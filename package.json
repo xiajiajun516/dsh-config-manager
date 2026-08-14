@@ -1,6 +1,6 @@
 {
   "name": "dsh-config-manager",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "DSH Config Manager — backup / export / import / migrate DSH configuration (dual-face Cordis plugin: host engine + web UI). Manifest shape mirrors @linxin666/dsh-ssh@0.1.12.",
   "type": "module",
   "repository": {
