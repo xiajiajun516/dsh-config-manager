@@ -72,6 +72,8 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 ```
 
 > 💡 Just copy-paste the command: `--config.auto-install-peers=false` skips a few DSH core packages that aren't on the public registry yet (the DSH runtime provides them), and `@latest` ensures you get the newest build.
+>
+> 🐛 **`@latest` installed an old version?** pnpm caches registry metadata, so `@latest` may resolve to a stale release. Use an exact version instead: `dsh plugin --profile web add dsh-config-manager@0.1.4 --config.auto-install-peers=false`.
 
 ---
 

@@ -72,6 +72,8 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 ```
 
 > 💡 照着复制就行：`--config.auto-install-peers=false` 跳过几个尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），`@latest` 确保装到最新版。
+>
+> 🐛 **`@latest` 装到了旧版？** pnpm 会缓存 registry 元数据，`@latest` 可能解析到过期版本。改用精确版本即可：`dsh plugin --profile web add dsh-config-manager@0.1.4 --config.auto-install-peers=false`。
 
 ---
 
