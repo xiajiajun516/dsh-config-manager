@@ -1,0 +1,128 @@
+/**
+ * import-wizard 测试（m6-ui）：
+ *  - 步骤状态机 select→analyzing→compatibility→preview→importing→result
+ *  - 显式 rollbackOnError（场景 E 默认 true）
+ *  - Preview 摘要（§10）
+ *  - confirm 安全阀、进度事件、reset
+ */
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ImportWizard } from './import-wizard.ts';
+import { MockImportPort, makeAnalysis, makeImportResult, makePlan } from './test-helpers.ts';
+
+test('import-wizard: selectZip 进入 compatibility 并保存 analysis', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  assert.equal(wiz.currentStep, 'select');
+
+  const analysis = await wiz.selectZip('C:\\backup\\dsh-config.zip');
+  assert.equal(port.analyzeCalls, 1);
+  assert.equal(analysis.compatibility, 'good');
+  assert.equal(wiz.currentStep, 'compatibility');
+  assert.equal(wiz.snapshot().zipPath, 'C:\\backup\\dsh-config.zip');
+});
+
+test('import-wizard: 分析失败进入 errors 并抛出', async () => {
+  const port = new MockImportPort();
+  port.analysis = makeAnalysis({ valid: false, errors: ['备份完整性校验失败'] });
+  const wiz = new ImportWizard({ port });
+  await assert.rejects(() => wiz.selectZip('x.zip'), /完整性/);
+  assert.equal(wiz.snapshot().errors.length, 1);
+});
+
+test('import-wizard: confirmCompatibility 生成计划并进入 preview', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  const plan = await wiz.confirmCompatibility();
+  assert.equal(wiz.currentStep, 'preview');
+  assert.ok(plan.items.length > 0);
+  assert.equal(port.planCalls.length, 1);
+});
+
+test('import-wizard: Preview 摘要统计（§10 数值化）', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  const s = wiz.previewSummary();
+  assert.equal(s.willChange, 5); // Create×3 + Update×1 + Install×1（Skip/MissingSecret 不计）
+  assert.equal(s.pluginsToInstall, 1);
+  assert.equal(s.mcpAdds, 1);
+  assert.equal(s.prompts, 1);
+  assert.equal(s.conflicts, 0);
+  assert.equal(s.secretsNeeded, 1);
+  assert.equal(s.needsRestart, true);
+});
+
+test('import-wizard: execute 默认显式传 rollbackOnError=true（场景 E）', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  const result = await wiz.execute({ confirm: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(wiz.currentStep, 'result');
+  assert.equal(port.executeCalls.length, 1);
+  assert.equal(port.executeCalls[0]!.confirm, true);
+  assert.equal(port.executeCalls[0]!.rollbackOnError, true, '默认整体回滚');
+});
+
+test('import-wizard: 用户可选 rollbackOnError=false（单项失败继续 §34.17）', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true, rollbackOnError: false });
+  assert.equal(port.executeCalls[0]!.rollbackOnError, false);
+});
+
+test('import-wizard: confirm=false 拒绝执行（core 安全阀透传）', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await assert.rejects(() => wiz.execute({ confirm: false }), /未确认/);
+  assert.equal(port.executeCalls.length, 0);
+});
+
+test('import-wizard: secretInputs 仅内存传递', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  wiz.setSecretInputs({ K1: 'sk-xxx' });
+  await wiz.execute({ confirm: true });
+  assert.equal(port.executeCalls[0]!.secretInputs?.['K1'], 'sk-xxx');
+});
+
+test('import-wizard: 失败且回滚时发出 rolling-back 进度事件', async () => {
+  const port = new MockImportPort();
+  port.result = makeImportResult({
+    ok: false,
+    rollback: { full: true, restored: ['settings:a'], failed: [] },
+  });
+  const events: string[] = [];
+  const wiz = new ImportWizard({ port, onProgress: (e) => events.push(e.stage) });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  const result = await wiz.execute({ confirm: true });
+  assert.equal(result.ok, false);
+  assert.ok(events.includes('rolling-back'));
+  assert.ok(events.includes('done'));
+});
+
+test('import-wizard: reset 清空状态回 select', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true });
+  wiz.reset();
+  const snap = wiz.snapshot();
+  assert.equal(snap.step, 'select');
+  assert.equal(snap.zipPath, null);
+  assert.equal(snap.plan, null);
+  assert.equal(snap.result, null);
+});

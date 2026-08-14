@@ -1,0 +1,21 @@
+# dsh-config-manager bundle patch — standalone copy under the task-mandated
+# filename `dsh.bundle.patch`.
+#
+# NOTE on the real reference (@linxin666/dsh-ssh@0.1.12, verified): there is
+# NO file named `dsh.bundle.patch` in the wild. `dsh.bundle.patch` is the JSON
+# key inside package.json —
+#   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+# — that points at the bundle patch FILE, which dsh-ssh names cordis.patch.yml.
+# This file is an equivalent duplicate for consumers expecting the name
+# `dsh.bundle.patch`. package.json currently points at ./cordis.patch.yml
+# (exactly like dsh-ssh). If you switch the pointer, update package.json:
+#   "dsh": { "bundle": { "patch": "./dsh.bundle.patch" } }
+# Reference only ONE of the two files at a time — the loader applies each
+# bundle's patch file once per bundle layer.
+#
+# Content is identical to ./cordis.patch.yml (same row, same id semantics:
+# row id must match the Host plugin's `export const name` in src/index.ts;
+# ASSUMED "config-manager" until the Host half lands).
+- insert:
+    - id: config-manager
+      name: 'dsh-config-manager'
