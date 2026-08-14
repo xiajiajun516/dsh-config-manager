@@ -510,9 +510,11 @@ export class ProfileManager {
     }
     try {
       const result: ApplyResult = await adapter.applyItem(item, ctx);
+      const status = result.ok ? 'ok' : (result.warning === true ? 'warning' : 'failed');
       return {
-        executed: { itemId: item.id, status: result.ok ? 'ok' : 'failed', message: result.message },
+        executed: { itemId: item.id, status, message: result.message },
         needsRestart: result.needsRestart === true,
+        warning: result.warning === true ? `${item.id}: ${result.message ?? item.description}` : undefined,
       };
     } catch (err) {
       this.ctx.log.error(`切换 Profile 应用计划项失败 ${item.id}: ${err instanceof Error ? err.message : String(err)}`);

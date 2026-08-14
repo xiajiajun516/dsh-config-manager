@@ -69,8 +69,19 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
     const data = ctx.sections.get('workspaces') as WorkspacesSection | undefined;
     const rec = data?.workspaces.find((r) => r.id === ref);
     if (!rec) return { ok: false, message: `导入数据缺少工作区 ${ref}` };
-    await ctx.target.workspace.writeRecord(rec);
-    return { ok: true };
+    try {
+      await ctx.target.workspace.writeRecord(rec);
+      return { ok: true };
+    } catch (err) {
+      // 目标端无法写入（如路径 realpath 失败/目录不存在）→ 非致命警告（§34.17），
+      // 不触发整体回滚——否则一个失效路径会拖垮已成功导入的其余配置。
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        warning: true,
+        message: `工作区 ${ref} 未能写入：${msg}（需映射路径或先在目标创建目录）`,
+      };
+    }
   }
 
   async validate(data: WorkspacesSection): Promise<ValidationResult> {

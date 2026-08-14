@@ -64,11 +64,12 @@ export function importSectionStats(executed: readonly ExecutedItem[]): ImportSec
     const section = sectionFromItemId(e.itemId);
     let stat = bySection.get(section);
     if (!stat) {
-      stat = { section: section as SectionId, ok: 0, skipped: 0, failed: 0, items: [] };
+      stat = { section: section as SectionId, ok: 0, skipped: 0, warned: 0, failed: 0, items: [] };
       bySection.set(section, stat);
     }
     if (e.status === 'ok') stat.ok += 1;
     else if (e.status === 'skipped') stat.skipped += 1;
+    else if (e.status === 'warning') stat.warned += 1;
     else stat.failed += 1;
     stat.items.push(e);
   }
@@ -83,12 +84,13 @@ export function renderImportReport(result: ImportResult): string {
     const parts: string[] = [];
     if (s.ok > 0) parts.push(`✓ ${s.ok} imported/restored`);
     if (s.skipped > 0) parts.push(`- ${s.skipped} skipped`);
+    if (s.warned > 0) parts.push(`⚠ ${s.warned} need attention`);
     if (s.failed > 0) parts.push(`✗ ${s.failed} failed`);
     lines.push(`${s.section}: ${parts.join(' ') || 'no changes'}`);
-    // 失败项给出可操作原因（§23）
+    // 失败/警告项给出可操作原因（§23）
     for (const it of s.items) {
-      if (it.status === 'failed') {
-        lines.push(`  Reason: ${it.message ?? '未知原因'}`);
+      if (it.status === 'failed' || it.status === 'warning') {
+        lines.push(`  ${it.status === 'failed' ? 'Reason' : 'Note'}: ${it.message ?? '未知原因'}`);
       }
     }
   }

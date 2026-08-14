@@ -154,7 +154,9 @@ export interface PlanItem {
   target?: SnapshotTarget;    // 该项将修改的目标（快照登记用）
 }
 
-export interface ApplyResult { ok: boolean; message?: string; needsRestart?: boolean; }
+/** applyItem 结果。warning=true 表示“未应用但属非致命”（如目标路径不可达/需人工映射），
+ * 引擎记为警告、不触发失败回滚（§34.17 单项失败不拖垮整体）。 */
+export interface ApplyResult { ok: boolean; message?: string; needsRestart?: boolean; warning?: boolean; }
 
 /* ---------------- 三段式输入输出 ---------------- */
 
@@ -187,7 +189,8 @@ export interface ImportPlan {
 
 export interface ExecutedItem {
   itemId: string;
-  status: 'ok' | 'skipped' | 'failed';
+  /** warning = 未应用但非致命（目标不可达等），不计入失败、不触发回滚 */
+  status: 'ok' | 'skipped' | 'warning' | 'failed';
   message?: string;
 }
 

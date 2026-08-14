@@ -156,8 +156,9 @@ export interface ImportSectionStat {
   section: SectionId;
   ok: number;
   skipped: number;
+  warned: number;
   failed: number;
-  items: { itemId: string; status: 'ok' | 'skipped' | 'failed'; message?: string }[];
+  items: { itemId: string; status: 'ok' | 'skipped' | 'warning' | 'failed'; message?: string }[];
 }
 
 export type ImportResultAction = 'fixIssues' | 'viewDetails' | 'done';

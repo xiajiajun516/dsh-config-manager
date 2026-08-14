@@ -412,6 +412,7 @@ export class Analyzer {
       for (const item of byAdapter.get(adapterId) ?? []) {
         const outcome = await this.applyOne(adapter, item, importCtx);
         executed.push(outcome.executed);
+        // 仅硬失败计入 anyFailed（warning 属非致命：目标不可达等，不触发回滚，§34.17）
         if (outcome.executed.status === 'failed') anyFailed = true;
         if (outcome.needsRestart) needsRestart = true;
         if (outcome.warning) warnings.push(outcome.warning);
@@ -499,9 +500,11 @@ export class Analyzer {
     }
     try {
       const result: ApplyResult = await adapter.applyItem(item, ctx);
+      const status = result.ok ? 'ok' : (result.warning === true ? 'warning' : 'failed');
       return {
-        executed: { itemId: item.id, status: result.ok ? 'ok' : 'failed', message: result.message },
+        executed: { itemId: item.id, status, message: result.message },
         needsRestart: result.needsRestart === true,
+        warning: result.warning === true ? `${item.id}: ${result.message ?? item.description}` : undefined,
       };
     } catch (err) {
       this.ctx.log.error(`应用计划项失败 ${item.id}: ${err instanceof Error ? err.message : String(err)}`);

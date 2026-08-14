@@ -77,3 +77,30 @@ test('workspaces: applyItem 写入映射后数据（PathMapper 先行）', async
   const items2 = await adapter.analyzeImport(mappedData, makeImportContext(dst, sections));
   assert.equal(items2.find((i) => i.id === 'workspace:ws-ops')?.kind, 'Skip');
 });
+
+test('workspaces: applyItem 写入失败（路径 realpath ENOENT）→ warning 非致命，不抛错', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.workspace.records.set('ws-ops', {
+    id: 'ws-ops', path: 'C:\\Users\\alice\\projects\\ops', title: 'OpsFlow', sessionIds: [],
+  });
+  const adapter = new WorkspacesAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['workspaces', exported.data]]);
+  const dst = makeContext('linux', '/home/bob');
+  // 模拟目标端工作区服务对不存在路径 realpath 失败（dsh-workspace 真实行为）
+  const original = dst.workspace.writeRecord.bind(dst.workspace);
+  dst.workspace.writeRecord = async () => {
+    throw new Error("ENOENT: no such file or directory, realpath '/home/bob/projects/ops'");
+  };
+  try {
+    const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+    const create = items.find((i) => i.id === 'workspace:ws-ops') as PlanItem;
+    const r = await adapter.applyItem(create, makeImportContext(dst, sections));
+    assert.equal(r.ok, false, '写入失败');
+    assert.equal(r.warning, true, '应为非致命警告（§34.17：不拖垮整体导入）');
+    assert.match(r.message ?? '', /未能写入|realpath/);
+  } finally {
+    dst.workspace.writeRecord = original;
+  }
+});
+

@@ -67,8 +67,10 @@ async function compensateOne(
     }
     case 'patchLine': {
       try {
-        const file = entry.ref.split('\u0000')[0] ?? 'cordis.patch.yml';
-        const lineId = entry.ref.includes('\u0000') ? entry.ref.split('\u0000')[1]! : entry.ref;
+        // 引擎只管理 profile 的 cordis.patch.yml（backup.ts 的 patchLine 快照只记 lineId 作 ref，
+        // 不含文件编码）——回滚固定写回该文件；切勿把 lineId 当文件名（否则 patchPath 抛「仅支持管理」）。
+        const file = 'cordis.patch.yml';
+        const lineId = entry.ref;
         await ctx.patchFile.applyPatchChanges(file, [
           { lineId, raw: entry.before, action: entry.before === null ? 'remove' : 'update' },
         ]);
