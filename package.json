@@ -1,7 +1,6 @@
 {
   "name": "dsh-config-manager",
   "version": "0.1.0",
-  "private": true,
   "description": "DSH Config Manager — backup / export / import / migrate DSH configuration (dual-face Cordis plugin: host engine + web UI). Manifest shape mirrors @linxin666/dsh-ssh@0.1.12.",
   "type": "module",
   "engines": {
@@ -47,7 +46,8 @@
     "cordis.patch.yml",
     "dsh.bundle.patch",
     "dsh.client",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "scripts": {
     "test": "node --test \"src/**/*.test.ts\" \"tests/**/*.test.ts\"",
