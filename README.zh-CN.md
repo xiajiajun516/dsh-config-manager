@@ -45,13 +45,13 @@ Analyze → Preview → Snapshot → Apply → Validate → Rollback(if needed)
 两种安装方式（二选一）：
 
 ```bash
-# ① 从本地 tgz / 目录安装（推荐，构建后）
+# ① 推荐 —— 从 npm registry 安装
+dsh plugin --profile web add dsh-config-manager --config.auto-install-peers=false
+
+# ② 备选 —— 本地 tgz / 目录安装（开发与测试）
 npm run build
 npm pack                       # 产出 dsh-config-manager-0.1.0.tgz
 dsh plugin --profile web add file:/absolute/path/to/dsh-config-manager-0.1.0.tgz
-
-# ② 发布后从 registry 安装
-dsh plugin --profile web add dsh-config-manager
 ```
 
 > **`--legacy-peer-deps` 说明**：peerDependencies 中的部分 DSH 核心包（如
@@ -158,6 +158,20 @@ npm test                         # node --test "src/**/*.test.ts" "tests/**/*.te
 ```
 
 架构：核心引擎（`src/core`）只依赖 `ConfigAdapter` / `HostContext` 接口（与 DSH 运行时解耦，可用内存 mock 测试）；`src/adapters` 实现各配置类别；`src/security` 提供秘密扫描 / 加密 / 完整性 / ZIP 安全 / redaction；`src/migrations` 集中 schema 迁移。
+
+## Publishing（GitHub Actions 自动发布）
+
+推送版本标签会触发 `.github/workflows/publish.yml` 的 CI 流水线：typecheck → 测试 → 构建 → 自动发布到 npm：
+
+```bash
+npm version patch          # 0.1.0 → 0.1.1（同时创建 tag）
+git push origin main --tags
+```
+
+前置要求：
+- 在仓库 Settings → Secrets and variables → Actions 添加名为 **`NPM_TOKEN`** 的仓库密钥，值为 **Granular Access Token（Read and write + Bypass 2FA）**——CI 无法输入一次性验证码，令牌必须带 2FA 绕过权限。
+- `package.json` 中的版本须与 tag 一致（`npm version` 会自动同步）。
+- 也可在 Actions 页面点 **Run workflow** 手动触发。
 
 ## Testing
 

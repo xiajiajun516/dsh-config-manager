@@ -43,13 +43,13 @@ This plugin is a standard **DSH bundle plugin** (mirrors the dsh-ssh engineering
 Two install options (choose one):
 
 ```bash
-# ① Install from a local tgz / directory (recommended, after build)
+# ① Recommended — install from the npm registry
+dsh plugin --profile web add dsh-config-manager --config.auto-install-peers=false
+
+# ② Alternative — local tgz / directory (development & testing)
 npm run build
 npm pack                       # produces dsh-config-manager-0.1.0.tgz
 dsh plugin --profile web add file:/absolute/path/to/dsh-config-manager-0.1.0.tgz
-
-# ② Install from a registry after publishing
-dsh plugin --profile web add dsh-config-manager
 ```
 
 > **`--legacy-peer-deps` note**: some DSH core packages in peerDependencies (e.g.
@@ -156,6 +156,20 @@ npm test                         # node --test "src/**/*.test.ts" "tests/**/*.te
 ```
 
 Architecture: the core engine (`src/core`) depends only on the `ConfigAdapter` / `HostContext` interfaces (decoupled from the DSH runtime, testable with in-memory mocks); `src/adapters` implements each config category; `src/security` provides secret scanning / encryption / integrity / ZIP safety / redaction; `src/migrations` centralizes schema migration.
+
+## Publishing (GitHub Actions auto-publish)
+
+Pushing a version tag triggers the CI pipeline in `.github/workflows/publish.yml`, which typechecks, runs the tests, builds, and publishes the package to npm:
+
+```bash
+npm version patch          # 0.1.0 → 0.1.1 (also creates the tag)
+git push origin main --tags
+```
+
+Requirements:
+- A **Granular Access Token with "Bypass 2FA"** (Read and write permissions) added as the repository secret `NPM_TOKEN` (Settings → Secrets and variables → Actions). The token must have 2FA bypass — CI cannot type a one-time code.
+- The version in `package.json` must match the tag (`npm version` keeps them in sync automatically).
+- The workflow can also be triggered manually via **Run workflow** on the Actions page.
 
 ## Testing
 
