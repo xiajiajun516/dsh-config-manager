@@ -71,23 +71,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 # ② Restart DSH (a "Backup & Migration" entry appears in Settings)
 ```
 
-> 💡 **Why the flag?** `--config.auto-install-peers=false` skips a few DSH core packages that aren't on the public registry yet (the DSH runtime provides them). Just copy-paste it.
->
-> 💡 **Why `@latest`?** A bare `dsh plugin add dsh-config-manager` keeps the version already recorded in the profile (pnpm does not upgrade existing deps). Use `@latest` — or an exact version like `@0.1.3` — to get the newest build.
-
-**From source / local package** (for developers):
-
-```bash
-npm run build && npm pack          # produces dsh-config-manager-0.1.2.tgz
-dsh plugin --profile web add file:/absolute/path/dsh-config-manager-0.1.2.tgz
-```
-
-> 🧪 **Try it without touching your real environment?** Use an isolated `DSH_HOME`:
-> ```bash
-> $env:DSH_HOME = "D:\tmp\dsh-home"   # Windows PowerShell
-> dsh plugin --profile test add dsh-config-manager@latest --config.auto-install-peers=false
-> dsh --profile test --dump-config | Select-String config-manager
-> ```
+> 💡 Just copy-paste the command: `--config.auto-install-peers=false` skips a few DSH core packages that aren't on the public registry yet (the DSH runtime provides them), and `@latest` ensures you get the newest build.
 
 ---
 
@@ -170,27 +154,6 @@ Save multiple configurations (Work / Personal) and switch anytime; switching inc
 
 ---
 
-## 📦 What's inside a backup?
-
-```
-dsh-config-2026-08-14.zip
-├── manifest.json              # backup manifest: version / source / time / sections
-├── config/
-│   ├── settings.json          # settings (redacted)
-│   └── ui.json                # UI preferences
-├── ai/providers.json          # AI providers / models
-├── plugins/                   # plugin manifest (binaries are never packaged)
-├── mcp/servers.json           # MCP server configs
-├── custom/                    # prompts / skills
-├── agents/presets/            # agent presets
-├── workspaces/                # workspaces
-├── security/credentials.json  # credential state (no values)
-├── security/secrets.enc       # encrypted backups only
-└── integrity/checksums.json   # SHA-256 checksums
-```
-
----
-
 ## 🛡️ Security
 
 - **The default backup contains no secret values** — a hard invariant, enforced at export
@@ -231,64 +194,15 @@ No. Items are deduplicated by stable IDs (plugin ID / MCP name / skill name…);
 
 ---
 
-## 👨‍💻 For developers
+## 📋 Known limitations (user-facing)
 
-```bash
-npm install --legacy-peer-deps   # install dependencies
-npm run typecheck                # type checking
-npm run build                    # build (host lib/ + client bundle)
-npm test                         # run tests (192)
-npm run bundle                   # rebuild the client bundle only
-```
+1. **Installing / updating plugins or MCP takes effect after restarting DSH**
+2. **Some UI state is not migrated** (e.g. task board data, panel widths — they live in the browser, not in DSH's config files)
+3. **keybindings / workflow configs / commands / rules** — DSH has no such concepts, so nothing is exported for them
+4. **History/session migration is off by default** (v1 copies files only)
+5. **Encrypted backups**: a lost password means the `secrets.enc` can't be decrypted (by design — keep your password safe)
 
-**Architecture**: the core engine is decoupled from the DSH runtime (mock-testable) → per-category adapters → security modules → centralized schema migrations.
-
-**Auto-publish**: push a tag → automatically published to npm (GitHub Actions + OIDC, no stored secrets):
-
-```bash
-npm version patch          # 0.1.2 → 0.1.3
-git push origin main --tags   # CI: test → build → publish → GitHub Release
-```
-
-A **GitHub Release** is created automatically for each tag too — with auto-generated release notes and the installable `dsh-config-manager-<version>.tgz` attached as an asset.
-
-> One-time OIDC trusted-publisher setup:
-> ```bash
-> npm login
-> npm trust github dsh-config-manager --file publish.yml --repo xiajiajun516/dsh-config-manager --allow-publish
-> ```
-> Or add the GitHub Actions trusted publisher on the package page (Settings → Publishing access).
-
----
-
-## 🧪 Testing
-
-**All 192 tests pass** (Node's built-in test runner, zero extra dependencies), covering:
-
-| Category | Coverage |
-|---|---|
-| Export | normal / empty / large / Unicode & special chars / secret filtering |
-| Import | normal / merge / replace / skip / conflict / missing plugin / missing dependency / missing secret |
-| Rollback | mid-flight failure → everything restored |
-| Security | malicious ZIP / corrupt archive / checksum mismatch / path traversal |
-| Cross-platform | Windows ↔ macOS ↔ Linux path handling |
-| Migration | schema upgrade mechanism |
-
----
-
-## 📋 Known limitations
-
-1. **Workspace: create/rename title only** — DSH has no whole-overwrite write channel; paths & session lists are maintained by DSH itself (path mapping adapts cross-device)
-2. **Some DSH core packages are not public** — features depending on their APIs only work in a local DSH; install needs `--config.auto-install-peers=false`
-3. **No MCP management API** — MCP is imported as config lines and takes effect after restarting DSH
-4. **Plugin install requires a restart**
-5. **Browser UI state (localStorage) is not migrated** — e.g. task board data, panel widths
-6. **keybindings / workflows / commands / rules** — DSH has no such concepts; no fake sections
-7. **Credential values can't be rolled back** — re-enter manually after a rollback that touched them
-8. **Newly created items can't be rollback-deleted** — DSH settings have no delete semantics
-9. **Schema migration** — the mechanism is ready; the v1→v2 chain is a placeholder (v1 is current)
-10. **History/session migration is off by default** — v1 copies files only
-11. **Encrypted backups** — a lost password means the `secrets.enc` can't be decrypted (by design)
+> Maintainers & developers: see [DEVELOPERS.md](DEVELOPERS.md) for build, testing, auto-publishing and full technical notes.
 
 ---
 

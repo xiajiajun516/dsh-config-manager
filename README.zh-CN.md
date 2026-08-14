@@ -71,23 +71,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 # ② 重启 DSH（设置页就会出现「备份与迁移」入口）
 ```
 
-> 💡 **小知识**：`--config.auto-install-peers=false` 是为了跳过一些尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），照着复制就行。
->
-> 💡 **为什么带 `@latest`？** 裸写 `dsh plugin add dsh-config-manager` 会**保留 profile 里已记录的旧版本**（pnpm 不会自动升级已有依赖），必须用 `@latest`（或精确版本如 `@0.1.3`）才能装到最新构建。
-
-**从源码 / 本地包安装**（开发者用）：
-
-```bash
-npm run build && npm pack          # 产出 dsh-config-manager-0.1.2.tgz
-dsh plugin --profile web add file:/绝对路径/dsh-config-manager-0.1.2.tgz
-```
-
-> 🧪 **想先试不碰正式环境？** 用隔离目录测试，完全不触碰 `~/.dsh`：
-> ```bash
-> $env:DSH_HOME = "D:\tmp\dsh-home"   # Windows PowerShell
-> dsh plugin --profile test add dsh-config-manager@latest --config.auto-install-peers=false
-> dsh --profile test --dump-config | Select-String config-manager
-> ```
+> 💡 照着复制就行：`--config.auto-install-peers=false` 跳过几个尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），`@latest` 确保装到最新版。
 
 ---
 
@@ -103,7 +87,7 @@ dsh plugin --profile web add file:/绝对路径/dsh-config-manager-0.1.2.tgz
   1. 打开 DSH → 「备份与迁移」→「导入配置」
   2. 选择 ZIP → 等待分析 → 查看「导入预览」
   3. 有路径问题？→ 选择新路径（可批量映射）
-  4. 有同名配置冲突？→ 选择 保留现有 / 用导入的
+  4. 有同名配置冲突？→ 选择 保留现有的 / 用导入的
   5. 确认导入 → 等待完成
   6. 按提示重新填写缺失的 API Key
   7. ✅ 设置 / 插件 / MCP / 技能 / 工作区都回来了
@@ -170,27 +154,6 @@ dsh plugin --profile web add file:/绝对路径/dsh-config-manager-0.1.2.tgz
 
 ---
 
-## 📦 备份里有什么？（文件结构）
-
-```
-dsh-config-2026-08-14.zip
-├── manifest.json              # 备份清单：版本 / 来源 / 时间 / 包含项
-├── config/
-│   ├── settings.json          # 设置（已脱敏）
-│   └── ui.json                # 界面偏好
-├── ai/providers.json          # AI 模型 / 服务商配置
-├── plugins/                   # 插件清单（不打包插件本体）
-├── mcp/servers.json           # MCP 服务配置
-├── custom/                    # 提示词 / 技能
-├── agents/presets/            # Agent 预设
-├── workspaces/                # 工作区
-├── security/credentials.json  # 密钥状态（不含值）
-├── security/secrets.enc       # 仅加密备份时存在
-└── integrity/checksums.json   # SHA-256 校验和
-```
-
----
-
 ## 🛡️ 安全
 
 - **默认备份不包含任何密钥值** —— 这是硬性规则，导出时强制执行
@@ -231,64 +194,15 @@ dsh-config-2026-08-14.zip
 
 ---
 
-## 👨‍💻 给开发者
+## 📋 已知限制（用户须知）
 
-```bash
-npm install --legacy-peer-deps   # 安装依赖
-npm run typecheck                # 类型检查
-npm run build                    # 构建（Host lib/ + client bundle）
-npm test                         # 运行测试（192 个）
-npm run bundle                   # 仅重建 client bundle
-```
+1. **安装/更新插件或 MCP 后需重启 DSH 才生效**
+2. **部分界面状态不迁移**（如任务看板数据、面板宽度——它们存在浏览器里，不在 DSH 配置文件内）
+3. **keybindings / workflows 配置 / commands / rules**：DSH 当前没有这些概念，因此不会导出相关内容
+4. **历史会话默认不迁移**（v1 仅支持文件级复制）
+5. **加密备份**：密码丢失则无法解密（设计使然——请牢记密码）
 
-**架构**：核心引擎与 DSH 运行时解耦（可 mock 测试）→ 各配置分类适配器 → 安全模块 → 迁移逻辑集中。
-
-**自动发布**：打 tag 即自动发布（GitHub Actions + OIDC，无需任何密钥）：
-
-```bash
-npm version patch          # 0.1.2 → 0.1.3
-git push origin main --tags   # CI 自动: 测试 → 构建 → 发布 → GitHub Release
-```
-
-每个 tag 还会**自动创建 GitHub Release**：自动生成更新日志，并附上可安装的 `dsh-config-manager-<版本>.tgz` 产物。
-
-> 首次配置 OIDC 可信发布方（只需一次）：
-> ```bash
-> npm login
-> npm trust github dsh-config-manager --file publish.yml --repo xiajiajun516/dsh-config-manager --allow-publish
-> ```
-> 或在 npm 包设置页（Settings → Publishing access）添加 GitHub Actions 可信发布方。
-
----
-
-## 🧪 测试
-
-**192 个测试全部通过**（Node 内置测试框架，零额外依赖），覆盖：
-
-| 类别 | 覆盖内容 |
-|---|---|
-| 导出 | 正常 / 空配置 / 大配置 / 中文与特殊字符 / 密钥过滤 |
-| 导入 | 正常 / 合并 / 覆盖 / 跳过 / 冲突 / 缺失插件 / 缺失依赖 / 缺失密钥 |
-| 回滚 | 导入中途失败 → 全部恢复原样 |
-| 安全 | 恶意 ZIP / 损坏文件 / 校验和不匹配 / 路径穿越 |
-| 跨平台 | Windows ↔ macOS ↔ Linux 路径处理 |
-| 迁移 | 版本升级机制 |
-
----
-
-## 📋 已知限制
-
-1. **工作区只能创建/改标题**：DSH 无整体覆盖写通道，路径与会话列表由 DSH 自行维护（路径映射适配跨设备）
-2. **部分 DSH 核心包未公开发布**：依赖其 API 的功能仅在本地 DSH 环境可用；安装需跳过 peer 自动安装（见安装说明）
-3. **MCP 无管理 API**：MCP 以配置行导入，需重启 DSH 生效
-4. **插件安装需重启**：安装插件后重启 DSH 生效
-5. **浏览器 UI 状态（localStorage）不迁移**：如任务看板数据、面板宽度
-6. **keybindings / workflows / commands / rules**：DSH 当前无这些概念，不做假分区
-7. **密钥值无法回滚**：导入中覆盖的密钥在回滚时需人工重新填写
-8. **新建项无法回滚删除**：DSH 设置无删除语义，新建的配置项回滚时需人工处理
-9. **Schema 迁移**：机制已就绪，v1→v2 迁移链为占位（当前版本即 v1）
-10. **历史会话默认不迁移**：v1 仅支持文件级复制
-11. **加密备份**：密码丢失则无法解密（设计使然，请牢记密码）
+> 维护者与开发者：构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 
 ---
 
