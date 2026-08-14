@@ -42,7 +42,8 @@ jobs:
 
       - name: Package tarball
         # The installable tgz is attached to the GitHub Release as an asset.
-        run: npm pack --pack-destination ./dist
+        # npm pack --pack-destination fails if the dir does not exist (fresh checkout).
+        run: mkdir -p dist && npm pack --pack-destination ./dist
 
       - name: Publish to npm (trusted publishing / OIDC)
         # No NODE_AUTH_TOKEN: the npm CLI obtains a short-lived registry token
