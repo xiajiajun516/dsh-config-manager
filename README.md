@@ -66,12 +66,14 @@ It's a standard **DSH plugin** — two steps:
 
 ```bash
 # ① Install the plugin
-dsh plugin --profile web add dsh-config-manager --config.auto-install-peers=false
+dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-peers=false
 
 # ② Restart DSH (a "Backup & Migration" entry appears in Settings)
 ```
 
 > 💡 **Why the flag?** `--config.auto-install-peers=false` skips a few DSH core packages that aren't on the public registry yet (the DSH runtime provides them). Just copy-paste it.
+>
+> 💡 **Why `@latest`?** A bare `dsh plugin add dsh-config-manager` keeps the version already recorded in the profile (pnpm does not upgrade existing deps). Use `@latest` — or an exact version like `@0.1.3` — to get the newest build.
 
 **From source / local package** (for developers):
 
@@ -83,7 +85,7 @@ dsh plugin --profile web add file:/absolute/path/dsh-config-manager-0.1.2.tgz
 > 🧪 **Try it without touching your real environment?** Use an isolated `DSH_HOME`:
 > ```bash
 > $env:DSH_HOME = "D:\tmp\dsh-home"   # Windows PowerShell
-> dsh plugin --profile test add dsh-config-manager --config.auto-install-peers=false
+> dsh plugin --profile test add dsh-config-manager@latest --config.auto-install-peers=false
 > dsh --profile test --dump-config | Select-String config-manager
 > ```
 

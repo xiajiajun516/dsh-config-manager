@@ -66,12 +66,14 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 
 ```bash
 # ① 安装插件
-dsh plugin --profile web add dsh-config-manager --config.auto-install-peers=false
+dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-peers=false
 
 # ② 重启 DSH（设置页就会出现「备份与迁移」入口）
 ```
 
 > 💡 **小知识**：`--config.auto-install-peers=false` 是为了跳过一些尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），照着复制就行。
+>
+> 💡 **为什么带 `@latest`？** 裸写 `dsh plugin add dsh-config-manager` 会**保留 profile 里已记录的旧版本**（pnpm 不会自动升级已有依赖），必须用 `@latest`（或精确版本如 `@0.1.3`）才能装到最新构建。
 
 **从源码 / 本地包安装**（开发者用）：
 
@@ -83,7 +85,7 @@ dsh plugin --profile web add file:/绝对路径/dsh-config-manager-0.1.2.tgz
 > 🧪 **想先试不碰正式环境？** 用隔离目录测试，完全不触碰 `~/.dsh`：
 > ```bash
 > $env:DSH_HOME = "D:\tmp\dsh-home"   # Windows PowerShell
-> dsh plugin --profile test add dsh-config-manager --config.auto-install-peers=false
+> dsh plugin --profile test add dsh-config-manager@latest --config.auto-install-peers=false
 > dsh --profile test --dump-config | Select-String config-manager
 > ```
 
