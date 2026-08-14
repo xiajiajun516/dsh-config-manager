@@ -2,8 +2,11 @@
  * 冲突决策列表（规范 §11，绑 src/ui/conflict-view.ts 的 ConflictCollector）。
  *
  * 渲染 plan 中 kind === 'Conflict' 的项，用户逐项选择
- * Keep Current / Use Imported / Review；决策实时写入 collector，
+ * Keep Current / Use Imported；决策实时写入 collector，
  * 完成时父组件调用 collector.toResolutions() → wizard.setResolutions()。
+ *
+ * 注意：不提供 "Review（稍后决定）" 选项——Review 会被收集器计为
+ * unresolved，导致「下一步」永远禁用（死路）。要么决策，要么不进入本步。
  */
 import { useState } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
@@ -22,7 +25,6 @@ export interface ConflictListProps {
 const RESOLUTION_OPTIONS: { value: ItemResolution; key: string }[] = [
   { value: 'keepCurrent', key: 'import.conflicts.keepCurrent' },
   { value: 'useImported', key: 'import.conflicts.useImported' },
-  { value: 'review', key: 'import.conflicts.review' },
 ]
 
 /** 冲突项决策列表 */
@@ -58,7 +60,7 @@ export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
                       onChanged()
                     }}
                   />
-                  {t(opt.key as 'import.conflicts.keepCurrent' | 'import.conflicts.useImported' | 'import.conflicts.review')}
+                  {t(opt.key as 'import.conflicts.keepCurrent' | 'import.conflicts.useImported')}
                 </label>
               ))}
             </div>
