@@ -21,6 +21,7 @@ import { useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { ImportWizard } from '../../ui/import-wizard.ts'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
+import { nextFlowPhase, type FlowPhase } from '../../ui/flow.ts'
 import type { ImportPreviewSummary, ProgressEvent, WizardSnapshot } from '../../ui/types.ts'
 import type { PathMapping } from '../../core/types.ts'
 import type { ConfigManagerApi, UploadResponse } from '../api.ts'
@@ -38,8 +39,7 @@ export interface ImportWizardViewProps {
   t: TranslateNS<'config-manager'>
 }
 
-/** 中间流程阶段（wizard.step 之外的 UI 层页面） */
-type FlowPhase = 'preview' | 'conflicts' | 'path-mapping' | 'secrets' | 'confirm'
+/** 中间流程阶段（wizard.step 之外的 UI 层页面）——定义见 src/ui/flow.ts */
 
 const SCORE_LABEL: Record<string, string> = {
   excellent: 'Excellent',
@@ -118,13 +118,23 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const hasPathIssues = (snapshot.analysis?.pathIssues.length ?? 0) > 0
   const hasSecrets = (snapshot.plan?.missingSecrets.length ?? 0) > 0
 
-  /** 从某阶段完成后进入的下一个阶段（跳过空阶段；from 之前的阶段不再进入） */
-  const nextPhase = (from: FlowPhase): FlowPhase => {
-    if (from !== 'conflicts' && hasConflicts) return 'conflicts'
-    if (from !== 'path-mapping' && hasPathIssues) return 'path-mapping'
-    if (from !== 'secrets' && hasSecrets) return 'secrets'
-    return 'confirm'
+  /**
+   * 适用阶段的有序列表（仅含需要用户处理 + 确认页）。
+   * hasConflicts/hasPathIssues/hasSecrets 基于原始 analysis/plan（Dry Run 产物），
+   * 在流程中不会因已解决而重算——所以导航必须只前进（见 nextFlowPhase），
+   * 而不是靠"当前阶段 != X"判定（那会让已完成阶段被重新命中、跳回上一步）。
+   */
+  const applicablePhases = (): FlowPhase[] => {
+    const list: FlowPhase[] = []
+    if (hasConflicts) list.push('conflicts')
+    if (hasPathIssues) list.push('path-mapping')
+    if (hasSecrets) list.push('secrets')
+    list.push('confirm')
+    return list
   }
+
+  /** 从某阶段完成后进入的下一个阶段：只前进（from 不在列表时取第一项） */
+  const nextPhase = (from: FlowPhase): FlowPhase => nextFlowPhase(applicablePhases(), from)
 
   /* ---------- 动作 ---------- */
 
