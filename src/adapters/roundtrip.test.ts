@@ -88,6 +88,8 @@ test('集成往返：win32 → linux（路径映射 + Secret 不泄 + 补录报�
 
     // —— 目标机器（linux）导入 ——
     const dst = makeContext('linux', '/home/bob');
+    // 目标已装相同插件（命名空间已注册但为空）→ 导入走 Create 初始化；未注册的命名空间会按 MissingDependency 跳过
+    for (const n of NS) dst.settings.registered.add(n);
     const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
 
     const analysis = await importer.analyzeImport(zipPath);

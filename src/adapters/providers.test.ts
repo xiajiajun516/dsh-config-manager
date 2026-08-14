@@ -58,6 +58,7 @@ test('providers: analyzeImport Create/Skip/Conflict + applyItem 写回整个 nam
   const sections = new Map([['providers', exported.data]]);
 
   const dst = makeContext('linux', '/home/bob');
+  dst.settings.registered.add('llm-pi-ai'); // 目标已安装提供该命名空间的插件（空值 → Create 初始化）
   let items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
   assert.equal(items.length, 1);
   assert.equal(items[0]?.kind, 'Create');

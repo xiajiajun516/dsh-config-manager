@@ -48,7 +48,16 @@ export async function collectNamespaceRecords(
   return namespaces;
 }
 
-/** 对比导入记录与目标当前值：不存在 → Create；一致 → Skip；不同 → Conflict（纯计算，零写入） */
+/** 值是否“空”（目标已注册但从未配置 → 视为待初始化，Create 而非 Conflict） */
+export function isEmptyValue(v: unknown): boolean {
+  if (v === undefined || v === null) return true;
+  if (typeof v === 'object') return Object.keys(v as Record<string, unknown>).length === 0;
+  return false;
+}
+
+/** 对比导入记录与目标当前值：不存在 → Create；一致 → Skip；不同 → Conflict；
+ * 目标端 describe 抛错（命名空间未注册：提供它的插件在目标未激活/未安装）→ MissingDependency（§15 依赖检测），
+ * 此时 Create/Update 必然失败，标记为“需注意”让导入继续，而不是整体失败。纯计算，零写入。 */
 export async function planNamespaceItems(
   data: Record<string, NamespaceRecord>,
   adapter: 'settings' | 'ui',
@@ -57,13 +66,23 @@ export async function planNamespaceItems(
   const items: PlanItem[] = [];
   for (const [name, rec] of Object.entries(data)) {
     let current: NamespaceInfo | null = null;
+    let targetUnavailable = false;
     try {
       current = await ctx.target.settings.describe(name, { redactSecrets: true });
     } catch {
-      current = null;
+      // 目标连 describe 都失败 → 命名空间未注册（缺少提供插件）或目标不可读：
+      // 不能假定“不存在就创建”（replace 会同样失败），按依赖缺失处理。
+      targetUnavailable = true;
     }
     const id = `${adapter}:${name}`;
-    if (current === null) {
+    if (targetUnavailable) {
+      items.push({
+        id, kind: 'MissingDependency', adapter,
+        description: `设置命名空间 ${name} 在目标未注册（可能需要安装提供它的插件）`,
+        severity: 'warning', target: { adapter, ref: name },
+      });
+    } else if (current === null || isEmptyValue(current.value)) {
+      // 目标已注册但从未配置（空值）→ 初始化（Create）
       items.push({
         id, kind: 'Create', adapter, description: `创建设置 ${name}`, severity: 'info',
         target: { adapter, ref: name },

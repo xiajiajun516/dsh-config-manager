@@ -34,17 +34,24 @@ test('settings: 导出只含非 UI namespace（redacted + revision + secrets 标
   assert.equal(v.valid, true);
 });
 
-test('settings: analyzeImport Create/Skip/Conflict + applyItem 写回（幂等）', async () => {
+test('settings: analyzeImport 未注册→MissingDependency / 空→Create / 一致→Skip / 不同→Conflict + applyItem 写回（幂等）', async () => {
   const src = makeContext('win32', 'C:\\Users\\alice');
   src.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
   const adapter = new SettingsAdapter(NS);
   const exported = await adapter.export(src, { includeSecrets: false });
   const sections = new Map([['settings', exported.data]]);
 
-  const dst = makeContext('linux', '/home/bob');
-  // 目标无 → Create 并写入
-  let items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  // 场景 A：目标命名空间未注册（缺少提供插件）→ MissingDependency（不是 Create，写入必失败）
+  const dstA = makeContext('linux', '/home/bob');
+  let items = await adapter.analyzeImport(exported.data, makeImportContext(dstA, sections));
   assert.equal(items.length, 1);
+  assert.equal(items[0]?.kind, 'MissingDependency');
+  assert.equal(items[0]?.target?.ref, 'general');
+
+  // 场景 B：目标已注册但为空 → Create 并写入（初始化）
+  const dst = makeContext('linux', '/home/bob');
+  dst.settings.registered.add('general'); // 注册但无值
+  items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
   assert.equal(items[0]?.kind, 'Create');
   assert.equal(items[0]?.target?.ref, 'general');
   const r = await adapter.applyItem(items[0]!, makeImportContext(dst, sections));

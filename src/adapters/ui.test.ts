@@ -46,6 +46,7 @@ test('ui: analyzeImport 与 applyItem 写回', async () => {
   const sections = new Map([['ui', exported.data]]);
 
   const dst = makeContext('linux', '/home/bob');
+  dst.settings.registered.add('theme'); // 目标已注册该 UI 命名空间（空值 → Create）
   const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
   assert.equal(items.length, 1);
   assert.equal(items[0]?.kind, 'Create');

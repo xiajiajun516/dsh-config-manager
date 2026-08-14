@@ -477,7 +477,13 @@ export class Analyzer {
     item: PlanItem,
     ctx: ImportContext,
   ): Promise<{ executed: ExecutedItem; needsRestart: boolean; warning?: string }> {
-    if (item.kind === 'Skip' || (item.kind === 'Conflict' && item.conflict?.resolution !== 'useImported')) {
+    if (
+      item.kind === 'Skip' ||
+      item.kind === 'Warning' ||
+      item.kind === 'MissingDependency' ||
+      (item.kind === 'Conflict' && item.conflict?.resolution !== 'useImported')
+    ) {
+      // Warning / MissingDependency 是信息项（依赖缺失、需人工注意），不调用 applyItem。
       return { executed: { itemId: item.id, status: 'skipped' }, needsRestart: false };
     }
     if (item.kind === 'Error') {

@@ -312,7 +312,10 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     )
   }
 
-  if (phase === 'conflicts') {
+  // 流程阶段页只在 wizard.step === 'preview' 时渲染：execute 开始后 step 变
+  // importing/result，若 phase 仍是 confirm，必须让位给导入中/结果页（否则点「导入」
+  // 无反应——confirm 页一直挡着，要回退一步才露出结果）。
+  if (phase === 'conflicts' && step === 'preview') {
     if (conflictCollector === null || snapshot.plan === null) return null
     return (
       <div className={css.viewBody}>
@@ -328,7 +331,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     )
   }
 
-  if (phase === 'path-mapping') {
+  if (phase === 'path-mapping' && step === 'preview') {
     const issues = snapshot.analysis?.pathIssues ?? []
     return (
       <div className={css.viewBody}>
@@ -342,7 +345,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     )
   }
 
-  if (phase === 'secrets') {
+  if (phase === 'secrets' && step === 'preview') {
     const missing = snapshot.plan?.missingSecrets ?? []
     return (
       <div className={css.viewBody}>
@@ -356,7 +359,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     )
   }
 
-  if (phase === 'confirm') {
+  if (phase === 'confirm' && step === 'preview') {
     return (
       <div className={css.viewBody}>
         <Card className={css.optionsCard}>

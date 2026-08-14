@@ -133,15 +133,18 @@ test('E-01 场景 E 端到端：多 adapter 中途失败（workspaces）→ 整�
   });
 });
 
-test('E-02 部分回滚：新建项无法删除 → full=false + manualHint（诚实报告）', async () => {
+test('E-02 部分回滚：凭据值不可回读 → full=false + manualHint（诚实报告）', async () => {
   await withTmp(async (dir) => {
     const src = makeContext('win32', 'C:\\Users\\alice');
     await seedSource(src);
+    src.credentials.values.set('DEEPSEEK_API_KEY', 'source-secret'); // 源已配置凭据 → 导出 MissingSecret
     const zipPath = path.join(dir, 'e02.zip');
     await exportFixture(src, zipPath);
 
     const dst = makeContext('win32', 'C:\\Users\\bob');
-    // 目标 general/skills/workspace/mcp 已存在，但 llm-deepseek 不存在（将 Create）
+    // 目标 general/skills/workspace/mcp 已存在（可回滚）；llm-deepseek 已注册但为空（Create 初始化，可恢复为空）；
+    // DEEPSEEK_API_KEY 凭据已存在（值不可回读 → 回滚只能 manualHint，构成部分回滚）
+    dst.settings.registered.add('llm-deepseek');
     dst.settings.ns.set('general', { value: { theme: 'light' }, revision: 7, secrets: [] });
     await dst.fs.writeFile('skills/coding.md', Buffer.from('# OLD skill content\n', 'utf8'));
     dst.workspace.records.set('ws-ops', { id: 'ws-ops', path: 'C:\\Users\\bob\\projects\\old', title: 'OldTitle', sessionIds: [] });
@@ -149,6 +152,7 @@ test('E-02 部分回滚：新建项无法删除 → full=false + manualHint（�
       lineId: 'mcp-fs',
       raw: { id: 'mcp-fs', name: 'dsh-mcp-client', config: { serverName: 'filesystem', command: 'node', args: ['old.js'] } },
     });
+    dst.credentials.values.set('DEEPSEEK_API_KEY', 'old-secret');
 
     const adapters = createAdapters({ namespaces: NS });
     const flaky = adapters.map((a) => (a.id === 'workspaces' ? new FlakyAdapter(a, 'workspace:ws-ops') : a));
@@ -161,13 +165,17 @@ test('E-02 部分回滚：新建项无法删除 → full=false + manualHint（�
     });
     assert.ok(plan.items.some((i) => i.id === 'settings:llm-deepseek' && i.kind === 'Create'), 'llm-deepseek 应为 Create');
 
-    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, rollbackOnError: true });
+    const result = await importer.executeImportPlan(zipPath, plan, {
+      confirm: true,
+      rollbackOnError: true,
+      secretInputs: { DEEPSEEK_API_KEY: 'new-secret' },
+    });
     assert.equal(result.ok, false);
     assert.ok(result.rollback);
-    assert.equal(result.rollback.full, false, '新建项无法回滚 → 应如实报告部分回滚');
+    assert.equal(result.rollback.full, false, '凭据值不可回读 → 应如实报告部分回滚');
     assert.ok(
-      result.rollback.failed.some((f) => f.item.includes('llm-deepseek') && f.manualHint),
-      '失败清单应含 manualHint 提示人工处理',
+      result.rollback.failed.some((f) => f.item.includes('DEEPSEEK_API_KEY') && f.manualHint),
+      '失败清单应含 manualHint 提示人工补录凭据',
     );
     // 其余可恢复项仍恢复
     assert.equal((dst.settings.ns.get('general')?.value as { theme: string }).theme, 'light');

@@ -67,6 +67,9 @@ test('I-01 正常导入：同平台全流程 analyze → plan → execute 成功
     await exportFixture(src, zipPath);
 
     const dst = makeContext('win32', 'C:\\Users\\bob');
+    // 目标已装同插件（general/llm-deepseek 注册但为空 → Create 初始化）
+    dst.settings.registered.add('general');
+    dst.settings.registered.add('llm-deepseek');
     const importer = makeImporter(dst);
 
     const analysis = await importer.analyzeImport(zipPath);

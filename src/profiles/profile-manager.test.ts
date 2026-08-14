@@ -134,6 +134,7 @@ test('analyzeSwitch Preview + executeSwitch（confirm 安全阀 + Create 应用 
     await srcMgr.saveCurrent('work');
 
     const dst = makeContext('linux', '/home/bob');
+    for (const n of NS) dst.settings.registered.add(n); // 目标已装同插件（注册但为空 → Create 初始化）
     const dstMgr = new ProfileManager({ dataDir, ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
 
     // 未确认 → 拒绝且零写入
@@ -250,6 +251,7 @@ test('exportProfile / importProfile 往返（完整验证）', async () => {
 
     // 导入后的 profile 可切换到空目标
     const dst = makeContext('linux', '/home/bob');
+    for (const n of NS) dst.settings.registered.add(n); // 目标已装同插件
     const dstMgr = new ProfileManager({ dataDir, ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
     const r = await dstMgr.executeSwitch('work-copy', { confirm: true });
     assert.equal(r.ok, true);

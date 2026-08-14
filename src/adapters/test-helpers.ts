@@ -54,14 +54,37 @@ export class MemFs implements FileSystemFacade {
   async mkdir(): Promise<void> { /* 内存实现无需建目录 */ }
 }
 
+/** ns.set 时自动注册（有值即视为对应插件已激活；对齐真实 dsh-settings 的注册语义） */
+class AutoRegisterMap extends Map<string, { value: unknown; base?: unknown; revision: number; applies?: string[]; secrets: { path: string[]; set: boolean }[] }> {
+  private readonly registered: Set<string>;
+  constructor(registered: Set<string>) {
+    super();
+    this.registered = registered;
+  }
+  override set(key: string, value: { value: unknown; base?: unknown; revision: number; applies?: string[]; secrets: { path: string[]; set: boolean }[] }): this {
+    this.registered.add(key);
+    return super.set(key, value);
+  }
+}
+
 export class MemSettings implements SettingsFacade {
-  ns = new Map<string, { value: unknown; base?: unknown; revision: number; applies?: string[]; secrets: { path: string[]; set: boolean }[] }>();
+  /** 已注册命名空间（对齐真实 dsh-settings：插件激活时注册；未注册的 describe/replace 抛错） */
+  registered = new Set<string>();
+  /** 有值的命名空间自动视为已注册 */
+  ns = new AutoRegisterMap(this.registered);
   async describe(namespace: string, _opts?: { redactSecrets?: boolean }): Promise<NamespaceInfo> {
+    if (!this.registered.has(namespace)) throw new Error(`settings namespace "${namespace}" is not registered`);
     const rec = this.ns.get(namespace);
-    if (!rec) throw new Error(`namespace not found: ${namespace}`);
-    return { value: rec.value, base: rec.base, revision: rec.revision, applies: rec.applies, secrets: rec.secrets };
+    return {
+      value: rec?.value,
+      base: rec?.base,
+      revision: rec?.revision ?? 0,
+      applies: rec?.applies,
+      secrets: rec?.secrets ?? [],
+    };
   }
   async replace(namespace: string, value: unknown, expectedRevision?: number): Promise<void> {
+    if (!this.registered.has(namespace)) throw new Error(`settings namespace "${namespace}" is not registered`);
     const rec = this.ns.get(namespace);
     if (expectedRevision !== undefined && rec && rec.revision !== expectedRevision) {
       throw new Error(`SETTINGS_CONFLICT: ${namespace} revision ${rec.revision} !== ${expectedRevision}`);
@@ -71,6 +94,7 @@ export class MemSettings implements SettingsFacade {
     });
   }
   async update?(namespace: string, patch: unknown, expectedRevision?: number): Promise<void> {
+    if (!this.registered.has(namespace)) throw new Error(`settings namespace "${namespace}" is not registered`);
     const rec = this.ns.get(namespace);
     if (expectedRevision !== undefined && rec && rec.revision !== expectedRevision) {
       throw new Error(`SETTINGS_CONFLICT: ${namespace} revision ${rec.revision} !== ${expectedRevision}`);

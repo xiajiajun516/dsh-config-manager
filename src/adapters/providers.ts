@@ -11,7 +11,7 @@ import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, NamespaceInfo, PlanItem, ValidationResult,
 } from '../core/types.ts';
-import { resolveNamespaces, type NamespaceProvider } from './settings.ts';
+import { resolveNamespaces, isEmptyValue, type NamespaceProvider } from './settings.ts';
 
 /** 导出记录：ProviderEntry 之外附加 namespace 级元数据（导入写回用），满足 ProvidersSection 形状 */
 export interface ProviderExportEntry extends ProviderEntry {
@@ -91,12 +91,21 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
     for (const [route, entry] of Object.entries(data.providers)) {
       const id = `provider:${route}`;
       let current: NamespaceInfo | null = null;
+      let targetUnavailable = false;
       try {
         current = await ctx.target.settings.describe(entry.namespace, { redactSecrets: true });
       } catch {
-        current = null;
+        // 目标未注册该 namespace（缺少提供它的插件）→ 写入必失败，按依赖缺失处理（§15）
+        targetUnavailable = true;
       }
-      if (current === null) {
+      if (targetUnavailable) {
+        items.push({
+          id, kind: 'MissingDependency', adapter: 'providers',
+          description: `Provider ${route} 的命名空间 ${entry.namespace} 在目标未注册（可能需要安装对应插件）`,
+          severity: 'warning', target: { adapter: 'providers', ref: entry.namespace },
+        });
+      } else if (current === null || isEmptyValue(current.value)) {
+        // 目标已注册但为空 → 初始化（Create）
         items.push({
           id, kind: 'Create', adapter: 'providers',
           description: `创建 Provider ${route}（namespace ${entry.namespace}）`, severity: 'info',
