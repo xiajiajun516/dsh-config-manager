@@ -168,13 +168,22 @@ git push origin main --tags
 
 One-time setup on npmjs.com (required before the first OIDC publish):
 
+**Option A — website** (scoped packages / where the UI is available):
 1. Open the package page: https://www.npmjs.com/package/dsh-config-manager → **Settings → Publishing access**.
-2. **Add trusted publisher**:
-   - Provider: **GitHub Actions**
-   - GitHub owner: `xiajiajun516`
-   - Repository: `dsh-config-manager`
-   - Workflow filename: `publish.yml`
-3. No `NPM_TOKEN` repository secret is needed — a previously configured token can be revoked.
+2. **Add trusted publisher**: Provider **GitHub Actions** · owner `xiajiajun516` · repository `dsh-config-manager` · workflow filename `publish.yml`.
+
+**Option B — CLI** (recommended; works for unscoped packages where the UI section is missing):
+```bash
+npm logout
+npm login                                    # web OAuth + 2FA code
+npm trust github dsh-config-manager \
+  --file publish.yml \
+  --repo xiajiajun516/dsh-config-manager \
+  --allow-publish                            # first run asks for a 2FA code
+npm trust list dsh-config-manager            # verify
+```
+
+No `NPM_TOKEN` repository secret is needed — a previously configured token can be revoked (npm is deprecating bypass-2FA tokens anyway).
 
 Notes:
 

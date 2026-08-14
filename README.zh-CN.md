@@ -170,13 +170,22 @@ git push origin main --tags
 
 npmjs.com 一次性配置（首次 OIDC 发布前必须完成）：
 
+**方案 A — 网页**（有 scope 包或 UI 入口可用时）：
 1. 打开包页面：https://www.npmjs.com/package/dsh-config-manager → **Settings → Publishing access**。
-2. **Add trusted publisher**（添加可信发布方）：
-   - Provider：**GitHub Actions**
-   - GitHub owner：`xiajiajun516`
-   - Repository：`dsh-config-manager`
-   - Workflow filename：`publish.yml`
-3. 无需 `NPM_TOKEN` 仓库密钥——之前配置的令牌可以撤销。
+2. **Add trusted publisher**：Provider **GitHub Actions** · owner `xiajiajun516` · repository `dsh-config-manager` · workflow filename `publish.yml`。
+
+**方案 B — CLI（推荐；无 scope 包 UI 无入口时用这个）**：
+```bash
+npm logout
+npm login                                    # 网页 OAuth + 2FA 验证码
+npm trust github dsh-config-manager \
+  --file publish.yml \
+  --repo xiajiajun516/dsh-config-manager \
+  --allow-publish                            # 首次会要求输入 2FA 验证码
+npm trust list dsh-config-manager            # 验证
+```
+
+无需 `NPM_TOKEN` 仓库密钥——之前配置的令牌可以撤销（npm 也正在逐步废弃 bypass-2FA 令牌）。
 
 说明：
 
