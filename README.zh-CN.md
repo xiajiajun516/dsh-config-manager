@@ -73,7 +73,11 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 
 > 💡 照着复制就行：`--config.auto-install-peers=false` 跳过几个尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），`@latest` 确保装到最新版。
 >
-> 🐛 **`@latest` 装到了旧版？** pnpm 会缓存 registry 元数据，`@latest` 可能解析到过期版本。改用精确版本即可：`dsh plugin --profile web add dsh-config-manager@0.1.4 --config.auto-install-peers=false`。
+> 🐛 **`@latest` 装到了旧版？** 这是 **pnpm 11 的 `minimumReleaseAge` 供应链发布年龄策略**（不是缓存）：发布不足约 30 天的新版本会被排除出版本解析，直到进入白名单。装一次精确版本即可自动白名单，之后 `@latest` 正常：
+> ```bash
+> dsh plugin --profile web add dsh-config-manager@0.1.5 --config.auto-install-peers=false
+> ```
+> （或在 profile 的 `pnpm-workspace.yaml` 加 `minimumReleaseAge: 0` 彻底关闭年龄门槛。）
 
 ---
 

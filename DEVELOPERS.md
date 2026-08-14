@@ -84,10 +84,11 @@ CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish�
 ## 📌 常见坑
 
 - **pnpm 裸名 add 不升级**：`dsh plugin add dsh-config-manager`（无版本）会保留已记录版本；用 `@latest` 或精确版本
-- **pnpm 缓存旧 latest 元数据**：`@latest` 可能解析到旧版（pnpm 缓存 packument）。解决：
-  ```bash
-  dsh plugin --profile web cache delete dsh-config-manager   # 清该包元数据缓存
-  dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-peers=false
-  # 或直接精确版本：dsh plugin --profile web add dsh-config-manager@0.1.4 ...
-  ```
+- **`@latest` 装到旧版 = pnpm 11 发布年龄策略（不是缓存）**：`minimumReleaseAge` 默认把发布不足 30 天的新版本排除出版本解析，只有 `minimumReleaseAgeExclude` 白名单里的版本可用。`pnpm cache delete` 无效。解决：
+  1. **精确版本装一次即自动白名单**（推荐）：
+     ```bash
+     dsh plugin --profile web add dsh-config-manager@0.1.5 --config.auto-install-peers=false
+     # pnpm 自动把 0.1.5 追加进 pnpm-workspace.yaml 的 minimumReleaseAgeExclude，之后 @latest 即可解析到它
+     ```
+  2. 或彻底关闭年龄门槛：在 profile 的 `pnpm-workspace.yaml` 加 `minimumReleaseAge: 0`
 - **MemFs 测试路径**：内存 fs 的 key 必须与宿主 path 解耦（POSIX 上 path.resolve 对 win32 home 会注入 cwd）
