@@ -37,12 +37,15 @@ import type {
 
 class MemFs implements FileSystemFacade {
   files = new Map<string, Uint8Array>();
-  private readonly homeDir: string;
+  private readonly homeDir: string; // 规范化后的 home（纯字符串前缀，不依赖宿主 path 语义）
   constructor(homeDir: string) {
-    this.homeDir = homeDir;
+    this.homeDir = normalizePath(homeDir);
   }
+  /** 内存 fs 的 key：与宿主平台解耦——避免 POSIX 上 path.resolve('C:\\...', p) 注入 cwd 前缀，
+   * 也避免 win32 上 path.resolve('/home/...', p) 补盘符，导致 listRecursive 切片错位。 */
   private key(p: string): string {
-    return normalizePath(path.resolve(this.homeDir, p));
+    const rel = normalizePath(p).replace(/^\/+/, '');
+    return rel === '' ? this.homeDir : `${this.homeDir}/${rel}`;
   }
   async readFile(relPath: string): Promise<Uint8Array> {
     const v = this.files.get(this.key(relPath));
@@ -64,10 +67,10 @@ class MemFs implements FileSystemFacade {
     this.files.delete(this.key(relPath));
   }
   async listRecursive(dir: string): Promise<string[]> {
-    const prefix = normalizePath(path.resolve(this.homeDir, dir)) + '/';
+    const prefix = this.key(dir) + '/';
     const out: string[] = [];
     for (const k of this.files.keys()) {
-      if (k.startsWith(prefix)) out.push(k.slice(this.homeDir.length).replace(/^[\\/]+/, ''));
+      if (k.startsWith(prefix)) out.push(k.slice(this.homeDir.length + 1)); // 去掉 home + '/'
     }
     return out.sort();
   }
