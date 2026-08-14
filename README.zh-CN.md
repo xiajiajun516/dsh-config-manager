@@ -73,11 +73,22 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 
 > 💡 照着复制就行：`--config.auto-install-peers=false` 跳过几个尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），`@latest` 确保装到最新版。
 >
-> 🐛 **`@latest` 装到了旧版？** 这是 **pnpm 11 的 `minimumReleaseAge` 供应链发布年龄策略**（不是缓存）：发布不足约 30 天的新版本会被排除出版本解析，直到进入白名单。装一次精确版本即可自动白名单，之后 `@latest` 正常：
-> ```bash
-> dsh plugin --profile web add dsh-config-manager@0.1.5 --config.auto-install-peers=false
-> ```
-> （或在 profile 的 `pnpm-workspace.yaml` 加 `minimumReleaseAge: 0` 彻底关闭年龄门槛。）
+> 🐛 **`@latest` 装到了旧版？** 这是 **pnpm 11 的 `minimumReleaseAge` 供应链发布年龄策略**（不是缓存）：发布不足约 30 天的新版本会被排除出版本解析，直到进入白名单。两种解决办法：
+> - 装一次精确版本即可自动白名单，之后 `@latest` 正常：
+>   ```bash
+>   dsh plugin --profile web add dsh-config-manager@0.1.7 --config.auto-install-peers=false
+>   ```
+> - 或一行命令彻底关闭年龄门槛（在 profile 的 `pnpm-workspace.yaml` 顶部加 `minimumReleaseAge: 0`）：
+>   ```powershell
+>   $f = "$env:USERPROFILE\.dsh\profiles\web\pnpm-workspace.yaml"
+>   $c = Get-Content $f -Raw
+>   if ($c -notmatch '(?m)^minimumReleaseAge:') {
+>     Set-Content -LiteralPath $f -Value ("minimumReleaseAge: 0`n" + $c) -Encoding utf8
+>     Write-Output "已添加 minimumReleaseAge: 0"
+>   } else {
+>     Write-Output "已存在，无需修改"
+>   }
+>   ```
 
 ---
 

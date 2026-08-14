@@ -73,11 +73,22 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 
 > 💡 Just copy-paste the command: `--config.auto-install-peers=false` skips a few DSH core packages that aren't on the public registry yet (the DSH runtime provides them), and `@latest` ensures you get the newest build.
 >
-> 🐛 **`@latest` installed an old version?** That's pnpm 11's `minimumReleaseAge` supply-chain policy, not a cache issue: versions published less than ~30 days ago are excluded from resolution until whitelisted. Install an exact version once (it auto-whitelists, then `@latest` works):
-> ```bash
-> dsh plugin --profile web add dsh-config-manager@0.1.5 --config.auto-install-peers=false
-> ```
-> (Or set `minimumReleaseAge: 0` in the profile's `pnpm-workspace.yaml` to disable the age gate.)
+> 🐛 **`@latest` installed an old version?** That's pnpm 11's `minimumReleaseAge` supply-chain policy, not a cache issue: versions published less than ~30 days ago are excluded from resolution until whitelisted. Two fixes:
+> - Install an exact version once (it auto-whitelists, then `@latest` works):
+>   ```bash
+>   dsh plugin --profile web add dsh-config-manager@0.1.7 --config.auto-install-peers=false
+>   ```
+> - Or disable the age gate with a one-liner (adds `minimumReleaseAge: 0` at the top of the profile's `pnpm-workspace.yaml`):
+>   ```powershell
+>   $f = "$env:USERPROFILE\.dsh\profiles\web\pnpm-workspace.yaml"
+>   $c = Get-Content $f -Raw
+>   if ($c -notmatch '(?m)^minimumReleaseAge:') {
+>     Set-Content -LiteralPath $f -Value ("minimumReleaseAge: 0`n" + $c) -Encoding utf8
+>     Write-Output "Added minimumReleaseAge: 0"
+>   } else {
+>     Write-Output "Already present, nothing to do"
+>   }
+>   ```
 
 ---
 
