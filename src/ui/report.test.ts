@@ -78,12 +78,12 @@ test('report: 回滚报告 full / partial', () => {
   assert.ok(partial.includes('请手动安装'));
 });
 
-test('report: suggestedActions 顺序（fixIssues → viewDetails → done）', () => {
-  assert.deepEqual(suggestedActions(makeImportResult()), ['viewDetails', 'done']);
+test('report: suggestedActions 仅「完成」（报告已内联全部详情，无空操作按钮）', () => {
+  assert.deepEqual(suggestedActions(makeImportResult()), ['done']);
   const failed = makeImportResult({
     executed: [{ itemId: 'mcp:m', status: 'failed' }],
   });
-  assert.deepEqual(suggestedActions(failed), ['fixIssues', 'viewDetails', 'done']);
+  assert.deepEqual(suggestedActions(failed), ['done']);
 });
 
 test('report: formatBytes', () => {

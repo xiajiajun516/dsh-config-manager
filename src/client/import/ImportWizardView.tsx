@@ -403,14 +403,11 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
           importResult={result}
           onAction={(action) => {
             if (action === 'done') resetWizard()
-            // fixIssues / viewDetails：报告已展示全部失败项与详情，无需额外页面
+            // 报告已内联展示全部失败/警告项与回滚详情（§22/§23），无额外动作页
           }}
         />
         {result.needsRestart && <Banner kind="warn">{t('report.needsRestart')}</Banner>}
         {error !== null && <ErrorBanner error={error} />}
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={resetWizard}>{t('common.done')}</Button>
-        </div>
       </div>
     )
   }

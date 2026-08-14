@@ -108,13 +108,10 @@ export function renderImportReport(result: ImportResult): string {
   return lines.join('\n');
 }
 
-/** 结果页动作按钮（§22：Fix Issues / View Details / Done） */
-export function suggestedActions(result: ImportResult): ImportResultAction[] {
-  const actions: ImportResultAction[] = [];
-  if (result.executed.some((e) => e.status === 'failed')) actions.push('fixIssues');
-  if (result.executed.length > 0 || result.warnings.length > 0) actions.push('viewDetails');
-  actions.push('done');
-  return actions;
+/** 结果页动作按钮（§22）。报告已内联展示全部失败/警告项的原因与回滚详情（§23），
+ * 不再提供空操作的 Fix Issues / View Details 按钮——仅保留「完成」。 */
+export function suggestedActions(_result: ImportResult): ImportResultAction[] {
+  return ['done'];
 }
 
 /* ---------------- §17 回滚报告 ---------------- */
