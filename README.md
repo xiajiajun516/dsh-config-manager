@@ -247,8 +247,10 @@ npm run bundle                   # rebuild the client bundle only
 
 ```bash
 npm version patch          # 0.1.2 → 0.1.3
-git push origin main --tags   # CI: test → build → publish
+git push origin main --tags   # CI: test → build → publish → GitHub Release
 ```
+
+A **GitHub Release** is created automatically for each tag too — with auto-generated release notes and the installable `dsh-config-manager-<version>.tgz` attached as an asset.
 
 > One-time OIDC trusted-publisher setup:
 > ```bash

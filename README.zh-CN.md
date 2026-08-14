@@ -243,12 +243,14 @@ npm run bundle                   # 仅重建 client bundle
 
 **架构**：核心引擎与 DSH 运行时解耦（可 mock 测试）→ 各配置分类适配器 → 安全模块 → 迁移逻辑集中。
 
-**自动发布**：打 tag 即自动发布到 npm（GitHub Actions + OIDC，无需任何密钥）：
+**自动发布**：打 tag 即自动发布（GitHub Actions + OIDC，无需任何密钥）：
 
 ```bash
 npm version patch          # 0.1.2 → 0.1.3
-git push origin main --tags   # CI 自动: 测试 → 构建 → 发布
+git push origin main --tags   # CI 自动: 测试 → 构建 → 发布 → GitHub Release
 ```
+
+每个 tag 还会**自动创建 GitHub Release**：自动生成更新日志，并附上可安装的 `dsh-config-manager-<版本>.tgz` 产物。
 
 > 首次配置 OIDC 可信发布方（只需一次）：
 > ```bash

@@ -10,7 +10,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # needed to create the GitHub Release (assets + notes)
       id-token: write   # required for npm trusted publishing (OIDC)
     steps:
       - name: Checkout
@@ -40,8 +40,24 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Package tarball
+        # The installable tgz is attached to the GitHub Release as an asset.
+        run: npm pack --pack-destination ./dist
+
       - name: Publish to npm (trusted publishing / OIDC)
         # No NODE_AUTH_TOKEN: the npm CLI obtains a short-lived registry token
         # via GitHub Actions OIDC. Requires a trusted publisher configured on
         # npmjs.com for this package (see README "Publishing").
         run: npm publish --access public --provenance
+
+      - name: Create GitHub Release (tag-triggered only)
+        # Runs only on tag pushes (not manual dispatch): creates a GitHub
+        # Release with auto-generated notes and the tgz artifact.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/dsh-config-manager-*.tgz \
+            --generate-notes \
+            --title "DSH Config Manager $GITHUB_REF_NAME"
