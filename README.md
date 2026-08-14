@@ -30,7 +30,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 | 🚀 | **One-click Export** | Package your recommended config into a ZIP |
 | 📦 | **One-click Import** | Restore your environment on another machine |
 | 👀 | **Preview before import** | Full preview first — **never touches your config silently** |
-| ⚔️ | **Conflict handling** | Keep Current / Use Imported / Review — you decide |
+| ⚔️ | **Conflict handling** | Keep Current / Use Imported — you decide |
 | 🗺️ | **Path auto-mapping** | Detects dead absolute paths and lets you remap them |
 | 🔒 | **Secret safety** | API Keys are never exported; re-enter them after import |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
@@ -146,7 +146,8 @@ When the target already has a same-named item, you choose:
 |---|---|
 | **Keep Current** | Leave the target's config untouched |
 | **Use Imported** | Overwrite with the backup's value |
-| **Review** | Skip for now, handle later |
+
+> Note: a "decide later / review" option is intentionally **not** offered — an undecided conflict would block the import from proceeding. Every conflict must be resolved before continuing.
 
 ### 🗺️ Path mapping
 
