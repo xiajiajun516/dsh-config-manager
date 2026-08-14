@@ -84,5 +84,10 @@ CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish�
 ## 📌 常见坑
 
 - **pnpm 裸名 add 不升级**：`dsh plugin add dsh-config-manager`（无版本）会保留已记录版本；用 `@latest` 或精确版本
-- **pnpm 缓存旧 latest 元数据**：`@latest` 可能解析到旧版，用精确版本最稳
+- **pnpm 缓存旧 latest 元数据**：`@latest` 可能解析到旧版（pnpm 缓存 packument）。解决：
+  ```bash
+  dsh plugin --profile web cache delete dsh-config-manager   # 清该包元数据缓存
+  dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-peers=false
+  # 或直接精确版本：dsh plugin --profile web add dsh-config-manager@0.1.4 ...
+  ```
 - **MemFs 测试路径**：内存 fs 的 key 必须与宿主 path 解耦（POSIX 上 path.resolve 对 win32 home 会注入 cwd）
