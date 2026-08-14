@@ -1,250 +1,290 @@
-# DSH Config Manager
+# 🎒 DSH Config Manager
 
-**Backup · Export · Import · Migrate · Restore** — A configuration backup / export / import / migration manager for DSH.
+**Pack up your DSH configuration and take it anywhere — restore your whole environment on a new machine with one click.**
 
-[English](README.md) | [简体中文](README.zh-CN.md)
-
-One-click export of your main DSH configuration to a ZIP file, import it on another DSH, and restore your working environment as completely as possible.
-
-> ⚠️ **Security first: no Secret (API Key / Token / Password) is exported by default.** See [Security](#security).
+[English](README.md) · [简体中文](README.zh-CN.md)
 
 ---
 
-## What it does
+## What is this? 🤔
 
-DSH configuration is a hybrid model — one central `settings.yaml` plus multiple standalone files plus plugin-owned files (see `Docs/research/dsh-architecture.md`).
-This plugin does **not** copy `~/.dsh` wholesale. Instead it collects configuration by real config categories, packages them into a ZIP backup with a manifest and checksums, and runs a safe import flow on the target side:
+DSH is your AI assistant workbench — it holds your settings: model configs, plugins, skills, workspaces…
+
+**DSH Config Manager is its "moving service"**:
 
 ```
-Analyze → Preview → Snapshot → Apply → Validate → Rollback(if needed)
+┌──────────────┐   ① one-click    ┌─────────────────┐   ② one-click    ┌──────────────┐
+│  Machine A    │ ──── export ───► │ dsh-config.zip   │ ──── import ───► │  Machine B    │
+│  my config    │                  │   (one file)     │                  │  all restored │
+└──────────────┘                  └─────────────────┘                  └──────────────┘
 ```
 
-## Features
+> ⚠️ **Security first**: no secrets (API Key / Token / Password) are exported by default. See [Security](#-security).
 
-- **Export**: Quick Export (one-click recommended config) and per-section custom export.
-- **Import**: ZIP validation → manifest read → integrity check → schema check → compatibility check → content scan → import-plan preview → user confirmation → automatic snapshot → apply → validate → result (automatic rollback on failure).
-- **Dry Run / Preview**: `analyzeImport()` + `createImportPlan()` are pure computation with zero writes — full preview before importing.
-- **Conflict handling**: global strategies `merge` (default) / `replace` / `skipExisting` plus per-item `Keep Current / Use Imported / Review`.
-- **Path mapping**: cross-device absolute-path detection and batch prefix mapping (workspace paths / MCP cwd / plugin config paths).
-- **Secret safety**: all sensitive fields are stripped by default; encrypted full backup (scrypt + AES-256-GCM) is an opt-in advanced feature.
-- **Automatic snapshot & rollback**: backs up the target state before import and restores it in reverse order on failure.
-- **Schema versioning & migration**: independent `schemaVersion`, migration logic centralized in `src/migrations/`.
-- **Idempotency**: re-importing the same ZIP creates no duplicates (keyed by Plugin ID / MCP serverName / Prompt name / Workspace id / Credential ref).
-- **Compatibility score**: Excellent / Good / Partial / Unsupported (rule-driven).
-- **Profiles**: save current config as a Profile / switch / duplicate / rename / export / import / delete; switching includes Preview + snapshot + rollback (`src/profiles/`).
+---
 
-## Installation
+## ✨ Highlights
 
-This plugin is a standard **DSH bundle plugin** (mirrors the dsh-ssh engineering pattern, research report §5.1): `package.json` declares
-`dsh.bundle.patch` (pointing to `cordis.patch.yml`, the CLI bundle hard criterion) and `dsh.client` (browser-half declaration);
-`npm run build` produces both halves (`lib/index.js` host half + `lib/client.js` browser half, the latter loaded into the Web GUI via
-`window.__ModuleLoader__.load(...)`).
+| Icon | Feature | In one line |
+|:---:|---|---|
+| 🚀 | **One-click Export** | Package your recommended config into a ZIP |
+| 📦 | **One-click Import** | Restore your environment on another machine |
+| 👀 | **Preview before import** | Full preview first — **never touches your config silently** |
+| ⚔️ | **Conflict handling** | Keep Current / Use Imported / Review — you decide |
+| 🗺️ | **Path auto-mapping** | Detects dead absolute paths and lets you remap them |
+| 🔒 | **Secret safety** | API Keys are never exported; re-enter them after import |
+| ↩️ | **Automatic rollback** | Failed import restores everything automatically |
+| 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime |
 
-Two install options (choose one):
+---
+
+## 🔄 How it works?
+
+### Export (pack it up)
+
+```
+Read your config → strip secrets (safe) → build manifest → compute checksums → pack into ZIP
+```
+
+### Import (restore the environment)
+
+Every step confirms and backs up first — **it never modifies your config directly**:
+
+```
+Select ZIP → validate file → check integrity → check schema → compatibility check
+    → scan contents → build import plan → preview & confirm
+    → auto-backup current config → apply → validate → done
+                      │
+                      └─ failed midway? → automatically restored (rollback)
+```
+
+---
+
+## 📥 Installation
+
+It's a standard **DSH plugin** — two steps:
 
 ```bash
-# ① Recommended — install from the npm registry
+# ① Install the plugin
 dsh plugin --profile web add dsh-config-manager --config.auto-install-peers=false
 
-# ② Alternative — local tgz / directory (development & testing)
-npm run build
-npm pack                       # produces dsh-config-manager-0.1.0.tgz
-dsh plugin --profile web add file:/absolute/path/to/dsh-config-manager-0.1.0.tgz
+# ② Restart DSH (a "Backup & Migration" entry appears in Settings)
 ```
 
-> **`--legacy-peer-deps` note**: some DSH core packages in peerDependencies (e.g.
-> `@deepseek-ai/dsh-plugin-marketplace`, `dsh-host-plugin-inventory`) are not published to the public npm registry
-> and only exist in a local DSH profile. If npm/pnpm fails while resolving peer dependencies, skip automatic peer installation:
-> - Direct npm install: `npm install --legacy-peer-deps`
-> - `dsh plugin add` (forwards to pnpm internally): `dsh plugin --profile web add <spec> --config.auto-install-peers=false`
->
-> At runtime these packages are provided by the DSH profile itself (peerDependencies semantics); the plugin never reinstalls them.
+> 💡 **Why the flag?** `--config.auto-install-peers=false` skips a few DSH core packages that aren't on the public registry yet (the DSH runtime provides them). Just copy-paste it.
 
-> **Local verification tip**: isolate testing with the `$DSH_HOME` environment variable — never touches `~/.dsh`:
+**From source / local package** (for developers):
+
+```bash
+npm run build && npm pack          # produces dsh-config-manager-0.1.2.tgz
+dsh plugin --profile web add file:/absolute/path/dsh-config-manager-0.1.2.tgz
+```
+
+> 🧪 **Try it without touching your real environment?** Use an isolated `DSH_HOME`:
 > ```bash
-> $env:DSH_HOME = "D:\tmp\dsh-home"        # Windows PowerShell
-> dsh plugin --profile test add file:<tgz> --config.auto-install-peers=false
-> dsh --profile test --dump-config | Select-String config-manager   # should show the mount line
+> $env:DSH_HOME = "D:\tmp\dsh-home"   # Windows PowerShell
+> dsh plugin --profile test add dsh-config-manager --config.auto-install-peers=false
+> dsh --profile test --dump-config | Select-String config-manager
 > ```
 
-## Export
+---
 
-Two modes:
-
-- **Quick Export**: one-click export of the recommended sections (settings / ui / providers / plugins / mcp / prompts / skills / agentPresets / workspaces / credentialsStatus).
-- **Custom Export**: choose sections individually (`pluginFiles` and `sessions` are opt-in; `sessions` is off by default).
-
-Output: `dsh-config-<yyyy-MM-dd>.zip` containing `manifest.json` + per-section data + `integrity/checksums.json` (SHA-256).
-
-## Import
+## 🚀 Quick start (3-minute tour)
 
 ```
-Select ZIP → Validate ZIP → Read Manifest → Check Integrity → Check Schema
-→ Check Compatibility → Scan Contents → Generate Import Plan → Show Preview
-→ User Confirms → Create Backup (Snapshot) → Import → Validate → Show Result
+Machine A (export)
+  1. Open DSH → Settings → "Backup & Migration"
+  2. Click "Export Configuration" → choose "Quick Export"
+  3. You get dsh-config-2026-08-14.zip (the report confirms no secrets inside)
+
+Copy the ZIP to Machine B (import)
+  1. Open DSH → "Backup & Migration" → "Import Configuration"
+  2. Select the ZIP → wait for analysis → review the "Import Preview"
+  3. Path issues? → choose new paths (batch mapping supported)
+  4. Conflicts? → choose Keep Current / Use Imported
+  5. Confirm import → wait
+  6. Re-enter any missing API Keys as prompted
+  7. ✅ Settings / plugins / MCP / skills / workspaces are back
 ```
 
-Import flow is enforced: **no writes happen before confirmation**; **a snapshot is always created before importing**; on failure `rollbackOnError` decides between full rollback or per-item honest reporting.
+---
 
-## Security
+## 🧩 Features
 
-> **The default backup contains no Secret values.** This is a hard security invariant, enforced by the `Exporter`:
+### 📤 Export (two modes)
 
-- All structured section data passes a sensitive-field scan before being written to the ZIP (field-name blacklist: password / token / apiKey / secret / credential / authorization / cookie / privateKey / clientSecret etc., case-insensitive); matches are stripped.
-- `ctx.settings.describe({ redactSecrets: true })` is the first line of defense for DSH-known secrets; the sensitive-field scanner is the second line of defense for plugin-defined fields.
-- Credentials (`.credentials.yaml`) **never export values**, only state (`{ref, required, configured, hasValue:false}`); after import a "N credentials need attention" list is generated.
-- **Encrypted full backup (optional)**: when "Include secrets" is explicitly checked, a backup password is required; `node:crypto` (scrypt KDF + AES-256-GCM) is used, **the password is never written to the manifest**; `secrets.enc` is only written back via `ctx.credentials.set()` after decryption.
-- Without an encryption provider, `includeSecrets: true` is rejected (secrets are never leaked in plaintext).
-- Logging is fully redacted — Secret values never reach logs.
-- A ZIP is untrusted input: defends against Zip Slip / absolute paths / symlinks / zip bombs (entry count / compressed size / uncompressed size / compression-ratio limits) / malformed ZIPs / checksum mismatch — any trigger rejects the whole archive.
-
-## What is NOT exported
-
-By default **not** exported (spec §34.19/20):
-
-- API Key / Password / Token / Cookie / Session / auth credentials (values)
-- `~/.dsh/.anonymous-user-id` (device unique ID)
-- Conversation history (`sessions/`, off by default; v1 supports file-level copy only)
-- Logs / Cache / temp files
-- Browser localStorage UI state (no host-side channel; only `uiMigrationNotes` is exported)
-- Plugin binaries (never packaged — only the manifest is migrated, install goes through the official mechanism)
-
-## Secrets
-
-| Backup type | Import behavior |
+| Mode | Description |
 |---|---|
-| Normal backup (no secrets.enc) | All credentials → `MissingSecret`, filled in by the user after import |
-| Encrypted backup + correct password | Auto-decrypted and restored via `credentials.set()` (per-item confirmation in preview) |
-| Encrypted backup + no password | Same as normal backup: state-only, user fills in |
+| **Quick Export** (recommended) | One-click: settings / UI / models / plugins / MCP / skills / workspaces… |
+| **Custom Export** | Tick the categories you want |
 
-## Compatibility
+> Output: `dsh-config-<date>.zip` with manifest + per-category data + SHA-256 checksums.
 
-| Status | Rule |
+### 📥 Import (safe flow)
+
+- **Nothing is written before confirmation** — analyze & preview are zero-write
+- **Backup before applying** — the target config is snapshotted automatically
+- **Automatic rollback on failure** — full rollback or skip-and-continue, your choice
+
+### 👀 Import Preview (dry run)
+
+Shown fully before importing:
+
+```
+✓ 18 settings will be updated    ✓ 6 plugins already installed
+⚠ 2 plugins need installation    ⚠ 3 secrets need re-entry
+⚠ 1 path needs mapping           ⚠ 2 conflicts need attention
+```
+
+### ⚔️ Conflict handling
+
+When the target already has a same-named item, you choose:
+
+| Option | Meaning |
 |---|---|
-| Excellent | Same platform, no missing sections, supported schema |
-| Good | Backup from an older DSH (target is backward compatible) |
-| Partial | Cross-platform / missing sections / backup newer than target |
-| Unsupported | Schema beyond the supported range |
+| **Keep Current** | Leave the target's config untouched |
+| **Use Imported** | Overwrite with the backup's value |
+| **Review** | Skip for now, handle later |
 
-## Backup format
+### 🗺️ Path mapping
+
+`C:\Users\alice\projects` doesn't exist on the new machine? The plugin:
+1. Detects the dead absolute paths automatically
+2. Lets you pick new paths
+3. Supports **batch prefix mapping** (`C:\Users\alice\` → `/Users/bob/` in one shot)
+
+### 🔒 Secrets
+
+| Scenario | Behavior |
+|---|---|
+| Default backup | **No secret values at all** — only records which keys are needed |
+| Encrypted backup (optional) | AES-256-GCM with a password; the password is **never written to the file** |
+| After import | "3 secrets need re-entry" — values stay in memory only |
+
+### 🗂️ Profiles
+
+Save multiple configurations (Work / Personal) and switch anytime; switching includes preview + auto-backup + rollback.
+
+---
+
+## 📦 What's inside a backup?
 
 ```
 dsh-config-2026-08-14.zip
-├── manifest.json                  # schemaVersion / exporter / source / sections / security
-├── config/settings.json           # non-UI settings namespaces (redacted + revision)
-├── config/ui.json                 # UI namespaces + uiMigrationNotes
-├── ai/providers.json              # llm-* providers/models (same section, not split)
-├── plugins/plugins.json + patch.json
-├── mcp/servers.json               # dsh-mcp-client entries extracted from the composed patch
-├── custom/prompts.json + skills/
-├── agents/presets/
-├── workspaces/workspaces.json
-├── plugin-files/                  # optional
-├── security/credentials.json      # credential state (never contains values)
-├── security/secrets.enc           # encrypted backups only
-└── integrity/checksums.json       # SHA-256
-```
-
-## Development
-
-```bash
-npm install --legacy-peer-deps   # peers include DSH core packages not on the public registry, see Installation
-npm run typecheck                # tsc --noEmit
-npm run build                    # tsc -p tsconfig.build.json (host half lib/) + tsdown (client bundle lib/client.js)
-npm run bundle                   # rebuild the client bundle only (tsdown)
-npm test                         # node --test "src/**/*.test.ts" "tests/**/*.test.ts"
-```
-
-Architecture: the core engine (`src/core`) depends only on the `ConfigAdapter` / `HostContext` interfaces (decoupled from the DSH runtime, testable with in-memory mocks); `src/adapters` implements each config category; `src/security` provides secret scanning / encryption / integrity / ZIP safety / redaction; `src/migrations` centralizes schema migration.
-
-## Publishing (GitHub Actions · npm trusted publishing / OIDC)
-
-Pushing a version tag triggers the CI pipeline in `.github/workflows/publish.yml`, which typechecks, runs the tests, builds, and publishes the package to npm. Publishing uses **npm trusted publishing (OIDC)** — no long-lived token is stored in the repository; the npm CLI exchanges a short-lived identity with the registry via GitHub Actions.
-
-```bash
-npm version patch          # 0.1.0 → 0.1.1 (also creates the tag)
-git push origin main --tags
-```
-
-One-time setup on npmjs.com (required before the first OIDC publish):
-
-**Option A — website** (scoped packages / where the UI is available):
-1. Open the package page: https://www.npmjs.com/package/dsh-config-manager → **Settings → Publishing access**.
-2. **Add trusted publisher**: Provider **GitHub Actions** · owner `xiajiajun516` · repository `dsh-config-manager` · workflow filename `publish.yml`.
-
-**Option B — CLI** (recommended; works for unscoped packages where the UI section is missing):
-```bash
-npm logout
-npm login                                    # web OAuth + 2FA code
-npm trust github dsh-config-manager \
-  --file publish.yml \
-  --repo xiajiajun516/dsh-config-manager \
-  --allow-publish                            # first run asks for a 2FA code
-npm trust list dsh-config-manager            # verify
-```
-
-No `NPM_TOKEN` repository secret is needed — a previously configured token can be revoked (npm is deprecating bypass-2FA tokens anyway).
-
-Notes:
-
-- The version in `package.json` must match the tag (`npm version` keeps them in sync automatically).
-- The workflow upgrades npm (`npm install -g npm@latest`) because OIDC publishing requires npm ≥ 11.5.1.
-- The workflow can also be triggered manually via **Run workflow** on the Actions page.
-
-## Testing
-
-Test framework: **node:test (Node built-in, zero dependency)**, following the choice made in the core module (no vitest). Tests live in `src/**/*.test.ts` and `tests/**/*.test.ts`.
-
-Coverage matrix (spec §33 + acceptance scenarios A–G):
-
-| Group | Coverage |
-|---|---|
-| Export | normal / empty / large (1MB+) / Unicode / special characters / secret filtering |
-| Import | normal / Merge / Replace / Skip (never deletes target-only items, §32) / Conflict / Missing plugin / Missing dependency / Missing secret / unconfirmed rejection |
-| Rollback (scenario E) | multi-adapter mid-flight failure → full restore (settings / file blobs / workspace / patch lines); `rollbackOnError=false` comparison; honest partial-rollback report |
-| Migration (scenario G) | `migrateToCurrent` mechanism-level: same version / too new / below minimum / no path / registry overlap / chained progression (**honest note: v1 is current, no real v2 exists for end-to-end verification**) |
-| Security (scenario F) | malformed ZIP / oversized entry count / checksum mismatch & missing / Zip Slip / absolute paths |
-| Cross-platform (scenario B) | win32→darwin / darwin→win32 / linux→win32 batch prefix mapping |
-| Redaction | log messages / meta / full pipeline never leaks secret values |
-| Schema | manifest structure validation / version predicate functions |
-
-Current test results: **186 tests, all passing** (`npm test`); `npm run typecheck` and `npm run build` both pass.
-
-## Known limitations
-
-1. **Workspace: create/rename title only**: DSH's workspace service has no "overwrite whole" write channel — import can create workspaces and update titles; paths and session lists are maintained by DSH itself from the real directory, cross-device paths are adapted via path mapping.
-2. **Some DSH core packages are not on the public npm registry** (e.g. `@deepseek-ai/dsh-plugin-marketplace`, `dsh-host-plugin-inventory`): features depending on their APIs only work in a local profile; installing this plugin requires skipping automatic peer installation (see the `--legacy-peer-deps` note in [Installation](#installation)).
-3. **No MCP management API** (research report §4.3): MCP is imported as composed patch lines and takes effect after restarting DSH; no add/remove/update API.
-4. **Plugin installation requires a restart**: `pluginMarketplace.installPlugin` only returns `needsRestart`; restarting depends on DSH Desktop.
-5. **Browser localStorage UI state is not migrated** (task board data, panel widths, etc.): no host channel.
-6. **keybindings / workflow configs / commands / rules files**: DSH currently has no such concepts; no sections are implemented (nothing invented).
-7. **Credential values cannot be rolled back**: DSH never reads credential values back; credentials overwritten during import can only be marked `manualHint` for manual re-entry on rollback.
-8. **Newly created items cannot be rollback-deleted**: DSH settings have no delete semantics; namespaces newly created by import can only be handled manually on rollback (honestly reported as partial).
-9. **Schema migration**: v1→v2 is a placeholder (current `CURRENT_SCHEMA_VERSION=1`); the mechanism is ready but no real v2 exists to verify.
-10. **History/session migration**: off by default; v1 supports file-level copy only.
-11. **Encrypted backups**: depend on a strong user-set password; a lost password makes `secrets.enc` undecryptable (by design).
-
-## Manual Test (shortest manual flow)
-
-> Prerequisites: two DSH instances (or two config directories on one machine); this plugin built and installed per [Installation](#installation).
-
-```
-DSH A
-→ open Config Manager → Export Configuration
-→ choose Quick Export → export dsh-config-<date>.zip (confirm in the report that Secrets are all excluded)
-→ copy the ZIP to DSH B
-
-DSH B
-→ open Config Manager → Import Configuration
-→ select the ZIP → wait for Analyzing... → review the Import Preview (sections/plugins/path mapping/credential re-entry list)
-→ if there are path issues → choose mapping directories (batch prefix mapping)
-→ resolve conflicts (Keep Current / Use Imported / Review)
-→ confirm Import → watch progress → review the result report
-→ fill in missing credentials (N credentials need attention)
-→ Verify: settings / plugins / MCP / Prompts / Skills / Workspaces are restored;
-    if the import failed midway → confirm it rolled back automatically and the original config still works
+├── manifest.json              # backup manifest: version / source / time / sections
+├── config/
+│   ├── settings.json          # settings (redacted)
+│   └── ui.json                # UI preferences
+├── ai/providers.json          # AI providers / models
+├── plugins/                   # plugin manifest (binaries are never packaged)
+├── mcp/servers.json           # MCP server configs
+├── custom/                    # prompts / skills
+├── agents/presets/            # agent presets
+├── workspaces/                # workspaces
+├── security/credentials.json  # credential state (no values)
+├── security/secrets.enc       # encrypted backups only
+└── integrity/checksums.json   # SHA-256 checksums
 ```
 
 ---
 
-**Product principles**: better to migrate one config less than to break a user's existing config. Every Import follows `Analyze → Preview → Backup → Modify → Validate → Rollback`; every Secret follows `never export by default / never log / never expose / never silently transfer`.
+## 🛡️ Security
+
+- **The default backup contains no secret values** — a hard invariant, enforced at export
+- **Not exported**: API Keys / passwords / tokens / cookies / sessions / device unique ID / logs & cache / plugin binaries
+- **A ZIP is untrusted input**: defends against Zip Slip, malicious paths, zip bombs, corrupt archives — any trigger rejects the whole file
+- **Logs are fully redacted** — secret values never reach logs
+- **Encrypted backup**: scrypt + AES-256-GCM; the password lives in memory only
+
+---
+
+## 🤝 Compatibility
+
+| Status | Meaning |
+|---|---|
+| ✅ Excellent | Same platform, complete sections, supported schema |
+| 👍 Good | Backup from an older DSH |
+| ⚠️ Partial | Cross-platform / missing sections / backup newer than target |
+| ❌ Unsupported | Schema beyond the supported range (cannot import) |
+
+---
+
+## ❓ FAQ
+
+**Q: Will my API Key be in the backup?**
+No. The default backup **never contains any secret value** — only records which keys you'll need to re-enter.
+
+**Q: Will importing overwrite my existing config?**
+Not silently. Conflicts ask you to choose (Keep Current / Use Imported); the target is auto-backed-up and can roll back.
+
+**Q: Does it work across platforms (Windows → macOS)?**
+Yes. Dead absolute paths are detected and remapped (batch replacement supported).
+
+**Q: Can a corrupted ZIP still be imported?**
+No. A checksum mismatch rejects the import outright (protects against corruption or tampering).
+
+**Q: Will re-importing duplicate things?**
+No. Items are deduplicated by stable IDs (plugin ID / MCP name / skill name…); existing items are skipped.
+
+---
+
+## 👨‍💻 For developers
+
+```bash
+npm install --legacy-peer-deps   # install dependencies
+npm run typecheck                # type checking
+npm run build                    # build (host lib/ + client bundle)
+npm test                         # run tests (192)
+npm run bundle                   # rebuild the client bundle only
+```
+
+**Architecture**: the core engine is decoupled from the DSH runtime (mock-testable) → per-category adapters → security modules → centralized schema migrations.
+
+**Auto-publish**: push a tag → automatically published to npm (GitHub Actions + OIDC, no stored secrets):
+
+```bash
+npm version patch          # 0.1.2 → 0.1.3
+git push origin main --tags   # CI: test → build → publish
+```
+
+> One-time OIDC trusted-publisher setup:
+> ```bash
+> npm login
+> npm trust github dsh-config-manager --file publish.yml --repo xiajiajun516/dsh-config-manager --allow-publish
+> ```
+> Or add the GitHub Actions trusted publisher on the package page (Settings → Publishing access).
+
+---
+
+## 🧪 Testing
+
+**All 192 tests pass** (Node's built-in test runner, zero extra dependencies), covering:
+
+| Category | Coverage |
+|---|---|
+| Export | normal / empty / large / Unicode & special chars / secret filtering |
+| Import | normal / merge / replace / skip / conflict / missing plugin / missing dependency / missing secret |
+| Rollback | mid-flight failure → everything restored |
+| Security | malicious ZIP / corrupt archive / checksum mismatch / path traversal |
+| Cross-platform | Windows ↔ macOS ↔ Linux path handling |
+| Migration | schema upgrade mechanism |
+
+---
+
+## 📋 Known limitations
+
+1. **Workspace: create/rename title only** — DSH has no whole-overwrite write channel; paths & session lists are maintained by DSH itself (path mapping adapts cross-device)
+2. **Some DSH core packages are not public** — features depending on their APIs only work in a local DSH; install needs `--config.auto-install-peers=false`
+3. **No MCP management API** — MCP is imported as config lines and takes effect after restarting DSH
+4. **Plugin install requires a restart**
+5. **Browser UI state (localStorage) is not migrated** — e.g. task board data, panel widths
+6. **keybindings / workflows / commands / rules** — DSH has no such concepts; no fake sections
+7. **Credential values can't be rolled back** — re-enter manually after a rollback that touched them
+8. **Newly created items can't be rollback-deleted** — DSH settings have no delete semantics
+9. **Schema migration** — the mechanism is ready; the v1→v2 chain is a placeholder (v1 is current)
+10. **History/session migration is off by default** — v1 copies files only
+11. **Encrypted backups** — a lost password means the `secrets.enc` can't be decrypted (by design)
+
+---
+
+**Product principles**: better to migrate one config less than to break your existing config. Every import follows `Analyze → Preview → Backup → Apply → Validate → Rollback(if needed)`; every secret follows `never export by default / never log / never expose / never silently transfer`.

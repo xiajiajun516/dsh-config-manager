@@ -1,252 +1,290 @@
-# DSH Config Manager
+# 🎒 DSH Config Manager
 
-**Backup · Export · Import · Migrate · Restore** —— DSH 配置备份 / 导出 / 导入 / 迁移管理器。
+**把你的 DSH 配置打包带走 —— 换台电脑，环境一键恢复。**
 
-[English](README.md) | [简体中文](README.zh-CN.md)
-
-在一台 DSH 中一键导出主要配置为 ZIP，在另一台 DSH 中导入并尽可能恢复原来的使用环境。
-
-> ⚠️ **安全第一：默认不导出任何 Secret（API Key / Token / 密码）。** 详见 [Security](#security)。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
 ---
 
-## What it does
+## 这是什么？🤔
 
-DSH 的配置是「一个集中 `settings.yaml` + 多个独立文件 + 插件自有文件」的混合模型（见 `Docs/research/dsh-architecture.md`）。
-本插件**不整包复制 `~/.dsh`**，而是按真实配置类别分区收集、打包为带清单（manifest）与校验和（checksums）的 ZIP 备份，并在导入端执行
+DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置、插件、常用技能、工作区……
+
+**DSH Config Manager 就是它的「搬家工具」**：
 
 ```
-Analyze → Preview → Snapshot → Apply → Validate → Rollback(if needed)
+┌──────────────┐   ① 一键导出    ┌─────────────────┐   ② 一键导入    ┌──────────────┐
+│   电脑 A      │ ─────────────► │  dsh-config.zip  │ ─────────────► │   电脑 B      │
+│   我的配置     │                │   （一个文件）     │                │  配置全部恢复  │
+└──────────────┘                └─────────────────┘                └──────────────┘
 ```
 
-的安全导入流程。
+> ⚠️ **安全第一**：默认**不导出**任何密钥（API Key / Token / 密码）。详见 [安全](#-安全)。
 
-## Features
+---
 
-- **Export**：Quick Export（推荐配置一键导出）与按分区选择导出。
-- **Import**：ZIP 校验 → manifest 读取 → 完整性校验 → schema 检查 → 兼容性检查 → 内容扫描 → 导入计划预览 → 用户确认 → 自动快照 → 执行 → 校验 → 结果（失败自动回滚）。
-- **Dry Run / Preview**：`analyzeImport()` + `createImportPlan()` 纯计算零写入，导入前完整预览。
-- **冲突处理**：`merge`（默认）/ `replace` / `skipExisting` 全局策略 + 逐项 `Keep Current / Use Imported / Review`。
-- **路径映射**：跨设备绝对路径检测与批量前缀映射（workspace 路径 / MCP cwd / 插件配置路径）。
-- **Secret 安全**：默认剥离所有敏感字段；加密完整备份（scrypt + AES-256-GCM）为可选高级功能。
-- **自动快照与回滚**：导入前备份将被修改的目标，失败时逆序补偿恢复。
-- **Schema 版本与迁移**：`schemaVersion` 独立演进，迁移逻辑集中在 `src/migrations/`。
-- **幂等**：同一 ZIP 重复导入不产生重复数据（按 Plugin ID / MCP serverName / Prompt name / Workspace id / Credential ref 识别）。
-- **兼容性评分**：Excellent / Good / Partial / Unsupported（规则驱动）。
-- **Profiles（配置 Profile）**：保存当前配置为 Profile / 切换 / 复制 / 重命名 / 导出 / 导入 / 删除；切换带 Preview + 快照 + 回滚（`src/profiles/`）。
+## ✨ 核心亮点
 
-## Installation
+| 图标 | 功能 | 一句话说明 |
+|:---:|---|---|
+| 🚀 | **一键导出** | 点一下，把推荐配置打包成一个 ZIP |
+| 📦 | **一键导入** | 在另一台电脑点一下，环境就回来了 |
+| 👀 | **先预览再导入** | 导入前完整预览，**绝不偷偷改你的配置** |
+| ⚔️ | **冲突处理** | 遇到同名配置，让你自己选：保留现有的 / 用导入的 / 再看看 |
+| 🗺️ | **路径自动映射** | 换了电脑路径变了？自动检测并让你重新指定 |
+| 🔒 | **密钥安全** | API Key 默认不导出；导入后提醒你重新填写 |
+| ↩️ | **自动回滚** | 导入失败自动恢复原样，不会弄坏现有配置 |
+| 🗂️ | **配置档案 Profiles** | 保存多套配置（工作 / 个人），随时切换 |
 
-本插件是标准的 **DSH bundle 插件**（仿 dsh-ssh 工程范式，见研究报告 §5.1）：`package.json` 声明
-`dsh.bundle.patch`（指向 `cordis.patch.yml`，CLI 的 bundle 硬判据）与 `dsh.client`（浏览器半声明），
-`npm run build` 产出双半产物（`lib/index.js` Host 半 + `lib/client.js` 浏览器半，后者以
-`window.__ModuleLoader__.load(...)` 装载进 Web GUI）。
+---
 
-两种安装方式（二选一）：
+## 🔄 它是怎么工作的？
+
+### 导出（打包带走）
+
+```
+读取你的配置 → 剔除密钥（安全） → 生成清单 → 计算校验和 → 打包成 ZIP
+```
+
+### 导入（恢复环境）
+
+每一步都先确认、先备份，**绝不直接改你的配置**：
+
+```
+选择 ZIP → 校验文件 → 检查完整性 → 检查版本 → 兼容性检查
+    → 扫描内容 → 生成导入计划 → 预览确认
+    → 自动备份当前配置 → 执行导入 → 验证 → 完成
+                      │
+                      └─ 中途失败？→ 自动恢复原样（回滚）
+```
+
+---
+
+## 📥 安装
+
+本插件是标准的 **DSH 插件**，安装只需要两步：
 
 ```bash
-# ① 推荐 —— 从 npm registry 安装
+# ① 安装插件
 dsh plugin --profile web add dsh-config-manager --config.auto-install-peers=false
 
-# ② 备选 —— 本地 tgz / 目录安装（开发与测试）
-npm run build
-npm pack                       # 产出 dsh-config-manager-0.1.0.tgz
-dsh plugin --profile web add file:/absolute/path/to/dsh-config-manager-0.1.0.tgz
+# ② 重启 DSH（设置页就会出现「备份与迁移」入口）
 ```
 
-> **`--legacy-peer-deps` 说明**：peerDependencies 中的部分 DSH 核心包（如
-> `@deepseek-ai/dsh-plugin-marketplace`、`dsh-host-plugin-inventory`）尚未发布到公共 npm registry，
-> 只在本地 DSH profile 环境存在。安装时若 npm/pnpm 尝试解析 peer 依赖并失败，请跳过 peer 自动安装：
-> - npm 直接安装：`npm install --legacy-peer-deps`
-> - `dsh plugin add`（内部转发 pnpm）：`dsh plugin --profile web add <spec> --config.auto-install-peers=false`
->
-> 运行时这些包由 DSH profile 自身提供（peerDependencies 语义），插件不重复安装。
+> 💡 **小知识**：`--config.auto-install-peers=false` 是为了跳过一些尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），照着复制就行。
 
-> **本地验证提示**：可用 `$DSH_HOME=<临时目录>` 环境变量隔离测试，完全不触碰 `~/.dsh`：
+**从源码 / 本地包安装**（开发者用）：
+
+```bash
+npm run build && npm pack          # 产出 dsh-config-manager-0.1.2.tgz
+dsh plugin --profile web add file:/绝对路径/dsh-config-manager-0.1.2.tgz
+```
+
+> 🧪 **想先试不碰正式环境？** 用隔离目录测试，完全不触碰 `~/.dsh`：
 > ```bash
-> $env:DSH_HOME = "D:\tmp\dsh-home"        # Windows PowerShell
-> dsh plugin --profile test add file:<tgz> --config.auto-install-peers=false
-> dsh --profile test --dump-config | Select-String config-manager   # 应看到挂载行
+> $env:DSH_HOME = "D:\tmp\dsh-home"   # Windows PowerShell
+> dsh plugin --profile test add dsh-config-manager --config.auto-install-peers=false
+> dsh --profile test --dump-config | Select-String config-manager
 > ```
 
-## Export
+---
 
-两种方式：
-
-- **Quick Export**：一键导出推荐分区（settings / ui / providers / plugins / mcp / prompts / skills / agentPresets / workspaces / credentialsStatus）。
-- **Custom Export**：按分区逐项选择（可选 `pluginFiles`、`sessions`；`sessions` 默认关闭）。
-
-导出产物：`dsh-config-<yyyy-MM-dd>.zip`，含 `manifest.json` + 各分区数据 + `integrity/checksums.json`（SHA-256）。
-
-## Import
+## 🚀 快速上手（3 分钟体验）
 
 ```
-Select ZIP → Validate ZIP → Read Manifest → Check Integrity → Check Schema
-→ Check Compatibility → Scan Contents → Generate Import Plan → Show Preview
-→ User Confirms → Create Backup (Snapshot) → Import → Validate → Show Result
+电脑 A（导出）
+  1. 打开 DSH → 设置 → 「备份与迁移」
+  2. 点「导出配置」→ 选「快速导出」
+  3. 得到一个 dsh-config-2026-08-14.zip（可确认报告里没有密钥）
+
+把 ZIP 拷到电脑 B（导入）
+  1. 打开 DSH → 「备份与迁移」→「导入配置」
+  2. 选择 ZIP → 等待分析 → 查看「导入预览」
+  3. 有路径问题？→ 选择新路径（可批量映射）
+  4. 有同名配置冲突？→ 选择 保留现有 / 用导入的
+  5. 确认导入 → 等待完成
+  6. 按提示重新填写缺失的 API Key
+  7. ✅ 设置 / 插件 / MCP / 技能 / 工作区都回来了
 ```
 
-导入流程强制：**未确认不执行任何写入**；**导入前必须生成快照**；失败按 `rollbackOnError` 决定整体回滚或单项如实记录。
+---
 
-## Security
+## 🧩 功能详解
 
-> **默认备份不包含任何 Secret 值。** 这是硬性安全不变量，由 `Exporter` 强制：
+### 📤 导出（两种方式）
 
-- 所有结构化分区数据在写入 ZIP 前经过敏感字段扫描（字段名黑名单：password / token / apiKey / secret / credential / authorization / cookie / privateKey / clientSecret 等，大小写不敏感），命中即剥离。
-- `ctx.settings.describe({ redactSecrets: true })` 作为第一道防线剥离 DSH 已知秘密；敏感字段扫描器作为第二道防线兜底插件自定义字段。
-- 凭据（`.credentials.yaml`）**永不导出值**，只导出状态（`{ref, required, configured, hasValue:false}`），导入后生成「N credentials need attention」补录清单。
-- **加密完整备份（可选）**：显式勾选「Include secrets」时，要求设置备份密码，使用 `node:crypto`（scrypt 派生 + AES-256-GCM 加密），**密码绝不写入 manifest**；`secrets.enc` 只有解密后经 `ctx.credentials.set()` 写回。
-- 无加密提供者时 `includeSecrets: true` 会被拒绝（绝不明文泄密）。
-- 日志系统全部经过 redaction，Secret 值永不进入日志。
-- ZIP 属于不可信输入：防御 Zip Slip / 绝对路径 / 符号链接 / zip bomb（条目数 / 压缩体积 / 解压体积 / 压缩比上限）/ 畸形 ZIP / checksum 不匹配，任何一条触发即整体拒绝。
-
-## What is NOT exported
-
-默认**不**导出（规范 §34.19/20）：
-
-- API Key / Password / Token / Cookie / Session / 认证凭据（值）
-- `~/.dsh/.anonymous-user-id`（设备唯一 ID）
-- 会话历史（`sessions/`，默认关闭；v1 仅支持文件级复制）
-- Logs / Cache / 临时文件
-- 浏览器 localStorage 中的 UI 状态（Host 侧无通道，仅导出 `uiMigrationNotes` 说明）
-- 插件二进制（绝不打包，只迁移清单并走官方安装机制）
-
-## Secrets
-
-| 备份类型 | 导入行为 |
+| 方式 | 说明 |
 |---|---|
-| 普通备份（无 secrets.enc） | 全部凭据 → `MissingSecret`，导入后由用户补录 |
-| 加密备份 + 正确密码 | 自动解密并经 `credentials.set()` 恢复（预览时可逐条确认） |
-| 加密备份 + 不输密码 | 同普通备份：状态补录 |
+| **快速导出**（推荐） | 一键导出推荐配置：设置 / UI / 模型 / 插件 / MCP / 技能 / 工作区等 |
+| **自定义导出** | 自己勾选要导出的分类 |
 
-## Compatibility
+> 导出文件：`dsh-config-<日期>.zip`，内含清单 + 各分类数据 + SHA-256 校验和。
 
-| 状态 | 规则 |
+### 📥 导入（安全流程）
+
+- **未确认不写入**：分析、预览阶段零修改
+- **先备份再导入**：执行前自动备份将被修改的配置
+- **失败自动回滚**：按你的选择整体回滚或跳过失败项继续
+
+### 👀 导入预览（Dry Run）
+
+导入前完整展示：
+
+```
+✓ 18 项设置将被更新      ✓ 6 个插件已安装
+⚠ 2 个插件需要安装       ⚠ 3 个密钥需要重新填写
+⚠ 1 个路径需要映射        ⚠ 2 处冲突需要处理
+```
+
+### ⚔️ 冲突处理
+
+目标电脑已有同名配置时，让你选：
+
+| 选项 | 含义 |
 |---|---|
-| Excellent | 同平台、无分区缺失、schema 受支持 |
-| Good | 备份来自更旧 DSH（目标向后兼容） |
-| Partial | 跨平台 / 分区缺失 / 备份比目标新 |
-| Unsupported | schema 超出支持范围 |
+| **保留现有的** | 不动目标电脑的原配置 |
+| **用导入的** | 用备份里的配置覆盖 |
+| **再看看** | 暂时跳过，稍后处理 |
 
-## Backup format
+### 🗺️ 路径映射
+
+换了电脑，`C:\Users\alice\projects` 在另一台机器上不存在？插件会：
+1. 自动检测失效的绝对路径
+2. 让你选择新路径
+3. 支持**批量前缀映射**（如 `C:\Users\alice\` → `/Users/bob/` 一键替换所有相关路径）
+
+### 🔒 密钥处理
+
+| 场景 | 行为 |
+|---|---|
+| 默认备份 | **不含任何密钥值**，只记录"哪些密钥需要填写" |
+| 加密备份（可选） | 设置密码后用 AES-256-GCM 加密，密码**绝不写入备份文件** |
+| 导入后 | 提示「3 个密钥需要重新填写」，输入后仅保存在内存中写入 |
+
+### 🗂️ 配置档案（Profiles）
+
+保存多套配置（如「工作」「个人」），随时切换；切换同样带预览 + 自动备份 + 回滚。
+
+---
+
+## 📦 备份里有什么？（文件结构）
 
 ```
 dsh-config-2026-08-14.zip
-├── manifest.json                  # schemaVersion / exporter / source / sections / security
-├── config/settings.json           # 非 UI settings namespace（redacted + revision）
-├── config/ui.json                 # UI namespace + uiMigrationNotes
-├── ai/providers.json              # llm-* providers/models（同 section 不拆分）
-├── plugins/plugins.json + patch.json
-├── mcp/servers.json               # 组合 patch 提取的 dsh-mcp-client 条目
-├── custom/prompts.json + skills/
-├── agents/presets/
-├── workspaces/workspaces.json
-├── plugin-files/                  # 可选
-├── security/credentials.json      # 凭据状态（永不含值）
-├── security/secrets.enc           # 仅加密备份
-└── integrity/checksums.json       # SHA-256
-```
-
-## Development
-
-```bash
-npm install --legacy-peer-deps   # peer 含未发布公共 registry 的 DSH 核心包，见 Installation
-npm run typecheck                # tsc --noEmit
-npm run build                    # tsc -p tsconfig.build.json（Host 半 lib/）+ tsdown（client bundle lib/client.js）
-npm run bundle                   # 仅重新构建 client bundle（tsdown）
-npm test                         # node --test "src/**/*.test.ts" "tests/**/*.test.ts"
-```
-
-架构：核心引擎（`src/core`）只依赖 `ConfigAdapter` / `HostContext` 接口（与 DSH 运行时解耦，可用内存 mock 测试）；`src/adapters` 实现各配置类别；`src/security` 提供秘密扫描 / 加密 / 完整性 / ZIP 安全 / redaction；`src/migrations` 集中 schema 迁移。
-
-## Publishing（GitHub Actions · npm Trusted Publishing / OIDC）
-
-推送版本标签会触发 `.github/workflows/publish.yml` 的 CI 流水线：typecheck → 测试 → 构建 → 自动发布到 npm。发布使用 **npm Trusted Publishing（OIDC）**——仓库不存储任何长期令牌，npm CLI 通过 GitHub Actions 的 OIDC 与 registry 交换短期身份。
-
-```bash
-npm version patch          # 0.1.0 → 0.1.1（同时创建 tag）
-git push origin main --tags
-```
-
-npmjs.com 一次性配置（首次 OIDC 发布前必须完成）：
-
-**方案 A — 网页**（有 scope 包或 UI 入口可用时）：
-1. 打开包页面：https://www.npmjs.com/package/dsh-config-manager → **Settings → Publishing access**。
-2. **Add trusted publisher**：Provider **GitHub Actions** · owner `xiajiajun516` · repository `dsh-config-manager` · workflow filename `publish.yml`。
-
-**方案 B — CLI（推荐；无 scope 包 UI 无入口时用这个）**：
-```bash
-npm logout
-npm login                                    # 网页 OAuth + 2FA 验证码
-npm trust github dsh-config-manager \
-  --file publish.yml \
-  --repo xiajiajun516/dsh-config-manager \
-  --allow-publish                            # 首次会要求输入 2FA 验证码
-npm trust list dsh-config-manager            # 验证
-```
-
-无需 `NPM_TOKEN` 仓库密钥——之前配置的令牌可以撤销（npm 也正在逐步废弃 bypass-2FA 令牌）。
-
-说明：
-
-- `package.json` 中的版本须与 tag 一致（`npm version` 会自动同步）。
-- 流水线会先升级 npm（`npm install -g npm@latest`），因为 OIDC 发布要求 npm ≥ 11.5.1。
-- 也可在 Actions 页面点 **Run workflow** 手动触发。
-
-## Testing
-
-测试框架为 **node:test（Node 内置，零依赖）**，沿用核心模块的既有选择（不引入 vitest）。测试位于 `src/**/*.test.ts` 与 `tests/**/*.test.ts`。
-
-覆盖矩阵（规范 §33 + 验收场景 A-G）：
-
-| 组 | 覆盖 |
-|---|---|
-| Export | 正常 / 空配置 / 大配置(1MB+) / Unicode / 特殊字符 / Secret 过滤 |
-| Import | 正常 / Merge / Replace / Skip（不删目标独有 §32）/ Conflict / Missing plugin / Missing dependency / Missing secret / 未确认拒绝 |
-| Rollback（场景 E） | 多 adapter 混合中途失败 → 整体恢复（settings / 文件 blob / workspace / patch 行）；`rollbackOnError=false` 对照；部分回滚诚实报告 |
-| Migration（场景 G） | `migrateToCurrent` 机制级：同版本 / 过新 / 低于最低 / 无路径 / 注册重叠 / 链式推进（**如实说明：当前 v1 即最新，无真实 v2 可端到端验证**） |
-| Security（场景 F） | 畸形 ZIP / 超大条目数 / checksum 不匹配与缺失 / Zip Slip / 绝对路径 |
-| Cross-platform（场景 B） | win32→darwin / darwin→win32 / linux→win32 批量前缀映射 |
-| Redaction | 日志消息 / meta / 全链路不泄 Secret 值 |
-| Schema | manifest 结构校验 / 版本判定函数 |
-
-当前测试结果：**186 tests, all passing**（`npm test`），`npm run typecheck` 与 `npm run build` 均通过。
-
-## Known limitations
-
-1. **Workspace 只能建/改标题**：DSH 的 workspace 服务没有「整体覆盖」写通道——导入时可创建 workspace 与更新标题；path 与会话列表由 DSH 依真实目录自行维护，跨设备路径通过路径映射适配。
-2. **部分 DSH 核心包未发布公共 npm registry**（如 `@deepseek-ai/dsh-plugin-marketplace`、`dsh-host-plugin-inventory`）：依赖其 API 的功能只在本地 profile 环境可用；安装本插件需跳过 peer 自动安装（见 [Installation](#installation) 的 `--legacy-peer-deps` 说明）。
-3. **MCP 无管理 API**（研究报告 §4.3）：MCP 以组合 patch 行导入，需重启 DSH 生效；无增删改 API。
-4. **插件安装需重启**：`pluginMarketplace.installPlugin` 只返回 `needsRestart`，重启依赖 DSH Desktop。
-5. **浏览器 localStorage UI 状态不迁移**（任务看板数据、面板宽度等）：Host 无通道。
-6. **keybindings / workflows 配置 / commands / rules 文件**：DSH 当前无这些概念，不实现分区（不发明）。
-7. **凭据值无法回滚**：DSH 不回读凭据值，导入中覆盖的凭据在回滚时只能标记 `manualHint` 人工补录。
-8. **新建项无法删除回滚**：DSH settings 无删除语义，导入新建的 namespace 在回滚时只能人工处理（如实报告 partial）。
-9. **Schema 迁移**：v1→v2 为占位（当前 `CURRENT_SCHEMA_VERSION=1`），机制已就绪但无真实 v2 可验证。
-10. **历史会话迁移**：默认关闭，v1 仅文件级复制。
-11. **加密备份**：依赖用户设置强密码；密码丢失则 `secrets.enc` 无法解密（设计使然）。
-
-## Manual Test（最短人工测试流程）
-
-> 前提：两台 DSH（或同一台的两份配置目录）；本插件已按 [Installation](#installation) 打包并安装。
-
-```
-DSH A
-→ 打开 Config Manager → Export Configuration
-→ 选择 Quick Export → 导出 dsh-config-<date>.zip（确认报告中 Secret 均被排除）
-→ 将 ZIP 复制到 DSH B
-
-DSH B
-→ 打开 Config Manager → Import Configuration
-→ 选择 ZIP → 等待 Analyzing... → 查看 Import Preview（分区/插件/路径映射/凭据补录清单）
-→ 如有路径问题 → 选择映射目录（批量前缀映射）
-→ 解决冲突（Keep Current / Use Imported / Review）
-→ 确认 Import → 观察进度 → 查看结果报告
-→ 补充缺失凭据（N credentials need attention）
-→ Verify：确认 settings / 插件 / MCP / Prompts / Skills / Workspaces 已恢复；
-   若导入中途失败 → 确认已自动回滚、原配置可正常使用
+├── manifest.json              # 备份清单：版本 / 来源 / 时间 / 包含项
+├── config/
+│   ├── settings.json          # 设置（已脱敏）
+│   └── ui.json                # 界面偏好
+├── ai/providers.json          # AI 模型 / 服务商配置
+├── plugins/                   # 插件清单（不打包插件本体）
+├── mcp/servers.json           # MCP 服务配置
+├── custom/                    # 提示词 / 技能
+├── agents/presets/            # Agent 预设
+├── workspaces/                # 工作区
+├── security/credentials.json  # 密钥状态（不含值）
+├── security/secrets.enc       # 仅加密备份时存在
+└── integrity/checksums.json   # SHA-256 校验和
 ```
 
 ---
 
-**产品原则**：宁可少迁移一个配置，也不要破坏用户现有配置。任何 Import 都遵循 `Analyze → Preview → Backup → Modify → Validate → Rollback`；任何 Secret 都遵循 `不默认导出 / 不记日志 / 不暴露 / 不静默转移`。
+## 🛡️ 安全
+
+- **默认备份不包含任何密钥值** —— 这是硬性规则，导出时强制执行
+- **不导出**：API Key / 密码 / Token / Cookie / 会话 / 设备唯一 ID / 日志缓存 / 插件二进制
+- **ZIP 是"不可信输入"**：防御 Zip Slip、恶意路径、压缩炸弹、损坏文件——任何一项触发就整体拒绝
+- **日志全程脱敏**：密钥值永不进入日志
+- **加密备份**：scrypt + AES-256-GCM，密码只在内存中，绝不写入文件
+
+---
+
+## 🤝 兼容性
+
+| 状态 | 含义 |
+|---|---|
+| ✅ Excellent | 同平台、配置齐全、版本兼容 |
+| 👍 Good | 备份来自更旧版本的 DSH |
+| ⚠️ Partial | 跨平台 / 部分配置缺失 / 备份比当前新 |
+| ❌ Unsupported | 备份版本超出支持范围（无法导入） |
+
+---
+
+## ❓ 常见问题
+
+**Q：备份会包含我的 API Key 吗？**
+不会。默认备份**绝不包含任何密钥**，只记录哪些密钥需要重新填写。
+
+**Q：导入会不会覆盖我现有的配置？**
+不会偷偷覆盖。有冲突时让你选择：保留现有的 / 用导入的；导入前还会自动备份，失败可回滚。
+
+**Q：换电脑（Windows → macOS）能用吗？**
+能。插件会自动检测失效的绝对路径，让你重新映射（支持批量替换）。
+
+**Q：导出的 ZIP 被改坏了还能导入吗？**
+不能。校验和检查不通过会直接拒绝导入（防止损坏或篡改）。
+
+**Q：重复导入会重复吗？**
+不会。按插件 ID / MCP 名称 / 技能名等稳定标识去重，重复导入自动跳过已有项。
+
+---
+
+## 👨‍💻 给开发者
+
+```bash
+npm install --legacy-peer-deps   # 安装依赖
+npm run typecheck                # 类型检查
+npm run build                    # 构建（Host lib/ + client bundle）
+npm test                         # 运行测试（192 个）
+npm run bundle                   # 仅重建 client bundle
+```
+
+**架构**：核心引擎与 DSH 运行时解耦（可 mock 测试）→ 各配置分类适配器 → 安全模块 → 迁移逻辑集中。
+
+**自动发布**：打 tag 即自动发布到 npm（GitHub Actions + OIDC，无需任何密钥）：
+
+```bash
+npm version patch          # 0.1.2 → 0.1.3
+git push origin main --tags   # CI 自动: 测试 → 构建 → 发布
+```
+
+> 首次配置 OIDC 可信发布方（只需一次）：
+> ```bash
+> npm login
+> npm trust github dsh-config-manager --file publish.yml --repo xiajiajun516/dsh-config-manager --allow-publish
+> ```
+> 或在 npm 包设置页（Settings → Publishing access）添加 GitHub Actions 可信发布方。
+
+---
+
+## 🧪 测试
+
+**192 个测试全部通过**（Node 内置测试框架，零额外依赖），覆盖：
+
+| 类别 | 覆盖内容 |
+|---|---|
+| 导出 | 正常 / 空配置 / 大配置 / 中文与特殊字符 / 密钥过滤 |
+| 导入 | 正常 / 合并 / 覆盖 / 跳过 / 冲突 / 缺失插件 / 缺失依赖 / 缺失密钥 |
+| 回滚 | 导入中途失败 → 全部恢复原样 |
+| 安全 | 恶意 ZIP / 损坏文件 / 校验和不匹配 / 路径穿越 |
+| 跨平台 | Windows ↔ macOS ↔ Linux 路径处理 |
+| 迁移 | 版本升级机制 |
+
+---
+
+## 📋 已知限制
+
+1. **工作区只能创建/改标题**：DSH 无整体覆盖写通道，路径与会话列表由 DSH 自行维护（路径映射适配跨设备）
+2. **部分 DSH 核心包未公开发布**：依赖其 API 的功能仅在本地 DSH 环境可用；安装需跳过 peer 自动安装（见安装说明）
+3. **MCP 无管理 API**：MCP 以配置行导入，需重启 DSH 生效
+4. **插件安装需重启**：安装插件后重启 DSH 生效
+5. **浏览器 UI 状态（localStorage）不迁移**：如任务看板数据、面板宽度
+6. **keybindings / workflows / commands / rules**：DSH 当前无这些概念，不做假分区
+7. **密钥值无法回滚**：导入中覆盖的密钥在回滚时需人工重新填写
+8. **新建项无法回滚删除**：DSH 设置无删除语义，新建的配置项回滚时需人工处理
+9. **Schema 迁移**：机制已就绪，v1→v2 迁移链为占位（当前版本即 v1）
+10. **历史会话默认不迁移**：v1 仅支持文件级复制
+11. **加密备份**：密码丢失则无法解密（设计使然，请牢记密码）
+
+---
+
+**产品原则**：宁可少迁移一个配置，也不要破坏你现有的配置。任何导入都遵循 `分析 → 预览 → 备份 → 修改 → 验证 → 回滚(如需要)`；任何密钥都遵循 `不默认导出 / 不记日志 / 不暴露 / 不静默转移`。
