@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # for npm provenance
+      id-token: write   # required for npm trusted publishing (OIDC)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,7 +20,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org/
+          registry-url: https://registry.npmjs.org
+
+      - name: Update npm to latest
+        # npm trusted publishing (OIDC) needs npm >= 11.5.1; runners may ship an older npm.
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         # Some DSH core packages live only in peerDependencies and are not on
@@ -36,7 +40,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm (trusted publishing / OIDC)
+        # No NODE_AUTH_TOKEN: the npm CLI obtains a short-lived registry token
+        # via GitHub Actions OIDC. Requires a trusted publisher configured on
+        # npmjs.com for this package (see README "Publishing").
+        run: npm publish --access public --provenance

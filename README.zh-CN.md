@@ -159,18 +159,29 @@ npm test                         # node --test "src/**/*.test.ts" "tests/**/*.te
 
 架构：核心引擎（`src/core`）只依赖 `ConfigAdapter` / `HostContext` 接口（与 DSH 运行时解耦，可用内存 mock 测试）；`src/adapters` 实现各配置类别；`src/security` 提供秘密扫描 / 加密 / 完整性 / ZIP 安全 / redaction；`src/migrations` 集中 schema 迁移。
 
-## Publishing（GitHub Actions 自动发布）
+## Publishing（GitHub Actions · npm Trusted Publishing / OIDC）
 
-推送版本标签会触发 `.github/workflows/publish.yml` 的 CI 流水线：typecheck → 测试 → 构建 → 自动发布到 npm：
+推送版本标签会触发 `.github/workflows/publish.yml` 的 CI 流水线：typecheck → 测试 → 构建 → 自动发布到 npm。发布使用 **npm Trusted Publishing（OIDC）**——仓库不存储任何长期令牌，npm CLI 通过 GitHub Actions 的 OIDC 与 registry 交换短期身份。
 
 ```bash
 npm version patch          # 0.1.0 → 0.1.1（同时创建 tag）
 git push origin main --tags
 ```
 
-前置要求：
-- 在仓库 Settings → Secrets and variables → Actions 添加名为 **`NPM_TOKEN`** 的仓库密钥，值为 **Granular Access Token（Read and write + Bypass 2FA）**——CI 无法输入一次性验证码，令牌必须带 2FA 绕过权限。
+npmjs.com 一次性配置（首次 OIDC 发布前必须完成）：
+
+1. 打开包页面：https://www.npmjs.com/package/dsh-config-manager → **Settings → Publishing access**。
+2. **Add trusted publisher**（添加可信发布方）：
+   - Provider：**GitHub Actions**
+   - GitHub owner：`xiajiajun516`
+   - Repository：`dsh-config-manager`
+   - Workflow filename：`publish.yml`
+3. 无需 `NPM_TOKEN` 仓库密钥——之前配置的令牌可以撤销。
+
+说明：
+
 - `package.json` 中的版本须与 tag 一致（`npm version` 会自动同步）。
+- 流水线会先升级 npm（`npm install -g npm@latest`），因为 OIDC 发布要求 npm ≥ 11.5.1。
 - 也可在 Actions 页面点 **Run workflow** 手动触发。
 
 ## Testing

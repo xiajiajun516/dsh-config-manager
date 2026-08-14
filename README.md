@@ -157,18 +157,29 @@ npm test                         # node --test "src/**/*.test.ts" "tests/**/*.te
 
 Architecture: the core engine (`src/core`) depends only on the `ConfigAdapter` / `HostContext` interfaces (decoupled from the DSH runtime, testable with in-memory mocks); `src/adapters` implements each config category; `src/security` provides secret scanning / encryption / integrity / ZIP safety / redaction; `src/migrations` centralizes schema migration.
 
-## Publishing (GitHub Actions auto-publish)
+## Publishing (GitHub Actions · npm trusted publishing / OIDC)
 
-Pushing a version tag triggers the CI pipeline in `.github/workflows/publish.yml`, which typechecks, runs the tests, builds, and publishes the package to npm:
+Pushing a version tag triggers the CI pipeline in `.github/workflows/publish.yml`, which typechecks, runs the tests, builds, and publishes the package to npm. Publishing uses **npm trusted publishing (OIDC)** — no long-lived token is stored in the repository; the npm CLI exchanges a short-lived identity with the registry via GitHub Actions.
 
 ```bash
 npm version patch          # 0.1.0 → 0.1.1 (also creates the tag)
 git push origin main --tags
 ```
 
-Requirements:
-- A **Granular Access Token with "Bypass 2FA"** (Read and write permissions) added as the repository secret `NPM_TOKEN` (Settings → Secrets and variables → Actions). The token must have 2FA bypass — CI cannot type a one-time code.
+One-time setup on npmjs.com (required before the first OIDC publish):
+
+1. Open the package page: https://www.npmjs.com/package/dsh-config-manager → **Settings → Publishing access**.
+2. **Add trusted publisher**:
+   - Provider: **GitHub Actions**
+   - GitHub owner: `xiajiajun516`
+   - Repository: `dsh-config-manager`
+   - Workflow filename: `publish.yml`
+3. No `NPM_TOKEN` repository secret is needed — a previously configured token can be revoked.
+
+Notes:
+
 - The version in `package.json` must match the tag (`npm version` keeps them in sync automatically).
+- The workflow upgrades npm (`npm install -g npm@latest`) because OIDC publishing requires npm ≥ 11.5.1.
 - The workflow can also be triggered manually via **Run workflow** on the Actions page.
 
 ## Testing
