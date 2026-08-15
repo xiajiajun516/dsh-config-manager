@@ -78,7 +78,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.8'
+const PLUGIN_VERSION = '0.1.9'
 
 /** Plugin config (composition entry); the loader applies it as-is. */
 export interface Config {

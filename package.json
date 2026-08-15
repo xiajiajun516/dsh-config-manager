@@ -1,6 +1,6 @@
 {
   "name": "dsh-config-manager",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "DSH Config Manager — backup / export / import / migrate DSH configuration (dual-face Cordis plugin: host engine + web UI). Manifest shape mirrors @linxin666/dsh-ssh@0.1.12.",
   "type": "module",
   "repository": {
@@ -77,7 +77,6 @@
     "@deepseek-ai/dsh-host-plugin-inventory": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-plugin-marketplace": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-settings": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-system-prompt": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
