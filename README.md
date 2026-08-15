@@ -76,7 +76,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 > 🐛 **`@latest` installed an old version?** That's pnpm 11's `minimumReleaseAge` supply-chain policy, not a cache issue: versions published less than ~30 days ago are excluded from resolution until whitelisted. Two fixes:
 > - Install an exact version once (it auto-whitelists, then `@latest` works):
 >   ```bash
->   dsh plugin --profile web add dsh-config-manager@0.1.7 --config.auto-install-peers=false
+>   dsh plugin --profile web add dsh-config-manager@0.1.8 --config.auto-install-peers=false
 >   ```
 > - Or disable the age gate with a one-liner (adds `minimumReleaseAge: 0` at the top of the profile's `pnpm-workspace.yaml`):
 >   ```powershell

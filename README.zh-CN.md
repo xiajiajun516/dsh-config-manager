@@ -76,7 +76,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 > 🐛 **`@latest` 装到了旧版？** 这是 **pnpm 11 的 `minimumReleaseAge` 供应链发布年龄策略**（不是缓存）：发布不足约 30 天的新版本会被排除出版本解析，直到进入白名单。两种解决办法：
 > - 装一次精确版本即可自动白名单，之后 `@latest` 正常：
 >   ```bash
->   dsh plugin --profile web add dsh-config-manager@0.1.7 --config.auto-install-peers=false
+>   dsh plugin --profile web add dsh-config-manager@0.1.8 --config.auto-install-peers=false
 >   ```
 > - 或一行命令彻底关闭年龄门槛（在 profile 的 `pnpm-workspace.yaml` 顶部加 `minimumReleaseAge: 0`）：
 >   ```powershell
