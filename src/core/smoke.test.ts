@@ -14,6 +14,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { Exporter } from './exporter.ts';
 import { Importer } from './importer.ts';
+import { PluginsAdapter } from '../adapters/plugins.ts';
 import { parseZip, zipToBuffer, crc32, ZipSafetyError, type ZipWriteEntry } from '../utils/zip.ts';
 import { parseManifest } from '../schema/manifest.ts';
 import { computeCompatibility } from './validator.ts';
@@ -105,8 +106,14 @@ class MemCredentials implements CredentialsFacade {
 
 class MemPlugins implements PluginsFacade {
   installed = new Map<string, { name: string; version: string; enabled: boolean }>();
+  /** 测试钩子：install 抛错（模拟 npm ERESOLVE / 网络失败） */
+  failInstall = false;
   async listInstalled() { return [...this.installed.values()]; }
-  async install(pkg: string) { this.installed.set(pkg, { name: pkg, version: '1.0.0', enabled: true }); return { needsRestart: true }; }
+  async install(pkg: string) {
+    if (this.failInstall) throw new Error(`npm error code ERESOLVE: could not resolve ${pkg}`);
+    this.installed.set(pkg, { name: pkg, version: '1.0.0', enabled: true });
+    return { needsRestart: true };
+  }
 }
 
 class MemWorkspace implements WorkspaceFacade {
@@ -631,6 +638,36 @@ test('整体回滚：applyItem 中途失败 + rollbackOnError → 目标恢复�
     assert.equal(result.rollback.full, true, '快照覆盖目标应能完整回滚');
     assert.equal((dst.settings.ns.get('general')?.value as { theme: string }).theme, 'light', '回滚后 general 应恢复 light');
     assert.ok(!dst.settings.ns.has('llm-deepseek'), '回滚后 llm-deepseek 应不存在');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('插件安装失败（rollbackOnError=true）→ 非致命 warning，不回滚已导入配置', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-pluginfail-'));
+  try {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    src.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    src.plugins.installed.set('needs-install', { name: 'needs-install', version: '1.0.0', enabled: true });
+    const adapters: ConfigAdapter[] = [new MockSettingsAdapter(), new PluginsAdapter()];
+    const zipPath = path.join(tmp, 'x.zip');
+    await new Exporter({ ctx: src, adapters, now: () => new Date() }).export({ includeSecrets: false, outPath: zipPath });
+
+    const dst = makeContext('linux', '/home/bob');
+    dst.settings.ns.set('general', { value: { theme: 'light' }, revision: 7, secrets: [] });
+    dst.plugins.failInstall = true; // 模拟 npm ERESOLVE
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'replace', resolutions: {}, pathMappings: [] });
+    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, rollbackOnError: true });
+
+    assert.equal(result.ok, true, '单个插件安装失败不得使整个导入失败');
+    assert.equal(result.rollback, null, '不得触发整体回滚');
+    const pluginItem = result.executed.find((e) => e.itemId === 'plugin:needs-install');
+    assert.equal(pluginItem?.status, 'warning', '插件安装失败记为 warning 而非 failed');
+    const settingsItem = result.executed.find((e) => e.itemId === 'settings:general');
+    assert.equal(settingsItem?.status, 'ok', 'settings 应正常导入');
+    assert.equal((dst.settings.ns.get('general')?.value as { theme: string }).theme, 'dark', '已导入的 settings 保留，未被回滚');
+    assert.ok(!dst.plugins.installed.has('needs-install'), '插件未装入');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

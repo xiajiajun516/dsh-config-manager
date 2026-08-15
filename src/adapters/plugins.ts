@@ -135,15 +135,32 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
-    // 插件安装：官方机制 installPlugin；needsRestart 提示（设计 §8：不打包二进制）
-    if (item.kind === 'Install') {
+    // 插件安装/更新：官方机制 installPlugin；needsRestart 提示（设计 §8：不打包二进制）。
+    // 版本冲突（useImported）会解析成 Update，同样走这条安装通道（官方机制只能装到 npm
+    // 最新版，无法精确锁定备份版本，故如实提示）。
+    // 失败为非致命 warning（§34.17）：一个装不上的插件（npm 依赖冲突/网络不可达等）不得
+    // 拖垮已成功导入的其余配置——与 workspaces 的「目标不可达 → warning」同款语义。
+    if (item.id.startsWith('plugin:')) {
       const name = item.id.replace(/^plugin:/, '');
-      const result = await ctx.target.plugins.install(name);
-      return {
-        ok: true,
-        needsRestart: true,
-        message: result.needsRestart ? `插件 ${name} 已安装，重启 dsh 后生效` : `插件 ${name} 已安装`,
-      };
+      const verb = item.kind === 'Update' ? '更新' : '安装';
+      try {
+        const result = await ctx.target.plugins.install(name);
+        const suffix = result.needsRestart ? '，重启 dsh 后生效' : '';
+        return {
+          ok: true,
+          needsRestart: true,
+          message: item.kind === 'Update'
+            ? `插件 ${name} 已触发${verb}（npm 最新版）${suffix}`
+            : `插件 ${name} 已${verb}${suffix}`,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          warning: true,
+          message: `插件 ${name} ${verb}失败：${msg}（其余配置已导入；可修复依赖后在设置页重试或手动安装）`,
+        };
+      }
     }
     // patch 行：Create → insert，Update/Conflict(useImported) → update
     const ref = item.target?.ref;

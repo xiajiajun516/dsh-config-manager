@@ -116,10 +116,13 @@ export class MemCredentials implements CredentialsFacade {
 
 export class MemPlugins implements PluginsFacade {
   installed = new Map<string, PluginInfo>();
+  /** 测试钩子：install 抛错（模拟 npm ERESOLVE / 网络失败） */
+  failInstall = false;
   async listInstalled(): Promise<PluginInfo[]> {
     return [...this.installed.values()];
   }
   async install(pkg: string): Promise<{ needsRestart: boolean }> {
+    if (this.failInstall) throw new Error(`npm error code ERESOLVE: could not resolve ${pkg}`);
     if (this.installed.has(pkg)) return { needsRestart: false };
     this.installed.set(pkg, { name: pkg, version: '1.0.0', enabled: true });
     return { needsRestart: true };

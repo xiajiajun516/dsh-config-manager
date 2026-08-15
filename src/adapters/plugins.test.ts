@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginsAdapter, USER_PATCH_FILE } from './plugins.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
+import type { PlanItem } from '../core/types.ts';
 
 test('plugins: 导出清单与 patch 行', async () => {
   const ctx = makeContext('win32', 'C:\\Users\\alice');
@@ -69,4 +70,48 @@ test('plugins: applyItem Install → needsRestart（官方机制，不打包二�
   assert.equal(r.ok, true);
   assert.equal(r.needsRestart, true);
   assert.ok(dst.plugins.installed.has('need-install'), '经 installPlugin 门面写入');
+});
+
+test('plugins: 安装失败 → 非致命 warning（§34.17，不触发整体回滚）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.plugins.installed.set('broken-pkg', { name: 'broken-pkg', version: '3.0.0', enabled: true });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  dst.plugins.failInstall = true; // 模拟 npm ERESOLVE / 网络不可达
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const installItem = items.find((i) => i.id === 'plugin:broken-pkg');
+  assert.equal(installItem?.kind, 'Install');
+  const r = await adapter.applyItem(installItem!, makeImportContext(dst, sections));
+  assert.equal(r.ok, false);
+  assert.equal(r.warning, true, '安装失败必须记为 warning（不计入失败、不触发回滚）');
+  assert.match(r.message ?? '', /ERESOLVE/);
+  assert.ok(!dst.plugins.installed.has('broken-pkg'), '安装失败不得假装已写入');
+});
+
+test('plugins: 版本冲突 useImported → Update 走安装通道，失败同样为 warning', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.plugins.installed.set('pkg-b', { name: 'pkg-b', version: '2.0.0', enabled: true });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  dst.plugins.installed.set('pkg-b', { name: 'pkg-b', version: '1.5.0', enabled: true });
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const conflict = items.find((i) => i.id === 'plugin:pkg-b');
+  assert.equal(conflict?.kind, 'Conflict');
+  // 模拟 analyzer 在 createImportPlan 中对 useImported 的解析结果
+  const updateItem: PlanItem = { ...conflict!, kind: 'Update', conflict: { itemId: conflict!.id, resolution: 'useImported' } };
+
+  const rOk = await adapter.applyItem(updateItem, makeImportContext(dst, sections));
+  assert.equal(rOk.ok, true, 'Update 应走安装通道，而不是报缺少 target.ref');
+  assert.equal(rOk.needsRestart, true);
+
+  dst.plugins.failInstall = true;
+  const rFail = await adapter.applyItem(updateItem, makeImportContext(dst, sections));
+  assert.equal(rFail.ok, false);
+  assert.equal(rFail.warning, true, '更新失败同样为非致命 warning');
 });
