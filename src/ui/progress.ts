@@ -30,6 +30,17 @@ export const IMPORT_STAGES: readonly string[] = [
   'done',
 ] as const;
 
+/**
+ * 真实执行阶段（不在 IMPORT_STAGES 序列里，因此 step/total 缺省 → 进度条渲染
+ * 为不定态动画而非伪造百分比）。execute 是一个单次 HTTP 请求，Host 端串行
+ * 跑完全部计划项（其中插件安装是 npm 串行，耗时最长）；请求期间没有中间
+ * 进度事件可回传，旧实现把 restoring-settings / restoring-plugins /
+ * restoring-mcp / validating-config 在请求前全部预发，导致进度条瞬间跳到
+ * 78% 后长时间无变化——像卡死。现在统一在请求期间显示 'executing' 不定态，
+ * 让用户明确知道「仍在执行，请等待」。
+ */
+export const EXECUTING_STAGE = 'executing' as const;
+
 const STAGE_TEXTS: Record<string, string> = {
   // export
   'analyzing': 'Analyzing configuration...',
@@ -48,6 +59,8 @@ const STAGE_TEXTS: Record<string, string> = {
   'restoring-mcp': 'Restoring MCP...',
   'validating-config': 'Validating configuration...',
   'rolling-back': 'Rolling back...',
+  // 真实执行中（请求期间不定态）
+  'executing': 'Applying configuration (plugin installs may take a while)...',
   // common
   'done': 'Done',
 };

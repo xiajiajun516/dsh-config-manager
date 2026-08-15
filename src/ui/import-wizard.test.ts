@@ -113,6 +113,27 @@ test('import-wizard: 失败且回滚时发出 rolling-back 进度事件', async 
   assert.ok(events.includes('done'));
 });
 
+test('import-wizard: execute 请求期间发 executing 不定态而非预发假进度', async () => {
+  const port = new MockImportPort();
+  const events: { stage: string; step?: number; total?: number }[] = [];
+  const wiz = new ImportWizard({ port, onProgress: (e) => events.push({ stage: e.stage, step: e.step, total: e.total }) });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true });
+
+  // 请求期间（executeImportPlan 调用前后）必须发 executing 不定态事件
+  // （step/total 缺省 → UI 渲染动画而不是伪造的 78% 假进度）。
+  const executing = events.find((e) => e.stage === 'executing');
+  assert.ok(executing, 'execute 期间应发出 executing 阶段');
+  assert.equal(executing!.step, undefined, 'executing 不在阶段序列 → step 缺省');
+  assert.equal(executing!.total, undefined, 'executing 不在阶段序列 → total 缺省');
+  // 不再预发 restoring-* / validating-config 假进度
+  for (const fake of ['restoring-settings', 'restoring-plugins', 'restoring-mcp', 'validating-config']) {
+    assert.ok(!events.some((e) => e.stage === fake), `不应再预发假进度 ${fake}`);
+  }
+  assert.ok(events.some((e) => e.stage === 'done'));
+});
+
 test('import-wizard: reset 清空状态回 select', async () => {
   const port = new MockImportPort();
   const wiz = new ImportWizard({ port });

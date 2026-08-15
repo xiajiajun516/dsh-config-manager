@@ -16,7 +16,7 @@ import type {
   PathMapping, PlanItem,
 } from '../core/types.ts';
 import type { ImportPort, ImportPreviewSummary, ImportStep, ProgressListener, WizardSnapshot } from './types.ts';
-import { IMPORT_STAGES, ProgressTracker } from './progress.ts';
+import { EXECUTING_STAGE, IMPORT_STAGES, ProgressTracker } from './progress.ts';
 import { formatActionableError, toActionableError } from './errors.ts';
 
 export interface ImportWizardOptions {
@@ -167,15 +167,20 @@ export class ImportWizard {
     }
     const rollbackOnError = opts.rollbackOnError ?? this.rollbackOnError;
     this.step = 'importing';
+    // 快照由 Host 端在 executeImportPlan 内部第一步创建；此处只发开始阶段。
     this.tracker.emit('creating-snapshot');
 
     try {
       // 用最终决策重建计划（与预览逻辑一致，保证 Dry Run 与真实导入一致）
       this.plan = await this.port.createImportPlan(this.zipPath, this.decisions);
-      this.tracker.emit('restoring-settings');
-      this.tracker.emit('restoring-plugins');
-      this.tracker.emit('restoring-mcp');
-      this.tracker.emit('validating-config');
+      // executeImportPlan 是一个单次 HTTP 请求：Host 端串行跑完全部计划项
+      // （插件安装为 npm 串行，耗时最长）。请求期间没有任何中间进度事件可
+      // 回传——旧实现把 restoring-settings / restoring-plugins /
+      // restoring-mcp / validating-config 在请求前全部预发，进度条瞬间跳到
+      // 78% 后长时间不动，看起来像卡死。现在统一改为 EXECUTING_STAGE
+      // 不定态（无 step/total → 动画），让用户明确知道「仍在执行」。
+      // 真实各分区结果在返回后的报告里逐项展示。
+      this.tracker.emit(EXECUTING_STAGE);
       this.result = await this.port.executeImportPlan(this.zipPath, this.plan, {
         confirm: true,
         secretInputs: this.secretInputs,
