@@ -55,9 +55,9 @@ test('export-flow: run 调 port 并携带 only 选择与进度事件', async () 
   assert.equal(out.text.includes('✓ settings'), true);
   assert.equal(out.text.includes('8 plugins'), true);
   assert.equal(events[events.length - 1], 'done');
-  // 进度覆盖导出阶段序列
-  assert.ok(events.includes('analyzing'));
-  assert.ok(events.includes('creating-archive'));
+  // 请求期间只发 in-flight 阶段（不定态，不显示假百分比），完成后 done
+  assert.ok(events.includes('exporting'));
+  assert.ok(!events.includes('calculating-checksums'), '不再预先发出假阶段文案');
 });
 
 test('export-flow: Quick 模式 only 使用推荐项', async () => {

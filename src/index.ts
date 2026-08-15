@@ -78,7 +78,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.0'
+const PLUGIN_VERSION = '0.1.8'
 
 /** Plugin config (composition entry); the loader applies it as-is. */
 export interface Config {
@@ -617,6 +617,23 @@ async function dependencyAvailable(command: string): Promise<boolean> {
   }
 }
 
+/** 导出/导入执行超时（ms）。正常导出秒级完成；此上限只兜底「宿主卡死」场景，
+ * 让客户端拿到明确错误而不是永远停在进度条。 */
+const ROUTE_TIMEOUT_MS = 5 * 60 * 1000
+
+/** 带超时的 Promise：超时以明确错误拒绝（promise 自身由调用方负责，此处只计时）。 */
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms)
+  })
+  try {
+    return await Promise.race([promise, timeout])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 /** Decrypt an encrypted backup's credentials (in-memory only; undefined when not applicable). */
 async function tryDecryptCredentials(
   zipPath: string,
@@ -726,7 +743,11 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
             encryption: includeSecrets && password !== undefined ? createEncryptionProvider(password) : null,
             exporterVersion: PLUGIN_VERSION,
           })
-          const result = await exporter.export({ includeSecrets, only, outPath })
+          const result = await withTimeout(
+            exporter.export({ includeSecrets, only, outPath }),
+            ROUTE_TIMEOUT_MS,
+            '导出超时（5 分钟）：导出过程未完成，请重试；若反复超时请检查 profile 依赖状态',
+          )
           writeJson(res, 200, { zipPath: result.zipPath, manifest: result.manifest, report: result.report })
         } catch (error) {
           host.log.error('导出失败', { error: error instanceof Error ? error.message : String(error) })

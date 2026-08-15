@@ -110,13 +110,11 @@ export class ExportFlow {
     const only = mode === 'quick' ? this.quickSelection() : [...selection];
     if (mode === 'quick' && opts.includeSecrets === undefined) opts = { ...opts, includeSecrets: false };
 
-    tracker.emit('analyzing');
-    tracker.emit('exporting-settings');
-    tracker.emit('scanning-secrets');
-    tracker.emit('exporting-plugins');
-    tracker.emit('creating-archive');
-    tracker.emit('calculating-checksums');
-
+    // 导出工作全部发生在 port.export() 的单次请求内，客户端无法逐阶段上报真实进度。
+    // 旧实现把整串阶段一次性 emit，请求期间 UI 会静止在假的「Calculating checksums... 86%」，
+    // 任何慢请求/挂起请求看起来都像卡死。改为：请求期间只发一个不带 step/total 的 in-flight
+    // 阶段（ProgressBar 显示不定态动画），完成后发 done（100%）。超时/失败由 api 层显式抛出。
+    tracker.emit('exporting');
     const result = await this.port.export({
       includeSecrets: opts.includeSecrets ?? false,
       only,

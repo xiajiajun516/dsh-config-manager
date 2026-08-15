@@ -38,6 +38,7 @@ const STAGE_TEXTS: Record<string, string> = {
   'exporting-plugins': 'Exporting plugins...',
   'creating-archive': 'Creating archive...',
   'calculating-checksums': 'Calculating checksums...',
+  'exporting': 'Exporting configuration...', // in-flight（请求期间不定态，不显示假百分比）
   // import
   'validating': 'Validating backup...',
   'checking-compatibility': 'Checking compatibility...',

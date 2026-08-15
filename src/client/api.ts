@@ -75,6 +75,9 @@ export const CONFIG_MANAGER_API = {
   execute: '/api/dsh-config-manager/execute',
 } as const;
 
+/** 导出请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐，防止宿主卡死时 UI 无限等待 */
+const EXPORT_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** 携带路由 JSON error 消息的错误类型 */
 export class ConfigManagerApiError extends Error {
   constructor(message: string) {
@@ -85,17 +88,22 @@ export class ConfigManagerApiError extends Error {
 
 /** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError */
 async function readJson<T>(response: Response): Promise<T> {
+  const notMountedMessage =
+    'config-manager 服务未挂载（插件未加载）：请确认 profile 中已安装 dsh-config-manager 并重启 DSH';
   let body: unknown;
   try {
     body = await response.json();
   } catch {
+    if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
     throw new ConfigManagerApiError(`HTTP ${response.status}: invalid JSON response`);
   }
   if (!response.ok) {
     const message =
       typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
         ? (body as { error: string }).error
-        : `HTTP ${response.status}`;
+        : response.status === 404
+          ? notMountedMessage
+          : `HTTP ${response.status}`;
     throw new ConfigManagerApiError(message);
   }
   return body as T;
@@ -146,18 +154,31 @@ export class ConfigManagerApi {
   }
 
   // ------------------------------------------------------------- export
-  /** ExportPort.export：调用 Host 侧导出编排（core Exporter）。加密密码随请求体传输（仅内存）。 */
+  /** ExportPort.export：调用 Host 侧导出编排（core Exporter）。加密密码随请求体传输（仅内存）。
+   * 带 AbortController 超时：宿主若卡死，客户端得到明确错误而不是永远停在进度条。 */
   async export(options: ExportOptions): Promise<ExportResponse> {
     const body: ExportOptions & { password?: string } = {
       ...options,
       password: this.exportPassword ?? undefined,
     };
-    const response = await fetch(CONFIG_MANAGER_API.export, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return readJson<ExportResponse>(response);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXPORT_TIMEOUT_MS);
+    try {
+      const response = await fetch(CONFIG_MANAGER_API.export, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      return await readJson<ExportResponse>(response);
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new ConfigManagerApiError(`导出超时（${Math.round(EXPORT_TIMEOUT_MS / 60000)} 分钟）：导出过程未完成，请重试；若反复超时请检查 DSH 状态`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
