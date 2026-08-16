@@ -259,6 +259,20 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
 
 /* ---------------- 默认文件快照存储 ---------------- */
 
+/** 快照保留上限：save 落盘后超过该数量则删除最旧快照目录 */
+export const SNAPSHOT_RETENTION_LIMIT = 10;
+
+/** 纯函数：返回应清理的最旧快照 id（按 createdAt 升序取超限部分；恰好 limit 个 → 空数组）。
+ * 参数用最小结构类型，避免引入 restore.ts 的 SnapshotMeta 造成循环 import。 */
+export function selectPruneCandidates(
+  metas: ReadonlyArray<{ id: string; createdAt: string }>,
+  limit: number = SNAPSHOT_RETENTION_LIMIT,
+): string[] {
+  if (metas.length <= limit) return [];
+  const sorted = [...metas].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  return sorted.slice(0, sorted.length - limit).map((m) => m.id);
+}
+
 export interface FileSnapshotStoreOptions {
   /** 快照根目录（宿主决定，如 ~/.dsh/dsh-config-manager/snapshots） */
   dir: string;
@@ -286,7 +300,30 @@ export class FileSnapshotStore implements SnapshotStore {
       await fs.writeFile(target, data);
     }
     await fs.writeFile(path.join(dir, 'snapshot.json'), JSON.stringify(snapshot, null, 2));
+    await this.prune();
     return snapshot.id;
+  }
+
+  /** 保留清理：扫描快照根目录，超限时删除最旧快照目录（损坏/非快照目录跳过；目录缺失容错）。 */
+  private async prune(): Promise<void> {
+    const dir = this.options.dir;
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const metas: { id: string; createdAt: string }[] = [];
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        const parsed = parseJsonSafe(await fs.readFile(path.join(dir, entry.name, 'snapshot.json'), 'utf8')) as Snapshot;
+        if (typeof parsed.id !== 'string' || parsed.id === '' || typeof parsed.createdAt !== 'string') continue;
+        metas.push({ id: parsed.id, createdAt: parsed.createdAt });
+      } catch {
+        // 损坏 / 非快照目录：跳过（与 listSnapshots 语义一致）
+      }
+    }
+    for (const id of selectPruneCandidates(metas)) {
+      const target = path.join(dir, id);
+      if (!target.startsWith(dir)) continue; // 越界 id 跳过（不删、不抛，同 save/readBlob 包含性约定）
+      await fs.rm(target, { recursive: true, force: true });
+    }
   }
 
   async load(id: string): Promise<Snapshot> {
