@@ -12,12 +12,66 @@ import { parseJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
-  ConfigAdapter, HostContext, ImportPlan, PlanItem, Snapshot,
-  SnapshotEntry, SnapshotStore, SnapshotTarget,
+  ConfigAdapter, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
+  SnapshotEntry, SnapshotStatus, SnapshotStore, SnapshotTarget,
 } from './types.ts';
 
 /** 导入将实际写入的目标 kinds（这些项才需要快照） */
 const EXECUTABLE_KINDS = new Set(['Create', 'Update', 'Install', 'MissingSecret', 'MissingDependency']);
+
+/**
+ * 需要整文件备份的宿主关键文件（相对 $DSH_HOME）：
+ *  - settings.yaml（DSH 配置主存储；不存在时探测 settings.json）
+ *  - cordis.patch.yml（用户 patch 层）
+ *  - profiles/<profile>/cordis.patch.yml（profile patch 层，宿主暴露 profile 时）
+ */
+const HOST_FILE_CANDIDATES: ReadonlyArray<{ relPath: string }> = [
+  { relPath: 'settings.yaml' },
+  { relPath: 'settings.json' },
+  { relPath: 'cordis.patch.yml' },
+];
+
+/**
+ * 宿主整文件备份（M1）：探测存在性，存在的文件字节进 blobs Map 由 store.save 落盘，
+ * 全部候选（含 existed:false）登记进 hostFileBackups，供 M2 restore 整文件还原。
+ */
+async function backupHostFiles(
+  ctx: HostContext,
+  blobs: Map<string, Uint8Array>,
+): Promise<HostFileBackup[]> {
+  const candidates = [...HOST_FILE_CANDIDATES];
+  if (ctx.profile !== undefined && ctx.profile !== '') {
+    candidates.push({ relPath: `profiles/${ctx.profile}/cordis.patch.yml` });
+  }
+
+  const backups: HostFileBackup[] = [];
+  for (const { relPath } of candidates) {
+    // settings.yaml 与 settings.json 互斥：主存储存在时不再探测 json 备选
+    if (relPath === 'settings.json' && backups.some((b) => b.relPath === 'settings.yaml' && b.existed)) {
+      continue;
+    }
+    let existed = false;
+    try {
+      existed = await ctx.fs.exists(relPath);
+    } catch (err) {
+      ctx.log.warn(`快照探测宿主文件失败 ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
+      existed = false;
+    }
+    if (!existed) {
+      backups.push({ relPath, blobPath: '', existed: false });
+      continue;
+    }
+    const blobPath = `blobs/host/${crypto.randomUUID()}`;
+    try {
+      blobs.set(blobPath, await ctx.fs.readFile(relPath));
+      backups.push({ relPath, blobPath, existed: true });
+    } catch (err) {
+      ctx.log.warn(`快照读取宿主文件失败 ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
+      backups.push({ relPath, blobPath: '', existed: false });
+    }
+  }
+  return backups;
+}
 
 /** 文件类分区的目标基准目录（相对 homeDir；pluginFiles 的 ref 已是完整相对路径） */
 const FILE_BASES: Partial<Record<SectionId, string>> = {
@@ -152,11 +206,25 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
     }
   }
 
+  // 3) 宿主整文件备份（M1）：settings.yaml/settings.json + 用户/ profile 层 cordis.patch.yml
+  const hostFileBackups = await backupHostFiles(ctx, blobs);
+
+  // 4) 导入前插件清单（M2 restore 撤销插件对比基准；读取失败不阻断快照）
+  let beforePlugins: Snapshot['beforePlugins'] = [];
+  try {
+    beforePlugins = await ctx.plugins.listInstalled();
+  } catch (err) {
+    ctx.log.warn(`快照登记插件清单失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   const snapshot: Snapshot = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     sourceZip,
     entries,
+    status: 'pending',
+    beforePlugins,
+    hostFileBackups,
   };
   // file 条目登记 snapshotId，回滚读 blob 时定位快照目录
   for (const entry of snapshot.entries) {
@@ -208,5 +276,13 @@ export class FileSnapshotStore implements SnapshotStore {
     const dir = this.options.dir;
     if (!target.startsWith(dir)) throw new Error(`快照 blob 路径越界: ${blobPath}`);
     return fs.readFile(target);
+  }
+
+  /** 标记快照生命周期状态：重写 <dir>/<id>/snapshot.json（保留其余字段）。 */
+  async updateStatus(id: string, status: SnapshotStatus): Promise<void> {
+    const file = path.join(this.snapshotDir(id), 'snapshot.json');
+    const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
+    snapshot.status = status;
+    await fs.writeFile(file, JSON.stringify(snapshot, null, 2));
   }
 }

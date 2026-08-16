@@ -170,6 +170,11 @@ export class MemSnapshotStore implements SnapshotStore {
     if (!v) throw new Error(`blob not found: ${id}/${blobPath}`);
     return v;
   }
+  async updateStatus(id: string, status: Snapshot['status']): Promise<void> {
+    const s = this.snapshots.get(id);
+    if (!s) throw new Error(`snapshot not found: ${id}`);
+    s.status = status;
+  }
 }
 
 export class MockHostContext implements HostContext {
@@ -178,22 +183,24 @@ export class MockHostContext implements HostContext {
   homeDir: string;
   dshVersion = '0.1.0-rc.6';
   log: Logger;
+  profile?: string;
   settings = new MemSettings();
   credentials = new MemCredentials();
   plugins = new MemPlugins();
   workspace = new MemWorkspace();
   patchFile = new MemPatch();
   fs: MemFs;
-  constructor(platform: string, homeDir: string) {
+  constructor(platform: string, homeDir: string, profile?: string) {
     this.platform = platform;
     this.homeDir = homeDir;
+    this.profile = profile;
     this.fs = new MemFs(homeDir);
     this.log = createLogger({ level: 'error', sink: () => {} });
   }
 }
 
-export function makeContext(platform: string, homeDir: string): MockHostContext {
-  return new MockHostContext(platform, homeDir);
+export function makeContext(platform: string, homeDir: string, profile?: string): MockHostContext {
+  return new MockHostContext(platform, homeDir, profile);
 }
 
 /** 构造最小合法 manifest（adapter 单测用；真实 manifest 由 exporter 生成） */

@@ -23,14 +23,21 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { ConfigManagerApi } from './api.ts'
 import { ConfigManagerSection } from './ConfigManagerSection.tsx'
 import { en, zh, type ConfigManagerKey } from './locales.ts'
+import { SyncApi } from './sync/sync-api.ts'
+import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
+import { en as syncEn, zh as syncZh, type SyncKey } from './sync/sync-locales.ts'
 
 /** 本插件拥有的 locale namespace。 */
 const NS = 'config-manager'
+/** 远程同步设置区块的独立 locale namespace（独立字典文件，不与共享 locales.ts 冲突）。 */
+const SYNC_NS = 'config-manager-sync'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Config Manager 表面文案。 */
     'config-manager': ConfigManagerKey
+    /** 远程同步设置区块文案（m-sync-ui）。 */
+    'config-manager-sync': SyncKey
   }
 }
 
@@ -41,8 +48,10 @@ export const inject = ['slots', 'locale']
 export type { ConfigManagerSectionProps } from './ConfigManagerSection.tsx'
 export type { ExportViewProps } from './export/ExportView.tsx'
 export type { ImportWizardViewProps } from './import/ImportWizardView.tsx'
+export type { SyncSettingsViewProps } from './sync/SyncSettingsView.tsx'
 export type { ConfigManagerApiError, DownloadResult, ServiceStatus, UploadResponse } from './api.ts'
 export type { ConfigManagerKey } from './locales.ts'
+export type { SyncKey } from './sync/sync-locales.ts'
 
 /**
  * 注册 Config Manager 设置页。
@@ -50,9 +59,12 @@ export type { ConfigManagerKey } from './locales.ts'
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'config-manager: dictionaries')
+  ctx.effect(() => ctx.locale.register(SYNC_NS, { zh: syncZh, en: syncEn }), 'config-manager: sync dictionaries')
 
   const t = ctx.locale.bind(NS)
   const api = new ConfigManagerApi()
+  const syncT = ctx.locale.bind(SYNC_NS)
+  const syncApi = new SyncApi()
 
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -62,4 +74,14 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({ api }),
   }, ConfigManagerSection))
+
+  // m-sync-ui：远程同步独立设置页（不触碰 ConfigManagerSection 的 tab 容器）。
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'config-manager-sync',
+    order: 70,
+    label: () => syncT('section.label'),
+    locale: SYNC_NS,
+    inject: () => ({ api: syncApi }),
+  }, SyncSettingsView))
 }

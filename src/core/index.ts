@@ -17,6 +17,11 @@ export {
 } from './backup.ts';
 export { rollback, type RollbackOptions } from './rollback.ts';
 export {
+  planRestore, restore, listSnapshots,
+  type RestoreAction, type RestoreActionKind, type RestoreOptions,
+  type RestorePlan, type RestoreReport, type SnapshotMeta,
+} from './restore.ts';
+export {
   computeCompatibility, describeCompatibility, describeSchemaStatus,
   validateSections,
 } from './validator.ts';

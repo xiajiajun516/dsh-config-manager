@@ -69,26 +69,6 @@
   padding: 4px 2px 16px;
 }
 
-.iconButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  font-size: 15px;
-}
-
-.iconButton:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
 /* ---------------- 区块标题 ---------------- */
 
 .sectionTitleBlock {
@@ -464,6 +444,33 @@
 
 .progressDetail {
   color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+/* m3：分区徽章 / 内部计数徽章 */
+.progressBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.progressBadgeSection {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.progressBadgeCount {
+  background: color-mix(in srgb, var(--dsw-alias-state-info-primary) 14%, transparent);
+  color: var(--dsw-alias-state-info-primary);
 }
 
 .progressPercent {
@@ -756,4 +763,76 @@
 
 @keyframes dshCmSpin {
   to { transform: rotate(360deg); }
+}
+
+/* ---------------- 快照恢复面板（M4） ---------------- */
+
+.snapshotList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.snapshotRowHeader,
+.snapshotRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.2fr) minmax(140px, 1.6fr) 90px 56px 56px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.snapshotRowHeader {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.snapshotRow {
+  width: 100%;
+  text-align: left;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.snapshotRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.snapshotRow[data-active] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+}
+
+.warnText {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.reportList {
+  margin: 8px 0 4px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.kindTag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.rowActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
 }

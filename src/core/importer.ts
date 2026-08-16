@@ -10,6 +10,7 @@
  */
 import type { ZipArchive, ZipSafetyLimits } from '../utils/zip.ts';
 import { Analyzer } from './analyzer.ts';
+import type { PlanItemProgress } from './analyzer.ts';
 import type {
   ConfigAdapter, HostContext, ImportAnalysis, ImportDecisions, ImportPlan,
   ImportResult, SnapshotStore,
@@ -35,6 +36,8 @@ export interface ExecuteOptions {
   decryptedCredentials?: Map<string, string>;
   /** 任一项失败立即整体回滚（默认 false：单项失败如实记录并继续其余项） */
   rollbackOnError?: boolean;
+  /** m1：每完成一个计划项的进度回调（透传给 Analyzer；不传则无埋点） */
+  onItem?: (info: PlanItemProgress) => void;
 }
 
 export class Importer {
@@ -61,6 +64,7 @@ export class Importer {
       secretInputs: opts.secretInputs,
       decryptedCredentials: opts.decryptedCredentials,
       rollbackOnError: opts.rollbackOnError,
+      onItem: opts.onItem,
     });
   }
 }

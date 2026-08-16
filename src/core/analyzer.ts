@@ -67,6 +67,19 @@ interface AnalyzedBundle extends Bundle {
   adapterIssues: string[];
 }
 
+/** m1：每完成一个计划项的进度回调信息（Host 侧 run 状态更新用） */
+export interface PlanItemProgress {
+  adapter: SectionId;
+  /** 已处理计划项序号（1 起，含 skip/warning 信息项） */
+  index: number;
+  /** 将实际执行的计划项总数（APPLY_ORDER 内各项合计） */
+  total: number;
+  /** 该项最终状态（ok/skipped/warning/failed） */
+  status?: ExecutedItem['status'];
+  /** 当前计划项 id（非敏感） */
+  detail?: string;
+}
+
 export class Analyzer {
   private readonly ctx: HostContext;
   private readonly adapters: ConfigAdapter[];
@@ -361,7 +374,14 @@ export class Analyzer {
   async executeImportPlan(
     zipPath: string,
     plan: ImportPlan,
-    opts: { confirm?: boolean; secretInputs?: Record<string, string>; decryptedCredentials?: Map<string, string>; rollbackOnError?: boolean } = {},
+    opts: {
+      confirm?: boolean;
+      secretInputs?: Record<string, string>;
+      decryptedCredentials?: Map<string, string>;
+      rollbackOnError?: boolean;
+      /** m1：每完成一个计划项调用（真实进度埋点；不传则无埋点） */
+      onItem?: (info: PlanItemProgress) => void;
+    } = {},
   ): Promise<ImportResult> {
     const bundle = await this.loadBundle(zipPath);
     const analyzed = await this.analyzeBundle(bundle);
@@ -405,12 +425,27 @@ export class Analyzer {
       list.push(item);
       byAdapter.set(item.adapter, list);
     }
+    const totalItems = APPLY_ORDER.reduce((sum, id) => sum + (byAdapter.get(id)?.length ?? 0), 0);
+    let itemIndex = 0;
 
     for (const adapterId of APPLY_ORDER) {
       const adapter = this.adapters.find((a) => a.id === adapterId);
       if (!adapter) continue;
       for (const item of byAdapter.get(adapterId) ?? []) {
         const outcome = await this.applyOne(adapter, item, importCtx);
+        // m1 埋点：每完成一个计划项上报（真实进度；onItem 抛错不得中断导入）
+        itemIndex += 1;
+        try {
+          opts.onItem?.({
+            adapter: item.adapter,
+            index: itemIndex,
+            total: totalItems,
+            status: outcome.executed.status,
+            detail: item.id,
+          });
+        } catch {
+          // 埋点回调失败不影响导入执行（进度是尽力而为）
+        }
         executed.push(outcome.executed);
         // 仅硬失败计入 anyFailed（warning 属非致命：目标不可达等，不触发回滚，§34.17）
         if (outcome.executed.status === 'failed') anyFailed = true;
@@ -429,6 +464,8 @@ export class Analyzer {
         store: this.snapshotStore,
         adapters: this.adapters,
       });
+      // M1：回滚完成 → 快照标记 rolled-back（元数据写失败只告警，不影响回滚结论）
+      await this.markSnapshotStatus(snapshot.id, 'rolled-back');
       this.ctx.log.warn(`导入失败，已回滚（${rollbackReport.full ? '完整' : '部分'}）`, {
         failed: executed.filter((e) => e.status === 'failed').map((e) => e.itemId),
       });
@@ -462,6 +499,9 @@ export class Analyzer {
       .filter((s) => !importCtx.decryptedCredentials?.has(s.ref) && !importCtx.secretInputs[s.ref])
       .map((s) => s.ref);
 
+    // M1：导入成功 → 快照标记 done（元数据写失败只告警，不改变导入结论）
+    await this.markSnapshotStatus(snapshot.id, 'done');
+
     return {
       ok: true, // 单项失败已如实记录在 executed；无未捕获异常即完成
       executed,
@@ -471,6 +511,15 @@ export class Analyzer {
       rollback: null,
       snapshotId: snapshot.id,
     };
+  }
+
+  /** 快照状态标记（M1）：成功→done / 失败回滚→rolled-back。元数据写失败只告警不抛错。 */
+  private async markSnapshotStatus(id: string, status: 'done' | 'rolled-back'): Promise<void> {
+    try {
+      await this.snapshotStore.updateStatus(id, status);
+    } catch (err) {
+      this.ctx.log.warn(`快照 ${id} 状态标记 ${status} 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async applyOne(

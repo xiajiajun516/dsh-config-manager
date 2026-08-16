@@ -152,6 +152,11 @@ class MemSnapshotStore implements SnapshotStore {
     if (!v) throw new Error(`blob not found: ${id}/${blobPath}`);
     return v;
   }
+  async updateStatus(id: string, status: Snapshot['status']): Promise<void> {
+    const s = this.snapshots.get(id);
+    if (!s) throw new Error(`snapshot not found: ${id}`);
+    s.status = status;
+  }
 }
 
 class MockHostContext implements HostContext {

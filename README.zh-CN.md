@@ -34,6 +34,7 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 | 🗺️ | **路径自动映射** | 换了电脑路径变了？自动检测并让你重新指定 |
 | 🔒 | **密钥安全** | API Key 默认不导出；导入后提醒你重新填写 |
 | ↩️ | **自动回滚** | 导入失败自动恢复原样，不会弄坏现有配置 |
+| 📸 | **快照恢复** | 撤销一次导入：整文件还原 + 卸载新增插件（CLI 与 GUI 均支持） |
 | 🗂️ | **配置档案 Profiles** | 保存多套配置（工作 / 个人），随时切换 |
 
 ---
@@ -169,6 +170,34 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 
 保存多套配置（如「工作」「个人」），随时切换；切换同样带预览 + 自动备份 + 回滚。
 
+### 📸 快照恢复（撤销一次导入）
+
+每次导入都会先创建**安全快照**。导入后如果觉得哪里不对劲，可以把目标环境恢复到导入前的状态：
+
+| 动作 | 说明 |
+|---|---|
+| 整文件还原 | settings.yaml / settings.json / cordis.patch.yml 的 blob 写回 `$DSH_HOME`；快照时不存在、导入后新增的文件会被移除 |
+| 插件卸载 | 导入期间新增的插件经官方 `dsh plugin remove` 卸载（与基线对比；旧快照无基线时只给提示） |
+| 文件补偿 | skills / agentPresets / pluginFiles / sessions 的 blob 写回原路径 |
+| 凭据 | DSH 不回读凭据值——只提示人工重新填写 |
+
+**GUI**：设置 → 「备份与迁移」→「快照恢复」tab → 选择快照 → 预览恢复计划（dry-run，零写入）→ 确认执行。
+
+**CLI**（纯离线，无需 DSH 运行时）：
+
+```bash
+# 列出快照（最新在前）
+dsh-config-manager snapshots
+
+# 预览最近可用快照的恢复计划（零写入）
+dsh-config-manager restore --dry-run
+
+# 执行恢复（覆盖/删除前先把当前文件备份到 <快照>/pre-restore/）
+dsh-config-manager restore --id <snapshot-id>
+```
+
+每次覆盖/删除前都会先把当前文件复制到 `<snapshotDir>/pre-restore/`，可人工反悔。任一动作失败则退出码为 1；报告如实列出 已还原 / 已卸载插件 / 需人工处理 / 失败 / 跳过。
+
 ---
 
 ## 🛡️ 安全
@@ -218,6 +247,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 3. **keybindings / workflows 配置 / commands / rules**：DSH 当前没有这些概念，因此不会导出相关内容
 4. **历史会话默认不迁移**（v1 仅支持文件级复制）
 5. **加密备份**：密码丢失则无法解密（设计使然——请牢记密码）
+6. **快照恢复是离线的、诚实的**：离线引擎无法恢复的条目（快照无整文件备份时的 settings namespace / patch 行、存在 DSH storages 里的 workspace 记录）会如实列为跳过并指向在线回滚；凭据**值**绝不自动改写（只提示人工补录）；无插件基线的旧快照只提示人工核对新增插件
 
 > 维护者与开发者：构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 

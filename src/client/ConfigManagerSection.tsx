@@ -1,15 +1,21 @@
 /**
  * Config Manager 设置页（settings.section 入口的主页面容器）。
  *
- * owner props 由 settings shell 传入（close）；业务面（api）由注册时的
- * inject face 注入；t 由 locale seat 注入。内部两个主视图：
+ * 业务面（api）由注册时的 inject face 注入；t 由 locale seat 注入。
+ * 关闭按钮由 settings shell 自带，本页不再渲染。内部两个主视图：
  * Export（Quick/Custom）与 Import（九步向导）。
+ *
+ * m2：主视图 tab（view）与全部子视图状态统一由模块级 runStore 持有
+ * （sessionStorage 持久化 + 切 tab/关面板不重建控制器实例）；挂载时
+ * 经 GET /runs + 轮询 /progress 恢复进行中的 run（刷新/重开面板后）。
  */
-import { useState } from 'react'
+import { useEffect, useSyncExternalStore, useState } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.ts'
+import { runStore, type MainView } from './run-store.ts'
 import { ExportView } from './export/ExportView.tsx'
 import { ImportWizardView } from './import/ImportWizardView.tsx'
+import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
 import css from './config-manager.module.css'
 
 export type ConfigManagerSectionProps =
@@ -17,13 +23,31 @@ export type ConfigManagerSectionProps =
   & ConfigManagerSectionInjected
   & { t: TranslateNS<'config-manager'> }
 
-type MainView = 'export' | 'import'
-
 /**
- * 设置页容器：Export / Import 双视图切换。
+ * 设置页容器：Export / Import / Snapshots 三视图切换。
+ * Export/Import 状态在模块级 store（切 tab 不丢失）；快照恢复面板为低频显式
+ * 操作，其状态组件内自持（local state，不进 sessionStorage）。
  */
-export function ConfigManagerSection({ close, api, t }: ConfigManagerSectionProps) {
-  const [view, setView] = useState<MainView>('export')
+export function ConfigManagerSection({ api, t }: ConfigManagerSectionProps) {
+  const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
+  const view = state.view
+  const [snapshotsOpen, setSnapshotsOpen] = useState(false)
+
+  // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
+  // 这里经 /runs 找回活跃 runId 再轮询 /progress）；卸载时停止轮询，重开再订阅。
+  useEffect(() => {
+    void runStore.resume(api)
+    return () => {
+      runStore.stopResume()
+    }
+  }, [api])
+
+  const setView = (next: MainView): void => {
+    setSnapshotsOpen(false)
+    runStore.patch({ view: next })
+  }
+
+  const activeTab: MainView | 'snapshots' = snapshotsOpen ? 'snapshots' : view
 
   return (
     <div className={css.section}>
@@ -32,8 +56,8 @@ export function ConfigManagerSection({ close, api, t }: ConfigManagerSectionProp
           <button
             type="button"
             role="tab"
-            aria-selected={view === 'export'}
-            data-active={view === 'export' ? '' : undefined}
+            aria-selected={activeTab === 'export'}
+            data-active={activeTab === 'export' ? '' : undefined}
             className={css.viewTab}
             onClick={() => { setView('export') }}
           >
@@ -42,18 +66,29 @@ export function ConfigManagerSection({ close, api, t }: ConfigManagerSectionProp
           <button
             type="button"
             role="tab"
-            aria-selected={view === 'import'}
-            data-active={view === 'import' ? '' : undefined}
+            aria-selected={activeTab === 'import'}
+            data-active={activeTab === 'import' ? '' : undefined}
             className={css.viewTab}
             onClick={() => { setView('import') }}
           >
             {t('view.import')}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'snapshots'}
+            data-active={snapshotsOpen ? '' : undefined}
+            className={css.viewTab}
+            onClick={() => { setSnapshotsOpen(true) }}
+          >
+            {t('view.snapshots')}
+          </button>
         </div>
-        <button type="button" className={css.iconButton} title={t('common.close')} aria-label={t('common.close')} onClick={close}>×</button>
       </div>
       <div className={css.sectionBody}>
-        {view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
+        {snapshotsOpen
+          ? <SnapshotsPanel api={api} t={t} />
+          : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
       </div>
     </div>
   )

@@ -34,6 +34,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 | 🗺️ | **Path auto-mapping** | Detects dead absolute paths and lets you remap them |
 | 🔒 | **Secret safety** | API Keys are never exported; re-enter them after import |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
+| 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
 | 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime |
 
 ---
@@ -169,6 +170,34 @@ When the target already has a same-named item, you choose:
 
 Save multiple configurations (Work / Personal) and switch anytime; switching includes preview + auto-backup + rollback.
 
+### 📸 Snapshot restore (undo an import)
+
+Every import creates a **safety snapshot** first. If something feels off afterwards, restore the target back to its pre-import state:
+
+| Action | What it does |
+|---|---|
+| Whole-file restore | settings.yaml / settings.json / cordis.patch.yml blobs are written back to `$DSH_HOME`; files that didn't exist at snapshot time but appeared after import are removed |
+| Plugin uninstall | Plugins added during import are removed via the official `dsh plugin remove` (baseline comparison; old snapshots without a baseline only get a hint) |
+| File compensation | skills / agentPresets / pluginFiles / sessions blobs are written back to their original paths |
+| Credentials | DSH never reads credential values back — you get a manual re-entry hint instead |
+
+**GUI**: Settings → "Backup & Migration" → **Snapshots & Restore** tab → pick a snapshot → preview the plan (dry-run, zero writes) → confirm.
+
+**CLI** (offline, no DSH runtime needed):
+
+```bash
+# list snapshots (newest first)
+dsh-config-manager snapshots
+
+# preview the restore plan for the latest usable snapshot (zero writes)
+dsh-config-manager restore --dry-run
+
+# execute the restore (current files are backed up to <snapshot>/pre-restore/ first)
+dsh-config-manager restore --id <snapshot-id>
+```
+
+Every overwrite/delete is first copied to `<snapshotDir>/pre-restore/` so you can manually change your mind. Exit code is `1` if any action failed; the report honestly lists restored / removedPlugins / manualHints / failed / skipped.
+
 ---
 
 ## 🛡️ Security
@@ -218,6 +247,7 @@ No. Items are deduplicated by stable IDs (plugin ID / MCP name / skill name…);
 3. **keybindings / workflow configs / commands / rules** — DSH has no such concepts, so nothing is exported for them
 4. **History/session migration is off by default** (v1 copies files only)
 5. **Encrypted backups**: a lost password means the `secrets.enc` can't be decrypted (by design — keep your password safe)
+6. **Snapshot restore is offline and honest**: entries the offline engine can't restore (settings namespaces / patch lines when the snapshot has no whole-file backup, workspace records stored in DSH storages) are reported as skipped with a pointer to online rollback; credential **values** are never auto-written (manual re-entry hint only); old snapshots without a plugin baseline only get a hint to remove added plugins manually
 
 > Maintainers & developers: see [DEVELOPERS.md](DEVELOPERS.md) for build, testing, auto-publishing and full technical notes.
 

@@ -114,6 +114,8 @@ export interface HostContext {
   workspace: WorkspaceFacade;
   patchFile: PatchFileFacade;
   fs: FileSystemFacade;
+  /** 当前管理的 DSH profile 名（如 web）；引擎用它定位 profiles/<profile>/cordis.patch.yml。宿主不暴露时缺省 */
+  profile?: string;
 }
 
 /* ---------------- 导入计划（§13.3 十类 + 决策） ---------------- */
@@ -240,11 +242,29 @@ export interface SnapshotEntry {
   snapshotId?: string;
 }
 
+/** 快照生命周期状态（M1 增强；旧快照无此字段，视为未知/兼容） */
+export type SnapshotStatus = 'pending' | 'done' | 'rolled-back';
+
+/** 宿主整文件备份登记（M1）：导入前对 $DSH_HOME 关键文件的整文件快照。
+ * relPath 相对 $DSH_HOME（如 settings.yaml / cordis.patch.yml / profiles/<p>/cordis.patch.yml），
+ * blobPath 为快照内 blob 路径（existed=false 时为空串，表示该文件当时不存在）。 */
+export interface HostFileBackup {
+  relPath: string;
+  blobPath: string;
+  existed: boolean;
+}
+
 export interface Snapshot {
   id: string;
   createdAt: string;
   sourceZip: string;
   entries: SnapshotEntry[];
+  /** 生命周期状态：pending（已生成，导入未完成）/ done（导入成功）/ rolled-back（失败已回滚）。旧快照缺省 */
+  status?: SnapshotStatus;
+  /** 导入前已安装插件清单（M2 restore 撤销插件时与当前已装对比）。旧快照缺省 */
+  beforePlugins?: PluginInfo[];
+  /** 宿主整文件备份（settings.yaml / settings.json / cordis.patch.yml / profiles/<p>/cordis.patch.yml）。旧快照缺省 */
+  hostFileBackups?: HostFileBackup[];
 }
 
 /** 快照存储（默认文件实现见 core/backup.ts；测试可用内存实现） */
@@ -252,6 +272,8 @@ export interface SnapshotStore {
   save(snapshot: Snapshot, blobs?: Map<string, Uint8Array>): Promise<string>;
   load(id: string): Promise<Snapshot>;
   readBlob(id: string, blobPath: string): Promise<Uint8Array>;
+  /** 标记快照生命周期状态（导入成功→done；失败回滚→rolled-back；持久化由实现负责） */
+  updateStatus(id: string, status: SnapshotStatus): Promise<void>;
 }
 
 export interface RollbackReport {

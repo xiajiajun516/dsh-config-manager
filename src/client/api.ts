@@ -9,12 +9,14 @@
  * 端点契约（Host 半 `src/index.ts` 按此实现，见 CLIENT_DEPENDENCIES.md 的接口说明）：
  * ```
  * GET  /api/dsh-config-manager/status             → ServiceStatus        （健康/版本检查）
- * POST /api/dsh-config-manager/export             → ExportResponse       （body: ExportOptions）
+ * POST /api/dsh-config-manager/export             → ExportResponse       （body: ExportOptions；响应含 runId）
  * GET  /api/dsh-config-manager/download?path=…    → 文件流（content-disposition 文件名）
  * POST /api/dsh-config-manager/upload?name=…      → UploadResponse       （body: 原始字节）
  * POST /api/dsh-config-manager/analyze            → ImportAnalysis       （body: { zipPath }）
  * POST /api/dsh-config-manager/plan               → ImportPlan           （body: { zipPath, decisions }）
- * POST /api/dsh-config-manager/execute            → ImportResult         （body: { zipPath, plan, opts }）
+ * POST /api/dsh-config-manager/execute            → ImportResult         （body: { zipPath, plan, opts }；响应含 runId）
+ * GET  /api/dsh-config-manager/progress?runId=…   → RunState             （run 实时状态：轮询/刷新恢复）
+ * GET  /api/dsh-config-manager/runs               → RunState[]           （活跃 run 列表）
  * ```
  * 安全约束：
  *  - 所有响应/错误文本在进入 UI 前经 `redact()`（见 common/ErrorBanner.tsx）；
@@ -24,6 +26,8 @@
 
 import type { ImportAnalysis, ImportDecisions, ImportPlan, ImportResult } from '../core/types.ts';
 import type { ExportOptions, ExportReport } from '../core/types.ts';
+import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.ts';
+import type { RunState } from '../core/run-registry.ts';
 import type { Manifest } from '../schema/types.ts';
 
 /** Host 半健康检查响应（plugin 版本 / DSH 版本 / 平台，用于主页横幅与兼容性说明） */
@@ -35,11 +39,13 @@ export interface ServiceStatus {
   arch: string;
 }
 
-/** export 端点响应（对齐 ExportFlow 的 ExportRunResult 前半部分） */
+/** export 端点响应（对齐 ExportFlow 的 ExportRunResult 前半部分；runId 为 m1 run 注册表标识） */
 export interface ExportResponse {
   zipPath: string;
   manifest: Manifest;
   report: ExportReport;
+  /** m1：本次导出 run 的 id（可用 /progress 查询状态 / 刷新恢复） */
+  runId: string;
 }
 
 /** upload 端点响应：Host 把用户上传的 ZIP 存入受控临时目录，返回可被 analyze/plan/execute 引用的路径 */
@@ -63,6 +69,13 @@ export interface ExecutePayload {
   };
 }
 
+/** restore 端点响应：dryRun=true 返回 plan；执行返回 report（与 CLI 一致的诚实报告） */
+export interface RestoreResponse {
+  dryRun: boolean;
+  plan?: RestorePlan;
+  report?: RestoreReport;
+}
+
 /** 路由族常量（集中管理，与 Host 半的路由前缀保持一致） */
 export const CONFIG_MANAGER_API = {
   base: '/api/dsh-config-manager',
@@ -73,6 +86,10 @@ export const CONFIG_MANAGER_API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
+  progress: '/api/dsh-config-manager/progress',
+  runs: '/api/dsh-config-manager/runs',
+  snapshots: '/api/dsh-config-manager/snapshots',
+  restore: '/api/dsh-config-manager/restore',
 } as const;
 
 /** 导出请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐，防止宿主卡死时 UI 无限等待 */
@@ -271,7 +288,7 @@ export class ConfigManagerApi {
     zipPath: string,
     plan: ImportPlan,
     opts: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean },
-  ): Promise<ImportResult> {
+  ): Promise<ImportResult & { runId: string }> {
     const payload: ExecutePayload = {
       zipPath,
       plan,
@@ -286,6 +303,37 @@ export class ConfigManagerApi {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    return readJson<ImportResult>(response);
+    return readJson<ImportResult & { runId: string }>(response);
+  }
+
+  // ------------------------------------------------------------- run 进度
+  /** m1：查询单个 run 的实时状态（执行中轮询 / 刷新恢复用；404 = 已过保留期或不存在） */
+  async progress(runId: string): Promise<RunState> {
+    const response = await fetch(CONFIG_MANAGER_API.progress + query({ runId }));
+    return readJson<RunState>(response);
+  }
+
+  /** m1：列出当前活跃（running）的 run（刷新后重新订阅进行中任务的入口） */
+  async runs(): Promise<RunState[]> {
+    const response = await fetch(CONFIG_MANAGER_API.runs);
+    return readJson<RunState[]>(response);
+  }
+
+  // ------------------------------------------------------- 快照恢复（M4）
+  /** 列出全部快照元信息（createdAt 倒序；含 status/条目数/宿主文件数/插件数） */
+  async snapshots(): Promise<SnapshotMeta[]> {
+    const response = await fetch(CONFIG_MANAGER_API.snapshots);
+    const body = await readJson<{ snapshots: SnapshotMeta[] }>(response);
+    return body.snapshots;
+  }
+
+  /** 快照恢复：dryRun=true 只取动作计划（零写入）；false 执行并返回诚实报告 */
+  async restoreSnapshot(snapshotId: string, dryRun: boolean): Promise<RestoreResponse> {
+    const response = await fetch(CONFIG_MANAGER_API.restore, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ snapshotId, dryRun }),
+    });
+    return readJson<RestoreResponse>(response);
   }
 }

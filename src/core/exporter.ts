@@ -20,6 +20,15 @@ import type {
   ExportSection, HostContext, SecretScanner, SensitiveHit,
 } from './types.ts';
 
+/** m1：每导出一个分区前的进度回调信息（Host 侧 run 状态更新用；section = adapter id） */
+export interface SectionProgress {
+  section: string;
+  /** 当前分区序号（1 起） */
+  index: number;
+  /** 选中分区总数 */
+  total: number;
+}
+
 export interface ExporterOptions {
   ctx: HostContext;
   adapters: ConfigAdapter[];
@@ -30,6 +39,8 @@ export interface ExporterOptions {
   /** 插件自身版本（manifest.exporter.version） */
   exporterVersion?: string;
   now?: () => Date;
+  /** m1：每导出一个分区前调用（真实进度埋点；不传则无埋点） */
+  onSection?: (info: SectionProgress) => void;
 }
 
 /** 缺省 SecretScanner：递归黑名单字段剥离（字段名大小写不敏感；二进制/Uint8Array 原样跳过） */
@@ -76,6 +87,7 @@ export class Exporter {
   private readonly encryption: EncryptionProvider | null;
   private readonly exporterVersion: string;
   private readonly now: () => Date;
+  private readonly onSection: ((info: SectionProgress) => void) | undefined;
 
   constructor(opts: ExporterOptions) {
     this.ctx = opts.ctx;
@@ -84,6 +96,7 @@ export class Exporter {
     this.encryption = opts.encryption ?? null;
     this.exporterVersion = opts.exporterVersion ?? '0.1.0';
     this.now = opts.now ?? (() => new Date());
+    this.onSection = opts.onSection;
   }
 
   /**
@@ -108,8 +121,16 @@ export class Exporter {
     const included: ExportReport['included'] = [];
     const excluded: SectionId[] = this.adapters.filter((a) => !selected.includes(a.id)).map((a) => a.id);
 
+    // m1 埋点：每导出一个分区前上报真实进度（onSection 抛错不得中断导出）
+    let sectionIndex = 0;
     for (const adapter of this.adapters) {
       if (!selected.includes(adapter.id)) continue;
+      sectionIndex += 1;
+      try {
+        this.onSection?.({ section: adapter.id, index: sectionIndex, total: selected.length });
+      } catch {
+        // 埋点回调失败不影响导出本身（进度是尽力而为）
+      }
       let section: ExportSection;
       try {
         section = await adapter.export(this.ctx, options);

@@ -216,6 +216,11 @@ class MemSnapshotStore implements SnapshotStore {
     return s;
   }
   async readBlob() { return new Uint8Array(); }
+  async updateStatus(id: string, status: Snapshot['status']) {
+    const s = this.snapshots.get(id);
+    if (!s) throw new Error(`snapshot not found: ${id}`);
+    s.status = status;
+  }
 }
 
 class MockHostContext implements HostContext {

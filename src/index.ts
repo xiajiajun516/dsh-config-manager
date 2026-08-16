@@ -46,6 +46,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // Type-only: pull the Cordis Context augmentations (webServer / workspaceRegistry)
 // and the WebRoute contract without any runtime import.
@@ -56,6 +57,8 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
 import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
+import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
+import { RunRegistry, type RunState } from './core/run-registry.ts'
 import {
   hasDshBundlePatch, installErrorFor, listInstalledPlugins, resolveProfileDir,
   resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
@@ -68,6 +71,10 @@ import type {
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
+import { GitTransport } from './sync/git/git-transport.ts'
+import { SyncEngine } from './sync/sync-engine.ts'
+import { loadSyncState } from './sync/sync-state.ts'
+import { readSyncConfig, writeSyncConfig, validateRepoUrl } from './sync/sync-config.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
@@ -84,7 +91,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.11'
+const PLUGIN_VERSION = '0.1.13'
 
 /** Plugin config (composition entry); the loader applies it as-is. */
 export interface Config {
@@ -107,7 +114,22 @@ const API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
+  progress: '/api/dsh-config-manager/progress',
+  runs: '/api/dsh-config-manager/runs',
+  snapshots: '/api/dsh-config-manager/snapshots',
+  restore: '/api/dsh-config-manager/restore',
+  // m-sync-ui：远程同步（Git 私有仓库通道）
+  syncStatus: '/api/dsh-config-manager/sync/status',
+  syncPush: '/api/dsh-config-manager/sync/push',
+  syncPull: '/api/dsh-config-manager/sync/pull',
 } as const
+
+/**
+ * 同步 token 的 DSH credentials 引用名（POSIX env-var 形态，满足 CredentialRef 品牌要求）。
+ * token 只经 credentialRef 读写（写入由请求体触发，读取在每次 git 网络操作时 resolve），
+ * 永不进 repoUrl / argv / commit / 同步文件 / 日志。
+ */
+const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN'
 
 /** Cap on JSON request bodies (import plans can be large: 4 MB). */
 const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
@@ -607,6 +629,7 @@ class ConfigManagerHostContext implements HostContext {
   readonly arch: string = process.arch
   readonly homeDir: string
   readonly dshVersion: string
+  readonly profile: string
   readonly log: Logger
   readonly settings: SettingsFacade
   readonly credentials: CredentialsFacade
@@ -618,6 +641,7 @@ class ConfigManagerHostContext implements HostContext {
   constructor(ctx: Context, homeDir: string, profile: string) {
     this.homeDir = homeDir
     this.dshVersion = resolveDshVersion(homeDir)
+    this.profile = profile
     const level = process.env.DSH_CONFIG_MANAGER_LOG_LEVEL
     this.log = createLogger({
       level: level === 'debug' || level === 'info' || level === 'warn' || level === 'error' ? level : 'info',
@@ -714,11 +738,177 @@ interface RoutesDeps {
   exportsDir: string
   tmpDir: string
   snapshotsDir: string
+  /** m1：导出/导入 run 注册表（跨请求共享，/progress 与 /runs 的单一事实源） */
+  runs: RunRegistry
+  /** m-sync-ui：同步状态/配置目录（$DSH_HOME/dsh-config-manager/sync） */
+  syncDir: string
+  /** m-sync-ui：原始 DSH credentials（resolve token / set token / describe 状态） */
+  credentials: CredentialProvider
+}
+
+/* -------------------------------------------------- sync 路由（m-sync-ui） */
+
+/** 同步路由可预期的请求级错误（status 缺省 400；引擎/传输失败走 500） */
+export class SyncRouteError extends Error {
+  readonly status: number
+
+  constructor(message: string, status: number = 400) {
+    super(message)
+    this.name = 'SyncRouteError'
+    this.status = status
+  }
+}
+
+/** 同步路由错误统一出口：SyncRouteError 用其 status，其余 500（GitTransport 错误消息已脱敏） */
+export function writeSyncRouteError(res: ServerResponse, error: unknown): void {
+  if (error instanceof SyncRouteError) {
+    writeJson(res, error.status, { error: error.message })
+    return
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  writeJson(res, 500, { error: message })
+}
+
+/* -------------------------------------------------- restore 路由（M4） */
+
+/** POST /restore 请求体校验（纯函数；snapshotId 拒绝路径分隔符防 join 越界）。 */
+export type BuildRestoreBodyResult =
+  | { ok: true; value: { snapshotId: string; dryRun: boolean } }
+  | { ok: false; error: string }
+
+export function buildRestoreBody(body: unknown): BuildRestoreBodyResult {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: 'invalid JSON body' }
+  }
+  const record = body as Record<string, unknown>
+  const snapshotId = record['snapshotId']
+  if (typeof snapshotId !== 'string' || snapshotId === '') {
+    return { ok: false, error: 'snapshotId is required' }
+  }
+  if (snapshotId === '.' || snapshotId === '..' || snapshotId.includes('/') || snapshotId.includes('\\')) {
+    return { ok: false, error: 'snapshotId 非法（禁止路径分隔符）/ invalid snapshotId' }
+  }
+  return { ok: true, value: { snapshotId, dryRun: record['dryRun'] === true } }
+}
+
+/**
+ * 宿主侧恢复动作执行器（真实执行 restore 计划）：
+ * 整文件/文件还原与删除走 ctx.fs（home-relative facade，越界由 facade 再拦一道），
+ * blob 读取与 pre-restore 副本走快照目录（node fs），插件卸载走官方 dsh plugin CLI。
+ */
+export interface RestoreExecutor {
+  /** 读快照目录内 blob（相对 snapshotDir） */
+  readBlob(blobPath: string): Promise<Uint8Array>
+  /** 把当前 home 文件内容复制到 <snapshotDir>/pre-restore/（覆盖/删除前的双保险） */
+  savePreRestore(relPath: string): Promise<void>
+  existsHome(relPath: string): Promise<boolean>
+  writeHome(relPath: string, data: Uint8Array): Promise<void>
+  removeHome(relPath: string): Promise<void>
+  /** 卸载插件（官方通道）；失败返回 { ok:false, message } */
+  uninstallPlugin(name: string): Promise<{ ok: boolean; message?: string }>
+}
+
+/**
+ * 按计划执行恢复动作（纯执行器；逐项 try/catch 不拖垮其余），
+ * 返回与 CLI 一致的诚实报告。顺序 = 计划顺序（整文件 → 插件 → file 补偿）。
+ */
+export async function executeRestorePlan(
+  plan: RestorePlan,
+  exec: RestoreExecutor,
+): Promise<RestoreReport> {
+  const report: RestoreReport = {
+    snapshotId: plan.snapshotId,
+    restored: [],
+    removedPlugins: [],
+    manualHints: [],
+    failed: [],
+    skipped: [],
+  }
+  for (const action of plan.actions) {
+    try {
+      switch (action.kind) {
+        case 'hostFileRestore':
+        case 'fileRestore': {
+          if (action.target === undefined || action.blobPath === undefined) {
+            throw new Error('恢复动作缺少 target/blobPath')
+          }
+          if (await exec.existsHome(action.target)) await exec.savePreRestore(action.target)
+          await exec.writeHome(action.target, await exec.readBlob(action.blobPath))
+          report.restored.push(action.target)
+          break
+        }
+        case 'hostFileRemove':
+        case 'fileRemove': {
+          if (action.target === undefined) throw new Error('恢复动作缺少 target')
+          if (await exec.existsHome(action.target)) {
+            await exec.savePreRestore(action.target)
+            await exec.removeHome(action.target)
+          }
+          report.restored.push(action.target)
+          break
+        }
+        case 'pluginRemove': {
+          if (action.pluginName === undefined) throw new Error('恢复动作缺少插件名')
+          const result = await exec.uninstallPlugin(action.pluginName)
+          if (result.ok) {
+            report.removedPlugins.push(action.pluginName)
+          } else {
+            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? '卸载失败' })
+          }
+          break
+        }
+        case 'credentialHint':
+          report.manualHints.push(action.manualHint ?? action.description)
+          break
+        case 'skip':
+          report.skipped.push(action.description)
+          break
+        default:
+          report.skipped.push(`未知动作 ${String(action.kind)}: ${action.description}`)
+      }
+    } catch (err) {
+      report.failed.push({
+        item: action.target ?? action.pluginName ?? action.description,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return report
+}
+
+/** 宿主 restore 执行器装配：ctx.fs（home-relative）+ 快照目录（node fs）+ runDshPlugin。 */
+function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: string): RestoreExecutor {
+  const profileDir = resolveProfileDir(host.homeDir, profile)
+  let seq = 0
+  return {
+    readBlob: async (blobPath) => {
+      const target = resolve(snapshotDir, blobPath)
+      if (!isSameOrChild(target, snapshotDir)) throw new Error(`blob 路径越界: ${blobPath}`)
+      return fs.readFile(target)
+    },
+    savePreRestore: async (relPath) => {
+      const data = await host.fs.readFile(relPath)
+      seq += 1
+      const safe = relPath.replace(/[\\/:*?"<>|]/g, '_')
+      await fs.mkdir(join(snapshotDir, 'pre-restore'), { recursive: true })
+      await fs.writeFile(join(snapshotDir, 'pre-restore', `${String(seq).padStart(4, '0')}-${safe}`), data)
+    },
+    existsHome: (relPath) => host.fs.exists(relPath),
+    writeHome: (relPath, data) => host.fs.writeFile(relPath, data),
+    removeHome: (relPath) => host.fs.remove(relPath),
+    uninstallPlugin: async (name) => {
+      const result = await runDshPlugin(profileDir, profile, ['remove', name])
+      if (result.exitCode === 0) return { ok: true }
+      const output = `${result.stderr}\n${result.stdout}`.trim()
+      const tail = output.split('\n').slice(-8).join('\n') || '无输出'
+      return { ok: false, message: `dsh plugin remove ${name} 失败（exit ${String(result.exitCode)}）：${tail}` }
+    },
+  }
 }
 
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): WebRoute[] {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, credentials } = deps
   const roots = [exportsDir, tmpDir]
 
   const makeImporter = (): Importer => new Importer({
@@ -740,6 +930,56 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
       return false
     }
     return true
+  }
+
+  // ------------------------------------------------- sync 路由装配（m-sync-ui）
+  // 请求级装配：每次 push/pull 从请求体取 repoUrl/gitBin，token 非空先写入 DSH
+  // credentials（只存值不落盘同步文件/日志），git 网络操作时经 resolve 现取 ——
+  // 与 GitTransport「token 只从注入 provider 读取」的安全契约完全对齐。
+
+  /** 解析同步请求体（repoUrl 必填；token 非空则先写入 DSH credentials）。 */
+  const prepareSync = async (body: Record<string, unknown>): Promise<{ repoUrl: string; gitBin?: string }> => {
+    const repoUrl = typeof body['repoUrl'] === 'string' ? body['repoUrl'].trim() : ''
+    if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
+    const urlError = validateRepoUrl(repoUrl)
+    if (urlError !== null) throw new SyncRouteError(urlError)
+    const gitBin = typeof body['gitBin'] === 'string' && body['gitBin'] !== '' ? body['gitBin'] : undefined
+    const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
+    if (token !== undefined) {
+      try {
+        await credentials.set(credentialRef(SYNC_CREDENTIAL_REF), token)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new SyncRouteError(
+          `token 写入 DSH credentials 失败：${reason}（请在 DSH 凭据管理里配置 ${SYNC_CREDENTIAL_REF} 后重试）`,
+        )
+      }
+    }
+    return { repoUrl, gitBin }
+  }
+
+  /** 构造 SyncEngine（Git 私有仓库通道 + 散文件快照目录 + pull 用 Importer）。 */
+  const makeSyncEngine = (repoUrl: string, gitBin: string | undefined): SyncEngine => {
+    const transport = new GitTransport({
+      repoUrl,
+      workDir: join(syncDir, 'work'),
+      credentials: {
+        getToken: async () => {
+          const resolved = await credentials.resolve(credentialRef(SYNC_CREDENTIAL_REF))
+          return resolved?.value ?? ''
+        },
+      },
+      gitBin,
+    })
+    return new SyncEngine({
+      ctx: host,
+      transport,
+      stateDir: syncDir,
+      adapters,
+      importer: makeImporter(),
+      localSnapshotsDir: join(syncDir, 'snapshots'),
+      zipDir: tmpDir,
+    })
   }
 
   return [
@@ -776,22 +1016,45 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         // Encryption password is in-memory only (never persisted / logged).
         const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
         const outPath = join(exportsDir, `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`)
+        // m1：执行开始注册 run（同 kind 已有进行中任务 → 409 拒绝，防止重复导出）
+        let run: RunState
+        try {
+          run = runs.register('export')
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          return
+        }
+        const runId = run.runId
         try {
           const exporter = new Exporter({
             ctx: host,
             adapters,
             encryption: includeSecrets && password !== undefined ? createEncryptionProvider(password) : null,
             exporterVersion: PLUGIN_VERSION,
+            // m1 埋点：每导出一个分区实时更新 run 状态（/progress 轮询可见）
+            onSection: (info) => {
+              runs.update(runId, {
+                section: info.section,
+                sectionTotal: info.total,
+                item: info.index,
+                itemTotal: info.total,
+                detail: info.section,
+              })
+            },
           })
           const result = await withTimeout(
             exporter.export({ includeSecrets, only, outPath }),
             ROUTE_TIMEOUT_MS,
             '导出超时（5 分钟）：导出过程未完成，请重试；若反复超时请检查 profile 依赖状态',
           )
-          writeJson(res, 200, { zipPath: result.zipPath, manifest: result.manifest, report: result.report })
+          // 结束写结果：完成结果落账（供 /progress 查询与刷新恢复后下载）
+          runs.finish(runId, { zipPath: result.zipPath, manifest: result.manifest, report: result.report })
+          writeJson(res, 200, { zipPath: result.zipPath, manifest: result.manifest, report: result.report, runId })
         } catch (error) {
-          host.log.error('导出失败', { error: error instanceof Error ? error.message : String(error) })
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          const message = error instanceof Error ? error.message : String(error)
+          runs.fail(runId, message)
+          host.log.error('导出失败', { error: message })
+          writeJson(res, 500, { error: message, runId })
         }
       },
     },
@@ -908,6 +1171,37 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
       },
     },
+    // ------------------------------------------------------------ progress
+    // m1：查询单个 run 的实时状态（轮询 / 刷新恢复用；runId 不可猜，走 loopback-only 守卫）
+    {
+      kind: 'exact',
+      path: API.progress,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const runId = queryParam(url, 'runId')
+        if (runId === undefined || runId === '') {
+          writeJson(res, 400, { error: 'runId query parameter is required' })
+          return
+        }
+        const state = runs.get(runId)
+        if (state === undefined) {
+          writeJson(res, 404, { error: `run ${runId} not found（可能已过保留期被清理）` })
+          return
+        }
+        writeJson(res, 200, state)
+      },
+    },
+    // ----------------------------------------------------------------- runs
+    // m1：列出当前活跃（running）的 run（刷新恢复时重新订阅进度用）
+    {
+      kind: 'exact',
+      path: API.runs,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        writeJson(res, 200, runs.listActive())
+      },
+    },
     // ------------------------------------------------------------- execute
     {
       kind: 'exact',
@@ -932,6 +1226,15 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           typeof opts['decryptPassword'] === 'string' && opts['decryptPassword'] !== ''
             ? opts['decryptPassword']
             : undefined
+        // m1：执行开始注册 run（同 kind 已有进行中任务 → 409 拒绝，防止重复导入）
+        let run: RunState
+        try {
+          run = runs.register('import')
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          return
+        }
+        const runId = run.runId
         try {
           const decryptedCredentials = await tryDecryptCredentials(zipPath, decryptPassword)
           const result = await makeImporter().executeImportPlan(zipPath, plan, {
@@ -942,11 +1245,165 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
                 : {},
             rollbackOnError: opts['rollbackOnError'] === true,
             decryptedCredentials,
+            // m1 埋点：每完成一个计划项实时更新 run 状态（/progress 轮询可见）
+            onItem: (info) => {
+              runs.update(runId, {
+                section: info.adapter,
+                item: info.index,
+                itemTotal: info.total,
+                detail: info.detail ?? info.adapter,
+              })
+            },
           })
-          writeJson(res, 200, result)
+          // 结束写结果：导入结果落账（供 /progress 查询与刷新恢复）
+          runs.finish(runId, result)
+          writeJson(res, 200, { ...result, runId })
         } catch (error) {
-          host.log.error('导入执行失败', { error: error instanceof Error ? error.message : String(error) })
+          const message = error instanceof Error ? error.message : String(error)
+          runs.fail(runId, message)
+          host.log.error('导入执行失败', { error: message })
+          writeJson(res, 400, { error: message, runId })
+        }
+      },
+    },
+    // ---------------------------------------------------------- snapshots
+    // M4：列出快照元信息（id/createdAt/sourceZip/status/计数，createdAt 倒序）
+    {
+      kind: 'exact',
+      path: API.snapshots,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          writeJson(res, 200, { snapshots: await listSnapshots(snapshotsDir) })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ------------------------------------------------------------ restore
+    // M4：快照恢复。dryRun=true 只返回动作计划（planRestore，零写入）；
+    // 真实执行 = 计划 → 宿主执行器（ctx.fs 整文件/文件还原 + runDshPlugin 卸载插件）
+    // → 与 CLI 一致的诚实报告 { restored/removedPlugins/manualHints/failed/skipped }。
+    {
+      kind: 'exact',
+      path: API.restore,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const parsed = buildRestoreBody(body)
+        if (!parsed.ok) {
+          writeJson(res, 400, { error: parsed.error })
+          return
+        }
+        const { snapshotId, dryRun } = parsed.value
+        const snapshotDir = join(snapshotsDir, snapshotId)
+        const restoreOpts = {
+          snapshotDir,
+          homeDir: host.homeDir,
+          profile: host.profile,
+          settingsPath: undefined,
+        }
+        try {
+          if (dryRun) {
+            writeJson(res, 200, { dryRun: true, plan: await planRestore(restoreOpts) })
+            return
+          }
+          const plan = await planRestore(restoreOpts)
+          const report = await executeRestorePlan(plan, makeRestoreExecutor(snapshotDir, host, host.profile))
+          writeJson(res, 200, { dryRun: false, report })
+        } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/status
+    // m-sync-ui：同步状态（仓库配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
+    {
+      kind: 'exact',
+      path: API.syncStatus,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const [cfg, state, cred] = await Promise.all([
+            readSyncConfig(syncDir),
+            loadSyncState(syncDir),
+            credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
+          ])
+          writeJson(res, 200, {
+            ok: true,
+            configured: cfg !== null,
+            repoUrl: cfg?.repoUrl,
+            gitBin: cfg?.gitBin,
+            credentialConfigured: cred.configured,
+            credentialWritable: cred.writable === true,
+            lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
+            sectionCount: Object.keys(state.sections).length,
+            transport: state.transport,
+          })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/push
+    // m-sync-ui：推送（导出 portable 分区 → 提交私有仓库 → 更新 sync-state）。
+    // token 可选：非空先写入 DSH credentials；成功则记忆仓库配置（回填表单用）。
+    {
+      kind: 'exact',
+      path: API.syncPush,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const { repoUrl, gitBin } = await prepareSync(body)
+          const engine = makeSyncEngine(repoUrl, gitBin)
+          const snapshotId =
+            typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          const report = await withTimeout(
+            engine.push(snapshotId === undefined ? {} : { snapshotId }),
+            ROUTE_TIMEOUT_MS,
+            '同步推送超时（5 分钟）：请检查网络与仓库可达性后重试',
+          )
+          await writeSyncConfig(syncDir, { repoUrl, gitBin })
+          writeJson(res, 200, report)
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/pull
+    // m-sync-ui：拉取差异预览（只读：list/download → 转临时 ZIP → Importer 分析出计划摘要）。
+    // 绝不直接写配置、绝不执行导入（executeImportPlan 由上层按用户确认驱动）。
+    {
+      kind: 'exact',
+      path: API.syncPull,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const { repoUrl, gitBin } = await prepareSync(body)
+          const engine = makeSyncEngine(repoUrl, gitBin)
+          const strategy =
+            body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] : 'merge'
+          const snapshotId =
+            typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          const report = await withTimeout(
+            engine.pull({ strategy, ...(snapshotId === undefined ? {} : { snapshotId }) }),
+            ROUTE_TIMEOUT_MS,
+            '同步拉取超时（5 分钟）：请检查网络与仓库可达性后重试',
+          )
+          await writeSyncConfig(syncDir, { repoUrl, gitBin })
+          writeJson(res, 200, report)
+        } catch (error) {
+          writeSyncRouteError(res, error)
         }
       },
     },
@@ -971,9 +1428,11 @@ export function apply(ctx: Context, config?: Config): void {
   const exportsDir = join(dataDir, 'exports')
   const tmpDir = join(dataDir, 'tmp')
   const snapshotsDir = join(dataDir, 'snapshots')
+  const syncDir = join(dataDir, 'sync')
   mkdirSync(exportsDir, { recursive: true })
   mkdirSync(tmpDir, { recursive: true })
   mkdirSync(snapshotsDir, { recursive: true })
+  mkdirSync(syncDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
   const adapters = createAdapters({
@@ -988,7 +1447,16 @@ export function apply(ctx: Context, config?: Config): void {
     adapters: adapters.map((a) => a.id),
   })
 
-  const routes = makeRoutes({ host, adapters, exportsDir, tmpDir, snapshotsDir })
+  const routes = makeRoutes({
+    host,
+    adapters,
+    exportsDir,
+    tmpDir,
+    snapshotsDir,
+    runs: new RunRegistry(),
+    syncDir,
+    credentials: ctx.credentials,
+  })
   const webServer = readService<WebServer>(ctx, 'webServer')
   if (webServer === undefined) {
     host.log.warn('webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册（引擎能力仍可用）')
