@@ -8,8 +8,8 @@
  *
  *   ctx.settings           -> SettingsFacade      (@deepseek-ai/dsh-settings)
  *   ctx.credentials        -> CredentialsFacade   (@deepseek-ai/dsh-credentials)
- *   ctx.pluginInventory +  -> PluginsFacade       (@deepseek-ai/dsh-host-plugin-inventory
- *   ctx.pluginMarketplace                            + @deepseek-ai/dsh-plugin-marketplace, web)
+ *   ctx.plugins            -> PluginsFacade       (官方 dsh plugin CLI 通道 + profile 文件，
+ *                                                  见 src/core/plugin-cli.ts)
  *   ctx.workspaceRegistry  -> WorkspaceFacade     (@deepseek-ai/dsh-workspace)
  *   ~/.dsh/cordis.patch.yml-> PatchFileFacade     (js-yaml)
  *   $DSH_HOME files        -> FileSystemFacade    (node:fs, home-relative)
@@ -26,9 +26,12 @@
  *    (core ImportNotConfirmedError safety valve).
  *
  * Optional services are read with ctx.get() at call time (never injected), so
- * the engine keeps working in profiles without the web-only marketplace or
- * workspace services; hard dependencies are the core `settings`/`credentials`
- * services present in every profile.
+ * the engine keeps working in profiles without the web-only workspace
+ * service; hard dependencies are the core `settings`/`credentials` services
+ * present in every profile. Plugin install/list no longer depend on the
+ * web-only pluginMarketplace/pluginInventory services: both go through the
+ * official `dsh plugin --profile <name>` CLI (pnpm forwarder) and read the
+ * profile's package.json / node_modules directly.
  */
 
 import { randomBytes } from 'node:crypto'
@@ -44,16 +47,19 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-// Type-only: pull the Cordis Context augmentations (webServer / pluginInventory /
-// workspaceRegistry) and the WebRoute contract without any runtime import.
+// Type-only: pull the Cordis Context augmentations (webServer / workspaceRegistry)
+// and the WebRoute contract without any runtime import.
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
-import type {} from '@deepseek-ai/dsh-host-plugin-inventory'
 import type {} from '@deepseek-ai/dsh-workspace'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
 import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
+import {
+  hasDshBundlePatch, installErrorFor, listInstalledPlugins, resolveProfileDir,
+  resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
+} from './core/plugin-cli.ts'
 import type {
   ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
   ImportPlan, NamespaceInfo, PatchFileFacade, PluginInfo, PluginsFacade,
@@ -78,7 +84,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.10'
+const PLUGIN_VERSION = '0.1.11'
 
 /** Plugin config (composition entry); the loader applies it as-is. */
 export interface Config {
@@ -86,6 +92,8 @@ export interface Config {
   enabled?: boolean
   /** Data root override; defaults to $DSH_HOME/dsh-config-manager. */
   dataDir?: string
+  /** 管理的 profile 名（插件依赖读写/安装目标）；缺省取启动参数 --profile，再缺省 'web'。 */
+  profile?: string
 }
 
 /* ---------------------------------------------------------------- constants */
@@ -206,23 +214,21 @@ function resolveDshVersion(home: string): string {
   return 'unknown'
 }
 
+/* ------------------------------------------------------------ profile name */
+
+/** 解析管理的 profile：config.profile → 启动参数 --profile → 'web'。 */
+function resolveProfileName(config?: Config): string {
+  const configured = config?.profile
+  if (configured !== undefined && configured !== '') return validateProfileName(configured)
+  return resolveProfileNameFromArgv()
+}
+
 /* ------------------------------------------------------- HostContext facades */
 
 /** Optional Cordis service reader (never injected → never blocks the fiber). */
 function readService<T>(ctx: Context, serviceName: string): T | undefined {
   const candidate = ctx.get(serviceName)
   return candidate === null || typeof candidate !== 'object' ? undefined : candidate as T
-}
-
-/** Real-plugin marketplace service shape (@deepseek-ai/dsh-plugin-marketplace
- * ships no types; shape verified from its lib/index.js). */
-interface MarketplacePlugin { name: string; version: string; isBundle: boolean; isClient: boolean; inBundles: string[] }
-interface MarketplaceSnapshot { profileDir: string; bundles: string[]; plugins: MarketplacePlugin[] }
-interface MarketplaceService {
-  installed(): MarketplaceSnapshot
-  installPlugin(packageName: string): Promise<{
-    ok: boolean; name: string; version?: string; needsRestart?: boolean; error?: string
-  }>
 }
 
 /** Settings facade over the real ctx.settings (describe() is namespace-less). */
@@ -282,52 +288,79 @@ class DshCredentialsFacade implements CredentialsFacade {
   }
 }
 
-/** Plugins facade: inventory (tree) + marketplace (user installs) merged. */
-class DshPluginsFacade implements PluginsFacade {
-  private readonly ctx: Context
+/** 包名 → patch 行 id slug（仿 marketplace ensureRow）：去 @、非法字符→-、连续-合并、去首尾-。 */
+export function slugOf(name: string): string {
+  return name.replace(/^@/, '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '')
+}
 
-  constructor(ctx: Context) {
-    this.ctx = ctx
+/** 某 patch 行（raw）是否激活了指定包名（兼容单行与 insert 块成员）。 */
+export function patchRowActivates(raw: unknown, name: string): boolean {
+  if (raw === null || typeof raw !== 'object') return false
+  const obj = raw as Record<string, unknown>
+  const entries = Array.isArray(obj['insert']) ? obj['insert'] : [obj]
+  return entries.some((e) => e !== null && typeof e === 'object' && (e as Record<string, unknown>)['name'] === name)
+}
+
+/**
+ * 非 bundle 插件安装成功后，幂等补 profile cordis.patch.yml 激活行
+ * （{id: pm-<slug>, name: <pkg>}，仿 marketplace ensureRow）。bundle 包不写行
+ * （CLI 的 reconcile 已维护 dsh.profile.bundles）。
+ */
+export async function ensureActivationRow(patchFile: PatchFileFacade, pkgDir: string, pkg: string): Promise<void> {
+  if (hasDshBundlePatch(pkgDir)) return
+  const lines = await patchFile.readPatchLines(PROFILE_PATCH_FILE)
+  if (lines.some((l) => patchRowActivates(l.raw, pkg))) return
+  const id = `pm-${slugOf(pkg)}`
+  await patchFile.applyPatchChanges(PROFILE_PATCH_FILE, [
+    { lineId: id, raw: { id, name: pkg }, action: 'insert' },
+  ])
+}
+
+/**
+ * Plugins facade：官方 dsh plugin CLI 通道（任何 profile 可用）+ profile 文件
+ * 实时清单 + 非 bundle 插件激活行幂等补写。不再依赖 web 专用
+ * pluginMarketplace / pluginInventory 服务。
+ *
+ * 导出 + runner 可注入：M5 单测用 mock runner 验证「无 marketplace 时 install
+ * 走 CLI 通道」的行为契约，不触发真实子进程；生产路径默认参数不变。
+ */
+export class DshPluginsFacade implements PluginsFacade {
+  private readonly homeDir: string
+  private readonly profile: string
+  private readonly patchFile: PatchFileFacade
+  private readonly runner: typeof runDshPlugin
+
+  constructor(
+    homeDir: string,
+    profile: string,
+    patchFile: PatchFileFacade,
+    runner: typeof runDshPlugin = runDshPlugin,
+  ) {
+    this.homeDir = homeDir
+    this.profile = profile
+    this.patchFile = patchFile
+    this.runner = runner
   }
 
   async listInstalled(): Promise<PluginInfo[]> {
-    const out: PluginInfo[] = []
-    const inventory = readService<{ list(): { entries: readonly { moduleName: string; enabled: boolean }[] } }>(
-      this.ctx, 'pluginInventory',
-    )
-    const marketplace = readService<MarketplaceService>(this.ctx, 'pluginMarketplace')
-    if (inventory) {
-      for (const entry of inventory.list().entries) {
-        out.push({ name: entry.moduleName, version: '', enabled: entry.enabled, isBundle: false, inBundles: [] })
-      }
-    }
-    if (marketplace) {
-      try {
-        for (const p of marketplace.installed().plugins) {
-          const existing = out.find((o) => o.name === p.name)
-          if (existing) {
-            existing.version = p.version
-            existing.isBundle = p.isBundle
-            existing.inBundles = p.inBundles
-          } else {
-            out.push({ name: p.name, version: p.version, enabled: true, isBundle: p.isBundle, inBundles: p.inBundles })
-          }
-        }
-      } catch {
-        // marketplace hiccup → still return the inventory view
-      }
-    }
-    return out
+    return listInstalledPlugins(this.homeDir, this.profile)
   }
 
   async install(pkg: string): Promise<{ needsRestart: boolean }> {
-    const marketplace = readService<MarketplaceService>(this.ctx, 'pluginMarketplace')
-    if (!marketplace) {
-      throw new Error('插件市场服务不可用（仅 web profile 提供），无法安装 ' + pkg)
+    const profileDir = resolveProfileDir(this.homeDir, this.profile)
+    const result = await this.runner(profileDir, this.profile, ['add', pkg])
+    if (result.exitCode !== 0 || result.timedOut) throw installErrorFor(pkg, result)
+    // 非 bundle 插件：CLI 只维护 bundles，需补 profile patch 激活行才能加载。
+    // 补写失败不吞：包已装但未激活，明确报错并允许重试（幂等补行）。
+    try {
+      await ensureActivationRow(this.patchFile, join(profileDir, 'node_modules', pkg), pkg)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(
+        `插件 ${pkg} 已安装，但激活行写入 profile 补丁失败：${reason}（重启后该插件可能未激活；修复后重试安装即可幂等补行）`,
+      )
     }
-    const result = await marketplace.installPlugin(pkg)
-    if (result.ok !== true) throw new Error(result.error ?? `安装失败: ${pkg}`)
-    return { needsRestart: result.needsRestart ?? true }
+    return { needsRestart: true }
   }
 }
 
@@ -375,17 +408,24 @@ class DshWorkspaceFacade implements WorkspaceFacade {
   }
 }
 
-/** Patch-file facade over the user patch layer ($DSH_HOME/cordis.patch.yml). */
+/** Profile 目录内的 patch 文件（非 bundle 插件激活行写入处，marketplace 同款路径）。 */
+const PROFILE_PATCH_FILE = 'cordis.patch.yml'
+
+/** Patch-file facade：用户 patch 层（$DSH_HOME/cordis.patch.yml）+ profile patch 层
+ * （$DSH_HOME/profiles/<name>/cordis.patch.yml），两者都在 home 根内。 */
 class DshPatchFileFacade implements PatchFileFacade {
   private readonly homeDir: string
+  private readonly profile: string
 
-  constructor(homeDir: string) {
+  constructor(homeDir: string, profile: string) {
     this.homeDir = homeDir
+    this.profile = profile
   }
 
   private patchPath(file: string): string {
-    if (file !== USER_PATCH_FILE) throw new Error(`dsh-config-manager 仅支持管理 ${USER_PATCH_FILE}（收到 ${file}）`)
-    return join(this.homeDir, USER_PATCH_FILE)
+    if (file === USER_PATCH_FILE) return join(this.homeDir, USER_PATCH_FILE)
+    if (file === PROFILE_PATCH_FILE) return join(this.homeDir, 'profiles', this.profile, PROFILE_PATCH_FILE)
+    throw new Error(`dsh-config-manager 仅支持管理 ${USER_PATCH_FILE} 与 profile 的 ${PROFILE_PATCH_FILE}（收到 ${file}）`)
   }
 
   async readPatchLines(file: string): Promise<{ lineId: string; raw: unknown }[]> {
@@ -575,7 +615,7 @@ class ConfigManagerHostContext implements HostContext {
   readonly patchFile: PatchFileFacade
   readonly fs: FileSystemFacade
 
-  constructor(ctx: Context, homeDir: string) {
+  constructor(ctx: Context, homeDir: string, profile: string) {
     this.homeDir = homeDir
     this.dshVersion = resolveDshVersion(homeDir)
     const level = process.env.DSH_CONFIG_MANAGER_LOG_LEVEL
@@ -584,9 +624,9 @@ class ConfigManagerHostContext implements HostContext {
     })
     this.settings = new DshSettingsFacade(ctx)
     this.credentials = new DshCredentialsFacade(ctx)
-    this.plugins = new DshPluginsFacade(ctx)
+    this.patchFile = new DshPatchFileFacade(homeDir, profile)
+    this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile)
     this.workspace = new DshWorkspaceFacade(ctx)
-    this.patchFile = new DshPatchFileFacade(homeDir)
     this.fs = new DshFileSystemFacade(homeDir)
   }
 }
@@ -935,7 +975,7 @@ export function apply(ctx: Context, config?: Config): void {
   mkdirSync(tmpDir, { recursive: true })
   mkdirSync(snapshotsDir, { recursive: true })
 
-  const host = new ConfigManagerHostContext(ctx, homeDir)
+  const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
   const adapters = createAdapters({
     // Namespace list = everything the settings service has registered.
     namespaces: async () => (await ctx.settings.describe({ redactSecrets: true })).map((d) => String(d.ns)),

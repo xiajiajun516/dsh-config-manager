@@ -88,6 +88,7 @@ test('plugins: 安装失败 → 非致命 warning（§34.17，不触发整体回
   assert.equal(r.ok, false);
   assert.equal(r.warning, true, '安装失败必须记为 warning（不计入失败、不触发回滚）');
   assert.match(r.message ?? '', /ERESOLVE/);
+  assert.match(r.message ?? '', /dsh plugin --profile web add broken-pkg/, '失败报告必须给可复制的手动安装命令');
   assert.ok(!dst.plugins.installed.has('broken-pkg'), '安装失败不得假装已写入');
 });
 

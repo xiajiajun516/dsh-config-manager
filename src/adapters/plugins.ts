@@ -2,10 +2,11 @@
  * plugins 分区 adapter（设计 §3.3/§8）：
  * 数据源 = ctx.plugins.listInstalled()（插件清单）+ 用户 patch 层（profile cordis.patch.yml）。
  *
- * 安全不变量：绝不打包插件二进制；导入走 DSH 官方机制（installPlugin → needsRestart 提示）。
+ * 安全不变量：绝不打包插件二进制；导入走 DSH 官方机制（dsh plugin CLI → needsRestart 提示）。
  * patch 行导入（用户自定义行：启用/禁用/插入）写回 cordis.patch.yml，同样 needsRestart。
  */
 import { isDeepStrictEqual } from 'node:util';
+import { resolveProfileNameFromArgv } from '../core/plugin-cli.ts';
 import type { PatchLine, PluginEntry, PluginsSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -135,7 +136,8 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
-    // 插件安装/更新：官方机制 installPlugin；needsRestart 提示（设计 §8：不打包二进制）。
+    // 插件安装/更新：官方机制 dsh plugin CLI（dsh plugin --profile <p> add <pkg>）；
+    // needsRestart 提示（设计 §8：不打包二进制）。
     // 版本冲突（useImported）会解析成 Update，同样走这条安装通道（官方机制只能装到 npm
     // 最新版，无法精确锁定备份版本，故如实提示）。
     // 失败为非致命 warning（§34.17）：一个装不上的插件（npm 依赖冲突/网络不可达等）不得
@@ -158,7 +160,9 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         return {
           ok: false,
           warning: true,
-          message: `插件 ${name} ${verb}失败：${msg}（其余配置已导入；可修复依赖后在设置页重试或手动安装）`,
+          // 保留 warning（§34.17 非致命）：一个装不上的插件不得拖垮已成功导入的其余配置；
+          // message 附可复制的手动安装命令（profile 解析与 M1 宿主一致）。
+          message: `插件 ${name} ${verb}失败：${msg}。可手动安装：dsh plugin --profile ${resolveProfileNameFromArgv()} add ${name}（其余配置已导入；可修复依赖后在设置页重试或手动安装）`,
         };
       }
     }
