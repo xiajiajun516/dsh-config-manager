@@ -1,0 +1,45 @@
+# dsh-config-manager bundle patch: inserts the dual-face plugin row into the
+# web profile roster. Applied as a profile bundle layer (the `dsh.bundle.patch`
+# manifest field in package.json) over dsh-base; activate with
+#   dsh plugin --profile <name> add dsh-config-manager        # published
+#   dsh plugin --profile <name> add link:<abs-or-~-path>      # local dev
+# (the CLI forwards to pnpm inside the profile directory).
+#
+# CLI hard criterion (verified from `dsh plugin add` source): a package is
+# appended to the target profile's `dsh.profile.bundles` only when its
+# manifest carries `dsh.bundle.patch` (package.json does — it points at this
+# file); without that field the CLI treats the package as a plain dependency
+# and warns. So this file plus the package.json `dsh.bundle.patch` key are
+# what make dsh-config-manager a real bundle.
+#
+# Format mirrors @linxin666/dsh-ssh/cordis.patch.yml exactly (verified
+# against the installed dsh-ssh@0.1.12): a bare plugin row by package name —
+# the node half (exports ".") runs in the host process (backup/export/import
+# engine, /api/dsh-config-manager routes, agent tools), and the `dsh.client`
+# declaration in package.json makes the browser half (exports "./client")
+# load in the web GUI.
+#
+# Row id must match the Host plugin's `export const name` in src/index.ts
+# (dsh-ssh precedent: patch row id "ssh" == export const name "ssh").
+# ASSUMED here: "config-manager" — align when the Host half lands.
+#
+# Host services this plugin consumes — real DSH package names from the
+# architecture research report (Docs/research/dsh-architecture.md §1.4),
+# each listed as a peerDependency in package.json; plugin code declares them
+# via `inject` in src/index.ts:
+#   ctx.settings           -> @deepseek-ai/dsh-settings      (+ dsh-settings-file)
+#   ctx.credentials        -> @deepseek-ai/dsh-credentials   (+ dsh-credentials-local)
+#   ctx.llm                -> @deepseek-ai/dsh-llm
+#   ctx.pluginInventory    -> @deepseek-ai/dsh-host-plugin-inventory
+#   ctx.pluginMarketplace  -> @deepseek-ai/dsh-plugin-marketplace  (web profile)
+#   ctx.tools              -> @deepseek-ai/dsh-tools
+#   ctx.webServer          -> @deepseek-ai/dsh-host-webserver
+#   ctx.systemPrompt       -> @deepseek-ai/dsh-system-prompt
+#   ctx.agentPresets       -> @deepseek-ai/dsh-agent-presets
+# Settings namespaces read via ctx.settings.describe() — registered by these
+# provider plugins (report §2.2), not services:
+#   llm-deepseek (settings.yaml section) -> @deepseek-ai/dsh-llm-deepseek
+#   llm-pi-ai    (settings.yaml section) -> @deepseek-ai/dsh-llm-pi-ai
+- insert:
+    - id: config-manager
+      name: 'dsh-config-manager'

@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+lib/
+dist/
+*.tsbuildinfo
+
+# Vibe governance / team runtime state (local only, contains absolute paths)
+.vibeskills/
+.agent-teams/
+outputs/
+
+# Packaging artifacts
+*.tgz
+*.zip
+*.tar.gz
+
+# Logs & OS junk
+*.log
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.local

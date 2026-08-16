@@ -1,0 +1,1997 @@
+# 角色
+
+你是一名资深桌面应用、插件系统、TypeScript/JavaScript、配置迁移、数据安全与软件架构工程师。
+
+你的任务是为 **DSH** 开发一个完整、可靠、可维护的 **配置备份 / 导出 / 导入 / 迁移插件**。
+
+插件的核心目标是：
+
+> 用户可以在一台 DSH 中一键导出自己的主要配置为一个 ZIP 文件，然后在另一台 DSH 中导入这个 ZIP，尽可能恢复原来的使用环境。
+
+这不是简单地把整个配置目录复制成 ZIP。
+
+需要设计一个真正的 **DSH Configuration Migration / Backup Manager**，需要考虑：
+
+* 配置导出
+* 配置导入
+* 插件迁移
+* Provider / Model 配置
+* MCP 配置
+* Prompt / Rules / Skills
+* Workflow
+* Workspace
+* UI 偏好
+* 环境变量
+* Secret 安全
+* 跨设备路径
+* 操作系统差异
+* DSH 版本差异
+* 插件版本差异
+* 配置冲突
+* Dry Run
+* 自动备份
+* Rollback
+* Schema Version
+* Migration
+* 数据完整性校验
+* 错误恢复
+
+---
+
+# 第一原则：先研究 DSH，再写代码
+
+在开始实现之前，必须先完整检查当前 DSH 项目的：
+
+1. 插件 API
+2. 插件目录结构
+3. 插件 manifest 格式
+4. 插件生命周期
+5. 插件可以访问哪些 DSH API
+6. DSH 配置存储位置
+7. DSH 配置 Schema
+8. Provider / Model 配置存储方式
+9. MCP 配置存储方式
+10. Plugin 配置存储方式
+11. Prompt / Rules / Skills 存储方式
+12. Workflow 存储方式
+13. Workspace / Project 存储方式
+14. UI Settings 存储方式
+15. Secret / Credential 存储方式
+16. DSH 是否提供官方导入导出 API
+17. DSH 是否提供插件安装 API
+18. DSH 是否提供配置读写 API
+19. DSH 是否提供通知、Dialog、文件选择器等 API
+20. DSH 对插件权限的限制
+
+**不要凭空假设任何 DSH API、目录、配置文件名称或者字段。**
+
+如果项目代码中已经存在类似：
+
+* backup
+* import
+* export
+* settings
+* migration
+* config
+* profile
+* sync
+
+等功能，优先复用现有实现。
+
+如果某项能力 DSH 当前没有公开给插件，请明确指出：
+
+> 当前 DSH Plugin API 无法直接完成 XXX。
+
+然后设计安全合理的 fallback。
+
+禁止为了让代码“看起来能运行”而编造不存在的 API。
+
+---
+
+# 插件定位
+
+建议插件名称：
+
+**DSH Config Manager**
+
+或者：
+
+**DSH Migration**
+
+插件核心能力：
+
+> Backup · Export · Import · Migrate · Restore
+
+第一版优先做好可靠的一键迁移，而不是堆大量无关功能。
+
+---
+
+# 一、核心功能：Export
+
+提供：
+
+## Export Configuration
+
+用户点击后进入导出页面。
+
+提供两个主要选项：
+
+### Quick Export
+
+一键导出推荐配置。
+
+默认包含：
+
+* DSH Settings
+* Plugins
+* Plugin Settings
+* Providers
+* Models
+* MCP Servers
+* Prompts
+* Rules
+* Skills
+* Commands
+* Workflows
+* Workspace Settings
+* UI Preferences
+* Keybindings
+
+默认不包含：
+
+* Password
+* API Key
+* Access Token
+* Refresh Token
+* Cookie
+* Session
+* Authentication Credential
+* Cache
+* Log
+* 临时文件
+* 大型历史数据
+* 设备唯一 ID
+
+### Custom Export
+
+允许用户逐项选择。
+
+分类至少考虑：
+
+#### General
+
+* DSH Settings
+* Language
+* Theme
+* UI Preferences
+* Keybindings
+* Feature Flags
+
+#### AI
+
+* Providers
+* Models
+* Default Model
+* Model Alias
+* Model Parameters
+* Provider Base URL
+* Fallback Model
+* Provider Preference
+
+#### Extensions
+
+* Installed Plugins
+* Plugin Versions
+* Plugin Enabled / Disabled State
+* Plugin Settings
+
+#### MCP / Tools
+
+* MCP Servers
+* MCP Commands
+* MCP Arguments
+* MCP Environment Variable Names
+* MCP Enabled State
+* Tool Settings
+* Tool Permissions
+
+#### Customization
+
+* Prompts
+* System Prompts
+* Rules
+* Skills
+* Commands
+* Agents / Profiles
+* Templates
+
+如果 DSH 没有其中某个概念，不要创造虚假的配置。
+
+#### Automation
+
+* Workflows
+* Workflow Settings
+* Automation Settings
+
+#### Workspace
+
+* Workspace Metadata
+* Project Settings
+* Workspace Preferences
+* Directory References
+
+#### UI
+
+* Layout
+* Sidebar
+* Pinned Items
+* Favorites
+* Appearance
+
+#### Optional Data
+
+如果 DSH 支持：
+
+* History
+* Conversations
+* Recent Projects
+
+这些必须默认关闭。
+
+---
+
+# 二、ZIP 文件格式
+
+不要简单压缩 DSH 整个配置目录。
+
+定义一个稳定的 Export Schema。
+
+建议：
+
+```text
+dsh-backup-2026-08-14.zip
+
+manifest.json
+
+config/
+  settings.json
+  ui.json
+  keybindings.json
+
+ai/
+  providers.json
+  models.json
+
+plugins/
+  plugins.json
+  settings/
+
+mcp/
+  servers.json
+
+custom/
+  prompts/
+  rules/
+  skills/
+  commands/
+  agents/
+
+workflows/
+  workflows.json
+
+workspaces/
+  workspaces.json
+
+security/
+  secrets.enc
+
+integrity/
+  checksums.json
+```
+
+实际结构必须根据 DSH 真实数据结构调整。
+
+不要为了匹配这个示例而重复存储数据。
+
+---
+
+# 三、manifest.json
+
+每个导出 ZIP 必须包含 manifest。
+
+建议 Schema：
+
+```json
+{
+  "schemaVersion": 1,
+  "exporter": {
+    "name": "DSH Config Manager",
+    "version": "1.0.0"
+  },
+  "source": {
+    "dshVersion": "unknown",
+    "platform": "unknown",
+    "arch": "unknown"
+  },
+  "exportedAt": "ISO-8601",
+  "sections": {
+    "settings": true,
+    "plugins": true,
+    "pluginSettings": true,
+    "providers": true,
+    "models": true,
+    "mcp": true,
+    "prompts": true,
+    "rules": true,
+    "skills": true,
+    "commands": true,
+    "workflows": true,
+    "workspaces": true,
+    "ui": true,
+    "keybindings": true,
+    "history": false,
+    "secrets": false
+  },
+  "security": {
+    "containsSecrets": false,
+    "encrypted": false
+  }
+}
+```
+
+manifest 至少需要帮助程序判断：
+
+* 谁创建了备份
+* Export Schema Version
+* 插件版本
+* 来源 DSH Version
+* 来源平台
+* 创建时间
+* 包含哪些 Section
+* 是否包含 Secret
+* 是否加密
+
+---
+
+# 四、Schema Version
+
+这是非常重要的架构要求。
+
+不要假设未来配置格式永远不会变化。
+
+实现独立：
+
+```text
+schemaVersion
+```
+
+例如：
+
+```text
+v1
+v2
+v3
+```
+
+未来插件更新后，需要能够：
+
+```text
+Backup V1
+↓
+Migration
+↓
+Internal V2
+↓
+Current DSH Config
+```
+
+把迁移逻辑独立放置，例如：
+
+```text
+src/
+  migrations/
+    v1-to-v2
+    v2-to-v3
+```
+
+不要把大量版本判断散落在 UI 和业务代码里。
+
+---
+
+# 五、Secrets 安全
+
+这是最高优先级功能之一。
+
+默认情况下禁止导出：
+
+* API Keys
+* Passwords
+* Access Tokens
+* Refresh Tokens
+* OAuth Credentials
+* Cookies
+* Sessions
+* Private Keys
+* Authentication Headers
+* Secret Environment Variables
+
+普通 Export 应该：
+
+> Export configuration WITHOUT secrets.
+
+但是需要保留足够的信息，让导入后知道哪些 Secret 缺失。
+
+例如：
+
+```json
+{
+  "provider": "example",
+  "apiKey": {
+    "required": true,
+    "exported": false
+  }
+}
+```
+
+导入完成后显示：
+
+```text
+3 credentials need attention.
+
+OpenAI API Key
+GitHub Token
+Example MCP Token
+```
+
+用户可以重新填写。
+
+---
+
+# 六、敏感信息扫描
+
+不能只根据固定字段判断 Secret。
+
+导出之前实现 Sensitive Data Scanner。
+
+检查疑似字段，例如：
+
+```text
+password
+passwd
+token
+accessToken
+refreshToken
+apiKey
+apikey
+secret
+credential
+authorization
+cookie
+privateKey
+clientSecret
+```
+
+大小写不敏感。
+
+如果发现疑似敏感数据：
+
+* 默认移除
+* 标记
+* 告知用户
+
+不要把具体 Secret 内容显示在日志里。
+
+---
+
+# 七、Encrypted Full Backup
+
+作为高级功能，可以允许用户：
+
+> Include secrets
+
+但是必须明显警告用户。
+
+如果用户启用：
+
+要求设置 Backup Password。
+
+Secret 必须使用成熟、安全、经过验证的加密方案。
+
+禁止：
+
+* Base64 当加密
+* 自己设计密码算法
+* 明文 Secret
+* 明文密码写进 ZIP
+* 把解密密码写进 manifest
+
+优先使用当前运行环境已经可靠支持的标准密码学方案。
+
+如果无法安全实现，第一版宁可不支持 Secret 导出。
+
+---
+
+# 八、插件迁移
+
+导出：
+
+```text
+Plugin ID
+Plugin Name
+Plugin Version
+Enabled State
+Plugin Configuration
+```
+
+优先不要把整个插件安装目录/二进制直接放入 ZIP。
+
+导入时优先：
+
+```text
+读取 Plugin Manifest
+↓
+检查是否安装
+↓
+检查版本
+↓
+通过 DSH 官方插件机制安装/更新
+↓
+恢复 Plugin Settings
+```
+
+如果原版本已经不存在：
+
+提供兼容版本或最新版本选项，并明确提示。
+
+禁止偷偷安装不可信来源插件。
+
+---
+
+# 九、Import
+
+用户选择 ZIP 后，绝对不能马上修改 DSH。
+
+流程必须：
+
+```text
+Select ZIP
+↓
+Validate ZIP
+↓
+Read Manifest
+↓
+Check Integrity
+↓
+Check Schema
+↓
+Check Compatibility
+↓
+Scan Contents
+↓
+Generate Import Plan
+↓
+Show Preview
+↓
+User Confirms
+↓
+Create Backup
+↓
+Import
+↓
+Validate
+↓
+Show Result
+```
+
+---
+
+# 十、Import Preview / Dry Run
+
+这是必须功能。
+
+导入之前显示：
+
+```text
+Import Preview
+
+12 settings will be updated
+
+8 plugins:
+6 already installed
+2 need installation
+
+4 MCP servers will be added
+
+7 prompts will be imported
+
+3 workflows will be imported
+
+2 path mappings need attention
+
+3 secrets need to be re-entered
+
+2 conflicts detected
+```
+
+Dry Run 不允许修改任何实际数据。
+
+业务逻辑最好实现成：
+
+```text
+analyzeImport()
+createImportPlan()
+executeImportPlan()
+```
+
+UI 不要自己计算这些逻辑。
+
+---
+
+# 十一、冲突处理
+
+支持至少：
+
+### Merge
+
+保留目标 DSH 原配置，并合并导入内容。
+
+### Replace
+
+导入配置覆盖相应目标配置。
+
+### Skip Existing
+
+已经存在的项目不修改。
+
+对于具体冲突允许：
+
+```text
+Keep Current
+Use Imported
+Review
+```
+
+例如：
+
+```text
+Prompt "Coding Assistant"
+
+Current:
+modified 2026-08-10
+
+Imported:
+modified 2026-07-20
+
+[Keep Current]
+[Use Imported]
+```
+
+不要默认无脑覆盖用户数据。
+
+---
+
+# 十二、路径映射
+
+必须处理跨设备绝对路径。
+
+例如来源：
+
+```text
+/Users/alice/projects
+```
+
+目标机器不存在。
+
+或者：
+
+```text
+C:\Users\Alice\Projects
+```
+
+导入到了 macOS/Linux。
+
+Import Analyzer 必须识别：
+
+* 不存在的路径
+* OS 不兼容路径
+* Workspace 路径
+* MCP executable 路径
+* Project 路径
+* Script 路径
+
+然后提供：
+
+```text
+Path Mapping
+
+Old:
+/Users/alice/projects
+
+New:
+[Choose Folder]
+```
+
+最好支持批量映射：
+
+```text
+/Users/alice/
+→
+/Users/bob/
+```
+
+所有相关路径自动替换。
+
+---
+
+# 十三、跨平台
+
+考虑：
+
+* macOS
+* Windows
+* Linux
+
+不要默认路径分隔符都是 `/`。
+
+注意：
+
+* Path separator
+* Home directory
+* Executable extension
+* Environment variables
+* Shell
+* File permission
+* Symlink
+* Case sensitivity
+
+平台相关配置需要标记：
+
+```text
+portable
+device-specific
+platform-specific
+```
+
+默认优先迁移 portable 配置。
+
+---
+
+# 十四、环境变量
+
+环境变量需要分为：
+
+```text
+Normal
+Sensitive
+```
+
+例如：
+
+```text
+NODE_ENV=development
+```
+
+可以导出。
+
+但：
+
+```text
+OPENAI_API_KEY=...
+```
+
+默认不能导出值。
+
+可以只导出：
+
+```json
+{
+  "name": "OPENAI_API_KEY",
+  "required": true,
+  "hasValue": false
+}
+```
+
+导入后提醒用户填写。
+
+---
+
+# 十五、依赖检测
+
+部分配置可能依赖：
+
+* Node.js
+* Python
+* Git
+* Docker
+* Bun
+* npm
+* pnpm
+* uv
+* npx
+* Local executable
+
+导入 MCP / Workflow 等配置前检查必要依赖。
+
+如果缺失：
+
+不要让整个导入失败。
+
+标记：
+
+```text
+Imported, but requires attention.
+```
+
+例如：
+
+```text
+MCP: filesystem
+Status: Requires Attention
+Missing dependency: npx
+```
+
+---
+
+# 十六、自动备份
+
+Import 真正执行前：
+
+必须自动备份当前配置。
+
+例如：
+
+```text
+Pre-import snapshot
+```
+
+至少保存被本次导入操作即将修改的数据。
+
+Import transaction：
+
+```text
+Analyze
+↓
+Snapshot
+↓
+Apply
+↓
+Validate
+↓
+Commit
+```
+
+失败：
+
+```text
+Rollback
+```
+
+---
+
+# 十七、Rollback
+
+如果导入过程中发生错误：
+
+```text
+Plugin installation failed
+Invalid configuration
+Write failed
+Migration failed
+Validation failed
+```
+
+尽可能恢复到导入之前。
+
+UI 显示：
+
+```text
+Import failed.
+
+Your previous configuration has been restored.
+```
+
+如果无法完整 Rollback：
+
+必须明确告诉用户：
+
+```text
+Rollback partially completed.
+
+These items may require manual recovery:
+...
+```
+
+不能假装成功。
+
+---
+
+# 十八、配置完整性
+
+导出时生成 checksum。
+
+例如：
+
+```text
+integrity/checksums.json
+```
+
+对实际导出的文件计算 SHA-256 等成熟 hash。
+
+Import 时：
+
+先验证。
+
+如果 ZIP 被损坏：
+
+```text
+Backup integrity check failed.
+```
+
+禁止继续自动导入，除非产品明确提供高级恢复模式。
+
+---
+
+# 十九、防止 ZIP 安全问题
+
+Import ZIP 属于不可信输入。
+
+必须防御：
+
+* Zip Slip
+* `../`
+* Absolute Path
+* Symlink Escape
+* Malformed ZIP
+* Zip Bomb
+* 超大文件
+* 超大解压后体积
+* 大量文件攻击
+* JSON 深度攻击
+* 非预期 executable
+
+所有文件只能解压到受控临时目录。
+
+必须验证：
+
+```text
+resolvedPath.startsWith(allowedDirectory)
+```
+
+不要执行 ZIP 中携带的脚本或 executable。
+
+---
+
+# 二十、Profiles
+
+在核心 Export / Import 稳定后增加：
+
+## Configuration Profiles
+
+用户可以保存：
+
+```text
+Work
+Personal
+Development
+Minimal
+```
+
+每个 Profile 可以包含不同：
+
+* Plugins
+* Providers
+* MCP
+* Prompts
+* Rules
+* Skills
+* Workflows
+* UI Settings
+
+支持：
+
+```text
+Save Current as Profile
+Switch Profile
+Duplicate Profile
+Rename Profile
+Export Profile
+Import Profile
+Delete Profile
+```
+
+Profile 切换同样需要 Preview 和必要的 Snapshot。
+
+---
+
+# 二十一、导出结果报告
+
+Export 完成后不要只显示：
+
+```text
+Export successful.
+```
+
+显示：
+
+```text
+Backup Created
+
+Included:
+✓ Settings
+✓ 8 Plugins
+✓ 4 Providers
+✓ 6 MCP Servers
+✓ 21 Prompts
+✓ 5 Workflows
+
+Excluded:
+○ History
+○ Cache
+○ Logs
+
+Security:
+✓ API Keys excluded
+✓ Tokens excluded
+✓ Passwords excluded
+
+File:
+dsh-backup-2026-08-14.zip
+```
+
+---
+
+# 二十二、导入结果报告
+
+例如：
+
+```text
+Import Complete
+
+Settings
+✓ 18 imported
+
+Plugins
+✓ 6 restored
+✓ 2 installed
+
+MCP
+✓ 4 imported
+⚠ 1 requires dependency
+
+Prompts
+✓ 21 imported
+
+Workflows
+✓ 5 imported
+
+Secrets
+⚠ 3 credentials need to be entered
+
+Paths
+⚠ 1 path needs mapping
+```
+
+提供：
+
+```text
+Fix Issues
+View Details
+Done
+```
+
+---
+
+# 二十三、错误设计
+
+不要只有：
+
+```text
+Something went wrong.
+```
+
+错误必须尽可能可操作。
+
+例如：
+
+```text
+Could not restore MCP "filesystem".
+
+Reason:
+Executable "npx" was not found.
+
+Suggested action:
+Install Node.js and retry this item.
+```
+
+同时：
+
+日志中绝对不能打印 Secret。
+
+---
+
+# 二十四、日志系统
+
+实现结构化日志：
+
+```text
+INFO
+WARN
+ERROR
+DEBUG
+```
+
+记录：
+
+* Export start/end
+* Import start/end
+* Validation
+* Migration
+* Plugin restoration
+* Conflict resolution
+* Rollback
+
+任何以下数据必须 redact：
+
+```text
+password
+token
+apiKey
+authorization
+cookie
+secret
+```
+
+例如：
+
+```text
+apiKey: "***REDACTED***"
+```
+
+---
+
+# 二十五、代码架构
+
+不要写成一个巨大文件。
+
+根据 DSH 项目现有规范组织；如果没有明确规范，可以参考：
+
+```text
+src/
+  core/
+    exporter
+    importer
+    analyzer
+    validator
+    backup
+    rollback
+
+  schema/
+    manifest
+    config
+
+  migrations/
+    v1/
+
+  security/
+    secret-scanner
+    encryption
+    integrity
+    zip-security
+    redaction
+
+  adapters/
+    settings
+    plugins
+    providers
+    models
+    mcp
+    prompts
+    skills
+    workflows
+    workspaces
+    ui
+
+  profiles/
+
+  ui/
+
+  utils/
+
+  tests/
+```
+
+核心思想：
+
+每种 DSH 配置使用 Adapter。
+
+例如：
+
+```text
+SettingsAdapter
+PluginAdapter
+ProviderAdapter
+MCPAdapter
+PromptAdapter
+WorkflowAdapter
+```
+
+统一接口可以类似：
+
+```ts
+interface ConfigAdapter<T> {
+  id: string;
+
+  export(): Promise<T>;
+
+  analyzeImport(data: T): Promise<ImportAnalysis>;
+
+  import(data: T, options: ImportOptions): Promise<ImportResult>;
+
+  validate(data: T): Promise<ValidationResult>;
+}
+```
+
+根据项目真实架构调整，不要为了使用这个接口而破坏现有设计。
+
+---
+
+# 二十六、Import Plan
+
+Import 不要直接边读取边修改。
+
+先产生：
+
+```ts
+ImportPlan
+```
+
+概念上包含：
+
+```text
+Create
+Update
+Skip
+Conflict
+Install
+MissingSecret
+MissingDependency
+PathMapping
+Warning
+Error
+```
+
+之后 UI 展示 Plan。
+
+用户确认后：
+
+```text
+executeImportPlan(plan)
+```
+
+这样 Dry Run 和真实 Import 可以共享同一套逻辑。
+
+---
+
+# 二十七、事务思想
+
+尽量让 Import 具备事务性。
+
+理想：
+
+```text
+BEGIN
+↓
+Snapshot
+↓
+Settings
+↓
+Plugins
+↓
+Providers
+↓
+MCP
+↓
+Prompts
+↓
+Workflows
+↓
+Validate
+↓
+COMMIT
+```
+
+错误：
+
+```text
+ROLLBACK
+```
+
+如果 DSH API 本身不支持 transaction，就实现应用层 transaction / compensating actions。
+
+---
+
+# 二十八、UI / UX
+
+UI 风格必须遵循 DSH 现有 Design System。
+
+不要为了这个插件额外创建完全不同的视觉体系。
+
+主页面建议：
+
+```text
+DSH Config Manager
+
+Backup & Migration
+
+[ Export Configuration ]
+Create a portable backup of this DSH.
+
+[ Import Configuration ]
+Restore configuration from another DSH.
+
+Profiles
+Work
+Personal
+Development
+
+Recent Backups
+...
+```
+
+Export：
+
+```text
+Export Configuration
+
+Quick Export
+Recommended
+
+Custom Export
+Choose exactly what to include
+```
+
+Import：
+
+```text
+Select Backup
+↓
+Analyzing...
+↓
+Compatibility
+↓
+Import Preview
+↓
+Resolve Conflicts
+↓
+Importing
+↓
+Result
+```
+
+---
+
+# 二十九、进度显示
+
+大型 Export / Import 不要冻结 UI。
+
+显示阶段：
+
+```text
+Analyzing configuration...
+Exporting settings...
+Scanning secrets...
+Exporting plugins...
+Creating archive...
+Calculating checksums...
+Done
+```
+
+Import：
+
+```text
+Validating backup...
+Checking compatibility...
+Creating safety snapshot...
+Restoring settings...
+Restoring plugins...
+Restoring MCP...
+Validating configuration...
+Done
+```
+
+如果 DSH API 支持取消操作，可以提供 Cancel。
+
+---
+
+# 三十、兼容性评分
+
+可以考虑显示：
+
+```text
+Compatibility
+
+Backup DSH: 2.2
+Current DSH: 2.4
+
+Compatibility: Good
+```
+
+状态：
+
+```text
+Excellent
+Good
+Partial
+Unsupported
+```
+
+但必须基于明确规则计算，不能随便给评分。
+
+---
+
+# 三十一、重复导入
+
+同一个 ZIP 导入两次不应该产生大量重复数据。
+
+尽可能让操作具有 idempotency。
+
+例如根据：
+
+* Plugin ID
+* Prompt ID
+* Workflow ID
+* MCP ID
+
+识别已有项目。
+
+如果 DSH 没有稳定 ID，再设计可靠的匹配策略。
+
+不要仅凭显示名称就武断覆盖。
+
+---
+
+# 三十二、删除策略
+
+导入默认不要删除目标 DSH 中 ZIP 没有的东西。
+
+例如：
+
+目标有：
+
+```text
+Plugin A
+Plugin B
+Plugin C
+```
+
+ZIP 只有：
+
+```text
+Plugin A
+Plugin B
+```
+
+默认 Import 后：
+
+```text
+A
+B
+C
+```
+
+而不是删除 C。
+
+只有明确的：
+
+```text
+Mirror / Exact Restore
+```
+
+模式才能执行删除，而且必须给出强提示和 Snapshot。
+
+---
+
+# 三十三、测试
+
+必须给核心逻辑写测试。
+
+至少覆盖：
+
+### Export
+
+* 正常导出
+* 空配置
+* 大配置
+* Unicode
+* 特殊字符
+* Secret filtering
+
+### Import
+
+* 正常导入
+* Merge
+* Replace
+* Skip
+* Conflict
+* Missing plugin
+* Missing dependency
+* Missing secret
+
+### Version
+
+* Same version
+* Old schema
+* Newer unsupported schema
+* Migration
+
+### Security
+
+* Zip Slip
+* Absolute path
+* Malformed ZIP
+* Oversized archive
+* Suspicious secret fields
+* Checksum mismatch
+
+### Rollback
+
+模拟导入到一半失败。
+
+验证原配置是否恢复。
+
+### Cross Platform
+
+测试：
+
+```text
+Windows → macOS
+macOS → Windows
+Linux → Windows
+```
+
+尤其验证路径处理。
+
+---
+
+# 三十四、禁止事项
+
+绝对禁止：
+
+1. 猜测 DSH API。
+2. 为了让 TypeScript 编译通过而创建假的 DSH API。
+3. 默认导出 Secret。
+4. 明文存储 Secret。
+5. 日志打印 Token/API Key。
+6. Import ZIP 后立即覆盖配置。
+7. Import 前不做 Snapshot。
+8. 用 ZIP 中路径直接写入文件系统。
+9. 执行 ZIP 内脚本。
+10. 导入失败却显示成功。
+11. 为了解决类型错误大量使用 `any`。
+12. 无视现有项目 architecture。
+13. 重复实现项目已有工具。
+14. 修改与插件无关的大量代码。
+15. 在没有必要的情况下引入大型 dependency。
+16. 删除用户现有配置而不确认。
+17. 因一个非关键项目失败而导致所有可恢复内容永久丢失。
+18. 在 UI 中暴露 Secret。
+19. 把设备 ID、Session、Cache 当作正常配置迁移。
+20. 把整个 DSH data directory 当成“备份方案”。
+
+---
+
+# 三十五、开发顺序
+
+严格按照以下阶段推进。
+
+## Phase 1 — Research
+
+检查 DSH 项目。
+
+输出：
+
+```text
+DSH Plugin Architecture
+Available APIs
+Config Sources
+Security Constraints
+Unsupported Capabilities
+Recommended Implementation
+```
+
+此阶段不要大规模写代码。
+
+---
+
+## Phase 2 — Design
+
+设计：
+
+* Export Schema
+* Manifest Schema
+* Adapter Architecture
+* ImportPlan
+* Conflict Model
+* Secret Model
+* Snapshot Model
+* Migration Model
+
+明确文件结构和数据流。
+
+---
+
+## Phase 3 — MVP
+
+实现：
+
+```text
+Export
+Import
+Manifest
+Validation
+Secret Filtering
+Dry Run
+Conflict Detection
+Snapshot
+Rollback
+```
+
+优先支持最重要配置。
+
+---
+
+## Phase 4 — Extended Config
+
+加入：
+
+```text
+Plugins
+Providers
+Models
+MCP
+Prompts
+Rules
+Skills
+Workflows
+Workspace
+UI
+Keybindings
+```
+
+前提是 DSH 确实存在对应能力。
+
+---
+
+## Phase 5 — Hardening
+
+完成：
+
+```text
+ZIP Security
+Checksums
+Cross-platform
+Migration
+Dependency Detection
+Error Recovery
+Tests
+```
+
+---
+
+## Phase 6 — Profiles
+
+核心迁移稳定后，再实现 Profiles。
+
+不要为了 Profile 延误核心 Backup / Restore 的可靠性。
+
+---
+
+# 三十六、验收标准
+
+最终插件至少应该达到：
+
+### 场景 A
+
+用户：
+
+```text
+Mac A
+↓
+Export
+↓
+backup.zip
+↓
+Mac B
+↓
+Import
+```
+
+主要 DSH 使用环境恢复。
+
+---
+
+### 场景 B
+
+```text
+Windows
+↓
+Export
+↓
+macOS
+```
+
+程序检测 Windows 路径问题并要求重新映射，而不是写入无效路径。
+
+---
+
+### 场景 C
+
+Backup 中 Provider 需要 API Key。
+
+默认 Export 不包含 API Key。
+
+Import 后：
+
+```text
+Provider imported.
+API Key required.
+```
+
+---
+
+### 场景 D
+
+目标 DSH 已有同名配置。
+
+程序展示 Conflict，而不是偷偷覆盖。
+
+---
+
+### 场景 E
+
+Import 到 60% 失败。
+
+程序 Rollback。
+
+原来的 DSH 仍然可以正常使用。
+
+---
+
+### 场景 F
+
+用户导入恶意 ZIP：
+
+```text
+../../something
+```
+
+插件拒绝导入。
+
+---
+
+### 场景 G
+
+旧版本 Backup 导入新版插件。
+
+Migration 正确升级 Schema。
+
+---
+
+# 三十七、代码质量要求
+
+要求：
+
+* TypeScript 类型尽可能完整
+* 清晰的数据模型
+* 模块化
+* 可测试
+* 可扩展
+* 不重复代码
+* 合理错误处理
+* 合理日志
+* Secret Redaction
+* 注释解释 WHY，而不是重复代码 WHAT
+* 遵循项目现有 lint / formatter / naming convention
+
+不要过度工程化。
+
+优先：
+
+```text
+Correctness
+↓
+Data Safety
+↓
+Compatibility
+↓
+Maintainability
+↓
+UX
+↓
+Additional Features
+```
+
+---
+
+# 三十八、README
+
+完成后更新 README。
+
+README 至少包括：
+
+```text
+What it does
+Features
+Installation
+Export
+Import
+Security
+What is NOT exported
+Secrets
+Compatibility
+Backup format
+Development
+Testing
+Known limitations
+```
+
+必须特别写清楚：
+
+> 默认备份是否包含 Secret。
+
+---
+
+# 三十九、开发过程中如何与我沟通
+
+不要每写一个文件就询问我。
+
+你应该自主完成普通工程决策。
+
+只有以下情况再询问：
+
+1. DSH 本身存在两种完全不同的实现路线，并且会明显影响产品行为。
+2. 需要做不可逆的数据格式决定。
+3. DSH Plugin API 无法实现核心需求。
+4. 必须修改 DSH Core 才能实现。
+5. 涉及明显安全取舍，需要产品决策。
+
+普通的：
+
+* 文件命名
+* 函数拆分
+* 类型定义
+* 测试结构
+* UI 小细节
+
+自行按照最佳实践决定。
+
+---
+
+# 四十、最终交付要求
+
+不要只告诉我“应该怎么实现”。
+
+我要你实际完成插件。
+
+最终向我汇报：
+
+## 1. Architecture
+
+你最终采用了什么架构，以及原因。
+
+## 2. Files Changed
+
+列出：
+
+```text
+Created
+Modified
+Deleted
+```
+
+并说明关键文件用途。
+
+## 3. Supported Configuration
+
+明确列出：
+
+```text
+✓ Supported
+△ Partially Supported
+✗ Not Supported
+```
+
+不要声称支持实际上没有实现的能力。
+
+## 4. Security
+
+说明：
+
+* Secret 如何处理
+* ZIP 如何验证
+* Integrity 如何检查
+* Rollback 如何实现
+
+## 5. Tests
+
+告诉我：
+
+```text
+Tests added
+Tests passed
+Tests failed
+```
+
+实际运行项目已有的：
+
+```text
+test
+typecheck
+lint
+build
+```
+
+命令。
+
+不要声称没有执行过的测试已经通过。
+
+## 6. Known Limitations
+
+明确告诉我目前有哪些限制。
+
+## 7. Manual Test
+
+给我一套最短人工测试流程：
+
+```text
+DSH A
+→ Export
+→ DSH B
+→ Preview
+→ Import
+→ Verify
+```
+
+---
+
+# 最重要的产品原则
+
+始终记住：
+
+这个插件处理的是用户可能花了几个月甚至几年积累下来的 DSH 配置。
+
+**宁可少迁移一个配置，也不要破坏用户现有配置。**
+
+任何 Import 操作都遵循：
+
+```text
+Analyze first
+Preview second
+Backup third
+Modify fourth
+Validate fifth
+Rollback if necessary
+```
+
+任何 Secret 都遵循：
+
+```text
+Do not export by default.
+Do not log.
+Do not expose.
+Do not silently transfer.
+```
+
+任何兼容性问题都遵循：
+
+```text
+Detect
+Explain
+Let the user decide
+```
+
+现在开始工作。
+
+第一步不要直接生成大量代码。
+
+**先完整检查当前 DSH 项目、插件 API 和现有配置实现，给出 Research + Architecture 结论；确认技术路线之后，立即继续实现，不需要等待我的确认，除非遇到前面列出的重大阻塞问题。**

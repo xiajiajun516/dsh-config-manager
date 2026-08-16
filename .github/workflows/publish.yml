@@ -1,0 +1,88 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create the GitHub Release (assets + notes)
+      id-token: write   # required for npm trusted publishing (OIDC)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Update npm to latest
+        # npm trusted publishing (OIDC) needs npm >= 11.5.1; runners may ship an older npm.
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        # Some DSH core packages live only in peerDependencies and are not on
+        # the public registry; --legacy-peer-deps skips peer resolution.
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Package tarball
+        # The installable tgz is attached to the GitHub Release as an asset.
+        # npm pack --pack-destination fails if the dir does not exist (fresh checkout).
+        run: mkdir -p dist && npm pack --pack-destination ./dist
+
+      - name: Publish to npm (trusted publishing / OIDC)
+        # No NODE_AUTH_TOKEN: the npm CLI obtains a short-lived registry token
+        # via GitHub Actions OIDC. Requires a trusted publisher configured on
+        # npmjs.com for this package (see README "Publishing").
+        run: npm publish --access public --provenance
+
+      - name: Create GitHub Release (tag-triggered only)
+        # Runs only on tag pushes (not manual dispatch): creates a GitHub
+        # Release with auto-generated notes and the tgz artifact, then prepends
+        # a hand-written highlight section (方式 2: 手动亮点 + 自动变更记录).
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # ① 先创建 release（自动生成 commit 变更记录）
+          gh release create "$GITHUB_REF_NAME" \
+            dist/dsh-config-manager-*.tgz \
+            --generate-notes \
+            --title "DSH Config Manager $GITHUB_REF_NAME"
+
+          # ② 把自动生成的变更记录存到临时文件
+          gh release view "$GITHUB_REF_NAME" --json body -q .body > /tmp/auto-notes.md
+
+          # ③ 手动亮点段（每次发版前更新这里的列表）
+          cat > /tmp/release-notes.md <<'EOF'
+          ## ✨ 本次更新亮点
+          - 修复插件导入失败：GitHub 来源依赖（github:csyangwen/dsh-memory-evolve 等）导出时保留声明 spec、导入按 spec 安装，不再因裸包名 fetch-404 产生幽灵依赖拖垮整个 profile 的后续安装
+          - plugins 分区新增携带 pnpm-workspace.yaml（allowBuilds / minimumReleaseAgeExclude），目标机插件构建白名单与冷静期配置随导入迁移
+          - 新增目标机幽灵依赖清理脚本 Docs/repair-ghost-plugin-deps.ps1（删除残留依赖行 + 补 allowBuilds + 按正确 spec 重装）
+          - 新增回归测试：github: spec 透传、pnpm-workspace.yaml Create/Update、快照/回滚覆盖
+          ## 📦 安装
+          ```bash
+          dsh plugin --profile web add dsh-config-manager@latest
+          ```
+          ## 🔄 变更记录（自动生成）
+          EOF
+          echo "" >> /tmp/release-notes.md
+          cat /tmp/auto-notes.md >> /tmp/release-notes.md
+
+          # ④ 用拼接后的完整描述更新 release
+          gh release edit "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
