@@ -184,7 +184,15 @@ Every import creates a **safety snapshot** first. If something feels off afterwa
 
 **GUI**: Settings → "Backup & Migration" → **Snapshots & Restore** tab → pick a snapshot → preview the plan (dry-run, zero writes) → confirm.
 
-**CLI** (offline, no DSH runtime needed):
+**CLI** (offline, no DSH runtime needed) — it is a standalone npm tool, **installed separately from the plugin**:
+
+```bash
+# install the CLI once on the machine where you want to restore snapshots
+# (--omit=peer: the offline CLI only needs js-yaml, not the DSH peer packages)
+npm install -g dsh-config-manager@latest --omit=peer
+```
+
+> ⚠️ Installing/updating the plugin (`dsh plugin --profile web add ...`) only enables the GUI — it does **not** create the `dsh-config-manager` command. Run the install command above, then:
 
 ```bash
 # list snapshots (newest first)

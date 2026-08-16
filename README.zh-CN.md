@@ -184,7 +184,15 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 
 **GUI**：设置 → 「备份与迁移」→「快照恢复」tab → 选择快照 → 预览恢复计划（dry-run，零写入）→ 确认执行。
 
-**CLI**（纯离线，无需 DSH 运行时）：
+**CLI**（纯离线，无需 DSH 运行时）——它是独立的 npm 命令行工具，**需单独安装**（与插件安装是两回事）：
+
+```bash
+# 在想恢复快照的那台机器上安装一次 CLI
+# （--omit=peer：离线 CLI 只需要 js-yaml，不需要 DSH 的 peer 依赖包）
+npm install -g dsh-config-manager@latest --omit=peer
+```
+
+> ⚠️ 只安装/更新插件（`dsh plugin --profile web add ...`）只启用 GUI，**不会**产生 `dsh-config-manager` 命令。请先执行上面这条安装命令，然后：
 
 ```bash
 # 列出快照（最新在前）
