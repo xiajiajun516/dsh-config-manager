@@ -344,18 +344,27 @@ export class RunStore {
 
   /* ------------------------------------------------------------- 订阅 */
 
-  /** 订阅 store 变化（useSyncExternalStore 的 subscribe）。 */
-  subscribe(listener: () => void): () => void {
+  /**
+   * 订阅 store 变化（useSyncExternalStore 的 subscribe）。
+   *
+   * 必须为箭头函数类字段：React 以裸引用（`runStore.subscribe`）调用它，
+   * 无接收者，若为原型方法则 `this` 为 undefined，`this.listeners` 直接崩溃。
+   */
+  subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
     }
   }
 
-  /** 当前完整快照（引用稳定：仅在 patch 后替换，适合 useSyncExternalStore）。 */
-  getSnapshot(): StoreState {
-    return this.state
-  }
+  /**
+   * 当前完整快照（引用稳定：仅在 patch 后替换，适合 useSyncExternalStore）。
+   *
+   * 必须为箭头函数类字段：React 以裸引用（`runStore.getSnapshot`）调用它，
+   * 无接收者，若为原型方法则 `this` 为 undefined，`this.state` 抛 TypeError，
+   * 导致整个 settings.section 槽位渲染崩溃（备份与迁移页空白）。
+   */
+  getSnapshot = (): StoreState => this.state
 
   private notify(): void {
     for (const listener of this.listeners) listener()

@@ -71,7 +71,8 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 待填写：例如「修复备份与迁移页面空白」「远程同步并入主页面 tab」
+          - 修复「备份与迁移」页面空白：runStore.subscribe/getSnapshot 改为箭头函数类字段，useSyncExternalStore 裸引用调用不再因 this 丢失而崩溃
+          - 新增回归测试锁定该行为（裸引用调用不丢 this）
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest

@@ -498,3 +498,19 @@ test('subscribe/notify: patch 触发监听器，退订后不再通知', () => {
   store.patch({ view: 'import' })
   assert.notEqual(store.getSnapshot(), before)
 })
+
+test('回归: subscribe/getSnapshot 以裸引用调用时 this 绑定实例（useSyncExternalStore 的调用方式）', () => {
+  const store = new RunStore({ storage: null })
+  // React 内部以无接收者方式调用 getSnapshot()/subscribe(listener) ——
+  // 若为原型方法则 this 为 undefined 直接崩溃（备份与迁移页空白根因）。
+  const bareGet = store.getSnapshot
+  const bareSub = store.subscribe
+  assert.equal(bareGet().view, 'export', '裸引用 getSnapshot 不崩（this 绑定实例）')
+  let notified = 0
+  const unsub = bareSub(() => { notified += 1 })
+  store.patch({ view: 'import' })
+  assert.equal(notified, 1, '裸引用 subscribe 不崩且能退订')
+  unsub()
+  store.patch({ view: 'export' })
+  assert.equal(notified, 1, '退订后不再通知')
+})
