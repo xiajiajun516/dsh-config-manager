@@ -135,9 +135,11 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
     return (
       <Card className={css.card}>
         <strong className={warn ? css.warnText : undefined}>{title}（{items.length}）</strong>
-        <ul className={css.reportList}>
-          {items.map((item, i) => <li key={`${title}-${i}`}>{item}</li>)}
-        </ul>
+        <div className={css.reportScroll}>
+          <ul className={css.reportList}>
+            {items.map((item, i) => <li key={`${title}-${i}`}>{item}</li>)}
+          </ul>
+        </div>
       </Card>
     )
   }
@@ -198,15 +200,19 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
                 <Card>
                   <SectionTitle title={t('snapshots.planTitle')} subtitle={summary()} />
                   {state.plan.actions.length === 0 && <Empty>{t('snapshots.noActions')}</Empty>}
-                  <ul className={css.reportList}>
-                    {state.plan.actions.map((action, i) => (
-                      <li key={`plan-${i}`}>
-                        <span className={css.kindTag}>{actionKindLabel(action.kind)}</span>
-                        {' '}{action.description}
-                        {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
-                      </li>
-                    ))}
-                  </ul>
+                  {state.plan.actions.length > 0 && (
+                    <div className={css.planScroll}>
+                      <ul className={css.reportList}>
+                        {state.plan.actions.map((action, i) => (
+                          <li key={`plan-${i}`}>
+                            <span className={css.kindTag}>{actionKindLabel(action.kind)}</span>
+                            {' '}{action.description}
+                            {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <div className={css.rowActions}>
                     <Button
                       variant="danger"

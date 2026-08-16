@@ -831,6 +831,37 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* 恢复计划详情容器：固定高度 + 内部滚动，数百条动作不再把整页撑长；
+   列表滚动、标题/汇总/执行按钮固定在容器外 */
+.planScroll {
+  height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 10px 8px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+.planScroll .reportList {
+  margin-top: 6px;
+}
+
+/* 报告分区详情容器：同样限高内部滚动（多分区堆叠时避免整页失控） */
+.reportScroll {
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 10px 6px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+.reportScroll .reportList {
+  margin-top: 4px;
+}
+
 .rowActions {
   display: flex;
   gap: 8px;
