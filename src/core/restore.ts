@@ -24,6 +24,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { resolveFileTarget } from './backup.ts';
+import { zhMsg } from './messages.ts';
+import type { MsgFunc } from './messages.ts';
 import {
   classifyDshPluginFailure, readInstalled, resolveProfileDir, runDshPlugin,
 } from './plugin-cli.ts';
@@ -91,6 +93,8 @@ export interface RestoreOptions {
   pluginUninstaller?: (
     name: string, profileDir: string, profile: string,
   ) => Promise<{ ok: boolean; message?: string }>;
+  /** 消息翻译器（缺省 zh；宿主按 DSH 应用语言注入） */
+  msg?: MsgFunc;
 }
 
 export interface RestoreReport {
@@ -120,10 +124,10 @@ export interface SnapshotMeta {
 /* ------------------------------------------------------------ 工具 */
 
 /** 快照目录内读取 snapshot.json（深度保护解析） */
-async function loadSnapshot(snapshotDir: string): Promise<Snapshot> {
+async function loadSnapshot(snapshotDir: string, msg: MsgFunc): Promise<Snapshot> {
   const parsed = parseJsonSafe(await fs.readFile(path.join(snapshotDir, 'snapshot.json'), 'utf8'));
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`快照 ${snapshotDir} 的 snapshot.json 不是合法对象`);
+    throw new Error(msg('restore.snapshotInvalid', { dir: snapshotDir }));
   }
   return parsed as Snapshot;
 }
@@ -144,16 +148,16 @@ function isWithinHome(homeDir: string, abs: string): boolean {
 }
 
 /** homeDir 内绝对路径（越界抛错） */
-function homeAbs(homeDir: string, relPath: string): string {
+function homeAbs(homeDir: string, relPath: string, msg: MsgFunc): string {
   const abs = path.resolve(homeDir, relPath);
-  if (!isWithinHome(homeDir, abs)) throw new Error(`路径越界: ${relPath}`);
+  if (!isWithinHome(homeDir, abs)) throw new Error(msg('restore.pathEscape', { path: relPath }));
   return abs;
 }
 
 /** 快照目录内 blob 绝对路径（防 snapshot.json 里伪造 ../ 越界读） */
-function blobAbs(snapshotDir: string, blobPath: string): string {
+function blobAbs(snapshotDir: string, blobPath: string, msg: MsgFunc): string {
   const abs = path.resolve(snapshotDir, blobPath);
-  if (!isWithinHome(snapshotDir, abs)) throw new Error(`blob 路径越界: ${blobPath}`);
+  if (!isWithinHome(snapshotDir, abs)) throw new Error(msg('restore.blobPathEscape', { path: blobPath }));
   return abs;
 }
 
@@ -189,17 +193,17 @@ async function copyToPreRestore(preDir: string, absPath: string, label: string, 
 
 /** 默认插件卸载器：官方 dsh plugin remove 通道 + 失败分类诊断 */
 async function defaultPluginUninstaller(
-  name: string, profileDir: string, profile: string,
+  name: string, profileDir: string, profile: string, msg: MsgFunc,
 ): Promise<{ ok: boolean; message?: string }> {
   const result = await runDshPlugin(profileDir, profile, ['remove', name]);
   if (result.exitCode === 0) return { ok: true };
   const output = `${result.stderr}\n${result.stdout}`.trim();
   const failure = classifyDshPluginFailure(output);
   if (failure !== null) {
-    return { ok: false, message: `dsh plugin remove ${name} 失败（${failure.code}）：${failure.message}` };
+    return { ok: false, message: msg('restore.uninstallFailedCode', { name, code: failure.code, message: failure.message }) };
   }
-  const tail = output.split('\n').slice(-8).join('\n') || '无输出';
-  return { ok: false, message: `dsh plugin remove ${name} 失败（exit ${String(result.exitCode)}）：${tail}` };
+  const tail = output.split('\n').slice(-8).join('\n') || msg('restore.noOutput');
+  return { ok: false, message: msg('restore.uninstallFailedExit', { name, code: String(result.exitCode), tail }) };
 }
 
 /* ------------------------------------------------------------ planRestore */
@@ -210,7 +214,8 @@ async function defaultPluginUninstaller(
  */
 export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   const { snapshotDir, homeDir, profile } = opts;
-  const snapshot = await loadSnapshot(snapshotDir);
+  const msg = opts.msg ?? zhMsg;
+  const snapshot = await loadSnapshot(snapshotDir, msg);
   const settingsRel = await resolveSettingsRelPath(homeDir, opts.settingsPath);
   const actions: RestoreAction[] = [];
 
@@ -219,13 +224,13 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   for (const backup of hostBackups) {
     let abs: string;
     try {
-      abs = homeAbs(homeDir, backup.relPath);
+      abs = homeAbs(homeDir, backup.relPath, msg);
     } catch {
       actions.push({
         kind: 'skip',
-        description: `宿主文件路径越界，跳过: ${backup.relPath}`,
+        description: msg('restore.hostSkipEscape', { path: backup.relPath }),
         target: backup.relPath,
-        detail: '快照登记路径越界，拒绝恢复',
+        detail: msg('restore.hostSkipEscapeDetail'),
       });
       continue;
     }
@@ -234,39 +239,39 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
       if (backup.blobPath === '') {
         actions.push({
           kind: 'skip',
-          description: `宿主文件 ${backup.relPath} 缺少 blob 副本，跳过`,
+          description: msg('restore.hostNoBlobInfo', { path: backup.relPath }),
           target: backup.relPath,
         });
         continue;
       }
-      if (!(await fileExists(blobAbs(snapshotDir, backup.blobPath)))) {
+      if (!(await fileExists(blobAbs(snapshotDir, backup.blobPath, msg)))) {
         actions.push({
           kind: 'skip',
-          description: `宿主文件 ${backup.relPath} 的 blob 缺失，跳过`,
+          description: msg('restore.hostBlobMissing', { path: backup.relPath }),
           target: backup.relPath,
         });
         continue;
       }
       actions.push({
         kind: 'hostFileRestore',
-        description: `整文件还原 ${backup.relPath}`,
+        description: msg('restore.hostRestore', { path: backup.relPath }),
         target: backup.relPath,
         blobPath: backup.blobPath,
         isSettings: backup.relPath === settingsRel,
-        detail: currentExists ? '还原前将备份当前文件到 pre-restore/' : '当前文件不存在，直接写入',
+        detail: currentExists ? msg('restore.backupBeforeWrite') : msg('restore.writeDirect'),
       });
     } else if (currentExists) {
       actions.push({
         kind: 'hostFileRemove',
-        description: `移除快照时不存在、现已出现的文件 ${backup.relPath}`,
+        description: msg('restore.hostRemove', { path: backup.relPath }),
         target: backup.relPath,
         isSettings: backup.relPath === settingsRel,
-        detail: '删除前将备份当前文件到 pre-restore/',
+        detail: msg('restore.backupBeforeRemove'),
       });
     } else {
       actions.push({
         kind: 'skip',
-        description: `宿主文件 ${backup.relPath} 快照时不存在且当前也不存在，无动作`,
+        description: msg('restore.hostSkipAbsent', { path: backup.relPath }),
         target: backup.relPath,
       });
     }
@@ -276,9 +281,9 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   if (settingsRel !== undefined && !hostBackups.some((b) => b.relPath === settingsRel)) {
     actions.push({
       kind: 'skip',
-      description: `settings 文件 ${settingsRel} 未被快照登记，无法整文件还原`,
+      description: msg('restore.settingsNotBacked', { path: settingsRel }),
       isSettings: true,
-      detail: '该快照未备份此 settings 文件（可能当时不存在或宿主未暴露 profile）',
+      detail: msg('restore.settingsNotBackedDetail'),
     });
   }
 
@@ -288,8 +293,8 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   if (baseline === undefined) {
     actions.push({
       kind: 'skip',
-      description: '旧快照无 beforePlugins 基线，无法自动卸载插件',
-      detail: '请人工核对导入期间新增的插件并逐个移除',
+      description: msg('restore.noBaseline'),
+      detail: msg('restore.noBaselineDetail'),
     });
   } else {
     const beforeNames = new Set(baseline.map((p) => p.name));
@@ -297,16 +302,16 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
     for (const name of added) {
       actions.push({
         kind: 'pluginRemove',
-        description: `卸载导入期间新增插件 ${name}`,
+        description: msg('restore.pluginRemove', { name }),
         target: name,
         pluginName: name,
-        detail: baseline.length === 0 ? '快照基线为空（导入前可能未捕获插件清单），请确认后执行' : undefined,
+        detail: baseline.length === 0 ? msg('restore.pluginRemoveEmptyBaseline') : undefined,
       });
     }
     if (added.length === 0) {
       actions.push({
         kind: 'skip',
-        description: '无导入期间新增插件（当前已装插件 ⊆ 快照基线）',
+        description: msg('restore.noAddedPlugins'),
       });
     }
   }
@@ -323,48 +328,48 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
         if (rel === '') {
           actions.push({
             kind: 'skip',
-            description: `文件条目路径越界，跳过: ${entry.adapter}:${entry.ref}`,
+            description: msg('restore.fileSkipEscape', { adapter: entry.adapter, ref: entry.ref }),
             target: entry.ref,
           });
           continue;
         }
-        const abs = homeAbs(homeDir, rel);
+        const abs = homeAbs(homeDir, rel, msg);
         const currentExists = await fileExists(abs);
         if (entry.existed && entry.copiedTo) {
-          if (!(await fileExists(blobAbs(snapshotDir, entry.copiedTo)))) {
+          if (!(await fileExists(blobAbs(snapshotDir, entry.copiedTo, msg)))) {
             actions.push({
               kind: 'skip',
-              description: `文件 ${rel} 的 blob 缺失，跳过`,
+              description: msg('restore.fileBlobMissing', { path: rel }),
               target: rel,
             });
             continue;
           }
           actions.push({
             kind: 'fileRestore',
-            description: `还原文件 ${rel}（${entry.adapter}）`,
+            description: msg('restore.fileRestore', { path: rel, adapter: entry.adapter }),
             target: rel,
             blobPath: entry.copiedTo,
-            detail: currentExists ? '还原前将备份当前文件到 pre-restore/' : '当前文件不存在，直接写入',
+            detail: currentExists ? msg('restore.backupBeforeWrite') : msg('restore.writeDirect'),
           });
         } else if (!entry.existed) {
           if (currentExists) {
             actions.push({
               kind: 'fileRemove',
-              description: `删除导入写入的文件 ${rel}（${entry.adapter}）`,
+              description: msg('restore.fileRemove', { path: rel, adapter: entry.adapter }),
               target: rel,
-              detail: '删除前将备份当前文件到 pre-restore/',
+              detail: msg('restore.backupBeforeRemove'),
             });
           } else {
             actions.push({
               kind: 'skip',
-              description: `文件 ${rel} 快照时不存在且当前也不存在，无动作`,
+              description: msg('restore.fileSkipAbsent', { path: rel }),
               target: rel,
             });
           }
         } else {
           actions.push({
             kind: 'skip',
-            description: `文件 ${rel} 缺少 blob 副本信息，跳过`,
+            description: msg('restore.fileNoBlobInfo', { path: rel }),
             target: rel,
           });
         }
@@ -374,9 +379,9 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
         if (entry.existed) {
           actions.push({
             kind: 'credentialHint',
-            description: `凭据 ${entry.ref} 需人工补录`,
+            description: msg('restore.credentialHint', { ref: entry.ref }),
             target: entry.ref,
-            manualHint: `凭据 "${entry.ref}" 请人工重新填写（DSH 不回读凭据值）`,
+            manualHint: msg('restore.credentialManualHint', { ref: entry.ref }),
           });
         } else {
           credentialAbsentCount += 1;
@@ -402,28 +407,28 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   if (namespaceCount > 0 && !settingsBacked) {
     actions.push({
       kind: 'skip',
-      description: `${namespaceCount} 条 settings namespace 条目：快照无 settings 整文件备份，离线无法恢复`,
-      detail: '需经在线回滚（rollback.ts）或人工核对 settings.yaml',
+      description: msg('restore.nsAggregate', { count: String(namespaceCount) }),
+      detail: msg('restore.nsAggregateDetail'),
     });
   }
   if (patchLineCount > 0 && !patchBacked) {
     actions.push({
       kind: 'skip',
-      description: `${patchLineCount} 条 patch 行条目：快照无 cordis.patch.yml 整文件备份，离线无法恢复`,
-      detail: '需经在线回滚（rollback.ts）或人工核对 patch 文件',
+      description: msg('restore.patchAggregate', { count: String(patchLineCount) }),
+      detail: msg('restore.patchAggregateDetail'),
     });
   }
   if (workspaceCount > 0) {
     actions.push({
       kind: 'skip',
-      description: `${workspaceCount} 条 workspace 记录条目：离线无法恢复（数据在 DSH storages）`,
-      detail: '需经在线回滚（rollback.ts）或人工核对 workspace 注册表',
+      description: msg('restore.workspaceAggregate', { count: String(workspaceCount) }),
+      detail: msg('restore.workspaceAggregateDetail'),
     });
   }
   if (credentialAbsentCount > 0) {
     actions.push({
       kind: 'skip',
-      description: `${credentialAbsentCount} 条凭据快照时未配置：若导入已创建，需人工在 DSH 中删除`,
+      description: msg('restore.credentialAbsentAggregate', { count: String(credentialAbsentCount) }),
     });
   }
 
@@ -466,9 +471,11 @@ function summarizeActions(actions: RestoreAction[]): RestorePlan['summary'] {
 export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   const plan = await planRestore(opts);
   const { snapshotDir, homeDir, profile } = opts;
+  const msg = opts.msg ?? zhMsg;
   const preDir = path.join(snapshotDir, 'pre-restore');
   const profileDir = resolveProfileDir(homeDir, profile);
-  const uninstaller = opts.pluginUninstaller ?? defaultPluginUninstaller;
+  const uninstaller = opts.pluginUninstaller
+    ?? ((name: string, dir: string, prof: string) => defaultPluginUninstaller(name, dir, prof, msg));
 
   const report: RestoreReport = {
     snapshotId: plan.snapshotId,
@@ -484,16 +491,16 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
     try {
       switch (action.kind) {
         case 'hostFileRestore': {
-          const abs = homeAbs(homeDir, action.target!);
+          const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
-          const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!));
+          const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!, msg));
           await fs.mkdir(path.dirname(abs), { recursive: true });
           await fs.writeFile(abs, data);
           report.restored.push(action.target!);
           break;
         }
         case 'hostFileRemove': {
-          const abs = homeAbs(homeDir, action.target!);
+          const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) {
             await copyToPreRestore(preDir, abs, action.target!, ++seq);
             await fs.rm(abs, { force: true });
@@ -502,16 +509,16 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           break;
         }
         case 'fileRestore': {
-          const abs = homeAbs(homeDir, action.target!);
+          const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
-          const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!));
+          const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!, msg));
           await fs.mkdir(path.dirname(abs), { recursive: true });
           await fs.writeFile(abs, data);
           report.restored.push(action.target!);
           break;
         }
         case 'fileRemove': {
-          const abs = homeAbs(homeDir, action.target!);
+          const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) {
             await copyToPreRestore(preDir, abs, action.target!, ++seq);
             await fs.rm(abs, { force: true });
@@ -524,7 +531,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           if (result.ok) {
             report.removedPlugins.push(action.pluginName!);
           } else {
-            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? '卸载失败' });
+            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? msg('restore.pluginRemoveFailed') });
           }
           break;
         }
@@ -535,7 +542,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           report.skipped.push(action.description);
           break;
         default:
-          report.skipped.push(`未知动作 ${String(action.kind)}: ${action.description}`);
+          report.skipped.push(msg('restore.unknownAction', { kind: String(action.kind), description: action.description }));
       }
     } catch (err) {
       report.failed.push({

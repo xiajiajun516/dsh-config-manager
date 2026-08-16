@@ -10,6 +10,8 @@
  * rules/commands 无独立存储（研究报告 §2.2），不实现。
  */
 import { isDeepStrictEqual } from 'node:util';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { PromptEntry, PromptsSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -116,7 +118,7 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
     try {
       lines = await ctx.patchFile.readPatchLines(USER_PATCH_FILE);
     } catch (err) {
-      warnings.push(`patch 文件读取失败，无法提取 prompts: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(msgOf(ctx)('adapter.patchReadFailedPrompts', { reason: err instanceof Error ? err.message : String(err) }));
     }
     const prompts = extractPrompts(lines);
     return {
@@ -128,6 +130,7 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
   }
 
   async analyzeImport(data: PromptsExportSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
     const items: PlanItem[] = [];
     const targetLines = await ctx.target.patchFile.readPatchLines(USER_PATCH_FILE);
     const targetPrompts = extractPrompts(targetLines);
@@ -137,11 +140,11 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
       const targetLine = targetLines.find((l) => l.lineId === p.sourceLineId);
       if (targetLine && sameName && sameName.sourceLineId === p.sourceLineId) {
         if (sameName.text === p.text && sameName.kind === p.kind) {
-          items.push({ id, kind: 'Skip', adapter: 'prompts', description: `提示词 ${p.name} 已一致`, severity: 'info' });
+          items.push({ id, kind: 'Skip', adapter: 'prompts', description: msg('adapter.promptSame', { name: p.name }), severity: 'info' });
         } else {
           items.push({
             id, kind: 'Conflict', adapter: 'prompts',
-            description: `提示词 ${p.name} 与目标不同`,
+            description: msg('adapter.promptDiff', { name: p.name }),
             detail: `行 ${p.sourceLineId} current=${JSON.stringify(sameName.text).slice(0, 80)} imported=${JSON.stringify(p.text).slice(0, 80)}`,
             severity: 'warning',
             target: { adapter: 'prompts', ref: p.sourceLineId ?? '' },
@@ -150,11 +153,11 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
       } else if (sameName) {
         // 目标存在同名 prompt（不同来源行）→ 更新其所在行
         if (sameName.text === p.text && sameName.kind === p.kind) {
-          items.push({ id, kind: 'Skip', adapter: 'prompts', description: `提示词 ${p.name} 已一致`, severity: 'info' });
+          items.push({ id, kind: 'Skip', adapter: 'prompts', description: msg('adapter.promptSame', { name: p.name }), severity: 'info' });
         } else {
           items.push({
             id, kind: 'Conflict', adapter: 'prompts',
-            description: `提示词 ${p.name} 与目标不同（目标位于行 ${sameName.sourceLineId}）`,
+            description: msg('adapter.promptDiffWithLine', { name: p.name, line: sameName.sourceLineId ?? '' }),
             severity: 'warning',
             target: { adapter: 'prompts', ref: sameName.sourceLineId ?? '' },
           });
@@ -164,13 +167,13 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
         const lineId = p.sourceLineId ?? `prompt-${p.name}`;
         items.push({
           id, kind: 'Create', adapter: 'prompts',
-          description: `创建提示词 ${p.name}（行 ${lineId}）`, severity: 'info',
+          description: msg('adapter.promptCreate', { name: p.name, line: lineId }), severity: 'info',
           target: { adapter: 'prompts', ref: lineId },
         });
       } else {
         items.push({
           id, kind: 'Warning', adapter: 'prompts',
-          description: `提示词 ${p.name} 在目标无对应来源，请手动配置（DSH 无独立 prompt 存储）`,
+          description: msg('adapter.promptManual', { name: p.name }),
           severity: 'info',
         });
       }
@@ -179,45 +182,46 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
-    if (item.kind === 'Warning') return { ok: true, message: '提示项，无需写入' };
+    const msg = ctx.msg;
+    if (item.kind === 'Warning') return { ok: true, message: msg('adapter.promptWarningNoWrite') };
     const ref = item.target?.ref;
-    if (!ref) return { ok: false, message: '缺少 target.ref' };
+    if (!ref) return { ok: false, message: msg('adapter.missingTargetRef') };
     const data = ctx.sections.get('prompts') as PromptsExportSection | undefined;
     const prompt = data?.prompts.find((p) => p.id === item.id);
-    if (!prompt) return { ok: false, message: `导入数据缺少提示词 ${item.id}` };
+    if (!prompt) return { ok: false, message: msg('adapter.promptMissing', { id: item.id }) };
     // Create：目标无来源行 → 用记录的行名重建 patch 行（insert）
     if (item.kind === 'Create') {
       const raw = buildPromptLine(ref, prompt);
       await ctx.target.patchFile.applyPatchChanges(USER_PATCH_FILE, [
         { lineId: ref, raw, action: 'insert' },
       ]);
-      return { ok: true, needsRestart: true, message: `提示词 ${prompt.name} 已创建（行 ${ref}）` };
+      return { ok: true, needsRestart: true, message: msg('adapter.promptCreated', { name: prompt.name, ref }) };
     }
     // Update / Conflict(useImported)：合并进目标行 config
     const lines = await ctx.target.patchFile.readPatchLines(USER_PATCH_FILE);
     const line = lines.find((l) => l.lineId === ref);
-    if (!line) return { ok: false, message: `目标 patch 行 ${ref} 不存在，无法写入` };
+    if (!line) return { ok: false, message: msg('adapter.patchLineMissing', { ref }) };
     const newRaw = mergePromptIntoLine(line.raw, prompt);
     await ctx.target.patchFile.applyPatchChanges(USER_PATCH_FILE, [
       { lineId: ref, raw: newRaw, action: 'update' },
     ]);
-    return { ok: true, needsRestart: true, message: `提示词 ${prompt.name} 已写入 patch 行 ${ref}` };
+    return { ok: true, needsRestart: true, message: msg('adapter.promptWritten', { name: prompt.name, ref }) };
   }
 
-  async validate(data: PromptsExportSection): Promise<ValidationResult> {
+  async validate(data: PromptsExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'prompts 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'prompts' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (!Array.isArray(data.prompts)) {
-      issues.push({ path: 'prompts', message: 'prompts 必须是数组', severity: 'error' });
+      issues.push({ path: 'prompts', message: msg('adapter.validate.array', { subject: 'prompts' }), severity: 'error' });
     } else {
       for (const p of data.prompts) {
         if (p === null || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.text !== 'string') {
-          issues.push({ path: 'prompts[]', message: 'prompt 记录必须含字符串 name 与 text', severity: 'error' });
+          issues.push({ path: 'prompts[]', message: msg('adapter.validate.promptIdentity'), severity: 'error' });
         }
       }
     }

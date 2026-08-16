@@ -7,6 +7,8 @@
  * patch 行 raw 支持两种形态：单行 { id, name, config } 与块 { insert: [{ id, name, config }] }。
  */
 import { isDeepStrictEqual } from 'node:util';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { McpServerEntry, McpSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -95,7 +97,7 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
     try {
       lines = await ctx.patchFile.readPatchLines(USER_PATCH_FILE);
     } catch (err) {
-      warnings.push(`patch 文件读取失败，无法提取 MCP: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(msgOf(ctx)('adapter.patchReadFailedMCP', { reason: err instanceof Error ? err.message : String(err) }));
     }
     const servers = extractMcpServers(lines);
     return {
@@ -107,6 +109,7 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
   }
 
   async analyzeImport(data: McpExportSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
     const items: PlanItem[] = [];
     const targetLines = await ctx.target.patchFile.readPatchLines(USER_PATCH_FILE);
     const targetServers = extractMcpServers(targetLines);
@@ -121,7 +124,7 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
           : (server.sourceLineId ?? newLineId(server.serverName));
         items.push({
           id, kind: 'Create', adapter: 'mcp',
-          description: `创建 MCP server ${server.serverName}`,
+          description: msg('adapter.mcpCreate', { serverName: server.serverName }),
           detail: `${server.type === 'stdio' ? `${server.command} ${(server.args ?? []).join(' ')}` : server.url}`,
           severity: 'info',
           target: { adapter: 'mcp', ref: lineId },
@@ -130,11 +133,11 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
         const existingComparable = { ...existing } as Record<string, unknown>;
         delete existingComparable.sourceLineId;
         if (isDeepStrictEqual(existingComparable, comparable)) {
-          items.push({ id, kind: 'Skip', adapter: 'mcp', description: `MCP server ${server.serverName} 已一致`, severity: 'info' });
+          items.push({ id, kind: 'Skip', adapter: 'mcp', description: msg('adapter.mcpSame', { serverName: server.serverName }), severity: 'info' });
         } else {
           items.push({
             id, kind: 'Conflict', adapter: 'mcp',
-            description: `MCP server ${server.serverName} 与目标不同`,
+            description: msg('adapter.mcpDiff', { serverName: server.serverName }),
             detail: `current=${JSON.stringify(existingComparable)} imported=${JSON.stringify(comparable)}`.slice(0, 200),
             severity: 'warning',
             target: { adapter: 'mcp', ref: existing.sourceLineId },
@@ -146,33 +149,34 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    const msg = ctx.msg;
     const serverName = item.id.replace(/^mcp:/, '');
     const data = ctx.sections.get('mcp') as McpExportSection | undefined;
     const server = data?.servers.find((s) => s.serverName === serverName);
-    if (!server) return { ok: false, message: `导入数据缺少 MCP server ${serverName}` };
+    if (!server) return { ok: false, message: msg('adapter.mcpMissing', { serverName }) };
     const ref = item.target?.ref;
-    if (!ref) return { ok: false, message: '缺少 target.ref' };
+    if (!ref) return { ok: false, message: msg('adapter.missingTargetRef') };
     const raw = buildMcpPatchLine(ref, server);
     await ctx.target.patchFile.applyPatchChanges(USER_PATCH_FILE, [
       { lineId: ref, raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
-    return { ok: true, needsRestart: true, message: `MCP server ${serverName} 已写入 patch，重启后生效` };
+    return { ok: true, needsRestart: true, message: msg('adapter.mcpWritten', { serverName }) };
   }
 
-  async validate(data: McpExportSection): Promise<ValidationResult> {
+  async validate(data: McpExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'mcp 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'mcp' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (!Array.isArray(data.servers)) {
-      issues.push({ path: 'servers', message: 'servers 必须是数组', severity: 'error' });
+      issues.push({ path: 'servers', message: msg('adapter.validate.array', { subject: 'servers' }), severity: 'error' });
     } else {
       for (const s of data.servers) {
         if (s === null || typeof s !== 'object' || typeof s.serverName !== 'string' || s.serverName === '') {
-          issues.push({ path: 'servers[]', message: 'server 记录必须含非空 serverName', severity: 'error' });
+          issues.push({ path: 'servers[]', message: msg('adapter.validate.serverName'), severity: 'error' });
         }
       }
     }

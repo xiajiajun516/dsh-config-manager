@@ -4,6 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ExportFlow } from './export-flow.ts';
+import { makeUiT } from './i18n.ts';
+
+const enT = makeUiT('en');
 import { MockExportPort, makeExportReport } from './test-helpers.ts';
 
 test('export-flow: Quick 推荐项 = defaultIncluded 且非 deviceSpecific', () => {
@@ -45,7 +48,7 @@ test('export-flow: validateSelection 对 deviceSpecific 分区给出警告', () 
 test('export-flow: run 调 port 并携带 only 选择与进度事件', async () => {
   const port = new MockExportPort();
   const events: string[] = [];
-  const flow = new ExportFlow({ port, onProgress: (e) => events.push(e.stage) });
+  const flow = new ExportFlow({ port, onProgress: (e) => events.push(e.stage), t: enT });
   const out = await flow.run('custom', ['settings', 'plugins']);
 
   assert.equal(port.calls.length, 1);

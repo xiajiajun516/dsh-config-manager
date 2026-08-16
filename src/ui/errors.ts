@@ -3,9 +3,11 @@
  *
  * 绝不只有 "Something went wrong."：
  *  - 解析错误 → Reason + Suggested action（可操作）；
- *  - 输出前强制脱敏（redact），Secret 永不进入 UI/日志。
+ *  - 输出前强制脱敏（redact），Secret 永不进入 UI/日志；
+ *  - 文案经 UiT 注入（zh 源 / en 镜像，见 i18n.ts）。
  */
 import { redact } from '../security/redaction.ts';
+import { zhUiT, type UiT } from './i18n.ts';
 
 /** 可操作错误（UI 渲染为 Reason / Suggested action 两段） */
 export interface ActionableError {
@@ -26,58 +28,61 @@ interface ErrorRule {
   retryable: boolean;
 }
 
-const ERROR_RULES: readonly ErrorRule[] = [
-  {
-    match: (m) => /SETTINGS_CONFLICT|revision.*conflict/i.test(m),
-    title: '配置已被并发修改',
-    suggestedAction: '目标 DSH 的该配置在导入期间被其他进程修改，为避免覆盖请重新导出或手动核对后再试。',
-    retryable: true,
-  },
-  {
-    match: (m) => /ImportNotConfirmed|未确认/i.test(m),
-    title: '导入未确认',
-    suggestedAction: '请在预览页确认导入内容后重试。',
-    retryable: true,
-  },
-  {
-    match: (m) => /backup integrity|完整性校验失败|checksum/i.test(m),
-    title: '备份完整性校验失败',
-    suggestedAction: '备份文件可能已损坏或被篡改，请重新导出备份后再试。',
-    retryable: false,
-  },
-  {
-    match: (m) => /schema.*(不支持|超出)|无法导入|Unsupported/i.test(m),
-    title: '备份格式版本不受支持',
-    suggestedAction: '请升级 DSH Config Manager 或使用相同版本的备份文件。',
-    retryable: false,
-  },
-  {
-    match: (m) => /ENOENT|not found|无法读取|不存在/i.test(m),
-    title: '文件或路径不存在',
-    suggestedAction: '请检查文件路径是否正确、文件是否已被移动或删除。',
-    retryable: true,
-  },
-  {
-    match: (m) => /EACCES|permission|权限/i.test(m),
-    title: '权限不足',
-    suggestedAction: '请检查目标目录的读写权限后重试。',
-    retryable: true,
-  },
-  {
-    match: (m) => /install.*(plugin|插件)|needsRestart|重启/i.test(m),
-    title: '插件安装需要重启生效',
-    suggestedAction: '导入已完成，插件将在重启 DSH 后生效；请在 DSH Desktop 中重启服务。',
-    retryable: false,
-  },
-];
+function buildErrorRules(t: UiT): readonly ErrorRule[] {
+  return [
+    {
+      match: (m) => /SETTINGS_CONFLICT|revision.*conflict/i.test(m),
+      title: t('error.settingsConflict.title'),
+      suggestedAction: t('error.settingsConflict.action'),
+      retryable: true,
+    },
+    {
+      match: (m) => /ImportNotConfirmed|未确认/i.test(m),
+      title: t('error.notConfirmed.title'),
+      suggestedAction: t('error.notConfirmed.action'),
+      retryable: true,
+    },
+    {
+      match: (m) => /backup integrity|完整性校验失败|checksum/i.test(m),
+      title: t('error.integrity.title'),
+      suggestedAction: t('error.integrity.action'),
+      retryable: false,
+    },
+    {
+      match: (m) => /schema.*(不支持|超出)|无法导入|Unsupported|schemaUnsupported|无法导入/i.test(m),
+      title: t('error.schema.title'),
+      suggestedAction: t('error.schema.action'),
+      retryable: false,
+    },
+    {
+      match: (m) => /ENOENT|not found|无法读取|不存在|readFailed/i.test(m),
+      title: t('error.notFound.title'),
+      suggestedAction: t('error.notFound.action'),
+      retryable: true,
+    },
+    {
+      match: (m) => /EACCES|permission|权限/i.test(m),
+      title: t('error.permission.title'),
+      suggestedAction: t('error.permission.action'),
+      retryable: true,
+    },
+    {
+      match: (m) => /install.*(plugin|插件)|needsRestart|重启/i.test(m),
+      title: t('error.needsRestart.title'),
+      suggestedAction: t('error.needsRestart.action'),
+      retryable: false,
+    },
+  ];
+}
 
 /** 将任意错误转换为可操作错误（消息已脱敏，不泄漏 Secret） */
-export function toActionableError(err: unknown, opts?: { item?: string; fallbackTitle?: string }): ActionableError {
-  const raw = err instanceof Error ? err.message : String(err ?? '未知错误');
+export function toActionableError(err: unknown, opts?: { item?: string; fallbackTitle?: string; t?: UiT }): ActionableError {
+  const t = opts?.t ?? zhUiT;
+  const raw = err instanceof Error ? err.message : String(err ?? t('commonUnknownError'));
   const message = redact(raw);
-  const rule = ERROR_RULES.find((r) => r.match(message));
+  const rule = buildErrorRules(t).find((r) => r.match(message));
   return {
-    title: rule?.title ?? opts?.fallbackTitle ?? '操作失败',
+    title: rule?.title ?? opts?.fallbackTitle ?? t('error.fallback'),
     reason: message,
     suggestedAction: rule?.suggestedAction,
     item: opts?.item !== undefined ? redact(opts.item) : undefined,
@@ -86,10 +91,10 @@ export function toActionableError(err: unknown, opts?: { item?: string; fallback
 }
 
 /** 格式化为用户可读的多行文本（Reason / Suggested action） */
-export function formatActionableError(e: ActionableError): string {
+export function formatActionableError(e: ActionableError, t: UiT = zhUiT): string {
   const lines = [e.title];
-  lines.push(`Reason: ${e.reason}`);
-  if (e.suggestedAction) lines.push(`Suggested action: ${e.suggestedAction}`);
-  if (e.item) lines.push(`Item: ${e.item}`);
+  lines.push(`${t('error.reason')}: ${e.reason}`);
+  if (e.suggestedAction) lines.push(`${t('error.suggestedAction')}: ${e.suggestedAction}`);
+  if (e.item) lines.push(`${t('error.item')}: ${e.item}`);
   return lines.join('\n');
 }

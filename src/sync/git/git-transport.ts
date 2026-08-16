@@ -27,6 +27,8 @@ import type { SnapshotDirManifest } from '../layout.ts';
 import { computeSnapshotMeta } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
+import { zhMsg } from '../../core/messages.ts';
+import type { MsgFunc } from '../../core/messages.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -68,6 +70,8 @@ export interface GitTransportOptions {
   author?: GitAuthor;
   /** credential 用户名（GitHub PAT 用 oauth2），默认 'oauth2' */
   credentialUsername?: string;
+  /** 消息翻译器（缺省 zh） */
+  msg?: MsgFunc;
 }
 
 export class GitTransportError extends Error {
@@ -122,18 +126,20 @@ export class GitTransport implements SyncTransport {
   };
   private repoReady = false;
   private privateHint: boolean | null = null;
+  private readonly msg: MsgFunc;
 
   constructor(options: GitTransportOptions) {
     if (typeof options.repoUrl !== 'string' || options.repoUrl.length === 0) {
-      throw new GitTransportError('repoUrl 必须是非空字符串');
+      throw new GitTransportError(zhMsg('sync.git.repoUrlRequired'));
     }
     if (typeof options.workDir !== 'string' || options.workDir.length === 0) {
-      throw new GitTransportError('workDir 必须是非空字符串');
+      throw new GitTransportError(zhMsg('sync.git.workDirRequired'));
     }
     if (options.credentials === null || typeof options.credentials !== 'object'
       || typeof options.credentials.getToken !== 'function') {
-      throw new GitTransportError('credentials 必须提供 getToken()');
+      throw new GitTransportError(zhMsg('sync.git.credentialsRequired'));
     }
+    this.msg = options.msg ?? zhMsg;
     this.o = {
       repoUrl: options.repoUrl,
       workDir: options.workDir,
@@ -204,7 +210,7 @@ export class GitTransport implements SyncTransport {
     await this.pullFromRemote();
     const dir = this.snapshotDir(id);
     if (!(await createSnapshotFs().isDir(dir))) {
-      throw new GitTransportError(`快照 ${id} 不存在（本地工作副本 ${dir}）`);
+      throw new GitTransportError(this.msg('sync.git.snapshotMissing', { id, dir }));
     }
     return readSnapshotFromDir(dir);
   }
@@ -244,7 +250,7 @@ export class GitTransport implements SyncTransport {
       this.privateHint = true;
       return true;
     }
-    throw new GitTransportError(`仓库不可达或认证失败: ${this.mask(this.o.repoUrl, null)}`);
+    throw new GitTransportError(this.msg('sync.git.repoUnreachable', { url: this.mask(this.o.repoUrl, null) }));
   }
 
   /* ---------------- 内部实现 ---------------- */
@@ -259,7 +265,7 @@ export class GitTransport implements SyncTransport {
     }
     const entries = await fsx.readdir(this.o.workDir);
     if (entries.length > 0) {
-      throw new GitTransportError(`workDir 不是 git 仓库（缺少 .git）且目录非空，无法 clone: ${this.o.workDir}`);
+      throw new GitTransportError(this.msg('sync.git.workDirNotRepo', { dir: this.o.workDir }));
     }
     await this.runGit(['clone', this.o.repoUrl, '.'], { cwd: this.o.workDir, withCredential: true });
     // 仓库级提交身份（写入远端历史，可经 author 选项覆盖；不改全局配置）
@@ -275,7 +281,7 @@ export class GitTransport implements SyncTransport {
     const res = await this.runGit(['pull', '--ff-only'], { withCredential: true, allowNonZero: true });
     if (res.code === 0) return;
     if (/no tracking information/i.test(res.stderr)) return; // 无 upstream（初始状态）→ 跳过
-    throw new GitTransportError(`git pull 失败: ${this.mask(res.stderr, await this.readTokenOnce())}`);
+    throw new GitTransportError(this.msg('sync.git.pullFailed', { err: this.mask(res.stderr, await this.readTokenOnce()) }));
   }
 
   /** 执行 git 命令；withCredential=true 时注入 credential helper（token 不进 argv），失败时错误消息脱敏 */
@@ -297,7 +303,7 @@ export class GitTransport implements SyncTransport {
       const result = await this.o.exec(this.o.gitBin, [...extra, ...args], { cwd, timeoutMs: this.o.timeoutMs });
       if (result.code !== 0 && !opts.allowNonZero) {
         throw new GitTransportError(
-          this.mask(`git ${args.join(' ')} 失败 (exit ${result.code}): ${result.stderr}`, token),
+          this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) }),
         );
       }
       return result;
@@ -334,7 +340,7 @@ export class GitTransport implements SyncTransport {
       const u = new URL(this.o.repoUrl);
       return u.port ? `${u.hostname}:${u.port}` : u.hostname;
     } catch {
-      throw new GitTransportError(`无法解析 repoUrl（http(s) 仓库必须为合法 URL）: ${this.o.repoUrl}`);
+      throw new GitTransportError(this.msg('sync.git.repoUrlInvalid', { url: this.o.repoUrl }));
     }
   }
 
@@ -355,7 +361,7 @@ export class GitTransport implements SyncTransport {
 
   private assertSafeId(id: string): void {
     if (typeof id !== 'string' || !SAFE_ID_RE.test(id)) {
-      throw new GitTransportError(`非法快照 id: ${JSON.stringify(id)}（仅允许字母数字开头，字符限 . _ -）`);
+      throw new GitTransportError(this.msg('sync.git.invalidSnapshotId', { id: JSON.stringify(id) }));
     }
   }
 

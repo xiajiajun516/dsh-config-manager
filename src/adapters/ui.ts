@@ -4,6 +4,8 @@
  * localStorage 等 Host 不可迁移的 UI 状态以 uiMigrationNotes 纯说明形式导出（不含任何值）。
  */
 import type { NamespaceRecord, UiSection } from '../schema/types.ts';
+import { zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, PlanItem, ValidationResult,
@@ -87,19 +89,19 @@ export class UiAdapter implements ConfigAdapter<UiSection> {
     return applyNamespaceItem(item, 'ui', ctx);
   }
 
-  async validate(data: UiSection): Promise<ValidationResult> {
+  async validate(data: UiSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'ui 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'ui' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (data.namespaces === null || typeof data.namespaces !== 'object') {
-      issues.push({ path: 'namespaces', message: '缺少 namespaces 对象', severity: 'error' });
+      issues.push({ path: 'namespaces', message: msg('adapter.validate.missingObject', { subject: 'namespaces' }), severity: 'error' });
     }
     if (data.uiMigrationNotes !== undefined && !Array.isArray(data.uiMigrationNotes)) {
-      issues.push({ path: 'uiMigrationNotes', message: 'uiMigrationNotes 必须是数组', severity: 'error' });
+      issues.push({ path: 'uiMigrationNotes', message: msg('adapter.validate.array', { subject: 'uiMigrationNotes' }), severity: 'error' });
     }
     return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
   }

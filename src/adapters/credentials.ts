@@ -8,6 +8,8 @@
  * .credentials.yaml 文件字节交由 m4 加密层处理，本 adapter 不触碰。
  */
 import type { CredentialStatus, CredentialsSection } from '../schema/types.ts';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, PlanItem, ValidationResult,
@@ -89,7 +91,7 @@ export class CredentialsAdapter implements ConfigAdapter<CredentialsSection> {
           hasValue: false, // 值未导出（安全不变量）
         });
       } catch (err) {
-        warnings.push(`凭据 ${ref} 状态读取失败: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(msgOf(ctx)('adapter.credStatusReadFailed', { ref, reason: err instanceof Error ? err.message : String(err) }));
       }
     }
     return {
@@ -108,31 +110,31 @@ export class CredentialsAdapter implements ConfigAdapter<CredentialsSection> {
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
     const ref = item.target?.ref;
-    if (!ref) return { ok: false, message: '缺少 target.ref' };
+    if (!ref) return { ok: false, message: ctx.msg('adapter.missingTargetRef') };
     const value = ctx.secretInputs[ref] ?? ctx.decryptedCredentials?.get(ref);
-    if (value === undefined || value === '') return { ok: false, message: '凭据值未提供（需补录）' };
+    if (value === undefined || value === '') return { ok: false, message: ctx.msg('adapter.credentialValueMissing') };
     await ctx.target.credentials.set(ref, value);
     return { ok: true };
   }
 
-  async validate(data: CredentialsSection): Promise<ValidationResult> {
+  async validate(data: CredentialsSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'credentials 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'credentials' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (!Array.isArray(data.credentials)) {
-      issues.push({ path: 'credentials', message: 'credentials 必须是数组', severity: 'error' });
+      issues.push({ path: 'credentials', message: msg('adapter.validate.array', { subject: 'credentials' }), severity: 'error' });
     } else {
       for (const c of data.credentials) {
         if (c === null || typeof c !== 'object' || typeof c.ref !== 'string' || c.ref === '') {
-          issues.push({ path: 'credentials[]', message: '凭据记录必须含非空 ref', severity: 'error' });
+          issues.push({ path: 'credentials[]', message: msg('adapter.validate.credentialRef'), severity: 'error' });
         }
         if (c.hasValue === true) {
           // 安全不变量：普通导出恒不携带值；若备份声称有值，视为结构异常
-          issues.push({ path: `credentials.${c.ref}.hasValue`, message: '值未导出，hasValue 必须为 false', severity: 'error' });
+          issues.push({ path: `credentials.${c.ref}.hasValue`, message: msg('adapter.validate.hasValueFalse'), severity: 'error' });
         }
       }
     }

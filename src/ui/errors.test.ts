@@ -4,6 +4,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatActionableError, toActionableError } from './errors.ts';
+import { makeUiT } from './i18n.ts';
+
+const enT = makeUiT('en');
 
 test('errors: SETTINGS_CONFLICT 映射为可操作建议', () => {
   const e = toActionableError(new Error('SETTINGS_CONFLICT: llm-deepseek revision 12 != 14'));
@@ -35,9 +38,9 @@ test('errors: 带 item 的错误也脱敏', () => {
   assert.ok(!e.item!.includes('sk-zzz999'));
 });
 
-test('errors: formatActionableError 输出 Reason + Suggested action', () => {
-  const e = toActionableError(new Error('ENOENT: no such file'), { item: 'x.zip' });
-  const text = formatActionableError(e);
+test('errors: formatActionableError 输出 Reason + Suggested action（en）', () => {
+  const e = toActionableError(new Error('ENOENT: no such file'), { item: 'x.zip', t: enT });
+  const text = formatActionableError(e, enT);
   assert.ok(text.includes('Reason:'));
   assert.ok(text.includes('Suggested action:'));
   assert.ok(text.includes('Item:'));

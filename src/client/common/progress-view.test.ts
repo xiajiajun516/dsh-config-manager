@@ -14,6 +14,10 @@ import assert from 'node:assert/strict'
 
 import { computeProgressView } from './progress-view.ts'
 import type { RunProgress } from './progress-view.ts'
+import { makeUiT } from '../../ui/i18n.ts'
+
+const enT = makeUiT('en')
+const zhT = makeUiT('zh')
 
 test('m3-render: null 事件 → 空渲染模型', () => {
   const view = computeProgressView(null)
@@ -26,12 +30,14 @@ test('m3-render: null 事件 → 空渲染模型', () => {
 
 test('m3-render: 兼容路径 —— 普通 ProgressEvent 走原逻辑（阶段 + 百分比）', () => {
   const event: RunProgress = { stage: 'validating', step: 2, total: 4 }
-  const view = computeProgressView(event)
+  const view = computeProgressView(event, enT)
   assert.equal(view.label, 'Validating backup...')
   assert.equal(view.percent, 50)
   assert.equal(view.sectionBadge, null)
   assert.equal(view.countBadge, null)
   assert.equal(view.detail, null)
+  // zh 字典同样生效
+  assert.equal(computeProgressView(event, zhT).label, '正在校验备份…')
 })
 
 test('m3-render: 无 step/total → 不定态（percent null）', () => {

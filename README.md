@@ -37,6 +37,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
 | 🔄 | **Remote Sync** | Push/pull portable config via a private Git repo (secrets never sync) |
 | 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime |
+| 🌐 | **Bilingual UI** | Interface, reports and error details follow the DSH app language (中文 / English) |
 
 ---
 

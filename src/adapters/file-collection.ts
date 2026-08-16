@@ -8,6 +8,8 @@
  */
 import path from 'node:path';
 import { sha256Hex } from '../utils/hashing.ts';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection, SectionId } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -36,7 +38,7 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
       const relPath = this.baseDir === '' ? rel : rel.replace(new RegExp(`^${escapeRegExp(this.baseDir)}[\\/]`), '');
       files.push({ relativePath: relPath, data, contentHash: sha256Hex(data) });
     }
-    if (rels.length === 0) warnings.push(`${this.displayName} 目录为空或不存在`);
+    if (rels.length === 0) warnings.push(msgOf(ctx)('adapter.dirEmpty', { type: this.displayName }));
     return {
       sectionId: this.id,
       data: { version: 1, files },
@@ -46,6 +48,7 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
   }
 
   async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
     const items: PlanItem[] = [];
     for (const file of data.files) {
       const id = `${this.id}:${file.relativePath}`;
@@ -58,15 +61,15 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
       if (current === null) {
         items.push({
           id, kind: 'Create', adapter: this.id,
-          description: `创建${this.displayName}文件 ${file.relativePath}`, severity: 'info',
+          description: msg('adapter.fileCreate', { type: this.displayName, path: file.relativePath }), severity: 'info',
           target: { adapter: this.id, ref: file.relativePath },
         });
       } else if (sha256Hex(current) === file.contentHash) {
-        items.push({ id, kind: 'Skip', adapter: this.id, description: `文件 ${file.relativePath} 已一致`, severity: 'info' });
+        items.push({ id, kind: 'Skip', adapter: this.id, description: msg('adapter.fileSame', { path: file.relativePath }), severity: 'info' });
       } else {
         items.push({
           id, kind: 'Conflict', adapter: this.id,
-          description: `文件 ${file.relativePath} 内容不同`, severity: 'warning',
+          description: msg('adapter.fileDiff', { path: file.relativePath }), severity: 'warning',
           target: { adapter: this.id, ref: file.relativePath },
         });
       }
@@ -75,29 +78,30 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    const msg = ctx.msg;
     const ref = item.target?.ref;
-    if (!ref) return { ok: false, message: '缺少 target.ref' };
+    if (!ref) return { ok: false, message: msg('adapter.missingTargetRef') };
     const data = ctx.sections.get(this.id) as FilesSection | undefined;
     const file = data?.files.find((f) => f.relativePath === ref);
-    if (!file) return { ok: false, message: `导入数据缺少文件 ${ref}` };
+    if (!file) return { ok: false, message: msg('adapter.dataMissingFile', { ref }) };
     await ctx.target.fs.writeFile(path.join(this.baseDir, ref), file.data);
     return { ok: true };
   }
 
-  async validate(data: FilesSection): Promise<ValidationResult> {
+  async validate(data: FilesSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: '文件分区数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.fileSection'), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (!Array.isArray(data.files)) {
-      issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
+      issues.push({ path: 'files', message: msg('adapter.validate.array', { subject: 'files' }), severity: 'error' });
     } else {
       for (const f of data.files) {
         if (f === null || typeof f !== 'object' || typeof f.relativePath !== 'string' || f.relativePath === '') {
-          issues.push({ path: 'files[]', message: '文件记录必须含非空 relativePath', severity: 'error' });
+          issues.push({ path: 'files[]', message: msg('adapter.validate.fileRelativePath'), severity: 'error' });
         }
       }
     }

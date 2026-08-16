@@ -9,12 +9,13 @@ import type {
   ExecutedItem, ExportReport, ImportResult, RollbackReport,
 } from '../core/types.ts';
 import type { ImportResultAction, ImportSectionStat } from './types.ts';
+import { zhUiT, type UiT } from './i18n.ts';
 
 /* ---------------- §21 导出报告 ---------------- */
 
-export function renderExportReport(report: ExportReport): string {
-  const lines: string[] = ['Backup Created', ''];
-  lines.push('Included:');
+export function renderExportReport(report: ExportReport, t: UiT = zhUiT): string {
+  const lines: string[] = [t('report.backupCreated'), ''];
+  lines.push(t('report.included'));
   for (const { section, counts } of report.included) {
     const detail = Object.entries(counts)
       .map(([k, v]) => `${v} ${k}`)
@@ -23,17 +24,17 @@ export function renderExportReport(report: ExportReport): string {
   }
   lines.push('');
   if (report.excluded.length > 0) {
-    lines.push('Excluded:');
+    lines.push(t('report.excluded'));
     for (const s of report.excluded) lines.push(`  ○ ${s}`);
     lines.push('');
   }
-  lines.push('Security:');
-  lines.push(`  ✓ API Keys excluded: ${report.security.secretsExcluded ? 'yes' : 'no'}`);
-  lines.push(`  ✓ Contains secrets: ${report.security.containsSecrets ? 'yes (encrypted)' : 'no'}`);
-  lines.push(`  ✓ Encrypted: ${report.security.encrypted ? 'yes' : 'no'}`);
-  if (report.security.redactedHits > 0) lines.push(`  ⚠ ${report.security.redactedHits} sensitive field(s) redacted`);
+  lines.push(t('report.security'));
+  lines.push(`  ✓ ${t('report.apiKeysExcluded')} ${report.security.secretsExcluded ? t('report.yes') : t('report.no')}`);
+  lines.push(`  ✓ ${t('report.containsSecrets')} ${report.security.containsSecrets ? t('report.yesEncrypted') : t('report.no')}`);
+  lines.push(`  ✓ ${t('report.encrypted')} ${report.security.encrypted ? t('report.yes') : t('report.no')}`);
+  if (report.security.redactedHits > 0) lines.push(`  ⚠ ${t('report.redacted', { count: String(report.security.redactedHits) })}`);
   lines.push('');
-  lines.push(`File: ${report.file.name} (${formatBytes(report.file.sizeBytes)})`);
+  lines.push(`${t('report.file')} ${report.file.name} (${formatBytes(report.file.sizeBytes)})`);
   for (const w of report.warnings) lines.push(`  ⚠ ${w}`);
   return lines.join('\n');
 }
@@ -77,33 +78,33 @@ export function importSectionStats(executed: readonly ExecutedItem[]): ImportSec
 }
 
 /** 导入报告渲染（含回滚状态；§22 动作按钮由 suggestedActions 给出） */
-export function renderImportReport(result: ImportResult): string {
-  const lines: string[] = [result.ok ? 'Import Complete' : 'Import Failed', ''];
+export function renderImportReport(result: ImportResult, t: UiT = zhUiT): string {
+  const lines: string[] = [result.ok ? t('report.importComplete') : t('report.importFailed'), ''];
   const stats = importSectionStats(result.executed);
   for (const s of stats) {
     const parts: string[] = [];
-    if (s.ok > 0) parts.push(`✓ ${s.ok} imported/restored`);
-    if (s.skipped > 0) parts.push(`- ${s.skipped} skipped`);
-    if (s.warned > 0) parts.push(`⚠ ${s.warned} need attention`);
-    if (s.failed > 0) parts.push(`✗ ${s.failed} failed`);
-    lines.push(`${s.section}: ${parts.join(' ') || 'no changes'}`);
+    if (s.ok > 0) parts.push(`✓ ${s.ok} ${t('report.importedRestored')}`);
+    if (s.skipped > 0) parts.push(`- ${s.skipped} ${t('report.skipped')}`);
+    if (s.warned > 0) parts.push(`⚠ ${s.warned} ${t('report.needAttention')}`);
+    if (s.failed > 0) parts.push(`✗ ${s.failed} ${t('report.failed')}`);
+    lines.push(`${s.section}: ${parts.join(' ') || t('report.noChanges')}`);
     // 失败/警告项给出可操作原因（§23）
     for (const it of s.items) {
       if (it.status === 'failed' || it.status === 'warning') {
-        lines.push(`  ${it.status === 'failed' ? 'Reason' : 'Note'}: ${it.message ?? '未知原因'}`);
+        lines.push(`  ${it.status === 'failed' ? t('report.reason') : t('report.note')}: ${it.message ?? t('report.unknownReason')}`);
       }
     }
   }
   if (result.missingSecrets.length > 0) {
-    lines.push(`Secrets: ⚠ ${result.missingSecrets.length} credentials need to be entered`);
+    lines.push(`${t('report.secrets')} ⚠ ${t('report.credentialsNeedEntry', { count: String(result.missingSecrets.length) })}`);
   }
   if (result.needsRestart) {
-    lines.push('Restart required: 插件/MCP 变更将在重启 DSH 后生效');
+    lines.push(t('report.restartPluginsMcp'));
   }
   for (const w of result.warnings) lines.push(`⚠ ${w}`);
   if (result.rollback) {
     lines.push('');
-    lines.push(renderRollbackReport(result.rollback));
+    lines.push(renderRollbackReport(result.rollback, t));
   }
   return lines.join('\n');
 }
@@ -117,16 +118,16 @@ export function suggestedActions(_result: ImportResult): ImportResultAction[] {
 /* ---------------- §17 回滚报告 ---------------- */
 
 /** 回滚报告渲染（full / partial + 人工恢复清单） */
-export function renderRollbackReport(rr: RollbackReport): string {
+export function renderRollbackReport(rr: RollbackReport, t: UiT = zhUiT): string {
   if (rr.full) {
-    return 'Rollback: 已完整恢复导入前的配置。';
+    return t('report.rollbackFull');
   }
-  const lines = ['Rollback partially completed.'];
-  lines.push('These items may require manual recovery:');
+  const lines = [t('report.rollbackPartial')];
+  lines.push(t('report.rollbackManual'));
   for (const f of rr.failed) {
     lines.push(`  - ${f.item}: ${f.reason}${f.manualHint ? ` (${f.manualHint})` : ''}`);
   }
-  if (rr.restored.length > 0) lines.push(`Restored: ${rr.restored.length} item(s)`);
+  if (rr.restored.length > 0) lines.push(t('report.restored', { count: String(rr.restored.length) }));
   return lines.join('\n');
 }
 

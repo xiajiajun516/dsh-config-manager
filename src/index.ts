@@ -59,6 +59,8 @@ import * as yaml from 'js-yaml'
 import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
 import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
+import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
+import type { MsgFunc } from './core/messages.ts'
 import {
   hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins,
   resolveProfileDir, resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
@@ -92,7 +94,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.18'
+const PLUGIN_VERSION = '0.1.19'
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
@@ -243,6 +245,18 @@ async function writeRequestBodyToFile(req: IncomingMessage, dest: string, maxByt
 
 /* -------------------------------------------------------------- dsh version */
 
+/** 当前 DSH 应用语言（settings `locale` 命名空间的 preference；缺省 zh）。 */
+function resolveAppLanguage(ctx: Context): 'zh' | 'en' {
+  try {
+    const descriptors = ctx.settings.describe({ redactSecrets: true })
+    const locale = descriptors.find((d) => String(d.ns) === 'locale')
+    const pref = (locale?.value as { preference?: unknown } | undefined)?.preference
+    return pref === 'en' ? 'en' : 'zh'
+  } catch {
+    return 'zh'
+  }
+}
+
 /** Resolve the real DSH version from the profile dependency tree (read-only). */
 function resolveDshVersion(home: string): string {
   const candidates = [
@@ -374,6 +388,7 @@ export class DshPluginsFacade implements PluginsFacade {
   private readonly homeDir: string
   private readonly profile: string
   private readonly patchFile: PatchFileFacade
+  private readonly msg: MsgFunc
   private readonly runner: typeof runDshPlugin
 
   constructor(
@@ -381,11 +396,13 @@ export class DshPluginsFacade implements PluginsFacade {
     profile: string,
     patchFile: PatchFileFacade,
     runner: typeof runDshPlugin = runDshPlugin,
+    msg: MsgFunc = zhMsg,
   ) {
     this.homeDir = homeDir
     this.profile = profile
     this.patchFile = patchFile
     this.runner = runner
+    this.msg = msg
   }
 
   async listInstalled(): Promise<PluginInfo[]> {
@@ -405,9 +422,7 @@ export class DshPluginsFacade implements PluginsFacade {
       await ensureActivationRow(this.patchFile, join(profileDir, 'node_modules', pkg), pkg)
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
-      throw new Error(
-        `插件 ${pkg} 已安装，但激活行写入 profile 补丁失败：${reason}（重启后该插件可能未激活；修复后重试安装即可幂等补行）`,
-      )
+      throw new Error(this.msg('host.activationRowFailed', { pkg, reason }))
     }
     return { needsRestart: true }
   }
@@ -416,9 +431,11 @@ export class DshPluginsFacade implements PluginsFacade {
 /** Workspace facade over the real ctx.workspaceRegistry. */
 class DshWorkspaceFacade implements WorkspaceFacade {
   private readonly ctx: Context
+  private readonly msg: MsgFunc
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, msg: MsgFunc = zhMsg) {
     this.ctx = ctx
+    this.msg = msg
   }
 
   private registry(): { list(): { id: unknown; path: string; title: string; sessionIds: readonly unknown[]; createdAt: string; updatedAt: string }[]; get(id: unknown): { title: string; setTitle(title: string): Promise<void> } | undefined; create(path: string, title?: string): Promise<unknown>; delete(id: unknown): Promise<boolean> } | undefined {
@@ -440,7 +457,7 @@ class DshWorkspaceFacade implements WorkspaceFacade {
 
   async writeRecord(record: WorkspaceRecord): Promise<void> {
     const registry = this.registry()
-    if (!registry) throw new Error('workspaceRegistry 服务不可用，无法写入工作区')
+    if (!registry) throw new Error(this.msg('host.workspaceUnavailable'))
     const existing = registry.get(record.id as unknown as WorkspaceId)
     if (existing) {
       // DSH API 没有「整体覆盖」写通道：标题可更新；path/会话由 registry 依真实目录维护
@@ -465,16 +482,18 @@ const PROFILE_PATCH_FILE = 'cordis.patch.yml'
 class DshPatchFileFacade implements PatchFileFacade {
   private readonly homeDir: string
   private readonly profile: string
+  private readonly msg: MsgFunc
 
-  constructor(homeDir: string, profile: string) {
+  constructor(homeDir: string, profile: string, msg: MsgFunc = zhMsg) {
     this.homeDir = homeDir
     this.profile = profile
+    this.msg = msg
   }
 
   private patchPath(file: string): string {
     if (file === USER_PATCH_FILE) return join(this.homeDir, USER_PATCH_FILE)
     if (file === PROFILE_PATCH_FILE) return join(this.homeDir, 'profiles', this.profile, PROFILE_PATCH_FILE)
-    throw new Error(`dsh-config-manager 仅支持管理 ${USER_PATCH_FILE} 与 profile 的 ${PROFILE_PATCH_FILE}（收到 ${file}）`)
+    throw new Error(this.msg('host.patchUnsupported', { user: USER_PATCH_FILE, profile: PROFILE_PATCH_FILE, file }))
   }
 
   async readPatchLines(file: string): Promise<{ lineId: string; raw: unknown }[]> {
@@ -581,14 +600,16 @@ class DshPatchFileFacade implements PatchFileFacade {
 /** File facade over $DSH_HOME, confined to the home root. */
 class DshFileSystemFacade implements FileSystemFacade {
   private readonly homeDir: string
+  private readonly msg: MsgFunc
 
-  constructor(homeDir: string) {
+  constructor(homeDir: string, msg: MsgFunc = zhMsg) {
     this.homeDir = homeDir
+    this.msg = msg
   }
 
   private abs(relPath: string): string {
     const target = resolve(isAbsolute(relPath) ? relPath : join(this.homeDir, relPath))
-    if (!isSameOrChild(target, this.homeDir)) throw new Error(`路径越界: ${relPath}`)
+    if (!isSameOrChild(target, this.homeDir)) throw new Error(this.msg('host.fsPathEscape', { path: relPath }))
     return target
   }
 
@@ -658,6 +679,7 @@ class ConfigManagerHostContext implements HostContext {
   readonly dshVersion: string
   readonly profile: string
   readonly log: Logger
+  readonly msg: MsgFunc
   readonly settings: SettingsFacade
   readonly credentials: CredentialsFacade
   readonly plugins: PluginsFacade
@@ -669,16 +691,17 @@ class ConfigManagerHostContext implements HostContext {
     this.homeDir = homeDir
     this.dshVersion = resolveDshVersion(homeDir)
     this.profile = profile
+    this.msg = makeMsg(resolveAppLanguage(ctx))
     const level = process.env.DSH_CONFIG_MANAGER_LOG_LEVEL
     this.log = createLogger({
       level: level === 'debug' || level === 'info' || level === 'warn' || level === 'error' ? level : 'info',
     })
     this.settings = new DshSettingsFacade(ctx)
     this.credentials = new DshCredentialsFacade(ctx)
-    this.patchFile = new DshPatchFileFacade(homeDir, profile)
-    this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile)
-    this.workspace = new DshWorkspaceFacade(ctx)
-    this.fs = new DshFileSystemFacade(homeDir)
+    this.patchFile = new DshPatchFileFacade(homeDir, profile, this.msg)
+    this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile, undefined, this.msg)
+    this.workspace = new DshWorkspaceFacade(ctx, this.msg)
+    this.fs = new DshFileSystemFacade(homeDir, this.msg)
   }
 }
 
@@ -816,7 +839,7 @@ export function buildRestoreBody(body: unknown): BuildRestoreBodyResult {
     return { ok: false, error: 'snapshotId is required' }
   }
   if (snapshotId === '.' || snapshotId === '..' || snapshotId.includes('/') || snapshotId.includes('\\')) {
-    return { ok: false, error: 'snapshotId 非法（禁止路径分隔符）/ invalid snapshotId' }
+    return { ok: false, error: zhMsg('restore.invalidSnapshotId') }
   }
   return { ok: true, value: { snapshotId, dryRun: record['dryRun'] === true } }
 }
@@ -913,7 +936,7 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
   return {
     readBlob: async (blobPath) => {
       const target = resolve(snapshotDir, blobPath)
-      if (!isSameOrChild(target, snapshotDir)) throw new Error(`blob 路径越界: ${blobPath}`)
+      if (!isSameOrChild(target, snapshotDir)) throw new Error(msgOf(host)('host.restoreBlobEscape', { blob: blobPath }))
       return fs.readFile(target)
     },
     savePreRestore: async (relPath) => {
@@ -930,8 +953,8 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
       const result = await runDshPlugin(profileDir, profile, ['remove', name])
       if (result.exitCode === 0) return { ok: true }
       const output = `${result.stderr}\n${result.stdout}`.trim()
-      const tail = output.split('\n').slice(-8).join('\n') || '无输出'
-      return { ok: false, message: `dsh plugin remove ${name} 失败（exit ${String(result.exitCode)}）：${tail}` }
+      const tail = output.split('\n').slice(-8).join('\n') || msgOf(host)('host.restoreNoOutput')
+      return { ok: false, message: msgOf(host)('host.restoreUninstallFailed', { name, code: String(result.exitCode), tail }) }
     },
   }
 }
@@ -944,6 +967,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
   /** m-github-oauth：宿主侧设备码登记表 + auth 客户端（进程生命周期；device_code 只存内存） */
   const githubFlows = new DeviceFlowStore()
   const githubAuth = new GitHubAuthClient()
+  const msg = host.msg
 
   const makeImporter = (): Importer => new Importer({
     ctx: host,
@@ -951,6 +975,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
     snapshotStore: new FileSnapshotStore({ dir: snapshotsDir }),
     parseZipOverride: createHardenedZipParser(),
     dependencyChecker: dependencyAvailable,
+    msg,
   })
 
   /** Fence + method guard (mirrors dsh-ssh). */
@@ -1004,6 +1029,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         },
       },
       gitBin,
+      msg,
     })
     return new SyncEngine({
       ctx: host,
@@ -1013,7 +1039,8 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
       importer: makeImporter(),
       localSnapshotsDir: join(syncDir, 'snapshots'),
       zipDir: tmpDir,
-    })
+      msg,
+    });
   }
 
   return [
@@ -1079,7 +1106,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           const result = await withTimeout(
             exporter.export({ includeSecrets, only, outPath }),
             ROUTE_TIMEOUT_MS,
-            '导出超时（5 分钟）：导出过程未完成，请重试；若反复超时请检查 profile 依赖状态',
+            msg('host.exportTimeout'),
           )
           // 结束写结果：完成结果落账（供 /progress 查询与刷新恢复后下载）
           runs.finish(runId, { zipPath: result.zipPath, manifest: result.manifest, report: result.report })
@@ -1220,7 +1247,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
         const state = runs.get(runId)
         if (state === undefined) {
-          writeJson(res, 404, { error: `run ${runId} not found（可能已过保留期被清理）` })
+          writeJson(res, 404, { error: msg('run.notFound', { runId }) })
           return
         }
         writeJson(res, 200, state)
@@ -1336,6 +1363,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           homeDir: host.homeDir,
           profile: host.profile,
           settingsPath: undefined,
+          msg,
         }
         try {
           if (dryRun) {
@@ -1400,7 +1428,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           const report = await withTimeout(
             engine.push(snapshotId === undefined ? {} : { snapshotId }),
             ROUTE_TIMEOUT_MS,
-            '同步推送超时（5 分钟）：请检查网络与仓库可达性后重试',
+            msg('host.syncPushTimeout'),
           )
           await writeSyncConfig(syncDir, { repoUrl, gitBin })
           writeJson(res, 200, report)
@@ -1432,7 +1460,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           const report = await withTimeout(
             engine.pull({ strategy, ...(snapshotId === undefined ? {} : { snapshotId }) }),
             ROUTE_TIMEOUT_MS,
-            '同步拉取超时（5 分钟）：请检查网络与仓库可达性后重试',
+            msg('host.syncPullTimeout'),
           )
           await writeSyncConfig(syncDir, { repoUrl, gitBin })
           writeJson(res, 200, report)
@@ -1452,7 +1480,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         if (!guard(req, res, 'POST')) return
         if (githubClientId === undefined || githubClientId === '') {
           writeJson(res, 400, {
-            error: '未配置 GitHub OAuth client_id：请在插件配置中设置 githubClientId（GitHub → Settings → Developer settings → OAuth Apps 注册应用获取）',
+            error: msg('host.githubMissingClientId'),
           })
           return
         }
@@ -1496,7 +1524,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
         const flow = githubFlows.get(flowId)
         if (flow === undefined) {
-          writeJson(res, 400, { error: 'GitHub 登录流程不存在或已过期，请重新开始' })
+          writeJson(res, 400, { error: msg('host.githubFlowGone') })
           return
         }
         try {
@@ -1592,7 +1620,7 @@ export function apply(ctx: Context, config?: Config): void {
     exportsDir,
     tmpDir,
     snapshotsDir,
-    runs: new RunRegistry(),
+    runs: new RunRegistry({ msg: host.msg }),
     syncDir,
     credentials: ctx.credentials,
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,

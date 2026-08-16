@@ -5,6 +5,8 @@
  */
 import { sha256Hex } from '../utils/hashing.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
@@ -70,7 +72,7 @@ export function hashSection(data: SectionData): string {
 }
 
 /** 读取同步状态；文件不存在 → 返回缺省空状态（从未同步） */
-export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapshotFs()): Promise<SyncState> {
+export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapshotFs(), msg: MsgFunc = zhMsg): Promise<SyncState> {
   const file = joinFs(dir, SYNC_STATE_FILE);
   if (!(await fsx.exists(file))) {
     return { schemaVersion: SYNC_STATE_SCHEMA_VERSION, lastSyncAt: '', sections: {} };
@@ -78,26 +80,26 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
   const raw = Buffer.from(await fsx.readFile(file)).toString('utf8');
   const parsed = parseJsonSafe(raw);
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('sync-state.json 损坏：必须是对象');
+    throw new Error(msg('sync.state.notObject'));
   }
   const obj = parsed as Record<string, unknown>;
   if (obj['schemaVersion'] !== SYNC_STATE_SCHEMA_VERSION) {
-    throw new Error(`sync-state.json schemaVersion 不支持: ${String(obj['schemaVersion'])}（期望 ${SYNC_STATE_SCHEMA_VERSION}）`);
+    throw new Error(msg('sync.state.schemaUnsupported', { version: String(obj['schemaVersion']), expected: String(SYNC_STATE_SCHEMA_VERSION) }));
   }
   if (typeof obj['lastSyncAt'] !== 'string') {
-    throw new Error('sync-state.json 损坏：lastSyncAt 必须是字符串');
+    throw new Error(msg('sync.state.lastSyncAt'));
   }
   if (obj['sections'] === null || typeof obj['sections'] !== 'object' || Array.isArray(obj['sections'])) {
-    throw new Error('sync-state.json 损坏：sections 必须是对象');
+    throw new Error(msg('sync.state.sections'));
   }
   const sections: SyncState['sections'] = {};
   for (const [sid, rec] of Object.entries(obj['sections'] as Record<string, unknown>)) {
     if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) {
-      throw new Error(`sync-state.json 损坏：分区 ${sid} 记录必须是对象`);
+      throw new Error(msg('sync.state.sectionRecord', { section: sid }));
     }
     const r = rec as Record<string, unknown>;
     if (typeof r['hash'] !== 'string' || typeof r['updatedAt'] !== 'string') {
-      throw new Error(`sync-state.json 损坏：分区 ${sid} 记录必须含字符串 hash/updatedAt`);
+      throw new Error(msg('sync.state.sectionFields', { section: sid }));
     }
     sections[sid as SectionId] = { hash: r['hash'], updatedAt: r['updatedAt'] };
   }
@@ -109,7 +111,7 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
   const t = obj['transport'];
   if (t !== undefined) {
     if (t === null || typeof t !== 'object' || typeof (t as Record<string, unknown>)['type'] !== 'string' || typeof (t as Record<string, unknown>)['ref'] !== 'string') {
-      throw new Error('sync-state.json 损坏：transport 必须含字符串 type/ref');
+      throw new Error(msg('sync.state.transport'));
     }
     state.transport = { type: (t as { type: string }).type, ref: (t as { ref: string }).ref };
   }

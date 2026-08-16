@@ -7,7 +7,11 @@ import {
   formatBytes, importSectionStats, renderExportReport, renderImportReport,
   renderRollbackReport, sectionFromItemId, suggestedActions,
 } from './report.ts';
+import { makeUiT } from './i18n.ts';
 import { makeExportReport, makeImportResult, makeRollbackReport } from './test-helpers.ts';
+
+const enT = makeUiT('en');
+const zhT = makeUiT('zh');
 
 test('report: sectionFromItemId 前缀推断', () => {
   assert.equal(sectionFromItemId('settings:general'), 'settings');
@@ -24,15 +28,17 @@ test('report: sectionFromItemId 前缀推断', () => {
   assert.equal(sectionFromItemId('unknown'), 'other');
 });
 
-test('report: 导出报告含 Included/Excluded/Security/File', () => {
-  const text = renderExportReport(makeExportReport());
-  assert.ok(text.includes('Backup Created'));
-  assert.ok(text.includes('✓ settings'));
-  assert.ok(text.includes('8 plugins'));
-  assert.ok(text.includes('○ sessions'));
-  assert.ok(text.includes('API Keys excluded: yes'));
-  assert.ok(text.includes('File: dsh-config-2026-08-14.zip'));
-  assert.ok(text.includes('2 sensitive field(s) redacted'));
+test('report: 导出报告含 Included/Excluded/Security/File（en / zh）', () => {
+  const enText = renderExportReport(makeExportReport(), enT);
+  assert.ok(enText.includes('Backup Created'));
+  assert.ok(enText.includes('✓ settings'));
+  assert.ok(enText.includes('8 plugins'));
+  assert.ok(enText.includes('○ sessions'));
+  assert.ok(enText.includes('API Keys excluded: yes'));
+  assert.ok(enText.includes('File: dsh-config-2026-08-14.zip'));
+  assert.ok(enText.includes('2 sensitive field(s) redacted'));
+  const zhText = renderExportReport(makeExportReport(), zhT);
+  assert.ok(zhText.includes('备份已创建'));
 });
 
 test('report: 导入报告分节统计', () => {
@@ -47,15 +53,15 @@ test('report: 导入报告分节统计', () => {
   assert.equal(secrets.skipped, 1);
 });
 
-test('report: 导入报告渲染含分节/重启/缺失 secret', () => {
-  const text = renderImportReport(makeImportResult());
+test('report: 导入报告渲染含分节/重启/缺失 secret（en）', () => {
+  const text = renderImportReport(makeImportResult(), enT);
   assert.ok(text.includes('Import Complete'));
-  assert.ok(text.includes('settings: ✓ 2 imported'));
-  assert.ok(text.includes('Secrets: ⚠ 1 credentials need to be entered'));
-  assert.ok(text.includes('Restart required'));
+  assert.ok(text.includes('settings: ✓ 2 imported/restored'));
+  assert.ok(text.includes('Secrets: ⚠ 1 credential(s) need to be entered'));
+  assert.ok(text.includes('Plugin / MCP changes take effect'));
 });
 
-test('report: 失败导入渲染 Import Failed + 回滚报告', () => {
+test('report: 失败导入渲染 Import Failed + 回滚报告（en）', () => {
   const result = makeImportResult({
     ok: false,
     executed: [
@@ -64,18 +70,20 @@ test('report: 失败导入渲染 Import Failed + 回滚报告', () => {
     ],
     rollback: makeRollbackReport(),
   });
-  const text = renderImportReport(result);
+  const text = renderImportReport(result, enT);
   assert.ok(text.includes('Import Failed'));
   assert.ok(text.includes('Rollback partially completed.'));
   assert.ok(text.includes('manual recovery'));
   assert.ok(text.includes('npx not found'));
 });
 
-test('report: 回滚报告 full / partial', () => {
-  assert.ok(renderRollbackReport({ full: true, restored: [], failed: [] }).includes('完整恢复'));
-  const partial = renderRollbackReport(makeRollbackReport());
+test('report: 回滚报告 full / partial（zh 缺省 + en）', () => {
+  assert.ok(renderRollbackReport({ full: true, restored: [], failed: [] }, zhT).includes('已完整恢复'));
+  const partial = renderRollbackReport(makeRollbackReport(), enT);
   assert.ok(partial.includes('Rollback partially completed.'));
-  assert.ok(partial.includes('请手动安装'));
+  assert.ok(partial.includes('manual recovery'));
+  const partialZh = renderRollbackReport(makeRollbackReport(), zhT);
+  assert.ok(partialZh.includes('请手动'));
 });
 
 test('report: suggestedActions 仅「完成」（报告已内联全部详情，无空操作按钮）', () => {

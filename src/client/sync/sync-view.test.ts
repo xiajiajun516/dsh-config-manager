@@ -8,17 +8,18 @@ import assert from 'node:assert/strict'
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts'
 import {
-  PRIVATE_REPO_HINT, computeGithubLoginView, computeSyncButtons, computeSyncStatus, formatDateTime,
-  formatLastSync, githubPollMessage, kindLabel, pullReportView, pushReportView, severityLabel,
+  computeGithubLoginView, computeSyncButtons, computeSyncStatus, formatDateTime,
+  formatLastSync, githubPollMessage, kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
   summarizePullChanges,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
 
 test('sync-view: 私有仓库强制提示文案存在且强调私有', () => {
-  assert.match(PRIVATE_REPO_HINT, /私有/)
-  assert.match(PRIVATE_REPO_HINT, /public/)
-  assert.match(PRIVATE_REPO_HINT, /token/)
+  const hint = privateRepoHint()
+  assert.match(hint, /私有/)
+  assert.match(hint, /public/)
+  assert.match(hint, /token/)
 })
 
 /* ---------------------------------------------------------------- 按钮状态 */

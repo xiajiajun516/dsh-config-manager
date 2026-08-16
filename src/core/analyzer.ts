@@ -21,6 +21,8 @@ import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
 import { createSnapshot } from './backup.ts';
 import { rollback } from './rollback.ts';
 import { computeCompatibility } from './validator.ts';
+import { msgOf } from './messages.ts';
+import type { MsgFunc } from './messages.ts';
 import {
   ImportNotConfirmedError, type ApplyResult, type ConfigAdapter, type ExecutedItem,
   type HostContext, type ImportAnalysis, type ImportContext, type ImportDecisions,
@@ -52,6 +54,8 @@ export interface AnalyzerOptions {
   dependencyChecker?: (command: string) => Promise<boolean>;
   /** m4 可注入强化版 ZIP 安全解析 */
   parseZipOverride?: (buf: Uint8Array, limits?: ZipSafetyLimits) => ZipArchive;
+  /** 消息翻译器（缺省 ctx.msg ?? zh） */
+  msg?: MsgFunc;
 }
 
 interface Bundle {
@@ -87,6 +91,7 @@ export class Analyzer {
   private readonly limits?: ZipSafetyLimits;
   private readonly dependencyChecker?: (command: string) => Promise<boolean>;
   private readonly parseZipFn: (buf: Uint8Array, limits?: ZipSafetyLimits) => ZipArchive;
+  private readonly msg: MsgFunc;
   /** 会话内 bundle 缓存（zipPath → 解析结果），避免重复解压 */
   private readonly bundleCache = new Map<string, Bundle>();
 
@@ -97,6 +102,7 @@ export class Analyzer {
     this.limits = opts.limits;
     this.dependencyChecker = opts.dependencyChecker;
     this.parseZipFn = opts.parseZipOverride ?? parseZip;
+    this.msg = opts.msg ?? msgOf(opts.ctx);
   }
 
   /* ---------------- 第 1-6 步：ZIP 读入 → 安全解析 → manifest → 完整性 → schema ---------------- */
@@ -110,18 +116,18 @@ export class Analyzer {
     try {
       raw = await fs.readFile(zipPath);
     } catch (err) {
-      throw new Error(`无法读取备份文件 "${zipPath}": ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(this.msg('import.readFailed', { zip: zipPath, reason: err instanceof Error ? err.message : String(err) }));
     }
     // 2. 校验 ZIP（安全解析：条目名/数量/体积上限）
     const archive = this.parseZipFn(raw, this.limits);
 
     // 3. manifest
-    if (!archive.has(MANIFEST_FILE)) throw new Error('备份缺少 manifest.json，不是有效的 DSH Config Manager 备份');
+    if (!archive.has(MANIFEST_FILE)) throw new Error(this.msg('import.noManifest'));
     let manifest: Manifest;
     try {
       manifest = parseManifest(archive.readEntryText(MANIFEST_FILE));
     } catch (err) {
-      throw new Error(`manifest.json 解析失败: ${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(this.msg('import.manifestParseFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
 
     // 4. 完整性（integrity/checksums.json 逐一 SHA-256）
@@ -142,13 +148,15 @@ export class Analyzer {
       const result = await verifyAgainstTable(entries, table);
       checksums = result;
       if (!checksums.ok) {
-        throw new Error(`备份完整性校验失败: ${[...checksums.mismatches, ...checksums.missing].map((m) => `"${m}"`).join(', ')}`);
+        throw new Error(this.msg('import.integrityFailed', {
+          entries: [...checksums.mismatches, ...checksums.missing].map((m) => `"${m}"`).join(', '),
+        }));
       }
     }
 
     // 5. schema 版本判定（集中）
     if (!isSupported(manifest.schemaVersion)) {
-      throw new Error(`备份 ${describeVersion(manifest.schemaVersion)}，无法导入（当前支持 v${1}）`);
+      throw new Error(this.msg('import.schemaUnsupported', { version: describeVersion(manifest.schemaVersion) }));
     }
 
     // 6. 扫描：可执行文件条目 → 警告（不执行）
@@ -156,7 +164,7 @@ export class Analyzer {
     for (const name of archive.names()) {
       const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
       if (EXECUTABLE_EXTENSIONS.has(ext)) {
-        zipWarnings.push(`备份包含可执行文件 "${name}"，本插件不会执行它`);
+        zipWarnings.push(this.msg('import.executableWarning', { name }));
       }
     }
 
@@ -192,12 +200,12 @@ export class Analyzer {
       try {
         data = archive.readEntryJson(jsonPath);
       } catch (err) {
-        throw new Error(`分区 ${sectionId} 数据解析失败: ${err instanceof Error ? err.message : String(err)}`);
+        throw new Error(this.msg('import.sectionParseFailed', { section: sectionId, reason: err instanceof Error ? err.message : String(err) }));
       }
       const issues = validateSectionData(sectionId, data);
       const errors = issues.filter((i) => i.severity === 'error');
       if (errors.length > 0) {
-        throw new Error(`分区 ${sectionId} 数据无效: ${errors.map((e) => e.message).join('; ')}`);
+        throw new Error(this.msg('import.sectionInvalid', { section: sectionId, issues: errors.map((e) => e.message).join('; ') }));
       }
       sections.set(sectionId, data);
     }
@@ -217,6 +225,7 @@ export class Analyzer {
       resolutions: {},
       secretInputs: {},
       log: this.ctx.log,
+      msg: this.msg,
     };
 
     const adapterItems: PlanItem[] = [];
@@ -225,15 +234,15 @@ export class Analyzer {
       const data = sections.get(adapter.id);
       if (data === undefined) continue;
       try {
-        const v = await adapter.validate(data);
+        const v = await adapter.validate(data, this.msg);
         for (const issue of v.issues) {
-          if (issue.severity === 'error') adapterIssues.push(`${adapter.id}: ${issue.message}`);
+          if (issue.severity === 'error') adapterIssues.push(this.msg('import.adapterValidationIssue', { adapter: adapter.id, message: issue.message }));
         }
         if (!v.valid) continue;
         const items = await adapter.analyzeImport(data, importCtx);
         adapterItems.push(...items);
       } catch (err) {
-        adapterIssues.push(`${adapter.id}: 分析失败 ${err instanceof Error ? err.message : String(err)}`);
+        adapterIssues.push(this.msg('import.adapterAnalyzeFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
       }
     }
 
@@ -250,7 +259,7 @@ export class Analyzer {
     const errors = [...analyzed.adapterIssues];
     const warnings = [...zipWarnings];
     if (!canImport(manifest.schemaVersion)) {
-      errors.push(`${describeVersion(manifest.schemaVersion)}：无法导入`);
+      errors.push(this.msg('import.versionUnsupported', { version: describeVersion(manifest.schemaVersion) }));
     }
 
     // 兼容性（第 6 步）
@@ -259,7 +268,7 @@ export class Analyzer {
       .filter(([id, on]) => on && !analyzed.sections.has(id))
       .map(([id]) => id);
     if (missingSections.length > 0) {
-      warnings.push(`备份声明了但缺少的分区: ${missingSections.join(', ')}`);
+      warnings.push(this.msg('import.missingSections', { sections: missingSections.join(', ') }));
     }
     const compatibility = computeCompatibility({
       sourceDsh: manifest.source.dshVersion,
@@ -339,13 +348,14 @@ export class Analyzer {
       resolutions: decisions.resolutions,
       secretInputs: {},
       log: this.ctx.log,
+      msg: this.msg,
     };
 
-    const items = analyzed.adapterItems.map((item) => applyItemResolution(item, decisions));
+    const items = analyzed.adapterItems.map((item) => applyItemResolution(item, decisions, this.msg));
     const planMappings = mergePathMappings(items, decisions.pathMappings);
 
     // MissingSecret：兜底——credentialsStatus 分区里已配置的凭据若没有对应计划项，补占位
-    ensureMissingSecrets(items, analyzed.sections);
+    ensureMissingSecrets(items, analyzed.sections, this.msg);
 
     const missingSecrets = items
       .filter((i) => i.kind === 'MissingSecret')
@@ -389,7 +399,7 @@ export class Analyzer {
 
     // 10. 用户确认（安全阀：不确认绝不动数据）
     if (opts.confirm !== true) {
-      throw new ImportNotConfirmedError();
+      throw new ImportNotConfirmedError(this.msg);
     }
 
     const importCtx: ImportContext = {
@@ -402,6 +412,7 @@ export class Analyzer {
       secretInputs: opts.secretInputs ?? {},
       decryptedCredentials: opts.decryptedCredentials,
       log: this.ctx.log,
+      msg: this.msg,
     };
 
     // 11. 快照（强制：导入前必须先备份将被修改的目标）
@@ -485,12 +496,12 @@ export class Analyzer {
       const data = analyzed.sections.get(adapter.id);
       if (data === undefined) continue;
       try {
-        const v = await adapter.validate(data);
+        const v = await adapter.validate(data, this.msg);
         for (const issue of v.issues) {
-          if (issue.severity === 'error') warnings.push(`导入后校验 ${adapter.id}: ${issue.message}`);
+          if (issue.severity === 'error') warnings.push(this.msg('import.postValidationIssue', { adapter: adapter.id, message: issue.message }));
         }
       } catch (err) {
-        warnings.push(`导入后校验 ${adapter.id} 失败: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(this.msg('import.postValidationFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
       }
     }
 
@@ -543,7 +554,7 @@ export class Analyzer {
       const ref = item.id.replace(/^secret:/, '');
       const value = ctx.decryptedCredentials?.get(ref) ?? ctx.secretInputs[ref];
       if (value === undefined || value === '') {
-        return { executed: { itemId: item.id, status: 'skipped', message: '凭据未提供，需补录' }, needsRestart: false };
+        return { executed: { itemId: item.id, status: 'skipped', message: this.msg('import.secretNotProvided') }, needsRestart: false };
       }
       // 补录值只经 adapter.applyItem 写入（m5 实现），引擎不直接触碰凭据
     }
@@ -585,21 +596,21 @@ async function verifyAgainstTable(
 }
 
 /** 应用用户冲突决策 + 全局策略（纯函数，返回新数组） */
-function applyItemResolution(item: PlanItem, decisions: ImportDecisions): PlanItem {
+function applyItemResolution(item: PlanItem, decisions: ImportDecisions, msg: MsgFunc): PlanItem {
   if (item.kind !== 'Conflict') return item;
   const resolution = decisions.resolutions[item.id];
   if (resolution === 'keepCurrent') {
-    return { ...item, kind: 'Skip', severity: 'info', detail: `${item.detail ?? ''}（用户选择保留当前）` };
+    return { ...item, kind: 'Skip', severity: 'info', detail: `${item.detail ?? ''}${msg('import.conflictKeepCurrent')}` };
   }
   if (resolution === 'useImported') {
     return { ...item, kind: 'Update', severity: 'info', conflict: { itemId: item.id, resolution } };
   }
   // review / 未决策：按全局策略兜底
   if (decisions.strategy === 'skipExisting') {
-    return { ...item, kind: 'Skip', severity: 'info', detail: `${item.detail ?? ''}（skipExisting 策略）` };
+    return { ...item, kind: 'Skip', severity: 'info', detail: `${item.detail ?? ''}${msg('import.conflictSkipExisting')}` };
   }
   if (decisions.strategy === 'replace') {
-    return { ...item, kind: 'Update', severity: 'info', detail: `${item.detail ?? ''}（replace 策略）` };
+    return { ...item, kind: 'Update', severity: 'info', detail: `${item.detail ?? ''}${msg('import.conflictReplace')}` };
   }
   return item; // merge + 未决策 → 保持 Conflict，由报告列明
 }
@@ -668,7 +679,7 @@ function judgePath(p: string, sourcePlatform: string, targetPlatform: string): P
 }
 
 /** MissingSecret 兜底：credentialsStatus 分区已配置凭据若无对应计划项，补占位 */
-function ensureMissingSecrets(items: PlanItem[], sections: Map<SectionId, unknown>): void {
+function ensureMissingSecrets(items: PlanItem[], sections: Map<SectionId, unknown>, msg: MsgFunc): void {
   const creds = sections.get('credentialsStatus') as { credentials?: { ref?: string; configured?: boolean }[] } | undefined;
   if (!creds?.credentials) return;
   const existing = new Set(items.filter((i) => i.kind === 'MissingSecret').map((i) => i.id));
@@ -680,7 +691,7 @@ function ensureMissingSecrets(items: PlanItem[], sections: Map<SectionId, unknow
       id,
       kind: 'MissingSecret',
       adapter: 'credentialsStatus',
-      description: `凭据 ${c.ref} 需要补录`,
+      description: msg('import.secretMissingDesc', { ref: c.ref }),
       severity: 'warning',
       target: { adapter: 'credentialsStatus', ref: c.ref },
     });

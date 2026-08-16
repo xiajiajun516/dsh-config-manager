@@ -10,6 +10,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 
 export const SYNC_CONFIG_FILE = 'sync-config.json';
@@ -49,23 +51,23 @@ export async function writeSyncConfig(dir: string, cfg: SyncConfig): Promise<voi
  * 安全约束：token 永不拼入 repoUrl —— http(s) 地址带 userinfo（username[:password]@）直接拒绝，
  * 引导用户把 token 放凭据字段（DSH credentials），避免 token 经 URL 泄漏进 git 历史/日志。
  */
-export function validateRepoUrl(repoUrl: string): string | null {
+export function validateRepoUrl(repoUrl: string, msg: MsgFunc = zhMsg): string | null {
   if (typeof repoUrl !== 'string' || repoUrl.trim() === '') {
     return 'repoUrl is required';
   }
   const url = repoUrl.trim();
   if (/\s/.test(url)) {
-    return '仓库地址不能包含空白字符';
+    return msg('sync.configWhitespace');
   }
   if (/^https?:\/\//i.test(url)) {
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
-      return `无法解析仓库地址: ${url}`;
+      return msg('sync.configUnparseable', { url });
     }
     if (parsed.username !== '' || parsed.password !== '') {
-      return '请勿在仓库地址中包含用户名/密码（认证 token 请使用凭据字段，不会拼入地址）';
+      return msg('sync.configUserinfo');
     }
   }
   return null;

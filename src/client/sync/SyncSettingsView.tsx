@@ -24,8 +24,8 @@ import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { SYNC_CREDENTIAL_REF } from './sync-api.ts'
 import type { SyncApi, SyncStatusResponse } from './sync-api.ts'
 import {
-  PRIVATE_REPO_HINT, computeGithubLoginView, computeSyncButtons, computeSyncStatus, githubPollMessage,
-  kindLabel, pullReportView, pushReportView, severityLabel,
+  computeGithubLoginView, computeSyncButtons, computeSyncStatus, githubPollMessage,
+  kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
 } from './sync-view.ts'
 import type { GithubLoginPhase } from './sync-view.ts'
 import css from '../config-manager.module.css'
@@ -81,6 +81,7 @@ const initial: SyncUiState = {
 
 export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const [state, setState] = useState<SyncUiState>(initial)
+  const uiT = api.t // 客户端展示层翻译器（zh/en，见 ui/i18n.ts）
   const patch = (p: Partial<SyncUiState>): void => setState((s) => ({ ...s, ...p }))
   const patchGithub = (p: Partial<GithubUiState>): void => setState((s) => ({ ...s, github: { ...s.github, ...p } }))
   /** GitHub 轮询定时器（卸载/取消时清理，防止泄漏与跨流程串扰） */
@@ -151,7 +152,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         scheduleGithubPoll(flowId, poll.pollDelayMs ?? Math.max(state.github.interval, 1) * 1000)
         return
       }
-      const message = githubPollMessage(poll)
+      const message = githubPollMessage(poll, uiT)
       if (poll.status === 'success') {
         patchGithub({ phase: 'success', error: null })
         // token 已由宿主写入 DSH credentials：刷新状态行与凭据徽章
@@ -198,12 +199,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
   }
 
-  const status = computeSyncStatus(state.statusInfo, state.loading, state.loadError)
-  const buttons = computeSyncButtons(state.busy, state.repoUrl)
-  const pushView = pushReportView(state.pushReport)
-  const pullView = pullReportView(state.pullReport)
+  const status = computeSyncStatus(state.statusInfo, state.loading, state.loadError, uiT)
+  const buttons = computeSyncButtons(state.busy, state.repoUrl, uiT)
+  const pushView = pushReportView(state.pushReport, uiT)
+  const pullView = pullReportView(state.pullReport, uiT)
   const githubView = computeGithubLoginView(
-    state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error,
+    state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error, uiT,
   )
   /** GitHub 流程进行中（请求设备码 / 等待授权 / 轮询）：禁用 push/pull，避免无凭据操作 */
   const githubBusy =
@@ -214,7 +215,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
           {/* 私有仓库强制提示 */}
-          <Banner kind="warn">{PRIVATE_REPO_HINT}</Banner>
+          <Banner kind="warn">{privateRepoHint(uiT)}</Banner>
 
           {/* 仓库配置 */}
           <Card>
@@ -356,17 +357,17 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 <>
                   <div className={css.statRow}>
                     <Badge kind="info">{t('change.total', { total: pullView.summary.total })}</Badge>
-                    {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error')} × {pullView.summary.error}</Badge>}
-                    {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning')} × {pullView.summary.warning}</Badge>}
-                    {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info')} × {pullView.summary.info}</Badge>}
+                    {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error', uiT)} × {pullView.summary.error}</Badge>}
+                    {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', uiT)} × {pullView.summary.warning}</Badge>}
+                    {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
                   </div>
                   {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
                   <div className={css.reportList}>
                     {pullView.summary.items.map((c) => (
                       <div key={c.id} className={css.statRow}>
-                        <span className={css.kindTag}>{kindLabel(c.kind)}</span>
+                        <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
                         <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
-                          {severityLabel(c.severity)}
+                          {severityLabel(c.severity, uiT)}
                         </Badge>
                         <span>{c.description}</span>
                       </div>

@@ -6,6 +6,8 @@
  * 每项携带 raw（该 namespace 的完整 redacted 值）用于整体写回，apiKey 值经 credentials 状态占位（不导出值）。
  */
 import { isDeepStrictEqual } from 'node:util';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { ProviderEntry } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -56,7 +58,7 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
       try {
         info = await ctx.settings.describe(ns, { redactSecrets: true });
       } catch (err) {
-        warnings.push(`provider namespace ${ns} 读取失败（可能未配置）: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(msgOf(ctx)('adapter.providerNsReadFailed', { ns, reason: err instanceof Error ? err.message : String(err) }));
         continue;
       }
       const value = (info.value ?? {}) as Record<string, unknown>;
@@ -87,6 +89,7 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
   }
 
   async analyzeImport(data: ProviderExportSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
     const items: PlanItem[] = [];
     for (const [route, entry] of Object.entries(data.providers)) {
       const id = `provider:${route}`;
@@ -101,22 +104,22 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
       if (targetUnavailable) {
         items.push({
           id, kind: 'MissingDependency', adapter: 'providers',
-          description: `Provider ${route} 的命名空间 ${entry.namespace} 在目标未注册（可能需要安装对应插件）`,
+          description: msg('adapter.providerUnregistered', { route, ns: entry.namespace }),
           severity: 'warning', target: { adapter: 'providers', ref: entry.namespace },
         });
       } else if (current === null || isEmptyValue(current.value)) {
         // 目标已注册但为空 → 初始化（Create）
         items.push({
           id, kind: 'Create', adapter: 'providers',
-          description: `创建 Provider ${route}（namespace ${entry.namespace}）`, severity: 'info',
+          description: msg('adapter.providerCreate', { route, ns: entry.namespace }), severity: 'info',
           target: { adapter: 'providers', ref: entry.namespace },
         });
       } else if (isDeepStrictEqual(current.value, entry.raw ?? stripEntry(entry))) {
-        items.push({ id, kind: 'Skip', adapter: 'providers', description: `Provider ${route} 已一致`, severity: 'info' });
+        items.push({ id, kind: 'Skip', adapter: 'providers', description: msg('adapter.providerSame', { route }), severity: 'info' });
       } else {
         items.push({
           id, kind: 'Conflict', adapter: 'providers',
-          description: `Provider ${route} 与目标不同`,
+          description: msg('adapter.providerDiff', { route }),
           detail: `namespace=${entry.namespace} current=${JSON.stringify(current.value)} imported=${JSON.stringify(entry.raw ?? stripEntry(entry))}`.slice(0, 200),
           severity: 'warning', target: { adapter: 'providers', ref: entry.namespace },
         });
@@ -129,7 +132,7 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
     const route = item.id.replace(/^provider:/, '');
     const data = ctx.sections.get('providers') as ProviderExportSection | undefined;
     const entry = data?.providers[route];
-    if (!entry) return { ok: false, message: `导入数据缺少 provider ${route}` };
+    if (!entry) return { ok: false, message: ctx.msg('adapter.providerMissing', { route }) };
     const value = entry.raw ?? stripEntry(entry);
     let expected: number | undefined;
     try {
@@ -141,27 +144,27 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
     return { ok: true };
   }
 
-  async validate(data: ProviderExportSection): Promise<ValidationResult> {
+  async validate(data: ProviderExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'providers 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'providers' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (data.providers === null || typeof data.providers !== 'object') {
-      issues.push({ path: 'providers', message: '缺少 providers 对象', severity: 'error' });
+      issues.push({ path: 'providers', message: msg('adapter.validate.missingObject', { subject: 'providers' }), severity: 'error' });
     } else {
       for (const [route, entry] of Object.entries(data.providers)) {
         if (entry === null || typeof entry !== 'object') {
-          issues.push({ path: `providers.${route}`, message: 'provider 记录必须是对象', severity: 'error' });
+          issues.push({ path: `providers.${route}`, message: msg('adapter.validate.recordObject', { subject: 'provider' }), severity: 'error' });
           continue;
         }
         if (typeof entry.namespace !== 'string' || entry.namespace === '') {
-          issues.push({ path: `providers.${route}.namespace`, message: '缺少来源 namespace', severity: 'error' });
+          issues.push({ path: `providers.${route}.namespace`, message: msg('adapter.validate.sourceNamespace'), severity: 'error' });
         }
         if (typeof entry.revision !== 'number') {
-          issues.push({ path: `providers.${route}.revision`, message: 'revision 必须是数字', severity: 'error' });
+          issues.push({ path: `providers.${route}.revision`, message: msg('adapter.validate.number', { subject: 'revision' }), severity: 'error' });
         }
       }
     }

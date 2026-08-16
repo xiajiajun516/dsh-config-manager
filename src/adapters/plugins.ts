@@ -7,6 +7,8 @@
  */
 import { isDeepStrictEqual } from 'node:util';
 import { resolveProfileNameFromArgv } from '../core/plugin-cli.ts';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { PatchLine, PluginEntry, PluginsSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -71,14 +73,14 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         });
       }
     } catch (err) {
-      warnings.push(`插件清单读取失败: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(msgOf(ctx)('adapter.pluginListReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
     const patch: PatchLine[] = [];
     try {
       const lines = await ctx.patchFile.readPatchLines(USER_PATCH_FILE);
       for (const l of lines) patch.push({ file: USER_PATCH_FILE, lineId: l.lineId, raw: l.raw });
     } catch (err) {
-      warnings.push(`patch 文件读取失败: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(msgOf(ctx)('adapter.patchReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
     // pnpm-workspace.yaml（allowBuilds / minimumReleaseAgeExclude 等）：随插件分区迁移，
     // 否则目标 profile 的 pnpm 可能因构建白名单/冷静期拒绝安装插件（§34.17 同款语义）。
@@ -89,7 +91,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         pnpmWorkspace = new TextDecoder().decode(await ctx.fs.readFile(rel));
       }
     } catch (err) {
-      warnings.push(`pnpm-workspace.yaml 读取失败: ${err instanceof Error ? err.message : String(err)}`);
+      warnings.push(msgOf(ctx)('adapter.pnpmReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
     return {
       sectionId: 'plugins',
@@ -100,6 +102,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   }
 
   async analyzeImport(data: PluginsSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
     const items: PlanItem[] = [];
 
     // pnpm-workspace.yaml：先于插件安装写入（allowBuilds / minimumReleaseAgeExclude 需在
@@ -119,7 +122,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           id: 'plugins:pnpm-workspace',
           kind: current === null ? 'Create' : 'Update',
           adapter: 'plugins',
-          description: current === null ? '写入 pnpm-workspace.yaml（插件构建白名单/冷静期配置）' : '更新 pnpm-workspace.yaml（插件构建白名单/冷静期配置）',
+          description: current === null ? msg('adapter.pwCreate') : msg('adapter.pwUpdate'),
           severity: 'info',
           target: { adapter: 'plugins', ref: 'pnpm-workspace.yaml' },
         });
@@ -134,17 +137,17 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       if (!tp) {
         items.push({
           id, kind: 'Install', adapter: 'plugins',
-          description: `安装插件 ${p.name}@${p.version}`,
-          detail: p.isBundle ? '（bundle 成员，经聚合包安装）' : undefined,
+          description: msg('adapter.pluginInstall', { name: p.name, version: p.version }),
+          detail: p.isBundle ? msg('adapter.pluginBundleMember') : undefined,
           severity: 'info',
         });
       } else if (tp.version === p.version) {
-        items.push({ id, kind: 'Skip', adapter: 'plugins', description: `插件 ${p.name} 已安装且版本一致`, severity: 'info' });
+        items.push({ id, kind: 'Skip', adapter: 'plugins', description: msg('adapter.pluginSame', { name: p.name }), severity: 'info' });
       } else {
         items.push({
           id, kind: 'Conflict', adapter: 'plugins',
-          description: `插件 ${p.name} 版本不同`,
-          detail: `当前 ${tp.version} vs 导入 ${p.version}`,
+          description: msg('adapter.pluginDiff', { name: p.name }),
+          detail: msg('adapter.pluginVersionDetail', { current: tp.version, imported: p.version }),
           severity: 'warning',
         });
       }
@@ -160,15 +163,15 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       if (!tl) {
         items.push({
           id, kind: 'Create', adapter: 'plugins',
-          description: `写入 patch 行 ${pl.lineId}`, severity: 'info',
+          description: msg('adapter.patchLineCreate', { lineId: pl.lineId }), severity: 'info',
           target: { adapter: 'plugins', ref: pl.lineId },
         });
       } else if (isDeepStrictEqual(tl.raw, pl.raw)) {
-        items.push({ id, kind: 'Skip', adapter: 'plugins', description: `patch 行 ${pl.lineId} 已一致`, severity: 'info' });
+        items.push({ id, kind: 'Skip', adapter: 'plugins', description: msg('adapter.patchLineSame', { lineId: pl.lineId }), severity: 'info' });
       } else {
         items.push({
           id, kind: 'Conflict', adapter: 'plugins',
-          description: `patch 行 ${pl.lineId} 与目标不同`, severity: 'warning',
+          description: msg('adapter.patchLineDiff', { lineId: pl.lineId }), severity: 'warning',
           target: { adapter: 'plugins', ref: pl.lineId },
         });
       }
@@ -177,23 +180,24 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    const msg = ctx.msg;
     // pnpm-workspace.yaml：插件安装的 pnpm 配置（allowBuilds / minimumReleaseAgeExclude），
     // 必须先于任何插件安装写入，pnpm add 时才能生效。失败为非致命 warning。
     if (item.id === 'plugins:pnpm-workspace') {
       const data = ctx.sections.get('plugins') as PluginsSection | undefined;
       const text = data?.pnpmWorkspace;
       if (text === undefined || text === null || text === '') {
-        return { ok: false, message: '导入数据缺少 pnpm-workspace.yaml 内容' };
+        return { ok: false, message: msg('adapter.pwMissing') };
       }
       try {
         await ctx.target.fs.writeFile(PNPM_WORKSPACE_REL(ctx.target.profile), new TextEncoder().encode(text));
-        return { ok: true, needsRestart: true, message: 'pnpm-workspace.yaml 已写入（插件安装将按该配置执行），重启后生效' };
+        return { ok: true, needsRestart: true, message: msg('adapter.pwWritten') };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const reason = err instanceof Error ? err.message : String(err);
         return {
           ok: false,
           warning: true,
-          message: `pnpm-workspace.yaml 写入失败：${msg}（插件安装可能因此受阻，可修复后在设置页重试）`,
+          message: msg('adapter.pwWriteFailed', { msg: reason }),
         };
       }
     }
@@ -206,59 +210,58 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // 拖垮已成功导入的其余配置——与 workspaces 的「目标不可达 → warning」同款语义。
     if (item.id.startsWith('plugin:')) {
       const name = item.id.replace(/^plugin:/, '');
-      const verb = item.kind === 'Update' ? '更新' : '安装';
       try {
         // 非 registry 来源（github:/file: 等）按来源 spec 安装，registry 包按裸包名装 npm 最新版
         const data = ctx.sections.get('plugins') as PluginsSection | undefined;
         const spec = data?.plugins.find((p) => p.name === name)?.spec;
         const result = await ctx.target.plugins.install(name, spec);
-        const suffix = result.needsRestart ? '，重启 dsh 后生效' : '';
+        const suffix = result.needsRestart ? msg('adapter.pluginRestartSuffix') : '';
         return {
           ok: true,
           needsRestart: true,
           message: item.kind === 'Update'
-            ? `插件 ${name} 已触发${verb}（npm 最新版）${suffix}`
-            : `插件 ${name} 已${verb}${suffix}`,
+            ? msg('adapter.pluginUpdateTriggered', { name, suffix })
+            : msg('adapter.pluginInstallOk', { name, suffix }),
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const reason = err instanceof Error ? err.message : String(err);
         return {
           ok: false,
           warning: true,
           // 保留 warning（§34.17 非致命）：一个装不上的插件不得拖垮已成功导入的其余配置；
           // message 附可复制的手动安装命令（profile 解析与 M1 宿主一致）。
-          message: `插件 ${name} ${verb}失败：${msg}。可手动安装：dsh plugin --profile ${resolveProfileNameFromArgv()} add ${name}（其余配置已导入；可修复依赖后在设置页重试或手动安装）`,
+          message: (item.kind === 'Update' ? msg('adapter.pluginUpdateFailed', { name, msg: reason, profile: resolveProfileNameFromArgv() }) : msg('adapter.pluginInstallFailed', { name, msg: reason, profile: resolveProfileNameFromArgv() })),
         };
       }
     }
     // patch 行：Create → insert，Update/Conflict(useImported) → update
     const ref = item.target?.ref;
-    if (!ref) return { ok: false, message: '缺少 target.ref' };
+    if (!ref) return { ok: false, message: msg('adapter.missingTargetRef') };
     const data = ctx.sections.get('plugins') as PluginsSection | undefined;
     const pl = data?.patch.find((p) => p.lineId === ref);
-    if (!pl) return { ok: false, message: `导入数据缺少 patch 行 ${ref}` };
+    if (!pl) return { ok: false, message: msg('adapter.patchMissing', { ref }) };
     await ctx.target.patchFile.applyPatchChanges(pl.file, [
       { lineId: ref, raw: pl.raw, action: item.kind === 'Create' ? 'insert' : 'update' },
     ]);
-    return { ok: true, needsRestart: true, message: `patch 行 ${ref} 已写入，重启后生效` };
+    return { ok: true, needsRestart: true, message: msg('adapter.patchWritten', { ref }) };
   }
 
-  async validate(data: PluginsSection): Promise<ValidationResult> {
+  async validate(data: PluginsSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'plugins 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'plugins' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (!Array.isArray(data.plugins)) {
-      issues.push({ path: 'plugins', message: 'plugins 必须是数组', severity: 'error' });
+      issues.push({ path: 'plugins', message: msg('adapter.validate.array', { subject: 'plugins' }), severity: 'error' });
     }
     if (data.patch !== undefined && !Array.isArray(data.patch)) {
-      issues.push({ path: 'patch', message: 'patch 必须是数组', severity: 'error' });
+      issues.push({ path: 'patch', message: msg('adapter.validate.array', { subject: 'patch' }), severity: 'error' });
     }
     if (data.pnpmWorkspace !== undefined && data.pnpmWorkspace !== null && typeof data.pnpmWorkspace !== 'string') {
-      issues.push({ path: 'pnpmWorkspace', message: 'pnpmWorkspace 必须是字符串', severity: 'error' });
+      issues.push({ path: 'pnpmWorkspace', message: msg('adapter.validate.string', { subject: 'pnpmWorkspace' }), severity: 'error' });
     }
     return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
   }

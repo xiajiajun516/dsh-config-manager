@@ -8,6 +8,7 @@
  *  - settings 回滚仍走 expectedRevision 乐观锁，避免覆盖导入后用户的新修改。
  */
 import { resolveFileTarget } from './backup.ts';
+import { msgOf } from './messages.ts';
 import type {
   ConfigAdapter, HostContext, RollbackReport, Snapshot, SnapshotEntry, SnapshotStore,
 } from './types.ts';
@@ -38,8 +39,8 @@ async function compensateOne(
           }
           if (current === null) return null; // 本来就没有且未创建 → 无需恢复
           return {
-            reason: '该 namespace 由导入创建，DSH settings 无删除语义',
-            manualHint: `namespace "${entry.ref}" 需人工删除或合并`,
+            reason: msgOf(ctx)('rollback.ns.createdNoDelete'),
+            manualHint: msgOf(ctx)('rollback.ns.manualHint', { ref: entry.ref }),
           };
         }
         // 用当前 revision 作乐观锁基准：读时即锁，冲突则如实失败（不覆盖并发修改）
@@ -47,15 +48,15 @@ async function compensateOne(
         await ctx.settings.replace(entry.ref, entry.before, current.revision);
         return null;
       } catch (err) {
-        return { reason: err instanceof Error ? err.message : String(err), manualHint: `settings namespace "${entry.ref}" 需人工核对` };
+        return { reason: err instanceof Error ? err.message : String(err), manualHint: msgOf(ctx)('rollback.ns.conflictHint', { ref: entry.ref }) };
       }
     }
     case 'credential': {
       if (entry.existed) {
         // 值不可回读：无法自动恢复原值
         return {
-          reason: 'DSH 不回读凭据值，无法自动恢复',
-          manualHint: `凭据 "${entry.ref}" 请人工重新填写`,
+          reason: msgOf(ctx)('rollback.cred.noReadback'),
+          manualHint: msgOf(ctx)('rollback.cred.manualHint', { ref: entry.ref }),
         };
       }
       try {
@@ -76,7 +77,7 @@ async function compensateOne(
         ]);
         return null;
       } catch (err) {
-        return { reason: err instanceof Error ? err.message : String(err), manualHint: `patch 行 "${entry.ref}" 需人工核对` };
+        return { reason: err instanceof Error ? err.message : String(err), manualHint: msgOf(ctx)('rollback.patch.manualHint', { ref: entry.ref }) };
       }
     }
     case 'file': {
@@ -91,7 +92,7 @@ async function compensateOne(
         }
         return null;
       } catch (err) {
-        return { reason: err instanceof Error ? err.message : String(err), manualHint: `文件 "${entry.ref}" 需人工恢复` };
+        return { reason: err instanceof Error ? err.message : String(err), manualHint: msgOf(ctx)('rollback.file.manualHint', { ref: entry.ref }) };
       }
     }
     case 'workspaceRecord': {
@@ -103,11 +104,11 @@ async function compensateOne(
         }
         return null;
       } catch (err) {
-        return { reason: err instanceof Error ? err.message : String(err), manualHint: `workspace "${entry.ref}" 需人工核对` };
+        return { reason: err instanceof Error ? err.message : String(err), manualHint: msgOf(ctx)('rollback.workspace.manualHint', { ref: entry.ref }) };
       }
     }
     default:
-      return { reason: `未知快照条目类型 ${entry.kind}` };
+      return { reason: msgOf(ctx)('rollback.unknownEntry', { kind: entry.kind }) };
   }
 }
 

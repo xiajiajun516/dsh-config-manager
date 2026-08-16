@@ -29,6 +29,7 @@ import type { ExportOptions, ExportReport } from '../core/types.ts';
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.ts';
 import type { RunState } from '../core/run-registry.ts';
 import type { Manifest } from '../schema/types.ts';
+import { zhUiT, type UiT } from '../ui/i18n.ts';
 
 /** Host 半健康检查响应（plugin 版本 / DSH 版本 / 平台，用于主页横幅与兼容性说明） */
 export interface ServiceStatus {
@@ -104,15 +105,14 @@ export class ConfigManagerApiError extends Error {
 }
 
 /** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError */
-async function readJson<T>(response: Response): Promise<T> {
-  const notMountedMessage =
-    'config-manager 服务未挂载（插件未加载）：请确认 profile 中已安装 dsh-config-manager 并重启 DSH';
+async function readJson<T>(response: Response, t: UiT): Promise<T> {
+  const notMountedMessage = t('error.notMounted');
   let body: unknown;
   try {
     body = await response.json();
   } catch {
     if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
-    throw new ConfigManagerApiError(`HTTP ${response.status}: invalid JSON response`);
+    throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
   }
   if (!response.ok) {
     const message =
@@ -162,12 +162,18 @@ export class ConfigManagerApi {
    * 绝不写入 manifest / 任何 DSH 配置 / localStorage。
    */
   exportPassword: string | null = null
+  /** 客户端展示层翻译器（zh 源 / en 镜像，见 ui/i18n.ts）。 */
+  readonly t: UiT
+
+  constructor(t: UiT = zhUiT) {
+    this.t = t
+  }
 
   // ------------------------------------------------------------- status
   /** 健康/版本检查（主页横幅：插件版本 / DSH 版本 / 平台） */
   async status(): Promise<ServiceStatus> {
     const response = await fetch(CONFIG_MANAGER_API.status);
-    return readJson<ServiceStatus>(response);
+    return readJson<ServiceStatus>(response, this.t);
   }
 
   // ------------------------------------------------------------- export
@@ -187,10 +193,10 @@ export class ConfigManagerApi {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      return await readJson<ExportResponse>(response);
+      return await readJson<ExportResponse>(response, this.t);
     } catch (err) {
       if (controller.signal.aborted) {
-        throw new ConfigManagerApiError(`导出超时（${Math.round(EXPORT_TIMEOUT_MS / 60000)} 分钟）：导出过程未完成，请重试；若反复超时请检查 DSH 状态`);
+        throw new ConfigManagerApiError(this.t('error.exportTimeout', { minutes: String(Math.round(EXPORT_TIMEOUT_MS / 60000)) }));
       }
       throw err;
     } finally {
@@ -209,7 +215,7 @@ export class ConfigManagerApi {
     const response = await fetch(CONFIG_MANAGER_API.download + query({ path: zipPath }));
     if (!response.ok || response.body === null) {
       const text = await response.text().catch(() => '');
-      throw new ConfigManagerApiError(text !== '' ? text : `download failed: HTTP ${response.status}`);
+      throw new ConfigManagerApiError(text !== '' ? text : this.t('error.downloadFailed', { status: String(response.status) }));
     }
     const total = Number(response.headers.get('content-length') ?? '0');
     const disposition = response.headers.get('content-disposition') ?? '';
@@ -260,7 +266,7 @@ export class ConfigManagerApi {
       method: 'POST',
       body: file,
     });
-    return readJson<UploadResponse>(response);
+    return readJson<UploadResponse>(response, this.t);
   }
 
   /** ImportPort.analyzeImport：零写入分析（校验/兼容性/差异/路径/秘密检测） */
@@ -270,7 +276,7 @@ export class ConfigManagerApi {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ zipPath }),
     });
-    return readJson<ImportAnalysis>(response);
+    return readJson<ImportAnalysis>(response, this.t);
   }
 
   /** ImportPort.createImportPlan：用用户决策（冲突/路径映射/策略）生成最终计划（Dry Run 零写入） */
@@ -280,7 +286,7 @@ export class ConfigManagerApi {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ zipPath, decisions }),
     });
-    return readJson<ImportPlan>(response);
+    return readJson<ImportPlan>(response, this.t);
   }
 
   /** ImportPort.executeImportPlan：快照→分阶段 apply→validate→commit/rollback */
@@ -303,27 +309,27 @@ export class ConfigManagerApi {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    return readJson<ImportResult & { runId: string }>(response);
+    return readJson<ImportResult & { runId: string }>(response, this.t);
   }
 
   // ------------------------------------------------------------- run 进度
   /** m1：查询单个 run 的实时状态（执行中轮询 / 刷新恢复用；404 = 已过保留期或不存在） */
   async progress(runId: string): Promise<RunState> {
     const response = await fetch(CONFIG_MANAGER_API.progress + query({ runId }));
-    return readJson<RunState>(response);
+    return readJson<RunState>(response, this.t);
   }
 
   /** m1：列出当前活跃（running）的 run（刷新后重新订阅进行中任务的入口） */
   async runs(): Promise<RunState[]> {
     const response = await fetch(CONFIG_MANAGER_API.runs);
-    return readJson<RunState[]>(response);
+    return readJson<RunState[]>(response, this.t);
   }
 
   // ------------------------------------------------------- 快照恢复（M4）
   /** 列出全部快照元信息（createdAt 倒序；含 status/条目数/宿主文件数/插件数） */
   async snapshots(): Promise<SnapshotMeta[]> {
     const response = await fetch(CONFIG_MANAGER_API.snapshots);
-    const body = await readJson<{ snapshots: SnapshotMeta[] }>(response);
+    const body = await readJson<{ snapshots: SnapshotMeta[] }>(response, this.t);
     return body.snapshots;
   }
 
@@ -334,6 +340,6 @@ export class ConfigManagerApi {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ snapshotId, dryRun }),
     });
-    return readJson<RestoreResponse>(response);
+    return readJson<RestoreResponse>(response, this.t);
   }
 }

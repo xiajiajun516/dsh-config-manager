@@ -18,6 +18,7 @@ import {
 } from './types.ts';
 import { EXPORT_STAGES, ProgressTracker } from './progress.ts';
 import { renderExportReport } from './report.ts';
+import { zhUiT, type UiT } from './i18n.ts';
 
 /** UI → core 的导出端口（宿主注入 Exporter.export；测试注入 mock） */
 export interface ExportPort {
@@ -29,6 +30,8 @@ export interface ExportFlowOptions {
   /** 分类目录（缺省用内置目录，与 adapters 的 displayName/defaultIncluded/portability 对齐） */
   categories?: ExportCategory[];
   onProgress?: ProgressListener;
+  /** 报告渲染翻译器（zh/en，见 i18n.ts） */
+  t?: UiT;
 }
 
 export interface ExportRunResult {
@@ -59,11 +62,13 @@ export class ExportFlow {
   readonly categories: readonly ExportCategory[];
   private readonly port: ExportPort;
   private readonly onProgress: ProgressListener | undefined;
+  private readonly t: UiT;
 
   constructor(opts: ExportFlowOptions) {
     this.port = opts.port;
     this.categories = opts.categories ?? DEFAULT_CATEGORIES;
     this.onProgress = opts.onProgress;
+    this.t = opts.t ?? zhUiT;
   }
 
   /** Quick Export 推荐分区（defaultIncluded 且非 deviceSpecific） */
@@ -121,6 +126,6 @@ export class ExportFlow {
     });
 
     tracker.emit('done');
-    return { ...result, text: renderExportReport(result.report) };
+    return { ...result, text: renderExportReport(result.report, this.t) };
   }
 }

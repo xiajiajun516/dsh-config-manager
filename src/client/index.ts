@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { ConfigManagerApi } from './api.ts'
 import { ConfigManagerSection } from './ConfigManagerSection.tsx'
 import { en, zh, type ConfigManagerKey } from './locales.ts'
+import { makeUiT, type UiT } from '../ui/i18n.ts'
 import { SyncApi } from './sync/sync-api.ts'
 import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import { en as syncEn, zh as syncZh, type SyncKey } from './sync/sync-locales.ts'
@@ -62,9 +63,11 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(SYNC_NS, { zh: syncZh, en: syncEn }), 'config-manager: sync dictionaries')
 
   const t = ctx.locale.bind(NS)
-  const api = new ConfigManagerApi()
+  // 客户端展示层（报告/错误/进度/sync-view）翻译器：locale active 为 'en' 时用 en 目录。
+  const uiT: UiT = makeUiT(ctx.locale.getLocale().active === 'en' ? 'en' : 'zh')
+  const api = new ConfigManagerApi(uiT)
   const syncT = ctx.locale.bind(SYNC_NS)
-  const syncApi = new SyncApi()
+  const syncApi = new SyncApi(uiT)
 
   // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync 四 tab）。
   // 远程同步不再注册独立设置页 —— 并入主 section 的 inject 面（syncApi/syncT），

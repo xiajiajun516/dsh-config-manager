@@ -4,6 +4,8 @@
  * 白名单机制避免扫描整个主目录；默认关闭（defaultIncluded=false，用户显式勾选才导出）。
  */
 import { sha256Hex } from '../utils/hashing.ts';
+import { zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -42,6 +44,7 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
   }
 
   async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
     const items: PlanItem[] = [];
     for (const file of data.files) {
       const id = `pluginFile:${file.relativePath}`;
@@ -54,15 +57,15 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
       if (current === null) {
         items.push({
           id, kind: 'Create', adapter: 'pluginFiles',
-          description: `创建插件配置文件 ${file.relativePath}`, severity: 'info',
+          description: msg('adapter.pluginFileCreate', { path: file.relativePath }), severity: 'info',
           target: { adapter: 'pluginFiles', ref: file.relativePath },
         });
       } else if (sha256Hex(current) === file.contentHash) {
-        items.push({ id, kind: 'Skip', adapter: 'pluginFiles', description: `文件 ${file.relativePath} 已一致`, severity: 'info' });
+        items.push({ id, kind: 'Skip', adapter: 'pluginFiles', description: msg('adapter.fileSame', { path: file.relativePath }), severity: 'info' });
       } else {
         items.push({
           id, kind: 'Conflict', adapter: 'pluginFiles',
-          description: `文件 ${file.relativePath} 内容不同`, severity: 'warning',
+          description: msg('adapter.fileDiff', { path: file.relativePath }), severity: 'warning',
           target: { adapter: 'pluginFiles', ref: file.relativePath },
         });
       }
@@ -72,24 +75,24 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
     const ref = item.target?.ref;
-    if (!ref) return { ok: false, message: '缺少 target.ref' };
+    if (!ref) return { ok: false, message: ctx.msg('adapter.missingTargetRef') };
     const data = ctx.sections.get('pluginFiles') as FilesSection | undefined;
     const file = data?.files.find((f) => f.relativePath === ref);
-    if (!file) return { ok: false, message: `导入数据缺少文件 ${ref}` };
+    if (!file) return { ok: false, message: ctx.msg('adapter.dataMissingFile', { ref }) };
     await ctx.target.fs.writeFile(ref, file.data);
     return { ok: true };
   }
 
-  async validate(data: FilesSection): Promise<ValidationResult> {
+  async validate(data: FilesSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     const issues: ValidationResult['issues'] = [];
     if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: 'pluginFiles 数据必须是对象', severity: 'error' }] };
+      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'pluginFiles' }), severity: 'error' }] };
     }
     if (data.version !== 1) {
-      issues.push({ path: 'version', message: `version 必须为 1（收到 ${String(data.version)}）`, severity: 'error' });
+      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
     }
     if (!Array.isArray(data.files)) {
-      issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
+      issues.push({ path: 'files', message: msg('adapter.validate.array', { subject: 'files' }), severity: 'error' });
     }
     return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
   }

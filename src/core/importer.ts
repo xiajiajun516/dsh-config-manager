@@ -9,6 +9,7 @@
  * Dry Run：analyzeImport / createImportPlan 零写入（ZIP 全程内存解析，不进磁盘）。
  */
 import type { ZipArchive, ZipSafetyLimits } from '../utils/zip.ts';
+import type { MsgFunc } from './messages.ts';
 import { Analyzer } from './analyzer.ts';
 import type { PlanItemProgress } from './analyzer.ts';
 import type {
@@ -25,6 +26,8 @@ export interface ImporterOptions {
   dependencyChecker?: (command: string) => Promise<boolean>;
   /** m4 可注入强化版 ZIP 安全解析 */
   parseZipOverride?: (buf: Uint8Array, limits?: ZipSafetyLimits) => ZipArchive;
+  /** 消息翻译器（缺省 ctx.msg ?? zh） */
+  msg?: MsgFunc;
 }
 
 export interface ExecuteOptions {

@@ -14,6 +14,8 @@ import { stringifyJsonSafe } from '../utils/json.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE, EXPORTER_NAME } from '../schema/manifest.ts';
 import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts';
 import { writeZip } from '../utils/zip.ts';
+import { msgOf } from './messages.ts';
+import type { MsgFunc } from './messages.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
 import type {
   ConfigAdapter, EncryptionProvider, ExportOptions, ExportReport,
@@ -39,6 +41,8 @@ export interface ExporterOptions {
   /** 插件自身版本（manifest.exporter.version） */
   exporterVersion?: string;
   now?: () => Date;
+  /** 消息翻译器（缺省 ctx.msg ?? zh） */
+  msg?: MsgFunc;
   /** m1：每导出一个分区前调用（真实进度埋点；不传则无埋点） */
   onSection?: (info: SectionProgress) => void;
 }
@@ -87,6 +91,7 @@ export class Exporter {
   private readonly encryption: EncryptionProvider | null;
   private readonly exporterVersion: string;
   private readonly now: () => Date;
+  private readonly msg: MsgFunc;
   private readonly onSection: ((info: SectionProgress) => void) | undefined;
 
   constructor(opts: ExporterOptions) {
@@ -96,6 +101,7 @@ export class Exporter {
     this.encryption = opts.encryption ?? null;
     this.exporterVersion = opts.exporterVersion ?? '0.1.0';
     this.now = opts.now ?? (() => new Date());
+    this.msg = opts.msg ?? msgOf(opts.ctx);
     this.onSection = opts.onSection;
   }
 
@@ -106,7 +112,7 @@ export class Exporter {
   async export(options: ExportOptions): Promise<{ zipPath: string; manifest: Manifest; report: ExportReport }> {
     const { includeSecrets, only } = options;
     if (includeSecrets && !this.encryption) {
-      throw new Error('导出包含秘密需要注入 EncryptionProvider（m4 实现），拒绝明文导出秘密');
+      throw new Error(this.msg('export.encryptionRequired'));
     }
 
     // 1. 选定分区（only 过滤 + 默认包含）
@@ -136,7 +142,7 @@ export class Exporter {
         section = await adapter.export(this.ctx, options);
       } catch (err) {
         // 单个分区失败不拖垮整体（§34.17）；如实告警并跳过
-        warnings.push(`分区 ${adapter.id} 导出失败: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(this.msg('export.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
         excluded.push(adapter.id);
         continue;
       }
@@ -185,7 +191,7 @@ export class Exporter {
         const raw = await this.ctx.fs.readFile(credentialsFile);
         plaintext = Buffer.from(raw).toString('utf8');
       } catch (err) {
-        warnings.push(`读取凭据文件失败，跳过秘密导出: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(this.msg('export.credentialsReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
         plaintext = '';
       }
       if (plaintext !== '') {

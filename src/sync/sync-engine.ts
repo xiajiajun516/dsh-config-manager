@@ -38,6 +38,8 @@ import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
 import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
 import type { SyncSnapshot, SyncTransport } from './transport.ts';
+import { msgOf, zhMsg } from '../core/messages.ts';
+import type { MsgFunc } from '../core/messages.ts';
 
 export interface SyncEngineOptions {
   ctx: HostContext;
@@ -61,6 +63,8 @@ export interface SyncEngineOptions {
   zipDir?: string;
   exporterVersion?: string;
   fsx?: SnapshotFs;
+  /** 消息翻译器（缺省 ctx.msg ?? zh） */
+  msg?: MsgFunc;
 }
 
 export interface SyncPushOptions {
@@ -121,16 +125,17 @@ export class SyncEngine {
   private readonly zipDir: string;
   private readonly exporterVersion: string;
   private readonly fsx: SnapshotFs;
+  private readonly msg: MsgFunc;
 
   constructor(opts: SyncEngineOptions) {
-    if (opts.ctx === null || typeof opts.ctx !== 'object') throw new Error('SyncEngine 需要 ctx');
+    if (opts.ctx === null || typeof opts.ctx !== 'object') throw new Error(zhMsg('sync.missingCtx'));
     if (opts.transport === null || typeof opts.transport !== 'object'
       || typeof opts.transport.upload !== 'function' || typeof opts.transport.list !== 'function'
       || typeof opts.transport.download !== 'function' || typeof opts.transport.delete !== 'function') {
-      throw new Error('SyncEngine 需要完整 SyncTransport（list/upload/download/delete）');
+      throw new Error(zhMsg('sync.missingTransport'));
     }
     if (typeof opts.stateDir !== 'string' || opts.stateDir.length === 0) {
-      throw new Error('SyncEngine 需要 stateDir');
+      throw new Error(zhMsg('sync.missingStateDir'));
     }
     this.ctx = opts.ctx;
     this.transport = opts.transport;
@@ -145,6 +150,7 @@ export class SyncEngine {
     this.zipDir = opts.zipDir ?? os.tmpdir();
     this.exporterVersion = opts.exporterVersion ?? '0.1.0';
     this.fsx = opts.fsx ?? createSnapshotFs();
+    this.msg = opts.msg ?? msgOf(opts.ctx);
   }
 
   /** 同步只做 portable 分区（deviceSpecific/platformSpecific 永不参与） */
@@ -156,7 +162,7 @@ export class SyncEngine {
   private assertNoForbiddenSections(sections: Record<string, unknown>): void {
     for (const sid of FORBIDDEN_SECTIONS) {
       if (sid in sections) {
-        throw new Error(`同步拒绝携带敏感分区 ${sid}（secret 值永不参与同步）`);
+        throw new Error(this.msg('sync.denySensitiveSection', { section: sid }));
       }
     }
   }
@@ -173,7 +179,7 @@ export class SyncEngine {
       try {
         section = await adapter.export(this.ctx, { includeSecrets: false });
       } catch (err) {
-        warnings.push(`分区 ${adapter.id} 导出失败: ${err instanceof Error ? err.message : String(err)}`);
+        warnings.push(this.msg('sync.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
         continue;
       }
       warnings.push(...section.warnings);
@@ -185,7 +191,7 @@ export class SyncEngine {
     }
 
     if (Object.keys(sections).length === 0) {
-      return { ok: false, snapshotId: '', sections: [], warnings, message: '没有可同步的 portable 分区（全部导出失败）' };
+      return { ok: false, snapshotId: '', sections: [], warnings, message: this.msg('sync.noPortableSections') };
     }
     this.assertNoForbiddenSections(sections as Record<string, unknown>);
 
@@ -211,7 +217,7 @@ export class SyncEngine {
     // ② 上传远端（传输通道负责散文件落盘 + 提交推送）
     await this.transport.upload(snapshot);
     // ③ 更新 sync-state：每分区 hash + updatedAt；lastSyncAt；transport 绑定
-    const state = await loadSyncState(this.stateDir, this.fsx);
+    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
     for (const [sid, data] of Object.entries(sections)) {
       state.sections[sid as SectionId] = { hash: hashSection(data as SectionData), updatedAt: nowIso };
     }
@@ -229,16 +235,16 @@ export class SyncEngine {
    */
   async pull(opts: SyncPullOptions = {}): Promise<SyncPullReport> {
     if (!this.importer) {
-      throw new Error('SyncEngine 缺少 importer：pull 需要注入 Importer（analyzeImport/createImportPlan）');
+      throw new Error(this.msg('sync.missingImporter'));
     }
     const metas = await this.transport.list();
     if (metas.length === 0) {
-      return { ok: true, snapshotId: '', changes: [], needsReview: false, message: '远端无快照' };
+      return { ok: true, snapshotId: '', changes: [], needsReview: false, message: this.msg('sync.remoteEmpty') };
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新
     const snapshot = await this.transport.download(targetId);
     if (snapshot.manifest.containsSecrets) {
-      throw new Error(`远端快照 ${targetId} 声明 containsSecrets=true，拒绝同步（同步通道永不携带秘密）`);
+      throw new Error(this.msg('sync.remoteContainsSecrets', { id: targetId }));
     }
 
     const portableIds = new Set(this.portableAdapters().map((a) => a.id));
@@ -263,8 +269,8 @@ export class SyncEngine {
           || i.kind === 'Install' || i.kind === 'Error')
         || analysis.pathIssues.length > 0;
       const message = changes.length === 0
-        ? '远端快照与本地一致（无变更）'
-        : `compatibility=${analysis.compatibility}，共 ${changes.length} 项变更`;
+        ? this.msg('sync.unchanged')
+        : this.msg('sync.changesSummary', { compatibility: analysis.compatibility, count: String(changes.length) });
       return { ok: analysis.valid, snapshotId: targetId, changes, needsReview, message };
     } finally {
       await fs.rm(path.dirname(zipPath), { recursive: true, force: true });

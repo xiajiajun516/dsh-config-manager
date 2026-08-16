@@ -24,6 +24,7 @@
  */
 import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
 import { ConfigManagerApiError } from '../api.ts';
+import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
 /** 同步端点常量（与 Host 半 src/index.ts API 常量保持一致） */
 export const SYNC_API = {
@@ -106,15 +107,14 @@ export interface GithubPollResponse {
 const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError（与 api.ts 同款） */
-async function readJson<T>(response: Response): Promise<T> {
-  const notMountedMessage =
-    'config-manager 服务未挂载（插件未加载）：请确认 profile 中已安装 dsh-config-manager 并重启 DSH';
+async function readJson<T>(response: Response, t: UiT): Promise<T> {
+  const notMountedMessage = t('error.notMounted');
   let body: unknown;
   try {
     body = await response.json();
   } catch {
     if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
-    throw new ConfigManagerApiError(`HTTP ${response.status}: invalid JSON response`);
+    throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
   }
   if (!response.ok) {
     const message =
@@ -129,7 +129,7 @@ async function readJson<T>(response: Response): Promise<T> {
 }
 
 /** POST JSON 请求（带超时：宿主卡死时 UI 拿到明确错误而不是永远转圈） */
-async function postJson<T>(path: string, body: unknown): Promise<T> {
+async function postJson<T>(path: string, body: unknown, t: UiT): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SYNC_TIMEOUT_MS);
   try {
@@ -139,11 +139,11 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    return await readJson<T>(response);
+    return await readJson<T>(response, t);
   } catch (err) {
     if (controller.signal.aborted) {
       throw new ConfigManagerApiError(
-        `同步请求超时（${Math.round(SYNC_TIMEOUT_MS / 60000)} 分钟）：请检查网络与仓库可达性后重试`,
+        t('error.syncTimeout', { minutes: String(Math.round(SYNC_TIMEOUT_MS / 60000)) }),
       );
     }
     throw err;
@@ -154,34 +154,39 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 /** 远程同步浏览器半数据入口（备份与迁移页第 4 个 tab 的注入业务面） */
 export class SyncApi {
+  readonly t: UiT
+  constructor(t: UiT = zhUiT) {
+    this.t = t
+  }
+
   /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数） */
   async status(): Promise<SyncStatusResponse> {
     const response = await fetch(SYNC_API.status);
-    return readJson<SyncStatusResponse>(response);
+    return readJson<SyncStatusResponse>(response, this.t);
   }
 
   /** 推送：导出 portable 分区 → 提交到私有 Git 仓库 → 更新 sync-state */
   async push(payload: SyncPushPayload): Promise<SyncPushReport> {
-    return postJson<SyncPushReport>(SYNC_API.push, payload);
+    return postJson<SyncPushReport>(SYNC_API.push, payload, this.t);
   }
 
   /** 拉取差异预览：拉取远端最新快照 → 只读分析（绝不执行导入） */
   async pull(payload: SyncPullPayload): Promise<SyncPullReport> {
-    return postJson<SyncPullReport>(SYNC_API.pull, payload);
+    return postJson<SyncPullReport>(SYNC_API.pull, payload, this.t);
   }
 
   /** GitHub OAuth device flow：发起登录，返回一次性用户码 + 授权页 URL + flowId */
   async githubStart(): Promise<GithubDeviceFlowStartResponse> {
-    return postJson<GithubDeviceFlowStartResponse>(SYNC_API.githubStart, {});
+    return postJson<GithubDeviceFlowStartResponse>(SYNC_API.githubStart, {}, this.t);
   }
 
   /** GitHub OAuth device flow：凭 flowId 轮询授权结果（成功时 token 已由 Host 写入 credentials） */
   async githubPoll(flowId: string): Promise<GithubPollResponse> {
-    return postJson<GithubPollResponse>(SYNC_API.githubPoll, { flowId });
+    return postJson<GithubPollResponse>(SYNC_API.githubPoll, { flowId }, this.t);
   }
 
   /** GitHub OAuth device flow：取消（丢弃宿主侧登记，零副作用） */
   async githubCancel(flowId: string): Promise<{ ok: boolean }> {
-    return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId });
+    return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId }, this.t);
   }
 }

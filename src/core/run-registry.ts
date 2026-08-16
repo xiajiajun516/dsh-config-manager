@@ -18,6 +18,8 @@
  * （宿主路由以 409 拒绝新任务，防止重复导出/导入）。
  */
 import { randomBytes } from 'node:crypto'
+import { zhMsg } from './messages.ts'
+import type { MsgFunc } from './messages.ts'
 
 /** run 类型：导出 / 导入。 */
 export type RunKind = 'export' | 'import'
@@ -53,11 +55,11 @@ export interface RunState {
 export class RunConflictError extends Error {
   /** 已在进行中的 run id（供客户端定位既有任务）。 */
   readonly runId: string
-  constructor(runId: string, kind: RunKind) {
+  constructor(runId: string, kind: RunKind, msg: MsgFunc = zhMsg) {
     super(
       kind === 'export'
-        ? `已有进行中的导出任务（${runId}），请等待其完成后再试`
-        : `已有进行中的导入任务（${runId}），请等待其完成后再试`,
+        ? msg('run.conflict.export', { runId })
+        : msg('run.conflict.import', { runId }),
     )
     this.name = 'RunConflictError'
     this.runId = runId
@@ -72,6 +74,8 @@ export interface RunRegistryOptions {
   retentionMs?: number
   /** 时间源（测试注入）。 */
   now?: () => number
+  /** 消息翻译器（缺省 zh；冲突错误文案随应用语言）。 */
+  msg?: MsgFunc
 }
 
 /**
@@ -82,17 +86,19 @@ export class RunRegistry {
   private readonly runs = new Map<string, RunState>()
   private readonly retentionMs: number
   private readonly now: () => number
+  private readonly msg: MsgFunc
 
   constructor(opts: RunRegistryOptions = {}) {
     this.retentionMs = opts.retentionMs ?? DEFAULT_RUN_RETENTION_MS
     this.now = opts.now ?? (() => Date.now())
+    this.msg = opts.msg ?? zhMsg
   }
 
   /** 注册新 run；同 kind 已有 running 时抛 RunConflictError。 */
   register(kind: RunKind): RunState {
     this.prune()
     for (const run of this.runs.values()) {
-      if (run.kind === kind && run.status === 'running') throw new RunConflictError(run.runId, kind)
+      if (run.kind === kind && run.status === 'running') throw new RunConflictError(run.runId, kind, this.msg)
     }
     const now = this.now()
     const state: RunState = {

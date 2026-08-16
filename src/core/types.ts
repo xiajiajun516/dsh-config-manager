@@ -7,6 +7,8 @@
  */
 import type { EncryptionInfo, Manifest, SectionId, WorkspaceRecord } from '../schema/types.ts';
 import type { Logger } from '../utils/logger.ts';
+import { zhMsg } from './messages.ts';
+import type { MsgFunc } from './messages.ts';
 
 /* ---------------- 导出选项与分区产出 ---------------- */
 
@@ -125,6 +127,11 @@ export interface HostContext {
   fs: FileSystemFacade;
   /** 当前管理的 DSH profile 名（如 web）；引擎用它定位 profiles/<profile>/cordis.patch.yml。宿主不暴露时缺省 */
   profile?: string;
+  /**
+   * 消息翻译器（zh/en 目录，见 messages.ts）。由宿主按 DSH 应用语言注入；
+   * 缺省 zh（改造前行为）。引擎与适配器用它生成所有用户可见动态文案。
+   */
+  msg?: MsgFunc;
 }
 
 /* ---------------- 导入计划（§13.3 十类 + 决策） ---------------- */
@@ -230,6 +237,8 @@ export interface ImportContext {
   secretInputs: Record<string, string>;
   decryptedCredentials?: Map<string, string>;
   log: Logger;
+  /** 消息翻译器（analyzer 注入；适配器用它生成计划项描述/校验/结果消息） */
+  msg: MsgFunc;
 }
 
 /* ---------------- Snapshot / Rollback（§8） ---------------- */
@@ -339,7 +348,7 @@ export interface ConfigAdapter<TSection = unknown> {
   applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult>;
 
   /** 结构校验 */
-  validate(data: TSection): Promise<ValidationResult>;
+  validate(data: TSection, msg?: MsgFunc): Promise<ValidationResult>;
 
   /** 可选：导入前快照（缺省用引擎通用快照） */
   snapshot?(targets: SnapshotTarget[], ctx: HostContext): Promise<SnapshotEntry[]>;
@@ -360,8 +369,8 @@ export interface EncryptionProvider {
 
 /** 导入被确认前拒绝执行（安全阀） */
 export class ImportNotConfirmedError extends Error {
-  constructor() {
-    super('导入未确认：必须显式 confirm 后才允许修改任何数据');
+  constructor(msg?: MsgFunc) {
+    super((msg ?? zhMsg)('import.notConfirmed'));
     this.name = 'ImportNotConfirmedError';
   }
 }

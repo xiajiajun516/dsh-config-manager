@@ -8,6 +8,7 @@
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
 import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts';
+import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
 
@@ -16,8 +17,9 @@ import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts';
  * 安全约束：同步内容为可移植配置，public 仓库会公开配置 → 必须私有；
  * token 仅用于认证，绝不写入同步文件/提交内容/日志。
  */
-export const PRIVATE_REPO_HINT =
-  '安全要求：同步仓库必须为私有仓库（public 仓库会公开你的配置内容）。认证 token 仅用于仓库访问，绝不写入同步文件、提交内容或日志。';
+export function privateRepoHint(t: UiT = zhUiT): string {
+  return t('sync.privateRepoHint');
+}
 
 /* ---------------------------------------------------------------- 变更摘要 */
 
@@ -52,28 +54,28 @@ export function summarizePullChanges(changes: readonly PullChange[]): PullChange
 }
 
 /** PlanItemKind → 短标签（列表徽章） */
-export function kindLabel(kind: PlanItemKind): string {
+export function kindLabel(kind: PlanItemKind, t: UiT = zhUiT): string {
   switch (kind) {
-    case 'Create': return '新增';
-    case 'Update': return '更新';
-    case 'Skip': return '跳过';
-    case 'Conflict': return '冲突';
-    case 'Install': return '安装';
-    case 'MissingSecret': return '缺密钥';
-    case 'MissingDependency': return '缺依赖';
-    case 'PathMapping': return '路径映射';
-    case 'Warning': return '警告';
-    case 'Error': return '错误';
+    case 'Create': return t('sync.kind.create');
+    case 'Update': return t('sync.kind.update');
+    case 'Skip': return t('sync.kind.skip');
+    case 'Conflict': return t('sync.kind.conflict');
+    case 'Install': return t('sync.kind.install');
+    case 'MissingSecret': return t('sync.kind.missingSecret');
+    case 'MissingDependency': return t('sync.kind.missingDependency');
+    case 'PathMapping': return t('sync.kind.pathMapping');
+    case 'Warning': return t('sync.kind.warning');
+    case 'Error': return t('sync.kind.error');
     default: return kind;
   }
 }
 
 /** severity → 短标签 */
-export function severityLabel(severity: PlanItem['severity']): string {
+export function severityLabel(severity: PlanItem['severity'], t: UiT = zhUiT): string {
   switch (severity) {
-    case 'error': return '错误';
-    case 'warning': return '警告';
-    default: return '信息';
+    case 'error': return t('sync.severity.error');
+    case 'warning': return t('sync.severity.warning');
+    default: return t('sync.severity.info');
   }
 }
 
@@ -92,15 +94,15 @@ export interface SyncButtons {
  * - 仓库地址为空 → 禁用（无仓库无从同步）；
  * - busy 时按钮文案切换为「正在推送/拉取…」（配 Spinner）。
  */
-export function computeSyncButtons(busy: 'push' | 'pull' | null, repoUrl: string): SyncButtons {
+export function computeSyncButtons(busy: 'push' | 'pull' | null, repoUrl: string, t: UiT = zhUiT): SyncButtons {
   const idle = busy === null;
   const repoOk = repoUrl.trim() !== '';
   const enabled = idle && repoOk;
   return {
     canPush: enabled,
     canPull: enabled,
-    pushLabel: busy === 'push' ? '正在推送…' : '推送到远端',
-    pullLabel: busy === 'pull' ? '正在拉取…' : '拉取差异预览',
+    pushLabel: busy === 'push' ? t('sync.pushing') : t('sync.pushLabel'),
+    pullLabel: busy === 'pull' ? t('sync.pulling') : t('sync.pullLabel'),
   };
 }
 
@@ -118,19 +120,20 @@ export function computeSyncStatus(
   statusInfo: SyncStatusResponse | null,
   loading: boolean,
   error: string | null,
+  t: UiT = zhUiT,
 ): SyncStatusSummary {
-  if (loading) return { kind: 'loading', text: '正在读取同步状态…' };
+  if (loading) return { kind: 'loading', text: t('sync.statusLoading') };
   if (error !== null) return { kind: 'error', text: error };
   if (statusInfo === null || !statusInfo.configured) {
-    return { kind: 'unconfigured', text: '尚未配置同步仓库（请填写仓库地址并推送一次以保存配置）' };
+    return { kind: 'unconfigured', text: t('sync.statusUnconfigured') };
   }
   const cred = statusInfo.credentialConfigured
-    ? '凭据已配置'
-    : '未配置凭据（token 将在首次推送/拉取时写入 DSH credentials）';
+    ? t('sync.credConfigured')
+    : t('sync.credMissing');
   const last =
     statusInfo.lastSyncAt !== undefined && statusInfo.lastSyncAt !== ''
-      ? `上次同步：${formatDateTime(statusInfo.lastSyncAt)}`
-      : '尚未同步过';
+      ? t('sync.lastSync', { time: formatDateTime(statusInfo.lastSyncAt) })
+      : t('sync.neverSynced');
   const transport =
     statusInfo.transport !== undefined
       ? ` · ${statusInfo.transport.type}${statusInfo.transport.ref !== '' ? `/${statusInfo.transport.ref}` : ''}`
@@ -147,8 +150,8 @@ export function formatDateTime(iso: string): string {
 }
 
 /** 上次同步时间的展示文本（'' / undefined = 从未同步） */
-export function formatLastSync(iso: string | undefined): string {
-  if (iso === undefined || iso === '') return '从未同步';
+export function formatLastSync(iso: string | undefined, t: UiT = zhUiT): string {
+  if (iso === undefined || iso === '') return t('sync.neverSyncedShort');
   return formatDateTime(iso);
 }
 
@@ -162,14 +165,14 @@ export interface PushReportView {
 }
 
 /** push 报告 → 渲染模型（ok 头部带快照 id；失败显示引擎 message；分区与告警透传） */
-export function pushReportView(report: SyncPushReport | null): PushReportView | null {
+export function pushReportView(report: SyncPushReport | null, t: UiT = zhUiT): PushReportView | null {
   if (report === null) return null;
   if (!report.ok) {
-    return { kind: 'error', headline: report.message ?? '推送失败', sections: report.sections, warnings: report.warnings };
+    return { kind: 'error', headline: report.message ?? t('sync.pushFailed'), sections: report.sections, warnings: report.warnings };
   }
   return {
     kind: 'ok',
-    headline: `推送成功（快照 ${report.snapshotId}）`,
+    headline: t('sync.pushOk', { id: report.snapshotId }),
     sections: report.sections,
     warnings: report.warnings,
   };
@@ -184,20 +187,19 @@ export interface PullReportView {
 }
 
 /** pull 报告 → 渲染模型（差异预览；empty = 无变更；error = 拉取失败） */
-export function pullReportView(report: SyncPullReport | null): PullReportView | null {
+export function pullReportView(report: SyncPullReport | null, t: UiT = zhUiT): PullReportView | null {
   if (report === null) return null;
   if (!report.ok) {
-    return { kind: 'error', headline: report.message ?? '拉取失败', summary: null, previewHint: '' };
+    return { kind: 'error', headline: report.message ?? t('sync.pullFailed'), summary: null, previewHint: '' };
   }
   if (report.changes.length === 0) {
-    return { kind: 'empty', headline: report.message ?? '远端快照与本地一致（无变更）', summary: null, previewHint: '' };
+    return { kind: 'empty', headline: report.message ?? t('sync.pullEmpty'), summary: null, previewHint: '' };
   }
   return {
     kind: 'ok',
-    headline: `远端快照 ${report.snapshotId} 差异预览：共 ${report.changes.length} 项变更`,
+    headline: t('sync.pullOk', { id: report.snapshotId, count: String(report.changes.length) }),
     summary: summarizePullChanges(report.changes),
-    previewHint:
-      '以上为只读差异预览，不会执行导入。v1 暂不提供一键导入接线；如需应用远端配置，请使用「导入恢复」向导手动导入导出的备份。',
+    previewHint: t('sync.previewHint'),
   };
 }
 
@@ -235,36 +237,37 @@ export function computeGithubLoginView(
   userCode: string,
   verificationUri: string,
   error: string | null,
+  t: UiT = zhUiT,
 ): GithubLoginView {
   const inFlight = phase === 'starting' || phase === 'waiting' || phase === 'polling';
   let statusText: string;
   switch (phase) {
     case 'starting':
-      statusText = '正在发起 GitHub 授权…';
+      statusText = t('sync.github.starting');
       break;
     case 'waiting':
       statusText = userCode === ''
-        ? '请在浏览器中打开授权页面并完成授权…'
-        : `请在浏览器中打开授权页面，输入一次性代码 ${userCode} 完成授权（自动等待确认）。`;
+        ? t('sync.github.waitingNoCode')
+        : t('sync.github.waiting', { code: userCode });
       break;
     case 'polling':
-      statusText = '正在确认 GitHub 授权状态…';
+      statusText = t('sync.github.polling');
       break;
     case 'success':
-      statusText = 'GitHub 登录成功：token 已安全写入 DSH credentials，可直接推送/拉取。';
+      statusText = t('sync.github.success');
       break;
     case 'error':
-      statusText = error ?? 'GitHub 登录失败';
+      statusText = error ?? t('sync.github.failed');
       break;
     default:
-      statusText = '通过 GitHub OAuth 设备码流程登录，token 自动写入 DSH credentials（无需手动输入）。';
+      statusText = t('sync.github.defaultStatus');
   }
   return {
     phase,
     userCode,
     verificationUri,
     statusText,
-    startLabel: phase === 'error' ? '重新登录' : '使用 GitHub 登录',
+    startLabel: phase === 'error' ? t('sync.github.relogin') : t('sync.github.login'),
     canStart: phase === 'idle' || phase === 'error',
     canCancel: inFlight,
     showCode: phase === 'waiting' || phase === 'polling',
@@ -273,16 +276,16 @@ export function computeGithubLoginView(
 }
 
 /** 轮询终止态 → 用户可读消息（pending 不是终止态，返回空串；成功/拒绝/过期/错误给出明确文案） */
-export function githubPollMessage(poll: GithubPollResponse): string {
+export function githubPollMessage(poll: GithubPollResponse, t: UiT = zhUiT): string {
   switch (poll.status) {
     case 'success':
-      return 'GitHub 登录成功：token 已安全写入 DSH credentials。';
+      return t('sync.github.pollSuccess');
     case 'denied':
-      return 'GitHub 授权被拒绝（access_denied）。可重新发起登录，或改用下方手动 token 输入。';
+      return t('sync.github.pollDenied');
     case 'expired':
-      return 'GitHub 授权已过期（expired_token）。请重新发起登录。';
+      return t('sync.github.pollExpired');
     case 'error':
-      return `GitHub OAuth 错误：${poll.message ?? poll.errorCode ?? '未知错误'}`;
+      return t('sync.github.pollError', { detail: poll.message ?? poll.errorCode ?? t('sync.github.unknownError') });
     default:
       return '';
   }

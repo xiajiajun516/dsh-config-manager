@@ -5,6 +5,7 @@
 import { normalizePath } from '../utils/paths.ts';
 import { createLogger, type Logger } from '../utils/logger.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { zhMsg } from '../core/messages.ts';
 import type {
   CredentialsFacade, FileSystemFacade, HostContext, ImportContext, NamespaceInfo,
   PatchFileFacade, PluginInfo, PluginsFacade, SettingsFacade, Snapshot,
@@ -237,6 +238,7 @@ export function makeImportContext(
     resolutions: {},
     secretInputs: {},
     log: target.log,
+    msg: zhMsg,
     ...overrides,
   };
 }

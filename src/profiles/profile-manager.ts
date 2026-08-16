@@ -23,6 +23,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createSnapshot } from '../core/backup.ts';
 import { rollback } from '../core/rollback.ts';
+import { zhMsg } from '../core/messages.ts';
 import { ImportNotConfirmedError } from '../core/types.ts';
 import { isFileSection } from '../schema/config.ts';
 import { stringifyJsonSafe, parseJsonSafe } from '../utils/json.ts';
@@ -375,6 +376,7 @@ export class ProfileManager {
       secretInputs: opts.secretInputs ?? {},
       decryptedCredentials: opts.decryptedCredentials,
       log: this.ctx.log,
+      msg: this.ctx.msg ?? zhMsg,
     };
 
     const executed: ExecutedItem[] = [];
@@ -453,6 +455,7 @@ export class ProfileManager {
       resolutions: {},
       secretInputs: {},
       log: this.ctx.log,
+      msg: this.ctx.msg ?? zhMsg,
     };
     const items: PlanItem[] = [];
     const issues: string[] = [];
