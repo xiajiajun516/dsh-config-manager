@@ -84,6 +84,8 @@ export interface PersistedExportState {
 export interface PersistedImportState {
   step: ImportStep
   zipPath: string | null
+  /** select 步骤已选备份文件名（换选/取消选择的 UI 状态；非敏感） */
+  selectedFileName: string | null
   analysis: ImportAnalysis | null
   plan: ImportPlan | null
   result: ImportResult | null
@@ -169,6 +171,7 @@ function defaultImportState(): ImportLiveState {
   return {
     step: 'select',
     zipPath: null,
+    selectedFileName: null,
     analysis: null,
     plan: null,
     result: null,
@@ -446,6 +449,8 @@ export class RunStore {
       import: {
         ...defaultImportState(),
         ...parsed.import,
+        // 旧版持久化载荷可能缺 selectedFileName（undefined）→ 归一到 null
+        selectedFileName: parsed.import.selectedFileName ?? null,
         // 硬性：秘密补录值绝不从存储恢复；collector 由 plan+决策重建
         secretInputs: {},
         conflictCollector: null,
@@ -567,6 +572,7 @@ export class RunStore {
           running: false,
           progress: null,
           conflictCollector: null,
+          selectedFileName: null,
           errors: [],
           error: '上次导入任务已结束或超过保留期，结果无法恢复，请重新导入',
         },
@@ -769,6 +775,7 @@ export class RunStore {
           step: 'select',
           phase: 'preview',
           conflictCollector: null,
+          selectedFileName: null,
           errors: [],
           error: '任务已结束或超过保留期，进度不可恢复',
         },

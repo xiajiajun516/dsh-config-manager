@@ -9,11 +9,16 @@
  * GET  /api/dsh-config-manager/sync/status → SyncStatusResponse （配置/凭据/上次同步）
  * POST /api/dsh-config-manager/sync/push    → SyncPushReport    （body: { repoUrl, gitBin?, token?, snapshotId? }）
  * POST /api/dsh-config-manager/sync/pull    → SyncPullReport    （body: { repoUrl, gitBin?, token?, strategy?, snapshotId? }）
+ * POST /api/dsh-config-manager/sync/github/start   → GithubDeviceFlowStartResponse（GitHub OAuth 设备码）
+ * POST /api/dsh-config-manager/sync/github/poll    → GithubPollResponse（凭 flowId 轮询；成功时 token 已由 Host 写入 credentials）
+ * POST /api/dsh-config-manager/sync/github/cancel  → { ok: true }
  * ```
  *
  * 安全约束：
  *  - token 只存在于请求体内（同源 loopback，与导入 secretInputs 同策略），由 Host 写入
  *    DSH credentials（credentialRef），绝不落同步文件/日志/URL；响应永不回传 token；
+ *  - GitHub device flow：浏览器只持有 flowId（随机 id）+ user_code + 授权页 URL；
+ *    device_code 与 access token 只存在于宿主（内存 / DSH credentials），永不回传；
  *  - 错误消息由 Host 侧已脱敏（GitTransport 统一 [REDACTED]），UI 侧再经 ErrorBanner redact 兜底；
  *  - 本文件不 import 任何 node 模块（纯浏览器 bundle；sync-engine 仅作 type-only 引用）。
  */
@@ -26,6 +31,9 @@ export const SYNC_API = {
   status: '/api/dsh-config-manager/sync/status',
   push: '/api/dsh-config-manager/sync/push',
   pull: '/api/dsh-config-manager/sync/pull',
+  githubStart: '/api/dsh-config-manager/sync/github/start',
+  githubPoll: '/api/dsh-config-manager/sync/github/poll',
+  githubCancel: '/api/dsh-config-manager/sync/github/cancel',
 } as const;
 
 /** DSH credentials 中的同步 token 引用名（Host 半同值；仅供提示文案使用，值由 Host 读写） */
@@ -60,6 +68,38 @@ export interface SyncPushPayload {
 export interface SyncPullPayload extends SyncPushPayload {
   strategy?: 'merge' | 'replace' | 'skipExisting';
   snapshotId?: string;
+}
+
+/* ---------------------------------------------------------------- GitHub OAuth device flow */
+
+/** POST /sync/github/start 响应：UI 展示用（device_code 只存宿主，绝不回传） */
+export interface GithubDeviceFlowStartResponse {
+  /** 随机 flowId：后续 poll/cancel 凭它引用宿主侧登记的 device_code */
+  flowId: string;
+  /** 一次性用户码（用户在 GitHub 授权页输入） */
+  userCode: string;
+  /** GitHub 授权页 URL（用户浏览器打开） */
+  verificationUri: string;
+  /** 设备码过期秒数 */
+  expiresIn: number;
+  /** GitHub 建议轮询间隔秒数 */
+  interval: number;
+}
+
+/** POST /sync/github/poll 响应状态 */
+export type GithubPollStatus = 'pending' | 'success' | 'denied' | 'expired' | 'error';
+
+/** POST /sync/github/poll 响应：成功时 token 已由 Host 写入 DSH credentials（值永不回传） */
+export interface GithubPollResponse {
+  status: GithubPollStatus;
+  /** pending：下次轮询前应等待的毫秒数 */
+  pollDelayMs?: number;
+  /** 终止态错误码（GitHub error code） */
+  errorCode?: string;
+  /** 终止态可展示消息（来自 GitHub error_description / 宿主文案，不含秘密） */
+  message?: string;
+  /** success 时恒 true（凭据已配置）；便于 UI 直接刷新状态 */
+  credentialConfigured?: boolean;
 }
 
 /** 同步请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐（git 网络操作可能较慢） */
@@ -128,5 +168,20 @@ export class SyncApi {
   /** 拉取差异预览：拉取远端最新快照 → 只读分析（绝不执行导入） */
   async pull(payload: SyncPullPayload): Promise<SyncPullReport> {
     return postJson<SyncPullReport>(SYNC_API.pull, payload);
+  }
+
+  /** GitHub OAuth device flow：发起登录，返回一次性用户码 + 授权页 URL + flowId */
+  async githubStart(): Promise<GithubDeviceFlowStartResponse> {
+    return postJson<GithubDeviceFlowStartResponse>(SYNC_API.githubStart, {});
+  }
+
+  /** GitHub OAuth device flow：凭 flowId 轮询授权结果（成功时 token 已由 Host 写入 credentials） */
+  async githubPoll(flowId: string): Promise<GithubPollResponse> {
+    return postJson<GithubPollResponse>(SYNC_API.githubPoll, { flowId });
+  }
+
+  /** GitHub OAuth device flow：取消（丢弃宿主侧登记，零副作用） */
+  async githubCancel(flowId: string): Promise<{ ok: boolean }> {
+    return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId });
   }
 }

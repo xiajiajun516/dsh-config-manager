@@ -7,7 +7,7 @@
  */
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
-import type { SyncStatusResponse } from './sync-api.ts';
+import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts';
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
 
@@ -199,4 +199,91 @@ export function pullReportView(report: SyncPullReport | null): PullReportView | 
     previewHint:
       '以上为只读差异预览，不会执行导入。v1 暂不提供一键导入接线；如需应用远端配置，请使用「导入恢复」向导手动导入导出的备份。',
   };
+}
+
+/* ---------------------------------------------------------------- GitHub 登录视图模型 */
+
+export type GithubLoginPhase = 'idle' | 'starting' | 'waiting' | 'polling' | 'success' | 'error';
+
+export interface GithubLoginView {
+  phase: GithubLoginPhase;
+  /** 一次性用户码（waiting/polling 展示，用户到 GitHub 授权页输入） */
+  userCode: string;
+  /** GitHub 授权页 URL */
+  verificationUri: string;
+  /** 状态行文案（中文，项目源语言；与 computeSyncStatus 同策略，不依赖 locale 注入） */
+  statusText: string;
+  /** 主按钮文案：发起 / 重新登录 */
+  startLabel: string;
+  /** 是否可发起/重试登录 */
+  canStart: boolean;
+  /** 流程进行中是否展示「取消」按钮 */
+  canCancel: boolean;
+  /** 是否展示设备码 + 授权链接区块 */
+  showCode: boolean;
+  /** 错误消息（phase=error；来自轮询终止态或请求失败） */
+  error: string | null;
+}
+
+/**
+ * GitHub 登录区块渲染模型（纯函数，node 可测）：
+ * - idle → 可发起；starting → 请求设备码中；waiting → 展示设备码等待用户在浏览器授权；
+ * - polling → 轮询 GitHub 中（仍展示代码区块）；success → 完成；error → 可重试。
+ */
+export function computeGithubLoginView(
+  phase: GithubLoginPhase,
+  userCode: string,
+  verificationUri: string,
+  error: string | null,
+): GithubLoginView {
+  const inFlight = phase === 'starting' || phase === 'waiting' || phase === 'polling';
+  let statusText: string;
+  switch (phase) {
+    case 'starting':
+      statusText = '正在发起 GitHub 授权…';
+      break;
+    case 'waiting':
+      statusText = userCode === ''
+        ? '请在浏览器中打开授权页面并完成授权…'
+        : `请在浏览器中打开授权页面，输入一次性代码 ${userCode} 完成授权（自动等待确认）。`;
+      break;
+    case 'polling':
+      statusText = '正在确认 GitHub 授权状态…';
+      break;
+    case 'success':
+      statusText = 'GitHub 登录成功：token 已安全写入 DSH credentials，可直接推送/拉取。';
+      break;
+    case 'error':
+      statusText = error ?? 'GitHub 登录失败';
+      break;
+    default:
+      statusText = '通过 GitHub OAuth 设备码流程登录，token 自动写入 DSH credentials（无需手动输入）。';
+  }
+  return {
+    phase,
+    userCode,
+    verificationUri,
+    statusText,
+    startLabel: phase === 'error' ? '重新登录' : '使用 GitHub 登录',
+    canStart: phase === 'idle' || phase === 'error',
+    canCancel: inFlight,
+    showCode: phase === 'waiting' || phase === 'polling',
+    error,
+  };
+}
+
+/** 轮询终止态 → 用户可读消息（pending 不是终止态，返回空串；成功/拒绝/过期/错误给出明确文案） */
+export function githubPollMessage(poll: GithubPollResponse): string {
+  switch (poll.status) {
+    case 'success':
+      return 'GitHub 登录成功：token 已安全写入 DSH credentials。';
+    case 'denied':
+      return 'GitHub 授权被拒绝（access_denied）。可重新发起登录，或改用下方手动 token 输入。';
+    case 'expired':
+      return 'GitHub 授权已过期（expired_token）。请重新发起登录。';
+    case 'error':
+      return `GitHub OAuth 错误：${poll.message ?? poll.errorCode ?? '未知错误'}`;
+    default:
+      return '';
+  }
 }

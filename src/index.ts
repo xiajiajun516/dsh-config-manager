@@ -72,6 +72,7 @@ import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
+import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
 import { SyncEngine } from './sync/sync-engine.ts'
 import { loadSyncState } from './sync/sync-state.ts'
 import { readSyncConfig, writeSyncConfig, validateRepoUrl } from './sync/sync-config.ts'
@@ -101,6 +102,16 @@ export interface Config {
   dataDir?: string
   /** 管理的 profile 名（插件依赖读写/安装目标）；缺省取启动参数 --profile，再缺省 'web'。 */
   profile?: string
+  /**
+   * GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 必需）。
+   * 未配置时登录入口返回指引错误（设备码流程无法凭空认证，必须有一个已注册的 OAuth App）。
+   */
+  githubClientId?: string
+  /**
+   * GitHub OAuth App 的 client_secret（confidential app 必需；public app 可省略）。
+   * 只存在于宿主进程：device flow 轮询时由宿主直接发送给 GitHub，绝不回传浏览器/日志。
+   */
+  githubClientSecret?: string
 }
 
 /* ---------------------------------------------------------------- constants */
@@ -122,6 +133,10 @@ const API = {
   syncStatus: '/api/dsh-config-manager/sync/status',
   syncPush: '/api/dsh-config-manager/sync/push',
   syncPull: '/api/dsh-config-manager/sync/pull',
+  // m-github-oauth：GitHub OAuth device flow 登录（start → 展示授权码 → poll → token 入库）
+  syncGithubStart: '/api/dsh-config-manager/sync/github/start',
+  syncGithubPoll: '/api/dsh-config-manager/sync/github/poll',
+  syncGithubCancel: '/api/dsh-config-manager/sync/github/cancel',
 } as const
 
 /**
@@ -747,6 +762,9 @@ interface RoutesDeps {
   syncDir: string
   /** m-sync-ui：原始 DSH credentials（resolve token / set token / describe 状态） */
   credentials: CredentialProvider
+  /** m-github-oauth：GitHub OAuth App 凭据（device flow 必需 client_id；client_secret 可选） */
+  githubClientId?: string
+  githubClientSecret?: string
 }
 
 /* -------------------------------------------------- sync 路由（m-sync-ui） */
@@ -911,8 +929,12 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
 
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): WebRoute[] {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, credentials } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, credentials, githubClientId, githubClientSecret } = deps
   const roots = [exportsDir, tmpDir]
+
+  /** m-github-oauth：宿主侧设备码登记表 + auth 客户端（进程生命周期；device_code 只存内存） */
+  const githubFlows = new DeviceFlowStore()
+  const githubAuth = new GitHubAuthClient()
 
   const makeImporter = (): Importer => new Importer({
     ctx: host,
@@ -1410,6 +1432,111 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
       },
     },
+    // -------------------------------------------------- sync/github/start
+    // m-github-oauth：发起 GitHub OAuth device flow。请求 GitHub 取设备码，宿主登记
+    // （flowId → device_code 只存内存），返回 UI 展示用的 user_code + 授权页 URL。
+    // client_id 来自插件配置；未配置时给出可操作指引（不会凭空认证）。
+    {
+      kind: 'exact',
+      path: API.syncGithubStart,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        if (githubClientId === undefined || githubClientId === '') {
+          writeJson(res, 400, {
+            error: '未配置 GitHub OAuth client_id：请在插件配置中设置 githubClientId（GitHub → Settings → Developer settings → OAuth Apps 注册应用获取）',
+          })
+          return
+        }
+        try {
+          const started = await githubAuth.startDeviceFlow(githubClientId)
+          const flowId = DeviceFlowStore.newFlowId()
+          githubFlows.set(flowId, {
+            deviceCode: started.deviceCode,
+            clientId: githubClientId,
+            clientSecret: githubClientSecret,
+            interval: started.interval,
+            expiresAt: Date.now() + started.expiresIn * 1000,
+          })
+          // device_code 绝不回传；只回 UI 需要的展示信息
+          writeJson(res, 200, {
+            flowId,
+            userCode: started.userCode,
+            verificationUri: started.verificationUri,
+            expiresIn: started.expiresIn,
+            interval: started.interval,
+          })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // -------------------------------------------------- sync/github/poll
+    // m-github-oauth：轮询授权结果。凭 flowId 取回宿主登记的 device_code → GitHub 换 token
+    // → 成功则立即写入 DSH credentials（SYNC_CREDENTIAL_REF，与手动 token 同槽），
+    // token 绝不回传浏览器；pending 返回下次轮询延迟；终止态（denied/expired/error）清理登记。
+    {
+      kind: 'exact',
+      path: API.syncGithubPoll,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const flowId = typeof body?.['flowId'] === 'string' ? body['flowId'] : ''
+        if (flowId === '') {
+          writeJson(res, 400, { error: 'flowId is required' })
+          return
+        }
+        const flow = githubFlows.get(flowId)
+        if (flow === undefined) {
+          writeJson(res, 400, { error: 'GitHub 登录流程不存在或已过期，请重新开始' })
+          return
+        }
+        try {
+          const result = await githubAuth.pollForToken({
+            clientId: flow.clientId,
+            deviceCode: flow.deviceCode,
+            clientSecret: flow.clientSecret,
+            interval: flow.interval,
+          })
+          if (result.status === 'success' && result.accessToken !== undefined) {
+            await credentials.set(credentialRef(SYNC_CREDENTIAL_REF), result.accessToken)
+            githubFlows.delete(flowId)
+            host.log.info('GitHub OAuth 登录成功（token 已写入 DSH credentials）')
+            writeJson(res, 200, { status: 'success', credentialConfigured: true })
+            return
+          }
+          if (result.status === 'pending') {
+            writeJson(res, 200, { status: 'pending', pollDelayMs: result.pollDelayMs })
+            return
+          }
+          // 终止态：清理登记，把状态 + 可展示消息回给 UI（不含任何秘密）
+          githubFlows.delete(flowId)
+          writeJson(res, 200, {
+            status: result.status,
+            ...(result.message !== undefined ? { message: result.message } : {}),
+            ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
+          })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // -------------------------------------------------- sync/github/cancel
+    // m-github-oauth：取消登录流程（丢弃宿主侧 device_code 登记，零副作用）。
+    {
+      kind: 'exact',
+      path: API.syncGithubCancel,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const flowId = typeof body?.['flowId'] === 'string' ? body['flowId'] : ''
+        if (flowId === '') {
+          writeJson(res, 400, { error: 'flowId is required' })
+          return
+        }
+        githubFlows.delete(flowId)
+        writeJson(res, 200, { ok: true })
+      },
+    },
   ]
 }
 
@@ -1459,6 +1586,8 @@ export function apply(ctx: Context, config?: Config): void {
     runs: new RunRegistry(),
     syncDir,
     credentials: ctx.credentials,
+    githubClientId: config?.githubClientId,
+    githubClientSecret: config?.githubClientSecret,
   })
   const webServer = readService<WebServer>(ctx, 'webServer')
   if (webServer === undefined) {

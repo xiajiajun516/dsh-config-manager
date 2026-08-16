@@ -6,10 +6,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
-import type { SyncStatusResponse } from './sync-api.ts'
+import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts'
 import {
-  PRIVATE_REPO_HINT, computeSyncButtons, computeSyncStatus, formatDateTime, formatLastSync,
-  kindLabel, pullReportView, pushReportView, severityLabel, summarizePullChanges,
+  PRIVATE_REPO_HINT, computeGithubLoginView, computeSyncButtons, computeSyncStatus, formatDateTime,
+  formatLastSync, githubPollMessage, kindLabel, pullReportView, pushReportView, severityLabel,
+  summarizePullChanges,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
@@ -208,4 +209,68 @@ test('sync-view: formatLastSync / formatDateTime 合法 ISO → 本地可读格�
   const text = formatLastSync('2026-08-16T10:30:00.000Z')
   assert.match(text, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
   assert.equal(formatDateTime('not-a-date'), 'not-a-date')
+})
+
+/* ------------------------------------------------ GitHub 登录视图模型 */
+
+test('sync-view: github 登录 idle → 可开始、不展示代码区块、无错误', () => {
+  const v = computeGithubLoginView('idle', '', '', null)
+  assert.equal(v.phase, 'idle')
+  assert.equal(v.canStart, true)
+  assert.equal(v.canCancel, false)
+  assert.equal(v.showCode, false)
+  assert.match(v.startLabel, /GitHub/)
+})
+
+test('sync-view: github 登录 starting → 不可重复发起、显示进行中文案', () => {
+  const v = computeGithubLoginView('starting', '', '', null)
+  assert.equal(v.canStart, false)
+  assert.equal(v.canCancel, true)
+  assert.match(v.statusText, /发起/)
+})
+
+test('sync-view: github 登录 waiting → 展示设备码与授权链接、可取消', () => {
+  const v = computeGithubLoginView('waiting', 'ABCD-EFGH', 'https://github.com/login/device', null)
+  assert.equal(v.showCode, true)
+  assert.equal(v.canCancel, true)
+  assert.equal(v.userCode, 'ABCD-EFGH')
+  assert.equal(v.verificationUri, 'https://github.com/login/device')
+  assert.match(v.statusText, /ABCD-EFGH/)
+})
+
+test('sync-view: github 登录 polling → 仍展示代码区块且可取消', () => {
+  const v = computeGithubLoginView('polling', 'ABCD-EFGH', 'https://github.com/login/device', null)
+  assert.equal(v.showCode, true)
+  assert.equal(v.canCancel, true)
+  assert.equal(v.canStart, false)
+  assert.match(v.statusText, /确认 GitHub 授权状态/)
+})
+
+test('sync-view: github 登录 success → 成功文案、代码区块隐藏', () => {
+  const v = computeGithubLoginView('success', 'ABCD-EFGH', 'https://github.com/login/device', null)
+  assert.equal(v.showCode, false)
+  assert.equal(v.canStart, false)
+  assert.match(v.statusText, /已安全写入/)
+})
+
+test('sync-view: github 登录 error → 展示错误 + 重新登录入口', () => {
+  const v = computeGithubLoginView('error', '', '', '授权被拒绝')
+  assert.equal(v.canStart, true)
+  assert.equal(v.canCancel, false)
+  assert.equal(v.error, '授权被拒绝')
+  assert.match(v.statusText, /授权被拒绝/)
+  assert.match(v.startLabel, /重新登录/)
+})
+
+test('sync-view: githubPollMessage 映射轮询终止态（denied/expired/error/success）', () => {
+  const denied: GithubPollResponse = { status: 'denied' }
+  assert.match(githubPollMessage(denied), /拒绝/)
+  const expired: GithubPollResponse = { status: 'expired' }
+  assert.match(githubPollMessage(expired), /过期/)
+  const error: GithubPollResponse = { status: 'error', errorCode: 'incorrect_device_code', message: '设备码不匹配' }
+  assert.match(githubPollMessage(error), /设备码不匹配/)
+  const success: GithubPollResponse = { status: 'success', credentialConfigured: true }
+  assert.match(githubPollMessage(success), /已安全写入/)
+  const pending: GithubPollResponse = { status: 'pending', pollDelayMs: 5000 }
+  assert.equal(githubPollMessage(pending), '', 'pending 不是终止态，不应产生消息')
 })

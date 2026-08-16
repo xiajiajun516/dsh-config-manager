@@ -37,6 +37,9 @@ import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
 import { ConflictList } from './ConflictList.tsx'
 import { PathMappingForm } from './PathMappingForm.tsx'
+import {
+  applyPickedFile, browseLabelKey, cancelSelection, consumePickedFile, fileSelectModel,
+} from './import-file-select.ts'
 import css from '../config-manager.module.css'
 
 export interface ImportWizardViewProps {
@@ -111,6 +114,11 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const pathMappings = imp.pathMappings
   const secretInputs = imp.secretInputs
   const fileInput = useRef<HTMLInputElement | null>(null)
+  /**
+   * 选择代数（取消选择时递增）：作废在途的选择上传/分析，
+   * 防止「取消后旧请求仍把向导推进/写错误」的竞态。
+   */
+  const pickGeneration = useRef(0)
 
   const setPhase = (next: FlowPhase): void => {
     runStore.patch({ import: { phase: next } })
@@ -142,21 +150,38 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
 
   /* ---------- 动作 ---------- */
 
-  /** 选择并上传 ZIP → wizard.selectZip（analyzing → compatibility） */
+  /** 选择并上传 ZIP → wizard.selectZip（analyzing → compatibility）。
+   * 换选不变式：每次选择都以最新文件为准（applyPickedFile 替换旧选择）；
+   * pickGeneration 守卫作废取消后在途的旧请求。 */
   const onPickFile = async (file: File | undefined): Promise<void> => {
     if (file === undefined) return
-    runStore.patch({ import: { uploading: true, error: null } })
+    const generation = pickGeneration.current
+    const next = applyPickedFile(fileSelectModel(imp.selectedFileName, uploading), file)
+    runStore.patch({ import: { uploading: next.busy, error: null, selectedFileName: next.selectedName } })
     try {
       const uploaded: UploadResponse = await api.upload(file)
+      if (generation !== pickGeneration.current) return // 用户已取消本次选择
       const analysis = await wizard.selectZip(uploaded.zipPath)
       void analysis
+      if (generation !== pickGeneration.current) return
       runStore.syncWizard()
     } catch (err) {
+      if (generation !== pickGeneration.current) return
       runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
       runStore.syncWizard()
     } finally {
-      runStore.patch({ import: { uploading: false } })
+      if (generation === pickGeneration.current) {
+        runStore.patch({ import: { uploading: false } })
+      }
     }
+  }
+
+  /** 取消当前选择：回 idle 并清空 input value（同一文件可再次选择触发 onChange）。 */
+  const cancelPick = (): void => {
+    pickGeneration.current += 1
+    const idle = cancelSelection(fileSelectModel(imp.selectedFileName, uploading))
+    runStore.patch({ import: { selectedFileName: idle.selectedName, uploading: idle.busy, error: null } })
+    if (fileInput.current !== null) fileInput.current.value = ''
   }
 
   /** Compatibility → Preview */
@@ -227,6 +252,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
 
   /** 重置向导（重新导入） */
   const resetWizard = (): void => {
+    pickGeneration.current += 1
     wizard.reset()
     runStore.syncWizard()
     runStore.patch({
@@ -237,6 +263,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         progress: null,
         error: null,
         runId: null,
+        selectedFileName: null,
         conflictCollector: null,
         conflictStrategy: 'merge',
         conflictResolutions: {},
@@ -249,6 +276,8 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   /* ---------- 各步骤渲染 ---------- */
 
   if (step === 'select') {
+    // 换选模型：由 store 的 selectedFileName/uploading 推导（import-file-reselection）
+    const selectModel = fileSelectModel(imp.selectedFileName, uploading)
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('import.select.title')} subtitle={t('import.select.hint')} />
@@ -257,11 +286,29 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
           type="file"
           accept=".zip,application/zip"
           className={css.hiddenFile}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => { void onPickFile(e.target.files?.[0]) }}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+            // 恒清空 input value → 同一文件再次选择也会触发 onChange（同文件换选）
+            const file = consumePickedFile(e.target.files?.[0], e.target)
+            void onPickFile(file)
+          }}
         />
+        {selectModel.selectedName !== null && (
+          <div className={css.hint} data-testid="import-selected-file">
+            {t('import.select.file', { name: selectModel.selectedName })}
+          </div>
+        )}
         <div className={css.actionRow}>
-          <Button variant="primary" disabled={uploading} onClick={() => { fileInput.current?.click() }}>
-            {uploading ? <Spinner label={t('import.analyzing')} /> : t('import.select.browse')}
+          {selectModel.selectedName !== null && (
+            <Button variant="ghost" onClick={cancelPick}>
+              {t('import.select.cancel')}
+            </Button>
+          )}
+          <Button
+            variant="primary"
+            disabled={uploading}
+            onClick={() => { fileInput.current?.click() }}
+          >
+            {uploading ? <Spinner label={t('import.analyzing')} /> : t(browseLabelKey(selectModel.selectedName !== null))}
           </Button>
         </div>
         {error !== null && <ErrorBanner error={error} onRetry={resetWizard} />}
@@ -301,6 +348,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         )}
         {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} />}
         <div className={css.actionRow}>
+          <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
           <Button variant="primary" onClick={() => { void goPreview() }}>{t('common.next')}</Button>
         </div>
       </div>
@@ -325,6 +373,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
         {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} />}
         <div className={css.actionRow}>
+          <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
           <Button
             variant="primary"
             onClick={() => {

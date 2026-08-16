@@ -15,7 +15,7 @@
  * 状态组件内自持（低频显式操作，同 SnapshotsPanel 策略，不进 sessionStorage）；
  * token 仅内存（state），成功后清空（已写入 DSH credentials），绝不持久化。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
@@ -24,9 +24,10 @@ import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { SYNC_CREDENTIAL_REF } from './sync-api.ts'
 import type { SyncApi, SyncStatusResponse } from './sync-api.ts'
 import {
-  PRIVATE_REPO_HINT, computeSyncButtons, computeSyncStatus, kindLabel,
-  pullReportView, pushReportView, severityLabel,
+  PRIVATE_REPO_HINT, computeGithubLoginView, computeSyncButtons, computeSyncStatus, githubPollMessage,
+  kindLabel, pullReportView, pushReportView, severityLabel,
 } from './sync-view.ts'
+import type { GithubLoginPhase } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
 export interface SyncSettingsViewProps {
@@ -46,6 +47,22 @@ interface SyncUiState {
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
   error: string | null
+  /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
+  github: GithubUiState
+}
+
+interface GithubUiState {
+  phase: GithubLoginPhase
+  flowId: string
+  userCode: string
+  verificationUri: string
+  /** GitHub 建议轮询间隔秒数（pending 重排时兜底用） */
+  interval: number
+  error: string | null
+}
+
+const initialGithub: GithubUiState = {
+  phase: 'idle', flowId: '', userCode: '', verificationUri: '', interval: 5, error: null,
 }
 
 const initial: SyncUiState = {
@@ -59,6 +76,7 @@ const initial: SyncUiState = {
   pushReport: null,
   pullReport: null,
   error: null,
+  github: initialGithub,
 }
 
 export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {

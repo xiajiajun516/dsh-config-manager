@@ -115,3 +115,65 @@ test('S-05 服务未挂载：404（非 JSON 体）→ ConfigManagerApiError 提�
     return true;
   });
 });
+
+/* ------------------------------------------------ GitHub OAuth device flow 契约 */
+
+test('S-06 api.githubStart()：POST /sync/github/start，解析 flowId/userCode/授权页', async () => {
+  const body = {
+    flowId: 'flow-1', userCode: 'ABCD-EFGH',
+    verificationUri: 'https://github.com/login/device', expiresIn: 900, interval: 5,
+  };
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, body);
+  });
+
+  const api = new SyncApi();
+  const result = await api.githubStart();
+  assert.equal(result.flowId, 'flow-1');
+  assert.equal(result.userCode, 'ABCD-EFGH');
+  assert.equal(result.verificationUri, 'https://github.com/login/device');
+  assert.equal(calls[0]?.url, SYNC_API.githubStart);
+  assert.equal(calls[0]?.init?.method, 'POST');
+});
+
+test('S-07 api.githubPoll()：POST /sync/github/poll 携带 flowId；pending 透传 pollDelayMs', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { status: 'pending', pollDelayMs: 5000 });
+  });
+
+  const api = new SyncApi();
+  const result = await api.githubPoll('flow-1');
+  assert.equal(result.status, 'pending');
+  assert.equal(result.pollDelayMs, 5000);
+  assert.equal(calls[0]?.url, SYNC_API.githubPoll);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['flowId'], 'flow-1');
+});
+
+test('S-08 api.githubPoll() 成功 → 响应只含状态，token 永不回传', async () => {
+  installFetchMock(() => jsonResponse(200, { status: 'success', credentialConfigured: true }));
+  const api = new SyncApi();
+  const result = await api.githubPoll('flow-1');
+  assert.equal(result.status, 'success');
+  assert.equal(result.credentialConfigured, true);
+  assert.equal('accessToken' in result, false, '响应契约不得携带 access token 字段');
+  assert.equal('token' in result, false);
+});
+
+test('S-09 api.githubCancel()：POST /sync/github/cancel 携带 flowId', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true });
+  });
+  const api = new SyncApi();
+  const result = await api.githubCancel('flow-1');
+  assert.equal(result.ok, true);
+  assert.equal(calls[0]?.url, SYNC_API.githubCancel);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['flowId'], 'flow-1');
+});
