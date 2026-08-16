@@ -71,11 +71,20 @@ export interface CredentialsFacade {
   unset(ref: string): Promise<void>;
 }
 
-export interface PluginInfo { name: string; version: string; enabled: boolean; isBundle?: boolean; inBundles?: string[]; }
+export interface PluginInfo {
+  name: string;
+  version: string;
+  enabled: boolean;
+  isBundle?: boolean;
+  inBundles?: string[];
+  /** 声明依赖 spec（profile package.json dependencies 原样）；文件视图来自 readInstalled */
+  spec?: string;
+}
 
 export interface PluginsFacade {
   listInstalled(): Promise<PluginInfo[]>;
-  install(pkg: string): Promise<{ needsRestart: boolean }>;
+  /** 安装/更新插件；spec 为来源记录的声明依赖 spec（如 github:user/repo），缺省按裸包名装 npm 最新版 */
+  install(pkg: string, spec?: string): Promise<{ needsRestart: boolean }>;
 }
 
 export interface WorkspaceFacade {

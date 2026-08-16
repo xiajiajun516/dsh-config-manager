@@ -84,22 +84,28 @@ test('listInstalledPlugins: 版本取 node_modules 真实落盘版本（声明 ^
   const { homeDir, profileDir, cleanup } = makeTempProfile({
     '@linxin666/dsh-ssh': '^0.1.0',
     'pkg-a': '1.0.0',
+    'dsh-memory-evolve': 'github:csyangwen/dsh-memory-evolve',
     '@deepseek-ai/dsh-base': '0.1.0-rc.6',
   });
   try {
     writeInstalledPkg(profileDir, '@linxin666/dsh-ssh', '0.1.12', 'patch.yml');
     writeInstalledPkg(profileDir, 'pkg-a', '1.0.0');
+    writeInstalledPkg(profileDir, 'dsh-memory-evolve', '1.0.0');
     writeInstalledPkg(profileDir, '@deepseek-ai/dsh-base', '0.1.0-rc.6');
 
     const list = listInstalledPlugins(homeDir, 'web');
     const ssh = list.find((p) => p.name === '@linxin666/dsh-ssh');
     const plain = list.find((p) => p.name === 'pkg-a');
+    const git = list.find((p) => p.name === 'dsh-memory-evolve');
     assert.equal(ssh?.version, '0.1.12', '必须返回落盘真实版本，而不是声明的 ^0.1.0');
     assert.equal(ssh?.isBundle, true);
     assert.deepEqual(ssh?.inBundles, ['@linxin666/dsh-ssh'], '直接依赖的 bundle 自身就是 profile 层');
     assert.equal(plain?.version, '1.0.0');
     assert.equal(plain?.isBundle, false);
     assert.deepEqual(plain?.inBundles, []);
+    // 声明 spec 原样保留：github 来源 / 版本区间都要随清单带出（导入重装依据）
+    assert.equal(git?.spec, 'github:csyangwen/dsh-memory-evolve');
+    assert.equal(ssh?.spec, '^0.1.0');
     assert.equal(list.some((p) => p.name === '@deepseek-ai/dsh-base'), false, 'in-box bundle 不出现');
     assert.equal(list.every((p: PluginInfo) => p.enabled === true), true, '文件视图依赖即视为启用');
   } finally {

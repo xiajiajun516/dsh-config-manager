@@ -176,7 +176,8 @@ export function listInstalledPlugins(homeDir: string, profile: string): PluginIn
   const dir = resolveProfileDir(homeDir, profile)
   reconcileBundles(dir)
   const out: PluginInfo[] = []
-  for (const name of Object.keys(readInstalled(dir))) {
+  const installed = readInstalled(dir)
+  for (const name of Object.keys(installed)) {
     const isBundle = hasDshBundlePatch(join(dir, 'node_modules', name))
     out.push({
       name,
@@ -186,6 +187,8 @@ export function listInstalledPlugins(homeDir: string, profile: string): PluginIn
       isBundle,
       // 直接依赖的 bundle 自己就是 profile 层；普通依赖不属于任何聚合 bundle。
       inBundles: isBundle ? [name] : [],
+      // 声明依赖 spec 原样保留：github:/file:/link: 等非 registry 来源导入时按此安装。
+      spec: installed[name],
     })
   }
   return out
@@ -195,6 +198,19 @@ export function listInstalledPlugins(homeDir: string, profile: string): PluginIn
 
 /** 15 分钟默认上限（慢网络 + git 安装），可用环境变量覆盖（CI/测试）。 */
 const INSTALL_TIMEOUT_MS = Number(process.env.DSH_CONFIG_MANAGER_INSTALL_TIMEOUT_MS) || 15 * 60 * 1000
+
+/**
+ * 非 registry 来源的依赖 spec 前缀：这些来源必须把 spec 原样交给 pnpm add，
+ * 裸包名在 registry 上查不到（fetch-404 → 幽灵依赖拖垮整个 profile 的安装）。
+ * 版本区间（^x / x.y.z）与裸包名走默认语义：npm 最新版（官方机制，见 §34.17 设计决策）。
+ */
+const NON_REGISTRY_SPEC = /^(github:|gitlab:|bitbucket:|git\+|file:|link:|workspace:|https?:)/i
+
+/** 安装目标：非 registry spec 按 spec 安装；其余按裸包名（npm 最新版）。 */
+export function installSpecFor(pkg: string, spec?: string): string {
+  if (spec !== undefined && spec !== '' && NON_REGISTRY_SPEC.test(spec)) return spec
+  return pkg
+}
 
 /** Windows 的 npm/corepack/pnpm/dsh 都是 .cmd 垫片：Node 直接 spawn 无法启动（ENOENT/EINVAL）。 */
 const winCmdShim = process.platform === 'win32'

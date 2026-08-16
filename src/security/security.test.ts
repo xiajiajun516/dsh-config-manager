@@ -193,7 +193,7 @@ class MemCredentials implements CredentialsFacade {
 
 class MemPlugins implements PluginsFacade {
   async listInstalled() { return []; }
-  async install(_pkg: string) { return { needsRestart: true }; }
+  async install(_pkg: string, _spec?: string) { return { needsRestart: true }; }
 }
 
 class MemWorkspace implements WorkspaceFacade {

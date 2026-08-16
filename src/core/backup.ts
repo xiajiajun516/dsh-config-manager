@@ -42,6 +42,8 @@ async function backupHostFiles(
   const candidates = [...HOST_FILE_CANDIDATES];
   if (ctx.profile !== undefined && ctx.profile !== '') {
     candidates.push({ relPath: `profiles/${ctx.profile}/cordis.patch.yml` });
+    // pnpm-workspace.yaml 决定插件能否安装（allowBuilds/冷静期）→ 一并纳入宿主整文件备份
+    candidates.push({ relPath: `profiles/${ctx.profile}/pnpm-workspace.yaml` });
   }
 
   const backups: HostFileBackup[] = [];
@@ -83,6 +85,11 @@ const FILE_BASES: Partial<Record<SectionId, string>> = {
 
 /** 解析文件类目标的绝对路径（引擎通用快照与回滚共用） */
 export function resolveFileTarget(ctx: HostContext, adapter: SectionId, ref: string): string {
+  // plugins 分区的 pnpm-workspace.yaml：位于 profiles/<profile>/ 下（非 FILE_BASES 静态基准）
+  if (adapter === 'plugins' && ref === 'pnpm-workspace.yaml') {
+    const profile = ctx.profile !== undefined && ctx.profile !== '' ? ctx.profile : 'web';
+    return path.join(ctx.homeDir, 'profiles', profile, 'pnpm-workspace.yaml');
+  }
   const base = FILE_BASES[adapter] ?? '';
   return path.join(ctx.homeDir, base, ref);
 }
@@ -135,6 +142,22 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     case 'mcp':
     case 'plugins':
     case 'prompts': {
+      // plugins 分区的 pnpm-workspace.yaml → 整文件快照（file 类，回滚可整文件还原）
+      if (target.adapter === 'plugins' && target.ref === 'pnpm-workspace.yaml') {
+        const abs = resolveFileTarget(ctx, target.adapter, target.ref);
+        if (!(await ctx.fs.exists(abs))) {
+          return { kind: 'file', adapter: target.adapter, ref: target.ref, before: null, existed: false };
+        }
+        const data = await ctx.fs.readFile(abs);
+        return {
+          kind: 'file',
+          adapter: target.adapter,
+          ref: target.ref,
+          before: { contentHash: sha256Hex(data) },
+          existed: true,
+          copiedTo: `blobs/${crypto.randomUUID()}`,
+        };
+      }
       // patchLine：从组合 patch 文件读取原行（file 为必填的 file 字段约定为 'cordis.patch.yml'）
       const file = 'cordis.patch.yml';
       const lines = await ctx.patchFile.readPatchLines(file);

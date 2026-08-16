@@ -109,7 +109,7 @@ class MemPlugins implements PluginsFacade {
   /** 测试钩子：install 抛错（模拟 npm ERESOLVE / 网络失败） */
   failInstall = false;
   async listInstalled() { return [...this.installed.values()]; }
-  async install(pkg: string) {
+  async install(pkg: string, _spec?: string) {
     if (this.failInstall) throw new Error(`npm error code ERESOLVE: could not resolve ${pkg}`);
     this.installed.set(pkg, { name: pkg, version: '1.0.0', enabled: true });
     return { needsRestart: true };

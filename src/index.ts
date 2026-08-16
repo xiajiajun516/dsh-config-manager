@@ -60,8 +60,8 @@ import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
 import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import {
-  hasDshBundlePatch, installErrorFor, listInstalledPlugins, resolveProfileDir,
-  resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
+  hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins,
+  resolveProfileDir, resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
 } from './core/plugin-cli.ts'
 import type {
   ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
@@ -91,7 +91,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.16'
+const PLUGIN_VERSION = '0.1.17'
 
 /** Plugin config (composition entry); the loader applies it as-is. */
 export interface Config {
@@ -368,9 +368,12 @@ export class DshPluginsFacade implements PluginsFacade {
     return listInstalledPlugins(this.homeDir, this.profile)
   }
 
-  async install(pkg: string): Promise<{ needsRestart: boolean }> {
+  async install(pkg: string, spec?: string): Promise<{ needsRestart: boolean }> {
     const profileDir = resolveProfileDir(this.homeDir, this.profile)
-    const result = await this.runner(profileDir, this.profile, ['add', pkg])
+    // 非 registry 来源（github:/git+/file: 等）按来源 spec 安装；registry 包按裸包名装
+    // npm 最新版（官方机制）。spec 丢失（旧备份）时退化为裸包名 → pnpm fetch-404，
+    // 由 installErrorFor 给出可操作诊断。
+    const result = await this.runner(profileDir, this.profile, ['add', installSpecFor(pkg, spec)])
     if (result.exitCode !== 0 || result.timedOut) throw installErrorFor(pkg, result)
     // 非 bundle 插件：CLI 只维护 bundles，需补 profile patch 激活行才能加载。
     // 补写失败不吞：包已装但未激活，明确报错并允许重试（幂等补行）。

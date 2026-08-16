@@ -71,8 +71,10 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 修复「备份与迁移」页面空白：runStore.subscribe/getSnapshot 改为箭头函数类字段，useSyncExternalStore 裸引用调用不再因 this 丢失而崩溃
-          - 新增回归测试锁定该行为（裸引用调用不丢 this）
+          - 修复插件导入失败：GitHub 来源依赖（github:csyangwen/dsh-memory-evolve 等）导出时保留声明 spec、导入按 spec 安装，不再因裸包名 fetch-404 产生幽灵依赖拖垮整个 profile 的后续安装
+          - plugins 分区新增携带 pnpm-workspace.yaml（allowBuilds / minimumReleaseAgeExclude），目标机插件构建白名单与冷静期配置随导入迁移
+          - 新增目标机幽灵依赖清理脚本 Docs/repair-ghost-plugin-deps.ps1（删除残留依赖行 + 补 allowBuilds + 按正确 spec 重装）
+          - 新增回归测试：github: spec 透传、pnpm-workspace.yaml Create/Update、快照/回滚覆盖
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest

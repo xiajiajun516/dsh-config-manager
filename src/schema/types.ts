@@ -94,6 +94,13 @@ export interface ProvidersSection { version: 1; providers: Record<string, Provid
 export interface PluginEntry {
   name: string;     // 包名
   version: string;
+  /**
+   * 声明依赖 spec（profile package.json dependencies 原样），如 ^0.3.6、
+   * github:csyangwen/dsh-memory-evolve、file:/link: 等。
+   * 导入时非 registry 来源（github:/git+/file:/link:/workspace: 等）按此 spec 安装，
+   * 否则按裸包名走 npm 最新版（官方机制）。
+   */
+  spec?: string;
   isBundle: boolean;
   inBundles: string[];
   enabled: boolean;
@@ -106,6 +113,12 @@ export interface PluginsSection {
   version: 1;
   plugins: PluginEntry[];
   patch: PatchLine[];
+  /**
+   * profile 的 pnpm-workspace.yaml 原文（allowBuilds / minimumReleaseAgeExclude /
+   * nodeLinker 等）。随插件分区迁移，保证目标 profile 的 pnpm 能按来源配置安装
+   * （git 插件构建脚本白名单、新发布版本冷静期等）。缺省/无文件为 null。
+   */
+  pnpmWorkspace?: string | null;
 }
 
 /* —— mcp 分区 —— */

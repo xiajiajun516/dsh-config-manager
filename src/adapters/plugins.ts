@@ -15,6 +15,10 @@ import type {
 
 export const USER_PATCH_FILE = 'cordis.patch.yml';
 
+/** pnpm-workspace.yaml 相对 $DSH_HOME 的路径（plugins 分区内按「插件安装配置」管理）。 */
+export const PNPM_WORKSPACE_REL = (profile: string | undefined): string =>
+  `profiles/${profile !== undefined && profile !== '' ? profile : 'web'}/pnpm-workspace.yaml`;
+
 /** patch 行 raw 是否由其他 adapter 管理（mcp-client 行 / systemPrompt / planMode 行）。
  * 这些行的导入归 mcp.ts / prompts.ts，plugins 分区只负责普通用户行（启用/禁用/插入插件等）。 */
 function isManagedElsewhere(raw: unknown): boolean {
@@ -59,6 +63,8 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         plugins.push({
           name: p.name,
           version: p.version,
+          // 声明依赖 spec（github:/file:/link: 等非 registry 来源导入时按此重装）
+          spec: p.spec,
           isBundle: p.isBundle ?? false,
           inBundles: p.inBundles ?? [],
           enabled: p.enabled,
@@ -74,9 +80,20 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     } catch (err) {
       warnings.push(`patch 文件读取失败: ${err instanceof Error ? err.message : String(err)}`);
     }
+    // pnpm-workspace.yaml（allowBuilds / minimumReleaseAgeExclude 等）：随插件分区迁移，
+    // 否则目标 profile 的 pnpm 可能因构建白名单/冷静期拒绝安装插件（§34.17 同款语义）。
+    let pnpmWorkspace: string | null = null;
+    try {
+      const rel = PNPM_WORKSPACE_REL(ctx.profile);
+      if (await ctx.fs.exists(rel)) {
+        pnpmWorkspace = new TextDecoder().decode(await ctx.fs.readFile(rel));
+      }
+    } catch (err) {
+      warnings.push(`pnpm-workspace.yaml 读取失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return {
       sectionId: 'plugins',
-      data: { version: 1, plugins, patch },
+      data: { version: 1, plugins, patch, pnpmWorkspace },
       counts: { plugins: plugins.length, patchLines: patch.length },
       warnings,
     };
@@ -84,9 +101,33 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
 
   async analyzeImport(data: PluginsSection, ctx: ImportContext): Promise<PlanItem[]> {
     const items: PlanItem[] = [];
-    const targetInstalled = await ctx.target.plugins.listInstalled();
+
+    // pnpm-workspace.yaml：先于插件安装写入（allowBuilds / minimumReleaseAgeExclude 需在
+    // pnpm add 时生效）。与目标不同 → Create/Update；无文件/内容一致 → Skip。
+    if (data.pnpmWorkspace !== undefined && data.pnpmWorkspace !== null && data.pnpmWorkspace !== '') {
+      let current: string | null = null;
+      try {
+        const rel = PNPM_WORKSPACE_REL(ctx.target.profile);
+        current = await ctx.target.fs.exists(rel)
+          ? new TextDecoder().decode(await ctx.target.fs.readFile(rel))
+          : null;
+      } catch {
+        current = null;
+      }
+      if (current !== data.pnpmWorkspace) {
+        items.push({
+          id: 'plugins:pnpm-workspace',
+          kind: current === null ? 'Create' : 'Update',
+          adapter: 'plugins',
+          description: current === null ? '写入 pnpm-workspace.yaml（插件构建白名单/冷静期配置）' : '更新 pnpm-workspace.yaml（插件构建白名单/冷静期配置）',
+          severity: 'info',
+          target: { adapter: 'plugins', ref: 'pnpm-workspace.yaml' },
+        });
+      }
+    }
 
     // 插件：包名唯一键；同版本 Skip / 未装 Install / 版本不同 Conflict
+    const targetInstalled = await ctx.target.plugins.listInstalled();
     for (const p of data.plugins) {
       const id = `plugin:${p.name}`;
       const tp = targetInstalled.find((t) => t.name === p.name);
@@ -136,6 +177,27 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    // pnpm-workspace.yaml：插件安装的 pnpm 配置（allowBuilds / minimumReleaseAgeExclude），
+    // 必须先于任何插件安装写入，pnpm add 时才能生效。失败为非致命 warning。
+    if (item.id === 'plugins:pnpm-workspace') {
+      const data = ctx.sections.get('plugins') as PluginsSection | undefined;
+      const text = data?.pnpmWorkspace;
+      if (text === undefined || text === null || text === '') {
+        return { ok: false, message: '导入数据缺少 pnpm-workspace.yaml 内容' };
+      }
+      try {
+        await ctx.target.fs.writeFile(PNPM_WORKSPACE_REL(ctx.target.profile), new TextEncoder().encode(text));
+        return { ok: true, needsRestart: true, message: 'pnpm-workspace.yaml 已写入（插件安装将按该配置执行），重启后生效' };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          ok: false,
+          warning: true,
+          message: `pnpm-workspace.yaml 写入失败：${msg}（插件安装可能因此受阻，可修复后在设置页重试）`,
+        };
+      }
+    }
+
     // 插件安装/更新：官方机制 dsh plugin CLI（dsh plugin --profile <p> add <pkg>）；
     // needsRestart 提示（设计 §8：不打包二进制）。
     // 版本冲突（useImported）会解析成 Update，同样走这条安装通道（官方机制只能装到 npm
@@ -146,7 +208,10 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       const name = item.id.replace(/^plugin:/, '');
       const verb = item.kind === 'Update' ? '更新' : '安装';
       try {
-        const result = await ctx.target.plugins.install(name);
+        // 非 registry 来源（github:/file: 等）按来源 spec 安装，registry 包按裸包名装 npm 最新版
+        const data = ctx.sections.get('plugins') as PluginsSection | undefined;
+        const spec = data?.plugins.find((p) => p.name === name)?.spec;
+        const result = await ctx.target.plugins.install(name, spec);
         const suffix = result.needsRestart ? '，重启 dsh 后生效' : '';
         return {
           ok: true,
@@ -191,6 +256,9 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     }
     if (data.patch !== undefined && !Array.isArray(data.patch)) {
       issues.push({ path: 'patch', message: 'patch 必须是数组', severity: 'error' });
+    }
+    if (data.pnpmWorkspace !== undefined && data.pnpmWorkspace !== null && typeof data.pnpmWorkspace !== 'string') {
+      issues.push({ path: 'pnpmWorkspace', message: 'pnpmWorkspace 必须是字符串', severity: 'error' });
     }
     return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
   }

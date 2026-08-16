@@ -11,21 +11,58 @@ import type { PlanItem } from '../core/types.ts';
 test('plugins: 导出清单与 patch 行', async () => {
   const ctx = makeContext('win32', 'C:\\Users\\alice');
   ctx.plugins.installed.set('@linxin666/dsh-ssh', { name: '@linxin666/dsh-ssh', version: '0.1.12', enabled: true, isBundle: true, inBundles: ['@linxin666/dsh-web-ui-all'] });
+  ctx.plugins.installed.set('dsh-memory-evolve', { name: 'dsh-memory-evolve', version: '1.0.0', enabled: true, spec: 'github:csyangwen/dsh-memory-evolve' });
   ctx.plugins.installed.set('@deepseek-ai/dsh-base', { name: '@deepseek-ai/dsh-base', version: '0.1.0-rc.6', enabled: true });
   ctx.patchFile.lines.set('skill-badge', { lineId: 'skill-badge', raw: { id: 'skill-badge', disabled: true } });
 
   const adapter = new PluginsAdapter();
   const out = await adapter.export(ctx, { includeSecrets: false });
   assert.equal(out.data.version, 1);
-  assert.equal(out.data.plugins.length, 2);
+  assert.equal(out.data.plugins.length, 3);
   assert.equal(out.data.patch.length, 1);
   assert.equal(out.data.patch[0]?.lineId, 'skill-badge');
   const ssh = out.data.plugins.find((p) => p.name === '@linxin666/dsh-ssh');
   assert.equal(ssh?.isBundle, true);
   assert.deepEqual(ssh?.inBundles, ['@linxin666/dsh-web-ui-all']);
+  // 非 registry spec 必须随导出保留（导入时按此重装）
+  const mem = out.data.plugins.find((p) => p.name === 'dsh-memory-evolve');
+  assert.equal(mem?.spec, 'github:csyangwen/dsh-memory-evolve');
+  assert.equal(out.data.pnpmWorkspace, null, '目标无 pnpm-workspace.yaml → null');
 
   const v = await adapter.validate(out.data);
   assert.equal(v.valid, true);
+});
+
+test('plugins: 导出携带 pnpm-workspace.yaml；analyze 目标无文件 → Create', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice', 'web');
+  await src.fs.writeFile('profiles/web/pnpm-workspace.yaml', new TextEncoder().encode('allowBuilds:\n  ssh2: true\n'));
+  const adapter = new PluginsAdapter();
+  const out = await adapter.export(src, { includeSecrets: false });
+  assert.equal(out.data.pnpmWorkspace, 'allowBuilds:\n  ssh2: true\n');
+
+  // 目标机没有该文件 → Create；有相同内容 → Skip；有不同内容 → Update
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const items = await adapter.analyzeImport(out.data, makeImportContext(dst, new Map([['plugins', out.data]])));
+  const wsItem = items.find((i) => i.id === 'plugins:pnpm-workspace');
+  assert.equal(wsItem?.kind, 'Create');
+  assert.deepEqual(wsItem?.target, { adapter: 'plugins', ref: 'pnpm-workspace.yaml' });
+  assert.equal(items[0]?.id, 'plugins:pnpm-workspace', 'pnpm-workspace 项必须先于插件安装项');
+
+  // applyItem 写入目标 fs
+  const r = await adapter.applyItem(wsItem!, makeImportContext(dst, new Map([['plugins', out.data]])));
+  assert.equal(r.ok, true);
+  assert.equal(r.needsRestart, true);
+  const written = new TextDecoder().decode(dst.fs.files.get('/home/bob/profiles/web/pnpm-workspace.yaml')!);
+  assert.equal(written, 'allowBuilds:\n  ssh2: true\n');
+
+  // 内容一致 → Skip；不同 → Update
+  const same = await adapter.analyzeImport(out.data, makeImportContext(dst, new Map([['plugins', out.data]])));
+  assert.equal(same.some((i) => i.id === 'plugins:pnpm-workspace'), false, '内容一致 → 不生成项');
+  const other = makeContext('linux', '/home/bob', 'web');
+  await other.fs.writeFile('profiles/web/pnpm-workspace.yaml', new TextEncoder().encode('nodeLinker: isolated\n'));
+  const diff = await adapter.analyzeImport(out.data, makeImportContext(other, new Map([['plugins', out.data]])));
+  const diffItem = diff.find((i) => i.id === 'plugins:pnpm-workspace');
+  assert.equal(diffItem?.kind, 'Update');
 });
 
 test('plugins: 已装同版本 Skip / 未装 Install / 版本不同 Conflict / patch Create', async () => {
@@ -70,6 +107,23 @@ test('plugins: applyItem Install → needsRestart（官方机制，不打包二�
   assert.equal(r.ok, true);
   assert.equal(r.needsRestart, true);
   assert.ok(dst.plugins.installed.has('need-install'), '经 installPlugin 门面写入');
+});
+
+test('plugins: 非 registry spec（github:）随导入传给 install，registry 包不传 spec', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.plugins.installed.set('dsh-memory-evolve', { name: 'dsh-memory-evolve', version: '1.0.0', enabled: true, spec: 'github:csyangwen/dsh-memory-evolve' });
+  src.plugins.installed.set('dshmarket', { name: 'dshmarket', version: '1.0.3', enabled: true, spec: '^1.0.3' });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob');
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  await adapter.applyItem(items.find((i) => i.id === 'plugin:dsh-memory-evolve')!, makeImportContext(dst, sections));
+  assert.equal(dst.plugins.lastSpec, 'github:csyangwen/dsh-memory-evolve', 'github: spec 必须原样传给安装通道');
+
+  await adapter.applyItem(items.find((i) => i.id === 'plugin:dshmarket')!, makeImportContext(dst, sections));
+  assert.equal(dst.plugins.lastSpec, '^1.0.3', 'registry 版本区间也透传（由门面决定按裸名装最新）');
 });
 
 test('plugins: 安装失败 → 非致命 warning（§34.17，不触发整体回滚）', async () => {

@@ -111,6 +111,31 @@ test('install: bundle 包成功 → 不补 patch 行（reconcile 维护 bundles�
   }
 });
 
+test('install: 非 registry spec（github:）→ add 按 spec 安装；registry 版本区间 → 裸包名（npm 最新）', async () => {
+  const { homeDir, profileDir, cleanup } = makeTempProfile();
+  try {
+    writeInstalledPkg(profileDir, 'dsh-memory-evolve', '1.0.0');
+    writeInstalledPkg(profileDir, 'dshmarket', '1.0.3');
+    const calls: { args: string[] }[] = [];
+    const runner = async (_p: string, _profile: string, args: readonly string[]): Promise<DshPluginResult> => {
+      calls.push({ args: [...args] });
+      return okResult();
+    };
+    const facade = new DshPluginsFacade(homeDir, 'web', new MemPatchFile(), runner);
+
+    await facade.install('dsh-memory-evolve', 'github:csyangwen/dsh-memory-evolve');
+    await facade.install('dshmarket', '^1.0.3');
+    await facade.install('pkg-plain');
+    assert.deepEqual(calls.map((c) => c.args), [
+      ['add', 'github:csyangwen/dsh-memory-evolve'],
+      ['add', 'dshmarket'],
+      ['add', 'pkg-plain'],
+    ], 'github: 来源按 spec 安装；registry 版本区间与裸包名都走 npm 最新版');
+  } finally {
+    cleanup();
+  }
+});
+
 test('install: CLI 失败 → 分类后的可读错误，且绝不出现「插件市场服务不可用」', async () => {
   const { homeDir, profileDir, cleanup } = makeTempProfile();
   try {
