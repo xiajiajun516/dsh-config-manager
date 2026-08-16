@@ -94,6 +94,14 @@ export const inject = ['settings', 'credentials']
 /** Plugin version, kept in sync with package.json ("version"). */
 const PLUGIN_VERSION = '0.1.17'
 
+/**
+ * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
+ * Client ID 是公开标识（GitHub 官方明确非机密）：内置后所有安装者开箱即用，
+ * 无需各自注册/配置 OAuth App；token 仍按用户私有（各自授权、各自存 credentials）。
+ * 插件配置的 githubClientId 优先于本默认值（换自有 App 时覆盖）。
+ */
+export const DEFAULT_GITHUB_CLIENT_ID = 'Ov23liq4i7n8UsylGRfb'
+
 /** Plugin config (composition entry); the loader applies it as-is. */
 export interface Config {
   /** Master switch; defaults to true. */
@@ -103,8 +111,9 @@ export interface Config {
   /** 管理的 profile 名（插件依赖读写/安装目标）；缺省取启动参数 --profile，再缺省 'web'。 */
   profile?: string
   /**
-   * GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 必需）。
-   * 未配置时登录入口返回指引错误（设备码流程无法凭空认证，必须有一个已注册的 OAuth App）。
+   * GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow）。
+   * 缺省使用内置 DEFAULT_GITHUB_CLIENT_ID（公开标识，开箱即用）；
+   * 显式配置可覆盖（换自有 OAuth App 时）。
    */
   githubClientId?: string
   /**
@@ -1586,7 +1595,7 @@ export function apply(ctx: Context, config?: Config): void {
     runs: new RunRegistry(),
     syncDir,
     credentials: ctx.credentials,
-    githubClientId: config?.githubClientId,
+    githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,
   })
   const webServer = readService<WebServer>(ctx, 'webServer')
