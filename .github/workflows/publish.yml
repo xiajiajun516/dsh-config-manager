@@ -53,12 +53,33 @@ jobs:
 
       - name: Create GitHub Release (tag-triggered only)
         # Runs only on tag pushes (not manual dispatch): creates a GitHub
-        # Release with auto-generated notes and the tgz artifact.
+        # Release with auto-generated notes and the tgz artifact, then prepends
+        # a hand-written highlight section (方式 2: 手动亮点 + 自动变更记录).
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # ① 先创建 release（自动生成 commit 变更记录）
           gh release create "$GITHUB_REF_NAME" \
             dist/dsh-config-manager-*.tgz \
             --generate-notes \
             --title "DSH Config Manager $GITHUB_REF_NAME"
+
+          # ② 把自动生成的变更记录存到临时文件
+          gh release view "$GITHUB_REF_NAME" --json body -q .body > /tmp/auto-notes.md
+
+          # ③ 手动亮点段（每次发版前更新这里的列表）
+          cat > /tmp/release-notes.md <<'EOF'
+          ## ✨ 本次更新亮点
+          - 待填写：例如「修复备份与迁移页面空白」「远程同步并入主页面 tab」
+          ## 📦 安装
+          ```bash
+          dsh plugin --profile web add dsh-config-manager@latest
+          ```
+          ## 🔄 变更记录（自动生成）
+          EOF
+          echo "" >> /tmp/release-notes.md
+          cat /tmp/auto-notes.md >> /tmp/release-notes.md
+
+          # ④ 用拼接后的完整描述更新 release
+          gh release edit "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
