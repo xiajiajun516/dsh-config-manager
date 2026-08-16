@@ -82,6 +82,9 @@ const initial: SyncUiState = {
 export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const [state, setState] = useState<SyncUiState>(initial)
   const patch = (p: Partial<SyncUiState>): void => setState((s) => ({ ...s, ...p }))
+  const patchGithub = (p: Partial<GithubUiState>): void => setState((s) => ({ ...s, github: { ...s.github, ...p } }))
+  /** GitHub 轮询定时器（卸载/取消时清理，防止泄漏与跨流程串扰） */
+  const githubPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /** 挂载时读取同步状态（配置回填 + 上次同步时间 + 凭据状态） */
   const loadStatus = async (): Promise<void> => {
@@ -100,12 +103,79 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  /** 卸载时清理轮询定时器（组件销毁后不得再 setState/发请求） */
+  useEffect(() => () => {
+    if (githubPollTimer.current !== null) clearTimeout(githubPollTimer.current)
+  }, [])
+
   /** 表单快照 → 请求体（token 为空串不携带；gitBin 空串不携带） */
   const payload = (): { repoUrl: string; gitBin?: string; token?: string } => ({
     repoUrl: state.repoUrl.trim(),
     gitBin: state.gitBin.trim() !== '' ? state.gitBin.trim() : undefined,
     token: state.token.trim() !== '' ? state.token : undefined,
   })
+
+  /* ------------------------------------------------ GitHub OAuth device flow */
+
+  /** 发起 GitHub 登录：取设备码 → 展示一次性用户码 + 授权页 → 开始轮询 */
+  const runGithubStart = async (): Promise<void> => {
+    patchGithub({ phase: 'starting', error: null })
+    try {
+      const info = await api.githubStart()
+      patchGithub({
+        phase: 'waiting',
+        flowId: info.flowId,
+        userCode: info.userCode,
+        verificationUri: info.verificationUri,
+        interval: info.interval,
+      })
+      scheduleGithubPoll(info.flowId, Math.max(info.interval, 1) * 1000)
+    } catch (err) {
+      patchGithub({ phase: 'error', error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 排定一次 GitHub 轮询（先清旧定时器，避免重复轮询） */
+  const scheduleGithubPoll = (flowId: string, delayMs: number): void => {
+    if (githubPollTimer.current !== null) clearTimeout(githubPollTimer.current)
+    githubPollTimer.current = setTimeout(() => { void runGithubPoll(flowId) }, delayMs)
+  }
+
+  /** 轮询 GitHub 授权结果：pending 继续等；success 刷新凭据状态；终止态展示结果 */
+  const runGithubPoll = async (flowId: string): Promise<void> => {
+    patchGithub({ phase: 'polling' })
+    try {
+      const poll = await api.githubPoll(flowId)
+      if (poll.status === 'pending') {
+        patchGithub({ phase: 'waiting' })
+        scheduleGithubPoll(flowId, poll.pollDelayMs ?? Math.max(state.github.interval, 1) * 1000)
+        return
+      }
+      const message = githubPollMessage(poll)
+      if (poll.status === 'success') {
+        patchGithub({ phase: 'success', error: null })
+        // token 已由宿主写入 DSH credentials：刷新状态行与凭据徽章
+        void loadStatus()
+      } else {
+        patchGithub({ phase: 'error', error: message })
+      }
+    } catch (err) {
+      patchGithub({ phase: 'error', error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 取消登录：停轮询 + 通知宿主丢弃设备码登记 + 复位 UI */
+  const runGithubCancel = async (): Promise<void> => {
+    if (githubPollTimer.current !== null) {
+      clearTimeout(githubPollTimer.current)
+      githubPollTimer.current = null
+    }
+    const flowId = state.github.flowId
+    patchGithub(initialGithub)
+    if (flowId !== '') {
+      try { await api.githubCancel(flowId) } catch { /* 取消失败无需打扰用户 */ }
+    }
+  }
 
   const runPush = async (): Promise<void> => {
     patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
@@ -132,6 +202,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const buttons = computeSyncButtons(state.busy, state.repoUrl)
   const pushView = pushReportView(state.pushReport)
   const pullView = pullReportView(state.pullReport)
+  const githubView = computeGithubLoginView(
+    state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error,
+  )
+  /** GitHub 流程进行中（请求设备码 / 等待授权 / 轮询）：禁用 push/pull，避免无凭据操作 */
+  const githubBusy =
+    state.github.phase === 'starting' || state.github.phase === 'waiting' || state.github.phase === 'polling'
 
   return (
     <div className={css.viewBody}>
@@ -172,6 +248,47 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               />
               <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
             </label>
+
+            {/* GitHub OAuth 登录（device flow）：无需手动输入 token */}
+            <span className={css.groupLabel}>{t('github.title')}</span>
+            <span className={css.hint}>{t('github.description')}</span>
+            {githubView.showCode && (
+              <div className={css.statRow}>
+                <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
+                <a
+                  className={css.ghostButton}
+                  href={githubView.verificationUri}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ textDecoration: 'none' }}
+                >
+                  {t('github.openAuth')}
+                </a>
+              </div>
+            )}
+            <div className={css.actionRow}>
+              <Button
+                variant="primary"
+                disabled={!githubView.canStart || state.busy !== null}
+                onClick={() => { void runGithubStart() }}
+              >
+                {githubView.startLabel}
+              </Button>
+              {githubView.canCancel && (
+                <Button disabled={state.busy !== null} onClick={() => { void runGithubCancel() }}>
+                  {t('github.cancel')}
+                </Button>
+              )}
+            </div>
+            <div className={css.statRow}>
+              <Badge kind={githubView.phase === 'success' ? 'ok' : githubView.phase === 'error' ? 'error' : 'warn'}>
+                {githubView.statusText}
+              </Badge>
+            </div>
+            {githubView.phase === 'error' && (
+              <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
+            )}
+
             <label className={css.field}>
               <span className={css.fieldLabel}>{t('config.gitBin')}</span>
               <input
@@ -196,10 +313,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
           {/* 操作 */}
           <div className={css.actionRow}>
-            <Button variant="primary" disabled={!buttons.canPush} onClick={() => { void runPush() }}>
+            <Button variant="primary" disabled={!buttons.canPush || githubBusy} onClick={() => { void runPush() }}>
               {state.busy === 'push' ? <Spinner label={buttons.pushLabel} /> : buttons.pushLabel}
             </Button>
-            <Button disabled={!buttons.canPull} onClick={() => { void runPull() }}>
+            <Button disabled={!buttons.canPull || githubBusy} onClick={() => { void runPull() }}>
               {state.busy === 'pull' ? <Spinner label={buttons.pullLabel} /> : buttons.pullLabel}
             </Button>
           </div>
