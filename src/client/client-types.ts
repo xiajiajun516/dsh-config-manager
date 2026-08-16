@@ -18,4 +18,8 @@ export type { TranslateNS }
 /** 本插件 Client 半的注入业务面：每个 settings.section 注册项都拿到同一个 api 实例 */
 export interface ConfigManagerSectionInjected {
   api: import('./api.ts').ConfigManagerApi
+  /** 远程同步 API（备份与迁移页第 4 个 tab 使用，主 section 注册时注入） */
+  syncApi: import('./sync/sync-api.ts').SyncApi
+  /** 远程同步 locale（config-manager-sync 命名空间，主 section 注册时注入） */
+  syncT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-sync'>
 }

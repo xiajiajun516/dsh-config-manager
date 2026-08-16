@@ -1,7 +1,8 @@
 /**
- * 远程同步设置区块（settings.section: config-manager-sync）。
+ * 远程同步面板（备份与迁移页的第 4 个 tab 内容）。
  *
- * 独立 settings 页（不触碰并行会话的 ConfigManagerSection.tsx 三 tab 容器）：
+ * 独立设置页壳（sectionHeader/close/自身 tab）已移除 —— tab 容器由
+ * ConfigManagerSection 统一渲染，本组件只输出内容体：
  * - 仓库配置表单：repoUrl（必填）+ 认证 token（可选，写入 DSH credentials 的提示）
  *   + gitBin（可选）；
  * - 私有仓库强制提示横幅（常驻）；
@@ -16,7 +17,6 @@
  */
 import { useEffect, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
@@ -29,14 +29,10 @@ import {
 } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
-export interface SyncSettingsSectionInjected {
+export interface SyncSettingsViewProps {
   api: SyncApi
+  t: TranslateNS<'config-manager-sync'>
 }
-
-export type SyncSettingsViewProps =
-  & PropsRuntime<'settings.section'>
-  & SyncSettingsSectionInjected
-  & { t: TranslateNS<'config-manager-sync'> }
 
 interface SyncUiState {
   loading: boolean
@@ -65,7 +61,7 @@ const initial: SyncUiState = {
   error: null,
 }
 
-export function SyncSettingsView({ close, api, t }: SyncSettingsViewProps) {
+export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const [state, setState] = useState<SyncUiState>(initial)
   const patch = (p: Partial<SyncUiState>): void => setState((s) => ({ ...s, ...p }))
 
@@ -120,16 +116,8 @@ export function SyncSettingsView({ close, api, t }: SyncSettingsViewProps) {
   const pullView = pullReportView(state.pullReport)
 
   return (
-    <div className={css.section}>
-      <div className={css.sectionHeader}>
-        <div className={css.viewTabs}>
-          <span role="tab" aria-selected="true" data-active className={css.viewTab}>{t('section.label')}</span>
-        </div>
-        <button type="button" className={css.iconButton} title={t('common.close')} aria-label={t('common.close')} onClick={close}>×</button>
-      </div>
-      <div className={css.sectionBody}>
-        <div className={css.viewBody}>
-          <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
+    <div className={css.viewBody}>
+      <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
           {/* 私有仓库强制提示 */}
           <Banner kind="warn">{PRIVATE_REPO_HINT}</Banner>
@@ -254,8 +242,6 @@ export function SyncSettingsView({ close, api, t }: SyncSettingsViewProps) {
               {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
             </Card>
           )}
-        </div>
-      </div>
     </div>
   )
 }

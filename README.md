@@ -35,6 +35,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 | 🔒 | **Secret safety** | API Keys are never exported; re-enter them after import |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
+| 🔄 | **Remote Sync** | Push/pull portable config via a private Git repo (secrets never sync) |
 | 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime |
 
 ---

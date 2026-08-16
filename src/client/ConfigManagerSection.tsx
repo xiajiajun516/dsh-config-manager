@@ -16,6 +16,7 @@ import { runStore, type MainView } from './run-store.ts'
 import { ExportView } from './export/ExportView.tsx'
 import { ImportWizardView } from './import/ImportWizardView.tsx'
 import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
+import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import css from './config-manager.module.css'
 
 export type ConfigManagerSectionProps =
@@ -24,14 +25,15 @@ export type ConfigManagerSectionProps =
   & { t: TranslateNS<'config-manager'> }
 
 /**
- * 设置页容器：Export / Import / Snapshots 三视图切换。
- * Export/Import 状态在模块级 store（切 tab 不丢失）；快照恢复面板为低频显式
+ * 设置页容器：Export / Import / Snapshots / Sync 四视图切换。
+ * Export/Import 状态在模块级 store（切 tab 不丢失）；快照恢复与远程同步为低频显式
  * 操作，其状态组件内自持（local state，不进 sessionStorage）。
  */
-export function ConfigManagerSection({ api, t }: ConfigManagerSectionProps) {
+export function ConfigManagerSection({ api, syncApi, syncT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const view = state.view
   const [snapshotsOpen, setSnapshotsOpen] = useState(false)
+  const [syncOpen, setSyncOpen] = useState(false)
 
   // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
   // 这里经 /runs 找回活跃 runId 再轮询 /progress）；卸载时停止轮询，重开再订阅。
@@ -44,10 +46,21 @@ export function ConfigManagerSection({ api, t }: ConfigManagerSectionProps) {
 
   const setView = (next: MainView): void => {
     setSnapshotsOpen(false)
+    setSyncOpen(false)
     runStore.patch({ view: next })
   }
 
-  const activeTab: MainView | 'snapshots' = snapshotsOpen ? 'snapshots' : view
+  const openSnapshots = (): void => {
+    setSnapshotsOpen(true)
+    setSyncOpen(false)
+  }
+
+  const openSync = (): void => {
+    setSyncOpen(true)
+    setSnapshotsOpen(false)
+  }
+
+  const activeTab: MainView | 'snapshots' | 'sync' = syncOpen ? 'sync' : snapshotsOpen ? 'snapshots' : view
 
   return (
     <div className={css.section}>
@@ -79,16 +92,28 @@ export function ConfigManagerSection({ api, t }: ConfigManagerSectionProps) {
             aria-selected={activeTab === 'snapshots'}
             data-active={snapshotsOpen ? '' : undefined}
             className={css.viewTab}
-            onClick={() => { setSnapshotsOpen(true) }}
+            onClick={openSnapshots}
           >
             {t('view.snapshots')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'sync'}
+            data-active={syncOpen ? '' : undefined}
+            className={css.viewTab}
+            onClick={openSync}
+          >
+            {t('view.sync')}
           </button>
         </div>
       </div>
       <div className={css.sectionBody}>
-        {snapshotsOpen
-          ? <SnapshotsPanel api={api} t={t} />
-          : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
+        {syncOpen
+          ? <SyncSettingsView api={syncApi} t={syncT} />
+          : snapshotsOpen
+            ? <SnapshotsPanel api={api} t={t} />
+            : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
       </div>
     </div>
   )

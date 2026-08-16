@@ -112,7 +112,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   }
 }
 
-/** 远程同步浏览器半数据入口（settings.section: config-manager-sync 的注入业务面） */
+/** 远程同步浏览器半数据入口（备份与迁移页第 4 个 tab 的注入业务面） */
 export class SyncApi {
   /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数） */
   async status(): Promise<SyncStatusResponse> {

@@ -66,22 +66,16 @@ export function apply(ctx: ClientContext): void {
   const syncT = ctx.locale.bind(SYNC_NS)
   const syncApi = new SyncApi()
 
+  // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync 四 tab）。
+  // 远程同步不再注册独立设置页 —— 并入主 section 的 inject 面（syncApi/syncT），
+  // 由 ConfigManagerSection 渲染第 4 个 tab。避免第二个 settings.section 注册在
+  // 目标 DSH 渲染 section 列表时抛错导致整页空白。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'config-manager',
     order: 60,
     label: () => t('section.label'),
     locale: NS,
-    inject: () => ({ api }),
+    inject: () => ({ api, syncApi, syncT }),
   }, ConfigManagerSection))
-
-  // m-sync-ui：远程同步独立设置页（不触碰 ConfigManagerSection 的 tab 容器）。
-  ctx.slots.inject('settings.section', () => ctx.slots.register({
-    name: 'settings.section',
-    id: 'config-manager-sync',
-    order: 70,
-    label: () => syncT('section.label'),
-    locale: SYNC_NS,
-    inject: () => ({ api: syncApi }),
-  }, SyncSettingsView))
 }
