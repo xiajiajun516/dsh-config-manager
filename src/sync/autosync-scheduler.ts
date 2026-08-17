@@ -167,10 +167,18 @@ export class AutoSyncScheduler {
       if (this.stopped || !cfg.enabled) return;
       const ms = intervalToMs(cfg.interval);
       this.timer = this.setTimer(() => {
+        // 一次性定时器：触发后立即置空，避免 reload() 清理到已失效的句柄
+        this.timer = null;
         if (this.stopped) return;
-        void this.runOnce().catch((err) => {
-          this.host.log.error('自动同步定时触发失败', { error: err instanceof Error ? err.message : String(err) });
-        });
+        void this.runOnce()
+          .catch((err) => {
+            this.host.log.error('自动同步定时触发失败', { error: err instanceof Error ? err.message : String(err) });
+          })
+          .then(() => {
+            // 本轮结束（成功 / 跳过 / 失败）后重新排定下一次；refreshTimer
+            // 内部重读配置，若期间被关闭（enabled=false）则不再排期。
+            if (!this.stopped) this.refreshTimer();
+          });
       }, ms);
     }).catch(() => { /* 读配置失败静默 */ });
   }
@@ -376,8 +384,15 @@ export class AutoSyncScheduler {
       return result;
     } finally {
       this.running = false;
+      // 收尾 RunRegistry：不 finish 会让 autosync 的 running 记录滞留
+      // （保留期 30 分钟），期间任何再次 runOnce 都会 register('autosync')
+      // → RunConflictError → 永远 skip(conflict)，后台同步就此停摆。
       if (runId !== null) {
-        // 完成标记（不抛错，尽力而为）
+        try {
+          this.runs.finish(runId, { kind: 'autosync' });
+        } catch {
+          /* 尽力而为：收尾失败不影响同步结果 */
+        }
       }
     }
   }

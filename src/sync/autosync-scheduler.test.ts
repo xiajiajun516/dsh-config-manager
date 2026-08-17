@@ -177,6 +177,65 @@ test('runOnce: startup 变体 → 只做 pull 合并，不上传', async () => {
   assert.equal(pushCalls.length, 0, 'startup 变体不调用 push');
 });
 
+test('runOnce: 连续两次执行不再 skip(conflict)（run 完成收尾）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: ['settings'], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: async () => ({ ok: true, snapshotId: 's1', sections: ['settings'] as never, warnings: [] }),
+  };
+  const { scheduler, runs } = makeScheduler({ cfg, engine, history: [] });
+  const first = await scheduler.runOnce();
+  assert.equal(first.status, 'success', '首次执行成功');
+  assert.equal(runs.listActive().filter((r) => r.kind === 'autosync').length, 0, '执行后 registry 无滞留 autosync running 记录');
+  const second = await scheduler.runOnce();
+  assert.equal(second.status, 'success', '第二次执行不再被同 kind 注册冲突拦截');
+  assert.equal(second.direction, 'both');
+  assert.equal(runs.listActive().filter((r) => r.kind === 'autosync').length, 0);
+});
+
+test('start(): 定时器触发后自动重排下一次（周期性后台同步）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const pending: Array<() => void> = [];
+  let timerSeq = 0;
+  const engine = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([]),
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(1_000_000_000_000),
+    readConfig: async () => cfg,
+    writeConfig: async () => {},
+    readSyncConfigFn: async () => ({ repoUrl: 'git@github.com:foo/bar.git' }),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn) => { pending.push(fn); timerSeq += 1; return String(timerSeq) as unknown as ReturnType<typeof setTimeout>; },
+    clearTimer: () => {},
+  });
+  scheduler.start();
+  // start() → refreshTimer 异步读配置后排入首个定时器（startupRun 不会排定时器）
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(pending.length, 1, '启动后已排入首个定时器');
+  // 触发一次定时回调：应执行 runOnce 并在结束后重新排定下一次
+  const firstTimer = pending[0];
+  assert.ok(firstTimer, '首个定时器句柄存在');
+  firstTimer();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(pending.length >= 2, '一轮执行后重新排入下一次定时器（循环调度）');
+  scheduler.stop();
+  // stop 后触发已排定时器不再重排
+  const countAfterStop = pending.length;
+  const lastTimer = pending[countAfterStop - 1];
+  assert.ok(lastTimer, '停止前最后一次排期的定时器存在');
+  lastTimer();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(pending.length, countAfterStop, 'stop 后不再排期');
+});
+
 test('buildAutoApplyPlan: 把非 skip 非 conflict 项归入 autoApply', () => {
   const plan = makeMergePlan([
     ['settings', 'useRemote'],

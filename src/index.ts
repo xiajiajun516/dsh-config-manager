@@ -101,7 +101,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.27'
+const PLUGIN_VERSION = '0.1.28'
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
@@ -1070,7 +1070,7 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
 }
 
 /** Build the /api/dsh-config-manager route family. */
-function makeRoutes(deps: RoutesDeps): WebRoute[] {
+function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler } {
   const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, credentials, githubClientId, githubClientSecret } = deps
   const roots = [exportsDir, tmpDir]
 
@@ -1157,8 +1157,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
   const syncSessions = new SyncSessionStore()
 
   /** 自动同步后台调度器（宿主进程生命周期，不依赖浏览器） */
-  let scheduler: AutoSyncScheduler | undefined
-  scheduler = new AutoSyncScheduler({
+  const scheduler = new AutoSyncScheduler({
     syncDir,
     host,
     makeSyncEngine,
@@ -1168,7 +1167,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
   // 启动：读 autosync-config；若 enabled 启动定时器；无条件执行一次「启动触发下载合并」（受阈值约束）
   scheduler.start()
 
-  return [
+  const routesList: WebRoute[] = [
     // ------------------------------------------------------------- status
     {
       kind: 'exact',
@@ -2068,6 +2067,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
       },
     },
   ]
+  return { routes: routesList, scheduler }
 }
 
 /* ------------------------------------------------------------------ apply */
@@ -2109,7 +2109,7 @@ export function apply(ctx: Context, config?: Config): void {
     adapters: adapters.map((a) => a.id),
   })
 
-  const routes = makeRoutes({
+  const { routes, scheduler } = makeRoutes({
     host,
     adapters,
     exportsDir,
@@ -2121,6 +2121,9 @@ export function apply(ctx: Context, config?: Config): void {
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,
   })
+  // 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，
+  // 避免旧调度器残留导致重复后台同步。
+  ctx.effect(() => () => scheduler.stop(), 'config-manager: autosync scheduler')
   const webServer = readService<WebServer>(ctx, 'webServer')
   if (webServer === undefined) {
     host.log.warn('webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册（引擎能力仍可用）')
