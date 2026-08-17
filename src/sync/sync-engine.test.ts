@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { SyncEngine } from './sync-engine.ts';
+import type { SyncApplyPlan } from './risk.ts';
 import { hashSection, loadSyncState, SYNC_STATE_FILE } from './sync-state.ts';
 import { computeSnapshotMeta } from './transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
@@ -62,7 +63,7 @@ function makeEngine(opts: {
   transport: MemSyncTransport;
   stateDir: string;
   localSnapshotsDir?: string;
-  extra?: ConstructorParameters<typeof SyncEngine>[0];
+  extra?: Partial<ConstructorParameters<typeof SyncEngine>[0]>;
 }) {
   const adapters = createAdapters({ namespaces: NS });
   const importer = new Importer({ ctx: opts.ctx, adapters, snapshotStore: new MemSnapshotStore() });
@@ -75,7 +76,7 @@ function makeEngine(opts: {
     importer,
     now: () => new Date('2026-08-16T12:00:00.000Z'),
     ...opts.extra,
-  });
+  } as ConstructorParameters<typeof SyncEngine>[0]);
 }
 
 test('push: 收集 portable 分区 → 上传快照 → 更新 sync-state → 本地散文件副本', async () => {
@@ -114,7 +115,7 @@ test('push: 收集 portable 分区 → 上传快照 → 更新 sync-state → �
     assert.equal(state.sections['settings']?.updatedAt, '2026-08-16T12:00:00.000Z');
     assert.deepEqual(state.transport, { type: 'memory', ref: '' });
     const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
-    assert.equal(raw.schemaVersion, 1);
+    assert.equal(raw.schemaVersion, 2);
 
     // 本地散文件副本（复用 t2 layout 布局）
     assert.ok((await fs.stat(path.join(local, 'sync-001', 'manifest.json'))).isFile());
@@ -293,6 +294,294 @@ test('push: 全部 portable 分区导出失败 → ok=false + 明确 message', a
     // 空数据仍视为「成功导出（空分区）」还是失败？settings 无 namespace 时 adapter 返回空（不抛错）
     assert.equal(report.ok, true, '空配置导出为空快照而非失败');
     assert.equal(transport.snapshots.has('sync-fail'), true);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── P2c M2：applyMergePlan 单元测试 ──────────────────────────────────────────────
+
+/** 测试用 mock Importer：注入 analyzeImport / createImportPlan / executeImportPlan 的可控行为。 */
+class MockImporter {
+  ok = true;
+  executeCalls = 0;
+  warnings: string[] = [];
+  analyzeImpl: () => Promise<unknown> = async () => ({ valid: true, compatibility: 'full' });
+  createPlanImpl: () => Promise<unknown> = async () => ({
+    items: [{ id: 'mock', kind: 'Update', adapter: 'settings', description: 'mock', severity: 'info', target: undefined }],
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: { settings: 1 } as Record<string, number>,
+  });
+  executeImpl: () => Promise<unknown> = async () => ({
+    ok: this.ok,
+    executed: [],
+    needsRestart: false,
+    missingSecrets: [],
+    warnings: this.warnings,
+    rollback: null,
+    snapshotId: null,
+  });
+  async analyzeImport(_zipPath: string): Promise<unknown> { return await this.analyzeImpl(); }
+  async createImportPlan(_zipPath: string, _decisions: unknown): Promise<unknown> { return await this.createPlanImpl(); }
+  async executeImportPlan(_zipPath: string, _plan: unknown, _opts: unknown): Promise<unknown> {
+    this.executeCalls += 1;
+    return await this.executeImpl();
+  }
+}
+
+function makeEngineWithMockImporter(opts: {
+  ctx: ReturnType<typeof makeContext>;
+  transport: MemSyncTransport;
+  stateDir: string;
+  localSnapshotsDir?: string;
+  mockImporter: MockImporter;
+}) {
+  // 把 mock 注入到 SyncEngine 的 importer 槽位 —— Importer 是类，类型上不能完全替换；
+  // 这里用对象字面量 duck-type 兼容 Importer 的三个方法。
+  return makeEngine({
+    ...opts,
+    extra: { importer: opts.mockImporter as unknown as Importer },
+  });
+}
+
+test('applyMergePlan: 成功路径 → ApplyReport{ok:true, applied, restoreId, rolledBack:false}', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-ok-'));
+  const localDir = path.join(tmp, 'snapshots');
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = true;
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: localDir, mockImporter: mock,
+    });
+    const apply: SyncApplyPlan = {
+      autoApply: [{
+        id: 'settings',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 5, secrets: [] } } },
+      }],
+      review: [],
+      skipped: [],
+    };
+    const report = await engine.applyMergePlan(apply);
+    assert.equal(report.ok, true, 'success path → ok:true');
+    assert.deepEqual(report.applied, ['settings']);
+    assert.notEqual(report.restoreId, '', 'restoreId 应非空');
+    assert.equal(report.rolledBack, false);
+    assert.equal(report.review.length, 0);
+    assert.equal(report.warnings.length, 0);
+    assert.equal(mock.executeCalls, 1, 'Importer.executeImportPlan 应被调用一次');
+    // 祖先基线应被更新：sync-state.lastSnapshotId 非空 + 落 ancestor 副本
+    const state = await loadSyncState(tmp);
+    assert.notEqual(state.lastSnapshotId, '', 'push 后 lastSnapshotId 已被 recordBaseline 更新');
+    // localSnapshotsDir 下应有写出的祖先目录
+    const dirs = await fs.readdir(localDir);
+    assert.ok(dirs.length > 0, '祖先副本已写入');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergePlan: 失败路径 → 整体回滚 + enqueueItems + ApplyReport{ok:false,rolledBack:true,review}', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-fail-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = false; // Importer.executeImportPlan 返回 ok:false
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, mockImporter: mock,
+    });
+    const apply: SyncApplyPlan = {
+      autoApply: [{
+        id: 'settings',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 5, secrets: [] } } },
+      }],
+      review: [],
+      skipped: [],
+    };
+    const report = await engine.applyMergePlan(apply);
+    assert.equal(report.ok, false, 'failure path → ok:false');
+    assert.equal(report.rolledBack, true);
+    assert.equal(report.applied.length, 0);
+    assert.notEqual(report.restoreId, '', 'restoreId 应透传以便排查');
+    assert.ok(report.review.length > 0, 'auto 项应入 review 队列');
+    assert.equal(report.review[0]!.sectionId, 'settings');
+    // sync-review-queue.json 应被写入
+    const rqPath = path.join(tmp, 'sync-review-queue.json');
+    assert.ok(await fs.stat(rqPath).then(() => true).catch(() => false), 'review-queue.json 已写盘');
+    const rq = JSON.parse(await fs.readFile(rqPath, 'utf8')) as { items: Array<{ sectionId: string }> };
+    assert.equal(rq.items.length, 1);
+    assert.equal(rq.items[0]!.sectionId, 'settings');
+    // recordBaseline 不应在失败路径调用：sync-state.lastSnapshotId 应仍为空
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, '', '失败时不应 recordBaseline');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergePlan: 空 autoApply → 直接返回 ok:true 空报告（无 Importer 调用）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-empty-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, mockImporter: mock,
+    });
+    const apply: SyncApplyPlan = { autoApply: [], review: [], skipped: [] };
+    const report = await engine.applyMergePlan(apply);
+    assert.equal(report.ok, true);
+    assert.equal(report.applied.length, 0);
+    assert.equal(mock.executeCalls, 0, '空 autoApply 不应触发 Importer');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergePlan: Importer 缺失 → 抛错（构造期校验）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-apply-noimporter-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    // 不传 importer → SyncEngine 内部无 importer
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters: createAdapters({ namespaces: NS }),
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+      // 注意：未传 importer
+    });
+    const apply: SyncApplyPlan = {
+      autoApply: [{ id: 'settings', decision: 'useRemote', conflicts: [], merged: { version: 1, namespaces: {} } }],
+      review: [], skipped: [],
+    };
+    await assert.rejects(() => engine.applyMergePlan(apply), /缺少 importer/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── P2a M4：merge / recordBaseline / push-baseline ──────────────────────────────
+
+test('push: 完成后 sync-state.lastSnapshotId 指向本次推送快照（祖先基线已记录）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-baseline-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    await engine.push({ snapshotId: 'sync-base' });
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-base', 'push 后 lastSnapshotId 应等于本次快照 id');
+    assert.equal(state.lastSyncAt, '2026-08-16T12:00:00.000Z');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('recordBaseline: 写本地祖先副本 + 更新 sync-state + 触发裁剪', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-record-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const local = path.join(tmp, 'ancestors');
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: local });
+    const snapshot = (await transport.list()).length === 0
+      ? null
+      : (transport.metas[0] && (await transport.download(transport.metas[0].id)));
+    void snapshot;
+    // 走一遍 push 让 ancestors 目录被建立
+    await engine.push({ snapshotId: 'sync-anc-1' });
+    await engine.push({ snapshotId: 'sync-anc-2' });
+    // 显式再调一次 recordBaseline（模拟合并 apply 完成后更新基线）
+    const newSnap: SyncSnapshot = {
+      id: 'sync-explicit',
+      createdAt: '2026-08-16T13:00:00.000Z',
+      manifest: {
+        schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32',
+        sectionIds: ['settings'], containsSecrets: false,
+      },
+      sections: { settings: { version: 1, namespaces: {} } },
+    };
+    await engine.recordBaseline('sync-explicit', newSnap.sections, '2026-08-16T13:00:00.000Z');
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-explicit');
+    assert.ok((await fs.stat(path.join(local, 'sync-explicit', 'manifest.json'))).isFile(), '祖先副本已写');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('merge: 不写本地配置、不执行导入，返回 MergePlan', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-merge-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    // 远端与本地不同：本地 settings.theme = dark；远端 = light
+    const remote: SyncSnapshot = {
+      id: 'remote-merge',
+      createdAt: '2026-08-16T12:00:00.000Z',
+      manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+      sections: {
+        settings: {
+          version: 1,
+          namespaces: {
+            general: { value: { theme: 'light', language: 'zh-CN' }, revision: 5, secrets: [] },
+          },
+        },
+      },
+    };
+    const transport = new MemSyncTransport();
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    // 祖先：与本地相同（本地未改 → useRemote）
+    const ancestor: SyncSnapshot = {
+      id: 'anc',
+      createdAt: '2026-08-15T00:00:00.000Z',
+      manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+      sections: {
+        settings: {
+          version: 1,
+          namespaces: { general: { value: { theme: 'dark', language: 'zh-CN' }, revision: 3, secrets: [] } },
+        },
+      },
+    };
+    const local = path.join(tmp, 'ancestors');
+    // 预置祖先副本
+    const { writeSnapshotToDir } = await import('./layout.ts');
+    await writeSnapshotToDir(ancestor, path.join(local, 'anc'));
+    // 预置 sync-state（指向祖先 id）
+    const { saveSyncState } = await import('./sync-state.ts');
+    await saveSyncState(tmp, {
+      schemaVersion: 2,
+      lastSyncAt: '2026-08-15T00:00:00.000Z',
+      sections: { settings: { hash: '0'.repeat(64), updatedAt: '2026-08-15T00:00:00.000Z' } },
+      lastSnapshotId: 'anc',
+    });
+
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: local });
+    const plan = await engine.merge();
+    assert.ok(plan.sections.length >= 1, '至少包含 settings 分区');
+    const settings = plan.sections.find((s) => s.id === 'settings');
+    assert.ok(settings, 'settings 在 MergePlan 中');
+    // 本地未改（=祖先）、远端改了 → useRemote
+    assert.equal(settings!.decision, 'useRemote');
+    // 零写入：目标 settings 未被覆盖
+    assert.deepEqual(ctx.settings.ns.get('general')?.value, { theme: 'dark', language: 'zh-CN' });
+    // transport 仅被 list/download 调用（无 upload/delete）
+    assert.deepEqual(transport.calls, ['list', 'download']);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

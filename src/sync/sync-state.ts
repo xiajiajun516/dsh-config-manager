@@ -11,7 +11,9 @@ import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 
-export const SYNC_STATE_SCHEMA_VERSION = 1;
+export const SYNC_STATE_SCHEMA_VERSION = 2;
+/** 历史可读取版本：v1 缺 lastSnapshotId 时做内存迁移到 v2（lastSnapshotId=''）。 */
+export const SYNC_STATE_SUPPORTED_VERSIONS: readonly number[] = [1, 2];
 export const SYNC_STATE_FILE = 'sync-state.json';
 
 /** 单个分区的同步状态：内容 hash + 最近变更时间 */
@@ -27,6 +29,8 @@ export interface SyncState {
   sections: Partial<Record<SectionId, SyncSectionState>>;
   /** 当前绑定的传输通道（type = SyncTransport.type，ref = 通道内引用，如 git 分支） */
   transport?: { type: string; ref: string };
+  /** 最近一次同步的快照 ID（= 共同祖先指针）；'' = 从未同步或无祖先 */
+  lastSnapshotId: string;
 }
 
 /** 文件类分区判定：{ version: 1, files: [...] }（duck-typing，与 JSON 分区区分） */
@@ -71,11 +75,12 @@ export function hashSection(data: SectionData): string {
   return sha256Hex(canonicalJson(data));
 }
 
-/** 读取同步状态；文件不存在 → 返回缺省空状态（从未同步） */
+/** 读取同步状态；文件不存在 → 返回缺省空状态（从未同步）。
+ * v1 文件 → 内存迁移到 v2（lastSnapshotId=''），不在磁盘上就地升级。 */
 export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapshotFs(), msg: MsgFunc = zhMsg): Promise<SyncState> {
   const file = joinFs(dir, SYNC_STATE_FILE);
   if (!(await fsx.exists(file))) {
-    return { schemaVersion: SYNC_STATE_SCHEMA_VERSION, lastSyncAt: '', sections: {} };
+    return { schemaVersion: SYNC_STATE_SCHEMA_VERSION, lastSyncAt: '', sections: {}, lastSnapshotId: '' };
   }
   const raw = Buffer.from(await fsx.readFile(file)).toString('utf8');
   const parsed = parseJsonSafe(raw);
@@ -83,8 +88,8 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
     throw new Error(msg('sync.state.notObject'));
   }
   const obj = parsed as Record<string, unknown>;
-  if (obj['schemaVersion'] !== SYNC_STATE_SCHEMA_VERSION) {
-    throw new Error(msg('sync.state.schemaUnsupported', { version: String(obj['schemaVersion']), expected: String(SYNC_STATE_SCHEMA_VERSION) }));
+  if (typeof obj['schemaVersion'] !== 'number' || !SYNC_STATE_SUPPORTED_VERSIONS.includes(obj['schemaVersion'])) {
+    throw new Error(msg('sync.state.schemaUnsupported', { version: String(obj['schemaVersion']), expected: String(SYNC_STATE_SUPPORTED_VERSIONS.join('/')) }));
   }
   if (typeof obj['lastSyncAt'] !== 'string') {
     throw new Error(msg('sync.state.lastSyncAt'));
@@ -107,6 +112,7 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
     schemaVersion: SYNC_STATE_SCHEMA_VERSION,
     lastSyncAt: obj['lastSyncAt'],
     sections,
+    lastSnapshotId: typeof obj['lastSnapshotId'] === 'string' ? obj['lastSnapshotId'] : '',
   };
   const t = obj['transport'];
   if (t !== undefined) {

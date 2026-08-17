@@ -94,7 +94,7 @@ export interface SyncButtons {
  * - 仓库地址为空 → 禁用（无仓库无从同步）；
  * - busy 时按钮文案切换为「正在推送/拉取…」（配 Spinner）。
  */
-export function computeSyncButtons(busy: 'push' | 'pull' | null, repoUrl: string, t: UiT = zhUiT): SyncButtons {
+export function computeSyncButtons(busy: 'push' | 'pull' | 'apply' | 'rollback' | null, repoUrl: string, t: UiT = zhUiT): SyncButtons {
   const idle = busy === null;
   const repoOk = repoUrl.trim() !== '';
   const enabled = idle && repoOk;

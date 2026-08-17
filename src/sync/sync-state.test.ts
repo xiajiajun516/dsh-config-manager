@@ -62,6 +62,7 @@ test('saveSyncState / loadSyncState: 完整往返（含 transport 字段）', as
         skills: { hash: 'b'.repeat(64), updatedAt: '2026-08-16T12:00:00.000Z' },
       },
       transport: { type: 'git', ref: 'main' },
+      lastSnapshotId: 'sync-abc',
     };
     await saveSyncState(tmp, state);
     const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
@@ -72,12 +73,13 @@ test('saveSyncState / loadSyncState: 完整往返（含 transport 字段）', as
   }
 });
 
-test('loadSyncState: 文件不存在 → 返回缺省空状态（lastSyncAt 为空串）', async () => {
+test('loadSyncState: 文件不存在 → 返回缺省空状态（lastSyncAt 为空串，lastSnapshotId 为空串）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-missing-'));
   try {
     const state = await loadSyncState(tmp);
     assert.equal(state.schemaVersion, SYNC_STATE_SCHEMA_VERSION);
     assert.equal(state.lastSyncAt, '');
+    assert.equal(state.lastSnapshotId, '');
     assert.deepEqual(state.sections, {});
     assert.equal(state.transport, undefined);
   } finally {
@@ -109,9 +111,53 @@ test('saveSyncState: 自动创建目录', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-mkdir-'));
   try {
     const dir = path.join(tmp, 'nested', 'sync');
-    await saveSyncState(dir, { schemaVersion: SYNC_STATE_SCHEMA_VERSION, lastSyncAt: '', sections: {} });
+    await saveSyncState(dir, { schemaVersion: SYNC_STATE_SCHEMA_VERSION, lastSyncAt: '', sections: {}, lastSnapshotId: '' });
     const state = await loadSyncState(dir);
     assert.equal(state.schemaVersion, SYNC_STATE_SCHEMA_VERSION);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('loadSyncState: v1 文件 → 内存迁移到 v2 形态（lastSnapshotId=""），不动磁盘', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-v1-'));
+  try {
+    // 写入一个 schemaVersion=1 的旧文件（缺 lastSnapshotId）
+    await fs.writeFile(
+      path.join(tmp, SYNC_STATE_FILE),
+      JSON.stringify({
+        schemaVersion: 1,
+        lastSyncAt: '2026-08-15T00:00:00.000Z',
+        sections: { settings: { hash: 'c'.repeat(64), updatedAt: '2026-08-15T00:00:00.000Z' } },
+      }),
+      'utf8',
+    );
+    const state = await loadSyncState(tmp);
+    assert.equal(state.schemaVersion, SYNC_STATE_SCHEMA_VERSION, '内存中应已升级为 v2');
+    assert.equal(state.lastSnapshotId, '', 'v1 文件缺祖先指针时迁移为 ""');
+    assert.equal(state.lastSyncAt, '2026-08-15T00:00:00.000Z');
+    assert.equal(state.sections.settings?.hash, 'c'.repeat(64));
+    // 磁盘上仍是 v1（不就地升级）
+    const onDisk = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
+    assert.equal(onDisk.schemaVersion, 1);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('saveSyncState / loadSyncState: lastSnapshotId 非空往返', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-ancestor-'));
+  try {
+    const state: SyncState = {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '2026-08-16T12:00:00.000Z',
+      sections: {},
+      lastSnapshotId: 'sync-deadbeef-1234',
+    };
+    await saveSyncState(tmp, state);
+    const loaded = await loadSyncState(tmp);
+    assert.equal(loaded.lastSnapshotId, 'sync-deadbeef-1234');
+    assert.deepEqual(loaded, state);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

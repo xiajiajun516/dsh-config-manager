@@ -16,13 +16,19 @@ import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 
 export const SYNC_CONFIG_FILE = 'sync-config.json';
 
+/** 当前 sync-config.json schema 版本号。 */
+export const SYNC_CONFIG_SCHEMA_VERSION = 1;
+/** 历史可读取版本：v1 缺 schemaVersion 字段做兼容读取（视为 v1）。 */
+export const SYNC_CONFIG_SUPPORTED_VERSIONS: readonly number[] = [1];
+
 /** 持久化的仓库配置（不含任何凭据） */
 export interface SyncConfig {
   repoUrl: string;
   gitBin?: string;
 }
 
-/** 读取仓库配置；文件不存在/损坏 → null（视为未配置，UI 显示空表单） */
+/** 读取仓库配置；文件不存在/损坏/不支持 schema → null（视为未配置，UI 显示空表单）。
+ * 兼容旧文件：缺 schemaVersion 字段视为 v1（保留字段）。 */
 export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
   const file = path.join(dir, SYNC_CONFIG_FILE);
   let raw: string;
@@ -31,19 +37,32 @@ export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
   } catch {
     return null;
   }
-  const parsed = parseJsonSafe(raw);
+  let parsed: unknown;
+  try {
+    parsed = parseJsonSafe(raw);
+  } catch {
+    // 损坏 JSON / 体积超限 / 嵌套过深 → 视为未配置（不抛错）
+    return null;
+  }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
   const obj = parsed as Record<string, unknown>;
+  // schemaVersion：缺省视为 v1（兼容旧文件）；非缺省但不在支持列表 → 拒绝
+  if (obj['schemaVersion'] !== undefined && typeof obj['schemaVersion'] !== 'number') {
+    return null;
+  }
+  const ver = typeof obj['schemaVersion'] === 'number' ? obj['schemaVersion'] : 1;
+  if (!SYNC_CONFIG_SUPPORTED_VERSIONS.includes(ver)) return null;
   if (typeof obj['repoUrl'] !== 'string' || obj['repoUrl'] === '') return null;
   const cfg: SyncConfig = { repoUrl: obj['repoUrl'] };
   if (typeof obj['gitBin'] === 'string' && obj['gitBin'] !== '') cfg.gitBin = obj['gitBin'];
   return cfg;
 }
 
-/** 保存仓库配置（自动创建目录；覆盖旧值） */
+/** 保存仓库配置（自动创建目录；覆盖旧值；写 schemaVersion=1） */
 export async function writeSyncConfig(dir: string, cfg: SyncConfig): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), stringifyJsonSafe(cfg, { space: 2 }), 'utf8');
+  const payload = { schemaVersion: SYNC_CONFIG_SCHEMA_VERSION, repoUrl: cfg.repoUrl, ...(cfg.gitBin !== undefined && cfg.gitBin !== '' ? { gitBin: cfg.gitBin } : {}) };
+  await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), stringifyJsonSafe(payload, { space: 2 }), 'utf8');
 }
 
 /**

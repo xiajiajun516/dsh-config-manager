@@ -40,6 +40,16 @@ import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
 import type { SyncSnapshot, SyncTransport } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
+import { DEFAULT_ANCESTOR_KEEP, loadAncestor, pruneAncestors, writeAncestor } from './ancestor.ts';
+import type { MergePlan, MergeSectionResult } from './merge.ts';
+import { merge as mergeSections } from './merge.ts';
+import { classifyMergePlan } from './risk.ts';
+import type { SyncApplyPlan } from './risk.ts';
+import { createSnapshot } from '../core/backup.ts';
+import { rollback } from '../core/rollback.ts';
+import { FileSnapshotStore } from '../core/backup.ts';
+import type { Snapshot, SnapshotStore } from '../core/types.ts';
+import { enqueueItems as enqueueReviewItems } from './review-queue.ts';
 
 export interface SyncEngineOptions {
   ctx: HostContext;
@@ -105,6 +115,21 @@ export interface SyncPullReport {
   /** 是否存在需要人工决策的项（Conflict / MissingSecret / MissingDependency / Install / 路径问题） */
   needsReview: boolean;
   message?: string;
+}
+
+/** 自动应用执行器（P2b）报告 */
+export interface ApplyReport {
+  ok: boolean;
+  /** 实际写入本地的分区 id 列表 */
+  applied: string[];
+  /** 应用前快照 id（UI 可借此一键回滚）；失败时仍透传以便排查 */
+  restoreId: string;
+  /** 是否触发了整体回滚 */
+  rolledBack: boolean;
+  /** 失败时移到 review 队列的项（ReviewQueueItem 形态供 UI 直接渲染） */
+  review: import('./review-queue.ts').ReviewQueueItem[];
+  /** 来自 Importer.ImportResult 的 warnings；UI 可用于红条提示 */
+  warnings: string[];
 }
 
 /** 同步通道结构性排除的敏感分区（即使 portable 判定有误也双保险拒绝；
@@ -216,14 +241,8 @@ export class SyncEngine {
     }
     // ② 上传远端（传输通道负责散文件落盘 + 提交推送）
     await this.transport.upload(snapshot);
-    // ③ 更新 sync-state：每分区 hash + updatedAt；lastSyncAt；transport 绑定
-    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    for (const [sid, data] of Object.entries(sections)) {
-      state.sections[sid as SectionId] = { hash: hashSection(data as SectionData), updatedAt: nowIso };
-    }
-    state.lastSyncAt = nowIso;
-    state.transport = { type: this.transport.type, ref: this.transportRef };
-    await saveSyncState(this.stateDir, state, this.fsx);
+    // ③ 记录祖先基线：写 sync-state（lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport）+ 裁剪
+    await this.recordBaseline(id, snapshot.sections, nowIso);
 
     return { ok: true, snapshotId: id, sections: Object.keys(sections) as SectionId[], warnings };
   }
@@ -274,6 +293,198 @@ export class SyncEngine {
       return { ok: analysis.valid, snapshotId: targetId, changes, needsReview, message };
     } finally {
       await fs.rm(path.dirname(zipPath), { recursive: true, force: true });
+    }
+  }
+
+  async merge(opts: { snapshotId?: string } = {}): Promise<MergePlan> {
+    const metas = await this.transport.list();
+    if (metas.length === 0) {
+      return { sections: [] };
+    }
+    const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
+    const remote = await this.transport.download(targetId);
+    if (remote.manifest.containsSecrets) {
+      throw new Error(`远端快照 ${targetId} 声明 containsSecrets=true，拒绝合并（同步通道永不携带秘密）`);
+    }
+    // 共同祖先：从 sync-state.lastSnapshotId 读本地副本；空 = 首次/无祖先
+    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
+    let ancestor: SyncSnapshot | undefined;
+    if (state.lastSnapshotId !== '' && this.localSnapshotsDir !== undefined) {
+      ancestor = await loadAncestor(this.localSnapshotsDir, state.lastSnapshotId, this.fsx);
+    }
+    // 本地当前：现场 export（含 s​e​c​r​e​t 剥离），与 push 同口径
+    const localSections: Partial<Record<SectionId, SectionData>> = {};
+    for (const adapter of this.portableAdapters()) {
+      let section: ExportSection;
+      try {
+        section = await adapter.export(this.ctx, { includeSecrets: false });
+      } catch {
+        continue;
+      }
+      const data = isFileSection(adapter.id) ? section.data : this.scanner.scanAndRedact(section.data).sanitized;
+      localSections[adapter.id] = data as SectionData;
+    }
+    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const remotePortable: Partial<Record<SectionId, SectionData>> = {};
+    for (const [id, data] of Object.entries(remote.sections)) {
+      if (portableIds.has(id as SectionId)) remotePortable[id as SectionId] = data as SectionData;
+    }
+    const ancestorPortable: Partial<Record<SectionId, SectionData>> = {};
+    if (ancestor) {
+      for (const [id, data] of Object.entries(ancestor.sections)) {
+        if (portableIds.has(id as SectionId)) ancestorPortable[id as SectionId] = data as SectionData;
+      }
+    }
+    return mergeSections(localSections, remotePortable, ancestorPortable);
+  }
+
+  /**
+   * 记录祖先基线：写本地祖先副本 + 更新 sync-state（lastSnapshotId、每分区 hash/updatedAt、lastSyncAt、transport）+ 裁剪到 keep。
+   * 通常由 push() 在上传成功后调用，也可被上层（合并 apply 完成后）显式调用以更新基线到合并后的快照。
+   */
+  async recordBaseline(
+    snapshotId: string,
+    sections: SyncSnapshot['sections'],
+    nowIso?: string,
+  ): Promise<void> {
+    const ts = nowIso ?? this.now().toISOString();
+    // 1) 写本地祖先副本（如有 localSnapshotsDir）
+    if (this.localSnapshotsDir !== undefined) {
+      const snapshot: SyncSnapshot = {
+        id: snapshotId,
+        createdAt: ts,
+        manifest: {
+          schemaVersion: CURRENT_SCHEMA_VERSION,
+          dshVersion: this.ctx.dshVersion,
+          platform: this.ctx.platform as Platform,
+          sectionIds: Object.keys(sections) as SectionId[],
+          containsSecrets: false,
+        },
+        sections,
+      };
+      await writeAncestor(this.localSnapshotsDir, snapshot, this.fsx);
+    }
+    // 2) 更新 sync-state：lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport
+    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
+    state.lastSnapshotId = snapshotId;
+    state.lastSyncAt = ts;
+    state.transport = { type: this.transport.type, ref: this.transportRef };
+    for (const [sid, data] of Object.entries(sections)) {
+      state.sections[sid as SectionId] = { hash: hashSection(data as SectionData), updatedAt: ts };
+    }
+    await saveSyncState(this.stateDir, state, this.fsx);
+    // 3) 裁剪祖先副本（最近 N 个）
+    if (this.localSnapshotsDir !== undefined) {
+      await pruneAncestors(this.localSnapshotsDir, DEFAULT_ANCESTOR_KEEP, this.fsx);
+    }
+  }
+
+  /**
+   * 应用自动应用计划：写本地（走 Importer.executeImportPlan 标准路径；应用前调 backup.createSnapshot 兜底）；
+   * 任一 auto 项失败 → 整体 rollback + 把全部 auto 项移到 review 队列（写回 sync-review-queue.json）；
+   * 成功后 recordBaseline 更新祖先基线。
+   * 返回 ApplyReport；不抛错到调用方（失败返回 ok:false + rolledBack:true）。
+   */
+  async applyMergePlan(apply: SyncApplyPlan): Promise<ApplyReport> {
+    if (!this.importer) {
+      throw new Error('applyMergePlan: SyncEngine 缺少 importer（需在 options 中注​入）');
+    }
+    const appliedIds = apply.autoApply.map((r) => r.id);
+    // 0) 空 autoApply：无物可应用，直接短路（不构造 ZIP、不调 Importer）
+    if (appliedIds.length === 0) {
+      return { ok: true, applied: [], restoreId: '', rolledBack: false, review: [], warnings: [] };
+    }
+    // 1) 构造临时 ZIP（仅含 autoApply 项的 merged payload）+ 分析 + 计划
+    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const tempSnapshot: SyncSnapshot = {
+      id: this.snapshotIdFn(),
+      createdAt: this.now().toISOString(),
+      manifest: {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        dshVersion: this.ctx.dshVersion,
+        platform: this.ctx.platform as Platform,
+        sectionIds: apply.autoApply.map((r) => r.id) as SectionId[],
+        containsSecrets: false,
+      },
+      sections: apply.autoApply.reduce<Record<string, SectionData>>((acc, r) => {
+        if (r.merged !== undefined) acc[r.id] = r.merged as SectionData;
+        return acc;
+      }, {}),
+    };
+    const zipPath = await this.snapshotToZip(tempSnapshot, portableIds);
+    try {
+      const analysis = await this.importer.analyzeImport(zipPath);
+      const plan = await this.importer.createImportPlan(zipPath, {
+        strategy: 'replace', // auto 路径：冲突已在外部分流；这里 replace = 接受导入值
+        resolutions: {},
+        pathMappings: [],
+      });
+      if (!plan.items.length) {
+        // 没有可执行项 → 视为 ok 但空 applied
+        return { ok: true, applied: [], restoreId: '', rolledBack: false, review: [], warnings: [] };
+      }
+      // 2) 兜底：先建快照（拿到 restoreId 给 UI 一键回滚用）
+      const store: SnapshotStore = new FileSnapshotStore({ dir: this.stateDir });
+      let snapshot: Snapshot | undefined;
+      try {
+        snapshot = await createSnapshot({
+          ctx: this.ctx,
+          plan,
+          sourceZip: zipPath,
+          store,
+          adapters: this.adapters,
+        });
+      } catch (backupErr) {
+        return {
+          ok: false,
+          applied: [],
+          restoreId: '',
+          rolledBack: false,
+          review: [],
+          warnings: [`应用前快照失败：${backupErr instanceof Error ? backupErr.message : String(backupErr)}`],
+        };
+      }
+      // 3) 真正执行：Importer.executeImportPlan（rollbackOnError=true → 任一失败整体回滚）
+      const result = await this.importer.executeImportPlan(zipPath, plan, {
+        confirm: true,
+        rollbackOnError: true,
+        secretInputs: undefined,
+        decryptedCredentials: undefined,
+      });
+      if (!result.ok) {
+        try { await rollback({ ctx: this.ctx, snapshot, store, adapters: this.adapters }); } catch { /* noop */ }
+        // 4) 把全部 auto 项移到 review 队列
+        const review = await enqueueReviewItems(this.stateDir, apply.autoApply.map((r) => ({
+          sectionId: r.id,
+          kind: 'section' as const,
+          description: `自动应用失败：${r.id}（已回滚）`,
+          merged: r.merged,
+        })));
+        return {
+          ok: false,
+          applied: [],
+          restoreId: snapshot.id,
+          rolledBack: true,
+          review: review.items,
+          warnings: result.warnings ?? [],
+        };
+      }
+      // 5) 全成功 → recordBaseline（更新祖先基线指向合并后的快照）
+      const mergedSections: SyncSnapshot['sections'] = apply.autoApply.reduce<Record<string, SectionData>>((acc, r) => {
+        if (r.merged !== undefined) acc[r.id] = r.merged as SectionData;
+        return acc;
+      }, {});
+      await this.recordBaseline(tempSnapshot.id, mergedSections);
+      return {
+        ok: true,
+        applied: appliedIds,
+        restoreId: snapshot.id,
+        rolledBack: false,
+        review: [],
+        warnings: result.warnings ?? [],
+      };
+    } finally {
+      try { await fs.rm(path.dirname(zipPath), { recursive: true, force: true }); } catch { /* noop */ }
     }
   }
 

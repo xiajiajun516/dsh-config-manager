@@ -18,7 +18,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
-import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
+import type { ApplyReport, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { SYNC_CREDENTIAL_REF } from './sync-api.ts'
@@ -28,6 +28,9 @@ import {
   kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
 } from './sync-view.ts'
 import type { GithubLoginPhase } from './sync-view.ts'
+import { SyncHistoryView } from './SyncHistoryView.tsx'
+import { SyncPullPreviewView } from './SyncPullPreviewView.tsx'
+import type { SyncApplyPlan } from '../../sync/risk.ts'
 import css from '../config-manager.module.css'
 
 export interface SyncSettingsViewProps {
@@ -43,9 +46,10 @@ interface SyncUiState {
   gitBin: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化 */
   token: string
-  busy: 'push' | 'pull' | null
+  busy: 'push' | 'pull' | 'apply' | 'rollback' | null
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
+  applyReport: ApplyReport | null
   error: string | null
   /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
   github: GithubUiState
@@ -75,6 +79,7 @@ const initial: SyncUiState = {
   busy: null,
   pushReport: null,
   pullReport: null,
+  applyReport: null,
   error: null,
   github: initialGithub,
 }
@@ -194,6 +199,28 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     try {
       const report = await api.pull(payload())
       patch({ busy: null, pullReport: report, token: '' })
+    } catch (err) {
+      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** P2：自动应用（Host 端 engine.merge + classifyMergePlan + applyMergePlan 走完整链路） */
+  const runApply = async (): Promise<void> => {
+    patch({ busy: 'apply', error: null, applyReport: null })
+    try {
+      const report = await api.apply(payload())
+      patch({ busy: null, applyReport: report })
+    } catch (err) {
+      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** P2：一键回滚（按 apply 返回的 restoreId 调 Host /sync/rollback） */
+  const runRollback = async (restoreId: string): Promise<void> => {
+    patch({ busy: 'rollback', error: null })
+    try {
+      await api.rollback({ restoreId })
+      patch({ busy: null, applyReport: null })
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
@@ -378,6 +405,65 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
             </Card>
           )}
+
+          {/* P2：自动应用（拉取后可触发；Host 端合并 + 写本地 + 失败回滚） */}
+          <div className={css.actionRow}>
+            <Button
+              variant="primary"
+              disabled={state.busy !== null || state.pullReport === null}
+              onClick={() => { void runApply() }}
+            >
+              {state.busy === 'apply' ? <Spinner label="自动应用中…" /> : '自动应用（合并 + 写本地）'}
+            </Button>
+          </div>
+
+          {/* P2：自动应用结果 */}
+          {state.applyReport !== null && (
+            <Card>
+              <span className={css.groupLabel}>自动应用结果</span>
+              <Banner kind={state.applyReport.ok ? 'ok' : 'error'}>
+                {state.applyReport.ok
+                  ? `已应用 ${state.applyReport.applied.length} 个分区（restoreId=${state.applyReport.restoreId}）`
+                  : `自动应用失败（已整体回滚，restoreId=${state.applyReport.restoreId}）`}
+              </Banner>
+              {state.applyReport.applied.length > 0 && (
+                <div>
+                  <span className={css.fieldLabel}>已写入</span>
+                  <div className={css.statRow}>
+                    {state.applyReport.applied.map((sid) => <Badge key={sid} kind="ok">{sid}</Badge>)}
+                  </div>
+                </div>
+              )}
+              {state.applyReport.warnings.length > 0 && (
+                <div>
+                  <span className={css.fieldLabel}>告警</span>
+                  <ul className={css.warnList}>
+                    {state.applyReport.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                  </ul>
+                </div>
+              )}
+              {state.applyReport.review.length > 0 && (
+                <div>
+                  <span className={css.fieldLabel}>待审（已入 sync-review-queue.json）</span>
+                  <ul className={css.warnList}>
+                    {state.applyReport.review.map((r, i) => <li key={i}>{r.sectionId} — {r.description}</li>)}
+                  </ul>
+                </div>
+              )}
+              {!state.applyReport.ok && state.applyReport.restoreId !== '' && (
+                <Button
+                  variant="danger"
+                  disabled={state.busy !== null}
+                  onClick={() => { void runRollback(state.applyReport!.restoreId) }}
+                >
+                  {state.busy === 'rollback' ? <Spinner label="回滚中…" /> : '回滚到应用前'}
+                </Button>
+              )}
+            </Card>
+          )}
+
+          {/* P2：同步历史视图（Host /sync/history 端点） */}
+          <SyncHistoryView api={api} />
     </div>
   )
 }

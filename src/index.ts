@@ -58,6 +58,7 @@ import * as yaml from 'js-yaml'
 
 import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
 import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
+import { rollback as performRollback } from './core/rollback.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
@@ -76,8 +77,9 @@ import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
 import { SyncEngine } from './sync/sync-engine.ts'
-import { loadSyncState } from './sync/sync-state.ts'
+import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
 import { readSyncConfig, writeSyncConfig, validateRepoUrl } from './sync/sync-config.ts'
+import { classifyMergePlan } from './sync/risk.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
@@ -148,6 +150,10 @@ const API = {
   syncGithubStart: '/api/dsh-config-manager/sync/github/start',
   syncGithubPoll: '/api/dsh-config-manager/sync/github/poll',
   syncGithubCancel: '/api/dsh-config-manager/sync/github/cancel',
+  // P2：同步历史 / 自动应用 / 一键回滚
+  syncHistory: '/api/dsh-config-manager/sync/history',
+  syncApply: '/api/dsh-config-manager/sync/apply',
+  syncRollback: '/api/dsh-config-manager/sync/rollback',
 } as const
 
 /**
@@ -1572,6 +1578,125 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
         githubFlows.delete(flowId)
         writeJson(res, 200, { ok: true })
+      },
+    },
+    // ------------------------------------------------------ sync/history
+    // P2：列出本地祖先快照目录的 manifest.json（id/createdAt/sectionHashes），
+    // 同时统计 review-queue 中关联到该 snapshotId 的项数。
+    {
+      kind: 'exact',
+      path: API.syncHistory,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const localDir = join(syncDir, 'snapshots')
+          const entries = await fs.readdir(localDir).catch(() => [])
+          const rows: Array<{ id: string; createdAt: string; sectionCount: number; reviewCount: number }> = []
+          for (const name of entries) {
+            const dir = join(localDir, name)
+            const stat = await fs.stat(dir).catch(() => null)
+            if (!stat?.isDirectory()) continue
+            const manifestPath = join(dir, 'manifest.json')
+            const raw = await fs.readFile(manifestPath, 'utf8').catch(() => null)
+            if (raw === null) continue
+            try {
+              const m = JSON.parse(raw) as { id?: unknown; createdAt?: unknown; sectionHashes?: unknown }
+              if (typeof m.id !== 'string' || typeof m.createdAt !== 'string') continue
+              const sectionCount = m.sectionHashes && typeof m.sectionHashes === 'object'
+                ? Object.keys(m.sectionHashes as Record<string, unknown>).length
+                : 0
+              rows.push({ id: m.id, createdAt: m.createdAt, sectionCount, reviewCount: 0 })
+            } catch { /* skip malformed */ }
+          }
+          // 关联 review-queue 计数
+          const rqPath = join(syncDir, 'sync-review-queue.json')
+          const rqRaw = await fs.readFile(rqPath, 'utf8').catch(() => null)
+          if (rqRaw !== null) {
+            try {
+              const rq = JSON.parse(rqRaw) as { items?: Array<{ snapshotId?: string }> }
+              const byId = new Map<string, number>()
+              for (const it of rq.items ?? []) {
+                if (typeof it.snapshotId === 'string') {
+                  byId.set(it.snapshotId, (byId.get(it.snapshotId) ?? 0) + 1)
+                }
+              }
+              for (const r of rows) {
+                const c = byId.get(r.id)
+                if (c !== undefined) r.reviewCount = c
+              }
+            } catch { /* skip */ }
+          }
+          rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+          writeJson(res, 200, rows)
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/apply
+    // P2：应用自动应用计划。流程：
+    //   1) engine.merge 拉取远端 → 三方合并 → classifyMergePlan(firstSync)
+    //   2) engine.applyMergePlan(apply) → backup + Importer.executeImportPlan(rollbackOnError=true)
+    //      失败 → rollback + enqueueItems → return ApplyReport{ok:false,rolledBack:true,review}
+    //   3) 全成功 → recordBaseline + 标记 firstSyncCompleted
+    {
+      kind: 'exact',
+      path: API.syncApply,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const { repoUrl, gitBin } = await prepareSync(body)
+          const engine = makeSyncEngine(repoUrl, gitBin)
+          const merge = await withTimeout(
+            engine.merge(),
+            ROUTE_TIMEOUT_MS,
+            '同步三方合并超时（5 分钟）',
+          )
+          // 首次强制预览：sync-state.lastSyncAt === '' 时一律 review
+          const state = await loadSyncState(syncDir)
+          const firstSync = state.lastSyncAt === ''
+          const apply = classifyMergePlan(merge, { firstSync })
+          if (firstSync) {
+            state.lastSyncAt = new Date().toISOString()
+            await saveSyncState(syncDir, state)
+          }
+          const report = await engine.applyMergePlan(apply)
+          writeJson(res, 200, report)
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/rollback
+    // P2：UI 一键回滚入口（按 apply 返回的 restoreId 调用 backup→rollback）。
+    {
+      kind: 'exact',
+      path: API.syncRollback,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const restoreId = typeof body['restoreId'] === 'string' ? body['restoreId'] : ''
+          if (restoreId === '') {
+            writeJson(res, 400, { error: 'restoreId required' })
+            return
+          }
+          const store = new FileSnapshotStore({ dir: join(syncDir, 'snapshots') })
+          const snap = await store.load(restoreId)
+          const report = await performRollback({ ctx: host, snapshot: snap, store, adapters })
+          writeJson(res, 200, { ok: true, full: report.full })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
       },
     },
   ]

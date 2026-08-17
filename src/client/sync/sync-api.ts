@@ -22,7 +22,7 @@
  *  - 错误消息由 Host 侧已脱敏（GitTransport 统一 [REDACTED]），UI 侧再经 ErrorBanner redact 兜底；
  *  - 本文件不 import 任何 node 模块（纯浏览器 bundle；sync-engine 仅作 type-only 引用）。
  */
-import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { ApplyReport, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
 import { ConfigManagerApiError } from '../api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
@@ -35,6 +35,9 @@ export const SYNC_API = {
   githubStart: '/api/dsh-config-manager/sync/github/start',
   githubPoll: '/api/dsh-config-manager/sync/github/poll',
   githubCancel: '/api/dsh-config-manager/sync/github/cancel',
+  history: '/api/dsh-config-manager/sync/history',
+  apply: '/api/dsh-config-manager/sync/apply',
+  rollback: '/api/dsh-config-manager/sync/rollback',
 } as const;
 
 /** DSH credentials 中的同步 token 引用名（Host 半同值；仅供提示文案使用，值由 Host 读写） */
@@ -189,4 +192,28 @@ export class SyncApi {
   async githubCancel(flowId: string): Promise<{ ok: boolean }> {
     return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId }, this.t);
   }
+
+  /** 同步历史：列出 localSnapshotsDir 下的快照目录（manifest.json: id/createdAt/sectionHashes） */
+  async history(): Promise<SyncHistoryEntry[]> {
+    const response = await fetch(SYNC_API.history);
+    return readJson<SyncHistoryEntry[]>(response, this.t);
+  }
+
+  /** 应用自动应用计划：写本地 + backup + (失败时) rollback + enqueue review；返回 ApplyReport */
+  async apply(payload: SyncPushPayload): Promise<ApplyReport> {
+    return postJson<ApplyReport>(SYNC_API.apply, payload, this.t);
+  }
+
+  /** 一键回滚：按 restoreId 调用 backup→rollback */
+  async rollback(payload: { restoreId: string }): Promise<{ ok: boolean; full: boolean }> {
+    return postJson<{ ok: boolean; full: boolean }>(SYNC_API.rollback, payload, this.t);
+  }
+}
+
+/** 同步历史条目（Host 端返回） */
+export interface SyncHistoryEntry {
+  id: string;
+  createdAt: string;
+  sectionCount: number;
+  reviewCount: number;
 }
