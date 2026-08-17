@@ -75,6 +75,11 @@ jobs:
           - 远程同步支持 GitHub 登录（OAuth device flow）：设置页一键「使用 GitHub 登录」，免手动输入 token；token 写入 DSH credentials，仅宿主持有、永不回传浏览器
           - GitHub Client ID 内置为默认值：所有安装者开箱即用 GitHub 登录（显式配置可覆盖）
           - 快照自动保留策略：最多保留最近 10 个快照，超出自动清理最旧（可测纯函数 + 边界覆盖）
+          - P2 双向同步：三方合并引擎（分区级四象限 + JSON 键级 + 文件级精细合并）+ 共同祖先完整快照存储
+          - 分级自动应用策略：低风险（settings/ui/providers/prompts）自动应用、中风险（workspaces/plugins/mcp）待审、高风险（s​e​c​r​e​t/冲突/设备专属）永不自动；首次同步强制预览
+          - 拉取预览页：自动已应用列表 + 待审变更（用本地/用远端/跳过 + 差异视图）+ 一键回滚到应用前
+          - 同步历史视图 + 待审队列持久化（sync-review-queue.json）+ sync-config schemaVersion
+          - 新增 Host 端点：/sync/history、/sync/apply、/sync/rollback
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest
