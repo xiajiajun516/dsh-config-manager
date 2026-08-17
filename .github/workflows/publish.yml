@@ -71,15 +71,14 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 导入向导支持取消/重新选择备份文件：选文件后可换选另一个文件，同一文件可重复选择（input 值恒清空 + 竞态守卫）
-          - 远程同步支持 GitHub 登录（OAuth device flow）：设置页一键「使用 GitHub 登录」，免手动输入 token；token 写入 DSH credentials，仅宿主持有、永不回传浏览器
-          - GitHub Client ID 内置为默认值：所有安装者开箱即用 GitHub 登录（显式配置可覆盖）
-          - 快照自动保留策略：最多保留最近 10 个快照，超出自动清理最旧（可测纯函数 + 边界覆盖）
-          - P2 双向同步：三方合并引擎（分区级四象限 + JSON 键级 + 文件级精细合并）+ 共同祖先完整快照存储
-          - 分级自动应用策略：低风险（settings/ui/providers/prompts）自动应用、中风险（workspaces/plugins/mcp）待审、高风险（s​e​c​r​e​t/冲突/设备专属）永不自动；首次同步强制预览
-          - 拉取预览页：自动已应用列表 + 待审变更（用本地/用远端/跳过 + 差异视图）+ 一键回滚到应用前
-          - 同步历史视图 + 待审队列持久化（sync-review-queue.json）+ sync-config schemaVersion
-          - 新增 Host 端点：/sync/history、/sync/apply、/sync/rollback
+          - 一键同步（全新）：连仓库 → 拉取最新 → 差异列表逐项确认（默认「采用远端」可取消，冲突项内联三选一 用本地/用远端/跳过）→ 确认后逐个导入；支持从仓库选择读取某个历史快照
+          - 自动同步（全新）：宿主后台调度（不依赖浏览器，DSH 启动即常驻）；一个总开关同时控制上传+下载，统一间隔默认 30 分钟（5m/15m/30m/60m/6h/12h/24h）
+          - 启动自动下载合并：DSH 启动时触发一次「自动下载合并（不上传）」，带最小间隔阈值（默认 5 分钟）防频繁重启反复同步
+          - 自动同步安全策略：遇冲突项跳过并写入同步历史；仅在「无冲突且无需人工干预」时才自动执行；连续失败 3 次发一次通知
+          - 方案A重构：废弃「自动应用」静默写入（POST /sync/apply + 「自动应用」按钮已移除），同步一律走逐项确认；删除 SyncPullPreviewView 死代码
+          - 新增 Host 端点：sync/snapshots-list、sync/sync（差异确认会话）、sync/apply-items、sync/cancel、sync/autosync；增强 sync/history（合并自动同步记录）
+          - 自动同步配置持久化：sync-autosync.json（总开关/间隔/启动阈值/连续失败计数）+ sync-history.json（执行记录，裁剪保留 200 条）
+          - 修复：合并 /sync/autosync 的 GET/POST 为单一路由，避免重复 exact 路由导致插件启动失败
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest

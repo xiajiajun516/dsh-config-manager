@@ -1927,22 +1927,21 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
     },
     // ------------------------------------------------------ sync/autosync
     // m-sync-v2：自动同步配置读写（总开关 + 间隔 + 启动阈值 + 状态）。
+    // GET = 读状态；POST = 写配置。同一路径注册为一个 exact 路由（方法内部分发），
+    // 避免 webserver 对重复 exact 路径报错。
     {
       kind: 'exact',
       path: API.syncAutosync,
       handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          writeJson(res, 200, await buildAutosyncStatus(syncDir))
-        } catch (error) {
-          writeSyncRouteError(res, error)
+        if (req.method === 'GET') {
+          if (!guard(req, res, 'GET')) return
+          try {
+            writeJson(res, 200, await buildAutosyncStatus(syncDir))
+          } catch (error) {
+            writeSyncRouteError(res, error)
+          }
+          return
         }
-      },
-    },
-    {
-      kind: 'exact',
-      path: API.syncAutosync,
-      handler: async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
