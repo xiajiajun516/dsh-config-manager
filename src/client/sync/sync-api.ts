@@ -22,7 +22,9 @@
  *  - 错误消息由 Host 侧已脱敏（GitTransport 统一 [REDACTED]），UI 侧再经 ErrorBanner redact 兜底；
  *  - 本文件不 import 任何 node 模块（纯浏览器 bundle；sync-engine 仅作 type-only 引用）。
  */
-import type { ApplyReport, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { PlanItemKind } from '../../core/types.ts';
+import type { SectionId } from '../../schema/types.ts';
 import { ConfigManagerApiError } from '../api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
@@ -36,7 +38,11 @@ export const SYNC_API = {
   githubPoll: '/api/dsh-config-manager/sync/github/poll',
   githubCancel: '/api/dsh-config-manager/sync/github/cancel',
   history: '/api/dsh-config-manager/sync/history',
-  apply: '/api/dsh-config-manager/sync/apply',
+  snapshotsList: '/api/dsh-config-manager/sync/snapshots-list',
+  sync: '/api/dsh-config-manager/sync/sync',
+  applyItems: '/api/dsh-config-manager/sync/apply-items',
+  cancel: '/api/dsh-config-manager/sync/cancel',
+  autosync: '/api/dsh-config-manager/sync/autosync',
   rollback: '/api/dsh-config-manager/sync/rollback',
 } as const;
 
@@ -59,6 +65,8 @@ export interface SyncStatusResponse {
   /** sync-state.sections 条目数 */
   sectionCount: number;
   transport?: { type: string; ref: string };
+  /** 自动同步当前状态（供 UI 顶部开关回填；§3.9） */
+  autosync?: AutosyncStatusResponse;
 }
 
 /** push 请求体（token 可选：非空则 Host 先写入 DSH credentials 再使用） */
@@ -72,6 +80,172 @@ export interface SyncPushPayload {
 export interface SyncPullPayload extends SyncPushPayload {
   strategy?: 'merge' | 'replace' | 'skipExisting';
   snapshotId?: string;
+}
+
+/* ---------------------------------------------------------------- 一键同步（方案 A） */
+
+/** GET /sync/snapshots-list 响应：远端历史快照列表（按 createdAt 倒序）。 */
+export interface SyncSnapshotsListResponse {
+  ok: boolean;
+  /** 按 createdAt 倒序（最新在前） */
+  snapshots: SyncSnapshotLite[];
+  /** 当前本地祖先指针（sync-state.lastSnapshotId），用于高亮当前基线 */
+  currentSnapshotId?: string;
+}
+
+/** 远端快照摘要（「选择历史快照」下拉项）。 */
+export interface SyncSnapshotLite {
+  id: string;
+  createdAt: string;
+  sectionCount: number;
+  platform: string;
+  dshVersion: string;
+}
+
+/** POST /sync/sync 请求体（一键同步第一步：拉取 → 差异确认会话）。 */
+export interface SyncStartPayload {
+  repoUrl: string;
+  gitBin?: string;
+  token?: string;
+  /** 缺省 = 最新快照；传入则对该历史快照拉取 */
+  snapshotId?: string;
+}
+
+/** POST /sync/sync 响应：差异确认会话（items 供 UI 逐项确认）。 */
+export interface SyncStartResponse {
+  ok: boolean;
+  /** 差异确认会话 id：后续 apply-items / cancel 引用 */
+  syncSessionId: string;
+  /** 被拉取的远端快照 id */
+  snapshotId: string;
+  items: SyncConfirmItem[];
+  /** 是否包含任何需人工决策项 */
+  needsReview: boolean;
+  compatibility: 'excellent' | 'good' | 'partial' | 'unsupported';
+  message?: string;
+}
+
+/** 单条可确认的差异项（由 ImportPlan.item 投影 + 冲突详情）。 */
+export interface SyncConfirmItem {
+  itemId: string;
+  adapter: SectionId;
+  kind: PlanItemKind;
+  description: string;
+  severity: 'info' | 'warning' | 'error';
+  /** 默认采纳方向；Conflict/MissingSecret 等人工项默认 false */
+  defaultAdopt: boolean;
+  /** 用户最终决策（缺省 = defaultAdopt） */
+  adopt: boolean;
+  /** 冲突项内联解决所需详情（仅 Conflict 项非空） */
+  conflict?: SyncConflictDetail;
+  /** 该项若采用将写入的目标摘要 */
+  target?: { adapter: SectionId; ref: string };
+}
+
+/** 冲突项内联解决详情（来源 MergeConflict + 可读 diff）。 */
+export interface SyncConflictDetail {
+  path: string;
+  kind: 'key' | 'file' | 'section';
+  local?: unknown;
+  remote?: unknown;
+  ancestor?: unknown;
+  diff?: string;
+}
+
+/** POST /sync/apply-items 请求体（一键同步第二步：按逐项决策执行导入）。 */
+export interface ApplyItemsPayload {
+  syncSessionId: string;
+  /** 每项的最终采纳决策（未列出项视为 adopt=false） */
+  adoptions: SyncItemAdoption[];
+}
+
+/** 单条采纳决策。 */
+export interface SyncItemAdoption {
+  itemId: string;
+  adopt: boolean;
+  /** 冲突项解决方案（仅当该项是 Conflict 且 adopt=true 时必须） */
+  resolution?: 'useRemote' | 'keepLocal' | 'skip';
+}
+
+/** POST /sync/apply-items 响应。 */
+export interface ApplyItemsResponse {
+  ok: boolean;
+  applied: string[];
+  skipped: string[];
+  needsRestart: boolean;
+  warnings: string[];
+  /** 应用前快照 id（UI 一键回滚用） */
+  restoreId: string;
+  /** 任一失败是否整体回滚 */
+  rolledBack: boolean;
+  failed: { itemId: string; message?: string }[];
+  result: unknown;
+}
+
+/* ---------------------------------------------------------------- 自动同步 */
+
+/** 统一间隔类型。 */
+export type AutosyncInterval = '5m' | '15m' | '30m' | '60m' | '6h' | '12h' | '24h';
+
+/** 最近一次自动同步执行状态。 */
+export type AutosyncRunStatus = 'success' | 'skipped' | 'failed' | 'partial';
+
+/** GET/POST /sync/autosync 响应：自动同步状态。 */
+export interface AutosyncStatusResponse {
+  enabled: boolean;
+  interval: AutosyncInterval;
+  lastRunAt?: string;
+  lastRunStatus?: AutosyncRunStatus;
+  lastRunMessage?: string;
+  consecutiveFailures: number;
+  /** 距上次自动同步已过 ms（host 计算，供 UI 倒计时/立即触发判断） */
+  elapsedMs: number;
+  lastRunHistoryId?: string;
+}
+
+/** POST /sync/autosync 请求体。 */
+export interface AutosyncUpdatePayload {
+  enabled: boolean;
+  interval?: AutosyncInterval;
+  startupMinIntervalMs?: number;
+}
+
+/* ---------------------------------------------------------------- 同步历史 */
+
+/** 自动同步执行记录（§3.7 AutosyncHistoryEntry）。 */
+export interface AutosyncHistoryEntry {
+  direction: 'pull' | 'push' | 'both';
+  status: 'success' | 'skipped' | 'failed' | 'partial';
+  /** 跳过原因（冲突项 / 缺失依赖 / Install / 错误 / 无远端 / 网络） */
+  skipReason?: string;
+  /** 被跳过的冲突分区 id（冲突跳过时列出） */
+  conflictedSections?: string[];
+  /** 本次自动合并实际写入的分区 */
+  appliedSections?: string[];
+  /** 本次 push 产生的快照 id */
+  pushedSnapshotId?: string;
+  /** 本次 pull 来源快照 id */
+  pulledSnapshotId?: string;
+  error?: string;
+  notifiedAt?: string;
+  /** 本次触发时的连续失败计数 */
+  failureCountAtRun: number;
+  createdAt: string;
+}
+
+/** 同步历史条目（Host 端返回；kind='autosync' 时 autosync 非空）。 */
+export interface SyncHistoryEntry {
+  id: string;
+  createdAt: string;
+  kind: 'push' | 'pull' | 'apply' | 'autosync' | 'rollback';
+  sectionCount?: number;
+  reviewCount?: number;
+  autosync?: AutosyncHistoryEntry;
+}
+
+/** GET /sync/history 响应：{ entries }。 */
+export interface SyncHistoryResponse {
+  entries: SyncHistoryEntry[];
 }
 
 /* ---------------------------------------------------------------- GitHub OAuth device flow */
@@ -193,27 +367,45 @@ export class SyncApi {
     return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId }, this.t);
   }
 
-  /** 同步历史：列出 localSnapshotsDir 下的快照目录（manifest.json: id/createdAt/sectionHashes） */
-  async history(): Promise<SyncHistoryEntry[]> {
+  /** 同步历史：列出本地祖先快照 + 自动同步执行记录（按 createdAt 倒序合并）。 */
+  async history(): Promise<SyncHistoryResponse> {
     const response = await fetch(SYNC_API.history);
-    return readJson<SyncHistoryEntry[]>(response, this.t);
+    return readJson<SyncHistoryResponse>(response, this.t);
   }
 
-  /** 应用自动应用计划：写本地 + backup + (失败时) rollback + enqueue review；返回 ApplyReport */
-  async apply(payload: SyncPushPayload): Promise<ApplyReport> {
-    return postJson<ApplyReport>(SYNC_API.apply, payload, this.t);
+  /** 远端历史快照列表（供「选择历史快照」下拉）。 */
+  async snapshotsList(payload: SyncPushPayload): Promise<SyncSnapshotsListResponse> {
+    return postJson<SyncSnapshotsListResponse>(SYNC_API.snapshotsList, payload, this.t);
+  }
+
+  /** 一键同步第一步：拉取 → 差异确认会话（items 逐项确认，暂不导入）。 */
+  async sync(payload: SyncStartPayload): Promise<SyncStartResponse> {
+    return postJson<SyncStartResponse>(SYNC_API.sync, payload, this.t);
+  }
+
+  /** 一键同步第二步：按用户对差异项的逐项决策执行导入。 */
+  async applyItems(payload: ApplyItemsPayload): Promise<ApplyItemsResponse> {
+    return postJson<ApplyItemsResponse>(SYNC_API.applyItems, payload, this.t);
+  }
+
+  /** 取消/清理差异确认会话（丢弃临时 ZIP，零副作用）。 */
+  async cancel(syncSessionId: string): Promise<{ ok: boolean }> {
+    return postJson<{ ok: boolean }>(SYNC_API.cancel, { syncSessionId }, this.t);
+  }
+
+  /** 自动同步状态（GET /sync/autosync）。 */
+  async autosyncStatus(): Promise<AutosyncStatusResponse> {
+    const response = await fetch(SYNC_API.autosync);
+    return readJson<AutosyncStatusResponse>(response, this.t);
+  }
+
+  /** 自动同步配置更新（POST /sync/autosync）。 */
+  async autosyncUpdate(payload: AutosyncUpdatePayload): Promise<AutosyncStatusResponse> {
+    return postJson<AutosyncStatusResponse>(SYNC_API.autosync, payload, this.t);
   }
 
   /** 一键回滚：按 restoreId 调用 backup→rollback */
   async rollback(payload: { restoreId: string }): Promise<{ ok: boolean; full: boolean }> {
     return postJson<{ ok: boolean; full: boolean }>(SYNC_API.rollback, payload, this.t);
   }
-}
-
-/** 同步历史条目（Host 端返回） */
-export interface SyncHistoryEntry {
-  id: string;
-  createdAt: string;
-  sectionCount: number;
-  reviewCount: number;
 }

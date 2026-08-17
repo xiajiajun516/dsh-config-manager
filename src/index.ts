@@ -68,7 +68,7 @@ import {
 } from './core/plugin-cli.ts'
 import type {
   ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
-  ImportPlan, NamespaceInfo, PatchFileFacade, PluginInfo, PluginsFacade,
+  ImportPlan, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade,
   SettingsFacade, WorkspaceFacade,
 } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
@@ -77,9 +77,13 @@ import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
 import { SyncEngine } from './sync/sync-engine.ts'
+import { SyncSessionStore } from './sync/sync-session.ts'
+import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
+import { defaultAutosyncConfig, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
+import type { AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
+import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
 import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
 import { readSyncConfig, writeSyncConfig, validateRepoUrl } from './sync/sync-config.ts'
-import { classifyMergePlan } from './sync/risk.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
@@ -152,8 +156,13 @@ const API = {
   syncGithubCancel: '/api/dsh-config-manager/sync/github/cancel',
   // P2：同步历史 / 自动应用 / 一键回滚
   syncHistory: '/api/dsh-config-manager/sync/history',
-  syncApply: '/api/dsh-config-manager/sync/apply',
   syncRollback: '/api/dsh-config-manager/sync/rollback',
+  // m-sync-v2：一键同步（差异确认会话）+ 自动同步 + 历史快照
+  syncSnapshotsList: '/api/dsh-config-manager/sync/snapshots-list',
+  syncSync: '/api/dsh-config-manager/sync/sync',
+  syncApplyItems: '/api/dsh-config-manager/sync/apply-items',
+  syncCancel: '/api/dsh-config-manager/sync/cancel',
+  syncAutosync: '/api/dsh-config-manager/sync/autosync',
 } as const
 
 /**
@@ -828,6 +837,88 @@ export function writeSyncRouteError(res: ServerResponse, error: unknown): void {
   writeJson(res, 500, { error: message })
 }
 
+/** 需要人工决策的 PlanItemKind（一键同步 needsReview 判定 + 逐项确认标记） */
+const REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
+  'Conflict', 'MissingSecret', 'MissingDependency', 'Install', 'Error', 'PathMapping',
+])
+
+/** 一键同步差异项（client 逐项确认的最小契约；与 sync-api.ts SyncConfirmItem 对齐） */
+interface SyncConfirmItem {
+  itemId: string
+  adapter: SectionId
+  kind: PlanItemKind
+  description: string
+  severity: 'info' | 'warning' | 'error'
+  defaultAdopt: boolean
+  adopt: boolean
+  conflict?: { path: string; kind: 'key' | 'file' | 'section'; local?: unknown; remote?: unknown; ancestor?: unknown; diff?: string }
+  target?: { adapter: SectionId; ref: string }
+}
+
+/** 把 ImportPlan 投影为逐项可确认的差异项（默认采用 Create/Update/Install；人工项默认不采用）。 */
+function planToConfirmItems(plan: ImportPlan): SyncConfirmItem[] {
+  return plan.items.map((item) => {
+    const manual = REVIEW_KINDS.has(item.kind)
+    let conflict: SyncConfirmItem['conflict']
+    if (item.kind === 'Conflict') {
+      const c = (item as { conflict?: { path?: string; kind?: string; local?: unknown; remote?: unknown; ancestor?: unknown } }).conflict
+      conflict = {
+        path: c?.path ?? '$',
+        kind: c?.kind === 'file' ? 'file' : c?.kind === 'section' ? 'section' : 'key',
+        ...(c?.local !== undefined ? { local: c.local } : {}),
+        ...(c?.remote !== undefined ? { remote: c.remote } : {}),
+        ...(c?.ancestor !== undefined ? { ancestor: c.ancestor } : {}),
+      }
+    }
+    return {
+      itemId: item.id,
+      adapter: item.adapter,
+      kind: item.kind,
+      description: item.description,
+      severity: item.severity,
+      defaultAdopt: !manual,
+      adopt: !manual,
+      ...(conflict !== undefined ? { conflict } : {}),
+      ...(item.target !== undefined ? { target: item.target } : {}),
+    }
+  })
+}
+
+/** autosync interval 类型守卫 */
+function isAutosyncInterval(v: unknown): v is AutosyncInterval {
+  return v === '5m' || v === '15m' || v === '30m' || v === '60m' || v === '6h' || v === '12h' || v === '24h'
+}
+
+/** 自动同步状态响应（GET /sync/autosync 与 POST 回填；读盘计算 elapsedMs）。 */
+async function buildAutosyncStatus(dir: string): Promise<AutosyncStatusResponse> {
+  const cfg = await readAutosyncConfig(dir)
+  const elapsedMs = cfg.lastRunAt === undefined || cfg.lastRunAt === ''
+    ? -1
+    : Math.max(0, Date.now() - Date.parse(cfg.lastRunAt))
+  return {
+    enabled: cfg.enabled,
+    interval: cfg.interval,
+    ...(cfg.lastRunAt !== undefined ? { lastRunAt: cfg.lastRunAt } : {}),
+    ...(cfg.lastRunStatus !== undefined ? { lastRunStatus: cfg.lastRunStatus } : {}),
+    ...(cfg.lastRunMessage !== undefined ? { lastRunMessage: cfg.lastRunMessage } : {}),
+    consecutiveFailures: cfg.consecutiveFailures,
+    elapsedMs,
+    ...(cfg.lastRunHistoryId !== undefined ? { lastRunHistoryId: cfg.lastRunHistoryId } : {}),
+  }
+}
+
+/** GET /sync/autosync 响应类型（与 sync-api.ts AutosyncStatusResponse 对齐） */
+interface AutosyncStatusResponse {
+  enabled: boolean
+  interval: AutosyncInterval
+  lastRunAt?: string
+  lastRunStatus?: AutosyncRunStatus
+  lastRunMessage?: string
+  consecutiveFailures: number
+  elapsedMs: number
+  lastRunHistoryId?: string
+}
+
 /* -------------------------------------------------- restore 路由（M4） */
 
 /** POST /restore 请求体校验（纯函数；snapshotId 拒绝路径分隔符防 join 越界）。 */
@@ -1048,6 +1139,21 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
       msg,
     });
   }
+
+  /** 一键同步差异确认会话存储（进程内存；/sync/sync 预览 → /sync/apply-items 逐项执行解耦） */
+  const syncSessions = new SyncSessionStore()
+
+  /** 自动同步后台调度器（宿主进程生命周期，不依赖浏览器） */
+  let scheduler: AutoSyncScheduler | undefined
+  scheduler = new AutoSyncScheduler({
+    syncDir,
+    host,
+    makeSyncEngine,
+    msg,
+    runs,
+  })
+  // 启动：读 autosync-config；若 enabled 启动定时器；无条件执行一次「启动触发下载合并」（受阈值约束）
+  scheduler.start()
 
   return [
     // ------------------------------------------------------------- status
@@ -1407,6 +1513,7 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
             lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
             sectionCount: Object.keys(state.sections).length,
             transport: state.transport,
+            autosync: await buildAutosyncStatus(syncDir),
           })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
@@ -1627,21 +1734,28 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
             } catch { /* skip */ }
           }
           rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
-          writeJson(res, 200, rows)
+          // 合并自动同步执行记录（sync-history.json）
+          const hist = await readSyncHistory(syncDir)
+          const merged = [
+            ...rows.map((r) => ({ ...r, kind: 'apply' as const })),
+            ...hist.autosyncEntries.map((e) => ({
+              id: e.createdAt,
+              createdAt: e.createdAt,
+              kind: 'autosync' as const,
+              autosync: e,
+            })),
+          ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+          writeJson(res, 200, { entries: merged })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     },
-    // ------------------------------------------------------ sync/apply
-    // P2：应用自动应用计划。流程：
-    //   1) engine.merge 拉取远端 → 三方合并 → classifyMergePlan(firstSync)
-    //   2) engine.applyMergePlan(apply) → backup + Importer.executeImportPlan(rollbackOnError=true)
-    //      失败 → rollback + enqueueItems → return ApplyReport{ok:false,rolledBack:true,review}
-    //   3) 全成功 → recordBaseline + 标记 firstSyncCompleted
+    // ------------------------------------------------------ sync/snapshots-list
+    // m-sync-v2：远端历史快照列表（供「选择历史快照」下拉）。
     {
       kind: 'exact',
-      path: API.syncApply,
+      path: API.syncSnapshotsList,
       handler: async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
@@ -1652,21 +1766,199 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         try {
           const { repoUrl, gitBin } = await prepareSync(body)
           const engine = makeSyncEngine(repoUrl, gitBin)
-          const merge = await withTimeout(
-            engine.merge(),
+          const metas = await withTimeout(
+            engine.listSnapshots(),
             ROUTE_TIMEOUT_MS,
-            '同步三方合并超时（5 分钟）',
+            msg('host.syncPullTimeout'),
           )
-          // 首次强制预览：sync-state.lastSyncAt === '' 时一律 review
+          const snapshots = [...metas]
+            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+            .map((m) => ({
+              id: m.id,
+              createdAt: m.createdAt,
+              sectionCount: m.manifest.sectionIds.length,
+              platform: m.manifest.platform,
+              dshVersion: m.manifest.dshVersion,
+            }))
           const state = await loadSyncState(syncDir)
-          const firstSync = state.lastSyncAt === ''
-          const apply = classifyMergePlan(merge, { firstSync })
-          if (firstSync) {
-            state.lastSyncAt = new Date().toISOString()
-            await saveSyncState(syncDir, state)
+          writeJson(res, 200, { ok: true, snapshots, currentSnapshotId: state.lastSnapshotId === '' ? undefined : state.lastSnapshotId })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/sync
+    // m-sync-v2：一键同步第一步 —— 拉取 → 差异确认会话（内存登记临时 ZIP + ImportPlan）。
+    {
+      kind: 'exact',
+      path: API.syncSync,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const { repoUrl, gitBin } = await prepareSync(body)
+          const engine = makeSyncEngine(repoUrl, gitBin)
+          const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          const preview = await withTimeout(
+            engine.preview(snapshotId === undefined ? {} : { snapshotId }),
+            ROUTE_TIMEOUT_MS,
+            msg('host.syncPullTimeout'),
+          )
+          if (!preview.ok || preview.plan === null || preview.analysis === null) {
+            writeJson(res, 200, { ok: false, syncSessionId: '', snapshotId: preview.snapshotId, items: [], needsReview: false, compatibility: 'unsupported', message: preview.message ?? '同步预览失败' })
+            return
           }
-          const report = await engine.applyMergePlan(apply)
-          writeJson(res, 200, report)
+          const syncSessionId = syncSessions.set({
+            zipPath: preview.zipPath,
+            plan: preview.plan,
+            analysis: preview.analysis,
+            snapshotId: preview.snapshotId,
+            repoUrl,
+            gitBin,
+          })
+          const items = planToConfirmItems(preview.plan)
+          const needsReview = items.some((i) => REVIEW_KINDS.has(i.kind)) || preview.analysis.pathIssues.length > 0
+          writeJson(res, 200, {
+            ok: true,
+            syncSessionId,
+            snapshotId: preview.snapshotId,
+            items,
+            needsReview,
+            compatibility: preview.analysis.compatibility,
+          })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/apply-items
+    // m-sync-v2：一键同步第二步 —— 按用户对差异项的逐项决策执行导入。
+    {
+      kind: 'exact',
+      path: API.syncApplyItems,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const syncSessionId = typeof body['syncSessionId'] === 'string' ? body['syncSessionId'] : ''
+          const session = syncSessions.get(syncSessionId)
+          if (session === undefined) {
+            writeJson(res, 400, { error: '同步会话不存在或已过期，请重新拉取预览' })
+            return
+          }
+          const adoptions = Array.isArray(body['adoptions']) ? body['adoptions'] : []
+          // 构造子计划（仅含采纳项）
+          const byId = new Map<string, { adopt: boolean; resolution?: string }>()
+          for (const a of adoptions as Array<Record<string, unknown>>) {
+            if (typeof a?.['itemId'] !== 'string') continue
+            byId.set(a['itemId'], { adopt: a['adopt'] === true, resolution: typeof a['resolution'] === 'string' ? a['resolution'] : undefined })
+          }
+          const subItems = session.plan.items.filter((item) => {
+            const d = byId.get(item.id)
+            if (d === undefined || !d.adopt) return false
+            // Conflict 项必须有 resolution，且 keepLocal/skip 从子计划剔除
+            if (item.kind === 'Conflict') {
+              if (d.resolution === undefined) throw new SyncRouteError(`冲突项 ${item.id} 必须提供 resolution（useRemote/keepLocal/skip）`)
+              if (d.resolution === 'keepLocal' || d.resolution === 'skip') return false
+            }
+            return true
+          })
+          const subPlan: ImportPlan = {
+            ...session.plan,
+            items: subItems,
+          }
+          // 消费会话（同一 session 只允许一次 apply-items）
+          syncSessions.delete(syncSessionId)
+          await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
+          const engine = makeSyncEngine(session.repoUrl, session.gitBin)
+          const report = await engine.applyItems(session.zipPath, subPlan, {
+            onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
+          })
+          writeJson(res, 200, {
+            ok: report.ok,
+            applied: report.applied,
+            skipped: subItems.map((i) => i.id),
+            needsRestart: report.needsRestart === true,
+            warnings: report.warnings,
+            restoreId: report.restoreId,
+            rolledBack: report.rolledBack,
+            failed: report.failed,
+            result: report.result,
+          })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/cancel
+    // m-sync-v2：取消 / 清理差异确认会话（丢弃临时 ZIP，零副作用）。
+    {
+      kind: 'exact',
+      path: API.syncCancel,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const syncSessionId = typeof body['syncSessionId'] === 'string' ? body['syncSessionId'] : ''
+          if (syncSessionId !== '') {
+            const session = syncSessions.get(syncSessionId)
+            if (session !== undefined) {
+              await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
+            }
+            syncSessions.delete(syncSessionId)
+          }
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/autosync
+    // m-sync-v2：自动同步配置读写（总开关 + 间隔 + 启动阈值 + 状态）。
+    {
+      kind: 'exact',
+      path: API.syncAutosync,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          writeJson(res, 200, await buildAutosyncStatus(syncDir))
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.syncAutosync,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const cfg = await readAutosyncConfig(syncDir)
+          if (typeof body['enabled'] === 'boolean') cfg.enabled = body['enabled']
+          if (typeof body['interval'] === 'string' && isAutosyncInterval(body['interval'])) cfg.interval = body['interval']
+          if (typeof body['startupMinIntervalMs'] === 'number' && Number.isFinite(body['startupMinIntervalMs']) && body['startupMinIntervalMs'] > 0) {
+            cfg.startupMinIntervalMs = body['startupMinIntervalMs']
+          }
+          await writeAutosyncConfig(syncDir, cfg)
+          if (scheduler) scheduler.reload().catch(() => { /* 尽力而为 */ })
+          writeJson(res, 200, await buildAutosyncStatus(syncDir))
         } catch (error) {
           writeSyncRouteError(res, error)
         }

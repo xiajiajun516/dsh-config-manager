@@ -867,3 +867,21 @@
   gap: 8px;
   margin-top: 10px;
 }
+
+/* 拉取差异预览（details 展开后的 diff）：限高 + 内部滚动，diff 项多时不把整页撑长 */
+.diffScroll {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 8px 10px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-primary);
+}

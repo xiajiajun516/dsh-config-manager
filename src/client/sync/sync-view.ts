@@ -7,7 +7,10 @@
  */
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
-import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts';
+import type {
+  ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem,
+  SyncItemAdoption, SyncStatusResponse,
+} from './sync-api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
@@ -94,15 +97,15 @@ export interface SyncButtons {
  * - 仓库地址为空 → 禁用（无仓库无从同步）；
  * - busy 时按钮文案切换为「正在推送/拉取…」（配 Spinner）。
  */
-export function computeSyncButtons(busy: 'push' | 'pull' | 'apply' | 'rollback' | null, repoUrl: string, t: UiT = zhUiT): SyncButtons {
+export function computeSyncButtons(busy: 'sync' | 'push' | 'pull' | 'apply' | 'rollback' | null, repoUrl: string, t: UiT = zhUiT): SyncButtons {
   const idle = busy === null;
   const repoOk = repoUrl.trim() !== '';
   const enabled = idle && repoOk;
   return {
     canPush: enabled,
     canPull: enabled,
-    pushLabel: busy === 'push' ? t('sync.pushing') : t('sync.pushLabel'),
-    pullLabel: busy === 'pull' ? t('sync.pulling') : t('sync.pullLabel'),
+    pushLabel: busy === 'push' ? t('sync.pushing') : busy === 'sync' ? t('sync.syncing') : t('sync.pushLabel'),
+    pullLabel: busy === 'pull' ? t('sync.pulling') : busy === 'sync' ? t('sync.syncing') : t('sync.pullLabel'),
   };
 }
 
@@ -289,4 +292,148 @@ export function githubPollMessage(poll: GithubPollResponse, t: UiT = zhUiT): str
     default:
       return '';
   }
+}
+
+/* ---------------------------------------------------------------- 一键同步差异确认（方案 A） */
+
+/** 需要人工决策的 PlanItemKind（与 Host /sync/sync 的 needsReview 判定对齐）。 */
+const CONFIRM_REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
+  'Conflict', 'MissingSecret', 'MissingDependency', 'Install', 'Error', 'PathMapping',
+]);
+
+export interface SyncConfirmSummary {
+  total: number;
+  info: number;
+  warning: number;
+  error: number;
+  /** 默认/当前采用数（adopt=true 的项数）。 */
+  adopted: number;
+  /** 是否包含任何需人工决策项。 */
+  needsReview: boolean;
+}
+
+/** 差异确认列表摘要（按 severity 计数 + 采用数 + needsReview 徽章数据源）。 */
+export function summarizeConfirmItems(items: readonly SyncConfirmItem[]): SyncConfirmSummary {
+  let info = 0;
+  let warning = 0;
+  let error = 0;
+  let adopted = 0;
+  let needsReview = false;
+  for (const it of items) {
+    if (it.severity === 'error') error += 1;
+    else if (it.severity === 'warning') warning += 1;
+    else info += 1;
+    if (it.adopt) adopted += 1;
+    if (CONFIRM_REVIEW_KINDS.has(it.kind)) needsReview = true;
+  }
+  return { total: items.length, info, warning, error, adopted, needsReview };
+}
+
+/**
+ * 收集用户逐项决策 → apply-items 请求体 adoptions[]。
+ * 仅包含 adopt=true 的项；Conflict 项 adopt=true 且未给 resolution → 抛错（强制先解决）。
+ */
+export function buildAdoptions(
+  items: readonly SyncConfirmItem[],
+  adopted: ReadonlyMap<string, boolean>,
+  resolutions: ReadonlyMap<string, 'useRemote' | 'keepLocal' | 'skip'>,
+): SyncItemAdoption[] {
+  const out: SyncItemAdoption[] = [];
+  for (const it of items) {
+    if (adopted.get(it.itemId) !== true) continue; // adopt=false / 未列出 → 跳过
+    const adoption: SyncItemAdoption = { itemId: it.itemId, adopt: true };
+    if (it.kind === 'Conflict') {
+      const resolution = resolutions.get(it.itemId);
+      if (resolution === undefined) {
+        throw new Error(`冲突项 ${it.itemId} 必须先选择解决方式（用本地 / 用远端 / 跳过）`);
+      }
+      if (resolution !== 'skip') adoption.resolution = resolution;
+    }
+    out.push(adoption);
+  }
+  return out;
+}
+
+export type ApplyItemsViewKind = 'ok' | 'failed' | 'rolledBack';
+
+export interface ApplyItemsView {
+  kind: ApplyItemsViewKind;
+  headline: string;
+  sections: string[];
+  warnings: string[];
+  restoreId: string;
+  needsRestart: boolean;
+}
+
+/** apply-items 执行结果 → 渲染模型（ok / failed / 整体回滚）。 */
+export function applyItemsReportView(
+  report: ApplyItemsResponse | null,
+  t: UiT = zhUiT,
+): ApplyItemsView | null {
+  if (report === null) return null;
+  const failedOnly = report.failed.length > 0 && !report.ok;
+  const kind: ApplyItemsViewKind = !report.ok && report.rolledBack ? 'rolledBack' : failedOnly ? 'failed' : 'ok';
+  const headline = kind === 'ok'
+    ? t('sync.importDone', { n: String(report.applied.length) })
+    : kind === 'rolledBack'
+      ? t('sync.importFailed')
+      : t('sync.importFailed');
+  return {
+    kind,
+    headline,
+    sections: report.applied,
+    warnings: report.warnings,
+    restoreId: report.restoreId,
+    needsRestart: report.needsRestart,
+  };
+}
+
+/* ---------------------------------------------------------------- 自动同步（方案 A） */
+
+/** AutosyncInterval → ms。 */
+export function autosyncIntervalMs(interval: AutosyncInterval): number {
+  switch (interval) {
+    case '5m': return 5 * 60 * 1000;
+    case '15m': return 15 * 60 * 1000;
+    case '60m': return 60 * 60 * 1000;
+    case '6h': return 6 * 60 * 60 * 1000;
+    case '12h': return 12 * 60 * 60 * 1000;
+    case '24h': return 24 * 60 * 60 * 1000;
+    default: return 30 * 60 * 1000;
+  }
+}
+
+/** 距下次自动同步剩余 ms（已到期 → 0）。elapsedMs 为 host 计算的「距上次执行已过 ms」。 */
+export function computeAutosyncCountdown(elapsedMs: number, intervalMs: number): number {
+  if (elapsedMs < 0) return -1; // 从未运行
+  return Math.max(0, intervalMs - elapsedMs);
+}
+
+/** 间隔 ms → 可读时长（如「30 分钟」「6 小时」）。 */
+export function formatIntervalDuration(ms: number, t: UiT = zhUiT): string {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return t('sync.interval.30m');
+  const hours = Math.round(minutes / 60);
+  if (hours === 6) return t('sync.interval.6h');
+  if (hours === 12) return t('sync.interval.12h');
+  if (hours === 24) return t('sync.interval.24h');
+  return `${hours}h`;
+}
+
+/** 自动同步状态行的可读文案（未运行 / 上次状态 / 连续失败计数）。 */
+export function autosyncStatusText(status: AutosyncStatusResponse, t: UiT = zhUiT): string {
+  if (status.lastRunAt === undefined || status.lastRunAt === '' || status.lastRunStatus === undefined) {
+    return t('sync.autosyncNever');
+  }
+  const statusText = status.lastRunStatus === 'success'
+    ? t('sync.autosyncSuccess')
+    : status.lastRunStatus === 'skipped'
+      ? t('sync.autosyncSkipped')
+      : status.lastRunStatus === 'partial'
+        ? t('sync.autosyncPartial')
+        : t('sync.autosyncFailed');
+  const time = formatDateTime(status.lastRunAt);
+  const base = t('sync.autosyncLastRun', { time });
+  const fail = status.consecutiveFailures > 0 ? ` · ${t('sync.autosyncFailCount', { n: String(status.consecutiveFailures) })}` : '';
+  return `${statusText} · ${base}${fail}`;
 }

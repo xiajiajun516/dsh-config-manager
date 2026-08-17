@@ -7,8 +7,10 @@
  *   + gitBin（可选）；
  * - 私有仓库强制提示横幅（常驻）；
  * - 推送按钮 → SyncPushReport（快照 id / 分区 / 告警）；
- * - 拉取按钮 → SyncPullReport.changes 差异摘要（description/kind/severity）+
- *   「预览不执行导入」提示；needsReview 高亮（v1 不做完整导入接线）；
+ * - 拉取按钮 → SyncPullReport.changes 差异摘要（description/kind/severity）；
+ * - 【方案 A】一键同步主按钮：拉取 → 差异确认会话（SyncConfirmView 逐项确认）→
+ *   确认导入（apply-items）→ 执行结果 + 一键回滚（restoreId）；「选择历史快照」下拉；
+ * - 【方案 A】自动同步设置区块：总开关 + 间隔下拉 + 状态（上次运行 / 下次倒计时）；
  * - 状态行：凭据配置 + 上次同步时间 + 通道（来自 GET /sync/status，组件挂载时加载）。
  *
  * 全部渲染模型来自 ./sync-view.ts 纯函数（node 单测覆盖），组件只做装配；
@@ -18,19 +20,22 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
-import type { ApplyReport, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
+import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { SYNC_CREDENTIAL_REF } from './sync-api.ts'
-import type { SyncApi, SyncStatusResponse } from './sync-api.ts'
+import type {
+  AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncSnapshotLite, SyncStartResponse,
+  SyncStatusResponse,
+} from './sync-api.ts'
 import {
-  computeGithubLoginView, computeSyncButtons, computeSyncStatus, githubPollMessage,
-  kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
+  autosyncIntervalMs, autosyncStatusText, computeAutosyncCountdown, computeGithubLoginView,
+  computeSyncButtons, computeSyncStatus, formatIntervalDuration, githubPollMessage, kindLabel,
+  privateRepoHint, pullReportView, pushReportView, severityLabel,
 } from './sync-view.ts'
 import type { GithubLoginPhase } from './sync-view.ts'
 import { SyncHistoryView } from './SyncHistoryView.tsx'
-import { SyncPullPreviewView } from './SyncPullPreviewView.tsx'
-import type { SyncApplyPlan } from '../../sync/risk.ts'
+import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
 
 export interface SyncSettingsViewProps {
@@ -46,10 +51,23 @@ interface SyncUiState {
   gitBin: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化 */
   token: string
-  busy: 'push' | 'pull' | 'apply' | 'rollback' | null
+  busy: 'sync' | 'push' | 'pull' | 'rollback' | null
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
-  applyReport: ApplyReport | null
+  /** 一键同步差异确认会话（POST /sync/sync 结果；非空时渲染 SyncConfirmView） */
+  confirmSession: SyncStartResponse | null
+  /** 远端历史快照列表（「选择历史快照」下拉数据源） */
+  snapshots: SyncSnapshotLite[]
+  /** 当前选中的历史快照 id（'' = 最新） */
+  selectedSnapshotId: string
+  /** 自动同步状态 */
+  autosync: AutosyncStatusResponse | null
+  /** 自动同步开关（回填自 autosync） */
+  autosyncEnabled: boolean
+  /** 自动同步间隔（回填自 autosync） */
+  autosyncInterval: AutosyncInterval
+  /** 最近一次一键同步执行结果（回滚入口） */
+  lastRestoreId: string | null
   error: string | null
   /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
   github: GithubUiState
@@ -69,6 +87,8 @@ const initialGithub: GithubUiState = {
   phase: 'idle', flowId: '', userCode: '', verificationUri: '', interval: 5, error: null,
 }
 
+const AUTOSYNC_INTERVAL_OPTIONS: AutosyncInterval[] = ['5m', '15m', '30m', '60m', '6h', '12h', '24h'];
+
 const initial: SyncUiState = {
   loading: true,
   loadError: null,
@@ -79,7 +99,13 @@ const initial: SyncUiState = {
   busy: null,
   pushReport: null,
   pullReport: null,
-  applyReport: null,
+  confirmSession: null,
+  snapshots: [],
+  selectedSnapshotId: '',
+  autosync: null,
+  autosyncEnabled: false,
+  autosyncInterval: '30m',
+  lastRestoreId: null,
   error: null,
   github: initialGithub,
 }
@@ -92,14 +118,50 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   /** GitHub 轮询定时器（卸载/取消时清理，防止泄漏与跨流程串扰） */
   const githubPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  /** 挂载时读取同步状态（配置回填 + 上次同步时间 + 凭据状态） */
+  /** 挂载时读取同步状态（配置回填 + 上次同步时间 + 凭据状态 + autosync） */
   const loadStatus = async (): Promise<void> => {
     patch({ loading: true, loadError: null })
     try {
       const info = await api.status()
-      patch({ loading: false, statusInfo: info, repoUrl: info.repoUrl ?? '', gitBin: info.gitBin ?? '' })
+      patch({
+        loading: false,
+        statusInfo: info,
+        repoUrl: info.repoUrl ?? '',
+        gitBin: info.gitBin ?? '',
+        ...(info.autosync !== undefined
+          ? {
+              autosync: info.autosync,
+              autosyncEnabled: info.autosync.enabled,
+              autosyncInterval: info.autosync.interval,
+            }
+          : {}),
+      })
+      // 独立拉取 autosync（若 status 未带则补一次）
+      if (info.autosync === undefined) {
+        void loadAutosync()
+      }
     } catch (err) {
       patch({ loading: false, loadError: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 读取自动同步状态（GET /sync/autosync）。 */
+  const loadAutosync = async (): Promise<void> => {
+    try {
+      const autosync = await api.autosyncStatus()
+      patch({ autosync, autosyncEnabled: autosync.enabled, autosyncInterval: autosync.interval })
+    } catch (err) {
+      patch({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 读取远端历史快照列表（「选择历史快照」下拉数据源）。 */
+  const loadSnapshots = async (): Promise<void> => {
+    try {
+      const res = await api.snapshotsList(payload())
+      patch({ snapshots: res.snapshots })
+    } catch {
+      // 拉取失败不阻断主流程（下拉留空，用户可重试）
     }
   }
 
@@ -204,25 +266,57 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
   }
 
-  /** P2：自动应用（Host 端 engine.merge + classifyMergePlan + applyMergePlan 走完整链路） */
-  const runApply = async (): Promise<void> => {
-    patch({ busy: 'apply', error: null, applyReport: null })
+  /* ------------------------------------------------ 一键同步（方案 A） */
+
+  /** 一键同步：拉取 → 差异确认会话（先取消旧会话，再发起新会话）。 */
+  const runSync = async (snapshotId?: string): Promise<void> => {
+    // 清理旧的差异确认会话（避免残留临时 ZIP / 同 key 冲突）
+    if (state.confirmSession !== null) {
+      try { await api.cancel(state.confirmSession.syncSessionId) } catch { /* 尽力清理 */ }
+    }
+    patch({ busy: 'sync', error: null, confirmSession: null, lastRestoreId: null })
     try {
-      const report = await api.apply(payload())
-      patch({ busy: null, applyReport: report })
+      const session = await api.sync({ ...payload(), ...(snapshotId !== undefined && snapshotId !== '' ? { snapshotId } : {}) })
+      if (!session.ok) {
+        patch({ busy: null, error: session.message ?? t('syncflow.syncFailed') })
+        return
+      }
+      patch({ busy: null, confirmSession: session, token: '' })
+      void loadSnapshots()
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  /** P2：一键回滚（按 apply 返回的 restoreId 调 Host /sync/rollback） */
-  const runRollback = async (restoreId: string): Promise<void> => {
-    patch({ busy: 'rollback', error: null })
+  /** 用户取消差异确认：清除会话，复位到空闲。 */
+  const cancelConfirm = (): void => {
+    patch({ confirmSession: null })
+  }
+
+  /** 从 SyncConfirmView 透传的一键回滚完成信号。 */
+  const onRollbackApplied = (): void => {
+    patch({ lastRestoreId: null })
+  }
+
+  /* ------------------------------------------------ 自动同步（方案 A） */
+
+  const toggleAutosync = async (enabled: boolean): Promise<void> => {
+    patch({ autosyncEnabled: enabled, error: null })
     try {
-      await api.rollback({ restoreId })
-      patch({ busy: null, applyReport: null })
+      const updated = await api.autosyncUpdate({ enabled, interval: state.autosyncInterval })
+      patch({ autosync: updated, autosyncEnabled: updated.enabled, autosyncInterval: updated.interval })
     } catch (err) {
-      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+      patch({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  const updateAutosyncInterval = async (interval: AutosyncInterval): Promise<void> => {
+    patch({ autosyncInterval: interval, error: null })
+    try {
+      const updated = await api.autosyncUpdate({ enabled: state.autosyncEnabled, interval })
+      patch({ autosync: updated, autosyncEnabled: updated.enabled, autosyncInterval: updated.interval })
+    } catch (err) {
+      patch({ error: err instanceof Error ? err.message : String(err) })
     }
   }
 
@@ -236,6 +330,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   /** GitHub 流程进行中（请求设备码 / 等待授权 / 轮询）：禁用 push/pull，避免无凭据操作 */
   const githubBusy =
     state.github.phase === 'starting' || state.github.phase === 'waiting' || state.github.phase === 'polling'
+
+  const autosyncText = state.autosync !== null ? autosyncStatusText(state.autosync, uiT) : t('autosync.statusNever')
+  const autosyncCountdown = state.autosync !== null && state.autosync.elapsedMs >= 0
+    ? formatIntervalDuration(computeAutosyncCountdown(state.autosync.elapsedMs, autosyncIntervalMs(state.autosync.interval)), uiT)
+    : null
 
   return (
     <div className={css.viewBody}>
@@ -270,7 +369,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 className={css.input}
                 value={state.token}
                 autoComplete="off"
-                placeholder="ghp_…（可选）"
+                placeholder={t('config.tokenPlaceholder')}
                 disabled={state.busy !== null}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ token: e.target.value }) }}
               />
@@ -339,9 +438,16 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </div>
           </Card>
 
-          {/* 操作 */}
+          {/* 一键同步 + 手动推送/拉取 */}
           <div className={css.actionRow}>
-            <Button variant="primary" disabled={!buttons.canPush || githubBusy} onClick={() => { void runPush() }}>
+            <Button
+              variant="primary"
+              disabled={state.busy !== null || state.repoUrl.trim() === ''}
+              onClick={() => { void runSync() }}
+            >
+              {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}
+            </Button>
+            <Button disabled={!buttons.canPush || githubBusy} onClick={() => { void runPush() }}>
               {state.busy === 'push' ? <Spinner label={buttons.pushLabel} /> : buttons.pushLabel}
             </Button>
             <Button disabled={!buttons.canPull || githubBusy} onClick={() => { void runPull() }}>
@@ -349,7 +455,47 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </Button>
           </div>
 
+          {/* 选择历史快照下拉 */}
+          <div className={css.statRow}>
+            <label className={css.field}>
+              <span className={css.fieldLabel}>{t('syncflow.selectSnapshot')}</span>
+              <select
+                className={css.input}
+                value={state.selectedSnapshotId}
+                disabled={state.busy !== null}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                  const id = e.target.value
+                  patch({ selectedSnapshotId: id })
+                  void runSync(id === '' ? undefined : id)
+                }}
+              >
+                <option value="">{t('syncflow.latestSnapshot')}</option>
+                {state.snapshots.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.id}{t('syncflow.snapshotOption', { date: s.createdAt.slice(0, 10), count: String(s.sectionCount) })}
+                  </option>
+                ))}
+              </select>
+              {state.snapshots.length === 0 && <span className={css.hint}>{t('syncflow.noSnapshots')}</span>}
+            </label>
+          </div>
+
           {state.error !== null && <ErrorBanner error={state.error} />}
+
+          {/* 一键同步差异确认（拉取 → 逐项确认 → 导入） */}
+          {state.confirmSession !== null && (
+            <SyncConfirmView
+              api={api}
+              syncSessionId={state.confirmSession.syncSessionId}
+              snapshotId={state.confirmSession.snapshotId}
+              items={state.confirmSession.items}
+              needsReview={state.confirmSession.needsReview}
+              compatibility={state.confirmSession.compatibility}
+              t={t}
+              onCancel={cancelConfirm}
+              onRollbackDone={onRollbackApplied}
+            />
+          )}
 
           {/* 推送结果 */}
           {pushView !== null && (
@@ -406,64 +552,61 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </Card>
           )}
 
-          {/* P2：自动应用（拉取后可触发；Host 端合并 + 写本地 + 失败回滚） */}
-          <div className={css.actionRow}>
-            <Button
-              variant="primary"
-              disabled={state.busy !== null || state.pullReport === null}
-              onClick={() => { void runApply() }}
-            >
-              {state.busy === 'apply' ? <Spinner label="自动应用中…" /> : '自动应用（合并 + 写本地）'}
-            </Button>
-          </div>
-
-          {/* P2：自动应用结果 */}
-          {state.applyReport !== null && (
-            <Card>
-              <span className={css.groupLabel}>自动应用结果</span>
-              <Banner kind={state.applyReport.ok ? 'ok' : 'error'}>
-                {state.applyReport.ok
-                  ? `已应用 ${state.applyReport.applied.length} 个分区（restoreId=${state.applyReport.restoreId}）`
-                  : `自动应用失败（已整体回滚，restoreId=${state.applyReport.restoreId}）`}
-              </Banner>
-              {state.applyReport.applied.length > 0 && (
-                <div>
-                  <span className={css.fieldLabel}>已写入</span>
-                  <div className={css.statRow}>
-                    {state.applyReport.applied.map((sid) => <Badge key={sid} kind="ok">{sid}</Badge>)}
-                  </div>
-                </div>
+          {/* 自动同步设置（方案 A） */}
+          <Card>
+            <span className={css.groupLabel}>{t('autosync.title')}</span>
+            <span className={css.hint}>{t('autosync.description')}</span>
+            <label className={css.checkboxRow}>
+              <input
+                type="checkbox"
+                checked={state.autosyncEnabled}
+                disabled={state.busy !== null}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => { void toggleAutosync(e.target.checked) }}
+              />
+              <span>{t('autosync.enable')}</span>
+            </label>
+            <label className={css.field}>
+              <span className={css.fieldLabel}>{t('autosync.interval')}</span>
+              <select
+                className={css.input}
+                value={state.autosyncInterval}
+                disabled={state.busy !== null}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                  void updateAutosyncInterval(e.target.value as AutosyncInterval)
+                }}
+              >
+                {AUTOSYNC_INTERVAL_OPTIONS.map((iv) => (
+                  <option key={iv} value={iv}>{intervalLabel(iv, t)}</option>
+                ))}
+              </select>
+              <span className={css.hint}>{t('autosync.intervalHint')}</span>
+            </label>
+            <div className={css.statRow}>
+              <Badge kind={state.autosync?.lastRunStatus === 'failed' ? 'error' : state.autosync?.lastRunStatus === 'skipped' ? 'warn' : 'info'}>
+                {autosyncText}
+              </Badge>
+              {autosyncCountdown !== null && state.autosyncEnabled && (
+                <Badge kind="info">{t('autosync.nextRun', { time: autosyncCountdown })}</Badge>
               )}
-              {state.applyReport.warnings.length > 0 && (
-                <div>
-                  <span className={css.fieldLabel}>告警</span>
-                  <ul className={css.warnList}>
-                    {state.applyReport.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                  </ul>
-                </div>
-              )}
-              {state.applyReport.review.length > 0 && (
-                <div>
-                  <span className={css.fieldLabel}>待审（已入 sync-review-queue.json）</span>
-                  <ul className={css.warnList}>
-                    {state.applyReport.review.map((r, i) => <li key={i}>{r.sectionId} — {r.description}</li>)}
-                  </ul>
-                </div>
-              )}
-              {!state.applyReport.ok && state.applyReport.restoreId !== '' && (
-                <Button
-                  variant="danger"
-                  disabled={state.busy !== null}
-                  onClick={() => { void runRollback(state.applyReport!.restoreId) }}
-                >
-                  {state.busy === 'rollback' ? <Spinner label="回滚中…" /> : '回滚到应用前'}
-                </Button>
-              )}
-            </Card>
-          )}
+            </div>
+          </Card>
 
           {/* P2：同步历史视图（Host /sync/history 端点） */}
-          <SyncHistoryView api={api} />
+          <SyncHistoryView api={api} t={t} />
     </div>
   )
+}
+
+/** AutosyncInterval → 可读标签（复用 i18n interval 键）。 */
+function intervalLabel(iv: AutosyncInterval, t: TranslateNS<'config-manager-sync'>): string {
+  switch (iv) {
+    case '5m': return t('autosync.interval5m');
+    case '15m': return t('autosync.interval15m');
+    case '30m': return t('autosync.interval30m');
+    case '60m': return t('autosync.interval60m');
+    case '6h': return t('autosync.interval6h');
+    case '12h': return t('autosync.interval12h');
+    case '24h': return t('autosync.interval24h');
+    default: return iv;
+  }
 }

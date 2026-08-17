@@ -177,3 +177,158 @@ test('S-09 api.githubCancel()：POST /sync/github/cancel 携带 flowId', async (
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
   assert.equal(sent['flowId'], 'flow-1');
 });
+
+/* ------------------------------------------------ 一键同步（方案 A）端点契约 */
+
+test('S-10 api.snapshotsList()：POST /sync/snapshots-list，解析倒序快照列表 + currentSnapshotId', async () => {
+  const body = {
+    ok: true,
+    snapshots: [
+      { id: 'sync-2', createdAt: '2026-08-17T10:00:00.000Z', sectionCount: 3, platform: 'darwin', dshVersion: '1.0.0' },
+      { id: 'sync-1', createdAt: '2026-08-16T10:00:00.000Z', sectionCount: 2, platform: 'darwin', dshVersion: '1.0.0' },
+    ],
+    currentSnapshotId: 'sync-1',
+  };
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, body);
+  });
+  const api = new SyncApi();
+  const result = await api.snapshotsList({ repoUrl: 'https://github.com/u/r.git' });
+  assert.equal(result.ok, true);
+  assert.equal(result.snapshots.length, 2);
+  assert.equal(result.snapshots[0]?.id, 'sync-2');
+  assert.equal(result.currentSnapshotId, 'sync-1');
+  assert.equal(calls[0]?.url, SYNC_API.snapshotsList);
+  assert.equal(calls[0]?.init?.method, 'POST');
+});
+
+test('S-11 api.sync()：POST /sync/sync，请求体携带 snapshotId；响应含 items/needsReview/compatibility', async () => {
+  const body = {
+    ok: true,
+    syncSessionId: 'sess-1',
+    snapshotId: 'sync-3',
+    items: [{ itemId: 'settings:a', adapter: 'settings', kind: 'Update', description: '更新', severity: 'info', defaultAdopt: true, adopt: true }],
+    needsReview: false,
+    compatibility: 'good',
+  };
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, body);
+  });
+  const api = new SyncApi();
+  const result = await api.sync({ repoUrl: 'https://github.com/u/r.git', snapshotId: 'sync-3' });
+  assert.equal(result.syncSessionId, 'sess-1');
+  assert.equal(result.items.length, 1);
+  assert.equal(result.compatibility, 'good');
+  assert.equal(calls[0]?.url, SYNC_API.sync);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['snapshotId'], 'sync-3');
+});
+
+test('S-12 api.applyItems()：POST /sync/apply-items，携带 adoptions（含 Conflict resolution）', async () => {
+  const body = {
+    ok: true, applied: ['settings'], skipped: ['plugin:x'], needsRestart: false,
+    warnings: [], restoreId: 'rest-1', rolledBack: false, failed: [], result: {},
+  };
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, body);
+  });
+  const api = new SyncApi();
+  const result = await api.applyItems({
+    syncSessionId: 'sess-1',
+    adoptions: [
+      { itemId: 'settings:a', adopt: true },
+      { itemId: 'plugin:x', adopt: true, resolution: 'useRemote' },
+    ],
+  });
+  assert.equal(result.applied[0], 'settings');
+  assert.equal(result.restoreId, 'rest-1');
+  assert.equal(calls[0]?.url, SYNC_API.applyItems);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['syncSessionId'], 'sess-1');
+  const adoptions = sent['adoptions'] as Array<Record<string, unknown>>;
+  assert.equal(adoptions[1]?.['resolution'], 'useRemote');
+});
+
+test('S-13 api.cancel()：POST /sync/cancel 携带 syncSessionId', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true });
+  });
+  const api = new SyncApi();
+  const result = await api.cancel('sess-1');
+  assert.equal(result.ok, true);
+  assert.equal(calls[0]?.url, SYNC_API.cancel);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['syncSessionId'], 'sess-1');
+});
+
+/* ------------------------------------------------ 自动同步端点契约 */
+
+test('S-14 api.autosyncStatus()：GET /sync/autosync，解析 enabled/interval/elapsedMs', async () => {
+  const body = {
+    enabled: true, interval: '30m', lastRunAt: '2026-08-17T10:00:00.000Z',
+    lastRunStatus: 'success', consecutiveFailures: 0, elapsedMs: 60000,
+  };
+  let called: FetchCall | null = null;
+  installFetchMock((call) => {
+    called = call;
+    return jsonResponse(200, body);
+  });
+  const lastCall = (): FetchCall | null => called;
+  const api = new SyncApi();
+  const result = await api.autosyncStatus();
+  assert.equal(result.enabled, true);
+  assert.equal(result.interval, '30m');
+  assert.equal(result.consecutiveFailures, 0);
+  assert.equal(result.elapsedMs, 60000);
+  assert.equal(lastCall()?.url, SYNC_API.autosync);
+});
+
+test('S-15 api.autosyncUpdate()：POST /sync/autosync，请求体携带 enabled/interval', async () => {
+  const body = {
+    enabled: true, interval: '60m', consecutiveFailures: 0, elapsedMs: -1,
+  };
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, body);
+  });
+  const api = new SyncApi();
+  const result = await api.autosyncUpdate({ enabled: true, interval: '60m' });
+  assert.equal(result.enabled, true);
+  assert.equal(result.interval, '60m');
+  assert.equal(calls[0]?.url, SYNC_API.autosync);
+  assert.equal(calls[0]?.init?.method, 'POST');
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['enabled'], true);
+  assert.equal(sent['interval'], '60m');
+});
+
+test('S-16 api.history()：GET /sync/history，解析 { entries }（含 autosync 记录）', async () => {
+  const body = {
+    entries: [
+      { id: 'sync-1', createdAt: '2026-08-17T10:00:00.000Z', kind: 'apply', sectionCount: 3, reviewCount: 0 },
+      {
+        id: '2026-08-17T09:00:00.000Z', createdAt: '2026-08-17T09:00:00.000Z', kind: 'autosync',
+        autosync: {
+          direction: 'both', status: 'skipped', skipReason: 'conflict',
+          conflictedSections: ['settings'], failureCountAtRun: 0, createdAt: '2026-08-17T09:00:00.000Z',
+        },
+      },
+    ],
+  };
+  installFetchMock(() => jsonResponse(200, body));
+  const api = new SyncApi();
+  const result = await api.history();
+  assert.equal(result.entries.length, 2);
+  assert.equal(result.entries[0]?.kind, 'apply');
+  assert.equal(result.entries[1]?.kind, 'autosync');
+  assert.deepEqual(result.entries[1]?.autosync?.conflictedSections, ['settings']);
+});

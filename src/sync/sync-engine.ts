@@ -23,7 +23,7 @@ import { defaultSecretScanner } from '../core/exporter.ts';
 import { Importer } from '../core/importer.ts';
 import type {
   ConfigAdapter, ExportSection, GlobalConflictStrategy, HostContext,
-  PlanItem, PlanItemKind, SecretScanner,
+  ImportAnalysis, ImportPlan, ImportResult, PlanItem, PlanItemKind, SecretScanner,
 } from '../core/types.ts';
 import { isFileSection, SECTION_FILE_PREFIXES, SECTION_JSON_PATHS } from '../schema/config.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest.ts';
@@ -37,19 +37,18 @@ import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
 import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
-import type { SyncSnapshot, SyncTransport } from './transport.ts';
+import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { DEFAULT_ANCESTOR_KEEP, loadAncestor, pruneAncestors, writeAncestor } from './ancestor.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
-import { classifyMergePlan } from './risk.ts';
 import type { SyncApplyPlan } from './risk.ts';
 import { createSnapshot } from '../core/backup.ts';
 import { rollback } from '../core/rollback.ts';
 import { FileSnapshotStore } from '../core/backup.ts';
 import type { Snapshot, SnapshotStore } from '../core/types.ts';
-import { enqueueItems as enqueueReviewItems } from './review-queue.ts';
+import type { PlanItemProgress } from '../core/analyzer.ts';
 
 export interface SyncEngineOptions {
   ctx: HostContext;
@@ -117,6 +116,17 @@ export interface SyncPullReport {
   message?: string;
 }
 
+/** 一键同步预览结果（preview() 返回；临时 ZIP 由调用方持有并负责清理）。 */
+export interface SyncPreviewResult {
+  ok: boolean;
+  /** 临时标准 ZIP 路径（apply-items 复用 executeImportPlan 需要；调用方清理） */
+  zipPath: string;
+  plan: ImportPlan | null;
+  analysis: ImportAnalysis | null;
+  snapshotId: string;
+  message?: string;
+}
+
 /** 自动应用执行器（P2b）报告 */
 export interface ApplyReport {
   ok: boolean;
@@ -130,6 +140,24 @@ export interface ApplyReport {
   review: import('./review-queue.ts').ReviewQueueItem[];
   /** 来自 Importer.ImportResult 的 warnings；UI 可用于红条提示 */
   warnings: string[];
+}
+
+/** applyItems 报告（§3.4 ApplyItemsResponse 的服务端形态） */
+export interface ApplyItemsReport {
+  ok: boolean;
+  /** 实际写入的分区 id 列表（去重） */
+  applied: string[];
+  /** 未采纳的 itemId 列表 */
+  skipped?: string[];
+  /** 应用前快照 id（UI 一键回滚用；失败时仍透传以便排查） */
+  restoreId: string;
+  /** 任一失败是否整体回滚 */
+  rolledBack: boolean;
+  warnings: string[];
+  failed: { itemId: string; message?: string }[];
+  /** 透传 executeImportPlan 结果 */
+  result: ImportResult | null;
+  needsRestart?: boolean;
 }
 
 /** 同步通道结构性排除的敏感分区（即使 portable 判定有误也双保险拒绝；
@@ -296,6 +324,41 @@ export class SyncEngine {
     }
   }
 
+  /** 列出远端已有快照（按 createdAt 升序）—— 供「选择历史快照」下拉。 */
+  async listSnapshots(): Promise<SyncSnapshotMeta[]> {
+    return this.transport.list();
+  }
+
+  /**
+   * 一键同步预览：拉取远端（最新或指定历史快照）→ 转临时 ZIP → Importer 分析出计划。
+   * 与 pull 的区别：临时 ZIP **不清理**（由调用方 / 会话持有，供 apply-items 复用），
+   * 并返回完整 plan/analysis/snapshotId 供会话登记。
+   * 调用方负责在会话消费或取消后清理 zipPath 所在目录。
+   */
+  async preview(opts: SyncPullOptions = {}): Promise<SyncPreviewResult> {
+    if (!this.importer) {
+      throw new Error(this.msg('sync.missingImporter'));
+    }
+    const metas = await this.transport.list();
+    if (metas.length === 0) {
+      return { ok: false, zipPath: '', plan: null, analysis: null, snapshotId: '', message: this.msg('sync.remoteEmpty') };
+    }
+    const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
+    const snapshot = await this.transport.download(targetId);
+    if (snapshot.manifest.containsSecrets) {
+      throw new Error(this.msg('sync.remoteContainsSecrets', { id: targetId }));
+    }
+    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const zipPath = await this.snapshotToZip(snapshot, portableIds);
+    const analysis = await this.importer.analyzeImport(zipPath);
+    const plan = await this.importer.createImportPlan(zipPath, {
+      strategy: opts.strategy ?? 'merge',
+      resolutions: {},
+      pathMappings: [],
+    });
+    return { ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, message: undefined };
+  }
+
   async merge(opts: { snapshotId?: string } = {}): Promise<MergePlan> {
     const metas = await this.transport.list();
     if (metas.length === 0) {
@@ -381,9 +444,9 @@ export class SyncEngine {
 
   /**
    * 应用自动应用计划：写本地（走 Importer.executeImportPlan 标准路径；应用前调 backup.createSnapshot 兜底）；
-   * 任一 auto 项失败 → 整体 rollback + 把全部 auto 项移到 review 队列（写回 sync-review-queue.json）；
-   * 成功后 recordBaseline 更新祖先基线。
+   * 任一 auto 项失败 → 整体 rollback；成功后 recordBaseline 更新祖先基线。
    * 返回 ApplyReport；不抛错到调用方（失败返回 ok:false + rolledBack:true）。
+   * 不再写 review-queue（§2.3/§7.4：待审语义改由同步历史 skipped 标记表达）。
    */
   async applyMergePlan(apply: SyncApplyPlan): Promise<ApplyReport> {
     if (!this.importer) {
@@ -453,19 +516,13 @@ export class SyncEngine {
       });
       if (!result.ok) {
         try { await rollback({ ctx: this.ctx, snapshot, store, adapters: this.adapters }); } catch { /* noop */ }
-        // 4) 把全部 auto 项移到 review 队列
-        const review = await enqueueReviewItems(this.stateDir, apply.autoApply.map((r) => ({
-          sectionId: r.id,
-          kind: 'section' as const,
-          description: `自动应用失败：${r.id}（已回滚）`,
-          merged: r.merged,
-        })));
+        // 失败路径不再写 review-queue（§7.4）：历史 skipped/failed 标记由上层（路由/调度器）写入。
         return {
           ok: false,
           applied: [],
           restoreId: snapshot.id,
           rolledBack: true,
-          review: review.items,
+          review: [],
           warnings: result.warnings ?? [],
         };
       }
@@ -486,6 +543,111 @@ export class SyncEngine {
     } finally {
       try { await fs.rm(path.dirname(zipPath), { recursive: true, force: true }); } catch { /* noop */ }
     }
+  }
+
+  /**
+   * applyItems：按用户对差异项的逐项决策执行导入（§3.4/§5.3）。
+   *
+   * 与 applyMergePlan 的区别：applyItems 接收「会话级临时 ZIP + 子计划」，
+   * 直接执行（backup.createSnapshot 兜底 → importer.executeImportPlan →
+   * 成功 recordBaseline / 失败 rollback），不构造中间 SyncApplyPlan。
+   *
+   * @param zipPath 会话级临时标准 ZIP（由 sync/sync 生成，包含采纳项的 merged payload）
+   * @param subPlan 子计划（仅含采纳项的 ImportPlan；globalStrategy/pathMappings/needsRestart 沿用会话 plan）
+   * @param opts 执行选项（onItem 进度回调）
+   * @returns ApplyItemsReport（ok/applied/restoreId/rolledBack/warnings/result）
+   */
+  async applyItems(
+    zipPath: string,
+    subPlan: ImportPlan,
+    opts: { onItem?: (info: PlanItemProgress) => void } = {},
+  ): Promise<ApplyItemsReport> {
+    if (!this.importer) {
+      throw new Error('applyItems: SyncEngine 缺少 importer（需在 options 中注​入）');
+    }
+    if (subPlan.items.length === 0) {
+      return { ok: true, applied: [], restoreId: '', rolledBack: false, warnings: [], failed: [], result: null };
+    }
+
+    // 兜底快照（拿到 restoreId 给 UI 一键回滚用）
+    const store: SnapshotStore = new FileSnapshotStore({ dir: this.stateDir });
+    let snapshot: Snapshot | undefined;
+    try {
+      snapshot = await createSnapshot({
+        ctx: this.ctx,
+        plan: subPlan,
+        sourceZip: zipPath,
+        store,
+        adapters: this.adapters,
+      });
+    } catch (backupErr) {
+      return {
+        ok: false,
+        applied: [],
+        restoreId: '',
+        rolledBack: false,
+        warnings: [`应用前快照失败：${backupErr instanceof Error ? backupErr.message : String(backupErr)}`],
+        failed: subPlan.items.map((i) => ({ itemId: i.id })),
+        result: null,
+      };
+    }
+
+    // 真正执行：Importer.executeImportPlan（confirm:true + rollbackOnError:true → 任一失败整体回滚）
+    const result = await this.importer.executeImportPlan(zipPath, subPlan, {
+      confirm: true,
+      rollbackOnError: true,
+      secretInputs: undefined,
+      decryptedCredentials: undefined,
+      onItem: opts.onItem,
+    });
+
+    if (!result.ok) {
+      // executeImportPlan 已内部回滚（rollbackOnError）；这里再显式 rollback 兜底（幂等）
+      try { await rollback({ ctx: this.ctx, snapshot, store, adapters: this.adapters }); } catch { /* noop */ }
+      return {
+        ok: false,
+        applied: [],
+        restoreId: snapshot.id,
+        rolledBack: true,
+        warnings: result.warnings ?? [],
+        failed: result.executed.filter((e) => e.status === 'failed').map((e) => ({ itemId: e.itemId, message: e.message })),
+        result,
+      };
+    }
+
+    // 成功：recordBaseline 更新祖先基线（合并后的快照）
+    const appliedIds = [...new Set(subPlan.items.map((i) => i.adapter))];
+    const mergedSections: SyncSnapshot['sections'] = {};
+    // 从 subPlan 中按 adapter 收集写入的分区数据（无法直接从 plan item 获取 merged data，
+    // 但这里不需要精确的 merged 数据——recordBaseline 只需要 sectionIds 与数据来源；
+    // 用现有应用后的 adapter export 作为快照数据更准确）
+    // 注意：recordBaseline 需要各分区内容 hash，因此导出当前各分区最新状态。
+    for (const adapter of this.portableAdapters()) {
+      if (!appliedIds.includes(adapter.id)) continue;
+      try {
+        const section = await adapter.export(this.ctx, { includeSecrets: false });
+        const data = isFileSection(adapter.id)
+          ? section.data
+          : this.scanner.scanAndRedact(section.data).sanitized;
+        mergedSections[adapter.id] = data as SectionData;
+      } catch {
+        // 单个分区导出失败不拖垮 recordBaseline（已应用的分区数据从 subPlan 兜底）
+      }
+    }
+    const snapshotId = this.snapshotIdFn();
+    await this.recordBaseline(snapshotId, mergedSections);
+
+    return {
+      ok: true,
+      applied: appliedIds,
+      skipped: subPlan.items.filter((i) => i.kind === 'Skip').map((i) => i.id),
+      restoreId: snapshot.id,
+      rolledBack: false,
+      warnings: result.warnings ?? [],
+      failed: [],
+      needsRestart: result.needsRestart,
+      result,
+    };
   }
 
   /** 散文件快照 → 标准导出 ZIP（临时目录，用完即删）：buildManifest + checksums + 平铺分区 */

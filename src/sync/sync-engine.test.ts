@@ -414,14 +414,11 @@ test('applyMergePlan: 失败路径 → 整体回滚 + enqueueItems + ApplyReport
     assert.equal(report.rolledBack, true);
     assert.equal(report.applied.length, 0);
     assert.notEqual(report.restoreId, '', 'restoreId 应透传以便排查');
-    assert.ok(report.review.length > 0, 'auto 项应入 review 队列');
-    assert.equal(report.review[0]!.sectionId, 'settings');
-    // sync-review-queue.json 应被写入
+    assert.deepEqual(report.review, [], '不再写 review-queue（§7.4）');
+    // sync-review-queue.json 不应被写入
     const rqPath = path.join(tmp, 'sync-review-queue.json');
-    assert.ok(await fs.stat(rqPath).then(() => true).catch(() => false), 'review-queue.json 已写盘');
-    const rq = JSON.parse(await fs.readFile(rqPath, 'utf8')) as { items: Array<{ sectionId: string }> };
-    assert.equal(rq.items.length, 1);
-    assert.equal(rq.items[0]!.sectionId, 'settings');
+    const rqExists = await fs.stat(rqPath).then(() => true).catch(() => false);
+    assert.equal(rqExists, false, 'review-queue.json 不应再被写入');
     // recordBaseline 不应在失败路径调用：sync-state.lastSnapshotId 应仍为空
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSnapshotId, '', '失败时不应 recordBaseline');
@@ -582,6 +579,109 @@ test('merge: 不写本地配置、不执行导入，返回 MergePlan', async () 
     assert.deepEqual(ctx.settings.ns.get('general')?.value, { theme: 'dark', language: 'zh-CN' });
     // transport 仅被 list/download 调用（无 upload/delete）
     assert.deepEqual(transport.calls, ['list', 'download']);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── P3：applyItems（一键同步逐项执行）测试 ──────────────────────────────
+
+import type { ImportPlan } from '../core/types.ts';
+
+function makeImportPlan(seed: string): ImportPlan {
+  return {
+    items: [{
+      id: `settings:general-${seed}`,
+      kind: 'Update',
+      adapter: 'settings',
+      description: `Update settings.general (${seed})`,
+      severity: 'info',
+      target: { adapter: 'settings', ref: 'general' },
+    }],
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: { settings: 1 } as unknown as Record<SectionId, number>,
+  };
+}
+
+test('applyItems: 成功路径 → 执行子计划 + recordBaseline', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applyitems-ok-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = true;
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, mockImporter: mock,
+    });
+
+    // 需要真实 ZIP 路径（applyItems 用 executeImportPlan 的 zipPath）
+    // 用 mock importer 时 zipPath 可以被 mock 忽略
+    const zipPath = path.join(tmp, 'session.zip');
+    await fs.writeFile(zipPath, 'mock-zip-content');
+
+    const report = await engine.applyItems(zipPath, makeImportPlan('ok'));
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.applied, ['settings']);
+    assert.notEqual(report.restoreId, '', 'restoreId 应非空');
+    assert.equal(report.rolledBack, false);
+    assert.equal(mock.executeCalls, 1, 'Importer.executeImportPlan 应被调用一次');
+    // recordBaseline 应被调用（lastSnapshotId 非空）
+    const state = await loadSyncState(tmp);
+    assert.notEqual(state.lastSnapshotId, '', 'applyItems 成功后 lastSnapshotId 非空');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyItems: 失败路径 → 整体回滚 + ok:false', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applyitems-fail-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = false;
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, mockImporter: mock,
+    });
+
+    const zipPath = path.join(tmp, 'session.zip');
+    await fs.writeFile(zipPath, 'mock-zip-content');
+
+    const report = await engine.applyItems(zipPath, makeImportPlan('fail'));
+    assert.equal(report.ok, false);
+    assert.equal(report.rolledBack, true);
+    assert.notEqual(report.restoreId, '', 'restoreId 应透传');
+    // 不再写 review-queue
+    const rqPath = path.join(tmp, 'sync-review-queue.json');
+    const rqExists = await fs.stat(rqPath).then(() => true).catch(() => false);
+    assert.equal(rqExists, false, '失败路径不应写 review-queue');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyItems: 空子计划 → 直接返回 ok:true（不调 Importer）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applyitems-empty-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, mockImporter: mock,
+    });
+    const emptyPlan: ImportPlan = {
+      items: [], globalStrategy: 'merge', pathMappings: [], missingSecrets: [], needsRestart: false, estimatedActions: {} as unknown as Record<SectionId, number>,
+    };
+    const report = await engine.applyItems(path.join(tmp, 'none.zip'), emptyPlan);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.applied, []);
+    assert.equal(mock.executeCalls, 0, '空子计划不应触发 Importer');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
