@@ -28,6 +28,7 @@ import { DEFAULT_CATEGORIES, ExportFlow } from '../ui/export-flow.ts'
 import type { ExportRunResult } from '../ui/export-flow.ts'
 import { ImportWizard } from '../ui/import-wizard.ts'
 import { renderExportReport } from '../ui/report.ts'
+import type { FlowPhase } from '../ui/flow.ts'
 import type { ImportStep } from '../ui/types.ts'
 import type { RunProgress } from './common/progress-view.ts'
 import type {
@@ -124,6 +125,10 @@ export interface ExportLiveState extends PersistedExportState {
 export interface ImportLiveState extends PersistedImportState {
   /** 秘密补录值（仅内存，绝不写入 sessionStorage；刷新后清空、secrets 阶段重输） */
   secretInputs: Record<string, string>
+  /** 加密备份的解密密码（仅内存，绝不写入 sessionStorage；刷新后清空、decrypt 阶段重输） */
+  decryptPassword: string
+  /** 解密验证成功后覆盖的凭据 ref 名（仅内存、非值）；secrets 阶段据此剔除已恢复项 */
+  decryptRefs: string[]
   /** 冲突决策收集器实例（仅内存；刷新后由 plan + conflictResolutions 重建） */
   conflictCollector: ConflictCollector | null
 }
@@ -145,9 +150,6 @@ export interface StorePatch {
 
 /** 向导 step 的类型别名（与 src/ui/types.ts 的 ImportStep 保持一致）。 */
 type ImportWizardStep = ImportStep
-
-/** UI 层流程阶段（与 src/ui/flow.ts 的 FlowPhase 保持一致）。 */
-type FlowPhase = 'preview' | 'conflicts' | 'path-mapping' | 'secrets' | 'confirm'
 
 /* ------------------------------------------------------------- 默认值 */
 
@@ -182,6 +184,8 @@ function defaultImportState(): ImportLiveState {
     conflictResolutions: {},
     pathMappings: [],
     secretInputs: {},
+    decryptPassword: '',
+    decryptRefs: [],
     uploading: false,
     running: false,
     progress: null,
@@ -203,13 +207,16 @@ function defaultState(): StoreState {
 /* ------------------------------------------------- 序列化白名单（安全关键） */
 
 /**
- * 持久化白名单：解构剔除敏感字段（password/passwordConfirm/secretInputs）
+ * 持久化白名单：解构剔除敏感字段（password/passwordConfirm/secretInputs/decryptPassword）
  * 与不可序列化的实例字段（conflictCollector），其余原样落入 sessionStorage。
  * 这是 sessionStorage 的唯一写入路径 —— 敏感值在此被硬性隔离。
  */
 export function toPersistedState(state: StoreState): PersistedState {
   const { password: _password, passwordConfirm: _passwordConfirm, ...exportRest } = state.export
-  const { secretInputs: _secretInputs, conflictCollector: _conflictCollector, ...importRest } = state.import
+  const {
+    secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
+    conflictCollector: _conflictCollector, ...importRest
+  } = state.import
   return { v: 1, view: state.view, export: exportRest, import: importRest }
 }
 
@@ -245,11 +252,12 @@ interface WizardInternals {
   errors: string[]
   decisions: ImportDecisions
   secretInputs: Record<string, string>
+  decryptPassword: string
 }
 
 /**
  * 把 store 的导入快照写回 ImportWizard 控制器私有字段（受控 rehydrate）。
- * - 只写非敏感字段；secretInputs 恒置空 —— 刷新后 secrets 阶段要求重输；
+ * - 只写非敏感字段；secretInputs / decryptPassword 恒置空 —— 刷新后要求重输；
  * - 仅在 load / hydrate / resume-settle 时调用，不参与正常交互路径。
  */
 function writeWizardSnapshot(wizard: ImportWizard, imp: ImportLiveState): void {
@@ -267,6 +275,7 @@ function writeWizardSnapshot(wizard: ImportWizard, imp: ImportLiveState): void {
     pathMappings: imp.pathMappings.map((m) => ({ ...m, appliesTo: [...m.appliesTo] })),
   }
   internals.secretInputs = {}
+  internals.decryptPassword = ''
 }
 
 /** 由 plan + 已持久化的决策重建 ConflictCollector（刷新恢复用）。 */
@@ -451,8 +460,10 @@ export class RunStore {
         ...parsed.import,
         // 旧版持久化载荷可能缺 selectedFileName（undefined）→ 归一到 null
         selectedFileName: parsed.import.selectedFileName ?? null,
-        // 硬性：秘密补录值绝不从存储恢复；collector 由 plan+决策重建
+        // 硬性：秘密补录值 / 解密密码 / 解密覆盖清单绝不从存储恢复；collector 由 plan+决策重建
         secretInputs: {},
+        decryptPassword: '',
+        decryptRefs: [],
         conflictCollector: null,
       },
     }
@@ -461,6 +472,18 @@ export class RunStore {
     const missing = this.state.import.plan?.missingSecrets ?? []
     if (this.state.import.phase === 'confirm' && missing.length > 0) {
       this.state.import.phase = 'secrets'
+    }
+    // 安全兜底：加密备份的解密密码绝不从存储恢复（decryptPassword 必为空）→
+    // 刷新后只要已越过解密阶段（conflicts/secrets/confirm）就强制退回 decrypt 重输，
+    // 否则执行时会被 core 的加密不变量拒绝（import.encryptedPasswordRequired）。
+    const analysis = this.state.import.analysis
+    if (
+      analysis?.encrypted === true &&
+      this.state.import.decryptPassword === '' &&
+      this.state.import.phase !== 'preview' &&
+      this.state.import.phase !== 'decrypt'
+    ) {
+      this.state.import.phase = 'decrypt'
     }
     // 冲突阶段：由恢复后的 plan + 决策重建 collector（刷新后实例必然丢失）
     const imp = this.state.import
@@ -724,6 +747,8 @@ export class RunStore {
           step: 'result',
           result,
           secretInputs: {},
+          decryptPassword: '',
+          decryptRefs: [],
           conflictCollector: null,
         }
         writeWizardSnapshot(wizard, imp)

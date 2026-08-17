@@ -32,7 +32,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 | 👀 | **Preview before import** | Full preview first — **never touches your config silently** |
 | ⚔️ | **Conflict handling** | Keep Current / Use Imported — you decide |
 | 🗺️ | **Path auto-mapping** | Detects dead absolute paths and lets you remap them |
-| 🔒 | **Secret safety** | API Keys are never exported; re-enter them after import |
+| 🔒 | **Secret safety** | API Keys are never exported; encrypted backups restore them with the password, non-encrypted imports ask you to re-enter |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
 | 🔄 | **Remote Sync** | Push/pull portable config via a private Git repo (secrets never sync) |
@@ -178,7 +178,8 @@ When the target already has a same-named item, you choose:
 |---|---|
 | Default backup | **No secret values at all** — only records which keys are needed |
 | Encrypted backup (optional) | AES-256-GCM with a password; the password is **never written to the file** |
-| After import | "3 secrets need re-entry" — values stay in memory only |
+| Encrypted backup import | The export-time password is required: enter → verify → credentials are restored; **no password, no import** |
+| After non-encrypted import | "3 secrets need re-entry" — values stay in memory only |
 
 ### 🗂️ Profiles
 
@@ -259,6 +260,9 @@ No. A checksum mismatch rejects the import outright (protects against corruption
 
 **Q: Will re-importing duplicate things?**
 No. Items are deduplicated by stable IDs (plugin ID / MCP name / skill name…); existing items are skipped.
+
+**Q: Does importing an encrypted backup require the password?**
+Yes. The import wizard asks for the export-time encryption password and verifies it before the import can proceed; the password is never saved — memory only. A wrong or missing password blocks the import (credentials are restored from the backup instead of being re-entered when the password is correct).
 
 ---
 

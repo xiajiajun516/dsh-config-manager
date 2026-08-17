@@ -184,6 +184,8 @@ export interface ImportPort {
       secretInputs?: Record<string, string>;
       /** 显式回滚策略：true=任一项失败整体回滚（场景 E）；false=单项失败继续（§34.17） */
       rollbackOnError: boolean;
+      /** 加密备份的解密密码（仅内存；core 拒绝加密备份无密码执行） */
+      decryptPassword?: string;
     },
   ): Promise<ImportResult>;
 }

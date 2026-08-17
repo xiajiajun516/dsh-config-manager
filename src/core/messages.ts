@@ -43,6 +43,8 @@ export const zh = {
   'import.secretMissingDesc': '凭据 {ref} 需要补录',
   'import.secretNotProvided': '凭据未提供，需补录',
   'import.notConfirmed': '导入未确认：必须显式 confirm 后才允许修改任何数据',
+  'import.encryptedPasswordRequired': '该备份已加密，必须提供解密密码才能导入（拒绝无密码导入）',
+  'import.encryptedPasswordWrong': '解密密码错误，请重试',
 
   // ---------- 回滚 ----------
   'rollback.ns.createdNoDelete': '该 namespace 由导入创建，DSH settings 无删除语义',
@@ -279,6 +281,8 @@ export const en: Record<keyof typeof zh, string> = {
   'import.secretMissingDesc': 'Credential {ref} needs to be re-entered',
   'import.secretNotProvided': 'Credential not provided; requires re-entry',
   'import.notConfirmed': 'Import not confirmed: explicit confirm is required before any data is modified',
+  'import.encryptedPasswordRequired': 'This backup is encrypted; the decryption password is required to import it (refusing password-less import)',
+  'import.encryptedPasswordWrong': 'Wrong decryption password, please try again',
 
   // ---------- rollback ----------
   'rollback.ns.createdNoDelete': 'This namespace was created by the import; DSH settings have no delete semantics',

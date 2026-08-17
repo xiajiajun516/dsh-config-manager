@@ -188,6 +188,8 @@ export interface ImportAnalysis {
   pathIssues: PathIssue[];
   secretCount: number;
   dependencyIssues: { item: string; dependency: string }[];
+  /** 备份是否加密（manifest.security.encrypted）：加密备份的凭据必须用解密密码恢复 */
+  encrypted: boolean;
 }
 
 export interface ImportDecisions {

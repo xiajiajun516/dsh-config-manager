@@ -113,12 +113,19 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const conflictCollector = imp.conflictCollector
   const pathMappings = imp.pathMappings
   const secretInputs = imp.secretInputs
+  const decryptPassword = imp.decryptPassword
+  const decryptRefs = imp.decryptRefs
+  const isEncrypted = imp.analysis?.encrypted === true
   const fileInput = useRef<HTMLInputElement | null>(null)
   /**
    * 选择代数（取消选择时递增）：作废在途的选择上传/分析，
    * 防止「取消后旧请求仍把向导推进/写错误」的竞态。
    */
   const pickGeneration = useRef(0)
+  /** decrypt 阶段的本地交互状态（不持久化；密码变动即失效重验） */
+  const [verifying, setVerifying] = useState(false)
+  const [verified, setVerified] = useState(false)
+  const [verifyError, setVerifyError] = useState<string | null>(null)
 
   const setPhase = (next: FlowPhase): void => {
     runStore.patch({ import: { phase: next } })
@@ -128,16 +135,19 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
 
   const hasConflicts = (imp.plan?.items ?? []).some((i) => i.kind === 'Conflict')
   const hasPathIssues = (imp.analysis?.pathIssues.length ?? 0) > 0
-  const hasSecrets = (imp.plan?.missingSecrets.length ?? 0) > 0
+  // 加密备份：解密已覆盖的凭据（decryptRefs）不需用户补录，仅剩余项进入 secrets 阶段
+  const hasSecrets = (imp.plan?.missingSecrets ?? []).some((s) => !decryptRefs.includes(s.ref))
 
   /**
    * 适用阶段的有序列表（仅含需要用户处理 + 确认页）。
    * hasConflicts/hasPathIssues/hasSecrets 基于原始 analysis/plan（Dry Run 产物），
    * 在流程中不会因已解决而重算——所以导航必须只前进（见 nextFlowPhase），
    * 而不是靠"当前阶段 != X"判定（那会让已完成阶段被重新命中、跳回上一步）。
+   * 加密备份（analysis.encrypted）恒先插入 decrypt 阶段：不解锁不得继续。
    */
   const applicablePhases = (): FlowPhase[] => {
     const list: FlowPhase[] = []
+    if (isEncrypted) list.push('decrypt')
     if (hasConflicts) list.push('conflicts')
     if (hasPathIssues) list.push('path-mapping')
     if (hasSecrets) list.push('secrets')
@@ -157,7 +167,16 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     if (file === undefined) return
     const generation = pickGeneration.current
     const next = applyPickedFile(fileSelectModel(imp.selectedFileName, uploading), file)
-    runStore.patch({ import: { uploading: next.busy, error: null, selectedFileName: next.selectedName } })
+    // 换文件：清空上一份备份的仅内存解密状态（密码/凭据覆盖清单）
+    runStore.patch({
+      import: {
+        uploading: next.busy,
+        error: null,
+        selectedFileName: next.selectedName,
+        decryptPassword: '',
+        decryptRefs: [],
+      },
+    })
     try {
       const uploaded: UploadResponse = await api.upload(file)
       if (generation !== pickGeneration.current) return // 用户已取消本次选择
@@ -227,6 +246,37 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     setPhase('confirm')
   }
 
+  /** 解密阶段：验证加密备份密码（只读零写入）；成功记录解密覆盖的凭据 refs */
+  const onVerifyDecrypt = async (): Promise<void> => {
+    if (imp.zipPath === null) return
+    setVerifying(true)
+    setVerifyError(null)
+    try {
+      const res = await api.verifyDecrypt(imp.zipPath, decryptPassword)
+      runStore.patch({ import: { decryptRefs: res.refs } })
+      setVerified(true)
+    } catch (err) {
+      setVerified(false)
+      runStore.patch({ import: { decryptRefs: [] } })
+      setVerifyError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setVerifying(false)
+    }
+  }
+
+  /** 解密密码输入变化：写 store（仅内存）并使验证失效（需重新验证） */
+  const onDecryptPasswordChange = (value: string): void => {
+    runStore.patch({ import: { decryptPassword: value } })
+    setVerified(false)
+    setVerifyError(null)
+  }
+
+  /** Decrypt 完成：把密码交给向导（仅内存）→ 下一阶段（按 applicablePhases 顺序） */
+  const finishDecrypt = (): void => {
+    wizard.setDecryptPassword(decryptPassword)
+    setPhase(nextPhase('decrypt'))
+  }
+
   /** Confirm 执行：confirm=true（安全阀）+ 用户回滚策略 */
   const execute = async (): Promise<void> => {
     runStore.patch({ import: { error: null, running: true } })
@@ -269,6 +319,8 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         conflictResolutions: {},
         pathMappings: [],
         secretInputs: {},
+        decryptPassword: '',
+        decryptRefs: [],
       },
     })
   }
@@ -340,6 +392,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
           <Badge kind="info">plugins: {analysis.pluginSummary.installed}✓ / {analysis.pluginSummary.toInstall}✗</Badge>
           {analysis.pathIssues.length > 0 && <Badge kind="warn">{analysis.pathIssues.length} paths</Badge>}
           {analysis.secretCount > 0 && <Badge kind="warn">{analysis.secretCount} secrets</Badge>}
+          {analysis.encrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
         </div>
         {analysis.warnings.length > 0 && (
           <Banner kind="warn">
@@ -367,9 +420,11 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
           {summary.pluginsToInstall > 0 && <Badge kind="info">{t('import.preview.plugins', { count: String(summary.pluginsToInstall) })}</Badge>}
           {summary.mcpAdds > 0 && <Badge kind="info">{t('import.preview.mcp', { count: String(summary.mcpAdds) })}</Badge>}
           {summary.pathMappingsNeeded > 0 && <Badge kind="warn">{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
-          {summary.secretsNeeded > 0 && <Badge kind="warn">{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
+          {summary.secretsNeeded > 0 && !isEncrypted && <Badge kind="warn">{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
           {summary.conflicts > 0 && <Badge kind="error">{t('import.preview.conflicts', { count: String(summary.conflicts) })}</Badge>}
+          {isEncrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
         </div>
+        {isEncrypted && <Banner kind="warn">{t('import.decrypt.previewHint')}</Banner>}
         {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
         {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} />}
         <div className={css.actionRow}>
@@ -392,6 +447,43 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   // 流程阶段页只在 wizard.step === 'preview' 时渲染：execute 开始后 step 变
   // importing/result，若 phase 仍是 confirm，必须让位给导入中/结果页（否则点「导入」
   // 无反应——confirm 页一直挡着，要回退一步才露出结果）。
+  if (phase === 'decrypt' && step === 'preview') {
+    return (
+      <div className={css.viewBody}>
+        <SectionTitle title={t('import.decrypt.title')} subtitle={t('import.decrypt.hint')} />
+        <input
+          type="password"
+          className={css.input}
+          autoComplete="off"
+          placeholder={t('import.decrypt.passwordPlaceholder')}
+          value={decryptPassword}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => { onDecryptPasswordChange(e.target.value) }}
+        />
+        {verifyError !== null && <ErrorBanner error={verifyError} />}
+        {verified && (
+          <Banner kind="ok">
+            {t(decryptRefs.length > 0 ? 'import.decrypt.verified' : 'import.decrypt.verifiedEmpty', { count: String(decryptRefs.length) })}
+          </Banner>
+        )}
+        <div className={css.actionRow}>
+          <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
+          {/* 验证密码：只读零写入；密码为空或验证中不可点 */}
+          <Button
+            variant="ghost"
+            disabled={decryptPassword === '' || verifying}
+            onClick={() => { void onVerifyDecrypt() }}
+          >
+            {verifying ? <Spinner label={t('import.decrypt.verifying')} /> : t('import.decrypt.verify')}
+          </Button>
+          {/* 只有验证通过的密码才能进入后续阶段（core 同样拒绝无密码执行） */}
+          <Button variant="primary" disabled={!verified || verifying} onClick={finishDecrypt}>
+            {t('common.next')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   if (phase === 'conflicts' && step === 'preview') {
     if (conflictCollector === null || imp.plan === null) return null
     return (
@@ -432,7 +524,8 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   }
 
   if (phase === 'secrets' && step === 'preview') {
-    const missing = imp.plan?.missingSecrets ?? []
+    // 加密备份：解密已覆盖的凭据（decryptRefs）由备份密码恢复，不再要求补录
+    const missing = (imp.plan?.missingSecrets ?? []).filter((s) => !decryptRefs.includes(s.ref))
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('import.secrets.title')} />
@@ -450,6 +543,9 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
       <div className={css.viewBody}>
         <Card className={css.optionsCard}>
           <Banner kind="info">{t('import.confirm.warning')}</Banner>
+          {isEncrypted && decryptRefs.length > 0 && (
+            <Banner kind="ok">{t('import.confirm.encrypted', { count: String(decryptRefs.length) })}</Banner>
+          )}
           <Checkbox
             checked={rollbackOnError}
             onChange={(v) => {

@@ -72,7 +72,7 @@ import type {
   SettingsFacade, WorkspaceFacade,
 } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
-import { createEncryptionProvider, decryptCredentials } from './security/index.ts'
+import { createEncryptionProvider, decryptCredentials, SecurityError } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
@@ -101,7 +101,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.26'
+const PLUGIN_VERSION = '0.1.27'
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
@@ -143,6 +143,7 @@ const API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
+  decryptVerify: '/api/dsh-config-manager/decrypt-verify',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
@@ -798,6 +799,14 @@ async function tryDecryptCredentials(
   return map
 }
 
+/** 解密错误 → 用户可读文本：BAD_PASSWORD 只报「密码错误」（不泄内部细节），其余原文 */
+function decryptErrorText(error: unknown, msg: MsgFunc): string {
+  if (error instanceof SecurityError && error.code === 'BAD_PASSWORD') {
+    return msg('import.encryptedPasswordWrong')
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
 interface RoutesDeps {
   host: ConfigManagerHostContext
   adapters: ConfigAdapter[]
@@ -1305,6 +1314,45 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
       },
     },
+    // ------------------------------------------------------ decrypt-verify
+    // 加密备份的解密密码验证（只读零写入）：成功返回将恢复的凭据数；密码错误返回 400。
+    // 密码仅内存随请求体传入，绝不落盘/落日志；供导入向导在确认前先行解锁校验。
+    {
+      kind: 'exact',
+      path: API.decryptVerify,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
+        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
+          writeJson(res, 400, { error: 'zipPath is required and must reference a staged backup' })
+          return
+        }
+        const password =
+          typeof body?.['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
+        if (password === undefined) {
+          writeJson(res, 400, { error: msg('import.encryptedPasswordRequired') })
+          return
+        }
+        try {
+          const decrypted = await tryDecryptCredentials(zipPath, password)
+          const isEncrypted = decrypted !== undefined
+          writeJson(res, 200, {
+            ok: true,
+            encrypted: isEncrypted,
+            secretCount: isEncrypted ? decrypted.size : 0,
+            // 解密覆盖的凭据 ref 名（非值）：UI 据此从「补录密钥」阶段剔除已恢复项
+            refs: isEncrypted ? [...decrypted.keys()] : [],
+          })
+        } catch (error) {
+          writeJson(res, 400, { error: decryptErrorText(error, msg) })
+        }
+      },
+    },
     // ------------------------------------------------------------- analyze
     {
       kind: 'exact',
@@ -1397,8 +1445,8 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           return
         }
         const opts = (body?.['opts'] ?? {}) as Record<string, unknown>
-        // decryptPassword is an optional Host extension (the browser contract
-        // only carries secretInputs); used to open an encrypted backup.
+        // 加密备份的解密密码（仅内存，来自导入向导 decrypt 阶段；绝不落盘/落日志）。
+        // core 层强制：加密备份必须成功解密后才允许执行（import.encryptedPasswordRequired）。
         const decryptPassword =
           typeof opts['decryptPassword'] === 'string' && opts['decryptPassword'] !== ''
             ? opts['decryptPassword']
@@ -1413,7 +1461,13 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
         }
         const runId = run.runId
         try {
-          const decryptedCredentials = await tryDecryptCredentials(zipPath, decryptPassword)
+          let decryptedCredentials: Map<string, string> | undefined
+          try {
+            decryptedCredentials = await tryDecryptCredentials(zipPath, decryptPassword)
+          } catch (error) {
+            // 解密失败（密码错误/篡改）：转用户可读错误，不落 run 账（未开始执行）
+            throw new Error(decryptErrorText(error, msg))
+          }
           const result = await makeImporter().executeImportPlan(zipPath, plan, {
             confirm: opts['confirm'] === true,
             secretInputs:
@@ -2044,6 +2098,8 @@ export function apply(ctx: Context, config?: Config): void {
   const adapters = createAdapters({
     // Namespace list = everything the settings service has registered.
     namespaces: async () => (await ctx.settings.describe({ redactSecrets: true })).map((d) => String(d.ns)),
+    // Sessions 分区默认关（含敏感内容）：挂载 adapter 供 Custom Export 显式勾选（§3.3/§15）。
+    includeSessions: true,
   })
 
   host.log.info('config-manager 已挂载', {

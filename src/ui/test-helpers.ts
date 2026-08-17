@@ -70,8 +70,9 @@ export function makeAnalysis(overrides: Partial<ImportAnalysis> = {}): ImportAna
     pathIssues: [],
     secretCount: 3,
     dependencyIssues: [],
+    encrypted: false,
     ...overrides,
-  };
+  } as ImportAnalysis;
 }
 
 export function makePlanItem(overrides: Partial<PlanItem> = {}): PlanItem {
@@ -146,7 +147,7 @@ export class MockImportPort implements ImportPort {
   result: ImportResult;
   analyzeCalls = 0;
   planCalls: ImportDecisions[] = [];
-  executeCalls: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean }[] = [];
+  executeCalls: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string }[] = [];
 
   constructor(opts: {
     analysis?: ImportAnalysis;
@@ -169,7 +170,7 @@ export class MockImportPort implements ImportPort {
   async executeImportPlan(
     _zip: string,
     _plan: ImportPlan,
-    opts: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean },
+    opts: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string },
   ): Promise<ImportResult> {
     this.executeCalls.push(opts);
     return this.result;

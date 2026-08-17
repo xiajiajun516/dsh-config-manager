@@ -78,6 +78,29 @@ test('import-wizard: 用户可选 rollbackOnError=false（单项失败继续 §3
   assert.equal(port.executeCalls[0]!.rollbackOnError, false);
 });
 
+test('import-wizard: 加密备份的解密密码经 execute 传给端口（仅内存）', async () => {
+  const port = new MockImportPort();
+  port.analysis = makeAnalysis({ encrypted: true });
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+
+  // 未设置密码：execute 不携带 decryptPassword
+  await wiz.execute({ confirm: true });
+  assert.equal(port.executeCalls[0]!.decryptPassword, undefined);
+
+  // 设置密码后：execute 携带；reset 后清空（绝不残留）
+  wiz.setDecryptPassword('backup-password-123');
+  await wiz.execute({ confirm: true });
+  assert.equal(port.executeCalls[1]!.decryptPassword, 'backup-password-123');
+
+  wiz.reset();
+  await wiz.selectZip('y.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true });
+  assert.equal(port.executeCalls[2]!.decryptPassword, undefined, 'reset 必须清空解密密码');
+});
+
 test('import-wizard: confirm=false 拒绝执行（core 安全阀透传）', async () => {
   const port = new MockImportPort();
   const wiz = new ImportWizard({ port });

@@ -8,7 +8,7 @@
  */
 
 /** 中间流程阶段（wizard.step 之外的 UI 层页面） */
-export type FlowPhase = 'preview' | 'conflicts' | 'path-mapping' | 'secrets' | 'confirm'
+export type FlowPhase = 'preview' | 'decrypt' | 'conflicts' | 'path-mapping' | 'secrets' | 'confirm'
 
 /**
  * 计算下一阶段：在 `list`（适用阶段的有序列表）中取 `from` 的下一项。

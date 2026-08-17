@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
 import { SyncSessionStore } from './sync-session.ts';
-import type { ImportPlan } from '../core/types.ts';
+import type { ImportAnalysis, ImportPlan } from '../core/types.ts';
 import type { SectionId } from '../schema/types.ts';
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
@@ -22,7 +22,7 @@ function makePlan(seed: string): ImportPlan {
   };
 }
 
-function makeAnalysis(seed: string): { valid: boolean; errors: string[]; warnings: string[]; compatibility: 'excellent' | 'good' | 'partial' | 'unsupported'; sectionsInZip: SectionId[]; pluginSummary: { installed: number; toInstall: number }; pathIssues: []; secretCount: number; dependencyIssues: [] } {
+function makeAnalysis(seed: string): ImportAnalysis {
   return {
     valid: true,
     errors: [],
@@ -33,6 +33,7 @@ function makeAnalysis(seed: string): { valid: boolean; errors: string[]; warning
     pathIssues: [],
     secretCount: 0,
     dependencyIssues: [],
+    encrypted: false,
   };
 }
 

@@ -67,7 +67,20 @@ export interface ExecutePayload {
     secretInputs: Record<string, string>;
     /** true=任一项失败整体回滚（场景 E）；false=单项失败继续 */
     rollbackOnError: boolean;
+    /** 加密备份的解密密码（仅内存；加密备份必须提供，core 拒绝无密码导入） */
+    decryptPassword?: string;
   };
+}
+
+/** decrypt-verify 端点响应：校验加密备份密码是否可解开 secrets.enc（零写入） */
+export interface DecryptVerifyResponse {
+  ok: boolean;
+  /** 该备份是否加密（password 非空时恒 true；用于 UI 双保险） */
+  encrypted: boolean;
+  /** 解密成功后将恢复的凭据数（普通备份为 0） */
+  secretCount: number;
+  /** 解密覆盖的凭据 ref 名（非值）；UI 据此从补录阶段剔除已恢复项 */
+  refs: string[];
 }
 
 /** restore 端点响应：dryRun=true 返回 plan；执行返回 report（与 CLI 一致的诚实报告） */
@@ -87,6 +100,7 @@ export const CONFIG_MANAGER_API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
+  decryptVerify: '/api/dsh-config-manager/decrypt-verify',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
@@ -289,11 +303,21 @@ export class ConfigManagerApi {
     return readJson<ImportPlan>(response, this.t);
   }
 
+  /** 验证加密备份的解密密码（只读零写入）：成功返回将恢复的凭据数；密码错误抛 ConfigManagerApiError */
+  async verifyDecrypt(zipPath: string, password: string): Promise<DecryptVerifyResponse> {
+    const response = await fetch(CONFIG_MANAGER_API.decryptVerify, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ zipPath, password }),
+    });
+    return readJson<DecryptVerifyResponse>(response, this.t);
+  }
+
   /** ImportPort.executeImportPlan：快照→分阶段 apply→validate→commit/rollback */
   async executeImportPlan(
     zipPath: string,
     plan: ImportPlan,
-    opts: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean },
+    opts: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string },
   ): Promise<ImportResult & { runId: string }> {
     const payload: ExecutePayload = {
       zipPath,
@@ -302,6 +326,7 @@ export class ConfigManagerApi {
         confirm: opts.confirm,
         secretInputs: opts.secretInputs ?? {},
         rollbackOnError: opts.rollbackOnError,
+        decryptPassword: opts.decryptPassword,
       },
     };
     const response = await fetch(CONFIG_MANAGER_API.execute, {

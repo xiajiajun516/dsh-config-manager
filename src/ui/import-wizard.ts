@@ -43,6 +43,8 @@ export class ImportWizard {
     pathMappings: [],
   };
   private secretInputs: Record<string, string> = {};
+  /** 加密备份的解密密码（仅内存，绝不持久化；刷新后要求重输） */
+  private decryptPassword = '';
 
   constructor(opts: ImportWizardOptions) {
     this.port = opts.port;
@@ -123,6 +125,11 @@ export class ImportWizard {
     this.secretInputs = inputs;
   }
 
+  /** 设置加密备份的解密密码（仅内存，绝不持久化；导出密码不可复用，无明文存储） */
+  setDecryptPassword(password: string): void {
+    this.decryptPassword = password;
+  }
+
   /** Preview 摘要（规范 §10 数值化；基于当前 plan 与 analysis） */
   previewSummary(): ImportPreviewSummary {
     const items = this.plan?.items ?? [];
@@ -185,6 +192,8 @@ export class ImportWizard {
         confirm: true,
         secretInputs: this.secretInputs,
         rollbackOnError,
+        // 未设置解密密码（普通备份/未解锁）→ 不携带该字段
+        decryptPassword: this.decryptPassword === '' ? undefined : this.decryptPassword,
       });
       // 失败且已整体回滚（场景 E）→ 报告回滚阶段
       if (!this.result.ok && this.result.rollback) {
@@ -209,5 +218,6 @@ export class ImportWizard {
     this.errors = [];
     this.decisions = { strategy: 'merge', resolutions: {}, pathMappings: [] };
     this.secretInputs = {};
+    this.decryptPassword = '';
   }
 }

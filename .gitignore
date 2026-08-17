@@ -10,6 +10,7 @@ dist/
 .vibeskills/
 .agent-teams/
 outputs/
+my-video/
 
 # Packaging artifacts
 *.tgz

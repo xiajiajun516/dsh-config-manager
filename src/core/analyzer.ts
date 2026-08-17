@@ -326,6 +326,7 @@ export class Analyzer {
       pathIssues,
       secretCount,
       dependencyIssues,
+      encrypted: manifest.security.encrypted,
     };
   }
 
@@ -400,6 +401,13 @@ export class Analyzer {
     // 10. 用户确认（安全阀：不确认绝不动数据）
     if (opts.confirm !== true) {
       throw new ImportNotConfirmedError(this.msg);
+    }
+
+    // 10b. 加密不变量：加密备份必须已成功解密（decryptedCredentials 由宿主用备份密码
+    // 解开 security/secrets.enc 后注入）。未解密（undefined）一律拒绝执行——
+    // 不允许把加密凭据静默降级为「缺凭据照常导入」，否则加密备份与普通备份无区别。
+    if (bundle.manifest.security.encrypted && opts.decryptedCredentials === undefined) {
+      throw new Error(this.msg('import.encryptedPasswordRequired'));
     }
 
     const importCtx: ImportContext = {

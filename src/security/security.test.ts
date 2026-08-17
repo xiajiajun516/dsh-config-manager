@@ -16,6 +16,8 @@ import { createLogger, type Logger } from '../utils/logger.ts';
 import { zipToBuffer, parseZip, crc32, ZipSafetyError, type ZipWriteEntry } from '../utils/zip.ts';
 import { normalizePath } from '../utils/paths.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { CredentialsAdapter } from '../adapters/credentials.ts';
+import { parseManifest } from '../schema/manifest.ts';
 import type {
   ConfigAdapter, CredentialsFacade, ExportSection, FileSystemFacade, HostContext,
   NamespaceInfo, PatchFileFacade, PluginsFacade, SettingsFacade, SnapshotStore,
@@ -764,6 +766,63 @@ test('集成: Exporter + EncryptionProvider 加密备份（secrets.enc + manifes
     const blob = archive.readEntry('security/secrets.enc');
     const decrypted = await decryptCredentials(blob, manifest.security.encryption!, password);
     assert.equal(decrypted, credentialsYaml);
+  });
+});
+
+test('集成: 加密备份导入强制密码——无解密结果拒绝，正确解密恢复凭据', async () => {
+  await withTmp(async (dir) => {
+    const homeDir = path.join(dir, 'home');
+    const src = new MockHostContext(homeDir);
+    src.settings.ns.set('general', { value: { theme: 'dark', apiKeyEnv: 'DEEPSEEK_API_KEY' }, revision: 1, secrets: [] });
+    src.credentials.values.set('DEEPSEEK_API_KEY', 'sk-super-secret-value');
+    await src.fs.writeFile(
+      path.join(homeDir, '.credentials.yaml'),
+      Buffer.from('DEEPSEEK_API_KEY: sk-super-secret-value\n', 'utf8'),
+    );
+    const credentialsAdapter = new CredentialsAdapter({ refs: async () => ['DEEPSEEK_API_KEY'] });
+    const adapters: ConfigAdapter[] = [new MiniSettingsAdapter(), credentialsAdapter];
+    const zipPath = path.join(dir, 'enc.zip');
+    const password = 'backup-password-123';
+    await new Exporter({
+      ctx: src,
+      adapters,
+      scanner: createSecretScanner(),
+      encryption: createEncryptionProvider(password),
+      now: () => new Date('2026-08-14T12:00:00.000Z'),
+    }).export({ includeSecrets: true, outPath: zipPath });
+
+    const dst = new MockHostContext(path.join(dir, 'dst-home'));
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
+
+    // 分析层必须暴露加密标志（UI 据此要求输入解密密码）
+    const analysis = await importer.analyzeImport(zipPath);
+    assert.equal(analysis.encrypted, true);
+    assert.equal(analysis.secretCount, 1);
+
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] });
+    assert.ok(plan.missingSecrets.some((s) => s.ref === 'DEEPSEEK_API_KEY'));
+
+    // 1) 无解密结果：加密备份拒绝执行（不允许「无密码照样导入」）
+    await assert.rejects(
+      () => importer.executeImportPlan(zipPath, plan, { confirm: true }),
+      /解密密码才能导入/,
+    );
+    assert.equal(dst.credentials.values.has('DEEPSEEK_API_KEY'), false, '拒绝时不得写入任何凭据');
+
+    // 2) 正确解密结果（宿主用备份密码解开 secrets.enc 注入）：凭据恢复，不再要求补录
+    const archive = parseZip(await fs.readFile(zipPath));
+    const manifest = parseManifest(archive.readEntryText('manifest.json'));
+    const blob = archive.readEntry('security/secrets.enc');
+    const plaintext = await decryptCredentials(blob, manifest.security.encryption!, password);
+    const map = new Map<string, string>();
+    for (const line of plaintext.split('\n')) {
+      const m = /^([A-Za-z0-9_]+):\s*(.+)$/.exec(line.trim());
+      if (m) map.set(m[1]!, m[2]!);
+    }
+    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, decryptedCredentials: map });
+    assert.equal(result.ok, true);
+    assert.equal(result.missingSecrets.length, 0, '解密覆盖的凭据不再计入缺失');
+    assert.equal(dst.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-super-secret-value');
   });
 });
 
