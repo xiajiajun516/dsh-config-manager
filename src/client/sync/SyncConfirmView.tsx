@@ -13,7 +13,10 @@ import type { ReactNode } from 'react'
 
 import { Badge, Banner, Button, Card, Spinner } from '../common/ui.tsx'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
-import { keepLocalAll, kindLabel, reviewItems, severityLabel, summarizeConfirmItems, useRemoteAll } from './sync-view.ts'
+import {
+  buildAdoptions, keepLocalAll, kindLabel, reviewItems, severityLabel,
+  summarizeConfirmItems, useRemoteAll, type SyncConflictResolution,
+} from './sync-view.ts'
 import type { ApplyItemsResponse } from './sync-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import css from '../config-manager.module.css'
@@ -36,7 +39,8 @@ export interface SyncConfirmViewProps {
   onRollbackDone?: () => void
 }
 
-type ConflictResolution = 'useRemote' | 'keepLocal' | 'skip'
+/** 冲突解决方式：与导入恢复向导一致的两项（保留当前 / 使用备份）。 */
+type ConflictResolution = SyncConflictResolution
 
 /** 单条差异项的可变决策状态。 */
 interface ItemState {
@@ -89,7 +93,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   };
 
   const runApply = async (): Promise<void> => {
-    // 校验冲突项必须已解决
+    // 校验冲突项必须已解决（与 buildAdoptions 的强制先解决一致）
     const unresolved = items.find(
       (it) => it.kind === 'Conflict' && (states[it.itemId]?.adopted === true) && states[it.itemId]?.resolution === undefined,
     );
@@ -104,14 +108,12 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       for (const it of items) {
         adoptedMap.set(it.itemId, states[it.itemId]?.adopted ?? false);
       }
-      const adoptions = items
-        .filter((it) => adoptedMap.get(it.itemId) === true)
-        .map((it) => {
-          const adoption: { itemId: string; adopt: boolean; resolution?: ConflictResolution } = { itemId: it.itemId, adopt: true };
-          const res = states[it.itemId]?.resolution;
-          if (it.kind === 'Conflict' && res !== undefined && res !== 'skip') adoption.resolution = res;
-          return adoption;
-        });
+      const resolutions = new Map<string, ConflictResolution>();
+      for (const it of items) {
+        const res = states[it.itemId]?.resolution;
+        if (res !== undefined) resolutions.set(it.itemId, res);
+      }
+      const adoptions = buildAdoptions(items, adoptedMap, resolutions);
       const result = await api.applyItems({ syncSessionId, adoptions });
       setPhase(result.ok ? 'done' : 'failed');
       setApplyResult(result);
@@ -261,25 +263,38 @@ interface ConflictResolverProps {
 
 function ConflictResolver({ item, resolution, busy, t, onResolve }: ConflictResolverProps): ReactNode {
   const conflict = item.conflict;
+  const options: { value: ConflictResolution; label: string }[] = [
+    { value: 'keepLocal', label: t('syncflow.conflictUseLocal') },
+    { value: 'useRemote', label: t('syncflow.conflictUseRemote') },
+  ];
   return (
-    <span className={css.rowActions}>
-      <span className={css.fieldLabel}>{t('syncflow.conflictTitle')}</span>
-      <Button variant="ghost" disabled={busy || resolution === 'keepLocal'} onClick={() => { onResolve('keepLocal') }}>
-        {resolution === 'keepLocal' ? `✓ ${t('syncflow.conflictUseLocal')}` : t('syncflow.conflictUseLocal')}
-      </Button>
-      <Button variant="primary" disabled={busy || resolution === 'useRemote'} onClick={() => { onResolve('useRemote') }}>
-        {resolution === 'useRemote' ? `✓ ${t('syncflow.conflictUseRemote')}` : t('syncflow.conflictUseRemote')}
-      </Button>
-      <Button variant="ghost" disabled={busy || resolution === 'skip'} onClick={() => { onResolve('skip') }}>
-        {resolution === 'skip' ? `✓ ${t('syncflow.conflictSkip')}` : t('syncflow.conflictSkip')}
-      </Button>
+    <div className={css.conflictItem}>
+      {/* 变更详情（与导入恢复向导一致：如插件「当前 1.1 vs 备份 1.6」） */}
+      {item.detail !== undefined && item.detail !== '' && (
+        <pre className={css.conflictDetail}>{item.detail}</pre>
+      )}
       {conflict?.diff !== undefined && (
         <details className={css.conflictDetail}>
           <summary>{t('syncflow.diff')}</summary>
           <pre className={css.diffScroll}>{conflict.diff}</pre>
         </details>
       )}
-    </span>
+      {/* 与导入恢复向导 ConflictList 相同的两项单选（保留当前 / 使用备份） */}
+      <div className={css.conflictOptions}>
+        {options.map((opt) => (
+          <label key={opt.value} className={css.radioLabel}>
+            <input
+              type="radio"
+              name={`sync-conflict-${item.itemId}`}
+              checked={resolution === opt.value}
+              disabled={busy}
+              onChange={() => { onResolve(opt.value) }}
+            />
+            <span>{opt.label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
   );
 }
 

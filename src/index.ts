@@ -68,7 +68,7 @@ import {
 } from './core/plugin-cli.ts'
 import type {
   ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
-  ImportPlan, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade,
+  ImportPlan, NamespaceInfo, PatchFileFacade, PlanItem, PlanItemKind, PluginInfo, PluginsFacade,
   SettingsFacade, WorkspaceFacade,
 } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
@@ -77,6 +77,7 @@ import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
 import { SyncEngine } from './sync/sync-engine.ts'
+import type { ApplyItemsReport } from './sync/sync-engine.ts'
 import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { defaultAutosyncConfig, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
@@ -100,7 +101,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.23'
+const PLUGIN_VERSION = '0.1.24'
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
@@ -848,6 +849,8 @@ interface SyncConfirmItem {
   adapter: SectionId
   kind: PlanItemKind
   description: string
+  /** 变更详情（如插件「当前 1.1 vs 导入 1.6」），与导入恢复向导展示一致 */
+  detail?: string
   severity: 'info' | 'warning' | 'error'
   defaultAdopt: boolean
   adopt: boolean
@@ -875,6 +878,7 @@ function planToConfirmItems(plan: ImportPlan): SyncConfirmItem[] {
       adapter: item.adapter,
       kind: item.kind,
       description: item.description,
+      detail: item.detail,
       severity: item.severity,
       defaultAdopt: !manual,
       adopt: !manual,
@@ -1861,15 +1865,28 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
             if (typeof a?.['itemId'] !== 'string') continue
             byId.set(a['itemId'], { adopt: a['adopt'] === true, resolution: typeof a['resolution'] === 'string' ? a['resolution'] : undefined })
           }
-          const subItems = session.plan.items.filter((item) => {
+          // 构造子计划（仅含采纳项）。同步冲突决策 useRemote → 核心 importer 的
+          // useImported（item 转成 Update，applyOne 才会真正写远端值），
+          // keepLocal/skip 从子计划剔除（keepCurrent/skip 语义：不写）。
+          // 与导入恢复向导（ConflictList keepCurrent/useImported）的决策语义完全一致。
+          const subItems: PlanItem[] = session.plan.items.flatMap((item) => {
             const d = byId.get(item.id)
-            if (d === undefined || !d.adopt) return false
-            // Conflict 项必须有 resolution，且 keepLocal/skip 从子计划剔除
+            if (d === undefined || !d.adopt) return []
+            // Conflict 项必须有 resolution；keepLocal/skip 不写入本地 → 剔除
             if (item.kind === 'Conflict') {
               if (d.resolution === undefined) throw new SyncRouteError(`冲突项 ${item.id} 必须提供 resolution（useRemote/keepLocal/skip）`)
-              if (d.resolution === 'keepLocal' || d.resolution === 'skip') return false
+              if (d.resolution === 'keepLocal' || d.resolution === 'skip') return []
+              // useRemote → 转成 Update 计划项（镜像 analyzer.applyItemResolution 的
+              // useImported 分支），applyOne 才会把远端值真正写进本地。
+              const c = (item as { conflict?: { itemId?: string } }).conflict
+              return [{
+                ...item,
+                kind: 'Update' as const,
+                severity: 'info' as const,
+                conflict: { itemId: c?.itemId ?? item.id, resolution: 'useImported' as const },
+              } as PlanItem]
             }
-            return true
+            return [item]
           })
           const subPlan: ImportPlan = {
             ...session.plan,
@@ -1877,11 +1894,17 @@ function makeRoutes(deps: RoutesDeps): WebRoute[] {
           }
           // 消费会话（同一 session 只允许一次 apply-items）
           syncSessions.delete(syncSessionId)
-          await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
-          const engine = makeSyncEngine(session.repoUrl, session.gitBin)
-          const report = await engine.applyItems(session.zipPath, subPlan, {
-            onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
-          })
+          let engine: SyncEngine
+          let report: ApplyItemsReport
+          try {
+            engine = makeSyncEngine(session.repoUrl, session.gitBin)
+            report = await engine.applyItems(session.zipPath, subPlan, {
+              onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
+            })
+          } finally {
+            // 用完再清理临时 ZIP（此前在 applyItems 读取前就删除 → ENOENT：无法读取备份文件）
+            await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
+          }
           writeJson(res, 200, {
             ok: report.ok,
             applied: report.applied,

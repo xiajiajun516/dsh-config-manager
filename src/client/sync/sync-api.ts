@@ -131,6 +131,8 @@ export interface SyncConfirmItem {
   adapter: SectionId;
   kind: PlanItemKind;
   description: string;
+  /** 变更详情（如插件「当前 1.1 vs 导入 1.6」），与导入恢复向导展示一致 */
+  detail?: string;
   severity: 'info' | 'warning' | 'error';
   /** 默认采纳方向；Conflict/MissingSecret 等人工项默认 false */
   defaultAdopt: boolean;
@@ -163,8 +165,9 @@ export interface ApplyItemsPayload {
 export interface SyncItemAdoption {
   itemId: string;
   adopt: boolean;
-  /** 冲突项解决方案（仅当该项是 Conflict 且 adopt=true 时必须） */
-  resolution?: 'useRemote' | 'keepLocal' | 'skip';
+  /** 冲突项解决方案（仅当该项是 Conflict 且 adopt=true 时必须）。
+   *  与导入恢复向导一致：keepLocal=保留当前 / useRemote=使用导入；跳过 = adopt=false。 */
+  resolution?: 'useRemote' | 'keepLocal';
 }
 
 /** POST /sync/apply-items 响应。 */

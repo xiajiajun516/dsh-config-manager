@@ -107,7 +107,7 @@ test('sync-view: buildAdoptions 收集用户决策；未列出项视为 adopt=fa
     ['b', false],
     ['c', true],
   ])
-  const resolutions = new Map<string, 'useRemote' | 'keepLocal' | 'skip'>([['c', 'useRemote']])
+  const resolutions = new Map<string, 'useRemote' | 'keepLocal'>([['c', 'useRemote']])
   const out = buildAdoptions(items, adopted, resolutions)
   // 只有 adopt=true 的项进列表（a、c）；b 未采纳剔除
   const ids = out.map((o) => o.itemId)
@@ -120,7 +120,7 @@ test('sync-view: buildAdoptions Conflict 项未给 resolution → 抛错（强�
     confirmItem({ itemId: 'c', kind: 'Conflict', defaultAdopt: false }),
   ]
   const adopted = new Map<string, boolean>([['c', true]])
-  const resolutions = new Map<string, 'useRemote' | 'keepLocal' | 'skip'>()
+  const resolutions = new Map<string, 'useRemote' | 'keepLocal'>()
   assert.throws(() => buildAdoptions(items, adopted, resolutions), /解决/)
 })
 

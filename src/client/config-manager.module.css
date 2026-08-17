@@ -922,6 +922,24 @@
   margin-bottom: 0;
 }
 
+/* 远程同步「拉取差异预览」列表容器：固定高度 + 内部滚动（变更项再多也不把整页撑长；
+   标题/汇总/提示固定在容器外）。区别于 .confirmScroll 的 max-height，这里用固定 height，
+   保证面板视觉高度恒定、仅内部滚动。 */
+.pullScroll {
+  height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 10px 6px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+.pullScroll .reportList {
+  margin-top: 4px;
+  margin-bottom: 0;
+}
+
 .rowActions {
   display: flex;
   gap: 8px;

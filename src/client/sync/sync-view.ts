@@ -318,10 +318,16 @@ export function reviewItems(items: readonly SyncConfirmItem[]): SyncConfirmItem[
   return items.filter((it) => CONFIRM_REVIEW_KINDS.has(it.kind));
 }
 
+/** 冲突解决方式：与导入恢复向导（ConflictList）完全一致的两项（保留当前 / 使用导入）。
+ *  - keepLocal = keepCurrent（保留本地现有值，不写入）；
+ *  - useRemote = useImported（采用远端快照值，写入本地）。
+ */
+export type SyncConflictResolution = 'keepLocal' | 'useRemote';
+
 /** 单条 Conflict 项的批量决策（resolution + adopt）。 */
 export interface ConflictDecision {
   itemId: string;
-  resolution: 'useRemote' | 'keepLocal' | 'skip';
+  resolution: SyncConflictResolution;
   adopt: boolean;
 }
 
@@ -376,11 +382,12 @@ export function summarizeConfirmItems(items: readonly SyncConfirmItem[]): SyncCo
 /**
  * 收集用户逐项决策 → apply-items 请求体 adoptions[]。
  * 仅包含 adopt=true 的项；Conflict 项 adopt=true 且未给 resolution → 抛错（强制先解决）。
+ * 与导入恢复向导一致：只提供「保留当前 / 使用导入」两项，跳过 = 取消勾选（adopt=false）。
  */
 export function buildAdoptions(
   items: readonly SyncConfirmItem[],
   adopted: ReadonlyMap<string, boolean>,
-  resolutions: ReadonlyMap<string, 'useRemote' | 'keepLocal' | 'skip'>,
+  resolutions: ReadonlyMap<string, SyncConflictResolution>,
 ): SyncItemAdoption[] {
   const out: SyncItemAdoption[] = [];
   for (const it of items) {
@@ -389,9 +396,9 @@ export function buildAdoptions(
     if (it.kind === 'Conflict') {
       const resolution = resolutions.get(it.itemId);
       if (resolution === undefined) {
-        throw new Error(`冲突项 ${it.itemId} 必须先选择解决方式（用本地 / 用远端 / 跳过）`);
+        throw new Error(`冲突项 ${it.itemId} 必须先选择解决方式（保留当前 / 使用导入）`);
       }
-      if (resolution !== 'skip') adoption.resolution = resolution;
+      adoption.resolution = resolution;
     }
     out.push(adoption);
   }

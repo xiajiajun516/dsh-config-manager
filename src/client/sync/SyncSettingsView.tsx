@@ -547,16 +547,19 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
                   </div>
                   {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
-                  <div className={css.reportList}>
-                    {pullView.summary.items.map((c) => (
-                      <div key={c.id} className={css.statRow}>
-                        <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
-                        <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
-                          {severityLabel(c.severity, uiT)}
-                        </Badge>
-                        <span>{c.description}</span>
-                      </div>
-                    ))}
+                  {/* 固定高度 + 内部滚动：变更项再多也不把整页撑长 */}
+                  <div className={css.pullScroll}>
+                    <div className={css.reportList}>
+                      {pullView.summary.items.map((c) => (
+                        <div key={c.id} className={css.statRow}>
+                          <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
+                          <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
+                            {severityLabel(c.severity, uiT)}
+                          </Badge>
+                          <span>{c.description}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </>
               )}
