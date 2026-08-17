@@ -301,6 +301,50 @@ const CONFIRM_REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
   'Conflict', 'MissingSecret', 'MissingDependency', 'Install', 'Error', 'PathMapping',
 ]);
 
+/**
+ * 是否需要人工决策（是否进入差异确认列表）。
+ * 非决策项（Create / Update / Skip / Warning 等）默认自动采用（defaultAdopt=true），
+ * 不逐项展示但 apply-items 时照常导入。
+ */
+export function isReviewItem(kind: PlanItemKind): boolean {
+  return CONFIRM_REVIEW_KINDS.has(kind);
+}
+
+/**
+ * 仅保留需人工决策的项（差异确认列表只渲染这些）。
+ * 统计（summarizeConfirmItems）仍基于全量 items，不受影响。
+ */
+export function reviewItems(items: readonly SyncConfirmItem[]): SyncConfirmItem[] {
+  return items.filter((it) => CONFIRM_REVIEW_KINDS.has(it.kind));
+}
+
+/** 单条 Conflict 项的批量决策（resolution + adopt）。 */
+export interface ConflictDecision {
+  itemId: string;
+  resolution: 'useRemote' | 'keepLocal' | 'skip';
+  adopt: boolean;
+}
+
+/**
+ * 「全部保留本地」：所有 Conflict 项 → resolution=keepLocal、adopt=false。
+ * 仅作用于 Conflict 项，非 Conflict 项的 adopt 保持默认。
+ */
+export function keepLocalAll(items: readonly SyncConfirmItem[]): ConflictDecision[] {
+  return items
+    .filter((it) => it.kind === 'Conflict')
+    .map((it) => ({ itemId: it.itemId, resolution: 'keepLocal', adopt: false }));
+}
+
+/**
+ * 「全部采用远端」：所有 Conflict 项 → resolution=useRemote、adopt=true。
+ * 仅作用于 Conflict 项，非 Conflict 项的 adopt 保持默认。
+ */
+export function useRemoteAll(items: readonly SyncConfirmItem[]): ConflictDecision[] {
+  return items
+    .filter((it) => it.kind === 'Conflict')
+    .map((it) => ({ itemId: it.itemId, resolution: 'useRemote', adopt: true }));
+}
+
 export interface SyncConfirmSummary {
   total: number;
   info: number;

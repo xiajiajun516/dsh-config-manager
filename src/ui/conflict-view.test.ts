@@ -60,3 +60,19 @@ test('conflict-view: viewItems 提供视图数据（React 绑定）', () => {
   assert.equal(first.resolution, 'useImported');
   assert.ok(first.currentSummary !== undefined);
 });
+
+test('conflict-view: 批量决策（ConflictList 按钮语义）遍历所有冲突并清空未决', () => {
+  // 「全部保留当前配置」
+  const keepAll = new ConflictCollector(conflictPlan());
+  for (const item of keepAll.conflicts) keepAll.resolve(item.id, 'keepCurrent');
+  assert.equal(keepAll.hasUnresolved, false);
+  assert.equal(keepAll.toResolutions()['settings:a'], 'keepCurrent');
+  assert.equal(keepAll.toResolutions()['plugin:c'], 'keepCurrent');
+
+  // 「全部使用备份配置」
+  const useAll = new ConflictCollector(conflictPlan());
+  for (const item of useAll.conflicts) useAll.resolve(item.id, 'useImported');
+  assert.equal(useAll.hasUnresolved, false);
+  assert.equal(useAll.toResolutions()['settings:a'], 'useImported');
+  assert.equal(useAll.toResolutions()['plugin:c'], 'useImported');
+});

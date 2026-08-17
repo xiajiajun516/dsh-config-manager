@@ -248,6 +248,8 @@ export const zh = {
   'sync.git.cmdFailed': 'git {args} 失败 (exit {code}): {err}',
   'sync.git.repoUrlInvalid': '无法解析 repoUrl（http(s) 仓库必须为合法 URL）: {url}',
   'sync.git.invalidSnapshotId': '非法快照 id: {id}（仅允许字母数字开头，字符限 . _ -）',
+  'sync.pruneListFailed': '远端快照裁剪失败：无法列出远端快照，{reason}',
+  'sync.pruneDeleteFailed': '远端快照裁剪失败：删除快照 {id} 失败，{reason}',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -482,6 +484,8 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.git.cmdFailed': 'git {args} failed (exit {code}): {err}',
   'sync.git.repoUrlInvalid': 'Cannot parse repoUrl (http(s) repositories must be valid URLs): {url}',
   'sync.git.invalidSnapshotId': 'Invalid snapshot id: {id} (must start with an alphanumeric; only . _ - allowed)',
+  'sync.pruneListFailed': 'Remote snapshot pruning failed: could not list remote snapshots, {reason}',
+  'sync.pruneDeleteFailed': 'Remote snapshot pruning failed: deleting snapshot {id} failed, {reason}',
 };
 
 /** 插值：{param} → 形参值；缺参原样保留（便于排查）。 */

@@ -140,6 +140,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       if (info.autosync === undefined) {
         void loadAutosync()
       }
+      // 仓库已配置且地址就绪时，自动拉取远端快照填充下拉（无需先点一键同步）；
+      // 直接传 info.repoUrl（state.repoUrl 的 patch 尚未生效），避免竞态
+      if (info.configured && (info.repoUrl ?? '').trim() !== '') {
+        void loadSnapshots(info.repoUrl)
+      }
     } catch (err) {
       patch({ loading: false, loadError: err instanceof Error ? err.message : String(err) })
     }
@@ -155,10 +160,17 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
   }
 
-  /** 读取远端历史快照列表（「选择历史快照」下拉数据源）。 */
-  const loadSnapshots = async (): Promise<void> => {
+  /**
+   * 读取远端历史快照列表（「选择历史快照」下拉数据源）。
+   * repoUrlOverride：挂载时仓库地址刚从 status 回填、state.repoUrl 尚未生效，
+   * 直接传 info.repoUrl 避免竞态读旧值；缺省读 state.repoUrl（同步成功后的刷新路径）。
+   * 无仓库地址时静默跳过（不发无效请求，下拉留空）。
+   */
+  const loadSnapshots = async (repoUrlOverride?: string): Promise<void> => {
+    const repoUrl = repoUrlOverride ?? state.repoUrl
+    if (repoUrl.trim() === '') return
     try {
-      const res = await api.snapshotsList(payload())
+      const res = await api.snapshotsList({ ...payload(), repoUrl })
       patch({ snapshots: res.snapshots })
     } catch {
       // 拉取失败不阻断主流程（下拉留空，用户可重试）
@@ -460,7 +472,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             <label className={css.field}>
               <span className={css.fieldLabel}>{t('syncflow.selectSnapshot')}</span>
               <select
-                className={css.input}
+                className={css.select}
                 value={state.selectedSnapshotId}
                 disabled={state.busy !== null}
                 onChange={(e: ChangeEvent<HTMLSelectElement>) => {

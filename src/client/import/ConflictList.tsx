@@ -12,7 +12,7 @@ import { useState } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
 import type { ItemResolution } from '../../core/types.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Banner } from '../common/ui.tsx'
+import { Banner, Button } from '../common/ui.tsx'
 import css from '../config-manager.module.css'
 
 export interface ConflictListProps {
@@ -27,15 +27,47 @@ const RESOLUTION_OPTIONS: { value: ItemResolution; key: string }[] = [
   { value: 'useImported', key: 'import.conflicts.useImported' },
 ]
 
+/** 批量决策全部冲突项（keepCurrent / useImported），与逐项逻辑一致地更新 tick + onChanged */
+function resolveAll(
+  collector: ConflictCollector,
+  resolution: ItemResolution,
+  setTick: (fn: (v: number) => number) => void,
+  onChanged: () => void,
+): void {
+  for (const item of collector.conflicts) collector.resolve(item.id, resolution)
+  setTick((v) => v + 1)
+  onChanged()
+}
+
 /** 冲突项决策列表 */
 export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
   const [tick, setTick] = useState(0)
   const items = collector.viewItems()
   const unresolved = collector.unresolved().length
+  const hasConflicts = items.length > 0
 
   return (
     <div className={css.conflictList}>
       {unresolved > 0 && <Banner kind="warn">{t('import.conflicts.unresolved', { count: String(unresolved) })}</Banner>}
+
+      {/* 批量决策按钮（无冲突项时禁用；逐项单选仍可微调） */}
+      <div className={css.actionRow}>
+        <Button
+          variant="ghost"
+          disabled={!hasConflicts}
+          onClick={() => { resolveAll(collector, 'keepCurrent', setTick, onChanged) }}
+        >
+          {t('import.conflicts.keepCurrentAll')}
+        </Button>
+        <Button
+          variant="primary"
+          disabled={!hasConflicts}
+          onClick={() => { resolveAll(collector, 'useImported', setTick, onChanged) }}
+        >
+          {t('import.conflicts.useImportedAll')}
+        </Button>
+      </div>
+
       {items.map((view) => {
         const item = view.item
         return (

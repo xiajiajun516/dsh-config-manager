@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import type { ApplyItemsResponse, AutosyncStatusResponse, SyncConfirmItem } from './sync-api.ts'
 import {
   applyItemsReportView, autosyncIntervalMs, autosyncStatusText, buildAdoptions,
-  computeAutosyncCountdown, summarizeConfirmItems,
+  computeAutosyncCountdown, isReviewItem, keepLocalAll, reviewItems, summarizeConfirmItems, useRemoteAll,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 一键同步差异确认 */
@@ -41,6 +41,59 @@ test('sync-view: summarizeConfirmItems 空数组 → 全零 + 不需决策', () 
   assert.equal(s.total, 0)
   assert.equal(s.adopted, 0)
   assert.equal(s.needsReview, false)
+})
+
+/* ---------------------------------------------------------------- 精简显示 + 批量决策 */
+
+test('sync-view: isReviewItem 仅需人工决策的类型返回 true', () => {
+  assert.equal(isReviewItem('Conflict'), true)
+  assert.equal(isReviewItem('MissingSecret'), true)
+  assert.equal(isReviewItem('MissingDependency'), true)
+  assert.equal(isReviewItem('Install'), true)
+  assert.equal(isReviewItem('Error'), true)
+  assert.equal(isReviewItem('PathMapping'), true)
+  assert.equal(isReviewItem('Create'), false)
+  assert.equal(isReviewItem('Update'), false)
+  assert.equal(isReviewItem('Skip'), false)
+  assert.equal(isReviewItem('Warning'), false)
+})
+
+test('sync-view: reviewItems 只保留需人工决策项（统计仍基于全量）', () => {
+  const items: SyncConfirmItem[] = [
+    confirmItem({ itemId: 'a', kind: 'Update' }),
+    confirmItem({ itemId: 'b', kind: 'Create' }),
+    confirmItem({ itemId: 'c', kind: 'Conflict', defaultAdopt: false }),
+    confirmItem({ itemId: 'd', kind: 'MissingSecret', defaultAdopt: false }),
+  ]
+  const shown = reviewItems(items)
+  assert.deepEqual(shown.map((i) => i.itemId), ['c', 'd'])
+  // summarizeConfirmItems 仍统计全量
+  assert.equal(summarizeConfirmItems(items).total, 4)
+})
+
+test('sync-view: keepLocalAll 所有 Conflict → keepLocal + adopt=false', () => {
+  const items: SyncConfirmItem[] = [
+    confirmItem({ itemId: 'a', kind: 'Conflict', defaultAdopt: false }),
+    confirmItem({ itemId: 'b', kind: 'Update' }),
+    confirmItem({ itemId: 'c', kind: 'Conflict', defaultAdopt: false }),
+  ]
+  const decisions = keepLocalAll(items)
+  assert.deepEqual(decisions, [
+    { itemId: 'a', resolution: 'keepLocal', adopt: false },
+    { itemId: 'c', resolution: 'keepLocal', adopt: false },
+  ])
+})
+
+test('sync-view: useRemoteAll 所有 Conflict → useRemote + adopt=true', () => {
+  const items: SyncConfirmItem[] = [
+    confirmItem({ itemId: 'a', kind: 'Conflict', defaultAdopt: false }),
+    confirmItem({ itemId: 'b', kind: 'Update' }),
+    confirmItem({ itemId: 'c', kind: 'MissingSecret', defaultAdopt: false }),
+  ]
+  const decisions = useRemoteAll(items)
+  assert.deepEqual(decisions, [
+    { itemId: 'a', resolution: 'useRemote', adopt: true },
+  ])
 })
 
 test('sync-view: buildAdoptions 收集用户决策；未列出项视为 adopt=false', () => {

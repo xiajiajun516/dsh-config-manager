@@ -164,6 +164,13 @@ export interface ApplyItemsReport {
  * 注：'credentials' 不是合法 SectionId——凭据状态分区为 credentialsStatus） */
 const FORBIDDEN_SECTIONS: readonly SectionId[] = ['credentialsStatus', 'secrets'];
 
+/**
+ * 远端快照保留数量上限：每次 push 上传成功后对远端裁剪，
+ * 保留最新 N 个（按 createdAt 升序的最末 N 个，含刚 push 的），更旧的逐个删除。
+ * 只按数量裁剪，不按时间窗口。删除失败只告警（进 push 的 warnings），不上抛阻断主流程。
+ */
+export const MAX_REMOTE_SNAPSHOTS = 10;
+
 export class SyncEngine {
   private readonly ctx: HostContext;
   private readonly transport: SyncTransport;
@@ -269,10 +276,46 @@ export class SyncEngine {
     }
     // ② 上传远端（传输通道负责散文件落盘 + 提交推送）
     await this.transport.upload(snapshot);
+    // ②·1 裁剪远端快照：保留最新 MAX_REMOTE_SNAPSHOTS 个（含刚 push 的）。
+    //      删除失败只告警（进 warnings），不上抛 —— 不阻断 push 主流程。
+    //      放在 upload 之后（保证新快照已推送成功）与 recordBaseline 之前（先管好远端再记基线）。
+    await this.pruneRemoteSnapshots(id, warnings);
     // ③ 记录祖先基线：写 sync-state（lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport）+ 裁剪
     await this.recordBaseline(id, snapshot.sections, nowIso);
 
     return { ok: true, snapshotId: id, sections: Object.keys(sections) as SectionId[], warnings };
+  }
+
+  /**
+   * 裁剪远端快照：调用 transport.list() 获取全部快照（按 createdAt 升序），
+   * 保留最新 MAX_REMOTE_SNAPSHOTS 个（含刚 push 的 pushedId），对更旧的逐个调用 transport.delete()。
+   * 只按数量裁剪，不按时间窗口。
+   *
+   * 失败语义：list/delete 失败均只 push 进 warnings，不上抛 —— 裁剪是「尽力而为」的后台整理，
+   * 绝不影响 push 主流程的成功与否（§34.17 分区级告警同款语义）。
+   */
+  private async pruneRemoteSnapshots(pushedId: string, warnings: string[]): Promise<void> {
+    let metas: SyncSnapshotMeta[];
+    try {
+      metas = await this.transport.list();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      warnings.push(this.msg('sync.pruneListFailed', { reason }));
+      return;
+    }
+    if (metas.length <= MAX_REMOTE_SNAPSHOTS) return;
+    // 升序最末 N 个保留；刚 push 的快照（createdAt 最新）必在其中，防御性也把它计入保留集
+    const keep = new Set(metas.slice(-MAX_REMOTE_SNAPSHOTS).map((m) => m.id));
+    keep.add(pushedId);
+    for (const m of metas) {
+      if (keep.has(m.id)) continue;
+      try {
+        await this.transport.delete(m.id);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        warnings.push(this.msg('sync.pruneDeleteFailed', { id: m.id, reason }));
+      }
+    }
   }
 
   /**

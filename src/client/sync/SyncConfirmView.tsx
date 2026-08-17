@@ -13,7 +13,7 @@ import type { ReactNode } from 'react'
 
 import { Badge, Banner, Button, Card, Spinner } from '../common/ui.tsx'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
-import { kindLabel, severityLabel, summarizeConfirmItems } from './sync-view.ts'
+import { keepLocalAll, kindLabel, reviewItems, severityLabel, summarizeConfirmItems, useRemoteAll } from './sync-view.ts'
 import type { ApplyItemsResponse } from './sync-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import css from '../config-manager.module.css'
@@ -61,6 +61,9 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
     items.map((it) => ({ ...it, adopt: states[it.itemId]?.adopted ?? it.defaultAdopt })),
   ), [items, states]);
 
+  // 仅需人工决策的项进入确认列表；非决策项（Create/Update 等）默认自动采用，不逐项展示
+  const displayItems = useMemo(() => reviewItems(items), [items]);
+
   const setAdopted = (itemId: string, adopted: boolean): void => {
     setStates((prev) => ({ ...prev, [itemId]: { ...prev[itemId], adopted } }));
   };
@@ -69,6 +72,19 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
     setStates((prev) => {
       const existing: ItemState = prev[itemId] ?? { adopted: false, resolution: undefined };
       return { ...prev, [itemId]: { ...existing, resolution } };
+    });
+  };
+
+  // 批量决策（仅作用于 Conflict 项；非 Conflict 项的 adopt 保持默认）
+  const applyBulkDecision = (decisions: readonly { itemId: string; resolution: ConflictResolution; adopt: boolean }[]): void => {
+    if (decisions.length === 0) return;
+    setStates((prev) => {
+      const next: Record<string, ItemState> = { ...prev };
+      for (const d of decisions) {
+        const existing: ItemState = prev[d.itemId] ?? { adopted: false, resolution: undefined };
+        next[d.itemId] = { ...existing, resolution: d.resolution, adopted: d.adopt };
+      }
+      return next;
     });
   };
 
@@ -161,38 +177,51 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       </div>
       <span className={css.hint}>{t('syncflow.adoptHint')}</span>
 
-      {/* 逐项差异列表 */}
-      <div className={css.reportList}>
-        {items.map((it) => {
-          const st = states[it.itemId] ?? { adopted: it.defaultAdopt };
-          const isConflict = it.kind === 'Conflict';
-          return (
-            <div key={it.itemId} className={css.statRow}>
-              <label className={css.checkboxRow}>
-                <input
-                  type="checkbox"
-                  checked={st.adopted}
-                  disabled={busy}
-                  onChange={(e) => { setAdopted(it.itemId, e.target.checked) }}
-                />
-                <span>{kindLabel(it.kind, api.t)}</span>
-              </label>
-              <Badge kind={it.severity === 'error' ? 'error' : it.severity === 'warning' ? 'warn' : 'info'}>
-                {severityLabel(it.severity, api.t)}
-              </Badge>
-              <span>{it.description}</span>
-              {isConflict && (
-                <ConflictResolver
-                  item={it}
-                  resolution={st.resolution}
-                  busy={busy}
-                  t={t}
-                  onResolve={(r) => { setResolution(it.itemId, r) }}
-                />
-              )}
-            </div>
-          );
-        })}
+      {/* 批量决策（仅作用于 Conflict 项） */}
+      <div className={css.actionRow}>
+        <Button variant="ghost" disabled={busy || displayItems.filter((it) => it.kind === 'Conflict').length === 0} onClick={() => { applyBulkDecision(keepLocalAll(items)) }}>
+          {t('syncflow.keepLocalAll')}
+        </Button>
+        <Button variant="primary" disabled={busy || displayItems.filter((it) => it.kind === 'Conflict').length === 0} onClick={() => { applyBulkDecision(useRemoteAll(items)) }}>
+          {t('syncflow.useRemoteAll')}
+        </Button>
+        <span className={css.hint}>{t('syncflow.bulkHint')}</span>
+      </div>
+
+      {/* 逐项差异列表（仅需人工决策的项）；固定容器限高 + 内部滚动，防止整页被拉长 */}
+      <div className={css.confirmScroll}>
+        <div className={css.reportList}>
+          {displayItems.map((it) => {
+            const st = states[it.itemId] ?? { adopted: it.defaultAdopt };
+            const isConflict = it.kind === 'Conflict';
+            return (
+              <div key={it.itemId} className={css.statRow}>
+                <label className={css.checkboxRow}>
+                  <input
+                    type="checkbox"
+                    checked={st.adopted}
+                    disabled={busy}
+                    onChange={(e) => { setAdopted(it.itemId, e.target.checked) }}
+                  />
+                  <span>{kindLabel(it.kind, api.t)}</span>
+                </label>
+                <Badge kind={it.severity === 'error' ? 'error' : it.severity === 'warning' ? 'warn' : 'info'}>
+                  {severityLabel(it.severity, api.t)}
+                </Badge>
+                <span>{it.description}</span>
+                {isConflict && (
+                  <ConflictResolver
+                    item={it}
+                    resolution={st.resolution}
+                    busy={busy}
+                    t={t}
+                    onResolve={(r) => { setResolution(it.itemId, r) }}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {error !== null && <Banner kind="error">{error}</Banner>}

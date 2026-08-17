@@ -12,7 +12,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { SyncEngine } from './sync-engine.ts';
+import { SyncEngine, MAX_REMOTE_SNAPSHOTS } from './sync-engine.ts';
 import type { SyncApplyPlan } from './risk.ts';
 import { hashSection, loadSyncState, SYNC_STATE_FILE } from './sync-state.ts';
 import { computeSnapshotMeta } from './transport.ts';
@@ -47,6 +47,7 @@ class MemSyncTransport implements SyncTransport {
   async delete(id: string): Promise<void> {
     this.calls.push('delete');
     this.snapshots.delete(id);
+    this.metas = this.metas.filter((m) => m.id !== id);
   }
 }
 
@@ -682,6 +683,125 @@ test('applyItems: 空子计划 → 直接返回 ok:true（不调 Importer）', a
     assert.equal(report.ok, true);
     assert.deepEqual(report.applied, []);
     assert.equal(mock.executeCalls, 0, '空子计划不应触发 Importer');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── t5：push 后远端快照裁剪（保留最新 MAX_REMOTE_SNAPSHOTS 个） ─────────────────
+
+/** 预置 n 个远端快照（id=remote-N，createdAt 递增） */
+function seedRemoteSnapshots(transport: MemSyncTransport, n: number): void {
+  for (let i = 1; i <= n; i++) {
+    const id = `remote-${String(i).padStart(2, '0')}`;
+    const snap: SyncSnapshot = {
+      id,
+      createdAt: `2026-08-15T${String(i - 1).padStart(2, '0')}:00:00.000Z`,
+      manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+      sections: { settings: { version: 1, namespaces: {} } },
+    };
+    transport.snapshots.set(id, snap);
+    transport.metas.push(computeSnapshotMeta(snap));
+  }
+}
+
+test('push: 远端快照数超过 MAX_REMOTE_SNAPSHOTS → 裁剪只保留最新 10 个（含刚 push 的）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 13); // 预置 13 个旧快照
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true);
+    // 本次 push 的快照应保留
+    assert.ok(transport.snapshots.has('sync-new'), '刚 push 的快照必须保留');
+
+    const remaining = [...transport.snapshots.keys()];
+    // 保留 13 个预置里最新的 9 个（remote-05..remote-13）+ 本次 push 的 sync-new = 10
+    assert.equal(remaining.length, MAX_REMOTE_SNAPSHOTS, `裁剪后应恰剩 ${MAX_REMOTE_SNAPSHOTS} 个`);
+    // 最旧的 4 个（remote-01..remote-04）被删
+    for (let i = 1; i <= 4; i++) {
+      assert.ok(!transport.snapshots.has(`remote-0${i}`), `最旧的 remote-0${i} 应被裁剪`);
+    }
+    // 最新保留集含 5..13 与 sync-new
+    for (let i = 5; i <= 13; i++) {
+      assert.ok(transport.snapshots.has(`remote-${String(i).padStart(2, '0')}`), `最新的 remote-${i} 应保留`);
+    }
+    // 裁剪通过 transport.delete 逐个删除（删除调用次数 = 4）
+    assert.equal(transport.calls.filter((c) => c === 'delete').length, 4);
+    // 顺序：upload → list(裁剪) → delete×4 → recordBaseline（无本地裁剪）→ push 返回
+    // 断言 upload 在首次 delete 之前（保证新快照先推送成功再删旧的）
+    assert.ok(transport.calls.indexOf('upload') < transport.calls.indexOf('delete'), '先 push 新快照再删旧的');
+    // 无裁剪告警（push 会带若干基础导出告警，如未注册 namespace，但不应有裁剪告警）
+    assert.ok(!report.warnings.some((w) => w.includes('裁剪')), '正常裁剪不应产生告警');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 远端快照数未超上限 → 不触发任何删除', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-ok-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 9); // 9 旧 + 本次 1 = 10，恰好达标不裁剪
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true);
+    assert.equal(transport.calls.filter((c) => c === 'delete').length, 0, '未超上限不得删除');
+    assert.equal(transport.snapshots.size, 10);
+    assert.ok(!report.warnings.some((w) => w.includes('裁剪')), '未超上限不应有裁剪告警');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 裁剪 list 失败 → 只告警不上抛，push 仍 ok', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-listfail-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 13);
+    transport.list = async () => { throw new Error('list boom'); };
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true, '裁剪失败不得阻断 push');
+    assert.ok(transport.snapshots.has('sync-new'), '快照本身已上传');
+    assert.ok(report.warnings.some((w) => w.includes('裁剪')), '应有裁剪告警');
+    assert.ok(report.warnings.some((w) => w.includes('无法列出远端快照')), '告警应说明 list 失败');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 裁剪单个 delete 失败 → 只告警不上抛，其余旧快照照常删除', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-delfail-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 13);
+    // 让删除 remote-02 时抛错，其余正常
+    const origDelete = transport.delete.bind(transport);
+    transport.delete = async (id: string) => {
+      if (id === 'remote-02') throw new Error('delete boom');
+      return origDelete(id);
+    };
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true, '单个删除失败不得阻断 push');
+    assert.ok(report.warnings.some((w) => w.includes('删除快照 remote-02 失败')), '应有删除失败告警');
+    // remote-02 仍残留（删除失败），其余旧快照被删
+    assert.ok(transport.snapshots.has('remote-02'), '删除失败的 remote-02 应残留');
+    assert.ok(!transport.snapshots.has('remote-01'), '其余旧快照照常删除');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

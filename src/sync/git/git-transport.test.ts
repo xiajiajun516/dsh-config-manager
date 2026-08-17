@@ -454,3 +454,42 @@ test('集成：list 按 createdAt 升序（真实 git 多快照）', async (t) =
   const listed = await transport.list();
   assert.deepEqual(listed.map((m) => m.id), ['snap-a', 'snap-b', 'snap-c']);
 });
+
+// ─── t5：远端快照裁剪的 git 契约（upload 先 push，再 delete 删旧，各自独立 commit+push） ───
+
+test('集成：裁剪删除旧快照 → 每次 delete 独立 commit+push，add 提交先于 delete 提交', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+
+  // 模拟裁剪场景：先上传多个快照（adds），随后逐个 delete 旧的
+  for (let i = 1; i <= 4; i++) {
+    await transport.upload(sampleSnapshot({ id: `snap-0${i}`, createdAt: `2026-08-16T0${i}:00:00.000Z` }));
+  }
+  // delete 3 个旧的，保留最新 1 个
+  await transport.delete('snap-01');
+  await transport.delete('snap-02');
+  await transport.delete('snap-03');
+
+  // list 只反映保留的快照
+  const listed = await transport.list();
+  assert.deepEqual(listed.map((m) => m.id), ['snap-04'], '裁剪后远端只保留最新快照');
+
+  // git 提交历史：先 add 后 delete（顺序正确，新快照先推再删旧）
+  const log = await runRealGit(['log', '--oneline', '--all'], bare);
+  assert.equal(log.code, 0, `git log 失败: ${log.stderr}`);
+  const addIdx = log.stdout.indexOf('sync: add snapshot snap-04');
+  const delIdx = log.stdout.indexOf('sync: delete snapshot snap-01');
+  assert.ok(addIdx >= 0, 'add 提交应存在');
+  assert.ok(delIdx >= 0, 'delete 提交应存在');
+  // git log 默认按最新提交在前；delete 是较新的提交，应出现在 add 之前（add 更旧在列表更靠后）
+  assert.ok(delIdx < addIdx, 'delete 提交应晚于（在 log 中靠前于）add 提交 → 先推新再删旧');
+
+  // 每个 delete 独立 commit+push
+  const delCount = (log.stdout.match(/sync: delete snapshot snap-0/g) ?? []).length;
+  assert.equal(delCount, 3, '每个被删快照对应一次独立 delete 提交');
+
+  // 已删除快照目录从工作副本移除
+  const dirs = await fs.readdir(path.join(workDir, 'snapshots'));
+  assert.deepEqual(dirs, ['snap-04']);
+});

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 远程同步设置区块（config-manager-sync）表面文案：zh 为源语言，en 镜像每个键。
  * 独立命名空间、独立文件：不触碰共享的 locales.ts（并行会话已改），零冲突。
  * 键集合经 `SyncKey` 类型在 client/index.ts 注册处做编译期校验。
@@ -62,6 +62,9 @@ export const zh = {
   'syncflow.needsReviewBadge': '需人工决策',
   'syncflow.empty': '远端快照与本地一致（无变更）',
   'syncflow.diffCount': '共 {count} 项差异',
+  'syncflow.keepLocalAll': '全部保留本地',
+  'syncflow.useRemoteAll': '全部采用远端',
+  'syncflow.bulkHint': '批量决策仅作用于冲突项；其余差异默认自动采用。',
   'syncflow.conflictTitle': '冲突解决',
   'syncflow.conflictUseLocal': '用本地',
   'syncflow.conflictUseRemote': '用远端',
@@ -183,6 +186,9 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.needsReviewBadge': 'Needs decision',
   'syncflow.empty': 'Remote snapshot matches local (no changes)',
   'syncflow.diffCount': '{count} change(s)',
+  'syncflow.keepLocalAll': 'Keep all local',
+  'syncflow.useRemoteAll': 'Adopt all remote',
+  'syncflow.bulkHint': 'Bulk decisions only apply to conflict items; other changes are adopted by default.',
   'syncflow.conflictTitle': 'Resolve conflict',
   'syncflow.conflictUseLocal': 'Use local',
   'syncflow.conflictUseRemote': 'Use remote',
