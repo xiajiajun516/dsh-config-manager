@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 客户端展示层（src/ui/*、src/client/common/*）的渲染文案目录（zh 源语言 / en 镜像）。
  *
  * 与 core 的 messages.ts 分工：本目录负责「客户端纯渲染层」（ReportView / ErrorBanner /
@@ -211,6 +211,10 @@ export const uiZh = {
   'sync.interval.6h': '6 小时',
   'sync.interval.12h': '12 小时',
   'sync.interval.24h': '24 小时',
+  // 自动同步倒计时（剩余时长插值）
+  'sync.duration.min': '{n} 分钟',
+  'sync.duration.hour': '{n} 小时',
+  'sync.duration.day': '{n} 天',
   // 自动同步历史（kind=autosync 行渲染）
   'sync.hist.autosync': '自动同步',
   'sync.hist.directionPull': '下载',
@@ -435,6 +439,9 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.interval.6h': '6 hr',
   'sync.interval.12h': '12 hr',
   'sync.interval.24h': '24 hr',
+  'sync.duration.min': '{n} min',
+  'sync.duration.hour': '{n} hr',
+  'sync.duration.day': '{n} day',
   'sync.hist.autosync': 'Auto Sync',
   'sync.hist.directionPull': 'Pull',
   'sync.hist.directionPush': 'Push',

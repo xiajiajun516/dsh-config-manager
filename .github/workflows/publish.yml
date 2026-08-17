@@ -71,8 +71,8 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 🐛 修复一键同步「确认导入」/「回滚到应用前」后点回滚报错 `ENOENT: …/sync/snapshots/<id>/snapshot.json`：apply 落盘的兜底快照目录与 /sync/rollback 读取目录不一致，现已统一到 `sync/snapshots/`，回滚能正确找到快照
-          - 📦 安装说明见下；升级后已产生的错误位置快照已迁移回 `sync/snapshots/`，之前的回滚按钮可继续使用
+          - ⏱️ 修复自动同步倒计时显示：剩余时长不再一律显示「约 30 分钟后」，改为显示真实剩余时间（分钟 / 小时 / 天，向上取整，如 5 分钟间隔显示「5 分钟后」）
+          - ⏱️ 自动同步到期时显示「已到同步时间，即将执行」（新增中英文案）
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest

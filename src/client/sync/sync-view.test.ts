@@ -8,9 +8,9 @@ import assert from 'node:assert/strict'
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts'
 import {
-  computeGithubLoginView, computeSyncButtons, computeSyncStatus, formatDateTime,
-  formatLastSync, githubPollMessage, kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
-  summarizePullChanges,
+  autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons, computeSyncStatus,
+  formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
+  pullReportView, pushReportView, severityLabel, summarizePullChanges,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
@@ -274,4 +274,41 @@ test('sync-view: githubPollMessage 映射轮询终止态（denied/expired/error/
   assert.match(githubPollMessage(success), /已安全写入/)
   const pending: GithubPollResponse = { status: 'pending', pollDelayMs: 5000 }
   assert.equal(githubPollMessage(pending), '', 'pending 不是终止态，不应产生消息')
+})
+
+/* ---------------------------------------------------------------- 自动同步倒计时 */
+
+test('sync-view: autosyncIntervalMs 各档位换算正确', () => {
+  assert.equal(autosyncIntervalMs('5m'), 5 * 60 * 1000)
+  assert.equal(autosyncIntervalMs('15m'), 15 * 60 * 1000)
+  assert.equal(autosyncIntervalMs('30m'), 30 * 60 * 1000)
+  assert.equal(autosyncIntervalMs('60m'), 60 * 60 * 1000)
+  assert.equal(autosyncIntervalMs('6h'), 6 * 60 * 60 * 1000)
+  assert.equal(autosyncIntervalMs('12h'), 12 * 60 * 60 * 1000)
+  assert.equal(autosyncIntervalMs('24h'), 24 * 60 * 60 * 1000)
+})
+
+test('sync-view: computeAutosyncCountdown 已到期 → 0；未到 → interval - elapsed；从未运行 → -1', () => {
+  assert.equal(computeAutosyncCountdown(0, 5 * 60 * 1000), 5 * 60 * 1000)
+  assert.equal(computeAutosyncCountdown(60 * 1000, 5 * 60 * 1000), 4 * 60 * 1000)
+  assert.equal(computeAutosyncCountdown(5 * 60 * 1000, 5 * 60 * 1000), 0)
+  assert.equal(computeAutosyncCountdown(6 * 60 * 1000, 5 * 60 * 1000), 0)
+  assert.equal(computeAutosyncCountdown(-1, 5 * 60 * 1000), -1)
+})
+
+test('sync-view: formatIntervalDuration 输出真实剩余时长（不再把 <1 小时一律显示成 30 分钟）', () => {
+  // 回归：旧实现 `if (minutes < 60) return '30 分钟'` 导致 5m 间隔永远显示「约 30 分钟后」
+  assert.equal(formatIntervalDuration(4 * 60 * 1000), '4 分钟')
+  assert.equal(formatIntervalDuration(5 * 60 * 1000), '5 分钟')
+  assert.equal(formatIntervalDuration(30 * 60 * 1000), '30 分钟')
+  // 整 60 分钟进位为 1 小时
+  assert.equal(formatIntervalDuration(60 * 60 * 1000), '1 小时')
+  // 向上取整：90 分钟 → 2 小时；6 小时整 → 6 小时
+  assert.equal(formatIntervalDuration(90 * 60 * 1000), '2 小时')
+  assert.equal(formatIntervalDuration(6 * 60 * 60 * 1000), '6 小时')
+  // 跨天：24 小时 → 1 天；48 小时 → 2 天
+  assert.equal(formatIntervalDuration(24 * 60 * 60 * 1000), '1 天')
+  assert.equal(formatIntervalDuration(48 * 60 * 60 * 1000), '2 天')
+  // 已到期/异常值兜底为 1 分钟，不出现 0 分钟
+  assert.equal(formatIntervalDuration(0), '1 分钟')
 })

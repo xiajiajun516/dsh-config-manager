@@ -344,8 +344,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     state.github.phase === 'starting' || state.github.phase === 'waiting' || state.github.phase === 'polling'
 
   const autosyncText = state.autosync !== null ? autosyncStatusText(state.autosync, uiT) : t('autosync.statusNever')
-  const autosyncCountdown = state.autosync !== null && state.autosync.elapsedMs >= 0
-    ? formatIntervalDuration(computeAutosyncCountdown(state.autosync.elapsedMs, autosyncIntervalMs(state.autosync.interval)), uiT)
+  /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
+  const autosyncCountdownMs = state.autosync !== null && state.autosync.elapsedMs >= 0
+    ? computeAutosyncCountdown(state.autosync.elapsedMs, autosyncIntervalMs(state.autosync.interval))
     : null
 
   return (
@@ -600,8 +601,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               <Badge kind={state.autosync?.lastRunStatus === 'failed' ? 'error' : state.autosync?.lastRunStatus === 'skipped' ? 'warn' : 'info'}>
                 {autosyncText}
               </Badge>
-              {autosyncCountdown !== null && state.autosyncEnabled && (
-                <Badge kind="info">{t('autosync.nextRun', { time: autosyncCountdown })}</Badge>
+              {autosyncCountdownMs !== null && state.autosyncEnabled && (
+                <Badge kind="info">
+                  {autosyncCountdownMs <= 0
+                    ? t('autosync.due')
+                    : t('autosync.nextRun', { time: formatIntervalDuration(autosyncCountdownMs, uiT) })}
+                </Badge>
               )}
             </div>
           </Card>

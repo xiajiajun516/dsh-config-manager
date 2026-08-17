@@ -460,15 +460,17 @@ export function computeAutosyncCountdown(elapsedMs: number, intervalMs: number):
   return Math.max(0, intervalMs - elapsedMs);
 }
 
-/** 间隔 ms → 可读时长（如「30 分钟」「6 小时」）。 */
+/**
+ * 剩余时长 → 可读文案（向上取整，避免出现「0 分钟」；≤0 视为 1 分钟兜底）。
+ * 例：4 分钟 →「4 分钟」；90 分钟 →「2 小时」；30 小时 →「2 天」。
+ */
 export function formatIntervalDuration(ms: number, t: UiT = zhUiT): string {
-  const minutes = Math.round(ms / 60000);
-  if (minutes < 60) return t('sync.interval.30m');
-  const hours = Math.round(minutes / 60);
-  if (hours === 6) return t('sync.interval.6h');
-  if (hours === 12) return t('sync.interval.12h');
-  if (hours === 24) return t('sync.interval.24h');
-  return `${hours}h`;
+  const totalMinutes = Math.max(1, Math.ceil(ms / 60000));
+  if (totalMinutes < 60) return t('sync.duration.min', { n: totalMinutes });
+  const totalHours = Math.ceil(totalMinutes / 60);
+  if (totalHours < 24) return t('sync.duration.hour', { n: totalHours });
+  const totalDays = Math.ceil(totalHours / 24);
+  return t('sync.duration.day', { n: totalDays });
 }
 
 /** 自动同步状态行的可读文案（未运行 / 上次状态 / 连续失败计数）。 */
