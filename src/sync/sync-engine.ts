@@ -68,6 +68,9 @@ export interface SyncEngineOptions {
   transportRef?: string;
   /** 本地散文件快照副本目录（push 落盘审计副本；不传则跳过本地落盘） */
   localSnapshotsDir?: string;
+  /** 一键回滚兜底快照目录（apply-items / apply-merge-plan 落盘；缺省 <stateDir>/snapshots，
+   *  与 Host /sync/rollback 路由读取的目录保持一致，否则回滚找不到 snapshot.json） */
+  rollbackSnapshotsDir?: string;
   /** pull 临时 ZIP 目录（缺省 os.tmpdir()） */
   zipDir?: string;
   exporterVersion?: string;
@@ -182,6 +185,7 @@ export class SyncEngine {
   private readonly snapshotIdFn: () => string;
   private readonly transportRef: string;
   private readonly localSnapshotsDir: string | undefined;
+  private readonly rollbackSnapshotsDir: string;
   private readonly zipDir: string;
   private readonly exporterVersion: string;
   private readonly fsx: SnapshotFs;
@@ -207,6 +211,7 @@ export class SyncEngine {
     this.snapshotIdFn = opts.snapshotId ?? (() => `sync-${crypto.randomUUID()}`);
     this.transportRef = opts.transportRef ?? '';
     this.localSnapshotsDir = opts.localSnapshotsDir;
+    this.rollbackSnapshotsDir = opts.rollbackSnapshotsDir ?? path.join(opts.stateDir, 'snapshots');
     this.zipDir = opts.zipDir ?? os.tmpdir();
     this.exporterVersion = opts.exporterVersion ?? '0.1.0';
     this.fsx = opts.fsx ?? createSnapshotFs();
@@ -530,7 +535,7 @@ export class SyncEngine {
         return { ok: true, applied: [], restoreId: '', rolledBack: false, review: [], warnings: [] };
       }
       // 2) 兜底：先建快照（拿到 restoreId 给 UI 一键回滚用）
-      const store: SnapshotStore = new FileSnapshotStore({ dir: this.stateDir });
+      const store: SnapshotStore = new FileSnapshotStore({ dir: this.rollbackSnapshotsDir });
       let snapshot: Snapshot | undefined;
       try {
         snapshot = await createSnapshot({
@@ -613,7 +618,7 @@ export class SyncEngine {
     }
 
     // 兜底快照（拿到 restoreId 给 UI 一键回滚用）
-    const store: SnapshotStore = new FileSnapshotStore({ dir: this.stateDir });
+    const store: SnapshotStore = new FileSnapshotStore({ dir: this.rollbackSnapshotsDir });
     let snapshot: Snapshot | undefined;
     try {
       snapshot = await createSnapshot({

@@ -101,7 +101,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.24'
+const PLUGIN_VERSION = '0.1.25'
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
