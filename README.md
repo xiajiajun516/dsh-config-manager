@@ -41,6 +41,18 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 
 ---
 
+## 📸 Screenshots
+
+| Export | Import Preview |
+|:---:|:---:|
+| ![One-click Export](assets/screenshot-export.png) | ![Import Preview](assets/screenshot-import-preview.png) |
+
+| Snapshot Restore | Remote Sync |
+|:---:|:---:|
+| ![Snapshot Restore](assets/screenshot-snapshots.png) | ![Remote Sync](assets/screenshot-sync.png) |
+
+---
+
 ## 🔄 How it works?
 
 ### Export (pack it up)

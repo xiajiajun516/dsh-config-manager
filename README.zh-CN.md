@@ -40,6 +40,18 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 
 ---
 
+## 📸 功能截图
+
+| 导出备份 | 导入预览 |
+|:---:|:---:|
+| ![一键导出](assets/screenshot-export.png) | ![导入预览](assets/screenshot-import-preview.png) |
+
+| 快照恢复 | 远程同步 |
+|:---:|:---:|
+| ![快照恢复](assets/screenshot-snapshots.png) | ![远程同步](assets/screenshot-sync.png) |
+
+---
+
 ## 🔄 它是怎么工作的？
 
 ### 导出（打包带走）
