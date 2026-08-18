@@ -32,7 +32,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 | 👀 | **Preview before import** | Full preview first — **never touches your config silently** |
 | ⚔️ | **Conflict handling** | Keep Current / Use Imported — you decide |
 | 🗺️ | **Path auto-mapping** | Detects dead absolute paths and lets you remap them |
-| 🔒 | **Secret safety** | API Keys are never exported; encrypted backups restore them with the password, non-encrypted imports ask you to re-enter |
+| 🔒 | **Secret safety** | API Keys are not exported by default — non-encrypted imports ask you to re-enter; encrypted backups restore them with the password |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
 | 🔄 | **Remote Sync** | Push/pull portable config via a private Git repo (secrets never sync) |
@@ -177,7 +177,7 @@ When the target already has a same-named item, you choose:
 | Scenario | Behavior |
 |---|---|
 | Default backup | **No secret values at all** — only records which keys are needed |
-| Encrypted backup (optional) | AES-256-GCM with a password; the password is **never written to the file** |
+| Encrypted backup (explicit opt-in) | scrypt + AES-256-GCM, random salt & IV per export; secrets never leave as plaintext, and the password is **never written to the file** |
 | Encrypted backup import | The export-time password is required: enter → verify → credentials are restored; **no password, no import** |
 | After non-encrypted import | "3 secrets need re-entry" — values stay in memory only |
 
@@ -226,10 +226,10 @@ Every overwrite/delete is first copied to `<snapshotDir>/pre-restore/` so you ca
 ## 🛡️ Security
 
 - **The default backup contains no secret values** — a hard invariant, enforced at export
-- **Not exported**: API Keys / passwords / tokens / cookies / sessions / device unique ID / logs & cache / plugin binaries
+- **Not exported by default**: API Keys / passwords / tokens / cookies / sessions / device unique ID / logs & cache / plugin binaries
 - **A ZIP is untrusted input**: defends against Zip Slip, malicious paths, zip bombs, corrupt archives — any trigger rejects the whole file
 - **Logs are fully redacted** — secret values never reach logs
-- **Encrypted backup**: scrypt + AES-256-GCM; the password lives in memory only
+- **Encrypted backup (explicit opt-in)**: secrets are exported only as scrypt + AES-256-GCM ciphertext — random salt & IV per export, never plaintext; the password lives in memory only
 
 ---
 
@@ -247,7 +247,7 @@ Every overwrite/delete is first copied to `<snapshotDir>/pre-restore/` so you ca
 ## ❓ FAQ
 
 **Q: Will my API Key be in the backup?**
-No. The default backup **never contains any secret value** — only records which keys you'll need to re-enter.
+Not by default. The default backup **never contains any secret value** — only records which keys you'll need to re-enter. If you explicitly choose an **encrypted backup**, secrets are included, but only as scrypt + AES-256-GCM ciphertext (random salt & IV per export) — never plaintext.
 
 **Q: Will importing overwrite my existing config?**
 Not silently. Conflicts ask you to choose (Keep Current / Use Imported); the target is auto-backed-up and can roll back.
