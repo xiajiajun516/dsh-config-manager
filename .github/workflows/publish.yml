@@ -71,9 +71,10 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 🔄 修复自动同步无法在后台持续运行的问题：定时器改为循环调度，每轮执行（成功/跳过/失败）结束后自动重排下一次，不再只同步一次就停摆
-          - 🧹 修复 run 注册表滞留导致自动同步被冲突拦截：每次执行后正确收尾 autosync run，后续轮次不再因 RunConflictError 永久跳过
-          - 🛑 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，避免旧调度器残留导致重复后台同步
+          - 🛒 新增「配置市场」(Marketplace)：从公开 Git 仓库单向浏览 + 安全下载配置条目——分层信任（目录 manifest 校验 → config.zip 走现有安全导入管道），任何网络来源条目默认不可信，导入前逐条展示来源/校验和并要求确认
+          - 🔁 远程同步新增 **WebDAV 通道**：与既有 Git 私库并列双通道；WebDAV 密码经 DSH credentials 槽位读取，绝不落盘、绝不落日志；切换通道从新远端空基线重新开始
+          - 🚑 新增 `reinstall` 一键救援命令：跨平台重装 @deepseek-ai/dsh launcher；危险清理项默认不选、需二次 `YES` 确认、wipe 前自动 `.reinstall-backup` 应急备份，DSH 无法启动时也能从 CLI 拉回配置
+          - 📦 新增 `agent-instructions` 配置区块（并纳入风险分级）
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest
