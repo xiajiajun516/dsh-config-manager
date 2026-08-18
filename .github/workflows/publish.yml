@@ -71,10 +71,10 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 🛒 新增「配置市场」(Marketplace)：从公开 Git 仓库单向浏览 + 安全下载配置条目——分层信任（目录 manifest 校验 → config.zip 走现有安全导入管道），任何网络来源条目默认不可信，导入前逐条展示来源/校验和并要求确认
-          - 🔁 远程同步新增 **WebDAV 通道**：与既有 Git 私库并列双通道；WebDAV 密码经 DSH credentials 槽位读取，绝不落盘、绝不落日志；切换通道从新远端空基线重新开始
-          - 🚑 新增 `reinstall` 一键救援命令：跨平台重装 @deepseek-ai/dsh launcher；危险清理项默认不选、需二次 `YES` 确认、wipe 前自动 `.reinstall-backup` 应急备份，DSH 无法启动时也能从 CLI 拉回配置
-          - 📦 新增 `agent-instructions` 配置区块（并纳入风险分级）
+          - 🐛 修复 v0.1.29 市场面板在 **Web 端加载失败**（`process is not defined`）：`builtin.ts` 顶层直接读取 `process.env`，浏览器没有 `process` 全局导致插件启动崩溃。现已做环境防御——Web 端安全回退默认官方市场地址，host/Node 端仍保留 `DSH_CONFIG_MARKET_URL` 覆盖
+          - 🛒 配置市场 (Marketplace)：浏览 + 安全下载，分层信任、网络来源默认不可信并逐条确认
+          - 🔁 远程同步 **WebDAV 通道**：与 Git 私库双通道，密码走 credentials 槽位、不落盘/不落日志
+          - 🚑 `reinstall` 一键救援命令：跨平台重装 launcher，危险清理默认不选 + 二次 `YES` 确认 + 自动应急备份
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest
