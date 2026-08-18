@@ -4,9 +4,12 @@
  * - Quick：一键导出推荐分区（ExportFlow.quickSelection()）；
  * - Custom：按 §1 分组目录（EXPORT_GROUPS × DEFAULT_CATEGORIES）逐项勾选，
  *   ExportFlow.validateSelection() 给出设备相关分区警告；
- * - Include secrets：可选加密备份（需设置加密密码，密码仅本次内存使用，
- *   经 api.exportPassword 随请求体传给 Host 半，绝不落盘/入 manifest，
- *   **也绝不进入 sessionStorage** —— m2 白名单剔除，刷新后要求重输）；
+ * - 安全选项（两个独立选项）：
+ *   - 加密备份：勾选后设置加密密码（AES-256-GCM），备份标记 encrypted、导入需密码；
+ *     密码仅本次内存使用，经 api.exportPassword 随请求体传给 Host 半，绝不落盘/入
+ *     manifest，**也绝不进入 sessionStorage** —— m2 白名单剔除，刷新后要求重输；
+ *   - 导出密钥：把真实凭据值写入备份；勾选时自动联动选中加密（密钥绝不明文存储），
+ *     取消加密会一并取消导出密钥（core 安全不变量 includeSecrets ⇒ encryption）。
  * - 进度：ExportFlow.run 发出 ProgressEvent → ProgressBar；
  * - 结果：ReportView(export) + 下载按钮（File System Access API 流式落盘）。
  *
@@ -44,6 +47,7 @@ export function ExportView({ api, t }: ExportViewProps) {
   const mode = exp.mode
   const selection = exp.selection
   const includeSecrets = exp.includeSecrets
+  const encrypt = exp.encrypt
   // 密码字段仅内存（store 的敏感字段，绝不序列化进 sessionStorage）
   const password = exp.password
   const passwordConfirm = exp.passwordConfirm
@@ -57,7 +61,12 @@ export function ExportView({ api, t }: ExportViewProps) {
     runStore.patch({ export: { mode: next } })
   }
   const setIncludeSecrets = (next: boolean): void => {
-    runStore.patch({ export: { includeSecrets: next } })
+    // 导出密钥联动加密：勾选导出密钥时默认同时选中加密（密钥绝不明文存储）
+    runStore.patch({ export: { includeSecrets: next, encrypt: next ? true : exp.encrypt } })
+  }
+  const setEncrypt = (next: boolean): void => {
+    // 取消加密时若仍勾选着导出密钥 → 一并取消（密钥必须以加密形式备份，安全底线）
+    runStore.patch({ export: { encrypt: next, includeSecrets: next ? includeSecrets : false } })
   }
   const setPassword = (value: string): void => {
     runStore.patch({ export: { password: value } })
@@ -73,7 +82,7 @@ export function ExportView({ api, t }: ExportViewProps) {
   }, [selection])
 
   const passwordInvalid =
-    includeSecrets && (password === '' || password !== passwordConfirm)
+    encrypt && (password === '' || password !== passwordConfirm)
 
   /** 执行导出（Quick 或 Custom） */
   const runExport = async (): Promise<void> => {
@@ -85,8 +94,10 @@ export function ExportView({ api, t }: ExportViewProps) {
     runStore.watchRunning('export', 500)
     try {
       // 加密密码随本次导出请求体传给 Host 半（仅内存）
-      api.exportPassword = includeSecrets ? password : null
-      const run = await flow.run(mode, selection, { includeSecrets })
+      api.exportPassword = encrypt ? password : null
+      // includeSecrets 只表示「导出密钥」；安全上密钥必须以加密形式备份，
+      // UI 联动保证 includeSecrets ⇒ encrypt，这里再兜底一次
+      const run = await flow.run(mode, selection, { includeSecrets: includeSecrets && encrypt })
       // ExportResponse 携带 runId（/progress 查询与刷新恢复用）；控制器类型不含，运行时对象有
       const runId = (run as { runId?: unknown }).runId
       runStore.patch({
@@ -184,32 +195,39 @@ export function ExportView({ api, t }: ExportViewProps) {
         </Banner>
       )}
 
-      {/* 加密备份选项 */}
+      {/* 安全选项：加密备份 / 导出密钥（两个独立选项） */}
       <Card className={css.optionsCard}>
+        <span className={css.optionsHeader}>{t('export.security')}</span>
+        <Checkbox
+          checked={encrypt}
+          onChange={setEncrypt}
+          label={<span className={css.categoryName}>{t('export.encrypt')}</span>}
+        />
+        <div className={css.hint}>{t('export.encryptHint')}</div>
+        {encrypt && (
+          <div className={css.secretFields}>
+            <label className={css.field}>
+              <span className={css.fieldLabel}>{t('export.password')}</span>
+              <input type="password" className={css.input} value={password} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPassword(e.target.value) }} autoComplete="new-password" />
+            </label>
+            <label className={css.field}>
+              <span className={css.fieldLabel}>{t('export.passwordConfirm')}</span>
+              <input type="password" className={css.input} value={passwordConfirm} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPasswordConfirm(e.target.value) }} autoComplete="new-password" />
+            </label>
+            {password !== '' && password !== passwordConfirm && (
+              <span className={css.formError}>{t('export.passwordMismatch')}</span>
+            )}
+            {password === '' && encrypt && (
+              <span className={css.formError}>{t('export.passwordRequired')}</span>
+            )}
+          </div>
+        )}
         <Checkbox
           checked={includeSecrets}
           onChange={setIncludeSecrets}
           label={<span className={css.categoryName}>{t('export.includeSecrets')}</span>}
         />
         <div className={css.hint}>{t('export.includeSecretsHint')}</div>
-        {includeSecrets && (
-          <div className={css.secretFields}>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('export.password')}</span>
-              <input type="password" className={css.input} value={password} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPassword(e.target.value) }} />
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('export.passwordConfirm')}</span>
-              <input type="password" className={css.input} value={passwordConfirm} onChange={(e: ChangeEvent<HTMLInputElement>) => { setPasswordConfirm(e.target.value) }} />
-            </label>
-            {password !== '' && password !== passwordConfirm && (
-              <span className={css.formError}>{t('export.passwordMismatch')}</span>
-            )}
-            {password === '' && includeSecrets && (
-              <span className={css.formError}>{t('export.passwordRequired')}</span>
-            )}
-          </div>
-        )}
       </Card>
 
       {/* 执行 */}

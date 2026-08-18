@@ -109,6 +109,7 @@ test('m2-refresh: 非敏感状态往返恢复，敏感字段刷新后清空', ()
       mode: 'custom',
       selection: ['settings', 'plugins'],
       includeSecrets: true,
+      encrypt: true,
       downloaded: true,
       password: 'pw123',
       passwordConfirm: 'pw123',
@@ -130,6 +131,7 @@ test('m2-refresh: 非敏感状态往返恢复，敏感字段刷新后清空', ()
   assert.equal(st.export.mode, 'custom')
   assert.deepEqual(st.export.selection, ['settings', 'plugins'])
   assert.equal(st.export.includeSecrets, true)
+  assert.equal(st.export.encrypt, true, 'encrypt 为非敏感选项，刷新后恢复')
   assert.equal(st.export.downloaded, true)
   assert.equal(st.export.password, '', '密码刷新后清空')
   assert.equal(st.export.passwordConfirm, '', '确认密码刷新后清空')

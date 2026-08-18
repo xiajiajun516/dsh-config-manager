@@ -182,6 +182,112 @@ test('push: portable 过滤——deviceSpecific/platformSpecific 分区不参与
   }
 });
 
+test('push: 显式 sections（高级/自定义导出）→ 只同步指定 portable 分区', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sections-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    await ctx.fs.writeFile('skills/coding.md', Buffer.from('# Coding\n', 'utf8'));
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-sel', sections: ['settings', 'skills'] });
+    assert.equal(report.ok, true);
+    const uploaded = transport.snapshots.get('sync-sel')!;
+    // 只含勾选的 portable 分区
+    assert.deepEqual(uploaded.manifest.sectionIds.sort(), ['settings', 'skills']);
+    assert.ok('settings' in uploaded.sections, 'settings 进入');
+    assert.ok('skills' in uploaded.sections, 'skills 进入');
+    // 未勾选的 portable 分区（providers/plugins/ui 等）不进入
+    assert.ok(!('providers' in uploaded.sections), '未勾选分区不进入');
+    assert.ok(!('plugins' in uploaded.sections), '未勾选分区不进入');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: sections 含非 portable / 未知分区 → 警告跳过，其余照常同步', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sections-skip-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-mix', sections: ['settings', 'mcp' as SectionId, 'nope' as SectionId] });
+    assert.equal(report.ok, true);
+    const uploaded = transport.snapshots.get('sync-mix')!;
+    assert.deepEqual(uploaded.manifest.sectionIds, ['settings'], '只同步 portable 且已知的分区');
+    // 非法/非 portable 分区给出明确告警（不静默）
+    const warnText = report.warnings.join('\n');
+    assert.ok(/mcp/.test(warnText), `告警应点名 mcp：${warnText}`);
+    assert.ok(/nope/.test(warnText), `告警应点名 nope：${warnText}`);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: sections 全为无效/非 portable → ok=false + 明确 message', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sections-none-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-empty', sections: ['credentialsStatus'] });
+    assert.equal(report.ok, false);
+    assert.equal(transport.snapshots.has('sync-empty'), false, '无有效 portable 分区时不上传快照');
+    assert.ok(report.message && report.message.includes('没有可同步'), `message：${report.message}`);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: sections 缺省/空数组 → 全部 portable 推荐分区（默认/快速导出模式）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sections-default-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-def', sections: [] });
+    assert.equal(report.ok, true);
+    const uploaded = transport.snapshots.get('sync-def')!;
+    // 空数组 = 全量（默认模式）；应含 settings/providers 等多个 portable
+    assert.ok('settings' in uploaded.sections);
+    assert.ok('providers' in uploaded.sections);
+    assert.ok(uploaded.manifest.sectionIds.length >= 4, `应同步全部 portable 分区，实际 ${uploaded.manifest.sectionIds.length}`);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 构造注入 sections（自动同步持久化配置）→ 未显式传 opts 也按注入范围同步', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-ctor-sections-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    // 模拟 autosync：makeSyncEngine 注入持久化的高级模式勾选（advanced + sections）
+    const engine = makeEngine({
+      ctx, transport, stateDir: tmp,
+      extra: { sections: ['settings', 'skills'] },
+    });
+
+    // 不传 opts.sections（调度器 Phase C 调用 engine.push() 的样子）
+    const report = await engine.push({ snapshotId: 'sync-auto' });
+    assert.equal(report.ok, true);
+    const uploaded = transport.snapshots.get('sync-auto')!;
+    assert.deepEqual(uploaded.manifest.sectionIds.sort(), ['settings', 'skills']);
+    assert.ok(!('providers' in uploaded.sections), '注入范围外的 portable 分区不进入');
+    assert.ok(!('plugins' in uploaded.sections));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('pull: 复用 Importer 预览流程，绝不直接写配置，产出差异报告', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-pull-'));
   try {
@@ -802,6 +908,61 @@ test('push: 裁剪单个 delete 失败 → 只告警不上抛，其余旧快照�
     // remote-02 仍残留（删除失败），其余旧快照被删
     assert.ok(transport.snapshots.has('remote-02'), '删除失败的 remote-02 应残留');
     assert.ok(!transport.snapshots.has('remote-01'), '其余旧快照照常删除');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── t6：事件驱动触发检测（§3.1 本地变化 / §3.2 远端新快照） ─────────────────
+
+test('hasNewRemoteSnapshot: 空远端→false；从未同步且远端非空→true；远端最新=祖先→false；比祖先新→true', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-hasnew-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    // 远端为空 → 无新生
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '空远端 → false');
+
+    // push：上传 sync-001 并记录祖先 = sync-001（远端最新即祖先）
+    await engine.push({ snapshotId: 'sync-001' });
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '远端最新=本地祖先 → 无新生');
+
+    // 远端出现比祖先更新的快照 → 有新生
+    const base = transport.snapshots.get('sync-001')!;
+    const newer: SyncSnapshot = {
+      ...base,
+      id: 'remote-newer',
+      createdAt: '2026-08-16T13:00:00.000Z',
+    };
+    transport.snapshots.set('remote-newer', newer);
+    transport.metas.push(computeSnapshotMeta(newer));
+    assert.equal(await engine.hasNewRemoteSnapshot(), true, '远端出现比祖先更新的快照 → 有新生');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('hasLocalChanges: 从未同步→true；推后无改动→false；本地改动→true', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-haslocal-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    // 从未同步（sync-state.sections 为空）→ 视为有改动
+    assert.equal(await engine.hasLocalChanges(), true, '从未同步 → true');
+
+    // push 记录基线后：本地与基线一致 → 无改动
+    await engine.push({ snapshotId: 'sync-001' });
+    assert.equal(await engine.hasLocalChanges(), false, '推后本地与基线一致 → false');
+
+    // 改动一个 portable 分区（settings.general theme dark→light）→ 有改动
+    ctx.settings.ns.set('general', { value: { theme: 'light', language: 'zh-CN' }, revision: 4, secrets: [] });
+    assert.equal(await engine.hasLocalChanges(), true, '改动 portable 分区 → true');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

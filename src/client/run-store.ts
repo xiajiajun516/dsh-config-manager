@@ -70,7 +70,10 @@ export function defaultCustomSelection(): SectionId[] {
 export interface PersistedExportState {
   mode: ExportMode
   selection: SectionId[]
+  /** 是否导出真实密钥（凭据值）；勾选时默认联动勾选 encrypt（密钥绝不明文） */
   includeSecrets: boolean
+  /** 是否加密备份（独立选项；不导出密钥也可单独加密） */
+  encrypt: boolean
   running: boolean
   progress: RunProgress | null
   result: ExportRunResult | null
@@ -87,6 +90,8 @@ export interface PersistedImportState {
   zipPath: string | null
   /** select 步骤已选备份文件名（换选/取消选择的 UI 状态；非敏感） */
   selectedFileName: string | null
+  /** 上传文件是否为整体加密备份容器（非敏感；UI 据此先进入解密容器阶段再分析） */
+  containerEncrypted: boolean
   analysis: ImportAnalysis | null
   plan: ImportPlan | null
   result: ImportResult | null
@@ -129,6 +134,8 @@ export interface ImportLiveState extends PersistedImportState {
   decryptPassword: string
   /** 解密验证成功后覆盖的凭据 ref 名（仅内存、非值）；secrets 阶段据此剔除已恢复项 */
   decryptRefs: string[]
+  /** 整体加密备份容器已解锁（仅内存；刷新后要求重输密码重新解锁） */
+  archiveUnlocked: boolean
   /** 冲突决策收集器实例（仅内存；刷新后由 plan + conflictResolutions 重建） */
   conflictCollector: ConflictCollector | null
 }
@@ -158,6 +165,7 @@ function defaultExportState(): ExportLiveState {
     mode: 'quick',
     selection: defaultCustomSelection(),
     includeSecrets: false,
+    encrypt: false,
     password: '',
     passwordConfirm: '',
     running: false,
@@ -174,6 +182,7 @@ function defaultImportState(): ImportLiveState {
     step: 'select',
     zipPath: null,
     selectedFileName: null,
+    containerEncrypted: false,
     analysis: null,
     plan: null,
     result: null,
@@ -186,6 +195,7 @@ function defaultImportState(): ImportLiveState {
     secretInputs: {},
     decryptPassword: '',
     decryptRefs: [],
+    archiveUnlocked: false,
     uploading: false,
     running: false,
     progress: null,
@@ -215,7 +225,7 @@ export function toPersistedState(state: StoreState): PersistedState {
   const { password: _password, passwordConfirm: _passwordConfirm, ...exportRest } = state.export
   const {
     secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
-    conflictCollector: _conflictCollector, ...importRest
+    archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector, ...importRest
   } = state.import
   return { v: 1, view: state.view, export: exportRest, import: importRest }
 }
@@ -253,11 +263,14 @@ interface WizardInternals {
   decisions: ImportDecisions
   secretInputs: Record<string, string>
   decryptPassword: string
+  archiveUnlocked: boolean
+  unlockedZipPath: string | null
 }
 
 /**
  * 把 store 的导入快照写回 ImportWizard 控制器私有字段（受控 rehydrate）。
- * - 只写非敏感字段；secretInputs / decryptPassword 恒置空 —— 刷新后要求重输；
+ * - 只写非敏感字段；secretInputs / decryptPassword / archiveUnlocked / unlockedZipPath
+ *   恒置空 —— 刷新后要求重输密码重新解锁容器；
  * - 仅在 load / hydrate / resume-settle 时调用，不参与正常交互路径。
  */
 function writeWizardSnapshot(wizard: ImportWizard, imp: ImportLiveState): void {
@@ -276,6 +289,8 @@ function writeWizardSnapshot(wizard: ImportWizard, imp: ImportLiveState): void {
   }
   internals.secretInputs = {}
   internals.decryptPassword = ''
+  internals.archiveUnlocked = false
+  internals.unlockedZipPath = null
 }
 
 /** 由 plan + 已持久化的决策重建 ConflictCollector（刷新恢复用）。 */
@@ -460,12 +475,25 @@ export class RunStore {
         ...parsed.import,
         // 旧版持久化载荷可能缺 selectedFileName（undefined）→ 归一到 null
         selectedFileName: parsed.import.selectedFileName ?? null,
-        // 硬性：秘密补录值 / 解密密码 / 解密覆盖清单绝不从存储恢复；collector 由 plan+决策重建
+        // 旧版持久化载荷可能缺 containerEncrypted（undefined）→ 归一到 false
+        containerEncrypted: parsed.import.containerEncrypted === true,
+        // 硬性：秘密补录值 / 解密密码 / 解密覆盖清单 / 容器解锁标志绝不从存储恢复；
+        // collector 由 plan+决策重建
         secretInputs: {},
         decryptPassword: '',
         decryptRefs: [],
+        archiveUnlocked: false,
         conflictCollector: null,
       },
+    }
+    // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
+    // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。
+    if (
+      this.state.import.containerEncrypted &&
+      this.state.import.phase !== 'preview' &&
+      this.state.import.phase !== 'decrypt-archive'
+    ) {
+      this.state.import.phase = 'decrypt-archive'
     }
     // 安全兜底：confirm 阶段若仍缺必填 secret（刷新后 secretInputs 必为空），
     // 强制退回 secrets 阶段要求重输（验收 m2-refresh 的「secrets 阶段要求重输」）。
@@ -474,10 +502,12 @@ export class RunStore {
       this.state.import.phase = 'secrets'
     }
     // 安全兜底：加密备份的解密密码绝不从存储恢复（decryptPassword 必为空）→
-    // 刷新后只要已越过解密阶段（conflicts/secrets/confirm）就强制退回 decrypt 重输，
+    // 刷新后只要已越过解密阶段（conflicts/secrets/confirm）就强制退回解密阶段重输，
     // 否则执行时会被 core 的加密不变量拒绝（import.encryptedPasswordRequired）。
+    // 容器加密备份（containerEncrypted）统一回到上面的 decrypt-archive 阶段，不做此分支。
     const analysis = this.state.import.analysis
     if (
+      !this.state.import.containerEncrypted &&
       analysis?.encrypted === true &&
       this.state.import.decryptPassword === '' &&
       this.state.import.phase !== 'preview' &&

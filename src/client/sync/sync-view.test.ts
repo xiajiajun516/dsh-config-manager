@@ -6,11 +6,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
-import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts'
+import type { GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
   autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
   formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
-  pullReportView, pushReportView, severityLabel, summarizePullChanges,
+  pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
+  severityLabel, summarizePullChanges, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
@@ -21,6 +22,42 @@ test('sync-view: 私有仓库强制提示文案存在且强调私有', () => {
   assert.match(hint, /public/)
   assert.match(hint, /token/)
 })
+
+/* ---------------------------------------------------------------- 同步分区模式（默认/高级） */
+
+const SYNC_CATALOG: SyncSectionInfo[] = [
+  { id: 'settings', displayName: 'Settings', portability: 'portable', defaultIncluded: true },
+  { id: 'providers', displayName: 'Providers & Models', portability: 'portable', defaultIncluded: true },
+  { id: 'plugins', displayName: 'Plugins', portability: 'portable', defaultIncluded: true },
+  { id: 'skills', displayName: 'Skills', portability: 'portable', defaultIncluded: true },
+];
+
+test('sync-view: syncSectionOptions 把 host 目录投影为勾选项（保 id 顺序）', () => {
+  const opts = syncSectionOptions(SYNC_CATALOG)
+  assert.deepEqual(opts.map((o) => o.id), ['settings', 'providers', 'plugins', 'skills'])
+  assert.equal(opts[0]?.label, 'Settings')
+  assert.equal(opts[0]?.defaultIncluded, true)
+});
+
+test('sync-view: recommendedSyncSections 只取可移植且默认包含的分区（默认/快速导出模式）', () => {
+  const rec = recommendedSyncSections(SYNC_CATALOG)
+  assert.deepEqual(rec, ['settings', 'providers', 'plugins', 'skills'])
+});
+
+test('sync-view: recommendedSyncSections 排除非 portable / 非默认包含分区', () => {
+  const catalog: SyncSectionInfo[] = [
+    { id: 'settings', displayName: 'Settings', portability: 'portable', defaultIncluded: true },
+    { id: 'credentialsStatus', displayName: 'Credentials', portability: 'deviceSpecific', defaultIncluded: true },
+    { id: 'mcp', displayName: 'MCP', portability: 'platformSpecific', defaultIncluded: true },
+    { id: 'pluginFiles', displayName: 'Plugin Files', portability: 'deviceSpecific', defaultIncluded: false },
+  ];
+  assert.deepEqual(recommendedSyncSections(catalog), ['settings'])
+});
+
+test('sync-view: 空/缺省目录 → 推荐分区为空数组（UI 显示「至少选一个」场景）', () => {
+  assert.deepEqual(recommendedSyncSections([]), [])
+  assert.deepEqual(syncSectionOptions([]), [])
+});
 
 /* ---------------------------------------------------------------- 按钮状态 */
 
@@ -81,12 +118,17 @@ test('sync-view: summarizePullChanges 按 severity 计数', () => {
   assert.equal(summary.needsReview, false)
 })
 
-test('sync-view: summarizePullChanges 对冲突/安装/密钥/依赖项标记 needsReview', () => {
+test('sync-view: summarizePullChanges 对冲突/密钥/依赖项标记 needsReview（安装插件不算）', () => {
+  // 插件安装随同步自动采用（product requirement），不标记 needsReview
   const summary = summarizePullChanges([
     change({ kind: 'Conflict' }),
     change({ kind: 'Install' }),
+    change({ kind: 'Install' }),
   ])
   assert.equal(summary.needsReview, true)
+  // 仅 Install 项 → 不作为需人工决策项
+  const onlyInstall = summarizePullChanges([change({ kind: 'Install' })])
+  assert.equal(onlyInstall.needsReview, false)
 })
 
 test('sync-view: summarizePullChanges 空数组 → total 0 且不需决策', () => {
@@ -334,4 +376,58 @@ test('sync-view: formatIntervalDuration 输出真实剩余时长（不再把 <1 
   assert.equal(formatIntervalDuration(48 * 60 * 60 * 1000), '2 天')
   // 已到期/异常值兜底为 1 分钟，不出现 0 分钟
   assert.equal(formatIntervalDuration(0), '1 分钟')
+})
+
+/* ---------------------------------------------------------------- WebDAV 预设 */
+
+test('sync-view: WEBDAV_PRESETS 含自定义与 6 个常见服务器,首项为自定义', () => {
+  assert.equal(WEBDAV_PRESETS[0]?.id, 'custom')
+  assert.ok(WEBDAV_PRESETS.length >= 6)
+  const ids = WEBDAV_PRESETS.map((p) => p.id)
+  assert.ok(ids.includes('jianguoyun'))
+  assert.ok(ids.includes('nextcloud'))
+  assert.ok(ids.includes('box'))
+})
+
+test('sync-view: presetById 已知 id → 对应预设；未知 → 自定义兜底', () => {
+  assert.equal(presetById('jianguoyun').url, 'https://dav.jianguoyun.com/dav/')
+  assert.equal(presetById('nextcloud').url, 'https://<server>/remote.php/dav/files/<user>/')
+  assert.equal(presetById('unknown-xyz').id, 'custom', '未知 id 回退自定义')
+})
+
+test('sync-view: presetIdForUrl 空/自定义 → custom；匹配常见前缀 → 对应预设', () => {
+  assert.equal(presetIdForUrl(''), 'custom')
+  assert.equal(presetIdForUrl('https://anything.example/x'), 'custom')
+  assert.equal(presetIdForUrl('https://dav.jianguoyun.com/dav/'), 'jianguoyun')
+  assert.equal(presetIdForUrl('https://dav.box.com/dav/my-config/'), 'box')
+})
+
+/* ---------------------------------------------------------------- 通道选择持久化 */
+
+/** 内存 mock storage（node 无 localStorage） */
+function makeStorage(): { getItem(k: string): string | null; setItem(k: string, v: string): void } {
+  const map = new Map<string, string>()
+  return {
+    getItem: (k) => map.get(k) ?? null,
+    setItem: (k, v) => { map.set(k, v) },
+  }
+}
+
+test('sync-view: readStoredChannel 无值/非法 → null；git/webdav → 对应通道', () => {
+  const s = makeStorage()
+  assert.equal(readStoredChannel(s), null, '无记录 → null')
+  s.setItem('dsh.configManager.syncChannel', 'webdav')
+  assert.equal(readStoredChannel(s), 'webdav')
+  s.setItem('dsh.configManager.syncChannel', 'git')
+  assert.equal(readStoredChannel(s), 'git')
+  s.setItem('dsh.configManager.syncChannel', 'garbage')
+  assert.equal(readStoredChannel(s), null, '非法值 → null')
+})
+
+test('sync-view: writeStoredChannel 写回 localStorage,可被 readStoredChannel 读回', () => {
+  const s = makeStorage()
+  writeStoredChannel('webdav', s)
+  assert.equal(readStoredChannel(s), 'webdav')
+  writeStoredChannel('git', s)
+  assert.equal(readStoredChannel(s), 'git')
 })

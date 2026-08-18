@@ -54,7 +54,7 @@ test('S-01 api.status()：GET 到 /sync/status，解析配置/凭据/上次同�
   assert.equal(lastCall()?.init?.method, undefined, 'GET 不设 method');
 });
 
-test('S-02 api.push()：POST /sync/push，请求体携带 repoUrl/token/gitBin', async () => {
+test('S-02 api.push()：POST /sync/push，请求体携带 repoUrl/token', async () => {
   const calls: FetchCall[] = [];
   installFetchMock((call) => {
     calls.push(call);
@@ -62,7 +62,7 @@ test('S-02 api.push()：POST /sync/push，请求体携带 repoUrl/token/gitBin',
   });
 
   const api = new SyncApi();
-  const result = await api.push({ repoUrl: 'https://github.com/u/r.git', token: 'ghp_secret', gitBin: 'git' });
+  const result = await api.push({ repoUrl: 'https://github.com/u/r.git', token: 'ghp_secret' });
   assert.equal(result.ok, true);
   assert.equal(result.snapshotId, 'sync-1');
   assert.equal(calls.length, 1);
@@ -71,7 +71,7 @@ test('S-02 api.push()：POST /sync/push，请求体携带 repoUrl/token/gitBin',
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
   assert.equal(sent['repoUrl'], 'https://github.com/u/r.git');
   assert.equal(sent['token'], 'ghp_secret');
-  assert.equal(sent['gitBin'], 'git');
+  assert.equal(sent['gitBin'], undefined);
 });
 
 test('S-03 api.pull()：POST /sync/pull，strategy 缺省透传 merge，响应含差异摘要', async () => {
@@ -339,11 +339,11 @@ test('S-17 WebDAV 密码凭据引用名常量存在', () => {
   assert.equal(SYNC_WEBDAV_CREDENTIAL_REF, 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD');
 });
 
-test('S-18 api.status()：webdav 通道 → 解析 webdav 配置状态（url/usernameConfigured/passwordConfigured，无 secret 值）', async () => {
+test('S-18 api.status()：webdav 通道 → 解析 webdav 配置状态（url/username/usernameConfigured/passwordConfigured，无 secret 值）', async () => {
   const body = {
     ok: true, configured: true, credentialConfigured: false, credentialWritable: true,
     webdav: {
-      url: 'https://dav.example.com/dav/config', usernameConfigured: true, passwordConfigured: true,
+      url: 'https://dav.example.com/dav/config', username: 'alice', usernameConfigured: true, passwordConfigured: true,
     },
     lastSyncAt: '2026-08-16T10:30:00.000Z', sectionCount: 2,
     transport: { type: 'webdav', ref: 'https://dav.example.com/dav/config' },
@@ -357,14 +357,14 @@ test('S-18 api.status()：webdav 通道 → 解析 webdav 配置状态（url/use
   const api = new SyncApi();
   const result = await api.status();
   assert.equal(result.webdav?.url, 'https://dav.example.com/dav/config');
+  assert.equal(result.webdav?.username, 'alice', 'status 可回传 username 值（非敏感，供表单回填）');
   assert.equal(result.webdav?.usernameConfigured, true);
   assert.equal(result.webdav?.passwordConfigured, true);
   assert.equal('password' in (result.webdav ?? {}), false, 'status 契约不得携带 webdav 密码值');
-  assert.equal('username' in (result.webdav ?? {}), false, 'status 契约不得携带 webdav 用户名字段（用布尔标记）');
   assert.equal(lastCall()?.url, SYNC_API.status);
 });
 
-test('S-19 api.push()：transport=webdav → 请求体携带 webdav.url/username/password（不携带 git 字段）', async () => {
+test('S-19 api.push()：transport=webdav → 请求体携带顶层扁平 url/username/password（不携带 git 字段）', async () => {
   const calls: FetchCall[] = [];
   installFetchMock((call) => {
     calls.push(call);
@@ -373,32 +373,33 @@ test('S-19 api.push()：transport=webdav → 请求体携带 webdav.url/username
   const api = new SyncApi();
   const result = await api.push({
     transport: 'webdav',
-    webdav: { url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass' },
+    url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass',
   });
   assert.equal(result.ok, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.url, SYNC_API.push);
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
   assert.equal(sent['transport'], 'webdav');
-  const webdav = sent['webdav'] as Record<string, unknown>;
-  assert.equal(webdav['url'], 'https://dav.example.com/dav/config');
-  assert.equal(webdav['username'], 'alice');
-  assert.equal(webdav['password'], 'secret-pass');
+  assert.equal(sent['url'], 'https://dav.example.com/dav/config', 'webdav url 应处于请求体顶层（flat）');
+  assert.equal(sent['username'], 'alice', 'webdav username 应处于请求体顶层（flat）');
+  assert.equal(sent['password'], 'secret-pass', 'webdav password 应处于请求体顶层（flat）');
+  assert.equal(sent['webdav'], undefined, '不应再嵌套 webdav 对象');
   assert.equal(sent['repoUrl'], undefined, 'webdav 通道不应携带 git repoUrl');
 });
 
-test('S-20 api.pull()：transport=webdav 请求体透传 webdav 配置', async () => {
+test('S-20 api.pull()：transport=webdav 请求体透传扁平 webdav 配置', async () => {
   const calls: FetchCall[] = [];
   installFetchMock((call) => {
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-w1', changes: [], needsReview: false });
   });
   const api = new SyncApi();
-  await api.pull({ transport: 'webdav', webdav: { url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass' } });
+  await api.pull({ transport: 'webdav', url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass' });
   assert.equal(calls[0]?.url, SYNC_API.pull);
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
   assert.equal(sent['transport'], 'webdav');
-  assert.equal((sent['webdav'] as Record<string, unknown>)['url'], 'https://dav.example.com/dav/config');
+  assert.equal(sent['url'], 'https://dav.example.com/dav/config');
+  assert.equal(sent['webdav'], undefined, '不应再嵌套 webdav 对象');
 });
 
 test('S-21 git 通道缺省：不带 transport → 请求体仍只含 git 字段（向后兼容）', async () => {
@@ -413,4 +414,85 @@ test('S-21 git 通道缺省：不带 transport → 请求体仍只含 git 字段
   assert.equal(sent['transport'], undefined, '缺省不声明 transport（Host 视为 git）');
   assert.equal(sent['repoUrl'], 'https://github.com/u/r.git');
   assert.equal(sent['webdav'], undefined);
+});
+
+test('S-22 api.push()：高级（自定义导出）模式 → 请求体携带 sections；缺省不携带', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-sel', sections: ['settings'], warnings: [] });
+  });
+  const api = new SyncApi();
+  // 高级模式：传勾选分区
+  await api.push({ repoUrl: 'https://github.com/u/r.git', sections: ['settings', 'skills'] });
+  assert.equal(calls.length, 1);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.deepEqual(sent['sections'], ['settings', 'skills'], '高级模式应携带 sections');
+
+  // 默认模式：不传 sections（undefined → 全量推荐分区）
+  const calls2: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls2.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-def', sections: ['settings'], warnings: [] });
+  });
+  await api.push({ repoUrl: 'https://github.com/u/r.git' });
+  const sent2 = JSON.parse(String(calls2[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent2['sections'], undefined, '默认模式不应携带 sections');
+});
+
+test('S-23 api.status()：解析 syncSections（可同步分区目录，无 secret 值）', async () => {
+  const body = {
+    ok: true, configured: true, credentialConfigured: true, credentialWritable: true, sectionCount: 4,
+    syncSections: [
+      { id: 'settings', displayName: 'Settings', portability: 'portable', defaultIncluded: true },
+      { id: 'skills', displayName: 'Skills', portability: 'portable', defaultIncluded: true },
+    ],
+  };
+  let called: FetchCall | null = null;
+  installFetchMock((call) => {
+    called = call;
+    return jsonResponse(200, body);
+  });
+  const lastCall = (): FetchCall | null => called;
+  const api = new SyncApi();
+  const result = await api.status();
+  assert.equal(result.syncSections?.length, 2);
+  assert.equal(result.syncSections?.[0]?.id, 'settings');
+  assert.equal(result.syncSections?.[1]?.portability, 'portable');
+  assert.equal(lastCall()?.url, SYNC_API.status);
+});
+
+test('S-24 api.status()：解析 syncSelection（持久化分区选择，UI 回填用）', async () => {
+  const body = {
+    ok: true, configured: true, credentialConfigured: true, credentialWritable: true, sectionCount: 2,
+    syncSelection: { mode: 'advanced', sections: ['settings', 'skills'] },
+  };
+  let called: FetchCall | null = null;
+  installFetchMock((call) => {
+    called = call;
+    return jsonResponse(200, body);
+  });
+  const lastCall = (): FetchCall | null => called;
+  const api = new SyncApi();
+  const result = await api.status();
+  assert.equal(result.syncSelection?.mode, 'advanced');
+  assert.deepEqual(result.syncSelection?.sections, ['settings', 'skills']);
+  assert.equal(lastCall()?.url, SYNC_API.status);
+});
+
+test('S-25 api.saveSelection()：POST /sync/selection 携带 mode + sections（持久化到 Host）', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, mode: 'advanced', sections: ['settings', 'skills'] });
+  });
+  const api = new SyncApi();
+  const result = await api.saveSelection({ mode: 'advanced', sections: ['settings', 'skills'] });
+  assert.equal(result.mode, 'advanced');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, SYNC_API.selection);
+  assert.equal(calls[0]?.init?.method, 'POST');
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['mode'], 'advanced');
+  assert.deepEqual(sent['sections'], ['settings', 'skills']);
 });

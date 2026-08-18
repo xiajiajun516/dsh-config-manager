@@ -29,6 +29,8 @@ export interface AdapterRegistryOptions {
   credentialsRefs?: CredentialRefsProvider;
   /** pluginFiles 白名单（相对 ~/.dsh 根；缺省 dsh-ssh.json + pet.json） */
   pluginFiles?: string[];
+  /** pluginFiles 约定的配置目录（相对 ~/.dsh 根），递归收集其下所有插件配置文件 */
+  pluginFilesDir?: string;
   /** 是否包含 sessions 分区（默认关，研究报告 §4.9） */
   includeSessions?: boolean;
   /** 插件自身包名：导出 plugins 分区时不列自己（避免自引用；缺省 dsh-config-manager） */
@@ -50,7 +52,7 @@ export function createAdapters(options: AdapterRegistryOptions = {}): ConfigAdap
     new AgentInstructionsAdapter(),
     new WorkspacesAdapter(),
     new CredentialsAdapter({ namespaces, refs: options.credentialsRefs }),
-    new PluginFilesAdapter(options.pluginFiles),
+    new PluginFilesAdapter(options.pluginFiles, options.pluginFilesDir),
   ];
   if (options.includeSessions) adapters.push(new SessionsAdapter());
   return adapters;

@@ -175,6 +175,12 @@ export interface RollbackView {
 export interface ImportPort {
   analyzeImport(zipPath: string): Promise<ImportAnalysis>;
   createImportPlan(zipPath: string, decisions: ImportDecisions): Promise<ImportPlan>;
+  /**
+   * 解锁整体加密备份（只读，零写入）：用备份密码解密上传的加密容器，得到明文 ZIP
+   * 写入受控临时目录并返回新的 zipPath，供 analyze/plan/execute 引用。
+   * 密码仅内存，绝不落盘/落日志；解密后的明文 ZIP 亦为临时文件，导入结束后清理。
+   */
+  decryptArchive(zipPath: string, password: string): Promise<{ zipPath: string }>;
   executeImportPlan(
     zipPath: string,
     plan: ImportPlan,

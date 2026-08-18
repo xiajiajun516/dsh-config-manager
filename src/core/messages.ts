@@ -45,6 +45,7 @@ export const zh = {
   'import.notConfirmed': '导入未确认：必须显式 confirm 后才允许修改任何数据',
   'import.encryptedPasswordRequired': '该备份已加密，必须提供解密密码才能导入（拒绝无密码导入）',
   'import.encryptedPasswordWrong': '解密密码错误，请重试',
+  'import.notEncryptedContainer': '该文件不是加密备份容器，无法解锁',
 
   // ---------- 回滚 ----------
   'rollback.ns.createdNoDelete': '该 namespace 由导入创建，DSH settings 无删除语义',
@@ -221,6 +222,7 @@ export const zh = {
   // ---------- 远程同步 ----------
   'sync.denySensitiveSection': '同步拒绝携带敏感分区 {section}（secret 值永不参与同步）',
   'sync.sectionFailed': '分区 {adapter} 导出失败: {reason}',
+  'sync.skipNonPortable': '分区 {section} 非可移植类型（或不存在），已跳过，不参与同步',
   'sync.noPortableSections': '没有可同步的 portable 分区（全部导出失败）',
   'sync.remoteEmpty': '远端无快照',
   'sync.missingImporter': 'SyncEngine 缺少 importer：pull 需要注入 Importer（analyzeImport/createImportPlan）',
@@ -310,6 +312,7 @@ export const en: Record<keyof typeof zh, string> = {
   'import.notConfirmed': 'Import not confirmed: explicit confirm is required before any data is modified',
   'import.encryptedPasswordRequired': 'This backup is encrypted; the decryption password is required to import it (refusing password-less import)',
   'import.encryptedPasswordWrong': 'Wrong decryption password, please try again',
+  'import.notEncryptedContainer': 'This file is not an encrypted backup container and cannot be unlocked',
 
   // ---------- rollback ----------
   'rollback.ns.createdNoDelete': 'This namespace was created by the import; DSH settings have no delete semantics',
@@ -486,6 +489,7 @@ export const en: Record<keyof typeof zh, string> = {
   // ---------- remote sync ----------
   'sync.denySensitiveSection': 'Sync refuses to carry the sensitive section {section} (secret values never sync)',
   'sync.sectionFailed': 'Section {adapter} export failed: {reason}',
+  'sync.skipNonPortable': 'Section {section} is not portable (or does not exist); skipped from sync',
   'sync.noPortableSections': 'No portable sections to sync (all exports failed)',
   'sync.remoteEmpty': 'No snapshots on the remote',
   'sync.missingImporter': 'SyncEngine is missing the importer: pull requires an Importer (analyzeImport/createImportPlan)',

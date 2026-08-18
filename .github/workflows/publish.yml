@@ -71,10 +71,12 @@ jobs:
           # ③ 手动亮点段（每次发版前更新这里的列表）
           cat > /tmp/release-notes.md <<'EOF'
           ## ✨ 本次更新亮点
-          - 🐛 修复 v0.1.29 市场面板在 **Web 端加载失败**（`process is not defined`）：`builtin.ts` 顶层直接读取 `process.env`，浏览器没有 `process` 全局导致插件启动崩溃。现已做环境防御——Web 端安全回退默认官方市场地址，host/Node 端仍保留 `DSH_CONFIG_MARKET_URL` 覆盖
-          - 🛒 配置市场 (Marketplace)：浏览 + 安全下载，分层信任、网络来源默认不可信并逐条确认
-          - 🔁 远程同步 **WebDAV 通道**：与 Git 私库双通道，密码走 credentials 槽位、不落盘/不落日志
-          - 🚑 `reinstall` 一键救援命令：跨平台重装 launcher，危险清理默认不选 + 二次 `YES` 确认 + 自动应急备份
+          - 🔐 **整体加密备份容器（DCA1）**：导出时用外层 AES-256-GCM 容器**整体加密整个备份 ZIP**（不再只加密凭据分区），导入时自动探测容器类型并在 UI 插入「解锁加密备份」阶段；密码仅内存传入、解出的明文 ZIP 为临时文件用完即清，磁盘不残留明文备份
+          - 🧩 **同步分区选择持久化（sync-selection）**：默认/高级（自定义勾选）两种导出模式，勾选结果持久化到 `sync-selection.json`，**自动同步与手动推送共用同一份选择**，无需重复设置
+          - 🤖 **插件自动安装**：拉取差异时备份里新增的插件在确认导入时**自动安装**，不再逐项手动勾选；只有**版本冲突**的插件仍需要你决定「保留当前 / 采用备份」
+          - 📂 **pluginFiles 目录收集**：新增 `pluginFilesDir` 配置，把约定插件配置目录（相对 `~/.dsh` 根，如 `plugin-config/`）下的文件**递归自动随备份携带**，配合原有白名单固定文件
+          - ⚡ **自动同步事件驱动**：定时器只做兜底轮询，真正驱动改为「远端有新快照才下载」「本地有改动才上传」，两端都无变化则 `upToDate` 空转跳过，不再无谓拉取/上传
+          - 🧹 移除自定义 `gitBin` 配置，git 固定使用系统 PATH；WebDAV 非敏感 `username` 可在表单回显回填
           ## 📦 安装
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest

@@ -5,6 +5,8 @@
  * 安全不变量：
  *  - Secret 值默认永不进入导出数据（结构化分区逐一过 SecretScanner）；
  *  - includeSecrets=true 必须注入 EncryptionProvider（m4 实现），否则拒绝导出；
+ *  - 注入 EncryptionProvider 时备份标记为加密（encrypted=true）：includeSecrets=false
+ *    时 secrets.enc 加密空内容占位，备份仍需要密码导入，但不含任何凭据值；
  *  - 加密密码/秘密值绝不写入 manifest 与日志。
  */
 import fs from 'node:fs/promises';
@@ -36,7 +38,7 @@ export interface ExporterOptions {
   adapters: ConfigAdapter[];
   /** Secret 扫描器；缺省用字段名黑名单剥离（m4 可注入强化版） */
   scanner?: SecretScanner;
-  /** 加密提供者（m4 用 node:crypto 实现）；includeSecrets 时必填 */
+  /** 加密提供者（m4 用 node:crypto 实现）；includeSecrets 时必填；提供时备份标记 encrypted=true */
   encryption?: EncryptionProvider | null;
   /** 插件自身版本（manifest.exporter.version） */
   exporterVersion?: string;
@@ -183,24 +185,28 @@ export class Exporter {
       });
     }
 
-    // secrets.enc：仅加密备份
-    if (includeSecrets && this.encryption) {
+    // secrets.enc：有加密提供者即生成。includeSecrets=true 时加密真实的凭据原文；
+    // 只勾选加密（不导出密钥）时加密空内容占位，备份仍标记 encrypted（导入需密码），
+    // 但绝不把凭据值放进去（containsSecrets 保持 false；安全不变量不破）。
+    if (this.encryption) {
       const credentialsFile = path.join(this.ctx.homeDir, '.credentials.yaml');
       let plaintext: string;
-      try {
-        const raw = await this.ctx.fs.readFile(credentialsFile);
-        plaintext = Buffer.from(raw).toString('utf8');
-      } catch (err) {
-        warnings.push(this.msg('export.credentialsReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
+      if (includeSecrets) {
+        try {
+          const raw = await this.ctx.fs.readFile(credentialsFile);
+          plaintext = Buffer.from(raw).toString('utf8');
+        } catch (err) {
+          warnings.push(this.msg('export.credentialsReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
+          plaintext = '';
+        }
+      } else {
         plaintext = '';
       }
-      if (plaintext !== '') {
-        const result = await this.encryption.encrypt(plaintext);
-        entries.push({ name: 'security/secrets.enc', data: result.blob });
-        encryption = result.info;
-        containsSecrets = true;
-        encrypted = true;
-      }
+      const result = await this.encryption.encrypt(plaintext);
+      entries.push({ name: 'security/secrets.enc', data: result.blob });
+      encryption = result.info;
+      containsSecrets = includeSecrets && plaintext !== '';
+      encrypted = true;
     }
 
     // 5. checksums（覆盖除 manifest/checksums 外的全部条目）

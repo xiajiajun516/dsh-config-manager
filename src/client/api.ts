@@ -54,6 +54,8 @@ export interface UploadResponse {
   zipPath: string;
   name: string;
   sizeBytes: number;
+  /** zip=普通备份；encrypted=整体加密备份容器（需先 decryptArchive 解锁才能按 ZIP 解析） */
+  containerType: 'zip' | 'encrypted';
 }
 
 /** execute 端点请求体（对齐 ImportWizard.execute 的 opts） */
@@ -101,6 +103,7 @@ export const CONFIG_MANAGER_API = {
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
   decryptVerify: '/api/dsh-config-manager/decrypt-verify',
+  decryptArchive: '/api/dsh-config-manager/decrypt-archive',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
@@ -311,6 +314,16 @@ export class ConfigManagerApi {
       body: JSON.stringify({ zipPath, password }),
     });
     return readJson<DecryptVerifyResponse>(response, this.t);
+  }
+
+  /** ImportPort.decryptArchive：解锁整体加密备份容器 → 返回可被 analyze/plan/execute 引用的明文 ZIP 路径 */
+  async decryptArchive(zipPath: string, password: string): Promise<{ zipPath: string }> {
+    const response = await fetch(CONFIG_MANAGER_API.decryptArchive, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ zipPath, password }),
+    });
+    return readJson<{ zipPath: string }>(response, this.t);
   }
 
   /** ImportPort.executeImportPlan：快照→分阶段 apply→validate→commit/rollback */

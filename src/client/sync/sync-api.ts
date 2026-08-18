@@ -7,8 +7,8 @@
  * 端点契约（Host 半 src/index.ts 的 makeRoutes 按此实现）：
  * ```
  * GET  /api/dsh-config-manager/sync/status → SyncStatusResponse （配置/凭据/上次同步）
- * POST /api/dsh-config-manager/sync/push    → SyncPushReport    （body: { repoUrl, gitBin?, token?, snapshotId? }）
- * POST /api/dsh-config-manager/sync/pull    → SyncPullReport    （body: { repoUrl, gitBin?, token?, strategy?, snapshotId? }）
+ * POST /api/dsh-config-manager/sync/push    → SyncPushReport    （body: { repoUrl, token?, snapshotId? }）
+ * POST /api/dsh-config-manager/sync/pull    → SyncPullReport    （body: { repoUrl, token?, strategy?, snapshotId? }）
  * POST /api/dsh-config-manager/sync/github/start   → GithubDeviceFlowStartResponse（GitHub OAuth 设备码）
  * POST /api/dsh-config-manager/sync/github/poll    → GithubPollResponse（凭 flowId 轮询；成功时 token 已由 Host 写入 credentials）
  * POST /api/dsh-config-manager/sync/github/cancel  → { ok: true }
@@ -43,6 +43,7 @@ export const SYNC_API = {
   applyItems: '/api/dsh-config-manager/sync/apply-items',
   cancel: '/api/dsh-config-manager/sync/cancel',
   autosync: '/api/dsh-config-manager/sync/autosync',
+  selection: '/api/dsh-config-manager/sync/selection',
   rollback: '/api/dsh-config-manager/sync/rollback',
 } as const;
 
@@ -55,16 +56,6 @@ export const SYNC_WEBDAV_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWO
 /** 远程同步通道类型：git（默认）或 webdav */
 export type SyncTransportType = 'git' | 'webdav';
 
-/** WebDAV 通道配置（仅请求体携带；password 为 secret，只存在于请求体，Host 写入 credentials 后值不回传） */
-export interface WebDavRequestPayload {
-  /** WebDAV 远端根地址（https://…），快照存于 {url}/snapshots/ 下 */
-  url?: string;
-  /** HTTP Basic 用户名（非敏感） */
-  username?: string;
-  /** HTTP Basic 密码（secret：仅请求体，绝不持久化到同步文件/日志/URL） */
-  password?: string;
-}
-
 /** GET /sync/status 响应：配置/凭据/上次同步的只读事实（无任何 secret 值） */
 export interface SyncStatusResponse {
   ok: boolean;
@@ -72,7 +63,6 @@ export interface SyncStatusResponse {
   configured: boolean;
   /** git 通道：上次使用的仓库地址（不含 token，可回显） */
   repoUrl?: string;
-  gitBin?: string;
   /** git 通道：DSH credentials 中是否已存在 token（describe 只报状态，值永不返回） */
   credentialConfigured: boolean;
   credentialWritable: boolean;
@@ -83,30 +73,58 @@ export interface SyncStatusResponse {
   /** sync-state.sections 条目数 */
   sectionCount: number;
   transport?: { type: string; ref: string };
+  /** 可同步分区目录（「高级/自定义导出」勾选列表；host adapters 唯一事实源，只含 portable） */
+  syncSections?: SyncSectionInfo[];
+  /** 当前分区选择（默认/高级模式 + 勾选分区；UI 回填用，自动同步与手动 push 共用） */
+  syncSelection?: SyncSelectionPayload;
   /** 自动同步当前状态（供 UI 顶部开关回填；§3.9） */
   autosync?: AutosyncStatusResponse;
+}
+
+/** 同步分区选择（POST /sync/selection 请求体 + status.syncSelection 响应；持久化于 Host）。 */
+export interface SyncSelectionPayload {
+  mode: 'default' | 'advanced';
+  /** 高级模式勾选分区；default 模式可为空数组 */
+  sections: SectionId[];
 }
 
 /** webdav 通道状态字段（无任何 secret 值；password 只报 passwordConfigured 布尔） */
 export interface WebDavStatusResponse {
   /** 上次使用的服务器地址（可回显；不含 userinfo） */
   url?: string;
-  /** 是否已填过用户名（布尔；便于 UI 提示。username 值由 Host 不回传） */
+  /** 上次使用的用户名（非敏感，可回显；供表单回填） */
+  username?: string;
+  /** 是否已填过用户名（布尔；便于 UI 提示徽章） */
   usernameConfigured: boolean;
   /** DSH credentials 中是否已存在密码（值永不返回） */
   passwordConfigured: boolean;
 }
 
+/** 可同步分区条目（status.syncSections 项）。只含 portable —— 与 SyncEngine 同步通道一致。 */
+export interface SyncSectionInfo {
+  id: SectionId;
+  /** 展示名（host adapter displayName） */
+  displayName: string;
+  portability: 'portable' | 'deviceSpecific' | 'platformSpecific';
+  defaultIncluded: boolean;
+}
+
 /** push 请求体（token 可选：非空则 Host 先写入 DSH credentials 再使用）。
- *  git 通道携带 repoUrl/gitBin/token；webdav 通道携带 webdav.url/username/password。 */
+ *  扁平形状与 Host parseSyncBody 一致：git 携带 repoUrl/token；
+ *  webdav 携带 url/username/password（顶层，不嵌套 webdav 对象）。
+ *  git 可执行文件固定使用系统 PATH 中的 git，不再接受自定义路径。
+ *  sections 可选（高级/自定义导出模式）：只推送勾选分区；缺省 = 默认模式全部推荐分区。 */
 export interface SyncPushPayload {
   /** 通道类型；缺省 'git' */
   transport?: SyncTransportType;
   repoUrl?: string;
-  gitBin?: string;
   token?: string;
-  /** webdav 通道配置（transport='webdav' 时使用） */
-  webdav?: WebDavRequestPayload;
+  /** webdav 通道字段（transport='webdav' 时使用；扁平顶层） */
+  url?: string;
+  username?: string;
+  password?: string;
+  /** 仅同步指定分区（缺省 = 全部 portable 推荐分区；即「默认/快速导出」vs「高级/自定义导出」） */
+  sections?: SectionId[];
 }
 
 /** pull 请求体（strategy 缺省 merge：冲突保留待决策；snapshotId 缺省 = 最新） */
@@ -435,6 +453,12 @@ export class SyncApi {
   /** 自动同步配置更新（POST /sync/autosync）。 */
   async autosyncUpdate(payload: AutosyncUpdatePayload): Promise<AutosyncStatusResponse> {
     return postJson<AutosyncStatusResponse>(SYNC_API.autosync, payload, this.t);
+  }
+
+  /** 保存同步分区选择（POST /sync/selection）：模式 + 勾选分区持久化到 Host。
+   *  自动同步调度器与手动 push 共用此配置（刷新/重启后仍然生效）。 */
+  async saveSelection(payload: SyncSelectionPayload): Promise<SyncSelectionPayload> {
+    return postJson<SyncSelectionPayload>(SYNC_API.selection, payload, this.t);
   }
 
   /** 一键回滚：按 restoreId 调用 backup→rollback */

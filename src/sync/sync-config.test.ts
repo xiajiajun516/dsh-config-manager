@@ -24,7 +24,7 @@ import {
 test('writeSyncConfig + readSyncConfig（git 通道）：写入 v2 命名空间形态 → 读回一致', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cfg-git2-'));
   try {
-    const cfg: SyncConfig = { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git', gitBin: '/usr/bin/git' } };
+    const cfg: SyncConfig = { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } };
     await writeSyncConfig(dir, cfg);
     const loaded = await readSyncConfig(dir);
     assert.deepEqual(loaded, cfg);
@@ -34,7 +34,6 @@ test('writeSyncConfig + readSyncConfig（git 通道）：写入 v2 命名空间�
     assert.equal(raw.schemaVersion, SYNC_CONFIG_SCHEMA_VERSION);
     assert.equal(raw.transport, 'git');
     assert.equal(raw.git.repoUrl, 'git@github.com:foo/bar.git');
-    assert.equal(raw.git.gitBin, '/usr/bin/git');
     assert.equal(raw.webdav, undefined);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
@@ -69,7 +68,7 @@ test('writeSyncConfig（webdav 通道）：username 非空才写入', async () =
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-test('readSyncConfig：旧 v1 文件（无 schemaVersion）→ 归一为 v2 git 命名空间', async () => {
+test('readSyncConfig：旧 v1 文件（无 schemaVersion）→ 归一为 v2 git 命名空间（旧 gitBin 被忽略）', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cfg-v1legacy-'));
   try {
     await fs.writeFile(
@@ -78,7 +77,7 @@ test('readSyncConfig：旧 v1 文件（无 schemaVersion）→ 归一为 v2 git 
       'utf8',
     );
     const loaded = await readSyncConfig(dir);
-    assert.deepEqual(loaded, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git', gitBin: '/bin/git' } });
+    assert.deepEqual(loaded, { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } });
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
@@ -113,7 +112,7 @@ test('readSyncConfig（git）：缺 git.repoUrl → 返回 null（未配置）',
   try {
     await fs.writeFile(
       path.join(dir, SYNC_CONFIG_FILE),
-      JSON.stringify({ schemaVersion: 2, transport: 'git', git: { gitBin: '/bin/git' } }),
+      JSON.stringify({ schemaVersion: 2, transport: 'git', git: {} }),
       'utf8',
     );
     const loaded = await readSyncConfig(dir);

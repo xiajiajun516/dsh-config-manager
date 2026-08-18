@@ -5,7 +5,7 @@
  * - 快照以「散文件目录」提交到 git 仓库：工作副本 <workDir>/snapshots/<id>/ 即 t2 layout 布局
  *   （manifest.json + 平铺 JSON 分区 + 文件类分区目录），每次 sync 一次 commit + push。
  * - 命令执行走 node:child_process execFile（promise 封装，数组参数无 shell 注入），
- *   默认 gitBin='git'，可注入 exec 便于测试。
+ *   始终使用系统 PATH 中的 git（固定命令 'git'），可注入 exec 便于测试。
  * - 认证：token 仅从注入的 credentials provider 读取（每次网络操作时 getToken()），
  *   经 git credential helper（store --file=<临时文件>）传给 git —— token 不进入 argv、
  *   不进入 repoUrl、不写入任何同步内容/commit message/日志；临时凭据文件用后即删。
@@ -60,8 +60,6 @@ export interface GitTransportOptions {
   workDir: string;
   /** token 提供者（http(s) 远端必填；本地/ssh 远端不会被调用） */
   credentials: GitCredentialProvider;
-  /** git 可执行文件名/路径，默认 'git' */
-  gitBin?: string;
   /** 单条 git 命令超时 ms，默认 60000 */
   timeoutMs?: number;
   /** 注入 exec（测试 mock 用）；缺省 = execFile 封装 */
@@ -144,7 +142,7 @@ export class GitTransport implements SyncTransport {
       repoUrl: options.repoUrl,
       workDir: options.workDir,
       credentials: options.credentials,
-      gitBin: options.gitBin ?? 'git',
+      gitBin: 'git',
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
       exec: options.exec ?? defaultExec,
       author: options.author ?? DEFAULT_AUTHOR,

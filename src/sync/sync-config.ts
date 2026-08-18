@@ -7,14 +7,15 @@
  * schema v2（统一接口契约，captain 冻结）：
  * - 顶层形状：
  *     { "schemaVersion": 2, "transport": "git"|"webdav",
- *       "git":    { "repoUrl": "...", "gitBin": "..." },   // transport=git 时
+ *       "git":    { "repoUrl": "..." },   // transport=git 时
  *       "webdav": { "url": "...", "username": "..." } }    // transport=webdav 时
  * - 顶层 transport 选择 + git/webdav 命名空间对象（嵌套，非扁平，避免歧义）。
+ *   git 命名空间不再含 gitBin（git 可执行文件固定使用系统 PATH 中的 git）。
  * - webdav.url 不含任何凭据、拒绝 userinfo；username 可回显；
  *   password 绝不入文件（走 DSH credentials ref `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD`）。
  * - 代码内为可辨识联合 SyncConfig + isGitConfig()/isWebDavConfig() 守卫。
  * - 兼容旧 v1 文件（{schemaVersion:1, repoUrl, gitBin?} 或缺 schemaVersion 视为 v1）
- *   → 读取时归一为 v2 git 形态。
+ *   → 读取时归一为 v2 git 形态（旧 gitBin 字段被忽略/下一次保存时丢弃）。
  *
  * 安全不变量：
  * - 配置文件绝不出现密码/token（webdav 仅存 url/可选 username；口令走 DSH credentials）。
@@ -34,10 +35,9 @@ export const SYNC_CONFIG_SCHEMA_VERSION = 2;
 /** 历史可读取版本：v1 与 v2。 */
 export const SYNC_CONFIG_SUPPORTED_VERSIONS: readonly number[] = [1, 2];
 
-/** git 通道配置（不含任何凭据） */
+/** git 通道配置（不含任何凭据；git 可执行文件固定使用系统 PATH 中的 git） */
 export interface GitConfig {
   repoUrl: string;
-  gitBin?: string;
 }
 
 /** webdav 通道配置（不含 password；password 走 DSH credentials） */
@@ -63,12 +63,10 @@ export function isWebDavConfig(cfg: SyncConfig): cfg is Extract<SyncConfig, { tr
   return cfg.transport === 'webdav';
 }
 
-/** 从 v1 扁平形态解析 git 配置；缺 repoUrl → null */
+/** 从 v1 扁平形态解析 git 配置；缺 repoUrl → null（gitBin 已废弃：始终使用系统 PATH 中的 git） */
 function parseV1Git(obj: Record<string, unknown>): GitConfig | null {
   if (typeof obj['repoUrl'] !== 'string' || obj['repoUrl'] === '') return null;
-  const git: GitConfig = { repoUrl: obj['repoUrl'] };
-  if (typeof obj['gitBin'] === 'string' && obj['gitBin'] !== '') git.gitBin = obj['gitBin'];
-  return git;
+  return { repoUrl: obj['repoUrl'] };
 }
 
 /** 从 v2 git 命名空间解析；缺有效 repoUrl → null */

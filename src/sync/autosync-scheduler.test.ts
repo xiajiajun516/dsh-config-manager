@@ -114,6 +114,7 @@ test('runOnce: webdav 已配置（webdav.url 非空）→ 不判 unconfigured，
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const engine = {
     merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'skip']]),
+    hasLocalChanges: async () => false,
   };
   const syncCfg: SyncConfig = { schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/remote.php/dav/files/u' } };
   const { scheduler } = makeScheduler({ cfg, engine, history: [], syncCfg });
@@ -167,10 +168,11 @@ test('runOnce: 有冲突 → skipped(conflict)，不写本地，不计失败', a
   assert.ok(getEntries().some((e) => e.skipReason === 'conflict'), '写入冲突跳过历史');
 });
 
-test('runOnce: 无冲突且无变化 → success(pull,unchanged)', async () => {
+test('runOnce: 无冲突且无变化 → success(pull,unchanged)，不上传（本地也无改动）', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const engine = {
     merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'skip']]),
+    hasLocalChanges: async () => false,
   };
   const { scheduler } = makeScheduler({ cfg, engine, history: [] });
   const result = await scheduler.runOnce();
@@ -226,6 +228,62 @@ test('runOnce: 连续两次执行不再 skip(conflict)（run 完成收尾）', a
   assert.equal(second.status, 'success', '第二次执行不再被同 kind 注册冲突拦截');
   assert.equal(second.direction, 'both');
   assert.equal(runs.listActive().filter((r) => r.kind === 'autosync').length, 0);
+});
+
+test('runOnce: 远端无新快照且本地无改动 → success(upToDate)，不 merge 不 push', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const mergeCalls: string[] = [];
+  const pushCalls: string[] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async () => { mergeCalls.push('merge'); return makeMergePlan([]); },
+    push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 's', sections: [] as never, warnings: [] }; },
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'success');
+  assert.equal(result.direction, 'none');
+  assert.equal(result.skipReason, 'upToDate');
+  assert.equal(mergeCalls.length, 0, '远端无新生不拉取');
+  assert.equal(pushCalls.length, 0, '本地无改动不上传');
+  assert.ok(getEntries().some((e) => e.skipReason === 'upToDate'), '写入 upToDate 历史');
+});
+
+test('runOnce: 远端无新快照但本地有改动 → 只 push 不拉取（direction=push）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const mergeCalls: string[] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    merge: async () => { mergeCalls.push('merge'); return makeMergePlan([]); },
+    push: async () => ({ ok: true, snapshotId: 'snap-local', sections: ['settings'] as never, warnings: [] }),
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'success');
+  assert.equal(result.direction, 'push', '远端无新生只上传本地改动');
+  assert.equal(result.pushedSnapshotId, 'snap-local');
+  assert.equal(mergeCalls.length, 0, '远端无新生不执行 merge/拉取');
+  assert.ok(getEntries().some((e) => e.status === 'success' && e.direction === 'push'), '写入 push 历史');
+});
+
+test('runOnce: 远端有新快照但本地无改动 → 只 pull 合并，不 push', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const pushCalls: string[] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'useRemote']]),
+    applyMergePlan: async () => ({ ok: true, applied: ['settings'], restoreId: 'r1', rolledBack: false, review: [], warnings: [] }),
+    push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 'x', sections: [] as never, warnings: [] }; },
+  };
+  const { scheduler } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'success');
+  assert.equal(result.direction, 'pull', '本地无改动不上传，只拉取合并');
+  assert.deepEqual(result.appliedSections, ['settings']);
+  assert.equal(pushCalls.length, 0, '本地无改动不 push');
 });
 
 test('start(): 定时器触发后自动重排下一次（周期性后台同步）', async () => {

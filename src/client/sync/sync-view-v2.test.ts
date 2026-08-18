@@ -49,7 +49,8 @@ test('sync-view: isReviewItem 仅需人工决策的类型返回 true', () => {
   assert.equal(isReviewItem('Conflict'), true)
   assert.equal(isReviewItem('MissingSecret'), true)
   assert.equal(isReviewItem('MissingDependency'), true)
-  assert.equal(isReviewItem('Install'), true)
+  // 插件安装随同步自动采用，不视为需人工决策项（product requirement）
+  assert.equal(isReviewItem('Install'), false)
   assert.equal(isReviewItem('Error'), true)
   assert.equal(isReviewItem('PathMapping'), true)
   assert.equal(isReviewItem('Create'), false)

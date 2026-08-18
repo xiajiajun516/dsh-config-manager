@@ -452,6 +452,14 @@
   gap: 8px;
 }
 
+.optionsHeader {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
 .warnList {
   margin: 4px 0 0;
   padding-left: 18px;

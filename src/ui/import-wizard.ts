@@ -45,6 +45,13 @@ export class ImportWizard {
   private secretInputs: Record<string, string> = {};
   /** 加密备份的解密密码（仅内存，绝不持久化；刷新后要求重输） */
   private decryptPassword = '';
+  /** 整体加密备份容器是否已解锁（upload 探测到 encrypted 容器后为 false；unlockArchive 成功后为 true） */
+  private archiveUnlocked = false;
+  /**
+   * 解锁后的明文 ZIP 路径（仅内存，绝不持久化；指向受控临时目录）。
+   * decryptArchive 端点解出明文 ZIP 并返回新 zipPath，后续 analyze/plan/execute 都基于它。
+   */
+  private unlockedZipPath: string | null = null;
 
   constructor(opts: ImportWizardOptions) {
     this.port = opts.port;
@@ -70,6 +77,35 @@ export class ImportWizard {
     return this.step;
   }
 
+  /**
+   * 解析「当前应传给 analyze/plan/execute 的 ZIP 路径」：
+   * - 已解锁的整体加密容器 → 用解密后的明文 ZIP 路径；
+   * - 否则 → 直接上传/传入的路径。
+   */
+  private resolvedZipPath(): string {
+    return this.archiveUnlocked && this.unlockedZipPath !== null ? this.unlockedZipPath : this.zipPath!;
+  }
+
+  /**
+   * 设置整体加密备份容器是否为 encrypted（upload 探测结果；仅内存）。
+   * 调用方先在解密阶段展示密码输入，成功后调用 unlockArchive。
+   */
+  setArchiveEncrypted(encrypted: boolean): void {
+    this.archiveUnlocked = !encrypted;
+    this.unlockedZipPath = null;
+  }
+
+  /**
+   * 解锁整体加密备份容器（只读，零写入）：用备份密码解密上传的容器 → 明文 ZIP。
+   * 成功后 archiveUnlocked=true；之后 analyze/plan/execute 基于解密后的 ZIP 路径。
+   */
+  async unlockArchive(encryptedPath: string, password: string): Promise<void> {
+    this.zipPath = encryptedPath;
+    const { zipPath } = await this.port.decryptArchive(encryptedPath, password);
+    this.unlockedZipPath = zipPath;
+    this.archiveUnlocked = true;
+  }
+
   /** 步骤 1-2：选 ZIP → Analyzing → Compatibility（analyzeImport 零写入） */
   async selectZip(path: string): Promise<ImportAnalysis> {
     this.zipPath = path;
@@ -77,7 +113,7 @@ export class ImportWizard {
     this.tracker.emit('validating');
     this.errors = [];
     try {
-      this.analysis = await this.port.analyzeImport(path);
+      this.analysis = await this.port.analyzeImport(this.resolvedZipPath());
       this.tracker.emit('checking-compatibility');
       if (!this.analysis.valid) {
         // 分析失败（完整性/schema/兼容性）：错误进 errors，UI 停在失败态
@@ -100,7 +136,7 @@ export class ImportWizard {
     if (this.analysis === null || this.zipPath === null) {
       throw new Error('尚未完成分析，请先选择备份文件');
     }
-    this.plan = await this.port.createImportPlan(this.zipPath, this.decisions);
+    this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions);
     this.step = 'preview';
     return this.plan;
   }
@@ -179,7 +215,7 @@ export class ImportWizard {
 
     try {
       // 用最终决策重建计划（与预览逻辑一致，保证 Dry Run 与真实导入一致）
-      this.plan = await this.port.createImportPlan(this.zipPath, this.decisions);
+      this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions);
       // executeImportPlan 是一个单次 HTTP 请求：Host 端串行跑完全部计划项
       // （插件安装为 npm 串行，耗时最长）。请求期间没有任何中间进度事件可
       // 回传——旧实现把 restoring-settings / restoring-plugins /
@@ -188,7 +224,7 @@ export class ImportWizard {
       // 不定态（无 step/total → 动画），让用户明确知道「仍在执行」。
       // 真实各分区结果在返回后的报告里逐项展示。
       this.tracker.emit(EXECUTING_STAGE);
-      this.result = await this.port.executeImportPlan(this.zipPath, this.plan, {
+      this.result = await this.port.executeImportPlan(this.resolvedZipPath(), this.plan, {
         confirm: true,
         secretInputs: this.secretInputs,
         rollbackOnError,
@@ -219,5 +255,7 @@ export class ImportWizard {
     this.decisions = { strategy: 'merge', resolutions: {}, pathMappings: [] };
     this.secretInputs = {};
     this.decryptPassword = '';
+    this.archiveUnlocked = false;
+    this.unlockedZipPath = null;
   }
 }

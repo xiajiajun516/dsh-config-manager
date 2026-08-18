@@ -14,7 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  parseSyncBody, webdavBaseUrl, SyncRouteError,
+  parseSyncBody, webdavBaseUrl, extractSyncSections, SyncRouteError,
   SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF,
   type ParseSyncBodyDeps,
 } from './index.ts';
@@ -35,7 +35,7 @@ function memCreds(): ParseSyncBodyDeps & { writes: Array<[string, string]>; } {
 
 /* ---------------- git 分支 ---------------- */
 
-test('parseSyncBody: git 分支（缺省 transport）解析 repoUrl/gitBin，token 写入 SYNC_CREDENTIAL_REF', async () => {
+test('parseSyncBody: git 分支（缺省 transport）解析 repoUrl（gitBin 已废弃），token 写入 SYNC_CREDENTIAL_REF', async () => {
   const deps = memCreds();
   const cfg = await parseSyncBody(
     { repoUrl: 'https://github.com/foo/bar.git', gitBin: '/usr/bin/git', token: 'tok-123' },
@@ -44,7 +44,7 @@ test('parseSyncBody: git 分支（缺省 transport）解析 repoUrl/gitBin，tok
   assert.deepEqual(cfg, {
     schemaVersion: 2,
     transport: 'git',
-    git: { repoUrl: 'https://github.com/foo/bar.git', gitBin: '/usr/bin/git' },
+    git: { repoUrl: 'https://github.com/foo/bar.git' },
   });
   assert.deepEqual(deps.writes, [[SYNC_CREDENTIAL_REF, 'tok-123']], 'token 写 git credentials ref，不写 webdav ref');
 });
@@ -143,4 +143,40 @@ test('webdavBaseUrl: webdav.url 作为 base，尾部规范化带 /；git 通道�
   );
   const git: SyncConfig = { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } };
   assert.equal(webdavBaseUrl(git), '', 'git 通道无 webdav baseUrl');
+});
+
+/* ---------------- extractSyncSections（push 分区选择） ---------------- */
+
+const KNOWN = new Set(['settings', 'providers', 'plugins', 'skills']);
+
+test('extractSyncSections: 缺省 / 非数组 / 空数组 → undefined（默认全量推荐分区）', () => {
+  assert.equal(extractSyncSections({ repoUrl: 'x' }, KNOWN), undefined);
+  assert.equal(extractSyncSections({ sections: 'settings' }, KNOWN), undefined, '非数组视为未指定');
+  assert.equal(extractSyncSections({ sections: [] }, KNOWN), undefined, '空数组视为未指定');
+});
+
+test('extractSyncSections: 合法分区 → 去重保序返回 SectionId[]', () => {
+  assert.deepEqual(
+    extractSyncSections({ sections: ['plugins', 'settings', 'settings'] }, KNOWN),
+    ['plugins', 'settings'],
+    '重复分区去重，保持首次出现顺序',
+  );
+});
+
+test('extractSyncSections: 元素非字符串 / 空串 → SyncRouteError', () => {
+  assert.throws(
+    () => extractSyncSections({ sections: ['settings', 42] }, KNOWN),
+    (err) => err instanceof SyncRouteError && /sections/.test(err.message),
+  );
+  assert.throws(
+    () => extractSyncSections({ sections: [''] }, KNOWN),
+    (err) => err instanceof SyncRouteError,
+  );
+});
+
+test('extractSyncSections: 元素为未知分区 id → SyncRouteError（不静默吞错）', () => {
+  assert.throws(
+    () => extractSyncSections({ sections: ['settings', 'nope'] }, KNOWN),
+    (err) => err instanceof SyncRouteError && /nope/.test(err.message),
+  );
 });

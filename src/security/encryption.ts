@@ -31,6 +31,15 @@ const scryptAsync = promisify(crypto.scrypt) as (
 
 export const SCHEMA_MAGIC = 'DSC1';
 export const SCHEMA_VERSION = 1;
+
+/** 整体加密备份容器的 magic（D C A rchive）：头部布局同 secrets.enc，kdf 参数用默认常量 */
+export const ARCHIVE_MAGIC = 'DCA1';
+export const ARCHIVE_VERSION = 1;
+
+/** 探测字节是否为整体加密备份容器（上传/下载时判定 containerType） */
+export function isArchiveBlob(buf: Uint8Array): boolean {
+  return Buffer.from(buf.subarray(0, 4)).toString('ascii') === ARCHIVE_MAGIC;
+}
 export const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, keyLength: 32 } as const;
 export const SALT_LENGTH = 16;
 export const IV_LENGTH = 12;
@@ -177,4 +186,158 @@ export function createEncryptionProvider(password: string): EncryptionProvider {
       return decryptCredentials(blob, info, pw);
     },
   };
+}
+
+/* ---------------- 整体备份容器加密（§7.4：加密整个 ZIP，而非仅 secrets） ---------------- */
+
+/**
+ * 加密完整 ZIP 字节 → 加密容器 blob。
+ *
+ * 布局（DCA1，与 secrets.enc 同构，kdf 参数用默认常量）：
+ *   magic "DCA1"(4B) + version(1B) + salt(16B) + iv(12B) + authTag(16B) + ciphertext(plainZIP)
+ *
+ * 语义：整个备份（manifest / 各分区 JSON / sessions / 插件文件 / secrets.enc……）
+ * 全部进入 ciphertext，磁盘上无法看到任何明文内容。verifyEncryptedBlob 用于
+ * 校验密码正确（GCM authTag 通过）且返回真实解密用的随机参数。
+ */
+export async function encryptArchive(
+  plainZip: Uint8Array,
+  password: string,
+): Promise<{ blob: Uint8Array; info: EncryptionInfo; kdf: { salt: Buffer; iv: Buffer } }> {
+  if (password === '') throw new SecurityError('BAD_PASSWORD', '加密密码不能为空');
+  const salt = crypto.randomBytes(SALT_LENGTH);
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const key = await deriveKey(password, salt);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(plainZip), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+
+  const header = Buffer.alloc(HEADER_LENGTH);
+  header.write(ARCHIVE_MAGIC, 0, 'ascii');
+  header[4] = ARCHIVE_VERSION;
+  salt.copy(header, 5);
+  iv.copy(header, 5 + SALT_LENGTH);
+  authTag.copy(header, 5 + SALT_LENGTH + IV_LENGTH);
+
+  const info: EncryptionInfo = {
+    algorithm: 'aes-256-gcm',
+    kdf: 'scrypt',
+    kdfParams: { ...SCRYPT_PARAMS },
+    salt: salt.toString('base64'),
+    iv: iv.toString('base64'),
+    authTag: authTag.toString('base64'),
+    version: ARCHIVE_VERSION,
+  };
+  return { blob: Buffer.concat([header, encrypted]), info, kdf: { salt, iv } };
+}
+
+/** 容器版解密：用「先验真实参数」校验密码并解密（—— 调用方必须先用 verifyEncryptedBlob 拿到 info/kdf） */
+export async function decryptArchive(
+  blob: Uint8Array,
+  info: EncryptionInfo,
+  kdfParam: { salt: Buffer; iv: Buffer },
+  password: string,
+): Promise<Uint8Array> {
+  if (blob.length < HEADER_LENGTH) {
+    throw new SecurityError('TAMPERED', '加密备份容器体积过小（截断或损坏）');
+  }
+  const magic = Buffer.from(blob.subarray(0, 4)).toString('ascii');
+  if (magic !== ARCHIVE_MAGIC) {
+    throw new SecurityError('UNSUPPORTED_FORMAT', `未知文件格式 magic "${magic}"，不是本插件产物`);
+  }
+  const version = blob[4]!;
+  if (version !== ARCHIVE_VERSION) {
+    throw new SecurityError('UNSUPPORTED_FORMAT', `不支持的加密备份版本 ${version}`);
+  }
+  const blobSalt = Buffer.from(blob.subarray(5, 5 + SALT_LENGTH));
+  const blobIv = Buffer.from(blob.subarray(5 + SALT_LENGTH, 5 + SALT_LENGTH + IV_LENGTH));
+  const blobTag = Buffer.from(blob.subarray(5 + SALT_LENGTH + IV_LENGTH, HEADER_LENGTH));
+  const paramSalt = Buffer.isBuffer(kdfParam.salt) ? kdfParam.salt : Buffer.from(kdfParam.salt);
+  const paramIv = Buffer.isBuffer(kdfParam.iv) ? kdfParam.iv : Buffer.from(kdfParam.iv);
+  // 与此时真实的随机参数对齐（参数来自 verify 阶段读取，防调用方换参数）
+  if (
+    !blobSalt.equals(paramSalt) ||
+    !blobIv.equals(paramIv)
+  ) {
+    throw new SecurityError('TAMPERED', '加密备份参数不一致（可能被篡改）');
+  }
+
+  let key: Buffer;
+  try {
+    key = await deriveKey(password, blobSalt, info.kdfParams);
+  } catch (err) {
+    throw new SecurityError('BAD_PASSWORD', `密钥派生失败: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, blobIv);
+  decipher.setAuthTag(blobTag);
+  try {
+    return Buffer.concat([
+      decipher.update(blob.subarray(HEADER_LENGTH)),
+      decipher.final(),
+    ]);
+  } catch {
+    throw new SecurityError('BAD_PASSWORD', '解密认证失败：密码错误或密文被篡改');
+  }
+}
+
+export interface EncryptedBlobInfo {
+  /** 容器是否合法（magic/version/header 校验通过） */
+  valid: boolean;
+  /** 密码是否正确（GCM authTag 认证通过）；valid=false 时恒 false */
+  ok: boolean;
+  /** 解密所需参数（valid && ok 时有效；用默认常量派生 key） */
+  info: EncryptionInfo | null;
+  kdf: { salt: Buffer; iv: Buffer } | null;
+  /** 错误码（供上层转用户可读错误）：BAD_PASSWORD / TAMPERED / UNSUPPORTED_FORMAT */
+  code: SecurityErrorCode | null;
+}
+
+/**
+ * 校验加密备份容器并验证密码（只读，零解密返回内容）。
+ * - 容器不合法（非 DCA1 / 截断 / 参数异常）→ valid=false + code
+ * - 密码正确 → ok=true + 返回随机参数（后续 decryptArchive 用之）
+ * - 密码错误 → ok=false + code=BAD_PASSWORD
+ */
+export async function verifyEncryptedBlob(
+  blob: Uint8Array,
+  password: string,
+): Promise<EncryptedBlobInfo> {
+  if (blob.length < HEADER_LENGTH) {
+    return { valid: false, ok: false, info: null, kdf: null, code: 'TAMPERED' };
+  }
+  const magic = Buffer.from(blob.subarray(0, 4)).toString('ascii');
+  if (magic !== ARCHIVE_MAGIC) {
+    return { valid: false, ok: false, info: null, kdf: null, code: 'UNSUPPORTED_FORMAT' };
+  }
+  const version = blob[4]!;
+  if (version !== ARCHIVE_VERSION) {
+    return { valid: false, ok: false, info: null, kdf: null, code: 'UNSUPPORTED_FORMAT' };
+  }
+  const salt = Buffer.from(blob.subarray(5, 5 + SALT_LENGTH));
+  const iv = Buffer.from(blob.subarray(5 + SALT_LENGTH, 5 + SALT_LENGTH + IV_LENGTH));
+  const tag = Buffer.from(blob.subarray(5 + SALT_LENGTH + IV_LENGTH, HEADER_LENGTH));
+  const info: EncryptionInfo = {
+    algorithm: 'aes-256-gcm',
+    kdf: 'scrypt',
+    kdfParams: { ...SCRYPT_PARAMS },
+    salt: salt.toString('base64'),
+    iv: iv.toString('base64'),
+    authTag: tag.toString('base64'),
+    version: ARCHIVE_VERSION,
+  };
+  let key: Buffer;
+  try {
+    key = await deriveKey(password, salt, info.kdfParams);
+  } catch (err) {
+    return { valid: true, ok: false, info, kdf: { salt, iv }, code: 'BAD_PASSWORD' };
+  }
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  try {
+    decipher.update(blob.subarray(HEADER_LENGTH));
+    decipher.final();
+  } catch {
+    return { valid: true, ok: false, info, kdf: { salt, iv }, code: 'BAD_PASSWORD' };
+  }
+  return { valid: true, ok: true, info, kdf: { salt, iv }, code: null };
 }

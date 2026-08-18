@@ -4,7 +4,7 @@
  * 独立设置页壳（sectionHeader/close/自身 tab）已移除 —— tab 容器由
  * ConfigManagerSection 统一渲染，本组件只输出内容体：
  * - 仓库配置表单：repoUrl（必填）+ 认证 token（可选，写入 DSH credentials 的提示）
- *   + gitBin（可选）；
+ *   （git 可执行文件固定使用系统 PATH 中的 git，不再可配置）；
  * - 私有仓库强制提示横幅（常驻）；
  * - 推送按钮 → SyncPushReport（快照 id / 分区 / 告警）；
  * - 拉取按钮 → SyncPullReport.changes 差异摘要（description/kind/severity）；
@@ -21,19 +21,22 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
-import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
+import type { SectionId } from '../../schema/types.ts'
+import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF } from './sync-api.ts'
 import type {
-  AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncPushPayload, SyncSnapshotLite, SyncStartResponse,
-  SyncStatusResponse,
+  AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncPushPayload, SyncSectionInfo, SyncSnapshotLite,
+  SyncStartResponse, SyncStatusResponse,
 } from './sync-api.ts'
 import {
   autosyncIntervalMs, autosyncStatusText, computeAutosyncCountdown, computeGithubLoginView,
   computeRemoteReady, computeSyncButtons, computeSyncStatus, formatIntervalDuration, githubPollMessage,
-  kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
+  kindLabel, presetById, presetIdForUrl, privateRepoHint, pullReportView, pushReportView,
+  readStoredChannel, recommendedSyncSections, severityLabel, syncSectionOptions, WEBDAV_PRESETS,
+  writeStoredChannel,
 } from './sync-view.ts'
-import type { GithubLoginPhase, SyncChannel } from './sync-view.ts'
+import type { GithubLoginPhase, SyncChannel, SyncMode, SyncSectionOption } from './sync-view.ts'
 import { SyncHistoryView } from './SyncHistoryView.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
@@ -51,7 +54,6 @@ interface SyncUiState {
   channel: SyncChannel
   /** git 通道表单 */
   repoUrl: string
-  gitBin: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化 */
   token: string
   /** webdav 通道表单 */
@@ -76,6 +78,12 @@ interface SyncUiState {
   autosyncInterval: AutosyncInterval
   /** 最近一次一键同步执行结果（回滚入口） */
   lastRestoreId: string | null
+  /** 同步模式：默认（快速导出推荐分区） / 高级（自定义勾选分区） */
+  syncMode: SyncMode
+  /** 可同步分区目录（status.syncSections 回填；高级模式勾选列表数据源） */
+  catalog: SyncSectionOption[]
+  /** 高级模式勾选的同步分区（初始 = 推荐分区；空 = 未勾选任何分区） */
+  syncSections: SectionId[]
   error: string | null
   /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
   github: GithubUiState
@@ -101,9 +109,9 @@ const initial: SyncUiState = {
   loading: true,
   loadError: null,
   statusInfo: null,
-  channel: 'git',
+  // 用户最近选择的通道优先（localStorage 记住）；无则缺省 git，由 loadStatus 按配置回填
+  channel: readStoredChannel() ?? 'git',
   repoUrl: '',
-  gitBin: '',
   token: '',
   webdavUrl: '',
   webdavUsername: '',
@@ -118,6 +126,9 @@ const initial: SyncUiState = {
   autosyncEnabled: false,
   autosyncInterval: '30m',
   lastRestoreId: null,
+  syncMode: 'default',
+  catalog: [],
+  syncSections: [],
   error: null,
   github: initialGithub,
 }
@@ -135,17 +146,30 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     patch({ loading: true, loadError: null })
     try {
       const info = await api.status()
-      // 通道回填：transport.type=webdav → 显示 webdav；否则 git（Host 以 transport 字段为准）
+      // 通道回填：优先用户记住的选择（localStorage）；未记录过则按配置（sync-config.transport）
       const savedChannel: SyncChannel = info.transport?.type === 'webdav' ? 'webdav' : 'git'
+      const remembered = readStoredChannel()
+      // 可同步分区目录回填（host adapters 唯一事实源；仅 portable）
+      const catalog = info.syncSections !== undefined ? syncSectionOptions(info.syncSections) : []
+      // 分区选择回填：优先持久化配置（status.syncSelection；自动同步与手动 push 共用）；
+      // 无持久化 → 默认模式 + 推荐分区
+      const persisted = info.syncSelection
+      const persistedMode: SyncMode = persisted?.mode === 'advanced' ? 'advanced' : 'default'
+      const persistedSections = persisted !== undefined
+        ? persisted.sections
+        : recommendedSyncSections(info.syncSections ?? [])
       patch({
         loading: false,
         statusInfo: info,
-        channel: savedChannel,
+        channel: remembered ?? savedChannel,
         repoUrl: info.repoUrl ?? '',
-        gitBin: info.gitBin ?? '',
         webdavUrl: info.webdav?.url ?? '',
-        // Host 不回传 username 值（仅 usernameConfigured 布尔）；留空待填，徽章提示已配置过
-        webdavUsername: '',
+        // Host 回传 username 值（非敏感可回显），供表单回填；无则留空待填
+        webdavUsername: info.webdav?.username ?? '',
+        catalog,
+        // 仅首次回填时设置（用户已改过的勾选保留）；模式跟随持久化
+        syncMode: state.syncMode === 'default' && state.syncSections.length === 0 ? persistedMode : state.syncMode,
+        syncSections: state.syncSections.length === 0 ? persistedSections : state.syncSections,
         ...(info.autosync !== undefined
           ? {
               autosync: info.autosync,
@@ -191,7 +215,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       const url = urlOverride ?? state.webdavUrl
       if (url.trim() === '') return
       try {
-        const res = await api.snapshotsList({ transport: 'webdav', webdav: { url: url.trim() } })
+        const res = await api.snapshotsList({ transport: 'webdav', url: url.trim() })
         patch({ snapshots: res.snapshots })
       } catch {
         // 拉取失败不阻断主流程（下拉留空，用户可重试）
@@ -204,7 +228,6 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       const res = await api.snapshotsList({
         transport: 'git',
         repoUrl: repo.trim(),
-        gitBin: state.gitBin.trim() !== '' ? state.gitBin.trim() : undefined,
       })
       patch({ snapshots: res.snapshots })
     } catch {
@@ -228,17 +251,14 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     if (state.channel === 'webdav') {
       return {
         transport: 'webdav',
-        webdav: {
-          url: state.webdavUrl.trim() !== '' ? state.webdavUrl.trim() : undefined,
-          username: state.webdavUsername.trim() !== '' ? state.webdavUsername.trim() : undefined,
-          password: state.webdavPassword !== '' ? state.webdavPassword : undefined,
-        },
+        url: state.webdavUrl.trim() !== '' ? state.webdavUrl.trim() : undefined,
+        username: state.webdavUsername.trim() !== '' ? state.webdavUsername.trim() : undefined,
+        password: state.webdavPassword !== '' ? state.webdavPassword : undefined,
       }
     }
     return {
       transport: 'git',
       repoUrl: state.repoUrl.trim(),
-      gitBin: state.gitBin.trim() !== '' ? state.gitBin.trim() : undefined,
       token: state.token.trim() !== '' ? state.token : undefined,
     }
   }
@@ -308,7 +328,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const runPush = async (): Promise<void> => {
     patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
     try {
-      const report = await api.push(payload())
+      // 默认模式：不传 sections（= 全部 portable 推荐分区）；高级模式：传勾选分区
+      const selection =
+        state.syncMode === 'advanced' && state.syncSections.length > 0
+          ? { sections: state.syncSections }
+          : {}
+      const report = await api.push({ ...payload(), ...selection })
       // 成功即清空 token/webdavPassword（已安全写入 DSH credentials）；失败保留以便重试
       patch({
         busy: null, pushReport: report,
@@ -328,6 +353,35 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
   }
+
+  /* ------------------------------------------------ 同步模式（默认/高级） */
+
+  /** 保存分区选择到 Host（持久化；自动同步与手动 push 共用；失败提示但不阻断本地 UI）。 */
+  const saveSelection = async (mode: SyncMode, sections: SectionId[]): Promise<void> => {
+    try {
+      await api.saveSelection({ mode, sections })
+    } catch (err) {
+      patch({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 切换同步模式并持久化（高级模式勾选沿用当前 syncSections，切回时保留）。 */
+  const setSyncMode = (mode: SyncMode): void => {
+    patch({ syncMode: mode })
+    void saveSelection(mode, state.syncSections)
+  }
+
+  /** 高级模式勾选分区开关（增删 state.syncSections 并立即持久化）。 */
+  const toggleSyncSection = (id: SectionId, checked: boolean): void => {
+    const next = checked
+      ? (state.syncSections.includes(id) ? state.syncSections : [...state.syncSections, id])
+      : state.syncSections.filter((s) => s !== id)
+    patch({ syncSections: next })
+    void saveSelection(state.syncMode, next)
+  }
+
+  /** 默认（快速导出）模式的推荐分区数（渲染计数用；catalog 已只含 portable）。 */
+  const recommendedSectionCount = state.catalog.filter((c) => c.defaultIncluded).length
 
   /* ------------------------------------------------ 一键同步（方案 A） */
 
@@ -396,6 +450,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const githubBusy =
     state.github.phase === 'starting' || state.github.phase === 'waiting' || state.github.phase === 'polling'
 
+  /** 高级模式勾选为空 → 禁止推送（默认模式不受限）。 */
+  const pushSelectionReady = state.syncMode !== 'advanced' || state.syncSections.length > 0
+
   const autosyncText = state.autosync !== null ? autosyncStatusText(state.autosync, uiT) : t('autosync.statusNever')
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
   const autosyncCountdownMs = state.autosync !== null && state.autosync.elapsedMs >= 0
@@ -418,7 +475,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               value={state.channel}
               disabled={state.busy !== null}
               onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                patch({ channel: e.target.value as SyncChannel })
+                const ch = e.target.value as SyncChannel
+                patch({ channel: ch })
+                writeStoredChannel(ch) // 记住选择，下次进入仍停留此栏
               }}
             >
               <option value="git">{t('channel.git')}</option>
@@ -498,19 +557,6 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 {githubView.phase === 'error' && (
                   <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
                 )}
-
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>{t('config.gitBin')}</span>
-                  <input
-                    type="text"
-                    className={css.input}
-                    value={state.gitBin}
-                    placeholder="git"
-                    disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ gitBin: e.target.value }) }}
-                  />
-                  <span className={css.hint}>{t('config.gitBinHint')}</span>
-                </label>
               </>
             )}
 
@@ -518,6 +564,21 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             {state.channel === 'webdav' && (
               <>
                 <span className={css.groupLabel}>{t('webdav.title')}</span>
+                {/* 常见 WebDAV 服务器预设：选择后填充 url 模板（含占位符待替换） */}
+                <span className={css.hint}>{t('webdav.presetHint')}</span>
+                <select
+                  className={css.select}
+                  value={presetIdForUrl(state.webdavUrl)}
+                  disabled={state.busy !== null}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                    const p = presetById(e.target.value)
+                    patch({ webdavUrl: p.url })
+                  }}
+                >
+                  {WEBDAV_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>{p.label}</option>
+                  ))}
+                </select>
                 <label className={css.field}>
                   <span className={css.fieldLabel}>{t('webdav.url')}</span>
                   <input
@@ -577,6 +638,76 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </div>
           </Card>
 
+          {/* 同步模式：默认（快速导出）/ 高级（自定义导出） */}
+          <Card>
+            <span className={css.groupLabel}>{t('mode.title')}</span>
+            <span className={css.hint}>{t('mode.hint')}</span>
+            <div className={css.modeTabs} role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={state.syncMode === 'default'}
+                data-active={state.syncMode === 'default' ? '' : undefined}
+                className={css.modeTab}
+                disabled={state.busy !== null}
+                onClick={() => { setSyncMode('default') }}
+              >
+                {t('mode.default')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={state.syncMode === 'advanced'}
+                data-active={state.syncMode === 'advanced' ? '' : undefined}
+                className={css.modeTab}
+                disabled={state.busy !== null}
+                onClick={() => { setSyncMode('advanced') }}
+              >
+                {t('mode.advanced')}
+              </button>
+            </div>
+            <div className={css.modeHint}>
+              {state.syncMode === 'default' ? t('mode.defaultHint') : t('mode.advancedHint')}
+            </div>
+            <span className={css.hint}>{t('mode.persistHint')}</span>
+
+            {state.syncMode === 'advanced' && (
+              <>
+                <span className={css.groupLabel}>{t('mode.sectionsTitle')}</span>
+                {state.catalog.length === 0 ? (
+                  <span className={css.hint}>{t('common.loading')}</span>
+                ) : (
+                  <div className={css.groupList}>
+                    {state.catalog.map((s) => (
+                      <Checkbox
+                        key={s.id}
+                        checked={state.syncSections.includes(s.id)}
+                        onChange={(checked) => { toggleSyncSection(s.id, checked) }}
+                        label={
+                          <span className={css.categoryItem}>
+                            <span className={css.categoryName}>{s.label}</span>
+                            <Badge kind="info">{t('mode.sectionPortable')}</Badge>
+                            {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
+                          </span>
+                        }
+                      />
+                    ))}
+                  </div>
+                )}
+                <span className={css.hint}>{t('mode.sectionsHint')}</span>
+                {state.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
+              </>
+            )}
+
+            {state.syncMode === 'default' && (
+              <span className={css.hint}>
+                {state.catalog.length === 0
+                  ? t('common.loading')
+                  : t('mode.defaultCount', { n: String(recommendedSectionCount) })}
+              </span>
+            )}
+          </Card>
+
           {/* 一键同步 + 手动推送/拉取 */}
           <div className={css.actionRow}>
             <Button
@@ -586,7 +717,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             >
               {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}
             </Button>
-            <Button disabled={!buttons.canPush || githubBusy} onClick={() => { void runPush() }}>
+            <Button disabled={!buttons.canPush || githubBusy || !pushSelectionReady} onClick={() => { void runPush() }}>
               {state.busy === 'push' ? <Spinner label={buttons.pushLabel} /> : buttons.pushLabel}
             </Button>
             <Button disabled={!buttons.canPull || githubBusy} onClick={() => { void runPull() }}>

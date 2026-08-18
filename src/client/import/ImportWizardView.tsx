@@ -116,6 +116,10 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const decryptPassword = imp.decryptPassword
   const decryptRefs = imp.decryptRefs
   const isEncrypted = imp.analysis?.encrypted === true
+  // 上传备份是否整体加密容器（需先解锁才可分析）；非敏感、刷新恢复
+  const containerEncrypted = imp.containerEncrypted
+  // 容器是否已解锁（仅内存；刷新后要求重输密码重新解锁）
+  const archiveUnlocked = imp.archiveUnlocked
   const fileInput = useRef<HTMLInputElement | null>(null)
   /**
    * 选择代数（取消选择时递增）：作废在途的选择上传/分析，
@@ -126,6 +130,11 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const [verifying, setVerifying] = useState(false)
   const [verified, setVerified] = useState(false)
   const [verifyError, setVerifyError] = useState<string | null>(null)
+  /** decrypt-archive 阶段（解锁加密容器）的本地状态（不持久化） */
+  const [unlocking, setUnlocking] = useState(false)
+  const [archiveUnlockError, setArchiveUnlockError] = useState<string | null>(null)
+  /** 解锁阶段密码输入（本地 state，不上报 store 的敏感持久化键） */
+  const [archivePassword, setArchivePassword] = useState('')
 
   const setPhase = (next: FlowPhase): void => {
     runStore.patch({ import: { phase: next } })
@@ -143,10 +152,13 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
    * hasConflicts/hasPathIssues/hasSecrets 基于原始 analysis/plan（Dry Run 产物），
    * 在流程中不会因已解决而重算——所以导航必须只前进（见 nextFlowPhase），
    * 而不是靠"当前阶段 != X"判定（那会让已完成阶段被重新命中、跳回上一步）。
-   * 加密备份（analysis.encrypted）恒先插入 decrypt 阶段：不解锁不得继续。
+   * 整体加密容器（containerEncrypted && !archiveUnlocked）恒先插入 decrypt-archive：
+   * 不解锁不得分析/继续导入。
+   * 加密备份（analysis.encrypted）恒先插入 decrypt 阶段：不解锁凭据不得继续。
    */
   const applicablePhases = (): FlowPhase[] => {
     const list: FlowPhase[] = []
+    if (containerEncrypted && !archiveUnlocked) list.push('decrypt-archive')
     if (isEncrypted) list.push('decrypt')
     if (hasConflicts) list.push('conflicts')
     if (hasPathIssues) list.push('path-mapping')
@@ -162,12 +174,14 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
 
   /** 选择并上传 ZIP → wizard.selectZip（analyzing → compatibility）。
    * 换选不变式：每次选择都以最新文件为准（applyPickedFile 替换旧选择）；
-   * pickGeneration 守卫作废取消后在途的旧请求。 */
+   * pickGeneration 守卫作废取消后在途的旧请求。
+   * 整体加密容器（upload.containerType === 'encrypted'）：不能直接按 ZIP 分析，
+   * 先进入「解锁加密备份」（decrypt-archive）阶段，解锁成功后再走 selectZip。 */
   const onPickFile = async (file: File | undefined): Promise<void> => {
     if (file === undefined) return
     const generation = pickGeneration.current
     const next = applyPickedFile(fileSelectModel(imp.selectedFileName, uploading), file)
-    // 换文件：清空上一份备份的仅内存解密状态（密码/凭据覆盖清单）
+    // 换文件：清空上一份备份的仅内存解密状态（密码/凭据覆盖清单/容器解锁）
     runStore.patch({
       import: {
         uploading: next.busy,
@@ -175,11 +189,27 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         selectedFileName: next.selectedName,
         decryptPassword: '',
         decryptRefs: [],
+        archiveUnlocked: false,
+        containerEncrypted: false,
       },
     })
     try {
       const uploaded: UploadResponse = await api.upload(file)
       if (generation !== pickGeneration.current) return // 用户已取消本次选择
+      if (uploaded.containerType === 'encrypted') {
+        // 加密容器：告知向导 + 进入解锁阶段；analysis 留待解锁后
+        wizard.setArchiveEncrypted(true)
+        runStore.patch({
+          import: {
+            containerEncrypted: true,
+            archiveUnlocked: false,
+            zipPath: uploaded.zipPath,
+            phase: 'decrypt-archive',
+          },
+        })
+        runStore.syncWizard()
+        return
+      }
       const analysis = await wizard.selectZip(uploaded.zipPath)
       void analysis
       if (generation !== pickGeneration.current) return
@@ -275,6 +305,28 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const finishDecrypt = (): void => {
     wizard.setDecryptPassword(decryptPassword)
     setPhase(nextPhase('decrypt'))
+  }
+
+  /** 解锁整体加密备份容器（只读，零写入）：解密 → 明文 ZIP → selectZip 继续分析 */
+  const onUnlockArchive = async (): Promise<void> => {
+    if (imp.zipPath === null) return
+    setUnlocking(true)
+    setArchiveUnlockError(null)
+    try {
+      await wizard.unlockArchive(imp.zipPath, archivePassword)
+      runStore.patch({ import: { archiveUnlocked: true } })
+      runStore.syncWizard()
+      // 解锁成功：继续「选 ZIP → 分析 → 兼容性」流程（selectZip 内部步进到 compatibility）
+      const analysis = await wizard.selectZip(imp.zipPath!)
+      void analysis
+      runStore.syncWizard()
+    } catch (err) {
+      setArchiveUnlockError(err instanceof Error ? err.message : String(err))
+      runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
+      runStore.syncWizard()
+    } finally {
+      setUnlocking(false)
+    }
   }
 
   /** Confirm 执行：confirm=true（安全阀）+ 用户回滚策略 */
@@ -447,6 +499,37 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   // 流程阶段页只在 wizard.step === 'preview' 时渲染：execute 开始后 step 变
   // importing/result，若 phase 仍是 confirm，必须让位给导入中/结果页（否则点「导入」
   // 无反应——confirm 页一直挡着，要回退一步才露出结果）。
+  // 解密容器阶段（decrypt-archive）：发生在任何分析之前（step 可能仍是 select）。
+  if (phase === 'decrypt-archive') {
+    return (
+      <div className={css.viewBody}>
+        <SectionTitle title={t('import.decryptArchive.title')} subtitle={t('import.decryptArchive.hint')} />
+        <input
+          type="password"
+          className={css.input}
+          autoComplete="off"
+          placeholder={t('import.decryptArchive.passwordPlaceholder')}
+          value={archivePassword}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+            setArchivePassword(e.target.value)
+            setArchiveUnlockError(null)
+          }}
+        />
+        {archiveUnlockError !== null && <ErrorBanner error={archiveUnlockError} />}
+        <div className={css.actionRow}>
+          <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
+          <Button
+            variant="primary"
+            disabled={archivePassword === '' || unlocking}
+            onClick={() => { void onUnlockArchive() }}
+          >
+            {unlocking ? <Spinner label={t('import.decryptArchive.unlocking')} /> : t('import.decryptArchive.unlock')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   if (phase === 'decrypt' && step === 'preview') {
     return (
       <div className={css.viewBody}>

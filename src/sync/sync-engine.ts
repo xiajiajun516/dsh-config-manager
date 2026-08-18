@@ -77,11 +77,22 @@ export interface SyncEngineOptions {
   fsx?: SnapshotFs;
   /** 消息翻译器（缺省 ctx.msg ?? zh） */
   msg?: MsgFunc;
+  /**
+   * 同步范围（高级/自定义导出模式持久化配置）：只处理这些 portable 分区。
+   * 缺省 = 全部 portable 推荐分区。应用于 push / merge / applyMergePlan / applyItems
+   * 等全部链路（portableAdapters 层过滤），供自动同步等后台流程复用用户选择；
+   * 手动请求仍可用 push(opts.sections) 覆盖。
+   */
+  sections?: SectionId[];
 }
 
 export interface SyncPushOptions {
   /** 覆盖自动生成的快照 id */
   snapshotId?: string;
+  /** 仅同步指定分区（缺省 = 全部 portable 推荐分区，即「默认/快速导出」模式）。
+   *  传入非 portable 或未知分区 → 忽略并告警（同步通道安全约束：
+   *  deviceSpecific/platformSpecific 永不进入同步通道；未知 id 不静默吞掉）。 */
+  sections?: SectionId[];
 }
 
 export interface SyncPullOptions {
@@ -114,7 +125,8 @@ export interface SyncPullReport {
   ok: boolean;
   snapshotId: string;
   changes: PullChange[];
-  /** 是否存在需要人工决策的项（Conflict / MissingSecret / MissingDependency / Install / 路径问题） */
+  /** 是否存在需要人工决策的项（Conflict / MissingSecret / MissingDependency / 路径问题）。
+   * 插件 Install 不算 —— 插件安装随同步自动采用（product requirement）。 */
   needsReview: boolean;
   message?: string;
 }
@@ -190,6 +202,7 @@ export class SyncEngine {
   private readonly exporterVersion: string;
   private readonly fsx: SnapshotFs;
   private readonly msg: MsgFunc;
+  private readonly sections: readonly SectionId[] | undefined;
 
   constructor(opts: SyncEngineOptions) {
     if (opts.ctx === null || typeof opts.ctx !== 'object') throw new Error(zhMsg('sync.missingCtx'));
@@ -216,11 +229,39 @@ export class SyncEngine {
     this.exporterVersion = opts.exporterVersion ?? '0.1.0';
     this.fsx = opts.fsx ?? createSnapshotFs();
     this.msg = opts.msg ?? msgOf(opts.ctx);
+    this.sections = opts.sections !== undefined && opts.sections.length > 0 ? [...opts.sections] : undefined;
   }
 
-  /** 同步只做 portable 分区（deviceSpecific/platformSpecific 永不参与） */
+  /** 同步只做 portable 分区（deviceSpecific/platformSpecific 永不参与）。
+   *  构造注入 sections（同步范围）时再按注入范围过滤 —— 自动同步等后台流程
+   *  merge/apply/push 全链路复用用户选择；手动请求仍可用 push(opts.sections) 覆盖。 */
   private portableAdapters(): ConfigAdapter[] {
-    return this.adapters.filter((a) => a.portability === 'portable');
+    const portable = this.adapters.filter((a) => a.portability === 'portable');
+    if (this.sections === undefined) return portable;
+    const wanted = new Set(this.sections);
+    return portable.filter((a) => wanted.has(a.id));
+  }
+
+  /**
+   * push 候选 adapter：
+   * - sections 缺省/空 → 全部 portable（「默认/快速导出」模式）；
+   * - sections 显式给出 → 只取 portable 且命中的（「高级/自定义导出」模式）；
+   *   非 portable / 未知分区 → 警告跳过（安全约束 + 不静默，用户能看见自己勾了哪个无效项）。
+   */
+  private pushTargets(sections: readonly SectionId[] | undefined, warnings: string[]): ConfigAdapter[] {
+    const portable = this.portableAdapters();
+    if (sections === undefined || sections.length === 0) return portable;
+    const byId = new Map(portable.map((a) => [a.id, a]));
+    const out: ConfigAdapter[] = [];
+    for (const id of sections) {
+      const adapter = byId.get(id);
+      if (adapter === undefined) {
+        warnings.push(this.msg('sync.skipNonPortable', { section: id }));
+        continue;
+      }
+      out.push(adapter);
+    }
+    return out;
   }
 
   /** 结构性断言：凭据/秘密分区绝不进入同步载荷（双保险，portable 过滤之上） */
@@ -235,11 +276,13 @@ export class SyncEngine {
   /**
    * push：导出 portable 分区 → 组装快照 → 本地散文件副本 → transport.upload → 更新 sync-state。
    * 单项分区导出失败只告警跳过（§34.17），全部失败才整体失败。
+   * opts.sections：指定仅同步这些分区（高级/自定义模式）；缺省 = 全部 portable 推荐分区。
    */
   async push(opts: SyncPushOptions = {}): Promise<SyncPushReport> {
     const warnings: string[] = [];
     const sections: SyncSnapshot['sections'] = {};
-    for (const adapter of this.portableAdapters()) {
+    const targets = this.pushTargets(opts.sections, warnings);
+    for (const adapter of targets) {
       let section: ExportSection;
       try {
         section = await adapter.export(this.ctx, { includeSecrets: false });
@@ -361,7 +404,7 @@ export class SyncEngine {
       const needsReview =
         plan.items.some((i) =>
           i.kind === 'Conflict' || i.kind === 'MissingSecret' || i.kind === 'MissingDependency'
-          || i.kind === 'Install' || i.kind === 'Error')
+          || i.kind === 'Error')
         || analysis.pathIssues.length > 0;
       const message = changes.length === 0
         ? this.msg('sync.unchanged')
@@ -375,6 +418,47 @@ export class SyncEngine {
   /** 列出远端已有快照（按 createdAt 升序）—— 供「选择历史快照」下拉。 */
   async listSnapshots(): Promise<SyncSnapshotMeta[]> {
     return this.transport.list();
+  }
+
+  /**
+   * 远端是否出现比本地共同祖先（sync-state.lastSnapshotId）更新的快照（§3.2「检测到远端新快照」）。
+   * - 远端为空 → false（无物可拉）；
+   * - 本地从未同步（lastSnapshotId=''）且远端非空 → true（首次可拉）；
+   * - 否则比较远端最新快照 id 与 lastSnapshotId。
+   * 只读远端列表（transport.list），不做下载/合并。
+   */
+  async hasNewRemoteSnapshot(): Promise<boolean> {
+    const metas = await this.transport.list();
+    if (metas.length === 0) return false;
+    const latestId = metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新在末
+    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
+    if (state.lastSnapshotId === '') return true;
+    return latestId !== state.lastSnapshotId;
+  }
+
+  /**
+   * 本地 portable 配置当前内容与上次基线（sync-state.sections hash）相比是否有变化（§3.1 上传「看变化」）。
+   * - 从未同步（sync-state.sections 为空）→ true；
+   * - 任一 portable 分区当前导出 hash ≠ 基线 hash → true；
+   * - 全部一致 → false（无本地改动，不上传）。
+   * 只读本地导出 + sync-state，不写任何东西、不碰远端。
+   */
+  async hasLocalChanges(): Promise<boolean> {
+    const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
+    if (Object.keys(state.sections).length === 0) return true;
+    for (const adapter of this.portableAdapters()) {
+      let section: ExportSection;
+      try {
+        section = await adapter.export(this.ctx, { includeSecrets: false });
+      } catch {
+        continue; // 单项导出失败不影响判定（与 push 单项跳过语义一致）
+      }
+      const data = isFileSection(adapter.id) ? section.data : this.scanner.scanAndRedact(section.data).sanitized;
+      const recorded = state.sections[adapter.id];
+      if (recorded === undefined) return true; // 基线缺该分区 → 视为有变化
+      if (recorded.hash !== hashSection(data as SectionData)) return true;
+    }
+    return false;
   }
 
   /**

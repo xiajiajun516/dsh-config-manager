@@ -34,6 +34,7 @@ import {
   encryptCredentials, decryptCredentials, createEncryptionProvider,
   SecurityError, SCHEMA_MAGIC, SCHEMA_VERSION, HEADER_LENGTH, SALT_LENGTH, IV_LENGTH,
   validatePasswordStrength, SCRYPT_PARAMS,
+  encryptArchive, decryptArchive, verifyEncryptedBlob, isArchiveBlob, ARCHIVE_MAGIC,
 } from './encryption.ts';
 import {
   buildChecksums, parseChecksumsTable, verifyChecksums, verifyChecksumsJson, describeMismatches,
@@ -360,6 +361,62 @@ test('encryption: 密码强度校验', () => {
   assert.equal(validatePasswordStrength('short').ok, false);
   assert.equal(validatePasswordStrength('12345678').ok, true);
   assert.ok(validatePasswordStrength('abcdefghijkL1!').ok);
+});
+
+/* ---------------- 整体备份容器加密（encryptArchive / verifyEncryptedBlob / decryptArchive） ---------------- */
+
+test('archive: 往返加解密一致（任意二进制 ZIP 字节无损）', async () => {
+  const zipBytes = Buffer.from('PK\x03\x04this-is-a-real-zip-binary-content\u0000\x01\x02', 'binary');
+  const password = 'archive-password-123';
+  const { blob } = await encryptArchive(zipBytes, password);
+  assert.ok(isArchiveBlob(blob), 'magic DCA1 可探测');
+  assert.equal(Buffer.from(blob.subarray(0, 4)).toString('ascii'), ARCHIVE_MAGIC);
+
+  const verified = await verifyEncryptedBlob(blob, password);
+  assert.equal(verified.valid, true);
+  assert.equal(verified.ok, true);
+  assert.ok(verified.info && verified.kdf, '应返回解密参数');
+
+  const decrypted = await decryptArchive(blob, verified.info!, verified.kdf!, password);
+  assert.deepEqual(Buffer.from(decrypted), zipBytes, '解出的明文 ZIP 字节必须无损一致');
+});
+
+test('archive: 密码错误 → BAD_PASSWORD（verify 与 decrypt 都拒绝，不泄明文）', async () => {
+  const zipBytes = Buffer.from('PK\x03\x04dsh-config-plaintext');
+  const password = 'right-password';
+  const { blob } = await encryptArchive(zipBytes, password);
+  const verified = await verifyEncryptedBlob(blob, 'wrong-password');
+  assert.equal(verified.valid, true);
+  assert.equal(verified.ok, false);
+  assert.equal(verified.code, 'BAD_PASSWORD');
+  await assert.rejects(
+    () => decryptArchive(blob, verified.info!, verified.kdf!, 'wrong-password'),
+    (err: unknown) => err instanceof SecurityError && err.code === 'BAD_PASSWORD',
+  );
+});
+
+test('archive: 非容器字节 → valid=false（体积不足判 TAMPERED；magic 不符判 UNSUPPORTED_FORMAT）', async () => {
+  const tooShort = Buffer.from('PK\x03\x04plain-zip-not-encrypted');
+  assert.equal(isArchiveBlob(tooShort), false);
+  const v = await verifyEncryptedBlob(tooShort, 'pw');
+  assert.equal(v.valid, false);
+  assert.equal(v.code, 'TAMPERED', '体积不足 → TAMPERED');
+
+  // 长度足够的非容器字节 → magic 不符 → UNSUPPORTED_FORMAT
+  const fullLen = Buffer.alloc(64);
+  fullLen.write('PK\x03\x04', 0, 'binary');
+  const v2 = await verifyEncryptedBlob(fullLen, 'pw');
+  assert.equal(v2.valid, false);
+  assert.equal(v2.code, 'UNSUPPORTED_FORMAT');
+});
+
+test('archive: 篡改密文 → verify ok=false（GCM 认证失败）', async () => {
+  const { blob } = await encryptArchive(Buffer.from('sensitive-archive'), 'archive-pw-123');
+  const tampered = Buffer.from(blob);
+  tampered[tampered.length - 1] = tampered[tampered.length - 1]! ^ 0xff;
+  const verified = await verifyEncryptedBlob(tampered, 'archive-pw-123');
+  assert.equal(verified.valid, true);
+  assert.equal(verified.ok, false, '篡改后密码验证必失败');
 });
 
 /* ================= zip-security ================= */
@@ -835,6 +892,99 @@ test('集成: includeSecrets 无加密提供者 → 拒绝（绝不明文导出�
       () => exporter.export({ includeSecrets: true, outPath: path.join(dir, 'x.zip') }),
       /EncryptionProvider/,
     );
+  });
+});
+
+test('集成: 只加密不导出密钥（encryption 提供但 includeSecrets=false）→ 备份仍标记加密，但不含任何凭据值', async () => {
+  await withTmp(async (dir) => {
+    const homeDir = path.join(dir, 'home');
+    const ctx = new MockHostContext(homeDir);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    // 存在真实凭据文件，但用户只勾了「加密备份」、未勾「导出密钥」—— 凭据值绝不能进备份
+    const credentialsYaml = 'DEEPSEEK_API_KEY: sk-super-secret-value\n';
+    await ctx.fs.writeFile(path.join(homeDir, '.credentials.yaml'), Buffer.from(credentialsYaml, 'utf8'));
+
+    const adapters: ConfigAdapter[] = [new MiniSettingsAdapter()];
+    const zipPath = path.join(dir, 'enc-only.zip');
+    const password = 'backup-password-123';
+    const exporter = new Exporter({
+      ctx,
+      adapters,
+      scanner: createSecretScanner(),
+      encryption: createEncryptionProvider(password),
+      now: () => new Date('2026-08-14T12:00:00.000Z'),
+    });
+    const { manifest } = await exporter.export({ includeSecrets: false, outPath: zipPath });
+
+    assert.equal(manifest.security.encrypted, true, '加密是独立选项：不含密钥也应标记加密');
+    assert.equal(manifest.security.containsSecrets, false, '未导出密钥：不得声称包含秘密');
+    assert.ok(manifest.security.encryption, '应记录加密参数');
+
+    const archive = parseZip(await fs.readFile(zipPath));
+    assert.ok(archive.has('security/secrets.enc'), 'secrets.enc 应写入 ZIP');
+    const blob = archive.readEntry('security/secrets.enc');
+    const decrypted = await decryptCredentials(blob, manifest.security.encryption!, password);
+    assert.equal(decrypted, '', '未导出密钥时 secrets.enc 解密内容必须为空');
+    for (const name of archive.names()) {
+      if (name === 'security/secrets.enc') continue // secrets.enc 为二进制加密内容，单独断言解密结果
+      assert.ok(
+        !archive.readEntryText(name).includes('sk-super-secret-value'),
+        `凭据值绝不得出现在备份条目 ${name} 中`,
+      )
+    }
+  });
+});
+
+test('集成: 整体加密备份容器——导出→容器→解锁→明文 ZIP→分析（完整链路）', async () => {
+  await withTmp(async (dir) => {
+    const homeDir = path.join(dir, 'home');
+    const ctx = new MockHostContext(homeDir);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    await ctx.fs.writeFile(
+      path.join(homeDir, '.credentials.yaml'),
+      Buffer.from('DEEPSEEK_API_KEY: sk-super-secret-value\n', 'utf8'),
+    );
+    const adapters: ConfigAdapter[] = [new MiniSettingsAdapter()];
+    const password = 'archive-whole-backup-pw';
+
+    // 1) Exporter 生成明文 ZIP（注入 EncryptionProvider 以便 includeSecrets 在 ZIP 内产出 secrets.enc；
+    //    最终整体加密由外层容器完成）
+    const plainZip = path.join(dir, 'plain.zip');
+    await new Exporter({
+      ctx,
+      adapters,
+      encryption: createEncryptionProvider(password),
+      now: () => new Date(),
+    }).export({ includeSecrets: true, outPath: plainZip });
+
+    // 2) 整体加密为容器
+    const rawZip = await fs.readFile(plainZip);
+    const { blob } = await encryptArchive(rawZip, password);
+    const containerPath = path.join(dir, 'backup.zip');
+    await fs.writeFile(containerPath, blob);
+    assert.ok(isArchiveBlob(await fs.readFile(containerPath)), '落盘文件是加密容器（magic DCA1）');
+
+    // 3) 解锁（只读校验 + 解密）→ 明文 ZIP
+    const containerBytes = await fs.readFile(containerPath);
+    const verified = await verifyEncryptedBlob(containerBytes, password);
+    assert.equal(verified.valid, true);
+    assert.equal(verified.ok, true, '正确密码应通过验证');
+    const plain = await decryptArchive(containerBytes, verified.info!, verified.kdf!, password);
+    const unlockedPath = path.join(dir, 'unlocked.zip');
+    await fs.writeFile(unlockedPath, plain);
+
+    // 4) 明文 ZIP 可被 Importer 正常分析
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+    const analysis = await importer.analyzeImport(unlockedPath);
+    assert.equal(analysis.valid, true);
+    assert.deepEqual(analysis.sectionsInZip, ['settings']);
+
+    // 5) 明文 ZIP 中确实包含完整凭据（includeSecrets=true 时 Exporter 在 ZIP 内写入 secrets.enc）
+    const archive = parseZip(plain);
+    assert.ok(archive.has('security/secrets.enc'), '容器解出的 ZIP 含 secrets.enc（凭据受容器整体保护）');
+    // 错误密码：verify 拒绝
+    const wrong = await verifyEncryptedBlob(containerBytes, 'wrong-password');
+    assert.equal(wrong.ok, false);
   });
 });
 

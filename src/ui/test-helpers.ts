@@ -167,6 +167,10 @@ export class MockImportPort implements ImportPort {
     this.planCalls.push(decisions);
     return this.plan;
   }
+  async decryptArchive(zipPath: string): Promise<{ zipPath: string }> {
+    // 测试用：把传入路径视为已解锁的明文 ZIP（不真正解密）
+    return { zipPath };
+  }
   async executeImportPlan(
     _zip: string,
     _plan: ImportPlan,

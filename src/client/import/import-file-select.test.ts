@@ -130,7 +130,7 @@ test('import-reselect-works: 选 A → 取消选择 → 换选 B → 提交的�
   const executedZip: string[] = []
   const api = makeApi({
     upload: async (file: File): Promise<UploadResponse> =>
-      ({ zipPath: `/tmp/${file.name}`, name: file.name, sizeBytes: file.size }),
+      ({ zipPath: `/tmp/${file.name}`, name: file.name, sizeBytes: file.size, containerType: 'zip' }),
     analyzeImport: async (zipPath: string) => {
       assert.equal(zipPath, '/tmp/b.zip', '换选后只分析最新文件 B')
       return makeAnalysis()
@@ -178,7 +178,7 @@ test('import-reselect-works: 取消后重新选择同一文件也生效（input 
   const api = makeApi({
     upload: async (file: File): Promise<UploadResponse> => {
       uploaded.push(file.name)
-      return { zipPath: `/tmp/${file.name}`, name: file.name, sizeBytes: file.size }
+      return { zipPath: `/tmp/${file.name}`, name: file.name, sizeBytes: file.size, containerType: 'zip' }
     },
     analyzeImport: async () => makeAnalysis(),
     createImportPlan: async (zipPath: string) => {

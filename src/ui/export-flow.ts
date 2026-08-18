@@ -47,7 +47,7 @@ export const DEFAULT_CATEGORIES: readonly ExportCategory[] = [
   { id: 'settings', label: 'Settings', description: 'DSH 全局设置（namespace 分区，redacted）', defaultIncluded: true, portability: 'portable', group: 'general' },
   { id: 'providers', label: 'Providers & Models', description: 'LLM Provider / Model / 默认模型 / BaseURL', defaultIncluded: true, portability: 'portable', group: 'ai' },
   { id: 'plugins', label: 'Plugins', description: '已安装插件清单与启用状态（不含二进制）', defaultIncluded: true, portability: 'portable', group: 'extensions' },
-  { id: 'pluginFiles', label: 'Plugin Files', description: '插件自有配置文件（dsh-ssh.json 等，白名单）', defaultIncluded: false, portability: 'deviceSpecific', group: 'extensions' },
+  { id: 'pluginFiles', label: 'Plugin Files', description: '插件自有配置文件（白名单 + plugin-config/ 目录，整文件复制）', defaultIncluded: false, portability: 'deviceSpecific', group: 'extensions' },
   { id: 'mcp', label: 'MCP Servers', description: 'MCP 服务器组合配置（需重启生效）', defaultIncluded: true, portability: 'platformSpecific', group: 'mcp' },
   { id: 'prompts', label: 'Prompts', description: 'System Prompt / Plan Mode 提示', defaultIncluded: true, portability: 'portable', group: 'customization' },
   { id: 'skills', label: 'Skills', description: '用户技能文件（~/.dsh/skills）', defaultIncluded: true, portability: 'portable', group: 'customization' },

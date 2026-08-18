@@ -192,6 +192,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 - **两通道保留策略一致**：远端只保留最新 **10** 个快照（`MAX_REMOTE_SNAPSHOTS=10`），更旧的自动删除。
 - **切换通道重新开始**：Git 与 WebDAV 的快照 / 共同祖先**互不共享**。切换通道后，同步从新远端的空基线重新开始——请先推送一个新快照。
 - **WebDAV 认证**采用 HTTP Basic：`username` 存配置、可在界面回显；`password` 则实时从 DSH credentials 槽位 `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` 读取——绝不出现于任何同步文件或日志。
+- **插件自动安装**：拉取差异时，备份里新增的插件会在确认导入时**自动安装**，无需在差异列表里逐项手动勾选；只有**版本冲突**的插件仍需要你决定「保留当前 / 采用备份」。
 
 ### 🗂️ 配置档案（Profiles）
 

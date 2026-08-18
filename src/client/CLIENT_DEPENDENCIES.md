@@ -76,8 +76,9 @@ POST /api/dsh-config-manager/plan          body: { zipPath, decisions } → Impo
 POST /api/dsh-config-manager/execute       body: { zipPath, plan, opts: { confirm, secretInputs, rollbackOnError } } → ImportResult
 ```
 
-- `password` 仅加密备份模式传入（Host 侧 `security/encryption.ts` scrypt+AES-256-GCM），
-  **绝不写入 manifest / 任何配置**；
+- `password` 为加密的独立开关：传入即注入 EncryptionProvider（Host 侧 `security/encryption.ts`
+  scrypt+AES-256-GCM），备份标记 encrypted（导入需密码）；`includeSecrets=false`（不导出密钥）时
+  secrets.enc 加密空内容占位，不包含任何凭据值。密码**绝不写入 manifest / 任何配置**；
 - `upload` 落 Host 受控临时目录（如 `~/.dsh/dsh-config-manager/tmp/`），返回的 zipPath
   供 analyze/plan/execute 引用；
 - 错误响应统一 `{ error: string }`（client `readJson` 依赖该形状）；

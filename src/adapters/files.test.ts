@@ -133,6 +133,42 @@ test('pluginFiles: 白名单导出（不存在跳过）+ 默认不包含', async
   assert.equal(Buffer.from(await dst.fs.readFile('dsh-ssh.json')).toString(), '{"hosts":[]}');
 });
 
+test('pluginFiles: 约定配置目录递归收集 + 与白名单去重 + 导入映射写回', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  // 约定目录下的文件（含嵌套子目录）
+  await src.fs.writeFile('plugin-config/pluginA/a.json', Buffer.from('{"a":1}', 'utf8'));
+  await src.fs.writeFile('plugin-config/pluginA/sub/b.toml', Buffer.from('b=2', 'utf8'));
+  // 白名单文件
+  await src.fs.writeFile('dsh-ssh.json', Buffer.from('{"hosts":[]}', 'utf8'));
+  // 白名单里显式点到的文件同时位于约定目录内 → 应去重，只收集一次
+  //（whitelist 用与 collectDir 相同的相对路径 plugin-config/pluginA/a.json）
+
+  // whitelist 命中约定目录内同路径文件：a.json 同时由白名单与目录收集 → 去重
+  const whitelist = ['dsh-ssh.json', 'plugin-config/pluginA/a.json'];
+  const adapter = new PluginFilesAdapter(whitelist, 'plugin-config');
+  const out = await adapter.export(src, { includeSecrets: false });
+  const rels = out.data.files.map((f) => f.relativePath).sort();
+  // 白名单 dsh-ssh.json + 目录 a.json、sub/b.toml（a.json 白名单/目录交叉去重，只出现一次）
+  assert.deepEqual(rels, ['dsh-ssh.json', 'plugin-config/pluginA/a.json', 'plugin-config/pluginA/sub/b.toml']);
+
+  const sections = new Map([['pluginFiles', out.data]]);
+  const dst = makeContext('linux', '/home/bob');
+  const items = await adapter.analyzeImport(out.data, makeImportContext(dst, sections));
+  assert.equal(items.length, 3);
+  assert.ok(items.every((i) => i.kind === 'Create'));
+  for (const item of items) {
+    await adapter.applyItem(item, makeImportContext(dst, sections));
+  }
+  assert.equal(Buffer.from(await dst.fs.readFile('dsh-ssh.json')).toString(), '{"hosts":[]}');
+  assert.equal(Buffer.from(await dst.fs.readFile('plugin-config/pluginA/sub/b.toml')).toString(), 'b=2');
+  assert.equal(Buffer.from(await dst.fs.readFile('plugin-config/pluginA/a.json')).toString(), '{"a":1}');
+});
+
+test('pluginFiles: 非法 collectDir（绝对路径/越界）构造即抛错', () => {
+  assert.throws(() => new PluginFilesAdapter(undefined, 'C:\\evil'), /collectDir 非法/);
+  assert.throws(() => new PluginFilesAdapter(undefined, '../escape'), /collectDir 非法/);
+});
+
 test('sessions: 默认关 + 文件级复制（deviceSpecific）', async () => {
   const src = makeContext('win32', 'C:\\Users\\alice');
   await src.fs.writeFile('sessions/proj-a/s1/session.jsonl.zstd', Buffer.from('zstd-bytes', 'utf8'));

@@ -72,7 +72,7 @@ import type {
   SettingsFacade, WorkspaceFacade,
 } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
-import { createEncryptionProvider, decryptCredentials, SecurityError } from './security/index.ts'
+import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
@@ -90,6 +90,11 @@ import {
   isGitConfig, isWebDavConfig,
 } from './sync/sync-config.ts'
 import type { SyncConfig } from './sync/sync-config.ts'
+import {
+  defaultSyncSelection, effectiveSections, readSyncSelection, writeSyncSelection,
+  SYNC_SELECTION_SCHEMA_VERSION,
+} from './sync/sync-selection.ts'
+import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
 import { parseMarketIndex } from './market/index-parser.ts'
@@ -148,6 +153,16 @@ export interface Config {
    * 只存在于宿主进程：device flow 轮询时由宿主直接发送给 GitHub，绝不回传浏览器/日志。
    */
   githubClientSecret?: string
+  /**
+   * pluginFiles 分区：额外白名单文件（相对 ~/.dsh 根的单文件名或子路径）。
+   * 与默认白名单（dsh-ssh.json、pet.json）合并；用于精确指定要随导出携带的插件配置文件。
+   */
+  pluginFiles?: string[]
+  /**
+   * pluginFiles 分区：约定的插件配置目录（相对 ~/.dsh 根，如 'plugin-config'）。
+   * 导出时递归收集该目录下所有文件（按相对 ~/.dsh 根的路径写回），实现「往目录放文件即自动随备份携带」。
+   */
+  pluginFilesDir?: string
 }
 
 /* ---------------------------------------------------------------- constants */
@@ -162,6 +177,7 @@ const API = {
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
   decryptVerify: '/api/dsh-config-manager/decrypt-verify',
+  decryptArchive: '/api/dsh-config-manager/decrypt-archive',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
@@ -183,6 +199,8 @@ const API = {
   syncApplyItems: '/api/dsh-config-manager/sync/apply-items',
   syncCancel: '/api/dsh-config-manager/sync/cancel',
   syncAutosync: '/api/dsh-config-manager/sync/autosync',
+  // m-sync-selection：同步分区选择持久化（默认/高级模式 + 勾选分区；自动同步共用）
+  syncSelection: '/api/dsh-config-manager/sync/selection',
   // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
   marketStatus: '/api/dsh-config-manager/market/status',
   marketRefresh: '/api/dsh-config-manager/market/refresh',
@@ -887,7 +905,8 @@ export interface ParseSyncBodyDeps {
 /**
  * 解析同步请求体，按 transport 分支返回归一化的 SyncConfig（可辨识联合，schemaVersion=2）。
  * 请求体形状（flat，M4 契约）：
- * - git:    { transport:'git', repoUrl, gitBin?, token? } —— token 非空写 SYNC_CREDENTIAL_REF；
+ * - git:    { transport:'git', repoUrl, token? } —— token 非空写 SYNC_CREDENTIAL_REF；
+ *   git 可执行文件固定使用系统 PATH 中的 git（不再接受自定义 gitBin）。
  * - webdav: { transport:'webdav', url, username?, password? } —— password 非空写 SYNC_WEBDAV_CREDENTIAL_REF。
  * 返回值不含任何 secret（password/token 只进 credentials，永不回传/落同步文件）。
  */
@@ -924,7 +943,6 @@ export async function parseSyncBody(
   if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
   const urlError = validateRepoUrl(repoUrl)
   if (urlError !== null) throw new SyncRouteError(urlError)
-  const gitBin = typeof body['gitBin'] === 'string' && body['gitBin'] !== '' ? body['gitBin'] : undefined
   const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
   if (token !== undefined) {
     try {
@@ -939,7 +957,7 @@ export async function parseSyncBody(
   return {
     schemaVersion: 2,
     transport: 'git',
-    git: { repoUrl, ...(gitBin !== undefined ? { gitBin } : {}) },
+    git: { repoUrl },
   }
 }
 
@@ -949,9 +967,40 @@ export function webdavBaseUrl(cfg: SyncConfig): string {
   return cfg.webdav.url.replace(/\/+$/, '') + '/'
 }
 
-/** 需要人工决策的 PlanItemKind（一键同步 needsReview 判定 + 逐项确认标记） */
+/**
+ * 解析 push 请求体的分区选择（sections）——「高级/自定义导出」模式负载。
+ * - 缺省 / 非数组 / 空数组 → undefined（= 全部 portable 推荐分区，即「默认/快速导出」模式）；
+ * - 元素必须是 knownIds（已知 adapter id）中的非空字符串，非法 → SyncRouteError（不静默吞错）；
+ * - 返回去重后的数组（保持原顺序；重复分区不做重复导出）。
+ */
+export function extractSyncSections(
+  body: Record<string, unknown>,
+  knownIds: ReadonlySet<string>,
+): SectionId[] | undefined {
+  const raw = body['sections']
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const out: SectionId[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== 'string' || item === '') {
+      throw new SyncRouteError('sections must be an array of non-empty strings')
+    }
+    if (!knownIds.has(item)) {
+      throw new SyncRouteError(`unknown sync section: ${item}`)
+    }
+    if (!seen.has(item)) {
+      seen.add(item)
+      out.push(item as SectionId)
+    }
+  }
+  return out
+}
+
+/** 需要人工决策的 PlanItemKind（一键同步 needsReview 判定 + 逐项确认标记）。
+ * 注意：'Install'（安装插件）不在此列 —— 同步拉取差异时插件按「自动安装」处理：
+ * 默认采纳、不逐项展示、无需手动选择（product requirement）。 */
 const REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
-  'Conflict', 'MissingSecret', 'MissingDependency', 'Install', 'Error', 'PathMapping',
+  'Conflict', 'MissingSecret', 'MissingDependency', 'Error', 'PathMapping',
 ])
 
 /** 一键同步差异项（client 逐项确认的最小契约；与 sync-api.ts SyncConfirmItem 对齐） */
@@ -1181,6 +1230,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const githubAuth = new GitHubAuthClient()
   const msg = host.msg
 
+  /** 已知 adapter id 集合（push 请求体 sections 校验用）。 */
+  const knownSyncSectionIds = new Set(adapters.map((a) => a.id))
+  /** 可同步分区目录（status 回填 UI「高级/自定义导出」勾选列表；只含 portable，与 SyncEngine 一致）。 */
+  const syncSectionCatalog = adapters
+    .filter((a) => a.portability === 'portable')
+    .map((a) => ({ id: a.id, displayName: a.displayName, portability: a.portability, defaultIncluded: a.defaultIncluded }))
+
   const makeImporter = (): Importer => new Importer({
     ctx: host,
     adapters,
@@ -1204,7 +1260,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   }
 
   // ------------------------------------------------- sync 路由装配（m-sync-ui）
-  // 请求级装配：每次 push/pull 从请求体取 repoUrl/gitBin，token 非空先写入 DSH
+  // 请求级装配：每次 push/pull 从请求体取 repoUrl，token 非空先写入 DSH
   // credentials（只存值不落盘同步文件/日志），git 网络操作时经 resolve 现取 ——
   // 与 GitTransport「token 只从注入 provider 读取」的安全契约完全对齐。
 
@@ -1212,7 +1268,31 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const prepareSync = (body: Record<string, unknown>): Promise<SyncConfig> =>
     parseSyncBody(body, { credentials })
 
-  /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。 */
+  /** 同步分区选择缓存（sync-selection.json；makeSyncEngine 同步读取用，保存路由更新）。
+   *  null = 尚未加载（启动竞态窗口）；读取/使用处兜底 defaultSyncSelection。 */
+  let selectionCache: SyncSelection | null = null
+  void readSyncSelection(syncDir).then((sel) => { selectionCache = sel }).catch(() => { /* 读失败保持缺省 */ })
+
+  /** 确保缓存已加载（status/save 路由调用；启动竞态兜底）。 */
+  const ensureSelectionLoaded = async (): Promise<SyncSelection> => {
+    if (selectionCache !== null) return selectionCache
+    try {
+      selectionCache = await readSyncSelection(syncDir)
+    } catch {
+      selectionCache = defaultSyncSelection()
+    }
+    return selectionCache
+  }
+
+  /** status 响应用的分区选择视图（{ mode, sections }，无 schemaVersion）。 */
+  const selectionView = async (): Promise<{ mode: SyncSelectionMode; sections: SectionId[] }> => {
+    const sel = await ensureSelectionLoaded()
+    return { mode: sel.mode, sections: sel.sections }
+  }
+
+  /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。
+   *  同步范围（sections）来自持久化分区选择：advanced 模式 → 只处理勾选分区，
+   *  自动同步（merge/apply/push 全链路）与手动 push 共用此配置。 */
   const makeSyncEngine = (cfg: SyncConfig): SyncEngine => {
     let transport: SyncTransport
     if (isWebDavConfig(cfg)) {
@@ -1237,10 +1317,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             return resolved?.value ?? ''
           },
         },
-        gitBin: cfg.git.gitBin,
         msg,
       })
     }
+    const sections = effectiveSections(selectionCache ?? defaultSyncSelection())
     return new SyncEngine({
       ctx: host,
       transport,
@@ -1250,6 +1330,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       localSnapshotsDir: join(syncDir, 'snapshots'),
       zipDir: tmpDir,
       msg,
+      ...(sections === undefined ? {} : { sections }),
     })
   }
 
@@ -1383,6 +1464,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           ? body['only'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
           : undefined
         // Encryption password is in-memory only (never persisted / logged).
+        // 加密是独立选项：只要提供了密码就注入 EncryptionProvider
+        // （includeSecrets=false 时备份仍标记加密，但 secrets.enc 内容为空）。
         const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
         const outPath = join(exportsDir, `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`)
         // m1：执行开始注册 run（同 kind 已有进行中任务 → 409 拒绝，防止重复导出）
@@ -1395,10 +1478,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         const runId = run.runId
         try {
+          // 先由 Exporter 产出标准明文 ZIP（含 manifest/checksums；若 includeSecrets 需要
+          // 加密提供者来生成 secrets.enc —— 整体容器的外层加密再保护整个文件）。core 不感知外层容器。
+          const plainZipPath = join(tmpDir, `export-plain-${randomBytes(4).toString('hex')}.zip`)
           const exporter = new Exporter({
             ctx: host,
             adapters,
-            encryption: includeSecrets && password !== undefined ? createEncryptionProvider(password) : null,
+            // includeSecrets=true 必须注入 EncryptionProvider（core 不变量：绝不明文写凭据）。
+            // includeSecrets=false 时也注入，使 exporter 生成空的 secrets.enc、manifest.security.encrypted=true，
+            // 与外层容器语义一致（备份打开需密码但不含凭据值）。
+            encryption: password !== undefined ? createEncryptionProvider(password) : null,
             exporterVersion: PLUGIN_VERSION,
             // m1 埋点：每导出一个分区实时更新 run 状态（/progress 轮询可见）
             onSection: (info) => {
@@ -1412,10 +1501,20 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             },
           })
           const result = await withTimeout(
-            exporter.export({ includeSecrets, only, outPath }),
+            exporter.export({ includeSecrets, only, outPath: plainZipPath }),
             ROUTE_TIMEOUT_MS,
             msg('host.exportTimeout'),
           )
+          // 若设置了密码 → 用外层容器加密整个明文 ZIP（AES-256-GCM，DCA1 容器）
+          if (password !== undefined) {
+            const plainZip = await fs.readFile(plainZipPath)
+            const { blob } = await encryptArchive(plainZip, password)
+            await fs.writeFile(outPath, blob)
+            // 临时明文 ZIP 立即清理，磁盘不残留明文备份
+            await fs.rm(plainZipPath, { force: true }).catch(() => undefined)
+          } else {
+            await fs.rename(plainZipPath, outPath)
+          }
           // 结束写结果：完成结果落账（供 /progress 查询与刷新恢复后下载）
           runs.finish(runId, { zipPath: result.zipPath, manifest: result.manifest, report: result.report })
           writeJson(res, 200, { zipPath: result.zipPath, manifest: result.manifest, report: result.report, runId })
@@ -1486,7 +1585,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         const tmp = join(tmpDir, `upload-${randomBytes(6).toString('hex')}.zip`)
         try {
           const sizeBytes = await writeRequestBodyToFile(req, tmp, MAX_UPLOAD_BYTES)
-          writeJson(res, 200, { zipPath: tmp, name, sizeBytes })
+          // 探测上传文件是否为整体加密备份容器（DCA1 magic）：加密容器不能直接当作 ZIP 解析，
+          // UI 据此插入「解锁加密备份」阶段（decrypt-archive），解出明文 ZIP 后再走导入。
+          let containerType: 'zip' | 'encrypted' = 'zip'
+          try {
+            const first = await fs.readFile(tmp)
+            containerType = isArchiveBlob(first) ? 'encrypted' : 'zip'
+          } catch {
+            containerType = 'zip'
+          }
+          writeJson(res, 200, { zipPath: tmp, name, sizeBytes, containerType })
         } catch (error) {
           await fs.rm(tmp, { force: true }).catch(() => undefined)
           if (!res.headersSent) {
@@ -1532,6 +1640,59 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             refs: isEncrypted ? [...decrypted.keys()] : [],
           })
         } catch (error) {
+          writeJson(res, 400, { error: decryptErrorText(error, msg) })
+        }
+      },
+    },
+    // ------------------------------------------------------ decrypt-archive
+    // 整体加密备份容器的解锁（只读，零写入到任何配置）：用备份密码解密上传的加密容器，
+    // 得到明文 ZIP 写入受控临时目录并返回新 zipPath，供 analyze/plan/execute 引用。
+    // 密码仅内存随请求体传入，绝不落盘/落日志；解出的明文 ZIP 亦为临时文件，导入结束后清理。
+    {
+      kind: 'exact',
+      path: API.decryptArchive,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const encryptedPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
+        if (encryptedPath === '' || !isControlledPath(encryptedPath, roots)) {
+          writeJson(res, 400, { error: 'zipPath is required and must reference a staged backup' })
+          return
+        }
+        const password =
+          typeof body?.['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
+        if (password === undefined) {
+          writeJson(res, 400, { error: msg('import.encryptedPasswordRequired') })
+          return
+        }
+        let plainZipPath: string | null = null
+        try {
+          const container = await fs.readFile(encryptedPath)
+          if (!isArchiveBlob(container)) {
+            writeJson(res, 400, { error: msg('import.notEncryptedContainer') })
+            return
+          }
+          // 校验密码（只读）+ 取真实解密参数
+          const verified = await verifyEncryptedBlob(container, password)
+          if (!verified.valid) {
+            writeJson(res, 400, { error: msg('import.notEncryptedContainer') })
+            return
+          }
+          if (!verified.ok || verified.info === null || verified.kdf === null) {
+            writeJson(res, 400, { error: decryptErrorText(new SecurityError('BAD_PASSWORD', '解密认证失败'), msg) })
+            return
+          }
+          // 解密得到明文 ZIP
+          const plain = await decryptArchive(container, verified.info, verified.kdf, password)
+          plainZipPath = join(tmpDir, `decrypted-${randomBytes(6).toString('hex')}.zip`)
+          await fs.writeFile(plainZipPath, plain)
+          writeJson(res, 200, { zipPath: plainZipPath })
+        } catch (error) {
+          if (plainZipPath !== null) await fs.rm(plainZipPath, { force: true }).catch(() => undefined)
           writeJson(res, 400, { error: decryptErrorText(error, msg) })
         }
       },
@@ -1749,6 +1910,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const webdav = transport === 'webdav' && cfg !== null && isWebDavConfig(cfg)
             ? {
                 url: cfg.webdav.url,
+                // username 非敏感可回显，供表单回填
+                username: cfg.webdav.username,
                 usernameConfigured: typeof cfg.webdav.username === 'string' && cfg.webdav.username !== '',
                 passwordConfigured: webdavCred.configured,
               }
@@ -1758,7 +1921,6 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             configured: cfg !== null,
             transport,
             repoUrl: cfg !== null && isGitConfig(cfg) ? cfg.git.repoUrl : undefined,
-            gitBin: cfg !== null && isGitConfig(cfg) ? cfg.git.gitBin : undefined,
             credentialConfigured: cred.configured,
             credentialWritable: cred.writable === true,
             // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）
@@ -1766,6 +1928,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
             sectionCount: Object.keys(state.sections).length,
             lastTransport: state.transport,
+            // 可同步分区目录（「高级/自定义导出」勾选列表；只含 portable，无 secret 值）
+            syncSections: syncSectionCatalog,
+            // 当前分区选择（默认/高级模式 + 勾选分区；UI 回填用，自动同步共用）
+            syncSelection: await selectionView(),
             autosync: await buildAutosyncStatus(syncDir),
           })
         } catch (error) {
@@ -1776,6 +1942,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     // ------------------------------------------------------ sync/push
     // m-sync-ui：推送（导出 portable 分区 → 提交私有仓库 → 更新 sync-state）。
     // token 可选：非空先写入 DSH credentials；成功则记忆仓库配置（回填表单用）。
+    // sections 可选（高级/自定义导出）：只推送勾选的分区；缺省 = 默认模式全部推荐分区。
     {
       kind: 'exact',
       path: API.syncPush,
@@ -1791,8 +1958,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const engine = makeSyncEngine(syncCfg)
           const snapshotId =
             typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          const sections = extractSyncSections(body, knownSyncSectionIds)
           const report = await withTimeout(
-            engine.push(snapshotId === undefined ? {} : { snapshotId }),
+            engine.push({
+              ...(snapshotId === undefined ? {} : { snapshotId }),
+              ...(sections === undefined ? {} : { sections }),
+            }),
             ROUTE_TIMEOUT_MS,
             msg('host.syncPushTimeout'),
           )
@@ -2234,6 +2405,46 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ------------------------------------------------------ sync/selection
+    // m-sync-selection：保存同步分区选择（默认/高级模式 + 勾选分区）。
+    // 持久化到 sync-selection.json；自动同步调度器与手动 push 共用（makeSyncEngine 注入）。
+    // sections 元素必须是可同步（portable）分区 id；mode 非法 → 回退 default。
+    {
+      kind: 'exact',
+      path: API.syncSelection,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const mode: SyncSelectionMode = body['mode'] === 'advanced' ? 'advanced' : 'default'
+          const rawSections = Array.isArray(body['sections']) ? body['sections'] : []
+          const portableIds = new Set(syncSectionCatalog.map((s) => s.id))
+          for (const s of rawSections) {
+            if (typeof s !== 'string' || s === '') {
+              writeJson(res, 400, { error: 'sections must be an array of non-empty strings' })
+              return
+            }
+            if (!portableIds.has(s as SectionId)) {
+              writeJson(res, 400, { error: `unknown sync section: ${s}` })
+              return
+            }
+          }
+          const next: SyncSelection = {
+            schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
+            mode,
+            sections: [...new Set(rawSections as string[])] as SectionId[],
+          }
+          await writeSyncSelection(syncDir, next)
+          selectionCache = next
+          writeJson(res, 200, { ok: true, mode: next.mode, sections: next.sections })        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
     // ------------------------------------------------------ sync/rollback
     // P2：UI 一键回滚入口（按 apply 返回的 restoreId 调用 backup→rollback）。
     {
@@ -2453,6 +2664,9 @@ export function apply(ctx: Context, config?: Config): void {
     includeSessions: true,
     // 导出 plugins 分区时不列本插件自身，避免备份中的自引用条目。
     selfPluginName: PLUGIN_NAME,
+    // pluginFiles 扩展：额外白名单文件 + 约定配置目录（都相对 ~/.dsh 根），支持导出更多插件配置。
+    pluginFiles: config?.pluginFiles,
+    pluginFilesDir: config?.pluginFilesDir,
   })
 
   host.log.info('config-manager 已挂载', {

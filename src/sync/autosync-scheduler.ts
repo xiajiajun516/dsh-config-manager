@@ -101,6 +101,16 @@ export interface AutoSyncSchedulerOptions {
   /** 注入计时器（测试用；缺省 setInterval/clearInterval） */
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
+  /**
+   * 远端新快照检测（§3.2「下载=检测到远端新快照才拉取」）。
+   * 缺省：若 engine 实现了 hasNewRemoteSnapshot() 则调用；否则视为 true（保持旧行为=每次拉取）。
+   */
+  detectRemoteNew?: (engine: SyncEngine) => Promise<boolean>;
+  /**
+   * 本地配置变化检测（§3.1「上传=本地改动才推」）。
+   * 缺省：若 engine 实现了 hasLocalChanges() 则调用；否则视为 true（保持旧行为=每次都推）。
+   */
+  detectLocalChange?: (engine: SyncEngine) => Promise<boolean>;
 }
 
 export class AutoSyncScheduler {
@@ -117,6 +127,8 @@ export class AutoSyncScheduler {
   private readonly appendHistoryFn: (entry: AutosyncHistoryEntry) => Promise<void>;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
+  private readonly detectRemoteNew: (engine: SyncEngine) => Promise<boolean>;
+  private readonly detectLocalChange: (engine: SyncEngine) => Promise<boolean>;
 
   private timer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
@@ -136,6 +148,8 @@ export class AutoSyncScheduler {
     this.appendHistoryFn = opts.appendHistoryFn ?? ((entry) => appendAutosyncEntry(this.syncDir, entry));
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
+    this.detectRemoteNew = opts.detectRemoteNew ?? defaultDetectRemoteNew;
+    this.detectLocalChange = opts.detectLocalChange ?? defaultDetectLocalChange;
   }
 
   /** 启动：读配置 → 若 enabled 启动定时器 → 无条件执行一次启动触发下载合并。 */
@@ -246,89 +260,107 @@ export class AutoSyncScheduler {
 
       const engine = this.makeSyncEngine(syncCfg!);
 
-      // Phase A: pull 合并（下载）
-      let mergePlan: MergePlan;
-      try {
-        mergePlan = await engine.merge();
-      } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        const result: AutosyncRunResult = {
-          status: 'failed', direction: 'pull', error, historyId,
-          consecutiveFailures: cfg.consecutiveFailures + 1,
-        };
-        await this.appendHistoryFn({
-          direction: 'pull', status: 'failed', error, createdAt: nowIso,
-          failureCountAtRun: cfg.consecutiveFailures + 1,
-        });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId);
-        this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
-        return result;
-      }
+      // 事件驱动触发（§3.1/§3.2/§3.3 看变化不看时间）：
+      // - remoteNew：远端是否出现比本地祖先更新的快照 → 决定是否做下载合并（Phase A）；
+      // - localDirty：本地 portable 配置相对基线是否真的变了 → 决定是否上传（Phase C）。
+      // 定时器只是兜底轮询；真正驱动是这两个「变化」信号。
+      const remoteNew = await this.detectRemoteNew(engine);
+      const localDirty = await this.detectLocalChange(engine);
 
-      // 判定 needsReview
-      const reviewSections = mergePlan.sections.filter((s) => s.decision === 'conflict');
-      if (reviewSections.length > 0) {
-        const conflictedSections = reviewSections.map((s) => s.id);
+      // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
+      if (!remoteNew && !localDirty) {
         const result: AutosyncRunResult = {
-          status: 'skipped', direction: 'pull', skipReason: 'conflict',
-          conflictedSections, historyId,
+          status: 'success', direction: 'none', skipReason: 'upToDate', historyId,
           consecutiveFailures: cfg.consecutiveFailures,
         };
         await this.appendHistoryFn({
-          direction: 'pull', status: 'skipped', skipReason: 'conflict',
-          conflictedSections, createdAt: nowIso,
-          failureCountAtRun: cfg.consecutiveFailures,
+          direction: 'both', status: 'success', skipReason: 'upToDate',
+          createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
         });
         await this.writeFinalConfig(cfg, result, nowIso, historyId);
         return result;
       }
 
-      // 无冲突：构造 SyncApplyPlan（autoApply = 所有 useRemote/keepLocal 项；skipped = skip 项）
-      const apply = buildAutoApplyPlan(mergePlan);
-      if (apply.autoApply.length === 0) {
-        // 无物可应用（全部 skip / 无变化）
-        const result: AutosyncRunResult = {
-          status: 'success', direction: 'pull', skipReason: 'unchanged', historyId,
-          consecutiveFailures: 0,
-        };
-        await this.appendHistoryFn({
-          direction: 'pull', status: 'success', skipReason: 'unchanged',
-          createdAt: nowIso, failureCountAtRun: 0,
-        });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId);
-        return result;
+      let appliedSections: SectionId[] = [];
+
+      // Phase A: pull 合并（下载）—— 仅当远端有新快照才拉取（§3.2）。
+      if (remoteNew) {
+        let mergePlan: MergePlan;
+        try {
+          mergePlan = await engine.merge();
+        } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          const result: AutosyncRunResult = {
+            status: 'failed', direction: 'pull', error, historyId,
+            consecutiveFailures: cfg.consecutiveFailures + 1,
+          };
+          await this.appendHistoryFn({
+            direction: 'pull', status: 'failed', error, createdAt: nowIso,
+            failureCountAtRun: cfg.consecutiveFailures + 1,
+          });
+          await this.writeFinalConfig(cfg, result, nowIso, historyId);
+          this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+          return result;
+        }
+
+        // 判定 needsReview
+        const reviewSections = mergePlan.sections.filter((s) => s.decision === 'conflict');
+        if (reviewSections.length > 0) {
+          const conflictedSections = reviewSections.map((s) => s.id);
+          const result: AutosyncRunResult = {
+            status: 'skipped', direction: 'pull', skipReason: 'conflict',
+            conflictedSections, historyId,
+            consecutiveFailures: cfg.consecutiveFailures,
+          };
+          await this.appendHistoryFn({
+            direction: 'pull', status: 'skipped', skipReason: 'conflict',
+            conflictedSections, createdAt: nowIso,
+            failureCountAtRun: cfg.consecutiveFailures,
+          });
+          await this.writeFinalConfig(cfg, result, nowIso, historyId);
+          return result;
+        }
+
+        // 无冲突：构造 SyncApplyPlan（autoApply = 所有 useRemote/keepLocal 项；skipped = skip 项）
+        const apply = buildAutoApplyPlan(mergePlan);
+        if (apply.autoApply.length === 0) {
+          // 远端快照无物可应用（全部 skip / 无变化）→ 无远端合并产出；若本地有改动则仅走上传。
+          // 此处不立即返回，让 Phase C 依据 localDirty 决定是否上传本地改动。
+        } else {
+          // Phase B: 写入本地（applyMergePlan，无 review-queue 写）
+          const applyReport = await engine.applyMergePlan(apply);
+          appliedSections = applyReport.applied as SectionId[];
+          if (!applyReport.ok) {
+            const error = applyReport.warnings.join('; ') || 'applyMergePlan 执行失败';
+            const result: AutosyncRunResult = {
+              status: 'failed', direction: 'pull', error, historyId,
+              consecutiveFailures: cfg.consecutiveFailures + 1,
+            };
+            await this.appendHistoryFn({
+              direction: 'pull', status: 'failed', error, createdAt: nowIso,
+              failureCountAtRun: cfg.consecutiveFailures + 1,
+            });
+            await this.writeFinalConfig(cfg, result, nowIso, historyId);
+            this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+            return result;
+          }
+        }
       }
 
-      // Phase B: 写入本地（applyMergePlan，无 review-queue 写）
-      const applyReport = await engine.applyMergePlan(apply);
-      const appliedSections = applyReport.applied as SectionId[];
-      if (!applyReport.ok) {
-        const error = applyReport.warnings.join('; ') || 'applyMergePlan 执行失败';
-        const result: AutosyncRunResult = {
-          status: 'failed', direction: 'pull', error, historyId,
-          consecutiveFailures: cfg.consecutiveFailures + 1,
-        };
-        await this.appendHistoryFn({
-          direction: 'pull', status: 'failed', error, createdAt: nowIso,
-          failureCountAtRun: cfg.consecutiveFailures + 1,
-        });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId);
-        this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
-        return result;
-      }
-
-      // Phase C: push 上传（完整双向）
-      if (!opts.startup) {
+      // Phase C: push 上传（完整双向）—— 仅当本地真有改动才上传（§3.1）；startup 变体不上传。
+      if (!opts.startup && localDirty) {
         try {
           const pushReport = await engine.push();
           if (!pushReport.ok) {
             const error = pushReport.message ?? 'push 失败';
             const result: AutosyncRunResult = {
-              status: 'failed', direction: 'both', appliedSections, error, historyId,
+              status: 'failed', direction: appliedSections.length ? 'both' : 'push',
+              appliedSections, error, historyId,
               consecutiveFailures: cfg.consecutiveFailures + 1,
             };
             await this.appendHistoryFn({
-              direction: 'both', status: 'failed', appliedSections, error,
+              direction: appliedSections.length ? 'both' : 'push', status: 'failed',
+              appliedSections, error,
               createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
             });
             await this.writeFinalConfig(cfg, result, nowIso, historyId);
@@ -336,23 +368,27 @@ export class AutoSyncScheduler {
             return result;
           }
           const result: AutosyncRunResult = {
-            status: 'success', direction: 'both', appliedSections,
-            pushedSnapshotId: pushReport.snapshotId, historyId, consecutiveFailures: 0,
+            status: 'success', direction: appliedSections.length ? 'both' : 'push',
+            appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
+            consecutiveFailures: 0,
           };
           await this.appendHistoryFn({
-            direction: 'both', status: 'success', appliedSections,
-            pushedSnapshotId: pushReport.snapshotId, createdAt: nowIso, failureCountAtRun: 0,
+            direction: appliedSections.length ? 'both' : 'push', status: 'success',
+            appliedSections, pushedSnapshotId: pushReport.snapshotId,
+            createdAt: nowIso, failureCountAtRun: 0,
           });
           await this.writeFinalConfig(cfg, result, nowIso, historyId);
           return result;
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
           const result: AutosyncRunResult = {
-            status: 'failed', direction: 'both', appliedSections, error, historyId,
+            status: 'failed', direction: appliedSections.length ? 'both' : 'push',
+            appliedSections, error, historyId,
             consecutiveFailures: cfg.consecutiveFailures + 1,
           };
           await this.appendHistoryFn({
-            direction: 'both', status: 'failed', appliedSections, error,
+            direction: appliedSections.length ? 'both' : 'push', status: 'failed',
+            appliedSections, error,
             createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
           });
           await this.writeFinalConfig(cfg, result, nowIso, historyId);
@@ -361,12 +397,15 @@ export class AutoSyncScheduler {
         }
       }
 
-      // startup 变体：只做 pull 合并（不上传）
+      // startup 变体 / 仅远端合并：只做 pull 合并（不上传），或远端无新生且本地无改动（已在上方 upToDate 短路上）。
       const result: AutosyncRunResult = {
-        status: 'success', direction: 'pull', appliedSections, historyId, consecutiveFailures: 0,
+        status: 'success', direction: 'pull', appliedSections,
+        ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
+        historyId, consecutiveFailures: 0,
       };
       await this.appendHistoryFn({
         direction: 'pull', status: 'success', appliedSections,
+        ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
         createdAt: nowIso, failureCountAtRun: 0,
       });
       await this.writeFinalConfig(cfg, result, nowIso, historyId);
@@ -472,4 +511,36 @@ export function syncIsConfigured(cfg: SyncConfig | null): boolean {
     return typeof cfg.git.repoUrl === 'string' && cfg.git.repoUrl !== '';
   }
   return false;
+}
+
+/**
+ * 缺省远端新快照检测（§3.2）：engine 实现了 hasNewRemoteSnapshot() → 调用；
+ * 否则（测试 mock 未实现）保守返回 true（假设有新生，保持旧行为=每次都尝试拉取）。
+ */
+async function defaultDetectRemoteNew(engine: SyncEngine): Promise<boolean> {
+  const fn = (engine as unknown as { hasNewRemoteSnapshot?: () => Promise<boolean> }).hasNewRemoteSnapshot;
+  if (typeof fn === 'function') {
+    try {
+      return await fn.call(engine);
+    } catch {
+      return true; // 检测失败保守视为有新生，避免漏拉
+    }
+  }
+  return true;
+}
+
+/**
+ * 缺省本地变化检测（§3.1）：engine 实现了 hasLocalChanges() → 调用；
+ * 否则（测试 mock 未实现）保守返回 true（假设有本地改动，保持旧行为=每次都尝试上传）。
+ */
+async function defaultDetectLocalChange(engine: SyncEngine): Promise<boolean> {
+  const fn = (engine as unknown as { hasLocalChanges?: () => Promise<boolean> }).hasLocalChanges;
+  if (typeof fn === 'function') {
+    try {
+      return await fn.call(engine);
+    } catch {
+      return true; // 检测失败保守视为有改动，避免漏传
+    }
+  }
+  return true;
 }

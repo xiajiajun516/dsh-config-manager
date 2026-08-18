@@ -6,10 +6,11 @@
  * React 组件只做装配。文案直接用中文（项目源语言），组件不重复造。
  */
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
+import type { SectionId } from '../../schema/types.ts';
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
 import type {
   ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem,
-  SyncItemAdoption, SyncStatusResponse,
+  SyncItemAdoption, SyncSectionInfo, SyncStatusResponse,
 } from './sync-api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
@@ -24,11 +25,41 @@ export function privateRepoHint(t: UiT = zhUiT): string {
   return t('sync.privateRepoHint');
 }
 
+/* ---------------------------------------------------------------- 同步分区模式 */
+
+/** 远程同步模式：默认（快速导出） / 高级（自定义导出）。 */
+export type SyncMode = 'default' | 'advanced';
+
+/** 可同步分区选项（status.syncSections 投影；高级模式勾选目录的单选项）。 */
+export interface SyncSectionOption {
+  id: SectionId;
+  label: string;
+  portability: 'portable' | 'deviceSpecific' | 'platformSpecific';
+  /** 是否为推荐分区（defaultIncluded=true；默认模式全选、高级模式初始勾选） */
+  defaultIncluded: boolean;
+}
+
+/** host 目录（SyncSectionInfo[]）→ UI 勾选项（保留 id 顺序）。 */
+export function syncSectionOptions(info: readonly SyncSectionInfo[]): SyncSectionOption[] {
+  return info.map((s) => ({
+    id: s.id,
+    label: s.displayName,
+    portability: s.portability,
+    defaultIncluded: s.defaultIncluded,
+  }));
+}
+
+/** 默认（快速导出）模式的推荐同步分区：可移植且默认包含（与 ExportFlow.quickSelection 同口径）。 */
+export function recommendedSyncSections(info: readonly SyncSectionInfo[]): SectionId[] {
+  return info.filter((s) => s.portability === 'portable' && s.defaultIncluded).map((s) => s.id);
+}
+
 /* ---------------------------------------------------------------- 变更摘要 */
 
-/** 需要人工决策的 PlanItem 类型（与 SyncEngine.pull 的 needsReview 判定一致） */
+/** 需要人工决策的 PlanItem 类型（与 SyncEngine.pull 的 needsReview 判定一致）。
+ * 注意：'Install' 不在此列 —— 插件安装随同步自动采用（product requirement）。 */
 const REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
-  'Conflict', 'MissingSecret', 'MissingDependency', 'Install', 'Error',
+  'Conflict', 'MissingSecret', 'MissingDependency', 'Error',
 ]);
 
 export interface PullChangeSummary {
@@ -86,6 +117,84 @@ export function severityLabel(severity: PlanItem['severity'], t: UiT = zhUiT): s
 
 /** 远程同步通道类型：git（默认）或 webdav */
 export type SyncChannel = 'git' | 'webdav';
+
+/* ---------------------------------------------------------------- 通道选择持久化 */
+
+/** 记住用户最近选择的通道（localStorage key；跨会话保持在用户上次所在栏） */
+export const SYNC_CHANNEL_STORAGE_KEY = 'dsh.configManager.syncChannel';
+
+/** 从 localStorage 读用户记住的通道；无/非法 → null（缺省 git，交由配置回填）。
+ *  浏览器环境走 globalThis.localStorage；node 测试注入 mock storage 或返回 null。 */
+export function readStoredChannel(storage?: Pick<Storage, 'getItem'> | null): SyncChannel | null {
+  const s = storage ?? browserStorage();
+  if (s === null) return null;
+  try {
+    const v = s.getItem(SYNC_CHANNEL_STORAGE_KEY);
+    return v === 'webdav' || v === 'git' ? v : null;
+  } catch {
+    return null; // localStorage 不可用（隐私模式等）静默降级
+  }
+}
+
+/** 把用户选择的通道写入 localStorage（记住，跨进入保持）。 */
+export function writeStoredChannel(channel: SyncChannel, storage?: Pick<Storage, 'setItem'> | null): void {
+  const s = storage ?? browserStorage();
+  if (s === null) return;
+  try {
+    s.setItem(SYNC_CHANNEL_STORAGE_KEY, channel);
+  } catch {
+    // 静默；记住失败不阻断功能
+  }
+}
+
+/** 浏览器 localStorage；非浏览器（node 测试）→ null */
+function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+  const g = globalThis as { localStorage?: Storage } | undefined;
+  return g?.localStorage ?? null;
+}
+
+/* ---------------------------------------------------------------- WebDAV 预设 */
+
+/** 常见 WebDAV 服务器预设：label 展示名 + url 模板（含 <占位> 待用户替换）。 */
+export interface WebDavPreset {
+  id: string;
+  label: string;
+  /** url 模板；可能含 <server>/<user> 占位符，用户需替换为真实地址 */
+  url: string;
+  /** 是否需要用户替换占位符 */
+  hasPlaceholder: boolean;
+}
+
+/** 内置常见 WebDAV 服务器（预设下拉数据源；第一项为自定义）。 */
+export const WEBDAV_PRESETS: readonly WebDavPreset[] = [
+  { id: 'custom', label: 'Custom URL', url: '', hasPlaceholder: false },
+  { id: 'jianguoyun', label: '坚果云 (Jianguoyun)', url: 'https://dav.jianguoyun.com/dav/', hasPlaceholder: false },
+  { id: 'nextcloud', label: 'Nextcloud', url: 'https://<server>/remote.php/dav/files/<user>/', hasPlaceholder: true },
+  { id: 'owncloud', label: 'ownCloud', url: 'https://<server>/remote.php/dav/files/<user>/', hasPlaceholder: true },
+  { id: 'seafile', label: 'Seafile', url: 'https://<server>/seafdav/', hasPlaceholder: true },
+  { id: 'synology', label: 'Synology NAS (WebDAV)', url: 'https://<nas-ip>:5006/', hasPlaceholder: true },
+  { id: 'box', label: 'Box', url: 'https://dav.box.com/dav/', hasPlaceholder: false },
+];
+
+/** 默认预设（自定义）对应的 id。 */
+export const WEBDAV_CUSTOM_PRESET_ID = 'custom';
+
+/** 根据预设 id 取 preset；未知 id → 自定义（缺省）。 */
+export function presetById(id: string): WebDavPreset {
+  return WEBDAV_PRESETS.find((p) => p.id === id) ?? WEBDAV_PRESETS[0]!;
+}
+
+/** 从已填 url 反推最接近的预设 id（用于下拉回显；无匹配 → 自定义）。 */
+export function presetIdForUrl(url: string): string {
+  const trimmed = url.trim();
+  if (trimmed === '') return WEBDAV_CUSTOM_PRESET_ID;
+  for (const p of WEBDAV_PRESETS) {
+    if (!p.hasPlaceholder && p.url !== '' && trimmed.toLowerCase().startsWith(p.url.toLowerCase())) {
+      return p.id;
+    }
+  }
+  return WEBDAV_CUSTOM_PRESET_ID;
+}
 
 export interface SyncButtons {
   canPush: boolean;
@@ -308,9 +417,11 @@ export function githubPollMessage(poll: GithubPollResponse, t: UiT = zhUiT): str
 
 /* ---------------------------------------------------------------- 一键同步差异确认（方案 A） */
 
-/** 需要人工决策的 PlanItemKind（与 Host /sync/sync 的 needsReview 判定对齐）。 */
+/** 需要人工决策的 PlanItemKind（与 Host /sync/sync 的 needsReview 判定对齐）。
+ * 注意：'Install'（安装插件）不在其中 —— 插件安装默认自动采用（defaultAdopt=true）、
+ * 不逐项展示、无需手动选择（product requirement）。 */
 const CONFIRM_REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
-  'Conflict', 'MissingSecret', 'MissingDependency', 'Install', 'Error', 'PathMapping',
+  'Conflict', 'MissingSecret', 'MissingDependency', 'Error', 'PathMapping',
 ]);
 
 /**
