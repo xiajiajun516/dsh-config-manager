@@ -27,11 +27,16 @@ import { makeUiT, type UiT } from '../ui/i18n.ts'
 import { SyncApi } from './sync/sync-api.ts'
 import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import { en as syncEn, zh as syncZh, type SyncKey } from './sync/sync-locales.ts'
+import { MarketApi } from './market/market-api.ts'
+import { MarketPanel } from './market/MarketPanel.tsx'
+import { en as marketEn, zh as marketZh, type MarketKey } from './market/market-locales.ts'
 
 /** 本插件拥有的 locale namespace。 */
 const NS = 'config-manager'
 /** 远程同步设置区块的独立 locale namespace（独立字典文件，不与共享 locales.ts 冲突）。 */
 const SYNC_NS = 'config-manager-sync'
+/** 配置市场区块的独立 locale namespace（m-market-ui）。 */
+const MARKET_NS = 'config-manager-market'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -39,6 +44,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'config-manager': ConfigManagerKey
     /** 远程同步设置区块文案（m-sync-ui）。 */
     'config-manager-sync': SyncKey
+    /** 配置市场区块文案（m-market-ui）。 */
+    'config-manager-market': MarketKey
   }
 }
 
@@ -50,9 +57,11 @@ export type { ConfigManagerSectionProps } from './ConfigManagerSection.tsx'
 export type { ExportViewProps } from './export/ExportView.tsx'
 export type { ImportWizardViewProps } from './import/ImportWizardView.tsx'
 export type { SyncSettingsViewProps } from './sync/SyncSettingsView.tsx'
+export type { MarketPanelProps } from './market/MarketPanel.tsx'
 export type { ConfigManagerApiError, DownloadResult, ServiceStatus, UploadResponse } from './api.ts'
 export type { ConfigManagerKey } from './locales.ts'
 export type { SyncKey } from './sync/sync-locales.ts'
+export type { MarketKey } from './market/market-locales.ts'
 
 /**
  * 注册 Config Manager 设置页。
@@ -61,24 +70,27 @@ export type { SyncKey } from './sync/sync-locales.ts'
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'config-manager: dictionaries')
   ctx.effect(() => ctx.locale.register(SYNC_NS, { zh: syncZh, en: syncEn }), 'config-manager: sync dictionaries')
+  ctx.effect(() => ctx.locale.register(MARKET_NS, { zh: marketZh, en: marketEn }), 'config-manager: market dictionaries')
 
   const t = ctx.locale.bind(NS)
-  // 客户端展示层（报告/错误/进度/sync-view）翻译器：locale active 为 'en' 时用 en 目录。
+  // 客户端展示层（报告/错误/进度/sync-view/market-view）翻译器：locale active 为 'en' 时用 en 目录。
   const uiT: UiT = makeUiT(ctx.locale.getLocale().active === 'en' ? 'en' : 'zh')
   const api = new ConfigManagerApi(uiT)
   const syncT = ctx.locale.bind(SYNC_NS)
   const syncApi = new SyncApi(uiT)
+  const marketT = ctx.locale.bind(MARKET_NS)
+  const marketApi = new MarketApi(uiT)
 
-  // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync 四 tab）。
-  // 远程同步不再注册独立设置页 —— 并入主 section 的 inject 面（syncApi/syncT），
-  // 由 ConfigManagerSection 渲染第 4 个 tab。避免第二个 settings.section 注册在
-  // 目标 DSH 渲染 section 列表时抛错导致整页空白。
+  // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync/Market 五 tab）。
+  // 远程同步与配置市场不注册独立设置页 —— 并入主 section 的 inject 面
+  // （syncApi/syncT、marketApi/marketT），由 ConfigManagerSection 渲染第 4/5 个 tab。
+  // 避免第二个 settings.section 注册在目标 DSH 渲染 section 列表时抛错导致整页空白。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'config-manager',
     order: 60,
     label: () => t('section.label'),
     locale: NS,
-    inject: () => ({ api, syncApi, syncT }),
+    inject: () => ({ api, syncApi, syncT, marketApi, marketT }),
   }, ConfigManagerSection))
 }

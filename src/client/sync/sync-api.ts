@@ -49,17 +49,35 @@ export const SYNC_API = {
 /** DSH credentials 中的同步 token 引用名（Host 半同值；仅供提示文案使用，值由 Host 读写） */
 export const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN';
 
+/** WebDAV 通道密码在 DSH credentials 中的引用名（Host 半同值；仅供提示文案使用，值由 Host 读写） */
+export const SYNC_WEBDAV_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD';
+
+/** 远程同步通道类型：git（默认）或 webdav */
+export type SyncTransportType = 'git' | 'webdav';
+
+/** WebDAV 通道配置（仅请求体携带；password 为 secret，只存在于请求体，Host 写入 credentials 后值不回传） */
+export interface WebDavRequestPayload {
+  /** WebDAV 远端根地址（https://…），快照存于 {url}/snapshots/ 下 */
+  url?: string;
+  /** HTTP Basic 用户名（非敏感） */
+  username?: string;
+  /** HTTP Basic 密码（secret：仅请求体，绝不持久化到同步文件/日志/URL） */
+  password?: string;
+}
+
 /** GET /sync/status 响应：配置/凭据/上次同步的只读事实（无任何 secret 值） */
 export interface SyncStatusResponse {
   ok: boolean;
-  /** 是否已保存过仓库配置（sync-config.json） */
+  /** 是否已保存过仓库/通道配置（sync-config.json） */
   configured: boolean;
-  /** 上次使用的仓库地址（不含 token，可回显） */
+  /** git 通道：上次使用的仓库地址（不含 token，可回显） */
   repoUrl?: string;
   gitBin?: string;
-  /** DSH credentials 中是否已存在 token（describe 只报状态，值永不返回） */
+  /** git 通道：DSH credentials 中是否已存在 token（describe 只报状态，值永不返回） */
   credentialConfigured: boolean;
   credentialWritable: boolean;
+  /** webdav 通道：配置状态（url 可回显，username 非敏感；password 值永不返回） */
+  webdav?: WebDavStatusResponse;
   /** sync-state.lastSyncAt；'' = 从未同步 */
   lastSyncAt?: string;
   /** sync-state.sections 条目数 */
@@ -69,11 +87,26 @@ export interface SyncStatusResponse {
   autosync?: AutosyncStatusResponse;
 }
 
-/** push 请求体（token 可选：非空则 Host 先写入 DSH credentials 再使用） */
+/** webdav 通道状态字段（无任何 secret 值；password 只报 passwordConfigured 布尔） */
+export interface WebDavStatusResponse {
+  /** 上次使用的服务器地址（可回显；不含 userinfo） */
+  url?: string;
+  /** 是否已填过用户名（布尔；便于 UI 提示。username 值由 Host 不回传） */
+  usernameConfigured: boolean;
+  /** DSH credentials 中是否已存在密码（值永不返回） */
+  passwordConfigured: boolean;
+}
+
+/** push 请求体（token 可选：非空则 Host 先写入 DSH credentials 再使用）。
+ *  git 通道携带 repoUrl/gitBin/token；webdav 通道携带 webdav.url/username/password。 */
 export interface SyncPushPayload {
-  repoUrl: string;
+  /** 通道类型；缺省 'git' */
+  transport?: SyncTransportType;
+  repoUrl?: string;
   gitBin?: string;
   token?: string;
+  /** webdav 通道配置（transport='webdav' 时使用） */
+  webdav?: WebDavRequestPayload;
 }
 
 /** pull 请求体（strategy 缺省 merge：冲突保留待决策；snapshotId 缺省 = 最新） */
@@ -103,10 +136,7 @@ export interface SyncSnapshotLite {
 }
 
 /** POST /sync/sync 请求体（一键同步第一步：拉取 → 差异确认会话）。 */
-export interface SyncStartPayload {
-  repoUrl: string;
-  gitBin?: string;
-  token?: string;
+export interface SyncStartPayload extends SyncPushPayload {
   /** 缺省 = 最新快照；传入则对该历史快照拉取 */
   snapshotId?: string;
 }

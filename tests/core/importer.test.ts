@@ -303,3 +303,57 @@ test('I-09 未确认 → ImportNotConfirmedError 且零写入（安全阀）', a
     assert.equal(dst.fs.files.size, 0);
   });
 });
+
+/**
+ * I-10 仅导入已批准分区（严格分层信任；安全不变式 (c) 回归）。
+ *
+ * 配置市场「逐分区批准」最终依赖：MarketPanel 把 plan 过滤为「仅已批准分区」的子计划
+ * （src/client/market/market-view.ts buildApprovedPlan），再交给 executeImportPlan。
+ * 本用例证明 Importer.executeImportPlan **只执行 plan.items 里出现的分区** —— 即使完整 plan
+ * 含高风险分区（plugins/mcp），只要子计划里不含它们，就绝不写入。
+ */
+test('I-10 仅导入已批准分区：executeImportPlan 只执行子计划出现的高风险之外的已批准分区', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedSource(src); // settings(general/llm-deepseek) + plugins + mcp + skills + workspaces
+
+    const zipPath = path.join(dir, 'i10.zip');
+    await exportFixture(src, zipPath);
+
+    const dst = makeContext('win32', 'C:\\Users\\bob');
+    dst.settings.registered.add('general');
+    dst.settings.registered.add('llm-deepseek');
+    const importer = makeImporter(dst);
+
+    // 完整 dry-run 计划（/market/download 形态：含全部能导出的分区）
+    const fullPlan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] });
+    const fullAdapters = new Set(fullPlan.items.map((i) => i.adapter));
+    // 前提：本例导出确实包含高/低风险分区
+    assert.ok(fullAdapters.has('settings'), '完整计划应含 settings');
+    assert.ok(fullAdapters.has('skills'), '完整计划应含 skills');
+
+    // 模拟「逐分区批准」：只批准 settings + skills（高风险 plugins/mcp 不勾选 → 从子计划剔除）
+    const approved = new Set(['settings', 'skills']);
+    const subPlan: ImportPlan = {
+      ...fullPlan,
+      items: fullPlan.items.filter((it) => approved.has(it.adapter)),
+    };
+    // 需要重启重算：仅保留 settings/skills 已批准项 → 无 Install/MCP → 不重启
+    subPlan.needsRestart = false;
+    assert.ok(!subPlan.items.some((i) => i.adapter === 'plugins'), '子计划不含 plugins');
+    assert.ok(!subPlan.items.some((i) => i.adapter === 'mcp'), '子计划不含 mcp');
+
+    const result = await importer.executeImportPlan(zipPath, subPlan, {
+      confirm: true,
+    });
+    assert.equal(result.ok, true);
+
+    // 已批准分区写入
+    assert.deepEqual(dst.settings.ns.get('general')?.value, { theme: 'dark', language: 'zh-CN' }, 'settings 已批准 → 写入');
+    assert.equal(Buffer.from(await dst.fs.readFile('skills/coding.md')).toString(), '# Coding skill\n', 'skills 已批准 → 写入');
+
+    // 高风险未批准分区 —— 绝不被写（即使完整计划里存在，也不执行）
+    assert.ok(!dst.patchFile.lines.has('mcp-fs'), 'mcp 未批准 → 不得写入 MCP patch 行');
+    assert.ok(!dst.plugins.installed.has('@linxin666/dsh-ssh'), 'plugins 未批准 → 不得安装/写入插件');
+  });
+});

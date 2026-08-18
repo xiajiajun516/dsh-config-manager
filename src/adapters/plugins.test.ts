@@ -8,6 +8,31 @@ import { PluginsAdapter, USER_PATCH_FILE } from './plugins.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 import type { PlanItem } from '../core/types.ts';
 
+test('plugins: 导出剔除插件自身（默认 dsh-config-manager，可配置）', async () => {
+  const ctx = makeContext('win32', 'C:\\Users\\alice');
+  ctx.plugins.installed.set('dsh-config-manager', { name: 'dsh-config-manager', version: '0.1.28', enabled: true });
+  ctx.plugins.installed.set('@linxin666/dsh-ssh', { name: '@linxin666/dsh-ssh', version: '0.1.12', enabled: true });
+  ctx.plugins.installed.set('dsh-memory-evolve', { name: 'dsh-memory-evolve', version: '1.0.0', enabled: true });
+
+  // 默认 selfName = dsh-config-manager → 从导出清单剔除
+  const adapter = new PluginsAdapter();
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  assert.equal(out.data.plugins.length, 2, '自身应被剔除');
+  assert.ok(!out.data.plugins.some((p) => p.name === 'dsh-config-manager'), '导出清单不应包含自身');
+  assert.ok(out.data.plugins.some((p) => p.name === '@linxin666/dsh-ssh'));
+  assert.ok(out.data.plugins.some((p) => p.name === 'dsh-memory-evolve'));
+
+  // 空 selfName 表示不过滤（保留全部）
+  const adapterAll = new PluginsAdapter('');
+  const outAll = await adapterAll.export(ctx, { includeSecrets: false });
+  assert.equal(outAll.data.plugins.length, 3, 'selfName="" 不过滤');
+
+  // 可配置成任意包名（如 scope 化安装名）
+  const adapterScoped = new PluginsAdapter('@scope/dsh-config-manager');
+  const outScoped = await adapterScoped.export(ctx, { includeSecrets: false });
+  assert.equal(outScoped.data.plugins.length, 3, '不同包名不匹配 → 不过滤');
+});
+
 test('plugins: 导出清单与 patch 行', async () => {
   const ctx = makeContext('win32', 'C:\\Users\\alice');
   ctx.plugins.installed.set('@linxin666/dsh-ssh', { name: '@linxin666/dsh-ssh', version: '0.1.12', enabled: true, isBundle: true, inBundles: ['@linxin666/dsh-web-ui-all'] });

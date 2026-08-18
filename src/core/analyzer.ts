@@ -33,7 +33,7 @@ import {
 /** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后） */
 const APPLY_ORDER: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'prompts', 'skills', 'agentPresets',
-  'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
+  'agentInstructions', 'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
 ];
 
 /** ZIP 内可执行文件扩展名黑名单（§19.6：只警告，本插件不执行任何脚本） */

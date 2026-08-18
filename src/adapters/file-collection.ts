@@ -1,5 +1,6 @@
 /**
- * 文件类分区共享 adapter 基类（skills / agentPresets / sessions 复用）。
+ * 文件类分区共享 adapter 基类（skills / agentPresets / sessions 复用；
+ * agentInstructions 因位于 homeDir 根、只能白名单收集，覆写 export 后复用本类其余逻辑）。
  * 基准目录与 core/backup.ts 的 FILE_BASES 保持一致（skills→'skills'、agentPresets→'.agent-presets'、sessions→'sessions'），
  * 保证引擎通用快照/回滚（resolveFileTarget）与 applyItem 的写入路径完全一致。
  *

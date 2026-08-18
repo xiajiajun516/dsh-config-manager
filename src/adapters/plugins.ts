@@ -55,6 +55,12 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   readonly displayName = 'Plugins';
   readonly defaultIncluded = true;
   readonly portability = 'portable' as const;
+  /** 插件自身包名：导出 plugins 分区时不列自己（避免备份里出现「当前正在生成备份的插件」的自引用条目） */
+  private readonly selfName: string;
+
+  constructor(selfName: string = 'dsh-config-manager') {
+    this.selfName = selfName;
+  }
 
   async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<PluginsSection>> {
     const plugins: PluginEntry[] = [];
@@ -62,6 +68,8 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     try {
       const installed = await ctx.plugins.listInstalled();
       for (const p of installed) {
+        // 不导出自身：本插件即正在生成该备份的插件，备份不应包含指向自己的清单条目
+        if (this.selfName !== '' && p.name === this.selfName) continue;
         plugins.push({
           name: p.name,
           version: p.version,

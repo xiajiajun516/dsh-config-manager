@@ -20,6 +20,8 @@ import type { AutosyncConfig } from './autosync-config.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import type { SyncEngine } from './sync-engine.ts';
+import type { SyncConfig } from './sync-config.ts';
+import { syncIsConfigured } from './autosync-scheduler.ts';
 
 test('intervalToMs: 间隔换算正确', () => {
   assert.equal(intervalToMs('5m'), 5 * 60 * 1000);
@@ -47,6 +49,7 @@ function makeScheduler(opts: {
   cfg: AutosyncConfig;
   engine: Partial<SyncEngine>;
   history: AutosyncHistoryEntry[];
+  syncCfg?: SyncConfig | null;
 }) {
   const runs = new RunRegistry();
   const entries: AutosyncHistoryEntry[] = [...opts.history];
@@ -60,7 +63,7 @@ function makeScheduler(opts: {
     now: () => new Date(1_000_000_000_000),
     readConfig: async () => config,
     writeConfig: async (c) => { config = c; },
-    readSyncConfigFn: async () => ({ repoUrl: 'git@github.com:foo/bar.git' }),
+    readSyncConfigFn: async () => opts.syncCfg !== undefined ? opts.syncCfg : ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }),
     readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: entries, updatedAt: '' }),
     appendHistoryFn: async (e) => { entries.push(e); },
     // 测试不用真实定时器：不调 start()
@@ -105,6 +108,37 @@ test('runOnce: 未配置仓库 → skipped(unconfigured)，写历史但不计失
   assert.equal(result.status, 'skipped');
   assert.equal(result.skipReason, 'unconfigured');
   assert.equal(result.consecutiveFailures, 0, '未配置不累计失败');
+});
+
+test('runOnce: webdav 已配置（webdav.url 非空）→ 不判 unconfigured，正常走 merge（按通道判定）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = {
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'skip']]),
+  };
+  const syncCfg: SyncConfig = { schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/remote.php/dav/files/u' } };
+  const { scheduler } = makeScheduler({ cfg, engine, history: [], syncCfg });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'success', 'webdav 已配置应进入合并流程');
+  assert.equal(result.skipReason, 'unchanged', '空变更 → pull/unchanged');
+});
+
+test('runOnce: webdav 未配置（webdav.url 缺）→ skipped(unconfigured)，不计失败', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 1 };
+  const syncCfg: SyncConfig = { schemaVersion: 2, transport: 'webdav', webdav: { url: '' } };
+  const { scheduler, getConfig } = makeScheduler({ cfg, engine: {}, history: [], syncCfg });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.skipReason, 'unconfigured');
+  assert.equal(result.consecutiveFailures, 1, '未配置不计失败（保持 1）');
+  assert.equal(getConfig().consecutiveFailures, 1);
+});
+
+test('syncIsConfigured: git 看 git.repoUrl、webdav 看 webdav.url；null 未配置', () => {
+  assert.equal(syncIsConfigured({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }), true);
+  assert.equal(syncIsConfigured({ schemaVersion: 2, transport: 'git', git: { repoUrl: '' } }), false, 'git 缺 repoUrl → 未配置');
+  assert.equal(syncIsConfigured({ schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com' } }), true);
+  assert.equal(syncIsConfigured({ schemaVersion: 2, transport: 'webdav', webdav: { url: '' } }), false, 'webdav 缺 url → 未配置');
+  assert.equal(syncIsConfigured(null), false);
 });
 
 test('runOnce: merge 抛错 → failed，连续失败计数 +1', async () => {
@@ -210,7 +244,7 @@ test('start(): 定时器触发后自动重排下一次（周期性后台同步�
     now: () => new Date(1_000_000_000_000),
     readConfig: async () => cfg,
     writeConfig: async () => {},
-    readSyncConfigFn: async () => ({ repoUrl: 'git@github.com:foo/bar.git' }),
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }),
     readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
     appendHistoryFn: async () => {},
     setTimer: (fn) => { pending.push(fn); timerSeq += 1; return String(timerSeq) as unknown as ReturnType<typeof setTimeout>; },

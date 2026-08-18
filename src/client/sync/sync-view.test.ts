@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { GithubPollResponse, SyncStatusResponse } from './sync-api.ts'
 import {
-  autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons, computeSyncStatus,
+  autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
   formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
   pullReportView, pushReportView, severityLabel, summarizePullChanges,
 } from './sync-view.ts'
@@ -24,22 +24,22 @@ test('sync-view: 私有仓库强制提示文案存在且强调私有', () => {
 
 /* ---------------------------------------------------------------- 按钮状态 */
 
-test('sync-view: 空闲 + 仓库地址为空 → 两个按钮都禁用', () => {
-  const b = computeSyncButtons(null, '')
+test('sync-view: 空闲 + 活动通道地址未就绪 → 两个按钮都禁用', () => {
+  const b = computeSyncButtons(null, false)
   assert.equal(b.canPush, false)
   assert.equal(b.canPull, false)
   assert.equal(b.pushLabel, '推送到远端')
   assert.equal(b.pullLabel, '拉取差异预览')
 })
 
-test('sync-view: 空闲 + 有效仓库地址 → 两个按钮可用', () => {
-  const b = computeSyncButtons(null, ' https://github.com/u/r.git ')
+test('sync-view: 空闲 + 活动通道地址就绪 → 两个按钮可用', () => {
+  const b = computeSyncButtons(null, true)
   assert.equal(b.canPush, true)
   assert.equal(b.canPull, true)
 })
 
 test('sync-view: push 进行中 → 按钮禁用且文案切换为正在推送（防并发）', () => {
-  const b = computeSyncButtons('push', 'https://github.com/u/r.git')
+  const b = computeSyncButtons('push', true)
   assert.equal(b.canPush, false)
   assert.equal(b.canPull, false)
   assert.equal(b.pushLabel, '正在推送…')
@@ -47,10 +47,18 @@ test('sync-view: push 进行中 → 按钮禁用且文案切换为正在推送�
 })
 
 test('sync-view: pull 进行中 → 两个按钮都禁用，pull 文案切换', () => {
-  const b = computeSyncButtons('pull', 'https://github.com/u/r.git')
+  const b = computeSyncButtons('pull', true)
   assert.equal(b.canPush, false)
   assert.equal(b.canPull, false)
   assert.equal(b.pullLabel, '正在拉取…')
+})
+
+test('sync-view: computeRemoteReady 按活动通道判断地址就绪（git=repoUrl，webdav=url）', () => {
+  assert.equal(computeRemoteReady('git', 'https://github.com/u/r.git', ''), true)
+  assert.equal(computeRemoteReady('git', '  ', 'https://dav.example.com/dav'), false, 'git 通道不看 webdav 地址')
+  assert.equal(computeRemoteReady('webdav', '', 'https://dav.example.com/dav'), true)
+  assert.equal(computeRemoteReady('webdav', 'https://github.com/u/r.git', ''), false, 'webdav 通道不看 git 地址')
+  assert.equal(computeRemoteReady('webdav', '', '   '), false)
 })
 
 /* ---------------------------------------------------------------- 变更摘要 */
@@ -197,6 +205,21 @@ test('sync-view: 已配置 + 凭据就绪 + 上次同步 → ready 文案含日�
   assert.match(s.text, /凭据已配置/)
   assert.match(s.text, /上次同步/)
   assert.match(s.text, /git\/main/)
+})
+
+test('sync-view: webdav 通道 → ready 文案回显通道类型（webdav + 服务器地址 ref）', () => {
+  const info: SyncStatusResponse = {
+    ok: true, configured: true, repoUrl: undefined,
+    credentialConfigured: false, credentialWritable: true,
+    webdav: { url: 'https://dav.example.com/dav/config', usernameConfigured: true, passwordConfigured: true },
+    lastSyncAt: '2026-08-16T10:30:00.000Z', sectionCount: 2,
+    transport: { type: 'webdav', ref: 'https://dav.example.com/dav/config' },
+  }
+  const s = computeSyncStatus(info, false, null)
+  assert.equal(s.kind, 'ready')
+  assert.match(s.text, /凭据已配置/)
+  assert.match(s.text, /webdav/)
+  assert.match(s.text, /https:\/\/dav\.example\.com\/dav\/config/)
 })
 
 /* ---------------------------------------------------------------- 时间格式化 */

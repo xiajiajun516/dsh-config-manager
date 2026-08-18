@@ -52,6 +52,7 @@ export const DEFAULT_CATEGORIES: readonly ExportCategory[] = [
   { id: 'prompts', label: 'Prompts', description: 'System Prompt / Plan Mode 提示', defaultIncluded: true, portability: 'portable', group: 'customization' },
   { id: 'skills', label: 'Skills', description: '用户技能文件（~/.dsh/skills）', defaultIncluded: true, portability: 'portable', group: 'customization' },
   { id: 'agentPresets', label: 'Agent Presets', description: 'Agent 预设（~/.dsh/.agent-presets）', defaultIncluded: true, portability: 'portable', group: 'customization' },
+  { id: 'agentInstructions', label: 'Agent Instructions', description: '全局指令文件（~/.dsh/AGENTS.md，注入每个会话）', defaultIncluded: true, portability: 'portable', group: 'customization' },
   { id: 'workspaces', label: 'Workspaces', description: '工作区记录（含绝对路径，需路径映射）', defaultIncluded: true, portability: 'platformSpecific', group: 'workspace' },
   { id: 'ui', label: 'UI Preferences', description: 'UI 类 settings namespace（localStorage 项仅说明）', defaultIncluded: true, portability: 'portable', group: 'ui' },
   { id: 'credentialsStatus', label: 'Credentials Status', description: '凭据状态（configured 标记，永不导出值）', defaultIncluded: true, portability: 'deviceSpecific', group: 'optional', sensitive: true },

@@ -1,11 +1,12 @@
 /**
- * 文件类分区 adapter 测试（skills / agentPresets / pluginFiles / sessions）：
+ * 文件类分区 adapter 测试（skills / agentPresets / agentInstructions / pluginFiles / sessions）：
  * 导出收集文件、Create/Skip 分析、applyItem 写入、白名单与默认关闭语义。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SkillsAdapter } from './skills.ts';
 import { AgentPresetsAdapter } from './agent-presets.ts';
+import { AgentInstructionsAdapter } from './agent-instructions.ts';
 import { PluginFilesAdapter } from './plugin-files.ts';
 import { SessionsAdapter } from './sessions.ts';
 import { makeContext, makeImportContext, sha256Hex } from './test-helpers.ts';
@@ -66,6 +67,50 @@ test('agentPresets: 目录 bundle 文件收集与写入（.agent-presets 基准�
     Buffer.from(await dst.fs.readFile('.agent-presets/work/agent.cordis.yml')).toString(),
     'services:\n  - name: work\n',
   );
+});
+
+test('agentInstructions: 只收集 homeDir 根 AGENTS.md（白名单）+ 导入往返', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  await src.fs.writeFile('AGENTS.md', Buffer.from('# Global rules\nAlways reply in Chinese.\n', 'utf8'));
+  // 根目录其他文件不得被收集（不能整目录递归）
+  await src.fs.writeFile('settings.yaml', Buffer.from('foo: bar\n', 'utf8'));
+
+  const adapter = new AgentInstructionsAdapter();
+  assert.equal(adapter.defaultIncluded, true, 'agentInstructions 默认导出');
+  assert.equal(adapter.portability, 'portable');
+  const out = await adapter.export(src, { includeSecrets: false });
+  assert.equal(out.data.files.length, 1);
+  assert.equal(out.data.files[0]?.relativePath, 'AGENTS.md');
+  assert.equal(out.data.files[0]?.contentHash, sha256Hex(Buffer.from('# Global rules\nAlways reply in Chinese.\n')));
+  assert.equal(out.warnings.length, 0, '存在文件时不告警');
+
+  const sections = new Map([['agentInstructions', out.data]]);
+  const dst = makeContext('linux', '/home/bob');
+  const items = await adapter.analyzeImport(out.data, makeImportContext(dst, sections));
+  assert.equal(items.length, 1);
+  assert.equal(items[0]?.kind, 'Create');
+  const r = await adapter.applyItem(items[0]!, makeImportContext(dst, sections));
+  assert.equal(r.ok, true);
+  assert.equal(
+    Buffer.from(await dst.fs.readFile('AGENTS.md')).toString(),
+    '# Global rules\nAlways reply in Chinese.\n',
+    '导入写回 $DSH_HOME/AGENTS.md（homeDir 根）',
+  );
+
+  // 幂等：一致 → Skip；内容不同 → Conflict
+  let items2 = await adapter.analyzeImport(out.data, makeImportContext(dst, sections));
+  assert.equal(items2[0]?.kind, 'Skip');
+  await dst.fs.writeFile('AGENTS.md', Buffer.from('# Changed\n', 'utf8'));
+  items2 = await adapter.analyzeImport(out.data, makeImportContext(dst, sections));
+  assert.equal(items2[0]?.kind, 'Conflict');
+});
+
+test('agentInstructions: 文件缺失 → 空分区 + dirEmpty 警告', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  const adapter = new AgentInstructionsAdapter();
+  const out = await adapter.export(src, { includeSecrets: false });
+  assert.equal(out.data.files.length, 0);
+  assert.ok(out.warnings.length > 0, '缺失时给出提示（与 skills 目录为空一致）');
 });
 
 test('pluginFiles: 白名单导出（不存在跳过）+ 默认不包含', async () => {

@@ -10,7 +10,8 @@
  * 核心逻辑（runOnce）：
  *  - 读配置；若 !enabled → return
  *  - runs.register('autosync') 防重复；同 kind running → 跳过
- *  - readSyncConfig → repoUrl 无 → 记 skipped(未配置) → return
+ *  - readSyncConfig → 按通道判定未配置（git 无 git.repoUrl / webdav 无 webdav.url）
+ *    → 记 skipped(未配置) → return
  *  - Phase A: engine.merge() 三方合并 → 判定 needsReview（冲突/缺失依赖/Install/Error）
  *  - 冲突 → 跳过 + 写历史 skipped + conflictedSections[] → return
  *  - Phase B: 无冲突 → engine.applyMergePlan(apply) 写入本地
@@ -29,7 +30,7 @@ import type { RunRegistry } from '../core/run-registry.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './autosync-config.ts';
-import { readSyncConfig } from './sync-config.ts';
+import { isGitConfig, isWebDavConfig, readSyncConfig } from './sync-config.ts';
 import type { SyncConfig } from './sync-config.ts';
 import { readSyncHistory, appendAutosyncEntry } from './sync-history.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
@@ -82,7 +83,8 @@ export interface AutosyncRunResult {
 export interface AutoSyncSchedulerOptions {
   syncDir: string;
   host: { log: Logger };
-  makeSyncEngine: (repoUrl: string, gitBin?: string) => SyncEngine;
+  /** 注入 SyncEngine 构造器：按 SyncConfig 构造对应通道的引擎（git/webdav）。 */
+  makeSyncEngine: (cfg: SyncConfig) => SyncEngine;
   /** 消息翻译器 */
   msg: MsgFunc;
   runs: RunRegistry;
@@ -104,7 +106,7 @@ export interface AutoSyncSchedulerOptions {
 export class AutoSyncScheduler {
   private readonly syncDir: string;
   private readonly host: { log: Logger };
-  private readonly makeSyncEngine: (repoUrl: string, gitBin?: string) => SyncEngine;
+  private readonly makeSyncEngine: (cfg: SyncConfig) => SyncEngine;
   private readonly msg: MsgFunc;
   private readonly runs: RunRegistry;
   private readonly now: () => Date;
@@ -224,9 +226,9 @@ export class AutoSyncScheduler {
     }
 
     try {
-      // 读 sync-config → repoUrl
+      // 读 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
       const syncCfg = await this.readSyncConfigFn();
-      if (syncCfg === null || syncCfg.repoUrl === '') {
+      if (!syncIsConfigured(syncCfg)) {
         const result: AutosyncRunResult = {
           status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
           consecutiveFailures: cfg.consecutiveFailures,
@@ -242,7 +244,7 @@ export class AutoSyncScheduler {
         return result;
       }
 
-      const engine = this.makeSyncEngine(syncCfg.repoUrl, syncCfg.gitBin);
+      const engine = this.makeSyncEngine(syncCfg!);
 
       // Phase A: pull 合并（下载）
       let mergePlan: MergePlan;
@@ -455,4 +457,19 @@ export function buildAutoApplyPlan(plan: MergePlan): SyncApplyPlan {
     }
   }
   return { autoApply, review, skipped };
+}
+
+/**
+ * 同步通道是否「已配置」：git 看 git.repoUrl 非空；webdav 看 webdav.url 非空；
+ * 未配置（null / 缺字段）→ false。作为 autosync 未配置跳过的判定依据。
+ */
+export function syncIsConfigured(cfg: SyncConfig | null): boolean {
+  if (cfg === null || typeof cfg !== 'object') return false;
+  if (isWebDavConfig(cfg)) {
+    return typeof cfg.webdav.url === 'string' && cfg.webdav.url !== '';
+  }
+  if (isGitConfig(cfg)) {
+    return typeof cfg.git.repoUrl === 'string' && cfg.git.repoUrl !== '';
+  }
+  return false;
 }

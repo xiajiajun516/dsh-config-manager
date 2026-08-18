@@ -84,6 +84,9 @@ export function severityLabel(severity: PlanItem['severity'], t: UiT = zhUiT): s
 
 /* ---------------------------------------------------------------- 按钮状态 */
 
+/** 远程同步通道类型：git（默认）或 webdav */
+export type SyncChannel = 'git' | 'webdav';
+
 export interface SyncButtons {
   canPush: boolean;
   canPull: boolean;
@@ -91,16 +94,21 @@ export interface SyncButtons {
   pullLabel: string;
 }
 
+/** 活动通道的远端地址是否就绪（git=repoUrl，webdav=webdavUrl）。 */
+export function computeRemoteReady(channel: SyncChannel, gitUrl: string, webdavUrl: string): boolean {
+  const url = channel === 'webdav' ? webdavUrl : gitUrl;
+  return url.trim() !== '';
+}
+
 /**
  * 按钮可用性与文案：
  * - 任一操作进行中（busy）→ 两个按钮都禁用（防并发 push/pull）；
- * - 仓库地址为空 → 禁用（无仓库无从同步）；
+ * - 活动通道远端地址未就绪（remoteReady=false）→ 禁用（无从同步）；
  * - busy 时按钮文案切换为「正在推送/拉取…」（配 Spinner）。
  */
-export function computeSyncButtons(busy: 'sync' | 'push' | 'pull' | 'apply' | 'rollback' | null, repoUrl: string, t: UiT = zhUiT): SyncButtons {
+export function computeSyncButtons(busy: 'sync' | 'push' | 'pull' | 'apply' | 'rollback' | null, remoteReady: boolean, t: UiT = zhUiT): SyncButtons {
   const idle = busy === null;
-  const repoOk = repoUrl.trim() !== '';
-  const enabled = idle && repoOk;
+  const enabled = idle && remoteReady;
   return {
     canPush: enabled,
     canPull: enabled,
@@ -130,7 +138,11 @@ export function computeSyncStatus(
   if (statusInfo === null || !statusInfo.configured) {
     return { kind: 'unconfigured', text: t('sync.statusUnconfigured') };
   }
-  const cred = statusInfo.credentialConfigured
+  const isWebdav = statusInfo.transport?.type === 'webdav';
+  const credOk = isWebdav
+    ? (statusInfo.webdav?.passwordConfigured ?? false)
+    : statusInfo.credentialConfigured;
+  const cred = credOk
     ? t('sync.credConfigured')
     : t('sync.credMissing');
   const last =

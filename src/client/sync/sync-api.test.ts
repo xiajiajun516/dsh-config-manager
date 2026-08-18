@@ -6,7 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ConfigManagerApiError } from '../api.ts';
-import { SYNC_API, SyncApi } from './sync-api.ts';
+import { SYNC_API, SYNC_WEBDAV_CREDENTIAL_REF, SyncApi } from './sync-api.ts';
 
 interface FetchCall {
   url: string;
@@ -331,4 +331,86 @@ test('S-16 api.history()：GET /sync/history，解析 { entries }（含 autosync
   assert.equal(result.entries[0]?.kind, 'apply');
   assert.equal(result.entries[1]?.kind, 'autosync');
   assert.deepEqual(result.entries[1]?.autosync?.conflictedSections, ['settings']);
+});
+
+/* ------------------------------------------------ WebDAV 通道契约 */
+
+test('S-17 WebDAV 密码凭据引用名常量存在', () => {
+  assert.equal(SYNC_WEBDAV_CREDENTIAL_REF, 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD');
+});
+
+test('S-18 api.status()：webdav 通道 → 解析 webdav 配置状态（url/usernameConfigured/passwordConfigured，无 secret 值）', async () => {
+  const body = {
+    ok: true, configured: true, credentialConfigured: false, credentialWritable: true,
+    webdav: {
+      url: 'https://dav.example.com/dav/config', usernameConfigured: true, passwordConfigured: true,
+    },
+    lastSyncAt: '2026-08-16T10:30:00.000Z', sectionCount: 2,
+    transport: { type: 'webdav', ref: 'https://dav.example.com/dav/config' },
+  };
+  let called: FetchCall | null = null;
+  installFetchMock((call) => {
+    called = call;
+    return jsonResponse(200, body);
+  });
+  const lastCall = (): FetchCall | null => called;
+  const api = new SyncApi();
+  const result = await api.status();
+  assert.equal(result.webdav?.url, 'https://dav.example.com/dav/config');
+  assert.equal(result.webdav?.usernameConfigured, true);
+  assert.equal(result.webdav?.passwordConfigured, true);
+  assert.equal('password' in (result.webdav ?? {}), false, 'status 契约不得携带 webdav 密码值');
+  assert.equal('username' in (result.webdav ?? {}), false, 'status 契约不得携带 webdav 用户名字段（用布尔标记）');
+  assert.equal(lastCall()?.url, SYNC_API.status);
+});
+
+test('S-19 api.push()：transport=webdav → 请求体携带 webdav.url/username/password（不携带 git 字段）', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-w1', sections: [], warnings: [] });
+  });
+  const api = new SyncApi();
+  const result = await api.push({
+    transport: 'webdav',
+    webdav: { url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass' },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, SYNC_API.push);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['transport'], 'webdav');
+  const webdav = sent['webdav'] as Record<string, unknown>;
+  assert.equal(webdav['url'], 'https://dav.example.com/dav/config');
+  assert.equal(webdav['username'], 'alice');
+  assert.equal(webdav['password'], 'secret-pass');
+  assert.equal(sent['repoUrl'], undefined, 'webdav 通道不应携带 git repoUrl');
+});
+
+test('S-20 api.pull()：transport=webdav 请求体透传 webdav 配置', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-w1', changes: [], needsReview: false });
+  });
+  const api = new SyncApi();
+  await api.pull({ transport: 'webdav', webdav: { url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass' } });
+  assert.equal(calls[0]?.url, SYNC_API.pull);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['transport'], 'webdav');
+  assert.equal((sent['webdav'] as Record<string, unknown>)['url'], 'https://dav.example.com/dav/config');
+});
+
+test('S-21 git 通道缺省：不带 transport → 请求体仍只含 git 字段（向后兼容）', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-1', sections: [], warnings: [] });
+  });
+  const api = new SyncApi();
+  await api.push({ repoUrl: 'https://github.com/u/r.git', token: 't' });
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['transport'], undefined, '缺省不声明 transport（Host 视为 git）');
+  assert.equal(sent['repoUrl'], 'https://github.com/u/r.git');
+  assert.equal(sent['webdav'], undefined);
 });

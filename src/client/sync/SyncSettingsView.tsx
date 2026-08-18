@@ -23,17 +23,17 @@ import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
-import { SYNC_CREDENTIAL_REF } from './sync-api.ts'
+import { SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF } from './sync-api.ts'
 import type {
-  AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncSnapshotLite, SyncStartResponse,
+  AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncPushPayload, SyncSnapshotLite, SyncStartResponse,
   SyncStatusResponse,
 } from './sync-api.ts'
 import {
   autosyncIntervalMs, autosyncStatusText, computeAutosyncCountdown, computeGithubLoginView,
-  computeSyncButtons, computeSyncStatus, formatIntervalDuration, githubPollMessage, kindLabel,
-  privateRepoHint, pullReportView, pushReportView, severityLabel,
+  computeRemoteReady, computeSyncButtons, computeSyncStatus, formatIntervalDuration, githubPollMessage,
+  kindLabel, privateRepoHint, pullReportView, pushReportView, severityLabel,
 } from './sync-view.ts'
-import type { GithubLoginPhase } from './sync-view.ts'
+import type { GithubLoginPhase, SyncChannel } from './sync-view.ts'
 import { SyncHistoryView } from './SyncHistoryView.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
@@ -47,10 +47,18 @@ interface SyncUiState {
   loading: boolean
   loadError: string | null
   statusInfo: SyncStatusResponse | null
+  /** 当前同步通道（git 默认；webdav 切换显示 WebDAV 表单） */
+  channel: SyncChannel
+  /** git 通道表单 */
   repoUrl: string
   gitBin: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化 */
   token: string
+  /** webdav 通道表单 */
+  webdavUrl: string
+  webdavUsername: string
+  /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化/回显 */
+  webdavPassword: string
   busy: 'sync' | 'push' | 'pull' | 'rollback' | null
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
@@ -93,9 +101,13 @@ const initial: SyncUiState = {
   loading: true,
   loadError: null,
   statusInfo: null,
+  channel: 'git',
   repoUrl: '',
   gitBin: '',
   token: '',
+  webdavUrl: '',
+  webdavUsername: '',
+  webdavPassword: '',
   busy: null,
   pushReport: null,
   pullReport: null,
@@ -123,11 +135,17 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     patch({ loading: true, loadError: null })
     try {
       const info = await api.status()
+      // 通道回填：transport.type=webdav → 显示 webdav；否则 git（Host 以 transport 字段为准）
+      const savedChannel: SyncChannel = info.transport?.type === 'webdav' ? 'webdav' : 'git'
       patch({
         loading: false,
         statusInfo: info,
+        channel: savedChannel,
         repoUrl: info.repoUrl ?? '',
         gitBin: info.gitBin ?? '',
+        webdavUrl: info.webdav?.url ?? '',
+        // Host 不回传 username 值（仅 usernameConfigured 布尔）；留空待填，徽章提示已配置过
+        webdavUsername: '',
         ...(info.autosync !== undefined
           ? {
               autosync: info.autosync,
@@ -140,10 +158,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       if (info.autosync === undefined) {
         void loadAutosync()
       }
-      // 仓库已配置且地址就绪时，自动拉取远端快照填充下拉（无需先点一键同步）；
-      // 直接传 info.repoUrl（state.repoUrl 的 patch 尚未生效），避免竞态
-      if (info.configured && (info.repoUrl ?? '').trim() !== '') {
-        void loadSnapshots(info.repoUrl)
+      // 通道已配置且远端地址就绪时，自动拉取远端快照填充下拉（无需先点一键同步）；
+      // 直接传 info 的地址（state.patch 尚未生效），避免竞态
+      const preset = savedChannel === 'webdav' ? (info.webdav?.url ?? '') : (info.repoUrl ?? '')
+      if (info.configured && preset.trim() !== '') {
+        void loadSnapshots(preset, savedChannel)
       }
     } catch (err) {
       patch({ loading: false, loadError: err instanceof Error ? err.message : String(err) })
@@ -162,15 +181,31 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
   /**
    * 读取远端历史快照列表（「选择历史快照」下拉数据源）。
-   * repoUrlOverride：挂载时仓库地址刚从 status 回填、state.repoUrl 尚未生效，
-   * 直接传 info.repoUrl 避免竞态读旧值；缺省读 state.repoUrl（同步成功后的刷新路径）。
-   * 无仓库地址时静默跳过（不发无效请求，下拉留空）。
+   * urlOverride / channelOverride：挂载时地址刚从 status 回填、state.patch 尚未生效，
+   * 直接传 info 的地址与通道避免竞态读旧值；缺省读当前 state。
+   * 无远端地址时静默跳过（不发无效请求，下拉留空）。
    */
-  const loadSnapshots = async (repoUrlOverride?: string): Promise<void> => {
-    const repoUrl = repoUrlOverride ?? state.repoUrl
-    if (repoUrl.trim() === '') return
+  const loadSnapshots = async (urlOverride?: string, channelOverride?: SyncChannel): Promise<void> => {
+    const ch = channelOverride ?? state.channel
+    if (ch === 'webdav') {
+      const url = urlOverride ?? state.webdavUrl
+      if (url.trim() === '') return
+      try {
+        const res = await api.snapshotsList({ transport: 'webdav', webdav: { url: url.trim() } })
+        patch({ snapshots: res.snapshots })
+      } catch {
+        // 拉取失败不阻断主流程（下拉留空，用户可重试）
+      }
+      return
+    }
+    const repo = urlOverride ?? state.repoUrl
+    if (repo.trim() === '') return
     try {
-      const res = await api.snapshotsList({ ...payload(), repoUrl })
+      const res = await api.snapshotsList({
+        transport: 'git',
+        repoUrl: repo.trim(),
+        gitBin: state.gitBin.trim() !== '' ? state.gitBin.trim() : undefined,
+      })
       patch({ snapshots: res.snapshots })
     } catch {
       // 拉取失败不阻断主流程（下拉留空，用户可重试）
@@ -188,12 +223,25 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     if (githubPollTimer.current !== null) clearTimeout(githubPollTimer.current)
   }, [])
 
-  /** 表单快照 → 请求体（token 为空串不携带；gitBin 空串不携带） */
-  const payload = (): { repoUrl: string; gitBin?: string; token?: string } => ({
-    repoUrl: state.repoUrl.trim(),
-    gitBin: state.gitBin.trim() !== '' ? state.gitBin.trim() : undefined,
-    token: state.token.trim() !== '' ? state.token : undefined,
-  })
+  /** 表单快照 → 请求体（按当前通道构建；空串不携带；password 仅内存不发回显） */
+  const payload = (): SyncPushPayload => {
+    if (state.channel === 'webdav') {
+      return {
+        transport: 'webdav',
+        webdav: {
+          url: state.webdavUrl.trim() !== '' ? state.webdavUrl.trim() : undefined,
+          username: state.webdavUsername.trim() !== '' ? state.webdavUsername.trim() : undefined,
+          password: state.webdavPassword !== '' ? state.webdavPassword : undefined,
+        },
+      }
+    }
+    return {
+      transport: 'git',
+      repoUrl: state.repoUrl.trim(),
+      gitBin: state.gitBin.trim() !== '' ? state.gitBin.trim() : undefined,
+      token: state.token.trim() !== '' ? state.token : undefined,
+    }
+  }
 
   /* ------------------------------------------------ GitHub OAuth device flow */
 
@@ -261,8 +309,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
     try {
       const report = await api.push(payload())
-      // 成功即清空 token（已安全写入 DSH credentials）；失败保留以便重试
-      patch({ busy: null, pushReport: report, token: report.ok ? '' : state.token })
+      // 成功即清空 token/webdavPassword（已安全写入 DSH credentials）；失败保留以便重试
+      patch({
+        busy: null, pushReport: report,
+        ...(report.ok ? { token: '', webdavPassword: '' } : {}),
+      })
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
@@ -272,7 +323,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     patch({ busy: 'pull', error: null, pullReport: null, pushReport: null })
     try {
       const report = await api.pull(payload())
-      patch({ busy: null, pullReport: report, token: '' })
+      patch({ busy: null, pullReport: report, token: '', webdavPassword: '' })
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
@@ -293,7 +344,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         patch({ busy: null, error: session.message ?? t('syncflow.syncFailed') })
         return
       }
-      patch({ busy: null, confirmSession: session, token: '' })
+      patch({ busy: null, confirmSession: session, token: '', webdavPassword: '' })
       void loadSnapshots()
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
@@ -333,7 +384,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   }
 
   const status = computeSyncStatus(state.statusInfo, state.loading, state.loadError, uiT)
-  const buttons = computeSyncButtons(state.busy, state.repoUrl, uiT)
+  /** 活动通道的远端地址是否就绪（git=repoUrl 非空；webdav=webdavUrl 非空） */
+  const remoteReady = computeRemoteReady(state.channel, state.repoUrl, state.webdavUrl)
+  const buttons = computeSyncButtons(state.busy, remoteReady, uiT)
   const pushView = pushReportView(state.pushReport, uiT)
   const pullView = pullReportView(state.pullReport, uiT)
   const githubView = computeGithubLoginView(
@@ -353,94 +406,166 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     <div className={css.viewBody}>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
-          {/* 私有仓库强制提示 */}
-          <Banner kind="warn">{privateRepoHint(uiT)}</Banner>
+          {/* 私有仓库强制提示：仅 git 通道适用 */}
+          {state.channel === 'git' && <Banner kind="warn">{privateRepoHint(uiT)}</Banner>}
 
-          {/* 仓库配置 */}
+          {/* 通道配置 */}
           <Card>
-            <span className={css.groupLabel}>{t('config.title')}</span>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('config.repoUrl')}</span>
-              <input
-                type="text"
-                className={css.input}
-                value={state.repoUrl}
-                placeholder="https://github.com/user/private-repo.git"
-                disabled={state.busy !== null}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ repoUrl: e.target.value }) }}
-              />
-              <span className={css.hint}>{t('config.repoUrlHint')}</span>
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>
-                {t('config.token')}
-                {' '}
-                {state.statusInfo?.credentialConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
-              </span>
-              <input
-                type="password"
-                className={css.input}
-                value={state.token}
-                autoComplete="off"
-                placeholder={t('config.tokenPlaceholder')}
-                disabled={state.busy !== null}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ token: e.target.value }) }}
-              />
-              <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
-            </label>
+            <span className={css.groupLabel}>{t('channel.title')}</span>
+            <span className={css.hint}>{t('channel.hint')}</span>
+            <select
+              className={css.select}
+              value={state.channel}
+              disabled={state.busy !== null}
+              onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                patch({ channel: e.target.value as SyncChannel })
+              }}
+            >
+              <option value="git">{t('channel.git')}</option>
+              <option value="webdav">{t('channel.webdav')}</option>
+            </select>
 
-            {/* GitHub OAuth 登录（device flow）：无需手动输入 token */}
-            <span className={css.groupLabel}>{t('github.title')}</span>
-            <span className={css.hint}>{t('github.description')}</span>
-            {githubView.showCode && (
-              <div className={css.statRow}>
-                <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
-                <a
-                  className={css.ghostButton}
-                  href={githubView.verificationUri}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ textDecoration: 'none' }}
-                >
-                  {t('github.openAuth')}
-                </a>
-              </div>
-            )}
-            <div className={css.actionRow}>
-              <Button
-                variant="primary"
-                disabled={!githubView.canStart || state.busy !== null}
-                onClick={() => { void runGithubStart() }}
-              >
-                {githubView.startLabel}
-              </Button>
-              {githubView.canCancel && (
-                <Button disabled={state.busy !== null} onClick={() => { void runGithubCancel() }}>
-                  {t('github.cancel')}
-                </Button>
-              )}
-            </div>
-            <div className={css.statRow}>
-              <Badge kind={githubView.phase === 'success' ? 'ok' : githubView.phase === 'error' ? 'error' : 'warn'}>
-                {githubView.statusText}
-              </Badge>
-            </div>
-            {githubView.phase === 'error' && (
-              <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
+            {/* git 通道分支 */}
+            {state.channel === 'git' && (
+              <>
+                <span className={css.groupLabel}>{t('config.title')}</span>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>{t('config.repoUrl')}</span>
+                  <input
+                    type="text"
+                    className={css.input}
+                    value={state.repoUrl}
+                    placeholder="https://github.com/user/private-repo.git"
+                    disabled={state.busy !== null}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ repoUrl: e.target.value }) }}
+                  />
+                  <span className={css.hint}>{t('config.repoUrlHint')}</span>
+                </label>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>
+                    {t('config.token')}
+                    {' '}
+                    {state.statusInfo?.credentialConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
+                  </span>
+                  <input
+                    type="password"
+                    className={css.input}
+                    value={state.token}
+                    autoComplete="off"
+                    placeholder={t('config.tokenPlaceholder')}
+                    disabled={state.busy !== null}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ token: e.target.value }) }}
+                  />
+                  <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
+                </label>
+
+                {/* GitHub OAuth 登录（device flow）：仅 git 通道显示 */}
+                <span className={css.groupLabel}>{t('github.title')}</span>
+                <span className={css.hint}>{t('github.description')}</span>
+                {githubView.showCode && (
+                  <div className={css.statRow}>
+                    <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
+                    <a
+                      className={css.ghostButton}
+                      href={githubView.verificationUri}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ textDecoration: 'none' }}
+                    >
+                      {t('github.openAuth')}
+                    </a>
+                  </div>
+                )}
+                <div className={css.actionRow}>
+                  <Button
+                    variant="primary"
+                    disabled={!githubView.canStart || state.busy !== null}
+                    onClick={() => { void runGithubStart() }}
+                  >
+                    {githubView.startLabel}
+                  </Button>
+                  {githubView.canCancel && (
+                    <Button disabled={state.busy !== null} onClick={() => { void runGithubCancel() }}>
+                      {t('github.cancel')}
+                    </Button>
+                  )}
+                </div>
+                <div className={css.statRow}>
+                  <Badge kind={githubView.phase === 'success' ? 'ok' : githubView.phase === 'error' ? 'error' : 'warn'}>
+                    {githubView.statusText}
+                  </Badge>
+                </div>
+                {githubView.phase === 'error' && (
+                  <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
+                )}
+
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>{t('config.gitBin')}</span>
+                  <input
+                    type="text"
+                    className={css.input}
+                    value={state.gitBin}
+                    placeholder="git"
+                    disabled={state.busy !== null}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ gitBin: e.target.value }) }}
+                  />
+                  <span className={css.hint}>{t('config.gitBinHint')}</span>
+                </label>
+              </>
             )}
 
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('config.gitBin')}</span>
-              <input
-                type="text"
-                className={css.input}
-                value={state.gitBin}
-                placeholder="git"
-                disabled={state.busy !== null}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ gitBin: e.target.value }) }}
-              />
-              <span className={css.hint}>{t('config.gitBinHint')}</span>
-            </label>
+            {/* webdav 通道分支 */}
+            {state.channel === 'webdav' && (
+              <>
+                <span className={css.groupLabel}>{t('webdav.title')}</span>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>{t('webdav.url')}</span>
+                  <input
+                    type="text"
+                    className={css.input}
+                    value={state.webdavUrl}
+                    placeholder="https://dav.example.com/dav/config"
+                    disabled={state.busy !== null}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ webdavUrl: e.target.value }) }}
+                  />
+                  <span className={css.hint}>{t('webdav.urlHint')}</span>
+                </label>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>
+                    {t('webdav.username')}
+                    {' '}
+                    {state.statusInfo?.webdav?.usernameConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
+                  </span>
+                  <input
+                    type="text"
+                    className={css.input}
+                    value={state.webdavUsername}
+                    autoComplete="off"
+                    placeholder="alice"
+                    disabled={state.busy !== null}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ webdavUsername: e.target.value }) }}
+                  />
+                  <span className={css.hint}>{t('webdav.usernameHint')}</span>
+                </label>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>
+                    {t('webdav.password')}
+                    {' '}
+                    {state.statusInfo?.webdav?.passwordConfigured === true && <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>}
+                  </span>
+                  <input
+                    type="password"
+                    className={css.input}
+                    value={state.webdavPassword}
+                    autoComplete="off"
+                    placeholder={t('webdav.passwordPlaceholder')}
+                    disabled={state.busy !== null}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ webdavPassword: e.target.value }) }}
+                  />
+                  <span className={css.hint}>{t('webdav.passwordHint', { ref: SYNC_WEBDAV_CREDENTIAL_REF })}</span>
+                </label>
+              </>
+            )}
           </Card>
 
           {/* 同步状态 */}
@@ -448,6 +573,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             <span className={css.groupLabel}>{t('status.title')}</span>
             <div className={css.statRow}>
               <Badge kind={status.kind === 'ready' ? 'ok' : status.kind === 'error' ? 'error' : 'warn'}>{status.text}</Badge>
+              <Badge kind="info">{state.channel === 'webdav' ? t('channel.webdav') : t('channel.git')}</Badge>
             </div>
           </Card>
 
@@ -455,7 +581,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           <div className={css.actionRow}>
             <Button
               variant="primary"
-              disabled={state.busy !== null || state.repoUrl.trim() === ''}
+              disabled={state.busy !== null || !remoteReady}
               onClick={() => { void runSync() }}
             >
               {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}

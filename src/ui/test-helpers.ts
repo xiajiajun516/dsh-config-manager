@@ -19,7 +19,7 @@ export function makeManifest(): Manifest {
     exportedAt: '2026-08-14T12:00:00.000Z',
     sections: {
       settings: true, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
-      skills: false, agentPresets: false, workspaces: false, pluginFiles: false,
+      skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
       credentialsStatus: false, secrets: false, sessions: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },
@@ -103,7 +103,7 @@ export function makePlan(overrides: Partial<ImportPlan> = {}): ImportPlan {
     needsRestart: true,
     estimatedActions: {
       settings: 2, ui: 0, providers: 0, plugins: 1, mcp: 1, prompts: 1,
-      skills: 0, agentPresets: 0, workspaces: 0, pluginFiles: 0,
+      skills: 0, agentPresets: 0, agentInstructions: 0, workspaces: 0, pluginFiles: 0,
       credentialsStatus: 0, secrets: 0, sessions: 0,
     },
     ...overrides,

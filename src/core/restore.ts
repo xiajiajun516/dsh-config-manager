@@ -12,7 +12,7 @@
  *     <snapshotDir>/pre-restore/（可人工反悔）；
  *  3. 插件撤销：beforePlugins（导入前基线）与当前已装对比 → 导入期间新增的插件
  *     走官方 `dsh plugin --profile <p> remove <pkg>`（runDshPlugin 通道，零新子进程代码）；
- *  4. file 类条目补偿：skills/agentPresets/pluginFiles/sessions 原文件 blob 写回 /
+ *  4. file 类条目补偿：skills/agentPresets/agentInstructions/pluginFiles/sessions 原文件 blob 写回 /
  *     快照时不存在则删除（与 rollback.ts 语义一致）；
  *  5. credentials：DSH 不回读值 → existed=true 只生成 manualHint，绝不自动改写。
  *

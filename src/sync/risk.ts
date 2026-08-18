@@ -38,6 +38,7 @@ export const SECTION_RISK_TIER: Readonly<Record<SectionId, RiskTier>> = {
   mcp: 'medium',
   skills: 'low',
   agentPresets: 'low',
+  agentInstructions: 'low',
   pluginFiles: 'high',
   sessions: 'high',
   credentialsStatus: 'high',

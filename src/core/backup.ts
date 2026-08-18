@@ -79,6 +79,7 @@ async function backupHostFiles(
 const FILE_BASES: Partial<Record<SectionId, string>> = {
   skills: 'skills',
   agentPresets: '.agent-presets',
+  agentInstructions: '', // homeDir 根（~/.dsh/AGENTS.md）
   pluginFiles: '',
   sessions: 'sessions',
 };
@@ -166,6 +167,7 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     }
     case 'skills':
     case 'agentPresets':
+    case 'agentInstructions':
     case 'pluginFiles':
     case 'sessions': {
       const abs = resolveFileTarget(ctx, target.adapter, target.ref);

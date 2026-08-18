@@ -1,9 +1,9 @@
 /**
  * Config Manager 设置页（settings.section 入口的主页面容器）。
  *
- * 业务面（api）由注册时的 inject face 注入；t 由 locale seat 注入。
- * 关闭按钮由 settings shell 自带，本页不再渲染。内部两个主视图：
- * Export（Quick/Custom）与 Import（九步向导）。
+ * 业务面（api/syncApi/marketApi）由注册时的 inject face 注入；t 由 locale seat 注入。
+ * 关闭按钮由 settings shell 自带，本页不再渲染。内部主视图：
+ * Export（Quick/Custom）与 Import（九步向导），以及快照/远程同步/配置市场三块低频面板。
  *
  * m2：主视图 tab（view）与全部子视图状态统一由模块级 runStore 持有
  * （sessionStorage 持久化 + 切 tab/关面板不重建控制器实例）；挂载时
@@ -17,6 +17,7 @@ import { ExportView } from './export/ExportView.tsx'
 import { ImportWizardView } from './import/ImportWizardView.tsx'
 import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
 import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
+import { MarketPanel } from './market/MarketPanel.tsx'
 import css from './config-manager.module.css'
 
 export type ConfigManagerSectionProps =
@@ -25,15 +26,16 @@ export type ConfigManagerSectionProps =
   & { t: TranslateNS<'config-manager'> }
 
 /**
- * 设置页容器：Export / Import / Snapshots / Sync 四视图切换。
- * Export/Import 状态在模块级 store（切 tab 不丢失）；快照恢复与远程同步为低频显式
- * 操作，其状态组件内自持（local state，不进 sessionStorage）。
+ * 设置页容器：Export / Import / Snapshots / Sync / Market 五视图切换。
+ * Export/Import 状态在模块级 store（切 tab 不丢失）；快照恢复/远程同步/配置市场为
+ * 低频显式操作，其状态组件内自持（local state，不进 sessionStorage）。
  */
-export function ConfigManagerSection({ api, syncApi, syncT, t }: ConfigManagerSectionProps) {
+export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const view = state.view
   const [snapshotsOpen, setSnapshotsOpen] = useState(false)
   const [syncOpen, setSyncOpen] = useState(false)
+  const [marketOpen, setMarketOpen] = useState(false)
 
   // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
   // 这里经 /runs 找回活跃 runId 再轮询 /progress）；卸载时停止轮询，重开再订阅。
@@ -47,20 +49,30 @@ export function ConfigManagerSection({ api, syncApi, syncT, t }: ConfigManagerSe
   const setView = (next: MainView): void => {
     setSnapshotsOpen(false)
     setSyncOpen(false)
+    setMarketOpen(false)
     runStore.patch({ view: next })
   }
 
   const openSnapshots = (): void => {
     setSnapshotsOpen(true)
     setSyncOpen(false)
+    setMarketOpen(false)
   }
 
   const openSync = (): void => {
     setSyncOpen(true)
     setSnapshotsOpen(false)
+    setMarketOpen(false)
   }
 
-  const activeTab: MainView | 'snapshots' | 'sync' = syncOpen ? 'sync' : snapshotsOpen ? 'snapshots' : view
+  const openMarket = (): void => {
+    setMarketOpen(true)
+    setSnapshotsOpen(false)
+    setSyncOpen(false)
+  }
+
+  const activeTab: MainView | 'snapshots' | 'sync' | 'market' =
+    marketOpen ? 'market' : syncOpen ? 'sync' : snapshotsOpen ? 'snapshots' : view
 
   return (
     <div className={css.section}>
@@ -106,14 +118,26 @@ export function ConfigManagerSection({ api, syncApi, syncT, t }: ConfigManagerSe
           >
             {t('view.sync')}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'market'}
+            data-active={marketOpen ? '' : undefined}
+            className={css.viewTab}
+            onClick={openMarket}
+          >
+            {t('view.market')}
+          </button>
         </div>
       </div>
       <div className={css.sectionBody}>
-        {syncOpen
-          ? <SyncSettingsView api={syncApi} t={syncT} />
-          : snapshotsOpen
-            ? <SnapshotsPanel api={api} t={t} />
-            : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
+        {marketOpen
+          ? <MarketPanel api={marketApi} importApi={api} t={marketT} />
+          : syncOpen
+            ? <SyncSettingsView api={syncApi} t={syncT} />
+            : snapshotsOpen
+              ? <SnapshotsPanel api={api} t={t} />
+              : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
       </div>
     </div>
   )

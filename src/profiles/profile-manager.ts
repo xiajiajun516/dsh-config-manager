@@ -83,7 +83,7 @@ export interface ProfileManagerOptions {
 /** 执行阶段顺序（与 core/analyzer.ts APPLY_ORDER 对齐：副作用大的 patch/安装最后） */
 export const APPLY_ORDER: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'prompts', 'skills', 'agentPresets',
-  'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
+  'agentInstructions', 'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
 ];
 
 /** Profile 名校验：拒绝路径穿越与非法字符 */
@@ -603,7 +603,7 @@ function buildProfileManifest(ctx: HostContext): Manifest {
     exportedAt: new Date().toISOString(),
     sections: {
       settings: false, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
-      skills: false, agentPresets: false, workspaces: false, pluginFiles: false,
+      skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
       credentialsStatus: false, secrets: false, sessions: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },

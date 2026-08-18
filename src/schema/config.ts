@@ -12,7 +12,7 @@ import type {
 /** 全部分区 id（manifest 校验与 adapter registry 共用） */
 export const SECTION_IDS: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts',
-  'skills', 'agentPresets', 'workspaces', 'pluginFiles',
+  'skills', 'agentPresets', 'agentInstructions', 'workspaces', 'pluginFiles',
   'credentialsStatus', 'secrets', 'sessions',
 ];
 
@@ -32,6 +32,7 @@ export const SECTION_JSON_PATHS: Partial<Record<SectionId, string>> = {
 export const SECTION_FILE_PREFIXES: Partial<Record<SectionId, string>> = {
   skills: 'custom/skills/',
   agentPresets: 'agents/presets/',
+  agentInstructions: 'custom/agent-instructions/',
   pluginFiles: 'plugin-files/',
   sessions: 'sessions/',
 };
@@ -114,6 +115,7 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
     }
     case 'skills':
     case 'agentPresets':
+    case 'agentInstructions':
     case 'pluginFiles':
     case 'sessions': {
       if (!Array.isArray(obj['files'])) issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });

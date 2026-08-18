@@ -75,6 +75,7 @@ import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials, SecurityError } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
+import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
 import { SyncEngine } from './sync/sync-engine.ts'
 import type { ApplyItemsReport } from './sync/sync-engine.ts'
@@ -84,7 +85,21 @@ import { defaultAutosyncConfig, readAutosyncConfig, writeAutosyncConfig } from '
 import type { AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
 import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
 import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
-import { readSyncConfig, writeSyncConfig, validateRepoUrl } from './sync/sync-config.ts'
+import {
+  readSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
+  isGitConfig, isWebDavConfig,
+} from './sync/sync-config.ts'
+import type { SyncConfig } from './sync/sync-config.ts'
+import type { SyncTransport } from './sync/transport.ts'
+import { GitMarketReader } from './market/reader.ts'
+import { parseMarketIndex } from './market/index-parser.ts'
+import { BUILTIN_MARKET_URL, isOfficialMarket } from './market/builtin.ts'
+import { validateMarketItem } from './market/security.ts'
+import { marketItemWarnings, toMarketListItem } from './market/view.ts'
+import type {
+  MarketDownloadResult, MarketIndex, MarketItemDetail, MarketListItem, MarketSummary,
+} from './market/types.ts'
+import { sha256Hex } from './utils/hashing.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
@@ -102,6 +117,9 @@ export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
 const PLUGIN_VERSION = '0.1.28'
+
+/** Plugin own package name — excluded from its own exported plugins list. */
+const PLUGIN_NAME = 'dsh-config-manager'
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
@@ -165,6 +183,11 @@ const API = {
   syncApplyItems: '/api/dsh-config-manager/sync/apply-items',
   syncCancel: '/api/dsh-config-manager/sync/cancel',
   syncAutosync: '/api/dsh-config-manager/sync/autosync',
+  // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
+  marketStatus: '/api/dsh-config-manager/market/status',
+  marketRefresh: '/api/dsh-config-manager/market/refresh',
+  marketBrowse: '/api/dsh-config-manager/market/browse',
+  marketDownload: '/api/dsh-config-manager/market/download',
 } as const
 
 /**
@@ -172,7 +195,14 @@ const API = {
  * token 只经 credentialRef 读写（写入由请求体触发，读取在每次 git 网络操作时 resolve），
  * 永不进 repoUrl / argv / commit / 同步文件 / 日志。
  */
-const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN'
+export const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN'
+
+/**
+ * WebDAV 通道口令的独立 DSH credentials 引用（与 git token 槽位分离）。
+ * 口令只经 credentialRef 读写（写入由请求体触发，读取在每次 WebDAV 网络操作时
+ * by WebDavTransport 经注入的 getPassword() resolve），永不进 URL / 请求头 / 日志。
+ */
+export const SYNC_WEBDAV_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD'
 
 /** Cap on JSON request bodies (import plans can be large: 4 MB). */
 const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
@@ -817,6 +847,8 @@ interface RoutesDeps {
   runs: RunRegistry
   /** m-sync-ui：同步状态/配置目录（$DSH_HOME/dsh-config-manager/sync） */
   syncDir: string
+  /** m-market：市场目录（$DSH_HOME/dsh-config-manager/market；其下 config/ 与 cache/） */
+  marketDir: string
   /** m-sync-ui：原始 DSH credentials（resolve token / set token / describe 状态） */
   credentials: CredentialProvider
   /** m-github-oauth：GitHub OAuth App 凭据（device flow 必需 client_id；client_secret 可选） */
@@ -845,6 +877,76 @@ export function writeSyncRouteError(res: ServerResponse, error: unknown): void {
   }
   const message = error instanceof Error ? error.message : String(error)
   writeJson(res, 500, { error: message })
+}
+
+/** parseSyncBody 的凭据写入依赖（只用到 set；测试可注入内存 mock）。 */
+export interface ParseSyncBodyDeps {
+  credentials: Pick<CredentialProvider, 'set'>
+}
+
+/**
+ * 解析同步请求体，按 transport 分支返回归一化的 SyncConfig（可辨识联合，schemaVersion=2）。
+ * 请求体形状（flat，M4 契约）：
+ * - git:    { transport:'git', repoUrl, gitBin?, token? } —— token 非空写 SYNC_CREDENTIAL_REF；
+ * - webdav: { transport:'webdav', url, username?, password? } —— password 非空写 SYNC_WEBDAV_CREDENTIAL_REF。
+ * 返回值不含任何 secret（password/token 只进 credentials，永不回传/落同步文件）。
+ */
+export async function parseSyncBody(
+  body: Record<string, unknown>,
+  deps: ParseSyncBodyDeps,
+): Promise<SyncConfig> {
+  const transport = body['transport'] === 'webdav' ? 'webdav' : 'git'
+  if (transport === 'webdav') {
+    const url = typeof body['url'] === 'string' ? body['url'].trim() : ''
+    if (url === '') throw new SyncRouteError('url is required for webdav')
+    const urlError = validateWebDavUrl(url)
+    if (urlError !== null) throw new SyncRouteError(urlError)
+    const username = typeof body['username'] === 'string' && body['username'] !== '' ? body['username'] : undefined
+    const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
+    if (password !== undefined) {
+      try {
+        await deps.credentials.set(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF), password)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new SyncRouteError(
+          `WebDAV 口令写入 DSH credentials 失败：${reason}（请在 DSH 凭据管理里配置 ${SYNC_WEBDAV_CREDENTIAL_REF} 后重试）`,
+        )
+      }
+    }
+    return {
+      schemaVersion: 2,
+      transport: 'webdav',
+      webdav: { url, ...(username !== undefined ? { username } : {}) },
+    }
+  }
+  // git 通道（沿用现有逻辑）
+  const repoUrl = typeof body['repoUrl'] === 'string' ? body['repoUrl'].trim() : ''
+  if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
+  const urlError = validateRepoUrl(repoUrl)
+  if (urlError !== null) throw new SyncRouteError(urlError)
+  const gitBin = typeof body['gitBin'] === 'string' && body['gitBin'] !== '' ? body['gitBin'] : undefined
+  const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
+  if (token !== undefined) {
+    try {
+      await deps.credentials.set(credentialRef(SYNC_CREDENTIAL_REF), token)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new SyncRouteError(
+        `token 写入 DSH credentials 失败：${reason}（请在 DSH 凭据管理里配置 ${SYNC_CREDENTIAL_REF} 后重试）`,
+      )
+    }
+  }
+  return {
+    schemaVersion: 2,
+    transport: 'git',
+    git: { repoUrl, ...(gitBin !== undefined ? { gitBin } : {}) },
+  }
+}
+
+/** 由 SyncConfig 合成 WebDAV 通道 baseUrl（webdav.url，尾部规范化带 '/'；git 通道返回 ''）。 */
+export function webdavBaseUrl(cfg: SyncConfig): string {
+  if (!isWebDavConfig(cfg)) return ''
+  return cfg.webdav.url.replace(/\/+$/, '') + '/'
 }
 
 /** 需要人工决策的 PlanItemKind（一键同步 needsReview 判定 + 逐项确认标记） */
@@ -1071,7 +1173,7 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
 
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler } {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, credentials, githubClientId, githubClientSecret } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, credentials, githubClientId, githubClientSecret } = deps
   const roots = [exportsDir, tmpDir]
 
   /** m-github-oauth：宿主侧设备码登记表 + auth 客户端（进程生命周期；device_code 只存内存） */
@@ -1106,41 +1208,39 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   // credentials（只存值不落盘同步文件/日志），git 网络操作时经 resolve 现取 ——
   // 与 GitTransport「token 只从注入 provider 读取」的安全契约完全对齐。
 
-  /** 解析同步请求体（repoUrl 必填；token 非空则先写入 DSH credentials）。 */
-  const prepareSync = async (body: Record<string, unknown>): Promise<{ repoUrl: string; gitBin?: string }> => {
-    const repoUrl = typeof body['repoUrl'] === 'string' ? body['repoUrl'].trim() : ''
-    if (repoUrl === '') throw new SyncRouteError('repoUrl is required')
-    const urlError = validateRepoUrl(repoUrl)
-    if (urlError !== null) throw new SyncRouteError(urlError)
-    const gitBin = typeof body['gitBin'] === 'string' && body['gitBin'] !== '' ? body['gitBin'] : undefined
-    const token = typeof body['token'] === 'string' && body['token'] !== '' ? body['token'] : undefined
-    if (token !== undefined) {
-      try {
-        await credentials.set(credentialRef(SYNC_CREDENTIAL_REF), token)
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-        throw new SyncRouteError(
-          `token 写入 DSH credentials 失败：${reason}（请在 DSH 凭据管理里配置 ${SYNC_CREDENTIAL_REF} 后重试）`,
-        )
-      }
-    }
-    return { repoUrl, gitBin }
-  }
+  /** 解析同步请求体（委托给导出的 parseSyncBody，便于单测）。 */
+  const prepareSync = (body: Record<string, unknown>): Promise<SyncConfig> =>
+    parseSyncBody(body, { credentials })
 
-  /** 构造 SyncEngine（Git 私有仓库通道 + 散文件快照目录 + pull 用 Importer）。 */
-  const makeSyncEngine = (repoUrl: string, gitBin: string | undefined): SyncEngine => {
-    const transport = new GitTransport({
-      repoUrl,
-      workDir: join(syncDir, 'work'),
-      credentials: {
-        getToken: async () => {
-          const resolved = await credentials.resolve(credentialRef(SYNC_CREDENTIAL_REF))
-          return resolved?.value ?? ''
+  /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。 */
+  const makeSyncEngine = (cfg: SyncConfig): SyncEngine => {
+    let transport: SyncTransport
+    if (isWebDavConfig(cfg)) {
+      transport = new WebDavTransport({
+        baseUrl: webdavBaseUrl(cfg),
+        username: cfg.webdav.username ?? '',
+        credentials: {
+          getPassword: async () => {
+            const resolved = await credentials.resolve(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF))
+            return resolved?.value ?? ''
+          },
         },
-      },
-      gitBin,
-      msg,
-    })
+        msg,
+      })
+    } else {
+      transport = new GitTransport({
+        repoUrl: cfg.git.repoUrl,
+        workDir: join(syncDir, 'work'),
+        credentials: {
+          getToken: async () => {
+            const resolved = await credentials.resolve(credentialRef(SYNC_CREDENTIAL_REF))
+            return resolved?.value ?? ''
+          },
+        },
+        gitBin: cfg.git.gitBin,
+        msg,
+      })
+    }
     return new SyncEngine({
       ctx: host,
       transport,
@@ -1150,7 +1250,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       localSnapshotsDir: join(syncDir, 'snapshots'),
       zipDir: tmpDir,
       msg,
-    });
+    })
   }
 
   /** 一键同步差异确认会话存储（进程内存；/sync/sync 预览 → /sync/apply-items 逐项执行解耦） */
@@ -1166,6 +1266,90 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   })
   // 启动：读 autosync-config；若 enabled 启动定时器；无条件执行一次「启动触发下载合并」（受阈值约束）
   scheduler.start()
+
+  // ------------------------------------------------ market 辅助（m-market）
+  // 目录：<marketDir>/cache/<url-hash>/（index/条目缓存）
+  //       + <marketDir>/work/<url-hash>/（git 只读工作副本，--depth 1）。无任何凭据。
+  const marketCacheRoot = join(marketDir, 'cache')
+  const marketWorkRoot = join(marketDir, 'work')
+  const urlHash = (url: string) => sha256Hex(url).slice(0, 32)
+  const marketCacheIndex = (url: string) => join(marketCacheRoot, urlHash(url), 'index.json')
+  const marketCacheItemDir = (url: string) => join(marketCacheRoot, urlHash(url), 'items')
+  const marketWorkDir = (url: string) => join(marketWorkRoot, urlHash(url))
+
+  /** 请求级装配只读 GitMarketReader（公开市场无凭据；url = BUILTIN_MARKET_URL，已由 validateRepoUrl 拒绝 userinfo）。 */
+  const makeMarketReader = (): GitMarketReader => new GitMarketReader({ msg, timeoutMs: 60_000 })
+
+  /** 读缓存的 index.json（结构校验通过才返回，否则 null）。 */
+  async function readCachedIndexObj(url: string): Promise<MarketIndex | null> {
+    try {
+      const raw = await fs.readFile(marketCacheIndex(url), 'utf8')
+      const res = parseMarketIndex(raw)
+      return res.ok ? res.index : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 由配置条目构建市场摘要（name/itemCount/lastFetchedAt 来自缓存 index，可空）。 */
+  async function buildMarketSummary(e: { url: string; addedAt: string }): Promise<MarketSummary> {
+    const s: MarketSummary = { url: e.url, addedAt: e.addedAt }
+    const idx = await readCachedIndexObj(e.url)
+    if (idx) {
+      if (idx.name) s.name = idx.name
+      s.itemCount = idx.items.length
+      try {
+        const st = await fs.stat(marketCacheIndex(e.url))
+        s.lastFetchedAt = st.mtime.toISOString()
+      } catch { /* 无缓存/读取失败 → 省略 lastFetchedAt */ }
+    }
+    return s
+  }
+
+  /** 条目是否已有完整缓存（manifest + config.zip）。 */
+  async function itemCached(url: string, itemId: string): Promise<boolean> {
+    try {
+      await fs.access(join(marketCacheItemDir(url), itemId, 'config.zip'))
+      await fs.access(join(marketCacheItemDir(url), itemId, 'manifest.json'))
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 写条目缓存（manifest + config.zip）供离线重复查看。内容始终视为不可信。 */
+  async function writeItemCache(url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array): Promise<void> {
+    const dir = join(marketCacheItemDir(url), itemId)
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(join(dir, 'manifest.json'), manifestRaw, 'utf8')
+    await fs.writeFile(join(dir, 'config.zip'), zipBytes)
+  }
+
+  /**
+   * 清理滞留在 tmpDir 的过期市场暂存 zip（market-*.zip）。
+   * market/download 每次暂存新 zip 前调用（懒 GC）：保留最近 RETENTION_MS 内的（供刚下载
+   * 后立即执行的 /execute 消费），清理更旧的 —— 防止未确认导入的暂存文件无限堆积。
+   * 一次性尽力而为：任何读取/删除失败不影响主流程。
+   */
+  const MARKET_TMP_RETENTION_MS = 10 * 60 * 1000
+  async function pruneStagedMarketZips(): Promise<void> {
+    try {
+      const names = await fs.readdir(tmpDir)
+      const now = Date.now()
+      for (const name of names) {
+        if (!name.startsWith('market-') || !name.endsWith('.zip')) continue
+        const p = join(tmpDir, name)
+        try {
+          const st = await fs.stat(p)
+          if (now - st.mtimeMs > MARKET_TMP_RETENTION_MS) await fs.rm(p, { force: true })
+        } catch {
+          // 单文件 stat/删除失败 → 跳过（尽力而为）
+        }
+      }
+    } catch {
+      // tmpDir 读取失败 → 跳过（尽力而为）
+    }
+  }
 
   const routesList: WebRoute[] = [
     // ------------------------------------------------------------- status
@@ -1548,28 +1732,40 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       },
     },
     // ------------------------------------------------------ sync/status
-    // m-sync-ui：同步状态（仓库配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
+    // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
     {
       kind: 'exact',
       path: API.syncStatus,
       handler: async (req, res) => {
         if (!guard(req, res, 'GET')) return
         try {
-          const [cfg, state, cred] = await Promise.all([
-            readSyncConfig(syncDir),
-            loadSyncState(syncDir),
+          const cfg = await readSyncConfig(syncDir)
+          const state = await loadSyncState(syncDir)
+          const [cred, webdavCred] = await Promise.all([
             credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
+            credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
           ])
+          const transport: SyncConfig['transport'] = cfg !== null && isWebDavConfig(cfg) ? 'webdav' : 'git'
+          const webdav = transport === 'webdav' && cfg !== null && isWebDavConfig(cfg)
+            ? {
+                url: cfg.webdav.url,
+                usernameConfigured: typeof cfg.webdav.username === 'string' && cfg.webdav.username !== '',
+                passwordConfigured: webdavCred.configured,
+              }
+            : undefined
           writeJson(res, 200, {
             ok: true,
             configured: cfg !== null,
-            repoUrl: cfg?.repoUrl,
-            gitBin: cfg?.gitBin,
+            transport,
+            repoUrl: cfg !== null && isGitConfig(cfg) ? cfg.git.repoUrl : undefined,
+            gitBin: cfg !== null && isGitConfig(cfg) ? cfg.git.gitBin : undefined,
             credentialConfigured: cred.configured,
             credentialWritable: cred.writable === true,
+            // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）
+            ...(webdav !== undefined ? { webdav } : {}),
             lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
             sectionCount: Object.keys(state.sections).length,
-            transport: state.transport,
+            lastTransport: state.transport,
             autosync: await buildAutosyncStatus(syncDir),
           })
         } catch (error) {
@@ -1591,8 +1787,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
-          const { repoUrl, gitBin } = await prepareSync(body)
-          const engine = makeSyncEngine(repoUrl, gitBin)
+          const syncCfg = await prepareSync(body)
+          const engine = makeSyncEngine(syncCfg)
           const snapshotId =
             typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
           const report = await withTimeout(
@@ -1600,7 +1796,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             ROUTE_TIMEOUT_MS,
             msg('host.syncPushTimeout'),
           )
-          await writeSyncConfig(syncDir, { repoUrl, gitBin })
+          await writeSyncConfig(syncDir, syncCfg)
           writeJson(res, 200, report)
         } catch (error) {
           writeSyncRouteError(res, error)
@@ -1621,8 +1817,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
-          const { repoUrl, gitBin } = await prepareSync(body)
-          const engine = makeSyncEngine(repoUrl, gitBin)
+          const syncCfg = await prepareSync(body)
+          const engine = makeSyncEngine(syncCfg)
           const strategy =
             body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] : 'merge'
           const snapshotId =
@@ -1632,7 +1828,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             ROUTE_TIMEOUT_MS,
             msg('host.syncPullTimeout'),
           )
-          await writeSyncConfig(syncDir, { repoUrl, gitBin })
+          await writeSyncConfig(syncDir, syncCfg)
           writeJson(res, 200, report)
         } catch (error) {
           writeSyncRouteError(res, error)
@@ -1821,8 +2017,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
-          const { repoUrl, gitBin } = await prepareSync(body)
-          const engine = makeSyncEngine(repoUrl, gitBin)
+          const syncCfg = await prepareSync(body)
+          const engine = makeSyncEngine(syncCfg)
           const metas = await withTimeout(
             engine.listSnapshots(),
             ROUTE_TIMEOUT_MS,
@@ -1857,8 +2053,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
-          const { repoUrl, gitBin } = await prepareSync(body)
-          const engine = makeSyncEngine(repoUrl, gitBin)
+          const syncCfg = await prepareSync(body)
+          const engine = makeSyncEngine(syncCfg)
           const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
           const preview = await withTimeout(
             engine.preview(snapshotId === undefined ? {} : { snapshotId }),
@@ -1874,8 +2070,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             plan: preview.plan,
             analysis: preview.analysis,
             snapshotId: preview.snapshotId,
-            repoUrl,
-            gitBin,
+            config: syncCfg,
           })
           const items = planToConfirmItems(preview.plan)
           const needsReview = items.some((i) => REVIEW_KINDS.has(i.kind)) || preview.analysis.pathIssues.length > 0
@@ -1950,7 +2145,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           let engine: SyncEngine
           let report: ApplyItemsReport
           try {
-            engine = makeSyncEngine(session.repoUrl, session.gitBin)
+            engine = makeSyncEngine(session.config)
             report = await engine.applyItems(session.zipPath, subPlan, {
               onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
             })
@@ -2066,6 +2261,160 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ---------------------------------------------------- market/status
+    // 内置单市场（只读、不可编辑）：恒返回内置仓库摘要。无 add/remove —— 市场绑定内置仓库。
+    {
+      kind: 'exact',
+      path: API.marketStatus,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const summary = await buildMarketSummary({ url: BUILTIN_MARKET_URL, addedAt: '' })
+          writeJson(res, 200, { ok: true, configured: true, markets: [summary] })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ---------------------------------------------------- market/refresh
+    {
+      kind: 'exact',
+      path: API.marketRefresh,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        // 内置单市场：url 可省略，缺省用 BUILTIN_MARKET_URL（保留接受 url 以兼容旧调用方与 env 覆盖）
+        const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
+          ? body['url']
+          : BUILTIN_MARKET_URL
+        try {
+          const reader = makeMarketReader()
+          const { text, fetchedAt } = await reader.readIndex({ url, workDir: marketWorkDir(url) })
+          const parsed = parseMarketIndex(text)
+          if (!parsed.ok) {
+            writeJson(res, 400, { error: `market index invalid: ${parsed.errors.join('; ')}` })
+            return
+          }
+          // 写缓存 index（供离线重复浏览）。内容始终视为不可信，读取时再结构校验。
+          await fs.mkdir(dirname(marketCacheIndex(url)), { recursive: true })
+          await fs.writeFile(marketCacheIndex(url), text, 'utf8')
+          const summary = await buildMarketSummary({ url, addedAt: new Date().toISOString() })
+          writeJson(res, 200, { ok: true, items: parsed.index!.items, market: { ...summary, lastFetchedAt: fetchedAt } })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ---------------------------------------------------- market/browse
+    {
+      kind: 'exact',
+      path: API.marketBrowse,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        // 内置单市场：url 缺省用 BUILTIN_MARKET_URL（兼容旧调用方与 env 覆盖）
+        const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
+          ? body['url']
+          : BUILTIN_MARKET_URL
+        try {
+          // 缓存 index 缺失 → 先拉取（refresh 语义）；已存在则直接用缓存。
+          let index: MarketIndex | null = await readCachedIndexObj(url)
+          if (index === null) {
+            const reader = makeMarketReader()
+            const { text } = await reader.readIndex({ url, workDir: marketWorkDir(url) })
+            const parsed = parseMarketIndex(text)
+            if (!parsed.ok) {
+              writeJson(res, 400, { error: `market index invalid: ${parsed.errors.join('; ')}` })
+              return
+            }
+            index = parsed.index!
+            await fs.mkdir(dirname(marketCacheIndex(url)), { recursive: true })
+            await fs.writeFile(marketCacheIndex(url), text, 'utf8')
+          }
+          const items: MarketListItem[] = []
+          for (const item of index.items) {
+            const cacheState = await itemCached(url, item.id) ? 'cached' : 'none'
+            items.push(toMarketListItem(item, cacheState))
+          }
+          writeJson(res, 200, { ok: true, items })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ---------------------------------------------------- market/download
+    // 拉取 manifest + config.zip → 安全校验（§6）→ valid 则落受控临时区 + dry-run 分析/计划。
+    // 真正落盘由用户确认后走既有 POST /execute（zipPath + plan）。零写入到确认。
+    {
+      kind: 'exact',
+      path: API.marketDownload,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        // 内置单市场：url 缺省用 BUILTIN_MARKET_URL；itemId 必填
+        const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
+          ? body['url']
+          : BUILTIN_MARKET_URL
+        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
+        if (itemId === '') {
+          writeJson(res, 400, { error: 'itemId required' })
+          return
+        }
+        try {
+          const reader = makeMarketReader()
+          const workDir = marketWorkDir(url)
+          const { text: manifestRaw } = await reader.readItemManifest({ url, workDir, itemId })
+          const { data: zipBytes } = await reader.readItemZip({ url, workDir, itemId })
+
+          const validation = validateMarketItem(itemId, manifestRaw, zipBytes)
+          const manifest = validation.manifest
+          // 供应链警示恒生成（marketItemWarnings 模型层）；download 时间
+          const downloadedAt = new Date().toISOString()
+          const warnings = manifest !== null
+            ? marketItemWarnings(manifest, url, downloadedAt, msg)
+            : [`条目 ${itemId} 来自公共网络市场，未经官方审核（供应链警示）`]
+
+          const base: MarketItemDetail = {
+            id: itemId,
+            name: manifest?.name ?? itemId,
+            version: manifest?.version ?? '',
+            author: manifest?.author,
+            description: manifest?.description,
+            updatedAt: manifest?.updatedAt,
+            sections: validation.sections,
+            provenance: manifest?.provenance,
+            downloadedAt,
+            status: validation.status,
+            errors: validation.errors,
+            warnings,
+          }
+
+          if (validation.status === 'invalid') {
+            // 校验失败 → 返回 MarketItemDetail（status:'invalid' + errors/warnings），不进入导入预览。
+            writeJson(res, 200, base)
+            return
+          }
+
+          // valid：落受控临时区（tmpDir 已是 /execute 的 controlled root）
+          // 先懒 GC 清理过期市场暂存 zip，避免未确认导入的暂存文件堆积
+          await pruneStagedMarketZips()
+          const zipPath = join(tmpDir, `market-${itemId}-${randomBytes(6).toString('hex')}.zip`)
+          await fs.writeFile(zipPath, zipBytes)
+          // 写条目缓存（manifest + config.zip）供离线重复查看
+          await writeItemCache(url, itemId, manifestRaw, zipBytes)
+
+          // dry-run 分析 + 计划（零写入）：复用现有 importer
+          const importer = makeImporter()
+          const analysis = await importer.analyzeImport(zipPath)
+          const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] })
+
+          const download: MarketDownloadResult = { ...base, zipPath, analysis, plan }
+          writeJson(res, 200, download)
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
   ]
   return { routes: routesList, scheduler }
 }
@@ -2089,10 +2438,12 @@ export function apply(ctx: Context, config?: Config): void {
   const tmpDir = join(dataDir, 'tmp')
   const snapshotsDir = join(dataDir, 'snapshots')
   const syncDir = join(dataDir, 'sync')
+  const marketDir = join(dataDir, 'market')
   mkdirSync(exportsDir, { recursive: true })
   mkdirSync(tmpDir, { recursive: true })
   mkdirSync(snapshotsDir, { recursive: true })
   mkdirSync(syncDir, { recursive: true })
+  mkdirSync(marketDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
   const adapters = createAdapters({
@@ -2100,6 +2451,8 @@ export function apply(ctx: Context, config?: Config): void {
     namespaces: async () => (await ctx.settings.describe({ redactSecrets: true })).map((d) => String(d.ns)),
     // Sessions 分区默认关（含敏感内容）：挂载 adapter 供 Custom Export 显式勾选（§3.3/§15）。
     includeSessions: true,
+    // 导出 plugins 分区时不列本插件自身，避免备份中的自引用条目。
+    selfPluginName: PLUGIN_NAME,
   })
 
   host.log.info('config-manager 已挂载', {
@@ -2117,6 +2470,7 @@ export function apply(ctx: Context, config?: Config): void {
     snapshotsDir,
     runs: new RunRegistry({ msg: host.msg }),
     syncDir,
+    marketDir,
     credentials: ctx.credentials,
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,

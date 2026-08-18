@@ -243,6 +243,20 @@ export const uiZh = {
   'sync.github.pollExpired': 'GitHub 授权已过期（expired_token）。请重新发起登录。',
   'sync.github.pollError': 'GitHub OAuth 错误：{detail}',
   'sync.github.unknownError': '未知错误',
+  // 配置市场（m-market-ui：market-view 纯渲染模型文案；React 壳文案在 config-manager-market 命名空间）
+  'market.statusLoading': '正在读取市场状态…',
+  'market.statusUnconfigured': '尚未添加市场（请输入公开 Git 仓库地址）',
+  'market.statusConfigured': '已添加 {count} 个市场',
+  'market.supplyUnofficial': '来自公共网络、非官方审核',
+  'market.supplySource': '来源仓库：{url}',
+  'market.supplyDownloadedAt': '下载时间：{time}',
+  'market.supplyAuthor': '作者：{author}',
+  'market.supplyProvenanceSource': '作者声明来源：{source}',
+  'market.supplyProvenanceNote': '作者自述：{note}',
+  'market.detail.sections': '包含分区：{sections}',
+  'market.detail.sectionsEmpty': '未声明分区',
+  'market.detail.statusValid': '校验通过',
+  'market.detail.statusInvalid': '校验未通过',
 } as const;
 
 export type UiTextKey = keyof typeof uiZh;
@@ -468,6 +482,19 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.github.pollExpired': 'GitHub authorization expired (expired_token). Please re-start the sign-in.',
   'sync.github.pollError': 'GitHub OAuth error: {detail}',
   'sync.github.unknownError': 'Unknown error',
+  'market.statusLoading': 'Reading market status…',
+  'market.statusUnconfigured': 'No markets added (enter a public Git repository URL)',
+  'market.statusConfigured': '{count} market(s) added',
+  'market.supplyUnofficial': 'From the public network, not officially reviewed',
+  'market.supplySource': 'Source repo: {url}',
+  'market.supplyDownloadedAt': 'Downloaded at: {time}',
+  'market.supplyAuthor': 'Author: {author}',
+  'market.supplyProvenanceSource': 'Author-declared source: {source}',
+  'market.supplyProvenanceNote': 'Author note: {note}',
+  'market.detail.sections': 'Sections: {sections}',
+  'market.detail.sectionsEmpty': 'No sections declared',
+  'market.detail.statusValid': 'Verified',
+  'market.detail.statusInvalid': 'Failed verification',
 };
 
 /** UI 翻译函数：key → 当前语言文案（{param} 插值；未知键回退 zh/键名）。 */

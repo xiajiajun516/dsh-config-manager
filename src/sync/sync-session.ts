@@ -12,6 +12,7 @@
  */
 import crypto from 'node:crypto';
 import type { ImportAnalysis, ImportPlan } from '../core/types.ts';
+import type { SyncConfig } from './sync-config.ts';
 
 /** 默认会话 TTL（30 分钟） */
 export const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
@@ -25,8 +26,8 @@ export interface SyncSession {
   analysis: ImportAnalysis;
   /** 被拉取的远端快照 id */
   snapshotId: string;
-  repoUrl: string;
-  gitBin?: string;
+  /** 该次同步使用的通道配置（git/webdav 通用；apply-items 据此重建引擎） */
+  config: SyncConfig;
   /** 创建时间（epoch ms） */
   createdAt: number;
   /** 过期时间（epoch ms；过期条目惰性清理） */

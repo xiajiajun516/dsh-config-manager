@@ -35,7 +35,7 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 | 🔒 | **密钥安全** | API Key 默认不导出；非加密导入后提醒重新填写，加密备份用密码解锁恢复 |
 | ↩️ | **自动回滚** | 导入失败自动恢复原样，不会弄坏现有配置 |
 | 📸 | **快照恢复** | 撤销一次导入：整文件还原 + 卸载新增插件（CLI 与 GUI 均支持） |
-| 🔄 | **远程同步** | 通过 Git 私有仓库推送 / 拉取可移植配置（密钥永不参与同步） |
+| 🔄 | **远程同步** | 通过 **Git 私有仓库或 WebDAV** 推送 / 拉取可移植配置（密钥永不参与同步） |
 | 🗂️ | **配置档案 Profiles** | 保存多套配置（工作 / 个人），随时切换 |
 
 ---
@@ -121,7 +121,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
   4. 有同名配置冲突？→ 选择 保留现有的 / 用导入的
   5. 确认导入 → 等待完成
   6. 按提示重新填写缺失的 API Key
-  7. ✅ 设置 / 插件 / MCP / 技能 / 工作区都回来了
+  7. ✅ 设置 / 插件 / MCP / 技能 / 工作区 / 全局指令（AGENTS.md）都回来了
 ```
 
 ---
@@ -132,7 +132,7 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 
 | 方式 | 说明 |
 |---|---|
-| **快速导出**（推荐） | 一键导出推荐配置：设置 / UI / 模型 / 插件 / MCP / 技能 / 工作区等 |
+| **快速导出**（推荐） | 一键导出推荐配置：设置 / UI / 模型 / 插件 / MCP / 技能 / Agent 预设 / 全局指令（AGENTS.md）/ 工作区等 |
 | **自定义导出** | 自己勾选要导出的分类 |
 
 > 导出文件：`dsh-config-<日期>.zip`，内含清单 + 各分类数据 + SHA-256 校验和。
@@ -180,6 +180,19 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 | 加密备份导入 | 必须输入导出时的加密密码解锁：输入→验证密码→凭据自动恢复，**无密码无法导入** |
 | 非加密导入后 | 提示「3 个密钥需要重新填写」，输入后仅保存在内存中写入 |
 
+### 🔄 远程同步（Git / WebDAV）
+
+通过**两种通道之一**在机器间推送 / 拉取可移植配置——除传输方式外，使用方式完全一致：
+
+| | Git 私有仓库 | WebDAV |
+|:---:|---|---|
+| **端点** | `repoUrl` | `webdav.url` |
+| **凭据** | 认证 token 存入 DSH credentials（`DSH_CONFIG_MANAGER_SYNC_TOKEN`） | `username` 存配置、可在界面回显；**密码永不同步、永不记日志**——存入 DSH credentials `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` |
+
+- **两通道保留策略一致**：远端只保留最新 **10** 个快照（`MAX_REMOTE_SNAPSHOTS=10`），更旧的自动删除。
+- **切换通道重新开始**：Git 与 WebDAV 的快照 / 共同祖先**互不共享**。切换通道后，同步从新远端的空基线重新开始——请先推送一个新快照。
+- **WebDAV 认证**采用 HTTP Basic：`username` 存配置、可在界面回显；`password` 则实时从 DSH credentials 槽位 `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` 读取——绝不出现于任何同步文件或日志。
+
 ### 🗂️ 配置档案（Profiles）
 
 保存多套配置（如「工作」「个人」），随时切换；切换同样带预览 + 自动备份 + 回滚。
@@ -192,33 +205,67 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 |---|---|
 | 整文件还原 | settings.yaml / settings.json / cordis.patch.yml 的 blob 写回 `$DSH_HOME`；快照时不存在、导入后新增的文件会被移除 |
 | 插件卸载 | 导入期间新增的插件经官方 `dsh plugin remove` 卸载（与基线对比；旧快照无基线时只给提示） |
-| 文件补偿 | skills / agentPresets / pluginFiles / sessions 的 blob 写回原路径 |
+| 文件补偿 | skills / agentPresets / agentInstructions / pluginFiles / sessions 的 blob 写回原路径 |
 | 凭据 | DSH 不回读凭据值——只提示人工重新填写 |
 
 **GUI**：设置 → 「备份与迁移」→「快照恢复」tab → 选择快照 → 预览恢复计划（dry-run，零写入）→ 确认执行。
 
-**CLI**（纯离线，无需 DSH 运行时）——它是独立的 npm 命令行工具，**需单独安装**（与插件安装是两回事）：
+---
+
+### 🚨 CLI —— DSH 挂了时的第一救急手段
+
+GUI 住在 DSH *里面* —— DSH 起不来时，GUI 也帮不了你。而 `dsh-config-manager` 的 **CLI 完全独立于 DSH 运行时**（纯 Node + 核心引擎，**绝不 import `@deepseek-ai/*`** —— 即使 DSH 的 peer 包损坏或缺失也照常运行）。因此它是你在**配置损坏、GUI 无法启动、或换新机器要还原环境**时的**第一救急工具**。
+
+它是一个独立的 npm 命令行工具，**需单独安装**（与插件安装是两回事）。在任意可能需要救急的机器上装一次即可：
 
 ```bash
-# 在想恢复快照的那台机器上安装一次 CLI
-# （--omit=peer：离线 CLI 只需要 js-yaml，不需要 DSH 的 peer 依赖包）
+# --omit=peer：离线 CLI 只需要 js-yaml，不需要 DSH 的 peer 依赖包
 npm install -g dsh-config-manager@latest --omit=peer
 ```
 
-> ⚠️ 只安装/更新插件（`dsh plugin --profile web add ...`）只启用 GUI，**不会**产生 `dsh-config-manager` 命令。请先执行上面这条安装命令，然后：
+> ⚠️ 只安装/更新插件（`dsh plugin --profile web add ...`）只启用 GUI，**不会**产生 `dsh-config-manager` 命令。请先执行上面这条安装命令，然后使用下面任意命令。
+
+全部命令（`dsh-config-manager help` 也会列出）：
+
+```text
+dsh-config-manager help                                        # 列出全部命令与参数
+dsh-config-manager snapshots [--data-dir <dir>]                # 列出快照（最新在前）
+dsh-config-manager restore [--id <id>] [--dry-run]
+                           [--profile <name>] [--settings <path>]
+dsh-config-manager reinstall [--version <v>] [--yes] [--list]
+                             [--wipe-config] [--dry-run]       # 一键重装 DSH 程序本体
+```
+
+**`reinstall` —— DSH 损坏时的救急重装。** 跨平台一键重装 `@deepseek-ai/dsh` 启动器（按操作系统自动选用正确命令：Windows 走 PowerShell、Unix 走 bash）。默认重装启动器 + 清全局残留缓存；交互式多选会询问是否勾选**危险**清理项（设置 / 插件 / 会话与凭据）——这些**默认不勾选**，且只要涉及删数据的动作，执行前都必须**二次确认输入 `YES`**。清空 `~/.dsh` 数据前会先做一份 `.reinstall-backup` 紧急备份（`snapshots/` 目录按设计绝不触碰）。
 
 ```bash
-# 列出快照（最新在前）
-dsh-config-manager snapshots
+# 查看可选清理项
+dsh-config-manager reinstall --list
 
-# 预览最近可用快照的恢复计划（零写入）
-dsh-config-manager restore --dry-run
+# 交互式：选择清理项 → 确认 → 重装 DSH
+dsh-config-manager reinstall
 
-# 执行恢复（覆盖/删除前先把当前文件备份到 <快照>/pre-restore/）
-dsh-config-manager restore --id <snapshot-id>
+# 非交互：全部勾选并跳过确认
+dsh-config-manager reinstall --yes
+
+# 连配置数据一起清（等价于勾选全部数据项）——仍会要求交互确认
+dsh-config-manager reinstall --wipe-config
+
+# 只预览执行计划，不真正运行
+dsh-config-manager reinstall --dry-run
+```
+
+**快照恢复。** 列出并恢复安全快照（恢复引擎内置于 CLI，无论 DSH 能否启动都能用）：
+
+```bash
+dsh-config-manager snapshots                                  # 列出快照（最新在前）
+dsh-config-manager restore --dry-run                          # 预览恢复计划（零写入）
+dsh-config-manager restore --id <snapshot-id>                 # 执行恢复（先备份当前文件）
 ```
 
 每次覆盖/删除前都会先把当前文件复制到 `<snapshotDir>/pre-restore/`，可人工反悔。任一动作失败则退出码为 1；报告如实列出 已还原 / 已卸载插件 / 需人工处理 / 失败 / 跳过。
+
+**典型救急流程**（DSH 起不来时）：① `dsh-config-manager reinstall` 先把启动器重装回来（必要时顺带清理），② `dsh web` 重新启动 DSH，③ 从仓库装回插件，④ 从远程仓库拉取快照（或执行 `dsh-config-manager restore`）把配置恢复回来。整个流程中 CLI 全程可用，与 DSH 是否健康无关。
 
 ---
 
@@ -269,7 +316,7 @@ dsh-config-manager restore --id <snapshot-id>
 
 1. **安装/更新插件或 MCP 后需重启 DSH 才生效**
 2. **部分界面状态不迁移**（如任务看板数据、面板宽度——它们存在浏览器里，不在 DSH 配置文件内）
-3. **keybindings / workflows 配置 / commands / rules**：DSH 当前没有这些概念，因此不会导出相关内容
+3. **keybindings / workflows 配置 / commands**：DSH 当前没有这些概念，因此不会导出相关内容。全局 agent 规则已由**全局指令（Agent Instructions）**承接（`~/.dsh/AGENTS.md`，注入每个会话）；项目级 `AGENTS.md` / `CLAUDE.md` 属于各项目仓库本身，不在个人配置迁移范围内
 4. **历史会话默认不迁移**（v1 仅支持文件级复制）
 5. **加密备份**：密码丢失则无法解密（设计使然——请牢记密码）
 6. **快照恢复是离线的、诚实的**：离线引擎无法恢复的条目（快照无整文件备份时的 settings namespace / patch 行、存在 DSH storages 里的 workspace 记录）会如实列为跳过并指向在线回滚；凭据**值**绝不自动改写（只提示人工补录）；无插件基线的旧快照只提示人工核对新增插件

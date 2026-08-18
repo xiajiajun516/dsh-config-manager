@@ -13,6 +13,7 @@ export const zh = {
   'view.import': '导入恢复',
   'view.snapshots': '快照恢复',
   'view.sync': '远程同步',
+  'view.market': '配置市场',
   // 公共
   'common.close': '关闭',
   'common.cancel': '取消',
@@ -144,6 +145,7 @@ export const en: Record<keyof typeof zh, string> = {
   'view.import': 'Import',
   'view.snapshots': 'Snapshots & Restore',
   'view.sync': 'Remote Sync',
+  'view.market': 'Marketplace',
   'common.close': 'Close',
   'common.cancel': 'Cancel',
   'common.back': 'Back',

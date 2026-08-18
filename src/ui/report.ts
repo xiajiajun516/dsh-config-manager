@@ -53,6 +53,7 @@ export function sectionFromItemId(itemId: string): SectionId | 'other' {
   if (itemId.startsWith('secret:')) return 'credentialsStatus';
   if (itemId.startsWith('skills:')) return 'skills';
   if (itemId.startsWith('agentPresets:')) return 'agentPresets';
+  if (itemId.startsWith('agentInstructions:')) return 'agentInstructions';
   if (itemId.startsWith('pluginFiles:')) return 'pluginFiles';
   if (itemId.startsWith('sessions:')) return 'sessions';
   return 'other';

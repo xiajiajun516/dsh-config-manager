@@ -216,7 +216,7 @@ export function makeManifest(platform = 'win32'): Manifest {
     exportedAt: new Date('2026-08-14T12:00:00.000Z').toISOString(),
     sections: {
       settings: false, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
-      skills: false, agentPresets: false, workspaces: false, pluginFiles: false,
+      skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
       credentialsStatus: false, secrets: false, sessions: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },

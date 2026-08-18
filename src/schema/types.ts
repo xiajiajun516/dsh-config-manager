@@ -12,11 +12,12 @@ export type Platform =
 
 /**
  * 分区标识，与 ZIP 目录结构、manifest.sections 键一一对应。
- * 明确不实现的分区（keybindings/workflows/commands/rules）不在此列。
+ * 明确不实现的分区（keybindings/workflows/commands）不在此列；
+ * rules 已由 agentInstructions（~/.dsh/AGENTS.md，dsh-agent-instructions 全局指令）承接。
  */
 export type SectionId =
   | 'settings' | 'ui' | 'providers' | 'plugins' | 'mcp' | 'prompts'
-  | 'skills' | 'agentPresets' | 'workspaces' | 'pluginFiles'
+  | 'skills' | 'agentPresets' | 'agentInstructions' | 'workspaces' | 'pluginFiles'
   | 'credentialsStatus' | 'secrets' | 'sessions';
 
 /** 加密备份的算法参数（非秘密：salt/iv/authTag 仅用于解密与完整性校验） */
@@ -173,7 +174,7 @@ export interface CredentialStatus {
 
 export interface CredentialsSection { version: 1; credentials: CredentialStatus[]; }
 
-/* —— 文件类分区（skills/agentPresets/pluginFiles/sessions） ——
+/* —— 文件类分区（skills/agentPresets/agentInstructions/pluginFiles/sessions） ——
  * 这些分区以真实文件形式进入 ZIP（custom/skills/… 等），
  * 内存中统一表示为 FilesSection（ZIP 内不落此 JSON，见 exporter）。 */
 

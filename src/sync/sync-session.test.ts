@@ -6,8 +6,11 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
 import { SyncSessionStore } from './sync-session.ts';
+import type { SyncConfig } from './sync-config.ts';
 import type { ImportAnalysis, ImportPlan } from '../core/types.ts';
 import type { SectionId } from '../schema/types.ts';
+
+const GIT_CONFIG: SyncConfig = { schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://github.com/foo/bar.git' } };
 
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 
@@ -46,7 +49,7 @@ function makeSession(store: SyncSessionStore, opts: { seed: string; nowMs?: numb
     plan: makePlan(opts.seed),
     analysis: makeAnalysis(opts.seed),
     snapshotId: `snap-${opts.seed}`,
-    repoUrl: 'https://github.com/foo/bar.git',
+    config: GIT_CONFIG,
     createdAt: now,
     expiresAt: now + DEFAULT_TTL_MS,
   });
@@ -69,7 +72,7 @@ test('SyncSessionStore: set/get 往返；同 id 覆盖', () => {
     plan: makePlan('b'),
     analysis: makeAnalysis('b'),
     snapshotId: 'snap-b',
-    repoUrl: 'https://github.com/foo/bar.git',
+    config: GIT_CONFIG,
     createdAt: 5_000_000,
     expiresAt: 5_000_000 + DEFAULT_TTL_MS,
   });
@@ -89,7 +92,7 @@ test('SyncSessionStore: get 过期条目 → undefined（惰性清理）', () =>
     plan: makePlan('x'),
     analysis: makeAnalysis('x'),
     snapshotId: 'snap-x',
-    repoUrl: 'https://github.com/foo/bar.git',
+    config: GIT_CONFIG,
     createdAt: now - DEFAULT_TTL_MS - 1,
     expiresAt: now - 1,
   });
@@ -116,7 +119,7 @@ test('SyncSessionStore: TTL 边界——过期临界点', () => {
     plan: makePlan('boundary'),
     analysis: makeAnalysis('boundary'),
     snapshotId: 'snap-b',
-    repoUrl: 'https://github.com/foo/bar.git',
+    config: GIT_CONFIG,
     createdAt: now - DEFAULT_TTL_MS,
     expiresAt: now,
   });
@@ -130,7 +133,7 @@ test('SyncSessionStore: TTL 边界——过期临界点', () => {
     plan: makePlan('boundary2'),
     analysis: makeAnalysis('boundary2'),
     snapshotId: 'snap-b2',
-    repoUrl: 'https://github.com/foo/bar.git',
+    config: GIT_CONFIG,
     createdAt: now - DEFAULT_TTL_MS,
     expiresAt: now + 1,
   });
