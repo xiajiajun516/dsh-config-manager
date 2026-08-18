@@ -8,6 +8,8 @@
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
+import { DEFAULT_CATEGORIES } from '../../ui/export-flow.ts';
+import { EXPORT_GROUPS, type ExportGroup } from '../../ui/types.ts';
 import type {
   ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem,
   SyncItemAdoption, SyncSectionInfo, SyncStatusResponse,
@@ -30,23 +32,53 @@ export function privateRepoHint(t: UiT = zhUiT): string {
 /** 远程同步模式：默认（快速导出） / 高级（自定义导出）。 */
 export type SyncMode = 'default' | 'advanced';
 
-/** 可同步分区选项（status.syncSections 投影；高级模式勾选目录的单选项）。 */
+/** 可同步分区选项（status.syncSections 投影 + 导出目录补充分组/描述；高级模式勾选目录单选项）。 */
 export interface SyncSectionOption {
   id: SectionId;
   label: string;
+  /** 一句话描述（来自导出目录；未知 id 为空串） */
+  description: string;
+  /** 所属导出分组（General / AI / Extensions / …；未知 id 兜底 'general'） */
+  group: ExportGroup;
   portability: 'portable' | 'deviceSpecific' | 'platformSpecific';
   /** 是否为推荐分区（defaultIncluded=true；默认模式全选、高级模式初始勾选） */
   defaultIncluded: boolean;
 }
 
-/** host 目录（SyncSectionInfo[]）→ UI 勾选项（保留 id 顺序）。 */
+/** host 目录（SyncSectionInfo[]）→ UI 勾选项（保留 id 顺序）。
+ *  同步分区必为导出目录（DEFAULT_CATEGORIES）的可移植子集：分组/描述从导出目录
+ *  补充（单一事实源，与「导出备份·自定义模式」的目录保持一致），未命中 id 兜底。 */
 export function syncSectionOptions(info: readonly SyncSectionInfo[]): SyncSectionOption[] {
-  return info.map((s) => ({
-    id: s.id,
-    label: s.displayName,
-    portability: s.portability,
-    defaultIncluded: s.defaultIncluded,
-  }));
+  const meta = new Map(DEFAULT_CATEGORIES.map((c) => [c.id, c]));
+  return info.map((s) => {
+    const cat = meta.get(s.id);
+    return {
+      id: s.id,
+      label: s.displayName,
+      description: cat?.description ?? '',
+      group: cat?.group ?? 'general',
+      portability: s.portability,
+      defaultIncluded: s.defaultIncluded,
+    };
+  });
+}
+
+/** 高级模式勾选目录 → 按导出分组（EXPORT_GROUPS）投影：与「导出备份·自定义模式」同构，
+ *  空分组省略；UI 直接渲染 groupCard。 */
+export function syncSectionGroups(options: readonly SyncSectionOption[]): {
+  group: ExportGroup;
+  label: string;
+  note?: string;
+  items: SyncSectionOption[];
+}[] {
+  return EXPORT_GROUPS
+    .map((g) => ({
+      group: g.id,
+      label: g.label,
+      ...(g.note !== undefined ? { note: g.note } : {}),
+      items: options.filter((o) => o.group === g.id),
+    }))
+    .filter((g) => g.items.length > 0);
 }
 
 /** 默认（快速导出）模式的推荐同步分区：可移植且默认包含（与 ExportFlow.quickSelection 同口径）。 */

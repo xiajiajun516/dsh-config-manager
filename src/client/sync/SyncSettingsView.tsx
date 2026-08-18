@@ -33,8 +33,8 @@ import {
   autosyncIntervalMs, autosyncStatusText, computeAutosyncCountdown, computeGithubLoginView,
   computeRemoteReady, computeSyncButtons, computeSyncStatus, formatIntervalDuration, githubPollMessage,
   kindLabel, presetById, presetIdForUrl, privateRepoHint, pullReportView, pushReportView,
-  readStoredChannel, recommendedSyncSections, severityLabel, syncSectionOptions, WEBDAV_PRESETS,
-  writeStoredChannel,
+  readStoredChannel, recommendedSyncSections, severityLabel, syncSectionGroups, syncSectionOptions,
+  WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
 import type { GithubLoginPhase, SyncChannel, SyncMode, SyncSectionOption } from './sync-view.ts'
 import { SyncHistoryView } from './SyncHistoryView.tsx'
@@ -677,20 +677,32 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 {state.catalog.length === 0 ? (
                   <span className={css.hint}>{t('common.loading')}</span>
                 ) : (
+                  /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章） */
                   <div className={css.groupList}>
-                    {state.catalog.map((s) => (
-                      <Checkbox
-                        key={s.id}
-                        checked={state.syncSections.includes(s.id)}
-                        onChange={(checked) => { toggleSyncSection(s.id, checked) }}
-                        label={
-                          <span className={css.categoryItem}>
-                            <span className={css.categoryName}>{s.label}</span>
-                            <Badge kind="info">{t('mode.sectionPortable')}</Badge>
-                            {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
-                          </span>
-                        }
-                      />
+                    {syncSectionGroups(state.catalog).map((g) => (
+                      <Card key={g.group} className={css.groupCard}>
+                        <div className={css.groupHeader}>
+                          <span className={css.groupLabel}>{g.label}</span>
+                          {g.note !== undefined && <span className={css.groupNote}>{g.note}</span>}
+                        </div>
+                        <div className={css.groupItems}>
+                          {g.items.map((s) => (
+                            <Checkbox
+                              key={s.id}
+                              checked={state.syncSections.includes(s.id)}
+                              onChange={(checked) => { toggleSyncSection(s.id, checked) }}
+                              label={
+                                <span className={css.categoryItem}>
+                                  <span className={css.categoryName}>{s.label}</span>
+                                  <span className={css.categoryDesc}>{s.description}</span>
+                                  <Badge kind="info">{t('mode.sectionPortable')}</Badge>
+                                  {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
+                                </span>
+                              }
+                            />
+                          ))}
+                        </div>
+                      </Card>
                     ))}
                   </div>
                 )}

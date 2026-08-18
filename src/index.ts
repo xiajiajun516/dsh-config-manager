@@ -121,7 +121,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.31'
+const PLUGIN_VERSION = '0.1.32'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -1515,9 +1515,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           } else {
             await fs.rename(plainZipPath, outPath)
           }
-          // 结束写结果：完成结果落账（供 /progress 查询与刷新恢复后下载）
-          runs.finish(runId, { zipPath: result.zipPath, manifest: result.manifest, report: result.report })
-          writeJson(res, 200, { zipPath: result.zipPath, manifest: result.manifest, report: result.report, runId })
+          // 结束写结果：完成结果落账（供 /progress 查询与刷新恢复后下载）。
+          // 注意必须回报实际落盘的 outPath 而非 result.zipPath（后者是 plainZipPath：
+          // 加密分支已删除、无加密分支已 rename 成 outPath，此时已不存在，下载会 404）。
+          runs.finish(runId, { zipPath: outPath, manifest: result.manifest, report: result.report })
+          writeJson(res, 200, { zipPath: outPath, manifest: result.manifest, report: result.report, runId })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           runs.fail(runId, message)

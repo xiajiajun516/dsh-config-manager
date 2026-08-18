@@ -6,12 +6,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
+import type { SectionId } from '../../schema/types.ts'
 import type { GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
   autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
   formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
-  severityLabel, summarizePullChanges, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
+  severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
@@ -32,11 +33,36 @@ const SYNC_CATALOG: SyncSectionInfo[] = [
   { id: 'skills', displayName: 'Skills', portability: 'portable', defaultIncluded: true },
 ];
 
-test('sync-view: syncSectionOptions 把 host 目录投影为勾选项（保 id 顺序）', () => {
+test('sync-view: syncSectionOptions 把 host 目录投影为勾选项（保 id 顺序 + 导出目录分组/描述补充）', () => {
   const opts = syncSectionOptions(SYNC_CATALOG)
   assert.deepEqual(opts.map((o) => o.id), ['settings', 'providers', 'plugins', 'skills'])
   assert.equal(opts[0]?.label, 'Settings')
   assert.equal(opts[0]?.defaultIncluded, true)
+  // 分组/描述来自导出目录（单一事实源）：settings → general 组带描述；providers → ai 组
+  assert.equal(opts[0]?.group, 'general')
+  assert.match(opts[0]?.description ?? '', /DSH 全局设置/)
+  assert.equal(opts[1]?.group, 'ai')
+  assert.match(opts[1]?.description ?? '', /Provider/)
+  assert.equal(opts[2]?.group, 'extensions')
+  assert.equal(opts[3]?.group, 'customization')
+});
+
+test('sync-view: syncSectionOptions 未知分区 id → 兜底（description 空、group=general）', () => {
+  const opts = syncSectionOptions([
+    { id: 'nope' as SectionId, displayName: 'Nope', portability: 'portable', defaultIncluded: true },
+  ])
+  assert.equal(opts[0]?.label, 'Nope')
+  assert.equal(opts[0]?.description, '')
+  assert.equal(opts[0]?.group, 'general')
+});
+
+test('sync-view: syncSectionGroups 按导出分组投影（与「导出备份·自定义模式」同构，空组省略）', () => {
+  const groups = syncSectionGroups(syncSectionOptions(SYNC_CATALOG))
+  // settings(general) + providers(ai) + plugins(extensions) + skills(customization)
+  assert.deepEqual(groups.map((g) => g.group), ['general', 'ai', 'extensions', 'customization'])
+  assert.equal(groups[0]?.label, 'General')
+  assert.deepEqual(groups[0]?.items.map((i) => i.id), ['settings'])
+  assert.deepEqual(groups[2]?.items.map((i) => i.id), ['plugins'])
 });
 
 test('sync-view: recommendedSyncSections 只取可移植且默认包含的分区（默认/快速导出模式）', () => {
