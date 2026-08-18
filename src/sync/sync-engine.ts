@@ -36,8 +36,10 @@ import type { ZipWriteEntry } from '../utils/zip.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
+import { decryptSectionsPayload, encryptSectionsPayload } from './snapshot-crypto.ts';
 import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
-import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
+import type { EncryptedSections, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
+import { isEncryptedSections } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { DEFAULT_ANCESTOR_KEEP, loadAncestor, pruneAncestors, writeAncestor } from './ancestor.ts';
@@ -93,6 +95,14 @@ export interface SyncPushOptions {
    *  传入非 portable 或未知分区 → 忽略并告警（同步通道安全约束：
    *  deviceSpecific/platformSpecific 永不进入同步通道；未知 id 不静默吞掉）。 */
   sections?: SectionId[];
+  /** 加密快照：sections 载荷整体加密（AES-256-GCM），manifest.encrypted=true。
+   *  开启时必须提供 password（仅本次调用内存使用，绝不落盘/落日志）。 */
+  encrypt?: boolean;
+  /** 加密密码（仅内存；encrypt=true 时必填）。 */
+  password?: string;
+  /** 导出真实凭据值（凭据值进入快照）。安全不变量：includeSecrets=true 必须同时 encrypt=true，
+   *  否则拒绝（密钥绝不明文进入同步通道）；自动同步恒 includeSecrets=false（推普通快照）。 */
+  includeSecrets?: boolean;
 }
 
 export interface SyncPullOptions {
@@ -100,6 +110,8 @@ export interface SyncPullOptions {
   snapshotId?: string;
   /** 冲突全局策略（缺省 merge：冲突保留待决策） */
   strategy?: GlobalConflictStrategy;
+  /** 解密密码（加密快照需要；仅内存，绝不落盘/落日志） */
+  password?: string;
 }
 
 export interface SyncPushReport {
@@ -274,34 +286,76 @@ export class SyncEngine {
   }
 
   /**
+   * 快照读取准备（download 后、使用前）：
+   * - 加密快照（manifest.encrypted）→ 用 password 解密回明文 sections（原地替换）；
+   *   无密码 → 明确报错（自动同步等无密码场景在调用方先行跳过）。
+   * - 普通快照声明 containsSecrets=true → 拒绝（同步通道永不携带秘密，防御篡改/旧坏数据）。
+   * 密码仅本次调用内存使用，绝不落盘/落日志。
+   */
+  private async prepareSnapshot(snapshot: SyncSnapshot, password?: string): Promise<void> {
+    if (snapshot.manifest.encrypted) {
+      if (password === undefined || password === '') {
+        throw new Error(this.msg('sync.encryptedNeedsPassword', { id: snapshot.id }));
+      }
+      if (!isEncryptedSections(snapshot.sections)) {
+        throw new Error(this.msg('sync.encryptedNeedsPassword', { id: snapshot.id }));
+      }
+      const decrypted = await decryptSectionsPayload(snapshot.sections.encrypted, password);
+      snapshot.sections = decrypted;
+      return;
+    }
+    if (snapshot.manifest.containsSecrets) {
+      throw new Error(this.msg('sync.remoteContainsSecrets', { id: snapshot.id }));
+    }
+  }
+
+  /**
    * push：导出 portable 分区 → 组装快照 → 本地散文件副本 → transport.upload → 更新 sync-state。
    * 单项分区导出失败只告警跳过（§34.17），全部失败才整体失败。
    * opts.sections：指定仅同步这些分区（高级/自定义模式）；缺省 = 全部 portable 推荐分区。
+   * opts.encrypt/password/includeSecrets：加密快照（含可选密钥导出）。
+   * 安全不变量：includeSecrets ⇒ encrypt（密钥绝不明文进入同步通道）；密码仅内存。
    */
   async push(opts: SyncPushOptions = {}): Promise<SyncPushReport> {
     const warnings: string[] = [];
-    const sections: SyncSnapshot['sections'] = {};
+    const includeSecrets = opts.includeSecrets ?? false;
+    const encrypt = opts.encrypt ?? false;
+    // 安全不变量：导出密钥必须加密；加密必须给密码（密码绝不落盘）
+    if (includeSecrets && !encrypt) {
+      throw new Error(this.msg('sync.includeSecretsRequiresEncryption'));
+    }
+    if (encrypt && (opts.password === undefined || opts.password === '')) {
+      throw new Error(this.msg('sync.encryptRequiresPassword'));
+    }
+    const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const targets = this.pushTargets(opts.sections, warnings);
     for (const adapter of targets) {
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, { includeSecrets: false });
+        section = await adapter.export(this.ctx, { includeSecrets });
       } catch (err) {
         warnings.push(this.msg('sync.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
         continue;
       }
       warnings.push(...section.warnings);
-      // 与 Exporter 同语义：非文件类分区过 SecretScanner；文件类分区内容不按字段扫描
-      const data = isFileSection(adapter.id)
+      // includeSecrets=true：凭据值保留（随后整体加密）；否则过 SecretScanner 剥离（默认安全）
+      const data = isFileSection(adapter.id) || includeSecrets
         ? section.data
         : this.scanner.scanAndRedact(section.data).sanitized;
-      sections[adapter.id] = data as SectionData;
+      plainSections[adapter.id] = data as SectionData;
     }
 
-    if (Object.keys(sections).length === 0) {
+    if (Object.keys(plainSections).length === 0) {
       return { ok: false, snapshotId: '', sections: [], warnings, message: this.msg('sync.noPortableSections') };
     }
-    this.assertNoForbiddenSections(sections as Record<string, unknown>);
+    this.assertNoForbiddenSections(plainSections as Record<string, unknown>);
+
+    // 加密：整个明文 sections 载荷加密为密文（manifest 只存非秘密参数）
+    let sections: SyncSnapshot['sections'] = plainSections;
+    const encrypted = encrypt;
+    if (encrypt) {
+      sections = await encryptSectionsPayload(plainSections, opts.password!);
+    }
 
     const nowIso = this.now().toISOString();
     const id = opts.snapshotId ?? this.snapshotIdFn();
@@ -312,14 +366,16 @@ export class SyncEngine {
         schemaVersion: CURRENT_SCHEMA_VERSION,
         dshVersion: this.ctx.dshVersion,
         platform: this.ctx.platform as Platform,
-        sectionIds: Object.keys(sections) as SectionId[],
-        containsSecrets: false,
+        sectionIds: Object.keys(plainSections) as SectionId[],
+        containsSecrets: includeSecrets,
+        ...(encrypted ? { encrypted: true } : {}),
       },
       sections,
     };
 
-    // ① 本地散文件快照副本（审计；复用 t2 layout，不写 ZIP）
-    if (this.localSnapshotsDir !== undefined) {
+    // ① 本地散文件快照副本（审计；复用 t2 layout，不写 ZIP）。
+    //    加密快照不写本地散文件副本（磁盘不落任何密文/明文载荷；远端已存密文）。
+    if (this.localSnapshotsDir !== undefined && !encrypted) {
       await writeSnapshotToDir(snapshot, joinFs(this.localSnapshotsDir, id), this.fsx);
     }
     // ② 上传远端（传输通道负责散文件落盘 + 提交推送）
@@ -328,10 +384,11 @@ export class SyncEngine {
     //      删除失败只告警（进 warnings），不上抛 —— 不阻断 push 主流程。
     //      放在 upload 之后（保证新快照已推送成功）与 recordBaseline 之前（先管好远端再记基线）。
     await this.pruneRemoteSnapshots(id, warnings);
-    // ③ 记录祖先基线：写 sync-state（lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport）+ 裁剪
-    await this.recordBaseline(id, snapshot.sections, nowIso);
+    // ③ 记录祖先基线：写 sync-state（lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport）+ 裁剪。
+    //    基线 hash 用明文（hasLocalChanges 与本地明文可比）；加密快照不写明文祖先副本（密钥不落盘）。
+    await this.recordBaseline(id, plainSections, nowIso, { writeAncestor: !encrypted });
 
-    return { ok: true, snapshotId: id, sections: Object.keys(sections) as SectionId[], warnings };
+    return { ok: true, snapshotId: id, sections: Object.keys(plainSections) as SectionId[], warnings };
   }
 
   /**
@@ -381,9 +438,8 @@ export class SyncEngine {
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新
     const snapshot = await this.transport.download(targetId);
-    if (snapshot.manifest.containsSecrets) {
-      throw new Error(this.msg('sync.remoteContainsSecrets', { id: targetId }));
-    }
+    // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
+    await this.prepareSnapshot(snapshot, opts.password);
 
     const portableIds = new Set(this.portableAdapters().map((a) => a.id));
     const zipPath = await this.snapshotToZip(snapshot, portableIds);
@@ -477,9 +533,8 @@ export class SyncEngine {
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
     const snapshot = await this.transport.download(targetId);
-    if (snapshot.manifest.containsSecrets) {
-      throw new Error(this.msg('sync.remoteContainsSecrets', { id: targetId }));
-    }
+    // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
+    await this.prepareSnapshot(snapshot, opts.password);
     const portableIds = new Set(this.portableAdapters().map((a) => a.id));
     const zipPath = await this.snapshotToZip(snapshot, portableIds);
     const analysis = await this.importer.analyzeImport(zipPath);
@@ -491,16 +546,15 @@ export class SyncEngine {
     return { ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, message: undefined };
   }
 
-  async merge(opts: { snapshotId?: string } = {}): Promise<MergePlan> {
+  async merge(opts: { snapshotId?: string; password?: string } = {}): Promise<MergePlan> {
     const metas = await this.transport.list();
     if (metas.length === 0) {
       return { sections: [] };
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
     const remote = await this.transport.download(targetId);
-    if (remote.manifest.containsSecrets) {
-      throw new Error(`远端快照 ${targetId} 声明 containsSecrets=true，拒绝合并（同步通道永不携带秘密）`);
-    }
+    // 加密快照 → 用密码解密；普通快照 containsSecrets=true → 拒绝（防御）
+    await this.prepareSnapshot(remote, opts.password);
     // 共同祖先：从 sync-state.lastSnapshotId 读本地副本；空 = 首次/无祖先
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
     let ancestor: SyncSnapshot | undefined;
@@ -541,10 +595,13 @@ export class SyncEngine {
     snapshotId: string,
     sections: SyncSnapshot['sections'],
     nowIso?: string,
+    opts: { writeAncestor?: boolean } = {},
   ): Promise<void> {
     const ts = nowIso ?? this.now().toISOString();
-    // 1) 写本地祖先副本（如有 localSnapshotsDir）
-    if (this.localSnapshotsDir !== undefined) {
+    // 1) 写本地祖先副本（如有 localSnapshotsDir）。
+    //    writeAncestor=false（加密快照基线）：不写明文祖先副本（磁盘不落密钥；
+    //    基线仅用 sync-state 的明文 hash，供 hasLocalChanges 比较）。
+    if (this.localSnapshotsDir !== undefined && opts.writeAncestor !== false) {
       const snapshot: SyncSnapshot = {
         id: snapshotId,
         createdAt: ts,
@@ -784,6 +841,10 @@ export class SyncEngine {
 
   /** 散文件快照 → 标准导出 ZIP（临时目录，用完即删）：buildManifest + checksums + 平铺分区 */
   private async snapshotToZip(snapshot: SyncSnapshot, portableIds: Set<SectionId>): Promise<string> {
+    // 防御：加密快照必须已由调用方解密（prepareSnapshot）；此处不处理密文载荷
+    if (isEncryptedSections(snapshot.sections)) {
+      throw new Error('快照仍为加密载荷，无法转 ZIP（需先解密）');
+    }
     const entries: ZipWriteEntry[] = [];
     const sectionFlags = {} as Record<SectionId, boolean>;
     for (const sid of portableIds) {

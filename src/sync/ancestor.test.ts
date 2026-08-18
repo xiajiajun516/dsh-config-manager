@@ -15,7 +15,10 @@ import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
 import type { SectionData, FilesSection } from '../schema/types.ts';
 import type { SyncSnapshot } from './transport.ts';
 
-function mkSnapshot(id: string, createdAt: string, sections: SyncSnapshot['sections']): SyncSnapshot {
+/** 测试用明文快照：sections 恒为普通分区 Record（ancestor 测试不涉及加密载荷）。 */
+type PlainSnapshot = SyncSnapshot & { sections: Record<string, SectionData> };
+
+function mkSnapshot(id: string, createdAt: string, sections: SyncSnapshot['sections']): PlainSnapshot {
   return {
     id,
     createdAt,
@@ -26,7 +29,7 @@ function mkSnapshot(id: string, createdAt: string, sections: SyncSnapshot['secti
       sectionIds: Object.keys(sections) as SyncSnapshot['manifest']['sectionIds'],
       containsSecrets: false,
     },
-    sections,
+    sections: sections as Record<string, SectionData>,
   };
 }
 
@@ -37,7 +40,7 @@ test('loadAncestor: 存在 → 返回 SyncSnapshot（与 writeAncestor 写入一
       settings: { version: 1, namespaces: { general: { value: { theme: 'dark' }, revision: 1, secrets: [] } } } as SectionData,
     });
     await writeAncestor(dir, snap);
-    const loaded = await loadAncestor(dir, 'sync-1');
+    const loaded = (await loadAncestor(dir, 'sync-1')) as unknown as PlainSnapshot;
     assert.equal(loaded.id, 'sync-1');
     assert.equal(loaded.createdAt, '2026-08-16T10:00:00.000Z');
     assert.equal(loaded.sections.settings && hashSection(loaded.sections.settings as SectionData), hashSection(snap.sections.settings as SectionData));
@@ -68,7 +71,7 @@ test('writeAncestor: 写出目录可被 readSnapshotFromDir 读回，分区 hash
     };
     const snap = mkSnapshot('sync-2', '2026-08-16T11:00:00.000Z', { skills: files as unknown as SectionData });
     await writeAncestor(dir, snap);
-    const loaded = await loadAncestor(dir, 'sync-2');
+    const loaded = (await loadAncestor(dir, 'sync-2')) as unknown as PlainSnapshot;
     assert.equal(hashSection(loaded.sections.skills as SectionData), hashSection(files as unknown as SectionData));
     assert.equal((loaded.sections.skills as FilesSection).files.length, 2);
   } finally {

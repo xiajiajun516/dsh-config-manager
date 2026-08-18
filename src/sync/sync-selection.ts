@@ -30,11 +30,15 @@ export interface SyncSelection {
   mode: SyncSelectionMode;
   /** 高级模式勾选分区；default 模式可为空数组 */
   sections: SectionId[];
+  /** 手动推送默认加密快照（密码仅每次推送输入，绝不持久化） */
+  encrypt: boolean;
+  /** 手动推送默认导出真实凭据值（安全：必须同时 encrypt；自动同步恒 false） */
+  includeSecrets: boolean;
 }
 
 /** 缺省配置（首次无文件 / 损坏 / 不支持 schema 时回退） */
 export function defaultSyncSelection(): SyncSelection {
-  return { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [] };
+  return { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [], encrypt: false, includeSecrets: false };
 }
 
 /**
@@ -79,6 +83,10 @@ export async function readSyncSelection(dir: string): Promise<SyncSelection> {
       (s): s is SectionId => typeof s === 'string' && s !== '',
     );
   }
+  if (typeof obj['encrypt'] === 'boolean') sel.encrypt = obj['encrypt'];
+  if (typeof obj['includeSecrets'] === 'boolean') sel.includeSecrets = obj['includeSecrets'];
+  // 安全兜底：持久化数据被篡改导致 includeSecrets 但未 encrypt → 强制关掉导出密钥
+  if (sel.includeSecrets && !sel.encrypt) sel.includeSecrets = false;
   return sel;
 }
 
@@ -89,6 +97,8 @@ export async function writeSyncSelection(dir: string, sel: SyncSelection): Promi
     schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
     mode: sel.mode,
     sections: sel.sections,
+    encrypt: sel.encrypt,
+    includeSecrets: sel.includeSecrets,
   };
   const target = path.join(dir, SYNC_SELECTION_FILE);
   const tmp = path.join(

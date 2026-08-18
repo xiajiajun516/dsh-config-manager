@@ -14,11 +14,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  parseSyncBody, webdavBaseUrl, extractSyncSections, SyncRouteError,
+  parseSyncBody, webdavBaseUrl, extractSyncSections, mergePersistedWebDavUsername, SyncRouteError,
   SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF,
   type ParseSyncBodyDeps,
 } from './index.ts';
-import type { SyncConfig } from './sync/sync-config.ts';
+import { isWebDavConfig, type SyncConfig } from './sync/sync-config.ts';
 
 /** 内存凭据 mock：记录写入的 (ref, value) 列表 */
 function memCreds(): ParseSyncBodyDeps & { writes: Array<[string, string]>; } {
@@ -179,4 +179,39 @@ test('extractSyncSections: 元素为未知分区 id → SyncRouteError（不静�
     () => extractSyncSections({ sections: ['settings', 'nope'] }, KNOWN),
     (err) => err instanceof SyncRouteError && /nope/.test(err.message),
   );
+});
+
+/* ---------------- mergePersistedWebDavUsername（prepareSync username 回退） ---------------- */
+
+const WEBDAV_CFG: SyncConfig = { schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav' } };
+const WEBDAV_WITH_USER: SyncConfig = {
+  schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav', username: 'alice' },
+};
+const GIT_CFG: SyncConfig = { schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } };
+
+test('mergePersistedWebDavUsername: webdav 缺 username + 持久化有 username → 回填（snapshotsList 挂载自动加载场景）', () => {
+  const cfg = mergePersistedWebDavUsername({ ...WEBDAV_CFG }, { ...WEBDAV_WITH_USER });
+  assert.ok(isWebDavConfig(cfg) && cfg.webdav.username === 'alice', '回填持久化 username');
+});
+
+test('mergePersistedWebDavUsername: 请求已带 username → 保留新值不回填（用户输入优先）', () => {
+  const cfg = mergePersistedWebDavUsername(
+    { ...WEBDAV_CFG, webdav: { ...WEBDAV_CFG.webdav, username: 'bob' } },
+    { ...WEBDAV_WITH_USER },
+  );
+  assert.ok(isWebDavConfig(cfg) && cfg.webdav.username === 'bob');
+});
+
+test('mergePersistedWebDavUsername: 持久化无 username / 非 webdav / 为 null → 原样返回', () => {
+  const noUser = mergePersistedWebDavUsername({ ...WEBDAV_CFG }, { ...WEBDAV_CFG });
+  assert.ok(isWebDavConfig(noUser) && noUser.webdav.username === undefined, '持久化无 username 不回填');
+
+  const gitPersisted = mergePersistedWebDavUsername({ ...WEBDAV_CFG }, { ...GIT_CFG });
+  assert.ok(isWebDavConfig(gitPersisted) && gitPersisted.webdav.username === undefined, '持久化是 git 通道不回填');
+
+  const nullPersisted = mergePersistedWebDavUsername({ ...WEBDAV_CFG }, null);
+  assert.ok(isWebDavConfig(nullPersisted) && nullPersisted.webdav.username === undefined, '无持久化配置原样返回');
+
+  const gitCfg = mergePersistedWebDavUsername({ ...GIT_CFG }, { ...WEBDAV_WITH_USER });
+  assert.deepEqual(gitCfg, GIT_CFG, 'git 请求体不受影响');
 });

@@ -13,6 +13,7 @@ import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { hashSection } from './sync-state.ts';
 import type { SyncSnapshot } from './transport.ts';
+import { isEncryptedSections } from './transport.ts';
 
 export const SNAPSHOT_MANIFEST_FILE = 'manifest.json';
 
@@ -73,6 +74,10 @@ export async function writeSnapshotToDir(
   dir: string,
   fsx: SnapshotFs = createSnapshotFs(),
 ): Promise<SnapshotDirManifest> {
+  // 加密快照不写散文件目录（本地不落盘：密文/明文都不落；远端已存密文）
+  if (isEncryptedSections(snapshot.sections)) {
+    throw new Error('加密快照不写散文件目录（本地不落盘；请直接使用密文传输）');
+  }
   const sectionHashes: SnapshotDirManifest['sectionHashes'] = {};
   for (const [id, data] of Object.entries(snapshot.sections)) {
     const sid = id as SectionId;

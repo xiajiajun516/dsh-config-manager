@@ -38,7 +38,7 @@ import { ReportView } from '../common/ReportView.tsx'
 import { ConflictList } from './ConflictList.tsx'
 import { PathMappingForm } from './PathMappingForm.tsx'
 import {
-  applyPickedFile, browseLabelKey, cancelSelection, consumePickedFile, fileSelectModel,
+  applyPickedFile, browseLabelKey, cancelSelection, consumePickedFile, fileSelectModel, shouldRenderSelect,
 } from './import-file-select.ts'
 import css from '../config-manager.module.css'
 
@@ -373,13 +373,17 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         secretInputs: {},
         decryptPassword: '',
         decryptRefs: [],
+        containerEncrypted: false,
+        archiveUnlocked: false,
       },
     })
   }
 
   /* ---------- 各步骤渲染 ---------- */
 
-  if (step === 'select') {
+  // decrypt-archive（解锁整体加密容器）发生在任何分析之前（step 仍可能是 select）：
+  // shouldRenderSelect 保证此时渲染解锁页而非文件选择页（import-decrypt-archive-render 回归）。
+  if (shouldRenderSelect(step, phase)) {
     // 换选模型：由 store 的 selectedFileName/uploading 推导（import-file-reselection）
     const selectModel = fileSelectModel(imp.selectedFileName, uploading)
     return (

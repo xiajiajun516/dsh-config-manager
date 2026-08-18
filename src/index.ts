@@ -121,7 +121,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.32'
+const PLUGIN_VERSION = '0.1.33'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -201,6 +201,8 @@ const API = {
   syncAutosync: '/api/dsh-config-manager/sync/autosync',
   // m-sync-selection：同步分区选择持久化（默认/高级模式 + 勾选分区；自动同步共用）
   syncSelection: '/api/dsh-config-manager/sync/selection',
+  // m-sync-config：同步通道配置保存（UI 表单自动保存 /「保存配置」按钮；凭据写 DSH credentials）
+  syncConfig: '/api/dsh-config-manager/sync/config',
   // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
   marketStatus: '/api/dsh-config-manager/market/status',
   marketRefresh: '/api/dsh-config-manager/market/refresh',
@@ -800,6 +802,10 @@ async function dependencyAvailable(command: string): Promise<boolean> {
  * 让客户端拿到明确错误而不是永远停在进度条。 */
 const ROUTE_TIMEOUT_MS = 5 * 60 * 1000
 
+/** WebDAV 单请求超时（ms）：慢速 WebDAV（如坚果云限速）上传大快照/读写索引
+ * 需要比 git 通道更宽裕的窗口；错误消息会带上实际 ms，便于用户判断。 */
+const WEBDAV_TIMEOUT_MS = 120_000
+
 /** 带超时的 Promise：超时以明确错误拒绝（promise 自身由调用方负责，此处只计时）。 */
 async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -965,6 +971,20 @@ export async function parseSyncBody(
 export function webdavBaseUrl(cfg: SyncConfig): string {
   if (!isWebDavConfig(cfg)) return ''
   return cfg.webdav.url.replace(/\/+$/, '') + '/'
+}
+
+/**
+ * 补全 webdav 配置缺失的 username（从持久化配置回填；纯函数，不修改入参）。
+ * 语义与 password 一致：请求未带 username（表单留空/挂载自动加载）→ 沿用已保存的值；
+ * 请求显式带 username → 原样保留（用户新输入优先）。非 webdav / 无持久化 → 原样返回。
+ */
+export function mergePersistedWebDavUsername(cfg: SyncConfig, persisted: SyncConfig | null): SyncConfig {
+  if (!isWebDavConfig(cfg) || (cfg.webdav.username !== undefined && cfg.webdav.username !== '')) return cfg
+  if (persisted !== null && isWebDavConfig(persisted)
+    && typeof persisted.webdav.username === 'string' && persisted.webdav.username !== '') {
+    return { ...cfg, webdav: { ...cfg.webdav, username: persisted.webdav.username } }
+  }
+  return cfg
 }
 
 /**
@@ -1264,9 +1284,25 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   // credentials（只存值不落盘同步文件/日志），git 网络操作时经 resolve 现取 ——
   // 与 GitTransport「token 只从注入 provider 读取」的安全契约完全对齐。
 
-  /** 解析同步请求体（委托给导出的 parseSyncBody，便于单测）。 */
-  const prepareSync = (body: Record<string, unknown>): Promise<SyncConfig> =>
-    parseSyncBody(body, { credentials })
+  /**
+   * 解析同步请求体并补全缺失字段（委托给导出的 parseSyncBody，便于单测）。
+   * username 回退：webdav 请求体未带 username（如挂载时 snapshotsList 自动加载、
+   * 表单留空后直接同步）时，从持久化 sync-config 回填已保存的 username——
+   * 否则 WebDavTransport 构造会因空 username 抛错，导致「保存过配置仍无法列出快照」。
+   * 语义与 password 一致：留空 = 沿用已保存凭据。
+   */
+  const prepareSync = async (body: Record<string, unknown>): Promise<SyncConfig> => {
+    const cfg = await parseSyncBody(body, { credentials })
+    if (isWebDavConfig(cfg) && (cfg.webdav.username === undefined || cfg.webdav.username === '')) {
+      try {
+        const persisted = await readSyncConfig(syncDir)
+        return mergePersistedWebDavUsername(cfg, persisted)
+      } catch {
+        return cfg // 读失败保持原值（空 username 由 WebDavTransport 构造校验兜底报错）
+      }
+    }
+    return cfg
+  }
 
   /** 同步分区选择缓存（sync-selection.json；makeSyncEngine 同步读取用，保存路由更新）。
    *  null = 尚未加载（启动竞态窗口）；读取/使用处兜底 defaultSyncSelection。 */
@@ -1284,10 +1320,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     return selectionCache
   }
 
-  /** status 响应用的分区选择视图（{ mode, sections }，无 schemaVersion）。 */
-  const selectionView = async (): Promise<{ mode: SyncSelectionMode; sections: SectionId[] }> => {
+  /** status 响应用的分区选择视图（{ mode, sections, encrypt, includeSecrets }，无 schemaVersion/密码）。 */
+  const selectionView = async (): Promise<{ mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean }> => {
     const sel = await ensureSelectionLoaded()
-    return { mode: sel.mode, sections: sel.sections }
+    return { mode: sel.mode, sections: sel.sections, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
   }
 
   /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。
@@ -1305,6 +1341,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             return resolved?.value ?? ''
           },
         },
+        // 显式传超时：不依赖默认值，慢速 WebDAV 上传大快照有足够窗口
+        timeoutMs: WEBDAV_TIMEOUT_MS,
         msg,
       })
     } else {
@@ -1941,6 +1979,44 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ------------------------------------------------------ sync/config
+    // m-sync-config：保存同步通道配置（parseSyncBody 校验 + password/token 写 DSH credentials +
+    // writeSyncConfig 落盘）。UI 表单自动保存 /「保存配置」按钮调用；响应为轻量状态视图
+    // （仅凭据布尔，无 secret 值），供 UI 直接刷新徽章而不必重拉 status 覆盖正在编辑的表单。
+    {
+      kind: 'exact',
+      path: API.syncConfig,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const syncCfg = await prepareSync(body)
+          await writeSyncConfig(syncDir, syncCfg)
+          const [cred, webdavCred] = await Promise.all([
+            credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
+            credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
+          ])
+          writeJson(res, 200, {
+            ok: true,
+            configured: true,
+            transport: syncCfg.transport,
+            credentialConfigured: cred.configured,
+            webdav: isWebDavConfig(syncCfg)
+              ? {
+                  usernameConfigured: typeof syncCfg.webdav.username === 'string' && syncCfg.webdav.username !== '',
+                  passwordConfigured: webdavCred.configured,
+                }
+              : undefined,
+          })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
     // ------------------------------------------------------ sync/push
     // m-sync-ui：推送（导出 portable 分区 → 提交私有仓库 → 更新 sync-state）。
     // token 可选：非空先写入 DSH credentials；成功则记忆仓库配置（回填表单用）。
@@ -1961,10 +2037,19 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const snapshotId =
             typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
           const sections = extractSyncSections(body, knownSyncSectionIds)
+          // 加密快照选项：encrypt=true 时携带密码（仅内存传输，绝不落盘/落日志）；
+          // includeSecrets=true 由 engine 强制要求 encrypt（密钥绝不明文进同步通道）
+          const encrypt = body['encrypt'] === true
+          const includeSecrets = body['includeSecrets'] === true
+          const encryptPassword =
+            typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== ''
+              ? body['encryptPassword']
+              : undefined
           const report = await withTimeout(
             engine.push({
               ...(snapshotId === undefined ? {} : { snapshotId }),
               ...(sections === undefined ? {} : { sections }),
+              ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: encryptPassword ?? '' } : {}),
             }),
             ROUTE_TIMEOUT_MS,
             msg('host.syncPushTimeout'),
@@ -1996,8 +2081,17 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] : 'merge'
           const snapshotId =
             typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          // 解密密码（加密快照拉取时提供；仅内存传输，绝不落盘/落日志）
+          const decryptPassword =
+            typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+              ? body['decryptPassword']
+              : undefined
           const report = await withTimeout(
-            engine.pull({ strategy, ...(snapshotId === undefined ? {} : { snapshotId }) }),
+            engine.pull({
+              strategy,
+              ...(snapshotId === undefined ? {} : { snapshotId }),
+              ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
+            }),
             ROUTE_TIMEOUT_MS,
             msg('host.syncPullTimeout'),
           )
@@ -2229,8 +2323,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const syncCfg = await prepareSync(body)
           const engine = makeSyncEngine(syncCfg)
           const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          // 解密密码（一键同步拉取加密快照时提供；仅内存传输，绝不落盘/落日志）
+          const decryptPassword =
+            typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+              ? body['decryptPassword']
+              : undefined
           const preview = await withTimeout(
-            engine.preview(snapshotId === undefined ? {} : { snapshotId }),
+            engine.preview({
+              ...(snapshotId === undefined ? {} : { snapshotId }),
+              ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
+            }),
             ROUTE_TIMEOUT_MS,
             msg('host.syncPullTimeout'),
           )
@@ -2439,10 +2541,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
             mode,
             sections: [...new Set(rawSections as string[])] as SectionId[],
+            encrypt: body['encrypt'] === true,
+            // 安全兜底：includeSecrets 必须同时 encrypt（密钥绝不明文进同步通道）
+            includeSecrets: body['includeSecrets'] === true && body['encrypt'] === true,
           }
           await writeSyncSelection(syncDir, next)
           selectionCache = next
-          writeJson(res, 200, { ok: true, mode: next.mode, sections: next.sections })        } catch (error) {
+          writeJson(res, 200, { ok: true, mode: next.mode, sections: next.sections, encrypt: next.encrypt, includeSecrets: next.includeSecrets })
+        } catch (error) {
           writeSyncRouteError(res, error)
         }
       },

@@ -19,6 +19,7 @@ import { nullLogger } from '../utils/logger.ts';
 import type { AutosyncConfig } from './autosync-config.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
+import type { SectionId } from '../schema/types.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { SyncConfig } from './sync-config.ts';
 import { syncIsConfigured } from './autosync-scheduler.ts';
@@ -339,4 +340,50 @@ test('buildAutoApplyPlan: 把非 skip 非 conflict 项归入 autoApply', () => {
   assert.deepEqual(apply.autoApply.map((s) => s.id), ['settings', 'providers']);
   assert.deepEqual(apply.review.map((s) => s.id), ['mcp']);
   assert.deepEqual(apply.skipped.map((s) => s.id), ['plugins']);
+});
+
+test('runOnce: 远端最新快照为加密 → 跳过 + 历史 skipReason=encrypted（不 merge 不 push）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const mergeCalls: string[] = [];
+  const pushCalls: string[] = [];
+  const engine = {
+    listSnapshots: async () => [
+      {
+        id: 'remote-enc', createdAt: '2026-08-16T12:00:00.000Z', sections: {},
+        manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings' as SectionId], containsSecrets: true, encrypted: true },
+      },
+    ],
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async () => { mergeCalls.push('merge'); return makeMergePlan([]); },
+    push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 'x', sections: [] as never, warnings: [] }; },
+  };
+  const { scheduler, getEntries, getConfig } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'skipped', '加密快照 → 跳过');
+  assert.equal(result.skipReason, 'encrypted');
+  assert.equal(mergeCalls.length, 0, '加密快照不拉取合并');
+  assert.equal(pushCalls.length, 0, '加密快照不上传');
+  assert.ok(getEntries().some((e) => e.skipReason === 'encrypted'), '写入 encrypted 跳过历史');
+  assert.equal(getConfig().lastRunStatus, 'skipped', 'autosync 状态记录为 skipped');
+});
+
+test('runOnce: 远端最新快照为普通 → 加密检测不触发（listSnapshots 正常路径不受影响）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const engine = {
+    listSnapshots: async () => [
+      {
+        id: 'remote-plain', createdAt: '2026-08-16T12:00:00.000Z', sections: {},
+        manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings' as SectionId], containsSecrets: false },
+      },
+    ],
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([]),
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce();
+  assert.equal(result.status, 'success', '普通快照照常执行');
+  assert.equal(result.skipReason, 'upToDate');
+  assert.ok(!getEntries().some((e) => e.skipReason === 'encrypted'), '普通快照不产生 encrypted 跳过历史');
 });

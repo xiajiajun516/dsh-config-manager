@@ -61,6 +61,8 @@ interface SyncUiState {
   webdavUsername: string
   /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化/回显 */
   webdavPassword: string
+  /** 通道配置保存中（「保存配置」按钮 spinner；自动保存同用） */
+  savingConfig: boolean
   busy: 'sync' | 'push' | 'pull' | 'rollback' | null
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
@@ -84,6 +86,16 @@ interface SyncUiState {
   catalog: SyncSectionOption[]
   /** 高级模式勾选的同步分区（初始 = 推荐分区；空 = 未勾选任何分区） */
   syncSections: SectionId[]
+  /** 手动推送默认加密快照（持久化开关；密码不持久化） */
+  encrypt: boolean
+  /** 手动推送默认导出真实凭据值（持久化开关；必须同时 encrypt） */
+  includeSecrets: boolean
+  /** 加密密码（仅内存；推送成功后清空，绝不持久化/回显） */
+  encryptPassword: string
+  /** 加密密码确认（仅内存） */
+  encryptPasswordConfirm: string
+  /** 解密密码（拉取/一键同步加密快照用；仅内存，绝不持久化） */
+  decryptPassword: string
   error: string | null
   /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
   github: GithubUiState
@@ -116,6 +128,7 @@ const initial: SyncUiState = {
   webdavUrl: '',
   webdavUsername: '',
   webdavPassword: '',
+  savingConfig: false,
   busy: null,
   pushReport: null,
   pullReport: null,
@@ -129,6 +142,11 @@ const initial: SyncUiState = {
   syncMode: 'default',
   catalog: [],
   syncSections: [],
+  encrypt: false,
+  includeSecrets: false,
+  encryptPassword: '',
+  encryptPasswordConfirm: '',
+  decryptPassword: '',
   error: null,
   github: initialGithub,
 }
@@ -136,10 +154,23 @@ const initial: SyncUiState = {
 export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const [state, setState] = useState<SyncUiState>(initial)
   const uiT = api.t // 客户端展示层翻译器（zh/en，见 ui/i18n.ts）
-  const patch = (p: Partial<SyncUiState>): void => setState((s) => ({ ...s, ...p }))
+  /** 最新 state 镜像（自动保存 flush 时读取，避免防抖回调里闭包过期值） */
+  const stateRef = useRef<SyncUiState>(state)
+  const patch = (p: Partial<SyncUiState>): void => {
+    setState((s) => {
+      const next = { ...s, ...p }
+      stateRef.current = next
+      return next
+    })
+  }
   const patchGithub = (p: Partial<GithubUiState>): void => setState((s) => ({ ...s, github: { ...s.github, ...p } }))
   /** GitHub 轮询定时器（卸载/取消时清理，防止泄漏与跨流程串扰） */
   const githubPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 通道配置自动保存：防抖 timer + 待发 payload（关闭设置页前 flush，不丢输入） */
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingSave = useRef<SyncPushPayload | null>(null)
+  /** 保存请求在途（防重入：保存中又排入新改动 → 完成后补发最新 payload） */
+  const savingRef = useRef(false)
 
   /** 挂载时读取同步状态（配置回填 + 上次同步时间 + 凭据状态 + autosync） */
   const loadStatus = async (): Promise<void> => {
@@ -170,6 +201,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         // 仅首次回填时设置（用户已改过的勾选保留）；模式跟随持久化
         syncMode: state.syncMode === 'default' && state.syncSections.length === 0 ? persistedMode : state.syncMode,
         syncSections: state.syncSections.length === 0 ? persistedSections : state.syncSections,
+        // 加密/密钥开关跟随持久化（密码不持久化，不在此回填）
+        encrypt: persisted?.encrypt === true,
+        includeSecrets: persisted?.includeSecrets === true,
         ...(info.autosync !== undefined
           ? {
               autosync: info.autosync,
@@ -215,7 +249,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       const url = urlOverride ?? state.webdavUrl
       if (url.trim() === '') return
       try {
-        const res = await api.snapshotsList({ transport: 'webdav', url: url.trim() })
+        // 带 username（非空时）：挂载早期 state 未回填 → undefined，Host 端回退持久化配置补 username
+        const res = await api.snapshotsList({
+          transport: 'webdav',
+          url: url.trim(),
+          username: state.webdavUsername.trim() !== '' ? state.webdavUsername.trim() : undefined,
+        })
         patch({ snapshots: res.snapshots })
       } catch {
         // 拉取失败不阻断主流程（下拉留空，用户可重试）
@@ -241,9 +280,18 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** 卸载时清理轮询定时器（组件销毁后不得再 setState/发请求） */
+  /** 卸载时清理轮询定时器 + 补发未落盘的通道配置改动（组件销毁后不得再 setState/发请求） */
   useEffect(() => () => {
     if (githubPollTimer.current !== null) clearTimeout(githubPollTimer.current)
+    if (saveTimer.current !== null) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
+    // 关闭设置页前若还有未保存的改动：立即补发（host 侧落盘；此路径只发请求不 setState）
+    const pending = pendingSave.current
+    if (pending !== null) {
+      void api.saveConfig(pending).catch(() => { /* 已卸载：静默，不打扰用户 */ })
+    }
   }, [])
 
   /** 表单快照 → 请求体（按当前通道构建；空串不携带；password 仅内存不发回显） */
@@ -261,6 +309,109 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       repoUrl: state.repoUrl.trim(),
       token: state.token.trim() !== '' ? state.token : undefined,
     }
+  }
+
+  /* ------------------------------------------------ 通道配置持久化（自动保存 + 显式保存） */
+
+  /** 按给定 state 构建「保存配置」请求体；当前通道远端地址未就绪（webdav url / git repoUrl 为空）
+   *  → 返回 null（无可保存内容，自动保存跳过）。password/token 仅非空携带（空 = 沿用已保存凭据）。 */
+  const buildConfigPayload = (s: SyncUiState): SyncPushPayload | null => {
+    if (s.channel === 'webdav') {
+      const url = s.webdavUrl.trim()
+      if (url === '') return null
+      return {
+        transport: 'webdav',
+        url,
+        username: s.webdavUsername.trim() !== '' ? s.webdavUsername.trim() : undefined,
+        password: s.webdavPassword !== '' ? s.webdavPassword : undefined,
+      }
+    }
+    const repoUrl = s.repoUrl.trim()
+    if (repoUrl === '') return null
+    return {
+      transport: 'git',
+      repoUrl,
+      token: s.token.trim() !== '' ? s.token.trim() : undefined,
+    }
+  }
+
+  /** 实际发送保存请求：成功清空已入库的 password/token（与 push 一致）并刷新凭据徽章；
+   *  失败保留表单值以便重试。防重入：保存中又排入新改动 → 完成后自动补发最新 payload。 */
+  const doSaveConfig = async (payloadToSave: SyncPushPayload): Promise<void> => {
+    if (savingRef.current) {
+      pendingSave.current = payloadToSave
+      return
+    }
+    savingRef.current = true
+    patch({ savingConfig: true, error: null })
+    try {
+      const saved = await api.saveConfig(payloadToSave)
+      setState((s) => {
+        const next: SyncUiState = { ...s, savingConfig: false }
+        // 只清空「本次已写入的」password/token：若保存期间用户已改输入则保留新值
+        next.webdavPassword = s.webdavPassword !== '' && s.webdavPassword !== payloadToSave.password
+          ? s.webdavPassword
+          : ''
+        next.token = s.token !== '' && s.token !== payloadToSave.token ? s.token : ''
+        // 凭据徽章合并（响应只含布尔，无 secret 值）
+        if (s.statusInfo !== null) {
+          const info: SyncStatusResponse = {
+            ...s.statusInfo,
+            configured: true,
+            credentialConfigured: saved.credentialConfigured,
+          }
+          if (saved.webdav !== undefined) {
+            info.webdav = {
+              url: s.statusInfo.webdav?.url,
+              username: s.statusInfo.webdav?.username,
+              usernameConfigured: saved.webdav.usernameConfigured,
+              passwordConfigured: saved.webdav.passwordConfigured,
+            }
+          }
+          next.statusInfo = info
+        }
+        stateRef.current = next
+        return next
+      })
+    } catch (err) {
+      patch({ savingConfig: false, error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      savingRef.current = false
+      // 保存期间又排入的新改动 → 立即补发（保底，不丢输入）
+      if (pendingSave.current !== null) {
+        const p = pendingSave.current
+        pendingSave.current = null
+        void doSaveConfig(p)
+      }
+    }
+  }
+
+  /** 表单改动 → 防抖 600ms 自动保存（取最新 state；地址未就绪时跳过）。 */
+  const scheduleConfigSave = (): void => {
+    const payloadToSave = buildConfigPayload(stateRef.current)
+    pendingSave.current = payloadToSave
+    if (saveTimer.current !== null) clearTimeout(saveTimer.current)
+    if (payloadToSave === null) {
+      saveTimer.current = null
+      return
+    }
+    saveTimer.current = setTimeout(() => {
+      saveTimer.current = null
+      flushConfigSave()
+    }, 600)
+  }
+
+  /** 立即保存（「保存配置」按钮 / 防抖到点）：优先待发改动，否则按当前表单值。 */
+  const flushConfigSave = (): void => {
+    if (saveTimer.current !== null) {
+      clearTimeout(saveTimer.current)
+      saveTimer.current = null
+    }
+    const pending = pendingSave.current
+    pendingSave.current = null
+    const payloadToSave = pending ?? buildConfigPayload(stateRef.current)
+    if (payloadToSave === null) return
+    void doSaveConfig(payloadToSave)
   }
 
   /* ------------------------------------------------ GitHub OAuth device flow */
@@ -333,11 +484,19 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         state.syncMode === 'advanced' && state.syncSections.length > 0
           ? { sections: state.syncSections }
           : {}
-      const report = await api.push({ ...payload(), ...selection })
-      // 成功即清空 token/webdavPassword（已安全写入 DSH credentials）；失败保留以便重试
+      // 加密快照：勾选加密 → 携带密码（仅内存传输；密码错误由 Host 解密认证兜底）；
+      // includeSecrets 必须伴随 encrypt（Host 安全断言兜底）
+      const cryptoOpts =
+        state.encrypt || state.includeSecrets
+          ? { encrypt: true, encryptPassword: state.encryptPassword, includeSecrets: state.includeSecrets }
+          : {}
+      const report = await api.push({ ...payload(), ...selection, ...cryptoOpts })
+      // 成功即清空 token/webdavPassword/加密密码（已安全使用完；绝不持久化）；失败保留以便重试
       patch({
         busy: null, pushReport: report,
-        ...(report.ok ? { token: '', webdavPassword: '' } : {}),
+        ...(report.ok
+          ? { token: '', webdavPassword: '', encryptPassword: '', encryptPasswordConfirm: '' }
+          : {}),
       })
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
@@ -347,8 +506,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const runPull = async (): Promise<void> => {
     patch({ busy: 'pull', error: null, pullReport: null, pushReport: null })
     try {
-      const report = await api.pull(payload())
-      patch({ busy: null, pullReport: report, token: '', webdavPassword: '' })
+      // 解密密码（可选）：拉取加密快照时提供；仅内存传输
+      const decrypt =
+        state.decryptPassword !== '' ? { decryptPassword: state.decryptPassword } : {}
+      const report = await api.pull({ ...payload(), ...decrypt })
+      patch({ busy: null, pullReport: report, token: '', webdavPassword: '', decryptPassword: '' })
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
@@ -356,10 +518,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
   /* ------------------------------------------------ 同步模式（默认/高级） */
 
-  /** 保存分区选择到 Host（持久化；自动同步与手动 push 共用；失败提示但不阻断本地 UI）。 */
-  const saveSelection = async (mode: SyncMode, sections: SectionId[]): Promise<void> => {
+  /** 保存分区选择到 Host（持久化；自动同步与手动 push 共用；失败提示但不阻断本地 UI）。
+   *  附带持久化加密/密钥开关（密码不持久化）。 */
+  const saveSelection = async (mode: SyncMode, sections: SectionId[], encrypt = state.encrypt, includeSecrets = state.includeSecrets): Promise<void> => {
     try {
-      await api.saveSelection({ mode, sections })
+      await api.saveSelection({ mode, sections, encrypt, includeSecrets })
     } catch (err) {
       patch({ error: err instanceof Error ? err.message : String(err) })
     }
@@ -380,6 +543,23 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     void saveSelection(state.syncMode, next)
   }
 
+  /** 加密备份开关（持久化）。取消加密时若勾选着导出密钥 → 一并取消（密钥必须加密，安全底线）。 */
+  const setEncrypt = (next: boolean): void => {
+    patch({
+      encrypt: next,
+      includeSecrets: next ? state.includeSecrets : false,
+      // 密码字段仅内存：取消加密时清空
+      ...(next ? {} : { encryptPassword: '', encryptPasswordConfirm: '' }),
+    })
+    void saveSelection(state.syncMode, state.syncSections, next, next ? state.includeSecrets : false)
+  }
+
+  /** 导出密钥开关（持久化）。勾选时自动联动选中加密（密钥绝不明文进同步通道）。 */
+  const setIncludeSecrets = (next: boolean): void => {
+    patch({ includeSecrets: next, encrypt: next ? true : state.encrypt })
+    void saveSelection(state.syncMode, state.syncSections, next ? true : state.encrypt, next)
+  }
+
   /** 默认（快速导出）模式的推荐分区数（渲染计数用；catalog 已只含 portable）。 */
   const recommendedSectionCount = state.catalog.filter((c) => c.defaultIncluded).length
 
@@ -393,12 +573,19 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
     patch({ busy: 'sync', error: null, confirmSession: null, lastRestoreId: null })
     try {
-      const session = await api.sync({ ...payload(), ...(snapshotId !== undefined && snapshotId !== '' ? { snapshotId } : {}) })
+      // 解密密码（可选）：一键同步拉取加密快照时提供；仅内存传输
+      const decrypt =
+        state.decryptPassword !== '' ? { decryptPassword: state.decryptPassword } : {}
+      const session = await api.sync({
+        ...payload(),
+        ...(snapshotId !== undefined && snapshotId !== '' ? { snapshotId } : {}),
+        ...decrypt,
+      })
       if (!session.ok) {
         patch({ busy: null, error: session.message ?? t('syncflow.syncFailed') })
         return
       }
-      patch({ busy: null, confirmSession: session, token: '', webdavPassword: '' })
+      patch({ busy: null, confirmSession: session, token: '', webdavPassword: '', decryptPassword: '' })
       void loadSnapshots()
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
@@ -453,6 +640,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   /** 高级模式勾选为空 → 禁止推送（默认模式不受限）。 */
   const pushSelectionReady = state.syncMode !== 'advanced' || state.syncSections.length > 0
 
+  /** 加密推送校验：勾选加密时密码非空且两次一致（密码仅内存）。 */
+  const encryptInvalid =
+    (state.encrypt || state.includeSecrets) &&
+    (state.encryptPassword === '' || state.encryptPassword !== state.encryptPasswordConfirm)
+
   const autosyncText = state.autosync !== null ? autosyncStatusText(state.autosync, uiT) : t('autosync.statusNever')
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
   const autosyncCountdownMs = state.autosync !== null && state.autosync.elapsedMs >= 0
@@ -496,7 +688,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     value={state.repoUrl}
                     placeholder="https://github.com/user/private-repo.git"
                     disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ repoUrl: e.target.value }) }}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      patch({ repoUrl: e.target.value })
+                      scheduleConfigSave() // 改动自动保存（防抖；关闭设置页不丢输入）
+                    }}
                   />
                   <span className={css.hint}>{t('config.repoUrlHint')}</span>
                 </label>
@@ -513,7 +708,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     autoComplete="off"
                     placeholder={t('config.tokenPlaceholder')}
                     disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ token: e.target.value }) }}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      patch({ token: e.target.value })
+                      scheduleConfigSave()
+                    }}
                   />
                   <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
                 </label>
@@ -573,6 +771,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                   onChange={(e: ChangeEvent<HTMLSelectElement>) => {
                     const p = presetById(e.target.value)
                     patch({ webdavUrl: p.url })
+                    scheduleConfigSave()
                   }}
                 >
                   {WEBDAV_PRESETS.map((p) => (
@@ -587,7 +786,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     value={state.webdavUrl}
                     placeholder="https://dav.example.com/dav/config"
                     disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ webdavUrl: e.target.value }) }}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      patch({ webdavUrl: e.target.value })
+                      scheduleConfigSave()
+                    }}
                   />
                   <span className={css.hint}>{t('webdav.urlHint')}</span>
                 </label>
@@ -604,7 +806,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     autoComplete="off"
                     placeholder="alice"
                     disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ webdavUsername: e.target.value }) }}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      patch({ webdavUsername: e.target.value })
+                      scheduleConfigSave()
+                    }}
                   />
                   <span className={css.hint}>{t('webdav.usernameHint')}</span>
                 </label>
@@ -621,12 +826,27 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     autoComplete="off"
                     placeholder={t('webdav.passwordPlaceholder')}
                     disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ webdavPassword: e.target.value }) }}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      patch({ webdavPassword: e.target.value })
+                      scheduleConfigSave()
+                    }}
                   />
                   <span className={css.hint}>{t('webdav.passwordHint', { ref: SYNC_WEBDAV_CREDENTIAL_REF })}</span>
                 </label>
               </>
             )}
+
+            {/* 配置保存：改动自动保存（防抖）；按钮提供立即保存与明确反馈 */}
+            <div className={css.actionRow}>
+              <Button
+                variant="primary"
+                disabled={state.busy !== null || state.savingConfig || !remoteReady}
+                onClick={() => { flushConfigSave() }}
+              >
+                {state.savingConfig ? <Spinner label={t('config.saving')} /> : t('config.save')}
+              </Button>
+            </div>
+            <span className={css.hint}>{t('config.saveHint')}</span>
           </Card>
 
           {/* 同步状态 */}
@@ -720,6 +940,69 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             )}
           </Card>
 
+          {/* 加密与密钥导出（手动推送；仿「导出备份·自定义模式」安全选项） */}
+          <Card>
+            <span className={css.groupLabel}>{t('mode.security')}</span>
+            <Checkbox
+              checked={state.encrypt}
+              onChange={setEncrypt}
+              label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
+            />
+            <div className={css.hint}>{t('mode.encryptHint')}</div>
+            {state.encrypt && (
+              <div className={css.secretFields}>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>{t('mode.password')}</span>
+                  <input
+                    type="password"
+                    className={css.input}
+                    value={state.encryptPassword}
+                    autoComplete="new-password"
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ encryptPassword: e.target.value }) }}
+                  />
+                </label>
+                <label className={css.field}>
+                  <span className={css.fieldLabel}>{t('mode.passwordConfirm')}</span>
+                  <input
+                    type="password"
+                    className={css.input}
+                    value={state.encryptPasswordConfirm}
+                    autoComplete="new-password"
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ encryptPasswordConfirm: e.target.value }) }}
+                  />
+                </label>
+                {state.encryptPassword !== '' && state.encryptPassword !== state.encryptPasswordConfirm && (
+                  <span className={css.formError}>{t('mode.passwordMismatch')}</span>
+                )}
+                {state.encryptPassword === '' && (
+                  <span className={css.formError}>{t('mode.passwordRequired')}</span>
+                )}
+              </div>
+            )}
+            <Checkbox
+              checked={state.includeSecrets}
+              onChange={setIncludeSecrets}
+              label={<span className={css.categoryName}>{t('mode.includeSecrets')}</span>}
+            />
+            <div className={css.hint}>{t('mode.includeSecretsHint')}</div>
+            <span className={css.hint}>{t('mode.encryptAutosyncNotice')}</span>
+          </Card>
+
+          {/* 解密密码（拉取/一键同步加密快照用；仅内存） */}
+          <Card>
+            <label className={css.field}>
+              <span className={css.fieldLabel}>{t('mode.decryptPassword')}</span>
+              <input
+                type="password"
+                className={css.input}
+                value={state.decryptPassword}
+                autoComplete="off"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ decryptPassword: e.target.value }) }}
+              />
+              <span className={css.hint}>{t('mode.decryptPasswordHint')}</span>
+            </label>
+          </Card>
+
           {/* 一键同步 + 手动推送/拉取 */}
           <div className={css.actionRow}>
             <Button
@@ -729,7 +1012,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             >
               {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}
             </Button>
-            <Button disabled={!buttons.canPush || githubBusy || !pushSelectionReady} onClick={() => { void runPush() }}>
+            <Button disabled={!buttons.canPush || githubBusy || !pushSelectionReady || encryptInvalid} onClick={() => { void runPush() }}>
               {state.busy === 'push' ? <Spinner label={buttons.pushLabel} /> : buttons.pushLabel}
             </Button>
             <Button disabled={!buttons.canPull || githubBusy} onClick={() => { void runPull() }}>

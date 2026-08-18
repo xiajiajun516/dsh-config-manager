@@ -16,15 +16,19 @@ import {
 test('writeSyncSelection + readSyncSelection：advanced 模式写入 → 读回字段一致', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-rt-'));
   try {
-    await writeSyncSelection(dir, { schemaVersion: 1, mode: 'advanced', sections: ['settings', 'skills'] });
+    await writeSyncSelection(dir, { schemaVersion: 1, mode: 'advanced', sections: ['settings', 'skills'], encrypt: true, includeSecrets: true });
     const sel = await readSyncSelection(dir);
     assert.equal(sel.mode, 'advanced');
     assert.deepEqual(sel.sections, ['settings', 'skills']);
+    assert.equal(sel.encrypt, true);
+    assert.equal(sel.includeSecrets, true);
     // 原始文件校验
     const raw = JSON.parse(await fs.readFile(path.join(dir, SYNC_SELECTION_FILE), 'utf8'));
     assert.equal(raw.schemaVersion, SYNC_SELECTION_SCHEMA_VERSION);
     assert.equal(raw.mode, 'advanced');
     assert.deepEqual(raw.sections, ['settings', 'skills']);
+    assert.equal(raw.encrypt, true);
+    assert.equal(raw.includeSecrets, true);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
@@ -77,13 +81,27 @@ test('readSyncSelection：非法 mode / 非字符串 sections 元素 → 过滤�
 
 test('effectiveSections：advanced + 非空 → 勾选分区；default / advanced 空勾选 → undefined（全量）', () => {
   assert.deepEqual(
-    effectiveSections({ schemaVersion: 1, mode: 'advanced', sections: ['settings', 'skills'] }),
+    effectiveSections({ schemaVersion: 1, mode: 'advanced', sections: ['settings', 'skills'], encrypt: false, includeSecrets: false }),
     ['settings', 'skills'],
   );
   assert.equal(effectiveSections(defaultSyncSelection()), undefined, 'default 模式 = 全量推荐分区');
   assert.equal(
-    effectiveSections({ schemaVersion: 1, mode: 'advanced', sections: [] }),
+    effectiveSections({ schemaVersion: 1, mode: 'advanced', sections: [], encrypt: false, includeSecrets: false }),
     undefined,
     'advanced 但未勾选 → 回退全量（避免自动同步卡死）',
   );
+});
+
+test('readSyncSelection：includeSecrets 但未 encrypt（持久化被篡改）→ 强制关闭导出密钥', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-safe-'));
+  try {
+    await fs.writeFile(
+      path.join(dir, SYNC_SELECTION_FILE),
+      JSON.stringify({ schemaVersion: 1, mode: 'advanced', sections: ['settings'], encrypt: false, includeSecrets: true }),
+      'utf8',
+    );
+    const sel = await readSyncSelection(dir);
+    assert.equal(sel.encrypt, false);
+    assert.equal(sel.includeSecrets, false, '密钥未加密时强制关闭（安全兜底）');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

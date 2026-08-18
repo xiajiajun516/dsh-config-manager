@@ -44,6 +44,7 @@ export const SYNC_API = {
   cancel: '/api/dsh-config-manager/sync/cancel',
   autosync: '/api/dsh-config-manager/sync/autosync',
   selection: '/api/dsh-config-manager/sync/selection',
+  config: '/api/dsh-config-manager/sync/config',
   rollback: '/api/dsh-config-manager/sync/rollback',
 } as const;
 
@@ -86,6 +87,10 @@ export interface SyncSelectionPayload {
   mode: 'default' | 'advanced';
   /** 高级模式勾选分区；default 模式可为空数组 */
   sections: SectionId[];
+  /** 手动推送默认加密快照（密码每次推送输入，不持久化） */
+  encrypt?: boolean;
+  /** 手动推送默认导出真实凭据值（必须同时 encrypt） */
+  includeSecrets?: boolean;
 }
 
 /** webdav 通道状态字段（无任何 secret 值；password 只报 passwordConfigured 布尔） */
@@ -98,6 +103,20 @@ export interface WebDavStatusResponse {
   usernameConfigured: boolean;
   /** DSH credentials 中是否已存在密码（值永不返回） */
   passwordConfigured: boolean;
+}
+
+/** POST /sync/config 响应：保存成功后的轻量凭据状态（无 secret 值；UI 直接合并刷新徽章）。 */
+export interface SyncConfigSaveResponse {
+  ok: boolean;
+  configured: boolean;
+  transport: SyncTransportType;
+  /** git 通道：token 是否已配置（值永不返回） */
+  credentialConfigured: boolean;
+  /** webdav 通道：username/password 是否已配置（值永不返回；git 通道为 undefined） */
+  webdav?: {
+    usernameConfigured: boolean;
+    passwordConfigured: boolean;
+  };
 }
 
 /** 可同步分区条目（status.syncSections 项）。只含 portable —— 与 SyncEngine 同步通道一致。 */
@@ -113,7 +132,8 @@ export interface SyncSectionInfo {
  *  扁平形状与 Host parseSyncBody 一致：git 携带 repoUrl/token；
  *  webdav 携带 url/username/password（顶层，不嵌套 webdav 对象）。
  *  git 可执行文件固定使用系统 PATH 中的 git，不再接受自定义路径。
- *  sections 可选（高级/自定义导出模式）：只推送勾选分区；缺省 = 默认模式全部推荐分区。 */
+ *  sections 可选（高级/自定义导出模式）：只推送勾选分区；缺省 = 默认模式全部推荐分区。
+ *  encrypt/encryptPassword/includeSecrets：加密快照（含可选密钥导出；密码仅内存传输，绝不落盘）。 */
 export interface SyncPushPayload {
   /** 通道类型；缺省 'git' */
   transport?: SyncTransportType;
@@ -125,12 +145,21 @@ export interface SyncPushPayload {
   password?: string;
   /** 仅同步指定分区（缺省 = 全部 portable 推荐分区；即「默认/快速导出」vs「高级/自定义导出」） */
   sections?: SectionId[];
+  /** 加密快照（sections 载荷整体加密；开启时必须提供 encryptPassword） */
+  encrypt?: boolean;
+  /** 加密密码（仅本次请求体内存传输，Host 绝不落盘/落日志；encrypt=true 时必填） */
+  encryptPassword?: string;
+  /** 导出真实凭据值（必须同时 encrypt=true，否则 Host 拒绝：密钥绝不明文进同步通道） */
+  includeSecrets?: boolean;
 }
 
-/** pull 请求体（strategy 缺省 merge：冲突保留待决策；snapshotId 缺省 = 最新） */
+/** pull 请求体（strategy 缺省 merge：冲突保留待决策；snapshotId 缺省 = 最新；
+ *  decryptPassword 可选：拉取加密快照时提供，仅内存传输）。 */
 export interface SyncPullPayload extends SyncPushPayload {
   strategy?: 'merge' | 'replace' | 'skipExisting';
   snapshotId?: string;
+  /** 解密密码（拉取/一键同步遇到加密快照时提供；仅内存传输，绝不落盘） */
+  decryptPassword?: string;
 }
 
 /* ---------------------------------------------------------------- 一键同步（方案 A） */
@@ -459,6 +488,12 @@ export class SyncApi {
    *  自动同步调度器与手动 push 共用此配置（刷新/重启后仍然生效）。 */
   async saveSelection(payload: SyncSelectionPayload): Promise<SyncSelectionPayload> {
     return postJson<SyncSelectionPayload>(SYNC_API.selection, payload, this.t);
+  }
+
+  /** 保存同步通道配置（POST /sync/config）：url/username/password（git: repoUrl/token）持久化。
+   *  password/token 经 Host 写入 DSH credentials（值永不回传）；返回凭据布尔供 UI 刷新徽章。 */
+  async saveConfig(payload: SyncPushPayload): Promise<SyncConfigSaveResponse> {
+    return postJson<SyncConfigSaveResponse>(SYNC_API.config, payload, this.t);
   }
 
   /** 一键回滚：按 restoreId 调用 backup→rollback */

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { computeSnapshotMeta, manifestSummaryFrom } from './transport.ts';
 import { hashSection } from './sync-state.ts';
 import type { ManifestSummary, SyncSnapshot, SyncTransport } from './transport.ts';
-import type { Manifest, SectionId } from '../schema/types.ts';
+import type { Manifest, SectionData, SectionId } from '../schema/types.ts';
 
 function sampleSnapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
   return {
@@ -37,8 +37,9 @@ test('computeSnapshotMeta: 透传 id/createdAt/manifest，sections 为各分区�
   assert.equal(meta.id, 'snap-001');
   assert.equal(meta.createdAt, snap.createdAt);
   assert.deepEqual(meta.manifest, snap.manifest);
-  assert.equal(meta.sections['settings'], hashSection(snap.sections['settings']!));
-  assert.equal(meta.sections['providers'], hashSection(snap.sections['providers']!));
+  const snapPlain = snap.sections as Partial<Record<string, unknown>>;
+  assert.equal(meta.sections['settings'], hashSection(snapPlain['settings'] as SectionData));
+  assert.equal(meta.sections['providers'], hashSection(snapPlain['providers'] as SectionData));
   assert.equal(Object.keys(meta.sections).length, 2);
 });
 

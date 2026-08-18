@@ -53,3 +53,17 @@ export function cancelSelection(current: FileSelectModel): FileSelectModel {
 export function browseLabelKey(hasSelection: boolean): ConfigManagerKey {
   return hasSelection ? 'import.select.reselect' : 'import.select.browse'
 }
+
+/**
+ * select 步骤是否应渲染文件选择页。
+ *
+ * decrypt-archive（解锁整体加密容器）阶段发生时，step 仍可能是 'select'
+ * （上传后尚未 selectZip），此时渲染必须让位给解锁页而非文件选择页——
+ * 否则用户停在「已选择文件 + 取消/重新选择」页面，看不到密码输入界面，
+ * 无法继续导入加密快照（import-decrypt-archive-render 回归）。
+ *
+ * 入参用 string 而非 ui 类型，避免本纯函数模块引入跨层类型依赖（可 node --test 直测）。
+ */
+export function shouldRenderSelect(step: string, phase: string): boolean {
+  return !(step === 'select' && phase === 'decrypt-archive')
+}

@@ -25,7 +25,12 @@ import { parseJsonSafe } from '../../utils/json.ts';
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** 保留 id：与 index.json 冲突（id 'index' 会占用索引文件路径） */
 const RESERVED_IDS = new Set(['index']);
-const DEFAULT_TIMEOUT_MS = 30_000;
+/**
+ * 默认单请求超时（ms）。WebDAV 上传大快照（含多个分区配置）与读写索引在慢速
+ * 服务器（如坚果云限速、自建 NAS）下较慢，30s 常不够 → 提高至 120s；
+ * 业务侧（makeSyncEngine）还会显式传 timeoutMs 覆盖默认值。
+ */
+const DEFAULT_TIMEOUT_MS = 120_000;
 /** 错误消息里截取的响应体最大长度（防超大/二进制响应撑爆消息） */
 const ERR_BODY_MAX = 500;
 const SNAPSHOTS_SEG = 'snapshots';
@@ -67,7 +72,7 @@ export interface WebDavTransportOptions {
   credentials: WebDavCredentialProvider;
   /** 可注入 request（测试 mock 用）；缺省 = 全局 fetch + AbortController 超时 */
   request?: WebDavRequestFn;
-  /** 单请求超时 ms，默认 30000 */
+  /** 单请求超时 ms，默认 120000（慢速 WebDAV 上传大快照需要宽裕窗口；0 = 不超时） */
   timeoutMs?: number;
   /** 消息翻译器（缺省 zh） */
   msg?: MsgFunc;

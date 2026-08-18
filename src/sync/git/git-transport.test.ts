@@ -19,7 +19,7 @@ import type { SyncSnapshot } from '../transport.ts';
 
 const TEST_TOKEN = 'secret-token-xyz-123';
 
-function sampleSnapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
+function sampleSnapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot & { sections: Record<string, unknown> } {
   return {
     id: 'snap-001',
     createdAt: '2026-08-16T12:00:00.000Z',
@@ -35,7 +35,7 @@ function sampleSnapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
       providers: { version: 1, providers: { deepseek: { route: '/v1' } } },
     },
     ...overrides,
-  };
+  } as SyncSnapshot & { sections: Record<string, unknown> };
 }
 
 /** 记录每次 git 调用的 mock exec：默认全部成功；按需特判 */

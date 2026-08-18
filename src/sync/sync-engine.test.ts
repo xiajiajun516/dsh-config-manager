@@ -15,16 +15,23 @@ import path from 'node:path';
 import { SyncEngine, MAX_REMOTE_SNAPSHOTS } from './sync-engine.ts';
 import type { SyncApplyPlan } from './risk.ts';
 import { hashSection, loadSyncState, SYNC_STATE_FILE } from './sync-state.ts';
+import { decryptSectionsPayload } from './snapshot-crypto.ts';
 import { computeSnapshotMeta } from './transport.ts';
-import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
+import { isEncryptedSections } from './transport.ts';
+import type { EncryptedSections, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
 import { createAdapters } from '../adapters/index.ts';
 import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import { Importer } from '../core/importer.ts';
 import type { SectionId } from '../schema/types.ts';
+import type { SectionData } from '../schema/types.ts';
+
+/** 测试辅助：取明文 sections（同步测试构造/上传的快照均为普通快照，非加密载荷）。 */
+function plainSections(s: SyncSnapshot['sections']): Partial<Record<SectionId, SectionData>> {
+  return s as Partial<Record<SectionId, SectionData>>;
+}
 
 /** 内存 SyncTransport：记录方法调用（spy），供断言「pull 不写远端」 */
-class MemSyncTransport implements SyncTransport {
-  readonly type = 'memory';
+class MemSyncTransport implements SyncTransport {  readonly type = 'memory';
   snapshots = new Map<string, SyncSnapshot>();
   metas: SyncSnapshotMeta[] = [];
   calls: string[] = [];
@@ -102,17 +109,17 @@ test('push: 收集 portable 分区 → 上传快照 → 更新 sync-state → �
     assert.ok(uploaded, '快照已上传');
     assert.equal(uploaded.createdAt, '2026-08-16T12:00:00.000Z');
     assert.equal(uploaded.manifest.containsSecrets, false);
-    const exportedGeneral = (uploaded.sections['settings'] as { namespaces: Record<string, { value: unknown; revision: number; secrets: unknown[] }> }).namespaces['general']!;
+    const exportedGeneral = (plainSections(uploaded.sections)['settings'] as { namespaces: Record<string, { value: unknown; revision: number; secrets: unknown[] }> }).namespaces['general']!;
     assert.ok(exportedGeneral, 'settings.general 已导出');
     assert.deepEqual(exportedGeneral.value, { theme: 'dark', language: 'zh-CN' });
     assert.equal(exportedGeneral.revision, 3);
     assert.deepEqual(exportedGeneral.secrets, []);
-    assert.equal((uploaded.sections['skills'] as { files: unknown[] }).files.length, 1);
+    assert.equal((plainSections(uploaded.sections)['skills'] as { files: unknown[] }).files.length, 1);
 
     // sync-state 更新：每分区 hash + updatedAt + lastSyncAt + transport 绑定
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSyncAt, '2026-08-16T12:00:00.000Z');
-    assert.equal(state.sections['settings']?.hash, hashSection(uploaded.sections['settings']!));
+    assert.equal(state.sections['settings']?.hash, hashSection(plainSections(uploaded.sections)['settings']!));
     assert.equal(state.sections['settings']?.updatedAt, '2026-08-16T12:00:00.000Z');
     assert.deepEqual(state.transport, { type: 'memory', ref: '' });
     const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
@@ -152,7 +159,7 @@ test('push: secret 断言——敏感字段值被剥离、凭据分区绝不参�
       assert.ok(!(forbidden in uploaded.sections), `分区 ${forbidden} 不得进入快照`);
     }
     // 剥离后保留字段名与空值（供「需补录」提示）
-    const general = (uploaded.sections['settings'] as { namespaces: Record<string, unknown> }).namespaces['general'] as { value: Record<string, unknown> };
+    const general = (plainSections(uploaded.sections)['settings'] as { namespaces: Record<string, unknown> }).namespaces['general'] as { value: Record<string, unknown> };
     assert.equal(general.value['apiToken'], '');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
@@ -283,6 +290,125 @@ test('push: 构造注入 sections（自动同步持久化配置）→ 未显式�
     assert.deepEqual(uploaded.manifest.sectionIds.sort(), ['settings', 'skills']);
     assert.ok(!('providers' in uploaded.sections), '注入范围外的 portable 分区不进入');
     assert.ok(!('plugins' in uploaded.sections));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------- 加密快照（push 加密 + 密钥导出；pull 解密） ---------------- */
+
+test('push: encrypt+password → 上传加密快照（manifest.encrypted=true，sections 为密文，远端无明文）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-encrypt-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-enc', encrypt: true, password: 'pw-12345678' });
+    assert.equal(report.ok, true);
+    const uploaded = transport.snapshots.get('sync-enc')!;
+    assert.equal(uploaded.manifest.encrypted, true, 'manifest 标记加密');
+    assert.equal(uploaded.manifest.containsSecrets, false, '未导出密钥时 containsSecrets=false');
+    assert.ok(isEncryptedSections(uploaded.sections), 'sections 为密文载荷');
+    const serialized = JSON.stringify(uploaded);
+    assert.ok(!serialized.includes('dark'), '明文内容不得出现在加密快照（远端/序列化）');
+    // 解密后还原
+    const decrypted = await decryptSectionsPayload(uploaded.sections.encrypted, 'pw-12345678');
+    assert.ok('settings' in decrypted, '解密后分区还原');
+    // 本地不写明文祖先/散文件副本（密钥不落盘）
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-enc');
+    assert.ok(state.sections['settings'] !== undefined, '基线 hash 已记录（明文 hash，可比较）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: encrypt + includeSecrets → 凭据值进入加密快照（解密后可恢复），未加密快照仍不含', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-secrets-enc-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    ctx.settings.ns.set('general', {
+      value: { theme: 'dark', apiToken: 'sk-cred-123', password: 'p@ss' },
+      revision: 3,
+      secrets: [{ path: ['apiToken'], set: true }],
+    });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    // 加密 + 导出密钥：凭据值进入密文载荷
+    const report = await engine.push({ snapshotId: 'sync-sec-enc', encrypt: true, password: 'pw-12345678', includeSecrets: true });
+    assert.equal(report.ok, true);
+    const uploaded = transport.snapshots.get('sync-sec-enc')!;
+    assert.equal(uploaded.manifest.encrypted, true);
+    assert.equal(uploaded.manifest.containsSecrets, true, '加密快照声明含秘密');
+    const serialized = JSON.stringify(uploaded);
+    assert.ok(!serialized.includes('sk-cred-123'), '密文载荷不得含明文凭据值');
+    // 解密后凭据值可恢复
+    const encSections = uploaded.sections as EncryptedSections;
+    const decrypted = await decryptSectionsPayload(encSections.encrypted, 'pw-12345678');
+    const general = (decrypted['settings'] as { namespaces: Record<string, { value: Record<string, unknown> }> }).namespaces['general'];
+    assert.equal(general!.value['apiToken'], 'sk-cred-123', '解密后凭据值恢复');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: includeSecrets 但未加密 → 拒绝（密钥绝不明文进同步通道）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-secrets-nocrypt-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    await assert.rejects(
+      () => engine.push({ snapshotId: 'x', includeSecrets: true }),
+      /导出密钥必须同时加密快照/,
+    );
+    assert.equal(transport.snapshots.size, 0, '拒绝时不上传任何快照');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: encrypt 但无密码 → 拒绝（密码绝不落盘，必须本次提供）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-enc-nopw-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    await assert.rejects(() => engine.push({ snapshotId: 'x', encrypt: true }), /加密快照必须提供密码/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('pull: 远端加密快照无密码 → 明确报错；提供密码 → 解密成功并产出差异', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-pull-enc-'));
+  try {
+    // 先加密推送一个快照（含凭据值），模拟远端加密快照
+    const srcCtx = makeContext('win32', 'C:\\Users\\alice');
+    srcCtx.settings.ns.set('general', {
+      value: { theme: 'dark', apiToken: 'sk-cred-123' },
+      revision: 5,
+      secrets: [{ path: ['apiToken'], set: true }],
+    });
+    const transport = new MemSyncTransport();
+    const pushEngine = makeEngine({ ctx: srcCtx, transport, stateDir: tmp });
+    await pushEngine.push({ snapshotId: 'remote-enc', encrypt: true, password: 'pw-12345678', includeSecrets: true });
+
+    // 目标侧：无密码 pull → 报错提示需密码
+    const dstCtx = makeContext('win32', 'C:\\Users\\alice');
+    for (const n of NS) dstCtx.settings.registered.add(n);
+    const dstEngine = makeEngine({ ctx: dstCtx, transport, stateDir: tmp });
+    await assert.rejects(() => dstEngine.pull(), /已加密，需要解密密码/);
+
+    // 提供密码 → 解密成功，差异报告含凭据值条目
+    const report = await dstEngine.pull({ password: 'pw-12345678' });
+    assert.equal(report.ok, true);
+    assert.ok(report.changes.length > 0, '解密后产出差异');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

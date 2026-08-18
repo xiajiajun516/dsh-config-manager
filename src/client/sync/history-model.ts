@@ -68,6 +68,7 @@ export function describeSkipReason(reason: string | undefined): string {
     case 'no-remote': return '远端无快照';
     case 'not-configured': return '未配置仓库';
     case 'network': return '网络问题';
+    case 'encrypted': return '远端快照已加密，自动同步跳过（请手动同步）';
     default: return reason ?? '未知';
   }
 }

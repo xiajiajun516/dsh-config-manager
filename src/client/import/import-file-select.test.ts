@@ -24,6 +24,7 @@ import {
   cancelSelection,
   consumePickedFile,
   fileSelectModel,
+  shouldRenderSelect,
   type FileSelectModel,
 } from './import-file-select.ts'
 
@@ -122,6 +123,44 @@ test('import-file-select: 取消选择回 idle（可重新选择）', () => {
 test('import-file-select: 浏览按钮文案随选择状态切换（重新选择 / 选择 ZIP 文件）', () => {
   assert.equal(browseLabelKey(false), 'import.select.browse')
   assert.equal(browseLabelKey(true), 'import.select.reselect')
+})
+
+/* ----------------- 回归：整体加密容器必须先渲染解锁页，而不是停在选择页 */
+
+test('import-file-select: 普通阶段渲染 select 页（shouldRenderSelect=true）', () => {
+  // step=='select' 且未进入解密容器阶段 → 正常渲染文件选择页
+  assert.equal(shouldRenderSelect('select', 'preview'), true)
+})
+
+test('import-decrypt-archive-render: 上传加密容器后必须渲染解锁页而非 select 页', async () => {
+  // 复现 bug：上传 DCA1 整体加密容器 → 设置 phase='decrypt-archive'，但 step 仍为 'select'
+  // （未 selectZip）。此前组件的 `if (step === 'select')` 先命中，用户停在文件选择页
+  // 看不到密码输入界面 → shouldRenderSelect 必须为 false，让位给解锁页。
+  const api = makeApi({
+    upload: async (file: File): Promise<UploadResponse> =>
+      ({ zipPath: `/tmp/${file.name}`, name: file.name, sizeBytes: file.size, containerType: 'encrypted' }),
+  })
+  const store = new RunStore({ storage: null })
+  const uploads: UploadResponse = await api.upload(zip('encrypted.zip'))
+  assert.equal(uploads.containerType, 'encrypted')
+
+  // 上传加密容器后的 store 状态：containerEncrypted=true、phase='decrypt-archive'、step 仍 'select'
+  store.patch({
+    import: {
+      containerEncrypted: true,
+      archiveUnlocked: false,
+      zipPath: uploads.zipPath,
+      phase: 'decrypt-archive',
+      selectedFileName: 'encrypted.zip',
+    },
+  })
+  const imp = store.getSnapshot().import
+  assert.equal(imp.step, 'select', '加密容器上传后 step 仍为 select（未 selectZip）')
+  assert.equal(imp.phase, 'decrypt-archive')
+  // 渲染判定核心：此时必须让位给解锁页，选择页不得渲染
+  assert.equal(shouldRenderSelect(imp.step, imp.phase), false, '加密容器阶段不渲染文件选择页')
+  // 对照：普通 ZIP 阶段则照常渲染选择页
+  assert.equal(shouldRenderSelect('select', 'preview'), true)
 })
 
 /* --------------------------- 接线验收：选 A → 取消 → 换选 B → 提交的是 B */

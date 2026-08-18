@@ -53,6 +53,7 @@ test('describeSkipReason：已知原因映射，未知回退原串', () => {
   assert.equal(describeSkipReason('no-remote'), '远端无快照');
   assert.equal(describeSkipReason('not-configured'), '未配置仓库');
   assert.equal(describeSkipReason('network'), '网络问题');
+  assert.equal(describeSkipReason('encrypted'), '远端快照已加密，自动同步跳过（请手动同步）');
   assert.equal(describeSkipReason('weird'), 'weird');
   assert.equal(describeSkipReason(undefined), '未知');
 });

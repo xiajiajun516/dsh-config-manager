@@ -260,6 +260,31 @@ export class AutoSyncScheduler {
 
       const engine = this.makeSyncEngine(syncCfg!);
 
+      // 加密快照检测：远端最新快照为加密 → 自动同步无密码无法解密 → 整体跳过，
+      // 同步历史记录 skipReason='encrypted'（提示需手动输入密码同步）。
+      // 加密快照只通过手动推送/拉取产生与消费；自动同步仅处理普通快照。
+      // list 失败宽容处理：视为无加密快照，继续正常流程（网络问题由后续链路暴露为 failed）。
+      let encryptedRemote = false;
+      try {
+        const metas = await engine.listSnapshots();
+        const latestMeta = metas.length > 0 ? metas[metas.length - 1]! : null;
+        encryptedRemote = latestMeta !== null && latestMeta.manifest.encrypted === true;
+      } catch {
+        encryptedRemote = false;
+      }
+      if (encryptedRemote) {
+        const result: AutosyncRunResult = {
+          status: 'skipped', direction: 'pull', skipReason: 'encrypted', historyId,
+          consecutiveFailures: cfg.consecutiveFailures,
+        };
+        await this.appendHistoryFn({
+          direction: 'pull', status: 'skipped', skipReason: 'encrypted',
+          createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
+        });
+        await this.writeFinalConfig(cfg, result, nowIso, historyId);
+        return result;
+      }
+
       // 事件驱动触发（§3.1/§3.2/§3.3 看变化不看时间）：
       // - remoteNew：远端是否出现比本地祖先更新的快照 → 决定是否做下载合并（Phase A）；
       // - localDirty：本地 portable 配置相对基线是否真的变了 → 决定是否上传（Phase C）。

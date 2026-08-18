@@ -15,9 +15,13 @@ import { readSnapshotFromDir, writeSnapshotToDir, SNAPSHOT_MANIFEST_FILE, isSafe
 import { createSnapshotFs } from './fs.ts';
 import { hashSection } from './sync-state.ts';
 import type { SnapshotFs } from './fs.ts';
+import type { SectionData, SectionId } from '../schema/types.ts';
 import type { SyncSnapshot } from './transport.ts';
 
-function sampleSnapshot(): SyncSnapshot {
+/** 测试用「明文快照」类型：sections 恒为普通分区 Record（layout 测试不涉及加密载荷）。 */
+type PlainSnapshot = SyncSnapshot & { sections: Record<string, SectionData> };
+
+function sampleSnapshot(): PlainSnapshot {
   return {
     id: 'snap-001',
     createdAt: '2026-08-16T12:00:00.000Z',
@@ -74,7 +78,7 @@ test('writeSnapshotToDir + readSnapshotFromDir: 完整往返（JSON 平铺 + 文
     assert.equal((await fs.readFile(path.join(tmp, 'custom', 'skills', 'nested', 'tool.md'), 'utf8')), '# Tool\n');
     assert.equal((await fs.readFile(path.join(tmp, 'plugin-files', 'dsh-ssh', 'main.js'), 'utf8')), 'module.exports = 1\n');
 
-    const back = await readSnapshotFromDir(tmp);
+    const back = (await readSnapshotFromDir(tmp)) as unknown as PlainSnapshot;
     assert.equal(back.id, snap.id);
     assert.equal(back.createdAt, snap.createdAt);
     assert.deepEqual(back.manifest, snap.manifest);
@@ -100,7 +104,7 @@ test('writeSnapshotToDir: manifest.sectionHashes 覆盖全部包含分区', asyn
     const manifest = await writeSnapshotToDir(snap, tmp);
     assert.deepEqual(Object.keys(manifest.sectionHashes).sort(), ['pluginFiles', 'providers', 'settings', 'skills']);
     for (const [id, data] of Object.entries(snap.sections)) {
-      assert.equal(manifest.sectionHashes[id as keyof typeof snap.sections], hashSection(data));
+      assert.equal(manifest.sectionHashes[id as SectionId], hashSection(data));
     }
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
@@ -113,7 +117,7 @@ test('writeSnapshotToDir: 空文件类分区也保留（目录存在 → 读回�
     const snap = sampleSnapshot();
     snap.sections['skills'] = { version: 1, files: [] };
     await writeSnapshotToDir(snap, tmp);
-    const back = await readSnapshotFromDir(tmp);
+    const back = (await readSnapshotFromDir(tmp)) as unknown as PlainSnapshot;
     assert.deepEqual(back.sections['skills'], { version: 1, files: [] });
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
@@ -201,10 +205,12 @@ test('注入验证：内存 SnapshotFs 驱动同一往返逻辑', async () => {
   const manifest = await writeSnapshotToDir(snap, 'snap/001', memFs);
   const back = await readSnapshotFromDir('snap/001', memFs);
   assert.equal(back.id, snap.id);
-  assert.deepEqual(back.sections['settings'], snap.sections['settings']);
-  const skills = back.sections['skills'] as { files: { relativePath: string; data: Uint8Array; contentHash: string }[] };
+  const backPlain = back.sections as Partial<Record<SectionId, SectionData>>;
+  const snapPlain = snap.sections as Partial<Record<SectionId, SectionData>>;
+  assert.deepEqual(backPlain['settings'], snapPlain['settings']);
+  const skills = backPlain['skills'] as { files: { relativePath: string; data: Uint8Array; contentHash: string }[] };
   assert.equal(skills.files.length, 2);
-  assert.equal(hashSection(back.sections['skills']!), manifest.sectionHashes['skills']);
+  assert.equal(hashSection(backPlain['skills']!), manifest.sectionHashes['skills']);
 });
 
 test('createSnapshotFs: 默认 node:fs 适配器可用（真实临时目录）', async () => {

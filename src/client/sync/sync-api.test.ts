@@ -496,3 +496,48 @@ test('S-25 api.saveSelection()：POST /sync/selection 携带 mode + sections（�
   assert.equal(sent['mode'], 'advanced');
   assert.deepEqual(sent['sections'], ['settings', 'skills']);
 });
+
+test('S-26 api.push()：加密快照 → 请求体携带 encrypt/encryptPassword/includeSecrets', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-enc', sections: ['settings'], warnings: [] });
+  });
+  const api = new SyncApi();
+  await api.push({
+    repoUrl: 'https://github.com/u/r.git',
+    encrypt: true,
+    encryptPassword: 'pw-12345678',
+    includeSecrets: true,
+  });
+  assert.equal(calls.length, 1);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['encrypt'], true);
+  assert.equal(sent['encryptPassword'], 'pw-12345678');
+  assert.equal(sent['includeSecrets'], true);
+});
+
+test('S-27 api.pull()：拉取加密快照 → 请求体携带 decryptPassword（仅内存传输）', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, snapshotId: 'sync-enc', changes: [], needsReview: false });
+  });
+  const api = new SyncApi();
+  await api.pull({ repoUrl: 'https://github.com/u/r.git', decryptPassword: 'pw-12345678' });
+  assert.equal(calls[0]?.url, SYNC_API.pull);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['decryptPassword'], 'pw-12345678');
+});
+
+test('S-28 api.status()：syncSelection 含 encrypt/includeSecrets 开关（UI 回填）', async () => {
+  const body = {
+    ok: true, configured: true, credentialConfigured: true, credentialWritable: true, sectionCount: 2,
+    syncSelection: { mode: 'advanced', sections: ['settings'], encrypt: true, includeSecrets: true },
+  };
+  installFetchMock(() => jsonResponse(200, body));
+  const api = new SyncApi();
+  const result = await api.status();
+  assert.equal(result.syncSelection?.encrypt, true);
+  assert.equal(result.syncSelection?.includeSecrets, true);
+});
