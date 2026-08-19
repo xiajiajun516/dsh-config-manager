@@ -20,7 +20,7 @@ export function makeManifest(): Manifest {
     sections: {
       settings: true, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
       skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
-      credentialsStatus: false, secrets: false, sessions: false,
+      credentialsStatus: false, secrets: false, sessions: false, self: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },
   };
@@ -104,7 +104,7 @@ export function makePlan(overrides: Partial<ImportPlan> = {}): ImportPlan {
     estimatedActions: {
       settings: 2, ui: 0, providers: 0, plugins: 1, mcp: 1, prompts: 1,
       skills: 0, agentPresets: 0, agentInstructions: 0, workspaces: 0, pluginFiles: 0,
-      credentialsStatus: 0, secrets: 0, sessions: 0,
+      credentialsStatus: 0, secrets: 0, sessions: 0, self: 0,
     },
     ...overrides,
   };
@@ -167,9 +167,9 @@ export class MockImportPort implements ImportPort {
     this.planCalls.push(decisions);
     return this.plan;
   }
-  async decryptArchive(zipPath: string): Promise<{ zipPath: string }> {
-    // 测试用：把传入路径视为已解锁的明文 ZIP（不真正解密）
-    return { zipPath };
+  async decryptArchive(zipPath: string): Promise<{ zipPath: string; refs: string[] }> {
+    // 测试用：把传入路径视为已解锁的明文 ZIP（不真正解密），无内部凭据
+    return { zipPath, refs: [] };
   }
   async executeImportPlan(
     _zip: string,

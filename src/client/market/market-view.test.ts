@@ -18,7 +18,8 @@ import type { ImportPlan, PlanItem } from '../../core/types.ts'
 import {
   approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, computeItemBadge,
   defaultApprovals, filterMarketItems, formatMarketTime, isHighRiskAdapter, marketDetailView,
-  marketListSummary, marketStatusText, marketWarningsLines, marketItemWarnings, needsReview, toMarketListItem,
+  marketListSummary, marketStatusText, marketWarningsLines, marketItemWarnings, needsReview,
+  sourceBadgeKind, isThirdPartyItem, toMarketListItem,
 } from './market-view.ts'
 
 /* ---------------------------------------------------------------- 共享渲染模型（re-export 权威） */
@@ -84,6 +85,38 @@ test('market-view: toMarketListItem（共享权威）投影 MarketIndexItem → 
   assert.equal(out.name, 'x')
   assert.equal(out.cacheState, 'cached')
   assert.deepEqual(out.categories, ['c'])
+})
+
+/* ---------------------------------------------------------------- 客户端专属：来源徽章（阶段 1 条目级来源仓库） */
+
+const OFFICIAL_URL = 'https://github.com/xiajiajun516/dsh-config-market.git'
+const THIRD_PARTY_URL = 'https://github.com/alice/dsh-config-market-items.git'
+
+test('market-view: sourceBadgeKind 无 repo（与市场同仓）→ 官方 ok', () => {
+  assert.equal(sourceBadgeKind({}, OFFICIAL_URL), 'ok')
+  assert.equal(sourceBadgeKind({ repo: undefined }, OFFICIAL_URL), 'ok')
+  assert.equal(isThirdPartyItem({}, OFFICIAL_URL), false)
+})
+
+test('market-view: sourceBadgeKind repo 为官方默认地址 → 官方 ok', () => {
+  assert.equal(sourceBadgeKind({ repo: OFFICIAL_URL }, OFFICIAL_URL), 'ok')
+  assert.equal(isThirdPartyItem({ repo: OFFICIAL_URL }, OFFICIAL_URL), false)
+})
+
+test('market-view: sourceBadgeKind repo 为第三方仓库 → 第三方 warn', () => {
+  assert.equal(sourceBadgeKind({ repo: THIRD_PARTY_URL }, OFFICIAL_URL), 'warn')
+  assert.equal(isThirdPartyItem({ repo: THIRD_PARTY_URL }, OFFICIAL_URL), true)
+})
+
+test('market-view: sourceBadgeKind 市场被 env 覆盖为预览仓库时，无 repo 条目随市场显示第三方 warn（语义自洽）', () => {
+  // 非官方默认地址的 builtinUrl（维护者预览仓库）：无 repo 条目与市场同仓 → 非官方
+  assert.equal(sourceBadgeKind({}, THIRD_PARTY_URL), 'warn')
+  assert.equal(isThirdPartyItem({}, THIRD_PARTY_URL), true)
+})
+
+test('market-view: sourceBadgeKind 有 repo 时 builtinUrl 不参与判定（repo 非官方即 warn）', () => {
+  // 即便传入的 builtinUrl 与该 repo 相同，只要 repo 非官方默认地址 → 第三方 warn
+  assert.equal(sourceBadgeKind({ repo: THIRD_PARTY_URL }, THIRD_PARTY_URL), 'warn')
 })
 
 /* ---------------------------------------------------------------- 客户端专属：搜索 / 类别 */

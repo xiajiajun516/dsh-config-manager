@@ -8,11 +8,13 @@
  * m2：主视图 tab（view）与全部子视图状态统一由模块级 runStore 持有
  * （sessionStorage 持久化 + 切 tab/关面板不重建控制器实例）；挂载时
  * 经 GET /runs + 轮询 /progress 恢复进行中的 run（刷新/重开面板后）。
+ * 低频面板的「当前打开面板」（panel）同样存于 runStore：切 tab 不丢、
+ * 刷新后回到原 tab；面板内部状态由各自视图镜像进 store（见各视图头部注释）。
  */
-import { useEffect, useSyncExternalStore, useState } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.ts'
-import { runStore, type MainView } from './run-store.ts'
+import { runStore, type MainView, type PanelId } from './run-store.ts'
 import { ExportView } from './export/ExportView.tsx'
 import { ImportWizardView } from './import/ImportWizardView.tsx'
 import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
@@ -28,16 +30,13 @@ export type ConfigManagerSectionProps =
 
 /**
  * 设置页容器：Export / Import / Snapshots / Sync / Market / About 六视图切换。
- * Export/Import 状态在模块级 store（切 tab 不丢失）；快照恢复/远程同步/配置市场/关于为
- * 低频显式操作，其状态组件内自持（local state，不进 sessionStorage）。
+ * 所有 tab（主视图 view + 低频面板 panel）状态都在模块级 store（切 tab/刷新不丢）；
+ * 面板内部状态由各视图镜像进 store（Sync/Market/Snapshots），敏感字段白名单剔除。
  */
 export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const view = state.view
-  const [snapshotsOpen, setSnapshotsOpen] = useState(false)
-  const [syncOpen, setSyncOpen] = useState(false)
-  const [marketOpen, setMarketOpen] = useState(false)
-  const [aboutOpen, setAboutOpen] = useState(false)
+  const panel = state.panel
 
   // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
   // 这里经 /runs 找回活跃 runId 再轮询 /progress）；卸载时停止轮询，重开再订阅。
@@ -48,44 +47,17 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, 
     }
   }, [api])
 
+  /** 切到主视图（export/import）：清空低频面板，记录到 store（刷新恢复）。 */
   const setView = (next: MainView): void => {
-    setSnapshotsOpen(false)
-    setSyncOpen(false)
-    setMarketOpen(false)
-    setAboutOpen(false)
-    runStore.patch({ view: next })
+    runStore.patch({ view: next, panel: null })
   }
 
-  const openSnapshots = (): void => {
-    setSnapshotsOpen(true)
-    setSyncOpen(false)
-    setMarketOpen(false)
-    setAboutOpen(false)
+  /** 打开低频面板（snapshots/sync/market/about）：记录到 store（刷新恢复）。 */
+  const openPanel = (next: PanelId): void => {
+    runStore.patch({ panel: next })
   }
 
-  const openSync = (): void => {
-    setSyncOpen(true)
-    setSnapshotsOpen(false)
-    setMarketOpen(false)
-    setAboutOpen(false)
-  }
-
-  const openMarket = (): void => {
-    setMarketOpen(true)
-    setSnapshotsOpen(false)
-    setSyncOpen(false)
-    setAboutOpen(false)
-  }
-
-  const openAbout = (): void => {
-    setAboutOpen(true)
-    setSnapshotsOpen(false)
-    setSyncOpen(false)
-    setMarketOpen(false)
-  }
-
-  const activeTab: MainView | 'snapshots' | 'sync' | 'market' | 'about' =
-    marketOpen ? 'market' : syncOpen ? 'sync' : snapshotsOpen ? 'snapshots' : aboutOpen ? 'about' : view
+  const activeTab: MainView | PanelId = panel ?? view
 
   return (
     <div className={css.section}>
@@ -115,9 +87,9 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, 
             type="button"
             role="tab"
             aria-selected={activeTab === 'snapshots'}
-            data-active={snapshotsOpen ? '' : undefined}
+            data-active={panel === 'snapshots' ? '' : undefined}
             className={css.viewTab}
-            onClick={openSnapshots}
+            onClick={() => { openPanel('snapshots') }}
           >
             {t('view.snapshots')}
           </button>
@@ -125,9 +97,9 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, 
             type="button"
             role="tab"
             aria-selected={activeTab === 'sync'}
-            data-active={syncOpen ? '' : undefined}
+            data-active={panel === 'sync' ? '' : undefined}
             className={css.viewTab}
-            onClick={openSync}
+            onClick={() => { openPanel('sync') }}
           >
             {t('view.sync')}
           </button>
@@ -135,9 +107,9 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, 
             type="button"
             role="tab"
             aria-selected={activeTab === 'market'}
-            data-active={marketOpen ? '' : undefined}
+            data-active={panel === 'market' ? '' : undefined}
             className={css.viewTab}
-            onClick={openMarket}
+            onClick={() => { openPanel('market') }}
           >
             {t('view.market')}
           </button>
@@ -145,22 +117,22 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, 
             type="button"
             role="tab"
             aria-selected={activeTab === 'about'}
-            data-active={aboutOpen ? '' : undefined}
+            data-active={panel === 'about' ? '' : undefined}
             className={css.viewTab}
-            onClick={openAbout}
+            onClick={() => { openPanel('about') }}
           >
             {t('view.about')}
           </button>
         </div>
       </div>
       <div className={css.sectionBody}>
-        {aboutOpen
+        {panel === 'about'
           ? <AboutPanel api={api} t={t} />
-          : marketOpen
+          : panel === 'market'
             ? <MarketPanel api={marketApi} importApi={api} t={marketT} />
-            : syncOpen
+            : panel === 'sync'
               ? <SyncSettingsView api={syncApi} t={syncT} />
-              : snapshotsOpen
+              : panel === 'snapshots'
                 ? <SnapshotsPanel api={api} t={t} />
                 : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
       </div>

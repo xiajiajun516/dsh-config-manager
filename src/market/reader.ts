@@ -6,7 +6,10 @@
  * - 复用点：git 命令执行层（execFile promise 封装 / 脱敏 mask / SnapshotFs）+ validateRepoUrl；
  * - 每次读取：ensureRepo() 首次 git clone --depth 1，已存在副本则 git pull --ff-only；
  * - 默认公开市场不注入凭据（repoUrl 拒绝 userinfo）；二期私有市场才走 token credential helper；
- * - itemId 必须过 assertSafeItemId（防 items/<id>/ 越界）。
+ * - itemId 必须过 assertSafeItemId（防 items/<id>/ 越界）；
+ * - 条目级来源仓库（方案 B，docs/design/2026-08-19-market-publish-design.md §3.2）：
+ *   readItemManifest/readItemZip 接受可选 repo，读取目录 = repo ?? url；workDir 由调用方按
+ *   来源仓库 url-hash 分目录，index.json 永远从市场仓库读。
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -15,7 +18,7 @@ import { promisify } from 'node:util';
 
 import { createSnapshotFs, joinFs } from '../sync/fs.ts';
 import type { SnapshotFs } from '../sync/fs.ts';
-import { validateRepoUrl } from '../sync/sync-config.ts';
+import { validateMarketRepoUrl } from './url.ts';
 import type { GitExecResult } from '../sync/git/git-transport.ts';
 import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
@@ -61,10 +64,10 @@ export class MarketReaderError extends Error {
 export interface MarketReader {
   /** 拉取市场目录（拉最新 index.json；返回原文 + 拉取时间） */
   readIndex(opts: { url: string; workDir: string }): Promise<{ text: string; fetchedAt: string }>;
-  /** 拉取单条目 manifest.json（返回 raw 文本） */
-  readItemManifest(opts: { url: string; workDir: string; itemId: string }): Promise<{ text: string }>;
-  /** 拉取单条目 config.zip（返回 bytes） */
-  readItemZip(opts: { url: string; workDir: string; itemId: string }): Promise<{ data: Uint8Array }>;
+  /** 拉取单条目 manifest.json（返回 raw 文本）；repo 可选：条目来源仓库，缺省 = url（市场仓库） */
+  readItemManifest(opts: { url: string; workDir: string; itemId: string; repo?: string }): Promise<{ text: string }>;
+  /** 拉取单条目 config.zip（返回 bytes）；repo 可选：条目来源仓库，缺省 = url（市场仓库） */
+  readItemZip(opts: { url: string; workDir: string; itemId: string; repo?: string }): Promise<{ data: Uint8Array }>;
 }
 
 export interface GitMarketReaderOptions {
@@ -111,11 +114,17 @@ export class GitMarketReader implements MarketReader {
     return { text: raw, fetchedAt: new Date().toISOString() };
   }
 
-  /** 拉取单条目 L2 manifest.json 原文 */
-  async readItemManifest(opts: { url: string; workDir: string; itemId: string }): Promise<{ text: string }> {
+  /**
+   * 拉取单条目 L2 manifest.json 原文。
+   * repo 存在时从条目来源仓库读取（读取目录 = repo ?? url；workDir 由调用方按来源仓库
+   * url-hash 分目录，天然隔离），index.json 永远从市场仓库读（不变）。
+   */
+  async readItemManifest(opts: { url: string; workDir: string; itemId: string; repo?: string }): Promise<{ text: string }> {
     assertSafeItemId(opts.itemId);
     validateMarketUrl(opts.url);
-    await this.ensureRepo(opts.url, opts.workDir);
+    const sourceUrl = opts.repo ?? opts.url;
+    if (opts.repo !== undefined) validateMarketUrl(opts.repo);
+    await this.ensureRepo(sourceUrl, opts.workDir);
     const abs = joinFs(opts.workDir, `items/${opts.itemId}/manifest.json`);
     if (!(await this.fsx.exists(abs))) {
       throw new MarketReaderError(this.msg('market.missingManifest', { id: opts.itemId }));
@@ -124,11 +133,13 @@ export class GitMarketReader implements MarketReader {
     return { text: raw };
   }
 
-  /** 拉取单条目 L3 config.zip 字节 */
-  async readItemZip(opts: { url: string; workDir: string; itemId: string }): Promise<{ data: Uint8Array }> {
+  /** 拉取单条目 L3 config.zip 字节（repo 语义同 readItemManifest）。 */
+  async readItemZip(opts: { url: string; workDir: string; itemId: string; repo?: string }): Promise<{ data: Uint8Array }> {
     assertSafeItemId(opts.itemId);
     validateMarketUrl(opts.url);
-    await this.ensureRepo(opts.url, opts.workDir);
+    const sourceUrl = opts.repo ?? opts.url;
+    if (opts.repo !== undefined) validateMarketUrl(opts.repo);
+    await this.ensureRepo(sourceUrl, opts.workDir);
     const abs = joinFs(opts.workDir, `items/${opts.itemId}/config.zip`);
     if (!(await this.fsx.exists(abs))) {
       throw new MarketReaderError(this.msg('market.missingZip', { id: opts.itemId }));
@@ -172,8 +183,8 @@ export class GitMarketReader implements MarketReader {
   }
 }
 
-/** 校验市场仓库地址（复用 validateRepoUrl）；非法抛错。 */
+/** 校验市场仓库地址（validateRepoUrl + 强制 http(s)，拒绝 git@/ssh）；非法抛错。 */
 export function validateMarketUrl(url: string): void {
-  const err = validateRepoUrl(url);
+  const err = validateMarketRepoUrl(url);
   if (err !== null) throw new MarketReaderError(err);
 }

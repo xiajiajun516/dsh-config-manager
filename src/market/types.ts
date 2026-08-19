@@ -52,6 +52,9 @@ export interface MarketIndexItem {
   updatedAt?: string;
   /** 内容类别标签（展示用；禁止执行语义） */
   categories?: string[];
+  /** 条目来源仓库 URL（发布者自托管；读取路由依据）；缺省 = 市场仓库自身（兼容现状单仓）。
+   *  存在时必须过 validateRepoUrl（拒绝 userinfo / 空白），只读拉取、永不注入凭据。 */
+  repo?: string;
 }
 
 /** 市场目录 index.json（字段白名单：多出的字段拒绝） */
@@ -103,6 +106,8 @@ export interface ParseIndexResult {
   ok: boolean;
   index: MarketIndex | null;
   errors: string[];
+  /** 因 repo 非法（未过 validateRepoUrl）被丢弃的条目数：仅丢弃该条目，不整体拒绝 index */
+  dropped?: number;
 }
 
 export interface ParseItemManifestResult {
@@ -134,6 +139,8 @@ export interface MarketListItem {
   version?: string;
   updatedAt?: string;
   categories?: string[];
+  /** 条目来源仓库 URL（来自 index 条目；UI 据此显示来源徽章）；缺省 = 市场仓库自身 */
+  repo?: string;
   /** 本地缓存状态：cached | fresh | none（UI 徽章） */
   cacheState: 'cached' | 'fresh' | 'none';
 }
@@ -147,6 +154,8 @@ export interface MarketItemDetail {
   description?: string;
   updatedAt?: string;
   sections: SectionId[];
+  /** 条目来源仓库 URL（本次下载实际读取的仓库，repo ?? 市场 url）；展示用 */
+  repo?: string;
   /** 供应链/来源信息（UI 恒展示） */
   provenance?: MarketItemProvenance;
   /** 下载/校验时间 */
@@ -196,4 +205,35 @@ export interface MarketRefreshResponse {
 export interface MarketBrowseResponse {
   ok: boolean;
   items: MarketListItem[];
+}
+
+/** POST /market/prepare 请求体：由上传 zip + 用户填写元数据生成市场条目包（发布向导） */
+export interface MarketPreparePayload {
+  /** 受控临时区中的配置 zip 路径（upload 端点返回；必须引用 staged upload） */
+  zipPath: string;
+  itemId: string;
+  name: string;
+  version?: string;
+  description?: string;
+  author?: string;
+  /** 作者托管仓库 URL（可选；非空须过 validateRepoUrl） */
+  repoUrl?: string;
+  categories?: string[];
+}
+
+/** POST /market/prepare 响应：条目包生成结果（manifest 文本 + 校验摘要 + 发布目录） */
+export interface MarketPrepareResponse {
+  ok: boolean;
+  /** 发布目录（受控临时区，含 items/<id>/manifest.json + config.zip；懒 GC 与下载临时区同款） */
+  dir: string;
+  /** 发布目录打包 zip 路径（受控临时区，供 /download 端点下载；懒 GC 清理） */
+  zipPath: string;
+  /** items/<id>/manifest.json 内容（pretty JSON，可直接复制/写入） */
+  manifestText: string;
+  /** config.zip 的 SHA-256（与 manifest.checksums.zip 一致） */
+  sha256: string;
+  /** zip 内启用的分区（与 manifest.sections 一致） */
+  sections: SectionId[];
+  /** 供应链警示（恒生成：发布即公开、未经审核） */
+  warnings: string[];
 }

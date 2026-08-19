@@ -271,10 +271,13 @@ test('S-13 api.cancel()：POST /sync/cancel 携带 syncSessionId', async () => {
 
 /* ------------------------------------------------ 自动同步端点契约 */
 
-test('S-14 api.autosyncStatus()：GET /sync/autosync，解析 enabled/interval/elapsedMs', async () => {
+test('S-14 api.autosyncStatus()：GET /sync/autosync 返回 { git, webdav }，按通道取状态', async () => {
   const body = {
-    enabled: true, interval: '30m', lastRunAt: '2026-08-17T10:00:00.000Z',
-    lastRunStatus: 'success', consecutiveFailures: 0, elapsedMs: 60000,
+    git: {
+      enabled: true, interval: '30m', lastRunAt: '2026-08-17T10:00:00.000Z',
+      lastRunStatus: 'success', consecutiveFailures: 0, elapsedMs: 60000,
+    },
+    webdav: { enabled: false, interval: '30m', consecutiveFailures: 0, elapsedMs: -1 },
   };
   let called: FetchCall | null = null;
   installFetchMock((call) => {
@@ -283,15 +286,19 @@ test('S-14 api.autosyncStatus()：GET /sync/autosync，解析 enabled/interval/e
   });
   const lastCall = (): FetchCall | null => called;
   const api = new SyncApi();
-  const result = await api.autosyncStatus();
+  const result = await api.autosyncStatus('git');
   assert.equal(result.enabled, true);
   assert.equal(result.interval, '30m');
   assert.equal(result.consecutiveFailures, 0);
   assert.equal(result.elapsedMs, 60000);
   assert.equal(lastCall()?.url, SYNC_API.autosync);
+  // 全量返回：webdav 通道独立
+  const all = await api.autosyncStatusAll();
+  assert.equal(all.git.enabled, true);
+  assert.equal(all.webdav.enabled, false, 'webdav 通道自动同步独立');
 });
 
-test('S-15 api.autosyncUpdate()：POST /sync/autosync，请求体携带 enabled/interval', async () => {
+test('S-15 api.autosyncUpdate()：POST /sync/autosync，请求体携带 transport + enabled/interval', async () => {
   const body = {
     enabled: true, interval: '60m', consecutiveFailures: 0, elapsedMs: -1,
   };
@@ -301,12 +308,13 @@ test('S-15 api.autosyncUpdate()：POST /sync/autosync，请求体携带 enabled/
     return jsonResponse(200, body);
   });
   const api = new SyncApi();
-  const result = await api.autosyncUpdate({ enabled: true, interval: '60m' });
+  const result = await api.autosyncUpdate({ transport: 'webdav', enabled: true, interval: '60m' });
   assert.equal(result.enabled, true);
   assert.equal(result.interval, '60m');
   assert.equal(calls[0]?.url, SYNC_API.autosync);
   assert.equal(calls[0]?.init?.method, 'POST');
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['transport'], 'webdav', '按通道写入 autosync 配置');
   assert.equal(sent['enabled'], true);
   assert.equal(sent['interval'], '60m');
 });
@@ -480,19 +488,20 @@ test('S-24 api.status()：解析 syncSelection（持久化分区选择，UI 回�
   assert.equal(lastCall()?.url, SYNC_API.status);
 });
 
-test('S-25 api.saveSelection()：POST /sync/selection 携带 mode + sections（持久化到 Host）', async () => {
+test('S-25 api.saveSelection()：POST /sync/selection 携带 transport + mode + sections（持久化到 Host）', async () => {
   const calls: FetchCall[] = [];
   installFetchMock((call) => {
     calls.push(call);
-    return jsonResponse(200, { ok: true, mode: 'advanced', sections: ['settings', 'skills'] });
+    return jsonResponse(200, { ok: true, transport: 'webdav', mode: 'advanced', sections: ['settings', 'skills'] });
   });
   const api = new SyncApi();
-  const result = await api.saveSelection({ mode: 'advanced', sections: ['settings', 'skills'] });
+  const result = await api.saveSelection({ transport: 'webdav', mode: 'advanced', sections: ['settings', 'skills'] });
   assert.equal(result.mode, 'advanced');
   assert.equal(calls.length, 1);
   assert.equal(calls[0]?.url, SYNC_API.selection);
   assert.equal(calls[0]?.init?.method, 'POST');
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['transport'], 'webdav', '按通道写入分区选择');
   assert.equal(sent['mode'], 'advanced');
   assert.deepEqual(sent['sections'], ['settings', 'skills']);
 });
@@ -540,4 +549,54 @@ test('S-28 api.status()：syncSelection 含 encrypt/includeSecrets 开关（UI �
   const result = await api.status();
   assert.equal(result.syncSelection?.encrypt, true);
   assert.equal(result.syncSelection?.includeSecrets, true);
+});
+
+test('S-28b api.status()：syncSelectionByChannel / autosyncByChannel 按通道独立解析（子 tab UI 回填）', async () => {
+  const body = {
+    ok: true, configured: true, credentialConfigured: true, credentialWritable: true, sectionCount: 2,
+    syncSelectionByChannel: {
+      git: { mode: 'default', sections: [], encrypt: false, includeSecrets: false },
+      webdav: { mode: 'advanced', sections: ['settings'], encrypt: true, includeSecrets: true },
+    },
+    autosyncByChannel: {
+      git: { enabled: true, interval: '30m', consecutiveFailures: 0, elapsedMs: 60000 },
+      webdav: { enabled: false, interval: '5m', consecutiveFailures: 0, elapsedMs: -1 },
+    },
+  };
+  installFetchMock(() => jsonResponse(200, body));
+  const api = new SyncApi();
+  const result = await api.status();
+  assert.equal(result.syncSelectionByChannel?.git.mode, 'default', 'git 通道选择独立');
+  assert.equal(result.syncSelectionByChannel?.webdav.mode, 'advanced');
+  assert.equal(result.syncSelectionByChannel?.webdav.encrypt, true);
+  assert.equal(result.autosyncByChannel?.git.enabled, true, 'git 通道自动同步独立');
+  assert.equal(result.autosyncByChannel?.webdav.enabled, false);
+  assert.equal(result.autosyncByChannel?.webdav.interval, '5m');
+});
+
+test('S-29 api.saveUiPrefs()：POST /sync/ui-prefs 携带 lastSyncChannel（磁盘持久化）', async () => {
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, { ok: true, lastSyncChannel: 'webdav' });
+  });
+  const api = new SyncApi();
+  const result = await api.saveUiPrefs({ lastSyncChannel: 'webdav' });
+  assert.equal(result.lastSyncChannel, 'webdav');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, SYNC_API.uiPrefs);
+  assert.equal(calls[0]?.init?.method, 'POST');
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.equal(sent['lastSyncChannel'], 'webdav');
+});
+
+test('S-30 api.status()：lastSyncChannel 回填（磁盘 ui-prefs；UI 通道回填权威来源）', async () => {
+  const body = {
+    ok: true, configured: true, credentialConfigured: true, credentialWritable: true, sectionCount: 2,
+    lastSyncChannel: 'webdav',
+  };
+  installFetchMock(() => jsonResponse(200, body));
+  const api = new SyncApi();
+  const result = await api.status();
+  assert.equal(result.lastSyncChannel, 'webdav');
 });

@@ -81,25 +81,29 @@ import { SyncEngine } from './sync/sync-engine.ts'
 import type { ApplyItemsReport } from './sync/sync-engine.ts'
 import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
-import { defaultAutosyncConfig, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
-import type { AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
+import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
+import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
 import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
 import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
 import {
-  readSyncConfig, readFullSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
+  readSyncConfig, readSyncConfigFor, readFullSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
   isGitConfig, isWebDavConfig,
 } from './sync/sync-config.ts'
-import type { SyncConfig, FullSyncConfig } from './sync/sync-config.ts'
+import type { SyncConfig, FullSyncConfig, SyncTransportType } from './sync/sync-config.ts'
 import {
-  defaultSyncSelection, effectiveSections, readSyncSelection, writeSyncSelection,
+  defaultSyncSelection, effectiveSections, readAllSyncSelections, readSyncSelection, writeSyncSelection,
   SYNC_SELECTION_SCHEMA_VERSION,
 } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
+import { readUiPrefs, writeUiPrefs, UI_PREFS_SCHEMA_VERSION } from './sync/ui-prefs.ts'
+import type { UiPrefsChannel } from './sync/ui-prefs.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
 import { parseMarketIndex } from './market/index-parser.ts'
 import { BUILTIN_MARKET_URL, isOfficialMarket } from './market/builtin.ts'
 import { validateMarketItem } from './market/security.ts'
+import { prepareMarketItem } from './market/prepare.ts'
+import { validateMarketRepoUrl } from './market/url.ts'
 import { marketItemWarnings, toMarketListItem } from './market/view.ts'
 import type {
   MarketDownloadResult, MarketIndex, MarketItemDetail, MarketListItem, MarketSummary,
@@ -108,7 +112,7 @@ import { sha256Hex } from './utils/hashing.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
-import { parseZip } from './utils/zip.ts'
+import { parseZip, zipToBuffer } from './utils/zip.ts'
 import { isSameOrChild, normalizePath } from './utils/paths.ts'
 import { createLogger, type Logger } from './utils/logger.ts'
 
@@ -176,7 +180,6 @@ const API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
-  decryptVerify: '/api/dsh-config-manager/decrypt-verify',
   decryptArchive: '/api/dsh-config-manager/decrypt-archive',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
@@ -203,11 +206,14 @@ const API = {
   syncSelection: '/api/dsh-config-manager/sync/selection',
   // m-sync-config：同步通道配置保存（UI 表单自动保存 /「保存配置」按钮；凭据写 DSH credentials）
   syncConfig: '/api/dsh-config-manager/sync/config',
+  // m-self：插件 UI 偏好（如上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
+  syncUiPrefs: '/api/dsh-config-manager/sync/ui-prefs',
   // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
   marketStatus: '/api/dsh-config-manager/market/status',
   marketRefresh: '/api/dsh-config-manager/market/refresh',
   marketBrowse: '/api/dsh-config-manager/market/browse',
   marketDownload: '/api/dsh-config-manager/market/download',
+  marketPrepare: '/api/dsh-config-manager/market/prepare',
 } as const
 
 /**
@@ -1074,8 +1080,8 @@ function isAutosyncInterval(v: unknown): v is AutosyncInterval {
 }
 
 /** 自动同步状态响应（GET /sync/autosync 与 POST 回填；读盘计算 elapsedMs）。 */
-async function buildAutosyncStatus(dir: string): Promise<AutosyncStatusResponse> {
-  const cfg = await readAutosyncConfig(dir)
+async function buildAutosyncStatus(dir: string, channel: SyncTransportType): Promise<AutosyncStatusResponse> {
+  const cfg = await readAutosyncConfig(dir, channel)
   const elapsedMs = cfg.lastRunAt === undefined || cfg.lastRunAt === ''
     ? -1
     : Math.max(0, Date.now() - Date.parse(cfg.lastRunAt))
@@ -1089,6 +1095,28 @@ async function buildAutosyncStatus(dir: string): Promise<AutosyncStatusResponse>
     elapsedMs,
     ...(cfg.lastRunHistoryId !== undefined ? { lastRunHistoryId: cfg.lastRunHistoryId } : {}),
   }
+}
+
+/** 全部通道的自动同步状态（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
+async function buildAutosyncStatusByChannel(dir: string): Promise<Record<SyncTransportType, AutosyncStatusResponse>> {
+  const all = await readAllAutosyncConfigs(dir)
+  const build = async (channel: SyncTransportType): Promise<AutosyncStatusResponse> => {
+    const cfg = all[channel]
+    const elapsedMs = cfg.lastRunAt === undefined || cfg.lastRunAt === ''
+      ? -1
+      : Math.max(0, Date.now() - Date.parse(cfg.lastRunAt))
+    return {
+      enabled: cfg.enabled,
+      interval: cfg.interval,
+      ...(cfg.lastRunAt !== undefined ? { lastRunAt: cfg.lastRunAt } : {}),
+      ...(cfg.lastRunStatus !== undefined ? { lastRunStatus: cfg.lastRunStatus } : {}),
+      ...(cfg.lastRunMessage !== undefined ? { lastRunMessage: cfg.lastRunMessage } : {}),
+      consecutiveFailures: cfg.consecutiveFailures,
+      elapsedMs,
+      ...(cfg.lastRunHistoryId !== undefined ? { lastRunHistoryId: cfg.lastRunHistoryId } : {}),
+    }
+  }
+  return { git: await build('git'), webdav: await build('webdav') }
 }
 
 /** GET /sync/autosync 响应类型（与 sync-api.ts AutosyncStatusResponse 对齐） */
@@ -1304,26 +1332,43 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     return cfg
   }
 
-  /** 同步分区选择缓存（sync-selection.json；makeSyncEngine 同步读取用，保存路由更新）。
-   *  null = 尚未加载（启动竞态窗口）；读取/使用处兜底 defaultSyncSelection。 */
-  let selectionCache: SyncSelection | null = null
-  void readSyncSelection(syncDir).then((sel) => { selectionCache = sel }).catch(() => { /* 读失败保持缺省 */ })
+  /** 同步分区选择缓存（按通道；sync-selection.json；makeSyncEngine 同步读取用，保存路由更新）。
+   *  缺失通道 = 尚未加载（启动竞态窗口）；读取/使用处兜底 defaultSyncSelection。 */
+  const selectionCache: Partial<Record<SyncTransportType, SyncSelection>> = {}
+  void readAllSyncSelections(syncDir).then((all) => {
+    selectionCache.git = all.git
+    selectionCache.webdav = all.webdav
+  }).catch(() => { /* 读失败保持缺省 */ })
 
-  /** 确保缓存已加载（status/save 路由调用；启动竞态兜底）。 */
-  const ensureSelectionLoaded = async (): Promise<SyncSelection> => {
-    if (selectionCache !== null) return selectionCache
+  /** 确保指定通道缓存已加载（status/save 路由调用；启动竞态兜底）。 */
+  const ensureSelectionLoaded = async (channel: SyncTransportType): Promise<SyncSelection> => {
+    const cached = selectionCache[channel]
+    if (cached !== undefined) return cached
     try {
-      selectionCache = await readSyncSelection(syncDir)
+      const sel = await readSyncSelection(syncDir, channel)
+      selectionCache[channel] = sel
+      return sel
     } catch {
-      selectionCache = defaultSyncSelection()
+      const fallback = defaultSyncSelection()
+      selectionCache[channel] = fallback
+      return fallback
     }
-    return selectionCache
   }
 
-  /** status 响应用的分区选择视图（{ mode, sections, encrypt, includeSecrets }，无 schemaVersion/密码）。 */
-  const selectionView = async (): Promise<{ mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean }> => {
-    const sel = await ensureSelectionLoaded()
+  /** 指定通道的分区选择视图（{ mode, sections, encrypt, includeSecrets }，无 schemaVersion/密码）。 */
+  const selectionView = async (channel: SyncTransportType): Promise<{ mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean }> => {
+    const sel = await ensureSelectionLoaded(channel)
     return { mode: sel.mode, sections: sel.sections, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
+  }
+
+  /** 全部通道的分区选择视图（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
+  const selectionViewByChannel = async (): Promise<Record<SyncTransportType, { mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean }>> => {
+    const all = await readAllSyncSelections(syncDir)
+    selectionCache.git = all.git
+    selectionCache.webdav = all.webdav
+    const view = (sel: SyncSelection): { mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean } =>
+      ({ mode: sel.mode, sections: sel.sections, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets })
+    return { git: view(all.git), webdav: view(all.webdav) }
   }
 
   /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。
@@ -1358,7 +1403,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         msg,
       })
     }
-    const sections = effectiveSections(selectionCache ?? defaultSyncSelection())
+    const channel: SyncTransportType = isWebDavConfig(cfg) ? 'webdav' : 'git'
+    const sections = effectiveSections(selectionCache[channel] ?? defaultSyncSelection())
     return new SyncEngine({
       ctx: host,
       transport,
@@ -1456,11 +1502,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       const names = await fs.readdir(tmpDir)
       const now = Date.now()
       for (const name of names) {
-        if (!name.startsWith('market-') || !name.endsWith('.zip')) continue
+        // market-*.zip（未确认导入的暂存）与 publish-*.zip（发布向导产物）都纳入保留策略
+        if ((!name.startsWith('market-') && !name.startsWith('publish-')) || !name.endsWith('.zip')) continue
         const p = join(tmpDir, name)
         try {
           const st = await fs.stat(p)
-          if (now - st.mtimeMs > MARKET_TMP_RETENTION_MS) await fs.rm(p, { force: true })
+          if (now - st.mtimeMs > MARKET_TMP_RETENTION_MS) await fs.rm(p, { force: true, recursive: true })
         } catch {
           // 单文件 stat/删除失败 → 跳过（尽力而为）
         }
@@ -1645,48 +1692,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
-    // ------------------------------------------------------ decrypt-verify
-    // 加密备份的解密密码验证（只读零写入）：成功返回将恢复的凭据数；密码错误返回 400。
-    // 密码仅内存随请求体传入，绝不落盘/落日志；供导入向导在确认前先行解锁校验。
-    {
-      kind: 'exact',
-      path: API.decryptVerify,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
-        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
-          writeJson(res, 400, { error: 'zipPath is required and must reference a staged backup' })
-          return
-        }
-        const password =
-          typeof body?.['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
-        if (password === undefined) {
-          writeJson(res, 400, { error: msg('import.encryptedPasswordRequired') })
-          return
-        }
-        try {
-          const decrypted = await tryDecryptCredentials(zipPath, password)
-          const isEncrypted = decrypted !== undefined
-          writeJson(res, 200, {
-            ok: true,
-            encrypted: isEncrypted,
-            secretCount: isEncrypted ? decrypted.size : 0,
-            // 解密覆盖的凭据 ref 名（非值）：UI 据此从「补录密钥」阶段剔除已恢复项
-            refs: isEncrypted ? [...decrypted.keys()] : [],
-          })
-        } catch (error) {
-          writeJson(res, 400, { error: decryptErrorText(error, msg) })
-        }
-      },
-    },
     // ------------------------------------------------------ decrypt-archive
     // 整体加密备份容器的解锁（只读，零写入到任何配置）：用备份密码解密上传的加密容器，
     // 得到明文 ZIP 写入受控临时目录并返回新 zipPath，供 analyze/plan/execute 引用。
+    // 导出时容器密码与内部 secrets.enc 密码同源（同一 password 派生两层加密），
+    // 因此顺带在明文 ZIP 上解出内部凭据覆盖清单（refs，非值）一并返回——
+    // 导入全程只需输入这一次密码，无需第二个密码校验页面。
     // 密码仅内存随请求体传入，绝不落盘/落日志；解出的明文 ZIP 亦为临时文件，导入结束后清理。
     {
       kind: 'exact',
@@ -1730,7 +1741,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const plain = await decryptArchive(container, verified.info, verified.kdf, password)
           plainZipPath = join(tmpDir, `decrypted-${randomBytes(6).toString('hex')}.zip`)
           await fs.writeFile(plainZipPath, plain)
-          writeJson(res, 200, { zipPath: plainZipPath })
+          // 顺带解出内部凭据覆盖清单（同一密码；旧版 DSC1-only 备份无 secrets.enc → 空）
+          let refs: string[] = []
+          try {
+            const decrypted = await tryDecryptCredentials(plainZipPath, password)
+            if (decrypted !== undefined) refs = [...decrypted.keys()]
+          } catch {
+            // 内部凭据解密失败不影响容器解锁结果（密码已通过容器 GCM 认证）
+          }
+          writeJson(res, 200, { zipPath: plainZipPath, refs })
         } catch (error) {
           if (plainZipPath !== null) await fs.rm(plainZipPath, { force: true }).catch(() => undefined)
           writeJson(res, 400, { error: decryptErrorText(error, msg) })
@@ -1949,6 +1968,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
           ])
           const transport: SyncConfig['transport'] = full !== null && full.transport === 'webdav' ? 'webdav' : 'git'
+          // m-self：插件 UI 偏好（上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
+          const uiPrefs = await readUiPrefs(syncDir)
           // webdav 配置视图（配置过即返回，与当前通道无关：供表单在 git ↔ webdav 切换时回填）
           const webdav = full?.webdav !== undefined
             ? {
@@ -1971,11 +1992,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
             sectionCount: Object.keys(state.sections).length,
             lastTransport: state.transport,
+            // 上次选择的同步通道（磁盘 ui-prefs；UI 回填优先于此，localStorage 仅兜底）
+            lastSyncChannel: uiPrefs.lastSyncChannel,
             // 可同步分区目录（「高级/自定义导出」勾选列表；只含 portable，无 secret 值）
             syncSections: syncSectionCatalog,
-            // 当前分区选择（默认/高级模式 + 勾选分区；UI 回填用，自动同步共用）
-            syncSelection: await selectionView(),
-            autosync: await buildAutosyncStatus(syncDir),
+            // 当前分区选择（默认/高级模式 + 勾选分区；当前激活通道；UI 回填用，自动同步共用）
+            syncSelection: await selectionView(transport),
+            // 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道）
+            syncSelectionByChannel: await selectionViewByChannel(),
+            // 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9）
+            autosync: await buildAutosyncStatus(syncDir, transport),
+            // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
+            autosyncByChannel: await buildAutosyncStatusByChannel(syncDir),
           })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
@@ -2015,6 +2043,28 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 }
               : undefined,
           })
+        } catch (error) {
+          writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ sync/ui-prefs
+    // m-self：保存插件 UI 偏好（当前为上次选择的同步通道；ui-prefs.json，随 self 分区进备份）。
+    // 纯偏好、无 secret；失败仅提示，不阻断同步主流程。
+    {
+      kind: 'exact',
+      path: API.syncUiPrefs,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const channel: UiPrefsChannel | undefined = body['lastSyncChannel'] === 'webdav' ? 'webdav' : body['lastSyncChannel'] === 'git' ? 'git' : undefined
+          await writeUiPrefs(syncDir, { schemaVersion: UI_PREFS_SCHEMA_VERSION, ...(channel !== undefined ? { lastSyncChannel: channel } : {}) })
+          writeJson(res, 200, { ok: true, lastSyncChannel: channel })
         } catch (error) {
           writeSyncRouteError(res, error)
         }
@@ -2475,9 +2525,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       },
     },
     // ------------------------------------------------------ sync/autosync
-    // m-sync-v2：自动同步配置读写（总开关 + 间隔 + 启动阈值 + 状态）。
-    // GET = 读状态；POST = 写配置。同一路径注册为一个 exact 路由（方法内部分发），
-    // 避免 webserver 对重复 exact 路径报错。
+    // m-sync-v2：自动同步配置读写（按通道：git/webdav 各自的开关 + 间隔 + 启动阈值 + 状态）。
+    // GET = 读全部通道状态（{ git, webdav }）；POST = 写指定通道（body.transport，缺省 git）。
+    // 同一路径注册为一个 exact 路由（方法内部分发），避免 webserver 对重复 exact 路径报错。
     {
       kind: 'exact',
       path: API.syncAutosync,
@@ -2485,7 +2535,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         if (req.method === 'GET') {
           if (!guard(req, res, 'GET')) return
           try {
-            writeJson(res, 200, await buildAutosyncStatus(syncDir))
+            writeJson(res, 200, await buildAutosyncStatusByChannel(syncDir))
           } catch (error) {
             writeSyncRouteError(res, error)
           }
@@ -2498,22 +2548,24 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
-          const cfg = await readAutosyncConfig(syncDir)
+          // 按通道读写：git/webdav 各自的自动同步配置与运行状态独立（缺省 git 兜底）
+          const channel: SyncTransportType = body['transport'] === 'webdav' ? 'webdav' : 'git'
+          const cfg = await readAutosyncConfig(syncDir, channel)
           if (typeof body['enabled'] === 'boolean') cfg.enabled = body['enabled']
           if (typeof body['interval'] === 'string' && isAutosyncInterval(body['interval'])) cfg.interval = body['interval']
           if (typeof body['startupMinIntervalMs'] === 'number' && Number.isFinite(body['startupMinIntervalMs']) && body['startupMinIntervalMs'] > 0) {
             cfg.startupMinIntervalMs = body['startupMinIntervalMs']
           }
-          await writeAutosyncConfig(syncDir, cfg)
+          await writeAutosyncConfig(syncDir, channel, cfg)
           if (scheduler) scheduler.reload().catch(() => { /* 尽力而为 */ })
-          writeJson(res, 200, await buildAutosyncStatus(syncDir))
+          writeJson(res, 200, await buildAutosyncStatus(syncDir, channel))
         } catch (error) {
           writeSyncRouteError(res, error)
         }
       },
     },
     // ------------------------------------------------------ sync/selection
-    // m-sync-selection：保存同步分区选择（默认/高级模式 + 勾选分区）。
+    // m-sync-selection：保存同步分区选择（按通道：git/webdav 各自的模式 + 勾选分区）。
     // 持久化到 sync-selection.json；自动同步调度器与手动 push 共用（makeSyncEngine 注入）。
     // sections 元素必须是可同步（portable）分区 id；mode 非法 → 回退 default。
     {
@@ -2527,6 +2579,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
+          // 按通道读写：git/webdav 各自的模式与分区勾选独立（缺省 git 兜底）
+          const channel: SyncTransportType = body['transport'] === 'webdav' ? 'webdav' : 'git'
           const mode: SyncSelectionMode = body['mode'] === 'advanced' ? 'advanced' : 'default'
           const rawSections = Array.isArray(body['sections']) ? body['sections'] : []
           const portableIds = new Set(syncSectionCatalog.map((s) => s.id))
@@ -2548,9 +2602,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             // 安全兜底：includeSecrets 必须同时 encrypt（密钥绝不明文进同步通道）
             includeSecrets: body['includeSecrets'] === true && body['encrypt'] === true,
           }
-          await writeSyncSelection(syncDir, next)
-          selectionCache = next
-          writeJson(res, 200, { ok: true, mode: next.mode, sections: next.sections, encrypt: next.encrypt, includeSecrets: next.includeSecrets })
+          await writeSyncSelection(syncDir, channel, next)
+          selectionCache[channel] = next
+          writeJson(res, 200, { ok: true, transport: channel, mode: next.mode, sections: next.sections, encrypt: next.encrypt, includeSecrets: next.includeSecrets })
         } catch (error) {
           writeSyncRouteError(res, error)
         }
@@ -2673,7 +2727,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       handler: async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
-        // 内置单市场：url 缺省用 BUILTIN_MARKET_URL；itemId 必填
+        // 内置单市场：url 缺省用 BUILTIN_MARKET_URL；itemId 必填；repo 可选（条目来源仓库，发布者自托管）
         const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
           ? body['url']
           : BUILTIN_MARKET_URL
@@ -2682,18 +2736,29 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           writeJson(res, 400, { error: 'itemId required' })
           return
         }
+        // repo 可选：条目来源仓库。非法（含 userinfo / 空白 / 非 http(s) 形态）→ 400，永不注入凭据。
+        const repo = (typeof body?.['repo'] === 'string' && body['repo'] !== '') ? body['repo'] : undefined
+        if (repo !== undefined) {
+          const repoErr = validateMarketRepoUrl(repo)
+          if (repoErr !== null) {
+            writeJson(res, 400, { error: `repo invalid: ${repoErr}` })
+            return
+          }
+        }
         try {
           const reader = makeMarketReader()
-          const workDir = marketWorkDir(url)
-          const { text: manifestRaw } = await reader.readItemManifest({ url, workDir, itemId })
-          const { data: zipBytes } = await reader.readItemZip({ url, workDir, itemId })
+          // 条目仓库与市场仓库分离时，workDir 按来源仓库 url-hash 分目录（天然隔离）
+          const sourceRepo = repo ?? url
+          const workDir = marketWorkDir(sourceRepo)
+          const { text: manifestRaw } = await reader.readItemManifest({ url, workDir, itemId, repo })
+          const { data: zipBytes } = await reader.readItemZip({ url, workDir, itemId, repo })
 
           const validation = validateMarketItem(itemId, manifestRaw, zipBytes)
           const manifest = validation.manifest
-          // 供应链警示恒生成（marketItemWarnings 模型层）；download 时间
+          // 供应链警示恒生成（marketItemWarnings 模型层）；download 时间；来源 URL 带条目仓库
           const downloadedAt = new Date().toISOString()
           const warnings = manifest !== null
-            ? marketItemWarnings(manifest, url, downloadedAt, msg)
+            ? marketItemWarnings(manifest, sourceRepo, downloadedAt, msg)
             : [`条目 ${itemId} 来自公共网络市场，未经官方审核（供应链警示）`]
 
           const base: MarketItemDetail = {
@@ -2704,6 +2769,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             description: manifest?.description,
             updatedAt: manifest?.updatedAt,
             sections: validation.sections,
+            repo: sourceRepo,
             provenance: manifest?.provenance,
             downloadedAt,
             status: validation.status,
@@ -2732,6 +2798,66 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
 
           const download: MarketDownloadResult = { ...base, zipPath, analysis, plan }
           writeJson(res, 200, download)
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ---------------------------------------------------- market/prepare
+    // 发布向导：由「用户上传的配置 zip + 用户填写元数据」生成市场条目包
+    // （L2 manifest + config.zip SHA-256 + sections），供 UI 展示/复制与引导推送。
+    // 零写入配置：只在受控临时区生成发布目录；插件不做任何 git 写操作、不持有凭据。
+    {
+      kind: 'exact',
+      path: API.marketPrepare,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
+        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
+          writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
+          return
+        }
+        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
+        const name = typeof body?.['name'] === 'string' ? body['name'] : ''
+        const version = typeof body?.['version'] === 'string' ? body['version'] : undefined
+        const description = typeof body?.['description'] === 'string' ? body['description'] : undefined
+        const author = typeof body?.['author'] === 'string' ? body['author'] : undefined
+        const repoUrl = typeof body?.['repoUrl'] === 'string' && body['repoUrl'] !== '' ? body['repoUrl'] : undefined
+        const categoriesRaw = body?.['categories']
+        const categories = Array.isArray(categoriesRaw)
+          ? categoriesRaw.filter((c): c is string => typeof c === 'string')
+          : undefined
+        try {
+          const zipBytes = await fs.readFile(zipPath)
+          const result = prepareMarketItem({ itemId, name, version, description, author, repoUrl, categories, zipBytes })
+          // 发布目录落到受控临时区（供 UI 展示目录结构；不写任何配置）
+          const dir = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}`)
+          const itemDir = join(dir, 'items', itemId)
+          await fs.mkdir(itemDir, { recursive: true })
+          await fs.writeFile(join(itemDir, 'manifest.json'), result.manifestText, 'utf8')
+          await fs.writeFile(join(itemDir, 'config.zip'), zipBytes)
+          // 打包发布目录为 zip（供 /download 端点下载；zip 由懒 GC 清理），
+          // 打包后删除中间目录，避免 publish-* 目录在 tmpDir 无限累积
+          const publishZip = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}.zip`)
+          await fs.writeFile(publishZip, Buffer.from(zipToBuffer([
+            { name: `items/${itemId}/manifest.json`, data: Buffer.from(result.manifestText, 'utf8') },
+            { name: `items/${itemId}/config.zip`, data: Buffer.from(zipBytes) },
+          ])))
+          await fs.rm(dir, { force: true, recursive: true }).catch(() => undefined)
+          writeJson(res, 200, {
+            ok: true,
+            dir,
+            zipPath: publishZip,
+            manifestText: result.manifestText,
+            sha256: result.sha256,
+            sections: result.sections,
+            warnings: result.warnings,
+          })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2768,6 +2894,14 @@ export function apply(ctx: Context, config?: Config): void {
   mkdirSync(marketDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
+  // self 分区目录（相对 ~/.dsh 根）：dataDir 在 homeDir 下 → 用相对路径挂载 self adapter；
+  // 自定义 dataDir 位于 ~/.dsh 之外时 Host fs 门面无法覆盖（confined to home root），
+  // 不挂 self 分区并告警（其余分区不受影响）。
+  const selfRel = relative(homeDir, dataDir)
+  const selfDir = !selfRel.startsWith('..') && !isAbsolute(selfRel) && selfRel !== '' ? selfRel : ''
+  if (selfDir === '') {
+    host.log.warn(`dataDir 不在 ~/.dsh 之下（${dataDir}），self 分区（插件自身配置备份）不挂载`)
+  }
   const adapters = createAdapters({
     // Namespace list = everything the settings service has registered.
     namespaces: async () => (await ctx.settings.describe({ redactSecrets: true })).map((d) => String(d.ns)),
@@ -2778,6 +2912,8 @@ export function apply(ctx: Context, config?: Config): void {
     // pluginFiles 扩展：额外白名单文件 + 约定配置目录（都相对 ~/.dsh 根），支持导出更多插件配置。
     pluginFiles: config?.pluginFiles,
     pluginFilesDir: config?.pluginFilesDir,
+    // self 分区：插件自身配置（sync-*.json / market-config.json / ui-prefs.json）；'' = 不挂载
+    selfDir,
   })
 
   host.log.info('config-manager 已挂载', {

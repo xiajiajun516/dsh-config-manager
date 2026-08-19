@@ -74,13 +74,9 @@ export interface ExecutePayload {
   };
 }
 
-/** decrypt-verify 端点响应：校验加密备份密码是否可解开 secrets.enc（零写入） */
-export interface DecryptVerifyResponse {
-  ok: boolean;
-  /** 该备份是否加密（password 非空时恒 true；用于 UI 双保险） */
-  encrypted: boolean;
-  /** 解密成功后将恢复的凭据数（普通备份为 0） */
-  secretCount: number;
+/** decrypt-archive 端点响应：解锁整体加密容器后返回明文 ZIP 路径 + 解密覆盖的凭据 ref 名（非值） */
+export interface DecryptArchiveResponse {
+  zipPath: string;
   /** 解密覆盖的凭据 ref 名（非值）；UI 据此从补录阶段剔除已恢复项 */
   refs: string[];
 }
@@ -102,7 +98,6 @@ export const CONFIG_MANAGER_API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
-  decryptVerify: '/api/dsh-config-manager/decrypt-verify',
   decryptArchive: '/api/dsh-config-manager/decrypt-archive',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
@@ -341,24 +336,14 @@ export class ConfigManagerApi {
     return readJson<ImportPlan>(response, this.t);
   }
 
-  /** 验证加密备份的解密密码（只读零写入）：成功返回将恢复的凭据数；密码错误抛 ConfigManagerApiError */
-  async verifyDecrypt(zipPath: string, password: string): Promise<DecryptVerifyResponse> {
-    const response = await fetch(CONFIG_MANAGER_API.decryptVerify, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ zipPath, password }),
-    });
-    return readJson<DecryptVerifyResponse>(response, this.t);
-  }
-
-  /** ImportPort.decryptArchive：解锁整体加密备份容器 → 返回可被 analyze/plan/execute 引用的明文 ZIP 路径 */
-  async decryptArchive(zipPath: string, password: string): Promise<{ zipPath: string }> {
+  /** ImportPort.decryptArchive：解锁整体加密备份容器 → 明文 ZIP 路径 + 解密覆盖的凭据 ref 名 */
+  async decryptArchive(zipPath: string, password: string): Promise<DecryptArchiveResponse> {
     const response = await fetch(CONFIG_MANAGER_API.decryptArchive, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ zipPath, password }),
     });
-    return readJson<{ zipPath: string }>(response, this.t);
+    return readJson<DecryptArchiveResponse>(response, this.t);
   }
 
   /** ImportPort.executeImportPlan：快照→分阶段 apply→validate→commit/rollback */

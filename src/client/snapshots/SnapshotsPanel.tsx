@@ -4,14 +4,17 @@
  * 数据流：api.snapshots() 加载列表；选择快照后 api.restoreSnapshot(id, true) 拿
  * 恢复计划（零写入预览）；确认后 api.restoreSnapshot(id, false) 执行并展示报告
  * （restored / removedPlugins / manualHints（人工项高亮）/ failed / skipped）。
- * 全部状态组件内自持：恢复是低频显式操作，不进入 sessionStorage（快照列表可随时重载）。
+ * 状态组件内自持（useState），同时经 toSnapshotsStoreSlice() 镜像进模块级 runStore：
+ * 模块级单例保证「切 tab 不丢」，sessionStorage 白名单保证「刷新恢复」
+ * （选中快照 / dry-run 计划 / 执行报告；快照列表本身可随时重载，不持久化）。
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../../core/restore.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice } from '../run-store.ts'
 import css from '../config-manager.module.css'
 
 export interface SnapshotsPanelProps {
@@ -75,8 +78,37 @@ function actionKindLabel(kind: string): string {
   }
 }
 
+/**
+ * 从 runStore 恢复上次的快照面板状态（切 tab 回 / 刷新后挂载）。
+ * 无敏感字段；plan/report 为纯数据，可安全序列化恢复。
+ */
+function initFromStore(): PanelState {
+  const s: SnapshotsStoreSlice = runStore.getSnapshot().snapshots
+  return {
+    ...initial,
+    selectedId: s.selectedId,
+    plan: s.plan,
+    report: s.report,
+    actionError: s.actionError,
+    error: s.error,
+  }
+}
+
 export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
-  const [state, setState] = useState<PanelState>(initial)
+  const [state, setState] = useState<PanelState>(initFromStore)
+  /** 最新 state 镜像（卸载 flush 时读取，避免闭包过期值） */
+  const stateRef = useRef<PanelState>(state)
+  useEffect(() => { stateRef.current = state }, [state])
+
+  /** 状态镜像：任何状态变化同步进 runStore（切 tab 不丢 / 刷新恢复）。 */
+  useEffect(() => {
+    runStore.patch({ snapshots: toSnapshotsStoreSlice(state) })
+  }, [state])
+
+  /** 卸载时最后镜像一次（防止「最后一次改动后立即切 tab」时镜像 effect 尚未 flush）。 */
+  useEffect(() => () => {
+    runStore.patch({ snapshots: toSnapshotsStoreSlice(stateRef.current) })
+  }, [])
 
   const load = (): void => {
     setState((s) => ({ ...s, status: 'loading', error: null }))

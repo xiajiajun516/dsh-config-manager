@@ -9,8 +9,8 @@ import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync
 import type { SectionId } from '../../schema/types.ts'
 import type { GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
-  autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
-  formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
+  autosyncIntervalMs, channelTabModels, computeAutosyncCountdown, computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
+  defaultChannelSyncState, formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
@@ -456,4 +456,36 @@ test('sync-view: writeStoredChannel 写回 localStorage,可被 readStoredChannel
   assert.equal(readStoredChannel(s), 'webdav')
   writeStoredChannel('git', s)
   assert.equal(readStoredChannel(s), 'git')
+})
+
+/* ---------------------------------------------------------------- 通道子 tab（每通道独立） */
+
+test('sync-view: channelTabModels git 激活 → git active / webdav 未激活；busy 全禁用', () => {
+  const tabs = channelTabModels('git', false)
+  assert.equal(tabs.length, 2)
+  assert.deepEqual(tabs[0], { channel: 'git', active: true, disabled: false })
+  assert.deepEqual(tabs[1], { channel: 'webdav', active: false, disabled: false })
+  const busy = channelTabModels('webdav', true)
+  assert.equal(busy[0]?.active, false)
+  assert.equal(busy[1]?.active, true)
+  assert.ok(busy.every((b) => b.disabled), 'busy 时两个子 tab 都禁用（防并发操作切换）')
+})
+
+test('sync-view: defaultChannelSyncState 每通道独立缺省值', () => {
+  const git = defaultChannelSyncState()
+  assert.equal(git.syncMode, 'default')
+  assert.deepEqual(git.syncSections, [])
+  assert.equal(git.encrypt, false)
+  assert.equal(git.includeSecrets, false)
+  assert.equal(git.encryptPassword, '')
+  assert.equal(git.decryptPassword, '')
+  assert.equal(git.selectedSnapshotId, '')
+  assert.deepEqual(git.snapshots, [])
+  assert.equal(git.autosync, null)
+  assert.equal(git.autosyncEnabled, false)
+  assert.equal(git.autosyncInterval, '30m')
+  // 两通道缺省互不影响（同一默认工厂，调用即得独立实例）
+  const webdav = defaultChannelSyncState()
+  webdav.syncMode = 'advanced'
+  assert.equal(git.syncMode, 'default', '修改一个通道缺省不影响另一个')
 })

@@ -101,12 +101,15 @@ export class ImportWizard {
   /**
    * 解锁整体加密备份容器（只读，零写入）：用备份密码解密上传的容器 → 明文 ZIP。
    * 成功后 archiveUnlocked=true；之后 analyze/plan/execute 基于解密后的 ZIP 路径。
+   * 返回明文 ZIP 路径与解密覆盖的凭据 ref 名（导出时容器密码与 secrets.enc 密码
+   * 同源，解锁即完成凭据解密验证）——导入全程只需输入这一次密码。
    */
-  async unlockArchive(encryptedPath: string, password: string): Promise<void> {
+  async unlockArchive(encryptedPath: string, password: string): Promise<{ zipPath: string; refs: string[] }> {
     this.zipPath = encryptedPath;
-    const { zipPath } = await this.port.decryptArchive(encryptedPath, password);
+    const { zipPath, refs } = await this.port.decryptArchive(encryptedPath, password);
     this.unlockedZipPath = zipPath;
     this.archiveUnlocked = true;
+    return { zipPath, refs };
   }
 
   /** 步骤 1-2：选 ZIP → Analyzing → Compatibility（analyzeImport 零写入） */

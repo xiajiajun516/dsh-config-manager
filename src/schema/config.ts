@@ -13,7 +13,7 @@ import type {
 export const SECTION_IDS: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts',
   'skills', 'agentPresets', 'agentInstructions', 'workspaces', 'pluginFiles',
-  'credentialsStatus', 'secrets', 'sessions',
+  'credentialsStatus', 'secrets', 'sessions', 'self',
 ];
 
 /** JSON 分区在 ZIP 内的相对路径；文件类分区（skills 等）走目录前缀，不在此表 */
@@ -35,6 +35,7 @@ export const SECTION_FILE_PREFIXES: Partial<Record<SectionId, string>> = {
   agentInstructions: 'custom/agent-instructions/',
   pluginFiles: 'plugin-files/',
   sessions: 'sessions/',
+  self: 'self/',
 };
 
 /** 该分区是否是「文件类」分区（ZIP 内以真实文件存放而非 JSON） */
@@ -117,7 +118,8 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
     case 'agentPresets':
     case 'agentInstructions':
     case 'pluginFiles':
-    case 'sessions': {
+    case 'sessions':
+    case 'self': {
       if (!Array.isArray(obj['files'])) issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
       break;
     }

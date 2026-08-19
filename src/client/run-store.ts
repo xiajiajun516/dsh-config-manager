@@ -12,6 +12,13 @@
  *    直到完成/失败，把 RunState.result 回填到 store（m2-resume）。服务端在
  *    刷新/关面板期间继续执行，本 store 只负责重新订阅进度。
  *
+ * 低频面板（Snapshots / Sync / Market / About）同样把非敏感 UI 状态镜像进这里：
+ *  - ConfigManagerSection 的「当前打开面板」（panel）持久化，刷新后回到原 tab；
+ *  - SyncSettingsView / MarketPanel / SnapshotsPanel 把自身状态切片（toXxxStoreSlice）
+ *    镜像进 store —— 模块级单例保证「切 tab 不丢」，sessionStorage 白名单保证
+ *    「刷新恢复」；同步凭据（token / webdav 密码 / 加密与解密密码）仅内存，
+ *    由 toPersistedState 硬性剔除，刷新后清空要求重输。
+ *
  * 控制器 rehydrate 说明：ImportWizard 没有公开的 hydrate 入口（m2 约束为只改
  * src/client/、不动 src/ui/），刷新恢复需要把持久化的非敏感快照写回控制器
  * 私有字段。writeWizardSnapshot() 是唯一的受控访问点：类型层 private 只是
@@ -38,11 +45,21 @@ import type {
 import type { RunKind, RunState } from '../core/run-registry.ts'
 import type { Manifest, SectionId } from '../schema/types.ts'
 import type { ConfigManagerApi } from './api.ts'
+import type { RestorePlan, RestoreReport } from '../core/restore.ts'
+import type { MarketListItem, MarketDownloadResult } from '../market/types.ts'
+import type { SyncPushReport, SyncPullReport } from '../sync/sync-engine.ts'
+import type { SyncStartResponse } from './sync/sync-api.ts'
+import type { ChannelSyncState, SyncChannel } from './sync/sync-view.ts'
+import { defaultChannelSyncState } from './sync/sync-view.ts'
+import type { MarketApprovals } from './market/market-view.ts'
 
 /* ---------------------------------------------------------------- 基础类型 */
 
 /** 主视图（ConfigManagerSection 的 tab 状态）。 */
 export type MainView = 'export' | 'import'
+
+/** 设置页四块低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。 */
+export type PanelId = 'snapshots' | 'sync' | 'market' | 'about'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'
@@ -62,6 +79,83 @@ export function defaultCustomSelection(): SectionId[] {
   return DEFAULT_CATEGORIES
     .filter((c) => c.defaultIncluded)
     .map((c) => c.id)
+}
+
+/* -------------------------------------------- 低频面板切片（Sync/Market/Snapshots） */
+
+/**
+ * 同步面板的运行时切片 = 非敏感 UI 状态 + 仅内存的敏感字段。
+ * 组件（SyncSettingsView）把自身状态镜像进这里：模块级单例保证「切 tab 不丢」，
+ * sessionStorage 白名单保证「刷新恢复」；敏感字段（token/webdav 密码/加密与解密密码）
+ * 由 toPersistedState 硬性剔除，刷新后清空、要求重输。
+ *
+ * git/webdav 通道各自独立的设置（自动同步、同步模式、加密、快照）放在 byChannel 内，
+ * 两通道互不干扰；push/pull 报告与差异确认会话等瞬态结果保持全局（作用于当前操作通道）。
+ */
+export interface SyncStoreSlice {
+  channel: SyncChannel
+  repoUrl: string
+  /** 仅内存：成功后清空（已写入 DSH credentials），绝不持久化/回显 */
+  token: string
+  webdavUrl: string
+  webdavUsername: string
+  /** 仅内存：成功后清空，绝不持久化/回显 */
+  webdavPassword: string
+  /** git/webdav 通道各自独立的设置状态（自动同步、同步模式、加密、快照） */
+  byChannel: {
+    git: ChannelSyncState
+    webdav: ChannelSyncState
+  }
+  pushReport: SyncPushReport | null
+  pullReport: SyncPullReport | null
+  /** 一键同步差异确认会话（items 供 UI 逐项确认；宿主侧 30 分钟 TTL 内存登记） */
+  confirmSession: SyncStartResponse | null
+  /** 最近一次一键同步执行结果（回滚入口） */
+  lastRestoreId: string | null
+  /** 已 redact 的错误文本 */
+  error: string | null
+  loadError: string | null
+}
+
+/** 单通道状态的持久化切片 = 运行时剔除密码类敏感字段（安全关键，白名单单一出口）。 */
+export type PersistedChannelSyncState = Omit<
+  ChannelSyncState,
+  'encryptPassword' | 'encryptPasswordConfirm' | 'decryptPassword'
+>
+
+/** 同步面板的持久化切片 = 运行时切片剔除敏感字段（顶层凭据 + byChannel 密码类）。 */
+export type PersistedSyncState = Omit<SyncStoreSlice, 'token' | 'webdavPassword' | 'byChannel'> & {
+  byChannel: {
+    git: PersistedChannelSyncState
+    webdav: PersistedChannelSyncState
+  }
+}
+
+/**
+ * 配置市场面板的切片（无敏感字段：市场端点无任何 secret 输入；detail.zipPath 为宿主
+ * 受控临时文件路径，非密钥）。持久化形状与运行时形状一致。
+ */
+export interface MarketStoreSlice {
+  search: string
+  category: string
+  /** 最近一次 browse 的条目列表（切 tab/刷新后免重拉；host 缓存状态下次 browse 时合并） */
+  items: MarketListItem[]
+  /** 条目详情（下载 + 校验 + dry-run 预览；zipPath 指向宿主 tmpDir，懒 GC 10 分钟） */
+  detail: MarketDownloadResult | null
+  /** 逐分区批准表（安全不变式 (c)：高风险分区默认不勾选） */
+  approvals: MarketApprovals
+  importResult: ImportResult | null
+  error: string | null
+  loadError: string | null
+}
+
+/** 快照恢复面板的切片（无敏感字段；快照列表本身可随时重载，不持久化）。 */
+export interface SnapshotsStoreSlice {
+  selectedId: string | null
+  plan: RestorePlan | null
+  report: RestoreReport | null
+  actionError: string | null
+  error: string | null
 }
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
@@ -109,12 +203,17 @@ export interface PersistedImportState {
   runId: string | null
 }
 
-/** 刷新恢复的顶层持久化状态（v1 结构版本）。 */
+/** 刷新恢复的顶层持久化状态（v1 结构版本；旧载荷缺新字段时回退默认）。 */
 export interface PersistedState {
   v: 1
   view: MainView
+  /** 当前打开的低频面板（null = 主视图 export/import）；刷新后回到原 tab */
+  panel: PanelId | null
   export: PersistedExportState
   import: PersistedImportState
+  sync: PersistedSyncState
+  market: MarketStoreSlice
+  snapshots: SnapshotsStoreSlice
 }
 
 /* --------------------------------------- 运行时状态（含仅内存的敏感字段） */
@@ -144,15 +243,24 @@ export interface ImportLiveState extends PersistedImportState {
 export interface StoreState {
   v: 1
   view: MainView
+  panel: PanelId | null
   export: ExportLiveState
   import: ImportLiveState
+  sync: SyncStoreSlice
+  market: MarketStoreSlice
+  snapshots: SnapshotsStoreSlice
 }
 
 /** patch 的输入形状（浅合并对应切片）。 */
 export interface StorePatch {
   view?: MainView
+  /** null = 回到主视图（export/import） */
+  panel?: PanelId | null
   export?: Partial<ExportLiveState>
   import?: Partial<ImportLiveState>
+  sync?: Partial<SyncStoreSlice>
+  market?: Partial<MarketStoreSlice>
+  snapshots?: Partial<SnapshotsStoreSlice>
 }
 
 /** 向导 step 的类型别名（与 src/ui/types.ts 的 ImportStep 保持一致）。 */
@@ -205,20 +313,122 @@ function defaultImportState(): ImportLiveState {
   }
 }
 
+function defaultSyncState(): SyncStoreSlice {
+  return {
+    channel: 'git',
+    repoUrl: '',
+    token: '',
+    webdavUrl: '',
+    webdavUsername: '',
+    webdavPassword: '',
+    byChannel: {
+      git: defaultChannelSyncState(),
+      webdav: defaultChannelSyncState(),
+    },
+    pushReport: null,
+    pullReport: null,
+    confirmSession: null,
+    lastRestoreId: null,
+    error: null,
+    loadError: null,
+  }
+}
+
+function defaultMarketState(): MarketStoreSlice {
+  return {
+    search: '',
+    category: '',
+    items: [],
+    detail: null,
+    approvals: {},
+    importResult: null,
+    error: null,
+    loadError: null,
+  }
+}
+
+function defaultSnapshotsState(): SnapshotsStoreSlice {
+  return {
+    selectedId: null,
+    plan: null,
+    report: null,
+    actionError: null,
+    error: null,
+  }
+}
+
 function defaultState(): StoreState {
   return {
     v: 1,
     view: 'export',
+    panel: null,
     export: defaultExportState(),
     import: defaultImportState(),
+    sync: defaultSyncState(),
+    market: defaultMarketState(),
+    snapshots: defaultSnapshotsState(),
   }
 }
 
 /* ------------------------------------------------- 序列化白名单（安全关键） */
 
 /**
+ * 从视图状态提取同步切片（结构兼容：传入 SyncUiState 亦可；只保留切片字段，
+ * github 流程态/loading/busy 等瞬态不进入切片）。组件每次状态变化后调用，
+ * 把非敏感 + 仅内存字段镜像进 store；敏感字段由 toPersistedState 硬性剔除。
+ * byChannel 的快照数组复制引用（避免跨切片共享可变数组）。
+ */
+export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
+  return {
+    channel: s.channel,
+    repoUrl: s.repoUrl,
+    token: s.token,
+    webdavUrl: s.webdavUrl,
+    webdavUsername: s.webdavUsername,
+    webdavPassword: s.webdavPassword,
+    byChannel: {
+      git: { ...s.byChannel.git, snapshots: [...s.byChannel.git.snapshots] },
+      webdav: { ...s.byChannel.webdav, snapshots: [...s.byChannel.webdav.snapshots] },
+    },
+    pushReport: s.pushReport,
+    pullReport: s.pullReport,
+    confirmSession: s.confirmSession,
+    lastRestoreId: s.lastRestoreId,
+    error: s.error,
+    loadError: s.loadError,
+  }
+}
+
+/** 从市场视图状态提取切片（结构兼容：传入 MarketUiState 亦可）。 */
+export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
+  return {
+    search: s.search,
+    category: s.category,
+    items: s.items,
+    detail: s.detail,
+    approvals: s.approvals,
+    importResult: s.importResult,
+    error: s.error,
+    loadError: s.loadError,
+  }
+}
+
+/** 从快照面板状态提取切片（结构兼容：传入 PanelState 亦可）。 */
+export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSlice {
+  return {
+    selectedId: s.selectedId,
+    plan: s.plan,
+    report: s.report,
+    actionError: s.actionError,
+    error: s.error,
+  }
+}
+
+/**
  * 持久化白名单：解构剔除敏感字段（password/passwordConfirm/secretInputs/decryptPassword）
- * 与不可序列化的实例字段（conflictCollector），其余原样落入 sessionStorage。
+ * 与不可序列化的实例字段（conflictCollector），以及同步面板的凭据字段
+ * （token/webdavPassword/encryptPassword/encryptPasswordConfirm/decryptPassword ——
+ * 含 byChannel 内每通道的加密/解密密码），其余原样落入 sessionStorage。
  * 这是 sessionStorage 的唯一写入路径 —— 敏感值在此被硬性隔离。
  */
 export function toPersistedState(state: StoreState): PersistedState {
@@ -227,7 +437,28 @@ export function toPersistedState(state: StoreState): PersistedState {
     secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
     archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector, ...importRest
   } = state.import
-  return { v: 1, view: state.view, export: exportRest, import: importRest }
+  const { token: _token, webdavPassword: _webdavPassword, ...syncRest } = state.sync
+  // byChannel 内每通道的密码类字段同样硬性剔除（安全不变量：不落盘任何密码）
+  const stripChannelSensitive = (c: ChannelSyncState): PersistedChannelSyncState => {
+    const { encryptPassword: _ep, encryptPasswordConfirm: _epc, decryptPassword: _dp, ...rest } = c
+    return rest
+  }
+  return {
+    v: 1,
+    view: state.view,
+    panel: state.panel,
+    export: exportRest,
+    import: importRest,
+    sync: {
+      ...syncRest,
+      byChannel: {
+        git: stripChannelSensitive(state.sync.byChannel.git),
+        webdav: stripChannelSensitive(state.sync.byChannel.webdav),
+      },
+    },
+    market: state.market,
+    snapshots: state.snapshots,
+  }
 }
 
 /** 解析 + 轻量校验持久化状态；损坏/版本不符返回 null（调用方回退默认并清键）。 */
@@ -246,7 +477,22 @@ export function parsePersistedState(raw: string): PersistedState | null {
   const exp = p['export']
   const imp = p['import']
   if (typeof exp !== 'object' || exp === null || typeof imp !== 'object' || imp === null) return null
-  return { v: 1, view, export: exp as PersistedExportState, import: imp as PersistedImportState }
+  // panel：旧载荷可能缺失 → null（回到主视图）；非法值 → null
+  const rawPanel = p['panel']
+  const panel: PanelId | null =
+    rawPanel === 'snapshots' || rawPanel === 'sync' || rawPanel === 'market' || rawPanel === 'about'
+      ? rawPanel
+      : null
+  // sync/market/snapshots：旧载荷可能缺失 → 默认切片（字段级缺失由 applyPersisted 兜底）
+  const sync = isRecord(p['sync']) ? p['sync'] as unknown as PersistedSyncState : defaultSyncState()
+  const market = isRecord(p['market']) ? p['market'] as unknown as MarketStoreSlice : defaultMarketState()
+  const snapshots = isRecord(p['snapshots']) ? p['snapshots'] as unknown as SnapshotsStoreSlice : defaultSnapshotsState()
+  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots }
+}
+
+/** 运行时不变量小工具：值为普通对象。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /* ----------------------------------------------------- 控制器 rehydrate */
@@ -404,8 +650,13 @@ export class RunStore {
     this.state = {
       ...this.state,
       view: patchObj.view ?? this.state.view,
+      // panel 可被显式置回 null（回到主视图），故用 undefined 判断而非 ?? 兜底
+      panel: patchObj.panel !== undefined ? patchObj.panel : this.state.panel,
       export: { ...this.state.export, ...patchObj.export },
       import: { ...this.state.import, ...patchObj.import },
+      sync: { ...this.state.sync, ...patchObj.sync },
+      market: { ...this.state.market, ...patchObj.market },
+      snapshots: { ...this.state.snapshots, ...patchObj.snapshots },
     }
     this.notify()
     this.save()
@@ -463,6 +714,7 @@ export class RunStore {
     this.state = {
       v: 1,
       view: parsed.view,
+      panel: parsed.panel,
       export: {
         ...defaultExportState(),
         ...parsed.export,
@@ -485,6 +737,55 @@ export class RunStore {
         archiveUnlocked: false,
         conflictCollector: null,
       },
+      sync: (() => {
+        // 旧版持久化载荷（升级前顶层 syncMode 形状）→ 迁移为 git 通道的 byChannel 状态
+        const legacySync = parsed.sync as unknown as Record<string, unknown>
+        const legacyHasChannelState =
+          typeof legacySync['syncMode'] === 'string' || Array.isArray(legacySync['syncSections'])
+        const legacyGit: PersistedChannelSyncState | undefined = legacyHasChannelState
+          ? {
+              syncMode: legacySync['syncMode'] === 'advanced' ? 'advanced' : 'default',
+              syncSections: Array.isArray(legacySync['syncSections'])
+                ? legacySync['syncSections'] as SectionId[]
+                : [],
+              encrypt: legacySync['encrypt'] === true,
+              includeSecrets: legacySync['includeSecrets'] === true,
+              selectedSnapshotId: typeof legacySync['selectedSnapshotId'] === 'string'
+                ? legacySync['selectedSnapshotId']
+                : '',
+              snapshots: [],
+              autosync: null,
+              autosyncEnabled: false,
+              autosyncInterval: '30m',
+            }
+          : undefined
+        return {
+          ...defaultSyncState(),
+          ...parsed.sync,
+          // 硬性：同步凭据（git token / webdav 密码 / 加密与解密密码）绝不从存储恢复；
+          // 刷新后清空，需要时重新输入（byChannel 内密码类字段同样强制归零）
+          token: '',
+          webdavPassword: '',
+          byChannel: {
+            git: {
+              ...defaultChannelSyncState(),
+              ...(legacyGit ?? parsed.sync.byChannel?.git),
+              encryptPassword: '',
+              encryptPasswordConfirm: '',
+              decryptPassword: '',
+            } as ChannelSyncState,
+            webdav: {
+              ...defaultChannelSyncState(),
+              ...parsed.sync.byChannel?.webdav,
+              encryptPassword: '',
+              encryptPasswordConfirm: '',
+              decryptPassword: '',
+            } as ChannelSyncState,
+          },
+        }
+      })(),
+      market: { ...defaultMarketState(), ...parsed.market },
+      snapshots: { ...defaultSnapshotsState(), ...parsed.snapshots },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
     // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。
@@ -501,20 +802,9 @@ export class RunStore {
     if (this.state.import.phase === 'confirm' && missing.length > 0) {
       this.state.import.phase = 'secrets'
     }
-    // 安全兜底：加密备份的解密密码绝不从存储恢复（decryptPassword 必为空）→
-    // 刷新后只要已越过解密阶段（conflicts/secrets/confirm）就强制退回解密阶段重输，
-    // 否则执行时会被 core 的加密不变量拒绝（import.encryptedPasswordRequired）。
-    // 容器加密备份（containerEncrypted）统一回到上面的 decrypt-archive 阶段，不做此分支。
-    const analysis = this.state.import.analysis
-    if (
-      !this.state.import.containerEncrypted &&
-      analysis?.encrypted === true &&
-      this.state.import.decryptPassword === '' &&
-      this.state.import.phase !== 'preview' &&
-      this.state.import.phase !== 'decrypt'
-    ) {
-      this.state.import.phase = 'decrypt'
-    }
+    // 加密备份（普通 ZIP 内 secrets.enc，非容器）在旧版本中有独立的解密阶段；
+    // 现在解密密码只在「解锁加密备份」时输入一次（containerEncrypted 场景已由上面的
+    // decrypt-archive 兜底强制退回重新解锁），不再存在 decrypt 阶段，无需此处兜底。
     // 冲突阶段：由恢复后的 plan + 决策重建 collector（刷新后实例必然丢失）
     const imp = this.state.import
     if (imp.phase === 'conflicts' && imp.plan !== null) {

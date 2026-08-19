@@ -27,6 +27,7 @@ export const zh = {
   'channel.hint': '选择远程同步通道：Git 私有仓库或 WebDAV 服务器。',
   'channel.git': 'Git 私有仓库',
   'channel.webdav': 'WebDAV 服务器',
+  'channel.perChannelHint': 'GitHub 与 WebDAV 通道的自动同步、同步模式、加密与远端快照各自独立配置。',
   // WebDAV 配置表单
   'webdav.title': 'WebDAV 配置',
   'webdav.url': '服务器地址',
@@ -200,6 +201,7 @@ export const en: Record<keyof typeof zh, string> = {
   'channel.hint': 'Choose the remote sync channel: Git private repository or WebDAV server.',
   'channel.git': 'Git private repo',
   'channel.webdav': 'WebDAV server',
+  'channel.perChannelHint': 'Auto sync, sync mode, encryption and remote snapshots are configured independently for GitHub and WebDAV channels.',
   'webdav.title': 'WebDAV Configuration',
   'webdav.url': 'Server URL',
   'webdav.urlHint': 'WebDAV server root URL (https://…). Sync snapshots and the index are stored under a snapshots/ subdirectory of that URL. Do not include a username/password in the URL.',

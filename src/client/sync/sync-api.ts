@@ -45,6 +45,7 @@ export const SYNC_API = {
   autosync: '/api/dsh-config-manager/sync/autosync',
   selection: '/api/dsh-config-manager/sync/selection',
   config: '/api/dsh-config-manager/sync/config',
+  uiPrefs: '/api/dsh-config-manager/sync/ui-prefs',
   rollback: '/api/dsh-config-manager/sync/rollback',
 } as const;
 
@@ -75,16 +76,25 @@ export interface SyncStatusResponse {
   /** sync-state.sections 条目数 */
   sectionCount: number;
   transport?: { type: string; ref: string };
+  /** 上次选择的同步通道（磁盘 ui-prefs.json；UI 回填优先于此，localStorage 仅兜底） */
+  lastSyncChannel?: 'git' | 'webdav';
   /** 可同步分区目录（「高级/自定义导出」勾选列表；host adapters 唯一事实源，只含 portable） */
   syncSections?: SyncSectionInfo[];
-  /** 当前分区选择（默认/高级模式 + 勾选分区；UI 回填用，自动同步与手动 push 共用） */
+  /** 当前分区选择（当前激活通道；UI 回填用，自动同步与手动 push 共用） */
   syncSelection?: SyncSelectionPayload;
-  /** 自动同步当前状态（供 UI 顶部开关回填；§3.9） */
+  /** 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道） */
+  syncSelectionByChannel?: Record<SyncTransportType, SyncSelectionPayload>;
+  /** 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9） */
   autosync?: AutosyncStatusResponse;
+  /** 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道） */
+  autosyncByChannel?: Record<SyncTransportType, AutosyncStatusResponse>;
 }
 
-/** 同步分区选择（POST /sync/selection 请求体 + status.syncSelection 响应；持久化于 Host）。 */
+/** 同步分区选择（POST /sync/selection 请求体 + status.syncSelection 响应；持久化于 Host）。
+ *  git/webdav 通道各自独立（transport 缺省 git）。 */
 export interface SyncSelectionPayload {
+  /** 目标通道（git/webdav 各自独立的模式与勾选；缺省 git） */
+  transport?: SyncTransportType;
   mode: 'default' | 'advanced';
   /** 高级模式勾选分区；default 模式可为空数组 */
   sections: SectionId[];
@@ -284,8 +294,10 @@ export interface AutosyncStatusResponse {
   lastRunHistoryId?: string;
 }
 
-/** POST /sync/autosync 请求体。 */
+/** POST /sync/autosync 请求体（transport 指定目标通道；git/webdav 各自独立）。 */
 export interface AutosyncUpdatePayload {
+  /** 目标通道（git/webdav 各自独立的开关/间隔/状态；缺省 git） */
+  transport?: SyncTransportType;
   enabled: boolean;
   interval?: AutosyncInterval;
   startupMinIntervalMs?: number;
@@ -474,13 +486,19 @@ export class SyncApi {
     return postJson<{ ok: boolean }>(SYNC_API.cancel, { syncSessionId }, this.t);
   }
 
-  /** 自动同步状态（GET /sync/autosync）。 */
-  async autosyncStatus(): Promise<AutosyncStatusResponse> {
+  /** 自动同步状态（GET /sync/autosync 返回全部通道的 { git, webdav }，各自独立）。 */
+  async autosyncStatusAll(): Promise<Record<SyncTransportType, AutosyncStatusResponse>> {
     const response = await fetch(SYNC_API.autosync);
-    return readJson<AutosyncStatusResponse>(response, this.t);
+    return readJson<Record<SyncTransportType, AutosyncStatusResponse>>(response, this.t);
   }
 
-  /** 自动同步配置更新（POST /sync/autosync）。 */
+  /** 自动同步状态（指定通道；从全部通道状态中取）。 */
+  async autosyncStatus(transport: SyncTransportType = 'git'): Promise<AutosyncStatusResponse> {
+    const all = await this.autosyncStatusAll();
+    return all[transport];
+  }
+
+  /** 自动同步配置更新（POST /sync/autosync；payload.transport 指定目标通道）。 */
   async autosyncUpdate(payload: AutosyncUpdatePayload): Promise<AutosyncStatusResponse> {
     return postJson<AutosyncStatusResponse>(SYNC_API.autosync, payload, this.t);
   }
@@ -495,6 +513,12 @@ export class SyncApi {
    *  password/token 经 Host 写入 DSH credentials（值永不回传）；返回凭据布尔供 UI 刷新徽章。 */
   async saveConfig(payload: SyncPushPayload): Promise<SyncConfigSaveResponse> {
     return postJson<SyncConfigSaveResponse>(SYNC_API.config, payload, this.t);
+  }
+
+  /** 保存插件 UI 偏好（POST /sync/ui-prefs）：当前为上次选择的同步通道（ui-prefs.json，
+   *  随 self 分区进导出备份）。纯偏好无 secret；失败由调用方静默降级（localStorage 兜底）。 */
+  async saveUiPrefs(payload: { lastSyncChannel?: 'git' | 'webdav' }): Promise<{ ok: boolean; lastSyncChannel?: 'git' | 'webdav' }> {
+    return postJson<{ ok: boolean; lastSyncChannel?: 'git' | 'webdav' }>(SYNC_API.uiPrefs, payload, this.t);
   }
 
   /** 一键回滚：按 restoreId 调用 backup→rollback */

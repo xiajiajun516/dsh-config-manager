@@ -11,7 +11,10 @@
  *   - executeImportPlan 必须 confirm=true（core 安全阀）；
  *   - 秘密补录值仅内存（secretInputs），经 HTTPS 请求体传给 Host，绝不落日志/落盘，
  *     **也绝不进入 sessionStorage**（m2 白名单剔除，刷新后 secrets 阶段要求重输）；
- *   - 默认整体回滚（rollbackOnError=true），用户在 Confirm 步可切换。
+ *   - 默认整体回滚（rollbackOnError=true），用户在 Confirm 步可切换；
+ *   - 整体加密容器（DCA1）密码只输入一次：选完 ZIP 即进入「解锁加密备份」
+ *     （decrypt-archive）输入密码，Host 解锁时顺带解出内部凭据覆盖清单（refs）；
+ *     该密码同时作为解密密码交给向导，无第二个密码校验页面（decrypt-archive 回归）。
  *
  * 数据流：本地文件 → api.upload → zipPath → wizard.selectZip/confirmCompatibility/
  *   setResolutions/setPathMappings/setSecretInputs → wizard.execute。
@@ -113,7 +116,6 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const conflictCollector = imp.conflictCollector
   const pathMappings = imp.pathMappings
   const secretInputs = imp.secretInputs
-  const decryptPassword = imp.decryptPassword
   const decryptRefs = imp.decryptRefs
   const isEncrypted = imp.analysis?.encrypted === true
   // 上传备份是否整体加密容器（需先解锁才可分析）；非敏感、刷新恢复
@@ -126,10 +128,6 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
    * 防止「取消后旧请求仍把向导推进/写错误」的竞态。
    */
   const pickGeneration = useRef(0)
-  /** decrypt 阶段的本地交互状态（不持久化；密码变动即失效重验） */
-  const [verifying, setVerifying] = useState(false)
-  const [verified, setVerified] = useState(false)
-  const [verifyError, setVerifyError] = useState<string | null>(null)
   /** decrypt-archive 阶段（解锁加密容器）的本地状态（不持久化） */
   const [unlocking, setUnlocking] = useState(false)
   const [archiveUnlockError, setArchiveUnlockError] = useState<string | null>(null)
@@ -153,13 +151,12 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
    * 在流程中不会因已解决而重算——所以导航必须只前进（见 nextFlowPhase），
    * 而不是靠"当前阶段 != X"判定（那会让已完成阶段被重新命中、跳回上一步）。
    * 整体加密容器（containerEncrypted && !archiveUnlocked）恒先插入 decrypt-archive：
-   * 不解锁不得分析/继续导入。
-   * 加密备份（analysis.encrypted）恒先插入 decrypt 阶段：不解锁凭据不得继续。
+   * 不解锁不得分析/继续导入。解密密码只在解锁时输入一次（导出时容器密码与
+   * 内部 secrets.enc 密码同源），不再有独立的 decrypt 阶段。
    */
   const applicablePhases = (): FlowPhase[] => {
     const list: FlowPhase[] = []
     if (containerEncrypted && !archiveUnlocked) list.push('decrypt-archive')
-    if (isEncrypted) list.push('decrypt')
     if (hasConflicts) list.push('conflicts')
     if (hasPathIssues) list.push('path-mapping')
     if (hasSecrets) list.push('secrets')
@@ -277,45 +274,26 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     setPhase('confirm')
   }
 
-  /** 解密阶段：验证加密备份密码（只读零写入）；成功记录解密覆盖的凭据 refs */
-  const onVerifyDecrypt = async (): Promise<void> => {
-    if (imp.zipPath === null) return
-    setVerifying(true)
-    setVerifyError(null)
-    try {
-      const res = await api.verifyDecrypt(imp.zipPath, decryptPassword)
-      runStore.patch({ import: { decryptRefs: res.refs } })
-      setVerified(true)
-    } catch (err) {
-      setVerified(false)
-      runStore.patch({ import: { decryptRefs: [] } })
-      setVerifyError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setVerifying(false)
-    }
-  }
-
-  /** 解密密码输入变化：写 store（仅内存）并使验证失效（需重新验证） */
-  const onDecryptPasswordChange = (value: string): void => {
-    runStore.patch({ import: { decryptPassword: value } })
-    setVerified(false)
-    setVerifyError(null)
-  }
-
-  /** Decrypt 完成：把密码交给向导（仅内存）→ 下一阶段（按 applicablePhases 顺序） */
-  const finishDecrypt = (): void => {
-    wizard.setDecryptPassword(decryptPassword)
-    setPhase(nextPhase('decrypt'))
-  }
-
-  /** 解锁整体加密备份容器（只读，零写入）：解密 → 明文 ZIP → selectZip 继续分析 */
+  /** 解锁整体加密备份容器（只读，零写入）：解密 → 明文 ZIP → selectZip 继续分析。
+   * 导出时容器密码与备份内 secrets.enc 密码同源（同一 password 派生两层加密）：
+   * 解锁请求在 Host 端顺带解出内部凭据覆盖清单（refs）一并返回，此密码直接作为
+   * 解密密码交给向导——整个导入只输入这一次密码，没有第二个密码校验页面。 */
   const onUnlockArchive = async (): Promise<void> => {
     if (imp.zipPath === null) return
     setUnlocking(true)
     setArchiveUnlockError(null)
     try {
-      await wizard.unlockArchive(imp.zipPath, archivePassword)
-      runStore.patch({ import: { archiveUnlocked: true } })
+      const { refs } = await wizard.unlockArchive(imp.zipPath, archivePassword)
+      // 容器密码即内部凭据解密密码：交给向导（execute 时解密 secrets.enc 用）
+      wizard.setDecryptPassword(archivePassword)
+      // refs 为解锁时顺带解出的凭据覆盖清单（非值）：secrets 阶段据此剔除已恢复项
+      runStore.patch({
+        import: {
+          archiveUnlocked: true,
+          decryptPassword: archivePassword,
+          decryptRefs: refs,
+        },
+      })
       runStore.syncWizard()
       // 解锁成功：继续「选 ZIP → 分析 → 兼容性」流程（selectZip 内部步进到 compatibility）
       const analysis = await wizard.selectZip(imp.zipPath!)
@@ -323,7 +301,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
       runStore.syncWizard()
       // 解锁后 phase 不再停留在 decrypt-archive，否则 preview 页会被解锁页劫持。
       // 用最新 store 快照计算下一阶段：decrypt-archive 已解锁（archiveUnlocked=true）
-      // 不再适用，nextFlowPhase 取第一项——decrypt/isEncrypted、conflicts 或 confirm。
+      // 不再适用，nextFlowPhase 取第一项——conflicts、path-mapping、secrets 或 confirm。
       runStore.patch({ import: { phase: 'preview' } })
     } catch (err) {
       setArchiveUnlockError(err instanceof Error ? err.message : String(err))
@@ -533,43 +511,6 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             onClick={() => { void onUnlockArchive() }}
           >
             {unlocking ? <Spinner label={t('import.decryptArchive.unlocking')} /> : t('import.decryptArchive.unlock')}
-          </Button>
-        </div>
-      </div>
-    )
-  }
-
-  if (phase === 'decrypt' && step === 'preview') {
-    return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.decrypt.title')} subtitle={t('import.decrypt.hint')} />
-        <input
-          type="password"
-          className={css.input}
-          autoComplete="off"
-          placeholder={t('import.decrypt.passwordPlaceholder')}
-          value={decryptPassword}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => { onDecryptPasswordChange(e.target.value) }}
-        />
-        {verifyError !== null && <ErrorBanner error={verifyError} />}
-        {verified && (
-          <Banner kind="ok">
-            {t(decryptRefs.length > 0 ? 'import.decrypt.verified' : 'import.decrypt.verifiedEmpty', { count: String(decryptRefs.length) })}
-          </Banner>
-        )}
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
-          {/* 验证密码：只读零写入；密码为空或验证中不可点 */}
-          <Button
-            variant="ghost"
-            disabled={decryptPassword === '' || verifying}
-            onClick={() => { void onVerifyDecrypt() }}
-          >
-            {verifying ? <Spinner label={t('import.decrypt.verifying')} /> : t('import.decrypt.verify')}
-          </Button>
-          {/* 只有验证通过的密码才能进入后续阶段（core 同样拒绝无密码执行） */}
-          <Button variant="primary" disabled={!verified || verifying} onClick={finishDecrypt}>
-            {t('common.next')}
           </Button>
         </div>
       </div>

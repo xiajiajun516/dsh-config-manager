@@ -21,6 +21,7 @@ import { WorkspacesAdapter } from './workspaces.ts';
 import { CredentialsAdapter, type CredentialRefsProvider } from './credentials.ts';
 import { PluginFilesAdapter } from './plugin-files.ts';
 import { SessionsAdapter } from './sessions.ts';
+import { SelfAdapter } from './self.ts';
 
 export interface AdapterRegistryOptions {
   /** settings namespace 清单（宿主从 settings.yaml 顶层 key 解析注入；缺省 [] → settings/ui/credentials 为空） */
@@ -35,6 +36,11 @@ export interface AdapterRegistryOptions {
   includeSessions?: boolean;
   /** 插件自身包名：导出 plugins 分区时不列自己（避免自引用；缺省 dsh-config-manager） */
   selfPluginName?: string;
+  /**
+   * self 分区：插件自身配置目录（相对 ~/.dsh 根，如 'dsh-config-manager'）。
+   * 缺省 'dsh-config-manager'；传入 '' 表示不挂载（宿主自定义 dataDir 在 homeDir 外时）。
+   */
+  selfDir?: string;
 }
 
 /** 组装默认 adapter 列表（pluginFiles/sessions 恒挂载但 defaultIncluded=false，用户勾选才导出） */
@@ -54,6 +60,10 @@ export function createAdapters(options: AdapterRegistryOptions = {}): ConfigAdap
     new CredentialsAdapter({ namespaces, refs: options.credentialsRefs }),
     new PluginFilesAdapter(options.pluginFiles, options.pluginFilesDir),
   ];
+  // self 分区：插件自身配置（同步/市场/偏好），portable 默认包含；'' = 不挂载
+  if (options.selfDir !== '') {
+    adapters.push(new SelfAdapter(options.selfDir ?? 'dsh-config-manager'));
+  }
   if (options.includeSessions) adapters.push(new SessionsAdapter());
   return adapters;
 }
@@ -74,4 +84,5 @@ export { WorkspacesAdapter } from './workspaces.ts';
 export { CredentialsAdapter, defaultCredentialRefs } from './credentials.ts';
 export { PluginFilesAdapter, DEFAULT_PLUGIN_FILE_WHITELIST } from './plugin-files.ts';
 export { SessionsAdapter } from './sessions.ts';
+export { SelfAdapter, SELF_CONFIG_FILES } from './self.ts';
 export { FileCollectionAdapter } from './file-collection.ts';

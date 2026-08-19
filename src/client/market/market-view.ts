@@ -6,7 +6,7 @@
  *    marketListSummary / computeItemBadge / marketItemWarnings / needsReview / toMarketListItem）。
  *    本文件原样 **re-export** 这些函数（单一来源，消重，避免与后端漂移）；
  *  - 本文件只保留**客户端专属**的 UI 装配函数（搜索/类别过滤、详情聚合、时间格式化、
- *    供应链警示的 warn/info 着色行）——这些不属共享模型，属前端薄层。
+ *    供应链警示的 warn/info 着色行、条目来源徽章）——这些不属共享模型，属前端薄层。
  *
  * 安全硬约束（§1 / §7.2）：供应链警示恒生成、needsReview 恒 true（re-export 自后端权威）。
  */
@@ -26,6 +26,25 @@ import type { MarketItemDetail, MarketListItem } from '../../market/types.ts';
 import type { ImportPlan, PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import { isOfficialMarket } from '../../market/builtin.ts';
+
+/* ---------------------------------------------------------------- 客户端专属：来源徽章 */
+
+/**
+ * 条目来源徽章 kind（阶段 1：条目级来源仓库，docs/design/2026-08-19-market-publish-design.md §3.3）：
+ * - `'ok'`（官方）：`item.repo` 缺省（条目与市场仓库同仓）或 `item.repo` 为官方默认地址；
+ * - `'warn'`（第三方）：`item.repo` 存在且非官方默认地址（条目由作者自托管仓库发布）。
+ * 判定基准复用 `builtin.ts` 的 `isOfficialMarket`（固定官方地址比较）：env 覆盖为预览仓库时，
+ * 无 repo 条目随市场头部一并显示第三方徽章，语义自洽。纯函数、node 可测；MarketPanel 只装配。
+ */
+export function sourceBadgeKind(item: { repo?: string }, builtinUrl: string): 'ok' | 'warn' {
+  return isOfficialMarket(item.repo ?? builtinUrl) ? 'ok' : 'warn';
+}
+
+/** 条目是否为第三方来源（有 repo 且非官方默认地址；无 repo 条目视为官方/市场同仓）。 */
+export function isThirdPartyItem(item: { repo?: string }, builtinUrl: string): boolean {
+  return sourceBadgeKind(item, builtinUrl) === 'warn';
+}
 
 /** 类别过滤：从条目收集全部出现过的类别（用于「全部类别」下拉）。 */
 export function collectCategories(items: readonly MarketListItem[]): string[] {

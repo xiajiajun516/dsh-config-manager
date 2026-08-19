@@ -12,7 +12,7 @@ import { DEFAULT_CATEGORIES } from '../../ui/export-flow.ts';
 import { EXPORT_GROUPS, type ExportGroup } from '../../ui/types.ts';
 import type {
   ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem,
-  SyncItemAdoption, SyncSectionInfo, SyncStatusResponse,
+  SyncItemAdoption, SyncSectionInfo, SyncSnapshotLite, SyncStatusResponse,
 } from './sync-api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
@@ -150,9 +150,79 @@ export function severityLabel(severity: PlanItem['severity'], t: UiT = zhUiT): s
 /** 远程同步通道类型：git（默认）或 webdav */
 export type SyncChannel = 'git' | 'webdav';
 
+/* ---------------------------------------------------------------- 每通道独立状态 */
+
+/**
+ * 每个同步通道（git/webdav）各自独立的设置状态：
+ * 自动同步、同步模式（默认/高级 + 分区勾选）、是否加密、远端快照互不共享。
+ * 敏感字段（加密/解密密码）仅内存：成功后清空，绝不持久化/回显。
+ */
+export interface ChannelSyncState {
+  /** 同步模式：默认（快速导出推荐分区） / 高级（自定义勾选分区） */
+  syncMode: SyncMode
+  /** 高级模式勾选的同步分区（初始 = 推荐分区；空 = 未勾选任何分区） */
+  syncSections: SectionId[]
+  /** 手动推送默认加密快照（持久化开关；密码不持久化） */
+  encrypt: boolean
+  /** 手动推送默认导出真实凭据值（持久化开关；必须同时 encrypt） */
+  includeSecrets: boolean
+  /** 加密密码（仅内存；推送成功后清空，绝不持久化/回显） */
+  encryptPassword: string
+  /** 加密密码确认（仅内存） */
+  encryptPasswordConfirm: string
+  /** 解密密码（拉取/一键同步加密快照用；仅内存，绝不持久化） */
+  decryptPassword: string
+  /** 当前选中的历史快照 id（'' = 最新） */
+  selectedSnapshotId: string
+  /** 该通道远端历史快照列表（「选择历史快照」下拉数据源） */
+  snapshots: SyncSnapshotLite[]
+  /** 该通道自动同步状态 */
+  autosync: AutosyncStatusResponse | null
+  /** 该通道自动同步开关（回填自 autosync） */
+  autosyncEnabled: boolean
+  /** 该通道自动同步间隔（回填自 autosync） */
+  autosyncInterval: AutosyncInterval
+}
+
+/** 缺省每通道状态（未配置时各字段默认值）。 */
+export function defaultChannelSyncState(): ChannelSyncState {
+  return {
+    syncMode: 'default',
+    syncSections: [],
+    encrypt: false,
+    includeSecrets: false,
+    encryptPassword: '',
+    encryptPasswordConfirm: '',
+    decryptPassword: '',
+    selectedSnapshotId: '',
+    snapshots: [],
+    autosync: null,
+    autosyncEnabled: false,
+    autosyncInterval: '30m',
+  }
+}
+
+/** 通道子 tab 的渲染模型（active/disabled 由组件据此装配 modeTabs）。 */
+export interface ChannelTabModel {
+  channel: SyncChannel
+  active: boolean
+  disabled: boolean
+}
+
+/** 通道子 tab 列表：git/webdav 两个 tab；busy 时全部禁用（防并发操作切换）。 */
+export function channelTabModels(active: SyncChannel, busy: boolean): ChannelTabModel[] {
+  return (['git', 'webdav'] as const).map((channel) => ({
+    channel,
+    active: channel === active,
+    disabled: busy,
+  }))
+}
+
 /* ---------------------------------------------------------------- 通道选择持久化 */
 
-/** 记住用户最近选择的通道（localStorage key；跨会话保持在用户上次所在栏） */
+/** 记住用户最近选择的通道（localStorage key；跨会话保持在用户上次所在栏）。
+ *  m-self：磁盘持久化（ui-prefs.json）为权威来源（Host 可读、随 self 分区进备份），
+ *  localStorage 仅保留为 status 响应未带回填时的同步降级通道（升级前遗留数据兼容）。 */
 export const SYNC_CHANNEL_STORAGE_KEY = 'dsh.configManager.syncChannel';
 
 /** 从 localStorage 读用户记住的通道；无/非法 → null（缺省 git，交由配置回填）。

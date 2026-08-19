@@ -14,6 +14,7 @@
  * POST /api/dsh-config-manager/market/refresh   → MarketRefreshResponse （拉取最新 index.json）
  * POST /api/dsh-config-manager/market/browse    → MarketBrowseResponse  （合并 index + 缓存状态）
  * POST /api/dsh-config-manager/market/download  → MarketDownloadResult  （{ itemId } 拉取+校验+dry-run 预览）
+ * POST /api/dsh-config-manager/market/prepare   → MarketPrepareResponse （发布向导：上传 zip + 元数据 → 条目包）
  * ```
  * 确认导入（apply）**复用现有** `POST /api/dsh-config-manager/execute`（见 ../api.ts executeImportPlan），
  * 不新增第二条导入路径 —— 保证安全校验/回滚/凭据补录全部走既有管道。
@@ -27,7 +28,7 @@
  */
 import type {
   MarketBrowseResponse, MarketDownloadResult, MarketItemDetail, MarketListItem,
-  MarketRefreshResponse, MarketStatusResponse,
+  MarketPreparePayload, MarketPrepareResponse, MarketRefreshResponse, MarketStatusResponse,
 } from '../../market/types.ts';
 import { ConfigManagerApiError } from '../api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
@@ -41,6 +42,9 @@ export const MARKET_API = {
   refresh: '/api/dsh-config-manager/market/refresh',
   browse: '/api/dsh-config-manager/market/browse',
   download: '/api/dsh-config-manager/market/download',
+  prepare: '/api/dsh-config-manager/market/prepare',
+  /** 受控临时区文件下载端点（发布包 zip 下载复用；GET ?path=，无凭据） */
+  fileDownload: '/api/dsh-config-manager/download',
 } as const;
 
 /** 市场请求超时（ms）：git 拉取可能较慢，与 Host 半 ROUTE_TIMEOUT_MS 对齐量级 */
@@ -126,5 +130,16 @@ export class MarketApi {
    *  真正落盘由用户对预览确认后走现有 executeImportPlan（confirm:true 安全阀 + 回滚）。 */
   async download(itemId: string): Promise<MarketDownloadResult> {
     return postJson<MarketDownloadResult>(MARKET_API.download, { itemId }, this.t);
+  }
+
+  /** 发布向导：由「上传 zip + 用户填写元数据」生成市场条目包（L2 manifest + SHA-256 + sections），
+   *  供 UI 展示/复制与引导推送。零写入配置（发布目录在受控临时区）；不含任何凭据字段。 */
+  async prepare(payload: MarketPreparePayload): Promise<MarketPrepareResponse> {
+    return postJson<MarketPrepareResponse>(MARKET_API.prepare, payload, this.t);
+  }
+
+  /** 发布包下载 URL（受控临时区 zip；经宿主 /download 端点，无凭据、无写操作） */
+  downloadPublishUrl(zipPath: string): string {
+    return `${MARKET_API.fileDownload}?path=${encodeURIComponent(zipPath)}`;
   }
 }

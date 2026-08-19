@@ -187,7 +187,8 @@ test('import-wizard: setArchiveEncrypted(true, zipPath) 存入容器路径供 un
 
   // unlockArchive 后 zipPath 仍为加密路径，unlockedZipPath 为明文路径
   const decrypted = await wiz.unlockArchive('/tmp/encrypted-backup.dca1', 'secret123');
-  void decrypted;
+  assert.deepEqual(decrypted, { zipPath: '/tmp/encrypted-backup.dca1', refs: [] },
+    'unlockArchive 必须返回明文 ZIP 路径与凭据覆盖清单（导入全程只输一次密码）');
   assert.equal(wiz.snapshot().zipPath, '/tmp/encrypted-backup.dca1',
     'unlockArchive 后 snapshot.zipPath 仍为加密容器路径');
   // resolvedZipPath 应返回明文路径（通过私有字段，这里用 snapshot 验证 zipPath 不变）

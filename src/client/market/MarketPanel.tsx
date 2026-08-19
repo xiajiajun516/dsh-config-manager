@@ -12,11 +12,13 @@
  *   - 「确认导入」→ 只把已批准分区子计划交给 executeImportPlan（confirm:true 安全阀 + 回滚）。
  *
  * 全部渲染模型来自 ./market-view.ts 纯函数（node 单测覆盖），本组件只做装配；
- * 状态组件内自持（低频显式操作，同 SyncSettingsView 策略，不进 sessionStorage）。
+ * 状态组件内自持（useState），同时经 toMarketStoreSlice() 镜像进模块级 runStore：
+ * 模块级单例保证「切 tab 不丢」，sessionStorage 白名单保证「刷新恢复」
+ * （搜索词/类别筛选/条目列表/详情与逐分区批准/导入结果）。
  * 安全：市场端点无任何 secret 输入（内置 URL 已由 validateRepoUrl 拒绝 userinfo）；downloaded
  * 内容一律视为不可信，确认导入前 supply-chain 警示可见 & needsReview 恒 true（不允许默认信任）。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
@@ -24,14 +26,16 @@ import type { ImportResult, ImportPlan } from '../../core/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { BUILTIN_MARKET_URL, isOfficialMarket } from '../../market/builtin.ts'
 import type { MarketApi } from './market-api.ts'
+import { PublishView } from './PublishView.tsx'
 import type {
   MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketSummary,
 } from '../../market/types.ts'
 import {
   approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, defaultApprovals,
-  filterMarketItems, marketDetailView, marketListSummary, marketStatusText,
+  filterMarketItems, marketDetailView, marketListSummary, marketStatusText, sourceBadgeKind,
 } from './market-view.ts'
 import type { MarketApprovals } from './market-view.ts'
+import { runStore, toMarketStoreSlice, type MarketStoreSlice } from '../run-store.ts'
 import css from '../config-manager.module.css'
 
 export interface MarketPanelProps {
@@ -82,10 +86,48 @@ const initial: MarketUiState = {
   error: null,
 }
 
+/**
+ * 从 runStore 恢复上次的市场 UI 状态（切 tab 回 / 刷新后挂载）。
+ * 无敏感字段；detail.zipPath 为宿主受控临时文件（懒 GC 10 分钟），
+ * 若已过期，确认导入会得到明确错误 → 重新下载即可。
+ */
+function initFromStore(): MarketUiState {
+  const s: MarketStoreSlice = runStore.getSnapshot().market
+  return {
+    ...initial,
+    search: s.search,
+    category: s.category,
+    items: s.items,
+    detail: s.detail,
+    approvals: s.approvals,
+    importResult: s.importResult,
+    error: s.error,
+    loadError: s.loadError,
+  }
+}
+
 export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
   const uiT = api.t // 展示层翻译器（zh/en）：供应链警示 / 状态行 / 徽章文本走 UiT（market.* 键）
-  const [state, setState] = useState<MarketUiState>(initial)
-  const patch = (p: Partial<MarketUiState>): void => setState((s) => ({ ...s, ...p }))
+  /** 发布向导开关（组件内状态，不进 sessionStorage —— 发布为一次性低频率流程） */
+  const [publishOpen, setPublishOpen] = useState(false)
+  const [state, setState] = useState<MarketUiState>(initFromStore)
+  /** 最新 state 镜像（卸载 flush 时读取，避免闭包过期值） */
+  const stateRef = useRef<MarketUiState>(state)
+  const patch = (p: Partial<MarketUiState>): void => setState((s) => {
+    const next = { ...s, ...p }
+    stateRef.current = next
+    return next
+  })
+
+  /** 状态镜像：任何 UI 状态变化同步进 runStore（切 tab 不丢 / 刷新恢复）。 */
+  useEffect(() => {
+    runStore.patch({ market: toMarketStoreSlice(state) })
+  }, [state])
+
+  /** 卸载时最后镜像一次（防止「最后一次改动后立即切 tab」时镜像 effect 尚未 flush）。 */
+  useEffect(() => () => {
+    runStore.patch({ market: toMarketStoreSlice(stateRef.current) })
+  }, [])
 
   /** 内置市场 URL（单一权威；来自 Host 内置常量） */
   const marketUrl: string = BUILTIN_MARKET_URL
@@ -214,6 +256,8 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
           <Button disabled={state.browsing} onClick={() => { void runBrowse() }}>
             {state.browsing ? <Spinner label={t('list.loading')} /> : t('list.browse')}
           </Button>
+          {/* 发布到市场入口（ghost 次操作）：打开发布向导（PublishView 组件内状态切换） */}
+          <Button onClick={() => { setPublishOpen(true) }}>{t('publish.title')}</Button>
         </div>
         <div className={css.statRow}>
           <Badge kind={state.loadError !== null ? 'error' : 'ok'}>{statusText}</Badge>
@@ -361,32 +405,39 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
           {/* 条目卡片列表 */}
           {!state.browsing && state.loadError === null && filtered.length > 0 && (
             <div className={css.snapshotList}>
-              {filtered.map((it) => (
-                <div key={it.id} className={css.statRow} style={{ paddingTop: 4 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className={css.conflictHead}>
-                      <span className={css.conflictId}>{it.name}</span>
-                      {it.version !== undefined && <Badge kind="info">{it.version}</Badge>}
+              {filtered.map((it) => {
+                // 来源徽章（阶段 1：条目级来源仓库）：官方 ok / 第三方 warn，文案走字典
+                const sourceKind = sourceBadgeKind(it, marketUrl)
+                return (
+                  <div key={it.id} className={css.statRow} style={{ paddingTop: 4 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className={css.conflictHead}>
+                        <span className={css.conflictId}>{it.name}</span>
+                        {it.version !== undefined && <Badge kind="info">{it.version}</Badge>}
+                      </div>
+                      {(it.author !== undefined || it.description !== undefined) && (
+                        <span className={css.hint}>
+                          {it.author !== undefined ? `${it.author}` : ''}
+                          {it.author !== undefined && it.description !== undefined ? ' · ' : ''}
+                          {it.description ?? ''}
+                        </span>
+                      )}
+                      <div className={css.statRow}>
+                        <Badge kind={sourceKind}>
+                          {sourceKind === 'ok' ? t('list.sourceOfficial') : t('list.sourceThirdParty')}
+                        </Badge>
+                        {(it.categories ?? []).map((c) => <Badge key={c} kind="info">{c}</Badge>)}
+                        <Badge kind={it.cacheState === 'cached' ? 'ok' : it.cacheState === 'fresh' ? 'info' : 'warn'}>
+                          {cacheLabel(it.cacheState)}
+                        </Badge>
+                      </div>
                     </div>
-                    {(it.author !== undefined || it.description !== undefined) && (
-                      <span className={css.hint}>
-                        {it.author !== undefined ? `${it.author}` : ''}
-                        {it.author !== undefined && it.description !== undefined ? ' · ' : ''}
-                        {it.description ?? ''}
-                      </span>
-                    )}
-                    <div className={css.statRow}>
-                      {(it.categories ?? []).map((c) => <Badge key={c} kind="info">{c}</Badge>)}
-                      <Badge kind={it.cacheState === 'cached' ? 'ok' : it.cacheState === 'fresh' ? 'info' : 'warn'}>
-                        {cacheLabel(it.cacheState)}
-                      </Badge>
-                    </div>
+                    <Button disabled={state.downloadingId === it.id} onClick={() => { void runDownload(it.id) }}>
+                      {state.downloadingId === it.id ? <Spinner label={t('common.loading')} /> : t('list.download')}
+                    </Button>
                   </div>
-                  <Button disabled={state.downloadingId === it.id} onClick={() => { void runDownload(it.id) }}>
-                    {state.downloadingId === it.id ? <Spinner label={t('common.loading')} /> : t('list.download')}
-                  </Button>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </Card>

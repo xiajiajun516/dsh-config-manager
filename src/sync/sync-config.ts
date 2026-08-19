@@ -30,6 +30,9 @@ import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 
 export const SYNC_CONFIG_FILE = 'sync-config.json';
 
+/** 同步通道类型（git / webdav；host 侧统一引用，autosync-config / sync-selection 复用）。 */
+export type SyncTransportType = 'git' | 'webdav';
+
 /** 当前 sync-config.json schema 版本号（v3：双命名空间共存，切换通道不丢失另一通道配置）。 */
 export const SYNC_CONFIG_SCHEMA_VERSION = 3;
 /** 历史可读取版本：v1、v2、v3。 */
@@ -196,6 +199,21 @@ export async function readFullSyncConfig(dir: string): Promise<FullSyncConfig | 
     }
   } catch { /* 默认 git */ }
   return { transport, git: both.git, webdav: both.webdav }
+}
+
+/**
+ * 读取指定通道的同步通道配置（供自动同步调度器按通道运行）。
+ * 从完整双命名空间配置取对应通道构造可辨识联合 SyncConfig；该通道未配置 → null。
+ */
+export async function readSyncConfigFor(dir: string, channel: SyncTransportType): Promise<SyncConfig | null> {
+  const full = await readFullSyncConfig(dir);
+  if (full === null) return null;
+  if (channel === 'webdav') {
+    if (full.webdav === undefined) return null;
+    return { schemaVersion: 2, transport: 'webdav', webdav: full.webdav };
+  }
+  if (full.git === undefined) return null;
+  return { schemaVersion: 2, transport: 'git', git: full.git };
 }
 
 /**

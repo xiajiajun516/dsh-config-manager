@@ -604,7 +604,7 @@ function buildProfileManifest(ctx: HostContext): Manifest {
     sections: {
       settings: false, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
       skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
-      credentialsStatus: false, secrets: false, sessions: false,
+      credentialsStatus: false, secrets: false, sessions: false, self: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },
   };

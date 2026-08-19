@@ -257,6 +257,17 @@ export const uiZh = {
   'market.detail.sectionsEmpty': '未声明分区',
   'market.detail.statusValid': '校验通过',
   'market.detail.statusInvalid': '校验未通过',
+  // 发布向导（m-market-publish：纯渲染层文案；React 壳文案在 config-manager-market 命名空间）
+  'marketPublish.stepSelect': '选择配置包',
+  'marketPublish.stepValidate': '本地校验',
+  'marketPublish.stepPrepare': '生成条目包',
+  'marketPublish.stepPush': '推送作者仓库',
+  'marketPublish.stepSubmit': '提交收录申请',
+  'marketPublish.errorItemId': '条目 id 仅允许字母数字开头，字符限 . _ -（最长 128）',
+  'marketPublish.errorName': '条目名称不能为空',
+  'marketPublish.repoWhitespace': '仓库地址不能包含空白字符',
+  'marketPublish.repoScheme': '仓库地址必须为 http(s) 链接',
+  'marketPublish.repoUserinfo': '仓库地址不能包含用户名或密码（userinfo）；凭据请通过 DSH credentials 提供',
 } as const;
 
 export type UiTextKey = keyof typeof uiZh;
@@ -495,6 +506,16 @@ export const uiEn: Record<UiTextKey, string> = {
   'market.detail.sectionsEmpty': 'No sections declared',
   'market.detail.statusValid': 'Verified',
   'market.detail.statusInvalid': 'Failed verification',
+  'marketPublish.stepSelect': 'Select config package',
+  'marketPublish.stepValidate': 'Local validation',
+  'marketPublish.stepPrepare': 'Generate item package',
+  'marketPublish.stepPush': 'Push to author repo',
+  'marketPublish.stepSubmit': 'Submit listing request',
+  'marketPublish.errorItemId': 'Item id must start with a letter or digit; only . _ - allowed (max 128)',
+  'marketPublish.errorName': 'Item name is required',
+  'marketPublish.repoWhitespace': 'Repository URL must not contain whitespace',
+  'marketPublish.repoScheme': 'Repository URL must be an http(s) link',
+  'marketPublish.repoUserinfo': 'Repository URL must not contain username/password (userinfo); provide credentials via DSH credentials',
 };
 
 /** UI 翻译函数：key → 当前语言文案（{param} 插值；未知键回退 zh/键名）。 */

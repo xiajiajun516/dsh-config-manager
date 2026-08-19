@@ -75,13 +75,14 @@ async function backupHostFiles(
   return backups;
 }
 
-/** 文件类分区的目标基准目录（相对 homeDir；pluginFiles 的 ref 已是完整相对路径） */
+/** 文件类分区的目标基准目录（相对 homeDir；pluginFiles/self 的 ref 已是完整相对路径） */
 const FILE_BASES: Partial<Record<SectionId, string>> = {
   skills: 'skills',
   agentPresets: '.agent-presets',
   agentInstructions: '', // homeDir 根（~/.dsh/AGENTS.md）
   pluginFiles: '',
   sessions: 'sessions',
+  self: 'dsh-config-manager',
 };
 
 /** 解析文件类目标的绝对路径（引擎通用快照与回滚共用） */
@@ -169,7 +170,8 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     case 'agentPresets':
     case 'agentInstructions':
     case 'pluginFiles':
-    case 'sessions': {
+    case 'sessions':
+    case 'self': {
       const abs = resolveFileTarget(ctx, target.adapter, target.ref);
       if (!(await ctx.fs.exists(abs))) {
         return { kind: 'file', adapter: target.adapter, ref: target.ref, before: null, existed: false };

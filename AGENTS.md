@@ -23,7 +23,7 @@ src/
 ├── core/             核心引擎：exporter / importer / restore / rollback / run-registry / plugin-cli，与 DSH 运行时解耦（ConfigAdapter/HostContext 接口 + 内存 mock）
 ├── schema/           领域类型 / Manifest / 版本判定（CURRENT_SCHEMA_VERSION=1）
 ├── security/         secret-scanner / redaction / zip-security / integrity / encryption（scrypt + AES-256-GCM）
-├── adapters/         12 个真实配置适配器（settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/workspaces/credentials/pluginFiles/sessions）
+├── adapters/         13 个真实配置适配器（settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/workspaces/credentials/pluginFiles/sessions/self）
 ├── sync/             同步体系：SyncEngine + GitTransport/WebDavTransport + AutoSyncScheduler + 配置/状态/历史/sync-selection
 ├── market/           配置市场：GitMarketReader + index-parser + security 校验 + builtin 内置市场
 ├── migrations/       schema 迁移链（registry + v1→v2 占位）
@@ -32,7 +32,7 @@ src/
 ├── utils/            通用工具（paths/zip/hashing/json/logger）
 └── client/           React 界面（浏览器半）—— 见下「页面与组件落位」
 tests/                集成式测试（node --test）
-docs/                 设计文档（sync-auto-sync-design.md 等，改同步/安全功能先读）
+docs/                 设计文档（docs/design/，现有 UI 与市场发布设计）
 ```
 
 ### UI 分层（改动前必读，避免放错层）
@@ -107,10 +107,10 @@ typecheck → npm test → build → npm pack → npm publish（Trusted Publishi
 
 - 双面插件：**host 半**（`src/index.ts`，Cordis 入口 `name='config-manager'`，挂 `/api/dsh-config-manager/*` 路由）+ **web 半**（`src/client/`，React，`settings.section` 挂载，经 api 调 host）
 - `src/core/` 与 DSH 运行时**解耦**：`ConfigAdapter`/`HostContext` 接口 + 内存 mock，可独立测试——**新功能优先加进 core，适配器/UI 只做薄壳**
-- 12 个 adapter：`settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/workspaces/credentials/pluginFiles/sessions`（`src/adapters/`）
-- 同步体系：`SyncEngine` + `GitTransport`/`WebDavTransport` + `AutoSyncScheduler`（事件驱动：远端有新快照才拉、本地有改动才推）+ `sync-selection`（分区选择持久化，自动同步与手动推送共用）
+- 13 个 adapter：`settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/workspaces/credentials/pluginFiles/sessions/self`（`src/adapters/`）；`self` 分区 = 插件自身配置（`$DSH_HOME/dsh-config-manager/` 下 `sync-*.json` / `market-config.json` / `ui-prefs.json` 白名单收集，文件类分区，portable 默认包含；`dataDir` 在 `~/.dsh` 之外时宿主不挂载）
+- 同步体系：`SyncEngine` + `GitTransport`/`WebDavTransport` + `AutoSyncScheduler`（事件驱动：远端有新快照才拉、本地有改动才推）+ `sync-selection`（分区选择持久化，自动同步与手动推送共用）；**autosync 与 sync-selection 均按通道（git/webdav）独立**（schema v2，v1 迁移到 git 通道），调度器双通道各自排期
 - **import 一律带 `.ts` 后缀**（Deno-style，全仓统一，勿写成无后缀）
-- 设计决策有上游文档：`docs/sync-auto-sync-design.md`、`docs/sync-redesign-spec.md`、`docs/design/` —— 改同步/安全相关功能先读，**设计文档是上游依据，实现规格在下游**
+- 设计决策有上游文档：`docs/design/`（现有 UI 与市场发布设计；历史 sync/安全设计文档已随旧 `Docs/` 目录清理移除，当前依据以代码文件头注释为准）—— 对应领域先读，**设计文档是上游依据，实现规格在下游**
 - 依赖注入走 Cordis fiber：client 面经 `ctx.slots.inject('settings.section', ...)` 注册 + `inject: () => ({ api, syncApi, ... })` 注入服务；host 面可选服务用 `ctx.get()` 惰取
 
 ## 🛠️ 开发规范
@@ -126,7 +126,8 @@ typecheck → npm test → build → npm pack → npm publish（Trusted Publishi
 ### 状态管理
 
 - 高频/可恢复流程（Export / Import）状态集中在 `src/client/run-store.ts`（模块级单例，`useSyncExternalStore` 消费，sessionStorage 白名单持久化）；**新视图若状态需要「切 tab 不丢 / 刷新恢复」，加入 runStore 而非另造 store**
-- 低频显式操作（Snapshots / Sync / Market）状态组件内自持（`useState` + `useRef` 镜像），不进 sessionStorage
+- 低频面板（Snapshots / Sync / Market）状态组件内自持（`useState` + `useRef` 镜像），**同时把非敏感切片镜像进 runStore**（`toSyncStoreSlice` / `toMarketStoreSlice` / `toSnapshotsStoreSlice`，实现切 tab 不丢 / 刷新恢复）：组件 `useEffect` 监听自身状态变化 → `runStore.patch({ sync|market|snapshots })`，挂载时从 store 切片重建初始状态，卸载时最后 flush 一次；同步凭据（token / webdav 密码 / 加密与解密密码）仅内存，由 `toPersistedState` 白名单硬性剔除，刷新后清空要求重输
+- 面板开关（`ConfigManagerSection` 当前打开的 tab）存 runStore `panel` 字段：切 tab 不丢、刷新后回到原 tab
 - 控制器实例（`ExportFlow` / `ImportWizard`）由 runStore 缓存复用，**禁止每次渲染 new 一个**（切 tab 会重建，破坏 m2 状态恢复）；刷新恢复经 `writeWizardSnapshot()` 受控 rehydrate
 
 ### 数据访问 / 错误处理

@@ -1,22 +1,27 @@
 /**
- * AutoSyncScheduler：宿主后台自动同步调度器。
+ * AutoSyncScheduler：宿主后台自动同步调度器（按同步通道独立调度）。
  *
  * 生命周期：
- *  - start()：读 autosync-config；若 enabled 启动定时器（按 interval）；无条件执行一次
- *    「启动触发下载合并」（受 startupMinIntervalMs 阈值约束）。
- *  - stop()：清定时器、标记不再调度。
- *  - runOnce()：执行一次完整双向自动同步（§6.1 流程）。
+ *  - start()：读两个通道（git/webdav）的 autosync 配置；每个 enabled 通道启动独立定时器
+ *    （按各自 interval）；无条件对每个 enabled 通道执行一次「启动触发下载合并」
+ *    （受各自 startupMinIntervalMs 阈值约束）。
+ *  - stop()：清全部定时器、标记不再调度。
+ *  - runOnce(channel)：对指定通道执行一次完整双向自动同步（§6.1 流程）。
+ *
+ * 双通道语义：git 与 webdav 的自动同步配置（enabled/interval/运行状态）各自独立，
+ * 互不干扰；同一时刻至多执行一个通道的 runOnce（runs.register('autosync') 全局防重，
+ * 避免两个引擎并发写本地配置），另一通道的定时触发在本轮结束后自然补跑。
  *
  * 核心逻辑（runOnce）：
- *  - 读配置；若 !enabled → return
+ *  - 读该通道配置；若 !enabled → return
  *  - runs.register('autosync') 防重复；同 kind running → 跳过
- *  - readSyncConfig → 按通道判定未配置（git 无 git.repoUrl / webdav 无 webdav.url）
+ *  - readSyncConfig(该通道) → 按通道判定未配置（git 无 git.repoUrl / webdav 无 webdav.url）
  *    → 记 skipped(未配置) → return
  *  - Phase A: engine.merge() 三方合并 → 判定 needsReview（冲突/缺失依赖/Install/Error）
  *  - 冲突 → 跳过 + 写历史 skipped + conflictedSections[] → return
  *  - Phase B: 无冲突 → engine.applyMergePlan(apply) 写入本地
  *  - Phase C: 完整双向 → engine.push() 上传
- *  - 收尾：写 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures, lastRunHistoryId）
+ *  - 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures, lastRunHistoryId）
  *
  * 连续失败计数：只对网络/传输/apply 真实失败计数；skipped（未配置/冲突跳过/无远端）不计。
  * 连续失败 ≥ 3 → host.log.warn 通知 + 记 notifiedAt。
@@ -30,8 +35,8 @@ import type { RunRegistry } from '../core/run-registry.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './autosync-config.ts';
-import { isGitConfig, isWebDavConfig, readSyncConfig } from './sync-config.ts';
-import type { SyncConfig } from './sync-config.ts';
+import { readSyncConfigFor, isGitConfig, isWebDavConfig } from './sync-config.ts';
+import type { SyncConfig, SyncTransportType } from './sync-config.ts';
 import { readSyncHistory, appendAutosyncEntry } from './sync-history.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
@@ -88,13 +93,13 @@ export interface AutoSyncSchedulerOptions {
   /** 消息翻译器 */
   msg: MsgFunc;
   runs: RunRegistry;
-  /** 时间源（测试注​入） */
+  /** 时间源（测试注入） */
   now?: () => Date;
-  /** 注入 autosync-config 读写（测试可内存实现） */
-  readConfig?: () => Promise<AutosyncConfig>;
-  writeConfig?: (cfg: AutosyncConfig) => Promise<void>;
-  /** 注入 sync-config 读取 */
-  readSyncConfigFn?: () => Promise<SyncConfig | null>;
+  /** 注入 autosync-config 读写（按通道；测试可内存实现） */
+  readConfig?: (channel: SyncTransportType) => Promise<AutosyncConfig>;
+  writeConfig?: (channel: SyncTransportType, cfg: AutosyncConfig) => Promise<void>;
+  /** 注入 sync-config 读取（按通道） */
+  readSyncConfigFn?: (channel: SyncTransportType) => Promise<SyncConfig | null>;
   /** 注入 sync-history 读写 */
   readHistoryFn?: () => Promise<Awaited<ReturnType<typeof readSyncHistory>>>;
   appendHistoryFn?: (entry: AutosyncHistoryEntry) => Promise<void>;
@@ -120,9 +125,9 @@ export class AutoSyncScheduler {
   private readonly msg: MsgFunc;
   private readonly runs: RunRegistry;
   private readonly now: () => Date;
-  private readonly readConfig: () => Promise<AutosyncConfig>;
-  private readonly writeConfig: (cfg: AutosyncConfig) => Promise<void>;
-  private readonly readSyncConfigFn: () => Promise<SyncConfig | null>;
+  private readonly readConfig: (channel: SyncTransportType) => Promise<AutosyncConfig>;
+  private readonly writeConfig: (channel: SyncTransportType, cfg: AutosyncConfig) => Promise<void>;
+  private readonly readSyncConfigFn: (channel: SyncTransportType) => Promise<SyncConfig | null>;
   private readonly readHistoryFn: () => Promise<Awaited<ReturnType<typeof readSyncHistory>>>;
   private readonly appendHistoryFn: (entry: AutosyncHistoryEntry) => Promise<void>;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -130,7 +135,8 @@ export class AutoSyncScheduler {
   private readonly detectRemoteNew: (engine: SyncEngine) => Promise<boolean>;
   private readonly detectLocalChange: (engine: SyncEngine) => Promise<boolean>;
 
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  /** 每通道一个定时器（git/webdav 各自 enabled 时独立排期）。 */
+  private readonly timers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
   private stopped = false;
   private running = false;
 
@@ -141,9 +147,9 @@ export class AutoSyncScheduler {
     this.msg = opts.msg;
     this.runs = opts.runs;
     this.now = opts.now ?? (() => new Date());
-    this.readConfig = opts.readConfig ?? (() => readAutosyncConfig(this.syncDir));
-    this.writeConfig = opts.writeConfig ?? ((cfg) => writeAutosyncConfig(this.syncDir, cfg));
-    this.readSyncConfigFn = opts.readSyncConfigFn ?? (() => readSyncConfig(this.syncDir));
+    this.readConfig = opts.readConfig ?? ((channel) => readAutosyncConfig(this.syncDir, channel));
+    this.writeConfig = opts.writeConfig ?? ((channel, cfg) => writeAutosyncConfig(this.syncDir, channel, cfg));
+    this.readSyncConfigFn = opts.readSyncConfigFn ?? ((channel) => readSyncConfigFor(this.syncDir, channel));
     this.readHistoryFn = opts.readHistoryFn ?? (() => readSyncHistory(this.syncDir));
     this.appendHistoryFn = opts.appendHistoryFn ?? ((entry) => appendAutosyncEntry(this.syncDir, entry));
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
@@ -152,75 +158,79 @@ export class AutoSyncScheduler {
     this.detectLocalChange = opts.detectLocalChange ?? defaultDetectLocalChange;
   }
 
-  /** 启动：读配置 → 若 enabled 启动定时器 → 无条件执行一次启动触发下载合并。 */
+  /** 启动：读两个通道配置 → enabled 通道各自排定时器 → 对每个 enabled 通道执行一次启动触发。 */
   start(): void {
     if (this.stopped) return;
-    this.refreshTimer();
-    void this.startupRun();
+    this.refreshTimers();
+    void this.startupRuns();
   }
 
-  /** 停止：清定时器、标记不再调度；正在执行的任务允许自然结束。 */
+  /** 停止：清全部定时器、标记不再调度；正在执行的任务允许自然结束。 */
   stop(): void {
     this.stopped = true;
-    if (this.timer !== null) {
-      this.clearTimer(this.timer);
-      this.timer = null;
-    }
+    for (const timer of this.timers.values()) this.clearTimer(timer);
+    this.timers.clear();
   }
 
-  /** 重新加载配置（路由 POST /sync/autosync 后调用）。 */
+  /** 重新加载配置（路由 POST /sync/autosync 后调用；重排所有通道定时器）。 */
   async reload(): Promise<void> {
     if (this.stopped) return;
-    this.refreshTimer();
+    this.refreshTimers();
   }
 
-  private refreshTimer(): void {
-    if (this.timer !== null) {
-      this.clearTimer(this.timer);
-      this.timer = null;
+  private refreshTimers(): void {
+    for (const timer of this.timers.values()) this.clearTimer(timer);
+    this.timers.clear();
+    const channels: SyncTransportType[] = ['git', 'webdav'];
+    for (const channel of channels) {
+      void this.readConfig(channel).then((cfg) => {
+        if (this.stopped || !cfg.enabled) return;
+        const ms = intervalToMs(cfg.interval);
+        const timer = this.setTimer(() => {
+          // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
+          this.timers.delete(channel);
+          if (this.stopped) return;
+          void this.runOnce(channel)
+            .catch((err) => {
+              this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
+            })
+            .then(() => {
+              // 本轮结束（成功 / 跳过 / 失败）后重新排定下一次；refreshTimers
+              // 内部重读配置，若期间被关闭（enabled=false）则不再排期。
+              if (!this.stopped) this.refreshTimers();
+            });
+        }, ms);
+        this.timers.set(channel, timer);
+      }).catch(() => { /* 读配置失败静默 */ });
     }
-    void this.readConfig().then((cfg) => {
-      if (this.stopped || !cfg.enabled) return;
-      const ms = intervalToMs(cfg.interval);
-      this.timer = this.setTimer(() => {
-        // 一次性定时器：触发后立即置空，避免 reload() 清理到已失效的句柄
-        this.timer = null;
-        if (this.stopped) return;
-        void this.runOnce()
-          .catch((err) => {
-            this.host.log.error('自动同步定时触发失败', { error: err instanceof Error ? err.message : String(err) });
-          })
-          .then(() => {
-            // 本轮结束（成功 / 跳过 / 失败）后重新排定下一次；refreshTimer
-            // 内部重读配置，若期间被关闭（enabled=false）则不再排期。
-            if (!this.stopped) this.refreshTimer();
-          });
-      }, ms);
-    }).catch(() => { /* 读配置失败静默 */ });
   }
 
-  /** 启动触发下载合并（受 startupMinIntervalMs 阈值约束）。 */
-  private async startupRun(): Promise<void> {
-    try {
-      const cfg = await this.readConfig();
-      if (!cfg.enabled) return; // 总开关关闭 → 启动触发不执行
-      if (!shouldTriggerStartupRun(cfg.lastRunAt, cfg.startupMinIntervalMs, this.now().getTime())) {
-        this.host.log.info('自动同步启动触发跳过：距上次运行未达阈值');
-        return;
+  /** 启动触发下载合并（每个 enabled 通道；受各自 startupMinIntervalMs 阈值约束）。 */
+  private async startupRuns(): Promise<void> {
+    const channels: SyncTransportType[] = ['git', 'webdav'];
+    for (const channel of channels) {
+      try {
+        const cfg = await this.readConfig(channel);
+        if (!cfg.enabled) continue; // 该通道总开关关闭 → 启动触发不执行
+        if (!shouldTriggerStartupRun(cfg.lastRunAt, cfg.startupMinIntervalMs, this.now().getTime())) {
+          this.host.log.info(`自动同步启动触发跳过（${channel}）：距上次运行未达阈值`);
+          continue;
+        }
+        await this.runOnce(channel, { startup: true });
+      } catch (err) {
+        this.host.log.error(`启动触发下载合并失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
       }
-      await this.runOnce({ startup: true });
-    } catch (err) {
-      this.host.log.error('启动触发下载合并失败', { error: err instanceof Error ? err.message : String(err) });
     }
   }
 
   /**
-   * 执行一次自动同步（§6.1）。
+   * 执行一次指定通道的自动同步（§6.1）。
+   * @param channel - 同步通道（git / webdav；各自独立的配置与运行状态）
    * @param opts.startup - true 表示启动触发变体（只做 Phase A+B，不做 Phase C push）
    */
-  async runOnce(opts: { startup?: boolean } = {}): Promise<AutosyncRunResult> {
+  async runOnce(channel: SyncTransportType, opts: { startup?: boolean } = {}): Promise<AutosyncRunResult> {
     if (this.running) return { status: 'skipped', direction: 'none', skipReason: 'running', historyId: '', consecutiveFailures: 0 };
-    const cfg = await this.readConfig();
+    const cfg = await this.readConfig(channel);
     if (!cfg.enabled) {
       return { status: 'skipped', direction: 'none', skipReason: 'disabled', historyId: '', consecutiveFailures: cfg.consecutiveFailures };
     }
@@ -240,8 +250,8 @@ export class AutoSyncScheduler {
     }
 
     try {
-      // 读 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
-      const syncCfg = await this.readSyncConfigFn();
+      // 读该通道 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
+      const syncCfg = await this.readSyncConfigFn(channel);
       if (!syncIsConfigured(syncCfg)) {
         const result: AutosyncRunResult = {
           status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
@@ -254,7 +264,7 @@ export class AutoSyncScheduler {
           createdAt: nowIso,
           failureCountAtRun: cfg.consecutiveFailures,
         });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId);
+        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
       }
 
@@ -281,7 +291,7 @@ export class AutoSyncScheduler {
           direction: 'pull', status: 'skipped', skipReason: 'encrypted',
           createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
         });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId);
+        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
       }
 
@@ -302,7 +312,7 @@ export class AutoSyncScheduler {
           direction: 'both', status: 'success', skipReason: 'upToDate',
           createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
         });
-        await this.writeFinalConfig(cfg, result, nowIso, historyId);
+        await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
       }
 
@@ -323,8 +333,8 @@ export class AutoSyncScheduler {
             direction: 'pull', status: 'failed', error, createdAt: nowIso,
             failureCountAtRun: cfg.consecutiveFailures + 1,
           });
-          await this.writeFinalConfig(cfg, result, nowIso, historyId);
-          this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+          await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+          this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
           return result;
         }
 
@@ -342,7 +352,7 @@ export class AutoSyncScheduler {
             conflictedSections, createdAt: nowIso,
             failureCountAtRun: cfg.consecutiveFailures,
           });
-          await this.writeFinalConfig(cfg, result, nowIso, historyId);
+          await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
           return result;
         }
 
@@ -365,8 +375,8 @@ export class AutoSyncScheduler {
               direction: 'pull', status: 'failed', error, createdAt: nowIso,
               failureCountAtRun: cfg.consecutiveFailures + 1,
             });
-            await this.writeFinalConfig(cfg, result, nowIso, historyId);
-            this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+            await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+            this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
             return result;
           }
         }
@@ -388,8 +398,8 @@ export class AutoSyncScheduler {
               appliedSections, error,
               createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
             });
-            await this.writeFinalConfig(cfg, result, nowIso, historyId);
-            this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+            await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+            this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
             return result;
           }
           const result: AutosyncRunResult = {
@@ -402,7 +412,7 @@ export class AutoSyncScheduler {
             appliedSections, pushedSnapshotId: pushReport.snapshotId,
             createdAt: nowIso, failureCountAtRun: 0,
           });
-          await this.writeFinalConfig(cfg, result, nowIso, historyId);
+          await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
           return result;
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
@@ -416,8 +426,8 @@ export class AutoSyncScheduler {
             appliedSections, error,
             createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
           });
-          await this.writeFinalConfig(cfg, result, nowIso, historyId);
-          this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+          await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+          this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
           return result;
         }
       }
@@ -433,7 +443,7 @@ export class AutoSyncScheduler {
         ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
         createdAt: nowIso, failureCountAtRun: 0,
       });
-      await this.writeFinalConfig(cfg, result, nowIso, historyId);
+      await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
       return result;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
@@ -445,8 +455,8 @@ export class AutoSyncScheduler {
         direction: 'both', status: 'failed', error,
         createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
       });
-      await this.writeFinalConfig(cfg, result, nowIso, historyId);
-      this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso);
+      await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+      this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
       return result;
     } finally {
       this.running = false;
@@ -463,14 +473,15 @@ export class AutoSyncScheduler {
     }
   }
 
-  /** 收尾：写 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures, lastRunHistoryId）。 */
+  /** 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures, lastRunHistoryId）。 */
   private async writeFinalConfig(
     base: AutosyncConfig,
     result: AutosyncRunResult,
     nowIso: string,
     historyId: string,
+    channel: SyncTransportType,
   ): Promise<void> {
-    await this.writeConfig({
+    await this.writeConfig(channel, {
       ...base,
       lastRunAt: nowIso,
       lastRunStatus: result.status,
@@ -481,16 +492,16 @@ export class AutoSyncScheduler {
   }
 
   /** 连续失败 ≥ 3 → 通知（host.log.warn）。 */
-  private maybeNotify(failures: number, historyId: string, nowIso: string): void {
+  private maybeNotify(failures: number, historyId: string, nowIso: string, channel: SyncTransportType): void {
     if (failures >= 3) {
-      this.host.log.warn(`自动同步连续失败 ${failures} 次，请检查仓库配置/凭据`);
+      this.host.log.warn(`自动同步连续失败 ${failures} 次，请检查仓库配置/凭据（${channel}）`);
       // 记录 notifiedAt（更新历史 entry）
       void this.readHistoryFn().then(async (hist) => {
         const entry = hist.autosyncEntries.find((e) => e.createdAt === nowIso);
         if (entry) {
           entry.notifiedAt = nowIso;
-          await this.writeConfig({
-            ...(await this.readConfig()),
+          await this.writeConfig(channel, {
+            ...(await this.readConfig(channel)),
             lastRunMessage: `连续失败 ${failures} 次，已通知`,
           });
         }

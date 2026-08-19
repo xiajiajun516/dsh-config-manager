@@ -23,8 +23,8 @@ src/
 │               exporter / analyzer(三段式) / importer(14步) / backup(快照) / rollback(逆序补偿)
 ├── schema/     领域类型 / Manifest / 版本判定（集中，CURRENT_SCHEMA_VERSION=1）
 ├── security/   secret-scanner / redaction / zip-security / integrity / encryption(scrypt+AES-256-GCM)
-├── adapters/   12 个真实配置适配器（settings/ui/providers/plugins/mcp/prompts/skills/
-│               agentPresets/workspaces/credentials/pluginFiles/sessions）
+├── adapters/   13 个真实配置适配器（settings/ui/providers/plugins/mcp/prompts/skills/
+│               agentPresets/workspaces/credentials/pluginFiles/sessions/self）
 ├── migrations/ schema 迁移链（registry + v1→v2 占位）
 ├── ui/         框架无关 UI 逻辑层（九步导入向导 / 冲突 / 路径映射 / 进度 / 报告）
 ├── client/     React 界面（settings.section 挂载，/api/dsh-config-manager/* 调 Host）

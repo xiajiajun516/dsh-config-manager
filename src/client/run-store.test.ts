@@ -26,6 +26,8 @@ import {
   makeAnalysis, makeExportReport, makeImportResult, makeManifest, makePlan,
   makePlanItem,
 } from '../ui/test-helpers.ts'
+import type { SyncConfirmItem, SyncStartResponse } from './sync/sync-api.ts'
+import type { MarketListItem, MarketDownloadResult } from '../market/types.ts'
 
 /* ------------------------------------------------------------- fixtures */
 
@@ -515,4 +517,254 @@ test('回归: subscribe/getSnapshot 以裸引用调用时 this 绑定实例（us
   unsub()
   store.patch({ view: 'export' })
   assert.equal(notified, 1, '退订后不再通知')
+})
+
+/* ----------------------------------------- 低频面板切片持久化（切 tab / 刷新恢复） */
+
+/** SyncConfirmItem 最小夹具。 */
+function makeConfirmItem(id: string): SyncConfirmItem {
+  return {
+    itemId: id,
+    adapter: 'settings',
+    kind: 'Update',
+    description: `更新 ${id}`,
+    severity: 'info',
+    defaultAdopt: true,
+    adopt: true,
+  }
+}
+
+/** 一键同步差异确认会话夹具（items 非敏感，可安全持久化）。 */
+function makeConfirmSession(): SyncStartResponse {
+  return {
+    ok: true,
+    syncSessionId: 'sync-session-test-0001',
+    snapshotId: 'snap-abc',
+    items: [makeConfirmItem('settings:key'), makeConfirmItem('plugins:pkg')],
+    needsReview: false,
+    compatibility: 'excellent',
+  }
+}
+
+/** 同步切片夹具（含敏感字段；token/webdav/加密与解密密码必须被白名单剔除）。 */
+function makeSyncPatch(): Parameters<RunStore['patch']>[0]['sync'] {
+  return {
+    channel: 'webdav',
+    repoUrl: 'https://github.com/u/repo.git',
+    token: 'GIT-TOKEN-SECRET',
+    webdavUrl: 'https://dav.example.com/dav',
+    webdavUsername: 'alice',
+    webdavPassword: 'WEBDAV-PASS-SECRET',
+    byChannel: {
+      git: {
+        syncMode: 'default',
+        syncSections: [],
+        encrypt: false,
+        includeSecrets: false,
+        encryptPassword: '',
+        encryptPasswordConfirm: '',
+        decryptPassword: '',
+        selectedSnapshotId: '',
+        snapshots: [],
+        autosync: null,
+        autosyncEnabled: false,
+        autosyncInterval: '30m',
+      },
+      webdav: {
+        syncMode: 'advanced',
+        syncSections: ['settings', 'plugins'],
+        encrypt: true,
+        includeSecrets: true,
+        encryptPassword: 'ENC-PASS-SECRET',
+        encryptPasswordConfirm: 'ENC-PASS-SECRET',
+        decryptPassword: 'DEC-PASS-SECRET',
+        selectedSnapshotId: 'snap-xyz',
+        snapshots: [],
+        autosync: null,
+        autosyncEnabled: false,
+        autosyncInterval: '30m',
+      },
+    },
+    pushReport: null,
+    pullReport: null,
+    confirmSession: makeConfirmSession(),
+    lastRestoreId: null,
+    error: 'sync error text',
+    loadError: null,
+  }
+}
+
+test('低频面板: 同步凭据（token/webdav/加密与解密密码）绝不写入 sessionStorage', () => {
+  const { storage, raw } = makeStorage()
+  const store = new RunStore({ storage })
+  store.patch({ sync: makeSyncPatch() })
+  const text = raw()
+  assert.ok(text !== null, 'patch 后已同步持久化')
+  assert.ok(!text.includes('GIT-TOKEN-SECRET'), 'git token 不得落入 sessionStorage')
+  assert.ok(!text.includes('WEBDAV-PASS-SECRET'), 'webdav 密码不得落入 sessionStorage')
+  assert.ok(!text.includes('ENC-PASS-SECRET'), '加密密码不得落入 sessionStorage')
+  assert.ok(!text.includes('DEC-PASS-SECRET'), '解密密码不得落入 sessionStorage')
+  assert.ok(text.includes('https://github.com/u/repo.git'), '非敏感表单值可持久化')
+  assert.ok(text.includes('sync-session-test-0001'), '确认会话 id 可持久化（宿主侧 30 分钟内存登记）')
+  const parsed = JSON.parse(text) as {
+    sync: {
+      byChannel: { git: Record<string, unknown>; webdav: Record<string, unknown> }
+      [k: string]: unknown
+    }
+  }
+  assert.ok(!('token' in parsed['sync']), 'sync 切片不含 token')
+  assert.ok(!('webdavPassword' in parsed['sync']), 'sync 切片不含 webdav 密码')
+  assert.ok(!('encryptPassword' in parsed['sync']), 'sync 切片顶层不含加密密码')
+  assert.ok(!('encryptPasswordConfirm' in parsed['sync']), 'sync 切片顶层不含加密密码确认')
+  assert.ok(!('decryptPassword' in parsed['sync']), 'sync 切片顶层不含解密密码')
+  assert.ok(!('encryptPassword' in parsed['sync'].byChannel.git), 'byChannel.git 不含加密密码')
+  assert.ok(!('encryptPasswordConfirm' in parsed['sync'].byChannel.git), 'byChannel.git 不含加密密码确认')
+  assert.ok(!('decryptPassword' in parsed['sync'].byChannel.git), 'byChannel.git 不含解密密码')
+  assert.ok(!('encryptPassword' in parsed['sync'].byChannel.webdav), 'byChannel.webdav 不含加密密码')
+  assert.ok(!('decryptPassword' in parsed['sync'].byChannel.webdav), 'byChannel.webdav 不含解密密码')
+  assert.equal(parsed['sync'].byChannel.webdav.syncMode, 'advanced', '非敏感通道设置可持久化')
+  assert.deepEqual(parsed['sync'].byChannel.webdav.syncSections, ['settings', 'plugins'])
+})
+
+test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复（敏感字段清空）', () => {
+  const { storage } = makeStorage()
+  const first = new RunStore({ storage })
+  const confirmSession = makeConfirmSession()
+  const plan = makePlan()
+  const analysis = makeAnalysis()
+  first.patch({ panel: 'sync', sync: makeSyncPatch() })
+  const marketDetail: MarketDownloadResult = {
+    id: 'm1',
+    name: 'Market A',
+    version: '1.0.0',
+    sections: ['settings'],
+    downloadedAt: '2026-01-01T00:00:00Z',
+    status: 'valid',
+    warnings: ['第三方来源'],
+    zipPath: '/tmp/market-m1-abc.zip',
+    analysis,
+    plan,
+  }
+  first.patch({
+    panel: 'market',
+    market: {
+      search: 'deepseek',
+      category: 'sync',
+      items: [{ id: 'm1', name: 'Market A', cacheState: 'cached' } as MarketListItem],
+      detail: marketDetail,
+      approvals: { plugins: true },
+      importResult: null,
+      error: 'market error',
+      loadError: null,
+    },
+  })
+  first.patch({
+    panel: 'snapshots',
+    snapshots: {
+      selectedId: 'snap-1',
+      plan: {
+        snapshotId: 'snap-1',
+        createdAt: '2026-01-01T00:00:00Z',
+        sourceZip: 'x.zip',
+        actions: [],
+        summary: { hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0, fileRestores: 0, fileRemoves: 0, credentialHints: 0, skips: 1 },
+        pluginBaselineConfirmed: true,
+      },
+      report: {
+        snapshotId: 'snap-1',
+        restored: ['settings.yaml'],
+        removedPlugins: [],
+        manualHints: [],
+        failed: [],
+        skipped: [],
+      },
+      actionError: null,
+      error: null,
+    },
+  })
+
+  // 新实例 + 同一存储 = 模拟页面刷新
+  const second = new RunStore({ storage })
+  const st = second.getSnapshot()
+  assert.equal(st.panel, 'snapshots', '刷新后回到原低频面板')
+  assert.equal(st.sync.channel, 'webdav')
+  assert.equal(st.sync.byChannel.webdav.syncMode, 'advanced', 'webdav 通道模式恢复')
+  assert.deepEqual(st.sync.byChannel.webdav.syncSections, ['settings', 'plugins'], 'webdav 通道勾选恢复')
+  assert.equal(st.sync.byChannel.webdav.selectedSnapshotId, 'snap-xyz')
+  assert.equal(st.sync.byChannel.git.syncMode, 'default', 'git 通道独立（未配置保持缺省）')
+  assert.deepEqual(st.sync.confirmSession, confirmSession, '确认会话刷新后恢复（宿主侧会话仍有效）')
+  assert.equal(st.sync.error, 'sync error text')
+  assert.equal(st.sync.token, '', 'git token 刷新后清空')
+  assert.equal(st.sync.webdavPassword, '', 'webdav 密码刷新后清空')
+  assert.equal(st.sync.byChannel.webdav.encryptPassword, '', '加密密码刷新后清空')
+  assert.equal(st.sync.byChannel.webdav.decryptPassword, '', '解密密码刷新后清空')
+  assert.equal(st.market.search, 'deepseek')
+  assert.equal(st.market.category, 'sync')
+  assert.equal(st.market.items.length, 1)
+  assert.deepEqual(st.market.detail, marketDetail, '详情（含 zipPath/plan）往返恢复')
+  assert.deepEqual(st.market.approvals, { plugins: true })
+  assert.equal(st.market.error, 'market error')
+  assert.equal(st.snapshots.selectedId, 'snap-1')
+  assert.equal(st.snapshots.plan?.snapshotId, 'snap-1')
+  assert.deepEqual(st.snapshots.report?.restored, ['settings.yaml'])
+})
+
+test('低频面板: 旧版 v1 载荷（无 panel/sync/market/snapshots 字段）兼容解析 → 默认切片', () => {
+  const { storage } = makeStorage()
+  storage.setItem(STATE_KEY, JSON.stringify({
+    v: 1,
+    view: 'import',
+    export: {
+      mode: 'quick', selection: [], includeSecrets: false, encrypt: false,
+      running: false, progress: null, result: null, error: null, downloaded: false, runId: null,
+    },
+    import: {
+      step: 'select', zipPath: null, selectedFileName: null, containerEncrypted: false,
+      analysis: null, plan: null, result: null, rollbackOnError: true, errors: [],
+      phase: 'preview', conflictStrategy: 'merge', conflictResolutions: {}, pathMappings: [],
+      uploading: false, running: false, progress: null, error: null, runId: null,
+    },
+  }))
+  const store = new RunStore({ storage })
+  const st = store.getSnapshot()
+  assert.equal(st.view, 'import')
+  assert.equal(st.panel, null, '旧载荷无 panel → 主视图')
+  assert.equal(st.sync.channel, 'git')
+  assert.equal(st.sync.byChannel.git.syncSections.length, 0)
+  assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道缺省')
+  assert.deepEqual(st.market.items, [])
+  assert.equal(st.snapshots.selectedId, null)
+})
+
+test('低频面板: 旧版顶层 syncMode 载荷 → 迁移为 git 通道的 byChannel 状态', () => {
+  const { storage } = makeStorage()
+  storage.setItem(STATE_KEY, JSON.stringify({
+    v: 1,
+    view: 'export',
+    export: {
+      mode: 'quick', selection: [], includeSecrets: false, encrypt: false,
+      running: false, progress: null, result: null, error: null, downloaded: false, runId: null,
+    },
+    import: {
+      step: 'select', zipPath: null, selectedFileName: null, containerEncrypted: false,
+      analysis: null, plan: null, result: null, rollbackOnError: true, errors: [],
+      phase: 'preview', conflictStrategy: 'merge', conflictResolutions: {}, pathMappings: [],
+      uploading: false, running: false, progress: null, error: null, runId: null,
+    },
+    sync: {
+      channel: 'git', repoUrl: '', token: '', webdavUrl: '', webdavUsername: '', webdavPassword: '',
+      syncMode: 'advanced', syncSections: ['settings'], encrypt: true, includeSecrets: false,
+      encryptPassword: 'SHOULD-NOT-PERSIST', encryptPasswordConfirm: '', decryptPassword: '',
+      selectedSnapshotId: 'snap-old', pushReport: null, pullReport: null, confirmSession: null,
+      lastRestoreId: null, error: null, loadError: null,
+    },
+  }))
+  const store = new RunStore({ storage })
+  const st = store.getSnapshot()
+  assert.equal(st.sync.byChannel.git.syncMode, 'advanced', '旧顶层模式迁移到 git 通道')
+  assert.deepEqual(st.sync.byChannel.git.syncSections, ['settings'], '旧顶层勾选迁移到 git 通道')
+  assert.equal(st.sync.byChannel.git.encrypt, true)
+  assert.equal(st.sync.byChannel.git.encryptPassword, '', '迁移后加密密码仍强制清空')
+  assert.equal(st.sync.byChannel.git.selectedSnapshotId, 'snap-old')
+  assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道保持缺省')
 })

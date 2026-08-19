@@ -18,7 +18,7 @@ export type Platform =
 export type SectionId =
   | 'settings' | 'ui' | 'providers' | 'plugins' | 'mcp' | 'prompts'
   | 'skills' | 'agentPresets' | 'agentInstructions' | 'workspaces' | 'pluginFiles'
-  | 'credentialsStatus' | 'secrets' | 'sessions';
+  | 'credentialsStatus' | 'secrets' | 'sessions' | 'self';
 
 /** 加密备份的算法参数（非秘密：salt/iv/authTag 仅用于解密与完整性校验） */
 export interface EncryptionInfo {

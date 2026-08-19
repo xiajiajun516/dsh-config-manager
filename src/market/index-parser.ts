@@ -6,9 +6,12 @@
  *  - 深度保护解析（parseJsonSafe）；
  *  - 字段白名单：允许字段之外的多出字段一律进 errors（拒绝，不忽略 —— 防字段渗透）；
  *  - schemaVersion === 1 强制；
- *  - items 每项 id 过 SAFE_ITEM_ID_RE。
+ *  - items 每项 id 过 SAFE_ITEM_ID_RE；
+ *  - items 每项 repo（可选来源仓库）必须过 validateRepoUrl：非法条目**仅丢弃该条目**，
+ *    不整体拒绝 index（防止恶意/失效引用进入浏览列表，同时不因单条坏引用弄垮整个市场）。
  */
 import { parseJsonSafe } from '../utils/json.ts';
+import { validateMarketRepoUrl } from './url.ts';
 import { SAFE_ITEM_ID_RE, MARKET_INDEX_SCHEMA_VERSION, MARKET_ITEM_SCHEMA_VERSION } from './types.ts';
 import type {
   MarketIndex, MarketIndexItem, MarketItemManifest, ParseIndexResult, ParseItemManifestResult,
@@ -17,7 +20,7 @@ import { SECTION_IDS } from '../schema/config.ts';
 import type { SectionId } from '../schema/types.ts';
 
 const INDEX_ALLOWED = new Set(['schemaVersion', 'name', 'description', 'items']);
-const INDEX_ITEM_ALLOWED = new Set(['id', 'name', 'description', 'author', 'version', 'updatedAt', 'categories']);
+const INDEX_ITEM_ALLOWED = new Set(['id', 'name', 'description', 'author', 'version', 'updatedAt', 'categories', 'repo']);
 const MANIFEST_ALLOWED = new Set([
   'schemaVersion', 'id', 'name', 'version', 'author', 'description', 'updatedAt',
   'categories', 'sections', 'provenance', 'checksums',
@@ -52,8 +55,12 @@ function optStringArray(obj: Record<string, unknown>, key: string, errors: strin
   return v as string[];
 }
 
-/** 解析并校验单条 MarketIndexItem（L1）；非法返回 null + errors */
-function parseIndexItem(raw: unknown, errors: string[], inPath: string): MarketIndexItem | null {
+/**
+ * 解析并校验单条 MarketIndexItem（L1）；非法返回 null + errors。
+ * repo 非法（未过 validateRepoUrl）属「该条目不可用」：计入 dropped 计数并返回 null，
+ * 不向 errors 写任何内容 —— 调用方据此只丢弃该条目、不整体拒绝 index。
+ */
+function parseIndexItem(raw: unknown, errors: string[], inPath: string, dropped: { n: number }): MarketIndexItem | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
     errors.push(`${inPath} 必须是对象`);
     return null;
@@ -74,6 +81,16 @@ function parseIndexItem(raw: unknown, errors: string[], inPath: string): MarketI
     errors.push(`${inPath}.name 必须是非空字符串`);
     return null;
   }
+  // repo 可选：条目来源仓库（发布者自托管）。非法（含 userinfo / 空白 / 非字符串）→ 仅丢弃该条目。
+  let repo: string | undefined;
+  const repoVal = obj['repo'];
+  if (repoVal !== undefined) {
+    if (typeof repoVal !== 'string' || validateMarketRepoUrl(repoVal) !== null) {
+      dropped.n += 1;
+      return null;
+    }
+    repo = repoVal;
+  }
   return {
     id,
     name,
@@ -82,6 +99,7 @@ function parseIndexItem(raw: unknown, errors: string[], inPath: string): MarketI
     version: optString(obj, 'version', errors, inPath),
     updatedAt: optString(obj, 'updatedAt', errors, inPath),
     categories: optStringArray(obj, 'categories', errors, inPath),
+    ...(repo !== undefined ? { repo } : {}),
   };
 }
 
@@ -116,8 +134,9 @@ export function parseMarketIndex(raw: string): ParseIndexResult {
     return { ok: false, index: null, errors: ['index.json 缺少 items 数组'] };
   }
   const items: MarketIndexItem[] = [];
+  const dropped = { n: 0 };
   (obj['items'] as unknown[]).forEach((item, i) => {
-    const parsedItem = parseIndexItem(item, errors, `items[${i}]`);
+    const parsedItem = parseIndexItem(item, errors, `items[${i}]`, dropped);
     if (parsedItem !== null) items.push(parsedItem);
   });
   if (errors.length > 0) {
@@ -130,7 +149,12 @@ export function parseMarketIndex(raw: string): ParseIndexResult {
     items,
   };
   if (errors.length > 0) return { ok: false, index: null, errors };
-  return { ok: true, index, errors: [] };
+  return {
+    ok: true,
+    index,
+    errors: [],
+    ...(dropped.n > 0 ? { dropped: dropped.n } : {}),
+  };
 }
 
 /**

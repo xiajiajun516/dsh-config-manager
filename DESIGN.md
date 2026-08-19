@@ -230,7 +230,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 ### 8.2 Badge（`Badge`）
 - Kind：`info`（业务主色描边）/ `ok`（成功）/ `warn`（警告）/ `error`（错误）；默认 `info`。
-- 用途：状态标记、统计计数（`3 sections`、`plugins: 6✓/18✗`）、分区标签。
+- 用途：状态标记、统计计数（`3 sections`、`plugins: 6✓/18✗`）、分区标签、来源徽章（见 §14）。
 - 计数场景用 `progressBadge`（淡色底 + tabular-nums）而不是普通 badge。
 
 ### 8.3 Banner（`Banner`）
@@ -355,10 +355,13 @@ css.section                    高 100%，纵向 flex，gap 10px
 | Pattern | 结构 | 现例 |
 |---|---|---|
 | **模式切换（Quick/Custom）** | `modeTabs` 双 tab + `modeHint` 说明 | 导出视图、同步模式 |
+| **通道子 tab 面板（GitHub/WebDAV）** | `modeTabs` 双 tab + `modeHint` 说明；各 tab 内配置表单 / 自动同步 / 同步模式 / 加密 / 远端快照**按通道独立**，切换 tab 互不覆盖（busy 时禁用切换） | 远程同步视图（同步面板二级 tab） |
 | **分组勾选目录** | `groupList > groupCard(groupHeader: groupLabel+groupNote) > groupItems(Checkbox 行: categoryName+categoryDesc+Badge)` | 导出 Custom、同步高级模式 |
 | **安全选项卡** | Card + `optionsHeader` + Checkbox + hint + 条件渲染密码双列 + formError | 导出、同步加密 |
-| **步骤化向导** | 顶部为阶段渲染（`SectionTitle` 标题 + 内容 + `actionRow` 内「上一步/下一步」），进度条独立 | 导入九步向导 |
+| **步骤化向导** | 顶部为阶段渲染（`SectionTitle` 标题 + 内容 + `actionRow` 内「上一步/下一步」），进度条独立 | 导入九步向导、发布向导（5 步） |
 | **统计徽章行** | `statRow` 一组语义化 Badge + 条件 `warn` Banner | 兼容性页、预览页、报告页 |
+| **来源徽章** | 条目卡片首徽章表达供应链来源：`sourceBadgeKind(item, builtinUrl)` 纯函数判定 —— 无 `repo`（与市场同仓）或 `repo` 为官方默认地址 → `Badge kind="ok"`「官方来源」；`repo` 为第三方仓库 → `kind="warn"`「第三方来源」；文案走 locale 字典（`list.sourceOfficial` / `list.sourceThirdParty`） | 市场面板条目行 |
+| **复制文本块** | 等宽 `<pre class="reportText">` + `actionRow` 内复制按钮（`navigator.clipboard`，成功/失败 Badge 反馈），用于向用户交付「复制到外部执行」的文本产物（git 命令模板、JSON 片段）；文本渲染前过 `redact()` | 发布向导（推送命令 / index.json 收录片段） |
 | **限高列表 + 批量操作** | `confirmScroll/reportScroll` + 底部 actionRow（批量决策按钮） | 冲突决策、差异确认、恢复计划、拉取预览 |
 | **diff 展开** | `<details><summary>diff</summary><pre class="diffScroll">` | 同步冲突 diff |
 | **结果页** | `ReportView`（统计 + 等宽报告）+ 条件 Banner（needsRestart）+ 动作按钮 | 导入结果、导出完成 |

@@ -69,7 +69,7 @@ export function needsReview(_detail: MarketItemDetail): boolean {
   return true;
 }
 
-/** 从 MarketIndexItem 投影浏览列表项（cacheState 由调用方按缓存状态计算） */
+/** 从 MarketIndexItem 投影浏览列表项（cacheState 由调用方按缓存状态计算；repo 透出供来源徽章） */
 export function toMarketListItem(item: MarketIndexItem, cacheState: MarketListItem['cacheState']): MarketListItem {
   return {
     id: item.id,
@@ -79,6 +79,7 @@ export function toMarketListItem(item: MarketIndexItem, cacheState: MarketListIt
     version: item.version,
     updatedAt: item.updatedAt,
     categories: item.categories,
+    ...(item.repo !== undefined ? { repo: item.repo } : {}),
     cacheState,
   };
 }

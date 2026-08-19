@@ -11,6 +11,7 @@ import path from 'node:path';
 import { zipToBuffer, type ZipWriteEntry } from '../utils/zip.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import type { SnapshotFs } from '../sync/fs.ts';
+import { validateRepoUrl } from '../sync/sync-config.ts';
 import { parseMarketIndex, parseMarketItemManifest } from './index-parser.ts';
 import { validateMarketItem } from './security.ts';
 import { GitMarketReader } from './reader.ts';
@@ -91,6 +92,42 @@ test('解析：id 越界字符拒绝', () => {
   }));
   assert.equal(res.ok, false);
   assert.match(res.errors.join(), /id/);
+});
+
+test('解析：条目 repo 合法 → 保留并透出（来源仓库路由依据）', () => {
+  const res = parseMarketIndex(JSON.stringify({
+    schemaVersion: 1,
+    items: [{ id: 'a', name: 'A', repo: 'https://github.com/x/items.git' }],
+  }));
+  assert.equal(res.ok, true);
+  assert.equal(res.index?.items.length, 1);
+  assert.equal(res.index?.items[0]?.repo, 'https://github.com/x/items.git');
+});
+
+test('解析：条目 repo 非法 → 仅丢弃该条目，不整体拒绝 index', () => {
+  const res = parseMarketIndex(JSON.stringify({
+    schemaVersion: 1,
+    items: [
+      { id: 'good', name: 'Good' },
+      { id: 'bad-userinfo', name: 'Bad', repo: 'https://user:token@github.com/x' },
+      { id: 'bad-whitespace', name: 'Bad2', repo: 'https://github.com/x/a b.git' },
+      { id: 'bad-ssh', name: 'Bad3', repo: 'git@github.com:xiaojun/items.git' },
+      { id: 'bad-type', name: 'Bad4', repo: 123 },
+    ],
+  }));
+  assert.equal(res.ok, true, '非法 repo 条目不应弄垮整个 index');
+  assert.equal(res.index?.items.length, 1, '仅保留合法条目');
+  assert.equal(res.index?.items[0]?.id, 'good');
+  assert.equal(res.dropped, 4, '丢弃计数透出（含 git@/ssh 形态拒绝）');
+});
+
+test('解析：未知字段拒绝仍然整体拒绝（repo 白名单之外不变式保持）', () => {
+  const res = parseMarketIndex(JSON.stringify({
+    schemaVersion: 1,
+    items: [{ id: 'a', name: 'A', repo: 'https://github.com/x/items.git', evil: 'x' }],
+  }));
+  assert.equal(res.ok, false);
+  assert.match(res.errors.join(), /未知字段/);
 });
 
 test('解析：L2 manifest 合法', () => {
@@ -248,6 +285,120 @@ test('reader：首次 clone，复用副本 pull（只读不 push）', async () =
   assert.match(flat, /pull/);
   assert.doesNotMatch(flat, /push/);
   await fs.rm(work, { recursive: true, force: true });
+});
+
+/** 内存 SnapshotFs mock（reader 测试用）：clone 分支写入 .git 标记以进入 pull 分支。 */
+function makeMemFs(initial: Array<[string, string]> = []): SnapshotFsLike {
+  const store = new Map<string, Uint8Array>(
+    initial.map(([p, content]) => [p, new TextEncoder().encode(content)]),
+  );
+  return {
+    store,
+    async readFile(p) { const d = this.store.get(p); if (!d) throw new Error('no'); return d; },
+    async writeFile(p, d) { this.store.set(p, d); },
+    async mkdir() {},
+    async readdir() { return []; },
+    async isDir(p) { return this.store.has(p); },
+    async exists(p) { return this.store.has(p); },
+    async remove() {},
+  };
+}
+
+test('reader：条目级 repo 多仓库读取（clone 条目仓库到调用方 workDir，读 items/<id>/）', async () => {
+  const work = await tmpDir('dsh-mkt-work-item-');
+  const calls: string[][] = [];
+  const mem = makeMemFs([
+    [`${work}/items/foo/manifest.json`, '{"id":"foo"}'],
+    [`${work}/items/foo/config.zip`, 'PK-bytes'],
+  ]);
+  const reader = new GitMarketReader({
+    exec: async (_cmd, args, opts) => {
+      calls.push(args);
+      if (args[0] === 'clone' && opts.cwd) {
+        mem.store.set(path.join(opts.cwd, '.git'), new Uint8Array());
+      }
+      return { stdout: 'ok', stderr: '', code: 0 };
+    },
+    fsx: mem as unknown as SnapshotFs,
+  });
+  // 无 .git → clone 分支：断言 clone 目标是条目仓库（repo），而非市场仓库
+  const m = await reader.readItemManifest({
+    url: 'https://github.com/example/market',
+    workDir: work,
+    itemId: 'foo',
+    repo: 'https://github.com/example/items-repo',
+  });
+  assert.equal(m.text, '{"id":"foo"}');
+  const cloneCall = calls.find((c) => c[0] === 'clone');
+  assert.ok(cloneCall, '应走 clone 分支');
+  assert.ok(cloneCall.includes('https://github.com/example/items-repo'), 'clone 目标是条目仓库');
+  assert.ok(!cloneCall.includes('https://github.com/example/market'), '不 clone 市场仓库');
+
+  // 二次调用（.git 已存在 → pull 分支）读取 zip
+  const z = await reader.readItemZip({
+    url: 'https://github.com/example/market',
+    workDir: work,
+    itemId: 'foo',
+    repo: 'https://github.com/example/items-repo',
+  });
+  assert.equal(new TextDecoder().decode(z.data), 'PK-bytes');
+  const flat = calls.map((c) => c.join(' ')).join('\n');
+  assert.match(flat, /pull/);
+  assert.doesNotMatch(flat, /push/);
+  await fs.rm(work, { recursive: true, force: true });
+});
+
+test('reader：repo 缺省时仍从市场仓库读取（现状兼容）', async () => {
+  const work = await tmpDir('dsh-mkt-work-item-');
+  const calls: string[][] = [];
+  const mem = makeMemFs([[`${work}/items/foo/manifest.json`, '{"id":"foo"}']]);
+  const reader = new GitMarketReader({
+    exec: async (_cmd, args, opts) => {
+      calls.push(args);
+      if (args[0] === 'clone' && opts.cwd) {
+        mem.store.set(path.join(opts.cwd, '.git'), new Uint8Array());
+      }
+      return { stdout: 'ok', stderr: '', code: 0 };
+    },
+    fsx: mem as unknown as SnapshotFs,
+  });
+  const m = await reader.readItemManifest({
+    url: 'https://github.com/example/market',
+    workDir: work,
+    itemId: 'foo',
+  });
+  assert.equal(m.text, '{"id":"foo"}');
+  const cloneCall = calls.find((c) => c[0] === 'clone');
+  assert.ok(cloneCall?.includes('https://github.com/example/market'), '缺省 clone 市场仓库');
+  await fs.rm(work, { recursive: true, force: true });
+});
+
+test('reader：非法 repo（含 userinfo）拒绝，不发起任何 clone', async () => {
+  const work = await tmpDir('dsh-mkt-work-item-');
+  const calls: string[][] = [];
+  const reader = new GitMarketReader({
+    exec: async (_cmd, args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; },
+    fsx: makeMemFs() as unknown as SnapshotFs,
+  });
+  await assert.rejects(
+    () => reader.readItemManifest({
+      url: 'https://github.com/example/market',
+      workDir: work,
+      itemId: 'foo',
+      repo: 'https://user:token@github.com/x',
+    }),
+    /userinfo|用户名\/密码/,
+    '含 userinfo 的 repo 必须拒绝',
+  );
+  assert.equal(calls.length, 0, '拒绝发生在 git 执行之前');
+  await fs.rm(work, { recursive: true, force: true });
+});
+
+test('validateRepoUrl：合法 https 通过；userinfo / 空白 / 空串拒绝', () => {
+  assert.equal(validateRepoUrl('https://github.com/example/items-repo.git'), null, '合法 https 通过');
+  assert.notEqual(validateRepoUrl('https://user:token@github.com/x'), null, 'userinfo 拒绝');
+  assert.notEqual(validateRepoUrl('https://github.com/x/a b.git'), null, '空白拒绝');
+  assert.notEqual(validateRepoUrl(''), null, '空串拒绝');
 });
 
 interface SnapshotFsLike {
