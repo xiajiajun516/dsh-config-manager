@@ -60,14 +60,15 @@ export type SyncTransportType = 'git' | 'webdav';
 /** GET /sync/status 响应：配置/凭据/上次同步的只读事实（无任何 secret 值） */
 export interface SyncStatusResponse {
   ok: boolean;
-  /** 是否已保存过仓库/通道配置（sync-config.json） */
+  /** 是否已保存过仓库/通道配置（sync-config.json；任一通道配置过即为 true） */
   configured: boolean;
-  /** git 通道：上次使用的仓库地址（不含 token，可回显） */
+  /** git 通道：已配置的仓库地址（不含 token，可回显；与当前通道无关，配置过即返回） */
   repoUrl?: string;
   /** git 通道：DSH credentials 中是否已存在 token（describe 只报状态，值永不返回） */
   credentialConfigured: boolean;
   credentialWritable: boolean;
-  /** webdav 通道：配置状态（url 可回显，username 非敏感；password 值永不返回） */
+  /** webdav 通道：配置状态（url 可回显，username 非敏感；password 值永不返回；
+   *  与当前通道无关，配置过即返回，供 git ↔ webdav 切换时回填表单） */
   webdav?: WebDavStatusResponse;
   /** sync-state.lastSyncAt；'' = 从未同步 */
   lastSyncAt?: string;

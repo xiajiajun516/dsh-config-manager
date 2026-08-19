@@ -14,6 +14,7 @@ export const zh = {
   'view.snapshots': '快照恢复',
   'view.sync': '远程同步',
   'view.market': '配置市场',
+  'view.about': '关于',
   // 公共
   'common.close': '关闭',
   'common.cancel': '取消',
@@ -44,6 +45,7 @@ export const zh = {
   'export.run': '开始导出',
   'export.running': '正在导出…',
   'export.download': '下载备份文件',
+  'export.saved': '已保存到下载目录：{name}',
   'export.selectionWarnings': '以下分区为设备相关数据，跨设备导入时可能不适用：',
   'export.group.unknown': '其他',
   'export.included': '已包含',
@@ -144,6 +146,20 @@ export const zh = {
   // —— 错误 ——
   'error.title': '操作失败',
   'error.hint': '错误消息已自动脱敏，不会泄露任何密钥信息。',
+  // —— 关于 ——
+  'about.title': '关于 DSH Config Manager',
+  'about.subtitle': '插件信息、作者与反馈入口',
+  'about.official': '官方',
+  'about.version': '版本 {version}',
+  'about.dshVersion': 'DSH {version}',
+  'about.links': '相关链接',
+  'about.star': '⭐ 在 GitHub 上点赞',
+  'about.repo': 'GitHub 仓库',
+  'about.docs': '使用文档',
+  'about.issues': '反馈问题',
+  'about.authorLabel': '作者',
+  'about.loading': '正在获取版本信息…',
+  'about.retryStatus': '重新获取',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -154,6 +170,7 @@ export const en: Record<keyof typeof zh, string> = {
   'view.snapshots': 'Snapshots & Restore',
   'view.sync': 'Remote Sync',
   'view.market': 'Marketplace',
+  'view.about': 'About',
   'common.close': 'Close',
   'common.cancel': 'Cancel',
   'common.back': 'Back',
@@ -181,6 +198,7 @@ export const en: Record<keyof typeof zh, string> = {
   'export.run': 'Start Export',
   'export.running': 'Exporting…',
   'export.download': 'Download backup file',
+  'export.saved': 'Saved to downloads: {name}',
   'export.selectionWarnings': 'Device-specific sections may not apply on another machine:',
   'export.group.unknown': 'Other',
   'export.included': 'Included',
@@ -277,6 +295,19 @@ export const en: Record<keyof typeof zh, string> = {
   'report.needsRestart': 'Plugin / MCP changes take effect after restarting DSH.',
   'error.title': 'Operation failed',
   'error.hint': 'Error messages are auto-redacted and never leak secrets.',
+  'about.title': 'About DSH Config Manager',
+  'about.subtitle': 'Plugin info, author and feedback links',
+  'about.official': 'Official',
+  'about.version': 'Version {version}',
+  'about.dshVersion': 'DSH {version}',
+  'about.links': 'Links',
+  'about.star': '⭐ Star on GitHub',
+  'about.repo': 'GitHub Repository',
+  'about.docs': 'Documentation',
+  'about.issues': 'Issues',
+  'about.authorLabel': 'Author',
+  'about.loading': 'Loading version info…',
+  'about.retryStatus': 'Retry',
 };
 
 /** 字典键联合（注册处 compile-time 校验） */

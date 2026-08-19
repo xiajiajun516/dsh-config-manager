@@ -58,6 +58,7 @@ export type { ExportViewProps } from './export/ExportView.tsx'
 export type { ImportWizardViewProps } from './import/ImportWizardView.tsx'
 export type { SyncSettingsViewProps } from './sync/SyncSettingsView.tsx'
 export type { MarketPanelProps } from './market/MarketPanel.tsx'
+export type { AboutPanelProps } from './about/AboutPanel.tsx'
 export type { ConfigManagerApiError, DownloadResult, ServiceStatus, UploadResponse } from './api.ts'
 export type { ConfigManagerKey } from './locales.ts'
 export type { SyncKey } from './sync/sync-locales.ts'
@@ -81,9 +82,9 @@ export function apply(ctx: ClientContext): void {
   const marketT = ctx.locale.bind(MARKET_NS)
   const marketApi = new MarketApi(uiT)
 
-  // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync/Market 五 tab）。
-  // 远程同步与配置市场不注册独立设置页 —— 并入主 section 的 inject 面
-  // （syncApi/syncT、marketApi/marketT），由 ConfigManagerSection 渲染第 4/5 个 tab。
+  // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync/Market/About 六 tab）。
+  // 远程同步、配置市场与关于页不注册独立设置页 —— 并入主 section 的 inject 面
+  // （syncApi/syncT、marketApi/marketT），由 ConfigManagerSection 渲染第 4/5/6 个 tab。
   // 避免第二个 settings.section 注册在目标 DSH 渲染 section 列表时抛错导致整页空白。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',

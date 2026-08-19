@@ -89,9 +89,12 @@ export class ImportWizard {
   /**
    * 设置整体加密备份容器是否为 encrypted（upload 探测结果；仅内存）。
    * 调用方先在解密阶段展示密码输入，成功后调用 unlockArchive。
+   * 传入 zipPath 时同步记录容器路径（供 unlockArchive/selectZip 引用，
+   * 避免 syncWizard 把 store 中已 patch 的 zipPath 覆盖回 null）。
    */
-  setArchiveEncrypted(encrypted: boolean): void {
+  setArchiveEncrypted(encrypted: boolean, zipPath?: string): void {
     this.archiveUnlocked = !encrypted;
+    if (encrypted && zipPath !== undefined) this.zipPath = zipPath;
     this.unlockedZipPath = null;
   }
 

@@ -16,14 +16,38 @@ export interface ButtonProps {
   children: ReactNode
   title?: string
   className?: string
+  /** 外链 URL：存在时渲染 <a>（新窗口 + noreferrer，防 tabnabbing），否则渲染 <button> */
+  href?: string
+  /** 是否新窗口打开（仅 href 存在时生效；默认 true） */
+  newTab?: boolean
 }
 
-/** 统一按钮（primary=主操作 / ghost=次操作 / danger=危险操作） */
-export function Button({ variant = 'ghost', disabled, onClick, children, title, className }: ButtonProps) {
+/**
+ * 统一按钮（primary=主操作 / ghost=次操作 / danger=危险操作）。
+ * 带 href 时渲染同款按钮类的外链 <a>（target=_blank + rel=noreferrer），
+ * 外观与普通按钮一致，不破坏既有 <button> 调用。
+ */
+export function Button({ variant = 'ghost', disabled, onClick, children, title, className, href, newTab = true }: ButtonProps) {
   const cls =
     variant === 'primary' ? css.primaryButton
       : variant === 'danger' ? css.dangerButton
         : css.ghostButton
+  if (href !== undefined) {
+    return (
+      <a
+        className={className !== undefined ? `${cls} ${className}` : cls}
+        href={href}
+        target={newTab ? '_blank' : undefined}
+        rel={newTab ? 'noreferrer' : undefined}
+        title={title}
+        onClick={onClick}
+        // 按钮类无 text-decoration 规则，<a> 默认下划线破坏按钮外观（SyncSettingsView 外链同款极小修补）
+        style={{ textDecoration: 'none' }}
+      >
+        {children}
+      </a>
+    )
+  }
   return (
     <button
       type="button"

@@ -168,6 +168,26 @@ export interface DownloadResult {
   bytes: number;
 }
 
+/** 下载选项：saveDialog=true 才弹系统保存对话框（需用户手势）；缺省自动下载到浏览器下载目录 */
+export interface DownloadOptions {
+  saveDialog?: boolean;
+}
+
+/** 用 Blob URL + <a download> 触发浏览器静默下载到默认下载目录（无需用户手势/另存为对话框）。 */
+function triggerBlobDownload(blob: Blob, filename: string): void {
+  if (typeof document === 'undefined' || typeof URL === 'undefined') return
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  anchor.style.display = 'none'
+  document.body.appendChild(anchor)
+  anchor.click()
+  document.body.removeChild(anchor)
+  // 稍后释放 URL：立即 revoke 可能让部分浏览器来不及开始下载
+  setTimeout(() => { URL.revokeObjectURL(url) }, 15_000)
+}
+
 /**
  * Config Manager 浏览器半的唯一数据入口。
  * 同时实现 `ExportPort`（export-flow 用）与 `ImportPort`（import-wizard 用）。
@@ -222,11 +242,15 @@ export class ConfigManagerApi {
   }
 
   /**
-   * 把导出的 ZIP 下载到本机。优先 File System Access API 流式落盘
-   * （不占整文件内存），不可用时回退内存 Blob（dsh-ssh downloadFile 同款策略）。
+   * 把导出的 ZIP 下载到本机。
+   * - 默认（saveDialog 缺省/false）：读取为 Blob 后用 <a download> 触发浏览器
+   *   静默下载到「下载」目录，无需用户额外操作（导出完成即可自动调用）；
+   * - saveDialog: true：优先 File System Access API 流式落盘（不占整文件内存），
+   *   用户可在系统保存对话框中选择位置；不可用/取消时回退 Blob 下载。
    */
   async download(
     zipPath: string,
+    opts?: DownloadOptions,
     onProgress?: (received: number, total: number) => void,
   ): Promise<DownloadResult> {
     const response = await fetch(CONFIG_MANAGER_API.download + query({ path: zipPath }));
@@ -239,22 +263,22 @@ export class ConfigManagerApi {
     const match = /filename="([^"]+)"/.exec(disposition);
     const filename = match?.[1] ?? zipPath.split(/[\\/]/).pop() ?? 'dsh-config.zip';
     const reader = response.body.getReader();
-    const picker =
-      typeof window !== 'undefined'
-        ? (window as WindowWithFileSystemAccess).showSaveFilePicker
-        : undefined;
-    let streamed = false;
+    const usePicker =
+      opts?.saveDialog === true
+      && typeof window !== 'undefined'
+      && (window as WindowWithFileSystemAccess).showSaveFilePicker !== undefined;
     let writable: { write: (data: Uint8Array) => Promise<void>; close: () => Promise<void> } | undefined;
     const chunks: Uint8Array<ArrayBuffer>[] = [];
     let received = 0;
-    try {
-      if (picker !== undefined) {
+    if (usePicker) {
+      try {
+        const picker = (window as WindowWithFileSystemAccess).showSaveFilePicker!;
         const handle = await picker.call(window, { suggestedName: filename });
         writable = await handle.createWritable();
-        streamed = true;
+      } catch {
+        // 用户取消保存对话框或 API 不可用：回退内存 Blob + <a download>。
+        writable = undefined;
       }
-    } catch {
-      // 用户取消保存对话框或 API 不可用：回退内存 Blob。
     }
     for (;;) {
       const { done, value } = await reader.read();
@@ -267,11 +291,22 @@ export class ConfigManagerApi {
       received += value.length;
       onProgress?.(received, total);
     }
-    if (writable !== undefined) await writable.close();
+    if (writable !== undefined) {
+      await writable.close();
+      return {
+        blob: undefined,
+        filename,
+        streamed: true,
+        bytes: received,
+      };
+    }
+    // 默认路径：<a download> 静默下载到浏览器「下载」目录
+    const blob = new Blob(chunks);
+    triggerBlobDownload(blob, filename);
     return {
-      blob: streamed ? undefined : new Blob(chunks),
+      blob,
       filename,
-      streamed,
+      streamed: false,
       bytes: received,
     };
   }

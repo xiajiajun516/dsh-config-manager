@@ -84,7 +84,7 @@ export function ExportView({ api, t }: ExportViewProps) {
   const passwordInvalid =
     encrypt && (password === '' || password !== passwordConfirm)
 
-  /** 执行导出（Quick 或 Custom） */
+  /** 执行导出（Quick 或 Custom）；成功后自动下载到浏览器「下载」目录 */
   const runExport = async (): Promise<void> => {
     if (passwordInvalid) return
     runStore.patch({
@@ -107,6 +107,8 @@ export function ExportView({ api, t }: ExportViewProps) {
           progress: { stage: 'done', step: 1, total: 1 },
         },
       })
+      // 导出完成即自动下载到浏览器「下载」目录，无需用户再点 Download 按钮
+      await download(run.zipPath)
     } catch (err) {
       runStore.patch({ export: { error: err instanceof Error ? err.message : String(err) } })
     } finally {
@@ -115,12 +117,12 @@ export function ExportView({ api, t }: ExportViewProps) {
     }
   }
 
-  /** 下载导出的 ZIP 到本机 */
-  const download = async (): Promise<void> => {
-    if (result === null) return
+  /** 把导出的 ZIP 下载到浏览器「下载」目录（默认静默下载，不弹另存为对话框） */
+  const download = async (zipPath: string): Promise<void> => {
+    if (zipPath === '') return
     try {
       runStore.patch({ export: { error: null } })
-      const outcome = await api.download(result.zipPath)
+      const outcome = await api.download(zipPath)
       runStore.patch({ export: { downloaded: true } })
       void outcome // blob/streamed 由 api 处理；此处仅确认成功
     } catch (err) {
@@ -245,8 +247,8 @@ export function ExportView({ api, t }: ExportViewProps) {
 
       {result !== null && !running && (
         <>
-          <ReportView kind="export" exportReport={result.report} onDownload={() => { void download() }} />
-          {downloaded && <Banner kind="ok">Saved: {result.report.file.name}</Banner>}
+          <ReportView kind="export" exportReport={result.report} onDownload={() => { void download(result.zipPath) }} />
+          {downloaded && <Banner kind="ok">{t('export.saved', { name: result.report.file.name })}</Banner>}
         </>
       )}
     </div>

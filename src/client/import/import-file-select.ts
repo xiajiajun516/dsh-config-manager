@@ -65,5 +65,5 @@ export function browseLabelKey(hasSelection: boolean): ConfigManagerKey {
  * 入参用 string 而非 ui 类型，避免本纯函数模块引入跨层类型依赖（可 node --test 直测）。
  */
 export function shouldRenderSelect(step: string, phase: string): boolean {
-  return !(step === 'select' && phase === 'decrypt-archive')
+  return step === 'select' && phase !== 'decrypt-archive'
 }

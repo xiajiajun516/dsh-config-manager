@@ -43,9 +43,10 @@ npm version patch          # 0.1.x → 0.1.x+1（改版本 + 打 tag）
 git push origin main --tags
 ```
 
-CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish（OIDC）→ 创建 GitHub Release（tgz 附件 + 自动更新日志）`
+CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish（OIDC）→ 创建 GitHub Release（tgz 附件 + CHANGELOG 双语亮点 + 自动变更记录）`
 
 - **npm 发布走 Trusted Publishing（OIDC）**：无任何长期令牌；workflow 需 `id-token: write` + npm ≥ 11.5.1（workflow 会先升级 npm）
+- **Release 描述**：CI 从 `CHANGELOG.md` 抽取当前版本段（中英双语亮点，漏写会 **fail fast**）拼上自动变更记录；发版前务必在 `CHANGELOG.md` 顶部更新对应版本段
 - 一次性配置（首次）：
   ```bash
   npm login

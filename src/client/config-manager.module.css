@@ -971,3 +971,30 @@
   line-height: 1.6;
   color: var(--dsw-alias-label-primary);
 }
+
+/* ---------------- 关于（About）面板 ---------------- */
+
+/* 链接行：外链排布，flex-wrap + gap 10px（与 .actionRow 同距，见 DESIGN.md §4.2 间距表） */
+.aboutLinkRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 作者行：可点外链（GitHub 主页），13px 正文、label-primary，hover 转 interactive-bg-hover */
+.aboutAuthor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-primary);
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.aboutAuthor:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}

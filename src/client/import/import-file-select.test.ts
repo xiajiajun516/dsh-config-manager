@@ -163,6 +163,19 @@ test('import-decrypt-archive-render: 上传加密容器后必须渲染解锁页�
   assert.equal(shouldRenderSelect('select', 'preview'), true)
 })
 
+test('import-decrypt-archive-render: 解锁后 step 前进到 analyzing/compatibility 时不得再渲染选择页（shouldRenderSelect 回归）', () => {
+  // 复现 bug：shouldRenderSelect 原实现 `!(step==='select' && phase==='decrypt-archive')`
+  // 对任何非 'select' 的 step 恒返回 true —— 解锁成功后 step 已变为 analyzing/compatibility，
+  // 组件却被劫持回文件选择页，「点击解锁并继续」看起来毫无反应。
+  // 修正后（step==='select' && phase!=='decrypt-archive'）必须返回 false。
+  assert.equal(shouldRenderSelect('analyzing', 'decrypt-archive'), false, '解锁分析中不渲染选择页')
+  assert.equal(shouldRenderSelect('compatibility', 'decrypt-archive'), false, '解锁后兼容页不渲染选择页')
+  assert.equal(shouldRenderSelect('preview', 'decrypt-archive'), false, '解锁后预览不渲染选择页')
+  // 未经解锁的普通流程：非 select 阶段同样不得渲染选择页
+  assert.equal(shouldRenderSelect('analyzing', 'preview'), false, '普通分析中不渲染选择页')
+  assert.equal(shouldRenderSelect('compatibility', 'preview'), false, '普通兼容页不渲染选择页')
+})
+
 /* --------------------------- 接线验收：选 A → 取消 → 换选 B → 提交的是 B */
 
 test('import-reselect-works: 选 A → 取消选择 → 换选 B → 提交的是 B', async () => {

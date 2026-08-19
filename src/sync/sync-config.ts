@@ -30,10 +30,10 @@ import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 
 export const SYNC_CONFIG_FILE = 'sync-config.json';
 
-/** 当前 sync-config.json schema 版本号（v2：命名空间 + WebDAV 通道）。 */
-export const SYNC_CONFIG_SCHEMA_VERSION = 2;
-/** 历史可读取版本：v1 与 v2。 */
-export const SYNC_CONFIG_SUPPORTED_VERSIONS: readonly number[] = [1, 2];
+/** 当前 sync-config.json schema 版本号（v3：双命名空间共存，切换通道不丢失另一通道配置）。 */
+export const SYNC_CONFIG_SCHEMA_VERSION = 3;
+/** 历史可读取版本：v1、v2、v3。 */
+export const SYNC_CONFIG_SUPPORTED_VERSIONS: readonly number[] = [1, 2, 3];
 
 /** git 通道配置（不含任何凭据；git 可执行文件固定使用系统 PATH 中的 git） */
 export interface GitConfig {
@@ -46,6 +46,16 @@ export interface WebDavConfig {
   url: string;
   /** 可选用户名（可回显） */
   username?: string;
+}
+
+/**
+ * 完整双命名空间配置视图（v3 文件直接读取，供 status 路由回填另一通道的 repoUrl/url）。
+ * 与可辨识联合 SyncConfig 不同：git 和 webdav 命名空间同时存在，可能缺失。
+ */
+export interface FullSyncConfig {
+  transport: 'git' | 'webdav';
+  git?: GitConfig;
+  webdav?: WebDavConfig;
 }
 
 /** 持久化的同步通道配置：可辨识联合（schemaVersion 恒 2） */
@@ -120,7 +130,7 @@ export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
     return { schemaVersion: 2, transport: 'git', git };
   }
 
-  // v2：顶层 transport 选择
+  // v2 / v3：顶层 transport 选择（v3 双命名空间并存，按 transport 返回对应通道）
   const transport = obj['transport'];
   if (transport !== 'git' && transport !== 'webdav') return null;
   if (transport === 'git') {
@@ -134,16 +144,84 @@ export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
 }
 
 /**
- * 保存同步通道配置（自动创建目录；覆盖旧值；恒写 schemaVersion=2 + transport + 对应命名空间）。
+ * 读取 sync-config.json 原始内容，提取 git/webdav 两个命名空间（不存在/无效 → undefined）。
+ * 供 writeSyncConfig 合并保留另一通道配置用：切换通道保存时不得丢弃另一通道的 repoUrl/url。
+ */
+function readBothNamespaces(file: string): Promise<{ git?: GitConfig; webdav?: WebDavConfig }> {
+  return (async () => {
+    let raw: string
+    try {
+      raw = await fs.readFile(file, 'utf8')
+    } catch {
+      return {} // 文件不存在：无历史配置
+    }
+    let parsed: unknown
+    try {
+      parsed = parseJsonSafe(raw)
+    } catch {
+      return {} // 损坏 JSON：按无历史配置处理（不阻塞保存）
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const o = parsed as Record<string, unknown>
+    const out: { git?: GitConfig; webdav?: WebDavConfig } = {}
+    const git = parseV2GitNamespace(o['git'])
+    if (git !== null) out.git = git
+    const webdav = parseV2WebDavNamespace(o['webdav'])
+    if (webdav !== null) out.webdav = webdav
+    // v1 旧文件（无命名空间）：git 读扁平 repoUrl
+    if (out.git === undefined && out.webdav === undefined) {
+      const v1 = parseV1Git(o)
+      if (v1 !== null) out.git = v1
+    }
+    return out
+  })()
+}
+
+/**
+ * 读取完整的双命名空间配置（供 status 路由回填另一通道的 repoUrl/url）。
+ * 文件不存在/损坏/无任何通道配置 → null（视为未配置）。
+ */
+export async function readFullSyncConfig(dir: string): Promise<FullSyncConfig | null> {
+  const file = path.join(dir, SYNC_CONFIG_FILE)
+  const both = await readBothNamespaces(file)
+  if (both.git === undefined && both.webdav === undefined) return null
+  // 从原始文件读取当前活动 transport 字段
+  let transport: 'git' | 'webdav' = 'git'
+  try {
+    const raw = await fs.readFile(file, 'utf8')
+    const parsed = parseJsonSafe(raw)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const o = parsed as Record<string, unknown>
+      if (o['transport'] === 'webdav') transport = 'webdav'
+    }
+  } catch { /* 默认 git */ }
+  return { transport, git: both.git, webdav: both.webdav }
+}
+
+/**
+ * 保存同步通道配置（自动创建目录；恒写 schemaVersion=3 双命名空间）。
+ * - 写入当前通道的命名空间（git/webdav）；
+ * - 另一通道之前配置过 → 一并保留（切换通道不丢失另一通道的 repoUrl/url）；
+ * - 覆盖旧值；未配置过的字段不写入。
  */
 export async function writeSyncConfig(dir: string, cfg: SyncConfig): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, SYNC_CONFIG_FILE)
+  const existing = await readBothNamespaces(file)
   const payload: Record<string, unknown> = {
     schemaVersion: SYNC_CONFIG_SCHEMA_VERSION,
     transport: cfg.transport,
-    ...(isGitConfig(cfg) ? { git: cfg.git } : { webdav: cfg.webdav }),
-  };
-  await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), stringifyJsonSafe(payload, { space: 2 }), 'utf8');
+  }
+  if (isGitConfig(cfg)) {
+    payload.git = cfg.git
+    // 保留另一通道的 webdav 配置（存在时）
+    if (existing.webdav !== undefined) payload.webdav = existing.webdav
+  } else {
+    payload.webdav = cfg.webdav
+    // 保留另一通道的 git 配置（存在时）
+    if (existing.git !== undefined) payload.git = existing.git
+  }
+  await fs.writeFile(file, stringifyJsonSafe(payload, { space: 2 }), 'utf8');
 }
 
 /**

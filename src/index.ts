@@ -86,10 +86,10 @@ import type { AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config
 import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
 import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
 import {
-  readSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
+  readSyncConfig, readFullSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
   isGitConfig, isWebDavConfig,
 } from './sync/sync-config.ts'
-import type { SyncConfig } from './sync/sync-config.ts'
+import type { SyncConfig, FullSyncConfig } from './sync/sync-config.ts'
 import {
   defaultSyncSelection, effectiveSections, readSyncSelection, writeSyncSelection,
   SYNC_SELECTION_SCHEMA_VERSION,
@@ -1940,27 +1940,30 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       handler: async (req, res) => {
         if (!guard(req, res, 'GET')) return
         try {
-          const cfg = await readSyncConfig(syncDir)
+          // 完整双命名空间配置：repoUrl / webdav.url 无论当前通道都回填，
+          // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失
+          const full = await readFullSyncConfig(syncDir)
           const state = await loadSyncState(syncDir)
           const [cred, webdavCred] = await Promise.all([
             credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
             credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
           ])
-          const transport: SyncConfig['transport'] = cfg !== null && isWebDavConfig(cfg) ? 'webdav' : 'git'
-          const webdav = transport === 'webdav' && cfg !== null && isWebDavConfig(cfg)
+          const transport: SyncConfig['transport'] = full !== null && full.transport === 'webdav' ? 'webdav' : 'git'
+          // webdav 配置视图（配置过即返回，与当前通道无关：供表单在 git ↔ webdav 切换时回填）
+          const webdav = full?.webdav !== undefined
             ? {
-                url: cfg.webdav.url,
+                url: full.webdav.url,
                 // username 非敏感可回显，供表单回填
-                username: cfg.webdav.username,
-                usernameConfigured: typeof cfg.webdav.username === 'string' && cfg.webdav.username !== '',
+                username: full.webdav.username,
+                usernameConfigured: typeof full.webdav.username === 'string' && full.webdav.username !== '',
                 passwordConfigured: webdavCred.configured,
               }
             : undefined
           writeJson(res, 200, {
             ok: true,
-            configured: cfg !== null,
+            configured: full !== null,
             transport,
-            repoUrl: cfg !== null && isGitConfig(cfg) ? cfg.git.repoUrl : undefined,
+            repoUrl: full?.git?.repoUrl,
             credentialConfigured: cred.configured,
             credentialWritable: cred.writable === true,
             // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）

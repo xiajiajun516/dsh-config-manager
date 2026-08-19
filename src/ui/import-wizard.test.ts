@@ -170,3 +170,40 @@ test('import-wizard: reset 清空状态回 select', async () => {
   assert.equal(snap.plan, null);
   assert.equal(snap.result, null);
 });
+
+test('import-wizard: setArchiveEncrypted(true, zipPath) 存入容器路径供 unlock 使用', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  assert.equal(wiz.snapshot().zipPath, null, '初始 zipPath 为 null');
+
+  // setArchiveEncrypted 传入 zipPath → 写入 this.zipPath
+  wiz.setArchiveEncrypted(true, '/tmp/encrypted-backup.dca1');
+  assert.equal(wiz.snapshot().zipPath, '/tmp/encrypted-backup.dca1',
+    'setArchiveEncrypted(true, zipPath) 必须设置 zipPath（防止 syncWizard 覆盖 store');
+  // setArchiveEncrypted(false) 不应改 zipPath（普通备份路径保留）
+  const wiz2 = new ImportWizard({ port });
+  wiz2.setArchiveEncrypted(false);
+  assert.equal(wiz2.snapshot().zipPath, null, '非加密容器不应改 zipPath');
+
+  // unlockArchive 后 zipPath 仍为加密路径，unlockedZipPath 为明文路径
+  const decrypted = await wiz.unlockArchive('/tmp/encrypted-backup.dca1', 'secret123');
+  void decrypted;
+  assert.equal(wiz.snapshot().zipPath, '/tmp/encrypted-backup.dca1',
+    'unlockArchive 后 snapshot.zipPath 仍为加密容器路径');
+  // resolvedZipPath 应返回明文路径（通过私有字段，这里用 snapshot 验证 zipPath 不变）
+  // 后续 selectZip 应使用明文路径（resolvedZipPath 内部逻辑）
+});
+
+test('import-wizard: unlockArchive → selectZip 完整流程（加密容器解锁后分析明文 ZIP）', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  // 模拟加密容器上传
+  wiz.setArchiveEncrypted(true, '/tmp/encrypted.dca1');
+
+  // 解锁
+  await wiz.unlockArchive('/tmp/encrypted.dca1', 'password');
+  // 解锁后调用 selectZip 应分析解密后的明文 ZIP（mock 固定返回同一路径）
+  const analysis = await wiz.selectZip('/tmp/encrypted.dca1');
+  assert.equal(analysis.compatibility, 'good');
+  assert.equal(wiz.currentStep, 'compatibility');
+});

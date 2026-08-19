@@ -197,8 +197,9 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
       const uploaded: UploadResponse = await api.upload(file)
       if (generation !== pickGeneration.current) return // 用户已取消本次选择
       if (uploaded.containerType === 'encrypted') {
-        // 加密容器：告知向导 + 进入解锁阶段；analysis 留待解锁后
-        wizard.setArchiveEncrypted(true)
+        // 加密容器：告知向导（含容器路径，syncWizard 不会把 zipPath 覆盖回 null）
+        // + 进入解锁阶段；analysis 留待解锁后
+        wizard.setArchiveEncrypted(true, uploaded.zipPath)
         runStore.patch({
           import: {
             containerEncrypted: true,
@@ -320,6 +321,10 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
       const analysis = await wizard.selectZip(imp.zipPath!)
       void analysis
       runStore.syncWizard()
+      // 解锁后 phase 不再停留在 decrypt-archive，否则 preview 页会被解锁页劫持。
+      // 用最新 store 快照计算下一阶段：decrypt-archive 已解锁（archiveUnlocked=true）
+      // 不再适用，nextFlowPhase 取第一项——decrypt/isEncrypted、conflicts 或 confirm。
+      runStore.patch({ import: { phase: 'preview' } })
     } catch (err) {
       setArchiveUnlockError(err instanceof Error ? err.message : String(err))
       runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })

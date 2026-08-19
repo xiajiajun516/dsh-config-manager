@@ -52,14 +52,11 @@ jobs:
         run: npm publish --access public --provenance
 
       - name: Create GitHub Release (tag-triggered only)
-        # Runs only on tag pushes (not manual dispatch): creates a GitHub
-        # Release with auto-generated notes and the tgz artifact, then prepends
-        # a hand-written highlight section (方式 2: 手动亮点 + 自动变更记录).
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # ① 先创建 release（自动生成 commit 变更记录）
+          # ① 先创建 release（自动生成 commit 变更记录，conventional commits 自动分组）
           gh release create "$GITHUB_REF_NAME" \
             dist/dsh-config-manager-*.tgz \
             --generate-notes \
@@ -68,23 +65,26 @@ jobs:
           # ② 把自动生成的变更记录存到临时文件
           gh release view "$GITHUB_REF_NAME" --json body -q .body > /tmp/auto-notes.md
 
-          # ③ 手动亮点段（每次发版前更新这里的列表）
-          cat > /tmp/release-notes.md <<'EOF'
-          ## ✨ 本次更新亮点
-          - 🔐 **加密快照同步**：手动推送时可将整个同步快照的 sections 载荷用 AES-256-GCM **整体加密**后上传远端（`manifest.encrypted=true`），拉取/一键同步时输入密码解密——密码仅内存使用，绝不落盘/落日志
-          - 🛡️ **凭据随同步通道携带（可选）**：手动推送可导出真实凭据值（`includeSecrets`），但**强制要求同时加密**（安全不变量：密钥绝不明文进入同步通道）；自动同步恒不携带凭据
-          - 🚫 **自动同步智能跳过加密快照**：远端最新快照为加密 → 自动同步无密码无法解密，记录 `skipReason='encrypted'` 整体跳过（不误判失败），提示走手动输入密码同步
-          - ⚙️ **同步配置保存路由（sync/config）**：UI 表单自动保存 /「保存配置」按钮落盘同步通道配置，凭据走 DSH credentials 槽位；WebDAV `username` 留空时从持久化配置自动回填（挂载/刷新后不再因空用户名失败）
-          - ⏱️ **WebDAV 通道独立超时**：单请求放宽至 120s（适配坚果云等慢速 WebDAV 上传大快照/读写索引），错误消息携带实际毫秒数便于判断
-          - 🐛 **修复导入「解锁加密备份」阶段渲染让位**：decrypt-archive 阶段发生时不再停留在文件选择页，正确显示密码输入界面（import-decrypt-archive-render 回归）
-          ## 📦 安装
+          # ③ 从 CHANGELOG.md 抽取当前版本的双语亮点段（方式 3: CHANGELOG 承载亮点 + 默认 automatic grouping）
+          #    未写当前版本段则 fail fast，防止漏写导致 release 描述缺亮点。
+          python3 .github/scripts/extract-release-notes.py "$GITHUB_REF_NAME" CHANGELOG.md > /tmp/highlights.md
+          if [ ! -s /tmp/highlights.md ]; then
+            echo "::error::CHANGELOG.md 缺少当前版本 $GITHUB_REF_NAME 的亮点段，请先在 CHANGELOG.md 顶部按 ## [vX.Y.Z] 补充（中英双语）后再发版"
+            exit 1
+          fi
+
+          # ④ 拼装完整描述：双语亮点段 + 安装指引 + 变更记录
+          cp /tmp/highlights.md /tmp/release-notes.md
+          cat >> /tmp/release-notes.md <<'EOF'
+
+          ## 📦 安装 / Install
           ```bash
           dsh plugin --profile web add dsh-config-manager@latest
           ```
-          ## 🔄 变更记录（自动生成）
+          ## 🔄 变更记录 / Changelog（自动生成）
           EOF
           echo "" >> /tmp/release-notes.md
           cat /tmp/auto-notes.md >> /tmp/release-notes.md
 
-          # ④ 用拼接后的完整描述更新 release
+          # ⑤ 用拼接后的完整描述更新 release
           gh release edit "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
