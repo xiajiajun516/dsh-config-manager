@@ -16,8 +16,12 @@ import type { ZipSafetyLimits } from '../utils/zip.ts'
 import { sha256Hex } from '../utils/hashing.ts'
 import { parseManifest, MANIFEST_FILE } from '../schema/manifest.ts'
 import type { SectionId } from '../schema/types.ts'
+import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts'
+import { scanAndRedact, scanText } from '../security/secret-scanner.ts'
 import { validateMarketRepoUrl } from './url.ts'
-import { assertSafeItemId, MARKET_ITEM_SCHEMA_VERSION, MAX_MARKET_ZIP_BYTES } from './types.ts'
+import {
+  assertSafeItemId, BANNED_MARKET_SECTIONS, MARKET_ITEM_SCHEMA_VERSION, MAX_MARKET_ZIP_BYTES,
+} from './types.ts'
 import type { MarketItemManifest } from './types.ts'
 
 export class MarketPrepareError extends Error {
@@ -112,6 +116,48 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     .map(([id]) => id)
   if (sections.length === 0) {
     throw new MarketPrepareError('zip 无启用分区，无可发布内容')
+  }
+  // 6b. 市场条目禁止分区（BANNED_MARKET_SECTIONS：sessions 历史会话 / pluginFiles 任意文件 / self 本地环境）
+  const bannedHit = sections.filter((s) => BANNED_MARKET_SECTIONS.includes(s))
+  if (bannedHit.length > 0) {
+    throw new MarketPrepareError(
+      `zip 包含禁止分区 ${bannedHit.join(', ')}（sessions=历史会话 / pluginFiles=任意文件 / self=本地环境），市场条目禁止携带`,
+    )
+  }
+  // 6c. 内容级秘密扫描（纵深防御，不依赖导出 containsSecrets 标记）：
+  //     JSON 分区走 scanAndRedact（字段名+值形状，空值/env 引用名豁免，低误报）；
+  //     文件类分区（skills/agentPresets/agentInstructions）走 scanText（只报告不改写）。
+  const scanHits: string[] = []
+  for (const sid of sections) {
+    if (isFileSection(sid)) {
+      const prefix = SECTION_FILE_PREFIXES[sid]!
+      for (const name of archive.names().filter((n) => n.startsWith(prefix))) {
+        let text: string
+        try {
+          text = new TextDecoder('utf-8').decode(archive.readEntry(name))
+        } catch {
+          continue
+        }
+        const hits = scanText(text)
+        if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, 5).map((h) => h.path).join(', ')}`)
+      }
+    } else {
+      const jsonPath = SECTION_JSON_PATHS[sid]
+      if (jsonPath === undefined || !archive.has(jsonPath)) continue
+      let data: unknown
+      try {
+        data = archive.readEntryJson(jsonPath)
+      } catch {
+        continue
+      }
+      const { hits } = scanAndRedact(data)
+      if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, 5).map((h) => h.path).join(', ')}`)
+    }
+  }
+  if (scanHits.length > 0) {
+    throw new MarketPrepareError(
+      `检测到疑似敏感内容（${scanHits.slice(0, 3).join('；')}…），市场条目禁止携带凭据，请脱敏后重试`,
+    )
   }
   // 7. SHA-256 + 生成 L2 manifest
   const sha256 = sha256Hex(buf)

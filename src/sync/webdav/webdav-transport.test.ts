@@ -232,6 +232,56 @@ test('download：不存在的 id（404）→ 抛错（契约），消息含 id',
   );
 });
 
+test('回归：含文件分区（Uint8Array）的快照经 JSON 往返字节无损——PUT 存 base64、GET 还原 Uint8Array', async () => {
+  const snap: SyncSnapshot = {
+    ...sampleSnapshot(),
+    sections: {
+      ...sampleSnapshot().sections,
+      skills: {
+        version: 1,
+        files: [
+          { relativePath: 'coding.md', data: new Uint8Array(Buffer.from('# Coding\n', 'utf8')), contentHash: 'h1' },
+          { relativePath: 'sub/notes.txt', data: new Uint8Array(Buffer.from('hello world', 'utf8')), contentHash: 'h2' },
+        ],
+      },
+    },
+  };
+  let uploadedBody = '';
+  const calls = makeCalls();
+  const handler = (m: MockRequest): WebDavResponse => {
+    if (m.method === 'MKCOL') return res(201, '');
+    if (m.method === 'PUT' && m.url.endsWith('/snap-001.json')) {
+      uploadedBody = m.body ?? '';
+      return res(201, '');
+    }
+    if (m.method === 'PUT' && m.url.endsWith('/index.json')) return res(201, '');
+    if (m.method === 'GET') return res(404, '');
+    return res(405, '');
+  };
+  const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
+  await t.upload(snap);
+  // PUT 体必须是二进制安全形态：data 为 base64 标记对象而非数字索引对象
+  const parsed = JSON.parse(uploadedBody) as { sections: { skills: { files: Array<{ data: unknown }> } } };
+  const f0 = parsed.sections.skills.files[0]!.data as { $bin?: string };
+  assert.equal(typeof f0.$bin, 'string', '文件 data 应为 { $bin: base64 }');
+  assert.ok(!/\"0\"\s*:/.test(uploadedBody), '不得出现数字索引对象（Uint8Array 直序列化）');
+
+  // download：远端返回该 body → 还原为 Uint8Array，字节无损
+  const calls2 = makeCalls();
+  const handler2 = (m: MockRequest): WebDavResponse => {
+    if (m.method === 'GET') return res(200, uploadedBody);
+    return res(405, '');
+  };
+  const t2 = new WebDavTransport(makeOptions({ request: mockReq(calls2, handler2) }));
+  const roundtrip = await t2.download('snap-001');
+  const files = (roundtrip.sections as { skills: { files: Array<{ data: Uint8Array; relativePath: string; contentHash?: string }> } }).skills.files;
+  assert.ok(files[0]!.data instanceof Uint8Array, '还原后 data 必须是 Uint8Array（此前是普通对象 → Buffer.from 报错）');
+  assert.equal(Buffer.from(files[0]!.data).toString('utf8'), '# Coding\n');
+  assert.equal(Buffer.from(files[1]!.data).toString('utf8'), 'hello world');
+  assert.equal(files[1]!.relativePath, 'sub/notes.txt');
+  assert.equal(roundtrip.id, 'snap-001');
+});
+
 /* ---------------- delete ---------------- */
 
 test('delete：DELETE <id>.json + 摘除 index 条目并写回', async () => {

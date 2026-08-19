@@ -240,6 +240,68 @@ test('校验：containsSecrets=true 拒绝（市场通道永不携带秘密，�
   assert.match(res.errors.join(), /containsSecrets/);
 });
 
+test('校验：sessions 分区拒绝（历史会话禁止进入市场条目）', () => {
+  // 文件类分区 sessions：目录前缀须有内容才通过第 7 步 —— 但 sessions 属禁止分区，应在此之前拒绝
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} });
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'sessions/abc.json', data: Buffer.from('{"id":"abc"}') },
+  ];
+  entries.push({ name: 'integrity/checksums.json', data: Buffer.from(JSON.stringify({
+    'config/settings.json': sha256Hex(Buffer.from(settingsJson)),
+    'sessions/abc.json': sha256Hex(Buffer.from('{"id":"abc"}')),
+  })) });
+  const manifest = {
+    schemaVersion: 1, exporter: { name: 'X', version: '1' },
+    source: { dshVersion: '1', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(), sections: { settings: true, sessions: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  };
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) });
+  const zip = Buffer.from(zipToBuffer(entries));
+  const res = validateMarketItem('foo', makeItemManifest('foo', zip, ['settings', 'sessions']), zip);
+  assert.equal(res.status, 'invalid');
+  assert.match(res.errors.join(), /sessions|历史会话/);
+});
+
+test('校验：pluginFiles 分区拒绝（任意文件直通，禁止进入市场）', () => {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} });
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'plugin-files/secret.txt', data: Buffer.from('token=xxx') },
+  ];
+  const manifest = {
+    schemaVersion: 1, exporter: { name: 'X', version: '1' },
+    source: { dshVersion: '1', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(), sections: { settings: true, pluginFiles: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  };
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) });
+  const zip = Buffer.from(zipToBuffer(entries));
+  const res = validateMarketItem('foo', makeItemManifest('foo', zip, ['settings', 'pluginFiles']), zip);
+  assert.equal(res.status, 'invalid');
+  assert.match(res.errors.join(), /pluginFiles/);
+});
+
+test('校验：self 分区拒绝（本地环境专属，禁止进入市场）', () => {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} });
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'self/ui-prefs.json', data: Buffer.from('{"syncChannel":"webdav"}') },
+  ];
+  const manifest = {
+    schemaVersion: 1, exporter: { name: 'X', version: '1' },
+    source: { dshVersion: '1', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(), sections: { settings: true, self: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  };
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) });
+  const zip = Buffer.from(zipToBuffer(entries));
+  const res = validateMarketItem('foo', makeItemManifest('foo', zip, ['settings', 'self']), zip);
+  assert.equal(res.status, 'invalid');
+  assert.match(res.errors.join(), /self/);
+});
+
 /* ---------------- reader（只读 git） ---------------- */
 
 async function tmpDir(prefix: string): Promise<string> {

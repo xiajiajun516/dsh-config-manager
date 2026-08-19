@@ -90,6 +90,24 @@ test('runOnce: enabled=false → skipped(disabled)，不写历史', async () => 
   assert.equal(getConfig().consecutiveFailures, 0);
 });
 
+test('runOnce: 历史记录携带触发通道（transport=调用通道 git/webdav）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  // 两端无变化 → upToDate 成功历史（走 appendHistory）
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => false,
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  await scheduler.runOnce('git');
+  let entries = getEntries();
+  assert.ok(entries.some((e) => e.transport === 'git' && e.skipReason === 'upToDate'), `git 通道历史应带 transport=git: ${JSON.stringify(entries)}`);
+  await scheduler.runOnce('webdav');
+  entries = getEntries();
+  assert.ok(entries.some((e) => e.transport === 'webdav' && e.skipReason === 'upToDate'), 'webdav 通道历史应带 transport=webdav');
+  // 全部历史条目都应携带 channel
+  for (const e of entries) assert.ok(e.transport === 'git' || e.transport === 'webdav', `历史必须带 transport: ${JSON.stringify(e)}`);
+});
+
 test('runOnce: 未配置仓库 → skipped(unconfigured)，写历史但不计失败', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const scheduler = new AutoSyncScheduler({

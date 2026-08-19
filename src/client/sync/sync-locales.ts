@@ -176,6 +176,9 @@ export const zh = {
   'history.autosyncNotified': '已通知（连续失败 3 次）',
   'history.column.snapshot': '快照',
   'history.column.autosync': '自动同步',
+  // 触发通道（同步历史「由哪个通道触发」）
+  'history.channelGit': 'GitHub',
+  'history.channelWebdav': 'WebDAV',
   // 公共
   'common.close': '关闭',
   'common.retry': '重试',
@@ -342,6 +345,9 @@ export const en: Record<keyof typeof zh, string> = {
   'history.autosyncNotified': 'Notified (3 consecutive failures)',
   'history.column.snapshot': 'Snapshot',
   'history.column.autosync': 'Auto Sync',
+  // Trigger channel (which channel triggered this history entry)
+  'history.channelGit': 'GitHub',
+  'history.channelWebdav': 'WebDAV',
   'common.close': 'Close',
   'common.retry': 'Retry',
   'common.loading': 'Loading…',

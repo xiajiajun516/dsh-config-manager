@@ -82,6 +82,82 @@ test('prepare：containsSecrets=true 拒绝（市场通道永不携带秘密）'
   )
 })
 
+test('prepare：zip 含 sessions 分区拒绝（历史会话禁止进入市场条目）', () => {
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'sess', name: 'Sess', zipBytes: makeValidZip({ sections: { settings: true, sessions: true } }),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /sessions|历史会话/.test(err.message),
+  )
+})
+
+test('prepare：zip 含 pluginFiles 分区拒绝（任意文件直通，禁止进入市场）', () => {
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'pf', name: 'PF', zipBytes: makeValidZip({ sections: { settings: true, pluginFiles: true } }),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /pluginFiles/.test(err.message),
+  )
+})
+
+test('prepare：zip 含 self 分区拒绝（本地环境专属，禁止进入市场）', () => {
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'selfp', name: 'SelfP', zipBytes: makeValidZip({ sections: { settings: true, self: true } }),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /self/.test(err.message),
+  )
+})
+
+test('prepare：内容级秘密扫描拒绝（providers 分区含 apiKey 值，即使 containsSecrets=false）', () => {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
+  const providersJson = JSON.stringify({ version: 1, providers: { deepseek: { apiKey: 'sk-test1234567890abcdef' } } }, null, 2)
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'ai/providers.json', data: Buffer.from(providersJson) },
+  ]
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { settings: true, providers: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  const zip = Buffer.from(zipToBuffer(entries))
+  // containsSecrets=false 骗过标记闸门 → 内容级扫描应兜底拒绝
+  assert.throws(
+    () => prepareMarketItem({ itemId: 'pv', name: 'PV', zipBytes: zip }),
+    (err: unknown) => err instanceof MarketPrepareError && /敏感内容/.test(err.message),
+  )
+})
+
+test('prepare：内容级扫描豁免 env 引用名（apiKeyEnv=DEEPSEEK_API_KEY 不误报）', () => {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
+  const providersJson = JSON.stringify({
+    version: 1,
+    providers: { deepseek: { apiKeyEnv: 'DEEPSEEK_API_KEY', baseUrl: 'https://api.deepseek.com' } },
+  }, null, 2)
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'ai/providers.json', data: Buffer.from(providersJson) },
+  ]
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { settings: true, providers: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  const zip = Buffer.from(zipToBuffer(entries))
+  const res = prepareMarketItem({ itemId: 'pv2', name: 'PV2', zipBytes: zip, now: FIXED_NOW })
+  const manifestOut = JSON.parse(res.manifestText) as { sections: string[] }
+  assert.deepEqual(manifestOut.sections, ['settings', 'providers'])
+})
+
 test('prepare：非法 id（路径穿越）拒绝', () => {
   assert.throws(
     () => prepareMarketItem({ itemId: '../evil', name: 'Evil', zipBytes: makeValidZip() }),

@@ -158,6 +158,11 @@ export class AutoSyncScheduler {
     this.detectLocalChange = opts.detectLocalChange ?? defaultDetectLocalChange;
   }
 
+  /** 追加一条自动同步历史（自动带上触发通道；0x 安全：绝不覆盖调用方显式 transport）。 */
+  private async appendHistory(channel: SyncTransportType, entry: AutosyncHistoryEntry): Promise<void> {
+    await this.appendHistoryFn({ ...entry, transport: channel });
+  }
+
   /** 启动：读两个通道配置 → enabled 通道各自排定时器 → 对每个 enabled 通道执行一次启动触发。 */
   start(): void {
     if (this.stopped) return;
@@ -257,7 +262,7 @@ export class AutoSyncScheduler {
           status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
           consecutiveFailures: cfg.consecutiveFailures,
         };
-        await this.appendHistoryFn({
+        await this.appendHistory(channel, {
           direction: 'both',
           status: 'skipped',
           skipReason: 'unconfigured',
@@ -287,7 +292,7 @@ export class AutoSyncScheduler {
           status: 'skipped', direction: 'pull', skipReason: 'encrypted', historyId,
           consecutiveFailures: cfg.consecutiveFailures,
         };
-        await this.appendHistoryFn({
+        await this.appendHistory(channel, {
           direction: 'pull', status: 'skipped', skipReason: 'encrypted',
           createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
         });
@@ -308,7 +313,7 @@ export class AutoSyncScheduler {
           status: 'success', direction: 'none', skipReason: 'upToDate', historyId,
           consecutiveFailures: cfg.consecutiveFailures,
         };
-        await this.appendHistoryFn({
+        await this.appendHistory(channel, {
           direction: 'both', status: 'success', skipReason: 'upToDate',
           createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
         });
@@ -329,7 +334,7 @@ export class AutoSyncScheduler {
             status: 'failed', direction: 'pull', error, historyId,
             consecutiveFailures: cfg.consecutiveFailures + 1,
           };
-          await this.appendHistoryFn({
+          await this.appendHistory(channel, {
             direction: 'pull', status: 'failed', error, createdAt: nowIso,
             failureCountAtRun: cfg.consecutiveFailures + 1,
           });
@@ -347,7 +352,7 @@ export class AutoSyncScheduler {
             conflictedSections, historyId,
             consecutiveFailures: cfg.consecutiveFailures,
           };
-          await this.appendHistoryFn({
+          await this.appendHistory(channel, {
             direction: 'pull', status: 'skipped', skipReason: 'conflict',
             conflictedSections, createdAt: nowIso,
             failureCountAtRun: cfg.consecutiveFailures,
@@ -371,7 +376,7 @@ export class AutoSyncScheduler {
               status: 'failed', direction: 'pull', error, historyId,
               consecutiveFailures: cfg.consecutiveFailures + 1,
             };
-            await this.appendHistoryFn({
+            await this.appendHistory(channel, {
               direction: 'pull', status: 'failed', error, createdAt: nowIso,
               failureCountAtRun: cfg.consecutiveFailures + 1,
             });
@@ -393,7 +398,7 @@ export class AutoSyncScheduler {
               appliedSections, error, historyId,
               consecutiveFailures: cfg.consecutiveFailures + 1,
             };
-            await this.appendHistoryFn({
+            await this.appendHistory(channel, {
               direction: appliedSections.length ? 'both' : 'push', status: 'failed',
               appliedSections, error,
               createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
@@ -407,7 +412,7 @@ export class AutoSyncScheduler {
             appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
             consecutiveFailures: 0,
           };
-          await this.appendHistoryFn({
+          await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push', status: 'success',
             appliedSections, pushedSnapshotId: pushReport.snapshotId,
             createdAt: nowIso, failureCountAtRun: 0,
@@ -421,7 +426,7 @@ export class AutoSyncScheduler {
             appliedSections, error, historyId,
             consecutiveFailures: cfg.consecutiveFailures + 1,
           };
-          await this.appendHistoryFn({
+          await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push', status: 'failed',
             appliedSections, error,
             createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
@@ -438,7 +443,7 @@ export class AutoSyncScheduler {
         ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
         historyId, consecutiveFailures: 0,
       };
-      await this.appendHistoryFn({
+      await this.appendHistory(channel, {
         direction: 'pull', status: 'success', appliedSections,
         ...(appliedSections.length === 0 ? { skipReason: 'unchanged' as const } : {}),
         createdAt: nowIso, failureCountAtRun: 0,
@@ -451,7 +456,7 @@ export class AutoSyncScheduler {
         status: 'failed', direction: 'none', error, historyId,
         consecutiveFailures: cfg.consecutiveFailures + 1,
       };
-      await this.appendHistoryFn({
+      await this.appendHistory(channel, {
         direction: 'both', status: 'failed', error,
         createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures + 1,
       });

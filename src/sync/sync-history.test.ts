@@ -58,6 +58,37 @@ test('readSyncHistory：损坏 JSON → 抛错', async () => {
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('appendAutosyncEntry：记录触发通道（transport git/webdav）→ 读回保留', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-history-channel-'));
+  try {
+    await appendAutosyncEntry(dir, { ...makeEntry(0, 'success'), transport: 'git' });
+    await appendAutosyncEntry(dir, { ...makeEntry(1, 'skipped'), transport: 'webdav' });
+    const hist = await readSyncHistory(dir);
+    assert.equal(hist.autosyncEntries[0]!.transport, 'git');
+    assert.equal(hist.autosyncEntries[1]!.transport, 'webdav');
+    // 旧记录（无字段）读回 → undefined（向后兼容）
+    const raw = await fs.readFile(path.join(dir, SYNC_HISTORY_FILE), 'utf8');
+    void raw;
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('readSyncHistory：旧记录无 transport 字段 → 读回 undefined（向后兼容）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-history-legacy-'));
+  try {
+    await fs.writeFile(
+      path.join(dir, SYNC_HISTORY_FILE),
+      JSON.stringify({
+        schemaVersion: 1,
+        autosyncEntries: [{ direction: 'push', status: 'success', createdAt: '2026-08-16T12:00:00.000Z', failureCountAtRun: 0 }],
+        updatedAt: '2026-08-16T12:00:00.000Z',
+      }),
+      'utf8',
+    );
+    const hist = await readSyncHistory(dir);
+    assert.equal(hist.autosyncEntries[0]!.transport, undefined);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('appendAutosyncEntry：裁剪到 AUTOSYNC_HISTORY_KEEP 条', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-history-prune-'));
   try {

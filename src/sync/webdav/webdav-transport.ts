@@ -11,12 +11,16 @@
  * - list：GET index.json，缺失（404）视为空；按 createdAt 升序返回。
  * - download：GET <id>.json 解析成 SyncSnapshot；不存在必须抛错（契约）。
  * - delete：DELETE <id>.json 并从 index 摘除条目（写回合并后 index）；文件不存在视为成功。
+ * - 二进制安全：快照序列化经 snapshot-json（文件分区 Uint8Array → base64 标记对象），
+ *   JSON 往返字节无损（否则 JSON.stringify 把 TypedArray 变成数字索引对象，拉取还原
+ *   成普通对象 → Buffer.from(对象) 报错）。
  * - 认证：HTTP Basic（username 配置项 + 注入 credentials 提供者 getPassword()）。
  *   密码绝不进 URL/日志；错误消息中的响应体统一脱敏（password → [REDACTED]）。
  * - 可注入 request 便于测试；缺省用全局 fetch（AbortController 超时）。
  */
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
+import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
 import { computeSnapshotMeta } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
@@ -149,14 +153,15 @@ export class WebDavTransport implements SyncTransport {
     return this.parseIndex(await res.text(), url, pwd);
   }
 
-  /** 上传快照：幂等 MKCOL → PUT <id>.json → 合并写回 index.json；返回 computeSnapshotMeta。 */
+  /** 上传快照：幂等 MKCOL → PUT <id>.json → 合并写回 index.json；返回 computeSnapshotMeta。
+   *  序列化经 snapshot-json：文件类分区字节以 base64 传输（JSON 无法直传 Uint8Array）。 */
   async upload(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
     this.assertSafeId(snapshot.id);
     const pwd = await this.passwordOnce();
     await this.ensureCollection(pwd);
-    // 先写快照文件
+    // 先写快照文件（JSON 序列化：文件字节 base64 编码，往返无损）
     const snapUrl = this.snapshotUrl(snapshot.id);
-    const snapRes = await this.send('PUT', snapUrl, pwd, { body: JSON.stringify(snapshot) });
+    const snapRes = await this.send('PUT', snapUrl, pwd, { body: serializeSnapshot(snapshot) });
     if (!snapRes.ok) {
       throw new WebDavTransportError(await this.failText('PUT', snapUrl, snapRes, pwd));
     }
@@ -324,24 +329,13 @@ export class WebDavTransport implements SyncTransport {
   }
 
   private parseSnapshot(raw: string, id: string): SyncSnapshot {
-    let parsed: unknown;
     try {
-      parsed = parseJsonSafe(raw);
+      return deserializeSnapshot(raw);
     } catch (err) {
       throw new WebDavTransportError(
         this.o.msg('sync.webdav.snapshotInvalid', { id, err: this.mask(String((err as Error)?.message ?? ''), '') }),
       );
     }
-    const snap = parsed as Partial<SyncSnapshot>;
-    const okShape = typeof snap === 'object' && snap !== null
-      && typeof snap.id === 'string'
-      && typeof snap.createdAt === 'string'
-      && typeof snap.manifest === 'object' && snap.manifest !== null
-      && typeof snap.sections === 'object' && snap.sections !== null;
-    if (!okShape) {
-      throw new WebDavTransportError(this.o.msg('sync.webdav.snapshotInvalid', { id, err: 'invalid shape' }));
-    }
-    return parsed as SyncSnapshot;
   }
 
   /** 发送请求：注入 Basic 认证头 + 调用 request；网络错误/超时归一 */

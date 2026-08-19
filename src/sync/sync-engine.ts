@@ -368,6 +368,8 @@ export class SyncEngine {
         platform: this.ctx.platform as Platform,
         sectionIds: Object.keys(plainSections) as SectionId[],
         containsSecrets: includeSecrets,
+        // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
+        transport: this.transport.type,
         ...(encrypted ? { encrypted: true } : {}),
       },
       sections,
@@ -611,6 +613,8 @@ export class SyncEngine {
           platform: this.ctx.platform as Platform,
           sectionIds: Object.keys(sections) as SectionId[],
           containsSecrets: false,
+          // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
+          transport: this.transport.type,
         },
         sections,
       };

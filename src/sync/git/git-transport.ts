@@ -2,8 +2,11 @@
  * m-git-channel：Git 私有仓库通道（SyncTransport 的 git 实现）。
  *
  * 设计：
- * - 快照以「散文件目录」提交到 git 仓库：工作副本 <workDir>/snapshots/<id>/ 即 t2 layout 布局
- *   （manifest.json + 平铺 JSON 分区 + 文件类分区目录），每次 sync 一次 commit + push。
+ * - 明文快照以「散文件目录」提交到 git 仓库：工作副本 <workDir>/snapshots/<id>/ 即 t2 layout 布局
+ *   （manifest.json + 平铺 JSON 分区 + 文件类分区目录），每次 sync 一次 commit + push；
+ * - 加密快照（EncryptedSections 密文载荷，无法平铺为明文 JSON 分区）走「密文单文件」布局：
+ *   整个快照 JSON 提交到 <workDir>/snapshots-encrypted/<id>.json（远端已存密文；
+ *   本地工作副本即远端镜像，不产生额外明文审计副本）。
  * - 命令执行走 node:child_process execFile（promise 封装，数组参数无 shell 注入），
  *   始终使用系统 PATH 中的 git（固定命令 'git'），可注入 exec 便于测试。
  * - 认证：token 仅从注入的 credentials provider 读取（每次网络操作时 getToken()），
@@ -24,7 +27,8 @@ import { createSnapshotFs, joinFs } from '../fs.ts';
 import type { SnapshotFs } from '../fs.ts';
 import { readSnapshotFromDir, SNAPSHOT_MANIFEST_FILE, writeSnapshotToDir } from '../layout.ts';
 import type { SnapshotDirManifest } from '../layout.ts';
-import { computeSnapshotMeta } from '../transport.ts';
+import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
+import { computeSnapshotMeta, isEncryptedSections } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 import { zhMsg } from '../../core/messages.ts';
@@ -80,6 +84,9 @@ export class GitTransportError extends Error {
 }
 
 const SNAPSHOTS_REL = 'snapshots';
+/** 加密快照的「密文单文件」目录：整个快照 JSON（含密文载荷）以 <id>.json 提交。
+ *  加密快照不写散文件目录（密文无法平铺为明文 JSON 分区；远端已存密文）。 */
+const SNAPSHOTS_ENCRYPTED_REL = 'snapshots-encrypted';
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_AUTHOR: GitAuthor = { name: 'DSH Config Sync', email: 'sync@dsh.local' };
 const DEFAULT_CREDENTIAL_USERNAME = 'oauth2';
@@ -155,14 +162,16 @@ export class GitTransport implements SyncTransport {
     return this.privateHint;
   }
 
-  /** 列出远端已有快照（按 createdAt 升序）。读取工作副本 snapshots/ 目录（先 pull 同步远端）。 */
+  /** 列出远端已有快照（按 createdAt 升序）。读取工作副本 snapshots/（明文散文件）
+   *  与 snapshots-encrypted/（密文单文件）两个目录（先 pull 同步远端）。 */
   async list(): Promise<SyncSnapshotMeta[]> {
     await this.ensureRepo();
     await this.pullFromRemote();
     const fsx = createSnapshotFs();
+    const metas: SyncSnapshotMeta[] = [];
+    // 明文散文件目录
     const snapsAbs = this.snapshotsDir();
     const names = await fsx.readdir(snapsAbs);
-    const metas: SyncSnapshotMeta[] = [];
     for (const name of names) {
       if (name === '' || name === '.' || name === '..') continue;
       const dirAbs = joinFs(snapsAbs, name);
@@ -176,21 +185,53 @@ export class GitTransport implements SyncTransport {
         manifest: m.manifest,
       });
     }
+    // 密文单文件目录（snapshots-encrypted/<id>.json）：整体 JSON 快照
+    const encAbs = this.encryptedSnapshotsDir();
+    const encNames = await fsx.readdir(encAbs);
+    for (const name of encNames) {
+      if (!name.endsWith('.json')) continue;
+      const id = name.slice(0, -'.json'.length);
+      if (id === '' || id === '.' || id === '..' || id.includes('/') || id.includes('\\')) continue;
+      const snap = await this.readEncryptedSnapshotFile(joinFs(encAbs, name));
+      if (snap === null) continue; // 损坏/解析失败 → 跳过
+      metas.push({ id: snap.id, createdAt: snap.createdAt, sections: {}, manifest: snap.manifest });
+    }
     metas.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
     return metas;
   }
 
-  /** 上传快照：写散文件目录 → add → commit → push；同 id 覆盖；内容无变化时幂等（不产生 commit）。 */
+  /**
+   * 上传快照：写散文件目录（明文）或密文单文件（加密）→ add → commit → push；
+   * 同 id 覆盖；内容无变化时幂等（不产生 commit）。
+   * 双形态互斥：同 id 从一种形态切到另一种时先清掉旧形态残留，保证工作副本/远端布局自洽。
+   */
   async upload(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
     this.assertSafeId(snapshot.id);
     await this.ensureRepo();
     await this.pullFromRemote();
     const fsx = createSnapshotFs();
-    const dir = this.snapshotDir(snapshot.id);
-    const existed = await fsx.exists(dir);
-    if (existed) await fsx.remove(dir); // 覆盖语义：先清旧目录，避免残留旧文件
-    await writeSnapshotToDir(snapshot, dir, fsx);
-    const rel = `${SNAPSHOTS_REL}/${snapshot.id}`;
+    const encrypted = isEncryptedSections(snapshot.sections);
+    // 覆盖判定：任一种旧形态（散文件目录 / 密文单文件）已存在 → update
+    const existed = await fsx.exists(this.snapshotDir(snapshot.id))
+      || await fsx.exists(this.encryptedSnapshotFile(snapshot.id));
+    let rel: string;
+    if (encrypted) {
+      // 密文单文件：整个快照 JSON（sections 为 EncryptedSections，纯字符串 JSON 安全）
+      const file = this.encryptedSnapshotFile(snapshot.id);
+      await fsx.remove(file); // 覆盖语义：先删旧文件
+      await fsx.mkdir(this.encryptedSnapshotsDir());
+      await fsx.writeFile(file, new TextEncoder().encode(serializeSnapshot(snapshot)));
+      // 同 id 旧散文件目录残留 → 一并清理（形态切换不残留）
+      await fsx.remove(this.snapshotDir(snapshot.id));
+      rel = `${SNAPSHOTS_ENCRYPTED_REL}/${snapshot.id}.json`;
+    } else {
+      const dir = this.snapshotDir(snapshot.id);
+      if (await fsx.exists(dir)) await fsx.remove(dir); // 覆盖语义：先清旧目录，避免残留旧文件
+      await writeSnapshotToDir(snapshot, dir, fsx);
+      // 同 id 旧密文单文件残留 → 一并清理（形态切换不残留）
+      await fsx.remove(this.encryptedSnapshotFile(snapshot.id));
+      rel = `${SNAPSHOTS_REL}/${snapshot.id}`;
+    }
     await this.runGit(['add', '--', rel]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code !== 0) {
@@ -201,28 +242,49 @@ export class GitTransport implements SyncTransport {
     return computeSnapshotMeta(snapshot);
   }
 
-  /** 下载快照完整载荷（读回散文件目录）。不存在的 id 必须抛错（契约）。 */
+  /** 下载快照完整载荷。明文 → 读回散文件目录；加密 → 读回密文单文件。不存在的 id 必须抛错（契约）。 */
   async download(id: string): Promise<SyncSnapshot> {
     this.assertSafeId(id);
     await this.ensureRepo();
     await this.pullFromRemote();
-    const dir = this.snapshotDir(id);
-    if (!(await createSnapshotFs().isDir(dir))) {
-      throw new GitTransportError(this.msg('sync.git.snapshotMissing', { id, dir }));
+    const fsx = createSnapshotFs();
+    // 优先散文件目录（明文布局）；其次密文单文件（加密布局）
+    if (await fsx.isDir(this.snapshotDir(id))) {
+      return readSnapshotFromDir(this.snapshotDir(id));
     }
-    return readSnapshotFromDir(dir);
+    const encFile = this.encryptedSnapshotFile(id);
+    if (await fsx.exists(encFile)) {
+      const raw = Buffer.from(await fsx.readFile(encFile)).toString('utf8');
+      try {
+        return deserializeSnapshot(raw);
+      } catch (err) {
+        throw new GitTransportError(this.msg('sync.git.snapshotCorrupt', {
+          id, dir: encFile, err: this.mask(String((err as Error)?.message ?? ''), null),
+        }));
+      }
+    }
+    throw new GitTransportError(this.msg('sync.git.snapshotMissing', { id, dir: this.snapshotDir(id) }));
   }
 
-  /** 删除远端快照（不存在视为成功，契约）。 */
+  /** 删除远端快照（明文散文件目录或密文单文件；不存在视为成功，契约）。 */
   async delete(id: string): Promise<void> {
     this.assertSafeId(id);
     await this.ensureRepo();
     await this.pullFromRemote();
     const fsx = createSnapshotFs();
-    const dir = this.snapshotDir(id);
-    if (!(await fsx.exists(dir))) return; // 不存在视为成功
-    await fsx.remove(dir);
-    const rel = `${SNAPSHOTS_REL}/${id}`;
+    const plainDir = this.snapshotDir(id);
+    const encFile = this.encryptedSnapshotFile(id);
+    const plainExists = await fsx.exists(plainDir);
+    const encExists = await fsx.exists(encFile);
+    if (!plainExists && !encExists) return; // 不存在视为成功
+    let rel: string;
+    if (plainExists) {
+      await fsx.remove(plainDir);
+      rel = `${SNAPSHOTS_REL}/${id}`;
+    } else {
+      await fsx.remove(encFile);
+      rel = `${SNAPSHOTS_ENCRYPTED_REL}/${id}.json`;
+    }
     await this.runGit(['add', '-A', '--', rel]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code !== 0) {
@@ -369,6 +431,26 @@ export class GitTransport implements SyncTransport {
 
   private snapshotsDir(): string {
     return joinFs(this.o.workDir, SNAPSHOTS_REL);
+  }
+
+  /** 加密快照密文单文件目录（<workDir>/snapshots-encrypted/） */
+  private encryptedSnapshotsDir(): string {
+    return joinFs(this.o.workDir, SNAPSHOTS_ENCRYPTED_REL);
+  }
+
+  /** 加密快照密文单文件路径（<id>.json） */
+  private encryptedSnapshotFile(id: string): string {
+    return joinFs(this.encryptedSnapshotsDir(), `${id}.json`);
+  }
+
+  /** 读密文单文件快照（解析失败 → null，调用方跳过，不静默失败整体 list）。 */
+  private async readEncryptedSnapshotFile(file: string): Promise<SyncSnapshot | null> {
+    try {
+      const raw = Buffer.from(await createSnapshotFs().readFile(file)).toString('utf8');
+      return deserializeSnapshot(raw);
+    } catch {
+      return null;
+    }
   }
 
   /** 读快照目录 manifest.json（结构不合法 → null，调用方跳过） */

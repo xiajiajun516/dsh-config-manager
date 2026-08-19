@@ -19,6 +19,13 @@ import type { SnapshotHistoryEntry } from './history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
 import css from '../config-manager.module.css'
 
+/** 通道徽章：git → GitHub，webdav → WebDAV；未知/缺失不渲染。 */
+function ChannelBadge({ transport, t }: { transport?: string; t: TranslateNS<'config-manager-sync'> }): ReactNode {
+  if (transport === 'git') return <Badge kind="info">{t('history.channelGit')}</Badge>
+  if (transport === 'webdav') return <Badge kind="info">{t('history.channelWebdav')}</Badge>
+  return null
+}
+
 export interface SyncHistoryViewProps {
   api: SyncApi
   t: TranslateNS<'config-manager-sync'>
@@ -92,6 +99,7 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
                 <td>{formatDateTime(r.createdAt)}</td>
                 <td><Badge kind="info">{t('history.kindSnapshot')}</Badge></td>
                 <td>
+                  <ChannelBadge transport={r.transport} t={t} />
                   <code>{r.id}</code>
                   {snap !== undefined && <> · {snap.sectionCount} {t('history.sectionCount')}</>}
                 </td>
@@ -119,6 +127,7 @@ function AutosyncRow({ entry, t }: AutosyncRowProps): ReactNode {
       <td><Badge kind="info">{t('history.kindAutosync')}</Badge></td>
       <td>
         <div>
+          <ChannelBadge transport={entry.transport} t={t} />
           {row.summary}
           {entry.pushedSnapshotId !== undefined && <> · {t('history.autosyncPush')} {entry.pushedSnapshotId}</>}
           {entry.pulledSnapshotId !== undefined && <> · {t('history.autosyncPull')} {entry.pulledSnapshotId}</>}

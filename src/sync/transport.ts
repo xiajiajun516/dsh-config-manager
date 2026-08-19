@@ -16,6 +16,8 @@ export interface ManifestSummary {
   containsSecrets: boolean;
   /** 快照是否加密（sections 为 EncryptedSections 密文载荷）；缺省 false（旧快照兼容） */
   encrypted?: boolean;
+  /** 产生该快照的同步通道（git / webdav；供同步历史展示触发来源；旧快照缺省 undefined） */
+  transport?: string;
 }
 
 /** 快照元信息：list() 条目 / upload() 返回值 */

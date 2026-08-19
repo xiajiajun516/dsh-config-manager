@@ -230,6 +230,11 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
 
   return (
     <div className={css.viewBody}>
+      {/* 发布到市场向导：打开时独占整个市场视图（onBack 返回市场） */}
+      {publishOpen ? (
+        <PublishView api={api} importApi={importApi} t={t} onBack={() => { setPublishOpen(false) }} />
+      ) : (
+        <>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
       {/* 内置市场头部：固定 URL + 官方徽章 + 拉取最新（不可编辑） */}
@@ -441,6 +446,8 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
             </div>
           )}
         </Card>
+      )}
+        </>
       )}
     </div>
   )

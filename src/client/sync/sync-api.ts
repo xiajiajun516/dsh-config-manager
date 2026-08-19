@@ -307,6 +307,8 @@ export interface AutosyncUpdatePayload {
 
 /** 自动同步执行记录（§3.7 AutosyncHistoryEntry）。 */
 export interface AutosyncHistoryEntry {
+  /** 触发该次运行的同步通道（git / webdav；旧记录缺省 undefined） */
+  transport?: SyncTransportType;
   direction: 'pull' | 'push' | 'both';
   status: 'success' | 'skipped' | 'failed' | 'partial';
   /** 跳过原因（冲突项 / 缺失依赖 / Install / 错误 / 无远端 / 网络） */
@@ -333,6 +335,8 @@ export interface SyncHistoryEntry {
   kind: 'push' | 'pull' | 'apply' | 'autosync' | 'rollback';
   sectionCount?: number;
   reviewCount?: number;
+  /** 快照类条目的触发通道（git / webdav；旧快照缺省 undefined） */
+  transport?: string;
   autosync?: AutosyncHistoryEntry;
 }
 

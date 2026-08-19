@@ -22,6 +22,15 @@ export const MARKET_ITEM_SCHEMA_VERSION = 1;
 export const MAX_MARKET_ZIP_BYTES = 64 * 1024 * 1024;
 
 /**
+ * 市场条目禁止携带的分区（产品决策 2026-08-19，guide docs/design/2026-08-19-market-repo-setup-guide.md）：
+ *  - sessions：历史会话，含个人交互记录/上下文；
+ *  - pluginFiles：任意文件直通（目录放啥带啥），无内容过滤，最易泄漏 token/密钥文件；
+ *  - self：本地环境专属（sync 通道 URL / WebDAV 地址 / 市场配置 / UI 偏好），无分享价值且泄漏环境信息。
+ * 发布（prepare）与下载（validateMarketItem）两端强制拒绝。
+ */
+export const BANNED_MARKET_SECTIONS: readonly SectionId[] = ['sessions', 'pluginFiles', 'self'] as const;
+
+/**
  * itemId / 仓库 url-hash 的安全字符集（防路径穿越 + 用作目录名）：
  * 字母数字开头，仅 . _ -，最长 128。与 sync GitTransport 的 SAFE_ID_RE 同构。
  */

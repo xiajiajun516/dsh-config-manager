@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import type { SectionId } from '../schema/types.ts';
+import type { SyncTransportType } from './sync-config.ts';
 
 export const SYNC_HISTORY_FILE = 'sync-history.json';
 export const SYNC_HISTORY_SCHEMA_VERSION = 1;
@@ -22,6 +23,8 @@ export const AUTOSYNC_HISTORY_KEEP = 200;
 
 /** 自动同步执行记录（§3.7 AutosyncHistoryEntry） */
 export interface AutosyncHistoryEntry {
+  /** 触发该次运行的同步通道（git / webdav；旧记录缺省 undefined） */
+  transport?: SyncTransportType;
   /** 执行方向 */
   direction: 'pull' | 'push' | 'both';
   status: 'success' | 'skipped' | 'failed' | 'partial';

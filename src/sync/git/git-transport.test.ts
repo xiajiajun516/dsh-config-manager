@@ -12,8 +12,10 @@ import { execFile } from 'node:child_process';
 
 import { GitTransport, GitTransportError } from './git-transport.ts';
 import type { GitExecFn, GitExecResult, GitTransportOptions } from './git-transport.ts';
-import { computeSnapshotMeta } from '../transport.ts';
+import { encryptSectionsPayload } from '../snapshot-crypto.ts';
+import { computeSnapshotMeta, isEncryptedSections } from '../transport.ts';
 import type { SyncSnapshot } from '../transport.ts';
+import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 
 /* ---------------- helpers ---------------- */
 
@@ -112,6 +114,29 @@ function makeOptions(overrides: Partial<GitTransportOptions> = {}): GitTransport
 
 function joinedArgs(calls: CallRecord[], needle: string): string[] {
   return calls.filter((c) => c.args.join(' ').includes(needle)).map((c) => c.args.join(' '));
+}
+
+/** 构造加密快照（sections 为 EncryptedSections 密文载荷；含文件分区以覆盖字节往返）。 */
+async function encryptedSnapshot(overrides: Partial<SyncSnapshot> = {}): Promise<SyncSnapshot> {
+  const base = sampleSnapshot();
+  const plain: Partial<Record<SectionId, SectionData>> = {};
+  for (const [id, data] of Object.entries(base.sections)) {
+    plain[id as SectionId] = data as SectionData;
+  }
+  plain.skills = {
+    version: 1,
+    files: [
+      { relativePath: 'coding.md', data: new Uint8Array(Buffer.from('# Coding\n', 'utf8')), contentHash: 'h1' },
+    ],
+  } as FilesSection;
+  const enc = await encryptSectionsPayload(plain, 'pw-12345678');
+  return {
+    ...base,
+    id: 'snap-enc',
+    manifest: { ...base.manifest, sectionIds: ['settings', 'providers', 'skills'], encrypted: true, containsSecrets: true },
+    sections: enc,
+    ...overrides,
+  };
 }
 
 /* ---------------- 单元测试（mock exec） ---------------- */
@@ -331,6 +356,75 @@ test('快照 id 安全：非法 id（路径穿越/特殊字符）→ upload/down
   }
 });
 
+test('upload 加密快照：写 snapshots-encrypted/<id>.json 密文单文件（不落散文件目录），add/commit/push', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+  const snap = await encryptedSnapshot();
+  assert.ok(isEncryptedSections(snap.sections), '前置：加密载荷');
+  const meta = await transport.upload(snap);
+  assert.deepEqual(meta, computeSnapshotMeta(snap));
+  // 密文单文件已写入工作副本
+  const encFile = path.join(dir, 'snapshots-encrypted', 'snap-enc.json');
+  const raw = JSON.parse(await fs.readFile(encFile, 'utf8'));
+  assert.equal(raw.id, 'snap-enc');
+  assert.ok(isEncryptedSections(raw.sections), '远端文件保持加密载荷（不含明文）');
+  assert.ok(!JSON.stringify(raw).includes('# Coding'), '序列化不得泄漏明文文件内容');
+  // 散文件目录不产生
+  assert.equal(await fs.stat(path.join(dir, 'snapshots', 'snap-enc')).catch(() => null), null, '加密快照不写散文件目录');
+  // git 命令：add snapshots-encrypted/<id>.json
+  const adds = joinedArgs(calls, 'add');
+  assert.ok(adds.some((a) => a.includes('snapshots-encrypted/snap-enc.json')), `应 add 密文文件: ${JSON.stringify(adds)}`);
+  const commits = joinedArgs(calls, 'commit');
+  assert.equal(commits.length, 1);
+  assert.match(commits[0]!, /-m sync: add snapshot snap-enc/);
+  assert.equal(joinedArgs(calls, 'push').length, 1);
+});
+
+test('upload 加密快照覆盖：同 id 明文→加密 切换时清掉旧散文件目录（双形态互斥）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+  // 先传明文（snap-enc 走散文件目录）
+  await transport.upload(sampleSnapshot({ id: 'snap-enc' }));
+  assert.ok(await fs.stat(path.join(dir, 'snapshots', 'snap-enc')));
+  calls.length = 0;
+  // 同 id 再传加密 → 旧散文件目录被清除，只留密文单文件
+  await transport.upload(await encryptedSnapshot());
+  assert.equal(await fs.stat(path.join(dir, 'snapshots', 'snap-enc')).catch(() => null), null, '旧明文散文件目录已删');
+  assert.ok(await fs.stat(path.join(dir, 'snapshots-encrypted', 'snap-enc.json')));
+  const commits = joinedArgs(calls, 'commit');
+  assert.match(commits[0]!, /-m sync: update snapshot snap-enc/, '形态切换视为 update');
+});
+
+test('download 加密快照：读回密文单文件并还原（sections 保持密文载荷）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+  const snap = await encryptedSnapshot();
+  await transport.upload(snap);
+  const roundtrip = await transport.download('snap-enc');
+  assert.equal(roundtrip.id, 'snap-enc');
+  assert.deepEqual(roundtrip.manifest, snap.manifest);
+  assert.deepEqual(roundtrip.sections, snap.sections, '加密载荷逐字节一致（解密后文件字节应无损）');
+});
+
+test('delete 加密快照：从 snapshots-encrypted 移除 + commit(delete) + push', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+  await transport.upload(await encryptedSnapshot());
+  calls.length = 0;
+  await transport.delete('snap-enc');
+  const adds = joinedArgs(calls, 'add -A');
+  assert.ok(adds.some((a) => a.includes('snapshots-encrypted/snap-enc.json')), 'delete 应 stage 密文文件删除');
+  assert.equal(joinedArgs(calls, 'commit').length, 1);
+  assert.match(joinedArgs(calls, 'commit')[0]!, /-m sync: delete snapshot snap-enc/);
+  // 不存在 → 静默成功
+  await transport.delete('snap-enc');
+  assert.equal(joinedArgs(calls, 'commit').length, 1, '再次删除不产生 commit');
+});
+
 /* ---------------- 集成测试（真实 git，本地 bare repo） ---------------- */
 
 test('集成：upload → list → download → delete 端到端（真实 git + 本地 bare repo）', async (t) => {
@@ -453,6 +547,46 @@ test('集成：list 按 createdAt 升序（真实 git 多快照）', async (t) =
   await transport.upload(sampleSnapshot({ id: 'snap-c', createdAt: '2026-08-16T12:00:00.000Z' }));
   const listed = await transport.list();
   assert.deepEqual(listed.map((m) => m.id), ['snap-a', 'snap-b', 'snap-c']);
+});
+
+test('集成：加密快照端到端（真实 git + 本地 bare repo）—— upload → list → download → delete', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+  const snap = await encryptedSnapshot();
+
+  // upload：密文单文件提交并推送
+  const meta = await transport.upload(snap);
+  assert.equal(meta.id, 'snap-enc');
+  assert.equal(meta.manifest.encrypted, true);
+  assert.deepEqual(meta.sections, {}, '加密快照的 sections hash 记录为空（密文不可与本地明文比较）');
+  const log = await runRealGit(['log', '--oneline', '--all'], bare);
+  assert.equal(log.code, 0, `git log 失败: ${log.stderr}`);
+  assert.match(log.stdout, /sync: add snapshot snap-enc/);
+
+  // list：密文快照可见（工作副本 pull 后重建）
+  const listed = await transport.list();
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0]!.id, 'snap-enc');
+  assert.equal(listed[0]!.manifest.encrypted, true);
+  assert.deepEqual(listed[0]!.manifest, snap.manifest);
+
+  // download：读回密文载荷（明文内容不可见）
+  const roundtrip = await transport.download('snap-enc');
+  assert.ok(isEncryptedSections(roundtrip.sections), '下载返回加密载荷');
+  assert.deepEqual(roundtrip.sections, snap.sections);
+  assert.ok(!JSON.stringify(roundtrip).includes('# Coding'), '载荷序列化不得泄漏明文');
+
+  // 明文 + 加密快照共存于 list（按 createdAt 升序）
+  await transport.upload(sampleSnapshot({ id: 'snap-plain', createdAt: '2026-08-16T09:00:00.000Z' }));
+  const mixed = await transport.list();
+  assert.deepEqual(mixed.map((m) => m.id), ['snap-plain', 'snap-enc']);
+
+  // delete 加密快照
+  await transport.delete('snap-enc');
+  assert.deepEqual((await transport.list()).map((m) => m.id), ['snap-plain']);
+  await assert.rejects(transport.download('snap-enc'), /不存在/);
+  await transport.delete('snap-enc'); // 不存在视为成功
 });
 
 // ─── t5：远端快照裁剪的 git 契约（upload 先 push，再 delete 删旧，各自独立 commit+push） ───

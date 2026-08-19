@@ -13,15 +13,20 @@
 import { decryptCredentials, encryptCredentials } from '../security/encryption.ts';
 import type { EncryptionInfo, SectionData, SectionId } from '../schema/types.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { sectionsFromJsonSafe, sectionsToJsonSafe } from './snapshot-json.ts';
 import type { EncryptedSections } from './transport.ts';
 
-/** 加密整个明文 sections Record → 密文载荷（info 进 manifest 非秘密参数；data 为 base64 密文）。 */
+/**
+ * 加密整个明文 sections Record → 密文载荷（info 进 manifest 非秘密参数；data 为 base64 密文）。
+ * 序列化经 snapshot-json：文件类分区字节以 base64 进入载荷，解密后还原 Uint8Array
+ * （JSON 无法直传 TypedArray，否则解密回来的文件分区被破坏成普通对象）。
+ */
 export async function encryptSectionsPayload(
   sections: Partial<Record<SectionId, SectionData>>,
   password: string,
 ): Promise<EncryptedSections> {
   if (password === '') throw new Error('加密密码不能为空');
-  const { blob, info } = await encryptCredentials(stringifyJsonSafe(sections), password);
+  const { blob, info } = await encryptCredentials(stringifyJsonSafe(sectionsToJsonSafe(sections)), password);
   return { encrypted: { info, data: Buffer.from(blob).toString('base64') } };
 }
 
@@ -36,7 +41,7 @@ export async function decryptSectionsPayload(
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error('加密快照内容损坏：解密后不是有效的分区对象');
   }
-  return parsed as Partial<Record<SectionId, SectionData>>;
+  return sectionsFromJsonSafe(parsed) as Partial<Record<SectionId, SectionData>>;
 }
 
 /** 从加密载荷提取非秘密的加密参数（展示/诊断用；不含密码）。 */

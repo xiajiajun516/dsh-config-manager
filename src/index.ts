@@ -2271,7 +2271,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         try {
           const localDir = join(syncDir, 'snapshots')
           const entries = await fs.readdir(localDir).catch(() => [])
-          const rows: Array<{ id: string; createdAt: string; sectionCount: number; reviewCount: number }> = []
+          const rows: Array<{ id: string; createdAt: string; sectionCount: number; reviewCount: number; transport?: string }> = []
           for (const name of entries) {
             const dir = join(localDir, name)
             const stat = await fs.stat(dir).catch(() => null)
@@ -2280,12 +2280,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             const raw = await fs.readFile(manifestPath, 'utf8').catch(() => null)
             if (raw === null) continue
             try {
-              const m = JSON.parse(raw) as { id?: unknown; createdAt?: unknown; sectionHashes?: unknown }
+              const m = JSON.parse(raw) as { id?: unknown; createdAt?: unknown; sectionHashes?: unknown; manifest?: { transport?: unknown } }
               if (typeof m.id !== 'string' || typeof m.createdAt !== 'string') continue
               const sectionCount = m.sectionHashes && typeof m.sectionHashes === 'object'
                 ? Object.keys(m.sectionHashes as Record<string, unknown>).length
                 : 0
-              rows.push({ id: m.id, createdAt: m.createdAt, sectionCount, reviewCount: 0 })
+              // 触发通道（push/apply 落盘时写入各快照 manifest.transport；旧快照为 undefined）
+              const transport = m.manifest && typeof m.manifest === 'object' && typeof m.manifest.transport === 'string'
+                ? m.manifest.transport
+                : undefined
+              rows.push({ id: m.id, createdAt: m.createdAt, sectionCount, reviewCount: 0, ...(transport !== undefined ? { transport } : {}) })
             } catch { /* skip malformed */ }
           }
           // 关联 review-queue 计数

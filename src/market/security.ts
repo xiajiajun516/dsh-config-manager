@@ -16,7 +16,7 @@ import { parseManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest
 import { validateSectionData, SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
 import { parseMarketItemManifest } from './index-parser.ts';
-import { MAX_MARKET_ZIP_BYTES } from './types.ts';
+import { MAX_MARKET_ZIP_BYTES, BANNED_MARKET_SECTIONS } from './types.ts';
 import type { MarketItemManifest } from './types.ts';
 
 export interface MarketItemValidationResult {
@@ -133,6 +133,11 @@ export function validateMarketItem(
   // 7. 内部分区数据校验（JSON 分区逐一 validateSectionData）
   for (const [sectionId, enabled] of Object.entries(internalManifest.sections) as [SectionId, boolean][]) {
     if (!enabled) continue;
+    // 市场条目禁止分区（BANNED_MARKET_SECTIONS：sessions 历史会话 / pluginFiles 任意文件 / self 本地环境）：
+    // 与 secrets 同级硬约束（产品决策 2026-08-19，guide docs/design/2026-08-19-market-repo-setup-guide.md）。
+    if (BANNED_MARKET_SECTIONS.includes(sectionId)) {
+      return { status: 'invalid', errors: [`config.zip 包含禁止分区 ${sectionId}（sessions=历史会话 / pluginFiles=任意文件 / self=本地环境），市场条目禁止携带`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+    }
     if (isFileSection(sectionId)) {
       // 文件类分区：以文件形式进入 ZIP，结构校验由 security/safeExtract 在导入期做；
       // 这里只需确认前缀目录有内容（非空目录即视为有内容）。
