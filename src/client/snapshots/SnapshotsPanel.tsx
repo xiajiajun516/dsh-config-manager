@@ -96,30 +96,38 @@ function initFromStore(): PanelState {
 
 export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   const [state, setState] = useState<PanelState>(initFromStore)
-  /** 最新 state 镜像（卸载 flush 时读取，避免闭包过期值） */
+  /** 最新 state 镜像（commit/卸载 flush 读取，避免闭包过期值） */
   const stateRef = useRef<PanelState>(state)
-  useEffect(() => { stateRef.current = state }, [state])
+  /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
+  const mountedRef = useRef(true)
 
-  /** 状态镜像：任何状态变化同步进 runStore（切 tab 不丢 / 刷新恢复）。 */
-  useEffect(() => {
-    runStore.patch({ snapshots: toSnapshotsStoreSlice(state) })
-  }, [state])
+  /**
+   * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
+   * 关键：镜像不依赖 effect flush —— 异步操作（dry-run 计划/执行恢复）完成回调
+   * 在组件已卸载（切走 tab）时也能把结果（plan/report）写进 store，切回恢复。
+   */
+  const commit = (next: PanelState): void => {
+    stateRef.current = next
+    if (mountedRef.current) setState(next)
+    runStore.patch({ snapshots: toSnapshotsStoreSlice(next) })
+  }
+  const patch = (p: Partial<PanelState>): void => commit({ ...stateRef.current, ...p })
 
-  /** 卸载时最后镜像一次（防止「最后一次改动后立即切 tab」时镜像 effect 尚未 flush）。 */
+  /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
   useEffect(() => () => {
+    mountedRef.current = false
     runStore.patch({ snapshots: toSnapshotsStoreSlice(stateRef.current) })
   }, [])
 
   const load = (): void => {
-    setState((s) => ({ ...s, status: 'loading', error: null }))
+    patch({ status: 'loading', error: null })
     api.snapshots().then(
-      (metas) => { setState((s) => ({ ...s, status: 'ready', metas })) },
+      (metas) => { patch({ status: 'ready', metas }) },
       (err) => {
-        setState((s) => ({
-          ...s,
+        patch({
           status: 'error',
           error: err instanceof Error ? err.message : String(err),
-        }))
+        })
       },
     )
   }
@@ -127,30 +135,28 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   useEffect(load, [api])
 
   const select = (id: string): void => {
-    setState((s) => ({ ...s, selectedId: id, plan: null, report: null, actionError: null, planning: true }))
+    patch({ selectedId: id, plan: null, report: null, actionError: null, planning: true })
     api.restoreSnapshot(id, true).then(
-      (res) => { setState((s) => ({ ...s, planning: false, plan: res.plan ?? null })) },
+      (res) => { patch({ planning: false, plan: res.plan ?? null }) },
       (err) => {
-        setState((s) => ({
-          ...s,
+        patch({
           planning: false,
           actionError: err instanceof Error ? err.message : String(err),
-        }))
+        })
       },
     )
   }
 
   const execute = (): void => {
     if (state.selectedId === null || state.running) return
-    setState((s) => ({ ...s, running: true, report: null, actionError: null }))
+    patch({ running: true, report: null, actionError: null })
     api.restoreSnapshot(state.selectedId, false).then(
-      (res) => { setState((s) => ({ ...s, running: false, report: res.report ?? null })) },
+      (res) => { patch({ running: false, report: res.report ?? null }) },
       (err) => {
-        setState((s) => ({
-          ...s,
+        patch({
           running: false,
           actionError: err instanceof Error ? err.message : String(err),
-        }))
+        })
       },
     )
   }

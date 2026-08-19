@@ -137,6 +137,8 @@ const initial: SyncUiState = {
  * 从 runStore 恢复上次的同步 UI 状态（切 tab 回 / 刷新后挂载）。
  * 敏感字段（token/webdav 密码/加密与解密密码）只在内存切片里保留：切 tab 保留；
  * 刷新后已被持久化白名单清空（applyPersisted 强制归零）→ 需要时重新输入。
+ * busy/savingConfig 为瞬态：切 tab 由模块级单例保留（切回仍显示进行中）；
+ * 刷新后白名单剔除 → 回复空闲。
  */
 function initFromStore(): SyncUiState {
   const s: SyncStoreSlice = runStore.getSnapshot().sync
@@ -155,6 +157,8 @@ function initFromStore(): SyncUiState {
       git: { ...defaultChannelSyncState(), ...s.byChannel.git },
       webdav: { ...defaultChannelSyncState(), ...s.byChannel.webdav },
     },
+    busy: s.busy,
+    savingConfig: s.savingConfig,
     pushReport: s.pushReport,
     pullReport: s.pullReport,
     confirmSession: s.confirmSession,
@@ -167,30 +171,38 @@ function initFromStore(): SyncUiState {
 export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const [state, setState] = useState<SyncUiState>(initFromStore)
   const uiT = api.t // 客户端展示层翻译器（zh/en，见 ui/i18n.ts）
-  /** 最新 state 镜像（自动保存 flush 时读取，避免防抖回调里闭包过期值） */
+  /** 最新 state 镜像（commit/自动保存 flush 读取，避免闭包过期值） */
   const stateRef = useRef<SyncUiState>(state)
-  const patch = (p: Partial<SyncUiState>): void => {
-    setState((s) => {
-      const next = { ...s, ...p }
-      stateRef.current = next
-      return next
-    })
-  }
-  /** 更新指定通道的 byChannel 状态（子 tab 切换后 loadSnapshots 等场景用）。 */
-  const patchChannelState = (ch: SyncChannel, p: Partial<ChannelSyncState>): void => setState((s) => {
-    const next = { ...s, byChannel: { ...s.byChannel, [ch]: { ...s.byChannel[ch], ...p } } }
+  /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
+  const mountedRef = useRef(true)
+
+  /**
+   * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
+   * 关键：镜像不依赖 effect flush —— 异步操作（push/pull/sync）完成回调在组件
+   * 已卸载（切走 tab）时也能把结果写进 store，切回 tab 时 initFromStore 恢复。
+   */
+  const commit = (next: SyncUiState): void => {
     stateRef.current = next
-    return next
+    if (mountedRef.current) setState(next)
+    runStore.patch({ sync: toSyncStoreSlice(next) })
+  }
+  const patch = (p: Partial<SyncUiState>): void => commit({ ...stateRef.current, ...p })
+  /** 更新指定通道的 byChannel 状态（子 tab 切换后 loadSnapshots 等场景用）。 */
+  const patchChannelState = (ch: SyncChannel, p: Partial<ChannelSyncState>): void => commit({
+    ...stateRef.current,
+    byChannel: {
+      ...stateRef.current.byChannel,
+      [ch]: { ...stateRef.current.byChannel[ch], ...p },
+    },
   })
   /** 更新当前激活通道的 byChannel 状态。 */
   const patchChannel = (p: Partial<ChannelSyncState>): void => patchChannelState(state.channel, p)
   /** 当前激活通道的设置状态（自动同步/模式/加密/快照）。 */
   const chState: ChannelSyncState = state.byChannel[state.channel]
-  const patchGithub = (p: Partial<GithubUiState>): void => setState((s) => {
-    const next = { ...s, github: { ...s.github, ...p } }
-    // 同步镜像进 ref（stateRef 是卸载 flush 时的权威来源；github 不进 store 切片）
-    stateRef.current = next
-    return next
+  /** GitHub 流程态（不进 store 切片；commit 的镜像写幂等无害）。 */
+  const patchGithub = (p: Partial<GithubUiState>): void => commit({
+    ...stateRef.current,
+    github: { ...stateRef.current.github, ...p },
   })
   /** GitHub 轮询定时器（卸载/取消时清理，防止泄漏与跨流程串扰） */
   const githubPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -272,16 +284,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const loadAutosync = async (): Promise<void> => {
     try {
       const all = await api.autosyncStatusAll()
-      setState((s) => {
-        const next: SyncUiState = {
-          ...s,
-          byChannel: {
-            git: { ...s.byChannel.git, autosync: all.git, autosyncEnabled: all.git.enabled, autosyncInterval: all.git.interval },
-            webdav: { ...s.byChannel.webdav, autosync: all.webdav, autosyncEnabled: all.webdav.enabled, autosyncInterval: all.webdav.interval },
-          },
-        }
-        stateRef.current = next
-        return next
+      patchChannelState('git', {
+        autosync: all.git, autosyncEnabled: all.git.enabled, autosyncInterval: all.git.interval,
+      })
+      patchChannelState('webdav', {
+        autosync: all.webdav, autosyncEnabled: all.webdav.enabled, autosyncInterval: all.webdav.interval,
       })
     } catch (err) {
       patch({ error: err instanceof Error ? err.message : String(err) })
@@ -331,15 +338,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  /** 状态镜像：任何 UI 状态变化同步进 runStore（模块级单例 → 切 tab 不丢；sessionStorage → 刷新恢复）。
-   * 切片函数剔除 github 流程态等瞬态；敏感字段（含 byChannel 密码类）由 toPersistedState 白名单硬性剔除。 */
-  useEffect(() => {
-    runStore.patch({ sync: toSyncStoreSlice(state) })
-  }, [state])
-
-  /** 卸载时清理轮询定时器 + 补发未落盘的通道配置改动 + 最后镜像一次状态
-   *  （组件销毁后不得再 setState/发请求；store 镜像为纯内存/白名单写，安全） */
+  /** 卸载时置挂载守卫 + 清理轮询定时器 + 补发未落盘的通道配置改动 + 最后镜像一次状态
+   *  （组件销毁后不得再 setState/发请求；store 镜像为纯内存/白名单写，安全）。
+   *  异步操作完成回调仍会走 commit 写 store（见 commit 注释），结果不丢。 */
   useEffect(() => () => {
+    mountedRef.current = false
     if (githubPollTimer.current !== null) clearTimeout(githubPollTimer.current)
     if (saveTimer.current !== null) {
       clearTimeout(saveTimer.current)
@@ -350,7 +353,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     if (pending !== null) {
       void api.saveConfig(pending).catch(() => { /* 已卸载：静默，不打扰用户 */ })
     }
-    // 最后镜像一次（防止「最后一次改动后立即切 tab」时上面 effect 尚未 flush）
+    // 最后镜像一次（防止「最后一次改动后立即切 tab」时 commit 之前的瞬态丢失）
     runStore.patch({ sync: toSyncStoreSlice(stateRef.current) })
   }, [])
 
@@ -406,33 +409,33 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     patch({ savingConfig: true, error: null })
     try {
       const saved = await api.saveConfig(payloadToSave)
-      setState((s) => {
-        const next: SyncUiState = { ...s, savingConfig: false }
-        // 只清空「本次已写入的」password/token：若保存期间用户已改输入则保留新值
-        next.webdavPassword = s.webdavPassword !== '' && s.webdavPassword !== payloadToSave.password
-          ? s.webdavPassword
-          : ''
-        next.token = s.token !== '' && s.token !== payloadToSave.token ? s.token : ''
-        // 凭据徽章合并（响应只含布尔，无 secret 值）
-        if (s.statusInfo !== null) {
-          const info: SyncStatusResponse = {
-            ...s.statusInfo,
-            configured: true,
-            credentialConfigured: saved.credentialConfigured,
-          }
-          if (saved.webdav !== undefined) {
-            info.webdav = {
-              url: s.statusInfo.webdav?.url,
-              username: s.statusInfo.webdav?.username,
-              usernameConfigured: saved.webdav.usernameConfigured,
-              passwordConfigured: saved.webdav.passwordConfigured,
-            }
-          }
-          next.statusInfo = info
+      // 基于 stateRef 计算（同步权威），经 commit 落库：即使保存完成时组件已卸载
+      // （切走 tab），savingConfig 复位与凭据清空仍会镜像进 store，切回后一致
+      const s = stateRef.current
+      const next: SyncUiState = { ...s, savingConfig: false }
+      // 只清空「本次已写入的」password/token：若保存期间用户已改输入则保留新值
+      next.webdavPassword = s.webdavPassword !== '' && s.webdavPassword !== payloadToSave.password
+        ? s.webdavPassword
+        : ''
+      next.token = s.token !== '' && s.token !== payloadToSave.token ? s.token : ''
+      // 凭据徽章合并（响应只含布尔，无 secret 值）
+      if (s.statusInfo !== null) {
+        const info: SyncStatusResponse = {
+          ...s.statusInfo,
+          configured: true,
+          credentialConfigured: saved.credentialConfigured,
         }
-        stateRef.current = next
-        return next
-      })
+        if (saved.webdav !== undefined) {
+          info.webdav = {
+            url: s.statusInfo.webdav?.url,
+            username: s.statusInfo.webdav?.username,
+            usernameConfigured: saved.webdav.usernameConfigured,
+            passwordConfigured: saved.webdav.passwordConfigured,
+          }
+        }
+        next.statusInfo = info
+      }
+      commit(next)
     } catch (err) {
       patch({ savingConfig: false, error: err instanceof Error ? err.message : String(err) })
     } finally {

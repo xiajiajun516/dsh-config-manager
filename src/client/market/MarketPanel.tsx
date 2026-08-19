@@ -111,21 +111,26 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
   /** 发布向导开关（组件内状态，不进 sessionStorage —— 发布为一次性低频率流程） */
   const [publishOpen, setPublishOpen] = useState(false)
   const [state, setState] = useState<MarketUiState>(initFromStore)
-  /** 最新 state 镜像（卸载 flush 时读取，避免闭包过期值） */
+  /** 最新 state 镜像（commit/卸载 flush 读取，避免闭包过期值） */
   const stateRef = useRef<MarketUiState>(state)
-  const patch = (p: Partial<MarketUiState>): void => setState((s) => {
-    const next = { ...s, ...p }
+  /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
+  const mountedRef = useRef(true)
+
+  /**
+   * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
+   * 关键：镜像不依赖 effect flush —— 异步操作（下载/确认导入）完成回调在组件
+   * 已卸载（切走 tab）时也能把结果（detail/importResult）写进 store，切回恢复。
+   */
+  const commit = (next: MarketUiState): void => {
     stateRef.current = next
-    return next
-  })
+    if (mountedRef.current) setState(next)
+    runStore.patch({ market: toMarketStoreSlice(next) })
+  }
+  const patch = (p: Partial<MarketUiState>): void => commit({ ...stateRef.current, ...p })
 
-  /** 状态镜像：任何 UI 状态变化同步进 runStore（切 tab 不丢 / 刷新恢复）。 */
-  useEffect(() => {
-    runStore.patch({ market: toMarketStoreSlice(state) })
-  }, [state])
-
-  /** 卸载时最后镜像一次（防止「最后一次改动后立即切 tab」时镜像 effect 尚未 flush）。 */
+  /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
   useEffect(() => () => {
+    mountedRef.current = false
     runStore.patch({ market: toMarketStoreSlice(stateRef.current) })
   }, [])
 

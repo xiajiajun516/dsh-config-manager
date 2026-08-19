@@ -106,6 +106,13 @@ export interface SyncStoreSlice {
     git: ChannelSyncState
     webdav: ChannelSyncState
   }
+  /**
+   * 进行中的同步操作（瞬态：切 tab 由模块级单例保留 → 切回仍显示进行中；
+   * 刷新时被白名单剔除 → 回复空闲，异步请求结果经 /runs 等宿主侧恢复）。
+   */
+  busy: SyncBusyState
+  /** 「保存配置」进行中（瞬态；同 busy 语义） */
+  savingConfig: boolean
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
   /** 一键同步差异确认会话（items 供 UI 逐项确认；宿主侧 30 分钟 TTL 内存登记） */
@@ -117,14 +124,17 @@ export interface SyncStoreSlice {
   loadError: string | null
 }
 
+/** 同步视图的进行中操作标记（与 SyncUiState.busy 同形状；无 busy 时为空闲）。 */
+export type SyncBusyState = 'sync' | 'push' | 'pull' | 'rollback' | null
+
 /** 单通道状态的持久化切片 = 运行时剔除密码类敏感字段（安全关键，白名单单一出口）。 */
 export type PersistedChannelSyncState = Omit<
   ChannelSyncState,
   'encryptPassword' | 'encryptPasswordConfirm' | 'decryptPassword'
 >
 
-/** 同步面板的持久化切片 = 运行时切片剔除敏感字段（顶层凭据 + byChannel 密码类）。 */
-export type PersistedSyncState = Omit<SyncStoreSlice, 'token' | 'webdavPassword' | 'byChannel'> & {
+/** 同步面板的持久化切片 = 运行时切片剔除敏感字段（顶层凭据 + byChannel 密码类）与瞬态字段。 */
+export type PersistedSyncState = Omit<SyncStoreSlice, 'token' | 'webdavPassword' | 'busy' | 'savingConfig' | 'byChannel'> & {
   byChannel: {
     git: PersistedChannelSyncState
     webdav: PersistedChannelSyncState
@@ -325,6 +335,8 @@ function defaultSyncState(): SyncStoreSlice {
       git: defaultChannelSyncState(),
       webdav: defaultChannelSyncState(),
     },
+    busy: null,
+    savingConfig: false,
     pushReport: null,
     pullReport: null,
     confirmSession: null,
@@ -374,8 +386,9 @@ function defaultState(): StoreState {
 
 /**
  * 从视图状态提取同步切片（结构兼容：传入 SyncUiState 亦可；只保留切片字段，
- * github 流程态/loading/busy 等瞬态不进入切片）。组件每次状态变化后调用，
- * 把非敏感 + 仅内存字段镜像进 store；敏感字段由 toPersistedState 硬性剔除。
+ * github 流程态/loading 等瞬态不进入切片；busy/savingConfig 为「内存切片」瞬态——
+ * 切 tab 由模块级单例保留，刷新时被 toPersistedState 白名单剔除）。组件每次状态
+ * 变化后（含异步回调）调用，把非敏感 + 仅内存字段镜像进 store。
  * byChannel 的快照数组复制引用（避免跨切片共享可变数组）。
  */
 export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
@@ -390,6 +403,8 @@ export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
       git: { ...s.byChannel.git, snapshots: [...s.byChannel.git.snapshots] },
       webdav: { ...s.byChannel.webdav, snapshots: [...s.byChannel.webdav.snapshots] },
     },
+    busy: s.busy,
+    savingConfig: s.savingConfig,
     pushReport: s.pushReport,
     pullReport: s.pullReport,
     confirmSession: s.confirmSession,
@@ -428,7 +443,8 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
  * 持久化白名单：解构剔除敏感字段（password/passwordConfirm/secretInputs/decryptPassword）
  * 与不可序列化的实例字段（conflictCollector），以及同步面板的凭据字段
  * （token/webdavPassword/encryptPassword/encryptPasswordConfirm/decryptPassword ——
- * 含 byChannel 内每通道的加密/解密密码），其余原样落入 sessionStorage。
+ * 含 byChannel 内每通道的加密/解密密码）与瞬态字段（busy/savingConfig —— 刷新后
+ * 回复空闲，不把「进行中」状态带到新页面），其余原样落入 sessionStorage。
  * 这是 sessionStorage 的唯一写入路径 —— 敏感值在此被硬性隔离。
  */
 export function toPersistedState(state: StoreState): PersistedState {
@@ -437,7 +453,10 @@ export function toPersistedState(state: StoreState): PersistedState {
     secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
     archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector, ...importRest
   } = state.import
-  const { token: _token, webdavPassword: _webdavPassword, ...syncRest } = state.sync
+  const {
+    token: _token, webdavPassword: _webdavPassword, busy: _busy, savingConfig: _savingConfig,
+    ...syncRest
+  } = state.sync
   // byChannel 内每通道的密码类字段同样硬性剔除（安全不变量：不落盘任何密码）
   const stripChannelSensitive = (c: ChannelSyncState): PersistedChannelSyncState => {
     const { encryptPassword: _ep, encryptPasswordConfirm: _epc, decryptPassword: _dp, ...rest } = c
@@ -766,6 +785,10 @@ export class RunStore {
           // 刷新后清空，需要时重新输入（byChannel 内密码类字段同样强制归零）
           token: '',
           webdavPassword: '',
+          // 硬性：进行中操作/保存中为瞬态，绝不从存储恢复（刷新后回复空闲；
+          // 异步请求进行中由宿主 /runs 等恢复，不依赖 UI 瞬态）
+          busy: null,
+          savingConfig: false,
           byChannel: {
             git: {
               ...defaultChannelSyncState(),

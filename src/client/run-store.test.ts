@@ -555,6 +555,9 @@ function makeSyncPatch(): Parameters<RunStore['patch']>[0]['sync'] {
     webdavUrl: 'https://dav.example.com/dav',
     webdavUsername: 'alice',
     webdavPassword: 'WEBDAV-PASS-SECRET',
+    // 瞬态：进行中推送 + 保存中 —— 切 tab 由模块级单例保留，刷新时白名单剔除
+    busy: 'push',
+    savingConfig: true,
     byChannel: {
       git: {
         syncMode: 'default',
@@ -614,6 +617,8 @@ test('低频面板: 同步凭据（token/webdav/加密与解密密码）绝不�
   }
   assert.ok(!('token' in parsed['sync']), 'sync 切片不含 token')
   assert.ok(!('webdavPassword' in parsed['sync']), 'sync 切片不含 webdav 密码')
+  assert.ok(!('busy' in parsed['sync']), 'sync 切片不含 busy（瞬态不落盘）')
+  assert.ok(!('savingConfig' in parsed['sync']), 'sync 切片不含 savingConfig（瞬态不落盘）')
   assert.ok(!('encryptPassword' in parsed['sync']), 'sync 切片顶层不含加密密码')
   assert.ok(!('encryptPasswordConfirm' in parsed['sync']), 'sync 切片顶层不含加密密码确认')
   assert.ok(!('decryptPassword' in parsed['sync']), 'sync 切片顶层不含解密密码')
@@ -698,6 +703,8 @@ test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复�
   assert.equal(st.sync.webdavPassword, '', 'webdav 密码刷新后清空')
   assert.equal(st.sync.byChannel.webdav.encryptPassword, '', '加密密码刷新后清空')
   assert.equal(st.sync.byChannel.webdav.decryptPassword, '', '解密密码刷新后清空')
+  assert.equal(st.sync.busy, null, '进行中操作（busy）为瞬态，刷新后清空回复空闲')
+  assert.equal(st.sync.savingConfig, false, '保存中（savingConfig）为瞬态，刷新后清空')
   assert.equal(st.market.search, 'deepseek')
   assert.equal(st.market.category, 'sync')
   assert.equal(st.market.items.length, 1)

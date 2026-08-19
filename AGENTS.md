@@ -126,7 +126,7 @@ typecheck → npm test → build → npm pack → npm publish（Trusted Publishi
 ### 状态管理
 
 - 高频/可恢复流程（Export / Import）状态集中在 `src/client/run-store.ts`（模块级单例，`useSyncExternalStore` 消费，sessionStorage 白名单持久化）；**新视图若状态需要「切 tab 不丢 / 刷新恢复」，加入 runStore 而非另造 store**
-- 低频面板（Snapshots / Sync / Market）状态组件内自持（`useState` + `useRef` 镜像），**同时把非敏感切片镜像进 runStore**（`toSyncStoreSlice` / `toMarketStoreSlice` / `toSnapshotsStoreSlice`，实现切 tab 不丢 / 刷新恢复）：组件 `useEffect` 监听自身状态变化 → `runStore.patch({ sync|market|snapshots })`，挂载时从 store 切片重建初始状态，卸载时最后 flush 一次；同步凭据（token / webdav 密码 / 加密与解密密码）仅内存，由 `toPersistedState` 白名单硬性剔除，刷新后清空要求重输
+- 低频面板（Snapshots / Sync / Market）状态组件内自持（`useState` + `useRef`），**同时把非敏感切片镜像进 runStore**（`toSyncStoreSlice` / `toMarketStoreSlice` / `toSnapshotsStoreSlice`，实现切 tab 不丢 / 刷新恢复）：所有状态变更统一走组件的 `commit(next)`（更新 stateRef → 挂载时 setState → **总是** `runStore.patch`），镜像**不依赖 effect flush**——异步操作（push/pull/sync/下载/确认导入/执行恢复）完成回调在组件已卸载（切走 tab）时仍能把结果写进 store，切回时 `initFromStore` 恢复；卸载时最后 flush 一次兜底；同步凭据（token / webdav 密码 / 加密与解密密码）仅内存，`busy`/`savingConfig` 等瞬态为「内存切片」（切 tab 保留、刷新清空），均由 `toPersistedState` 白名单硬性剔除
 - 面板开关（`ConfigManagerSection` 当前打开的 tab）存 runStore `panel` 字段：切 tab 不丢、刷新后回到原 tab
 - 控制器实例（`ExportFlow` / `ImportWizard`）由 runStore 缓存复用，**禁止每次渲染 new 一个**（切 tab 会重建，破坏 m2 状态恢复）；刷新恢复经 `writeWizardSnapshot()` 受控 rehydrate
 
