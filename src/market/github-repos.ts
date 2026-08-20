@@ -39,8 +39,8 @@ export const MARKET_UPSTREAM_REPO = 'dsh-config-market';
 
 /** fork 异步创建轮询缺省间隔（毫秒） */
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
-/** fork 异步创建轮询缺省超时（毫秒）：超时抛可重试错误 */
-const DEFAULT_POLL_TIMEOUT_MS = 60_000;
+/** fork 异步创建轮询缺省超时（毫秒）：GitHub 首次 fork 需复制仓库内容，可能超过 60s；180s 兜底后抛可重试错误 */
+const DEFAULT_POLL_TIMEOUT_MS = 180_000;
 
 /** GET /user 的投影（只保留编排 / UI 需要的最小字段，不携带任何凭据） */
 export interface GitHubUserInfo {

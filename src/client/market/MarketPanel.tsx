@@ -30,7 +30,6 @@ import type { MyConfigsApi } from './my-configs-api.ts'
 import type { SyncApi } from '../sync/sync-api.ts'
 import { MyConfigsView } from './MyConfigsView.tsx'
 import type { MyItemEntry } from './my-configs-api.ts'
-import { PublishView } from './PublishView.tsx'
 import type {
   MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketSummary,
 } from '../../market/types.ts'
@@ -128,8 +127,6 @@ function initFromStore(): MarketUiState {
 
 export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: MarketPanelProps) {
   const uiT = api.t // 展示层翻译器（zh/en）：供应链警示 / 状态行 / 徽章文本走 UiT（market.* 键）
-  /** 发布向导开关（组件内状态，不进 sessionStorage —— 发布为一次性低频率流程） */
-  const [publishOpen, setPublishOpen] = useState(false)
   const [state, setState] = useState<MarketUiState>(initFromStore)
   /** 最新 state 镜像（commit/卸载 flush 读取，避免闭包过期值） */
   const stateRef = useRef<MarketUiState>(state)
@@ -255,11 +252,6 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
 
   return (
     <div className={css.viewBody}>
-      {/* 发布到市场向导：打开时独占整个市场视图（onBack 返回市场） */}
-      {publishOpen ? (
-        <PublishView api={api} importApi={importApi} t={t} onBack={() => { setPublishOpen(false) }} />
-      ) : (
-        <>
       {/* 子视图切换（§4.6）：浏览市场 / 我的配置（低频面板状态镜像 runStore，切 tab/刷新不丢） */}
       <div className={css.modeTabs} role="tablist">
         <button
@@ -323,8 +315,6 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           <Button disabled={state.browsing} onClick={() => { void runBrowse() }}>
             {state.browsing ? <Spinner label={t('list.loading')} /> : t('list.browse')}
           </Button>
-          {/* 发布到市场入口（ghost 次操作）：打开发布向导（PublishView 组件内状态切换） */}
-          <Button onClick={() => { setPublishOpen(true) }}>{t('publish.title')}</Button>
         </div>
         <div className={css.statRow}>
           <Badge kind={state.loadError !== null ? 'error' : 'ok'}>{statusText}</Badge>
@@ -509,10 +499,8 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           )}
         </Card>
       )}
-        </>
-      )}
-        </>
-      )}
+      </>
+    )}
     </div>
   )
 }
