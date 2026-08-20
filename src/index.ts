@@ -1,4 +1,4 @@
-﻿/**
+/**
  * dsh-config-manager — host half.
  *
  * Mounts the backup / export / import engine (src/core Exporter + Importer
