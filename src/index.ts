@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-config-manager — host half.
  *
  * Mounts the backup / export / import engine (src/core Exporter + Importer
@@ -129,7 +129,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.37'
+const PLUGIN_VERSION = '0.1.38'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
