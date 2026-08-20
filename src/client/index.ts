@@ -28,6 +28,7 @@ import { SyncApi } from './sync/sync-api.ts'
 import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import { en as syncEn, zh as syncZh, type SyncKey } from './sync/sync-locales.ts'
 import { MarketApi } from './market/market-api.ts'
+import { MyConfigsApi } from './market/my-configs-api.ts'
 import { MarketPanel } from './market/MarketPanel.tsx'
 import { en as marketEn, zh as marketZh, type MarketKey } from './market/market-locales.ts'
 
@@ -81,10 +82,11 @@ export function apply(ctx: ClientContext): void {
   const syncApi = new SyncApi(uiT)
   const marketT = ctx.locale.bind(MARKET_NS)
   const marketApi = new MarketApi(uiT)
+  const myConfigsApi = new MyConfigsApi(uiT)
 
   // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync/Market/About 六 tab）。
   // 远程同步、配置市场与关于页不注册独立设置页 —— 并入主 section 的 inject 面
-  // （syncApi/syncT、marketApi/marketT），由 ConfigManagerSection 渲染第 4/5/6 个 tab。
+  // （syncApi/syncT、marketApi/marketT、myConfigsApi），由 ConfigManagerSection 渲染第 4/5/6 个 tab。
   // 避免第二个 settings.section 注册在目标 DSH 渲染 section 列表时抛错导致整页空白。
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
@@ -92,6 +94,6 @@ export function apply(ctx: ClientContext): void {
     order: 60,
     label: () => t('section.label'),
     locale: NS,
-    inject: () => ({ api, syncApi, syncT, marketApi, marketT }),
+    inject: () => ({ api, syncApi, syncT, marketApi, marketT, myConfigsApi }),
   }, ConfigManagerSection))
 }

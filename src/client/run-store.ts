@@ -52,6 +52,7 @@ import type { SyncStartResponse } from './sync/sync-api.ts'
 import type { ChannelSyncState, SyncChannel } from './sync/sync-view.ts'
 import { defaultChannelSyncState } from './sync/sync-view.ts'
 import type { MarketApprovals } from './market/market-view.ts'
+import type { MyItemEntry } from './market/my-configs-api.ts'
 
 /* ---------------------------------------------------------------- 基础类型 */
 
@@ -146,6 +147,8 @@ export type PersistedSyncState = Omit<SyncStoreSlice, 'token' | 'webdavPassword'
  * 受控临时文件路径，非密钥）。持久化形状与运行时形状一致。
  */
 export interface MarketStoreSlice {
+  /** 市场面板子视图（设计 §4.6：「浏览市场 / 我的配置」；低频面板镜像，切 tab/刷新不丢） */
+  subView: 'browse' | 'myconfigs'
   search: string
   category: string
   /** 最近一次 browse 的条目列表（切 tab/刷新后免重拉；host 缓存状态下次 browse 时合并） */
@@ -157,6 +160,10 @@ export interface MarketStoreSlice {
   importResult: ImportResult | null
   error: string | null
   loadError: string | null
+  /** 我的配置子视图：已上传条目（null = 尚未加载；切 tab/刷新后免重拉） */
+  myItems: MyItemEntry[] | null
+  /** 我的配置子视图：列表加载错误（已 redact 文本；null = 无） */
+  myItemsError: string | null
 }
 
 /** 快照恢复面板的切片（无敏感字段；快照列表本身可随时重载，不持久化）。 */
@@ -348,6 +355,7 @@ function defaultSyncState(): SyncStoreSlice {
 
 function defaultMarketState(): MarketStoreSlice {
   return {
+    subView: 'browse',
     search: '',
     category: '',
     items: [],
@@ -356,6 +364,8 @@ function defaultMarketState(): MarketStoreSlice {
     importResult: null,
     error: null,
     loadError: null,
+    myItems: null,
+    myItemsError: null,
   }
 }
 
@@ -417,6 +427,7 @@ export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
 /** 从市场视图状态提取切片（结构兼容：传入 MarketUiState 亦可）。 */
 export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
   return {
+    subView: s.subView,
     search: s.search,
     category: s.category,
     items: s.items,
@@ -425,6 +436,8 @@ export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
     importResult: s.importResult,
     error: s.error,
     loadError: s.loadError,
+    myItems: s.myItems,
+    myItemsError: s.myItemsError,
   }
 }
 

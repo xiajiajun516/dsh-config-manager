@@ -268,6 +268,16 @@ export const uiZh = {
   'marketPublish.repoWhitespace': '仓库地址不能包含空白字符',
   'marketPublish.repoScheme': '仓库地址必须为 http(s) 链接',
   'marketPublish.repoUserinfo': '仓库地址不能包含用户名或密码（userinfo）；凭据请通过 DSH credentials 提供',
+  // 我的配置（m-my-configs-view：一键上传 / 查看 / 更新；React 壳文案在 config-manager-market 命名空间）
+  'myConfigs.autoField': '系统自动',
+  'myConfigs.field.id': '条目 ID',
+  'myConfigs.field.author': '作者',
+  'myConfigs.field.version': '版本',
+  'myConfigs.field.updatedAt': '更新时间',
+  'myConfigs.status.notListed': '未收录',
+  'myConfigs.status.pendingPr': 'PR 待审核',
+  'myConfigs.status.listed': '已收录',
+  'myConfigs.form.errorName': '名称不能为空',
 } as const;
 
 export type UiTextKey = keyof typeof uiZh;
@@ -516,6 +526,15 @@ export const uiEn: Record<UiTextKey, string> = {
   'marketPublish.repoWhitespace': 'Repository URL must not contain whitespace',
   'marketPublish.repoScheme': 'Repository URL must be an http(s) link',
   'marketPublish.repoUserinfo': 'Repository URL must not contain username/password (userinfo); provide credentials via DSH credentials',
+  'myConfigs.autoField': 'Auto',
+  'myConfigs.field.id': 'Item ID',
+  'myConfigs.field.author': 'Author',
+  'myConfigs.field.version': 'Version',
+  'myConfigs.field.updatedAt': 'Updated',
+  'myConfigs.status.notListed': 'Not listed',
+  'myConfigs.status.pendingPr': 'PR pending review',
+  'myConfigs.status.listed': 'Listed',
+  'myConfigs.form.errorName': 'Name is required',
 };
 
 /** UI 翻译函数：key → 当前语言文案（{param} 插值；未知键回退 zh/键名）。 */

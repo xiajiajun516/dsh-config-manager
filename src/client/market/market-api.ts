@@ -127,9 +127,12 @@ export class MarketApi {
   }
 
   /** 下载 + 校验单条目（dry-run 预览：拉取 → §6 校验 → analyzeImport → createImportPlan）。
+   *  repo 可选：条目来源仓库（作者自托管）。自托管条目（官方 index 带 repo 引用、或「我的配置」
+   *  未收录条目）内容文件在作者自己的公开仓库，必须显式传 repo 才能从正确来源拉取；
+   *  缺省 = 市场仓库（官方同仓条目）。
    *  真正落盘由用户对预览确认后走现有 executeImportPlan（confirm:true 安全阀 + 回滚）。 */
-  async download(itemId: string): Promise<MarketDownloadResult> {
-    return postJson<MarketDownloadResult>(MARKET_API.download, { itemId }, this.t);
+  async download(itemId: string, repo?: string): Promise<MarketDownloadResult> {
+    return postJson<MarketDownloadResult>(MARKET_API.download, { itemId, ...(repo !== undefined && repo !== '' ? { repo } : {}) }, this.t);
   }
 
   /** 发布向导：由「上传 zip + 用户填写元数据」生成市场条目包（L2 manifest + SHA-256 + sections），

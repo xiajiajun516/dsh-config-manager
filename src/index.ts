@@ -108,6 +108,10 @@ import { marketItemWarnings, toMarketListItem } from './market/view.ts'
 import type {
   MarketDownloadResult, MarketIndex, MarketItemDetail, MarketListItem, MarketSummary,
 } from './market/types.ts'
+import { GitHubAuthRest, GitHubApiError } from './market/github-repos.ts'
+import { MyRepoService, USER_CONFIGS_REPO, userConfigsRepoUrl } from './market/my-repo.ts'
+import { createGitFileWriter } from './market/git-file-writer.ts'
+import { redact } from './security/redaction.ts'
 import { sha256Hex } from './utils/hashing.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
@@ -214,6 +218,12 @@ const API = {
   marketBrowse: '/api/dsh-config-manager/market/browse',
   marketDownload: '/api/dsh-config-manager/market/download',
   marketPrepare: '/api/dsh-config-manager/market/prepare',
+  // m-my-configs：「一键上传 / 我的配置」（目标仓库固定 xiajiajun516/dsh-config-market；
+  // 登录复用 sync/github/start|poll|cancel，不重复实现；/me/items 401 → 未登录）
+  meStatus: '/api/dsh-config-manager/me/status',
+  meUpload: '/api/dsh-config-manager/me/upload',
+  meItems: '/api/dsh-config-manager/me/items',
+  meUpdate: '/api/dsh-config-manager/me/update',
 } as const
 
 /**
@@ -1268,6 +1278,27 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
   }
 }
 
+/**
+ * 解析「一键上传/我的配置」请求体的 form 字段：仅 { name, description?, categories? }。
+ * name 必填（非空字符串，trim 后取）；description 可选字符串；categories 可选字符串数组。
+ * 非法 → null（调用方返回 400）。用户可填内容就这三项，其余元数据全自动。
+ */
+function parseMeForm(raw: unknown): { name: string; description?: string; categories?: string[] } | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const obj = raw as Record<string, unknown>
+  const name = typeof obj['name'] === 'string' ? obj['name'].trim() : ''
+  if (name === '') return null
+  const form: { name: string; description?: string; categories?: string[] } = { name }
+  const description = obj['description']
+  if (typeof description === 'string' && description.trim() !== '') form.description = description.trim()
+  const categoriesRaw = obj['categories']
+  if (Array.isArray(categoriesRaw)) {
+    const categories = categoriesRaw.filter((c): c is string => typeof c === 'string' && c.trim() !== '')
+    if (categories.length > 0) form.categories = categories
+  }
+  return form
+}
+
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler } {
   const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, credentials, githubClientId, githubClientSecret } = deps
@@ -1516,6 +1547,24 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       // tmpDir 读取失败 → 跳过（尽力而为）
     }
   }
+
+  // -------------------------------------------------- me 装配（m-my-configs）
+  // 「一键上传 / 我的配置」：GitHub REST 客户端 + 上传编排。
+  // token 只经 credentials.resolve(SYNC_CREDENTIAL_REF) 在宿主内部读取（与 git 同步共用
+  // 同一凭据槽），值绝不落盘 / 进日志 / 回传浏览器；gitWriter 写用户仓库与 fork 分支，
+  // 安全模式与 GitTransport 一致（credential helper store 临时文件 0600 用后即删）。
+  const meTokenProvider = async (): Promise<string> => {
+    const resolved = await credentials.resolve(credentialRef(SYNC_CREDENTIAL_REF))
+    return resolved?.value ?? ''
+  }
+  const meGitHubRest = new GitHubAuthRest({ tokenProvider: meTokenProvider })
+  const meService = new MyRepoService({
+    prepare: prepareMarketItem,
+    rest: meGitHubRest,
+    gitWriter: createGitFileWriter({ credentials: { getToken: meTokenProvider } }),
+    tokenProvider: meTokenProvider,
+    now: () => new Date(),
+  })
 
   const routesList: WebRoute[] = [
     // ------------------------------------------------------------- status
@@ -2864,6 +2913,119 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ---------------------------------------------------- me/status
+    // 「一键上传 / 我的配置」登录状态：resolve SYNC_CREDENTIAL_REF token → GET /user。
+    // 401 → loggedIn:false（未登录）；token 值不出模块外，只回传 login 用户名。
+    {
+      kind: 'exact',
+      path: API.meStatus,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          let loggedIn = false
+          let login: string | undefined
+          try {
+            const user = await meGitHubRest.getUser()
+            loggedIn = true
+            login = user.login
+          } catch (error) {
+            // 仅 401（token 无效/过期）→ 未登录；其余错误（网络/限流）向上抛
+            if (!(error instanceof GitHubApiError && error.code === 'unauthorized')) throw error
+          }
+          const repoUrl = login !== undefined ? userConfigsRepoUrl(login) : undefined
+          const repoExists = login !== undefined ? await meGitHubRest.repoExists(login, USER_CONFIGS_REPO) : false
+          writeJson(res, 200, {
+            loggedIn,
+            ...(login !== undefined ? { login } : {}),
+            ...(repoUrl !== undefined ? { repoUrl } : {}),
+            repoExists,
+          })
+        } catch (error) {
+          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
+    // ---------------------------------------------------- me/upload
+    // 一键上传：zipPath 必须来自受控上传临时区（复用 /market/prepare 规则）；
+    // form 仅 { name, description?, categories? }（name 必填）；元数据全自动由 MyRepoService 生成。
+    {
+      kind: 'exact',
+      path: API.meUpload,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const zipPath = typeof body['zipPath'] === 'string' ? body['zipPath'] : ''
+        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
+          writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
+          return
+        }
+        const form = parseMeForm(body['form'])
+        if (form === null) {
+          writeJson(res, 400, { error: 'form is required and name must be a non-empty string' })
+          return
+        }
+        try {
+          const zipBytes = await fs.readFile(zipPath)
+          // MyRepoService 内部已做 prepare 8 道校验 + 秘密扫描（失败 → ok:false，零推送）
+          const result = await meService.upload({ zipBytes, form })
+          writeJson(res, 200, result)
+        } catch (error) {
+          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
+    // ---------------------------------------------------- me/items
+    // 查看已上传：读用户仓库 index.json + 收录状态（未收录 / PR 待审核 / 已收录）。
+    // 401（token 过期）→ 401 + 脱敏错误，UI 引导重新登录。
+    {
+      kind: 'exact',
+      path: API.meItems,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const items = await meService.listItems()
+          writeJson(res, 200, { items })
+        } catch (error) {
+          const status = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          writeJson(res, status, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
+    // ---------------------------------------------------- me/update
+    // 一键更新：同 upload 时序；version 纯自动 +1、id 不变；PR 未合并 force push 更新 / 已合并基于最新 main 重开。
+    {
+      kind: 'exact',
+      path: API.meUpdate,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const zipPath = typeof body['zipPath'] === 'string' ? body['zipPath'] : ''
+        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
+          writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
+          return
+        }
+        const form = parseMeForm(body['form'])
+        if (form === null) {
+          writeJson(res, 400, { error: 'form is required and name must be a non-empty string' })
+          return
+        }
+        try {
+          const zipBytes = await fs.readFile(zipPath)
+          const result = await meService.update({ zipBytes, form })
+          writeJson(res, 200, result)
+        } catch (error) {
+          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
         }
       },
     },

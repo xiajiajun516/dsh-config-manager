@@ -354,7 +354,8 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 | Pattern | 结构 | 现例 |
 |---|---|---|
-| **模式切换（Quick/Custom）** | `modeTabs` 双 tab + `modeHint` 说明 | 导出视图、同步模式 |
+| **模式切换（Quick/Custom）** | `modeTabs` 双 tab + `modeHint` 说明 | 导出视图、同步模式、市场面板（浏览市场 / 我的配置） |
+| **GitHub 登录卡（device flow）** | `Card` + `actionRow`（「使用 GitHub 登录」primary 按钮 + 取消）+ 一次性用户码 Badge + 「打开授权页」外链 + 轮询状态 Badge + 错误 Banner；token 只存宿主凭据槽，界面只展示用户码与登录名 | 远程同步视图（GitHub 登录）、「我的配置」登录卡 |
 | **通道子 tab 面板（GitHub/WebDAV）** | `modeTabs` 双 tab + `modeHint` 说明；各 tab 内配置表单 / 自动同步 / 同步模式 / 加密 / 远端快照**按通道独立**，切换 tab 互不覆盖（busy 时禁用切换） | 远程同步视图（同步面板二级 tab） |
 | **分组勾选目录** | `groupList > groupCard(groupHeader: groupLabel+groupNote) > groupItems(Checkbox 行: categoryName+categoryDesc+Badge)` | 导出 Custom、同步高级模式 |
 | **安全选项卡** | Card + `optionsHeader` + Checkbox + hint + 条件渲染密码双列 + formError | 导出、同步加密 |

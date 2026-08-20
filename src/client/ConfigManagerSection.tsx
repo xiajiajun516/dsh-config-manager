@@ -33,7 +33,7 @@ export type ConfigManagerSectionProps =
  * 所有 tab（主视图 view + 低频面板 panel）状态都在模块级 store（切 tab/刷新不丢）；
  * 面板内部状态由各视图镜像进 store（Sync/Market/Snapshots），敏感字段白名单剔除。
  */
-export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, t }: ConfigManagerSectionProps) {
+export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigsApi, marketT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const view = state.view
   const panel = state.panel
@@ -129,7 +129,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, marketT, 
         {panel === 'about'
           ? <AboutPanel api={api} t={t} />
           : panel === 'market'
-            ? <MarketPanel api={marketApi} importApi={api} t={marketT} />
+            ? <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
             : panel === 'sync'
               ? <SyncSettingsView api={syncApi} t={syncT} />
               : panel === 'snapshots'

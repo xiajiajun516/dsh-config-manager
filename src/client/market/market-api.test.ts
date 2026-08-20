@@ -136,6 +136,35 @@ test('M-06 api.download()：POST /market/download 携带 itemId；内置单市�
   assert.equal(sent['itemId'], 'a');
 });
 
+test('M-06b api.download()：自托管条目（repo 来源）→ 请求体携带 repo（装回本地 / 浏览第三方条目场景）', async () => {
+  const body = {
+    ok: true,
+    id: 'a',
+    name: '自托管条目',
+    version: '1.0',
+    sections: ['settings'],
+    downloadedAt: '2026-08-16T10:30:00.000Z',
+    status: 'valid',
+    warnings: ['第三方来源'],
+    zipPath: '/tmp/controlled/a.zip',
+    analysis: { compatible: true },
+    plan: { items: [] },
+  };
+  const calls: FetchCall[] = [];
+  installFetchMock((call) => {
+    calls.push(call);
+    return jsonResponse(200, body);
+  });
+  const api = new MarketApi();
+  const result = await api.download('a', 'https://github.com/xiaojun/dsh-configs');
+  assert.equal(result.status, 'valid');
+  assert.equal(calls[0]?.url, MARKET_API.download);
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
+  assert.deepEqual(Object.keys(sent), ['itemId', 'repo'], '自托管条目必须携带 repo 来源（否则从官方仓库拉取会缺文件）');
+  assert.equal(sent['itemId'], 'a');
+  assert.equal(sent['repo'], 'https://github.com/xiaojun/dsh-configs');
+});
+
 test('M-07 错误映射：4xx 携带 error → ConfigManagerApiError', async () => {
   installFetchMock(() => jsonResponse(400, { error: 'market index invalid: unknown field' }));
   const api = new MarketApi();

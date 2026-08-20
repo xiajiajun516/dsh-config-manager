@@ -26,6 +26,10 @@ import type { ImportResult, ImportPlan } from '../../core/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { BUILTIN_MARKET_URL, isOfficialMarket } from '../../market/builtin.ts'
 import type { MarketApi } from './market-api.ts'
+import type { MyConfigsApi } from './my-configs-api.ts'
+import type { SyncApi } from '../sync/sync-api.ts'
+import { MyConfigsView } from './MyConfigsView.tsx'
+import type { MyItemEntry } from './my-configs-api.ts'
 import { PublishView } from './PublishView.tsx'
 import type {
   MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketSummary,
@@ -40,12 +44,22 @@ import css from '../config-manager.module.css'
 
 export interface MarketPanelProps {
   api: MarketApi
+  /** 「我的配置」API（/me/* 端点：登录态/一键上传/查看已上传/一键更新；登录复用 SyncApi.github*） */
+  myConfigsApi: MyConfigsApi
   /** 确认导入复用的主 ConfigManagerApi（executeImportPlan：安全阀 + 回滚） */
   importApi: ConfigManagerApi
+  /** GitHub 登录 API（「我的配置」登录卡复用 sync github device flow，同 token 槽） */
+  syncApi: SyncApi
   t: TranslateNS<'config-manager-market'>
 }
 
 interface MarketUiState {
+  /** 市场面板子视图（§4.6：「浏览市场 / 我的配置」；切 tab/刷新不丢） */
+  subView: 'browse' | 'myconfigs'
+  /** 我的配置：已上传条目（null = 尚未加载；「我的配置」子视图镜像，切 tab 不丢） */
+  myItems: MyItemEntry[] | null
+  /** 我的配置：列表加载错误（已 redact；null = 无） */
+  myItemsError: string | null
   loading: boolean
   loadError: string | null
   /** 内置市场摘要（status 返回；条目数 / 名称 / 最近拉取） */
@@ -70,6 +84,9 @@ interface MarketUiState {
 }
 
 const initial: MarketUiState = {
+  subView: 'browse',
+  myItems: null,
+  myItemsError: null,
   loading: true,
   loadError: null,
   market: null,
@@ -95,6 +112,9 @@ function initFromStore(): MarketUiState {
   const s: MarketStoreSlice = runStore.getSnapshot().market
   return {
     ...initial,
+    subView: s.subView,
+    myItems: s.myItems,
+    myItemsError: s.myItemsError,
     search: s.search,
     category: s.category,
     items: s.items,
@@ -106,7 +126,7 @@ function initFromStore(): MarketUiState {
   }
 }
 
-export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
+export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: MarketPanelProps) {
   const uiT = api.t // 展示层翻译器（zh/en）：供应链警示 / 状态行 / 徽章文本走 UiT（market.* 键）
   /** 发布向导开关（组件内状态，不进 sessionStorage —— 发布为一次性低频率流程） */
   const [publishOpen, setPublishOpen] = useState(false)
@@ -180,11 +200,11 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
     }
   }
 
-  /** 下载 + 校验单条目 → dry-run 详情预览（零写入） */
-  const runDownload = async (itemId: string): Promise<void> => {
-    patch({ downloadingId: itemId, error: null })
+  /** 下载 + 校验单条目 → dry-run 详情预览（零写入）。自托管条目（带 repo）必须携带来源仓库。 */
+  const runDownload = async (item: MarketListItem): Promise<void> => {
+    patch({ downloadingId: item.id, error: null })
     try {
-      const detail = await api.download(itemId)
+      const detail = await api.download(item.id, item.repo)
       // 初始化逐分区批准表：低风险默认勾选，高风险默认不勾选（须逐项显式批准）
       patch({ downloadingId: null, detail, approvals: defaultApprovals(detail.plan) })
     } catch (err) {
@@ -222,7 +242,7 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
   const summary = marketListSummary(state.items, uiT)
   const categories = collectCategories(state.items)
   const detailView = state.detail !== null
-    ? marketDetailView(state.detail, marketUrl, state.items.length > 0 || state.detail.status !== 'valid', uiT)
+    ? marketDetailView(state.detail, state.detail.repo ?? marketUrl, state.items.length > 0 || state.detail.status !== 'valid', uiT)
     : null
   // 逐分区批准（安全不变式 (c)）：详情里列出 plan 分区，高风险默认不勾选、须逐项批准
   const approvalList = state.detail !== null ? approvalRows(state.detail.plan, state.approvals) : []
@@ -238,6 +258,43 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
       {/* 发布到市场向导：打开时独占整个市场视图（onBack 返回市场） */}
       {publishOpen ? (
         <PublishView api={api} importApi={importApi} t={t} onBack={() => { setPublishOpen(false) }} />
+      ) : (
+        <>
+      {/* 子视图切换（§4.6）：浏览市场 / 我的配置（低频面板状态镜像 runStore，切 tab/刷新不丢） */}
+      <div className={css.modeTabs} role="tablist">
+        <button
+          type="button" role="tab"
+          aria-selected={state.subView === 'browse'}
+          data-active={state.subView === 'browse' ? '' : undefined}
+          className={css.modeTab}
+          onClick={() => { patch({ subView: 'browse' }) }}
+        >
+          {t('myconfigs.tab.browse')}
+        </button>
+        <button
+          type="button" role="tab"
+          aria-selected={state.subView === 'myconfigs'}
+          data-active={state.subView === 'myconfigs' ? '' : undefined}
+          className={css.modeTab}
+          onClick={() => { patch({ subView: 'myconfigs' }) }}
+        >
+          {t('myconfigs.tab.myconfigs')}
+        </button>
+      </div>
+
+      {/* 「我的配置」子视图（登录卡 / 上传向导 / 已上传列表 / 装回本地） */}
+      {state.subView === 'myconfigs' ? (
+        <MyConfigsView
+          meApi={myConfigsApi}
+          api={api}
+          importApi={importApi}
+          syncApi={syncApi}
+          t={t}
+          myItems={state.myItems}
+          myItemsError={state.myItemsError}
+          onMyItemsChange={(items, error) => { patch({ myItems: items, myItemsError: error }) }}
+          onBack={() => { patch({ subView: 'browse' }) }}
+        />
       ) : (
         <>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
@@ -442,7 +499,7 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
                         </Badge>
                       </div>
                     </div>
-                    <Button disabled={state.downloadingId === it.id} onClick={() => { void runDownload(it.id) }}>
+                    <Button disabled={state.downloadingId === it.id} onClick={() => { void runDownload(it) }}>
                       {state.downloadingId === it.id ? <Spinner label={t('common.loading')} /> : t('list.download')}
                     </Button>
                   </div>
@@ -451,6 +508,8 @@ export function MarketPanel({ api, importApi, t }: MarketPanelProps) {
             </div>
           )}
         </Card>
+      )}
+        </>
       )}
         </>
       )}

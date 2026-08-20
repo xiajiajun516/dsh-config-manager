@@ -25,7 +25,7 @@ src/
 ├── security/         secret-scanner / redaction / zip-security / integrity / encryption（scrypt + AES-256-GCM）
 ├── adapters/         13 个真实配置适配器（settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/workspaces/credentials/pluginFiles/sessions/self）
 ├── sync/             同步体系：SyncEngine + GitTransport/WebDavTransport + AutoSyncScheduler + 配置/状态/历史/sync-selection
-├── market/           配置市场：GitMarketReader + index-parser + security 校验 + builtin 内置市场
+├── market/           配置市场：GitMarketReader + index-parser + security 校验 + builtin 内置市场；「一键上传/我的配置」：GitHub REST 薄客户端（github-repos.ts）+ 上传编排（my-repo.ts）+ 通用 git 写文件器（git-file-writer.ts）
 ├── migrations/       schema 迁移链（registry + v1→v2 占位）
 ├── profiles/         ProfileManager（保存/切换带 Preview+快照+回滚）
 ├── ui/               框架无关 UI 逻辑层（纯函数 + 控制器，无 React，node 可测）—— 见下「UI 分层」
@@ -50,7 +50,7 @@ docs/                 设计文档（docs/design/，现有 UI 与市场发布设
 | 导入九步向导 | `src/client/import/ImportWizardView.tsx`（阶段子页：`ConflictList.tsx`、`PathMappingForm.tsx`、`import-file-select.ts`） |
 | 快照恢复 | `src/client/snapshots/SnapshotsPanel.tsx` |
 | 远程同步 | `src/client/sync/SyncSettingsView.tsx`（+ `SyncConfirmView.tsx`、`SyncHistoryView.tsx`、`sync-view.ts` 纯函数模型、`history-model.ts`） |
-| 配置市场 | `src/client/market/MarketPanel.tsx`（+ `market-view.ts` 纯函数模型） |
+| 配置市场 | `src/client/market/MarketPanel.tsx`（+ `market-view.ts` 纯函数模型）；「我的配置」子视图 `src/client/market/MyConfigsView.tsx`（+ `my-configs-view.ts` 纯渲染模型、`my-configs-api.ts`，登录复用 sync device flow） |
 | **共享 UI 原语** | **`src/client/common/ui.tsx`（Button/Badge/Banner/Card/Spinner/Field/SectionTitle/Empty/Checkbox）+ `common/ErrorBanner.tsx`、`common/ProgressBar.tsx`、`common/ReportView.tsx`** |
 | 状态中枢 | `src/client/run-store.ts`（模块级单例 + sessionStorage，敏感字段白名单剔除） |
 | 数据访问 | `src/client/api.ts`、`sync/sync-api.ts`、`market/market-api.ts`（类型化 fetch 封装，实现 `src/ui/types.ts` 的 port 契约） |

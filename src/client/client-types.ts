@@ -24,6 +24,8 @@ export interface ConfigManagerSectionInjected {
   syncT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-sync'>
   /** 配置市场 API（备份与迁移页第 5 个 tab 使用，主 section 注册时注入） */
   marketApi: import('./market/market-api.ts').MarketApi
+  /** 「我的配置」API（MarketPanel 的「我的配置」子视图使用，主 section 注册时注入） */
+  myConfigsApi: import('./market/my-configs-api.ts').MyConfigsApi
   /** 配置市场 locale（config-manager-market 命名空间，主 section 注册时注入） */
   marketT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-market'>
 }
