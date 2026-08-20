@@ -73,6 +73,9 @@ export type MyItemStatus = 'not-listed' | 'pr-pending' | 'listed';
 export interface MyRepoForm {
   /** 配置名（预填 zip 文件名，可改）；id 由其派生稳定 slug */
   name: string;
+  /** 显式目标条目 id（**仅 update 模式**用：由列表「更新」按钮预填，避免靠 name→slug 猜测匹配；
+   *  上传（新条目）时省略；后端校验存在性，缺省回退 name slug 匹配（向后兼容） */
+  id?: string;
   description?: string;
   categories?: string[];
 }
@@ -341,10 +344,18 @@ export class MyRepoService {
       let version: string;
       const warnings: string[] = [];
       if (params.mode === 'update') {
-        const existing = userIndex.index.items.find((it) => it.id === baseId);
+        // 优先按显式 form.id 定位（「更新」按钮预填，避免 name→slug 猜测在中文名/改名场景失配）；
+        // 缺省回退 name slug 匹配（旧调用方向后兼容）。
+        const explicitId = typeof form.id === 'string' && form.id.trim() !== '' ? form.id.trim() : null;
+        const existing = explicitId !== null
+          ? userIndex.index.items.find((it) => it.id === explicitId)
+          : userIndex.index.items.find((it) => it.id === baseId);
         if (existing !== undefined) {
           itemId = existing.id; // id 保持不变
           version = bumpVersion(existing.version ?? '0.0.0');
+        } else if (explicitId !== null) {
+          // 明确要求更新一个不存在的 id → 报错（避免静默新建导致用户以为更新成功）
+          throw new MyRepoError(`未找到要更新的条目 ${explicitId}（可能已被移除），请刷新列表后重试`, 'item_not_found');
         } else {
           itemId = uniqueItemId(baseId, ids); // 名称变化 → 作为新条目
           version = '1.0.0';

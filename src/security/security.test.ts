@@ -700,6 +700,35 @@ test('scanner: isSensitiveFieldName / createSecretScanner（core 契约）', () 
   assert.ok(textHits.some((h) => h.path.startsWith('line:')));
 });
 
+test('scanText: 技能/代码文档中的示例命名不再误报（2026-08-20 优化）', () => {
+  // 真实技能文件（api-tester.md / frontend-developer.md 等）里出现过的代码示例形态 —— 全部应放行
+  const skillDoc = [
+    'let authToken: string;',                       // 类型声明（值=string 类型词）
+    'password: process.env.TEST_USER_PASSWORD',      // 代码引用（含 . 与 (）—— 注意 field: value 正则截取 value 为 process.env.TEST_USER_PASSWORD
+    'authToken = data.token;',                       // 赋值 + 成员访问
+    'const token = loginResponse.json(\'token\');',  // 方法调用
+    'key={virtualItem.key}',                         // React key prop（key 不入敏感名单）
+    'queryKey: [\'products\'],',                     // 数组字面量
+    'token: your-token-here',                        // 占位符
+    'api_key: <your-key>',                           // 占位符
+    'max_tokens: 100',                               // 值=数字…… 但正则只匹配 \w+；"100" 是短标识符？100 长3 <20 → 放行 ✓
+  ].join('\n');
+  const hits = scanText(skillDoc);
+  assert.equal(hits.length, 0, `技能文档示例不应误报，实际: ${JSON.stringify(hits)}`);
+});
+
+test('scanText: 真实字面量密钥仍然拦截（优化不回退安全）', () => {
+  // 字段名敏感 + 真正的字面量长串 → 报
+  const real = [
+    'password: s3cretP@ssw0rdXyZ2024',              // 字段 password + 混合字面量长串
+    'client_secret: abcdef1234567890abcdef12345678', // 字段敏感 + 长混合串
+    '"apiKey": "sk-proj-abcdef1234567890"',          // JSON 形态 + sk- 值形状（强信号）
+    'token=ghp_abcdefghijklmnopqrstuvwxyzABCDEF',    // GitHub PAT 值形状
+  ].join('\n');
+  const hits = scanText(real);
+  assert.ok(hits.length >= 4, `真实密钥应全部拦截，实际: ${JSON.stringify(hits)} (${hits.length})`);
+});
+
 /* ================= redaction ================= */
 
 test('redaction: 结构化字段三形态 + 值形状 + URL query', () => {

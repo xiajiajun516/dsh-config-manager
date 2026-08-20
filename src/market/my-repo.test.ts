@@ -248,6 +248,38 @@ test('my-repo: 更新 → id 不变、version 纯自动 +1、updatedAt 刷新', 
   assert.equal(forkIndex.items.find((it) => it.id === 'my-config')!.version, '1.0.2');
 });
 
+test('my-repo: update 显式 form.id → 按 id 定位（name→slug 失配时不再误为新建）', async () => {
+  // 模拟中文名条目：id=config-abc12345（name slug 折叠为空 → hash 兜底），更新时 name 可随意改
+  const existing = USER_INDEX_WITH([
+    { id: 'config-abc12345', name: '我的配置', version: '2.1.0', author: LOGIN },
+  ]);
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? existing : OFFICIAL_INDEX),
+  });
+  // form.id 显式指向条目 id；name 被用户改了也不影响定位
+  const result = await h.service.update({ zipBytes: ZIP_BYTES, form: form({ id: 'config-abc12345', name: '我的配置 v2' }) });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.itemId, 'config-abc12345', '必须按显式 id 更新');
+  assert.equal(result.version, '2.1.1', 'version 基于显式 id 条目的旧版本 +1');
+
+  const userIndex = indexJsonOf(h.gitCalls[0]!);
+  assert.ok(userIndex.items.some((it) => it.id === 'config-abc12345' && it.version === '2.1.1'), '显式 id 条目被更新');
+  assert.equal(userIndex.items.filter((it) => it.id === 'config-abc12345').length, 1, '不得新增重复条目');
+});
+
+test('my-repo: update 显式 form.id 但条目不存在 → 明确报错（不静默新建）', async () => {
+  const existing = USER_INDEX_WITH([{ id: 'other-item', name: 'Other', version: '1.0.0', author: LOGIN }]);
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? existing : OFFICIAL_INDEX),
+  });
+  const result = await h.service.update({ zipBytes: ZIP_BYTES, form: form({ id: 'gone-item', name: 'Gone' }) });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'item_not_found');
+  assert.equal(h.gitCalls.length, 0, '未找到条目必须零推送');
+});
+
 /* ---------------------------------------------------------------- PR 复用与重开 */
 
 test('my-repo: PR 复用（open PR 未合并）→ 不重复创建', async () => {

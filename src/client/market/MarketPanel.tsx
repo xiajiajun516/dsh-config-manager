@@ -285,7 +285,6 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           myItems={state.myItems}
           myItemsError={state.myItemsError}
           onMyItemsChange={(items, error) => { patch({ myItems: items, myItemsError: error }) }}
-          onBack={() => { patch({ subView: 'browse' }) }}
         />
       ) : (
         <>

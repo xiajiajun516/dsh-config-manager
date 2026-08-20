@@ -69,19 +69,23 @@ export function deriveLoginState(input: {
 /* ---------------------------------------------------------------- 上传表单模型 */
 
 /**
- * 一键上传表单（§2.4 用户输入最小化）：仅名称（必填，预填 zip 文件名可改）/
+ * 一键上传/更新表单（§2.4 用户输入最小化）：仅名称（必填，预填 zip 文件名可改）/
  * 描述（可选）/ 类别（可选，逗号分隔原始文本）。id/author/version/updatedAt
  * 均由系统自动生成，不在表单里。
+ * `id` 为**更新模式内部字段**（「更新」按钮预填条目 id，避免后端靠 name→slug 猜错），
+ * 不渲染为输入框；上传模式恒为空串。
  */
 export interface MyConfigForm {
   name: string
   description: string
   /** 类别原始文本（逗号分隔；UI 解析为数组，空串 = 无类别） */
   categories: string
+  /** 更新目标条目 id（update 模式预填；upload 模式空串） */
+  id: string
 }
 
 /** 空表单初值（React 壳 useState 初始 + 测试用）。 */
-export const EMPTY_MY_CONFIG_FORM: MyConfigForm = { name: '', description: '', categories: '' }
+export const EMPTY_MY_CONFIG_FORM: MyConfigForm = { name: '', description: '', categories: '', id: '' }
 
 /** 表单字段错误（null = 该字段合法；文案已翻译）。 */
 export interface MyConfigFormErrors {

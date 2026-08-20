@@ -62,8 +62,6 @@ export interface MyConfigsViewProps {
   myItemsError: string | null
   /** 列表状态上抛（MarketPanel 统一 commit/patch 镜像 runStore，切 tab 不丢） */
   onMyItemsChange: (items: MyItemEntry[] | null, error: string | null) => void
-  /** 返回市场浏览视图 */
-  onBack: () => void
 }
 
 /* -------------------------------- GitHub device flow 状态（仅内存，token 只存宿主） */
@@ -124,7 +122,7 @@ interface InstallState {
   error: string | null
 }
 
-export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myItemsError, onMyItemsChange, onBack }: MyConfigsViewProps) {
+export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myItemsError, onMyItemsChange }: MyConfigsViewProps) {
   const uiT = meApi.t // 展示层翻译器（myConfigs.* 键经 UiT；同 MarketPanel 用 api.t）
 
   /* ---------------- 登录状态（/me/status；statusFailed=401 → token 失效） ---------------- */
@@ -305,6 +303,8 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
     const categories = parseCategories(wizard.form.categories)
     const form = {
       name: wizard.form.name.trim(),
+      // update 模式携带显式条目 id（后端按 id 更新，避免 name→slug 猜测失配）
+      ...(wizard.mode === 'update' && wizard.form.id !== '' ? { id: wizard.form.id } : {}),
       ...(wizard.form.description.trim() !== '' ? { description: wizard.form.description.trim() } : {}),
       ...(categories.length > 0 ? { categories } : {}),
     }
@@ -321,11 +321,12 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
     }
   }
 
-  /** 行操作：更新 → 打开向导，预填条目信息（name/description/categories） */
+  /** 行操作：更新 → 打开向导，预填条目信息（id/name/description/categories；id 供后端精确定位） */
   const startUpdate = (entry: MyItemEntry): void => {
     setWizard({
       ...initialWizard('update'),
       form: {
+        id: entry.id,
         name: entry.name,
         description: entry.description ?? '',
         categories: (entry.categories ?? []).join(', '),
@@ -727,9 +728,6 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
 
   return (
     <div className={css.viewBody}>
-      <div className={css.actionRow}>
-        <Button onClick={onBack}>{t('myconfigs.back')}</Button>
-      </div>
       <SectionTitle title={t('myconfigs.tab.myconfigs')} subtitle={t('myconfigs.login.hint')} />
       {renderLoginCard()}
       {/* 已登录才允许上传 / 查看列表 / 装回本地 */}

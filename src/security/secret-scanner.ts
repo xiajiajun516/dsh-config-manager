@@ -225,7 +225,44 @@ const FIELD_VALUE_RE = [
   { re: /([A-Za-z0-9_.\-]+)\s*:\s*([^\s,;}]+)/g, json: false },
 ] as const;
 
-/** 文本级扫描：逐行找「敏感字段名 = 值」与「值形状」命中（只报告，不修改文本） */
+/** 占位符 / 示例形态：xxx、your-token、<...>、example、sample、dummy、placeholder、... */
+const PLACEHOLDER_RE = /^(x{3,}|your[-_ ]?[\w]+|their[-_ ]?[\w]+|<[^>]+>|example|examples?|sample|dummy|placeholder|som[e]thing|^\u2026)/i;
+
+/** 类型/关键字形态（代码声明，如 `authToken: string`、`token: null`） */
+const TYPE_KEYWORD_RE = /^(string|number|boolean|object|array|any|unknown|null|undefined|void|true|false|required|optional)$/i;
+
+/** 代码表达式/引用形态：值里出现调用/成员访问/引号/运算符/空白等 → 是代码而非字面量密钥 */
+function isCodeExpressionValue(value: string): boolean {
+  // 方法调用 / 成员访问：data.token、process.env.X、wx.getStorageSync(...)、a.b(...)
+  if (/[.([\]'"`]/.test(value)) return true
+  // 赋值/比较/模板：a=b、a&&b 等
+  if (/[=+*/%<>!&|?]+/.test(value)) return true
+  // 含空白 → 短语/语句而非单个字面量
+  if (/\s/.test(value)) return true
+  return false
+}
+
+/** 值是否为「字面量密钥」：既不是代码表达式，也不是占位符/类型词/短标识符/环境引用。
+ *  只有字段名敏感 **且** 值像真实字面量凭据时才报告 —— 消除技能文档中
+ *  `authToken: string`、`password: process.env.X`、`token: data.token` 等代码示例误报。 */
+function isLiteralSecretValue(value: string): boolean {
+  if (value === '') return false
+  // 值形状强信号（sk- / ghp_ / AKIA / JWT / PEM / Bearer）—— 任何字段都视为真凭据
+  if (matchSecretValuePattern(value) !== null) return true
+  if (PLACEHOLDER_RE.test(value)) return false
+  if (TYPE_KEYWORD_RE.test(value)) return false
+  if (isCodeExpressionValue(value)) return false
+  if (isEnvVarName(value)) return false
+  // 纯字母数字短标识符（变量名/普通词，如 authToken、data、key）→ 非密钥
+  if (/^[A-Za-z0-9_]+$/.test(value) && value.length < 20) return false
+  // 其余：混合字符长串（含分隔符/符号）≥ 8 字符 → 疑似真实字面量凭据
+  return value.length >= 8
+}
+
+/** 文本级扫描：逐行找「敏感字段名 + 疑似真实字面量凭据」与「值形状」命中（只报告，不修改文本）。
+ *  2026-08-20 优化：字段名命中不再是充分条件 —— 值必须是「非代码引用 / 非占位符 / 非类型词 /
+ *  非短标识符」的字面量，消除技能/代码文档中 `token:`/`password:` 等示例命名的误报；
+ *  值形状（sk-/ghp_/AKIA/JWT/PEM/Bearer）保持强信号必报。 */
 export function scanText(text: string, opts: SecretScannerOptions = {}): SensitiveHit[] {
   const hits: SensitiveHit[] = [];
   const extra = opts.extraFieldNames ?? [];
@@ -243,16 +280,12 @@ export function scanText(text: string, opts: SecretScannerOptions = {}): Sensiti
         const field = m[1]!;
         const value = m[2]!;
         if (!isSensitiveFieldName(field, extra)) continue;
-        if (json) {
-          // JSON 形态下引号内值才报告（引用名豁免由调用方结合场景决定，这里保守报告）
-          hits.push({ path: linePath, field });
-          continue;
-        }
-        if (isEnvVarName(value)) continue; // 引用名不报告
+        // 值必须是「疑似字面量凭据」才报告（消除代码示例/占位符误报）
+        if (!isLiteralSecretValue(value)) continue;
         hits.push({ path: linePath, field });
       }
     }
-    // 值形状（字段名无关）
+    // 值形状（字段名无关；整行 trim 后匹配 sk-/ghp_/JWT/PEM/Bearer 等强信号）
     if (valuePatterns) {
       const trimmed = line.trim();
       const name = matchSecretValuePattern(trimmed);

@@ -129,7 +129,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.39'
+const PLUGIN_VERSION = '0.1.40'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -1283,12 +1283,15 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
  * name 必填（非空字符串，trim 后取）；description 可选字符串；categories 可选字符串数组。
  * 非法 → null（调用方返回 400）。用户可填内容就这三项，其余元数据全自动。
  */
-function parseMeForm(raw: unknown): { name: string; description?: string; categories?: string[] } | null {
+function parseMeForm(raw: unknown): { name: string; id?: string; description?: string; categories?: string[] } | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const obj = raw as Record<string, unknown>
   const name = typeof obj['name'] === 'string' ? obj['name'].trim() : ''
   if (name === '') return null
-  const form: { name: string; description?: string; categories?: string[] } = { name }
+  const form: { name: string; id?: string; description?: string; categories?: string[] } = { name }
+  // update 模式的可选显式 id（「更新」按钮预填；upload 时省略）
+  const idRaw = obj['id']
+  if (typeof idRaw === 'string' && idRaw.trim() !== '') form.id = idRaw.trim()
   const description = obj['description']
   if (typeof description === 'string' && description.trim() !== '') form.description = description.trim()
   const categoriesRaw = obj['categories']
