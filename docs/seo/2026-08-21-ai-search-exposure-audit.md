@@ -45,15 +45,17 @@ awesome-dsh-plugins 的收录描述（第三方语义信号，对 AI 召回是�
 4. **package.json description 重写**：去乱码、去内部备注、关键词密集但自然。
 5. **package.json keywords 扩至 17 个**：新增 dsh-plugin / restore / export / import / migrate / sync / webdav / mcp / skills / configuration。
 
-## 需人工在 GitHub 设置页完成的（仓库外，无 token 无法自动改）
+## GitHub Description / Topics（已落地 ✅ 2026-08-21，经本机 `gh` CLI 完成）
 
-### GitHub Description（建议值）
+> 方式：本机 `gh` CLI 已认证 `xiajiajun516`（scope 含 `repo`，token 存系统 keyring，未入聊天/日志）；`gh repo edit` 设置 description，`gh api --method PUT .../topics` 整组替换 topics。
+
+### GitHub Description（已设置）
 
 ```text
 DeepSeek Harness (DSH) backup & restore plugin — export, import, migrate and sync your complete DSH configuration, plugins, MCP servers, skills and workspace. One-click migration to another machine.
 ```
 
-### GitHub Topics（建议 15 个，`dsh-plugin` 必须保留——生态发现依赖该 topic）
+### GitHub Topics（已设置 15 个，`dsh-plugin` 保留——生态发现依赖该 topic）
 
 ```text
 deepseek-harness, dsh, dsh-plugin, deepseek, backup, restore, configuration, config-manager, migration, export, import, sync, mcp, skills, webdav
