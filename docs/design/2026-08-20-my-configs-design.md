@@ -188,7 +188,8 @@ dsh-config-manager 的「发布到市场」向导（`src/client/market/PublishVi
 
 ### 4.6 UI（client 半，React 壳只装配）
 
-- `MarketPanel.tsx`：顶部新增子视图切换「浏览市场 / 我的配置」（与现有 PublishView 打开模式同风格）；
+- `MarketPanel.tsx`：顶部新增子视图切换「浏览市场 / 我的配置」（与现有 PublishView 打开模式同风格）；「浏览市场」头部**精简操作卡**：只保留「拉取最新 / 浏览」按钮，不展示仓库 URL / 官方徽章 / 市场名 / 条目数 / 状态行（2026-08-21 UI 精简）；
+  - **启动后首次打开自动更新**：Host 进程内存标记 `marketBootAutoRefreshed`（dsh 重启后归零；`/market/refresh` 成功后置位）随 `/market/status` 以 `bootAutoRefreshed` 返回；MarketPanel 挂载时读该标记，未刷新过则自动执行一次「拉取最新」（复用 `runRefresh`，失败不置位 → 下次打开重试）；
 - 新增 `src/client/market/MyConfigsView.tsx`：
   - **登录卡**：未登录 → 「使用 GitHub 登录」（device flow：展示一次性用户码 + 授权页链接 + 轮询，交互与 SyncSettingsView 一致）；已登录 → 显示 `@login` + **固定目标仓库** `dsh-config-market` 的状态（只读展示，无任何编辑入口）；
   - **上传向导**：复用 PublishView 前两步（选 zip → 本地校验）+ 精简表单 + 第 3 步「一键上传」（调用 `/me/upload`）→ 结果卡（PR 链接 / 仓库链接 / sha256 / 分区）。表单仅含：**名称**（预填 zip 文件名，可改）、**描述**（可选）、**分类**（可选）；id / author / version / updatedAt 以「系统自动」徽章展示，无需填写；
@@ -237,7 +238,85 @@ dsh-config-manager 的「发布到市场」向导（`src/client/market/PublishVi
 
 ### 4.11 本次不实现（留作第二版）
 
-- 删除 / 下线条目（含从官方市场移除）；
+- ~~删除 / 下线条目（含从官方市场移除）~~ → **已实现（见 4.14）**；
 - 私有仓库选项（进市场必须公开；不公开的仓库可后续做「个人私密备份」通道）；
 - 一键提交到多个官方市场；
 - 市场收录审核流（合并权限仍归官方仓库 owner）。
+
+---
+
+## 5. 第二版改造（2026-08-20 用户确认：异步收录 + 向导持久化 + 删除/下架 + 更新直达表单）
+
+### 5.1 动机
+
+1. **上传被 fork 拖住**：upload/update 同步等待 `ensureFork`（GitHub 服务器端复制仓库，首次可能排队数分钟），用户看到「上传完但一直转圈」。根因：fork 复制慢拖住同步请求 + `findUserFork` 翻上游 forks 列表（per_page=100 无翻页）可能漏检已 fork 的仓库。
+2. **向导状态丢失**：MyConfigsView 的 wizard（选 zip / 表单 / 结果卡）为组件内 `useState`，切 tab / 刷新即丢（列表 myItems 早已镜像 runStore，向导没有）。
+3. **缺删除能力**：无法从配置仓库移除条目（含官方市场收录的清理）。
+
+### 5.2 异步收录（upload/update 拆分）
+
+```
+upload/update（同步，秒级）：
+①-⑥ 不变：登录 → 读用户 index → 元数据 → prepare 校验 → ensure 用户仓库 → 写用户仓库 + push
+     → 返回 UploadResult{ ok, itemId, ..., listing:'pending', prNumber:null, prUrl:null }
+     → 同时 fire-and-forget 启动后台任务 launchListing(action:'list')
+
+后台任务 finishListing（异步，不阻塞用户）：
+⑦ ensureFork（复用/新建+轮询就绪）→ ⑧ 读官方 index → upsert 条目（带 repo 引用）→
+   写 fork 分支 dsh-market-sync/<id>（workDir 按 itemId 隔离 fork-<login>/<id>）force push →
+   ⑨ 开/复用收录 PR → 任务表置 done
+失败 → 任务表置 failed（redact 后错误）；进程重启 → 任务表丢失，靠列表徽章回退 + relist 补收录
+```
+
+- **任务表**：内存 `Map<itemId, ListingJob>`（`src/market/my-repo.ts`）；同 itemId 已有 pending 任务不重复启动（幂等）。
+- **查询**：`POST /me/listing { itemId }` → `listingStatus()`：任务表命中直接返回；未命中回退 GitHub 实况（官方 index 含 id → done；open PR 匹配 → done）；无任务无实况 → null。
+- **重试**：`POST /me/relist { itemId }` → 重新启动收录（复用已存在 fork / open PR，天然幂等）；条目不存在 → 404 item_not_found。
+- **fork 查找优化**（`github-repos.ts`）：`findUserFork`（翻上游 forks 列表）→ `findOwnFork`（直查 `GET /repos/<login>/<repo>`，校验 fork:true + parent.full_name 匹配；同名但非本上游 fork → 显式报错 `fork_name_conflict`）；轮询超时 180s→300s、间隔 2s→5s。
+- **并发**：写用户仓库（`user-<login>` 共享工作副本）按 login 串行队列（`withLoginLock`）；fork 工作副本按 itemId 隔离。
+- **失败可观测**：结果卡轮询 `/me/listing`（3s × 40 次）展示「收录处理中 / 失败原因 + 重新提交收录」；列表徽章（未收录/待审核/已收录）为最终状态。
+
+### 5.3 向导持久化（runStore.myWizard）
+
+- `my-configs-view.ts`：`MyWizardState`（全量，含瞬态 validating/running/formErrors）↔ `MyWizardSlice`（持久化切片，去瞬态）转换：`toMyWizardSlice` / `restoreMyWizard`（null → EMPTY；非 null → 瞬态归零 + formErrors 重算）/ `initialWizard(mode)` / `EMPTY_MY_WIZARD`。
+- `run-store.ts`：`MarketStoreSlice.myWizard`（仅非敏感：step/zipPath/fileName/validated/validationError/form/result/error）；`toPersistedState` 对 market 整体落盘 → 自动进 sessionStorage（字段全部非敏感；错误文本镜像前已 redact）。
+- `MyConfigsView.tsx`：wizard 改为**受控**（读 `myWizard` props，`commitWizard` 上抛镜像）；挂载恢复：若持久化结果卡仍是 pending → 自动恢复 `/me/listing` 轮询（仿 resume，避免刷新后永久 pending）。
+
+### 5.4 更新直达表单页
+
+- `startUpdate` 直接进入 `step='form'`（预填 id/name/description/categories），不再停在「选 ZIP」；
+- 表单页内嵌「选择新 ZIP」入口（update 模式显示）：选 zip 自动校验（`runValidateWith`），校验通过才可「一键更新」；
+- 「重新选择」为**轻量重置**（只清 zip/校验，保留预填表单），避免误清用户已填信息；
+- 「取消」为**放弃更新**（`cancelUpdate` → `initialWizard('upload')`）：清空预填/暂存/校验态，向导回到默认「一键上传」初始态；运行/校验中禁用防并发。
+
+### 5.5 删除条目（含下架 PR）
+
+```
+POST /me/delete { itemId } → deleteItem()：
+① 读用户仓库 index → 定位条目（无 → 404 item_not_found）
+② 移除条目 + 删 items/<id>/ 目录（工作副本先 fs.rm，git add -A 捕获删除）→ 写回 index.json + push（同步，秒级）
+③ 收录状态处理：
+   - 已收录（官方 index 含 id）→ 后台异步提「下架 PR」（独立分支 dsh-market-delist/<id>，
+     从官方 index 移除；不依赖用户仓库条目仍存在）
+   - 待审核（有 open 收录 PR）→ 同步关闭该 PR（PATCH /pulls/{number} state=closed，新增 closePullRequest）
+   - 未收录 / 无 PR → 无额外操作
+返回 DeleteResult{ ok, itemId, delisted, prNumber, prUrl, warnings }
+```
+
+- **下架分支独立** `dsh-market-delist/<itemId>`：避免 `listItems` 的 pr-pending 判定（按 head=<login>:<sync 分支> 过滤）把下架 PR 误判为收录待审、以及删除后重传同 id 时 PR 复用错乱。
+- **UI**：列表行 `Button variant="danger"` → **行内两步确认**（新 Pattern，已写入 DESIGN.md §14）→ 确认后调 `/me/delete` → 刷新列表；结果提示（下架 PR 已提交 / 收录 PR 已关闭）。
+- **一致性窗口**：删除后到官方 index 移除前（下架 PR 人工合并），官方市场条目仍显示但下载 404 —— UI 明示「合并前市场可能仍显示」。
+
+### 5.6 新增 API 一览
+
+| 端点 | 请求 | 响应 | 说明 |
+|---|---|---|---|
+| `POST /me/listing` | `{ itemId }` | `ListingStatusResponse \| null` | 收录/下架任务状态（任务表 → 实况回退） |
+| `POST /me/relist` | `{ itemId }` | `ListingStatusResponse` | 重新提交收录（幂等；条目不存在 404） |
+| `POST /me/delete` | `{ itemId }` | `DeleteResult` | 删除条目（关 PR / 异步下架） |
+
+### 5.7 测试更新
+
+- `my-repo.test.ts`：upload/update 改断言同步段（pending）+ `waitForListing` 等后台终态；新增删除（未收录关 PR / 已收录下架 / 不存在）、relist 幂等、listingStatus 回退实况；mock 用户 index 改为动态（gitWriter 写入后 readFile 读最新）。
+- `github-repos.test.ts`：ensureFork 直查（复用/404 创建/同名非 fork 冲突/parent 不匹配）、closePullRequest。
+- `my-configs-view.test.ts`：toMyWizardSlice / restoreMyWizard / initialWizard（瞬态不落盘、formErrors 重算）。
+- 验证：`npm run typecheck` + `npm test` + `npm run build`。

@@ -21,6 +21,7 @@ npm run smoke                    # 仅核心引擎冒烟测试
 src/
 ├── core/       核心引擎（与 DSH 运行时解耦，ConfigAdapter/HostContext 接口 + 内存 mock 可测）
 │               exporter / analyzer(三段式) / importer(14步) / backup(快照) / rollback(逆序补偿)
+│               cache-cleaner（缓存自动清理：tmp 暂存 / exports 导出副本 / market cache+work，保留期可配）
 ├── schema/     领域类型 / Manifest / 版本判定（集中，CURRENT_SCHEMA_VERSION=1）
 ├── security/   secret-scanner / redaction / zip-security / integrity / encryption(scrypt+AES-256-GCM)
 ├── adapters/   13 个真实配置适配器（settings/ui/providers/plugins/mcp/prompts/skills/

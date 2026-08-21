@@ -19,6 +19,7 @@ import {
 } from './sync-view.ts'
 import type { ApplyItemsResponse } from './sync-api.ts'
 import type { TranslateNS } from '../client-types.ts'
+import type { SyncConfirmDecisions } from '../run-store.ts'
 import css from '../config-manager.module.css'
 
 export interface SyncConfirmViewProps {
@@ -33,6 +34,10 @@ export interface SyncConfirmViewProps {
   compatibility?: 'excellent' | 'good' | 'partial' | 'unsupported'
   /** 翻译器。 */
   t: TranslateNS<'config-manager-sync'>
+  /** 逐项决策（受控：来自 runStore.sync.confirmDecisions；null = 无持久化决策，按 defaultAdopt 初始化） */
+  decisions: SyncConfirmDecisions | null
+  /** 决策变更上抛（SyncSettingsView patch 镜像 runStore，切 tab/刷新不丢） */
+  onDecisionsChange: (decisions: SyncConfirmDecisions) => void
   /** 用户取消确认后回调（复位到空闲态）。 */
   onCancel: () => void
   /** 回滚成功后回调（清空 lastRestoreId）。 */
@@ -49,13 +54,17 @@ interface ItemState {
 }
 
 export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
-  const { api, syncSessionId, snapshotId, items, needsReview, compatibility, t, onCancel, onRollbackDone } = props;
-  // 逐项决策状态（初始 = defaultAdopt）
-  const [states, setStates] = useState<Record<string, ItemState>>(() => {
-    const init: Record<string, ItemState> = {};
-    for (const it of items) init[it.itemId] = { adopted: it.defaultAdopt, resolution: undefined };
-    return init;
-  });
+  const { api, syncSessionId, snapshotId, items, needsReview, compatibility, t, decisions, onDecisionsChange, onCancel, onRollbackDone } = props;
+  // 逐项决策状态（受控：来自 props.decisions；null 时按 defaultAdopt 初始化；持久化决策覆盖同名项）
+  const states = useMemo<Record<string, ItemState>>(() => {
+    const base: Record<string, ItemState> = {};
+    for (const it of items) base[it.itemId] = { adopted: it.defaultAdopt, resolution: undefined };
+    if (decisions === null) return base;
+    for (const [id, d] of Object.entries(decisions)) {
+      if (base[id] !== undefined) base[id] = { adopted: d.adopted, resolution: d.resolution };
+    }
+    return base;
+  }, [items, decisions]);
   // 执行阶段：'idle' | 'applying' | 'done' | 'failed' | 'cancelling'
   const [phase, setPhase] = useState<'idle' | 'applying' | 'done' | 'failed' | 'cancelling'>('idle');
   const [applyResult, setApplyResult] = useState<ApplyItemsResponse | null>(null);
@@ -69,27 +78,24 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   const displayItems = useMemo(() => reviewItems(items), [items]);
 
   const setAdopted = (itemId: string, adopted: boolean): void => {
-    setStates((prev) => ({ ...prev, [itemId]: { ...prev[itemId], adopted } }));
+    const existing: ItemState = states[itemId] ?? { adopted: false, resolution: undefined };
+    onDecisionsChange({ ...(decisions ?? {}), [itemId]: { adopted, resolution: existing.resolution } });
   };
 
   const setResolution = (itemId: string, resolution: ConflictResolution): void => {
-    setStates((prev) => {
-      const existing: ItemState = prev[itemId] ?? { adopted: false, resolution: undefined };
-      return { ...prev, [itemId]: { ...existing, resolution } };
-    });
+    const existing: ItemState = states[itemId] ?? { adopted: false, resolution: undefined };
+    onDecisionsChange({ ...(decisions ?? {}), [itemId]: { adopted: existing.adopted, resolution } });
   };
 
   // 批量决策（仅作用于 Conflict 项；非 Conflict 项的 adopt 保持默认）
-  const applyBulkDecision = (decisions: readonly { itemId: string; resolution: ConflictResolution; adopt: boolean }[]): void => {
-    if (decisions.length === 0) return;
-    setStates((prev) => {
-      const next: Record<string, ItemState> = { ...prev };
-      for (const d of decisions) {
-        const existing: ItemState = prev[d.itemId] ?? { adopted: false, resolution: undefined };
-        next[d.itemId] = { ...existing, resolution: d.resolution, adopted: d.adopt };
-      }
-      return next;
-    });
+  const applyBulkDecision = (bulk: readonly { itemId: string; resolution: ConflictResolution; adopt: boolean }[]): void => {
+    if (bulk.length === 0) return;
+    const next: SyncConfirmDecisions = { ...(decisions ?? {}) };
+    for (const d of bulk) {
+      const existing: ItemState = states[d.itemId] ?? { adopted: false, resolution: undefined };
+      next[d.itemId] = { ...existing, resolution: d.resolution, adopted: d.adopt };
+    }
+    onDecisionsChange(next);
   };
 
   const runApply = async (): Promise<void> => {

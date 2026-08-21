@@ -5,9 +5,10 @@
  *   getUser()                  验证 token（GET /user）并取回登录名；
  *   repoExists()               判断仓库是否存在（200 / 404）；
  *   createPublicRepo()         创建公开仓库（POST /user/repos，public + auto_init）；
- *   ensureFork()               复用用户已 fork 的仓库 / 新建 fork 并轮询就绪（fork 异步创建）；
+ *   ensureFork()               直查用户同名仓库复用已 fork / 新建 fork 并轮询就绪（fork 异步创建）；
  *   readFile()                 读仓库内文本文件（contents API，base64 解码）；
  *   openPullRequest()          开 PR（POST /pulls；缺省目标 = 固定官方收录仓库）；
+ *   closePullRequest()         关闭 PR（PATCH /pulls/{number}，state=closed）；
  *   listOpenPullRequests()     列 open PR（可带 head 过滤，如 `<login>:<branch>`）。
  *
  * 与 GitTransport 的分工：本模块只做 REST 元操作；内容推送（clone → 写文件 → commit →
@@ -37,10 +38,11 @@ export const MARKET_UPSTREAM_OWNER = 'xiajiajun516';
 /** 官方收录目标仓库名（见 MARKET_UPSTREAM_OWNER） */
 export const MARKET_UPSTREAM_REPO = 'dsh-config-market';
 
-/** fork 异步创建轮询缺省间隔（毫秒） */
-const DEFAULT_POLL_INTERVAL_MS = 2_000;
-/** fork 异步创建轮询缺省超时（毫秒）：GitHub 首次 fork 需复制仓库内容，可能超过 60s；180s 兜底后抛可重试错误 */
-const DEFAULT_POLL_TIMEOUT_MS = 180_000;
+/** fork 异步创建轮询缺省间隔（毫秒）：后台收录模式下放宽粒度，减少 API 调用 */
+const DEFAULT_POLL_INTERVAL_MS = 5_000;
+/** fork 异步创建轮询缺省超时（毫秒）：GitHub 首次 fork 需复制仓库内容，可能超过 60s；
+ *  异步收录后不阻塞用户请求，300s 作保险兜底，超时后抛可重试错误 */
+const DEFAULT_POLL_TIMEOUT_MS = 300_000;
 
 /** GET /user 的投影（只保留编排 / UI 需要的最小字段，不携带任何凭据） */
 export interface GitHubUserInfo {
@@ -96,9 +98,9 @@ export interface GitHubAuthRestOptions {
   fetcher?: typeof fetch;
   /** 可注入时钟（epoch ms；fork 轮询超时判定用）；缺省 = Date.now */
   now?: () => number;
-  /** fork 就绪轮询间隔（毫秒）；缺省 2000；测试可设 0 避免真实等待 */
+  /** fork 就绪轮询间隔（毫秒）；缺省 5000；测试可设 0 避免真实等待 */
   pollIntervalMs?: number;
-  /** fork 就绪轮询超时（毫秒）；缺省 60000 */
+  /** fork 就绪轮询超时（毫秒）；缺省 300000（后台异步收录，不阻塞用户） */
   pollTimeoutMs?: number;
 }
 
@@ -162,6 +164,14 @@ function ownerLoginOf(obj: Record<string, unknown>): string | undefined {
   if (owner === null || typeof owner !== 'object' || Array.isArray(owner)) return undefined;
   const login = (owner as Record<string, unknown>)['login'];
   return typeof login === 'string' && login !== '' ? login : undefined;
+}
+
+/** 嵌套 parent.full_name（非 fork 仓库 parent 为 null；fork 的 parent 是直接上游） */
+function parentFullNameOf(obj: Record<string, unknown>): string | undefined {
+  const parent = obj['parent'];
+  if (parent === null || typeof parent !== 'object' || Array.isArray(parent)) return undefined;
+  const fullName = (parent as Record<string, unknown>)['full_name'];
+  return typeof fullName === 'string' && fullName !== '' ? fullName : undefined;
 }
 
 /** 路径片段编码（owner/repo/ref 单段） */
@@ -277,16 +287,17 @@ export class GitHubAuthRest {
 
   /**
    * 确保存在「当前用户 fork 的 <owner>/<repo>」：
-   * 1. 优先复用：列出上游仓库 forks，命中 owner.login === 当前登录名的 fork → 直接返回；
+   * 1. 优先复用：直查 GET /repos/<login>/<repo>，校验 fork:true + parent.full_name 匹配
+   *    （不翻上游 forks 分页列表，避免 per_page=100 上限下旧 fork 被挤出首页而漏检）→ 直接返回；
    * 2. 否则创建 fork（POST /forks，异步）并轮询 GET /repos/<login>/<repo> 直到就绪
-   *    （owner.login 匹配 + fork:true）；超时抛可重试错误（fork_timeout）。
+   *    （owner.login 匹配 + fork:true + parent 匹配）；超时抛可重试错误（fork_timeout）。
    */
   async ensureFork(owner: string, repo: string): Promise<GitHubForkInfo> {
     const me = await this.getUser();
-    const existing = await this.findUserFork(owner, repo, me.login);
+    const existing = await this.findOwnFork(owner, repo, me.login);
     if (existing !== null) return existing;
     await this.createFork(owner, repo);
-    return this.waitForkReady(me.login, repo);
+    return this.waitForkReady(me.login, repo, owner);
   }
 
   /**
@@ -328,6 +339,12 @@ export class GitHubAuthRest {
     return toPullInfo(data);
   }
 
+  /** 关闭 PR（PATCH /pulls/{number}，state=closed）；返回关闭后的 PR 信息。 */
+  async closePullRequest(owner: string, repo: string, number: number): Promise<GitHubPullRequestInfo> {
+    const data = await this.requestJson('PATCH', `/repos/${seg(owner)}/${seg(repo)}/pulls/${number}`, { state: 'closed' });
+    return toPullInfo(data);
+  }
+
   /** 列 open PR（GET /pulls?state=open）；head 可选（跨仓库形态 `<login>:<branch>`，URL 编码传入）。 */
   async listOpenPullRequests(owner: string, repo: string, head?: string): Promise<GitHubPullRequestInfo[]> {
     const query = new URLSearchParams();
@@ -343,25 +360,39 @@ export class GitHubAuthRest {
 
   /* ---------------------------------------------------------------- 内部实现 */
 
-  /** 上游仓库 forks 列表命中当前用户 → 返回 fork 信息；否则 null。 */
-  private async findUserFork(owner: string, repo: string, login: string): Promise<GitHubForkInfo | null> {
-    const data = await this.requestJson('GET', `/repos/${seg(owner)}/${seg(repo)}/forks?per_page=100&sort=newest`);
-    if (!Array.isArray(data)) {
-      throw new GitHubApiError('GitHub forks 响应不是数组', 'invalid_response');
+  /**
+   * 直查用户自己的同名仓库（GET /repos/<login>/<repo>）判断是否已是本上游的 fork：
+   * - 404 → null（无 fork，需创建）；
+   * - 200 + fork:true + parent.full_name 匹配 → 返回 fork 信息（复用）；
+   * - 200 + fork:false 或 parent 不匹配（同名但非本上游 fork）→ 抛 fork_name_conflict
+   *   （此时既不能复用也不能再 fork——同名仓库已存在，GitHub 会以同名冲突拒绝）。
+   */
+  private async findOwnFork(owner: string, repo: string, login: string): Promise<GitHubForkInfo | null> {
+    const response = await this.request(`/repos/${seg(login)}/${seg(repo)}`, { method: 'GET' });
+    if (response.status === 404) return null;
+    if (!response.ok) throw await this.apiError(response);
+    return this.tryReadOwnFork(response, owner, repo);
+  }
+
+  /** 解析直查响应并校验「是本上游的 fork」；不满足 → fork_name_conflict。 */
+  private async tryReadOwnFork(response: Response, owner: string, repo: string): Promise<GitHubForkInfo> {
+    const data = await safeParseJson(response);
+    const obj = asRecord(data);
+    const isFork = getBool(obj, 'fork');
+    const parentName = parentFullNameOf(obj);
+    if (isFork !== true || parentName !== `${owner}/${repo}`) {
+      throw new GitHubApiError(
+        '你的同名仓库已存在但不是本市场的 fork，无法自动收录，请改名或删除后重试',
+        'fork_name_conflict',
+      );
     }
-    for (const item of data) {
-      const obj = asRecord(item);
-      if (ownerLoginOf(obj) === login) {
-        const fullName = getStr(obj, 'full_name');
-        return {
-          fullName,
-          htmlUrl: getStr(obj, 'html_url'),
-          cloneUrl: getOptStr(obj, 'clone_url') ?? `https://github.com/${fullName}.git`,
-          defaultBranch: getOptStr(obj, 'default_branch') ?? 'main',
-        };
-      }
-    }
-    return null;
+    const fullName = getStr(obj, 'full_name');
+    return {
+      fullName,
+      htmlUrl: getStr(obj, 'html_url'),
+      cloneUrl: getOptStr(obj, 'clone_url') ?? `https://github.com/${fullName}.git`,
+      defaultBranch: getOptStr(obj, 'default_branch') ?? 'main',
+    };
   }
 
   /** 创建 fork（POST /forks）。GitHub 异步执行，返回 202/200 即视为已接受，就绪状态由轮询确认。 */
@@ -374,13 +405,13 @@ export class GitHubAuthRest {
     if (!response.ok) throw await this.apiError(response);
   }
 
-  /** 轮询 GET /repos/<login>/<repo> 直到 fork 就绪（owner.login 匹配 + fork:true + 有默认分支）。 */
-  private async waitForkReady(login: string, repo: string): Promise<GitHubForkInfo> {
+  /** 轮询 GET /repos/<login>/<repo> 直到 fork 就绪（owner.login 匹配 + fork:true + parent 匹配）。 */
+  private async waitForkReady(login: string, repo: string, owner: string): Promise<GitHubForkInfo> {
     const deadline = this.now() + this.pollTimeoutMs;
     for (;;) {
       const response = await this.request(`/repos/${seg(login)}/${seg(repo)}`, { method: 'GET' });
       if (response.ok) {
-        const info = await this.tryReadForkInfo(response);
+        const info = await this.tryReadForkInfo(response, owner, repo);
         if (info !== null) return info;
       } else if (response.status !== 404) {
         throw await this.apiError(response);
@@ -392,14 +423,15 @@ export class GitHubAuthRest {
     }
   }
 
-  /** 解析一次轮询响应；未就绪（结构不完整 / owner 未出现）→ null 继续等。 */
-  private async tryReadForkInfo(response: Response): Promise<GitHubForkInfo | null> {
+  /** 解析一次轮询响应；未就绪（结构不完整 / owner 未出现 / parent 未匹配）→ null 继续等。 */
+  private async tryReadForkInfo(response: Response, owner: string, repo: string): Promise<GitHubForkInfo | null> {
     try {
       const data = await safeParseJson(response);
       const obj = asRecord(data);
       const login = ownerLoginOf(obj);
       const fullName = getStr(obj, 'full_name');
-      if (login === undefined || getBool(obj, 'fork') !== true) return null;
+      const parentName = parentFullNameOf(obj);
+      if (login === undefined || getBool(obj, 'fork') !== true || parentName !== `${owner}/${repo}`) return null;
       return {
         fullName,
         htmlUrl: getStr(obj, 'html_url'),

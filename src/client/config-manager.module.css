@@ -237,6 +237,16 @@
 
 /* ---------------- 表单 ---------------- */
 
+/* 向导卡片（一键上传 / 更新配置共用）：元素密集，间距比普通卡片略宽
+   （卡片内 10→14px、字段内 5→8px；取值见 DESIGN.md §4.2 spacing scale） */
+.wizardCard {
+  gap: 14px;
+}
+
+.wizardCard .field {
+  gap: 8px;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -997,4 +1007,95 @@
 
 .aboutAuthor:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* ---------------- 确认弹窗 ConfirmDialog（DESIGN.md §8.11；项目首个 fixed/z-index 浮动层，
+   §15 Anti-pattern #7 已登记豁免，z-index 100） ---------------- */
+
+/* 遮罩：全屏 fixed + 半透明背景（color-mix 调 token，禁硬编码 rgba）；
+   点击遮罩（非卡片）关闭由组件判断 e.target===currentTarget */
+.dialogMask {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--dsw-alias-bg-base) 55%, transparent);
+  padding: 20px;
+}
+
+/* 卡片：与 .card 同 token 体系（bg-layer-2 + border-l1 + radius10），限宽 420px */
+.dialogCard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(420px, 100%);
+  max-height: 80vh;
+  padding: 14px;
+  background: var(--dsw-alias-bg-layer-2);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--dsw-alias-bg-base) 40%, transparent);
+}
+
+/* 标题：与 .groupLabel 同视觉层级 */
+.dialogHeader {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 正文：限高内滚（长 message 安全，仿 .confirmScroll 模式） */
+.dialogBody {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-primary);
+  white-space: pre-wrap;
+}
+
+/* ---------------- 操作弹窗（2026-08-21：上传/下载/装回本地搬进弹窗，DESIGN.md §8.12） ---------------- */
+
+/* 宽版卡片：与 .dialogCard 同 token 体系，放宽到 560px（表单/详情内容更长） */
+.dialogWide {
+  width: min(560px, 100%);
+}
+
+/* 弹窗正文（操作弹窗用）：70vh 限高内滚（详情/表单长内容安全，替代 240px 的短版） */
+.dialogBodyScroll {
+  max-height: 70vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-primary);
+  white-space: normal;
+}
+
+/* 弹窗头部行：标题 + 关闭按钮（操作弹窗） */
+.dialogHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* 弹窗关闭按钮（×）：ghost 语义、紧凑 */
+.dialogClose {
+  background: none;
+  border: none;
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.dialogClose:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-hover);
 }

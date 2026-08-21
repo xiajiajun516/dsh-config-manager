@@ -24,6 +24,7 @@
  */
 import { join } from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs/promises';
 
 import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from './github-repos.ts';
 import type {
@@ -51,12 +52,20 @@ import type { SectionId } from '../schema/types.ts';
 export const USER_CONFIGS_REPO = 'dsh-configs';
 /** 用户仓库 index.json 的名称/描述（展示用） */
 export const USER_INDEX_NAME = '我的配置仓库';
-/** PR 分支固定名模式：dsh-market-sync/<itemId> */
+/** PR 分支固定名模式：dsh-market-sync/<itemId>（收录） */
 export const PR_BRANCH_PREFIX = 'dsh-market-sync';
+/** 下架 PR 分支固定名模式：dsh-market-delist/<itemId>（删除已收录条目；独立分支避免与收录分支混淆，
+ *  防止 listItems 的 pr-pending 判定把下架 PR 误判为收录待审、以及删除后重传时 PR 复用错乱） */
+export const DELIST_BRANCH_PREFIX = 'dsh-market-delist';
 
 /** 由 itemId 生成 PR 分支名（固定模式，同条目复用同一分支：未合并 force push 更新、已合并基于最新 main 重开） */
 export function prBranchFor(itemId: string): string {
   return `${PR_BRANCH_PREFIX}/${itemId}`;
+}
+
+/** 由 itemId 生成下架 PR 分支名（删除已收录条目时用；独立于收录分支） */
+export function delistBranchFor(itemId: string): string {
+  return `${DELIST_BRANCH_PREFIX}/${itemId}`;
 }
 
 /** 用户公开仓库 URL（https 形态，绝不携带凭据） */
@@ -80,7 +89,16 @@ export interface MyRepoForm {
   categories?: string[];
 }
 
-/** upload / update 返回（ok=false 时携带已脱敏 error + errorCode） */
+/** 收录流程状态：pending=已提交、后台处理中；done=已提交收录（PR 已开/复用）；failed=收录失败可重试 */
+export type ListingState = 'pending' | 'done' | 'failed';
+
+/**
+ * upload / update 返回（ok=false 时携带已脱敏 error + errorCode）。
+ * 流程拆分（2026-08-20 优化）：upload/update 只同步执行「推用户仓库」并立即返回
+ * （listing='pending'），「收录流程」（fork + 官方 index + PR）在后台异步执行，
+ * 避免 GitHub fork 排队时整个上传请求长时间挂起；收录结果经 listingStatus /
+ * /me/items 状态徽章查询。
+ */
 export interface UploadResult {
   ok: boolean;
   itemId: string;
@@ -89,12 +107,47 @@ export interface UploadResult {
   sections: SectionId[];
   /** 用户公开仓库 URL（https://github.com/<login>/dsh-configs） */
   repoUrl: string;
+  /** 收录 PR 编号（异步模式下收起完成前为 null；完成经 listingStatus 查询） */
   prNumber: number | null;
+  /** 收录 PR 链接（同上） */
   prUrl: string | null;
   warnings: string[];
+  /** 收录流程状态：ok=true 且上传成功后为 'pending'（后台进行中）；失败无收录流程时 'done' 无意义 */
+  listing: ListingState;
+  /** listing='failed' 时：收录失败原因（已脱敏，含重试指引） */
+  listingError?: string;
   /** ok=false 时：可展示错误（已脱敏，无 token 形态） */
   error?: string;
   /** ok=false 时：错误分类码（unauthorized/prepare_failed/...；无则 'internal'） */
+  errorCode?: string;
+}
+
+/** POST /me/listing 响应：收录任务状态（结果卡轮询用，比拉全列表更轻） */
+export interface ListingStatusResponse {
+  itemId: string;
+  listing: ListingState;
+  /** listing='done' 时：PR 编号 */
+  prNumber: number | null;
+  /** listing='done' 时：PR 链接 */
+  prUrl: string | null;
+  /** listing='failed' 时：失败原因（已脱敏） */
+  error?: string;
+}
+
+/** POST /me/delete 响应：删除条目结果 */
+export interface DeleteResult {
+  ok: boolean;
+  itemId: string;
+  /** 是否已异步提交「下架 PR」（条目此前已收录进官方市场时 true） */
+  delisted: boolean;
+  /** 被关闭的收录 PR（条目处于待审核、有 open PR 时关闭它） */
+  prNumber: number | null;
+  /** 被关闭 PR 的链接（同上） */
+  prUrl: string | null;
+  warnings: string[];
+  /** ok=false 时：可展示错误（已脱敏） */
+  error?: string;
+  /** ok=false 时：错误分类码（item_not_found/unauthorized/...） */
   errorCode?: string;
 }
 
@@ -128,6 +181,8 @@ export interface GitHubRestLike {
   readFile(owner: string, repo: string, path: string, ref?: string): Promise<string | null>;
   openPullRequest(params: GitHubPullRequestParams): Promise<GitHubPullRequestInfo>;
   listOpenPullRequests(owner: string, repo: string, head?: string): Promise<GitHubPullRequestInfo[]>;
+  /** 关闭 PR（删除条目时关闭待审核的收录 PR） */
+  closePullRequest(owner: string, repo: string, number: number): Promise<GitHubPullRequestInfo>;
 }
 
 /* ---------------------------------------------------------------- 服务选项与错误 */
@@ -155,6 +210,26 @@ export class MyRepoError extends Error {
     this.name = 'MyRepoError';
     this.code = code;
   }
+}
+
+/** 后台市场任务动作：list=收录（写官方 index + 提收录 PR）；delist=下架（从官方 index 移除 + 提下架 PR） */
+export type ListingAction = 'list' | 'delist';
+
+/** 后台市场任务（收录/下架共用同一管道；内存 Map<itemId, job>，进程重启后丢失，靠 relist/删除重新提交） */
+export interface ListingJob {
+  action: ListingAction;
+  login: string;
+  itemId: string;
+  version: string;
+  /** 用户公开仓库 URL（条目内容托管地） */
+  repoUrl: string;
+  status: ListingState;
+  prNumber: number | null;
+  prUrl: string | null;
+  /** status='failed' 时：失败原因（已脱敏） */
+  error: string | null;
+  startedAt: number;
+  finishedAt: number | null;
 }
 
 /* ---------------------------------------------------------------- 纯函数（node 可单测） */
@@ -204,6 +279,11 @@ function upsertIndexItem(index: MarketIndex, item: MarketIndexItem): MarketIndex
   return { ...index, items };
 }
 
+/** 移除条目：按 id 过滤（删除条目时用）；不存在则原样返回 */
+function removeIndexItem(index: MarketIndex, itemId: string): MarketIndex {
+  return { ...index, items: index.items.filter((it) => it.id !== itemId) };
+}
+
 /** manifest → 用户仓库 index 条目（不含 repo：条目即在本仓库） */
 function toUserIndexItem(m: MarketItemManifest): MarketIndexItem {
   return {
@@ -242,6 +322,7 @@ function failureResult(itemId: string, version: string, err: unknown): UploadRes
     prNumber: null,
     prUrl: null,
     warnings: [],
+    listing: 'done', // 上传阶段即失败：无收录流程，listing 无意义
     error: redact(msg),
     errorCode: classifyError(err),
   };
@@ -256,6 +337,10 @@ export class MyRepoService {
   private readonly tokenProvider: () => Promise<string>;
   private readonly now: () => Date;
   private readonly workDirRoot: string;
+  /** 后台市场任务表（收录/下架；key=itemId；内存态，重启丢失 → 列表状态徽章回退 + relist/删除可重提） */
+  private readonly listingJobs = new Map<string, ListingJob>();
+  /** 同一 login 的「写用户仓库」串行队列（user-<login> 工作副本共享；上传/删除并发时防踩踏） */
+  private readonly loginWriteQueues = new Map<string, Promise<unknown>>();
 
   constructor(options: MyRepoServiceOptions) {
     if (options.prepare === null || typeof options.prepare !== 'function') {
@@ -322,6 +407,174 @@ export class MyRepoService {
     return entries;
   }
 
+  /* ---------------- 后台收录/下架任务状态 ---------------- */
+
+  /**
+   * 查询收录/下架任务状态。
+   * 内存任务表命中 → 直接返回；未命中（进程重启 / 从未提交）→ 回退 GitHub 实况推导：
+   * 官方 index 含该 id → done（已收录）；存在 open 收录 PR → done（带 PR 链接）；否则 null。
+   */
+  async listingStatus(itemId: string): Promise<ListingStatusResponse | null> {
+    const job = this.listingJobs.get(itemId);
+    if (job !== undefined) return this.toListingStatus(job);
+    // 回退实况推导（重启后任务表丢失：靠官方 index / open PR 判断是否已完成）
+    try {
+      const user = await this.rest.getUser();
+      const login = user.login;
+      const officialText = await this.rest.readFile(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, 'index.json');
+      if (officialText !== null) {
+        const op = parseMarketIndex(officialText);
+        if (op.ok && op.index !== null && op.index.items.some((it) => it.id === itemId)) {
+          return { itemId, listing: 'done', prNumber: null, prUrl: null };
+        }
+      }
+      const openPrs = await this.rest.listOpenPullRequests(
+        MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, `${login}:${prBranchFor(itemId)}`,
+      );
+      if (openPrs.length > 0) {
+        const pr = openPrs[0]!;
+        return { itemId, listing: 'done', prNumber: pr.number, prUrl: pr.htmlUrl };
+      }
+      return null;
+    } catch {
+      return null; // 实况推导失败不阻塞轮询：前端按 null 处理（任务已结束/重启丢失）
+    }
+  }
+
+  /** 重新提交收录（收录失败 / 进程重启丢失后的一键重试）：幂等 —— 已有 pending 任务直接复用，不再重复启动 */
+  async relist(itemId: string): Promise<ListingStatusResponse> {
+    const user = await this.rest.getUser(); // 401 → 上层映射「请重新登录」
+    const login = user.login;
+    const existing = this.listingJobs.get(itemId);
+    if (existing !== undefined) {
+      if (existing.status === 'pending') return this.toListingStatus(existing);
+      if (existing.status === 'done') return this.toListingStatus(existing);
+      // failed → 落下去重新启动
+    }
+    const { index } = await this.readUserIndex(login);
+    const item = index.items.find((it) => it.id === itemId);
+    if (item === undefined) {
+      throw new MyRepoError(`未找到条目 ${itemId}（可能已被删除），请刷新列表后重试`, 'item_not_found');
+    }
+    const repoUrl = userConfigsRepoUrl(login);
+    this.launchListing({
+      action: 'list',
+      login,
+      itemId,
+      version: item.version ?? '1.0.0',
+      repoUrl,
+    });
+    const job = this.listingJobs.get(itemId)!;
+    return this.toListingStatus(job);
+  }
+
+  /** 等待任务终态（测试辅助 / 需要同步等待的场景；超时抛 internal 错误） */
+  async waitForListing(itemId: string, timeoutMs = 10_000): Promise<ListingStatusResponse> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const job = this.listingJobs.get(itemId);
+      if (job !== undefined && job.status !== 'pending') return this.toListingStatus(job);
+      if (Date.now() >= deadline) {
+        throw new MyRepoError(`等待市场任务超时（${itemId}）`, 'internal');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
+  /* ---------------- 删除条目（含下架处理） ---------------- */
+
+  /**
+   * 删除已上传条目：
+   * ① 从用户仓库 index.json 移除条目 + 删除 items/<itemId>/ 目录（同步，秒级）
+   * ② 收录状态处理：
+   *    - 已收录进官方市场（listed）→ 后台异步提「下架 PR」（从官方 index 移除，独立 delist 分支）
+   *    - 有待审核的收录 open PR → 同步关闭该 PR
+   *    - 未收录 / 无 PR → 无额外操作
+   * 返回 DeleteResult（ok=false 时携带已脱敏 error + errorCode）。
+   */
+  async deleteItem(itemId: string): Promise<DeleteResult> {
+    const user = await this.rest.getUser();
+    const login = user.login;
+    const repoUrl = userConfigsRepoUrl(login);
+    try {
+      // ① 读用户仓库 index + 定位条目
+      const { index } = await this.readUserIndex(login);
+      const item = index.items.find((it) => it.id === itemId);
+      if (item === undefined) {
+        throw new MyRepoError(`未找到要删除的条目 ${itemId}（可能已被删除），请刷新列表后重试`, 'item_not_found');
+      }
+
+      // ② 移除条目 + 删除 items/<itemId>/ 目录 → 写回 index.json（per-login 串行）
+      const updatedIndex = removeIndexItem(index, itemId);
+      await this.withLoginLock(login, async () => {
+        // writeFiles 只写 entries 列出的文件、不会主动删除 items/<itemId>/：先删工作副本目录，git add -A 才会捕获删除
+        const workDir = this.userWorkDir(login);
+        await fs.rm(join(workDir, 'items', itemId), { recursive: true, force: true }).catch(() => undefined);
+        await this.gitWriter.writeFiles({
+          repoUrl: `${userConfigsRepoUrl(login)}.git`,
+          workDir,
+          entries: [{ path: 'index.json', content: stringifyJsonSafe(updatedIndex, { space: 2 }) }],
+          commitMessage: `publish: remove ${itemId}`,
+        });
+      });
+
+      // ③ 收录状态处理
+      const officialText = await this.rest.readFile(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, 'index.json');
+      let officialListed = false;
+      if (officialText !== null) {
+        const op = parseMarketIndex(officialText);
+        if (op.ok && op.index !== null) officialListed = op.index.items.some((it) => it.id === itemId);
+      }
+      if (officialListed) {
+        // 已收录 → 后台异步提下架 PR（不阻塞删除；下架 PR 合并前官方市场条目短暂不可下载，UI 已提示）
+        this.launchListing({
+          action: 'delist',
+          login,
+          itemId,
+          version: item.version ?? '1.0.0',
+          repoUrl,
+        });
+        return {
+          ok: true,
+          itemId,
+          delisted: true,
+          prNumber: null,
+          prUrl: null,
+          warnings: ['该条目已收录官方市场，已自动提交下架 PR；合并前官方市场可能仍显示该条目'],
+        };
+      }
+      // 未收录 → 关闭待审核的收录 PR（如有）
+      const openPrs = await this.rest.listOpenPullRequests(
+        MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, `${login}:${prBranchFor(itemId)}`,
+      );
+      if (openPrs.length > 0) {
+        const pr = openPrs[0]!;
+        await this.rest.closePullRequest(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, pr.number);
+        return {
+          ok: true,
+          itemId,
+          delisted: false,
+          prNumber: pr.number,
+          prUrl: pr.htmlUrl,
+          warnings: ['已关闭该条目的待审核收录 PR'],
+        };
+      }
+      return { ok: true, itemId, delisted: false, prNumber: null, prUrl: null, warnings: [] };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        itemId,
+        delisted: false,
+        prNumber: null,
+        prUrl: null,
+        warnings: [],
+        error: redact(msg),
+        errorCode: classifyError(err),
+      };
+    }
+  }
+
   /* ---------------- 上传/更新共享状态机 ---------------- */
 
   private async runPublish(
@@ -384,29 +637,21 @@ export class MyRepoService {
       const repo = await this.ensureUserRepo(login);
 
       // ⑥ 写用户仓库：items/<id>/manifest.json + config.zip + 更新 index.json，commit + push
+      //    （同一 login 的写操作串行化：user-<login> 工作副本共享，删除/上传并发时防踩踏）
       const updatedUserIndex = upsertIndexItem(userIndex.index, toUserIndexItem(manifest));
-      await this.gitWriterManifestSync(login, repo, prepared, params.zipBytes, updatedUserIndex, itemId, version, params.mode);
+      await this.withLoginLock(login, () =>
+        this.gitWriterManifestSync(login, repo, prepared, params.zipBytes, updatedUserIndex, itemId, version, params.mode),
+      );
 
-      // ⑦ ensureFork 官方仓库（复用已 fork / 新建 + 轮询就绪）
-      const fork = await this.rest.ensureFork(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO);
-
-      // ⑧ 官方 index：读最新 → 更新条目（带 repo 自托管引用）→ 写 fork 分支 + force push
-      const officialIndex = await this.readOfficialIndex();
-      const updatedOfficial = upsertIndexItem(officialIndex.index, toOfficialIndexItem(manifest, repoUrl));
-      const branch = prBranchFor(itemId);
-      await this.gitWriter.writeFiles({
-        repoUrl: fork.cloneUrl,
-        workDir: this.forkWorkDir(login),
-        upstreamUrl: `https://github.com/${MARKET_UPSTREAM_OWNER}/${MARKET_UPSTREAM_REPO}.git`,
-        branch,
-        baseRef: 'upstream/main',
-        force: true,
-        entries: [{ path: 'index.json', content: stringifyJsonSafe(updatedOfficial, { space: 2 }) }],
-        commitMessage: `market: ${params.mode === 'update' ? 'update' : 'add'} ${itemId} v${version}`,
+      // ⑦⑧⑨ 收录流程（fork + 官方 index + PR）转入后台异步任务：上传立即返回，
+      //    避免 GitHub fork 排队时整个请求长时间挂起；结果经 listingStatus / 列表徽章查询。
+      this.launchListing({
+        action: 'list',
+        login,
+        itemId,
+        version,
+        repoUrl,
       });
-
-      // ⑨ PR：查 open PR（head=<login>:<branch>）复用；无则创建
-      const pr = await this.ensurePullRequest(login, branch, itemId, version);
 
       return {
         ok: true,
@@ -415,9 +660,10 @@ export class MyRepoService {
         sha256: prepared.sha256,
         sections: prepared.sections,
         repoUrl,
-        prNumber: pr.number,
-        prUrl: pr.htmlUrl,
+        prNumber: null,
+        prUrl: null,
         warnings: [...prepared.warnings, ...warnings],
+        listing: 'pending',
       };
     } catch (err) {
       return failureResult(baseId, '1.0.0', err);
@@ -498,11 +744,32 @@ export class MyRepoService {
     return this.rest.createPublicRepo(USER_CONFIGS_REPO, '我的配置仓库（dsh-config-manager 自动发布）');
   }
 
-  /** ⑨ ensure PR：open PR（head=<login>:<branch>）存在 → 复用；否则 openPullRequest(base=main) */
-  private async ensurePullRequest(login: string, branch: string, itemId: string, version: string): Promise<GitHubPullRequestInfo> {
+  /** ⑨ ensure PR：open PR（head=<login>:<branch>）存在 → 复用；否则 openPullRequest(base=main)。
+   *  action='delist' 时标题/正文为下架语义（分支用 delistBranchFor，head 过滤天然隔离）。 */
+  private async ensurePullRequest(
+    login: string,
+    branch: string,
+    itemId: string,
+    version: string,
+    action: ListingAction = 'list',
+  ): Promise<GitHubPullRequestInfo> {
     const head = `${login}:${branch}`;
     const open = await this.rest.listOpenPullRequests(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, head);
     if (open.length > 0) return open[0]!;
+    if (action === 'delist') {
+      return this.rest.openPullRequest({
+        head,
+        base: 'main',
+        title: `市场下架：${itemId}`,
+        body: [
+          `由 dsh-config-manager「删除条目」自动提交。`,
+          '',
+          `- 条目：${itemId}`,
+          `- 操作：从官方市场 index.json 移除该条目（下架）`,
+          `- 内容：原条目内容位于用户公开仓库，已随删除移除`,
+        ].join('\n'),
+      });
+    }
     return this.rest.openPullRequest({
       head,
       base: 'main',
@@ -517,11 +784,106 @@ export class MyRepoService {
     });
   }
 
+  /* ---------------- 后台市场任务（收录/下架） ---------------- */
+
+  /** 启动后台任务（fire-and-forget）：同 itemId 已有 pending 任务 → 不重复启动（幂等） */
+  private launchListing(input: {
+    action: ListingAction;
+    login: string;
+    itemId: string;
+    version: string;
+    repoUrl: string;
+  }): void {
+    const existing = this.listingJobs.get(input.itemId);
+    if (existing !== undefined && existing.status === 'pending') return;
+    const job: ListingJob = {
+      ...input,
+      status: 'pending',
+      prNumber: null,
+      prUrl: null,
+      error: null,
+      startedAt: Date.now(),
+      finishedAt: null,
+    };
+    this.listingJobs.set(input.itemId, job);
+    void this.finishListing(job).catch((err) => {
+      job.status = 'failed';
+      job.error = redact(err instanceof Error ? err.message : String(err));
+      job.finishedAt = Date.now();
+    });
+  }
+
+  /**
+   * 后台任务主体（收录/下架共用管道）：
+   * 读用户仓库条目 → ensureFork（复用/新建+轮询就绪）→ 读官方 index → 改（收录 upsert 带 repo /
+   * 下架 remove）→ 写 fork 分支（workDir 按 itemId 隔离，防并发踩踏）force push → 开/复用 PR。
+   */
+  private async finishListing(job: ListingJob): Promise<void> {
+    // ⑦ fork（复用已 fork / 新建 + 轮询就绪；GitHub 侧异步复制）
+    const fork = await this.rest.ensureFork(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO);
+    // ⑧ 官方 index：读最新 → 改 → 写 fork 分支 + force push
+    const officialIndex = await this.readOfficialIndex();
+    let updatedOfficial: MarketIndex;
+    let commitMsg: string;
+    if (job.action === 'delist') {
+      // 下架：从官方 index 移除（不依赖用户仓库条目仍存在——删除后条目已移除）
+      updatedOfficial = removeIndexItem(officialIndex.index, job.itemId);
+      commitMsg = `market: delist ${job.itemId}`;
+    } else {
+      // 收录：从用户仓库读最新条目元数据（上传已完成，条目在用户仓库）→ upsert 带 repo 引用
+      const { index } = await this.readUserIndex(job.login);
+      const item = index.items.find((it) => it.id === job.itemId);
+      if (item === undefined) {
+        throw new MyRepoError(`条目 ${job.itemId} 已不在用户仓库（可能已删除），任务终止`, 'item_not_found');
+      }
+      updatedOfficial = upsertIndexItem(officialIndex.index, { ...item, repo: job.repoUrl });
+      commitMsg = `market: ${item.version !== undefined && item.version !== '' ? 'update' : 'add'} ${job.itemId} v${job.version}`;
+    }
+    const branch = job.action === 'delist' ? delistBranchFor(job.itemId) : prBranchFor(job.itemId);
+    await this.gitWriter.writeFiles({
+      repoUrl: fork.cloneUrl,
+      workDir: this.forkWorkDir(job.login, job.itemId),
+      upstreamUrl: `https://github.com/${MARKET_UPSTREAM_OWNER}/${MARKET_UPSTREAM_REPO}.git`,
+      branch,
+      baseRef: 'upstream/main',
+      force: true,
+      entries: [{ path: 'index.json', content: stringifyJsonSafe(updatedOfficial, { space: 2 }) }],
+      commitMessage: commitMsg,
+    });
+    // ⑨ PR：查 open PR（head=<login>:<branch>）复用；无则创建
+    const pr = await this.ensurePullRequest(job.login, branch, job.itemId, job.version, job.action);
+    job.status = 'done';
+    job.prNumber = pr.number;
+    job.prUrl = pr.htmlUrl;
+    job.finishedAt = Date.now();
+  }
+
+  /** job → ListingStatusResponse（错误文本 redact 兜底） */
+  private toListingStatus(job: ListingJob): ListingStatusResponse {
+    return {
+      itemId: job.itemId,
+      listing: job.status,
+      prNumber: job.prNumber,
+      prUrl: job.prUrl,
+      ...(job.status === 'failed' ? { error: redact(job.error ?? '') } : {}),
+    };
+  }
+
+  /** 同一 login 的「写用户仓库」串行化（user-<login> 工作副本共享；上传/删除并发防踩踏）。
+   *  前一个操作失败不阻塞队列：catch 吞掉错误只作为队列锚点，真实错误已由调用方处理。 */
+  private async withLoginLock<T>(login: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.loginWriteQueues.get(login) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    this.loginWriteQueues.set(login, run.then(() => undefined, () => undefined));
+    return run;
+  }
+
   private userWorkDir(login: string): string {
     return join(this.workDirRoot, `user-${login}`);
   }
 
-  private forkWorkDir(login: string): string {
-    return join(this.workDirRoot, `fork-${login}`);
+  /** fork 工作副本按 itemId 隔离（fork-<login>/<itemId>）：不同条目的后台收录/下架并发操作互不踩踏 */
+  private forkWorkDir(login: string, itemId: string): string {
+    return join(this.workDirRoot, `fork-${login}`, itemId);
   }
 }

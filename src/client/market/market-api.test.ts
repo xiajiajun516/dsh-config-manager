@@ -36,6 +36,8 @@ test('M-01 api.status()：GET 到 /market/status，解析已添加市场列表�
     ok: true,
     configured: true,
     markets: [{ url: 'https://github.com/u/m', addedAt: '2026-08-16T00:00:00.000Z', itemCount: 3 }],
+    // 启动后首次打开市场页自动更新的判据（Host 进程内存标记；dsh 重启后重置）
+    bootAutoRefreshed: false,
   };
   let called: FetchCall | null = null;
   installFetchMock((call) => {
@@ -50,6 +52,7 @@ test('M-01 api.status()：GET 到 /market/status，解析已添加市场列表�
   assert.equal(result.configured, true);
   assert.equal(result.markets.length, 1);
   assert.equal(result.markets[0]?.url, 'https://github.com/u/m');
+  assert.equal(result.bootAutoRefreshed, false, 'status 契约透传 bootAutoRefreshed（首次打开自动更新判据）');
   assert.equal('token' in result, false, 'status 契约不得携带 token');
   assert.equal(lastCall()?.url, MARKET_API.status);
   assert.equal(lastCall()?.init?.method, undefined, 'GET 不设 method');

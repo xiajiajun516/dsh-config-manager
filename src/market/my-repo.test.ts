@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { GitHubApiError, MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from './github-repos.ts';
 import type { GitHubForkInfo, GitHubPullRequestInfo, GitHubPullRequestParams, GitHubRepoInfo, GitHubUserInfo } from './github-repos.ts';
 import type { GitHubRestLike, MyItemEntry, MyRepoForm } from './my-repo.ts';
-import { MyRepoService, prBranchFor, slugifyItemId, uniqueItemId, bumpVersion } from './my-repo.ts';
+import { MyRepoError, MyRepoService, delistBranchFor, prBranchFor, slugifyItemId, uniqueItemId, bumpVersion } from './my-repo.ts';
 import { MarketPrepareError } from './prepare.ts';
 import type { MarketPrepareInput, MarketPrepareResult } from './prepare.ts';
 import type { GitFileWriter, GitFileWriteCall, GitFileWriterResult } from './git-file-writer.ts';
@@ -54,6 +54,7 @@ interface RestOverrides {
   readFile?: (owner: string, repo: string, path: string, ref?: string) => Promise<string | null>;
   openPullRequest?: (params: GitHubPullRequestParams) => Promise<GitHubPullRequestInfo>;
   listOpenPullRequests?: (owner: string, repo: string, head?: string) => Promise<GitHubPullRequestInfo[]>;
+  closePullRequest?: (owner: string, repo: string, number: number) => Promise<GitHubPullRequestInfo>;
 }
 
 interface Harness {
@@ -90,10 +91,22 @@ function makePrepare() {
   return { prepare, prepareInputs };
 }
 
-function makeHarness(overrides: RestOverrides = {}): Harness {
+function makeHarness(overrides: RestOverrides = {}, opts: { userIndex?: string; officialIndex?: string } = {}): Harness {
   const gitCalls: GitFileWriteCall[] = [];
+  /** 动态用户仓库 index（初始=opts.userIndex ?? 空；gitWriter 写入后更新，readFile 读取最新——后台收录要读回条目） */
+  let liveUserIndex = opts.userIndex ?? USER_INDEX_EMPTY;
+  /** 官方市场 index（opts.officialIndex 可覆盖；后台收录读它） */
+  const liveOfficialIndex = opts.officialIndex ?? OFFICIAL_INDEX;
   const gitWriter: GitFileWriter = {
-    writeFiles: async (call): Promise<GitFileWriterResult> => { gitCalls.push(call); return { pushed: true, branch: 'default' }; },
+    writeFiles: async (call): Promise<GitFileWriterResult> => {
+      gitCalls.push(call);
+      // 写用户仓库时同步内存 index（后台收录/下架经 readFile 读最新）
+      if (call.repoUrl === USER_REPO_CLONE) {
+        const idx = call.entries.find((e) => e.path === 'index.json');
+        if (idx !== undefined) liveUserIndex = String(idx.content);
+      }
+      return { pushed: true, branch: 'default' };
+    },
   };
   const openPrCalls: GitHubPullRequestParams[] = [];
   const restCalls: string[] = [];
@@ -117,8 +130,8 @@ function makeHarness(overrides: RestOverrides = {}): Harness {
     },
     readFile: async (owner, repo, p) => {
       restCalls.push(`readFile:${owner}/${repo}/${p}`);
-      if (owner === LOGIN) return USER_INDEX_EMPTY; // 用户仓库 index
-      return OFFICIAL_INDEX; // 官方市场 index
+      if (owner === LOGIN) return liveUserIndex; // 用户仓库 index（动态：反映最近一次写入）
+      return liveOfficialIndex; // 官方市场 index
     },
     openPullRequest: async (params) => {
       restCalls.push('openPullRequest');
@@ -133,6 +146,7 @@ function makeHarness(overrides: RestOverrides = {}): Harness {
       };
     },
     listOpenPullRequests: async () => { restCalls.push('listOpenPullRequests'); return []; },
+    closePullRequest: async () => { restCalls.push('closePullRequest'); throw new Error('closePullRequest 默认不调用'); },
     ...overrides,
   };
   const { prepare, prepareInputs } = makePrepare();
@@ -159,18 +173,20 @@ function indexJsonOf(call: GitFileWriteCall): { schemaVersion: number; items: Ar
 
 /* ---------------------------------------------------------------- 首次上传全流程 */
 
-test('my-repo: 首次上传全流程 → prepare 元数据自动生成 + 建仓 + 写用户仓库 + fork + 建 PR', async () => {
+test('my-repo: 首次上传全流程 → prepare 元数据自动生成 + 建仓 + 写用户仓库（同步）+ 后台收录（fork + 建 PR）', async () => {
   const h = makeHarness();
   const result = await h.service.upload({ zipBytes: ZIP_BYTES, form: form() });
 
+  // 同步段：推用户仓库立即返回（listing='pending'，prUrl 尚不可用）
   assert.equal(result.ok, true);
   assert.equal(result.itemId, 'my-config');
   assert.equal(result.version, '1.0.0');
   assert.equal(result.sha256, 'sha256-abc');
   assert.deepEqual(result.sections, ['settings']);
   assert.equal(result.repoUrl, USER_REPO_URL);
-  assert.equal(result.prNumber, 42);
-  assert.equal(result.prUrl, `${OFFICIAL_URL}/pull/42`);
+  assert.equal(result.listing, 'pending', '上传立即返回 pending（收录后台进行）');
+  assert.equal(result.prNumber, null);
+  assert.equal(result.prUrl, null);
   assert.ok(result.warnings.length >= 1);
 
   // prepare 输入：author=login、version=1.0.0、repoUrl=用户仓库
@@ -182,14 +198,10 @@ test('my-repo: 首次上传全流程 → prepare 元数据自动生成 + 建仓 
   assert.equal(pi.repoUrl, USER_REPO_URL);
   assert.equal(pi.now, '2026-08-20T00:00:00.000Z');
 
-  // 仓库操作序：getUser → 读用户 index → repoExists → createPublicRepo → 写用户仓库 → ensureFork → 读官方 index → 写 fork 分支 → listOpenPullRequests → openPullRequest
+  // 同步段仓库操作：getUser → 读用户 index → repoExists → createPublicRepo → 写用户仓库
   assert.ok(h.restCalls.includes('createPublicRepo'), '首次上传必须自动创建公开仓库');
-  assert.ok(h.restCalls.includes('ensureFork'), '必须 ensureFork 官方仓库');
-  assert.ok(h.restCalls.some((c) => c.startsWith('readFile:xiajiajun516/dsh-config-market/index.json')), '必须读官方最新 index');
-
-  // gitWriter 两次调用：用户仓库 + fork 分支
-  assert.equal(h.gitCalls.length, 2);
-  const [userCall, forkCall] = h.gitCalls as [GitFileWriteCall, GitFileWriteCall];
+  assert.equal(h.gitCalls.length, 1, '同步段只写用户仓库（收录在后台）');
+  const userCall = h.gitCalls[0]!;
   assert.equal(userCall.repoUrl, USER_REPO_CLONE);
   assert.deepEqual(userCall.entries.map((e) => e.path), [
     'items/my-config/manifest.json', 'items/my-config/config.zip', 'index.json',
@@ -203,7 +215,17 @@ test('my-repo: 首次上传全流程 → prepare 元数据自动生成 + 建仓 
   assert.equal(userIndex.items[0]!.version, '1.0.0');
   assert.equal(userIndex.items[0]!.author, LOGIN);
 
-  // fork 分支：基于官方最新 main + force push + 仅 index.json + repo 自托管引用
+  // 后台收录（waitForListing 等终态）→ fork + 写官方 index 分支 + 建 PR
+  const listing = await h.service.waitForListing('my-config');
+  assert.equal(listing.listing, 'done');
+  assert.equal(listing.prNumber, 42);
+  assert.equal(listing.prUrl, `${OFFICIAL_URL}/pull/42`);
+  assert.ok(h.restCalls.includes('ensureFork'), '收录阶段必须 ensureFork 官方仓库');
+  assert.ok(h.restCalls.some((c) => c.startsWith('readFile:xiajiajun516/dsh-config-market/index.json')), '必须读官方最新 index');
+
+  // gitWriter 两次调用：用户仓库 + fork 分支
+  assert.equal(h.gitCalls.length, 2);
+  const forkCall = h.gitCalls[1]!;
   assert.equal(forkCall.repoUrl, FORK_CLONE);
   assert.equal(forkCall.branch, 'dsh-market-sync/my-config');
   assert.equal(forkCall.baseRef, 'upstream/main');
@@ -226,9 +248,7 @@ test('my-repo: 首次上传全流程 → prepare 元数据自动生成 + 建仓 
 
 test('my-repo: 更新 → id 不变、version 纯自动 +1、updatedAt 刷新', async () => {
   const existing = USER_INDEX_WITH([{ id: 'my-config', name: 'My Config', version: '1.0.1', author: LOGIN }]);
-  const h = makeHarness({
-    readFile: async (owner, repo, p) => (owner === LOGIN ? existing : OFFICIAL_INDEX),
-  });
+  const h = makeHarness({}, { userIndex: existing });
   const result = await h.service.update({ zipBytes: ZIP_BYTES, form: form() });
 
   assert.equal(result.ok, true);
@@ -243,7 +263,8 @@ test('my-repo: 更新 → id 不变、version 纯自动 +1、updatedAt 刷新', 
   const userIndex = indexJsonOf(h.gitCalls[0]!);
   const entry = userIndex.items.find((it) => it.id === 'my-config')!;
   assert.equal(entry.version, '1.0.2');
-  // PR 分支同样同步新版本
+  // 后台收录：fork 分支同步新版本
+  await h.service.waitForListing('my-config');
   const forkIndex = indexJsonOf(h.gitCalls[1]!);
   assert.equal(forkIndex.items.find((it) => it.id === 'my-config')!.version, '1.0.2');
 });
@@ -292,15 +313,19 @@ test('my-repo: PR 复用（open PR 未合并）→ 不重复创建', async () =>
   });
   const result = await h.service.upload({ zipBytes: ZIP_BYTES, form: form() });
 
-  assert.equal(result.prNumber, 7);
-  assert.equal(result.prUrl, `${OFFICIAL_URL}/pull/7`);
+  // 后台收录完成：复用已有 open PR（head 匹配）
+  const listing = await h.service.waitForListing('my-config');
+  assert.equal(listing.prNumber, 7);
+  assert.equal(listing.prUrl, `${OFFICIAL_URL}/pull/7`);
   assert.equal(h.openPrCalls.length, 0, '已有 open PR 必须复用，不重复创建');
 });
 
 test('my-repo: PR 重开（无 open PR / 已合并）→ 新建 PR', async () => {
   const h = makeHarness(); // listOpenPullRequests 默认返回 []
   const result = await h.service.upload({ zipBytes: ZIP_BYTES, form: form() });
-  assert.equal(result.prNumber, 42);
+  assert.equal(result.ok, true);
+  const listing = await h.service.waitForListing('my-config');
+  assert.equal(listing.prNumber, 42);
   assert.equal(h.openPrCalls.length, 1, '无 open PR 必须新建');
 });
 
@@ -319,9 +344,7 @@ test('my-repo: 远端 index 前进防覆盖 → 用户/官方既有条目全部�
       { id: 'my-config', name: 'My Config', version: '0.9.0', repo: USER_REPO_URL },
     ],
   });
-  const h = makeHarness({
-    readFile: async (owner, repo, p) => (owner === LOGIN ? userIndexText : officialText),
-  });
+  const h = makeHarness({}, { userIndex: userIndexText, officialIndex: officialText });
 
   // update 同名：旧条目已在，直接 bump 而非新建
   const result = await h.service.update({ zipBytes: ZIP_BYTES, form: form() });
@@ -335,7 +358,8 @@ test('my-repo: 远端 index 前进防覆盖 → 用户/官方既有条目全部�
   assert.equal(userIndex.items.find((it) => it.id === 'old-item')!.version, '2.0.0');
   assert.equal(userIndex.items.find((it) => it.id === 'my-config')!.version, '0.9.1');
 
-  // 官方 index：keep-me 保留 + my-config 更新
+  // 官方 index（后台收录完成）：keep-me 保留 + my-config 更新
+  await h.service.waitForListing('my-config');
   const forkIndex = indexJsonOf(h.gitCalls[1]!);
   assert.deepEqual(forkIndex.items.map((it) => it.id), ['keep-me', 'my-config']);
   assert.equal(forkIndex.items.find((it) => it.id === 'my-config')!.version, '0.9.1');
@@ -362,6 +386,7 @@ test('my-repo: 校验失败（prepare 抛错）→ 零推送、零仓库操作',
     readFile: async () => { restCalls.push('readFile'); return null; },
     openPullRequest: async () => { restCalls.push('openPullRequest'); throw new Error('不应调用'); },
     listOpenPullRequests: async () => { restCalls.push('listOpenPullRequests'); return []; },
+    closePullRequest: async () => { restCalls.push('closePullRequest'); throw new Error('不应调用'); },
   };
   const service = new MyRepoService({
     prepare: failingPrepare,
@@ -480,6 +505,140 @@ test('my-repo: listItems 从未上传（用户仓库无 index）→ 空数组', 
   });
   const items = await h.service.listItems();
   assert.deepEqual(items, []);
+});
+
+/* ---------------------------------------------------------------- 删除条目（关 PR / 下架） */
+
+test('my-repo: 删除未收录条目（有 open PR）→ 移除索引与文件 + 关闭收录 PR', async () => {
+  const existing = USER_INDEX_WITH([{ id: 'my-config', name: 'My Config', version: '1.0.0', author: LOGIN }]);
+  const openPrs = [
+    { number: 7, htmlUrl: `${OFFICIAL_URL}/pull/7`, title: 't', head: prBranchFor('my-config'), state: 'open', merged: false },
+  ];
+  const closedCalls: number[] = [];
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? existing : OFFICIAL_INDEX),
+    listOpenPullRequests: async (owner, repo, head) => {
+      // 删除场景：先查官方 index（未收录）→ 再查 open PR（命中）
+      return openPrs.filter((p) => head === `${LOGIN}:${p.head}`);
+    },
+    closePullRequest: async (owner, repo, number) => {
+      closedCalls.push(number);
+      return { number, htmlUrl: `${OFFICIAL_URL}/pull/${number}`, title: 't', head: 'x', state: 'closed', merged: false };
+    },
+  });
+
+  const result = await h.service.deleteItem('my-config');
+  assert.equal(result.ok, true);
+  assert.equal(result.delisted, false, '未收录不触发下架');
+  assert.equal(result.prNumber, 7);
+  assert.deepEqual(closedCalls, [7], '必须关闭待审核的收录 PR');
+
+  // 用户仓库写回：index.json 移除条目（删除 items/ 目录由调用方在 writeFiles 前 fs.rm 完成）
+  assert.equal(h.gitCalls.length, 1);
+  const call = h.gitCalls[0]!;
+  assert.equal(call.repoUrl, `${USER_REPO_URL}.git`);
+  assert.deepEqual(call.entries.map((e) => e.path), ['index.json']);
+  const userIndex = indexJsonOf(call);
+  assert.equal(userIndex.items.length, 0, '删除后 index 必须为空');
+});
+
+test('my-repo: 删除已收录条目 → 移除本地内容 + 后台异步提下架 PR（独立 delist 分支）', async () => {
+  const existing = USER_INDEX_WITH([{ id: 'my-config', name: 'My Config', version: '1.0.0', author: LOGIN }]);
+  const officialText = JSON.stringify({
+    schemaVersion: 1,
+    name: 'DSH 配置市场',
+    items: [{ id: 'my-config', name: 'My Config', version: '1.0.0', repo: USER_REPO_URL }],
+  });
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? existing : officialText),
+  });
+
+  const result = await h.service.deleteItem('my-config');
+  assert.equal(result.ok, true);
+  assert.equal(result.delisted, true, '已收录必须触发下架');
+  assert.ok(result.warnings.some((w) => w.includes('下架')), '必须提示已提交下架 PR');
+
+  // 本地删除：index.json 移除条目
+  const userIndex = indexJsonOf(h.gitCalls[0]!);
+  assert.equal(userIndex.items.length, 0);
+
+  // 后台下架：独立 delist 分支 + 从官方 index 移除
+  const listing = await h.service.waitForListing('my-config');
+  assert.equal(listing.listing, 'done');
+  assert.equal(h.gitCalls.length, 2);
+  const forkCall = h.gitCalls[1]!;
+  assert.equal(forkCall.branch, delistBranchFor('my-config'), '下架必须用独立 delist 分支');
+  assert.equal(forkCall.force, true);
+  const officialIndex = indexJsonOf(forkCall);
+  assert.equal(officialIndex.items.length, 0, '官方 index 必须移除该条目');
+  // 下架 PR 标题/正文走下架语义
+  assert.equal(h.openPrCalls.length, 1);
+  assert.ok(h.openPrCalls[0]!.title.includes('下架'), '下架 PR 标题必须区分收录');
+  assert.equal(h.openPrCalls[0]!.head, `${LOGIN}:${delistBranchFor('my-config')}`);
+});
+
+test('my-repo: 删除不存在的条目 → item_not_found 零推送', async () => {
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? USER_INDEX_EMPTY : OFFICIAL_INDEX),
+  });
+  const result = await h.service.deleteItem('gone-item');
+  assert.equal(result.ok, false);
+  assert.equal(result.errorCode, 'item_not_found');
+  assert.equal(h.gitCalls.length, 0, '删除不存在的条目必须零推送');
+});
+
+/* ---------------------------------------------------------------- relist / listingStatus */
+
+test('my-repo: relist 幂等（上传失败后重新提交收录）→ 复用已有 fork + open PR', async () => {
+  const openPrs = [
+    { number: 7, htmlUrl: `${OFFICIAL_URL}/pull/7`, title: 't', head: prBranchFor('my-config'), state: 'open', merged: false },
+  ];
+  const h = makeHarness({
+    listOpenPullRequests: async (owner, repo, head) => openPrs.filter((p) => head === `${LOGIN}:${p.head}`),
+  });
+
+  // 上传（后台收录完成）
+  const up = await h.service.upload({ zipBytes: ZIP_BYTES, form: form() });
+  assert.equal(up.ok, true);
+  assert.equal(up.itemId, 'my-config');
+  await h.service.waitForListing('my-config');
+
+  // relist：任务已 done → 直接返回当前状态，不重复启动
+  const again = await h.service.relist('my-config');
+  assert.equal(again.listing, 'done');
+  assert.equal(again.prNumber, 7);
+  assert.equal(h.openPrCalls.length, 0, 'relist 复用 open PR 不新建');
+});
+
+test('my-repo: relist 条目不存在 → item_not_found', async () => {
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? USER_INDEX_EMPTY : OFFICIAL_INDEX),
+  });
+  await assert.rejects(h.service.relist('gone-item'), (err: unknown) => {
+    assert.ok(err instanceof MyRepoError);
+    assert.equal(err.code, 'item_not_found');
+    return true;
+  });
+});
+
+test('my-repo: listingStatus 任务表未命中 → 回退 GitHub 实况推导（已收录 → done）', async () => {
+  const officialText = JSON.stringify({
+    schemaVersion: 1,
+    name: 'DSH 配置市场',
+    items: [{ id: 'my-config', name: 'My Config', version: '1.0.0', repo: USER_REPO_URL }],
+  });
+  const h = makeHarness({
+    readFile: async (owner, repo, p) => (owner === LOGIN ? USER_INDEX_EMPTY : officialText),
+  });
+  const status = await h.service.listingStatus('my-config');
+  assert.equal(status?.listing, 'done');
+  assert.equal(status?.prUrl, null, '官方 index 命中时无 PR 链接');
+});
+
+test('my-repo: listingStatus 无任务且无实况 → null', async () => {
+  const h = makeHarness();
+  const status = await h.service.listingStatus('never-existed');
+  assert.equal(status, null);
 });
 
 /* ---------------------------------------------------------------- 纯函数 */

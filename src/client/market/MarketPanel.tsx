@@ -24,20 +24,25 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ImportPlan } from '../../core/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
-import { BUILTIN_MARKET_URL, isOfficialMarket } from '../../market/builtin.ts'
+import { BUILTIN_MARKET_URL } from '../../market/builtin.ts'
 import type { MarketApi } from './market-api.ts'
 import type { MyConfigsApi } from './my-configs-api.ts'
 import type { SyncApi } from '../sync/sync-api.ts'
 import { MyConfigsView } from './MyConfigsView.tsx'
 import type { MyItemEntry } from './my-configs-api.ts'
 import type {
-  MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketSummary,
+  MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketStatusResponse,
 } from '../../market/types.ts'
 import {
   approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, defaultApprovals,
-  filterMarketItems, marketDetailView, marketListSummary, marketStatusText, sourceBadgeKind,
+  filterMarketItems, marketDetailView, marketListSummary, sourceBadgeKind,
 } from './market-view.ts'
 import type { MarketApprovals } from './market-view.ts'
+import type { MyInstallSlice, MyWizardSlice } from './my-configs-view.ts'
+import { readDisclaimerDismissed, writeDisclaimerDismissed } from './disclaimer.ts'
+import type { DisclaimerKey } from './disclaimer.ts'
+import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
+import { redact } from '../../security/redaction.ts'
 import { runStore, toMarketStoreSlice, type MarketStoreSlice } from '../run-store.ts'
 import css from '../config-manager.module.css'
 
@@ -59,10 +64,14 @@ interface MarketUiState {
   myItems: MyItemEntry[] | null
   /** 我的配置：列表加载错误（已 redact；null = 无） */
   myItemsError: string | null
+  /** 我的配置：上传/更新向导持久化切片（非敏感；null = 未开始；镜像 runStore，切 tab/刷新不丢） */
+  myWizard: MyWizardSlice | null
+  /** 我的配置：装回本地（下载+逐分区批准+导入结果）持久化切片（非敏感；null = 未开始/已关闭） */
+  myInstall: MyInstallSlice | null
+  /** 我的配置：删除确认弹窗目标条目 id（非敏感；镜像 runStore，切 tab/刷新不丢） */
+  myConfirmDeleteId: string | null
   loading: boolean
   loadError: string | null
-  /** 内置市场摘要（status 返回；条目数 / 名称 / 最近拉取） */
-  market: MarketSummary | null
   refreshing: boolean
   browsing: boolean
   items: MarketListItem[]
@@ -86,9 +95,11 @@ const initial: MarketUiState = {
   subView: 'browse',
   myItems: null,
   myItemsError: null,
+  myWizard: null,
+  myInstall: null,
+  myConfirmDeleteId: null,
   loading: true,
   loadError: null,
-  market: null,
   refreshing: false,
   browsing: false,
   items: [],
@@ -114,6 +125,9 @@ function initFromStore(): MarketUiState {
     subView: s.subView,
     myItems: s.myItems,
     myItemsError: s.myItemsError,
+    myWizard: s.myWizard,
+    myInstall: s.myInstall,
+    myConfirmDeleteId: s.myConfirmDeleteId,
     search: s.search,
     category: s.category,
     items: s.items,
@@ -145,30 +159,83 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   }
   const patch = (p: Partial<MarketUiState>): void => commit({ ...stateRef.current, ...p })
 
+  /* ---------------- 下载弹窗 + 免责前置（2026-08-21） ---------------- */
+  /** 下载详情弹窗开关（瞬态 UI，不持久化） */
+  const [downloadOpen, setDownloadOpen] = useState(false)
+  /** 当前展示的免责弹窗操作（null = 无） */
+  const [disclaimerKey, setDisclaimerKey] = useState<DisclaimerKey | null>(null)
+  /** 免责弹窗「不再提示」勾选（每次打开重置） */
+  const [dontAsk, setDontAsk] = useState(false)
+  /** localStorage（浏览器环境；免责「不再提示」跨会话持久化） */
+  const storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage
+
+  /** 待下载条目（免责确认后取用；避免免责流程中闭包过期） */
+  const pendingDownloadItem = useRef<MarketListItem | null>(null)
+  /** 点条目「查看详情」：未勾「不再提示」→ 先弹免责，确认后下载并打开详情弹窗 */
+  const openDownload = (item: MarketListItem): void => {
+    pendingDownloadItem.current = item
+    if (readDisclaimerDismissed('download', storage)) {
+      setDownloadOpen(true)
+      void runDownload(item)
+      return
+    }
+    setDontAsk(false)
+    setDisclaimerKey('download')
+  }
+  /** 免责弹窗确认：勾选则记录「不再提示」→ 关闭免责 → 打开下载详情弹窗并启动下载 */
+  const confirmDownloadDisclaimer = (): void => {
+    if (disclaimerKey !== 'download') return
+    if (dontAsk) writeDisclaimerDismissed('download', storage)
+    setDisclaimerKey(null)
+    const item = pendingDownloadItem.current
+    setDownloadOpen(true)
+    if (item !== null) void runDownload(item)
+  }
+  /** 关闭下载详情弹窗：清 detail（弹窗即会话，关闭即放弃） */
+  const closeDownload = (): void => {
+    setDownloadOpen(false)
+    patch({ detail: null, importResult: null, error: null, approvals: {} })
+  }
+
   /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
   useEffect(() => () => {
     mountedRef.current = false
     runStore.patch({ market: toMarketStoreSlice(stateRef.current) })
   }, [])
 
-  /** 内置市场 URL（单一权威；来自 Host 内置常量） */
+  /** 内置市场 URL（单一权威；来自 Host 内置常量；用于条目来源判定与详情供应链警示） */
   const marketUrl: string = BUILTIN_MARKET_URL
-  const official: boolean = isOfficialMarket(marketUrl)
 
-  /** 挂载时读取内置市场状态 */
-  const loadStatus = useCallback(async (): Promise<void> => {
+  /** 挂载时读取内置市场状态；返回响应供「首次打开自动更新」判据（bootAutoRefreshed） */
+  const loadStatus = useCallback(async (): Promise<MarketStatusResponse | null> => {
     patch({ loading: true, loadError: null })
     try {
       const info = await api.status()
-      patch({ loading: false, market: info.markets[0] ?? null })
+      patch({ loading: false })
+      return info
     } catch (err) {
       patch({ loading: false, loadError: err instanceof Error ? err.message : String(err) })
+      return null
     }
   }, [api])
 
+  /**
+   * 启动后首次打开市场页 → 自动拉取一次最新 index（需求：dsh 启动后第一次打开市场页面自动更新一次市场）。
+   * 判据是 Host 侧进程内存标记 bootAutoRefreshed（dsh 重启后归零；refresh 成功后置位），
+   * 因此「每次打开都刷新」/「刷新失败后下次打开重试」都自然成立；无需客户端持久化。
+   * bootAutoChecked 同步置位防 StrictMode 双执行/竞态重复触发（同一组件实例只自动刷一次）。
+   */
+  const bootAutoChecked = useRef(false)
   useEffect(() => {
-    void loadStatus()
-    // api 为注入单例（注册时创建），生命周期内稳定；仅挂载时加载一次
+    if (bootAutoChecked.current) return
+    bootAutoChecked.current = true
+    void (async () => {
+      const info = await loadStatus()
+      if (info !== null && info.bootAutoRefreshed !== true) {
+        await runRefresh()
+      }
+    })()
+    // api 为注入单例（注册时创建），生命周期内稳定；仅挂载时执行一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -233,8 +300,6 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   }
 
   // ---- 渲染模型装配（全部纯函数，node 已测） ----
-  // 状态行（共享 marketStatusText：恒 configured 单市场）；loading/error 由 spinner/banner 单独呈现
-  const statusText = marketStatusText({ count: 1 }, uiT)
   const filtered = filterMarketItems(state.items, state.search, state.category)
   const summary = marketListSummary(state.items, uiT)
   const categories = collectCategories(state.items)
@@ -285,28 +350,20 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           myItems={state.myItems}
           myItemsError={state.myItemsError}
           onMyItemsChange={(items, error) => { patch({ myItems: items, myItemsError: error }) }}
+          myWizard={state.myWizard}
+          onMyWizardChange={(wizard) => { patch({ myWizard: wizard }) }}
+          myInstall={state.myInstall}
+          onMyInstallChange={(install) => { patch({ myInstall: install }) }}
+          myConfirmDeleteId={state.myConfirmDeleteId}
+          onMyConfirmDeleteChange={(id) => { patch({ myConfirmDeleteId: id }) }}
         />
       ) : (
         <>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
-      {/* 内置市场头部：固定 URL + 官方徽章 + 拉取最新（不可编辑） */}
+      {/* 内置市场操作卡：保留面板标题；移除 URL / 官方徽章 / 名称 / 条目数 / 状态行等文字展示 */}
       <Card>
         <span className={css.groupLabel}>{t('config.title')}</span>
-        <span className={css.hint}>{t('config.builtinHint')}</span>
-        <div className={css.statRow} style={{ paddingTop: 4 }}>
-          <Badge kind="info">{marketUrl}</Badge>
-          {official && <Badge kind="ok">{t('config.official')}</Badge>}
-          {!official && <Badge kind="warn">{t('config.custom')}</Badge>}
-        </div>
-        {state.market !== null && (state.market.name || state.market.itemCount !== undefined) && (
-          <div className={css.statRow}>
-            {state.market.name !== undefined && <Badge kind="info">{state.market.name}</Badge>}
-            {state.market.itemCount !== undefined && (
-              <Badge kind="info">{t('list.count', { count: String(state.market.itemCount) })}</Badge>
-            )}
-          </div>
-        )}
         <div className={css.actionRow}>
           <Button variant="primary" disabled={state.refreshing || state.importing} onClick={() => { void runRefresh() }}>
             {state.refreshing ? <Spinner label={t('config.refreshing')} /> : t('config.refresh')}
@@ -315,21 +372,36 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
             {state.browsing ? <Spinner label={t('list.loading')} /> : t('list.browse')}
           </Button>
         </div>
-        <div className={css.statRow}>
-          <Badge kind={state.loadError !== null ? 'error' : 'ok'}>{statusText}</Badge>
-        </div>
       </Card>
 
       {state.error !== null && <Banner kind="error">{state.error}</Banner>}
 
-      {/* 条目详情（下载 + 校验 + dry-run 预览） */}
-      {state.detail !== null && detailView !== null && (
-        <Card>
-          <div className={css.actionRow}>
-            <span className={css.groupLabel}>{t('detail.title')}：{state.detail.name}</span>
-            <Button onClick={() => { patch({ detail: null }) }}>{t('detail.back')}</Button>
-          </div>
-
+      {/* 条目详情弹窗（下载 + 校验 + dry-run 预览；点「查看详情」→ 免责 → 弹窗；
+          下载完成前 detail 为 null → 显示 loading） */}
+      {downloadOpen && (
+        <div
+          className={css.dialogMask}
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !state.importing) closeDownload() }}
+        >
+          <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('detail.title')}>
+            <div className={css.dialogHeaderRow}>
+              <span className={css.dialogHeader}>{t('detail.title')}：{state.detail !== null ? state.detail.name : (state.downloadingId ?? '')}</span>
+              <button
+                type="button"
+                className={css.dialogClose}
+                aria-label={t('common.close')}
+                disabled={state.importing}
+                onClick={closeDownload}
+              >
+                ×
+              </button>
+            </div>
+            <div className={css.dialogBodyScroll}>
+          {state.error !== null && <Banner kind="error">{redact(state.error)}</Banner>}
+          {state.detail === null && (
+            <div className={css.statRow}><Spinner label={t('common.loading')} /></div>
+          )}
+          {state.detail !== null && detailView !== null && (<>
           {/* 供应链警示：恒展示（硬约束），确认导入前必经 */}
           <Banner kind="warn">
             <strong>{t('detail.needReview')}</strong>
@@ -422,11 +494,14 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
               {state.importResult.needsRestart && ' · 部分改动需重启 DSH 后生效'}
             </Banner>
           )}
-        </Card>
+          </>)}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* 条目列表（浏览） */}
-      {state.detail === null && (
+      {!downloadOpen && (
         <Card>
           {state.loadError !== null && <Empty>{t('list.empty')}</Empty>}
           {state.loadError === null && (
@@ -488,7 +563,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                         </Badge>
                       </div>
                     </div>
-                    <Button disabled={state.downloadingId === it.id} onClick={() => { void runDownload(it) }}>
+                    <Button disabled={state.downloadingId === it.id} onClick={() => { openDownload(it) }}>
                       {state.downloadingId === it.id ? <Spinner label={t('common.loading')} /> : t('list.download')}
                     </Button>
                   </div>
@@ -498,6 +573,25 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           )}
         </Card>
       )}
+      {/* 免责弹窗（复用 ConfirmDialog + 「不再提示」勾选；download 操作） */}
+      <ConfirmDialog
+        open={disclaimerKey === 'download'}
+        title={t('disclaimer.title')}
+        message={t('disclaimer.download.text')}
+        confirmLabel={t('disclaimer.confirm')}
+        cancelLabel={t('common.cancel')}
+        onConfirm={confirmDownloadDisclaimer}
+        onCancel={() => { setDisclaimerKey(null) }}
+      >
+        <label className={css.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={dontAsk}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setDontAsk(e.target.checked) }}
+          />
+          <span>{t('disclaimer.dontAsk')}</span>
+        </label>
+      </ConfirmDialog>
       </>
     )}
     </div>

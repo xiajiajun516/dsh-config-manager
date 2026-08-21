@@ -159,7 +159,7 @@ credentialsStatus, secrets, sessions, self
 
 **禁止分区**：`secrets`（凭据）、`sessions`（历史会话，含个人交互记录与上下文）、`pluginFiles`（任意文件直通，无结构过滤，目录放啥带啥）、`self`（本地环境专属：sync 通道地址/WebDAV 主机等环境信息）为市场条目硬性禁止分区——发布向导（prepare）与下载校验（validateMarketItem）两端均强制，含任一禁止分区的条目直接 invalid / 拒绝发布。作者发布前需在导出时排除这些分区。
 
-**内容级秘密扫描（纵深防御）**：发布向导除校验 `containsSecrets` 标记外，还会对 config.zip 内各分区**实际内容**做敏感扫描（复用 secret-scanner：字段名 + 值形状识别 api-key/token/password/SK- 形态；环境变量引用名豁免不误报）——即使导出标记被绕过，内容中残留的凭据也会被拦下。作者发布前应确认 providers/mcp/settings 等分区内容已脱敏（apiKey 请改为 env 引用名）。
+**内容级秘密扫描（纵深防御）**：发布向导除校验 `containsSecrets` 标记外，还会对 config.zip 内各分区**实际内容**做敏感扫描（复用 secret-scanner：字段名 + 值形状识别 api-key/token/password/SK- 形态；环境变量引用名豁免不误报）。扫描采用**宽松档**：占位符（`your-token`、`<token>`）、模板引用（`${VAR}` / `{{VAR}}` / `%VAR%` / `$VAR`）、代码表达式（`process.env.X`）与示例形态（`sk-your-*`、`Bearer example-*`、JWT 教学串）一律放行；只有值像**真实字面量凭据**（sk- 真实串 / ghp_ / AKIA / PEM / 完整 JWT，或字段名敏感且值为含数字/符号的混合长串）才拦截——即使导出标记被绕过，内容中残留的凭据也会被拦下。作者发布前应确认 providers/mcp/settings 等分区内容已脱敏（apiKey 请改为 env 引用名或 `${VAR}` 模板引用）。
 
 - `integrity/checksums.json`：**可选**；存在则会校验其声明的各文件 SHA-256 与实际内容一致，不一致拒绝；
 - 每个启用分区的数据文件在 ZIP 内必须真实存在（缺失 → 拒绝）。
@@ -197,7 +197,7 @@ credentialsStatus, secrets, sessions, self
 7. **分区数据合法**：JSON 分区过结构校验（version=1 + 顶层形状），文件分区目录非空；
 8. **L2↔L3 一致**：manifest.sections 与 zip 内部启用分区交集**非空**（空 → 拒绝）；
 9. **禁止分区拒绝**：`sessions`（历史会话）、`pluginFiles`（任意文件）、`self`（本地环境）为市场硬性禁止分区（与 `secrets` 同级）——发布向导与下载校验两端强制，含任一即拒绝；
-10. **内容级秘密扫描（发布侧纵深防御）**：对区内实际内容做敏感扫描（字段名 + 值形状），发现疑似凭据即拒绝发布——不依赖导出 `containsSecrets` 标记。
+10. **内容级秘密扫描（发布侧纵深防御）**：对区内实际内容做敏感扫描（字段名 + 值形状，宽松档：占位符/模板引用/代码表达式/示例形态放行），发现疑似**真实凭据**即拒绝发布——不依赖导出 `containsSecrets` 标记。
 
 辅以：`repo` 必须 `http(s)` 且无 userinfo（`git@`/`ssh://` 形态拒绝）；供应链警示对任何来源恒展示。
 

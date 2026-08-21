@@ -102,7 +102,7 @@ test('m2-refresh: password/passwordConfirm/secretInputs 绝不写入 sessionStor
   assert.ok(!('secretInputs' in (parsed['import'] as Record<string, unknown>)))
 })
 
-test('m2-refresh: 非敏感状态往返恢复，敏感字段刷新后清空', () => {
+test('m2-refresh: 非敏感表单状态往返恢复，敏感字段与导出结果瞬态刷新后清空', () => {
   const { storage } = makeStorage()
   const first = new RunStore({ storage })
   first.patch({
@@ -134,7 +134,7 @@ test('m2-refresh: 非敏感状态往返恢复，敏感字段刷新后清空', ()
   assert.deepEqual(st.export.selection, ['settings', 'plugins'])
   assert.equal(st.export.includeSecrets, true)
   assert.equal(st.export.encrypt, true, 'encrypt 为非敏感选项，刷新后恢复')
-  assert.equal(st.export.downloaded, true)
+  assert.equal(st.export.downloaded, false, '导出完成提示（downloaded）为瞬态，刷新后清空')
   assert.equal(st.export.password, '', '密码刷新后清空')
   assert.equal(st.export.passwordConfirm, '', '确认密码刷新后清空')
   assert.equal(st.import.step, 'preview')
@@ -142,6 +142,44 @@ test('m2-refresh: 非敏感状态往返恢复，敏感字段刷新后清空', ()
   assert.deepEqual(st.import.analysis, makeAnalysis())
   assert.deepEqual(st.import.plan, makePlan())
   assert.deepEqual(st.import.secretInputs, {}, '秘密补录值刷新后清空')
+})
+
+test('m2-refresh: 导出结果/进度/进行中为内存切片瞬态——不写入 sessionStorage、刷新后清空', () => {
+  const { storage, raw } = makeStorage()
+  const store = new RunStore({ storage })
+  store.patch({
+    export: {
+      result: {
+        zipPath: 'export-result-x.zip',
+        manifest: makeManifest(),
+        report: makeExportReport(),
+        text: '备份已创建\n已包含：\n  ✓ settings (21 namespaces)',
+      },
+      downloaded: true,
+      running: true,
+      progress: { stage: 'exporting', step: 1, total: 3, section: 'settings', item: 1, itemTotal: 3 },
+      runId: RUN_ID,
+    },
+  })
+  const text = raw()
+  assert.ok(text !== null, 'patch 后已同步持久化')
+  assert.ok(!text.includes('export-result-x.zip'), '导出结果文件名不得落入 sessionStorage')
+  assert.ok(!text.includes('备份已创建'), '报告文本不得落入 sessionStorage')
+  const parsed = JSON.parse(text) as { export: Record<string, unknown> }
+  assert.ok(!('result' in parsed['export']), 'export 切片不含 result（瞬态不落盘）')
+  assert.ok(!('downloaded' in parsed['export']), 'export 切片不含 downloaded（瞬态不落盘）')
+  assert.ok(!('running' in parsed['export']), 'export 切片不含 running（瞬态不落盘）')
+  assert.ok(!('progress' in parsed['export']), 'export 切片不含 progress（瞬态不落盘）')
+  assert.ok(!('runId' in parsed['export']), 'export 切片不含 runId（瞬态不落盘）')
+
+  // 新实例 + 同一存储 = 模拟页面刷新 → 导出结果清空，回到干净导出页
+  const second = new RunStore({ storage })
+  const st = second.getSnapshot()
+  assert.equal(st.export.result, null, '导出报告刷新后清空（不残留展示）')
+  assert.equal(st.export.downloaded, false, '已保存提示刷新后清空')
+  assert.equal(st.export.running, false, '进行中为瞬态，刷新后回复空闲')
+  assert.equal(st.export.progress, null, '进度刷新后清空')
+  assert.equal(st.export.runId, null, 'runId 刷新后清空')
 })
 
 test('损坏或版本不符的存储数据回退默认并清除脏键', () => {

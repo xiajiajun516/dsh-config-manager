@@ -57,6 +57,7 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
 import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
+import { cleanupCaches } from './core/cache-cleaner.ts'
 import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
@@ -109,7 +110,7 @@ import type {
   MarketDownloadResult, MarketIndex, MarketItemDetail, MarketListItem, MarketSummary,
 } from './market/types.ts'
 import { GitHubAuthRest, GitHubApiError } from './market/github-repos.ts'
-import { MyRepoService, USER_CONFIGS_REPO, userConfigsRepoUrl } from './market/my-repo.ts'
+import { MyRepoError, MyRepoService, USER_CONFIGS_REPO, userConfigsRepoUrl } from './market/my-repo.ts'
 import { createGitFileWriter } from './market/git-file-writer.ts'
 import { redact } from './security/redaction.ts'
 import { sha256Hex } from './utils/hashing.ts'
@@ -129,10 +130,13 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.40'
+const PLUGIN_VERSION = '0.1.41'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
+
+/** 缓存自动清理周期：24 小时（启动即清一次 + 此后每日一次；与 cache-cleaner 保留期独立） */
+const CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /**
  * 内置 GitHub OAuth App 的 client_id（「使用 GitHub 登录」device flow 缺省值）。
@@ -197,6 +201,8 @@ const API = {
   syncGithubStart: '/api/dsh-config-manager/sync/github/start',
   syncGithubPoll: '/api/dsh-config-manager/sync/github/poll',
   syncGithubCancel: '/api/dsh-config-manager/sync/github/cancel',
+  // m-sync-github-valid：校验已存 token 是否有效（决定「已登录」→ 隐藏登录区块）
+  syncGithubValidate: '/api/dsh-config-manager/sync/github/validate',
   // P2：同步历史 / 自动应用 / 一键回滚
   syncHistory: '/api/dsh-config-manager/sync/history',
   syncRollback: '/api/dsh-config-manager/sync/rollback',
@@ -224,6 +230,9 @@ const API = {
   meUpload: '/api/dsh-config-manager/me/upload',
   meItems: '/api/dsh-config-manager/me/items',
   meUpdate: '/api/dsh-config-manager/me/update',
+  meListing: '/api/dsh-config-manager/me/listing',
+  meRelist: '/api/dsh-config-manager/me/relist',
+  meDelete: '/api/dsh-config-manager/me/delete',
 } as const
 
 /**
@@ -1476,6 +1485,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const marketCacheItemDir = (url: string) => join(marketCacheRoot, urlHash(url), 'items')
   const marketWorkDir = (url: string) => join(marketWorkRoot, urlHash(url))
 
+  /**
+   * 进程生命周期标记：本次 dsh 启动后市场是否已成功刷新过一次（内存态，dsh 重启后自动归零）。
+   * 供「首次打开市场页自动更新一次市场」：MarketPanel 挂载时读 status 返回的
+   * bootAutoRefreshed 判断是否要自动拉取；refresh（含手动「拉取最新」）成功后置位。
+   */
+  let marketBootAutoRefreshed = false
+
   /** 请求级装配只读 GitMarketReader（公开市场无凭据；url = BUILTIN_MARKET_URL，已由 validateRepoUrl 拒绝 userinfo）。 */
   const makeMarketReader = (): GitMarketReader => new GitMarketReader({ msg, timeoutMs: 60_000 })
 
@@ -2312,6 +2328,43 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         writeJson(res, 200, { ok: true })
       },
     },
+    // -------------------------------------------------- sync/github/validate
+    // m-sync-github-valid：校验 SYNC_CREDENTIAL_REF 中已存 token 是否有效（GET /user），
+    // 供 UI 判定「是否已登录」→ 已登录隐藏 GitHub 登录区块、token 失效则重新展示。
+    // 只回布尔 + 登录名（非敏感），token 值绝不回传；仅 401（无效/过期）→ valid:false，
+    // 其余错误（网络/限流）向上抛，由 UI 兜底（不误判登出）。
+    {
+      kind: 'exact',
+      path: API.syncGithubValidate,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          let configured = false
+          let valid = false
+          let login: string | undefined
+          const resolved = await meTokenProvider()
+          configured = resolved !== ''
+          if (configured) {
+            try {
+              const user = await meGitHubRest.getUser()
+              valid = true
+              login = user.login
+            } catch (error) {
+              // 仅 401（token 无效/过期）→ 视为未登录；其余错误（网络/限流）向上抛
+              if (!(error instanceof GitHubApiError && error.code === 'unauthorized')) throw error
+            }
+          }
+          writeJson(res, 200, {
+            ok: true,
+            configured,
+            valid,
+            ...(login !== undefined ? { login } : {}),
+          })
+        } catch (error) {
+          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
     // ------------------------------------------------------ sync/history
     // P2：列出本地祖先快照目录的 manifest.json（id/createdAt/sectionHashes），
     // 同时统计 review-queue 中关联到该 snapshotId 的项数。
@@ -2702,7 +2755,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         if (!guard(req, res, 'GET')) return
         try {
           const summary = await buildMarketSummary({ url: BUILTIN_MARKET_URL, addedAt: '' })
-          writeJson(res, 200, { ok: true, configured: true, markets: [summary] })
+          writeJson(res, 200, {
+            ok: true,
+            configured: true,
+            markets: [summary],
+            // 首次打开市场页自动更新一次的判据：本次 dsh 启动后是否已刷新过（进程内存，重启重置）
+            bootAutoRefreshed: marketBootAutoRefreshed,
+          })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2730,6 +2789,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           // 写缓存 index（供离线重复浏览）。内容始终视为不可信，读取时再结构校验。
           await fs.mkdir(dirname(marketCacheIndex(url)), { recursive: true })
           await fs.writeFile(marketCacheIndex(url), text, 'utf8')
+          // 刷新成功 → 置位「本次启动已刷新」标记（手动「拉取最新」同样生效；失败不置位，下次打开可重试）
+          marketBootAutoRefreshed = true
           const summary = await buildMarketSummary({ url, addedAt: new Date().toISOString() })
           writeJson(res, 200, { ok: true, items: parsed.index!.items, market: { ...summary, lastFetchedAt: fetchedAt } })
         } catch (error) {
@@ -3032,6 +3093,79 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ---------------------------------------------------- me/listing
+    // 查询收录/下架任务状态（结果卡轮询）：任务表命中 → 直接返回；未命中 → 回退 GitHub 实况推导；
+    // 无任务且无实况 → 200 null。401（token 过期）→ 401，UI 引导重新登录。
+    {
+      kind: 'exact',
+      path: API.meListing,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
+        if (itemId === '') {
+          writeJson(res, 400, { error: 'itemId is required' })
+          return
+        }
+        try {
+          const status = await meService.listingStatus(itemId)
+          writeJson(res, 200, status) // null → 200 null
+        } catch (error) {
+          const status = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          writeJson(res, status, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
+    // ---------------------------------------------------- me/relist
+    // 重新提交收录（收录失败 / 进程重启丢失后的一键重试）：幂等复用已存在 fork/open PR。
+    {
+      kind: 'exact',
+      path: API.meRelist,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
+        if (itemId === '') {
+          writeJson(res, 400, { error: 'itemId is required' })
+          return
+        }
+        try {
+          const status = await meService.relist(itemId)
+          writeJson(res, 200, status)
+        } catch (error) {
+          const code = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          const message = error instanceof MyRepoError && error.code === 'item_not_found'
+            ? 404
+            : code
+          writeJson(res, message, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
+    // ---------------------------------------------------- me/delete
+    // 删除条目：同步删用户仓库索引 + items/<id>/ 文件；已收录 → 后台异步提下架 PR；待审核 → 关闭收录 PR。
+    {
+      kind: 'exact',
+      path: API.meDelete,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
+        if (itemId === '') {
+          writeJson(res, 400, { error: 'itemId is required' })
+          return
+        }
+        try {
+          const result = await meService.deleteItem(itemId)
+          writeJson(res, 200, result)
+        } catch (error) {
+          const code = error instanceof GitHubApiError && error.code === 'unauthorized' ? 401 : 500
+          const message = error instanceof MyRepoError && error.code === 'item_not_found'
+            ? 404
+            : code
+          writeJson(res, message, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
   ]
   return { routes: routesList, scheduler }
 }
@@ -3063,6 +3197,29 @@ export function apply(ctx: Context, config?: Config): void {
   mkdirSync(marketDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
+  // 缓存自动清理：启动即清一次 + 每 24h 定时清一次。
+  // 只清「可重建/一次性」缓存与临时文件（tmp 暂存、exports 导出副本、market cache/work），
+  // 保留期内的文件不删（供刷新恢复导入/下载等窗口继续消费）；snapshots 与 sync 属用户数据/安全网不动。
+  // 尽力而为：任何失败仅记日志，不影响插件挂载与其他功能。
+  const runCacheCleanup = (): void => {
+    void cleanupCaches({
+      tmpDir,
+      exportsDir,
+      marketCacheRoot: join(marketDir, 'cache'),
+      marketWorkRoot: join(marketDir, 'work'),
+    })
+      .then((report) => {
+        if (report.removed > 0) {
+          host.log.info('缓存自动清理完成', { removed: report.removed, freedBytes: report.freedBytes })
+        }
+      })
+      .catch((error) => {
+        host.log.warn('缓存自动清理失败', { error: error instanceof Error ? error.message : String(error) })
+      })
+  }
+  runCacheCleanup()
+  const cacheCleanupTimer = setInterval(runCacheCleanup, CACHE_CLEANUP_INTERVAL_MS)
+  ctx.effect(() => () => clearInterval(cacheCleanupTimer), 'config-manager: cache cleanup scheduler')
   // self 分区目录（相对 ~/.dsh 根）：dataDir 在 homeDir 下 → 用相对路径挂载 self adapter；
   // 自定义 dataDir 位于 ~/.dsh 之外时 Host fs 门面无法覆盖（confined to home root），
   // 不挂 self 分区并告警（其余分区不受影响）。

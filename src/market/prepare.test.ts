@@ -111,7 +111,7 @@ test('prepare：zip 含 self 分区拒绝（本地环境专属，禁止进入市
 
 test('prepare：内容级秘密扫描拒绝（providers 分区含 apiKey 值，即使 containsSecrets=false）', () => {
   const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
-  const providersJson = JSON.stringify({ version: 1, providers: { deepseek: { apiKey: 'sk-test1234567890abcdef' } } }, null, 2)
+  const providersJson = JSON.stringify({ version: 1, providers: { deepseek: { apiKey: 'sk-proj-9f8e7d6c5b4a3210abcdef' } } }, null, 2)
   const entries: ZipWriteEntry[] = [
     { name: 'config/settings.json', data: Buffer.from(settingsJson) },
     { name: 'ai/providers.json', data: Buffer.from(providersJson) },
@@ -130,6 +130,76 @@ test('prepare：内容级秘密扫描拒绝（providers 分区含 apiKey 值，�
   assert.throws(
     () => prepareMarketItem({ itemId: 'pv', name: 'PV', zipBytes: zip }),
     (err: unknown) => err instanceof MarketPrepareError && /敏感内容/.test(err.message),
+  )
+})
+
+test('prepare：插件/MCP 配置中的占位/模板引用/示例不误报（2026-08-21 优化）', () => {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
+  // plugins 分区：插件配置里常见的「环境变量模板引用 + 占位头」形态（真实结构为数组）
+  const pluginsJson = JSON.stringify({
+    version: 1,
+    plugins: [
+      {
+        name: 'mcp-server',
+        enabled: true,
+        config: {
+          headers: { Authorization: 'Bearer <token>' },
+          apiKey: '${OPENAI_API_KEY}',
+          max_tokens: 4096,
+          baseUrl: 'https://api.example.com',
+        },
+      },
+    ],
+  }, null, 2)
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'plugins/plugins.json', data: Buffer.from(pluginsJson) },
+  ]
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { settings: true, plugins: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  const zip = Buffer.from(zipToBuffer(entries))
+  const res = prepareMarketItem({ itemId: 'mcp', name: 'MCP', zipBytes: zip, now: FIXED_NOW })
+  const manifestOut = JSON.parse(res.manifestText) as { sections: string[] }
+  assert.deepEqual(manifestOut.sections, ['settings', 'plugins'])
+})
+
+test('prepare：skill 文档中的示例代码/占位符不误报；真实密钥仍拦截', () => {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
+  // skills 分区（文件类，scanText）：示例文档 + 一个真实密钥文件
+  const skillDoc = [
+    '# 使用示例',
+    'token: ${API_TOKEN}',
+    'password: your-token-here',
+    'api_key: sk-your-api-key-here',
+    'Authorization: Bearer example-token-here',
+  ].join('\n')
+  const realDoc = 'client_secret: s3cretP@ssw0rdXyZ2024'
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'custom/skills/example.md', data: Buffer.from(skillDoc) },
+    { name: 'custom/skills/real.md', data: Buffer.from(realDoc) },
+  ]
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { settings: true, skills: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  const zip = Buffer.from(zipToBuffer(entries))
+  // 示例文档放行，但真实密钥文件仍触发拦截（命中报告含 skills 前缀）
+  assert.throws(
+    () => prepareMarketItem({ itemId: 'sk', name: 'SK', zipBytes: zip }),
+    (err: unknown) => err instanceof MarketPrepareError && /疑似敏感内容.*skills/.test(err.message),
   )
 })
 

@@ -17,6 +17,10 @@
  * 渲染前仍过 redact() 兜底（与全站一致）。
  */
 import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import type { UploadResult } from '../../market/my-repo.ts'
+import type { MarketDownloadResult } from '../../market/types.ts'
+import type { ImportResult } from '../../core/types.ts'
+import type { MarketApprovals } from './market-view.ts'
 
 /* ---------------------------------------------------------------- 登录状态展示模型 */
 
@@ -105,6 +109,170 @@ export function myConfigFormValid(errors: MyConfigFormErrors): boolean {
 /** 逗号分隔类别文本 → 去空白数组（空结果 = 无类别；与 PublishView 相同语义）。 */
 export function parseCategories(csv: string): string[] {
   return csv.split(',').map((c) => c.trim()).filter((c) => c !== '')
+}
+
+/* ---------------------------------------------------------------- 上传/更新向导状态模型 */
+
+/**
+ * 上传结果（对齐 host 半 my-repo.ts 的 UploadResult 类型，避免客户端各层重复声明）。
+ * 纯 JSON 无 token：error/listingError 在宿主侧已脱敏；可安全持久化。
+ */
+export type MyUploadResult = UploadResult
+
+/**
+ * 上传/更新向导的运行时全量状态（迁移自 MyConfigsView 组件内私有 WizardState）。
+ * validating/validated/running/formErrors 为瞬态/派生字段：不进入持久化切片
+ * （MyWizardSlice）；validated 虽为瞬态，但「是否已校验通过」值得随切片保留，
+ * 恢复后由组件结合 zipPath 决定是否自动重校验（详见 restoreMyWizard 注释）。
+ */
+export interface MyWizardState {
+  mode: 'upload' | 'update'
+  step: 'select' | 'validate' | 'form'
+  zipPath: string | null
+  fileName: string | null
+  /** 瞬态：校验进行中（不持久化，恢复后恒 false） */
+  validating: boolean
+  /** 瞬态：最近一次校验是否通过（切片保留，恢复后由组件决定是否重校验） */
+  validated: boolean
+  validationError: string | null
+  form: MyConfigForm
+  /** 派生：由 validateMyConfigForm(form) 重算（不持久化） */
+  formErrors: MyConfigFormErrors
+  /** 瞬态：上传/更新请求进行中（不持久化，恢复后恒 false） */
+  running: boolean
+  result: MyUploadResult | null
+  error: string | null
+}
+
+/** 向导初始状态常量（initialWizard('upload') 语义；调用方应经 initialWizard 获取新对象）。 */
+export const EMPTY_MY_WIZARD: MyWizardState = {
+  mode: 'upload',
+  step: 'select',
+  zipPath: null,
+  fileName: null,
+  validating: false,
+  validated: false,
+  validationError: null,
+  form: { ...EMPTY_MY_CONFIG_FORM },
+  formErrors: { name: null },
+  running: false,
+  result: null,
+  error: null,
+}
+
+/**
+ * 向导的持久化切片 = 全量状态去掉瞬态/派生字段（validating/running/formErrors）。
+ * formErrors 恢复时由 restoreMyWizard 经 validateMyConfigForm 重算；validating/running 恢复后恒 false。
+ * 仅非敏感字段：zipPath 为宿主受控临时文件路径、form 为用户输入描述性内容（含 update 模式的
+ * 公开条目 id）、result 为无 token 的 UploadResult —— 与 run-store market 切片整体落盘纪律一致。
+ */
+export interface MyWizardSlice {
+  mode: 'upload' | 'update'
+  step: 'select' | 'validate' | 'form'
+  zipPath: string | null
+  fileName: string | null
+  validated: boolean
+  validationError: string | null
+  form: MyConfigForm
+  result: MyUploadResult | null
+  error: string | null
+}
+
+/** 全量状态 → 持久化切片（忽略 validating/running/formErrors；form 浅拷贝，result 直接引用纯 JSON）。 */
+export function toMyWizardSlice(w: MyWizardState): MyWizardSlice {
+  return {
+    mode: w.mode,
+    step: w.step,
+    zipPath: w.zipPath,
+    fileName: w.fileName,
+    validated: w.validated,
+    validationError: w.validationError,
+    form: { ...w.form },
+    result: w.result,
+    error: w.error,
+  }
+}
+
+/**
+ * 持久化切片 → 全量状态（null → 全新向导）。瞬态字段归零（validating/running 恒 false），
+ * formErrors 按 form 经 validateMyConfigForm 重算；form 拷贝新对象（不共享切片引用）。
+ */
+export function restoreMyWizard(slice: MyWizardSlice | null): MyWizardState {
+  if (slice === null) return { ...EMPTY_MY_WIZARD, form: { ...EMPTY_MY_CONFIG_FORM } }
+  return {
+    mode: slice.mode,
+    step: slice.step,
+    zipPath: slice.zipPath,
+    fileName: slice.fileName,
+    validating: false,
+    validated: slice.validated,
+    validationError: slice.validationError,
+    form: { ...slice.form },
+    formErrors: validateMyConfigForm(slice.form),
+    running: false,
+    result: slice.result,
+    error: slice.error,
+  }
+}
+
+/** 指定模式的向导初始状态（form 全新空表；mode/step 之外同 EMPTY_MY_WIZARD）。 */
+export function initialWizard(mode: 'upload' | 'update'): MyWizardState {
+  return { ...EMPTY_MY_WIZARD, mode, form: { ...EMPTY_MY_CONFIG_FORM } }
+}
+
+/* ---------------------------------------------------------------- 装回本地状态模型 */
+
+/**
+ * 装回本地（下载 + 逐分区批准 + 执行导入）的运行时全量状态。
+ * importing 为瞬态：不进入持久化切片（MyInstallSlice）；approvals（逐分区批准）是
+ * 用户昂贵的人工决策，必须随切片保留（切 tab/刷新不丢）。
+ */
+export interface MyInstallState {
+  itemId: string
+  detail: MarketDownloadResult | null
+  /** 逐分区批准表（安全不变式 (c)：高风险分区默认不勾选） */
+  approvals: MarketApprovals
+  /** 瞬态：导入执行中（不持久化，恢复后恒 false） */
+  importing: boolean
+  importResult: ImportResult | null
+  error: string | null
+}
+
+/**
+ * 装回本地的持久化切片 = 全量状态去掉瞬态（importing）。
+ * 仅非敏感字段：detail.zipPath 为宿主受控临时文件路径、approvals 为布尔批准表、
+ * importResult 为纯 JSON、error 为已 redact 文本 —— 与 run-store market 切片整体落盘纪律一致。
+ */
+export interface MyInstallSlice {
+  itemId: string
+  detail: MarketDownloadResult | null
+  approvals: MarketApprovals
+  importResult: ImportResult | null
+  error: string | null
+}
+
+/** 全量状态 → 持久化切片（忽略 importing；detail/approvals/importResult 直接引用纯 JSON/布尔表）。 */
+export function toMyInstallSlice(s: MyInstallState): MyInstallSlice {
+  return {
+    itemId: s.itemId,
+    detail: s.detail,
+    approvals: s.approvals,
+    importResult: s.importResult,
+    error: s.error,
+  }
+}
+
+/** 持久化切片 → 全量状态（null → 无装回本地会话；importing 恢复后恒 false）。 */
+export function restoreMyInstall(slice: MyInstallSlice | null): MyInstallState | null {
+  if (slice === null) return null
+  return {
+    itemId: slice.itemId,
+    detail: slice.detail,
+    approvals: slice.approvals,
+    importing: false,
+    importResult: slice.importResult,
+    error: slice.error,
+  }
 }
 
 /* ---------------------------------------------------------------- 系统自动字段徽章 */

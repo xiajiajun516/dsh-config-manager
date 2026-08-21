@@ -53,6 +53,8 @@ import type { ChannelSyncState, SyncChannel } from './sync/sync-view.ts'
 import { defaultChannelSyncState } from './sync/sync-view.ts'
 import type { MarketApprovals } from './market/market-view.ts'
 import type { MyItemEntry } from './market/my-configs-api.ts'
+import type { MyInstallSlice, MyWizardSlice } from './market/my-configs-view.ts'
+import type { SyncConflictResolution } from './sync/sync-view.ts'
 
 /* ---------------------------------------------------------------- 基础类型 */
 
@@ -118,6 +120,8 @@ export interface SyncStoreSlice {
   pullReport: SyncPullReport | null
   /** 一键同步差异确认会话（items 供 UI 逐项确认；宿主侧 30 分钟 TTL 内存登记） */
   confirmSession: SyncStartResponse | null
+  /** 一键同步差异确认的逐项决策（adopted/resolution；非敏感，与 confirmSession 生命周期绑定——切 tab/刷新不丢，刷新后会话仍在可恢复决策） */
+  confirmDecisions: SyncConfirmDecisions | null
   /** 最近一次一键同步执行结果（回滚入口） */
   lastRestoreId: string | null
   /** 已 redact 的错误文本 */
@@ -127,6 +131,15 @@ export interface SyncStoreSlice {
 
 /** 同步视图的进行中操作标记（与 SyncUiState.busy 同形状；无 busy 时为空闲）。 */
 export type SyncBusyState = 'sync' | 'push' | 'pull' | 'rollback' | null
+
+/**
+ * 一键同步差异确认的单条决策（非敏感；resolution 仅在 Conflict 项已解决时存在）。
+ * 与 SyncConfirmView 的 ItemState 同构（resolution 序列化为 SyncConflictResolution 字符串）。
+ */
+export type SyncConfirmDecision = { adopted: boolean; resolution?: SyncConflictResolution }
+
+/** 一键同步差异确认的逐项决策表（itemId → 决策；null = 无进行中的确认会话决策）。 */
+export type SyncConfirmDecisions = Record<string, SyncConfirmDecision>
 
 /** 单通道状态的持久化切片 = 运行时剔除密码类敏感字段（安全关键，白名单单一出口）。 */
 export type PersistedChannelSyncState = Omit<
@@ -164,6 +177,12 @@ export interface MarketStoreSlice {
   myItems: MyItemEntry[] | null
   /** 我的配置子视图：列表加载错误（已 redact 文本；null = 无） */
   myItemsError: string | null
+  /** 我的配置子视图：上传/更新向导持久化切片（仅非敏感字段；null = 未开始或已完成，见 my-configs-view.ts MyWizardSlice） */
+  myWizard: MyWizardSlice | null
+  /** 我的配置子视图：装回本地（下载+逐分区批准+导入结果）持久化切片（仅非敏感；null = 未开始或已关闭） */
+  myInstall: MyInstallSlice | null
+  /** 我的配置子视图：删除确认弹窗的目标条目 id（非敏感；切 tab/刷新不丢，用户可见的确认态） */
+  myConfirmDeleteId: string | null
 }
 
 /** 快照恢复面板的切片（无敏感字段；快照列表本身可随时重载，不持久化）。 */
@@ -177,7 +196,14 @@ export interface SnapshotsStoreSlice {
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
 
-/** 导出视图的持久化切片（不含 password/passwordConfirm）。 */
+/**
+ * 导出视图的持久化切片 = 仅「表单配置类」非敏感字段（模式/勾选/安全选项/错误）。
+ *
+ * 导出结果（result / downloaded）与进行中/进度（running / progress / runId）是
+ * **内存切片瞬态**：切 tab / 关面板由模块级单例保留，刷新 / 关闭 DSH 重开后自动
+ * 清空 —— 旧导出报告与「已保存到下载目录」提示不残留展示（与 sync 面板 busy 同级）。
+ * 不含 password/passwordConfirm（仅内存）。
+ */
 export interface PersistedExportState {
   mode: ExportMode
   selection: SectionId[]
@@ -185,14 +211,8 @@ export interface PersistedExportState {
   includeSecrets: boolean
   /** 是否加密备份（独立选项；不导出密钥也可单独加密） */
   encrypt: boolean
-  running: boolean
-  progress: RunProgress | null
-  result: ExportRunResult | null
   /** 错误消息（已 redact 的文本；Error 对象不可 JSON 序列化，统一转字符串） */
   error: string | null
-  downloaded: boolean
-  /** 最近一次导出 run id（/runs + /progress 重新订阅用；32-hex 不可猜） */
-  runId: string | null
 }
 
 /** 导入向导的持久化切片（不含 secretInputs）。 */
@@ -235,11 +255,27 @@ export interface PersistedState {
 
 /* --------------------------------------- 运行时状态（含仅内存的敏感字段） */
 
-/** 导出运行时状态 = 持久化字段 + 仅内存的密码字段。 */
+/**
+ * 导出运行时状态 = 持久化字段 + 密码字段（仅内存）+ 导出结果/进度瞬态。
+ *
+ * result / downloaded / running / progress / runId 为「内存切片」：toPersistedState
+ * 白名单剔除、applyPersisted 硬性清空 —— 刷新 / 关闭 DSH 重开后不残留；
+ * 进行中导出由 m2-resume 从宿主 /runs 重新发现并恢复轮询。
+ */
 export interface ExportLiveState extends PersistedExportState {
   /** 加密密码（仅内存，绝不写入 sessionStorage；刷新后清空） */
   password: string
   passwordConfirm: string
+  /** 导出进行中（内存切片瞬态：切 tab 保留、刷新清空） */
+  running: boolean
+  /** 导出进度（内存切片瞬态；进行中由 m2-resume 重回填，否则清空） */
+  progress: RunProgress | null
+  /** 导出结果报告（内存切片瞬态；刷新/关闭 DSH 后清空，不残留展示） */
+  result: ExportRunResult | null
+  /** 「已保存到下载目录」提示（内存切片瞬态；刷新后清空） */
+  downloaded: boolean
+  /** 最近一次导出 run id（/runs + /progress 重新订阅用；resume 自 /runs 发现，纯瞬态） */
+  runId: string | null
 }
 
 /** 导入运行时状态 = 持久化字段 + 仅内存的敏感/实例字段。 */
@@ -347,6 +383,7 @@ function defaultSyncState(): SyncStoreSlice {
     pushReport: null,
     pullReport: null,
     confirmSession: null,
+    confirmDecisions: null,
     lastRestoreId: null,
     error: null,
     loadError: null,
@@ -366,6 +403,9 @@ function defaultMarketState(): MarketStoreSlice {
     loadError: null,
     myItems: null,
     myItemsError: null,
+    myWizard: null,
+    myInstall: null,
+    myConfirmDeleteId: null,
   }
 }
 
@@ -418,6 +458,7 @@ export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
     pushReport: s.pushReport,
     pullReport: s.pullReport,
     confirmSession: s.confirmSession,
+    confirmDecisions: s.confirmDecisions,
     lastRestoreId: s.lastRestoreId,
     error: s.error,
     loadError: s.loadError,
@@ -438,6 +479,9 @@ export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
     loadError: s.loadError,
     myItems: s.myItems,
     myItemsError: s.myItemsError,
+    myWizard: s.myWizard,
+    myInstall: s.myInstall,
+    myConfirmDeleteId: s.myConfirmDeleteId,
   }
 }
 
@@ -457,11 +501,20 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
  * 与不可序列化的实例字段（conflictCollector），以及同步面板的凭据字段
  * （token/webdavPassword/encryptPassword/encryptPasswordConfirm/decryptPassword ——
  * 含 byChannel 内每通道的加密/解密密码）与瞬态字段（busy/savingConfig —— 刷新后
- * 回复空闲，不把「进行中」状态带到新页面），其余原样落入 sessionStorage。
+ * 回复空闲，不把「进行中」状态带到新页面）；导出面板的结果字段（result/downloaded）
+ * 与进行中/进度（running/progress/runId）同为内存切片瞬态一并剔除（刷新/关闭 DSH
+ * 后不残留上次导出报告），其余原样落入 sessionStorage。
  * 这是 sessionStorage 的唯一写入路径 —— 敏感值在此被硬性隔离。
  */
 export function toPersistedState(state: StoreState): PersistedState {
-  const { password: _password, passwordConfirm: _passwordConfirm, ...exportRest } = state.export
+  const {
+    password: _password, passwordConfirm: _passwordConfirm,
+    // 导出结果/进度为内存切片瞬态（切 tab 由模块级单例保留、刷新/关闭 DSH 清空）：
+    // 不落盘，旧导出报告与「已保存」提示不残留展示 —— 与 sync 面板 busy 同级
+    result: _result, downloaded: _downloaded, running: _running,
+    progress: _progress, runId: _runId,
+    ...exportRest
+  } = state.export
   const {
     secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
     archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector, ...importRest
@@ -753,6 +806,13 @@ export class RunStore {
         // 硬性：密码/确认密码绝不从存储恢复
         password: '',
         passwordConfirm: '',
+        // 硬性：导出结果/进度/进行中为内存切片瞬态，绝不从存储恢复（即便旧版持久化
+        // 载荷携带这些字段也清空）—— 刷新/关闭 DSH 重开后导出页干净，不残留上次结果
+        result: null,
+        downloaded: false,
+        running: false,
+        progress: null,
+        runId: null,
       },
       import: {
         ...defaultImportState(),

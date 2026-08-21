@@ -37,6 +37,7 @@ export const SYNC_API = {
   githubStart: '/api/dsh-config-manager/sync/github/start',
   githubPoll: '/api/dsh-config-manager/sync/github/poll',
   githubCancel: '/api/dsh-config-manager/sync/github/cancel',
+  githubValidate: '/api/dsh-config-manager/sync/github/validate',
   history: '/api/dsh-config-manager/sync/history',
   snapshotsList: '/api/dsh-config-manager/sync/snapshots-list',
   sync: '/api/dsh-config-manager/sync/sync',
@@ -377,6 +378,18 @@ export interface GithubPollResponse {
   credentialConfigured?: boolean;
 }
 
+/** POST /sync/github/validate 响应：token 是否已配置 + 是否有效（GET /user；
+ *  401 → 无效）。只回布尔 + 登录名（非敏感），token 值永不回传浏览器。 */
+export interface GithubValidateResponse {
+  ok: boolean;
+  /** token 是否存在于 DSH credentials */
+  configured: boolean;
+  /** token 是否有效（GitHub GET /user 成功；configured=false 时恒 false） */
+  valid: boolean;
+  /** GitHub 登录名（valid=true 时；非敏感展示位） */
+  login?: string;
+}
+
 /** 同步请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐（git 网络操作可能较慢） */
 const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -462,6 +475,12 @@ export class SyncApi {
   /** GitHub OAuth device flow：取消（丢弃宿主侧登记，零副作用） */
   async githubCancel(flowId: string): Promise<{ ok: boolean }> {
     return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId }, this.t);
+  }
+
+  /** GitHub token 有效性校验（判定「是否已登录」：token 存在且 GitHub API 接受；
+   *  401 → valid:false 引导重新登录；非 401 错误向上抛，UI 兜底不误判登出） */
+  async githubValidate(): Promise<GithubValidateResponse> {
+    return postJson<GithubValidateResponse>(SYNC_API.githubValidate, {}, this.t);
   }
 
   /** 同步历史：列出本地祖先快照 + 自动同步执行记录（按 createdAt 倒序合并）。 */

@@ -25,25 +25,29 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
-import type { ImportResult } from '../../core/types.ts'
-import type { MarketDownloadResult } from '../../market/types.ts'
 import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from '../../market/github-repos.ts'
 import type { MarketApi } from './market-api.ts'
-import type { MyConfigsApi, MyItemEntry, MyUploadResult } from './my-configs-api.ts'
+import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
+import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
+import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { redact } from '../../security/redaction.ts'
 import { computeGithubLoginView, githubPollMessage } from '../sync/sync-view.ts'
 import type { GithubLoginPhase } from '../sync/sync-view.ts'
+import { readDisclaimerDismissed, writeDisclaimerDismissed } from './disclaimer.ts'
+import type { DisclaimerKey } from './disclaimer.ts'
 import {
-  autoFieldBadges, deriveLoginState, EMPTY_MY_CONFIG_FORM, itemStatusFromHost,
-  myConfigFormValid, parseCategories, summarizeMyItems, toMyItemView, validateMyConfigForm,
+  autoFieldBadges, deriveLoginState, initialWizard, itemStatusFromHost,
+  myConfigFormValid, parseCategories, restoreMyInstall, restoreMyWizard, summarizeMyItems,
+  toMyInstallSlice, toMyItemView, toMyWizardSlice, validateMyConfigForm,
 } from './my-configs-view.ts'
-import type { LoginView, MyConfigForm, MyConfigFormErrors, MeStatusData } from './my-configs-view.ts'
+import type {
+  LoginView, MyConfigForm, MeStatusData, MyInstallSlice, MyInstallState, MyWizardSlice, MyWizardState,
+} from './my-configs-view.ts'
 import {
   approvalRows, approvedAdapterSummary, buildApprovedPlan, defaultApprovals, marketDetailView,
 } from './market-view.ts'
-import type { MarketApprovals } from './market-view.ts'
 import css from '../config-manager.module.css'
 
 export interface MyConfigsViewProps {
@@ -62,6 +66,18 @@ export interface MyConfigsViewProps {
   myItemsError: string | null
   /** 列表状态上抛（MarketPanel 统一 commit/patch 镜像 runStore，切 tab 不丢） */
   onMyItemsChange: (items: MyItemEntry[] | null, error: string | null) => void
+  /** 上传/更新向导持久化切片（受控：MarketPanel 经 runStore 持有；null = 未开始） */
+  myWizard: MyWizardSlice | null
+  /** 向导切片上抛（MarketPanel 统一 commit/patch 镜像 runStore，切 tab/刷新不丢） */
+  onMyWizardChange: (wizard: MyWizardSlice | null) => void
+  /** 装回本地（下载+逐分区批准+导入结果）持久化切片（受控：MarketPanel 经 runStore 持有；null = 未开始/已关闭） */
+  myInstall: MyInstallSlice | null
+  /** 装回本地切片上抛（MarketPanel 统一 commit/patch 镜像 runStore，切 tab/刷新不丢） */
+  onMyInstallChange: (install: MyInstallSlice | null) => void
+  /** 删除确认弹窗目标条目 id（受控：MarketPanel 经 runStore 持有；null = 无确认中的删除） */
+  myConfirmDeleteId: string | null
+  /** 删除确认态上抛（MarketPanel 统一 commit/patch 镜像 runStore，切 tab/刷新不丢） */
+  onMyConfirmDeleteChange: (id: string | null) => void
 }
 
 /* -------------------------------- GitHub device flow 状态（仅内存，token 只存宿主） */
@@ -79,50 +95,18 @@ const initialGithubFlow: GithubFlowState = {
   phase: 'idle', flowId: '', userCode: '', verificationUri: '', interval: 5, error: null,
 }
 
-/** 上传/更新向导状态（一次性低频率流程，不进 sessionStorage —— 与 PublishView 同策略） */
-interface WizardState {
-  mode: 'upload' | 'update'
-  step: 'select' | 'validate' | 'form'
-  zipPath: string | null
-  fileName: string | null
-  validating: boolean
-  validated: boolean
-  validationError: string | null
-  form: MyConfigForm
-  formErrors: MyConfigFormErrors
-  running: boolean
-  result: MyUploadResult | null
-  error: string | null
-}
+/**
+ * 上传/更新向导状态（全量模型在 my-configs-view.ts 的 MyWizardState；本组件持有的是
+ * 持久化切片 myWizard（受控 props），经 restoreMyWizard 恢复全量、toMyWizardSlice 上抛镜像。
+ * 瞬态（validating/running/formErrors）由 restore 重建，切 tab/刷新恢复后为初始态。
+ * 装回本地状态（MyInstallState）同模式：持久化切片 myInstall（受控 props），
+ * 经 restoreMyInstall 恢复全量（importing 瞬态归零）、toMyInstallSlice 上抛镜像。
+ */
 
-function initialWizard(mode: 'upload' | 'update'): WizardState {
-  return {
-    mode,
-    step: 'select',
-    zipPath: null,
-    fileName: null,
-    validating: false,
-    validated: false,
-    validationError: null,
-    form: { ...EMPTY_MY_CONFIG_FORM },
-    formErrors: { name: null },
-    running: false,
-    result: null,
-    error: null,
-  }
-}
-
-/** 装回本地（下载 + 逐分区批准 + 执行导入）状态 */
-interface InstallState {
-  itemId: string
-  detail: MarketDownloadResult | null
-  approvals: MarketApprovals
-  importing: boolean
-  importResult: ImportResult | null
-  error: string | null
-}
-
-export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myItemsError, onMyItemsChange }: MyConfigsViewProps) {
+export function MyConfigsView({
+  meApi, api, importApi, syncApi, t, myItems, myItemsError, onMyItemsChange, myWizard, onMyWizardChange,
+  myInstall, onMyInstallChange, myConfirmDeleteId, onMyConfirmDeleteChange,
+}: MyConfigsViewProps) {
   const uiT = meApi.t // 展示层翻译器（myConfigs.* 键经 UiT；同 MarketPanel 用 api.t）
 
   /* ---------------- 登录状态（/me/status；statusFailed=401 → token 失效） ---------------- */
@@ -136,10 +120,139 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
   /* ---------------- 已上传列表（受控：MarketPanel 持有并镜像 runStore market.myItems） ---------------- */
   const [listLoading, setListLoading] = useState(false)
 
-  /* ---------------- 向导 / 装回本地 ---------------- */
-  const [wizard, setWizard] = useState<WizardState>(() => initialWizard('upload'))
-  const [install, setInstall] = useState<InstallState | null>(null)
+  /* ---------------- 向导（受控：切片来自 runStore；瞬态本地重建）/ 装回本地 / 删除 ---------------- */
+  const [wizard, setWizard] = useState<MyWizardState>(() => restoreMyWizard(myWizard))
+  /** 最近一次 wizard 全量（commitWizard 读最新值，避免闭包过期） */
+  const wizardRef = useRef<MyWizardState>(wizard)
+  /** 收录/下架任务状态（结果卡轮询 /me/listing 的实时结果） */
+  const [listingStatus, setListingStatus] = useState<ListingStatusResponse | null>(null)
+  /** 收录/下架任务轮询定时器 */
+  const listingPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** 删除确认弹窗目标条目 id（受控：MarketPanel 经 runStore 持有，切 tab/刷新不丢；null = 无确认中的删除） */
+  const confirmDeleteId = myConfirmDeleteId
+  /** 正在删除的条目 id（行级 spinner + 防重复点击） */
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  /** 装回本地状态（受控：切片来自 runStore；瞬态 importing 本地重建） */
+  const [install, setInstall] = useState<MyInstallState | null>(() => restoreMyInstall(myInstall))
+  /** 最近一次 install 全量（commitInstall 读最新值，避免闭包过期） */
+  const installRef = useRef<MyInstallState | null>(install)
   const fileInput = useRef<HTMLInputElement>(null)
+
+  /* ---------------- 弹窗交互（2026-08-21：上传/装回本地搬进弹窗 + 免责前置） ---------------- */
+  /** 上传/更新向导弹窗开关（瞬态 UI，不持久化：切 tab 弹窗关闭，数据仍在 runStore） */
+  const [uploadOpen, setUploadOpen] = useState(false)
+  /** 装回本地弹窗开关（同上） */
+  const [installOpen, setInstallOpen] = useState(false)
+  /** 当前展示的免责弹窗操作（null = 无；upload/download/install 三操作分开记「不再提示」） */
+  const [disclaimerKey, setDisclaimerKey] = useState<DisclaimerKey | null>(null)
+  /** 免责弹窗「不再提示」勾选（每次打开重置） */
+  const [dontAsk, setDontAsk] = useState(false)
+  /** localStorage（浏览器环境；免责「不再提示」跨会话持久化） */
+  const storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage
+
+  /** 打开上传/更新弹窗（更新模式表单已预填）：未勾「不再提示」→ 先弹免责，确认后开弹窗 */
+  const openUpload = (): void => {
+    if (readDisclaimerDismissed('upload', storage)) {
+      setUploadOpen(true)
+      return
+    }
+    setDontAsk(false)
+    setDisclaimerKey('upload')
+  }
+  /** 待装回本地的目标条目（免责确认后取用；避免免责流程中闭包过期） */
+  const pendingInstallEntry = useRef<MyItemEntry | null>(null)
+  /** 打开装回本地弹窗：未勾「不再提示」→ 先弹免责，确认后开弹窗并启动下载 */
+  const openInstall = (entry: MyItemEntry): void => {
+    pendingInstallEntry.current = entry
+    if (readDisclaimerDismissed('install', storage)) {
+      setInstallOpen(true)
+      void runDownload(entry)
+      return
+    }
+    setDontAsk(false)
+    setDisclaimerKey('install')
+  }
+  /** 关闭上传/更新弹窗：重置向导为初始态（弹窗即会话，关闭即放弃本次操作；
+   *  更新模式也切回「一键上传」入口，避免入口按钮残留 update 态） */
+  const closeUpload = (): void => {
+    setUploadOpen(false)
+    commitWizard(initialWizard('upload'))
+    setListingStatus(null)
+  }
+  /** 取消更新：放弃本次更新，向导回到默认「一键上传」初始态（清空预填/暂存/校验态），弹窗保持打开 */
+  const cancelUpdate = (): void => {
+    commitWizard(initialWizard('upload'))
+    setListingStatus(null)
+  }
+  /** 关闭装回本地弹窗：清 install 会话 */
+  const closeInstall = (): void => {
+    setInstallOpen(false)
+    commitInstall(null)
+  }
+  /** 免责弹窗确认：勾选则记录「不再提示」→ 关闭免责 → 打开对应操作弹窗 */
+  const confirmDisclaimer = (): void => {
+    const key = disclaimerKey
+    if (key === null) return
+    if (dontAsk) writeDisclaimerDismissed(key, storage)
+    setDisclaimerKey(null)
+    if (key === 'upload') {
+      setUploadOpen(true)
+    } else if (key === 'install') {
+      const entry = pendingInstallEntry.current
+      setInstallOpen(true)
+      if (entry !== null && entry !== undefined) void runDownload(entry)
+    }
+  }
+  /** 取消免责弹窗：关闭，不打开操作弹窗；若向导处于 update 残留态则重置为上传初始态 */
+  const cancelDisclaimer = (): void => {
+    setDisclaimerKey(null)
+    if (disclaimerKey === 'upload' && wizardRef.current.mode === 'update') {
+      commitWizard(initialWizard('upload'))
+      setListingStatus(null)
+    }
+  }
+  /** 免责弹窗文案（MyConfigsView 只触发 upload / install 两种；default 兜底返回空串防误显） */
+  const disclaimerText = (): string => {
+    switch (disclaimerKey) {
+      case 'upload': return t('disclaimer.upload.text')
+      case 'install': return t('disclaimer.install.text')
+      default: return ''
+    }
+  }
+
+  /**
+   * 向导状态统一提交：更新 ref → setState → **总是**镜像切片上抛（MarketPanel 落 runStore）。
+   * 镜像不依赖 effect flush：异步回调在组件已卸载（切走 tab）时也能落库，切回恢复。
+   * 镜像上抛包 try/catch：镜像失败（store 异常）绝不影响本地 UI 更新（防「点击无反应」）。
+   */
+  const commitWizard = (next: MyWizardState): void => {
+    wizardRef.current = next
+    setWizard(next)
+    try {
+      onMyWizardChange(toMyWizardSlice(next))
+    } catch {
+      // 镜像失败不影响本地状态：下轮 commit 会再尝试
+    }
+  }
+  const patchWizard = (p: Partial<MyWizardState>): void => commitWizard({ ...wizardRef.current, ...p })
+
+  /**
+   * 装回本地状态统一提交：更新 ref → setState → **总是**镜像切片上抛（MarketPanel 落 runStore）。
+   * 镜像不依赖 effect flush：异步回调在组件已卸载（切走 tab）时也能落库，切回恢复。
+   */
+  const commitInstall = (next: MyInstallState | null): void => {
+    installRef.current = next
+    setInstall(next)
+    try {
+      onMyInstallChange(next === null ? null : toMyInstallSlice(next))
+    } catch {
+      // 镜像失败不影响本地状态
+    }
+  }
+  const patchInstall = (p: Partial<MyInstallState>): void => {
+    if (installRef.current === null) return
+    commitInstall({ ...installRef.current, ...p })
+  }
 
   /** 读取登录态（挂载 / 登录成功 / 状态刷新），返回 status 供后续判断 */
   const loadStatus = async (): Promise<MeStatusData | null> => {
@@ -247,84 +360,106 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
 
   /* ------------------------------------------------ 上传 / 更新向导 */
 
-  /** 步骤 1：选 zip → upload 受控临时区；upload 模式预填 name 为 zip 文件名（可改） */
+  /** 选 zip → upload 受控临时区；upload 模式预填 name 为 zip 文件名（可改）；
+   *  update 模式（更新直达表单页）留在 form 步骤并自动跑校验 */
   const onPickFile = async (file: File | undefined): Promise<void> => {
     if (file === undefined) return
-    setWizard((w) => ({ ...w, fileName: file.name, error: null }))
+    patchWizard({ fileName: file.name, error: null, validationError: null })
     try {
       const uploaded = await importApi.upload(file)
-      setWizard((w) => ({
-        ...w,
-        zipPath: uploaded.zipPath,
-        step: 'validate',
-        /* 预填 zip 文件名（去 .zip 后缀，可改）；update 模式保留条目预填的 name */
-        form: w.mode === 'upload'
-          ? { ...w.form, name: file.name.replace(/\.zip$/i, '') }
-          : w.form,
-      }))
+      const base = { zipPath: uploaded.zipPath, fileName: file.name }
+      if (wizardRef.current.mode === 'update') {
+        // 更新模式：留在表单页，选完新 zip 自动校验（校验通过才可一键更新）
+        patchWizard({ ...base, validated: false })
+        await runValidateWith(uploaded.zipPath)
+      } else {
+        patchWizard({
+          ...base,
+          step: 'validate',
+          /* 预填 zip 文件名（去 .zip 后缀，可改） */
+          form: { ...wizardRef.current.form, name: file.name.replace(/\.zip$/i, '') },
+        })
+      }
     } catch (err) {
-      setWizard((w) => ({ ...w, error: err instanceof Error ? err.message : String(err) }))
+      patchWizard({ error: err instanceof Error ? err.message : String(err) })
     }
   }
 
   /** 步骤 2：analyzeImport dry-run（零写入）—— 无密钥 + 内容合法才放行；通过后进表单 */
   const runValidate = async (): Promise<void> => {
     if (wizard.zipPath === null) return
-    setWizard((w) => ({ ...w, validating: true, validationError: null }))
+    await runValidateWith(wizard.zipPath)
+  }
+
+  /** 校验指定 zipPath（update 模式选新 zip 后自动调用；任何异常都落到 validationError 展示，不静默） */
+  const runValidateWith = async (zipPath: string): Promise<void> => {
     try {
-      const analysis = await importApi.analyzeImport(wizard.zipPath)
+      patchWizard({ validating: true, validationError: null })
+    } catch (err) {
+      // 进入校验态失败（极端情况）：仍展示错误而不是无反应
+      setWizard((w) => ({ ...w, validationError: err instanceof Error ? err.message : String(err) }))
+      return
+    }
+    try {
+      const analysis = await importApi.analyzeImport(zipPath)
       if (analysis.secretCount > 0) {
-        setWizard((w) => ({ ...w, validating: false, validated: false, validationError: t('myconfigs.upload.validateSecrets') }))
+        patchWizard({ validating: false, validated: false, validationError: t('myconfigs.upload.validateSecrets') })
       } else if (!analysis.valid) {
-        setWizard((w) => ({ ...w, validating: false, validated: false, validationError: t('myconfigs.upload.validateInvalid') }))
+        patchWizard({ validating: false, validated: false, validationError: t('myconfigs.upload.validateInvalid') })
       } else {
-        setWizard((w) => ({ ...w, validating: false, validated: true, step: 'form' }))
+        // 校验通过 → 自动进入表单步骤（upload 模式从 validate 进 form；update 模式本就是 form，值相同无害）
+        patchWizard({ validating: false, validated: true, validationError: null, step: 'form' })
       }
     } catch (err) {
-      setWizard((w) => ({
-        ...w, validating: false, validated: false,
+      patchWizard({
+        validating: false, validated: false,
         validationError: err instanceof Error ? err.message : String(err),
-      }))
+      })
     }
   }
 
   /** 表单字段更新 + 实时校验（pure 模型） */
   const onFormField = (field: keyof MyConfigForm, value: string): void => {
-    const next = { ...wizard.form, [field]: value }
-    setWizard((w) => ({ ...w, form: next, formErrors: validateMyConfigForm(next, uiT) }))
+    const next = { ...wizardRef.current.form, [field]: value }
+    patchWizard({ form: next, formErrors: validateMyConfigForm(next, uiT) })
   }
 
   /** 「一键上传 / 一键更新」→ meUpload / meUpdate */
   const runUpload = async (): Promise<void> => {
-    if (wizard.zipPath === null) return
-    const errs = validateMyConfigForm(wizard.form, uiT)
-    setWizard((w) => ({ ...w, formErrors: errs }))
+    const w = wizardRef.current
+    const zipPath = w.zipPath
+    if (zipPath === null) return
+    const errs = validateMyConfigForm(w.form, uiT)
+    patchWizard({ formErrors: errs })
     if (!myConfigFormValid(errs)) return
-    const categories = parseCategories(wizard.form.categories)
+    const categories = parseCategories(w.form.categories)
     const form = {
-      name: wizard.form.name.trim(),
+      name: w.form.name.trim(),
       // update 模式携带显式条目 id（后端按 id 更新，避免 name→slug 猜测失配）
-      ...(wizard.mode === 'update' && wizard.form.id !== '' ? { id: wizard.form.id } : {}),
-      ...(wizard.form.description.trim() !== '' ? { description: wizard.form.description.trim() } : {}),
+      ...(w.mode === 'update' && w.form.id !== '' ? { id: w.form.id } : {}),
+      ...(w.form.description.trim() !== '' ? { description: w.form.description.trim() } : {}),
       ...(categories.length > 0 ? { categories } : {}),
     }
-    setWizard((w) => ({ ...w, running: true, error: null, result: null }))
+    patchWizard({ running: true, error: null, result: null })
     try {
-      const result = wizard.mode === 'update'
-        ? await meApi.meUpdate({ zipPath: wizard.zipPath, form })
-        : await meApi.meUpload({ zipPath: wizard.zipPath, form })
-      setWizard((w) => ({ ...w, running: false, result }))
-      // 上传/更新成功后刷新已上传列表
+      const result = w.mode === 'update'
+        ? await meApi.meUpdate({ zipPath, form })
+        : await meApi.meUpload({ zipPath, form })
+      commitWizard({ ...wizardRef.current, running: false, result })
+      // 上传/更新成功后：清空旧收录状态 + 若收录后台进行中则轮询状态 + 刷新列表
+      setListingStatus(null)
+      if (result.ok && result.listing === 'pending') startListingPoll(result.itemId)
       void loadItems({ silent: true })
     } catch (err) {
-      setWizard((w) => ({ ...w, running: false, error: err instanceof Error ? err.message : String(err) }))
+      patchWizard({ running: false, error: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  /** 行操作：更新 → 打开向导，预填条目信息（id/name/description/categories；id 供后端精确定位） */
+  /** 行操作：更新 → 打开「更新配置」表单页（step='form'，预填条目信息；表单内选新 zip 自动校验） */
   const startUpdate = (entry: MyItemEntry): void => {
-    setWizard({
+    commitWizard({
       ...initialWizard('update'),
+      step: 'form',
       form: {
         id: entry.id,
         name: entry.name,
@@ -332,18 +467,104 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
         categories: (entry.categories ?? []).join(', '),
       },
     })
+    setListingStatus(null)
+  }
+
+  /* ------------------------------------------------ 收录/下架任务状态轮询 */
+
+  /** 轮询 /me/listing 直到任务终态（done/failed/null）；间隔 3s、最多 40 次（≈2 分钟），
+   *  后台 fork 更久时超时停止，用户可稍后手动刷新列表/点「重新收录」 */
+  const startListingPoll = (itemId: string): void => {
+    if (listingPollTimer.current !== null) clearTimeout(listingPollTimer.current)
+    let count = 0
+    const tick = (): void => {
+      void (async () => {
+        try {
+          const s = await meApi.meListing(itemId)
+          if (s === null) {
+            // 任务表未命中且实况也无（重启丢失/从未提交）→ 停止轮询，状态由列表徽章体现
+            setListingStatus({ itemId, listing: 'done', prNumber: null, prUrl: null })
+            return
+          }
+          setListingStatus(s)
+          if (s.listing !== 'pending') return // done/failed → 停止轮询
+        } catch {
+          // 轮询失败不打断：下一轮继续
+        }
+        count += 1
+        if (count >= 40) {
+          listingPollTimer.current = null
+          return
+        }
+        listingPollTimer.current = setTimeout(tick, 3000)
+      })()
+    }
+    tick()
+  }
+
+  /** 挂载恢复：若持久化的向导结果仍是「收录处理中」（pending），继续轮询（仿 resume 模式，避免刷新后永久 pending 卡死） */
+  useEffect(() => {
+    const w = wizardRef.current
+    if (w.result !== null && w.result.ok && w.result.listing === 'pending') {
+      startListingPoll(w.result.itemId)
+    }
+    return () => {
+      if (listingPollTimer.current !== null) clearTimeout(listingPollTimer.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  /* ------------------------------------------------ 删除条目（行内两步确认） */
+
+  /** 重新提交收录（收录失败 / 进程重启丢失后的一键重试）→ 重新轮询状态 */
+  const runRelist = async (itemId: string): Promise<void> => {
+    try {
+      const s = await meApi.meRelist(itemId)
+      setListingStatus(s)
+      startListingPoll(itemId)
+    } catch (err) {
+      patchWizard({ error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** 删除：调 /me/delete（同步删本地索引+文件；已收录自动后台提下架 PR）→ 刷新列表 */
+  const runDelete = async (entry: MyItemEntry): Promise<void> => {
+    if (deletingId !== null) return
+    setDeletingId(entry.id)
+    onMyConfirmDeleteChange(null)
+    try {
+      const result = await meApi.meDelete(entry.id)
+      if (result.ok) {
+        if (result.delisted) {
+          patchWizard({ error: t('myconfigs.delete.delistStarted') })
+        } else if (result.prNumber !== null) {
+          patchWizard({ error: t('myconfigs.delete.prClosed') })
+        }
+        void loadItems({ silent: true })
+      } else {
+        patchWizard({ error: result.error ?? t('common.unknownError') })
+      }
+    } catch (err) {
+      patchWizard({ error: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   /* ------------------------------------------------ 装回本地（复用市场下载 + 逐分区批准链路） */
 
   /** 装回本地（复用市场下载 + 逐分区批准链路；条目内容在用户自己的公开仓库，必须带 repo 来源） */
   const runDownload = async (entry: MyItemEntry): Promise<void> => {
-    setInstall({ itemId: entry.id, detail: null, approvals: {}, importing: false, importResult: null, error: null })
+    commitInstall({ itemId: entry.id, detail: null, approvals: {}, importing: false, importResult: null, error: null })
     try {
       const detail = await api.download(entry.id, entry.repoUrl)
-      setInstall((i) => (i !== null ? { ...i, detail, approvals: defaultApprovals(detail.plan) } : i))
+      if (installRef.current !== null) {
+        commitInstall({ ...installRef.current, detail, approvals: defaultApprovals(detail.plan) })
+      }
     } catch (err) {
-      setInstall((i) => (i !== null ? { ...i, error: err instanceof Error ? err.message : String(err) } : i))
+      if (installRef.current !== null) {
+        patchInstall({ error: err instanceof Error ? err.message : String(err) })
+      }
     }
   }
 
@@ -351,19 +572,19 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
     if (install === null || install.detail === null) return
     const approvedPlan = buildApprovedPlan(install.detail.plan, install.approvals)
     if (approvedPlan.items.length === 0) {
-      setInstall((i) => (i !== null ? { ...i, error: t('detail.noApproval') } : i))
+      patchInstall({ error: t('detail.noApproval') })
       return
     }
-    setInstall((i) => (i !== null ? { ...i, importing: true, error: null } : i))
+    patchInstall({ importing: true, error: null })
     try {
       const executed = await importApi.executeImportPlan(
         install.detail.zipPath,
         approvedPlan,
         { confirm: true, rollbackOnError: true },
       )
-      setInstall((i) => (i !== null ? { ...i, importing: false, importResult: executed } : i))
+      patchInstall({ importing: false, importResult: executed })
     } catch (err) {
-      setInstall((i) => (i !== null ? { ...i, importing: false, error: err instanceof Error ? err.message : String(err) } : i))
+      patchInstall({ importing: false, error: err instanceof Error ? err.message : String(err) })
     }
   }
 
@@ -456,15 +677,57 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
 
   /** 上传 / 更新向导卡片（选 zip → 校验 → 表单 → 结果） */
   const renderWizard = (): ReactNode => {
-    const reset = (): void => setWizard(initialWizard(wizard.mode))
+    /** PR 链接（优先实时任务状态；收录完成后由轮询补上，或直接取同步结果） */
+    const prLink = ((): { url: string; label: string } | null => {
+      const live = listingStatus
+      const url = (live !== null && live.prUrl !== null && live.prUrl !== '')
+        ? live.prUrl
+        : (wizardRef.current.result?.prUrl ?? null)
+      if (url === null || url === '') return null
+      const number = live !== null && live.prNumber !== null ? live.prNumber : wizardRef.current.result?.prNumber
+      return {
+        url,
+        label: number !== null && number !== undefined
+          ? t('myconfigs.result.pr', { number: String(number) })
+          : t('myconfigs.result.openPr'),
+      }
+    })()
+    /** 重置：update 模式轻量重置（只清 zip/校验，**保留预填表单**）；upload 模式完全重置 */
+    const reset = (): void => {
+      const w = wizardRef.current
+      if (w.mode === 'update') {
+        commitWizard({
+          ...initialWizard('update'),
+          step: 'form',
+          form: { ...w.form },
+        })
+      } else {
+        commitWizard(initialWizard('upload'))
+      }
+      setListingStatus(null)
+    }
     return (
-      <Card>
-        <div className={css.actionRow}>
-          <span className={css.groupLabel}>
-            {wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
-          </span>
-          {wizard.mode === 'update' && <Badge kind="info">{t('myconfigs.update.hint')}</Badge>}
-        </div>
+      <div
+        className={css.dialogMask}
+        onMouseDown={(e) => { if (e.target === e.currentTarget && !wizard.running && !wizard.validating) closeUpload() }}
+      >
+        <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}>
+          <div className={css.dialogHeaderRow}>
+            <span className={css.dialogHeader}>
+              {wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
+              {wizard.mode === 'update' && <Badge kind="info">{t('myconfigs.update.hint')}</Badge>}
+            </span>
+            <button
+              type="button"
+              className={css.dialogClose}
+              aria-label={t('common.close')}
+              disabled={wizard.running || wizard.validating}
+              onClick={closeUpload}
+            >
+              ×
+            </button>
+          </div>
+          <div className={css.dialogBodyScroll}>
 
         {/* 步骤 1：选配置包 */}
         {wizard.step === 'select' && (
@@ -508,9 +771,37 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
           </div>
         )}
 
-        {/* 步骤 3：精简表单（仅 name/description/categories；其余系统自动） → 上传 */}
+        {/* 步骤 3：精简表单（仅 name/description/categories；其余系统自动） → 上传/更新 */}
         {wizard.step === 'form' && (
           <div>
+            {/* update 模式：表单页内嵌「选择新 ZIP」入口（选中自动校验，通过后才可一键更新） */}
+            {wizard.mode === 'update' && (
+              <div>
+                <span className={css.hint}>{t('myconfigs.update.zipHint')}</span>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept=".zip,application/zip"
+                  className={css.hiddenFile}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                    const picked = e.target.files?.[0]
+                    e.target.value = ''
+                    void onPickFile(picked)
+                  }}
+                />
+                <div className={css.actionRow}>
+                  <Button variant="primary" disabled={wizard.validating || wizard.running} onClick={() => { fileInput.current?.click() }}>
+                    {wizard.fileName !== null && wizard.zipPath !== null
+                      ? t('myconfigs.upload.selected', { name: wizard.fileName })
+                      : t('myconfigs.update.selectZip')}
+                  </Button>
+                  {wizard.zipPath !== null && (
+                    <Button disabled={wizard.validating || wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
+                  )}
+                </div>
+                {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
+              </div>
+            )}
             {wizard.validated && (
               <div className={css.statRow}>
                 <Badge kind="ok">{t('myconfigs.upload.validateOk')}</Badge>
@@ -534,19 +825,29 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
               ))}
             </div>
             <div className={css.actionRow}>
-              <Button variant="primary" disabled={wizard.validated !== true || wizard.running || !myConfigFormValid(wizard.formErrors)} onClick={() => { void runUpload() }}>
+              <Button
+                variant="primary"
+                disabled={
+                  wizard.validated !== true || wizard.running || wizard.zipPath === null
+                  || !myConfigFormValid(wizard.formErrors)
+                }
+                onClick={() => { void runUpload() }}
+              >
                 {wizard.running
                   ? <Spinner label={wizard.mode === 'update' ? t('myconfigs.update.running') : t('myconfigs.upload.running')} />
                   : (wizard.mode === 'update' ? t('myconfigs.update.run') : t('myconfigs.upload.run'))}
               </Button>
-              <Button disabled={wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
+              {wizard.mode === 'update' && (
+                <Button disabled={wizard.running || wizard.validating} onClick={cancelUpdate}>{t('common.cancel')}</Button>
+              )}
+              {wizard.mode === 'upload' && <Button disabled={wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>}
             </div>
           </div>
         )}
 
         {wizard.error !== null && <Banner kind="error">{redact(wizard.error)}</Banner>}
 
-        {/* 结果卡：PR 链接 / 仓库链接 / sha256 / 分区 */}
+        {/* 结果卡：收录状态（异步）/ PR 链接 / 仓库链接 / sha256 / 分区 */}
         {wizard.result !== null && (
           wizard.result.ok ? (
             <div>
@@ -556,15 +857,29 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
                 <Badge kind="info">{t('myconfigs.result.sha256', { hash: wizard.result.sha256 })}</Badge>
                 <Badge kind="info">{t('myconfigs.result.sections', { sections: wizard.result.sections.join(', ') })}</Badge>
               </div>
+              {/* 收录状态：pending=后台处理中（轮询中）；failed=失败可重试；done=已提交（PR 链接） */}
+              {wizard.result.listing === 'pending' && (
+                <div className={css.statRow}>
+                  {listingStatus !== null && listingStatus.listing === 'failed' ? (
+                    <>
+                      <Badge kind="error">{t('myconfigs.result.listingFailed')}</Badge>
+                      <Button variant="danger" onClick={() => { void runRelist(wizard.result!.itemId) }}>
+                        {t('myconfigs.result.relist')}
+                      </Button>
+                    </>
+                  ) : (
+                    <Badge kind="info">{t('myconfigs.result.listingPending')}</Badge>
+                  )}
+                </div>
+              )}
+              {listingStatus !== null && listingStatus.listing === 'failed' && (
+                <Banner kind="error">{redact(listingStatus.error ?? t('common.unknownError'))}</Banner>
+              )}
               <div className={css.actionRow}>
                 <Badge kind="info">{t('myconfigs.result.repo')}</Badge>
                 <Button href={wizard.result.repoUrl}>{t('myconfigs.result.openRepo')}</Button>
-                {wizard.result.prUrl !== null && wizard.result.prUrl !== '' && (
-                  <Button href={wizard.result.prUrl}>
-                    {wizard.result.prNumber !== null
-                      ? t('myconfigs.result.pr', { number: String(wizard.result.prNumber) })
-                      : t('myconfigs.result.openPr')}
-                  </Button>
+                {(prLink !== null) && (
+                  <Button href={prLink.url}>{prLink.label}</Button>
                 )}
               </div>
             </div>
@@ -574,7 +889,9 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
             </Banner>
           )
         )}
-      </Card>
+          </div>
+        </div>
+      </div>
     )
   }
 
@@ -618,10 +935,10 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
                   </div>
                 </div>
                 <div className={css.rowActions}>
-                  <Button onClick={() => { startUpdate(entry) }}>{t('myconfigs.item.update')}</Button>
+                  <Button onClick={() => { startUpdate(entry); openUpload() }}>{t('myconfigs.item.update')}</Button>
                   <Button
                     disabled={install !== null && install.itemId === view.id && install.detail === null}
-                    onClick={() => { void runDownload(entry) }}
+                    onClick={() => { openInstall(entry) }}
                   >
                     {t('myconfigs.item.install')}
                   </Button>
@@ -629,6 +946,14 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
                   {badge.kind === 'warn' && badge.prUrl !== undefined && badge.prUrl !== '' && (
                     <Button href={badge.prUrl}>{t('myconfigs.item.openPr')}</Button>
                   )}
+                  {/* 删除：danger 按钮 → 弹窗二次确认（ConfirmDialog；不可恢复，已收录自动提交下架 PR） */}
+                  <Button
+                    variant="danger"
+                    disabled={deletingId !== null}
+                    onClick={() => { onMyConfirmDeleteChange(view.id) }}
+                  >
+                    {t('myconfigs.delete.run')}
+                  </Button>
                 </div>
               </div>
             ))}
@@ -646,11 +971,24 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
     const approvalSummary = detail !== null ? approvedAdapterSummary(detail.plan, install.approvals) : null
     const detailView = detail !== null ? marketDetailView(detail, detail.repo ?? entryRepoUrl(install.itemId), true, uiT) : null
     return (
-      <Card>
-        <div className={css.actionRow}>
-          <span className={css.groupLabel}>{t('detail.title')}：{install.itemId}</span>
-          <Button onClick={() => { setInstall(null) }}>{t('detail.back')}</Button>
-        </div>
+      <div
+        className={css.dialogMask}
+        onMouseDown={(e) => { if (e.target === e.currentTarget && !install.importing) closeInstall() }}
+      >
+        <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('detail.title')}>
+          <div className={css.dialogHeaderRow}>
+            <span className={css.dialogHeader}>{t('detail.title')}：{install.itemId}</span>
+            <button
+              type="button"
+              className={css.dialogClose}
+              aria-label={t('common.close')}
+              disabled={install.importing}
+              onClick={closeInstall}
+            >
+              ×
+            </button>
+          </div>
+          <div className={css.dialogBodyScroll}>
         {install.error !== null && <Banner kind="error">{redact(install.error)}</Banner>}
         {detail === null && <div className={css.statRow}><Spinner label={t('list.loading')} /></div>}
         {detail !== null && detailView !== null && (
@@ -672,7 +1010,9 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
                       key={row.adapter}
                       checked={row.approved}
                       onChange={(checked) => {
-                        setInstall((i) => (i !== null ? { ...i, approvals: { ...i.approvals, [row.adapter]: checked } } : i))
+                        if (installRef.current !== null) {
+                          patchInstall({ approvals: { ...installRef.current.approvals, [row.adapter]: checked } })
+                        }
                       }}
                       label={
                         <span>
@@ -716,7 +1056,9 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
             {install.importResult.needsRestart && ' · 部分改动需重启 DSH 后生效'}
           </Banner>
         )}
-      </Card>
+          </div>
+        </div>
+      </div>
     )
   }
 
@@ -733,11 +1075,54 @@ export function MyConfigsView({ meApi, api, importApi, syncApi, t, myItems, myIt
       {/* 已登录才允许上传 / 查看列表 / 装回本地 */}
       {loginView.kind === 'logged-in' && (
         <>
-          {renderWizard()}
+          {/* 一键上传入口：点按钮 → 免责（首次）→ 弹窗向导 */}
+          <Card>
+            <div className={css.actionRow}>
+              <span className={css.groupLabel}>{t('myconfigs.upload.title')}</span>
+              <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
+            </div>
+            <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
+          </Card>
           {renderList()}
-          {renderInstall()}
+          {/* 弹窗：上传/更新向导（uploadOpen）与装回本地（installOpen），条件渲染 */}
+          {uploadOpen && renderWizard()}
+          {installOpen && renderInstall()}
         </>
       )}
+      {/* 免责弹窗（复用 ConfirmDialog + 「不再提示」勾选；三操作分开记） */}
+      <ConfirmDialog
+        open={disclaimerKey !== null}
+        title={t('disclaimer.title')}
+        message={disclaimerText()}
+        confirmLabel={t('disclaimer.confirm')}
+        cancelLabel={t('common.cancel')}
+        onConfirm={confirmDisclaimer}
+        onCancel={cancelDisclaimer}
+      >
+        <label className={css.checkboxRow}>
+          <input
+            type="checkbox"
+            checked={dontAsk}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setDontAsk(e.target.checked) }}
+          />
+          <span>{t('disclaimer.dontAsk')}</span>
+        </label>
+      </ConfirmDialog>
+      {/* 删除确认弹窗（二次确认；不可恢复；确认执行中 busy 防重复提交） */}
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        title={t('myconfigs.delete.confirmTitle')}
+        message={t('myconfigs.delete.confirmText')}
+        confirmLabel={t('myconfigs.delete.confirm')}
+        cancelLabel={t('common.cancel')}
+        danger
+        busy={deletingId !== null}
+        onConfirm={async () => {
+          const entry = (myItems ?? []).find((it) => it.id === confirmDeleteId)
+          if (entry !== undefined) await runDelete(entry)
+        }}
+        onCancel={() => { onMyConfirmDeleteChange(null) }}
+      />
     </div>
   )
 }

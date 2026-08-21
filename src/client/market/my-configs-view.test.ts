@@ -14,9 +14,9 @@ import {
   autoFieldBadges, buildMyItemsView, deriveItemStatus, deriveLoginState, itemStatusBadge,
   itemStatusFromHost, MARKET_SYNC_PR_BRANCH_PREFIX, MY_CONFIG_AUTO_FIELDS, myConfigFormValid,
   parseCategories, prBranchFor, summarizeMyItems, toMyItemView, validateMyConfigForm,
-  EMPTY_MY_CONFIG_FORM,
+  EMPTY_MY_CONFIG_FORM, EMPTY_MY_WIZARD, initialWizard, restoreMyWizard, toMyWizardSlice,
 } from './my-configs-view.ts'
-import type { ItemStatus, MeStatusData, MyItemSource, OpenPrInfo } from './my-configs-view.ts'
+import type { ItemStatus, MeStatusData, MyItemSource, MyUploadResult, MyWizardSlice, MyWizardState, OpenPrInfo } from './my-configs-view.ts'
 
 /* ---------------------------------------------------------------- 登录状态推导 */
 
@@ -286,4 +286,139 @@ test('my-configs-view: ItemStatus 判别联合可判别（编译期形状约束�
   assert.equal(statusKindOf({ kind: 'listed' }), 'listed')
   assert.equal(statusKindOf({ kind: 'pending-pr', prNumber: 1, prUrl: 'u' }), 'pending-pr')
   assert.equal(statusKindOf({ kind: 'not-listed' }), 'not-listed')
+})
+
+/* ---------------------------------------------------------------- 向导状态模型 */
+
+/** UploadResult 夹具（对齐 host 半 my-repo.ts 形状；listing 必填）。 */
+function uploadResult(overrides: Partial<MyUploadResult> = {}): MyUploadResult {
+  return {
+    ok: true,
+    itemId: 'my-config',
+    version: '1.0.0',
+    sha256: 'sha256-abc',
+    sections: ['settings'],
+    repoUrl: 'https://github.com/xiaojun/dsh-configs',
+    prNumber: null,
+    prUrl: null,
+    warnings: ['供应链警示'],
+    listing: 'pending',
+    ...overrides,
+  }
+}
+
+function wizard(overrides: Partial<MyWizardState> = {}): MyWizardState {
+  return {
+    mode: 'upload',
+    step: 'select',
+    zipPath: null,
+    fileName: null,
+    validating: false,
+    validated: false,
+    validationError: null,
+    form: { ...EMPTY_MY_CONFIG_FORM },
+    formErrors: { name: null },
+    running: false,
+    result: null,
+    error: null,
+    ...overrides,
+  }
+}
+
+test('my-configs-view: toMyWizardSlice 去掉瞬态字段（validating/running/formErrors 不出现）、保留 validated', () => {
+  const w = wizard({
+    mode: 'update',
+    step: 'form',
+    zipPath: 'C:\\tmp\\upload-abc.zip',
+    fileName: 'cfg.zip',
+    validating: true,
+    validated: true,
+    validationError: null,
+    form: { name: 'My Config', description: 'desc', categories: 'a, b', id: 'my-config' },
+    formErrors: { name: null },
+    running: true,
+    result: uploadResult(),
+    error: null,
+  })
+  const s = toMyWizardSlice(w)
+  assert.equal(s.mode, 'update')
+  assert.equal(s.step, 'form')
+  assert.equal(s.zipPath, 'C:\\tmp\\upload-abc.zip')
+  assert.equal(s.fileName, 'cfg.zip')
+  assert.equal(s.validated, true, 'validated 保留（已校验通过状态值得持久化）')
+  assert.equal(s.validationError, null)
+  assert.deepEqual(s.form, { name: 'My Config', description: 'desc', categories: 'a, b', id: 'my-config' })
+  assert.equal(s.result, w.result, 'result 为纯 JSON 直接引用')
+  assert.equal(s.error, null)
+  // 瞬态/派生字段不进入切片
+  assert.ok(!('validating' in s), 'validating 不得进入切片')
+  assert.ok(!('running' in s), 'running 不得进入切片')
+  assert.ok(!('formErrors' in s), 'formErrors 不得进入切片（恢复时重算）')
+})
+
+test('my-configs-view: restoreMyWizard(null) → EMPTY 语义（step select、瞬态归零、formErrors 无错）', () => {
+  const w = restoreMyWizard(null)
+  assert.equal(w.mode, 'upload')
+  assert.equal(w.step, 'select')
+  assert.equal(w.zipPath, null)
+  assert.equal(w.fileName, null)
+  assert.equal(w.validating, false)
+  assert.equal(w.validated, false)
+  assert.equal(w.validationError, null)
+  assert.deepEqual(w.form, EMPTY_MY_CONFIG_FORM)
+  assert.deepEqual(w.formErrors, { name: null })
+  assert.equal(w.running, false)
+  assert.equal(w.result, null)
+  assert.equal(w.error, null)
+  // 返回新对象，不共享 EMPTY_MY_WIZARD / EMPTY_MY_CONFIG_FORM 引用
+  assert.notEqual(w, EMPTY_MY_WIZARD)
+  assert.notEqual(w.form, EMPTY_MY_CONFIG_FORM)
+})
+
+test('my-configs-view: restoreMyWizard(slice) → 瞬态归零、formErrors 按 form.name 重算、其余字段一致', () => {
+  const slice: MyWizardSlice = {
+    mode: 'update',
+    step: 'form',
+    zipPath: 'C:\\tmp\\upload-abc.zip',
+    fileName: 'cfg.zip',
+    validated: true,
+    validationError: null,
+    form: { name: 'My Config', description: '', categories: '', id: 'my-config' },
+    result: uploadResult(),
+    error: null,
+  }
+  const w = restoreMyWizard(slice)
+  assert.equal(w.mode, 'update')
+  assert.equal(w.step, 'form')
+  assert.equal(w.zipPath, slice.zipPath)
+  assert.equal(w.fileName, 'cfg.zip')
+  assert.equal(w.validating, false, 'validating 恢复后恒 false')
+  assert.equal(w.running, false, 'running 恢复后恒 false')
+  assert.equal(w.validated, true, 'validated 从切片保留')
+  assert.deepEqual(w.form, slice.form)
+  assert.deepEqual(w.formErrors, { name: null }, 'form.name 合法 → 无错误')
+  assert.equal(w.result, slice.result)
+  assert.equal(w.error, null)
+  assert.notEqual(w.form, slice.form, 'form 为新对象，不共享切片引用')
+  // form.name 为空 → formErrors.name 重算为非 null
+  const w2 = restoreMyWizard({ ...slice, form: { ...slice.form, name: '   ' } })
+  assert.notEqual(w2.formErrors.name, null, '空白名称 → 重算出错误')
+  assert.equal(w2.formErrors.name, validateMyConfigForm({ ...slice.form, name: '   ' }).name)
+})
+
+test('my-configs-view: initialWizard(mode) → 指定模式、step select、空表单', () => {
+  const w = initialWizard('update')
+  assert.equal(w.mode, 'update')
+  assert.equal(w.step, 'select')
+  assert.deepEqual(w.form, EMPTY_MY_CONFIG_FORM)
+  assert.deepEqual(w.formErrors, { name: null })
+  assert.equal(w.zipPath, null)
+  assert.equal(w.result, null)
+  assert.equal(w.validating, false)
+  assert.equal(w.running, false)
+  assert.notEqual(w, EMPTY_MY_WIZARD, '每次返回新对象')
+  assert.notEqual(w.form, EMPTY_MY_CONFIG_FORM, 'form 为新对象')
+  const u = initialWizard('upload')
+  assert.equal(u.mode, 'upload')
+  assert.equal(u.step, 'select')
 })

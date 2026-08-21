@@ -125,6 +125,8 @@ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 | 页面视图内边距 | 4px 2px 16px | `.viewBody { padding }` |
 | section 容器 gap（tab 栏与内容） | 10px | `.section { gap: 10px }` |
 | 卡片内间距 | **10px**（gap）/ 12px（padding） | `.card { gap: 10px; padding: 12px }` |
+| 向导卡片内间距（上传/更新表单，元素密集） | **14px**（gap） | `.wizardCard { gap: 14px }` |
+| 向导卡片内字段（label↔控件↔hint） | **8px** | `.wizardCard .field { gap: 8px }` |
 | 操作行按钮间距 | **10px** | `.actionRow { gap: 10px }` |
 | 表单字段内（label↔控件↔hint） | **5px** | `.field { gap: 5px }` |
 | 分组勾选项间距 | 6px | `.groupItems { gap: 6px }` |
@@ -277,6 +279,33 @@ css.section                    高 100%，纵向 flex，gap 10px
 | File | `.hiddenFile` | 隐藏原生 input，触发按钮为外层 Button |
 | 密码二次确认 | `.secretFields` 双列 + `.formError` | 加密/密钥场景（导出、同步、解密） |
 
+### 8.11 ConfirmDialog（确认弹窗，`src/client/common/ConfirmDialog.tsx`）
+
+项目**首个 fixed / z-index 浮动层**（§15 Anti-pattern #7 的登记豁免，z-index 100）。危险/重要操作（删除等不可恢复）的二次确认，替代一次性内联确认。
+
+- **API**（受控）：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, children? }`；
+- **关闭三途径**：遮罩点击（组件判定 `e.target === currentTarget`，卡片内点击不关闭）/ Esc 键 / 取消按钮；`busy` 时全部禁用；
+- **busy 自管**：`onConfirm` 返回 Promise 时组件内部置 busy（防重复提交），完成后复位；`busy` prop 可外部强控；
+- **焦点**：打开后焦点落**取消**按钮（危险确认不默认落破坏性按钮）；关闭后还原到打开前的触发元素；不做完整 focus trap（两按钮场景风险可接受，本小节即登记）；
+- **样式**：仅 `dialogMask`（fixed 全屏 + `color-mix(bg-base 55%)` 遮罩）/ `dialogCard`（bg-layer-2 + border-l1 + radius10 + max-width 420 + 80vh 限高）/ `dialogHeader`（groupLabel 层级）/ `dialogBody`（240px 限高内滚，`white-space: pre-wrap`）；确认按钮复用现有 `Button variant="danger"|"primary"`，零新按钮类；
+- **文案**：confirmLabel / cancelLabel / title / message 由调用方从 i18n 字典传入，组件不硬编码。
+
+### 8.12 操作弹窗 + 免责弹窗（2026-08-21，`market/` 三处：上传 / 下载 / 装回本地）
+
+在 ConfirmDialog（§8.11）基础上扩展的弹窗体系，共享同一 z-index 100 浮动层登记（§15 Anti-pattern #7）。
+
+**交互约定（用户需求 2026-08-21）**：
+- 上传 / 下载 / 装回本地三处操作**改为弹窗驱动**：点操作按钮 → 弹窗；弹窗前置**免责声明**；
+- **免责弹窗** = 复用 `ConfirmDialog` + `children` 里放「不再提示」勾选框（`css.checkboxRow`）：点「我已了解，继续」才进入操作弹窗；
+- **「不再提示」三操作分开记**（`market/disclaimer.ts` 纯函数层，localStorage key `dsh-cm-market.disclaimer.<key>`，`upload | download | install` 各自独立；读/写都 try/catch 静默降级——存储不可用时下次仍提示）；
+- **操作弹窗**：手写遮罩容器（`dialogMask` + `dialogCard dialogWide` + 标题行 `dialogHeaderRow` + 关闭按钮 `dialogClose` × + 正文 `dialogBodyScroll`），**不套 ConfirmDialog**（操作弹窗有自己的按钮区）；
+- 关闭弹窗 = 放弃本次操作（上传向导重置为初始态 / 装回本地清会话 / 下载详情清 detail）；关闭途径：遮罩点击（`e.target === currentTarget`）+ 关闭按钮 ×，`busy/importing/running/validating` 时禁用；
+- 弹窗开关（`uploadOpen` / `downloadOpen` / `installOpen`）是**瞬态 UI**（组件内 useState，不持久化）；内容状态（detail / approvals / wizard / install）仍走 runStore 持久化切片（切 tab/刷新不丢数据，但弹窗不自动重开）。
+
+**复用扩展（2026-08-21，`sync/` 同步通道配置弹窗）**：远程同步页的「同步通道」入口卡点按钮弹出通道配置弹窗（Git/WebDAV 子 tab + 表单 + GitHub device flow 登录块），复用本节的**操作弹窗样式四件套**（`dialogWide`/`dialogHeaderRow`/`dialogClose`/`dialogBodyScroll`），零新增样式；弹窗开关 `channelOpen` 同为瞬态 useState；关闭弹窗 = 放弃本次操作（GitHub 登录流程进行中 → 一并取消：停轮询 + 通知宿主丢弃设备码）；`savingConfig` 时禁用全部关闭途径。
+
+**样式**：新增 `dialogWide`（宽 560px）/ `dialogHeaderRow`（标题 + 关闭按钮行）/ `dialogClose`（× 按钮，ghost 语义）/ `dialogBodyScroll`（70vh 限高内滚，替代 240px 短版）四类，全部走 `--dsw-*` token；无新颜色、无新动效。
+
 ---
 
 ## 9. Interaction States
@@ -370,6 +399,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **列表+详情** | 列表（可搜索/过滤）+ 点条目展开详情卡 | 市场面板（搜索框 + 类别 select + 条目行 + 详情） |
 | **dry-run → confirm → 执行** | 零写入预览 → 危险按钮（title 确认）→ 诚实报告 | 快照恢复、市场导入、一键同步 |
 | **关于页** | `viewBody` 卡片流：`SectionTitle` + 信息卡（`statRow` 动态版本/DSH/平台 Badge：官方→`ok`、版本→`info`）+ 链接卡（`actionRow` 内 Star 主按钮 + `aboutLinkRow` 外链行 + `aboutAuthor` 作者外链） | 关于 tab |
+| **确认弹窗 ConfirmDialog（危险/重要操作）** | `common/ConfirmDialog.tsx` 受控弹窗：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, children? }`；遮罩点击（target===currentTarget）/ Esc / 取消三途径关闭（busy 时全禁用）；onConfirm 返回 Promise 时组件自管 busy 防重复提交；初始焦点落取消按钮（危险确认不默认落破坏性按钮）、关闭还原触发按钮；样式仅 dialogMask/dialogCard/dialogHeader/dialogBody 四类（遮罩 color-mix 半透明、卡片 bg-layer-2+border-l1+radius10、正文限高 240px 内滚）；确认按钮复用现有 danger/primary Button | 「我的配置」列表删除条目（不可恢复 + 已收录自动提交下架 PR）；快照恢复确认（可升级） |
 
 ---
 
@@ -381,7 +411,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 4. **禁止自造字号/间距/圆角/阴影**：必须落在 §3.2 / §4.2 / §5 的 scale 内。
 5. **禁止绕过公共组件**：能复用 `ui.tsx` 原语时手写 `<button>`/`<span>` 样式等同违规；新需求先检查 `common/` 与 COMPONENTS、再 Extend、最后才 Create（并回写本文件）。
 6. **禁止引入第二套视觉体系**：Tailwind / CSS-in-JS / Sass / styled-components / UI 组件库 / 图标库 / 动画库，一概不引入。
-7. **禁止随意增加 z-index / fixed 定位**：本项目无任何 z-index / fixed 元素；浮动层需求（提示浮层等）先设计好再进 DESIGN.md。
+7. **禁止随意增加 z-index / fixed 定位**：本项目长期无 z-index / fixed 元素；**唯一登记豁免** = 弹窗体系（§8.11 ConfirmDialog + §8.12 操作弹窗/免责弹窗，z-index 100，共享同一浮动层登记）。任何新的浮动层需求（提示浮层等）必须先设计好再进 DESIGN.md 并登记 z-index，禁止私自增加。
 8. **禁止给所有按钮加 primary、禁止用 danger 表达非危险操作**。
 9. **禁止硬编码用户可见文案**（走 locale 字典 / `UiT`）；**禁止在 UI 展示未 `redact()` 的原始错误文本**。
 10. **禁止把长列表/报告直接平铺撑长页面**——必须限高内滚（§7.2）。

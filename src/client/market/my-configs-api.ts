@@ -22,13 +22,13 @@
  *  - 本文件不 import 任何 node 模块（纯浏览器 bundle）。
  */
 import type {
-  MyItemEntry, MyRepoForm, UploadResult,
+  DeleteResult, ListingStatusResponse, MyItemEntry, MyRepoForm, UploadResult,
 } from '../../market/my-repo.ts';
 import { ConfigManagerApiError } from '../api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
 // 便捷重导出：Host 半 my-repo.ts 领域类型（client 消费单一来源，避免漂移）
-export type { MyItemEntry, MyRepoForm, UploadResult };
+export type { DeleteResult, ListingStatusResponse, MyItemEntry, MyRepoForm, UploadResult };
 
 /* ---------------------------------------------------------------- 端点常量 */
 
@@ -39,6 +39,9 @@ export const MY_CONFIGS_API = {
   upload: '/api/dsh-config-manager/me/upload',
   items: '/api/dsh-config-manager/me/items',
   update: '/api/dsh-config-manager/me/update',
+  listing: '/api/dsh-config-manager/me/listing',
+  relist: '/api/dsh-config-manager/me/relist',
+  delete: '/api/dsh-config-manager/me/delete',
 } as const;
 
 /** 「我的配置」请求超时（ms）：上传/更新含 git clone/push/fork/PR，与 market/sync 对齐量级 */
@@ -159,5 +162,20 @@ export class MyConfigsApi {
   /** 一键更新：version 自动 +1，复用/重开收录 PR */
   async meUpdate(payload: { zipPath: string; form: MyConfigsFormPayload }): Promise<MyUploadResult> {
     return postJson<MyUploadResult>(MY_CONFIGS_API.update, payload, this.t);
+  }
+
+  /** 查询收录/下架任务状态（结果卡轮询；任务表未命中时 Host 回退 GitHub 实况推导；无任务无实况 → null） */
+  async meListing(itemId: string): Promise<ListingStatusResponse | null> {
+    return postJson<ListingStatusResponse | null>(MY_CONFIGS_API.listing, { itemId }, this.t);
+  }
+
+  /** 重新提交收录（失败/重启丢失后重试；幂等复用已存在 fork/open PR） */
+  async meRelist(itemId: string): Promise<ListingStatusResponse> {
+    return postJson<ListingStatusResponse>(MY_CONFIGS_API.relist, { itemId }, this.t);
+  }
+
+  /** 删除条目（同步删本地索引+文件；已收录自动后台提下架 PR；待审核自动关闭收录 PR） */
+  async meDelete(itemId: string): Promise<DeleteResult> {
+    return postJson<DeleteResult>(MY_CONFIGS_API.delete, { itemId }, this.t);
   }
 }

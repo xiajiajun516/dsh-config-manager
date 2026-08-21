@@ -619,7 +619,7 @@ test('scanner: 引用豁免（apiKeyEnv 等只存名字的字段、env 名形态
     apiKeyEnv: 'DEEPSEEK_API_KEY',
     api_key_env: 'GITHUB_TOKEN',
     apiKey: 'DEEPSEEK_API_KEY', // 值是 env 变量名形态 → 视为引用
-    realKey: 'sk-real-secret-value',
+    realKey: 'sk-proj-9f8e7d6c5b4a3210abcdef', // 真实形态密钥 → 仍拦截
     tokenRef: 'MY_TOKEN_REF',
   };
   const { sanitized } = scanAndRedact(input);
@@ -635,7 +635,7 @@ test('scanner: 值形状启发式（字段名无关的 secret 形状也剥离）
   const input = {
     note: 'use sk-abc1234567890abc for api',
     jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
-    aws: 'AKIAIOSFODNN7EXAMPLE',
+    aws: 'AKIAIOSFODNN7A1B2C3D4',
     github: 'ghp_abcdefghijklmnopqrstuvwxyz',
     pem: '-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...',
     fine: 'just a note',
@@ -651,6 +651,26 @@ test('scanner: 值形状启发式（字段名无关的 secret 形状也剥离）
   assert.ok(hits.length >= 5);
   assert.equal(matchSecretValuePattern('sk-abc1234567890abc'), 'openai-style-key');
   assert.equal(matchSecretValuePattern('plain text'), null);
+});
+
+test('scanner: 值形状示例/占位形态放行（sk-your-*、AKIA...EXAMPLE、JWT 教学串）', () => {
+  const input = {
+    yourKey: 'sk-your-api-key-here',            // 占位词 your
+    exampleKey: 'sk-example-key-12345',          // 占位词 example
+    testKey: 'sk-test-key-1234567890',           // 占位词 test
+    awsSample: 'AKIAIOSFODNN7EXAMPLE',           // AWS 官方文档示例 key
+    jwtSample: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature', // 教学串第三段 signature
+    note: 'use sk-your-demo-key for api',        // 文本叙述中的示例
+  };
+  const { sanitized, hits } = scanAndRedact(input);
+  const s = sanitized as Record<string, unknown>;
+  assert.equal(s['yourKey'], 'sk-your-api-key-here', 'sk-your-* 示例应放行');
+  assert.equal(s['exampleKey'], 'sk-example-key-12345', 'sk-example-* 示例应放行');
+  assert.equal(s['testKey'], 'sk-test-key-1234567890', 'sk-test-* 示例应放行');
+  assert.equal(s['awsSample'], 'AKIAIOSFODNN7EXAMPLE', 'AWS 官方示例应放行');
+  assert.equal(s['jwtSample'], 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature', 'JWT 教学串应放行');
+  assert.equal(s['note'], 'use sk-your-demo-key for api', '叙述中的示例应放行');
+  assert.equal(hits.length, 0);
 });
 
 test('scanner: 深层嵌套上限（≤64 通过，超限抛错）与循环引用防护', () => {
@@ -727,6 +747,66 @@ test('scanText: 真实字面量密钥仍然拦截（优化不回退安全）', (
   ].join('\n');
   const hits = scanText(real);
   assert.ok(hits.length >= 4, `真实密钥应全部拦截，实际: ${JSON.stringify(hits)} (${hits.length})`);
+});
+
+test('scanText: 占位/示例/模板引用/普通示例值放行（2026-08-21 优化）', () => {
+  const doc = [
+    'token: ${OPENAI_API_KEY}',                    // 模板引用
+    'api_key: {{MY_KEY}}',                          // 模板引用（双花括号）
+    'secret: $ENV_SECRET',                          // $VAR 引用
+    'password: your-token-here',                    // 占位符
+    'token: abc-def-ghi-jkl',                       // 纯小写字母+连字符示例值（无数字/符号/大小写混合）
+    'Bearer example-token-here',                    // 值形状示例形态
+    'sk-your-api-key-here',                         // 值形状示例形态
+    'use sk-demo-key-1234567890 in this doc',       // 叙述中的示例
+  ].join('\n');
+  const hits = scanText(doc);
+  assert.equal(hits.length, 0, `示例文档不应误报，实际: ${JSON.stringify(hits)}`);
+});
+
+test('scanText: 含数字/符号的混合串仍是真实凭据特征 → 拦截（不回退）', () => {
+  const real = [
+    'token: abc123-def456',                         // 含数字的混合串
+    'password: AbCdEfGh-1234',                      // 大小写混合 + 数字 + 连字符（非纯字母数字，不落短标识符豁免）
+    'apiKey: sk-proj-9f8e7d6c5b4a3210abcdef',       // 真实形态 sk-（无占位词）
+  ].join('\n');
+  const hits = scanText(real);
+  assert.ok(hits.length >= 3, `真实凭据特征应拦截，实际: ${JSON.stringify(hits)} (${hits.length})`);
+});
+
+test('scanAndRedact: 宽松档（literalValueOnly，市场发布）占位/模板/代码引用放行，真凭据仍拦', () => {
+  // 宽松档：字段名敏感但值不是秘密 → 全部放行（市场发布场景，消除误报）
+  const benign = {
+    token: 'your-token',
+    apiKey: '${OPENAI_API_KEY}',
+    secret: '{{MY_SECRET}}',
+    password: 'process.env.PASSWORD',
+    Authorization: 'Bearer <token>',
+    clientSecret: 'client-secret-value', // 混合字符但纯小写+连字符（无数字/符号/大小写混合）→ 非凭据
+    max_tokens: 100,
+    note: 'just a note',
+  };
+  const r = scanAndRedact(benign, { literalValueOnly: true });
+  assert.equal(r.hits.length, 0, `宽松档不应误报，实际: ${JSON.stringify(r.hits)}`);
+  assert.deepEqual(r.sanitized, benign);
+
+  // 宽松档：真实凭据仍然拦截（安全不回退）
+  const real = {
+    token: 'sk-proj-9f8e7d6c5b4a3210abcdef',
+    Authorization: 'Bearer xyz1234567890abcdef',
+    clientSecret: 's3cretP@ssw0rdXyZ2024',
+  };
+  const rr = scanAndRedact(real, { literalValueOnly: true });
+  assert.equal(rr.hits.length, 3, `宽松档真凭据仍应拦截，实际: ${JSON.stringify(rr.hits)}`);
+});
+
+test('scanAndRedact: 保守档（默认，导出/同步）字段名敏感即剥，不受宽松档影响', () => {
+  // 默认模式：字段名敏感 + 任意值 → 剥离（导出脱敏保持保守，行为不变）
+  const input = { token: 'your-token', apiKey: '${OPENAI_API_KEY}' };
+  const { sanitized } = scanAndRedact(input);
+  const s = sanitized as Record<string, unknown>;
+  assert.equal(s['token'], REDACTED_PLACEHOLDER, '保守档字段名敏感即剥（占位符值也剥）');
+  assert.equal(s['apiKey'], REDACTED_PLACEHOLDER, '保守档模板引用值也剥');
 });
 
 /* ================= redaction ================= */

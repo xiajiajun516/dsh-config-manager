@@ -194,6 +194,8 @@ export interface MarketStatusResponse {
   /** 是否已添加过至少一个市场 */
   configured: boolean;
   markets: MarketSummary[];
+  /** 本次 dsh 启动后市场是否已刷新过（首次打开市场页自动更新一次的依据；进程内存，dsh 重启后重置） */
+  bootAutoRefreshed?: boolean;
 }
 
 /** POST /market/add | /market/remove 响应：{ ok, markets } */

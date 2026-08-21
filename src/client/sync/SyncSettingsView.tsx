@@ -3,10 +3,16 @@
  *
  * 独立设置页壳（sectionHeader/close/自身 tab）已移除 —— tab 容器由
  * ConfigManagerSection 统一渲染，本组件只输出内容体：
- * - **通道子 tab 面板**：GitHub（git）/ WebDAV 两个子 tab（modeTabs 样式）切换，
- *   两个通道的配置表单、自动同步、同步模式、是否加密、远端快照**各自独立**；
+ * - **同步通道入口卡**：展示当前通道 + 配置状态 + 凭据徽章；点「配置同步通道」
+ *   → 弹出**通道配置弹窗**（弹窗体系与市场操作弹窗一致，DESIGN.md §8.12：
+ *   dialogMask + dialogCard dialogWide + dialogHeaderRow + dialogClose +
+ *   dialogBodyScroll，零新增样式）；
+ * - **通道配置弹窗**：通道子 tab（GitHub（git）/ WebDAV）切换，两个通道的
+ *   配置表单、自动同步、同步模式、是否加密、远端快照**各自独立**；关闭弹窗
+ *   = 放弃本次操作（GitHub 登录流程进行中则一并取消，§8.12 约定）；
  * - GitHub 子 tab：repoUrl（必填）+ 认证 token（可选，写入 DSH credentials 的提示）
- *   + GitHub OAuth device flow 登录（git 可执行文件固定使用系统 PATH 中的 git）；
+ *   + **GitHub OAuth device flow 登录**（登录块跟随 git 通道配置放在弹窗内：
+ *   未登录/失效时显示；git 可执行文件固定使用系统 PATH 中的 git）；
  * - WebDAV 子 tab：url + username + password（密码写入 DSH credentials）+ 常见服务器预设；
  * - 私有仓库强制提示横幅（仅 git 子 tab 常驻）；
  * - 推送按钮 → SyncPushReport；拉取按钮 → SyncPullReport.changes 差异摘要；
@@ -29,7 +35,7 @@ import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
-import { runStore, toSyncStoreSlice, type SyncStoreSlice } from '../run-store.ts'
+import { runStore, toSyncStoreSlice, type SyncConfirmDecisions, type SyncStoreSlice } from '../run-store.ts'
 import { SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF } from './sync-api.ts'
 import type {
   AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncPushPayload, SyncSectionInfo, SyncSnapshotLite,
@@ -37,7 +43,7 @@ import type {
 } from './sync-api.ts'
 import {
   autosyncIntervalMs, autosyncStatusText, channelTabModels, computeAutosyncCountdown,
-  computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
+  computeGithubLoginView, computeRemoteReady, computeSyncButtons,
   defaultChannelSyncState, formatIntervalDuration, githubPollMessage, kindLabel, presetById,
   presetIdForUrl, privateRepoHint, pullReportView, pushReportView, readStoredChannel,
   recommendedSyncSections, severityLabel, syncSectionGroups, syncSectionOptions,
@@ -84,11 +90,20 @@ interface SyncUiState {
   pullReport: SyncPullReport | null
   /** 一键同步差异确认会话（POST /sync/sync 结果；非空时渲染 SyncConfirmView） */
   confirmSession: SyncStartResponse | null
+  /** 一键同步差异确认的逐项决策（adopted/resolution；与 confirmSession 生命周期绑定，切 tab/刷新不丢） */
+  confirmDecisions: SyncConfirmDecisions | null
   /** 最近一次一键同步执行结果（回滚入口） */
   lastRestoreId: string | null
   error: string | null
   /** GitHub OAuth device flow 状态（flowId/userCode 仅内存，token 只存宿主） */
   github: GithubUiState
+  /**
+   * GitHub token 是否有效（「已登录」判定：token 存在且 GitHub API 接受）。
+   * null = 尚未校验（不显示登录块，避免已登录用户看到闪烁）；true = 已登录
+   * （隐藏 GitHub 登录块）；false = 未配置或已失效（显示登录块）。
+   * 仅内存瞬态（不进 store 切片）：切 tab/刷新后重新校验，保证新鲜。
+   */
+  githubSignedIn: boolean | null
 }
 
 interface GithubUiState {
@@ -128,9 +143,11 @@ const initial: SyncUiState = {
   pushReport: null,
   pullReport: null,
   confirmSession: null,
+  confirmDecisions: null,
   lastRestoreId: null,
   error: null,
   github: initialGithub,
+  githubSignedIn: null,
 }
 
 /**
@@ -162,6 +179,7 @@ function initFromStore(): SyncUiState {
     pushReport: s.pushReport,
     pullReport: s.pullReport,
     confirmSession: s.confirmSession,
+    confirmDecisions: s.confirmDecisions,
     lastRestoreId: s.lastRestoreId,
     error: s.error,
     loadError: s.loadError,
@@ -175,6 +193,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const stateRef = useRef<SyncUiState>(state)
   /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
   const mountedRef = useRef(true)
+  /** 通道配置弹窗开关（瞬态 UI：切 tab/刷新不持久化，弹窗不自动重开；DESIGN.md §8.12 约定） */
+  const [channelOpen, setChannelOpen] = useState(false)
 
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
@@ -275,6 +295,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       if (info.configured && preset.trim() !== '') {
         void loadSnapshots(preset, activeCh)
       }
+      // 校验 GitHub token 有效性：已登录（有效）→ 隐藏 GitHub 登录块；未配置/失效 → 显示
+      void validateGithub()
     } catch (err) {
       patch({ loading: false, loadError: err instanceof Error ? err.message : String(err) })
     }
@@ -436,6 +458,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         next.statusInfo = info
       }
       commit(next)
+      // 手动填入的 git token 保存成功 → 校验有效性（有效则隐藏 GitHub 登录块）
+      if (payloadToSave.transport !== 'webdav' && saved.credentialConfigured) {
+        void validateGithub()
+      }
     } catch (err) {
       patch({ savingConfig: false, error: err instanceof Error ? err.message : String(err) })
     } finally {
@@ -515,8 +541,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       }
       const message = githubPollMessage(poll, uiT)
       if (poll.status === 'success') {
-        patchGithub({ phase: 'success', error: null })
-        // token 已由宿主写入 DSH credentials：刷新状态行与凭据徽章
+        // token 已由宿主写入 DSH credentials：标记已登录（隐藏登录块）+ 刷新状态/凭据徽章
+        patch({ githubSignedIn: true, github: { ...stateRef.current.github, phase: 'success', error: null } })
         void loadStatus()
       } else {
         patchGithub({ phase: 'error', error: message })
@@ -537,6 +563,43 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     if (flowId !== '') {
       try { await api.githubCancel(flowId) } catch { /* 取消失败无需打扰用户 */ }
     }
+  }
+
+  /**
+   * 校验 GitHub token 是否有效（「已登录」判定 → 决定登录块显隐）。
+   * 挂载 / 登录成功 / 保存凭据后调用；已确认登录（githubSignedIn===true）时跳过
+   * （避免反复网络调用）。401 → 未登录：显示登录块并提示重新登录；网络等其余
+   * 错误 → 保持现状（不误判登出，已登录用户不被打扰；下次进入页面会再校验）。
+   */
+  const validateGithub = async (): Promise<void> => {
+    if (stateRef.current.githubSignedIn === true) return
+    try {
+      const res = await api.githubValidate()
+      patch({ githubSignedIn: res.configured && res.valid })
+    } catch {
+      // 校验失败（网络/限流等）：不可知 → 维持现状（null 隐藏 / 既有值不变）
+    }
+  }
+
+  /* ------------------------------------------------ 通道配置弹窗（弹窗驱动，DESIGN.md §8.12 同体系） */
+
+  /** 打开通道配置弹窗：登录态尚未校验时补一次校验（决定 Git 子 tab 登录块显隐）。 */
+  const openChannelDialog = (): void => {
+    setChannelOpen(true)
+    if (stateRef.current.githubSignedIn === null) void validateGithub()
+  }
+
+  /**
+   * 关闭通道配置弹窗 = 放弃本次操作（§8.12 约定）：GitHub 登录流程进行中则取消
+   * （停轮询 + 通知宿主丢弃设备码登记），保存中（savingConfig）时禁止关闭。
+   */
+  const closeChannelDialog = (): void => {
+    if (stateRef.current.savingConfig) return
+    const phase = stateRef.current.github.phase
+    if (phase === 'starting' || phase === 'waiting' || phase === 'polling') {
+      void runGithubCancel()
+    }
+    setChannelOpen(false)
   }
 
   const runPush = async (): Promise<void> => {
@@ -647,7 +710,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     if (state.confirmSession !== null) {
       try { await api.cancel(state.confirmSession.syncSessionId) } catch { /* 尽力清理 */ }
     }
-    patch({ busy: 'sync', error: null, confirmSession: null, lastRestoreId: null })
+    patch({ busy: 'sync', error: null, confirmSession: null, confirmDecisions: null, lastRestoreId: null })
     try {
       // 解密密码（可选）：一键同步拉取加密快照时提供；仅内存传输
       const decrypt =
@@ -661,7 +724,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         patch({ busy: null, error: session.message ?? t('syncflow.syncFailed') })
         return
       }
-      patch({ busy: null, confirmSession: session, token: '', webdavPassword: '' })
+      patch({ busy: null, confirmSession: session, confirmDecisions: null, token: '', webdavPassword: '' })
       patchChannel({ decryptPassword: '' })
       void loadSnapshots()
     } catch (err) {
@@ -671,7 +734,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
   /** 用户取消差异确认：清除会话，复位到空闲。 */
   const cancelConfirm = (): void => {
-    patch({ confirmSession: null })
+    patch({ confirmSession: null, confirmDecisions: null })
   }
 
   /** 从 SyncConfirmView 透传的一键回滚完成信号。 */
@@ -715,7 +778,6 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
   }
 
-  const status = computeSyncStatus(state.statusInfo, state.loading, state.loadError, uiT)
   /** 活动通道的远端地址是否就绪（git=repoUrl 非空；webdav=webdavUrl 非空） */
   const remoteReady = computeRemoteReady(state.channel, state.repoUrl, state.webdavUrl)
   const buttons = computeSyncButtons(state.busy, remoteReady, uiT)
@@ -746,9 +808,59 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     <div className={css.viewBody}>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
-          {/* 通道子 tab 面板：GitHub / WebDAV（modeTabs 样式；两通道设置各自独立） */}
+          {/* 同步通道入口卡：通道配置改为弹窗驱动（点按钮 → 弹窗内配置 Git/WebDAV 通道；
+              弹窗样式复用市场操作弹窗体系，DESIGN.md §8.12） */}
+          <Card>
+            <span className={css.groupLabel}>{t('channel.title')}</span>
+            <span className={css.hint}>{t('channel.openHint')}</span>
+            <div className={css.statRow}>
+              <Badge kind="info">{state.channel === 'webdav' ? t('channel.webdav') : t('channel.git')}</Badge>
+              <Badge kind={remoteReady ? 'ok' : 'warn'}>
+                {remoteReady ? t('channel.configured') : t('channel.notConfigured')}
+              </Badge>
+              {state.channel === 'git' && state.statusInfo?.credentialConfigured === true && (
+                <Badge kind="ok">{t('config.tokenSaved')}</Badge>
+              )}
+              {state.channel === 'webdav' && state.statusInfo?.webdav?.passwordConfigured === true && (
+                <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>
+              )}
+            </div>
+            {remoteReady && (
+              <span className={css.hint}>
+                {t('channel.currentUrl')}：{state.channel === 'webdav' ? state.webdavUrl : state.repoUrl}
+              </span>
+            )}
+            <div className={css.actionRow}>
+              <Button variant="primary" onClick={openChannelDialog}>
+                {t('channel.open')}
+              </Button>
+            </div>
+          </Card>
+
+          {/* 通道配置弹窗（操作弹窗体系：dialogMask + dialogCard dialogWide + 标题行 + 关闭 × + 正文限高内滚） */}
+          {channelOpen && (
+            <div
+              className={css.dialogMask}
+              onMouseDown={(e) => { if (e.target === e.currentTarget && !state.savingConfig) closeChannelDialog() }}
+            >
+              <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('channel.title')}>
+                <div className={css.dialogHeaderRow}>
+                  <span className={css.dialogHeader}>{t('channel.title')}</span>
+                  <button
+                    type="button"
+                    className={css.dialogClose}
+                    aria-label={t('common.close')}
+                    disabled={state.savingConfig}
+                    onClick={closeChannelDialog}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className={css.dialogBodyScroll}>
+
+          {/* 通道子 tab：GitHub / WebDAV（modeTabs 样式；两通道设置各自独立） */}
           <div className={css.modeTabs} role="tablist">
-            {channelTabModels(state.channel, state.busy !== null).map((tab) => (
+            {channelTabModels(state.channel, state.busy !== null || state.savingConfig).map((tab) => (
               <button
                 key={tab.channel}
                 type="button"
@@ -767,11 +879,6 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
           {/* 私有仓库强制提示：仅 git 通道适用 */}
           {state.channel === 'git' && <Banner kind="warn">{privateRepoHint(uiT)}</Banner>}
-
-          {/* 通道配置（当前子 tab 的表单） */}
-          <Card>
-            <span className={css.groupLabel}>{t('channel.title')}</span>
-            <span className={css.hint}>{t('channel.hint')}</span>
 
             {/* git 通道分支 */}
             {state.channel === 'git' && (
@@ -813,44 +920,51 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                   <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
                 </label>
 
-                {/* GitHub OAuth 登录（device flow）：仅 git 通道显示 */}
-                <span className={css.groupLabel}>{t('github.title')}</span>
-                <span className={css.hint}>{t('github.description')}</span>
-                {githubView.showCode && (
-                  <div className={css.statRow}>
-                    <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
-                    <a
-                      className={css.ghostButton}
-                      href={githubView.verificationUri}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ textDecoration: 'none' }}
-                    >
-                      {t('github.openAuth')}
-                    </a>
-                  </div>
-                )}
-                <div className={css.actionRow}>
-                  <Button
-                    variant="primary"
-                    disabled={!githubView.canStart || state.busy !== null}
-                    onClick={() => { void runGithubStart() }}
-                  >
-                    {githubView.startLabel}
-                  </Button>
-                  {githubView.canCancel && (
-                    <Button disabled={state.busy !== null} onClick={() => { void runGithubCancel() }}>
-                      {t('github.cancel')}
-                    </Button>
-                  )}
-                </div>
-                <div className={css.statRow}>
-                  <Badge kind={githubView.phase === 'success' ? 'ok' : githubView.phase === 'error' ? 'error' : 'warn'}>
-                    {githubView.statusText}
-                  </Badge>
-                </div>
-                {githubView.phase === 'error' && (
-                  <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
+                {/* GitHub OAuth 登录（device flow）：弹窗内仅 git 通道显示；已登录（token 有效）时整块隐藏 */}
+                {state.githubSignedIn === false && (
+                  <>
+                    {state.statusInfo?.credentialConfigured === true && (
+                      <Banner kind="warn">{t('github.tokenInvalid')}</Banner>
+                    )}
+                    <span className={css.groupLabel}>{t('github.title')}</span>
+                    <span className={css.hint}>{t('github.description')}</span>
+                    {githubView.showCode && (
+                      <div className={css.statRow}>
+                        <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
+                        <a
+                          className={css.ghostButton}
+                          href={githubView.verificationUri}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ textDecoration: 'none' }}
+                        >
+                          {t('github.openAuth')}
+                        </a>
+                      </div>
+                    )}
+                    <div className={css.actionRow}>
+                      <Button
+                        variant="primary"
+                        disabled={!githubView.canStart || state.busy !== null}
+                        onClick={() => { void runGithubStart() }}
+                      >
+                        {githubView.startLabel}
+                      </Button>
+                      {githubView.canCancel && (
+                        <Button disabled={state.busy !== null} onClick={() => { void runGithubCancel() }}>
+                          {t('github.cancel')}
+                        </Button>
+                      )}
+                    </div>
+                    <div className={css.statRow}>
+                      <Badge kind={githubView.phase === 'success' ? 'ok' : githubView.phase === 'error' ? 'error' : 'warn'}>
+                        {githubView.statusText}
+                      </Badge>
+                    </div>
+                    {githubView.phase === 'error' && (
+                      <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -944,16 +1058,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               </Button>
             </div>
             <span className={css.hint}>{t('config.saveHint')}</span>
-          </Card>
-
-          {/* 同步状态（当前子 tab 通道） */}
-          <Card>
-            <span className={css.groupLabel}>{t('status.title')}</span>
-            <div className={css.statRow}>
-              <Badge kind={status.kind === 'ready' ? 'ok' : status.kind === 'error' ? 'error' : 'warn'}>{status.text}</Badge>
-              <Badge kind="info">{state.channel === 'webdav' ? t('channel.webdav') : t('channel.git')}</Badge>
+                </div>
+              </div>
             </div>
-          </Card>
+          )}
 
           {/* 同步模式（当前通道）：默认（快速导出）/ 高级（自定义导出） */}
           <Card>
@@ -1154,6 +1262,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               needsReview={state.confirmSession.needsReview}
               compatibility={state.confirmSession.compatibility}
               t={t}
+              decisions={state.confirmDecisions}
+              onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
               onCancel={cancelConfirm}
               onRollbackDone={onRollbackApplied}
             />

@@ -125,7 +125,8 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     )
   }
   // 6c. 内容级秘密扫描（纵深防御，不依赖导出 containsSecrets 标记）：
-  //     JSON 分区走 scanAndRedact（字段名+值形状，空值/env 引用名豁免，低误报）；
+  //     JSON 分区走 scanAndRedact 宽松档（literalValueOnly：占位符/模板引用/代码表达式/短标识符
+  //     放行，只有值像真实字面量凭据才拦截——消除 `"token": "${ENV}"`、`Bearer <token>` 等误报）；
   //     文件类分区（skills/agentPresets/agentInstructions）走 scanText（只报告不改写）。
   const scanHits: string[] = []
   for (const sid of sections) {
@@ -150,7 +151,7 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
       } catch {
         continue
       }
-      const { hits } = scanAndRedact(data)
+      const { hits } = scanAndRedact(data, { literalValueOnly: true })
       if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, 5).map((h) => h.path).join(', ')}`)
     }
   }

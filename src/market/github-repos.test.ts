@@ -85,6 +85,20 @@ const FORK = {
   default_branch: 'main',
   fork: true,
   owner: { login: 'xiaojun' },
+  parent: { full_name: 'xiajiajun516/dsh-config-market' },
+};
+
+/** 同名但非本上游 fork（fork:true 但 parent 指向别的仓库） */
+const FORK_WRONG_PARENT = {
+  ...FORK,
+  parent: { full_name: 'someone-else/dsh-config-market' },
+};
+
+/** 同名但非 fork 的仓库（用户自建同名仓） */
+const REPO_SAME_NAME = {
+  ...FORK,
+  fork: false,
+  parent: null,
 };
 
 const PR = {
@@ -234,11 +248,11 @@ test('github-repos: createPublicRepo 422 → GitHubApiError/validation_failed（
 
 /* ---------------------------------------------------------------- ensureFork */
 
-test('github-repos: ensureFork 复用已 fork → 只发 getUser + forks 两个请求，不创建', async () => {
+test('github-repos: ensureFork 直查用户同名仓库命中已 fork（fork:true + parent 匹配）→ 复用，零创建', async () => {
   let n = 0;
   const { rest, calls } = installRest(() => {
     n += 1;
-    return n === 1 ? jsonResponse(200, USER) : jsonResponse(200, [FORK]);
+    return n === 1 ? jsonResponse(200, USER) : jsonResponse(200, FORK);
   });
   const info = await rest.ensureFork(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO);
   assert.equal(info.fullName, 'xiaojun/dsh-config-market');
@@ -246,20 +260,20 @@ test('github-repos: ensureFork 复用已 fork → 只发 getUser + forks 两个�
   assert.equal(info.cloneUrl, 'https://github.com/xiaojun/dsh-config-market.git');
   assert.equal(info.defaultBranch, 'main');
 
-  assert.equal(calls.length, 2, '复用路径只发 getUser + forks 两个请求');
-  assert.match(calls[1]?.url ?? '', /\/forks\?per_page=100/);
+  assert.equal(calls.length, 2, '复用路径只发 getUser + 直查用户仓库两个请求');
+  assert.match(calls[1]?.url ?? '', /\/repos\/xiaojun\/dsh-config-market$/);
   assert.ok(!calls.some((c) => c.init?.method === 'POST'), '复用路径不得创建 fork');
 });
 
-test('github-repos: ensureFork 无 fork → 创建（POST /forks 202）+ 轮询直到就绪', async () => {
+test('github-repos: ensureFork 直查 404 → 创建（POST /forks 202）+ 轮询直到就绪', async () => {
   let n = 0;
   const { rest, calls } = installRest(() => {
     n += 1;
     if (n === 1) return jsonResponse(200, USER);
-    if (n === 2) return jsonResponse(200, []); // 无已 fork
+    if (n === 2) return jsonResponse(404, { message: 'Not Found' }); // 直查：无 fork
     if (n === 3) return new Response('', { status: 202 }); // 创建返回 202（异步）
     if (n === 4) return jsonResponse(404, { message: 'Not Found' }); // 未就绪
-    return jsonResponse(200, FORK); // 就绪
+    return jsonResponse(200, FORK); // 就绪（owner + fork:true + parent 匹配）
   });
   const info = await rest.ensureFork('xiajiajun516', 'dsh-config-market');
   assert.equal(info.cloneUrl, 'https://github.com/xiaojun/dsh-config-market.git');
@@ -271,13 +285,42 @@ test('github-repos: ensureFork 无 fork → 创建（POST /forks 202）+ 轮询�
   assert.match(calls[4]?.url ?? '', /\/repos\/xiaojun\/dsh-config-market$/);
 });
 
+test('github-repos: ensureFork 同名仓库 fork:false（非 fork）→ fork_name_conflict', async () => {
+  let n = 0;
+  const { rest, calls } = installRest(() => {
+    n += 1;
+    return n === 1 ? jsonResponse(200, USER) : jsonResponse(200, REPO_SAME_NAME);
+  });
+  await assert.rejects(rest.ensureFork('xiajiajun516', 'dsh-config-market'), (err: unknown) => {
+    assert.ok(err instanceof GitHubApiError);
+    assert.equal(err.code, 'fork_name_conflict');
+    assert.match(err.message, /同名仓库已存在/);
+    return true;
+  });
+  assert.ok(!calls.some((c) => c.init?.method === 'POST'), '冲突场景不得尝试创建 fork');
+});
+
+test('github-repos: ensureFork 同名仓库 fork:true 但 parent 不匹配 → fork_name_conflict', async () => {
+  let n = 0;
+  const { rest } = installRest(() => {
+    n += 1;
+    return n === 1 ? jsonResponse(200, USER) : jsonResponse(200, FORK_WRONG_PARENT);
+  });
+  await assert.rejects(rest.ensureFork('xiajiajun516', 'dsh-config-market'), (err: unknown) => {
+    assert.ok(err instanceof GitHubApiError);
+    assert.equal(err.code, 'fork_name_conflict');
+    assert.match(err.message, /同名仓库已存在/);
+    return true;
+  });
+});
+
 test('github-repos: ensureFork 轮询超时（fork 一直未就绪）→ GitHubApiError/fork_timeout', async () => {
   let now = 0;
   let n = 0;
   const { rest, calls } = installRest(() => {
     n += 1;
     if (n === 1) return jsonResponse(200, USER); // getUser 必须成功才能进入轮询
-    if (n === 2) return jsonResponse(200, []); // 无已 fork
+    if (n === 2) return jsonResponse(404, { message: 'Not Found' }); // 直查：无 fork
     if (n === 3) return new Response('', { status: 202 }); // 创建接受
     now += 40; // 之后每次轮询推进时钟（超过 pollTimeoutMs=100 即超时）
     return jsonResponse(404, { message: 'Not Found' });
@@ -290,6 +333,24 @@ test('github-repos: ensureFork 轮询超时（fork 一直未就绪）→ GitHubA
     return true;
   });
   assert.ok(calls.length >= 6, '必须经历多轮轮询后才超时');
+});
+
+test('github-repos: ensureFork 轮询就绪但 parent 不匹配 → 继续轮询直到超时', async () => {
+  let now = 0;
+  let n = 0;
+  const { rest } = installRest(() => {
+    n += 1;
+    if (n === 1) return jsonResponse(200, USER);
+    if (n === 2) return jsonResponse(404, { message: 'Not Found' });
+    if (n === 3) return new Response('', { status: 202 });
+    now += 40;
+    return jsonResponse(200, FORK_WRONG_PARENT); // 就绪但 parent 不匹配 → 不算就绪
+  }, { now: () => now, pollTimeoutMs: 100 });
+  await assert.rejects(rest.ensureFork('xiajiajun516', 'dsh-config-market'), (err: unknown) => {
+    assert.ok(err instanceof GitHubApiError);
+    assert.equal(err.code, 'fork_timeout');
+    return true;
+  });
 });
 
 /* ---------------------------------------------------------------- readFile */
@@ -395,6 +456,36 @@ test('github-repos: listOpenPullRequests 响应非数组 → GitHubApiError/inva
   await assert.rejects(rest.listOpenPullRequests('x', 'y'), (err: unknown) => {
     assert.ok(err instanceof GitHubApiError);
     assert.equal(err.code, 'invalid_response');
+    return true;
+  });
+});
+
+/* ---------------------------------------------------------------- closePullRequest */
+
+test('github-repos: closePullRequest → PATCH /pulls/{number} + body state closed + 返回 PR 信息', async () => {
+  const closedPr = { ...PR, state: 'closed' };
+  const { rest, calls } = installRest(() => jsonResponse(200, closedPr));
+  const info = await rest.closePullRequest('xiajiajun516', 'dsh-config-market', 12);
+  assert.equal(info.number, 12);
+  assert.equal(info.state, 'closed');
+  assert.equal(info.htmlUrl, 'https://github.com/xiajiajun516/dsh-config-market/pull/12');
+  assert.equal(info.merged, false);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, `${GITHUB_API_BASE}/repos/xiajiajun516/dsh-config-market/pulls/12`);
+  assert.equal(calls[0]?.init?.method, 'PATCH');
+  const payload = JSON.parse(bodyOf(calls[0]!)) as Record<string, unknown>;
+  assert.equal(payload['state'], 'closed');
+  const headers = new Headers(calls[0]?.init?.headers);
+  assert.ok((headers.get('content-type') ?? '').includes('application/json'), '带 body 的请求必须声明 JSON');
+});
+
+test('github-repos: closePullRequest 404（PR 不存在/无权限）→ GitHubApiError/not_found', async () => {
+  const { rest } = installRest(() => jsonResponse(404, { message: 'Not Found' }));
+  await assert.rejects(rest.closePullRequest('xiajiajun516', 'dsh-config-market', 999), (err: unknown) => {
+    assert.ok(err instanceof GitHubApiError);
+    assert.equal(err.code, 'not_found');
+    assert.equal(err.status, 404);
     return true;
   });
 });
