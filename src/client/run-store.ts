@@ -164,6 +164,10 @@ export interface MarketStoreSlice {
   subView: 'browse' | 'myconfigs'
   search: string
   category: string
+  /** 来源筛选（2026-08-21：全部 / 官方 / 个人；切 tab/刷新不丢） */
+  source: 'all' | 'official' | 'personal'
+  /** 排序键（2026-08-21：默认 / 最新更新 / ⭐ 最多 / 名称；切 tab/刷新不丢） */
+  sortKey: 'default' | 'updatedAt' | 'stars' | 'name'
   /** 最近一次 browse 的条目列表（切 tab/刷新后免重拉；host 缓存状态下次 browse 时合并） */
   items: MarketListItem[]
   /** 条目详情（下载 + 校验 + dry-run 预览；zipPath 指向宿主 tmpDir，懒 GC 10 分钟） */
@@ -395,6 +399,8 @@ function defaultMarketState(): MarketStoreSlice {
     subView: 'browse',
     search: '',
     category: '',
+    source: 'all',
+    sortKey: 'default',
     items: [],
     detail: null,
     approvals: {},
@@ -471,6 +477,8 @@ export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
     subView: s.subView,
     search: s.search,
     category: s.category,
+    source: s.source,
+    sortKey: s.sortKey,
     items: s.items,
     detail: s.detail,
     approvals: s.approvals,

@@ -150,6 +150,8 @@ export interface MarketListItem {
   categories?: string[];
   /** 条目来源仓库 URL（来自 index 条目；UI 据此显示来源徽章）；缺省 = 市场仓库自身 */
   repo?: string;
+  /** 条目来源仓库的 star 数（仓库级，非条目级；undefined = 无数据——查询失败/非 GitHub 仓库） */
+  stars?: number;
   /** 本地缓存状态：cached | fresh | none（UI 徽章） */
   cacheState: 'cached' | 'fresh' | 'none';
 }

@@ -55,6 +55,62 @@ export function collectCategories(items: readonly MarketListItem[]): string[] {
   return [...set];
 }
 
+/* ---------------------------------------------------------------- 客户端专属：来源筛选 / 排序 */
+
+/**
+ * 来源筛选值（docs/design/2026-08-21-market-star-filter-sort-design.md §3.3.1）：
+ * - 'all'      全部来源；
+ * - 'official' 官方配置：条目无 repo（= 官方市场仓库自身）或 repo 为官方地址；
+ * - 'personal' 个人配置：条目带非官方 repo（作者自托管仓库）。
+ * 判定复用 isThirdPartyItem（与来源徽章同一事实源）。
+ */
+export type MarketSourceFilter = 'all' | 'official' | 'personal'
+
+/** 排序键（下拉框选项）：default = 保持 index 原始顺序。 */
+export type MarketSortKey = 'default' | 'updatedAt' | 'stars' | 'name'
+
+/**
+ * 来源过滤：'official' 只保留官方条目（非第三方），'personal' 只保留个人条目（第三方），
+ * 'all' 不过滤。缺省 'all'（向后兼容旧调用方）。
+ */
+export function filterBySource(items: readonly MarketListItem[], source: MarketSourceFilter, builtinUrl: string): MarketListItem[] {
+  if (source === 'all') return [...items];
+  const wantOfficial = source === 'official';
+  return items.filter((it) => isThirdPartyItem(it, builtinUrl) !== wantOfficial);
+}
+
+/**
+ * 排序（纯函数）：按键排序，undefined 值（无 updatedAt / stars）排最后。
+ * - updatedAt：降序（最新在前）；无 updatedAt 排最后；
+ * - stars：降序（多在前）；无 stars 排最后；
+ * - name：升序 A–Z（localeCompare）；
+ * - default：保持原顺序。
+ * 稳定性：同值保持原相对顺序（Array.prototype.sort 现代引擎稳定）。
+ */
+export function sortMarketItems(items: readonly MarketListItem[], sortKey: MarketSortKey): MarketListItem[] {
+  if (sortKey === 'default') return [...items];
+  const copy = [...items];
+  copy.sort((a, b) => {
+    if (sortKey === 'name') return a.name.localeCompare(b.name);
+    if (sortKey === 'stars') {
+      const sa = a.stars;
+      const sb = b.stars;
+      if (sa === undefined && sb === undefined) return 0;
+      if (sa === undefined) return 1;
+      if (sb === undefined) return -1;
+      return sb - sa;
+    }
+    // updatedAt
+    const ta = a.updatedAt ?? '';
+    const tb = b.updatedAt ?? '';
+    if (ta === '' && tb === '') return 0;
+    if (ta === '') return 1;
+    if (tb === '') return -1;
+    return tb.localeCompare(ta); // ISO-8601 字符串比较即时间序
+  });
+  return copy;
+}
+
 /**
  * 搜索 + 类别过滤（纯函数，客户端专属）。
  * - query：对 name / author / description 做大小写不敏感子串匹配（空白 query 不过滤）；

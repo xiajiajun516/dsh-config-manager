@@ -11,7 +11,7 @@
  * 低频面板的「当前打开面板」（panel）同样存于 runStore：切 tab 不丢、
  * 刷新后回到原 tab；面板内部状态由各自视图镜像进 store（见各视图头部注释）。
  */
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.ts'
 import { runStore, type MainView, type PanelId } from './run-store.ts'
@@ -21,6 +21,8 @@ import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
 import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import { MarketPanel } from './market/MarketPanel.tsx'
 import { AboutPanel } from './about/AboutPanel.tsx'
+import { ConfirmDialog } from './common/ConfirmDialog.tsx'
+import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import css from './config-manager.module.css'
 
 export type ConfigManagerSectionProps =
@@ -37,6 +39,66 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const view = state.view
   const panel = state.panel
+
+  // m-star-prompt：Star 引导弹窗（挂载时判定一次，方案 A：满 3 天 + 未表态才弹；
+  // 点过「去点 Star」或「不再提示」后永久不再弹）。状态存 ui-prefs.json（Host 侧）。
+  const [starPromptOpen, setStarPromptOpen] = useState(false)
+  /** 弹窗展示的 GitHub 仓库地址（GET /star-prompt 返回；不落 store） */
+  const starRepoUrl = useRef('')
+  /** 本次挂载只判定一次（防止 StrictMode/重挂载重复弹） */
+  const starPromptChecked = useRef(false)
+
+  useEffect(() => {
+    if (starPromptChecked.current) return
+    starPromptChecked.current = true
+    void (async () => {
+      try {
+        const status = await api.starPromptStatus()
+        const ev = evaluateStarPrompt(
+          { firstSeenAt: status.firstSeenAt, dismissed: status.dismissed, clicked: status.clicked },
+          Date.now(),
+        )
+        // 首次进入：补记首次使用时间（失败静默，下次进入再记）
+        if (ev.shouldRecordFirstSeen) {
+          void api.saveStarPrompt({ firstSeenAt: Date.now() }).catch(() => {})
+        }
+        // 满 3 天且未表态：展示弹窗
+        if (ev.shouldShow) {
+          starRepoUrl.current = status.repoUrl
+          setStarPromptOpen(true)
+        }
+      } catch {
+        // 服务未就绪 / 挂载异常：不弹，静默（下次进入再判）
+      }
+    })()
+  }, [api])
+
+  /** 去点 Star（方案 A）：打开仓库页 + 记 clicked（此后不再弹）。 */
+  const handleStar = (): void => {
+    setStarPromptOpen(false)
+    const url = starRepoUrl.current
+    if (url !== '') {
+      // 与 AboutPanel 外链同模式：新标签页打开，noreferrer 不外泄来源
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.target = '_blank'
+      anchor.rel = 'noreferrer'
+      anchor.click()
+    }
+    // 记「引导完成」失败静默：最坏情况下次进入再弹一次
+    void api.saveStarPrompt({ clicked: true }).catch(() => {})
+  }
+
+  /** 不再提示：关闭弹窗 + 记 dismissed（永久不再弹）。 */
+  const handleDismiss = (): void => {
+    setStarPromptOpen(false)
+    void api.saveStarPrompt({ dismissed: true }).catch(() => {})
+  }
+
+  /** 遮罩点击 / Esc：只是暂时关闭，不记「不再提示」表态（下次进入再判）。 */
+  const handleBackdropClose = (): void => {
+    setStarPromptOpen(false)
+  }
 
   // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
   // 这里经 /runs 找回活跃 runId 再轮询 /progress）；卸载时停止轮询，重开再订阅。
@@ -136,6 +198,18 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
                 ? <SnapshotsPanel api={api} t={t} />
                 : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
       </div>
+      {/* Star 引导弹窗（复用 ConfirmDialog；「去点 Star」= primary 主操作，
+          「不再提示」= 次按钮；遮罩/Esc 走 backdropClose 只关不算表态） */}
+      <ConfirmDialog
+        open={starPromptOpen}
+        title={t('starPrompt.title')}
+        message={t('starPrompt.body')}
+        confirmLabel={t('starPrompt.star')}
+        cancelLabel={t('starPrompt.dismiss')}
+        onConfirm={handleStar}
+        onCancel={handleDismiss}
+        backdropClose={handleBackdropClose}
+      />
     </div>
   )
 }

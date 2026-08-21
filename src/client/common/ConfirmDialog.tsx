@@ -9,6 +9,8 @@
  * 交互约定：
  * - 受控组件：open=false 时不渲染；open=true 渲染遮罩 + 居中卡片；
  * - 关闭三途径：遮罩点击（仅 e.target === currentTarget）、Esc 键、取消按钮；
+ *   （可选 backdropClose：遮罩点击 / Esc 走此回调而非 onCancel —— 用于「不再提示」类
+ *   弹窗，用户点遮罩只是暂时关闭、不算表态；缺省时三途径一致走 onCancel）；
  * - busy=true（或 onConfirm 返回 Promise 的自管 busy）时禁用一切关闭途径与确认按钮，
  *   防重复提交；
  * - 初始焦点在取消按钮（危险确认不默认落破坏性按钮）；关闭后还原焦点到触发按钮
@@ -43,6 +45,9 @@ export interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>
   /** 取消/关闭回调 */
   onCancel: () => void
+  /** 遮罩点击 / Esc 关闭时的回调（缺省 = onCancel）；用于「不再提示」类弹窗
+   *  让遮罩/Esc 只是暂时关闭、不记「不再提示」表态 */
+  backdropClose?: () => void
   /** 额外内容（可选；渲染在 message 之后、按钮区之前） */
   children?: ReactNode
 }
@@ -52,7 +57,7 @@ export interface ConfirmDialogProps {
  * 自管 busy：onConfirm 返回 Promise 时置 busy 直到 resolve（reject 仍关闭 busy，错误由调用方处理）。
  */
 export function ConfirmDialog({
-  open, title, message, confirmLabel, cancelLabel, danger, busy: busyProp, onConfirm, onCancel, children,
+  open, title, message, confirmLabel, cancelLabel, danger, busy: busyProp, onConfirm, onCancel, backdropClose, children,
 }: ConfirmDialogProps) {
   const [selfBusy, setSelfBusy] = useState(false)
   const busy = busyProp === true || selfBusy
@@ -60,6 +65,8 @@ export function ConfirmDialog({
   const prevFocus = useRef<Element | null>(null)
   /** 取消按钮 ref（初始焦点） */
   const cancelRef = useRef<HTMLButtonElement | null>(null)
+  /** 遮罩/Esc 关闭回调（缺省 = 取消按钮同一回调） */
+  const handleBackdropClose = backdropClose ?? onCancel
 
   // 打开时记录触发元素 + 焦点落到取消按钮；关闭时还原焦点
   useEffect(() => {
@@ -75,15 +82,16 @@ export function ConfirmDialog({
     }
   }, [open])
 
-  // Esc 关闭（busy 时禁用）
+  // Esc 关闭（busy 时禁用；走 backdropClose ?? onCancel）
   useEffect(() => {
     if (!open || busy) return
+    const close = backdropClose ?? onCancel
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onCancel()
+      if (e.key === 'Escape') close()
     }
     window.addEventListener('keydown', onKey)
     return () => { window.removeEventListener('keydown', onKey) }
-  }, [open, busy, onCancel])
+  }, [open, busy, backdropClose, onCancel])
 
   if (!open) return null
 
@@ -100,8 +108,9 @@ export function ConfirmDialog({
     <div
       className={css.dialogMask}
       onMouseDown={(e) => {
-        // 仅遮罩自身点击关闭（目标 === 当前遮罩，卡片内的点击不冒泡关闭）
-        if (e.target === e.currentTarget && !busy) onCancel()
+        // 仅遮罩自身点击关闭（目标 === 当前遮罩，卡片内的点击不冒泡关闭）；
+        // 走 backdropClose ?? onCancel（busy 时禁用）
+        if (e.target === e.currentTarget && !busy) handleBackdropClose()
       }}
     >
       <div className={css.dialogCard} role="dialog" aria-modal="true" aria-label={title}>

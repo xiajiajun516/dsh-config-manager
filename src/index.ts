@@ -96,7 +96,7 @@ import {
   SYNC_SELECTION_SCHEMA_VERSION,
 } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
-import { readUiPrefs, writeUiPrefs, UI_PREFS_SCHEMA_VERSION } from './sync/ui-prefs.ts'
+import { readUiPrefs, updateUiPrefs } from './sync/ui-prefs.ts'
 import type { UiPrefsChannel } from './sync/ui-prefs.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
@@ -112,6 +112,8 @@ import type {
 import { GitHubAuthRest, GitHubApiError } from './market/github-repos.ts'
 import { MyRepoError, MyRepoService, USER_CONFIGS_REPO, userConfigsRepoUrl } from './market/my-repo.ts'
 import { createGitFileWriter } from './market/git-file-writer.ts'
+import { parseGitHubRepoUrl } from './market/repo-url.ts'
+import { StarCache } from './market/star-cache.ts'
 import { redact } from './security/redaction.ts'
 import { sha256Hex } from './utils/hashing.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
@@ -130,10 +132,17 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.41'
+const PLUGIN_VERSION = '0.1.42'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
+
+/**
+ * Star 引导弹窗指向的 GitHub 仓库（用户引导点 Star 的目标）。
+ * 与 package.json 的 repository 字段保持一致；界面不可改（硬编码，参照
+ * 「一键上传」目标仓库先例）。仅在 GET /star-prompt 响应中返回，供弹窗按钮跳转。
+ */
+const STAR_PROMPT_REPO_URL = 'https://github.com/xiajiajun516/dsh-config-manager'
 
 /** 缓存自动清理周期：24 小时（启动即清一次 + 此后每日一次；与 cache-cleaner 保留期独立） */
 const CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -218,6 +227,8 @@ const API = {
   syncConfig: '/api/dsh-config-manager/sync/config',
   // m-self：插件 UI 偏好（如上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
   syncUiPrefs: '/api/dsh-config-manager/sync/ui-prefs',
+  // m-star-prompt：Star 引导弹窗状态（复用 ui-prefs.json；GET 读 + POST 局部更新）
+  starPrompt: '/api/dsh-config-manager/star-prompt',
   // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
   marketStatus: '/api/dsh-config-manager/market/status',
   marketRefresh: '/api/dsh-config-manager/market/refresh',
@@ -1495,6 +1506,20 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   /** 请求级装配只读 GitMarketReader（公开市场无凭据；url = BUILTIN_MARKET_URL，已由 validateRepoUrl 拒绝 userinfo）。 */
   const makeMarketReader = (): GitMarketReader => new GitMarketReader({ msg, timeoutMs: 60_000 })
 
+  /**
+   * 市场条目来源仓库 star 缓存（docs/design/2026-08-21-market-star-filter-sort-design.md §3.1.3）。
+   * - **匿名查询**（getRepoStarsPublic，不注入 token）——守住「市场端点零凭据」安全不变式；
+   * - 按仓库 URL 去重 + 1 小时 TTL + 失败降级（单仓失败显示「—」，不影响整体浏览）；
+   * - tokenProvider 给空函数（requestPublic 不调用它，仅满足构造签名）。
+   */
+  const marketStarCache = new StarCache({
+    query: async (url: string): Promise<number | null> => {
+      const ref = parseGitHubRepoUrl(url)
+      if (ref === null) return null // 非 github.com 仓库 → 无 star 数据（显示「—」）
+      return new GitHubAuthRest({ tokenProvider: async () => '' }).getRepoStarsPublic(ref.owner, ref.repo)
+    },
+  })
+
   /** 读缓存的 index.json（结构校验通过才返回，否则 null）。 */
   async function readCachedIndexObj(url: string): Promise<MarketIndex | null> {
     try {
@@ -2119,6 +2144,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     // ------------------------------------------------------ sync/ui-prefs
     // m-self：保存插件 UI 偏好（当前为上次选择的同步通道；ui-prefs.json，随 self 分区进备份）。
     // 纯偏好、无 secret；失败仅提示，不阻断同步主流程。
+    // 经 updateUiPrefs 局部合并写：不覆盖其他端点（star-prompt）刚写入的字段。
     {
       kind: 'exact',
       path: API.syncUiPrefs,
@@ -2131,10 +2157,65 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         try {
           const channel: UiPrefsChannel | undefined = body['lastSyncChannel'] === 'webdav' ? 'webdav' : body['lastSyncChannel'] === 'git' ? 'git' : undefined
-          await writeUiPrefs(syncDir, { schemaVersion: UI_PREFS_SCHEMA_VERSION, ...(channel !== undefined ? { lastSyncChannel: channel } : {}) })
+          await updateUiPrefs(syncDir, { ...(channel !== undefined ? { lastSyncChannel: channel } : {}) })
           writeJson(res, 200, { ok: true, lastSyncChannel: channel })
         } catch (error) {
           writeSyncRouteError(res, error)
+        }
+      },
+    },
+    // ------------------------------------------------------ star-prompt
+    // m-star-prompt：Star 引导弹窗状态（复用 ui-prefs.json；随 self 分区进备份）。
+    // GET → 返回仓库地址 + 弹窗状态（UI 挂载时判定是否展示 / 是否补记首次使用时间）；
+    // POST → 局部更新（firstSeenAt / dismissed / clicked 白名单），经 updateUiPrefs
+    // 合并写，不覆盖 sync/ui-prefs 的 lastSyncChannel。纯偏好、无 secret。
+    {
+      kind: 'exact',
+      path: API.starPrompt,
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          if (!guard(req, res, 'GET')) return
+          try {
+            const prefs = await readUiPrefs(syncDir)
+            writeJson(res, 200, {
+              ok: true,
+              repoUrl: STAR_PROMPT_REPO_URL,
+              firstSeenAt: prefs.starPromptFirstSeenAt,
+              dismissed: prefs.starPromptDismissed === true,
+              clicked: prefs.starPromptClicked === true,
+            })
+          } catch (error) {
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const patch: Record<string, unknown> = {}
+          const firstSeenAt = body['firstSeenAt']
+          if (typeof firstSeenAt === 'number' && Number.isFinite(firstSeenAt)) {
+            patch['starPromptFirstSeenAt'] = firstSeenAt
+          }
+          if (body['dismissed'] === true) {
+            patch['starPromptDismissed'] = true
+          }
+          if (body['clicked'] === true) {
+            patch['starPromptClicked'] = true
+          }
+          const next = await updateUiPrefs(syncDir, patch)
+          writeJson(res, 200, {
+            ok: true,
+            firstSeenAt: next.starPromptFirstSeenAt,
+            dismissed: next.starPromptDismissed === true,
+            clicked: next.starPromptClicked === true,
+          })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     },
@@ -2828,6 +2909,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           for (const item of index.items) {
             const cacheState = await itemCached(url, item.id) ? 'cached' : 'none'
             items.push(toMarketListItem(item, cacheState))
+          }
+          // star 数据（仓库级）：收集条目来源仓库 URL（repo ?? 市场 URL）去重后批量查缓存，
+          // 并入浏览列表。查询失败/非 GitHub 仓库 → 该项 stars 缺省（undefined），UI 显示「—」。
+          if (items.length > 0) {
+            const repoUrls = [...new Set(items.map((it) => it.repo ?? url))]
+            const starsByUrl = await marketStarCache.getMany(repoUrls)
+            for (const it of items) {
+              const stars = starsByUrl.get(it.repo ?? url)
+              if (stars !== undefined) it.stars = stars
+            }
           }
           writeJson(res, 200, { ok: true, items })
         } catch (error) {

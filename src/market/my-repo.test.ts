@@ -133,6 +133,7 @@ function makeHarness(overrides: RestOverrides = {}, opts: { userIndex?: string; 
       if (owner === LOGIN) return liveUserIndex; // 用户仓库 index（动态：反映最近一次写入）
       return liveOfficialIndex; // 官方市场 index
     },
+    getRepoStars: async () => { restCalls.push('getRepoStars'); return null; },
     openPullRequest: async (params) => {
       restCalls.push('openPullRequest');
       openPrCalls.push(params);
@@ -384,6 +385,7 @@ test('my-repo: 校验失败（prepare 抛错）→ 零推送、零仓库操作',
     createPublicRepo: async () => { restCalls.push('createPublicRepo'); throw new Error('不应调用'); },
     ensureFork: async () => { restCalls.push('ensureFork'); throw new Error('不应调用'); },
     readFile: async () => { restCalls.push('readFile'); return null; },
+    getRepoStars: async () => { restCalls.push('getRepoStars'); return null; },
     openPullRequest: async () => { restCalls.push('openPullRequest'); throw new Error('不应调用'); },
     listOpenPullRequests: async () => { restCalls.push('listOpenPullRequests'); return []; },
     closePullRequest: async () => { restCalls.push('closePullRequest'); throw new Error('不应调用'); },

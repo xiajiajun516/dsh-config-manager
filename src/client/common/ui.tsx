@@ -68,11 +68,13 @@ export type BadgeKind = 'info' | 'ok' | 'warn' | 'error'
 export interface BadgeProps {
   kind?: BadgeKind
   children: ReactNode
+  /** 悬停提示（可选；如 star 徽章的「仓库级 star」说明） */
+  title?: string
 }
 
 /** 状态徽章（info=业务色 / ok=成功 / warn=警告 / error=错误） */
-export function Badge({ kind = 'info', children }: BadgeProps) {
-  return <span className={`${css.badge} ${css[`badge${kind[0]!.toUpperCase()}${kind.slice(1)}`] ?? ''}`}>{children}</span>
+export function Badge({ kind = 'info', children, title }: BadgeProps) {
+  return <span className={`${css.badge} ${css[`badge${kind[0]!.toUpperCase()}${kind.slice(1)}`] ?? ''}`} title={title}>{children}</span>
 }
 
 /* ---------------- Banner ---------------- */

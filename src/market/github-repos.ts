@@ -7,6 +7,9 @@
  *   createPublicRepo()         创建公开仓库（POST /user/repos，public + auto_init）；
  *   ensureFork()               直查用户同名仓库复用已 fork / 新建 fork 并轮询就绪（fork 异步创建）；
  *   readFile()                 读仓库内文本文件（contents API，base64 解码）；
+ *   getRepoStars()             读仓库 star 数（带 token；「我的配置」页用）；
+ *   getRepoStarsPublic()       读仓库 star 数（**匿名，不注入 token**；市场浏览用，
+ *                              守住「市场端点零凭据」安全不变式）；
  *   openPullRequest()          开 PR（POST /pulls；缺省目标 = 固定官方收录仓库）；
  *   closePullRequest()         关闭 PR（PATCH /pulls/{number}，state=closed）；
  *   listOpenPullRequests()     列 open PR（可带 head 过滤，如 `<login>:<branch>`）。
@@ -329,6 +332,25 @@ export class GitHubAuthRest {
     return Buffer.from(content, 'base64').toString('utf8');
   }
 
+  /**
+   * 读仓库 star 数（stargazers_count）。带 token 通道（「我的配置」页用，登录态 5000 次/小时）。
+   * 404（仓库不存在）→ null；其余错误抛 GitHubApiError。
+   */
+  async getRepoStars(owner: string, repo: string): Promise<number | null> {
+    const response = await this.request(`/repos/${seg(owner)}/${seg(repo)}`, { method: 'GET' });
+    return this.parseStars(response);
+  }
+
+  /**
+   * 读仓库 star 数（stargazers_count）。**匿名通道（不注入 token）** —— 市场浏览页专用：
+   * `/market/browse` 不触碰任何凭据（安全不变式：市场端点无 token），star 属公开数据，
+   * 匿名 REST 限额（60 次/小时）配合 StarCache 去重 + TTL 足够。404 → null。
+   */
+  async getRepoStarsPublic(owner: string, repo: string): Promise<number | null> {
+    const response = await this.requestPublic(`/repos/${seg(owner)}/${seg(repo)}`, { method: 'GET' });
+    return this.parseStars(response);
+  }
+
   /** 开 PR（POST /pulls）；owner/repo 缺省 = 固定官方收录仓库。 */
   async openPullRequest(params: GitHubPullRequestParams): Promise<GitHubPullRequestInfo> {
     const owner = params.owner ?? MARKET_UPSTREAM_OWNER;
@@ -463,6 +485,39 @@ export class GitHubAuthRest {
       );
     }
     return response;
+  }
+
+  /**
+   * 匿名请求管道（**不注入 token / authorization 头**）：仅用于读取公开数据
+   * （仓库 star 数等），守住「市场端点零凭据」安全不变式。网络异常 → network_error（消息脱敏）。
+   */
+  private async requestPublic(path: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    headers.set('accept', 'application/vnd.github+json');
+    headers.set('x-github-api-version', '2022-11-28');
+    let response: Response;
+    try {
+      response = await this.fetcher(GITHUB_API_BASE + path, { ...init, headers });
+    } catch (err) {
+      throw new GitHubApiError(
+        `GitHub API 请求失败：${redact(err instanceof Error ? err.message : String(err))}`,
+        'network_error',
+      );
+    }
+    return response;
+  }
+
+  /** 解析仓库响应 → stargazers_count（非负有限数）；404 → null；缺失/非法 → invalid_response。 */
+  private async parseStars(response: Response): Promise<number | null> {
+    if (response.status === 404) return null;
+    if (!response.ok) throw await this.apiError(response);
+    const data = await safeParseJson(response);
+    const obj = asRecord(data);
+    const stars = obj['stargazers_count'];
+    if (typeof stars !== 'number' || !Number.isFinite(stars) || stars < 0) {
+      throw new GitHubApiError('GitHub API 响应缺少有效的 stargazers_count', 'invalid_response');
+    }
+    return stars;
   }
 
   /** 请求 + 2xx 校验 + JSON 解析（空体 → undefined）。非 2xx → apiError。 */

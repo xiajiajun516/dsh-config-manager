@@ -390,6 +390,70 @@ test('github-repos: readFile 0 字节空文件 → 返回空串（contents API �
   assert.equal(await rest.readFile('xiaojun', 'dsh-configs', 'empty.txt'), '');
 });
 
+/* ---------------------------------------------------------------- getRepoStars / getRepoStarsPublic */
+
+test('github-repos: getRepoStars 200 → stargazers_count；请求带 Bearer 头（「我的配置」登录态通道）', async () => {
+  const { rest, calls, token } = installRest(() => jsonResponse(200, { ...REPO, stargazers_count: 42 }));
+  assert.equal(await rest.getRepoStars('xiaojun', 'dsh-configs'), 42);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, `${GITHUB_API_BASE}/repos/xiaojun/dsh-configs`);
+  const headers = new Headers(calls[0]?.init?.headers);
+  assert.equal(headers.get('authorization'), `Bearer ${token}`, 'getRepoStars 必须带 token（登录态通道）');
+});
+
+test('github-repos: getRepoStars 404 → null（仓库不存在）', async () => {
+  const { rest } = installRest(() => jsonResponse(404, { message: 'Not Found' }));
+  assert.equal(await rest.getRepoStars('ghost', 'gone'), null);
+});
+
+test('github-repos: getRepoStarsPublic 200 → stargazers_count；请求**不带** authorization 头（市场匿名通道）', async () => {
+  const { rest, calls } = installRest(() => jsonResponse(200, { ...REPO, stargazers_count: 7 }));
+  assert.equal(await rest.getRepoStarsPublic('xiaojun', 'dsh-configs'), 7);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.url, `${GITHUB_API_BASE}/repos/xiaojun/dsh-configs`);
+  const headers = new Headers(calls[0]?.init?.headers);
+  assert.equal(headers.get('authorization'), null, '匿名通道绝不注入 authorization 头（市场端点零凭据）');
+  assert.equal(headers.get('accept'), 'application/vnd.github+json');
+});
+
+test('github-repos: getRepoStarsPublic 404 → null；403 配额耗尽 → rate_limited（消息脱敏）', async () => {
+  let n = 0;
+  const { rest } = installRest(() => {
+    n += 1;
+    if (n === 1) return jsonResponse(404, { message: 'Not Found' });
+    return new Response(JSON.stringify({ message: 'API rate limit exceeded' }), {
+      status: 403,
+      headers: { 'x-ratelimit-remaining': '0' },
+    });
+  });
+  assert.equal(await rest.getRepoStarsPublic('ghost', 'gone'), null);
+  await assert.rejects(rest.getRepoStarsPublic('a', 'b'), (err: unknown) => {
+    assert.ok(err instanceof GitHubApiError);
+    assert.equal(err.code, 'rate_limited');
+    return true;
+  });
+});
+
+test('github-repos: getRepoStarsPublic 空 token（tokenProvider 返回空）仍可匿名查询（不触发 no_token）', async () => {
+  const calls: FetchCall[] = [];
+  const fetcher = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    calls.push({ url: String(input), init });
+    return jsonResponse(200, { ...REPO, stargazers_count: 3 });
+  }) as typeof fetch;
+  const rest = new GitHubAuthRest({ tokenProvider: async () => '', fetcher, now: () => 0 });
+  assert.equal(await rest.getRepoStarsPublic('xiaojun', 'dsh-configs'), 3, '匿名通道不依赖 token，空 token 也应可用');
+  assert.equal(calls.length, 1);
+});
+
+test('github-repos: getRepoStars 响应缺 stargazers_count → GitHubApiError/invalid_response', async () => {
+  const { rest } = installRest(() => jsonResponse(200, REPO)); // REPO 无 stargazers_count 字段
+  await assert.rejects(rest.getRepoStars('xiaojun', 'dsh-configs'), (err: unknown) => {
+    assert.ok(err instanceof GitHubApiError);
+    assert.equal(err.code, 'invalid_response');
+    return true;
+  });
+});
+
 /* ---------------------------------------------------------------- openPullRequest */
 
 test('github-repos: openPullRequest 缺省 owner/repo → 固定官方仓库；请求体含 title/head/base', async () => {

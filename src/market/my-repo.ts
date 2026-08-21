@@ -165,6 +165,8 @@ export interface MyItemEntry {
   prUrl?: string;
   /** 用户公开仓库 URL */
   repoUrl: string;
+  /** 用户公开仓库（<login>/dsh-configs）的 star 数（仓库级；undefined = 无数据） */
+  stars?: number;
 }
 
 /* ---------------------------------------------------------------- rest 端口（结构接口，可 mock） */
@@ -179,6 +181,8 @@ export interface GitHubRestLike {
   createPublicRepo(name: string, description?: string): Promise<GitHubRepoInfo>;
   ensureFork(owner: string, repo: string): Promise<GitHubForkInfo>;
   readFile(owner: string, repo: string, path: string, ref?: string): Promise<string | null>;
+  /** 读仓库 star 数（带 token；「我的配置」页展示自己仓库 star 用；404 → null） */
+  getRepoStars(owner: string, repo: string): Promise<number | null>;
   openPullRequest(params: GitHubPullRequestParams): Promise<GitHubPullRequestInfo>;
   listOpenPullRequests(owner: string, repo: string, head?: string): Promise<GitHubPullRequestInfo[]>;
   /** 关闭 PR（删除条目时关闭待审核的收录 PR） */
@@ -367,7 +371,7 @@ export class MyRepoService {
     return this.runPublish({ ...params, mode: 'update' });
   }
 
-  /** 列出已上传条目（读用户仓库 index.json）+ 收录状态（官方 index / open PR）。 */
+  /** 列出已上传条目（读用户仓库 index.json）+ 收录状态（官方 index / open PR）+ 自己仓库 star。 */
   async listItems(): Promise<MyItemEntry[]> {
     const user = await this.rest.getUser(); // 401 → GitHubApiError(unauthorized)，由上层映射「请重新登录」
     const login = user.login;
@@ -388,10 +392,18 @@ export class MyRepoService {
         for (const it of op.index.items) officialIds.add(it.id);
       }
     }
+    // 自己仓库 star（仓库级，全部条目共享；查询失败/仓库不存在 → undefined，不影响列表）
+    let stars: number | undefined;
+    try {
+      const s = await this.rest.getRepoStars(login, USER_CONFIGS_REPO);
+      if (s !== null) stars = s;
+    } catch {
+      // 失败降级：star 只是展示位，缺失不阻断列表
+    }
     const entries: MyItemEntry[] = [];
     for (const it of parsed.index.items) {
       if (officialIds.has(it.id)) {
-        entries.push({ ...it, status: 'listed' as const, repoUrl });
+        entries.push({ ...it, status: 'listed' as const, repoUrl, ...(stars !== undefined ? { stars } : {}) });
         continue;
       }
       const openPrs = await this.rest.listOpenPullRequests(
@@ -399,9 +411,9 @@ export class MyRepoService {
       );
       if (openPrs.length > 0) {
         const pr = openPrs[0]!;
-        entries.push({ ...it, status: 'pr-pending' as const, prUrl: pr.htmlUrl, repoUrl });
+        entries.push({ ...it, status: 'pr-pending' as const, prUrl: pr.htmlUrl, repoUrl, ...(stars !== undefined ? { stars } : {}) });
       } else {
-        entries.push({ ...it, status: 'not-listed' as const, repoUrl });
+        entries.push({ ...it, status: 'not-listed' as const, repoUrl, ...(stars !== undefined ? { stars } : {}) });
       }
     }
     return entries;

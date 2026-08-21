@@ -204,6 +204,29 @@ test('my-configs-view: toMyItemView name 纯空白也回退 id', () => {
   assert.equal(v.name, 'cfg-a')
 })
 
+test('my-configs-view: toMyItemView 带 stars → 透传（仓库级 star 展示位）', () => {
+  const v = toMyItemView(item({ id: 'cfg-a', stars: 42 }), { kind: 'listed' })
+  assert.equal(v.stars, 42)
+})
+
+test('my-configs-view: toMyItemView 无 stars → undefined（UI 不显示 ⭐）', () => {
+  const v = toMyItemView(item({ id: 'cfg-a' }), { kind: 'not-listed' })
+  assert.equal(v.stars, undefined)
+})
+
+test('my-configs-view: buildMyItemsView stars 随条目传播', () => {
+  const views = buildMyItemsView({
+    items: [
+      { id: 'a', name: 'A', stars: 5 },
+      { id: 'b', name: 'B' },
+    ],
+    officialListedIds: new Set(['a', 'b']),
+    openPrs: [],
+  })
+  assert.equal(views[0]!.stars, 5)
+  assert.equal(views[1]!.stars, undefined)
+})
+
 /* ---------------------------------------------------------------- 徽章模板 */
 
 test('my-configs-view: itemStatusBadge 三态 → 语义 kind（ok=已收录 / warn=PR 待审核 / info=未收录）', () => {

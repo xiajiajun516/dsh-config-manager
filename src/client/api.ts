@@ -88,6 +88,34 @@ export interface RestoreResponse {
   report?: RestoreReport;
 }
 
+/** Star 引导弹窗状态（GET /star-prompt；纯偏好，无 secret） */
+export interface StarPromptStatus {
+  ok: boolean;
+  /** 引导用户点 Star 的 GitHub 仓库地址（Host 提供，硬编码常量） */
+  repoUrl: string;
+  /** 首次进入页面时间（ms 时间戳）；undefined = 尚未进入过页面 */
+  firstSeenAt?: number;
+  /** 用户点过「不再提示」 */
+  dismissed: boolean;
+  /** 用户点过「去点 Star」（方案 A：引导完成） */
+  clicked: boolean;
+}
+
+/** Star 引导弹窗状态的局部更新补丁（POST /star-prompt；全部可选） */
+export interface StarPromptPatch {
+  firstSeenAt?: number;
+  dismissed?: boolean;
+  clicked?: boolean;
+}
+
+/** POST /star-prompt 响应（更新后的最新状态） */
+export interface StarPromptSaveResponse {
+  ok: boolean;
+  firstSeenAt?: number;
+  dismissed: boolean;
+  clicked: boolean;
+}
+
 /** 路由族常量（集中管理，与 Host 半的路由前缀保持一致） */
 export const CONFIG_MANAGER_API = {
   base: '/api/dsh-config-manager',
@@ -103,6 +131,7 @@ export const CONFIG_MANAGER_API = {
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
   restore: '/api/dsh-config-manager/restore',
+  starPrompt: '/api/dsh-config-manager/star-prompt',
 } as const;
 
 /** 导出请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐，防止宿主卡死时 UI 无限等待 */
@@ -206,6 +235,28 @@ export class ConfigManagerApi {
   async status(): Promise<ServiceStatus> {
     const response = await fetch(CONFIG_MANAGER_API.status);
     return readJson<ServiceStatus>(response, this.t);
+  }
+
+  // ------------------------------------------------------------- star-prompt
+  /** Star 引导弹窗状态（进入页面时判定是否展示 / 是否补记首次使用时间）。 */
+  async starPromptStatus(): Promise<StarPromptStatus> {
+    const response = await fetch(CONFIG_MANAGER_API.starPrompt);
+    return readJson<StarPromptStatus>(response, this.t);
+  }
+
+  /** 保存 Star 引导弹窗状态（局部更新：firstSeenAt / dismissed / clicked）。
+   * 纯偏好无 secret；失败由调用方静默降级（本次不弹/不记，下次再判）。 */
+  async saveStarPrompt(patch: StarPromptPatch): Promise<StarPromptSaveResponse> {
+    const body: StarPromptPatch = {};
+    if (patch.firstSeenAt !== undefined) body.firstSeenAt = patch.firstSeenAt;
+    if (patch.dismissed === true) body.dismissed = true;
+    if (patch.clicked === true) body.clicked = true;
+    const response = await fetch(CONFIG_MANAGER_API.starPrompt, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return readJson<StarPromptSaveResponse>(response, this.t);
   }
 
   // ------------------------------------------------------------- export

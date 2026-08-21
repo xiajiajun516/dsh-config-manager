@@ -283,12 +283,23 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 项目**首个 fixed / z-index 浮动层**（§15 Anti-pattern #7 的登记豁免，z-index 100）。危险/重要操作（删除等不可恢复）的二次确认，替代一次性内联确认。
 
-- **API**（受控）：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, children? }`；
+- **API**（受控）：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, backdropClose?, children? }`；
 - **关闭三途径**：遮罩点击（组件判定 `e.target === currentTarget`，卡片内点击不关闭）/ Esc 键 / 取消按钮；`busy` 时全部禁用；
+- **backdropClose（2026-08-22 扩展）**：遮罩点击 / Esc 走此回调而非 `onCancel`（缺省 = `onCancel`，现有调用方行为不变）——用于「不再提示」类弹窗（Star 引导），用户点遮罩/Esc 只是暂时关闭、**不算表态**，取消按钮（「不再提示」）才写持久化标记；
 - **busy 自管**：`onConfirm` 返回 Promise 时组件内部置 busy（防重复提交），完成后复位；`busy` prop 可外部强控；
 - **焦点**：打开后焦点落**取消**按钮（危险确认不默认落破坏性按钮）；关闭后还原到打开前的触发元素；不做完整 focus trap（两按钮场景风险可接受，本小节即登记）；
 - **样式**：仅 `dialogMask`（fixed 全屏 + `color-mix(bg-base 55%)` 遮罩）/ `dialogCard`（bg-layer-2 + border-l1 + radius10 + max-width 420 + 80vh 限高）/ `dialogHeader`（groupLabel 层级）/ `dialogBody`（240px 限高内滚，`white-space: pre-wrap`）；确认按钮复用现有 `Button variant="danger"|"primary"`，零新按钮类；
 - **文案**：confirmLabel / cancelLabel / title / message 由调用方从 i18n 字典传入，组件不硬编码。
+
+### 8.13 Star 引导弹窗（2026-08-22，`ConfigManagerSection` 挂载点）
+
+引导用户给 GitHub 仓库点 Star 的轻量弹窗，**复用 ConfirmDialog（§8.11）零新增样式**：
+
+- **触发规则**（判定逻辑在 `src/ui/star-prompt.ts` 纯函数，node 可测）：首次进入页面只记录「首次使用时间」（ui-prefs.json 的 `starPromptFirstSeenAt`）；距首次使用**满 3 天**且未表态才弹窗；
+- **表态持久化**（ui-prefs.json，随 self 分区进备份，Host 侧读写）：「去点 Star」→ 记 `starPromptClicked`（方案 A：引导完成，永久不再弹）；「不再提示」→ 记 `starPromptDismissed`（永久不再弹）；点遮罩/Esc → `backdropClose` 只关闭、**不记任何表态**（下次进入再判）；
+- **按钮语义**：去点 Star = `confirmLabel`（primary 主操作，新标签打开仓库 + 记 clicked）；不再提示 = `cancelLabel`（次按钮，记 dismissed）；
+- **状态流**：GET /star-prompt（Host 返回 repoUrl + 三状态）→ `evaluateStarPrompt()` 判定 → 首次补记 POST /star-prompt `{ firstSeenAt }`；全部失败静默降级（本次不弹，下次再判）；
+- **并发安全**：star-prompt 与 sync/ui-prefs 共写 `ui-prefs.json`，一律经 `updateUiPrefs`（read → merge → write）局部合并，杜绝互相覆盖。
 
 ### 8.12 操作弹窗 + 免责弹窗（2026-08-21，`market/` 三处：上传 / 下载 / 装回本地）
 
@@ -399,7 +410,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **列表+详情** | 列表（可搜索/过滤）+ 点条目展开详情卡 | 市场面板（搜索框 + 类别 select + 条目行 + 详情） |
 | **dry-run → confirm → 执行** | 零写入预览 → 危险按钮（title 确认）→ 诚实报告 | 快照恢复、市场导入、一键同步 |
 | **关于页** | `viewBody` 卡片流：`SectionTitle` + 信息卡（`statRow` 动态版本/DSH/平台 Badge：官方→`ok`、版本→`info`）+ 链接卡（`actionRow` 内 Star 主按钮 + `aboutLinkRow` 外链行 + `aboutAuthor` 作者外链） | 关于 tab |
-| **确认弹窗 ConfirmDialog（危险/重要操作）** | `common/ConfirmDialog.tsx` 受控弹窗：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, children? }`；遮罩点击（target===currentTarget）/ Esc / 取消三途径关闭（busy 时全禁用）；onConfirm 返回 Promise 时组件自管 busy 防重复提交；初始焦点落取消按钮（危险确认不默认落破坏性按钮）、关闭还原触发按钮；样式仅 dialogMask/dialogCard/dialogHeader/dialogBody 四类（遮罩 color-mix 半透明、卡片 bg-layer-2+border-l1+radius10、正文限高 240px 内滚）；确认按钮复用现有 danger/primary Button | 「我的配置」列表删除条目（不可恢复 + 已收录自动提交下架 PR）；快照恢复确认（可升级） |
+| **确认弹窗 ConfirmDialog（危险/重要操作）** | `common/ConfirmDialog.tsx` 受控弹窗：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, backdropClose?, children? }`；遮罩点击（target===currentTarget）/ Esc / 取消三途径关闭（busy 时全禁用）；`backdropClose`（2026-08-22）让遮罩/Esc 走独立回调（缺省 = onCancel），供「不再提示」类弹窗区分「暂时关闭」与「表态」（§8.13 Star 引导弹窗）；onConfirm 返回 Promise 时组件自管 busy 防重复提交；初始焦点落取消按钮（危险确认不默认落破坏性按钮）、关闭还原触发按钮；样式仅 dialogMask/dialogCard/dialogHeader/dialogBody 四类（遮罩 color-mix 半透明、卡片 bg-layer-2+border-l1+radius10、正文限高 240px 内滚）；确认按钮复用现有 danger/primary Button | 「我的配置」列表删除条目（不可恢复 + 已收录自动提交下架 PR）；快照恢复确认（可升级）；Star 引导弹窗（§8.13，满 3 天 + 未表态才弹，表态写 ui-prefs.json） |
 
 ---
 

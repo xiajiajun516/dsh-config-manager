@@ -139,6 +139,11 @@ export const zh = {
   // —— 错误 ——
   'error.title': '操作失败',
   'error.hint': '错误消息已自动脱敏，不会泄露任何密钥信息。',
+  // —— Star 引导弹窗 ——
+  'starPrompt.title': '喜欢 Config Manager 吗？',
+  'starPrompt.body': '如果你觉得这个插件有用，欢迎到 GitHub 点个 ⭐ Star 支持一下——你的支持是持续维护的最大动力！',
+  'starPrompt.star': '去点 Star',
+  'starPrompt.dismiss': '不再提示',
   // —— 关于 ——
   'about.title': '关于 DSH Config Manager',
   'about.subtitle': '插件信息、作者与反馈入口',
@@ -281,6 +286,12 @@ export const en: Record<keyof typeof zh, string> = {
   'report.needsRestart': 'Plugin / MCP changes take effect after restarting DSH.',
   'error.title': 'Operation failed',
   'error.hint': 'Error messages are auto-redacted and never leak secrets.',
+  // —— Star prompt dialog ——
+  'starPrompt.title': 'Enjoying Config Manager?',
+  'starPrompt.body': 'If you find this plugin useful, please give it a ⭐ on GitHub — your support keeps it maintained!',
+  'starPrompt.star': 'Star on GitHub',
+  'starPrompt.dismiss': "Don't ask again",
+  // —— About ——
   'about.title': 'About DSH Config Manager',
   'about.subtitle': 'Plugin info, author and feedback links',
   'about.official': 'Official',

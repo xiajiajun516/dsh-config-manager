@@ -313,6 +313,8 @@ export interface MyItemSource {
   updatedAt?: string
   categories?: string[]
   author?: string
+  /** 来源仓库 star 数（仓库级；可选，缺省无数据） */
+  stars?: number
 }
 
 /** 收录状态徽章模板：语义 + 展示文本（kind 对应用户列表徽章四态之一）。 */
@@ -415,6 +417,8 @@ export interface MyItemView {
   updatedAt: string
   categories: string[]
   author: string
+  /** 来源仓库（<login>/dsh-configs）的 star 数（仓库级；undefined = 无数据，UI 显示「—」） */
+  stars?: number
   /** 状态推导结果（调用方传入 status 或经 buildMyItemsView 装配） */
   status: ItemStatus
   /** 徽章模板（kind + 文案 + PR 链接） */
@@ -430,6 +434,7 @@ export function toMyItemView(item: MyItemSource, status: ItemStatus, t: UiT = zh
     updatedAt: item.updatedAt ?? '',
     categories: item.categories ?? [],
     author: item.author ?? '',
+    ...('stars' in item && typeof item.stars === 'number' ? { stars: item.stars } : {}),
     status,
     badge: itemStatusBadge(status, t),
   }

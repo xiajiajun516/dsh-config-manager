@@ -35,7 +35,7 @@ import type {
 } from '../../market/types.ts'
 import {
   approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, defaultApprovals,
-  filterMarketItems, marketDetailView, marketListSummary, sourceBadgeKind,
+  filterBySource, filterMarketItems, marketDetailView, marketListSummary, sortMarketItems, sourceBadgeKind,
 } from './market-view.ts'
 import type { MarketApprovals } from './market-view.ts'
 import type { MyInstallSlice, MyWizardSlice } from './my-configs-view.ts'
@@ -77,6 +77,10 @@ interface MarketUiState {
   items: MarketListItem[]
   search: string
   category: string
+  /** 来源筛选（2026-08-21：全部 / 官方 / 个人；镜像 runStore，切 tab/刷新不丢） */
+  source: 'all' | 'official' | 'personal'
+  /** 排序键（2026-08-21：默认 / 最新更新 / ⭐ 最多 / 名称；镜像 runStore，切 tab/刷新不丢） */
+  sortKey: 'default' | 'updatedAt' | 'stars' | 'name'
   /** 正在下载/浏览的条目 id（spinner） */
   downloadingId: string | null
   /** 条目详情（下载+校验+dry-run 预览，含 zipPath/plan 供确认导入）；非空时渲染详情视图 */
@@ -105,6 +109,8 @@ const initial: MarketUiState = {
   items: [],
   search: '',
   category: '',
+  source: 'all',
+  sortKey: 'default',
   downloadingId: null,
   detail: null,
   approvals: {},
@@ -130,6 +136,9 @@ function initFromStore(): MarketUiState {
     myConfirmDeleteId: s.myConfirmDeleteId,
     search: s.search,
     category: s.category,
+    // 旧持久化数据缺 source/sortKey（undefined）→ 兜底默认值（'all'/'default'），防 undefined 进筛选链
+    source: s.source ?? 'all',
+    sortKey: s.sortKey ?? 'default',
     items: s.items,
     detail: s.detail,
     approvals: s.approvals,
@@ -300,7 +309,11 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   }
 
   // ---- 渲染模型装配（全部纯函数，node 已测） ----
-  const filtered = filterMarketItems(state.items, state.search, state.category)
+  // 过滤链：搜索 + 类别 → 来源筛选（官方/个人）→ 排序（默认/最新/⭐/名称）
+  const filtered = sortMarketItems(
+    filterBySource(filterMarketItems(state.items, state.search, state.category), state.source, marketUrl),
+    state.sortKey,
+  )
   const summary = marketListSummary(state.items, uiT)
   const categories = collectCategories(state.items)
   const detailView = state.detail !== null
@@ -506,7 +519,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           {state.loadError !== null && <Empty>{t('list.empty')}</Empty>}
           {state.loadError === null && (
             <div className={css.statRow}>
-              {/* 搜索 + 类别过滤 */}
+              {/* 搜索 + 类别过滤 + 来源筛选 + 排序（2026-08-21 新增；状态镜像 runStore） */}
               <input
                 type="text"
                 className={css.input}
@@ -521,6 +534,29 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
               >
                 <option value="">{t('list.categoriesAll')}</option>
                 {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <select
+                className={css.select}
+                value={state.source}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                  patch({ source: e.target.value as 'all' | 'official' | 'personal' })
+                }}
+              >
+                <option value="all">{t('list.sourceAll')}</option>
+                <option value="official">{t('list.sourceOfficial')}</option>
+                <option value="personal">{t('list.sourcePersonal')}</option>
+              </select>
+              <select
+                className={css.select}
+                value={state.sortKey}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                  patch({ sortKey: e.target.value as 'default' | 'updatedAt' | 'stars' | 'name' })
+                }}
+              >
+                <option value="default">{t('list.sortDefault')}</option>
+                <option value="updatedAt">{t('list.sortUpdated')}</option>
+                <option value="stars">{t('list.sortStars')}</option>
+                <option value="name">{t('list.sortName')}</option>
               </select>
               <Badge kind="info">
                 {filtered.length > 0
@@ -555,12 +591,15 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                       )}
                       <div className={css.statRow}>
                         <Badge kind={sourceKind}>
-                          {sourceKind === 'ok' ? t('list.sourceOfficial') : t('list.sourceThirdParty')}
+                          {sourceKind === 'ok' ? t('list.sourceOfficial') : t('list.sourcePersonal')}
                         </Badge>
                         {(it.categories ?? []).map((c) => <Badge key={c} kind="info">{c}</Badge>)}
                         <Badge kind={it.cacheState === 'cached' ? 'ok' : it.cacheState === 'fresh' ? 'info' : 'warn'}>
                           {cacheLabel(it.cacheState)}
                         </Badge>
+                        {it.stars !== undefined && (
+                          <Badge kind="info" title={t('list.starsHint')}>{t('list.stars', { count: String(it.stars) })}</Badge>
+                        )}
                       </div>
                     </div>
                     <Button disabled={state.downloadingId === it.id} onClick={() => { openDownload(it) }}>

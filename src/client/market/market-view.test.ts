@@ -17,9 +17,9 @@ import { zhUiT } from '../../ui/i18n.ts'
 import type { ImportPlan, PlanItem } from '../../core/types.ts'
 import {
   approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, computeItemBadge,
-  defaultApprovals, filterMarketItems, formatMarketTime, isHighRiskAdapter, marketDetailView,
-  marketListSummary, marketStatusText, marketWarningsLines, marketItemWarnings, needsReview,
-  sourceBadgeKind, isThirdPartyItem, toMarketListItem,
+  defaultApprovals, filterBySource, filterMarketItems, formatMarketTime, isHighRiskAdapter,
+  marketDetailView, marketListSummary, marketStatusText, marketWarningsLines, marketItemWarnings,
+  needsReview, sortMarketItems, sourceBadgeKind, isThirdPartyItem, toMarketListItem,
 } from './market-view.ts'
 
 /* ---------------------------------------------------------------- 共享渲染模型（re-export 权威） */
@@ -158,6 +158,77 @@ test('market-view: filterMarketItems 类别过滤 + 组合查询', () => {
   assert.equal(filterMarketItems(items, '', '代理').length, 1)
   assert.equal(filterMarketItems(items, '', '不存在').length, 0)
   assert.equal(filterMarketItems(items, 'x', '插件').length, 1)
+})
+
+/* ---------------------------------------------------------------- 客户端专属：来源筛选 + 排序（2026-08-21） */
+
+test('market-view: filterBySource all → 原样保留全部（含官方与个人）', () => {
+  const items = [
+    item({ id: 'a' }), // 无 repo = 官方
+    item({ id: 'b', repo: THIRD_PARTY_URL }), // 个人
+  ]
+  assert.deepEqual(filterBySource(items, 'all', OFFICIAL_URL).map((i) => i.id), ['a', 'b'])
+})
+
+test('market-view: filterBySource official → 仅官方（无 repo / 官方 repo）', () => {
+  const items = [
+    item({ id: 'a' }),
+    item({ id: 'b', repo: OFFICIAL_URL }),
+    item({ id: 'c', repo: THIRD_PARTY_URL }),
+  ]
+  assert.deepEqual(filterBySource(items, 'official', OFFICIAL_URL).map((i) => i.id), ['a', 'b'])
+})
+
+test('market-view: filterBySource personal → 仅个人（非官方 repo）', () => {
+  const items = [
+    item({ id: 'a' }),
+    item({ id: 'b', repo: OFFICIAL_URL }),
+    item({ id: 'c', repo: THIRD_PARTY_URL }),
+  ]
+  assert.deepEqual(filterBySource(items, 'personal', OFFICIAL_URL).map((i) => i.id), ['c'])
+})
+
+test('market-view: sortMarketItems default → 保持原顺序（不改动数组）', () => {
+  const items = [item({ id: 'b' }), item({ id: 'a' })]
+  const out = sortMarketItems(items, 'default')
+  assert.deepEqual(out.map((i) => i.id), ['b', 'a'])
+  assert.notEqual(out, items, '返回新数组，不改原数组')
+})
+
+test('market-view: sortMarketItems updatedAt → 降序（最新在前），无 updatedAt 排最后', () => {
+  const items = [
+    item({ id: 'old', updatedAt: '2026-01-01T00:00:00.000Z' }),
+    item({ id: 'none' }),
+    item({ id: 'new', updatedAt: '2026-08-01T00:00:00.000Z' }),
+  ]
+  assert.deepEqual(sortMarketItems(items, 'updatedAt').map((i) => i.id), ['new', 'old', 'none'])
+})
+
+test('market-view: sortMarketItems stars → 降序（多在前），无 stars 排最后', () => {
+  const items = [
+    item({ id: 'two', stars: 2 }),
+    item({ id: 'none' }),
+    item({ id: 'nine', stars: 9 }),
+  ]
+  assert.deepEqual(sortMarketItems(items, 'stars').map((i) => i.id), ['nine', 'two', 'none'])
+})
+
+test('market-view: sortMarketItems name → 升序 A–Z（localeCompare）', () => {
+  const items = [
+    item({ id: 'z', name: 'Zebra' }),
+    item({ id: 'a', name: 'Alpha' }),
+    item({ id: 'm', name: 'bravo' }), // localeCompare 大小写感知，bravo 在 Alpha 后
+  ]
+  assert.deepEqual(sortMarketItems(items, 'name').map((i) => i.name), ['Alpha', 'bravo', 'Zebra'])
+})
+
+test('market-view: sortMarketItems 稳定性（同值保持原相对顺序）', () => {
+  const items = [
+    item({ id: 'a1', updatedAt: '2026-08-01T00:00:00.000Z' }),
+    item({ id: 'b2', updatedAt: '2026-08-01T00:00:00.000Z' }),
+    item({ id: 'c3', updatedAt: '2026-07-01T00:00:00.000Z' }),
+  ]
+  assert.deepEqual(sortMarketItems(items, 'updatedAt').map((i) => i.id), ['a1', 'b2', 'c3'], '同值保持原顺序')
 })
 
 /* ---------------------------------------------------------------- 客户端专属：供应链警示着色 + 详情聚合 */
