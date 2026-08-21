@@ -730,9 +730,48 @@ export function MyConfigsView({
           <div className={css.dialogBodyScroll}>
 
         {/* 步骤 1：选配置包 */}
-        {wizard.step === 'select' && (
-          <div>
-            <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
+        {wizard.step === 'select' && (<>
+          <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".zip,application/zip"
+            className={css.hiddenFile}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => {
+              const picked = e.target.files?.[0]
+              e.target.value = ''
+              void onPickFile(picked)
+            }}
+          />
+          <div className={css.actionRow}>
+            <Button variant="primary" disabled={wizard.running} onClick={() => { fileInput.current?.click() }}>
+              {t('myconfigs.upload.select')}
+            </Button>
+          </div>
+        </>)}
+
+        {/* 步骤 2：本地校验（dry-run 零写入） */}
+        {wizard.step === 'validate' && (<>
+          <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
+          {wizard.fileName !== null && (
+            <div className={css.statRow}>
+              <Badge kind="info">{t('myconfigs.upload.selected', { name: wizard.fileName })}</Badge>
+            </div>
+          )}
+          <div className={css.actionRow}>
+            <Button variant="primary" disabled={wizard.zipPath === null || wizard.validating} onClick={() => { void runValidate() }}>
+              {wizard.validating ? <Spinner label={t('myconfigs.upload.validating')} /> : t('myconfigs.upload.validate')}
+            </Button>
+            <Button disabled={wizard.validating} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
+          </div>
+          {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
+        </>)}
+
+        {/* 步骤 3：精简表单（仅 name/description/categories；其余系统自动） → 上传/更新 */}
+        {wizard.step === 'form' && (<>
+          {/* update 模式：表单页内嵌「选择新 ZIP」入口（选中自动校验，通过后才可一键更新） */}
+          {wizard.mode === 'update' && (<>
+            <span className={css.hint}>{t('myconfigs.update.zipHint')}</span>
             <input
               ref={fileInput}
               type="file"
@@ -745,145 +784,96 @@ export function MyConfigsView({
               }}
             />
             <div className={css.actionRow}>
-              <Button variant="primary" disabled={wizard.running} onClick={() => { fileInput.current?.click() }}>
-                {t('myconfigs.upload.select')}
+              <Button variant="primary" disabled={wizard.validating || wizard.running} onClick={() => { fileInput.current?.click() }}>
+                {wizard.fileName !== null && wizard.zipPath !== null
+                  ? t('myconfigs.upload.selected', { name: wizard.fileName })
+                  : t('myconfigs.update.selectZip')}
               </Button>
-            </div>
-          </div>
-        )}
-
-        {/* 步骤 2：本地校验（dry-run 零写入） */}
-        {wizard.step === 'validate' && (
-          <div>
-            <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
-            {wizard.fileName !== null && (
-              <div className={css.statRow}>
-                <Badge kind="info">{t('myconfigs.upload.selected', { name: wizard.fileName })}</Badge>
-              </div>
-            )}
-            <div className={css.actionRow}>
-              <Button variant="primary" disabled={wizard.zipPath === null || wizard.validating} onClick={() => { void runValidate() }}>
-                {wizard.validating ? <Spinner label={t('myconfigs.upload.validating')} /> : t('myconfigs.upload.validate')}
-              </Button>
-              <Button disabled={wizard.validating} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
+              {wizard.zipPath !== null && (
+                <Button disabled={wizard.validating || wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
+              )}
             </div>
             {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
-          </div>
-        )}
-
-        {/* 步骤 3：精简表单（仅 name/description/categories；其余系统自动） → 上传/更新 */}
-        {wizard.step === 'form' && (
-          <div>
-            {/* update 模式：表单页内嵌「选择新 ZIP」入口（选中自动校验，通过后才可一键更新） */}
-            {wizard.mode === 'update' && (
-              <div>
-                <span className={css.hint}>{t('myconfigs.update.zipHint')}</span>
-                <input
-                  ref={fileInput}
-                  type="file"
-                  accept=".zip,application/zip"
-                  className={css.hiddenFile}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                    const picked = e.target.files?.[0]
-                    e.target.value = ''
-                    void onPickFile(picked)
-                  }}
-                />
-                <div className={css.actionRow}>
-                  <Button variant="primary" disabled={wizard.validating || wizard.running} onClick={() => { fileInput.current?.click() }}>
-                    {wizard.fileName !== null && wizard.zipPath !== null
-                      ? t('myconfigs.upload.selected', { name: wizard.fileName })
-                      : t('myconfigs.update.selectZip')}
-                  </Button>
-                  {wizard.zipPath !== null && (
-                    <Button disabled={wizard.validating || wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
-                  )}
-                </div>
-                {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
-              </div>
-            )}
-            {wizard.validated && (
-              <div className={css.statRow}>
-                <Badge kind="ok">{t('myconfigs.upload.validateOk')}</Badge>
-              </div>
-            )}
-            <Field label={t('myconfigs.upload.form.name')} hint={t('myconfigs.upload.form.nameHint')}>
-              <input className={css.input} value={wizard.form.name} onChange={(e) => { onFormField('name', e.target.value) }} />
-              {wizard.formErrors.name !== null && <span className={css.formError}>{redact(wizard.formErrors.name)}</span>}
-            </Field>
-            <Field label={t('myconfigs.upload.form.description')}>
-              <textarea className={css.input} value={wizard.form.description} onChange={(e) => { onFormField('description', e.target.value) }} />
-            </Field>
-            <Field label={t('myconfigs.upload.form.categories')}>
-              <input className={css.input} value={wizard.form.categories} onChange={(e) => { onFormField('categories', e.target.value) }} />
-            </Field>
-            {/* 系统自动字段（id/author/version/updatedAt 徽章，无需填写） */}
-            <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>
+          </>)}
+          {wizard.validated && (
             <div className={css.statRow}>
-              {autoBadges.map((b) => (
-                <Badge key={b.field} kind="info">{b.label}：{b.autoText}</Badge>
-              ))}
+              <Badge kind="ok">{t('myconfigs.upload.validateOk')}</Badge>
             </div>
-            <div className={css.actionRow}>
-              <Button
-                variant="primary"
-                disabled={
-                  wizard.validated !== true || wizard.running || wizard.zipPath === null
-                  || !myConfigFormValid(wizard.formErrors)
-                }
-                onClick={() => { void runUpload() }}
-              >
-                {wizard.running
-                  ? <Spinner label={wizard.mode === 'update' ? t('myconfigs.update.running') : t('myconfigs.upload.running')} />
-                  : (wizard.mode === 'update' ? t('myconfigs.update.run') : t('myconfigs.upload.run'))}
-              </Button>
-              {wizard.mode === 'update' && (
-                <Button disabled={wizard.running || wizard.validating} onClick={cancelUpdate}>{t('common.cancel')}</Button>
-              )}
-              {wizard.mode === 'upload' && <Button disabled={wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>}
-            </div>
+          )}
+          <Field label={t('myconfigs.upload.form.name')} hint={t('myconfigs.upload.form.nameHint')}>
+            <input className={css.input} value={wizard.form.name} onChange={(e) => { onFormField('name', e.target.value) }} />
+            {wizard.formErrors.name !== null && <span className={css.formError}>{redact(wizard.formErrors.name)}</span>}
+          </Field>
+          <Field label={t('myconfigs.upload.form.description')}>
+            <textarea className={css.input} value={wizard.form.description} onChange={(e) => { onFormField('description', e.target.value) }} />
+          </Field>
+          <Field label={t('myconfigs.upload.form.categories')}>
+            <input className={css.input} value={wizard.form.categories} onChange={(e) => { onFormField('categories', e.target.value) }} />
+          </Field>
+          {/* 系统自动字段（id/author/version/updatedAt 徽章，无需填写） */}
+          <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>
+          <div className={css.statRow}>
+            {autoBadges.map((b) => (
+              <Badge key={b.field} kind="info">{b.label}：{b.autoText}</Badge>
+            ))}
           </div>
-        )}
+          <div className={css.actionRow}>
+            <Button
+              variant="primary"
+              disabled={
+                wizard.validated !== true || wizard.running || wizard.zipPath === null
+                || !myConfigFormValid(wizard.formErrors)
+              }
+              onClick={() => { void runUpload() }}
+            >
+              {wizard.running
+                ? <Spinner label={wizard.mode === 'update' ? t('myconfigs.update.running') : t('myconfigs.upload.running')} />
+                : (wizard.mode === 'update' ? t('myconfigs.update.run') : t('myconfigs.upload.run'))}
+            </Button>
+            {wizard.mode === 'update' && (
+              <Button disabled={wizard.running || wizard.validating} onClick={cancelUpdate}>{t('common.cancel')}</Button>
+            )}
+            {wizard.mode === 'upload' && <Button disabled={wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>}
+          </div>
+        </>)}
 
         {wizard.error !== null && <Banner kind="error">{redact(wizard.error)}</Banner>}
 
         {/* 结果卡：收录状态（异步）/ PR 链接 / 仓库链接 / sha256 / 分区 */}
         {wizard.result !== null && (
-          wizard.result.ok ? (
-            <div>
-              <span className={css.groupLabel}>{t('myconfigs.result.title')}</span>
+          wizard.result.ok ? (<>
+            <span className={css.groupLabel}>{t('myconfigs.result.title')}</span>
+            <div className={css.statRow}>
+              <Badge kind="ok">{t('myconfigs.result.version', { version: wizard.result.version })}</Badge>
+              <Badge kind="info">{t('myconfigs.result.sha256', { hash: wizard.result.sha256 })}</Badge>
+              <Badge kind="info">{t('myconfigs.result.sections', { sections: wizard.result.sections.join(', ') })}</Badge>
+            </div>
+            {/* 收录状态：pending=后台处理中（轮询中）；failed=失败可重试；done=已提交（PR 链接） */}
+            {wizard.result.listing === 'pending' && (
               <div className={css.statRow}>
-                <Badge kind="ok">{t('myconfigs.result.version', { version: wizard.result.version })}</Badge>
-                <Badge kind="info">{t('myconfigs.result.sha256', { hash: wizard.result.sha256 })}</Badge>
-                <Badge kind="info">{t('myconfigs.result.sections', { sections: wizard.result.sections.join(', ') })}</Badge>
-              </div>
-              {/* 收录状态：pending=后台处理中（轮询中）；failed=失败可重试；done=已提交（PR 链接） */}
-              {wizard.result.listing === 'pending' && (
-                <div className={css.statRow}>
-                  {listingStatus !== null && listingStatus.listing === 'failed' ? (
-                    <>
-                      <Badge kind="error">{t('myconfigs.result.listingFailed')}</Badge>
-                      <Button variant="danger" onClick={() => { void runRelist(wizard.result!.itemId) }}>
-                        {t('myconfigs.result.relist')}
-                      </Button>
-                    </>
-                  ) : (
-                    <Badge kind="info">{t('myconfigs.result.listingPending')}</Badge>
-                  )}
-                </div>
-              )}
-              {listingStatus !== null && listingStatus.listing === 'failed' && (
-                <Banner kind="error">{redact(listingStatus.error ?? t('common.unknownError'))}</Banner>
-              )}
-              <div className={css.actionRow}>
-                <Badge kind="info">{t('myconfigs.result.repo')}</Badge>
-                <Button href={wizard.result.repoUrl}>{t('myconfigs.result.openRepo')}</Button>
-                {(prLink !== null) && (
-                  <Button href={prLink.url}>{prLink.label}</Button>
+                {listingStatus !== null && listingStatus.listing === 'failed' ? (
+                  <>
+                    <Badge kind="error">{t('myconfigs.result.listingFailed')}</Badge>
+                    <Button variant="danger" onClick={() => { void runRelist(wizard.result!.itemId) }}>
+                      {t('myconfigs.result.relist')}
+                    </Button>
+                  </>
+                ) : (
+                  <Badge kind="info">{t('myconfigs.result.listingPending')}</Badge>
                 )}
               </div>
+            )}
+            {listingStatus !== null && listingStatus.listing === 'failed' && (
+              <Banner kind="error">{redact(listingStatus.error ?? t('common.unknownError'))}</Banner>
+            )}
+            <div className={css.actionRow}>
+              <Badge kind="info">{t('myconfigs.result.repo')}</Badge>
+              <Button href={wizard.result.repoUrl}>{t('myconfigs.result.openRepo')}</Button>
+              {(prLink !== null) && (
+                <Button href={prLink.url}>{prLink.label}</Button>
+              )}
             </div>
-          ) : (
+          </>) : (
             <Banner kind="error">
               {redact(wizard.result.error ?? ((wizard.result.warnings ?? []).join(' · ') || t('common.unknownError')))}
             </Banner>
@@ -994,63 +984,59 @@ export function MyConfigsView({
           <div className={css.dialogBodyScroll}>
         {install.error !== null && <Banner kind="error">{redact(install.error)}</Banner>}
         {detail === null && <div className={css.statRow}><Spinner label={t('list.loading')} /></div>}
-        {detail !== null && detailView !== null && (
-          <div>
-            <Banner kind="warn"><strong>{t('detail.needReview')}</strong></Banner>
-            <div className={css.statRow}>
-              <Badge kind={detailView.badge.valid ? 'ok' : 'error'}>{detailView.badge.statusText}</Badge>
-              <Badge kind="info">{detailView.badge.sectionsText}</Badge>
-            </div>
-            {approvalList.length > 0 && (
-              <div>
-                <span className={css.groupLabel}>{t('detail.approval.title')}</span>
-                {approvalSummary !== null && approvalSummary.highRiskTotal > 0 && (
-                  <Banner kind="warn">{t('detail.approval.highRiskHint')}</Banner>
-                )}
-                <div className={css.conflictList}>
-                  {approvalList.map((row) => (
-                    <Checkbox
-                      key={row.adapter}
-                      checked={row.approved}
-                      onChange={(checked) => {
-                        if (installRef.current !== null) {
-                          patchInstall({ approvals: { ...installRef.current.approvals, [row.adapter]: checked } })
-                        }
-                      }}
-                      label={
-                        <span>
-                          <span className={css.conflictId}>{row.adapter}</span>
-                          {' '}
-                          <Badge kind={row.highRisk ? 'warn' : 'info'}>
-                            {row.highRisk ? t('detail.approval.requiresApproval') : t('detail.approval.safe')}
-                          </Badge>
-                          {' '}
-                          <Badge kind="info">{row.label}</Badge>
-                        </span>
-                      }
-                    />
-                  ))}
-                </div>
-                <div className={css.statRow}>
-                  <Badge kind={approvalSummary !== null && approvalSummary.canImport ? 'ok' : 'warn'}>
-                    {approvalSummary !== null
-                      ? t('detail.approval.count', { selected: String(approvalSummary.selected), total: String(approvalSummary.total) })
-                      : ''}
-                  </Badge>
-                </div>
-              </div>
-            )}
-            <div className={css.actionRow}>
-              <Button
-                variant="primary"
-                disabled={install.importing || (approvalSummary !== null && !approvalSummary.canImport)}
-                onClick={() => { void runImport() }}
-              >
-                {install.importing ? <Spinner label={t('common.loading')} /> : t('detail.import')}
-              </Button>
-            </div>
+        {detail !== null && detailView !== null && (<>
+          <Banner kind="warn"><strong>{t('detail.needReview')}</strong></Banner>
+          <div className={css.statRow}>
+            <Badge kind={detailView.badge.valid ? 'ok' : 'error'}>{detailView.badge.statusText}</Badge>
+            <Badge kind="info">{detailView.badge.sectionsText}</Badge>
           </div>
-        )}
+          {approvalList.length > 0 && (<>
+            <span className={css.groupLabel}>{t('detail.approval.title')}</span>
+            {approvalSummary !== null && approvalSummary.highRiskTotal > 0 && (
+              <Banner kind="warn">{t('detail.approval.highRiskHint')}</Banner>
+            )}
+            <div className={css.conflictList}>
+              {approvalList.map((row) => (
+                <Checkbox
+                  key={row.adapter}
+                  checked={row.approved}
+                  onChange={(checked) => {
+                    if (installRef.current !== null) {
+                      patchInstall({ approvals: { ...installRef.current.approvals, [row.adapter]: checked } })
+                    }
+                  }}
+                  label={
+                    <span>
+                      <span className={css.conflictId}>{row.adapter}</span>
+                      {' '}
+                      <Badge kind={row.highRisk ? 'warn' : 'info'}>
+                        {row.highRisk ? t('detail.approval.requiresApproval') : t('detail.approval.safe')}
+                      </Badge>
+                      {' '}
+                      <Badge kind="info">{row.label}</Badge>
+                    </span>
+                  }
+                />
+              ))}
+            </div>
+            <div className={css.statRow}>
+              <Badge kind={approvalSummary !== null && approvalSummary.canImport ? 'ok' : 'warn'}>
+                {approvalSummary !== null
+                  ? t('detail.approval.count', { selected: String(approvalSummary.selected), total: String(approvalSummary.total) })
+                  : ''}
+              </Badge>
+            </div>
+          </>)}
+          <div className={css.actionRow}>
+            <Button
+              variant="primary"
+              disabled={install.importing || (approvalSummary !== null && !approvalSummary.canImport)}
+              onClick={() => { void runImport() }}
+            >
+              {install.importing ? <Spinner label={t('common.loading')} /> : t('detail.import')}
+            </Button>
+          </div>
+        </>)}
         {install.importResult !== null && (
           <Banner kind={install.importResult.ok ? 'ok' : 'error'}>
             {install.importResult.ok

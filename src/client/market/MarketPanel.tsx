@@ -433,57 +433,53 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
             {state.detail.version !== undefined && <Badge kind="info">{t('detail.version', { version: state.detail.version })}</Badge>}
           </div>
 
-          {detailView.errors.length > 0 && (
-            <div>
-              <span className={css.fieldLabel}>{t('detail.errors')}</span>
-              <div className={css.reportScroll}>
-                <ul className={css.warnList}>
-                  {detailView.errors.map((e, i) => <li key={i}>{e}</li>)}
-                </ul>
-              </div>
+          {detailView.errors.length > 0 && (<>
+            <span className={css.fieldLabel}>{t('detail.errors')}</span>
+            <div className={css.reportScroll}>
+              <ul className={css.warnList}>
+                {detailView.errors.map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
             </div>
-          )}
+          </>)}
 
           <Banner kind="info">{t('detail.previewHint')}</Banner>
 
           {/* 逐分区批准（安全不变式 (c)：高风险分区默认不导入、须逐项显式批准） */}
-          {detailView.canImport && approvalList.length > 0 && (
-            <div>
-              <span className={css.groupLabel}>{t('detail.approval.title')}</span>
-              {approvalSummary !== null && approvalSummary.highRiskTotal > 0 && (
-                <Banner kind="warn">{t('detail.approval.highRiskHint')}</Banner>
-              )}
-              <div className={css.conflictList}>
-                {approvalList.map((row) => (
-                  <label key={row.adapter} className={css.checkboxRow}>
-                    <input
-                      type="checkbox"
-                      checked={row.approved}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                        patch({ approvals: { ...state.approvals, [row.adapter]: e.target.checked } })
-                      }}
-                    />
-                    <span>
-                      <span className={css.conflictId}>{row.adapter}</span>
-                      {' '}
-                      <Badge kind={row.highRisk ? 'warn' : 'info'}>
-                        {row.highRisk ? t('detail.approval.requiresApproval') : t('detail.approval.safe')}
-                      </Badge>
-                      {' '}
-                      <Badge kind="info">{row.label}</Badge>
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <div className={css.statRow}>
-                <Badge kind={approvalSummary !== null && approvalSummary.canImport ? 'ok' : 'warn'}>
-                  {approvalSummary !== null
-                    ? t('detail.approval.count', { selected: String(approvalSummary.selected), total: String(approvalSummary.total) })
-                    : ''}
-                </Badge>
-              </div>
+          {detailView.canImport && approvalList.length > 0 && (<>
+            <span className={css.groupLabel}>{t('detail.approval.title')}</span>
+            {approvalSummary !== null && approvalSummary.highRiskTotal > 0 && (
+              <Banner kind="warn">{t('detail.approval.highRiskHint')}</Banner>
+            )}
+            <div className={css.conflictList}>
+              {approvalList.map((row) => (
+                <label key={row.adapter} className={css.checkboxRow}>
+                  <input
+                    type="checkbox"
+                    checked={row.approved}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                      patch({ approvals: { ...state.approvals, [row.adapter]: e.target.checked } })
+                    }}
+                  />
+                  <span>
+                    <span className={css.conflictId}>{row.adapter}</span>
+                    {' '}
+                    <Badge kind={row.highRisk ? 'warn' : 'info'}>
+                      {row.highRisk ? t('detail.approval.requiresApproval') : t('detail.approval.safe')}
+                    </Badge>
+                    {' '}
+                    <Badge kind="info">{row.label}</Badge>
+                  </span>
+                </label>
+              ))}
             </div>
-          )}
+            <div className={css.statRow}>
+              <Badge kind={approvalSummary !== null && approvalSummary.canImport ? 'ok' : 'warn'}>
+                {approvalSummary !== null
+                  ? t('detail.approval.count', { selected: String(approvalSummary.selected), total: String(approvalSummary.total) })
+                  : ''}
+              </Badge>
+            </div>
+          </>)}
 
           {detailView.canImport ? (
             <div className={css.actionRow}>
