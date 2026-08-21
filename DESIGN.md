@@ -288,7 +288,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 - **backdropClose（2026-08-22 扩展）**：遮罩点击 / Esc 走此回调而非 `onCancel`（缺省 = `onCancel`，现有调用方行为不变）——用于「不再提示」类弹窗（Star 引导），用户点遮罩/Esc 只是暂时关闭、**不算表态**，取消按钮（「不再提示」）才写持久化标记；
 - **busy 自管**：`onConfirm` 返回 Promise 时组件内部置 busy（防重复提交），完成后复位；`busy` prop 可外部强控；
 - **焦点**：打开后焦点落**取消**按钮（危险确认不默认落破坏性按钮）；关闭后还原到打开前的触发元素；不做完整 focus trap（两按钮场景风险可接受，本小节即登记）；
-- **样式**：仅 `dialogMask`（fixed 全屏 + `color-mix(bg-base 55%)` 遮罩）/ `dialogCard`（bg-layer-2 + border-l1 + radius10 + max-width 420 + 80vh 限高）/ `dialogHeader`（groupLabel 层级）/ `dialogBody`（240px 限高内滚，`white-space: pre-wrap`）；确认按钮复用现有 `Button variant="danger"|"primary"`，零新按钮类；
+- **样式**：仅 `dialogMask`（fixed 全屏 + `color-mix(bg-base 55%)` 遮罩）/ `dialogCard`（bg-layer-2 + border-l1 + radius10 + max-width 420 + 80vh 限高）/ `dialogHeader`（groupLabel 层级）/ `dialogBody`（240px 限高内滚 + flex 纵向排布 gap 10px，`white-space: pre-wrap`；message 与 children 之间 10px 间距）；确认按钮复用现有 `Button variant="danger"|"primary"`，零新按钮类；
 - **文案**：confirmLabel / cancelLabel / title / message 由调用方从 i18n 字典传入，组件不硬编码。
 
 ### 8.13 Star 引导弹窗（2026-08-22，`ConfigManagerSection` 挂载点）
@@ -315,7 +315,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 **复用扩展（2026-08-21，`sync/` 同步通道配置弹窗）**：远程同步页的「同步通道」入口卡点按钮弹出通道配置弹窗（Git/WebDAV 子 tab + 表单 + GitHub device flow 登录块），复用本节的**操作弹窗样式四件套**（`dialogWide`/`dialogHeaderRow`/`dialogClose`/`dialogBodyScroll`），零新增样式；弹窗开关 `channelOpen` 同为瞬态 useState；关闭弹窗 = 放弃本次操作（GitHub 登录流程进行中 → 一并取消：停轮询 + 通知宿主丢弃设备码）；`savingConfig` 时禁用全部关闭途径。
 
-**样式**：新增 `dialogWide`（宽 560px）/ `dialogHeaderRow`（标题 + 关闭按钮行）/ `dialogClose`（× 按钮，ghost 语义）/ `dialogBodyScroll`（70vh 限高内滚，替代 240px 短版）四类，全部走 `--dsw-*` token；无新颜色、无新动效。
+**样式**：新增 `dialogWide`（宽 560px）/ `dialogHeaderRow`（标题 + 关闭按钮行）/ `dialogClose`（× 按钮，ghost 语义）/ `dialogBodyScroll`（70vh 限高内滚 + flex 纵向排布 gap 10px，替代 240px 短版；正文内平铺的 tab/Banner/字段/操作行/hint 之间统一 10px 垂直间距）四类，全部走 `--dsw-*` token；无新颜色、无新动效。
 
 ---
 

@@ -1046,8 +1046,13 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 正文：限高内滚（长 message 安全，仿 .confirmScroll 模式） */
+/* 正文：限高内滚（长 message 安全，仿 .confirmScroll 模式）+ flex 纵向排布，
+   子元素（message / children）之间 gap 10px（与 .dialogCard 内部间距一致，
+   避免多个块级/行内元素贴在一起） */
 .dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   max-height: 240px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1064,8 +1069,14 @@
   width: min(560px, 100%);
 }
 
-/* 弹窗正文（操作弹窗用）：70vh 限高内滚（详情/表单长内容安全，替代 240px 的短版） */
+/* 弹窗正文（操作弹窗用）：70vh 限高内滚（详情/表单长内容安全，替代 240px 的短版）
+   + flex 纵向排布，子元素之间 gap 10px（与 .card/.dialogCard 内部间距一致；
+   弹窗内平铺的 tab/Banner/字段/操作行/hint 等不再紧贴，也与页面视图 .viewBody
+   的纵向节奏一致） */
 .dialogBodyScroll {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   max-height: 70vh;
   overflow-y: auto;
   overscroll-behavior: contain;
