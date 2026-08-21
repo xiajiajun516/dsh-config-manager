@@ -1,8 +1,19 @@
 # 🎒 DSH Config Manager
 
-**DeepSeek Harness（DSH）备份 / 恢复 / 迁移插件。**
+**DeepSeek Harness（DSH）配置备份、恢复与迁移插件。**
 
-一键备份、恢复、导出、导入、迁移和同步你的完整 DSH 配置——设置、模型供应商、插件、MCP 服务器、技能、Agent 预设与工作区；换台电脑，环境一键恢复。
+DSH Config Manager 是一个 DeepSeek Harness 配置备份与迁移插件：一键备份、恢复、导出、导入和迁移完整 DSH 配置，包括——
+
+- DSH 设置
+- 模型 / Provider 配置
+- 已安装插件及插件配置
+- MCP Servers
+- Skills
+- Agent Presets
+- Profiles（配置档案）
+- Workspace / AGENTS.md
+
+把当前 DeepSeek Harness 环境导出为可移植备份，在另一台电脑上一键恢复；也支持通过 Git / WebDAV 跨机同步（密钥永不参与同步）。
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 

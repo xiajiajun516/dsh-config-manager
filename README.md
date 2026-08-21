@@ -4,6 +4,15 @@
 
 Backup, restore, export, import, migrate and sync your complete DeepSeek Harness (DSH) configuration — settings, model providers, plugins, MCP servers, skills, agent presets and workspaces — and restore your whole environment on a new machine with one click.
 
+- 🔄 **Backup & Restore** DeepSeek Harness configuration
+- 📦 **Export / Import** complete DSH configuration
+- 🚚 **Migrate** DSH to another machine
+- 🔌 Backup installed **plugins** and plugin configuration
+- 🧩 Backup **MCP servers** and **Skills**
+- 🔐 Encrypted backups with optional credentials
+- ☁️ **Git / WebDAV** configuration sync
+- ↩️ Automatic snapshot and rollback before restore
+
 [English](README.md) · [简体中文](README.zh-CN.md)
 
 ---
