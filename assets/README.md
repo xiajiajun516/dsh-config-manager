@@ -20,5 +20,6 @@
 | `screenshot-import-preview.png` | 导入前预览（dry-run） |
 | `screenshot-snapshots.png` | 快照恢复列表 |
 | `screenshot-sync.png` | 远程同步界面 |
+| `screenshot-market.png` | 配置市场界面 |
 
 图片内容、张数、顺序随时可以改——换图时同步更新 `screenshots.json` 并提交新的 PR（只改自己那条）。

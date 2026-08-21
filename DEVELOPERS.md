@@ -72,16 +72,15 @@ CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish�
 ## 📋 完整技术限制
 
 1. Workspace 只能创建/改标题（DSH 无整体覆盖写通道；路径与会话列表由 DSH 维护）
-2. 部分 DSH 核心包未发布公共 npm registry（`dsh-plugin-marketplace` 等）——安装需 `--config.auto-install-peers=false`
-3. MCP 无管理 API——以组合 patch 行导入，需重启生效
-4. 插件安装需重启（installPlugin 返回 needsRestart）
-5. 浏览器 localStorage UI 状态不迁移（Host 无通道）
-6. keybindings / workflows 配置 / commands / rules——DSH 无此概念，不实现假分区
-7. 凭据值无法回滚（DSH 不回读值，回滚需人工补录）
-8. 新建项无法回滚删除（settings 无删除语义）
-9. Schema 迁移 v1→v2 为占位（CURRENT=1）
-10. 历史会话默认不迁移（v1 仅文件级复制）
-11. 加密备份密码丢失无法解密（设计使然）
+2. MCP 无管理 API——以组合 patch 行导入，需重启生效
+3. 插件安装需重启（installPlugin 返回 needsRestart）
+4. 浏览器 localStorage UI 状态不迁移（Host 无通道）
+5. keybindings / workflows 配置 / commands / rules——DSH 无此概念，不实现假分区
+6. 凭据值无法回滚（DSH 不回读值，回滚需人工补录）
+7. 新建项无法回滚删除（settings 无删除语义）
+8. Schema 迁移 v1→v2 为占位（CURRENT=1）
+9. 历史会话默认不迁移（v1 仅文件级复制）
+10. 加密备份密码丢失无法解密（设计使然）
 
 ## 📌 常见坑
 
@@ -89,7 +88,7 @@ CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish�
 - **`@latest` 装到旧版 = pnpm 11 发布年龄策略（不是缓存）**：`minimumReleaseAge` 默认把发布不足 30 天的新版本排除出版本解析，只有 `minimumReleaseAgeExclude` 白名单里的版本可用。`pnpm cache delete` 无效。解决：
   1. **精确版本装一次即自动白名单**（推荐）：
      ```bash
-     dsh plugin --profile web add dsh-config-manager@0.1.5 --config.auto-install-peers=false
+     dsh plugin --profile web add dsh-config-manager@0.1.5
      # pnpm 自动把 0.1.5 追加进 pnpm-workspace.yaml 的 minimumReleaseAgeExclude，之后 @latest 即可解析到它
      ```
   2. 或彻底关闭年龄门槛：在 profile 的 `pnpm-workspace.yaml` 加 `minimumReleaseAge: 0`

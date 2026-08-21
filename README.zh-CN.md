@@ -13,7 +13,7 @@ DSH Config Manager 是一个 DeepSeek Harness 配置备份与迁移插件：一�
 - Profiles（配置档案）
 - Workspace / AGENTS.md
 
-把当前 DeepSeek Harness 环境导出为可移植备份，在另一台电脑上一键恢复；也支持通过 Git / WebDAV 跨机同步（密钥永不参与同步）。
+把当前 DeepSeek Harness 环境导出为可移植备份，在另一台电脑上一键恢复；也支持通过 Git / WebDAV 跨机同步（密钥永不参与同步）；还能通过内置**配置市场**浏览、一键安装社区分享的现成配置。
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -54,6 +54,10 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 
 通过私有 Git 仓库或 WebDAV 在多台电脑间保持可移植配置同步——密钥永不参与同步。
 
+### 从配置市场发现并安装共享配置
+
+在内置官方市场浏览现成配置（模型 / Provider、插件、MCP、技能、Agent 预设……），先 dry-run 预览再一键安装——供应链警示恒展示，确认导入前每个分区都须显式批准。
+
 ---
 
 ## ✨ 核心亮点
@@ -69,6 +73,7 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 | ↩️ | **自动回滚** | 导入失败自动恢复原样，不会弄坏现有配置 |
 | 📸 | **快照恢复** | 撤销一次导入：整文件还原 + 卸载新增插件（CLI 与 GUI 均支持） |
 | 🔄 | **远程同步** | 通过 **Git 私有仓库或 WebDAV** 推送 / 拉取可移植配置（密钥永不参与同步） |
+| 🛒 | **配置市场** | 浏览并一键安装社区分享的配置——供应链警示 + 逐分区批准 |
 | 🗂️ | **配置档案 Profiles** | 保存多套配置（工作 / 个人），随时切换 |
 
 ---
@@ -82,6 +87,10 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 | 快照恢复 | 远程同步 |
 |:---:|:---:|
 | ![快照恢复](assets/screenshot-snapshots.png) | ![远程同步](assets/screenshot-sync.png) |
+
+| 配置市场 |
+|:---:|
+| ![配置市场](assets/screenshot-market.png) |
 
 ---
 
@@ -113,17 +122,17 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 
 ```bash
 # ① 安装插件
-dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-peers=false
+dsh plugin --profile web add dsh-config-manager@latest
 
 # ② 重启 DSH（设置页就会出现「备份与迁移」入口）
 ```
 
-> 💡 照着复制就行：`--config.auto-install-peers=false` 跳过几个尚未公开发布的 DSH 核心依赖（运行时由 DSH 自己提供），`@latest` 确保装到最新版。
+> 💡 照着复制就行：`@latest` 确保装到最新版。
 >
 > 🐛 **`@latest` 装到了旧版？** 这是 **pnpm 11 的 `minimumReleaseAge` 供应链发布年龄策略**（不是缓存）：发布不足约 30 天的新版本会被排除出版本解析，直到进入白名单。两种解决办法：
 > - 装一次精确版本即可自动白名单，之后 `@latest` 正常：
 >   ```bash
->   dsh plugin --profile web add dsh-config-manager@0.1.8 --config.auto-install-peers=false
+>   dsh plugin --profile web add dsh-config-manager@0.1.8
 >   ```
 > - 或一行命令彻底关闭年龄门槛（在 profile 的 `pnpm-workspace.yaml` 顶部加 `minimumReleaseAge: 0`）：
 >   ```powershell
@@ -226,6 +235,16 @@ dsh plugin --profile web add dsh-config-manager@latest --config.auto-install-pee
 - **切换通道重新开始**：Git 与 WebDAV 的快照 / 共同祖先**互不共享**。切换通道后，同步从新远端的空基线重新开始——请先推送一个新快照。
 - **WebDAV 认证**采用 HTTP Basic：`username` 存配置、可在界面回显；`password` 则实时从 DSH credentials 槽位 `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` 读取——绝不出现于任何同步文件或日志。
 - **插件自动安装**：拉取差异时，备份里新增的插件会在确认导入时**自动安装**，无需在差异列表里逐项手动勾选；只有**版本冲突**的插件仍需要你决定「保留当前 / 采用备份」。
+
+### 🛒 配置市场（Marketplace）
+
+浏览并一键安装社区分享的现成配置（模型 / Provider、插件、MCP、技能、Agent 预设……）：
+
+- **内置官方市场**——只读、绑定官方公开仓库（官方徽章，不可编辑）；首次打开自动刷新，也支持手动拉取最新
+- **搜索与筛选**——关键词搜索、类别过滤、来源筛选（官方 / 个人）、排序（最近更新 / ⭐ 最多 / 名称 A–Z），并显示**来源仓库**的 ⭐ star 数（匿名查询，不触碰任何 token）
+- **供应链警示恒展示**——来源仓库 URL +「未经官方审核」+ 下载时间；**逐分区批准**——高风险分区（历史会话 / 任意文件）直接禁止上架，其余分区确认导入前须逐项显式勾选
+- **安装复用安全导入管道**——分析 → 预览 → 自动备份 → 执行 → 回滚；确认前零写入
+- **「我的配置」**——GitHub 登录（device flow）后一键上传到**你自己的公开仓库**，并自动向官方市场仓库提交**收录 PR**；管理已上传条目（收录状态徽章：未收录 / PR 待审核 / 已收录）、一键更新、装回本地、删除（自动下架 PR）
 
 ### 🗂️ 配置档案（Profiles）
 
