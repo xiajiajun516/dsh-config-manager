@@ -1,6 +1,8 @@
 # 🎒 DSH Config Manager
 
-**Pack up your DSH configuration and take it anywhere — restore your whole environment on a new machine with one click.**
+**DeepSeek Harness Backup, Restore & Migration Plugin.**
+
+Backup, restore, export, import, migrate and sync your complete DeepSeek Harness (DSH) configuration — settings, model providers, plugins, MCP servers, skills, agent presets and workspaces — and restore your whole environment on a new machine with one click.
 
 [English](README.md) · [简体中文](README.zh-CN.md)
 
@@ -20,6 +22,26 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 ```
 
 > ⚠️ **Security first**: no secrets (API Key / Token / Password) are exported by default. See [Security](#-security).
+
+---
+
+## 🎯 Use Cases
+
+### Backup DeepSeek Harness configuration
+
+Create a portable backup of your DSH settings, model providers, plugins, MCP servers, skills, agent presets, profiles and workspace — one ZIP file, no secret values included by default.
+
+### Restore DeepSeek Harness on another machine
+
+Export your current DSH environment as a single ZIP and import it on a new Windows, macOS or Linux machine. One click brings back settings, plugins, MCP servers, skills and global instructions (AGENTS.md).
+
+### Migrate DSH configuration to a new computer
+
+Move your complete DeepSeek Harness setup without manually reinstalling plugins, MCP servers and skills. Dead absolute paths are detected and remapped automatically (batch prefix mapping supported).
+
+### Sync DSH configuration across machines
+
+Keep portable configuration synchronized between machines through a private Git repository or WebDAV — secrets never sync.
 
 ---
 
