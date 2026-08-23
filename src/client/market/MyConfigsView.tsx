@@ -439,6 +439,8 @@ export function MyConfigsView({
       ...(w.mode === 'update' && w.form.id !== '' ? { id: w.form.id } : {}),
       ...(w.form.description.trim() !== '' ? { description: w.form.description.trim() } : {}),
       ...(categories.length > 0 ? { categories } : {}),
+      // F6 发布模式：share 时携带 mode（Host prepare 走分享强制拦截）；migrate 缺省不写，向后兼容
+      ...(w.form.publishMode === 'share' ? { mode: 'share' as const } : {}),
     }
     patchWizard({ running: true, error: null, result: null })
     try {
@@ -465,6 +467,7 @@ export function MyConfigsView({
         name: entry.name,
         description: entry.description ?? '',
         categories: (entry.categories ?? []).join(', '),
+        publishMode: 'migrate', // 更新默认迁移模式（与表单初始态一致，用户可在表单页切换）
       },
     })
     setListingStatus(null)
@@ -809,6 +812,29 @@ export function MyConfigsView({
           </Field>
           <Field label={t('myconfigs.upload.form.categories')}>
             <input className={css.input} value={wizard.form.categories} onChange={(e) => { onFormField('categories', e.target.value) }} />
+          </Field>
+          {/* F6 发布模式：迁移（全带）/ 分享（自动排除敏感分区 + 强制隐私拦截）—— 复用既有 conflictOptions/radioLabel 单选样式 */}
+          <Field label={t('myconfigs.upload.mode.title')}>
+            <div className={css.conflictOptions}>
+              {([
+                ['migrate', t('myconfigs.upload.mode.migrate')],
+                ['share', t('myconfigs.upload.mode.share')],
+              ] as const).map(([value, label]) => (
+                <label key={value} className={css.radioLabel}>
+                  <input
+                    type="radio"
+                    name="my-config-publish-mode"
+                    checked={wizard.form.publishMode === value}
+                    disabled={wizard.running || wizard.validating}
+                    onChange={() => { onFormField('publishMode', value) }}
+                  />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            {wizard.form.publishMode === 'share' && (
+              <span className={css.hint}>{t('myconfigs.upload.mode.shareHint')}</span>
+            )}
           </Field>
           {/* 系统自动字段（id/author/version/updatedAt 徽章，无需填写） */}
           <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>

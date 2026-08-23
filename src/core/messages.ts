@@ -21,6 +21,9 @@ export const zh = {
   'export.encryptionRequired': '导出包含秘密需要注入 EncryptionProvider（m4 实现），拒绝明文导出秘密',
   'export.sectionFailed': '分区 {adapter} 导出失败: {reason}',
   'export.credentialsReadFailed': '读取凭据文件失败，跳过秘密导出: {reason}',
+  'export.vaultRefreshed': '凭据明文未进入备份，已镜像到本机 vault（{count} 个文件，恢复时可回填）',
+  'export.vaultRefreshSkipped': 'vault 镜像跳过 {rel}: {reason}',
+  'export.vaultRefreshFailed': 'vault 镜像刷新失败（不影响导出）: {reason}',
 
   // ---------- 导入：ZIP 读入 / 完整性 / schema ----------
   'import.readFailed': '无法读取备份文件 "{zip}": {reason}',
@@ -48,6 +51,9 @@ export const zh = {
   'import.notEncryptedContainer': '该文件不是加密备份容器，无法解锁',
   'import.userSkipped': '用户跳过（导入中点击「跳过当前插件」）',
   'import.userSkippedDetail': '插件 {name} 已由用户跳过，未安装',
+  'import.vaultRestored': '凭据文件 {rel} 已从本机 vault 回填',
+  'import.vaultMissing': '凭据文件 {rel} 不在本机 vault（跨机恢复需人工重填）',
+  'import.vaultBackfillFailed': 'vault 凭据回填失败（不影响导入结果）: {reason}',
 
   // ---------- 回滚 ----------
   'rollback.ns.createdNoDelete': '该 namespace 由导入创建，DSH settings 无删除语义',
@@ -105,6 +111,7 @@ export const zh = {
   'restore.missingTargetBlob': '恢复动作缺少 target/blobPath',
   'restore.missingTarget': '恢复动作缺少 target',
   'restore.missingPluginName': '恢复动作缺少插件名',
+  'restore.ghostSweepSummary': '发现 {count} 个幽灵会话（备份有记录、磁盘无文件），需人工在 DSH 确认清理：{keys}',
 
   // ---------- run 注册表 ----------
   'run.conflict.export': '已有进行中的导出任务（{runId}），请等待其完成后再试',
@@ -294,6 +301,9 @@ export const en: Record<keyof typeof zh, string> = {
   'export.encryptionRequired': 'Encrypted export requires an EncryptionProvider (m4); refusing to export secrets in plaintext',
   'export.sectionFailed': 'Section {adapter} export failed: {reason}',
   'export.credentialsReadFailed': 'Failed to read the credentials file; secrets export skipped: {reason}',
+  'export.vaultRefreshed': 'Credential plaintext did not enter the backup; mirrored to the local vault ({count} file(s), available for restore backfill)',
+  'export.vaultRefreshSkipped': 'Vault mirror skipped {rel}: {reason}',
+  'export.vaultRefreshFailed': 'Vault mirror refresh failed (export unaffected): {reason}',
 
   // ---------- import: ZIP / integrity / schema ----------
   'import.readFailed': 'Cannot read backup file "{zip}": {reason}',
@@ -321,6 +331,9 @@ export const en: Record<keyof typeof zh, string> = {
   'import.notEncryptedContainer': 'This file is not an encrypted backup container and cannot be unlocked',
   'import.userSkipped': 'Skipped by user (clicked "Skip current plugin" during import)',
   'import.userSkippedDetail': 'Plugin {name} was skipped by the user and not installed',
+  'import.vaultRestored': 'Credential file {rel} backfilled from the local vault',
+  'import.vaultMissing': 'Credential file {rel} is not in the local vault (cross-machine restore: re-enter manually)',
+  'import.vaultBackfillFailed': 'Vault credential backfill failed (import result unaffected): {reason}',
 
   // ---------- rollback ----------
   'rollback.ns.createdNoDelete': 'This namespace was created by the import; DSH settings have no delete semantics',
@@ -378,6 +391,7 @@ export const en: Record<keyof typeof zh, string> = {
   'restore.missingTargetBlob': 'Restore action is missing target/blobPath',
   'restore.missingTarget': 'Restore action is missing target',
   'restore.missingPluginName': 'Restore action is missing the plugin name',
+  'restore.ghostSweepSummary': 'Found {count} ghost session(s) (recorded in the backup, missing on disk); please confirm and clean them up in DSH: {keys}',
 
   // ---------- run registry ----------
   'run.conflict.export': 'An export task is already running ({runId}); wait for it to finish before retrying',

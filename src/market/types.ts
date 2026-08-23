@@ -17,6 +17,14 @@ export const MARKET_INDEX_SCHEMA_VERSION = 1;
 export const MARKET_ITEM_SCHEMA_VERSION = 1;
 
 /**
+ * 发布模式（F6 迁移/分享双模式，借鉴 dsh-packer config.personalPatterns 同源设计）：
+ *  - 'migrate'（缺省）：迁移模式，同一份数据全带（只受 BANNED 分区与字面量凭据扫描约束）；
+ *  - 'share'：分享模式，自动排除设备/平台相关分区（deviceSpecific/platformSpecific），
+ *    并对隐私内容**强制拦截**（发现任何敏感痕迹直接拒绝打包，而不是仅警告）。
+ */
+export type MarketPublishMode = 'migrate' | 'share';
+
+/**
  * 单条目 config.zip 体积上限（64 MB，对齐现有上传上限量级）—— zip bomb 首道闸。
  */
 export const MAX_MARKET_ZIP_BYTES = 64 * 1024 * 1024;
@@ -98,6 +106,8 @@ export interface MarketItemManifest {
   description?: string;
   updatedAt?: string;
   categories?: string[];
+  /** 发布模式：'migrate'（缺省，迁移全带）| 'share'（分享：自动排除敏感分区 + 强制隐私拦截） */
+  mode?: MarketPublishMode;
   /** 内容 section 清单：config.zip 内含哪些分区（正常应等于 zip 内部 manifest.sections 的子集） */
   sections: SectionId[];
   /** 供应链/来源信息（纯展示，不做身份验证） */
@@ -232,6 +242,8 @@ export interface MarketPreparePayload {
   /** 作者托管仓库 URL（可选；非空须过 validateRepoUrl） */
   repoUrl?: string;
   categories?: string[];
+  /** 发布模式：'migrate'（缺省，迁移全带）| 'share'（分享：自动排除敏感分区 + 强制隐私拦截） */
+  mode?: MarketPublishMode;
 }
 
 /** POST /market/prepare 响应：条目包生成结果（manifest 文本 + 校验摘要 + 发布目录） */

@@ -78,6 +78,7 @@ export function deriveLoginState(input: {
  * 均由系统自动生成，不在表单里。
  * `id` 为**更新模式内部字段**（「更新」按钮预填条目 id，避免后端靠 name→slug 猜错），
  * 不渲染为输入框；上传模式恒为空串。
+ * `publishMode` 为 F6 发布模式：'migrate'（迁移，全带）| 'share'（分享，自动排除敏感分区 + 强制隐私拦截）。
  */
 export interface MyConfigForm {
   name: string
@@ -86,10 +87,12 @@ export interface MyConfigForm {
   categories: string
   /** 更新目标条目 id（update 模式预填；upload 模式空串） */
   id: string
+  /** 发布模式（F6）：'migrate'（缺省，迁移全带）| 'share'（分享，排除设备/平台分区 + 强制隐私拦截） */
+  publishMode: 'migrate' | 'share'
 }
 
 /** 空表单初值（React 壳 useState 初始 + 测试用）。 */
-export const EMPTY_MY_CONFIG_FORM: MyConfigForm = { name: '', description: '', categories: '', id: '' }
+export const EMPTY_MY_CONFIG_FORM: MyConfigForm = { name: '', description: '', categories: '', id: '', publishMode: 'migrate' }
 
 /** 表单字段错误（null = 该字段合法；文案已翻译）。 */
 export interface MyConfigFormErrors {

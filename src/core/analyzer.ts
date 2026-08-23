@@ -8,6 +8,7 @@
  * ZIP 以内存方式解析（不进磁盘），杜绝不可信输入在分析阶段落盘。
  */
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { sha256Hex } from '../utils/hashing.ts';
 import { parseJsonSafe } from '../utils/json.ts';
 import {
@@ -18,6 +19,9 @@ import { canImport, describeVersion, isSupported } from '../schema/versions.ts';
 import { isAbsolutePath, applyPrefixMappings } from '../utils/paths.ts';
 import { parseZip, type ZipArchive, type ZipSafetyLimits } from '../utils/zip.ts';
 import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
+import { loadTombstones, isTombstoned } from '../schema/tombstones.ts';
+import type { Tombstone, TombstoneKind } from '../schema/tombstones.ts';
+import { DEFAULT_SENSITIVE_RELS, restoreVaultFiles } from '../security/vault.ts';
 import { createSnapshot } from './backup.ts';
 import { rollback } from './rollback.ts';
 import { computeCompatibility } from './validator.ts';
@@ -27,7 +31,7 @@ import {
   ImportNotConfirmedError, ImportUserSkippedError, type ApplyResult, type ConfigAdapter,
   type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,
   type ImportDecisions, type ImportPlan, type ImportResult, type PathIssue,
-  type PathMapping, type PlanItem, type SnapshotStore,
+  type PathMapping, type PlanItem, type SkippedTombstone, type SnapshotStore,
 } from './types.ts';
 
 /** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后） */
@@ -355,28 +359,35 @@ export class Analyzer {
     const items = analyzed.adapterItems.map((item) => applyItemResolution(item, decisions, this.msg));
     const planMappings = mergePathMappings(items, decisions.pathMappings);
 
-    // MissingSecret：兜底——credentialsStatus 分区里已配置的凭据若没有对应计划项，补占位
-    ensureMissingSecrets(items, analyzed.sections, this.msg);
+    // F4 删除墓碑过滤：读取本地删除墓碑（<dataDir>/tombstones.json；缺失/损坏 → 空列表安全降级），
+    // 剔除命中墓碑的计划项（插件 / 技能 / 文件类条目 + 分区级墓碑整分区跳过）。
+    // 过滤是纯函数（applyTombstoneFilter），此处只负责加载数据并调用。
+    const tombstones = await loadTombstones(this.ctx.fs, path.join(this.ctx.homeDir, 'dsh-config-manager'));
+    const { items: planItems, skipped: skippedTombstoned } = applyTombstoneFilter(items, tombstones);
 
-    const missingSecrets = items
+    // MissingSecret：兜底——credentialsStatus 分区里已配置的凭据若没有对应计划项，补占位
+    ensureMissingSecrets(planItems, analyzed.sections, this.msg);
+
+    const missingSecrets = planItems
       .filter((i) => i.kind === 'MissingSecret')
       .map((i) => ({ ref: i.id.replace(/^secret:/, ''), required: true }));
 
-    const needsRestart = items.some((i) => i.kind === 'Install' || (i.adapter === 'mcp' && i.kind !== 'Skip' && i.kind !== 'Warning'));
+    const needsRestart = planItems.some((i) => i.kind === 'Install' || (i.adapter === 'mcp' && i.kind !== 'Skip' && i.kind !== 'Warning'));
 
     const estimatedActions = {} as ImportPlan['estimatedActions'];
-    for (const item of items) {
+    for (const item of planItems) {
       if (item.kind === 'Skip' || item.kind === 'Warning') continue;
       estimatedActions[item.adapter] = (estimatedActions[item.adapter] ?? 0) + 1;
     }
 
     return {
-      items,
+      items: planItems,
       globalStrategy: decisions.strategy,
       pathMappings: planMappings,
       missingSecrets,
       needsRestart,
       estimatedActions,
+      skippedTombstoned,
     };
   }
 
@@ -513,6 +524,7 @@ export class Analyzer {
         warnings,
         rollback: rollbackReport,
         snapshotId: snapshot.id,
+        skippedTombstoned: plan.skippedTombstoned ?? [],
       };
     }
 
@@ -538,6 +550,22 @@ export class Analyzer {
     // M1：导入成功 → 快照标记 done（元数据写失败只告警，不改变导入结论）
     await this.markSnapshotStatus(snapshot.id, 'done');
 
+    // F1 vault 回填：导出时敏感文件（.credentials.yaml 等）明文未进备份（includeSecrets=false
+    // 时镜像到 <dataDir>/vault），导入成功后从本机 vault 回填 $DSH_HOME；vault 缺失
+    // （跨机恢复 / 从未镜像过）记入警告提示用户重填。尽力而为：失败仅警告，不影响导入结论。
+    try {
+      const vaultDataDir = path.join(this.ctx.homeDir, 'dsh-config-manager');
+      const vault = await restoreVaultFiles(this.ctx.fs, vaultDataDir, this.ctx.homeDir, DEFAULT_SENSITIVE_RELS);
+      for (const rel of vault.restored) warnings.push(this.msg('import.vaultRestored', { rel }));
+      for (const rel of vault.missing) warnings.push(this.msg('import.vaultMissing', { rel }));
+      for (const s of vault.skipped) {
+        // targetExists = 目标已有更新的凭据，属预期跳过，不打扰用户
+        if (s.reason !== 'targetExists') warnings.push(this.msg('import.vaultBackfillFailed', { rel: s.rel, reason: s.reason }));
+      }
+    } catch (err) {
+      warnings.push(this.msg('import.vaultBackfillFailed', { rel: DEFAULT_SENSITIVE_RELS.join(', '), reason: err instanceof Error ? err.message : String(err) }));
+    }
+
     return {
       ok: true, // 单项失败已如实记录在 executed；无未捕获异常即完成
       executed,
@@ -546,6 +574,7 @@ export class Analyzer {
       warnings,
       rollback: null,
       snapshotId: snapshot.id,
+      skippedTombstoned: plan.skippedTombstoned ?? [],
     };
   }
 
@@ -743,4 +772,60 @@ function ensureMissingSecrets(items: PlanItem[], sections: Map<SectionId, unknow
     });
     existing.add(id);
   }
+}
+
+/* ---------------- F4 删除墓碑过滤（纯函数，可独立测试） ---------------- */
+
+/**
+ * 按删除墓碑过滤计划项（F4）：
+ *  - 条目级：插件（Install/Update/Conflict）、技能（skills 文件）、文件类条目（agentPresets 等）命中墓碑 → 剔除；
+ *  - 分区级：墓碑 kind='section' 且 id=分区 id → 整分区跳过（仅记一条 skipped）。
+ * 返回过滤后的 items 与被跳过清单（纯函数：不读文件、不改入参）。
+ */
+function applyTombstoneFilter(
+  items: PlanItem[],
+  tombstones: Tombstone[],
+): { items: PlanItem[]; skipped: SkippedTombstone[] } {
+  if (tombstones.length === 0) return { items, skipped: [] };
+
+  const tombstonedSections = new Set(tombstones.filter((t) => t.kind === 'section').map((t) => t.id));
+  const skipped: SkippedTombstone[] = [];
+  const out: PlanItem[] = [];
+  const reportedSections = new Set<SectionId>();
+
+  for (const item of items) {
+    // 分区级墓碑优先：整个分区不出现（含 Skip 等非写入项，UI 提示「该分区已删除」）
+    if (tombstonedSections.has(item.adapter)) {
+      if (!reportedSections.has(item.adapter)) {
+        skipped.push({ kind: 'section', id: item.adapter, adapter: item.adapter });
+        reportedSections.add(item.adapter);
+      }
+      continue;
+    }
+    const key = tombstoneKeyForItem(item);
+    if (key !== null && isTombstoned(key.kind, key.id, tombstones)) {
+      skipped.push({ kind: key.kind, id: key.id, adapter: item.adapter });
+      continue;
+    }
+    out.push(item);
+  }
+  return { items: out, skipped };
+}
+
+/** PlanItem → 墓碑键（{kind,id}）映射；非「将写入」的条目（Skip 等）与配置类项返回 null 不过滤 */
+function tombstoneKeyForItem(item: PlanItem): { kind: TombstoneKind; id: string } | null {
+  // 插件本体（plugin:<pkg>）：Install / Update / Conflict 均视为「将写入该插件」→ 命中墓碑剔除；
+  // patch: 行与 plugins:pnpm-workspace 是配置类项，不按插件墓碑过滤（分区级墓碑可覆盖）。
+  if (item.adapter === 'plugins' && item.id.startsWith('plugin:')) {
+    if (item.kind !== 'Install' && item.kind !== 'Update' && item.kind !== 'Conflict') return null;
+    return { kind: 'plugin', id: item.id.slice('plugin:'.length) };
+  }
+  // 文件类分区条目（id = <分区>:<相对路径>）：skills → skill 墓碑；其余文件类（agentPresets/
+  // agentInstructions/pluginFiles/sessions/self）→ 通用 file 墓碑（id 为相对路径）。
+  if (item.kind === 'Create' || item.kind === 'Update' || item.kind === 'Conflict') {
+    const prefix = `${item.adapter}:`;
+    if (item.adapter === 'skills') return { kind: 'skill', id: item.id.slice(prefix.length) };
+    if (isFileSection(item.adapter)) return { kind: 'file', id: item.id.slice(prefix.length) };
+  }
+  return null;
 }

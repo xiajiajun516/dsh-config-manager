@@ -84,6 +84,7 @@ import { SyncEngine } from './sync/sync-engine.ts'
 import type { ApplyItemsReport } from './sync/sync-engine.ts'
 import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
+import { BackupScheduler } from './sync/backup-scheduler.ts'
 import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
 import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
@@ -117,6 +118,9 @@ import { createGitFileWriter } from './market/git-file-writer.ts'
 import { parseGitHubRepoUrl } from './market/repo-url.ts'
 import { StarCache } from './market/star-cache.ts'
 import { redact } from './security/redaction.ts'
+import { createConfiguredSecretScanner } from './security/secret-scanner.ts'
+import type { ConfiguredSecretPatterns } from './security/secret-scanner.ts'
+import type { SecretScanner } from './core/types.ts'
 import { sha256Hex } from './utils/hashing.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { SECTION_IDS } from './schema/config.ts'
@@ -186,6 +190,12 @@ export interface Config {
    * 导出时递归收集该目录下所有文件（按相对 ~/.dsh 根的路径写回），实现「往目录放文件即自动随备份携带」。
    */
   pluginFilesDir?: string
+  /**
+   * F2 个人隐私规则（对齐 dsh-packer config.personalPatterns）：个人化敏感字段名 /
+   * 引用字段 / 值形状模式，由部署者注入（个人昵称、本机用户名等），不进开源代码。
+   * 未配置时扫描器行为与默认完全一致。
+   */
+  personalPatterns?: ConfiguredSecretPatterns
 }
 
 /* ---------------------------------------------------------------- constants */
@@ -918,6 +928,10 @@ interface RoutesDeps {
   syncDir: string
   /** m-market：市场目录（$DSH_HOME/dsh-config-manager/market；其下 config/ 与 cache/） */
   marketDir: string
+  /** 插件数据根目录（$DSH_HOME/dsh-config-manager；F1 vault 镜像目录 = <dataDir>/vault） */
+  dataDir: string
+  /** F2 强化 Secret 扫描器（含部署者 personalPatterns）；缺省 = 默认扫描器 */
+  scanner?: SecretScanner
   /** m-sync-ui：原始 DSH credentials（resolve token / set token / describe 状态） */
   credentials: CredentialProvider
   /** m-github-oauth：GitHub OAuth App 凭据（device flow 必需 client_id；client_secret 可选） */
@@ -1308,16 +1322,16 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
 }
 
 /**
- * 解析「一键上传/我的配置」请求体的 form 字段：仅 { name, description?, categories? }。
- * name 必填（非空字符串，trim 后取）；description 可选字符串；categories 可选字符串数组。
- * 非法 → null（调用方返回 400）。用户可填内容就这三项，其余元数据全自动。
+ * 解析「一键上传/我的配置」请求体的 form 字段：仅 { name, description?, categories?, mode? }。
+ * name 必填（非空字符串，trim 后取）；description 可选字符串；categories 可选字符串数组；
+ * mode 可选 'migrate' | 'share'（F6 分享模式，非法值忽略→缺省 migrate）。非法 → null（调用方返回 400）。
  */
-function parseMeForm(raw: unknown): { name: string; id?: string; description?: string; categories?: string[] } | null {
+function parseMeForm(raw: unknown): { name: string; id?: string; description?: string; categories?: string[]; mode?: 'migrate' | 'share' } | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const obj = raw as Record<string, unknown>
   const name = typeof obj['name'] === 'string' ? obj['name'].trim() : ''
   if (name === '') return null
-  const form: { name: string; id?: string; description?: string; categories?: string[] } = { name }
+  const form: { name: string; id?: string; description?: string; categories?: string[]; mode?: 'migrate' | 'share' } = { name }
   // update 模式的可选显式 id（「更新」按钮预填；upload 时省略）
   const idRaw = obj['id']
   if (typeof idRaw === 'string' && idRaw.trim() !== '') form.id = idRaw.trim()
@@ -1328,6 +1342,8 @@ function parseMeForm(raw: unknown): { name: string; id?: string; description?: s
     const categories = categoriesRaw.filter((c): c is string => typeof c === 'string' && c.trim() !== '')
     if (categories.length > 0) form.categories = categories
   }
+  // F6 分享模式：仅接受字面量 'share' / 'migrate'（其余忽略 → 缺省 migrate），随 form 透传 MyRepoService
+  if (obj['mode'] === 'share' || obj['mode'] === 'migrate') form.mode = obj['mode']
   return form
 }
 
@@ -1680,6 +1696,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             // 与外层容器语义一致（备份打开需密码但不含凭据值）。
             encryption: password !== undefined ? createEncryptionProvider(password) : null,
             exporterVersion: PLUGIN_VERSION,
+            // F1 文件级 vault：敏感文件（.credentials.yaml 等）镜像目录（<dataDir>/vault），
+            // includeSecrets=false 导出时由 Exporter 自动刷新镜像（凭据明文只存本机）。
+            vaultDataDir: deps.dataDir,
+            // F2 强化扫描器（含部署者 personalPatterns 个人规则）
+            scanner: deps.scanner,
             // m1 埋点：每导出一个分区实时更新 run 状态（/progress 轮询可见）
             onSection: (info) => {
               runs.update(runId, {
@@ -3096,9 +3117,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         const categories = Array.isArray(categoriesRaw)
           ? categoriesRaw.filter((c): c is string => typeof c === 'string')
           : undefined
+        // F6 分享模式：share 强制排除 deviceSpecific/platformSpecific 分区 + 保守档内容扫描拦截
+        // （prepare.ts 内实现）；migrate 缺省。非法值一律回退 migrate。
+        const mode = body?.['mode'] === 'share' ? 'share' : 'migrate'
         try {
           const zipBytes = await fs.readFile(zipPath)
-          const result = prepareMarketItem({ itemId, name, version, description, author, repoUrl, categories, zipBytes })
+          const result = prepareMarketItem({ itemId, name, version, description, author, repoUrl, categories, zipBytes, mode })
           // 发布目录落到受控临时区（供 UI 展示目录结构；不写任何配置）
           const dir = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}`)
           const itemDir = join(dir, 'items', itemId)
@@ -3405,6 +3429,9 @@ export function apply(ctx: Context, config?: Config): void {
     runs: new RunRegistry({ msg: host.msg }),
     syncDir,
     marketDir,
+    dataDir,
+    // F2：部署者 personalPatterns → 强化 Secret 扫描器（未配置 = 默认行为）
+    scanner: createConfiguredSecretScanner(config?.personalPatterns),
     credentials: ctx.credentials,
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,
@@ -3420,6 +3447,21 @@ export function apply(ctx: Context, config?: Config): void {
     makeSyncEngine,
     exporterVersion: PLUGIN_VERSION,
   })
+  // 定时全量备份调度器（P0-3）：宿主后台按固定间隔导出全量备份 ZIP（恒不含 secret、
+  // 不加密——加密密码仅内存且不能持久化，与自动同步同语义）。配置存
+  // sync/backup-schedule.json（随 self 分区备份迁移）；enabled 缺省 false。
+  // 随插件生命周期停止，避免旧调度器残留导致重复备份。
+  const backupScheduler = new BackupScheduler({
+    syncDir,
+    exportsDir,
+    host,
+    adapters,
+    runs: new RunRegistry({ msg: host.msg }),
+    msg: host.msg,
+    exporterVersion: PLUGIN_VERSION,
+  })
+  backupScheduler.start()
+  ctx.effect(() => () => backupScheduler.stop(), 'config-manager: backup scheduler')
   // 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，
   // 避免旧调度器残留导致重复后台同步。
   ctx.effect(() => () => scheduler.stop(), 'config-manager: autosync scheduler')

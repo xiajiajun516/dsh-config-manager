@@ -77,6 +77,24 @@ export function computeSnapshotMeta(snapshot: SyncSnapshot): SyncSnapshotMeta {
   return { id: snapshot.id, createdAt: snapshot.createdAt, sections, manifest: snapshot.manifest };
 }
 
+/** 判定远端索引条目与本地快照「内容相同」（快照级跳过判定，供 webdav 通道增量上传用）：
+ *  仅比较各分区内容 hash（sections 全等），不比较 createdAt / manifest 摘要
+ *  （同 id 重复上传但内容未变 → 视为幂等覆盖，无需重新 PUT 载荷）。
+ *  - 本地 sections 为空对象（加密快照：密文无法与远端明文 hash 比较）→ 返回 false，
+ *    「无法比较」必须照常上传，绝不跳过；
+ *  - 键集合与每个键的 hash 值全部相等 → true；否则 false。
+ */
+export function sectionsEqual(remote: SyncSnapshotMeta, local: SyncSnapshotMeta): boolean {
+  const r = remote.sections;
+  const l = local.sections;
+  if (Object.keys(l).length === 0) return false; // 本地为空（加密快照）→ 无法比较
+  if (Object.keys(r).length !== Object.keys(l).length) return false;
+  for (const key of Object.keys(r)) {
+    if (r[key as SectionId] !== l[key as SectionId]) return false;
+  }
+  return true;
+}
+
 /** 判定 sections 是否为加密密文载荷（duck-typing：含 encrypted.info + encrypted.data 字符串）。 */
 export function isEncryptedSections(sections: unknown): sections is EncryptedSections {
   if (sections === null || typeof sections !== 'object') return false;

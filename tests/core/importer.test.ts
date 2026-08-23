@@ -357,3 +357,77 @@ test('I-10 仅导入已批准分区：executeImportPlan 只执行子计划出现
     assert.ok(!dst.plugins.installed.has('@linxin666/dsh-ssh'), 'plugins 未批准 → 不得安装/写入插件');
   });
 });
+
+/**
+ * I-11 F4 删除墓碑：导入计划按墓碑过滤（插件/技能/分区级），被跳过项记入
+ * plan.skippedTombstoned；executeImportPlan 消费过滤后的 plan → 墓碑条目不复活。
+ *
+ * 墓碑数据源 = 目标机 <dataDir>/tombstones.json（$DSH_HOME/dsh-config-manager/ 下，
+ * 由 createImportPlan 内部读取并过滤；纯函数过滤逻辑见 src/core/analyzer.ts）。
+ */
+test('I-11 删除墓碑：墓碑插件/技能/分区在导入计划中剔除并记入报告，执行不复活', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedSource(src); // settings + plugins(@linxin666/dsh-ssh、@linxin666/dsh-task-board) + mcp + skills/coding.md + workspaces
+    await src.fs.writeFile('.agent-presets/preset-a.yaml', Buffer.from('# preset a\n', 'utf8'));
+    const zipPath = path.join(dir, 'i11.zip');
+    await exportFixture(src, zipPath);
+
+    const dst = makeContext('win32', 'C:\\Users\\bob');
+    // 预写删除墓碑：插件 @linxin666/dsh-ssh、技能 skills/coding.md、整个 agentPresets 分区
+    const tombstones = [
+      { kind: 'plugin', id: '@linxin666/dsh-ssh', deletedAt: '2026-08-20T00:00:00.000Z' },
+      { kind: 'skill', id: 'coding.md', deletedAt: '2026-08-20T00:00:00.000Z' },
+      { kind: 'section', id: 'agentPresets', deletedAt: '2026-08-20T00:00:00.000Z' },
+    ];
+    await dst.fs.writeFile('dsh-config-manager/tombstones.json', Buffer.from(JSON.stringify(tombstones)));
+    const importer = makeImporter(dst);
+
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] });
+
+    // 墓碑插件（Install 意图）不出现；未墓碑插件保留
+    assert.ok(!plan.items.some((i) => i.id === 'plugin:@linxin666/dsh-ssh'), '墓碑插件不得出现在计划中');
+    assert.ok(plan.items.some((i) => i.id === 'plugin:@linxin666/dsh-task-board'), '未墓碑插件应保留');
+    // 墓碑技能不出现
+    assert.ok(!plan.items.some((i) => i.id === 'skills:coding.md'), '墓碑技能不得出现在计划中');
+    // 分区级墓碑：agentPresets 整分区不出现
+    assert.ok(!plan.items.some((i) => i.adapter === 'agentPresets'), '墓碑分区不得出现在计划中');
+    // 未墓碑内容保留（skills 分区本例仅 coding.md 一个文件，被墓碑后无其余项；
+    // 以未墓碑的 workspaces 条目验证过滤只剔除命中项）
+    assert.ok(plan.items.some((i) => i.id === 'workspace:ws-ops'), '未墓碑条目应保留');
+
+    // 报告：被跳过的墓碑条目
+    const skipped = plan.skippedTombstoned ?? [];
+    assert.ok(skipped.some((s) => s.kind === 'plugin' && s.id === '@linxin666/dsh-ssh' && s.adapter === 'plugins'), '报告应记录墓碑插件');
+    assert.ok(skipped.some((s) => s.kind === 'skill' && s.id === 'coding.md' && s.adapter === 'skills'), '报告应记录墓碑技能');
+    assert.ok(skipped.some((s) => s.kind === 'section' && s.id === 'agentPresets' && s.adapter === 'agentPresets'), '报告应记录墓碑分区');
+    assert.ok(skipped.every((s) => s.kind !== 'section' || s.id !== 'skills'), '未墓碑分区不得误报');
+
+    // 执行：过滤后的 plan 不复活墓碑插件；未墓碑插件正常安装
+    const r = await importer.executeImportPlan(zipPath, plan, { confirm: true });
+    assert.equal(r.ok, true);
+    const after = new Set((await dst.plugins.listInstalled()).map((p) => p.name));
+    assert.ok(!after.has('@linxin666/dsh-ssh'), '墓碑插件不得被安装');
+    assert.ok(after.has('@linxin666/dsh-task-board'), '未墓碑插件应被安装');
+    // 墓碑技能文件不得被写入
+    assert.equal(await dst.fs.exists('skills/coding.md'), false, '墓碑技能文件不得被写回');
+    // 墓碑分区文件不得被写入
+    assert.equal(await dst.fs.exists('.agent-presets/preset-a.yaml'), false, '墓碑分区文件不得被写回');
+  });
+});
+
+test('I-12 无墓碑文件：计划不包含 skippedTombstoned 过滤记录（安全降级路径）', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedSource(src);
+    const zipPath = path.join(dir, 'i12.zip');
+    await exportFixture(src, zipPath);
+
+    const dst = makeContext('win32', 'C:\\Users\\bob');
+    const importer = makeImporter(dst);
+
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] });
+    assert.ok(plan.items.some((i) => i.id === 'plugin:@linxin666/dsh-ssh'), '无墓碑 → 插件项照常出现');
+    assert.equal(plan.skippedTombstoned?.length ?? 0, 0, '无墓碑 → 无过滤记录（或空数组）');
+  });
+});

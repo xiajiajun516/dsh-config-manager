@@ -663,3 +663,21 @@ test('my-repo: uniqueItemId 冲突加后缀；bumpVersion 纯自动 +1', () => {
   assert.equal(bumpVersion('v1.0'), 'v1.1');
   assert.equal(bumpVersion('beta'), 'beta.1', '非数字尾追加 .1');
 });
+
+/* ---------------------------------------------------------------- F6 发布模式透传 */
+
+test('my-repo: form.mode=share 透传给 prepare（分享模式强制拦截）；缺省 migrate 不写 mode', async () => {
+  // share：form.mode='share' → prepare 收到 mode='share'
+  const h = makeHarness();
+  const result = await h.service.upload({ zipBytes: ZIP_BYTES, form: form({ mode: 'share' }) });
+  assert.equal(result.ok, true);
+  assert.equal(h.prepareInputs.length, 1);
+  assert.equal(h.prepareInputs[0]!.mode, 'share', 'share 模式必须透传 prepare');
+
+  // 缺省（migrate）：prepare 输入不含 mode 字段（行为与历史完全一致）
+  const h2 = makeHarness();
+  const result2 = await h2.service.upload({ zipBytes: ZIP_BYTES, form: form() });
+  assert.equal(result2.ok, true);
+  assert.equal(h2.prepareInputs.length, 1);
+  assert.equal('mode' in h2.prepareInputs[0]!, false, 'migrate 缺省不透传 mode');
+});

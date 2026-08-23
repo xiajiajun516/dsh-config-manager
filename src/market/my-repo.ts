@@ -36,7 +36,7 @@ import type { GitFileWriter } from './git-file-writer.ts';
 import { MarketPrepareError } from './prepare.ts';
 import type { MarketPrepareInput, MarketPrepareResult } from './prepare.ts';
 import { parseMarketIndex, parseMarketItemManifest } from './index-parser.ts';
-import type { MarketIndex, MarketIndexItem, MarketItemManifest } from './types.ts';
+import type { MarketIndex, MarketIndexItem, MarketItemManifest, MarketPublishMode } from './types.ts';
 import { MARKET_INDEX_SCHEMA_VERSION } from './types.ts';
 import { stringifyJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
@@ -87,6 +87,9 @@ export interface MyRepoForm {
   id?: string;
   description?: string;
   categories?: string[];
+  /** 发布模式（F6 迁移/分享双模式）：'share' 时 prepare 走分享强制拦截（排除设备/平台分区 + 保守档隐私扫描）；
+   *  缺省 undefined = migrate（迁移全带，行为与历史一致）。 */
+  mode?: MarketPublishMode;
 }
 
 /** 收录流程状态：pending=已提交、后台处理中；done=已提交收录（PR 已开/复用）；failed=收录失败可重试 */
@@ -639,6 +642,8 @@ export class MyRepoService {
         ...(form.description !== undefined && form.description.trim() !== '' ? { description: form.description.trim() } : {}),
         author: login,
         ...(form.categories !== undefined && form.categories.length > 0 ? { categories: form.categories } : {}),
+        // F6 发布模式透传：share → prepare 走分享强制拦截（排除设备/平台分区 + 保守档隐私扫描）；缺省 migrate 不写
+        ...(form.mode === 'share' ? { mode: 'share' as const } : {}),
         repoUrl,
         zipBytes: params.zipBytes,
         now: this.now().toISOString(),

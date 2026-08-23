@@ -34,6 +34,7 @@ export const SELF_CONFIG_FILES: readonly string[] = [
   'sync/sync-autosync.json',
   'sync/sync-selection.json',
   'sync/ui-prefs.json',
+  'sync/backup-schedule.json',
   'market/market-config.json',
 ];
 

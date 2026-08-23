@@ -27,9 +27,11 @@ import type { NamespaceRecord, SettingsSection, WorkspaceRecord } from '../schem
 import type { Snapshot } from '../core/types.ts';
 
 import {
-  createSecretScanner, scanAndRedact, scanText, isSensitiveFieldName,
-  matchSecretValuePattern, REDACTED_PLACEHOLDER, DEFAULT_SECRET_FIELD_NAMES,
+  createSecretScanner, createConfiguredSecretScanner, scanAndRedact, scanText,
+  isSensitiveFieldName, matchSecretValuePattern, REDACTED_PLACEHOLDER,
+  DEFAULT_SECRET_FIELD_NAMES,
 } from './secret-scanner.ts';
+import type { ValuePattern, ConfiguredSecretPatterns } from './secret-scanner.ts';
 import {
   encryptCredentials, decryptCredentials, createEncryptionProvider,
   SecurityError, SCHEMA_MAGIC, SCHEMA_VERSION, HEADER_LENGTH, SALT_LENGTH, IV_LENGTH,
@@ -807,6 +809,103 @@ test('scanAndRedact: 保守档（默认，导出/同步）字段名敏感即剥�
   const s = sanitized as Record<string, unknown>;
   assert.equal(s['token'], REDACTED_PLACEHOLDER, '保守档字段名敏感即剥（占位符值也剥）');
   assert.equal(s['apiKey'], REDACTED_PLACEHOLDER, '保守档模板引用值也剥');
+});
+
+test('scanner: extraValuePatterns 命中个人化值形状（默认模式不受影响）', () => {
+  // 部署者注入的个人化形状（F2 个人隐私规则：昵称/用户名格式，不进开源代码）
+  const personalPatterns: ValuePattern[] = [
+    { name: 'personal-nickname', re: /nick_[a-z0-9]{6,}/ },
+    { name: 'personal-handle', re: /@[a-z][a-z0-9]{5,}/ },
+  ];
+  // 单参（无附加模式）不命中 → 默认行为不变
+  assert.equal(matchSecretValuePattern('nick_abc12345'), null);
+  assert.equal(matchSecretValuePattern('@someuser123'), null);
+  // 双参（附加模式）命中
+  assert.equal(matchSecretValuePattern('nick_abc12345', personalPatterns), 'personal-nickname');
+  assert.equal(matchSecretValuePattern('@someuser123', personalPatterns), 'personal-handle');
+  // 附加模式同样降噪：命中片段含占位词 your → 放行
+  assert.equal(matchSecretValuePattern('@yourname123', personalPatterns), null);
+  // 默认内置模式不破坏：带附加模式时内置模式仍命中（内置优先）
+  assert.equal(matchSecretValuePattern('sk-abc1234567890abc', personalPatterns), 'openai-style-key');
+  assert.equal(matchSecretValuePattern('AKIAIOSFODNN7A1B2C3D4', personalPatterns), 'aws-access-key');
+
+  // 结构化扫描：字段名无关的值形状命中 → 剥离
+  const { sanitized, hits } = scanAndRedact(
+    { note: 'my nickname is nick_abc12345', handle: '@someuser123', fine: 'plain text' },
+    { extraValuePatterns: personalPatterns },
+  );
+  const s = sanitized as Record<string, unknown>;
+  assert.equal(s['note'], REDACTED_PLACEHOLDER, '附加形状命中剥离');
+  assert.equal(s['handle'], REDACTED_PLACEHOLDER, '@handle 形状命中剥离');
+  assert.equal(s['fine'], 'plain text');
+  assert.equal(hits.length, 2);
+  // 不带附加模式时：同样数据不剥离（默认模式不受影响）
+  const r2 = scanAndRedact({ note: 'my nickname is nick_abc12345' });
+  assert.equal((r2.sanitized as Record<string, unknown>)['note'], 'my nickname is nick_abc12345');
+});
+
+test('scanner: extraValuePatterns 宽松档同样生效 + scanText 值形状命中', () => {
+  const personalPatterns: ValuePattern[] = [
+    { name: 'personal-nickname', re: /nick_[a-z0-9]{6,}/ },
+  ];
+  // 宽松档（市场发布）：字段名不敏感 + 附加形状命中 → 仍拦（值形状字段名无关）
+  const loose = scanAndRedact(
+    { note: 'nick_abc12345', token: 'your-token', real: 'sk-proj-9f8e7d6c5b4a3210abcdef' },
+    { literalValueOnly: true, extraValuePatterns: personalPatterns },
+  );
+  const s = loose.sanitized as Record<string, unknown>;
+  assert.equal(s['note'], REDACTED_PLACEHOLDER, '宽松档附加形状同样命中');
+  assert.equal(s['token'], 'your-token', '宽松档占位值仍放行');
+  assert.equal(s['real'], REDACTED_PLACEHOLDER, '宽松档内置形状仍命中');
+
+  // scanText：附加形状参与值形状行扫描（字段名无关强信号）
+  const textHits = scanText('contact: nick_abc12345\nplain line', { extraValuePatterns: personalPatterns });
+  assert.ok(
+    textHits.some((h) => h.field === '(personal-nickname)'),
+    `scanText 应报附加形状，实际 ${JSON.stringify(textHits)}`,
+  );
+});
+
+test('scanner: createConfiguredSecretScanner 部署配置构造（未配置=默认，配置生效）', () => {
+  const personalPatterns: ValuePattern[] = [
+    { name: 'personal-nickname', re: /nick_[a-z0-9]{6,}/ },
+  ];
+  // 未配置（undefined / 空对象 / 全空数组）→ 与默认 createSecretScanner 行为一致
+  const emptyConfigs: (ConfiguredSecretPatterns | undefined)[] = [
+    undefined, {}, { extraFieldNames: [] }, { extraValuePatterns: [] },
+  ];
+  for (const cfg of emptyConfigs) {
+    const scanner = createConfiguredSecretScanner(cfg);
+    const r = scanner.scanAndRedact({ note: 'nick_abc12345', token: 'x' });
+    const s = r.sanitized as Record<string, unknown>;
+    assert.equal(s['note'], 'nick_abc12345', '未配置时附加形状不生效');
+    assert.equal(s['token'], REDACTED_PLACEHOLDER, '默认敏感字段仍剥离');
+  }
+  // 配置生效：附加字段名 / 附加值形状 / 附加引用字段
+  const configured = createConfiguredSecretScanner({
+    extraFieldNames: ['nickname'],
+    extraReferenceFields: ['nicknameref'],
+    extraValuePatterns: personalPatterns,
+  });
+  const r = configured.scanAndRedact({
+    nickname: 'nick_abc12345',    // 附加字段名敏感 → 剥
+    handle: 'nick_abc12345',      // 附加形状命中（字段名无关）→ 剥
+    nickNameRef: 'NICK_REF_NAME', // 附加引用字段 → 豁免
+    token: 'your-token',          // 默认字段仍剥
+    fine: 'plain',
+  });
+  const s = r.sanitized as Record<string, unknown>;
+  assert.equal(s['nickname'], REDACTED_PLACEHOLDER);
+  assert.equal(s['handle'], REDACTED_PLACEHOLDER);
+  assert.equal(s['nickNameRef'], 'NICK_REF_NAME');
+  assert.equal(s['token'], REDACTED_PLACEHOLDER);
+  assert.equal(s['fine'], 'plain');
+  // scanText 可选方法随配置生效
+  const textHits = configured.scanText!('nick_abc12345 in line');
+  assert.ok(
+    textHits.some((h) => h.field === '(personal-nickname)'),
+    `configured.scanText 应报附加形状，实际 ${JSON.stringify(textHits)}`,
+  );
 });
 
 /* ================= redaction ================= */

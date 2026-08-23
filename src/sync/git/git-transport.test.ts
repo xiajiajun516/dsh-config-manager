@@ -488,6 +488,24 @@ test('集成：upload → list → download → delete 端到端（真实 git + 
   assert.equal(tokenReads, 0, '本地仓库无需 token，getToken 不应被调用');
 });
 
+test('集成：同内容重复 upload → 第二次不产生新 commit（git 天然增量，内容无变化不提交）', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+
+  await transport.upload(sampleSnapshot());
+  let log = await runRealGit(['log', '--oneline', '--all'], bare);
+  assert.equal(log.code, 0, `git log 失败: ${log.stderr}`);
+  assert.equal(log.stdout.trim().split('\n').filter(Boolean).length, 1, '首次上传应恰好 1 个 commit');
+
+  // 同 id 同内容（快照完全一致）重复上传 → diff --cached --quiet 无变更 → 不 commit 不 push
+  await transport.upload(sampleSnapshot());
+  log = await runRealGit(['log', '--oneline', '--all'], bare);
+  assert.equal(log.stdout.trim().split('\n').filter(Boolean).length, 1, '内容无变化 → 不得产生新 commit');
+  const listed = await transport.list();
+  assert.equal(listed.length, 1, '远端仍只有 1 条快照（同 id 覆盖语义）');
+});
+
 test('集成：token 不泄漏到快照文件内容与 commit message（真实 git 全链路）', async (t) => {
   const bare = await makeBareRepo(t);
   const workDir = await makeTempDir(t);

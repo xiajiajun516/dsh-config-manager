@@ -243,3 +243,52 @@ test('E-06 Secret 过滤：敏感字段剥离、引用豁免、redactedHits 计�
     assert.equal(providers.providers.custom?.apiKey, '', 'apiKey 值应剥离为空串');
   });
 });
+
+test('E-07 文件级 vault：includeSecrets=false 时敏感文件镜像到本机 vault，报告标记，ZIP 无明文', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    const secret = 'sk-vaulT-secret-777';
+    await src.fs.writeFile(path.join(src.homeDir, '.credentials.yaml'), Buffer.from(`apiKey: ${secret}\n`, 'utf8'));
+    const adapters = createAdapters({ namespaces: [] });
+    const zipPath = path.join(dir, 'dsh-config-e07.zip');
+
+    const result = await new Exporter({ ctx: src, adapters, now: () => new Date('2026-08-14T12:00:00.000Z') })
+      .export({ includeSecrets: false, outPath: zipPath });
+
+    // 报告标记 + 提示（vault 镜像走报告字段，manifest 不加字段）
+    assert.equal(result.report.security.vaultRefreshed, 1, '报告应标记 vault 镜像 1 个文件');
+    assert.ok(result.report.warnings.some((w) => w.includes('vault')), '报告应含 vault 提示');
+
+    // vault 镜像落盘且字节一致（vault 只在本机，不进归档/同步）
+    const vaultPath = path.join(src.homeDir, 'dsh-config-manager', 'vault', '.credentials.yaml');
+    assert.equal(await src.fs.exists(vaultPath), true, 'vault 镜像应存在');
+    assert.deepEqual(
+      Buffer.from(await src.fs.readFile(vaultPath)),
+      Buffer.from(`apiKey: ${secret}\n`, 'utf8'),
+      'vault 镜像字节应与源一致',
+    );
+
+    // ZIP 全文本不含明文秘密
+    const archive = parseZip(await fs.readFile(zipPath));
+    const allText = archive.names()
+      .filter((n) => n !== CHECKSUMS_FILE)
+      .map((n) => Buffer.from(archive.readEntry(n)).toString('utf8'))
+      .join('\n');
+    assert.ok(!allText.includes(secret), '秘密值不得写入导出');
+    assert.ok(!archive.has('security/secrets.enc'), '无加密提供者时不生成 secrets.enc');
+  });
+});
+
+test('E-08 无敏感文件：vault 刷新为空，报告不产生 vault 提示', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('linux', '/home/empty');
+    const adapters = createAdapters({ namespaces: [] });
+    const zipPath = path.join(dir, 'dsh-config-e08.zip');
+
+    const result = await new Exporter({ ctx: src, adapters, now: () => new Date('2026-08-14T12:00:00.000Z') })
+      .export({ includeSecrets: false, outPath: zipPath });
+
+    assert.equal(result.report.security.vaultRefreshed, 0, '无敏感文件时 vault 镜像数为 0');
+    assert.ok(!result.report.warnings.some((w) => w.includes('vault')), '无敏感文件时不应产生 vault 提示');
+  });
+});

@@ -15,6 +15,7 @@ import { buildChecksums } from '../utils/hashing.ts';
 import { stringifyJsonSafe } from '../utils/json.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE, EXPORTER_NAME } from '../schema/manifest.ts';
 import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts';
+import { DEFAULT_SENSITIVE_RELS, refreshVault } from '../security/vault.ts';
 import { writeZip } from '../utils/zip.ts';
 import { msgOf } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
@@ -47,6 +48,12 @@ export interface ExporterOptions {
   msg?: MsgFunc;
   /** m1：每导出一个分区前调用（真实进度埋点；不传则无埋点） */
   onSection?: (info: SectionProgress) => void;
+  /**
+   * 插件数据目录（文件级 vault 位于 <vaultDataDir>/vault，缺省 <homeDir>/dsh-config-manager）。
+   * includeSecrets=false 时导出会自动刷新 vault；宿主自定义 dataDir 时应注入实际值
+   * （HostContext 不携带 dataDir，故经选项注入）。
+   */
+  vaultDataDir?: string;
 }
 
 /** 缺省 SecretScanner：递归黑名单字段剥离（字段名大小写不敏感；二进制/Uint8Array 原样跳过） */
@@ -95,6 +102,7 @@ export class Exporter {
   private readonly now: () => Date;
   private readonly msg: MsgFunc;
   private readonly onSection: ((info: SectionProgress) => void) | undefined;
+  private readonly vaultDataDir: string;
 
   constructor(opts: ExporterOptions) {
     this.ctx = opts.ctx;
@@ -105,6 +113,7 @@ export class Exporter {
     this.now = opts.now ?? (() => new Date());
     this.msg = opts.msg ?? msgOf(opts.ctx);
     this.onSection = opts.onSection;
+    this.vaultDataDir = opts.vaultDataDir ?? path.join(opts.ctx.homeDir, 'dsh-config-manager');
   }
 
   /**
@@ -209,6 +218,25 @@ export class Exporter {
       encrypted = true;
     }
 
+    // 4b. 文件级 vault（includeSecrets=false：敏感文件明文不进归档 → 镜像到本机 vault）。
+    //     尽力而为：任何失败仅记警告，不中断导出。includeSecrets=true 时秘密已加密进归档，
+    //     无需镜像（vault 只服务于「明文不进备份」的本机留存场景）。
+    let vaultRefreshed = 0;
+    if (!includeSecrets) {
+      try {
+        const vault = await refreshVault(this.ctx.fs, this.vaultDataDir, this.ctx.homeDir, DEFAULT_SENSITIVE_RELS);
+        vaultRefreshed = vault.mirrored.length;
+        if (vault.mirrored.length > 0) {
+          warnings.push(this.msg('export.vaultRefreshed', { count: vault.mirrored.length }));
+        }
+        for (const s of vault.skipped) {
+          warnings.push(this.msg('export.vaultRefreshSkipped', { rel: s.rel, reason: s.reason }));
+        }
+      } catch (err) {
+        warnings.push(this.msg('export.vaultRefreshFailed', { reason: err instanceof Error ? err.message : String(err) }));
+      }
+    }
+
     // 5. checksums（覆盖除 manifest/checksums 外的全部条目）
     const checksums = buildChecksums(entries);
     entries.push({ name: CHECKSUMS_FILE, data: Buffer.from(stringifyJsonSafe(checksums, { space: 2 }), 'utf8') });
@@ -240,6 +268,7 @@ export class Exporter {
       redactedFields: redactedHits.length,
       containsSecrets,
       encrypted,
+      vaultRefreshed,
     });
 
     const report: ExportReport = {
@@ -250,6 +279,7 @@ export class Exporter {
         containsSecrets,
         encrypted,
         redactedHits: redactedHits.length,
+        vaultRefreshed,
       },
       file: { name: path.basename(outPath), sizeBytes: stat.size },
       warnings,

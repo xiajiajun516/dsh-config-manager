@@ -6,8 +6,10 @@
  *   <base>/snapshots/index.json  —— 索引（SyncSnapshotMeta 数组，每个 id 一条）
  *
  * 设计：
- * - upload：先幂等 MKCOL snapshots 集合，再 PUT <id>.json（先快照文件），
- *   然后 GET index → 合并（保留其它 id、覆盖同 id）→ PUT 写回 index。
+ * - upload：先幂等 MKCOL snapshots 集合，再读 index 做「快照级跳过」判定
+ *   （同 id 条目且 sections hash 全等 → 内容未变，跳过 PUT 直接返回远端 meta）；
+ *   否则 PUT <id>.json（先快照文件）→ 合并（保留其它 id、覆盖同 id）→ PUT 写回 index
+ *   （meta 最后落盘：快照文件成功后才写索引）。
  * - list：GET index.json，缺失（404）视为空；按 createdAt 升序返回。
  * - download：GET <id>.json 解析成 SyncSnapshot；不存在必须抛错（契约）。
  * - delete：DELETE <id>.json 并从 index 摘除条目（写回合并后 index）；文件不存在视为成功。
@@ -21,7 +23,7 @@
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
-import { computeSnapshotMeta } from '../transport.ts';
+import { computeSnapshotMeta, sectionsEqual } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 
@@ -153,23 +155,32 @@ export class WebDavTransport implements SyncTransport {
     return this.parseIndex(await res.text(), url, pwd);
   }
 
-  /** 上传快照：幂等 MKCOL → PUT <id>.json → 合并写回 index.json；返回 computeSnapshotMeta。
+  /** 上传快照：幂等 MKCOL → 快照级跳过判定（同 id 且内容全等则免上传）→ PUT <id>.json
+   *  → 合并写回 index.json；返回远端 meta（跳过时）或 computeSnapshotMeta。
    *  序列化经 snapshot-json：文件类分区字节以 base64 传输（JSON 无法直传 Uint8Array）。 */
   async upload(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
     this.assertSafeId(snapshot.id);
     const pwd = await this.passwordOnce();
     await this.ensureCollection(pwd);
+    // 快照级跳过（增量优化）：先读远端 index，同 id 条目与本地内容全等（sections hash 全等）
+    // → 内容未变，直接返回远端 meta，跳过 PUT 快照文件与 index 写回（幂等契约不变）。
+    // 加密快照（computeSnapshotMeta.sections 为空对象）经 sectionsEqual 判定为「无法比较」
+    // → 必须照常上传，绝不跳过。
+    const meta = computeSnapshotMeta(snapshot);
+    const idxBefore = await this.readIndex(pwd);
+    const existing = idxBefore.find((m) => m.id === snapshot.id);
+    if (existing !== undefined && sectionsEqual(existing, meta)) {
+      return existing;
+    }
     // 先写快照文件（JSON 序列化：文件字节 base64 编码，往返无损）
     const snapUrl = this.snapshotUrl(snapshot.id);
     const snapRes = await this.send('PUT', snapUrl, pwd, { body: serializeSnapshot(snapshot) });
     if (!snapRes.ok) {
       throw new WebDavTransportError(await this.failText('PUT', snapUrl, snapRes, pwd));
     }
-    // 再写合并后的 index（先读现有 index，保留其它 id、覆盖同 id）
-    const meta = computeSnapshotMeta(snapshot);
+    // 再写合并后的 index（保留其它 id、覆盖同 id）—— meta 最后落盘
     const idxUrl = this.indexUrl();
-    const idx = await this.readIndex(pwd);
-    const merged = idx.filter((m) => m.id !== snapshot.id);
+    const merged = idxBefore.filter((m) => m.id !== snapshot.id);
     merged.push(meta);
     merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
     const putIdx = await this.send('PUT', idxUrl, pwd, { body: JSON.stringify(merged) });

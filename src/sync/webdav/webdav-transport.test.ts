@@ -4,7 +4,8 @@
  * 验证点（验收判据 m1-red-green + m1-interface）：
  * - 远端布局 <base>/snapshots/<id>.json + <base>/snapshots/index.json
  * - list：GET index.json，缺失视为空，按 createdAt 升序
- * - upload：幂等 MKCOL → PUT <id>.json → 合并写回 index.json；返回 computeSnapshotMeta
+ * - upload：幂等 MKCOL → 快照级跳过（同 id 且 sections hash 全等免上传）→ PUT <id>.json →
+ *   合并写回 index.json（meta 最后落盘）；返回 computeSnapshotMeta
  * - download：GET <id>.json 解析成 SyncSnapshot；不存在抛错（契约）
  * - delete：DELETE <id>.json + 从 index.json 摘除；不存在视为成功
  * - 认证：HTTP Basic（username + credentials.getPassword()），可注入 request
@@ -16,8 +17,10 @@ import assert from 'node:assert/strict';
 
 import { WebDavTransport, WebDavTransportError } from './webdav-transport.ts';
 import type { WebDavRequestFn, WebDavResponse, WebDavTransportOptions } from './webdav-transport.ts';
-import { computeSnapshotMeta } from '../transport.ts';
-import type { SyncSnapshot } from '../transport.ts';
+import { computeSnapshotMeta, sectionsEqual } from '../transport.ts';
+import type { SyncSnapshot, SyncSnapshotMeta } from '../transport.ts';
+import { encryptSectionsPayload } from '../snapshot-crypto.ts';
+import type { SectionData, SectionId } from '../../schema/types.ts';
 
 const TEST_PASSWORD = 'super-secret-password-9876';
 
@@ -161,13 +164,14 @@ test('upload：幂等 MKCOL → PUT <id>.json → 合并写回 index.json，返�
   const meta = await t.upload(sampleSnapshot());
   assert.deepEqual(meta, computeSnapshotMeta(sampleSnapshot()));
 
-  // 请求顺序：MKCOL snapshots → PUT <id>.json → GET index → PUT index
+  // 请求顺序：MKCOL snapshots → GET index（跳过判定）→ PUT <id>.json → PUT index（meta 最后落盘）
   assert.equal(calls[0]!.method, 'MKCOL', '应先创建 snapshots 集合');
   assert.equal(calls[0]!.url, 'https://dav.example.com/dav/config/snapshots/');
-  assert.equal(calls[1]!.method, 'PUT', '先写快照文件');
-  assert.match(calls[1]!.url, /snap-001\.json$/);
-  assert.equal(calls[2]!.method, 'GET', '读现有 index 以合并');
-  assert.equal(calls[3]!.method, 'PUT');
+  assert.equal(calls[1]!.method, 'GET', '应先读 index 做快照级跳过判定');
+  assert.match(calls[1]!.url, /index\.json$/);
+  assert.equal(calls[2]!.method, 'PUT', '再写快照文件');
+  assert.match(calls[2]!.url, /snap-001\.json$/);
+  assert.equal(calls[3]!.method, 'PUT', '最后写 index（meta 最后落盘）');
   assert.match(calls[3]!.url, /index\.json$/);
 });
 
@@ -202,6 +206,119 @@ test('upload：同 id 再上传 → index 合并（保留其他 id，替换同 i
   const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
   await t.upload(sampleSnapshot());
   await t.upload(sampleSnapshot({ createdAt: '2026-08-16T13:00:00.000Z' }));
+});
+
+test('upload 快照级跳过：同 id 且 sections hash 全等 → 跳过 PUT 快照文件与 index 写回，直接返回远端 meta', async () => {
+  const calls = makeCalls();
+  const remoteMeta = computeSnapshotMeta(sampleSnapshot());
+  const handler = (m: MockRequest): WebDavResponse => {
+    if (m.method === 'MKCOL') return res(405, '');
+    if (m.method === 'GET') return res(200, JSON.stringify([remoteMeta]));
+    return res(201, '');
+  };
+  const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
+  const meta = await t.upload(sampleSnapshot());
+  assert.deepEqual(meta, remoteMeta, '内容全等 → 应直接返回远端 meta（含其 createdAt）');
+  assert.deepEqual(calls.map((c) => c.method), ['MKCOL', 'GET'], '只应发生 MKCOL + GET index');
+  assert.ok(!calls.some((c) => c.method === 'PUT'), '内容全等不得发生任何 PUT');
+});
+
+test('upload 快照级跳过：加密快照（sections 为空对象，无法明文比较）→ 必须照常上传，绝不跳过', async () => {
+  const base = sampleSnapshot();
+  const plain: Partial<Record<SectionId, SectionData>> = {};
+  for (const [id, data] of Object.entries(base.sections)) {
+    plain[id as SectionId] = data as SectionData;
+  }
+  const enc = await encryptSectionsPayload(plain, 'pw-12345678');
+  const encSnap = sampleSnapshot({ sections: enc });
+  const remoteMeta = computeSnapshotMeta(encSnap);
+  assert.deepEqual(remoteMeta.sections, {}, '加密快照 meta.sections 应为空对象（密文无法明文比较）');
+  const calls = makeCalls();
+  const handler = (m: MockRequest): WebDavResponse => {
+    if (m.method === 'MKCOL') return res(405, '');
+    if (m.method === 'GET') return res(200, JSON.stringify([remoteMeta]));
+    if (m.method === 'PUT' && m.url.endsWith('/snap-001.json')) return res(201, '');
+    if (m.method === 'PUT' && m.url.endsWith('/index.json')) return res(201, '');
+    return res(405, '');
+  };
+  const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
+  const meta = await t.upload(encSnap);
+  assert.equal(meta.id, 'snap-001');
+  assert.ok(
+    calls.some((c) => c.method === 'PUT' && /snap-001\.json$/.test(c.url)),
+    '加密快照无法比较 → 应照常 PUT 快照文件',
+  );
+  assert.ok(calls.some((c) => c.method === 'PUT' && /index\.json$/.test(c.url)), '应照常写回 index');
+});
+
+test('upload 快照级跳过：同 id 但 sections hash 不同 → 照常上传并覆盖 index 条目（唯一）', async () => {
+  const calls = makeCalls();
+  // 远端同 id 条目内容不同（theme: light vs 本地 dark）
+  const remoteMeta = computeSnapshotMeta(sampleSnapshot({
+    sections: {
+      settings: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 1, secrets: [] } } },
+      providers: { version: 1, providers: { deepseek: { route: '/v1' } } },
+    },
+  }));
+  const handler = (m: MockRequest): WebDavResponse => {
+    if (m.method === 'MKCOL') return res(405, '');
+    if (m.method === 'GET') return res(200, JSON.stringify([remoteMeta]));
+    if (m.method === 'PUT' && m.url.endsWith('/snap-001.json')) return res(201, '');
+    if (m.method === 'PUT' && m.url.endsWith('/index.json')) {
+      const idx = JSON.parse(m.body!) as Array<{ id: string }>;
+      assert.equal(idx.filter((x) => x.id === 'snap-001').length, 1, '同 id 条目应唯一（覆盖）');
+      return res(201, '');
+    }
+    return res(405, '');
+  };
+  const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
+  const meta = await t.upload(sampleSnapshot());
+  assert.equal(meta.id, 'snap-001');
+  assert.ok(
+    calls.some((c) => c.method === 'PUT' && /snap-001\.json$/.test(c.url)),
+    '内容不同 → 应 PUT 快照文件',
+  );
+});
+
+test('upload meta 最后落盘：快照文件 PUT 失败 → 绝不写 index（meta 不得先于快照落盘）', async () => {
+  const calls = makeCalls();
+  const handler = (m: MockRequest): WebDavResponse => {
+    if (m.method === 'MKCOL') return res(405, '');
+    if (m.method === 'GET') return res(404, '');
+    if (m.method === 'PUT' && m.url.endsWith('/snap-001.json')) return res(500, 'disk full');
+    return res(201, '');
+  };
+  const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
+  await assert.rejects(t.upload(sampleSnapshot()), /失败|500/);
+  assert.ok(
+    !calls.some((c) => c.method === 'PUT' && /index\.json$/.test(c.url)),
+    '快照文件未成功 → 不得写 index（meta 最后落盘不变量）',
+  );
+});
+
+/* ---------------- sectionsEqual 纯函数 ---------------- */
+
+test('sectionsEqual：全等 → true；键/值任一不同 → false；本地为空（加密）→ false', () => {
+  const a = computeSnapshotMeta(sampleSnapshot());
+  const same = computeSnapshotMeta(sampleSnapshot());
+  const diff = computeSnapshotMeta(sampleSnapshot({
+    sections: {
+      settings: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 1, secrets: [] } } },
+      providers: { version: 1, providers: { deepseek: { route: '/v1' } } },
+    },
+  }));
+  const fewer = computeSnapshotMeta(sampleSnapshot({
+    sections: {
+      settings: { version: 1, namespaces: { general: { value: { theme: 'dark' }, revision: 1, secrets: [] } } },
+    },
+  }));
+  assert.equal(sectionsEqual(a, same), true, '内容全等 → true');
+  assert.equal(sectionsEqual(a, diff), false, '值不同 → false');
+  assert.equal(sectionsEqual(a, fewer), false, '键集合不同 → false');
+  // 本地为空对象（加密快照 meta）→ 无法比较 → false
+  const empty: SyncSnapshotMeta = { ...a, sections: {} };
+  assert.equal(sectionsEqual(a, empty), false, '本地为空 → false（加密快照必须上传）');
+  assert.equal(sectionsEqual(empty, empty), false, '双方为空 → 仍 false（无法比较）');
 });
 
 /* ---------------- download ---------------- */

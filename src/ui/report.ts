@@ -81,6 +81,11 @@ export function importSectionStats(executed: readonly ExecutedItem[]): ImportSec
 /** 导入报告渲染（含回滚状态；§22 动作按钮由 suggestedActions 给出） */
 export function renderImportReport(result: ImportResult, t: UiT = zhUiT): string {
   const lines: string[] = [result.ok ? t('report.importComplete') : t('report.importFailed'), ''];
+  // F4：被删除墓碑过滤的条目提示（用户明确删过、不复活）
+  if ((result.skippedTombstoned?.length ?? 0) > 0) {
+    lines.push(t('report.tombstonedSkipped', { count: String(result.skippedTombstoned!.length) }));
+    lines.push('');
+  }
   const stats = importSectionStats(result.executed);
   for (const s of stats) {
     const parts: string[] = [];

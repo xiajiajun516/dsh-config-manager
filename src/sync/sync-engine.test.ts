@@ -19,6 +19,8 @@ import { decryptSectionsPayload } from './snapshot-crypto.ts';
 import { computeSnapshotMeta } from './transport.ts';
 import { isEncryptedSections } from './transport.ts';
 import type { EncryptedSections, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
+import { WebDavTransport } from './webdav/webdav-transport.ts';
+import type { WebDavRequestFn } from './webdav/webdav-transport.ts';
 import { createAdapters } from '../adapters/index.ts';
 import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import { Importer } from '../core/importer.ts';
@@ -1089,6 +1091,78 @@ test('hasLocalChanges: 从未同步→true；推后无改动→false；本地改
     // 改动一个 portable 分区（settings.general theme dark→light）→ 有改动
     ctx.settings.ns.set('general', { value: { theme: 'light', language: 'zh-CN' }, revision: 4, secrets: [] });
     assert.equal(await engine.hasLocalChanges(), true, '改动 portable 分区 → true');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push + webdav 快照级跳过：同 id 同内容二次 push → 不重复 PUT 快照文件（端到端组合）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-webdav-skip-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    // 内存 WebDAV「服务器」：snapshots/ 集合 + <id>.json 文件 + index.json
+    const files = new Map<string, string>();
+    const putCalls: string[] = [];
+    const request: WebDavRequestFn = async (method, url, opts = {}) => {
+      const key = url.replace(/\/+$/, '');
+      if (method === 'MKCOL') return { status: 201, ok: true, text: async () => '' };
+      if (method === 'GET') {
+        const body = files.get(key);
+        return body === undefined
+          ? { status: 404, ok: false, text: async () => '' }
+          : { status: 200, ok: true, text: async () => body };
+      }
+      if (method === 'PUT') {
+        putCalls.push(key);
+        files.set(key, opts.body ?? '');
+        return { status: 201, ok: true, text: async () => '' };
+      }
+      if (method === 'DELETE') {
+        files.delete(key);
+        return { status: 204, ok: true, text: async () => '' };
+      }
+      return { status: 405, ok: false, text: async () => '' };
+    };
+    const transport = new WebDavTransport({
+      baseUrl: 'https://dav.example.com/dav/config',
+      username: 'alice',
+      credentials: { getPassword: async () => 'test-password' },
+      request,
+    });
+    const adapters = createAdapters({ namespaces: NS });
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+    const engine = new SyncEngine({
+      ctx,
+      transport,
+      stateDir: tmp,
+      adapters,
+      importer,
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    // 首次 push：上传快照文件 + 写 index
+    const first = await engine.push({ snapshotId: 'sync-001' });
+    assert.equal(first.ok, true);
+    assert.equal(putCalls.filter((k) => k.endsWith('/sync-001.json')).length, 1, '首次 push 应 PUT 快照文件');
+    assert.ok(putCalls.some((k) => k.endsWith('/index.json')), '首次 push 应写 index（meta 最后落盘）');
+
+    // 二次 push：同 id 同内容 → webdav 快照级跳过（不 PUT 快照文件、不写 index）
+    const second = await engine.push({ snapshotId: 'sync-001' });
+    assert.equal(second.ok, true);
+    assert.equal(
+      putCalls.filter((k) => k.endsWith('/sync-001.json')).length,
+      1,
+      '内容无变化 → 不得再次 PUT 快照文件',
+    );
+    assert.equal(
+      putCalls.filter((k) => k.endsWith('/index.json')).length,
+      1,
+      '内容无变化 → 不得再次写 index',
+    );
+    // 远端快照文件仍存在且为首次内容
+    const remote = files.get('https://dav.example.com/dav/config/snapshots/sync-001.json');
+    assert.ok(remote !== undefined && remote.length > 0, '远端快照文件存在');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

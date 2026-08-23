@@ -22,13 +22,36 @@ import { validateMarketRepoUrl } from './url.ts'
 import {
   assertSafeItemId, BANNED_MARKET_SECTIONS, MARKET_ITEM_SCHEMA_VERSION, MAX_MARKET_ZIP_BYTES,
 } from './types.ts'
-import type { MarketItemManifest } from './types.ts'
+import type { MarketItemManifest, MarketPublishMode } from './types.ts'
 
 export class MarketPrepareError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'MarketPrepareError'
   }
+}
+
+/**
+ * 分区可移植性静态判定（F6 share 模式排除依据；对齐 src/adapters/* 的 portability 属性与
+ * ui/export-flow.ts 内置目录——prepare 为纯函数不 import 运行时，故内联静态表）。
+ * secrets 分区按 deviceSpecific 处理（分享模式绝不允许携带秘密内容本身）。
+ */
+const SECTION_PORTABILITY: Record<SectionId, 'portable' | 'deviceSpecific' | 'platformSpecific'> = {
+  settings: 'portable',
+  ui: 'portable',
+  providers: 'portable',
+  plugins: 'portable',
+  mcp: 'platformSpecific',
+  prompts: 'portable',
+  skills: 'portable',
+  agentPresets: 'portable',
+  agentInstructions: 'portable',
+  workspaces: 'platformSpecific',
+  pluginFiles: 'deviceSpecific',
+  credentialsStatus: 'deviceSpecific',
+  secrets: 'deviceSpecific',
+  sessions: 'deviceSpecific',
+  self: 'portable', // self 的 portability 虽为 portable，但已在 BANNED_MARKET_SECTIONS 恒拒绝
 }
 
 /** 发布输入：用户填写的条目元数据 + 配置 zip 字节。 */
@@ -42,6 +65,8 @@ export interface MarketPrepareInput {
   categories?: string[]
   /** 作者托管仓库 URL（可选；留空表示未来与官方市场同仓，provenance.source 省略） */
   repoUrl?: string
+  /** 发布模式：'migrate'（缺省，迁移全带）| 'share'（分享：排除设备/平台分区 + 强制隐私拦截） */
+  mode?: MarketPublishMode
   /** 用户配置 zip 的字节（来自受控临时区） */
   zipBytes: Uint8Array
   /** 测试可注入固定时间（updatedAt）；缺省 now */
@@ -74,6 +99,9 @@ const parseZipHardened = createHardenedZipParser(SAFE_ZIP_LIMITS)
  * 由用户配置 zip 生成市场条目包（纯函数，零写入；异常一律抛 MarketPrepareError）。
  */
 export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResult {
+  // 0. 发布模式：缺省 migrate（迁移全带，行为与历史完全一致）
+  const mode: MarketPublishMode = input.mode === 'share' ? 'share' : 'migrate'
+  const isShare = mode === 'share'
   // 1. id / name 基础校验
   assertSafeItemId(input.itemId)
   if (typeof input.name !== 'string' || input.name.trim() === '') {
@@ -124,10 +152,20 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
       `zip 包含禁止分区 ${bannedHit.join(', ')}（sessions=历史会话 / pluginFiles=任意文件 / self=本地环境），市场条目禁止携带`,
     )
   }
+  // 6b2. 分享模式额外排除：deviceSpecific/platformSpecific 分区（比 BANNED 更严，与 BANNED 同语义——直接拒绝）
+  if (isShare) {
+    const nonPortable = sections.filter((s) => SECTION_PORTABILITY[s] !== 'portable')
+    if (nonPortable.length > 0) {
+      throw new MarketPrepareError(
+        `分享模式禁止携带设备/平台相关分区 ${nonPortable.join(', ')}（含凭据状态 / 会话 / MCP / 工作区等），请仅导出通用可移植分区`,
+      )
+    }
+  }
   // 6c. 内容级秘密扫描（纵深防御，不依赖导出 containsSecrets 标记）：
-  //     JSON 分区走 scanAndRedact 宽松档（literalValueOnly：占位符/模板引用/代码表达式/短标识符
-  //     放行，只有值像真实字面量凭据才拦截——消除 `"token": "${ENV}"`、`Bearer <token>` 等误报）；
-  //     文件类分区（skills/agentPresets/agentInstructions）走 scanText（只报告不改写）。
+  //     migrate 模式：JSON 分区走 scanAndRedact 宽松档（literalValueOnly：占位符/模板引用/代码表达式/
+  //     短标识符放行，只有值像真实字面量凭据才拦截——消除 `"token": "${ENV}"`、`Bearer <token>` 等误报）；
+  //     share 模式：升级为保守档（字段名敏感即拦截，值形状优先）——分享即公开，任何敏感字段痕迹都拒绝；
+  //     文件类分区（skills/agentPresets/agentInstructions）两档均走 scanText（只报告不改写）。
   const scanHits: string[] = []
   for (const sid of sections) {
     if (isFileSection(sid)) {
@@ -140,7 +178,7 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
           continue
         }
         const hits = scanText(text)
-        if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, 5).map((h) => h.path).join(', ')}`)
+        if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, isShare ? 10 : 5).map((h) => h.path).join(', ')}`)
       }
     } else {
       const jsonPath = SECTION_JSON_PATHS[sid]
@@ -151,13 +189,15 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
       } catch {
         continue
       }
-      const { hits } = scanAndRedact(data, { literalValueOnly: true })
-      if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, 5).map((h) => h.path).join(', ')}`)
+      const { hits } = scanAndRedact(data, isShare ? {} : { literalValueOnly: true })
+      if (hits.length > 0) scanHits.push(`${sid}: ${hits.slice(0, isShare ? 10 : 5).map((h) => h.path).join(', ')}`)
     }
   }
   if (scanHits.length > 0) {
+    const limit = isShare ? 10 : 3
+    const suffix = scanHits.length > limit ? '…' : ''
     throw new MarketPrepareError(
-      `检测到疑似敏感内容（${scanHits.slice(0, 3).join('；')}…），市场条目禁止携带凭据，请脱敏后重试`,
+      `检测到疑似敏感内容（${scanHits.slice(0, limit).join('；')}${suffix}），市场条目禁止携带凭据，请脱敏后重试`,
     )
   }
   // 7. SHA-256 + 生成 L2 manifest
@@ -173,6 +213,8 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     ...(input.categories !== undefined && input.categories.length > 0
       ? { categories: input.categories.map((c) => c.trim()).filter((c) => c !== '') }
       : {}),
+    // 分享模式显式落 mode 标记（下载方据此感知内容已按分享规则过滤）；migrate 缺省不写字段（向后兼容）
+    ...(isShare ? { mode: 'share' as const } : {}),
     sections,
     ...(repoUrl !== undefined ? { provenance: { source: repoUrl } } : {}),
     checksums: { zip: sha256 },

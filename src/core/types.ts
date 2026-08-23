@@ -6,6 +6,7 @@
  * 测试用内存 mock 即可驱动完整导出→导入往返。
  */
 import type { EncryptionInfo, Manifest, SectionId, WorkspaceRecord } from '../schema/types.ts';
+import type { TombstoneKind } from '../schema/tombstones.ts';
 import type { Logger } from '../utils/logger.ts';
 import { zhMsg } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
@@ -206,6 +207,15 @@ export interface ImportPlan {
   missingSecrets: { ref: string; required: boolean }[];
   needsRestart: boolean;
   estimatedActions: Record<SectionId, number>;
+  /** F4：被删除墓碑（tombstone）过滤掉的计划项（缺省/空数组 = 无过滤；UI 据此提示用户） */
+  skippedTombstoned?: SkippedTombstone[];
+}
+
+/** F4：被墓碑过滤的计划项记录（条目级：kind+id；分区级：kind='section'，id=分区 id） */
+export interface SkippedTombstone {
+  kind: TombstoneKind;
+  id: string;
+  adapter: SectionId;
 }
 
 export interface ExecutedItem {
@@ -226,6 +236,8 @@ export interface ImportResult {
   warnings: string[];
   rollback: RollbackReport | null;
   snapshotId: string | null;
+  /** F4：本次导入被删除墓碑过滤掉的条目（缺省/空 = 无过滤；UI 据此提示用户） */
+  skippedTombstoned?: SkippedTombstone[];
 }
 
 /* ---------------- 导入上下文（传给 adapter.analyzeImport / applyItem） ---------------- */
@@ -341,6 +353,8 @@ export interface ExportReport {
     containsSecrets: boolean;
     encrypted: boolean;
     redactedHits: number;
+    /** 本次导出镜像到本机 vault 的敏感文件数（文件级 vault；0 或缺失 = 未镜像） */
+    vaultRefreshed?: number;
   };
   file: { name: string; sizeBytes: number };
   warnings: string[];

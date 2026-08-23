@@ -69,7 +69,9 @@ export class RunConflictError extends Error {
           ? '自动同步已在进行中'
           : kind === 'sync-apply'
             ? '一键同步已在进行中'
-            : msg('run.conflict.import', { runId }),
+            : kind === 'backup-schedule'
+              ? '定时备份已在进行中'
+              : msg('run.conflict.import', { runId }),
     )
     this.name = 'RunConflictError'
     this.runId = runId

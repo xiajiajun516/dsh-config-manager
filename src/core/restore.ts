@@ -24,6 +24,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { resolveFileTarget } from './backup.ts';
+import { expectedSessionRefs, sweepGhostSessions } from './ghost-sweep.ts';
 import { zhMsg } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
 import {
@@ -109,6 +110,12 @@ export interface RestoreReport {
   failed: { item: string; reason: string }[];
   /** 跳过项（无动作 / 离线无法处理） */
   skipped: string[];
+  /**
+   * 幽灵会话（F5 失效归档清理）：快照记录的 sessions 分区会话在磁盘 sessions 目录
+   * 已无任何文件（备份有记录、磁盘无文件）。DSH 官方无归档会话 API，降级本地校验，
+   * 仅供报告、需人工在 DSH 确认清理；无会话分区/无幽灵时为缺省或空数组。
+   */
+  ghostSessions?: string[];
 }
 
 export interface SnapshotMeta {
@@ -552,7 +559,51 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
     }
   }
 
+  // F5 幽灵会话校验（file 类会话条目写回后）：快照记录的会话清单 vs 磁盘 sessions 目录
+  // 实际文件，报告失效归档（备份有记录、磁盘无文件）。DSH 无归档会话 API，仅报告不
+  // 自动清理；校验失败不拖垮已完成的恢复动作，如实记入 failed。
+  try {
+    const ghostSessions = await sweepRestoredSessions(snapshotDir, homeDir, msg);
+    report.ghostSessions = ghostSessions;
+    if (ghostSessions.length > 0) {
+      report.skipped.push(
+        msg('restore.ghostSweepSummary', { count: String(ghostSessions.length), keys: ghostSessions.join(', ') }),
+      );
+    }
+  } catch (err) {
+    report.failed.push({ item: 'ghost-sweep', reason: err instanceof Error ? err.message : String(err) });
+  }
+
   return report;
+}
+
+/* ------------------------------------------------------------ 幽灵会话（F5） */
+
+/**
+ * 磁盘 sessions 目录实际相对路径清单（相对 <homeDir>/sessions；目录缺失视为空）。
+ * 用 node fs 递归列举（离线引擎不依赖 HostContext），分隔符由 sessionKeyOf 归一。
+ */
+async function listSessionEntries(homeDir: string): Promise<string[]> {
+  const base = path.join(homeDir, 'sessions');
+  try {
+    return await fs.readdir(base, { recursive: true });
+  } catch {
+    return []; // 目录不存在（无会话分区）→ 空
+  }
+}
+
+/**
+ * 幽灵会话本地校验（F5 降级方案）：
+ * 快照记录的 sessions 分区 file 条目（existed=true，恢复后应存在）与磁盘
+ * <homeDir>/sessions 实际条目对比，返回「备份有记录、磁盘无文件」的失效会话键。
+ * DSH 官方无归档会话 API（core/types.ts 未暴露 archivedSessionIds/unarchive），
+ * 故不清理 DSH 归档列表，仅报告供人工确认。
+ */
+async function sweepRestoredSessions(snapshotDir: string, homeDir: string, msg: MsgFunc): Promise<string[]> {
+  const snapshot = await loadSnapshot(snapshotDir, msg);
+  const expected = expectedSessionRefs(snapshot.entries ?? []);
+  if (expected.length === 0) return [];
+  return sweepGhostSessions(expected, await listSessionEntries(homeDir));
 }
 
 /* ------------------------------------------------------------ listSnapshots */

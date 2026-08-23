@@ -275,3 +275,111 @@ test('prepare：name 空拒绝', () => {
     (err: unknown) => err instanceof MarketPrepareError && /name 必填/.test(err.message),
   )
 })
+
+/* ================= F6 迁移/分享双模式 ================= */
+
+test('prepare：share 模式拒绝设备相关分区（credentialsStatus），migrate 不受影响', () => {
+  // share：credentialsStatus（deviceSpecific）→ 比 BANNED 更严的分享排除，直接拒绝
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'cs', name: 'CS', mode: 'share',
+      zipBytes: makeValidZip({ sections: { settings: true, credentialsStatus: true } }),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /设备\/平台相关分区/.test(err.message),
+  )
+  // migrate（缺省）：credentialsStatus 不在 BANNED → 放行（行为不变，向后兼容）
+  const res = prepareMarketItem({
+    itemId: 'cs2', name: 'CS2',
+    zipBytes: makeValidZip({ sections: { settings: true, credentialsStatus: true } }),
+  })
+  assert.deepEqual(JSON.parse(res.manifestText).sections, ['settings', 'credentialsStatus'])
+})
+
+test('prepare：share 模式拒绝平台相关分区（mcp/workspaces），migrate 放行', () => {
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'mcp1', name: 'MCP1', mode: 'share',
+      zipBytes: makeValidZip({ sections: { settings: true, mcp: true } }),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /mcp/.test(err.message),
+  )
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'ws1', name: 'WS1', mode: 'share',
+      zipBytes: makeValidZip({ sections: { settings: true, workspaces: true } }),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /workspaces/.test(err.message),
+  )
+  // migrate：mcp/workspaces 允许（不在 BANNED）
+  const res = prepareMarketItem({
+    itemId: 'mcp2', name: 'MCP2',
+    zipBytes: makeValidZip({ sections: { settings: true, mcp: true } }),
+  })
+  assert.deepEqual(JSON.parse(res.manifestText).sections, ['settings', 'mcp'])
+})
+
+test('prepare：share 模式内容级保守档拦截（占位符值也拦），migrate 宽松档放行', () => {
+  // providers 分区 apiKey 值为占位符：migrate 宽松档放行（值不是真实凭据），share 保守档拦截（字段名敏感即拦）
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
+  const providersJson = JSON.stringify({
+    version: 1,
+    providers: { deepseek: { apiKey: 'your-api-key', baseUrl: 'https://api.deepseek.com' } },
+  }, null, 2)
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'ai/providers.json', data: Buffer.from(providersJson) },
+  ]
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { settings: true, providers: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  const zip = Buffer.from(zipToBuffer(entries))
+  // migrate：占位符值放行（宽松档语义不变）
+  const res = prepareMarketItem({ itemId: 'pv3', name: 'PV3', zipBytes: zip })
+  assert.deepEqual(JSON.parse(res.manifestText).sections, ['settings', 'providers'])
+  // share：保守档强制拦截（apiKey 字段名敏感即拦，占位符也不例外）
+  assert.throws(
+    () => prepareMarketItem({ itemId: 'pv4', name: 'PV4', mode: 'share', zipBytes: zip }),
+    (err: unknown) => err instanceof MarketPrepareError && /敏感内容/.test(err.message),
+  )
+})
+
+test('prepare：share 模式真实字面量密钥仍拦截（不回退），且 manifest 落 mode 标记', () => {
+  // share + 真实凭据（值形状 sk-）→ 拦截
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2)
+  const providersJson = JSON.stringify({
+    version: 1,
+    providers: { deepseek: { apiKey: 'sk-proj-9f8e7d6c5b4a3210abcdef' } },
+  }, null, 2)
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'ai/providers.json', data: Buffer.from(providersJson) },
+  ]
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { settings: true, providers: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  const zip = Buffer.from(zipToBuffer(entries))
+  assert.throws(
+    () => prepareMarketItem({ itemId: 'pv5', name: 'PV5', mode: 'share', zipBytes: zip }),
+    (err: unknown) => err instanceof MarketPrepareError && /敏感内容/.test(err.message),
+  )
+  // share + 纯 portable 分区（settings）→ 成功，manifest 显式落 mode: 'share'
+  const shareRes = prepareMarketItem({ itemId: 'sh1', name: 'SH1', mode: 'share', zipBytes: makeValidZip() })
+  const shareManifest = JSON.parse(shareRes.manifestText) as Record<string, unknown>
+  assert.equal(shareManifest['mode'], 'share')
+  // migrate（缺省）→ manifest 不含 mode 字段（向后兼容：不破坏现有发布产物）
+  const migrateRes = prepareMarketItem({ itemId: 'mg1', name: 'MG1', zipBytes: makeValidZip() })
+  const migrateManifest = JSON.parse(migrateRes.manifestText) as Record<string, unknown>
+  assert.equal('mode' in migrateManifest, false)
+})

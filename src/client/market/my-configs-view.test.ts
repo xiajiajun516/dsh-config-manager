@@ -357,7 +357,7 @@ test('my-configs-view: toMyWizardSlice 去掉瞬态字段（validating/running/f
     validating: true,
     validated: true,
     validationError: null,
-    form: { name: 'My Config', description: 'desc', categories: 'a, b', id: 'my-config' },
+    form: { name: 'My Config', description: 'desc', categories: 'a, b', id: 'my-config', publishMode: 'migrate' },
     formErrors: { name: null },
     running: true,
     result: uploadResult(),
@@ -370,7 +370,7 @@ test('my-configs-view: toMyWizardSlice 去掉瞬态字段（validating/running/f
   assert.equal(s.fileName, 'cfg.zip')
   assert.equal(s.validated, true, 'validated 保留（已校验通过状态值得持久化）')
   assert.equal(s.validationError, null)
-  assert.deepEqual(s.form, { name: 'My Config', description: 'desc', categories: 'a, b', id: 'my-config' })
+  assert.deepEqual(s.form, { name: 'My Config', description: 'desc', categories: 'a, b', id: 'my-config', publishMode: 'migrate' })
   assert.equal(s.result, w.result, 'result 为纯 JSON 直接引用')
   assert.equal(s.error, null)
   // 瞬态/派生字段不进入切片
@@ -406,7 +406,7 @@ test('my-configs-view: restoreMyWizard(slice) → 瞬态归零、formErrors 按 
     fileName: 'cfg.zip',
     validated: true,
     validationError: null,
-    form: { name: 'My Config', description: '', categories: '', id: 'my-config' },
+    form: { name: 'My Config', description: '', categories: '', id: 'my-config', publishMode: 'migrate' },
     result: uploadResult(),
     error: null,
   }

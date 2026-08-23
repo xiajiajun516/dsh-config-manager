@@ -7,6 +7,7 @@ Backup, restore, export, import, migrate and sync your complete DeepSeek Harness
 - 🔄 **Backup & Restore** DeepSeek Harness configuration
 - 📦 **Export / Import** complete DSH configuration
 - 🚚 **Migrate** DSH to another machine
+- ⏰ **Scheduled full backups** — automatic, on your own cadence (6h / 12h / 24h / 7d), secrets never included
 - 🔌 Backup installed **plugins** and plugin configuration
 - 🧩 Backup **MCP servers** and **Skills**
 - 🔐 Encrypted backups with optional credentials
@@ -53,6 +54,10 @@ Move your complete DeepSeek Harness setup without manually reinstalling plugins,
 
 Keep portable configuration synchronized between machines through a private Git repository or WebDAV — secrets never sync.
 
+### Schedule automatic full backups
+
+Turn on scheduled backups (6h / 12h / 24h / 7d) and DSH quietly keeps a fresh full backup of your configuration in the background — secrets are never included, so it stays safe on disk without a password.
+
 ### Discover & install configurations from the marketplace
 
 Browse the built-in official market for ready-made configurations (model providers, plugins, MCP servers, skills, agent presets…), preview what would be imported (dry-run), and install with one click — supply-chain warnings are always shown and every section must be explicitly approved before anything is written.
@@ -72,6 +77,7 @@ Browse the built-in official market for ready-made configurations (model provide
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
 | 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo or WebDAV** (secrets never sync) |
+| ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d) — set-and-forget, secrets never included |
 | 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-section approval |
 | 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime |
 | 🌐 | **Bilingual UI** | Interface, reports and error details follow the DSH app language (中文 / English) |

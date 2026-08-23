@@ -94,17 +94,30 @@ function isExampleSecretShape(matched: string): boolean {
 /** 值形状命中详情（模式名 + 实际匹配片段；示例降噪用） */
 interface ValuePatternHit { name: string; matched: string }
 
-function matchSecretValuePatternHit(value: string): ValuePatternHit | null {
+function matchSecretValuePatternHit(
+  value: string,
+  extraPatterns: readonly ValuePattern[] = [],
+): ValuePatternHit | null {
+  // 默认内置模式优先，个人化附加模式其次（返回的模式名语义以内置为准，附加模式不抢占）
   for (const p of SECRET_VALUE_PATTERNS) {
+    const m = p.re.exec(value);
+    if (m !== null) return { name: p.name, matched: m[0] };
+  }
+  for (const p of extraPatterns) {
     const m = p.re.exec(value);
     if (m !== null) return { name: p.name, matched: m[0] };
   }
   return null;
 }
 
-/** 值是否命中强模式 secret 形状（示例/占位形态 → null；返回命中模式名；未命中返回 null） */
-export function matchSecretValuePattern(value: string): string | null {
-  const hit = matchSecretValuePatternHit(value);
+/** 值是否命中强模式 secret 形状（示例/占位形态 → null；返回命中模式名；未命中返回 null）。
+ *  extraPatterns 为可选的个人化附加值形状模式（与 SECRET_VALUE_PATTERNS 合并判定，默认内置优先）；
+ *  单参调用行为与历史完全一致（向后兼容）。 */
+export function matchSecretValuePattern(
+  value: string,
+  extraPatterns: readonly ValuePattern[] = [],
+): string | null {
+  const hit = matchSecretValuePatternHit(value, extraPatterns);
   if (hit === null) return null;
   if (isExampleSecretShape(hit.matched)) return null;
   return hit.name;
@@ -115,6 +128,11 @@ export interface SecretScannerOptions {
   extraFieldNames?: string[];
   /** 附加引用字段名（规范化后精确命中即豁免） */
   extraReferenceFields?: string[];
+  /**
+   * 附加值形状强模式（个人化规则，如昵称/用户名格式；与 SECRET_VALUE_PATTERNS 合并参与值形状判定，
+   * 默认内置模式优先；示例/占位形态同样降噪放行）。来自部署配置 personalPatterns，不进开源代码。
+   */
+  extraValuePatterns?: ValuePattern[];
   /** 值形状启发式开关（默认 true） */
   valuePatterns?: boolean;
   /** 高熵长串启发式（默认 false：误伤风险高，需显式开启） */
@@ -223,11 +241,12 @@ function looksLikeCredential(value: string): boolean {
 
 /** 值是否为「字面量密钥」：既不是代码表达式，也不是占位符/类型词/短标识符/环境引用。
  *  只有字段名敏感 **且** 值像真实字面量凭据时才报告 —— 消除技能文档中
- *  `authToken: string`、`password: process.env.X`、`token: data.token` 等代码示例误报。 */
-function isLiteralSecretValue(value: string): boolean {
+ *  `authToken: string`、`password: process.env.X`、`token: data.token` 等代码示例误报。
+ *  extraPatterns 为个人化附加值形状模式，与内置模式一同参与「值形状强信号」判定。 */
+function isLiteralSecretValue(value: string, extraPatterns: readonly ValuePattern[] = []): boolean {
   if (value === '') return false;
-  // 值形状强信号（sk- / ghp_ / AKIA / JWT / PEM / Bearer，示例/占位形态已降噪）—— 任何字段都视为真凭据
-  if (matchSecretValuePattern(value) !== null) return true;
+  // 值形状强信号（sk- / ghp_ / AKIA / JWT / PEM / Bearer / 个人化附加形状，示例/占位形态已降噪）—— 任何字段都视为真凭据
+  if (matchSecretValuePattern(value, extraPatterns) !== null) return true;
   if (PLACEHOLDER_RE.test(value)) return false;
   if (TYPE_KEYWORD_RE.test(value)) return false;
   if (isCodeExpressionValue(value)) return false;
@@ -242,16 +261,16 @@ function isLiteralSecretValue(value: string): boolean {
 /** 判定单个「字段名 + 字符串值」：strip | keep（含引用豁免与值形状）
  * 顺序：值形状优先（AKIA 等全大写 secret 形状不能被 env 名豁免误放）→ 引用字段 → env 名 → 字段名。
  * 宽松档（literalValueOnly，市场发布）：字段名命中还要求值像真实字面量凭据（非占位/引用/代码）。 */
-function judgeFieldValue(field: string, value: string, opts: Required<Pick<SecretScannerOptions, 'extraFieldNames' | 'extraReferenceFields' | 'valuePatterns' | 'highEntropy' | 'literalValueOnly'>>): boolean {
+function judgeFieldValue(field: string, value: string, opts: Required<Pick<SecretScannerOptions, 'extraFieldNames' | 'extraReferenceFields' | 'extraValuePatterns' | 'valuePatterns' | 'highEntropy' | 'literalValueOnly'>>): boolean {
   if (value === '') return false;
   if (opts.literalValueOnly) {
     // 宽松档（市场发布扫描）：值形状强信号字段无关必拦；字段名敏感 + 值像真实字面量凭据才拦
-    if (opts.valuePatterns && matchSecretValuePattern(value) !== null) return true;
-    if (isSensitiveFieldName(field, opts.extraFieldNames) && isLiteralSecretValue(value)) return true;
+    if (opts.valuePatterns && matchSecretValuePattern(value, opts.extraValuePatterns) !== null) return true;
+    if (isSensitiveFieldName(field, opts.extraFieldNames) && isLiteralSecretValue(value, opts.extraValuePatterns)) return true;
     return false;
   }
   // 保守档（导出/同步脱敏）：值形状优先 → 引用字段/env 名豁免 → 字段名敏感即剥
-  if (opts.valuePatterns && matchSecretValuePattern(value) !== null) return true;
+  if (opts.valuePatterns && matchSecretValuePattern(value, opts.extraValuePatterns) !== null) return true;
   if (isReferenceField(field, opts.extraReferenceFields)) return false;
   if (isEnvVarName(value)) return false; // 值是 env 变量名 → 引用
   if (isSensitiveFieldName(field, opts.extraFieldNames)) return true;
@@ -262,9 +281,10 @@ function judgeFieldValue(field: string, value: string, opts: Required<Pick<Secre
 /** 递归扫描 + 剥离（纯函数，不改原数据；深度保护；返回清洗后数据与命中清单） */
 export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): { sanitized: unknown; hits: SensitiveHit[] } {
   const maxDepth = opts.maxDepth ?? 64;
-  const cfg: Required<Pick<SecretScannerOptions, 'extraFieldNames' | 'extraReferenceFields' | 'valuePatterns' | 'highEntropy' | 'literalValueOnly'>> = {
+  const cfg: Required<Pick<SecretScannerOptions, 'extraFieldNames' | 'extraReferenceFields' | 'extraValuePatterns' | 'valuePatterns' | 'highEntropy' | 'literalValueOnly'>> = {
     extraFieldNames: opts.extraFieldNames ?? [],
     extraReferenceFields: opts.extraReferenceFields ?? [],
+    extraValuePatterns: opts.extraValuePatterns ?? [],
     valuePatterns: opts.valuePatterns ?? true,
     highEntropy: opts.highEntropy ?? false,
     literalValueOnly: opts.literalValueOnly ?? false,
@@ -350,6 +370,7 @@ const FIELD_VALUE_RE = [
 export function scanText(text: string, opts: SecretScannerOptions = {}): SensitiveHit[] {
   const hits: SensitiveHit[] = [];
   const extra = opts.extraFieldNames ?? [];
+  const extraPatterns = opts.extraValuePatterns ?? [];
   const valuePatterns = opts.valuePatterns ?? true;
   const lines = text.split(/\r?\n/);
 
@@ -365,14 +386,14 @@ export function scanText(text: string, opts: SecretScannerOptions = {}): Sensiti
         const value = m[2]!;
         if (!isSensitiveFieldName(field, extra)) continue;
         // 值必须是「疑似字面量凭据」才报告（消除代码示例/占位符误报）
-        if (!isLiteralSecretValue(value)) continue;
+        if (!isLiteralSecretValue(value, extraPatterns)) continue;
         hits.push({ path: linePath, field });
       }
     }
-    // 值形状（字段名无关；整行 trim 后匹配 sk-/ghp_/JWT/PEM/Bearer 等强信号，示例形态已降噪）
+    // 值形状（字段名无关；整行 trim 后匹配 sk-/ghp_/JWT/PEM/Bearer 及个人化附加形状等强信号，示例形态已降噪）
     if (valuePatterns) {
       const trimmed = line.trim();
-      const name = matchSecretValuePattern(trimmed);
+      const name = matchSecretValuePattern(trimmed, extraPatterns);
       if (name !== null) hits.push({ path: linePath, field: `(${name})` });
     }
   }
@@ -389,4 +410,36 @@ export function createSecretScanner(opts: SecretScannerOptions = {}): SecretScan
       return scanText(text, opts);
     },
   };
+}
+
+/**
+ * 部署配置（F2 个人隐私规则注入，对齐 dsh-packer config.personalPatterns 设计）：
+ * 通用隐私规则开源内置（DEFAULT_SECRET_FIELD_NAMES / SECRET_VALUE_PATTERNS 等），
+ * 个人化规则（昵称/用户名等）由部署者注入，不进开源代码。
+ */
+export interface ConfiguredSecretPatterns {
+  /** 附加敏感字段名（个人账号/昵称等字段） */
+  extraFieldNames?: string[];
+  /** 附加引用字段名（值只是名字，如引用环境变量名的个人字段） */
+  extraReferenceFields?: string[];
+  /** 附加值形状强模式（个人昵称/用户名等一眼可辨格式） */
+  extraValuePatterns?: ValuePattern[];
+}
+
+/** 从部署配置构造扫描器；未配置（undefined 或全部为空）时返回默认 createSecretScanner()，
+ *  行为与默认完全一致。配置了个人化规则时将其作为附加字段名 / 引用字段 / 值形状模式合并进扫描器。 */
+export function createConfiguredSecretScanner(
+  patterns: ConfiguredSecretPatterns | undefined,
+): SecretScanner {
+  if (patterns === undefined) return createSecretScanner();
+  const isEmpty =
+    (patterns.extraFieldNames?.length ?? 0) === 0 &&
+    (patterns.extraReferenceFields?.length ?? 0) === 0 &&
+    (patterns.extraValuePatterns?.length ?? 0) === 0;
+  if (isEmpty) return createSecretScanner();
+  return createSecretScanner({
+    extraFieldNames: patterns.extraFieldNames,
+    extraReferenceFields: patterns.extraReferenceFields,
+    extraValuePatterns: patterns.extraValuePatterns,
+  });
 }

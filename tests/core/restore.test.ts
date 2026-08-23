@@ -198,6 +198,7 @@ test('R-03 restore 执行：blob 写回 + pre-restore 双保险 + 插件卸载 +
     assert.ok(report.restored.includes('settings.yaml'));
     assert.ok(report.restored.includes('skills/coding.md'));
     assert.ok(report.restored.includes('profiles/web/cordis.patch.yml'), '删除项也计入 restored（已回到快照状态）');
+    assert.deepEqual(report.ghostSessions, [], '无 sessions 分区条目 → 无幽灵会话');
 
     // pre-restore 双保险：3 个当前文件（settings.yaml / coding.md / profile patch）各有副本
     const pre = path.join(f.snapshotDir, 'pre-restore');
@@ -227,6 +228,53 @@ test('R-04 restore 失败项如实报告（卸载失败不拖垮其余）', asyn
     assert.ok(report.restored.includes('settings.yaml'), '整文件还原仍成功');
     assert.ok(report.failed.some((x) => x.item === 'plugin:dsh-find-plugin' && x.reason.includes('模拟 pnpm 卸载失败')), '卸载失败如实记录');
     assert.deepEqual(report.removedPlugins, []);
+  });
+});
+
+test('R-07 F5 幽灵会话：恢复后校验快照会话 vs 磁盘实际文件，报告失效归档（混合场景）', async () => {
+  await withTmp(async (tmp) => {
+    // s1 blob 齐全 → 还原落盘；s2 blob 缺失 → 跳过（磁盘无文件 → 幽灵）；s3 快照时不存在 → 不参与判定
+    const snapshot = makeSnapshot({
+      beforePlugins: [],
+      hostFileBackups: [],
+      entries: [
+        { kind: 'file', adapter: 'sessions', ref: 'proj-a/s1/session.jsonl.zstd', before: { contentHash: 'h1' }, existed: true, copiedTo: 'blobs/sess-s1', snapshotId: 'snap-m2-1' },
+        { kind: 'file', adapter: 'sessions', ref: 'proj-b/s2/session.jsonl.zstd', before: { contentHash: 'h2' }, existed: true, copiedTo: 'blobs/sess-s2', snapshotId: 'snap-m2-1' },
+        { kind: 'file', adapter: 'sessions', ref: 'proj-c/s3/session.jsonl.zstd', before: null, existed: false },
+      ],
+    });
+    const f = await makeFixture(tmp, snapshot, { 'blobs/sess-s1': 'SESSION S1\n' });
+
+    const report = await restore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web' });
+
+    // s1 还原落盘
+    assert.equal(
+      await fs.readFile(path.join(f.homeDir, 'sessions', 'proj-a', 's1', 'session.jsonl.zstd'), 'utf8'),
+      'SESSION S1\n',
+      's1 blob 写回磁盘',
+    );
+    // s2 blob 缺失 → 不落盘 → 幽灵；s3 existed=false 不参与
+    assert.deepEqual(report.ghostSessions, ['proj-b/s2'], '仅磁盘缺失的会话算幽灵');
+    assert.ok(report.skipped.some((s) => s.includes('proj-b/s2')), '幽灵会话汇总进入 skipped 供报告展示');
+    // 磁盘事实核对：s2 目录不存在
+    await assert.rejects(fs.access(path.join(f.homeDir, 'sessions', 'proj-b', 's2')), undefined, 's2 目录不存在');
+  });
+});
+
+test('R-08 F5 幽灵会话：全部 blob 齐全 → 无幽灵', async () => {
+  await withTmp(async (tmp) => {
+    const snapshot = makeSnapshot({
+      beforePlugins: [],
+      hostFileBackups: [],
+      entries: [
+        { kind: 'file', adapter: 'sessions', ref: 'proj-a/s1/session.jsonl.zstd', before: { contentHash: 'h1' }, existed: true, copiedTo: 'blobs/sess-s1', snapshotId: 'snap-m2-1' },
+      ],
+    });
+    const f = await makeFixture(tmp, snapshot, { 'blobs/sess-s1': 'SESSION S1\n' });
+
+    const report = await restore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web' });
+
+    assert.deepEqual(report.ghostSessions, [], '磁盘存在全部期望会话 → 无幽灵');
   });
 });
 
