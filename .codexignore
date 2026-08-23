@@ -1,0 +1,15 @@
+# .codexignore — 防止本地产物/敏感文件被 AI 工具扫描打包
+# 与 .gitignore 保持同步（构建产物与本地工具目录一律排除）
+
+node_modules/
+lib/
+dist/
+outputs/
+my-video/
+.vibeskills/
+.agent-teams/
+coverage/
+*.log
+.env
+.env.*
+.DS_Store
