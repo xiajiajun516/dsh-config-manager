@@ -25,7 +25,7 @@
  * 控制器实例（ImportWizard）由 store 缓存复用；每次 wizard 动作后 syncWizard()
  * 把控制器快照镜像进 store（非敏感字段持久化）。
  */
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { useSyncExternalStore } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
@@ -103,18 +103,61 @@ function SecretsForm({
  * （逐计划项操作 `▶/✓/⚠/✗/–` + 子进程命令行 `$ dsh plugin …`）。
  * - 数据来自 Host RunRegistry（经 /progress 轮询回传），行文本仅非敏感内容，
  *   渲染前再过 redact() 兜底（安全不变量：UI 展示文本先脱敏）；
- * - 限高内滚（logScroll）+ 新行自动滚到底部（新命令持续追加时无需手动滚动）。
+ * - 限高内滚（logScroll）；**智能自动滚动**：仅当用户贴近底部时跟随最新行；
+ *   用户向上滚动查看历史时不强制拉回，改显示「↓ 新输出」提示，点击再滚到底部；
+ * - memo 自定义比较：lines 数组为同一引用被 append（RunState.log push 不换引用），
+ *   按引用浅比较无法感知新行 —— 比较长度 + t 引用，避免整页轮询反复重渲染整个列表。
  */
-function ImportLogPanel({ lines, t }: { lines: string[]; t: TranslateNS<'config-manager'> }) {
+function ImportLogPanelBase({ lines, t }: { lines: string[]; t: TranslateNS<'config-manager'> }) {
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  /** 是否贴底（用户上滚置 false；滚动回底部自动恢复） */
+  const stickRef = useRef(true)
+  /** 用户上滚后是否有新行到达（显示「↓ 新输出」；点击跳到底部清除） */
+  const [hasNewOutput, setHasNewOutput] = useState(false)
+  /** 上次渲染的行数（memo 外比较用；新行 = 长度增加） */
+  const prevCountRef = useRef(lines.length)
+
   useEffect(() => {
     const el = scrollRef.current
-    if (el !== null) el.scrollTop = el.scrollHeight
+    if (el === null) return
+    if (stickRef.current) {
+      el.scrollTop = el.scrollHeight
+      setHasNewOutput(false)
+    } else if (lines.length > prevCountRef.current) {
+      // 用户已上滚且有新行到达：提示而非强制拉回（§24 自动滚动纪律）
+      setHasNewOutput(true)
+    }
+    prevCountRef.current = lines.length
   }, [lines.length])
+
+  /** 滚动中更新贴底状态（上滚 → 停止跟随；滚回底部 → 恢复跟随并清除提示） */
+  const onScroll = (): void => {
+    const el = scrollRef.current
+    if (el === null) return
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+    stickRef.current = nearBottom
+    if (nearBottom) setHasNewOutput(false)
+  }
+
+  /** 「↓ 新输出」：跳到底部 + 恢复跟随 */
+  const jumpToBottom = (): void => {
+    const el = scrollRef.current
+    if (el !== null) el.scrollTop = el.scrollHeight
+    stickRef.current = true
+    setHasNewOutput(false)
+  }
+
   return (
     <div className={css.logPanel}>
-      <div className={css.logHeader}>{t('import.log.title')}</div>
-      <div className={css.logScroll} ref={scrollRef}>
+      <div className={css.logHeader}>
+        {t('import.log.title')}
+        {hasNewOutput && (
+          <button type="button" className={css.logJumpButton} onClick={jumpToBottom}>
+            ↓ {t('import.log.newOutput')}
+          </button>
+        )}
+      </div>
+      <div className={css.logScroll} ref={scrollRef} onScroll={onScroll}>
         {lines.length === 0
           ? <div className={css.logEmpty}>{t('import.log.empty')}</div>
           : lines.map((line, i) => (
@@ -124,6 +167,12 @@ function ImportLogPanel({ lines, t }: { lines: string[]; t: TranslateNS<'config-
     </div>
   )
 }
+
+/** memo：lines 数组为同一引用被 append（RunState.log push 不换引用），浅比较失效 ——
+ *  自定义比较以行数 + t 引用为准，长度未变时跳过整个列表重渲染。 */
+const ImportLogPanel = memo(ImportLogPanelBase, (prev, next) =>
+  prev.lines.length === next.lines.length && prev.t === next.t,
+)
 
 /**
  * 导入向导主视图。
@@ -308,10 +357,14 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
    * 解密密码交给向导——整个导入只输入这一次密码，没有第二个密码校验页面。 */
   const onUnlockArchive = async (): Promise<void> => {
     if (imp.zipPath === null) return
+    // 竞态守卫：解锁/继续分析期间用户可能点「重新选择」（resetWizard 递增 pickGeneration），
+    // 此时丢弃在途结果，防止晚到的 selectZip 把已重置的向导推进到 compatibility。
+    const generation = pickGeneration.current
     setUnlocking(true)
     setArchiveUnlockError(null)
     try {
       const { refs } = await wizard.unlockArchive(imp.zipPath, archivePassword)
+      if (generation !== pickGeneration.current) return
       // 容器密码即内部凭据解密密码：交给向导（execute 时解密 secrets.enc 用）
       wizard.setDecryptPassword(archivePassword)
       // refs 为解锁时顺带解出的凭据覆盖清单（非值）：secrets 阶段据此剔除已恢复项
@@ -326,12 +379,14 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
       // 解锁成功：继续「选 ZIP → 分析 → 兼容性」流程（selectZip 内部步进到 compatibility）
       const analysis = await wizard.selectZip(imp.zipPath!)
       void analysis
+      if (generation !== pickGeneration.current) return
       runStore.syncWizard()
       // 解锁后 phase 不再停留在 decrypt-archive，否则 preview 页会被解锁页劫持。
       // 用最新 store 快照计算下一阶段：decrypt-archive 已解锁（archiveUnlocked=true）
       // 不再适用，nextFlowPhase 取第一项——conflicts、path-mapping、secrets 或 confirm。
       runStore.patch({ import: { phase: 'preview' } })
     } catch (err) {
+      if (generation !== pickGeneration.current) return
       setArchiveUnlockError(err instanceof Error ? err.message : String(err))
       runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
       runStore.syncWizard()

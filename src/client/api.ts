@@ -29,6 +29,7 @@ import type { ExportOptions, ExportReport } from '../core/types.ts';
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.ts';
 import type { RunState } from '../core/run-registry.ts';
 import type { Manifest } from '../schema/types.ts';
+import type { BackupScheduleStatus, BackupRunResult, BackupScheduleDraft } from '../ui/backup-schedule.ts';
 import { zhUiT, type UiT } from '../ui/i18n.ts';
 
 /** Host 半健康检查响应（plugin 版本 / DSH 版本 / 平台，用于主页横幅与兼容性说明） */
@@ -132,6 +133,8 @@ export const CONFIG_MANAGER_API = {
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
   restore: '/api/dsh-config-manager/restore',
+  backupSchedule: '/api/dsh-config-manager/backup-schedule',
+  backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
   starPrompt: '/api/dsh-config-manager/star-prompt',
 } as const;
 
@@ -462,5 +465,34 @@ export class ConfigManagerApi {
       body: JSON.stringify({ snapshotId, dryRun }),
     });
     return readJson<RestoreResponse>(response, this.t);
+  }
+
+  // ------------------------------------------------- 定时全量备份（快照 tab）
+  /** 读取定时备份配置（enabled / interval / 上次运行状态；无敏感字段）。 */
+  async backupSchedule(): Promise<BackupScheduleStatus> {
+    const response = await fetch(CONFIG_MANAGER_API.backupSchedule);
+    const body = await readJson<{ schedule: BackupScheduleStatus }>(response, this.t);
+    return body.schedule;
+  }
+
+  /** 保存定时备份设置（enabled + interval）；Host 校验后原子写 + 重排调度器。 */
+  async saveBackupSchedule(draft: BackupScheduleDraft): Promise<BackupScheduleStatus> {
+    const response = await fetch(CONFIG_MANAGER_API.backupSchedule, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(draft),
+    });
+    const body = await readJson<{ schedule: BackupScheduleStatus }>(response, this.t);
+    return body.schedule;
+  }
+
+  /** 立即执行一次全量备份（复用调度器 runOnce，防重；返回执行结果 + 最新配置）。 */
+  async runBackupNow(): Promise<{ run: BackupRunResult; schedule: BackupScheduleStatus }> {
+    const response = await fetch(CONFIG_MANAGER_API.backupScheduleRun, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    return readJson<{ run: BackupRunResult; schedule: BackupScheduleStatus }>(response, this.t);
   }
 }

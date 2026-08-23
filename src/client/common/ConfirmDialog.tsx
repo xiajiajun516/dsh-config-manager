@@ -23,7 +23,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { Button } from './ui.tsx'
+import { Button, Spinner } from './ui.tsx'
 import css from '../config-manager.module.css'
 
 export interface ConfirmDialogProps {
@@ -123,9 +123,10 @@ export function ConfirmDialog({
           <Button
             variant={danger === true ? 'danger' : 'primary'}
             disabled={busy}
+            loading={busy}
             onClick={() => { void handleConfirm() }}
           >
-            {busy ? '…' : (confirmLabel ?? '')}
+            {busy ? <Spinner /> : (confirmLabel ?? '')}
           </Button>
           {/* 取消按钮用原生 button + ghostButton 类（样式与 Button ghost 一致），以便 ref 聚焦 */}
           <button
@@ -133,6 +134,7 @@ export function ConfirmDialog({
             type="button"
             className={css.ghostButton}
             disabled={busy}
+            aria-busy={busy || undefined}
             onClick={onCancel}
           >
             {cancelLabel ?? ''}

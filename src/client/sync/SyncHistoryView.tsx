@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 
 import { Badge, Card, SectionTitle, Spinner } from '../common/ui.tsx'
+import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import type { SyncApi, SyncHistoryEntry, AutosyncHistoryEntry } from './sync-api.ts'
 import {
   describeSkipReason, directionLabel, formatDateTime, projectAutosyncEntry,
@@ -36,14 +37,18 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [entries, setEntries] = useState<SyncHistoryEntry[]>([]);
+  /** 重试计数（错误态点「重试」递增 → 重新加载） */
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     (async () => {
       try {
         const data = await api.history();
         if (!cancelled) {
           setEntries(data.entries);
+          setError(null);
           setLoading(false);
         }
       } catch (err) {
@@ -54,7 +59,7 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
       }
     })();
     return () => { cancelled = true; };
-  }, [api]);
+  }, [api, reloadKey]);
 
   const rows = useMemo(() => projectSyncHistoryEntries(entries), [entries]);
   // 快照类条目（兼容旧投影；仅统计展示）
@@ -71,7 +76,15 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
   );
 
   if (loading) return <Spinner label={t('common.loading')} />;
-  if (error) return <Card><span className="error">{error}</span></Card>;
+  if (error) {
+    return (
+      <ErrorBanner
+        error={error}
+        onRetry={() => { setReloadKey((k) => k + 1) }}
+        retrying={loading}
+      />
+    );
+  }
   if (rows.length === 0) {
     return (
       <Card>

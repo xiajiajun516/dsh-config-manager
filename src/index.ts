@@ -85,6 +85,9 @@ import type { ApplyItemsReport } from './sync/sync-engine.ts'
 import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { BackupScheduler } from './sync/backup-scheduler.ts'
+import { readBackupSchedule, writeBackupSchedule } from './sync/backup-schedule-config.ts'
+import type { BackupScheduleConfig } from './sync/backup-schedule-config.ts'
+import { validateBackupScheduleDraft } from './ui/backup-schedule.ts'
 import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
 import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
@@ -138,7 +141,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.47'
+const PLUGIN_VERSION = '0.1.48'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -215,6 +218,9 @@ const API = {
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
   restore: '/api/dsh-config-manager/restore',
+  // m-backup-schedule：定时全量备份（读/存 backup-schedule.json + 立即执行一次）
+  backupSchedule: '/api/dsh-config-manager/backup-schedule',
+  backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
   // m-sync-ui：远程同步（Git 私有仓库通道）
   syncStatus: '/api/dsh-config-manager/sync/status',
   syncPush: '/api/dsh-config-manager/sync/push',
@@ -937,6 +943,8 @@ interface RoutesDeps {
   /** m-github-oauth：GitHub OAuth App 凭据（device flow 必需 client_id；client_secret 可选） */
   githubClientId?: string
   githubClientSecret?: string
+  /** m-backup-schedule：定时全量备份调度器（保存重排 reload / 立即执行 runOnce） */
+  backupScheduler: BackupScheduler
 }
 
 /* -------------------------------------------------- sync 路由（m-sync-ui） */
@@ -1349,7 +1357,7 @@ function parseMeForm(raw: unknown): { name: string; id?: string; description?: s
 
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine } {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, credentials, githubClientId, githubClientSecret } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, credentials, githubClientId, githubClientSecret, backupScheduler } = deps
   const roots = [exportsDir, tmpDir]
 
   /** m-github-oauth：宿主侧设备码登记表 + auth 客户端（进程生命周期；device_code 只存内存） */
@@ -2118,6 +2126,62 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           writeJson(res, 200, { dryRun: false, report })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // -------------------------------------------------- backup-schedule
+    // 定时全量备份设置（GET 读 / PUT 存 sync/backup-schedule.json；无敏感字段）：
+    // 保存后重排调度器（reload）；恒不含 secret、不加密（与自动同步同语义）。
+    {
+      kind: 'exact',
+      path: API.backupSchedule,
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          try {
+            writeJson(res, 200, { schedule: await readBackupSchedule(syncDir) })
+          } catch (error) {
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        if (req.method === 'PUT') {
+          try {
+            const body = await readJsonBody(req)
+            const parsed = validateBackupScheduleDraft(body)
+            if (!parsed.ok) {
+              writeJson(res, 400, { error: parsed.error })
+              return
+            }
+            const current = await readBackupSchedule(syncDir)
+            const next: BackupScheduleConfig = { ...current, ...parsed.value }
+            await writeBackupSchedule(syncDir, next)
+            await backupScheduler.reload()
+            writeJson(res, 200, { ok: true, schedule: next })
+          } catch (error) {
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        writeJson(res, 405, { error: `method ${req.method} not allowed` })
+      },
+    },
+    // ------------------------------------------------- backup-schedule/run
+    // 立即执行一次全量备份（复用 BackupScheduler.runOnce，同一时刻防重）：
+    // 返回执行结果（status/zip/skipReason/error）+ 最新配置（含 lastRun 状态）。
+    {
+      kind: 'exact',
+      path: API.backupScheduleRun,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          writeJson(res, 405, { error: `method ${req.method} not allowed` })
+          return
+        }
+        try {
+          const run = await backupScheduler.runOnce()
+          const schedule = await readBackupSchedule(syncDir)
+          writeJson(res, 200, { ok: true, run, schedule })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     },
@@ -3420,6 +3484,20 @@ export function apply(ctx: Context, config?: Config): void {
     adapters: adapters.map((a) => a.id),
   })
 
+  // 定时全量备份调度器（P0-3）：宿主后台按固定间隔导出全量备份 ZIP（恒不含 secret、
+  // 不加密——加密密码仅内存且不能持久化，与自动同步同语义）。配置存
+  // sync/backup-schedule.json（随 self 分区备份迁移）；enabled 缺省 false。
+  // 路由（PUT /backup-schedule 保存重排 / POST run 立即执行）经 RoutesDeps 注入；
+  // 随插件生命周期停止（见下方 effect），避免旧调度器残留导致重复备份。
+  const backupScheduler = new BackupScheduler({
+    syncDir,
+    exportsDir,
+    host,
+    adapters,
+    runs: new RunRegistry({ msg: host.msg }),
+    msg: host.msg,
+    exporterVersion: PLUGIN_VERSION,
+  })
   const { routes, scheduler, makeSyncEngine } = makeRoutes({
     host,
     adapters,
@@ -3435,6 +3513,7 @@ export function apply(ctx: Context, config?: Config): void {
     credentials: ctx.credentials,
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,
+    backupScheduler,
   })
   // Agent 可调用的模型工具（P0-1）：复用 src/core 引擎与同一 makeSyncEngine 来源。
   // 不依赖 webServer：host 侧能力在无 Web 部署时仍可用；tools 服务未组合时内部守卫跳过。
@@ -3445,19 +3524,6 @@ export function apply(ctx: Context, config?: Config): void {
     snapshotsDir,
     syncDir,
     makeSyncEngine,
-    exporterVersion: PLUGIN_VERSION,
-  })
-  // 定时全量备份调度器（P0-3）：宿主后台按固定间隔导出全量备份 ZIP（恒不含 secret、
-  // 不加密——加密密码仅内存且不能持久化，与自动同步同语义）。配置存
-  // sync/backup-schedule.json（随 self 分区备份迁移）；enabled 缺省 false。
-  // 随插件生命周期停止，避免旧调度器残留导致重复备份。
-  const backupScheduler = new BackupScheduler({
-    syncDir,
-    exportsDir,
-    host,
-    adapters,
-    runs: new RunRegistry({ msg: host.msg }),
-    msg: host.msg,
     exporterVersion: PLUGIN_VERSION,
   })
   backupScheduler.start()

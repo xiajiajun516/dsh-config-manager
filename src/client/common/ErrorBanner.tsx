@@ -8,7 +8,8 @@
 import { useState } from 'react'
 import { formatActionableError, toActionableError } from '../../ui/errors.ts'
 import { redact } from '../../security/redaction.ts'
-import { Button } from './ui.tsx'
+import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import { Button, Spinner } from './ui.tsx'
 import css from '../config-manager.module.css'
 
 export interface ErrorBannerProps {
@@ -18,13 +19,16 @@ export interface ErrorBannerProps {
   onRetry?: () => void
   /** 重试中的 loading 态 */
   retrying?: boolean
+  /** 展示层翻译器（缺省 zh；ErrorBanner 为通用组件，不绑定 settings 命名空间字典） */
+  t?: UiT
 }
 
 /**
  * 错误横幅：toActionableError 解析为标题 + 原因 + 建议动作，
  * 文本在渲染前再经 redact() 兜底（双保险），Reason 以等宽块展示。
+ * 重试按钮：进行中（retrying）时显示 Spinner 并禁用（防重复点击）。
  */
-export function ErrorBanner({ error, onRetry, retrying }: ErrorBannerProps) {
+export function ErrorBanner({ error, onRetry, retrying, t = zhUiT }: ErrorBannerProps) {
   const [actionable] = useState(() => toActionableError(error))
   const reason = redact(actionable.reason)
   const item = actionable.item !== undefined ? redact(actionable.item) : undefined
@@ -41,8 +45,8 @@ export function ErrorBanner({ error, onRetry, retrying }: ErrorBannerProps) {
       {item !== undefined && <div className={css.errorItem}>{item}</div>}
       {actionable.retryable && onRetry !== undefined && (
         <div className={css.errorFooter}>
-          <Button variant="primary" onClick={onRetry} disabled={retrying === true}>
-            {retrying === true ? '…' : 'Retry'}
+          <Button variant="primary" onClick={onRetry} disabled={retrying === true} loading={retrying === true}>
+            {retrying === true ? <Spinner /> : t('commonRetry')}
           </Button>
         </div>
       )}

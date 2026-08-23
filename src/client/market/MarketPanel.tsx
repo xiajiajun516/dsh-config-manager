@@ -273,14 +273,18 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
     }
   }
 
-  /** 下载 + 校验单条目 → dry-run 详情预览（零写入）。自托管条目（带 repo）必须携带来源仓库。 */
+  /** 下载 + 校验单条目 → dry-run 详情预览（零写入）。自托管条目（带 repo）必须携带来源仓库。
+   *  竞态守卫：下载期间用户可发起另一条目下载（downloadingId 已变），晚到响应一律丢弃，
+   *  防止「弹窗标题是 B、详情是 A」的串扰。 */
   const runDownload = async (item: MarketListItem): Promise<void> => {
     patch({ downloadingId: item.id, error: null })
     try {
       const detail = await api.download(item.id, item.repo)
+      if (stateRef.current.downloadingId !== item.id) return
       // 初始化逐分区批准表：低风险默认勾选，高风险默认不勾选（须逐项显式批准）
       patch({ downloadingId: null, detail, approvals: defaultApprovals(detail.plan) })
     } catch (err) {
+      if (stateRef.current.downloadingId !== item.id) return
       patch({ downloadingId: null, error: err instanceof Error ? err.message : String(err) })
     }
   }
@@ -378,10 +382,10 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
       <Card>
         <span className={css.groupLabel}>{t('config.title')}</span>
         <div className={css.actionRow}>
-          <Button variant="primary" disabled={state.refreshing || state.importing} onClick={() => { void runRefresh() }}>
+          <Button variant="primary" disabled={state.refreshing || state.importing || state.browsing} onClick={() => { void runRefresh() }}>
             {state.refreshing ? <Spinner label={t('config.refreshing')} /> : t('config.refresh')}
           </Button>
-          <Button disabled={state.browsing} onClick={() => { void runBrowse() }}>
+          <Button disabled={state.browsing || state.refreshing || state.importing} onClick={() => { void runBrowse() }}>
             {state.browsing ? <Spinner label={t('list.loading')} /> : t('list.browse')}
           </Button>
         </div>
@@ -598,7 +602,8 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                         )}
                       </div>
                     </div>
-                    <Button disabled={state.downloadingId === it.id} onClick={() => { openDownload(it) }}>
+                    {/* 下载按钮：任一下载进行中全部禁用（防止并发下载详情串扰 + 防重复点击） */}
+                    <Button disabled={state.downloadingId !== null} onClick={() => { openDownload(it) }}>
                       {state.downloadingId === it.id ? <Spinner label={t('common.loading')} /> : t('list.download')}
                     </Button>
                   </div>

@@ -17,7 +17,8 @@ import {
 } from '../../ui/report.ts'
 import type { ImportResultAction } from '../../ui/types.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Button, type BadgeKind } from './ui.tsx'
+import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import { Badge, Button, Spinner, type BadgeKind } from './ui.tsx'
 import css from '../config-manager.module.css'
 
 export type ReportViewKind = 'export' | 'import'
@@ -30,6 +31,10 @@ export interface ReportViewProps {
   onAction?: (action: ImportResultAction) => void
   /** 下载导出文件的回调（导出报告场景） */
   onDownload?: () => void
+  /** 下载进行中（导出报告场景：下载按钮 spinner + 禁用，防重复下载） */
+  downloadBusy?: boolean
+  /** 展示层翻译器（缺省 zh；与 ErrorBanner 同策略，不绑定 settings 命名空间） */
+  t?: UiT
 }
 
 /** 导入分区的统计徽章（由 report.importSectionStats 计算） */
@@ -73,7 +78,7 @@ function ExportSummary({ report }: { report: ExportReport }) {
  * 文本详情 = report.ts 渲染器的输出（已脱敏），展示前再过 redact() 双保险；
  * 以 <pre> 等宽块呈现保持对齐。
  */
-export function ReportView({ kind, exportReport, importResult, onAction, onDownload }: ReportViewProps) {
+export function ReportView({ kind, exportReport, importResult, onAction, onDownload, downloadBusy = false, t = zhUiT }: ReportViewProps) {
   const actions = kind === 'import' && importResult !== undefined
     ? suggestedActions(importResult)
     : []
@@ -86,7 +91,9 @@ export function ReportView({ kind, exportReport, importResult, onAction, onDownl
           <pre className={css.reportText}>{redact(renderExportReport(exportReport))}</pre>
           {onDownload !== undefined && (
             <div className={css.reportFooter}>
-              <Button variant="primary" onClick={onDownload}>Download</Button>
+              <Button variant="primary" onClick={onDownload} loading={downloadBusy}>
+                {downloadBusy ? <Spinner /> : t('export.download')}
+              </Button>
             </div>
           )}
         </>

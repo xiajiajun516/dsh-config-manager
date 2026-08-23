@@ -556,18 +556,18 @@ export function MyConfigsView({
 
   /* ------------------------------------------------ 装回本地（复用市场下载 + 逐分区批准链路） */
 
-  /** 装回本地（复用市场下载 + 逐分区批准链路；条目内容在用户自己的公开仓库，必须带 repo 来源） */
+  /** 装回本地（复用市场下载 + 逐分区批准链路；条目内容在用户自己的公开仓库，必须带 repo 来源）
+   *  竞态守卫：下载期间用户可切换装回另一条目（install.itemId 已变），晚到响应一律丢弃，
+   *  防止「会话标题是 B、详情是 A」的串扰。 */
   const runDownload = async (entry: MyItemEntry): Promise<void> => {
     commitInstall({ itemId: entry.id, detail: null, approvals: {}, importing: false, importResult: null, error: null })
     try {
       const detail = await api.download(entry.id, entry.repoUrl)
-      if (installRef.current !== null) {
-        commitInstall({ ...installRef.current, detail, approvals: defaultApprovals(detail.plan) })
-      }
+      if (installRef.current === null || installRef.current.itemId !== entry.id) return
+      commitInstall({ ...installRef.current, detail, approvals: defaultApprovals(detail.plan) })
     } catch (err) {
-      if (installRef.current !== null) {
-        patchInstall({ error: err instanceof Error ? err.message : String(err) })
-      }
+      if (installRef.current === null || installRef.current.itemId !== entry.id) return
+      patchInstall({ error: err instanceof Error ? err.message : String(err) })
     }
   }
 
@@ -956,7 +956,7 @@ export function MyConfigsView({
                 <div className={css.rowActions}>
                   <Button onClick={() => { startUpdate(entry); openUpload() }}>{t('myconfigs.item.update')}</Button>
                   <Button
-                    disabled={install !== null && install.itemId === view.id && install.detail === null}
+                    disabled={install !== null && install.detail === null}
                     onClick={() => { openInstall(entry) }}
                   >
                     {t('myconfigs.item.install')}

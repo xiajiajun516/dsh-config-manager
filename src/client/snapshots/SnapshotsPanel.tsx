@@ -7,14 +7,31 @@
  * 状态组件内自持（useState），同时经 toSnapshotsStoreSlice() 镜像进模块级 runStore：
  * 模块级单例保证「切 tab 不丢」，sessionStorage 白名单保证「刷新恢复」
  * （选中快照 / dry-run 计划 / 执行报告；快照列表本身可随时重载，不持久化）。
+ *
+ * 视图底部附「定时全量备份」设置卡（BackupScheduleCard，m-backup-schedule）：
+ * 开关 + 间隔档位（6h/12h/24h/7d）保存经 PUT /backup-schedule（host 校验 + 重排
+ * 调度器）；「立即备份」经 POST /backup-schedule/run 复用 BackupScheduler.runOnce
+ * （同一时刻防重）。草稿镜像 runStore.snapshots.backupDraft（未保存修改切 tab /
+ * 刷新保留）。安全：定时备份恒不含 secret、不加密；本卡无敏感字段。
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../../core/restore.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
+import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice } from '../run-store.ts'
+import {
+  BACKUP_INTERVAL_OPTIONS,
+  backupDraftDirty,
+  backupRunBadgeKind,
+  validateBackupScheduleDraft,
+  type BackupInterval,
+  type BackupRunStatus,
+  type BackupScheduleDraft,
+  type BackupScheduleStatus,
+} from '../../ui/backup-schedule.ts'
 import css from '../config-manager.module.css'
 
 export interface SnapshotsPanelProps {
@@ -100,23 +117,30 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   const stateRef = useRef<PanelState>(state)
   /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
   const mountedRef = useRef(true)
+  /** dry-run 计划请求代数：快速切换快照时作废在途旧请求（防晚到响应覆盖新选择） */
+  const planGeneration = useRef(0)
+  /** 执行恢复的二次确认弹窗开关（危险操作，DESIGN.md §8.11 场景） */
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
    * 关键：镜像不依赖 effect flush —— 异步操作（dry-run 计划/执行恢复）完成回调
    * 在组件已卸载（切走 tab）时也能把结果（plan/report）写进 store，切回恢复。
+   * backupDraft 由 BackupScheduleCard 独立管理，此处从 store 读回原值避免覆盖。
    */
   const commit = (next: PanelState): void => {
     stateRef.current = next
     if (mountedRef.current) setState(next)
-    runStore.patch({ snapshots: toSnapshotsStoreSlice(next) })
+    const backupDraft = runStore.getSnapshot().snapshots.backupDraft
+    runStore.patch({ snapshots: { ...toSnapshotsStoreSlice({ ...next, backupDraft }), backupDraft } })
   }
   const patch = (p: Partial<PanelState>): void => commit({ ...stateRef.current, ...p })
 
   /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
   useEffect(() => () => {
     mountedRef.current = false
-    runStore.patch({ snapshots: toSnapshotsStoreSlice(stateRef.current) })
+    const backupDraft = runStore.getSnapshot().snapshots.backupDraft
+    runStore.patch({ snapshots: { ...toSnapshotsStoreSlice({ ...stateRef.current, backupDraft }), backupDraft } })
   }, [])
 
   const load = (): void => {
@@ -135,10 +159,18 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   useEffect(load, [api])
 
   const select = (id: string): void => {
+    // 每次选择递增代数：用户快速切换快照时，旧 dry-run 请求晚到直接丢弃
+    // （防止「选了 B 却显示 A 的计划」的状态串扰）。
+    const generation = planGeneration.current + 1
+    planGeneration.current = generation
     patch({ selectedId: id, plan: null, report: null, actionError: null, planning: true })
     api.restoreSnapshot(id, true).then(
-      (res) => { patch({ planning: false, plan: res.plan ?? null }) },
+      (res) => {
+        if (generation !== planGeneration.current) return
+        patch({ planning: false, plan: res.plan ?? null })
+      },
       (err) => {
+        if (generation !== planGeneration.current) return
         patch({
           planning: false,
           actionError: err instanceof Error ? err.message : String(err),
@@ -150,6 +182,7 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   const execute = (): void => {
     if (state.selectedId === null || state.running) return
     patch({ running: true, report: null, actionError: null })
+    setConfirmOpen(false)
     api.restoreSnapshot(state.selectedId, false).then(
       (res) => { patch({ running: false, report: res.report ?? null }) },
       (err) => {
@@ -219,6 +252,7 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
                   aria-selected={selected}
                   data-active={selected ? '' : undefined}
                   className={css.snapshotRow}
+                  disabled={state.planning || state.running}
                   onClick={() => { select(meta.id) }}
                 >
                   <span title={meta.id}>{new Date(meta.createdAt).toLocaleString()}</span>
@@ -255,8 +289,7 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
                     <Button
                       variant="danger"
                       disabled={state.running || state.plan.actions.every((a) => a.kind === 'skip')}
-                      onClick={execute}
-                      title={t('snapshots.confirmRestore')}
+                      onClick={() => { setConfirmOpen(true) }}
                     >
                       {state.running ? t('snapshots.executing') : t('snapshots.execute')}
                     </Button>
@@ -279,6 +312,209 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
           )}
         </>
       )}
+
+      {/* 定时全量备份设置（独立于快照列表状态，始终展示） */}
+      <BackupScheduleCard api={api} t={t} />
+
+      {/* 执行恢复二次确认（破坏性操作：整文件还原/删除 + 卸载插件；busy 防重复提交） */}
+      <ConfirmDialog
+        open={confirmOpen}
+        title={t('snapshots.confirmTitle')}
+        message={t('snapshots.confirmRestore')}
+        confirmLabel={t('snapshots.execute')}
+        cancelLabel={t('common.cancel')}
+        danger
+        busy={state.running}
+        onConfirm={execute}
+        onCancel={() => { setConfirmOpen(false) }}
+      />
     </div>
+  )
+}
+
+/* ------------------------------------------------- 定时全量备份设置卡 */
+
+/** 间隔档位 → 字典键（t 的类型是字面量联合，switch 保持类型安全）。 */
+function intervalLabel(t: TranslateNS<'config-manager'>, interval: BackupInterval): string {
+  switch (interval) {
+    case '6h': return t('backupSchedule.interval.6h')
+    case '12h': return t('backupSchedule.interval.12h')
+    case '24h': return t('backupSchedule.interval.24h')
+    case '7d': return t('backupSchedule.interval.7d')
+  }
+}
+
+/** 上次运行状态 → 字典键。 */
+function runStatusLabel(t: TranslateNS<'config-manager'>, status: BackupRunStatus | undefined): string {
+  switch (status) {
+    case 'success': return t('backupSchedule.status.success')
+    case 'skipped': return t('backupSchedule.status.skipped')
+    case 'failed': return t('backupSchedule.status.failed')
+    default: return '—'
+  }
+}
+
+function formatRunTime(iso: string | undefined): string {
+  if (iso === undefined || iso === '') return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+}
+
+/**
+ * 定时全量备份设置卡：总开关 + 间隔档位 + 上次运行状态 + 保存 / 立即备份。
+ * 状态自持；草稿镜像 runStore.snapshots.backupDraft（未保存修改切 tab/刷新保留），
+ * 保存成功清草稿（宿主配置为权威）。
+ */
+function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<'config-manager'> }) {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState<string | null>(null)
+  const [draft, setDraft] = useState<BackupScheduleDraft>({ enabled: false, interval: '24h' })
+  const [saved, setSaved] = useState<BackupScheduleStatus | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [lastRun, setLastRun] = useState<BackupRunStatus | undefined>(undefined)
+  const [lastRunDetail, setLastRunDetail] = useState<string | null>(null)
+  const [flash, setFlash] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+
+  const load = (): void => {
+    setStatus('loading')
+    setError(null)
+    api.backupSchedule().then(
+      (schedule) => {
+        setSaved(schedule)
+        // 有未保存草稿（切 tab 回来）则保留，否则以宿主配置为权威
+        setDraft(runStore.getSnapshot().snapshots.backupDraft ?? { enabled: schedule.enabled, interval: schedule.interval })
+        setLastRun(schedule.lastRunStatus)
+        setLastRunDetail(formatRunTime(schedule.lastRunAt))
+        setStatus('ready')
+      },
+      (err) => {
+        setStatus('error')
+        setError(err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  useEffect(load, [api])
+
+  const updateDraft = (next: BackupScheduleDraft): void => {
+    setDraft(next)
+    runStore.patch({ snapshots: { backupDraft: next } })
+  }
+
+  const save = (): void => {
+    if (saving || running) return
+    const parsed = validateBackupScheduleDraft(draft)
+    if (!parsed.ok) {
+      setActionError(parsed.error)
+      return
+    }
+    setSaving(true)
+    setFlash(null)
+    setActionError(null)
+    api.saveBackupSchedule(parsed.value).then(
+      (schedule) => {
+        setSaved(schedule)
+        setDraft({ enabled: schedule.enabled, interval: schedule.interval })
+        setLastRun(schedule.lastRunStatus)
+        setLastRunDetail(formatRunTime(schedule.lastRunAt))
+        runStore.patch({ snapshots: { backupDraft: null } })
+        setSaving(false)
+        setFlash(t('backupSchedule.saved'))
+      },
+      (err) => {
+        setSaving(false)
+        setActionError(err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  const runNow = (): void => {
+    if (running || saving) return
+    setRunning(true)
+    setFlash(null)
+    setActionError(null)
+    api.runBackupNow().then(
+      (res) => {
+        setSaved(res.schedule)
+        setLastRun(res.run.status)
+        setLastRunDetail(res.run.zip !== undefined && res.run.zip !== ''
+          ? res.run.zip
+          : (res.run.skipReason !== undefined ? res.run.skipReason : formatRunTime(res.schedule.lastRunAt)))
+        setRunning(false)
+      },
+      (err) => {
+        setRunning(false)
+        setActionError(err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  const dirty = backupDraftDirty(draft, saved)
+  const busy = saving || running
+
+  return (
+    <Card className={css.card}>
+      <div className={css.groupLabel}>{t('backupSchedule.title')}</div>
+      <div className={css.hint}>{t('backupSchedule.hint')}</div>
+
+      {status === 'loading' && <Spinner label={t('backupSchedule.loading')} />}
+
+      {status === 'error' && (
+        <Banner kind="error">
+          {t('backupSchedule.error')}
+          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
+        </Banner>
+      )}
+
+      {status === 'ready' && (
+        <>
+          <Field label={t('backupSchedule.enabled')}>
+            <Checkbox
+              checked={draft.enabled}
+              onChange={(checked) => { updateDraft({ ...draft, enabled: checked }) }}
+              label={t('backupSchedule.enabledHint')}
+              disabled={busy}
+            />
+          </Field>
+          <Field label={t('backupSchedule.interval')}>
+            <select
+              className={css.select}
+              value={draft.interval}
+              disabled={busy}
+              onChange={(event) => { updateDraft({ ...draft, interval: event.target.value as BackupInterval }) }}
+            >
+              {BACKUP_INTERVAL_OPTIONS.map((interval) => (
+                <option key={interval} value={interval}>{intervalLabel(t, interval)}</option>
+              ))}
+            </select>
+          </Field>
+          {lastRun !== undefined && (
+            <div className={css.statRow}>
+              <span className={css.hint}>{t('backupSchedule.lastRun')}</span>
+              <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
+              {lastRunDetail !== null && lastRunDetail !== '' && <span className={css.hint}>{lastRunDetail}</span>}
+            </div>
+          )}
+          <div className={css.actionRow}>
+            <Button
+              variant="primary"
+              disabled={busy || !dirty}
+              onClick={save}
+              title={dirty ? undefined : t('backupSchedule.saved')}
+            >
+              {saving ? <Spinner label={t('backupSchedule.save')} /> : t('backupSchedule.save')}
+            </Button>
+            <Button disabled={busy || !(saved?.enabled ?? false)} onClick={runNow}>
+              {running ? <Spinner label={t('backupSchedule.running')} /> : t('backupSchedule.runNow')}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {flash !== null && <Banner kind="ok">{flash}</Banner>}
+      {actionError !== null && <Banner kind="error">{actionError}</Banner>}
+    </Card>
   )
 }

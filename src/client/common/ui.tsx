@@ -12,6 +12,8 @@ export type ButtonVariant = 'primary' | 'ghost' | 'danger'
 export interface ButtonProps {
   variant?: ButtonVariant
   disabled?: boolean
+  /** 进行中态：自动 disabled + aria-busy（children 由调用方渲染 Spinner 保持现状） */
+  loading?: boolean
   onClick?: () => void
   children: ReactNode
   title?: string
@@ -26,12 +28,15 @@ export interface ButtonProps {
  * 统一按钮（primary=主操作 / ghost=次操作 / danger=危险操作）。
  * 带 href 时渲染同款按钮类的外链 <a>（target=_blank + rel=noreferrer），
  * 外观与普通按钮一致，不破坏既有 <button> 调用。
+ * loading=true 时自动禁用（防重复点击）并标注 aria-busy（无障碍）；
+ * 视觉 loading（Spinner）由调用方按既有模式放在 children 中。
  */
-export function Button({ variant = 'ghost', disabled, onClick, children, title, className, href, newTab = true }: ButtonProps) {
+export function Button({ variant = 'ghost', disabled, loading = false, onClick, children, title, className, href, newTab = true }: ButtonProps) {
   const cls =
     variant === 'primary' ? css.primaryButton
       : variant === 'danger' ? css.dangerButton
         : css.ghostButton
+  const effectiveDisabled = disabled === true || loading
   if (href !== undefined) {
     return (
       <a
@@ -40,6 +45,7 @@ export function Button({ variant = 'ghost', disabled, onClick, children, title, 
         target={newTab ? '_blank' : undefined}
         rel={newTab ? 'noreferrer' : undefined}
         title={title}
+        aria-busy={loading || undefined}
         onClick={onClick}
         // 按钮类无 text-decoration 规则，<a> 默认下划线破坏按钮外观（SyncSettingsView 外链同款极小修补）
         style={{ textDecoration: 'none' }}
@@ -52,8 +58,9 @@ export function Button({ variant = 'ghost', disabled, onClick, children, title, 
     <button
       type="button"
       className={className !== undefined ? `${cls} ${className}` : cls}
-      disabled={disabled}
+      disabled={effectiveDisabled}
       title={title}
+      aria-busy={loading || undefined}
       onClick={onClick}
     >
       {children}

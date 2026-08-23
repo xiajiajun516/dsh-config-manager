@@ -16,7 +16,7 @@
  * m2：全部 UI 状态由模块级 runStore 持有（切 tab/关面板不重建、刷新恢复），
  * 控制器实例（ExportFlow）由 store 缓存复用。
  */
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent } from 'react'
 import { EXPORT_GROUPS } from '../../ui/types.ts'
 import type { SectionId } from '../../schema/types.ts'
@@ -56,6 +56,10 @@ export function ExportView({ api, t }: ExportViewProps) {
   const result = exp.result
   const error = exp.error
   const downloaded = exp.downloaded
+  /** 下载进行中（瞬态 UI：下载通常数秒，切 tab 后由 api 层继续，切回显示完成态） */
+  const [downloading, setDownloading] = useState(false)
+  /** 下载防重入 ref（导出完成自动下载 + 用户手动下载共享；避免双击并发下载同一文件） */
+  const downloadingRef = useRef(false)
 
   const setMode = (next: ExportMode): void => {
     runStore.patch({ export: { mode: next } })
@@ -117,9 +121,12 @@ export function ExportView({ api, t }: ExportViewProps) {
     }
   }
 
-  /** 把导出的 ZIP 下载到浏览器「下载」目录（默认静默下载，不弹另存为对话框） */
+  /** 把导出的 ZIP 下载到浏览器「下载」目录（默认静默下载，不弹另存为对话框）。
+   *  防重入：downloadingRef 作锁，进行中忽略重复点击/自动触发；失败后恢复可重试。 */
   const download = async (zipPath: string): Promise<void> => {
-    if (zipPath === '') return
+    if (zipPath === '' || downloadingRef.current) return
+    downloadingRef.current = true
+    setDownloading(true)
     try {
       runStore.patch({ export: { error: null } })
       const outcome = await api.download(zipPath)
@@ -127,6 +134,9 @@ export function ExportView({ api, t }: ExportViewProps) {
       void outcome // blob/streamed 由 api 处理；此处仅确认成功
     } catch (err) {
       runStore.patch({ export: { error: err instanceof Error ? err.message : String(err) } })
+    } finally {
+      downloadingRef.current = false
+      setDownloading(false)
     }
   }
 
@@ -247,7 +257,7 @@ export function ExportView({ api, t }: ExportViewProps) {
 
       {result !== null && !running && (
         <>
-          <ReportView kind="export" exportReport={result.report} onDownload={() => { void download(result.zipPath) }} />
+          <ReportView kind="export" exportReport={result.report} onDownload={() => { void download(result.zipPath) }} downloadBusy={downloading} />
           {downloaded && <Banner kind="ok">{t('export.saved', { name: result.report.file.name })}</Banner>}
         </>
       )}

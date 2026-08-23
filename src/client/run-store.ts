@@ -38,6 +38,7 @@ import { renderExportReport } from '../ui/report.ts'
 import type { FlowPhase } from '../ui/flow.ts'
 import type { ImportStep } from '../ui/types.ts'
 import type { RunProgress } from './common/progress-view.ts'
+import type { BackupScheduleDraft } from '../ui/backup-schedule.ts'
 import type {
   GlobalConflictStrategy, ImportAnalysis, ImportDecisions, ImportPlan, ImportResult,
   ItemResolution, PathMapping,
@@ -196,6 +197,8 @@ export interface SnapshotsStoreSlice {
   report: RestoreReport | null
   actionError: string | null
   error: string | null
+  /** 定时备份设置草稿（未保存修改切 tab / 刷新保留；null = 无草稿，以宿主配置为准） */
+  backupDraft: BackupScheduleDraft | null
 }
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
@@ -425,6 +428,7 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
     report: null,
     actionError: null,
     error: null,
+    backupDraft: null,
   }
 }
 
@@ -504,6 +508,7 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
     report: s.report,
     actionError: s.actionError,
     error: s.error,
+    backupDraft: s.backupDraft,
   }
 }
 
