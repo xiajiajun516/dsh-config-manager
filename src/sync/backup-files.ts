@@ -76,10 +76,12 @@ export async function listBackupFiles(exportsDir: string): Promise<BackupFileMet
   return metas
 }
 
-/** 文件名合法性校验：非空、仅文件名（basename 不变，防路径穿越）、.zip 结尾。 */
+/** 文件名合法性校验：非空、仅文件名（无路径分隔符，防穿越）、.zip 结尾。
+ *  显式拒绝 `/` 与 `\` 两种分隔符——不能依赖 path.basename 判定（平台相关：
+ *  POSIX 的 basename 不识别反斜杠，Windows 两者都识别，跨平台会不一致）。 */
 export function isValidBackupFileName(name: unknown): name is string {
   if (typeof name !== 'string' || name === '') return false
-  if (path.basename(name) !== name) return false
+  if (name.includes('/') || name.includes('\\')) return false
   return name.endsWith('.zip')
 }
 
