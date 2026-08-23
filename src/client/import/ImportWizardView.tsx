@@ -341,18 +341,21 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   }
 
   /** Confirm 执行：confirm=true（安全阀）+ 用户回滚策略 */
-  const execute = async (): Promise<void> => {
-    runStore.patch({ import: { error: null, running: true } })
+  const execute = async (opts?: { retry?: boolean }): Promise<void> => {
+    runStore.patch({ import: { error: null, running: true, skipRequested: false } })
     // m3：请求进行期间经 /runs 发现 runId 并轮询 /progress（500ms）显示真实进度
     runStore.watchRunning('import', 500)
     try {
-      const promise = wizard.execute({ confirm: true, rollbackOnError })
+      // 重试 = 只重跑「失败 + 用户跳过」的子集（结果页「重试」按钮）
+      const promise = opts?.retry === true
+        ? wizard.executeRetry({ rollbackOnError })
+        : wizard.execute({ confirm: true, rollbackOnError })
       // execute() 已同步置 step='importing'：立即镜像，保证执行期间刷新时持久化的是 importing
       runStore.syncWizard()
       const result = await promise
       // 响应含 runId（/progress 查询与刷新恢复用）；控制器类型不含，运行时对象有
       const runId = (result as { runId?: unknown }).runId
-      runStore.patch({ import: { runId: typeof runId === 'string' ? runId : null } })
+      runStore.patch({ import: { runId: typeof runId === 'string' ? runId : null, skipRequested: false } })
       runStore.syncWizard()
     } catch (err) {
       runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
@@ -360,6 +363,22 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     } finally {
       runStore.stopRunWatch('import')
       runStore.patch({ import: { running: false } })
+    }
+  }
+
+  /**
+   * 跳过当前正在安装的插件（导入中）：通知宿主 abort 当前项子进程 →
+   * kill + 清理半装状态 → 该项标记 user-skipped → 导入继续其余项。
+   */
+  const skipCurrent = async (): Promise<void> => {
+    const runId = imp.runId
+    if (runId === null || imp.skipRequested) return
+    runStore.patch({ import: { skipRequested: true } })
+    try {
+      await api.skipExecute(runId)
+    } catch {
+      // 跳过请求失败（run 已结束等）：复位标记，下次轮询由 UI 状态自然处理
+      runStore.patch({ import: { skipRequested: false } })
     }
   }
 
@@ -386,6 +405,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         decryptRefs: [],
         containerEncrypted: false,
         archiveUnlocked: false,
+        skipRequested: false,
       },
     })
   }
@@ -631,10 +651,22 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   if (step === 'importing') {
     // 执行日志：进度条下方展示导入过程中执行的命令（/progress 轮询带回，非敏感）
     const logLines = progress?.log ?? []
+    // 跳过按钮：仅当「当前正在安装插件」时显示（detail=正在执行项 id，plugin: 前缀）。
+    // 跳过 = 宿主 kill 该插件子进程 + 清理半装状态 → 该项标记 user-skipped → 继续其余项。
+    const currentItem = progress?.detail ?? ''
+    const isPluginInstall = running && currentItem.startsWith('plugin:') && !imp.skipRequested
     return (
       <div className={css.viewBody}>
         <ProgressBar event={progress} active />
         <ImportLogPanel lines={logLines} t={t} />
+        {isPluginInstall && (
+          <div className={css.actionRow}>
+            <Button variant="ghost" onClick={() => { void skipCurrent() }}>
+              {t('import.skipCurrent')}
+            </Button>
+          </div>
+        )}
+        {imp.skipRequested && <div className={css.hint}>{t('import.skipPending')}</div>}
         <div className={css.hint}>{t('import.importing')}</div>
         {error !== null && <ErrorBanner error={error} />}
         <ErrorList errors={imp.errors} />
@@ -645,6 +677,8 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   if (step === 'result') {
     const result = imp.result
     if (result === null) return null
+    // 重试：只重跑「失败 + 用户跳过」的项（ReportView 内联报告已有明细）
+    const retryable = wizard.retryableCount()
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('report.import.title')} />
@@ -656,6 +690,13 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             // 报告已内联展示全部失败/警告项与回滚详情（§22/§23），无额外动作页
           }}
         />
+        {retryable > 0 && (
+          <div className={css.actionRow}>
+            <Button variant="primary" disabled={running} onClick={() => { void execute({ retry: true }) }}>
+              {t('import.retrySkipped', { count: String(retryable) })}
+            </Button>
+          </div>
+        )}
         {result.needsRestart && <Banner kind="warn">{t('report.needsRestart')}</Banner>}
         {error !== null && <ErrorBanner error={error} />}
       </div>

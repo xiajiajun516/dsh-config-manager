@@ -65,7 +65,7 @@ import { registerModelTools } from './core/model-tools.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
 import {
-  hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins,
+  cleanupAbortedInstall, hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins,
   resolveProfileDir, resolveProfileNameFromArgv, runDshPlugin, validateProfileName,
 } from './core/plugin-cli.ts'
 import type {
@@ -73,6 +73,7 @@ import type {
   ImportPlan, NamespaceInfo, PatchFileFacade, PlanItem, PlanItemKind, PluginInfo, PluginsFacade,
   SettingsFacade, WorkspaceFacade,
 } from './core/types.ts'
+import { ImportUserSkippedError } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
@@ -198,6 +199,7 @@ const API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
+  skipExecute: '/api/dsh-config-manager/execute/skip',
   decryptArchive: '/api/dsh-config-manager/decrypt-archive',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
@@ -513,12 +515,18 @@ export class DshPluginsFacade implements PluginsFacade {
     return listInstalledPlugins(this.homeDir, this.profile)
   }
 
-  async install(pkg: string, spec?: string): Promise<{ needsRestart: boolean }> {
+  async install(pkg: string, spec?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean }> {
     const profileDir = resolveProfileDir(this.homeDir, this.profile)
     // 非 registry 来源（github:/git+/file: 等）按来源 spec 安装；registry 包按裸包名装
     // npm 最新版（官方机制）。spec 丢失（旧备份）时退化为裸包名 → pnpm fetch-404，
     // 由 installErrorFor 给出可操作诊断。
-    const result = await this.runner(profileDir, this.profile, ['add', installSpecFor(pkg, spec)])
+    const result = await this.runner(profileDir, this.profile, ['add', installSpecFor(pkg, spec)], undefined, signal)
+    // 用户「跳过当前插件」：宿主 kill 了子进程 → 清理半装状态（删依赖行 + 删 node_modules/<pkg>，
+    // 防止「package.json 声明了依赖但没装全」导致 DSH 启动失败），再以跳过语义抛错。
+    if (result.aborted || (signal !== undefined && signal.aborted)) {
+      cleanupAbortedInstall(profileDir, pkg)
+      throw new ImportUserSkippedError(this.msg)
+    }
     if (result.exitCode !== 0 || result.timedOut) throw installErrorFor(pkg, result)
     // 非 bundle 插件：CLI 只维护 bundles，需补 profile patch 激活行才能加载。
     // 补写失败不吞：包已装但未激活，明确报错并允许重试（幂等补行）。
@@ -1333,6 +1341,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const githubAuth = new GitHubAuthClient()
   const msg = host.msg
 
+  /** 导入 run 的「当前计划项」中止控制器（/execute 登记，/execute/skip 定位 abort）。
+   * 进程生命周期内存登记；同 kind 并发被 RunRegistry 拒绝，单 run 恒只有一个当前项。 */
+  const runAbortControllers = new Map<string, AbortController>()
+
   /** 已知 adapter id 集合（push 请求体 sections 校验用）。 */
   const knownSyncSectionIds = new Set(adapters.map((a) => a.id))
   /** 可同步分区目录（status 回填 UI「高级/自定义导出」勾选列表；只含 portable，与 SyncEngine 一致）。 */
@@ -1957,6 +1969,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         const runId = run.runId
+        // 用户「跳过当前插件」通道：登记本 run 的当前项中止控制器（/execute/skip abort 它）
+        const abortController = new AbortController()
+        runAbortControllers.set(runId, abortController)
         try {
           let decryptedCredentials: Map<string, string> | undefined
           try {
@@ -1973,6 +1988,16 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 : {},
             rollbackOnError: opts['rollbackOnError'] === true,
             decryptedCredentials,
+            // m1 埋点：每开始一个计划项实时更新 run 状态（detail=当前执行项，
+            // 供 UI 显示「正在安装插件 X」/ 判定跳过按钮；/progress 轮询可见）
+            onItemStart: (info) => {
+              runs.update(runId, {
+                section: info.adapter,
+                item: info.index,
+                itemTotal: info.total,
+                detail: info.detail,
+              })
+            },
             // m1 埋点：每完成一个计划项实时更新 run 状态（/progress 轮询可见）
             onItem: (info) => {
               runs.update(runId, {
@@ -1996,7 +2021,32 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           runs.fail(runId, message)
           host.log.error('导入执行失败', { error: message })
           writeJson(res, 400, { error: message, runId })
+        } finally {
+          runAbortControllers.delete(runId)
         }
+      },
+    },
+    // -------------------------------------------------- execute/skip
+    // 用户跳过当前计划项（导入中，目前仅插件安装）：abort 当前项的中止控制器 → 引擎
+    // 捕获 ImportUserSkippedError 记为 user-skipped，导入继续执行其余项。
+    {
+      kind: 'exact',
+      path: API.skipExecute,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const runId = typeof body?.['runId'] === 'string' ? body['runId'] : ''
+        if (runId === '') {
+          writeJson(res, 400, { error: 'runId is required' })
+          return
+        }
+        const controller = runAbortControllers.get(runId)
+        if (controller === undefined) {
+          writeJson(res, 404, { error: 'no running import found for this runId' })
+          return
+        }
+        controller.abort()
+        writeJson(res, 200, { skipped: true })
       },
     },
     // ---------------------------------------------------------- snapshots

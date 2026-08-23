@@ -17,7 +17,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 import type { PluginInfo } from './types.ts'
@@ -169,6 +169,34 @@ export function reconcileBundles(profileDir: string): boolean {
   }
   writeProfileManifest(profileDir, manifest)
   return true
+}
+
+/**
+ * 中止安装后清理半装状态（用户「跳过当前插件」）：移除 profile package.json 中的
+ * 依赖行 + reconcile bundles + 删 node_modules/<pkg>。
+ *
+ * 目的：pnpm add 被中途 kill 后，package.json 可能已声明依赖但 node_modules 不完整，
+ * 直接启动 DSH 会因缺包而失败。本函数把 manifest 恢复为「该插件未安装」的一致状态，
+ * 消除「声明了依赖但没装全」的启动风险。pnpm-lock.yaml 不触碰（运行时不被读取，
+ * 下次安装 pnpm 自行对齐）。尽力而为：任何失败不抛错，由调用方记录告警。
+ */
+export function cleanupAbortedInstall(profileDir: string, pkg: string): void {
+  const manifest = readProfileManifest(profileDir)
+  if (manifest !== null) {
+    const deps = manifest.dependencies ?? {}
+    if (Object.prototype.hasOwnProperty.call(deps, pkg)) {
+      delete deps[pkg]
+      manifest.dependencies = deps
+      writeProfileManifest(profileDir, manifest)
+    }
+    // 若 pkg 曾是 bundle 成员且已非依赖 → 从 bundles 移除
+    reconcileBundles(profileDir)
+  }
+  try {
+    rmSync(join(profileDir, 'node_modules', pkg), { recursive: true, force: true })
+  } catch {
+    // 尽力而为：目录可能不存在或正被占用，忽略
+  }
 }
 
 /** 实时读 profile 已装插件清单（先 reconcile bundles，再逐依赖取版本/bundle 属性）。 */

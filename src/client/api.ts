@@ -126,6 +126,7 @@ export const CONFIG_MANAGER_API = {
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
   execute: '/api/dsh-config-manager/execute',
+  skipExecute: '/api/dsh-config-manager/execute/skip',
   decryptArchive: '/api/dsh-config-manager/decrypt-archive',
   progress: '/api/dsh-config-manager/progress',
   runs: '/api/dsh-config-manager/runs',
@@ -432,6 +433,17 @@ export class ConfigManagerApi {
   async runs(): Promise<RunState[]> {
     const response = await fetch(CONFIG_MANAGER_API.runs);
     return readJson<RunState[]>(response, this.t);
+  }
+
+  /** 导入中「跳过当前插件」：宿主 abort 当前计划项的中止控制器（kill 子进程 + 清半装状态）。
+   * 404 = run 不在执行（已完成/无进行中导入）。 */
+  async skipExecute(runId: string): Promise<{ skipped: boolean }> {
+    const response = await fetch(CONFIG_MANAGER_API.skipExecute, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ runId }),
+    });
+    return readJson<{ skipped: boolean }>(response, this.t);
   }
 
   // ------------------------------------------------------- 快照恢复（M4）

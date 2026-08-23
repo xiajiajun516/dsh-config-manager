@@ -225,7 +225,8 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         // 执行日志：记录实际将发起的子进程命令行（与宿主 DshPluginsFacade 的
         // dsh plugin --profile <p> add <spec> 一致）；仅非敏感文本，渲染前 UI 再 redact 兜底
         ctx.onLog?.(`$ dsh plugin --profile ${ctx.target.profile ?? resolveProfileNameFromArgv()} add ${installSpecFor(name, spec)}`);
-        const result = await ctx.target.plugins.install(name, spec);
+        // 透传中止信号：用户「跳过当前插件」→ 宿主 kill 子进程 + 清半装状态 → 抛 ImportUserSkippedError
+        const result = await ctx.target.plugins.install(name, spec, ctx.signal);
         const suffix = result.needsRestart ? msg('adapter.pluginRestartSuffix') : '';
         return {
           ok: true,
@@ -235,6 +236,8 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
             : msg('adapter.pluginInstallOk', { name, suffix }),
         };
       } catch (err) {
+        // 用户跳过：原样上抛（引擎 applyOne 捕获 → skipped + skippedByUser，不触发回滚）
+        if (ctx.signal?.aborted) throw err;
         const reason = err instanceof Error ? err.message : String(err);
         return {
           ok: false,

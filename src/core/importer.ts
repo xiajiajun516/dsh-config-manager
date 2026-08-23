@@ -16,6 +16,7 @@ import type {
   ConfigAdapter, HostContext, ImportAnalysis, ImportDecisions, ImportPlan,
   ImportResult, SnapshotStore,
 } from './types.ts';
+import type { SectionId } from '../schema/types.ts';
 
 export interface ImporterOptions {
   ctx: HostContext;
@@ -41,6 +42,8 @@ export interface ExecuteOptions {
   rollbackOnError?: boolean;
   /** m1：每完成一个计划项的进度回调（透传给 Analyzer；不传则无埋点） */
   onItem?: (info: PlanItemProgress) => void;
+  /** m1：每开始一个计划项的进度回调（供 UI 显示「正在执行项 X」/ 判定跳过按钮；不传则无埋点） */
+  onItemStart?: (info: { adapter: SectionId; index: number; total: number; detail: string }) => void;
   /** 执行日志回调（逐计划项操作 + 子进程命令行，仅非敏感文本；透传给 Analyzer → ImportContext） */
   onLog?: (line: string) => void;
 }
@@ -70,6 +73,7 @@ export class Importer {
       decryptedCredentials: opts.decryptedCredentials,
       rollbackOnError: opts.rollbackOnError,
       onItem: opts.onItem,
+      onItemStart: opts.onItemStart,
       onLog: opts.onLog,
     });
   }

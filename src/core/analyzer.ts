@@ -24,10 +24,10 @@ import { computeCompatibility } from './validator.ts';
 import { msgOf } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
 import {
-  ImportNotConfirmedError, type ApplyResult, type ConfigAdapter, type ExecutedItem,
-  type HostContext, type ImportAnalysis, type ImportContext, type ImportDecisions,
-  type ImportPlan, type ImportResult, type PathIssue, type PathMapping, type PlanItem,
-  type SnapshotStore,
+  ImportNotConfirmedError, ImportUserSkippedError, type ApplyResult, type ConfigAdapter,
+  type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,
+  type ImportDecisions, type ImportPlan, type ImportResult, type PathIssue,
+  type PathMapping, type PlanItem, type SnapshotStore,
 } from './types.ts';
 
 /** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后） */
@@ -392,6 +392,8 @@ export class Analyzer {
       rollbackOnError?: boolean;
       /** m1：每完成一个计划项调用（真实进度埋点；不传则无埋点） */
       onItem?: (info: PlanItemProgress) => void;
+      /** m1：每开始一个计划项调用（供 UI 显示「正在执行项 X」/ 判定跳过按钮；不传则无埋点） */
+      onItemStart?: (info: { adapter: SectionId; index: number; total: number; detail: string }) => void;
       /** 执行日志回调（逐计划项操作 + 子进程命令行；注入 ImportContext 供适配器调用；不传则无日志） */
       onLog?: (line: string) => void;
     } = {},
@@ -454,7 +456,19 @@ export class Analyzer {
       const adapter = this.adapters.find((a) => a.id === adapterId);
       if (!adapter) continue;
       for (const item of byAdapter.get(adapterId) ?? []) {
+        // 每项一个 AbortController：宿主可 abort「当前项」（用户跳过当前插件）→
+        // 该项子进程被杀、标记为 user-skipped；不影响后续项执行。
+        const controller = new AbortController();
+        importCtx.signal = controller.signal;
+        // m1 埋点：每开始一个计划项上报（UI 显示「正在执行项 X」/ 判定跳过按钮）
+        const startIndex = itemIndex + 1;
+        try {
+          opts.onItemStart?.({ adapter: item.adapter, index: startIndex, total: totalItems, detail: item.id });
+        } catch {
+          // 埋点回调失败不影响导入执行
+        }
         const outcome = await this.applyOne(adapter, item, importCtx);
+        importCtx.signal = undefined;
         // m1 埋点：每完成一个计划项上报（真实进度；onItem 抛错不得中断导入）
         itemIndex += 1;
         try {
@@ -585,6 +599,19 @@ export class Analyzer {
         warning: result.warning === true ? `${item.id}: ${result.message ?? item.description}` : undefined,
       };
     } catch (err) {
+      // 用户跳过（宿主 install 中止子进程）：记为 skipped + skippedByUser，非失败，不触发回滚
+      if (err instanceof ImportUserSkippedError) {
+        onLog?.(`⏭ ${item.id}`);
+        return {
+          executed: {
+            itemId: item.id,
+            status: 'skipped',
+            skippedByUser: true,
+            message: this.msg('import.userSkipped'),
+          },
+          needsRestart: false,
+        };
+      }
       this.ctx.log.error(`应用计划项失败 ${item.id}: ${err instanceof Error ? err.message : String(err)}`);
       onLog?.(`✗ ${item.id}`);
       return {

@@ -402,3 +402,12 @@ export class ImportFailedError extends Error {
     this.result = result;
   }
 }
+
+/** 当前计划项被用户跳过（导入中点击「跳过当前插件」中止子进程）。
+ * 宿主 install 中止时抛出；引擎在 applyOne 捕获并记为 skipped + skippedByUser。 */
+export class ImportUserSkippedError extends Error {
+  constructor(msg?: MsgFunc) {
+    super((msg ?? zhMsg)('import.userSkipped'));
+    this.name = 'ImportUserSkippedError';
+  }
+}

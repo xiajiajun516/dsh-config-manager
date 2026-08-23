@@ -294,6 +294,8 @@ export interface ImportLiveState extends PersistedImportState {
   archiveUnlocked: boolean
   /** 冲突决策收集器实例（仅内存；刷新后由 plan + conflictResolutions 重建） */
   conflictCollector: ConflictCollector | null
+  /** 导入中「跳过当前插件」已发送（内存瞬态；runId 变化时清除；UI 据此禁用跳过按钮） */
+  skipRequested: boolean
 }
 
 /** store 的完整运行时快照（getSnapshot 返回；含敏感字段，仅供组件读取）。 */
@@ -367,6 +369,7 @@ function defaultImportState(): ImportLiveState {
     error: null,
     runId: null,
     conflictCollector: null,
+    skipRequested: false,
   }
 }
 
@@ -525,7 +528,9 @@ export function toPersistedState(state: StoreState): PersistedState {
   } = state.export
   const {
     secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
-    archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector, ...importRest
+    archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector,
+    // 导入中「跳过当前」为内存瞬态（刷新后复位，避免遗留禁用态）
+    skipRequested: _skipRequested, ...importRest
   } = state.import
   const {
     token: _token, webdavPassword: _webdavPassword, busy: _busy, savingConfig: _savingConfig,
@@ -831,12 +836,13 @@ export class RunStore {
         // 旧版持久化载荷可能缺 containerEncrypted（undefined）→ 归一到 false
         containerEncrypted: parsed.import.containerEncrypted === true,
         // 硬性：秘密补录值 / 解密密码 / 解密覆盖清单 / 容器解锁标志绝不从存储恢复；
-        // collector 由 plan+决策重建
+        // collector 由 plan+决策重建；「跳过当前」为内存瞬态，刷新后复位
         secretInputs: {},
         decryptPassword: '',
         decryptRefs: [],
         archiveUnlocked: false,
         conflictCollector: null,
+        skipRequested: false,
       },
       sync: (() => {
         // 旧版持久化载荷（升级前顶层 syncMode 形状）→ 迁移为 git 通道的 byChannel 状态

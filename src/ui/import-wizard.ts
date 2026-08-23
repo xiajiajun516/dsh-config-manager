@@ -250,6 +250,58 @@ export class ImportWizard {
     }
   }
 
+  /** 可重试项计数：执行失败（failed）或用户跳过（skippedByUser）的项。 */
+  retryableCount(): number {
+    return (this.result?.executed ?? []).filter((e) => e.status === 'failed' || e.skippedByUser === true).length;
+  }
+
+  /** 可重试项 id 集合（与 result.executed 对齐；供 executeRetry 过滤计划）。 */
+  private retryableIds(): Set<string> {
+    return new Set(
+      (this.result?.executed ?? [])
+        .filter((e) => e.status === 'failed' || e.skippedByUser === true)
+        .map((e) => e.itemId),
+    );
+  }
+
+  /**
+   * 步骤 10-14（重试版）：只重跑「失败 + 用户跳过」的子集计划（结果页「重试」按钮）。
+   * - 复用已解析的最终计划（this.plan，含冲突决策/路径映射），过滤出可重试项；
+   * - 仍走 executeImportPlan 全流程：快照 → 子集 apply → 校验 → 结果（幂等）；
+   * - 已成功的项不重跑，不重建整体导入；secret 补录值仍沿用仅内存的 secretInputs。
+   */
+  async executeRetry(opts: { rollbackOnError?: boolean }): Promise<ImportResult> {
+    if (this.plan === null || this.result === null) {
+      throw new Error('没有可重试的导入结果');
+    }
+    const retryable = this.retryableIds();
+    const subset = this.plan.items.filter((i) => retryable.has(i.id));
+    if (subset.length === 0) {
+      throw new Error('没有失败或跳过的项需要重试');
+    }
+    const rollbackOnError = opts.rollbackOnError ?? this.rollbackOnError;
+    this.step = 'importing';
+    this.tracker.emit('creating-snapshot');
+    try {
+      this.tracker.emit(EXECUTING_STAGE);
+      this.result = await this.port.executeImportPlan(this.resolvedZipPath(), { ...this.plan, items: subset }, {
+        confirm: true,
+        secretInputs: this.secretInputs,
+        rollbackOnError,
+        decryptPassword: this.decryptPassword === '' ? undefined : this.decryptPassword,
+      });
+      if (!this.result.ok && this.result.rollback) {
+        this.tracker.emit('rolling-back');
+      }
+      this.tracker.emit('done');
+      this.step = 'result';
+      return this.result;
+    } catch (err) {
+      this.errors.push(formatActionableError(toActionableError(err)));
+      throw err;
+    }
+  }
+
   /** 重置向导（可复用实例开始新导入） */
   reset(): void {
     this.step = 'select';
