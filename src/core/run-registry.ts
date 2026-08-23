@@ -21,8 +21,8 @@ import { randomBytes } from 'node:crypto'
 import { zhMsg } from './messages.ts'
 import type { MsgFunc } from './messages.ts'
 
-/** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用。 */
-export type RunKind = 'export' | 'import' | 'autosync' | 'sync-apply'
+/** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用 / 定时备份。 */
+export type RunKind = 'export' | 'import' | 'autosync' | 'sync-apply' | 'backup-schedule'
 
 /** run 状态：进行中 / 完成 / 失败。 */
 export type RunStatus = 'running' | 'done' | 'failed'

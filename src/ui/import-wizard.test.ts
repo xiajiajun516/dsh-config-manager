@@ -208,3 +208,54 @@ test('import-wizard: unlockArchive → selectZip 完整流程（加密容器解�
   assert.equal(analysis.compatibility, 'good');
   assert.equal(wiz.currentStep, 'compatibility');
 });
+
+test('import-wizard: retryableCount 只统计 failed 与用户跳过（skippedByUser）项', async () => {
+  const port = new MockImportPort({
+    result: makeImportResult({
+      executed: [
+        { itemId: 'settings:a', status: 'ok' },
+        { itemId: 'plugin:x', status: 'failed', message: '网络超时' },
+        { itemId: 'plugin:y', status: 'skipped', skippedByUser: true },
+        { itemId: 'prompt:p', status: 'skipped' }, // 引擎跳过（非用户）不计
+      ],
+    }),
+  });
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true });
+  assert.equal(wiz.retryableCount(), 2, 'failed + 用户跳过 各 1');
+});
+
+test('import-wizard: executeRetry 只重跑「失败 + 用户跳过」的子集计划', async () => {
+  const port = new MockImportPort({
+    result: makeImportResult({
+      executed: [
+        { itemId: 'settings:a', status: 'ok' },
+        { itemId: 'settings:b', status: 'ok' },
+        { itemId: 'plugin:x', status: 'failed', message: '网络超时' },
+        { itemId: 'plugin:y', status: 'skipped', skippedByUser: true },
+        { itemId: 'prompt:p', status: 'ok' },
+        { itemId: 'mcp:m', status: 'ok' },
+        { itemId: 'secret:K1', status: 'skipped' },
+      ],
+    }),
+  });
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true });
+  assert.equal(wiz.retryableCount(), 2, 'plugin:x(failed) + plugin:y(用户跳过)')
+
+  await wiz.executeRetry({});
+  assert.equal(wiz.currentStep, 'result', '重试完成后回到结果页');
+  assert.equal(port.executeCalls.length, 2, '第二次 execute 调用为重试');
+  const retryPlan = port.executeCalls[1]!.plan;
+  assert.ok(retryPlan !== undefined, '重试应携带子集计划');
+  assert.deepEqual(
+    retryPlan.items.map((i) => i.id),
+    ['plugin:x', 'plugin:y'],
+    '重试计划只含 failed/用户跳过 项（顺序按原计划）',
+  );
+  assert.equal(retryPlan.pathMappings.length, 0, '子集计划保留 pathMappings');
+});

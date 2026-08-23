@@ -147,7 +147,7 @@ export class MockImportPort implements ImportPort {
   result: ImportResult;
   analyzeCalls = 0;
   planCalls: ImportDecisions[] = [];
-  executeCalls: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string }[] = [];
+  executeCalls: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string; plan?: ImportPlan }[] = [];
 
   constructor(opts: {
     analysis?: ImportAnalysis;
@@ -173,10 +173,10 @@ export class MockImportPort implements ImportPort {
   }
   async executeImportPlan(
     _zip: string,
-    _plan: ImportPlan,
+    plan: ImportPlan,
     opts: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string },
   ): Promise<ImportResult> {
-    this.executeCalls.push(opts);
+    this.executeCalls.push({ ...opts, plan });
     return this.result;
   }
 }

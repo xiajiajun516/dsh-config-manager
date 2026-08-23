@@ -22,7 +22,7 @@ import { createLogger, type Logger } from '../utils/logger.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { UnsupportedSchemaError } from '../schema/versions.ts';
-import { ImportNotConfirmedError } from './types.ts';
+import { ImportNotConfirmedError, ImportUserSkippedError } from './types.ts';
 import type {
   FilesSection, NamespaceRecord, SettingsSection, WorkspaceRecord, WorkspacesSection,
 } from '../schema/types.ts';
@@ -190,6 +190,8 @@ class MockSettingsAdapter implements ConfigAdapter<SettingsSection> {
   readonly portability = 'portable' as const;
   /** 测试钩子：下一次 applyItem 抛错（回滚测试用） */
   failNext = false;
+  /** 测试钩子：下一次 applyItem 抛 ImportUserSkippedError（跳过测试用） */
+  skipNext = false;
 
   async export(ctx: HostContext): Promise<ExportSection<SettingsSection>> {
     const namespaces: Record<string, NamespaceRecord> = {};
@@ -225,6 +227,7 @@ class MockSettingsAdapter implements ConfigAdapter<SettingsSection> {
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
     if (this.failNext) { this.failNext = false; throw new Error('模拟写入失败（failNext）'); }
+    if (this.skipNext) { this.skipNext = false; throw new ImportUserSkippedError(); }
     const ref = item.target?.ref;
     if (!ref) return { ok: false, message: '缺少 target.ref' };
     const data = ctx.sections.get('settings') as SettingsSection;
@@ -598,6 +601,51 @@ test('导入执行 onLog：逐计划项命令日志 + 插件子进程命令行�
     )
     // 日志不得泄 secret 值（安全不变量：RunState.log 只存非敏感文本）
     for (const l of lines) assert.ok(!l.includes('sk-super-secret'), `日志不得含 secret 值: ${l}`)
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('导入执行 onItemStart/用户跳过：开始埋点先于执行；ImportUserSkippedError → skippedByUser 且继续其余项', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-skip-'))
+  try {
+    const src = makeContext('win32', 'C:\\Users\\alice')
+    src.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] })
+    src.settings.ns.set('llm-deepseek', { value: { model: 'x' }, revision: 1, secrets: [] })
+    const adapters = [new MockSettingsAdapter()]
+    const zipPath = path.join(tmp, 'x.zip')
+    await new Exporter({ ctx: src, adapters, now: () => new Date() }).export({ includeSecrets: false, outPath: zipPath })
+
+    const dst = makeContext('linux', '/home/bob')
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() })
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] })
+    assert.equal(plan.items.length, 2, 'fixture 应有 2 个 settings 计划项')
+
+    // 第一个项执行时被「用户跳过」：第二个项应照常执行
+    const settingsAdapter = adapters[0] as MockSettingsAdapter
+    settingsAdapter.skipNext = true
+    const starts: string[] = []
+    const lines: string[] = []
+    const result = await importer.executeImportPlan(zipPath, plan, {
+      confirm: true,
+      onItemStart: (info) => { starts.push(info.detail) },
+      onLog: (l) => lines.push(l),
+    })
+
+    // onItemStart 按计划项顺序先于执行发出（detail = 当前项 id）
+    assert.deepEqual(starts, ['settings:general', 'settings:llm-deepseek'], 'onItemStart 应在每项开始前发出')
+    // 被跳过的项：skipped + skippedByUser + 非失败（不触发回滚）
+    const skipped = result.executed.find((e) => e.itemId === 'settings:general')
+    assert.equal(skipped?.status, 'skipped')
+    assert.equal(skipped?.skippedByUser, true)
+    // 其余项照常执行成功
+    const rest = result.executed.find((e) => e.itemId === 'settings:llm-deepseek')
+    assert.equal(rest?.status, 'ok')
+    assert.equal(result.ok, true)
+    assert.ok(dst.settings.ns.has('llm-deepseek'), '跳过后后续项应继续执行并写入')
+    assert.ok(!dst.settings.ns.has('general'), '被跳过的项不得写入')
+    // 日志含跳过标记
+    assert.ok(lines.some((l) => l.startsWith('⏭ settings:general')), `日志应含跳过行: ${lines.join(' | ')}`)
   } finally {
     await fs.rm(tmp, { recursive: true, force: true })
   }

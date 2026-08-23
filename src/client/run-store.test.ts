@@ -103,6 +103,20 @@ test('m2-refresh: password/passwordConfirm/secretInputs 绝不写入 sessionStor
   assert.ok(!('secretInputs' in (parsed['import'] as Record<string, unknown>)))
 })
 
+test('m2-refresh: skipRequested 为内存瞬态——不写入 sessionStorage、刷新后复位', () => {
+  const { storage, raw } = makeStorage()
+  const first = new RunStore({ storage })
+  first.patch({ import: { skipRequested: true, running: true } })
+  const text = raw()
+  assert.ok(text !== null)
+  const parsed = JSON.parse(text) as Record<string, unknown>
+  const imp = parsed['import'] as Record<string, unknown>
+  assert.ok(!('skipRequested' in imp), 'skipRequested 为瞬态，不得落盘')
+  // 新实例（模拟刷新）：skipRequested 复位为 false
+  const second = new RunStore({ storage })
+  assert.equal(second.getSnapshot().import.skipRequested, false, '刷新后跳过标记复位')
+})
+
 test('m2-refresh: 非敏感表单状态往返恢复，敏感字段与导出结果瞬态刷新后清空', () => {
   const { storage } = makeStorage()
   const first = new RunStore({ storage })
