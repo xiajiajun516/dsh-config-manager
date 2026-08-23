@@ -252,12 +252,12 @@ export function ExportView({ api, t }: ExportViewProps) {
       {running && <ProgressBar event={progress} active />}
 
       {error !== null && (
-        <ErrorBanner error={error} onRetry={() => { void runExport() }} retrying={running} />
+        <ErrorBanner error={error} onRetry={() => { void runExport() }} retrying={running} t={api.t} />
       )}
 
       {result !== null && !running && (
         <>
-          <ReportView kind="export" exportReport={result.report} onDownload={() => { void download(result.zipPath) }} downloadBusy={downloading} />
+          <ReportView kind="export" exportReport={result.report} onDownload={() => { void download(result.zipPath) }} downloadBusy={downloading} t={api.t} />
           {downloaded && <Banner kind="ok">{t('export.saved', { name: result.report.file.name })}</Banner>}
         </>
       )}

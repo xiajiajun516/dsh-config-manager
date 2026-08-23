@@ -82,6 +82,7 @@ export function SyncHistoryView(props: SyncHistoryViewProps): ReactNode {
         error={error}
         onRetry={() => { setReloadKey((k) => k + 1) }}
         retrying={loading}
+        t={api.t}
       />
     );
   }

@@ -575,6 +575,28 @@
   font-size: 12.5px;
   font-weight: 600;
   color: var(--dsw-alias-label-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 「↓ 新输出」跳底按钮：用户上滚后有新行时出现（§24 自动滚动纪律）；
+   复用 ghost 语义（L2 描边 + 细圆角），hover 走交互底色，不新增视觉体系 */
+.logJumpButton {
+  font-family: var(--dsw-font-family);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 999px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.logJumpButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 /* 命令日志容器：限高内滚（长日志不把整页撑长；见 DESIGN.md §7.2 logScroll） */

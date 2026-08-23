@@ -98,12 +98,15 @@ function actionKindLabel(kind: string): string {
 /**
  * 从 runStore 恢复上次的快照面板状态（切 tab 回 / 刷新后挂载）。
  * 无敏感字段；plan/report 为纯数据，可安全序列化恢复。
+ * running 来自 store 镜像（刷新后经 runStore.resume() 以宿主 /runs 为权威重新置位——
+ * 持久化白名单恒为 false，绝不把浏览器陈旧状态当成恢复执行中的依据）。
  */
 function initFromStore(): PanelState {
   const s: SnapshotsStoreSlice = runStore.getSnapshot().snapshots
   return {
     ...initial,
     selectedId: s.selectedId,
+    running: s.running,
     plan: s.plan,
     report: s.report,
     actionError: s.actionError,
@@ -183,6 +186,10 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
     if (state.selectedId === null || state.running) return
     patch({ running: true, report: null, actionError: null })
     setConfirmOpen(false)
+    // m3/P1-1：宿主侧权威防重（/restore 经 RunRegistry 登记，同 kind running → 409）；
+    // 前端 running 只是 UX 镜像。watchRunning 轮询宿主 /runs + /progress——
+    // 切 tab（卸载）后轮询继续，完成/失败经 applySettled 写入 store，切回 initFromStore 恢复。
+    runStore.watchRunning('restore', 500)
     api.restoreSnapshot(state.selectedId, false).then(
       (res) => { patch({ running: false, report: res.report ?? null }) },
       (err) => {
@@ -191,7 +198,7 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
           actionError: err instanceof Error ? err.message : String(err),
         })
       },
-    )
+    ).finally(() => { runStore.stopRunWatch('restore') })
   }
 
   const summary = (): string => {
@@ -376,12 +383,17 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
   const [lastRunDetail, setLastRunDetail] = useState<string | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  /** 挂载守卫：切 tab 卸载后异步回调只更新 store（草稿），不再 setState（React 18 无告警但浪费） */
+  const mountedRef = useRef(true)
+
+  useEffect(() => () => { mountedRef.current = false }, [])
 
   const load = (): void => {
     setStatus('loading')
     setError(null)
     api.backupSchedule().then(
       (schedule) => {
+        if (!mountedRef.current) return
         setSaved(schedule)
         // 有未保存草稿（切 tab 回来）则保留，否则以宿主配置为权威
         setDraft(runStore.getSnapshot().snapshots.backupDraft ?? { enabled: schedule.enabled, interval: schedule.interval })
@@ -390,6 +402,7 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
         setStatus('ready')
       },
       (err) => {
+        if (!mountedRef.current) return
         setStatus('error')
         setError(err instanceof Error ? err.message : String(err))
       },
@@ -415,15 +428,18 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
     setActionError(null)
     api.saveBackupSchedule(parsed.value).then(
       (schedule) => {
+        // 宿主已保存：无论面板是否仍挂载都清 store 草稿（否则切回会显示陈旧未保存态）
+        runStore.patch({ snapshots: { backupDraft: null } })
+        if (!mountedRef.current) return
         setSaved(schedule)
         setDraft({ enabled: schedule.enabled, interval: schedule.interval })
         setLastRun(schedule.lastRunStatus)
         setLastRunDetail(formatRunTime(schedule.lastRunAt))
-        runStore.patch({ snapshots: { backupDraft: null } })
         setSaving(false)
         setFlash(t('backupSchedule.saved'))
       },
       (err) => {
+        if (!mountedRef.current) return
         setSaving(false)
         setActionError(err instanceof Error ? err.message : String(err))
       },
@@ -437,6 +453,7 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
     setActionError(null)
     api.runBackupNow().then(
       (res) => {
+        if (!mountedRef.current) return
         setSaved(res.schedule)
         setLastRun(res.run.status)
         setLastRunDetail(res.run.zip !== undefined && res.run.zip !== ''
@@ -445,6 +462,7 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
         setRunning(false)
       },
       (err) => {
+        if (!mountedRef.current) return
         setRunning(false)
         setActionError(err instanceof Error ? err.message : String(err))
       },

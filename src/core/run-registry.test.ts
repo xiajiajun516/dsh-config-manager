@@ -118,6 +118,46 @@ test('appendLog: 日志行数封顶 MAX_RUN_LOG_LINES（超限截断保留最新
   assert.equal(state?.log[state!.log.length - 1], `line-${MAX_RUN_LOG_LINES + 9}`)
 })
 
+test('appendLog: 不可变追加——每次 append 换新数组引用（React memo 感知新行；封顶后长度恒定但引用仍变）', () => {
+  const reg = new RunRegistry()
+  const run = reg.register('import')
+  const initial = reg.get(run.runId)!.log
+  reg.appendLog(run.runId, 'line-1')
+  const second = reg.get(run.runId)!.log
+  assert.notEqual(second, initial, 'append 必须生成新数组引用（不得原地 push）')
+  assert.deepEqual(second, ['line-1'])
+
+  // 500 行封顶后：长度恒定（memo 按长度比较会漏），但每次 append 引用必变
+  const capRun = reg.register('export')
+  const refs = new Set<unknown[]>()
+  for (let i = 0; i < MAX_RUN_LOG_LINES + 5; i++) {
+    reg.appendLog(capRun.runId, `line-${i}`)
+    refs.add(reg.get(capRun.runId)!.log)
+  }
+  assert.equal(reg.get(capRun.runId)!.log.length, MAX_RUN_LOG_LINES)
+  assert.equal(refs.size, MAX_RUN_LOG_LINES + 5, '每次 append 都是新引用（含封顶后）——前端以引用比较不会漏渲染')
+})
+
+test('register: 快照恢复（restore）同 kind 进行中拒绝（P1-1 并发恢复防护）', () => {
+  const reg = new RunRegistry()
+  const first = reg.register('restore')
+  assert.throws(
+    () => reg.register('restore'),
+    (err: unknown) => {
+      assert.ok(err instanceof RunConflictError)
+      assert.equal((err as RunConflictError).runId, first.runId)
+      return true
+    },
+  )
+  // 恢复中允许导出（不同 kind 互不阻塞）
+  const exp = reg.register('export')
+  assert.equal(exp.kind, 'export')
+  // 完成后的 restore 不阻塞新 restore
+  reg.finish(first.runId, {})
+  const second = reg.register('restore')
+  assert.notEqual(second.runId, first.runId)
+})
+
 test('finish/fail: 状态与 result/error 落账', () => {
   const reg = new RunRegistry()
   const done = reg.register('export')

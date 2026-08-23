@@ -141,7 +141,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.48'
+const PLUGIN_VERSION = '0.1.49'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -1234,10 +1234,13 @@ export interface RestoreExecutor {
 /**
  * 按计划执行恢复动作（纯执行器；逐项 try/catch 不拖垮其余），
  * 返回与 CLI 一致的诚实报告。顺序 = 计划顺序（整文件 → 插件 → file 补偿）。
+ * @param onAction - 每项动作执行回调（宿主路由埋点：更新 RunRegistry 进度；
+ *   index/1-based、total=计划动作数、detail=动作描述）
  */
 export async function executeRestorePlan(
   plan: RestorePlan,
   exec: RestoreExecutor,
+  onAction?: (info: { index: number; total: number; detail: string }) => void,
 ): Promise<RestoreReport> {
   const report: RestoreReport = {
     snapshotId: plan.snapshotId,
@@ -1247,7 +1250,11 @@ export async function executeRestorePlan(
     failed: [],
     skipped: [],
   }
+  const total = plan.actions.length
+  let index = 0
   for (const action of plan.actions) {
+    index += 1
+    onAction?.({ index, total, detail: action.description })
     try {
       switch (action.kind) {
         case 'hostFileRestore':
@@ -2096,6 +2103,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     // M4：快照恢复。dryRun=true 只返回动作计划（planRestore，零写入）；
     // 真实执行 = 计划 → 宿主执行器（ctx.fs 整文件/文件还原 + runDshPlugin 卸载插件）
     // → 与 CLI 一致的诚实报告 { restored/removedPlugins/manualHints/failed/skipped }。
+    //
+    // **并发防护（P1-1）**：真实执行（dryRun=false）经 runs.register('restore') 登记——
+    // 同 kind 已有 running 时抛 RunConflictError → 409 拒绝。这是宿主侧的权威防重
+    // （前端 loading 只是 UX）：即使两个 tab / 刷新后重复点击，同一时刻至多一个
+    // restore 在执行（不同快照并发恢复会交错写文件，同快照并发会互相覆盖
+    // pre-restore 双保险备份，都是真实数据风险）。进度经 onAction 埋点更新
+    // RunRegistry（/progress 轮询 + /runs 刷新恢复可见）；响应含 runId。
     {
       kind: 'exact',
       path: API.restore,
@@ -2118,12 +2132,41 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         try {
           if (dryRun) {
+            // dry-run 零写入、只读探测：不登记 run（并发 dry-run 无害）
             writeJson(res, 200, { dryRun: true, plan: await planRestore(restoreOpts) })
             return
           }
-          const plan = await planRestore(restoreOpts)
-          const report = await executeRestorePlan(plan, makeRestoreExecutor(snapshotDir, host, host.profile))
-          writeJson(res, 200, { dryRun: false, report })
+          // 真实执行：先登记 run（同 kind running → 409 拒绝重复恢复）
+          let run: RunState
+          try {
+            run = runs.register('restore')
+          } catch (error) {
+            writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+            return
+          }
+          const runId = run.runId
+          try {
+            const plan = await planRestore(restoreOpts)
+            const report = await executeRestorePlan(
+              plan,
+              makeRestoreExecutor(snapshotDir, host, host.profile),
+              // m1 埋点：每执行一个恢复动作实时更新 run 状态（/progress 轮询可见）
+              (info) => {
+                runs.update(runId, {
+                  section: 'restore',
+                  item: info.index,
+                  itemTotal: info.total,
+                  detail: info.detail,
+                })
+              },
+            )
+            runs.finish(runId, report)
+            writeJson(res, 200, { dryRun: false, report, runId })
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            runs.fail(runId, message)
+            writeJson(res, 400, { error: message, runId })
+          }
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2132,11 +2175,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     // -------------------------------------------------- backup-schedule
     // 定时全量备份设置（GET 读 / PUT 存 sync/backup-schedule.json；无敏感字段）：
     // 保存后重排调度器（reload）；恒不含 secret、不加密（与自动同步同语义）。
+    // 与全仓一致：每个方法分支都过 loopback fence（guard）——其他 /api/dsh-config-manager/*
+    // 路由全部首行 guard，新增路由不得遗漏（安全不变量：仅 loopback + 同源可访问）。
     {
       kind: 'exact',
       path: API.backupSchedule,
       handler: async (req, res) => {
         if (req.method === 'GET') {
+          if (!guard(req, res, 'GET')) return
           try {
             writeJson(res, 200, { schedule: await readBackupSchedule(syncDir) })
           } catch (error) {
@@ -2145,6 +2191,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         if (req.method === 'PUT') {
+          if (!guard(req, res, 'PUT')) return
           try {
             const body = await readJsonBody(req)
             const parsed = validateBackupScheduleDraft(body)
@@ -2168,14 +2215,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     // ------------------------------------------------- backup-schedule/run
     // 立即执行一次全量备份（复用 BackupScheduler.runOnce，同一时刻防重）：
     // 返回执行结果（status/zip/skipReason/error）+ 最新配置（含 lastRun 状态）。
+    // 同全仓：loopback fence（guard）——远程调用方不得触发宿主写盘操作。
     {
       kind: 'exact',
       path: API.backupScheduleRun,
       handler: async (req, res) => {
-        if (req.method !== 'POST') {
-          writeJson(res, 405, { error: `method ${req.method} not allowed` })
-          return
-        }
+        if (!guard(req, res, 'POST')) return
         try {
           const run = await backupScheduler.runOnce()
           const schedule = await readBackupSchedule(syncDir)

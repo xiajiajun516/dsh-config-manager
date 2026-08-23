@@ -114,21 +114,26 @@ function ImportLogPanelBase({ lines, t }: { lines: string[]; t: TranslateNS<'con
   const stickRef = useRef(true)
   /** 用户上滚后是否有新行到达（显示「↓ 新输出」；点击跳到底部清除） */
   const [hasNewOutput, setHasNewOutput] = useState(false)
-  /** 上次渲染的行数（memo 外比较用；新行 = 长度增加） */
-  const prevCountRef = useRef(lines.length)
+  /**
+   * 上次渲染的数组引用（新输出 = 引用变化）。依赖 appendLog 的**不可变写入**：
+   * 每次追加都生成新数组（run-registry.ts）——行数封顶后长度恒定，但引用必变，
+   * 以引用判断才能感知截断后的新行（长度比较在 500 行封顶时失效）。
+   */
+  const prevLinesRef = useRef(lines)
 
   useEffect(() => {
     const el = scrollRef.current
     if (el === null) return
+    const hasNew = lines !== prevLinesRef.current
+    prevLinesRef.current = lines
     if (stickRef.current) {
       el.scrollTop = el.scrollHeight
       setHasNewOutput(false)
-    } else if (lines.length > prevCountRef.current) {
+    } else if (hasNew) {
       // 用户已上滚且有新行到达：提示而非强制拉回（§24 自动滚动纪律）
       setHasNewOutput(true)
     }
-    prevCountRef.current = lines.length
-  }, [lines.length])
+  }, [lines])
 
   /** 滚动中更新贴底状态（上滚 → 停止跟随；滚回底部 → 恢复跟随并清除提示） */
   const onScroll = (): void => {
@@ -168,10 +173,11 @@ function ImportLogPanelBase({ lines, t }: { lines: string[]; t: TranslateNS<'con
   )
 }
 
-/** memo：lines 数组为同一引用被 append（RunState.log push 不换引用），浅比较失效 ——
- *  自定义比较以行数 + t 引用为准，长度未变时跳过整个列表重渲染。 */
+/** memo：lines 数组经 appendLog **不可变追加**（每次 append 换新引用，run-registry.ts）——
+ *  自定义比较以「数组引用 + t 引用」为准：引用未变 = 无新输出，跳过整个列表重渲染；
+ *  引用已变 = 有新行（含 500 行封顶后长度不变的情况），必须重渲染。 */
 const ImportLogPanel = memo(ImportLogPanelBase, (prev, next) =>
-  prev.lines.length === next.lines.length && prev.t === next.t,
+  prev.lines === next.lines && prev.t === next.t,
 )
 
 /**
@@ -505,7 +511,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             {uploading ? <Spinner label={t('import.analyzing')} /> : t(browseLabelKey(selectModel.selectedName !== null))}
           </Button>
         </div>
-        {error !== null && <ErrorBanner error={error} onRetry={resetWizard} />}
+        {error !== null && <ErrorBanner error={error} onRetry={resetWizard} t={api.t} />}
       </div>
     )
   }
@@ -514,7 +520,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     return (
       <div className={css.viewBody}>
         <ProgressBar event={progress} active />
-        {error !== null && <ErrorBanner error={error} onRetry={resetWizard} />}
+        {error !== null && <ErrorBanner error={error} onRetry={resetWizard} t={api.t} />}
         <ErrorList errors={imp.errors} />
       </div>
     )
@@ -541,7 +547,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             {analysis.warnings.map((w, i) => <div key={i}>{w}</div>)}
           </Banner>
         )}
-        {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} />}
+        {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
           <Button variant="primary" onClick={() => { void goPreview() }}>{t('common.next')}</Button>
@@ -568,7 +574,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         </div>
         {isEncrypted && <Banner kind="warn">{t('import.decrypt.previewHint')}</Banner>}
         {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
-        {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} />}
+        {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
           <Button
@@ -605,7 +611,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             setArchiveUnlockError(null)
           }}
         />
-        {archiveUnlockError !== null && <ErrorBanner error={archiveUnlockError} />}
+        {archiveUnlockError !== null && <ErrorBanner error={archiveUnlockError} t={api.t} />}
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
           <Button
@@ -698,7 +704,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             </Button>
           </div>
         </Card>
-        {error !== null && <ErrorBanner error={error} onRetry={() => { void execute() }} />}
+        {error !== null && <ErrorBanner error={error} onRetry={() => { void execute() }} t={api.t} />}
       </div>
     )
   }
@@ -723,7 +729,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         )}
         {imp.skipRequested && <div className={css.hint}>{t('import.skipPending')}</div>}
         <div className={css.hint}>{t('import.importing')}</div>
-        {error !== null && <ErrorBanner error={error} />}
+        {error !== null && <ErrorBanner error={error} t={api.t} />}
         <ErrorList errors={imp.errors} />
       </div>
     )
@@ -753,7 +759,7 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
           </div>
         )}
         {result.needsRestart && <Banner kind="warn">{t('report.needsRestart')}</Banner>}
-        {error !== null && <ErrorBanner error={error} />}
+        {error !== null && <ErrorBanner error={error} t={api.t} />}
       </div>
     )
   }

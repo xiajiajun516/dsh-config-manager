@@ -406,7 +406,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **限高列表 + 批量操作** | `confirmScroll/reportScroll` + 底部 actionRow（批量决策按钮） | 冲突决策、差异确认、恢复计划、拉取预览 |
 | **diff 展开** | `<details><summary>diff</summary><pre class="diffScroll">` | 同步冲突 diff |
 | **结果页** | `ReportView`（统计 + 等宽报告）+ 条件 Banner（needsRestart）+ 动作按钮 | 导入结果、导出完成 |
-| **导入执行日志（进行中）** | importing 步骤进度条下方：`logPanel`（`logHeader` 小标题 + `logScroll` 限高 200px 内滚 + `logLine` 等宽行），行文本 = 逐计划项操作（`▶` 开始 / `✓⚠✗–⏭` 结果）+ 子进程命令行（`$ dsh plugin …`），新行自动滚底，渲染前 `redact()` 兜底；数据来自 Host RunRegistry（`/progress` 轮询，刷新期间导入仍在进行则自动恢复） | 导入向导 importing 步骤 |
+| **导入执行日志（进行中）** | importing 步骤进度条下方：`logPanel`（`logHeader` 小标题 + `logScroll` 限高 200px 内滚 + `logLine` 等宽行），行文本 = 逐计划项操作（`▶` 开始 / `✓⚠✗–⏭` 结果）+ 子进程命令行（`$ dsh plugin …`），渲染前 `redact()` 兜底；数据来自 Host RunRegistry（`/progress` 轮询，刷新期间导入仍在进行则自动恢复）。**智能自动滚动**：仅当用户贴近底部时跟随最新行；用户上滚查看历史时不强制拉回，改为在 `logHeader` 显示「↓ 新输出」胶囊按钮（`logJumpButton`，ghost 语义：L2 描边 + 细圆角 + hover 交互底色），点击跳回底部并恢复跟随。性能正确性：RunRegistry `appendLog` 为**不可变追加**（每次换新数组引用，行数封顶 500 后长度恒定但引用必变），`ImportLogPanel` 以「数组引用 + t 引用」做 memo 比较——引用未变跳过重渲染、引用已变（含封顶后）必重渲染，杜绝「优化导致日志冻结」 | 导入向导 importing 步骤 |
 | **跳过当前插件 + 结果页重试** | importing 步骤：仅当当前项为插件安装（`progress.detail` 以 `plugin:` 前缀）时显示 ghost 按钮「跳过当前插件」→ 宿主 kill 子进程并清理半装状态（恢复 profile package.json + 删 node_modules/<pkg>）→ 该项标记 user-skipped（报告显示「用户跳过」）→ 导入继续其余项；结果页当存在 failed/用户跳过 项时显示 primary 按钮「重试失败/跳过的项 (N)」→ 只重跑子集计划（复用决策/路径映射，不重建整体导入） | 导入向导 importing 步骤、导入结果页 |
 | **错误恢复** | `ErrorBanner(error, onRetry)`（可重试）+ 禁用重复启动 | 全站 |
 | **列表+详情** | 列表（可搜索/过滤）+ 点条目展开详情卡 | 市场面板（搜索框 + 类别 select + 条目行 + 详情） |

@@ -94,6 +94,9 @@ export interface RestoreOptions {
   pluginUninstaller?: (
     name: string, profileDir: string, profile: string,
   ) => Promise<{ ok: boolean; message?: string }>;
+  /** 每项动作执行回调（宿主路由埋点：更新 RunRegistry 进度；index/1-based、total=计划动作数、
+   * detail=动作描述。dry-run/planRestore 不触发） */
+  onAction?: (info: { index: number; total: number; detail: string }) => void;
   /** 消息翻译器（缺省 zh；宿主按 DSH 应用语言注入） */
   msg?: MsgFunc;
 }
@@ -494,7 +497,11 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   };
 
   let seq = 0;
+  const total = plan.actions.length;
+  let actionIndex = 0;
   for (const action of plan.actions) {
+    actionIndex += 1;
+    opts.onAction?.({ index: actionIndex, total, detail: action.description });
     try {
       switch (action.kind) {
         case 'hostFileRestore': {

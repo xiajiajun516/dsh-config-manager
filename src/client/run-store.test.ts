@@ -19,7 +19,8 @@ import assert from 'node:assert/strict'
 
 import { RunStore, STATE_KEY, type StoreStorage } from './run-store.ts'
 import type { RunProgress } from './common/progress-view.ts'
-import type { RunState } from '../core/run-registry.ts'
+import { MAX_RUN_LOG_LINES, type RunState } from '../core/run-registry.ts'
+import type { RestoreReport } from '../core/restore.ts'
 import type { ImportDecisions } from '../core/types.ts'
 import type { ConfigManagerApi } from './api.ts'
 import {
@@ -503,6 +504,9 @@ test('m3-poll: watchRunning 经 /runs 发现进行中 run 并轮询 /progress �
   // 发现后转入 /progress 轮询且回填过真实进度（内部计数 + 当前项名）
   assert.ok(progressCalls >= 2, '发现 runId 后轮询 /progress')
   assert.equal(imp.running, false)
+  // 发现活跃 run 时 runId 同步写入 store（fresh run 期间「跳过当前插件」有正确目标，
+  // 不会用上一次导入的陈旧 runId —— run-store patchProgress 同步 runId）
+  assert.equal(imp.runId, RUN_ID, 'watchRunning 发现 run 后 store.runId 立即填充')
 })
 
 test('m3-poll: watchRunning 轮询回填分区/内部计数进度（ProgressBar 徽章数据源）', async () => {
@@ -563,6 +567,48 @@ test('m3-poll: stopRunWatch 停止发现阶段轮询（视图请求结束后）'
   await sleep(20)
   assert.ok(runsCalls > callsAfterStop, 'stop 后可重新 watch')
   store.stopRunWatch('export')
+})
+
+test('m3-poll: 导入日志超过 MAX_RUN_LOG_LINES 后 store progress.log 仍持续更新（P1-3 封顶不冻结）', async () => {
+  // 模拟导入日志已满 500 行封顶：后续轮询长度恒为 500，但每次 append 都换新数组引用
+  // （run-registry appendLog 不可变写入）。store 的 progress.log 必须持续拿到新引用，
+  // 否则 ImportLogPanel 的 memo 按引用比较会判定「无变化」→ 日志面板冻结。
+  let log: string[] = []
+  for (let i = 0; i < MAX_RUN_LOG_LINES; i++) log = [...log, `line-${i}`]
+  const progressResponses: RunState[] = []
+  for (let i = 0; i < 4; i++) {
+    log = [...log.slice(-(MAX_RUN_LOG_LINES - 1)), `cap-${i}`]
+    progressResponses.push(runningRun('import', { section: 'plugins', item: i + 1, itemTotal: 8, detail: 'plugin:pkg', log }))
+  }
+  progressResponses.push({
+    runId: RUN_ID, kind: 'import', status: 'done',
+    section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
+    result: makeImportResult(), createdAt: 1, updatedAt: 3,
+  })
+  let progressCalls = 0
+  const api = makeApi({
+    runs: async () => [runningRun('import')],
+    progress: async () => progressResponses[Math.min(progressCalls++, progressResponses.length - 1)]!,
+  })
+  const store = new RunStore({ storage: null, pollIntervalMs: 5 })
+  await store.resume(api)
+  // 订阅捕获轮询期间的 progress.log 引用
+  const seenRefs = new Set<string[]>()
+  const seenTails = new Set<string>()
+  const unsub = store.subscribe(() => {
+    const p = store.getSnapshot().import.progress
+    const log = p?.log ?? []
+    if (log.length === MAX_RUN_LOG_LINES) {
+      seenRefs.add(log)
+      seenTails.add(log[log.length - 1]!)
+    }
+  })
+  await sleep(150)
+  unsub()
+  assert.equal(store.getSnapshot().import.step, 'result', '轮询收敛到完成')
+  assert.ok(seenRefs.size >= 3, `封顶后轮询仍拿到新数组引用（实际 ${seenRefs.size} 个不同引用）`)
+  assert.ok(seenTails.has('cap-3'), '最新行 cap-3 已到达 store（日志没有冻结在旧行）')
+  assert.ok(!seenTails.has('line-499'), '截断保留最新行（cap-* 覆盖 line-* 尾部）')
 })
 
 test('m3-poll: 同一 kind 重复 watchRunning 不重复启动', async () => {
@@ -872,4 +918,69 @@ test('低频面板: 旧版顶层 syncMode 载荷 → 迁移为 git 通道的 byC
   assert.equal(st.sync.byChannel.git.encryptPassword, '', '迁移后加密密码仍强制清空')
   assert.equal(st.sync.byChannel.git.selectedSnapshotId, 'snap-old')
   assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道保持缺省')
+})
+
+/* -------------------------------------------------- restore（P1-1）权威状态 */
+
+test('低频面板: 快照恢复 running 为瞬态——不写入 sessionStorage、刷新后复位（以宿主 /runs 为权威）', () => {
+  const { storage, raw } = makeStorage()
+  const first = new RunStore({ storage })
+  first.patch({ panel: 'snapshots', snapshots: { selectedId: 'snap-1', running: true } })
+  const persisted = JSON.parse(raw() ?? '{}') as { snapshots?: { running?: boolean } }
+  assert.equal(persisted.snapshots?.running, false, 'running 恒不落盘（白名单剔除）')
+
+  // 即便旧载荷携带 running=true，applyPersisted 也硬性归零——绝不把浏览器陈旧状态
+  // 当成「恢复仍在执行」的依据（宿主 /runs 是唯一权威，resume() 负责重新置位）
+  storage.setItem(STATE_KEY, JSON.stringify({
+    ...persisted,
+    snapshots: { ...persisted.snapshots, running: true },
+  }))
+  const second = new RunStore({ storage })
+  assert.equal(second.getSnapshot().snapshots.running, false, '刷新后 running 复位（不读存储）')
+  assert.equal(second.getSnapshot().snapshots.selectedId, 'snap-1', '非瞬态字段仍恢复')
+})
+
+test('m2-resume: 活跃 restore run 经 /runs 恢复 running 并轮询到完成回填报告（宿主为权威）', async () => {
+  const report: RestoreReport = {
+    snapshotId: 'snap-1',
+    restored: ['settings.yaml'],
+    removedPlugins: ['@scope/pkg'],
+    manualHints: [],
+    failed: [],
+    skipped: [],
+  }
+  const progressResponses: RunState[] = [
+    runningRun('restore', { section: 'restore', item: 1, itemTotal: 3, detail: '整文件还原 settings.yaml' }),
+    {
+      runId: RUN_ID, kind: 'restore', status: 'done',
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
+      result: report, createdAt: 1, updatedAt: 3,
+    },
+  ]
+  let progressCalls = 0
+  const api = makeApi({
+    runs: async () => [runningRun('restore')],
+    progress: async () => progressResponses[Math.min(progressCalls++, progressResponses.length - 1)]!,
+  })
+  const store = new RunStore({ storage: null, pollIntervalMs: 5 })
+  const resumed = await store.resume(api)
+  assert.equal(resumed, true, '发现活跃 restore run')
+  assert.equal(store.getSnapshot().snapshots.running, true, 'running 镜像置位（宿主 /runs 为权威）')
+
+  await sleep(80)
+  const snap = store.getSnapshot().snapshots
+  assert.equal(snap.running, false, '完成后 running 复位')
+  assert.deepEqual(snap.report?.restored, ['settings.yaml'], '恢复报告回填 store')
+  assert.equal(snap.actionError, null)
+})
+
+test('m2-resume: store 镜像显示恢复中但 host 无活跃 restore run → 复位并提示不可恢复', async () => {
+  const api = makeApi({ runs: async () => [] })
+  const store = new RunStore({ storage: null })
+  store.patch({ snapshots: { running: true } })
+  const resumed = await store.resume(api)
+  assert.equal(resumed, false)
+  const snap = store.getSnapshot().snapshots
+  assert.equal(snap.running, false, '无宿主 run 时 running 复位（不残留 UI 假状态）')
+  assert.ok(snap.actionError !== null, '如实提示结果不可恢复')
 })

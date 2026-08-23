@@ -82,11 +82,13 @@ export interface DecryptArchiveResponse {
   refs: string[];
 }
 
-/** restore 端点响应：dryRun=true 返回 plan；执行返回 report（与 CLI 一致的诚实报告） */
+/** restore 端点响应：dryRun=true 返回 plan；执行返回 report（与 CLI 一致的诚实报告）。
+ *  runId 仅真实执行时存在（宿主 RunRegistry 登记；/runs + /progress 刷新恢复用）。 */
 export interface RestoreResponse {
   dryRun: boolean;
   plan?: RestorePlan;
   report?: RestoreReport;
+  runId?: string;
 }
 
 /** Star 引导弹窗状态（GET /star-prompt；纯偏好，无 secret） */

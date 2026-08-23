@@ -21,8 +21,8 @@ import { randomBytes } from 'node:crypto'
 import { zhMsg } from './messages.ts'
 import type { MsgFunc } from './messages.ts'
 
-/** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用 / 定时备份。 */
-export type RunKind = 'export' | 'import' | 'autosync' | 'sync-apply' | 'backup-schedule'
+/** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用 / 定时备份 / 快照恢复。 */
+export type RunKind = 'export' | 'import' | 'autosync' | 'sync-apply' | 'backup-schedule' | 'restore'
 
 /** run 状态：进行中 / 完成 / 失败。 */
 export type RunStatus = 'running' | 'done' | 'failed'
@@ -71,7 +71,9 @@ export class RunConflictError extends Error {
             ? '一键同步已在进行中'
             : kind === 'backup-schedule'
               ? '定时备份已在进行中'
-              : msg('run.conflict.import', { runId }),
+              : kind === 'restore'
+                ? '快照恢复已在进行中（请等待当前恢复完成）'
+                : msg('run.conflict.import', { runId }),
     )
     this.name = 'RunConflictError'
     this.runId = runId
@@ -142,17 +144,22 @@ export class RunRegistry {
     return { ...run }
   }
 
-  /** 追加一行执行日志（导入逐计划项操作 / 子进程命令）；run 不存在返回 undefined，
+  /**
+   * 追加一行执行日志（导入逐计划项操作 / 子进程命令）；run 不存在返回 undefined，
    * 已完成/失败后的晚到追加被忽略（防御异步回调竞态）。行数封顶 MAX_RUN_LOG_LINES，
-   * 超限时截断保留最新行。 */
+   * 超限时截断保留最新行。
+   *
+   * **不可变写入（性能正确性关键）**：每次 append 生成新数组（push + splice 会原地
+   * mutation —— /progress 轮询返回的 RunState.log 与浏览器侧 store 共享同一引用，
+   * 行数封顶后长度恒定，React memo 按引用/长度比较将无法感知新行，日志面板冻结）。
+   * 调用方（mapRunProgress → ImportLogPanel）据此以「数组引用变化」判断有新输出。
+   */
   appendLog(runId: string, line: string): RunState | undefined {
     const run = this.runs.get(runId)
     if (run === undefined) return undefined
     if (run.status !== 'running') return { ...run }
-    run.log.push(line)
-    if (run.log.length > MAX_RUN_LOG_LINES) {
-      run.log.splice(0, run.log.length - MAX_RUN_LOG_LINES)
-    }
+    // 不可变追加：保留最新 MAX_RUN_LOG_LINES 行（slice(-(MAX-1)) 在长度不足时取全量）
+    run.log = [...run.log.slice(-(MAX_RUN_LOG_LINES - 1)), line]
     run.updatedAt = this.now()
     return { ...run }
   }

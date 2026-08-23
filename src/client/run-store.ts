@@ -190,10 +190,15 @@ export interface MarketStoreSlice {
   myConfirmDeleteId: string | null
 }
 
-/** 快照恢复面板的切片（无敏感字段；快照列表本身可随时重载，不持久化）。 */
+/** 快照恢复面板的切片（无敏感字段；快照列表本身可随时重载，不持久化）。
+ *  running 为「内存切片瞬态」：切 tab 由模块级单例保留、刷新时被 toPersistedState
+ *  白名单剔除 —— 恢复是否仍在执行以宿主 RunRegistry（/runs + /progress）为权威，
+ *  刷新后经 resume() 重新发现；浏览器持久化绝不作为 destructive operation 的状态源。 */
 export interface SnapshotsStoreSlice {
   selectedId: string | null
   plan: RestorePlan | null
+  /** 真实恢复执行中（瞬态；宿主 /runs 是权威来源，本字段只是镜像） */
+  running: boolean
   report: RestoreReport | null
   actionError: string | null
   error: string | null
@@ -425,6 +430,7 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
   return {
     selectedId: null,
     plan: null,
+    running: false,
     report: null,
     actionError: null,
     error: null,
@@ -505,6 +511,7 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
   return {
     selectedId: s.selectedId,
     plan: s.plan,
+    running: s.running,
     report: s.report,
     actionError: s.actionError,
     error: s.error,
@@ -560,7 +567,13 @@ export function toPersistedState(state: StoreState): PersistedState {
       },
     },
     market: state.market,
-    snapshots: state.snapshots,
+    snapshots: {
+      ...state.snapshots,
+      // 快照恢复 running 为内存切片瞬态：不落盘 —— 恢复是否仍在执行以宿主
+      // RunRegistry（/runs + /progress）为权威，刷新后由 resume() 重新发现；
+      // 持久化「running=true」会把浏览器陈旧状态误当成宿主真实状态（P1-1 原则）。
+      running: false,
+    },
   }
 }
 
@@ -901,7 +914,13 @@ export class RunStore {
         }
       })(),
       market: { ...defaultMarketState(), ...parsed.market },
-      snapshots: { ...defaultSnapshotsState(), ...parsed.snapshots },
+      snapshots: {
+        ...defaultSnapshotsState(),
+        ...parsed.snapshots,
+        // 硬性：恢复执行中为瞬态，绝不从存储恢复（即使旧载荷携带 running=true 也清空）——
+        // 是否仍有恢复在执行以宿主 /runs 为权威，resume() 会重新发现并置 true
+        running: false,
+      },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
     // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。
@@ -1037,6 +1056,25 @@ export class RunStore {
         },
       })
     }
+
+    // 快照恢复（P1-1）：宿主 /runs 是「恢复是否仍在执行」的权威来源。
+    // 刷新/重开面板后若存在活跃 restore run → 恢复 running 并轮询 /progress
+    // （结果经 applySettled 回填 report）；持久化的 running 恒为 false（白名单
+    // 剔除），绝不把浏览器陈旧状态当成宿主真实状态。
+    const restoreRun = active.find((r) => r.kind === 'restore')
+    if (restoreRun !== undefined) {
+      resumed = true
+      this.patch({ snapshots: { running: true, actionError: null } })
+      this.pollRun(restoreRun.runId, 'restore')
+    } else if (this.state.snapshots.running) {
+      // 面板镜像显示恢复中，但 host 无活跃 restore run：请求已结束且响应丢失
+      this.patch({
+        snapshots: {
+          running: false,
+          actionError: '上次恢复任务已结束但结果无法恢复，请重新执行',
+        },
+      })
+    }
     return resumed
   }
 
@@ -1142,7 +1180,13 @@ export class RunStore {
   private patchProgress(kind: RunKind, state: RunState): void {
     const event = mapRunProgress(kind, state)
     if (kind === 'export') this.patch({ export: { progress: event } })
-    else this.patch({ import: { progress: event } })
+    else if (kind === 'restore') this.patch({ snapshots: { running: true } })
+    else {
+      // 同步写入 runId：watchRunning 发现活跃 import run 时立即填充——
+      // 否则 fresh run（非刷新恢复）期间 store.runId 仍是上一次导入的陈旧值
+      // （/execute 响应在整段导入完成后才带 runId），「跳过当前插件」会打到旧 run。
+      this.patch({ import: { progress: event, runId: state.runId } })
+    }
   }
 
   /** run 完成/失败：把 RunState.result 回填 store（并镜像回控制器）。 */
@@ -1169,6 +1213,22 @@ export class RunStore {
             downloaded: false,
             error: state.error ?? '导出失败（结果不可用）',
           },
+        })
+      }
+      return
+    }
+    // restore（P1-1）：完成/失败回填快照面板切片（running 复位 + report/actionError）。
+    // 刷新恢复路径与面板本地状态收敛：applySettled 写入 store，面板挂载时经
+    // initFromStore 读取（切 tab 后回来也能看到结果）。
+    if (kind === 'restore') {
+      const result = state.result as RestoreReport | undefined
+      if (state.status === 'done' && result !== undefined && typeof result === 'object') {
+        this.patch({
+          snapshots: { running: false, report: result, actionError: null },
+        })
+      } else {
+        this.patch({
+          snapshots: { running: false, actionError: state.error ?? '恢复失败（结果不可用）' },
         })
       }
       return
@@ -1224,6 +1284,15 @@ export class RunStore {
           progress: null,
           runId: null,
           error: '任务已结束或超过保留期，进度不可恢复',
+        },
+      })
+    } else if (kind === 'restore') {
+      // 恢复 run 被清理/丢失：复位 running（宿主侧恢复动作可能仍在执行——
+      // 以 RunRegistry 为准，本提示只说明进度不可恢复，不臆断恢复已停止）
+      this.patch({
+        snapshots: {
+          running: false,
+          actionError: '恢复任务已结束或超过保留期，进度不可恢复',
         },
       })
     } else {
