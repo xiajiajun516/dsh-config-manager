@@ -183,7 +183,7 @@ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 ```
 css.section                    高 100%，纵向 flex，gap 10px
 ├── .sectionHeader             横向 flex（含 .viewTabs 角色=tablist）
-│   └── .viewTabs / .viewTab   五 tab（导出/导入/快照/同步/市场），下划线激活态
+│   └── .viewTabs / .viewTab   tab（导出/导入/备份与快照/同步/市场/关于），下划线激活态
 └── .sectionBody               flex:1 + overflow-y:auto（滚动发生在 section 内部）
     └── .viewBody              纵向 flex，gap 12px，padding 4px 2px 16px（各视图内容）
 ```
@@ -396,7 +396,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 |---|---|---|
 | **模式切换（Quick/Custom）** | `modeTabs` 双 tab + `modeHint` 说明 | 导出视图、同步模式、市场面板（浏览市场 / 我的配置） |
 | **GitHub 登录卡（device flow）** | `Card` + `actionRow`（「使用 GitHub 登录」primary 按钮 + 取消）+ 一次性用户码 Badge + 「打开授权页」外链 + 轮询状态 Badge + 错误 Banner；token 只存宿主凭据槽，界面只展示用户码与登录名 | 远程同步视图（GitHub 登录）、「我的配置」登录卡 |
-| **通道子 tab 面板（GitHub/WebDAV）** | `modeTabs` 双 tab + `modeHint` 说明；各 tab 内配置表单 / 自动同步 / 同步模式 / 加密 / 远端快照**按通道独立**，切换 tab 互不覆盖（busy 时禁用切换） | 远程同步视图（同步面板二级 tab） |
+| **通道子 tab 面板（GitHub/WebDAV）** | `modeTabs` 双 tab + `modeHint` 说明；各 tab 内配置表单 / 自动同步 / 同步模式 / 加密 / 远端快照**按通道独立**，切换 tab 互不覆盖（busy 时禁用切换） | 远程同步视图（同步面板二级 tab）、快照面板二级 tab（备份文件 / 快照恢复，subTab 镜像 runStore 切 tab/刷新不丢） |
 | **分组勾选目录** | `groupList > groupCard(groupHeader: groupLabel+groupNote) > groupItems(Checkbox 行: categoryName+categoryDesc+Badge)` | 导出 Custom、同步高级模式 |
 | **安全选项卡** | Card + `optionsHeader` + Checkbox + hint + 条件渲染密码双列 + formError | 导出、同步加密 |
 | **步骤化向导** | 顶部为阶段渲染（`SectionTitle` 标题 + 内容 + `actionRow` 内「上一步/下一步」），进度条独立 | 导入九步向导、发布向导（5 步） |
@@ -413,7 +413,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **dry-run → confirm → 执行** | 零写入预览 → 危险按钮（title 确认）→ 诚实报告 | 快照恢复、市场导入、一键同步 |
 | **关于页** | `viewBody` 卡片流：`SectionTitle` + 信息卡（`statRow` 动态版本/DSH/平台 Badge：官方→`ok`、版本→`info`）+ 链接卡（`actionRow` 内 Star 主按钮 + `aboutLinkRow` 外链行 + `aboutAuthor` 作者外链） | 关于 tab |
 | **确认弹窗 ConfirmDialog（危险/重要操作）** | `common/ConfirmDialog.tsx` 受控弹窗：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, backdropClose?, children? }`；遮罩点击（target===currentTarget）/ Esc / 取消三途径关闭（busy 时全禁用）；`backdropClose`（2026-08-22）让遮罩/Esc 走独立回调（缺省 = onCancel），供「不再提示」类弹窗区分「暂时关闭」与「表态」（§8.13 Star 引导弹窗）；onConfirm 返回 Promise 时组件自管 busy 防重复提交；初始焦点落取消按钮（危险确认不默认落破坏性按钮）、关闭还原触发按钮；样式仅 dialogMask/dialogCard/dialogHeader/dialogBody 四类（遮罩 color-mix 半透明、卡片 bg-layer-2+border-l1+radius10、正文限高 240px 内滚）；确认按钮复用现有 danger/primary Button | 「我的配置」列表删除条目（不可恢复 + 已收录自动提交下架 PR）；快照恢复确认（可升级）；Star 引导弹窗（§8.13，满 3 天 + 未表态才弹，表态写 ui-prefs.json） |
-| **备份文件列表（导出产物管理）** | `Card`（`groupLabel` + `hint`）+ `backupFileList`（flex 列，gap 4px）内 `backupFileRow`（flex 行，gap 10px flex-wrap：`backupFileName` 单行 ellipsis 截断 + 来源 Badge `kind="info"`（定时备份 auto / 手动导出 manual）+ `backupFileMeta` 大小/时间 + `actionRow` 内 下载（默认 ghost）/ 导入（ghost）/ 删除（danger，走 ConfirmDialog 二次确认，busy 防重复））；空态 `Empty`；「立即备份」完成后父组件 `refreshTick` 递增触发列表重载（列表本身可随时重载，不持久化）；「导入」= 把宿主 exports 目录 zipPath 交给导入向导（切 Import tab，向导挂载即分析，不经上传） | 快照面板「备份文件」卡（m-backup-files） |
+| **备份文件列表（导出产物管理）** | `Card`（`groupLabel` + `hint`）+ `backupFileList`（flex 列，gap 4px）内 `backupFileRow`（flex 行，gap 10px flex-wrap：`backupFileName` 单行 ellipsis 截断 + 来源 Badge `kind="info"`（定时备份 auto / 手动导出 manual）+ `backupFileMeta` 大小/时间 + `actionRow` 内 下载（默认 ghost）/ 导入（ghost）/ 删除（danger，走 ConfirmDialog 二次确认，busy 防重复））；空态 `Empty`；「立即备份」完成后父组件 `refreshTick` 递增触发列表重载（列表本身可随时重载，不持久化）；「导入」= 把宿主 exports 目录 zipPath 交给导入向导（切 Import tab，向导挂载即分析，不经上传） | 「备份与快照」面板 →「备份文件」子 tab（m-backup-files） |
 
 ---
 

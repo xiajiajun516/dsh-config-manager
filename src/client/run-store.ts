@@ -194,6 +194,9 @@ export interface MarketStoreSlice {
  *  running 为「内存切片瞬态」：切 tab 由模块级单例保留、刷新时被 toPersistedState
  *  白名单剔除 —— 恢复是否仍在执行以宿主 RunRegistry（/runs + /progress）为权威，
  *  刷新后经 resume() 重新发现；浏览器持久化绝不作为 destructive operation 的状态源。 */
+/** 快照面板二级 tab：restore = 快照恢复（导入前回滚点）；files = 备份文件管理 */
+export type SnapshotsSubTab = 'restore' | 'files'
+
 export interface SnapshotsStoreSlice {
   selectedId: string | null
   plan: RestorePlan | null
@@ -207,6 +210,8 @@ export interface SnapshotsStoreSlice {
   /** 「一键导入」请求（内存瞬态：快照面板点导入 → 切到 Import tab，向导挂载时消费）。
    *  zipPath 指向宿主 exports 目录的备份文件；消费后立即清空，不持久化。 */
   importBackup: { zipPath: string; name: string } | null
+  /** 当前二级 tab（restore/files；切 tab / 刷新恢复；非敏感可持久化） */
+  subTab: SnapshotsSubTab
 }
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
@@ -439,6 +444,7 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
     error: null,
     backupDraft: null,
     importBackup: null,
+    subTab: 'restore',
   }
 }
 
@@ -521,6 +527,7 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
     error: s.error,
     backupDraft: s.backupDraft,
     importBackup: s.importBackup,
+    subTab: s.subTab,
   }
 }
 
@@ -929,6 +936,8 @@ export class RunStore {
         running: false,
         // 硬性：「一键导入」请求为一次性瞬态，绝不从存储恢复
         importBackup: null,
+        // 旧载荷可能缺 subTab / 带非法值 → 归一（只认 restore/files）
+        subTab: parsed.snapshots.subTab === 'files' ? 'files' : 'restore',
       },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→

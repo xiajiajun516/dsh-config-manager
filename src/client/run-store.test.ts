@@ -952,6 +952,24 @@ test('低频面板: 快照恢复 running 为瞬态——不写入 sessionStorage
   assert.equal(second.getSnapshot().snapshots.selectedId, 'snap-1', '非瞬态字段仍恢复')
 })
 
+test('快照面板二级 tab: subTab 持久化——切换后刷新恢复，旧载荷缺省回退 restore', () => {
+  const { storage, raw } = makeStorage()
+  const first = new RunStore({ storage })
+  // 默认 restore；切到 files 后写入 sessionStorage
+  assert.equal(first.getSnapshot().snapshots.subTab, 'restore', '缺省为快照恢复')
+  first.patch({ snapshots: { subTab: 'files' } })
+  const persisted = JSON.parse(raw() ?? '{}') as { snapshots?: { subTab?: string } }
+  assert.equal(persisted.snapshots?.subTab, 'files', 'subTab 非敏感可持久化')
+
+  const second = new RunStore({ storage })
+  assert.equal(second.getSnapshot().snapshots.subTab, 'files', '刷新后恢复上次子 tab')
+
+  // 旧版载荷（无 subTab 字段）→ 回退缺省 restore
+  storage.setItem(STATE_KEY, JSON.stringify({ ...persisted, snapshots: { ...persisted.snapshots, subTab: undefined } }))
+  const third = new RunStore({ storage })
+  assert.equal(third.getSnapshot().snapshots.subTab, 'restore', '旧载荷缺省回退 restore')
+})
+
 test('m2-resume: 活跃 restore run 经 /runs 恢复 running 并轮询到完成回填报告（宿主为权威）', async () => {
   const report: RestoreReport = {
     snapshotId: 'snap-1',

@@ -21,7 +21,7 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
-import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice } from '../run-store.ts'
+import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice, type SnapshotsSubTab } from '../run-store.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
 import { formatBytes } from '../../ui/report.ts'
 import {
@@ -128,6 +128,12 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   /** 备份文件列表刷新信号：BackupScheduleCard「立即备份」完成后递增触发重载 */
   const [backupFilesTick, setBackupFilesTick] = useState(0)
+  /** 二级 tab（备份文件 / 快照恢复）：初始从 store 恢复，切换镜像 runStore（切一级 tab/刷新不丢） */
+  const [subTab, setSubTab] = useState<SnapshotsSubTab>(() => runStore.getSnapshot().snapshots.subTab ?? 'restore')
+  const switchSubTab = (next: SnapshotsSubTab): void => {
+    setSubTab(next)
+    runStore.patch({ snapshots: { subTab: next } })
+  }
 
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
@@ -139,8 +145,8 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
     stateRef.current = next
     if (mountedRef.current) setState(next)
     const store = runStore.getSnapshot().snapshots
-    // 合并 store 中非 PanelState 字段（backupDraft / importBackup），避免镜像时覆盖
-    runStore.patch({ snapshots: toSnapshotsStoreSlice({ ...next, backupDraft: store.backupDraft, importBackup: store.importBackup }) })
+    // 合并 store 中非 PanelState 字段（backupDraft / importBackup / subTab），避免镜像时覆盖
+    runStore.patch({ snapshots: toSnapshotsStoreSlice({ ...next, backupDraft: store.backupDraft, importBackup: store.importBackup, subTab: store.subTab }) })
   }
   const patch = (p: Partial<PanelState>): void => commit({ ...stateRef.current, ...p })
 
@@ -148,7 +154,7 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   useEffect(() => () => {
     mountedRef.current = false
     const store = runStore.getSnapshot().snapshots
-    runStore.patch({ snapshots: toSnapshotsStoreSlice({ ...stateRef.current, backupDraft: store.backupDraft, importBackup: store.importBackup }) })
+    runStore.patch({ snapshots: toSnapshotsStoreSlice({ ...stateRef.current, backupDraft: store.backupDraft, importBackup: store.importBackup, subTab: store.subTab }) })
   }, [])
 
   const load = (): void => {
@@ -231,122 +237,152 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
     <div className={css.viewBody}>
       <SectionTitle title={t('snapshots.title')} subtitle={t('snapshots.hint')} />
 
-      {state.status === 'loading' && <Spinner label={t('snapshots.loading')} />}
+      {/* 二级 tab（备份文件 / 快照恢复；subTab 镜像 runStore——切一级 tab/刷新不丢，与市场面板 modeTabs 同模式） */}
+      <div className={css.modeTabs} role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subTab === 'restore'}
+          data-active={subTab === 'restore' ? '' : undefined}
+          className={css.modeTab}
+          onClick={() => { switchSubTab('restore') }}
+        >
+          {t('snapshots.subTab.restore')}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subTab === 'files'}
+          data-active={subTab === 'files' ? '' : undefined}
+          className={css.modeTab}
+          onClick={() => { switchSubTab('files') }}
+        >
+          {t('snapshots.subTab.files')}
+        </button>
+      </div>
 
-      {state.status === 'error' && (
-        <Banner kind="error">
-          {state.error ?? t('common.unknownError')}
-          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
-        </Banner>
-      )}
-
-      {state.status === 'ready' && state.metas.length === 0 && (
-        <Empty>{t('snapshots.empty')}</Empty>
-      )}
-
-      {state.status === 'ready' && state.metas.length > 0 && (
+      {subTab === 'restore' ? (
         <>
-          <div className={css.snapshotList} role="listbox" aria-label={t('snapshots.selectHint')}>
-            <div className={css.snapshotRowHeader}>
-              <span>{t('snapshots.createdAt')}</span>
-              <span>{t('snapshots.sourceZip')}</span>
-              <span>{t('snapshots.status')}</span>
-              <span>{t('snapshots.entries')}</span>
-              <span>{t('snapshots.plugins')}</span>
-            </div>
-            {state.metas.map((meta) => {
-              const selected = meta.id === state.selectedId
-              return (
-                <button
-                  key={meta.id}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  data-active={selected ? '' : undefined}
-                  className={css.snapshotRow}
-                  disabled={state.planning || state.running}
-                  onClick={() => { select(meta.id) }}
-                >
-                  <span title={meta.id}>{new Date(meta.createdAt).toLocaleString()}</span>
-                  <span title={meta.sourceZip}>{meta.sourceZip}</span>
-                  <span><Badge kind={statusBadgeKind(meta.status)}>{statusLabel(t, meta.status)}</Badge></span>
-                  <span>{meta.entryCount}</span>
-                  <span>{meta.beforePluginCount}</span>
-                </button>
-              )
-            })}
-          </div>
+          {/* —— 快照恢复：导入前回滚点列表 → 选择 → dry-run 计划 → 执行 → 报告 —— */}
 
-          {state.selectedId !== null && (
+          {state.status === 'loading' && <Spinner label={t('snapshots.loading')} />}
+
+          {state.status === 'error' && (
+            <Banner kind="error">
+              {state.error ?? t('common.unknownError')}
+              <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
+            </Banner>
+          )}
+
+          {state.status === 'ready' && state.metas.length === 0 && (
+            <Empty>{t('snapshots.empty')}</Empty>
+          )}
+
+          {state.status === 'ready' && state.metas.length > 0 && (
             <>
-              {state.planning && <Spinner label={t('common.loading')} />}
-              {state.plan !== null && (
-                <Card>
-                  <SectionTitle title={t('snapshots.planTitle')} subtitle={summary()} />
-                  {state.plan.actions.length === 0 && <Empty>{t('snapshots.noActions')}</Empty>}
-                  {state.plan.actions.length > 0 && (
-                    <div className={css.planScroll}>
-                      <ul className={css.reportList}>
-                        {state.plan.actions.map((action, i) => (
-                          <li key={`plan-${i}`}>
-                            <span className={css.kindTag}>{actionKindLabel(action.kind)}</span>
-                            {' '}{action.description}
-                            {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <div className={css.rowActions}>
-                    <Button
-                      variant="danger"
-                      disabled={state.running || state.plan.actions.every((a) => a.kind === 'skip')}
-                      onClick={() => { setConfirmOpen(true) }}
+              <div className={css.snapshotList} role="listbox" aria-label={t('snapshots.selectHint')}>
+                <div className={css.snapshotRowHeader}>
+                  <span>{t('snapshots.createdAt')}</span>
+                  <span>{t('snapshots.sourceZip')}</span>
+                  <span>{t('snapshots.status')}</span>
+                  <span>{t('snapshots.entries')}</span>
+                  <span>{t('snapshots.plugins')}</span>
+                </div>
+                {state.metas.map((meta) => {
+                  const selected = meta.id === state.selectedId
+                  return (
+                    <button
+                      key={meta.id}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      data-active={selected ? '' : undefined}
+                      className={css.snapshotRow}
+                      disabled={state.planning || state.running}
+                      onClick={() => { select(meta.id) }}
                     >
-                      {state.running ? t('snapshots.executing') : t('snapshots.execute')}
-                    </Button>
-                  </div>
-                  {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
-                </Card>
+                      <span title={meta.id}>{new Date(meta.createdAt).toLocaleString()}</span>
+                      <span title={meta.sourceZip}>{meta.sourceZip}</span>
+                      <span><Badge kind={statusBadgeKind(meta.status)}>{statusLabel(t, meta.status)}</Badge></span>
+                      <span>{meta.entryCount}</span>
+                      <span>{meta.beforePluginCount}</span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {state.selectedId !== null && (
+                <>
+                  {state.planning && <Spinner label={t('common.loading')} />}
+                  {state.plan !== null && (
+                    <Card>
+                      <SectionTitle title={t('snapshots.planTitle')} subtitle={summary()} />
+                      {state.plan.actions.length === 0 && <Empty>{t('snapshots.noActions')}</Empty>}
+                      {state.plan.actions.length > 0 && (
+                        <div className={css.planScroll}>
+                          <ul className={css.reportList}>
+                            {state.plan.actions.map((action, i) => (
+                              <li key={`plan-${i}`}>
+                                <span className={css.kindTag}>{actionKindLabel(action.kind)}</span>
+                                {' '}{action.description}
+                                {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <div className={css.rowActions}>
+                        <Button
+                          variant="danger"
+                          disabled={state.running || state.plan.actions.every((a) => a.kind === 'skip')}
+                          onClick={() => { setConfirmOpen(true) }}
+                        >
+                          {state.running ? t('snapshots.executing') : t('snapshots.execute')}
+                        </Button>
+                      </div>
+                      {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
+                    </Card>
+                  )}
+                </>
+              )}
+
+              {state.report !== null && (
+                <>
+                  <SectionTitle title={t('snapshots.reportTitle')} />
+                  {reportLine(t('snapshots.restored'), state.report.restored, false)}
+                  {reportLine(t('snapshots.removedPlugins'), state.report.removedPlugins, false)}
+                  {reportLine(t('snapshots.manualHints'), state.report.manualHints, true)}
+                  {reportLine(t('snapshots.failed'), state.report.failed.map((f) => `${f.item}: ${f.reason}`), true)}
+                  {reportLine(t('snapshots.skipped'), state.report.skipped, false)}
+                </>
               )}
             </>
           )}
 
-          {state.report !== null && (
-            <>
-              <SectionTitle title={t('snapshots.reportTitle')} />
-              {reportLine(t('snapshots.restored'), state.report.restored, false)}
-              {reportLine(t('snapshots.removedPlugins'), state.report.removedPlugins, false)}
-              {reportLine(t('snapshots.manualHints'), state.report.manualHints, true)}
-              {reportLine(t('snapshots.failed'), state.report.failed.map((f) => `${f.item}: ${f.reason}`), true)}
-              {reportLine(t('snapshots.skipped'), state.report.skipped, false)}
-            </>
-          )}
+          {/* 执行恢复二次确认（破坏性操作：整文件还原/删除 + 卸载插件；busy 防重复提交） */}
+          <ConfirmDialog
+            open={confirmOpen}
+            title={t('snapshots.confirmTitle')}
+            message={t('snapshots.confirmRestore')}
+            confirmLabel={t('snapshots.execute')}
+            cancelLabel={t('common.cancel')}
+            danger
+            busy={state.running}
+            onConfirm={execute}
+            onCancel={() => { setConfirmOpen(false) }}
+          />
+        </>
+      ) : (
+        <>
+          {/* —— 备份文件：导出产物管理（下载/一键导入/删除）+ 定时全量备份设置 —— */}
+          <BackupFilesCard api={api} t={t} refreshTick={backupFilesTick} />
+          <BackupScheduleCard
+            api={api}
+            t={t}
+            onBackupDone={() => { setBackupFilesTick((n) => n + 1) }}
+          />
         </>
       )}
-
-      {/* 备份文件管理（exports 导出产物：手动导出 + 定时备份；下载/导入/删除） */}
-      <BackupFilesCard api={api} t={t} refreshTick={backupFilesTick} />
-
-      {/* 定时全量备份设置（独立于快照列表状态，始终展示；完成后刷新上方备份文件列表） */}
-      <BackupScheduleCard
-        api={api}
-        t={t}
-        onBackupDone={() => { setBackupFilesTick((n) => n + 1) }}
-      />
-
-      {/* 执行恢复二次确认（破坏性操作：整文件还原/删除 + 卸载插件；busy 防重复提交） */}
-      <ConfirmDialog
-        open={confirmOpen}
-        title={t('snapshots.confirmTitle')}
-        message={t('snapshots.confirmRestore')}
-        confirmLabel={t('snapshots.execute')}
-        cancelLabel={t('common.cancel')}
-        danger
-        busy={state.running}
-        onConfirm={execute}
-        onCancel={() => { setConfirmOpen(false) }}
-      />
     </div>
   )
 }
