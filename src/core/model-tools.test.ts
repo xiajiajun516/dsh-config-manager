@@ -256,16 +256,22 @@ function mockCtx(toolsSvc: unknown): { ctx: Context; registered: string[]; effec
   return { ctx, registered, effects }
 }
 
-test('registerModelTools：tools 服务存在 → 注册 5 个工具（schema 可编译）', async () => {
+test('registerModelTools：tools 服务存在 → 注册 5 个工具（走 ctx.get 结果，属性访问守卫不崩）', async () => {
   const { deps, tmp } = await makeDeps()
   try {
     const names: string[] = []
+    const toolsSvc = { register: (def: { name: string }) => { names.push(def.name); return () => {} } }
+    // 模拟真实 Cordis ctx：ctx.get('tools') 返回服务，但 ctx.tools 属性访问因插件未声明
+    // inject: ['tools'] 而抛 "cannot get property without inject"（回归：注册必须走 get
+    // 结果而非属性——旧实现 ctx.tools.register 在这里会崩溃）。
     const wrapped = {
-      get: () => ({}),
-      tools: { register: (def: { name: string }) => { names.push(def.name); return () => {} } },
+      get: (name: string) => (name === 'tools' ? toolsSvc : undefined),
       effect: () => {},
     } as unknown as Context
-    // 不抛错 = defineTool schema 全部可编译（无效 schema 会在定义时抛错）
+    Object.defineProperty(wrapped, 'tools', {
+      get() { throw new Error('cannot get property "tools" without inject') },
+    })
+    // 不抛错 = 注册走 toolsSvc + defineTool schema 全部可编译（无效 schema 会在定义时抛错）
     registerModelTools(wrapped, deps)
     assert.deepEqual(names.sort(), [
       'config_backup', 'config_list_snapshots', 'config_restore',

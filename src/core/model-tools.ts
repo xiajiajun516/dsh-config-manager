@@ -272,8 +272,11 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
   }
   const tools: ModelTools = createModelTools(deps)
   const disposers: (() => void)[] = []
+  // 注意：必须经 ctx.get('tools') 的结果注册，绝不能用 ctx.tools 属性访问——
+  // Cordis 的属性访问要求插件声明 inject: ['tools']，未声明时即使服务存在也会抛
+  // "cannot get property X without inject"（tools 是可选服务，不应进 inject）。
   const register = (def: Parameters<typeof ctx.tools.register>[0]): void => {
-    disposers.push(ctx.tools.register(def))
+    disposers.push(toolsSvc.register(def))
   }
 
   register(defineTool({
