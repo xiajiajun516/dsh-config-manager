@@ -93,7 +93,6 @@ function isDshPackageAllowed(rel: string): boolean {
 const KNOWN_VIOLATIONS = new Set([
   'core/model-tools.ts → @deepseek-ai/cordis',
   'core/model-tools.ts → @deepseek-ai/dsh-tools',
-  'core/model-tools.ts → @deepseek-ai/dsh-session',
   'core/model-tools.ts → ../sync/sync-engine.ts',
   'core/model-tools.ts → ../sync/sync-config.ts',
   'market/view.ts → ../ui/i18n.ts',
