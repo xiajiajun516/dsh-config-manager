@@ -6,7 +6,7 @@
  * patch 行导入（用户自定义行：启用/禁用/插入）写回 cordis.patch.yml，同样 needsRestart。
  */
 import { isDeepStrictEqual } from 'node:util';
-import { resolveProfileNameFromArgv } from '../core/plugin-cli.ts';
+import { installSpecFor, resolveProfileNameFromArgv } from '../core/plugin-cli.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { PatchLine, PluginEntry, PluginsSection } from '../schema/types.ts';
@@ -222,6 +222,9 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         // 非 registry 来源（github:/file: 等）按来源 spec 安装，registry 包按裸包名装 npm 最新版
         const data = ctx.sections.get('plugins') as PluginsSection | undefined;
         const spec = data?.plugins.find((p) => p.name === name)?.spec;
+        // 执行日志：记录实际将发起的子进程命令行（与宿主 DshPluginsFacade 的
+        // dsh plugin --profile <p> add <spec> 一致）；仅非敏感文本，渲染前 UI 再 redact 兜底
+        ctx.onLog?.(`$ dsh plugin --profile ${ctx.target.profile ?? resolveProfileNameFromArgv()} add ${installSpecFor(name, spec)}`);
         const result = await ctx.target.plugins.install(name, spec);
         const suffix = result.needsRestart ? msg('adapter.pluginRestartSuffix') : '';
         return {

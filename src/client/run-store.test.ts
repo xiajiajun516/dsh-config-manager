@@ -75,6 +75,7 @@ function runningRun(kind: RunState['kind'], patch: Partial<RunState> = {}): RunS
     item: null,
     itemTotal: null,
     detail: null,
+    log: [],
     createdAt: 1,
     updatedAt: 2,
     ...patch,
@@ -303,7 +304,7 @@ test('m2-resume: 进行中 import run 经 /runs + 轮询 /progress 重新订阅�
     runningRun('import', { section: 'plugins', item: 2, itemTotal: 5, detail: 'plugin:pkg-a' }),
     {
       runId: RUN_ID, kind: 'import', status: 'done',
-      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null,
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
       result, createdAt: 1, updatedAt: 3,
     },
   ]
@@ -327,6 +328,51 @@ test('m2-resume: 进行中 import run 经 /runs + 轮询 /progress 重新订阅�
   assert.ok(progressCalls >= 2, '完成前至少轮询过一次 /progress')
 })
 
+test('m2-resume: 进行中 import run 恢复时带回执行日志（刷新页面 log 不丢）', async () => {
+  const initialLog = ['▶ settings:general', '$ dsh plugin --profile web add @scope/pkg', '✓ settings:general']
+  const progressResponses: RunState[] = [
+    runningRun('import', {
+      section: 'plugins', item: 3, itemTotal: 5, detail: 'plugin:@scope/pkg',
+      log: [...initialLog],
+    }),
+    runningRun('import', {
+      section: 'plugins', item: 4, itemTotal: 5, detail: 'plugin:@scope/pkg',
+      log: [...initialLog, '▶ plugin:@scope/pkg'],
+    }),
+    {
+      runId: RUN_ID, kind: 'import', status: 'done',
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
+      result: makeImportResult(), createdAt: 1, updatedAt: 3,
+    },
+  ]
+  let progressCalls = 0
+  const api = makeApi({
+    // 刷新后 /runs 仍返回进行中 run（Host 侧导入继续执行），快照即带已累积日志
+    runs: async () => [runningRun('import', { log: [...initialLog] })],
+    progress: async () => progressResponses[Math.min(progressCalls++, progressResponses.length - 1)]!,
+  })
+  const store = new RunStore({ storage: null, pollIntervalMs: 5 })
+  // 订阅捕获轮询期间的进度快照（完成态 progress 不含 log，故在轮询中断言）
+  const seenLogs: (string[] | undefined)[] = []
+  const unsub = store.subscribe(() => {
+    const p = store.getSnapshot().import.progress
+    if (p !== null) seenLogs.push(p.log)
+  })
+  const resumed = await store.resume(api)
+  assert.equal(resumed, true, '发现活跃 import run')
+  assert.equal(store.getSnapshot().import.step, 'importing')
+  // 恢复瞬间：/runs 快照即带回已累积的日志行（刷新不丢）
+  assert.deepEqual(store.getSnapshot().import.progress?.log, initialLog, '刷新后立即恢复已累积日志')
+  // 轮询 /progress：日志持续追加
+  await sleep(40)
+  unsub()
+  assert.ok(
+    seenLogs.some((l) => (l ?? []).includes('▶ plugin:@scope/pkg')),
+    '轮询带回新增日志行',
+  )
+  assert.equal(store.getSnapshot().import.step, 'result')
+})
+
 test('m2-resume: 进行中 export run 轮询到完成，导出结果（含报告文本）恢复', async () => {
   const report = makeExportReport()
   const manifest = makeManifest()
@@ -334,7 +380,7 @@ test('m2-resume: 进行中 export run 轮询到完成，导出结果（含报告
     runningRun('export', { section: 'settings', item: 1, itemTotal: 3, detail: 'settings' }),
     {
       runId: RUN_ID, kind: 'export', status: 'done',
-      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null,
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
       result: { zipPath: 'dsh-config-x.zip', manifest, report },
       createdAt: 1, updatedAt: 3,
     },
@@ -391,7 +437,7 @@ test('m2-resume: 导出失败 run → 停止轮询并回填错误', async () => 
     runningRun('export'),
     {
       runId: RUN_ID, kind: 'export', status: 'failed',
-      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null,
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
       error: '导出超时', createdAt: 1, updatedAt: 3,
     },
   ]
@@ -417,7 +463,7 @@ test('m3-poll: watchRunning 经 /runs 发现进行中 run 并轮询 /progress �
     runningRun('import', { section: 'plugins', item: 6, itemTotal: 18, detail: 'plugin:pkg-a' }),
     {
       runId: RUN_ID, kind: 'import', status: 'done',
-      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null,
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
       result, createdAt: 1, updatedAt: 3,
     },
   ]
@@ -451,7 +497,7 @@ test('m3-poll: watchRunning 轮询回填分区/内部计数进度（ProgressBar 
     runningRun('export', { section: 'plugins', sectionTotal: 12, item: 4, itemTotal: 12, detail: 'plugins' }),
     {
       runId: RUN_ID, kind: 'export', status: 'done',
-      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null,
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
       result: { zipPath: 'x.zip', manifest: makeManifest(), report: makeExportReport() },
       createdAt: 1, updatedAt: 3,
     },

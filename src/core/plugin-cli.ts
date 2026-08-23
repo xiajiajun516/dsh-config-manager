@@ -309,6 +309,8 @@ export function killTree(child: ChildProcess): void {
 export interface DshPluginResult {
   exitCode: number | null
   timedOut: boolean
+  /** 经 AbortSignal 中止（用户跳过/取消）：进程树被 kill，非失败语义 */
+  aborted?: boolean
   stdout: string
   stderr: string
   /** spawn 自身失败（如 ENOENT）；此时 exitCode 固定为 127。 */
@@ -319,12 +321,16 @@ export interface DshPluginResult {
  * 运行 `dsh plugin --profile <profile> <pluginArgs…>`：
  * cwd=profile 目录、CI 环境、windowsHide、pipe 输出、15 分钟超时杀进程树。
  * 永远 resolve（不 throw），由调用方判定成败。
+ *
+ * signal：可选 AbortSignal。中止时立即 killTree 杀掉整棵进程树（dsh 包装 + pnpm 孙进程），
+ * 结果标记 aborted=true（调用方据此判定「用户跳过/取消」，而非失败）。
  */
 export function runDshPlugin(
   profileDir: string,
   profile: string,
   pluginArgs: readonly string[],
   timeoutMs: number = INSTALL_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<DshPluginResult> {
   const { file, args, viaShell } = dshArgv()
   return new Promise((resolvePromise) => {
@@ -340,10 +346,20 @@ export function runDshPlugin(
     let stdout = ''
     let stderr = ''
     let timedOut = false
+    let aborted = false
     const timer = setTimeout(() => {
       timedOut = true
       killTree(child)
     }, timeoutMs)
+    const onAbort = (): void => {
+      aborted = true
+      clearTimeout(timer)
+      killTree(child)
+    }
+    if (signal !== undefined) {
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout = (stdout + chunk.toString()).slice(-256 * 1024)
     })
@@ -352,11 +368,13 @@ export function runDshPlugin(
     })
     child.on('error', (error) => {
       clearTimeout(timer)
-      resolvePromise({ exitCode: 127, timedOut: false, stdout, stderr, spawnError: error.message })
+      signal?.removeEventListener('abort', onAbort)
+      resolvePromise({ exitCode: 127, timedOut: false, aborted, stdout, stderr, spawnError: error.message })
     })
     child.on('close', (code) => {
       clearTimeout(timer)
-      resolvePromise({ exitCode: code, timedOut, stdout, stderr })
+      signal?.removeEventListener('abort', onAbort)
+      resolvePromise({ exitCode: code, timedOut, aborted, stdout, stderr })
     })
   })
 }

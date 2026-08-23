@@ -571,6 +571,38 @@ test('导出→导入完整往返（win32 → linux + 路径映射 + Secret 不�
   }
 });
 
+test('导入执行 onLog：逐计划项命令日志 + 插件子进程命令行，且不泄 secret', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-onlog-'))
+  try {
+    const src = makeContext('win32', 'C:\\Users\\alice')
+    const adapters = [...makeAdapters(), new PluginsAdapter('dsh-config-manager')]
+    src.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] })
+    src.plugins.installed.set('@scope/my-plugin', { name: '@scope/my-plugin', version: '1.2.3', enabled: true })
+    const zipPath = path.join(tmp, 'x.zip')
+    await new Exporter({ ctx: src, adapters, now: () => new Date() }).export({ includeSecrets: false, outPath: zipPath })
+
+    const dst = makeContext('linux', '/home/bob')
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() })
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] })
+
+    const lines: string[] = []
+    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, onLog: (l) => lines.push(l) })
+    assert.equal(result.ok, true)
+    // 逐计划项：启动行 + 结果行（导入面板日志数据源）
+    assert.ok(lines.some((l) => l.startsWith('▶ settings:general')), `应有 settings 启动行: ${lines.join(' | ')}`)
+    assert.ok(lines.some((l) => l.startsWith('✓ settings:general')), `应有 settings 完成行`)
+    // 插件安装子进程命令行（PluginsAdapter 经 ctx.onLog 记录实际将发起的 dsh plugin 命令）
+    assert.ok(
+      lines.some((l) => l.startsWith('$ dsh plugin --profile') && l.includes('add @scope/my-plugin')),
+      `应有 dsh plugin 命令行: ${lines.join(' | ')}`,
+    )
+    // 日志不得泄 secret 值（安全不变量：RunState.log 只存非敏感文本）
+    for (const l of lines) assert.ok(!l.includes('sk-super-secret'), `日志不得含 secret 值: ${l}`)
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
 test('冲突不默认覆盖：merge 无决策 → 跳过；keepCurrent/useImported 决策生效', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-conflict-'));
   try {

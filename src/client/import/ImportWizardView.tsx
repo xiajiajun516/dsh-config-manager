@@ -25,7 +25,7 @@
  * 控制器实例（ImportWizard）由 store 缓存复用；每次 wizard 动作后 syncWizard()
  * 把控制器快照镜像进 store（非敏感字段持久化）。
  */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { useSyncExternalStore } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
@@ -40,6 +40,7 @@ import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
 import { ConflictList } from './ConflictList.tsx'
 import { PathMappingForm } from './PathMappingForm.tsx'
+import { redact } from '../../security/redaction.ts'
 import {
   applyPickedFile, browseLabelKey, cancelSelection, consumePickedFile, fileSelectModel, shouldRenderSelect,
 } from './import-file-select.ts'
@@ -93,6 +94,33 @@ function SecretsForm({
           />
         </label>
       ))}
+    </div>
+  )
+}
+
+/**
+ * 导入执行日志面板（importing 步骤进度条下方）：展示导入过程中执行的命令
+ * （逐计划项操作 `▶/✓/⚠/✗/–` + 子进程命令行 `$ dsh plugin …`）。
+ * - 数据来自 Host RunRegistry（经 /progress 轮询回传），行文本仅非敏感内容，
+ *   渲染前再过 redact() 兜底（安全不变量：UI 展示文本先脱敏）；
+ * - 限高内滚（logScroll）+ 新行自动滚到底部（新命令持续追加时无需手动滚动）。
+ */
+function ImportLogPanel({ lines, t }: { lines: string[]; t: TranslateNS<'config-manager'> }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el !== null) el.scrollTop = el.scrollHeight
+  }, [lines.length])
+  return (
+    <div className={css.logPanel}>
+      <div className={css.logHeader}>{t('import.log.title')}</div>
+      <div className={css.logScroll} ref={scrollRef}>
+        {lines.length === 0
+          ? <div className={css.logEmpty}>{t('import.log.empty')}</div>
+          : lines.map((line, i) => (
+            <div key={i} className={css.logLine}>{redact(line)}</div>
+          ))}
+      </div>
     </div>
   )
 }
@@ -601,9 +629,12 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   }
 
   if (step === 'importing') {
+    // 执行日志：进度条下方展示导入过程中执行的命令（/progress 轮询带回，非敏感）
+    const logLines = progress?.log ?? []
     return (
       <div className={css.viewBody}>
         <ProgressBar event={progress} active />
+        <ImportLogPanel lines={logLines} t={t} />
         <div className={css.hint}>{t('import.importing')}</div>
         {error !== null && <ErrorBanner error={error} />}
         <ErrorList errors={imp.errors} />

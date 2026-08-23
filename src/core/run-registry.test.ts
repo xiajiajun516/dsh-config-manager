@@ -10,7 +10,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  DEFAULT_RUN_RETENTION_MS, RunConflictError, RunRegistry,
+  DEFAULT_RUN_RETENTION_MS, MAX_RUN_LOG_LINES, RunConflictError, RunRegistry,
 } from './run-registry.ts'
 
 test('register: 生成不可猜的 32 hex runId 且初始为 running', () => {
@@ -83,6 +83,39 @@ test('update: 完成/失败后的晚到更新被忽略（异步回调竞态防�
   assert.equal(state?.status, 'done')
   assert.equal(state?.detail, 'settings', 'finish 后的 update 不得覆盖')
   assert.deepEqual(state?.result, { zipPath: 'x.zip' })
+})
+
+test('appendLog: 追加执行日志行并刷新 updatedAt；不存在/已结束的 run 忽略', () => {
+  let now = 1000
+  const reg = new RunRegistry({ now: () => now })
+  const run = reg.register('import')
+  assert.deepEqual(run.log, [], '初始 log 为空数组')
+  now = 1100
+  reg.appendLog(run.runId, '▶ settings:general')
+  reg.appendLog(run.runId, '$ dsh plugin --profile web add @scope/pkg')
+  const state = reg.get(run.runId)
+  assert.deepEqual(state?.log, ['▶ settings:general', '$ dsh plugin --profile web add @scope/pkg'])
+  assert.equal(state?.updatedAt, 1100, 'appendLog 必须刷新 updatedAt')
+
+  // 完成后晚到追加被忽略（防御异步回调竞态）
+  reg.finish(run.runId, { ok: true })
+  reg.appendLog(run.runId, 'late')
+  assert.deepEqual(reg.get(run.runId)?.log, ['▶ settings:general', '$ dsh plugin --profile web add @scope/pkg'], 'finish 后的 appendLog 不得写入')
+
+  // 不存在 → undefined
+  assert.equal(reg.appendLog('nope', 'x'), undefined)
+})
+
+test('appendLog: 日志行数封顶 MAX_RUN_LOG_LINES（超限截断保留最新）', () => {
+  const reg = new RunRegistry()
+  const run = reg.register('import')
+  for (let i = 0; i < MAX_RUN_LOG_LINES + 10; i++) {
+    reg.appendLog(run.runId, `line-${i}`)
+  }
+  const state = reg.get(run.runId)
+  assert.equal(state?.log.length, MAX_RUN_LOG_LINES)
+  assert.equal(state?.log[0], 'line-10', '截断后保留最新行')
+  assert.equal(state?.log[state!.log.length - 1], `line-${MAX_RUN_LOG_LINES + 9}`)
 })
 
 test('finish/fail: 状态与 result/error 落账', () => {

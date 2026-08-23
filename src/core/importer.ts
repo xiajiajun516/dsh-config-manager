@@ -41,6 +41,8 @@ export interface ExecuteOptions {
   rollbackOnError?: boolean;
   /** m1：每完成一个计划项的进度回调（透传给 Analyzer；不传则无埋点） */
   onItem?: (info: PlanItemProgress) => void;
+  /** 执行日志回调（逐计划项操作 + 子进程命令行，仅非敏感文本；透传给 Analyzer → ImportContext） */
+  onLog?: (line: string) => void;
 }
 
 export class Importer {
@@ -68,6 +70,7 @@ export class Importer {
       decryptedCredentials: opts.decryptedCredentials,
       rollbackOnError: opts.rollbackOnError,
       onItem: opts.onItem,
+      onLog: opts.onLog,
     });
   }
 }

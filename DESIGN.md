@@ -204,7 +204,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | 作者行 | `.aboutAuthor` | 可点外链行：13px label-primary，hover 转 `interactive-bg-hover`，6px 圆角微底（图标/文字 gap 6px） |
 | 分组勾选列表 | `.groupList > .groupCard > .groupItems` | 导出 Custom / 同步高级模式共用 |
 | 动作标题 + 说明 | `.groupLabel` + `.hint` | 卡片内「小标题 + 说明」模式 |
-| 限高滚动容器 | `.planScroll`(280px 固定) `.reportScroll`(220px) `.confirmScroll`(280px) `.pullScroll`(280px 固定) `.diffScroll`(240px) | 长列表/报告/diff，`overscroll-behavior: contain` |
+| 限高滚动容器 | `.planScroll`(280px 固定) `.reportScroll`(220px) `.confirmScroll`(280px) `.pullScroll`(280px 固定) `.diffScroll`(240px) `.logScroll`(200px) | 长列表/报告/diff/导入执行日志，`overscroll-behavior: contain` |
 
 ### 7.3 表格类布局
 
@@ -406,6 +406,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **限高列表 + 批量操作** | `confirmScroll/reportScroll` + 底部 actionRow（批量决策按钮） | 冲突决策、差异确认、恢复计划、拉取预览 |
 | **diff 展开** | `<details><summary>diff</summary><pre class="diffScroll">` | 同步冲突 diff |
 | **结果页** | `ReportView`（统计 + 等宽报告）+ 条件 Banner（needsRestart）+ 动作按钮 | 导入结果、导出完成 |
+| **导入执行日志（进行中）** | importing 步骤进度条下方：`logPanel`（`logHeader` 小标题 + `logScroll` 限高 200px 内滚 + `logLine` 等宽行），行文本 = 逐计划项操作（`▶` 开始 / `✓⚠✗–` 结果）+ 子进程命令行（`$ dsh plugin …`），新行自动滚底，渲染前 `redact()` 兜底；数据来自 Host RunRegistry（`/progress` 轮询，刷新期间导入仍在进行则自动恢复） | 导入向导 importing 步骤 |
 | **错误恢复** | `ErrorBanner(error, onRetry)`（可重试）+ 禁用重复启动 | 全站 |
 | **列表+详情** | 列表（可搜索/过滤）+ 点条目展开详情卡 | 市场面板（搜索框 + 类别 select + 条目行 + 详情） |
 | **dry-run → confirm → 执行** | 零写入预览 → 危险按钮（title 确认）→ 诚实报告 | 快照恢复、市场导入、一键同步 |

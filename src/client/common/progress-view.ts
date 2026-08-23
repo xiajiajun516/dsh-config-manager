@@ -23,6 +23,8 @@ export interface RunProgress extends ProgressEvent {
   /** 内部计数（如插件 6/18；导出 = 分区序号，导入 = 已处理计划项数） */
   item?: number | null
   itemTotal?: number | null
+  /** 执行日志行（RunState.log 轮询映射；仅非敏感命令/操作文本；无日志通道时为 undefined） */
+  log?: string[]
 }
 
 /** 徽章渲染数据（label · current/total）。 */

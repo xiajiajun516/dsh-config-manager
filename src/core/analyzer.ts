@@ -392,6 +392,8 @@ export class Analyzer {
       rollbackOnError?: boolean;
       /** m1：每完成一个计划项调用（真实进度埋点；不传则无埋点） */
       onItem?: (info: PlanItemProgress) => void;
+      /** 执行日志回调（逐计划项操作 + 子进程命令行；注入 ImportContext 供适配器调用；不传则无日志） */
+      onLog?: (line: string) => void;
     } = {},
   ): Promise<ImportResult> {
     const bundle = await this.loadBundle(zipPath);
@@ -421,6 +423,7 @@ export class Analyzer {
       decryptedCredentials: opts.decryptedCredentials,
       log: this.ctx.log,
       msg: this.msg,
+      onLog: opts.onLog,
     };
 
     // 11. 快照（强制：导入前必须先备份将被修改的目标）
@@ -546,6 +549,8 @@ export class Analyzer {
     item: PlanItem,
     ctx: ImportContext,
   ): Promise<{ executed: ExecutedItem; needsRestart: boolean; warning?: string }> {
+    // 执行日志（导入面板展示）：仅非敏感文本（项 id / 命令），绝不写密钥/密码/补录值
+    const onLog = ctx.onLog;
     if (
       item.kind === 'Skip' ||
       item.kind === 'Warning' ||
@@ -553,22 +558,27 @@ export class Analyzer {
       (item.kind === 'Conflict' && item.conflict?.resolution !== 'useImported')
     ) {
       // Warning / MissingDependency 是信息项（依赖缺失、需人工注意），不调用 applyItem。
+      onLog?.(`– ${item.id}`);
       return { executed: { itemId: item.id, status: 'skipped' }, needsRestart: false };
     }
     if (item.kind === 'Error') {
+      onLog?.(`✗ ${item.id}`);
       return { executed: { itemId: item.id, status: 'failed', message: item.detail ?? item.description }, needsRestart: false };
     }
     if (item.kind === 'MissingSecret') {
       const ref = item.id.replace(/^secret:/, '');
       const value = ctx.decryptedCredentials?.get(ref) ?? ctx.secretInputs[ref];
       if (value === undefined || value === '') {
+        onLog?.(`– ${item.id}`);
         return { executed: { itemId: item.id, status: 'skipped', message: this.msg('import.secretNotProvided') }, needsRestart: false };
       }
       // 补录值只经 adapter.applyItem 写入（m5 实现），引擎不直接触碰凭据
     }
+    onLog?.(`▶ ${item.id}`);
     try {
       const result: ApplyResult = await adapter.applyItem(item, ctx);
       const status = result.ok ? 'ok' : (result.warning === true ? 'warning' : 'failed');
+      onLog?.(`${status === 'ok' ? '✓' : status === 'warning' ? '⚠' : '✗'} ${item.id}`);
       return {
         executed: { itemId: item.id, status, message: result.message },
         needsRestart: result.needsRestart === true,
@@ -576,6 +586,7 @@ export class Analyzer {
       };
     } catch (err) {
       this.ctx.log.error(`应用计划项失败 ${item.id}: ${err instanceof Error ? err.message : String(err)}`);
+      onLog?.(`✗ ${item.id}`);
       return {
         executed: { itemId: item.id, status: 'failed', message: err instanceof Error ? err.message : String(err) },
         needsRestart: false,

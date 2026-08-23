@@ -61,6 +61,7 @@ import { cleanupCaches } from './core/cache-cleaner.ts'
 import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
+import { registerModelTools } from './core/model-tools.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
 import {
@@ -1323,7 +1324,7 @@ function parseMeForm(raw: unknown): { name: string; id?: string; description?: s
 }
 
 /** Build the /api/dsh-config-manager route family. */
-function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler } {
+function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine } {
   const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, credentials, githubClientId, githubClientSecret } = deps
   const roots = [exportsDir, tmpDir]
 
@@ -1980,6 +1981,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 itemTotal: info.total,
                 detail: info.detail ?? info.adapter,
               })
+            },
+            // 执行日志：逐计划项操作 + 子进程命令行。宿主侧先 redact 再落账，
+            // 保证 RunState.log 恒为非敏感（/progress 轮询回传浏览器）。
+            onLog: (line) => {
+              runs.appendLog(runId, redact(line))
             },
           })
           // 结束写结果：导入结果落账（供 /progress 查询与刷新恢复）
@@ -3258,7 +3264,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       },
     },
   ]
-  return { routes: routesList, scheduler }
+  return { routes: routesList, scheduler, makeSyncEngine }
 }
 
 /* ------------------------------------------------------------------ apply */
@@ -3340,7 +3346,7 @@ export function apply(ctx: Context, config?: Config): void {
     adapters: adapters.map((a) => a.id),
   })
 
-  const { routes, scheduler } = makeRoutes({
+  const { routes, scheduler, makeSyncEngine } = makeRoutes({
     host,
     adapters,
     exportsDir,
@@ -3352,6 +3358,17 @@ export function apply(ctx: Context, config?: Config): void {
     credentials: ctx.credentials,
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,
+  })
+  // Agent 可调用的模型工具（P0-1）：复用 src/core 引擎与同一 makeSyncEngine 来源。
+  // 不依赖 webServer：host 侧能力在无 Web 部署时仍可用；tools 服务未组合时内部守卫跳过。
+  registerModelTools(ctx, {
+    host,
+    adapters,
+    exportsDir,
+    snapshotsDir,
+    syncDir,
+    makeSyncEngine,
+    exporterVersion: PLUGIN_VERSION,
   })
   // 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，
   // 避免旧调度器残留导致重复后台同步。

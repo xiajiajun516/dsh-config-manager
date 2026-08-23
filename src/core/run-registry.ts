@@ -43,6 +43,9 @@ export interface RunState {
   itemTotal: number | null
   /** 非敏感进度摘要（当前分区 / 当前计划项 id）。 */
   detail: string | null
+  /** 执行日志行（导入为逐计划项操作 + 子进程命令；append-only，封顶 MAX_RUN_LOG_LINES）。
+   * 只存非敏感文本（命令/操作摘要），绝不写入密钥、密码、秘密补录值。 */
+  log: string[]
   /** 完成时的业务结果（仅 JSON 可序列化、不含秘密值）。 */
   result?: unknown
   /** 失败时的错误消息（非敏感）。 */
@@ -50,6 +53,9 @@ export interface RunState {
   createdAt: number
   updatedAt: number
 }
+
+/** 单个 run 执行日志的行数上限（防无限增长；截断时保留最新行）。 */
+export const MAX_RUN_LOG_LINES = 500
 
 /** 进行中同 kind 已有 run 时注册被拒（宿主路由 → 409）。 */
 export class RunConflictError extends Error {
@@ -114,6 +120,7 @@ export class RunRegistry {
       item: null,
       itemTotal: null,
       detail: null,
+      log: [],
       createdAt: now,
       updatedAt: now,
     }
@@ -130,6 +137,21 @@ export class RunRegistry {
     if (run === undefined) return undefined
     if (run.status !== 'running') return { ...run }
     Object.assign(run, patch, { updatedAt: this.now() })
+    return { ...run }
+  }
+
+  /** 追加一行执行日志（导入逐计划项操作 / 子进程命令）；run 不存在返回 undefined，
+   * 已完成/失败后的晚到追加被忽略（防御异步回调竞态）。行数封顶 MAX_RUN_LOG_LINES，
+   * 超限时截断保留最新行。 */
+  appendLog(runId: string, line: string): RunState | undefined {
+    const run = this.runs.get(runId)
+    if (run === undefined) return undefined
+    if (run.status !== 'running') return { ...run }
+    run.log.push(line)
+    if (run.log.length > MAX_RUN_LOG_LINES) {
+      run.log.splice(0, run.log.length - MAX_RUN_LOG_LINES)
+    }
+    run.updatedAt = this.now()
     return { ...run }
   }
 

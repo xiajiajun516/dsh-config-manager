@@ -660,6 +660,7 @@ function mapRunProgress(kind: RunKind, state: RunState): RunProgress {
     sectionTotal: state.sectionTotal,
     item: state.item,
     itemTotal: state.itemTotal,
+    log: state.log ?? [],
   }
 }
 

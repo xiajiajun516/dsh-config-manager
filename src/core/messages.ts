@@ -46,6 +46,8 @@ export const zh = {
   'import.encryptedPasswordRequired': '该备份已加密，必须提供解密密码才能导入（拒绝无密码导入）',
   'import.encryptedPasswordWrong': '解密密码错误，请重试',
   'import.notEncryptedContainer': '该文件不是加密备份容器，无法解锁',
+  'import.userSkipped': '用户跳过（导入中点击「跳过当前插件」）',
+  'import.userSkippedDetail': '插件 {name} 已由用户跳过，未安装',
 
   // ---------- 回滚 ----------
   'rollback.ns.createdNoDelete': '该 namespace 由导入创建，DSH settings 无删除语义',
@@ -317,6 +319,8 @@ export const en: Record<keyof typeof zh, string> = {
   'import.encryptedPasswordRequired': 'This backup is encrypted; the decryption password is required to import it (refusing password-less import)',
   'import.encryptedPasswordWrong': 'Wrong decryption password, please try again',
   'import.notEncryptedContainer': 'This file is not an encrypted backup container and cannot be unlocked',
+  'import.userSkipped': 'Skipped by user (clicked "Skip current plugin" during import)',
+  'import.userSkippedDetail': 'Plugin {name} was skipped by the user and not installed',
 
   // ---------- rollback ----------
   'rollback.ns.createdNoDelete': 'This namespace was created by the import; DSH settings have no delete semantics',

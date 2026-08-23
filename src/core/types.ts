@@ -85,8 +85,9 @@ export interface PluginInfo {
 
 export interface PluginsFacade {
   listInstalled(): Promise<PluginInfo[]>;
-  /** 安装/更新插件；spec 为来源记录的声明依赖 spec（如 github:user/repo），缺省按裸包名装 npm 最新版 */
-  install(pkg: string, spec?: string): Promise<{ needsRestart: boolean }>;
+  /** 安装/更新插件；spec 为来源记录的声明依赖 spec（如 github:user/repo），缺省按裸包名装 npm 最新版。
+   * signal 可选：中止时宿主应 kill 子进程并清理半装状态（恢复 package.json + 删 node_modules/<pkg>）。 */
+  install(pkg: string, spec?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean }>;
 }
 
 export interface WorkspaceFacade {
@@ -212,6 +213,9 @@ export interface ExecutedItem {
   /** warning = 未应用但非致命（目标不可达等），不计入失败、不触发回滚 */
   status: 'ok' | 'skipped' | 'warning' | 'failed';
   message?: string;
+  /** 用户主动跳过（导入中点击「跳过当前插件」）：status 为 skipped 且此标记为 true。
+   * 结果页据此区分「用户跳过」与「引擎跳过」，并提供重试入口。 */
+  skippedByUser?: boolean;
 }
 
 export interface ImportResult {
@@ -241,6 +245,18 @@ export interface ImportContext {
   log: Logger;
   /** 消息翻译器（analyzer 注入；适配器用它生成计划项描述/校验/结果消息） */
   msg: MsgFunc;
+  /**
+   * 执行日志回调（executeImportPlan 注入；适配器在发出子进程命令等动作时调用）。
+   * 行文本只允许非敏感内容（命令/操作摘要），绝不写入密钥/密码/补录值；
+   * Dry Run / 分析阶段未注入（undefined），调用方可空调用。
+   */
+  onLog?: (line: string) => void;
+  /**
+   * 当前计划项的中止信号（executeImportPlan 注入；适配器在启动子进程时传给宿主 install）。
+   * 用户点击「跳过当前插件」时宿主 abort 该信号 → 子进程被 kill → 该项标记为 user-skipped。
+   * 非插件项 / Dry Run 阶段为 undefined。
+   */
+  signal?: AbortSignal;
 }
 
 /* ---------------- Snapshot / Rollback（§8） ---------------- */
