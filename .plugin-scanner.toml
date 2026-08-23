@@ -1,0 +1,4 @@
+[scanner]
+# plugin-scanner 抑制配置：测试文件中的 CI 伪装密钥与构建产物扫描发现均为误报类，
+# 正式代码不涉及（见 src/security 的 real 校验逻辑）。
+ignore_paths = ["**/*.test.ts", "lib/**"]
