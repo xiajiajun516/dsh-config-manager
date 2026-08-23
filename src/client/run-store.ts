@@ -204,6 +204,9 @@ export interface SnapshotsStoreSlice {
   error: string | null
   /** 定时备份设置草稿（未保存修改切 tab / 刷新保留；null = 无草稿，以宿主配置为准） */
   backupDraft: BackupScheduleDraft | null
+  /** 「一键导入」请求（内存瞬态：快照面板点导入 → 切到 Import tab，向导挂载时消费）。
+   *  zipPath 指向宿主 exports 目录的备份文件；消费后立即清空，不持久化。 */
+  importBackup: { zipPath: string; name: string } | null
 }
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
@@ -435,6 +438,7 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
     actionError: null,
     error: null,
     backupDraft: null,
+    importBackup: null,
   }
 }
 
@@ -516,6 +520,7 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
     actionError: s.actionError,
     error: s.error,
     backupDraft: s.backupDraft,
+    importBackup: s.importBackup,
   }
 }
 
@@ -573,6 +578,8 @@ export function toPersistedState(state: StoreState): PersistedState {
       // RunRegistry（/runs + /progress）为权威，刷新后由 resume() 重新发现；
       // 持久化「running=true」会把浏览器陈旧状态误当成宿主真实状态（P1-1 原则）。
       running: false,
+      // 「一键导入」请求为一次性内存瞬态：不落盘（刷新后回到导入向导 select 步骤）
+      importBackup: null,
     },
   }
 }
@@ -920,6 +927,8 @@ export class RunStore {
         // 硬性：恢复执行中为瞬态，绝不从存储恢复（即使旧载荷携带 running=true 也清空）——
         // 是否仍有恢复在执行以宿主 /runs 为权威，resume() 会重新发现并置 true
         running: false,
+        // 硬性：「一键导入」请求为一次性瞬态，绝不从存储恢复
+        importBackup: null,
       },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→

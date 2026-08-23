@@ -925,18 +925,30 @@ test('低频面板: 旧版顶层 syncMode 载荷 → 迁移为 git 通道的 byC
 test('低频面板: 快照恢复 running 为瞬态——不写入 sessionStorage、刷新后复位（以宿主 /runs 为权威）', () => {
   const { storage, raw } = makeStorage()
   const first = new RunStore({ storage })
-  first.patch({ panel: 'snapshots', snapshots: { selectedId: 'snap-1', running: true } })
-  const persisted = JSON.parse(raw() ?? '{}') as { snapshots?: { running?: boolean } }
+  first.patch({
+    panel: 'snapshots',
+    snapshots: {
+      selectedId: 'snap-1', running: true,
+      importBackup: { zipPath: '/exports/x.zip', name: 'x.zip' },
+    },
+  })
+  const persisted = JSON.parse(raw() ?? '{}') as { snapshots?: { running?: boolean; importBackup?: unknown } }
   assert.equal(persisted.snapshots?.running, false, 'running 恒不落盘（白名单剔除）')
+  assert.equal(persisted.snapshots?.importBackup, null, 'importBackup 恒不落盘（一次性瞬态剔除）')
 
-  // 即便旧载荷携带 running=true，applyPersisted 也硬性归零——绝不把浏览器陈旧状态
-  // 当成「恢复仍在执行」的依据（宿主 /runs 是唯一权威，resume() 负责重新置位）
+  // 即便旧载荷携带 running=true / importBackup，applyPersisted 也硬性归零——绝不把浏览器
+  // 陈旧状态当成「恢复仍在执行」的依据（宿主 /runs 是唯一权威，resume() 负责重新置位）
   storage.setItem(STATE_KEY, JSON.stringify({
     ...persisted,
-    snapshots: { ...persisted.snapshots, running: true },
+    snapshots: {
+      ...persisted.snapshots,
+      running: true,
+      importBackup: { zipPath: '/exports/stale.zip', name: 'stale.zip' },
+    },
   }))
   const second = new RunStore({ storage })
   assert.equal(second.getSnapshot().snapshots.running, false, '刷新后 running 复位（不读存储）')
+  assert.equal(second.getSnapshot().snapshots.importBackup, null, '刷新后 importBackup 复位（不读存储）')
   assert.equal(second.getSnapshot().snapshots.selectedId, 'snap-1', '非瞬态字段仍恢复')
 })
 

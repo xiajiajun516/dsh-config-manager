@@ -150,6 +150,35 @@ test('exports：过期导出 zip 删、新导出 zip 留、非 zip 文件留', a
   }
 });
 
+test('exports：豁免前缀（定时备份 dsh-config-auto-*）超期也不删，保留策略归备份调度器', async () => {
+  const d = await makeDataDir();
+  try {
+    const now = Date.now();
+    const oldAuto = path.join(d.exportsDir, 'dsh-config-auto-old.zip');
+    const oldManual = path.join(d.exportsDir, 'dsh-config-old.zip');
+    await fs.writeFile(oldAuto, Buffer.alloc(9));
+    await fs.writeFile(oldManual, Buffer.alloc(11));
+    await touch(oldAuto, now - EXPORTS_RETENTION_DEFAULT_MS - 1000); // 超期
+    await touch(oldManual, now - EXPORTS_RETENTION_DEFAULT_MS - 1000); // 超期
+
+    const report = await cleanupCaches({
+      tmpDir: d.tmpDir,
+      exportsDir: d.exportsDir,
+      marketCacheRoot: d.marketCacheRoot,
+      marketWorkRoot: d.marketWorkRoot,
+      exportsExemptPrefix: 'dsh-config-auto-',
+      now: () => now,
+    });
+
+    assert.equal(report.removed, 1, '只删手动导出，豁免前缀保留');
+    await assert.rejects(() => fs.stat(oldManual), '超期手动导出 zip 已删');
+    assert.equal(await fs.readFile(oldAuto).then((b) => b.length), 9, '豁免前缀（定时备份）即使超期也不删');
+    assert.ok(report.detail.some((s) => s.includes('dsh-config-old.zip')), 'detail 只含手动导出删除记录');
+  } finally {
+    await d.cleanup();
+  }
+});
+
 test('market/cache：全过期 → 条目、items 目录、hash 目录依次回收', async () => {
   const d = await makeDataDir();
   try {

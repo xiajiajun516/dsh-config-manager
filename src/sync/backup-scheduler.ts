@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import { readBackupSchedule, writeBackupSchedule, backupIntervalToMs } from './backup-schedule-config.ts';
 import type { BackupScheduleConfig, BackupRunStatus } from './backup-schedule-config.ts';
 import { shouldTriggerStartupRun } from './autosync-scheduler.ts';
+import { AUTO_BACKUP_PREFIX, DEFAULT_BACKUP_RETENTION, pruneAutoBackups } from './backup-files.ts';
 
 export interface BackupRunResult {
   status: BackupRunStatus;
@@ -57,6 +58,8 @@ export interface BackupSchedulerOptions {
   /** 注入配置读写（测试可内存实现） */
   readConfig?: () => Promise<BackupScheduleConfig>;
   writeConfig?: (cfg: BackupScheduleConfig) => Promise<void>;
+  /** 定时备份产物保留数量（超出后按 mtime 清理最旧的；缺省 10）。 */
+  retention?: number;
   /** 注入计时器（测试用；缺省 setInterval/clearInterval） */
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
@@ -75,6 +78,7 @@ export class BackupScheduler {
   private readonly now: () => Date;
   private readonly readConfig: () => Promise<BackupScheduleConfig>;
   private readonly writeConfig: (cfg: BackupScheduleConfig) => Promise<void>;
+  private readonly retention: number;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
   private readonly log: Logger;
@@ -94,6 +98,7 @@ export class BackupScheduler {
     this.now = opts.now ?? (() => new Date());
     this.readConfig = opts.readConfig ?? (() => readBackupSchedule(this.syncDir));
     this.writeConfig = opts.writeConfig ?? ((cfg) => writeBackupSchedule(this.syncDir, cfg));
+    this.retention = opts.retention ?? DEFAULT_BACKUP_RETENTION;
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
     this.log = opts.log ?? this.host.log;
@@ -189,7 +194,8 @@ export class BackupScheduler {
         msg: this.msg,
       });
       // 显式落 exportsDir（与 host 路由同构；Exporter 缺省 outPath 是相对文件名，不落目录）
-      const outPath = join(this.exportsDir, `dsh-config-${dateStamp(this.now())}-${randomBytes(3).toString('hex')}.zip`);
+      // auto 前缀 = 定时备份产物标识：列表来源 Badge + cache-cleaner 豁免 + 保留策略清理依据
+      const outPath = join(this.exportsDir, `${AUTO_BACKUP_PREFIX}${dateStamp(this.now())}-${randomBytes(3).toString('hex')}.zip`);
       const { report } = await exporter.export({
         includeSecrets: false, // 恒不含 secret（与自动同步同语义）
         outPath,
@@ -214,6 +220,16 @@ export class BackupScheduler {
         sizeBytes: result.sizeBytes,
         sections: result.sections,
       });
+      // 保留策略：只保留最近 retention 个 auto 前缀产物，更旧的删除（尽力而为，
+      // 失败仅记日志不阻断——下次成功备份时再清）。
+      try {
+        const removed = await pruneAutoBackups(this.exportsDir, this.retention);
+        if (removed.length > 0) {
+          this.log.info('定时备份保留策略清理', { removed, keep: this.retention });
+        }
+      } catch (err) {
+        this.log.warn('定时备份保留策略清理失败', { error: err instanceof Error ? err.message : String(err) });
+      }
       return result;
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);

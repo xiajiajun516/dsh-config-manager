@@ -87,6 +87,7 @@ import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { BackupScheduler } from './sync/backup-scheduler.ts'
 import { readBackupSchedule, writeBackupSchedule } from './sync/backup-schedule-config.ts'
 import type { BackupScheduleConfig } from './sync/backup-schedule-config.ts'
+import { AUTO_BACKUP_PREFIX, deleteBackupFile, isValidBackupFileName, listBackupFiles } from './sync/backup-files.ts'
 import { validateBackupScheduleDraft } from './ui/backup-schedule.ts'
 import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
@@ -221,6 +222,9 @@ const API = {
   // m-backup-schedule：定时全量备份（读/存 backup-schedule.json + 立即执行一次）
   backupSchedule: '/api/dsh-config-manager/backup-schedule',
   backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
+  // m-backup-files：导出产物管理（列出 exports/*.zip + 删除；下载复用 /download）
+  backupFiles: '/api/dsh-config-manager/backup-files',
+  backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
   // m-sync-ui：远程同步（Git 私有仓库通道）
   syncStatus: '/api/dsh-config-manager/sync/status',
   syncPush: '/api/dsh-config-manager/sync/push',
@@ -2230,6 +2234,43 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ------------------------------------------------------ backup-files
+    // 导出产物管理（m-backup-files）：列出 exports/*.zip（名称/大小/时间/来源，
+    // 时间倒序）+ 删除单个备份文件。下载复用 /download（roots 已含 exportsDir）。
+    // 安全：删除只接受文件名（服务端 basename 校验防路径穿越）；恒 loopback guard。
+    {
+      kind: 'exact',
+      path: API.backupFiles,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          writeJson(res, 200, { ok: true, files: await listBackupFiles(exportsDir) })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.backupFilesDelete,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const name = typeof body === 'object' && body !== null
+            ? (body as Record<string, unknown>)['name']
+            : undefined
+          if (!isValidBackupFileName(name)) {
+            writeJson(res, 400, { error: 'name must be a .zip file name (no path separators)' })
+            return
+          }
+          const removed = await deleteBackupFile(exportsDir, name)
+          writeJson(res, 200, { ok: true, removed })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
     // ------------------------------------------------------ sync/status
     // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
     {
@@ -3485,6 +3526,9 @@ export function apply(ctx: Context, config?: Config): void {
     void cleanupCaches({
       tmpDir,
       exportsDir,
+      // 定时备份产物（dsh-config-auto-*）豁免按天回收：保留策略归 BackupScheduler
+      // （保留最近 N 个），避免 7 天回收与「保留 10 个」相互截断。
+      exportsExemptPrefix: AUTO_BACKUP_PREFIX,
       marketCacheRoot: join(marketDir, 'cache'),
       marketWorkRoot: join(marketDir, 'work'),
     })

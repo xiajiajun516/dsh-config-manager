@@ -934,6 +934,42 @@
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
 }
 
+/* ---------------- 备份文件列表（快照面板 m-backup-files） ---------------- */
+/* flex 行 + 徽章（来源 auto/manual）+ 元信息 + 操作按钮（下载/导入/删除）；
+   与 .snapshotRow 同 token 体系（border-l1 + radius6），行内操作沿用 .actionRow 间距 */
+
+.backupFileList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.backupFileRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+}
+
+.backupFileName {
+  flex: 1 1 180px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.backupFileMeta {
+  flex: none;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .warnText {
   color: var(--dsw-alias-state-warn-primary);
 }

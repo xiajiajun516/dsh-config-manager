@@ -45,6 +45,12 @@ export interface CacheCleanupOptions {
   tmpRetentionMs?: number
   /** 导出产物保留期（缺省 7 天） */
   exportsRetentionMs?: number
+  /**
+   * exports 清理豁免的文件名前缀（如定时备份的 dsh-config-auto-）：
+   * 匹配该前缀的 ZIP 不按保留期回收 —— 其生命周期由业务保留策略管理
+   * （BackupScheduler.pruneAutoBackups「保留最近 N 个」）。缺省不豁免。
+   */
+  exportsExemptPrefix?: string
   /** 市场缓存/工作副本保留期（缺省 7 天） */
   marketRetentionMs?: number
   /** 时间源（测试注入；缺省 Date.now） */
@@ -120,11 +126,14 @@ export async function cleanupCaches(opts: CacheCleanupOptions): Promise<CacheCle
     result.errors += 1
   }
 
-  // 2) exportsDir：过期的导出产物 .zip（导出时已下载/另存到本地，host 端副本按保留期回收）
+  // 2) exportsDir：过期的导出产物 .zip（导出时已下载/另存到本地，host 端副本按保留期回收）。
+  //    豁免前缀（定时备份产物）跳过 —— 由备份保留策略管理，不按天回收。
+  const exemptPrefix = opts.exportsExemptPrefix
   try {
     const entries = await fs.readdir(opts.exportsDir, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.zip')) continue
+      if (exemptPrefix !== undefined && entry.name.startsWith(exemptPrefix)) continue
       const target = path.join(opts.exportsDir, entry.name)
       if (await isExpired(target, exportsRetentionMs, nowMs)) {
         await removeEntry(target, `exports/${entry.name}`, result)

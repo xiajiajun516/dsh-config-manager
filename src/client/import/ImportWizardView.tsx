@@ -314,6 +314,46 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
     if (fileInput.current !== null) fileInput.current.value = ''
   }
 
+  /**
+   * 一键导入（快照面板「备份文件 → 导入」）：消费 runStore.snapshots.importBackup，
+   * 跳过上传直接对宿主 exports 目录的 zipPath 执行 selectZip（analyze 零写入）。
+   * 一次性瞬态：消费后立即清空，刷新/重挂载不会重放；与 onPickFile 共用
+   * pickGeneration 竞态守卫（用户取消选择后晚到的分析结果丢弃）。
+   */
+  useEffect(() => {
+    const req = runStore.getSnapshot().snapshots.importBackup
+    if (req === null) return
+    runStore.patch({ snapshots: { importBackup: null } })
+    const generation = pickGeneration.current
+    runStore.patch({
+      import: {
+        selectedFileName: req.name,
+        uploading: true,
+        error: null,
+        // 换文件：清空上一份备份的仅内存解密状态（与 onPickFile 一致）
+        decryptPassword: '',
+        decryptRefs: [],
+        archiveUnlocked: false,
+        containerEncrypted: false,
+      },
+    })
+    wizard.selectZip(req.zipPath)
+      .then(() => {
+        if (generation !== pickGeneration.current) return
+        runStore.syncWizard()
+      })
+      .catch((err) => {
+        if (generation !== pickGeneration.current) return
+        runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
+        runStore.syncWizard()
+      })
+      .finally(() => {
+        if (generation === pickGeneration.current) {
+          runStore.patch({ import: { uploading: false } })
+        }
+      })
+  }, [api])
+
   /** Compatibility → Preview */
   const goPreview = async (): Promise<void> => {
     runStore.patch({ import: { error: null } })

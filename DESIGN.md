@@ -413,6 +413,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **dry-run → confirm → 执行** | 零写入预览 → 危险按钮（title 确认）→ 诚实报告 | 快照恢复、市场导入、一键同步 |
 | **关于页** | `viewBody` 卡片流：`SectionTitle` + 信息卡（`statRow` 动态版本/DSH/平台 Badge：官方→`ok`、版本→`info`）+ 链接卡（`actionRow` 内 Star 主按钮 + `aboutLinkRow` 外链行 + `aboutAuthor` 作者外链） | 关于 tab |
 | **确认弹窗 ConfirmDialog（危险/重要操作）** | `common/ConfirmDialog.tsx` 受控弹窗：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, backdropClose?, children? }`；遮罩点击（target===currentTarget）/ Esc / 取消三途径关闭（busy 时全禁用）；`backdropClose`（2026-08-22）让遮罩/Esc 走独立回调（缺省 = onCancel），供「不再提示」类弹窗区分「暂时关闭」与「表态」（§8.13 Star 引导弹窗）；onConfirm 返回 Promise 时组件自管 busy 防重复提交；初始焦点落取消按钮（危险确认不默认落破坏性按钮）、关闭还原触发按钮；样式仅 dialogMask/dialogCard/dialogHeader/dialogBody 四类（遮罩 color-mix 半透明、卡片 bg-layer-2+border-l1+radius10、正文限高 240px 内滚）；确认按钮复用现有 danger/primary Button | 「我的配置」列表删除条目（不可恢复 + 已收录自动提交下架 PR）；快照恢复确认（可升级）；Star 引导弹窗（§8.13，满 3 天 + 未表态才弹，表态写 ui-prefs.json） |
+| **备份文件列表（导出产物管理）** | `Card`（`groupLabel` + `hint`）+ `backupFileList`（flex 列，gap 4px）内 `backupFileRow`（flex 行，gap 10px flex-wrap：`backupFileName` 单行 ellipsis 截断 + 来源 Badge `kind="info"`（定时备份 auto / 手动导出 manual）+ `backupFileMeta` 大小/时间 + `actionRow` 内 下载（默认 ghost）/ 导入（ghost）/ 删除（danger，走 ConfirmDialog 二次确认，busy 防重复））；空态 `Empty`；「立即备份」完成后父组件 `refreshTick` 递增触发列表重载（列表本身可随时重载，不持久化）；「导入」= 把宿主 exports 目录 zipPath 交给导入向导（切 Import tab，向导挂载即分析，不经上传） | 快照面板「备份文件」卡（m-backup-files） |
 
 ---
 

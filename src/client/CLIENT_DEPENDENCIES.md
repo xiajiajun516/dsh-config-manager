@@ -74,6 +74,8 @@ POST /api/dsh-config-manager/upload?name   body: 原始字节 → UploadResponse
 POST /api/dsh-config-manager/analyze       body: { zipPath } → ImportAnalysis
 POST /api/dsh-config-manager/plan          body: { zipPath, decisions } → ImportPlan
 POST /api/dsh-config-manager/execute       body: { zipPath, plan, opts: { confirm, secretInputs, rollbackOnError } } → ImportResult
+GET  /api/dsh-config-manager/backup-files  → { ok, files: BackupFileMeta[] }（exports 目录备份文件，时间倒序）
+POST /api/dsh-config-manager/backup-files/delete  body: { name } → { ok, removed }（仅 exports 内 .zip）
 ```
 
 - `password` 为加密的独立开关：传入即注入 EncryptionProvider（Host 侧 `security/encryption.ts`

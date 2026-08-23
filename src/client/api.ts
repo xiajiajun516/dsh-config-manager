@@ -17,6 +17,8 @@
  * POST /api/dsh-config-manager/execute            → ImportResult         （body: { zipPath, plan, opts }；响应含 runId）
  * GET  /api/dsh-config-manager/progress?runId=…   → RunState             （run 实时状态：轮询/刷新恢复）
  * GET  /api/dsh-config-manager/runs               → RunState[]           （活跃 run 列表）
+ * GET  /api/dsh-config-manager/backup-files       → { files: BackupFileMeta[] }（exports 备份文件列表）
+ * POST /api/dsh-config-manager/backup-files/delete → { removed }          （body: { name }）
  * ```
  * 安全约束：
  *  - 所有响应/错误文本在进入 UI 前经 `redact()`（见 common/ErrorBanner.tsx）；
@@ -30,6 +32,7 @@ import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.t
 import type { RunState } from '../core/run-registry.ts';
 import type { Manifest } from '../schema/types.ts';
 import type { BackupScheduleStatus, BackupRunResult, BackupScheduleDraft } from '../ui/backup-schedule.ts';
+import type { BackupFileMeta } from '../sync/backup-files.ts';
 import { zhUiT, type UiT } from '../ui/i18n.ts';
 
 /** Host 半健康检查响应（plugin 版本 / DSH 版本 / 平台，用于主页横幅与兼容性说明） */
@@ -137,6 +140,8 @@ export const CONFIG_MANAGER_API = {
   restore: '/api/dsh-config-manager/restore',
   backupSchedule: '/api/dsh-config-manager/backup-schedule',
   backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
+  backupFiles: '/api/dsh-config-manager/backup-files',
+  backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
   starPrompt: '/api/dsh-config-manager/star-prompt',
 } as const;
 
@@ -496,5 +501,23 @@ export class ConfigManagerApi {
       body: JSON.stringify({}),
     });
     return readJson<{ run: BackupRunResult; schedule: BackupScheduleStatus }>(response, this.t);
+  }
+
+  // ------------------------------------------------- 备份文件管理（快照 tab）
+  /** 列出导出目录（exports/*.zip）下的全部备份文件（时间倒序；含来源 auto/manual）。 */
+  async listBackupFiles(): Promise<BackupFileMeta[]> {
+    const response = await fetch(CONFIG_MANAGER_API.backupFiles);
+    const body = await readJson<{ ok: boolean; files: BackupFileMeta[] }>(response, this.t);
+    return body.files;
+  }
+
+  /** 删除一个备份文件（危险操作：不可恢复；仅限 exports 目录内 .zip）。 */
+  async deleteBackupFile(name: string): Promise<{ removed: boolean }> {
+    const response = await fetch(CONFIG_MANAGER_API.backupFilesDelete, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    return readJson<{ ok: boolean; removed: boolean }>(response, this.t);
   }
 }

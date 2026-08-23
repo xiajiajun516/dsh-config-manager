@@ -91,7 +91,7 @@ test('runOnce: 成功 → 产出真实 ZIP 到 exports，写成功状态，连�
     const { scheduler, getConfig } = makeScheduler({ cfg, tmp });
     const result = await scheduler.runOnce();
     assert.equal(result.status, 'success');
-    assert.ok(result.zip !== undefined && /^dsh-config-.*\.zip$/.test(result.zip!), 'ZIP 文件名符合 dsh-config- 前缀');
+    assert.ok(result.zip !== undefined && result.zip!.startsWith('dsh-config-auto-') && result.zip!.endsWith('.zip'), 'ZIP 文件名带 auto 前缀（定时备份产物标识）');
     assert.ok(result.sections !== undefined && result.sections.includes('settings'), 'settings 分区进入备份');
     // ZIP 确实落盘
     const stat = await fs.stat(path.join(tmp, 'exports', result.zip!));
@@ -151,6 +151,91 @@ test('runOnce: 并发防重 → running 中第二次调用 skipped(running)', as
     const [a, b] = await Promise.all([scheduler.runOnce(), scheduler.runOnce()]);
     const statuses = [a.status, b.status].sort();
     assert.deepEqual(statuses, ['skipped', 'success'], '一个成功、一个被防重跳过');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runOnce: 成功后按保留策略清理旧 auto 备份（只留最近 10 个，手动导出不动）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-backup-sched-'));
+  try {
+    // 预置 12 个旧的定时备份 ZIP（mtime 递增，最旧在前）+ 1 个手动导出 ZIP
+    const exportsDir = path.join(tmp, 'exports');
+    await fs.mkdir(exportsDir, { recursive: true });
+    const oldNames: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const name = `dsh-config-auto-20260801-0000${String(i).padStart(2, '0')}-abc.zip`;
+      oldNames.push(name);
+      const p = path.join(exportsDir, name);
+      await fs.writeFile(p, `old-${i}`);
+      await fs.utimes(p, new Date(1_000_000_000_000 + i * 1000), new Date(1_000_000_000_000 + i * 1000));
+    }
+    await fs.writeFile(path.join(exportsDir, 'dsh-config-manual.zip'), 'manual');
+
+    const cfg: BackupScheduleConfig = { enabled: true, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0 };
+    const { scheduler } = makeScheduler({ cfg, tmp });
+    const result = await scheduler.runOnce();
+    assert.equal(result.status, 'success');
+
+    // 12 旧 + 1 新 = 13 auto → 保留 10，删最旧的 3 个
+    const remaining = await fs.readdir(exportsDir);
+    const autoLeft = remaining.filter((n) => n.startsWith('dsh-config-auto-'));
+    assert.equal(autoLeft.length, 10, '只保留最近 10 个定时备份');
+    assert.ok(!remaining.includes(oldNames[0]!), '最旧的已删');
+    assert.ok(!remaining.includes(oldNames[1]!), '第二旧的已删');
+    assert.ok(!remaining.includes(oldNames[2]!), '第三旧的已删');
+    assert.ok(remaining.includes(oldNames[3]!), '保留线（第 4 旧）保留');
+    assert.ok(remaining.includes(oldNames[11]!), '最新的旧文件保留');
+    assert.ok(remaining.includes('dsh-config-manual.zip'), '手动导出文件不被保留策略清理');
+    const fresh = autoLeft.find((n) => !oldNames.includes(n));
+    assert.ok(fresh !== undefined, '本次新产出的备份保留在列表中');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('runOnce: 自定义 retention 生效（keep=2 → 只留最近 2 个）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-backup-sched-'));
+  try {
+    const exportsDir = path.join(tmp, 'exports');
+    await fs.mkdir(exportsDir, { recursive: true });
+    const oldNames: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const name = `dsh-config-auto-20260801-0000${String(i).padStart(2, '0')}-abc.zip`;
+      oldNames.push(name);
+      const p = path.join(exportsDir, name);
+      await fs.writeFile(p, `old-${i}`);
+      await fs.utimes(p, new Date(1_000_000_000_000 + i * 1000), new Date(1_000_000_000_000 + i * 1000));
+    }
+    const cfg: BackupScheduleConfig = { enabled: true, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0 };
+    const runs = new RunRegistry();
+    let config = cfg;
+    const ctx = makeContext('win32', path.join(tmp, 'home'));
+    seedSettings(ctx);
+    const adapters = createAdapters({ namespaces: NS });
+    const scheduler = new BackupScheduler({
+      syncDir: path.join(tmp, 'sync'),
+      exportsDir,
+      host: ctx,
+      adapters,
+      runs,
+      msg: zhMsg,
+      exporterVersion: '0.1.45',
+      now: () => new Date(1_000_000_000_000),
+      readConfig: async () => config,
+      writeConfig: async (c) => { config = c; },
+      log: nullLogger(),
+      retention: 2,
+    });
+    const result = await scheduler.runOnce();
+    assert.equal(result.status, 'success');
+    // 3 旧 + 1 新 = 4 auto → keep=2 → 删最旧的 2 个
+    const remaining = await fs.readdir(exportsDir);
+    const autoLeft = remaining.filter((n) => n.startsWith('dsh-config-auto-'));
+    assert.equal(autoLeft.length, 2, '自定义 retention=2 只留最近 2 个');
+    assert.ok(!remaining.includes(oldNames[0]!), '最旧已删');
+    assert.ok(!remaining.includes(oldNames[1]!), '第二旧已删');
+    assert.ok(remaining.includes(oldNames[2]!), '第三旧（保留线）保留');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

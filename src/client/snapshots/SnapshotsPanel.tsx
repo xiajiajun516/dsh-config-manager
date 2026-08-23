@@ -22,6 +22,8 @@ import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice } from '../run-store.ts'
+import type { BackupFileMeta } from '../../sync/backup-files.ts'
+import { formatBytes } from '../../ui/report.ts'
 import {
   BACKUP_INTERVAL_OPTIONS,
   backupDraftDirty,
@@ -124,6 +126,8 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   const planGeneration = useRef(0)
   /** 执行恢复的二次确认弹窗开关（危险操作，DESIGN.md §8.11 场景） */
   const [confirmOpen, setConfirmOpen] = useState(false)
+  /** 备份文件列表刷新信号：BackupScheduleCard「立即备份」完成后递增触发重载 */
+  const [backupFilesTick, setBackupFilesTick] = useState(0)
 
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
@@ -134,16 +138,17 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   const commit = (next: PanelState): void => {
     stateRef.current = next
     if (mountedRef.current) setState(next)
-    const backupDraft = runStore.getSnapshot().snapshots.backupDraft
-    runStore.patch({ snapshots: { ...toSnapshotsStoreSlice({ ...next, backupDraft }), backupDraft } })
+    const store = runStore.getSnapshot().snapshots
+    // 合并 store 中非 PanelState 字段（backupDraft / importBackup），避免镜像时覆盖
+    runStore.patch({ snapshots: toSnapshotsStoreSlice({ ...next, backupDraft: store.backupDraft, importBackup: store.importBackup }) })
   }
   const patch = (p: Partial<PanelState>): void => commit({ ...stateRef.current, ...p })
 
   /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
   useEffect(() => () => {
     mountedRef.current = false
-    const backupDraft = runStore.getSnapshot().snapshots.backupDraft
-    runStore.patch({ snapshots: { ...toSnapshotsStoreSlice({ ...stateRef.current, backupDraft }), backupDraft } })
+    const store = runStore.getSnapshot().snapshots
+    runStore.patch({ snapshots: toSnapshotsStoreSlice({ ...stateRef.current, backupDraft: store.backupDraft, importBackup: store.importBackup }) })
   }, [])
 
   const load = (): void => {
@@ -320,8 +325,15 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
         </>
       )}
 
-      {/* 定时全量备份设置（独立于快照列表状态，始终展示） */}
-      <BackupScheduleCard api={api} t={t} />
+      {/* 备份文件管理（exports 导出产物：手动导出 + 定时备份；下载/导入/删除） */}
+      <BackupFilesCard api={api} t={t} refreshTick={backupFilesTick} />
+
+      {/* 定时全量备份设置（独立于快照列表状态，始终展示；完成后刷新上方备份文件列表） */}
+      <BackupScheduleCard
+        api={api}
+        t={t}
+        onBackupDone={() => { setBackupFilesTick((n) => n + 1) }}
+      />
 
       {/* 执行恢复二次确认（破坏性操作：整文件还原/删除 + 卸载插件；busy 防重复提交） */}
       <ConfirmDialog
@@ -372,7 +384,12 @@ function formatRunTime(iso: string | undefined): string {
  * 状态自持；草稿镜像 runStore.snapshots.backupDraft（未保存修改切 tab/刷新保留），
  * 保存成功清草稿（宿主配置为权威）。
  */
-function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<'config-manager'> }) {
+function BackupScheduleCard({ api, t, onBackupDone }: {
+  api: ConfigManagerApi
+  t: TranslateNS<'config-manager'>
+  /** 「立即备份」成功完成后回调（父组件据此刷新备份文件列表） */
+  onBackupDone?: () => void
+}) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState<BackupScheduleDraft>({ enabled: false, interval: '24h' })
@@ -453,13 +470,16 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
     setActionError(null)
     api.runBackupNow().then(
       (res) => {
-        if (!mountedRef.current) return
-        setSaved(res.schedule)
-        setLastRun(res.run.status)
-        setLastRunDetail(res.run.zip !== undefined && res.run.zip !== ''
-          ? res.run.zip
-          : (res.run.skipReason !== undefined ? res.run.skipReason : formatRunTime(res.schedule.lastRunAt)))
-        setRunning(false)
+        if (mountedRef.current) {
+          setSaved(res.schedule)
+          setLastRun(res.run.status)
+          setLastRunDetail(res.run.zip !== undefined && res.run.zip !== ''
+            ? res.run.zip
+            : (res.run.skipReason !== undefined ? res.run.skipReason : formatRunTime(res.schedule.lastRunAt)))
+          setRunning(false)
+        }
+        // 无论面板是否仍挂载都通知父组件刷新备份文件列表（新 ZIP 已落盘）
+        onBackupDone?.()
       },
       (err) => {
         if (!mountedRef.current) return
@@ -533,6 +553,152 @@ function BackupScheduleCard({ api, t }: { api: ConfigManagerApi; t: TranslateNS<
 
       {flash !== null && <Banner kind="ok">{flash}</Banner>}
       {actionError !== null && <Banner kind="error">{actionError}</Banner>}
+    </Card>
+  )
+}
+
+/* ------------------------------------------------- 备份文件管理卡 */
+
+/**
+ * 备份文件管理卡（m-backup-files）：列出 exports/ 下的导出 ZIP（手动导出 + 定时备份），
+ * 提供下载（复用 /download）/ 一键导入（切 Import tab + 注入 zipPath，向导直接分析）/
+ * 删除（危险操作二次确认）。
+ *
+ * 状态组件自持（列表可随时重载，不持久化；与快照列表同级）。refreshTick 由父组件在
+ * 「立即备份」完成后递增触发重载。安全：文件路径来自宿主受控 exports 目录；删除按钮
+ * 恒走 ConfirmDialog（danger）；导入 = 把 zipPath 交给现有导入向导（analyze 零写入，
+ * 不经过上传）。
+ */
+function BackupFilesCard({ api, t, refreshTick }: {
+  api: ConfigManagerApi
+  t: TranslateNS<'config-manager'>
+  /** 外部刷新信号（「立即备份」完成后递增；首帧跳过，挂载由 load 处理） */
+  refreshTick: number
+}) {
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [error, setError] = useState<string | null>(null)
+  const [files, setFiles] = useState<BackupFileMeta[]>([])
+  const [deleting, setDeleting] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState<BackupFileMeta | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const mountedRef = useRef(true)
+  const initialTick = useRef(refreshTick)
+
+  useEffect(() => () => { mountedRef.current = false }, [])
+
+  const load = (): void => {
+    setStatus('loading')
+    setError(null)
+    api.listBackupFiles().then(
+      (list) => {
+        if (!mountedRef.current) return
+        setFiles(list)
+        setStatus('ready')
+      },
+      (err) => {
+        if (!mountedRef.current) return
+        setStatus('error')
+        setError(err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  useEffect(load, [api])
+
+  // 「立即备份」完成等外部事件（refreshTick 递增）→ 重载列表；首帧跳过（挂载已 load）
+  useEffect(() => {
+    if (refreshTick === initialTick.current) return
+    load()
+  }, [refreshTick])
+
+  const download = (file: BackupFileMeta): void => {
+    setActionError(null)
+    void api.download(file.path, { saveDialog: true }).catch((err) => {
+      if (!mountedRef.current) return
+      setActionError(err instanceof Error ? err.message : String(err))
+    })
+  }
+
+  /** 一键导入：把备份文件 zipPath 交给现有导入向导（切 Import tab；向导挂载即分析） */
+  const importBackup = (file: BackupFileMeta): void => {
+    runStore.patch({
+      view: 'import',
+      panel: null,
+      snapshots: { importBackup: { zipPath: file.path, name: file.name } },
+    })
+  }
+
+  const doDelete = (): void => {
+    const file = confirmDelete
+    if (file === null || deleting) return
+    setDeleting(true)
+    setActionError(null)
+    api.deleteBackupFile(file.name).then(
+      () => {
+        setDeleting(false)
+        setConfirmDelete(null)
+        load()
+      },
+      (err) => {
+        setDeleting(false)
+        setConfirmDelete(null)
+        setActionError(err instanceof Error ? err.message : String(err))
+      },
+    )
+  }
+
+  return (
+    <Card className={css.card}>
+      <div className={css.groupLabel}>{t('backupFiles.title')}</div>
+      <div className={css.hint}>{t('backupFiles.hint')}</div>
+
+      {status === 'loading' && <Spinner label={t('backupFiles.loading')} />}
+
+      {status === 'error' && (
+        <Banner kind="error">
+          {error ?? t('common.unknownError')}
+          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
+        </Banner>
+      )}
+
+      {status === 'ready' && files.length === 0 && <Empty>{t('backupFiles.empty')}</Empty>}
+
+      {status === 'ready' && files.length > 0 && (
+        <div className={css.backupFileList} role="list" aria-label={t('backupFiles.title')}>
+          {files.map((file) => (
+            <div key={file.name} className={css.backupFileRow} role="listitem">
+              <span className={css.backupFileName} title={file.name}>{file.name}</span>
+              <Badge kind="info">
+                {file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}
+              </Badge>
+              <span className={css.backupFileMeta}>{formatBytes(file.sizeBytes)}</span>
+              <span className={css.backupFileMeta}>{new Date(file.mtimeMs).toLocaleString()}</span>
+              <span className={css.actionRow}>
+                <Button disabled={deleting} onClick={() => { download(file) }}>{t('backupFiles.download')}</Button>
+                <Button disabled={deleting} onClick={() => { importBackup(file) }}>{t('backupFiles.import')}</Button>
+                <Button variant="danger" disabled={deleting} onClick={() => { setConfirmDelete(file) }}>
+                  {t('backupFiles.delete')}
+                </Button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {actionError !== null && <Banner kind="error">{actionError}</Banner>}
+
+      {/* 删除二次确认（危险操作：备份文件不可恢复） */}
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title={t('backupFiles.deleteConfirmTitle')}
+        message={confirmDelete !== null ? t('backupFiles.deleteConfirm', { name: confirmDelete.name }) : undefined}
+        confirmLabel={t('backupFiles.delete')}
+        cancelLabel={t('common.cancel')}
+        danger
+        busy={deleting}
+        onConfirm={doDelete}
+        onCancel={() => { setConfirmDelete(null) }}
+      />
     </Card>
   )
 }
