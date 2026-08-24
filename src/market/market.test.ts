@@ -183,6 +183,24 @@ test('校验：sections 无交集拒绝', () => {
   assert.match(res.errors.join(), /无交集/);
 });
 
+test('校验：文件分区 enabled 但 ZIP 无前缀条目 → valid（空分区合法，仅 warning）', () => {
+  // 模拟空 skills 分区导出：内部 manifest 声明 skills=true，但 ZIP 无任何 custom/skills/ 条目
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} });
+  const entries: ZipWriteEntry[] = [{ name: 'config/settings.json', data: Buffer.from(settingsJson) }];
+  entries.push({ name: 'integrity/checksums.json', data: Buffer.from(JSON.stringify({ 'config/settings.json': sha256Hex(Buffer.from(settingsJson)) })) });
+  const manifest = {
+    schemaVersion: 1, exporter: { name: 'X', version: '1' },
+    source: { dshVersion: '1', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(), sections: { settings: true, skills: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  };
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) });
+  const zip = Buffer.from(zipToBuffer(entries));
+  const res = validateMarketItem('foo', makeItemManifest('foo', zip, ['settings', 'skills']), zip);
+  assert.equal(res.status, 'valid', '空文件分区不应拒绝条目（导入侧对空分区零操作）');
+  assert.ok(res.warnings.some((w) => w.includes('skills') && w.includes('为空')), `应提示空分区 warning: ${res.warnings.join(' | ')}`);
+});
+
 test('校验：内部 manifest 无效拒绝', () => {
   // zipToBuffer 自身已拒绝路径穿越条目，故此处验证 validateMarketItem 对「内容级恶意
   // 载荷」的防线：结构合法但内部 manifest 无效的 zip 必须被拒（parseManifest → parseZipHardened 委托）。

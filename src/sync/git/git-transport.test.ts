@@ -607,6 +607,32 @@ test('集成：加密快照端到端（真实 git + 本地 bare repo）—— up
   await transport.delete('snap-enc'); // 不存在视为成功
 });
 
+test('集成：空文件类分区（skills files:[]）upload 后，全新 clone 的 B 机 download 应读回空分区（git 不跟踪空目录）', async (t) => {
+  const bare = await makeBareRepo(t);
+  // 机器 A：上传含空 skills 分区（~/.dsh/skills 不存在 → files: []）的快照
+  const workDirA = await makeTempDir(t);
+  const transportA = new GitTransport({ repoUrl: bare, workDir: workDirA, credentials: { getToken: async () => TEST_TOKEN } });
+  const snap = sampleSnapshot();
+  snap.sections.skills = { version: 1, files: [] } as unknown as FilesSection;
+  snap.manifest = { ...snap.manifest, sectionIds: ['settings', 'providers', 'skills'] };
+  await transportA.upload(snap);
+
+  // 机器 B：全新 workDir（重新 clone 远端），模拟另一台机器的首次拉取
+  const workDirB = await makeTempDir(t);
+  const transportB = new GitTransport({ repoUrl: bare, workDir: workDirB, credentials: { getToken: async () => TEST_TOKEN } });
+
+  // 复现前提：git 不跟踪空目录 → B 端工作副本里不存在 custom/skills/ 目录
+  const skillsAbsB = path.join(workDirB, 'snapshots', 'snap-001', 'custom', 'skills');
+  const skillsStat = await fs.stat(skillsAbsB).catch(() => null);
+  assert.equal(skillsStat, null, 'git 应不跟踪空目录：B 端工作副本不应存在 custom/skills/');
+
+  // 修复后：download 应降级读回空分区，而不是抛「快照缺少文件分区目录」
+  const roundtrip = await transportB.download('snap-001');
+  const skills = (roundtrip.sections as Partial<Record<SectionId, SectionData>>)['skills'];
+  assert.deepEqual(skills, { version: 1, files: [] });
+  assert.deepEqual(roundtrip.manifest, snap.manifest);
+});
+
 // ─── t5：远端快照裁剪的 git 契约（upload 先 push，再 delete 删旧，各自独立 commit+push） ───
 
 test('集成：裁剪删除旧快照 → 每次 delete 独立 commit+push，add 提交先于 delete 提交', async (t) => {

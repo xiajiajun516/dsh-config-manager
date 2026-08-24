@@ -25,12 +25,14 @@ import { promisify } from 'node:util';
 
 import { createSnapshotFs, joinFs } from '../fs.ts';
 import type { SnapshotFs } from '../fs.ts';
-import { readSnapshotFromDir, SNAPSHOT_MANIFEST_FILE, writeSnapshotToDir } from '../layout.ts';
+import { readSnapshotFromDir, SNAPSHOT_KEEP_CONTENT, SNAPSHOT_KEEP_FILE, SNAPSHOT_MANIFEST_FILE, writeSnapshotToDir } from '../layout.ts';
 import type { SnapshotDirManifest } from '../layout.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
 import { computeSnapshotMeta, isEncryptedSections } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
+import { SECTION_FILE_PREFIXES } from '../../schema/config.ts';
+import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
 
@@ -228,6 +230,16 @@ export class GitTransport implements SyncTransport {
       const dir = this.snapshotDir(snapshot.id);
       if (await fsx.exists(dir)) await fsx.remove(dir); // 覆盖语义：先清旧目录，避免残留旧文件
       await writeSnapshotToDir(snapshot, dir, fsx);
+      // git 不跟踪空目录：为空文件类分区目录写占位文件，保证远端保留目录。
+      // 占位文件不参与 manifest.sectionHashes（基于传入数据计算）；读回时按名+内容过滤。
+      // 否则空分区（如未安装 skills）上传后目录在远端丢失，B 机全新 clone 下载即失败。
+      const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
+      for (const [sid, prefix] of Object.entries(SECTION_FILE_PREFIXES)) {
+        const data = plain[sid as SectionId] as FilesSection | undefined;
+        if (data === undefined || data.files.length > 0) continue;
+        // joinFs 只接受两个参数，占位路径拼进 prefix 一起传
+        await fsx.writeFile(joinFs(dir, `${prefix}${SNAPSHOT_KEEP_FILE}`), new TextEncoder().encode(SNAPSHOT_KEEP_CONTENT));
+      }
       // 同 id 旧密文单文件残留 → 一并清理（形态切换不残留）
       await fsx.remove(this.encryptedSnapshotFile(snapshot.id));
       rel = `${SNAPSHOTS_REL}/${snapshot.id}`;
@@ -249,8 +261,10 @@ export class GitTransport implements SyncTransport {
     await this.pullFromRemote();
     const fsx = createSnapshotFs();
     // 优先散文件目录（明文布局）；其次密文单文件（加密布局）
+    // missingFileDir='empty'：git 不跟踪空目录 → 目录缺失 = 空文件分区（非损坏；
+    // 提交原子性保证非空目录不会缺失），兼容旧版插件上传的无占位快照
     if (await fsx.isDir(this.snapshotDir(id))) {
-      return readSnapshotFromDir(this.snapshotDir(id));
+      return readSnapshotFromDir(this.snapshotDir(id), fsx, { missingFileDir: 'empty' });
     }
     const encFile = this.encryptedSnapshotFile(id);
     if (await fsx.exists(encFile)) {

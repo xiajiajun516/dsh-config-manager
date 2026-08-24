@@ -17,6 +17,26 @@ import { isEncryptedSections } from './transport.ts';
 
 export const SNAPSHOT_MANIFEST_FILE = 'manifest.json';
 
+/**
+ * 空文件类分区的 git 占位文件（git 不跟踪空目录）：
+ * 上传方（GitTransport.upload）给 files 为空的文件类分区目录写入本占位文件，
+ * 保证远端仓库保留该目录；读回时仅当「文件名 + 内容」同时匹配才过滤，
+ * 避免吞掉用户真实同名文件。占位文件不参与 sectionHashes（基于传入数据计算）。
+ * 注意：占位内容不得含换行 —— Windows core.autocrlf 会把 LF 转 CRLF，内容校验会失败。
+ */
+export const SNAPSHOT_KEEP_FILE = '.gitkeep';
+export const SNAPSHOT_KEEP_CONTENT = 'DSH Config Manager sync placeholder (keep empty section dir)';
+const SNAPSHOT_KEEP_BYTES = new TextEncoder().encode(SNAPSHOT_KEEP_CONTENT);
+
+function isKeepFile(rel: string, data: Uint8Array): boolean {
+  if (rel !== SNAPSHOT_KEEP_FILE) return false;
+  if (data.length !== SNAPSHOT_KEEP_BYTES.length) return false;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] !== SNAPSHOT_KEEP_BYTES[i]) return false;
+  }
+  return true;
+}
+
 /** 快照根目录下的 manifest.json 结构 */
 export interface SnapshotDirManifest {
   id: string;
@@ -131,9 +151,16 @@ export async function writeSnapshotToDir(
 
 /**
  * 从散文件目录读回快照。
- * manifest 声明的分区必须可解析：JSON 分区文件缺失 / 文件分区目录缺失 → 抛错（不静默降级）。
+ * manifest 声明的分区必须可解析：JSON 分区文件缺失 / 文件分区目录缺失 → 抛错（不静默降级），
+ * 但 opts.missingFileDir='empty' 时文件分区目录缺失降级为空分区
+ * （git 通道专用：git 不跟踪空目录，目录缺失 = 空文件分区；提交原子性保证非空目录不会缺失）。
+ * 读回时过滤 git 占位文件（SNAPSHOT_KEEP_FILE），使 files 与上传方数据一致。
  */
-export async function readSnapshotFromDir(dir: string, fsx: SnapshotFs = createSnapshotFs()): Promise<SyncSnapshot> {
+export async function readSnapshotFromDir(
+  dir: string,
+  fsx: SnapshotFs = createSnapshotFs(),
+  opts: { missingFileDir?: 'throw' | 'empty' } = {},
+): Promise<SyncSnapshot> {
   const manifestAbs = joinFs(dir, SNAPSHOT_MANIFEST_FILE);
   if (!(await fsx.exists(manifestAbs))) {
     throw new Error(`快照目录缺少 ${SNAPSHOT_MANIFEST_FILE}: ${dir}`);
@@ -173,12 +200,19 @@ export async function readSnapshotFromDir(dir: string, fsx: SnapshotFs = createS
     if (!(sid in manifest.sectionHashes)) continue;
     const baseAbs = joinFs(dir, prefix);
     if (!(await fsx.isDir(baseAbs))) {
+      if (opts.missingFileDir === 'empty') {
+        // git 通道降级：目录缺失 = 空文件分区（git 不跟踪空目录，详见函数注释）
+        sections[sid as SectionId] = { version: 1, files: [] };
+        continue;
+      }
       throw new Error(`快照缺少文件分区目录 ${prefix}（${sid}）`);
     }
     const rels = await listSnapshotFiles(fsx, baseAbs);
     const files: FilesSection['files'] = [];
     for (const rel of rels) {
       const data = await fsx.readFile(joinFs(baseAbs, rel));
+      // 过滤 git 占位文件（名 + 内容同时匹配才过滤，避免吞用户真实同名文件）
+      if (isKeepFile(rel, data)) continue;
       files.push({ relativePath: rel, data, contentHash: sha256Hex(data) });
     }
     sections[sid as SectionId] = { version: 1, files };

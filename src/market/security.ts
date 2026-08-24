@@ -139,10 +139,13 @@ export function validateMarketItem(
       return { status: 'invalid', errors: [`config.zip 包含禁止分区 ${sectionId}（sessions=历史会话 / pluginFiles=任意文件 / self=本地环境），市场条目禁止携带`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }
     if (isFileSection(sectionId)) {
-      // 文件类分区：以文件形式进入 ZIP，结构校验由 security/safeExtract 在导入期做；
-      // 这里只需确认前缀目录有内容（非空目录即视为有内容）。
+      // 文件类分区：以文件形式进入 ZIP，结构校验由 security/safeExtract 在导入期做。
+      // enabled 但 ZIP 无该前缀条目 = 空文件分区（如未安装 skills 时导出）——
+      // 合法状态：导入侧 analyzer.extractSections 对空分区收集空 files、零操作零报错，
+      // 与 sync 通道对空分区的语义一致（空分区参与 manifest 标记但不产生任何文件）。
+      // 仅加 warning 提示，不拒绝；JSON 分区仍严格要求文件存在（有内容才可能 enabled）。
       if (!archive.names().some((n) => n.startsWith(SECTION_FILE_PREFIXES[sectionId]!))) {
-        return { status: 'invalid', errors: [`config.zip 缺少文件分区 ${sectionId}`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+        warnings.push(`config.zip 中分区 ${sectionId} 为空（无文件），导入后不产生任何效果`);
       }
       continue;
     }

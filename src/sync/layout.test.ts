@@ -11,7 +11,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { readSnapshotFromDir, writeSnapshotToDir, SNAPSHOT_MANIFEST_FILE, isSafeRelPath, listSnapshotFiles } from './layout.ts';
+import { readSnapshotFromDir, writeSnapshotToDir, SNAPSHOT_KEEP_CONTENT, SNAPSHOT_KEEP_FILE, SNAPSHOT_MANIFEST_FILE, isSafeRelPath, listSnapshotFiles } from './layout.ts';
 import { createSnapshotFs } from './fs.ts';
 import { hashSection } from './sync-state.ts';
 import type { SnapshotFs } from './fs.ts';
@@ -164,6 +164,44 @@ test('readSnapshotFromDir: manifest 声明了分区但文件缺失 → 拒绝（
     await writeSnapshotToDir(sampleSnapshot(), tmp);
     await fs.rm(path.join(tmp, 'config', 'settings.json'));
     await assert.rejects(() => readSnapshotFromDir(tmp), /settings/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('readSnapshotFromDir: 过滤 git 占位文件（名+内容匹配），保留真实同名文件', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-layout-keep-'));
+  try {
+    await writeSnapshotToDir(sampleSnapshot(), tmp);
+    // 模拟 GitTransport.upload 的空分区占位：custom/skills/.gitkeep（占位内容）
+    await fs.writeFile(path.join(tmp, 'custom', 'skills', SNAPSHOT_KEEP_FILE), SNAPSHOT_KEEP_CONTENT, 'utf8');
+    // 真实同名文件（非占位内容）不得被吞：plugin-files/.gitkeep
+    await fs.writeFile(path.join(tmp, 'plugin-files', SNAPSHOT_KEEP_FILE), 'real user file\n', 'utf8');
+
+    const back = (await readSnapshotFromDir(tmp)) as unknown as PlainSnapshot;
+    const skills = back.sections['skills'] as { files: { relativePath: string; data: Uint8Array }[] };
+    assert.deepEqual(skills.files.map((f) => f.relativePath), ['coding.md', 'nested/tool.md'], '占位文件应从 files 中过滤');
+    const pluginFiles = back.sections['pluginFiles'] as { files: { relativePath: string; data: Uint8Array }[] };
+    assert.deepEqual(pluginFiles.files.map((f) => f.relativePath), [SNAPSHOT_KEEP_FILE, 'dsh-ssh/main.js'], '真实 .gitkeep（非占位内容）应保留');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('readSnapshotFromDir: missingFileDir=empty → 文件分区目录缺失降级为空分区；默认仍抛错', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-layout-empty-dir-'));
+  try {
+    const snap = sampleSnapshot();
+    snap.sections['skills'] = { version: 1, files: [] };
+    await writeSnapshotToDir(snap, tmp);
+    // 模拟 git 远端：空目录未被跟踪 → 目录不存在（manifest 仍声明 skills）
+    await fs.rm(path.join(tmp, 'custom', 'skills'), { recursive: true, force: true });
+
+    // 默认（throw）：目录缺失 → 抛错（不静默降级）
+    await assert.rejects(() => readSnapshotFromDir(tmp), /快照缺少文件分区目录 custom\/skills\/（skills）/);
+    // git 通道语义（empty）：目录缺失 = 空文件分区
+    const back = (await readSnapshotFromDir(tmp, createSnapshotFs(), { missingFileDir: 'empty' })) as unknown as PlainSnapshot;
+    assert.deepEqual(back.sections['skills'], { version: 1, files: [] });
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
