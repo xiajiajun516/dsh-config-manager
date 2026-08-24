@@ -360,8 +360,9 @@ export function MyConfigsView({
 
   /* ------------------------------------------------ 上传 / 更新向导 */
 
-  /** 选 zip → upload 受控临时区；upload 模式预填 name 为 zip 文件名（可改）；
-   *  update 模式（更新直达表单页）留在 form 步骤并自动跑校验 */
+  /** 选 zip → upload 受控临时区；upload 模式预填 name 为 zip 文件名（可改）。
+   *  两种模式选完 zip 均**自动**跑校验（analyzeImport dry-run）——通过即直接进表单，
+   *  用户无需再手动点「校验」按钮；失败留在校验步骤展示错误（可重选 zip）。 */
   const onPickFile = async (file: File | undefined): Promise<void> => {
     if (file === undefined) return
     patchWizard({ fileName: file.name, error: null, validationError: null })
@@ -373,25 +374,22 @@ export function MyConfigsView({
         patchWizard({ ...base, validated: false })
         await runValidateWith(uploaded.zipPath)
       } else {
+        // 上传模式：进入校验步骤后立即自动校验（validating 态短暂展示），
+        // 通过后 runValidateWith 内部自动切到表单；失败停在校验步骤展示错误
         patchWizard({
           ...base,
           step: 'validate',
           /* 预填 zip 文件名（去 .zip 后缀，可改） */
           form: { ...wizardRef.current.form, name: file.name.replace(/\.zip$/i, '') },
         })
+        await runValidateWith(uploaded.zipPath)
       }
     } catch (err) {
       patchWizard({ error: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  /** 步骤 2：analyzeImport dry-run（零写入）—— 无密钥 + 内容合法才放行；通过后进表单 */
-  const runValidate = async (): Promise<void> => {
-    if (wizard.zipPath === null) return
-    await runValidateWith(wizard.zipPath)
-  }
-
-  /** 校验指定 zipPath（update 模式选新 zip 后自动调用；任何异常都落到 validationError 展示，不静默） */
+  /** 校验指定 zipPath（选完 zip 自动调用；任何异常都落到 validationError 展示，不静默） */
   const runValidateWith = async (zipPath: string): Promise<void> => {
     try {
       patchWizard({ validating: true, validationError: null })
@@ -753,7 +751,8 @@ export function MyConfigsView({
           </div>
         </>)}
 
-        {/* 步骤 2：本地校验（dry-run 零写入） */}
+        {/* 步骤 2：本地校验（dry-run 零写入；选完 zip 自动执行，通过即自动进表单，
+            本步骤仅短暂展示「校验中」；失败时展示错误 + 重新选择） */}
         {wizard.step === 'validate' && (<>
           <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
           {wizard.fileName !== null && (
@@ -762,10 +761,13 @@ export function MyConfigsView({
             </div>
           )}
           <div className={css.actionRow}>
-            <Button variant="primary" disabled={wizard.zipPath === null || wizard.validating} onClick={() => { void runValidate() }}>
-              {wizard.validating ? <Spinner label={t('myconfigs.upload.validating')} /> : t('myconfigs.upload.validate')}
+            <Button
+              variant="primary"
+              disabled={wizard.validating}
+              onClick={reset}
+            >
+              {wizard.validating ? <Spinner label={t('myconfigs.upload.validating')} /> : t('myconfigs.upload.reselect')}
             </Button>
-            <Button disabled={wizard.validating} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
           </div>
           {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
         </>)}
