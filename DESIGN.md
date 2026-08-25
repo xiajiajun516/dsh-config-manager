@@ -82,6 +82,19 @@ background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, tran
 
 Badge 的 `info` 特例：仅表达「中性状态计数 / 分类标签」（如 `3 sections`、插件版本）时用 `info` 但视觉上是中性描边徽章（§8.5）。
 
+### 2.4 kindTag 颜色变体（2026-08-24，变更明细分组）
+
+`.kindTag` 中性态（interactive-bg-hover 淡底）之外，为「变更明细分组」提供四个语义变体，均用 **token 淡底（`color-mix 14%`）+ 同色文字**（亮暗主题成立）：
+
+| 变体 | 语义 | 底色/文字 token |
+|---|---|---|
+| `.kindTagError` | 冲突（需决策） | `state-error-primary` |
+| `.kindTagInfo` | 变更（将写入） | `state-business-primary` |
+| `.kindTagWarn` | 路径映射 / 其他待处理 | `state-warn-primary` |
+| `.kindTagOk` | 一致跳过（无需处理） | `state-success-primary` |
+
+变体只允许用于「展示状态语义的标签」场景（目前仅备份查看/对比的变更明细分组）；普通中性 kindTag 保持原样（如恢复计划动作、审计标签）。
+
 ---
 
 ## 3. Typography
@@ -183,13 +196,14 @@ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 ```
 css.section                    高 100%，纵向 flex，gap 10px
 ├── .sectionHeader             横向 flex（含 .viewTabs 角色=tablist）
-│   └── .viewTabs / .viewTab   tab（导出/导入/备份与快照/同步/市场/关于），下划线激活态
+│   └── .viewTabs / .viewTab   tab（导出与导入/备份与快照/同步/市场/配置文件/关于，下划线激活态）
 └── .sectionBody               flex:1 + overflow-y:auto（滚动发生在 section 内部）
     └── .viewBody              纵向 flex，gap 12px，padding 4px 2px 16px（各视图内容）
 ```
 
 - **Tab 激活态**：`data-active` + `border-bottom: 2px solid var(--dsw-alias-state-business-primary)` + 字重 600。
 - **视图外滚动**：`sectionBody` 是唯一滚动容器；页面无需（也不应）设置 `height` 之外的滚动。
+- **「导出与导入」父子 tab（2026-08-24 合并）**：导出备份与导入恢复合并为一个顶层 tab「导出与导入」（`view.transfer`），顶层激活态 = `panel === null`；内部用 `modeTabs`/`modeTab` 子 tab 切换「导出备份 / 导入恢复」（状态 = runStore `view`，切 tab/刷新不丢）。
 
 ### 7.2 布局原语（组合一切视图的积木）
 
@@ -209,7 +223,8 @@ css.section                    高 100%，纵向 flex，gap 10px
 ### 7.3 表格类布局
 
 - 真实 `<table>` **只在 SyncHistoryView 存在**（历史遗留，类名 `sync-history-table` 是字符串 class，非新规范）。
-- 新列表一律用 **CSS Grid 行**（见 `.snapshotRowHeader/.snapshotRow`：`grid-template-columns: minmax(120px,1.2fr) minmax(140px,1.6fr) 90px 56px 56px`）或 **flex 行 + 徽章**。
+- 新列表一律用 **CSS Grid 行**：快照行（`.snapshotRowHeader/.snapshotRowMain`，5 内容列 `minmax(0,1.2fr) minmax(0,1.6fr) minmax(0,90px) minmax(0,56px) minmax(0,56px)` + 表头尾部 `auto` 操作列）或 flex 行 + 徽章。
+- **列可收缩 + ellipsis 纪律（2026-08-24，消灭「左右滚动条」）**：grid 内容列一律 `minmax(0, …)` 允许收缩，单元格 `min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap` —— 长文件名/备注长文/「📌 置顶前缀」/更宽按钮都不再把行撑破出页面横向滚动条；表头与数据行前 N 列模板必须一致才能保证列数据与列标题对齐（快照 5 内容列 + `auto` 操作；配置档案 3 内容列 + `auto` 操作，专用 `.profileRowHeader/.profileRow/.profileRowMain` 模板）。
 - 快照列表行 = `<button>` 整行可点，选中态 `data-active`（business 色边框 + 10% 淡底）。
 
 ### 7.4 表单布局
@@ -394,7 +409,7 @@ css.section                    高 100%，纵向 flex，gap 10px
 
 | Pattern | 结构 | 现例 |
 |---|---|---|
-| **模式切换（Quick/Custom）** | `modeTabs` 双 tab + `modeHint` 说明 | 导出视图、同步模式、市场面板（浏览市场 / 我的配置） |
+| **模式切换（Quick/Custom）** | `modeTabs` 双 tab + `modeHint` 说明 | 导出视图、同步模式、市场面板（浏览市场 / 我的配置）、「导出与导入」内部子 tab（导出备份 / 导入恢复） |
 | **GitHub 登录卡（device flow）** | `Card` + `actionRow`（「使用 GitHub 登录」primary 按钮 + 取消）+ 一次性用户码 Badge + 「打开授权页」外链 + 轮询状态 Badge + 错误 Banner；token 只存宿主凭据槽，界面只展示用户码与登录名 | 远程同步视图（GitHub 登录）、「我的配置」登录卡 |
 | **通道子 tab 面板（GitHub/WebDAV）** | `modeTabs` 双 tab + `modeHint` 说明；各 tab 内配置表单 / 自动同步 / 同步模式 / 加密 / 远端快照**按通道独立**，切换 tab 互不覆盖（busy 时禁用切换） | 远程同步视图（同步面板二级 tab）、快照面板二级 tab（备份文件 / 快照恢复，subTab 镜像 runStore 切 tab/刷新不丢） |
 | **分组勾选目录** | `groupList > groupCard(groupHeader: groupLabel+groupNote) > groupItems(Checkbox 行: categoryName+categoryDesc+Badge)` | 导出 Custom、同步高级模式 |
@@ -413,7 +428,13 @@ css.section                    高 100%，纵向 flex，gap 10px
 | **dry-run → confirm → 执行** | 零写入预览 → 危险按钮（title 确认）→ 诚实报告 | 快照恢复、市场导入、一键同步 |
 | **关于页** | `viewBody` 卡片流：`SectionTitle` + 信息卡（`statRow` 动态版本/DSH/平台 Badge：官方→`ok`、版本→`info`）+ 链接卡（`actionRow` 内 Star 主按钮 + `aboutLinkRow` 外链行 + `aboutAuthor` 作者外链） | 关于 tab |
 | **确认弹窗 ConfirmDialog（危险/重要操作）** | `common/ConfirmDialog.tsx` 受控弹窗：`{ open, title, message?, confirmLabel?, cancelLabel?, danger?, busy?, onConfirm, onCancel, backdropClose?, children? }`；遮罩点击（target===currentTarget）/ Esc / 取消三途径关闭（busy 时全禁用）；`backdropClose`（2026-08-22）让遮罩/Esc 走独立回调（缺省 = onCancel），供「不再提示」类弹窗区分「暂时关闭」与「表态」（§8.13 Star 引导弹窗）；onConfirm 返回 Promise 时组件自管 busy 防重复提交；初始焦点落取消按钮（危险确认不默认落破坏性按钮）、关闭还原触发按钮；样式仅 dialogMask/dialogCard/dialogHeader/dialogBody 四类（遮罩 color-mix 半透明、卡片 bg-layer-2+border-l1+radius10、正文限高 240px 内滚）；确认按钮复用现有 danger/primary Button | 「我的配置」列表删除条目（不可恢复 + 已收录自动提交下架 PR）；快照恢复确认（可升级）；Star 引导弹窗（§8.13，满 3 天 + 未表态才弹，表态写 ui-prefs.json） |
-| **备份文件列表（导出产物管理）** | `Card`（`groupLabel` + `hint`）+ `backupFileList`（flex 列，gap 4px）内 `backupFileRow`（flex 行，gap 10px flex-wrap：`backupFileName` 单行 ellipsis 截断 + 来源 Badge `kind="info"`（定时备份 auto / 手动导出 manual）+ `backupFileMeta` 大小/时间 + `actionRow` 内 下载（默认 ghost）/ 导入（ghost）/ 删除（danger，走 ConfirmDialog 二次确认，busy 防重复））；空态 `Empty`；「立即备份」完成后父组件 `refreshTick` 递增触发列表重载（列表本身可随时重载，不持久化）；「导入」= 把宿主 exports 目录 zipPath 交给导入向导（切 Import tab，向导挂载即分析，不经上传） | 「备份与快照」面板 →「备份文件」子 tab（m-backup-files） |
+| **备份文件列表（导出产物管理）** | `Card`（`groupLabel` + `hint`）上方可选**搜索框**（`css.input` type="search"，文件名/备注子串过滤）；`backupFileList`（flex 列，gap 4px）内 `backupFileRow`（flex 行，gap 10px flex-wrap：`backupFileName` 单行 ellipsis 截断 + 来源 Badge `kind="info"`（定时备份 auto / 手动导出 manual）+ `backupFileMeta` 大小/时间 + **可选备注 `backupFileNote`（💬 备注，Badge(info) 同款视觉但 `white-space:normal; overflow-wrap:anywhere` 自动换行 —— 长备注不撑破行产生横向滚动条）** + `actionRow` 内 下载（默认 ghost）/ 导入（ghost）/ **查看对比（ghost，P1-⑦/P2-⑬：只读弹窗展示分区清单 + 与当前配置 diff，复用 `dialogWide` 操作弹窗四件套 + `planScroll`/`reportList` 限高内滚）** / 删除（danger，走 ConfirmDialog 二次确认，busy 防重复））；空态 `Empty` + 搜索无命中 `searchEmpty`；「立即备份」完成后父组件 `refreshTick` 递增触发列表重载（列表本身可随时重载，不持久化）；「导入」= 把宿主 exports 目录 zipPath 交给导入向导（切 Import tab，向导挂载即分析，不经上传） | 「备份与快照」面板 →「备份文件」子 tab（m-backup-files） |
+| **快照列表（P1-⑧）** | 列表头上方 `hint` 常驻保留策略说明（最多 N 个 + 置顶豁免）；`snapshotRow` 改为双层结构：外层 div（grid `1fr auto`，承载边框/选中态/hover）+ 内层 `snapshotRowMain`（button，热区：时间/来源/状态/条目/插件列）+ 行尾 `actionRow`（置顶/取消置顶 ghost + 删除 danger，均走 ConfirmDialog 二次确认）；置顶快照时间前显 `📌` 前缀；**内容列 `minmax(0,…)` 可收缩 + 单元格 ellipsis（2026-08-24）：长文件名/📌 前缀/「取消置顶」按钮变宽不撑破行，消灭左右滚动条** | 「备份与快照」面板 →「快照恢复」子 tab |
+| **恢复计划预览弹窗（2026-08-24）** | 选中快照 → dry-run 完成后**自动打开弹窗**展示恢复计划（与备份文件「查看/对比」同弹窗体系）：`dialogMask` + `dialogCard dialogWide` + `dialogHeaderRow` + `dialogClose` × + `dialogBodyScroll` 内 = 计划摘要（`hint`）+ `planScroll` 动作列表（`kindTag` 前缀）+ 底栏 `actionRow`（取消 + 「执行恢复」danger → 关闭弹窗并打开 ConfirmDialog 二次确认）；loading/错误都在弹窗内；关闭 = 放弃展示（plan 仍镜像 runStore，弹窗关闭后提供「查看恢复计划」按钮重开，不重复请求）；弹窗开关为瞬态 useState 不持久化 | 「备份与快照」面板 →「快照恢复」子 tab 行点击 |
+| **导入/同步后收尾清单（P0-①/P2-⑪）** | `Card`：`groupLabel`（「接下来需要处理」）+ 三个分组 `nextStepsGroup`（`groupLabel` 标题 + `hint` 说明 + `reportList` 明细），组间 `border-top` 分隔；三组全空 → `Banner kind="ok"`「全部完成」。新增样式仅 `nextStepsGroup`（间距/分隔线） | 导入向导 result 步 |
+| **About CLI 引导卡（P1-⑩）** | 「关于」tab 新增卡片：`groupLabel` + `hint` + 安装命令等宽块 `cliCommand`（`bg-base` + `border-l2` + radius6，`mono` 栈）+ `reportList`（命令名 `cliName` 等宽高亮）+ `actionRow` 文档外链；命令清单含 `dsh-config-manager help`（列出全部 CLI 命令与用法，离线可用）；新增样式仅 `cliCommand`/`cliName`（等宽展示，无新颜色/动效） | 关于 tab |
+| **配置档案列表（Profiles tab）** | 复用既有 Pattern 的页面：保存卡（`Card`：`groupLabel`+`hint`+`actionRow` 内 `input`+primary 保存按钮）→ `snapshotList` 行复用「快照列表双层结构」（`snapshotRow` + `snapshotRowMain` 热区 + 行尾 `actionRow`：切换/重命名/删除 danger）；**2026-08-24：换用档案专用 4 列模板 `profileRowHeader`/`profileRow`/`profileRowMain`（档案名 / 分区 / 更新时间 / 操作 auto 尾列）——前 3 内容列与表头模板一致保证对齐，`minmax(0,…)` + ellipsis 消灭左右滚动条**；切换预览走 `dialogWide` 操作弹窗四件套；**2026-08-25：预览内容对齐备份文件「查看/对比」弹窗三分区结构**——差异摘要卡（Badge 语义）+ 档案分区清单卡（分区 Badge 流）+ 变更明细分组卡（复用备份 diff 的 `groupPlanItems` 分组：冲突→变更→路径映射→已一致→其他，带 kindTag 颜色变体 + 计数 Badge + `reportScroll` 限高内滚）；失败/回滚结果用 Banner 语义。 | 「配置文件」tab（m-profiles） |
+| **变更明细分组 + 颜色（P2-⑬ 优化）** | 变更明细按用户视角分组并排序：**冲突（`kindTagError`，error 色）→ 变更/将写入（`kindTagInfo`，business 色）→ 路径映射需处理（`kindTagWarn`，warn 色）→ 已一致无需处理（`kindTagOk`，success 色）→ 其他**；每组 = 组标题（`groupLabel` + Badge 计数）+ `reportScroll` 限高列表（组内 `kindTag` 同色变体）；分组逻辑 = `src/ui/backup-inspect.ts` 的 `groupPlanItems(PlanItem[])` 纯函数（空组不渲染、条目总数不丢），**备份「查看/对比」弹窗（`inspectGroupedChanges`）与配置档案切换预览共用同一分组语义**；新增样式仅 kindTag 四个颜色变体 + `inspectGroup`（组间分隔线） | 备份文件「查看/对比」弹窗、配置档案切换预览 |
 
 ---
 

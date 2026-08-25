@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { BackupScheduler } from './backup-scheduler.ts';
-import { backupIntervalToMs, defaultBackupSchedule, readBackupSchedule, writeBackupSchedule } from './backup-schedule-config.ts';
+import { backupIntervalToMs, defaultBackupSchedule, nextBackupDelayMs, parseWeeklySchedule, readBackupSchedule, writeBackupSchedule } from './backup-schedule-config.ts';
 import type { BackupScheduleConfig } from './backup-schedule-config.ts';
 import { shouldTriggerStartupRun } from './autosync-scheduler.ts';
 import { RunRegistry } from '../core/run-registry.ts';
@@ -60,6 +60,54 @@ test('backupIntervalToMs: 间隔换算正确', () => {
   assert.equal(backupIntervalToMs('12h'), 12 * 60 * 60 * 1000);
   assert.equal(backupIntervalToMs('24h'), 24 * 60 * 60 * 1000);
   assert.equal(backupIntervalToMs('7d'), 7 * 24 * 60 * 60 * 1000);
+  assert.ok(Number.isNaN(backupIntervalToMs('custom')), 'custom 无固定周期 → NaN');
+});
+
+test('parseWeeklySchedule: 合法/非法值域校验（P0-⑤）', () => {
+  assert.deepEqual(parseWeeklySchedule({ dayOfWeek: 1, hour: 3, minute: 30 }), { dayOfWeek: 1, hour: 3, minute: 30 });
+  assert.equal(parseWeeklySchedule({ dayOfWeek: 7, hour: 3, minute: 30 }), null);
+  assert.equal(parseWeeklySchedule({ dayOfWeek: 1, hour: 24, minute: 0 }), null);
+  assert.equal(parseWeeklySchedule({ dayOfWeek: 1, hour: 3, minute: 60 }), null);
+  assert.equal(parseWeeklySchedule(null), null);
+  assert.equal(parseWeeklySchedule('x'), null);
+});
+
+test('nextBackupDelayMs: 固定间隔档返回 interval ms（P0-⑤）', () => {
+  const now = new Date(1_000_000_000_000);
+  assert.equal(nextBackupDelayMs({ interval: '24h' }, now), 24 * 60 * 60 * 1000);
+  assert.equal(nextBackupDelayMs({ interval: '7d' }, now), 7 * 24 * 60 * 60 * 1000);
+});
+
+test('nextBackupDelayMs: custom 档对齐下一个每周时刻（P0-⑤）', () => {
+  // 2026-08-24 是周一 → 选周五(5) 03:30，应到本周五
+  const monday = new Date(2026, 7, 24, 10, 0, 0, 0); // 2026-08-24 10:00 周一
+  const cfg = { interval: 'custom' as const, customSchedule: { dayOfWeek: 5, hour: 3, minute: 30 } };
+  const delay = nextBackupDelayMs(cfg, monday)!;
+  const target = new Date(monday.getTime() + delay);
+  assert.equal(target.getDay(), 5, '目标是周五');
+  assert.equal(target.getHours(), 3);
+  assert.equal(target.getMinutes(), 30);
+  assert.ok(delay > 0 && delay < 7 * 24 * 60 * 60 * 1000);
+
+  // 同样是周五、但已过 03:30（周五 10:00 排期）→ 排到下周周五
+  const fridayLate = new Date(2026, 7, 28, 10, 0, 0, 0); // 2026-08-28 周五 10:00
+  const delay2 = nextBackupDelayMs(cfg, fridayLate)!;
+  const target2 = new Date(fridayLate.getTime() + delay2);
+  assert.equal(target2.getDay(), 5);
+  assert.ok(delay2 > 6 * 24 * 60 * 60 * 1000, '已过同刻 → 下周（略小于整周）');
+
+  // 当天未过同刻（周五 02:00 排 03:30）→ 今天同刻
+  const fridayEarly = new Date(2026, 7, 28, 2, 0, 0, 0);
+  const delay3 = nextBackupDelayMs(cfg, fridayEarly)!;
+  const target3 = new Date(fridayEarly.getTime() + delay3);
+  assert.equal(target3.getDay(), 5);
+  assert.equal(target3.getHours(), 3);
+  assert.ok(delay3 > 0 && delay3 < 2 * 60 * 60 * 1000, '同天未过 → 几小时内');
+});
+
+test('nextBackupDelayMs: custom 档缺 customSchedule → null（不排期）', () => {
+  assert.equal(nextBackupDelayMs({ interval: 'custom' }, new Date()), null);
+  assert.equal(nextBackupDelayMs({ interval: 'custom', customSchedule: undefined }, new Date()), null);
 });
 
 test('shouldTriggerStartupRun: 阈值判断（复用 autosync 实现）', () => {

@@ -15,8 +15,12 @@ import {
   backupFileSource,
   deleteBackupFile,
   isValidBackupFileName,
+  isValidExportFileName,
   listBackupFiles,
   pruneAutoBackups,
+  readBackupNotes,
+  resolveNonCollidingExportName,
+  writeBackupNote,
 } from './backup-files.ts';
 
 /** 建独立临时 exports 目录，返回 { dir, cleanup } */
@@ -48,6 +52,22 @@ test('isValidBackupFileName：仅文件名 + .zip；拒绝路径穿越与非法�
   assert.equal(isValidBackupFileName(''), false, '空名拒绝');
   assert.equal(isValidBackupFileName(undefined), false, '非字符串拒绝');
   assert.equal(isValidBackupFileName(42), false, '非字符串拒绝');
+});
+
+test('resolveNonCollidingExportName：同名自动追加数字，不覆盖已有备份', () => {
+  // 无撞名 → 原样返回
+  assert.equal(resolveNonCollidingExportName('my-backup.zip', []), 'my-backup.zip');
+  assert.equal(resolveNonCollidingExportName('my-backup.zip', ['other.zip']), 'my-backup.zip');
+  // 撞名依次递进
+  assert.equal(resolveNonCollidingExportName('my-backup.zip', ['my-backup.zip']), 'my-backup-1.zip');
+  assert.equal(resolveNonCollidingExportName('my-backup.zip', ['my-backup.zip', 'my-backup-1.zip']), 'my-backup-2.zip');
+  assert.equal(resolveNonCollidingExportName('my-backup.zip', ['my-backup.zip', 'my-backup-1.zip', 'my-backup-2.zip', 'my-backup-3.zip']), 'my-backup-4.zip');
+  // 数字后缀空洞（缺 2 有 3）→ 取最小可用（2）
+  assert.equal(resolveNonCollidingExportName('my-backup.zip', ['my-backup.zip', 'my-backup-1.zip', 'my-backup-3.zip']), 'my-backup-2.zip');
+  // 自动命名（随机后缀）撞同名也递进
+  assert.equal(resolveNonCollidingExportName('dsh-config-20260825-1a2b3c.zip', ['dsh-config-20260825-1a2b3c.zip']), 'dsh-config-20260825-1a2b3c-1.zip');
+  // 非 .zip 名称（理论不应发生；去重同样适用）
+  assert.equal(resolveNonCollidingExportName('plain', ['plain']), 'plain-1.zip');
 });
 
 test('listBackupFiles：只列 .zip、时间倒序、来源判定正确、缺失目录返回空', async () => {
@@ -148,6 +168,50 @@ test('pruneAutoBackups：缺失目录 → 空结果不抛错', async () => {
   const { dir, cleanup } = await makeExportsDir();
   try {
     assert.deepEqual(await pruneAutoBackups(path.join(dir, 'no-such'), 10), []);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('isValidExportFileName：自定义导出文件名校验（P0-④）', () => {
+  assert.equal(isValidExportFileName('my-config.zip'), true);
+  assert.equal(isValidExportFileName('dsh-config 2026-08.zip'), true, '允许空格');
+  assert.equal(isValidExportFileName('../evil.zip'), false, '目录穿越拒绝');
+  assert.equal(isValidExportFileName('a\\evil.zip'), false, '反斜杠拒绝');
+  assert.equal(isValidExportFileName('a/b.zip'), false, '子路径拒绝');
+  assert.equal(isValidExportFileName('x.txt'), false, '非 zip 拒绝');
+  assert.equal(isValidExportFileName('x.zip '), false, '尾随空格拒绝');
+  assert.equal(isValidExportFileName(''), false);
+  assert.equal(isValidExportFileName(undefined), false);
+  assert.equal(isValidExportFileName('a;rm.zip'), false, 'shell 元字符拒绝');
+});
+
+test('writeBackupNote / readBackupNotes：写入、覆盖、清空、删除时清理（P0-④）', async () => {
+  const { dir, cleanup } = await makeExportsDir();
+  try {
+    type FileMeta = Awaited<ReturnType<typeof listBackupFiles>>[number];
+
+    await fs.writeFile(path.join(dir, 'my-backup.zip'), 'x');
+    // 写备注 → 列表合并展示
+    await writeBackupNote(dir, 'my-backup.zip', '迁移前的完整备份');
+    let metas: FileMeta[] = await listBackupFiles(dir);
+    assert.equal(metas[0]!.note, '迁移前的完整备份');
+
+    // 覆盖备注
+    await writeBackupNote(dir, 'my-backup.zip', '更新后的备份');
+    metas = await listBackupFiles(dir);
+    assert.equal(metas[0]!.note, '更新后的备份');
+
+    // 写空串 = 删除该备注
+    await writeBackupNote(dir, 'my-backup.zip', '   ');
+    metas = await listBackupFiles(dir);
+    assert.equal(metas[0]!.note, null, '空备注 → null');
+
+    // 删除文件时同步清理备注
+    await writeBackupNote(dir, 'my-backup.zip', 'to-be-removed');
+    await deleteBackupFile(dir, 'my-backup.zip');
+    const notesAfter = await readBackupNotes(dir);
+    assert.equal(notesAfter['my-backup.zip'], undefined, '删除文件后备注一并清理');
   } finally {
     await cleanup();
   }

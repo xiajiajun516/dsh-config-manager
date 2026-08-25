@@ -29,6 +29,18 @@ export class ConflictCollector {
     return true;
   }
 
+  /** 批量决策全部冲突项（keepCurrent / useImported）—— P0-③ 批量操作。
+   *  返回实际决策的项数（= 当前冲突数）。与逐项 resolve 语义一致：
+   *  未出现在冲突列表中的 id 不会进入决策表。 */
+  resolveAll(resolution: Extract<ItemResolution, 'keepCurrent' | 'useImported'>): number {
+    let applied = 0;
+    for (const item of this.conflicts) {
+      this.decisions.set(item.id, resolution);
+      applied += 1;
+    }
+    return applied;
+  }
+
   /** 单项当前决策（未决策返回 null） */
   decisionOf(itemId: string): ItemResolution | null {
     return this.decisions.get(itemId) ?? null;

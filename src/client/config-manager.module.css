@@ -431,6 +431,38 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* 导入/同步后收尾清单（next-steps）：分组纵向排布，组间分隔（P0-①/P2-⑪） */
+.nextStepsGroup {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
+.nextStepsGroup .reportList {
+  margin-top: 6px;
+}
+
+/* P1-⑩：About CLI 引导卡 —— 安装命令等宽块 + 命令名等宽 */
+.cliCommand {
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 6px;
+}
+
+.cliName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
 .groupNote {
   font-size: 11.5px;
   color: var(--dsw-alias-label-tertiary);
@@ -899,10 +931,15 @@
   gap: 2px;
 }
 
+/* M4-滚动条修复：表头/数据行统一为「5 个内容列 + 尾部 auto 操作列」的 grid，
+   内容列允许收缩（minmax(0,…)）+ 单元格 ellipsis 截断 —— 长文件名 / 置顶后
+   📌 前缀 / 「取消置顶」按钮变宽都不再把行撑破（消灭页面左右滚动条）。
+   表头与数据行的前 5 列模板完全一致，保证列数据与列标题对齐。 */
 .snapshotRowHeader,
-.snapshotRow {
+.snapshotRowMain {
   display: grid;
-  grid-template-columns: minmax(120px, 1.2fr) minmax(140px, 1.6fr) 90px 56px 56px;
+  grid-template-columns:
+    minmax(0, 1.2fr) minmax(0, 1.6fr) minmax(0, 90px) minmax(0, 56px) minmax(0, 56px);
   gap: 8px;
   align-items: center;
   padding: 6px 10px;
@@ -913,16 +950,46 @@
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
+  grid-template-columns:
+    minmax(0, 1.2fr) minmax(0, 1.6fr) minmax(0, 90px) minmax(0, 56px) minmax(0, 56px) auto;
 }
 
+/* 单元格长文本 ellipsis：grid 子项默认 min-width:auto 会按内容撑宽，
+   设 min-width:0 + overflow hidden 才可收缩（列数据与标题同时收紧） */
+.snapshotRowHeader > span,
+.snapshotRowMain > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* P1-⑧：快照行改为「可点击主区 + 行内操作（置顶/删除）」的双层结构。
+   外层 div 承载边框/选中态，内层 .snapshotRowMain 是点击选择的热区 */
 .snapshotRow {
-  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 8px;
   text-align: left;
   color: var(--dsw-alias-label-primary);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
+}
+
+.snapshotRowMain {
+  grid-template-columns:
+    minmax(0, 1.2fr) minmax(0, 1.6fr) minmax(0, 90px) minmax(0, 56px) minmax(0, 56px);
+  padding: 2px 0;
+  width: 100%;
+  text-align: left;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
   cursor: pointer;
+  font-size: 12px;
 }
 
 .snapshotRow:hover {
@@ -932,6 +999,87 @@
 .snapshotRow[data-active] {
   border-color: var(--dsw-alias-state-business-primary);
   background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+}
+
+.snapshotRow .actionRow {
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+/* ---------------- 配置档案列表（Profiles，m-profiles） ---------------- */
+/* 专用 4 列模板：档案名 / 分区 / 更新时间 / 操作(auto 尾列)，表头与数据行
+   前 3 列（内容列）模板完全一致 → 列数据与列标题对齐；列可收缩 + ellipsis，
+   消除「列对不齐 / 左右滚动条」（不再复用快照 5 内容列模板，列数不同） */
+.profileRowHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.profileRowHeader > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profileRowHeader > span:last-child {
+  justify-self: end;
+  white-space: normal;
+}
+
+.profileRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  padding: 4px 8px;
+  text-align: left;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.profileRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.profileRow[data-active] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 10%, transparent);
+}
+
+.profileRow .actionRow {
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.profileRowMain {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.profileRowMain > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------------- 备份文件列表（快照面板 m-backup-files） ---------------- */
@@ -964,6 +1112,23 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* 备份备注徽章：同 Badge(info) 视觉，但允许自动换行（长备注不再把行撑破出
+   横向滚动条；flex 行内 min-width:0 + wrap 兜底）。 */
+.backupFileNote {
+  display: inline-block;
+  min-width: 0;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+  border-radius: 999px;
+  border: 1px solid var(--dsw-alias-state-business-primary);
+  color: var(--dsw-alias-state-business-primary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+  max-width: 100%;
+}
+
 .backupFileMeta {
   flex: none;
   font-size: 11px;
@@ -991,6 +1156,47 @@
   font-size: 10.5px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
+}
+
+/* 变更明细分组的 kindTag 颜色变体（P2-⑬ 增强）：
+   冲突=error / 变更=info(business) / 路径映射=warn / 一致跳过=ok，
+   用 token 淡底 + 同色文字，亮暗主题都成立（color-mix 规则见 DESIGN.md §2.2） */
+.kindTagError {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 14%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.kindTagWarn {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 14%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.kindTagOk {
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 14%, transparent);
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.kindTagInfo {
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* 变更明细分组块：组标题行 + 列表，组间分隔（P2-⑬ 分组展示） */
+.inspectGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+}
+
+.inspectGroup + .inspectGroup {
+  margin-top: 4px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  padding-top: 8px;
+}
+
+.inspectGroup .reportList {
+  margin-top: 2px;
 }
 
 /* 恢复计划详情容器：固定高度 + 内部滚动，数百条动作不再把整页撑长；

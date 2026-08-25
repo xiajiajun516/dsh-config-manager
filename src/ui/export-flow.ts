@@ -25,6 +25,26 @@ export interface ExportPort {
   export(options: ExportOptions): Promise<{ zipPath: string; manifest: Manifest; report: ExportReport }>;
 }
 
+/**
+ * 自定义导出文件名的归一化（P0-④ 体验优化）：无需用户手动输入 `.zip`。
+ * - trim 首尾空白；空串 → ''（宿主自动命名）；
+ * - 非空且未以 `.zip` 结尾 → 自动补全 `.zip`（大小写不敏感判定，统一补小写后缀）；
+ * - 已以 `.zip` 结尾 → 原样返回（含首字符为字母数字的校验由调用方/宿主把关）。
+ */
+export function normalizeExportFileName(raw: string): string {
+  const trimmed = raw.trim()
+  if (trimmed === '') return ''
+  return /\.zip$/i.test(trimmed) ? trimmed : `${trimmed}.zip`
+}
+
+/** 导出附加选项（P0-④：自定义文件名/备注——经 ExportFlow.run 透传给 host /export） */
+export interface ExportExtraOptions {
+  /** 自定义导出文件名（.zip；缺省宿主自动命名） */
+  fileName?: string
+  /** 导出备注（写入 exports/.backup-notes.json；缺省无） */
+  note?: string
+}
+
 export interface ExportFlowOptions {
   port: ExportPort;
   /** 分类目录（缺省用内置目录，与 adapters 的 displayName/defaultIncluded/portability 对齐） */
@@ -111,7 +131,7 @@ export class ExportFlow {
   async run(
     mode: 'quick' | 'custom',
     selection: readonly SectionId[],
-    opts: { includeSecrets?: boolean } = {},
+    opts: { includeSecrets?: boolean; fileName?: string; note?: string } = {},
   ): Promise<ExportRunResult> {
     const tracker = new ProgressTracker(EXPORT_STAGES, this.onProgress);
     const only = mode === 'quick' ? this.quickSelection() : [...selection];
@@ -125,6 +145,9 @@ export class ExportFlow {
     const result = await this.port.export({
       includeSecrets: opts.includeSecrets ?? false,
       only,
+      // P0-④：透传自定义文件名/备注（非敏感；host 做安全校验与持久化）
+      ...(opts.fileName !== undefined && opts.fileName !== '' ? { outPath: opts.fileName } : {}),
+      ...(opts.note !== undefined ? { note: opts.note } : {}),
     });
 
     tracker.emit('done');

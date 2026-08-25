@@ -27,7 +27,7 @@ import type { ConfigAdapter, HostContext } from '../core/types.ts';
 import { Exporter } from '../core/exporter.ts';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { readBackupSchedule, writeBackupSchedule, backupIntervalToMs } from './backup-schedule-config.ts';
+import { readBackupSchedule, writeBackupSchedule, nextBackupDelayMs } from './backup-schedule-config.ts';
 import type { BackupScheduleConfig, BackupRunStatus } from './backup-schedule-config.ts';
 import { shouldTriggerStartupRun } from './autosync-scheduler.ts';
 import { AUTO_BACKUP_PREFIX, DEFAULT_BACKUP_RETENTION, pruneAutoBackups } from './backup-files.ts';
@@ -133,7 +133,13 @@ export class BackupScheduler {
     }
     void this.readConfig().then((cfg) => {
       if (this.stopped || !cfg.enabled) return;
-      const ms = backupIntervalToMs(cfg.interval);
+      // P0-⑤：固定间隔档返回 interval ms；custom（每周固定时刻）返回到下一个
+      // 触发点的 delay（非法配置 → null 不排期，等待下次 reload/配置修正）。
+      const delay = nextBackupDelayMs(cfg, this.now());
+      if (delay === null) {
+        this.log.warn('定时备份 custom 档缺少有效 customSchedule，暂不排期', { interval: cfg.interval });
+        return;
+      }
       this.timer = this.setTimer(() => {
         this.timer = undefined;
         if (this.stopped) return;
@@ -146,7 +152,7 @@ export class BackupScheduler {
             // 期间若被关闭（enabled=false）则不再排期。
             if (!this.stopped) this.refreshTimer();
           });
-      }, ms);
+      }, delay);
     }).catch(() => { /* 读配置失败静默 */ });
   }
 
@@ -210,6 +216,8 @@ export class BackupScheduler {
       await this.writeConfig({
         enabled: cfg.enabled,
         interval: cfg.interval,
+        // P0-⑤：保留 custom 档的每周时刻（否则保存 custom 档后 runOnce 成功会把它丢掉）
+        ...(cfg.customSchedule !== undefined ? { customSchedule: cfg.customSchedule } : {}),
         startupMinIntervalMs: cfg.startupMinIntervalMs,
         consecutiveFailures: 0,
         lastRunAt: this.now().toISOString(),

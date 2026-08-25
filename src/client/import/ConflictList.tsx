@@ -27,14 +27,15 @@ const RESOLUTION_OPTIONS: { value: ItemResolution; key: string }[] = [
   { value: 'useImported', key: 'import.conflicts.useImported' },
 ]
 
-/** 批量决策全部冲突项（keepCurrent / useImported），与逐项逻辑一致地更新 tick + onChanged */
+/** 批量决策全部冲突项（keepCurrent / useImported；下沉到 ConflictCollector.resolveAll 纯函数，
+ *  组件只做装配 + tick/onChanged 通知；与逐项逻辑一致地更新 UI） */
 function resolveAll(
   collector: ConflictCollector,
-  resolution: ItemResolution,
+  resolution: Extract<ItemResolution, 'keepCurrent' | 'useImported'>,
   setTick: (fn: (v: number) => number) => void,
   onChanged: () => void,
 ): void {
-  for (const item of collector.conflicts) collector.resolve(item.id, resolution)
+  collector.resolveAll(resolution)
   setTick((v) => v + 1)
   onChanged()
 }

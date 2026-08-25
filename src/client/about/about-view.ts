@@ -102,3 +102,23 @@ export const ABOUT_META: AboutMeta = {
 
 /** 由 ABOUT_META.repoUrl 派生的外链常量（单一来源，恒与元数据一致） */
 export const ABOUT_LINKS: AboutLinks = deriveAboutLinks(ABOUT_META.repoUrl);
+
+/* ---------------------------------------------------------------- P1-⑩ CLI 救援工具卡 */
+
+/** CLI 引导卡的展示数据（P1-⑩：GUI 里发现不了 CLI → About 面板给安装/常用命令/文档入口）。
+ *  CLI 是独立 npm 工具（与插件分开安装：`--omit=peer` 让离线救援端零 DSH 运行时依赖），
+ *  DSH 挂了也能用；文案与命令见 README.md「CLI — the first line of defense」。 */
+export const ABOUT_CLI: {
+  installCommand: string;
+  commands: { command: string; description: string }[];
+  docsUrl: string;
+} = {
+  installCommand: 'npm install -g dsh-config-manager@latest --omit=peer',
+  commands: [
+    { command: 'dsh-config-manager help', description: '列出全部 CLI 命令与用法（离线可用）' },
+    { command: 'dsh-config-manager snapshots', description: '列出本机回滚快照（无需 DSH 运行）' },
+    { command: 'dsh-config-manager restore [--id <id>] [--dry-run]', description: '恢复到导入前状态（离线）' },
+    { command: 'dsh-config-manager reinstall [--yes] [--wipe-config]', description: '一键重装 DSH（救援）' },
+  ],
+  docsUrl: 'https://github.com/xiajiajun516/dsh-config-manager#-cli--the-first-line-of-defense-when-dsh-is-broken',
+};

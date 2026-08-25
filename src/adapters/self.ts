@@ -36,6 +36,9 @@ export const SELF_CONFIG_FILES: readonly string[] = [
   'sync/ui-prefs.json',
   'sync/backup-schedule.json',
   'market/market-config.json',
+  // P0-④：导出产物备注清单（exports/.backup-notes.json）——随 self 分区迁移，
+  // 换机器后备份列表仍能看到手动导出时填写的备注
+  'exports/.backup-notes.json',
 ];
 
 export class SelfAdapter extends FileCollectionAdapter {

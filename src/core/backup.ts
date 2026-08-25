@@ -308,7 +308,9 @@ export class FileSnapshotStore implements SnapshotStore {
     return snapshot.id;
   }
 
-  /** 保留清理：扫描快照根目录，超限时删除最旧快照目录（损坏/非快照目录跳过；目录缺失容错）。 */
+  /** 保留清理：扫描快照根目录，超限时删除最旧快照目录（损坏/非快照目录跳过；目录缺失容错）。
+ *  P1-⑧：置顶（pinned=true）的快照豁免自动清理——用户显式保留的导入前回滚点不得被
+ *  自动淘汰，只能手动删除（deleteSnapshot）。 */
   private async prune(): Promise<void> {
     const dir = this.options.dir;
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
@@ -318,6 +320,7 @@ export class FileSnapshotStore implements SnapshotStore {
       try {
         const parsed = parseJsonSafe(await fs.readFile(path.join(dir, entry.name, 'snapshot.json'), 'utf8')) as Snapshot;
         if (typeof parsed.id !== 'string' || parsed.id === '' || typeof parsed.createdAt !== 'string') continue;
+        if (parsed.pinned === true) continue; // 置顶快照豁免自动清理
         metas.push({ id: parsed.id, createdAt: parsed.createdAt });
       } catch {
         // 损坏 / 非快照目录：跳过（与 listSnapshots 语义一致）

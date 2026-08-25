@@ -22,7 +22,7 @@
  *  - 错误消息由 Host 侧已脱敏（GitTransport 统一 [REDACTED]），UI 侧再经 ErrorBanner redact 兜底；
  *  - 本文件不 import 任何 node 模块（纯浏览器 bundle；sync-engine 仅作 type-only 引用）。
  */
-import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts';
 import type { PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import { ConfigManagerApiError } from '../api.ts';
@@ -455,6 +455,11 @@ export class SyncApi {
   /** 推送：导出 portable 分区 → 提交到私有 Git 仓库 → 更新 sync-state */
   async push(payload: SyncPushPayload): Promise<SyncPushReport> {
     return postJson<SyncPushReport>(SYNC_API.push, payload, this.t);
+  }
+
+  /** P0-②：push 前只读预览（「将推送什么」，零写入远端）——body.preview=true 触发 */
+  async pushPreview(payload: SyncPushPayload): Promise<SyncPushPreview> {
+    return postJson<SyncPushPreview>(SYNC_API.push, { ...payload, preview: true }, this.t);
   }
 
   /** 拉取差异预览：拉取远端最新快照 → 只读分析（绝不执行导入） */

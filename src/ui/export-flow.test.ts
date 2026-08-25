@@ -3,7 +3,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ExportFlow } from './export-flow.ts';
+import { ExportFlow, normalizeExportFileName } from './export-flow.ts';
 import { makeUiT } from './i18n.ts';
 
 const enT = makeUiT('en');
@@ -75,4 +75,13 @@ test('export-flow: 报告包含 Excluded 与 Security 信息', async () => {
   const out = await new ExportFlow({ port: new MockExportPort(report) }).run('quick', []);
   assert.equal(out.report.excluded.includes('sessions'), true);
   assert.equal(out.report.security.secretsExcluded, true);
+});
+
+test('export-flow: normalizeExportFileName 自动补全 .zip（无需手动输入后缀）', () => {
+  assert.equal(normalizeExportFileName('my-backup'), 'my-backup.zip', '无后缀自动补全');
+  assert.equal(normalizeExportFileName('my-backup.zip'), 'my-backup.zip', '已有 .zip 不重复追加');
+  assert.equal(normalizeExportFileName(' My Backup '), 'My Backup.zip', 'trim 首尾空白');
+  assert.equal(normalizeExportFileName('a.ZIP'), 'a.ZIP', '已有 .zip（大小写不敏感）不重复追加');
+  assert.equal(normalizeExportFileName('   '), '', '全空白 → 空串（宿主自动命名）');
+  assert.equal(normalizeExportFileName(''), '', '空串 → 空串');
 });

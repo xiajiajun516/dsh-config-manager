@@ -23,7 +23,7 @@ export {
 /* ---------------------------------------------------------------- 客户端专属：搜索 / 类别 */
 
 import type { MarketItemDetail, MarketListItem } from '../../market/types.ts';
-import type { ImportPlan, PlanItem, PlanItemKind } from '../../core/types.ts';
+import type { ImportAnalysis, ImportPlan, PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 import { isOfficialMarket } from '../../market/builtin.ts';
@@ -113,7 +113,9 @@ export function sortMarketItems(items: readonly MarketListItem[], sortKey: Marke
 
 /**
  * 搜索 + 类别过滤（纯函数，客户端专属）。
- * - query：对 name / author / description 做大小写不敏感子串匹配（空白 query 不过滤）；
+ * - query：对 name / author / description / **categories** 做大小写不敏感子串匹配
+ *   （空白 query 不过滤；P2-⑭ 增强：类别标签也参与搜索命中——搜「模型」能命中
+ *   带 providers 类别标签的条目，不必精确知道字段名）；
  * - category：空串表示不限类别；否则要求 categories 含该值。
  * 返回筛选后的条目（保持原始顺序）。
  */
@@ -129,8 +131,38 @@ export function filterMarketItems(
     if (it.name.toLowerCase().includes(q)) return true;
     if ((it.author ?? '').toLowerCase().includes(q)) return true;
     if ((it.description ?? '').toLowerCase().includes(q)) return true;
+    if ((it.categories ?? []).some((c) => c.toLowerCase().includes(q))) return true;
     return false;
   });
+}
+
+/** P2-⑭：按分区筛选列表（对已缓存条目生效；未缓存条目 sections 未知 → 在筛选时排除）。
+ *  section 传 '' = 不限分区。返回 { matched, unknown }：unknown 为因「未下载、分区未知」
+ *  被排除的条目数（UI 提示用）。 */
+export function filterMarketBySection(
+  items: readonly MarketListItem[],
+  section: SectionId | '',
+): { matched: MarketListItem[]; unknown: number } {
+  if (section === '') return { matched: [...items], unknown: 0 };
+  const matched: MarketListItem[] = [];
+  let unknown = 0;
+  for (const it of items) {
+    if (it.sections === undefined) {
+      unknown += 1;
+      continue;
+    }
+    if (it.sections.includes(section)) matched.push(it);
+  }
+  return { matched, unknown };
+}
+
+/** 收集列表内已缓存条目的分区并集（分区筛选取值候选；未缓存条目贡献不了分区信息）。 */
+export function collectCachedSections(items: readonly MarketListItem[]): SectionId[] {
+  const set = new Set<SectionId>();
+  for (const it of items) {
+    for (const s of it.sections ?? []) set.add(s);
+  }
+  return [...set];
 }
 
 /* ---------------------------------------------------------------- 客户端专属：时间格式化 */
@@ -362,4 +394,43 @@ export function approvalRows(plan: ImportPlan, approvals: MarketApprovals): Appr
     });
   }
   return rows;
+}
+
+/* ------------------------------------------------- P1-⑥ 市场条目「装后会动什么」摘要 */
+
+/**
+ * 市场条目「装了这个会动你哪些东西」的一行式/徽章式摘要（P1-⑥）。
+ * 从 /market/download 的 dry-run plan + analysis 派生（与导入预览统计口径一致）：
+ * - willChange：将更新的项数（Create/Update/Install/Conflict 合计）；
+ * - unchanged：已一致项（Skip）；
+ * - conflicts / secretsNeeded / pathMappingsNeeded（analysis.pathIssues）/ needsRestart 透传。
+ * 纯函数、node 可测；组件在详情弹窗顶部展示。
+ */
+export interface MarketImpactSummary {
+  willChange: number;
+  unchanged: number;
+  conflicts: number;
+  secretsNeeded: number;
+  pathMappingsNeeded: number;
+  needsRestart: boolean;
+  /** 分区清单（含条目数），供「包含哪些内容」徽章流 */
+  sections: { section: SectionId; count: number }[];
+}
+
+export function marketImpactSummary(plan: ImportPlan, analysis?: ImportAnalysis): MarketImpactSummary {
+  const items = plan.items;
+  const count = (kinds: PlanItemKind[]): number => items.filter((i) => kinds.includes(i.kind)).length;
+  const byAdapter = new Map<SectionId, number>();
+  for (const item of items) {
+    byAdapter.set(item.adapter, (byAdapter.get(item.adapter) ?? 0) + 1);
+  }
+  return {
+    willChange: count(['Create', 'Update', 'Install', 'Conflict']),
+    unchanged: count(['Skip']),
+    conflicts: count(['Conflict']),
+    secretsNeeded: plan.missingSecrets.length,
+    pathMappingsNeeded: analysis?.pathIssues?.length ?? 0,
+    needsRestart: plan.needsRestart,
+    sections: [...byAdapter.entries()].map(([section, c]) => ({ section, count: c })),
+  };
 }

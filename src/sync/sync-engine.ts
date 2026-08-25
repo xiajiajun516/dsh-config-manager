@@ -143,7 +143,29 @@ export interface SyncPullReport {
   message?: string;
 }
 
-/** 一键同步预览结果（preview() 返回；临时 ZIP 由调用方持有并负责清理）。 */
+/** P0-②：push 前只读预览 ——「将推送什么」的单分区摘要（不写远端、不落盘）。 */
+export interface SyncPushPreviewSection {
+  /** 分区 id（将进入快照的 portable 分区） */
+  section: SectionId;
+  /** 分区内条目计数（adapter.export 的 counts 聚合；无计数时为 0） */
+  count: number;
+  /** 相对上次基线（sync-state）是否变化：true = 本次会更新该分区；false = 与基线一致 */
+  changed: boolean;
+}
+
+/** P0-②：push 前预览结果（零写入）。 */
+export interface SyncPushPreview {
+  ok: boolean;
+  /** 将推送的分区清单（含计数与变化标记） */
+  sections: SyncPushPreviewSection[];
+  /** 远端现有快照数（0 = 首次推送将创建首个基线） */
+  remoteSnapshotCount: number;
+  /** 加密快照：载荷将整体加密（分区计数与基线比较不可得） */
+  encrypted: boolean;
+  message?: string;
+}
+
+/** 一键 sync 预览结果（preview() 返回；临时 ZIP 由调用方持有并负责清理）。 */
 export interface SyncPreviewResult {
   ok: boolean;
   /** 临时标准 ZIP 路径（apply-items 复用 executeImportPlan 需要；调用方清理） */
@@ -391,6 +413,69 @@ export class SyncEngine {
     await this.recordBaseline(id, plainSections, nowIso, { writeAncestor: !encrypted });
 
     return { ok: true, snapshotId: id, sections: Object.keys(plainSections) as SectionId[], warnings };
+  }
+
+  /**
+   * P0-②：push 前只读预览「将推送什么」—— 零写入、零远端变更：
+   *  - 导出目标 portable 分区（与 push 同口径：sections 过滤 + secret 剥离）；
+   *  - 逐分区相对上次基线（sync-state.sections hash）的 changed 标记；
+   *  - 远端现有快照数（list 只读；首次推送 = 0）。
+   * 加密快照（encrypt）时不再比较基线（密文不可比），sections 只带计数。
+   * 任何失败都不写任何内容；预览只是 push 的「确认前说明书」。
+   */
+  async previewPush(opts: SyncPushOptions = {}): Promise<SyncPushPreview> {
+    const warnings: string[] = [];
+    const includeSecrets = opts.includeSecrets ?? false;
+    const encrypted = opts.encrypt ?? false;
+    if (includeSecrets && !encrypted) {
+      throw new Error(this.msg('sync.includeSecretsRequiresEncryption'));
+    }
+    const targets = this.pushTargets(opts.sections, warnings);
+    const plainSections: Partial<Record<SectionId, SectionData>> = {};
+    const counts: Partial<Record<SectionId, number>> = {};
+    for (const adapter of targets) {
+      let section: ExportSection;
+      try {
+        section = await adapter.export(this.ctx, { includeSecrets });
+      } catch (err) {
+        warnings.push(this.msg('sync.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
+        continue;
+      }
+      const data = isFileSection(adapter.id) || includeSecrets
+        ? section.data
+        : this.scanner.scanAndRedact(section.data).sanitized;
+      plainSections[adapter.id] = data as SectionData;
+      counts[adapter.id] = section.counts ? Object.values(section.counts).reduce((a, b) => a + b, 0) : 0;
+    }
+    if (Object.keys(plainSections).length === 0) {
+      return { ok: false, sections: [], remoteSnapshotCount: 0, encrypted, message: this.msg('sync.noPortableSections') };
+    }
+    this.assertNoForbiddenSections(plainSections as Record<string, unknown>);
+
+    // 基线对比（非加密）：sync-state.sections 存每分区 hash；缺基线分区 → 视为新增
+    let baselineHashes: Record<string, string> = {};
+    if (!encrypted) {
+      try {
+        const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
+        baselineHashes = state.sections as Record<string, string>;
+      } catch {
+        baselineHashes = {};
+      }
+    }
+    const sections: SyncPushPreviewSection[] = Object.keys(plainSections).map((sid) => {
+      const id = sid as SectionId;
+      const changed = encrypted || baselineHashes[id] === undefined || baselineHashes[id] !== hashSection(plainSections[id] as SectionData);
+      return { section: id, count: counts[id] ?? 0, changed };
+    });
+
+    let remoteSnapshotCount = 0;
+    try {
+      const metas = await this.transport.list();
+      remoteSnapshotCount = metas.length;
+    } catch {
+      // list 失败只影响展示（首次推送提示），不阻断预览
+    }
+    return { ok: true, sections, remoteSnapshotCount, encrypted, message: warnings.length > 0 ? warnings.join('; ') : undefined };
   }
 
   /**

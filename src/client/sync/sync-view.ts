@@ -7,7 +7,7 @@
  */
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
-import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { PullChange, SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts';
 import { DEFAULT_CATEGORIES } from '../../ui/export-flow.ts';
 import { EXPORT_GROUPS, type ExportGroup } from '../../ui/types.ts';
 import type {
@@ -401,6 +401,50 @@ export function pushReportView(report: SyncPushReport | null, t: UiT = zhUiT): P
     headline: t('sync.pushOk', { id: report.snapshotId }),
     sections: report.sections,
     warnings: report.warnings,
+  };
+}
+
+/* ------------------------------------------------ P0-② push 前只读预览渲染模型 */
+
+export interface PushPreviewView {
+  ok: boolean;
+  /** 将推送的分区行（含计数 + 是否相对基线有变化） */
+  rows: { section: string; count: number; changed: boolean }[];
+  /** 变更分区数（要展示「新增/更新 N 个分区」） */
+  changedCount: number;
+  /** 远端现有快照数（0 = 首次推送创建首个基线） */
+  remoteSnapshotCount: number;
+  /** 加密快照提示（基线不可比） */
+  encryptedHint: string;
+  /** 只读提示（预览不写远端） */
+  previewHint: string;
+  headline: string;
+  error: string | null;
+}
+
+/** push 预览 → 渲染模型（P0-②）：列分区 + 变更计数 + 远端基线提示。 */
+export function pushPreviewView(preview: SyncPushPreview | null, t: UiT = zhUiT): PushPreviewView | null {
+  if (preview === null) return null;
+  if (!preview.ok) {
+    return {
+      ok: false, rows: [], changedCount: 0, remoteSnapshotCount: preview.remoteSnapshotCount,
+      encryptedHint: '', previewHint: '', headline: '', error: preview.message ?? t('sync.pushFailed'),
+    };
+  }
+  const rows = preview.sections.map((s) => ({ section: s.section, count: s.count, changed: s.changed }));
+  const changedCount = preview.sections.filter((s) => s.changed).length;
+  return {
+    ok: true,
+    rows,
+    changedCount,
+    remoteSnapshotCount: preview.remoteSnapshotCount,
+    encryptedHint: preview.encrypted ? t('sync.pushPreviewEncrypted') : '',
+    previewHint: t('sync.pushPreviewHint'),
+    headline: t('sync.pushPreviewHeadline', {
+      total: String(preview.sections.length),
+      changed: String(changedCount),
+    }),
+    error: null,
   };
 }
 

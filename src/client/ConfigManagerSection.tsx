@@ -3,7 +3,8 @@
  *
  * 业务面（api/syncApi/marketApi）由注册时的 inject face 注入；t 由 locale seat 注入。
  * 关闭按钮由 settings shell 自带，本页不再渲染。内部主视图：
- * Export（Quick/Custom）与 Import（九步向导），以及快照/远程同步/配置市场/关于四块低频面板。
+ * 「导出与导入」一个顶层 tab（子 tab 切换 Export 导出备份 / Import 导入恢复），
+ * 以及备份与快照/远程同步/配置市场/配置文件/关于 低频面板。
  *
  * m2：主视图 tab（view）与全部子视图状态统一由模块级 runStore 持有
  * （sessionStorage 持久化 + 切 tab/关面板不重建控制器实例）；挂载时
@@ -21,6 +22,7 @@ import { SnapshotsPanel } from './snapshots/SnapshotsPanel.tsx'
 import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import { MarketPanel } from './market/MarketPanel.tsx'
 import { AboutPanel } from './about/AboutPanel.tsx'
+import { ProfilesPanel } from './profiles/ProfilesPanel.tsx'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import css from './config-manager.module.css'
@@ -31,9 +33,10 @@ export type ConfigManagerSectionProps =
   & { t: TranslateNS<'config-manager'> }
 
 /**
- * 设置页容器：Export / Import / Snapshots / Sync / Market / About 六视图切换。
- * 所有 tab（主视图 view + 低频面板 panel）状态都在模块级 store（切 tab/刷新不丢）；
- * 面板内部状态由各视图镜像进 store（Sync/Market/Snapshots），敏感字段白名单剔除。
+ * 设置页容器：「导出与导入」主视图（子 tab：导出备份 / 导入恢复）+ Snapshots /
+ * Sync / Market / Profiles / About 五块低频面板。所有 tab（主视图 view + 低频
+ * 面板 panel）状态都在模块级 store（切 tab/刷新不丢）；面板内部状态由各视图
+ * 镜像进 store（Sync/Market/Snapshots/Profiles），敏感字段白名单剔除。
  */
 export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigsApi, marketT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
@@ -109,17 +112,18 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     }
   }, [api])
 
-  /** 切到主视图（export/import）：清空低频面板，记录到 store（刷新恢复）。 */
+  /** 切到主视图（导出与导入）：清空低频面板，记录到 store（刷新恢复）。 */
   const setView = (next: MainView): void => {
     runStore.patch({ view: next, panel: null })
   }
 
-  /** 打开低频面板（snapshots/sync/market/about）：记录到 store（刷新恢复）。 */
+  /** 打开低频面板（snapshots/sync/market/profiles/about）：记录到 store（刷新恢复）。 */
   const openPanel = (next: PanelId): void => {
     runStore.patch({ panel: next })
   }
 
-  const activeTab: MainView | PanelId = panel ?? view
+  /** 顶层 tab：主视图「导出与导入」激活 = panel 为空（view 是内部子 tab 状态） */
+  const transferActive = panel === null
 
   return (
     <div className={css.section}>
@@ -128,27 +132,17 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'export'}
-            data-active={activeTab === 'export' ? '' : undefined}
+            aria-selected={transferActive}
+            data-active={transferActive ? '' : undefined}
             className={css.viewTab}
-            onClick={() => { setView('export') }}
+            onClick={() => { setView(view) }}
           >
-            {t('view.export')}
+            {t('view.transfer')}
           </button>
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'import'}
-            data-active={activeTab === 'import' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { setView('import') }}
-          >
-            {t('view.import')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeTab === 'snapshots'}
+            aria-selected={panel === 'snapshots'}
             data-active={panel === 'snapshots' ? '' : undefined}
             className={css.viewTab}
             onClick={() => { openPanel('snapshots') }}
@@ -158,7 +152,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'sync'}
+            aria-selected={panel === 'sync'}
             data-active={panel === 'sync' ? '' : undefined}
             className={css.viewTab}
             onClick={() => { openPanel('sync') }}
@@ -168,7 +162,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'market'}
+            aria-selected={panel === 'market'}
             data-active={panel === 'market' ? '' : undefined}
             className={css.viewTab}
             onClick={() => { openPanel('market') }}
@@ -178,7 +172,17 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'about'}
+            aria-selected={panel === 'profiles'}
+            data-active={panel === 'profiles' ? '' : undefined}
+            className={css.viewTab}
+            onClick={() => { openPanel('profiles') }}
+          >
+            {t('view.profiles')}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={panel === 'about'}
             data-active={panel === 'about' ? '' : undefined}
             className={css.viewTab}
             onClick={() => { openPanel('about') }}
@@ -190,13 +194,42 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
       <div className={css.sectionBody}>
         {panel === 'about'
           ? <AboutPanel api={api} t={t} />
-          : panel === 'market'
-            ? <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
+          : panel === 'profiles'
+            ? <ProfilesPanel api={api} t={t} />
+            : panel === 'market'
+              ? <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
             : panel === 'sync'
               ? <SyncSettingsView api={syncApi} t={syncT} />
               : panel === 'snapshots'
                 ? <SnapshotsPanel api={api} t={t} />
-                : view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
+                : (
+                  <>
+                    {/* 「导出与导入」内部子 tab：导出备份 / 导入恢复（状态 = view，切 tab/刷新不丢） */}
+                    <div className={css.modeTabs} role="tablist">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={view === 'export'}
+                        data-active={view === 'export' ? '' : undefined}
+                        className={css.modeTab}
+                        onClick={() => { setView('export') }}
+                      >
+                        {t('view.export')}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={view === 'import'}
+                        data-active={view === 'import' ? '' : undefined}
+                        className={css.modeTab}
+                        onClick={() => { setView('import') }}
+                      >
+                        {t('view.import')}
+                      </button>
+                    </div>
+                    {view === 'export' ? <ExportView api={api} t={t} /> : <ImportWizardView api={api} t={t} />}
+                  </>
+                )}
       </div>
       {/* Star 引导弹窗（复用 ConfirmDialog；「去点 Star」= primary 主操作，
           「不再提示」= 次按钮；遮罩/Esc 走 backdropClose 只关不算表态） */}

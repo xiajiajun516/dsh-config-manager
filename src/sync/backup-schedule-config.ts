@@ -26,8 +26,23 @@ import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 export const BACKUP_SCHEDULE_FILE = 'backup-schedule.json';
 export const BACKUP_SCHEDULE_SCHEMA_VERSION = 1;
 
-/** 定时备份间隔档位（全量备份无需太频繁；默认 24h） */
-export type BackupInterval = '6h' | '12h' | '24h' | '7d';
+/** 定时备份间隔档位（全量备份无需太频繁；默认 24h）。
+ *  - '6h' | '12h' | '24h' | '7d'：固定间隔；
+ *  - 'custom'：每周固定时刻（见 customSchedule）。 */
+export type BackupInterval = '6h' | '12h' | '24h' | '7d' | 'custom';
+
+/**
+ * 自定义（每周固定时刻）档配置：
+ * - dayOfWeek：0-6（0 = 周日，1 = 周一 … 6 = 周六）；
+ * - hour：0-23；
+ * - minute：0-59。
+ * 语义 = 每周该时刻触发一次全量备份（错过的时间点不补跑——下次排期自然对齐）。
+ */
+export interface BackupWeeklySchedule {
+  dayOfWeek: number;
+  hour: number;
+  minute: number;
+}
 
 /** 缺省间隔 */
 export const DEFAULT_BACKUP_INTERVAL: BackupInterval = '24h';
@@ -44,6 +59,8 @@ export interface BackupScheduleConfig {
   enabled: boolean;
   /** 备份间隔档位 */
   interval: BackupInterval;
+  /** custom 档的每周固定时刻（仅 interval='custom' 时有意义；写入/读取宽容：其他档位忽略） */
+  customSchedule?: BackupWeeklySchedule;
   /** 重启触发的「启动备份」最小间隔阈值（ms） */
   startupMinIntervalMs: number;
   /** 连续失败计数（用于通知判定） */
@@ -65,19 +82,60 @@ export function defaultBackupSchedule(): BackupScheduleConfig {
   };
 }
 
-/** 间隔 → ms 换算 */
+/** 间隔 → ms 换算（固定间隔档；'custom' 无固定周期 → NaN，调用方改用 nextBackupDelayMs） */
 export function backupIntervalToMs(interval: BackupInterval): number {
-  const table: Record<BackupInterval, number> = {
+  const table: Record<Exclude<BackupInterval, 'custom'>, number> = {
     '6h': 6 * 60 * 60 * 1000,
     '12h': 12 * 60 * 60 * 1000,
     '24h': 24 * 60 * 60 * 1000,
     '7d': 7 * 24 * 60 * 60 * 1000,
   };
+  if (interval === 'custom') return Number.NaN;
   return table[interval];
 }
 
 function isBackupInterval(v: unknown): v is BackupInterval {
-  return v === '6h' || v === '12h' || v === '24h' || v === '7d';
+  return v === '6h' || v === '12h' || v === '24h' || v === '7d' || v === 'custom';
+}
+
+/** 校验自定义周档（0-6 周几 / 0-23 时 / 0-59 分）；非法返回 null。 */
+export function parseWeeklySchedule(v: unknown): BackupWeeklySchedule | null {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const dayOfWeek = o['dayOfWeek'];
+  const hour = o['hour'];
+  const minute = o['minute'];
+  if (!Number.isInteger(dayOfWeek) || (dayOfWeek as number) < 0 || (dayOfWeek as number) > 6) return null;
+  if (!Number.isInteger(hour) || (hour as number) < 0 || (hour as number) > 23) return null;
+  if (!Number.isInteger(minute) || (minute as number) < 0 || (minute as number) > 59) return null;
+  return { dayOfWeek: dayOfWeek as number, hour: hour as number, minute: minute as number };
+}
+
+/**
+ * 计算下一次「定时备份」触发的 delay ms（相对 now；至少 >0）。
+ * - 固定间隔档：直接返回 interval ms（与旧行为一致——从上次排期算固定周期）；
+ * - 'custom'：计算从 now 到下一个匹配「周几 时:分」时刻的毫秒数（跨周自动对齐；
+ *   若今天正好是该时刻且已过 → 排到下周同刻；未过 → 今天同刻）。
+ * 配置非法（custom 无 valid customSchedule）→ 返回 null（调用方不排期）。
+ */
+export function nextBackupDelayMs(
+  cfg: Pick<BackupScheduleConfig, 'interval' | 'customSchedule'>,
+  now: Date = new Date(),
+): number | null {
+  if (cfg.interval !== 'custom') {
+    const ms = backupIntervalToMs(cfg.interval);
+    return Number.isNaN(ms) ? null : ms;
+  }
+  const sched = cfg.customSchedule;
+  if (sched === null || sched === undefined) return null;
+  // 距目标周几的天数（0-6）：目标周几 - 当前周几，模 7 归一
+  const days = (sched.dayOfWeek - now.getDay() + 7) % 7;
+  const target = new Date(now);
+  target.setDate(now.getDate() + days);
+  target.setHours(sched.hour, sched.minute, 0, 0);
+  let delay = target.getTime() - now.getTime();
+  if (delay <= 0) delay += 7 * 24 * 60 * 60 * 1000; // 同刻已过 → 下周同刻
+  return delay;
 }
 
 /** 从文件载荷解析（非法字段回退缺省） */
@@ -85,6 +143,8 @@ function parsePayload(obj: Record<string, unknown>): BackupScheduleConfig {
   const cfg = defaultBackupSchedule();
   if (typeof obj['enabled'] === 'boolean') cfg.enabled = obj['enabled'];
   if (isBackupInterval(obj['interval'])) cfg.interval = obj['interval'];
+  const weekly = parseWeeklySchedule(obj['customSchedule']);
+  if (weekly !== null) cfg.customSchedule = weekly;
   if (typeof obj['startupMinIntervalMs'] === 'number' && Number.isFinite(obj['startupMinIntervalMs']) && obj['startupMinIntervalMs'] > 0) {
     cfg.startupMinIntervalMs = obj['startupMinIntervalMs'];
   }
@@ -133,6 +193,7 @@ export async function writeBackupSchedule(dir: string, cfg: BackupScheduleConfig
     startupMinIntervalMs: cfg.startupMinIntervalMs,
     consecutiveFailures: cfg.consecutiveFailures,
   };
+  if (cfg.customSchedule !== undefined) payload['customSchedule'] = cfg.customSchedule;
   if (cfg.lastRunAt !== undefined && cfg.lastRunAt !== '') payload['lastRunAt'] = cfg.lastRunAt;
   if (cfg.lastRunStatus !== undefined) payload['lastRunStatus'] = cfg.lastRunStatus;
   if (cfg.lastRunMessage !== undefined && cfg.lastRunMessage !== '') payload['lastRunMessage'] = cfg.lastRunMessage;

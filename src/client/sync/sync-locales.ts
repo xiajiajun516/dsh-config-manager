@@ -106,6 +106,12 @@ export const zh = {
   'syncflow.rollingBack': '正在回滚…',
   'syncflow.rollbackDone': '已回滚到应用前',
   'syncflow.needsRestart': '部分改动需要重启 DSH 后生效',
+  // P0-②：push 前只读预览确认弹窗
+  'syncflow.pushPreviewTitle': '确认推送',
+  'syncflow.pushPreviewSections': '将推送的分区',
+  'syncflow.pushConfirm': '确认推送',
+  'syncflow.pushing': '正在推送…',
+  'syncflow.pushFirstBaseline': '远端暂无快照：本次将创建首个同步基线',
   // 同步模式（默认快速导出 / 高级自定义导出）
   'mode.title': '同步模式',
   'mode.hint': '选择推送时导出哪些分区：默认 = 推荐分区一键推送（快速导出）；高级 = 自定义勾选（自定义导出）。',
@@ -283,6 +289,12 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.rollingBack': 'Rolling back…',
   'syncflow.rollbackDone': 'Rolled back',
   'syncflow.needsRestart': 'Some changes require a DSH restart to take effect',
+  // P0-②: push read-only preview confirm dialog
+  'syncflow.pushPreviewTitle': 'Confirm Push',
+  'syncflow.pushPreviewSections': 'Sections to push',
+  'syncflow.pushConfirm': 'Push',
+  'syncflow.pushing': 'Pushing…',
+  'syncflow.pushFirstBaseline': 'No remote snapshots yet: this push creates the first sync baseline',
   // Sync mode (default quick export / advanced custom export)
   'mode.title': 'Sync Mode',
   'mode.hint': 'Choose which sections to export when pushing: Default = recommended sections in one click (Quick Export); Advanced = custom selection (Custom Export).',

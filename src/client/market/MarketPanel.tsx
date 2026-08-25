@@ -23,6 +23,7 @@ import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ImportPlan } from '../../core/types.ts'
+import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { BUILTIN_MARKET_URL } from '../../market/builtin.ts'
 import type { MarketApi } from './market-api.ts'
@@ -34,8 +35,9 @@ import type {
   MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketStatusResponse,
 } from '../../market/types.ts'
 import {
-  approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, defaultApprovals,
-  filterBySource, filterMarketItems, marketDetailView, marketListSummary, sortMarketItems, sourceBadgeKind,
+  approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCachedSections, collectCategories,
+  defaultApprovals, filterBySource, filterMarketBySection, filterMarketItems, marketDetailView,
+  marketImpactSummary, marketListSummary, sortMarketItems, sourceBadgeKind,
 } from './market-view.ts'
 import type { MarketApprovals } from './market-view.ts'
 import type { MyInstallSlice, MyWizardSlice } from './my-configs-view.ts'
@@ -77,6 +79,8 @@ interface MarketUiState {
   items: MarketListItem[]
   search: string
   category: string
+  /** 分区筛选（P2-⑭：按包含的分区过滤已缓存条目；空 = 不限；镜像 runStore） */
+  sectionFilter: string
   /** 来源筛选（2026-08-21：全部 / 官方 / 个人；镜像 runStore，切 tab/刷新不丢） */
   source: 'all' | 'official' | 'personal'
   /** 排序键（2026-08-21：默认 / 最新更新 / ⭐ 最多 / 名称；镜像 runStore，切 tab/刷新不丢） */
@@ -109,6 +113,7 @@ const initial: MarketUiState = {
   items: [],
   search: '',
   category: '',
+  sectionFilter: '',
   source: 'all',
   sortKey: 'default',
   downloadingId: null,
@@ -136,6 +141,7 @@ function initFromStore(): MarketUiState {
     myConfirmDeleteId: s.myConfirmDeleteId,
     search: s.search,
     category: s.category,
+    sectionFilter: s.sectionFilter ?? '',
     // 旧持久化数据缺 source/sortKey（undefined）→ 兜底默认值（'all'/'default'），防 undefined 进筛选链
     source: s.source ?? 'all',
     sortKey: s.sortKey ?? 'default',
@@ -313,19 +319,31 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   }
 
   // ---- 渲染模型装配（全部纯函数，node 已测） ----
-  // 过滤链：搜索 + 类别 → 来源筛选（官方/个人）→ 排序（默认/最新/⭐/名称）
+  // 过滤链：搜索 + 类别 → 分区筛选（已缓存条目）→ 来源筛选（官方/个人）→ 排序
+  // sectionFilter 为 ''（不限）或索引条目分区 id（string 形态；断言为 SectionId | '' 交给纯函数）
+  const sectionFiltered = filterMarketBySection(
+    filterMarketItems(state.items, state.search, state.category),
+    state.sectionFilter as SectionId | '',
+  )
   const filtered = sortMarketItems(
-    filterBySource(filterMarketItems(state.items, state.search, state.category), state.source, marketUrl),
+    filterBySource(sectionFiltered.matched, state.source, marketUrl),
     state.sortKey,
   )
+  const sectionFilterUnknown = sectionFiltered.unknown
   const summary = marketListSummary(state.items, uiT)
   const categories = collectCategories(state.items)
+  // P2-⑭：分区筛选取值（已缓存条目的分区并集）
+  const sectionOptions = collectCachedSections(state.items)
   const detailView = state.detail !== null
     ? marketDetailView(state.detail, state.detail.repo ?? marketUrl, state.items.length > 0 || state.detail.status !== 'valid', uiT)
     : null
   // 逐分区批准（安全不变式 (c)）：详情里列出 plan 分区，高风险默认不勾选、须逐项批准
   const approvalList = state.detail !== null ? approvalRows(state.detail.plan, state.approvals) : []
   const approvalSummary = state.detail !== null ? approvedAdapterSummary(state.detail.plan, state.approvals) : null
+  // P1-⑥：装了这个会动你哪些东西（dry-run plan + analysis 摘要）
+  const impact = state.detail !== null
+    ? marketImpactSummary(state.detail.plan, state.detail.analysis)
+    : null
   const cacheLabel = (cacheState: MarketListItem['cacheState']): string => {
     if (cacheState === 'cached') return t('list.cacheCached')
     if (cacheState === 'fresh') return t('list.cacheFresh')
@@ -448,6 +466,18 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
 
           <Banner kind="info">{t('detail.previewHint')}</Banner>
 
+          {/* P1-⑥：装了这个会动你哪些东西（基于 dry-run plan 的只读摘要） */}
+          {impact !== null && (
+            <div className={css.statRow}>
+              <Badge kind="info">{t('detail.impact.willChange', { count: String(impact.willChange) })}</Badge>
+              {impact.unchanged > 0 && <Badge kind="ok">{t('detail.impact.unchanged', { count: String(impact.unchanged) })}</Badge>}
+              {impact.conflicts > 0 && <Badge kind="error">{t('detail.impact.conflicts', { count: String(impact.conflicts) })}</Badge>}
+              {impact.secretsNeeded > 0 && <Badge kind="warn">{t('detail.impact.secrets', { count: String(impact.secretsNeeded) })}</Badge>}
+              {impact.pathMappingsNeeded > 0 && <Badge kind="warn">{t('detail.impact.paths', { count: String(impact.pathMappingsNeeded) })}</Badge>}
+              {impact.needsRestart && <Badge kind="warn">{t('detail.impact.restart')}</Badge>}
+            </div>
+          )}
+
           {/* 逐分区批准（安全不变式 (c)：高风险分区默认不导入、须逐项显式批准） */}
           {detailView.canImport && approvalList.length > 0 && (<>
             <span className={css.groupLabel}>{t('detail.approval.title')}</span>
@@ -535,6 +565,18 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
                 <option value="">{t('list.categoriesAll')}</option>
                 {categories.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
+              {/* P2-⑭：分区筛选（已缓存条目的分区并集；未缓存条目分区未知不参与匹配） */}
+              <select
+                className={css.select}
+                value={state.sectionFilter}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => { patch({ sectionFilter: e.target.value }) }}
+              >
+                <option value="">{t('list.sectionsAll')}</option>
+                {sectionOptions.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+              {state.sectionFilter !== '' && sectionFilterUnknown > 0 && (
+                <span className={css.hint}>{t('list.sectionsUnknown', { count: String(sectionFilterUnknown) })}</span>
+              )}
               <select
                 className={css.select}
                 value={state.source}

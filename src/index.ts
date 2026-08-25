@@ -57,8 +57,9 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
 import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
+import { ProfileManager, isValidProfileName } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
-import { listSnapshots, planRestore, type RestorePlan, type RestoreReport } from './core/restore.ts'
+import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, type RestorePlan, type RestoreReport } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
@@ -73,7 +74,7 @@ import type {
   ImportPlan, NamespaceInfo, PatchFileFacade, PlanItem, PlanItemKind, PluginInfo, PluginsFacade,
   SettingsFacade, WorkspaceFacade,
 } from './core/types.ts'
-import { ImportUserSkippedError } from './core/types.ts'
+import { ImportNotConfirmedError, ImportUserSkippedError } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
@@ -87,7 +88,7 @@ import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { BackupScheduler } from './sync/backup-scheduler.ts'
 import { readBackupSchedule, writeBackupSchedule } from './sync/backup-schedule-config.ts'
 import type { BackupScheduleConfig } from './sync/backup-schedule-config.ts'
-import { AUTO_BACKUP_PREFIX, deleteBackupFile, isValidBackupFileName, listBackupFiles } from './sync/backup-files.ts'
+import { AUTO_BACKUP_PREFIX, deleteBackupFile, isValidBackupFileName, isValidExportFileName, listBackupFiles, resolveNonCollidingExportName, writeBackupNote } from './sync/backup-files.ts'
 import { validateBackupScheduleDraft } from './ui/backup-schedule.ts'
 import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
@@ -107,7 +108,7 @@ import { readUiPrefs, updateUiPrefs } from './sync/ui-prefs.ts'
 import type { UiPrefsChannel } from './sync/ui-prefs.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
-import { parseMarketIndex } from './market/index-parser.ts'
+import { parseMarketIndex, parseMarketItemManifest } from './market/index-parser.ts'
 import { BUILTIN_MARKET_URL, isOfficialMarket } from './market/builtin.ts'
 import { validateMarketItem } from './market/security.ts'
 import { prepareMarketItem } from './market/prepare.ts'
@@ -127,7 +128,8 @@ import type { ConfiguredSecretPatterns } from './security/secret-scanner.ts'
 import type { SecretScanner } from './core/types.ts'
 import { sha256Hex } from './utils/hashing.ts'
 import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
-import { SECTION_IDS } from './schema/config.ts'
+import { isFileSection, SECTION_IDS } from './schema/config.ts'
+import { stringifyJsonSafe } from './utils/json.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
 import { parseZip, zipToBuffer } from './utils/zip.ts'
 import { isSameOrChild, normalizePath } from './utils/paths.ts'
@@ -142,7 +144,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.53'
+const PLUGIN_VERSION = '0.1.54'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -208,6 +210,8 @@ export interface Config {
 const API = {
   status: '/api/dsh-config-manager/status',
   export: '/api/dsh-config-manager/export',
+  // P2-⑫：导出前只读预览（不落盘 ZIP；返回各分区 counts + 估算大小）
+  exportPreview: '/api/dsh-config-manager/export-preview',
   download: '/api/dsh-config-manager/download',
   upload: '/api/dsh-config-manager/upload',
   analyze: '/api/dsh-config-manager/analyze',
@@ -219,6 +223,9 @@ const API = {
   runs: '/api/dsh-config-manager/runs',
   snapshots: '/api/dsh-config-manager/snapshots',
   restore: '/api/dsh-config-manager/restore',
+  // P1-⑧：快照管理（手动删除 + 置顶豁免自动清理）
+  snapshotDelete: '/api/dsh-config-manager/snapshots/delete',
+  snapshotPin: '/api/dsh-config-manager/snapshots/pin',
   // m-backup-schedule：定时全量备份（读/存 backup-schedule.json + 立即执行一次）
   backupSchedule: '/api/dsh-config-manager/backup-schedule',
   backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
@@ -267,6 +274,14 @@ const API = {
   meListing: '/api/dsh-config-manager/me/listing',
   meRelist: '/api/dsh-config-manager/me/relist',
   meDelete: '/api/dsh-config-manager/me/delete',
+  // m-profiles：配置档案（Profile = 一组可切换的配置快照；Save/List/Delete/Rename/Switch/Import）
+  profiles: '/api/dsh-config-manager/profiles',
+  profilesSave: '/api/dsh-config-manager/profiles/save',
+  profilesDelete: '/api/dsh-config-manager/profiles/delete',
+  profilesRename: '/api/dsh-config-manager/profiles/rename',
+  profilesAnalyzeSwitch: '/api/dsh-config-manager/profiles/analyze-switch',
+  profilesExecuteSwitch: '/api/dsh-config-manager/profiles/execute-switch',
+  profilesImport: '/api/dsh-config-manager/profiles/import',
 } as const
 
 /**
@@ -1368,7 +1383,7 @@ function parseMeForm(raw: unknown): { name: string; id?: string; description?: s
 
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine } {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, credentials, githubClientId, githubClientSecret, backupScheduler } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler } = deps
   const roots = [exportsDir, tmpDir]
 
   /** m-github-oauth：宿主侧设备码登记表 + auth 客户端（进程生命周期；device_code 只存内存） */
@@ -1394,6 +1409,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     parseZipOverride: createHardenedZipParser(),
     dependencyChecker: dependencyAvailable,
     msg,
+  })
+
+  /** m-profiles：配置档案管理器（<dataDir>/profiles/<name>/profile.json；切换复用同一快照/回滚管道） */
+  const profiles = new ProfileManager({
+    dataDir,
+    ctx: host,
+    adapters,
+    snapshotStore: new FileSnapshotStore({ dir: snapshotsDir }),
   })
 
   /** Fence + method guard (mirrors dsh-ssh). */
@@ -1689,11 +1712,37 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         const only = Array.isArray(body['only'])
           ? body['only'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
           : undefined
+        // P0-④：自定义导出文件名（可选；缺省自动命名）。安全：合法 zip 文件名才接受
+        // （isValidExportFileName 拒绝路径分隔符/非法字符）；输出恒在 exportsDir 内。
+        // 兼容两种 key：outPath（ExportFlow 透传，语义=文件名）与 fileName（显式自定义名）。
+        const fileNameRaw = typeof body['outPath'] === 'string' && body['outPath'] !== ''
+          ? body['outPath']
+          : body['fileName']
+        const customFileName = isValidExportFileName(fileNameRaw) ? fileNameRaw : null
+        // P0-④：导出备注（可选；写入 exports/.backup-notes.json，随 self 分区迁移）
+        const note = typeof body['note'] === 'string' && body['note'].trim() !== ''
+          ? body['note'].trim().slice(0, 200)
+          : null
         // Encryption password is in-memory only (never persisted / logged).
         // 加密是独立选项：只要提供了密码就注入 EncryptionProvider
         // （includeSecrets=false 时备份仍标记加密，但 secrets.enc 内容为空）。
         const password = typeof body['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
-        const outPath = join(exportsDir, `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`)
+        // 同名去重（用户决策 2026-08-25）：自定义文件名若已存在，自动追加数字
+        // （foo.zip → foo-1.zip → foo-2.zip）而非覆盖已有备份；自动命名自带随机
+        // 后缀几乎不会撞名，同样走此逻辑（撞名时也递进而非覆盖）。
+        // 读目录在 run 注册前做：exportsDir 缺失时 readdir 返回 []（自动命名原样）。
+        let existingExportNames: string[] = []
+        try {
+          const entries = await fs.readdir(exportsDir, { withFileTypes: true })
+          existingExportNames = entries.filter((e) => e.isFile() && e.name.endsWith('.zip')).map((e) => e.name)
+        } catch {
+          existingExportNames = [] // 目录尚不存在：自动命名，无需去重
+        }
+        const desiredName = customFileName !== null
+          ? customFileName
+          : `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`
+        const finalFileName = resolveNonCollidingExportName(desiredName, existingExportNames)
+        const outPath = join(exportsDir, finalFileName)
         // m1：执行开始注册 run（同 kind 已有进行中任务 → 409 拒绝，防止重复导出）
         let run: RunState
         try {
@@ -1750,12 +1799,77 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           // 注意必须回报实际落盘的 outPath 而非 result.zipPath（后者是 plainZipPath：
           // 加密分支已删除、无加密分支已 rename 成 outPath，此时已不存在，下载会 404）。
           runs.finish(runId, { zipPath: outPath, manifest: result.manifest, report: result.report })
+          // P0-④：导出备注写入 exports/.backup-notes.json（尽力而为：失败不影响导出结果）
+          if (note !== null) {
+            try {
+              await writeBackupNote(exportsDir, basename(outPath), note)
+            } catch (err) {
+              host.log.warn('导出备注写入失败', { error: err instanceof Error ? err.message : String(err) })
+            }
+          }
           writeJson(res, 200, { zipPath: outPath, manifest: result.manifest, report: result.report, runId })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           runs.fail(runId, message)
           host.log.error('导出失败', { error: message })
           writeJson(res, 500, { error: message, runId })
+        }
+      },
+    },
+    // ---------------------------------------------------- export-preview
+    // P2-⑫：导出前只读预览（不落盘 ZIP）：对选中分区逐个 adapter.export 收集 counts
+    // （与真实导出一致的 secret 剥离，不导出任何值），估算 JSON 载荷大小，返回可展示摘要。
+    // 零写入；loopback fence 必备。
+    {
+      kind: 'exact',
+      path: API.exportPreview,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const only = Array.isArray(body?.['only'])
+          ? body['only'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
+          : undefined
+        try {
+          const selected = adapters
+            .filter((a) => (only === undefined ? a.defaultIncluded : only.includes(a.id)))
+            .map((a) => a.id)
+          const preview: { section: SectionId; count: number; sizeBytes: number }[] = []
+          let totalSize = 0
+          let sectionsFailed = 0
+          for (const adapter of adapters) {
+            if (!selected.includes(adapter.id)) continue
+            try {
+              // includeSecrets=false：与真实导出同口径（值剥离），只统计不落盘
+              const section = await adapter.export(host, { includeSecrets: false })
+              // 文件类分区：大小按文件字节合计；JSON 分区：stringify 估算
+              let size = 0
+              if (isFileSection(adapter.id)) {
+                const files = (section.data as { files?: { data: Uint8Array }[] }).files ?? []
+                size = files.reduce((acc, f) => acc + f.data.length, 0)
+              } else {
+                size = Buffer.byteLength(stringifyJsonSafe(section.data), 'utf8')
+              }
+              const count = section.counts ? Object.values(section.counts).reduce((a, b) => a + b, 0) : 0
+              preview.push({ section: adapter.id, count, sizeBytes: size })
+              totalSize += size
+            } catch {
+              sectionsFailed += 1
+              // 单项失败不拖垮预览（与真实导出同语义：分区级失败跳过）
+            }
+          }
+          writeJson(res, 200, {
+            ok: true,
+            sections: preview,
+            totalSections: preview.length,
+            totalSizeBytes: totalSize,
+            sectionsFailed,
+          })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     },
@@ -2176,6 +2290,246 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ------------------------------------------- snapshots/delete（P1-⑧）
+    // 手动删除单个快照（危险操作：该导入前回滚点不可恢复）。loopback fence（guard）；
+    // 只接受合法快照 id（deleteSnapshot 内防穿越）。与自动保留清理不同：置顶快照
+    // 只能在这里被用户手动删除。
+    {
+      kind: 'exact',
+      path: API.snapshotDelete,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const id = typeof body === 'object' && body !== null
+            ? (body as Record<string, unknown>)['snapshotId']
+            : undefined
+          if (!isValidSnapshotId(id)) {
+            writeJson(res, 400, { error: 'snapshotId is required and must be a valid snapshot id' })
+            return
+          }
+          const removed = await deleteSnapshot(snapshotsDir, id)
+          writeJson(res, 200, { ok: true, removed })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // --------------------------------------------- snapshots/pin（P1-⑧）
+    // 置顶/取消置顶快照：置顶快照豁免「最多保留 N 个」的自动清理（只能手动删除）。
+    // 纯元数据写（重写 snapshot.json 的 pinned 字段）；loopback fence 必备。
+    {
+      kind: 'exact',
+      path: API.snapshotPin,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const id = typeof body === 'object' && body !== null
+            ? (body as Record<string, unknown>)['snapshotId']
+            : undefined
+          const pinned = (body as Record<string, unknown> | undefined)?.['pinned'] === true
+          if (!isValidSnapshotId(id)) {
+            writeJson(res, 400, { error: 'snapshotId is required and must be a valid snapshot id' })
+            return
+          }
+          await setSnapshotPinned(snapshotsDir, id, pinned)
+          writeJson(res, 200, { ok: true, pinned })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          writeJson(res, 404, { error: message })
+        }
+      },
+    },
+    // -------------------------------------------------- m-profiles
+    // 配置档案（Profile）：保存当前 DSH 配置为多套可切换快照（Work/Personal…）。
+    // 安全：Profile 名严格校验（ProfileManager 内部 isValidProfileName 防穿越）；
+    // 切换走「预览 → confirm → 快照 → 分阶段 apply → 失败回滚」与导入同一语义；
+    // Save 复用 adapter.export（天然不含秘密值）；全部路由 loopback fence。
+    {
+      kind: 'exact',
+      path: API.profiles,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          writeJson(res, 200, { ok: true, profiles: await profiles.list() })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesSave,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
+        if (!isValidProfileName(name)) {
+          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
+          return
+        }
+        const sections = Array.isArray(body['sections'])
+          ? body['sections'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
+          : undefined
+        try {
+          const meta = await profiles.saveCurrent(name, sections === undefined ? {} : { sections })
+          writeJson(res, 200, { ok: true, profile: meta })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesDelete,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const name = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)['name'] : undefined
+        if (typeof name !== 'string' || !isValidProfileName(name)) {
+          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
+          return
+        }
+        try {
+          await profiles.delete(name)
+          writeJson(res, 200, { ok: true })
+        } catch (error) {
+          writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesRename,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
+        const newName = typeof body['newName'] === 'string' ? body['newName'].trim() : ''
+        if (!isValidProfileName(name) || !isValidProfileName(newName)) {
+          writeJson(res, 400, { error: 'name and newName must be valid profile names' })
+          return
+        }
+        try {
+          const meta = await profiles.rename(name, newName)
+          writeJson(res, 200, { ok: true, profile: meta })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesAnalyzeSwitch,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const name = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)['name'] : undefined
+        if (typeof name !== 'string' || !isValidProfileName(name)) {
+          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
+          return
+        }
+        try {
+          const preview = await profiles.analyzeSwitch(name)
+          writeJson(res, 200, { ok: true, preview })
+        } catch (error) {
+          writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesExecuteSwitch,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
+        if (!isValidProfileName(name)) {
+          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
+          return
+        }
+        const secretInputs =
+          body['secretInputs'] !== null && typeof body['secretInputs'] === 'object'
+            ? body['secretInputs'] as Record<string, string>
+            : {}
+        const resolutions =
+          body['resolutions'] !== null && typeof body['resolutions'] === 'object'
+            ? body['resolutions'] as Record<string, 'keepCurrent' | 'useImported' | 'review'>
+            : {}
+        const strategy = body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] as 'replace' | 'skipExisting' : 'merge'
+        // 执行开始登记 run（同 kind 已有进行中任务 → 409，与 /restore、/execute 同防重语义）
+        let run: RunState
+        try {
+          run = runs.register('profile-switch')
+        } catch (error) {
+          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+          return
+        }
+        const runId = run.runId
+        try {
+          const result = await profiles.executeSwitch(name, {
+            confirm: body['confirm'] === true,
+            strategy,
+            resolutions,
+            secretInputs,
+            rollbackOnError: body['rollbackOnError'] !== false,
+          })
+          runs.finish(runId, result)
+          writeJson(res, 200, { ...result, runId })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (error instanceof ImportNotConfirmedError) {
+            runs.fail(runId, message)
+            writeJson(res, 400, { error: message, runId })
+          } else {
+            runs.fail(runId, message)
+            writeJson(res, 400, { error: message, runId })
+          }
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesImport,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        const asName = typeof body['asName'] === 'string' && body['asName'].trim() !== '' ? body['asName'].trim() : undefined
+        const raw = typeof body['content'] === 'string' ? body['content'] : undefined
+        if (raw === undefined || raw === '') {
+          writeJson(res, 400, { error: 'content (profile.json string) is required' })
+          return
+        }
+        // 落盘到受控 tmpDir，再走 ProfileManager.importProfile（内部校验 version/sections/name）
+        const staged = join(tmpDir, `profile-import-${randomBytes(6).toString('hex')}.json`)
+        try {
+          await fs.writeFile(staged, raw, 'utf8')
+          const meta = await profiles.importProfile(staged, asName === undefined ? {} : { asName })
+          writeJson(res, 200, { ok: true, profile: meta })
+        } catch (error) {
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+        } finally {
+          await fs.rm(staged, { force: true }).catch(() => undefined)
+        }
+      },
+    },
     // -------------------------------------------------- backup-schedule
     // 定时全量备份设置（GET 读 / PUT 存 sync/backup-schedule.json；无敏感字段）：
     // 保存后重排调度器（reload）；恒不含 secret、不加密（与自动同步同语义）。
@@ -2474,15 +2828,27 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== ''
               ? body['encryptPassword']
               : undefined
-          const report = await withTimeout(
-            engine.push({
-              ...(snapshotId === undefined ? {} : { snapshotId }),
-              ...(sections === undefined ? {} : { sections }),
-              ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: encryptPassword ?? '' } : {}),
-            }),
-            ROUTE_TIMEOUT_MS,
-            msg('host.syncPushTimeout'),
-          )
+          // P0-②：push 前只读预览（body.preview === true → 不写远端，只返回「将推送什么」）
+          const preview = body['preview'] === true
+          // 分支调用以保证 withTimeout 的泛型结果类型正确（SyncPushReport | SyncPushPreview）
+          const report = preview
+            ? await withTimeout(
+                engine.previewPush({
+                  ...(sections === undefined ? {} : { sections }),
+                  ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets } : {}),
+                }),
+                ROUTE_TIMEOUT_MS,
+                msg('host.syncPushTimeout'),
+              )
+            : await withTimeout(
+                engine.push({
+                  ...(snapshotId === undefined ? {} : { snapshotId }),
+                  ...(sections === undefined ? {} : { sections }),
+                  ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: encryptPassword ?? '' } : {}),
+                }),
+                ROUTE_TIMEOUT_MS,
+                msg('host.syncPushTimeout'),
+              )
           await writeSyncConfig(syncDir, syncCfg)
           writeJson(res, 200, report)
         } catch (error) {
@@ -3135,7 +3501,19 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const items: MarketListItem[] = []
           for (const item of index.items) {
             const cacheState = await itemCached(url, item.id) ? 'cached' : 'none'
-            items.push(toMarketListItem(item, cacheState))
+            // P2-⑭：已缓存条目从 L2 manifest 合并 sections（供列表分区筛选）；未缓存条目
+            // sections 缺省（= 未知，筛选时排除并提示需先「查看详情」下载）。
+            let sections: SectionId[] | undefined
+            if (cacheState === 'cached') {
+              try {
+                const manifestRaw = await fs.readFile(join(marketCacheItemDir(url), item.id, 'manifest.json'), 'utf8')
+                const parsed = parseMarketItemManifest(manifestRaw)
+                if (parsed.ok && parsed.manifest !== null) sections = parsed.manifest.sections
+              } catch {
+                // 缓存 manifest 读取失败：sections 保持 undefined（筛选降级为未知）
+              }
+            }
+            items.push({ ...toMarketListItem(item, cacheState), ...(sections !== undefined ? { sections } : {}) })
           }
           // star 数据（仓库级）：收集条目来源仓库 URL（repo ?? 市场 URL）去重后批量查缓存，
           // 并入浏览列表。查询失败/非 GitHub 仓库 → 该项 stars 缺省（undefined），UI 显示「—」。

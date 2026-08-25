@@ -20,6 +20,8 @@ export interface ExportOptions {
   only?: SectionId[];
   /** 导出文件路径（缺省自动生成 dsh-config-<date>.zip） */
   outPath?: string;
+  /** 导出备注（P0-④：host 写入 exports/.backup-notes.json，随 self 分区迁移；非敏感） */
+  note?: string;
 }
 
 /** adapter.export() 的产出：数据 + 文件 + 报告计数 + 告警 */
@@ -313,6 +315,8 @@ export interface Snapshot {
   beforePlugins?: PluginInfo[];
   /** 宿主整文件备份（settings.yaml / settings.json / cordis.patch.yml / profiles/<p>/cordis.patch.yml）。旧快照缺省 */
   hostFileBackups?: HostFileBackup[];
+  /** 置顶标记（P1-⑧）：置顶快照在保留清理（自动删最旧）中豁免，需用户手动删除 */
+  pinned?: boolean;
 }
 
 /** 快照存储（默认文件实现见 core/backup.ts；测试可用内存实现） */

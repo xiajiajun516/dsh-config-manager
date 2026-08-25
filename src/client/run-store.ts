@@ -47,8 +47,9 @@ import type { RunKind, RunState } from '../core/run-registry.ts'
 import type { Manifest, SectionId } from '../schema/types.ts'
 import type { ConfigManagerApi } from './api.ts'
 import type { RestorePlan, RestoreReport } from '../core/restore.ts'
+import type { ProfileMeta, ProfileSwitchResult, SwitchPreview } from '../profiles/profile-manager.ts'
 import type { MarketListItem, MarketDownloadResult } from '../market/types.ts'
-import type { SyncPushReport, SyncPullReport } from '../sync/sync-engine.ts'
+import type { SyncPushReport, SyncPullReport, SyncPushPreview } from '../sync/sync-engine.ts'
 import type { SyncStartResponse } from './sync/sync-api.ts'
 import type { ChannelSyncState, SyncChannel } from './sync/sync-view.ts'
 import { defaultChannelSyncState } from './sync/sync-view.ts'
@@ -59,11 +60,11 @@ import type { SyncConflictResolution } from './sync/sync-view.ts'
 
 /* ---------------------------------------------------------------- 基础类型 */
 
-/** 主视图（ConfigManagerSection 的 tab 状态）。 */
+/** 主视图（ConfigManagerSection 的「导出与导入」tab 内部子视图：导出备份 / 导入恢复）。 */
 export type MainView = 'export' | 'import'
 
 /** 设置页四块低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。 */
-export type PanelId = 'snapshots' | 'sync' | 'market' | 'about'
+export type PanelId = 'snapshots' | 'sync' | 'market' | 'about' | 'profiles'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'
@@ -119,6 +120,8 @@ export interface SyncStoreSlice {
   savingConfig: boolean
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
+  /** P0-②：push 前只读预览弹窗（preview 结果 + 打开状态；非敏感，切 tab/刷新不丢） */
+  pushPreview: { preview: SyncPushPreview | null; open: boolean }
   /** 一键同步差异确认会话（items 供 UI 逐项确认；宿主侧 30 分钟 TTL 内存登记） */
   confirmSession: SyncStartResponse | null
   /** 一键同步差异确认的逐项决策（adopted/resolution；非敏感，与 confirmSession 生命周期绑定——切 tab/刷新不丢，刷新后会话仍在可恢复决策） */
@@ -165,6 +168,8 @@ export interface MarketStoreSlice {
   subView: 'browse' | 'myconfigs'
   search: string
   category: string
+  /** 分区筛选（P2-⑭：按包含的分区过滤已缓存条目；空 = 不限；切 tab/刷新不丢） */
+  sectionFilter: string
   /** 来源筛选（2026-08-21：全部 / 官方 / 个人；切 tab/刷新不丢） */
   source: 'all' | 'official' | 'personal'
   /** 排序键（2026-08-21：默认 / 最新更新 / ⭐ 最多 / 名称；切 tab/刷新不丢） */
@@ -196,6 +201,21 @@ export interface MarketStoreSlice {
  *  刷新后经 resume() 重新发现；浏览器持久化绝不作为 destructive operation 的状态源。 */
 /** 快照面板二级 tab：restore = 快照恢复（导入前回滚点）；files = 备份文件管理 */
 export type SnapshotsSubTab = 'restore' | 'files'
+
+/** 配置档案面板的运行时切片（无敏感字段：Profile 天然不含秘密值）。 */
+export interface ProfilesStoreSlice {
+  /** Profile 列表（null = 尚未加载） */
+  profiles: ProfileMeta[] | null
+  /** 当前选中 Profile 名（切换预览目标） */
+  selectedName: string | null
+  /** 切换预览（null = 无预览会话；非敏感） */
+  preview: SwitchPreview | null
+  /** 最近一次切换结果（报告/回滚；非敏感） */
+  switchResult: ProfileSwitchResult | null
+  /** 已 redact 的错误文本 */
+  error: string | null
+  loadError: string | null
+}
 
 export interface SnapshotsStoreSlice {
   selectedId: string | null
@@ -231,6 +251,10 @@ export interface PersistedExportState {
   includeSecrets: boolean
   /** 是否加密备份（独立选项；不导出密钥也可单独加密） */
   encrypt: boolean
+  /** 自定义导出文件名（.zip；空 = 宿主自动命名；非敏感表单字段） */
+  fileName: string
+  /** 导出备注（写入备份列表显示；非敏感） */
+  note: string
   /** 错误消息（已 redact 的文本；Error 对象不可 JSON 序列化，统一转字符串） */
   error: string | null
 }
@@ -271,6 +295,7 @@ export interface PersistedState {
   sync: PersistedSyncState
   market: MarketStoreSlice
   snapshots: SnapshotsStoreSlice
+  profiles: ProfilesStoreSlice
 }
 
 /* --------------------------------------- 运行时状态（含仅内存的敏感字段） */
@@ -324,6 +349,7 @@ export interface StoreState {
   sync: SyncStoreSlice
   market: MarketStoreSlice
   snapshots: SnapshotsStoreSlice
+  profiles: ProfilesStoreSlice
 }
 
 /** patch 的输入形状（浅合并对应切片）。 */
@@ -336,6 +362,7 @@ export interface StorePatch {
   sync?: Partial<SyncStoreSlice>
   market?: Partial<MarketStoreSlice>
   snapshots?: Partial<SnapshotsStoreSlice>
+  profiles?: Partial<ProfilesStoreSlice>
 }
 
 /** 向导 step 的类型别名（与 src/ui/types.ts 的 ImportStep 保持一致）。 */
@@ -351,6 +378,8 @@ function defaultExportState(): ExportLiveState {
     encrypt: false,
     password: '',
     passwordConfirm: '',
+    fileName: '',
+    note: '',
     running: false,
     progress: null,
     result: null,
@@ -405,6 +434,7 @@ function defaultSyncState(): SyncStoreSlice {
     savingConfig: false,
     pushReport: null,
     pullReport: null,
+    pushPreview: { preview: null, open: false },
     confirmSession: null,
     confirmDecisions: null,
     lastRestoreId: null,
@@ -418,6 +448,7 @@ function defaultMarketState(): MarketStoreSlice {
     subView: 'browse',
     search: '',
     category: '',
+    sectionFilter: '',
     source: 'all',
     sortKey: 'default',
     items: [],
@@ -448,6 +479,17 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
   }
 }
 
+function defaultProfilesState(): ProfilesStoreSlice {
+  return {
+    profiles: null,
+    selectedName: null,
+    preview: null,
+    switchResult: null,
+    error: null,
+    loadError: null,
+  }
+}
+
 function defaultState(): StoreState {
   return {
     v: 1,
@@ -458,6 +500,7 @@ function defaultState(): StoreState {
     sync: defaultSyncState(),
     market: defaultMarketState(),
     snapshots: defaultSnapshotsState(),
+    profiles: defaultProfilesState(),
   }
 }
 
@@ -486,6 +529,7 @@ export function toSyncStoreSlice(s: SyncStoreSlice): SyncStoreSlice {
     savingConfig: s.savingConfig,
     pushReport: s.pushReport,
     pullReport: s.pullReport,
+    pushPreview: s.pushPreview,
     confirmSession: s.confirmSession,
     confirmDecisions: s.confirmDecisions,
     lastRestoreId: s.lastRestoreId,
@@ -500,6 +544,7 @@ export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
     subView: s.subView,
     search: s.search,
     category: s.category,
+    sectionFilter: s.sectionFilter,
     source: s.source,
     sortKey: s.sortKey,
     items: s.items,
@@ -528,6 +573,18 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
     backupDraft: s.backupDraft,
     importBackup: s.importBackup,
     subTab: s.subTab,
+  }
+}
+
+/** 从配置档案面板状态提取切片（结构兼容：传入 PanelState 亦可）。 */
+export function toProfilesStoreSlice(s: ProfilesStoreSlice): ProfilesStoreSlice {
+  return {
+    profiles: s.profiles,
+    selectedName: s.selectedName,
+    preview: s.preview,
+    switchResult: s.switchResult,
+    error: s.error,
+    loadError: s.loadError,
   }
 }
 
@@ -588,6 +645,15 @@ export function toPersistedState(state: StoreState): PersistedState {
       // 「一键导入」请求为一次性内存瞬态：不落盘（刷新后回到导入向导 select 步骤）
       importBackup: null,
     },
+    // 配置档案切片为非敏感（Profile 天然不含秘密值）：原样持久化（切 tab/刷新不丢列表与预览）
+    profiles: {
+      profiles: state.profiles.profiles,
+      selectedName: state.profiles.selectedName,
+      preview: state.profiles.preview,
+      switchResult: state.profiles.switchResult,
+      error: state.profiles.error,
+      loadError: state.profiles.loadError,
+    },
   }
 }
 
@@ -610,14 +676,15 @@ export function parsePersistedState(raw: string): PersistedState | null {
   // panel：旧载荷可能缺失 → null（回到主视图）；非法值 → null
   const rawPanel = p['panel']
   const panel: PanelId | null =
-    rawPanel === 'snapshots' || rawPanel === 'sync' || rawPanel === 'market' || rawPanel === 'about'
+    rawPanel === 'snapshots' || rawPanel === 'sync' || rawPanel === 'market' || rawPanel === 'about' || rawPanel === 'profiles'
       ? rawPanel
       : null
   // sync/market/snapshots：旧载荷可能缺失 → 默认切片（字段级缺失由 applyPersisted 兜底）
   const sync = isRecord(p['sync']) ? p['sync'] as unknown as PersistedSyncState : defaultSyncState()
   const market = isRecord(p['market']) ? p['market'] as unknown as MarketStoreSlice : defaultMarketState()
   const snapshots = isRecord(p['snapshots']) ? p['snapshots'] as unknown as SnapshotsStoreSlice : defaultSnapshotsState()
-  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots }
+  const profiles = isRecord(p['profiles']) ? p['profiles'] as unknown as ProfilesStoreSlice : defaultProfilesState()
+  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots, profiles }
 }
 
 /** 运行时不变量小工具：值为普通对象。 */
@@ -788,6 +855,7 @@ export class RunStore {
       sync: { ...this.state.sync, ...patchObj.sync },
       market: { ...this.state.market, ...patchObj.market },
       snapshots: { ...this.state.snapshots, ...patchObj.snapshots },
+      profiles: { ...this.state.profiles, ...patchObj.profiles },
     }
     this.notify()
     this.save()
@@ -939,6 +1007,7 @@ export class RunStore {
         // 旧载荷可能缺 subTab / 带非法值 → 归一（只认 restore/files）
         subTab: parsed.snapshots.subTab === 'files' ? 'files' : 'restore',
       },
+      profiles: { ...defaultProfilesState(), ...parsed.profiles },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
     // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。

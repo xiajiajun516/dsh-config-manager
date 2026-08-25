@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
-import { ABOUT_LINKS, ABOUT_META, aboutStatusRows } from './about-view.ts'
+import { ABOUT_CLI, ABOUT_LINKS, ABOUT_META, aboutStatusRows } from './about-view.ts'
 import type { AboutStatusRows } from './about-view.ts'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
@@ -111,6 +111,24 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           >
             {ABOUT_META.author}
           </a>
+        </div>
+      </Card>
+
+      {/* P1-⑩：CLI 救援工具引导卡（GUI 里唯一能发现 CLI 的地方；独立安装、DSH 挂了也能用） */}
+      <Card>
+        <span className={css.groupLabel}>{t('about.cli.title')}</span>
+        <div className={css.hint}>{t('about.cli.hint')}</div>
+        <pre className={css.cliCommand}>{ABOUT_CLI.installCommand}</pre>
+        <ul className={css.reportList}>
+          {ABOUT_CLI.commands.map((c) => (
+            <li key={c.command}>
+              <code className={css.cliName}>{c.command}</code>
+              {' — '}{c.description}
+            </li>
+          ))}
+        </ul>
+        <div className={css.actionRow}>
+          <Button href={ABOUT_CLI.docsUrl}>{t('about.cli.docs')}</Button>
         </div>
       </Card>
     </div>

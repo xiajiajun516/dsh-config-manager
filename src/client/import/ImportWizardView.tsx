@@ -30,7 +30,9 @@ import type { ChangeEvent } from 'react'
 import { useSyncExternalStore } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
 import { nextFlowPhase, type FlowPhase } from '../../ui/flow.ts'
+import { importNextSteps } from '../../ui/next-steps.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
+import type { ImportPlan, ImportResult } from '../../core/types.ts'
 import type { ConfigManagerApi, UploadResponse } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore } from '../run-store.ts'
@@ -179,6 +181,60 @@ function ImportLogPanelBase({ lines, t }: { lines: string[]; t: TranslateNS<'con
 const ImportLogPanel = memo(ImportLogPanelBase, (prev, next) =>
   prev.lines === next.lines && prev.t === next.t,
 )
+
+/**
+ * 导入/同步后收尾清单（P0-① / P2-⑪，绑 src/ui/next-steps.ts 的 importNextSteps 纯函数）。
+ * - 待重启项（Install 插件 / mcp 变更 → 重启 DSH 生效，逐项列出 id + 摘要）；
+ * - 补录凭据（ref 名清单，非值；无值展示，安全不变量不破）；
+ * - 失败/跳过项（count 传达「可重试」，明细仍在 ReportView 内联报告里）。
+ * 三组均无内容 → 显示「全部完成」ok Banner（替代旧版单行 needsRestart 提示）。
+ */
+function NextStepsCard({ plan, result, t }: {
+  plan: ImportPlan | null
+  result: ImportResult
+  t: TranslateNS<'config-manager'>
+}) {
+  if (plan === null) {
+    return result.needsRestart
+      ? <Banner kind="warn">{t('report.needsRestart')}</Banner>
+      : null
+  }
+  const steps = importNextSteps(plan, result)
+  if (!steps.hasNextSteps) {
+    return <Banner kind="ok">{t('nextSteps.done')}</Banner>
+  }
+  return (
+    <Card className={css.card}>
+      <div className={css.groupLabel}>{t('nextSteps.title')}</div>
+      {steps.restartItems.length > 0 && (
+        <div className={css.nextStepsGroup}>
+          <div className={css.groupLabel}>{t('nextSteps.restart.title', { count: String(steps.restartItems.length) })}</div>
+          <div className={css.hint}>{t('nextSteps.restart.hint')}</div>
+          <ul className={css.reportList}>
+            {steps.restartItems.map((item) => (
+              <li key={item.id}>{item.adapter}: {item.description}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {steps.missingSecrets.length > 0 && (
+        <div className={css.nextStepsGroup}>
+          <div className={css.groupLabel}>{t('nextSteps.secrets.title', { count: String(steps.missingSecrets.length) })}</div>
+          <div className={css.hint}>{t('nextSteps.secrets.hint')}</div>
+          <ul className={css.reportList}>
+            {steps.missingSecrets.map((ref) => <li key={ref}>{ref}</li>)}
+          </ul>
+        </div>
+      )}
+      {steps.unresolved.length > 0 && (
+        <div className={css.nextStepsGroup}>
+          <div className={css.groupLabel}>{t('nextSteps.unresolved.title', { count: String(steps.unresolved.length) })}</div>
+          <div className={css.hint}>{t('nextSteps.unresolved.hint')}</div>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 /**
  * 导入向导主视图。
@@ -798,7 +854,8 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
             </Button>
           </div>
         )}
-        {result.needsRestart && <Banner kind="warn">{t('report.needsRestart')}</Banner>}
+        {/* P0-①/P2-⑪：导入后收尾清单（重启生效项 / 补录凭据 / 失败可重试项），替代单行 needsRestart Banner */}
+        <NextStepsCard plan={imp.plan} result={result} t={t} />
         {error !== null && <ErrorBanner error={error} t={api.t} />}
       </div>
     )

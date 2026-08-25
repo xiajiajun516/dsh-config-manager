@@ -31,7 +31,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
-import type { SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
+import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -45,7 +46,7 @@ import {
   autosyncIntervalMs, autosyncStatusText, channelTabModels, computeAutosyncCountdown,
   computeGithubLoginView, computeRemoteReady, computeSyncButtons,
   defaultChannelSyncState, formatIntervalDuration, githubPollMessage, kindLabel, presetById,
-  presetIdForUrl, privateRepoHint, pullReportView, pushReportView, readStoredChannel,
+  presetIdForUrl, privateRepoHint, pullReportView, pushPreviewView, pushReportView, readStoredChannel,
   recommendedSyncSections, severityLabel, syncSectionGroups, syncSectionOptions,
   WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
@@ -59,6 +60,14 @@ import css from '../config-manager.module.css'
 export interface SyncSettingsViewProps {
   api: SyncApi
   t: TranslateNS<'config-manager-sync'>
+}
+
+/** P0-②：push 前预览弹窗的视图数据（持久化切片；非敏感，刷新后可恢复确认态） */
+export interface PushPreviewSlice {
+  /** 预览结果（null = 尚未取到 */ 
+  preview: SyncPushPreview | null
+  /** 弹窗是否打开（预览完成后自动打开；确认/关闭后关闭） */
+  open: boolean
 }
 
 interface SyncUiState {
@@ -88,6 +97,8 @@ interface SyncUiState {
   busy: 'sync' | 'push' | 'pull' | 'rollback' | null
   pushReport: SyncPushReport | null
   pullReport: SyncPullReport | null
+  /** P0-②：push 前只读预览弹窗（preview 结果 + 打开状态；非敏感，切 tab/刷新不丢） */
+  pushPreview: PushPreviewSlice
   /** 一键同步差异确认会话（POST /sync/sync 结果；非空时渲染 SyncConfirmView） */
   confirmSession: SyncStartResponse | null
   /** 一键同步差异确认的逐项决策（adopted/resolution；与 confirmSession 生命周期绑定，切 tab/刷新不丢） */
@@ -142,6 +153,7 @@ const initial: SyncUiState = {
   busy: null,
   pushReport: null,
   pullReport: null,
+  pushPreview: { preview: null, open: false },
   confirmSession: null,
   confirmDecisions: null,
   lastRestoreId: null,
@@ -178,6 +190,7 @@ function initFromStore(): SyncUiState {
     savingConfig: s.savingConfig,
     pushReport: s.pushReport,
     pullReport: s.pullReport,
+    pushPreview: s.pushPreview ?? { preview: null, open: false },
     confirmSession: s.confirmSession,
     confirmDecisions: s.confirmDecisions,
     lastRestoreId: s.lastRestoreId,
@@ -602,24 +615,41 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     setChannelOpen(false)
   }
 
+  /** 组装 push/preview 的公共载荷（分区选择 + 加密选项；密码仅内存） */
+  const buildPushPayload = (): SyncPushPayload & { encryptPassword?: string } => {
+    // 默认模式：不传 sections（= 全部 portable 推荐分区）；高级模式：传勾选分区
+    const selection =
+      chState.syncMode === 'advanced' && chState.syncSections.length > 0
+        ? { sections: chState.syncSections }
+        : {}
+    // 加密快照：勾选加密 → 携带密码（仅内存传输；密码错误由 Host 解密认证兜底）；
+    // includeSecrets 必须伴随 encrypt（Host 安全断言兜底）
+    const cryptoOpts =
+      chState.encrypt || chState.includeSecrets
+        ? { encrypt: true, encryptPassword: chState.encryptPassword, includeSecrets: chState.includeSecrets }
+        : {}
+    return { ...payload(), ...selection, ...cryptoOpts }
+  }
+
+  /** P0-②：push 前只读预览（弹窗确认流程第一步）——不写远端，只展示「将推送什么」。 */
+  const runPushPreview = async (): Promise<void> => {
+    patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
+    try {
+      const preview = await api.pushPreview(buildPushPayload())
+      patch({ busy: null, pushPreview: { preview, open: true } })
+    } catch (err) {
+      patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  /** P0-②：确认弹窗里点「确认推送」→ 真正推送（复用既有 push 语义）。 */
   const runPush = async (): Promise<void> => {
     patch({ busy: 'push', error: null, pushReport: null, pullReport: null })
     try {
-      // 默认模式：不传 sections（= 全部 portable 推荐分区）；高级模式：传勾选分区
-      const selection =
-        chState.syncMode === 'advanced' && chState.syncSections.length > 0
-          ? { sections: chState.syncSections }
-          : {}
-      // 加密快照：勾选加密 → 携带密码（仅内存传输；密码错误由 Host 解密认证兜底）；
-      // includeSecrets 必须伴随 encrypt（Host 安全断言兜底）
-      const cryptoOpts =
-        chState.encrypt || chState.includeSecrets
-          ? { encrypt: true, encryptPassword: chState.encryptPassword, includeSecrets: chState.includeSecrets }
-          : {}
-      const report = await api.push({ ...payload(), ...selection, ...cryptoOpts })
+      const report = await api.push(buildPushPayload())
       // 成功即清空 token/webdavPassword/加密密码（已安全使用完；绝不持久化）；失败保留以便重试
       patch({
-        busy: null, pushReport: report,
+        busy: null, pushReport: report, pushPreview: { preview: null, open: false },
         ...(report.ok
           ? { token: '', webdavPassword: '' }
           : {}),
@@ -1217,7 +1247,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             >
               {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}
             </Button>
-            <Button disabled={!buttons.canPush || githubBusy || !pushSelectionReady || encryptInvalid} onClick={() => { void runPush() }}>
+            <Button disabled={!buttons.canPush || githubBusy || !pushSelectionReady || encryptInvalid} onClick={() => { void runPushPreview() }}>
               {state.busy === 'push' ? <Spinner label={buttons.pushLabel} /> : buttons.pushLabel}
             </Button>
             <Button disabled={!buttons.canPull || githubBusy} onClick={() => { void runPull() }}>
@@ -1372,6 +1402,86 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
           {/* P2：同步历史视图（Host /sync/history 端点；全局，含两通道记录） */}
           <SyncHistoryView api={api} t={t} />
+
+          {/* P0-②：push 前只读预览确认弹窗（「将推送什么」→ 确认后才真正上传） */}
+          {state.pushPreview.open && (
+            <div
+              className={css.dialogMask}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget && state.busy !== 'push') {
+                  patch({ pushPreview: { preview: null, open: false } })
+                }
+              }}
+            >
+              <div className={`${css.dialogCard} ${css.dialogWide}`} role="dialog" aria-modal="true" aria-label={t('syncflow.pushPreviewTitle')}>
+                <div className={css.dialogHeaderRow}>
+                  <span className={css.dialogHeader}>{t('syncflow.pushPreviewTitle')}</span>
+                  <button
+                    type="button"
+                    className={css.dialogClose}
+                    aria-label={t('common.close')}
+                    disabled={state.busy === 'push'}
+                    onClick={() => { patch({ pushPreview: { preview: null, open: false } }) }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className={css.dialogBodyScroll}>
+                  <PushPreviewCard preview={state.pushPreview.preview} t={t} uiT={uiT} />
+                  <div className={css.actionRow}>
+                    <Button
+                      variant="ghost"
+                      disabled={state.busy === 'push'}
+                      onClick={() => { patch({ pushPreview: { preview: null, open: false } }) }}
+                    >
+                      {t('syncflow.cancel')}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      disabled={state.busy === 'push'}
+                      onClick={() => { void runPush() }}
+                    >
+                      {state.busy === 'push' ? <Spinner label={t('syncflow.pushing')} /> : t('syncflow.pushConfirm')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+    </div>
+  )
+}
+
+/** P0-②：push 预览内容（绑 src/ui/i18n.ts 的 UiT 文案；纯展示，无敏感字段）。 */
+function PushPreviewCard({ preview, t, uiT }: {
+  preview: SyncPushPreview | null
+  t: TranslateNS<'config-manager-sync'>
+  uiT: UiT
+}) {
+  const view = pushPreviewView(preview, uiT)
+  if (view === null) return null
+  if (view.error !== null) return <Banner kind="error">{view.error}</Banner>
+  return (
+    <div>
+      <Banner kind="info">{view.headline}</Banner>
+      {view.previewHint !== '' && <div className={css.hint}>{view.previewHint}</div>}
+      {view.remoteSnapshotCount === 0 && (
+        <Banner kind="warn">{t('syncflow.pushFirstBaseline')}</Banner>
+      )}
+      {view.encryptedHint !== '' && <Banner kind="warn">{view.encryptedHint}</Banner>}
+      <Card className={css.card}>
+        <div className={css.groupLabel}>{t('syncflow.pushPreviewSections')}</div>
+        <div className={css.planScroll}>
+          <ul className={css.reportList}>
+            {view.rows.map((row) => (
+              <li key={row.section}>
+                <span className={css.kindTag}>{row.changed ? 'changed' : 'unchanged'}</span>
+                {' '}{row.section} · {row.count}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </Card>
     </div>
   )
 }

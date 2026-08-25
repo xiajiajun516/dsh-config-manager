@@ -19,10 +19,12 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent } from 'react'
 import { EXPORT_GROUPS } from '../../ui/types.ts'
+import { normalizeExportFileName } from '../../ui/export-flow.ts'
 import type { SectionId } from '../../schema/types.ts'
 import type { TranslateNS } from '../client-types.ts'
-import type { ConfigManagerApi } from '../api.ts'
+import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import { runStore, type ExportMode } from '../run-store.ts'
+import { formatBytes } from '../../ui/report.ts'
 import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
@@ -48,6 +50,10 @@ export function ExportView({ api, t }: ExportViewProps) {
   const selection = exp.selection
   const includeSecrets = exp.includeSecrets
   const encrypt = exp.encrypt
+  /** P0-④：自定义导出文件名（.zip；空 = 宿主自动命名；仅表单非敏感字段） */
+  const fileName = exp.fileName
+  /** P0-④：导出备注（写入备份列表显示；非敏感） */
+  const note = exp.note
   // 密码字段仅内存（store 的敏感字段，绝不序列化进 sessionStorage）
   const password = exp.password
   const passwordConfirm = exp.passwordConfirm
@@ -60,6 +66,25 @@ export function ExportView({ api, t }: ExportViewProps) {
   const [downloading, setDownloading] = useState(false)
   /** 下载防重入 ref（导出完成自动下载 + 用户手动下载共享；避免双击并发下载同一文件） */
   const downloadingRef = useRef(false)
+  /** P2-⑫：导出前预览（null = 未请求；进行中/结果/错误） */
+  const [preview, setPreview] = useState<{
+    loading: boolean
+    result: ExportPreviewResponse | null
+    error: string | null
+  } | null>(null)
+
+  /** P2-⑫：请求导出前预览（不落盘；按当前模式的分区选择） */
+  const runPreview = async (): Promise<void> => {
+    if (running) return
+    setPreview({ loading: true, result: null, error: null })
+    try {
+      const only = mode === 'quick' ? flow.quickSelection() : [...selection]
+      const result = await api.exportPreview(only)
+      setPreview({ loading: false, result, error: null })
+    } catch (err) {
+      setPreview({ loading: false, result: null, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
 
   const setMode = (next: ExportMode): void => {
     runStore.patch({ export: { mode: next } })
@@ -78,6 +103,12 @@ export function ExportView({ api, t }: ExportViewProps) {
   const setPasswordConfirm = (value: string): void => {
     runStore.patch({ export: { passwordConfirm: value } })
   }
+  const setFileName = (value: string): void => {
+    runStore.patch({ export: { fileName: value } })
+  }
+  const setNote = (value: string): void => {
+    runStore.patch({ export: { note: value } })
+  }
 
   const toggleSection = useCallback((id: SectionId, checked: boolean): void => {
     const has = selection.includes(id)
@@ -88,9 +119,16 @@ export function ExportView({ api, t }: ExportViewProps) {
   const passwordInvalid =
     encrypt && (password === '' || password !== passwordConfirm)
 
+  /** 自定义文件名合法性（P0-④）：留空合法（自动命名）；非空必须合法文件名。
+   *  无需手动输入 .zip 后缀 —— 校验只针对「去 .zip 后缀后的基础名」，
+   *  提交时经 normalizeExportFileName 自动补全 .zip（host 端 isValidExportFileName 仍兜底）。 */
+  const trimmedName = fileName.trim()
+  const baseName = trimmedName.replace(/\.zip$/i, '')
+  const fileNameInvalid = trimmedName !== '' && !/^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/.test(baseName)
+
   /** 执行导出（Quick 或 Custom）；成功后自动下载到浏览器「下载」目录 */
   const runExport = async (): Promise<void> => {
-    if (passwordInvalid) return
+    if (passwordInvalid || fileNameInvalid) return
     runStore.patch({
       export: { running: true, error: null, result: null, downloaded: false, progress: null, runId: null },
     })
@@ -101,7 +139,12 @@ export function ExportView({ api, t }: ExportViewProps) {
       api.exportPassword = encrypt ? password : null
       // includeSecrets 只表示「导出密钥」；安全上密钥必须以加密形式备份，
       // UI 联动保证 includeSecrets ⇒ encrypt，这里再兜底一次
-      const run = await flow.run(mode, selection, { includeSecrets: includeSecrets && encrypt })
+      const run = await flow.run(mode, selection, {
+        includeSecrets: includeSecrets && encrypt,
+        // P0-④：自定义文件名（trim 后为空 = 自动命名；自动补全 .zip 后缀）+ 备注
+        fileName: normalizeExportFileName(fileName),
+        note: note.trim(),
+      })
       // ExportResponse 携带 runId（/progress 查询与刷新恢复用）；控制器类型不含，运行时对象有
       const runId = (run as { runId?: unknown }).runId
       runStore.patch({
@@ -242,12 +285,64 @@ export function ExportView({ api, t }: ExportViewProps) {
         <div className={css.hint}>{t('export.includeSecretsHint')}</div>
       </Card>
 
+      {/* P0-④：自定义文件名 + 备注（可选）—— 缺省自动命名；文件名安全校验与 host 一致 */}
+      <Card className={css.optionsCard}>
+        <span className={css.optionsHeader}>{t('export.naming')}</span>
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{t('export.fileName')}</span>
+          <input
+            type="text"
+            className={css.input}
+            value={fileName}
+            placeholder="dsh-config-2026-08-24"
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setFileName(e.target.value) }}
+            onBlur={() => {
+              // 失焦自动补全 .zip 后缀（无需用户手动输入）——空值保持空（宿主自动命名）
+              if (fileName.trim() !== '') setFileName(normalizeExportFileName(fileName))
+            }}
+          />
+          <span className={css.hint}>{t('export.fileNameHint')}</span>
+          {fileNameInvalid && <span className={css.formError}>{t('export.fileNameInvalid')}</span>}
+        </label>
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{t('export.note')}</span>
+          <input
+            type="text"
+            className={css.input}
+            value={note}
+            placeholder={t('export.notePlaceholder')}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { setNote(e.target.value) }}
+          />
+          <span className={css.hint}>{t('export.noteHint')}</span>
+        </label>
+      </Card>
+
       {/* 执行 */}
       <div className={css.actionRow}>
-        <Button variant="primary" disabled={running || passwordInvalid} onClick={() => { void runExport() }}>
+        <Button variant="ghost" disabled={running} onClick={() => { void runPreview() }}>
+          {preview?.loading === true ? <Spinner label={t('export.previewing')} /> : t('export.preview')}
+        </Button>
+        <Button variant="primary" disabled={running || passwordInvalid || fileNameInvalid} onClick={() => { void runExport() }}>
           {running ? <Spinner label={t('export.running')} /> : t('export.run')}
         </Button>
       </div>
+
+      {/* P2-⑫：导出前预览结果（「将打包 X 分区 / Y 条目 / 约 Z 大小」；零写入） */}
+      {preview !== null && !preview.loading && (
+        <Banner kind={preview.error !== null ? 'error' : 'info'}>
+          {preview.error !== null
+            ? preview.error
+            : preview.result !== null && (
+              <span>
+                {t('export.previewSummary', {
+                  sections: String(preview.result.totalSections),
+                  size: formatBytes(preview.result.totalSizeBytes),
+                })}
+                {preview.result.sectionsFailed > 0 && ` · ${t('export.previewSkipped', { count: String(preview.result.sectionsFailed) })}`}
+              </span>
+            )}
+        </Banner>
+      )}
 
       {running && <ProgressBar event={progress} active />}
 

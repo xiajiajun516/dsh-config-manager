@@ -7,7 +7,7 @@ Backup, restore, export, import, migrate and sync your complete DeepSeek Harness
 - 🔄 **Backup & Restore** DeepSeek Harness configuration
 - 📦 **Export / Import** complete DSH configuration
 - 🚚 **Migrate** DSH to another machine
-- ⏰ **Scheduled full backups** — automatic, on your own cadence (6h / 12h / 24h / 7d), secrets never included
+- ⏰ **Scheduled full backups** — automatic, on your own cadence (6h / 12h / 24h / 7d / custom weekly), secrets never included
 - 🔌 Backup installed **plugins** and plugin configuration
 - 🧩 Backup **MCP servers** and **Skills**
 - 🔐 Encrypted backups with optional credentials
@@ -56,7 +56,7 @@ Keep portable configuration synchronized between machines through a private Git 
 
 ### Schedule automatic full backups
 
-Turn on scheduled backups (6h / 12h / 24h / 7d) and DSH quietly keeps a fresh full backup of your configuration in the background — secrets are never included, so it stays safe on disk without a password.
+Turn on scheduled backups (6h / 12h / 24h / 7d — or a **custom weekly weekday & time**) and DSH quietly keeps a fresh full backup of your configuration in the background — secrets are never included, so it stays safe on disk without a password. Consecutive failures are highlighted in red in the settings card.
 
 ### Discover & install configurations from the marketplace
 
@@ -79,7 +79,7 @@ Browse the built-in official market for ready-made configurations (model provide
 | 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo or WebDAV** (secrets never sync) |
 | ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d) — set-and-forget, secrets never included |
 | 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-section approval |
-| 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime |
+| 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime — preview + auto-backup + rollback |
 | 🌐 | **Bilingual UI** | Interface, reports and error details follow the DSH app language (中文 / English) |
 | 🤖 | **Agent tools** | Backup / snapshot / restore / sync right from an agent session |
 
@@ -186,11 +186,16 @@ Copy the ZIP to Machine B (import)
 
 > Output: `dsh-config-<date>.zip` with manifest + per-category data + SHA-256 checksums.
 
+**Export extras:**
+- **Preview before export** — see what will be packaged (section count + estimated size, no secrets) before anything is written
+- **Custom file name & note** — name the ZIP yourself (auto-naming is the default) and attach an optional note that shows in the **Backup Files** list (the note travels with the self section when you sync/backup the config)
+
 ### 📥 Import (safe flow)
 
 - **Nothing is written before confirmation** — analyze & preview are zero-write
 - **Backup before applying** — the target config is snapshotted automatically
 - **Automatic rollback on failure** — full rollback or skip-and-continue, your choice
+- **Next-steps checklist after import** — the result page lists what needs a DSH restart (per plugin/MCP), credentials to re-enter, and failed/skipped items you can retry
 
 ### 👀 Import Preview (dry run)
 
@@ -242,13 +247,15 @@ Push / pull your portable config between machines through **either of two channe
 - **Switching channels starts fresh**: Git and WebDAV do **not** share snapshots or a common ancestor. When you switch transport, sync begins again from the new remote's empty baseline — push a fresh snapshot first.
 - **WebDAV auth** uses HTTP Basic: the `username` is stored in the config and may be echoed back into the UI, while the `password` is read live from the DSH credentials slot `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` — it never appears in any sync file or log.
 - **Plugins auto-install**: when pulling diffs, plugins that are new in the backup are **installed automatically** on confirm — no manual per-item ticking in the diff list. Only **version-conflict** plugins still ask you to pick "Keep Current / Use Imported".
+- **Push preview before uploading** — the Push button first shows a read-only preview of what will be sent (sections + per-section counts + changed-vs-baseline markers, first-baseline notice) and only writes the remote after you confirm.
 
 ### 🛒 Configuration Marketplace
 
 Browse and install ready-made configurations (model providers, plugins, MCP servers, skills, agent presets…) shared by the community:
 
 - **Built-in official market** — read-only, bound to the official public repo (official badge shown, not editable); first open auto-refreshes, manual refresh also available
-- **Search & filter** — keyword search, category filter, source filter (Official / Community), sorting (recently updated / most starred / name A–Z), and a ⭐ badge showing the **source repo's** star count (queried anonymously, no token involved)
+- **Search & filter** — keyword search (matches name / description / author / **categories**), category filter, **section filter** (items already downloaded list their sections; others are excluded with a hint), source filter (Official / Community), sorting (recently updated / most starred / name A–Z), and a ⭐ badge showing the **source repo's** star count (queried anonymously, no token involved)
+- **Impact preview** — the detail view shows "what installing this will change" (items updated / identical / conflicts / secrets to re-enter / DSH restart needed) before you approve anything
 - **Supply-chain warnings always shown** — source repo URL, "not officially reviewed", download time; **per-section approval** — high-risk sections (sessions / arbitrary files) are banned from listing outright, and every remaining section must be explicitly approved before the import is confirmed
 - **Install reuses the safe import pipeline** — analyze → preview → auto-backup → apply → rollback; nothing is written before you confirm
 - **"My Configs"** — sign in with GitHub (device flow), upload a config to **your own public repo** in one click, and an **auto listing PR** is opened against the official market repo; manage your listings (status badges: not listed / PR pending / listed), update in one click, install back locally, or delist (auto de-listing PR)
@@ -256,6 +263,11 @@ Browse and install ready-made configurations (model providers, plugins, MCP serv
 ### 🗂️ Profiles
 
 Save multiple configurations (Work / Personal) and switch anytime; switching includes preview + auto-backup + rollback.
+
+- **Save current config** — pick a name and store the current DSH configuration (settings / providers / plugins / skills / agent presets…; no secrets, file sections embedded)
+- **Switch with safety** — preview first (zero writes) → confirm → automatic snapshot → staged apply; any failure rolls back fully
+- **Manage** — rename / delete (confirmed) / import an exported profile.json
+- Library is an independent tab: Settings → "Backup & Migration" → **Profiles**
 
 ### 📸 Snapshot restore (undo an import)
 
@@ -269,6 +281,16 @@ Every import creates a **safety snapshot** first. If something feels off afterwa
 | Credentials | DSH never reads credential values back — you get a manual re-entry hint instead |
 
 **GUI**: Settings → "Backup & Migration" → **Snapshots & Restore** tab → pick a snapshot → preview the plan (dry-run, zero writes) → confirm.
+
+**Snapshot management:**
+- **Retention is visible** — up to **10** snapshots are kept automatically (oldest pruned); the hint is shown in the list
+- **Pin important snapshots** — a pinned snapshot is exempt from auto-pruning and can only be deleted manually
+- **Manual delete** — remove any snapshot (danger, confirmed) when you no longer need that rollback point
+
+**Backup Files management** (same tab → "Backup Files"):
+- List every export ZIP (manual + scheduled) with source badge, size, time and your custom **note**
+- **Search** by file name or note
+- **Inspect / Compare** — read-only preview of what the backup contains (sections + per-section counts) and the diff against your current config (zero writes) before deciding to import
 
 ---
 

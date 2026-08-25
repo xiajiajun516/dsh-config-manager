@@ -164,6 +164,8 @@ export interface MarketListItem {
   stars?: number;
   /** 本地缓存状态：cached | fresh | none（UI 徽章） */
   cacheState: 'cached' | 'fresh' | 'none';
+  /** 分区清单（P2-⑭：已缓存条目从 L2 manifest 合并；未缓存条目缺省 = 未知，列表分区筛选时排除） */
+  sections?: SectionId[];
 }
 
 /** POST /market/download 响应：条目详情 + 校验结果（dry-run 预览） */

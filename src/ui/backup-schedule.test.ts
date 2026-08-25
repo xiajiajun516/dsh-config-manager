@@ -18,6 +18,57 @@ test('validateBackupScheduleDraft：合法草稿通过（4 档位全过）', () 
   }
 })
 
+test('validateBackupScheduleDraft：custom 档要求合法 customSchedule（P0-⑤）', () => {
+  const ok = validateBackupScheduleDraft({
+    enabled: true, interval: 'custom',
+    customSchedule: { dayOfWeek: 1, hour: 3, minute: 30 },
+  })
+  assert.deepEqual(ok, {
+    ok: true,
+    value: { enabled: true, interval: 'custom', customSchedule: { dayOfWeek: 1, hour: 3, minute: 30 } },
+  })
+  // 缺 customSchedule → 拒绝
+  const missing = validateBackupScheduleDraft({ enabled: true, interval: 'custom' })
+  assert.equal(missing.ok, false)
+  // 非法值域（hour 25 / dayOfWeek 7 / minute -1）→ 拒绝
+  for (const bad of [
+    { dayOfWeek: 1, hour: 25, minute: 0 },
+    { dayOfWeek: 7, hour: 3, minute: 0 },
+    { dayOfWeek: 0, hour: 3, minute: -1 },
+  ]) {
+    const r = validateBackupScheduleDraft({ enabled: true, interval: 'custom', customSchedule: bad })
+    assert.equal(r.ok, false, `应拒绝非法 customSchedule: ${JSON.stringify(bad)}`)
+  }
+})
+
+test('backupDraftDirty：custom 档按周档字段比对（P0-⑤）', () => {
+  const saved: BackupScheduleStatus = {
+    enabled: true, interval: 'custom',
+    customSchedule: { dayOfWeek: 1, hour: 3, minute: 30 },
+    startupMinIntervalMs: 3600000, consecutiveFailures: 0,
+  }
+  assert.equal(
+    backupDraftDirty({ enabled: true, interval: 'custom', customSchedule: { dayOfWeek: 1, hour: 3, minute: 30 } }, saved),
+    false,
+  )
+  assert.equal(
+    backupDraftDirty({ enabled: true, interval: 'custom', customSchedule: { dayOfWeek: 2, hour: 3, minute: 30 } }, saved),
+    true,
+    '周几不同 = 有修改',
+  )
+  assert.equal(
+    backupDraftDirty({ enabled: true, interval: 'custom', customSchedule: { dayOfWeek: 1, hour: 4, minute: 0 } }, saved),
+    true,
+    '时刻不同 = 有修改',
+  )
+  // saved 无 customSchedule（旧配置）而草稿有 → 有修改
+  const legacy: BackupScheduleStatus = { enabled: true, interval: 'custom', startupMinIntervalMs: 3600000, consecutiveFailures: 0 }
+  assert.equal(
+    backupDraftDirty({ enabled: true, interval: 'custom', customSchedule: { dayOfWeek: 1, hour: 3, minute: 30 } }, legacy),
+    true,
+  )
+})
+
 test('validateBackupScheduleDraft：非法 interval 拒绝', () => {
   const r = validateBackupScheduleDraft({ enabled: true, interval: '1h' as never })
   assert.equal(r.ok, false)

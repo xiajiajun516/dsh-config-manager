@@ -129,6 +129,8 @@ export interface SnapshotMeta {
   entryCount: number;
   hostFileBackupCount: number;
   beforePluginCount: number;
+  /** 置顶标记（P1-⑧）：置顶快照不参与自动保留清理（最多保留 N 个时的淘汰豁免） */
+  pinned?: boolean;
 }
 
 /* ------------------------------------------------------------ 工具 */
@@ -642,6 +644,7 @@ export async function listSnapshots(dir: string): Promise<SnapshotMeta[]> {
         entryCount: snapshot.entries?.length ?? 0,
         hostFileBackupCount: snapshot.hostFileBackups?.length ?? 0,
         beforePluginCount: snapshot.beforePlugins?.length ?? 0,
+        pinned: snapshot.pinned === true,
       });
     } catch {
       // 损坏 / 非快照目录：跳过
@@ -649,4 +652,47 @@ export async function listSnapshots(dir: string): Promise<SnapshotMeta[]> {
   }
   metas.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
   return metas;
+}
+
+/* ------------------------------------------------------------ 快照管理（P1-⑧） */
+
+/** 快照 id 安全校验（防路径穿越）：字母数字 + - _ .，长度 1-80。 */
+export function isValidSnapshotId(id: unknown): id is string {
+  return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(id);
+}
+
+/** 删除单个快照（手动删除；P1-⑧）。只接受合法 id（防穿越），目标是快照根下的 <id>/ 目录。
+ *  不存在视为成功（幂等）。返回是否实际删除。 */
+export async function deleteSnapshot(snapshotsDir: string, id: string): Promise<boolean> {
+  if (!isValidSnapshotId(id)) {
+    throw new Error(`非法快照 id: ${JSON.stringify(id)}`);
+  }
+  const target = path.join(snapshotsDir, id);
+  if (!target.startsWith(path.resolve(snapshotsDir) + path.sep)) {
+    throw new Error(`快照路径越界: ${id}`);
+  }
+  try {
+    await fs.stat(target);
+  } catch {
+    return false; // 不存在 → 幂等成功
+  }
+  await fs.rm(target, { recursive: true, force: true });
+  return true;
+}
+
+/** 切换置顶状态（P1-⑧）：置顶快照豁免自动保留清理。重写 <dir>/<id>/snapshot.json 的 pinned 字段。
+ *  只接受合法 id；快照不存在抛错。 */
+export async function setSnapshotPinned(snapshotsDir: string, id: string, pinned: boolean): Promise<boolean> {
+  if (!isValidSnapshotId(id)) {
+    throw new Error(`非法快照 id: ${JSON.stringify(id)}`);
+  }
+  const file = path.join(snapshotsDir, id, 'snapshot.json');
+  const resolvedRoot = path.resolve(snapshotsDir) + path.sep;
+  if (!file.startsWith(resolvedRoot)) {
+    throw new Error(`快照路径越界: ${id}`);
+  }
+  const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
+  snapshot.pinned = pinned;
+  await fs.writeFile(file, JSON.stringify(snapshot, null, 2));
+  return pinned;
 }

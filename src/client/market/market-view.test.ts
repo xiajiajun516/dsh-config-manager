@@ -16,10 +16,11 @@ import type { MarketItemDetail, MarketListItem } from '../../market/types.ts'
 import { zhUiT } from '../../ui/i18n.ts'
 import type { ImportPlan, PlanItem } from '../../core/types.ts'
 import {
-  approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCategories, computeItemBadge,
-  defaultApprovals, filterBySource, filterMarketItems, formatMarketTime, isHighRiskAdapter,
-  marketDetailView, marketListSummary, marketStatusText, marketWarningsLines, marketItemWarnings,
-  needsReview, sortMarketItems, sourceBadgeKind, isThirdPartyItem, toMarketListItem,
+  approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCachedSections, collectCategories,
+  computeItemBadge, defaultApprovals, filterBySource, filterMarketBySection, filterMarketItems,
+  formatMarketTime, isHighRiskAdapter, marketDetailView, marketImpactSummary, marketListSummary,
+  marketStatusText, marketWarningsLines, marketItemWarnings, needsReview, sortMarketItems,
+  sourceBadgeKind, isThirdPartyItem, toMarketListItem,
 } from './market-view.ts'
 
 /* ---------------------------------------------------------------- 共享渲染模型（re-export 权威） */
@@ -377,4 +378,59 @@ test('market-view: approvalRows 逐分区行（adapter + 项数 + 风险 + 勾�
   assert.ok(pluginsR)
   assert.equal(pluginsR.highRisk, true)
   assert.equal(pluginsR.approved, false)
+})
+
+test('market-view: filterMarketItems 搜索命中 name/author/description 与 categories（P2-⑭）', () => {
+  const items = [
+    item({ id: 'a', name: 'Model Pack', categories: ['providers', 'models'] }),
+    item({ id: 'b', name: 'Prompt Kit', description: 'system prompts', categories: ['customization'] }),
+    item({ id: 'c', name: 'Skill Set', author: 'alice', categories: ['skills'] }),
+  ]
+  // 描述命中
+  assert.deepEqual(filterMarketItems(items, 'system', '').map((i) => i.id), ['b'])
+  // 类别命中（P2-⑭ 增强：搜类别标签名命中带该类别标签的条目）
+  assert.deepEqual(filterMarketItems(items, 'providers', '').map((i) => i.id), ['a'], '类别名参与搜索')
+  assert.deepEqual(filterMarketItems(items, 'skills', '').map((i) => i.id), ['c'], '类别标签命中')
+  // 类别下拉过滤仍独立生效
+  assert.deepEqual(filterMarketItems(items, '', 'providers').map((i) => i.id), ['a'])
+})
+
+test('market-view: filterMarketBySection / collectCachedSections（P2-⑭ 分区筛选）', () => {
+  const items = [
+    item({ id: 'a', name: 'A', cacheState: 'cached', sections: ['settings', 'plugins'] }),
+    item({ id: 'b', name: 'B', cacheState: 'cached', sections: ['settings'] }),
+    item({ id: 'c', name: 'C', cacheState: 'none' }), // 未下载 → 分区未知
+  ]
+  // 空筛选 = 全部
+  const all = filterMarketBySection(items, '')
+  assert.equal(all.matched.length, 3)
+  assert.equal(all.unknown, 0)
+  // 按 plugins 筛：只有 A 命中；C 未知被排除
+  const plugins = filterMarketBySection(items, 'plugins')
+  assert.deepEqual(plugins.matched.map((i) => i.id), ['a'])
+  assert.equal(plugins.unknown, 1, '未知分区条目计入 unknown 提示')
+  // 按 settings 筛：A + B
+  const settings = filterMarketBySection(items, 'settings')
+  assert.deepEqual(settings.matched.map((i) => i.id), ['a', 'b'])
+  // collectCachedSections：只收集已缓存条目的分区并集
+  assert.deepEqual(collectCachedSections(items).sort(), ['plugins', 'settings'])
+})
+
+test('market-view: marketImpactSummary 装了这个会动你什么（P1-⑥）', () => {
+  const impact = marketImpactSummary(samplePlan(), {
+    valid: true,
+    errors: [],
+    warnings: [],
+    compatibility: 'excellent',
+    sectionsInZip: ['settings'],
+    pluginSummary: { installed: 0, toInstall: 0 },
+    pathIssues: [],
+    secretCount: 0,
+    dependencyIssues: [],
+    encrypted: false,
+  })
+  assert.equal(impact.willChange > 0, true, '有变更项')
+  assert.ok(impact.sections.length > 0, '分区清单非空')
+  const settingsRow = impact.sections.find((s) => s.section === 'settings')
+  assert.ok(settingsRow && settingsRow.count >= 1)
 })
