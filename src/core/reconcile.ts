@@ -33,8 +33,15 @@ export interface ReconcileProbeHooks {
   verifyStepFingerprint(step: JournalStep): Promise<StepFingerprintVerdict>;
   /** 外部步骤（插件/Git/WebDAV）状态探测。 */
   probeExternal(step: JournalStep): Promise<ExternalProbe>;
-  /** 快照完整性（id 合法 + snapshot.json 存在 + 必要 blobs 存在 + 属于本 op）。 */
-  snapshotExists(snapshotId: string | null): Promise<boolean>;
+  /**
+   * 快照完整性（id 合法 + snapshot.json 存在 + 必要 blobs 存在 + READY + 属于本 op）。
+   * binding 为 journal 的绑定字段（operationId/ownerInstanceId/environmentFingerprint），
+   * 实现应校验 snapshot 的 manifest binding 与 journal 一致（P1-1：防伪造快照过 snapshotExists）。
+   */
+  snapshotExists(
+    snapshotId: string | null,
+    binding?: { operationId?: string; ownerInstanceId?: string; environmentFingerprint?: string },
+  ): Promise<boolean>;
 }
 
 export interface ReconcileEnv {
@@ -226,7 +233,50 @@ async function reconcileOne(
     }
   }
 
-  const snapshotExists = await hooks.snapshotExists(j.snapshotId);
+  const snapshotExists = await hooks.snapshotExists(j.snapshotId, {
+    operationId: j.operationId,
+    ownerInstanceId: j.ownerInstanceId,
+    environmentFingerprint: j.environmentFingerprint,
+  });
+
+  // F20 修复：空 steps（opaque intent journal）不得因 [].every() 真空真而判 RECOVERED。
+  // 若 mutation 是否执行无法证明 → NEEDS_ATTENTION；若有 trusted bound snapshot → rollback-recommended。
+  if (stepIds.length === 0) {
+    // CREATED / SNAPSHOT_CREATED：mutation 尚未开始 → 安全 no-op
+    if (j.state === 'CREATED' || j.state === 'SNAPSHOT_CREATED') {
+      await store.update(operationId, (cur) => {
+        let next = transitionJournalState(cur, 'RECOVERED');
+        next = { ...next, recovery: { ...next.recovery, attemptedAt: new Date().toISOString(), outcome: 'RECOVERED', reason: 'no mutation started (empty steps, pre-APPLYING)', attempts: next.recovery.attempts + 1 } };
+        return next;
+      });
+      await store.moveToCompleted(operationId).catch(() => undefined);
+      await store.appendRecoveryHistory('noop', { operationId, at: new Date().toISOString(), reason: 'no mutation started' }).catch(() => undefined);
+      return { decision: { operationId, kind: 'noop', reason: 'mutation 未开始，安全完成', snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+    }
+    // APPLYING（或其它非 terminal）：mutation 可能已开始，无法证明
+    if (j.snapshotId !== null && snapshotExists) {
+      // 有 trusted bound snapshot → rollback-recommended（需用户确认）
+      await store.writeSafeMode(true).catch(() => undefined);
+      const reason = 'opaque APPLYING（空 steps）且 mutation 可能已开始，有 trusted snapshot 可回滚（需用户确认）';
+      await store.update(operationId, (cur) => {
+        let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
+        next = { ...next, error: next.error || reason, recovery: { ...next.recovery, reason, attempts: next.recovery.attempts + 1 } };
+        return next;
+      }).catch(() => undefined);
+      await store.appendRecoveryHistory('needs-attention', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined);
+      return { decision: { operationId, kind: 'rollback-recommended', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
+    }
+    // 无 trusted snapshot → NEEDS_ATTENTION（SAFE MODE）
+    await store.writeSafeMode(true).catch(() => undefined);
+    const reason = 'opaque APPLYING（空 steps）且 mutation 可能已开始，无 trusted snapshot 可回滚';
+    await store.update(operationId, (cur) => {
+      let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
+      next = { ...next, error: next.error || reason, recovery: { ...next.recovery, reason, attempts: next.recovery.attempts + 1 } };
+      return next;
+    }).catch(() => undefined);
+    await store.appendRecoveryHistory('needs-attention', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined);
+    return { decision: { operationId, kind: 'needs-attention', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
+  }
 
   // 决策
   if (allDoneConfirmed && !anyUnprovable) {

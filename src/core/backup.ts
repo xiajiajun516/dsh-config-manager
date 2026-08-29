@@ -14,7 +14,7 @@ import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
   ConfigAdapter, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
-  SnapshotEntry, SnapshotStatus, SnapshotStore, SnapshotTarget,
+  SnapshotEntry, SnapshotManifest, SnapshotStatus, SnapshotStore, SnapshotTarget,
 } from './types.ts';
 
 /** 导入将实际写入的目标 kinds（这些项才需要快照） */
@@ -103,6 +103,11 @@ export interface CreateSnapshotOptions {
   sourceZip: string;
   store: SnapshotStore;
   adapters: ConfigAdapter[];
+  /** Phase 4：operation-bound binding（journal.operationId / environmentFingerprint / ownerInstanceId / operationType） */
+  operationId?: string;
+  operationType?: string;
+  environmentFingerprint?: string;
+  ownerInstanceId?: string;
 }
 
 /** 从计划中收集将被写入的 target（去重） */
@@ -253,6 +258,11 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
     status: 'pending',
     beforePlugins,
     hostFileBackups,
+    // Phase 4：operation-bound binding（journal ↔ snapshot 双向一致）
+    ...(opts.operationId !== undefined ? { operationId: opts.operationId } : {}),
+    ...(opts.operationType !== undefined ? { operationType: opts.operationType } : {}),
+    ...(opts.environmentFingerprint !== undefined ? { environmentFingerprint: opts.environmentFingerprint } : {}),
+    ...(opts.ownerInstanceId !== undefined ? { ownerInstanceId: opts.ownerInstanceId } : {}),
   };
   // file 条目登记 snapshotId，回滚读 blob 时定位快照目录
   for (const entry of snapshot.entries) {
@@ -281,6 +291,12 @@ export function selectPruneCandidates(
 export interface FileSnapshotStoreOptions {
   /** 快照根目录（宿主决定，如 ~/.dsh/dsh-config-manager/snapshots） */
   dir: string;
+  /**
+   * Phase 4 F3：可恢复 / 未收敛 journal 引用的 snapshotId 集合提供者。
+   * prune 必须豁免这些 snapshot（绝不可删被 recovery 引用的回滚点）。
+   * 缺省 = 空集合（不豁免）。宿主注入 JournalStore.listReferencedSnapshotIds。
+   */
+  referencedSnapshotIds?: () => Promise<Set<string>>;
 }
 
 /** 文件快照存储：<dir>/<id>/snapshot.json + <dir>/<id>/blobs/* */
@@ -298,23 +314,55 @@ export class FileSnapshotStore implements SnapshotStore {
   async save(snapshot: Snapshot, blobs: Map<string, Uint8Array> = new Map()): Promise<string> {
     const dir = this.snapshotDir(snapshot.id);
     await fs.mkdir(path.join(dir, 'blobs'), { recursive: true });
+    // 1) 写 blobs
     for (const [blobPath, data] of blobs) {
       const target = path.join(dir, blobPath);
       if (!target.startsWith(dir)) throw new Error(`快照 blob 路径越界: ${blobPath}`);
       await fs.mkdir(path.dirname(target), { recursive: true });
       await atomicWriteFile(target, data);
     }
-    await atomicWriteFile(path.join(dir, 'snapshot.json'), JSON.stringify(snapshot, null, 2));
-    await this.prune();
+    // 2) 写 snapshot.json（readiness='CREATING'，未完成不可用）
+    const creating = { ...snapshot, readiness: 'CREATING' as const };
+    await atomicWriteFile(path.join(dir, 'snapshot.json'), JSON.stringify(creating, null, 2));
+    // 3) 写 manifest（blob hashes + 破坏性内容 hash；metadataHash 稳定，不含 readiness/status）
+    const blobHashes: Record<string, string> = {};
+    for (const [blobPath, data] of blobs) {
+      blobHashes[blobPath] = sha256Hex(data);
+    }
+    const manifest: SnapshotManifest = {
+      schemaVersion: 1,
+      snapshotId: snapshot.id,
+      entryCount: snapshot.entries.length,
+      blobHashes,
+      metadataHash: computeMetadataHash(snapshot),
+    };
+    await atomicWriteFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    // 4) 验证（从磁盘重读，不信任内存对象）
+    const verified = await verifySnapshot(this.options.dir, snapshot.id);
+    if (!verified.ok) {
+      throw new Error(`快照 ${snapshot.id} 验证失败: ${verified.reason}`);
+    }
+    // 5) 原子发布 READY（重写 snapshot.json readiness='READY'；metadataHash 稳定不受影响）
+    const ready = { ...snapshot, readiness: 'READY' as const };
+    await atomicWriteFile(path.join(dir, 'snapshot.json'), JSON.stringify(ready, null, 2));
+    // 6) 保留清理（F13：prune 失败不中止已 durable 的 READY 快照——日志记录，upgrade 可继续）
+    try {
+      await this.prune();
+    } catch (err) {
+      // 快照已 READY + verified；prune 失败（EBUSY/EPERM）不应把刚成功的快照判为 unusable
+    }
     return snapshot.id;
   }
 
   /** 保留清理：扫描快照根目录，超限时删除最旧快照目录（损坏/非快照目录跳过；目录缺失容错）。
  *  P1-⑧：置顶（pinned=true）的快照豁免自动清理——用户显式保留的导入前回滚点不得被
- *  自动淘汰，只能手动删除（deleteSnapshot）。 */
+ *  自动淘汰，只能手动删除（deleteSnapshot）。
+ *  Phase 4 F3：被 active/quarantine 未收敛 journal 引用的 snapshot（recovery 回滚点）
+ *  必须豁免——引用提供者（referencedSnapshotIds）返回的 id 绝不自动清理。 */
   private async prune(): Promise<void> {
     const dir = this.options.dir;
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    const referenced = await this.options.referencedSnapshotIds?.().catch(() => new Set<string>()) ?? new Set<string>();
     const metas: { id: string; createdAt: string }[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -322,6 +370,7 @@ export class FileSnapshotStore implements SnapshotStore {
         const parsed = parseJsonSafe(await fs.readFile(path.join(dir, entry.name, 'snapshot.json'), 'utf8')) as Snapshot;
         if (typeof parsed.id !== 'string' || parsed.id === '' || typeof parsed.createdAt !== 'string') continue;
         if (parsed.pinned === true) continue; // 置顶快照豁免自动清理
+        if (referenced.has(parsed.id)) continue; // Phase 4 F3：recovery 引用豁免
         metas.push({ id: parsed.id, createdAt: parsed.createdAt });
       } catch {
         // 损坏 / 非快照目录：跳过（与 listSnapshots 语义一致）
@@ -353,4 +402,77 @@ export class FileSnapshotStore implements SnapshotStore {
     snapshot.status = status;
     await atomicWriteFile(file, JSON.stringify(snapshot, null, 2));
   }
+}
+
+/* ---------------- Phase 4：manifest / verifySnapshot（F1） ---------------- */
+
+/**
+ * 破坏性内容 hash（稳定，不含 readiness/status）：entries + hostFileBackups + beforePlugins。
+ * READY 发布与 status 更新不改变此 hash（B-P1-1 修复）。
+ */
+export function computeMetadataHash(snapshot: Snapshot): string {
+  const destructive = {
+    entries: snapshot.entries,
+    hostFileBackups: snapshot.hostFileBackups ?? [],
+    beforePlugins: snapshot.beforePlugins ?? [],
+  };
+  return sha256Hex(new TextEncoder().encode(JSON.stringify(destructive)));
+}
+
+export interface SnapshotVerifyResult {
+  ok: boolean;
+  reason?: string;
+}
+
+/**
+ * 从磁盘重读并验证快照（F1）：id 合法 + snapshot.json 存在 + manifest 存在 + blob hashes 匹配 +
+ * metadataHash 匹配 + 必要 blobs 存在 + 路径安全。不信任内存对象。
+ */
+export async function verifySnapshot(snapshotsDir: string, id: string): Promise<SnapshotVerifyResult> {
+  const dir = path.join(snapshotsDir, id);
+  if (!dir.startsWith(path.resolve(snapshotsDir) + path.sep)) {
+    return { ok: false, reason: '快照路径越界' };
+  }
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(dir, 'snapshot.json'), 'utf8');
+  } catch {
+    return { ok: false, reason: 'snapshot.json 缺失' };
+  }
+  const snapshot = parseJsonSafe(raw) as Snapshot;
+  if (snapshot === null || typeof snapshot !== 'object' || typeof snapshot.id !== 'string' || snapshot.id === '') {
+    return { ok: false, reason: 'snapshot.json 非法' };
+  }
+  if (snapshot.id !== id) {
+    return { ok: false, reason: 'snapshot.id 与目录不匹配' };
+  }
+  let manifestRaw: string;
+  try {
+    manifestRaw = await fs.readFile(path.join(dir, 'manifest.json'), 'utf8');
+  } catch {
+    return { ok: false, reason: 'manifest.json 缺失' };
+  }
+  const manifest = parseJsonSafe(manifestRaw) as SnapshotManifest;
+  if (manifest === null || typeof manifest !== 'object' || manifest.snapshotId !== id) {
+    return { ok: false, reason: 'manifest 非法或 snapshotId 不匹配' };
+  }
+  // metadataHash 匹配（破坏性内容）
+  if (computeMetadataHash(snapshot) !== manifest.metadataHash) {
+    return { ok: false, reason: 'metadataHash 不匹配（破坏性内容被篡改）' };
+  }
+  // blob hashes 匹配 + 存在
+  for (const [blobPath, expectedHash] of Object.entries(manifest.blobHashes)) {
+    const target = path.join(dir, blobPath);
+    if (!target.startsWith(dir)) return { ok: false, reason: `blob 路径越界: ${blobPath}` };
+    let data: Uint8Array;
+    try {
+      data = await fs.readFile(target);
+    } catch {
+      return { ok: false, reason: `blob 缺失: ${blobPath}` };
+    }
+    if (sha256Hex(data) !== expectedHash) {
+      return { ok: false, reason: `blob hash 不匹配: ${blobPath}` };
+    }
+  }
+  return { ok: true };
 }

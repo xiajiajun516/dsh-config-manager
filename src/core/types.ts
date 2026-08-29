@@ -311,6 +311,20 @@ export interface SnapshotEntry {
 /** 快照生命周期状态（M1 增强；旧快照无此字段，视为未知/兼容） */
 export type SnapshotStatus = 'pending' | 'done' | 'rolled-back';
 
+/** 快照 readiness（Phase 4）：CREATING = 未完成不可用；READY = 已验证可恢复。旧快照无此字段 → LEGACY。 */
+export type SnapshotReadiness = 'CREATING' | 'READY';
+
+/** 快照完整性 manifest（Phase 4，F1）：blob hashes + 破坏性内容 hash。 */
+export interface SnapshotManifest {
+  schemaVersion: number;
+  snapshotId: string;
+  entryCount: number;
+  /** blobPath → sha256（blob 完整性） */
+  blobHashes: Record<string, string>;
+  /** 破坏性内容（entries + hostFileBackups + beforePlugins）的 sha256；稳定（不含 readiness/status） */
+  metadataHash: string;
+}
+
 /** 宿主整文件备份登记（M1）：导入前对 $DSH_HOME 关键文件的整文件快照。
  * relPath 相对 $DSH_HOME（如 settings.yaml / cordis.patch.yml / profiles/<p>/cordis.patch.yml），
  * blobPath 为快照内 blob 路径（existed=false 时为空串，表示该文件当时不存在）。 */
@@ -333,6 +347,19 @@ export interface Snapshot {
   hostFileBackups?: HostFileBackup[];
   /** 置顶标记（P1-⑧）：置顶快照在保留清理（自动删最旧）中豁免，需用户手动删除 */
   pinned?: boolean;
+  // ---- Phase 4 新增（F1：operation-bound + integrity + readiness）----
+  /** 绑定 upgrade operation（journal.operationId ↔ snapshot.operationId） */
+  operationId?: string;
+  /** 来源操作类型（import/profile-switch/sync-apply/reinstall） */
+  operationType?: string;
+  /** 环境绑定（journal.environmentFingerprint ↔ snapshot.environmentFingerprint） */
+  environmentFingerprint?: string;
+  /** ownership epoch（journal.ownerInstanceId ↔ snapshot.ownerInstanceId） */
+  ownerInstanceId?: string;
+  /** readiness：CREATING = 未完成不可用；READY = 已验证可恢复。旧快照缺省 → LEGACY */
+  readiness?: SnapshotReadiness;
+  /** 完整性 manifest（blob hashes + 破坏性内容 hash） */
+  manifest?: SnapshotManifest;
 }
 
 /** 快照存储（默认文件实现见 core/backup.ts；测试可用内存实现） */

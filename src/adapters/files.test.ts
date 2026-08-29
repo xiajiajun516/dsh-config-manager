@@ -9,6 +9,7 @@ import { AgentPresetsAdapter } from './agent-presets.ts';
 import { AgentInstructionsAdapter } from './agent-instructions.ts';
 import { PluginFilesAdapter } from './plugin-files.ts';
 import { SessionsAdapter } from './sessions.ts';
+import { SelfAdapter } from './self.ts';
 import { makeContext, makeImportContext, sha256Hex } from './test-helpers.ts';
 import type { PlanItem } from '../core/types.ts';
 
@@ -191,4 +192,108 @@ test('文件类 validate', async () => {
   const adapter = new SkillsAdapter();
   assert.equal((await adapter.validate({ version: 1, files: [] })).valid, true);
   assert.equal((await adapter.validate({ version: 1, files: [{ relativePath: '' } as never] })).valid, false);
+});
+
+// ---------- F23：不可信 import 不得写内部 control-plane namespace ----------
+
+test('F23: pluginFiles 拒绝写内部 recovery/control-plane 保留区（快照/事务/锁）', async () => {
+  const adapter = new PluginFilesAdapter();
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  const malicious = [
+    'dsh-config-manager/snapshots/fake/snapshot.json',
+    'dsh-config-manager/snapshots/fake/blob-1',
+    'dsh-config-manager/transactions/active/x.json',
+    'dsh-config-manager/transactions/safe-mode',
+    'dsh-config-manager/locks/environment.lock',
+    'dsh-config-manager/environment-fingerprint.token',
+  ];
+  // 攻击者构造 ZIP 数据：把普通插件文件条目映射到内部 recovery 存储
+  const data = {
+    version: 1 as const,
+    files: malicious.map((relativePath) => ({
+      relativePath,
+      data: Buffer.from('{}', 'utf8'),
+      contentHash: sha256Hex(Buffer.from('{}')),
+    })),
+  };
+  const sections = new Map([['pluginFiles', data]]);
+  const ctx = makeImportContext(src, sections);
+  const items = await adapter.analyzeImport(data, ctx);
+  for (const item of items) {
+    assert.equal(item.kind, 'Error', `analyzeImport 应拒绝 ${item.target?.ref ?? item.description}`);
+    const r = await adapter.applyItem(item, ctx);
+    assert.equal(r.ok, false, `applyItem 应拒绝 ${item.target?.ref ?? item.description}`);
+  }
+  // 纵深防御：应用阶段直接命中保留区也必须拒绝（即使 analyzeImport 被绕过）
+  for (const rel of malicious) {
+    const r = await adapter.applyItem(
+      { id: `x:${rel}`, kind: 'Create', adapter: 'pluginFiles', description: rel, severity: 'info', target: { adapter: 'pluginFiles', ref: rel } } as PlanItem,
+      ctx,
+    );
+    assert.equal(r.ok, false, `applyItem 直接命中 ${rel} 应拒绝`);
+  }
+  // 关键：不得真正写入 control-plane 存储
+  for (const rel of malicious) {
+    assert.equal(await src.fs.exists(rel), false, `不得写入保留路径 ${rel}`);
+  }
+});
+
+test('F23: self adapter 拒绝写内部 recovery/control-plane 保留区（但放行合法配置）', async () => {
+  const adapter = new SelfAdapter('dsh-config-manager');
+  const dst = makeContext('linux', '/home/bob');
+  // 合法：sync-config.json 是 self 白名单配置，必须放行
+  const legitFiles = [
+    'sync/sync-config.json',
+    'sync/sync-selection.json',
+    'sync/ui-prefs.json',
+    'sync/backup-schedule.json',
+    'market/market-config.json',
+    'exports/.backup-notes.json',
+  ];
+  const legitData = {
+    version: 1 as const,
+    files: legitFiles.map((relativePath) => ({
+      relativePath,
+      data: Buffer.from('{}', 'utf8'),
+      contentHash: sha256Hex(Buffer.from('{}')),
+    })),
+  };
+  const legitSections = new Map([['self', legitData]]);
+  const legitCtx = makeImportContext(dst, legitSections);
+  const legitItems = await adapter.analyzeImport(legitData, legitCtx);
+  assert.ok(legitItems.every((i) => i.kind !== 'Error'), '合法 self 配置不得被保留区误伤');
+  for (const item of legitItems) {
+    const r = await adapter.applyItem(item, legitCtx);
+    if (r.ok === false) continue; // 同名冲突等非 F23 因素允许
+  }
+
+  // 恶意：把条目映射到内部 recovery 存储
+  const malicious = [
+    'snapshots/fake/snapshot.json',
+    'transactions/active/x.json',
+    'locks/environment.lock',
+    'sync/snapshots/fake/manifest.json', // sync rollback snapshot store
+    'sync/work/tmp.zip',
+  ];
+  const evilData = {
+    version: 1 as const,
+    files: malicious.map((relativePath) => ({
+      relativePath,
+      data: Buffer.from('{}', 'utf8'),
+      contentHash: sha256Hex(Buffer.from('{}')),
+    })),
+  };
+  const evilSections = new Map([['self', evilData]]);
+  const evilCtx = makeImportContext(dst, evilSections);
+  const evilItems = await adapter.analyzeImport(evilData, evilCtx);
+  assert.equal(evilItems.length, malicious.length);
+  for (const item of evilItems) {
+    assert.equal(item.kind, 'Error', `self analyzeImport 应拒绝 ${item.target?.ref ?? item.description}`);
+    const r = await adapter.applyItem(item, evilCtx);
+    assert.equal(r.ok, false);
+  }
+  const resolved = malicious.map((rel) => `dsh-config-manager/${rel}`);
+  for (const rel of resolved) {
+    assert.equal(await dst.fs.exists(rel), false, `不得写入保留路径 ${rel}`);
+  }
 });

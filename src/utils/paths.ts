@@ -60,6 +60,36 @@ export function isSameOrChild(p: string, parent: string): boolean {
 }
 
 /**
+ * 内部 control-plane namespace（F23 修复）：不可信 import（pluginFiles/self/file adapters）
+ * 不得把普通 config/file item 映射到这些 recovery storage 目录。
+ * 相对 homeDir 的路径（正斜杠归一）命中任一前缀 → 拒绝。
+ */
+const RESERVED_INTERNAL_PREFIXES: readonly string[] = [
+  'dsh-config-manager/snapshots/',
+  'dsh-config-manager/transactions/',
+  'dsh-config-manager/locks/',
+  'dsh-config-manager/safe-mode',
+  'dsh-config-manager/recovery-history/',
+  'dsh-config-manager/environment-fingerprint.token',
+  // sync recovery/transient 内部（sync rollback snapshot store + work 临时目录；F23 投毒链闭合）。
+  // 注意：不得整段保留 dsh-config-manager/sync/ —— self 分区合法持有 sync/*.json 白名单配置
+  //（sync-config / sync-selection / ui-prefs / backup-schedule），会误伤。
+  'dsh-config-manager/sync/snapshots/',
+  'dsh-config-manager/sync/work/',
+];
+
+/** 判断相对 homeDir 的路径是否落在内部 control-plane namespace（F23 投毒防护）。
+ *  大小写不敏感（Windows 文件系统大小写不敏感，防 `DSh-Config-Manager/...` 绕过）。 */
+export function isReservedInternalRel(relPath: string): boolean {
+  const norm = normalizePath(relPath).toLowerCase();
+  if (norm === '') return false;
+  for (const prefix of RESERVED_INTERNAL_PREFIXES) {
+    if (norm === prefix || norm.startsWith(prefix)) return true;
+  }
+  return false;
+}
+
+/**
  * 前缀批量映射（规范 §12）：把对象内所有字符串值中匹配 oldPrefix 的路径
  * 替换为 newPrefix（路径感知：必须落在段边界）。返回新对象（不改原对象）。
  */

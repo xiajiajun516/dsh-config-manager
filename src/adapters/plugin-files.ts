@@ -8,7 +8,7 @@
  */
 import { sha256Hex } from '../utils/hashing.ts';
 import { zhMsg } from '../core/messages.ts';
-import { isPathSafe } from '../utils/paths.ts';
+import { isPathSafe, isReservedInternalRel } from '../utils/paths.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection } from '../schema/types.ts';
 import type {
@@ -79,6 +79,14 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
     const items: PlanItem[] = [];
     for (const file of data.files) {
       const id = `pluginFile:${file.relativePath}`;
+      // F23 修复：不可信 import 不得写内部 control-plane namespace（snapshots/transactions/locks/safe-mode）
+      if (isReservedInternalRel(file.relativePath)) {
+        items.push({
+          id, kind: 'Error', adapter: 'pluginFiles',
+          description: msg('adapter.pluginFileReserved', { path: file.relativePath }), severity: 'error',
+        });
+        continue;
+      }
       let current: Uint8Array | null = null;
       try {
         current = await ctx.target.fs.readFile(file.relativePath);
@@ -107,6 +115,10 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
     const ref = item.target?.ref;
     if (!ref) return { ok: false, message: ctx.msg('adapter.missingTargetRef') };
+    // F23 修复：apply 前拒绝写内部 control-plane namespace（纵深防御，analyzeImport 已标 Error）
+    if (isReservedInternalRel(ref)) {
+      return { ok: false, message: ctx.msg('adapter.pluginFileReserved', { path: ref }) };
+    }
     const data = ctx.sections.get('pluginFiles') as FilesSection | undefined;
     const file = data?.files.find((f) => f.relativePath === ref);
     if (!file) return { ok: false, message: ctx.msg('adapter.dataMissingFile', { ref }) };

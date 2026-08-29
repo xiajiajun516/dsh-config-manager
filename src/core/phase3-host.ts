@@ -192,6 +192,10 @@ export class Phase3Recovery {
       let snapId: string | null = null;
       if (snapshotProvider !== undefined) {
         snapId = await snapshotProvider();
+        // P1-2 修复：snapshotProvider 返回 null 表示快照创建失败 → 显式 abort（不得在无快照下继续 mutation）
+        if (snapId === null) {
+          throw new Error(`snapshotProvider 返回 null（快照创建失败），abort operation ${operationType}`);
+        }
         await this.store.update(opId, (j) => transitionJournalState({ ...j, snapshotId: snapId }, 'SNAPSHOT_CREATED')).catch(() => undefined);
       } else {
         await this.store.update(opId, (j) => transitionJournalState(j, 'APPLYING'));

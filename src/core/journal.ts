@@ -384,6 +384,30 @@ export class JournalStore {
     return names.sort();
   }
 
+  /**
+   * 收集已被「可恢复 / 未收敛 journal」引用的 snapshotId（Phase 4 F3 prune 保护）：
+   * 扫描 active/ + quarantine/ 下的 journal，凡 state 非 COMMITTED（即可能仍需 recovery /
+   * NEEDS_ATTENTION / ROLLING_BACK / RECOVERY_REQUIRED / 非终态）且 snapshotId 合法
+   * → 收集。返回 Set<string>。COMMITTED 的 snapshot 已消费，不保护（可被 retention 淘汰）。
+   * 该集合用于 FileSnapshotStore.prune 豁免 —— 引用的 recovery snapshot 绝不可被自动淘汰。
+   */
+  async listReferencedSnapshotIds(): Promise<Set<string>> {
+    const out = new Set<string>();
+    const dirs = [this.activeDir(), this.quarantineDir()];
+    for (const dir of dirs) {
+      for (const name of await this.io.readdirNames(dir)) {
+        if (!isJournalBasename(name)) continue;
+        const text = await this.io.readFileText(path.join(dir, name)).catch(() => null);
+        if (text === null) continue;
+        const j = parseSafe(text);
+        if (j === null) continue;
+        if (j.state === 'COMMITTED') continue; // 已消费，不保护
+        if (typeof j.snapshotId === 'string' && j.snapshotId !== '') out.add(j.snapshotId);
+      }
+    }
+    return out;
+  }
+
   // ---------- SAFE MODE ----------
 
   /** 读 SAFE MODE（RECOVERY_REQUIRED / NEEDS_ATTENTION）持久标记。存在且内容为 blocked → true。 */

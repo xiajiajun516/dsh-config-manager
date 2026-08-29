@@ -9,6 +9,7 @@
  */
 import path from 'node:path';
 import { sha256Hex } from '../utils/hashing.ts';
+import { isReservedInternalRel, normalizePath } from '../utils/paths.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection, SectionId } from '../schema/types.ts';
@@ -53,6 +54,16 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
     const items: PlanItem[] = [];
     for (const file of data.files) {
       const id = `${this.id}:${file.relativePath}`;
+      // F23 修复：不可信 import 不得写内部 control-plane namespace。
+      // 检查 baseDir+ref 解析后的 homeDir 相对路径（self 适配器 baseDir='dsh-config-manager' 是主投毒向量）。
+      const resolvedRel = normalizePath(path.join(this.baseDir, file.relativePath));
+      if (isReservedInternalRel(resolvedRel)) {
+        items.push({
+          id, kind: 'Error', adapter: this.id,
+          description: msg('adapter.fileReserved', { path: file.relativePath }), severity: 'error',
+        });
+        continue;
+      }
       let current: Uint8Array | null = null;
       try {
         current = await ctx.target.fs.readFile(path.join(this.baseDir, file.relativePath));
@@ -82,6 +93,11 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
     const msg = ctx.msg;
     const ref = item.target?.ref;
     if (!ref) return { ok: false, message: msg('adapter.missingTargetRef') };
+    // F23 修复：apply 前拒绝写内部 control-plane namespace（纵深防御，analyzeImport 已标 Error）
+    const resolvedRel = normalizePath(path.join(this.baseDir, ref));
+    if (isReservedInternalRel(resolvedRel)) {
+      return { ok: false, message: msg('adapter.fileReserved', { path: ref }) };
+    }
     const data = ctx.sections.get(this.id) as FilesSection | undefined;
     const file = data?.files.find((f) => f.relativePath === ref);
     if (!file) return { ok: false, message: msg('adapter.dataMissingFile', { ref }) };

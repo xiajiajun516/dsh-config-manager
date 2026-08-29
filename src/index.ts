@@ -1412,7 +1412,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const makeImporter = (): Importer => new Importer({
     ctx: host,
     adapters,
-    snapshotStore: new FileSnapshotStore({ dir: snapshotsDir }),
+    snapshotStore: new FileSnapshotStore({
+      dir: snapshotsDir,
+      // Phase 4 F3：active/quarantine 未收敛 journal 引用的 snapshot 绝不自动 prune
+      referencedSnapshotIds: () => host.phase3Recovery?.store.listReferencedSnapshotIds() ?? Promise.resolve(new Set<string>()),
+    }),
     parseZipOverride: createHardenedZipParser(),
     dependencyChecker: dependencyAvailable,
     msg,
@@ -1423,7 +1427,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     dataDir,
     ctx: host,
     adapters,
-    snapshotStore: new FileSnapshotStore({ dir: snapshotsDir }),
+    snapshotStore: new FileSnapshotStore({
+      dir: snapshotsDir,
+      // Phase 4 F3：recovery 引用保护
+      referencedSnapshotIds: () => host.phase3Recovery?.store.listReferencedSnapshotIds() ?? Promise.resolve(new Set<string>()),
+    }),
   })
 
   /** Fence + method guard (mirrors dsh-ssh). */

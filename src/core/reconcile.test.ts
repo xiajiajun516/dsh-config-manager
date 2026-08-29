@@ -194,3 +194,40 @@ test('reconcile 幂等：重复运行稳定，不重复副作用', async (t) => 
   assert.deepEqual(await store.scanActive(), []);
   assert.equal((await store.load(id))?.state, 'RECOVERED');
 });
+
+// ---------- F20：空 steps（opaque intent journal）不得判 RECOVERED ----------
+
+test('F20：APPLYING + 空 steps + 无 snapshot → NEEDS_ATTENTION（非 RECOVERED）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000cc';
+  const j = op(id, 'APPLYING'); // 默认 plannedSteps=[] steps={} snapshotId=null
+  await store.create(j);
+  const out = await reconcileActive(store, hooks(), env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention', '空 steps + APPLYING 不得判 recovered/noop');
+  assert.equal(out.safeModeRequired, true);
+  assert.equal((await store.load(id))?.state, 'NEEDS_ATTENTION');
+});
+
+test('F20：APPLYING + 空 steps + trusted snapshot → rollback-recommended', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000cd';
+  const j = op(id, 'APPLYING'); j.snapshotId = 'snap-1';
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.equal(out.decisions[0]!.kind, 'rollback-recommended', '有 trusted snapshot 应推荐回滚');
+  assert.equal(out.safeModeRequired, true);
+});
+
+test('F20：CREATED + 空 steps → noop（mutation 未开始，安全）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000ce';
+  const j = op(id, 'CREATED'); // 默认空 steps
+  await store.create(j);
+  const out = await reconcileActive(store, hooks(), env);
+  assert.equal(out.decisions[0]!.kind, 'noop', 'CREATED + 空 steps 无 mutation，安全 noop');
+  assert.equal(out.safeModeRequired, false);
+  assert.equal((await store.load(id))?.state, 'RECOVERED');
+});
