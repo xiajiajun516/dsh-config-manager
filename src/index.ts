@@ -79,6 +79,8 @@ import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
+import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from './utils/env-lock.ts'
+import type { MutationLockPort } from './utils/env-lock.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
@@ -830,6 +832,8 @@ class ConfigManagerHostContext implements HostContext {
   readonly workspace: WorkspaceFacade
   readonly patchFile: PatchFileFacade
   readonly fs: FileSystemFacade
+  /** Phase 2 跨进程环境锁端口（宿主注入；测试 mock 不注入 → 无锁环境） */
+  mutationLock?: MutationLockPort
 
   constructor(ctx: Context, homeDir: string, profile: string) {
     this.homeDir = homeDir
@@ -1429,6 +1433,29 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     return true
   }
 
+  /**
+   * Phase 2 跨进程锁路由门（destructive 公共入口）。
+   * 包裹一个 mutation handler：进入前 acquire GLOBAL 环境锁（无 lock 配置 → 直接放行），
+   * 被另一进程/操作持有（含同进程另一操作）→ 409/423 拒绝；执行后 finally 释放。
+   * 嵌套调用（rollback / applyItems 内部 executeImportPlan）在外层已持锁区域内运行，绝不 reacquire。
+   */
+  const withMutationGate = (
+    op: string,
+    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+  ): ((req: IncomingMessage, res: ServerResponse) => Promise<void>) => {
+    return async (req, res) => {
+      try {
+        await runWithMutationLock(host.mutationLock, { op }, async () => { await handler(req, res) })
+      } catch (error) {
+        if (error instanceof EnvironmentLockUnavailableError) {
+          writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+          return
+        }
+        throw error
+      }
+    }
+  }
+
   // ------------------------------------------------- sync 路由装配（m-sync-ui）
   // 请求级装配：每次 push/pull 从请求体取 repoUrl，token 非空先写入 DSH
   // credentials（只存值不落盘同步文件/日志），git 网络操作时经 resolve 现取 ——
@@ -1550,6 +1577,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     makeSyncEngine,
     msg,
     runs,
+    mutationLock: host.mutationLock,
   })
   // 启动：读 autosync-config；若 enabled 启动定时器；无条件执行一次「启动触发下载合并」（受阈值约束）
   scheduler.start()
@@ -2091,7 +2119,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.execute,
-      handler: async (req, res) => {
+      handler: withMutationGate('import-apply', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
@@ -2175,7 +2203,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } finally {
           runAbortControllers.delete(runId)
         }
-      },
+      }),
     },
     // -------------------------------------------------- execute/skip
     // 用户跳过当前计划项（导入中，目前仅插件安装）：abort 当前项的中止控制器 → 引擎
@@ -2251,39 +2279,46 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             writeJson(res, 200, { dryRun: true, plan: await planRestore(restoreOpts) })
             return
           }
-          // 真实执行：先登记 run（同 kind running → 409 拒绝重复恢复）
-          let run: RunState
-          try {
-            run = runs.register('restore')
-          } catch (error) {
-            writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
-            return
-          }
-          const runId = run.runId
-          try {
-            const plan = await planRestore(restoreOpts)
-            const report = await executeRestorePlan(
-              plan,
-              makeRestoreExecutor(snapshotDir, host, host.profile),
-              // m1 埋点：每执行一个恢复动作实时更新 run 状态（/progress 轮询可见）
-              (info) => {
-                runs.update(runId, {
-                  section: 'restore',
-                  item: info.index,
-                  itemTotal: info.total,
-                  detail: info.detail,
-                })
-              },
-            )
-            runs.finish(runId, report)
-            writeJson(res, 200, { dryRun: false, report, runId })
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            runs.fail(runId, message)
-            writeJson(res, 400, { error: message, runId })
-          }
+          // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
+          await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId }, async () => {
+            // 先登记 run（同 kind running → 409 拒绝重复恢复）
+            let run: RunState
+            try {
+              run = runs.register('restore')
+            } catch (error) {
+              writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+              return
+            }
+            const runId = run.runId
+            try {
+              const plan = await planRestore(restoreOpts)
+              const report = await executeRestorePlan(
+                plan,
+                makeRestoreExecutor(snapshotDir, host, host.profile),
+                // m1 埋点：每执行一个恢复动作实时更新 run 状态（/progress 轮询可见）
+                (info) => {
+                  runs.update(runId, {
+                    section: 'restore',
+                    item: info.index,
+                    itemTotal: info.total,
+                    detail: info.detail,
+                  })
+                },
+              )
+              runs.finish(runId, report)
+              writeJson(res, 200, { dryRun: false, report, runId })
+            } catch (error) {
+              const message = error instanceof Error ? error.message : String(error)
+              runs.fail(runId, message)
+              writeJson(res, 400, { error: message, runId })
+            }
+          })
         } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          if (error instanceof EnvironmentLockUnavailableError) {
+            writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+          } else {
+            writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          }
         }
       },
     },
@@ -2294,7 +2329,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.snapshotDelete,
-      handler: async (req, res) => {
+      handler: withMutationGate('snapshot-delete', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         try {
           const body = await readJsonBody(req)
@@ -2310,7 +2345,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
+      }),
     },
     // --------------------------------------------- snapshots/pin（P1-⑧）
     // 置顶/取消置顶快照：置顶快照豁免「最多保留 N 个」的自动清理（只能手动删除）。
@@ -2318,7 +2353,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.snapshotPin,
-      handler: async (req, res) => {
+      handler: withMutationGate('snapshot-pin', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         try {
           const body = await readJsonBody(req)
@@ -2336,7 +2371,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const message = error instanceof Error ? error.message : String(error)
           writeJson(res, 404, { error: message })
         }
-      },
+      }),
     },
     // -------------------------------------------------- m-profiles
     // 配置档案（Profile）：保存当前 DSH 配置为多套可切换快照（Work/Personal…）。
@@ -2384,7 +2419,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.profilesDelete,
-      handler: async (req, res) => {
+      handler: withMutationGate('profile-delete', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         const name = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)['name'] : undefined
@@ -2398,12 +2433,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
+      }),
     },
     {
       kind: 'exact',
       path: API.profilesRename,
-      handler: async (req, res) => {
+      handler: withMutationGate('profile-rename', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2422,7 +2457,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
+      }),
     },
     {
       kind: 'exact',
@@ -2446,7 +2481,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.profilesExecuteSwitch,
-      handler: async (req, res) => {
+      handler: withMutationGate('profile-switch', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2496,12 +2531,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             writeJson(res, 400, { error: message, runId })
           }
         }
-      },
+      }),
     },
     {
       kind: 'exact',
       path: API.profilesImport,
-      handler: async (req, res) => {
+      handler: withMutationGate('profile-import', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2525,7 +2560,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } finally {
           await fs.rm(staged, { force: true }).catch(() => undefined)
         }
-      },
+      }),
     },
     // -------------------------------------------------- backup-schedule
     // 定时全量备份设置（GET 读 / PUT 存 sync/backup-schedule.json；无敏感字段）：
@@ -2604,7 +2639,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.backupFilesDelete,
-      handler: async (req, res) => {
+      handler: withMutationGate('backup-file-delete', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         try {
           const body = await readJsonBody(req)
@@ -2620,7 +2655,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
+      }),
     },
     // ------------------------------------------------------ sync/status
     // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
@@ -2804,7 +2839,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.syncPush,
-      handler: async (req, res) => {
+      handler: withMutationGate('sync-push', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2851,7 +2886,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeSyncRouteError(res, error)
         }
-      },
+      }),
     },
     // ------------------------------------------------------ sync/pull
     // m-sync-ui：拉取差异预览（只读：list/download → 转临时 ZIP → Importer 分析出计划摘要）。
@@ -3200,7 +3235,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.syncApplyItems,
-      handler: async (req, res) => {
+      handler: withMutationGate('sync-apply', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -3275,7 +3310,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeSyncRouteError(res, error)
         }
-      },
+      }),
     },
     // ------------------------------------------------------ sync/cancel
     // m-sync-v2：取消 / 清理差异确认会话（丢弃临时 ZIP，零副作用）。
@@ -3395,7 +3430,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.syncRollback,
-      handler: async (req, res) => {
+      handler: withMutationGate('sync-rollback', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -3415,7 +3450,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
+      }),
     },
     // ---------------------------------------------------- market/status
     // 内置单市场（只读、不可编辑）：恒返回内置仓库摘要。无 add/remove —— 市场绑定内置仓库。
@@ -3893,6 +3928,15 @@ export function apply(ctx: Context, config?: Config): void {
   mkdirSync(marketDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
+  // Phase 2 跨进程环境锁：全局唯一 GLOBAL EXCLUSIVE MUTATION LOCK（<dataDir>/locks/environment.lock）。
+  // 所有 destructive mutation 入口经 runWithMutationLock(host.mutationLock, …) 获取；跨进程/跨 kind 互斥。
+  // 随插件生命周期停止：停止 heartbeat 并清除本进程持有（release 由各入口 finally 保证；这里无需额外清理）。
+  host.mutationLock = new EnvironmentLockManager({
+    dataDir,
+    op: 'config-manager',
+    target: 'global-mutation',
+    lockVersion: PLUGIN_VERSION,
+  })
   // 缓存自动清理：启动即清一次 + 每 24h 定时清一次。
   // 只清「可重建/一次性」缓存与临时文件（tmp 暂存、exports 导出副本、market cache/work），
   // 保留期内的文件不删（供刷新恢复导入/下载等窗口继续消费）；snapshots 与 sync 属用户数据/安全网不动。
@@ -3961,6 +4005,7 @@ export function apply(ctx: Context, config?: Config): void {
     runs: new RunRegistry({ msg: host.msg }),
     msg: host.msg,
     exporterVersion: PLUGIN_VERSION,
+    mutationLock: host.mutationLock,
   })
   const { routes, scheduler, makeSyncEngine } = makeRoutes({
     host,

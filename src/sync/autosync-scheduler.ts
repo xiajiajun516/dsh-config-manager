@@ -33,6 +33,8 @@ import type { MsgFunc } from '../core/messages.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
 import type { SyncEngine } from './sync-engine.ts';
+import type { MutationLockPort } from '../utils/env-lock.ts';
+import { withMutationLock } from '../utils/env-lock.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig } from './sync-config.ts';
@@ -116,6 +118,8 @@ export interface AutoSyncSchedulerOptions {
    * 缺省：若 engine 实现了 hasLocalChanges() 则调用；否则视为 true（保持旧行为=每次都推）。
    */
   detectLocalChange?: (engine: SyncEngine) => Promise<boolean>;
+  /** Phase 2 跨进程环境锁端口（可选注入；缺省无锁环境——自动同步 apply（写本地配置）属 GLOBAL mutation） */
+  mutationLock?: MutationLockPort;
 }
 
 export class AutoSyncScheduler {
@@ -134,6 +138,7 @@ export class AutoSyncScheduler {
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
   private readonly detectRemoteNew: (engine: SyncEngine) => Promise<boolean>;
   private readonly detectLocalChange: (engine: SyncEngine) => Promise<boolean>;
+  private readonly mutationLock: MutationLockPort | undefined;
 
   /** 每通道一个定时器（git/webdav 各自 enabled 时独立排期）。 */
   private readonly timers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
@@ -154,6 +159,7 @@ export class AutoSyncScheduler {
     this.appendHistoryFn = opts.appendHistoryFn ?? ((entry) => appendAutosyncEntry(this.syncDir, entry));
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
+    this.mutationLock = opts.mutationLock;
     this.detectRemoteNew = opts.detectRemoteNew ?? defaultDetectRemoteNew;
     this.detectLocalChange = opts.detectLocalChange ?? defaultDetectLocalChange;
   }
@@ -252,6 +258,27 @@ export class AutoSyncScheduler {
     } catch {
       this.running = false;
       return { status: 'skipped', direction: 'none', skipReason: 'conflict', historyId, consecutiveFailures: cfg.consecutiveFailures };
+    }
+
+    // Phase 2 锁：autosync 的 apply（写本地配置）与 push（写远端+本地散文件）属 GLOBAL mutation。
+    // 获取失败（另一项 DSH 任务进行中）→ skipped(mutation-locked)；成功则在整个 runOnce 持锁并在 finally 释放。
+    // 无锁环境（测试未注入 mutationLock）→ 不锁定，直接执行（与旧行为一致）。
+    let releaseLock: (() => Promise<void>) | null = null;
+    if (this.mutationLock !== undefined) {
+      try {
+        const lk = await withMutationLock(this.mutationLock, { op: 'autosync', target: channel });
+        if (lk.context === null) {
+          this.running = false;
+          return {
+            status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId,
+            consecutiveFailures: cfg.consecutiveFailures,
+          };
+        }
+        releaseLock = lk.release;
+      } catch {
+        this.running = false;
+        return { status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId, consecutiveFailures: cfg.consecutiveFailures };
+      }
     }
 
     try {
@@ -474,6 +501,10 @@ export class AutoSyncScheduler {
         } catch {
           /* 尽力而为：收尾失败不影响同步结果 */
         }
+      }
+      // Phase 2 锁：始终释放（若本次成功获取）
+      if (releaseLock !== null) {
+        await releaseLock().catch(() => { /* 尽力而为 */ });
       }
     }
   }

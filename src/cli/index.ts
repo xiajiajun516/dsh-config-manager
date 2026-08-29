@@ -29,10 +29,11 @@ import {
   REINSTALL_ITEMS, buildReinstallPlan, isWindows,
   type ReinstallPlan, type ReinstallItemId, type ReinstallStep,
 } from '../core/reinstall.ts';
+import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
 
 /* ------------------------------------------------------------ 参数解析（纯函数） */
 
-export type CliCommand = 'snapshots' | 'restore' | 'reinstall' | 'help';
+export type CliCommand = 'snapshots' | 'restore' | 'reinstall' | 'recover-stale-lock' | 'help';
 
 export interface CliOptions {
   command: CliCommand;
@@ -71,15 +72,45 @@ const RESTORE_ONLY_FLAGS = new Set(['--id', '--dry-run', '--profile', '--setting
 /** 仅 reinstall 子命令允许的参数 */
 const REINSTALL_ONLY_FLAGS = new Set(['--yes', '--list', '--wipe-config', '--version']);
 
+/** recover-stale-lock 专用解析：只接受 --data-dir（用于定位 locks 目录），返回 dataDir 选项 */
+function parseCliDataDir(argv: readonly string[]): ParseResult {
+  const options: CliOptions = { command: 'recover-stale-lock', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false };
+  for (let i = 1; i < argv.length; i += 1) {
+    const flag = argv[i]!;
+    if (flag === '--data-dir') {
+      const value = argv[i + 1];
+      if (value === undefined || value === '' || value.startsWith('-')) {
+        return { ok: false, error: '参数 --data-dir 缺少值 / missing value for --data-dir' };
+      }
+      options.dataDir = value;
+      i += 1;
+    } else if (flag.startsWith('--data-dir=')) {
+      options.dataDir = flag.slice('--data-dir='.length);
+      if (options.dataDir === '') return { ok: false, error: '参数 --data-dir 缺少值 / missing value for --data-dir' };
+    } else {
+      return { ok: false, error: `未知参数 / unknown flag: ${flag}` };
+    }
+  }
+  return { ok: true, options };
+}
+
 /** 解析 CLI 参数（纯函数；help 返回 command:'help'，未知/缺值返回错误） */
-export function parseCli(argv: readonly string[]): ParseResult {
-  const command = argv[0];
+export function parseCli(argv: readonly string[]): ParseResult {  const command = argv[0];
   if (command === undefined) return { ok: false, error: '缺少子命令 / missing subcommand' };
   if (command === '--help' || command === '-h' || command === 'help') {
     return { ok: true, options: { command: 'help', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false } };
   }
-  if (command !== 'snapshots' && command !== 'restore' && command !== 'reinstall') {
+  if (command !== 'snapshots' && command !== 'restore' && command !== 'reinstall' && command !== 'recover-stale-lock') {
     return { ok: false, error: `未知子命令 / unknown subcommand: ${command}` };
+  }
+  if (command === 'recover-stale-lock') {
+    // recover-stale-lock：独立显式 recovery，不接受 destructive 执行参数（只能 --data-dir 定位锁目录）
+    for (const flag of argv.slice(1)) {
+      if (flag !== '--data-dir' && !flag.startsWith('--data-dir=') && !flag.startsWith('-')) {
+        return { ok: false, error: `recover-stale-lock 只接受 --data-dir / accepts only --data-dir` };
+      }
+    }
+    return parseCliDataDir(argv);
   }
 
   const options: CliOptions = { command, dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false };
@@ -419,21 +450,38 @@ async function runReinstall(
       return 0;
     }
 
-    // 执行
+    // 执行（Phase 2 锁：reinstall 卸载/清扫/重装属 GLOBAL destructive，必须成功获取环境锁）
+    const lockHome = resolveDshHome(env);
+    const lock = new EnvironmentLockManager({
+      locksDir: path.join(lockHome, 'dsh-config-manager', 'locks'),
+      op: 'cli-reinstall',
+      target: plan.version,
+      lockVersion: '0.1.0',
+    });
     const failed: Array<{ label: string; command: string; reason: string }> = [];
-    io.log(`开始重装 / reinstall started — 版本 ${plan.version}`);
-    for (const step of plan.steps) {
-      if (step.dangerous) {
-        io.log(`⚠ 危险步骤 / dangerous step: ${step.label}`);
+    try {
+      await runWithMutationLock(lock, { op: 'cli-reinstall', target: plan.version }, async () => {
+        io.log(`开始重装 / reinstall started — 版本 ${plan.version}`);
+        for (const step of plan.steps) {
+          if (step.dangerous) {
+            io.log(`⚠ 危险步骤 / dangerous step: ${step.label}`);
+          }
+          try {
+            await exec(step.command);
+            io.log(`✔ ${step.label}`);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            failed.push({ label: step.label, command: step.command, reason });
+            io.error(`✘ ${step.label} — ${reason}`);
+          }
+        }
+      });
+    } catch (err) {
+      if (err instanceof EnvironmentLockUnavailableError) {
+        io.error(`拒绝执行：${err.message}\n另一个 DSH 任务正在进行，请稍后重试。`);
+        return 1;
       }
-      try {
-        await exec(step.command);
-        io.log(`✔ ${step.label}`);
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        failed.push({ label: step.label, command: step.command, reason });
-        io.error(`✘ ${step.label} — ${reason}`);
-      }
+      throw err;
     }
     io.log(failed.length === 0 ? '重装完成 / reinstall done' : `重装完成但有 ${failed.length} 步失败 / done with ${failed.length} failed step(s)`);
     for (const f of failed) {
@@ -473,7 +521,33 @@ export async function runCli(
     return runReinstall(options, io, env, deps);
   }
 
-  const dataDir = resolveDataDir(options.dataDir, env);
+  const lockDataDir = resolveDataDir(options.dataDir, env);
+  const lockHome = resolveDshHome(env);
+
+  // recover-stale-lock：独立显式 recovery（只 inspect + prove stale + 原子回收；不自动、无 --force）。
+  if (options.command === 'recover-stale-lock') {
+    const lock = new EnvironmentLockManager({
+      locksDir: path.join(lockHome, 'dsh-config-manager', 'locks'),
+      op: 'recover-stale-lock',
+      target: lockDataDir,
+      lockVersion: '0.1.0',
+    });
+    const insp = await lock.inspectLockState();
+    if (insp.state !== 'STALE_LOCK_DETECTED' && !(insp.state === 'UNKNOWN_STATE' && insp.detail?.includes('无有效 owner'))) {
+      // 非 stale 或无法证明 → 拒绝 recovery（owner healthy 的活锁绝不删）
+      io.error(`环境锁未判定为 stale（state=${insp.state}），拒绝 recovery。不会触碰活锁。/ lock not stale, recovery refused`);
+      return 1;
+    }
+    const result = await lock.recoverStaleLock();
+    if (result.ok && result.removed) {
+      io.log(`已回收 stale 环境锁 / stale lock recovered: ${result.detail ?? ''}`);
+      return 0;
+    }
+    io.error(`recovery 失败：${result.detail ?? '未知原因'}（可能二次验证失败，已保留 quarantine 文件供诊断）`);
+    return 1;
+  }
+
+  const dataDir = lockDataDir;
 
   if (options.command === 'snapshots') {
     const metas = await listSnapshots(dataDir);
@@ -509,9 +583,25 @@ export async function runCli(
     printPlan(await planRestore(restoreOptions), io);
     return 0;
   }
-  const report = await restore(restoreOptions);
-  printReport(report, io);
-  return report.failed.length > 0 ? 1 : 0;
+  // Phase 2 锁：真实 restore 是 destructive（覆盖/删除 $DSH_HOME + 卸载插件），必须成功获取
+  // GLOBAL 环境锁；被另一 DSH 任务持有 → 明确报错退出（无 --force 旁路）。无锁目录 → 用默认 dataDir。
+  const lock = new EnvironmentLockManager({
+    locksDir: path.join(dataDir, '..', 'locks'),
+    op: 'cli-restore',
+    target: id,
+    lockVersion: '0.1.0',
+  });
+  try {
+    const report = await runWithMutationLock(lock, { op: 'cli-restore', target: id }, () => restore(restoreOptions));
+    printReport(report, io);
+    return report.failed.length > 0 ? 1 : 0;
+  } catch (err) {
+    if (err instanceof EnvironmentLockUnavailableError) {
+      io.error(`拒绝执行：${err.message}\n另一个 DSH 任务正在进行，请稍后重试。若确认为残留锁，可用 --recover-stale-lock（后续版本）`);
+      return 1;
+    }
+    throw err;
+  }
 }
 
 /* 直接运行（bin / node src/cli/index.ts）时进入主流程；被 import（测试）时不自动执行 */

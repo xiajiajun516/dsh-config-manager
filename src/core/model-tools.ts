@@ -36,6 +36,7 @@ import type { SectionId } from '../schema/types.ts'
 import { readFullSyncConfig, readSyncConfigFor } from '../sync/sync-config.ts'
 import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
 import type { ConfigAdapter, HostContext } from './types.ts'
+import { runWithMutationLock } from '../utils/env-lock.ts'
 
 /* ------------------------------------------------------------ 依赖与类型 */
 
@@ -189,7 +190,11 @@ export function createModelTools(deps: ModelToolsDeps) {
           })),
         }
       }
-      const report: RestoreReport = await executeRestore(restoreOpts)
+      const report: RestoreReport = await runWithMutationLock(
+        deps.host.mutationLock,
+        { op: 'model-restore', target: snapshotId },
+        () => executeRestore(restoreOpts),
+      )
       return {
         dryRun: false,
         snapshotId: report.snapshotId,
@@ -213,12 +218,13 @@ export function createModelTools(deps: ModelToolsDeps) {
       const sections = input.sections === undefined ? undefined : filterSectionIds(input.sections)
       const encrypt = input.encrypt === true
       const includeSecrets = input.includeSecrets === true
-      const report = await engine.push({
+      // Phase 2 锁：push 写远端 + 本地散文件 + sync-state，属 GLOBAL mutation
+      const report = await runWithMutationLock(deps.host.mutationLock, { op: 'model-sync-push' }, () => engine.push({
         ...(sections === undefined ? {} : { sections }),
         ...(encrypt || includeSecrets
           ? { encrypt: true, includeSecrets, password: input.password ?? '' }
           : {}),
-      })
+      }))
       return {
         ok: report.ok,
         snapshotId: report.snapshotId,

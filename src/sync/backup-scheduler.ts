@@ -24,6 +24,8 @@ import type { Logger } from '../utils/logger.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
 import type { ConfigAdapter, HostContext } from '../core/types.ts';
+import type { MutationLockPort } from '../utils/env-lock.ts';
+import { runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
 import { Exporter } from '../core/exporter.ts';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
@@ -65,6 +67,8 @@ export interface BackupSchedulerOptions {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
   /** 日志（缺省 host.log） */
   log?: Logger;
+  /** Phase 2 跨进程环境锁端口（可选注入；缺省无锁环境，测试 mock 不注入） */
+  mutationLock?: MutationLockPort;
 }
 
 export class BackupScheduler {
@@ -82,6 +86,7 @@ export class BackupScheduler {
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
   private readonly log: Logger;
+  private readonly mutationLock: MutationLockPort | undefined;
 
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
@@ -102,6 +107,7 @@ export class BackupScheduler {
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
     this.log = opts.log ?? this.host.log;
+    this.mutationLock = opts.mutationLock;
   }
 
   /** 启动：读配置 → enabled 时排定时器 → 执行一次启动触发备份。 */
@@ -192,54 +198,64 @@ export class BackupScheduler {
     }
 
     try {
-      const exporter = new Exporter({
-        ctx: this.host,
-        adapters: this.adapters,
-        encryption: null, // 定时备份恒不加密：加密密码仅内存且不能持久化
-        exporterVersion: this.exporterVersion,
-        msg: this.msg,
-      });
-      // 显式落 exportsDir（与 host 路由同构；Exporter 缺省 outPath 是相对文件名，不落目录）
-      // auto 前缀 = 定时备份产物标识：列表来源 Badge + cache-cleaner 豁免 + 保留策略清理依据
-      const outPath = join(this.exportsDir, `${AUTO_BACKUP_PREFIX}${dateStamp(this.now())}-${randomBytes(3).toString('hex')}.zip`);
-      const { report } = await exporter.export({
-        includeSecrets: false, // 恒不含 secret（与自动同步同语义）
-        outPath,
-      });
-      const result: BackupRunResult = {
-        status: 'success',
-        zip: report.file.name,
-        sizeBytes: report.file.sizeBytes,
-        sections: report.included.map((s) => s.section),
-        consecutiveFailures: 0,
-      };
-      await this.writeConfig({
-        enabled: cfg.enabled,
-        interval: cfg.interval,
-        // P0-⑤：保留 custom 档的每周时刻（否则保存 custom 档后 runOnce 成功会把它丢掉）
-        ...(cfg.customSchedule !== undefined ? { customSchedule: cfg.customSchedule } : {}),
-        startupMinIntervalMs: cfg.startupMinIntervalMs,
-        consecutiveFailures: 0,
-        lastRunAt: this.now().toISOString(),
-        lastRunStatus: 'success',
-      });
-      this.log.info('定时备份完成', {
-        zip: result.zip,
-        sizeBytes: result.sizeBytes,
-        sections: result.sections,
-      });
-      // 保留策略：只保留最近 retention 个 auto 前缀产物，更旧的删除（尽力而为，
-      // 失败仅记日志不阻断——下次成功备份时再清）。
-      try {
-        const removed = await pruneAutoBackups(this.exportsDir, this.retention);
-        if (removed.length > 0) {
-          this.log.info('定时备份保留策略清理', { removed, keep: this.retention });
+      // Phase 2 锁：定时备份写入 exports 属 GLOBAL mutation（与 Sync push / 手动备份互斥）。
+      // 无锁环境（测试）→ 不锁定直接执行；锁被占用 → 返回 failed（destructive 不执行）。
+      const result: BackupRunResult = await runWithMutationLock(this.mutationLock, { op: 'backup-schedule', target: 'exports' }, async () => {
+        const exporter = new Exporter({
+          ctx: this.host,
+          adapters: this.adapters,
+          encryption: null, // 定时备份恒不加密：加密密码仅内存且不能持久化
+          exporterVersion: this.exporterVersion,
+          msg: this.msg,
+        });
+        // 显式落 exportsDir（与 host 路由同构；Exporter 缺省 outPath 是相对文件名，不落目录）
+        // auto 前缀 = 定时备份产物标识：列表来源 Badge + cache-cleaner 豁免 + 保留策略清理依据
+        const outPath = join(this.exportsDir, `${AUTO_BACKUP_PREFIX}${dateStamp(this.now())}-${randomBytes(3).toString('hex')}.zip`);
+        const { report } = await exporter.export({
+          includeSecrets: false, // 恒不含 secret（与自动同步同语义）
+          outPath,
+        });
+        const backupResult: BackupRunResult = {
+          status: 'success',
+          zip: report.file.name,
+          sizeBytes: report.file.sizeBytes,
+          sections: report.included.map((s) => s.section),
+          consecutiveFailures: 0,
+        };
+        await this.writeConfig({
+          enabled: cfg.enabled,
+          interval: cfg.interval,
+          // P0-⑤：保留 custom 档的每周时刻（否则保存 custom 档后 runOnce 成功会把它丢掉）
+          ...(cfg.customSchedule !== undefined ? { customSchedule: cfg.customSchedule } : {}),
+          startupMinIntervalMs: cfg.startupMinIntervalMs,
+          consecutiveFailures: 0,
+          lastRunAt: this.now().toISOString(),
+          lastRunStatus: 'success',
+        });
+        this.log.info('定时备份完成', {
+          zip: backupResult.zip,
+          sizeBytes: backupResult.sizeBytes,
+          sections: backupResult.sections,
+        });
+        // 保留策略：只保留最近 retention 个 auto 前缀产物，更旧的删除（尽力而为，
+        // 失败仅记日志不阻断——下次成功备份时再清）。
+        try {
+          const removed = await pruneAutoBackups(this.exportsDir, this.retention);
+          if (removed.length > 0) {
+            this.log.info('定时备份保留策略清理', { removed, keep: this.retention });
+          }
+        } catch (err) {
+          this.log.warn('定时备份保留策略清理失败', { error: err instanceof Error ? err.message : String(err) });
         }
-      } catch (err) {
-        this.log.warn('定时备份保留策略清理失败', { error: err instanceof Error ? err.message : String(err) });
-      }
+        return backupResult;
+      });
       return result;
     } catch (err) {
+      // 锁被占用（另一项 DSH 任务进行中）：不执行，记为 skipped（不增加连续失败计数）
+      if (err instanceof EnvironmentLockUnavailableError) {
+        this.log.info('定时备份跳过：环境锁被占用（另一项 DSH 任务进行中）');
+        return { status: 'skipped', skipReason: 'mutation-locked', consecutiveFailures: cfg.consecutiveFailures };
+      }
       const error = err instanceof Error ? err.message : String(err);
       const result: BackupRunResult = {
         status: 'failed', error, consecutiveFailures: cfg.consecutiveFailures + 1,

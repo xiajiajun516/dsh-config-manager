@@ -7,6 +7,7 @@
  */
 import type { EncryptionInfo, Manifest, SectionId, WorkspaceRecord } from '../schema/types.ts';
 import type { TombstoneKind } from '../schema/tombstones.ts';
+import type { MutationLockPort } from '../utils/env-lock.ts';
 import type { Logger } from '../utils/logger.ts';
 import { zhMsg } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
@@ -136,6 +137,14 @@ export interface HostContext {
    * 缺省 zh（改造前行为）。引擎与适配器用它生成所有用户可见动态文案。
    */
   msg?: MsgFunc;
+  /**
+   * 跨进程环境锁契约（Phase 2，可选注入）。宿主在构造时注入 GLOBAL EXCLUSIVE MUTATION LOCK
+   * 的 port；核心 destructive 入口用 runWithMutationLock(ctx.mutationLock, …) 包住 ——
+   * 无有效父 token → acquire（被别的进程/操作持有则抛 EnvironmentLockUnavailableError），
+   * 有有效父 token（nested rollback 等）→ reuse，不 reacquire。
+   * 测试 mock 缺省不注入 → 无锁环境（不锁定、不抛）。绝不用进程级 reentrancy 判断嵌套。
+   */
+  mutationLock?: MutationLockPort;
 }
 
 /* ---------------- 导入计划（§13.3 十类 + 决策） ---------------- */
