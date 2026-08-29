@@ -7,9 +7,10 @@ PHASE 3 STATUS: PASS（P0-A CLOSED）
 - **Phase 3 名称**：Crash Journal + Startup Reconciliation
 - **设计基线**：`CRASH_JOURNAL_DESIGN.md` Rev 3 + `CRASH_JOURNAL_DESIGN_REVIEW.md` Rev 3（DESIGN/REVIEW CONSISTENCY PASS）
 - **Phase 3 implementation baseline commit**：`f22effb6ad452938b37541e440450575f59f86e1`（25 文件，4330 insertions）
-- **Phase 3 final consistency audit / P1 fix commit**：`72d7e70fb5cd343781ee24fbf0e368632a3d19a4`（isLiveOwner LOCKED-live `||` 修复 + 文档一致化：§9 findings history、测试数 1228、P0-A closed）
+- **Phase 3 final consistency audit / P1 fix commit**：`72d7e70fb5cd343781ee24fbf0e368632a3d19a4`（isLiveOwner LOCKED-live `||` 修复 + 文档一致化：§9 findings history、测试数、P0-A closed）
+- **Phase 3 P1-A / P1-B closure commit**：`a0e49ea9d5fac460cbb0f4feabde91d4512c9b6c`（enforce crash journal ownership + startup barrier）
 - **Phase 2 基线（前置）**：`6a687e9`（docs）/ `768a8f9`（feat）
-- **当前 HEAD**：`72d7e70`
+- **当前 HEAD**：`a0e49ea`
 - **package version**：`0.1.54`
 - **日期**：2026-08-29
 - **下一阶段**：Phase 4（Pre-upgrade Automatic Snapshot）——**禁止提前实现**
