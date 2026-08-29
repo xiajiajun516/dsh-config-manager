@@ -41,6 +41,13 @@ export interface ReconcileEnv {
   environmentFingerprint: string;
   /** 判定某 journal 是否属于仍存活的 live owner（live op 不可 reconcile/quarantine/move）。 */
   isLiveOwner(journal: OperationJournal): boolean | Promise<boolean>;
+  /**
+   * P1-A：期望的 crashed-ownership instanceId（= stale environment.lock owner.instanceId）。
+   * 显式 recovery 捕获 stale ownership 证据后传入：active journal 的 ownerInstanceId/lockId
+   * 必须匹配该 crashed ownership，才可作为 trusted transaction 参与 reconcile/rollback/resume；
+   * 否则 → needs-attention（SAFE MODE，不 trusted），防跨 transaction/伪造 journal。
+   */
+  expectedOwnershipInstanceId?: string;
 }
 
 export interface ReconcileOptions {
@@ -125,6 +132,19 @@ async function reconcileOne(
   // live owner 检查
   if (await env.isLiveOwner(j)) {
     return { decision: { operationId, kind: 'live', reason: 'owner 存活，live operation 进行中', snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+  }
+
+  // P1-A：ownership binding 强制校验（显式 recovery 捕获的 crashed ownership 证据）。
+  // journal.ownerInstanceId/lockId 必须匹配期望的 crashed ownership instanceId，否则不作 trusted 恢复。
+  if (env.expectedOwnershipInstanceId !== undefined && env.expectedOwnershipInstanceId !== '') {
+    const bindingOk = j.ownerInstanceId === env.expectedOwnershipInstanceId
+      && j.lockId === env.expectedOwnershipInstanceId; // lockId = 同 epoch identity（ownerInstanceId）
+    if (!bindingOk) {
+      const reason = `ownership binding 不匹配（journal.ownerInstanceId/lockId 非 crashed ownership ${env.expectedOwnershipInstanceId}），不作 trusted 恢复`;
+      await store.writeSafeMode(true).catch(() => undefined);
+      await store.appendRecoveryHistory('binding-mismatch', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined);
+      return { decision: { operationId, kind: 'needs-attention', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
+    }
   }
 
   // env fingerprint

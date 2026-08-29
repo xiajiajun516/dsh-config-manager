@@ -164,10 +164,25 @@ P0-A initially OPEN（Coordinator 仅测试引用；真实 destructive 只走 Ph
 - 逐计划项级 WAL / 指纹（import 每项 beforeFp/afterFp）未做：opaque intent journal → 真实 crash 后 reconcile 保守 needs-attention（**满足 v1「journal exists + SAFE MODE + explicit recovery」**；细粒度自动恢复留 v2，见 PHASE3_HANDOFF §Phase 3 v2）。
 - 生产 reconcile hooks 保守（incomplete → needs-attention，非自动 recovered）。
 - model `config_backup` 与 `profiles/save` 无 GLOBAL 锁（非 live-config 破坏，按 Phase 2 设计可接受，记录）。
-- **P2：Journal→Lock 绑定记录但回收时未强制验证**（`lockId` 为环境稳定合成串，非逐次 lock 所有权文件 inode；ownerInstanceId取自 lockCtx 真值）。因生产 journal 保守（incomplete→needs-attention）+ 回滚需用户确认，安全问题仍受控；完整「回收时绑定校验」留 v2。
-- **P2：启动 reconcile 为 fire-and-forget（`void (async()=>{})`），不能强 await 在 `scheduler.start()` 前**。但 crash 后必留 stale 锁 → autosync/backup 的 acquire 失败自动跳过（`mutation-locked`），故不会在 SAFE MODE 下误跑；强序屏障留 v2。
 
-> **P0 = 0，unresolved P1 = 0**（本轮审计：P1 isLiveOwner `&&`→`||` 已修复 + 测试；§9/§22 保留历史 finding 与最终状态）。
+**P1-A / P1-B（Final P1 Closure）**：
+```
+P1-A（Journal→Lock binding 强制校验）：
+  Initial: journal 记录 ownerInstanceId+lockId 但 recovery 仅“看到字段”，lockId 曾是环境稳定合成串
+  Fix:     lockId = 真实 acquisition-specific ownership epoch identity（ownerInstanceId）；reconcile 在可信恢复前
+           强制校验 binding（env.expectedOwnershipInstanceId，mismatch→needs-attention/SAFE MODE，不 rollback/resume）；
+           宿主启动 barrier 捕获 stale ownership（captureStaleOwnershipInstanceId）并传入 classifyStartup env（激活）
+  Tests:   phase3-p1.test.ts（Test A/B/C/D + 跨 transaction + forged + 生产 capture/match/mismatch）
+  Final:   CLOSED
+P1-B（Startup recovery barrier）：
+  Initial: 启动 reconcile fire-and-forget，scheduler.start() 同步紧随（强序不保证）
+  Fix:     StartupRecoveryController 分类 await 后仅 NORMAL 启动调度器（schedulerGate.start），fail-closed
+          （inspect 抛错不默认 NORMAL）；LOCKED_LIVE/RECOVERY_REQUIRED/NEEDS_ATTENTION/UNKNOWN/corrupt/safe-mode marker 不启动
+  Tests:   phase3-p1.test.ts（race / NORMAL 恰一次 / RECOVERY/UNKNOWN/corrupt/safe-mode 不启动 / fail-closed）
+  Final:   CLOSED
+```
+> **P0 = 0，unresolved P1 = 0**（含 P1-A + P1-B 已修；§9/§22 保留历史 finding 与最终状态）。
+> Reviewer：Ownership Binding = GO（P1-A 接线已激活）；Startup Ordering = GO（P2 LOCKED_LIVE 已对齐为仅 NORMAL）；Phase2 Compliance = GO（L-INV-1~8 保持）。
 
 ---
 

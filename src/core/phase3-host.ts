@@ -18,7 +18,7 @@ import {
   generateOperationId, createJournalEntry, transitionJournalState, isTerminalState,
 } from './journal.ts';
 import { inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './reconcile.ts';
-import type { LockState, MutationLockContext } from '../utils/env-lock.ts';
+import { OWNERSHIP_FILE, type LockState, type MutationLockContext } from '../utils/env-lock.ts';
 
 /** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
 export class TransactionRecoveryRequiredError extends Error {
@@ -50,8 +50,6 @@ export class Phase3Recovery {
   private readonly dataDir: string;
   private readonly fingerprintDataDir: string;
   private environmentFingerprint: string;
-  /** GLOBAL lock 稳定身份（每环境唯一，Journal→Lock 绑定用；来自 dataDir，非 per-op fake）。 */
-  readonly lockId: string;
 
   /** 内存 SAFE MODE 标志（isBlocked 同步谓词用） */
   safeModeActive = false;
@@ -62,7 +60,6 @@ export class Phase3Recovery {
     this.store = new JournalStore({ transactionsDir: path.join(opts.dataDir, 'transactions') });
     this.packageVersion = opts.packageVersion;
     this.environmentFingerprint = opts.environmentFingerprint ?? 'unknown';
-    this.lockId = `GLOBAL-LOCK@${path.basename(path.resolve(opts.dataDir))}`;
   }
 
   /** 计算环境指纹（持久化 token；跨启动稳定）。在 startup 前调用一次。 */
@@ -100,8 +97,7 @@ export class Phase3Recovery {
   }
 
   /** 保守 hooks：无法证明默认 needs-attention（绝不自动恢复/回滚） */
-  private conservativeHooks(): ReconcileProbeHooks {
-    return {
+  private conservativeHooks(): ReconcileProbeHooks {    return {
       verifyStepFingerprint: async () => 'unable',
       probeExternal: async () => 'unknown',
       snapshotExists: async () => false,
@@ -111,15 +107,31 @@ export class Phase3Recovery {
   /**
    * 启动只读 reconcile：返回是否需 SAFE MODE / RECOVERY_REQUIRED，并写 durable 标记。
    * @param lockState 宿主 EnvironmentLockManager 的 inspectLockState 结果（只分类，不自动 recover）
+   * @param expectedOwnershipInstanceId 若在显式 recovery 前已捕获 stale ownership 的 owner.instanceId，传入以做 P1-A binding 校验
    */
-  async startup(lockState: LockState): Promise<{ safeModeRequired: boolean; recoveryRequired: boolean }> {
+  async startup(lockState: LockState, expectedOwnershipInstanceId?: string | null): Promise<{ safeModeRequired: boolean; recoveryRequired: boolean }> {
     const env: ReconcileEnv = {
       environmentFingerprint: this.environmentFingerprint || 'unknown',
       isLiveOwner: async () => false,
+      ...(expectedOwnershipInstanceId ? { expectedOwnershipInstanceId } : {}),
     };
     const insp = await inspectStartup(this.store, this.conservativeHooks(), env, {}, mapLockStateForStartup(lockState));
     if (insp.safeModeRequired) this.safeModeActive = true;
     return { safeModeRequired: insp.safeModeRequired, recoveryRequired: insp.recoveryRequired };
+  }
+
+  /** P1-A：读取 crashed stale ownership 的 owner.instanceId（environment.lock 的 owner 证据；不可用返回 null）。 */
+  async captureStaleOwnershipInstanceId(): Promise<string | null> {
+    try {
+      const p = path.join(this.dataDir, 'locks', OWNERSHIP_FILE);
+      const text = await fs.readFile(p, 'utf8');
+      const rec = JSON.parse(text) as { owner?: { instanceId?: unknown } };
+      return typeof rec?.owner?.instanceId === 'string' && rec.owner.instanceId !== ''
+        ? rec.owner.instanceId
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   /** 用户确认恢复后清除 SAFE MODE（清空 durable 标记 + 内存标志） */
@@ -128,12 +140,18 @@ export class Phase3Recovery {
     await this.store.writeSafeMode(false);
   }
 
+  /** 保守 reconcile hooks（供启动 barrier / inspect 用） */
+  get recoveryHooks(): ReconcileProbeHooks { return this.conservativeHooks(); }
+  /** 环境指纹（供启动 barrier 用） */
+  get recoveryEnvFingerprint(): string { return this.environmentFingerprint || 'unknown'; }
+
   /**
    * 生产 journal 包装（关闭 P0-A）：在【已持 GLOBAL 锁】下，为该 destructive operation
    * 创建 durable journal（CREATED → snapshot → APPLYING → 执行真实引擎 → COMMITTED → 规整）。
    *
    *  - active≤1（§14）：创建前扫描 active/；存在非 terminal 残留（非当前 live owner）→ 抛错阻断，不建第二个 journal。
-   *  - Journal→Lock 绑定（§15）：ownerInstanceId = lockCtx.token.instanceId；lockId = 本环境 GLOBAL lock 稳定身份。
+   *  - Journal→Lock 绑定（§15/P1-A）：ownerInstanceId = lockCtx.token.instanceId（= Phase 2 activeInstanceId，
+   *      acquisition-specific）；lockId = 同一 ownership epoch identity（ownerInstanceId）。recovery 时强制校验。
    *  - 不 double-acquire（§6）：调用方（host gate）已持锁，本方法只负责 journal 生命周期，不 re-acquire、不 release（release 由 gate 负责）。
    *  - 异常 → NEEDS_ATTENTION + durable SAFE MODE + rethrow（不破坏既有错误/响应流）。
    *  - 返回 { operationId, result }。
@@ -147,6 +165,9 @@ export class Phase3Recovery {
   }): Promise<{ operationId: string; result: T }> {
     const { operationType, lockCtx, snapshotProvider, fn } = opts;
     const ownerInstanceId = (lockCtx?.token?.instanceId ?? 'unknown').toString();
+    // P1-A：ownership epoch identity = 真实 acquisition-specific ownerInstanceId（来自 lockCtx，
+    // 即 Phase 2 activeInstanceId；跨进程/跨持有不同）。不再用环境稳定合成串。
+    const ownershipIdentity = ownerInstanceId;
 
     // active≤1：存在非 terminal 残留 → 阻断（不创建第二个 journal）
     const activeIds = await this.store.scanActive();
@@ -161,7 +182,7 @@ export class Phase3Recovery {
 
     const opId = generateOperationId();
     const base = {
-      operationId: opId, ownerInstanceId, lockId: this.lockId,
+      operationId: opId, ownerInstanceId, lockId: ownershipIdentity,
       packageVersion: this.packageVersion, environmentFingerprint: this.environmentFingerprint || 'unknown',
     };
     await this.store.create(createJournalEntry(operationType, base, new Date().toISOString()));
@@ -218,9 +239,11 @@ export class Phase3Recovery {
   }): Promise<{ operationId: string; result: T }> {
     const { operationType, lockCtx, intent, fn } = opts;
     const ownerInstanceId = (lockCtx?.token?.instanceId ?? 'unknown').toString();
+    // P1-A：ownership epoch identity = 真实 acquisition-specific ownerInstanceId（非环境稳定串）
+    const ownershipIdentity = ownerInstanceId;
     const opId = generateOperationId();
     const base = {
-      operationId: opId, ownerInstanceId, lockId: this.lockId,
+      operationId: opId, ownerInstanceId, lockId: ownershipIdentity,
       packageVersion: this.packageVersion, environmentFingerprint: this.environmentFingerprint || 'unknown',
     };
     await this.store.create(createJournalEntry(operationType, base, new Date().toISOString()));

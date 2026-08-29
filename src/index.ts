@@ -80,7 +80,8 @@ import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityE
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
-import { Phase3Recovery, TransactionRecoveryRequiredError } from './core/phase3-host.ts'
+import { Phase3Recovery, TransactionRecoveryRequiredError, mapLockStateForStartup } from './core/phase3-host.ts'
+import { classifyStartup } from './core/startup-barrier.ts'
 import type { MutationLockPort } from './utils/env-lock.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
@@ -1605,8 +1606,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     isBlocked: () => host.safeModeIsBlocked?.() ?? false,
     phase3Recovery: host.phase3Recovery,
   })
-  // 启动：读 autosync-config；若 enabled 启动定时器；无条件执行一次「启动触发下载合并」（受阈值约束）
-  scheduler.start()
+  // P1-B：调度器不再在 makeRoutes 内同步 start —— 由 apply() 在「启动 recovery 分类完成后、仅 NORMAL」时启动。
 
   // ------------------------------------------------ market 辅助（m-market）
   // 目录：<marketDir>/cache/<url-hash>/（index/条目缓存）
@@ -3984,16 +3984,45 @@ export function apply(ctx: Context, config?: Config): void {
   if (phase3Recovery.safeModeActive) {
     host.log.warn('Phase 3 SAFE MODE 激活：存在未恢复的 transaction，destructive 操作被阻断（如需恢复请先显式处理）')
   }
+  // P1-B：启动 recovery 分类 barrier。调度器（AutoSync/Backup）只在分类完成且 state=NORMAL 时启动。
+  // schedulerGate.start 由 makeRoutes 返回 scheduler + apply 构造 backupScheduler 后赋值；apply 为同步，
+  // 故在该异步分类块 await 完成前，schedulerGate.start 通常已就绪。fail-closed：分类抛错 → 不启动调度器。
+  const schedulerGate = { start: null as (() => void) | null }
+  let startupStateResolved = false
+  let shouldStartSchedulers = false
   void (async () => {
     try {
       await phase3Recovery.initFingerprint()
       const lockInsp = await envLockManager.inspectLockState()
-      const insp = await phase3Recovery.startup(lockInsp.state)
-      if (insp.recoveryRequired) {
-        host.log.warn('Phase 3 RECOVERY_REQUIRED：上次 destructive operation 崩溃残留，锁 stale/未知，需显式恢复')
+      // P1-A：启动 barrier 前捕获 crashed stale ownership 证据（environment.lock owner.instanceId），
+      // 并将其作为 expectedOwnershipInstanceId 传入分类 env → 激活 journal↔ownership binding 校验。
+      const staleOwnerId = lockInsp.state === 'STALE_LOCK_DETECTED' || lockInsp.state === 'UNKNOWN_STATE'
+        ? await phase3Recovery.captureStaleOwnershipInstanceId()
+        : null
+      const startupState = classifyStartup({
+        store: phase3Recovery.store,
+        hooks: phase3Recovery.recoveryHooks,
+        env: {
+          environmentFingerprint: phase3Recovery.recoveryEnvFingerprint,
+          isLiveOwner: async () => false,
+          ...(staleOwnerId ? { expectedOwnershipInstanceId: staleOwnerId } : {}),
+        },
+        lockState: mapLockStateForStartup(lockInsp.state),
+      })
+      const { state } = await startupState.classify()
+      startupStateResolved = true
+      phase3Recovery.safeModeActive = phase3Recovery.safeModeActive || ['RECOVERY_REQUIRED', 'NEEDS_ATTENTION', 'UNKNOWN_STATE'].includes(state.kind)
+      shouldStartSchedulers = (state.kind === 'NORMAL')
+      if (state.kind === 'RECOVERY_REQUIRED' || state.kind === 'NEEDS_ATTENTION') {
+        host.log.warn(`Phase 3 ${state.kind}：上次 destructive operation 崩溃残留，需显式恢复；destructive 调度器未启动（read-only host 存活）`)
+      } else if (shouldStartSchedulers && schedulerGate.start !== null) {
+        schedulerGate.start()
       }
     } catch (err) {
-      host.log.warn('Phase 3 启动 reconcile 失败（保守忽略，不阻断宿主挂载）', {
+      // fail-closed：inspectStartup 抛错不默认 NORMAL → 不启动调度器（read-only host 存活）
+      startupStateResolved = true
+      shouldStartSchedulers = false
+      host.log.warn('Phase 3 启动 reconcile 失败（fail-closed：destructive 调度器不启动）', {
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -4098,7 +4127,10 @@ export function apply(ctx: Context, config?: Config): void {
     makeSyncEngine,
     exporterVersion: PLUGIN_VERSION,
   })
-  backupScheduler.start()
+  // P1-B：backupScheduler 不再同步 start —— 由启动 recovery 分类完成后（仅 NORMAL）启动。
+  schedulerGate.start = () => { scheduler.start(); backupScheduler.start(); }
+  // 若启动分类已在此构造完成前解析为 NORMAL（罕见竞态），立即补启动。
+  if (startupStateResolved && shouldStartSchedulers && schedulerGate.start !== null) { schedulerGate.start(); }
   ctx.effect(() => () => backupScheduler.stop(), 'config-manager: backup scheduler')
   // 自动同步调度器随插件生命周期停止：插件重载/卸载时清理定时器，
   // 避免旧调度器残留导致重复后台同步。

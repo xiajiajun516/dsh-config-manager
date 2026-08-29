@@ -45,8 +45,15 @@ PHASE 3 STATUS: PASS（P0-A CLOSED）
 
 - 基线 HEAD：`6a687e92da99c2ab6581bf342dd6f5a97dc6ad3a`
 - package：0.1.54
-- working tree：8 修改 + 新增 Phase 3 文件（待 commit，见 §Commit）
-- tests：基线 1176 → 最终 **1228**（+52 Phase 3：45 核心 + 6 生产集成 + 1 isLiveOwner，0 回归）
+- tests：基线 1176 → 最终 **1241**（+65 Phase 3：45 核心 + 6 生产集成 + 1 isLiveOwner + 13 P1-A/P1-B，0 回归）
+
+---
+
+## §P1-A / P1-B 状态（Final P1 Closure = CLOSED）
+
+- **P1-A（Journal→Lock binding 强制校验）**：journal `lockId` 改为真实 acquisition-specific ownership epoch identity（ownerInstanceId，来自 lockCtx token）；reconcile 在可信恢复前强制校验 `env.expectedOwnershipInstanceId`（mismatch → needs-attention + SAFE MODE，不 rollback/resume）；宿主启动 barrier 经 `captureStaleOwnershipInstanceId()` 捕获 stale environment.lock 证据并传入 `classifyStartup` env（**生产激活**）。**CLOSED**。（`phase3-host.ts`、`reconcile.ts`、`index.ts` classifyStartup；测试 `phase3-p1.test.ts`）
+- **P1-B（Startup recovery barrier）**：`StartupRecoveryController` 分类 await 后才在 NORMAL 启动 AutoSync/Backup 调度器（`schedulerGate.start`）；LOCKED_LIVE/RECOVERY_REQUIRED/NEEDS_ATTENTION/UNKNOWN/corrupt/safe-mode marker 一律不启动；fail-closed（inspect 抛错不默认 NORMAL）。**CLOSED**。（`startup-barrier.ts`、`index.ts`；测试 `phase3-p1.test.ts`）
+- Targeted reviewers：Ownership Binding = GO（P1-A 激活）、Startup Ordering = GO（P2 LOCKED_LIVE 已对齐为仅 NORMAL）、Phase2 Compliance = GO（L-INV-1~8 保持）。**P0 = 0，unresolved P1 = 0。**
 
 ---
 

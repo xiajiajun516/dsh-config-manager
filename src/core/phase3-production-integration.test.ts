@@ -46,8 +46,8 @@ test('P0-A：runJournaled 建 journal（绑定 + operationType + COMMITTED 规�
   const j = await recovery.store.load(operationId);
   assert.ok(j);
   assert.equal(j!.operationType, 'import-apply');
-  assert.equal(j!.ownerInstanceId, 'owner-prod'); // Journal→Lock 绑定
-  assert.equal(j!.lockId, recovery.lockId);
+  assert.equal(j!.ownerInstanceId, 'owner-prod'); // Journal→Lock 绑定（真实 lockCtx token instanceId）
+  assert.equal(j!.lockId, 'owner-prod'); // lockId = 同 ownership epoch identity（P1-A 真实捕获，非环境稳定串）
   assert.equal(j!.state, 'COMMITTED');
   assert.equal('journalId' in j, false, 'Journal→Lock 单向，不回写 environment.lock');
   assert.deepEqual(await recovery.store.scanActive(), [], 'COMMITTED 后已规整到 completed');
@@ -60,7 +60,7 @@ test('P0-A：active≤1 → 残留非终态阻断第二 journal', async (t) => {
   // 用手动预置一个「非终态」active journal（模拟未 reconcile 的 crash residue）
   const { generateOperationId, createJournalEntry } = await import('./journal.ts');
   const opId = generateOperationId();
-  await recovery.store.create(createJournalEntry('import-apply', { operationId: opId, ownerInstanceId: 'old', lockId: recovery.lockId, packageVersion: '0', environmentFingerprint: 'fp-prod' }, new Date().toISOString()));
+  await recovery.store.create(createJournalEntry('import-apply', { operationId: opId, ownerInstanceId: 'old', lockId: 'old', packageVersion: '0', environmentFingerprint: 'fp-prod' }, new Date().toISOString()));
   await recovery.store.update(opId, (j) => ({ ...j, state: 'APPLYING' }));
   // 第二次 run（新 transaction）→ 应被 active≤1 阻断
   await assert.rejects(
