@@ -338,10 +338,11 @@ export async function inspectStartup(
   lockState: 'LOCKED' | 'STALE_LOCK_DETECTED' | 'UNKNOWN_STATE' | 'FREE',
 ): Promise<StartupInspection> {
   // 锁为 LOCKED（fresh heartbeat，活跃 owner）→ 任何 incomplete journal 皆视为 live op，不 reconcile/quarantine/move；
-  // 仅 STALE / UNKNOWN / FREE 时才对 journal 做 recover 判定（修 isLiveOwner=恒false 的并发误判，§18）。
+  // 仅 STALE / UNKNOWN / FREE 时才对 journal 做 recover 判定（修 isLiveOwner 并发误判，§18）。
+  // 注意：此处用 `||`（不能 `&&`——env.isLiveOwner 在保守 hooks 下恒 false，`LOCKED && false` 会让 live 分支永不到达）。
   const envWithLive = {
     ...env,
-    isLiveOwner: async (j: OperationJournal) => lockState === 'LOCKED' && (await env.isLiveOwner(j)),
+    isLiveOwner: async (j: OperationJournal) => lockState === 'LOCKED' || (await env.isLiveOwner(j)),
   };
   const outcome = await reconcileActive(store, hooks, envWithLive, { ...opts, organizeTerminal: true });
   const hasIncomplete = outcome.unresolved.length > 0;

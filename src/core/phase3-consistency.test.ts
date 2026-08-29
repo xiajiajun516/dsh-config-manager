@@ -142,6 +142,24 @@ test('P0-B：during-rollback child crash → rollback-continue（绝不 RECOVERE
   assert.equal(await store.readSafeMode(), true);
 });
 
+// ---------- isLiveOwner：inspectStartup 在 LOCKED（fresh heartbeat）→ live 跳过 ----------
+test('isLiveOwner：inspectStartup LOCKED → journal 视为 live，不 reconcile/move/quarantine（且不自动 recover）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000f0';
+  const j = createJournalEntry('import-apply', { operationId: id, ownerInstanceId: 'live-owner', lockId: 'l', packageVersion: '0.1.54', environmentFingerprint: FP }, 'x');
+  j.state = 'APPLYING'; // incomplete（若被 reconcile 会 needs-attention，但 live 时应跳过）
+  j.plannedSteps = ['p1'];
+  j.steps = { p1: { adapter: 'plugins', ref: 'plugin:@live', kind: 'Install', external: true, beforeFp: null, afterFp: null, status: 'planned', appliedAt: null } };
+  await store.create(j);
+  const insp = await inspectStartup(store, {
+    verifyStepFingerprint: async () => 'unable', probeExternal: async () => 'half-installed', snapshotExists: async () => false,
+  }, { environmentFingerprint: FP, isLiveOwner: async () => false }, {}, 'LOCKED');
+  // LOCKED → journal 视为 live → 不被 reconcil；非 STALE/UNKNOWN → 不判 recoveryRequired（活锁，保守不接管）
+  assert.ok(await store.loadActive(id) !== null, 'live owner 的 journal 不得被 move/quarantine（保持 active）');
+  assert.equal(insp.recoveryRequired, false, 'LOCKED 活锁下不判 recovery-required（不自动 recover/接管）');
+});
+
 // ---------- Mandatory Test 12：scheduler destructive-run 门禁（recovery required 时 blocked） ----------
 test('M12：RECOVERY_REQUIRED/SAFE MODE → withMutationLock isBlocked 谓词阻断 destructive', async (t) => {
   const dir = tmp(t);

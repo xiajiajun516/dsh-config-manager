@@ -45,7 +45,7 @@ PHASE 3 STATUS: PASS（P0-A CLOSED）
 - 基线 HEAD：`6a687e92da99c2ab6581bf342dd6f5a97dc6ad3a`
 - package：0.1.54
 - working tree：8 修改 + 新增 Phase 3 文件（待 commit，见 §Commit）
-- tests：基线 1176 → 最终 **1227**（+51 Phase 3：45 核心 + 6 生产集成，0 回归）
+- tests：基线 1176 → 最终 **1228**（+52 Phase 3：45 核心 + 6 生产集成 + 1 isLiveOwner，0 回归）
 
 ---
 
@@ -78,7 +78,7 @@ PHASE 3 STATUS: PASS（P0-A CLOSED）
 > P0-A（生产 destructive 接线）已关闭（本轮）。v2 剩余（非阻塞 PASS，均为增强）：
 1. **逐计划项级 WAL / 指纹插桩**：import/restore 每项记 beforeFp/afterFp（side effect 后重读磁盘），使 reconcile 可自动判 done → 细粒度 recovery（当前 opaque intent journal → 保守 needs-attention）。
 2. 生产 `reconcile` 提供真实 `verifyStepFingerprint`/`probeExternal`/`snapshotExists`（替代 phase3-host conservativeHooks）→ `recovered`/`noop` 自动恢复路径真实可达。
-3. `isLiveOwner` 真实 owner 探测（当前 startup 用「lockState LOCKED → live」间接判定；可加强为 per-journal owner 探测）。
+3. `isLiveOwner` 增强为 per-journal owner 探测（当前 `inspectStartup` 已用 lockState LOCKED → 强制 live 跳过，`||` 修复 + 测试）；可进一步按每个 journal 的真实 owner 存活做细粒度判定。
 4. `COMMITTED` 写失败 → 显式 `RECOVERY_REQUIRED` 信号透传到 UI（当前内部分类 + SAFE MODE，信号未独立暴露）。
 5. 快照所有权绑定（snapshotId 属于 operationId）的显式元数据校验（当前靠 snapshotExists 保守 + 用户确认）。
 
@@ -86,8 +86,8 @@ PHASE 3 STATUS: PASS（P0-A CLOSED）
 
 ## §Phase 4 Prerequisites（进入 Phase 4 前须满足）
 
-- [ ] P0-A 决定：接受 v1 边界（仅 SAFE MODE + 机制）或完成真实操作 journal 接线（v2）。
-- [ ] 维持 1221 tests 基线（不得删旧）。
+- [x] P0-A（生产 destructive journal 接线）= CLOSED（本轮）。
+- [ ] 维持 1228 tests 基线（不得删旧）。
 - [ ] Phase 4 为**独立阶段**：pre-upgrade 自动 snapshot / upgrade detector / 版本迁移，**不并入 Phase 3**（Phase 3 只处理 destructive op crash recovery，不处理 upgrade）。
 
 ---

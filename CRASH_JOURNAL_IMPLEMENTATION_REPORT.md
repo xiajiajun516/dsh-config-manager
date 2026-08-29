@@ -13,7 +13,7 @@
 | package version | `0.1.54` |
 | working tree | 7 个修改文件 + 10 个新增 Phase 3 文件（未 commit，见 §11） |
 | 基线 tests | 1176/1176 PASS |
-| **最终 tests** | **1221/1221 PASS**（+45 个 Phase 3 测试，0 回归） |
+| **最终 tests** | **1228/1228 PASS**（基线 1176 + 52 个 Phase 3 测试 = 45 核心 + 6 生产集成 + 1 isLiveOwner，0 回归） |
 | typecheck / build | PASS |
 
 ---
@@ -41,7 +41,7 @@ Acquire Environment Lock（Phase 2，未改）
 | `src/core/journal.ts`（新） | JournalStore：schema/状态机（严格 transition）/WAL/atomic 持久化/active 扫描（忽略 tmp）/move/quarantine/retention/safe-mode 标记/environmentFingerprint/`redactJournalText`（高熵脱敏）。`journalId` 恒 null 不回填（Journal→Lock 单向绑定） |
 | `src/core/transaction-coordinator.ts`（新） | `MutationTransactionCoordinator`：run()（acquire→active≤1→journal CREATED→snapshot→WAL steps→tail→validate→COMMITTED→move→release）+ `rollbackForRecovery`（rollback WAL entryDone）+ 各 terminal 决策 |
 | `src/core/reconcile.ts`（新） | `Reconciler`：reconcileActive/executeRecovery/inspectStartup。corrupt quarantine、env fingerprint、NEEDS_ATTENTION、rollback-continue（ROLLING_BACK 绝不误判 RECOVERED）、保守不自动恢复 |
-| `src/core/phase3-host.ts`（新） | `Phase3Recovery`：startup 只读 reconcile + isBlocked 谓词 + durable SAFE MODE + `wrapOperation`（轻量 journal 包装，待接线） |
+| `src/core/phase3-host.ts`（新） | `Phase3Recovery`：startup 只读 reconcile + isBlocked 谓词 + durable SAFE MODE + `runJournaled`/`runExternalIntent`（生产 journal 包装，已接入全部 destructive 入口，P0-A CLOSED） |
 | `src/core/phase3-child-crash.ts`（新） | 真实 child-process crash 注入 harness（SIGKILL，finally 不执行） |
 | `src/core/rollback.ts` | RollbackOptions 加 `entryDone`（回滚 WAL 逐项回调） |
 | `src/utils/env-lock.ts` | withMutationLock/runWithMutationLock 加可选 `isBlocked` 注入谓词（env-lock 不识 policy） |
@@ -115,17 +115,23 @@ Terminal：COMMITTED / ROLLED_BACK / RECOVERED / NEEDS_ATTENTION
 
 ---
 
-## 9. Reviewer Findings & Fixes（本轮独立对抗评审）
+## 9. Reviewer Findings History & Final Status（保留审计历史；§22 不删除旧 finding）
 
-| # | 严重度 | Finding | 处置 |
-|---|---|---|---|
-| P0-A | P0 | **Coordinator 未接线生产 destructive 路径**：真实 import/restore 不建 journal，crash-journal 安全网惰性；`wrapOperation` 存在未接入 | **未闭合**（见 §10）；`phase3-host.wrapOperation` 已就绪待接线；SAFE MODE 安全网已真实接线 |
-| P0-B | P0 | reconcile 把 ROLLING_BACK 空 steps 判为 RECOVERED；不读回滚 WAL | **已修**：reconcile.ts 对 ROLLING_BACK/entryDone→rollback-continue 绝不 RECOVERED + child 测试 |
-| P1 | P1 | SAFE MODE 绕过（restore 路由、model-restore/model-sync-push 未传 isBlocked） | **已修**：全部传 isBlocked 谓词 + HostContext 字段 |
-| P1 | P1 | active≤1 / terminal guard / lock↔journal 绑定在 Coordinator deps 为桩 | **部分**：机制实现；宿主侧 checkActiveClear/terminal guard 由接线提供（P0-A 一并） |
-| P1 | P1 | snapshot 所有权绑定未在校验 | **部分**：snapshotExists 保守（缺失→needs-attention）；所有权绑定随 P0-A 接线补充（见 §10 剩余） |
-| P2 | P2 | COMMITTED 写失败报 NEEDS_ATTENTION 而非 RECOVERY_REQUIRED（分类） | 记录；均设 SAFE MODE |
-| 疑点 | — | phase3-host.isLiveOwner 恒 false（并发正确性隐患，不破坏 invariant） | 记录待后续 |
+> 每项：Historical finding → Initial status → Final fix → Source evidence → Test evidence → **Final status**。
+> Final status 只允许 `CLOSED` / `ACCEPTED P2 LIMITATION`。无 OPEN unresolved P1/P0（本轮审计确认）。
+
+| # | Historical finding | Final fix | Source evidence | Test evidence | **Final status** |
+|---|---|---|---|---|---|
+| P0-A | Coordinator/wrapOperation 未接线生产，真实 destructive 不建 journal（惰性） | 生产接线：withMutationGate journal-aware + Phase3Recovery.runJournaled/runExternalIntent，接入 import/restore/profile-switch/sync-apply/autosync-apply/sync-push/model-tools/CLI/backup（每入口见 PHASE3_HANDOFF §P0-A 表） | index.ts:1458/2344; phase3-host.ts runJournaled; model-tools.ts:200/239; autosync-scheduler.ts:417; backup-scheduler.ts:269; cli/index.ts:644/513 | phase3-production-integration.test.ts（6 项：建 journal 绑定/active≤1/fn异常/COMMITTED-fail/external step/child crash）+ independent final reviewer (生产 destructive 无 journal 改环境?=NO) | **CLOSED** |
+| P0-B | reconcile 把 ROLLING_BACK 空 steps 判为 RECOVERED；不读回滚 WAL | reconcile 对 ROLLING_BACK/entryDone→rollback-continue，绝不 RECOVERED；续回滚读 WAL | reconcile.ts:151-162 | phase3-consistency.test.ts P0-B（real child during-rollback SIGKILL） | **CLOSED** |
+| P1 | SAFE MODE 绕过（restore 路由、model-restore/model-sync-push 未传 isBlocked） | 全部传 isBlocked 谓词 + HostContext.safeModeIsBlocked | index.ts:2309; model-tools.ts:197/237; types.ts | phase3-consistency M12（isBlocked 阻断 + 放行） | **CLOSED** |
+| P1 | active≤1 / terminal guard / lock↔journal 绑定在 Coordinator deps 为桩 | 生产 runJournaled 在已持锁下 scan active/，残留非终态抛 TransactionRecoveryRequiredError；ownerInstanceId=lockCtx 真值；lockId=环境稳定身份 | phase3-host.ts runJournaled（active≤1 扫描 + 绑定） | phase3-production-integration（active≤1 阻断第二 journal） | **CLOSED** |
+| P1 | snapshot 所有权绑定未在校验 | 生产 v1 用 opaque journal（snapshotId=null）→ reconcile snapshotExists(null)=false → NEEDS_ATTENTION，**绝不 snapshot 授权回滚**；回滚恒需用户确认 | reconcile.ts:209/236-252; phase3-host.ts runJournaled（无 snapshotProvider→snapshotId=null） | phase3-security.test（伪造 snapshot→needs-attention 不自动回滚） | **CLOSED（v1：opaque 无 snapshot 授权；完整 operationId 绑定为 v2 逐项 WAL 项，见 §v2）** |
+| 疑点 | phase3-host.isLiveOwner 恒 false（live op 可能被当 abandoned） | 生产 startup `inspectStartup` 用 lockState：LOCKED（fresh heartbeat）→ 强制视为 live 跳过（`||` 修复，不 reconciled/quarantine/move）；STALE/FREE → reconcile；UNKNOWN → SAFE MODE 不接管 | reconcile.ts inspectStartup envWithLive（`||`）；phase3-host.startup | phase3-consistency（live owner → live 跳过，LOCKED 下不判 recoveryRequired；STALE 不自动 recover） | **CLOSED** |
+| P2 | COMMITTED 写失败报 NEEDS_ATTENTION 而非 RECOVERY_REQUIRED | runJournaled 区分：fn 失败→NEEDS_ATTENTION；COMMITTED 持久化失败→保持非终态 + SAFE MODE（RECOVERY_REQUIRED，lock 层不发明终态） | phase3-host.ts runJournaled（fnCompleted/terminalPersistAttempted） | phase3-production-integration（COMMITTED 持久化失败→非终态+SAFE MODE） | **CLOSED（alignment done）** |
+| — | 逐项 beforeFp/afterFp 未实现（生产 opaque） | 保留为 v1 保守策略：无法证明→NEEDS_ATTENTION（不 assume success/not-applied/auto-rollback）；v2 逐项 WAL | phase3-host.ts runJournaled/runExternalIntent（opaque intent）；reconcile.ts（needs-attention） | phase3-security / reconcile needs-attention | **ACCEPTED P2 LIMITATION（v2 增强）** |
+
+> 说明（§21 一致性）：本报告 §10 = `PHASE 3 STATUS: PASS`；**不存在**「P0-A 未闭合」与「PASS」并存的陈旧表述——所有历史 finding 已归档到上述 Final status。
 
 ---
 
@@ -133,7 +139,7 @@ Terminal：COMMITTED / ROLLED_BACK / RECOVERED / NEEDS_ATTENTION
 
 ```
 typecheck:            PASS
-full tests:           1227/1227 PASS（基线 1176 + 51 Phase 3 = 45 核心 + 6 生产集成，0 回归）
+full tests:           1228/1228 PASS（基线 1176 + 52 Phase 3 = 45 核心 + 6 生产集成 + 1 isLiveOwner，0 回归）
 build:                PASS
 failure injection:    PASS（真实 child SIGKILL，含 P0-B regression + 生产路径 child crash）
 child-process crash:  PASS（M8 + phase3-prod-child）
@@ -154,10 +160,14 @@ P0-A initially OPEN（Coordinator 仅测试引用；真实 destructive 只走 Ph
 ```
 生产接线 11 个真实 entry 的锁/journal/operationType/证据见 `PHASE3_HANDOFF.md` §P0-A 状态表。
 
-**剩余（如实标注；均不阻塞 v1 PASS）**：
+**剩余（如实标注；均 ACCEPTED P2 LIMITATION，不阻塞 v1 PASS）**：
 - 逐计划项级 WAL / 指纹（import 每项 beforeFp/afterFp）未做：opaque intent journal → 真实 crash 后 reconcile 保守 needs-attention（**满足 v1「journal exists + SAFE MODE + explicit recovery」**；细粒度自动恢复留 v2，见 PHASE3_HANDOFF §Phase 3 v2）。
 - 生产 reconcile hooks 保守（incomplete → needs-attention，非自动 recovered）。
 - model `config_backup` 与 `profiles/save` 无 GLOBAL 锁（非 live-config 破坏，按 Phase 2 设计可接受，记录）。
+- **P2：Journal→Lock 绑定记录但回收时未强制验证**（`lockId` 为环境稳定合成串，非逐次 lock 所有权文件 inode；ownerInstanceId取自 lockCtx 真值）。因生产 journal 保守（incomplete→needs-attention）+ 回滚需用户确认，安全问题仍受控；完整「回收时绑定校验」留 v2。
+- **P2：启动 reconcile 为 fire-and-forget（`void (async()=>{})`），不能强 await 在 `scheduler.start()` 前**。但 crash 后必留 stale 锁 → autosync/backup 的 acquire 失败自动跳过（`mutation-locked`），故不会在 SAFE MODE 下误跑；强序屏障留 v2。
+
+> **P0 = 0，unresolved P1 = 0**（本轮审计：P1 isLiveOwner `&&`→`||` 已修复 + 测试；§9/§22 保留历史 finding 与最终状态）。
 
 ---
 
