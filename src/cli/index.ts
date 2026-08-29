@@ -15,6 +15,7 @@
  * 缺省数据目录 = $DSH_HOME/dsh-config-manager/snapshots（$DSH_HOME 缺省 ~/.dsh）。
  */
 import os from 'node:os';
+import fssync from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -30,6 +31,7 @@ import {
   type ReinstallPlan, type ReinstallItemId, type ReinstallStep,
 } from '../core/reinstall.ts';
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
+import { Phase3Recovery } from '../core/phase3-host.ts';
 
 /* ------------------------------------------------------------ 参数解析（纯函数） */
 
@@ -196,6 +198,27 @@ export function resolveDshHome(env: Record<string, string | undefined> = process
 export function resolveDataDir(flag: string | undefined, env: Record<string, string | undefined> = process.env): string {
   if (flag !== undefined && flag !== '') return flag;
   return path.join(resolveDshHome(env), 'dsh-config-manager', 'snapshots');
+}
+
+/** Phase 3 SAFE MODE durable 标记路径：<dataDir>/transactions/safe-mode（dataDir = $DSH_HOME/dsh-config-manager）。 */
+function safeModeMarkerPath(homeDir: string): string {
+  return path.join(homeDir, 'dsh-config-manager', 'transactions', 'safe-mode');
+}
+
+/** 检查 Phase 3 SAFE MODE：存在未恢复 transaction → CLI destructive 应拒绝（返回错误文案，否则 null）。 */
+export function checkSafeModeBlocked(homeDir: string): string | null {
+  try {
+    const p = safeModeMarkerPath(homeDir);
+    if (fssync.existsSync(p)) {
+      const text = fssync.readFileSync(p, 'utf8');
+      if (/blocked|true/i.test(text)) {
+        return '存在未恢复的配置 transaction（SAFE MODE 激活）。destructive 操作被阻断：请先用恢复流程处理（GUI 恢复 / 显式 recover）后再重试。';
+      }
+    }
+    return null;
+  } catch {
+    return null; // 读不到标记不阻断（离线 CLI 保守放行读取类）
+  }
 }
 
 /** 快照 id 校验：拒绝路径分隔符/保留名（防 join 越界） */
@@ -450,6 +473,13 @@ async function runReinstall(
       return 0;
     }
 
+    // Phase 3 SAFE MODE：存在未恢复 transaction → 拒绝 destructive（CLI 不旁路 SAFE MODE）。
+    const safeMsg = checkSafeModeBlocked(resolveDshHome(env));
+    if (safeMsg !== null) {
+      io.error(`拒绝执行：${safeMsg}`);
+      return 1;
+    }
+
     // 执行（Phase 2 锁：reinstall 卸载/清扫/重装属 GLOBAL destructive，必须成功获取环境锁）
     const lockHome = resolveDshHome(env);
     const lock = new EnvironmentLockManager({
@@ -459,21 +489,31 @@ async function runReinstall(
       lockVersion: '0.1.0',
     });
     const failed: Array<{ label: string; command: string; reason: string }> = [];
+    // Phase 3 P0-A：CLI reinstall 也建 intent journal（外部副作用不可证明 → crash 后 NEEDS_ATTENTION）。
+    const recovery = new Phase3Recovery({ dataDir: path.join(lockHome, 'dsh-config-manager'), packageVersion: '0.1.0', fingerprintDataDir: path.join(lockHome, 'dsh-config-manager') });
+    await recovery.initFingerprint().catch(() => undefined);
     try {
-      await runWithMutationLock(lock, { op: 'cli-reinstall', target: plan.version }, async () => {
-        io.log(`开始重装 / reinstall started — 版本 ${plan.version}`);
-        for (const step of plan.steps) {
-          if (step.dangerous) {
-            io.log(`⚠ 危险步骤 / dangerous step: ${step.label}`);
+      await runWithMutationLock(lock, { op: 'cli-reinstall', target: plan.version }, async (lockCtx) => {
+        const runReinstall = async (): Promise<void> => {
+          io.log(`开始重装 / reinstall started — 版本 ${plan.version}`);
+          for (const step of plan.steps) {
+            if (step.dangerous) {
+              io.log(`⚠ 危险步骤 / dangerous step: ${step.label}`);
+            }
+            try {
+              await exec(step.command);
+              io.log(`✔ ${step.label}`);
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : String(err);
+              failed.push({ label: step.label, command: step.command, reason });
+              io.error(`✘ ${step.label} — ${reason}`);
+            }
           }
-          try {
-            await exec(step.command);
-            io.log(`✔ ${step.label}`);
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err);
-            failed.push({ label: step.label, command: step.command, reason });
-            io.error(`✘ ${step.label} — ${reason}`);
-          }
+        };
+        if (lockCtx !== null) {
+          await recovery.runExternalIntent({ operationType: 'cli-reinstall', lockCtx, intent: { adapter: 'dsh', ref: 'program', kind: 'Reinstall' }, fn: runReinstall });
+        } else {
+          await runReinstall();
         }
       });
     } catch (err) {
@@ -583,6 +623,12 @@ export async function runCli(
     printPlan(await planRestore(restoreOptions), io);
     return 0;
   }
+  // Phase 3 SAFE MODE：存在未恢复 transaction → 拒绝 destructive（CLI 不旁路 SAFE MODE）。
+  const safeMsg2 = checkSafeModeBlocked(resolveDshHome(env));
+  if (safeMsg2 !== null) {
+    io.error(`拒绝执行：${safeMsg2}`);
+    return 1;
+  }
   // Phase 2 锁：真实 restore 是 destructive（覆盖/删除 $DSH_HOME + 卸载插件），必须成功获取
   // GLOBAL 环境锁；被另一 DSH 任务持有 → 明确报错退出（无 --force 旁路）。无锁目录 → 用默认 dataDir。
   const lock = new EnvironmentLockManager({
@@ -592,7 +638,15 @@ export async function runCli(
     lockVersion: '0.1.0',
   });
   try {
-    const report = await runWithMutationLock(lock, { op: 'cli-restore', target: id }, () => restore(restoreOptions));
+    // Phase 3 P0-A：CLI restore 也创建 durable journal（关闭 bypass）。
+    const recovery = new Phase3Recovery({ dataDir: path.dirname(dataDir), packageVersion: '0.1.0', fingerprintDataDir: path.dirname(dataDir) });
+    await recovery.initFingerprint().catch(() => undefined);
+    const report = await runWithMutationLock(lock, { op: 'cli-restore', target: id }, async (lockCtx) => {
+      if (lockCtx !== null) {
+        return (await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: () => restore(restoreOptions) })).result;
+      }
+      return restore(restoreOptions);
+    });
     printReport(report, io);
     return report.failed.length > 0 ? 1 : 0;
   } catch (err) {

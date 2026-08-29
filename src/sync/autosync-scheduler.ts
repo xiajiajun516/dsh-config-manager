@@ -33,7 +33,7 @@ import type { MsgFunc } from '../core/messages.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
 import type { SyncEngine } from './sync-engine.ts';
-import type { MutationLockPort } from '../utils/env-lock.ts';
+import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
 import { withMutationLock } from '../utils/env-lock.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './autosync-config.ts';
@@ -120,6 +120,17 @@ export interface AutoSyncSchedulerOptions {
   detectLocalChange?: (engine: SyncEngine) => Promise<boolean>;
   /** Phase 2 跨进程环境锁端口（可选注入；缺省无锁环境——自动同步 apply（写本地配置）属 GLOBAL mutation） */
   mutationLock?: MutationLockPort;
+  /** Phase 3 SAFE MODE：注入同步谓词（被挡 → autosync skip），供 withMutationLock isBlocked 用。 */
+  isBlocked?: () => boolean;
+  /** Phase 3 recovery（可选注入）：apply/push 包 intent journal（P0-A 接线）。 */
+  phase3Recovery?: {
+    runExternalIntent(opts: {
+      operationType: string;
+      lockCtx: MutationLockContext;
+      intent: { adapter: string; ref: string; kind: string };
+      fn: () => Promise<unknown>;
+    }): Promise<{ operationId: string; result: unknown }>;
+  };
 }
 
 export class AutoSyncScheduler {
@@ -139,6 +150,10 @@ export class AutoSyncScheduler {
   private readonly detectRemoteNew: (engine: SyncEngine) => Promise<boolean>;
   private readonly detectLocalChange: (engine: SyncEngine) => Promise<boolean>;
   private readonly mutationLock: MutationLockPort | undefined;
+  private readonly isBlocked: (() => boolean) | undefined;
+  private readonly phase3Recovery: { runExternalIntent(opts: { operationType: string; lockCtx: MutationLockContext; intent: { adapter: string; ref: string; kind: string }; fn: () => Promise<unknown> }): Promise<{ operationId: string; result: unknown }> } | undefined;
+  /** 本次 runOnce 由 withMutationLock 取得的下游锁上下文（供 apply/push journal-wrap），非线程级。 */
+  private lockCtxForJournal: MutationLockContext | null = null;
 
   /** 每通道一个定时器（git/webdav 各自 enabled 时独立排期）。 */
   private readonly timers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
@@ -160,6 +175,8 @@ export class AutoSyncScheduler {
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
     this.mutationLock = opts.mutationLock;
+    this.isBlocked = opts.isBlocked;
+    this.phase3Recovery = opts.phase3Recovery;
     this.detectRemoteNew = opts.detectRemoteNew ?? defaultDetectRemoteNew;
     this.detectLocalChange = opts.detectLocalChange ?? defaultDetectLocalChange;
   }
@@ -266,7 +283,7 @@ export class AutoSyncScheduler {
     let releaseLock: (() => Promise<void>) | null = null;
     if (this.mutationLock !== undefined) {
       try {
-        const lk = await withMutationLock(this.mutationLock, { op: 'autosync', target: channel });
+        const lk = await withMutationLock(this.mutationLock, { op: 'autosync', target: channel, isBlocked: this.isBlocked });
         if (lk.context === null) {
           this.running = false;
           return {
@@ -275,6 +292,7 @@ export class AutoSyncScheduler {
           };
         }
         releaseLock = lk.release;
+        this.lockCtxForJournal = lk.context;
       } catch {
         this.running = false;
         return { status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId, consecutiveFailures: cfg.consecutiveFailures };
@@ -394,8 +412,14 @@ export class AutoSyncScheduler {
           // 远端快照无物可应用（全部 skip / 无变化）→ 无远端合并产出；若本地有改动则仅走上传。
           // 此处不立即返回，让 Phase C 依据 localDirty 决定是否上传本地改动。
         } else {
-          // Phase B: 写入本地（applyMergePlan，无 review-queue 写）
-          const applyReport = await engine.applyMergePlan(apply);
+          // Phase B: 写入本地（applyMergePlan，无 review-queue 写）。P0-A：包 intent journal。
+          const rawApply = async () => engine.applyMergePlan(apply);
+          const applyReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
+            ? (await this.phase3Recovery.runExternalIntent({
+                operationType: 'autosync-apply', lockCtx: this.lockCtxForJournal,
+                intent: { adapter: 'sync', ref: channel, kind: 'Apply' }, fn: rawApply,
+              })).result as import('./sync-engine.ts').ApplyReport
+            : await rawApply();
           appliedSections = applyReport.applied as SectionId[];
           if (!applyReport.ok) {
             const error = applyReport.warnings.join('; ') || 'applyMergePlan 执行失败';
@@ -417,7 +441,14 @@ export class AutoSyncScheduler {
       // Phase C: push 上传（完整双向）—— 仅当本地真有改动才上传（§3.1）；startup 变体不上传。
       if (!opts.startup && localDirty) {
         try {
-          const pushReport = await engine.push();
+          // Phase C: 完整双向 → engine.push() 上传。P0-A：外部 push 包 intent journal。
+          const rawPush = async () => engine.push();
+          const pushReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
+            ? (await this.phase3Recovery.runExternalIntent({
+                operationType: 'autosync-push', lockCtx: this.lockCtxForJournal,
+                intent: { adapter: 'sync', ref: channel, kind: 'Push' }, fn: rawPush,
+              })).result as import('./sync-engine.ts').SyncPushReport
+            : await rawPush();
           if (!pushReport.ok) {
             const error = pushReport.message ?? 'push 失败';
             const result: AutosyncRunResult = {

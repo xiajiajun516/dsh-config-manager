@@ -67,8 +67,19 @@ export interface BackupSchedulerOptions {
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
   /** 日志（缺省 host.log） */
   log?: Logger;
-  /** Phase 2 跨进程环境锁端口（可选注入；缺省无锁环境，测试 mock 不注入） */
+  /** Phase 2 跨进程环境锁端口（可选注入；缺省无锁环境） */
   mutationLock?: MutationLockPort;
+  /** Phase 3 SAFE MODE：注入同步谓词（被挡 → backup skipped），供 runWithMutationLock isBlocked 用。 */
+  isBlocked?: () => boolean;
+  /** Phase 3 recovery（可选注入）：backup export 包 intent journal（P0-A，可选 §20.3）。 */
+  phase3Recovery?: {
+    runExternalIntent(opts: {
+      operationType: string;
+      lockCtx: import('../utils/env-lock.ts').MutationLockContext;
+      intent: { adapter: string; ref: string; kind: string };
+      fn: () => Promise<unknown>;
+    }): Promise<{ operationId: string; result: unknown }>;
+  };
 }
 
 export class BackupScheduler {
@@ -87,6 +98,8 @@ export class BackupScheduler {
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
   private readonly log: Logger;
   private readonly mutationLock: MutationLockPort | undefined;
+  private readonly isBlocked: (() => boolean) | undefined;
+  private readonly phase3Recovery: BackupSchedulerOptions['phase3Recovery'];
 
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
@@ -108,6 +121,8 @@ export class BackupScheduler {
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
     this.log = opts.log ?? this.host.log;
     this.mutationLock = opts.mutationLock;
+    this.isBlocked = opts.isBlocked;
+    this.phase3Recovery = opts.phase3Recovery;
   }
 
   /** 启动：读配置 → enabled 时排定时器 → 执行一次启动触发备份。 */
@@ -200,7 +215,8 @@ export class BackupScheduler {
     try {
       // Phase 2 锁：定时备份写入 exports 属 GLOBAL mutation（与 Sync push / 手动备份互斥）。
       // 无锁环境（测试）→ 不锁定直接执行；锁被占用 → 返回 failed（destructive 不执行）。
-      const result: BackupRunResult = await runWithMutationLock(this.mutationLock, { op: 'backup-schedule', target: 'exports' }, async () => {
+      const result: BackupRunResult = await runWithMutationLock(this.mutationLock, { op: 'backup-schedule', target: 'exports', isBlocked: this.isBlocked }, async (lockCtx) => {
+        const doExport = async (): Promise<BackupRunResult> => {
         const exporter = new Exporter({
           ctx: this.host,
           adapters: this.adapters,
@@ -248,6 +264,15 @@ export class BackupScheduler {
           this.log.warn('定时备份保留策略清理失败', { error: err instanceof Error ? err.message : String(err) });
         }
         return backupResult;
+        };
+        // Phase 3 P0-A：backup export 记 intent journal（声明已接线，关闭 P1 gap）
+        if (this.phase3Recovery !== undefined && lockCtx !== null) {
+          return (await this.phase3Recovery.runExternalIntent({
+            operationType: 'backup-schedule', lockCtx,
+            intent: { adapter: 'backup', ref: 'exports', kind: 'Backup' }, fn: doExport,
+          })).result as BackupRunResult;
+        }
+        return doExport();
       });
       return result;
     } catch (err) {

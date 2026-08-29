@@ -190,10 +190,18 @@ export function createModelTools(deps: ModelToolsDeps) {
           })),
         }
       }
+      // Step 3 P0-A：真实 model-restore 在已持锁下创建 journal（不 double-acquire）
+      const doRestore = async (): Promise<RestoreReport> => executeRestore(restoreOpts)
       const report: RestoreReport = await runWithMutationLock(
         deps.host.mutationLock,
-        { op: 'model-restore', target: snapshotId },
-        () => executeRestore(restoreOpts),
+        { op: 'model-restore', target: snapshotId, isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false },
+        async (lockCtx) => {
+          if (deps.host.phase3Recovery !== undefined && lockCtx !== null) {
+            const r = await deps.host.phase3Recovery.runJournaled({ operationType: 'model-restore', lockCtx, fn: doRestore })
+            return r.result
+          }
+          return doRestore()
+        },
       )
       return {
         dryRun: false,
@@ -218,13 +226,26 @@ export function createModelTools(deps: ModelToolsDeps) {
       const sections = input.sections === undefined ? undefined : filterSectionIds(input.sections)
       const encrypt = input.encrypt === true
       const includeSecrets = input.includeSecrets === true
-      // Phase 2 锁：push 写远端 + 本地散文件 + sync-state，属 GLOBAL mutation
-      const report = await runWithMutationLock(deps.host.mutationLock, { op: 'model-sync-push' }, () => engine.push({
+      // Phase 2 锁：push 写远端 + 本地散文件 + sync-state，属 GLOBAL mutation。
+      // Step 3 P0-A：外部 push 记 intent journal（crash 后不可证明 → NEEDS_ATTENTION，不自动重推）。
+      const doPush = () => engine.push({
         ...(sections === undefined ? {} : { sections }),
         ...(encrypt || includeSecrets
           ? { encrypt: true, includeSecrets, password: input.password ?? '' }
           : {}),
-      }))
+      })
+      const report = await runWithMutationLock(deps.host.mutationLock, { op: 'model-sync-push', isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
+        if (deps.host.phase3Recovery !== undefined && lockCtx !== null) {
+          const r = await deps.host.phase3Recovery.runExternalIntent({
+            operationType: 'model-sync-push',
+            lockCtx,
+            intent: { adapter: 'sync', ref: input.channel ?? 'default', kind: 'Push' },
+            fn: doPush,
+          })
+          return r.result
+        }
+        return doPush()
+      })
       return {
         ok: report.ok,
         snapshotId: report.snapshotId,

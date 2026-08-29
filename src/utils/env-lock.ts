@@ -196,8 +196,12 @@ export interface MutationLockPort {
  */
 export async function withMutationLock(
   port: MutationLockPort | undefined,
-  opts: { op: string; target?: string; parentContext?: MutationLockContext },
+  opts: { op: string; target?: string; parentContext?: MutationLockContext; isBlocked?: () => boolean },
 ): Promise<{ context: MutationLockContext | null; release(): Promise<void> }> {
+  // Phase 3 SAFE MODE：注入谓词被挡 → 拒绝（generic blocked?，不识 policy/why）
+  if (opts.isBlocked?.() === true) {
+    return { context: null, release: async () => {} }
+  }
   if (port === undefined) {
     // 无锁环境（mock/测试）：不锁定，调用方自行保证（返回 null + no-op release）
     return { context: null, release: async () => {} }
@@ -231,7 +235,7 @@ export async function withMutationLock(
  */
 export async function runWithMutationLock<T>(
   port: MutationLockPort | undefined,
-  opts: { op: string; target?: string; parentContext?: MutationLockContext },
+  opts: { op: string; target?: string; parentContext?: MutationLockContext; isBlocked?: () => boolean },
   fn: (ctx: MutationLockContext | null) => Promise<T>,
 ): Promise<T> {
   if (port === undefined) return fn(null)

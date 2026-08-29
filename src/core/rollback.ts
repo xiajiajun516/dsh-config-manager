@@ -18,6 +18,9 @@ export interface RollbackOptions {
   snapshot: Snapshot;
   store?: SnapshotStore;
   adapters?: ConfigAdapter[];
+  /** 回滚 WAL（Phase 3）：每补偿完一条 entry 调用，供 Coordinator 记录 rollback.entryDone；
+   *   crash during rollback 后 reconcile 从 WAL 判定已补偿/未补偿，避免盲目从头重做。 */
+  entryDone?: (entryIndex: number) => Promise<void>;
 }
 
 /** 逆序补偿单条快照条目；返回 null=成功，否则为失败原因 */
@@ -114,13 +117,14 @@ async function compensateOne(
 
 /** 回滚：逆序补偿全部条目；返回诚实报告（full / partial） */
 export async function rollback(opts: RollbackOptions): Promise<RollbackReport> {
-  const { ctx, snapshot, store, adapters } = opts;
+  const { ctx, snapshot, store, adapters, entryDone } = opts;
   const restored: string[] = [];
   const failed: RollbackReport['failed'] = [];
 
   // 逆序遍历；adapter 自带的 rollback? 优先，否则引擎通用补偿
   const entries = [...snapshot.entries].reverse();
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!;
     const adapter = adapters?.find((a) => a.id === entry.adapter);
     let error: { reason: string; manualHint?: string } | null = null;
     if (adapter?.rollback) {
@@ -132,6 +136,10 @@ export async function rollback(opts: RollbackOptions): Promise<RollbackReport> {
     } else {
       error = await compensateOne(entry, ctx, store);
     }
+    // 回滚 WAL：每补偿一项记 entryDone（crash 后可判定进度）
+    try {
+      await opts.entryDone?.(index);
+    } catch { /* WAL 写失败不阻断回滚（best-effort） */ }
     if (error === null) {
       restored.push(`${entry.adapter}:${entry.ref}`);
     } else {

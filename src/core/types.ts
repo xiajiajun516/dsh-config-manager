@@ -145,6 +145,13 @@ export interface HostContext {
    * 测试 mock 缺省不注入 → 无锁环境（不锁定、不抛）。绝不用进程级 reentrancy 判断嵌套。
    */
   mutationLock?: MutationLockPort;
+  /**
+   * Phase 3 SAFE MODE：同步谓词（读内存标志），供 runWithMutationLock/withMutationLock 的
+   * isBlocked 注入（env-lock 不识 policy）。true → 阻断 destructive。
+   */
+  safeModeIsBlocked?: () => boolean;
+  /** Phase 3 恢复/事务（JournalStore + reconcile + runJournaled/runExternalIntent）。宿主注入。 */
+  phase3Recovery?: import('./phase3-host.ts').Phase3Recovery;
 }
 
 /* ---------------- 导入计划（§13.3 十类 + 决策） ---------------- */

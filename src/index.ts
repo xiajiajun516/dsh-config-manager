@@ -79,7 +79,8 @@ import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
-import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from './utils/env-lock.ts'
+import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
+import { Phase3Recovery, TransactionRecoveryRequiredError } from './core/phase3-host.ts'
 import type { MutationLockPort } from './utils/env-lock.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
@@ -834,6 +835,10 @@ class ConfigManagerHostContext implements HostContext {
   readonly fs: FileSystemFacade
   /** Phase 2 跨进程环境锁端口（宿主注入；测试 mock 不注入 → 无锁环境） */
   mutationLock?: MutationLockPort
+  /** Phase 3 SAFE MODE：注入同步谓词（读内存标志，供 withMutationLock isBlocked 用；env-lock 不识 policy） */
+  safeModeIsBlocked?: () => boolean
+  /** Phase 3 恢复/事务（JournalStore + reconcile + SAFE MODE + runJournaled）。apply() 注入。 */
+  phase3Recovery?: import('./core/phase3-host.ts').Phase3Recovery
 
   constructor(ctx: Context, homeDir: string, profile: string) {
     this.homeDir = homeDir
@@ -1438,17 +1443,36 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
    * 包裹一个 mutation handler：进入前 acquire GLOBAL 环境锁（无 lock 配置 → 直接放行），
    * 被另一进程/操作持有（含同进程另一操作）→ 409/423 拒绝；执行后 finally 释放。
    * 嵌套调用（rollback / applyItems 内部 executeImportPlan）在外层已持锁区域内运行，绝不 reacquire。
+   * Phase 3 SAFE MODE：isBlocked 注入谓词（host.safeModeIsBlocked）被挡 → 423（不执行 destructive）。
    */
   const withMutationGate = (
     op: string,
-    handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>,
+    handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext) => Promise<void>,
+    opts?: { journaled?: boolean },
   ): ((req: IncomingMessage, res: ServerResponse) => Promise<void>) => {
     return async (req, res) => {
       try {
-        await runWithMutationLock(host.mutationLock, { op }, async () => { await handler(req, res) })
+        await runWithMutationLock(host.mutationLock, { op, isBlocked: () => host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
+          // Step 3 P0-A：所有被 gate 覆盖的 destructive 路由在已持锁下创建 durable journal
+          // （runJournaled 不 double-acquire、不 release；锁由本 gate 的 finally 释放）。
+          if (host.phase3Recovery !== undefined && (opts?.journaled ?? true) && lockCtx !== null) {
+            await host.phase3Recovery.runJournaled({
+              operationType: op,
+              lockCtx,
+              fn: async () => { await handler(req, res, lockCtx) },
+            })
+          } else {
+            await handler(req, res, lockCtx ?? undefined)
+          }
+        })
       } catch (error) {
         if (error instanceof EnvironmentLockUnavailableError) {
           writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+          return
+        }
+        // 非 423：若已由 runJournaled 置 SAFE MODE/失败，保持既有错误语义（400/500）
+        if (error instanceof TransactionRecoveryRequiredError) {
+          writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
           return
         }
         throw error
@@ -1578,6 +1602,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     msg,
     runs,
     mutationLock: host.mutationLock,
+    isBlocked: () => host.safeModeIsBlocked?.() ?? false,
+    phase3Recovery: host.phase3Recovery,
   })
   // 启动：读 autosync-config；若 enabled 启动定时器；无条件执行一次「启动触发下载合并」（受阈值约束）
   scheduler.start()
@@ -2280,42 +2306,52 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             return
           }
           // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
-          await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId }, async () => {
-            // 先登记 run（同 kind running → 409 拒绝重复恢复）
-            let run: RunState
-            try {
-              run = runs.register('restore')
-            } catch (error) {
-              writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
-              return
+          await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId, isBlocked: () => host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
+            const executeRestore = async (): Promise<void> => {
+              // 先登记 run（同 kind running → 409 拒绝重复恢复）
+              let run: RunState
+              try {
+                run = runs.register('restore')
+              } catch (error) {
+                writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
+                return
+              }
+              const runId = run.runId
+              try {
+                const plan = await planRestore(restoreOpts)
+                const report = await executeRestorePlan(
+                  plan,
+                  makeRestoreExecutor(snapshotDir, host, host.profile),
+                  // m1 埋点：每执行一个恢复动作实时更新 run 状态（/progress 轮询可见）
+                  (info) => {
+                    runs.update(runId, {
+                      section: 'restore',
+                      item: info.index,
+                      itemTotal: info.total,
+                      detail: info.detail,
+                    })
+                  },
+                )
+                runs.finish(runId, report)
+                writeJson(res, 200, { dryRun: false, report, runId })
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                runs.fail(runId, message)
+                writeJson(res, 400, { error: message, runId })
+              }
             }
-            const runId = run.runId
-            try {
-              const plan = await planRestore(restoreOpts)
-              const report = await executeRestorePlan(
-                plan,
-                makeRestoreExecutor(snapshotDir, host, host.profile),
-                // m1 埋点：每执行一个恢复动作实时更新 run 状态（/progress 轮询可见）
-                (info) => {
-                  runs.update(runId, {
-                    section: 'restore',
-                    item: info.index,
-                    itemTotal: info.total,
-                    detail: info.detail,
-                  })
-                },
-              )
-              runs.finish(runId, report)
-              writeJson(res, 200, { dryRun: false, report, runId })
-            } catch (error) {
-              const message = error instanceof Error ? error.message : String(error)
-              runs.fail(runId, message)
-              writeJson(res, 400, { error: message, runId })
+            // Step 3 P0-A：真实 restore 在已持锁下创建 journal（不 double-acquire；release 由本 gate）
+            if (host.phase3Recovery !== undefined && lockCtx !== null) {
+              await host.phase3Recovery.runJournaled({ operationType: 'restore', lockCtx, fn: executeRestore })
+            } else {
+              await executeRestore()
             }
           })
         } catch (error) {
           if (error instanceof EnvironmentLockUnavailableError) {
             writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+          } else if (error instanceof TransactionRecoveryRequiredError) {
+            writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
           } else {
             writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
           }
@@ -3937,6 +3973,31 @@ export function apply(ctx: Context, config?: Config): void {
     target: 'global-mutation',
     lockVersion: PLUGIN_VERSION,
   })
+  const envLockManager = host.mutationLock as EnvironmentLockManager
+  // Phase 3：启动 reconcile（只读）+ SAFE MODE。宿主 apply() 为同步 →
+  // ① 先同步探测 durable SAFE MODE 标记（scheduler.start() 前即被阻断），
+  // ② 再异步跑完整只读 reconcile，刷新标志与 durable 标记。不自动 recover stale lock（Rev 3 P1-NEW-2）。
+  const phase3Recovery = new Phase3Recovery({ dataDir, packageVersion: PLUGIN_VERSION })
+  host.safeModeIsBlocked = () => phase3Recovery.safeModeActive
+  host.phase3Recovery = phase3Recovery
+  phase3Recovery.probeSafeModeSync()
+  if (phase3Recovery.safeModeActive) {
+    host.log.warn('Phase 3 SAFE MODE 激活：存在未恢复的 transaction，destructive 操作被阻断（如需恢复请先显式处理）')
+  }
+  void (async () => {
+    try {
+      await phase3Recovery.initFingerprint()
+      const lockInsp = await envLockManager.inspectLockState()
+      const insp = await phase3Recovery.startup(lockInsp.state)
+      if (insp.recoveryRequired) {
+        host.log.warn('Phase 3 RECOVERY_REQUIRED：上次 destructive operation 崩溃残留，锁 stale/未知，需显式恢复')
+      }
+    } catch (err) {
+      host.log.warn('Phase 3 启动 reconcile 失败（保守忽略，不阻断宿主挂载）', {
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })()
   // 缓存自动清理：启动即清一次 + 每 24h 定时清一次。
   // 只清「可重建/一次性」缓存与临时文件（tmp 暂存、exports 导出副本、market cache/work），
   // 保留期内的文件不删（供刷新恢复导入/下载等窗口继续消费）；snapshots 与 sync 属用户数据/安全网不动。
@@ -4006,6 +4067,8 @@ export function apply(ctx: Context, config?: Config): void {
     msg: host.msg,
     exporterVersion: PLUGIN_VERSION,
     mutationLock: host.mutationLock,
+    isBlocked: () => host.safeModeIsBlocked?.() ?? false,
+    phase3Recovery: host.phase3Recovery,
   })
   const { routes, scheduler, makeSyncEngine } = makeRoutes({
     host,

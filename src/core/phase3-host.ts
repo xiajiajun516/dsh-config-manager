@@ -1,0 +1,255 @@
+/**
+ * Phase 3 Host Recovery 集成助手。
+ *
+ * 职责（最小、保守）：
+ *  - 持有 JournalStore + 内存 SAFE MODE 标志（isBlocked 同步谓词，供 env-lock 注入）。
+ *  - `startup(lockState)`：启动时**只读**扫描 + 锁状态判定 → 设 SAFE MODE / RECOVERY_REQUIRED（durable）。
+ *    **不自动 recover stale lock**（Rev 3 P1-NEW-2）。
+ *  - 保守 reconcile hooks：任何无法证明的 step → needs-attention → SAFE MODE（绝不自动恢复/回滚）。
+ *
+ * 引擎级 WAL / 指纹（import/restore 逐 step 插桩）为 Phase 3 v1 之外（§33 不要临时扩大）——
+ * 本助手提供保守的「operation intent + crash 判定」基础，供宿主在各 destructive 入口包 Coordinator。
+ */
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import fssync from 'node:fs';
+import {
+  JournalStore, environmentFingerprint as computeFingerprint, SAFE_MODE_MARKER,
+  generateOperationId, createJournalEntry, transitionJournalState, isTerminalState,
+} from './journal.ts';
+import { inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './reconcile.ts';
+import type { LockState, MutationLockContext } from '../utils/env-lock.ts';
+
+/** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
+export class TransactionRecoveryRequiredError extends Error {
+  constructor(opId: string) {
+    super(`active transaction ${opId} 未收敛（待 recover / reconcile），拒绝创建新 transaction`)
+    this.name = 'TransactionRecoveryRequiredError'
+  }
+}
+
+/** 把环境锁分类映射到 startup 判定：ACQUIRED 视同 LOCKED（有活跃 owner），IO/PERMISSION 保守 LOCKED。 */
+export function mapLockStateForStartup(state: LockState): 'LOCKED' | 'STALE_LOCK_DETECTED' | 'UNKNOWN_STATE' | 'FREE' {
+  if (state === 'STALE_LOCK_DETECTED') return 'STALE_LOCK_DETECTED';
+  if (state === 'UNKNOWN_STATE') return 'UNKNOWN_STATE';
+  return 'LOCKED'; // ACQUIRED / LOCKED / LOCK_IO_ERROR / PERMISSION_ERROR → 保守 LOCKED
+}
+
+export interface Phase3RecoveryOptions {
+  dataDir: string;
+  packageVersion: string;
+  /** 覆盖环境指纹（测试） */
+  environmentFingerprint?: string;
+  /** 环境指纹持久化 token 目录（缺省 dataDir） */
+  fingerprintDataDir?: string;
+}
+
+export class Phase3Recovery {
+  readonly store: JournalStore;
+  readonly packageVersion: string;
+  private readonly dataDir: string;
+  private readonly fingerprintDataDir: string;
+  private environmentFingerprint: string;
+  /** GLOBAL lock 稳定身份（每环境唯一，Journal→Lock 绑定用；来自 dataDir，非 per-op fake）。 */
+  readonly lockId: string;
+
+  /** 内存 SAFE MODE 标志（isBlocked 同步谓词用） */
+  safeModeActive = false;
+
+  constructor(opts: Phase3RecoveryOptions) {
+    this.dataDir = opts.dataDir;
+    this.fingerprintDataDir = opts.fingerprintDataDir ?? opts.dataDir;
+    this.store = new JournalStore({ transactionsDir: path.join(opts.dataDir, 'transactions') });
+    this.packageVersion = opts.packageVersion;
+    this.environmentFingerprint = opts.environmentFingerprint ?? 'unknown';
+    this.lockId = `GLOBAL-LOCK@${path.basename(path.resolve(opts.dataDir))}`;
+  }
+
+  /** 计算环境指纹（持久化 token；跨启动稳定）。在 startup 前调用一次。 */
+  async initFingerprint(): Promise<string> {
+    try {
+      await fs.mkdir(this.fingerprintDataDir, { recursive: true });
+      this.environmentFingerprint = await computeFingerprint(this.fingerprintDataDir);
+    } catch {
+      this.environmentFingerprint = 'unknown';
+    }
+    return this.environmentFingerprint;
+  }
+
+  /** isBlocked 同步谓词（供 withMutationLock / runWithMutationLock 注入；env-lock 只问 blocked?） */
+  isBlocked(): boolean {
+    return this.safeModeActive;
+  }
+
+  /** 刷新 SAFE MODE 标志（读 durable 标记） */
+  async refreshSafeMode(): Promise<void> {
+    this.safeModeActive = await this.store.readSafeMode().catch(() => false);
+  }
+
+  /** 同步探测 durable SAFE MODE 标记（宿主 apply() 同步阶段、scheduler.start() 前调用，保证先阻断）。 */
+  probeSafeModeSync(): boolean {
+    const p = path.join(this.dataDir, 'transactions', SAFE_MODE_MARKER);
+    try {
+      const text = fssync.existsSync(p) ? fssync.readFileSync(p, 'utf8') : '';
+      const blocked = /blocked|true/i.test(text);
+      this.safeModeActive = blocked;
+      return blocked;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 保守 hooks：无法证明默认 needs-attention（绝不自动恢复/回滚） */
+  private conservativeHooks(): ReconcileProbeHooks {
+    return {
+      verifyStepFingerprint: async () => 'unable',
+      probeExternal: async () => 'unknown',
+      snapshotExists: async () => false,
+    };
+  }
+
+  /**
+   * 启动只读 reconcile：返回是否需 SAFE MODE / RECOVERY_REQUIRED，并写 durable 标记。
+   * @param lockState 宿主 EnvironmentLockManager 的 inspectLockState 结果（只分类，不自动 recover）
+   */
+  async startup(lockState: LockState): Promise<{ safeModeRequired: boolean; recoveryRequired: boolean }> {
+    const env: ReconcileEnv = {
+      environmentFingerprint: this.environmentFingerprint || 'unknown',
+      isLiveOwner: async () => false,
+    };
+    const insp = await inspectStartup(this.store, this.conservativeHooks(), env, {}, mapLockStateForStartup(lockState));
+    if (insp.safeModeRequired) this.safeModeActive = true;
+    return { safeModeRequired: insp.safeModeRequired, recoveryRequired: insp.recoveryRequired };
+  }
+
+  /** 用户确认恢复后清除 SAFE MODE（清空 durable 标记 + 内存标志） */
+  async clearSafeMode(): Promise<void> {
+    this.safeModeActive = false;
+    await this.store.writeSafeMode(false);
+  }
+
+  /**
+   * 生产 journal 包装（关闭 P0-A）：在【已持 GLOBAL 锁】下，为该 destructive operation
+   * 创建 durable journal（CREATED → snapshot → APPLYING → 执行真实引擎 → COMMITTED → 规整）。
+   *
+   *  - active≤1（§14）：创建前扫描 active/；存在非 terminal 残留（非当前 live owner）→ 抛错阻断，不建第二个 journal。
+   *  - Journal→Lock 绑定（§15）：ownerInstanceId = lockCtx.token.instanceId；lockId = 本环境 GLOBAL lock 稳定身份。
+   *  - 不 double-acquire（§6）：调用方（host gate）已持锁，本方法只负责 journal 生命周期，不 re-acquire、不 release（release 由 gate 负责）。
+   *  - 异常 → NEEDS_ATTENTION + durable SAFE MODE + rethrow（不破坏既有错误/响应流）。
+   *  - 返回 { operationId, result }。
+   */
+  async runJournaled<T>(opts: {
+    operationType: string;
+    lockCtx: MutationLockContext;
+    /** 可选：真实 pre-operation snapshot（回滚点），返回 snapshotId。 */
+    snapshotProvider?(): Promise<string | null>;
+    fn: () => Promise<T>;
+  }): Promise<{ operationId: string; result: T }> {
+    const { operationType, lockCtx, snapshotProvider, fn } = opts;
+    const ownerInstanceId = (lockCtx?.token?.instanceId ?? 'unknown').toString();
+
+    // active≤1：存在非 terminal 残留 → 阻断（不创建第二个 journal）
+    const activeIds = await this.store.scanActive();
+    for (const opId of activeIds) {
+      const j = await this.store.loadActive(opId);
+      if (j === null) continue;
+      const ts = ['COMMITTED', 'ROLLED_BACK', 'RECOVERED', 'NEEDS_ATTENTION'] as const;
+      if (!(ts as readonly string[]).includes(j.state)) {
+        throw new TransactionRecoveryRequiredError(opId);
+      }
+    }
+
+    const opId = generateOperationId();
+    const base = {
+      operationId: opId, ownerInstanceId, lockId: this.lockId,
+      packageVersion: this.packageVersion, environmentFingerprint: this.environmentFingerprint || 'unknown',
+    };
+    await this.store.create(createJournalEntry(operationType, base, new Date().toISOString()));
+    let fnCompleted = false;
+    let terminalPersistAttempted = false;
+    try {
+      let snapId: string | null = null;
+      if (snapshotProvider !== undefined) {
+        snapId = await snapshotProvider();
+        await this.store.update(opId, (j) => transitionJournalState({ ...j, snapshotId: snapId }, 'SNAPSHOT_CREATED')).catch(() => undefined);
+      } else {
+        await this.store.update(opId, (j) => transitionJournalState(j, 'APPLYING'));
+      }
+      const result = await fn();
+      fnCompleted = true;
+      // 尾操作：从任意 pre-commit 状态推进到 COMMITTED（合法链 SNAPSHOT_CREATED→APPLYING→VALIDATING→COMMITTED）
+      await this.store.update(opId, (j) => {
+        let next = j;
+        if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
+        if (next.state === 'APPLYING') next = transitionJournalState(next, 'VALIDATING');
+        next = transitionJournalState(next, 'COMMITTED');
+        return { ...next, commit: { at: new Date().toISOString(), validated: true, validationWarnings: [] } };
+      });
+      terminalPersistAttempted = true;
+      await this.store.moveToCompleted(opId).catch(() => undefined);
+      return { operationId: opId, result };
+    } catch (err) {
+      this.safeModeActive = true;
+      await this.store.writeSafeMode(true).catch(() => undefined);
+      if (fnCompleted && !terminalPersistAttempted) {
+        // 真实事务副作用已完成，但 terminal 持久化失败 → RECOVERY_REQUIRED（不伪造终态，保持非终态 journal）
+        // （此处保持 journal 非终态：apply 已成功、COMMITTED 未 durable —— 由下一轮显式 recovery 决定。
+        //   SAFE MODE 已设；不额外写 NEEDS_ATTENTION，避免把「无法 durable 记录 outcome」误报成「已分类 NEEDS_ATTENTION」。）
+      } else if (!fnCompleted) {
+        // fn / side effect 阶段失败：op 已开始但 outcome 不确定 → NEEDS_ATTENTION（durable 分类）
+        const j = await this.store.loadActive(opId);
+        if (j !== null && !isTerminalState(j.state)) {
+          await this.store.update(opId, (cur) => transitionJournalState(cur, 'NEEDS_ATTENTION')).catch(() => undefined);
+        }
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * 轻量 operation 包装（意图 journal，供外部/不可证明操作如 sync-push / reinstall 用）：
+   *   创建 CREATED → APPLYING（含 external intent step）→ 执行 → COMMITTED；异常 → NEEDS_ATTENTION + SAFE MODE。
+   */
+  async runExternalIntent<T>(opts: {
+    operationType: string;
+    lockCtx: MutationLockContext;
+    intent: { adapter: string; ref: string; kind: string };
+    fn: () => Promise<T>;
+  }): Promise<{ operationId: string; result: T }> {
+    const { operationType, lockCtx, intent, fn } = opts;
+    const ownerInstanceId = (lockCtx?.token?.instanceId ?? 'unknown').toString();
+    const opId = generateOperationId();
+    const base = {
+      operationId: opId, ownerInstanceId, lockId: this.lockId,
+      packageVersion: this.packageVersion, environmentFingerprint: this.environmentFingerprint || 'unknown',
+    };
+    await this.store.create(createJournalEntry(operationType, base, new Date().toISOString()));
+    try {
+      await this.store.update(opId, (j) => {
+        const extStep: import('./journal.ts').JournalStep = { adapter: intent.adapter, ref: intent.ref, kind: intent.kind, external: true, beforeFp: null, afterFp: null, status: 'planned', appliedAt: null };
+        const withStep = {
+          ...j, plannedSteps: ['ext'], steps: { ext: extStep },
+        };
+        return transitionJournalState(withStep, 'APPLYING');
+      });
+      const result = await fn();
+      await this.store.update(opId, (j) => {
+        let next = j;
+        if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
+        if (next.state === 'APPLYING') next = transitionJournalState(next, 'VALIDATING');
+        next = transitionJournalState(next, 'COMMITTED');
+        return { ...next, commit: { at: new Date().toISOString(), validated: true, validationWarnings: [] } };
+      });
+      await this.store.moveToCompleted(opId).catch(() => undefined);
+      return { operationId: opId, result };
+    } catch (err) {
+      const j = await this.store.loadActive(opId);
+      if (j !== null && !isTerminalState(j.state)) {
+        await this.store.update(opId, (cur) => transitionJournalState(cur, 'NEEDS_ATTENTION')).catch(() => undefined);
+      }
+      this.safeModeActive = true;
+      await this.store.writeSafeMode(true).catch(() => undefined);
+      throw err;
+    }
+  }
+}
