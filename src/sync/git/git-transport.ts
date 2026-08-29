@@ -31,6 +31,7 @@ import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
 import { computeSnapshotMeta, isEncryptedSections } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
+import { atomicWriteFile } from '../../utils/atomic-write.ts';
 import { SECTION_FILE_PREFIXES } from '../../schema/config.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { zhMsg } from '../../core/messages.ts';
@@ -400,7 +401,7 @@ export class GitTransport implements SyncTransport {
     const credFile = path.join(tmpDir, 'credential');
     const host = this.repoHost();
     const fileArg = quoteGitValue(credFile.replace(/\\/g, '/'));
-    await fs.writeFile(credFile, `https://${this.o.credentialUsername}:${token}@${host}\n`, { encoding: 'utf8', mode: 0o600 });
+    await atomicWriteFile(credFile, `https://${this.o.credentialUsername}:${token}@${host}\n`, { mode: 0o600, symlink: 'reject' });
     return {
       extraArgs: ['-c', 'credential.helper=', '-c', `credential.helper=store --file=${fileArg}`],
       token,

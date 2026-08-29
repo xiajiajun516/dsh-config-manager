@@ -20,6 +20,7 @@ import crypto from 'node:crypto';
 
 import type { SyncTransportType } from './sync-config.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 export const AUTOSYNC_CONFIG_FILE = 'sync-autosync.json';
 export const AUTOSYNC_CONFIG_SCHEMA_VERSION = 2;
@@ -154,18 +155,8 @@ export async function writeAutosyncConfig(dir: string, channel: SyncTransportTyp
     },
   };
   const target = path.join(dir, AUTOSYNC_CONFIG_FILE);
-  const tmp = path.join(
-    dir,
-    `.${AUTOSYNC_CONFIG_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
-  );
   const data = stringifyJsonSafe(payload, { space: 2 });
-  try {
-    await fs.writeFile(tmp, data, 'utf8');
-    await fs.rename(tmp, target);
-  } catch (err) {
-    try { await fs.rm(tmp, { force: true }); } catch { /* ignore */ }
-    throw err;
-  }
+  await atomicWriteFile(target, data, { mode: 0o600 });
 }
 
 /** AutosyncConfig → 文件载荷（可选运行字段仅在非空时写入，保持文件干净）。 */

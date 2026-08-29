@@ -13,6 +13,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { SyncTransportType } from './sync-config.ts';
 
@@ -114,16 +115,6 @@ export async function appendAutosyncEntry(
 
   await fs.mkdir(dir, { recursive: true });
   const target = path.join(dir, SYNC_HISTORY_FILE);
-  const tmp = path.join(
-    dir,
-    `.${SYNC_HISTORY_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
-  );
   const data = stringifyJsonSafe(current, { space: 2 });
-  try {
-    await fs.writeFile(tmp, data, 'utf8');
-    await fs.rename(tmp, target);
-  } catch (err) {
-    try { await fs.rm(tmp, { force: true }); } catch { /* ignore */ }
-    throw err;
-  }
+  await atomicWriteFile(target, data, { mode: 0o600 });
 }

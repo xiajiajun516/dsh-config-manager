@@ -16,6 +16,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 export const REVIEW_QUEUE_FILE = 'sync-review-queue.json';
 
@@ -93,19 +94,8 @@ export async function writeReviewQueue(
 ): Promise<void> {
   await fsx.mkdir(stateDir, { recursive: true });
   const target = path.join(stateDir, REVIEW_QUEUE_FILE);
-  const tmp = path.join(
-    stateDir,
-    `.${REVIEW_QUEUE_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
-  );
   const data = stringifyJsonSafe(queue, { space: 2 });
-  try {
-    await fsx.writeFile(tmp, data, 'utf8');
-    await fsx.rename(tmp, target);
-  } catch (err) {
-    // 清理可能残留的临时文件
-    try { await fsx.stat(tmp); await fsx.rename(tmp, target); } catch { /* ignore */ }
-    throw err;
-  }
+  await atomicWriteFile(target, data, { mode: 0o600 });
 }
 
 /** 生成稳定 id（基于内容的 hex；同 description → 同 id，便于去重） */

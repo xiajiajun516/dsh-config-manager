@@ -78,6 +78,7 @@ import { ImportNotConfirmedError, ImportUserSkippedError } from './core/types.ts
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
+import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
@@ -739,8 +740,7 @@ class DshPatchFileFacade implements PatchFileFacade {
     }
     const text = '# rewritten by dsh-config-manager import (original comments not preserved)\n'
       + yaml.dump(out)
-    await fs.mkdir(dirname(p), { recursive: true })
-    await fs.writeFile(p, text, 'utf8')
+    await atomicWriteFile(p, text)
   }
 }
 
@@ -765,9 +765,8 @@ class DshFileSystemFacade implements FileSystemFacade {
   }
 
   async writeFile(relPath: string, data: Uint8Array): Promise<void> {
-    const target = this.abs(relPath)
-    await fs.mkdir(dirname(target), { recursive: true })
-    await fs.writeFile(target, data)
+    // 原子写（Phase 1）：同目录 tmp + fsync + rename，覆盖所有经 HostContext.fs 的配置写
+    await atomicWriteFile(this.abs(relPath), data)
   }
 
   async exists(relPath: string): Promise<boolean> {
@@ -780,9 +779,7 @@ class DshFileSystemFacade implements FileSystemFacade {
   }
 
   async copy(from: string, to: string): Promise<void> {
-    const target = this.abs(to)
-    await fs.mkdir(dirname(target), { recursive: true })
-    await fs.copyFile(this.abs(from), target)
+    await atomicCopyFile(this.abs(from), this.abs(to))
   }
 
   async remove(relPath: string): Promise<void> {
@@ -1997,10 +1994,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             writeJson(res, 400, { error: decryptErrorText(new SecurityError('BAD_PASSWORD', '解密认证失败'), msg) })
             return
           }
-          // 解密得到明文 ZIP
+          // 解密得到明文 ZIP（Security-sensitive transient：随机独占名 + 0600 + 先权限后写，用后即删）
           const plain = await decryptArchive(container, verified.info, verified.kdf, password)
           plainZipPath = join(tmpDir, `decrypted-${randomBytes(6).toString('hex')}.zip`)
-          await fs.writeFile(plainZipPath, plain)
+          await atomicWriteFile(plainZipPath, plain, { mode: 0o600, symlink: 'reject' })
           // 顺带解出内部凭据覆盖清单（同一密码；旧版 DSC1-only 备份无 secrets.enc → 空）
           let refs: string[] = []
           try {

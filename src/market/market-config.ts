@@ -11,6 +11,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { validateRepoUrl } from '../sync/sync-config.ts';
 
 export const MARKET_CONFIG_FILE = 'market-config.json';
@@ -77,7 +78,7 @@ export async function writeMarketConfig(dir: string, cfg: MarketConfig): Promise
     schemaVersion: MARKET_CONFIG_SCHEMA_VERSION,
     markets: cfg.markets,
   };
-  await fs.writeFile(path.join(dir, MARKET_CONFIG_FILE), stringifyJsonSafe(payload, { space: 2 }), 'utf8');
+  await atomicWriteFile(path.join(dir, MARKET_CONFIG_FILE), stringifyJsonSafe(payload, { space: 2 }), { mode: 0o600 });
 }
 
 /**

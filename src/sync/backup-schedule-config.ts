@@ -22,6 +22,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 export const BACKUP_SCHEDULE_FILE = 'backup-schedule.json';
 export const BACKUP_SCHEDULE_SCHEMA_VERSION = 1;
@@ -198,16 +199,6 @@ export async function writeBackupSchedule(dir: string, cfg: BackupScheduleConfig
   if (cfg.lastRunStatus !== undefined) payload['lastRunStatus'] = cfg.lastRunStatus;
   if (cfg.lastRunMessage !== undefined && cfg.lastRunMessage !== '') payload['lastRunMessage'] = cfg.lastRunMessage;
   const target = path.join(dir, BACKUP_SCHEDULE_FILE);
-  const tmp = path.join(
-    dir,
-    `.${BACKUP_SCHEDULE_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
-  );
   const data = stringifyJsonSafe(payload, { space: 2 });
-  try {
-    await fs.writeFile(tmp, data, 'utf8');
-    await fs.rename(tmp, target);
-  } catch (err) {
-    try { await fs.rm(tmp, { force: true }); } catch { /* ignore */ }
-    throw err;
-  }
+  await atomicWriteFile(target, data, { mode: 0o600 });
 }

@@ -25,6 +25,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 export const UI_PREFS_FILE = 'ui-prefs.json';
 export const UI_PREFS_SCHEMA_VERSION = 1;
@@ -102,18 +103,8 @@ export async function writeUiPrefs(dir: string, prefs: UiPrefs): Promise<void> {
     ...(prefs.starPromptClicked === true ? { starPromptClicked: true } : {}),
   };
   const target = path.join(dir, UI_PREFS_FILE);
-  const tmp = path.join(
-    dir,
-    `.${UI_PREFS_FILE}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`,
-  );
   const data = stringifyJsonSafe(payload, { space: 2 });
-  try {
-    await fs.writeFile(tmp, data, 'utf8');
-    await fs.rename(tmp, target);
-  } catch (err) {
-    try { await fs.rm(tmp, { force: true }); } catch { /* ignore */ }
-    throw err;
-  }
+  await atomicWriteFile(target, data, { mode: 0o600 });
 }
 
 /**

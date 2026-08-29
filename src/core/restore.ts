@@ -31,6 +31,7 @@ import {
   classifyDshPluginFailure, readInstalled, resolveProfileDir, runDshPlugin,
 } from './plugin-cli.ts';
 import { parseJsonSafe } from '../utils/json.ts';
+import { atomicCopyFile, atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { HostContext, Snapshot, SnapshotStatus } from './types.ts';
 
@@ -200,7 +201,7 @@ async function resolveSettingsRelPath(homeDir: string, settingsPath?: string): P
 async function copyToPreRestore(preDir: string, absPath: string, label: string, seq: number): Promise<void> {
   const safe = label.replace(/[\\/:*?"<>|]/g, '_');
   await fs.mkdir(preDir, { recursive: true });
-  await fs.copyFile(absPath, path.join(preDir, `${String(seq).padStart(4, '0')}-${safe}`));
+  await atomicCopyFile(absPath, path.join(preDir, `${String(seq).padStart(4, '0')}-${safe}`));
 }
 
 /** 默认插件卸载器：官方 dsh plugin remove 通道 + 失败分类诊断 */
@@ -510,8 +511,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
           const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!, msg));
-          await fs.mkdir(path.dirname(abs), { recursive: true });
-          await fs.writeFile(abs, data);
+          await atomicWriteFile(abs, data);
           report.restored.push(action.target!);
           break;
         }
@@ -528,8 +528,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
           const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!, msg));
-          await fs.mkdir(path.dirname(abs), { recursive: true });
-          await fs.writeFile(abs, data);
+          await atomicWriteFile(abs, data);
           report.restored.push(action.target!);
           break;
         }
@@ -693,6 +692,6 @@ export async function setSnapshotPinned(snapshotsDir: string, id: string, pinned
   }
   const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
   snapshot.pinned = pinned;
-  await fs.writeFile(file, JSON.stringify(snapshot, null, 2));
+  await atomicWriteFile(file, JSON.stringify(snapshot, null, 2));
   return pinned;
 }

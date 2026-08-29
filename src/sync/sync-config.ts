@@ -27,6 +27,7 @@ import path from 'node:path';
 import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 export const SYNC_CONFIG_FILE = 'sync-config.json';
 
@@ -239,7 +240,7 @@ export async function writeSyncConfig(dir: string, cfg: SyncConfig): Promise<voi
     // 保留另一通道的 git 配置（存在时）
     if (existing.git !== undefined) payload.git = existing.git
   }
-  await fs.writeFile(file, stringifyJsonSafe(payload, { space: 2 }), 'utf8');
+  await atomicWriteFile(file, stringifyJsonSafe(payload, { space: 2 }), { mode: 0o600 });
 }
 
 /**

@@ -10,6 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { parseJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
   ConfigAdapter, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
@@ -301,9 +302,9 @@ export class FileSnapshotStore implements SnapshotStore {
       const target = path.join(dir, blobPath);
       if (!target.startsWith(dir)) throw new Error(`快照 blob 路径越界: ${blobPath}`);
       await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, data);
+      await atomicWriteFile(target, data);
     }
-    await fs.writeFile(path.join(dir, 'snapshot.json'), JSON.stringify(snapshot, null, 2));
+    await atomicWriteFile(path.join(dir, 'snapshot.json'), JSON.stringify(snapshot, null, 2));
     await this.prune();
     return snapshot.id;
   }
@@ -350,6 +351,6 @@ export class FileSnapshotStore implements SnapshotStore {
     const file = path.join(this.snapshotDir(id), 'snapshot.json');
     const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
     snapshot.status = status;
-    await fs.writeFile(file, JSON.stringify(snapshot, null, 2));
+    await atomicWriteFile(file, JSON.stringify(snapshot, null, 2));
   }
 }

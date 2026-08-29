@@ -24,6 +24,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { validateRepoUrl } from '../sync/sync-config.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type { GitAuthor, GitCredentialProvider, GitExecFn, GitExecResult } from '../sync/git/git-transport.ts';
 
 const execFileAsync = promisify(execFile);
@@ -256,7 +257,7 @@ export class GitFileWriterClient implements GitFileWriter {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-git-cred-'));
     const credFile = path.join(tmpDir, 'credential');
     const fileArg = quoteGitValue(credFile.replace(/\\/g, '/'));
-    await fs.writeFile(credFile, `https://${this.credentialUsername}:${token}@github.com\n`, { encoding: 'utf8', mode: 0o600 });
+    await atomicWriteFile(credFile, `https://${this.credentialUsername}:${token}@github.com\n`, { mode: 0o600, symlink: 'reject' });
     return {
       extraArgs: ['-c', 'credential.helper=', '-c', `credential.helper=store --file=${fileArg}`],
       cleanup: async () => { await fs.rm(tmpDir, { recursive: true, force: true }); },

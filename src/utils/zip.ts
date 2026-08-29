@@ -11,6 +11,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { parseJsonSafe } from './json.ts';
 import { isPathSafe, isSameOrChild } from './paths.ts';
+import { atomicWriteFile } from './atomic-write.ts';
 
 export interface ZipEntryMeta {
   name: string;
@@ -150,11 +151,10 @@ export function zipToBuffer(entries: ZipWriteEntry[]): Uint8Array {
   return Buffer.concat([...chunks, cd, eocd]);
 }
 
-/** 写出 ZIP 文件 */
+/** 写出 ZIP 文件（原子写，避免半写 zip） */
 export async function writeZip(zipPath: string, entries: ZipWriteEntry[]): Promise<void> {
   const buf = zipToBuffer(entries);
-  await fs.mkdir(path.dirname(zipPath), { recursive: true });
-  await fs.writeFile(zipPath, buf);
+  await atomicWriteFile(zipPath, buf);
 }
 
 /* ---------------- 读取 ---------------- */

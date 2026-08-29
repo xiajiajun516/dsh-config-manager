@@ -27,6 +27,7 @@ import { zhMsg } from '../core/messages.ts';
 import { ImportNotConfirmedError } from '../core/types.ts';
 import { isFileSection } from '../schema/config.ts';
 import { stringifyJsonSafe, parseJsonSafe } from '../utils/json.ts';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type {
   ApplyResult, ConfigAdapter, ExecutedItem, GlobalConflictStrategy, HostContext,
   ImportContext, ImportPlan, ItemResolution, PlanItem, RollbackReport,
@@ -219,7 +220,7 @@ export class ProfileManager {
 
   private async writeStored(stored: StoredProfile): Promise<void> {
     await fs.mkdir(this.profileDir(stored.name), { recursive: true });
-    await fs.writeFile(this.profileFile(stored.name), stringifyJsonSafe(stored, { space: 2 }), 'utf8');
+    await atomicWriteFile(this.profileFile(stored.name), stringifyJsonSafe(stored, { space: 2 }), { mode: 0o600 });
   }
 
   /* ---------------- Save / Duplicate / Rename / Delete ---------------- */
@@ -278,7 +279,7 @@ export class ProfileManager {
     stored.name = newName;
     stored.updatedAt = new Date().toISOString();
     await fs.mkdir(this.profileDir(newName), { recursive: true });
-    await fs.writeFile(this.profileFile(newName), stringifyJsonSafe(stored, { space: 2 }), 'utf8');
+    await atomicWriteFile(this.profileFile(newName), stringifyJsonSafe(stored, { space: 2 }), { mode: 0o600 });
     await fs.rm(this.profileDir(oldName), { recursive: true, force: true });
     return this.meta(newName);
   }
@@ -533,7 +534,7 @@ export class ProfileManager {
   /** 导出 Profile 为单 JSON 文件（dsh-profile-<name>.json，自包含可分发；文件类数据 base64 内嵌） */
   async exportProfile(name: string, outPath: string): Promise<{ path: string; fileCount: number }> {
     const stored = await this.readStored(name);
-    await fs.writeFile(outPath, stringifyJsonSafe(stored, { space: 2 }), 'utf8');
+    await atomicWriteFile(outPath, stringifyJsonSafe(stored, { space: 2 }), { mode: 0o600 });
     return { path: outPath, fileCount: Object.keys(stored.sections).length };
   }
 

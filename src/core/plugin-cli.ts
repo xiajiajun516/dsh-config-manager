@@ -20,6 +20,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
+import { atomicWriteFileSync } from '../utils/atomic-write.ts'
 import type { PluginInfo } from './types.ts'
 
 /* ------------------------------------------------------------ profile 文件 */
@@ -90,9 +91,9 @@ export function readProfileManifest(profileDir: string): ProfileManifest | null 
   }
 }
 
-/** 写回 profile package.json（2 空格缩进 + 尾换行，与 dsh-app-boot 一致）。 */
+/** 写回 profile package.json（2 空格缩进 + 尾换行，与 dsh-app-boot 一致；原子写防半装损坏）。 */
 export function writeProfileManifest(profileDir: string, manifest: ProfileManifest): void {
-  writeFileSync(join(profileDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  atomicWriteFileSync(join(profileDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o644 })
 }
 
 /** 真实已装的依赖（in-box bundles 过滤掉）：name → 声明的版本 spec。 */

@@ -3,6 +3,7 @@
  * 默认实现包 node:fs/promises；测试/内存场景可注入自定义实现（零副作用、纯接口）。
  */
 import fs from 'node:fs/promises';
+import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 /** 同步层所需的文件系统操作最小集（路径均为宿主文件系统绝对路径） */
 export interface SnapshotFs {
@@ -30,7 +31,8 @@ export function joinFs(dir: string, rel: string): string {
 export function createSnapshotFs(): SnapshotFs {
   return {
     async readFile(p) { return fs.readFile(p); },
-    async writeFile(p, data) { await fs.writeFile(p, data); },
+    /** 原子写：同目录 tmp + fsync + rename（同步快照文件不半写；注入的 mem-fs 天然原子） */
+    async writeFile(p, data) { await atomicWriteFile(p, data); },
     async mkdir(p) { await fs.mkdir(p, { recursive: true }); },
     async readdir(p) {
       try { return (await fs.readdir(p)).sort(); } catch { return []; }
