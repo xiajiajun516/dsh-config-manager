@@ -59,8 +59,12 @@ import * as yaml from 'js-yaml'
 import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
 import { ProfileManager, isValidProfileName } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
-import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, type RestorePlan, type RestoreReport } from './core/restore.ts'
+import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, validateSnapshotForRestore, type RestorePlan, type RestoreReport, type RestoreSnapshotVerdict } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
+import { recomputeRecoveryDecision, executeRecovery } from './core/reconcile.ts'
+import { verifyRecovery, recoveryTerminalState } from './core/verify-recovery.ts'
+import { createRecoveryOrchestrator, type RecoveryExecutorFns } from './core/recovery-orchestrator.ts'
+import { redactJournalText, isValidOperationId, isTerminalState, transitionJournalState, JournalStore, type OperationJournal } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
@@ -72,7 +76,7 @@ import {
 import type {
   ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
   ImportPlan, NamespaceInfo, PatchFileFacade, PlanItem, PlanItemKind, PluginInfo, PluginsFacade,
-  SettingsFacade, WorkspaceFacade,
+  SettingsFacade, Snapshot, WorkspaceFacade,
 } from './core/types.ts'
 import { ImportNotConfirmedError, ImportUserSkippedError } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
@@ -288,6 +292,8 @@ const API = {
   profilesAnalyzeSwitch: '/api/dsh-config-manager/profiles/analyze-switch',
   profilesExecuteSwitch: '/api/dsh-config-manager/profiles/execute-switch',
   profilesImport: '/api/dsh-config-manager/profiles/import',
+  // Phase 5：recovery 编排（prefix 路由，内部按 path 分发：status / <opId>/preview|confirm|execute|verify|retry|dismiss）
+  recovery: '/api/dsh-config-manager/recovery',
 } as const
 
 /**
@@ -1742,6 +1748,46 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     gitWriter: createGitFileWriter({ credentials: { getToken: meTokenProvider } }),
     tokenProvider: meTokenProvider,
     now: () => new Date(),
+  })
+
+  // ============================================================ Phase 5 recovery orchestration
+  // Recovery 路由**禁用 withMutationGate**（避免 double-journal：recovery 复用被恢复 operation 的
+  // 现有 journal，不新建）。mutation 路由只经 withMutationLock（Phase 2 GLOBAL 锁）+ loopback fence，
+  // **不传 isBlocked**（recovery 是解决 SAFE MODE 的机制，若被 SAFE MODE 阻断会死锁）。
+  // 只读路由（status/preview）不持锁。权威 snapshotId 只来自 j.snapshotId（不接受请求体覆盖）。
+  // 编排逻辑在 src/core/recovery-orchestrator.ts（可测纯编排层）。
+  const recoveryOrchestrator = createRecoveryOrchestrator({
+    store: host.phase3Recovery?.store ?? new JournalStore({ transactionsDir: join(dataDir, 'transactions') }),
+    runs,
+    snapshotsDir,
+    host,
+    msg,
+    snapshotExists: async (snapshotId, binding) => {
+      if (host.phase3Recovery === undefined) return false
+      return host.phase3Recovery.recoveryHooks.snapshotExists(snapshotId, binding)
+    },
+    environmentFingerprint: host.phase3Recovery?.recoveryEnvFingerprint ?? 'unknown',
+  })
+  /** 构造 recovery 执行器（restore / rollback），供 execute/retry 注入（runId 用于进度埋点）。 */
+  const makeRecoveryExecutors = (runId: string): RecoveryExecutorFns => ({
+    performRestore: async (snapshotId) => {
+      const dir = join(snapshotsDir, snapshotId)
+      const restoreOpts = {
+        snapshotDir: dir, homeDir: host.homeDir, profile: host.profile, settingsPath: undefined, msg,
+        snapshotsRoot: snapshotsDir, environmentFingerprint: host.phase3Recovery?.recoveryEnvFingerprint ?? 'unknown', requireOperationBound: true,
+      }
+      const plan = await planRestore(restoreOpts)
+      const report = await executeRestorePlan(plan, makeRestoreExecutor(dir, host, host.profile), (info) => {
+        runs.update(runId, { section: 'recovery', item: info.index, itemTotal: info.total, detail: info.detail })
+      })
+      return { full: report.failed.length === 0, failed: report.failed.map((f) => f.item) }
+    },
+    performRollback: async (snapshotId) => {
+      const store = new FileSnapshotStore({ dir: snapshotsDir })
+      const snap = await store.load(snapshotId)
+      const report = await performRollback({ ctx: host, snapshot: snap, store, adapters })
+      return { full: report.full, failed: report.failed.map((f) => f.item) }
+    },
   })
 
   const routesList: WebRoute[] = [
@@ -3950,6 +3996,61 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             ? 404
             : code
           writeJson(res, message, { error: redact(error instanceof Error ? error.message : String(error)) })
+        }
+      },
+    },
+    // ------------------------------------------------------------ recovery
+    // Phase 5：recovery 编排（prefix 路由，内部按 path 分发）。
+    // 禁用 withMutationGate（避免 double-journal）；mutation 路由经 withMutationLock + loopback fence。
+    {
+      kind: 'prefix',
+      path: API.recovery,
+      handler: async (req, res) => {
+        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: 'forbidden: loopback-only' }); return }
+        const url = new URL(req.url ?? '/', 'http://localhost')
+        const rel = url.pathname.slice(API.recovery.length).replace(/^\/+/, '')
+        const segments = rel.split('/').filter(Boolean)
+        if (segments.length === 0) { writeJson(res, 404, { error: 'not found' }); return }
+        if (segments[0] === 'status') {
+          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          const r = await recoveryOrchestrator.status()
+          writeJson(res, r.status, r.body)
+          return
+        }
+        if (segments.length !== 2) { writeJson(res, 404, { error: 'not found' }); return }
+        const operationId = segments[0]!
+        const action = segments[1]!
+        if (!isValidOperationId(operationId)) { writeJson(res, 400, { error: 'invalid operationId' }); return }
+        const methodFor: Record<string, 'GET' | 'POST'> = { preview: 'GET', confirm: 'POST', execute: 'POST', verify: 'POST', retry: 'POST', dismiss: 'POST' }
+        const expected = methodFor[action]
+        if (expected === undefined) { writeJson(res, 404, { error: 'not found' }); return }
+        if (req.method !== expected) { writeJson(res, 405, { error: 'method not allowed' }); return }
+        try {
+          if (action === 'preview') {
+            const r = await recoveryOrchestrator.preview(operationId)
+            writeJson(res, r.status, r.body)
+            return
+          }
+          // mutation 路由：withMutationLock（Phase 2 GLOBAL 锁）+ loopback fence；不 double-journal。
+          // 不传 isBlocked：recovery 是解决 SAFE MODE 的机制，若被 SAFE MODE 阻断会死锁。
+          await runWithMutationLock(host.mutationLock, { op: `recovery-${action}`, target: operationId }, async () => {
+            const body = await readJsonBody(req)
+            const userConfirmed = body?.['userConfirmed'] === true
+            let r
+            if (action === 'confirm') r = await recoveryOrchestrator.confirm(operationId, userConfirmed)
+            else if (action === 'execute') r = await recoveryOrchestrator.execute(operationId, userConfirmed, makeRecoveryExecutors)
+            else if (action === 'verify') r = await recoveryOrchestrator.verify(operationId)
+            else if (action === 'retry') r = await recoveryOrchestrator.retry(operationId, userConfirmed, makeRecoveryExecutors)
+            else if (action === 'dismiss') r = await recoveryOrchestrator.dismiss(operationId, userConfirmed)
+            else r = { status: 404, body: { error: 'not found' } } as const
+            writeJson(res, r.status, r.body)
+          })
+        } catch (error) {
+          if (error instanceof EnvironmentLockUnavailableError) {
+            writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+            return
+          }
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     },
