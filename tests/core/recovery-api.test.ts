@@ -100,7 +100,8 @@ async function setup(t: test.TestContext, opts: { state?: OperationJournal['stat
   const orch = createRecoveryOrchestrator({
     store, runs, snapshotsDir, host, msg: zhMsg,
     snapshotExists: async (id) => id !== null && id !== '',
-    environmentFingerprint: FP,
+    getEnvironmentFingerprint: () => FP,
+    clearSafeMode: async () => { await store.writeSafeMode(false); },
   });
   return { store, runs, snapshotsDir, homeDir, transactionsDir, host, orch, snap, opId };
 }

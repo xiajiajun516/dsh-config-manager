@@ -99,7 +99,8 @@ async function setup(t: test.TestContext, opts: { state?: OperationJournal['stat
   const orch = createRecoveryOrchestrator({
     store, runs, snapshotsDir, host, msg: zhMsg,
     snapshotExists: async (id) => id !== null && id !== '',
-    environmentFingerprint: FP,
+    getEnvironmentFingerprint: () => FP,
+    clearSafeMode: async () => { await store.writeSafeMode(false); },
   });
   return { store, runs, snapshotsDir, homeDir, transactionsDir, host, orch, snap, opId };
 }
@@ -212,6 +213,29 @@ test('C6: verification success（MATCH）→ 单次原子 update → ROLLED_BACK
   assert.equal(j?.recoveryVerification?.verdict, 'MATCH', 'recoveryVerification 已写入');
   // 已规整到 completed
   assert.deepEqual(await h.store.scanActive(), []);
+});
+
+test('C6b: recovery 成功后无其他未解决 incident → SAFE MODE 清除（解除阻断）', async (t) => {
+  const h = await setup(t, { state: 'RECOVERING' });
+  await h.store.writeSafeMode(true);
+  const r = await h.orch.verify(h.opId);
+  assert.equal(r.status, 200);
+  assert.equal((r.body as { terminal: string }).terminal, 'ROLLED_BACK');
+  assert.equal(await h.store.readSafeMode(), false, '唯一 incident 恢复成功 → SAFE MODE 清除');
+});
+
+test('C6c: recovery 成功后仍有其他未解决 incident → SAFE MODE 保持（不误清除）', async (t) => {
+  const h = await setup(t, { state: 'RECOVERING' });
+  await h.store.writeSafeMode(true);
+  // 另造一个未解决 incident
+  const other = '00000000-0000-4000-8000-0000000000bb';
+  await h.store.create(mkJournal(other, 'NEEDS_ATTENTION', h.snap.id));
+  const r = await h.orch.verify(h.opId);
+  assert.equal(r.status, 200);
+  assert.equal((r.body as { terminal: string }).terminal, 'ROLLED_BACK');
+  assert.equal(await h.store.readSafeMode(), true, '仍有未解决 incident → SAFE MODE 保持');
+  // 清理测试残留
+  await h.store.quarantine(other, 'cleanup');
 });
 
 // ---------- C7：crash between verification calculation and journal persistence → 不得假定成功（fail-closed） ----------

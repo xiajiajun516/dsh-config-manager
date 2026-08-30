@@ -1766,7 +1766,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       if (host.phase3Recovery === undefined) return false
       return host.phase3Recovery.recoveryHooks.snapshotExists(snapshotId, binding)
     },
-    environmentFingerprint: host.phase3Recovery?.recoveryEnvFingerprint ?? 'unknown',
+    // 动态 getter：环境指纹在 fire-and-forget 启动分类块（initFingerprint）完成后才就绪，
+    // 创建期捕获会拿到 'unknown' 初值 → 后续 recovery API 误判 WRONG_ENVIRONMENT。
+    // 改动态读取保证 API 调用时取到真实指纹（recovery-orchestrator 已改为 getter 语义）。
+    getEnvironmentFingerprint: () => host.phase3Recovery?.recoveryEnvFingerprint ?? 'unknown',
+    // 清除 SAFE MODE：同时重置内存标志（isBlocked 读它）与 durable 标记。
+    // 仅当 recovery 成功且无其他未解决 incident 时由编排器调用（§5.3 / §10.2）。
+    clearSafeMode: async () => {
+      if (host.phase3Recovery !== undefined) await host.phase3Recovery.clearSafeMode()
+    },
   })
   /** 构造 recovery 执行器（restore / rollback），供 execute/retry 注入（runId 用于进度埋点）。 */
   const makeRecoveryExecutors = (runId: string): RecoveryExecutorFns => ({
