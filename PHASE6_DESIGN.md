@@ -45,7 +45,7 @@
 /** §5 覆盖的操作 kind（COMPLETE 不变量；常量枚举，天然非敏感） */
 export type MigrationKind =
   | 'import' | 'restore' | 'rollback'
-  | 'profile-switch' | 'profile-delete' | 'profile-rename' | 'profile-save'
+  | 'profile-switch' | 'profile-delete' | 'profile-rename' | 'profile-save' | 'profile-import'
   | 'sync-apply' | 'autosync' | 'recovery'
   | 'backup' | 'snapshot-delete' | 'snapshot-prune'
 
@@ -76,12 +76,16 @@ export interface MigrationHistoryEntry {
 ### 3.2 数据文件形态
 
 ```json
-{ "schemaVersion": 1, "at": "…", "kind": "import", "result": "success",
+{ "schemaVersion": 1, "contentHash": "sha256…", "at": "…", "kind": "import", "result": "success",
   "sections": ["plugins","settings"], "operationId": "…", "snapshotId": "…",
   "source": "api", "summary": "导入 2 个分区", "error": null }
 ```
 
 - `schemaVersion: 1` 常量（每文件内联；读取校验，不匹配则忽略该文件）。
+- `contentHash`：对除 contentHash 外全字段的稳定 SHA-256（键排序 + 无空白序列化）。
+  用于 **append-only 篡改检测**（Append-only 评审 P1 裁决）：合法 JSON 内改任意字段值
+  （含 result/summary/at）→ 读回 hash 不符 → 该文件被识别为损坏并计数跳过（不静默接受）。
+  仅是内联字段（非 MAC/签名、非第二套 integrity framework；审计史非对抗性安全边界）。
 - 单文件整体为不可变快照；任何字段写入后不改。
 
 ---
@@ -132,25 +136,44 @@ async function tryAppendHistory(history, entry, host): Promise<void> {
 ## 6. 接线清单（Step 5；COMPLETE 不变量）
 
 > 在**结果确定后**（success/failed/skipped）追加。每个入口经 `tryAppendHistory`（best-effort）。
+> （Integration 评审修正：sections 来源全部改为真实存在的字段；新增 profile-import；snapshot-prune 用宿主回调不污染核心引擎。）
 
-| kind | 接线点（真实源码位置） | sections 来源 | 附加 BOUND 字段 |
+| kind | 接线点（真实源码位置） | sections 来源（真实字段） | 附加 BOUND 字段 |
 |---|---|---|---|
-| import | `/execute` handler `runs.finish` 后（index.ts ~L2291），取 `ImportResult` | `result.applied/…`（sections） | operationId=journalCtx, runId |
-| restore | `/restore` handler `runs.finish` 后（~L2407），取 `RestoreReport` | report sections | snapshotId, runId |
-| rollback | `core/rollback.ts` `rollback()` 返回后（调用方注入），或 `/sync/rollback` handler | report sections | snapshotId |
-| profile-switch | `/profiles/execute-switch`（~L2631 成功） | 切换 preview sections | operationId=snapshotBinding, runId |
-| profile-delete | `/profiles/delete` 成功（~L2540） | [profile] | 无 |
-| profile-rename | `/profiles/rename` 成功（~L2564） | [profile] | 无 |
-| profile-save | `/profiles/save` 成功（~L2521） | meta.sections | 无 |
-| sync-apply | `/sync/apply-items` 成功（~L3409） | subPlan sections / report.applied | operationId=journalCtx |
-| autosync | `autosync-scheduler.ts` runOnce 结果（success/skipped/failed） | appliedSections | 无（或 runId） |
-| recovery | `recovery-orchestrator.ts` execute/retry/rollback 结果 | 相关分区 | operationId |
-| backup | `backup-scheduler.ts` runOnce（`BackupRunResult`） | report.sections | 无 |
-| snapshot-delete | `/snapshots/delete` 成功（~L2452） | [snapshot] | snapshotId |
-| snapshot-prune | `core/backup.ts` `FileSnapshotStore.prune()`（自动保留清理） | 被清快照 → sections?  | 被清快照 id 清单摘要 |
+| import | `/execute` handler `runs.finish` 后（index.ts ~L2291），取 `result` + `plan` | `plan.items[].adapter` 去重（ExecutionItem 无 section 维度） | operationId=journalCtx, runId |
+| restore | `/restore` handler `runs.finish` 后（~L2407），取 `plan`（execute 前已算） | `RestorePlan.actions[].adapter` 去重（`RestoreReport` 无 sections） | snapshotId, runId |
+| rollback | `/sync/rollback` handler（~L3558） | `report` 无 sections → `[]` + summary | snapshotId |
+| profile-switch | `/profiles/execute-switch`（~L2631 成功） | `SwitchPreview.sectionsInProfile` | operationId=snapshotBinding, runId |
+| profile-delete | `/profiles/delete` 成功（~L2540） | `[name]` | 无 |
+| profile-rename | `/profiles/rename` 成功（~L2564） | `[name]` | 无 |
+| profile-save | `/profiles/save` 成功（~L2521） | `meta.sections` | 无 |
+| profile-import | `/profiles/import` 成功（Integration P1-1） | `meta.sections` | 无 |
+| sync-apply | `/sync/apply-items` 成功（~L3409） | `report.applied`（真实存在） | operationId=journalCtx |
+| autosync | `autosync-scheduler.ts` runOnce | `AutosyncRunResult.appliedSections`（复用现有 appendHistoryFn） | 无（或 runId） |
+| recovery | `recovery-orchestrator.ts` **terminal 点**（verify→ROLLED_BACK / execute failed / retry terminal；Integration P1-5 裁决：不记进行中 RECOVERING） | 从被恢复 journal 的 operationType 映射或 `[]`（无 sections 字段支撑） | operationId, snapshotId |
+| backup | `backup-scheduler.ts` runOnce（`BackupRunResult`） | `report.sections` | 无（需新增 appendHistoryFn 注入，Integration P2-1） |
+| snapshot-delete | `/snapshots/delete` 成功（~L2452） | `[snapshotId]` | snapshotId |
+| snapshot-prune | `core/backup.ts` `FileSnapshotStore.prune()` 后（Integration P1-4 裁决：**宿主经 FileSnapshotStoreOptions 注入可选 `history` 回调**，prune 删除后回调记录；不把 history store 依赖塞进核心引擎构造） | 被清快照 → `[]` + summary 列 id | 被清 snapshotId 清单（摘要） |
 
-> **实现方式**：新建 `src/core/migration-history.ts` 提供 store；宿主在 `makeRoutes`/`apply()` 注入一个 `MigrationHistory` 实例到 RoutesDeps；各路由 handler 在结果确定后调用 `tryAppendHistory`。autosync / backup-scheduler 通过构造参数注入（已有 `appendHistoryFn`/`history?` 注入范式）。**recovery** 在 orchestrator 的结果点注入（recovery-orchestrator 已持有 runs，同注入方式）。
-> **snapshot-prune**：`FileSnapshotStore.prune()` 是自动清理（在 createSnapshot 内尾调用），历史记「本次保留清理删除的 id 清单」为 summary + sections（若可映射）。
+**COMPLETE 裁决（rollback 三入口，Integration P2-2）**：import 内回滚归 import kind（`ImportResult.rollback` 已含）；recovery 内回滚归 recovery kind；仅独立 `/sync/rollback` 记 rollback kind。sync-push/sync-sync 不在 §5 清单（非迁移/破坏性写配置，属远端传输），不新增 kind。
+
+**实现方式**：新建 `src/core/migration-history.ts` 提供 store；宿主在 `makeRoutes`/`apply()` 注入 `MigrationHistory` 实例到 RoutesDeps；各路由 handler 在结果确定后调用 `tryAppendHistory`。autosync 复用现有 `appendHistoryFn`；backup-scheduler **新增**同范式 `appendHistoryFn`（Integration P2-1）。recovery 在 orchestrator 的 terminal 结果点注入（已持有 runs，加 history 同范式）。
+
+---
+
+## 6.1 Integration 评审裁决汇总
+
+| # | 裁决 |
+|---|---|
+| P1-1 | ✅ 新增 `profile-import` kind（13→14 项）；同时 Analysis §5 清单已含 profile 组，profile-import 与其同级，补入合理 |
+| P1-2 | ✅ import sections 改从 `plan.items[].adapter` 派生 |
+| P1-3 | ✅ restore sections 改从 `RestorePlan.actions[].adapter` 派生 |
+| P1-4 | ✅ snapshot-prune 用宿主注入的**可选 history 回调**（prune 后回调），不把 store 依赖塞进核心引擎构造；不改变 prune 行为 |
+| P1-5 | ✅ recovery 在 **terminal 点** 记（不记进行中 RECOVERING）；sections=[] 或无字段 |
+| P2-1 | ✅ BackupSchedulerOptions 新增 `appendHistoryFn`（复用 autosync 范式） |
+| P2-2 | ✅ rollback 三入口消歧（见上） |
+| P2-3 | ✅ sync-push/sync 确认不在 §5，不新增 kind |
+| P2-4 | ✅ 历史写盘 ms 级，best-effort 失败仅日志；writeJson 前 await append 可接受 |
 
 ---
 
@@ -231,3 +254,19 @@ GET  /api/dsh-config-manager/history/export?format=json|markdown&…（同过滤
 ## 13. Design Gate 结论
 
 设计复用既有模式、建立统一审计史、全部 Core Invariants 有明确落点、不建第二套 framework、不改已评审核心架构。**Design Draft → 交付独立只读评审（Step 3）。**
+
+---
+
+## 14. Design Review（Step 3）结果 — Gate=GO
+
+独立只读评审 **5 个维度全部 APPROVE / APPROVE-WITH-NITS，无 P0**，Gate=GO：
+
+| 维度 | 结论 | 关键裁决（已吸收进实现） |
+|---|---|---|
+| Durability | APPROVE-WITH-NITS | per-file + atomicWrite(0600/symlink-reject) 落盘跨重启成立；P2 时间源统一（`at` 由文件名时间戳派生）、文件名格式钉死（`toISOString().replace(/[:Z]/g,'')`，Windows-safe 定宽可排序）、崩溃窗口已文档化 |
+| Append-only | APPROVE-WITH-NITS | P1 采纳：**每文件内联 contentHash** 作篡改检测（合法 JSON 改字段 → hash 不符 → 跳过计数）；per-file 无二次重写 + 碰撞换名防覆盖；retention 只删合法 basename；basename 严格正则 + tmp/脏文件忽略 |
+| Redaction | APPROVE-WITH-NITS | scanAndRedact(highEntropy) + redactHistoryText 双保险确认互补；P2 采纳：**无损掩码优先**（redactHistoryText 在前，scanAndRedact 残留防线整值清空，保留可读上下文）+ source 运行期枚举校验 |
+| Integration | APPROVE-WITH-NITS | 接线点行号全部核实准确；P1 采纳：**新增 profile-import kind**、import/restore sections 改真实字段、recovery 记 terminal 点、snapshot-prune 用宿主可选回调不污染核心引擎 |
+| Windows | APPROVE-WITH-NITS | 文件名/排序/保留前缀投毒链跨平台成立；P1 采纳：**文件名时间戳契约钉死**（Windows-safe 定宽可排序，禁原样 toISOString 落文件名）；读时 lstat symlink reject |
+
+**实现已按所有 P1/P2 裁决落地**（见 PHASE6_DESIGN.md §6.1 + 各维度裁决）。无 unresolved P1/P2。**Gate=GO，进入 Step 4 实现。**

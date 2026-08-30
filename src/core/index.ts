@@ -30,6 +30,18 @@ export {
 } from './types.ts';
 export type * from './types.ts';
 
+/* —— 迁移历史引擎（Phase 6） —— */
+export {
+  MigrationStore, sanitizeEntry, queryHistory, summarizeHistory, renderExport,
+  parseHistoryQuery, isValidMigrationKind, redactHistoryText,
+  makeHistoryFilename, isHistoryBasename, MIGRATION_HISTORY_DIR,
+  DEFAULT_MIGRATION_RETENTION, MIGRATION_HISTORY_SCHEMA_VERSION,
+  type MigrationKind, type MigrationResult, type MigrationHistoryEntry,
+  type StoredMigrationHistoryEntry, type MigrationQuery, type MigrationHistoryStats,
+  type ExportFormat, type ReadMigrationResult, type AppendResult, type MigrationIo,
+  type MigrationStoreOptions, type MigrationSource,
+} from './migration-history.ts';
+
 /* —— 类型与工具的便捷重导出 —— */
 export type {
   ExportOptions, ExportSection, ValidationResult, HostContext,

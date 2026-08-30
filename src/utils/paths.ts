@@ -71,7 +71,8 @@ const RESERVED_INTERNAL_PREFIXES: readonly string[] = [
   'dsh-config-manager/safe-mode',
   'dsh-config-manager/recovery-history/',
   'dsh-config-manager/environment-fingerprint.token',
-  // sync recovery/transient 内部（sync rollback snapshot store + work 临时目录；F23 投毒链闭合）。
+  // Phase 6：迁移历史审计目录（统一历史引擎；防 F23 投毒链——不可信导入不得映射到该目录）。
+  'dsh-config-manager/migration-history/',
   // 注意：不得整段保留 dsh-config-manager/sync/ —— self 分区合法持有 sync/*.json 白名单配置
   //（sync-config / sync-selection / ui-prefs / backup-schedule），会误伤。
   'dsh-config-manager/sync/snapshots/',

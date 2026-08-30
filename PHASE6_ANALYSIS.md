@@ -52,6 +52,7 @@ Phase 1–5 建立了「迁移前咨询（Manifest + 健康评分）→ 迁移�
 | 11 | **snapshot delete** | `/snapshots/delete`（`withMutationGate('snapshot-delete')`） | snapshot-delete | removed 快照 id |
 | 12 | **snapshot prune** | `core/backup.ts` `FileSnapshotStore.prune()`（自动保留清理，删最旧+置顶豁免） | 无 run | 被清 id 列表 |
 | 13 | **profile save** | `/profiles/save`（无 gate，复用 adapter.export） | 无 run | `meta`（name/sections） |
+| 14 | **profile import** | `/profiles/import`（`withMutationGate('profile-import')`，destructive） | profile-import | `meta.sections` |
 
 > 注意：`export`（备份导出）**不在** §5 清单（非 destructive/migration，属备份产物）。autosync 中若实际发生 apply（写本地）也属 migration；**历史须覆盖 autosync 本身**（§5 明确列出），与 `sync-history.json` 并存而非重复。
 

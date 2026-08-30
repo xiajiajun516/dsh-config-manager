@@ -296,6 +296,17 @@ test('W-02: isReservedInternalRel 反斜杠归一（Windows 分隔符）', () =>
   assert.equal(isReservedInternalRel('dsh-config-manager/sync/sync-selection.json'), false);
 });
 
+test('W-03b（Phase 6）: migration-history 目录加入 RESERVED_INTERNAL_PREFIXES（F23 投毒链闭合）', () => {
+  // 新历史目录相对 homeDir 归一后必须命中保留前缀（大小写/反斜杠/../ 变体均须命中）
+  assert.equal(isReservedInternalRel('dsh-config-manager/migration-history/foo.json'), true);
+  assert.equal(isReservedInternalRel('dsh-config-manager/migration-history/x/y.json'), true);
+  assert.equal(isReservedInternalRel('DSh-Config-Manager\\Migration-History\\foo.json'), true, '大小写+反斜杠变体须命中');
+  assert.equal(isReservedInternalRel('dsh-config-manager/../dsh-config-manager/migration-history/evil.json'), true, '`..` 变体须命中');
+  // 合法 self 配置不得误伤（migration-history 是独立目录，非 sync/*）
+  assert.equal(isReservedInternalRel('dsh-config-manager/sync/sync-config.json'), false);
+  assert.equal(isReservedInternalRel('dsh-config-manager/snapshots/x/snapshot.json'), true); // 既有目录不受影响
+});
+
 test('W-03: F13 EPERM/EBUSY prune 模拟（fs.rm 抛错不阻断 save）', async () => {
   // 用自定义 referencedSnapshotIds provider 在 prune 时抛「EPERM」模拟被占用文件，
   // 已有 F13 覆盖 provider 抛错；这里再验证「save 的 prune 内部 fs.rm 抛错」也被吞掉。
