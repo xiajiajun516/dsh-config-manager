@@ -30,3 +30,5 @@ Thumbs.db
 phase4-e2e/
 # Phase 5 real-DSH E2E isolated environment
 phase5-e2e/
+# Phase 6 real-DSH E2E isolated environment
+phase6-e2e/
