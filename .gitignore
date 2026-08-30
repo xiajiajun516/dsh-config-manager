@@ -28,3 +28,5 @@ Thumbs.db
 
 # Phase 4 real-DSH E2E isolated environment
 phase4-e2e/
+# Phase 5 real-DSH E2E isolated environment
+phase5-e2e/
