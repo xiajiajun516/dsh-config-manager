@@ -920,6 +920,56 @@ test('低频面板: 旧版顶层 syncMode 载荷 → 迁移为 git 通道的 byC
   assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道保持缺省')
 })
 
+/* -------------------------------------------------- 聚合优化（2026-08）：一级 tab 8→6 的旧值迁移 */
+
+test('聚合优化: 旧 panel "recovery" → 迁移为 snapshots + subTab=recovery（不丢、不报错）', () => {
+  const { storage } = makeStorage()
+  storage.setItem(STATE_KEY, JSON.stringify({
+    v: 1, view: 'export', panel: 'recovery',
+    export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
+    import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
+    recovery: { status: { incidents: [], running: [] }, selectedOperationId: null, preview: null, verifyResult: null, running: false, error: null, actionError: null },
+    snapshots: { selectedId: null, plan: null, running: false, report: null, actionError: null, error: null, backupDraft: null, importBackup: null, subTab: 'restore' },
+  } as Record<string, unknown>))
+  const store = new RunStore({ storage })
+  const st = store.getSnapshot()
+  assert.equal(st.panel, 'snapshots', '旧 recovery tab → 备份与快照面板')
+  assert.equal(st.snapshots.subTab, 'recovery', '旧 recovery tab → snapshots 恢复子 tab')
+})
+
+test('聚合优化: 旧 panel "about"/"history" → 迁移为 more + 对应 moreSub；新 more 载荷往返', () => {
+  const { storage } = makeStorage()
+  // 旧 about → more + moreSub=about
+  storage.setItem(STATE_KEY, JSON.stringify({
+    v: 1, view: 'export', panel: 'about',
+    export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
+    import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
+  }))
+  const about = new RunStore({ storage })
+  assert.equal(about.getSnapshot().panel, 'more', '旧 about tab → 更多')
+  assert.equal(about.getSnapshot().more.moreSub, 'about', '旧 about tab → moreSub=about')
+
+  // 旧 history → more + moreSub=history
+  storage.setItem(STATE_KEY, JSON.stringify({
+    v: 1, view: 'export', panel: 'history',
+    export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
+    import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
+  }))
+  const history = new RunStore({ storage })
+  assert.equal(history.getSnapshot().panel, 'more', '旧 history tab → 更多')
+  assert.equal(history.getSnapshot().more.moreSub, 'history', '旧 history tab → moreSub=history')
+
+  // 新「更多」载荷往返（panel=more + moreSub=history 持久化 + 刷新恢复）
+  storage.setItem(STATE_KEY, JSON.stringify({
+    v: 1, view: 'export', panel: 'more', more: { moreSub: 'history' },
+    export: { mode: 'quick', selection: [], includeSecrets: false, encrypt: false, fileName: '', note: '', error: null },
+    import: { step: 'select', selectedFileName: null, containerEncrypted: false, error: null },
+  }))
+  const more = new RunStore({ storage })
+  assert.equal(more.getSnapshot().panel, 'more')
+  assert.equal(more.getSnapshot().more.moreSub, 'history', '新 more 载荷刷新恢复 moreSub')
+})
+
 /* -------------------------------------------------- restore（P1-1）权威状态 */
 
 test('低频面板: 快照恢复 running 为瞬态——不写入 sessionStorage、刷新后复位（以宿主 /runs 为权威）', () => {
@@ -1021,7 +1071,7 @@ test('recovery: running 为瞬态——不写入 sessionStorage、刷新后复�
   const { storage, raw } = makeStorage()
   const first = new RunStore({ storage })
   first.patch({
-    panel: 'recovery',
+    panel: 'snapshots',
     recovery: {
       status: { incidents: [], running: [] },
       selectedOperationId: '00000000-0000-4000-8000-0000000000aa',
@@ -1051,7 +1101,7 @@ test('recovery: status/preview/verifyResult 非敏感可持久化——刷新后
   const { storage, raw } = makeStorage()
   const first = new RunStore({ storage })
   first.patch({
-    panel: 'recovery',
+    panel: 'snapshots',
     recovery: {
       status: {
         incidents: [{

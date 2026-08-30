@@ -21,6 +21,8 @@ import type { ConsultReport } from '../../core/migration-consult.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
+import type { RecoveryPort } from '../../ui/types.ts'
+import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
 import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice, type SnapshotsSubTab } from '../run-store.ts'
@@ -46,6 +48,9 @@ import css from '../config-manager.module.css'
 export interface SnapshotsPanelProps {
   api: ConfigManagerApi
   t: TranslateNS<'config-manager'>
+  /** 聚合优化：恢复（Phase 5）并入「备份与快照」作第三子 tab，透传给 RecoveryPanel */
+  recoveryApi: RecoveryPort
+  recoveryT: TranslateNS<'config-manager-recovery'>
 }
 
 interface PanelState {
@@ -132,7 +137,7 @@ function initFromStore(): PanelState {
   }
 }
 
-export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
+export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPanelProps) {
   const [state, setState] = useState<PanelState>(initFromStore)
   /** 最新 state 镜像（commit/卸载 flush 读取，避免闭包过期值） */
   const stateRef = useRef<PanelState>(state)
@@ -330,7 +335,7 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
     <div className={css.viewBody}>
       <SectionTitle title={t('snapshots.title')} subtitle={t('snapshots.hint')} />
 
-      {/* 二级 tab（备份文件 / 快照恢复；subTab 镜像 runStore——切一级 tab/刷新不丢，与市场面板 modeTabs 同模式） */}
+      {/* 二级 tab（备份文件 / 快照恢复 / 恢复；subTab 镜像 runStore——切一级 tab/刷新不丢，与市场面板 modeTabs 同模式） */}
       <div className={css.modeTabs} role="tablist">
         <button
           type="button"
@@ -352,9 +357,23 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
         >
           {t('snapshots.subTab.files')}
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subTab === 'recovery'}
+          data-active={subTab === 'recovery' ? '' : undefined}
+          className={css.modeTab}
+          onClick={() => { switchSubTab('recovery') }}
+        >
+          {t('snapshots.subTab.recovery')}
+        </button>
       </div>
 
-      {subTab === 'restore' ? (
+      {subTab === 'recovery' ? (
+        /* 聚合优化：恢复（Phase 5）并入「备份与快照」作第三子 tab。
+           完全复用 RecoveryPanel（自身独立切片 + 确认/执行/验证流程），不做任何改动 */
+        <RecoveryPanel recoveryApi={recoveryApi} t={recoveryT} />
+      ) : subTab === 'restore' ? (
         <>
           {/* —— 快照恢复：导入前回滚点列表 → 选择 → dry-run 计划 → 执行 → 报告 —— */}
 

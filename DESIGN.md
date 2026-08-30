@@ -191,19 +191,23 @@ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
 ## 7. Layout
 
-### 7.1 页面骨架（五视图共用）
+### 7.1 页面骨架（各视图共用）
 
 ```
 css.section                    高 100%，纵向 flex，gap 10px
 ├── .sectionHeader             横向 flex（含 .viewTabs 角色=tablist）
-│   └── .viewTabs / .viewTab   tab（导出与导入/备份与快照/同步/市场/配置文件/关于，下划线激活态）
+│   └── .viewTabs / .viewTab   tab（导出与导入/备份与快照/远程同步/配置市场/配置文件/更多，下划线激活态）
+│   └── (可选) 全局 SAFE MODE 横幅：有未解决恢复事项时跨 tab 显示（Banner kind=error + 「去处理」按钮）
 └── .sectionBody               flex:1 + overflow-y:auto（滚动发生在 section 内部）
     └── .viewBody              纵向 flex，gap 12px，padding 4px 2px 16px（各视图内容）
 ```
 
 - **Tab 激活态**：`data-active` + `border-bottom: 2px solid var(--dsw-alias-state-business-primary)` + 字重 600。
 - **视图外滚动**：`sectionBody` 是唯一滚动容器；页面无需（也不应）设置 `height` 之外的滚动。
-- **「导出与导入」父子 tab（2026-08-24 合并）**：导出备份与导入恢复合并为一个顶层 tab「导出与导入」（`view.transfer`），顶层激活态 = `panel === null`；内部用 `modeTabs`/`modeTab` 子 tab 切换「导出备份 / 导入恢复」（状态 = runStore `view`，切 tab/刷新不丢）。
+- **「导出与导入」父子 tab**：导出备份与导入恢复合并为一个顶层 tab「导出与导入」（`view.transfer`），顶层激活态 = `panel === null`；内部用 `modeTabs`/`modeTab` 子 tab 切换「导出备份 / 导入恢复」（状态 = runStore `view`，切 tab/刷新不丢）。
+- **「备份与快照」父子 tab（含恢复）**：顶层 tab `panel==='snapshots'`。内部 `modeTabs` 子 tab「快照恢复 / 备份文件 / 恢复」（状态 = runStore `snapshots.subTab`，切 tab/刷新不丢）；「恢复」子 tab 渲染 RecoveryPanel（聚合优化：Phase 5 恢复并入，事故驱动，多数时间空态）。
+- **「更多」父子 tab（聚合优化 2026-08）**：顶层 tab `panel==='more'`。把低频的「迁移历史 / 关于」收进「更多」（`view.more`），内部 `modeTabs` 子 tab 切换（状态 = runStore `more.moreSub`，切 tab/刷新不丢）—— 一级 tab 从 8 收敛为 6。
+- **旧持久化值迁移**：runStore `parsePersistedState` 把旧 `panel:'about'/'history'` 迁移为 `panel:'more'` + 对应 `moreSub`；旧 `panel:'recovery'` 迁移为 `panel:'snapshots'` + `snapshots.subTab='recovery'`（刷新不丢、不报错）。
 
 ### 7.2 布局原语（组合一切视图的积木）
 

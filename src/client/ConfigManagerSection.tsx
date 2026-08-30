@@ -25,7 +25,9 @@ import { AboutPanel } from './about/AboutPanel.tsx'
 import { ProfilesPanel } from './profiles/ProfilesPanel.tsx'
 import { RecoveryPanel } from './recovery/RecoveryPanel.tsx'
 import { HistoryPanel } from './history/HistoryPanel.tsx'
+import { toRecoveryView } from './recovery/recovery-view.ts'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
+import { Banner, Button } from './common/ui.tsx'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import css from './config-manager.module.css'
 
@@ -114,14 +116,41 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     }
   }, [api])
 
+  // 全局 SAFE MODE 横幅（聚合优化后恢复并入「备份与快照」子 tab，需要跨 tab 的
+  // 可见兜底）：挂载时若 store 尚无 recovery status 则拉取一次，用于判定是否需要阻断。
+  // 纯导航兜底（只读状态 + 「去处理」入口），不改恢复判定/执行逻辑。
+  const recoveryStatus = state.recovery.status
+  useEffect(() => {
+    if (recoveryStatus !== null) return
+    let cancelled = false
+    recoveryApi.status().then(
+      (s) => { if (!cancelled) runStore.patch({ recovery: { status: s } }) },
+      () => { /* 拉取失败静默：不弹横幅，用户进恢复面板自己会看到 */ },
+    )
+    return () => { cancelled = true }
+  }, [recoveryStatus, recoveryApi])
+  const recoveryRequired = recoveryStatus !== null
+    ? (toRecoveryView(recoveryStatus).recoveryRequired === true)
+    : false
+
   /** 切到主视图（导出与导入）：清空低频面板，记录到 store（刷新恢复）。 */
   const setView = (next: MainView): void => {
     runStore.patch({ view: next, panel: null })
   }
 
-  /** 打开低频面板（snapshots/sync/market/profiles/about）：记录到 store（刷新恢复）。 */
+  /** 打开低频面板（snapshots/sync/market/profiles/more）：记录到 store（刷新恢复）。 */
   const openPanel = (next: PanelId): void => {
     runStore.patch({ panel: next })
+  }
+
+  /** 打开「更多」下的子视图（迁移历史 / 关于）：记录到 store（刷新恢复）。 */
+  const openMoreSub = (moreSub: 'history' | 'about'): void => {
+    runStore.patch({ more: { moreSub } })
+  }
+
+  /** 打开「备份与快照」面板并切到「恢复」子 tab（SAFE MODE 横幅入口）。 */
+  const openRecovery = (): void => {
+    runStore.patch({ panel: 'snapshots', snapshots: { subTab: 'recovery' } })
   }
 
   /** 顶层 tab：主视图「导出与导入」激活 = panel 为空（view 是内部子 tab 状态） */
@@ -181,53 +210,66 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           >
             {t('view.profiles')}
           </button>
+          {/* 「更多」：低频面板（关于 / 迁移历史）收敛层级，减少一级 tab 拥挤 */}
           <button
             type="button"
             role="tab"
-            aria-selected={panel === 'about'}
-            data-active={panel === 'about' ? '' : undefined}
+            aria-selected={panel === 'more'}
+            data-active={panel === 'more' ? '' : undefined}
             className={css.viewTab}
-            onClick={() => { openPanel('about') }}
+            onClick={() => { openPanel('more') }}
           >
-            {t('view.about')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'recovery'}
-            data-active={panel === 'recovery' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('recovery') }}
-          >
-            {recoveryT('view.recovery')}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={panel === 'history'}
-            data-active={panel === 'history' ? '' : undefined}
-            className={css.viewTab}
-            onClick={() => { openPanel('history') }}
-          >
-            {historyT('view.history')}
+            {t('view.more')}
           </button>
         </div>
       </div>
+
+      {/* 全局 SAFE MODE 横幅（聚合优化后恢复并入「备份与快照」子 tab，跨 tab 可见兜底）：
+          有未解决恢复事项时，无论当前 tab 都提示并引导去处理。纯导航，不改判定逻辑。 */}
+      {recoveryRequired && (
+        <Banner kind="error">
+          {recoveryT('recovery.banner')}
+          <Button variant="primary" onClick={openRecovery}>{recoveryT('recovery.bannerAction')}</Button>
+        </Banner>
+      )}
       <div className={css.sectionBody}>
-        {panel === 'history'
-          ? <HistoryPanel historyApi={historyApi} t={historyT} />
-          : panel === 'recovery'
-          ? <RecoveryPanel recoveryApi={recoveryApi} t={recoveryT} />
-          : panel === 'about'
-          ? <AboutPanel api={api} t={t} />
+        {panel === 'more' ? (
+          <>
+            {/* 「更多」内部子 tab：迁移历史 / 关于（moreSub 镜像 runStore，切 tab/刷新不丢） */}
+            <div className={css.modeTabs} role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={state.more.moreSub === 'history'}
+                data-active={state.more.moreSub === 'history' ? '' : undefined}
+                className={css.modeTab}
+                onClick={() => { openMoreSub('history') }}
+              >
+                {historyT('view.history')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={state.more.moreSub === 'about'}
+                data-active={state.more.moreSub === 'about' ? '' : undefined}
+                className={css.modeTab}
+                onClick={() => { openMoreSub('about') }}
+              >
+                {t('view.about')}
+              </button>
+            </div>
+            {state.more.moreSub === 'history'
+              ? <HistoryPanel historyApi={historyApi} t={historyT} />
+              : <AboutPanel api={api} t={t} />}
+          </>
+        ) : panel === 'snapshots'
+          ? <SnapshotsPanel api={api} t={t} recoveryApi={recoveryApi} recoveryT={recoveryT} />
           : panel === 'profiles'
             ? <ProfilesPanel api={api} t={t} />
             : panel === 'market'
               ? <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
-            : panel === 'sync'
-              ? <SyncSettingsView api={syncApi} t={syncT} />
-              : panel === 'snapshots'
-                ? <SnapshotsPanel api={api} t={t} />
+              : panel === 'sync'
+                ? <SyncSettingsView api={syncApi} t={syncT} />
                 : (
                   <>
                     {/* 「导出与导入」内部子 tab：导出备份 / 导入恢复（状态 = view，切 tab/刷新不丢） */}

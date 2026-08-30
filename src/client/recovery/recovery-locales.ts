@@ -16,6 +16,9 @@ export const zh = {
   'common.unknownError': '未知错误',
   // 入口 / tab
   'view.recovery': '恢复',
+  // 全局 SAFE MODE 横幅（聚合优化：恢复并入「备份与快照」，跨 tab 可见兜底）
+  'recovery.banner': '配置修改已被保护：存在未完成的恢复事项。请先处理后继续。',
+  'recovery.bannerAction': '去处理',
   'recovery.required': '需要恢复',
   'recovery.requiredHint': '检测到未完成的恢复事务，破坏性操作已被阻断（SAFE MODE）。请处理以下 incident 以恢复正常。',
   'recovery.rollbackRecommended': '建议回滚',
@@ -116,6 +119,8 @@ export const en: Record<keyof typeof zh, string> = {
   'common.retry': 'Retry',
   'common.unknownError': 'Unknown error',
   'view.recovery': 'Recovery',
+  'recovery.banner': 'Configuration changes are protected: there is an unfinished recovery item. Resolve it before continuing.',
+  'recovery.bannerAction': 'Go to recovery',
   'recovery.required': 'Recovery Required',
   'recovery.requiredHint': 'An unfinished recovery transaction was detected and destructive operations are blocked (SAFE MODE). Handle the incident(s) below to restore normal operation.',
   'recovery.rollbackRecommended': 'Rollback recommended',

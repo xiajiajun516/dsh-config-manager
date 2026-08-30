@@ -64,8 +64,13 @@ import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../u
 /** 主视图（ConfigManagerSection 的「导出与导入」tab 内部子视图：导出备份 / 导入恢复）。 */
 export type MainView = 'export' | 'import'
 
-/** 设置页四块低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。 */
-export type PanelId = 'snapshots' | 'sync' | 'market' | 'about' | 'profiles' | 'recovery' | 'history'
+/**
+ * 设置页低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。
+ * 聚合优化（UX 2026-08）：把「关于」与「迁移历史」收进「更多」作为子 tab，
+ * 「恢复」并入「备份与快照」作为子 tab —— 一级 tab 从 8 收敛为 6。
+ * 旧持久化值（about/history/recovery）由 parsePersistedState 迁移到新结构。
+ */
+export type PanelId = 'snapshots' | 'sync' | 'market' | 'profiles' | 'more'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'
@@ -200,8 +205,12 @@ export interface MarketStoreSlice {
  *  running 为「内存切片瞬态」：切 tab 由模块级单例保留、刷新时被 toPersistedState
  *  白名单剔除 —— 恢复是否仍在执行以宿主 RunRegistry（/runs + /progress）为权威，
  *  刷新后经 resume() 重新发现；浏览器持久化绝不作为 destructive operation 的状态源。 */
-/** 快照面板二级 tab：restore = 快照恢复（导入前回滚点）；files = 备份文件管理 */
-export type SnapshotsSubTab = 'restore' | 'files'
+/**
+ * 快照面板二级 tab：restore = 快照恢复（导入前回滚点）；files = 备份文件管理；
+ * recovery = 恢复（Phase 5，事故驱动的回滚/恢复 —— 聚合优化后并入「备份与快照」）。
+ * 旧顶级 tab `panel:'recovery'` 在 parsePersistedState 迁移为 `panel:'snapshots'` + `subTab:'recovery'`。
+ */
+export type SnapshotsSubTab = 'restore' | 'files' | 'recovery'
 
 /** 配置档案面板的运行时切片（无敏感字段：Profile 天然不含秘密值）。 */
 export interface ProfilesStoreSlice {
@@ -257,6 +266,19 @@ export interface RecoveryStoreSlice {
   error: string | null
   actionError: string | null
 }
+
+/**
+ * 「更多」面板的运行时切片（聚合优化 2026-08：把「关于」与「迁移历史」收进
+ * 「更多」作为子 tab，一级 tab 从 8 收敛为 6）。仅记录当前子视图，非敏感可持久化
+ * （切 tab/刷新恢复）；关于/历史面板自身的低频状态组件内自持，不关联本切片。
+ */
+export interface MoreStoreSlice {
+  /** 「更多」下的子视图：迁移历史 / 关于 */
+  moreSub: 'history' | 'about'
+}
+
+/** 「更多」子视图类型。 */
+export type MoreSubTab = MoreStoreSlice['moreSub']
 
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
 
@@ -321,6 +343,7 @@ export interface PersistedState {
   snapshots: SnapshotsStoreSlice
   profiles: ProfilesStoreSlice
   recovery: RecoveryStoreSlice
+  more: MoreStoreSlice
 }
 
 /* --------------------------------------- 运行时状态（含仅内存的敏感字段） */
@@ -376,6 +399,7 @@ export interface StoreState {
   snapshots: SnapshotsStoreSlice
   profiles: ProfilesStoreSlice
   recovery: RecoveryStoreSlice
+  more: MoreStoreSlice
 }
 
 /** patch 的输入形状（浅合并对应切片）。 */
@@ -390,6 +414,7 @@ export interface StorePatch {
   snapshots?: Partial<SnapshotsStoreSlice>
   profiles?: Partial<ProfilesStoreSlice>
   recovery?: Partial<RecoveryStoreSlice>
+  more?: Partial<MoreStoreSlice>
 }
 
 /** 向导 step 的类型别名（与 src/ui/types.ts 的 ImportStep 保持一致）。 */
@@ -529,6 +554,12 @@ function defaultRecoveryState(): RecoveryStoreSlice {
   }
 }
 
+function defaultMoreState(): MoreStoreSlice {
+  return {
+    moreSub: 'about',
+  }
+}
+
 function defaultState(): StoreState {
   return {
     v: 1,
@@ -541,6 +572,7 @@ function defaultState(): StoreState {
     snapshots: defaultSnapshotsState(),
     profiles: defaultProfilesState(),
     recovery: defaultRecoveryState(),
+    more: defaultMoreState(),
   }
 }
 
@@ -714,6 +746,8 @@ export function toPersistedState(state: StoreState): PersistedState {
       ...state.recovery,
       running: false,
     },
+    // 「更多」切片为非敏感（仅记录子视图 history/about）：原样持久化（切 tab/刷新恢复）
+    more: state.more,
   }
 }
 
@@ -733,19 +767,52 @@ export function parsePersistedState(raw: string): PersistedState | null {
   const exp = p['export']
   const imp = p['import']
   if (typeof exp !== 'object' || exp === null || typeof imp !== 'object' || imp === null) return null
-  // panel：旧载荷可能缺失 → null（回到主视图）；非法值 → null
+  // panel：旧载荷可能缺失 → null（回到主视图）；非法值 → null。
+  // 聚合优化（2026-08）旧值迁移：'about'/'history' → 'more' + 对应 moreSub；
+  // 'recovery' → 'snapshots' + snapshots.subTab='recovery'。旧 8 tab 值在新结构下不丢状态。
   const rawPanel = p['panel']
-  const panel: PanelId | null =
-    rawPanel === 'snapshots' || rawPanel === 'sync' || rawPanel === 'market' || rawPanel === 'about' || rawPanel === 'profiles' || rawPanel === 'recovery'
-      ? rawPanel
-      : null
+  let panel: PanelId | null = null
+  let moreSub: MoreStoreSlice['moreSub'] = 'about'
+  let snapshotsSubTab: SnapshotsSubTab = 'restore'
+  switch (rawPanel) {
+    case 'snapshots':
+    case 'sync':
+    case 'market':
+    case 'profiles':
+    case 'more':
+      panel = rawPanel
+      break
+    case 'about':
+      panel = 'more'
+      moreSub = 'about'
+      break
+    case 'history':
+      panel = 'more'
+      moreSub = 'history'
+      break
+    case 'recovery':
+      panel = 'snapshots'
+      snapshotsSubTab = 'recovery'
+      break
+    default:
+      panel = null
+      break
+  }
   // sync/market/snapshots：旧载荷可能缺失 → 默认切片（字段级缺失由 applyPersisted 兜底）
   const sync = isRecord(p['sync']) ? p['sync'] as unknown as PersistedSyncState : defaultSyncState()
   const market = isRecord(p['market']) ? p['market'] as unknown as MarketStoreSlice : defaultMarketState()
   const snapshots = isRecord(p['snapshots']) ? p['snapshots'] as unknown as SnapshotsStoreSlice : defaultSnapshotsState()
   const profiles = isRecord(p['profiles']) ? p['profiles'] as unknown as ProfilesStoreSlice : defaultProfilesState()
   const recovery = isRecord(p['recovery']) ? p['recovery'] as unknown as RecoveryStoreSlice : defaultRecoveryState()
-  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots, profiles, recovery }
+  // 从旧顶级 tab 'recovery' 迁移：快照面板 subTab 强制为 recovery（用户当时在恢复 tab）
+  const migratedSnapshots: SnapshotsStoreSlice = rawPanel === 'recovery'
+    ? { ...snapshots, subTab: snapshotsSubTab }
+    : snapshots
+  // 「更多」切片：旧载荷可能缺失 → 默认（about）；若从旧 about/history 迁移，用迁移值覆盖
+  const more = isRecord(p['more'])
+    ? { ...defaultMoreState(), ...p['more'] as unknown as MoreStoreSlice }
+    : { moreSub }
+  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots: migratedSnapshots, profiles, recovery, more }
 }
 
 /** 运行时不变量小工具：值为普通对象。 */
@@ -1066,8 +1133,8 @@ export class RunStore {
         running: false,
         // 硬性：「一键导入」请求为一次性瞬态，绝不从存储恢复
         importBackup: null,
-        // 旧载荷可能缺 subTab / 带非法值 → 归一（只认 restore/files）
-        subTab: parsed.snapshots.subTab === 'files' ? 'files' : 'restore',
+        // 旧载荷可能缺 subTab / 带非法值 → 归一（只认 restore/files/recovery；聚合优化加 recovery）
+        subTab: parsed.snapshots.subTab === 'files' ? 'files' : parsed.snapshots.subTab === 'recovery' ? 'recovery' : 'restore',
       },
       profiles: { ...defaultProfilesState(), ...parsed.profiles },
       recovery: {
@@ -1077,6 +1144,8 @@ export class RunStore {
         // 是否仍有恢复在执行以宿主 /runs 为权威，resume() 会重新发现并置 true
         running: false,
       },
+      // 「更多」切片非敏感（仅子视图 history/about），原样恢复；moreSub 非法值归一为 about
+      more: { moreSub: parsed.more.moreSub === 'history' ? 'history' : 'about' },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
     // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。
