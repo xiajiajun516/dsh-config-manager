@@ -16,7 +16,6 @@ function mkEntry(partial: Partial<StoredMigrationHistoryEntry> & { kind: StoredM
     schemaVersion: 1,
     contentHash: 'x',
     at: '2026-08-30T12:00:00.000Z',
-    kind: partial.kind,
     result: 'success',
     sections: [],
     source: 'api',
