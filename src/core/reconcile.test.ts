@@ -274,6 +274,32 @@ test('§6.5：RECOVERING + MATCH verification → 不触发门控（可 proceed�
   assert.equal(out.decisions[0]!.kind, 'recovered', '已验证 RECOVERING 可 proceed 到 terminal');
 });
 
+test('§6.5：RECOVERING + PARTIAL_MATCH verification → 不触发门控（可 proceed）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d9';
+  const j = op(id, 'RECOVERING'); j.snapshotId = 'snap-1';
+  j.recoveryVerification = { verdict: 'PARTIAL_MATCH', details: ['核心匹配，凭据不可验证'], manualHints: ['凭据需人工确认'], at: '2026-01-01T00:00:00.000Z' };
+  j.plannedSteps = ['s1']; j.steps = { s1: fileStep('done') };
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.notEqual(out.decisions[0]!.kind, 'needs-attention', 'PARTIAL_MATCH verification 不触发硬门控');
+  assert.equal(out.decisions[0]!.kind, 'recovered', 'PARTIAL_MATCH 已验证可 proceed 到 terminal');
+});
+
+test('§6.5：RECOVERING + VERIFICATION_ERROR verification → needs-attention（不 COMMITTED）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000da';
+  const j = op(id, 'RECOVERING'); j.snapshotId = 'snap-1';
+  j.recoveryVerification = { verdict: 'VERIFICATION_ERROR', details: ['快照重验失败'], manualHints: [], at: '2026-01-01T00:00:00.000Z' };
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention', 'VERIFICATION_ERROR → needs-attention（绝不自动 RECOVERED）');
+  assert.equal(out.safeModeRequired, true);
+  assert.equal((await store.load(id))?.state, 'NEEDS_ATTENTION');
+});
+
 test('§6.5：RECOVERING + entryDone 非空 → rollback-continue（门控之前，续跑中断回滚）', async (t) => {
   const dir = tmp(t);
   const store = mkStore(dir);

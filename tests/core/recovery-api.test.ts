@@ -121,6 +121,35 @@ test('status：无 incident → 空列表', async (t) => {
   assert.deepEqual((r.body as { incidents: unknown[] }).incidents, []);
 });
 
+test('invalid operationId → 400（全部路由）', async (t) => {
+  const h = await setup(t);
+  const bad = 'not-a-uuid';
+  assert.equal((await h.orch.preview(bad)).status, 400);
+  assert.equal((await h.orch.confirm(bad, true)).status, 400);
+  assert.equal((await h.orch.execute(bad, true, mockExecutors())).status, 400);
+  assert.equal((await h.orch.verify(bad)).status, 400);
+  assert.equal((await h.orch.retry(bad, true, mockExecutors())).status, 400);
+  assert.equal((await h.orch.dismiss(bad, true)).status, 400);
+});
+
+test('operation not found → 404（全部路由）', async (t) => {
+  const h = await setup(t, { createJournal: false });
+  const missing = '00000000-0000-4000-8000-0000000000ff';
+  assert.equal((await h.orch.preview(missing)).status, 404);
+  assert.equal((await h.orch.confirm(missing, true)).status, 404);
+  assert.equal((await h.orch.execute(missing, true, mockExecutors())).status, 404);
+  assert.equal((await h.orch.verify(missing)).status, 404);
+  assert.equal((await h.orch.retry(missing, true, mockExecutors())).status, 404);
+  assert.equal((await h.orch.dismiss(missing, true)).status, 404);
+});
+
+test('missing snapshot（journal.snapshotId 为空）→ 400（无法恢复）', async (t) => {
+  const h = await setup(t, { state: 'NEEDS_ATTENTION' });
+  await h.store.update(h.opId, (j) => ({ ...j, snapshotId: null }));
+  assert.equal((await h.orch.confirm(h.opId, true)).status, 400, '无 trusted snapshot 无法 confirm');
+  assert.equal((await h.orch.execute(h.opId, true, mockExecutors())).status, 400, '无 trusted snapshot 无法 execute');
+});
+
 test('status：NEEDS_ATTENTION + trusted snapshot → rollback-recommended', async (t) => {
   const h = await setup(t);
   const r = await h.orch.status();
