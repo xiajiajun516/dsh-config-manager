@@ -249,6 +249,8 @@ export class Phase3Recovery {
       ownerInstanceId,
       bindSnapshot: async (snapshotId: string) => {
         if (snapshotId === null || snapshotId === '') throw new Error('bindSnapshot: snapshotId 为空');
+        // Reviewer A P2①：持久化失败必须传播（fail-closed）——若 journal 无法 durable 绑定 SNAPSHOT_CREATED，
+        // 引擎的 await bindSnapshot 抛错 → fn 抛错 → runJournaled catch（NEEDS_ATTENTION），mutation 绝不在无绑定下继续。
         await this.store.update(opId, (j) => {
           let next = { ...j, snapshotId } as OperationJournal;
           if (next.state === 'CREATED') next = transitionJournalState(next, 'SNAPSHOT_CREATED');
@@ -256,15 +258,16 @@ export class Phase3Recovery {
           else if (next.state === 'APPLYING') { /* 允许：绑定已晚但幂等记录 */ }
           else throw new Error(`bindSnapshot 非法 state: ${next.state}`);
           return next;
-        }).catch(() => undefined);
+        });
       },
       markApplying: async () => {
+        // Reviewer A P2①：同 fail-closed——SNAPSHOT_CREATED→APPLYING 持久化失败须传播，不得在未 APPLYING durable 下 mutation。
         await this.store.update(opId, (j) => {
           let next = j;
           if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
           else if (next.state === 'CREATED') next = transitionJournalState(next, 'APPLYING');
           return next;
-        }).catch(() => undefined);
+        });
       },
     };
 

@@ -37,15 +37,18 @@ async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 function minSnapshot(id: string, now = '2026-08-14T12:00:00.000Z'): Snapshot {
   return {
     id, createdAt: now, sourceZip: `${id}.zip`,
-    entries: [{ kind: 'file', adapter: 'pluginFiles', ref: 'dsh-ssh.json', before: null, existed: true, copiedTo: 'blobs/dsh-ssh.json', snapshotId: id }],
-    hostFileBackups: [{ relPath: 'settings.yaml', blobPath: 'blobs/settings.yaml', existed: true }],
+    entries: [], hostFileBackups: [],
   };
 }
 
-/** 便捷：构造一个带 blob 的 snapshot 并 save 到临时目录，返回 { store, dir, blobKey } */
+/** 便捷：构造一个带 1 个 file 条目 + blob 的 snapshot 并 save（seedSave 提供 blobs） */
 async function seedSave(dir: string, id: string): Promise<FileSnapshotStore> {
   const store = new FileSnapshotStore({ dir });
-  const snap = minSnapshot(id);
+  const snap: Snapshot = {
+    ...minSnapshot(id),
+    entries: [{ kind: 'file', adapter: 'pluginFiles', ref: 'dsh-ssh.json', before: null, existed: true, copiedTo: 'blobs/dsh-ssh.json', snapshotId: id }],
+    hostFileBackups: [{ relPath: 'settings.yaml', blobPath: 'blobs/settings.yaml', existed: true }],
+  };
   const blobs = new Map<string, Uint8Array>([
     ['blobs/dsh-ssh.json', Buffer.from('{"hosts":[]}')],
     ['blobs/settings.yaml', Buffer.from('general:\n  theme: dark\n')],
@@ -271,6 +274,17 @@ test('W-01: isReservedInternalRel 大小写不敏感（Windows case-insensitive 
   assert.equal(isReservedInternalRel('dsh-config-manager/snapshots/x/snapshot.json'), true);
   assert.equal(isReservedInternalRel('DSh-Config-Manager/Snapshots/X/snapshot.json'), true, '大小写变体须命中');
   assert.equal(isReservedInternalRel('DSH-CONFIG-MANAGER\\TRANSACTIONS\\ACTIVE\\x.json'), true, '反斜杠 + 大小写变体须命中');
+});
+
+test('W-01b: isReservedInternalRel 折叠 .. / .（Reviewer B P0：宿主 fs resolve 会折叠，此处必须同样折叠）', () => {
+  // 宿主 DshFileSystemFacade.abs 用 resolve(join(home, rel))，会折叠 `..`。
+  // 攻击者用 `dsh-config-manager/../dsh-config-manager/snapshots/...` 若只在未折叠串上判前缀 → 绕过。
+  assert.equal(isReservedInternalRel('dsh-config-manager/../dsh-config-manager/snapshots/evil/snapshot.json'), true, '`..` 变体须命中保留区');
+  assert.equal(isReservedInternalRel('dsh-config-manager/./snapshots/evil/snapshot.json'), true, '`.` 变体须命中');
+  assert.equal(isReservedInternalRel('x/../../dsh-config-manager/snapshots/evil/snapshot.json'), true, '前缀 `..` 变体须命中');
+  assert.equal(isReservedInternalRel('dsh-config-manager/../dsh-config-manager/sync/snapshots/evil/m.json'), true, '.. 变体须命中 sync rollback store');
+  // 合法 self 配置仍不误伤
+  assert.equal(isReservedInternalRel('dsh-config-manager/../dsh-config-manager/sync/sync-config.json'), false, '合法 self 配置经 .. 折叠后仍在 home 内、非保留区 → 放行');
 });
 
 test('W-02: isReservedInternalRel 反斜杠归一（Windows 分隔符）', () => {

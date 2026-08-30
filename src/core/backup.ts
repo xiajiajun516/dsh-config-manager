@@ -478,5 +478,19 @@ export async function verifySnapshot(snapshotsDir: string, id: string): Promise<
       return { ok: false, reason: `blob hash 不匹配: ${blobPath}` };
     }
   }
+  // Review C P2：snapshot.json 引用的每个 blob（entries.copiedTo / hostFileBackups.blobPath）都必须被 manifest 覆盖，
+  // 否则攻击者可新增未被哈希校验的 blob（restore 会读+写）→ 覆盖任意 home 文件。
+  const referencedBlobs: string[] = [];
+  for (const e of snapshot.entries) {
+    if (e.kind === 'file' && e.copiedTo && e.copiedTo !== '') referencedBlobs.push(e.copiedTo);
+  }
+  for (const hb of snapshot.hostFileBackups ?? []) {
+    if (hb.blobPath && hb.blobPath !== '' && hb.existed) referencedBlobs.push(hb.blobPath);
+  }
+  for (const relBlob of referencedBlobs) {
+    if (!(relBlob in manifest.blobHashes)) {
+      return { ok: false, reason: `snapshot 引用的 blob 未在 manifest 中: ${relBlob}` };
+    }
+  }
   return { ok: true };
 }

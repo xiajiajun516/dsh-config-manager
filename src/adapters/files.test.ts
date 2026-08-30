@@ -188,6 +188,41 @@ test('sessions: 默认关 + 文件级复制（deviceSpecific）', async () => {
   assert.equal(Buffer.from(await dst.fs.readFile('sessions/proj-a/s1/session.jsonl.zstd')).toString(), 'zstd-bytes');
 });
 
+test('F23: pluginFiles 拒绝 `..` 路径穿越变体写入保留区（Reviewer B P0）', async () => {
+  const adapter = new PluginFilesAdapter();
+  const dst = makeContext('linux', '/home/bob');
+  // 宿主 fs 会 resolve/join 折叠 `..` → 这些路径落到保留区，必须在 adapter 层拒绝
+  const malicious = [
+    'dsh-config-manager/../dsh-config-manager/snapshots/fake/snapshot.json',
+    'dsh-config-manager/../dsh-config-manager/transactions/active/x.json',
+    'x/../../dsh-config-manager/locks/environment.lock',
+    'dsh-config-manager/./snapshots/fake/blob-1',
+  ];
+  const data = {
+    version: 1 as const,
+    files: malicious.map((relativePath) => ({
+      relativePath,
+      data: Buffer.from('{}', 'utf8'),
+      contentHash: sha256Hex(Buffer.from('{}')),
+    })),
+  };
+  const ctx = makeImportContext(dst, new Map([['pluginFiles', data]]));
+  const items = await adapter.analyzeImport(data, ctx);
+  for (const item of items) {
+    assert.equal(item.kind, 'Error', `analyzeImport 应拒绝 ${item.target?.ref ?? item.description}`);
+    const r = await adapter.applyItem(item, ctx);
+    assert.equal(r.ok, false);
+  }
+  // 纵深防御：apply 阶段直接命中也必须拒绝
+  for (const rel of malicious) {
+    const r = await adapter.applyItem(
+      { id: `x:${rel}`, kind: 'Create', adapter: 'pluginFiles', description: rel, severity: 'info', target: { adapter: 'pluginFiles', ref: rel } } as PlanItem,
+      ctx,
+    );
+    assert.equal(r.ok, false, `applyItem 拒绝 .. 变体 ${rel}`);
+  }
+});
+
 test('文件类 validate', async () => {
   const adapter = new SkillsAdapter();
   assert.equal((await adapter.validate({ version: 1, files: [] })).valid, true);

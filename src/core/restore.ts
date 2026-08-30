@@ -305,6 +305,16 @@ export async function validateSnapshotForRestore(
     if (s !== null) return { verdict: 'UNSAFE_PATH', reason: s };
   }
 
+  // F25（Review C）：blob 目录内任何实体若为 symlink → 拒绝（文档声称覆盖 blobs，须与实现一致）。
+  // blob symlink 指向外部文件，restore 读侧 fs.readFile 会跟随；即使内容 hash 恰好匹配，也属越界读取面，拒绝更安全。
+  const blobsDir = path.join(snapshotDir, 'blobs');
+  const blobEntries = await fs.readdir(blobsDir, { withFileTypes: true }).catch(() => [] as Array<{ name: string; isSymbolicLink(): boolean }>);
+  for (const be of blobEntries) {
+    if (be.isSymbolicLink()) {
+      return { verdict: 'UNSAFE_PATH', reason: `blob 是 symlink: ${be.name}` };
+    }
+  }
+
   // 旧快照检测：无 manifest.json 且 snapshot.json 无 readiness → LEGACY（结构/路径校验已在上面通过，
   // verifySnapshot 需要 manifest → 旧快照不能走完整 verify，需显式确认后仅做基本一致校验）。
   const manifestExists = await fs.access(path.join(snapshotDir, 'manifest.json')).then(() => true).catch(() => false);

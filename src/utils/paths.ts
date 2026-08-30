@@ -78,10 +78,33 @@ const RESERVED_INTERNAL_PREFIXES: readonly string[] = [
   'dsh-config-manager/sync/work/',
 ];
 
+/**
+ * 归一化并折叠 `.` / `..` 路径段（Reviewer B P0 修复）。
+ * 宿主 fs 经 `resolve(join(homeDir, rel))` 会折叠 `..`，因此「看似不在保留命名空间、实际经 `..` 落到保留区」
+ * 的路径（如 `dsh-config-manager/../dsh-config-manager/snapshots/...`）必须在此折叠后再判，否则 F23 被绕过。
+ * 纯字符串、跨平台（只用 `/`）语义与 node:path normalize 一致；`..` 超根时按根截断（不越到 home 外）。
+ */
+export function normalizePathCollapsed(p: string): string {
+  const norm = normalizePath(p);
+  if (norm === '') return '';
+  if (norm === '.') return '';
+  const out: string[] = [];
+  for (const seg of norm.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      if (out.length > 0) out.pop();
+      continue; // 超根 `..` 直接丢弃（home 相对路径不可能越出 homeDir）
+    }
+    out.push(seg);
+  }
+  return out.join('/');
+}
+
 /** 判断相对 homeDir 的路径是否落在内部 control-plane namespace（F23 投毒防护）。
- *  大小写不敏感（Windows 文件系统大小写不敏感，防 `DSh-Config-Manager/...` 绕过）。 */
+ *  大小写不敏感（Windows 文件系统大小写不敏感，防 `DSh-Config-Manager/...` 绕过）；
+ *  先折叠 `..`/`.` 段（宿主 fs 会折叠，此处必须同样折叠以免被路径穿越绕过）。 */
 export function isReservedInternalRel(relPath: string): boolean {
-  const norm = normalizePath(relPath).toLowerCase();
+  const norm = normalizePathCollapsed(relPath).toLowerCase();
   if (norm === '') return false;
   for (const prefix of RESERVED_INTERNAL_PREFIXES) {
     if (norm === prefix || norm.startsWith(prefix)) return true;

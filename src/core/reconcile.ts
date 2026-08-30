@@ -195,7 +195,13 @@ async function reconcileOne(
   for (const stepId of stepIds) {
     const step = j.steps[stepId];
     const plannedExternal = step?.external === true;
-    if (step === undefined) { allDoneConfirmed = false; continue; }
+    if (step === undefined) {
+      // Review D P2：plannedSteps 引用悬空（steps 缺条目）→ 不可证明，绝不能经 noop 判 RECOVERED。
+      anyUnprovable = true;
+      allDoneConfirmed = false;
+      details.push(`planned step ${stepId} 缺少 steps 条目（损坏/篡改 journal）`);
+      continue;
+    }
 
     if (plannedExternal) {
       // 外部 step：probe 判定
