@@ -166,6 +166,8 @@ export function createModelTools(deps: ModelToolsDeps) {
         homeDir: deps.host.homeDir,
         profile,
         ...(deps.host.msg === undefined ? {} : { msg: deps.host.msg }),
+        // Phase 4 统一恢复校验（与 Host/CLI 同强度）
+        snapshotsRoot: deps.snapshotsDir,
       }
       const plan: RestorePlan = await planRestore(restoreOpts)
       if (confirm !== true) {

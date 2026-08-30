@@ -31,7 +31,7 @@ import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type {
   ApplyResult, ConfigAdapter, ExecutedItem, GlobalConflictStrategy, HostContext,
   ImportContext, ImportPlan, ItemResolution, PlanItem, RollbackReport,
-  SnapshotStore,
+  SnapshotStore, TransactionSnapshotContext,
 } from '../core/types.ts';
 import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
 
@@ -331,6 +331,8 @@ export class ProfileManager {
       secretInputs?: Record<string, string>;
       decryptedCredentials?: Map<string, string>;
       rollbackOnError?: boolean;
+      /** Phase 4 生产 journal↔snapshot 绑定（deferred）；不传 = 无 journal 绑定 */
+      snapshotBinding?: TransactionSnapshotContext;
     } = {},
   ): Promise<ProfileSwitchResult> {
     // 安全阀：不确认绝不动数据（对齐 ImportNotConfirmedError）
@@ -358,14 +360,24 @@ export class ProfileManager {
       estimatedActions: {} as ImportPlan['estimatedActions'],
     };
 
-    // Snapshot（强制：切换前备份将被修改的目标，复用 core/backup.ts）
+    // Snapshot（强制：切换前备份将被修改的目标，复用 core/backup.ts）。
+    // Phase 4：宿主注入 snapshotBinding 时把 op-bound 元数据写入快照并绑定 journal（SNAPSHOT_CREATED）。
     const snapshot = await createSnapshot({
       ctx: this.ctx,
       plan,
       sourceZip: `profile:${name}`,
       store: this.snapshotStore,
       adapters: this.adapters,
+      operationId: opts.snapshotBinding?.operationId,
+      operationType: opts.snapshotBinding?.operationType,
+      environmentFingerprint: opts.snapshotBinding?.environmentFingerprint,
+      ownerInstanceId: opts.snapshotBinding?.ownerInstanceId,
     });
+    if (opts.snapshotBinding !== undefined) {
+      await opts.snapshotBinding.bindSnapshot(snapshot.id);
+      // 首个 destructive side effect（首个 applyOne）前：SNAPSHOT_CREATED→APPLYING
+      await opts.snapshotBinding.markApplying();
+    }
 
     const importCtx: ImportContext = {
       manifest: buildProfileManifest(this.ctx),

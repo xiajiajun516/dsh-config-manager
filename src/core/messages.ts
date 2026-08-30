@@ -70,6 +70,7 @@ export const zh = {
   'restore.snapshotInvalid': '快照 {dir} 的 snapshot.json 不是合法对象',
   'restore.invalidSnapshotId': 'snapshotId 非法（禁止路径分隔符）/ invalid snapshotId',
   'restore.pathEscape': '路径越界: {path}',
+  'restore.snapshotUntrusted': '快照不可信，拒绝恢复（{verdict}）：{reason}',
   'restore.blobPathEscape': 'blob 路径越界: {path}',
   'restore.hostSkipEscape': '宿主文件路径越界，跳过: {path}',
   'restore.hostSkipEscapeDetail': '快照登记路径越界，拒绝恢复',
@@ -351,6 +352,7 @@ export const en: Record<keyof typeof zh, string> = {
   // ---------- snapshot restore (restore.ts + host executor) ----------
   'restore.snapshotInvalid': 'snapshot.json in {dir} is not a valid object',
   'restore.invalidSnapshotId': 'invalid snapshotId (path separators forbidden)',
+  'restore.snapshotUntrusted': 'Snapshot untrusted, restore refused ({verdict}): {reason}',
   'restore.pathEscape': 'Path outside home directory: {path}',
   'restore.blobPathEscape': 'Blob path outside snapshot directory: {path}',
   'restore.hostSkipEscape': 'Host file path outside home directory, skipped: {path}',

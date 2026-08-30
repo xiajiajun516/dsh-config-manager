@@ -456,6 +456,10 @@ export async function verifySnapshot(snapshotsDir: string, id: string): Promise<
   if (manifest === null || typeof manifest !== 'object' || manifest.snapshotId !== id) {
     return { ok: false, reason: 'manifest 非法或 snapshotId 不匹配' };
   }
+  // entryCount 匹配（manifest 声明条目数与实际一致，防计数篡改）
+  if (typeof manifest.entryCount !== 'number' || manifest.entryCount !== snapshot.entries.length) {
+    return { ok: false, reason: 'manifest.entryCount 与 snapshot.entries 不一致（篡改）' };
+  }
   // metadataHash 匹配（破坏性内容）
   if (computeMetadataHash(snapshot) !== manifest.metadataHash) {
     return { ok: false, reason: 'metadataHash 不匹配（破坏性内容被篡改）' };

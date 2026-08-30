@@ -27,7 +27,8 @@ import {
   type RestorePlan, type RestoreReport, type SnapshotMeta,
 } from '../core/restore.ts';
 import {
-  REINSTALL_ITEMS, buildReinstallPlan, isWindows,
+  REINSTALL_ITEMS, buildReinstallPlan, isWindows, detectInstalledDshVersion,
+  writeReinstallRecoveryPoint,
   type ReinstallPlan, type ReinstallItemId, type ReinstallStep,
 } from '../core/reinstall.ts';
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
@@ -490,12 +491,41 @@ async function runReinstall(
     });
     const failed: Array<{ label: string; command: string; reason: string }> = [];
     // Phase 3 P0-A：CLI reinstall 也建 intent journal（外部副作用不可证明 → crash 后 NEEDS_ATTENTION）。
-    const recovery = new Phase3Recovery({ dataDir: path.join(lockHome, 'dsh-config-manager'), packageVersion: '0.1.0', fingerprintDataDir: path.join(lockHome, 'dsh-config-manager') });
+    const cliDataDir = path.join(lockHome, 'dsh-config-manager');
+    const recovery = new Phase3Recovery({ dataDir: cliDataDir, packageVersion: '0.1.0', fingerprintDataDir: cliDataDir });
     await recovery.initFingerprint().catch(() => undefined);
     try {
       await runWithMutationLock(lock, { op: 'cli-reinstall', target: plan.version }, async (lockCtx) => {
-        const runReinstall = async (): Promise<void> => {
+        const runReinstall = async (journalCtx?: { operationId?: string }): Promise<void> => {
           io.log(`开始重装 / reinstall started — 版本 ${plan.version}`);
+          // Phase 4 F29/F30：在首个 destructive side effect（npm uninstall -g）前，写 durable
+          // operation-bound recovery point。若涉及 program 步但无法探测旧版本 → fail-closed，不继续 uninstall。
+          if (selection.has('program')) {
+            const prev = await detectInstalledDshVersion(exec);
+            if (prev === null) {
+              const message = '无法探测当前已安装 DSH 版本，拒绝执行 program 步（fail-closed）：先手动确认 dsh --version 可用';
+              failed.push({ label: 'program recovery point', command: 'detectInstalledDshVersion', reason: message });
+              io.error(`✘ ${message}`);
+              // 不执行任何步骤（避免在无 recovery point 下 uninstall）
+              return;
+            }
+            try {
+              const opId = journalCtx?.operationId ?? 'cli-reinstall';
+              await writeReinstallRecoveryPoint(cliDataDir, {
+                operationId: opId,
+                environmentFingerprint: recovery.recoveryEnvFingerprint,
+                previousInstalledVersion: prev,
+                requestedTargetSpec: plan.version,
+                createdAt: new Date().toISOString(),
+                recoveryHint: `如需手动恢复此版本：npm install -g @deepseek-ai/dsh@${prev}`,
+              });
+            } catch (rpErr) {
+              const message = `recovery point 写入失败，拒绝执行 program 步（fail-closed）：${rpErr instanceof Error ? rpErr.message : String(rpErr)}`;
+              failed.push({ label: 'program recovery point', command: 'writeReinstallRecoveryPoint', reason: message });
+              io.error(`✘ ${message}`);
+              return;
+            }
+          }
           for (const step of plan.steps) {
             if (step.dangerous) {
               io.log(`⚠ 危险步骤 / dangerous step: ${step.label}`);
@@ -618,6 +648,8 @@ export async function runCli(
     homeDir: resolveDshHome(env),
     profile: options.profile,
     settingsPath: options.settings,
+    // Phase 4 统一恢复校验（与 Host/ModelTools 同强度：存在/READY/manifest/blob-hash/symlink/provenance）
+    snapshotsRoot: dataDir,
   };
   if (options.dryRun) {
     printPlan(await planRestore(restoreOptions), io);

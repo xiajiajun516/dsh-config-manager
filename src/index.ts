@@ -56,7 +56,7 @@ import type {} from '@deepseek-ai/dsh-workspace'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
-import { Exporter, FileSnapshotStore, Importer } from './core/index.ts'
+import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
 import { ProfileManager, isValidProfileName } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
 import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, type RestorePlan, type RestoreReport } from './core/restore.ts'
@@ -81,6 +81,7 @@ import { createHardenedZipParser } from './security/zip-security.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
 import { Phase3Recovery, TransactionRecoveryRequiredError, mapLockStateForStartup } from './core/phase3-host.ts'
+import type { JournalRunContext } from './core/phase3-host.ts'
 import { classifyStartup } from './core/startup-barrier.ts'
 import type { MutationLockPort } from './utils/env-lock.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
@@ -1456,8 +1457,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
    */
   const withMutationGate = (
     op: string,
-    handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext) => Promise<void>,
-    opts?: { journaled?: boolean },
+    handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>,
+    opts?: { journaled?: boolean; deferredSnapshot?: boolean },
   ): ((req: IncomingMessage, res: ServerResponse) => Promise<void>) => {
     return async (req, res) => {
       try {
@@ -1468,10 +1469,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             await host.phase3Recovery.runJournaled({
               operationType: op,
               lockCtx,
-              fn: async () => { await handler(req, res, lockCtx) },
+              // Phase 4：生产 snapshot 接线。deferredSnapshot = plan 在 handler 内解析后，
+              // 引擎创建 op-bound snapshot 并 bindSnapshot + markApplying（首个 destructive side effect 前）。
+              deferredSnapshot: opts?.deferredSnapshot ?? false,
+              fn: async (journalCtx) => { await handler(req, res, lockCtx, journalCtx) },
             })
           } else {
-            await handler(req, res, lockCtx ?? undefined)
+            await handler(req, res, lockCtx ?? undefined, undefined)
           }
         })
       } catch (error) {
@@ -2153,7 +2157,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.execute,
-      handler: withMutationGate('import-apply', async (req, res) => {
+      handler: withMutationGate('import-apply', async (req, res, lockCtx, journalCtx) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
@@ -2201,6 +2205,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 : {},
             rollbackOnError: opts['rollbackOnError'] === true,
             decryptedCredentials,
+            // Phase 4 生产 snapshot 接线：deferred journal 绑定的 ctx 透传给引擎，
+            // 使快照创建后立即 bindSnapshot（SNAPSHOT_CREATED）→ markApplying（APPLYING）再执行。
+            snapshotBinding: journalCtx,
             // m1 埋点：每开始一个计划项实时更新 run 状态（detail=当前执行项，
             // 供 UI 显示「正在安装插件 X」/ 判定跳过按钮；/progress 轮询可见）
             onItemStart: (info) => {
@@ -2237,7 +2244,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } finally {
           runAbortControllers.delete(runId)
         }
-      }),
+      }, { deferredSnapshot: true }),
     },
     // -------------------------------------------------- execute/skip
     // 用户跳过当前计划项（导入中，目前仅插件安装）：abort 当前项的中止控制器 → 引擎
@@ -2306,6 +2313,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           profile: host.profile,
           settingsPath: undefined,
           msg,
+          // Phase 4 统一恢复校验：所有 restore 入口传 snapshotsRoot → 同一验证强度（存在/READY/manifest/blob-hash/symlink/provenance）
+          snapshotsRoot: snapshotsDir,
+          environmentFingerprint: host.phase3Recovery?.recoveryEnvFingerprint ?? undefined,
         }
         try {
           if (dryRun) {
@@ -2525,7 +2535,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.profilesExecuteSwitch,
-      handler: withMutationGate('profile-switch', async (req, res) => {
+      handler: withMutationGate('profile-switch', async (req, res, lockCtx, journalCtx) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2562,6 +2572,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             resolutions,
             secretInputs,
             rollbackOnError: body['rollbackOnError'] !== false,
+            snapshotBinding: journalCtx,
           })
           runs.finish(runId, result)
           writeJson(res, 200, { ...result, runId })
@@ -2575,7 +2586,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             writeJson(res, 400, { error: message, runId })
           }
         }
-      }),
+      }, { deferredSnapshot: true }),
     },
     {
       kind: 'exact',
@@ -3279,7 +3290,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.syncApplyItems,
-      handler: withMutationGate('sync-apply', async (req, res) => {
+      handler: withMutationGate('sync-apply', async (req, res, lockCtx, journalCtx) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -3335,6 +3346,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             engine = makeSyncEngine(session.config)
             report = await engine.applyItems(session.zipPath, subPlan, {
               onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
+              snapshotBinding: journalCtx,
             })
           } finally {
             // 用完再清理临时 ZIP（此前在 applyItems 读取前就删除 → ENOENT：无法读取备份文件）
@@ -3354,7 +3366,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeSyncRouteError(res, error)
         }
-      }),
+      }, { deferredSnapshot: true }),
     },
     // ------------------------------------------------------ sync/cancel
     // m-sync-v2：取消 / 清理差异确认会话（丢弃临时 ZIP，零副作用）。
@@ -3985,7 +3997,26 @@ export function apply(ctx: Context, config?: Config): void {
   // Phase 3：启动 reconcile（只读）+ SAFE MODE。宿主 apply() 为同步 →
   // ① 先同步探测 durable SAFE MODE 标记（scheduler.start() 前即被阻断），
   // ② 再异步跑完整只读 reconcile，刷新标志与 durable 标记。不自动 recover stale lock（Rev 3 P1-NEW-2）。
-  const phase3Recovery = new Phase3Recovery({ dataDir, packageVersion: PLUGIN_VERSION })
+  // Phase 4 F21/F11：注入真实 snapshotExists 正向校验——journal 引用的 snapshot 存在 + READY +
+  // verified（manifest/blob hash）+ op/env/owner binding 匹配 journal，才视为可回滚的有效 recovery 证据。
+  const phase3Recovery = new Phase3Recovery({
+    dataDir,
+    packageVersion: PLUGIN_VERSION,
+    snapshotExists: async (snapshotId, binding) => {
+      if (snapshotId === null || snapshotId === '') return false
+      if (!isValidSnapshotId(snapshotId)) return false
+      const v = await verifySnapshot(snapshotsDir, snapshotId)
+      if (!v.ok) return false
+      // binding 校验：journal 引用必须与快照双向一致（operationId/ownerInstanceId/environmentFingerprint）
+      const snap = await new FileSnapshotStore({ dir: snapshotsDir }).load(snapshotId).catch(() => null)
+      if (snap === null) return false
+      if (snap.readiness !== 'READY') return false
+      if (binding?.operationId !== undefined && snap.operationId !== binding.operationId) return false
+      if (binding?.ownerInstanceId !== undefined && snap.ownerInstanceId !== binding.ownerInstanceId) return false
+      if (binding?.environmentFingerprint !== undefined && snap.environmentFingerprint !== binding.environmentFingerprint) return false
+      return true
+    },
+  })
   host.safeModeIsBlocked = () => phase3Recovery.safeModeActive
   host.phase3Recovery = phase3Recovery
   phase3Recovery.probeSafeModeSync()

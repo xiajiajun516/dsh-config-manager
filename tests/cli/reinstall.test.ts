@@ -15,19 +15,25 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { Phase3Recovery } from '../../src/core/phase3-host.ts';
 import {
   REINSTALL_ITEMS,
   buildReinstallPlan,
   copyDirCommand,
+  detectInstalledDshVersion,
   isWindows,
   psQuote,
+  readReinstallRecoveryPoint,
   resolveDshHome,
   resolvePnpmStoreDir,
   rmCommand,
   shellQuote,
+  writeReinstallRecoveryPoint,
   type ReinstallItemId,
 } from '../../src/core/reinstall.ts';
 
@@ -344,4 +350,57 @@ test('R-CLI runCli reinstall --list：仅列清单，不执行任何命令、不
   assert.ok(out.join('\n').includes('可选清理项'), '输出可选项清单');
   assert.equal(executed, 0, '--list 不执行任何外部命令');
   assert.equal(asked, 0, '--list 不进行交互询问');
+});
+
+/* ------------------- Phase 4 F29/F30：reinstall recovery point ------------------- */
+
+test('F29: detectInstalledDshVersion 解析 dsh --version 输出', async () => {
+  const v = await detectInstalledDshVersion(async () => 'DeepSeek Harness\nv0.1.54\n');
+  assert.equal(v, '0.1.54');
+  const bare = await detectInstalledDshVersion(async () => '0.1.31');
+  assert.equal(bare, '0.1.31');
+  // 失败 → null（fail-closed 前提）
+  const f = await detectInstalledDshVersion(async () => { throw new Error('boom'); });
+  assert.equal(f, null);
+  const empty = await detectInstalledDshVersion(async () => '   \n');
+  assert.equal(empty, null, '空输出无法探测 → null');
+});
+
+test('F30: writeReinstallRecoveryPoint 落盘 + operation-bound 往返', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-reinstall-rp-'));
+  try {
+    const dataDir = path.join(tmp, 'data');
+    const point = {
+      operationId: 'op-reinstall-1',
+      environmentFingerprint: 'fp-1',
+      previousInstalledVersion: '0.1.53',
+      requestedTargetSpec: 'latest',
+      createdAt: '2026-08-30T00:00:00.000Z',
+      recoveryHint: 'npm install -g @deepseek-ai/dsh@0.1.53',
+    };
+    const file = await writeReinstallRecoveryPoint(dataDir, point);
+    assert.ok((await fs.stat(file)).isFile());
+    const back = await readReinstallRecoveryPoint(dataDir, 'op-reinstall-1');
+    assert.deepEqual(back, point);
+    // 不存在的 opId → null
+    assert.equal(await readReinstallRecoveryPoint(dataDir, 'missing'), null);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('F29: runExternalIntent 暴露 operationId 给 fn（供 recovery point 绑定）', async (t) => {
+  const dir = fssync.mkdtempSync(path.join(os.tmpdir(), 'dsh-cm-reinstall-ext-'));
+  t.after(() => fssync.rmSync(dir, { recursive: true, force: true }));
+  const recovery = new Phase3Recovery({ dataDir: dir, packageVersion: '0.1.54', environmentFingerprint: 'fp' });
+  await recovery.store.ensureDirs();
+  let seen: string | undefined;
+  const { operationId } = await recovery.runExternalIntent({
+    operationType: 'cli-reinstall', lockCtx: { token: { tokenId: 't', managerId: 'm', instanceId: 'i', acquiredAt: 0 } },
+    intent: { adapter: 'dsh', ref: 'program', kind: 'Reinstall' },
+    fn: async (ctx) => { seen = ctx?.operationId; return 1; },
+  });
+  assert.equal(seen, operationId, 'fn 应拿到与 journal 相同的 operationId');
+  const j = await recovery.store.load(operationId);
+  assert.equal(j?.state, 'COMMITTED');
 });

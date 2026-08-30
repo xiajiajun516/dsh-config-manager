@@ -32,6 +32,7 @@ import {
   type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,
   type ImportDecisions, type ImportPlan, type ImportResult, type PathIssue,
   type PathMapping, type PlanItem, type SkippedTombstone, type SnapshotStore,
+  type TransactionSnapshotContext,
 } from './types.ts';
 
 /** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后） */
@@ -407,6 +408,12 @@ export class Analyzer {
       onItemStart?: (info: { adapter: SectionId; index: number; total: number; detail: string }) => void;
       /** 执行日志回调（逐计划项操作 + 子进程命令行；注入 ImportContext 供适配器调用；不传则无日志） */
       onLog?: (line: string) => void;
+      /**
+       * Phase 4 生产 journal↔snapshot 绑定（deferred 模式）。
+       * 宿主经 runJournaled({ deferredSnapshot:true }) 的 ctx 注入；引擎在快照创建/首 mutation 时绑定，
+       * 保证快照 durable+verified 且 journal 已知先于任何写。不传 = 无 journal 绑定（非生产 journaled 路径）。
+       */
+      snapshotBinding?: TransactionSnapshotContext;
     } = {},
   ): Promise<ImportResult> {
     const bundle = await this.loadBundle(zipPath);
@@ -439,14 +446,25 @@ export class Analyzer {
       onLog: opts.onLog,
     };
 
-    // 11. 快照（强制：导入前必须先备份将被修改的目标）
+    // 11. 快照（强制：导入前必须先备份将被修改的目标）。
+    //     Phase 4：宿主注入 snapshotBinding 时，把 op-bound 元数据写入快照，并立即绑定 journal
+    //     （SNAPSHOT_CREATED），保证「快照 durable+verified 且 journal 已知」先于首个 mutation。
     const snapshot = await createSnapshot({
       ctx: this.ctx,
       plan,
       sourceZip: zipPath,
       store: this.snapshotStore,
       adapters: this.adapters,
+      operationId: opts.snapshotBinding?.operationId,
+      operationType: opts.snapshotBinding?.operationType,
+      environmentFingerprint: opts.snapshotBinding?.environmentFingerprint,
+      ownerInstanceId: opts.snapshotBinding?.ownerInstanceId,
     });
+    if (opts.snapshotBinding !== undefined) {
+      await opts.snapshotBinding.bindSnapshot(snapshot.id);
+      // 首个 destructive side effect 前：SNAPSHOT_CREATED→APPLYING（在首个 applyOne 之前调 markApplying）
+      await opts.snapshotBinding.markApplying();
+    }
 
     const executed: ExecutedItem[] = [];
     const warnings: string[] = [...bundle.zipWarnings];

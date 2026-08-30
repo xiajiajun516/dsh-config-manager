@@ -17,6 +17,7 @@ import {
   JournalStore, environmentFingerprint as computeFingerprint, SAFE_MODE_MARKER,
   generateOperationId, createJournalEntry, transitionJournalState, isTerminalState,
 } from './journal.ts';
+import type { OperationJournal } from './journal.ts';
 import { inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './reconcile.ts';
 import { OWNERSHIP_FILE, type LockState, type MutationLockContext } from '../utils/env-lock.ts';
 
@@ -26,6 +27,25 @@ export class TransactionRecoveryRequiredError extends Error {
     super(`active transaction ${opId} 未收敛（待 recover / reconcile），拒绝创建新 transaction`)
     this.name = 'TransactionRecoveryRequiredError'
   }
+}
+
+/**
+ * Phase 4 生产 journal↔snapshot 绑定 API（deferred 模式）：
+ *  fn 收到此 ctx，在【首个 destructive side effect 前】：
+ *   - 用 plan 创建 op-bound snapshot（operationId/operationType/environmentFingerprint/ownerInstanceId）
+ *   - `bindSnapshot(id)`：journal 记录 snapshotId，CREATED→SNAPSHOT_CREATED
+ *   - 首个 mutation 前 `markApplying()`：SNAPSHOT_CREATED→APPLYING
+ *  保证「快照 durable+verified 且 journal 已知」先于任何写。显式 ctx，无 process-global reentrancy。
+ */
+export interface JournalRunContext {
+  operationId: string;
+  operationType: string;
+  environmentFingerprint: string;
+  ownerInstanceId: string;
+  /** 记录 journal.snapshotId 并推进 CREATED/SNAPSHOT_CREATED。 */
+  bindSnapshot: (snapshotId: string) => Promise<void>;
+  /** 首个 destructive side effect 前调用：SNAPSHOT_CREATED→APPLYING（或 CREATED→APPLYING）。 */
+  markApplying: () => Promise<void>;
 }
 
 /** 把环境锁分类映射到 startup 判定：ACQUIRED 视同 LOCKED（有活跃 owner），IO/PERMISSION 保守 LOCKED。 */
@@ -42,6 +62,19 @@ export interface Phase3RecoveryOptions {
   environmentFingerprint?: string;
   /** 环境指纹持久化 token 目录（缺省 dataDir） */
   fingerprintDataDir?: string;
+  /**
+   * Phase 4 F21/F11 生产正向校验：校验 journal 引用的 snapshot 是否「存在 + READY + verified +
+   * op/env/owner binding 匹配」。缺省 = 保守 false（无法证明存在 → 不强推回滚）。
+   * 宿主注入 FileSnapshotStore + verifySnapshot + manifest binding 校验实现。
+   */
+  snapshotExists?: (snapshotId: string | null, binding?: SnapshotBindingRef) => Promise<boolean>;
+}
+
+/** journal↔snapshot binding 引用（与 reconcile ReconcileProbeHooks.snapshotExists 的 binding 一致）。 */
+export interface SnapshotBindingRef {
+  operationId?: string;
+  ownerInstanceId?: string;
+  environmentFingerprint?: string;
 }
 
 export class Phase3Recovery {
@@ -50,6 +83,7 @@ export class Phase3Recovery {
   private readonly dataDir: string;
   private readonly fingerprintDataDir: string;
   private environmentFingerprint: string;
+  private readonly snapshotExistsFn: Phase3RecoveryOptions['snapshotExists'];
 
   /** 内存 SAFE MODE 标志（isBlocked 同步谓词用） */
   safeModeActive = false;
@@ -60,6 +94,7 @@ export class Phase3Recovery {
     this.store = new JournalStore({ transactionsDir: path.join(opts.dataDir, 'transactions') });
     this.packageVersion = opts.packageVersion;
     this.environmentFingerprint = opts.environmentFingerprint ?? 'unknown';
+    this.snapshotExistsFn = opts.snapshotExists;
   }
 
   /** 计算环境指纹（持久化 token；跨启动稳定）。在 startup 前调用一次。 */
@@ -96,11 +131,16 @@ export class Phase3Recovery {
     }
   }
 
-  /** 保守 hooks：无法证明默认 needs-attention（绝不自动恢复/回滚） */
-  private conservativeHooks(): ReconcileProbeHooks {    return {
+  /** 保守 hooks：无法证明默认 needs-attention（绝不自动恢复/回滚）。snapshotExists 用宿主注入的正向校验（若提供）。 */
+  private conservativeHooks(): ReconcileProbeHooks {
+    const snapshotExists = this.snapshotExistsFn;
+    return {
       verifyStepFingerprint: async () => 'unable',
       probeExternal: async () => 'unknown',
-      snapshotExists: async () => false,
+      snapshotExists: async (snapshotId, binding) => {
+        if (snapshotExists === undefined) return false; // 未注入 → 保守 false
+        return snapshotExists(snapshotId, binding);
+      },
     };
   }
 
@@ -155,15 +195,25 @@ export class Phase3Recovery {
    *  - 不 double-acquire（§6）：调用方（host gate）已持锁，本方法只负责 journal 生命周期，不 re-acquire、不 release（release 由 gate 负责）。
    *  - 异常 → NEEDS_ATTENTION + durable SAFE MODE + rethrow（不破坏既有错误/响应流）。
    *  - 返回 { operationId, result }。
+   *
+   *  Phase 4 snapshot 两种模式：
+   *   - `snapshotProvider`（pre-fn）：journal CREATED → 调用 provider 创建并 verify snapshot → 绑定 snapshotId
+   *     → SNAPSHOT_CREATED → APPLYING → fn（适合 provider 不依赖请求体 plan 的场景）。
+   *   - `deferredSnapshot`（推荐，F20 生产接线）：plan 只在 handler 解析请求体后可用，因此 journal 停留在 CREATED，
+   *     fn 收到 `ctx`（含 `bindSnapshot` / `markApplying`）。引擎在【首个 destructive side effect 前】用 plan 创建
+   *     op-bound snapshot → ctx.bindSnapshot(id)（CREATED→SNAPSHOT_CREATED，记录 snapshotId）→ 首个 mutation 前
+   *     ctx.markApplying()（SNAPSHOT_CREATED→APPLYING）。保证「快照 durable+verified 且 journal 已知」先于任何写。
    */
   async runJournaled<T>(opts: {
     operationType: string;
     lockCtx: MutationLockContext;
-    /** 可选：真实 pre-operation snapshot（回滚点），返回 snapshotId。 */
+    /** 可选：真实 pre-operation snapshot（回滚点），返回 snapshotId（pre-fn 模式）。 */
     snapshotProvider?(): Promise<string | null>;
-    fn: () => Promise<T>;
+    /** 可选：deferred 绑定模式——journal 停留 CREATED，fn 收到 ctx 自行 bindSnapshot/markApplying。 */
+    deferredSnapshot?: boolean;
+    fn: (ctx?: JournalRunContext) => Promise<T>;
   }): Promise<{ operationId: string; result: T }> {
-    const { operationType, lockCtx, snapshotProvider, fn } = opts;
+    const { operationType, lockCtx, snapshotProvider, deferredSnapshot, fn } = opts;
     const ownerInstanceId = (lockCtx?.token?.instanceId ?? 'unknown').toString();
     // P1-A：ownership epoch identity = 真实 acquisition-specific ownerInstanceId（来自 lockCtx，
     // 即 Phase 2 activeInstanceId；跨进程/跨持有不同）。不再用环境稳定合成串。
@@ -188,23 +238,54 @@ export class Phase3Recovery {
     await this.store.create(createJournalEntry(operationType, base, new Date().toISOString()));
     let fnCompleted = false;
     let terminalPersistAttempted = false;
+
+    // Phase 4 deferred 模式：把 journal 绑定 API 暴露给 fn（引擎在第一个 destructive side effect 前调用）。
+    // bindSnapshot：记录 snapshotId 并 CREATED→SNAPSHOT_CREATED；markApplying：SNAPSHOT_CREATED→APPLYING。
+    // 这些只在该 op 的同一 journal 上生效，杜绝 process-global reentrancy。
+    const journalCtx: JournalRunContext = {
+      operationId: opId,
+      operationType,
+      environmentFingerprint: this.environmentFingerprint || 'unknown',
+      ownerInstanceId,
+      bindSnapshot: async (snapshotId: string) => {
+        if (snapshotId === null || snapshotId === '') throw new Error('bindSnapshot: snapshotId 为空');
+        await this.store.update(opId, (j) => {
+          let next = { ...j, snapshotId } as OperationJournal;
+          if (next.state === 'CREATED') next = transitionJournalState(next, 'SNAPSHOT_CREATED');
+          else if (next.state === 'SNAPSHOT_CREATED') { /* 幂等：已绑定 */ }
+          else if (next.state === 'APPLYING') { /* 允许：绑定已晚但幂等记录 */ }
+          else throw new Error(`bindSnapshot 非法 state: ${next.state}`);
+          return next;
+        }).catch(() => undefined);
+      },
+      markApplying: async () => {
+        await this.store.update(opId, (j) => {
+          let next = j;
+          if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
+          else if (next.state === 'CREATED') next = transitionJournalState(next, 'APPLYING');
+          return next;
+        }).catch(() => undefined);
+      },
+    };
+
     try {
-      let snapId: string | null = null;
-      if (snapshotProvider !== undefined) {
-        snapId = await snapshotProvider();
+      if (deferredSnapshot !== true && snapshotProvider !== undefined) {
+        const snapId = await snapshotProvider();
         // P1-2 修复：snapshotProvider 返回 null 表示快照创建失败 → 显式 abort（不得在无快照下继续 mutation）
         if (snapId === null) {
           throw new Error(`snapshotProvider 返回 null（快照创建失败），abort operation ${operationType}`);
         }
-        await this.store.update(opId, (j) => transitionJournalState({ ...j, snapshotId: snapId }, 'SNAPSHOT_CREATED')).catch(() => undefined);
-      } else {
+        await journalCtx.bindSnapshot(snapId);
+      } else if (deferredSnapshot !== true) {
         await this.store.update(opId, (j) => transitionJournalState(j, 'APPLYING'));
       }
-      const result = await fn();
+      // deferred 模式：保持 CREATED，fn 自行 bindSnapshot + markApplying（首个 destructive side effect 前）
+      const result = await fn(journalCtx);
       fnCompleted = true;
-      // 尾操作：从任意 pre-commit 状态推进到 COMMITTED（合法链 SNAPSHOT_CREATED→APPLYING→VALIDATING→COMMITTED）
+      // 尾操作：从任意 pre-commit 状态推进到 COMMITTED（合法链 CREATED/SNAPSHOT_CREATED→APPLYING→VALIDATING→COMMITTED）
       await this.store.update(opId, (j) => {
         let next = j;
+        if (next.state === 'CREATED') next = transitionJournalState(next, 'APPLYING');
         if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
         if (next.state === 'APPLYING') next = transitionJournalState(next, 'VALIDATING');
         next = transitionJournalState(next, 'COMMITTED');
@@ -239,7 +320,7 @@ export class Phase3Recovery {
     operationType: string;
     lockCtx: MutationLockContext;
     intent: { adapter: string; ref: string; kind: string };
-    fn: () => Promise<T>;
+    fn: (ctx?: { operationId: string }) => Promise<T>;
   }): Promise<{ operationId: string; result: T }> {
     const { operationType, lockCtx, intent, fn } = opts;
     const ownerInstanceId = (lockCtx?.token?.instanceId ?? 'unknown').toString();
@@ -259,7 +340,9 @@ export class Phase3Recovery {
         };
         return transitionJournalState(withStep, 'APPLYING');
       });
-      const result = await fn();
+      // Phase 4 F29/F30：把 operationId 暴露给 fn，使调用方（如 CLI reinstall）能在首个 destructive
+      // side effect 前写 durably-bound recovery point（operationId + 环境/版本元数据）。
+      const result = await fn({ operationId: opId });
       await this.store.update(opId, (j) => {
         let next = j;
         if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');

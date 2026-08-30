@@ -49,7 +49,7 @@ import type { SyncApplyPlan } from './risk.ts';
 import { createSnapshot } from '../core/backup.ts';
 import { rollback } from '../core/rollback.ts';
 import { FileSnapshotStore } from '../core/backup.ts';
-import type { Snapshot, SnapshotStore } from '../core/types.ts';
+import type { Snapshot, SnapshotStore, TransactionSnapshotContext } from '../core/types.ts';
 import type { PlanItemProgress } from '../core/analyzer.ts';
 
 export interface SyncEngineOptions {
@@ -838,7 +838,11 @@ export class SyncEngine {
   async applyItems(
     zipPath: string,
     subPlan: ImportPlan,
-    opts: { onItem?: (info: PlanItemProgress) => void } = {},
+    opts: {
+      onItem?: (info: PlanItemProgress) => void;
+      /** Phase 4 生产 journal↔snapshot 绑定（deferred；透传给 Importer.executeImportPlan） */
+      snapshotBinding?: TransactionSnapshotContext;
+    } = {},
   ): Promise<ApplyItemsReport> {
     if (!this.importer) {
       throw new Error('applyItems: SyncEngine 缺少 importer（需在 options 中注​入）');
@@ -877,6 +881,7 @@ export class SyncEngine {
       secretInputs: undefined,
       decryptedCredentials: undefined,
       onItem: opts.onItem,
+      snapshotBinding: opts.snapshotBinding,
     });
 
     if (!result.ok) {

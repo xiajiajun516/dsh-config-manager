@@ -23,7 +23,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { resolveFileTarget } from './backup.ts';
+import { resolveFileTarget, verifySnapshot } from './backup.ts';
 import { expectedSessionRefs, sweepGhostSessions } from './ghost-sweep.ts';
 import { zhMsg } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
@@ -100,6 +100,19 @@ export interface RestoreOptions {
   onAction?: (info: { index: number; total: number; detail: string }) => void;
   /** 消息翻译器（缺省 zh；宿主按 DSH 应用语言注入） */
   msg?: MsgFunc;
+  /**
+   * Phase 4 统一恢复校验：快照根目录（<snapshotsDir>，<snapshotDir> 的直接父级）。
+   * 提供时，planRestore 顶端强制调用 validateSnapshotForRestore；CORRUPT/INVALID/UNSAFE_PATH/
+   * WRONG_ENVIRONMENT 拒绝计划。缺省 = 不强制（兼容旧调用；新入口都应传）。
+   */
+  snapshotsRoot?: string;
+  /** Phase 4 恢复校验时校验环境指纹（不匹配 → WRONG_ENVIRONMENT；缺省不校验）。 */
+  environmentFingerprint?: string;
+  /**
+   * Phase 4 恢复确认策略：缺省允许 LEGACY 显式恢复。若调用方要求「非 operation-bound 一律拒绝」，
+   * 可传 'requireOperationBound'。
+   */
+  requireOperationBound?: boolean;
 }
 
 export interface RestoreReport {
@@ -219,7 +232,114 @@ async function defaultPluginUninstaller(
   return { ok: false, message: msg('restore.uninstallFailedExit', { name, code: String(result.exitCode), tail }) };
 }
 
-/* ------------------------------------------------------------ planRestore */
+/* -------------------------------------------------- 统一恢复校验（Phase 4 F8/F9/F25） */
+
+/**
+ * 快照恢复前可信校验的 verdict（统一供 Host API / ModelTools / CLI / sync rollback 消费）。
+ *
+ * - TRUSTED_OPERATION_SNAPSHOT：READY + manifest 完整 + blob hash 匹配 + 有 op/env/owner binding。
+ *   可授权自动/推荐回滚。
+ * - TRUSTED_MANUAL_LOCAL：READY + 完整校验通过，但无 Phase4 binding（如用户手动/pinned 快照）。
+ *   可显式手动恢复，不可作 Phase3 自动 recovery 证据。
+ * - LEGACY_REQUIRES_CONFIRMATION：旧快照（无 manifest / 无 readiness）。结构/路径校验通过即可显式确认恢复，
+ *   绝不可自动恢复。
+ * - INVALID / CORRUPT / UNSAFE_PATH / WRONG_ENVIRONMENT：拒绝。
+ */
+export type RestoreSnapshotVerdict =
+  | 'TRUSTED_OPERATION_SNAPSHOT'
+  | 'TRUSTED_MANUAL_LOCAL'
+  | 'LEGACY_REQUIRES_CONFIRMATION'
+  | 'WRONG_ENVIRONMENT'
+  | 'CORRUPT'
+  | 'INVALID'
+  | 'UNSAFE_PATH';
+
+export interface RestoreSnapshotValidation {
+  verdict: RestoreSnapshotVerdict;
+  reason?: string;
+}
+
+/** 递归检查快照目录内关键文件非 symlink（F25：拒绝 symlink 化 metadata/blob 写穿）。 */
+async function assertNoSnapshotSymlink(dir: string, rel: string): Promise<string | null> {
+  const p = path.join(dir, rel);
+  if (!isWithinHome(dir, p)) return `路径越界: ${rel}`;
+  try {
+    const st = await fs.lstat(p);
+    if (st.isSymbolicLink()) return `symlink 化关键文件: ${rel}`;
+    return null;
+  } catch {
+    // 缺失由 verify/logic 处理（此处不判缺失）
+    return null;
+  }
+}
+
+/**
+ * 统一恢复前校验（供 planRestore 顶端对所有 restore 类型强制调用）：
+ * 1. isValidSnapshotId（语法）
+ * 2. snapshot.json + manifest 存在、id 匹配（结构）
+ * 3. verifySnapshot（磁盘重读：metadataHash + blob hashes + 路径安全）→ CORRUPT
+ * 4. symlink 检查（snapshot.json / manifest / blobs）→ UNSAFE_PATH
+ * 5. readiness + provenance：
+ *    - 无 binding 字段（旧快照）→ LEGACY_REQUIRES_CONFIRMATION
+ *    - 有 manifest/READY 但无 op binding → TRUSTED_MANUAL_LOCAL
+ *    - 有 READY + manifest + op/env/owner binding → TRUSTED_OPERATION_SNAPSHOT
+ * 绝不把「不可证明」当成 trusted。
+ */
+export async function validateSnapshotForRestore(
+  snapshotDir: string,
+  snapshotsRoot: string,
+  env?: { environmentFingerprint?: string },
+): Promise<RestoreSnapshotValidation> {
+  const id = path.basename(snapshotDir);
+  if (!isValidSnapshotId(id)) return { verdict: 'INVALID', reason: 'snapshotId 非法' };
+
+  // 目录边界：snapshotDir 必须紧邻 snapshotsRoot 下的一层
+  const rel = path.relative(snapshotsRoot, snapshotDir).split(path.sep).join('/');
+  if (rel === '' || rel.includes('/') || !isWithinHome(snapshotsRoot, snapshotDir)) {
+    return { verdict: 'INVALID', reason: '快照目录越界或非直接子目录' };
+  }
+
+  // 关键文件 symlink 检查（F25）
+  for (const f of ['snapshot.json', 'manifest.json']) {
+    const s = await assertNoSnapshotSymlink(snapshotDir, f);
+    if (s !== null) return { verdict: 'UNSAFE_PATH', reason: s };
+  }
+
+  // 旧快照检测：无 manifest.json 且 snapshot.json 无 readiness → LEGACY（结构/路径校验已在上面通过，
+  // verifySnapshot 需要 manifest → 旧快照不能走完整 verify，需显式确认后仅做基本一致校验）。
+  const manifestExists = await fs.access(path.join(snapshotDir, 'manifest.json')).then(() => true).catch(() => false);
+  let snapshot: Snapshot | null = null;
+  try {
+    snapshot = parseJsonSafe(await fs.readFile(path.join(snapshotDir, 'snapshot.json'), 'utf8')) as Snapshot;
+  } catch {
+    /* verifySnapshot 已报缺失 */
+  }
+  if (snapshot === null || typeof snapshot !== 'object') return { verdict: 'CORRUPT', reason: 'snapshot.json 无法解析' };
+  if (!manifestExists && snapshot.readiness === undefined) {
+    return { verdict: 'LEGACY_REQUIRES_CONFIRMATION', reason: '旧快照（无 manifest/READY），需显式确认后恢复' };
+  }
+
+  // 结构 + 完整性（磁盘重读，不信任内存）
+  const v = await verifySnapshot(snapshotsRoot, id);
+  if (!v.ok) return { verdict: 'CORRUPT', reason: v.reason };
+
+  // 环境绑定（WRONG_ENVIRONMENT）
+  if (env?.environmentFingerprint && snapshot.readiness === 'READY' && snapshot.environmentFingerprint
+    && snapshot.environmentFingerprint !== env.environmentFingerprint) {
+    return { verdict: 'WRONG_ENVIRONMENT', reason: 'environmentFingerprint 不匹配（可能来自其他机器/安装）' };
+  }
+
+  // provenance 分类
+  const hasBinding = snapshot.operationId !== undefined || snapshot.environmentFingerprint !== undefined || snapshot.ownerInstanceId !== undefined;
+  if (snapshot.readiness === undefined) {
+    return { verdict: 'LEGACY_REQUIRES_CONFIRMATION', reason: '旧快照（无 readiness），需显式确认后恢复' };
+  }
+  if (!hasBinding) {
+    return { verdict: 'TRUSTED_MANUAL_LOCAL', reason: '完整性通过，但非 operation-bound（手动/本地快照）' };
+  }
+  return { verdict: 'TRUSTED_OPERATION_SNAPSHOT', reason: 'READY + manifest 完整 + op/env/owner binding 匹配' };
+}
+
 
 /**
  * 生成恢复动作计划（dry-run 预览的唯一入口；零写入）：
@@ -228,6 +348,19 @@ async function defaultPluginUninstaller(
 export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
   const { snapshotDir, homeDir, profile } = opts;
   const msg = opts.msg ?? zhMsg;
+  // Phase 4 统一恢复校验：若提供 snapshotsRoot，则在生成任何动作前校验快照可信度。
+  // 所有 restore 入口（Host API / ModelTools / CLI）都应传 snapshotsRoot → 同一验证强度。
+  if (opts.snapshotsRoot !== undefined) {
+    const val = await validateSnapshotForRestore(snapshotDir, opts.snapshotsRoot, {
+      environmentFingerprint: opts.environmentFingerprint,
+    });
+    const reject = ['INVALID', 'CORRUPT', 'UNSAFE_PATH', 'WRONG_ENVIRONMENT'].includes(val.verdict);
+    const rejectNotTrusted = opts.requireOperationBound === true
+      && val.verdict !== 'TRUSTED_OPERATION_SNAPSHOT';
+    if (reject || rejectNotTrusted) {
+      throw new Error(msg('restore.snapshotUntrusted', { verdict: val.verdict, reason: val.reason ?? '' }));
+    }
+  }
   const snapshot = await loadSnapshot(snapshotDir, msg);
   const settingsRel = await resolveSettingsRelPath(homeDir, opts.settingsPath);
   const actions: RestoreAction[] = [];

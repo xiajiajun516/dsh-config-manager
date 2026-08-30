@@ -12,8 +12,8 @@ export {
   Analyzer, type AnalyzerOptions,
 } from './analyzer.ts';
 export {
-  createSnapshot, FileSnapshotStore, resolveFileTarget,
-  type CreateSnapshotOptions, type FileSnapshotStoreOptions,
+  createSnapshot, FileSnapshotStore, resolveFileTarget, verifySnapshot,
+  type CreateSnapshotOptions, type FileSnapshotStoreOptions, type SnapshotVerifyResult,
 } from './backup.ts';
 export { rollback, type RollbackOptions } from './rollback.ts';
 export {

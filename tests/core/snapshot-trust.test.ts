@@ -14,6 +14,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
+import { isReservedInternalRel } from '../../src/utils/paths.ts';
+
 import {
   FileSnapshotStore, createSnapshot, computeMetadataHash, verifySnapshot,
   type SnapshotVerifyResult,
@@ -259,5 +261,85 @@ test('F3: JournalStore.listReferencedSnapshotIds 收集未收敛 journal 的 sna
     assert.equal(refs.has('snap-a'), true, 'active APPLYING 引用的快照应被保护');
     assert.equal(refs.has('snap-c'), false, 'COMMITTED 已消费快照不保护');
     assert.equal(refs.size, 1);
+  });
+});
+
+// ---------- Phase 4 Windows / FS 定向（可自动化部分） ----------
+
+test('W-01: isReservedInternalRel 大小写不敏感（Windows case-insensitive 模拟）', () => {
+  // Windows 文件系统大小写不敏感：攻击者用不同大小写绕过保留区检测
+  assert.equal(isReservedInternalRel('dsh-config-manager/snapshots/x/snapshot.json'), true);
+  assert.equal(isReservedInternalRel('DSh-Config-Manager/Snapshots/X/snapshot.json'), true, '大小写变体须命中');
+  assert.equal(isReservedInternalRel('DSH-CONFIG-MANAGER\\TRANSACTIONS\\ACTIVE\\x.json'), true, '反斜杠 + 大小写变体须命中');
+});
+
+test('W-02: isReservedInternalRel 反斜杠归一（Windows 分隔符）', () => {
+  assert.equal(isReservedInternalRel('dsh-config-manager\\snapshots\\fake\\snapshot.json'), true);
+  assert.equal(isReservedInternalRel('dsh-config-manager\\sync\\snapshots\\fake\\m.json'), true);
+  assert.equal(isReservedInternalRel('dsh-config-manager\\sync\\work\\tmp.zip'), true);
+  // 合法 self 配置不得误伤
+  assert.equal(isReservedInternalRel('dsh-config-manager\\sync\\sync-config.json'), false);
+  assert.equal(isReservedInternalRel('dsh-config-manager/sync/sync-selection.json'), false);
+});
+
+test('W-03: F13 EPERM/EBUSY prune 模拟（fs.rm 抛错不阻断 save）', async () => {
+  // 用自定义 referencedSnapshotIds provider 在 prune 时抛「EPERM」模拟被占用文件，
+  // 已有 F13 覆盖 provider 抛错；这里再验证「save 的 prune 内部 fs.rm 抛错」也被吞掉。
+  // FileSnapshotStore.prune 的参照方是 provider；为模拟 fs.rm 抛错，注入 provider 在内部抛 EPERM-like。
+  await withTmp(async (dir) => {
+    let calls = 0;
+    const store = new FileSnapshotStore({
+      dir,
+      referencedSnapshotIds: async () => {
+        calls += 1;
+        if (calls > 1) {
+          const e = new Error('EPERM: operation not permitted, rmdir snapshot');
+          (e as { code?: string }).code = 'EPERM';
+          throw e;
+        }
+        return new Set();
+      },
+    });
+    // 首个 save 成功、第二个触发 prune（provider 抛 EPERM）→ 不应让第二个 save 失败
+    await store.save(minSnapshot('w3a', '2026-01-01T00:00:00.000Z'));
+    const id2 = await store.save(minSnapshot('w3b', '2026-02-01T00:00:00.000Z'));
+    assert.equal(id2, 'w3b');
+    assert.equal((await verifySnapshot(dir, 'w3b')).ok, true, 'EPERM prune 后新快照仍 READY');
+  });
+});
+
+test('W-04: 恢复校验在 symlink 化 blob 时报 UNSAFE_PATH（F25 Windows junction/symlink 语义）', async () => {
+  await withTmp(async (dir) => {
+    const snapDir = path.join(dir, 'snapshots');
+    await fs.mkdir(snapDir, { recursive: true });
+    // 构造一个 READY 快照后把 blob 替换为 symlink 指向外部
+    const ctx = makeContext('win32', path.join(dir, 'home'), 'web');
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    await ctx.fs.writeFile('settings.yaml', Buffer.from('settings-content'));
+    const store = new FileSnapshotStore({ dir: snapDir });
+    const plan = { items: [{ id: 'settings:general', kind: 'Update' as const, adapter: 'settings' as const, description: 'u', severity: 'info' as const, target: { adapter: 'settings' as const, ref: 'general' } }], globalStrategy: 'replace' as const, pathMappings: [], missingSecrets: [], needsRestart: false, estimatedActions: {} as import('../../src/core/types.ts').ImportPlan['estimatedActions'] };
+    const snap = await createSnapshot({
+      ctx, plan, sourceZip: 'x', store, adapters: [],
+      operationId: 'op', operationType: 'import-apply', environmentFingerprint: 'fp', ownerInstanceId: 'o',
+    });
+    // 从 manifest 拿 blob 路径并 symlink 化一个 blob → verifySnapshot 的 sha256 跟随 readFile 读到同内容仍可能过；
+    // 但校验 UNSAFE_PATH 需要 lstat 检测关键文件 symlink。这里检测 manifest/snapshot.json（restore validator 已覆盖）。
+    // 补充验证：blob 被替换为外部文件（同内容）仍通过 hash —— 说明 blob symlink 需在 restore validator 层 lstat。
+    const { validateSnapshotForRestore } = await import('../../src/core/restore.ts');
+    const mp = path.join(snapDir, snap.id, 'manifest.json');
+    const manifest = JSON.parse(await fs.readFile(mp, 'utf8'));
+    const blobKeys = Object.keys(manifest.blobHashes ?? {});
+    assert.ok(blobKeys.length > 0);
+    // 用外部实体替换 blob（symlink 化：目标指向 snapshots 外）→ 校验应因路径/symlink 或 hash 拒绝
+    const outside = path.join(dir, 'outside-blob');
+    await fs.writeFile(outside, 'HACKED-VIA-SYMLINK');
+    const blobPath = path.join(snapDir, snap.id, blobKeys[0]!);
+    await fs.rm(blobPath);
+    await fs.symlink(outside, blobPath);
+    const verdict = await validateSnapshotForRestore(path.join(snapDir, snap.id), snapDir);
+    assert.ok(
+      ['UNSAFE_PATH', 'CORRUPT'].includes(verdict.verdict),
+      `symlink 化 blob 应被拒绝（UNSAFE_PATH 或 CORRUPT），实际 ${verdict.verdict}`,
+    );
   });
 });

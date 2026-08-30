@@ -293,3 +293,75 @@ export async function buildReinstallPlan(
 
   return { version: versionSpec, steps, wipeConfig }
 }
+
+/* ------------------------------------------------------------ Phase 4：reinstall recovery point（F29/F30） */
+
+/**
+ * 探测当前已安装的全局 DSH 版本（`dsh --version` 输出末行 trim）。
+ * 返回 null = 无法探测（reinstall program 步应 fail-closed，不允许继续 uninstall）。
+ * exec 可注入（测试用假实现；真实 `exec('dsh --version')`）。
+ */
+export async function detectInstalledDshVersion(
+  exec: (cmd: string) => Promise<string>,
+): Promise<string | null> {
+  try {
+    const out = (await exec('dsh --version')).trim();
+    if (out === '') return null;
+    // 取最后一行（dsh --version 可能多行 banner）；去掉 v 前缀
+    const last = out.split(/\r?\n/).filter((l) => l.trim() !== '').pop()?.trim() ?? '';
+    return last.replace(/^v/, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReinstallRecoveryPoint {
+  /** 绑定 upgrade operation（journal.operationId ↔ recovery point.operationId） */
+  operationId: string;
+  environmentFingerprint: string;
+  /** 重装前已安装 DSH 版本（recovery evidence：恢复目标版本） */
+  previousInstalledVersion: string;
+  /** 请求的目标版本 spec（'latest' 或缺省字符串） */
+  requestedTargetSpec: string;
+  createdAt: string;
+  /** 供人工恢复参考的命令元数据 */
+  recoveryHint: string;
+}
+
+/**
+ * 写 durable reinstall recovery point（F29/F30）。
+ * 必须在 `npm uninstall -g` 之前调用并把文件落盘成功，才允许继续 program 步。
+ * 写入 <dataDir>/recovery/reinstall-<operationId>.json（atomic 0600）。
+ * 返回写入的 recovery point；写失败抛错 → 调用方 fail-closed（不继续 uninstall）。
+ */
+export async function writeReinstallRecoveryPoint(
+  dataDir: string,
+  point: ReinstallRecoveryPoint,
+  fs: {
+    mkdir(p: string, opts?: { recursive?: boolean }): Promise<unknown>;
+    writeFile(p: string, content: string, opts?: { mode?: number }): Promise<unknown>;
+  } = { mkdir: (p, o) => import('node:fs/promises').then((m) => m.mkdir(p, o)), writeFile: (p, c, o) => import('node:fs/promises').then((m) => m.writeFile(p, c, o)) },
+): Promise<string> {
+  const dir = path.join(dataDir, 'recovery');
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `reinstall-${point.operationId}.json`);
+  // atomic + 0600（敏感：包含旧版本信息，虽非 secret 但属 recovery 关键证据）
+  const tmp = `${file}.tmp`;
+  await fs.writeFile(tmp, `${JSON.stringify(point, null, 2)}\n`, { mode: 0o600 });
+  await import('node:fs/promises').then((m) => m.rename(tmp, file));
+  return file;
+}
+
+/** 读取 reinstall recovery point（供恢复/审计；不存在返回 null）。 */
+export async function readReinstallRecoveryPoint(
+  dataDir: string,
+  operationId: string,
+): Promise<ReinstallRecoveryPoint | null> {
+  try {
+    const raw = await import('node:fs/promises').then((m) => m.readFile(path.join(dataDir, 'recovery', `reinstall-${operationId}.json`), 'utf8'));
+    return JSON.parse(raw) as ReinstallRecoveryPoint;
+  } catch {
+    return null;
+  }
+}
+

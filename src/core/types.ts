@@ -371,6 +371,22 @@ export interface SnapshotStore {
   updateStatus(id: string, status: SnapshotStatus): Promise<void>;
 }
 
+/**
+ * Phase 4 生产 journal↔snapshot 绑定 context（由宿主注入引擎，引擎在首 destructive side effect 前调用）。
+ * 保证「快照 durable+verified 且 journal 已知」先于任何写。结构上兼容 phase3-host 的 JournalRunContext；
+ * 这里用最小接口避免 core 引擎依赖 phase3 宿主实现（显式 ctx，无 process-global）。
+ */
+export interface TransactionSnapshotContext {
+  operationId: string;
+  operationType: string;
+  environmentFingerprint: string;
+  ownerInstanceId: string;
+  /** 记录 journal.snapshotId 并推进 SNAPSHOT_CREATED（快照已 durable+verified 后调用）。 */
+  bindSnapshot: (snapshotId: string) => Promise<void>;
+  /** 首个 destructive side effect 前调用：SNAPSHOT_CREATED→APPLYING。 */
+  markApplying: () => Promise<void>;
+}
+
 export interface RollbackReport {
   full: boolean;
   restored: string[];

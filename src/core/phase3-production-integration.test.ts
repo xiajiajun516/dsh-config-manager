@@ -19,6 +19,9 @@ import { fileURLToPath } from 'node:url';
 import { JournalStore } from './journal.ts';
 import { Phase3Recovery, TransactionRecoveryRequiredError } from './phase3-host.ts';
 import { reconcileActive } from './reconcile.ts';
+import { createSnapshot, FileSnapshotStore, verifySnapshot } from './backup.ts';
+import type { Snapshot } from './types.ts';
+import { makeContext } from '../adapters/test-helpers.ts';
 import type { MutationLockContext } from '../utils/env-lock.ts';
 
 function tmp(t: test.TestContext): string {
@@ -154,4 +157,130 @@ test('P0-A：真实 child crash（fn 中 SIGKILL）→ 残留非终态 journal �
     snapshotExists: async () => false,
   }, { environmentFingerprint: 'fp-prod', isLiveOwner: async () => false });
   assert.ok(['recovered', 'noop', 'needs-attention', 'rollback-continue'].includes(out.decisions[0]!.kind));
+});
+
+// ---------- Phase 4：deferred snapshot 生产接线（F20）---------- 
+
+/** 模拟生产引擎：runJournaled({ deferredSnapshot:true }) 内，用 plan 创建 op-bound snapshot →
+ *  bindSnapshot（SNAPSHOT_CREATED）→ markApplying（APPLYING）→ 执行副作用。 */
+async function runDeferredApply(
+  dir: string,
+  opts: { operationType?: string; doBind?: boolean; doMark?: boolean; throwInApply?: boolean },
+): Promise<{ recovery: Phase3Recovery; operationId: string | null; thrown: unknown }> {
+  const { operationType = 'import-apply', doBind = true, doMark = true, throwInApply = false } = opts;
+  const recovery = new Phase3Recovery({ dataDir: dir, packageVersion: '0.1.54', environmentFingerprint: 'fp-prod' });
+  await recovery.store.ensureDirs();
+  const snapDir = path.join(dir, 'snapshots');
+  await fssync.mkdirSync(snapDir, { recursive: true });
+  const ctx = makeContext('win32', path.join(dir, 'home'), 'web');
+  ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+  await ctx.fs.writeFile('settings.yaml', Buffer.from('general:\n  theme: dark\n', 'utf8'));
+  const store = new FileSnapshotStore({ dir: snapDir });
+  const plan = { items: [{ id: 'settings:general', kind: 'Update' as const, adapter: 'settings' as const, description: 'u', severity: 'info' as const, target: { adapter: 'settings' as const, ref: 'general' } }], globalStrategy: 'replace' as const, pathMappings: [], missingSecrets: [], needsRestart: false, estimatedActions: {} as import('./types.ts').ImportPlan['estimatedActions'] };
+  try {
+    const { operationId } = await recovery.runJournaled({
+      operationType,
+      lockCtx: lk(),
+      deferredSnapshot: true,
+      fn: async (journalCtx) => {
+        const snapshot: Snapshot = await createSnapshot({
+          ctx,
+          plan,
+          sourceZip: 'x.zip',
+          store,
+          adapters: [],
+          operationId: journalCtx?.operationId,
+          operationType: journalCtx?.operationType,
+          environmentFingerprint: journalCtx?.environmentFingerprint,
+          ownerInstanceId: journalCtx?.ownerInstanceId,
+        });
+        if (doBind) await journalCtx?.bindSnapshot(snapshot.id);
+        if (doMark) await journalCtx?.markApplying();
+        if (throwInApply) throw new Error('injected apply failure');
+        return snapshot.id;
+      },
+    });
+    return { recovery, operationId, thrown: null };
+  } catch (err) {
+    // fn 抛错被 runJournaled 重新抛出；recovery 仍可用以读 journal 状态
+    return { recovery, operationId: null, thrown: err };
+  }
+}
+
+test('Phase4: deferredSnapshot 生产接线 → journal 记录 snapshotId + op-bound binding + COMMITTED', async (t) => {
+  const dir = tmp(t);
+  const { recovery, operationId } = await runDeferredApply(dir, {});
+  assert.ok(operationId);
+  const j = await recovery.store.load(operationId!);
+  assert.ok(j);
+  assert.ok(j!.snapshotId, 'journal 应记录 snapshotId（F20 生产接线）');
+  const snap = await new FileSnapshotStore({ dir: path.join(dir, 'snapshots') }).load(j!.snapshotId!);
+  assert.equal(snap.operationId, operationId, 'snapshot.operationId === journal.operationId');
+  assert.equal(snap.operationType, 'import-apply');
+  assert.equal(snap.environmentFingerprint, 'fp-prod');
+  assert.equal(snap.ownerInstanceId, 'owner-prod');
+  assert.equal(snap.readiness, 'READY', '部署快照应为 READY');
+  assert.equal(j!.state, 'COMMITTED');
+});
+
+test('Phase4: deferredSnapshot 未 bindSnapshot → journal 无 snapshotId（引擎未接线时保守）', async (t) => {
+  const dir = tmp(t);
+  const { recovery, operationId } = await runDeferredApply(dir, { doBind: false });
+  assert.ok(operationId);
+  const j = await recovery.store.load(operationId!);
+  assert.ok(j);
+  assert.equal(j!.snapshotId, null, '引擎未 bindSnapshot 时 journal.snapshotId 保持 null');
+  assert.equal(j!.state, 'COMMITTED');
+});
+
+test('Phase4: deferredSnapshot + fn 抛错（mutation 未完成）→ NEEDS_ATTENTION + SAFE MODE', async (t) => {
+  const dir = tmp(t);
+  const { recovery } = await runDeferredApply(dir, { throwInApply: true });
+  // fn 抛错 → runJournaled rethrow，返回无 operationId；扫描 active 定位 NEEDS_ATTENTION journal
+  const ids = await recovery.store.scanActive();
+  let j: import('./journal.ts').OperationJournal | null = null;
+  for (const id of ids) {
+    const x = await recovery.store.loadActive(id);
+    if (x) { j = x; break; }
+  }
+  assert.ok(j, 'journal 已创建（操作开始后才抛错）');
+  assert.equal(j!.state, 'NEEDS_ATTENTION');
+  assert.equal(await recovery.store.readSafeMode(), true);
+  assert.equal(recovery.safeModeActive, true);
+});
+
+// ---------- Phase 4：F21/F11 production snapshotExists 正向校验 ----------
+
+test('Phase4: snapshotExists 注入后正向校验（存在+READY+binding 匹配→true）', async (t) => {
+  const dir = tmp(t);
+  const snapDir = path.join(dir, 'snapshots');
+  await fssync.mkdirSync(snapDir, { recursive: true });
+  const ctx = makeContext('win32', path.join(dir, 'home'), 'web');
+  ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+  await ctx.fs.writeFile('settings.yaml', Buffer.from('general:\n  theme: dark\n', 'utf8'));
+  const store = new FileSnapshotStore({ dir: snapDir });
+  const plan = { items: [{ id: 'settings:general', kind: 'Update' as const, adapter: 'settings' as const, description: 'u', severity: 'info' as const, target: { adapter: 'settings' as const, ref: 'general' } }], globalStrategy: 'replace' as const, pathMappings: [], missingSecrets: [], needsRestart: false, estimatedActions: {} as import('./types.ts').ImportPlan['estimatedActions'] };
+  const snap = await createSnapshot({ ctx, plan, sourceZip: 'x', store, adapters: [], operationId: 'op-1', operationType: 'import-apply', environmentFingerprint: 'fp', ownerInstanceId: 'owner' });
+  // 未注入 → 保守 false
+  const noInj = new Phase3Recovery({ dataDir: path.join(dir, 'nohooks'), packageVersion: '0', environmentFingerprint: 'fp' });
+  await noInj.store.ensureDirs();
+  assert.equal(await noInj.recoveryHooks.snapshotExists(snap.id, { operationId: 'op-1' }), false, '未注入 snapshotExists → 保守 false');
+  // 注入后校验存在+就绪+binding
+  const inj = new Phase3Recovery({
+    dataDir: path.join(dir, 'hooks'), packageVersion: '0', environmentFingerprint: 'fp',
+    snapshotExists: async (id, binding) => {
+      if (id === null || id === '') return false;
+      const v = await verifySnapshot(snapDir, id);
+      if (!v.ok) return false;
+      const s = await store.load(id);
+      if (s.readiness !== 'READY') return false;
+      if (binding?.operationId !== undefined && s.operationId !== binding.operationId) return false;
+      return true;
+    },
+  });
+  await inj.store.ensureDirs();
+  assert.equal(await inj.recoveryHooks.snapshotExists(snap.id, { operationId: 'op-1' }), true, 'READY + binding 匹配 → true');
+  assert.equal(await inj.recoveryHooks.snapshotExists(snap.id, { operationId: 'WRONG' }), false, 'operationId 不匹配 → false（防伪造快照）');
+  assert.equal(await inj.recoveryHooks.snapshotExists('bad..id', {}), false, '非法 snapshotId → false');
+  assert.equal(await inj.recoveryHooks.snapshotExists(null, {}), false, 'null → false');
 });

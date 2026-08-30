@@ -14,7 +14,7 @@ import { Analyzer } from './analyzer.ts';
 import type { PlanItemProgress } from './analyzer.ts';
 import type {
   ConfigAdapter, HostContext, ImportAnalysis, ImportDecisions, ImportPlan,
-  ImportResult, SnapshotStore,
+  ImportResult, SnapshotStore, TransactionSnapshotContext,
 } from './types.ts';
 import type { SectionId } from '../schema/types.ts';
 
@@ -46,6 +46,8 @@ export interface ExecuteOptions {
   onItemStart?: (info: { adapter: SectionId; index: number; total: number; detail: string }) => void;
   /** 执行日志回调（逐计划项操作 + 子进程命令行，仅非敏感文本；透传给 Analyzer → ImportContext） */
   onLog?: (line: string) => void;
+  /** Phase 4 生产 journal↔snapshot 绑定（deferred；透传给 Analyzer；不传 = 无 journal 绑定） */
+  snapshotBinding?: TransactionSnapshotContext;
 }
 
 export class Importer {
@@ -75,6 +77,7 @@ export class Importer {
       onItem: opts.onItem,
       onItemStart: opts.onItemStart,
       onLog: opts.onLog,
+      snapshotBinding: opts.snapshotBinding,
     });
   }
 }
