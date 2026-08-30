@@ -4617,12 +4617,17 @@ export function apply(ctx: Context, config?: Config): void {
   // sync/backup-schedule.json（随 self 分区备份迁移）；enabled 缺省 false。
   // 路由（PUT /backup-schedule 保存重排 / POST run 立即执行）经 RoutesDeps 注入；
   // 随插件生命周期停止（见下方 effect），避免旧调度器残留导致重复备份。
+  // P2-A（Phase 8）：run 注册表单实例 —— 定时备份调度器与路由层共享同一实例
+  // （/progress 与 /runs 的单一事实源；backup-schedule 与 import/restore 等 run 同库登记）。
+  // 注意：跨 kind 的真实互斥由 GLOBAL mutation lock 保证（backup-schedule 与 destructive
+  // 路由共用 host.mutationLock），共享注册表是 hygiene，不替代 Lock（见 Phase 2 Handoff）。
+  const runs = new RunRegistry({ msg: host.msg })
   const backupScheduler = new BackupScheduler({
     syncDir,
     exportsDir,
     host,
     adapters,
-    runs: new RunRegistry({ msg: host.msg }),
+    runs,
     msg: host.msg,
     exporterVersion: PLUGIN_VERSION,
     mutationLock: host.mutationLock,
@@ -4639,7 +4644,7 @@ export function apply(ctx: Context, config?: Config): void {
     exportsDir,
     tmpDir,
     snapshotsDir,
-    runs: new RunRegistry({ msg: host.msg }),
+    runs,
     syncDir,
     marketDir,
     dataDir,
