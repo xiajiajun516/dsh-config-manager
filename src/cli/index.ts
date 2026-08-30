@@ -548,7 +548,7 @@ async function runReinstall(
       });
     } catch (err) {
       if (err instanceof EnvironmentLockUnavailableError) {
-        io.error(`拒绝执行：${err.message}\n另一个 DSH 任务正在进行，请稍后重试。`);
+        io.error(`拒绝执行：${err.message}`)
         return 1;
       }
       throw err;
@@ -683,7 +683,7 @@ export async function runCli(
     return report.failed.length > 0 ? 1 : 0;
   } catch (err) {
     if (err instanceof EnvironmentLockUnavailableError) {
-      io.error(`拒绝执行：${err.message}\n另一个 DSH 任务正在进行，请稍后重试。若确认为残留锁，可用 --recover-stale-lock（后续版本）`);
+      io.error(`拒绝执行：${err.message}`)
       return 1;
     }
     throw err;

@@ -1561,6 +1561,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         })
       } catch (error) {
         if (error instanceof EnvironmentLockUnavailableError) {
+          // 内部诊断（op/reason）进日志；用户只看到友好文案（error.message 恒为中文友好版，
+          // 不暴露环境锁/op/路径等技术细节）。
+          host.log.warn(`mutation lock blocked: op=${error.op}`)
           writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
           return
         }
@@ -2534,6 +2537,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           })
         } catch (error) {
           if (error instanceof EnvironmentLockUnavailableError) {
+            host.log.warn(`mutation lock blocked: op=${error.op}`)
             writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
           } else if (error instanceof TransactionRecoveryRequiredError) {
             writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
@@ -4436,6 +4440,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           })
         } catch (error) {
           if (error instanceof EnvironmentLockUnavailableError) {
+            host.log.warn(`mutation lock blocked: op=${error.op}`)
             writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
             return
           }

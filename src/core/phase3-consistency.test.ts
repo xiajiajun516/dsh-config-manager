@@ -180,7 +180,7 @@ test('M12：RECOVERY_REQUIRED/SAFE MODE → withMutationLock isBlocked 谓词阻
   // runWithMutationLock 被挡 → 抛 EnvironmentLockUnavailableError
   await assert.rejects(
     () => runWithMutationLock(fakePort as never, { op: 'import-apply', isBlocked: () => blockedMarker }, async () => 'should-not-run'),
-    /环境锁被占用|拒绝执行/,
+    /配置修改已被保护|拒绝执行/,
   );
   // 清除标记后可执行
   await store.writeSafeMode(false);

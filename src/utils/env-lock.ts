@@ -197,10 +197,10 @@ export interface MutationLockPort {
 export async function withMutationLock(
   port: MutationLockPort | undefined,
   opts: { op: string; target?: string; parentContext?: MutationLockContext; isBlocked?: () => boolean },
-): Promise<{ context: MutationLockContext | null; release(): Promise<void> }> {
+): Promise<{ context: MutationLockContext | null; release(): Promise<void>; reason?: LockBlockReason }> {
   // Phase 3 SAFE MODE：注入谓词被挡 → 拒绝（generic blocked?，不识 policy/why）
   if (opts.isBlocked?.() === true) {
-    return { context: null, release: async () => {} }
+    return { context: null, release: async () => {}, reason: 'blocked' }
   }
   if (port === undefined) {
     // 无锁环境（mock/测试）：不锁定，调用方自行保证（返回 null + no-op release）
@@ -212,8 +212,10 @@ export async function withMutationLock(
   }
   const res = await port.acquire({ op: opts.op, target: opts.target })
   if (res.state !== 'ACQUIRED' || res.token === null) {
-    // 锁不可得：不放行。LOCKED/STALE/UNKNOWN/IO 一律拒绝（destructive 必须成功 acquire）
-    return { context: null, release: async () => {} }
+    // 锁不可得：不放行。区分「被活跃任务占用」（LOCKED）与「锁不可用」（STALE/UNKNOWN/IO/PERM）
+    // —— 只在 LOCKED 时向用户说「另一个任务在运行」，其余诚实说「暂无法执行」（不谎称在运行）。
+    const reason: LockBlockReason = res.state === 'LOCKED' ? 'locked' : 'unavailable'
+    return { context: null, release: async () => {}, reason }
   }
   const context: MutationLockContext = { token: res.token }
   let released = false
@@ -239,9 +241,9 @@ export async function runWithMutationLock<T>(
   fn: (ctx: MutationLockContext | null) => Promise<T>,
 ): Promise<T> {
   if (port === undefined) return fn(null)
-  const { context, release } = await withMutationLock(port, opts)
+  const { context, release, reason } = await withMutationLock(port, opts)
   if (context === null) {
-    throw new EnvironmentLockUnavailableError(opts.op)
+    throw new EnvironmentLockUnavailableError(opts.op, reason ?? 'locked')
   }
   try {
     return await fn(context)
@@ -940,11 +942,32 @@ export class EnvironmentLockIOError extends Error {
   }
 }
 
-/** destructive 必须成功获取 Environment Lock；否则抛此错（被另一进程/操作持有，或锁不可用）。 */
+/** 锁被挡时向用户呈现的分类（用户可读文案据此选择，绝不暴露环境锁/op/路径等内部细节）。 */
+export type LockBlockReason =
+  /** 被另一进程/任务活跃持有（LOCKED → 「另一个任务正在运行，请稍后重试」） */
+  | 'locked'
+  /** Phase 3 SAFE MODE 注入谓词阻断（isBlocked → 「配置修改已被保护，请先处理恢复事项」） */
+  | 'blocked'
+  /** 锁不可用/IO/权限/UNKNOWN/STALE（→ 「操作暂时无法执行，请稍后重试」） */
+  | 'unavailable'
+
+/** 按分类生成用户可读的友好文案（内部诊断不进入此文案；op/reason 作为字段供日志使用）。 */
+const LOCK_BLOCK_MESSAGE: Record<LockBlockReason, string> = {
+  locked: '另一个任务正在运行，请稍后重试。',
+  blocked: '配置修改已被保护，请先处理恢复事项后再继续。',
+  unavailable: '操作暂时无法执行，请稍后重试；若持续失败请查看日志。',
+}
+
+/** destructive 必须成功获取 Environment Lock；否则抛此错（被另一进程/操作持有，或锁不可用）。
+ *  携带 op 与 reason 供内部日志诊断；.message 恒为用户可读的友好文案（不暴露锁/op/路径）。 */
 export class EnvironmentLockUnavailableError extends Error {
-  constructor(op: string) {
-    super(`环境锁被占用，destructive 操作「${op}」拒绝执行（另一项 DSH 任务正在进行，或锁不可用）`)
+  readonly reason: LockBlockReason
+  readonly op: string
+  constructor(op: string, reason: LockBlockReason = 'locked') {
+    super(LOCK_BLOCK_MESSAGE[reason])
     this.name = 'EnvironmentLockUnavailableError'
+    this.reason = reason
+    this.op = op
   }
 }
 
