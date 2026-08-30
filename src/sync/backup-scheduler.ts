@@ -71,6 +71,18 @@ export interface BackupSchedulerOptions {
   mutationLock?: MutationLockPort;
   /** Phase 3 SAFE MODE：注入同步谓词（被挡 → backup skipped），供 runWithMutationLock isBlocked 用。 */
   isBlocked?: () => boolean;
+  /**
+   * Phase 6：迁移历史追加（best-effort）。定时备份完成后回调，供宿主统一审计史记录。
+   * 缺省 = 不记录（不破坏既有调用方）。
+   */
+  appendHistoryFn?: (entry: {
+    kind: 'backup';
+    result: 'success' | 'failed' | 'skipped';
+    sections: string[];
+    source: 'backup-scheduler';
+    summary: string;
+    error?: string;
+  }) => Promise<void>;
   /** Phase 3 recovery（可选注入）：backup export 包 intent journal（P0-A，可选 §20.3）。 */
   phase3Recovery?: {
     runExternalIntent(opts: {
@@ -100,6 +112,7 @@ export class BackupScheduler {
   private readonly mutationLock: MutationLockPort | undefined;
   private readonly isBlocked: (() => boolean) | undefined;
   private readonly phase3Recovery: BackupSchedulerOptions['phase3Recovery'];
+  private readonly appendHistoryFn: BackupSchedulerOptions['appendHistoryFn'];
 
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
@@ -123,6 +136,7 @@ export class BackupScheduler {
     this.mutationLock = opts.mutationLock;
     this.isBlocked = opts.isBlocked;
     this.phase3Recovery = opts.phase3Recovery;
+    this.appendHistoryFn = opts.appendHistoryFn;
   }
 
   /** 启动：读配置 → enabled 时排定时器 → 执行一次启动触发备份。 */
@@ -274,12 +288,15 @@ export class BackupScheduler {
         }
         return doExport();
       });
+      await this.appendHistory(result);
       return result;
     } catch (err) {
       // 锁被占用（另一项 DSH 任务进行中）：不执行，记为 skipped（不增加连续失败计数）
       if (err instanceof EnvironmentLockUnavailableError) {
         this.log.info('定时备份跳过：环境锁被占用（另一项 DSH 任务进行中）');
-        return { status: 'skipped', skipReason: 'mutation-locked', consecutiveFailures: cfg.consecutiveFailures };
+        const skipped: BackupRunResult = { status: 'skipped', skipReason: 'mutation-locked', consecutiveFailures: cfg.consecutiveFailures };
+        await this.appendHistory(skipped);
+        return skipped;
       }
       const error = err instanceof Error ? err.message : String(err);
       const result: BackupRunResult = {
@@ -293,6 +310,7 @@ export class BackupScheduler {
         lastRunMessage: error,
       });
       this.log.warn(`定时备份失败（连续 ${cfg.consecutiveFailures + 1} 次）`, { error });
+      await this.appendHistory(result);
       return result;
     } finally {
       this.running = false;
@@ -303,6 +321,27 @@ export class BackupScheduler {
           /* 尽力而为 */
         }
       }
+    }
+  }
+
+  /** Phase 6：定时备份迁移历史（best-effort；失败仅日志，不阻断）。 */
+  private async appendHistory(result: BackupRunResult): Promise<void> {
+    if (this.appendHistoryFn === undefined) return;
+    try {
+      await this.appendHistoryFn({
+        kind: 'backup',
+        result: result.status,
+        sections: result.status === 'success' ? (result.sections ?? []) : [],
+        source: 'backup-scheduler',
+        summary: result.status === 'success'
+          ? `定时备份完成：${result.zip ?? ''}`
+          : result.status === 'skipped'
+            ? `定时备份跳过：${result.skipReason ?? ''}`
+            : '定时备份失败',
+        error: result.status === 'failed' ? (result.error ?? undefined) : undefined,
+      });
+    } catch (err) {
+      this.log.warn('定时备份迁移历史写入失败（best-effort 忽略）', { error: err instanceof Error ? err.message : String(err) });
     }
   }
 }

@@ -103,6 +103,11 @@ import { validateBackupScheduleDraft } from './ui/backup-schedule.ts'
 import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
 import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
 import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
+import {
+  MigrationStore, queryHistory, summarizeHistory, renderExport, parseHistoryQuery,
+  type MigrationKind, type MigrationResult, type ReadMigrationResult,
+  type StoredMigrationHistoryEntry, MIGRATION_HISTORY_DIR,
+} from './core/migration-history.ts'
 import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
 import {
   readSyncConfig, readSyncConfigFor, readFullSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
@@ -294,6 +299,9 @@ const API = {
   profilesImport: '/api/dsh-config-manager/profiles/import',
   // Phase 5：recovery 编排（prefix 路由，内部按 path 分发：status / <opId>/preview|confirm|execute|verify|retry|dismiss）
   recovery: '/api/dsh-config-manager/recovery',
+  // Phase 6：迁移历史审计（统一历史引擎；只读 GET + 导出）
+  history: '/api/dsh-config-manager/history',
+  historyExport: '/api/dsh-config-manager/history/export',
 } as const
 
 /**
@@ -835,6 +843,8 @@ class ConfigManagerHostContext implements HostContext {
   readonly profile: string
   readonly log: Logger
   readonly msg: MsgFunc
+  /** 应用语言（resolveAppLanguage；导出历史报告 locale 用） */
+  readonly language: 'zh' | 'en'
   readonly settings: SettingsFacade
   readonly credentials: CredentialsFacade
   readonly plugins: PluginsFacade
@@ -852,7 +862,8 @@ class ConfigManagerHostContext implements HostContext {
     this.homeDir = homeDir
     this.dshVersion = resolveDshVersion(homeDir)
     this.profile = profile
-    this.msg = makeMsg(resolveAppLanguage(ctx))
+    this.language = resolveAppLanguage(ctx)
+    this.msg = makeMsg(this.language)
     const level = process.env.DSH_CONFIG_MANAGER_LOG_LEVEL
     this.log = createLogger({
       level: level === 'debug' || level === 'info' || level === 'warn' || level === 'error' ? level : 'info',
@@ -978,6 +989,8 @@ interface RoutesDeps {
   githubClientSecret?: string
   /** m-backup-schedule：定时全量备份调度器（保存重排 reload / 立即执行 runOnce） */
   backupScheduler: BackupScheduler
+  /** Phase 6：迁移历史存储（统一审计史；<dataDir>/migration-history） */
+  history: MigrationStore
 }
 
 /* -------------------------------------------------- sync 路由（m-sync-ui） */
@@ -1397,8 +1410,62 @@ function parseMeForm(raw: unknown): { name: string; id?: string; description?: s
 
 /** Build the /api/dsh-config-manager route family. */
 function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSyncScheduler; makeSyncEngine: (cfg: SyncConfig) => SyncEngine } {
-  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler } = deps
+  const { host, adapters, exportsDir, tmpDir, snapshotsDir, runs, syncDir, marketDir, dataDir, credentials, githubClientId, githubClientSecret, backupScheduler, history } = deps
   const roots = [exportsDir, tmpDir]
+
+  /**
+   * Phase 6：迁移历史 best-effort 追加（写失败不阻断操作，但记录/降级，不静默丢）。
+   * 所有 destructive/migration 结果确定后调用。历史写盘 ms 级，失败仅日志 + 可选告警字段。
+   */
+  const tryAppendHistory = async (
+    raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string },
+  ): Promise<string | undefined> => {
+    try {
+      const res = await history.append(raw)
+      if (!res.ok) {
+        host.log.warn('迁移历史写入失败', { kind: raw.kind, error: res.error })
+        return res.error
+      }
+      return undefined
+    } catch (error) {
+      host.log.warn('迁移历史写入异常', { kind: raw.kind, error: error instanceof Error ? error.message : String(error) })
+      return error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  /**
+   * 从快照目录读取 entries 的 adapter id 集（用于 restore / snapshot-prune 历史 sections）。
+   * 读取失败 → 空数组（best-effort；sections 仅用于审计摘要，不影响功能）。
+   */
+  const snapshotEntrySections = async (snapshotDir: string): Promise<string[]> => {
+    try {
+      const raw = await fs.readFile(join(snapshotDir, 'snapshot.json'), 'utf8')
+      const parsed = JSON.parse(raw) as { entries?: Array<{ adapter?: string }> } | null
+      if (parsed === null || typeof parsed !== 'object' || !Array.isArray(parsed.entries)) return []
+      return Array.from(new Set(parsed.entries.map((e) => e.adapter).filter((s): s is string => typeof s === 'string' && s !== '')))
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * Phase 6：自动快照保留清理（snapshot-prune）迁移历史（best-effort）。
+   * 由 FileSnapshotStore.prune 经 onPrune 回调触发；fire-and-forget 不阻塞保存。
+   */
+  const tryAppendSnapshotPrune = async (removedIds: string[]): Promise<void> => {
+    if (removedIds.length === 0) return
+    try {
+      await history.append({
+        kind: 'snapshot-prune',
+        result: 'success',
+        sections: [],
+        source: 'api',
+        summary: `自动保留清理删除 ${removedIds.length} 个旧快照`,
+      })
+    } catch (error) {
+      host.log.warn('快照保留清理历史写入失败（best-effort）', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
 
   /** m-github-oauth：宿主侧设备码登记表 + auth 客户端（进程生命周期；device_code 只存内存） */
   const githubFlows = new DeviceFlowStore()
@@ -1423,6 +1490,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       dir: snapshotsDir,
       // Phase 4 F3：active/quarantine 未收敛 journal 引用的 snapshot 绝不自动 prune
       referencedSnapshotIds: () => host.phase3Recovery?.store.listReferencedSnapshotIds() ?? Promise.resolve(new Set<string>()),
+      // Phase 6：自动保留清理 → snapshot-prune 迁移历史（best-effort）
+      onPrune: (removedIds) => { void tryAppendSnapshotPrune(removedIds) },
     }),
     parseZipOverride: createHardenedZipParser(),
     dependencyChecker: dependencyAvailable,
@@ -1438,6 +1507,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       dir: snapshotsDir,
       // Phase 4 F3：recovery 引用保护
       referencedSnapshotIds: () => host.phase3Recovery?.store.listReferencedSnapshotIds() ?? Promise.resolve(new Set<string>()),
+      // Phase 6：自动保留清理 → snapshot-prune 迁移历史（best-effort）
+      onPrune: (removedIds) => { void tryAppendSnapshotPrune(removedIds) },
     }),
   })
 
@@ -1623,6 +1694,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     mutationLock: host.mutationLock,
     isBlocked: () => host.safeModeIsBlocked?.() ?? false,
     phase3Recovery: host.phase3Recovery,
+    // Phase 6：autosync 既写 sync-history.json（既有语义），也写统一迁移历史（COMPLETE 不变量）。
+    appendHistoryFn: async (entry) => {
+      await appendAutosyncEntry(syncDir, entry).catch(() => undefined)
+      await history.append({
+        kind: 'autosync',
+        result: entry.status === 'success' ? 'success' : entry.status === 'skipped' ? 'skipped' : 'failed',
+        sections: entry.appliedSections ?? [],
+        source: 'autosync',
+        summary: `自动同步 ${entry.direction}${entry.transport !== undefined ? `（${entry.transport}）` : ''}`,
+        error: entry.status === 'failed' ? (entry.error ?? entry.skipReason) : undefined,
+      }).catch(() => undefined)
+    },
   })
   // P1-B：调度器不再在 makeRoutes 内同步 start —— 由 apply() 在「启动 recovery 分类完成后、仅 NORMAL」时启动。
 
@@ -2289,7 +2372,22 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           })
           // 结束写结果：导入结果落账（供 /progress 查询与刷新恢复）
           runs.finish(runId, result)
-          writeJson(res, 200, { ...result, runId })
+          // Phase 6：迁移历史（best-effort）。sections 从导入计划的 items[].adapter 去重派生。
+          const importSections = Array.from(
+            new Set(plan.items.map((i) => (i as { adapter?: string }).adapter).filter((s): s is string => typeof s === 'string' && s !== '')),
+          )
+          const historyError = await tryAppendHistory({
+            kind: 'import',
+            result: result.ok ? 'success' : 'failed',
+            sections: importSections,
+            operationId: journalCtx?.operationId,
+            snapshotId: result.snapshotId ?? undefined,
+            runId,
+            source: 'api',
+            summary: `导入完成：${importSections.join(', ') || '无分区'}（执行 ${result.executed.length} 项）`,
+            error: result.ok ? undefined : '导入未完全成功',
+          })
+          writeJson(res, 200, historyError === undefined ? { ...result, runId } : { ...result, runId, historyWriteError: historyError })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           runs.fail(runId, message)
@@ -2405,7 +2503,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                   },
                 )
                 runs.finish(runId, report)
-                writeJson(res, 200, { dryRun: false, report, runId })
+                // Phase 6：迁移历史（best-effort）。sections 从快照 entries 的 adapter 去重派生。
+                const restoreSections = await snapshotEntrySections(snapshotDir)
+                const historyError = await tryAppendHistory({
+                  kind: 'restore',
+                  result: 'success',
+                  sections: restoreSections,
+                  snapshotId: snapshotId,
+                  runId,
+                  source: 'api',
+                  summary: `恢复快照 ${snapshotId}：还原 ${report.restored.length} 项${report.removedPlugins.length > 0 ? `，卸载插件 ${report.removedPlugins.length}` : ''}`,
+                })
+                writeJson(res, 200, historyError === undefined ? { dryRun: false, report, runId } : { dryRun: false, report, runId, historyWriteError: historyError })
               } catch (error) {
                 const message = error instanceof Error ? error.message : String(error)
                 runs.fail(runId, message)
@@ -2449,7 +2558,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             return
           }
           const removed = await deleteSnapshot(snapshotsDir, id)
-          writeJson(res, 200, { ok: true, removed })
+          const historyError = await tryAppendHistory({
+            kind: 'snapshot-delete',
+            result: 'success',
+            sections: [id],
+            snapshotId: id,
+            source: 'api',
+            summary: `删除快照 ${id}`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ok: true, removed } : { ok: true, removed, historyWriteError: historyError })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2518,7 +2635,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           : undefined
         try {
           const meta = await profiles.saveCurrent(name, sections === undefined ? {} : { sections })
-          writeJson(res, 200, { ok: true, profile: meta })
+          const historyError = await tryAppendHistory({
+            kind: 'profile-save',
+            result: 'success',
+            sections: Array.isArray(meta?.sections) ? (meta.sections.filter((s) => typeof s === 'string') as string[]) : [],
+            source: 'api',
+            summary: `保存配置档案 ${name}`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2537,7 +2661,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         try {
           await profiles.delete(name)
-          writeJson(res, 200, { ok: true })
+          const historyError = await tryAppendHistory({
+            kind: 'profile-delete',
+            result: 'success',
+            sections: [name],
+            source: 'api',
+            summary: `删除配置档案 ${name}`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ok: true } : { ok: true, historyWriteError: historyError })
         } catch (error) {
           writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2561,7 +2692,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         try {
           const meta = await profiles.rename(name, newName)
-          writeJson(res, 200, { ok: true, profile: meta })
+          const historyError = await tryAppendHistory({
+            kind: 'profile-rename',
+            result: 'success',
+            sections: [name],
+            source: 'api',
+            summary: `重命名配置档案 ${name} → ${newName}`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2629,7 +2767,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             snapshotBinding: journalCtx,
           })
           runs.finish(runId, result)
-          writeJson(res, 200, { ...result, runId })
+          // Phase 6：迁移历史（best-effort）。sections 从切换 preview 的分区。
+          const switchSections = (result as { sections?: string[] }).sections ?? []
+          const historyError = await tryAppendHistory({
+            kind: 'profile-switch',
+            result: 'success',
+            sections: switchSections,
+            operationId: journalCtx?.operationId,
+            runId,
+            source: 'api',
+            summary: `切换到配置档案 ${name}`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ...result, runId } : { ...result, runId, historyWriteError: historyError })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           if (error instanceof ImportNotConfirmedError) {
@@ -2663,7 +2812,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         try {
           await fs.writeFile(staged, raw, 'utf8')
           const meta = await profiles.importProfile(staged, asName === undefined ? {} : { asName })
-          writeJson(res, 200, { ok: true, profile: meta })
+          const historyError = await tryAppendHistory({
+            kind: 'profile-import',
+            result: 'success',
+            sections: Array.isArray(meta?.sections) ? (meta.sections.filter((s) => typeof s === 'string') as string[]) : [],
+            source: 'api',
+            summary: `导入配置档案${asName !== undefined ? ` ${asName}` : ''}`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         } finally {
@@ -3406,7 +3562,17 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             // 用完再清理临时 ZIP（此前在 applyItems 读取前就删除 → ENOENT：无法读取备份文件）
             await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
           }
-          writeJson(res, 200, {
+          const historyError = await tryAppendHistory({
+            kind: 'sync-apply',
+            result: report.ok ? 'success' : 'failed',
+            sections: Array.isArray(report.applied) ? report.applied.filter((s): s is string => typeof s === 'string') : subItems.map((i) => (i as { adapter?: string }).adapter).filter((s): s is string => typeof s === 'string' && s !== ''),
+            operationId: journalCtx?.operationId,
+            snapshotId: report.restoreId ?? undefined,
+            source: 'api',
+            summary: `一键同步应用：${(Array.isArray(report.applied) ? report.applied.length : subItems.length)} 项${report.rolledBack === true ? '（已回滚）' : ''}`,
+            error: report.ok ? undefined : '同步应用未完全成功',
+          })
+          writeJson(res, 200, historyError === undefined ? {
             ok: report.ok,
             applied: report.applied,
             skipped: subItems.map((i) => i.id),
@@ -3416,6 +3582,17 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             rolledBack: report.rolledBack,
             failed: report.failed,
             result: report.result,
+          } : {
+            ok: report.ok,
+            applied: report.applied,
+            skipped: subItems.map((i) => i.id),
+            needsRestart: report.needsRestart === true,
+            warnings: report.warnings,
+            restoreId: report.restoreId,
+            rolledBack: report.rolledBack,
+            failed: report.failed,
+            result: report.result,
+            historyWriteError: historyError,
           })
         } catch (error) {
           writeSyncRouteError(res, error)
@@ -3556,7 +3733,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const store = new FileSnapshotStore({ dir: join(syncDir, 'snapshots') })
           const snap = await store.load(restoreId)
           const report = await performRollback({ ctx: host, snapshot: snap, store, adapters })
-          writeJson(res, 200, { ok: true, full: report.full })
+          const historyError = await tryAppendHistory({
+            kind: 'rollback',
+            result: 'success',
+            sections: [],
+            snapshotId: restoreId,
+            source: 'api',
+            summary: `一键同步回滚（${restoreId}）`,
+          })
+          writeJson(res, 200, historyError === undefined ? { ok: true, full: report.full } : { ok: true, full: report.full, historyWriteError: historyError })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -4007,6 +4192,52 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       },
     },
+    // ------------------------------------------------------------ history
+    // Phase 6：迁移历史审计（统一历史引擎）。只读 GET：列表（过滤）+ 导出。
+    // loopback fence（guard）与全仓一致——仅同源 + loopback 可访问。
+    {
+      kind: 'exact',
+      path: API.history,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const q = parseHistoryQuery(Object.fromEntries(url.searchParams))
+          const { entries, corrupted } = await history.read()
+          const filtered = queryHistory(entries, q)
+          const stats = summarizeHistory(filtered)
+          writeJson(res, 200, { ok: true, entries: filtered, stats, corrupted })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.historyExport,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        try {
+          const url = new URL(req.url ?? '/', 'http://localhost')
+          const format = url.searchParams.get('format') === 'markdown' ? 'markdown' : 'json'
+          const q = parseHistoryQuery(Object.fromEntries(url.searchParams))
+          const { entries } = await history.read()
+          const filtered = queryHistory(entries, q)
+          const text = renderExport(filtered, format, host.language)
+          if (format === 'markdown') {
+            res.writeHead(200, {
+              'Content-Type': 'text/markdown; charset=utf-8',
+              'Content-Disposition': 'attachment; filename="migration-history.md"',
+            })
+            res.end(text)
+          } else {
+            writeJson(res, 200, { ok: true, generatedAt: new Date().toISOString(), text })
+          }
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
     // ------------------------------------------------------------ recovery
     // Phase 5：recovery 编排（prefix 路由，内部按 path 分发）。
     // 禁用 withMutationGate（避免 double-journal）；mutation 路由经 withMutationLock + loopback fence。
@@ -4051,6 +4282,18 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             else if (action === 'retry') r = await recoveryOrchestrator.retry(operationId, userConfirmed, makeRecoveryExecutors)
             else if (action === 'dismiss') r = await recoveryOrchestrator.dismiss(operationId, userConfirmed)
             else r = { status: 404, body: { error: 'not found' } } as const
+            // Phase 6：recovery 迁移历史（best-effort）。在 mutation 结果（execute/retry/verify/dismiss）后记。
+            if (action === 'execute' || action === 'retry' || action === 'verify' || action === 'dismiss') {
+              await tryAppendHistory({
+                kind: 'recovery',
+                result: r.status === 200 ? 'success' : r.status >= 500 ? 'failed' : 'skipped',
+                sections: [],
+                operationId,
+                source: 'recovery',
+                summary: `恢复操作 ${action}`,
+                error: r.status >= 400 && typeof r.body?.['error'] === 'string' ? String(r.body['error']) : undefined,
+              })
+            }
             writeJson(res, r.status, r.body)
           })
         } catch (error) {
@@ -4086,11 +4329,14 @@ export function apply(ctx: Context, config?: Config): void {
   const snapshotsDir = join(dataDir, 'snapshots')
   const syncDir = join(dataDir, 'sync')
   const marketDir = join(dataDir, 'market')
+  // Phase 6：迁移历史审计目录（统一历史引擎；加入 RESERVED_INTERNAL_PREFIXES 防 F23 投毒链）
+  const historyDir = join(dataDir, MIGRATION_HISTORY_DIR)
   mkdirSync(exportsDir, { recursive: true })
   mkdirSync(tmpDir, { recursive: true })
   mkdirSync(snapshotsDir, { recursive: true })
   mkdirSync(syncDir, { recursive: true })
   mkdirSync(marketDir, { recursive: true })
+  mkdirSync(historyDir, { recursive: true })
 
   const host = new ConfigManagerHostContext(ctx, homeDir, resolveProfileName(config))
   // Phase 2 跨进程环境锁：全局唯一 GLOBAL EXCLUSIVE MUTATION LOCK（<dataDir>/locks/environment.lock）。
@@ -4246,7 +4492,11 @@ export function apply(ctx: Context, config?: Config): void {
     mutationLock: host.mutationLock,
     isBlocked: () => host.safeModeIsBlocked?.() ?? false,
     phase3Recovery: host.phase3Recovery,
+    // Phase 6：定时备份迁移历史（best-effort；COMPLETE 不变量）。
+    appendHistoryFn: async (entry) => { await historyStore.append(entry) },
   })
+  // Phase 6：迁移历史引擎（统一审计史；per-file append-only 存储于 <dataDir>/migration-history）
+  const historyStore = new MigrationStore({ dir: historyDir })
   const { routes, scheduler, makeSyncEngine } = makeRoutes({
     host,
     adapters,
@@ -4263,6 +4513,7 @@ export function apply(ctx: Context, config?: Config): void {
     githubClientId: config?.githubClientId ?? DEFAULT_GITHUB_CLIENT_ID,
     githubClientSecret: config?.githubClientSecret,
     backupScheduler,
+    history: historyStore,
   })
   // Agent 可调用的模型工具（P0-1）：复用 src/core 引擎与同一 makeSyncEngine 来源。
   // 不依赖 webServer：host 侧能力在无 Web 部署时仍可用；tools 服务未组合时内部守卫跳过。

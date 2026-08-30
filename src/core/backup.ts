@@ -297,6 +297,12 @@ export interface FileSnapshotStoreOptions {
    * 缺省 = 空集合（不豁免）。宿主注入 JournalStore.listReferencedSnapshotIds。
    */
   referencedSnapshotIds?: () => Promise<Set<string>>;
+  /**
+   * Phase 6：自动保留清理的迁移历史回调（best-effort）。
+   * prune 删除后回调被清 snapshotId 列表；宿主据其写统一审计史（snapshot-prune kind）。
+   * 缺省 = 不记录（不改变 prune 行为、不污染核心引擎）。
+   */
+  onPrune?: (removedIds: string[]) => void;
 }
 
 /** 文件快照存储：<dir>/<id>/snapshot.json + <dir>/<id>/blobs/* */
@@ -376,10 +382,16 @@ export class FileSnapshotStore implements SnapshotStore {
         // 损坏 / 非快照目录：跳过（与 listSnapshots 语义一致）
       }
     }
+    const removedIds: string[] = [];
     for (const id of selectPruneCandidates(metas)) {
       const target = path.join(dir, id);
       if (!target.startsWith(dir)) continue; // 越界 id 跳过（不删、不抛，同 save/readBlob 包含性约定）
       await fs.rm(target, { recursive: true, force: true });
+      removedIds.push(id);
+    }
+    // Phase 6：自动保留清理历史回调（best-effort；不改变 prune 行为）
+    if (removedIds.length > 0) {
+      try { this.options.onPrune?.(removedIds); } catch { /* 历史回调失败不阻断 */ }
     }
   }
 
