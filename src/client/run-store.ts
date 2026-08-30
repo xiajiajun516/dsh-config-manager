@@ -65,7 +65,7 @@ import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../u
 export type MainView = 'export' | 'import'
 
 /** 设置页四块低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。 */
-export type PanelId = 'snapshots' | 'sync' | 'market' | 'about' | 'profiles' | 'recovery'
+export type PanelId = 'snapshots' | 'sync' | 'market' | 'about' | 'profiles' | 'recovery' | 'history'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'

@@ -33,6 +33,8 @@ import { MarketPanel } from './market/MarketPanel.tsx'
 import { en as marketEn, zh as marketZh, type MarketKey } from './market/market-locales.ts'
 import { RecoveryApi } from './recovery/recovery-api.ts'
 import { en as recoveryEn, zh as recoveryZh, type RecoveryKey } from './recovery/recovery-locales.ts'
+import { HistoryApi } from './history/history-api.ts'
+import { en as historyEn, zh as historyZh, type HistoryKey } from './history/history-locales.ts'
 
 /** 本插件拥有的 locale namespace。 */
 const NS = 'config-manager'
@@ -42,6 +44,8 @@ const SYNC_NS = 'config-manager-sync'
 const MARKET_NS = 'config-manager-market'
 /** Recovery 区块的独立 locale namespace（Phase 5）。 */
 const RECOVERY_NS = 'config-manager-recovery'
+/** Migration History 区块的独立 locale namespace（Phase 6）。 */
+const HISTORY_NS = 'config-manager-history'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -53,6 +57,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'config-manager-market': MarketKey
     /** Recovery 区块文案（Phase 5）。 */
     'config-manager-recovery': RecoveryKey
+    /** Migration History 区块文案（Phase 6）。 */
+    'config-manager-history': HistoryKey
   }
 }
 
@@ -71,6 +77,7 @@ export type { ConfigManagerKey } from './locales.ts'
 export type { SyncKey } from './sync/sync-locales.ts'
 export type { MarketKey } from './market/market-locales.ts'
 export type { RecoveryKey } from './recovery/recovery-locales.ts'
+export type { HistoryKey } from './history/history-locales.ts'
 
 /**
  * 注册 Config Manager 设置页。
@@ -81,6 +88,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(SYNC_NS, { zh: syncZh, en: syncEn }), 'config-manager: sync dictionaries')
   ctx.effect(() => ctx.locale.register(MARKET_NS, { zh: marketZh, en: marketEn }), 'config-manager: market dictionaries')
   ctx.effect(() => ctx.locale.register(RECOVERY_NS, { zh: recoveryZh, en: recoveryEn }), 'config-manager: recovery dictionaries')
+  ctx.effect(() => ctx.locale.register(HISTORY_NS, { zh: historyZh, en: historyEn }), 'config-manager: history dictionaries')
 
   const t = ctx.locale.bind(NS)
   // 客户端展示层（报告/错误/进度/sync-view/market-view）翻译器：locale active 为 'en' 时用 en 目录。
@@ -93,6 +101,8 @@ export function apply(ctx: ClientContext): void {
   const myConfigsApi = new MyConfigsApi(uiT)
   const recoveryT = ctx.locale.bind(RECOVERY_NS)
   const recoveryApi = new RecoveryApi(uiT)
+  const historyT = ctx.locale.bind(HISTORY_NS)
+  const historyApi = new HistoryApi(uiT)
 
   // 单一 settings.section：备份与迁移页（内部 Export/Import/Snapshots/Sync/Market/About 六 tab）。
   // 远程同步、配置市场与关于页不注册独立设置页 —— 并入主 section 的 inject 面
@@ -104,6 +114,6 @@ export function apply(ctx: ClientContext): void {
     order: 60,
     label: () => t('section.label'),
     locale: NS,
-    inject: () => ({ api, syncApi, syncT, marketApi, marketT, myConfigsApi, recoveryApi, recoveryT }),
+    inject: () => ({ api, syncApi, syncT, marketApi, marketT, myConfigsApi, recoveryApi, recoveryT, historyApi, historyT }),
   }, ConfigManagerSection))
 }

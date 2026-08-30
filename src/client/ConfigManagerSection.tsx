@@ -24,6 +24,7 @@ import { MarketPanel } from './market/MarketPanel.tsx'
 import { AboutPanel } from './about/AboutPanel.tsx'
 import { ProfilesPanel } from './profiles/ProfilesPanel.tsx'
 import { RecoveryPanel } from './recovery/RecoveryPanel.tsx'
+import { HistoryPanel } from './history/HistoryPanel.tsx'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import css from './config-manager.module.css'
@@ -39,7 +40,7 @@ export type ConfigManagerSectionProps =
  * 面板 panel）状态都在模块级 store（切 tab/刷新不丢）；面板内部状态由各视图
  * 镜像进 store（Sync/Market/Snapshots/Profiles），敏感字段白名单剔除。
  */
-export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigsApi, marketT, recoveryApi, recoveryT, t }: ConfigManagerSectionProps) {
+export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigsApi, marketT, recoveryApi, recoveryT, historyApi, historyT, t }: ConfigManagerSectionProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const view = state.view
   const panel = state.panel
@@ -200,10 +201,22 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           >
             {recoveryT('view.recovery')}
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={panel === 'history'}
+            data-active={panel === 'history' ? '' : undefined}
+            className={css.viewTab}
+            onClick={() => { openPanel('history') }}
+          >
+            {historyT('view.history')}
+          </button>
         </div>
       </div>
       <div className={css.sectionBody}>
-        {panel === 'recovery'
+        {panel === 'history'
+          ? <HistoryPanel historyApi={historyApi} t={historyT} />
+          : panel === 'recovery'
           ? <RecoveryPanel recoveryApi={recoveryApi} t={recoveryT} />
           : panel === 'about'
           ? <AboutPanel api={api} t={t} />

@@ -1417,3 +1417,67 @@
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-bg-hover);
 }
+
+/* ---------- Phase 6：迁移历史面板 ---------- */
+/* 按 kind 分组的卡片内分组（组标题 + 限高内滚列表） */
+.historyGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.historyGroup + .historyGroup {
+  border-top: 1px solid var(--dsw-alias-border-l1);
+  padding-top: 10px;
+  margin-top: 4px;
+}
+/* 历史列表限高内滚（长历史不得撑长页面） */
+.historyScroll {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 4px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+/* 单条历史行：时间/结果徽章/分区/摘要；可收缩 + 截断 */
+.historyRow {
+  display: grid;
+  grid-template-columns: minmax(0,1.4fr) auto minmax(0,1fr) minmax(0,1.6fr);
+  gap: 10px;
+  align-items: center;
+  padding: 3px 6px;
+  border-radius: 6px;
+}
+.historyRow:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+.historyRowMain {
+  display: contents;
+}
+.historyTime {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.historySections {
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.historySummary {
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+

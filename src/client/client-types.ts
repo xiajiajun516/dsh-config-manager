@@ -32,4 +32,8 @@ export interface ConfigManagerSectionInjected {
   recoveryApi: import('./recovery/recovery-api.ts').RecoveryApi
   /** Recovery locale（config-manager-recovery 命名空间，主 section 注册时注入） */
   recoveryT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-recovery'>
+  /** Migration History API（Phase 6：统一审计史；主 section 注册时注入） */
+  historyApi: import('./history/history-api.ts').HistoryApi
+  /** Migration History locale（config-manager-history 命名空间，主 section 注册时注入） */
+  historyT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-history'>
 }
