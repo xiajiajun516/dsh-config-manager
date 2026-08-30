@@ -22,7 +22,7 @@ import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
 import { loadTombstones, isTombstoned } from '../schema/tombstones.ts';
 import type { Tombstone, TombstoneKind } from '../schema/tombstones.ts';
 import { DEFAULT_SENSITIVE_RELS, restoreVaultFiles } from '../security/vault.ts';
-import { createSnapshot } from './backup.ts';
+import { createSnapshot, resolveFileTarget, resolveFileTargetRel } from './backup.ts';
 import { rollback } from './rollback.ts';
 import { computeCompatibility } from './validator.ts';
 import { msgOf } from './messages.ts';
@@ -469,6 +469,34 @@ export class Analyzer {
       await opts.snapshotBinding.markApplying();
     }
 
+    // P2-B（Phase 8）：逐计划项 WAL 预登记。将产生真实 side effect 的项在 apply 之前
+    // 记为 planned（文件类带 beforeFp），使 crash 中途可按「仍 planned ⇒ 未应用」保守判定；
+    // 非文件项 external=true（不可证明 → reconcile 恒 needs-attention，安全边界不放宽）。
+    const sb = opts.snapshotBinding;
+    const beforeFpByItem = new Map<string, string | null>();
+    if (sb?.recordStep !== undefined) {
+      for (const item of plan.items) {
+        if (!this.shouldJournalStep(item)) continue;
+        let rel: string | null = null;
+        let beforeFp: string | null = null;
+        if (Analyzer.fileRelFor(item) !== null) {
+          rel = Analyzer.fileRelFor(item) as string;
+          beforeFp = await this.fileFp(importCtx, rel);
+        }
+        beforeFpByItem.set(item.id, beforeFp);
+        await sb.recordStep({
+          id: item.id,
+          adapter: item.adapter,
+          kind: item.kind,
+          ref: rel !== null ? resolveFileTarget(importCtx.target, item.adapter, item.target?.ref ?? '') : '',
+          external: rel === null,
+          status: 'planned',
+          beforeFp,
+          afterFp: null,
+        });
+      }
+    }
+
     const executed: ExecutedItem[] = [];
     const warnings: string[] = [...bundle.zipWarnings];
     let needsRestart = plan.needsRestart;
@@ -515,6 +543,30 @@ export class Analyzer {
           // 埋点回调失败不影响导入执行（进度是尽力而为）
         }
         executed.push(outcome.executed);
+        // P2-B（Phase 8）：逐项更新 journal step。文件类成功 → done + afterFp（reconcile 可判
+        // recovered）；失败/warning/跳过 → 无不可靠 afterFp（attention/skipped → 保守 needs-attention）。
+        if (sb?.recordStep !== undefined && beforeFpByItem.has(item.id)) {
+          const rel = Analyzer.fileRelFor(item);
+          let afterFp: string | null = null;
+          if (rel !== null && outcome.executed.status === 'ok') {
+            afterFp = await this.fileFp(importCtx, rel);
+          }
+          await sb.recordStep({
+            id: item.id,
+            adapter: item.adapter,
+            kind: item.kind,
+            ref: rel !== null ? resolveFileTarget(importCtx.target, item.adapter, item.target?.ref ?? '') : '',
+            external: rel === null,
+            status:
+              outcome.executed.status === 'ok'
+                ? 'done'
+                : outcome.executed.status === 'failed'
+                  ? 'attention'
+                  : 'skipped',
+            beforeFp: beforeFpByItem.get(item.id) ?? null,
+            afterFp,
+          });
+        }
         // 仅硬失败计入 anyFailed（warning 属非致命：目标不可达等，不触发回滚，§34.17）
         if (outcome.executed.status === 'failed') anyFailed = true;
         if (outcome.needsRestart) needsRestart = true;
@@ -605,6 +657,37 @@ export class Analyzer {
       await this.snapshotStore.updateStatus(id, status);
     } catch (err) {
       this.ctx.log.warn(`快照 ${id} 状态标记 ${status} 失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /* -------------------------------------------------- P2-B 逐计划项指纹（Phase 8） */
+
+  /**
+   * 该计划项是否会产生真实 side effect（需 journal step 追踪）。
+   * 排除无副作用的「信息/跳过/错误」项与未采用其导入内容的 Conflict ——
+   * 这些不写目标，记录只会保守化 reconcile 而无收益。
+   */
+  private shouldJournalStep(item: PlanItem): boolean {
+    if (item.kind === 'Skip' || item.kind === 'Warning' || item.kind === 'MissingDependency' || item.kind === 'Error') return false;
+    if (item.kind === 'Conflict' && item.conflict?.resolution !== 'useImported') return false;
+    return true;
+  }
+
+  /** 文件类且可指纹 → 返回 home-relative 目标路径（posix）；否则 null（不可指纹外部项）。 */
+  private static fileRelFor(item: PlanItem): string | null {
+    if (!isFileSection(item.adapter)) return null;
+    const ref = item.target?.ref;
+    if (ref === undefined || ref === '') return null;
+    return resolveFileTargetRel(item.adapter, ref);
+  }
+
+  /** 读目标文件算 sha256（home-relative；经 HostContext.fs 使测试 mock 可注入）。失败返回 null。 */
+  private async fileFp(ctx: ImportContext, rel: string): Promise<string | null> {
+    try {
+      const data = await ctx.target.fs.readFile(rel);
+      return sha256Hex(data);
+    } catch {
+      return null;
     }
   }
 

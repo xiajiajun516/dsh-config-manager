@@ -20,6 +20,8 @@ import {
 import type { OperationJournal } from './journal.ts';
 import { inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './reconcile.ts';
 import { OWNERSHIP_FILE, type LockState, type MutationLockContext } from '../utils/env-lock.ts';
+import { sha256Hex } from '../utils/hashing.ts';
+import type { JournalStepRecord } from './types.ts';
 
 /** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
 export class TransactionRecoveryRequiredError extends Error {
@@ -42,10 +44,12 @@ export interface JournalRunContext {
   operationType: string;
   environmentFingerprint: string;
   ownerInstanceId: string;
-  /** 记录 journal.snapshotId 并推进 CREATED/SNAPSHOT_CREATED。 */
+  /** 记录 journal.snapshotId 并推进 CREATED→SNAPSHOT_CREATED（或幂等）。 */
   bindSnapshot: (snapshotId: string) => Promise<void>;
-  /** 首个 destructive side effect 前调用：SNAPSHOT_CREATED→APPLYING（或 CREATED→APPLYING）。 */
+  /** 首个 destructive side effect 前调用：SNAPSHOT_CREATED/CREATED→APPLYING。 */
   markApplying: () => Promise<void>;
+  /** 逐计划项 WAL step 记录（P2-B，Phase 8）：文件类带 fp，非文件类 external=true。 */
+  recordStep: (step: JournalStepRecord) => Promise<void>;
 }
 
 /** 把环境锁分类映射到 startup 判定：ACQUIRED 视同 LOCKED（有活跃 owner），IO/PERMISSION 保守 LOCKED。 */
@@ -135,7 +139,25 @@ export class Phase3Recovery {
   private conservativeHooks(): ReconcileProbeHooks {
     const snapshotExists = this.snapshotExistsFn;
     return {
-      verifyStepFingerprint: async () => 'unable',
+      // P2-B（Phase 8）：对带 afterFp/beforeFp 的本地文件 step 做真实磁盘指纹判定。
+      // 这使「可安全判定已应用」的整文件项在 crash 后判 recovered；无指纹项（external /
+      // before/after 均 null）→ unable（保守）。**不放松**「不可信/不可指纹 → needs-attention」边界。
+      verifyStepFingerprint: async (step) => {
+        if (step.external === true) return 'unable';
+        if (step.beforeFp === null && step.afterFp === null) return 'unable';
+        if (step.ref === '') return 'unable';
+        let data: Buffer;
+        try {
+          data = await fs.readFile(step.ref);
+        } catch {
+          // 目标不存在：若已记录 afterFp（期望存在）→ 未应用；否则无法判定。
+          return step.afterFp !== null && step.beforeFp === null ? 'before-match' : 'none';
+        }
+        const fp = sha256Hex(data);
+        if (step.afterFp !== null && fp === step.afterFp) return 'after-match';
+        if (step.beforeFp !== null && fp === step.beforeFp) return 'before-match';
+        return 'none';
+      },
       probeExternal: async () => 'unknown',
       snapshotExists: async (snapshotId, binding) => {
         if (snapshotExists === undefined) return false; // 未注入 → 保守 false
@@ -267,6 +289,26 @@ export class Phase3Recovery {
           if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
           else if (next.state === 'CREATED') next = transitionJournalState(next, 'APPLYING');
           return next;
+        });
+      },
+      // P2-B（Phase 8）：逐计划项 WAL step 记录（文件类带 fp；非文件类 external=true）。
+      // 与 bindSnapshot/markApplying 同一 fail-closed：持久化失败传播 → fn 抛错 → NEEDS_ATTENTION。
+      recordStep: async (rec) => {
+        const step: import('./journal.ts').JournalStep = {
+          adapter: rec.adapter,
+          ref: rec.ref,
+          kind: rec.kind,
+          external: rec.external === true,
+          beforeFp: rec.beforeFp ?? null,
+          afterFp: rec.afterFp ?? null,
+          status: rec.status ?? (rec.external === true ? 'attention' : 'planned'),
+          appliedAt: new Date().toISOString(),
+        };
+        await this.store.update(opId, (j) => {
+          const plannedSteps = j.plannedSteps.includes(rec.id)
+            ? j.plannedSteps
+            : [...j.plannedSteps, rec.id];
+          return { ...j, plannedSteps, steps: { ...j.steps, [rec.id]: step } };
         });
       },
     };

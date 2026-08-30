@@ -10,6 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { parseJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { normalizePath } from '../utils/paths.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
@@ -95,6 +96,16 @@ export function resolveFileTarget(ctx: HostContext, adapter: SectionId, ref: str
   }
   const base = FILE_BASES[adapter] ?? '';
   return path.join(ctx.homeDir, base, ref);
+}
+
+/**
+ * 文件类目标的 home-relative 相对路径（P2-B，Phase 8）。
+ * 供导入逐项指纹（analyzer 经 HostContext.fs.readFile(read rel) 读文件算 sha256）
+ * 与 journal step.ref 的 posix 规范化。仅适用于 isFileSection adapter。
+ */
+export function resolveFileTargetRel(adapter: SectionId, ref: string): string {
+  const base = FILE_BASES[adapter] ?? '';
+  return normalizePath(path.join(base, ref));
 }
 
 export interface CreateSnapshotOptions {

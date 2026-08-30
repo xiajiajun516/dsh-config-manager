@@ -376,6 +376,23 @@ export interface SnapshotStore {
  * 保证「快照 durable+verified 且 journal 已知」先于任何写。结构上兼容 phase3-host 的 JournalRunContext；
  * 这里用最小接口避免 core 引擎依赖 phase3 宿主实现（显式 ctx，无 process-global）。
  */
+/** 逐计划项 WAL step 记录（P2-B，Phase 8）：供 reconcile 判精度。 */
+export interface JournalStepRecord {
+  /** 稳定 step id（= plan item id；跨进程稳定）。 */
+  id: string;
+  adapter: string;
+  kind: string;
+  /** 目标引用（文件类项 = 绝对目标路径，供 reconcile 指纹判定；非文件项可为空串）。 */
+  ref: string;
+  /** 外部副作用（非文件项，如 settings/plugins/patchLine）→ reconcile 一律保守。 */
+  external: boolean;
+  status?: 'planned' | 'done' | 'failed' | 'skipped' | 'attention';
+  /** side effect 前目标内容指纹（null = 不可指纹）。 */
+  beforeFp?: string | null;
+  /** side effect 后重读磁盘指纹（null = 不可指纹）。 */
+  afterFp?: string | null;
+}
+
 export interface TransactionSnapshotContext {
   operationId: string;
   operationType: string;
@@ -385,6 +402,12 @@ export interface TransactionSnapshotContext {
   bindSnapshot: (snapshotId: string) => Promise<void>;
   /** 首个 destructive side effect 前调用：SNAPSHOT_CREATED→APPLYING。 */
   markApplying: () => Promise<void>;
+  /**
+   * 逐计划项 WAL（P2-B，可选）：记录一个将执行/已执行的 step。
+   * 文件类项带 beforeFp/afterFp（可证明）；非文件项 external=true（reconcile 维持保守）。
+   * 不实现/不传 = 无逐项 journal（opaque intent，保持 Phase 3 行为）。
+   */
+  recordStep?: (step: JournalStepRecord) => Promise<void>;
 }
 
 export interface RollbackReport {
