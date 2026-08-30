@@ -124,6 +124,38 @@ test('V-06: symlink 化 snapshot.json → UNSAFE_PATH（F25）', async () => {
   });
 });
 
+test('V-06b: 真实 Windows junction 化 blobs 目录 → UNSAFE_PATH（F25 Review C 强化）', async (t) => {
+  // Node 在 Windows 上 lstat(junction)=isSymbolicLink=true 但 readdir 列出外部目标的普通文件，
+  // 故仅查 blob 子项会漏 junction 逃逸。此测试用真实 junction 复现该场景（Phase 5 因环境限制
+  // 未能复现，标记 NOT REPRODUCIBLE）。
+  await withTmp(async (dir) => {
+    const snapDir = path.join(dir, 'snapshots');
+    await fs.mkdir(snapDir, { recursive: true });
+    const snap = await seedOpBound(snapDir);
+    const snapPath = path.join(snapDir, snap.id);
+    const blobs = path.join(snapPath, 'blobs');
+    // 用 junction 替换 blobs 目录 → 指向外部目录（外部含伪装 blob 文件）
+    const external = path.join(dir, 'external-blobs');
+    await fs.mkdir(external, { recursive: true });
+    await fs.writeFile(path.join(external, 'fake-blob.bin'), Buffer.from('external'));
+    // 移除 seedOpBound 创建的真实 blobs 目录，才能在原位建 junction
+    await fs.rm(blobs, { recursive: true, force: true });
+    let created = false;
+    try {
+      await fs.symlink(external, blobs, 'junction');
+      created = true;
+    } catch {
+      try { await fs.symlink(external, blobs, 'dir'); created = true; } catch { /* symlink 不可用 */ }
+    }
+    if (!created) {
+      t.diagnostic('当前环境无法创建 junction/symlink，跳过真实 junction 用例');
+      return;
+    }
+    const v = await validateSnapshotForRestore(snapPath, snapDir, { environmentFingerprint: 'fp' });
+    assert.equal(v.verdict, 'UNSAFE_PATH', 'junction 化的 blobs 目录必须拒绝（读取面逃逸）');
+  });
+});
+
 test('V-07: 越界/非法 id → INVALID', async () => {
   await withTmp(async (dir) => {
     const snapDir = path.join(dir, 'snapshots');

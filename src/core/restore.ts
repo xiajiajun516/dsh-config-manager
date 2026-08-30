@@ -305,6 +305,15 @@ export async function validateSnapshotForRestore(
     if (s !== null) return { verdict: 'UNSAFE_PATH', reason: s };
   }
 
+  // F25（Review C 强化）：快照目录本身 / blobs 目录若为 (junction) symlink → 拒绝。
+  // 真实 Windows junction（目录 reparse point）在 lstat 下 isSymbolicLink===true，但 readdir
+  // 只列出【外部目标目录】的普通文件（isSymbolicLink=false）——仅查 blob 子项会漏 junction 逃逸
+  // （外部内容经 junction 伪装成本快照 blobs，restore 读侧 fs.readFile 会跟随到外部读取面）。
+  const selfDirGuard = await assertNoSnapshotSymlink(snapshotDir, '.');
+  if (selfDirGuard !== null) return { verdict: 'UNSAFE_PATH', reason: selfDirGuard };
+  const blobsDirGuard = await assertNoSnapshotSymlink(snapshotDir, 'blobs');
+  if (blobsDirGuard !== null) return { verdict: 'UNSAFE_PATH', reason: blobsDirGuard };
+
   // F25（Review C）：blob 目录内任何实体若为 symlink → 拒绝（文档声称覆盖 blobs，须与实现一致）。
   // blob symlink 指向外部文件，restore 读侧 fs.readFile 会跟随；即使内容 hash 恰好匹配，也属越界读取面，拒绝更安全。
   const blobsDir = path.join(snapshotDir, 'blobs');
