@@ -25,3 +25,6 @@ Thumbs.db
 # Local env
 .env
 .env.local
+
+# Phase 4 real-DSH E2E isolated environment
+phase4-e2e/
