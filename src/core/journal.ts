@@ -119,6 +119,23 @@ export interface JournalRecovery {
   attempts: number;
 }
 
+/** Phase 5 post-recovery verification verdict（§6.3）。 */
+export type RecoveryVerificationVerdict =
+  | 'MATCH'            // 所有关键状态与 trusted snapshot 匹配 → terminal（可 COMMITTED）
+  | 'PARTIAL_MATCH'    // 关键状态匹配，但存在不可验证项（如凭据值不可回读）→ terminal + 警告
+  | 'MISMATCH'         // 关键状态不匹配（恢复未生效 / 部分残留）→ NEEDS_ATTENTION（不 COMMITTED）
+  | 'VERIFICATION_ERROR'; // 验证本身失败（无法读文件 / 快照损坏）→ NEEDS_ATTENTION（不 COMMITTED）
+
+/** Phase 5 post-recovery verification 结果（journal 可选字段，additive，不 bump schema）。 */
+export interface RecoveryVerification {
+  verdict: RecoveryVerificationVerdict;
+  /** 每项检查结果（写入前过 redactJournalText 强脱敏）。 */
+  details: string[];
+  /** 需人工处理项（凭据等；写入前过 redactJournalText 强脱敏）。 */
+  manualHints: string[];
+  at: string;
+}
+
 /** 单个 operation 的 durable journal。不保存任何 secret 值。 */
 export interface OperationJournal {
   schemaVersion: number;
@@ -140,6 +157,12 @@ export interface OperationJournal {
   recovery: JournalRecovery;
   /** 最后错误/原因文本（已 redact；非 secret） */
   error: string;
+  /**
+   * Phase 5：post-recovery verification 结果（可选，additive）。
+   * 旧 journal 无此字段（parseSafe 不受影响，schemaVersion 仍为 1）。
+   * details/manualHints 写入前必须过 redactJournalText（journal 安全不变量：不保存 secret）。
+   */
+  recoveryVerification?: RecoveryVerification;
 }
 
 export function createJournalEntry(

@@ -184,6 +184,28 @@ async function reconcileOne(
     return { decision: { operationId, kind: 'rollback-continue', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
   }
 
+  // §6.5 recovery hard gate（Reviewer A P0 + 第三轮 P2 收紧）：
+  // 置于 entryDone/回滚中断检查（:180）之后、step 指纹判定（:187）之前。
+  // RECOVERING +（无 recoveryVerification 或 verdict 非 MATCH/PARTIAL_MATCH）→ needs-attention，
+  // **绝不自动判 RECOVERED**（VERIFIED 不变量：恢复未验证不得视为完成）。
+  // 只有 recoveryVerification.verdict === 'MATCH' | 'PARTIAL_MATCH' 的 RECOVERING journal
+  // 才可转 ROLLED_BACK / RECOVERED（该终态迁移由 verify 路由以单次原子 journal update 完成）。
+  if (j.state === 'RECOVERING') {
+    const v = j.recoveryVerification;
+    const verified = v !== undefined && (v.verdict === 'MATCH' || v.verdict === 'PARTIAL_MATCH');
+    if (!verified) {
+      const reason = 'RECOVERING 且 recovery 未验证（无 recoveryVerification 或 verdict 非 MATCH/PARTIAL_MATCH），绝不自动 RECOVERED';
+      await store.writeSafeMode(true).catch(() => undefined);
+      await store.update(operationId, (cur) => {
+        let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
+        next = { ...next, error: next.error || reason, recovery: { ...next.recovery, reason, attempts: next.recovery.attempts + 1 } };
+        return next;
+      }).catch(() => undefined);
+      await store.appendRecoveryHistory('recovery-unverified', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined);
+      return { decision: { operationId, kind: 'needs-attention', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
+    }
+  }
+
   // incomplete：判定 steps
   const stepIds = [...new Set([...j.plannedSteps, ...Object.keys(j.steps)])];
   let anyApplied = false;
@@ -341,8 +363,15 @@ export interface RecoveryExecutorInput {
   operationId: string;
   action: 'rollback' | 'resume' | 'dismiss';
   snapshotId: string | null;
-  /** 宿主注入的实际回滚执行器（破坏性副作用由宿主/Coordinator 执行，此处只做 journal 终态）。 */
+  /**
+   * 恢复决策（§5.2 引擎映射）：rollback-recommended → restore executor（恢复到 trusted snapshot）；
+   * rollback-continue → rollback executor（续跑中断回滚）。缺省 = rollback-continue（兼容旧调用）。
+   */
+  decision?: 'rollback-recommended' | 'rollback-continue';
+  /** 宿主注入的实际回滚执行器（rollback-continue：续跑中断回滚；破坏性副作用由宿主/Coordinator 执行）。 */
   performRollback?: (snapshotId: string) => Promise<{ full: boolean; failed: string[] }>;
+  /** 宿主注入的 restore 执行器（rollback-recommended：恢复到 trusted snapshot）。 */
+  performRestore?: (snapshotId: string) => Promise<{ full: boolean; failed: string[] }>;
 }
 
 export async function executeRecovery(
@@ -367,22 +396,26 @@ export async function executeRecovery(
   if (input.action === 'rollback') {
     if (!userConfirmed) return 'needs-confirmation'; // 普通 metadata 不是 destructive 授权
     if (input.snapshotId === null) return 'failed'; // 无有效快照不可回滚
-    if (input.performRollback === undefined) return 'failed';
-    // 先推进 ROLLING_BACK（若当前允许），再 ROLLED_BACK（crash-during-rollback 续跑也稳）
+    // §11.2：execute 仅接受 NEEDS_ATTENTION（confirm 后）或 RECOVERING（retry 续跑）；terminal 拒绝 replay。
+    if (j.state !== 'NEEDS_ATTENTION' && j.state !== 'RECOVERING') return 'failed';
+    // §5.2 引擎映射：rollback-recommended → restore executor；rollback-continue → rollback executor。
+    // 不混用两套引擎；缺省 decision 走 rollback executor（兼容旧调用）。
+    const executor = input.decision === 'rollback-recommended' ? input.performRestore : input.performRollback;
+    if (executor === undefined) return 'failed';
+    // 真正开始时：NEEDS_ATTENTION → RECOVERING（§4.2/§7.1）。recovery 全程保持 RECOVERING，
+    // **不引入 ROLLING_BACK**（ALLOWED_TRANSITIONS['RECOVERING'] 不含 ROLLING_BACK）。
+    // retry 续跑时 journal 已 RECOVERING → 幂等保持。
     await store.update(input.operationId, (cur) => {
-      if (cur.state === 'ROLLING_BACK') return cur;
-      if (['CREATED', 'SNAPSHOT_CREATED', 'APPLYING', 'VALIDATING', 'RECOVERING', 'NEEDS_ATTENTION'].includes(cur.state)) {
-        return transitionJournalState(cur, 'ROLLING_BACK');
-      }
-      return cur;
+      if (cur.state === 'RECOVERING') return cur;
+      if (cur.state === 'NEEDS_ATTENTION') return transitionJournalState(cur, 'RECOVERING');
+      return cur; // 其它状态（terminal 等）不迁移
     }).catch(() => undefined);
-    const report = await input.performRollback(input.snapshotId);
+    const report = await executor(input.snapshotId);
+    // 执行完成：保持 RECOVERING（记录 rollback 报告；终态迁移 + verification 写入由 verify 路由
+    // 以单次原子 journal update 完成，见 §6.5）。此处绝不自行转 ROLLED_BACK。
     await store.update(input.operationId, (cur) => {
-      let next = transitionJournalState(cur, 'ROLLED_BACK');
-      next = { ...next, rollback: { ...next.rollback, full: report.full, failed: report.failed } };
-      return next;
-    });
-    await store.moveToCompleted(input.operationId).catch(() => undefined);
+      return { ...cur, rollback: { ...cur.rollback, full: report.full, failed: report.failed } };
+    }).catch(() => undefined);
     return 'done';
   }
 
@@ -390,6 +423,36 @@ export async function executeRecovery(
   if (!userConfirmed) return 'needs-confirmation';
   await store.quarantine(input.operationId, 'user dismissed').catch(() => undefined);
   return 'done';
+}
+
+// ---------- recovery decision 重算（§5.4） ----------
+
+/**
+ * 对 terminal `NEEDS_ATTENTION` journal 重算 recovery 决策（§5.4，Reviewer A 第二轮 P1-2）。
+ *
+ * `reconcileActive` 对 terminal `NEEDS_ATTENTION` journal 恒返回 `needs-attention`
+ * （`NEEDS_ATTENTION` 是 terminal，`rollback-recommended`/`rollback-continue` 只在转换进
+ * NEEDS_ATTENTION 的当次 pass 出现一次）。`GET /recovery/status` 用本函数重算，区分
+ * `rollback-recommended` / `rollback-continue` / `needs-attention`。
+ *
+ * **只读**：不修改 journal，不写 SAFE MODE，不写 recovery-history。
+ */
+export async function recomputeRecoveryDecision(
+  j: OperationJournal,
+  hooks: Pick<ReconcileProbeHooks, 'snapshotExists'>,
+): Promise<'rollback-continue' | 'rollback-recommended' | 'needs-attention'> {
+  // 回滚中断（entryDone 非空）→ 续跑中断回滚
+  if (Object.keys(j.rollback.entryDone ?? {}).length > 0) return 'rollback-continue';
+  // 有合法且存在的 trusted bound snapshot → 可恢复到快照
+  if (j.snapshotId !== null && j.snapshotId !== '') {
+    const exists = await hooks.snapshotExists(j.snapshotId, {
+      operationId: j.operationId,
+      ownerInstanceId: j.ownerInstanceId,
+      environmentFingerprint: j.environmentFingerprint,
+    });
+    if (exists) return 'rollback-recommended';
+  }
+  return 'needs-attention';
 }
 
 // ---------- startup 只读判定（不自动 recover stale lock） ----------

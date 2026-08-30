@@ -158,6 +158,26 @@ test('register: 快照恢复（restore）同 kind 进行中拒绝（P1-1 并发�
   assert.notEqual(second.runId, first.runId)
 })
 
+test('register: recovery 同 kind 进行中拒绝（并发 recovery 防护）', () => {
+  const reg = new RunRegistry()
+  const first = reg.register('recovery')
+  assert.throws(
+    () => reg.register('recovery'),
+    (err: unknown) => {
+      assert.ok(err instanceof RunConflictError)
+      assert.equal((err as RunConflictError).runId, first.runId)
+      return true
+    },
+  )
+  // 恢复中允许导出（不同 kind 互不阻塞）
+  const exp = reg.register('export')
+  assert.equal(exp.kind, 'export')
+  // 完成后的 recovery 不阻塞新 recovery
+  reg.finish(first.runId, {})
+  const second = reg.register('recovery')
+  assert.notEqual(second.runId, first.runId)
+})
+
 test('finish/fail: 状态与 result/error 落账', () => {
   const reg = new RunRegistry()
   const done = reg.register('export')

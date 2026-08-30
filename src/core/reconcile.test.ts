@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { JournalStore, createJournalEntry, type OperationJournal, type JournalStep } from './journal.ts';
 import {
-  reconcileActive, executeRecovery, inspectStartup,
+  reconcileActive, executeRecovery, inspectStartup, recomputeRecoveryDecision,
   type ReconcileProbeHooks, type ReconcileEnv,
 } from './reconcile.ts';
 
@@ -165,17 +165,19 @@ test('executeRecovery：rollback 无用户确认 → needs-confirmation（零副
   assert.equal(rollbackRan, false, '无确认不得执行破坏性回滚');
 });
 
-test('executeRecovery：有确认 → ROLLED_BACK', async (t) => {
+test('executeRecovery：有确认 → RECOVERING（终态由 verify 原子完成，不自行 ROLLED_BACK）', async (t) => {
   const dir = tmp(t);
   const store = mkStore(dir);
   const id = '00000000-0000-4000-8000-0000000000ca';
-  const j = op(id, 'APPLYING'); j.snapshotId = 'snap-1'; await store.create(j);
+  const j = op(id, 'NEEDS_ATTENTION'); j.snapshotId = 'snap-1'; await store.create(j);
   let rollbackRan = false;
   const r = await executeRecovery(store, { operationId: id, action: 'rollback', snapshotId: 'snap-1', performRollback: async () => { rollbackRan = true; return { full: true, failed: [] }; } }, true);
   assert.equal(r, 'done');
   assert.equal(rollbackRan, true);
-  assert.equal((await store.load(id))?.state, 'ROLLED_BACK');
-  assert.deepEqual(await store.scanActive(), []);
+  // §7.1：recovery 全程保持 RECOVERING（不引入 ROLLING_BACK）；终态迁移 + verification 写入
+  // 由 verify 路由以单次原子 journal update 完成。此处绝不自行转 ROLLED_BACK。
+  assert.equal((await store.load(id))?.state, 'RECOVERING');
+  assert.ok((await store.loadActive(id)) !== null, 'RECOVERING journal 仍 active（待 verify）');
 });
 
 // ---------- 幂等 ----------
@@ -230,4 +232,135 @@ test('F20：CREATED + 空 steps → noop（mutation 未开始，安全）', asyn
   assert.equal(out.decisions[0]!.kind, 'noop', 'CREATED + 空 steps 无 mutation，安全 noop');
   assert.equal(out.safeModeRequired, false);
   assert.equal((await store.load(id))?.state, 'RECOVERED');
+});
+
+// ---------- §6.5 recovery hard gate ----------
+
+test('§6.5：RECOVERING + 无 recoveryVerification → needs-attention（绝不自动 RECOVERED）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d1';
+  const j = op(id, 'RECOVERING'); j.snapshotId = 'snap-1';
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention', 'RECOVERING + 待验证绝不自动 RECOVERED');
+  assert.equal(out.safeModeRequired, true);
+  assert.equal((await store.load(id))?.state, 'NEEDS_ATTENTION');
+});
+
+test('§6.5：RECOVERING + MISMATCH verification → needs-attention（不 COMMITTED）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d2';
+  const j = op(id, 'RECOVERING'); j.snapshotId = 'snap-1';
+  j.recoveryVerification = { verdict: 'MISMATCH', details: ['host file 残留'], manualHints: [], at: '2026-01-01T00:00:00.000Z' };
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention', 'verdict 非 MATCH/PARTIAL_MATCH → needs-attention');
+  assert.equal(out.safeModeRequired, true);
+  assert.equal((await store.load(id))?.state, 'NEEDS_ATTENTION');
+});
+
+test('§6.5：RECOVERING + MATCH verification → 不触发门控（可 proceed）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d3';
+  const j = op(id, 'RECOVERING'); j.snapshotId = 'snap-1';
+  j.recoveryVerification = { verdict: 'MATCH', details: ['all match'], manualHints: [], at: '2026-01-01T00:00:00.000Z' };
+  j.plannedSteps = ['s1']; j.steps = { s1: fileStep('done') };
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.notEqual(out.decisions[0]!.kind, 'needs-attention', 'MATCH verification 不触发硬门控');
+  assert.equal(out.decisions[0]!.kind, 'recovered', '已验证 RECOVERING 可 proceed 到 terminal');
+});
+
+test('§6.5：RECOVERING + entryDone 非空 → rollback-continue（门控之前，续跑中断回滚）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d4';
+  const j = op(id, 'RECOVERING'); j.snapshotId = 'snap-1';
+  j.rollback.entryDone = { 0: true };
+  await store.create(j);
+  const out = await reconcileActive(store, hooks({ snapshotExists: async () => true }), env);
+  assert.equal(out.decisions[0]!.kind, 'rollback-continue', 'entryDone 非空 → 续跑中断回滚（不违反 VERIFIED）');
+});
+
+// ---------- recomputeRecoveryDecision（§5.4） ----------
+
+test('recomputeRecoveryDecision：entryDone 非空 → rollback-continue', async (t) => {
+  const j = op('00000000-0000-4000-8000-0000000000d5', 'NEEDS_ATTENTION');
+  j.rollback.entryDone = { 0: true };
+  const d = await recomputeRecoveryDecision(j, { snapshotExists: async () => true });
+  assert.equal(d, 'rollback-continue');
+});
+
+test('recomputeRecoveryDecision：snapshotId 合法且存在 → rollback-recommended', async (t) => {
+  const j = op('00000000-0000-4000-8000-0000000000d6', 'NEEDS_ATTENTION');
+  j.snapshotId = 'snap-1';
+  const d = await recomputeRecoveryDecision(j, { snapshotExists: async () => true });
+  assert.equal(d, 'rollback-recommended');
+});
+
+test('recomputeRecoveryDecision：无 entryDone / 快照缺失 → needs-attention', async (t) => {
+  const j = op('00000000-0000-4000-8000-0000000000d7', 'NEEDS_ATTENTION');
+  j.snapshotId = 'snap-1';
+  const d = await recomputeRecoveryDecision(j, { snapshotExists: async () => false });
+  assert.equal(d, 'needs-attention');
+});
+
+test('recomputeRecoveryDecision：只读，不修改 journal / 不写 SAFE MODE', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d8';
+  const j = op(id, 'NEEDS_ATTENTION'); j.snapshotId = 'snap-1';
+  await store.create(j);
+  const before = await store.load(id);
+  await recomputeRecoveryDecision(before!, { snapshotExists: async () => true });
+  const after = await store.load(id);
+  assert.deepEqual(after, before, 'recomputeRecoveryDecision 不得修改 journal');
+  assert.equal(await store.readSafeMode(), false, '不得写 SAFE MODE');
+});
+
+// ---------- executeRecovery 引擎路由（§5.2） ----------
+
+test('executeRecovery：rollback-recommended → 调 restore executor（不调 rollback executor）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d9';
+  const j = op(id, 'NEEDS_ATTENTION'); j.snapshotId = 'snap-1'; await store.create(j);
+  let restoreRan = false; let rollbackRan = false;
+  const r = await executeRecovery(store, {
+    operationId: id, action: 'rollback', snapshotId: 'snap-1', decision: 'rollback-recommended',
+    performRestore: async () => { restoreRan = true; return { full: true, failed: [] }; },
+    performRollback: async () => { rollbackRan = true; return { full: true, failed: [] }; },
+  }, true);
+  assert.equal(r, 'done');
+  assert.equal(restoreRan, true, 'rollback-recommended 应调 restore executor');
+  assert.equal(rollbackRan, false, '不得混用 rollback executor');
+  assert.equal((await store.load(id))?.state, 'RECOVERING', 'NEEDS_ATTENTION → RECOVERING');
+});
+
+test('executeRecovery：rollback-continue（缺省）→ 调 rollback executor', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000da';
+  const j = op(id, 'NEEDS_ATTENTION'); j.snapshotId = 'snap-1'; await store.create(j);
+  let rollbackRan = false;
+  const r = await executeRecovery(store, {
+    operationId: id, action: 'rollback', snapshotId: 'snap-1',
+    performRollback: async () => { rollbackRan = true; return { full: true, failed: [] }; },
+  }, true);
+  assert.equal(r, 'done');
+  assert.equal(rollbackRan, true, '缺省 decision 走 rollback executor');
+  assert.equal((await store.load(id))?.state, 'RECOVERING');
+});
+
+test('executeRecovery：rollback 无 executor → failed（不执行）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000db';
+  const j = op(id, 'NEEDS_ATTENTION'); j.snapshotId = 'snap-1'; await store.create(j);
+  const r = await executeRecovery(store, { operationId: id, action: 'rollback', snapshotId: 'snap-1' }, true);
+  assert.equal(r, 'failed');
+  assert.equal((await store.load(id))?.state, 'NEEDS_ATTENTION', '无 executor 不得迁移状态');
 });

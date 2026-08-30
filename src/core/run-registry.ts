@@ -21,8 +21,8 @@ import { randomBytes } from 'node:crypto'
 import { zhMsg } from './messages.ts'
 import type { MsgFunc } from './messages.ts'
 
-/** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用 / 定时备份 / 快照恢复 / 配置档案切换。 */
-export type RunKind = 'export' | 'import' | 'autosync' | 'sync-apply' | 'backup-schedule' | 'restore' | 'profile-switch'
+/** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用 / 定时备份 / 快照恢复 / 配置档案切换 / recovery 恢复。 */
+export type RunKind = 'export' | 'import' | 'autosync' | 'sync-apply' | 'backup-schedule' | 'restore' | 'profile-switch' | 'recovery'
 
 /** run 状态：进行中 / 完成 / 失败。 */
 export type RunStatus = 'running' | 'done' | 'failed'
@@ -73,7 +73,9 @@ export class RunConflictError extends Error {
               ? '定时备份已在进行中'
               : kind === 'restore'
                 ? '快照恢复已在进行中（请等待当前恢复完成）'
-                : msg('run.conflict.import', { runId }),
+                : kind === 'recovery'
+                  ? '恢复/回滚已在进行中（请等待当前恢复完成）'
+                  : msg('run.conflict.import', { runId }),
     )
     this.name = 'RunConflictError'
     this.runId = runId
