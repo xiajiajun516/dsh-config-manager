@@ -28,4 +28,8 @@ export interface ConfigManagerSectionInjected {
   myConfigsApi: import('./market/my-configs-api.ts').MyConfigsApi
   /** 配置市场 locale（config-manager-market 命名空间，主 section 注册时注入） */
   marketT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-market'>
+  /** Recovery API（Phase 5：引导式恢复工作流；主 section 注册时注入） */
+  recoveryApi: import('./recovery/recovery-api.ts').RecoveryApi
+  /** Recovery locale（config-manager-recovery 命名空间，主 section 注册时注入） */
+  recoveryT: import('@deepseek-ai/dsh-client-ui-slots').TranslateNS<'config-manager-recovery'>
 }

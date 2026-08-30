@@ -57,6 +57,7 @@ import type { MarketApprovals } from './market/market-view.ts'
 import type { MyItemEntry } from './market/my-configs-api.ts'
 import type { MyInstallSlice, MyWizardSlice } from './market/my-configs-view.ts'
 import type { SyncConflictResolution } from './sync/sync-view.ts'
+import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../ui/types.ts'
 
 /* ---------------------------------------------------------------- 基础类型 */
 
@@ -64,7 +65,7 @@ import type { SyncConflictResolution } from './sync/sync-view.ts'
 export type MainView = 'export' | 'import'
 
 /** 设置页四块低频面板（ConfigManagerSection 的 tab；panel 非空时覆盖主视图）。 */
-export type PanelId = 'snapshots' | 'sync' | 'market' | 'about' | 'profiles'
+export type PanelId = 'snapshots' | 'sync' | 'market' | 'about' | 'profiles' | 'recovery'
 
 /** 导出模式。 */
 export type ExportMode = 'quick' | 'custom'
@@ -234,6 +235,29 @@ export interface SnapshotsStoreSlice {
   subTab: SnapshotsSubTab
 }
 
+/**
+ * Recovery 面板的运行时切片（Phase 5 §10.4）。
+ * status/preview/verifyResult 为非敏感可持久化（切 tab/刷新恢复）；running 为
+ * 「内存切片瞬态」：切 tab 由模块级单例保留、刷新时被 toPersistedState 白名单剔除
+ * —— 恢复是否仍在执行以宿主 RunRegistry（/runs + /progress）为权威，刷新后经
+ * resume() 重新发现；浏览器持久化绝不作为 destructive operation 的状态源。
+ */
+export interface RecoveryStoreSlice {
+  /** GET /recovery/status 结果（incidents + running；非敏感可持久化） */
+  status: RecoveryStatus | null
+  /** 当前选中 incident 的 operationId（非敏感可持久化） */
+  selectedOperationId: string | null
+  /** 当前选中 incident 的只读 preview（非敏感可持久化） */
+  preview: RecoveryPreview | null
+  /** 最近一次 verify 结果（非敏感可持久化） */
+  verifyResult: RecoveryVerifyResult | null
+  /** 恢复执行中（内存切片瞬态：切 tab 保留、刷新清空；宿主 /runs 是权威） */
+  running: boolean
+  /** 已 redact 的错误文本 */
+  error: string | null
+  actionError: string | null
+}
+
 /* ------------------------------------------------- 持久化（非敏感）状态形状 */
 
 /**
@@ -296,6 +320,7 @@ export interface PersistedState {
   market: MarketStoreSlice
   snapshots: SnapshotsStoreSlice
   profiles: ProfilesStoreSlice
+  recovery: RecoveryStoreSlice
 }
 
 /* --------------------------------------- 运行时状态（含仅内存的敏感字段） */
@@ -350,6 +375,7 @@ export interface StoreState {
   market: MarketStoreSlice
   snapshots: SnapshotsStoreSlice
   profiles: ProfilesStoreSlice
+  recovery: RecoveryStoreSlice
 }
 
 /** patch 的输入形状（浅合并对应切片）。 */
@@ -363,6 +389,7 @@ export interface StorePatch {
   market?: Partial<MarketStoreSlice>
   snapshots?: Partial<SnapshotsStoreSlice>
   profiles?: Partial<ProfilesStoreSlice>
+  recovery?: Partial<RecoveryStoreSlice>
 }
 
 /** 向导 step 的类型别名（与 src/ui/types.ts 的 ImportStep 保持一致）。 */
@@ -490,6 +517,18 @@ function defaultProfilesState(): ProfilesStoreSlice {
   }
 }
 
+function defaultRecoveryState(): RecoveryStoreSlice {
+  return {
+    status: null,
+    selectedOperationId: null,
+    preview: null,
+    verifyResult: null,
+    running: false,
+    error: null,
+    actionError: null,
+  }
+}
+
 function defaultState(): StoreState {
   return {
     v: 1,
@@ -501,6 +540,7 @@ function defaultState(): StoreState {
     market: defaultMarketState(),
     snapshots: defaultSnapshotsState(),
     profiles: defaultProfilesState(),
+    recovery: defaultRecoveryState(),
   }
 }
 
@@ -588,6 +628,19 @@ export function toProfilesStoreSlice(s: ProfilesStoreSlice): ProfilesStoreSlice 
   }
 }
 
+/** 从 recovery 面板状态提取切片（结构兼容：传入 PanelState 亦可）。 */
+export function toRecoveryStoreSlice(s: RecoveryStoreSlice): RecoveryStoreSlice {
+  return {
+    status: s.status,
+    selectedOperationId: s.selectedOperationId,
+    preview: s.preview,
+    verifyResult: s.verifyResult,
+    running: s.running,
+    error: s.error,
+    actionError: s.actionError,
+  }
+}
+
 /**
  * 持久化白名单：解构剔除敏感字段（password/passwordConfirm/secretInputs/decryptPassword）
  * 与不可序列化的实例字段（conflictCollector），以及同步面板的凭据字段
@@ -654,6 +707,13 @@ export function toPersistedState(state: StoreState): PersistedState {
       error: state.profiles.error,
       loadError: state.profiles.loadError,
     },
+    // recovery 切片为非敏感（incidents/preview/verifyResult 无秘密值）：原样持久化；
+    // running 为内存切片瞬态：不落盘 —— 恢复是否仍在执行以宿主 RunRegistry
+    // （/runs + /progress）为权威，刷新后由 resume() 重新发现（P1-1 原则）。
+    recovery: {
+      ...state.recovery,
+      running: false,
+    },
   }
 }
 
@@ -676,7 +736,7 @@ export function parsePersistedState(raw: string): PersistedState | null {
   // panel：旧载荷可能缺失 → null（回到主视图）；非法值 → null
   const rawPanel = p['panel']
   const panel: PanelId | null =
-    rawPanel === 'snapshots' || rawPanel === 'sync' || rawPanel === 'market' || rawPanel === 'about' || rawPanel === 'profiles'
+    rawPanel === 'snapshots' || rawPanel === 'sync' || rawPanel === 'market' || rawPanel === 'about' || rawPanel === 'profiles' || rawPanel === 'recovery'
       ? rawPanel
       : null
   // sync/market/snapshots：旧载荷可能缺失 → 默认切片（字段级缺失由 applyPersisted 兜底）
@@ -684,7 +744,8 @@ export function parsePersistedState(raw: string): PersistedState | null {
   const market = isRecord(p['market']) ? p['market'] as unknown as MarketStoreSlice : defaultMarketState()
   const snapshots = isRecord(p['snapshots']) ? p['snapshots'] as unknown as SnapshotsStoreSlice : defaultSnapshotsState()
   const profiles = isRecord(p['profiles']) ? p['profiles'] as unknown as ProfilesStoreSlice : defaultProfilesState()
-  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots, profiles }
+  const recovery = isRecord(p['recovery']) ? p['recovery'] as unknown as RecoveryStoreSlice : defaultRecoveryState()
+  return { v: 1, view, panel, export: exp as PersistedExportState, import: imp as PersistedImportState, sync, market, snapshots, profiles, recovery }
 }
 
 /** 运行时不变量小工具：值为普通对象。 */
@@ -856,6 +917,7 @@ export class RunStore {
       market: { ...this.state.market, ...patchObj.market },
       snapshots: { ...this.state.snapshots, ...patchObj.snapshots },
       profiles: { ...this.state.profiles, ...patchObj.profiles },
+      recovery: { ...this.state.recovery, ...patchObj.recovery },
     }
     this.notify()
     this.save()
@@ -1008,6 +1070,13 @@ export class RunStore {
         subTab: parsed.snapshots.subTab === 'files' ? 'files' : 'restore',
       },
       profiles: { ...defaultProfilesState(), ...parsed.profiles },
+      recovery: {
+        ...defaultRecoveryState(),
+        ...parsed.recovery,
+        // 硬性：恢复执行中为瞬态，绝不从存储恢复（即使旧载荷携带 running=true 也清空）——
+        // 是否仍有恢复在执行以宿主 /runs 为权威，resume() 会重新发现并置 true
+        running: false,
+      },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
     // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。
@@ -1162,6 +1231,25 @@ export class RunStore {
         },
       })
     }
+
+    // recovery（Phase 5）：宿主 /runs 是「恢复是否仍在执行」的权威来源。
+    // 刷新/重开面板后若存在活跃 recovery run → 恢复 running 并轮询 /progress
+    // （结果经 applySettled 回填 verifyResult）；持久化的 running 恒为 false（白名单
+    // 剔除），绝不把浏览器陈旧状态当成宿主真实状态。
+    const recoveryRun = active.find((r) => r.kind === 'recovery')
+    if (recoveryRun !== undefined) {
+      resumed = true
+      this.patch({ recovery: { running: true, actionError: null } })
+      this.pollRun(recoveryRun.runId, 'recovery')
+    } else if (this.state.recovery.running) {
+      // 面板镜像显示恢复中，但 host 无活跃 recovery run：请求已结束且响应丢失
+      this.patch({
+        recovery: {
+          running: false,
+          actionError: '上次恢复任务已结束但结果无法恢复，请重新执行',
+        },
+      })
+    }
     return resumed
   }
 
@@ -1268,6 +1356,7 @@ export class RunStore {
     const event = mapRunProgress(kind, state)
     if (kind === 'export') this.patch({ export: { progress: event } })
     else if (kind === 'restore') this.patch({ snapshots: { running: true } })
+    else if (kind === 'recovery') this.patch({ recovery: { running: true } })
     else {
       // 同步写入 runId：watchRunning 发现活跃 import run 时立即填充——
       // 否则 fresh run（非刷新恢复）期间 store.runId 仍是上一次导入的陈旧值
@@ -1318,6 +1407,14 @@ export class RunStore {
           snapshots: { running: false, actionError: state.error ?? '恢复失败（结果不可用）' },
         })
       }
+      return
+    }
+    // recovery（Phase 5）：完成/失败复位 running（verifyResult 由 RecoveryPanel 的
+    // execute→verify 链回填；此处只复位瞬态，不臆断验证结果）
+    if (kind === 'recovery') {
+      this.patch({
+        recovery: { running: false, actionError: state.error ?? null },
+      })
       return
     }
     // import
@@ -1378,6 +1475,15 @@ export class RunStore {
       // 以 RunRegistry 为准，本提示只说明进度不可恢复，不臆断恢复已停止）
       this.patch({
         snapshots: {
+          running: false,
+          actionError: '恢复任务已结束或超过保留期，进度不可恢复',
+        },
+      })
+    } else if (kind === 'recovery') {
+      // recovery run 被清理/丢失：复位 running（宿主侧恢复动作可能仍在执行——
+      // 以 RunRegistry 为准，本提示只说明进度不可恢复，不臆断恢复已停止）
+      this.patch({
+        recovery: {
           running: false,
           actionError: '恢复任务已结束或超过保留期，进度不可恢复',
         },

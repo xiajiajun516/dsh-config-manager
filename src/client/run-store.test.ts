@@ -1014,3 +1014,127 @@ test('m2-resume: store 镜像显示恢复中但 host 无活跃 restore run → �
   assert.equal(snap.running, false, '无宿主 run 时 running 复位（不残留 UI 假状态）')
   assert.ok(snap.actionError !== null, '如实提示结果不可恢复')
 })
+
+/* -------------------------------------------------- recovery（Phase 5）权威状态 */
+
+test('recovery: running 为瞬态——不写入 sessionStorage、刷新后复位（以宿主 /runs 为权威）', () => {
+  const { storage, raw } = makeStorage()
+  const first = new RunStore({ storage })
+  first.patch({
+    panel: 'recovery',
+    recovery: {
+      status: { incidents: [], running: [] },
+      selectedOperationId: '00000000-0000-4000-8000-0000000000aa',
+      preview: null,
+      verifyResult: null,
+      running: true,
+      error: null,
+      actionError: null,
+    },
+  })
+  const persisted = JSON.parse(raw() ?? '{}') as { recovery?: { running?: boolean; selectedOperationId?: string | null } }
+  assert.equal(persisted.recovery?.running, false, 'running 恒不落盘（白名单剔除）')
+  assert.equal(persisted.recovery?.selectedOperationId, '00000000-0000-4000-8000-0000000000aa', '非瞬态字段仍持久化')
+
+  // 即便旧载荷携带 running=true，applyPersisted 也硬性归零——绝不把浏览器陈旧状态
+  // 当成「恢复仍在执行」的依据（宿主 /runs 是唯一权威，resume() 负责重新置位）
+  storage.setItem(STATE_KEY, JSON.stringify({
+    ...persisted,
+    recovery: { ...persisted.recovery, running: true },
+  }))
+  const second = new RunStore({ storage })
+  assert.equal(second.getSnapshot().recovery.running, false, '刷新后 running 复位（不读存储）')
+  assert.equal(second.getSnapshot().recovery.selectedOperationId, '00000000-0000-4000-8000-0000000000aa', '非瞬态字段仍恢复')
+})
+
+test('recovery: status/preview/verifyResult 非敏感可持久化——刷新后恢复', () => {
+  const { storage, raw } = makeStorage()
+  const first = new RunStore({ storage })
+  first.patch({
+    panel: 'recovery',
+    recovery: {
+      status: {
+        incidents: [{
+          operationId: '00000000-0000-4000-8000-0000000000aa',
+          operationType: 'import-apply',
+          state: 'NEEDS_ATTENTION',
+          decision: 'rollback-recommended',
+          snapshotId: 'snap-1',
+          reason: '',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        }],
+        running: [],
+      },
+      selectedOperationId: '00000000-0000-4000-8000-0000000000aa',
+      preview: {
+        operationId: '00000000-0000-4000-8000-0000000000aa',
+        operationType: 'import-apply',
+        state: 'NEEDS_ATTENTION',
+        decision: 'rollback-recommended',
+        snapshotId: 'snap-1',
+        snapshotVerdict: 'TRUSTED_OPERATION_SNAPSHOT',
+        snapshotMeta: { id: 'snap-1', createdAt: '2026-01-01T00:00:00.000Z', operationType: 'import-apply' },
+        environmentFingerprint: 'fp',
+        environmentCompatible: true,
+        reason: '',
+        createdAt: '2026-01-01T00:00:00.000Z',
+      },
+      verifyResult: {
+        ok: true,
+        operationId: '00000000-0000-4000-8000-0000000000aa',
+        verdict: 'MATCH',
+        terminal: 'ROLLED_BACK',
+        details: ['快照重验通过'],
+        manualHints: [],
+      },
+      running: false,
+      error: null,
+      actionError: null,
+    },
+  })
+  const persisted = JSON.parse(raw() ?? '{}') as { recovery?: { status?: unknown; preview?: unknown; verifyResult?: unknown } }
+  assert.ok(persisted.recovery?.status !== undefined, 'status 持久化')
+  assert.ok(persisted.recovery?.preview !== undefined, 'preview 持久化')
+  assert.ok(persisted.recovery?.verifyResult !== undefined, 'verifyResult 持久化')
+
+  const second = new RunStore({ storage })
+  const rec = second.getSnapshot().recovery
+  assert.equal(rec.status?.incidents.length, 1, '刷新后恢复 status')
+  assert.equal(rec.preview?.snapshotId, 'snap-1', '刷新后恢复 preview')
+  assert.equal(rec.verifyResult?.verdict, 'MATCH', '刷新后恢复 verifyResult')
+})
+
+test('m2-resume: 活跃 recovery run 经 /runs 恢复 running（宿主为权威）', async () => {
+  const progressResponses: RunState[] = [
+    runningRun('recovery', { section: 'recovery', item: 1, itemTotal: 3, detail: '整文件还原 settings.yaml' }),
+    {
+      runId: RUN_ID, kind: 'recovery', status: 'done',
+      section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
+      result: { ok: true, operationId: '00000000-0000-4000-8000-0000000000aa', decision: 'rollback-recommended', state: 'RECOVERING', runId: RUN_ID },
+      createdAt: 1, updatedAt: 3,
+    },
+  ]
+  let progressCalls = 0
+  const api = makeApi({
+    runs: async () => [runningRun('recovery')],
+    progress: async () => progressResponses[Math.min(progressCalls++, progressResponses.length - 1)]!,
+  })
+  const store = new RunStore({ storage: null, pollIntervalMs: 5 })
+  const resumed = await store.resume(api)
+  assert.equal(resumed, true, '发现活跃 recovery run')
+  assert.equal(store.getSnapshot().recovery.running, true, 'running 镜像置位（宿主 /runs 为权威）')
+
+  await sleep(80)
+  assert.equal(store.getSnapshot().recovery.running, false, '完成后 running 复位')
+})
+
+test('m2-resume: store 镜像显示恢复中但 host 无活跃 recovery run → 复位并提示不可恢复', async () => {
+  const api = makeApi({ runs: async () => [] })
+  const store = new RunStore({ storage: null })
+  store.patch({ recovery: { running: true } })
+  const resumed = await store.resume(api)
+  assert.equal(resumed, false)
+  const rec = store.getSnapshot().recovery
+  assert.equal(rec.running, false, '无宿主 run 时 running 复位（不残留 UI 假状态）')
+  assert.ok(rec.actionError !== null, '如实提示结果不可恢复')
+})

@@ -202,3 +202,96 @@ export interface ImportPort {
 export function itemDecisionKey(item: PlanItem): string {
   return item.id;
 }
+
+/* ---------------- Recovery（Phase 5：引导式恢复工作流） ---------------- */
+
+/** recovery 决策（§5.2）：rollback-recommended=恢复到 trusted snapshot；rollback-continue=续跑中断回滚；needs-attention=需人工调查。 */
+export type RecoveryDecision = 'rollback-recommended' | 'rollback-continue' | 'needs-attention';
+
+/** post-recovery verification verdict（§6.3）。 */
+export type RecoveryVerdict = 'MATCH' | 'PARTIAL_MATCH' | 'MISMATCH' | 'VERIFICATION_ERROR';
+
+/** GET /recovery/status 的单个 incident（未解决 operation）。 */
+export interface RecoveryIncident {
+  operationId: string;
+  operationType: string;
+  state: string;
+  decision: RecoveryDecision;
+  snapshotId: string | null;
+  /** 已 redact 的原因文本。 */
+  reason: string;
+  createdAt: string;
+}
+
+/** GET /recovery/status 响应。 */
+export interface RecoveryStatus {
+  incidents: RecoveryIncident[];
+  running: { runId: string; status: string }[];
+}
+
+/** GET /recovery/:operationId/preview 响应（只读，零写入）。 */
+export interface RecoveryPreview {
+  operationId: string;
+  operationType: string;
+  state: string;
+  decision: RecoveryDecision;
+  snapshotId: string | null;
+  snapshotVerdict: string | null;
+  snapshotMeta: { id: string; createdAt: string; operationType?: string } | null;
+  environmentFingerprint: string;
+  environmentCompatible: boolean;
+  reason: string;
+  createdAt: string;
+}
+
+/** POST /recovery/:operationId/verify 响应。 */
+export interface RecoveryVerifyResult {
+  ok: boolean;
+  operationId: string;
+  verdict: RecoveryVerdict;
+  terminal: string;
+  /** 每项检查结果（已 redact）。 */
+  details: string[];
+  /** 需人工处理项（已 redact）。 */
+  manualHints: string[];
+}
+
+/** POST /recovery/:operationId/execute|retry 响应。 */
+export interface RecoveryExecuteResult {
+  ok: boolean;
+  operationId: string;
+  decision: RecoveryDecision;
+  state: string;
+  runId: string;
+}
+
+/** POST /recovery/:operationId/confirm 响应。 */
+export interface RecoveryConfirmResult {
+  ok: boolean;
+  operationId: string;
+  snapshotId: string;
+  verdict: string;
+}
+
+/** POST /recovery/:operationId/dismiss 响应。 */
+export interface RecoveryDismissResult {
+  ok: boolean;
+  operationId: string;
+  dismissed: boolean;
+}
+
+/**
+ * Recovery 端口契约（§10.3）：recovery 无现有 port（ExportPort/ImportPort 只服务控制器）。
+ * `recovery-api.ts` 实现之；`recovery-view.ts` 是纯渲染模型（非控制器），消费本端口返回的渲染数据。
+ * 安全：所有 destructive 动作（confirm/execute/retry/dismiss）必须显式传 userConfirmed=true，
+ * 由 Host 侧双重校验（请求体 + journal 状态机）。
+ */
+export interface RecoveryPort {
+  status(): Promise<RecoveryStatus>;
+  preview(operationId: string): Promise<RecoveryPreview>;
+  confirm(operationId: string, userConfirmed: boolean): Promise<RecoveryConfirmResult>;
+  execute(operationId: string, userConfirmed: boolean): Promise<RecoveryExecuteResult>;
+  verify(operationId: string): Promise<RecoveryVerifyResult>;
+  retry(operationId: string, userConfirmed: boolean): Promise<RecoveryExecuteResult>;
+  dismiss(operationId: string, userConfirmed: boolean): Promise<RecoveryDismissResult>;
+}
