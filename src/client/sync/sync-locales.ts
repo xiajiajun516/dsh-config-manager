@@ -7,7 +7,7 @@
 export const zh = {
   // 入口
   'section.label': '远程同步',
-  'section.description': '通过 Git 私有仓库在设备间同步可移植配置（secret 永不参与同步）',
+  'section.description': '通过 Git 私有仓库在设备间同步可移植配置（密钥永不参与同步）',
   // 私有仓库强制提示（常驻警示横幅）
   'privateRepoHint': '安全要求：同步仓库必须为私有仓库（public 仓库会公开你的配置内容）。认证 token 仅用于仓库访问，绝不写入同步文件、提交内容或日志。',
   // 仓库配置表单
@@ -65,7 +65,7 @@ export const zh = {
   // 报告
   'push.title': '推送结果',
   'pull.title': '拉取差异预览',
-  'pull.previewHint': '以上为只读差异预览，不会执行导入。v1 暂不提供一键导入接线；如需应用远端配置，请使用「导入恢复」向导手动导入导出的备份。',
+  'pull.previewHint': '以上为只读差异预览，不会执行导入。当前版本暂不支持一键导入；如需应用远端配置，请使用「导入恢复」向导手动导入导出的备份。',
   'pull.needsReview': '包含需要人工决策的项（冲突 / 密钥 / 依赖 / 安装）',
   'pull.empty': '远端快照与本地一致（无变更）',
   'change.total': '共 {total} 项变更',
@@ -249,7 +249,7 @@ export const en: Record<keyof typeof zh, string> = {
   'action.pulling': 'Pulling…',
   'push.title': 'Push Result',
   'pull.title': 'Pull Diff Preview',
-  'pull.previewHint': 'Read-only diff preview above; nothing is imported. v1 does not wire one-click import yet — use the Import wizard to apply a downloaded backup if needed.',
+  'pull.previewHint': 'Read-only diff preview above; nothing is imported. One-click import is not supported in this version; use the Import wizard to apply a downloaded backup if needed.',
   'pull.needsReview': 'Contains items that need human decisions (conflicts / secrets / dependencies / installs)',
   'pull.empty': 'Remote snapshot matches local (no changes)',
   'change.total': '{total} change(s)',

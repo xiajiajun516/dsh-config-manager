@@ -103,7 +103,7 @@ function decisionLabel(t: TranslateNS<'config-manager-recovery'>, decision: stri
     case 'rollback-recommended': return t('recovery.rollbackRecommended')
     case 'rollback-continue': return t('recovery.rollbackContinue')
     case 'needs-attention': return t('recovery.needsAttention')
-    default: return decision
+    default: return t('recovery.decision.unknown')
   }
 }
 
@@ -114,7 +114,7 @@ function verdictLabel(t: TranslateNS<'config-manager-recovery'>, verdict: string
     case 'PARTIAL_MATCH': return t('recovery.partialMatch')
     case 'MISMATCH': return t('recovery.mismatch')
     case 'VERIFICATION_ERROR': return t('recovery.verificationError')
-    default: return verdict
+    default: return t('recovery.verify.verdict.unknown')
   }
 }
 
@@ -140,6 +140,18 @@ function snapshotVerdictLabel(t: TranslateNS<'config-manager-recovery'>, verdict
     case 'INVALID': return t('recovery.snapshot.verdict.invalid')
     case 'UNSAFE_PATH': return t('recovery.snapshot.verdict.unsafe')
     default: return t('recovery.snapshot.verdict.unknown')
+  }
+}
+
+/** incident 原始状态值 → 用户可懂的中文标签（未知名回退 unknown，绝不透出英文原文）。 */
+function incidentStateLabel(t: TranslateNS<'config-manager-recovery'>, state: string): string {
+  switch (state) {
+    case 'RECOVERING': return t('recovery.incident.state.recovering')
+    case 'NEEDS_ATTENTION': return t('recovery.incident.state.needsAttention')
+    case 'ROLLED_BACK': return t('recovery.incident.state.rolledBack')
+    case 'RECOVERED': return t('recovery.incident.state.recovered')
+    case 'COMMITTED': return t('recovery.incident.state.committed')
+    default: return t('recovery.incident.state.unknown')
   }
 }
 
@@ -347,7 +359,7 @@ export function RecoveryPanel({ recoveryApi, t }: RecoveryPanelProps) {
                       <span title={incident.operationId}>{incident.operationType}</span>
                       <span>{new Date(incident.createdAt).toLocaleString()}</span>
                       <span><Badge kind={decisionBadgeKind(incident.decision)}>{decisionLabel(t, incident.decision)}</Badge></span>
-                      <span>{incident.state}</span>
+                      <span>{incidentStateLabel(t, incident.state)}</span>
                     </button>
                   </div>
                 )

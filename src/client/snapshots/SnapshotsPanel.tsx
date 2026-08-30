@@ -104,17 +104,17 @@ function statusBadgeKind(status: SnapshotMeta['status']): 'info' | 'ok' | 'warn'
   }
 }
 
-/** 计划动作的本地化描述前缀（kind 标签 + 引擎已生成的中文 description） */
-function actionKindLabel(kind: string): string {
+/** 计划动作的本地化描述前缀（kind 标签 → 字典；未知名回退 unknown，不透出英文原文） */
+function actionKindLabel(t: TranslateNS<'config-manager'>, kind: string): string {
   switch (kind) {
-    case 'hostFileRestore': return '整文件还原'
-    case 'hostFileRemove': return '整文件删除'
-    case 'pluginRemove': return '卸载插件'
-    case 'fileRestore': return '还原文件'
-    case 'fileRemove': return '删除文件'
-    case 'credentialHint': return '人工提示'
-    case 'skip': return '跳过'
-    default: return kind
+    case 'hostFileRestore': return t('snapshots.kind.hostFileRestore')
+    case 'hostFileRemove': return t('snapshots.kind.hostFileRemove')
+    case 'pluginRemove': return t('snapshots.kind.pluginRemove')
+    case 'fileRestore': return t('snapshots.kind.fileRestore')
+    case 'fileRemove': return t('snapshots.kind.fileRemove')
+    case 'credentialHint': return t('snapshots.kind.credentialHint')
+    case 'skip': return t('snapshots.kind.skip')
+    default: return t('snapshots.kind.unknown')
   }
 }
 
@@ -274,8 +274,15 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   const summary = (): string => {
     const s = state.plan?.summary
     if (s === undefined) return ''
-    return `整文件还原 ${s.hostFileRestores} · 整文件删除 ${s.hostFileRemoves} · 插件卸载 ${s.pluginRemoves}`
-      + ` · 文件还原 ${s.fileRestores} · 文件删除 ${s.fileRemoves} · 凭据提示 ${s.credentialHints} · 跳过 ${s.skips}`
+    return t('snapshots.summary', {
+      hostFileRestores: String(s.hostFileRestores),
+      hostFileRemoves: String(s.hostFileRemoves),
+      pluginRemoves: String(s.pluginRemoves),
+      fileRestores: String(s.fileRestores),
+      fileRemoves: String(s.fileRemoves),
+      credentialHints: String(s.credentialHints),
+      skips: String(s.skips),
+    })
   }
 
   /** P1-⑧：置顶/取消置顶（豁免自动保留清理；操作成功后刷新列表）。 */
@@ -494,7 +501,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
                       <ul className={css.reportList}>
                         {state.plan.actions.map((action, i) => (
                           <li key={`plan-${i}`}>
-                            <span className={css.kindTag}>{actionKindLabel(action.kind)}</span>
+                            <span className={css.kindTag}>{actionKindLabel(t, action.kind)}</span>
                             {' '}{action.description}
                             {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
                           </li>

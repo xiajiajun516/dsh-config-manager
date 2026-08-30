@@ -48,7 +48,7 @@ export type HistoryKey = KindKey | ResultKey | CommonKey;
 export const zh = {
   'view.history': '迁移历史',
   'history.title': '迁移与审计历史',
-  'history.subtitle': '统一记录全部破坏性/迁移操作（导入/恢复/回滚/档案/同步/定时备份/快照操作），append-only 不可篡改，跨重启持久，可查询可导出。',
+  'history.subtitle': '统一记录全部破坏性/迁移操作（导入/恢复/回滚/档案/同步/定时备份/快照操作），只可追加、不可修改或删除，跨重启持久，可查询可导出。',
   'history.empty': '暂无迁移记录。执行导入、恢复、档案切换、同步应用或定时备份后，这里会出现审计记录。',
   'history.loading': '加载迁移历史…',
   'history.corruptedBanner': '检测到无法读取/可能被篡改的历史条目',
