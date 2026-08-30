@@ -39,6 +39,9 @@ import {
 const APPLY_ORDER: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'prompts', 'skills', 'agentPresets',
   'agentInstructions', 'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
+  // P1-1 修复：self 分区（插件自身配置 sync/market/ui-prefs）此前不在 APPLY_ORDER，
+  // 导致 plan 含 self 项但执行循环跳过、导入时被静默丢弃。加入执行顺序末尾（低风险配置文件）。
+  'self',
 ];
 
 /** ZIP 内可执行文件扩展名黑名单（§19.6：只警告，本插件不执行任何脚本） */
