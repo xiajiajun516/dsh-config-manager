@@ -10,8 +10,11 @@
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 
 import { Badge, Banner, Button, Card, Spinner } from '../common/ui.tsx'
+import { ConsultCard } from '../consult/ConsultCard.tsx'
+import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
 import {
   buildAdoptions, keepLocalAll, kindLabel, reviewItems, severityLabel,
@@ -69,6 +72,20 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   const [phase, setPhase] = useState<'idle' | 'applying' | 'done' | 'failed' | 'cancelling'>('idle');
   const [applyResult, setApplyResult] = useState<ApplyItemsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Phase 7 迁移前咨询：远端快照咨询报告（本地 state，非敏感） */
+  const [consultReport, setConsultReport] = useState<ConsultReport | null>(null);
+  const [consultLoading, setConsultLoading] = useState(false);
+
+  /** Phase 7 迁移前咨询：对远端快照生成咨询报告（只读，零写入）。失败静默。 */
+  useEffect(() => {
+    let cancelled = false;
+    setConsultLoading(true);
+    api.consult({ type: 'remote-snapshot', id: snapshotId, snapshotId })
+      .then((report) => { if (!cancelled) setConsultReport(report); })
+      .catch(() => { if (!cancelled) setConsultReport(null); })
+      .finally(() => { if (!cancelled) setConsultLoading(false); });
+    return () => { cancelled = true; };
+  }, [snapshotId, api]);
 
   const summary = useMemo(() => summarizeConfirmItems(
     items.map((it) => ({ ...it, adopt: states[it.itemId]?.adopted ?? it.defaultAdopt })),
@@ -231,6 +248,10 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
           })}
         </div>
       </div>
+
+      {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+      {consultLoading && <Spinner label={api.t('consult.loading')} />}
+      {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
 
       {error !== null && <Banner kind="error">{error}</Banner>}
 

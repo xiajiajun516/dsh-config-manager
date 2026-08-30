@@ -32,6 +32,7 @@ import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.t
 import type { ProfileMeta, ProfileSwitchResult, SwitchPreview } from '../profiles/profile-manager.ts';
 
 import type { RunState } from '../core/run-registry.ts';
+import type { ConsultReport } from '../core/migration-consult.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
 import type { BackupScheduleStatus, BackupRunResult, BackupScheduleDraft } from '../ui/backup-schedule.ts';
 import type { BackupFileMeta } from '../sync/backup-files.ts';
@@ -162,6 +163,7 @@ export const CONFIG_MANAGER_API = {
   backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
   backupFiles: '/api/dsh-config-manager/backup-files',
   backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
+  consult: '/api/dsh-config-manager/consult',
   profiles: '/api/dsh-config-manager/profiles',
   profilesSave: '/api/dsh-config-manager/profiles/save',
   profilesDelete: '/api/dsh-config-manager/profiles/delete',
@@ -653,6 +655,17 @@ export class ConfigManagerApi {
       body: JSON.stringify({ name }),
     });
     return readJson<{ ok: boolean; removed: boolean }>(response, this.t);
+  }
+
+  // ------------------------------------------------- Phase 7 迁移前咨询
+  /** 迁移前咨询（只读健康评分 + 建议）：对 4 种可迁移源生成统一咨询报告。 */
+  async consult(input: { type: 'export-zip' | 'local-snapshot' | 'remote-snapshot' | 'profile'; id: string; snapshotId?: string }): Promise<ConsultReport> {
+    const response = await fetch(CONFIG_MANAGER_API.consult, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return readJson<ConsultReport>(response, this.t);
   }
 
   // ------------------------------------------------- P1-⑦/P2-⑬ 备份内容查看 / 差异对比

@@ -17,6 +17,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../../core/restore.ts'
+import type { ConsultReport } from '../../core/migration-consult.ts'
+import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
@@ -147,6 +149,9 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   /** 恢复计划预览弹窗开关（瞬态 UI，不持久化：弹窗即会话，关闭即放弃展示；
    *  plan 仍镜像 runStore，切 tab/刷新恢复后可再次打开） */
   const [planOpen, setPlanOpen] = useState(false)
+  /** Phase 7 迁移前咨询：恢复计划弹窗内的咨询报告（本地 state，非敏感） */
+  const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
+  const [consultLoading, setConsultLoading] = useState(false)
   /** 备份文件列表刷新信号：BackupScheduleCard「立即备份」完成后递增触发重载 */
   const [backupFilesTick, setBackupFilesTick] = useState(0)
   /** 二级 tab（备份文件 / 快照恢复）：初始从 store 恢复，切换镜像 runStore（切一级 tab/刷新不丢） */
@@ -192,6 +197,19 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
   }
 
   useEffect(load, [api])
+
+  /** Phase 7 迁移前咨询：恢复计划弹窗打开时对选中快照生成咨询报告（只读，零写入）。
+   *  失败静默（咨询是建议性，不阻断恢复）。 */
+  useEffect(() => {
+    if (!planOpen || state.selectedId === null) return
+    let cancelled = false
+    setConsultLoading(true)
+    api.consult({ type: 'local-snapshot', id: state.selectedId, snapshotId: state.selectedId })
+      .then((report) => { if (!cancelled) setConsultReport(report) })
+      .catch(() => { if (!cancelled) setConsultReport(null) })
+      .finally(() => { if (!cancelled) setConsultLoading(false) })
+    return () => { cancelled = true }
+  }, [planOpen, state.selectedId, api])
 
   const select = (id: string): void => {
     // 每次选择递增代数：用户快速切换快照时，旧 dry-run 请求晚到直接丢弃
@@ -465,6 +483,9 @@ export function SnapshotsPanel({ api, t }: SnapshotsPanelProps) {
                       </ul>
                     </div>
                   )}
+                  {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+                  {consultLoading && <Spinner label={api.t('consult.loading')} />}
+                  {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
                   {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
                   <div className={css.actionRow}>
                     <Button disabled={state.running} onClick={() => { setPlanOpen(false) }}>

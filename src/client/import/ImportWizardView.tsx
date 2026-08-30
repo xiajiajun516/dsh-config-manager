@@ -33,6 +33,7 @@ import { nextFlowPhase, type FlowPhase } from '../../ui/flow.ts'
 import { importNextSteps } from '../../ui/next-steps.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
 import type { ImportPlan, ImportResult } from '../../core/types.ts'
+import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { ConfigManagerApi, UploadResponse } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore } from '../run-store.ts'
@@ -42,6 +43,7 @@ import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
 import { ConflictList } from './ConflictList.tsx'
 import { PathMappingForm } from './PathMappingForm.tsx'
+import { ConsultCard } from '../consult/ConsultCard.tsx'
 import { redact } from '../../security/redaction.ts'
 import {
   applyPickedFile, browseLabelKey, cancelSelection, consumePickedFile, fileSelectModel, shouldRenderSelect,
@@ -272,6 +274,9 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
   const [archiveUnlockError, setArchiveUnlockError] = useState<string | null>(null)
   /** 解锁阶段密码输入（本地 state，不上报 store 的敏感持久化键） */
   const [archivePassword, setArchivePassword] = useState('')
+  /** Phase 7 迁移前咨询：预览步的咨询报告（本地 state，非敏感） */
+  const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
+  const [consultLoading, setConsultLoading] = useState(false)
 
   const setPhase = (next: FlowPhase): void => {
     runStore.patch({ import: { phase: next } })
@@ -409,6 +414,19 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         }
       })
   }, [api])
+
+  /** Phase 7 迁移前咨询：预览步对当前 ZIP 生成咨询报告（只读，零写入）。
+   *  zipPath 变化 / 进入 preview 步时重新获取；失败静默（咨询是建议性，不阻断导入）。 */
+  useEffect(() => {
+    if (step !== 'preview' || imp.zipPath === null) return
+    let cancelled = false
+    setConsultLoading(true)
+    api.consult({ type: 'export-zip', id: imp.zipPath })
+      .then((report) => { if (!cancelled) setConsultReport(report) })
+      .catch(() => { if (!cancelled) setConsultReport(null) })
+      .finally(() => { if (!cancelled) setConsultLoading(false) })
+    return () => { cancelled = true }
+  }, [step, imp.zipPath, api])
 
   /** Compatibility → Preview */
   const goPreview = async (): Promise<void> => {
@@ -670,6 +688,9 @@ export function ImportWizardView({ api, t }: ImportWizardViewProps) {
         </div>
         {isEncrypted && <Banner kind="warn">{t('import.decrypt.previewHint')}</Banner>}
         {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
+        {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+        {consultLoading && <Spinner label={api.t('consult.loading')} />}
+        {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
         {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 配置档案面板（第 7 个 tab「配置文件」；m-profiles）。
  *
  * Profile = 用户在 DSH 中的一组配置快照（Work / Personal / …），由 src/profiles/
@@ -15,6 +15,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { ProfileMeta, ProfileSwitchResult, SwitchPreview } from '../../profiles/profile-manager.ts'
+import type { ConsultReport } from '../../core/migration-consult.ts'
+import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore, toProfilesStoreSlice, type ProfilesStoreSlice } from '../run-store.ts'
@@ -93,6 +95,9 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
   const [state, setState] = useState<PanelState>(initFromStore)
   const stateRef = useRef<PanelState>(state)
   const mountedRef = useRef(true)
+  /** Phase 7 迁移前咨询：切换预览弹窗内的咨询报告（本地 state，非敏感） */
+  const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
+  const [consultLoading, setConsultLoading] = useState(false)
 
   const commit = (next: PanelState): void => {
     stateRef.current = next
@@ -141,6 +146,19 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
   }
 
   useEffect(load, [api])
+
+  /** Phase 7 迁移前咨询：切换预览弹窗打开时对目标 profile 生成咨询报告（只读，零写入）。
+   *  失败静默（咨询是建议性，不阻断切换）。 */
+  useEffect(() => {
+    if (state.previewName === null) return
+    let cancelled = false
+    setConsultLoading(true)
+    api.consult({ type: 'profile', id: state.previewName })
+      .then((report) => { if (!cancelled) setConsultReport(report) })
+      .catch(() => { if (!cancelled) setConsultReport(null) })
+      .finally(() => { if (!cancelled) setConsultLoading(false) })
+    return () => { cancelled = true }
+  }, [state.previewName, api])
 
   /** 保存当前配置为新 Profile（输入名校验；成功后刷新列表并清空输入） */
   const doSave = (): void => {
@@ -390,6 +408,9 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
                 {state.preview !== null && (
                   <SwitchPreviewCard preview={state.preview} t={t} />
                 )}
+                {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
+                {consultLoading && <Spinner label={api.t('consult.loading')} />}
+                {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
                 {state.switchResult !== null && (
                   <ProfileSwitchResultCard result={state.switchResult} t={t} />
                 )}

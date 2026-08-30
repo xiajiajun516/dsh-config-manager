@@ -67,6 +67,8 @@ import { createRecoveryOrchestrator, type RecoveryExecutorFns } from './core/rec
 import { redactJournalText, isValidOperationId, isTerminalState, transitionJournalState, JournalStore, type OperationJournal } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
+import { computeConsultReport, type ConsultSourceRef, type ConsultSourceData, type MigratabilityResult } from './core/migration-consult.ts'
+import { readExportZipSource, buildLocalSnapshotSource, buildProfileSource } from './core/consult-source.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
 import {
@@ -247,6 +249,8 @@ const API = {
   // m-backup-files：导出产物管理（列出 exports/*.zip + 删除；下载复用 /download）
   backupFiles: '/api/dsh-config-manager/backup-files',
   backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
+  // Phase 7：迁移前咨询（只读健康评分 + 建议；POST，loopback fence）
+  consult: '/api/dsh-config-manager/consult',
   // m-sync-ui：远程同步（Git 私有仓库通道）
   syncStatus: '/api/dsh-config-manager/sync/status',
   syncPush: '/api/dsh-config-manager/sync/push',
@@ -2921,6 +2925,138 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
       }),
+    },
+    // ------------------------------------------------------ consult
+    // Phase 7：迁移前咨询（只读健康评分 + 建议）。POST，loopback fence。
+    // 对 4 种可迁移源（export-zip / local-snapshot / remote-snapshot / profile）生成
+    // 统一咨询报告。**只读**：不写配置/快照/journal；临时 ZIP 用 try/finally 立即清理。
+    {
+      kind: 'exact',
+      path: API.consult,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        try {
+          const body = await readJsonBody(req)
+          const type = body?.['type']
+          const id = body?.['id']
+          const snapshotId = body?.['snapshotId']
+          if (typeof type !== 'string' || typeof id !== 'string' || id === '') {
+            writeJson(res, 400, { error: 'type and id are required' })
+            return
+          }
+          if (!['export-zip', 'local-snapshot', 'remote-snapshot', 'profile'].includes(type)) {
+            writeJson(res, 400, { error: `unknown consult type: ${type}` })
+            return
+          }
+          const ref: ConsultSourceRef = {
+            type: type as ConsultSourceRef['type'],
+            id,
+            snapshotId: typeof snapshotId === 'string' ? snapshotId : undefined,
+          }
+          const target = { targetDsh: host.dshVersion, targetPlatform: host.platform }
+          const computeMigratability = async (zipPath: string): Promise<MigratabilityResult> => {
+            try {
+              const importer = makeImporter()
+              const analysis = await importer.analyzeImport(zipPath)
+              const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] })
+              return {
+                ok: analysis.valid,
+                itemCount: plan.items.length,
+                fatalConflicts: plan.items.filter((i) => i.kind === 'Conflict').length,
+                warnings: plan.items.filter((i) => i.severity === 'warning').length,
+                sections: analysis.sectionsInZip,
+                errors: analysis.errors,
+              }
+            } catch (err) {
+              return { ok: false, itemCount: 0, fatalConflicts: 0, warnings: 0, sections: [], errors: [err instanceof Error ? err.message : String(err)] }
+            }
+          }
+
+          let data: ConsultSourceData
+          if (type === 'export-zip') {
+            data = await readExportZipSource(ref, id, { computeMigratability })
+          } else if (type === 'remote-snapshot') {
+            // 用持久化 sync 配置构建引擎，下载快照 → 临时 ZIP → 读取（try/finally 清理）
+            const syncCfg = await prepareSync({})
+            const engine = makeSyncEngine(syncCfg)
+            const preview = await engine.preview({ snapshotId: ref.snapshotId ?? id })
+            if (!preview.ok || preview.zipPath === '') {
+              writeJson(res, 400, { error: preview.message ?? '远端快照不可用' })
+              return
+            }
+            try {
+              data = await readExportZipSource(ref, preview.zipPath, { computeMigratability })
+            } finally {
+              await fs.rm(dirname(preview.zipPath), { recursive: true, force: true }).catch(() => undefined)
+            }
+          } else if (type === 'local-snapshot') {
+            if (!isValidSnapshotId(id)) {
+              writeJson(res, 400, { error: 'invalid snapshot id' })
+              return
+            }
+            const verify = await verifySnapshot(snapshotsDir, id)
+            const snapshotDir = join(snapshotsDir, id)
+            // 从快照条目推导将恢复的分区（entries[].adapter）
+            const snapshot = await new FileSnapshotStore({ dir: snapshotsDir }).load(id).catch(() => null)
+            const snapshotSections = new Map<SectionId, unknown>()
+            for (const e of snapshot?.entries ?? []) {
+              if (e.adapter !== undefined) snapshotSections.set(e.adapter, {})
+            }
+            let restorePlan = { itemCount: 0, conflicts: 0, warnings: 0, sections: [] as SectionId[], errors: [] as string[] }
+            try {
+              const plan = await planRestore({
+                snapshotDir,
+                homeDir: host.homeDir,
+                profile: host.profile ?? 'web',
+                snapshotsRoot: snapshotsDir,
+              })
+              restorePlan = {
+                itemCount: plan.actions.length,
+                conflicts: plan.actions.filter((a) => a.kind === 'skip').length,
+                warnings: plan.actions.filter((a) => a.kind === 'skip').length,
+                sections: [...snapshotSections.keys()],
+                errors: [],
+              }
+            } catch (err) {
+              restorePlan.errors = [err instanceof Error ? err.message : String(err)]
+            }
+            data = buildLocalSnapshotSource(ref, {
+              sections: snapshotSections,
+              verify,
+              restorePlan,
+              sourceDsh: host.dshVersion,
+              sourcePlatform: host.platform,
+            })
+          } else {
+            // profile
+            const sections = await profiles.readSections(id)
+            let switchPreview = { itemCount: 0, conflicts: 0, warnings: 0, sections: [] as SectionId[], errors: [] as string[] }
+            try {
+              const preview = await profiles.analyzeSwitch(id)
+              switchPreview = {
+                itemCount: preview.items.length,
+                conflicts: preview.items.filter((i) => i.kind === 'Conflict').length,
+                warnings: preview.items.filter((i) => i.severity === 'warning').length,
+                sections: preview.sectionsInProfile,
+                errors: [],
+              }
+            } catch (err) {
+              switchPreview.errors = [err instanceof Error ? err.message : String(err)]
+            }
+            data = buildProfileSource(ref, {
+              sections,
+              switchPreview,
+              sourceDsh: host.dshVersion,
+              sourcePlatform: host.platform,
+            })
+          }
+
+          const report = computeConsultReport(data, target, { allowBlock: true })
+          writeJson(res, 200, report)
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
     },
     // ------------------------------------------------------ sync/status
     // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。

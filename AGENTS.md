@@ -52,6 +52,7 @@ docs/                 设计文档（docs/design/，现有 UI 与市场发布设
 | 迁移历史（Phase 6） | `src/client/history/HistoryPanel.tsx`（+ `history-api.ts`、`history-locales.ts`（ns `config-manager-history`）、`src/ui/history-model.ts` 纯渲染模型） |
 | 远程同步 | `src/client/sync/SyncSettingsView.tsx`（+ `SyncConfirmView.tsx`、`SyncHistoryView.tsx`、`sync-view.ts` 纯函数模型、`history-model.ts`） |
 | 配置市场 | `src/client/market/MarketPanel.tsx`（+ `market-view.ts` 纯函数模型）；「我的配置」子视图 `src/client/market/MyConfigsView.tsx`（+ `my-configs-view.ts` 纯渲染模型、`my-configs-api.ts`，登录复用 sync device flow） |
+| 迁移前咨询（Phase 7） | `src/client/consult/ConsultCard.tsx`（+ `src/ui/migration-consult-view.ts` 纯渲染模型、`src/core/migration-consult.ts` 纯函数健康评分、`src/core/consult-source.ts` 源读取）；接线到导入向导预览 / 快照恢复计划弹窗 / 配置档案切换预览 / 一键同步差异确认 |
 | **共享 UI 原语** | **`src/client/common/ui.tsx`（Button/Badge/Banner/Card/Spinner/Field/SectionTitle/Empty/Checkbox）+ `common/ErrorBanner.tsx`、`common/ProgressBar.tsx`、`common/ReportView.tsx`** |
 | 状态中枢 | `src/client/run-store.ts`（模块级单例 + sessionStorage，敏感字段白名单剔除） |
 | 数据访问 | `src/client/api.ts`、`sync/sync-api.ts`、`market/market-api.ts`（类型化 fetch 封装，实现 `src/ui/types.ts` 的 port 契约） |

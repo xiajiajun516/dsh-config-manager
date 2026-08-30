@@ -1289,6 +1289,33 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* ---------------- 迁移前咨询（Phase 7） ---------------- */
+
+/* 咨询维度明细容器：限高内滚（多维度堆叠不把整页撑长） */
+.consultScroll {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 10px 6px;
+  background: var(--dsw-alias-bg-base);
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+}
+
+/* 单个咨询维度块：上下留白 + 分隔 */
+.consultDimension {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+.consultDimension:last-child {
+  border-bottom: none;
+}
+
+.consultDimension .reportList {
+  margin-top: 4px;
+}
+
 /* ---------------- 关于（About）面板 ---------------- */
 
 /* 链接行：外链排布，flex-wrap + gap 10px（与 .actionRow 同距，见 DESIGN.md §4.2 间距表） */

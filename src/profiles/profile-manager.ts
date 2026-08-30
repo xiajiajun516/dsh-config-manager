@@ -300,6 +300,12 @@ export class ProfileManager {
     }
   }
 
+  /** 只读读取 profile 的分区数据（Phase 7 迁移前咨询用；零写入） */
+  async readSections(name: string): Promise<Map<SectionId, unknown>> {
+    const stored = await this.readStored(name);
+    return decodeSections(stored.sections);
+  }
+
   /* ---------------- Switch（Preview + Snapshot + Rollback 安全流程） ---------------- */
 
   /** Preview（纯读，零写入）：分析切换到该 Profile 会产生的计划项 */
