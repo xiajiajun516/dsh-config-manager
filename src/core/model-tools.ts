@@ -110,29 +110,38 @@ export function createModelTools(deps: ModelToolsDeps) {
       const encryption = input.password !== undefined && input.password !== ''
         ? createEncryptionProvider(input.password)
         : null
-      const exporter = new Exporter({
-        ctx: deps.host,
-        adapters: deps.adapters,
-        encryption,
-        exporterVersion: deps.exporterVersion,
-      })
+      // P2-C（Phase 8）：config_backup 接入 GLOBAL mutation lock，与导入/恢复/同步/定时备份等
+      // destructive 操作互斥（写 exports 产物期间确保 live config 不被并发改动，产物一致）。
+      // 无锁环境（测试/mock）→ 不锁定直接执行；锁被占用 → 抛 EnvironmentLockUnavailableError。
       const outPath = join(deps.exportsDir, `dsh-config-${dateStamp()}-${randomBytes(3).toString('hex')}.zip`)
-      const { report } = await exporter.export({
-        includeSecrets: false,
-        ...(only === undefined ? {} : { only }),
-        outPath,
-      })
-      return {
-        ok: true,
-        zip: report.file.name,
-        sizeBytes: report.file.sizeBytes,
-        sections: report.included.map((s) => s.section),
-        excluded: report.excluded,
-        encrypted: report.security.encrypted,
-        containsSecrets: report.security.containsSecrets,
-        redactedHits: report.security.redactedHits,
-        warnings: report.warnings,
-      }
+      return runWithMutationLock(
+        deps.host.mutationLock,
+        { op: 'model-backup', target: 'exports', isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false },
+        async () => {
+          const exporter = new Exporter({
+            ctx: deps.host,
+            adapters: deps.adapters,
+            encryption,
+            exporterVersion: deps.exporterVersion,
+          })
+          const { report } = await exporter.export({
+            includeSecrets: false,
+            ...(only === undefined ? {} : { only }),
+            outPath,
+          })
+          return {
+            ok: true,
+            zip: report.file.name,
+            sizeBytes: report.file.sizeBytes,
+            sections: report.included.map((s) => s.section),
+            excluded: report.excluded,
+            encrypted: report.security.encrypted,
+            containsSecrets: report.security.containsSecrets,
+            redactedHits: report.security.redactedHits,
+            warnings: report.warnings,
+          }
+        },
+      )
     },
 
     /** 列出本地回滚快照（非敏感 meta，按 createdAt 倒序）。 */

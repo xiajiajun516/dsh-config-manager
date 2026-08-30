@@ -2622,7 +2622,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     {
       kind: 'exact',
       path: API.profilesSave,
-      handler: async (req, res) => {
+      // P2-C（Phase 8）：profiles/save 接入 GLOBAL mutation lock（与 destructive 操作互斥；
+      // 保存档案期间确保 live config 不被并发改动，档案快照一致）。
+      handler: withMutationGate('profile-save', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2650,7 +2652,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
+      }),
     },
     {
       kind: 'exact',

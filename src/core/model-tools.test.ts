@@ -24,6 +24,8 @@ import { writeSyncConfig } from '../sync/sync-config.ts'
 import type { SyncConfig } from '../sync/sync-config.ts'
 import type { SyncTransport, SyncSnapshot, SyncSnapshotMeta } from '../sync/transport.ts'
 import { computeSnapshotMeta } from '../sync/transport.ts'
+import { EnvironmentLockUnavailableError } from '../utils/env-lock.ts'
+import type { MutationLockPort } from '../utils/env-lock.ts'
 
 /** 内存 SyncTransport（spy：记录方法调用，供断言「pull 不写远端」）。 */
 class MemSyncTransport implements SyncTransport {
@@ -120,6 +122,31 @@ test('config_backup：导出真实 ZIP 到 exports 目录，返回非敏感摘�
     const serialized = JSON.stringify(out)
     assert.ok(!serialized.includes('dark'), '摘要不泄漏配置值')
     assert.ok(!serialized.includes('DEEPSEEK'), '摘要不泄漏凭据/环境变量值')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('config_backup：GLOBAL mutation lock 被其它任务占用时拒绝（EnvironmentLockUnavailableError）', async () => {
+  const { deps, tmp } = await makeDeps()
+  try {
+    // 模拟另一项 destructive 任务已持有 GLOBAL 锁：acquire 恒返回 LOCKED（token=null）
+    const lockedPort: MutationLockPort = {
+      async acquire() {
+        return { state: 'LOCKED', token: null, detail: '另一项任务持有锁' }
+      },
+      validate(token: unknown): token is never { return false },
+      async release() {},
+    }
+    deps.host.mutationLock = lockedPort
+    const tools = createModelTools(deps)
+    await assert.rejects(
+      () => tools.backup({}),
+      (err: unknown) => {
+        assert.ok(err instanceof EnvironmentLockUnavailableError, `期望锁拒绝，得到 ${err instanceof Error ? err.message : String(err)}`)
+        return true
+      },
+    )
   } finally {
     await fs.rm(tmp, { recursive: true, force: true })
   }
