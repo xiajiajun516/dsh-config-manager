@@ -140,6 +140,27 @@ export interface StarPromptSaveResponse {
   clicked: boolean;
 }
 
+/** 更新内容弹窗状态（GET /release-notes-prompt） */
+export interface ReleaseNotesPromptStatus {
+  ok: boolean;
+  lastSeenVersion?: string;
+  dismissed: boolean;
+  currentVersion?: string;
+}
+
+/** 更新内容弹窗状态局部更新补丁（POST /release-notes-prompt） */
+export interface ReleaseNotesPromptPatch {
+  lastSeenVersion?: string;
+  dismissed?: boolean;
+}
+
+/** POST /release-notes-prompt 响应 */
+export interface ReleaseNotesPromptSaveResponse {
+  ok: boolean;
+  lastSeenVersion?: string;
+  dismissed: boolean;
+}
+
 /** 路由族常量（集中管理，与 Host 半的路由前缀保持一致） */
 export const CONFIG_MANAGER_API = {
   base: '/api/dsh-config-manager',
@@ -172,6 +193,7 @@ export const CONFIG_MANAGER_API = {
   profilesExecuteSwitch: '/api/dsh-config-manager/profiles/execute-switch',
   profilesImport: '/api/dsh-config-manager/profiles/import',
   starPrompt: '/api/dsh-config-manager/star-prompt',
+  releaseNotesPrompt: '/api/dsh-config-manager/release-notes-prompt',
 } as const;
 
 /** 导出请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐，防止宿主卡死时 UI 无限等待 */
@@ -308,6 +330,26 @@ export class ConfigManagerApi {
       body: JSON.stringify(body),
     });
     return readJson<StarPromptSaveResponse>(response, this.t);
+  }
+
+  // ------------------------------------------------------------- release-notes-prompt
+  /** 更新内容弹窗状态（进入页面时判定是否展示 / 是否已永不提示）。 */
+  async releaseNotesPromptStatus(): Promise<ReleaseNotesPromptStatus> {
+    const response = await fetch(CONFIG_MANAGER_API.releaseNotesPrompt);
+    return readJson<ReleaseNotesPromptStatus>(response, this.t);
+  }
+
+  /** 保存更新内容弹窗状态（局部更新：lastSeenVersion / dismissed）。 */
+  async saveReleaseNotesPrompt(patch: ReleaseNotesPromptPatch): Promise<ReleaseNotesPromptSaveResponse> {
+    const body: ReleaseNotesPromptPatch = {};
+    if (patch.lastSeenVersion !== undefined) body.lastSeenVersion = patch.lastSeenVersion;
+    if (patch.dismissed === true) body.dismissed = true;
+    const response = await fetch(CONFIG_MANAGER_API.releaseNotesPrompt, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return readJson<ReleaseNotesPromptSaveResponse>(response, this.t);
   }
 
   // ------------------------------------------------------------- export

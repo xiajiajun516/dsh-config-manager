@@ -1161,7 +1161,7 @@ test('push + webdav 快照级跳过：同 id 同内容二次 push → 不重复 
       '内容无变化 → 不得再次写 index',
     );
     // 远端快照文件仍存在且为首次内容
-    const remote = files.get('https://dav.example.com/dav/config/snapshots/sync-001.json');
+    const remote = files.get('https://dav.example.com/dav/config/dsh-config-manager/sync-001.json');
     assert.ok(remote !== undefined && remote.length > 0, '远端快照文件存在');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });

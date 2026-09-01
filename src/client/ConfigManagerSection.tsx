@@ -29,6 +29,8 @@ import { toRecoveryView } from './recovery/recovery-view.ts'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
 import { Banner, Button } from './common/ui.tsx'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
+import { evaluateReleaseNotesPrompt } from '../ui/release-notes-prompt.ts'
+import { ReleaseNotesDialog } from './about/ReleaseNotesDialog.tsx'
 import css from './config-manager.module.css'
 
 export type ConfigManagerSectionProps =
@@ -105,6 +107,53 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
   /** 遮罩点击 / Esc：只是暂时关闭，不记「不再提示」表态（下次进入再判）。 */
   const handleBackdropClose = (): void => {
     setStarPromptOpen(false)
+  }
+
+  // 版本更新内容弹窗（检测到更新后自动跳出，支持「确认」与「永不提示」）
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false)
+  /** 当前运行的插件版本号（GET /release-notes-prompt 返回） */
+  const releaseNotesCurrentVersion = useRef('')
+  /** 本次挂载只判定一次（防止 StrictMode/重挂载重复弹） */
+  const releaseNotesChecked = useRef(false)
+
+  useEffect(() => {
+    if (releaseNotesChecked.current) return
+    releaseNotesChecked.current = true
+    void (async () => {
+      try {
+        const status = await api.releaseNotesPromptStatus()
+        const currentVer = status.currentVersion ?? ''
+        releaseNotesCurrentVersion.current = currentVer
+        const ev = evaluateReleaseNotesPrompt(
+          { lastSeenVersion: status.lastSeenVersion, dismissed: status.dismissed },
+          currentVer,
+        )
+        if (ev.shouldShow) {
+          setReleaseNotesOpen(true)
+        }
+      } catch {
+        // 服务未就绪 / 网络异常：不弹，静默
+      }
+    })()
+  }, [api])
+
+  /** 确认：关闭弹窗 + 记录当前版本已读（下次更新到新版本时仍会提示）。 */
+  const handleReleaseNotesConfirm = (): void => {
+    setReleaseNotesOpen(false)
+    const ver = releaseNotesCurrentVersion.current
+    void api.saveReleaseNotesPrompt({ lastSeenVersion: ver !== '' ? ver : undefined }).catch(() => {})
+  }
+
+  /** 永不提示：关闭弹窗 + 记录 dismissed（后续版本更新不再自动提示）。 */
+  const handleReleaseNotesNeverShow = (): void => {
+    setReleaseNotesOpen(false)
+    const ver = releaseNotesCurrentVersion.current
+    void api.saveReleaseNotesPrompt({ dismissed: true, lastSeenVersion: ver !== '' ? ver : undefined }).catch(() => {})
+  }
+
+  /** 遮罩 / Esc / 标题栏关闭：按确认关闭，记录当前版本已读（防刷新重复弹同一版本）。 */
+  const handleReleaseNotesClose = (): void => {
+    handleReleaseNotesConfirm()
   }
 
   // m2-resume：挂载时重新订阅进行中的 run（刷新 / 重开面板后服务端继续执行，
@@ -310,6 +359,14 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
         onConfirm={handleStar}
         onCancel={handleDismiss}
         backdropClose={handleBackdropClose}
+      />
+      {/* 版本更新内容弹窗（检测到更新后自动跳出，支持「确认」与「永不提示」） */}
+      <ReleaseNotesDialog
+        open={releaseNotesOpen}
+        onClose={handleReleaseNotesClose}
+        onConfirm={handleReleaseNotesConfirm}
+        onNeverShow={handleReleaseNotesNeverShow}
+        t={t}
       />
     </div>
   )

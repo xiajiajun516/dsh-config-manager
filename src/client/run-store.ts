@@ -985,6 +985,7 @@ export class RunStore {
       snapshots: { ...this.state.snapshots, ...patchObj.snapshots },
       profiles: { ...this.state.profiles, ...patchObj.profiles },
       recovery: { ...this.state.recovery, ...patchObj.recovery },
+      more: { ...this.state.more, ...patchObj.more },
     }
     this.notify()
     this.save()

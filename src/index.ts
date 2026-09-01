@@ -43,9 +43,9 @@ import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:pat
 import { promisify } from 'node:util'
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
 import type { SettingsProvider } from '@deepseek-ai/dsh-settings'
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+import * as dshCredentials from '@deepseek-ai/dsh-credentials'
 import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // Type-only: pull the Cordis Context augmentations (webServer / workspaceRegistry)
@@ -161,7 +161,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.54'
+const PLUGIN_VERSION = '0.1.55'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -278,6 +278,8 @@ const API = {
   syncUiPrefs: '/api/dsh-config-manager/sync/ui-prefs',
   // m-star-prompt：Star 引导弹窗状态（复用 ui-prefs.json；GET 读 + POST 局部更新）
   starPrompt: '/api/dsh-config-manager/star-prompt',
+  // 版本更新内容弹窗状态（复用 ui-prefs.json；GET 读 + POST 局部更新）
+  releaseNotesPrompt: '/api/dsh-config-manager/release-notes-prompt',
   // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
   marketStatus: '/api/dsh-config-manager/market/status',
   marketRefresh: '/api/dsh-config-manager/market/refresh',
@@ -456,6 +458,34 @@ function readService<T>(ctx: Context, serviceName: string): T | undefined {
   return candidate === null || typeof candidate !== 'object' ? undefined : candidate as T
 }
 
+/** Safe settings namespace converter compatible across DSH 0.1.1 and 0.1.2-alpha.x */
+const SETTINGS_NAMESPACE_REGEX = /^[a-z][a-z0-9-]*$/
+function safeSettingsNamespace(namespace: string): any {
+  const fn = (dshSettings as Record<string, unknown>).settingsNamespace
+  if (typeof fn === 'function') {
+    return (fn as (ns: string) => any)(namespace)
+  }
+  if (!SETTINGS_NAMESPACE_REGEX.test(namespace)) {
+    throw new TypeError(`settings namespace "${namespace}" must match ${String(SETTINGS_NAMESPACE_REGEX)}`)
+  }
+  return namespace
+}
+
+/** Safe credential ref converter compatible across DSH 0.1.1 and 0.1.2-alpha.x */
+const CREDENTIAL_REF_REGEX = /^[A-Z_][A-Z0-9_]*$/
+function safeCredentialRef(ref: string): any {
+  const fn = (dshCredentials as Record<string, unknown>).credentialRef
+  if (typeof fn === 'function') {
+    return (fn as (r: string) => any)(ref)
+  }
+  if (!CREDENTIAL_REF_REGEX.test(ref)) {
+    throw new TypeError(`credential ref "${ref}" must match ${String(CREDENTIAL_REF_REGEX)}`)
+  }
+  return ref
+}
+const credentialRef = safeCredentialRef
+
+
 /** Settings facade over the real ctx.settings (describe() is namespace-less). */
 class DshSettingsFacade implements SettingsFacade {
   private readonly ctx: Context
@@ -483,11 +513,11 @@ class DshSettingsFacade implements SettingsFacade {
   }
 
   async replace(namespace: string, value: unknown, expectedRevision?: number): Promise<void> {
-    await this.provider().replace(settingsNamespace(namespace), value as object, expectedRevision)
+    await this.provider().replace(safeSettingsNamespace(namespace), value as object, expectedRevision)
   }
 
   async update(namespace: string, patch: unknown, expectedRevision?: number): Promise<void> {
-    await this.provider().update(settingsNamespace(namespace), patch as object, expectedRevision)
+    await this.provider().update(safeSettingsNamespace(namespace), patch as object, expectedRevision)
   }
 }
 
@@ -500,16 +530,16 @@ class DshCredentialsFacade implements CredentialsFacade {
   }
 
   async describe(ref: string): Promise<{ configured: boolean; source?: string; writable?: boolean }> {
-    const info = await this.ctx.credentials.describe(credentialRef(ref))
+    const info = await this.ctx.credentials.describe(safeCredentialRef(ref))
     return { configured: info.configured, source: info.source, writable: info.writable }
   }
 
   async set(ref: string, value: string): Promise<void> {
-    await this.ctx.credentials.set(credentialRef(ref), value)
+    await this.ctx.credentials.set(safeCredentialRef(ref), value)
   }
 
   async unset(ref: string): Promise<void> {
-    await this.ctx.credentials.unset(credentialRef(ref))
+    await this.ctx.credentials.unset(safeCredentialRef(ref))
   }
 }
 
@@ -3233,6 +3263,55 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             firstSeenAt: next.starPromptFirstSeenAt,
             dismissed: next.starPromptDismissed === true,
             clicked: next.starPromptClicked === true,
+          })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // ------------------------------------------------------ release-notes-prompt
+    // 版本更新内容弹窗状态（复用 ui-prefs.json；随 self 分区进备份）。
+    // GET → 返回当前插件版本 + 上次已读版本 + 是否永不提示；
+    // POST → 局部更新（lastSeenVersion / dismissed 白名单），经 updateUiPrefs 合并写。
+    {
+      kind: 'exact',
+      path: API.releaseNotesPrompt,
+      handler: async (req, res) => {
+        if (req.method === 'GET') {
+          if (!guard(req, res, 'GET')) return
+          try {
+            const prefs = await readUiPrefs(syncDir)
+            writeJson(res, 200, {
+              ok: true,
+              lastSeenVersion: prefs.releaseNotesLastSeenVersion,
+              dismissed: prefs.releaseNotesDismissed === true,
+              currentVersion: PLUGIN_VERSION,
+            })
+          } catch (error) {
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        if (body === undefined) {
+          writeJson(res, 400, { error: 'invalid JSON body' })
+          return
+        }
+        try {
+          const patch: Record<string, unknown> = {}
+          const lastSeenVersion = body['lastSeenVersion']
+          if (typeof lastSeenVersion === 'string' && lastSeenVersion.trim().length > 0) {
+            patch['releaseNotesLastSeenVersion'] = lastSeenVersion.trim()
+          }
+          if (body['dismissed'] === true) {
+            patch['releaseNotesDismissed'] = true
+          }
+          const next = await updateUiPrefs(syncDir, patch)
+          writeJson(res, 200, {
+            ok: true,
+            lastSeenVersion: next.releaseNotesLastSeenVersion,
+            dismissed: next.releaseNotesDismissed === true,
           })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })

@@ -44,6 +44,10 @@ export interface UiPrefs {
   starPromptDismissed?: boolean;
   /** Star 引导弹窗：用户点过「去点 Star」（方案 A：引导完成，不再弹） */
   starPromptClicked?: boolean;
+  /** 更新内容弹窗：上次已记录/展示过的插件版本号（如 '0.1.54'） */
+  releaseNotesLastSeenVersion?: string;
+  /** 更新内容弹窗：用户点过「永不提示」（永久不再自动弹出） */
+  releaseNotesDismissed?: boolean;
 }
 
 /** 缺省配置（首次无文件 / 损坏 / 不支持 schema 时回退） */
@@ -89,6 +93,12 @@ export async function readUiPrefs(dir: string): Promise<UiPrefs> {
   if (obj['starPromptClicked'] === true) {
     prefs.starPromptClicked = true;
   }
+  if (typeof obj['releaseNotesLastSeenVersion'] === 'string' && obj['releaseNotesLastSeenVersion'].trim().length > 0) {
+    prefs.releaseNotesLastSeenVersion = obj['releaseNotesLastSeenVersion'].trim();
+  }
+  if (obj['releaseNotesDismissed'] === true) {
+    prefs.releaseNotesDismissed = true;
+  }
   return prefs;
 }
 
@@ -101,6 +111,8 @@ export async function writeUiPrefs(dir: string, prefs: UiPrefs): Promise<void> {
     ...(prefs.starPromptFirstSeenAt !== undefined ? { starPromptFirstSeenAt: prefs.starPromptFirstSeenAt } : {}),
     ...(prefs.starPromptDismissed === true ? { starPromptDismissed: true } : {}),
     ...(prefs.starPromptClicked === true ? { starPromptClicked: true } : {}),
+    ...(prefs.releaseNotesLastSeenVersion !== undefined ? { releaseNotesLastSeenVersion: prefs.releaseNotesLastSeenVersion } : {}),
+    ...(prefs.releaseNotesDismissed === true ? { releaseNotesDismissed: true } : {}),
   };
   const target = path.join(dir, UI_PREFS_FILE);
   const data = stringifyJsonSafe(payload, { space: 2 });

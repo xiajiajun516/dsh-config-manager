@@ -2,7 +2,7 @@
  * m-webdav-channel：WebDAV 同步通道测试（TDD：先红后绿）。
  *
  * 验证点（验收判据 m1-red-green + m1-interface）：
- * - 远端布局 <base>/snapshots/<id>.json + <base>/snapshots/index.json
+ * - 远端布局 <base>/dsh-config-manager/<id>.json + <base>/dsh-config-manager/index.json
  * - list：GET index.json，缺失视为空，按 createdAt 升序
  * - upload：幂等 MKCOL → 快照级跳过（同 id 且 sections hash 全等免上传）→ PUT <id>.json →
  *   合并写回 index.json（meta 最后落盘）；返回 computeSnapshotMeta
@@ -112,7 +112,7 @@ test('list：index.json 缺失（404）→ 空列表', async () => {
   const calls = makeCalls();
   const handler = (m: MockRequest): WebDavResponse => {
     assert.equal(m.method, 'GET');
-    assert.equal(m.url, 'https://dav.example.com/dav/config/snapshots/index.json');
+    assert.equal(m.url, 'https://dav.example.com/dav/config/dsh-config-manager/index.json');
     return res(404, '');
   };
   const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
@@ -166,7 +166,7 @@ test('upload：幂等 MKCOL → PUT <id>.json → 合并写回 index.json，返�
 
   // 请求顺序：MKCOL snapshots → GET index（跳过判定）→ PUT <id>.json → PUT index（meta 最后落盘）
   assert.equal(calls[0]!.method, 'MKCOL', '应先创建 snapshots 集合');
-  assert.equal(calls[0]!.url, 'https://dav.example.com/dav/config/snapshots/');
+  assert.equal(calls[0]!.url, 'https://dav.example.com/dav/config/dsh-config-manager/');
   assert.equal(calls[1]!.method, 'GET', '应先读 index 做快照级跳过判定');
   assert.match(calls[1]!.url, /index\.json$/);
   assert.equal(calls[2]!.method, 'PUT', '再写快照文件');
@@ -328,7 +328,7 @@ test('download：GET <id>.json 解析成 SyncSnapshot（roundtrip 一致）', as
   const snap = sampleSnapshot();
   const handler = (m: MockRequest): WebDavResponse => {
     assert.equal(m.method, 'GET');
-    assert.equal(m.url, 'https://dav.example.com/dav/config/snapshots/snap-001.json');
+    assert.equal(m.url, 'https://dav.example.com/dav/config/dsh-config-manager/snap-001.json');
     return res(200, JSON.stringify(snap));
   };
   const t = new WebDavTransport(makeOptions({ request: mockReq(calls, handler) }));
@@ -409,7 +409,7 @@ test('delete：DELETE <id>.json + 摘除 index 条目并写回', async () => {
   ];
   const handler = (m: MockRequest): WebDavResponse => {
     if (m.method === 'DELETE') {
-      assert.equal(m.url, 'https://dav.example.com/dav/config/snapshots/snap-del.json');
+      assert.equal(m.url, 'https://dav.example.com/dav/config/dsh-config-manager/snap-del.json');
       return res(204, '');
     }
     if (m.method === 'GET') return res(200, JSON.stringify(existing));
@@ -534,3 +534,5 @@ test('快照 id 安全：非法 id（路径穿越/特殊字符）→ upload/down
     await assert.rejects(t.delete(bad), /非法快照 id/);
   }
 });
+
+

@@ -12,7 +12,7 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useEffect } from 'react'
 
-import { Badge, Banner, Button, Card, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
@@ -173,24 +173,24 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
 
   if (items.length === 0) {
     return (
-      <Card>
-        <span className={css.groupLabel}>{t('syncflow.title')}</span>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <Banner kind="ok">{t('syncflow.empty')}</Banner>
         <div className={css.actionRow}>
           <Button disabled={busy} onClick={() => { void runCancel() }}>
-            {t('syncflow.cancel')}
+            {t('common.close')}
           </Button>
         </div>
-      </Card>
+      </div>
     );
   }
 
   return (
-    <Card>
-      <span className={css.groupLabel}>
-        {t('syncflow.title')}
-        {compatibility !== undefined && <Badge kind="info">{compatibility}</Badge>}
-      </span>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {compatibility !== undefined && (
+        <div className={css.statRow}>
+          <Badge kind="info">{compatibility}</Badge>
+        </div>
+      )}
       <Banner kind={needsReview ? 'warn' : 'info'}>
         {needsReview ? t('syncflow.needsReviewBadge') : t('syncflow.diffCount', { count: String(summary.total) })}
       </Banner>
@@ -269,12 +269,26 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
 
       {/* 执行结果 */}
       {(phase === 'done' || phase === 'failed') && applyResult !== null && (
-        <ApplyResultCard result={applyResult} busy={busy} t={t} onRollback={runRollback} />
+        <>
+          <ApplyResultCard result={applyResult} busy={busy} t={t} onRollback={runRollback} />
+          <div className={css.actionRow} style={{ marginTop: '12px' }}>
+            <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
+              {t('common.close')}
+            </Button>
+          </div>
+        </>
       )}
       {(phase === 'done' || phase === 'failed') && applyResult === null && (
-        <Banner kind="ok">{t('syncflow.rollbackDone')}</Banner>
+        <>
+          <Banner kind="ok">{t('syncflow.rollbackDone')}</Banner>
+          <div className={css.actionRow} style={{ marginTop: '12px' }}>
+            <Button variant="primary" disabled={busy} onClick={() => { onCancel() }}>
+              {t('common.close')}
+            </Button>
+          </div>
+        </>
       )}
-    </Card>
+    </div>
   );
 }
 

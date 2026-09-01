@@ -88,4 +88,5 @@ test('about-view: ABOUT_LINKS 各字段与派生规则一致', () => {
   assert.equal(ABOUT_LINKS.repoUrl, ABOUT_META.repoUrl)
   assert.equal(ABOUT_LINKS.docsUrl, `${ABOUT_META.repoUrl}#readme`)
   assert.equal(ABOUT_LINKS.issuesUrl, `${ABOUT_META.repoUrl}/issues`)
+  assert.equal(ABOUT_LINKS.releasesUrl, `${ABOUT_META.repoUrl}/releases`)
 })

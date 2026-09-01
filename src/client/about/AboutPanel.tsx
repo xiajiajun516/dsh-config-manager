@@ -19,6 +19,7 @@ import type { ConfigManagerApi } from '../api.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ABOUT_CLI, ABOUT_LINKS, ABOUT_META, aboutStatusRows } from './about-view.ts'
 import type { AboutStatusRows } from './about-view.ts'
+import { ReleaseNotesDialog } from './ReleaseNotesDialog.tsx'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 
@@ -39,6 +40,7 @@ const initial: AboutUiState = { loading: true, loadError: null, rows: null }
 
 export function AboutPanel({ api, t }: AboutPanelProps) {
   const [state, setState] = useState<AboutUiState>(initial)
+  const [releaseNotesOpen, setReleaseNotesOpen] = useState(false)
   const patch = (p: Partial<AboutUiState>): void => setState((s) => ({ ...s, ...p }))
 
   /** 读取运行时版本信息（pluginVersion / dshVersion / platform+arch → 展示行） */
@@ -62,7 +64,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
     <div className={css.viewBody}>
       <SectionTitle title={t('about.title')} subtitle={t('about.subtitle')} />
 
-      {/* 项目信息卡：插件名 + 官方 Badge；版本 / DSH / 平台（动态，经 status()） */}
+      {/* 项目信息卡：插件名 + 官方 Badge；版本 / DSH / 平台（动态，经 status()） + 查看更新内容 */}
       <Card>
         <span className={css.groupLabel}>{ABOUT_META.name}</span>
         <div className={css.statRow}>
@@ -82,7 +84,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           </div>
         )}
         {state.rows !== null && (
-          <div className={css.statRow}>
+          <div className={css.statRow} style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
             <Badge kind="info">{t('about.version', { version: state.rows.version })}</Badge>
             <Badge kind="info">{t('about.dshVersion', { version: state.rows.dsh })}</Badge>
             <Badge kind="info">{state.rows.platform}</Badge>
@@ -100,6 +102,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           <Button href={ABOUT_LINKS.repoUrl}>{t('about.repo')}</Button>
           <Button href={ABOUT_LINKS.docsUrl}>{t('about.docs')}</Button>
           <Button href={ABOUT_LINKS.issuesUrl}>{t('about.issues')}</Button>
+          <Button onClick={() => setReleaseNotesOpen(true)}>{t('about.releaseNotes')}</Button>
         </div>
         <div className={css.statRow}>
           <span className={css.groupLabel}>{t('about.authorLabel')}</span>
@@ -131,6 +134,23 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           <Button href={ABOUT_CLI.docsUrl}>{t('about.cli.docs')}</Button>
         </div>
       </Card>
+
+      {/* 版本更新内容弹窗（支持向下无限滚动加载） */}
+      <ReleaseNotesDialog
+        open={releaseNotesOpen}
+        onClose={() => setReleaseNotesOpen(false)}
+        onConfirm={() => {
+          setReleaseNotesOpen(false)
+          if (state.rows?.version) {
+            void api.saveReleaseNotesPrompt({ lastSeenVersion: state.rows.version }).catch(() => {})
+          }
+        }}
+        onNeverShow={() => {
+          setReleaseNotesOpen(false)
+          void api.saveReleaseNotesPrompt({ dismissed: true, lastSeenVersion: state.rows?.version }).catch(() => {})
+        }}
+        t={t}
+      />
     </div>
   )
 }

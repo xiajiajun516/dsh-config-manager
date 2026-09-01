@@ -34,6 +34,8 @@ export interface AboutLinks {
   docsUrl: string;
   /** Issues 反馈链接（仓库页 + '/issues'） */
   issuesUrl: string;
+  /** Releases 更新日志链接（仓库页 + '/releases'） */
+  releasesUrl: string;
 }
 
 /**
@@ -65,6 +67,7 @@ export interface AboutStatusRows {
  * - starUrl = repoUrl（去尾斜杠归一化后原样）；
  * - docsUrl = repoUrl + '#readme'；
  * - issuesUrl = repoUrl + '/issues'；
+ * - releasesUrl = repoUrl + '/releases'；
  * - 输入尾斜杠（含多个）会被归一化去除，如 'https://…/repo/' → 'https://…/repo'。
  */
 export function deriveAboutLinks(repoUrl: string): AboutLinks {
@@ -74,6 +77,7 @@ export function deriveAboutLinks(repoUrl: string): AboutLinks {
     repoUrl: base,
     docsUrl: `${base}#readme`,
     issuesUrl: `${base}/issues`,
+    releasesUrl: `${base}/releases`,
   };
 }
 

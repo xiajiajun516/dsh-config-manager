@@ -968,6 +968,12 @@ test('聚合优化: 旧 panel "about"/"history" → 迁移为 more + 对应 more
   const more = new RunStore({ storage })
   assert.equal(more.getSnapshot().panel, 'more')
   assert.equal(more.getSnapshot().more.moreSub, 'history', '新 more 载荷刷新恢复 moreSub')
+
+  // 运行时 patch: 切换 moreSub (about <-> history)
+  more.patch({ more: { moreSub: 'about' } })
+  assert.equal(more.getSnapshot().more.moreSub, 'about', 'patch 切换到 about')
+  more.patch({ more: { moreSub: 'history' } })
+  assert.equal(more.getSnapshot().more.moreSub, 'history', 'patch 切换到 history')
 })
 
 /* -------------------------------------------------- restore（P1-1）权威状态 */

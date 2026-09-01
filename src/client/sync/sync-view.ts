@@ -176,6 +176,8 @@ export interface ChannelSyncState {
   selectedSnapshotId: string
   /** 该通道远端历史快照列表（「选择历史快照」下拉数据源） */
   snapshots: SyncSnapshotLite[]
+  /** 该通道是否正在拉取远端快照列表 */
+  loadingSnapshots?: boolean
   /** 该通道自动同步状态 */
   autosync: AutosyncStatusResponse | null
   /** 该通道自动同步开关（回填自 autosync） */
@@ -196,6 +198,7 @@ export function defaultChannelSyncState(): ChannelSyncState {
     decryptPassword: '',
     selectedSnapshotId: '',
     snapshots: [],
+    loadingSnapshots: false,
     autosync: null,
     autosyncEnabled: false,
     autosyncInterval: '30m',

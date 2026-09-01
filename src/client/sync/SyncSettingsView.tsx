@@ -244,6 +244,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const pendingSave = useRef<SyncPushPayload | null>(null)
   /** 保存请求在途（防重入：保存中又排入新改动 → 完成后补发最新 payload） */
   const savingRef = useRef(false)
+  /** 正在拉取远端快照列表（按通道独立防抖/防并发） */
+  const loadingSnapshotsRef = useRef<Record<SyncChannel, boolean>>({ git: false, webdav: false })
 
   /** 挂载时读取同步状态（配置回填 + 上次同步时间 + 凭据状态 + 两通道 autosync/selection） */
   const loadStatus = async (): Promise<void> => {
@@ -268,19 +270,12 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           ? sel.sections
           : recommendedSyncSections(info.syncSections ?? [])
         return {
-          // 仅首次回填时设置（用户已改过的勾选保留）；模式跟随持久化
-          syncMode: cur.syncMode === 'default' && cur.syncSections.length === 0 ? persistedMode : cur.syncMode,
-          syncSections: cur.syncSections.length === 0 ? persistedSections : cur.syncSections,
-          // 加密/密钥开关跟随持久化（密码不持久化，不在此回填）
-          encrypt: sel?.encrypt === true,
-          includeSecrets: sel?.includeSecrets === true,
-          ...(auto !== undefined
-            ? {
-                autosync: auto,
-                autosyncEnabled: auto.enabled,
-                autosyncInterval: auto.interval,
-              }
-            : {}),
+          syncMode: persistedMode,
+          syncSections: persistedSections,
+          encrypt: sel?.encrypt ?? false,
+          includeSecrets: sel?.includeSecrets ?? false,
+          autosyncEnabled: auto?.enabled ?? false,
+          autosyncInterval: auto?.interval ?? '30m',
         }
       }
       patch({
@@ -289,12 +284,11 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
         channel: remembered ?? savedChannel,
         repoUrl: info.repoUrl ?? '',
         webdavUrl: info.webdav?.url ?? '',
-        // Host 回传 username 值（非敏感可回显），供表单回填；无则留空待填
         webdavUsername: info.webdav?.username ?? '',
         catalog,
         byChannel: {
-          git: { ...state.byChannel.git, ...backfill('git', state.byChannel.git) },
-          webdav: { ...state.byChannel.webdav, ...backfill('webdav', state.byChannel.webdav) },
+          git: { ...stateRef.current.byChannel.git, ...backfill('git', stateRef.current.byChannel.git) },
+          webdav: { ...stateRef.current.byChannel.webdav, ...backfill('webdav', stateRef.current.byChannel.webdav) },
         },
       })
       // 独立拉取 autosync（若 status 未带按通道状态则补一次）
@@ -337,33 +331,38 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
    * 无远端地址时静默跳过（不发无效请求，下拉留空）。
    */
   const loadSnapshots = async (urlOverride?: string, channelOverride?: SyncChannel): Promise<void> => {
-    const ch = channelOverride ?? state.channel
-    if (ch === 'webdav') {
-      const url = urlOverride ?? state.webdavUrl
-      if (url.trim() === '') return
-      try {
-        // 带 username（非空时）：挂载早期 state 未回填 → undefined，Host 端回退持久化配置补 username
+    const ch = channelOverride ?? stateRef.current.channel
+    if (loadingSnapshotsRef.current[ch]) return
+    loadingSnapshotsRef.current[ch] = true
+    patchChannelState(ch, { loadingSnapshots: true })
+    try {
+      const s = stateRef.current
+      if (ch === 'webdav') {
+        const url = urlOverride ?? s.webdavUrl
+        if (url.trim() === '') return
+        // 带 username/password（非空时）：挂载早期 state 未回填 → undefined，Host 端回退持久化配置补 username
         const res = await api.snapshotsList({
           transport: 'webdav',
           url: url.trim(),
-          username: state.webdavUsername.trim() !== '' ? state.webdavUsername.trim() : undefined,
+          username: s.webdavUsername.trim() !== '' ? s.webdavUsername.trim() : undefined,
+          password: s.webdavPassword !== '' ? s.webdavPassword : undefined,
         })
         patchChannelState('webdav', { snapshots: res.snapshots })
-      } catch {
-        // 拉取失败不阻断主流程（下拉留空，用户可重试）
+      } else {
+        const repo = urlOverride ?? s.repoUrl
+        if (repo.trim() === '') return
+        const res = await api.snapshotsList({
+          transport: 'git',
+          repoUrl: repo.trim(),
+          token: s.token.trim() !== '' ? s.token.trim() : undefined,
+        })
+        patchChannelState('git', { snapshots: res.snapshots })
       }
-      return
-    }
-    const repo = urlOverride ?? state.repoUrl
-    if (repo.trim() === '') return
-    try {
-      const res = await api.snapshotsList({
-        transport: 'git',
-        repoUrl: repo.trim(),
-      })
-      patchChannelState('git', { snapshots: res.snapshots })
     } catch {
       // 拉取失败不阻断主流程（下拉留空，用户可重试）
+    } finally {
+      loadingSnapshotsRef.current[ch] = false
+      patchChannelState(ch, { loadingSnapshots: false })
     }
   }
 
@@ -654,7 +653,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           ? { token: '', webdavPassword: '' }
           : {}),
       })
-      if (report.ok) patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
+      if (report.ok) {
+        patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
+        void loadSnapshots()
+      }
     } catch (err) {
       patch({ busy: null, error: err instanceof Error ? err.message : String(err) })
     }
@@ -1255,14 +1257,17 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </Button>
           </div>
 
-          {/* 选择历史快照下拉（当前通道远端快照） */}
-          <div className={css.statRow}>
-            <label className={css.field}>
+          {/* 选择历史快照下拉（当前通道远端快照，支持点击/展开即刷新与主动刷新按钮） */}
+          <div className={css.statRow} style={{ alignItems: 'flex-end', gap: '8px' }}>
+            <label className={css.field} style={{ flex: 1, minWidth: '200px' }}>
               <span className={css.fieldLabel}>{t('syncflow.selectSnapshot')}</span>
               <select
                 className={css.select}
                 value={chState.selectedSnapshotId}
                 disabled={state.busy !== null}
+                onFocus={() => { void loadSnapshots() }}
+                onMouseDown={() => { void loadSnapshots() }}
+                onClick={() => { void loadSnapshots() }}
                 onChange={(e: ChangeEvent<HTMLSelectElement>) => {
                   const id = e.target.value
                   patchChannel({ selectedSnapshotId: id })
@@ -1276,86 +1281,24 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                   </option>
                 ))}
               </select>
-              {chState.snapshots.length === 0 && <span className={css.hint}>{t('syncflow.noSnapshots')}</span>}
+              {chState.snapshots.length === 0 && !chState.loadingSnapshots && (
+                <span className={css.hint}>{t('syncflow.noSnapshots')}</span>
+              )}
             </label>
+            <Button
+              disabled={state.busy !== null || chState.loadingSnapshots || !remoteReady}
+              onClick={() => { void loadSnapshots() }}
+              title={t('syncflow.refreshSnapshots')}
+            >
+              {chState.loadingSnapshots ? (
+                <Spinner label={t('syncflow.refreshingSnapshots')} />
+              ) : (
+                `🔄 ${t('syncflow.refreshSnapshots')}`
+              )}
+            </Button>
           </div>
 
           {state.error !== null && <ErrorBanner error={state.error} />}
-
-          {/* 一键同步差异确认（拉取 → 逐项确认 → 导入） */}
-          {state.confirmSession !== null && (
-            <SyncConfirmView
-              api={api}
-              syncSessionId={state.confirmSession.syncSessionId}
-              snapshotId={state.confirmSession.snapshotId}
-              items={state.confirmSession.items}
-              needsReview={state.confirmSession.needsReview}
-              compatibility={state.confirmSession.compatibility}
-              t={t}
-              decisions={state.confirmDecisions}
-              onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
-              onCancel={cancelConfirm}
-              onRollbackDone={onRollbackApplied}
-            />
-          )}
-
-          {/* 推送结果 */}
-          {pushView !== null && (
-            <Card>
-              <span className={css.groupLabel}>{t('push.title')}</span>
-              <Banner kind={pushView.kind === 'ok' ? 'ok' : 'error'}>{pushView.headline}</Banner>
-              {pushView.sections.length > 0 && (
-                <div>
-                  <span className={css.fieldLabel}>{t('sections.title')}</span>
-                  <div className={css.statRow}>
-                    {pushView.sections.map((s) => <Badge key={s} kind="info">{s}</Badge>)}
-                  </div>
-                </div>
-              )}
-              {pushView.warnings.length > 0 && (
-                <div>
-                  <span className={css.fieldLabel}>{t('warnings.title')}</span>
-                  <ul className={css.warnList}>
-                    {pushView.warnings.map((w, i) => <li key={i}>{w}</li>)}
-                  </ul>
-                </div>
-              )}
-            </Card>
-          )}
-
-          {/* 拉取差异预览 */}
-          {pullView !== null && (
-            <Card>
-              <span className={css.groupLabel}>{t('pull.title')}</span>
-              <Banner kind={pullView.kind === 'ok' ? 'info' : pullView.kind === 'empty' ? 'ok' : 'error'}>{pullView.headline}</Banner>
-              {pullView.summary !== null && (
-                <>
-                  <div className={css.statRow}>
-                    <Badge kind="info">{t('change.total', { total: pullView.summary.total })}</Badge>
-                    {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error', uiT)} × {pullView.summary.error}</Badge>}
-                    {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', uiT)} × {pullView.summary.warning}</Badge>}
-                    {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
-                  </div>
-                  {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
-                  {/* 固定高度 + 内部滚动：变更项再多也不把整页撑长 */}
-                  <div className={css.pullScroll}>
-                    <div className={css.reportList}>
-                      {pullView.summary.items.map((c) => (
-                        <div key={c.id} className={css.statRow}>
-                          <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
-                          <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
-                            {severityLabel(c.severity, uiT)}
-                          </Badge>
-                          <span>{c.description}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-              {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
-            </Card>
-          )}
 
           {/* 自动同步设置（当前通道） */}
           <Card>
@@ -1404,6 +1347,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           <SyncHistoryView api={api} t={t} />
 
           {/* P0-②：push 前只读预览确认弹窗（「将推送什么」→ 确认后才真正上传） */}
+          {/* 推送预览确认弹窗 */}
           {state.pushPreview.open && (
             <div
               className={css.dialogMask}
@@ -1444,6 +1388,164 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                       {state.busy === 'push' ? <Spinner label={t('syncflow.pushing')} /> : t('syncflow.pushConfirm')}
                     </Button>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 推送结果弹窗 */}
+          {state.pushReport !== null && pushView !== null && (
+            <div
+              className={css.dialogMask}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) {
+                  patch({ pushReport: null })
+                }
+              }}
+            >
+              <div className={`${css.dialogCard} ${css.dialogWide}`} style={{ width: 'min(640px, 100%)', maxHeight: '85vh' }} role="dialog" aria-modal="true" aria-label={t('push.title')}>
+                <div className={css.dialogHeaderRow}>
+                  <span className={css.dialogHeader}>{t('push.title')}</span>
+                  <button
+                    type="button"
+                    className={css.dialogClose}
+                    onClick={() => { patch({ pushReport: null }) }}
+                    aria-label={t('common.close')}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className={css.dialogBodyScroll} style={{ maxHeight: '70vh' }}>
+                  <Banner kind={pushView.kind === 'ok' ? 'ok' : 'error'}>{pushView.headline}</Banner>
+                  {pushView.sections.length > 0 && (
+                    <div>
+                      <span className={css.fieldLabel}>{t('sections.title')}</span>
+                      <div className={css.statRow}>
+                        {pushView.sections.map((s) => <Badge key={s} kind="info">{s}</Badge>)}
+                      </div>
+                    </div>
+                  )}
+                  {pushView.warnings.length > 0 && (
+                    <div>
+                      <span className={css.fieldLabel}>{t('warnings.title')}</span>
+                      <ul className={css.warnList}>
+                        {pushView.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                  <div className={css.actionRow} style={{ marginTop: '12px' }}>
+                    <Button variant="primary" onClick={() => { patch({ pushReport: null }) }}>
+                      {t('common.close')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 拉取差异预览弹窗 */}
+          {state.pullReport !== null && pullView !== null && (
+            <div
+              className={css.dialogMask}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) {
+                  patch({ pullReport: null })
+                }
+              }}
+            >
+              <div className={`${css.dialogCard} ${css.dialogWide}`} style={{ width: 'min(720px, 100%)', maxHeight: '85vh' }} role="dialog" aria-modal="true" aria-label={t('pull.title')}>
+                <div className={css.dialogHeaderRow}>
+                  <span className={css.dialogHeader}>{t('pull.title')}</span>
+                  <button
+                    type="button"
+                    className={css.dialogClose}
+                    onClick={() => { patch({ pullReport: null }) }}
+                    aria-label={t('common.close')}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className={css.dialogBodyScroll} style={{ maxHeight: '70vh' }}>
+                  <Banner kind={pullView.kind === 'ok' ? 'info' : pullView.kind === 'empty' ? 'ok' : 'error'}>
+                    {pullView.headline}
+                  </Banner>
+                  {pullView.summary !== null && (
+                    <>
+                      <div className={css.statRow}>
+                        <Badge kind="info">{t('change.total', { total: pullView.summary.total })}</Badge>
+                        {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error', uiT)} × {pullView.summary.error}</Badge>}
+                        {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', uiT)} × {pullView.summary.warning}</Badge>}
+                        {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
+                      </div>
+                      {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
+                      <div className={css.pullScroll}>
+                        <div className={css.reportList}>
+                          {pullView.summary.items.map((c) => (
+                            <div key={c.id} className={css.statRow}>
+                              <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
+                              <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
+                                {severityLabel(c.severity, uiT)}
+                              </Badge>
+                              <span>{c.description}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
+                  <div className={css.actionRow} style={{ marginTop: '12px' }}>
+                    <Button variant="primary" onClick={() => { patch({ pullReport: null }) }}>
+                      {t('common.close')}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 一键同步差异确认弹窗 */}
+          {state.confirmSession !== null && (
+            <div
+              className={css.dialogMask}
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget && state.busy !== 'sync') {
+                  cancelConfirm()
+                }
+              }}
+            >
+              <div
+                className={`${css.dialogCard} ${css.dialogWide}`}
+                style={{ width: 'min(820px, 100%)', maxHeight: '85vh' }}
+                role="dialog"
+                aria-modal="true"
+                aria-label={t('syncflow.title')}
+              >
+                <div className={css.dialogHeaderRow}>
+                  <span className={css.dialogHeader}>{t('syncflow.title')}</span>
+                  <button
+                    type="button"
+                    className={css.dialogClose}
+                    onClick={cancelConfirm}
+                    aria-label={t('common.close')}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className={css.dialogBodyScroll} style={{ maxHeight: '72vh' }}>
+                  <SyncConfirmView
+                    api={api}
+                    syncSessionId={state.confirmSession.syncSessionId}
+                    snapshotId={state.confirmSession.snapshotId}
+                    items={state.confirmSession.items}
+                    needsReview={state.confirmSession.needsReview}
+                    compatibility={state.confirmSession.compatibility}
+                    t={t}
+                    decisions={state.confirmDecisions}
+                    onDecisionsChange={(d) => { patch({ confirmDecisions: d }) }}
+                    onCancel={cancelConfirm}
+                    onRollbackDone={onRollbackApplied}
+                  />
                 </div>
               </div>
             </div>

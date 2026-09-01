@@ -132,3 +132,21 @@ test('updateUiPrefs：局部补丁合并，不覆盖未涉及的字段（防多�
     assert.equal(raw.starPromptFirstSeenAt, 1700000000000);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test('更新内容弹窗状态：写入字段 → 读回一致 + 原始文件校验', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-ui-prefs-rn-'));
+  try {
+    await writeUiPrefs(dir, {
+      schemaVersion: 1,
+      releaseNotesLastSeenVersion: '0.1.54',
+      releaseNotesDismissed: true,
+    });
+    const prefs = await readUiPrefs(dir);
+    assert.equal(prefs.releaseNotesLastSeenVersion, '0.1.54');
+    assert.equal(prefs.releaseNotesDismissed, true);
+    const raw = JSON.parse(await fs.readFile(path.join(dir, UI_PREFS_FILE), 'utf8'));
+    assert.equal(raw.releaseNotesLastSeenVersion, '0.1.54');
+    assert.equal(raw.releaseNotesDismissed, true);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+

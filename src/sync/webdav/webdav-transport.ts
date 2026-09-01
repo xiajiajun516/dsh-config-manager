@@ -2,8 +2,8 @@
  * m-webdav-channel：WebDAV 通道（SyncTransport 的 webdav 实现）。
  *
  * 远端布局（单文件 JSON 快照 + 索引）：
- *   <base>/snapshots/<id>.json   —— 单个快照的完整载荷（SyncSnapshot 序列化）
- *   <base>/snapshots/index.json  —— 索引（SyncSnapshotMeta 数组，每个 id 一条）
+ *   <base>/dsh-config-manager/<id>.json   —— 单个快照的完整载荷（SyncSnapshot 序列化）
+ *   <base>/dsh-config-manager/index.json  —— 索引（SyncSnapshotMeta 数组，每个 id 一条）
  *
  * 设计：
  * - upload：先幂等 MKCOL snapshots 集合，再读 index 做「快照级跳过」判定
@@ -20,6 +20,8 @@
  *   密码绝不进 URL/日志；错误消息中的响应体统一脱敏（password → [REDACTED]）。
  * - 可注入 request 便于测试；缺省用全局 fetch（AbortController 超时）。
  */
+import http from 'node:http';
+import https from 'node:https';
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
@@ -39,7 +41,7 @@ const RESERVED_IDS = new Set(['index']);
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** 错误消息里截取的响应体最大长度（防超大/二进制响应撑爆消息） */
 const ERR_BODY_MAX = 500;
-const SNAPSHOTS_SEG = 'snapshots';
+const SNAPSHOTS_SEG = 'dsh-config-manager';
 const INDEX_FILE = 'index.json';
 const REDACTED = '[REDACTED]';
 
@@ -91,25 +93,69 @@ export class WebDavTransportError extends Error {
   }
 }
 
-/** 默认请求实现：全局 fetch + AbortController 超时 */
+/** 默认请求实现：node:https/http 原生流式请求（支持全部 WebDAV 方法、准确 Content-Length 与 User-Agent） */
 const defaultRequest: WebDavRequestFn = async (method, url, options = {}) => {
   const timeoutMs = options.timeoutMs ?? 0;
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  if (timeoutMs > 0) {
-    timer = setTimeout(() => controller.abort(), timeoutMs);
-  }
-  try {
-    const response = await fetch(url, {
-      method,
-      headers: options.headers,
-      body: options.body,
-      signal: controller.signal,
+  return new Promise((resolve, reject) => {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+
+    const isHttps = parsed.protocol === 'https:';
+    const lib = isHttps ? https : http;
+
+    const headers: Record<string, string> = {
+      'User-Agent': 'DSH-Config-Manager/0.1.55 (WebDAV Client)',
+      ...(options.headers ?? {}),
+    };
+
+    let payload: Buffer | undefined;
+    if (options.body !== undefined) {
+      payload = Buffer.from(options.body, 'utf8');
+      headers['Content-Length'] = String(payload.length);
+    }
+
+    const req = lib.request(
+      url,
+      {
+        method,
+        headers,
+        timeout: timeoutMs > 0 ? timeoutMs : undefined,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        res.on('end', () => {
+          const bodyBuffer = Buffer.concat(chunks);
+          resolve({
+            status: res.statusCode ?? 0,
+            ok: (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300,
+            text: async () => bodyBuffer.toString('utf8'),
+          });
+        });
+      },
+    );
+
+    req.on('timeout', () => {
+      req.destroy();
+      const err = new Error(`Request timed out after ${timeoutMs}ms`);
+      err.name = 'TimeoutError';
+      reject(err);
     });
-    return { status: response.status, ok: response.ok, text: () => response.text() };
-  } finally {
-    if (timer !== null) clearTimeout(timer);
-  }
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    if (payload !== undefined) {
+      req.write(payload);
+    }
+    req.end();
+  });
 };
 
 /** 实现 SyncTransport 的 WebDAV 通道。所有网络操作经 request 注入（缺省 fetch）。 */
@@ -360,6 +406,7 @@ export class WebDavTransport implements SyncTransport {
     const headers: Record<string, string> = {
       Authorization: auth,
       'Content-Type': 'application/json',
+      'User-Agent': 'DSH-Config-Manager/0.1.55 (WebDAV Client)',
     };
     if (opts.body !== undefined) headers['Content-Length'] = String(Buffer.byteLength(opts.body, 'utf8'));
     try {
@@ -370,8 +417,11 @@ export class WebDavTransport implements SyncTransport {
           this.o.msg('sync.webdav.timeout', { method, url, timeout: String(this.o.timeoutMs) }),
         );
       }
+      const rawMsg = err instanceof Error
+        ? (err.cause ? `${err.message} (${(err.cause as Error).message || err.cause})` : err.message)
+        : String(err);
       throw new WebDavTransportError(
-        this.o.msg('sync.webdav.requestError', { method, url, err: this.mask(String((err as Error)?.message ?? ''), pwd) }),
+        this.o.msg('sync.webdav.requestError', { method, url, err: this.mask(rawMsg, pwd) }),
       );
     }
   }
