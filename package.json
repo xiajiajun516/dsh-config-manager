@@ -84,7 +84,7 @@
     "clean": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\""
   },
   "dependencies": {
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^5.4.1"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
