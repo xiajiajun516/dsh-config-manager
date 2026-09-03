@@ -36,7 +36,7 @@ export const zh = {
   // WebDAV 配置表单
   'webdav.title': 'WebDAV 配置',
   'webdav.url': '服务器地址',
-  'webdav.urlHint': 'WebDAV 服务器根地址（https://…）。同步快照与索引存放于该地址的 snapshots/ 子目录下。请勿在地址中包含用户名/密码。',
+  'webdav.urlHint': 'WebDAV 服务器根地址（https://…）。同步快照与索引存放于该地址的 dsh-config-manager/ 子目录下。请勿在地址中包含用户名/密码。',
   'webdav.username': '用户名',
   'webdav.usernameHint': 'HTTP Basic 认证用户名（非敏感，可回显）。',
   'webdav.password': '密码',
@@ -226,7 +226,7 @@ export const en: Record<keyof typeof zh, string> = {
   'channel.currentUrl': 'Current URL',
   'webdav.title': 'WebDAV Configuration',
   'webdav.url': 'Server URL',
-  'webdav.urlHint': 'WebDAV server root URL (https://…). Sync snapshots and the index are stored under a snapshots/ subdirectory of that URL. Do not include a username/password in the URL.',
+  'webdav.urlHint': 'WebDAV server root URL (https://…). Sync snapshots and the index are stored under a dsh-config-manager/ subdirectory of that URL. Do not include a username/password in the URL.',
   'webdav.username': 'Username',
   'webdav.usernameHint': 'HTTP Basic auth username (not sensitive, may be shown).',
   'webdav.password': 'Password',
