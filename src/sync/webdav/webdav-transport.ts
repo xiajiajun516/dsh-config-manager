@@ -18,7 +18,12 @@
  *   成普通对象 → Buffer.from(对象) 报错）。
  * - 认证：HTTP Basic（username 配置项 + 注入 credentials 提供者 getPassword()）。
  *   密码绝不进 URL/日志；错误消息中的响应体统一脱敏（password → [REDACTED]）。
- * - 可注入 request 便于测试；缺省用全局 fetch（AbortController 超时）。
+ * - 重定向：默认 request 自动跟随 301/302/303/307/308（网盘 WebDAV 会把下载 GET 302 到
+ *   带时效签名的 CDN 直链，如 123pan；不自建反代返回 301 也一样）。303 且非 GET/HEAD 时
+ *   降级为 GET 并丢弃请求体；跨源跳转剥离 Authorization（CDN 直链是预签名 URL，不得把
+ *   Basic 凭据转发给第三方域）；上限 5 跳，超出抛错。无 Location / Location 非法的 3xx
+ *   按最终响应返回（上层如实报 HTTP 状态失败）。
+ * - 可注入 request 便于测试；注入实现负责自己的重定向语义（默认实现才自动跟随）。
  */
 import http from 'node:http';
 import https from 'node:https';
@@ -44,6 +49,10 @@ const ERR_BODY_MAX = 500;
 const SNAPSHOTS_SEG = 'dsh-config-manager';
 const INDEX_FILE = 'index.json';
 const REDACTED = '[REDACTED]';
+/** 自动跟随的重定向状态码（RFC 7231/9110） */
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+/** 重定向最大跳数（RFC 7231 建议 ≤5；防 302 循环拖死请求） */
+const MAX_REDIRECTS = 5;
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
 export interface WebDavRequestOptions {
@@ -52,10 +61,12 @@ export interface WebDavRequestOptions {
   timeoutMs?: number;
 }
 
-/** 请求响应最小形状（兼容 fetch Response 的 status/ok/text()） */
+/** 请求响应最小形状（兼容 fetch Response 的 status/ok/text()；headers 供重定向读 Location） */
 export interface WebDavResponse {
   readonly status: number;
   readonly ok: boolean;
+  /** 响应头（可选：注入的 mock 可省略，默认 request 总会带上，重定向跟随需要 location） */
+  readonly headers?: Record<string, string>;
   text(): Promise<string>;
 }
 
@@ -93,8 +104,72 @@ export class WebDavTransportError extends Error {
   }
 }
 
-/** 默认请求实现：node:https/http 原生流式请求（支持全部 WebDAV 方法、准确 Content-Length 与 User-Agent） */
+/** 默认请求实现：node:https/http 原生流式请求（支持全部 WebDAV 方法、准确 Content-Length 与 User-Agent）。
+ * 自动跟随 301/302/303/307/308 重定向（网盘 WebDAV 的 GET/PUT 会 302 到 CDN 预签名直链）：
+ * - 301/302/307/308 保持原方法与请求体；303 且非 GET/HEAD 降级为 GET 并丢弃请求体；
+ * - 相对 Location 用当前 URL 解析；跨源跳转剥离 Authorization（预签名 URL 不应收到 Basic 凭据）；
+ * - 上限 MAX_REDIRECTS 跳，超出抛错；无 Location / Location 非法的 3xx 按最终响应返回。 */
 const defaultRequest: WebDavRequestFn = async (method, url, options = {}) => {
+  let currentMethod = method;
+  let currentUrl = url;
+  let currentHeaders = { ...(options.headers ?? {}) };
+  let currentBody = options.body;
+
+  for (let redirects = 0; ; ) {
+    const res = await rawRequest(currentMethod, currentUrl, {
+      ...options,
+      headers: currentHeaders,
+      body: currentBody,
+    });
+
+    const status = res.status;
+    if (!REDIRECT_STATUSES.has(status)) return res;
+
+    // 3xx 但没有 Location（或 Location 非法）→ 无法跟随，作为最终响应返回（上层如实报 HTTP 状态）
+    const rawLocation = res.headers?.location;
+    const location = Array.isArray(rawLocation) ? rawLocation[0] : rawLocation;
+    if (!location) return res;
+    let nextUrl: string;
+    try {
+      nextUrl = new URL(location, currentUrl).toString();
+    } catch {
+      return res;
+    }
+
+    if (redirects >= MAX_REDIRECTS) {
+      const err = new Error(`Too many redirects (${MAX_REDIRECTS} max) for ${url}`);
+      err.name = 'RedirectError';
+      throw err;
+    }
+    redirects += 1;
+
+    // 303：非 GET/HEAD 降级 GET 并丢弃请求体（303 See Other 语义）
+    let nextMethod = currentMethod;
+    let nextHeaders = currentHeaders;
+    let nextBody = currentBody;
+    if (status === 303 && currentMethod !== 'GET' && currentMethod !== 'HEAD') {
+      nextMethod = 'GET';
+      nextBody = undefined;
+    }
+    // 跨源：剥离 Authorization（同源保留，服务器可能按 Basic 认证续用）
+    if (!sameOrigin(currentUrl, nextUrl)) {
+      nextHeaders = { ...currentHeaders };
+      delete nextHeaders.Authorization;
+    }
+
+    currentMethod = nextMethod;
+    currentUrl = nextUrl;
+    currentHeaders = nextHeaders;
+    currentBody = nextBody;
+  }
+};
+
+/** 单次裸请求（不跟随重定向）：node:http/https + 超时；响应始终带 headers */
+function rawRequest(
+  method: string,
+  url: string,
+  options: WebDavRequestOptions,
+): Promise<WebDavResponse> {
   const timeoutMs = options.timeoutMs ?? 0;
   return new Promise((resolve, reject) => {
     let parsed: URL;
@@ -117,6 +192,9 @@ const defaultRequest: WebDavRequestFn = async (method, url, options = {}) => {
     if (options.body !== undefined) {
       payload = Buffer.from(options.body, 'utf8');
       headers['Content-Length'] = String(payload.length);
+    } else {
+      // 303 降级后已丢弃 body → 清除残留的 Content-Length，避免 GET 带错误长度头
+      delete headers['Content-Length'];
     }
 
     const req = lib.request(
@@ -131,9 +209,11 @@ const defaultRequest: WebDavRequestFn = async (method, url, options = {}) => {
         res.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
         res.on('end', () => {
           const bodyBuffer = Buffer.concat(chunks);
+          const status = res.statusCode ?? 0;
           resolve({
-            status: res.statusCode ?? 0,
-            ok: (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300,
+            status,
+            ok: status >= 200 && status < 300,
+            headers: res.headers as Record<string, string>,
             text: async () => bodyBuffer.toString('utf8'),
           });
         });
@@ -156,9 +236,20 @@ const defaultRequest: WebDavRequestFn = async (method, url, options = {}) => {
     }
     req.end();
   });
-};
+}
 
-/** 实现 SyncTransport 的 WebDAV 通道。所有网络操作经 request 注入（缺省 fetch）。 */
+/** 同源判断（协议 + host，host 含端口；子域名不同视为跨源） */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    return ua.protocol === ub.protocol && ua.host === ub.host;
+  } catch {
+    return false;
+  }
+}
+
+/** 实现 SyncTransport 的 WebDAV 通道。所有网络操作经 request 注入（缺省 defaultRequest，自动跟随重定向）。 */
 export class WebDavTransport implements SyncTransport {
   readonly type = 'webdav';
 
@@ -415,6 +506,12 @@ export class WebDavTransport implements SyncTransport {
       if (this.isTimeout(err)) {
         throw new WebDavTransportError(
           this.o.msg('sync.webdav.timeout', { method, url, timeout: String(this.o.timeoutMs) }),
+        );
+      }
+      if (err instanceof Error && err.name === 'RedirectError') {
+        // 默认 request 的重定向跳数超限（如 302 循环）→ 归一为清晰消息，避免暴露内部跳转详情
+        throw new WebDavTransportError(
+          this.o.msg('sync.webdav.tooManyRedirects', { method, url, n: String(MAX_REDIRECTS) }),
         );
       }
       const rawMsg = err instanceof Error

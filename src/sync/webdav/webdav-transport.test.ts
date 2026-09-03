@@ -14,6 +14,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
+import type { Server } from 'node:http';
 
 import { WebDavTransport, WebDavTransportError } from './webdav-transport.ts';
 import type { WebDavRequestFn, WebDavResponse, WebDavTransportOptions } from './webdav-transport.ts';
@@ -532,6 +534,337 @@ test('快照 id 安全：非法 id（路径穿越/特殊字符）→ upload/down
     await assert.rejects(t.upload(sampleSnapshot({ id: bad })), /非法快照 id/);
     await assert.rejects(t.download(bad), /非法快照 id/);
     await assert.rejects(t.delete(bad), /非法快照 id/);
+  }
+});
+
+/* ---------------- 重定向跟随（端到端：真实 HTTP 服务器 + 默认 request） ---------------- */
+/**
+ * 背景（issue #25）：123pan 等网盘 WebDAV 把文件下载 GET 一律 302 到带时效签名的 CDN 直链
+ * （跨源）；旧实现不跟随 3xx，所有同步（list/push/pull 都先读 index.json）直接失败。
+ * 下面用本地回环服务器模拟，走默认 request（不注入 mock），验证：
+ * - 302 GET → 200：list 正常解析索引（123pan 场景）
+ * - 301/302/307/308 保持方法；303 → GET 并丢弃请求体
+ * - 相对 Location 解析；同源保留 Authorization；跨源剥离 Authorization
+ * - 跳数上限：302 循环 → 抛 WebDavTransportError（归一消息）
+ * - 非跟随 3xx（如 300）按失败处理
+ */
+
+interface ServerRec { method: string; url: string; headers: http.IncomingHttpHeaders; body: string; }
+
+/** 起一个 127.0.0.1:<随机端口> 的本地 HTTP 服务器，handler(req,res,rec) 记录请求 */
+function startTestServer(
+  handler: (rec: ServerRec, res: http.ServerResponse) => void,
+): Promise<{ server: Server; port: number }> {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const recs: ServerRec[] = [];
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(Buffer.from(c)));
+      req.on('end', () => {
+        const rec: ServerRec = {
+          method: req.method ?? '',
+          url: req.url ?? '',
+          headers: req.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        };
+        try {
+          handler(rec, res);
+        } catch (err) {
+          res.statusCode = 500;
+          res.end(String((err as Error).message));
+        }
+      });
+    });
+    server.on('error', rejectPromise);
+    // 随机端口（0 = 系统分配）
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (addr === null || typeof addr === 'string') {
+        rejectPromise(new Error('无法获取测试服务器端口'));
+        return;
+      }
+      resolvePromise({ server, port: addr.port });
+    });
+  });
+}
+
+/** 记录 Rec 的服务器变体：返回 recs（测试断言语） */
+function startRecordingServer(
+  handler: (rec: ServerRec, res: http.ServerResponse) => void,
+): Promise<{ server: Server; port: number; recs: ServerRec[] }> {
+  const recs: ServerRec[] = [];
+  return new Promise((resolvePromise, rejectPromise) => {
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(Buffer.from(c)));
+      req.on('end', () => {
+        const rec: ServerRec = {
+          method: req.method ?? '',
+          url: req.url ?? '',
+          headers: req.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        };
+        recs.push(rec);
+        try {
+          handler(rec, res);
+        } catch (err) {
+          res.statusCode = 500;
+          res.end(String((err as Error).message));
+        }
+      });
+    });
+    server.on('error', rejectPromise);
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (addr === null || typeof addr === 'string') {
+        rejectPromise(new Error('无法获取测试服务器端口'));
+        return;
+      }
+      resolvePromise({ server, port: addr.port, recs });
+    });
+  });
+}
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolvePromise) => {
+    server.close(() => resolvePromise());
+  });
+}
+
+/** WebDAVTransport 走默认 request：真实网络 + 默认重定向跟随 */
+function makeRealTransport(baseUrl: string): WebDavTransport {
+  return new WebDavTransport({
+    baseUrl,
+    username: 'alice',
+    credentials: { getPassword: async () => TEST_PASSWORD },
+    timeoutMs: 10_000,
+  });
+}
+
+test('重定向：GET index.json 302 → 200（同源，123pan 场景）→ list 正常解析', async () => {
+  const meta = computeSnapshotMeta(sampleSnapshot());
+  const { server, port } = await startTestServer((rec, res) => {
+    assert.equal(rec.method, 'GET');
+    if (rec.url === '/dav/dsh-config-manager/index.json') {
+      res.writeHead(302, { Location: '/dl/index.json?sig=abc' }); // 相对 Location
+      res.end();
+      return;
+    }
+    if (rec.url === '/dl/index.json?sig=abc') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify([meta]));
+      return;
+    }
+    res.writeHead(404);
+    res.end('not found');
+  });
+  try {
+    const t = makeRealTransport(`http://127.0.0.1:${port}/dav`);
+    const listed = await t.list();
+    assert.deepEqual(listed.map((x) => x.id), ['snap-001'], '302 跟随后应解析出索引');
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('重定向：GET 跨源 302 → 目标请求不带 Authorization（CDN 直链泄露隔离）', async () => {
+  // 源服务器：index.json → 302 到目标服务器（不同端口 = 跨源）
+  const target = await startRecordingServer((rec, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('[]');
+  });
+  try {
+    const { server: sourceServer, port: sourcePort } = await startTestServer((rec, res) => {
+      assert.equal(rec.method, 'GET');
+      res.writeHead(302, { Location: `http://127.0.0.1:${target.port}/cdn/index.json?sig=xyz` });
+      res.end();
+    });
+    try {
+      const t = makeRealTransport(`http://127.0.0.1:${sourcePort}/dav`);
+      await t.list();
+      assert.equal(target.recs.length, 1, '目标服务器应收到一次请求');
+      const rec = target.recs[0]!;
+      assert.equal(rec.headers.authorization, undefined, '跨源重定向必须剥离 Authorization');
+      assert.ok(!rec.url.includes(TEST_PASSWORD), 'URL 不得含凭据');
+    } finally {
+      await closeServer(sourceServer);
+    }
+  } finally {
+    await closeServer(target.server);
+  }
+});
+
+test('重定向：同源 302 → 保留 Authorization（服务器可能按 Basic 认证续用）', async () => {
+  const { server, port, recs } = await startRecordingServer((rec, res) => {
+    assert.equal(rec.method, 'GET');
+    if (rec.url === '/dav/dsh-config-manager/index.json') {
+      res.writeHead(302, { Location: '/dav/dsh-config-manager/index2.json' });
+      res.end();
+      return;
+    }
+    if (rec.url === '/dav/dsh-config-manager/index2.json') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('[]');
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  try {
+    const t = makeRealTransport(`http://127.0.0.1:${port}/dav`);
+    await t.list();
+    const redirectTarget = recs.find((r) => r.url.includes('index2.json'));
+    assert.ok(redirectTarget, '应发生第二次 GET（重定向目标）');
+    assert.ok(
+      redirectTarget!.headers.authorization,
+      '同源重定向应保留 Authorization（Basic 认证续用）',
+    );
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('重定向：PUT 302（同源）→ 保持方法与请求体（WebDAV upload 全流程）', async () => {
+  const { server, port, recs } = await startRecordingServer((rec, res) => {
+    if (rec.method === 'MKCOL') {
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+    if (rec.method === 'GET') {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    if (rec.method === 'PUT' && rec.url.startsWith('/dav/dsh-config-manager/snap-001.json')) {
+      if (!rec.url.includes('hop=2')) {
+        // 302 到同源（含 query 的绝对路径）→ 必须保持 PUT + 完整 body
+        res.writeHead(302, { Location: rec.url + '?hop=2' });
+        res.end();
+        return;
+      }
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+    if (rec.method === 'PUT' && rec.url.endsWith('/index.json')) {
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+    res.writeHead(405);
+    res.end();
+  });
+  try {
+    const t = makeRealTransport(`http://127.0.0.1:${port}/dav`);
+    await t.upload(sampleSnapshot());
+    const snapPuts = recs.filter(
+      (r) => r.method === 'PUT' && r.url.startsWith('/dav/dsh-config-manager/snap-001.json'),
+    );
+    assert.ok(snapPuts.length >= 2, '302 后应重发 PUT');
+    for (const p of snapPuts) {
+      assert.equal(p.method, 'PUT', '302 必须保持 PUT 方法');
+      assert.ok(p.body.length > 0, '302 必须保持请求体');
+      assert.deepEqual(JSON.parse(p.body), sampleSnapshot(), '重发体应为完整快照');
+    }
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('重定向：303（非 GET）→ 降级为 GET 并丢弃请求体', async () => {
+  const { server, port, recs } = await startRecordingServer((rec, res) => {
+    if (rec.method === 'MKCOL') {
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+    if (rec.method === 'GET' && rec.url.endsWith('/index.json')) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    if (rec.method === 'PUT' && rec.url.startsWith('/dav/dsh-config-manager/snap-001.json')) {
+      if (!rec.url.includes('see-other')) {
+        // 303 See Other：非 GET 方法必须降级为 GET（语义：结果已在别处）
+        res.writeHead(303, { Location: '/dav/dsh-config-manager/snap-001.json?see-other=1' });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{}');
+      return;
+    }
+    if (rec.method === 'PUT' && rec.url.endsWith('/index.json')) {
+      res.writeHead(201);
+      res.end();
+      return;
+    }
+    if (rec.method === 'GET' && rec.url.includes('see-other=1')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('"ok"');
+      return;
+    }
+    res.writeHead(405);
+    res.end();
+  });
+  try {
+    const t = makeRealTransport(`http://127.0.0.1:${port}/dav`);
+    await t.upload(sampleSnapshot());
+    const firstPut = recs.find(
+      (r) => r.method === 'PUT' && r.url.startsWith('/dav/dsh-config-manager/snap-001.json') && !r.url.includes('see-other'),
+    );
+    assert.ok(firstPut, '首次请求应为 PUT（带完整 body）');
+    assert.ok(firstPut!.body.length > 0, '303 前 PUT 应携带请求体');
+    // 303 目标请求：方法降级为 GET、无请求体、无 Content-Length
+    const degraded = recs.find((r) => r.url.includes('see-other=1'));
+    assert.ok(degraded, '应发生 303 目标请求');
+    assert.equal(degraded!.method, 'GET', '303（原 PUT）后必须降级为 GET');
+    assert.equal(degraded!.body, '', '降级请求不得携带原始 body');
+    assert.equal(degraded!.headers['content-length'], undefined, '降级 GET 不得带 Content-Length');
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('重定向：302 循环（同源）→ 超 5 跳上限抛 WebDavTransportError（归一消息）', async () => {
+  const { server, port } = await startTestServer((rec, res) => {
+    res.writeHead(302, { Location: '/loop' });
+    res.end();
+  });
+  try {
+    const t = makeRealTransport(`http://127.0.0.1:${port}/dav`);
+    await assert.rejects(
+      t.list(),
+      (err: unknown) => {
+        assert.ok(err instanceof WebDavTransportError);
+        assert.match(err.message, /重定向|redirect/i);
+        assert.match(err.message, /5/);
+        return true;
+      },
+    );
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('重定向：300（非跟随 3xx）→ 按失败处理（明确报 HTTP 状态）', async () => {
+  const { server, port } = await startTestServer((rec, res) => {
+    res.writeHead(300, { Location: '/nowhere' });
+    res.end('multiple choices');
+  });
+  try {
+    const t = makeRealTransport(`http://127.0.0.1:${port}/dav`);
+    await assert.rejects(
+      t.list(),
+      (err: unknown) => {
+        assert.ok(err instanceof WebDavTransportError);
+        assert.match(err.message, /300/);
+        return true;
+      },
+    );
+  } finally {
+    await closeServer(server);
   }
 });
 
