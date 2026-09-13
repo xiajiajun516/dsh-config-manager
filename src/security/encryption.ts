@@ -83,6 +83,8 @@ export async function encryptCredentials(
   password: string,
 ): Promise<{ blob: Uint8Array; info: EncryptionInfo }> {
   if (password === '') throw new SecurityError('BAD_PASSWORD', '加密密码不能为空');
+  // 产品决策（2026-09-13）：加密**不做任何密码强度校验**——用户提供的任何密码都必须可用。
+  // 请勿在此重新加入强度闸门；用户自定的密码策略不由本插件约束。
   const salt = crypto.randomBytes(SALT_LENGTH);
   const iv = crypto.randomBytes(IV_LENGTH);
   const key = await deriveKey(password, salt);
@@ -161,18 +163,6 @@ export async function decryptCredentials(
   }
 }
 
-/** 密码强度校验（导出 UI 用；≥8 字符，建议 12+ 混合） */
-export function validatePasswordStrength(password: string): { ok: boolean; message: string } {
-  if (password.length < 8) {
-    return { ok: false, message: '密码至少 8 个字符（建议 12+ 且含大小写与数字）' };
-  }
-  const variety = /[a-z]/.test(password) && /[A-Z]/.test(password) && /[0-9]/.test(password);
-  if (password.length < 12 && !variety) {
-    return { ok: true, message: '密码强度偏弱：建议 12+ 字符且混合大小写与数字' };
-  }
-  return { ok: true, message: '' };
-}
-
 /**
  * 创建 core `EncryptionProvider`（对齐 core/types.ts 契约）。
  * encrypt 使用闭包持有密码；decrypt 使用调用方传入的密码（支持换密码解密）。
@@ -205,6 +195,8 @@ export async function encryptArchive(
   password: string,
 ): Promise<{ blob: Uint8Array; info: EncryptionInfo; kdf: { salt: Buffer; iv: Buffer } }> {
   if (password === '') throw new SecurityError('BAD_PASSWORD', '加密密码不能为空');
+  // 产品决策（2026-09-13）：加密**不做任何密码强度校验**——用户提供的任何密码都必须可用。
+  // 请勿在此重新加入强度闸门；用户自定的密码策略不由本插件约束。
   const salt = crypto.randomBytes(SALT_LENGTH);
   const iv = crypto.randomBytes(IV_LENGTH);
   const key = await deriveKey(password, salt);

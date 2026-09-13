@@ -12,15 +12,22 @@
  */
 import type { BackupInterval, BackupRunStatus, BackupWeeklySchedule } from '../sync/backup-schedule-config.ts'
 import type { BackupRunResult } from '../sync/backup-scheduler.ts'
+import { DEFAULT_RETENTION_POLICY, RETENTION_LIMITS, hasRetentionTiers, validateRetentionPolicy } from '../sync/retention-policy.ts'
+import type { RetentionPolicy } from '../sync/retention-policy.ts'
 
-export type { BackupInterval, BackupRunStatus, BackupRunResult, BackupWeeklySchedule }
+export type { BackupInterval, BackupRunStatus, BackupRunResult, BackupWeeklySchedule, RetentionPolicy }
+// 零依赖跨端共享常量/函数（retention-policy.ts 不 import 任何模块 → client 运行时引用安全）：
+// client 侧统一从本层取，不直接 import sync/ 运行时代码。
+export { DEFAULT_RETENTION_POLICY, hasRetentionTiers }
 
-/** 设置草稿（表单编辑态：总开关 + 间隔档位 + 自定义周档）。 */
+/** 设置草稿（表单编辑态：总开关 + 间隔档位 + 自定义周档 + 保留策略）。 */
 export interface BackupScheduleDraft {
   enabled: boolean
   interval: BackupInterval
   /** custom 档的每周固定时刻（仅 interval='custom' 时校验；其他档位忽略） */
   customSchedule?: BackupWeeklySchedule
+  /** m-retention：备份产物 + 快照的保留策略（GFS 分层）；缺省 = 「最近 10 个」 */
+  retention?: RetentionPolicy
 }
 
 /** 可选的间隔档位（UI 展示顺序 = 由短到长）。 */
@@ -42,6 +49,8 @@ export interface BackupScheduleStatus {
   enabled: boolean
   interval: BackupInterval
   customSchedule?: BackupWeeklySchedule
+  /** m-retention：保留策略（GFS 分层）；宿主未返回时由组件回退 DEFAULT_RETENTION_POLICY */
+  retention?: RetentionPolicy
   startupMinIntervalMs: number
   consecutiveFailures: number
   lastRunAt?: string
@@ -81,7 +90,37 @@ export function validateBackupScheduleDraft(
     }
     value.customSchedule = { dayOfWeek: dayOfWeek as number, hour: hour as number, minute: minute as number }
   }
+  // m-retention：保留策略（可选；给了就必须合法——非法一律拒绝并给可读原因，不静默回退）
+  if (d['retention'] !== undefined) {
+    const parsedRetention = validateRetentionPolicy(d['retention'])
+    if (!parsedRetention.ok) {
+      return { ok: false, error: `retention invalid: ${parsedRetention.error}` }
+    }
+    value.retention = parsedRetention.value
+  }
   return { ok: true, value }
+}
+
+/** m-retention：保留策略值域（UI 输入 min/max 直接用；与 validateRetentionPolicy 同源）。 */
+export const RETENTION_FIELD_LIMITS = RETENTION_LIMITS
+
+/** m-retention：策略的三层字段顺序（UI 渲染顺序 = 由近及远）。 */
+export const RETENTION_FIELDS: readonly (keyof RetentionPolicy)[] = ['keepLast', 'keepMonthly', 'keepYearly']
+
+/** m-retention：确保拿到完整策略（宿主未返回/字段缺失 → 缺省补齐；绝不产出 undefined 字段）。 */
+export function normalizeRetentionPolicy(raw: Partial<RetentionPolicy> | undefined): RetentionPolicy {
+  return {
+    keepLast: raw?.keepLast ?? DEFAULT_RETENTION_POLICY.keepLast,
+    keepMonthly: raw?.keepMonthly ?? DEFAULT_RETENTION_POLICY.keepMonthly,
+    keepYearly: raw?.keepYearly ?? DEFAULT_RETENTION_POLICY.keepYearly,
+  }
+}
+
+/** 保留策略相等判定（脏检查用；缺省补齐后再比，避免 undefined 与缺省值的伪差异）。 */
+export function retentionPolicyEquals(a: RetentionPolicy | undefined, b: RetentionPolicy | undefined): boolean {
+  const x = normalizeRetentionPolicy(a)
+  const y = normalizeRetentionPolicy(b)
+  return x.keepLast === y.keepLast && x.keepMonthly === y.keepMonthly && x.keepYearly === y.keepYearly
 }
 
 /** 上次运行状态 → Badge kind（success→ok / skipped→info / failed→error / 未知→info）。 */
@@ -98,6 +137,8 @@ export function backupRunBadgeKind(status: BackupRunStatus | undefined): 'info' 
 export function backupDraftDirty(draft: BackupScheduleDraft, saved: BackupScheduleStatus | null): boolean {
   if (saved === null) return true
   if (draft.enabled !== saved.enabled || draft.interval !== saved.interval) return true
+  // m-retention：保留策略参与脏判定（未保存的策略修改也要让「保存设置」可点）
+  if (!retentionPolicyEquals(draft.retention, saved.retention)) return true
   if (draft.interval === 'custom') {
     const a = draft.customSchedule
     const b = saved.customSchedule

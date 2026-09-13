@@ -66,13 +66,15 @@ export function makeAnalysis(overrides: Partial<ImportAnalysis> = {}): ImportAna
     warnings: [],
     compatibility: 'good',
     sectionsInZip: ['settings', 'plugins', 'mcp', 'prompts'],
+    unsupportedSections: [],
+    unsupportedVersions: [],
     pluginSummary: { installed: 6, toInstall: 2 },
     pathIssues: [],
     secretCount: 3,
     dependencyIssues: [],
     encrypted: false,
     ...overrides,
-  } as ImportAnalysis;
+  };
 }
 
 export function makePlanItem(overrides: Partial<PlanItem> = {}): PlanItem {

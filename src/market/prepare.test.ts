@@ -100,6 +100,66 @@ test('prepare：zip 含 pluginFiles 分区拒绝（任意文件直通，禁止�
   )
 })
 
+/* ---------------- T1：本地插件 tarball 的供应链防线 ---------------- */
+
+/** 造一个 plugins 分区为 JSON 的 zip（含或不含 localTarballs） */
+function makePluginsZip(localTarballs: unknown[] | undefined): Uint8Array {
+  const pluginsJson = JSON.stringify({
+    version: 1,
+    plugins: [{ name: 'p', version: '1.0.0', isBundle: false, inBundles: [], enabled: true }],
+    patch: [],
+    ...(localTarballs !== undefined ? { localTarballs } : {}),
+  }, null, 2)
+  const entries: ZipWriteEntry[] = [
+    { name: 'plugins/plugins.json', data: Buffer.from(pluginsJson) },
+  ]
+  const checksums = { 'plugins/plugins.json': sha256Hex(Buffer.from(pluginsJson)) }
+  entries.push({ name: 'integrity/checksums.json', data: Buffer.from(JSON.stringify(checksums)) })
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: new Date().toISOString(),
+    sections: { plugins: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  }
+  entries.push({ name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) })
+  return Buffer.from(zipToBuffer(entries))
+}
+
+const SAMPLE_TARBALL = {
+  packageName: 'my-local-plugin',
+  version: '2.3.4',
+  relativePath: 'local-plugins/my-local-plugin-2.3.4.tgz',
+  base64: 'H4sIAAAAAAAA',
+}
+
+test('T1 prepare：plugins 分区携带 localTarballs → 拒绝发布到市场（供应链防线）', () => {
+  assert.throws(
+    () => prepareMarketItem({
+      itemId: 'with-tarball', name: 'WithTarball',
+      zipBytes: makePluginsZip([SAMPLE_TARBALL]),
+    }),
+    (err: unknown) => err instanceof MarketPrepareError && /localTarballs|tarball/.test(err.message),
+  )
+})
+
+test('T1 prepare：plugins 分区无 localTarballs → 正常放行（不误伤普通插件清单）', () => {
+  const res = prepareMarketItem({
+    itemId: 'no-tarball', name: 'NoTarball',
+    zipBytes: makePluginsZip(undefined),
+  })
+  assert.ok(res.manifestText.includes('no-tarball'))
+})
+
+test('T1 prepare：localTarballs 为空数组 → 放行（空数组不等于携带代码）', () => {
+  const res = prepareMarketItem({
+    itemId: 'empty-tb', name: 'EmptyTB',
+    zipBytes: makePluginsZip([]),
+  })
+  assert.ok(res.manifestText.includes('empty-tb'))
+})
+
 test('prepare：zip 含 self 分区拒绝（本地环境专属，禁止进入市场）', () => {
   assert.throws(
     () => prepareMarketItem({

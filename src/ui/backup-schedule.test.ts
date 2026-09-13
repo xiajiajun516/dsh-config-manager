@@ -7,6 +7,8 @@ import {
   backupDraftDirty,
   backupRunBadgeKind,
   backupRunSummary,
+  normalizeRetentionPolicy,
+  retentionPolicyEquals,
   validateBackupScheduleDraft,
   type BackupScheduleStatus,
 } from './backup-schedule.ts'
@@ -101,4 +103,77 @@ test('backupRunSummary：跳过/失败摘要（reason/error 透传）', () => {
   assert.deepEqual(skipped, { status: 'skipped', zip: null, sizeBytes: null, skipReason: 'running', error: null })
   const failed = backupRunSummary({ status: 'failed', error: 'boom', consecutiveFailures: 2 })
   assert.deepEqual(failed, { status: 'failed', zip: null, sizeBytes: null, skipReason: null, error: 'boom' })
+})
+
+/* ---------------- m-retention：保留策略进草稿校验 / 脏判定 ---------------- */
+
+test('m-retention：草稿带合法 retention 时透传（host 侧落盘依据）', () => {
+  const r = validateBackupScheduleDraft({
+    enabled: true, interval: '24h',
+    retention: { keepLast: 5, keepMonthly: 12, keepYearly: 2 },
+  })
+  assert.deepEqual(r, {
+    ok: true,
+    value: { enabled: true, interval: '24h', retention: { keepLast: 5, keepMonthly: 12, keepYearly: 2 } },
+  })
+})
+
+test('m-retention：草稿不带 retention 时字段缺席（向后兼容旧前端/旧 body）', () => {
+  const r = validateBackupScheduleDraft({ enabled: false, interval: '6h' })
+  assert.equal(r.ok, true)
+  if (r.ok) {
+    assert.equal('retention' in r.value, false, '未提供即不写入（宿主保留既有值）')
+  }
+})
+
+test('m-retention：非法 retention 一律拒绝并注明字段（不静默回退）', () => {
+  const bads: unknown[] = [
+    { keepLast: -1, keepMonthly: 0, keepYearly: 0 },
+    { keepLast: 1.5, keepMonthly: 0, keepYearly: 0 },
+    { keepLast: 1, keepMonthly: 0 },
+    { keepLast: '3', keepMonthly: 0, keepYearly: 0 },
+    { keepLast: 99999, keepMonthly: 0, keepYearly: 0 },
+  ]
+  for (const retention of bads) {
+    const r = validateBackupScheduleDraft({ enabled: true, interval: '24h', retention })
+    assert.equal(r.ok, false, `应拒绝非法 retention: ${JSON.stringify(retention)}`)
+    if (!r.ok) assert.match(r.error, /retention invalid/, '错误文案应指明是 retention 校验失败')
+  }
+})
+
+test('m-retention：normalizeRetentionPolicy 补齐缺省（宿主未返回/字段缺失）', () => {
+  assert.deepEqual(normalizeRetentionPolicy(undefined), { keepLast: 10, keepMonthly: 0, keepYearly: 0 })
+  assert.deepEqual(normalizeRetentionPolicy({ keepLast: 3 }), { keepLast: 3, keepMonthly: 0, keepYearly: 0 })
+  assert.deepEqual(
+    normalizeRetentionPolicy({ keepMonthly: 6 }),
+    { keepLast: 10, keepMonthly: 6, keepYearly: 0 },
+    '缺字段用缺省值补齐，绝不产出 undefined',
+  )
+})
+
+test('m-retention：retentionPolicyEquals 把 undefined 视为缺省（避免伪脏）', () => {
+  assert.equal(retentionPolicyEquals(undefined, undefined), true)
+  assert.equal(
+    retentionPolicyEquals(undefined, { keepLast: 10, keepMonthly: 0, keepYearly: 0 }),
+    true,
+    'undefined 与显式缺省值等价',
+  )
+  assert.equal(retentionPolicyEquals({ keepLast: 10, keepMonthly: 0, keepYearly: 0 }, { keepLast: 10, keepMonthly: 1, keepYearly: 0 }), false)
+})
+
+test('m-retention：backupDraftDirty 把策略改动算作未保存修改', () => {
+  const saved: BackupScheduleStatus = {
+    enabled: true, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0,
+    retention: { keepLast: 10, keepMonthly: 0, keepYearly: 0 },
+  }
+  assert.equal(backupDraftDirty({ enabled: true, interval: '24h', retention: { keepLast: 10, keepMonthly: 0, keepYearly: 0 } }, saved), false)
+  assert.equal(backupDraftDirty({ enabled: true, interval: '24h', retention: { keepLast: 10, keepMonthly: 6, keepYearly: 0 } }, saved), true, '加月度分层 = 有修改')
+  assert.equal(backupDraftDirty({ enabled: true, interval: '24h', retention: { keepLast: 3, keepMonthly: 0, keepYearly: 0 } }, saved), true, '改最近保留数 = 有修改')
+  // 旧宿主未返回 retention 时：缺省草稿不应被误判为脏
+  const legacy: BackupScheduleStatus = { enabled: true, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0 }
+  assert.equal(
+    backupDraftDirty({ enabled: true, interval: '24h', retention: { keepLast: 10, keepMonthly: 0, keepYearly: 0 } }, legacy),
+    false,
+    '未经改动的缺省策略不算脏（旧宿主兼容）',
+  )
 })

@@ -1,0 +1,82 @@
+# PR / 主干校验门禁 / PR & main-branch validation gate
+#
+# 与 publish.yml 的分工（两条流水线互不重叠）：
+#  - publish.yml：tag `v*` push → typecheck → test → build → pack → 发布到 registry(OIDC) → GitHub Release
+#  - ci.yml（本文件）：pull_request → main 与 push → main 的同一套校验，**零发布副作用**
+#    （不含任何推送 registry 的步骤，不申请 OIDC 发布凭据，不请求仓库写权限）。
+#
+# 安装契约与步骤顺序均与 publish.yml 一致（Node 24 + registry-url + `npm ci --legacy-peer-deps`）：
+# 部分 @deepseek-ai/* 只声明在 peerDependencies 且未发布到公共 registry，
+# 不带 `--legacy-peer-deps` 的普通 `npm ci` 会因无法解析 peer 而红灯。
+#
+# 单 job 跑完整阶梯（install → typecheck → test → build → pack）：
+# 实测全量测试 1558 项约 88 秒，无需拆分为多 job——拆分只会重复 checkout/setup-node，
+# 并增加「哪个 job 才是 required」的出错面。耗时由 concurrency + timeout 控制。
+# 全量测试不按目录裁剪（裁剪会漏检）。任何失败一律保持真实红灯，不做「允许失败」、不加自动重试
+# （`src/utils/env-lock.test.ts` / `src/client/run-store.test.ts` 存在负载相关的间歇性失败，
+#  但多数运行全绿；若 CI 红灯先 `gh run rerun <id> --failed` 确认是否为该间歇，再判定缺陷）。
+#
+# actions 与 publish.yml 固定到同一批 SHA（供应链口径一致）；升级时两处必须同时改。
+
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# 最小权限：本流水线只读代码。发布权限（OIDC 发布凭据 / 仓库写权限）只属于 publish.yml。
+permissions:
+  contents: read
+
+# 同一 ref 上新的提交到达时取消旧运行：既省钱，也避免陈旧运行的结论误判当前提交。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck / Test / Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install dependencies
+        # Some DSH core packages live only in peerDependencies and are not on
+        # the public registry; --legacy-peer-deps skips peer resolution.
+        run: npm ci --legacy-peer-deps
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Bundle self-contained guard
+        # lib/client.js 必须自包含：DSH client loader 只取这一个文件，任何被外置的
+        # require（如 lucide-react / @radix-ui/*）都会在用户端命中 module-table-miss 崩溃。
+        # `npm test` 在 Build 之前运行，此时 lib/client.js 尚不存在（该测试会跳过并说明），
+        # 因此必须在 Build 之后单独跑一次，让护栏真正生效。
+        run: node --test src/client/bundle-selfcontained.test.ts
+
+      - name: Package tarball (dry run)
+        # 与发布流水线同构的打包校验：pack 失败说明 package.json "files" 白名单
+        # 或 lib/ 产物已坏——在 PR 阶段暴露，而不是等到发版时才卡住。
+        # npm pack --pack-destination 在目录不存在时报 ENOENT（fresh checkout）。
+        run: mkdir -p dist && npm pack --pack-destination ./dist

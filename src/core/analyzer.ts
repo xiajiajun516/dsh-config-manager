@@ -12,10 +12,13 @@ import path from 'node:path';
 import { sha256Hex } from '../utils/hashing.ts';
 import { parseJsonSafe } from '../utils/json.ts';
 import {
-  SECTION_FILE_PREFIXES, SECTION_JSON_PATHS, isFileSection, validateSectionData,
+  SECTION_FILE_PREFIXES, SECTION_IDS, SECTION_JSON_PATHS, isFileSection, validateSectionData,
 } from '../schema/config.ts';
-import { CHECKSUMS_FILE, MANIFEST_FILE, parseManifest } from '../schema/manifest.ts';
-import { canImport, describeVersion, isSupported } from '../schema/versions.ts';
+import { CHECKSUMS_FILE, MANIFEST_FILE, parseManifest, validateManifest } from '../schema/manifest.ts';
+import {
+  CURRENT_SCHEMA_VERSION, canImport, describeVersion, isSupported, isTooNew, needsMigration,
+} from '../schema/versions.ts';
+import { migrateToCurrent } from '../migrations/index.ts';
 import { isAbsolutePath, applyPrefixMappings } from '../utils/paths.ts';
 import { parseZip, type ZipArchive, type ZipSafetyLimits } from '../utils/zip.ts';
 import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
@@ -71,10 +74,26 @@ interface Bundle {
   manifest: Manifest;
   checksums: { ok: boolean; mismatches: string[]; missing: string[] };
   zipWarnings: string[];
+  /** G-06：schema 迁移链实际执行的步骤告警（`import.migrated`；CURRENT=MIN=1 时恒为空） */
+  migrationWarnings: string[];
+}
+
+/** 分区提取产出：数据 + 被跳过分区的原因分类（G-01/G-02/G-03/G-05） */
+interface SectionExtraction {
+  sections: Map<SectionId, unknown>;
+  /** manifest 声明启用但本版本不认识的 id（不在 SECTION_IDS）→ 独立告警，不计入 missingSections */
+  unsupportedSections: string[];
+  /** 已知分区、但数据 version 高于本版本支持的 1 → 已跳过该分区（warning，不阻断） */
+  unsupportedVersions: { section: SectionId; version: number }[];
+  /** 提取期产生的分区级告警（未知分区汇总 + 版本过高被跳过） */
+  warnings: string[];
 }
 
 interface AnalyzedBundle extends Bundle {
   sections: Map<SectionId, unknown>;
+  unsupportedSections: string[];
+  unsupportedVersions: { section: SectionId; version: number }[];
+  sectionWarnings: string[];
   adapterItems: PlanItem[];
   adapterIssues: string[];
 }
@@ -139,9 +158,19 @@ export class Analyzer {
     }
 
     // 4. 完整性（integrity/checksums.json 逐一 SHA-256）
+    const zipWarnings: string[] = [];
     let checksums = { ok: true, mismatches: [] as string[], missing: [] as string[] };
-    if (archive.has(CHECKSUMS_FILE)) {
-      const table = parseJsonSafe(archive.readEntryText(CHECKSUMS_FILE)) as Record<string, string>;
+    // 4a. H2：校验表**缺失**或**为空**时，全部条目都处于「未登记 ⇒ 未被校验」状态。
+    //     此前整段完整性逻辑（含下面的反向检查）都嵌在 `if (archive.has(CHECKSUMS_FILE))` 内，
+    //     于是「剥掉 checksums.json」或「把它置为 {}」= 一个条目都不校验，却 valid=true / 零告警。
+    //     两种形态对用户是同一件事（没有任何条目被校验），故共用同一条告警，不制造近重复文案。
+    const table = archive.has(CHECKSUMS_FILE)
+      ? (parseJsonSafe(archive.readEntryText(CHECKSUMS_FILE)) as Record<string, string>)
+      : null;
+    if (table === null || Object.keys(table).length === 0) {
+      zipWarnings.push(this.msg('import.checksumsMissing'));
+    }
+    if (table !== null && Object.keys(table).length > 0) {
       const entries = new Map<string, Uint8Array>();
       for (const name of archive.names()) {
         if (name === MANIFEST_FILE || name === CHECKSUMS_FILE) continue;
@@ -160,15 +189,39 @@ export class Analyzer {
           entries: [...checksums.mismatches, ...checksums.missing].map((m) => `"${m}"`).join(', '),
         }));
       }
+      // 4b. G-04：反向完整性——ZIP 内**不在**校验表里的条目（未登记 ⇒ 未被校验）。
+      //     verifyAgainstTable 只遍历表里的键，所以 ZIP 里多出的条目此前既不校验也不告知；
+      //     这里把它变成显式 warning（不阻断：未知 ZIP 条目不参与校验是格式 v1 的既定语义）。
+      //     排除 manifest.json / checksums.json 自身与目录条目（以 "/" 结尾）。
+      const tableKeys = new Set(Object.keys(table));
+      const extraEntries = archive.names().filter(
+        (name) => name !== MANIFEST_FILE && name !== CHECKSUMS_FILE
+          && !name.endsWith('/') && !tableKeys.has(name),
+      );
+      if (extraEntries.length > 0) {
+        zipWarnings.push(this.msg('import.extraEntries', {
+          entries: extraEntries.map((e) => `"${e}"`).join(', '),
+        }));
+      }
     }
 
-    // 5. schema 版本判定（集中）
-    if (!isSupported(manifest.schemaVersion)) {
+    // 5. schema 版本判定（集中）：过新（isTooNew）或过旧（低于 MIN_SUPPORTED）→ 一律硬失败（行为不变）
+    if (isTooNew(manifest.schemaVersion) || !isSupported(manifest.schemaVersion)) {
       throw new Error(this.msg('import.schemaUnsupported', { version: describeVersion(manifest.schemaVersion) }));
     }
 
+    // 5b. G-06：把「可迁移的旧 schema」真正沿迁移链升级——此前 `migrateToCurrent` 在 src/ 内零引用，
+    //     迁移链有定义、有单测、却从未执行。迁移结果 doc 成为后续 manifest，并重新校验其合法性。
+    //     注：当前 MIN_SUPPORTED = CURRENT = 1 ⇒ needsMigration 恒假 ⇒ 此处零迁移（旧 v1 行为不变）；
+    //     一旦 CURRENT > MIN，旧备份会在这里被真实迁移，而不是「判定可迁移却按新格式直接用」。
+    const migrationWarnings: string[] = [];
+    if (needsMigration(manifest.schemaVersion)) {
+      const migrated = runSchemaMigration(manifest, manifest.schemaVersion, CURRENT_SCHEMA_VERSION, this.msg);
+      manifest = migrated.manifest;
+      migrationWarnings.push(...migrated.warnings);
+    }
+
     // 6. 扫描：可执行文件条目 → 警告（不执行）
-    const zipWarnings: string[] = [];
     for (const name of archive.names()) {
       const ext = name.slice(name.lastIndexOf('.')).toLowerCase();
       if (EXECUTABLE_EXTENSIONS.has(ext)) {
@@ -176,20 +229,32 @@ export class Analyzer {
       }
     }
 
-    const bundle: Bundle = { archive, manifest, checksums, zipWarnings };
+    const bundle: Bundle = { archive, manifest, checksums, zipWarnings, migrationWarnings };
     this.bundleCache.set(zipPath, bundle);
     return bundle;
   }
 
   /* ---------------- 第 7 步：分区内容扫描/提取 ---------------- */
 
-  private extractSections(bundle: Bundle): Map<SectionId, unknown> {
+  private extractSections(bundle: Bundle): SectionExtraction {
     const { archive, manifest } = bundle;
     const sections = new Map<SectionId, unknown>();
-    for (const [sectionId, enabled] of Object.entries(manifest.sections) as [SectionId, boolean][]) {
+    const unsupportedSections: string[] = [];
+    const unsupportedVersions: { section: SectionId; version: number }[] = [];
+    const warnings: string[] = [];
+    const knownIds = new Set<string>(SECTION_IDS);
+    for (const [sectionId, enabled] of Object.entries(manifest.sections) as [string, boolean][]) {
       if (!enabled) continue;
-      if (isFileSection(sectionId)) {
-        const prefix = SECTION_FILE_PREFIXES[sectionId]!;
+      // G-01/G-02/G-03：manifest.sections 的键可能来自更新的 DSH（本版本不认识的分区）。
+      // 未知分区单独收集 → 由本函数产出独立告警；**绝不**再落进 missingSections
+      // （此前会被误报成「备份声明了但缺少的分区: X」——而文件其实就在 ZIP 里）。
+      if (!knownIds.has(sectionId)) {
+        unsupportedSections.push(sectionId);
+        continue;
+      }
+      const id = sectionId as SectionId;
+      if (isFileSection(id)) {
+        const prefix = SECTION_FILE_PREFIXES[id]!;
         const files: FilesSection['files'] = [];
         for (const name of archive.names()) {
           if (!name.startsWith(prefix) || name === prefix) continue;
@@ -198,30 +263,46 @@ export class Analyzer {
           const data = archive.readEntry(name);
           files.push({ relativePath: rel, data, contentHash: sha256Hex(data) });
         }
-        sections.set(sectionId, { version: 1, files });
+        sections.set(id, { version: 1, files });
         continue;
       }
-      const jsonPath = SECTION_JSON_PATHS[sectionId];
+      const jsonPath = SECTION_JSON_PATHS[id];
       if (jsonPath === undefined) continue; // secrets 分区无 JSON 文件
       if (!archive.has(jsonPath)) continue; // 声明包含但文件缺失 → 由调用方记 missingSections
       let data: unknown;
       try {
         data = archive.readEntryJson(jsonPath);
       } catch (err) {
-        throw new Error(this.msg('import.sectionParseFailed', { section: sectionId, reason: err instanceof Error ? err.message : String(err) }));
+        throw new Error(this.msg('import.sectionParseFailed', { section: id, reason: err instanceof Error ? err.message : String(err) }));
       }
-      const issues = validateSectionData(sectionId, data);
+      // G-05：分区数据 version 高于本版本支持的 1 → 跳过该分区（warning，不阻断整个 bundle）。
+      // 判定前置在此（不改 schema/config.ts 的校验语义）：只有「数字且 > 1」才跳过；
+      // version < 1、非数字或缺失仍交由 validateSectionData 记硬错误（数据损坏语义不变）。
+      const rawVersion = (data !== null && typeof data === 'object')
+        ? (data as Record<string, unknown>)['version']
+        : undefined;
+      if (typeof rawVersion === 'number' && rawVersion > 1) {
+        unsupportedVersions.push({ section: id, version: rawVersion });
+        warnings.push(this.msg('import.unsupportedSectionVersion', { section: id, version: String(rawVersion) }));
+        continue;
+      }
+      const issues = validateSectionData(id, data);
       const errors = issues.filter((i) => i.severity === 'error');
       if (errors.length > 0) {
-        throw new Error(this.msg('import.sectionInvalid', { section: sectionId, issues: errors.map((e) => e.message).join('; ') }));
+        throw new Error(this.msg('import.sectionInvalid', { section: id, issues: errors.map((e) => e.message).join('; ') }));
       }
-      sections.set(sectionId, data);
+      sections.set(id, data);
     }
-    return sections;
+    // 未知分区汇总告警（放在版本告警之后：一条消息列出全部被跳过的未知分区）
+    if (unsupportedSections.length > 0) {
+      warnings.push(this.msg('import.unsupportedSections', { sections: unsupportedSections.join(', ') }));
+    }
+    return { sections, unsupportedSections, unsupportedVersions, warnings };
   }
 
   private async analyzeBundle(bundle: Bundle): Promise<AnalyzedBundle> {
-    const sections = this.extractSections(bundle);
+    const extraction = this.extractSections(bundle);
+    const { sections } = extraction;
     const { manifest } = bundle;
 
     const importCtx: ImportContext = {
@@ -254,7 +335,15 @@ export class Analyzer {
       }
     }
 
-    return { ...bundle, sections, adapterItems, adapterIssues };
+    return {
+      ...bundle,
+      sections,
+      unsupportedSections: extraction.unsupportedSections,
+      unsupportedVersions: extraction.unsupportedVersions,
+      sectionWarnings: extraction.warnings,
+      adapterItems,
+      adapterIssues,
+    };
   }
 
   /* ---------------- 第 8 步：analyzeImport ---------------- */
@@ -265,15 +354,22 @@ export class Analyzer {
     const analyzed = await this.analyzeBundle(bundle);
 
     const errors = [...analyzed.adapterIssues];
-    const warnings = [...zipWarnings];
+    const warnings = [...zipWarnings, ...bundle.migrationWarnings, ...analyzed.sectionWarnings];
     if (!canImport(manifest.schemaVersion)) {
       errors.push(this.msg('import.versionUnsupported', { version: describeVersion(manifest.schemaVersion) }));
     }
 
     // 兼容性（第 6 步）
     const sectionsInZip = [...analyzed.sections.keys()];
+    // G-01/G-02/G-03/G-05：被「跳过」的分区（本版本不认识的未知分区 / 数据版本过高）**不是缺失**，
+    // 必须从 missingSections 剔除；missingSections 只统计「已知分区但 ZIP 内文件缺失」。
+    const unsupportedSections = analyzed.unsupportedSections;
+    const skippedSections = new Set<string>([
+      ...unsupportedSections,
+      ...analyzed.unsupportedVersions.map((u) => u.section),
+    ]);
     const missingSections = (Object.entries(manifest.sections) as [SectionId, boolean][])
-      .filter(([id, on]) => on && !analyzed.sections.has(id))
+      .filter(([id, on]) => on && !skippedSections.has(id) && !analyzed.sections.has(id))
       .map(([id]) => id);
     if (missingSections.length > 0) {
       warnings.push(this.msg('import.missingSections', { sections: missingSections.join(', ') }));
@@ -330,6 +426,8 @@ export class Analyzer {
       warnings,
       compatibility,
       sectionsInZip,
+      unsupportedSections,
+      unsupportedVersions: analyzed.unsupportedVersions,
       pluginSummary,
       pathIssues,
       secretCount,
@@ -498,7 +596,7 @@ export class Analyzer {
     }
 
     const executed: ExecutedItem[] = [];
-    const warnings: string[] = [...bundle.zipWarnings];
+    const warnings: string[] = [...bundle.zipWarnings, ...bundle.migrationWarnings, ...analyzed.sectionWarnings];
     let needsRestart = plan.needsRestart;
     let anyFailed = false;
 
@@ -756,6 +854,35 @@ export class Analyzer {
 }
 
 /* ---------------- 纯函数辅助 ---------------- */
+
+/**
+ * G-06：执行 schema 迁移链并把迁移结果重新校验为合法 manifest。
+ *
+ * `migrateToCurrent` 此前在 `src/` 内零引用（迁移链有定义、有单测、从不执行）；
+ * `loadBundle` 只用 isSupported 做判定就直接把旧文档当新格式使用。本函数是迁移链的
+ * **真实接线点**：沿链迁移 → 重新校验结果是合法 manifest（不合法则抛明确错误，
+ * 绝不把半迁移文档当合法 manifest 继续）→ 每个已应用步骤翻译成用户可见告警。
+ *
+ * 显式传入 from/target 使「链式迁移真的被执行」可被直接单测：当前
+ * `MIN_SUPPORTED_SCHEMA_VERSION = CURRENT_SCHEMA_VERSION = 1`，`needsMigration` 恒假，
+ * 因此该分支在真实导入中结构上不可达（loadBundle 仍按 needsMigration 调用本函数）。
+ */
+export function runSchemaMigration(
+  doc: unknown,
+  fromVersion: number,
+  targetVersion: number,
+  msg: MsgFunc,
+): { manifest: Manifest; warnings: string[] } {
+  const result = migrateToCurrent(doc, fromVersion, targetVersion);
+  const issues = validateManifest(result.doc).filter((i) => i.severity === 'error');
+  if (issues.length > 0) {
+    throw new Error(msg('import.migrateInvalidManifest', { issues: issues.map((i) => i.message).join('; ') }));
+  }
+  return {
+    manifest: result.doc as Manifest,
+    warnings: result.applied.map((step) => msg('import.migrated', { from: String(step.from), to: String(step.to) })),
+  };
+}
 
 async function verifyAgainstTable(
   entries: Map<string, Uint8Array>,

@@ -23,6 +23,8 @@ import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
+import { DEFAULT_RETENTION_POLICY, isDefaultRetentionPolicy, validateRetentionPolicy } from './retention-policy.ts';
+import type { RetentionPolicy } from './retention-policy.ts';
 
 export const BACKUP_SCHEDULE_FILE = 'backup-schedule.json';
 export const BACKUP_SCHEDULE_SCHEMA_VERSION = 1;
@@ -64,6 +66,12 @@ export interface BackupScheduleConfig {
   customSchedule?: BackupWeeklySchedule;
   /** 重启触发的「启动备份」最小间隔阈值（ms） */
   startupMinIntervalMs: number;
+  /**
+   * m-retention：定时备份产物的保留策略（GFS 分层）。
+   * 缺省/缺字段 = `DEFAULT_RETENTION_POLICY`（= 既有的「保留最近 10 个」）；
+   * 非法值 → 回退缺省（读取宽容，绝不崩——见 readBackupSchedule 的 warning 语义）。
+   */
+  retention?: RetentionPolicy;
   /** 连续失败计数（用于通知判定） */
   consecutiveFailures: number;
   /** 最近一次执行时间（ISO-8601 UTC）；''/undefined = 从未执行 */
@@ -79,8 +87,21 @@ export function defaultBackupSchedule(): BackupScheduleConfig {
     enabled: false,
     interval: DEFAULT_BACKUP_INTERVAL,
     startupMinIntervalMs: DEFAULT_STARTUP_MIN_INTERVAL_MS,
+    retention: { ...DEFAULT_RETENTION_POLICY },
     consecutiveFailures: 0,
   };
+}
+
+/**
+ * 解析并校验持久化的保留策略（m-retention）：
+ * 缺字段 / 非法 → 返回缺省策略（读取宽容，绝不崩）。
+ * 校验走 `validateRetentionPolicy`（与 UI/host 草稿校验同一实现，避免两套规则漂移）。
+ */
+export function parseRetentionPolicy(raw: unknown): RetentionPolicy {
+  if (raw === undefined) return { ...DEFAULT_RETENTION_POLICY };
+  const parsed = validateRetentionPolicy(raw);
+  if (!parsed.ok) return { ...DEFAULT_RETENTION_POLICY };
+  return parsed.value;
 }
 
 /** 间隔 → ms 换算（固定间隔档；'custom' 无固定周期 → NaN，调用方改用 nextBackupDelayMs） */
@@ -149,6 +170,8 @@ function parsePayload(obj: Record<string, unknown>): BackupScheduleConfig {
   if (typeof obj['startupMinIntervalMs'] === 'number' && Number.isFinite(obj['startupMinIntervalMs']) && obj['startupMinIntervalMs'] > 0) {
     cfg.startupMinIntervalMs = obj['startupMinIntervalMs'];
   }
+  // m-retention：保留策略（缺字段/非法 → 缺省；读取宽容不抛错）
+  cfg.retention = parseRetentionPolicy(obj['retention']);
   if (typeof obj['consecutiveFailures'] === 'number' && Number.isFinite(obj['consecutiveFailures']) && obj['consecutiveFailures'] >= 0) {
     cfg.consecutiveFailures = obj['consecutiveFailures'];
   }
@@ -195,6 +218,15 @@ export async function writeBackupSchedule(dir: string, cfg: BackupScheduleConfig
     consecutiveFailures: cfg.consecutiveFailures,
   };
   if (cfg.customSchedule !== undefined) payload['customSchedule'] = cfg.customSchedule;
+  // m-retention：**仅在非缺省时写入**（缺省 = 「最近 10 个」，与旧行为等价）。
+  // 依据：本函数是**全量覆盖写**（每次重建 payload 对象），省略该键 = 文件中不存在该键
+  // = 读回时走 parseRetentionPolicy 的缺省分支 → 语义正确，且有两个好处：
+  //  ① 不给所有用户平白多出一个字段（老文件↔新代码、新文件↔老代码均无 diff 噪音）；
+  //  ② backup-schedule.json 随 self 分区参与备份/远程同步，少一个字段 = 少一处无意义变更。
+  // schemaVersion **保持 1 不变**（加可选字段不升版本；升版本会让已存在用户的配置整体回退缺省）。
+  if (cfg.retention !== undefined && !isDefaultRetentionPolicy(cfg.retention)) {
+    payload['retention'] = cfg.retention;
+  }
   if (cfg.lastRunAt !== undefined && cfg.lastRunAt !== '') payload['lastRunAt'] = cfg.lastRunAt;
   if (cfg.lastRunStatus !== undefined) payload['lastRunStatus'] = cfg.lastRunStatus;
   if (cfg.lastRunMessage !== undefined && cfg.lastRunMessage !== '') payload['lastRunMessage'] = cfg.lastRunMessage;

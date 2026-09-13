@@ -161,6 +161,21 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
       )
     }
   }
+  // 6b3. T1：plugins 分区禁止携带本地插件 tarball（localTarballs）。
+  //      发布侧同样拒绝（与 market/security.ts 的导入侧检查双保险）：内嵌 tarball 是不可经公开
+  //      仓库审阅的不透明二进制，安装时可能执行 postinstall —— 不得经公共市场分发去绕过
+  //      BANNED 分区与逐分区批准的既有供应链防线。本地插件迁移只应发生在自己的备份里。
+  if (sections.includes('plugins')) {
+    const pluginsJson = archive.has(SECTION_JSON_PATHS.plugins!)
+      ? (archive.readEntryJson(SECTION_JSON_PATHS.plugins!) as { localTarballs?: unknown })
+      : null
+    const tb = pluginsJson?.localTarballs
+    if (Array.isArray(tb) && tb.length > 0) {
+      throw new MarketPrepareError(
+        `zip 的 plugins 分区携带 ${tb.length} 个本地插件 tarball（localTarballs），禁止发布到市场（内嵌插件代码不可经公开仓库审阅；本地插件迁移请用自己的备份）`,
+      )
+    }
+  }
   // 6c. 内容级秘密扫描（纵深防御，不依赖导出 containsSecrets 标记）：
   //     migrate 模式：JSON 分区走 scanAndRedact 宽松档（literalValueOnly：占位符/模板引用/代码表达式/
   //     短标识符放行，只有值像真实字面量凭据才拦截——消除 `"token": "${ENV}"`、`Bearer <token>` 等误报）；

@@ -1,6 +1,6 @@
 {
   "name": "dsh-config-manager",
-  "version": "0.1.58",
+  "version": "0.1.59",
   "license": "MIT",
   "description": "Backup, restore, export, import, migrate and sync your DeepSeek Harness (DSH) configuration: settings, plugins, MCP servers, skills, agent presets and workspaces. One-click migration to another machine. DSH 配置一键备份、恢复、导出、导入、迁移与同步插件。",
   "keywords": [
@@ -45,8 +45,8 @@
       "default": "./lib/core/index.js"
     },
     "./schema": {
-      "types": "./lib/schema/types.d.ts",
-      "default": "./lib/schema/types.js"
+      "types": "./lib/schema/index.d.ts",
+      "default": "./lib/schema/index.js"
     },
     "./client": {
       "types": "./lib/client.d.ts",
@@ -69,6 +69,7 @@
   },
   "files": [
     "lib",
+    "!lib/**/*.map",
     "src",
     "cordis.patch.yml",
     "README.md",
@@ -84,9 +85,7 @@
     "clean": "node -e \"require('node:fs').rmSync('lib', { recursive: true, force: true })\""
   },
   "dependencies": {
-    "@radix-ui/react-dialog": "^1.1.23",
-    "js-yaml": "^5.4.1",
-    "lucide-react": "^1.41.0"
+    "js-yaml": "^5.4.1"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-agent-presets": "^0.1.0-rc.6",
@@ -106,6 +105,56 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent-presets": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-connection": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-locale": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-runtime": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-slots": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-credentials": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-home-paths": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-plugin-inventory": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
@@ -124,11 +173,13 @@
     "@deepseek-ai/dsh-timeout": "^0.1.0-rc.8",
     "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-workspace": "^0.1.0-rc.6",
+    "@radix-ui/react-dialog": "^1.1.23",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^26.2.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.5",
     "lightningcss": "1.33.0",
+    "lucide-react": "^1.41.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "schemastery": "^3.18.0",

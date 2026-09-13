@@ -35,7 +35,7 @@ import { SECTION_IDS } from '../schema/config.ts'
 import type { SectionId } from '../schema/types.ts'
 import { readFullSyncConfig, readSyncConfigFor } from '../sync/sync-config.ts'
 import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
-import type { ConfigAdapter, HostContext } from './types.ts'
+import type { ConfigAdapter, HostContext, SecretScanner } from './types.ts'
 import { runWithMutationLock } from '../utils/env-lock.ts'
 
 /* ------------------------------------------------------------ 依赖与类型 */
@@ -56,6 +56,13 @@ export interface ModelToolsDeps {
   makeSyncEngine: (cfg: SyncConfig) => SyncEngine
   /** 插件版本（manifest.exporter.version） */
   exporterVersion?: string
+  /**
+   * F2 强化 Secret 扫描器（含部署者 personalPatterns 个人规则；G-09 文件类分区文本级扫描）。
+   * 必须与 HTTP 导出路由注入的是同一来源（src/index.ts 的 secretScanner 单一实例），
+   * 否则两条导出路径的扫描档位不一致（个人规则 / 文件类分区凭据告警）。
+   * 可选：缺省落回 Exporter 的 defaultSecretScanner()（无 scanText → 文件类分区不扫描，与修复前一致）。
+   */
+  scanner?: SecretScanner
 }
 
 /** 快照 id 校验：拒绝路径分隔符与 `.`/`..`（防 join(snapshotsDir, id) 越界）。 */
@@ -123,6 +130,8 @@ export function createModelTools(deps: ModelToolsDeps) {
             adapters: deps.adapters,
             encryption,
             exporterVersion: deps.exporterVersion,
+            // M1（G-09 接线）：与 HTTP 导出路由同一个 scanner 实例；缺省 undefined → Exporter 落回默认扫描器。
+            scanner: deps.scanner,
           })
           const { report } = await exporter.export({
             includeSecrets: false,

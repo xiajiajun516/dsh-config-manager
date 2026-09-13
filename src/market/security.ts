@@ -165,6 +165,23 @@ export function validateMarketItem(
     if (hardErrors.length > 0) {
       return { status: 'invalid', errors: [`分区 ${sectionId} 数据无效: ${hardErrors.map((e) => e.message).join('; ')}`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }
+    // T1 供应链约束：plugins 分区禁止携带本地插件 tarball（localTarballs）。
+    //
+    // 为什么必须拒绝：该字段内嵌**任意插件代码**（base64 tarball），导入时会解包到
+    // $DSH_HOME 并经 `file:` 交给 npm 安装 —— 安装过程可能执行 postinstall 脚本。
+    // 与既有 `github:user/repo` 这类来源的关键差别：tarball 是**不可通过公开仓库审阅**的
+    // 不透明二进制，等于给「分享配置」开了一条携带任意代码的通道，绕过 BANNED 分区的
+    // 既有供应链防线。本地插件迁移只应发生在**自己的备份**里，不应经公共市场分发。
+    if (sectionId === 'plugins') {
+      const tarballs = (data as { localTarballs?: unknown }).localTarballs;
+      if (Array.isArray(tarballs) && tarballs.length > 0) {
+        return {
+          status: 'invalid',
+          errors: [`config.zip 的 plugins 分区携带 ${tarballs.length} 个本地插件 tarball（localTarballs），市场条目禁止携带内嵌插件代码（供应链防线；本地插件迁移请用自己的备份，不要经公共市场分发）`],
+          warnings, manifest, internalManifest, sections: [], checksumsOk: true,
+        };
+      }
+    }
   }
 
   // 8. L2↔L3 一致性：manifest.sections 与 zip 内部 manifest.sections 取交集后至少非空（空 → 拒绝）

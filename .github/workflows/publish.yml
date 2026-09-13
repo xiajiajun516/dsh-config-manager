@@ -40,6 +40,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Bundle self-contained guard
+        # 发版前的最后一道闸：lib/client.js 必须自包含（只 require react/react-dom 白名单）。
+        # 任何被外置的 require 都会让用户端插件加载崩溃，绝不能带病发布。
+        # `npm test` 在 Build 之前运行，此时产物还不存在（该测试会跳过），故此处必须重跑。
+        run: node --test src/client/bundle-selfcontained.test.ts
+
       - name: Package tarball
         # The installable tgz is attached to the GitHub Release as an asset.
         # npm pack --pack-destination fails if the dir does not exist (fresh checkout).

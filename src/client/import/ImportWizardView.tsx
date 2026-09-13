@@ -668,7 +668,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
         </div>
         {analysis.warnings.length > 0 && (
           <Banner kind="warn">
-            {analysis.warnings.map((w, i) => <div key={i}>{w}</div>)}
+            {analysis.warnings.map((w, i) => <div key={i}>{redact(w)}</div>)}
           </Banner>
         )}
         {/* 备份包含的分区（两列网格；与总览「分区构成」同模式） */}

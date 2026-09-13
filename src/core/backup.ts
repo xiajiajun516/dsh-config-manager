@@ -285,6 +285,29 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
 
 /* ---------------- 默认文件快照存储 ---------------- */
 
+/**
+ * m-retention：保留策略的**结构形状**（故意在 core 内声明，而非 import sync/retention-policy.ts）。
+ *
+ * 为什么不用 sync 的类型：架构边界测试（tests/architecture-boundaries.test.ts）硬性禁止
+ * `core/ → sync/` 反向依赖——core 是与 DSH 解耦的领域层，只允许 node 内置 / core 内部 /
+ * schema / utils / security。sync 侧 `RetentionPolicy` 与本接口结构一致，可直接赋值（结构化类型）。
+ * 分层选别算法本体在 `src/sync/retention-policy.ts`（selectPruneCandidatesByPolicy），
+ * 由宿主（入口层）经 `FileSnapshotStoreOptions.pruneSelector` 注入——core 只定义契约，不反向依赖。
+ */
+export interface RetentionPolicyLike {
+  /** 最近保留份数 */
+  keepLast: number;
+  /** 每月保留份数（0 = 关闭） */
+  keepMonthly: number;
+  /** 每年保留份数（0 = 关闭） */
+  keepYearly: number;
+}
+
+/** core 侧缺省保留策略：与既有 `SNAPSHOT_RETENTION_LIMIT`（最近 10 个）逐字等价。 */
+export function defaultRetentionPolicyLike(): RetentionPolicyLike {
+  return { keepLast: SNAPSHOT_RETENTION_LIMIT, keepMonthly: 0, keepYearly: 0 };
+}
+
 /** 快照保留上限：save 落盘后超过该数量则删除最旧快照目录 */
 export const SNAPSHOT_RETENTION_LIMIT = 10;
 
@@ -298,6 +321,23 @@ export function selectPruneCandidates(
   const sorted = [...metas].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
   return sorted.slice(0, sorted.length - limit).map((m) => m.id);
 }
+
+/**
+ * 分层保留选择器契约（core 侧签名；实现由宿主注入，见 sync/retention-policy.ts）。
+ * 入参 metas 已剔除 pinned / recovery 引用等豁免项（由 store.prune 完成）。
+ */
+export type PruneSelector = (
+  metas: ReadonlyArray<{ id: string; createdAt: string }>,
+  policy: RetentionPolicyLike,
+) => string[];
+
+/**
+ * core 内置的**兜底**选择器：只按 keepLast 取最旧超限部分（= 既有 FIFO 行为）。
+ * 分层（keepMonthly/keepYearly）语义需宿主注入真正的 GFS 实现；未注入时分层字段被忽略，
+ * 行为等价于改造前（安全侧：宁可少删，绝不因缺实现而多删）。
+ */
+export const fallbackPruneSelector: PruneSelector = (metas, policy) =>
+  selectPruneCandidates(metas, policy.keepLast);
 
 export interface FileSnapshotStoreOptions {
   /** 快照根目录（宿主决定，如 ~/.dsh/dsh-config-manager/snapshots） */
@@ -314,6 +354,18 @@ export interface FileSnapshotStoreOptions {
    * 缺省 = 不记录（不改变 prune 行为、不污染核心引擎）。
    */
   onPrune?: (removedIds: string[]) => void;
+  /**
+   * m-retention：快照保留策略提供者（GFS 分层；可配置）。
+   * 缺省 = `SNAPSHOT_RETENTION_LIMIT`（= 既有的「保留最近 10 个」，行为不变）。
+   * 每次 prune 时调用（宿主可从 backup-schedule.json 读取最新策略，用户改完即时生效）；
+   * 抛错/返回非法值 → 回退缺省策略（绝不因策略读取失败而误删或崩溃）。
+   */
+  retentionPolicy?: () => RetentionPolicyLike | Promise<RetentionPolicyLike>;
+  /**
+   * m-retention：分层保留选择器（由宿主注入 sync/retention-policy.ts 的 GFS 实现）。
+   * 未注入 → `fallbackPruneSelector`（只按 keepLast，等价既有 FIFO；分层字段被忽略 = 保守少删）。
+   */
+  pruneSelector?: PruneSelector;
 }
 
 /** 文件快照存储：<dir>/<id>/snapshot.json + <dir>/<id>/blobs/* */
@@ -380,6 +432,11 @@ export class FileSnapshotStore implements SnapshotStore {
     const dir = this.options.dir;
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     const referenced = await this.options.referencedSnapshotIds?.().catch(() => new Set<string>()) ?? new Set<string>();
+    // m-retention：策略读取失败 → 回退缺省（绝不因策略提供者异常而误删/崩溃）
+    const policy = await Promise.resolve()
+      .then(() => this.options.retentionPolicy?.() ?? defaultRetentionPolicyLike())
+      .catch(() => defaultRetentionPolicyLike());
+    const selector = this.options.pruneSelector ?? fallbackPruneSelector;
     const metas: { id: string; createdAt: string }[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -394,7 +451,7 @@ export class FileSnapshotStore implements SnapshotStore {
       }
     }
     const removedIds: string[] = [];
-    for (const id of selectPruneCandidates(metas)) {
+    for (const id of selector(metas, policy)) {
       const target = path.join(dir, id);
       if (!target.startsWith(dir)) continue; // 越界 id 跳过（不删、不抛，同 save/readBlob 包含性约定）
       await fs.rm(target, { recursive: true, force: true });

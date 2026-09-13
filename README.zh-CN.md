@@ -80,6 +80,8 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 | ⏰ | **定时全量备份** | 按固定周期（6h / 12h / 24h / 7d）自动全量备份，一劳永逸，密钥永不包含 |
 | 🛒 | **配置市场** | 浏览并一键安装社区分享的配置——供应链警示 + 逐分区批准 |
 | 🗂️ | **配置档案 Profiles** | 保存多套配置（工作 / 个人），随时切换 |
+| 🧩 | **本地插件随备份迁移** | `link:` / `file:` 安装的本地开发插件会被打包进备份，换机不再丢失 |
+| 🗄️ | **保留策略可配（GFS 分层）** | 「最近 N 份 + 每月留 1 份 + 每年留 1 份」，默认值等价旧行为 |
 | 🤖 | **Agent 工具** | Agent 会话内直接备份 / 快照 / 恢复 / 同步 |
 
 ---
@@ -293,6 +295,10 @@ dsh-config-manager restore [--id <id>] [--dry-run]
                            [--profile <name>] [--settings <path>]
 dsh-config-manager reinstall [--version <v>] [--yes] [--list]
                              [--wipe-config] [--dry-run]       # 一键重装 DSH 程序本体
+dsh-config-manager verify [--id <文件|路径>] [--json]          # 只读自检备份 ZIP
+                          [--data-dir <dir>]
+dsh-config-manager backup [--sections <a,b,c>] [--out <path>] # 离线文件级备份
+                          [--dry-run] [--data-dir <dir>]
 ```
 
 **`reinstall` —— DSH 损坏时的救急重装。** 跨平台一键重装 `@deepseek-ai/dsh` 启动器（按操作系统自动选用正确命令：Windows 走 PowerShell、Unix 走 bash）。默认重装启动器 + 清全局残留缓存；交互式多选会询问是否勾选**危险**清理项（设置 / 插件 / 会话与凭据）——这些**默认不勾选**，且只要涉及删数据的动作，执行前都必须**二次确认输入 `YES`**。清空 `~/.dsh` 数据前会先做一份 `.reinstall-backup` 紧急备份（`snapshots/` 目录按设计绝不触碰）。
@@ -323,6 +329,41 @@ dsh-config-manager restore --id <snapshot-id>                 # 执行恢复（�
 ```
 
 每次覆盖/删除前都会先把当前文件复制到 `<snapshotDir>/pre-restore/`，可人工反悔。任一动作失败则退出码为 1；报告如实列出 已还原 / 已卸载插件 / 需人工处理 / 失败 / 跳过。
+
+**`verify` —— 三个月前那个备份现在还能不能用？** GUI 长在 DSH 里，DSH 起不来时它答不了这个问题，`verify` 能。它把备份 ZIP 从磁盘重读一遍，**一个字节都不写**，然后逐文件给出裁决：
+
+| 裁决 | 含义 |
+|---|---|
+| `OK` | 结构合法，且每个条目都与 `integrity/checksums.json` 里的 SHA-256 一致 |
+| `MISSING` | 文件不在（路径写错 / 已被删除） |
+| `CORRUPT` | 损坏或被篡改——报错会**点名具体是哪个条目** |
+| `UNSUPPORTED` | 备份本身有效，但本版本插件读不了（schema 过新，或整体加密容器需先解密） |
+| `VERIFY_ERROR` | 自检自身失败（磁盘 IO）；绝不降级成猜测结论 |
+
+不给参数就校验导出目录下**全部** `*.zip`；给文件名或路径就只校验那一个。**只要有一个不是 `OK` 退出码就是 `1`**，因此可直接在 CI / 定时任务里断言。`--json` 输出同样的机器可读结果。
+
+```bash
+dsh-config-manager verify                # 校验导出目录下的全部备份
+dsh-config-manager verify --json         # 机器可读（退出码语义不变）
+dsh-config-manager verify my-backup.zip  # 按文件名只校验一个
+dsh-config-manager verify C:/backups/dsh-config.zip   # 或按路径
+```
+
+**`backup` —— DSH 挂了也能备份。** 它是 GUI 导出的离线版：把 `$DSH_HOME` 里**无需 DSH 运行时即可直读**的部分（skills、agent presets、agent instructions、插件自身配置）打成与 GUI 导出同结构的 ZIP（`manifest.json` + `integrity/checksums.json` + 分区目录），落盘后立即用与 `verify` 同一引擎对自己做一次自检——一个从不校验自己产物的备份命令，比没有更糟。
+
+**凭据文件永不进入备份。** `.credentials.*`、`.env`、`*.pem` 等由显式黑名单排除；只遍历白名单目录（绝不对整个主目录递归）；symlink 一律跳过而非跟随。
+
+结构化分区（设置 / UI / providers / 插件 / MCP / prompts / workspaces）**不会**被偷偷伪造：它们需要 DSH 服务层读值并脱敏，因此一律不写入、在 manifest 里标记为 `false`——计划输出会把它们列在「离线不可收集」下，让你清楚这份备份到底有什么、没有什么。DSH 健康时想要完整备份，请用 GUI 导出。
+
+```bash
+dsh-config-manager backup --dry-run                       # 列出将打包哪些文件（零写入）
+dsh-config-manager backup                                 # 写入导出目录，随后自动自检
+dsh-config-manager backup --out D:/rescue/config.zip      # 指定输出（绝不覆盖既有文件）
+dsh-config-manager backup --sections skills,self          # 收窄范围
+```
+
+`--sections` 可选值为 `skills,agentPresets,agentInstructions,self,pluginFiles`。其中 `pluginFiles` 与 GUI 侧一致属**默认关闭**：它原样复制第三方插件自有文件，而 `dsh-ssh.json` 里是明文主机密码——确认过内容之后再选它。
+
 
 **典型救急流程**（DSH 起不来时）：① `dsh-config-manager reinstall` 先把启动器重装回来（必要时顺带清理），② `dsh web` 重新启动 DSH，③ 从仓库装回插件，④ 从远程仓库拉取快照（或执行 `dsh-config-manager restore`）把配置恢复回来。整个流程中 CLI 全程可用，与 DSH 是否健康无关。
 
@@ -393,6 +434,7 @@ dsh-config-manager restore --id <snapshot-id>                 # 执行恢复（�
 4. **历史会话默认不迁移**（v1 仅支持文件级复制）
 5. **加密备份**：密码丢失则无法解密（设计使然——请牢记密码）
 6. **快照恢复是离线的、诚实的**：离线引擎无法恢复的条目（快照无整文件备份时的 settings namespace / patch 行、存在 DSH storages 里的 workspace 记录）会如实列为跳过并指向在线回滚；凭据**值**绝不自动改写（只提示人工补录）；无插件基线的旧快照只提示人工核对新增插件
+7. **本地源插件（`link:` / `file:`）随备份打包**：导出时执行 `npm pack` 把本地开发中的插件打成 tarball 一并备份，导入时解包到 `$DSH_HOME/dsh-config-manager/local-plugins/` 后按 `file:` 安装。因此：① 备份体积会随本地插件的体积增大（单插件超过 100 MB 会被跳过并告警，建议先发布到 registry / git 再备份）；② 插件**源码**会进入备份（与「密钥永不进备份」不冲突——密钥仍被排除，这里进的是代码）；③ 打包需要本机有可用的 `npm`，无 npm 时该插件退化为原行为（保留原 spec，换机后仍需手工安装）
 
 > 维护者与开发者：构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 

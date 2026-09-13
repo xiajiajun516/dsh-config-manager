@@ -55,6 +55,21 @@ CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish�
   ```
 - `dist/` 目录需先创建（`mkdir -p dist && npm pack --pack-destination ./dist`），否则 npm pack 报 ENOENT
 
+## 🔒 CI 门禁（PR / 主干）
+
+`.github/workflows/ci.yml` 与发布流水线**分离**，对 `pull_request`（目标 `main`）、`push`（`main`）与 `workflow_dispatch` 触发：
+
+```
+install → typecheck → npm test（全量套件，不按目录裁剪）→ build（tsc + tsdown）→ npm pack（打包与 files 白名单校验）
+```
+
+- **零发布副作用**：不含向 registry 推送的步骤，不申请 OIDC 发布凭据，权限仅 `permissions: contents: read`
+- **单 job 跑完整阶梯**：install → typecheck → test → build → pack，一步失败即整体红；**禁用「允许失败」、不加自动重试**（全量测试实测 1558 项约 88 秒，无需拆 job；耗时由 concurrency + timeout 控制）
+- **安装契约与发布一致**：Node 24 + `npm ci --legacy-peer-deps`（部分 DSH 核心包只声明在 peerDependencies，普通 `npm ci` 必红）
+- **并发**：`concurrency.group: ci-${{ github.ref }}` + `cancel-in-progress`，同一分支的新提交自动取消旧运行
+- **PR 要求**：合并进 `main` 前需 ci.yml 全绿；**发布仍是打 tag → `publish.yml`**（见上一节），两条流水线互不触发
+- **已知间歇性失败（非必然红灯）**：`src/utils/env-lock.test.ts` 与 `src/client/run-store.test.ts` 存在**负载相关的间歇性**失败（多数运行 0 fail 全绿，单独跑必过）。若 CI 首次红灯，可先 `gh run rerun <id> --failed` 确认是否为该间歇，**而非直接认定为缺陷**——但也不要因为「可能是间歇」而放松警觉。
+
 ## 🧪 测试矩阵
 
 **192 个测试全部通过**（node:test，零额外依赖），覆盖规范 §33 + 验收场景 A–G：

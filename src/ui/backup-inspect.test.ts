@@ -26,6 +26,8 @@ function analysis(partial: Partial<ImportAnalysis> = {}): ImportAnalysis {
     warnings: [],
     compatibility: 'excellent',
     sectionsInZip: ['settings', 'plugins'],
+    unsupportedSections: [],
+    unsupportedVersions: [],
     pluginSummary: { installed: 1, toInstall: 1 },
     pathIssues: [],
     secretCount: 2,

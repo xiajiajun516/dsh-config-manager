@@ -7,8 +7,13 @@
  * sync,market,migrations,profiles,utils}。
  *
  * 规则数据表（from 层 → 允许/禁止 import 的目标）：
- *  - core     ：只允许 node 内置 + core 内部 + ../schema + ../utils + ../security + js-yaml
+ *  - core     ：只允许 node 内置 + core 内部 + ../schema + ../utils + ../security +
+ *                ../migrations + js-yaml
  *                （与 DSH 运行时解耦：ConfigAdapter/HostContext 接口，见 core/types.ts）；
+ *  - migrations：schema 迁移链（纯函数式格式转换）。只依赖 node 内置 + 自身 + ../schema +
+ *                ../utils；**禁止 ../core** —— core 可以消费迁移链（导入路径需要真实执行迁移，
+ *                见 analyzer.loadBundle），但迁移链本身必须保持对 core 零耦合，
+ *                否则 core 会经此间接获得 core 侧依赖，形成反向/循环依赖；
  *  - ui       ：框架无关纯函数层，禁止 react/react-dom 与 ../client；
  *  - client   ：浏览器半，禁止 node: 内置与 node 专属裸包（fs/path/os/crypto 等）；
  *               刻意豁免模式参照 PathMappingForm.tsx —— 不 import node:path，改用轻量
@@ -42,7 +47,13 @@ interface LayerRule {
 const LAYER_RULES: Record<string, LayerRule> = {
   core: {
     mode: 'allow',
-    targets: ['node:', './', '../schema/', '../utils/', '../security/', 'js-yaml'],
+    targets: ['node:', './', '../schema/', '../utils/', '../security/', '../migrations/', 'js-yaml'],
+  },
+  migrations: {
+    // 迁移链是纯函数式格式转换（schema 关注点的「执行」半），与 core 无耦合：
+    // core 消费它，它不得反过来依赖 core。封住 core → migrations 这个新放行点的传递性缺口。
+    mode: 'allow',
+    targets: ['node:', './', '../schema/', '../utils/'],
   },
   ui: {
     mode: 'forbid',
@@ -170,9 +181,12 @@ test('F7 架构边界：各层 import 依赖方向守护（违规即失败并列
       if (isEntry || rule === undefined) continue;
 
       if (rule.mode === 'allow') {
-        // core：白名单前缀
+        // allow 模式（core / migrations）：白名单前缀。文案按层自解释，规则表是唯一事实源。
         if (!rule.targets.some((p) => spec === p || spec.startsWith(p))) {
-          fileViolations.add(`${rel} → ${spec}（core 只允许 node 内置 / core 内部 / schema / utils / security / js-yaml）`);
+          const allowed = rule.targets
+            .map((p) => (p === './' ? `${layer} 内部` : p === 'node:' ? 'node 内置' : p))
+            .join(' / ');
+          fileViolations.add(`${rel} → ${spec}（${layer} 只允许 ${allowed}）`);
         }
       } else {
         for (const bad of rule.targets) {

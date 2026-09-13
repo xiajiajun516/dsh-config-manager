@@ -93,6 +93,85 @@ export function defaultSecretScanner(): SecretScanner {
   };
 }
 
+/* ---------------- G-09：文件类分区文本级扫描（只报告，绝不改写） ---------------- */
+
+/**
+ * 单文件扫描字节上限（1 MiB）。超大文件只扫描前 1 MiB：
+ * 凭据通常出现在配置/脚本的头部；超过上限的剩余部分放弃扫描，避免单个巨型文件拖垮导出。
+ */
+export const FILE_SECTION_SCAN_MAX_BYTES = 1024 * 1024;
+
+/** 一次导出中所有文件类分区的累计扫描字节上限（16 MiB），防「成千上万小文件」拖慢导出 */
+export const FILE_SECTION_SCAN_TOTAL_BUDGET_BYTES = 16 * 1024 * 1024;
+
+/** 每个分区最多告警的**不同文件**数（不是 hit 条数）；命中仍全量计入 redactedHits（报告统计通道），超出部分由一条汇总告警兜底，避免「真有凭据的文件被静默淹没」或「截断即静默丢失」 */
+export const MAX_FILE_SECTION_WARNINGS_PER_SECTION = 5;
+
+/** 二进制探测窗口（前 4 KiB 出现 NUL 即视为二进制，不按文本扫描） */
+const BINARY_SNIFF_BYTES = 4096;
+
+/** 是否为二进制内容（含 NUL 字节 → 不是 UTF-8 文本；避免对二进制做无意义的文本扫描/误报） */
+function looksBinary(bytes: Uint8Array): boolean {
+  const n = Math.min(bytes.length, BINARY_SNIFF_BYTES);
+  for (let i = 0; i < n; i++) {
+    if (bytes[i] === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * 文件类分区内容扫描（G-09）：
+ *  - 走注入 scanner 的 `scanText`（只报告不改写；`scanAndRedact` 会剥离值，**不得**用于用户文件）；
+ *  - 扫描档位与 `src/market/prepare.ts` 的导出侧扫描保持一致：默认保守档 +
+ *    值形状启发式（`valuePatterns` 默认开），**不启用** `highEntropy`（默认关，误报率高）；
+ *  - 二进制文件（含 NUL）跳过：文本扫描对它无意义且必然误报；
+ *  - 单文件上限 `FILE_SECTION_SCAN_MAX_BYTES`、累计上限 `FILE_SECTION_SCAN_TOTAL_BUDGET_BYTES`：
+ *    超限即停止扫描（不是停止导出），被跳过的部分不产生命中也不产生告警；
+ *  - scanner 未实现 `scanText`（如 core 内置的字段名黑名单 defaultSecretScanner）→ 返回空，
+ *    行为与修复前一致（生产路径注入的是含 scanText 的强化扫描器）。
+ *
+ * 返回命中清单，`path` 为「分区内文件相对路径」，`field` 为 `line:N`（值永不外泄）。
+ */
+function scanFileSectionText(scanner: SecretScanner, data: unknown): SensitiveHit[] {
+  const scanText = scanner.scanText;
+  if (typeof scanText !== 'function') return [];
+  const files = extractFileEntries(data);
+  if (files === null) return [];
+
+  const hits: SensitiveHit[] = [];
+  let budget = FILE_SECTION_SCAN_TOTAL_BUDGET_BYTES;
+  for (const file of files) {
+    if (budget <= 0) break;
+    const bytes = file.data;
+    if (!(bytes instanceof Uint8Array) || bytes.length === 0) continue;
+    const window = bytes.subarray(0, Math.min(bytes.length, FILE_SECTION_SCAN_MAX_BYTES, budget));
+    budget -= window.length;
+    if (looksBinary(window)) continue;
+    let text: string;
+    try {
+      text = new TextDecoder('utf-8').decode(window);
+    } catch {
+      continue;
+    }
+    for (const hit of scanText(text)) {
+      hits.push({ path: file.relativePath, field: hit.path });
+    }
+  }
+  return hits;
+}
+
+/** 从分区数据里取出文件条目（非文件类/结构异常 → null；只看 files 数组，不展开其他字段） */
+function extractFileEntries(data: unknown): { relativePath: string; data: Uint8Array }[] | null {
+  if (data === null || typeof data !== 'object') return null;
+  const files = (data as { files?: unknown }).files;
+  if (!Array.isArray(files)) return null;
+  return files.filter((f): f is { relativePath: string; data: Uint8Array } => (
+    f !== null && typeof f === 'object'
+    && typeof (f as { relativePath?: unknown }).relativePath === 'string'
+    && (f as { data?: unknown }).data instanceof Uint8Array
+  ));
+}
+
 export class Exporter {
   private readonly ctx: HostContext;
   private readonly adapters: ConfigAdapter[];
@@ -157,13 +236,42 @@ export class Exporter {
         excluded.push(adapter.id);
         continue;
       }
-      // 3. Secret 过滤：结构化数据逐一过 scanner；
-      //    文件类分区（skills 等）内容为自由文本，扫描语义由 m4 强化，此处不动
+      // 3. Secret 过滤：结构化数据逐一过 scanner（剥离值）；
+      //    文件类分区（skills/agentPresets/agentInstructions/pluginFiles/sessions/self）是用户的真实文件，
+      //    只做**文本级扫描 + 告警**，绝不改写/剥离内容（见 scanFileSectionText）。
       let sanitized = section.data;
       if (!isFileSection(adapter.id)) {
         const scanned = this.scanner.scanAndRedact(section.data);
         redactedHits.push(...scanned.hits);
         sanitized = scanned.sanitized;
+      } else {
+        const fileHits = scanFileSectionText(this.scanner, section.data);
+        if (fileHits.length > 0) {
+          // redactedHits 是**报告统计**通道（非告警通道）：仍计入全量命中（含同一文件的多行/多形态命中）。
+          redactedHits.push(...fileHits);
+          // 告警按**文件**去重（G-09/H1）：同一路径只告警一次。
+          // 修复前按 hit 计数，同一行同时命中「字段名」与「值形状」会产出两条同路径告警，
+          // 使少数文件就吃满上限，导致含真实明文凭据的其它文件被静默淹没（实测 redactedHits=8 而 5 条告警全属一个文件）。
+          const hitPaths: string[] = [];
+          const seenPaths = new Set<string>();
+          for (const hit of fileHits) {
+            if (seenPaths.has(hit.path)) continue;
+            seenPaths.add(hit.path);
+            hitPaths.push(hit.path);
+          }
+          // 上限语义 = 不同**文件**数 ≤ MAX_FILE_SECTION_WARNINGS_PER_SECTION（避免大分区刷屏）
+          const warnedPaths = hitPaths.slice(0, MAX_FILE_SECTION_WARNINGS_PER_SECTION);
+          for (const hitPath of warnedPaths) {
+            warnings.push(this.msg('export.fileSectionSecrets', { section: adapter.id, path: hitPath }));
+          }
+          // 被截断的文件数必须**显式**汇总告警，否则截断本身又变成静默丢失。
+          // 说明：此处未新增消息键（如 export.fileSectionSecretsTruncated）是为避免与并行任务冲突
+          // （src/core/messages.ts 属他人改动范围）；故复用 export.fileSectionSecrets，仅 path 传汇总文案。
+          const truncatedCount = hitPaths.length - warnedPaths.length;
+          if (truncatedCount > 0) {
+            warnings.push(this.msg('export.fileSectionSecrets', { section: adapter.id, path: `（另有 ${truncatedCount} 个文件命中，详见报告）` }));
+          }
+        }
       }
       sections.push({ ...section, data: sanitized });
       included.push({ section: adapter.id, counts: section.counts });

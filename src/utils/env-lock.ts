@@ -431,6 +431,8 @@ export class EnvironmentLockManager {
   private heartbeatSeq = 0
   private readonly activeInstanceId: string
   private heartbeatDegraded = false
+  /** 串行化的 heartbeat 写链（**最后一次写**的 promise）；release 前用于 drain，见 drainHeartbeat */
+  private pendingHeartbeat: Promise<void> = Promise.resolve()
   /** 瞬时错误（EBUSY 等）有界重试计数 */
   private transientRetries = 0
   private readonly maxTransientRetries = 5
@@ -627,8 +629,10 @@ export class EnvironmentLockManager {
     const st = await this.readOwnershipState()
     if (st.kind === 'missing') {
       // ownership 文件不存在：已被清除/尚未落盘 → 视为已释放；清 token + 尽力清 heartbeat
+      // 先清 token（writeHeartbeat 的「不再写」闸门）再 drain，最后清理 sidecar（同成功路径的顺序理由）
       this.heartbeatDegraded = false
       this.activeToken = null
+      await this.drainHeartbeat()
       await this.cleanupHeartbeat(instanceId).catch(() => {})
       return
     }
@@ -653,9 +657,13 @@ export class EnvironmentLockManager {
       // 绝不在此清空 token（否则锁卡死在磁盘而令牌失效）。
       throw new EnvironmentLockIOError(`release: unlink ${this.ownershipPath} 失败: ${e instanceof Error ? e.message : String(e)}`, e)
     }
-    // unlink 成功 → 释放完成：清 token + 清自己的 heartbeat sidecar
+    // unlink 成功 → 释放完成：**先清 token 再 drain**，最后清自己的 heartbeat sidecar。
+    // 顺序关键：activeToken=null 必须早于 drain —— 否则 interval 可能在 drain 返回之后、cleanup 之前
+    // 再排入一次写并真正落盘，把刚删掉的 sidecar 复活（writeHeartbeat 以 activeToken===null 作为「不再写」的闸门）。
+    // 本仓库实测：顺序颠倒时 L3 回归用例可稳定复现 sidecar 复活（该用例正是捕获了这一点）。
     this.heartbeatDegraded = false
     this.activeToken = null
+    await this.drainHeartbeat()
     await this.cleanupHeartbeat(instanceId).catch(() => {})
   }
 
@@ -663,10 +671,12 @@ export class EnvironmentLockManager {
 
   private startHeartbeat(): void {
     if (this.heartbeatTimer !== null) return
-    this.heartbeatTimer = setInterval(() => { void this.writeHeartbeat() }, Math.max(this.heartbeatIntervalMs, 50))
+    this.heartbeatTimer = setInterval(() => { void this.trackHeartbeat() }, Math.max(this.heartbeatIntervalMs, 50))
     if (this.heartbeatTimer.unref) this.heartbeatTimer.unref()
-    // 立即写一次，确立初始 heartbeat（stale 窗口从此刻起）
-    void this.writeHeartbeat()
+    // 立即写一次，确立初始 heartbeat（stale 窗口从此刻起）——走 trackHeartbeat 纳入可 drain 的串行链：
+    // 否则这个 fire-and-forget 的写可能在 release 清理 sidecar 之后才落盘，把 sidecar 重新创建（或残留 .dshcm.*.tmp），
+    // 在 Windows 上即表现为目录清理竞态（after-hook rmSync ENOTEMPTY）。
+    this.trackHeartbeat()
   }
 
   private stopHeartbeat(): void {
@@ -674,6 +684,24 @@ export class EnvironmentLockManager {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
+  }
+
+  /**
+   * 等待**当前在途**的 heartbeat 写完成（release 清理 sidecar 前必须调用）。
+   * 为什么必要：writeHeartbeat 走 atomicWriteFile（tmp 写入 → rename），是异步多步操作。
+   * 若 release 只 stopHeartbeat + unlink sidecar 而不等待，一个已启动的写会在 unlink 之后才 rename，
+   * 于是把刚删掉的 sidecar **重新创建**（或残留 .dshcm.*.tmp）——Windows 上即 after-hook rmSync ENOTEMPTY。
+   * 调用点保证：release 先同步 stopHeartbeat() 并置 activeToken=null，故此刻起不会有新的写开始；
+   * 因此 drain 之后 cleanupHeartbeat 删除的 sidecar 不会再被复活。
+   */
+  private async drainHeartbeat(): Promise<void> {
+    try { await this.pendingHeartbeat } catch { /* writeHeartbeat 自身已吞错；此处仅防御 */ }
+  }
+
+  /** 串行化并追踪一次 heartbeat 写：chain 保证不会有两个写并发 rename 同一个 sidecar */
+  private trackHeartbeat(): Promise<void> {
+    this.pendingHeartbeat = this.pendingHeartbeat.then(() => this.writeHeartbeat())
+    return this.pendingHeartbeat
   }
 
   /** 写 heartbeat sidecar（atomicWriteFile 更新 sidecar，不影响 ownership；失败 → degraded，不中断 mutation） */

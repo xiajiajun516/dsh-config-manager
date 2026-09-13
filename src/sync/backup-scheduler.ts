@@ -23,7 +23,7 @@
 import type { Logger } from '../utils/logger.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
-import type { ConfigAdapter, HostContext } from '../core/types.ts';
+import type { ConfigAdapter, HostContext, SecretScanner } from '../core/types.ts';
 import type { MutationLockPort } from '../utils/env-lock.ts';
 import { runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
 import { Exporter } from '../core/exporter.ts';
@@ -32,7 +32,9 @@ import { join } from 'node:path';
 import { readBackupSchedule, writeBackupSchedule, nextBackupDelayMs } from './backup-schedule-config.ts';
 import type { BackupScheduleConfig, BackupRunStatus } from './backup-schedule-config.ts';
 import { shouldTriggerStartupRun } from './autosync-scheduler.ts';
-import { AUTO_BACKUP_PREFIX, DEFAULT_BACKUP_RETENTION, pruneAutoBackups } from './backup-files.ts';
+import { AUTO_BACKUP_PREFIX, pruneAutoBackupsByPolicy } from './backup-files.ts';
+import { DEFAULT_RETENTION_POLICY } from './retention-policy.ts';
+import type { RetentionPolicy } from './retention-policy.ts';
 
 export interface BackupRunResult {
   status: BackupRunStatus;
@@ -55,13 +57,24 @@ export interface BackupSchedulerOptions {
   msg: MsgFunc;
   /** 插件版本（manifest.exporter.version） */
   exporterVersion?: string;
+  /**
+   * M1（G-09 接线）：secret 扫描器。必须与 HTTP 导出路由（makeRoutes）、Agent 模型工具
+   * config_backup（registerModelTools）共用**同一个实例**（宿主 index.ts 注入的
+   * createConfiguredSecretScanner 单一实例），否则三条全量导出路径的扫描档位漂移：
+   * 文件类分区（skills/agentPresets/agentInstructions/pluginFiles/sessions/self）的凭据告警
+   * 与 redactedHits 统计会不一致。定时备份是**无人值守**路径，用户不会自己发现静默漏扫。
+   * 缺省 undefined → Exporter 落回 defaultSecretScanner()（无 scanText）→ 文件类分区不扫描
+   * （旧行为；向后兼容既有调用方与测试）。
+   */
+  scanner?: SecretScanner;
   /** 时间源（测试注入） */
   now?: () => Date;
   /** 注入配置读写（测试可内存实现） */
   readConfig?: () => Promise<BackupScheduleConfig>;
   writeConfig?: (cfg: BackupScheduleConfig) => Promise<void>;
-  /** 定时备份产物保留数量（超出后按 mtime 清理最旧的；缺省 10）。 */
-  retention?: number;
+  /** 定时备份产物保留策略（GFS 分层；缺省 = 「保留最近 10 个」，与旧行为等价）。
+   *  兼容路径：仍接受 `number`（= 旧 API），内部转成 `{keepLast: n, keepMonthly: 0, keepYearly: 0}`。 */
+  retention?: RetentionPolicy | number;
   /** 注入计时器（测试用；缺省 setInterval/clearInterval） */
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
@@ -102,10 +115,11 @@ export class BackupScheduler {
   private readonly runs: RunRegistry;
   private readonly msg: MsgFunc;
   private readonly exporterVersion: string;
+  private readonly scanner: SecretScanner | undefined;
   private readonly now: () => Date;
   private readonly readConfig: () => Promise<BackupScheduleConfig>;
   private readonly writeConfig: (cfg: BackupScheduleConfig) => Promise<void>;
-  private readonly retention: number;
+  private readonly retention: RetentionPolicy;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
   private readonly log: Logger;
@@ -126,10 +140,14 @@ export class BackupScheduler {
     this.runs = opts.runs;
     this.msg = opts.msg;
     this.exporterVersion = opts.exporterVersion ?? '0.1.0';
+    this.scanner = opts.scanner;
     this.now = opts.now ?? (() => new Date());
     this.readConfig = opts.readConfig ?? (() => readBackupSchedule(this.syncDir));
     this.writeConfig = opts.writeConfig ?? ((cfg) => writeBackupSchedule(this.syncDir, cfg));
-    this.retention = opts.retention ?? DEFAULT_BACKUP_RETENTION;
+    // 兼容路径：number（旧 API）= keepLast，分层关闭 → 与既有行为逐字节等价
+    this.retention = typeof opts.retention === 'number'
+      ? { keepLast: opts.retention, keepMonthly: 0, keepYearly: 0 }
+      : (opts.retention ?? DEFAULT_RETENTION_POLICY);
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
     this.clearTimer = opts.clearTimer ?? ((t) => clearTimeout(t));
     this.log = opts.log ?? this.host.log;
@@ -237,6 +255,9 @@ export class BackupScheduler {
           encryption: null, // 定时备份恒不加密：加密密码仅内存且不能持久化
           exporterVersion: this.exporterVersion,
           msg: this.msg,
+          // M1（G-09 接线）：与 HTTP 导出路由 / config_backup 同一个 scanner 实例。
+          // 缺省 undefined → Exporter 落回无 scanText 的默认扫描器（旧行为）。
+          scanner: this.scanner,
         });
         // 显式落 exportsDir（与 host 路由同构；Exporter 缺省 outPath 是相对文件名，不落目录）
         // auto 前缀 = 定时备份产物标识：列表来源 Badge + cache-cleaner 豁免 + 保留策略清理依据
@@ -257,6 +278,8 @@ export class BackupScheduler {
           interval: cfg.interval,
           // P0-⑤：保留 custom 档的每周时刻（否则保存 custom 档后 runOnce 成功会把它丢掉）
           ...(cfg.customSchedule !== undefined ? { customSchedule: cfg.customSchedule } : {}),
+          // m-retention：保留用户配置的 GFS 保留策略（同理，不能被运行结果覆盖丢失）
+          ...(cfg.retention !== undefined ? { retention: cfg.retention } : {}),
           startupMinIntervalMs: cfg.startupMinIntervalMs,
           consecutiveFailures: 0,
           lastRunAt: this.now().toISOString(),
@@ -267,12 +290,14 @@ export class BackupScheduler {
           sizeBytes: backupResult.sizeBytes,
           sections: backupResult.sections,
         });
-        // 保留策略：只保留最近 retention 个 auto 前缀产物，更旧的删除（尽力而为，
+        // 保留策略：按 GFS policy 选出应保留的 auto 前缀产物，其余删除（尽力而为，
         // 失败仅记日志不阻断——下次成功备份时再清）。
+        // 生效策略优先级：持久化配置 policy（用户在 UI 改的） > 构造注入值（缺省 = 最近 10 个）。
         try {
-          const removed = await pruneAutoBackups(this.exportsDir, this.retention);
+          const effectiveRetention = cfg.retention ?? this.retention;
+          const removed = await pruneAutoBackupsByPolicy(this.exportsDir, effectiveRetention);
           if (removed.length > 0) {
-            this.log.info('定时备份保留策略清理', { removed, keep: this.retention });
+            this.log.info('定时备份保留策略清理', { removed, retention: effectiveRetention });
           }
         } catch (err) {
           this.log.warn('定时备份保留策略清理失败', { error: err instanceof Error ? err.message : String(err) });

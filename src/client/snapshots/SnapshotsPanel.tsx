@@ -37,15 +37,21 @@ import type { InspectGroupKey } from '../../ui/backup-inspect.ts'
 import { formatBytes } from '../../ui/report.ts'
 import {
   BACKUP_INTERVAL_OPTIONS,
+  DEFAULT_RETENTION_POLICY,
+  RETENTION_FIELDS,
+  RETENTION_FIELD_LIMITS,
   WEEKDAY_OPTIONS,
   backupDraftDirty,
   backupRunBadgeKind,
+  hasRetentionTiers,
+  normalizeRetentionPolicy,
   validateBackupScheduleDraft,
   type BackupInterval,
   type BackupRunStatus,
   type BackupScheduleDraft,
   type BackupScheduleStatus,
   type BackupWeeklySchedule,
+  type RetentionPolicy,
 } from '../../ui/backup-schedule.ts'
 import css from '../config-manager.module.css'
 
@@ -78,8 +84,13 @@ interface SnapshotDeleteTarget {
   createdAt: string
 }
 
-/** 快照保留上限（与 core backup.ts SNAPSHOT_RETENTION_LIMIT 对齐；展示用提示文案） */
-export const SNAPSHOT_RETENTION_LIMIT = 10
+/**
+ * 快照保留上限的回退值（m-retention）：
+ * 真实值来自宿主（`/backup-schedule` 的 `retention`，用户可配置）——**不再作为展示真值**，
+ * 仅在宿主未返回 retention（旧版宿主 / 请求失败）时兜底，注释保留常量以说明历史来源。
+ * 与 core backup.ts SNAPSHOT_RETENTION_LIMIT / DEFAULT_RETENTION_POLICY.keepLast 一致。
+ */
+export const SNAPSHOT_RETENTION_LIMIT = DEFAULT_RETENTION_POLICY.keepLast
 
 /** 中段省略（文件名：保留头尾，中段 …——尾部时间戳是唯一区分信息，不可被截掉）。 */
 function midEllipsis(s: string, max = 26): string {
@@ -173,6 +184,11 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   const [consultLoading, setConsultLoading] = useState(false)
   /** 备份文件列表刷新信号：BackupScheduleCard「立即备份」完成后递增触发重载 */
   const [backupFilesTick, setBackupFilesTick] = useState(0)
+  /**
+   * m-retention：宿主真实保留策略（用户可配置；快照子视图的提示文案用它而非本地常量）。
+   * 失败/旧版宿主未返回 → null，展示层回退 DEFAULT_RETENTION_POLICY（见 SNAPSHOT_RETENTION_LIMIT）。
+   */
+  const [retentionPolicy, setRetentionPolicy] = useState<RetentionPolicy | null>(null)
   /** 二级子视图（快照 / 备份文件 / 恢复）：初始从 store 恢复，切换镜像 runStore */
   const [subTab, setSubTab] = useState<SnapshotsSubTab>(() => runStore.getSnapshot().snapshots.subTab ?? 'restore')
   const switchSubTab = (next: SnapshotsSubTab): void => {
@@ -215,6 +231,19 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   }
 
   useEffect(load, [api])
+
+  /**
+   * m-retention：读取宿主保留策略（只读；用于「最多自动保留 N 个」提示文案的**真实分母**）。
+   * 失败静默（回退缺省值展示），不打扰用户——策略编辑入口在定时备份设置卡内。
+   */
+  useEffect(() => {
+    let cancelled = false
+    api.backupSchedule().then(
+      (schedule) => { if (!cancelled) setRetentionPolicy(normalizeRetentionPolicy(schedule.retention)) },
+      () => { if (!cancelled) setRetentionPolicy(null) },
+    )
+    return () => { cancelled = true }
+  }, [api, backupFilesTick])
 
   /** Phase 7 迁移前咨询：恢复计划弹窗打开时对选中快照生成咨询报告（只读，零写入）。 */
   useEffect(() => {
@@ -421,7 +450,10 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
           {state.status === 'ready' && state.metas.length > 0 && (
             <>
               <div className={css.hint} style={{ marginBottom: 8 }}>
-                {t('snapshots.retentionHint', { count: String(SNAPSHOT_RETENTION_LIMIT) })}
+                {/* m-retention：分母取宿主真实策略（可配置）；宿主未返回时回退缺省常量 */}
+                {t('snapshots.retentionHint', {
+                  count: String((retentionPolicy ?? DEFAULT_RETENTION_POLICY).keepLast),
+                })}
               </div>
               <div className={css.tableWrap}>
                 <div className={css.tableScroll}>
@@ -649,6 +681,8 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
   const [lastRun, setLastRun] = useState<BackupRunStatus | undefined>(undefined)
   const [lastRunDetail, setLastRunDetail] = useState<string | null>(null)
   const [draftError, setDraftError] = useState<string | null>(null)
+  /** m-retention：保留策略草稿（三层；与 interval/customSchedule 同属草稿，随保存一起提交） */
+  const [retentionDraft, setRetentionDraft] = useState<RetentionPolicy>(DEFAULT_RETENTION_POLICY)
   /** 挂载守卫：切页卸载后异步回调只更新 store（草稿），不再 setState */
   const mountedRef = useRef(true)
 
@@ -666,7 +700,12 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
           enabled: schedule.enabled,
           interval: schedule.interval,
           ...(schedule.customSchedule !== undefined ? { customSchedule: schedule.customSchedule } : {}),
+          retention: normalizeRetentionPolicy(schedule.retention),
         })
+        // m-retention：未保存草稿里的策略优先（切页回来不丢），否则取宿主真值（缺省补齐）
+        setRetentionDraft(
+          normalizeRetentionPolicy(runStore.getSnapshot().snapshots.backupDraft?.retention ?? schedule.retention),
+        )
         setLastRun(schedule.lastRunStatus)
         setLastRunDetail(formatRunTime(schedule.lastRunAt))
         setStatus('ready')
@@ -686,9 +725,16 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
     runStore.patch({ snapshots: { backupDraft: next } })
   }
 
+  /** m-retention：更新保留策略草稿（随 enabled/interval 一起提交；同时镜像 runStore 防切页丢失） */
+  const updateRetention = (next: RetentionPolicy): void => {
+    setRetentionDraft(next)
+    updateDraft({ ...draft, retention: next })
+  }
+
   const save = (): void => {
     if (saving || running) return
-    const parsed = validateBackupScheduleDraft(draft)
+    // m-retention：策略草稿合并进提交体（单入口校验：非法整数/超范围在此被拦下）
+    const parsed = validateBackupScheduleDraft({ ...draft, retention: retentionDraft })
     if (!parsed.ok) {
       // 表单内联校验：位置有语义（紧邻被校验的控件），保留就地提示而非 Toast
       setDraftError(parsed.error)
@@ -706,7 +752,10 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
           enabled: schedule.enabled,
           interval: schedule.interval,
           ...(schedule.customSchedule !== undefined ? { customSchedule: schedule.customSchedule } : {}),
+          retention: normalizeRetentionPolicy(schedule.retention),
         })
+        // 以宿主回传为权威回填策略草稿（宿主持久化后的真值）
+        setRetentionDraft(normalizeRetentionPolicy(schedule.retention))
         setLastRun(schedule.lastRunStatus)
         setLastRunDetail(formatRunTime(schedule.lastRunAt))
         setSaving(false)
@@ -728,6 +777,7 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
       (res) => {
         if (mountedRef.current) {
           setSaved(res.schedule)
+          // 运行结果不回写策略草稿（用户可能正在编辑；宿主配置已是权威，保存时以草稿为准）
           setLastRun(res.run.status)
           setLastRunDetail(res.run.zip !== undefined && res.run.zip !== ''
             ? res.run.zip
@@ -745,7 +795,8 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
     )
   }
 
-  const dirty = backupDraftDirty(draft, saved)
+  // m-retention：脏判定同时看策略草稿（策略改动也要让「保存设置」可点）
+  const dirty = backupDraftDirty({ ...draft, retention: retentionDraft }, saved)
   const busy = saving || running
   /**
    * 事实行「备份间隔」文案：整行事实统一取宿主权威值 saved（与事实行语义一致，
@@ -925,6 +976,61 @@ function BackupScheduleCard({ api, t, onBackupDone }: {
           {draft.enabled && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.enabledHint')}</div>}
           {/* custom 档专属说明：仅在已开启且选中自定义档时出现，紧贴上面的三个时刻下拉 */}
           {draft.enabled && draft.interval === 'custom' && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.customHint')}</div>}
+
+          {/* m-retention：保留策略（GFS 分层；快照 + 定时备份共用）——无常量硬编码，值全来自本卡片状态 */}
+          <div className={css.groupHeader} style={{ marginTop: 12 }}>
+            <span className={css.groupLabel}>{t('retention.title')}</span>
+            <span className={css.statusSpacer} />
+            <span className={css.hint}>
+              {!hasRetentionTiers(retentionDraft) && t('retention.tiersOff')}
+            </span>
+          </div>
+          <div className={css.hint} style={{ marginBottom: 8 }}>{t('retention.hint')}</div>
+          <div className={css.actionRow} style={{ marginBottom: 0 }}>
+            {RETENTION_FIELDS.map((field) => {
+              const limits = RETENTION_FIELD_LIMITS[field]
+              const unit = field === 'keepLast'
+                ? t('retention.unit')
+                : field === 'keepMonthly' ? t('retention.months') : t('retention.years')
+              return (
+                <label key={field} className={css.field} style={{ margin: 0 }}>
+                  <span className={css.fieldLabel}>
+                    {field === 'keepLast'
+                      ? t('retention.keepLast')
+                      : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')}
+                  </span>
+                  <input
+                    className={css.input}
+                    type="number"
+                    min={limits.min}
+                    max={limits.max}
+                    step={1}
+                    value={retentionDraft[field]}
+                    disabled={busy}
+                    style={{ width: 88 }}
+                    aria-label={t('retention.title')}
+                    onChange={(event) => {
+                      // 空输入/非法文本 → 视为 0（受控 input 不吞掉用户输入，保存时再由校验层把关）
+                      const raw = event.target.value
+                      const parsed = raw === '' ? 0 : Number(raw)
+                      updateRetention({
+                        ...retentionDraft,
+                        [field]: Number.isFinite(parsed) ? parsed : 0,
+                      })
+                    }}
+                  />
+                  <span className={css.hint}>{unit}</span>
+                </label>
+              )
+            })}
+          </div>
+          {/* 三层字段各自的行为说明（紧贴对应输入；仅在有分层时才需要，未启用时是噪音） */}
+          {hasRetentionTiers(retentionDraft) && (
+            <div className={css.hint} style={{ marginTop: 6 }}>
+              {t('retention.keepLastHint')} · {t('retention.keepMonthlyHint')} · {t('retention.keepYearlyHint')}
+            </div>
+          )}
+          <div className={css.hint} style={{ marginTop: 6 }}>{t('retention.appliesTo')}</div>
           {/* P1-⑨：连续失败主动标红（≥1 次失败即在设置卡内醒目提示，恒在卡片底部、成块不被拆散） */}
           {(saved?.consecutiveFailures ?? 0) > 0 && (
             <div style={{ marginTop: 8 }}>

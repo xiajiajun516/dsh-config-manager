@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { ReactNode } from 'react'
 import type { SnapshotMeta } from '../../core/restore.ts'
 import type { BackupScheduleStatus } from '../../ui/backup-schedule.ts'
+import { normalizeRetentionPolicy } from '../../ui/backup-schedule.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
 import type { SyncApi, SyncStatusResponse } from '../sync/sync-api.ts'
 import type { HistoryApi, HistoryListResult } from '../history/history-api.ts'
@@ -397,7 +398,12 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
                 <div className={css.factCell}>
                   <span className={css.factLabel}>{t('overview.location.retention')}</span>
                   <span className={`${css.factValue} ${css.mono}`}>
-                    {t('overview.location.retentionValue', { used: String(data.snapshots?.length ?? 0), limit: '10' })}
+                    {t('overview.location.retentionValue', {
+                      used: String(data.snapshots?.length ?? 0),
+                      // m-retention：分母取宿主真实策略（用户可配置），不再硬编码 '10'；
+                      // 宿主未返回 retention（旧版宿主/请求失败）→ 回退 DEFAULT_RETENTION_POLICY
+                      limit: String(normalizeRetentionPolicy(scheduleStatus?.retention).keepLast),
+                    })}
                   </span>
                 </div>
                 <div className={css.factCell}>

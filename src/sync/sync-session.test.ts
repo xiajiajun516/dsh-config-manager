@@ -32,6 +32,8 @@ function makeAnalysis(seed: string): ImportAnalysis {
     warnings: [],
     compatibility: 'excellent',
     sectionsInZip: ['settings'] as SectionId[],
+    unsupportedSections: [],
+    unsupportedVersions: [],
     pluginSummary: { installed: 0, toInstall: 0 },
     pathIssues: [],
     secretCount: 0,

@@ -4,18 +4,91 @@
  *
  * 安全不变量：绝不打包插件二进制；导入走 DSH 官方机制（dsh plugin CLI → needsRestart 提示）。
  * patch 行导入（用户自定义行：启用/禁用/插入）写回 cordis.patch.yml，同样 needsRestart。
+ *
+ * T1（本地源插件迁移）：`link:` / `file:` 来源的插件指向本机路径，换机后必然不可达
+ * （曾导致插件被静默丢失）。导出时经注入的 `localPack` 执行 `npm pack`，把 tarball 作为
+ * 文件条目随分区进入 ZIP（落在 `plugin-files/local-plugins/` 前缀下，复用既有文件类分区通道，
+ * **不新增分区 id**）；导入时把 spec 重写为 `file:<解包后的绝对路径>` 再交给官方安装通道。
  */
 import { isDeepStrictEqual } from 'node:util';
 import { installSpecFor, resolveProfileNameFromArgv } from '../core/plugin-cli.ts';
+import { isLocalPluginSpec, isPackedLocalSpec, LOCAL_PLUGIN_DIR } from '../core/local-plugin-pack.ts';
+import type { PackLocalPluginsResult } from '../core/local-plugin-pack.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
-import type { PatchLine, PluginEntry, PluginsSection } from '../schema/types.ts';
+import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 
 export const USER_PATCH_FILE = 'cordis.patch.yml';
+
+/**
+ * 本地源插件打包钩子（由宿主注入，见 src/index.ts createAdapters）。
+ * 返回打包结果（含字节与重写后的 spec）；不注入 = 不做本地源打包（保持旧行为）。
+ */
+export type LocalPluginPackHook = (
+  plugins: PluginEntry[],
+  ctx: HostContext,
+) => Promise<PackLocalPluginsResult>;
+
+/** tarball 字节 → base64（零依赖，避免 Buffer 在浏览器侧类型问题） */
+function bytesToBase64(data: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') return Buffer.from(data).toString('base64');
+  let binary = '';
+  for (const b of data) binary += String.fromCharCode(b);
+  return btoa(binary);
+}
+
+/** base64 → 字节（导入端解包用） */
+function base64ToBytes(b64: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') return new Uint8Array(Buffer.from(b64, 'base64'));
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+/** 本地插件 tarball 解包到 homeDir 内的固定缓存目录（相对 $DSH_HOME）。 */
+export const LOCAL_TARBALL_CACHE_REL = 'dsh-config-manager/local-plugins';
+
+/** 按包名取出备份内的 tarball 条目（不存在返回 undefined）。 */
+function tarballOf(data: PluginsSection, pkgName: string): LocalPluginTarball | undefined {
+  return data.localTarballs?.find((t) => t.packageName === pkgName);
+}
+
+/** 归档内相对路径 → 缓存目录下的安全文件名（拒绝任何路径穿越）。 */
+export function localTarballCacheName(relativePath: string): string {
+  const base = relativePath.split('/').pop() ?? '';
+  if (base === '' || base.includes('\\') || base === '.' || base === '..') {
+    throw new Error(`非法 tarball 相对路径: ${relativePath}`);
+  }
+  return base;
+}
+
+/**
+ * 把备份内的 tarball 写入 `$DSH_HOME/dsh-config-manager/local-plugins/<name>`，
+ * 返回**绝对路径**（供 `file:` spec 使用）。
+ *
+ * 为什么写进 $DSH_HOME 内：`ctx.target.fs` 是「限定在 home 根内」的门面
+ * （`DshFileSystemFacade.abs()` 对根外路径抛 fsPathEscape），写 homeDir 外会被拒。
+ * 该目录同时落在既有保留区内（`dsh-config-manager/`），随 self 分区语义一致。
+ */
+async function writeLocalTarball(
+  ctx: ImportContext,
+  tarball: LocalPluginTarball,
+): Promise<string> {
+  const name = localTarballCacheName(tarball.relativePath);
+  const rel = `${LOCAL_TARBALL_CACHE_REL}/${name}`;
+  await ctx.target.fs.writeFile(rel, base64ToBytes(tarball.base64));
+  // `file:` spec 一律用正斜杠（pnpm 跨平台接受正斜杠；反斜杠在部分版本需转义）
+  const abs = `${ctx.target.homeDir.replace(/[\\/]+$/, '')}/${rel}`;
+  return abs.replace(/\\/g, '/');
+}
+
+
+
 
 /** pnpm-workspace.yaml 相对 $DSH_HOME 的路径（plugins 分区内按「插件安装配置」管理）。 */
 export const PNPM_WORKSPACE_REL = (profile: string | undefined): string =>
@@ -57,9 +130,12 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   readonly portability = 'portable' as const;
   /** 插件自身包名：导出 plugins 分区时不列自己（避免备份里出现「当前正在生成备份的插件」的自引用条目） */
   private readonly selfName: string;
+  /** T1：本地源（link:/file:）插件打包钩子；未注入 = 不打包（保持改造前行为） */
+  private readonly localPack: LocalPluginPackHook | undefined;
 
-  constructor(selfName: string = 'dsh-config-manager') {
+  constructor(selfName: string = 'dsh-config-manager', localPack?: LocalPluginPackHook) {
     this.selfName = selfName;
+    this.localPack = localPack;
   }
 
   async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<PluginsSection>> {
@@ -101,10 +177,48 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     } catch (err) {
       warnings.push(msgOf(ctx)('adapter.pnpmReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
+
+    // T1：本地源（link:/file:）插件打包。这些 spec 指向本机路径，换机后必然不可达
+    // （曾导致插件被静默丢失）。钩子由宿主注入；未注入 / 无本地源 / 单个失败一律不中断导出。
+    let localTarballs: LocalPluginTarball[] | undefined;
+    let effectivePlugins = plugins;
+    if (this.localPack !== undefined) {
+      try {
+        const packed = await this.localPack(plugins, ctx);
+        warnings.push(...packed.warnings);
+        if (packed.packed.length > 0) {
+          localTarballs = packed.packed.map((p) => ({
+            packageName: p.packageName,
+            version: p.version,
+            relativePath: p.relativePath,
+            base64: bytesToBase64(p.data),
+          }));
+          // 清单里的 spec 同步改写为可移植形式：即便导入端不拆 tarball，
+          // 也不会再把本机绝对路径写进目标 profile package.json。
+          const rewritten = packed.rewritten;
+          effectivePlugins = plugins.map((p) =>
+            rewritten[p.name] !== undefined ? { ...p, spec: rewritten[p.name] } : p,
+          );
+        }
+      } catch (err) {
+        warnings.push(msgOf(ctx)('adapter.localPackFailed', { reason: err instanceof Error ? err.message : String(err) }));
+      }
+    }
+
     return {
       sectionId: 'plugins',
-      data: { version: 1, plugins, patch, pnpmWorkspace },
-      counts: { plugins: plugins.length, patchLines: patch.length },
+      data: {
+        version: 1,
+        plugins: effectivePlugins,
+        patch,
+        pnpmWorkspace,
+        ...(localTarballs !== undefined ? { localTarballs } : {}),
+      },
+      counts: {
+        plugins: effectivePlugins.length,
+        patchLines: patch.length,
+        ...(localTarballs !== undefined ? { localTarballs: localTarballs.length } : {}),
+      },
       warnings,
     };
   }
@@ -142,11 +256,14 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     for (const p of data.plugins) {
       const id = `plugin:${p.name}`;
       const tp = targetInstalled.find((t) => t.name === p.name);
+      // T1：该插件在备份内自带 tarball（本地源 link:/file:）→ 目标机无需原始路径即可安装。
+      const hasTarball = tarballOf(data, p.name) !== undefined;
+      const tarballHint = hasTarball ? msg('adapter.pluginLocalTarballHint') : undefined;
       if (!tp) {
         items.push({
           id, kind: 'Install', adapter: 'plugins',
           description: msg('adapter.pluginInstall', { name: p.name, version: p.version }),
-          detail: p.isBundle ? msg('adapter.pluginBundleMember') : undefined,
+          detail: p.isBundle ? msg('adapter.pluginBundleMember') : tarballHint,
           severity: 'info',
         });
       } else if (tp.version === p.version) {
@@ -221,7 +338,20 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       try {
         // 非 registry 来源（github:/file: 等）按来源 spec 安装，registry 包按裸包名装 npm 最新版
         const data = ctx.sections.get('plugins') as PluginsSection | undefined;
-        const spec = data?.plugins.find((p) => p.name === name)?.spec;
+        let spec = data?.plugins.find((p) => p.name === name)?.spec;
+
+        // T1：备份内自带 tarball → 解包到 homeDir 内的本地插件缓存目录，把 spec 重写为绝对路径。
+        // 这是「换机后本地插件不再丢失」的关键：原始绝对路径在目标机不存在，解包出的 tgz 一定存在。
+        const tarball = data !== undefined ? tarballOf(data, name) : undefined;
+        if (tarball !== undefined) {
+          try {
+            const abs = await writeLocalTarball(ctx, tarball);
+            spec = `file:${abs}`;
+          } catch (err) {
+            // 解包失败不阻断安装尝试：退回原 spec（可能失败，但会如实报错而非静默丢失）
+            ctx.onLog?.(`本地插件 ${name} 的 tarball 解包失败，回退原始 spec：${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         // 执行日志：记录实际将发起的子进程命令行（与宿主 DshPluginsFacade 的
         // dsh plugin --profile <p> add <spec> 一致）；仅非敏感文本，渲染前 UI 再 redact 兜底
         ctx.onLog?.(`$ dsh plugin --profile ${ctx.target.profile ?? resolveProfileNameFromArgv()} add ${installSpecFor(name, spec)}`);
@@ -276,6 +406,29 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     }
     if (data.pnpmWorkspace !== undefined && data.pnpmWorkspace !== null && typeof data.pnpmWorkspace !== 'string') {
       issues.push({ path: 'pnpmWorkspace', message: msg('adapter.validate.string', { subject: 'pnpmWorkspace' }), severity: 'error' });
+    }
+    // T1：本地插件 tarball 载荷（缺省合法；存在时逐条校验形状与路径安全）
+    if (data.localTarballs !== undefined) {
+      if (!Array.isArray(data.localTarballs)) {
+        issues.push({ path: 'localTarballs', message: msg('adapter.validate.array', { subject: 'localTarballs' }), severity: 'error' });
+      } else {
+        data.localTarballs.forEach((t, i) => {
+          if (t === null || typeof t !== 'object') {
+            issues.push({ path: `localTarballs[${i}]`, message: msg('adapter.validate.object', { subject: 'localTarballs[]' }), severity: 'error' });
+            return;
+          }
+          for (const field of ['packageName', 'version', 'relativePath', 'base64'] as const) {
+            if (typeof t[field] !== 'string' || t[field] === '') {
+              issues.push({ path: `localTarballs[${i}].${field}`, message: msg('adapter.validate.string', { subject: field }), severity: 'error' });
+            }
+          }
+          // 相对路径必须落在 LOCAL_PLUGIN_DIR 之下且不含穿越段（防写 homeDir 外）
+          const rel = typeof t.relativePath === 'string' ? t.relativePath.replace(/\\/g, '/') : '';
+          if (rel !== '' && (!rel.startsWith(`${LOCAL_PLUGIN_DIR}/`) || rel.includes('..'))) {
+            issues.push({ path: `localTarballs[${i}].relativePath`, message: msg('adapter.validate.localTarballPath', { path: rel }), severity: 'error' });
+          }
+        });
+      }
     }
     return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
   }

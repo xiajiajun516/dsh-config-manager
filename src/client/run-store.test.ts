@@ -85,6 +85,21 @@ function runningRun(kind: RunState['kind'], patch: Partial<RunState> = {}): RunS
 
 const sleep = (ms: number): Promise<void> => new Promise((resolvePromise) => setTimeout(resolvePromise, ms))
 
+/** waitFor 的轮询步长（ms）；只用于条件轮询，不用于「等待一段时间」。 */
+const WAIT_POLL_STEP_MS = 5
+
+/**
+ * 轮询等待条件成立（消除固定 sleep 竞态）；超时仍未成立则抛错，断言语义不变。
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 2000, label = '条件'): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (predicate()) return
+    if (Date.now() >= deadline) throw new Error(`waitFor 超时（${timeoutMs}ms）：${label} 仍未成立`)
+    await sleep(WAIT_POLL_STEP_MS)
+  }
+}
+
 /* ---------------------------------------------------------- 序列化白名单 */
 
 test('m2-refresh: password/passwordConfirm/secretInputs 绝不写入 sessionStorage', () => {
@@ -334,7 +349,7 @@ test('m2-resume: 进行中 import run 经 /runs + 轮询 /progress 重新订阅�
   assert.equal(resumed, true, '发现活跃 import run')
   assert.equal(store.getSnapshot().import.step, 'importing', '恢复后立即进入 importing')
 
-  await sleep(80)
+  await waitFor(() => store.getSnapshot().import.step === 'result', 2000, '轮询收敛到 import result')
   const imp = store.getSnapshot().import
   assert.equal(imp.step, 'result')
   assert.equal(imp.running, false)
@@ -379,7 +394,12 @@ test('m2-resume: 进行中 import run 恢复时带回执行日志（刷新页面
   // 恢复瞬间：/runs 快照即带回已累积的日志行（刷新不丢）
   assert.deepEqual(store.getSnapshot().import.progress?.log, initialLog, '刷新后立即恢复已累积日志')
   // 轮询 /progress：日志持续追加
-  await sleep(40)
+  await waitFor(
+    () => seenLogs.some((l) => (l ?? []).includes('▶ plugin:@scope/pkg'))
+      && store.getSnapshot().import.step === 'result',
+    2000,
+    '轮询带回新增日志行并收敛到 result',
+  )
   unsub()
   assert.ok(
     seenLogs.some((l) => (l ?? []).includes('▶ plugin:@scope/pkg')),
@@ -409,7 +429,7 @@ test('m2-resume: 进行中 export run 轮询到完成，导出结果（含报告
   const resumed = await store.resume(api)
   assert.equal(resumed, true)
 
-  await sleep(80)
+  await waitFor(() => store.getSnapshot().export.result?.zipPath === 'dsh-config-x.zip', 2000, '轮询收敛到 export 完成并回填结果')
   const exp = store.getSnapshot().export
   assert.equal(exp.running, false)
   assert.equal(exp.result?.zipPath, 'dsh-config-x.zip')
@@ -441,7 +461,7 @@ test('m2-resume: run 404（过保留期）→ 停止轮询并提示不可恢复'
   })
   const store = new RunStore({ storage: null, pollIntervalMs: 5 })
   await store.resume(api)
-  await sleep(40)
+  await waitFor(() => store.getSnapshot().export.error !== null, 2000, '404 后停止轮询并回填错误')
   const exp = store.getSnapshot().export
   assert.equal(exp.running, false)
   assert.ok((exp.error ?? '').includes('保留期'), '提示保留期/不可恢复')
@@ -463,7 +483,7 @@ test('m2-resume: 导出失败 run → 停止轮询并回填错误', async () => 
   })
   const store = new RunStore({ storage: null, pollIntervalMs: 5 })
   await store.resume(api)
-  await sleep(60)
+  await waitFor(() => store.getSnapshot().export.error === '导出超时', 2000, '导出失败 run 回填错误')
   const exp = store.getSnapshot().export
   assert.equal(exp.running, false)
   assert.equal(exp.error, '导出超时')
@@ -496,7 +516,7 @@ test('m3-poll: watchRunning 经 /runs 发现进行中 run 并轮询 /progress �
   store.importWizard(api)
   store.watchRunning('import', 5)
 
-  await sleep(80)
+  await waitFor(() => store.getSnapshot().import.step === 'result', 2000, 'watchRunning 发现 run 并轮询到完成')
   const imp = store.getSnapshot().import
   assert.ok(runsCalls >= 2, '发现阶段持续轮询 /runs 直到出现活跃 run')
   assert.equal(imp.step, 'result', '完成后结果落账')
@@ -534,7 +554,12 @@ test('m3-poll: watchRunning 轮询回填分区/内部计数进度（ProgressBar 
   })
   store.watchRunning('export', 5)
 
-  await sleep(80)
+  await waitFor(
+    () => seen.some((p) => p.section === 'plugins' && p.item === 4)
+      && store.getSnapshot().export.result?.zipPath === 'x.zip',
+    2000,
+    '轮询回填分区进度并收敛到完成',
+  )
   unsub()
   assert.ok(
     seen.some((p) => p.section === 'settings' && p.item === 3 && p.itemTotal === 12),
@@ -555,16 +580,18 @@ test('m3-poll: stopRunWatch 停止发现阶段轮询（视图请求结束后）'
   const store = new RunStore({ storage: null, pollIntervalMs: 5 })
   store.exportFlow(api)
   store.watchRunning('export', 5)
-  await sleep(30)
+  await waitFor(() => runsCalls >= 1, 2000, '发现阶段轮询已启动')
   const callsBeforeStop = runsCalls
   assert.ok(callsBeforeStop >= 1, '停止前发现阶段在轮询')
   store.stopRunWatch('export')
   const callsAfterStop = runsCalls
+  // 负向断言（stop 后不得再有 /runs 调用）无法用 waitFor 表达：必须保留一段观察
+  // 窗口，遗留定时器若仍在轮询，只能在这段窗口内被观察到。
   await sleep(40)
   assert.equal(runsCalls, callsAfterStop, 'stop 后不再轮询 /runs')
   // 同一 kind 可再次 watch（新请求）
   store.watchRunning('export', 5)
-  await sleep(20)
+  await waitFor(() => runsCalls > callsAfterStop, 2000, 'stop 后重新 watch 恢复轮询')
   assert.ok(runsCalls > callsAfterStop, 'stop 后可重新 watch')
   store.stopRunWatch('export')
 })
@@ -603,7 +630,11 @@ test('m3-poll: 导入日志超过 MAX_RUN_LOG_LINES 后 store progress.log 仍�
       seenTails.add(log[log.length - 1]!)
     }
   })
-  await sleep(150)
+  await waitFor(
+    () => store.getSnapshot().import.step === 'result' && seenTails.has('cap-3'),
+    2000,
+    '封顶日志持续更新并收敛到完成',
+  )
   unsub()
   assert.equal(store.getSnapshot().import.step, 'result', '轮询收敛到完成')
   assert.ok(seenRefs.size >= 3, `封顶后轮询仍拿到新数组引用（实际 ${seenRefs.size} 个不同引用）`)
@@ -623,9 +654,10 @@ test('m3-poll: 同一 kind 重复 watchRunning 不重复启动', async () => {
   store.exportFlow(api)
   store.watchRunning('export', 5)
   store.watchRunning('export', 5) // 幂等：不另起发现循环
-  await sleep(30)
+  await waitFor(() => runsCalls >= 1, 2000, '发现阶段轮询已启动')
   store.stopRunWatch('export')
   const calls = runsCalls
+  // 同上：负向断言需要一段观察窗口（stop 后不得有遗留轮询）。
   await sleep(30)
   assert.equal(runsCalls, calls, 'stop 后无遗留轮询')
 })
@@ -1053,7 +1085,10 @@ test('m2-resume: 活跃 restore run 经 /runs 恢复 running 并轮询到完成�
   assert.equal(resumed, true, '发现活跃 restore run')
   assert.equal(store.getSnapshot().snapshots.running, true, 'running 镜像置位（宿主 /runs 为权威）')
 
-  await sleep(80)
+  await waitFor(() => {
+    const snap = store.getSnapshot().snapshots
+    return snap.running === false && snap.report !== null
+  }, 2000, 'restore 轮询收敛到完成并回填报告')
   const snap = store.getSnapshot().snapshots
   assert.equal(snap.running, false, '完成后 running 复位')
   assert.deepEqual(snap.report?.restored, ['settings.yaml'], '恢复报告回填 store')
@@ -1180,7 +1215,7 @@ test('m2-resume: 活跃 recovery run 经 /runs 恢复 running（宿主为权威�
   assert.equal(resumed, true, '发现活跃 recovery run')
   assert.equal(store.getSnapshot().recovery.running, true, 'running 镜像置位（宿主 /runs 为权威）')
 
-  await sleep(80)
+  await waitFor(() => store.getSnapshot().recovery.running === false, 2000, 'recovery 轮询收敛到完成')
   assert.equal(store.getSnapshot().recovery.running, false, '完成后 running 复位')
 })
 

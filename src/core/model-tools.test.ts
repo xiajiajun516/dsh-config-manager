@@ -26,6 +26,8 @@ import type { SyncTransport, SyncSnapshot, SyncSnapshotMeta } from '../sync/tran
 import { computeSnapshotMeta } from '../sync/transport.ts'
 import { EnvironmentLockUnavailableError } from '../utils/env-lock.ts'
 import type { MutationLockPort } from '../utils/env-lock.ts'
+import { createSecretScanner } from '../security/secret-scanner.ts'
+import type { SecretScanner } from './types.ts'
 
 /** 内存 SyncTransport（spy：记录方法调用，供断言「pull 不写远端」）。 */
 class MemSyncTransport implements SyncTransport {
@@ -66,6 +68,8 @@ function seedSettings(ctx: ReturnType<typeof makeContext>): void {
 /** 构造 model-tools deps：真实 tmp 目录 + 内存 SyncTransport。 */
 async function makeDeps(opts: {
   transport?: MemSyncTransport
+  /** M1：可选注入强化 secret 扫描器（含 scanText）——验证 config_backup 文件类分区凭据告警 */
+  scanner?: SecretScanner
 } = {}): Promise<{ deps: ModelToolsDeps; tmp: string; transport: MemSyncTransport; ctx: ReturnType<typeof makeContext> }> {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-model-tools-'))
   const ctx = makeContext('win32', path.join(tmp, 'home'))
@@ -95,6 +99,8 @@ async function makeDeps(opts: {
       syncDir,
       makeSyncEngine,
       exporterVersion: '0.1.45',
+      // M1：缺省不传 scanner（保持旧行为：Exporter 落回 defaultSecretScanner，无 scanText）
+      ...(opts.scanner === undefined ? {} : { scanner: opts.scanner }),
     },
     tmp,
     transport,
@@ -127,8 +133,89 @@ test('config_backup：导出真实 ZIP 到 exports 目录，返回非敏感摘�
   }
 })
 
-test('config_backup：GLOBAL mutation lock 被其它任务占用时拒绝（EnvironmentLockUnavailableError）', async () => {
-  const { deps, tmp } = await makeDeps()
+
+/* ---------------- M1（G-09）：config_backup 模型工具路径必须与 HTTP 导出路由同档扫描 ---------------- */
+
+test('M1 config_backup：注入含 scanText 的 scanner → 文件类分区凭据产生告警；未注入 → 不告警（旧行为）', async () => {
+  // 1) 提供 scanner（与 HTTP 导出路由同一 createConfiguredSecretScanner 档位，含 scanText）：
+  //    技能文件里的 sk-... 必须产生 export.fileSectionSecrets 告警 + 计入 redactedHits。
+  const withScanner = await makeDeps({ scanner: createSecretScanner() })
+  try {
+    const secretValue = 'sk-live-m1-model-tool-9f3a2b7c'
+    await withScanner.ctx.fs.writeFile('skills/deploy.md', Buffer.from(`# Deploy skill\napiKey: "${secretValue}"\n`, 'utf8'))
+    const out = (await createModelTools(withScanner.deps).backup({})) as {
+      ok: boolean; sections: string[]; redactedHits: number; warnings: string[]
+    }
+    assert.equal(out.ok, true)
+    assert.ok(out.sections.includes('skills'), 'skills 分区进入备份')
+    const warn = out.warnings.find((w) => w.includes('skills') && w.includes('deploy.md'))
+    assert.ok(
+      warn !== undefined,
+      `注入 scanner 后文件类分区必须告警，实际 warnings=${JSON.stringify(out.warnings)}`,
+    )
+    assert.ok(warn!.includes('疑似凭据'), '告警文案应说明检测到疑似凭据')
+    assert.ok(!warn!.includes(secretValue), '告警绝不能带凭据值')
+    assert.ok(out.redactedHits >= 1, `文件类分区命中应计入 redactedHits，实际 ${out.redactedHits}`)
+    assert.ok(!JSON.stringify(out).includes(secretValue), '工具出参不得泄漏凭据值')
+  } finally {
+    await fs.rm(withScanner.tmp, { recursive: true, force: true })
+  }
+
+  // 2) 未注入 scanner（向后兼容缺省）→ Exporter 落回 defaultSecretScanner()（无 scanText）：
+  //    文件类分区不扫描、不告警，与修复前行为一致。
+  const noScanner = await makeDeps()
+  try {
+    await noScanner.ctx.fs.writeFile('skills/plain.md', Buffer.from('apiKey: "sk-live-m1-no-scanner-111"\n', 'utf8'))
+    const out = (await createModelTools(noScanner.deps).backup({})) as {
+      ok: boolean; redactedHits: number; warnings: string[]
+    }
+    assert.equal(out.ok, true)
+    assert.equal(out.redactedHits, 0, '缺省扫描器无 scanText → 文件类分区不计命中（旧行为）')
+    assert.ok(!out.warnings.some((w) => w.includes('疑似凭据')), '未注入 scanner 时文件类分区不告警（旧行为）')
+  } finally {
+    await fs.rm(noScanner.tmp, { recursive: true, force: true })
+  }
+})
+
+test('M1 源码守卫：index.ts 把同一个 scanner 实例注入 HTTP 导出路由与 config_backup', async () => {
+  const source = await fs.readFile(new URL('../../src/index.ts', import.meta.url), 'utf8')
+
+  // 1) 单一实例来源：createConfiguredSecretScanner 在 index.ts 里只构造一次
+  const ctorCall = 'createConfiguredSecretScanner(config?.personalPatterns)'
+  const ctorCount = source.split(ctorCall).length - 1
+  assert.equal(ctorCount, 1, `scanner 必须只构造一次（单一实例来源），实际 ${ctorCount} 次`)
+
+  // 2) 捕获该实例的标识符
+  const decl = source.match(/const ([A-Za-z_$][\w$]*) = createConfiguredSecretScanner\(/)
+  assert.ok(decl !== null, '应能找到 scanner 实例构造（const <name> = createConfiguredSecretScanner(...)）')
+  const name = decl![1] as string
+
+  // 3) HTTP 导出路由（makeRoutes 注入 RoutesDeps.scanner）
+  const routesStart = source.indexOf('makeRoutes({')
+  assert.ok(routesStart > 0, '应能找到 makeRoutes 调用')
+  const routesEnd = source.indexOf('\r\n  })', routesStart)
+  assert.ok(routesEnd > routesStart, '应能找到 makeRoutes 调用结尾')
+  const routesBody = source.slice(routesStart, routesEnd)
+  assert.ok(routesBody.includes(`scanner: ${name},`), `makeRoutes 必须注入同一个 scanner 实例（scanner: ${name},）`)
+
+  // 4) config_backup 模型工具（registerModelTools 注入 ModelToolsDeps.scanner）
+  const toolsStart = source.indexOf('registerModelTools(ctx, {')
+  assert.ok(toolsStart > 0, '应能找到 registerModelTools 调用')
+  const toolsEnd = source.indexOf('\r\n  })', toolsStart)
+  assert.ok(toolsEnd > toolsStart, '应能找到 registerModelTools 调用结尾')
+  const toolsBody = source.slice(toolsStart, toolsEnd)
+  assert.ok(toolsBody.includes(`scanner: ${name},`), `registerModelTools 必须注入同一个 scanner 实例（scanner: ${name},）`)
+
+  // 5) 路由内部确实把它交给 Exporter（防「注入了 deps 却没接上」）
+  const exportRouteStart = source.indexOf('path: API.export,')
+  assert.ok(exportRouteStart > 0, '应能找到导出路由（API.export）')
+  const exportRouteEnd = source.indexOf('path: API.exportPreview,', exportRouteStart)
+  assert.ok(exportRouteEnd > exportRouteStart, '应能找到紧随其后的 export-preview 路由')
+  const exportRouteBody = source.slice(exportRouteStart, exportRouteEnd)
+  assert.ok(exportRouteBody.includes('scanner: deps.scanner,'), '导出路由的 Exporter 必须使用 RoutesDeps.scanner')
+})
+
+test('config_backup：GLOBAL mutation lock 被其它任务占用时拒绝（EnvironmentLockUnavailableError）', async () => {  const { deps, tmp } = await makeDeps()
   try {
     // 模拟另一项 destructive 任务已持有 GLOBAL 锁：acquire 恒返回 LOCKED（token=null）
     const lockedPort: MutationLockPort = {

@@ -10,12 +10,17 @@
  *           [--data-dir <dir>] [--profile <name>] [--settings <path>]
  *   reinstall [--version <v>] [--yes] [--list] [--wipe-config] [--dry-run]
  *             一键重装 DSH 程序（交互多选 + 二次确认 / 跨平台执行）
+ *   verify [--id <file|path>] [--json] [--data-dir <dir>]
+ *             离线只读自检备份 ZIP（结构 + integrity/checksums 完整性；不改一个字节）
+ *   backup [--sections <a,b,c>] [--out <path>] [--dry-run] [--data-dir <dir>]
+ *             离线文件级备份（导出目录内生成与 GUI 同结构的 ZIP，落盘后自检）
  *   help | --help | -h                    显示全部命令与说明
  *
  * 缺省数据目录 = $DSH_HOME/dsh-config-manager/snapshots（$DSH_HOME 缺省 ~/.dsh）。
  */
 import os from 'node:os';
 import fssync from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
@@ -33,10 +38,25 @@ import {
 } from '../core/reinstall.ts';
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
 import { Phase3Recovery } from '../core/phase3-host.ts';
+import {
+  verifyBackupZip, type BackupVerifyResult, type BackupVerifyVerdict,
+} from '../core/backup-verify.ts';
+import {
+  collectBackupEntries, buildSectionFlags, parseSectionsArg,
+  DEFAULT_BACKUP_SECTIONS, OFFLINE_UNAVAILABLE_SECTIONS,
+  type BackupCollection,
+} from '../core/backup-plan.ts';
+import { buildChecksums } from '../utils/hashing.ts';
+import { stringifyJsonSafe } from '../utils/json.ts';
+import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest.ts';
+import { writeZip } from '../utils/zip.ts';
+import type { Manifest, SectionId } from '../schema/types.ts';
 
 /* ------------------------------------------------------------ 参数解析（纯函数） */
 
-export type CliCommand = 'snapshots' | 'restore' | 'reinstall' | 'recover-stale-lock' | 'help';
+export type CliCommand =
+  | 'snapshots' | 'restore' | 'reinstall' | 'recover-stale-lock'
+  | 'verify' | 'backup' | 'help';
 
 export interface CliOptions {
   command: CliCommand;
@@ -58,16 +78,35 @@ export interface CliOptions {
   list: boolean;
   /** --wipe-config：reinstall 等价勾选全部数据类（settings/plugins/data） */
   wipeConfig: boolean;
+  /** --json：verify 输出机器可读结果（便于 CI / 定时任务断言） */
+  json: boolean;
+  /** --sections <a,b,c>：backup 要打包的离线分区白名单（缺省取默认分区） */
+  sections?: string;
+  /** --out <path>：backup 输出 ZIP 路径（缺省写入导出目录，自动去重不覆盖） */
+  out?: string;
+  /** verify 的位置参数（文件名或路径；与 --id 同义，最多一个） */
+  positionals: string[];
 }
 
 export type ParseResult = { ok: true; options: CliOptions } | { ok: false; error: string };
 
-const VALUE_FLAGS = new Map<string, 'dataDir' | 'id' | 'profile' | 'settings'>([
+const VALUE_FLAGS = new Map<string, 'dataDir' | 'id' | 'profile' | 'settings' | 'sections' | 'out'>([
   ['--data-dir', 'dataDir'],
   ['--id', 'id'],
   ['--profile', 'profile'],
   ['--settings', 'settings'],
+  ['--sections', 'sections'],
+  ['--out', 'out'],
 ]);
+
+/** 仅 verify 子命令允许的参数（--json 为布尔开关，不在 VALUE_FLAGS 内） */
+const VERIFY_ONLY_FLAGS = new Set(['--json']);
+
+/** 仅 backup 子命令允许的参数 */
+const BACKUP_ONLY_FLAGS = new Set(['--sections', '--out']);
+
+/** backup 明确不支持的 restore 系参数（--dry-run 对 backup 有效，故不在此表） */
+const BACKUP_REJECTED_FLAGS = new Set(['--id', '--profile', '--settings']);
 
 /** 仅 restore 子命令允许的参数 */
 const RESTORE_ONLY_FLAGS = new Set(['--id', '--dry-run', '--profile', '--settings']);
@@ -77,7 +116,7 @@ const REINSTALL_ONLY_FLAGS = new Set(['--yes', '--list', '--wipe-config', '--ver
 
 /** recover-stale-lock 专用解析：只接受 --data-dir（用于定位 locks 目录），返回 dataDir 选项 */
 function parseCliDataDir(argv: readonly string[]): ParseResult {
-  const options: CliOptions = { command: 'recover-stale-lock', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false };
+  const options: CliOptions = { command: 'recover-stale-lock', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false, json: false, positionals: [] };
   for (let i = 1; i < argv.length; i += 1) {
     const flag = argv[i]!;
     if (flag === '--data-dir') {
@@ -101,9 +140,10 @@ function parseCliDataDir(argv: readonly string[]): ParseResult {
 export function parseCli(argv: readonly string[]): ParseResult {  const command = argv[0];
   if (command === undefined) return { ok: false, error: '缺少子命令 / missing subcommand' };
   if (command === '--help' || command === '-h' || command === 'help') {
-    return { ok: true, options: { command: 'help', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false } };
+    return { ok: true, options: { command: 'help', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false, json: false, positionals: [] } };
   }
-  if (command !== 'snapshots' && command !== 'restore' && command !== 'reinstall' && command !== 'recover-stale-lock') {
+  if (command !== 'snapshots' && command !== 'restore' && command !== 'reinstall'
+    && command !== 'recover-stale-lock' && command !== 'verify' && command !== 'backup') {
     return { ok: false, error: `未知子命令 / unknown subcommand: ${command}` };
   }
   if (command === 'recover-stale-lock') {
@@ -116,12 +156,36 @@ export function parseCli(argv: readonly string[]): ParseResult {  const command 
     return parseCliDataDir(argv);
   }
 
-  const options: CliOptions = { command, dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false };
+  const options: CliOptions = { command, dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false, json: false, positionals: [] };
   const rest = argv.slice(1);
   for (let i = 0; i < rest.length; i += 1) {
     const flag = rest[i]!;
     if (flag === '--help' || flag === '-h') {
       return { ok: true, options: { ...options, command: 'help' } };
+    }
+    // 位置参数：仅 verify 接受（文件名或路径），其余子命令沿用「未知参数」拒绝
+    if (!flag.startsWith('-')) {
+      if (command === 'verify') {
+        if (options.positionals.length >= 1) {
+          return { ok: false, error: 'verify 只接受一个目标 / verify accepts a single target' };
+        }
+        options.positionals.push(flag);
+        continue;
+      }
+      return { ok: false, error: `未知参数 / unknown flag: ${flag}` };
+    }
+    if (command !== 'verify' && VERIFY_ONLY_FLAGS.has(flag)) {
+      return { ok: false, error: `${command} 子命令不支持参数 / flag not allowed here: ${flag}` };
+    }
+    if (command !== 'backup' && BACKUP_ONLY_FLAGS.has(flag)) {
+      return { ok: false, error: `${command} 子命令不支持参数 / flag not allowed here: ${flag}` };
+    }
+    if (command === 'backup' && BACKUP_REJECTED_FLAGS.has(flag)) {
+      return { ok: false, error: `backup 子命令不支持参数 / flag not allowed here: ${flag}` };
+    }
+    if (flag === '--json') {
+      options.json = true;
+      continue;
     }
     if (command === 'snapshots' && RESTORE_ONLY_FLAGS.has(flag)) {
       return { ok: false, error: `snapshots 子命令不支持参数 / flag not allowed here: ${flag}` };
@@ -161,6 +225,11 @@ export function parseCli(argv: readonly string[]): ParseResult {  const command 
     const value = rest[i + 1];
     if (value === undefined || value === '' || value.startsWith('-')) {
       return { ok: false, error: `参数 ${flag} 缺少值 / missing value for ${flag}` };
+    }
+    if (key === 'sections') {
+      // 分区名提前校验：未知/离线不可用的分区一律在这里拒绝（不留到收集阶段才报）
+      const parsed = parseSectionsArg(value);
+      if (!parsed.ok) return { ok: false, error: parsed.error };
     }
     options[key] = value;
     i += 1;
@@ -245,6 +314,31 @@ export interface CliIo {
 
 const defaultIo: CliIo = { log: (s) => console.log(s), error: (s) => console.error(s) };
 
+/**
+ * CLI 写进 manifest.exporter.version 的版本号。
+ *
+ * **运行时从 package.json 读取，不硬编码**：本仓库铁律是「版本必须同步多处」，
+ * 再加一个常量就等于多一个会漂移的同步点（实测已发生：插件升到 0.1.59 后，
+ * 这个常量仍停在 0.1.58，导致新产出的备份被标成旧版本）。
+ * 只用 node 内置 `node:fs`，不引入 DSH 依赖，不破坏「CLI 零 @deepseek-ai 依赖」铁律。
+ *
+ * 路径解析：`src/cli/index.ts`（源码直跑）与 `lib/cli/index.js`（发布产物）都在包根下两级，
+ * 因此 `../../package.json` 两种形态均正确。读取失败时回退为中性占位（绝不谎报具体版本）。
+ */
+function resolveCliVersion(): string {
+  try {
+    const pkgUrl = new URL('../../package.json', import.meta.url);
+    const parsed = JSON.parse(fssync.readFileSync(pkgUrl, 'utf8')) as { version?: unknown };
+    if (typeof parsed.version === 'string' && parsed.version !== '') return parsed.version;
+  } catch {
+    // 包结构不可解析（被裁剪/单文件打包）：回退中性占位，不谎报版本
+  }
+  return '0.0.0-unknown';
+}
+
+/** 进程内缓存（每次 CLI 运行只读一次 package.json） */
+const CLI_EXPORTER_VERSION = resolveCliVersion();
+
 export function printUsage(io: CliIo = defaultIo): void {
   io.log(
     [
@@ -264,6 +358,17 @@ export function printUsage(io: CliIo = defaultIo): void {
       '      仅当持有者已确证死亡才回收；活锁一律拒绝。GUI 操作报「操作暂时无法执行」',
       '      且重试无效时使用（另有 GUI「事故恢复」入口）。',
       '      Refuses unless the owner is proven dead; never touches a live lock.',
+      '  dsh-config-manager verify [--id <file|path>] [--json] [--data-dir <dir>]',
+      '      离线只读自检备份 ZIP（结构 + integrity/checksums 完整性；不改一个字节）',
+      '      / read-only integrity check of backup ZIPs（零写入）',
+      '      无参校验导出目录下全部 *.zip；也可用位置参数指定单个文件或路径。',
+      '      退出码：全部 OK → 0，任一非 OK → 1（便于 CI / 定时任务断言）。',
+      '      Exit code: 0 only when every checked backup is OK.',
+      '  dsh-config-manager backup [--sections <a,b,c>] [--out <path>] [--dry-run]',
+      '                            [--data-dir <dir>]',
+      '      离线文件级备份（导出目录内生成与 GUI 同结构的 ZIP，落盘后自动自检）',
+      '      / offline file-level backup（dropped ZIP is self-verified）',
+      '      只打包离线可直读的分区；凭据类文件（凭据文件名 / .env / *.pem）永不进入备份。',
       '  dsh-config-manager help',
       '      显示全部命令与说明 / show all commands',
       '',
@@ -278,6 +383,9 @@ export function printUsage(io: CliIo = defaultIo): void {
       '  --yes              非交互：全选并跳过二次确认 / non-interactive',
       '  --list             只列出 reinstall 可选清理项 / list selectable items only',
       '  --wipe-config      一并勾选数据类（settings/plugins/data）/ also wipe ~/.dsh data',
+      '  --json             verify 输出机器可读 JSON / machine-readable output',
+      '  --sections <list>  backup 分区白名单（逗号分隔；缺省 ' + DEFAULT_BACKUP_SECTIONS.join(',') + '）',
+      '  --out <path>       backup 输出 ZIP 路径（缺省自动命名，绝不覆盖既有文件）',
     ].join('\n'),
   );
 }
@@ -597,6 +705,13 @@ export async function runCli(
   if (options.command === 'reinstall') {
     return runReinstall(options, io, env, deps);
   }
+  // verify / backup 全程只读或只写导出目录：不碰 $DSH_HOME 配置、不需要环境锁
+  if (options.command === 'verify') {
+    return runVerify(options, io, env);
+  }
+  if (options.command === 'backup') {
+    return runBackup(options, io, env);
+  }
 
   const lockDataDir = resolveDataDir(options.dataDir, env);
   const lockHome = resolveDshHome(env);
@@ -694,6 +809,242 @@ export async function runCli(
       return 1;
     }
     throw err;
+  }
+}
+
+/* ------------------------------------------------------------ verify：备份只读自检 */
+
+/** verdict → 行首标记（人读摘要用；OK 才不显眼） */
+function verdictTag(v: BackupVerifyVerdict): string {
+  switch (v) {
+    case 'OK': return '[OK]';
+    case 'MISSING': return '[MISSING]';
+    case 'CORRUPT': return '[CORRUPT]';
+    case 'UNSUPPORTED': return '[UNSUPPORTED]';
+    case 'VERIFY_ERROR': return '[VERIFY_ERROR]';
+  }
+}
+
+/** 导出目录：--data-dir 覆盖优先，缺省 $DSH_HOME/dsh-config-manager/exports */
+export function resolveExportsDir(flag: string | undefined, env: Record<string, string | undefined> = process.env): string {
+  if (flag !== undefined && flag !== '') return flag;
+  return path.join(resolveDshHome(env), 'dsh-config-manager', 'exports');
+}
+
+/** 定位待校验目标：显式目标（文件名或路径）优先，否则列出导出目录下全部 *.zip（名称升序） */
+async function resolveVerifyTargets(
+  dataDir: string,
+  explicit: string | undefined,
+): Promise<{ ok: true; targets: string[] } | { ok: false; error: string }> {
+  if (explicit !== undefined && explicit !== '') {
+    // 文件名：在导出目录内解析；路径：按原样使用（相对当前工作目录）
+    const looksLikePath = explicit.includes('/') || explicit.includes('\\') || path.isAbsolute(explicit);
+    const target = looksLikePath ? path.resolve(explicit) : path.join(dataDir, explicit);
+    return { ok: true, targets: [target] };
+  }
+  let names: string[];
+  try {
+    names = (await fsp.readdir(dataDir)).filter((n) => n.endsWith('.zip')).sort();
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT') {
+      return { ok: false, error: `导出目录不存在 / export directory not found: ${dataDir}` };
+    }
+    return { ok: false, error: `读取导出目录失败 / failed to read export directory: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  if (names.length === 0) {
+    return { ok: false, error: `导出目录内没有备份 ZIP / no backup ZIP in: ${dataDir}` };
+  }
+  return { ok: true, targets: names.map((n) => path.join(dataDir, n)) };
+}
+
+/** 打印单个校验结果（文件级一行摘要 + 详情缩进） */
+function printVerifyResult(r: BackupVerifyResult, io: CliIo): void {
+  const size = r.sizeBytes !== undefined ? ` ${r.sizeBytes}B` : '';
+  const entries = r.entryCount !== undefined ? ` ${r.entryCount} entries` : '';
+  io.log(`${verdictTag(r.verdict)} ${path.basename(r.file)}${size}${entries}`);
+  for (const e of r.errors) io.log(`    ! ${e}`);
+  for (const w of r.warnings) io.log(`    - ${w}`);
+}
+
+async function runVerify(
+  options: CliOptions,
+  io: CliIo,
+  env: Record<string, string | undefined>,
+): Promise<number> {
+  const dataDir = resolveExportsDir(options.dataDir, env);
+  const explicit = options.id ?? options.positionals[0];
+  const resolved = await resolveVerifyTargets(dataDir, explicit);
+  if (!resolved.ok) {
+    // --json：错误也走 JSON（否则 CI 会拿到空 stdout 导致 jq 解析失败）
+    if (options.json) io.log(stringifyJsonSafe({ error: resolved.error }, { space: 2 }));
+    else io.error(resolved.error);
+    return 1;
+  }
+  const results: BackupVerifyResult[] = [];
+  for (const target of resolved.targets) results.push(await verifyBackupZip(target));
+
+  if (options.json) {
+    // 机器可读：单目标 → 对象；多目标 → 数组（便于 CI 用 jq 直接取 verdict）
+    const payload = results.length === 1 ? results[0]! : results;
+    io.log(stringifyJsonSafe(payload, { space: 2 }));
+  } else {
+    for (const r of results) printVerifyResult(r, io);
+  }
+
+  const failed = results.filter((r) => r.verdict !== 'OK');
+  if (!options.json) {
+    const counts = new Map<BackupVerifyVerdict, number>();
+    for (const r of results) counts.set(r.verdict, (counts.get(r.verdict) ?? 0) + 1);
+    const parts = [...counts.entries()].map(([v, n]) => `${v} ${n}`);
+    io.log(`汇总 / summary: ${results.length} 个备份 checked — ${parts.join(' · ')}`);
+  }
+  if (failed.length > 0) {
+    if (!options.json) io.error(`${failed.length} 个备份未通过自检 / ${failed.length} backup(s) failed verification`);
+    return 1;
+  }
+  return 0;
+}
+
+/* ------------------------------------------------------------ backup：离线文件级备份 */
+
+/** 打印待打包清单（--dry-run 与真实执行前的预览共用） */
+function printBackupPlan(col: BackupCollection, outPath: string, io: CliIo): void {
+  io.log(`备份计划 / backup plan（${col.entries.length} 个文件 → ${outPath}）`);
+  for (const s of col.sections) {
+    io.log(`  ${s.label}（${s.sectionId}）: ${s.entryCount} 个文件${s.excludedCount > 0 ? `，已排除 ${s.excludedCount}` : ''}`);
+    if (s.risk !== undefined) io.log(`      ⚠ ${s.risk}`);
+  }
+  for (const id of OFFLINE_UNAVAILABLE_SECTIONS) {
+    io.log(`  （离线不可收集 / not offline-collectable）${id}`);
+  }
+  io.log('凭据类文件（.credentials.* / .env / *.pem 等）已显式排除，绝不进入备份。');
+}
+
+async function runBackup(
+  options: CliOptions,
+  io: CliIo,
+  env: Record<string, string | undefined>,
+): Promise<number> {
+  const homeDir = resolveDshHome(env);
+  const exportsDir = resolveExportsDir(options.dataDir, env);
+
+  let only: SectionId[] = [];
+  if (options.sections !== undefined && options.sections !== '') {
+    const parsed = parseSectionsArg(options.sections);
+    if (!parsed.ok) {
+      io.error(parsed.error);
+      return 1;
+    }
+    only = parsed.sections;
+  }
+
+  const collection = await collectBackupEntries(homeDir, only);
+  if (collection.entries.length === 0) {
+    io.error(`没有可打包的内容 / nothing to back up（${homeDir} 下未找到可离线收集的分区）`);
+    return 1;
+  }
+
+  // 输出路径：--out 优先；否则导出目录内按时间自动命名，且绝不覆盖既有文件
+  let outPath: string;
+  if (options.out !== undefined && options.out !== '') {
+    outPath = path.resolve(options.out);
+    if (await pathExists(outPath)) {
+      const base = outPath.endsWith('.zip') ? outPath.slice(0, -4) : outPath;
+      let candidate = `${base}-1.zip`;
+      for (let i = 2; await pathExists(candidate); i += 1) candidate = `${base}-${i}.zip`;
+      outPath = candidate;
+    }
+  } else {
+    // 注意：此处刻意不 mkdir —— dry-run 必须零写入，目录在真正落盘前才创建
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+      + `-${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+    try {
+      const rand = await randomHex4();
+      outPath = await resolveNonCollidingName(exportsDir, `dsh-config-cli-${stamp}-${rand}.zip`);
+    } catch (err) {
+      io.error(`生成输出路径失败 / failed to build output path: ${err instanceof Error ? err.message : String(err)}`);
+      return 1;
+    }
+  }
+
+  if (options.dryRun) {
+    printBackupPlan(collection, outPath, io);
+    return 0;
+  }
+
+  // 组装 ZIP（manifest / checksums 复用 GUI 导出的同一构造方式）
+  const sectionFlags = buildSectionFlags(collection.included);
+  const checksums = buildChecksums(collection.entries);
+  const manifest = buildManifest({
+    exporterVersion: CLI_EXPORTER_VERSION,
+    // 离线 CLI 探测不到真实 DSH 版本：如实标注（不谎报成某个版本号）
+    dshVersion: 'cli-offline',
+    platform: process.platform as Manifest['source']['platform'],
+    arch: process.arch,
+    sections: sectionFlags,
+    containsSecrets: false, // 凭据文件已被显式排除，恒为 false
+    encrypted: false,
+    encryption: null,
+  });
+  const entries = [
+    ...collection.entries,
+    { name: CHECKSUMS_FILE, data: new TextEncoder().encode(stringifyJsonSafe(checksums, { space: 2 })) },
+    { name: MANIFEST_FILE, data: new TextEncoder().encode(stringifyJsonSafe(manifest, { space: 2 })) },
+  ];
+  try {
+    // 真正落盘前才创建导出目录（dry-run 已在上面提前返回，不产生任何写入）
+    await fsp.mkdir(path.dirname(outPath), { recursive: true });
+    await writeZip(outPath, entries);
+  } catch (err) {
+    io.error(`写入备份失败 / failed to write backup: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+
+  printBackupPlan(collection, outPath, io);
+  io.log(`备份已创建 / backup created: ${outPath}`);
+  for (const w of collection.warnings) io.error(`  - ${w}`);
+
+  // 落盘后立即自检（与 verify 同一引擎）：只有自检通过才返回 0
+  const check = await verifyBackupZip(outPath);
+  printVerifyResult(check, io);
+  if (check.verdict !== 'OK') {
+    io.error('备份自检未通过（文件已保留，请复核）/ self-verification failed（file kept for inspection）');
+    return 1;
+  }
+  io.log('自检通过 / self-verification OK');
+  return 0;
+}
+
+/** 文件是否存在 */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await fsp.stat(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 4 字节随机十六进制（与宿主导出命名风格一致，避免引入额外依赖） */
+async function randomHex4(): Promise<string> {
+  const { randomBytes } = await import('node:crypto');
+  return randomBytes(4).toString('hex');
+}
+
+/** 导出目录内取不冲突的文件名（复用既有去重语义：foo.zip → foo-1.zip） */
+async function resolveNonCollidingName(dir: string, desired: string): Promise<string> {
+  let existing: string[] = [];
+  try {
+    existing = await fsp.readdir(dir);
+  } catch {
+    existing = [];
+  }
+  if (!existing.includes(desired)) return path.join(dir, desired);
+  const base = desired.endsWith('.zip') ? desired.slice(0, -4) : desired;
+  for (let i = 1; ; i += 1) {
+    const candidate = `${base}-${i}.zip`;
+    if (!existing.includes(candidate)) return path.join(dir, candidate);
   }
 }
 

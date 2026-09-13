@@ -880,3 +880,81 @@ test('§11-c26 withMutationLock/runWithMutationLock：无 port 直接执行不�
     await holder.release(rh.token!);
   }
 });
+
+/* ------------------------------------------------ L3 回归：release 必须 drain 在途 heartbeat 写 */
+
+/**
+ * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget。
+ * writeHeartbeat 走 atomicWriteFile（tmp 写 → rename，异步多步），若 release 只 stopHeartbeat + unlink sidecar
+ * 而不等待在途写，该写会在 unlink **之后**才 rename → 把 sidecar 重新创建（并可能残留 .dshcm.*.tmp），
+ * 于是测试 after-hook 的 rmSync(dir) 报 ENOTEMPTY。
+ * 本用例用注入 io 把 rename 拖慢（100ms），让 release 必然发生在「写已启动但未落盘」的窗口内。
+ */
+/* ------------------------------------------------ L3 回归：release 必须 drain 在途 heartbeat 写 */
+
+/**
+ * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget。
+ * writeHeartbeat 走 atomicWriteFile（tmp 写 → rename，异步多步）；若 release 只 stopHeartbeat + unlink sidecar
+ * 而不等待在途写，该写会在 unlink **之后**才 rename → 把 sidecar 重新创建（或残留 .dshcm.*.tmp），
+ * 于是测试 after-hook 的 rmSync(dir) 报 ENOTEMPTY。
+ *
+ * 为了让「release 时确有在途 heartbeat 写」可确定复现（不依赖机器快慢）：在 sidecar 路径上先放一个**目录**，
+ * 使 atomicWriteFile 的 rename 目标被占用 → renameWithRetry 进入有界退避重试（25/50/100ms，约 175ms），
+ * 期间该写必然处于在途状态。修复后 release 会 drain 它（于是 rename 的重试窗口结束、临时文件被清理），
+ * 再删除占位目录；未修复时 cleanupHeartbeat 与在途 rename 竞争 → 目录/临时文件残留（after-hook rmSync 失败）。
+ */
+/* ------------------------------------------------ L3 回归：release 必须 drain 在途 heartbeat 写 */
+
+/**
+ * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget。
+ * writeHeartbeat 走 atomicWriteFile（同目录 tmp 写 → rename，异步多步）；若 release 只 stopHeartbeat + unlink sidecar
+ * 而不等待在途写，该写会在 unlink **之后**才 rename → 把 sidecar 重新创建，或把 .dshcm.*.tmp 留在 locks 目录里，
+ * 于是测试 after-hook 的 rmSync(dir) 报 ENOTEMPTY。
+ *
+ * 为了让「release 时确有在途 heartbeat 写」可确定复现（不依赖机器快慢）：在 sidecar 路径上先放一个**目录**，
+ * 使 atomicWriteFile 的 rename 目标被占用 → renameWithRetry 进入有界退避重试（25/50/100ms，约 175ms），
+ * 期间该写必然处于在途状态（实测：pre-release 目录里可稳定看到 .dshcm.*.tmp）。
+ * 修复后 release 会先 stopHeartbeat + 清 activeToken，再 drain 在途写（重试窗口结束、临时文件被清理），最后清 sidecar。
+ */
+test('L3 release 必须 drain 在途 heartbeat 写：不得残留原子写临时文件（after-hook rmSync ENOTEMPTY 根因）', async (t) => {
+  const locksDir = tmp(t);
+  const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 1 });
+  const res = await mgr.acquire({ op: 'hb-drain' });
+  assert.equal(res.state, 'ACQUIRED');
+  const id = res.token!.instanceId;
+  const hbPath = path.join(locksDir, heartbeatFile(id));
+  // 让 heartbeat 写链持续有在途写（interval 1ms）
+  await sleepReal(60);
+  // 占用 sidecar 路径（目录）→ 之后的 heartbeat 写 rename 失败并进入退避重试（在途窗口 ≈175ms）。
+  // 写链持续在写，rm 与 mkdir 之间存在竞争，故用有界重试把占位目录稳定建立起来。
+  let occupied = false;
+  for (let i = 0; i < 50 && !occupied; i++) {
+    try {
+      await fs.rm(hbPath, { force: true });
+      await fs.mkdir(hbPath);
+      occupied = true;
+    } catch {
+      await sleepReal(10);
+    }
+  }
+  assert.equal(occupied, true, '应能把 sidecar 路径占位为目录（用于制造确定性的在途写）');
+  await sleepReal(60); // 至少一次写已进入退避重试窗口
+  await mgr.release(res.token!);
+  // 核心断言：release 返回时在途写必须已 drain —— 不得留下原子写临时文件
+  // （未修复时 cleanupHeartbeat 与在途 rename 竞争，.dshcm.*.tmp 会残留 → after-hook rmSync 报 ENOTEMPTY）
+  const leftovers = fssync.readdirSync(locksDir).filter((n) => n.startsWith('.dshcm.'));
+  assert.deepEqual(leftovers, [], 'release 返回后不得残留原子写临时文件（L3 根因）');
+  // 清理占位目录（它本身是被测方无法删除的测试夹具），并确认目录可清空
+  try { await fs.rmdir(hbPath); } catch { /* 已被写链清理 */ }
+  assert.deepEqual(fssync.readdirSync(locksDir), [], '清理占位目录后 locks 目录必须为空（无 sidecar / 无 .tmp 残留）');
+});
+
+test('L3 release 后 locks 目录必须完全为空（模拟 after-hook rmSync 前提）', async (t) => {
+  const locksDir = tmp(t);
+  const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 50 });
+  const res = await mgr.acquire({ op: 'hb-empty' });
+  assert.equal(res.state, 'ACQUIRED');
+  await mgr.release(res.token!);
+  assert.deepEqual(fssync.readdirSync(locksDir), [], 'release 后 locks 目录必须为空（无 sidecar / 无 .tmp 残留）');
+});
+

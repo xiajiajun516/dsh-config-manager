@@ -17,7 +17,7 @@ src/index.ts   host 入口(name='config-manager'；/api/dsh-config-manager/*，�
 src/core/      引擎(exporter/importer/restore/rollback/run-registry/plugin-cli)，与DSH解耦(ConfigAdapter/HostContext+内存mock)
 src/schema/    类型/Manifest/版本(CURRENT_SCHEMA_VERSION=1)
 src/security/  secret-scanner/redaction/zip-security/integrity/encryption(scrypt+AES-256-GCM)
-src/adapters/  13适配器(settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/workspaces/credentials/pluginFiles/sessions/self)
+src/adapters/  13适配器(settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/agentInstructions/workspaces/credentialsStatus/pluginFiles/self；includeSessions:true 时 +sessions=14)
 src/sync/      SyncEngine+Git/WebDav+AutoSyncScheduler+config/state/history/sync-selection
 src/market/    GitMarketReader+index-parser+security校验+builtin；github-repos.ts+my-repo.ts+git-file-writer.ts
 src/migrations/ schema迁移链(registry+v1→v2占位)
@@ -25,7 +25,7 @@ src/profiles/  ProfileManager(保存/切换带Preview+快照+回滚)
 src/ui/        框架无关UI逻辑(纯函数/控制器，无React，node可测)  ← 业务逻辑必须在此
 src/utils/     paths/zip/hashing/json/logger
 src/client/    React壳(浏览器半)  ← 只做装配
-tests/ 集成测试(node --test)；docs/design/ 设计文档
+tests/ 集成测试(node --test)；docs/design/ 设计文档；docs/spec/ 对外契约(格式规格/schema/兼容矩阵/已知缺口)
 ```
 
 ### UI 分层铁律
@@ -52,6 +52,7 @@ tests/ 集成测试(node --test)；docs/design/ 设计文档
 CI `.github/workflows/publish.yml`：tag `v*` push → typecheck → test → build → pack → npm publish(OIDC) → GitHub Release。
 步骤：①bump 三处版本；②`CHANGELOG.md` 顶部加当前版本双语亮点段（漏写 CI fail-fast，release 由 `.github/scripts/extract-release-notes.py` 抽取）；③push main；④`git tag -a vX.Y.Z && push`。
 注意：手动 `workflow_dispatch` 不建 Release；npm 用 OIDC 无长令牌；版本 `0.1.x`；commit 惯例 `chore: bump to X.Y.Z`；不配 `.github/release.yml`（无 PR+label，GitHub 默认 conventional 分组更好）。
+CI 门禁：`.github/workflows/ci.yml` 对 `pull_request`→main 与 `push`→main 跑 typecheck/test/build/pack（最小权限、零发布副作用）；**发版仍只走 tag → `publish.yml`**，两条流水线互不重叠。
 
 ## 🔐 安全不变量（硬约束，不得破坏）
 - **Secret 默认不导出**：`includeSecrets` 缺省 false；凭据值绝不写入同步文件/日志/回传浏览器。
@@ -70,6 +71,8 @@ CI `.github/workflows/publish.yml`：tag `v*` push → typecheck → test → bu
 - 同步：`SyncEngine`+`Git/WebDavTransport`+`AutoSyncScheduler`(事件驱动,远端新快照才拉/本地改动才推)+`sync-selection`；**autosync 与 sync-selection 按通道(git/webdav)独立**(schema v2，v1→git)，调度器双通道各自排期。
 - **import 一律带 `.ts` 后缀**(Deno-style，勿写无后缀)。
 - 设计决策看 `docs/design/`（上游依据，实现规格在下游）。
+- **对外契约看 `docs/spec/`**：与 `docs/design/` 性质不同——`design/` 是**上游设计依据**（写给本仓库），`spec/` 是**对外契约**（写给第三方实现者，应能在不读 `src/` 的前提下据此实现兼容的 exporter/importer）。含：`bundle-format-v1.md`（格式规格）、`bundle-manifest.schema.json`（机器可校验）、`compat-matrix.md`（DSH 兼容区间与升级风险）、`headless-consumption.md`（无 UI 栈消费引擎）、`known-gaps.md`（已知缺口登记）。**改格式行为必须同步 `spec/`，并重跑 `tests/conformance/`。**
+- **client bundle 自包含护栏**：`src/utils/bundle-scan.ts`（零依赖扫描内核，**多趟并集**避免注释内反引号导致的状态失衡假阴性）+ `src/client/bundle-selfcontained.test.ts`（产物护栏，白名单仅 react/react-dom/react-dom/client/react/jsx-runtime）。**必须 Build 之后单独跑**——`npm test` 在 Build 前执行，此时 `lib/client.js` 不存在，测试会跳过；故 `ci.yml`/`publish.yml` 各有一独立步骤。注释里的同名字符串会造成假阳性（本仓库实测过）。
 - DI 走 Cordis fiber：client 经 `ctx.slots.inject('settings.section')`+`inject:()=>({api,syncApi,...})`；host 可选服务 `ctx.get()` 惰取。
 
 ## 🛠️ 开发规范
@@ -93,6 +96,24 @@ CI `.github/workflows/publish.yml`：tag `v*` push → typecheck → test → bu
 ### i18n
 - 文案进字典：React 壳 `t('key')`(zh 源/en 镜像，`ConfigManagerKey` 编译校验)；`src/ui/` 走 `src/ui/i18n.ts` `UiT`(`makeUiT`)。
 - **禁止硬编码用户可见字符串**。
+
+#### 字典共 7 套；「查不到 key」不等于是缺陷（排查前必读）
+写文案时要放进**正确的那一套**；反过来，**判断「某 key 是否存在」时必须先确认 `t` 的来源**，否则会系统性误报：
+
+| 字典 | zh/en | `t` 的来源 | 缺 key 行为 |
+|---|---|---|---|
+| `src/client/locales.ts` | 464 / 464 | 组件 props `t`（`ConfigManagerKey`） | **编译期报错** |
+| `src/ui/i18n.ts` | 267 / 267 | `UiT`（`api.t` / `zhUiT` / props） | **静默返回 key 本身** |
+| `src/core/messages.ts` | 261 / 261 | host/adapter `msg()` | 编译期（`keyof typeof zh`） |
+| `history-locales.ts` | 51 / 51 | `historyT` → ns `config-manager-history` | 静默 |
+| `market-locales.ts` | 138 / 138 | `marketT` → ns `config-manager-market` | 静默 |
+| `recovery-locales.ts` | 95 / 95 | `recoveryT` → ns `config-manager-recovery` | 静默 |
+| `sync-locales.ts` | 198 / 198 | `syncT` → ns `config-manager-sync` | 静默 |
+
+**第四个坑：`t` 可经 props 注入 → 静态归属不可判。**
+`ConsultCard` 声明 `t: UiT`（不是本地字典），由调用方传 `t={api.t}`。因此「按文件在哪个目录就查哪套字典」**永远判不对**；实测这种静态归属扫描会产生 **600+ 处假阳性**（`error.*`/`history.*`/`myconfigs.*`/`report.*` 等全是注入式 `t`）。
+
+**正确排查姿势**：①先判 `t` 来自 import（编译校验）还是 `api.t` / props 注入（宽松）；②宽松字典里「查不到」**必须**先把 7 套字典取并集再下结论；③真正可靠的护栏是 `ConfigManagerKey` 的编译校验 + `UiT` 的运行时回退，而不是旁路扫字典。
 
 ### 测试
 - `node:test`+`node:assert`(零依赖)，同文件 `*.test.ts` 同目录。
@@ -148,7 +169,7 @@ npm run bundle                   # 仅重建 client bundle
 > 图标库同理：默认文本符号/emoji；确需图标库时按上述流程评估，优先支持 SVG sprite / icon font 的按需加载形态。
 
 **已落地（2026-09 Visual Polish，按上述 7 步评估通过）**：
-- `lucide-react`（图标）+ `@radix-ui/react-dialog`（弹窗 a11y）——均为**无样式/行为级**原语，视觉仍走 `--dsw-*` token，不引入第二套视觉体系。运行时 dependencies；经 `tsdown.config.ts` 的 `deps.alwaysBundle` 打进单文件 cjs（否则运行时 require 命中 DSH loader module-table-miss 崩溃）。bundle +136KB raw / +30KB gzip。封装层 `common/Icon.tsx`、`common/Modal.tsx`；细节与未迁移弹窗清单见 `DESIGN.md §6`。
+- `lucide-react`（图标）+ `@radix-ui/react-dialog`（弹窗 a11y）——均为**无样式/行为级**原语，视觉仍走 `--dsw-*` token，不引入第二套视觉体系。**devDependencies**（经 `tsdown.config.ts` 的 `deps.alwaysBundle` 打进单文件 cjs，已被内联故非运行时依赖；放 dependencies 会迫使 headless 消费者安装整套 React UI 栈）。bundle +136KB raw / +30KB gzip。封装层 `common/Icon.tsx`、`common/Modal.tsx`；细节与未迁移弹窗清单见 `DESIGN.md §6`。护栏：`src/client/bundle-selfcontained.test.ts`（build 后跑）；消费方式见 `docs/spec/headless-consumption.md`。
 
 ## ♻️ Reuse Before Creating
 新建任何 Component/Hook/Utility/Style/Type/API 前按序：①Reuse ②Extend ③Refactor ④Create。

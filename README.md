@@ -317,6 +317,10 @@ dsh-config-manager restore [--id <id>] [--dry-run]
 dsh-config-manager reinstall [--version <v>] [--yes] [--list]
                              [--wipe-config] [--dry-run]       # one-click reinstall of DSH itself
 dsh-config-manager recover-stale-lock [--data-dir <dir>]       # clear a leftover lock (see below)
+dsh-config-manager verify [--id <file|path>] [--json]         # read-only check of backup ZIPs
+                          [--data-dir <dir>]
+dsh-config-manager backup [--sections <a,b,c>] [--out <path>] # offline file-level backup
+                          [--dry-run] [--data-dir <dir>]
 ```
 
 **`reinstall` — rescue when DSH is broken.** It reinstalls the `@deepseek-ai/dsh` launcher across platforms (uses the right command per OS: PowerShell on Windows, bash on Unix). By default it reinstalls the launcher + clears global caches; interactively it asks which **dangerous** clean-up items to include (settings / plugins / session data & credentials) — those are **not** selected by default, and any destructive choice requires a second confirmation by typing `YES` before anything runs. Before wiping any `~/.dsh` data it makes an emergency backup at `.reinstall-backup` (the `snapshots/` folder is deliberately never touched).
@@ -347,6 +351,40 @@ dsh-config-manager restore --id <snapshot-id>                 # execute (current
 ```
 
 Every overwrite/delete is first copied to `<snapshotDir>/pre-restore/` so you can manually change your mind. Exit code is `1` if any action failed; the report honestly lists restored / removedPlugins / manualHints / failed / skipped.
+
+**`verify` — is that old backup still usable?** The GUI lives inside DSH, so it cannot answer this when DSH will not start; `verify` can. It re-reads a backup ZIP from disk **without writing a single byte**, then reports one verdict per file:
+
+| Verdict | Meaning |
+|---|---|
+| `OK` | Structurally valid and every entry matches its SHA-256 in `integrity/checksums.json` |
+| `MISSING` | The file is not there (wrong path / already deleted) |
+| `CORRUPT` | Damaged or tampered — the message names the exact offending entry |
+| `UNSUPPORTED` | A valid backup this plugin version cannot read (schema too new, or an encrypted container that must be decrypted first) |
+| `VERIFY_ERROR` | The check itself failed (disk I/O); never downgraded to a guess |
+
+With no argument it checks **every** `*.zip` in the exports directory; pass a file name or a path to check just one. Exit code is `1` unless **all** checked backups are `OK` — which makes it safe to assert from CI or a scheduled task. `--json` prints the same result machine-readably.
+
+```bash
+dsh-config-manager verify                # check every backup in the exports directory
+dsh-config-manager verify --json         # machine-readable (exit code still 0/1)
+dsh-config-manager verify my-backup.zip  # check a single file by name
+dsh-config-manager verify C:/backups/dsh-config.zip   # ...or by path
+```
+
+**`backup` — backup even when DSH is down.** This is the offline counterpart of the GUI export: it packs the parts of `$DSH_HOME` that can be read **without the DSH runtime** (skills, agent presets, agent instructions, and the plugin’s own config) into a ZIP with the same structure as a GUI export (`manifest.json` + `integrity/checksums.json` + section directories), then immediately self-checks what it wrote with the same engine as `verify` — a backup command that never verified its own output would be worse than none.
+
+**Credential files never enter a backup.** `.credentials.*`, `.env`, `*.pem` and friends are excluded by an explicit blacklist, only whitelisted directories are walked (never the whole home directory), and symlinks are skipped rather than followed.
+
+Structured sections (settings / UI / providers / plugins / MCP / prompts / workspaces) are **not** silently faked: they need the DSH service layer to read and redact, so they are left out and marked `false` in the manifest — the plan printout lists them under “not offline-collectable” so you know exactly what this backup does and does not contain. Use the GUI export when DSH is healthy for a full backup.
+
+```bash
+dsh-config-manager backup --dry-run                       # list what would be packed (zero writes)
+dsh-config-manager backup                                 # write into the exports directory, then self-check
+dsh-config-manager backup --out D:/rescue/config.zip      # explicit destination (never overwrites)
+dsh-config-manager backup --sections skills,self          # narrow the scope
+```
+
+`--sections` accepts `skills,agentPresets,agentInstructions,self,pluginFiles`. `pluginFiles` is **opt-in** (as in the GUI): it copies third-party plugin files verbatim, and `dsh-ssh.json` holds plaintext host passwords — select it only when you have looked at what is in there.
 
 **A typical rescue flow** when DSH won't start: ① `dsh-config-manager reinstall` to bring the launcher back (plus any clean-up), ② `dsh web` to start DSH again, ③ re-add the plugin from the registry, and ④ pull a snapshot from the remote repo (or run `dsh-config-manager restore`) to bring your config back. The CLI works at every step regardless of DSH's health.
 

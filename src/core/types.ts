@@ -204,6 +204,27 @@ export interface ImportAnalysis {
   warnings: string[];
   compatibility: 'excellent' | 'good' | 'partial' | 'unsupported';
   sectionsInZip: SectionId[];
+  /**
+   * 备份 manifest 声明启用、但**本版本不认识**的分区 id（不在 `SECTION_IDS` 中）。
+   *
+   * 语义（G-01/G-02/G-03）：这些分区的数据被跳过、未导入，且**绝不**计入
+   * `missingSections` —— 它们并非「备份声明了但文件缺失」，而是「本插件不认识」。
+   *
+   * 当前用户可见路径是 `warnings` 里的文案键 `import.unsupportedSections`
+   * （`ImportWizardView` 直接渲染 `analysis.warnings`）；本字段供第三方实现者与
+   * 后续 UI 做结构化展示（例如把「未知分区」与「版本过高」分列）。**尚无 UI 消费点。**
+   */
+  unsupportedSections: string[];
+  /**
+   * 已知分区、但其数据 `version` **高于**本版本支持的 1 → 该分区已被跳过（G-05）。
+   *
+   * 与 `unsupportedSections` 的区别：那个是「本插件不认识这个分区」，这个是
+   * 「认识这个分区，但它来自更新的格式」。两者都只告警、不阻断整个 bundle。
+   *
+   * 当前用户可见路径是 `warnings` 里的文案键 `import.unsupportedSectionVersion`；
+   * 本字段供第三方实现者与后续 UI 与 `unsupportedSections` 分列展示。**尚无 UI 消费点。**
+   */
+  unsupportedVersions: { section: SectionId; version: number }[];
   pluginSummary: { installed: number; toInstall: number };
   pathIssues: PathIssue[];
   secretCount: number;

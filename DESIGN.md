@@ -134,6 +134,10 @@ Shell（`ConfigManagerSection`）：导航条 + 页面内容 + 状态栏 + 活�
   强制把二者打进单文件 cjs（否则被当 dependencies 外部化 → 运行时 `require` 命中 DSH loader
   「module table miss」崩溃）。注意 tsdown 0.22 读 `deps.alwaysBundle`，旧的顶层 `noExternal`
   从 config 根读取、放在 `deps` 内会被静默忽略。bundle 增量约 +136KB raw / +30KB gzip。
+- **依赖归类**：二者已被内联进 `lib/client.js`，因此是**构建期依赖** → 放 `devDependencies`
+  （放 `dependencies` 会迫使只想复用引擎的 headless 消费者安装整套 React UI 栈）。
+  这条不变量由 `src/client/bundle-selfcontained.test.ts` 钉死（build 后跑）；消费方式见
+  `docs/spec/headless-consumption.md`。
 
 ### 数据展示
 - **数据表**：`.tableWrap > .tableScroll > .dataTable`；变体 `.tableFixed`（固定布局 +

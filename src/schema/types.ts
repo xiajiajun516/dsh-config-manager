@@ -110,6 +110,35 @@ export interface PluginEntry {
 
 export interface PatchLine { file: string; lineId: string; raw: unknown; }
 
+/**
+ * 本地源插件的打包产物（T1）。
+ *
+ * 为什么放在 `plugins` 分区内（而非 `plugin-files/` 前缀）：
+ * plugins 是 `defaultIncluded=true` 且 portable，而 pluginFiles 是 `deviceSpecific`
+ * 且 defaultIncluded=false —— 后者会让「快速导出」（默认路径）拿不到 tarball，
+ * 而「本地插件换机丢失」恰恰是最需要默认覆盖的场景。
+ *
+ * 为什么不新增分区 id：新增 SectionId 需同步 SECTION_IDS / SECTION_FILE_PREFIXES /
+ * manifest 校验 / analyzer / exporter / market BANNED / sync layout 共 7 处契约，
+ * 风险远大于收益；本字段落在既有 plugins 分区内即可被全部既有机制正确处理。
+ *
+ * 安全：base64 仅为传输编码，不做任何执行；导入端只把解包出的 tgz 交给官方
+ * `dsh plugin add` 通道。**市场侧已在发布与导入两端同时拒绝携带本字段的条目**
+ * （`market/prepare.ts` 6b3 + `market/security.ts`）——因为 tarball 是不可经公开仓库审阅的
+ * 不透明二进制，安装时可能执行 postinstall，等于给「分享配置」开一条携带任意代码、
+ * 绕过 BANNED 分区的通道。本地插件迁移只应发生在自己的备份里。
+ */
+export interface LocalPluginTarball {
+  /** 包名（与 PluginEntry.name 对应） */
+  packageName: string;
+  /** 打包时的插件版本 */
+  version: string;
+  /** 归档内相对路径（`local-plugins/<x>.tgz`，恒正斜杠） */
+  relativePath: string;
+  /** tarball 字节的 base64（非秘密；仅本地源插件的源码包） */
+  base64: string;
+}
+
 export interface PluginsSection {
   version: 1;
   plugins: PluginEntry[];
@@ -120,7 +149,13 @@ export interface PluginsSection {
    * （git 插件构建脚本白名单、新发布版本冷静期等）。缺省/无文件为 null。
    */
   pnpmWorkspace?: string | null;
+  /**
+   * 本地源（`link:` / `file:`）插件的打包产物（T1）。缺省/无本地源插件 = 不出现。
+   * 导出时由宿主注入的打包钩子填充；导入时据此把 spec 重写为 `file:<解包后的绝对路径>`。
+   */
+  localTarballs?: LocalPluginTarball[];
 }
+
 
 /* —— mcp 分区 —— */
 

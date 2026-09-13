@@ -35,7 +35,7 @@ import type { ValuePattern, ConfiguredSecretPatterns } from './secret-scanner.ts
 import {
   encryptCredentials, decryptCredentials, createEncryptionProvider,
   SecurityError, SCHEMA_MAGIC, SCHEMA_VERSION, HEADER_LENGTH, SALT_LENGTH, IV_LENGTH,
-  validatePasswordStrength, SCRYPT_PARAMS,
+  SCRYPT_PARAMS,
   encryptArchive, decryptArchive, verifyEncryptedBlob, isArchiveBlob, ARCHIVE_MAGIC,
 } from './encryption.ts';
 import {
@@ -359,11 +359,8 @@ test('encryption: createEncryptionProvider 对齐 core EncryptionProvider 契约
   );
 });
 
-test('encryption: 密码强度校验', () => {
-  assert.equal(validatePasswordStrength('short').ok, false);
-  assert.equal(validatePasswordStrength('12345678').ok, true);
-  assert.ok(validatePasswordStrength('abcdefghijkL1!').ok);
-});
+
+
 
 /* ---------------- 整体备份容器加密（encryptArchive / verifyEncryptedBlob / decryptArchive） ---------------- */
 

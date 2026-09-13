@@ -14,6 +14,8 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { isDefaultRetentionPolicy, selectRetentionKeepers } from './retention-policy.ts'
+import type { RetentionPolicy } from './retention-policy.ts'
 
 /** 定时备份产物前缀（区别于手动导出的 dsh-config-；同时是来源标识与清理豁免依据） */
 export const AUTO_BACKUP_PREFIX = 'dsh-config-auto-'
@@ -187,6 +189,9 @@ export async function deleteBackupFile(exportsDir: string, name: string): Promis
  * - 只动 AUTO_BACKUP_PREFIX 前缀的文件（手动导出文件永不在此被删）；
  * - 按 mtime 取最新的 keep 个，其余删除（stat 失败保守不删该文件）；
  * - 返回删除的文件名列表；目录缺失 → 空（不抛错）。
+ *
+ * 说明：本函数是既有公开 API（测试与调用方依赖），**签名与行为保持不变**。
+ * 需要 GFS 分层（每月/每年留一份）请用 `pruneAutoBackupsByPolicy`。
  */
 export async function pruneAutoBackups(exportsDir: string, keep: number): Promise<string[]> {
   const metas = await listBackupFiles(exportsDir)
@@ -194,6 +199,43 @@ export async function pruneAutoBackups(exportsDir: string, keep: number): Promis
   if (auto.length <= keep) return []
   const removed: string[] = []
   for (const meta of auto.slice(keep)) {
+    try {
+      await fs.rm(meta.path, { force: false })
+      removed.push(meta.name)
+    } catch {
+      // 竞态/权限失败：保守跳过，下次清理再试
+    }
+  }
+  return removed
+}
+
+/**
+ * GFS 分层保留策略：按 RetentionPolicy 选出「应保留」的 auto 前缀 ZIP，删除其余。
+ *
+ * - 与 `pruneAutoBackups` 同一适用范围：**只动 AUTO_BACKUP_PREFIX 前缀**（手动导出永不删）；
+ * - 时间口径 = `mtimeMs`（备份产物无 createdAt，mtime 即其诞生时间）；
+ * - 缺省策略（keepLast=10 且无分层）走 `pruneAutoBackups` 快速路径 → 与改造前**逐字节等价**
+ *   （保留旧实现的排序/切片语义，避免两条路径在 mtime 相同场景下出现差分）；
+ * - 返回删除的文件名列表；目录缺失 → 空（不抛错）；单个删除失败保守跳过、不影响其余。
+ */
+export async function pruneAutoBackupsByPolicy(
+  exportsDir: string,
+  policy: RetentionPolicy,
+): Promise<string[]> {
+  // 快速路径：等价既有的「保留最近 N 个」（逐字节兼容，含 mtime 相同场景）
+  if (isDefaultRetentionPolicy(policy)) {
+    return pruneAutoBackups(exportsDir, policy.keepLast)
+  }
+  const metas = await listBackupFiles(exportsDir)
+  const auto = metas.filter((m) => m.source === 'auto')
+  if (auto.length === 0) return []
+  const keepers = selectRetentionKeepers(
+    auto.map((m) => ({ name: m.name, mtimeMs: m.mtimeMs })),
+    policy,
+  )
+  const removed: string[] = []
+  for (const meta of auto) {
+    if (keepers.has(meta.name)) continue
     try {
       await fs.rm(meta.path, { force: false })
       removed.push(meta.name)

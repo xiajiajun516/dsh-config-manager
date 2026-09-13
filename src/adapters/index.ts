@@ -11,7 +11,7 @@ import type { ConfigAdapter, HostContext } from '../core/types.ts';
 import { SettingsAdapter, type NamespaceProvider } from './settings.ts';
 import { UiAdapter } from './ui.ts';
 import { ProvidersAdapter } from './providers.ts';
-import { PluginsAdapter } from './plugins.ts';
+import { PluginsAdapter, type LocalPluginPackHook } from './plugins.ts';
 import { McpAdapter } from './mcp.ts';
 import { PromptsAdapter } from './prompts.ts';
 import { SkillsAdapter } from './skills.ts';
@@ -37,6 +37,11 @@ export interface AdapterRegistryOptions {
   /** 插件自身包名：导出 plugins 分区时不列自己（避免自引用；缺省 dsh-config-manager） */
   selfPluginName?: string;
   /**
+   * T1：本地源（link:/file:）插件打包钩子。注入后，导出 plugins 分区时会为这类插件
+   * 执行 `npm pack` 并把 tarball 随备份带走；不注入 = 保持改造前行为（本地插件换机丢失）。
+   */
+  localPluginPack?: LocalPluginPackHook;
+  /**
    * self 分区：插件自身配置目录（相对 ~/.dsh 根，如 'dsh-config-manager'）。
    * 缺省 'dsh-config-manager'；传入 '' 表示不挂载（宿主自定义 dataDir 在 homeDir 外时）。
    */
@@ -50,7 +55,7 @@ export function createAdapters(options: AdapterRegistryOptions = {}): ConfigAdap
     new SettingsAdapter(namespaces),
     new UiAdapter(namespaces),
     new ProvidersAdapter(),
-    new PluginsAdapter(options.selfPluginName),
+    new PluginsAdapter(options.selfPluginName, options.localPluginPack),
     new McpAdapter(),
     new PromptsAdapter(),
     new SkillsAdapter(),
@@ -75,6 +80,7 @@ export { SettingsAdapter } from './settings.ts';
 export { UiAdapter, isUiNamespace, KNOWN_UI_NAMESPACE_PREFIXES, UI_MIGRATION_NOTES } from './ui.ts';
 export { ProvidersAdapter, DEFAULT_PROVIDER_NAMESPACES, type ProviderExportEntry, type ProviderExportSection } from './providers.ts';
 export { PluginsAdapter, USER_PATCH_FILE } from './plugins.ts';
+export type { LocalPluginPackHook } from './plugins.ts';
 export { McpAdapter, extractMcpServers, buildMcpPatchLine, type McpExportEntry, type McpExportSection } from './mcp.ts';
 export { PromptsAdapter, extractPrompts, mergePromptIntoLine, buildPromptLine, type PromptExportEntry, type PromptsExportSection } from './prompts.ts';
 export { SkillsAdapter } from './skills.ts';
