@@ -9,6 +9,71 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+## [0.1.61] - 2026-09-18
+
+> 单主题版本：修复 **issue #38** —— 同步页「导出密钥」此前**不会导出任何密钥**。
+> 本版把它做成真的：凭据以**独立密文载荷**随加密快照迁移，并在目标机按用户确认写回本机凭据。
+> 缺口登记见 `docs/spec/known-gaps.md` **G-17**。
+
+### 🐞 issue #38 同步页「导出密钥」未生效
+
+- **问题**：`includeSecrets` 在同步通道内**没有数据源**——没有任何 adapter 读它，结构化分区在源头
+  就已 `redactSecrets`，凭据分区被 `FORBIDDEN_SECTIONS` 结构性排除，`.credentials.yaml` 在
+  `SECTION_JSON_PATHS` / `SECTION_FILE_PREFIXES` 里没有映射。它唯一真实生效的效果是
+  **跳过同步载荷的第二道 `SecretScanner` 脱敏**——方向是**降低防护**，而不是取得凭据。
+  推送载荷与不勾时**逐字节相同**（唯一差异是 `manifest.containsSecrets` 由 `false` 变 `true`），
+  而 UI hint 承诺「把真实凭据值写入加密快照」，两版 README 也从未提及该选项。
+- **修复（push 侧接入数据源）**：`includeSecrets=true` 时经 `ctx.fs.readFile` 读
+  `$DSH_HOME/.credentials.yaml` 原文，用本次调用的密码加密为**独立字段**
+  `SyncSnapshot.credentials`（新类型 `EncryptedCredentials`）。**刻意不进 `sections`**——
+  `credentialsStatus` / `secrets` 是结构性拒绝分区，凭据值必须走分区之外的载荷。
+  读不到 / 解析不出凭据 → **显式告警且不带载荷**（不静默成功，也不阻断其余配置同步）。
+- **修复（pull / apply 侧接线）**：`pull()` / `preview()` 解密出 `Map<ref, value>`，为每个 ref
+  生成一条 `MissingSecret` 计划项（凭据迁移因此进**人工确认**列表、默认不采用）；
+  `applyItems()` 把该 Map 作为 `executeImportPlan.decryptedCredentials`（此前**硬编码
+  `undefined`**）交给 credentials adapter → `credentials.set(ref, value)` 写回本机。
+  一键同步会话**仅内存**保管该 Map（存值不存密码——能力更窄），apply-items 消费 / cancel /
+  TTL 30 分钟即消失，绝不落盘。
+- **双保险**：未加密快照若携带凭据载荷，一律拒绝拉取（与「非加密快照声明 `containsSecrets`」
+  同类，防御篡改 / 旧坏数据）；散文件布局显式拒绝承载凭据载荷，**绝不静默丢弃**。
+- **可见性**：推送预览新增 `credentialsIncluded`，确认弹窗明确提示
+  「本次推送包含真实凭据值（已随载荷整体加密；远端只见密文）」——勾选后不再是无声的行为变化。
+- **安全不变量（均未放宽）**：`includeSecrets ⇒ encrypt` 强制；凭据载荷**只**存在于加密快照；
+  自动同步恒 `includeSecrets=false`（无密码可用，遇到加密快照跳过）；密码仅内存，
+  不落盘 / 不落日志 / 不进响应体；`manifest.containsSecrets=true` 语义保持。
+- **已知有损点（如实登记）**：只搬运 `.credentials.yaml` 的**顶层字符串值**（与导出路径
+  `security/secrets.enc` 同口径），嵌套结构 / 非字符串值不迁移；凭据写回**不可回滚**——
+  DSH 不回读凭据值，属既有的技术限制。
+
+### 📄 文档与契约同步
+
+- `src/client/sync/sync-locales.ts`：入口描述与「导出密钥」hint 从「密钥永不参与同步」改为
+  「**默认**不参与同步；勾选『导出密钥』并加密后可随加密快照迁移」——消除文案与实现不符。
+- `README.md` / `README.zh-CN.md`：功能表与同步章节同步修订，写明「密文随快照上行、
+  远端只见密文、凭据写回需用户确认」。
+- `AGENTS.md`：安全不变量新增「同步『导出密钥』= 独立密文凭据载荷」一条（含两条不放宽的红线）。
+- `docs/spec/known-gaps.md`：新增 **G-17**（含修复位置、不变量、验证方式与有损点）。
+
+### 测试
+
+- 新增 `src/sync/sync-credentials.test.ts`（7 例端到端，含负例）：push 密文载荷 + 明文绝不入载荷 /
+  只加密不导密钥不带载荷 / 无凭据文件明确告警 / pull+preview 生成迁移项且报告不含凭据值 /
+  applyItems 带 Map 写回、不带则跳过 / 未加密快照携带凭据载荷被拒 / 散文件布局拒绝。
+- `src/client/sync/sync-push-preview.test.ts`：新增「含凭据推送 → 显式提示」用例。
+- 全量套件 **1962** 项通过；`typecheck` / `build` / build 后 `bundle-selfcontained` 护栏全绿。
+
+### 🎯 亮点 / Highlights (zh)
+
+- 🔑 **「导出密钥」终于真的导出密钥**：勾选后 `.credentials.yaml` 会以 scrypt + AES-256-GCM 密文**随加密快照一起走**——换机后凭据能真正落地，而不再是「看起来勾了、其实什么都没带」。修复前该选项的唯一效果是**降低**载荷脱敏强度，用户却以为密钥已经迁移
+- 🧭 **凭据迁移走人工确认，不静默写入**：拉取侧为每个 ref 生成一条「凭据迁移」项，你确认采纳才写入本机凭据；凭据值全程只在内存中流转，密码不落盘、不落日志、不进响应体
+- 🛡️ **红线一条没松**：仍强制「导出密钥必须加密」，凭据载荷**只**存在于加密快照，未加密快照携带凭据载荷一律拒绝；自动同步恒不带凭据
+
+### Highlights (en)
+
+- 🔑 **"Export secrets" now actually exports secrets**: with it checked, `.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext **inside the encrypted snapshot** — credentials genuinely land on the other machine instead of "looks checked, carries nothing". Before the fix the option's only real effect was to **weaken** payload redaction while users believed their secrets had migrated
+- 🧭 **Credential migration is confirmed, never silent**: the receiving side turns each ref into a "credential migration" item that is written to the local credential store only after you accept it; values stay in memory — the password is never persisted, logged, or returned to the browser
+- 🛡️ **No guardrail was relaxed**: "export secrets ⇒ encryption" still holds, the credentials payload exists **only** in encrypted snapshots, and an unencrypted snapshot carrying one is rejected outright; auto sync never carries credentials
+
 ## [0.1.60] - 2026-09-18
 
 > 本版包含**两块互不重叠**的工作：
