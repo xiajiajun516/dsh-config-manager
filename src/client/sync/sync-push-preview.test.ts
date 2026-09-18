@@ -20,6 +20,7 @@ function okPreview(partial: Partial<SyncPushPreview> = {}): SyncPushPreview {
     ],
     remoteSnapshotCount: 3,
     encrypted: false,
+    credentialsIncluded: false,
     ...partial,
   };
 }
@@ -57,10 +58,18 @@ test('pushPreviewView: 首次推送（远端 0 快照）→ remoteSnapshotCount=
 });
 
 test('pushPreviewView: 失败预览 → error 透传（P0-②）', () => {
-  const view = pushPreviewView({ ok: false, sections: [], remoteSnapshotCount: 0, encrypted: false, message: 'no portable sections' }, t);
+  const view = pushPreviewView({ ok: false, sections: [], remoteSnapshotCount: 0, encrypted: false, credentialsIncluded: false, message: 'no portable sections' }, t);
   assert.ok(view !== null && !view.ok);
   assert.equal(view.error, 'no portable sections');
   assert.equal(view.rows.length, 0);
+});
+
+test('pushPreviewView: 含凭据推送 → 显式提示「本次含真实凭据值」（issue #38）', () => {
+  const withSecrets = pushPreviewView(okPreview({ encrypted: true, credentialsIncluded: true }), t);
+  assert.ok(withSecrets !== null && withSecrets.credentialsHint.length > 0, '含凭据时提示非空');
+  const withoutSecrets = pushPreviewView(okPreview({ encrypted: true, credentialsIncluded: false }), t);
+  assert.ok(withoutSecrets !== null);
+  assert.equal(withoutSecrets.credentialsHint, '', '不含凭据时不显示该提示');
 });
 
 test('pushPreviewView: null 预览 → null（无弹窗内容）', () => {

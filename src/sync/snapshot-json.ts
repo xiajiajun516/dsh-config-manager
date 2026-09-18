@@ -14,8 +14,8 @@
  */
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
-import type { EncryptedSections, SyncSnapshot } from './transport.ts';
-import { isEncryptedSections } from './transport.ts';
+import type { EncryptedCredentials, EncryptedSections, SyncSnapshot } from './transport.ts';
+import { isEncryptedCredentials, isEncryptedSections } from './transport.ts';
 
 /** 二进制数据在 JSON 中的标记对象键（base64 载荷）。 */
 const BIN_KEY = '$bin';
@@ -103,6 +103,8 @@ export function serializeSnapshot(snapshot: SyncSnapshot): string {
     createdAt: snapshot.createdAt,
     manifest: snapshot.manifest,
     sections: sectionsToJsonSafe(snapshot.sections),
+    // issue #38：加密凭据载荷原样透传（纯字符串 JSON 安全）；缺省不写该字段
+    ...(snapshot.credentials !== undefined ? { credentials: snapshot.credentials } : {}),
   });
 }
 
@@ -119,10 +121,15 @@ export function deserializeSnapshot(raw: string): SyncSnapshot {
   if (!okShape) {
     throw new Error('快照 JSON 形状非法（缺少 id/createdAt/manifest/sections）');
   }
+  // issue #38：凭据载荷（形状不合法 → 视为不存在，不让坏数据破坏整份快照解析）
+  const rawCredentials = (snap as { credentials?: unknown }).credentials;
+  const credentials: EncryptedCredentials | undefined =
+    isEncryptedCredentials(rawCredentials) ? rawCredentials : undefined;
   return {
     id: (snap as { id: string }).id,
     createdAt: (snap as { createdAt: string }).createdAt,
     manifest: (snap as { manifest: SyncSnapshot['manifest'] }).manifest,
     sections: sectionsFromJsonSafe((snap as { sections: unknown }).sections),
+    ...(credentials !== undefined ? { credentials } : {}),
   };
 }

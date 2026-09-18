@@ -40,6 +40,21 @@ export interface EncryptedSections {
   };
 }
 
+/**
+ * 加密快照的凭据载荷（issue #38）：`$DSH_HOME/.credentials.yaml` 原文整体加密。
+ *
+ * 为什么不放进 sections：`credentialsStatus`/`secrets` 是结构性拒绝分区
+ * （SyncEngine.FORBIDDEN_SECTIONS 断言），凭据值必须走 sections 之外的独立载荷。
+ * 只在 `includeSecrets=true`（由引擎强制 `encrypt=true`）的快照上出现，
+ * 因此**永远**与 sections 一样是密文，明文既不落盘也不进 manifest。
+ */
+export interface EncryptedCredentials {
+  /** 加密参数（salt/iv/authTag base64；与 security/encryption.ts 的 EncryptionInfo 对齐） */
+  info: EncryptionInfo;
+  /** base64：带 DSC1 头的密文（明文 = .credentials.yaml 原文） */
+  data: string;
+}
+
 /** 快照载荷：upload() 入参 / download() 返回 */
 export interface SyncSnapshot {
   id: string;
@@ -47,6 +62,8 @@ export interface SyncSnapshot {
   manifest: ManifestSummary;
   /** JSON 分区数据 + 文件类分区（FilesSection）；加密快照为 EncryptedSections 密文载荷 */
   sections: Partial<Record<SectionId, SectionData>> | EncryptedSections;
+  /** 加密凭据载荷（仅 includeSecrets=true 的加密快照携带；缺省 = 不含任何凭据值） */
+  credentials?: EncryptedCredentials;
 }
 
 /**
@@ -93,6 +110,13 @@ export function sectionsEqual(remote: SyncSnapshotMeta, local: SyncSnapshotMeta)
     if (r[key as SectionId] !== l[key as SectionId]) return false;
   }
   return true;
+}
+
+/** 判定是否为加密凭据载荷（duck-typing：含 info 对象 + 非空 data 字符串）。 */
+export function isEncryptedCredentials(v: unknown): v is EncryptedCredentials {
+  if (v === null || typeof v !== 'object') return false;
+  const c = v as { info?: unknown; data?: unknown };
+  return typeof c.data === 'string' && c.data !== '' && c.info !== null && typeof c.info === 'object';
 }
 
 /** 判定 sections 是否为加密密文载荷（duck-typing：含 encrypted.info + encrypted.data 字符串）。 */

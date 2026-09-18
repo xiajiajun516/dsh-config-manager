@@ -28,6 +28,14 @@ export interface SyncSession {
   snapshotId: string;
   /** 该次同步使用的通道配置（git/webdav 通用；apply-items 据此重建引擎） */
   config: SyncConfig;
+  /**
+   * issue #38：快照凭据载荷解密出的 `Map<ref, value>`（仅内存，随会话存活）。
+   * 存在这里的理由：apply-items 是**另一次请求**，届时已无解密密码；存值比存密码
+   * 能力更窄（值只能写回本机凭据，密码可解开整份快照）。
+   * 生命周期与会话一致（TTL 30 分钟 / apply-items 消费 / cancel 即随会话消失），
+   * 绝不落盘、绝不进响应体/日志。
+   */
+  credentials?: Map<string, string>;
   /** 创建时间（epoch ms） */
   createdAt: number;
   /** 过期时间（epoch ms；过期条目惰性清理） */

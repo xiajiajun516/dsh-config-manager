@@ -9,8 +9,10 @@
  *       绝不直接写配置、绝不执行导入（executeImportPlan 由上层按用户确认驱动）。
  *
  * 安全不变量：
- *  - secret 值永不参与同步：includeSecrets=false 恒成立 + 敏感字段扫描剥离 + 凭据分区结构性排除断言；
- *  - 远端快照声明 containsSecrets=true → 拒绝拉取；
+ *  - 默认（includeSecrets=false）secret 值永不参与同步：敏感字段扫描剥离 + 凭据分区结构性排除断言；
+ *  - 显式勾选「导出密钥」（includeSecrets=true）时，凭据值**只能**以 scrypt+AES-256-GCM 密文
+ *    随加密快照上行（`snapshot.credentials` 独立载荷；强制 encrypt，绝不明文进通道）；
+ *  - 远端快照声明 containsSecrets=true 且未加密 → 拒绝拉取；
  *  - 同步只做 portable 分区（deviceSpecific/platformSpecific 永不进入同步通道）。
  */
 import crypto from 'node:crypto';
@@ -36,9 +38,12 @@ import type { ZipWriteEntry } from '../utils/zip.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
 import { writeSnapshotToDir } from './layout.ts';
-import { decryptSectionsPayload, encryptSectionsPayload } from './snapshot-crypto.ts';
+import {
+  credentialsMapFromYaml, decryptCredentialsPayload, decryptSectionsPayload,
+  encryptCredentialsPayload, encryptSectionsPayload,
+} from './snapshot-crypto.ts';
 import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
-import type { EncryptedSections, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
+import type { EncryptedCredentials, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
 import { isEncryptedSections } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
@@ -100,8 +105,10 @@ export interface SyncPushOptions {
   encrypt?: boolean;
   /** 加密密码（仅内存；encrypt=true 时必填）。 */
   password?: string;
-  /** 导出真实凭据值（凭据值进入快照）。安全不变量：includeSecrets=true 必须同时 encrypt=true，
-   *  否则拒绝（密钥绝不明文进入同步通道）；自动同步恒 includeSecrets=false（推普通快照）。 */
+  /** 导出真实凭据值：读取 `$DSH_HOME/.credentials.yaml` 原文，加密后作为快照的独立
+   *  凭据载荷（`snapshot.credentials`）随快照上行（issue #38）。安全不变量：
+   *  includeSecrets=true 必须同时 encrypt=true，否则拒绝（密钥绝不明文进入同步通道）；
+   *  自动同步恒 includeSecrets=false（推普通快照）。 */
   includeSecrets?: boolean;
 }
 
@@ -162,6 +169,8 @@ export interface SyncPushPreview {
   remoteSnapshotCount: number;
   /** 加密快照：载荷将整体加密（分区计数与基线比较不可得） */
   encrypted: boolean;
+  /** 本次推送是否真的会带上凭据载荷（.credentials.yaml 可读且非空；issue #38） */
+  credentialsIncluded: boolean;
   message?: string;
 }
 
@@ -173,6 +182,12 @@ export interface SyncPreviewResult {
   plan: ImportPlan | null;
   analysis: ImportAnalysis | null;
   snapshotId: string;
+  /**
+   * 从快照凭据载荷解密出的 `Map<ref, value>`（issue #38；无凭据载荷 → undefined）。
+   * **仅内存**：绝不落盘、绝不进响应体/日志/报告；apply-items 时作为
+   * executeImportPlan 的 decryptedCredentials 交给 credentials adapter 写回本机。
+   */
+  credentials?: Map<string, string>;
   message?: string;
 }
 
@@ -329,6 +344,78 @@ export class SyncEngine {
     if (snapshot.manifest.containsSecrets) {
       throw new Error(this.msg('sync.remoteContainsSecrets', { id: snapshot.id }));
     }
+    // issue #38 双保险：凭据载荷只允许存在于加密快照。未加密快照携带凭据载荷 = 与
+    // 「明文快照携带秘密」同类（防御篡改/旧坏数据），一律拒绝，绝不尝试解密后静默使用。
+    if (snapshot.credentials !== undefined) {
+      throw new Error(this.msg('sync.remoteContainsSecrets', { id: snapshot.id }));
+    }
+  }
+
+  /* ------------------------------------------------ issue #38：凭据载荷（导出密钥） */
+
+  /**
+   * push 侧凭据载荷：includeSecrets=true 时读取 `$DSH_HOME/.credentials.yaml` 原文并加密。
+   * 读不到 / 解析不出任何凭据 → 返回 undefined 并**告警**（不阻断推送：其余配置照常同步，
+   * 但用户必须能看见「勾了导出密钥却没导出任何值」，而不是静默成功）。
+   */
+  private async buildCredentialsPayload(
+    password: string,
+    warnings: string[],
+  ): Promise<EncryptedCredentials | undefined> {
+    const credentialsFile = path.join(this.ctx.homeDir, '.credentials.yaml');
+    let plaintext: string;
+    try {
+      plaintext = Buffer.from(await this.ctx.fs.readFile(credentialsFile)).toString('utf8');
+    } catch (err) {
+      warnings.push(this.msg('sync.credentialsReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
+      return undefined;
+    }
+    if (credentialsMapFromYaml(plaintext).size === 0) {
+      warnings.push(this.msg('sync.credentialsEmpty'));
+      return undefined;
+    }
+    return await encryptCredentialsPayload(plaintext, password);
+  }
+
+  /**
+   * pull/preview 侧凭据载荷解密：快照携带凭据载荷时用同一次调用的密码解开为
+   * `Map<ref, value>`（与宿主导入路径 tryDecryptCredentials 同口径）。无载荷 → undefined。
+   * 值仅在内存流转：绝不落盘、绝不进日志/报告/响应体。
+   */
+  private async decryptSnapshotCredentials(
+    snapshot: SyncSnapshot,
+    password?: string,
+  ): Promise<Map<string, string> | undefined> {
+    const payload = snapshot.credentials;
+    if (payload === undefined) return undefined;
+    if (password === undefined || password === '') {
+      throw new Error(this.msg('sync.credentialsNeedPassword', { id: snapshot.id }));
+    }
+    return credentialsMapFromYaml(await decryptCredentialsPayload(payload, password));
+  }
+
+  /**
+   * 把「随加密快照迁移的凭据」补进导入计划：每个解密出的 ref 生成一条 MissingSecret 项。
+   * 执行阶段由 credentials adapter 经 ImportContext.decryptedCredentials（仅内存）
+   * 调用 credentials.set(ref, value) 写回本机 —— 与手动补录走同一条已验证路径。
+   * 已存在同 id 项（远端凭据状态分区已给出）→ 不重复。
+   */
+  private appendCredentialPlanItems(plan: ImportPlan, credentials: Map<string, string> | undefined): void {
+    if (credentials === undefined || credentials.size === 0) return;
+    const existing = new Set(plan.items.map((i) => i.id));
+    for (const ref of credentials.keys()) {
+      const id = `secret:${ref}`;
+      if (existing.has(id)) continue;
+      plan.items.push({
+        id,
+        kind: 'MissingSecret',
+        adapter: 'credentialsStatus',
+        description: this.msg('sync.credentialsItemDesc', { ref }),
+        severity: 'warning',
+        target: { adapter: 'credentialsStatus', ref },
+      });
+      existing.add(id);
+    }
   }
 
   /**
@@ -378,6 +465,11 @@ export class SyncEngine {
     if (encrypt) {
       sections = await encryptSectionsPayload(plainSections, opts.password!);
     }
+    // issue #38：勾选「导出密钥」→ 读取 .credentials.yaml 并加密为独立凭据载荷随快照上行。
+    // includeSecrets ⇒ encrypt（上方已强制），故凭据载荷永远是密文；读不到/为空则只告警。
+    const credentials = includeSecrets
+      ? await this.buildCredentialsPayload(opts.password!, warnings)
+      : undefined;
 
     const nowIso = this.now().toISOString();
     const id = opts.snapshotId ?? this.snapshotIdFn();
@@ -395,6 +487,7 @@ export class SyncEngine {
         ...(encrypted ? { encrypted: true } : {}),
       },
       sections,
+      ...(credentials !== undefined ? { credentials } : {}),
     };
 
     // ① 本地散文件快照副本（审计；复用 t2 layout，不写 ZIP）。
@@ -430,6 +523,18 @@ export class SyncEngine {
     if (includeSecrets && !encrypted) {
       throw new Error(this.msg('sync.includeSecretsRequiresEncryption'));
     }
+    // issue #38：只读探测「本次是否真的会带上凭据」（不解密、不返回值，只看有没有可用凭据）
+    let credentialsIncluded = false;
+    if (includeSecrets) {
+      try {
+        const raw = Buffer.from(
+          await this.ctx.fs.readFile(path.join(this.ctx.homeDir, '.credentials.yaml')),
+        ).toString('utf8');
+        credentialsIncluded = credentialsMapFromYaml(raw).size > 0;
+      } catch {
+        credentialsIncluded = false; // 读不到 = 不会带凭据；预览如实显示 false
+      }
+    }
     const targets = this.pushTargets(opts.sections, warnings);
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const counts: Partial<Record<SectionId, number>> = {};
@@ -448,7 +553,7 @@ export class SyncEngine {
       counts[adapter.id] = section.counts ? Object.values(section.counts).reduce((a, b) => a + b, 0) : 0;
     }
     if (Object.keys(plainSections).length === 0) {
-      return { ok: false, sections: [], remoteSnapshotCount: 0, encrypted, message: this.msg('sync.noPortableSections') };
+      return { ok: false, sections: [], remoteSnapshotCount: 0, encrypted, credentialsIncluded, message: this.msg('sync.noPortableSections') };
     }
     this.assertNoForbiddenSections(plainSections as Record<string, unknown>);
 
@@ -475,7 +580,7 @@ export class SyncEngine {
     } catch {
       // list 失败只影响展示（首次推送提示），不阻断预览
     }
-    return { ok: true, sections, remoteSnapshotCount, encrypted, message: warnings.length > 0 ? warnings.join('; ') : undefined };
+    return { ok: true, sections, remoteSnapshotCount, encrypted, credentialsIncluded, message: warnings.length > 0 ? warnings.join('; ') : undefined };
   }
 
   /**
@@ -527,6 +632,8 @@ export class SyncEngine {
     const snapshot = await this.transport.download(targetId);
     // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
     await this.prepareSnapshot(snapshot, opts.password);
+    // issue #38：快照携带凭据载荷 → 解密出 ref→值（仅内存），供计划项与后续 apply 使用
+    const credentials = await this.decryptSnapshotCredentials(snapshot, opts.password);
 
     const portableIds = new Set(this.portableAdapters().map((a) => a.id));
     const zipPath = await this.snapshotToZip(snapshot, portableIds);
@@ -537,6 +644,8 @@ export class SyncEngine {
         resolutions: {},
         pathMappings: [],
       });
+      // 凭据迁移项（ref 名进计划/报告，值绝不进）
+      this.appendCredentialPlanItems(plan, credentials);
       const changes: PullChange[] = plan.items.map((i) => ({
         id: i.id,
         adapter: i.adapter,
@@ -622,6 +731,8 @@ export class SyncEngine {
     const snapshot = await this.transport.download(targetId);
     // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
     await this.prepareSnapshot(snapshot, opts.password);
+    // issue #38：凭据载荷解密（仅内存；由调用方登记进同步会话，apply-items 时写回本机）
+    const credentials = await this.decryptSnapshotCredentials(snapshot, opts.password);
     const portableIds = new Set(this.portableAdapters().map((a) => a.id));
     const zipPath = await this.snapshotToZip(snapshot, portableIds);
     const analysis = await this.importer.analyzeImport(zipPath);
@@ -630,7 +741,8 @@ export class SyncEngine {
       resolutions: {},
       pathMappings: [],
     });
-    return { ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, message: undefined };
+    this.appendCredentialPlanItems(plan, credentials);
+    return { ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, credentials, message: undefined };
   }
 
   async merge(opts: { snapshotId?: string; password?: string } = {}): Promise<MergePlan> {
@@ -786,6 +898,8 @@ export class SyncEngine {
         };
       }
       // 3) 真正执行：Importer.executeImportPlan（rollbackOnError=true → 任一失败整体回滚）
+      // 自动同步路径没有密码（凭据载荷无法解密），因此恒不注入 decryptedCredentials；
+      // 加密快照本就不会进入自动同步（无密码无法 prepareSnapshot）。
       const result = await this.importer.executeImportPlan(zipPath, plan, {
         confirm: true,
         rollbackOnError: true,
@@ -842,6 +956,12 @@ export class SyncEngine {
       onItem?: (info: PlanItemProgress) => void;
       /** Phase 4 生产 journal↔snapshot 绑定（deferred；透传给 Importer.executeImportPlan） */
       snapshotBinding?: TransactionSnapshotContext;
+      /**
+       * issue #38：快照凭据载荷解密出的 `Map<ref, value>`（由 preview() 交给会话保管，
+       * 仅内存）→ 透传为 executeImportPlan 的 decryptedCredentials，credentials adapter
+       * 据此 credentials.set(ref, value) 写回本机。缺省 = 无凭据可写。
+       */
+      credentials?: Map<string, string>;
     } = {},
   ): Promise<ApplyItemsReport> {
     if (!this.importer) {
@@ -879,7 +999,8 @@ export class SyncEngine {
       confirm: true,
       rollbackOnError: true,
       secretInputs: undefined,
-      decryptedCredentials: undefined,
+      // issue #38：快照凭据载荷解出的 ref→值（仅内存）→ credentials adapter 写回本机
+      decryptedCredentials: opts.credentials,
       onItem: opts.onItem,
       snapshotBinding: opts.snapshotBinding,
     });

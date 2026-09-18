@@ -98,6 +98,11 @@ export async function writeSnapshotToDir(
   if (isEncryptedSections(snapshot.sections)) {
     throw new Error('加密快照不写散文件目录（本地不落盘；请直接使用密文传输）');
   }
+  // issue #38：凭据载荷只随加密快照的密文单文件布局传输。散文件布局无法承载它，
+  // 静默丢弃 = 「勾了导出密钥却什么也没导」，因此这里显式拒绝（调用方本不该走到这里）。
+  if (snapshot.credentials !== undefined) {
+    throw new Error('凭据载荷只能随加密快照的密文单文件布局传输（散文件目录不落任何凭据）');
+  }
   const sectionHashes: SnapshotDirManifest['sectionHashes'] = {};
   for (const [id, data] of Object.entries(snapshot.sections)) {
     const sid = id as SectionId;

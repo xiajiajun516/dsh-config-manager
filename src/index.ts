@@ -3865,6 +3865,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             analysis: preview.analysis,
             snapshotId: preview.snapshotId,
             config: syncCfg,
+            // issue #38：随加密快照迁移的凭据（仅内存；apply-items 时写回本机）。
+            // 绝不进响应体：下面只回 items/needsReview 等非敏感字段。
+            credentials: preview.credentials,
           })
           const items = planToConfirmItems(preview.plan)
           const needsReview = items.some((i) => REVIEW_KINDS.has(i.kind) || isToolchainChangeItem(i))
@@ -3944,6 +3947,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             report = await engine.applyItems(session.zipPath, subPlan, {
               onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
               snapshotBinding: journalCtx,
+              // issue #38：把会话里的凭据 Map 交给 credentials adapter 写回本机（仅内存）
+              ...(session.credentials !== undefined ? { credentials: session.credentials } : {}),
             })
           } finally {
             // 用完再清理临时 ZIP（此前在 applyItems 读取前就删除 → ENOENT：无法读取备份文件）

@@ -1619,6 +1619,7 @@ function PushPreviewCard({ preview, t, uiT }: {
         <Banner kind="warn">{t('syncflow.pushFirstBaseline')}</Banner>
       )}
       {view.encryptedHint !== '' && <Banner kind="warn">{view.encryptedHint}</Banner>}
+      {view.credentialsHint !== '' && <Banner kind="warn">{view.credentialsHint}</Banner>}
       <Card className={css.card}>
         <div className={css.groupLabel}>{t('syncflow.pushPreviewSections')}</div>
         <div className={css.planScroll}>

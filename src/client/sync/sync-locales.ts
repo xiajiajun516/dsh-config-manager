@@ -7,7 +7,7 @@
 export const zh = {
   // 入口
   'section.label': '远程同步',
-  'section.description': '通过 Git 私有仓库在设备间同步可移植配置（密钥永不参与同步）',
+  'section.description': '通过 Git 私有仓库在设备间同步可移植配置（密钥默认不同步；勾选「导出密钥」并加密后可随加密快照迁移）',
   // 私有仓库强制提示（常驻警示横幅）
   'privateRepoHint': '安全要求：同步仓库必须为私有仓库（public 仓库会公开你的配置内容）。认证 token 仅用于仓库访问，绝不写入同步文件、提交内容或日志。',
   // 仓库配置表单
@@ -140,7 +140,7 @@ export const zh = {
   'mode.passwordMismatch': '两次输入的密码不一致',
   'mode.passwordRequired': '加密必须设置密码',
   'mode.includeSecrets': '导出密钥',
-  'mode.includeSecretsHint': '把真实凭据值写入加密快照（勾选时自动选中加密；密钥绝不进入未加密快照）。',
+  'mode.includeSecretsHint': '把真实凭据值（~/.dsh/.credentials.yaml）写入加密快照，可在另一台机器上随同步一并写回本机凭据；勾选时自动选中加密，密钥绝不进入未加密快照。',
   'mode.encryptAutosyncNotice': '加密快照仅通过手动推送/拉取使用；自动同步无密码，遇到加密快照会跳过并在历史中提示。',
   'mode.decryptPassword': '解密密码（加密快照拉取/同步用，可选）',
   'mode.decryptPasswordHint': '拉取或一键同步遇到加密快照时输入；不输入则加密快照无法读取（自动同步会跳过并在历史中提示）。',
@@ -231,7 +231,7 @@ export const zh = {
 
 export const en: Record<keyof typeof zh, string> = {
   'section.label': 'Remote Sync',
-  'section.description': 'Sync portable configuration across devices via a private Git repository (secrets never sync)',
+  'section.description': 'Sync portable configuration across devices via a private Git repository (secrets do not sync by default; checking "Export secrets" with encryption lets them travel inside the encrypted snapshot)',
   'privateRepoHint': 'Security requirement: the sync repository MUST be private (a public repo would expose your configuration). The auth token is only used for repository access and is never written into sync files, commit content, or logs.',
   'config.title': 'Repository',
   'config.repoUrl': 'Repository URL',
@@ -355,7 +355,7 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.passwordMismatch': 'Passwords do not match',
   'mode.passwordRequired': 'Encryption requires a password',
   'mode.includeSecrets': 'Export secrets',
-  'mode.includeSecretsHint': 'Write real credential values into the encrypted snapshot (auto-selects encryption when checked; secrets never enter a plaintext snapshot).',
+  'mode.includeSecretsHint': 'Write real credential values (~/.dsh/.credentials.yaml) into the encrypted snapshot so another machine can restore them with the sync; checking this auto-selects encryption, and secrets never enter a plaintext snapshot.',
   'mode.encryptAutosyncNotice': 'Encrypted snapshots are only produced/consumed by manual push/pull; auto sync has no password, so it skips encrypted snapshots and reports them in history.',
   'mode.decryptPassword': 'Decryption password (for encrypted snapshot pull/sync, optional)',
   'mode.decryptPasswordHint': 'Provide it when pulling or one-click syncing an encrypted snapshot; without it encrypted snapshots cannot be read (auto sync skips and reports them in history).',

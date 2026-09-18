@@ -52,7 +52,7 @@ Move your complete DeepSeek Harness setup without manually reinstalling plugins,
 
 ### Sync DSH configuration across machines
 
-Keep portable configuration synchronized between machines through a private Git repository or WebDAV — secrets never sync.
+Keep portable configuration synchronized between machines through a private Git repository or WebDAV — secrets do not sync by default (the payload is run through the SecretScanner); check "Export secrets" with an encryption password and `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext inside the encrypted snapshot, so another machine can restore the credentials while the remote (Git host / WebDAV provider) only ever sees ciphertext.
 
 ### Schedule automatic full backups
 
@@ -76,7 +76,7 @@ Browse the built-in official market for ready-made configurations (model provide
 | 🔒 | **Secret safety** | API Keys are not exported by default — non-encrypted imports ask you to re-enter; encrypted backups restore them with the password |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
-| 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo or WebDAV** (secrets never sync) |
+| 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo or WebDAV** (secrets do not sync by default; encrypted snapshots can optionally carry encrypted credentials) |
 | ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d) — set-and-forget, secrets never included |
 | 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-section approval |
 | 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime — preview + auto-backup + rollback |
@@ -248,6 +248,7 @@ Push / pull your portable config between machines through **either of two channe
 - **WebDAV auth** uses HTTP Basic: the `username` is stored in the config and may be echoed back into the UI, while the `password` is read live from the DSH credentials slot `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` — it never appears in any sync file or log.
 - **Plugins auto-install**: when pulling diffs, plugins that are new in the backup are **installed automatically** on confirm — no manual per-item ticking in the diff list. Only **version-conflict** plugins still ask you to pick "Keep Current / Use Imported".
 - **Push preview before uploading** — the Push button first shows a read-only preview of what will be sent (sections + per-section counts + changed-vs-baseline markers, first-baseline notice) and only writes the remote after you confirm.
+- **Secrets do not sync by default**: every section goes through the `SecretScanner` (sensitive field values stripped) and the credential section is structurally excluded. With "Export secrets" checked and an encryption password set, `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext in a **separate credentials payload** of the encrypted snapshot (never inside any section); the receiving side decrypts it into per-ref "credential migration" items that are written back to the local credential store (`credentials.set`) only after you confirm. The password is memory-only and never persisted or logged; **auto sync never carries credentials** (it has no password and skips encrypted snapshots).
 
 ### 🛒 Configuration Marketplace
 

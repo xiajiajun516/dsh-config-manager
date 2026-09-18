@@ -49,6 +49,7 @@
 | G-14 | 同步只搬 `pnpmWorkspace` 声明、不搬 `patches/**` → 目标机 pnpm 拒绝一切安装（issue #35） | ✅ 已修复（`patchFiles` 同进同出 + 导入端剔除不可满足声明 + 市场双端拒收 + journal 状态可辨 + 计划项可回滚 + 工具链变更可见可取消） |
 | G-15 | Windows 无 OS process identity → 阈值内的 PID 复用残留锁仍判 UNKNOWN_STATE（issue #36） | ⚠️ **部分修复**（长过期可显式回收；精确区分 PID 复用仍未实现，见 §3） |
 | G-16 | 文件类分区静默跳过 junction/符号链接（issue #37） | ✅ 已修复（GUI 与 CLI 同一跟随内核 + 跳过/不可读均留痕；home 外目标仍拒绝且留痕） |
+| G-17 | 同步页「导出密钥」无数据源：勾选后不导出任何凭据，只跳过载荷的二次脱敏（issue #38） | ✅ 已修复（凭据作为独立密文载荷随加密快照迁移；拉取侧解密 → 逐条确认 → `credentials.set` 写回） |
 
 ---
 
@@ -174,6 +175,17 @@
 | 未解决 | ① 阈值内（< 30 分钟无心跳）的 PID 复用残留锁仍判 `UNKNOWN_STATE`，只能等待阈值过去；② 无法把「PID 复用」与「owner 真存活但心跳降级」精确区分——两者都靠「心跳长过期」这一代理判据，属**启发式**而非确证。 |
 | 为什么不更激进 | 缩短阈值会提高「误回收活锁」的风险（活着的 owner 在 ACL/磁盘异常下可能长时间写不进心跳）。当前取值是「用户实测等 9 天」与「误删活锁」之间的折中；要真正解决需注入平台级 identity 探测（`ProcessIdentityProbe` 已是可注入接口，宿主可自行实现）。 |
 | 验证方式 | `src/utils/env-lock.test.ts` 的 `§11.1-c11b`（9 天长过期 → 可识别 + 可显式回收 + acquire 仍不自动摘锁）与 `§11.1-c11c`（未达阈值仍保守 `UNKNOWN_STATE`；heartbeat 缺失不放宽；阈值可注入）。 |
+
+### G-17 同步通道的「导出密钥」没有数据源（issue #38）
+
+| 项 | 内容 |
+|---|---|
+| 基线问题 | `includeSecrets=true` 在同步通道里**没有任何数据源**：没有任何 adapter 读取 `ExportOptions.includeSecrets`（结构化分区在源头就已 `redactSecrets`，凭据分区被 `FORBIDDEN_SECTIONS` 结构性排除，`.credentials.yaml` 在 `SECTION_JSON_PATHS` / `SECTION_FILE_PREFIXES` 里没有映射）。它唯一真实生效的效果是**跳过同步载荷的第二道 SecretScanner 脱敏**。 |
+| 后果 | 用户勾选「导出密钥」后推送载荷与不勾时**逐字节相同**（唯一差异是 `manifest.containsSecrets` 由 `false` 变 `true`），却以为密钥已随同步迁移到另一台机器——文案与实现不符，且勾选动作实际**降低了防护**（结构化分区里的字面量凭据原样进快照）。 |
+| 修复位置 | ① 数据源：`SyncEngine.buildCredentialsPayload`（`src/sync/sync-engine.ts`）在 `includeSecrets` 时经 `ctx.fs.readFile` 读 `$DSH_HOME/.credentials.yaml` 原文，用本次调用的密码加密为**独立载荷** `SyncSnapshot.credentials`（`src/sync/transport.ts` 的 `EncryptedCredentials`；不进 `sections`，否则被 `FORBIDDEN_SECTIONS` 断言拒绝）；读不到 / 解析不出凭据 → **显式告警且不带载荷**，不静默成功。② 编解码：`src/sync/snapshot-crypto.ts` 的 `encryptCredentialsPayload` / `decryptCredentialsPayload` / `credentialsMapFromYaml`（与宿主导入路径 `tryDecryptCredentials` 同口径）；`src/sync/snapshot-json.ts` 透传（git 密文单文件 / WebDAV 通道）；`src/sync/layout.ts` 对散文件布局显式拒绝（绝不静默丢弃）。③ 拉取接线：`pull`/`preview` 解密出 `Map<ref, value>` 并生成 `MissingSecret` 计划项（`appendCredentialPlanItems`）；`applyItems` 把该 Map 作为 `executeImportPlan.decryptedCredentials`（此前硬编码 `undefined`）交给 credentials adapter → `credentials.set(ref, value)`。④ 会话：`SyncSessionStore` 仅内存保管该 Map（存值不存密码——能力更窄），apply-items 消费 / cancel / TTL 即消失。⑤ 可见性：推送预览新增「本次推送包含真实凭据值」提示（`SyncPushPreview.credentialsIncluded`）。 |
+| 不变量（未放宽） | `includeSecrets ⇒ encrypt` 仍强制；凭据载荷**只**存在于加密快照；非加密快照声明 `containsSecrets=true` 仍拒绝拉取；自动同步恒 `includeSecrets=false`（无密码，遇到加密快照跳过）；密码仅内存，绝不落盘 / 落日志 / 进响应体。 |
+| 验证方式 | `src/sync/sync-credentials.test.ts`（7 例：push 密文载荷 + 明文不入载荷 / 只加密不导密钥不带载荷 / 无凭据文件明确告警 / pull+preview 生成迁移项且报告不含值 / applyItems 带 Map 写回、不带则跳过 / 未加密快照携带凭据载荷被拒 / 散文件布局拒绝）；`src/client/sync/sync-push-preview.test.ts`（含凭据提示）。 |
+| 已知有损点 | 只搬运 `.credentials.yaml` **顶层字符串值**（与导出路径 `security/secrets.enc` 同口径）；嵌套结构 / 非字符串值不迁移。凭据写回**不可回滚**（DSH 不回读凭据值，属既有的技术限制）。 |
 
 ### P-1 peerDependencies 体积：headless 消费者为浏览器半付费
 

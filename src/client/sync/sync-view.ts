@@ -419,6 +419,8 @@ export interface PushPreviewView {
   remoteSnapshotCount: number;
   /** 加密快照提示（基线不可比） */
   encryptedHint: string;
+  /** issue #38：本次推送将带上真实凭据值的提示（未带凭据时为空串） */
+  credentialsHint: string;
   /** 只读提示（预览不写远端） */
   previewHint: string;
   headline: string;
@@ -431,7 +433,7 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT = zhUiT)
   if (!preview.ok) {
     return {
       ok: false, rows: [], changedCount: 0, remoteSnapshotCount: preview.remoteSnapshotCount,
-      encryptedHint: '', previewHint: '', headline: '', error: preview.message ?? t('sync.pushFailed'),
+      encryptedHint: '', credentialsHint: '', previewHint: '', headline: '', error: preview.message ?? t('sync.pushFailed'),
     };
   }
   const rows = preview.sections.map((s) => ({ section: s.section, count: s.count, changed: s.changed }));
@@ -442,6 +444,7 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT = zhUiT)
     changedCount,
     remoteSnapshotCount: preview.remoteSnapshotCount,
     encryptedHint: preview.encrypted ? t('sync.pushPreviewEncrypted') : '',
+    credentialsHint: preview.credentialsIncluded ? t('sync.pushPreviewCredentials') : '',
     previewHint: t('sync.pushPreviewHint'),
     headline: t('sync.pushPreviewHeadline', {
       total: String(preview.sections.length),
