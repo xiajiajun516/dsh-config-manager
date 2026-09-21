@@ -11,6 +11,7 @@ import {
   latestBackup,
   latestSnapshot,
   overviewActivity,
+  overviewBackupFeedback,
   overviewEmptyState,
   overviewHealth,
   overviewSuggestions,
@@ -33,6 +34,42 @@ function baseInputs(over: Partial<OverviewInputs> = {}): OverviewInputs {
     ...over,
   }
 }
+
+/* ---------------- 立即备份反馈 ---------------- */
+
+test('overviewBackupFeedback: success / skipped / failed 按真实结果分流', () => {
+  assert.deepEqual(
+    overviewBackupFeedback({ status: 'success', consecutiveFailures: 0 }),
+    { kind: 'ok', messageKey: 'overview.quick.backupDone' },
+  )
+  for (const [skipReason, reasonKey] of [
+    ['disabled', 'overview.quick.backupSkip.disabled'],
+    ['running', 'overview.quick.backupSkip.running'],
+    ['conflict', 'overview.quick.backupSkip.conflict'],
+    ['mutation-locked', 'overview.quick.backupSkip.mutationLocked'],
+  ] as const) {
+    assert.deepEqual(
+      overviewBackupFeedback({ status: 'skipped', skipReason, consecutiveFailures: 0 }),
+      { kind: 'info', messageKey: 'overview.quick.backupSkipped', reasonKey },
+    )
+  }
+  assert.deepEqual(
+    overviewBackupFeedback({ status: 'skipped', skipReason: 'future-reason', consecutiveFailures: 0 }),
+    {
+      kind: 'info',
+      messageKey: 'overview.quick.backupSkipped',
+      reasonKey: 'overview.quick.backupSkip.unknown',
+    },
+  )
+  assert.deepEqual(
+    overviewBackupFeedback({ status: 'failed', error: 'disk full', consecutiveFailures: 1 }),
+    { kind: 'error', messageKey: 'overview.quick.backupFailed', error: 'disk full' },
+  )
+  assert.deepEqual(
+    overviewBackupFeedback({ status: 'failed', error: '', consecutiveFailures: 1 }),
+    { kind: 'error', messageKey: 'overview.quick.backupFailed', error: null },
+  )
+})
 
 /* ---------------- relTime / isoToMs ---------------- */
 

@@ -32,6 +32,7 @@ import { formatBytes } from '../../ui/report.ts'
 import {
   buildOverviewMetrics,
   overviewActivity,
+  overviewBackupFeedback,
   overviewEmptyState,
   overviewHealth,
   relTime,
@@ -217,8 +218,15 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
     if (backupRunning) return
     setBackupRunning(true)
     try {
-      await api.runBackupNow()
-      toast.ok(t('overview.quick.backupDone'))
+      const { run } = await api.runBackupNow()
+      const feedback = overviewBackupFeedback(run)
+      if (feedback.kind === 'ok') {
+        toast.ok(t(feedback.messageKey))
+      } else if (feedback.kind === 'info') {
+        toast.info(t(feedback.messageKey, { reason: t(feedback.reasonKey) }))
+      } else {
+        toast.error(redact(feedback.error ?? t(feedback.messageKey)))
+      }
       if (aliveRef.current) void load()
     } catch (err) {
       toast.error(redact(err instanceof Error ? err.message : String(err)))

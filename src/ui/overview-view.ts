@@ -13,6 +13,7 @@
  * redact()；kind / result 均为枚举常量，无 secret 承载面；本模块不输出任何文案，
  * 只输出 i18n key 基名与纯数据（与 history-model.ts 同模式）。
  */
+import type { BackupRunResult } from '../sync/backup-scheduler.ts'
 
 /** 备份文件最小形状（结构兼容 sync/backup-files.ts BackupFileMeta 子集）。 */
 export interface OverviewBackupLite {
@@ -62,6 +63,53 @@ export interface OverviewInputs {
   recoveryRequired: boolean | null
   /** 进行中任务数（run 列表长度）。 */
   runningCount: number
+}
+
+/* ---------------- 立即备份反馈 ---------------- */
+
+export type OverviewBackupSkipReasonKey =
+  | 'overview.quick.backupSkip.disabled'
+  | 'overview.quick.backupSkip.running'
+  | 'overview.quick.backupSkip.conflict'
+  | 'overview.quick.backupSkip.mutationLocked'
+  | 'overview.quick.backupSkip.unknown'
+
+export type OverviewBackupFeedback =
+  | { kind: 'ok'; messageKey: 'overview.quick.backupDone' }
+  | { kind: 'info'; messageKey: 'overview.quick.backupSkipped'; reasonKey: OverviewBackupSkipReasonKey }
+  | { kind: 'error'; messageKey: 'overview.quick.backupFailed'; error: string | null }
+
+/** 宿主备份结果 → 总览 Toast 语义；只有真正 success 才能显示成功。 */
+export function overviewBackupFeedback(run: BackupRunResult): OverviewBackupFeedback {
+  if (run.status === 'success') {
+    return { kind: 'ok', messageKey: 'overview.quick.backupDone' }
+  }
+  if (run.status === 'failed') {
+    return {
+      kind: 'error',
+      messageKey: 'overview.quick.backupFailed',
+      error: run.error?.trim() ? run.error : null,
+    }
+  }
+
+  let reasonKey: OverviewBackupSkipReasonKey
+  switch (run.skipReason) {
+    case 'disabled':
+      reasonKey = 'overview.quick.backupSkip.disabled'
+      break
+    case 'running':
+      reasonKey = 'overview.quick.backupSkip.running'
+      break
+    case 'conflict':
+      reasonKey = 'overview.quick.backupSkip.conflict'
+      break
+    case 'mutation-locked':
+      reasonKey = 'overview.quick.backupSkip.mutationLocked'
+      break
+    default:
+      reasonKey = 'overview.quick.backupSkip.unknown'
+  }
+  return { kind: 'info', messageKey: 'overview.quick.backupSkipped', reasonKey }
 }
 
 /* ---------------- 指标卡 ---------------- */
