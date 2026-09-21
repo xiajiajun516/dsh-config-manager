@@ -40,6 +40,7 @@ import { ConfirmDialog } from './common/ConfirmDialog.tsx'
 import { MODAL_ROOT_ID } from './common/Modal.tsx'
 import { Banner, IconButton, Segmented, StatusDot } from './common/ui.tsx'
 import { ActivityIcon, AboutIcon, CloseIcon } from './common/Icon.tsx'
+import { navOverflowAttr, navOverflowState } from '../ui/nav-overflow.ts'
 import { evaluateStarPrompt } from '../ui/star-prompt.ts'
 import { evaluateReleaseNotesPrompt } from '../ui/release-notes-prompt.ts'
 import { ReleaseNotesDialog } from './about/ReleaseNotesDialog.tsx'
@@ -103,6 +104,31 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     setDrawerOpen(true)
   }
   const closeDrawer = (): void => { setDrawerOpen(false) }
+  /* ---------------- 顶部页签条溢出可发现性（UI-19） ---------------- */
+  /**
+   * 页签条滚动条被隐藏（scrollbar-width: none）：英文界面（7 个英文页签 + 2 个文字动作按钮）
+   * 在 564px 画布下会溢出，而界面上没有任何「右边还有内容」的提示。
+   * 这里把溢出状态写进 `data-overflow`，由 CSS 在对应一侧画渐隐遮罩（判定见 src/ui/nav-overflow.ts）。
+   */
+  const navRef = useRef<HTMLDivElement | null>(null)
+  const [navOverflow, setNavOverflow] = useState<'none' | 'start' | 'end' | 'both'>('none')
+  useEffect(() => {
+    const el = navRef.current
+    if (el === null) return
+    const sync = (): void => { setNavOverflow(navOverflowAttr(navOverflowState(el))) }
+    sync()
+    el.addEventListener('scroll', sync, { passive: true })
+    window.addEventListener('resize', sync)
+    // 字号/语言（页签文案长度）变化同样会改变是否溢出：容器尺寸观察作双保险
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(sync) : null
+    observer?.observe(el)
+    return () => {
+      el.removeEventListener('scroll', sync)
+      window.removeEventListener('resize', sync)
+      observer?.disconnect()
+    }
+  }, [t])
+
   /* ---------------- 状态栏版本（挂载时取一次；失败隐藏） ---------------- */
   const [version, setVersion] = useState<ServiceStatus | null>(null)
   useEffect(() => {
@@ -295,10 +321,10 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
       page = <SnapshotsPanel api={api} t={t} recoveryApi={recoveryApi} recoveryT={recoveryT} />
       break
     case 'sync':
-      page = <SyncSettingsView api={syncApi} t={syncT} />
+      page = <SyncSettingsView api={syncApi} t={syncT} cmT={t} />
       break
     case 'market':
-      page = <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} />
+      page = <MarketPanel api={marketApi} myConfigsApi={myConfigsApi} syncApi={syncApi} importApi={api} t={marketT} cmT={t} />
       break
     case 'profiles':
       page = <ProfilesPanel api={api} t={t} />
@@ -324,7 +350,13 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     <div className={css.section} id={MODAL_ROOT_ID}>
       {/* 顶部导航条：页签 + 图标动作 */}
       <nav className={css.shellNav} aria-label={t('section.label')}>
-        <div className={css.navStrip} role="tablist" onKeyDown={onTablistKeyDown}>
+        <div
+          className={css.navStrip}
+          role="tablist"
+          ref={navRef}
+          data-overflow={navOverflow}
+          onKeyDown={onTablistKeyDown}
+        >
           {NAV_ITEMS.map((item) => (
             <button
               key={item.id}

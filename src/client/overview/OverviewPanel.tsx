@@ -18,12 +18,13 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 import type { ReactNode } from 'react'
 import type { SnapshotMeta } from '../../core/restore.ts'
 import type { BackupScheduleStatus } from '../../ui/backup-schedule.ts'
-import { normalizeRetentionPolicy } from '../../ui/backup-schedule.ts'
+import { backupRunOutcome, normalizeRetentionPolicy, type BackupSkipReason } from '../../ui/backup-schedule.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
 import type { SyncApi, SyncStatusResponse } from '../sync/sync-api.ts'
 import type { HistoryApi, HistoryListResult } from '../history/history-api.ts'
 import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
+import type { ConfigManagerKey } from '../locales.ts'
 import { redact } from '../../security/redaction.ts'
 import { runStore, type SnapshotsSubTab } from '../run-store.ts'
 import { toast } from '../common/toast-store.ts'
@@ -39,8 +40,18 @@ import {
 } from '../../ui/overview-view.ts'
 import { Badge, Button, Card, Spinner, StatusDot } from '../common/ui.tsx'
 import { SectionComposition } from '../common/SectionComposition.tsx'
+import { sectionLabeler } from '../common/section-labels.ts'
 import { BackupIcon, ExportIcon, ImportIcon, SyncIcon, ArrowRightIcon, CopyIcon } from '../common/Icon.tsx'
 import css from '../config-manager.module.css'
+
+/** issue #43：立即备份跳过原因 → 文案键（文案统一走 locale 字典；未知 token 走 other）。 */
+const BACKUP_SKIP_KEY: Record<BackupSkipReason, ConfigManagerKey> = {
+  disabled: 'overview.quick.backupSkippedDisabled',
+  running: 'overview.quick.backupSkippedRunning',
+  conflict: 'overview.quick.backupSkippedConflict',
+  locked: 'overview.quick.backupSkippedLocked',
+  other: 'overview.quick.backupSkippedOther',
+}
 
 export interface OverviewPanelProps {
   api: ConfigManagerApi
@@ -212,13 +223,22 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
 
   /** 立即备份（宿主 RunRegistry 防重；反馈后刷新指标）。
    *  反馈走全局 Toast：备份耗时较长，用户点完很可能已切到别的页面，
-   *  写入本组件 state 会随卸载一起丢失（以前就是被 aliveRef 竞态静默吞掉的）。 */
+   *  写入本组件 state 会随卸载一起丢失（以前就是被 aliveRef 竞态静默吞掉的）。
+   *  issue #43：宿主对 skipped / failed 也回 200 + ok:true，凭「有没有抛异常」判成败会把
+   *  「定时备份未启用 → 一个备份文件都没产出」读成「备份完成」——提示通道一律由 run.status 决定。 */
   const runBackupNow = async (): Promise<void> => {
     if (backupRunning) return
     setBackupRunning(true)
     try {
-      await api.runBackupNow()
-      toast.ok(t('overview.quick.backupDone'))
+      const { run } = await api.runBackupNow()
+      const outcome = backupRunOutcome(run)
+      if (outcome.kind === 'ok') {
+        toast.ok(t('overview.quick.backupDone'))
+      } else if (outcome.kind === 'skipped') {
+        toast.warn(t(BACKUP_SKIP_KEY[outcome.reason], outcome.raw !== undefined ? { reason: outcome.raw } : undefined))
+      } else {
+        toast.error(t('overview.quick.backupFailed', { message: redact(outcome.message ?? t('common.unknownError')) }))
+      }
       if (aliveRef.current) void load()
     } catch (err) {
       toast.error(redact(err instanceof Error ? err.message : String(err)))
@@ -438,7 +458,7 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
                   {data.sections.sectionsFailed > 0 && ` · ${t('export.previewSkipped', { count: String(data.sections.sectionsFailed) })}`}
                 </span>
               </div>
-              <SectionComposition sections={data.sections.sections} t={t} />
+              <SectionComposition sections={data.sections.sections} t={t} sectionLabel={sectionLabeler(t)} />
             </Card>
           )}
 

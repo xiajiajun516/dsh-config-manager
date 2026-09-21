@@ -131,6 +131,31 @@ import {
 - 安全：`defaultSecretScanner`
 - 校验：`validateSections` / `computeCompatibility` / `describeCompatibility`
 
+### 4.5 会话按数量筛选 + 凭据可恢复性（issue #39 Feature 1–3）
+
+```js
+// ① 会话只带最近的（键缺省 = 现有行为：sessions 的 defaultIncluded=false，不选不带）
+await exporter.export({ includeSecrets: false, sessions: { limit: 5 } })
+//   limit === 0 → 整个 sessions 分区不带；limit < 0 → 全带；缺省 / 非整数 → 显式选中但不限数量
+//   单位 = 会话目录 <projectKey>/<sessionId>：同一会话的新旧日志必须一起走；
+//   排序 = 会话日志文件的最新 mtime。宿主 FileSystemFacade 需实现可选的 mtimeMs()；
+//   未实现（或时间全读不到）→ 退回全量导出 + 一条告警，绝不把「时间未知」当成最旧（那会静默丢最近的会话）。
+
+// ② 分析时顺带拿到「包里的凭据能不能自动回填」——不必自己解 security/secrets.enc 再解析 .credentials.yaml
+const analysis = await analyzer.analyzeImport(zipPath, { decryptedCredentials })
+//   analysis.credentials = { inArchive, refs, satisfied }
+//   inArchive  = manifest.security.containsSecrets（归档声明携带真实凭据值）
+//   refs       = 本次实际解出的凭据 ref 名；**只回传名字，永不回传值**（不传 decryptedCredentials 时为 []）
+//   satisfied  = refs 中本机已配置的子集（无需回填、也无需人工补录）
+
+// ③ 导入结果带 credentialsRestored：从加密归档内解出并回填本机的条数（字段只增不改）
+const result = await analyzer.executeImportPlan(zipPath, plan, { confirm: true, decryptedCredentials })
+```
+
+宿主 HTTP API 的对应关系（同一套语义，只增不改）：`/export` 请求体加可选 `sessions: { limit }`；
+`/analyze` 请求体加可选 `decryptPassword`（提供即解开 `security/secrets.enc` 并回传 `credentials`）；
+`/execute` 结果加 `credentialsRestored`。
+
 ---
 
 ## 5. 边界与限制

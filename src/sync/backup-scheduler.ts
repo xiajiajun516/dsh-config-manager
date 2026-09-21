@@ -9,7 +9,10 @@
  *    「启动触发备份」（受 startupMinIntervalMs 阈值约束）。
  *  - stop()：清定时器、标记不再调度。
  *  - reload()：重新读配置并重排定时器（配置保存路由调用）。
- *  - runOnce()：立即执行一次全量备份（受 runs.register('backup-schedule') 防重）。
+ *  - runOnce({ manual })：执行一次全量备份（受 runs.register('backup-schedule') 防重）。
+ *    `manual: true` = 用户显式点「立即备份」：**不受自动调度开关 enabled 约束**（issue #43 ——
+ *    手动语义是「现在就给我做一份」，与自动调度开没开无关；缺省 enabled:false 时旧行为是静默空转）。
+ *    不传 = 自动 / 启动 / 外部调度路径，仍严格受 enabled 约束。
  *
  * 安全不变量（硬约束）：
  *  - 定时备份恒 includeSecrets=false 且不加密——加密密码仅内存且不能持久化，
@@ -90,7 +93,8 @@ export interface BackupSchedulerOptions {
    * 缺省 = 不记录（不破坏既有调用方）。
    */
   appendHistoryFn?: (entry: {
-    kind: 'backup';
+    /** 'backup' = 自动/定时调度产出；'backup-manual' = 用户手动「立即备份」（issue #43 起见区分）。 */
+    kind: 'backup' | 'backup-manual';
     result: 'success' | 'failed' | 'skipped';
     sections: string[];
     source: 'backup-scheduler';
@@ -225,13 +229,23 @@ export class BackupScheduler {
     }
   }
 
-  /** 执行一次全量备份（防重：同一时刻至多一个备份任务）。 */
-  async runOnce(): Promise<BackupRunResult> {
+  /**
+   * 执行一次全量备份（防重：同一时刻至多一个备份任务）。
+   *
+   * `opts.manual = true`（用户点「立即备份」）**绕过** `enabled` 开关（issue #43）：缺省
+   * `enabled: false` 时旧行为是静默空转，而这恰好是从未配置过定时的用户最可能点的按钮。
+   * 自动 / 启动 / 外部调度路径不传，仍严格受 `enabled` 约束；手动路径只写运行状态，
+   * 绝不改写 `enabled`（不偷偷替用户打开自动调度）。
+   */
+  async runOnce(opts: { manual?: boolean } = {}): Promise<BackupRunResult> {
+    const manual = opts.manual === true;
+    /** 日志 / 迁移历史的来源词：手动触发不得冒充「定时备份」。 */
+    const trigger = manual ? '手动备份' : '定时备份';
     if (this.running) {
       return { status: 'skipped', skipReason: 'running', consecutiveFailures: 0 };
     }
     const cfg = await this.readConfig();
-    if (!cfg.enabled) {
+    if (!cfg.enabled && !manual) {
       return { status: 'skipped', skipReason: 'disabled', consecutiveFailures: cfg.consecutiveFailures };
     }
 
@@ -286,7 +300,7 @@ export class BackupScheduler {
           lastRunAt: this.now().toISOString(),
           lastRunStatus: 'success',
         });
-        this.log.info('定时备份完成', {
+        this.log.info(`${trigger}完成`, {
           zip: backupResult.zip,
           sizeBytes: backupResult.sizeBytes,
           sections: backupResult.sections,
@@ -314,7 +328,7 @@ export class BackupScheduler {
         }
         return doExport();
       });
-      await this.appendHistory(result);
+      await this.appendHistory(result, undefined, manual);
       return result;
     } catch (err) {
       // issue #31：被挡时按分类说真话——**残留锁（持有者已确证死亡）不是「另一项任务进行中」**，
@@ -323,14 +337,14 @@ export class BackupScheduler {
       // 本路径漏接 → 实测 9 天内 57 次静默跳过，用户无从知道要回收残留锁）。
       if (err instanceof EnvironmentLockUnavailableError) {
         if (err.reason === 'stale') {
-          this.log.warn(`定时备份跳过：${LOCK_BLOCK_MESSAGE.stale}`);
+          this.log.warn(`${trigger}跳过：${LOCK_BLOCK_MESSAGE.stale}`);
         } else {
-          this.log.info(`定时备份跳过：${LOCK_BLOCK_MESSAGE[err.reason]}`);
+          this.log.info(`${trigger}跳过：${LOCK_BLOCK_MESSAGE[err.reason]}`);
         }
         const skipped: BackupRunResult = { status: 'skipped', skipReason: 'mutation-locked', consecutiveFailures: cfg.consecutiveFailures };
         // skipReason 保持稳定的机器 token（客户端据此本地化）；历史摘要用同源**短**文案，
         // 不留裸 token（issue #31 ②：中文前缀 + 英文 token 的历史行）。
-        await this.appendHistory(skipped, err.reason);
+        await this.appendHistory(skipped, err.reason, manual);
         return skipped;
       }
       const error = err instanceof Error ? err.message : String(err);
@@ -344,8 +358,8 @@ export class BackupScheduler {
         consecutiveFailures: cfg.consecutiveFailures + 1,
         lastRunMessage: error,
       });
-      this.log.warn(`定时备份失败（连续 ${cfg.consecutiveFailures + 1} 次）`, { error });
-      await this.appendHistory(result);
+      this.log.warn(`${trigger}失败（连续 ${cfg.consecutiveFailures + 1} 次）`, { error });
+      await this.appendHistory(result, undefined, manual);
       return result;
     } finally {
       this.running = false;
@@ -362,19 +376,22 @@ export class BackupScheduler {
   /** Phase 6：定时备份迁移历史（best-effort；失败仅日志，不阻断）。
    *  lockReason：被环境锁挡下时的分类（issue #31）——摘要据此给同源短文案，
    *  而不是把 'mutation-locked' 这个机器 token 原样写进用户可见的历史行。 */
-  private async appendHistory(result: BackupRunResult, lockReason?: LockBlockReason): Promise<void> {
+  private async appendHistory(result: BackupRunResult, lockReason?: LockBlockReason, manual = false): Promise<void> {
     if (this.appendHistoryFn === undefined) return;
+    // issue #43：手动与定时备份在同一份迁移史里必须可区分 —— 来源词与 kind 同源判定，
+    // 避免「日志说手动、条目说定时」两处漂移。
+    const trigger = manual ? '手动备份' : '定时备份';
     try {
       await this.appendHistoryFn({
-        kind: 'backup',
+        kind: manual ? 'backup-manual' : 'backup',
         result: result.status,
         sections: result.status === 'success' ? (result.sections ?? []) : [],
         source: 'backup-scheduler',
         summary: result.status === 'success'
-          ? `定时备份完成：${result.zip ?? ''}`
+          ? `${trigger}完成：${result.zip ?? ''}`
           : result.status === 'skipped'
-            ? `定时备份跳过：${lockReason !== undefined ? LOCK_BLOCK_BRIEF[lockReason] : (result.skipReason ?? '')}`
-            : '定时备份失败',
+            ? `${trigger}跳过：${lockReason !== undefined ? LOCK_BLOCK_BRIEF[lockReason] : (result.skipReason ?? '')}`
+            : `${trigger}失败`,
         error: result.status === 'failed' ? (result.error ?? undefined) : undefined,
       });
     } catch (err) {

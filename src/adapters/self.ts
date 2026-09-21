@@ -27,6 +27,7 @@ import type { ExportOptions, ExportSection, HostContext } from '../core/types.ts
 import type { FilesSection } from '../schema/types.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
+import { unitAllowed } from './units.ts';
 
 /** self 分区白名单文件（相对 baseDir，即 $DSH_HOME/dsh-config-manager/）。 */
 export const SELF_CONFIG_FILES: readonly string[] = [
@@ -56,10 +57,18 @@ export class SelfAdapter extends FileCollectionAdapter {
 
   /** 白名单收集：只导出配置类文件（存在才收），不递归（排除快照/历史/缓存/临时产物）。
    *  relativePath 产出相对 baseDir 的路径（与 analyzeImport/applyItem 的 path.join(baseDir, ref) 匹配）。 */
-  override async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<FilesSection>> {
+  /** self 的白名单文件彼此独立（同步配置 / 市场配置 / UI 偏好…），不构成 bundle
+   *  → 覆写为「逐文件单元」，用户可以只带走其中几项。 */
+  protected override unitIdOf(relativePath: string): string {
+    return relativePath;
+  }
+
+  override async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<FilesSection>> {
     const files: FilesSection['files'] = [];
     const warnings: string[] = [];
+    const allow = options.includeItems?.[this.id];
     for (const rel of SELF_CONFIG_FILES) {
+      if (!unitAllowed(allow, `${this.id}:${this.unitIdOf(rel)}`)) continue;
       // ctx.fs.readFile 语义 = 相对 homeDir 的完整路径 → 拼接 baseDir；产出仍为相对 baseDir
       const data = await ctx.fs.readFile(path.join(this.baseDir, rel)).catch(() => null);
       if (data === null) continue; // 未创建过的配置文件跳过（如从未配置市场/同步）

@@ -42,6 +42,7 @@ import {
   credentialsMapFromYaml, decryptCredentialsPayload, decryptSectionsPayload,
   encryptCredentialsPayload, encryptSectionsPayload,
 } from './snapshot-crypto.ts';
+import { OPT_IN_SYNC_SECTIONS } from './sync-selection.ts';
 import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
 import type { EncryptedCredentials, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
 import { isEncryptedSections } from './transport.ts';
@@ -85,6 +86,15 @@ export interface SyncEngineOptions {
   /** 消息翻译器（缺省 ctx.msg ?? zh） */
   msg?: MsgFunc;
   /**
+   * 显式开启「可选分区」（OPT_IN_SYNC_SECTIONS，目前只有 sessions）在**拉取/合并/应用**侧
+   * 的参与：只有 true 时，远端快照里的可选分区才会进入临时 ZIP 与合并输入。
+   *
+   * 缺省 false —— 自动同步等无用户确认的路径永不拉取会话；宿主只在**用户驱动**的
+   * pull / 一键同步路由上、且用户持久化的分区选择确实包含该可选分区时才传 true。
+   * （推送侧不受它影响：push 由 opts.sessions 单独把关。）
+   */
+  includeOptInSections?: boolean;
+  /**
    * 同步范围（高级/自定义导出模式持久化配置）：只处理这些 portable 分区。
    * 缺省 = 全部 portable 推荐分区。应用于 push / merge / applyMergePlan / applyItems
    * 等全部链路（portableAdapters 层过滤），供自动同步等后台流程复用用户选择；
@@ -98,8 +108,15 @@ export interface SyncPushOptions {
   snapshotId?: string;
   /** 仅同步指定分区（缺省 = 全部 portable 推荐分区，即「默认/快速导出」模式）。
    *  传入非 portable 或未知分区 → 忽略并告警（同步通道安全约束：
-   *  deviceSpecific/platformSpecific 永不进入同步通道；未知 id 不静默吞掉）。 */
+   *  deviceSpecific/platformSpecific 默认永不进入同步通道；未知 id 不静默吞掉）。
+   *  例外：OPT_IN_SYNC_SECTIONS 里的分区（目前只有 sessions）在**同时提供对应选项**
+   *  （见 sessions）时才纳入 —— 没有选项一律按非 portable 跳过并告警。 */
   sections?: SectionId[];
+  /**
+   * sessions（历史会话）分区选项：只有显式给出它，sessions 才被允许进入同步通道
+   * （「最新 N 个会话」上限）。缺省 / 未提供 → sessions 与其它 deviceSpecific 分区同样被跳过。
+   */
+  sessions?: { limit?: number };
   /** 加密快照：sections 载荷整体加密（AES-256-GCM），manifest.encrypted=true。
    *  开启时必须提供 password（仅本次调用内存使用，绝不落盘/落日志）。 */
   encrypt?: boolean;
@@ -252,6 +269,7 @@ export class SyncEngine {
   private readonly fsx: SnapshotFs;
   private readonly msg: MsgFunc;
   private readonly sections: readonly SectionId[] | undefined;
+  private readonly includeOptInSections: boolean;
 
   constructor(opts: SyncEngineOptions) {
     if (opts.ctx === null || typeof opts.ctx !== 'object') throw new Error(zhMsg('sync.missingCtx'));
@@ -279,6 +297,7 @@ export class SyncEngine {
     this.fsx = opts.fsx ?? createSnapshotFs();
     this.msg = opts.msg ?? msgOf(opts.ctx);
     this.sections = opts.sections !== undefined && opts.sections.length > 0 ? [...opts.sections] : undefined;
+    this.includeOptInSections = opts.includeOptInSections === true;
   }
 
   /** 同步只做 portable 分区（deviceSpecific/platformSpecific 永不参与）。
@@ -292,15 +311,44 @@ export class SyncEngine {
   }
 
   /**
+   * 拉取/合并侧的分区范围 id 集合：portable（受注入的同步范围约束）
+   * + 实例显式开启时的可选分区（sessions）。
+   *
+   * 为什么单独一个助手：pull/preview/merge 都要把「远端快照里的哪些分区转进临时 ZIP」，
+   * 三处必须同一口径；散开写 `portableAdapters().map(...)` 迟早漏掉一处（漏掉的表现是
+   * 「推上去了、拉下来静默没有」）。
+   */
+  private pullSectionIds(): Set<SectionId> {
+    const ids = this.portableAdapters().map((a) => a.id);
+    if (this.includeOptInSections) {
+      for (const a of this.adapters) {
+        if (OPT_IN_SYNC_SECTIONS.includes(a.id)) ids.push(a.id);
+      }
+    }
+    return new Set(ids);
+  }
+
+  /**
    * push 候选 adapter：
    * - sections 缺省/空 → 全部 portable（「默认/快速导出」模式）；
    * - sections 显式给出 → 只取 portable 且命中的（「高级/自定义导出」模式）；
-   *   非 portable / 未知分区 → 警告跳过（安全约束 + 不静默，用户能看见自己勾了哪个无效项）。
+   *   非 portable / 未知分区 → 警告跳过（安全约束 + 不静默，用户能看见自己勾了哪个无效项）；
+   * - 例外：OPT_IN_SYNC_SECTIONS（sessions）在调用方**显式提供选项**（sessions 参数）时
+   *   才作为候选取出 —— 它是 deviceSpecific，但用户主动勾选 + 数量上限后允许同步。
    */
-  private pushTargets(sections: readonly SectionId[] | undefined, warnings: string[]): ConfigAdapter[] {
+  private pushTargets(
+    sections: readonly SectionId[] | undefined,
+    warnings: string[],
+    opts?: { sessions?: { limit?: number } },
+  ): ConfigAdapter[] {
     const portable = this.portableAdapters();
     if (sections === undefined || sections.length === 0) return portable;
     const byId = new Map(portable.map((a) => [a.id, a]));
+    if (opts?.sessions !== undefined) {
+      for (const a of this.adapters) {
+        if (OPT_IN_SYNC_SECTIONS.includes(a.id)) byId.set(a.id, a);
+      }
+    }
     const out: ConfigAdapter[] = [];
     for (const id of sections) {
       const adapter = byId.get(id);
@@ -437,11 +485,15 @@ export class SyncEngine {
       throw new Error(this.msg('sync.encryptRequiresPassword'));
     }
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
-    const targets = this.pushTargets(opts.sections, warnings);
+    const targets = this.pushTargets(opts.sections, warnings, opts);
     for (const adapter of targets) {
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, { includeSecrets });
+        section = await adapter.export(this.ctx, {
+          includeSecrets,
+          // 可选分区（sessions）：把「最新 N 个」上限透传给 adapter（其余分区零变化）
+          ...(adapter.id === 'sessions' && opts.sessions !== undefined ? { sessions: opts.sessions } : {}),
+        });
       } catch (err) {
         warnings.push(this.msg('sync.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
         continue;
@@ -535,13 +587,16 @@ export class SyncEngine {
         credentialsIncluded = false; // 读不到 = 不会带凭据；预览如实显示 false
       }
     }
-    const targets = this.pushTargets(opts.sections, warnings);
+    const targets = this.pushTargets(opts.sections, warnings, opts);
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const counts: Partial<Record<SectionId, number>> = {};
     for (const adapter of targets) {
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, { includeSecrets });
+        section = await adapter.export(this.ctx, {
+          includeSecrets,
+          ...(adapter.id === 'sessions' && opts.sessions !== undefined ? { sessions: opts.sessions } : {}),
+        });
       } catch (err) {
         warnings.push(this.msg('sync.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
         continue;
@@ -635,7 +690,7 @@ export class SyncEngine {
     // issue #38：快照携带凭据载荷 → 解密出 ref→值（仅内存），供计划项与后续 apply 使用
     const credentials = await this.decryptSnapshotCredentials(snapshot, opts.password);
 
-    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const portableIds = this.pullSectionIds();
     const zipPath = await this.snapshotToZip(snapshot, portableIds);
     try {
       const analysis = await this.importer.analyzeImport(zipPath);
@@ -733,7 +788,7 @@ export class SyncEngine {
     await this.prepareSnapshot(snapshot, opts.password);
     // issue #38：凭据载荷解密（仅内存；由调用方登记进同步会话，apply-items 时写回本机）
     const credentials = await this.decryptSnapshotCredentials(snapshot, opts.password);
-    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const portableIds = this.pullSectionIds();
     const zipPath = await this.snapshotToZip(snapshot, portableIds);
     const analysis = await this.importer.analyzeImport(zipPath);
     const plan = await this.importer.createImportPlan(zipPath, {
@@ -762,7 +817,8 @@ export class SyncEngine {
     }
     // 本地当前：现场 export（含 s​e​c​r​e​t 剥离），与 push 同口径
     const localSections: Partial<Record<SectionId, SectionData>> = {};
-    for (const adapter of this.portableAdapters()) {
+    const localIds = this.pullSectionIds();
+    for (const adapter of this.adapters.filter((a) => localIds.has(a.id))) {
       let section: ExportSection;
       try {
         section = await adapter.export(this.ctx, { includeSecrets: false });
@@ -772,7 +828,7 @@ export class SyncEngine {
       const data = isFileSection(adapter.id) ? section.data : this.scanner.scanAndRedact(section.data).sanitized;
       localSections[adapter.id] = data as SectionData;
     }
-    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const portableIds = this.pullSectionIds();
     const remotePortable: Partial<Record<SectionId, SectionData>> = {};
     for (const [id, data] of Object.entries(remote.sections)) {
       if (portableIds.has(id as SectionId)) remotePortable[id as SectionId] = data as SectionData;
@@ -848,7 +904,7 @@ export class SyncEngine {
       return { ok: true, applied: [], restoreId: '', rolledBack: false, review: [], warnings: [] };
     }
     // 1) 构造临时 ZIP（仅含 autoApply 项的 merged payload）+ 分析 + 计划
-    const portableIds = new Set(this.portableAdapters().map((a) => a.id));
+    const portableIds = this.pullSectionIds();
     const tempSnapshot: SyncSnapshot = {
       id: this.snapshotIdFn(),
       createdAt: this.now().toISOString(),

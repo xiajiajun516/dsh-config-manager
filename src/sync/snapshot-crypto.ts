@@ -13,6 +13,7 @@
  *   （SyncSnapshot.credentials），绝不进 sections（那是结构性拒绝分区）。
  */
 import * as yaml from 'js-yaml';
+import { collectCredentialRefs } from '../security/credentials-yaml.ts';
 import { decryptCredentials, encryptCredentials } from '../security/encryption.ts';
 import type { EncryptionInfo, SectionData, SectionId } from '../schema/types.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
@@ -77,21 +78,19 @@ export async function decryptCredentialsPayload(
 }
 
 /**
- * `.credentials.yaml` 原文 → `Map<ref, value>`（YAML 顶层键即 ref；非字符串/空值丢弃）。
- * 与宿主导入路径的 tryDecryptCredentials 同口径（同一个文件格式，两处解析必须一致）。
+ * `.credentials.yaml` 原文 → `Map<ref, value>`。
+ *
+ * 解析口径由 `security/credentials-yaml.ts` 的 `collectCredentialRefs` 独占（DSH v1 的
+ * 顶层 `refs:` 块 + 预发布扁平布局都认，`records` 等嵌套结构忽略）——与宿主导入路径的
+ * tryDecryptCredentials 同口径：同一个文件格式，两处解析必须一致（issue #39）。
  * 解析失败 / 顶层不是对象 → 空 Map（调用方据此判定「没有可用凭据」并告警，绝不静默写入）。
  */
 export function credentialsMapFromYaml(text: string): Map<string, string> {
-  const map = new Map<string, string>();
   let parsed: unknown;
   try {
     parsed = yaml.load(text);
   } catch {
-    return map;
+    return new Map<string, string>();
   }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return map;
-  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof v === 'string' && v !== '') map.set(k, v);
-  }
-  return map;
+  return collectCredentialRefs(parsed);
 }

@@ -101,19 +101,30 @@ export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, cardS
 
 /* ---------------- 子部件（纯样式装配，无逻辑） ---------------- */
 
-export interface ModalHeaderProps {
+/** 标题行公共属性 */
+interface ModalHeaderCommon {
   /** 标题文本（同时作为可视标题） */
   title: string
-  /** 关闭按钮回调（缺省不渲染关闭按钮） */
-  onClose?: () => void
   /** 关闭按钮 disabled（如 busy） */
   closeDisabled?: boolean
   /** 标题行右侧额外内容（如徽章/合计） */
   trailing?: ReactNode
 }
 
+/**
+ * 弹窗标题行属性。
+ *
+ * `closeLabel`（关闭按钮的 aria-label）在传了 `onClose` 时**必填**，且必须是已翻译文本
+ * （各自字典的 `common.close`）：UI-17 —— 原先硬编码 `aria-label="关闭"`，界面语言为英文时
+ * 屏幕阅读器仍读中文。这条约束交给**编译器**（联合类型）而不是靠人记得。
+ */
+export type ModalHeaderProps = ModalHeaderCommon & (
+  | { /** 关闭按钮回调 */ onClose: () => void; /** 已翻译的关闭文案（各字典 common.close） */ closeLabel: string }
+  | { onClose?: undefined; closeLabel?: string }
+)
+
 /** 弹窗标题行（可选关闭按钮 + 右侧 trailing）。 */
-function ModalHeader({ title, onClose, closeDisabled, trailing }: ModalHeaderProps) {
+function ModalHeader({ title, onClose, closeLabel, closeDisabled, trailing }: ModalHeaderProps) {
   if (onClose === undefined && trailing === undefined) {
     return <div className={css.dialogHeader}>{title}</div>
   }
@@ -126,7 +137,8 @@ function ModalHeader({ title, onClose, closeDisabled, trailing }: ModalHeaderPro
           <button
             type="button"
             className={`${css.iconBtn} ${css.dialogClose}`}
-            aria-label="关闭"
+            // 关闭文案由调用方传入已翻译文本（各字典 common.close）；此处**不得**再硬编码（UI-17）
+            aria-label={closeLabel}
             disabled={closeDisabled === true}
           >
             <CloseIcon size={14} />

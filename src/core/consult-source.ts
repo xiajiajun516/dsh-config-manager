@@ -1,9 +1,9 @@
 /**
  * 迁移前咨询的源读取（Phase 7，只读分析层）。
  *
- * 把 4 种可迁移源（export-zip / local-snapshot / remote-snapshot / profile）归一化为
+ * 把 3 种可迁移源（export-zip / local-snapshot / remote-snapshot）归一化为
  * `ConsultSourceData`，供 `computeConsultReport` 评分。本模块**只读**：
- *  - 读 ZIP / 快照 / profile 文件；
+ *  - 读 ZIP / 快照文件；
  *  - 复用安全/schema 工具（parseZipHardened / parseManifest / verifyChecksumsJson /
  *    validateSectionData / scanAndRedact / scanText）；
  *  - 可迁移性经宿主注入的 `computeMigratability`（analyzeImport / createImportPlan，零写入）。
@@ -171,7 +171,7 @@ export async function readExportZipSource(
   };
 }
 
-/* ---------------- 非 ZIP 源（local-snapshot / profile） ---------------- */
+/* ---------------- 非 ZIP 源（local-snapshot） ---------------- */
 
 export interface LocalSnapshotSourceInput {
   /** 快照捕获的分区数据（按 adapter 分组；best-effort） */
@@ -235,59 +235,4 @@ export function buildLocalSnapshotSource(
   };
 }
 
-export interface ProfileSourceInput {
-  /** profile 的分区数据（decodeSections） */
-  sections: Map<SectionId, unknown>;
-  /** 切换预览（analyzeSwitch）→ 可迁移性 */
-  switchPreview: { itemCount: number; conflicts: number; warnings: number; sections: SectionId[]; errors: string[] };
-  /** 合成 manifest 的源信息（宿主 dshVersion/platform） */
-  sourceDsh: string;
-  sourcePlatform: string;
-}
 
-/**
- * 从配置档案（profile.json）构建 ConsultSourceData。
- * profile 无导出 manifest → 用合成 manifest（sections 来自 profile 分区）。
- * 可迁移性 = analyzeSwitch（切换预览计划项）。
- */
-export function buildProfileSource(
-  ref: ConsultSourceRef,
-  input: ProfileSourceInput,
-): ConsultSourceData {
-  const sectionFlags = {} as Record<SectionId, boolean>;
-  for (const sid of input.sections.keys()) sectionFlags[sid] = true;
-  const manifest: Manifest = {
-    schemaVersion: 1,
-    exporter: { name: 'DSH Config Manager', version: 'profile' },
-    source: { dshVersion: input.sourceDsh, platform: input.sourcePlatform as Manifest['source']['platform'], arch: 'unknown' },
-    exportedAt: new Date().toISOString(),
-    sections: sectionFlags,
-    security: { containsSecrets: false, encrypted: false, encryption: null },
-  };
-  const migratability: MigratabilityResult = {
-    ok: input.switchPreview.errors.length === 0,
-    itemCount: input.switchPreview.itemCount,
-    fatalConflicts: input.switchPreview.conflicts,
-    warnings: input.switchPreview.warnings,
-    sections: input.switchPreview.sections,
-    errors: input.switchPreview.errors,
-  };
-  return {
-    source: ref,
-    manifest,
-    manifestIssues: [],
-    sections: input.sections,
-    sectionFiles: new Map(),
-    checksums: {},
-    checksumIssues: [],
-    zipSlipIssues: [],
-    encrypted: false,
-    containsSecrets: false,
-    sourceDsh: input.sourceDsh,
-    sourcePlatform: input.sourcePlatform,
-    schemaVersion: 1,
-    missingSections: [],
-    sensitiveHits: [],
-    migratability,
-  };
-}

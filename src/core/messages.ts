@@ -24,6 +24,9 @@ export const zh = {
   'export.vaultRefreshed': '凭据明文未进入备份，已镜像到本机 vault（{count} 个文件，恢复时可回填）',
   'export.vaultRefreshSkipped': 'vault 镜像跳过 {rel}: {reason}',
   'export.vaultRefreshFailed': 'vault 镜像刷新失败（不影响导出）: {reason}',
+  'export.sessionsLimited': '会话按数量筛选：只带最新 {count} 个（共 {total} 个；单位 = 会话目录，同一会话的日志一起走）',
+  'export.sessionsNone': '会话按数量筛选：本次一个都不带（sessions.limit = 0）',
+  'export.sessionsLimitNoMtime': '无法读取会话日志的修改时间，无法判定哪个更新：已改为全量导出会话（不按数量筛选）',
   'export.fileSectionSecrets': '文件类分区 {section} 中检测到疑似凭据: {path}',
 
   // ---------- 导入：ZIP 读入 / 完整性 / schema ----------
@@ -61,6 +64,7 @@ export const zh = {
   'import.vaultRestored': '凭据文件 {rel} 已从本机 vault 回填',
   'import.vaultMissing': '凭据文件 {rel} 不在本机 vault（跨机恢复需人工重填）',
   'import.vaultBackfillFailed': 'vault 凭据回填失败（不影响导入结果）: {reason}',
+  'import.vaultCredentialsFromArchive': '凭据已从备份包内的密文回填（{count} 项）；本机 vault 无 {rel} 镜像属预期（导出时凭据走加密归档，不镜像明文）',
 
   // ---------- 回滚 ----------
   'rollback.ns.createdNoDelete': '该 namespace 由导入创建，DSH settings 无删除语义',
@@ -340,6 +344,9 @@ export const en: Record<keyof typeof zh, string> = {
   'export.vaultRefreshed': 'Credential plaintext did not enter the backup; mirrored to the local vault ({count} file(s), available for restore backfill)',
   'export.vaultRefreshSkipped': 'Vault mirror skipped {rel}: {reason}',
   'export.vaultRefreshFailed': 'Vault mirror refresh failed (export unaffected): {reason}',
+  'export.sessionsLimited': 'Sessions filtered by count: only the latest {count} are included ({total} total; the unit is a session directory, so all logs of one session travel together)',
+  'export.sessionsNone': 'Sessions filtered by count: none are included this time (sessions.limit = 0)',
+  'export.sessionsLimitNoMtime': 'Session log modification times are unavailable, so recency cannot be determined: exporting all sessions instead (no count filter)',
   'export.fileSectionSecrets': 'Suspected credential detected in file section {section}: {path}',
 
   // ---------- import: ZIP / integrity / schema ----------
@@ -377,6 +384,7 @@ export const en: Record<keyof typeof zh, string> = {
   'import.vaultRestored': 'Credential file {rel} backfilled from the local vault',
   'import.vaultMissing': 'Credential file {rel} is not in the local vault (cross-machine restore: re-enter manually)',
   'import.vaultBackfillFailed': 'Vault credential backfill failed (import result unaffected): {reason}',
+  'import.vaultCredentialsFromArchive': 'Credential values were restored from the encrypted payload in the backup ({count}); the local vault has no {rel} mirror, which is expected (the export carried credentials in the encrypted archive instead of mirroring plaintext)',
 
   // ---------- rollback ----------
   'rollback.ns.createdNoDelete': 'This namespace was created by the import; DSH settings have no delete semantics',

@@ -1,5 +1,5 @@
 /**
- * m-market：纯渲染模型（docs/design/marketplace.md §7.2）。
+ * m-market：纯渲染模型。
  * 仿 src/ui/progress.ts / sync-view.ts 模式：全部无副作用纯函数、node 可测，
  * 供 frontend 的 MarketPanel 直接复用。
  *

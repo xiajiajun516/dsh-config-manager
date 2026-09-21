@@ -272,7 +272,8 @@ export function LifecyclePanel({ lifecycleApi, t, openRecoveryWizard }: Lifecycl
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('lifecycle.snapshots')} />
-        <ErrorBanner error={new Error(redact(state.error))} onRetry={() => void load()} retrying={state.loading} />
+        {/* F-02：t 必传 —— 否则英文界面下错误标题/建议动作恒中文 */}
+        <ErrorBanner error={new Error(redact(state.error))} onRetry={() => void load()} retrying={state.loading} t={lifecycleApi.t} />
       </div>
     )
   }

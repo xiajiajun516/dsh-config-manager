@@ -9,6 +9,7 @@ dist/
 # Vibe governance / team runtime state (local only, contains absolute paths)
 .vibeskills/
 .agent-teams/
+.codegraph/
 outputs/
 my-video/
 

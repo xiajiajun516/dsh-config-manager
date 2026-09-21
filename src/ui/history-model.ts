@@ -28,9 +28,9 @@ export function kindLabelKey(kind: MigrationKind): HistoryKindLabelKey {
 /** 全量 kind 枚举（UI 过滤下拉用；顺序 = §5 清单顺序）。 */
 export const HISTORY_KIND_OPTIONS: readonly MigrationKind[] = [
   'import', 'restore', 'rollback',
-  'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
+  'profile-create', 'profile-select', 'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
   'sync-apply', 'autosync', 'recovery',
-  'backup', 'snapshot-delete', 'snapshot-prune',
+  'backup', 'backup-manual', 'snapshot-delete', 'snapshot-prune',
 ] as const;
 
 /** 结果过滤选项。 */
@@ -186,4 +186,14 @@ export function filterByText(entries: StoredMigrationHistoryEntry[], query: stri
 /** 空态判定。 */
 export function isEmpty(entries: StoredMigrationHistoryEntry[]): boolean {
   return entries.length === 0;
+}
+
+/**
+ * 分区列的紧凑显示：至多 `max` 个，其余折叠为 `+N`；空数组 → null（调用方不渲染占位）。
+ * 全量备份条目常带 10+ 个分区，整条铺在窄抽屉的行里会把摘要挤到看不见。
+ */
+export function formatHistorySections(sections: readonly string[], max = 3): string | null {
+  if (sections.length === 0) return null
+  if (sections.length <= max) return sections.join(', ')
+  return `${sections.slice(0, max).join(', ')} +${sections.length - max}`
 }

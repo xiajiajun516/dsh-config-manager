@@ -31,12 +31,14 @@
  *  - runId 为 32-hex 不可猜标识，可安全持久化（/runs + /progress 的查询键）。
  */
 import { ConflictCollector } from '../ui/conflict-view.ts'
+import { effectiveImportPlan, type ImportSelectionState } from '../ui/selection-model.ts'
 import { DEFAULT_CATEGORIES, ExportFlow } from '../ui/export-flow.ts'
 import type { ExportRunResult } from '../ui/export-flow.ts'
 import { ImportWizard } from '../ui/import-wizard.ts'
 import { renderExportReport } from '../ui/report.ts'
 import type { FlowPhase } from '../ui/flow.ts'
 import type { ImportStep } from '../ui/types.ts'
+import { isQuickRecommended } from '../ui/types.ts'
 import type { RunProgress } from './common/progress-view.ts'
 import type { BackupScheduleDraft } from '../ui/backup-schedule.ts'
 import type {
@@ -47,13 +49,14 @@ import type { RunKind, RunState } from '../core/run-registry.ts'
 import type { Manifest, SectionId } from '../schema/types.ts'
 import type { ConfigManagerApi } from './api.ts'
 import type { RestorePlan, RestoreReport } from '../core/restore.ts'
-import type { ProfileMeta, ProfileSwitchResult, SwitchPreview } from '../profiles/profile-manager.ts'
+import type { RestoreChangeSummary } from '../core/snapshot-diff.ts'
+import type { DshProfileMeta, DshProfileSelection } from '../profiles/dsh-profile-shared.ts'
 import type { MarketListItem, MarketDownloadResult } from '../market/types.ts'
 import type { SyncPushReport, SyncPullReport, SyncPushPreview } from '../sync/sync-engine.ts'
 import type { SyncStartResponse } from './sync/sync-api.ts'
 import type { ChannelSyncState, SyncChannel } from './sync/sync-view.ts'
-import { defaultChannelSyncState } from './sync/sync-view.ts'
-import type { MarketApprovals } from './market/market-view.ts'
+import { DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState } from './sync/sync-view.ts'
+
 import type { MyItemEntry } from './market/my-configs-api.ts'
 import type { MyInstallSlice, MyWizardSlice } from './market/my-configs-view.ts'
 import type { SyncConflictResolution } from './sync/sync-view.ts'
@@ -72,9 +75,6 @@ export type MainView = 'export' | 'import'
  */
 export type PanelId = 'overview' | 'export' | 'import' | 'snapshots' | 'sync' | 'market' | 'profiles' | 'lifecycle'
 
-/** 导出模式。 */
-export type ExportMode = 'quick' | 'custom'
-
 /** 存储抽象（浏览器 sessionStorage / 测试 mock / 无存储）。 */
 export interface StoreStorage {
   getItem(key: string): string | null
@@ -85,10 +85,13 @@ export interface StoreStorage {
 /** sessionStorage 键。 */
 export const STATE_KEY = 'dsh.cfgMgr.state.v1'
 
-/** Custom 模式的初始勾选 = 推荐分区（可再调整） */
-export function defaultCustomSelection(): SectionId[] {
+/**
+ * 导出页的初始勾选 = **推荐分区**（可迁移、非设备专属），之后由内容选择器调整。
+ * 判据与 ExportFlow.quickSelection() 共用同一个 isQuickRecommended —— 一处规则，两个调用点。
+ */
+export function defaultExportSelection(): SectionId[] {
   return DEFAULT_CATEGORIES
-    .filter((c) => c.defaultIncluded)
+    .filter(isQuickRecommended)
     .map((c) => c.id)
 }
 
@@ -151,10 +154,15 @@ export type SyncConfirmDecision = { adopted: boolean; resolution?: SyncConflictR
 /** 一键同步差异确认的逐项决策表（itemId → 决策；null = 无进行中的确认会话决策）。 */
 export type SyncConfirmDecisions = Record<string, SyncConfirmDecision>
 
-/** 单通道状态的持久化切片 = 运行时剔除密码类敏感字段（安全关键，白名单单一出口）。 */
+/**
+ * 单通道状态的持久化切片 = 运行时剔除密码类敏感字段（安全关键，白名单单一出口）。
+ *
+ * encryptPasswordSaved / decryptPasswordSaved 同样剔除：它们是**宿主凭据库的投影**，
+ * 只由 /sync/status 回填。落盘会在用户从别处删除密码后留下一个「已保存」的假象。
+ */
 export type PersistedChannelSyncState = Omit<
   ChannelSyncState,
-  'encryptPassword' | 'encryptPasswordConfirm' | 'decryptPassword'
+  'encryptPassword' | 'encryptPasswordConfirm' | 'decryptPassword' | 'encryptPasswordSaved' | 'decryptPasswordSaved'
 >
 
 /** 同步面板的持久化切片 = 运行时切片剔除敏感字段（顶层凭据 + byChannel 密码类）与瞬态字段。 */
@@ -184,8 +192,13 @@ export interface MarketStoreSlice {
   items: MarketListItem[]
   /** 条目详情（下载 + 校验 + dry-run 预览；zipPath 指向宿主 tmpDir，懒 GC 10 分钟） */
   detail: MarketDownloadResult | null
-  /** 逐分区批准表（安全不变式 (c)：高风险分区默认不勾选） */
-  approvals: MarketApprovals
+  /**
+   * 条目级勾选（与导入页同一个 Selection；绑 zipPath 失效 —— 换条目回落默认全选）。
+   * 原「逐分区批准表」approvals 已删除（市场通道与导入页同一套语义）。
+   */
+  selectionState: ImportSelectionState | null
+  /** 逐项冲突决策（keepCurrent / useImported；市场条目覆盖本机已有内容时用） */
+  conflictResolutions: Record<string, ItemResolution>
   importResult: ImportResult | null
   error: string | null
   loadError: string | null
@@ -213,16 +226,16 @@ export interface MarketStoreSlice {
  */
 export type SnapshotsSubTab = 'restore' | 'files' | 'schedule' | 'recovery'
 
-/** 配置档案面板的运行时切片（无敏感字段：Profile 天然不含秘密值）。 */
+/** 档案面板的运行时切片（无敏感字段：profile 定义本身不含秘密值）。 */
 export interface ProfilesStoreSlice {
-  /** Profile 列表（null = 尚未加载） */
-  profiles: ProfileMeta[] | null
-  /** 当前选中 Profile 名（切换预览目标） */
+  /** 档案列表（null = 尚未加载） */
+  profiles: DshProfileMeta[] | null
+  /** 「下次启动」标记（null = 未设置） */
+  selection: DshProfileSelection | null
+  /** 当前运行中的档案名（null = 尚未加载） */
+  current: string | null
+  /** 详情目标档案名（抽屉/弹窗展开项） */
   selectedName: string | null
-  /** 切换预览（null = 无预览会话；非敏感） */
-  preview: SwitchPreview | null
-  /** 最近一次切换结果（报告/回滚；非敏感） */
-  switchResult: ProfileSwitchResult | null
   /** 已 redact 的错误文本 */
   error: string | null
   loadError: string | null
@@ -231,6 +244,8 @@ export interface ProfilesStoreSlice {
 export interface SnapshotsStoreSlice {
   selectedId: string | null
   plan: RestorePlan | null
+  /** git 风格预览的变更统计（与 plan 同源；切 tab/刷新后仍能显示行数，null = 旧宿主未返回） */
+  changeSummary: RestoreChangeSummary | null
   /** 真实恢复执行中（瞬态；宿主 /runs 是权威来源，本字段只是镜像） */
   running: boolean
   report: RestoreReport | null
@@ -292,8 +307,14 @@ export type MoreSubTab = MoreStoreSlice['moreSub']
  * 不含 password/passwordConfirm（仅内存）。
  */
 export interface PersistedExportState {
-  mode: ExportMode
+  /** 勾选的分区（唯一来源；条目级例外见 excludedUnits） */
   selection: SectionId[]
+  /**
+   * 被排除的**最小可拆单元** id（Phase 1 条目级导出选择）。
+   * 稀疏表示：默认全选、只记例外 —— sessions 上千条也不会把 sessionStorage 撑大。
+   * 非敏感（只有条目名/包名，不含任何配置值）。
+   */
+  excludedUnits: string[]
   /** 是否导出真实密钥（凭据值）；勾选时默认联动勾选 encrypt（密钥绝不明文） */
   includeSecrets: boolean
   /** 是否加密备份（独立选项；不导出密钥也可单独加密） */
@@ -324,6 +345,11 @@ export interface PersistedImportState {
   conflictStrategy: GlobalConflictStrategy
   conflictResolutions: Record<string, ItemResolution>
   pathMappings: PathMapping[]
+  /**
+   * 导入侧内容选择（Phase 2）。null = 尚未选择 → 默认全选（与改造前行为一致）。
+   * 结构里带 zipPath：换一份备份后旧选择自动失效（见 ui/selection-model 的键控说明）。
+   */
+  importSelection: ImportSelectionState | null
   uploading: boolean
   running: boolean
   progress: RunProgress | null
@@ -425,8 +451,8 @@ type ImportWizardStep = ImportStep
 
 function defaultExportState(): ExportLiveState {
   return {
-    mode: 'quick',
-    selection: defaultCustomSelection(),
+    selection: defaultExportSelection(),
+    excludedUnits: [],
     includeSecrets: false,
     encrypt: false,
     password: '',
@@ -457,6 +483,7 @@ function defaultImportState(): ImportLiveState {
     conflictStrategy: 'merge',
     conflictResolutions: {},
     pathMappings: [],
+    importSelection: null,
     secretInputs: {},
     decryptPassword: '',
     decryptRefs: [],
@@ -506,7 +533,8 @@ function defaultMarketState(): MarketStoreSlice {
     sortKey: 'default',
     items: [],
     detail: null,
-    approvals: {},
+    selectionState: null,
+    conflictResolutions: {},
     importResult: null,
     error: null,
     loadError: null,
@@ -522,6 +550,7 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
   return {
     selectedId: null,
     plan: null,
+    changeSummary: null,
     running: false,
     report: null,
     actionError: null,
@@ -535,11 +564,41 @@ function defaultSnapshotsState(): SnapshotsStoreSlice {
 function defaultProfilesState(): ProfilesStoreSlice {
   return {
     profiles: null,
+    selection: null,
+    current: null,
     selectedName: null,
-    preview: null,
-    switchResult: null,
     error: null,
     loadError: null,
+  }
+}
+
+/** 档案条目形状守卫（旧「配置档案」载荷的 ProfileMeta 结构不同，必须丢弃而不是照单渲染）。 */
+function isDshProfileMetaLite(value: unknown): value is DshProfileMeta {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  return typeof v['name'] === 'string' && typeof v['dir'] === 'string' && Array.isArray(v['bundles'])
+}
+
+/** 持久化载荷归一：只接受新形态字段，缺失/旧形态一律回默认值。 */
+export function normalizeProfilesSlice(raw: unknown): ProfilesStoreSlice {
+  const base = defaultProfilesState()
+  if (typeof raw !== 'object' || raw === null) return base
+  const r = raw as Record<string, unknown>
+  const list = Array.isArray(r['profiles']) ? (r['profiles'] as unknown[]).filter(isDshProfileMetaLite) : null
+  const selectionRaw = r['selection']
+  const selection = (() => {
+    if (typeof selectionRaw !== 'object' || selectionRaw === null) return null
+    const s = selectionRaw as Record<string, unknown>
+    if (typeof s['name'] !== 'string') return null
+    return { name: s['name'], exists: s['exists'] === true, isCurrent: s['isCurrent'] === true }
+  })()
+  return {
+    profiles: list,
+    selection,
+    current: typeof r['current'] === 'string' ? r['current'] : null,
+    selectedName: typeof r['selectedName'] === 'string' ? r['selectedName'] : null,
+    error: typeof r['error'] === 'string' ? r['error'] : null,
+    loadError: typeof r['loadError'] === 'string' ? r['loadError'] : null,
   }
 }
 
@@ -623,7 +682,8 @@ export function toMarketStoreSlice(s: MarketStoreSlice): MarketStoreSlice {
     sortKey: s.sortKey,
     items: s.items,
     detail: s.detail,
-    approvals: s.approvals,
+    selectionState: s.selectionState,
+    conflictResolutions: s.conflictResolutions,
     importResult: s.importResult,
     error: s.error,
     loadError: s.loadError,
@@ -640,6 +700,7 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
   return {
     selectedId: s.selectedId,
     plan: s.plan,
+    changeSummary: s.changeSummary,
     running: s.running,
     report: s.report,
     actionError: s.actionError,
@@ -650,13 +711,13 @@ export function toSnapshotsStoreSlice(s: SnapshotsStoreSlice): SnapshotsStoreSli
   }
 }
 
-/** 从配置档案面板状态提取切片（结构兼容：传入 PanelState 亦可）。 */
+/** 从档案面板状态提取切片（结构兼容：传入 PanelState 亦可）。 */
 export function toProfilesStoreSlice(s: ProfilesStoreSlice): ProfilesStoreSlice {
   return {
     profiles: s.profiles,
+    selection: s.selection,
+    current: s.current,
     selectedName: s.selectedName,
-    preview: s.preview,
-    switchResult: s.switchResult,
     error: s.error,
     loadError: s.loadError,
   }
@@ -706,7 +767,11 @@ export function toPersistedState(state: StoreState): PersistedState {
   } = state.sync
   // byChannel 内每通道的密码类字段同样硬性剔除（安全不变量：不落盘任何密码）
   const stripChannelSensitive = (c: ChannelSyncState): PersistedChannelSyncState => {
-    const { encryptPassword: _ep, encryptPasswordConfirm: _epc, decryptPassword: _dp, ...rest } = c
+    const {
+      encryptPassword: _ep, encryptPasswordConfirm: _epc, decryptPassword: _dp,
+      encryptPasswordSaved: _eps, decryptPasswordSaved: _dps,
+      ...rest
+    } = c
     return rest
   }
   return {
@@ -732,12 +797,12 @@ export function toPersistedState(state: StoreState): PersistedState {
       // 「一键导入」请求为一次性内存瞬态：不落盘（刷新后回到导入向导 select 步骤）
       importBackup: null,
     },
-    // 配置档案切片为非敏感（Profile 天然不含秘密值）：原样持久化（切 tab/刷新不丢列表与预览）
+    // 档案切片为非敏感（profile 定义本身不含秘密值）：原样持久化（切 tab/刷新不丢列表）
     profiles: {
       profiles: state.profiles.profiles,
+      selection: state.profiles.selection,
+      current: state.profiles.current,
       selectedName: state.profiles.selectedName,
-      preview: state.profiles.preview,
-      switchResult: state.profiles.switchResult,
       error: state.profiles.error,
       loadError: state.profiles.loadError,
     },
@@ -1104,6 +1169,7 @@ export class RunStore {
               syncSections: Array.isArray(legacySync['syncSections'])
                 ? legacySync['syncSections'] as SectionId[]
                 : [],
+              sessionsLimit: DEFAULT_SYNC_SESSIONS_LIMIT,
               encrypt: legacySync['encrypt'] === true,
               includeSecrets: legacySync['includeSecrets'] === true,
               selectedSnapshotId: typeof legacySync['selectedSnapshotId'] === 'string'
@@ -1133,6 +1199,9 @@ export class RunStore {
               encryptPassword: '',
               encryptPasswordConfirm: '',
               decryptPassword: '',
+              // 「已保存」只由 /sync/status 回填（持久化切片已剔除）
+              encryptPasswordSaved: false,
+              decryptPasswordSaved: false,
             } as ChannelSyncState,
             webdav: {
               ...defaultChannelSyncState(),
@@ -1140,6 +1209,8 @@ export class RunStore {
               encryptPassword: '',
               encryptPasswordConfirm: '',
               decryptPassword: '',
+              encryptPasswordSaved: false,
+              decryptPasswordSaved: false,
             } as ChannelSyncState,
           },
         }
@@ -1156,7 +1227,7 @@ export class RunStore {
         // 旧载荷可能缺 subTab / 带非法值 → 归一（只认 restore/files/recovery；聚合优化加 recovery）
         subTab: parsed.snapshots.subTab === 'files' ? 'files' : parsed.snapshots.subTab === 'recovery' ? 'recovery' : 'restore',
       },
-      profiles: { ...defaultProfilesState(), ...parsed.profiles },
+      profiles: normalizeProfilesSlice(parsed.profiles),
       recovery: {
         ...defaultRecoveryState(),
         ...parsed.recovery,
@@ -1178,7 +1249,10 @@ export class RunStore {
     }
     // 安全兜底：confirm 阶段若仍缺必填 secret（刷新后 secretInputs 必为空），
     // 强制退回 secrets 阶段要求重输（验收 m2-refresh 的「secrets 阶段要求重输」）。
-    const missing = this.state.import.plan?.missingSecrets ?? []
+    // Phase 2：按**用户内容选择裁剪后**的计划判断（用户已取消的插件不该再索要密钥）
+    const missing = effectiveImportPlan(
+      this.state.import.plan, this.state.import.zipPath, this.state.import.importSelection,
+    )?.missingSecrets ?? []
     if (this.state.import.phase === 'confirm' && missing.length > 0) {
       this.state.import.phase = 'secrets'
     }
@@ -1188,7 +1262,11 @@ export class RunStore {
     // 冲突阶段：由恢复后的 plan + 决策重建 collector（刷新后实例必然丢失）
     const imp = this.state.import
     if (imp.phase === 'conflicts' && imp.plan !== null) {
-      imp.conflictCollector = rebuildConflictCollector(imp.plan, imp.conflictResolutions)
+      // Phase 2：冲突收集器必须基于**裁剪后**的计划，否则用户会被迫处理根本不导入的项的冲突
+      imp.conflictCollector = rebuildConflictCollector(
+        effectiveImportPlan(imp.plan, imp.zipPath, imp.importSelection) ?? imp.plan,
+        imp.conflictResolutions,
+      )
     }
   }
 

@@ -9,9 +9,46 @@ import type {
   ExecutedItem, ExportReport, ImportResult, RollbackReport,
 } from '../core/types.ts';
 import type { ImportResultAction, ImportSectionStat } from './types.ts';
-import { zhUiT, type UiT } from './i18n.ts';
+import { zhUiT, type UiT, type UiTextKey } from './i18n.ts';
 
 /* ---------------- §21 导出报告 ---------------- */
+
+/**
+ * 分区条目计数的单位词（adapter 的 counts 键 → 字典键）。
+ *
+ * 为什么必须映射：counts 的键是**适配器内部词汇**（namespaces / patchLines / servers），
+ * 原先直接拼进报告文本，中文界面上就出现了「settings (18 namespaces)」这种半英文行。
+ * 未知键回退原样显示（不吞信息、不显示 undefined）——新适配器忘配文案只是不够漂亮，
+ * 不会丢数据。
+ */
+const COUNT_UNIT_KEY: Record<string, UiTextKey> = {
+  namespaces: 'report.unit.namespaces',
+  files: 'report.unit.files',
+  servers: 'report.unit.servers',
+  providers: 'report.unit.providers',
+  plugins: 'report.unit.plugins',
+  patchLines: 'report.unit.patchLines',
+  patchFiles: 'report.unit.patchFiles',
+  localTarballs: 'report.unit.localTarballs',
+  prompts: 'report.unit.prompts',
+  workspaces: 'report.unit.workspaces',
+  credentials: 'report.unit.credentials',
+  notes: 'report.unit.notes',
+};
+
+/**
+ * 一个分区的 counts → 一行中文计数文本（如「18 个命名空间，3 条说明」）。
+ * 空 counts → 空串（调用方按「—」渲染，不要在这里编一个 0）。
+ */
+export function exportCountsText(counts: Record<string, number>, t: UiT = zhUiT): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(counts)) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    const unitKey = COUNT_UNIT_KEY[key];
+    parts.push(unitKey === undefined ? String(value) + ' ' + key : String(value) + ' ' + t(unitKey));
+  }
+  return parts.join('，');
+}
 
 export function renderExportReport(report: ExportReport, t: UiT = zhUiT): string {
   const lines: string[] = [t('report.backupCreated'), ''];

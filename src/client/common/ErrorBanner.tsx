@@ -5,7 +5,7 @@
  * 统一过 `redact()`（字段名黑名单 + sk-/JWT/PEM/Bearer 等值形状模式），
  * 渲染结果只含 Reason / Suggested action / Item，绝不出现密钥原文。
  */
-import { useState } from 'react'
+import { useMemo } from 'react'
 import { formatActionableError, toActionableError } from '../../ui/errors.ts'
 import { redact } from '../../security/redaction.ts'
 import { zhUiT, type UiT } from '../../ui/i18n.ts'
@@ -25,12 +25,19 @@ export interface ErrorBannerProps {
 }
 
 /**
- * 错误横幅：toActionableError 解析为标题 + 原因 + 建议动作，
+ * 错误横幅：toActionableError（**带当前语言 t**）解析为标题 + 原因 + 建议动作，
  * 文本在渲染前再经 redact() 兜底（双保险），Reason 以等宽块展示。
  * 重试按钮：进行中（retrying）时显示 Spinner 并禁用（防重复点击）。
  */
 export function ErrorBanner({ error, onRetry, retrying, t = zhUiT }: ErrorBannerProps) {
-  const [actionable] = useState(() => toActionableError(error))
+  /**
+   * UI-20：解析结果必须由 `error` **派生**（useMemo），不能是只在挂载时求值一次的 useState ——
+   * 同一横幅上 error 被替换后（如连续两次失败原因不同），标题/原因/建议动作/可重试判定会
+   * 全部停留在第一次解析的结果，展示与输入不一致。
+   * F-02：`t` 必须一并传给 toActionableError（src/ui/errors.ts 已支持 { t }；规则表按 t 构造），
+   * 否则英文界面下错误标题与建议动作恒为中文。
+   */
+  const actionable = useMemo(() => toActionableError(error, { t }), [error, t])
   const reason = redact(actionable.reason)
   const item = actionable.item !== undefined ? redact(actionable.item) : undefined
 

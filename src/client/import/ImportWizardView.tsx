@@ -32,6 +32,7 @@ import { ConflictCollector } from '../../ui/conflict-view.ts'
 import { nextFlowPhase, type FlowPhase } from '../../ui/flow.ts'
 import { importStepperModel, type ImportStageKey } from '../../ui/import-stepper.ts'
 import { importNextSteps } from '../../ui/next-steps.ts'
+import { mergeSecretInput } from '../../ui/import-wizard.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
 import type { ImportPlan, ImportResult } from '../../core/types.ts'
 import type { ConsultReport } from '../../core/migration-consult.ts'
@@ -43,6 +44,15 @@ import { ChevronDownIcon } from '../common/Icon.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import { ReportView } from '../common/ReportView.tsx'
+import {
+  ContentPicker,
+} from '../common/ContentPicker.tsx'
+import {
+  buildSelectedPlan, effectiveImportPlan, effectiveImportSelection, excludedPlanItems, pickerSummary,
+  sectionsFromPlan, selectionHasItems,
+  type Selection,
+} from '../../ui/selection-model.ts'
+import { sectionLabel, sectionLabeler } from '../common/section-labels.ts'
 import { ConflictList } from './ConflictList.tsx'
 import { PathMappingForm } from './PathMappingForm.tsx'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
@@ -59,33 +69,33 @@ export interface ImportWizardViewProps {
 
 /** 中间流程阶段（wizard.step 之外的 UI 层页面）——定义见 src/ui/flow.ts */
 
-const SCORE_LABEL: Record<string, string> = {
-  excellent: 'Excellent',
-  good: 'Good',
-  partial: 'Partial',
-  unsupported: 'Unsupported',
-}
-
-/** 密钥补录表单（仅内存收集，值不外泄；onChange 写入 store 的仅内存字段） */
+/**
+ * 密钥补录表单（仅内存收集，值不外泄；onChange 写入 store 的仅内存字段）。
+ *
+ * 受控组件（UI-06）：输入值直接来自 store 的 `secretInputs` —— 本组件**不自己持有**输入
+ * 状态。原因：该页是可来回切换的中间步骤，组件会随阶段切换卸载重挂；若以本地 state 为准，
+ * 「上一步」再回来会显示空输入框而提交集合里仍是旧值（看到的值 ≠ 提交的值），
+ * 且在空表上编辑任一字段会把其它 ref 已填的值丢掉。合并一律经 mergeSecretInput（src/ui）。
+ */
 function SecretsForm({
   missing,
+  value,
   t,
   onChange,
 }: {
   missing: { ref: string; required: boolean }[]
+  /** 当前提交集合（store 的 secretInputs；唯一事实） */
+  value: Record<string, string>
   t: TranslateNS<'config-manager'>
   onChange: (inputs: Record<string, string>) => void
 }) {
-  const [inputs, setInputs] = useState<Record<string, string>>({})
-  const setRef = (ref: string, value: string): void => {
-    const next = { ...inputs, [ref]: value }
-    setInputs(next)
-    onChange(next)
+  const setRef = (ref: string, next: string): void => {
+    onChange(mergeSecretInput(value, ref, next))
   }
   return (
     <div className={css.secretsList}>
       <div className={css.hint}>{t('import.secrets.hint')}</div>
-      {missing.length === 0 && <Empty>No secrets required</Empty>}
+      {missing.length === 0 && <Empty>{t('import.secrets.none')}</Empty>}
       {missing.map((s) => (
         <label key={s.ref} className={css.field}>
           <span className={css.fieldLabel}>
@@ -95,7 +105,7 @@ function SecretsForm({
             type="password"
             className={css.input}
             autoComplete="off"
-            value={inputs[s.ref] ?? ''}
+            value={value[s.ref] ?? ''}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { setRef(s.ref, e.target.value) }}
           />
         </label>
@@ -216,7 +226,8 @@ function NextStepsCard({ plan, result, t }: {
           <div className={css.hint}>{t('nextSteps.restart.hint')}</div>
           <ul className={css.reportList}>
             {steps.restartItems.map((item) => (
-              <li key={item.id}>{item.adapter}: {item.description}</li>
+              // description 由宿主按计划项拼装（可能含 MCP env/headers 等本地配置片段）→ 渲染前过 redact
+              <li key={item.id}>{item.adapter}: {redact(item.description)}</li>
             ))}
           </ul>
         </div>
@@ -262,6 +273,27 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   const secretInputs = imp.secretInputs
   const decryptRefs = imp.decryptRefs
   const isEncrypted = imp.analysis?.encrypted === true
+
+  /* ---------- Phase 2：导入内容选择（分区 → 最小单元） ---------- */
+  // 生效选择：未选择 / 换了 ZIP（陈旧）→ 默认全选。陈旧选择若被沿用，会因分区 id 不在新计划里
+  // 而把导入静默变成「什么都没做」——所以选择与 zipPath 绑定，这里做失效回落。
+  const effectiveSelection = effectiveImportSelection(imp.plan, imp.zipPath, imp.importSelection)
+  /** 裁剪后的子计划：冲突列表 / 密钥补录 / 执行**全部**以它为准（唯一定义处见 selection-model） */
+  const selectedPlan = effectiveImportPlan(imp.plan, imp.zipPath, imp.importSelection)
+  const selectionNodes = imp.plan === null ? [] : sectionsFromPlan(imp.plan)
+  const selectionValue: Selection = effectiveSelection ?? { sections: [], excluded: [] }
+  /** 用户主动取消的项数：结果页据此把「你取消的」与「引擎跳过的」分开说，不被混为一谈 */
+  const excludedCount = imp.plan === null ? 0 : excludedPlanItems(imp.plan, selectionValue).length
+  /**
+   * 「全不选」守卫（UI-05）：勾选被清空时，执行这次导入不会写入任何东西 —— 但引擎仍会
+   * 建安全快照并返回成功，界面会显示「导入完成」。与导出侧同一套空选择语义：预览步
+   * 就地提示 + 禁用「下一步」；确认页的「确认导入」同样禁用（防御性，防止从别处推进）。
+   */
+  const nothingSelected = imp.plan !== null && !selectionHasItems(imp.plan, selectionValue)
+  const applyImportSelection = (next: Selection): void => {
+    if (imp.zipPath === null) return
+    runStore.patch({ import: { importSelection: { zipPath: imp.zipPath, selection: next } } })
+  }
   // 上传备份是否整体加密容器（需先解锁才可分析）；非敏感、刷新恢复
   const containerEncrypted = imp.containerEncrypted
   // 容器是否已解锁（仅内存；刷新后要求重输密码重新解锁）
@@ -280,6 +312,11 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   /** Phase 7 迁移前咨询：预览步的咨询报告（本地 state，非敏感） */
   const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
   const [consultLoading, setConsultLoading] = useState(false)
+  /**
+   * 预览步的两页：先「迁移前咨询」（只读结论 + 依据），点下一步才是「选择要导入的内容」。
+   * 本地 state（不持久化）：换备份或重走流程时回到咨询页（见下方 zipPath effect）。
+   */
+  const [previewStage, setPreviewStage] = useState<'consult' | 'select'>('consult')
 
   const setPhase = (next: FlowPhase): void => {
     runStore.patch({ import: { phase: next } })
@@ -431,6 +468,11 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
     return () => { cancelled = true }
   }, [step, imp.zipPath, api])
 
+  /** 换了一份备份（或重新开始）→ 回到「迁移前咨询」这一页，而不是直接落到内容选择 */
+  useEffect(() => {
+    setPreviewStage('consult')
+  }, [imp.zipPath])
+
   /** Compatibility → Preview */
   const goPreview = async (): Promise<void> => {
     runStore.patch({ import: { error: null } })
@@ -445,7 +487,8 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
 
   /** 进入 conflicts 阶段（先创建 collector） */
   const enterConflicts = (): void => {
-    const plan = imp.plan
+    // Phase 2：基于**裁剪后**的计划 —— 用户没勾的项不该把他拖进冲突解决
+    const plan = selectedPlan
     if (plan !== null && imp.conflictCollector === null) {
       runStore.patch({ import: { conflictCollector: new ConflictCollector(plan) } })
     }
@@ -527,7 +570,15 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
       // 重试 = 只重跑「失败 + 用户跳过」的子集（结果页「重试」按钮）
       const promise = opts?.retry === true
         ? wizard.executeRetry({ rollbackOnError })
-        : wizard.execute({ confirm: true, rollbackOnError })
+        : wizard.execute({
+            confirm: true,
+            rollbackOnError,
+            // Phase 2：Dry Run 与真实执行用**同一套**裁剪逻辑（唯一定义处 = ui/selection-model）
+            planFilter: (plan) => {
+              const sel = effectiveImportSelection(plan, imp.zipPath, imp.importSelection)
+              return sel === null ? plan : buildSelectedPlan(plan, sel)
+            },
+          })
       // execute() 已同步置 step='importing'：立即镜像，保证执行期间刷新时持久化的是 importing
       runStore.syncWizard()
       const result = await promise
@@ -578,6 +629,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
         conflictStrategy: 'merge',
         conflictResolutions: {},
         pathMappings: [],
+        importSelection: null,
         secretInputs: {},
         decryptPassword: '',
         decryptRefs: [],
@@ -680,7 +732,7 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
           <div className={css.sectionGrid}>
             {analysis.sectionsInZip.map((s) => (
               <div key={s} className={css.sectionRow}>
-                <span className={css.sectionName}>{s}</span>
+                <span className={css.sectionName}>{sectionLabel(s, t)}</span>
               </div>
             ))}
           </div>
@@ -696,15 +748,40 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
 
   if (step === 'preview' && phase === 'preview') {
     const summary: ImportPreviewSummary = wizard.previewSummary()
+    /**
+     * 第 1 页：迁移前咨询（只读）—— 用户要求咨询**单独成页**，看完结论点「下一步」
+     * 才进入「选择要导入的内容」。因此这里把咨询卡从内容选择页挪出来。
+     */
+    if (previewStage === 'consult') {
+      return (
+        <div className={css.viewBody}>
+          <SectionTitle title={t('import.preview.title')} subtitle={t('import.consult.hint')} />
+          {consultLoading && <Spinner label={api.t('consult.loading')} />}
+          {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
+          {!consultLoading && consultReport === null && (
+            <Banner kind="info">{t('import.consult.unavailable')}</Banner>
+          )}
+          {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
+          <div className={css.actionRow}>
+            <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
+            <Button variant="primary" onClick={() => { setPreviewStage('select') }}>
+              {t('import.consult.next')}
+            </Button>
+          </div>
+        </div>
+      )
+    }
     return (
       <div className={css.viewBody}>
-        <SectionTitle title={t('import.preview.title')} />
+        <SectionTitle title={t('import.picker.title')} subtitle={t('import.picker.hint')} />
         <div className={css.statRow}>
           <Badge kind={summary.willChange > 0 ? 'info' : 'ok'}>{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>
           {summary.unchanged > 0 && <Badge kind="ok">{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}
           {summary.settingsUpdates > 0 && <Badge kind="info">{t('import.preview.settings', { count: String(summary.settingsUpdates) })}</Badge>}
           {summary.pluginsToInstall > 0 && <Badge kind="info">{t('import.preview.plugins', { count: String(summary.pluginsToInstall) })}</Badge>}
           {summary.mcpAdds > 0 && <Badge kind="info">{t('import.preview.mcp', { count: String(summary.mcpAdds) })}</Badge>}
+          {/* UI-25：提示词维度此前漏渲染（模型 ImportPreviewSummary.prompts 与字典 import.preview.prompts 都在） */}
+          {summary.prompts > 0 && <Badge kind="info">{t('import.preview.prompts', { count: String(summary.prompts) })}</Badge>}
           {summary.pathMappingsNeeded > 0 && <Badge kind="warn">{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
           {summary.secretsNeeded > 0 && !isEncrypted && <Badge kind="warn">{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
           {summary.conflicts > 0 && <Badge kind="error">{t('import.preview.conflicts', { count: String(summary.conflicts) })}</Badge>}
@@ -712,14 +789,25 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
         </div>
         {isEncrypted && <Banner kind="warn">{t('import.decrypt.previewHint')}</Banner>}
         {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
-        {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-        {consultLoading && <Spinner label={api.t('consult.loading')} />}
-        {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
         {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
+        {imp.plan !== null && (
+          <Card className={css.optionsCard}>
+            <ContentPicker
+              nodes={selectionNodes}
+              value={selectionValue}
+              onChange={applyImportSelection}
+              t={t}
+              sectionLabel={sectionLabeler(t)}
+              mode="import"
+            />
+          </Card>
+        )}
+        {nothingSelected && <Banner kind="warn">{t('import.nothingSelected')}</Banner>}
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
           <Button
             variant="primary"
+            disabled={nothingSelected}
             onClick={() => {
               const next = nextPhase('preview')
               setPhase(next)
@@ -808,11 +896,17 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
 
   if (phase === 'secrets' && step === 'preview') {
     // 加密备份：解密已覆盖的凭据（decryptRefs）由备份密码恢复，不再要求补录
-    const missing = (imp.plan?.missingSecrets ?? []).filter((s) => !decryptRefs.includes(s.ref))
+    // Phase 2：只补录**仍会导入**的凭据 —— 用户取消的插件不该再索要它的密钥
+    const missing = (selectedPlan?.missingSecrets ?? []).filter((s) => !decryptRefs.includes(s.ref))
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('import.secrets.title')} />
-        <SecretsForm missing={missing} t={t} onChange={(inputs) => { runStore.patch({ import: { secretInputs: inputs } }) }} />
+        <SecretsForm
+          missing={missing}
+          value={secretInputs}
+          t={t}
+          onChange={(inputs) => { runStore.patch({ import: { secretInputs: inputs } }) }}
+        />
         <div className={css.actionRow}>
           <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
           <Button variant="primary" onClick={finishSecrets}>{t('common.next')}</Button>
@@ -822,12 +916,31 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   }
 
   if (phase === 'confirm' && step === 'preview') {
+    /**
+     * UI-14：确认页是最后一道闸门，必须能核对「将导入什么」——
+     * 口径与选择器 footer **同源**（同一个 pickerSummary + 同一份 selectionNodes/selectionValue）。
+     */
+    const confirmSummary = pickerSummary(selectionValue, selectionNodes)
     return (
       <div className={css.viewBody}>
         <Card className={css.optionsCard}>
-          <Banner kind="info">{t('import.confirm.warning')}</Banner>
+          {/* UI-13：提示语必须随「失败时整体回滚」勾选状态切换 ——
+              该复选框可取消，取消后仍承诺「失败时整体回滚」是自相矛盾的文案 */}
+          <Banner kind="info">
+            {rollbackOnError ? t('import.confirm.warning') : t('import.confirm.warningNoRollback')}
+          </Banner>
           {isEncrypted && decryptRefs.length > 0 && (
             <Banner kind="ok">{t('import.confirm.encrypted', { count: String(decryptRefs.length) })}</Banner>
+          )}
+          {/* UI-14：将导入的分区/条目合计（与预览步选择器同源）+ 被用户取消的项数 */}
+          <div className={css.hint}>
+            {t('picker.summaryImport', {
+              sections: String(confirmSummary.sections),
+              units: String(confirmSummary.units),
+            })}
+          </div>
+          {excludedCount > 0 && (
+            <div className={css.hint}>{t('import.excludedByUser', { count: String(excludedCount) })}</div>
           )}
           <Checkbox
             checked={rollbackOnError}
@@ -839,8 +952,9 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
           />
           <div className={css.actionRow}>
             <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
-            {/* m3-lock：进行中禁用「确认导入」，防止重复启动 */}
-            <Button variant="primary" disabled={running} onClick={() => { void execute() }}>
+            {/* m3-lock：进行中禁用「确认导入」，防止重复启动；
+                空选择同样禁用（UI-05：不让「什么都没勾」走完最后一道闸门） */}
+            <Button variant="primary" disabled={running || nothingSelected} onClick={() => { void execute() }}>
               {t('import.confirm.execute')}
             </Button>
           </div>
@@ -884,6 +998,9 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('report.import.title')} />
+        {excludedCount > 0 && (
+          <Banner kind="info">{t('import.excludedByUser', { count: String(excludedCount) })}</Banner>
+        )}
         <ReportView
           kind="import"
           importResult={result}
@@ -891,6 +1008,9 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
             if (action === 'done') resetWizard()
             // 报告已内联展示全部失败/警告项与回滚详情（§22/§23），无额外动作页
           }}
+          // F-01：必须显式传 t —— ReportView 缺省 t=zhUiT，英文界面下报告正文与动作按钮
+          // 会恒为中文（导出路径一直是这么传的，这里补齐）
+          t={api.t}
         />
         {retryable > 0 && (
           <div className={css.actionRow}>

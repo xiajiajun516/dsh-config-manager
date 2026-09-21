@@ -17,9 +17,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
+import { redact } from '../../security/redaction.ts'
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../../core/restore.ts'
 import type { ConsultReport } from '../../core/migration-consult.ts'
+import type { RestoreChangeSummary } from '../../core/snapshot-diff.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
+import { RestorePlanView } from './RestorePlanView.tsx'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { RecoveryPort } from '../../ui/types.ts'
@@ -73,6 +76,8 @@ interface PanelState {
   selectedId: string | null
   planning: boolean
   plan: RestorePlan | null
+  /** git 风格预览：宿主返回的逐动作变更状态 + 行数统计（null = 旧宿主未返回） */
+  changeSummary: RestoreChangeSummary | null
   running: boolean
   report: RestoreReport | null
   /** 仅承载「恢复计划（dry-run）加载失败」——渲染点在计划预览弹窗内。
@@ -111,6 +116,7 @@ const initial: PanelState = {
   selectedId: null,
   planning: false,
   plan: null,
+  changeSummary: null,
   running: false,
   report: null,
   actionError: null,
@@ -134,20 +140,6 @@ function statusBadgeKind(status: SnapshotMeta['status']): 'info' | 'ok' | 'warn'
   }
 }
 
-/** 计划动作的本地化描述前缀（kind 标签 → 字典；未知名回退 unknown，不透出英文原文） */
-function actionKindLabel(t: TranslateNS<'config-manager'>, kind: string): string {
-  switch (kind) {
-    case 'hostFileRestore': return t('snapshots.kind.hostFileRestore')
-    case 'hostFileRemove': return t('snapshots.kind.hostFileRemove')
-    case 'pluginRemove': return t('snapshots.kind.pluginRemove')
-    case 'fileRestore': return t('snapshots.kind.fileRestore')
-    case 'fileRemove': return t('snapshots.kind.fileRemove')
-    case 'credentialHint': return t('snapshots.kind.credentialHint')
-    case 'skip': return t('snapshots.kind.skip')
-    default: return t('snapshots.kind.unknown')
-  }
-}
-
 /**
  * 从 runStore 恢复上次的快照面板状态（切页回 / 刷新后挂载）。
  * 无敏感字段；plan/report 为纯数据，可安全序列化恢复。
@@ -160,6 +152,7 @@ function initFromStore(): PanelState {
     selectedId: s.selectedId,
     running: s.running,
     plan: s.plan,
+    changeSummary: s.changeSummary,
     report: s.report,
     actionError: s.actionError,
     error: s.error,
@@ -269,13 +262,13 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
       setPlanOpen(true)
       return
     }
-    patch({ selectedId: id, plan: null, report: null, actionError: null, planning: true })
+    patch({ selectedId: id, plan: null, changeSummary: null, report: null, actionError: null, planning: true })
     // 计划预览在弹窗内展示：点击行即打开弹窗，loading/结果/错误都在弹窗内呈现
     setPlanOpen(true)
     api.restoreSnapshot(id, true).then(
       (res) => {
         if (generation !== planGeneration.current) return
-        patch({ planning: false, plan: res.plan ?? null })
+        patch({ planning: false, plan: res.plan ?? null, changeSummary: res.changeSummary ?? null })
       },
       (err) => {
         if (generation !== planGeneration.current) return
@@ -309,20 +302,6 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
     if (state.running || state.plan === null) return
     setPlanOpen(false)
     setConfirmOpen(true)
-  }
-
-  const summary = (): string => {
-    const s = state.plan?.summary
-    if (s === undefined) return ''
-    return t('snapshots.summary', {
-      hostFileRestores: String(s.hostFileRestores),
-      hostFileRemoves: String(s.hostFileRemoves),
-      pluginRemoves: String(s.pluginRemoves),
-      fileRestores: String(s.fileRestores),
-      fileRemoves: String(s.fileRemoves),
-      credentialHints: String(s.credentialHints),
-      skips: String(s.skips),
-    })
   }
 
   /** P1-⑧：置顶/取消置顶（豁免自动保留清理；操作成功后刷新列表）。 */
@@ -363,6 +342,15 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
         toast.error(err instanceof Error ? err.message : String(err))
       },
     )
+  }
+
+  /**
+   * 关闭恢复报告回执：只清报告本身（快照选中态/列表保持不动，用户可继续操作）。
+   * 必须走 patch（commit → runStore.patch）：报告随切片落 sessionStorage，
+   * 只清本地 state 会让它在切换页签/刷新后「复活」。
+   */
+  const dismissReport = (): void => {
+    patch({ report: null })
   }
 
   const reportLine = (title: string, items: string[], warn: boolean): ReactNode => {
@@ -523,8 +511,16 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
 
               {state.report !== null && (
                 <>
-                  <div className={css.groupHeader}>
+                  {/* 报告是「一次性回执」：必须在报告里给出显式退出入口。
+                      此前只有标题行，没有任何按钮 —— 执行恢复后页面就停在报告上，
+                      用户找不到「返回」（报告还会随 sessionStorage 一直留在面板里）。
+                      标题 + 右侧动作用 .headRow（非 baseline 对齐，按钮居中）。 */}
+                  <div className={css.headRow}>
                     <span className={css.groupLabel}>{t('snapshots.reportTitle')}</span>
+                    <span className={css.statusSpacer} />
+                    <Button size="sm" variant="primary" onClick={dismissReport}>
+                      {t('snapshots.reportDone')}
+                    </Button>
                   </div>
                   {reportLine(t('snapshots.restored'), state.report.restored, false)}
                   {reportLine(t('snapshots.removedPlugins'), state.report.removedPlugins, false)}
@@ -546,32 +542,34 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
           >
             <Modal.Header
               title={t('snapshots.planTitle')}
+              closeLabel={t('common.close')}
               onClose={() => { setPlanOpen(false) }}
               closeDisabled={state.running}
             />
             <Modal.Body scroll>
+              {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议）：用户要求排在计划预览之前，
+                  两部分之间用分割线隔开（无咨询报告时不画线，避免开头一条孤立横线）。 */}
+              {consultLoading && <Spinner label={api.t('consult.loading')} />}
+              {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
+              {(consultLoading || consultReport !== null) && <div className={css.sectionDivider} role="separator" />}
               <div className={css.hint}>{t('snapshots.selectHint')}</div>
               {state.planning && <Spinner label={t('common.loading')} />}
-              {state.plan !== null && summary() !== '' && <div className={css.hint}>{summary()}</div>}
               {state.plan !== null && state.plan.actions.length === 0 && (
                 <Empty>{t('snapshots.noActions')}</Empty>
               )}
               {state.plan !== null && state.plan.actions.length > 0 && (
-                <div className={css.planScroll}>
-                  <ul className={css.reportList}>
-                    {state.plan.actions.map((action, i) => (
-                      <li key={`plan-${i}`}>
-                        <span className={css.kindTag}>{actionKindLabel(t, action.kind)}</span>
-                        {' '}{action.description}
-                        {action.detail !== undefined && <span className={css.hint}>（{action.detail}）</span>}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                /* git 风格视图：摘要条 + 状态分组 + 点开文件看左右双栏逐行对照。
+                   渲染模型在 src/ui/restore-plan-view.ts 与 src/ui/diff-view.ts（纯函数），
+                   本组件只装配；key 用快照 id → 换快照时展开态与已加载 diff 全部重置。 */
+                <RestorePlanView
+                  key={state.selectedId ?? 'none'}
+                  api={api}
+                  t={t}
+                  snapshotId={state.selectedId ?? ''}
+                  plan={state.plan}
+                  changeSummary={state.changeSummary ?? undefined}
+                />
               )}
-              {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-              {consultLoading && <Spinner label={api.t('consult.loading')} />}
-              {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
               {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
             </Modal.Body>
             <Modal.Footer>
@@ -1282,6 +1280,7 @@ function BackupFilesCard({ api, t, refreshTick }: {
       >
         <Modal.Header
           title={t('backupFiles.inspect')}
+          closeLabel={t('common.close')}
           onClose={() => { setInspect(null) }}
         />
         <Modal.Body scroll>
@@ -1372,7 +1371,8 @@ function BackupInspectView({ result, t }: {
                   {group.items.map((item) => (
                     <li key={item.id}>
                       <span className={`${css.kindTag} ${kindTagClass(group.kind)}`}>{item.kind}</span>
-                      {' '}{item.adapter}: {item.description}
+                      {/* 差异查看的计划项文本由宿主拼装 → 渲染前过 redact（安全自查） */}
+                      {' '}{item.adapter}: {redact(item.description)}
                     </li>
                   ))}
                 </ul>

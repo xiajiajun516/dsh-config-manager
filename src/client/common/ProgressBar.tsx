@@ -13,6 +13,7 @@
  */
 import { computeProgressView } from './progress-view.ts'
 import type { RunProgress } from './progress-view.ts'
+import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 
 export interface ProgressBarProps {
@@ -30,20 +31,23 @@ export function ProgressBar({ event, active }: ProgressBarProps) {
 
   return (
     <div className={css.progressBlock}>
+      {/* G-03：进度里的阶段文案 / 分区名 / 当前项名都是**宿主经 /progress 下发的文本**
+          （当前来源是计划项 id 与常量消息，但规则统一：展示前一律 redact —— 不留例外，
+          否则以后换了数据源就成了静默缺口）。 */}
       <div className={css.progressMeta}>
-        <span className={css.progressLabel}>{view.label}</span>
+        <span className={css.progressLabel}>{redact(view.label)}</span>
         {view.sectionBadge !== null && (
           <span className={`${css.progressBadge} ${css.progressBadgeSection}`}>
-            {view.sectionBadge.label} · {view.sectionBadge.current}/{view.sectionBadge.total}
+            {redact(view.sectionBadge.label)} · {view.sectionBadge.current}/{view.sectionBadge.total}
           </span>
         )}
         {view.countBadge !== null && (
           <span className={`${css.progressBadge} ${css.progressBadgeCount}`}>
-            {view.countBadge.label !== '' ? `${view.countBadge.label} · ` : ''}
+            {view.countBadge.label !== '' ? `${redact(view.countBadge.label)} · ` : ''}
             {view.countBadge.current}/{view.countBadge.total}
           </span>
         )}
-        {view.detail !== null && <span className={css.progressDetail}>{view.detail}</span>}
+        {view.detail !== null && <span className={css.progressDetail}>{redact(view.detail)}</span>}
         {view.percent !== null && <span className={css.progressPercent}>{view.percent}%</span>}
       </div>
       <div className={css.progressTrack}>

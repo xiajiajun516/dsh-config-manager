@@ -19,8 +19,8 @@
 import { zhUiT, type UiT } from '../../ui/i18n.ts'
 import type { UploadResult } from '../../market/my-repo.ts'
 import type { MarketDownloadResult } from '../../market/types.ts'
-import type { ImportResult } from '../../core/types.ts'
-import type { MarketApprovals } from './market-view.ts'
+import type { ImportResult, ItemResolution } from '../../core/types.ts'
+import type { ImportSelectionState } from '../../ui/selection-model.ts'
 
 /* ---------------------------------------------------------------- 登录状态展示模型 */
 
@@ -226,15 +226,20 @@ export function initialWizard(mode: 'upload' | 'update'): MyWizardState {
 /* ---------------------------------------------------------------- 装回本地状态模型 */
 
 /**
- * 装回本地（下载 + 逐分区批准 + 执行导入）的运行时全量状态。
- * importing 为瞬态：不进入持久化切片（MyInstallSlice）；approvals（逐分区批准）是
- * 用户昂贵的人工决策，必须随切片保留（切 tab/刷新不丢）。
+ * 装回本地（下载 + 级联树勾选 + 执行导入）的运行时全量状态。
+ * importing 为瞬态：不进入持久化切片（MyInstallSlice）；selectionState / conflictResolutions
+ * 是用户昂贵的人工决策，必须随切片保留（切 tab/刷新不丢）。
  */
 export interface MyInstallState {
   itemId: string
   detail: MarketDownloadResult | null
-  /** 逐分区批准表（安全不变式 (c)：高风险分区默认不勾选） */
-  approvals: MarketApprovals
+  /**
+   * 条目级勾选（与导入页同一个 Selection；**绑 zipPath**：换条目后陈旧选择自动失效回落
+   * 默认全选，见 selection-model.effectiveImportSelection）。null = 尚未选择 → 默认全选。
+   */
+  selectionState: ImportSelectionState | null
+  /** 逐项冲突决策（keepCurrent / useImported；重算计划与刷新后重建决策列表都靠它） */
+  conflictResolutions: Record<string, ItemResolution>
   /** 瞬态：导入执行中（不持久化，恢复后恒 false） */
   importing: boolean
   importResult: ImportResult | null
@@ -243,23 +248,26 @@ export interface MyInstallState {
 
 /**
  * 装回本地的持久化切片 = 全量状态去掉瞬态（importing）。
- * 仅非敏感字段：detail.zipPath 为宿主受控临时文件路径、approvals 为布尔批准表、
- * importResult 为纯 JSON、error 为已 redact 文本 —— 与 run-store market 切片整体落盘纪律一致。
+ * 仅非敏感字段：detail.zipPath 为宿主受控临时文件路径、selectionState 为分区/单元 id 清单、
+ * conflictResolutions 为决策枚举、importResult 为纯 JSON、error 为已 redact 文本
+ * —— 与 run-store market 切片整体落盘纪律一致。
  */
 export interface MyInstallSlice {
   itemId: string
   detail: MarketDownloadResult | null
-  approvals: MarketApprovals
+  selectionState: ImportSelectionState | null
+  conflictResolutions: Record<string, ItemResolution>
   importResult: ImportResult | null
   error: string | null
 }
 
-/** 全量状态 → 持久化切片（忽略 importing；detail/approvals/importResult 直接引用纯 JSON/布尔表）。 */
+/** 全量状态 → 持久化切片（忽略 importing；其余字段直接引用纯 JSON）。 */
 export function toMyInstallSlice(s: MyInstallState): MyInstallSlice {
   return {
     itemId: s.itemId,
     detail: s.detail,
-    approvals: s.approvals,
+    selectionState: s.selectionState,
+    conflictResolutions: s.conflictResolutions,
     importResult: s.importResult,
     error: s.error,
   }
@@ -271,7 +279,8 @@ export function restoreMyInstall(slice: MyInstallSlice | null): MyInstallState |
   return {
     itemId: slice.itemId,
     detail: slice.detail,
-    approvals: slice.approvals,
+    selectionState: slice.selectionState,
+    conflictResolutions: slice.conflictResolutions,
     importing: false,
     importResult: slice.importResult,
     error: slice.error,

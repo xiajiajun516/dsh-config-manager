@@ -133,7 +133,7 @@ export interface ConsultReport {
 | export-zip | 复用 analyzer 的 ZIP 解析（manifest/checksums/sections），migratability 经 `analyzer.analyzeImport` + `createImportPlan` |
 | local-snapshot | `SnapshotStore.load(id)` + `readBlob` 重建 sections；migratability 经重建 ZIP 的 analyze |
 | remote-snapshot | `SyncEngine` 下载 → `snapshotToZip` → analyze |
-| profile | `ProfileManager` 读 profile.json sections；migratability 经 `analyzeSwitch` |
+| ~~profile~~ | **已移除（2026-09）**：原为 `ProfileManager` 读 profile.json sections；「配置档案」功能被替换为 DSH 自带 profile 管理（`$DSH_HOME/profiles/<name>`，只有 bundles/依赖/patch，没有可咨询的 config sections），故 `ConsultSourceType` 去掉 `profile`、`buildProfileSource` 删除，路由对未知类型返回 400。本表保留该行以记录历史契约。 |
 
 敏感暴露面：对 sections 数据跑 `scanAndRedact`（**固定 `highEntropy: true`**，保证确定性）统计 hits；**文件类分区（pluginFiles/sessions/self，sectionFiles 为 Uint8Array）经 `scanText` 并入 sensitiveHits**（scanAndRedact 对 Uint8Array 原样放行，需宿主对文件文本跑 scanText）。
 

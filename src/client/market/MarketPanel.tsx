@@ -8,8 +8,9 @@
  * - 条目列表：搜索框 + 类别过滤 + 缓存状态徽章；
  * - 条目详情：点「查看详情」→ POST /market/download（拉取 + §6 校验 + dry-run 预览）；
  *   - **供应链警示恒展示**（来源 URL + 非官方审核 + 下载时间；确认导入前必经）；
- *   - **逐分区批准**（安全不变式 (c)）：高风险分区默认不勾选、须逐项显式批准；
- *   - 「确认导入」→ 只把已批准分区子计划交给 executeImportPlan（confirm:true 安全阀 + 回滚）。
+ *   - **逐项内容选择**（安全不变式 (c) 的 2026-09 改版）：默认全选（含高风险分区），风险改由「就地警示 +
+ *     免责确认 + 导入前快照 + 导入后一键回滚」承担（此前的「高风险默认不勾」严格分层信任已移除）；
+ *   - 「确认导入」→ 只把已勾选单元组成的子计划交给 executeImportPlan（confirm:true 安全阀 + 回滚）。
  *
  * 全部渲染模型来自 ./market-view.ts 纯函数（node 单测覆盖），本组件只做装配；
  * 状态组件内自持（useState），同时经 toMarketStoreSlice() 镜像进模块级 runStore：
@@ -22,10 +23,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
-import type { ImportResult, ImportPlan } from '../../core/types.ts'
+import type { ImportResult, ItemResolution } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
-import { Modal } from '../common/Modal.tsx'
+import { effectiveImportSelection, type Selection } from '../../ui/selection-model.ts'
+import type { ImportSelectionState } from '../../ui/selection-model.ts'
+import { MarketImportReview } from './MarketImportReview.tsx'
 import { toast } from '../common/toast-store.ts'
 import { BUILTIN_MARKET_URL } from '../../market/builtin.ts'
 import type { MarketApi } from './market-api.ts'
@@ -37,11 +40,10 @@ import type {
   MarketBrowseResponse, MarketDownloadResult, MarketListItem, MarketStatusResponse,
 } from '../../market/types.ts'
 import {
-  approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCachedSections, collectCategories,
-  defaultApprovals, filterBySource, filterMarketBySection, filterMarketItems, marketDetailView,
+  collectCachedSections, collectCategories,
+  filterBySource, filterMarketBySection, filterMarketItems, marketDetailView,
   marketImpactSummary, marketListSummary, sortMarketItems, sourceBadgeKind,
 } from './market-view.ts'
-import type { MarketApprovals } from './market-view.ts'
 import type { MyInstallSlice, MyWizardSlice } from './my-configs-view.ts'
 import { readDisclaimerDismissed, writeDisclaimerDismissed } from './disclaimer.ts'
 import type { DisclaimerKey } from './disclaimer.ts'
@@ -59,6 +61,11 @@ export interface MarketPanelProps {
   /** GitHub 登录 API（「我的配置」登录卡复用 sync github device flow，同 token 槽） */
   syncApi: SyncApi
   t: TranslateNS<'config-manager-market'>
+  /**
+   * config-manager 字典（级联树 / 分区显示名 / 冲突决策列表 / 报告行）。
+   * 市场面板的 `api.t` 是 UiT（另一套键空间），不能顶替它。
+   */
+  cmT: TranslateNS<'config-manager'>
 }
 
 interface MarketUiState {
@@ -91,8 +98,13 @@ interface MarketUiState {
   downloadingId: string | null
   /** 条目详情（下载+校验+dry-run 预览，含 zipPath/plan 供确认导入）；非空时渲染详情视图 */
   detail: MarketDownloadResult | null
-  /** 逐分区批准表（安全不变式 (c)：高风险分区默认不勾选，须逐项显式批准） */
-  approvals: MarketApprovals
+  /**
+   * 条目级勾选（与导入页同一个 Selection；绑 zipPath 失效 —— 换条目回落默认全选）。
+   * 2026-09：原「逐分区批准表」approvals 已删除，市场通道与导入页同一套选择语义。
+   */
+  selectionState: ImportSelectionState | null
+  /** 逐项冲突决策（keepCurrent / useImported；重算计划与刷新后重建决策列表都靠它） */
+  conflictResolutions: Record<string, ItemResolution>
   /** 确认导入执行中 */
   importing: boolean
   /** 导入结果（executeImportPlan 返回） */
@@ -120,7 +132,8 @@ const initial: MarketUiState = {
   sortKey: 'default',
   downloadingId: null,
   detail: null,
-  approvals: {},
+  selectionState: null,
+  conflictResolutions: {},
   importing: false,
   importResult: null,
   error: null,
@@ -149,14 +162,16 @@ function initFromStore(): MarketUiState {
     sortKey: s.sortKey ?? 'default',
     items: s.items,
     detail: s.detail,
-    approvals: s.approvals,
+    // 旧持久化数据缺这两个字段（undefined）→ 兜底（null = 默认全选；{} = 无决策）
+    selectionState: s.selectionState ?? null,
+    conflictResolutions: s.conflictResolutions ?? {},
     importResult: s.importResult,
     error: s.error,
     loadError: s.loadError,
   }
 }
 
-export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: MarketPanelProps) {
+export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT }: MarketPanelProps) {
   const uiT = api.t // 展示层翻译器（zh/en）：供应链警示 / 状态行 / 徽章文本走 UiT（market.* 键）
   const [state, setState] = useState<MarketUiState>(initFromStore)
   /** 最新 state 镜像（commit/卸载 flush 读取，避免闭包过期值） */
@@ -176,24 +191,19 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   }
   const patch = (p: Partial<MarketUiState>): void => commit({ ...stateRef.current, ...p })
 
-  /* ---------------- 下载弹窗 + 免责前置（2026-08-21） ---------------- */
-  /** 下载详情弹窗开关（瞬态 UI，不持久化） */
+  /* ---------------- 条目向导页 + 免责前置（2026-08-21 引入，P2 2026-09 改为页面） ---------------- */
+  /** 是否在「条目导入向导页」（瞬态 UI，不持久化；P2 起它是**页面**，不再是弹窗） */
   const [downloadOpen, setDownloadOpen] = useState(false)
   /** 当前展示的免责弹窗操作（null = 无） */
   const [disclaimerKey, setDisclaimerKey] = useState<DisclaimerKey | null>(null)
   /** 免责弹窗「不再提示」勾选（每次打开重置） */
   const [dontAsk, setDontAsk] = useState(false)
-  /**
-   * K-07：未批准任何分区（表单内联校验，保留就地提示）。与 `state.error` 分流：
-   * `state.error` 只承载「动作失败」（改为全局 Toast），本提示紧邻导入按钮、修正勾选后立即消失。
-   */
-  const [noApprovalHint, setNoApprovalHint] = useState(false)
   /** localStorage（浏览器环境；免责「不再提示」跨会话持久化） */
   const storage: Pick<Storage, 'getItem' | 'setItem'> = window.localStorage
 
   /** 待下载条目（免责确认后取用；避免免责流程中闭包过期） */
   const pendingDownloadItem = useRef<MarketListItem | null>(null)
-  /** 点条目「查看详情」：未勾「不再提示」→ 先弹免责，确认后下载并打开详情弹窗 */
+  /** 点条目「查看详情」：未勾「不再提示」→ 先弹免责，确认后进入条目向导页 */
   const openDownload = (item: MarketListItem): void => {
     pendingDownloadItem.current = item
     if (readDisclaimerDismissed('download', storage)) {
@@ -204,7 +214,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
     setDontAsk(false)
     setDisclaimerKey('download')
   }
-  /** 免责弹窗确认：勾选则记录「不再提示」→ 关闭免责 → 打开下载详情弹窗并启动下载 */
+  /** 免责弹窗确认：勾选则记录「不再提示」→ 关闭免责 → 进入条目向导页并启动下载 */
   const confirmDownloadDisclaimer = (): void => {
     if (disclaimerKey !== 'download') return
     if (dontAsk) writeDisclaimerDismissed('download', storage)
@@ -213,11 +223,10 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
     setDownloadOpen(true)
     if (item !== null) void runDownload(item)
   }
-  /** 关闭下载详情弹窗：清 detail（弹窗即会话，关闭即放弃） */
+  /** 返回市场列表：清 detail（向导页即会话，返回即放弃） */
   const closeDownload = (): void => {
     setDownloadOpen(false)
-    patch({ detail: null, importResult: null, error: null, approvals: {} })
-    setNoApprovalHint(false)
+    patch({ detail: null, importResult: null, error: null, selectionState: null, conflictResolutions: {} })
   }
 
   /** 卸载时置挂载守卫 + 最后镜像一次（防止「最后一次改动后立即切 tab」时丢状态）。 */
@@ -298,59 +307,30 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
 
   /** 下载 + 校验单条目 → dry-run 详情预览（零写入）。自托管条目（带 repo）必须携带来源仓库。
    *  竞态守卫：下载期间用户可发起另一条目下载（downloadingId 已变），晚到响应一律丢弃，
-   *  防止「弹窗标题是 B、详情是 A」的串扰。 */
+   *  防止「页头标题是 B、详情是 A」的串扰。 */
   const runDownload = async (item: MarketListItem): Promise<void> => {
     patch({ downloadingId: item.id, error: null })
-    setNoApprovalHint(false) // 新会话：清掉上一次的「未批准」就地提示
     try {
       const detail = await api.download(item.id, item.repo)
       if (stateRef.current.downloadingId !== item.id) return
-      // 初始化逐分区批准表：低风险默认勾选，高风险默认不勾选（须逐项显式批准）
-      patch({ downloadingId: null, detail, approvals: defaultApprovals(detail.plan) })
+      // 选择态归零 = 默认全选（与导入页一致，含高风险分区）；换条目后陈旧选择自动失效
+      patch({ downloadingId: null, detail, selectionState: null, conflictResolutions: {} })
     } catch (err) {
       if (stateRef.current.downloadingId !== item.id) return
-      // R-21：下载失败 → 全局 Toast。error 仍落一次：详情弹窗以它判断「下载已失败」
-      // （detail 恒为 null），否则弹窗内会一直显示加载 Spinner。
+      // R-21：下载失败 → 全局 Toast。error 仍落一次：向导页以它判断「下载已失败」
+      // （detail 恒为 null），否则页内会一直显示加载 Spinner。
       patch({ downloadingId: null, error: err instanceof Error ? err.message : String(err) })
       toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
-  /** 确认导入：只导入用户显式批准的逐分区子集（subPlan 模式，与 sync-engine 同款） */
-  const runImport = async (): Promise<void> => {
-    const detail = state.detail
-    if (detail === null) return
-    const approvedPlan: ImportPlan = buildApprovedPlan(detail.plan, state.approvals)
-    if (approvedPlan.items.length === 0) {
-      // K-07：未批准任何分区属表单内联校验（非动作失败）→ 保留就地提示（紧邻导入按钮）
-      setNoApprovalHint(true)
-      return
-    }
-    setNoApprovalHint(false)
-    // plan 由 Host /market/download 的 dry-run 生成，确认时按已批准子集带回（安全不变式 (c)）
-    patch({ importing: true, error: null })
-    try {
-      const executed = await importApi.executeImportPlan(
-        detail.zipPath,
-        approvedPlan,
-        { confirm: true, rollbackOnError: true },
-      )
-      patch({ importing: false, importResult: executed })
-      // R-06：导入结果改全局 Toast（成功 ok / 失败 error），成功分支不再页内占位
-      const okCount = executed.executed.filter((e) => e.status === 'ok').length
-      const failedCount = executed.executed.filter((e) => e.status === 'failed').length
-      const restartSuffix = executed.needsRestart ? ` · ${t('import.needsRestart')}` : ''
-      if (executed.ok) {
-        toast.ok(t('import.done', { count: String(okCount) }) + restartSuffix)
-      } else {
-        toast.error(t('import.failed', { count: String(failedCount) }) + restartSuffix)
-      }
-    } catch (err) {
-      // R-21：导入执行失败 → 全局 Toast
-      patch({ importing: false, error: err instanceof Error ? err.message : String(err) })
-      toast.error(redact(err instanceof Error ? err.message : String(err)))
-    }
-  }
+  /**
+   * 编辑中的勾选（绑 zipPath：换条目后旧选择自动失效 → 默认全选）。
+   * 与导入向导同一套 effectiveImportSelection，不另写「陈旧选择」判定。
+   */
+  const pickerSelection: Selection | null = state.detail === null
+    ? null
+    : effectiveImportSelection(state.detail.plan, state.detail.zipPath, state.selectionState)
 
   // ---- 渲染模型装配（全部纯函数，node 已测） ----
   // 过滤链：搜索 + 类别 → 分区筛选（已缓存条目）→ 来源筛选（官方/个人）→ 排序
@@ -368,15 +348,14 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
   const categories = collectCategories(state.items)
   // P2-⑭：分区筛选取值（已缓存条目的分区并集）
   const sectionOptions = collectCachedSections(state.items)
-  const detailView = state.detail !== null
-    ? marketDetailView(state.detail, state.detail.repo ?? marketUrl, state.items.length > 0 || state.detail.status !== 'valid', uiT)
+  /** 详情（当前向导页会话的条目；null = 未下载/已返回列表）。局部常量让 JSX 里能安全收窄。 */
+  const detail = state.detail
+  const detailView = detail !== null
+    ? marketDetailView(detail, detail.repo ?? marketUrl, state.items.length > 0 || detail.status !== 'valid', uiT)
     : null
-  // 逐分区批准（安全不变式 (c)）：详情里列出 plan 分区，高风险默认不勾选、须逐项批准
-  const approvalList = state.detail !== null ? approvalRows(state.detail.plan, state.approvals) : []
-  const approvalSummary = state.detail !== null ? approvedAdapterSummary(state.detail.plan, state.approvals) : null
   // P1-⑥：装了这个会动你哪些东西（dry-run plan + analysis 摘要）
-  const impact = state.detail !== null
-    ? marketImpactSummary(state.detail.plan, state.detail.analysis)
+  const impact = detail !== null
+    ? marketImpactSummary(detail.plan, detail.analysis)
     : null
   const cacheLabel = (cacheState: MarketListItem['cacheState']): string => {
     if (cacheState === 'cached') return t('list.cacheCached')
@@ -416,6 +395,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           importApi={importApi}
           syncApi={syncApi}
           t={t}
+          cmT={cmT}
           myItems={state.myItems}
           myItemsError={state.myItemsError}
           onMyItemsChange={(items, error) => { patch({ myItems: items, myItemsError: error }) }}
@@ -428,6 +408,9 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
         />
       ) : (
         <>
+      {/* 列表视图的表头与市场操作卡：进入条目向导页时整块让位（P2 起向导是**页面**，
+          不再在列表之上叠弹窗） */}
+      {!downloadOpen && (<>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
 
       {/* 内置市场操作卡：保留面板标题；移除 URL / 官方徽章 / 名称 / 条目数 / 状态行等文字展示 */}
@@ -442,26 +425,26 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
           </Button>
         </div>
       </Card>
+      </>)}
 
       {/* R-21：动作失败（拉取最新 / 浏览 / 下载 / 导入）已全部改由全局 Toast 送达，
           此处的页面级 error Banner 与弹窗内那份是**同一字段的双渲染点**，会与 Toast 重复告知，
           故两处一并移除（state.error 仅保留作失败标记，见 runDownload / runImport）。 */}
 
-      {/* 条目详情弹窗（下载 + 校验 + dry-run 预览；点「查看详情」→ 免责 → 弹窗；
-          下载完成前 detail 为 null → 显示 loading；Radix Modal 统一 a11y） */}
-      <Modal
-        open={downloadOpen}
-        onClose={closeDownload}
-        title={t('detail.title')}
-        wide
-        busy={state.importing}
-      >
-        <Modal.Header
-          title={`${t('detail.title')}：${state.detail !== null ? state.detail.name : (state.downloadingId ?? '')}`}
-          onClose={closeDownload}
-          closeDisabled={state.importing}
-        />
-        <Modal.Body scroll>
+      {/* 条目导入向导页（P2 2026-09）：点「查看详情」→ 免责 → **进入本页**（不再是弹窗）。
+          与导入页同构：页头（标题 + 返回列表）→ 供应链警示（恒展示，硬约束）→
+          校验状态 / 错误 / 影响摘要 → 分步审阅（预览 → 选择 →（冲突）→ 确认 → 结果）。
+          下载完成前 detail 为 null → 页内显示 loading。 */}
+      {downloadOpen && (
+        <>
+          <div className={css.headRow}>
+            <SectionTitle
+              title={t('detail.title')}
+              subtitle={state.detail !== null ? state.detail.name : (state.downloadingId ?? '')}
+            />
+            <span className={css.statusSpacer} />
+            <Button disabled={state.importing} onClick={closeDownload}>{t('detail.back')}</Button>
+          </div>
           {/* R-21：失败详情走全局 Toast（原弹窗内 error Banner 移除）。
               下方 Spinner 以 state.error 为「失败标记」守卫：下载失败时 detail 恒为 null，
               若不守卫会一直旋转，让用户误以为仍在加载（与 MyConfigsView R-17 同款处理）。 */}
@@ -513,64 +496,43 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t }: Market
             </div>
           )}
 
-          {/* 逐分区批准（安全不变式 (c)：高风险分区默认不导入、须逐项显式批准） */}
-          {detailView.canImport && approvalList.length > 0 && (<>
-            <span className={css.groupLabel}>{t('detail.approval.title')}</span>
-            {approvalSummary !== null && approvalSummary.highRiskTotal > 0 && (
-              <Banner kind="warn">{t('detail.approval.highRiskHint')}</Banner>
-            )}
-            <div className={css.conflictList}>
-              {approvalList.map((row) => (
-                <label key={row.adapter} className={css.checkboxRow}>
-                  <input
-                    type="checkbox"
-                    checked={row.approved}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      patch({ approvals: { ...state.approvals, [row.adapter]: e.target.checked } })
-                    }}
-                  />
-                  <span>
-                    <span className={css.conflictId}>{row.adapter}</span>
-                    {' '}
-                    <Badge kind={row.highRisk ? 'warn' : 'info'}>
-                      {row.highRisk ? t('detail.approval.requiresApproval') : t('detail.approval.safe')}
-                    </Badge>
-                    {' '}
-                    <Badge kind="info">{row.label}</Badge>
-                  </span>
-                </label>
-              ))}
-            </div>
-            <div className={css.statRow}>
-              <Badge kind={approvalSummary !== null && approvalSummary.canImport ? 'ok' : 'warn'}>
-                {approvalSummary !== null
-                  ? t('detail.approval.count', { selected: String(approvalSummary.selected), total: String(approvalSummary.total) })
-                  : ''}
-              </Badge>
-            </div>
-          </>)}
-
-          {detailView.canImport ? (
-            <div className={css.actionRow}>
-              <Button
-                variant="primary"
-                disabled={state.importing || (approvalSummary !== null && !approvalSummary.canImport)}
-                onClick={() => { void runImport() }}
-              >
-                {state.importing ? <Spinner label={t('common.loading')} /> : t('detail.import')}
-              </Button>
-            </div>
+          {/* 导入审阅（2026-09）：级联树勾选 + 就地高风险警示 + 逐项摘要 + 冲突决策 + 导入
+              + 导入后一键回滚。与「我的配置→装回本地」共用同一个组件（R4d：消灭两套勾选语义）。 */}
+          {detailView.canImport && detail !== null && pickerSelection !== null ? (
+            <MarketImportReview
+              importApi={importApi}
+              t={t}
+              cmT={cmT}
+              zipPath={detail.zipPath}
+              plan={detail.plan}
+              selection={pickerSelection}
+              onSelectionChange={(next) => {
+                const zipPath = stateRef.current.detail?.zipPath
+                if (zipPath === undefined) return
+                patch({ selectionState: { zipPath, selection: next } })
+              }}
+              resolutions={state.conflictResolutions}
+              onResolutionsChange={(next) => { patch({ conflictResolutions: next }) }}
+              onPlanChange={(plan) => {
+                const detail = stateRef.current.detail
+                if (detail === null) return
+                patch({ detail: { ...detail, plan } })
+              }}
+              importing={state.importing}
+              onImportingChange={(value) => { patch({ importing: value }) }}
+              result={state.importResult}
+              onResultChange={(result) => { patch({ importResult: result }) }}
+              onErrorChange={(message) => { patch({ error: message }) }}
+              itemName={detail.name}
+            />
           ) : (
             <Banner kind="error">{t('detail.emptySections')}</Banner>
           )}
 
-          {/* K-07：未批准任何分区（表单内联校验，保留就地提示；紧邻导入按钮，修正勾选后立即消失） */}
-          {detailView.canImport && noApprovalHint && <Banner kind="error">{t('detail.noApproval')}</Banner>}
-
           {/* R-06：导入结果已由全局 Toast 送达（原 importResult Banner 移除） */}
           </>)}
-        </Modal.Body>
-      </Modal>
+        </>
+      )}
 
       {/* 条目列表（浏览） */}
       {!downloadOpen && (

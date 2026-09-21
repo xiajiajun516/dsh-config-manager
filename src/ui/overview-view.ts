@@ -262,41 +262,24 @@ export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
   return { kind: 'ok', textKey: 'health.ok' }
 }
 
-/* ---------------- 建议（未配置能力的温和引导） ---------------- */
-
-export type OverviewSuggestionId = 'schedule' | 'sync'
-
-export interface OverviewSuggestion {
-  id: OverviewSuggestionId
-  /** UI 渲染 key（`overview.suggest.<id>`）。 */
-  textKey: `suggest.${OverviewSuggestionId}`
-}
-
-/**
- * 建议：数据已加载且能力未启用时给出（最多两条，顺序固定：定时备份 → 远程同步）。
- * 已配置/已开启的能力不再提示；SAFE MODE 激活时不叠加建议（error 横幅已是更强信号）。
- */
-export function overviewSuggestions(inputs: OverviewInputs): OverviewSuggestion[] {
-  if (inputs.recoveryRequired === true) return []
-  const out: OverviewSuggestion[] = []
-  if (inputs.schedule !== null && !inputs.schedule.enabled) {
-    out.push({ id: 'schedule', textKey: 'suggest.schedule' })
-  }
-  if (inputs.sync !== null && !inputs.sync.configured) {
-    out.push({ id: 'sync', textKey: 'suggest.sync' })
-  }
-  return out
-}
-
 /* ---------------- 最近活动 ---------------- */
 
 /** 已知迁移操作 kind（与 core/migration-history.ts MIGRATION_KINDS 对齐；仅用于 key 归一）。 */
 const KNOWN_KINDS: ReadonlySet<string> = new Set([
   'import', 'restore', 'rollback',
-  'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
+  'profile-create', 'profile-select', 'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
   'sync-apply', 'autosync', 'recovery',
-  'backup', 'snapshot-delete', 'snapshot-prune',
+  'backup', 'backup-manual', 'snapshot-delete', 'snapshot-prune',
 ])
+
+/**
+ * kind → 概览活动行用的文案键（未知 kind 归一为 `overview.kind.other`）。
+ * 独立成函数以便守卫测试枚举全部 MigrationKind 断言字典齐备（新增 kind 忘记配文案时，
+ * 界面会直接显示裸 key —— 这正是 backup-manual 引入时的风险点）。
+ */
+export function overviewKindKey(kind: string): string {
+  return KNOWN_KINDS.has(kind) ? `overview.kind.${kind}` : 'overview.kind.other'
+}
 
 export interface OverviewActivityItem {
   at: string
@@ -322,7 +305,7 @@ export function overviewActivity(
   return sorted.slice(0, limit).map((e) => ({
     at: e.at,
     badge: e.result === 'success' ? 'ok' : e.result === 'failed' ? 'error' : 'warn',
-    kindKey: KNOWN_KINDS.has(e.kind) ? `overview.kind.${e.kind}` : 'overview.kind.other',
+    kindKey: overviewKindKey(e.kind),
     summary: e.summary,
   }))
 }

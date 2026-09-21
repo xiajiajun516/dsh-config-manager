@@ -20,6 +20,33 @@ export interface ExportOptions {
   includeSecrets: boolean;
   /** 仅导出指定分区（缺省 = 全部默认包含分区） */
   only?: SectionId[];
+  /**
+   * 条目级选择（Phase 1）：分区 → 允许导出的「最小可拆单元」id 白名单。
+   *
+   * 语义（三分，必须严格区分）：
+   *  - 键**缺省** → 该分区全量导出（向后兼容：旧调用方零改动，行为与改造前完全一致）；
+   *  - 键存在且为**空数组** → 该分区整体不导出（等价于未勾选该分区；Exporter 在选定阶段即剔除，
+   *    不会产出空载荷分区，manifest.sections 相应为 false）；
+   *  - 键存在且非空 → 只导出白名单内的单元，其余单元被剔除。
+   *
+   * 单元 id 由 ConfigAdapter.listUnits() 声明（规则见 adapters/units.ts）——
+   * 未实现 listUnits 的分区不可细分，传入白名单一律忽略（保持全量）。
+   */
+  includeItems?: Partial<Record<SectionId, string[]>>;
+  /**
+   * 会话分区按数量筛选（issue #39 Feature 1；**键缺省 = 现有行为**，旧调用方零改动）。
+   *
+   * 语义（档位与宿主界面一致）：
+   *  - 键存在且 `limit` 缺省 / 非整数 → 显式选中 sessions 分区，但不施加数量限制（全带）；
+   *  - `limit === 0` → 整个 sessions 分区不带（等价于未勾选）；
+   *  - `limit < 0` → 全带（并显式选中该分区）；
+   *  - `limit > 0` → 只带「最新 N 个会话」。
+   *
+   * 「最新」= 该会话目录下**会话日志文件**的最新 mtime（不用目录 mtime：增量写入时不可靠）。
+   * 单位是**会话目录**（`<projectKey>/<sessionId>`）——同一会话的新旧日志必须一起走；
+   * 文件名判据与排序见 `core/session-select.ts`（不写死文件名）。
+   */
+  sessions?: { limit?: number };
   /** 导出文件路径（缺省自动生成 dsh-config-<date>.zip） */
   outPath?: string;
   /** 导出备注（P0-④：host 写入 exports/.backup-notes.json，随 self 分区迁移；非敏感） */
@@ -34,6 +61,36 @@ export interface ExportSection<T = unknown> {
   files?: { relativePath: string; data: Uint8Array }[];
   counts: Record<string, number>;
   warnings: string[];
+}
+
+/**
+ * 分区内「可单独勾选的最小单元」（Phase 1 条目级导出选择）。
+ *
+ * 单元是**语义整体、不可再拆**：一个技能目录 bundle、一个会话目录、一个插件包。
+ * 由 ConfigAdapter.listUnits() 声明；id 命名空间与导入侧 PlanItem.id 一致，
+ * 保证「导出时勾选的单元」将来能直接映射到「导入时排除的条目」。
+ */
+export interface ExportUnit {
+  /** 全局唯一 id（`<section>:<单元路径>` / `plugin:<包名>` / `workspace:<id>` …） */
+  id: string;
+  /** 展示名（包名 / 目录名 / 工作区标题） */
+  label: string;
+  /** 副标题补充（版本 / 绝对路径等自行格式化的信息；**不要放 UI 文案模板**，文案由 i18n 负责） */
+  detail?: string;
+  /** 成员文件数（文件类单元用；UI 据此渲染「N 个文件」） */
+  fileCount?: number;
+  /** 单元体积（字节；文件类 = 成员文件合计） */
+  sizeBytes: number;
+  /** 原子组：必须与本单元同进同出的其它单元 id（如 pnpm-workspace.yaml ↔ patch 文件） */
+  lockedWith?: string[];
+  /**
+   * 分组名（同分区内的二级分组；如 sessions 按工作区聚合——用户要求「按工作区分类对话」）。
+   *
+   * 语义：**纯展示层分组**，不参与勾选/导出契约（契约只认 id）。缺省 = 该单元按现有方式
+   * 平铺渲染（skills / pluginFiles 等分区行为逐像素不变）。分组名是宿主直出的原始字符串
+   * （工作区标题 / 项目键），UI 渲染前同样要过 redact()。
+   */
+  group?: string;
 }
 
 export interface ValidationResult {
@@ -120,6 +177,13 @@ export interface FileSystemFacade {
    * （issue #37）。可选：未实现时调用方回退到 listRecursive（行为与旧版一致）。
    */
   listRecursiveDetailed?(dir: string): Promise<RecursiveListing>;
+  /**
+   * 文件最后修改时间（毫秒时间戳；文件不存在 / 读不到 → null）。
+   *
+   * 可选：未实现时，依赖它的能力（sessions 的「最新 N 个」）必须**退回安全行为**
+   * （全量导出 + 告警），绝不假定 0——把未知当成「最旧」会静默丢掉最近的会话。
+   */
+  mtimeMs?(relPath: string): Promise<number | null>;
   mkdir(dir: string): Promise<void>;
 }
 
@@ -187,6 +251,27 @@ export interface SnapshotTarget { adapter: SectionId; ref: string; }
 
 export interface PlanItem {
   id: string;                 // 稳定项 id（plugin:pkg / prompt:name / workspace:<id> …）
+  /**
+   * 「最小可拆单元」id（Phase 2 条目级导入选择，可选）。
+   *
+   * 为什么需要它：导入选择器不能按裸计划项勾选 —— skills/sessions 的计划项是**逐文件**的
+   * （`skills:bar/SKILL.md`、`skills:bar/ref.md`），而用户心智里是一个技能/一次会话。
+   * 由适配器用与导出侧 `listUnits()` **同一套** unitIdOf 规则声明单元 id，两端因此自动对齐
+   * （排除 `skills:bar` 即排除其全部成员项），UI 无需猜前缀。
+   *
+   * 缺省 = 本项自身即一个单元（插件包、工作区记录、patch 行等）。
+   */
+  unitId?: string;
+  /**
+   * 单元的**展示名**（可选；宿主在计划生成后填充，如 sessions 的「会话标题」）。
+   *
+   * 为什么由宿主填：会话标题在 DSH 自己的存储里（`$DSH_HOME/storages/session_projcache.json`），
+   * 引擎看不到也不该猜。缺省 = UI 退回用单元 id（会话目录名）显示 —— 用户实测「导入页只显示
+   * 文件名」就是这个缺省态。纯展示字段：不参与勾选/执行契约。
+   */
+  label?: string;
+  /** 单元的**二级分组名**（可选，同 `/export-preview` 的 `ExportUnit.group` 语义；纯展示）。 */
+  group?: string;
   kind: PlanItemKind;
   adapter: SectionId;
   description: string;
@@ -237,6 +322,19 @@ export interface ImportAnalysis {
   dependencyIssues: { item: string; dependency: string }[];
   /** 备份是否加密（manifest.security.encrypted）：加密备份的凭据必须用解密密码恢复 */
   encrypted: boolean;
+  /**
+   * 凭据可恢复性摘要（issue #39 Feature 2；**可选字段**，旧调用方零改动）。
+   *
+   * 目的：让宿主不必自己解开 `security/secrets.enc` 再解析 `.credentials.yaml` 才能
+   * 判断「包里的凭据能不能自动回填」（那等于把 `.credentials.yaml` 的布局知识复制到
+   * 每个宿主，正是 issue #39 的坑）。**只回传 ref 名，永远不回传任何值。**
+   *
+   *  - `inArchive`：归档声明携带真实凭据值（`manifest.security.containsSecrets`）；
+   *  - `refs`：本次分析**实际解出**的凭据 ref 名（宿主未提供解密结果时为 `[]`；
+   *    即「包含密码」这一前提不具备时，只能给出 `inArchive=true` 而不能给出名字）；
+   *  - `satisfied`：`refs` 中**本机已配置**的子集（无需回填、也无需人工补录）。
+   */
+  credentials?: { inArchive: boolean; refs: string[]; satisfied: string[] };
 }
 
 export interface ImportDecisions {
@@ -283,6 +381,12 @@ export interface ImportResult {
   snapshotId: string | null;
   /** F4：本次导入被删除墓碑过滤掉的条目（缺省/空 = 无过滤；UI 据此提示用户） */
   skippedTombstoned?: SkippedTombstone[];
+  /**
+   * issue #39：本次导入**从加密归档内解出并回填本机**的凭据条数（字段只增不改）。
+   * 缺省 = 未经归档恢复（普通备份 / 用户手工补录），此时不出现该字段。
+   * 只回传条数，绝不回传 ref 名或值——结果会进 run 账并回传浏览器。
+   */
+  credentialsRestored?: number;
 }
 
 /* ---------------- 导入上下文（传给 adapter.analyzeImport / applyItem） ---------------- */
@@ -485,8 +589,20 @@ export interface ConfigAdapter<TSection = unknown> {
   readonly defaultIncluded: boolean;
   readonly portability: Portability;
 
-  /** 读取当前 DSH 该类别配置 → 导出数据（无秘密值） */
+  /** 读取当前 DSH 该类别配置 → 导出数据（无秘密值）。
+   *  实现方应尊重 `options.includeItems?.[this.id]`（条目级选择，见 adapters/units.ts）。 */
   export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<TSection>>;
+
+  /**
+   * 可选（Phase 1）：把本分区的导出产物拆成「可单独勾选的最小单元」清单。
+   *
+   * 契约：
+   *  - **纯函数、零 I/O** —— 输入即 export() 已产出的 ExportSection，因此预览端点可以
+   *    零额外读盘地枚举（不需要第二次遍历目录/读文件）；
+   *  - 与 export(includeItems) **自洽**：本方法产出的 id 就是 includeItems 接受的 id；
+   *  - 未实现 = 本分区不可细分（UI 只给整体开关，传入白名单一律忽略）。
+   */
+  listUnits?(section: ExportSection<TSection>): ExportUnit[];
 
   /** 分析导入数据与目标 DSH 的差异 → 计划项（纯计算，零写入） */
   analyzeImport(data: TSection, ctx: ImportContext): Promise<PlanItem[]>;

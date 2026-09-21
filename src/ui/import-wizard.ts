@@ -26,6 +26,23 @@ export interface ImportWizardOptions {
   defaultRollbackOnError?: boolean;
 }
 
+/**
+ * 凭据补录：把**单个 ref 的输入**合并进当前提交集合（UI-06）。
+ *
+ * 为什么必须是「在最新集合上合并」而不是「以组件本地 state 整体替换」：补录页是可以
+ * 来回切换的中间步骤（「上一步」→「下一步」），组件会随阶段切换卸载重挂。若以组件本地
+ * state 为准会出现两种错误行为 —— ① 回到该页时输入框全空，但上一次的值仍在提交集合里
+ * （看到的值 ≠ 提交的值）；② 在空表上编辑任一字段会把其它 ref 已填的值从提交集合里丢掉。
+ * 统一以「最新的提交集合」为唯一事实：**看到什么就提交什么**。
+ */
+export function mergeSecretInput(
+  current: Record<string, string>,
+  ref: string,
+  value: string,
+): Record<string, string> {
+  return { ...current, [ref]: value }
+}
+
 export class ImportWizard {
   private readonly port: ImportPort;
   private readonly onProgress: ProgressListener | undefined;
@@ -207,7 +224,16 @@ export class ImportWizard {
    * 步骤 10-14：确认导入 → 快照 → 执行 → 校验 → 结果。
    * 用最终决策重建计划（与预览一致），显式传 rollbackOnError。
    */
-  async execute(opts: { confirm: boolean; rollbackOnError?: boolean }): Promise<ImportResult> {
+  async execute(opts: {
+    confirm: boolean;
+    rollbackOnError?: boolean;
+    /**
+     * 计划裁剪钩子（Phase 2 内容选择）：在 createImportPlan 之后、执行之前套用。
+     * 用钩子而不是让向导依赖选择模型 —— 向导保持「不认识 UI 选择语义」，且
+     * **Dry Run 与真实执行走同一套裁剪**（两边不一致是最容易出鬼故事的地方）。
+     */
+    planFilter?: (plan: ImportPlan) => ImportPlan;
+  }): Promise<ImportResult> {
     if (this.zipPath === null || this.analysis === null) {
       throw new Error('尚未完成分析，请先选择备份文件');
     }
@@ -222,6 +248,7 @@ export class ImportWizard {
     try {
       // 用最终决策重建计划（与预览逻辑一致，保证 Dry Run 与真实导入一致）
       this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions);
+      if (opts.planFilter !== undefined) this.plan = opts.planFilter(this.plan);
       // executeImportPlan 是一个单次 HTTP 请求：Host 端串行跑完全部计划项
       // （插件安装为 npm 串行，耗时最长）。请求期间没有任何中间进度事件可
       // 回传——旧实现把 restoring-settings / restoring-plugins /

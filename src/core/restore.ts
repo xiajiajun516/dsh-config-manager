@@ -167,21 +167,21 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-/** 越界防御：abs 必须等于 homeDir 或在 homeDir 之内 */
-function isWithinHome(homeDir: string, abs: string): boolean {
+/** 越界防御：abs 必须等于 homeDir 或在 homeDir 之内（导出供 snapshot-diff 复用同一护栏） */
+export function isWithinHome(homeDir: string, abs: string): boolean {
   const root = path.resolve(homeDir);
   return abs === root || abs.startsWith(root + path.sep);
 }
 
 /** homeDir 内绝对路径（越界抛错） */
-function homeAbs(homeDir: string, relPath: string, msg: MsgFunc): string {
+export function homeAbs(homeDir: string, relPath: string, msg: MsgFunc): string {
   const abs = path.resolve(homeDir, relPath);
   if (!isWithinHome(homeDir, abs)) throw new Error(msg('restore.pathEscape', { path: relPath }));
   return abs;
 }
 
 /** 快照目录内 blob 绝对路径（防 snapshot.json 里伪造 ../ 越界读） */
-function blobAbs(snapshotDir: string, blobPath: string, msg: MsgFunc): string {
+export function blobAbs(snapshotDir: string, blobPath: string, msg: MsgFunc): string {
   const abs = path.resolve(snapshotDir, blobPath);
   if (!isWithinHome(snapshotDir, abs)) throw new Error(msg('restore.blobPathEscape', { path: blobPath }));
   return abs;

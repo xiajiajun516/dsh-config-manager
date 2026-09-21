@@ -9,6 +9,338 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+## [0.1.62] - 2026-09-21
+
+> 本版主题是**内容级选择 + 可读性 + 安全收口**：「只能按分区整块勾选」的时代结束——导出、导入、
+> 市场三条通道现在共用同一套「分区 → 最小可拆单元」选择内核；恢复计划有了 git 风格的逐行对照；
+> 档案页从「插件自建的配置快照」换成**直接管理 DSH 自带 profile**（**行为替换，含破坏性**，见下）；
+> 并修复 issue **#39**（凭据 `refs:` 口径 / 会话限额 / 凭据可恢复性 Feature 1–3）与 **#43**（「立即备份」空转却假报成功）。
+> 未做项与有损点照旧登记在 `docs/spec/known-gaps.md`（本轮新增 **G-18**）。
+
+### ⚠️ 破坏性 / 不兼容（升级前必读）
+
+- **档案页语义整体替换（用户数据 + API 双重破坏）**：旧的「保存当前配置为档案 / 切换预览 / 执行切换 /
+  导入 profile.json」四处交互与 `/profiles/save|analyze-switch|execute-switch|import` 四条端点一起删除，
+  `ProfileManager` / `SwitchPreview` / `src/ui/profiles-view.ts` 全部移除，改为**直接管理 DSH 自带 profile**
+  （`$DSH_HOME/profiles/<name>`）。此前保存在 `$DSH_HOME/dsh-config-manager/profiles/<name>/profile.json` 的
+  插件自有档案**不再被列出或切换，也没有自动迁移代码**（文件仍在磁盘，需人工处理）。
+- **「切换档案」不再即时生效**：DSH 无法在运行中更换 profile（bundle 层启动时解析，且 0.1.5-rc.1 /
+  0.1.5-rc.2 / 0.1.6-alpha.2 均无 profile 管理路由），因此现在只写「下次启动用哪个」标记并给出
+  `dsh --profile <name>` 重启命令；该标记是机器本地状态，不参与备份。
+- **迁移前咨询不再接受 `type=profile`**：可迁移源只剩 export-zip / local-snapshot / remote-snapshot，
+  宿主对 `type=profile` 返回 400；`buildProfileSource` / `ProfileSourceInput` 已删除（调用方需自行更新）。
+- **市场通道取消「高风险分区默认不勾 + 逐分区批准」的严格分层信任默认**：改为与导入页同一套级联树
+  （默认全选，含 plugins / mcp / agentPresets / agentInstructions / sessions / pluginFiles），风险改由
+  「就地高风险警示 + 免责确认 + 导入前快照 + 导入后一键回滚」承担。相关免责文案与两份 README 已同步改写。
+- **导出页 / 同步页的「快速导出 vs 自定义」二选一模式被移除**：勾选集合成为唯一事实（`ExportMode` 类型删除，
+  `export.mode.*` 文案删除）；同步页改为「选择同步分区」弹窗，落盘 mode 恒为 advanced。
+- **同步加解密密码从「仅内存」改为持久化到本机 DSH 凭据库**（安全策略变更，见 `SECURITY.md` 登记为唯一
+  持久化例外）：值仍不写同步文件 / 响应 / 日志 / 备份，浏览器只拿得到 configured 布尔。
+
+### 🐞 issue #39 —— 凭据 `refs:` 口径 / 会话限额 / 凭据可恢复性（Feature 1–3）
+
+- **问题（报告人实测）**：`.credentials.yaml` 的 DSH v1 布局把凭据值放在顶层 `refs:` 之下，而插件两处解析
+  （宿主 `tryDecryptCredentials` 与同步 `credentialsMapFromYaml`）只认「顶层字符串项」的预发布扁平布局，
+  `refs` 是对象 → **整段被过滤成空 Map** → 备份包里明明带着凭据原文，导入却把全部 ref 送进「待人工重填」。
+- **修复（唯一解析口径）**：新增 `src/security/credentials-yaml.ts` 的 `collectCredentialRefs()`——v1 `refs:` 块
+  与预发布扁平布局**都认**、同名以 `refs` 为准，`records` / `payload` 等嵌套结构一律忽略（会话秘密不是凭据 ref，
+  混进来只会污染补录清单）；零依赖，宿主与同步引擎共用同一份实现，杜绝「同一文件格式两处口径漂移」。
+- **修复（误导提示收窄）**：`includeSecrets=true` 的导出按设计**不**镜像明文 vault，跨机 vault 必然为空，
+  于是「凭据文件不在本机 vault（需人工重填）」必然出现——现在值已随包内密文回填时改用新消息
+  `import.vaultCredentialsFromArchive` 如实说明，**只有确实还缺 ref 时才**保留「需人工重填」。
+- **Feature 1：会话按数量筛选** `ExportOptions.sessions: { limit }` —— `0` = 不带该分区 / 负数 = 全带 /
+  正数 = 最新 N 个 / 键缺省 = 现有行为。单位是**会话目录**（同一会话的 `session.jsonl.zstd` 与
+  `session.v3.jsonl.zstd` 必须一起走），文件名判据不写死（`session.lock` 不算会话、新格式不能整批漏掉），
+  排序用**会话日志文件的最新 mtime**；宿主 `FileSystemFacade` 未实现 `mtimeMs()` 或时间全读不到时
+  **退回全量 + 告警**，绝不把「时间未知」当成最旧。实测收益：全量会话约 370 MB → 最新 10 个约 7.5 MB。
+- **Feature 2：`/analyze` 返回 `credentials: { inArchive, refs, satisfied }`** —— 宿主不必自己解
+  `security/secrets.enc` 再解析 YAML（否则上面那个坑每个宿主都要重踩一遍）；**只回传 ref 名，永不回传值**。
+- **Feature 3：`/execute` 结果带 `credentialsRestored`**（从加密归档内解出并回填本机的条数；字段只增不改，
+  为 0 时省略以保持旧响应逐字节不变）。
+
+### 🐞 issue #43 —— 「立即备份」不再空转、更不再假报成功
+
+- **问题（报告人实测）**：概览页蓝色主按钮「立即备份」在**定时备份未启用**时（`enabled: false` 是缺省值，
+  也是「从未配置过定时备份」用户的必然状态）宿主直接返回 `{status:'skipped', skipReason:'disabled'}`、
+  一个文件都不产出，而客户端**不看 `run.status`**、无条件 `toast.ok('备份完成')`。
+- **修复（手动不再空转）**：`runOnce(opts?: { manual?: boolean })` —— 手动路径（`/backup-schedule/run` 改为
+  `runOnce({ manual: true })`）**绕过 `enabled` 开关**：用户点这个按钮的语义就是「现在就给我做一份」，
+  与自动调度开没开无关。其余守卫（RunRegistry 防重、环境锁、SAFE MODE、保留策略）一条未放宽；写回配置时
+  仍用原 `enabled` 值 —— **绝不偷偷替用户打开自动调度**（已用测试钉住）。
+- **修复（不再假报成功）**：新增纯函数 `backupRunOutcome()`，提示通道一律由 `run.status` 决定：
+  `success` → 成功；`skipped` → 按原因分档提示「已跳过：定时备份未启用（没有生成任何备份文件）/ 上一次备份
+  仍在进行中 / 另一项任务正在执行（防重）/ 环境锁被占用」；`failed` → 「备份失败：{原因}」（过 `redact()`）。
+  未知 status 一律落 `error`（fail-safe，绝不宣称成功）。
+- **来源词不冒充**：手动触发的日志与迁移历史用「手动备份完成/跳过/失败」，自动路径仍是「定时备份…」；
+  迁移史新增 kind `backup-manual`，于是历史面板与概览「最近活动」能把两者分开（旧条目无法追溯，见「已知限制」）。
+- **顺带修正文案**：`overview.quick.backupTitle` 由「全量快照，随时可回滚」改为「立即生成一份完整备份文件
+  （不受定时备份开关影响；在快照页查看 / 还原）」（原文案说的是快照，实际产物是 `exports/*.zip` 备份文件）。
+
+### 🐞 issue #35 收尾 —— 补丁声明与补丁文件成为**原子单元**
+
+- 条目级选择引入后，`pnpm-workspace.yaml` 的 `patchedDependencies` 声明与 `patches/**` 补丁文件被声明为
+  **互相 `lockedWith` 的原子组**，导出侧再用「全或无」兜底：取消其中任一个整组一起取消，**绝不产出
+  「有声明、没文件」的半套**（目标机 pnpm 会因此拒绝一切 `add`）。
+- 顺带把 `pnpm-workspace` ↔ patch 文件的配对知识下沉到 `src/adapters/units.ts`，供后续新增依赖组复用。
+
+### 🧩 条目级内容选择（Phase 1：导出 / 导入 / 市场共用一套内核）
+
+- 导出可对**分区内的最小可拆单元**逐个勾选，不再只能整块勾选分区：新增可选 `ConfigAdapter.listUnits()`
+  （纯函数、输入即 `export()` 产物，预览端点因此**零额外读盘**）。
+- 单元粒度按「拆开就失效」的知识定义（`src/adapters/units.ts`）：文件类分区默认 = 首个路径段
+  （一个技能目录 bundle / 一次会话 = 一个可勾选整体）；`pluginFiles` / `self` 覆写为逐文件；
+  `sessions` = `<projectKey>/<sessionId>` 会话目录；`plugins` = `plugin:<包名>` / `patch:<行id>` /
+  `plugins:pnpm-workspace` / `plugins:patch:<rel>`；`workspaces` = `workspace:<记录id>`。
+- 白名单三分语义（`ExportOptions.includeItems`）：键缺省 = 该分区全量（向后兼容）；键存在且**空数组**
+  = 该分区整体剔除（在选定阶段剔除，不产出空载荷分区，`manifest.sections` 如实为 false）；非空 = 只带
+  白名单单元。未实现 `listUnits` 的分区（settings / ui / providers / mcp / prompts / credentialsStatus）
+  不可细分，传入白名单一律忽略 = 保持全量。
+- 过滤发生在 `readFile` **之前**：未勾选的文件不读盘，取消勾选大分区（会话）后导出耗时明显下降。
+- 唯一的选择内核：`src/ui/selection-model.ts` 的 `Selection { sections, excluded }` 稀疏表示 + 三态 /
+  原子组 / 请求换算；导出页、导入向导、市场通道**共用**同一套语义（消灭「同样的勾选框不一样的行为」）。
+- 唯一的内容勾选组件：`src/client/common/ContentPicker.tsx`（两级树 + 搜索 + 全选/全不选 + 部分选中徽章 +
+  分组级联 + 捆绑联动 + 渐进披露 + `unitBadge`）；与只读的 `SectionComposition` 明确分工，禁止合并。
+- 新端点 / 字段（只增不改）：`/export-preview` 响应新增可选 `sections[].items`（`ExportUnit[]`）与
+  `failedSections`；`/export` 请求新增条目白名单 `includeItems`；`/restore` 响应新增可选 `changeSummary`。
+
+### 📤 导出页
+
+- 工具栏重排：删除「快速导出 / 自定义导出」分段与「预览将导出内容」按钮，改为「开始导出」（primary）+
+  「选择要导出的内容」；模式提示改为一行说明。
+- 内容选择器：「显示全部（共 N 条）」渐进披露上限由 100 提到 1000（真实 631 项会话库展开即全量）；
+  单元名中段省略 + 悬停全文；按工作区分组且默认全折叠，展开一个分组只展开那一棵子树。
+- 「设备相关 / 敏感」徽章 + 勾选到这类分区时页面与弹窗内**就地警示**（非阻断，列出分区名）；
+  一键「全选」不再静默勾上 sessions / pluginFiles / credentialsStatus；「全不选」时明确提示并禁用导出。
+- 页尾新增「本次将导出」构成卡（恒常渲染、内部滚动，合计与选择器 footer 同源）。
+- 修复：分区清单读取失败不再显示误导性的「已选 0/0」——逐分区标「读取中…」/「读取失败 · 将整体导出」，
+  存在未读分区时合计改口径为「已读取 …（含未读取分区，实际不少于该值）」，并把宿主精确清单与
+  「请求了但没回来」的推断取并集。
+- 修复：恢复「安全选项」「文件名与备注」两个分组标题；文件名规则与备注说明常驻显示（先规则后报错）；
+  弹窗几何稳定（内容区固定高度 + 公告位恒定高度 + 底部动作移入固定底栏，不再随内容跳动 / 关闭按钮滚走）；
+  双列字段间距由 5 处内联 style 改为 CSS 类。
+- 修复：导出结果报告改为结构化清单（中文分区名 + 中文计数单位「18 个命名空间」），长行折行不再被裁、
+  置于限高内滚，徽章全部走 i18n。
+
+### 📥 导入向导
+
+- 预览步拆成两页：第 1 页「迁移前咨询」（只读结论 + 「下一步：选择要导入的内容」，无法生成报告时给
+  中性提示且不阻断），第 2 页是内容选择面板；换一份备份自动回到咨询页。
+- 条目级内容勾选（与导出一套内核）：不勾选的条目**不导入、也不进快照**；确认页显示「将导入 N 个分区 ·
+  M 个条目」与「本次有 N 项被你取消勾选」。
+- 修复（UI-05）：**空选择守卫** —— 预览步勾选被清空时提示并禁用「下一步」，确认页「确认导入」同样禁用
+  （此前「什么都没勾」会被执行成一次成功导入）。
+- 修复（UI-06）：密钥补录页改为受控表单 —— 返回该页仍显示上次输入的值，编辑一个字段不再丢其它 ref 的值；
+  且只为仍会导入的凭据索要密钥（被取消的插件不再索要）。
+- 修复：确认页提示语跟随「失败时整体回滚」勾选状态（取消勾选后不再承诺回滚）；冲突列表文案走 i18n
+  （「当前 / 备份」「错误」「无冲突项」）且 `description` / `detail` 渲染前过 `redact()`；预览统计补上
+  此前漏渲染的「提示词」维度；兼容性页分区清单显示中文名；路径映射横幅由 warn 改 info（留空跳过是合法的）；
+  结果页显式传 `t`（英文界面不再恒中文）、底部按钮由原始动作 id「done」改为「完成 / 查看失败项 / 查看详情」。
+- `PlanItem` 新增可选 `unitId` / `label` / `group`（纯展示与对齐字段，`id`/`kind`/`target` 不变）：
+  文件类 adapter 在 `analyzeImport` 用与导出 `listUnits` **同一套** `unitIdOf` 声明单元，导入侧于是也能按
+  「一个技能 bundle / 一次会话」勾选，而不是逐个文件。
+
+### 📸 快照恢复 —— git 风格的恢复计划预览
+
+- 恢复计划预览改为三级视图：① 摘要条（将被还原 / 新增 / **将被删除** / 卸载插件 / 需人工处理 / 无动作 +
+  行数合计 `+X −Y`）② 固定顺序分组（变更 → 删除 → 插件 → 人工 → 无动作，「无动作」默认折叠）
+  ③ 点文件行展开**左右双栏逐行对照**（左 = 当前磁盘、右 = 快照内容，成对修改左红右绿，
+  块头 `@@ -a,b +c,d @@`）。
+- 新内核：零依赖行级 diff `src/utils/line-diff.ts`（CRLF 归一 + 公共前后缀裁剪 + 超预算降级，保证耗时确定）
+  + `src/core/snapshot-diff.ts`（两级读取上限：列表阶段单侧 ≤256 KB / 总预算 8 MB / 最多 80 文件，
+  详情阶段单侧 ≤1 MB / 6000 行 / 上下文 3 行；超限如实标 budget / truncated，而不是拖慢预览）。
+- 边界态都有说明：二进制 / 文件过大 / 不可读 / 快照内缺该文件 / 路径越界；两侧一致时显示
+  「两侧内容一致，无逐行差异」；行号列宽按最宽行号分四档；hunks 由 `POST /snapshots/file-diff`
+  **点开才懒加载**。
+- 安全：路径一律经恢复引擎的越界护栏（`isWithinHome` / `homeAbs` / `blobAbs` 本轮改为导出以复用**同一份**
+  判据），越界拒绝；返回值不含凭据值且 UI 渲染前再过 `redact()`；单项失败只标 unreadable / skip，
+  绝不因一个文件读不到就让整个预览失败。
+- 修复：恢复报告新增显式「完成」按钮关闭回执（此前执行完恢复就停在报告上找不到返回，且报告随
+  sessionStorage 落盘会「复活」）；迁移前咨询卡移到计划预览**之前**并加分割线。
+- 澄清：删除动作本身在 0.1.61 就有（`hostFileRemove` / `fileRemove` 未改动），本版增强的是
+  「预览里能看到它并逐行对比」；恢复计划的生成逻辑未变。
+
+### 🔄 同步
+
+- **历史会话成为显式可选同步分区**（`OPT_IN_SYNC_SECTIONS`）：推送必须**既勾选 sessions 又在请求体带**
+  `sessions.{limit}`，缺一即按非 portable 跳过并**显式告警**；拉取只在用户驱动的 pull / 一键同步上放行
+  （引擎 `includeOptInSections`），自动同步与 Agent 工具恒不带 —— **会话绝不悄悄下行**。
+- 会话同步上限：缺省 5、`0` = 勾了但不带、非整数回退 5、>10000 钳制（`sync-selection.json` schema v2
+  只增字段，旧文件缺省读回 5）。
+- **密码持久化**：加密 / 解密密码保存到本机 DSH 凭据库独立槽位
+  （`DSH_CONFIG_MANAGER_SYNC_{ENCRYPT,DECRYPT}_PASSWORD_<GIT|WEBDAV>`）；输入框失焦即写（两框一致才写）、
+  留空即沿用、取消勾选「加密备份」即删除已存密码、解密密码另有 danger 语义的「删除已保存密码」；
+  请求体密码优先于已存密码、`clear*` 优先于写入；`GET /sync/status` 只回 configured 布尔。
+- 行为变更：删除「同步模式」分段，改为「选择同步分区」弹窗 —— 勾选集合就是同步范围、改动即时生效并
+  持久化，设备相关分区带 warn 徽章，勾选为空时禁止推送。
+- 修复：同步确认视图的 `description` / `detail` / `diff` 渲染前过 `redact()`，变更明细由 `<pre>` 改普通块
+  （长 JSON 不再横向溢出被裁）；全部弹窗补 `closeLabel`（关闭按钮 aria-label 走字典）。
+- 内部：拉取侧「哪些分区进临时 ZIP」的三处口径收敛为 `pullSectionIds()`。
+
+### 🛒 市场
+
+- 条目详情从「列表上的弹窗」改为**页面级分步向导**（预览 → 选择内容 →（有冲突才有）冲突 → 确认 → 结果），
+  步骤条复用 Stepper，页头 = 标题 + 「返回列表」；起因是实测「3 分区 / 61 个计划项」导致三重滚动。
+- 选择步改用与导入页**同一套**级联树（搜索 / 全选 / 二级分组 / 树上直接标「将改动 / 已一致 / 不导入」），
+  筛选 Segmented（全部 / 将改动 / 高风险 / 未勾选，带计数，只影响渲染）。
+- 已勾选的高风险分区**就地警示**（列出分区名与后果）；无勾选时禁止导入；逐项摘要降维为**分区级小结**
+  （一行一分区：已选 n/m + 将改动/已一致 + 高风险徽章），不再把 61 行铺满。
+- 冲突逐项决策（保留本机 / 使用导入）内联在向导里，决策变化由宿主 `createImportPlan` 重算计划
+  （不在前端改 `planItem.kind`），未决策一律按「保留本机」不覆盖。
+- 导入后新增**「回滚到导入前快照」**入口（danger + 二次确认 + 恢复/卸载/失败/人工计数报告）；
+  没有可用快照时如实说明「无法回滚」，不给假入口。
+- 「我的配置 → 装回本地」同样改为页面级向导，与「浏览条目详情」**共用同一个** `MarketImportReview`
+  （消灭两套勾选语义）；上传 / 更新向导仍是弹窗。
+- 勾选与冲突决策进 runStore 市场切片（绑 `zipPath`，换条目自动回落默认全选），切 tab / 刷新不丢；
+  步骤与筛选是纯瞬态。
+- 安全默认变更见上文「破坏性」；免责文案与两份 README 的「逐分区批准」措辞已同步改写为「逐项内容选择」。
+  上传侧的 8 道校验、供应链警示恒展示（`needsReview` 恒 true）、`patchFiles` / `localTarballs` 双端拒收
+  均**未改动**（后者是 0.1.60 的既有防线）。
+
+### 🗂️ 档案（Profiles = DSH 自带 profile 管理）
+
+- 新语义：档案 = `$DSH_HOME/profiles/<name>`（`dsh --profile <name>` 启动的那份）。列表每行显示形态徽章
+  （Web / Headless / 自定义）、「当前运行」/「下次启动」徽章、损坏徽章（`package.json` 不可解析 / patch 过大）、
+  计数摘要（N 个层 · patch M 条 · 依赖 K · 已装未装 node_modules · patch 热生效或仅启动应用 · 更新时间）；
+  排序为当前运行 → 待切换 → 按名字。
+- 详情弹窗（点整行打开）：bundle 层清单（带序号 = patch 应用顺序）、依赖清单、目录、patch 条目数与体积、
+  更新时间，以及 `package.json` 与 `cordis.patch.yml` 原文（渲染前 `redact()`；patch 过大则不加载原文并说明）。
+- 新建：名字 + 起步模板下拉（base / web / headless / sdk / sdk-minimal / acp，并显示模板含哪些 bundle 层），
+  名称实时校验（空 / 超 64 字 / 非法字符 / DSH 保留名分别提示）；脚手架三文件与官方 `initProfile`
+  **逐字节一致**。
+- 重命名：目录级 rename + 同步修正 `package.json` 的 name 与「下次启动」标记；**运行中的档案拒绝改名**。
+- 删除：**物理删除整个目录（含 node_modules）**，不可恢复；目录内 junction 只删链接本身；目标是当前运行
+  档案时需额外勾选确认；删除会一并清掉指向它的「下次启动」标记。
+- 「下次启动」卡四态：未设置（规则说明）/ 就是当前（绿 Banner「无需重启」）/ 指向的档案已不存在
+  （warn + 清除）/ 待切换（等宽 `dsh --profile` 命令 + 复制 + 取消）。
+- 修复：重命名成功给 Toast 回执；错误码（同名已存在 / 不存在 / 不能作用于当前档案 / 名字非法 / 保留名 /
+  未知模板）本地化；加载失败横幅过 `redact()`。
+
+### 📋 迁移历史
+
+- 新增两类审计条目文案：「档案新建」「设置下次启动档案」；「备份」细分为**「定时备份」与「手动备份」**
+  （issue #43，含 en 镜像与筛选下拉）。
+- 行为变更：每条记录改**两行布局** —— 元信息行（时间 · 结果 · 分区）+ 摘要独占一行（此前摘要与元信息
+  抢同一行被挤成碎片）。
+- 修复：时间由原始 ISO 串（含 `T`/`Z`/毫秒）改为本地 `YYYY-MM-DD HH:mm`，悬停显示完整本地时间
+  （复用同步历史的时间格式化，两个历史视图观感一致）；分区列最多显示 3 个、其余折叠为 `+N`；
+  筛选下拉「最近」项改为与另两个同构的「最近: 全部」。
+
+### 🧪 迁移前咨询（migration consult）
+
+- 结论改为**由证据决定**而非由分数决定：新增硬阻断白名单（只有「引擎真的不会继续」才算：无 manifest /
+  schema 不支持 / checksum 不符 / Zip Slip / dry-run 失败），修复用户实测的「健康评分 89 却建议阻止执行」
+  自相矛盾；有硬阻断时把分数压进 critical 区间。
+- 冲突降级为「需处理」：致命冲突由 error 降为 warning 并封顶扣分，文案改为「有 N 处冲突需要你决定保留
+  哪一边（下一步可逐个选择；默认不覆盖本机）」；悬空凭据引用由「每个 ref 各刷一行」聚合成一条并封顶扣分，
+  且永不判 critical。
+- 报告新增 `blockerCount` / `attentionCount`，咨询卡在结论徽章旁恒显示「N 项硬阻断（不处理无法安全导入）」
+  「N 项需处理」，触发项列表里硬阻断排最前。
+
+### 🎨 UI 审计（26 条）与全局一致性
+
+- 按 `docs/design/ui-audit-2026-09-20.md` 的清单（0 blocker / 9 high / 11 medium / 6 low，共 26 条）逐条修复，
+  本版绝大多数 UI 改动都能回溯到 `UI-01` … `UI-26` 编号。用户可见的代表项：
+  - 长文本不再被裁：报告 / 错误明细的 `<pre>` 补 `white-space: pre-wrap` + `overflow-wrap: anywhere`
+    并统一置于 `.reportScroll` **限高内滚**（UI-01，此前长行横向溢出且被父容器裁掉）；同步变更明细、
+    导入结果报告同源修复。
+  - **分区显示名单一映射**（15 个分区的中文名，`common/section-labels.ts`）：总览构成、导出选择器、
+    导入选择器、兼容性页、同步分区弹窗、导出报告从此只有一种叫法（此前同一个分区有英文 label /
+    裸 id / 中文三套）；`Record<SectionId, …>` 全量覆盖 ⇒ 新增分区忘配文案会**编译失败**。
+  - **页签溢出提示**（UI-19）：英文界面 7 个页签 + 2 个文字按钮在 564px 画布溢出且滚动条被刻意隐藏时，
+    在真实溢出侧画渐隐遮罩；放得下时不画。
+  - `ErrorBanner` 改为随 `error` 属性重新解析（此前同屏连续两次失败会一直显示第一次的标题 / 原因 / 建议），
+    并把 `t` 传入错误映射 —— 英文界面的错误标题与建议动作不再恒中文。
+  - 走 `Modal.Header` 的弹窗：标题不再双重内边距；`closeLabel` 改为**编译器强制必填**，关闭按钮
+    aria-label 一律走字典（英文界面屏幕阅读器不再读中文「关闭」）。
+  - `ProgressBar` 的阶段文案 / 分区名 / 当前项名渲染前过 `redact()`；`ConflictList` 与 `SyncConfirmView`
+    的裸渲染修复（实测 MCP `env` / `headers` 明文凭据会原样回传浏览器），并新增**按渲染点**的源码级守卫
+    测试（去掉任一处 `redact()` 即红灯）。
+- i18n 收口：删除一批死键（`export.mode.*`、`export.preview*`、`snapshots.hint|viewPlan|kind.*|summary`、
+  `error.title|hint`、`about.diag.bundles`、nav 遗留键等），zh / en 同步；7 套字典最终态键数
+  506 / 278 / 291 / 51 / 138 / 104 / 198，**zh 与 en 键集合完全相等**（对照表与排查姿势见 `DEVELOPERS.md`）。
+
+### 🔇 日志降噪
+
+- 新增 `parseLogLevel()`：宿主入口**默认日志级别由 info 降为 warn**（大小写与空白不敏感，非法值 / 缺省 → warn）。
+  启动 `dsh web` 后控制台只留 warn / error —— 挂载横幅、调度器跳过、导出与备份完成、保留策略清理等常规
+  info 不再刷屏。
+- 排查时设 `DSH_CONFIG_MANAGER_LOG_LEVEL=info`（或 `debug`）即恢复逐条输出；级别只在入口解析一次，
+  勿在调用点再加 `if (debug)` 分支。
+
+### 📄 文档 / 契约 / 测试
+
+- `docs/spec/known-gaps.md`：新增 **G-18**（`.credentials.yaml` 的 `refs:` 块未被识别 → 导入后仍要求人工
+  重填，✅ 已修复，写明修复位置、验证方式与**未覆盖项**：`workspaces.applyItem` 整条覆盖会丢本机独有键、
+  `POST /sessions/group` 仍未做）；G-17 验证方式扩到 8 例、有损点表述改为「凭据字符串值」。
+- `docs/spec/headless-consumption.md`：新增 **§4.5**，把 `sessions.{limit}` 档位语义、
+  `analyzeImport(zip, { decryptedCredentials })` → `analysis.credentials`、`credentialsRestored` 写成
+  对外契约（只增不改），并列出对应 HTTP 面（`/export` 的 `sessions`、`/analyze` 的 `decryptPassword`、
+  `/execute` 的 `credentialsRestored`）。bundle-format / manifest schema / compat-matrix **未改**。
+- `docs/design/ui-audit-2026-09-20.md`（新增）：UI-01 … UI-26 逐条审计（现象 + 行号级证据 + 期望 +
+  涉及文件 + 三批修复建议 + 「本清单不需要新增第三方依赖」结论 + 复核命令）。
+- `docs/design/2026-09-20-session-log-compression.md`（新增，只读实测）：会话日志是多帧 zstd 容器
+  （4.4 MB 日志 2642 帧）——保留帧边界重压几乎无收益，合并单流才有；全量 379.8 MB → 210 MB（≈1.79×）、
+  跨会话 solid 4.3×、单个长会话 18–20×；结论「只带最新 N 个」性价比最高且不需格式改动
+  （默认改走 `sessions.limit` 属行为变更，**本版未改默认**）。
+- `DESIGN.md` +338 行：把内容选择器、git 风格恢复预览、市场条目导入审阅、档案页、导出页新结构、
+  报告与错误折行规则、计划文本与分区名脱敏规则、两套字典分工与死键纪律写成规范；`DEVELOPERS.md`：
+  新增「从 AGENTS.md 下移的细则」（页面落位 / 状态管理 / i18n 七套字典对照表 / Missing Design Rule /
+  第三方库准入 7 步）与两条技术限制（DSH 无法运行中切 profile、无 `DSH_PROFILE` 环境变量）。
+- `README.md` / `README.zh-CN.md`：Profiles 小节整段重写（= DSH 自带 profile + 无法运行中切换）、
+  同步密钥段改写为「密码存本机凭据库、留空即沿用、取消勾选即删除」、首屏备份内容清单移除 Profiles 并加注
+  「DSH profile 不随备份迁移」、新增 FAQ「`dsh web` 控制台为什么安静了」、市场小节措辞与「逐项内容选择」对齐。
+- `SECURITY.md`：「加密备份」→「加密备份 / 导出」，并新增「同步通道密码（唯一持久化例外）」条目（中英同步）。
+- 测试：全量 **2152** 项通过（新增 units / sessions / session-meta / session-select / snapshot-diff /
+  line-diff / logger / selection-model / restore-plan-view / diff-view / market-import / nav-overflow /
+  dsh-profiles-view / section-labels / plan-text-redaction / credentials-yaml / credentials-refs-import /
+  export-item-selection 等套件），`typecheck` / `build` / build 后 `bundle-selfcontained` 护栏全绿。
+
+### ⛔ 本版已知限制（如实登记）
+
+- **旧「配置档案」数据不会被迁移**：`$DSH_HOME/dsh-config-manager/profiles/<name>/profile.json` 仍在磁盘
+  但不再被列出 / 切换，仓库内也没有迁移代码 —— 需要时请手动转换为 DSH profile。
+- **旧迁移历史条目的来源无法追溯**：修复前写入的备份条目 kind 恒为 `backup`，因此仍显示「定时备份」，
+  即使当时是手动点的；只有本版之后的新条目才准确。
+- 「默认走最新 N 个会话」**未实现**：导出默认行为仍是「sessions 分区默认不含」（结论见设计文档）。
+- `workspaces` 导入仍以备份记录**整条覆盖**、会丢本机独有键（`archivedSessionIds` 等）；导入写记录前也
+  不建缺失目录。二者与 `POST /sessions/group` 一起留在 `known-gaps` G-18「未覆盖」。
+
+### 🎯 亮点 / Highlights (zh)
+
+- 🧩 **终于能按「内容」勾选了**：导出 / 导入 / 市场共用一套「分区 → 最小可拆单元」级联树，技能目录、
+  插件补丁组、单次会话都是整体单元；未勾选的文件连读都不读。
+- 🎬 **恢复计划变成 git 风格对照**：将被删除 / 还原 / 新增一目了然，逐文件左右双栏看改了哪几行
+  （hunk 点开才加载）。
+- 🗂️ **档案页重做**：直接列表 / 新建 / 重命名 / 物理删除 `$DSH_HOME/profiles/<name>`，并告诉你
+  「下次启动用哪个」+ 重启命令（**旧插件自有档案不迁移，见破坏性小节**）。
+- 🛒 **市场装回本地走完整向导**：预览 → 选择 → 冲突 → 确认 → 结果，导入后可一键回滚到导入前快照。
+- 🔐 **凭据终于认得 DSH 的 `refs:` 布局**：加密备份里的凭据不再被误判为「包里没有」，误导性的
+  「需人工重填」也只在真的还缺时出现。
+- ⏰ **「立即备份」真的备份**：不再空转、不再假报成功，与定时备份开关解耦；手动与定时在历史里分开记。
+- 🔇 **控制台安静了**：默认只留 warn / error，`DSH_CONFIG_MANAGER_LOG_LEVEL=info` 一键恢复。
+- 🎨 **26 条 UI 审计逐条修完**：长报告折行 + 限高内滚、分区名统一、页签溢出提示、错误横幅不再失真、
+  关闭按钮无障碍标签本地化。
+
+### Highlights (en)
+
+- 🧩 **Content-level selection**: export / import / market now share one section→smallest-unit cascade tree;
+  skill bundles, patch groups and single sessions are atomic units, and unchecked files are never even read.
+- 🎬 **git-style restore preview**: see what will be restored / added / **deleted**, then open any file for a
+  side-by-side line diff (hunks are lazy-loaded).
+- 🗂️ **Profiles page rewritten** to manage DSH's own `$DSH_HOME/profiles/<name>` (list / create / rename /
+  physical delete, plus "which profile to launch next" with the restart command). **Old plugin-owned profiles
+  are not migrated** — see the breaking-changes section.
+- 🛒 **Marketplace install is now a full wizard**: preview → select → conflicts → confirm → result, with
+  one-click rollback to the pre-import snapshot.
+- 🔐 **Credentials finally understand DSH's `refs:` layout**: encrypted backups no longer look "empty", and the
+  misleading "re-enter manually" hint appears only when a ref is genuinely missing.
+- ⏰ **"Back up now" really backs up**: no more silent no-op and no more false success toast; it is decoupled
+  from the schedule switch, and manual vs scheduled runs are recorded separately.
+- 🔇 **Quieter console**: warn/error by default; `DSH_CONFIG_MANAGER_LOG_LEVEL=info` restores verbose output.
+- 🎨 **All 26 UI-audit items fixed**: wrapping + capped scroll for long reports, one canonical section-name map,
+  tab overflow hints, accurate error banners, localized close-button labels.
+
+
 ## [0.1.61] - 2026-09-18
 
 > 单主题版本：修复 **issue #38** —— 同步页「导出密钥」此前**不会导出任何密钥**。

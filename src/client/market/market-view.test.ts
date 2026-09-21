@@ -16,9 +16,9 @@ import type { MarketItemDetail, MarketListItem } from '../../market/types.ts'
 import { zhUiT } from '../../ui/i18n.ts'
 import type { ImportPlan, PlanItem } from '../../core/types.ts'
 import {
-  approvalRows, approvedAdapterSummary, buildApprovedPlan, collectCachedSections, collectCategories,
-  computeItemBadge, defaultApprovals, filterBySource, filterMarketBySection, filterMarketItems,
-  formatMarketTime, isHighRiskAdapter, marketDetailView, marketImpactSummary, marketListSummary,
+  collectCachedSections, collectCategories,
+  computeItemBadge, filterBySource, filterMarketBySection, filterMarketItems,
+  formatMarketTime, marketDetailView, marketImpactSummary, marketListSummary,
   marketStatusText, marketWarningsLines, marketItemWarnings, needsReview, sortMarketItems,
   sourceBadgeKind, isThirdPartyItem, toMarketListItem,
 } from './market-view.ts'
@@ -286,7 +286,7 @@ test('market-view: formatMarketTime 合法 ISO → 本地可读；非法/空 →
 })
 
 /* ----------------------------------------------------------------------------
- * 逐分区批准（安全不变式 (c)：高风险分区默认不导入、须逐项显式批准）
+ * 逐项内容选择（安全不变式 (c) 2026-09 改版：默认全选、高风险分区就地警示；旧「默认不勾」已移除）
  * -------------------------------------------------------------------------- */
 
 function planItem(adapter: string, kind: PlanItem['kind'] = 'Create'): PlanItem {
@@ -311,74 +311,13 @@ function samplePlan(): ImportPlan {
   }
 }
 
-test('market-view: isHighRiskAdapter 覆盖插件/AGENTS.md/预设/会话/MCP/插件文件,其余低风险', () => {
-  for (const a of ['pluginFiles', 'agentInstructions', 'agentPresets', 'sessions', 'mcp', 'plugins']) {
-    assert.equal(isHighRiskAdapter(a as never), true, `${a} 应为高风险`)
-  }
-  assert.equal(isHighRiskAdapter('settings'), false)
-  assert.equal(isHighRiskAdapter('skills'), false)
-  assert.equal(isHighRiskAdapter('providers'), false)
-})
-
-test('market-view: defaultApprovals 低风险默认勾选、高风险默认不勾选（严格分层信任）', () => {
-  const approvals = defaultApprovals(samplePlan())
-  assert.equal(approvals['settings'], true)
-  assert.equal(approvals['skills'], true)
-  assert.equal(approvals['plugins'], false, 'plugins/Install 默认不导入')
-  assert.equal(approvals['agentInstructions'], false, 'AGENTS.md 默认不导入')
-  assert.equal(approvals['pluginFiles'], false)
-  assert.equal(approvals['mcp'], false)
-})
-
-test('market-view: buildApprovedPlan 仅保留已批准分区（subPlan），并重算 needsRestart/estimatedActions', () => {
-  const approvals = { settings: true, skills: true, plugins: false, agentInstructions: false, pluginFiles: false, mcp: false }
-  const sub = buildApprovedPlan(samplePlan(), approvals)
-  const adapters = sub.items.map((i) => i.adapter)
-  assert.deepEqual([...adapters].sort(), ['settings', 'skills'].sort())
-  assert.equal(sub.needsRestart, false, '已批准项均为低风险 → 不再需要重启')
-  assert.deepEqual(sub.estimatedActions, { settings: 1, skills: 1 })
-  assert.equal(sub.globalStrategy, 'merge')
-  assert.deepEqual(sub.missingSecrets, [])
-  assert.deepEqual(sub.pathMappings, [])
-})
-
-test('market-view: buildApprovedPlan 批准含 Install 的高风险分区 → needsRestart=true', () => {
-  const approvals = { settings: false, skills: true, plugins: true, agentInstructions: false, pluginFiles: false, mcp: false }
-  const sub = buildApprovedPlan(samplePlan(), approvals)
-  assert.ok(sub.items.some((i) => i.adapter === 'plugins'))
-  assert.equal(sub.needsRestart, true, '批准 plugins/Install → needsRestart')
-})
-
-test('market-view: buildApprovedPlan 全未批准 → 空 items（无可导入）', () => {
-  const sub = buildApprovedPlan(samplePlan(), {})
-  assert.equal(sub.items.length, 0)
-})
-
-test('market-view: approvedAdapterSummary 统计 selected/canImport/高风险计数', () => {
-  const approvals = { settings: true, skills: true, plugins: false, agentInstructions: false, pluginFiles: false, mcp: false }
-  const s = approvedAdapterSummary(samplePlan(), approvals)
-  assert.equal(s.total, 6)
-  assert.equal(s.selected, 2)
-  assert.equal(s.canImport, true)
-  assert.equal(s.highRiskTotal, 4) // plugins/agentInstructions/pluginFiles/mcp
-  assert.equal(s.highRiskSelected, 0)
-  const none = approvedAdapterSummary(samplePlan(), {})
-  assert.equal(none.canImport, false)
-})
-
-test('market-view: approvalRows 逐分区行（adapter + 项数 + 风险 + 勾选态）', () => {
-  const approvals = { settings: true, plugins: false }
-  const rows = approvalRows(samplePlan(), approvals)
-  const settings = rows.find((r) => r.adapter === 'settings')
-  assert.ok(settings)
-  assert.equal(settings.highRisk, false)
-  assert.equal(settings.approved, true)
-  assert.equal(settings.itemCount, 1)
-  const pluginsR = rows.find((r) => r.adapter === 'plugins')
-  assert.ok(pluginsR)
-  assert.equal(pluginsR.highRisk, true)
-  assert.equal(pluginsR.approved, false)
-})
+/**
+ * 2026-09：市场通道与导入页共用同一套 Selection 语义（默认全选、全选含高风险分区），
+ * 原「逐分区批准」实现（`defaultApprovals` / `buildApprovedPlan` / `approvedAdapterSummary` /
+ * `approvalRows`）已删除，其行为等价测试同步移除；选择语义本身在
+ * `src/ui/selection-model.test.ts`，市场特有的逐项摘要/高风险清单在
+ * `src/ui/market-import.test.ts`。
+ */
 
 test('market-view: filterMarketItems 搜索命中 name/author/description 与 categories（P2-⑭）', () => {
   const items = [

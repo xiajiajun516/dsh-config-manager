@@ -45,6 +45,33 @@ export interface ExportExtraOptions {
   note?: string
 }
 
+/**
+ * 清单读取失败的**分区**（UI-07）。
+ *
+ * 宿主 /export-preview 只回一个 `sectionsFailed` 数字，拿不到分区 id，所以按
+ * 「请求了但没回来」自行判定 —— 与引擎「清单缺失的分区按整体导出处理」的语义一致。
+ * 展示层据此逐行标注「读取失败 · 将整体导出」并抑制误导性的「已选 0/0」；
+ * 请求**整体失败**（宿主异常 / 断网）时调用方直接把本批在途分区全部计入失败。
+ * 纯函数（node 可测），React 壳不自己写判定。
+ */
+export function failedSectionsFromResponse(
+  requested: readonly SectionId[],
+  returned: readonly SectionId[],
+): SectionId[] {
+  const got = new Set(returned)
+  return requested.filter((s) => !got.has(s))
+}
+
+/** 勾选校验结果（结构化；文案由展示层 i18n 渲染，见 validateSelection）。 */
+export interface SelectionValidation {
+  /** 全部为已知分区 */
+  valid: boolean;
+  /** 未知 / 不存在的分区 id */
+  unknown: SectionId[];
+  /** 勾选中属于「设备相关」的分区（跨设备使用时可能不适用；非阻断） */
+  deviceSpecific: SectionId[];
+}
+
 export interface ExportFlowOptions {
   port: ExportPort;
   /** 分类目录（缺省用内置目录，与 adapters 的 displayName/defaultIncluded/portability 对齐） */
@@ -108,34 +135,41 @@ export class ExportFlow {
     }));
   }
 
-  /** 校验 Custom 勾选：未知分区 = invalid；deviceSpecific 分区给提示警告（仍可继续） */
-  validateSelection(selection: readonly SectionId[]): { valid: boolean; warnings: string[] } {
-    const warnings: string[] = [];
-    let valid = true;
+  /**
+   * 校验勾选：未知分区 = invalid；deviceSpecific 分区需就地警示（非阻断，仍可继续）。
+   *
+   * 返回**结构化结果**（不是拼好的字符串）：文案必须由展示层走 i18n 字典渲染 ——
+   * 原实现把中文警告文本硬编码在纯逻辑层，且生产代码无人调用（审计 UI-09），
+   * 而同一批文案在 `ui/i18n.ts` 里另有一份（`export.unknownSection` /
+   * `export.deviceSpecific`），属于「同一句话两处维护」。展示层按分区 id 自己起名
+   * （`common/section-labels.ts`）即可，这里只说「哪些分区有问题」。
+   */
+  validateSelection(selection: readonly SectionId[]): SelectionValidation {
     const known = new Set(this.categories.map((c) => c.id));
-    for (const id of selection) {
-      if (!known.has(id)) {
-        warnings.push(`未知分区：${id}`);
-        valid = false;
-      }
-    }
-    for (const c of this.categories) {
-      if (selection.includes(c.id) && c.portability === 'deviceSpecific') {
-        warnings.push(`${c.label} 为设备相关数据（${c.portability}），跨设备导入时可能不适用`);
-      }
-    }
-    return { valid, warnings };
+    const unknown = selection.filter((id) => !known.has(id));
+    const deviceSpecific = this.categories
+      .filter((c) => c.portability === 'deviceSpecific' && selection.includes(c.id))
+      .map((c) => c.id);
+    return { valid: unknown.length === 0, unknown, deviceSpecific };
   }
 
   /** 执行导出：发进度事件 → 调 core → 渲染 §21 报告 */
   async run(
-    mode: 'quick' | 'custom',
     selection: readonly SectionId[],
-    opts: { includeSecrets?: boolean; fileName?: string; note?: string } = {},
+    opts: {
+      includeSecrets?: boolean
+      fileName?: string
+      note?: string
+      /**
+       * 条目级选择（Phase 1）：只在部分勾选的分区上下发（由 selection-model 的
+       * buildExportRequest 决定）。缺省不下发 = 这些分区全量导出。
+       */
+      includeItems?: Partial<Record<SectionId, string[]>>
+    } = {},
   ): Promise<ExportRunResult> {
     const tracker = new ProgressTracker(EXPORT_STAGES, this.onProgress);
-    const only = mode === 'quick' ? this.quickSelection() : [...selection];
-    if (mode === 'quick' && opts.includeSecrets === undefined) opts = { ...opts, includeSecrets: false };
+    // 只有一个导出流程：导出的就是调用方传进来的这个集合（内容选择器的唯一出口）。
+    const only = [...selection];
 
     // 导出工作全部发生在 port.export() 的单次请求内，客户端无法逐阶段上报真实进度。
     // 旧实现把整串阶段一次性 emit，请求期间 UI 会静止在假的「Calculating checksums... 86%」，
@@ -145,6 +179,8 @@ export class ExportFlow {
     const result = await this.port.export({
       includeSecrets: opts.includeSecrets ?? false,
       only,
+      // 条目级白名单（稀疏：只有部分勾选的分区才会出现）
+      ...(opts.includeItems !== undefined ? { includeItems: opts.includeItems } : {}),
       // P0-④：透传自定义文件名/备注（非敏感；host 做安全校验与持久化）
       ...(opts.fileName !== undefined && opts.fileName !== '' ? { outPath: opts.fileName } : {}),
       ...(opts.note !== undefined ? { note: opts.note } : {}),

@@ -57,9 +57,16 @@ export class Importer {
     this.analyzer = new Analyzer(opts);
   }
 
-  /** 步骤 1-8 + 分析：只读，返回 ImportAnalysis（含兼容性/路径/依赖/秘密摘要） */
-  analyzeImport(zipPath: string): Promise<ImportAnalysis> {
-    return this.analyzer.analyzeImport(zipPath);
+  /**
+   * 步骤 1-8 + 分析：只读，返回 ImportAnalysis（含兼容性/路径/依赖/秘密摘要）。
+   * `opts.decryptedCredentials`（仅内存）= 宿主已用备份密码解开的凭据，用于填充
+   * `analysis.credentials`（issue #39 Feature 2）；不传 = refs 为空数组。
+   */
+  analyzeImport(
+    zipPath: string,
+    opts: { decryptedCredentials?: Map<string, string> } = {},
+  ): Promise<ImportAnalysis> {
+    return this.analyzer.analyzeImport(zipPath, opts);
   }
 
   /** 步骤 9：Dry Run / Preview —— 合并用户冲突决策与路径映射，输出最终可执行计划（零写入） */

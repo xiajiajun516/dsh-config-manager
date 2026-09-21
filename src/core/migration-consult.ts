@@ -6,7 +6,9 @@
  *
  * Core Invariants：
  *  - READ-ONLY：本模块纯函数，绝不产生 mutation（不写配置/快照/journal）。
- *  - ACCURATE：评分规则驱动、确定性（同一源任何时候评分一致）；verdict 与评分/证据一致。
+ *  - ACCURATE：评分规则驱动、确定性（同一源任何时候评分一致）；**verdict/recommendation 由证据
+ *    （issue 严重度 + 硬阻断白名单）决定，不由分数决定**——分数只做量化展示，且在有硬阻断时
+ *    被压进 critical 区间，避免出现「评分 89 / 建议阻止执行」这种自相矛盾的结论。
  *  - COMPLETE：覆盖全部 4 种可迁移源类型（export-zip / local-snapshot / remote-snapshot / profile）。
  *  - REDACTED：报告绝不含 secret/凭据/敏感值（宿主在填充 sensitiveHits 时已脱敏；
  *    渲染前由 UI 层 redact() 兜底）。
@@ -27,7 +29,7 @@ import { redact } from '../security/redaction.ts';
 
 /* ---------------- 类型 ---------------- */
 
-export type ConsultSourceType = 'export-zip' | 'local-snapshot' | 'remote-snapshot' | 'profile';
+export type ConsultSourceType = 'export-zip' | 'local-snapshot' | 'remote-snapshot';
 export type HealthVerdict = 'healthy' | 'needs-attention' | 'critical';
 export type Recommendation = 'proceed' | 'review' | 'block';
 
@@ -120,7 +122,14 @@ export interface ConsultReport {
   healthScore: number;
   verdict: HealthVerdict;
   recommendation: Recommendation;
-  /** 触发项（已 redact） */
+  /**
+   * 硬阻断项数（**只有 >0 才会建议 block**）：包不可信 / 照做会失败。
+   * UI 用它把「为什么不能继续」与「需要你处理什么」分开显示，不再让一个分数代替结论。
+   */
+  blockerCount: number;
+  /** 需处理项数（warning/error 但非硬阻断）：冲突、缺分区、凭据要补录、敏感提醒等。 */
+  attentionCount: number;
+  /** 触发项（已 redact；硬阻断在前） */
   recommendationReasons: string[];
   dimensions: HealthDimension[];
   willApply: ConsultWillApply;
@@ -144,12 +153,46 @@ export const DEFAULT_DIMENSION_WEIGHTS: Record<ConsultDimensionId, number> = {
 export const HEALTHY_THRESHOLD = 90;
 export const CRITICAL_THRESHOLD = 60;
 
+/**
+ * **硬阻断**问题码：只有这些「照做会失败 / 包本身不可信」的硬伤才配得上 block。
+ *
+ * 为什么需要这份白名单（用户实测反馈）：原实现让**分数**决定结论 —— 任一维度 <60 就算
+ * critical，于是「2 处冲突需要你决定」「3 个凭据引用没声明」这种纯决策/提醒也能把整份咨询
+ * 推成「建议：阻止执行」，用户拿到过自相矛盾的「健康评分 89 / 建议：阻止执行」。
+ * 冲突、缺声明、未加密秘密都是**要告诉用户、要他去处理**的事，不是「不许导」。
+ */
+export const HARD_BLOCKER_CODES: ReadonlySet<string> = new Set([
+  // 引擎会直接拒绝 / 内容不可信 —— 判定标准：**引擎侧真的不会继续**，而不是「看起来不好」
+  'compatibility.noManifest',   // 根本不是本插件的备份（无 manifest）
+  'compatibility.unsupported',  // schema 超出支持范围 → canImport() 拒绝
+  'integrity.noManifest',
+  'integrity.checksumMismatch', // 条目内容与 checksum 不符：包被改过 / 损坏
+  'integrity.zipSlip',          // 条目路径越界（安全拒绝）
+  'migratability.failed',       // dry-run 不通过 → 直接执行必然失败
+  'migratability.error',
+]);
+
+/** 该 issue 是否是硬阻断（结论为 block 的唯一依据）。 */
+export function isHardBlocker(issue: ConsultIssue): boolean {
+  return issue.severity === 'error' && HARD_BLOCKER_CODES.has(issue.code);
+}
+
 /* ---------------- 评分辅助 ---------------- */
 
-function dimensionVerdict(score: number): HealthVerdict {
-  if (score >= HEALTHY_THRESHOLD) return 'healthy';
-  if (score >= CRITICAL_THRESHOLD) return 'needs-attention';
-  return 'critical';
+/**
+ * 维度 verdict：**由证据决定，不由分数决定**。
+ *
+ *  - 有硬阻断 → critical（照做会失败）；
+ *  - 有任何 warning/error → needs-attention（要用户看一眼 / 处理一下）；
+ *  - 只有 info 或没有 issue → healthy。
+ *
+ * 分数继续用于量化展示（并被 `HEALTHY_THRESHOLD` / `CRITICAL_THRESHOLD` 用作参考刻度），
+ * 但不再能单独把结论推到 critical —— 这正是「89 分却建议阻止执行」的根因。
+ */
+function dimensionVerdict(issues: readonly ConsultIssue[]): HealthVerdict {
+  if (issues.some(isHardBlocker)) return 'critical';
+  if (issues.some((i) => i.severity !== 'info')) return 'needs-attention';
+  return 'healthy';
 }
 
 function clampScore(score: number): number {
@@ -197,7 +240,7 @@ export function scoreCompatibility(
         break;
     }
   }
-  return { id: 'compatibility', score, verdict: dimensionVerdict(score), issues };
+  return { id: 'compatibility', score, verdict: dimensionVerdict(issues), issues };
 }
 
 /** 结构完整性维度：manifest 合法 + checksums 匹配 + 无 Zip Slip */
@@ -231,7 +274,7 @@ export function scoreIntegrity(data: ConsultSourceData): HealthDimension {
     score -= 30;
     issues.push({ severity: 'error', code: 'integrity.zipSlip', message: `ZIP 路径越界：${z}` });
   }
-  return { id: 'integrity', score: clampScore(score), verdict: dimensionVerdict(clampScore(score)), issues };
+  return { id: 'integrity', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
 }
 
 /** 分区完整性维度：每个声明分区的数据可解析、无残缺 */
@@ -253,7 +296,7 @@ export function scoreSections(data: ConsultSourceData): HealthDimension {
       }
     }
   }
-  return { id: 'sections', score: clampScore(score), verdict: dimensionVerdict(clampScore(score)), issues };
+  return { id: 'sections', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
 }
 
 /* ---------------- 一致性检查（凭据引用） ---------------- */
@@ -313,7 +356,13 @@ function extractDeclaredCredentialRefs(data: ConsultSourceData): Set<string> {
   return refs;
 }
 
-/** 一致性维度：跨分区引用（凭据引用）是否自洽；孤立/悬空引用 */
+/**
+ * 一致性维度：跨分区引用（凭据引用）是否自洽；孤立/悬空引用。
+ *
+ * 悬空引用是**提醒级**：备份里引用了某个凭据名、但凭据分区没声明它 —— 导入后如果本机也没有，
+ * 用户需要补录一个 key。这既不代表导入会失败，也不是安全问题（只有 ref 名，没有值）。
+ * 因此：一条聚合消息（不再逐个 ref 各刷一行）+ 扣分设上限，且**永不判 critical**。
+ */
 export function scoreConsistency(data: ConsultSourceData): HealthDimension {
   const issues: ConsultIssue[] = [];
   let score = 100;
@@ -322,18 +371,19 @@ export function scoreConsistency(data: ConsultSourceData): HealthDimension {
     ...extractProvidersCredentialRefs(data),
   ]);
   const declared = extractDeclaredCredentialRefs(data);
-  for (const ref of referenced) {
-    if (!declared.has(ref)) {
-      score -= 15;
-      issues.push({
-        severity: 'warning',
-        code: 'consistency.danglingCredentialRef',
-        message: `凭据引用未在 credentials 分区声明：${ref}`,
-        evidence: ref,
-      });
-    }
+  const dangling = [...referenced].filter((ref) => !declared.has(ref));
+  if (dangling.length > 0) {
+    score -= Math.min(dangling.length * 15, 45);
+    const shown = dangling.slice(0, 5).join('、');
+    const more = dangling.length > 5 ? ` 等 ${dangling.length} 个` : '';
+    issues.push({
+      severity: 'warning',
+      code: 'consistency.danglingCredentialRef',
+      message: `备份引用了 ${dangling.length} 个未在凭据分区声明的凭据（导入后本机若缺值需补录）：${shown}${more}`,
+      evidence: dangling.join(', '),
+    });
   }
-  return { id: 'consistency', score: clampScore(score), verdict: dimensionVerdict(clampScore(score)), issues };
+  return { id: 'consistency', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
 }
 
 /** 敏感暴露维度：快照是否含未加密 secret、高熵 token 泄漏面 */
@@ -354,7 +404,7 @@ export function scoreSensitive(data: ConsultSourceData): HealthDimension {
       message: `检测到 ${hitCount} 处敏感字段暴露（已脱敏）`,
     });
   }
-  return { id: 'sensitive', score: clampScore(score), verdict: dimensionVerdict(clampScore(score)), issues };
+  return { id: 'sensitive', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
 }
 
 /** 可迁移性维度：dry-run 应用能否通过（无致命冲突） */
@@ -374,16 +424,29 @@ export function scoreMigratability(data: ConsultSourceData): HealthDimension {
     }
   } else {
     score = 100;
-    for (let i = 0; i < m.fatalConflicts; i++) {
-      score -= 30;
-      issues.push({ severity: 'error', code: 'migratability.fatalConflict', message: '存在致命冲突，需人工决策' });
+    /**
+     * 冲突 = **需要你决定保留哪一边**（下一步可逐个选择，默认不覆盖本机），不是「照做会失败」。
+     * 原实现每个冲突 -30 并记 error，两处冲突就把维度压成 critical、把整份咨询推成「阻止执行」——
+     * 与用户实际要做的事完全不符（用户实测抱怨的正是这种假建议）。
+     */
+    if (m.fatalConflicts > 0) {
+      score -= Math.min(m.fatalConflicts * 15, 60);
+      issues.push({
+        severity: 'warning',
+        code: 'migratability.conflicts',
+        message: `有 ${m.fatalConflicts} 处冲突需要你决定保留哪一边（下一步可逐个选择；默认不覆盖本机）`,
+      });
     }
-    for (let i = 0; i < m.warnings; i++) {
-      score -= 10;
-      issues.push({ severity: 'warning', code: 'migratability.warning', message: '存在需注意的迁移项' });
+    if (m.warnings > 0) {
+      score -= Math.min(m.warnings * 5, 30);
+      issues.push({
+        severity: 'warning',
+        code: 'migratability.warning',
+        message: `另有 ${m.warnings} 项需要留意（不影响导入能否成功）`,
+      });
     }
   }
-  return { id: 'migratability', score: clampScore(score), verdict: dimensionVerdict(clampScore(score)), issues };
+  return { id: 'migratability', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
 }
 
 /* ---------------- 汇总 ---------------- */
@@ -434,36 +497,31 @@ export function computeConsultReport(
   };
   const dimensions = computeDimensions(data, target, weights);
 
-  // 加权平均
+  // 证据分桶：**结论只看证据**（硬阻断 / 需处理），分数只用于量化展示。
+  const allIssues = dimensions.flatMap((d) => d.issues);
+  const blockers = allIssues.filter(isHardBlocker);
+  const attention = allIssues.filter((i) => !isHardBlocker(i) && (i.severity === 'error' || i.severity === 'warning'));
+
+  // 加权平均（展示用；不参与结论）
   let weighted = 0;
   for (const dim of dimensions) {
     weighted += (weights[dim.id] ?? 0) * dim.score;
   }
-  const healthScore = clampScore(weighted);
+  // 有硬阻断时把分数压进 critical 区间：否则会展示「评分 93 / 建议：阻止执行」这种自相矛盾
+  const healthScore = blockers.length > 0
+    ? Math.min(clampScore(weighted), CRITICAL_THRESHOLD - 1)
+    : clampScore(weighted);
 
-  // verdict = 最差维度 verdict
-  let verdict: HealthVerdict = 'healthy';
-  for (const dim of dimensions) verdict = worstVerdict(verdict, dim.verdict);
+  const verdict: HealthVerdict = blockers.length > 0
+    ? 'critical'
+    : attention.length > 0 ? 'needs-attention' : 'healthy';
 
-  // recommendation
-  let recommendation: Recommendation;
-  if (verdict === 'critical') {
-    recommendation = opts.allowBlock === true ? 'block' : 'review';
-  } else if (verdict === 'needs-attention') {
-    recommendation = 'review';
-  } else {
-    recommendation = 'proceed';
-  }
+  const recommendation: Recommendation = blockers.length > 0
+    ? (opts.allowBlock === true ? 'block' : 'review')
+    : attention.length > 0 ? 'review' : 'proceed';
 
-  // 触发项（全部 error/warning issue 的 message，已 redact）
-  const recommendationReasons: string[] = [];
-  for (const dim of dimensions) {
-    for (const issue of dim.issues) {
-      if (issue.severity === 'error' || issue.severity === 'warning') {
-        recommendationReasons.push(issue.message);
-      }
-    }
-  }
+  // 触发项：硬阻断排最前（用户先看到「为什么不能导入」），其余按维度顺序；core 已做同类聚合
+  const recommendationReasons: string[] = [...blockers, ...attention].map((i) => i.message);
 
   // willApply（来自 migratability；dryRun 恒 true）
   const m = data.migratability;
@@ -485,6 +543,8 @@ export function computeConsultReport(
     healthScore,
     verdict,
     recommendation,
+    blockerCount: blockers.length,
+    attentionCount: attention.length,
     recommendationReasons,
     dimensions,
     willApply,

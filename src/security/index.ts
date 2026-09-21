@@ -12,5 +12,6 @@
 export * from './secret-scanner.ts';
 export * from './encryption.ts';
 export * from './integrity.ts';
+export * from './credentials-yaml.ts';
 export * from './zip-security.ts';
 export * from './redaction.ts';

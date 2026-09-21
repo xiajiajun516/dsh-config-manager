@@ -14,7 +14,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  parseSyncBody, webdavBaseUrl, extractSyncSections, mergePersistedWebDavUsername, SyncRouteError,
+  parseSyncBody, webdavBaseUrl, extractSyncSections, extractSyncSessions, mergePersistedWebDavUsername,
+  syncPasswordRef, SyncRouteError,
   SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF,
   type ParseSyncBodyDeps,
 } from './index.ts';
@@ -214,4 +215,33 @@ test('mergePersistedWebDavUsername: 持久化无 username / 非 webdav / 为 nul
 
   const gitCfg = mergePersistedWebDavUsername({ ...GIT_CFG }, { ...WEBDAV_WITH_USER });
   assert.deepEqual(gitCfg, GIT_CFG, 'git 请求体不受影响');
+});
+
+/* ---------------- 可选分区（sessions）与同步密码凭据引用 ---------------- */
+
+test('extractSyncSessions: 只有显式给出对象才返回选项（形状非法 → undefined = 会话分区不参与同步）', () => {
+  assert.equal(extractSyncSessions({}), undefined, '缺省 = 不可选');
+  assert.equal(extractSyncSessions({ sessions: null }), undefined);
+  assert.equal(extractSyncSessions({ sessions: [1, 2] }), undefined, '数组形状非法');
+  assert.equal(extractSyncSessions({ sessions: 5 }), undefined, '标量形状非法');
+  assert.deepEqual(extractSyncSessions({ sessions: {} }), {}, '空对象 = 显式选中但不限数量（adapter 按全带处理）');
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: 5 } }), { limit: 5 });
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: 0 } }), { limit: 0 }, '0 = 勾选但不带会话');
+});
+
+test('extractSyncSessions: limit 非法（负数 / 小数 / 非数字）→ 归一为「不限数量」而不是丢弃选项', () => {
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: -3 } }), {}, '负数非法 → 不限数量');
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: 1.5 } }), {});
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: '5' } }), {});
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: 999999 } }), { limit: 10000 }, '超大钳制');
+});
+
+test('syncPasswordRef: 加密 / 解密密码按通道各自独立（值只进 DSH credentials）', () => {
+  assert.equal(syncPasswordRef('ENCRYPT', 'git'), 'DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD_GIT');
+  assert.equal(syncPasswordRef('ENCRYPT', 'webdav'), 'DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD_WEBDAV');
+  assert.equal(syncPasswordRef('DECRYPT', 'git'), 'DSH_CONFIG_MANAGER_SYNC_DECRYPT_PASSWORD_GIT');
+  assert.equal(syncPasswordRef('DECRYPT', 'webdav'), 'DSH_CONFIG_MANAGER_SYNC_DECRYPT_PASSWORD_WEBDAV');
+  // 与既有 token / webdav 口令槽位不冲突
+  assert.notEqual(syncPasswordRef('ENCRYPT', 'git'), SYNC_CREDENTIAL_REF);
+  assert.notEqual(syncPasswordRef('DECRYPT', 'webdav'), SYNC_WEBDAV_CREDENTIAL_REF);
 });

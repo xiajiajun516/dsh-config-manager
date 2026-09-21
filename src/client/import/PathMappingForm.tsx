@@ -50,10 +50,13 @@ export function PathMappingForm({ issues, initial, t, onChange }: PathMappingFor
 
   return (
     <div className={css.pathMappingList}>
+      {/* UI-18：留空 = 跳过该路径是**合法**操作（文案本身说明如此），且本页「下一步」不拦截 ——
+          因此这里用中性 info 语义而不是 warn（DESIGN.md §9 anti-pattern 3：warn/error 语义色
+          不得用于建议性内容；黄色横幅在首屏就会被读成「出错了」）。计数随输入实时更新。 */}
       {unresolved.length > 0 && (
-        <Banner kind="warn">{t('import.paths.unresolved', { count: String(unresolved.length) })}</Banner>
+        <Banner kind="info">{t('import.paths.unresolved', { count: String(unresolved.length) })}</Banner>
       )}
-      {issues.length === 0 && <div className={css.empty}>No paths to map</div>}
+      {issues.length === 0 && <div className={css.empty}>{t('import.paths.empty')}</div>}
       {issues.map((issue) => (
         <div key={issue.value} className={css.pathRow}>
           <div className={css.pathOld}>

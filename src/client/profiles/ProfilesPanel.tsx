@@ -1,33 +1,33 @@
 /**
- * 配置档案面板（第 7 个 tab「配置文件」；m-profiles）。
+ * 「档案」面板（第 7 个 tab；DSH 自带 profile 管理）。
  *
- * Profile = 用户在 DSH 中的一组配置快照（Work / Personal / …），由 src/profiles/
- * 的 ProfileManager 管理（save/list/delete/rename/switch）。本视图：
- * - **保存当前配置**：输入名 → POST /profiles/save（复用 adapter.export，天然不含秘密值）；
- * - **切换**：点「切换预览」→ 只读 preview（零写入）→ 确认弹窗 → executeSwitch
- *   （confirm 安全阀 + 自动快照 + 失败整体回滚，与导入同一语义）；
- * - **重命名 / 删除**：危险操作删除走 ConfirmDialog；
- * - **导入**：上传 profile.json 文本（JSON 字段 content）→ POST /profiles/import。
+ * 「档案」= DSH 的 profile（`$DSH_HOME/profiles/<name>`），由 src/profiles/dsh-profile-manager.ts
+ * 读写（列表 / 详情 / 新建 / 重命名 / 物理删除 / 记录「下次启动」）。本视图：
+ * - **列表**：形态（web/headless/自定义）、bundle 层、依赖数、patch 条目、node_modules、更新时间；
+ * - **下次启动**：DSH 无法在运行中切换 profile —— 这里只写 `<dataDir>/next-profile` 标记并给出
+ *   手动重启命令（`dsh --profile <name>`），由用户自己重启；
+ * - **新建 / 重命名 / 删除**：删除是**物理删除**（含 node_modules），走 ConfirmDialog；
+ *   删除当前运行中的档案需额外勾选确认；
+ * - **详情**：package.json 与 cordis.patch.yml 原文（只读）。
  *
- * 状态组件自持（useState），同时镜像 runStore.profiles 切片（切 tab/刷新不丢列表/预览/结果）。
- * 安全：Profile 天然不含秘密值（Save 走 adapter.export 脱敏）；重命名/删除/切换均确认。
+ * 状态组件自持（useState），同时镜像 runStore.profiles 切片（切 tab/刷新不丢列表与选择）。
+ * 安全：profile 定义不含秘密值（dependencies 只有包名与 spec）；错误文本渲染前过 redact()。
  */
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import type { ProfileMeta, ProfileSwitchResult, SwitchPreview } from '../../profiles/profile-manager.ts'
-import type { ConsultReport } from '../../core/migration-consult.ts'
-import { ConsultCard } from '../consult/ConsultCard.tsx'
+import { redact } from '../../security/redaction.ts'
+import type { DshProfileDetail, DshProfileMeta, DshProfileSelection, DshProfileTemplate } from '../../profiles/dsh-profile-shared.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore, toProfilesStoreSlice, type ProfilesStoreSlice } from '../run-store.ts'
-import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
-import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
-import { profileSwitchKind, summarizeSwitchPreview, validateProfileNameInput } from '../../ui/profiles-view.ts'
-import { groupPlanItems } from '../../ui/backup-inspect.ts'
-import type { InspectGroupKey } from '../../ui/backup-inspect.ts'
+import {
+  bundleLines, dependencyLines, formatBytes, formatProfileTime, issueLabelKey, profileRowFacts, restartCommand,
+  selectionState, shapeLabelKey, sortProfilesForDisplay, summarizeProfiles, validateProfileNameInput,
+} from '../../ui/dsh-profiles-view.ts'
 import css from '../config-manager.module.css'
 
 export interface ProfilesPanelProps {
@@ -38,25 +38,26 @@ export interface ProfilesPanelProps {
 interface PanelState {
   status: 'loading' | 'ready' | 'error'
   loadError: string | null
-  profiles: ProfileMeta[]
-  /** 保存新档案的表单名 */
-  saveName: string
-  saving: boolean
-  /** 切换流程：当前预览目标 + preview（null = 无预览会话）；执行中 */
-  previewName: string | null
-  preview: SwitchPreview | null
-  previewing: boolean
-  switching: boolean
-  switchResult: ProfileSwitchResult | null
-  /** 重命名目标（null = 无重命名会话） */
-  renameTarget: ProfileMeta | null
+  profiles: DshProfileMeta[]
+  current: string
+  selection: DshProfileSelection | null
+  templates: DshProfileTemplate[]
+  /** 新建表单 */
+  createName: string
+  createTemplate: string
+  creating: boolean
+  /** 重命名会话 */
+  renameTarget: DshProfileMeta | null
   renameValue: string
   renaming: boolean
-  /** 删除确认目标（null = 无删除会话） */
-  deleteTarget: ProfileMeta | null
+  /** 删除会话（物理删除，不可恢复） */
+  deleteTarget: DshProfileMeta | null
+  deleteCurrentConfirmed: boolean
   deleting: boolean
-  /** 导入会话：导入文件名 → 读入 content 待确认 */
-  importError: string | null
+  /** 「下次启动」写入中 */
+  selecting: boolean
+  /** 详情目标（null = 未打开） */
+  detailName: string | null
   actionError: string | null
 }
 
@@ -64,19 +65,20 @@ const initial: PanelState = {
   status: 'loading',
   loadError: null,
   profiles: [],
-  saveName: '',
-  saving: false,
-  previewName: null,
-  preview: null,
-  previewing: false,
-  switching: false,
-  switchResult: null,
+  current: '',
+  selection: null,
+  templates: [],
+  createName: '',
+  createTemplate: 'base',
+  creating: false,
   renameTarget: null,
   renameValue: '',
   renaming: false,
   deleteTarget: null,
+  deleteCurrentConfirmed: false,
   deleting: false,
-  importError: null,
+  selecting: false,
+  detailName: null,
   actionError: null,
 }
 
@@ -85,11 +87,40 @@ function initFromStore(): PanelState {
   return {
     ...initial,
     profiles: s.profiles ?? [],
-    previewName: s.selectedName,
-    preview: s.preview,
-    switchResult: s.switchResult,
+    current: s.current ?? '',
+    selection: s.selection,
+    // detailName 不恢复：详情原文是一次性拉取的（恢复弹窗目标只会得到一个空弹窗）
+    detailName: null,
     actionError: s.error,
     loadError: s.loadError,
+  }
+}
+
+/** host 侧 engine 错误码 → 文案（未知错误回退到通用模板，不显示裸英文码）。 */
+const ERROR_CODES = ['exists', 'notFound', 'currentProfile', 'invalidName', 'reservedName', 'unknownTemplate'] as const
+
+function profileErrorText(t: TranslateNS<'config-manager'>, error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  for (const code of ERROR_CODES) {
+    if (message === code || message.includes(code)) return t(`profiles.error.${code}`)
+  }
+  return t('profiles.error.generic', { message: redact(message) })
+}
+
+/** 复制文本到剪贴板（与 OverviewPanel 同一交互约定：结果以 Toast 反馈）。 */
+function copyText(text: string, t: TranslateNS<'config-manager'>): void {
+  try {
+    const pending = navigator.clipboard?.writeText(text)
+    if (pending === undefined) {
+      toast.warn(t('toast.copyFailed'))
+      return
+    }
+    void pending.then(
+      () => { toast.ok(t('profiles.copied')) },
+      () => { toast.warn(t('toast.copyFailed')) },
+    )
+  } catch {
+    toast.warn(t('toast.copyFailed'))
   }
 }
 
@@ -97,9 +128,10 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
   const [state, setState] = useState<PanelState>(initFromStore)
   const stateRef = useRef<PanelState>(state)
   const mountedRef = useRef(true)
-  /** Phase 7 迁移前咨询：切换预览弹窗内的咨询报告（本地 state，非敏感） */
-  const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
-  const [consultLoading, setConsultLoading] = useState(false)
+  /** 详情原文（一次性读取；非持久化） */
+  const [detail, setDetail] = useState<DshProfileDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
 
   const commit = (next: PanelState): void => {
     stateRef.current = next
@@ -107,9 +139,9 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
     runStore.patch({
       profiles: toProfilesStoreSlice({
         profiles: next.profiles,
-        selectedName: next.previewName,
-        preview: next.preview,
-        switchResult: next.switchResult,
+        selection: next.selection,
+        current: next.current === '' ? null : next.current,
+        selectedName: next.detailName,
         error: next.actionError,
         loadError: next.loadError,
       }),
@@ -119,14 +151,15 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
 
   useEffect(() => () => {
     mountedRef.current = false
+    const cur = stateRef.current
     runStore.patch({
       profiles: toProfilesStoreSlice({
-        profiles: stateRef.current.profiles,
-        selectedName: stateRef.current.previewName,
-        preview: stateRef.current.preview,
-        switchResult: stateRef.current.switchResult,
-        error: stateRef.current.actionError,
-        loadError: stateRef.current.loadError,
+        profiles: cur.profiles,
+        selection: cur.selection,
+        current: cur.current === '' ? null : cur.current,
+        selectedName: cur.detailName,
+        error: cur.actionError,
+        loadError: cur.loadError,
       }),
     })
   }, [])
@@ -134,12 +167,22 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
   const load = (): void => {
     patch({ status: 'loading', loadError: null })
     api.profilesList().then(
-      (profiles) => {
-        patch({ status: 'ready', profiles })
-        // 列表刷新后过滤失效的选择/预览目标
-        if (stateRef.current.previewName !== null && !profiles.some((p) => p.name === stateRef.current.previewName)) {
-          patch({ previewName: null, preview: null, switchResult: null })
-        }
+      (snapshot) => {
+        const profiles = snapshot.profiles ?? []
+        const cur = stateRef.current
+        // 目标已消失 → 关闭详情/重命名/删除会话，避免对着幽灵档案操作
+        const stillExists = (name: string | null): boolean => name !== null && profiles.some((p) => p.name === name)
+        patch({
+          status: 'ready',
+          profiles,
+          current: snapshot.current ?? '',
+          selection: snapshot.selection ?? null,
+          templates: snapshot.templates ?? [],
+          createTemplate: (snapshot.templates ?? []).some((tp) => tp.id === cur.createTemplate) ? cur.createTemplate : 'base',
+          detailName: stillExists(cur.detailName) ? cur.detailName : null,
+          renameTarget: stillExists(cur.renameTarget?.name ?? null) ? cur.renameTarget : null,
+          deleteTarget: stillExists(cur.deleteTarget?.name ?? null) ? cur.deleteTarget : null,
+        })
       },
       (err) => {
         patch({ status: 'error', loadError: err instanceof Error ? err.message : String(err) })
@@ -149,289 +192,337 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
 
   useEffect(load, [api])
 
-  /** Phase 7 迁移前咨询：切换预览弹窗打开时对目标 profile 生成咨询报告（只读，零写入）。
-   *  失败静默（咨询是建议性，不阻断切换）。 */
-  useEffect(() => {
-    if (state.previewName === null) return
-    let cancelled = false
-    setConsultLoading(true)
-    api.consult({ type: 'profile', id: state.previewName })
-      .then((report) => { if (!cancelled) setConsultReport(report) })
-      .catch(() => { if (!cancelled) setConsultReport(null) })
-      .finally(() => { if (!cancelled) setConsultLoading(false) })
-    return () => { cancelled = true }
-  }, [state.previewName, api])
+  /** 打开详情（只读；原文一次性拉取） */
+  const openDetail = (profile: DshProfileMeta): void => {
+    patch({ detailName: profile.name, actionError: null })
+    setDetail(null)
+    setDetailError(null)
+    setDetailLoading(true)
+    api.profileDetail(profile.name).then(
+      (value) => {
+        if (!mountedRef.current) return
+        setDetail(value)
+        setDetailLoading(false)
+      },
+      (err) => {
+        if (!mountedRef.current) return
+        setDetailError(profileErrorText(t, err))
+        setDetailLoading(false)
+      },
+    )
+  }
 
-  /** 保存当前配置为新 Profile（输入名校验；成功后刷新列表并清空输入） */
-  const doSave = (): void => {
-    const name = state.saveName.trim()
-    const invalid = validateProfileNameInput(name)
-    if (invalid !== null) {
-      patch({ actionError: invalid })
+  const closeDetail = (): void => {
+    patch({ detailName: null })
+    setDetail(null)
+    setDetailError(null)
+    setDetailLoading(false)
+  }
+
+  const doCreate = (): void => {
+    const name = state.createName.trim()
+    const issue = validateProfileNameInput(name)
+    if (issue !== null) {
+      patch({ actionError: nameIssueText(t, name, issue) })
       return
     }
-    if (state.saving) return
-    patch({ saving: true, actionError: null })
-    api.profileSave(name).then(
+    if (state.creating) return
+    patch({ creating: true, actionError: null })
+    api.profileCreate(name, state.createTemplate).then(
       (meta) => {
-        patch({ saving: false, saveName: '', actionError: null })
-        toast.ok(t('profiles.save.done', { name: meta.name }))
+        patch({ creating: false, createName: '', actionError: null })
+        toast.ok(t('profiles.create.done', { name: meta.name }))
         load()
       },
       (err) => {
-        patch({ saving: false })
-        toast.error(err instanceof Error ? err.message : String(err))
+        patch({ creating: false, actionError: profileErrorText(t, err) })
+        toast.error(profileErrorText(t, err))
       },
     )
   }
 
-  /** 切换预览（只读，零写入）：分析切换到该 Profile 会产生的计划项 */
-  const runPreview = (profile: ProfileMeta): void => {
-    patch({ previewName: profile.name, previewing: true, preview: null, switchResult: null, actionError: null })
-    api.profileAnalyzeSwitch(profile.name).then(
-      (preview) => {
-        patch({ previewing: false, preview })
-      },
-      (err) => {
-        patch({ previewing: false, previewName: null, actionError: err instanceof Error ? err.message : String(err) })
-      },
-    )
-  }
-
-  /** 执行切换（confirm 安全阀 + 自动快照 + 失败回滚） */
-  const doSwitch = (): void => {
-    const name = state.previewName
-    if (name === null || state.switching) return
-    patch({ switching: true, actionError: null })
-    api.profileExecuteSwitch(name, { rollbackOnError: true }).then(
-      (result) => {
-        patch({ switching: false, switchResult: result })
-      },
-      (err) => {
-        patch({ switching: false, actionError: err instanceof Error ? err.message : String(err) })
-      },
-    ).finally(() => {
-      // 切换完成后面板保持（结果展示在预览卡内）；刷新列表时间戳
-      load()
-    })
-  }
-
-  /** 关闭预览弹窗（放弃本次切换会话） */
-  const closePreview = (): void => {
-    if (state.switching) return
-    patch({ previewName: null, preview: null, switchResult: null })
-  }
-
-  /** 重命名（目录级移动） */
   const doRename = (): void => {
     const target = state.renameTarget
     if (target === null || state.renaming) return
     const newName = state.renameValue.trim()
-    const invalid = validateProfileNameInput(newName)
-    if (invalid !== null) {
-      patch({ actionError: invalid })
+    const issue = validateProfileNameInput(newName)
+    if (issue !== null) {
+      patch({ actionError: nameIssueText(t, newName, issue) })
       return
     }
     patch({ renaming: true, actionError: null })
     api.profileRename(target.name, newName).then(
-      () => {
+      (meta) => {
         patch({ renaming: false, renameTarget: null, renameValue: '', actionError: null })
+        toast.ok(t('profiles.rename.done', { name: meta.name }))
         load()
       },
       (err) => {
-        patch({ renaming: false })
-        toast.error(err instanceof Error ? err.message : String(err))
+        patch({ renaming: false, actionError: profileErrorText(t, err) })
       },
     )
   }
 
-  /** 删除 Profile（危险操作：该组配置快照不可恢复） */
   const doDelete = (): void => {
     const target = state.deleteTarget
     if (target === null || state.deleting) return
+    if (target.isCurrent && !state.deleteCurrentConfirmed) {
+      patch({ actionError: t('profiles.deleteCurrentWarning') })
+      return
+    }
     patch({ deleting: true, actionError: null })
-    api.profileDelete(target.name).then(
+    api.profileDelete(target.name, { allowCurrent: target.isCurrent }).then(
       () => {
-        patch({ deleting: false, deleteTarget: null, actionError: null })
-        // 删除的是当前预览目标 → 清空会话
-        if (stateRef.current.previewName === target.name) {
-          patch({ previewName: null, preview: null, switchResult: null })
-        }
-        // 不可恢复操作：明确回执（原先删完只有列表少一行，无任何确认）
+        patch({ deleting: false, deleteTarget: null, deleteCurrentConfirmed: false, actionError: null })
         toast.ok(t('profiles.delete.done', { name: target.name }))
         load()
       },
       (err) => {
-        patch({ deleting: false })
-        toast.error(err instanceof Error ? err.message : String(err))
+        patch({ deleting: false, actionError: profileErrorText(t, err) })
       },
     )
   }
 
-  /** 导入 Profile（读 JSON 文本 → 确认 → import） */
-  const importFile = (file: File | undefined): void => {
-    if (file === undefined) return
-    patch({ importError: null, actionError: null })
-    file.text().then(
-      (content) => {
-        // 取「文件名去 .json 后缀」作默认目标名；空名回退 'imported'
-        const stem = file.name.replace(/\.json$/i, '').trim() || 'imported'
-        api.profileImport(content, stem).then(
-          (meta) => {
-            toast.ok(t('profiles.import.done', { name: meta.name }))
-            load()
-          },
-          (err) => {
-            toast.error(err instanceof Error ? err.message : String(err))
-          },
-        )
+  const doSelect = (name: string | null): void => {
+    if (state.selecting) return
+    patch({ selecting: true, actionError: null })
+    api.profileSelect(name).then(
+      (selection) => {
+        patch({ selecting: false, selection, actionError: null })
+        toast.ok(name === null ? t('profiles.selectCleared') : t('profiles.selectDone', { name }))
       },
       (err) => {
-        toast.error(err instanceof Error ? err.message : String(err))
+        patch({ selecting: false, actionError: profileErrorText(t, err) })
       },
     )
   }
 
-  const saveInvalid = validateProfileNameInput(state.saveName.trim()) !== null && state.saveName.trim() !== ''
-
-  /** 更新时间（等宽 YYYY-MM-DD HH:mm；完整本地时间见 title）。 */
-  const fullTime = (v: string | number): string => {
-    const d = new Date(v)
-    if (Number.isNaN(d.getTime())) return ''
-    const p = (n: number): string => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-  }
+  const rows = sortProfilesForDisplay(state.profiles, {
+    currentName: state.current === '' ? null : state.current,
+    selectionName: state.selection?.name ?? null,
+  })
+  const summary = summarizeProfiles(state.profiles)
+  const selection = state.selection
+  const selState = selectionState(selection)
+  const createIssue = state.createName.trim() === '' ? null : validateProfileNameInput(state.createName)
 
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('profiles.title')} subtitle={t('profiles.subtitle')} />
 
-      {/* —— 保存当前配置为 Profile —— */}
+      {/* —— 当前运行 / 下次启动 —— */}
       <Card className={css.card}>
-        <div className={css.groupLabel}>{t('profiles.save.title')}</div>
-        <div className={css.hint}>{t('profiles.save.hint')}</div>
+        <div className={css.groupLabel}>{t('profiles.nextLaunch')}</div>
+        <div className={css.kvRow}>
+          <span className={css.kvKey}>{t('profiles.current')}</span>
+          <span className={css.kvValue}>
+            {state.current === '' ? '—' : <span className={css.mono}>{state.current}</span>}
+          </span>
+        </div>
+        {selState === 'none' && <div className={css.hint}>{t('profiles.selectHint')}</div>}
+        {selState === 'current' && selection !== null && (
+          <Banner kind="ok">{t('profiles.selectCurrent', { name: selection.name })}</Banner>
+        )}
+        {selState === 'missing' && selection !== null && (
+          <Banner kind="warn">
+            {t('profiles.selectMissing', { name: selection.name })}
+            <Button size="sm" disabled={state.selecting} onClick={() => { doSelect(null) }}>
+              {t('profiles.selectClear')}
+            </Button>
+          </Banner>
+        )}
+        {selState === 'pending' && selection !== null && (
+          <div className={css.actionRow}>
+            <span className={css.hint}>{t('profiles.selectPending', { name: selection.name })}</span>
+            <code className={css.mono}>{restartCommand(selection.name)}</code>
+            <Button size="sm" onClick={() => { copyText(restartCommand(selection.name), t) }}>
+              {t('profiles.copy')}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={state.selecting} onClick={() => { doSelect(null) }}>
+              {t('profiles.selectClear')}
+            </Button>
+          </div>
+        )}
+      </Card>
+
+      {/* —— 新建档案 —— */}
+      <Card className={css.card}>
+        <div className={css.groupLabel}>{t('profiles.create.title')}</div>
+        <div className={css.hint}>{t('profiles.create.hint')}</div>
         <div className={css.actionRow}>
           <input
             type="text"
             className={css.input}
-            placeholder={t('profiles.save.placeholder')}
-            value={state.saveName}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ saveName: e.target.value }) }}
+            placeholder={t('profiles.create.placeholder')}
+            aria-label={t('profiles.create.nameLabel')}
+            value={state.createName}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ createName: e.target.value }) }}
           />
-          <Button variant="primary" disabled={state.saving || state.saveName.trim() === ''} onClick={doSave}>
-            {state.saving ? <Spinner label={t('profiles.save.saving')} /> : t('profiles.save.action')}
+          <select
+            className={css.select}
+            aria-label={t('profiles.create.templateLabel')}
+            value={state.createTemplate}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => { patch({ createTemplate: e.target.value }) }}
+          >
+            {state.templates.map((template) => (
+              <option key={template.id} value={template.id}>
+                {template.id} — {template.bundles.join(' + ')}
+              </option>
+            ))}
+          </select>
+          <Button variant="primary" disabled={state.creating || state.createName.trim() === '' || createIssue !== null} onClick={doCreate}>
+            {state.creating ? <Spinner label={t('profiles.create.creating')} /> : t('profiles.create.action')}
           </Button>
         </div>
-        {saveInvalid && <span className={css.formError}>{t('profiles.nameInvalid')}</span>}
+        {createIssue !== null && <span className={css.formError}>{nameIssueText(t, state.createName.trim(), createIssue)}</span>}
       </Card>
 
-      {/* —— Profile 列表 —— */}
+      {/* —— 列表 —— */}
       {state.status === 'loading' && <Spinner label={t('profiles.loading')} />}
       {state.status === 'error' && (
         <Banner kind="error">
-          {state.loadError ?? t('common.unknownError')}
-          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
+          {redact(state.loadError ?? t('common.unknownError'))}
+          <Button size="sm" onClick={load}>{t('common.retry')}</Button>
         </Banner>
       )}
-      {state.status === 'ready' && state.profiles.length === 0 && (
-        <Empty>{t('profiles.empty')}</Empty>
-      )}
-{state.status === 'ready' && state.profiles.length > 0 && (
-        <div className={css.snapshotList} role="list" aria-label={t('profiles.title')}>
-          {state.profiles.map((profile) => (
-            <div key={profile.name} className={css.profileRow} role="listitem">
-              <div className={css.profileRowHeader}>
-                <button
-                  type="button"
-                  className={css.profileRowMain}
-                  onClick={() => { runPreview(profile) }}
-                  title={t('profiles.previewHint')}
-                >
-                  <span title={profile.name}>{profile.name}</span>
-                </button>
-                <span className={css.actionRow} style={{ margin: 0 }}>
-                  <Button size="sm" onClick={() => { runPreview(profile) }}>{t('profiles.switch')}</Button>
-                  <Button
-                    size="sm"
-                    onClick={() => { patch({ renameTarget: profile, renameValue: profile.name, actionError: null }) }}
-                  >
-                    {t('profiles.rename')}
-                  </Button>
-                  <Button size="sm" variant="danger" onClick={() => { patch({ deleteTarget: profile, actionError: null }) }}>
-                    {t('profiles.delete')}
-                  </Button>
-                </span>
-              </div>
-              <div className={css.cellMeta} style={{ marginTop: 2 }}>
-                <span className={css.mono}>{fullTime(profile.updatedAt)}</span>
-                <span>· {profile.sections.join('、')}</span>
-              </div>
-            </div>
-          ))}
-        </div>
+      {state.status === 'ready' && state.profiles.length === 0 && <Empty>{t('profiles.empty')}</Empty>}
+      {state.status === 'ready' && state.profiles.length > 0 && (
+        <>
+          <div className={css.listHeaderRow}>
+            <span className={css.groupLabel}>{t('profiles.list.title')}</span>
+            <span className={css.cellMeta}>
+              {t('profiles.list.count', { count: summary.total })} ·{' '}
+              {t('profiles.list.summary', { web: summary.web, headless: summary.headless, generic: summary.generic, installed: summary.withNodeModules })}
+            </span>
+            <Button size="sm" onClick={load}>{t('profiles.refresh')}</Button>
+          </div>
+          <div className={css.hint}>{t('profiles.list.hint')}</div>
+          <div className={css.snapshotList} role="list" aria-label={t('profiles.list.title')}>
+            {rows.map((profile) => {
+              const facts = profileRowFacts(profile)
+              return (
+                <div key={profile.name} className={css.profileRow} role="listitem" data-selected={profile.name === state.detailName ? '' : undefined}>
+                  <div className={css.profileRowHeader}>
+                    {/* 整行「信息区」可点：行内只给计数，完整清单（bundle 层 / 逐条依赖 / patch 原文）在详情弹窗里 */}
+                    <button type="button" className={css.profileRowMain} title={t('profiles.list.hint')} onClick={() => { openDetail(profile) }}>
+                      <span className={css.profileRowTitle}>
+                        <span className={`${css.mono} ${css.profileRowName}`}>{profile.name}</span>
+                        <span className={css.badgeRow}>
+                          {profile.isCurrent && <Badge kind="ok">{t('profiles.current')}</Badge>}
+                          {selection !== null && selection.name === profile.name && !profile.isCurrent && (
+                            <Badge kind="info">{t('profiles.nextLaunch')}</Badge>
+                          )}
+                          <Badge kind="info">{t(shapeLabelKey(profile.shape))}</Badge>
+                          {profile.issues.map((issue) => (
+                            <Badge key={issue} kind="error">{t(issueLabelKey(issue))}</Badge>
+                          ))}
+                        </span>
+                      </span>
+                      <span className={css.profileRowMeta}>
+                        {t('profiles.row.summary', { bundles: facts.bundles, patch: facts.patchEntries, deps: facts.deps })}
+                        {' · '}{facts.hasNodeModules ? t('profiles.nodeModules.yes') : t('profiles.nodeModules.no')}
+                        {' · '}{profile.patchReload === 'startup' ? t('profiles.patchReload.startup') : t('profiles.patchReload.live')}
+                        {profile.updatedAtMs !== null && ` · ${t('profiles.updatedAt', { time: formatProfileTime(profile.updatedAtMs) })}`}
+                      </span>
+                    </button>
+                    <span className={css.actionRow} data-inline>
+                      <Button size="sm" disabled={state.selecting} onClick={() => { doSelect(profile.name) }}>
+                        {t('profiles.select')}
+                      </Button>
+                      <Button size="sm" onClick={() => { patch({ renameTarget: profile, renameValue: profile.name, actionError: null }) }}>
+                        {t('profiles.rename')}
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => { patch({ deleteTarget: profile, deleteCurrentConfirmed: false, actionError: null }) }}>
+                        {t('profiles.delete')}
+                      </Button>
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
       )}
 
-      {/* —— 导入 Profile —— */}
-      <Card className={css.card}>
-        <div className={css.groupLabel}>{t('profiles.import.title')}</div>
-        <div className={css.hint}>{t('profiles.import.hint')}</div>
-        <input
-          type="file"
-          accept=".json,application/json"
-          className={css.hiddenFile}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            const file = e.target.files?.[0]
-            e.target.value = ''
-            importFile(file)
-          }}
-        />
-        <div className={css.actionRow}>
-          <Button onClick={() => { (document.querySelector<HTMLInputElement>(`input[type="file"][accept=".json,application/json"]`))?.click() }}>
-            {t('profiles.import.choose')}
-          </Button>
-        </div>
-      </Card>
-
-      {/* —— 切换预览弹窗（只读 → 确认执行；Radix Modal 统一 a11y） —— */}
-      <Modal
-        open={state.previewName !== null && (state.preview !== null || state.previewing || state.switchResult !== null)}
-        onClose={closePreview}
-        title={t('profiles.switch')}
-        wide
-        busy={state.switching}
-      >
+      {/* —— 详情弹窗（只读原文） —— */}
+      <Modal open={state.detailName !== null} onClose={closeDetail} title={t('profiles.detail')} wide busy={detailLoading}>
         <Modal.Header
-          title={state.previewName !== null ? t('profiles.switchPreviewTitle', { name: state.previewName }) : t('profiles.switch')}
-          onClose={closePreview}
-          closeDisabled={state.switching}
+          title={state.detailName !== null ? t('profiles.detailTitle', { name: state.detailName }) : t('profiles.detail')}
+          closeLabel={t('common.close')}
+          onClose={closeDetail}
+          closeDisabled={false}
         />
         <Modal.Body scroll>
-          {state.previewing && <Spinner label={t('profiles.previewing')} />}
-          {state.preview !== null && (
-            <SwitchPreviewCard preview={state.preview} t={t} />
-          )}
-          {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-          {consultLoading && <Spinner label={api.t('consult.loading')} />}
-          {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
-          {state.switchResult !== null && (
-            <ProfileSwitchResultCard result={state.switchResult} t={t} />
+          {detailLoading && <Spinner label={t('profiles.loading')} />}
+          {detailError !== null && <Banner kind="error">{detailError}</Banner>}
+          {detail !== null && (
+            <>
+              {/* 概览：行内被折叠掉的计数/状态在这里全量展开 */}
+              <div className={css.groupLabel}>{t('profiles.detail.info')}</div>
+              <div className={css.badgeRow}>
+                <Badge kind="info">{t(shapeLabelKey(detail.shape))}</Badge>
+                <Badge kind="info">{t('profiles.bundles.count', { count: detail.bundles.length })}</Badge>
+                <Badge kind="info">{t('profiles.patchEntries', { count: detail.patchEntryCount })}（{formatBytes(detail.patchBytes)}）</Badge>
+                <Badge kind="info">{detail.patchReload === 'startup' ? t('profiles.patchReload.startup') : t('profiles.patchReload.live')}</Badge>
+                <Badge kind={detail.hasNodeModules ? 'ok' : 'warn'}>
+                  {detail.hasNodeModules ? t('profiles.nodeModules.yes') : t('profiles.nodeModules.no')}
+                </Badge>
+                {detail.updatedAtMs !== null && <Badge kind="info">{t('profiles.updatedAt', { time: formatProfileTime(detail.updatedAtMs) })}</Badge>}
+              </div>
+              <div className={css.kvRow}>
+                <span className={css.kvKey}>{t('profiles.dir')}</span>
+                <span className={css.kvValue}><span className={css.mono}>{detail.dir}</span></span>
+              </div>
+              {detail.issues.length > 0 && (
+                <Banner kind="warn">
+                  {detail.issues.map((issue) => <div key={issue}>{t(issueLabelKey(issue))}</div>)}
+                </Banner>
+              )}
+              <div className={css.kvRow}>
+                <span className={css.kvKey}>{t('profiles.bundles')}</span>
+                <span className={css.kvValue}>
+                  {bundleLines(detail).length === 0
+                    ? t('profiles.bundles.none')
+                    : (
+                      <span className={css.detailLines}>
+                        {bundleLines(detail).map((line, index) => (
+                          <span key={line} className={css.mono}>{index + 1}. {line}</span>
+                        ))}
+                      </span>
+                    )}
+                </span>
+              </div>
+              {dependencyLines(detail).length > 0 && (
+                <div className={css.kvRow}>
+                  <span className={css.kvKey}>{t('profiles.deps')}</span>
+                  <span className={css.kvValue}>
+                    <span className={css.detailLines}>
+                      {dependencyLines(detail).map((line) => (
+                        <span key={line} className={css.mono}>{line}</span>
+                      ))}
+                    </span>
+                  </span>
+                </div>
+              )}
+              <div className={css.groupLabel}>{t('profiles.detail.manifest')}</div>
+              <div className={css.reportScroll}>
+                {/* 档案原文一律先过 redact()：package.json 的依赖 spec 可能内联私有源/令牌 */}
+                <pre className={css.reportText}>{redact(detail.manifest ?? '')}</pre>
+              </div>
+              <div className={css.groupLabel}>{t('profiles.detail.patch')}</div>
+              <div className={css.reportScroll}>
+                {/* cordis.patch.yml 可能内联字面量密钥（!!js 表达式旁），同样先脱敏 */}
+                <pre className={css.reportText}>{detail.patch !== null ? redact(detail.patch) : (detail.patchBytes > 0 ? t('profiles.detail.patchTooLarge') : t('profiles.detail.patchMissing'))}</pre>
+              </div>
+            </>
           )}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="ghost" disabled={state.switching} onClick={closePreview}>
-            {t('common.cancel')}
-          </Button>
-          <Button
-            variant="primary"
-            disabled={state.switching || state.preview === null || !state.preview.items.some((i) => i.kind !== 'Skip')}
-            onClick={doSwitch}
-          >
-            {state.switching ? <Spinner label={t('profiles.switching')} /> : t('profiles.switchConfirm')}
-          </Button>
+          <Button variant="ghost" onClick={closeDetail}>{t('common.close')}</Button>
         </Modal.Footer>
       </Modal>
 
-      {/* —— 重命名弹窗 —— */}
+      {/* —— 重命名 —— */}
       {state.renameTarget !== null && (
         <ConfirmDialog
           open
@@ -441,152 +532,55 @@ export function ProfilesPanel({ api, t }: ProfilesPanelProps) {
           cancelLabel={t('common.cancel')}
           busy={state.renaming}
           onConfirm={doRename}
-          onCancel={() => { patch({ renameTarget: null, renameValue: '' }) }}
+          onCancel={() => { patch({ renameTarget: null, renameValue: '', actionError: null }) }}
         >
           <input
             type="text"
             className={css.input}
             value={state.renameValue}
+            aria-label={t('profiles.renameTitle')}
             onChange={(e: ChangeEvent<HTMLInputElement>) => { patch({ renameValue: e.target.value }) }}
           />
-          {/* 表单内联校验：位置就地（原先渲染在页面级 Banner，被弹窗遮住而不可见） */}
           {state.actionError !== null && <span className={css.formError}>{state.actionError}</span>}
         </ConfirmDialog>
       )}
 
-      {/* —— 删除确认弹窗（危险操作） —— */}
+      {/* —— 删除（物理删除，不可恢复） —— */}
       <ConfirmDialog
         open={state.deleteTarget !== null}
         title={t('profiles.deleteTitle')}
-        message={state.deleteTarget !== null ? t('profiles.deleteMessage', { name: state.deleteTarget.name }) : undefined}
+        message={state.deleteTarget !== null
+          ? `${t('profiles.deleteMessage', { name: state.deleteTarget.name })}${state.deleteTarget.isCurrent ? `\n\n${t('profiles.deleteCurrentWarning')}` : ''}`
+          : undefined}
         confirmLabel={t('profiles.delete')}
         cancelLabel={t('common.cancel')}
         danger
         busy={state.deleting}
         onConfirm={doDelete}
-        onCancel={() => { patch({ deleteTarget: null }) }}
-      />
-    </div>
-  )
-}
+        onCancel={() => { patch({ deleteTarget: null, deleteCurrentConfirmed: false, actionError: null }) }}
+      >
+        {state.deleteTarget?.isCurrent === true && (
+          <Checkbox
+            checked={state.deleteCurrentConfirmed}
+            onChange={(checked: boolean) => { patch({ deleteCurrentConfirmed: checked, actionError: null }) }}
+            label={t('profiles.deleteCurrentConfirm')}
+          />
+        )}
+        {state.actionError !== null && <span className={css.formError}>{state.actionError}</span>}
+      </ConfirmDialog>
 
-/* ------------------------------------------------ 视图子组件 */
-
-/**
- * 切换预览内容（与备份文件「查看/对比」预览同构，2026-08-25）：
- * 三分区 = 分区清单（Badge 流）→ 差异摘要（将变更/已一致/冲突/需补录/重启）
- * → 变更明细分组（冲突→变更→路径映射→已一致→其他，带颜色 kindTag，限高内滚）。
- * 渲染模型来自 src/ui/profiles-view.ts 纯函数 + 备份 diff 共用 groupPlanItems 分组。
- */
-function SwitchPreviewCard({ preview, t }: {
-  preview: SwitchPreview
-  t: TranslateNS<'config-manager'>
-}) {
-  const s = summarizeSwitchPreview(preview)
-  const groups = groupPlanItems(preview.items)
-  // 分组标题字典键（与备份查看/对比弹窗共用同一组文案键）
-  const groupLabelKey = (key: InspectGroupKey): 'backupFiles.inspectGroup.conflicts' | 'backupFiles.inspectGroup.changes' | 'backupFiles.inspectGroup.paths' | 'backupFiles.inspectGroup.skipped' | 'backupFiles.inspectGroup.others' => {
-    switch (key) {
-      case 'conflicts': return 'backupFiles.inspectGroup.conflicts'
-      case 'changes': return 'backupFiles.inspectGroup.changes'
-      case 'paths': return 'backupFiles.inspectGroup.paths'
-      case 'skipped': return 'backupFiles.inspectGroup.skipped'
-      case 'others': return 'backupFiles.inspectGroup.others'
-    }
-  }
-  const kindTagClass = (kind: 'error' | 'info' | 'warn' | 'ok'): string => {
-    switch (kind) {
-      case 'error': return css.kindTagError ?? ''
-      case 'warn': return css.kindTagWarn ?? ''
-      case 'ok': return css.kindTagOk ?? ''
-      case 'info': return css.kindTagInfo ?? ''
-    }
-  }
-  return (
-    <div>
-      {/* 差异摘要（切到这个档案会动你什么） */}
-      <Card className={css.card}>
-        <div className={css.groupLabel}>{t('profiles.previewSummary')}</div>
-        <div className={css.statRow}>
-          <Badge kind="info">{t('profiles.previewWillChange', { count: String(s.willChange) })}</Badge>
-          {s.unchanged > 0 && <Badge kind="ok">{t('profiles.previewUnchanged', { count: String(s.unchanged) })}</Badge>}
-          {s.conflicts > 0 && <Badge kind="error">{t('profiles.previewConflicts', { count: String(s.conflicts) })}</Badge>}
-          {s.secretsNeeded > 0 && <Badge kind="warn">{t('profiles.previewSecrets', { count: String(s.secretsNeeded) })}</Badge>}
-          {s.needsRestart && <Badge kind="warn">{t('profiles.previewRestart')}</Badge>}
-        </div>
-        <div className={css.hint}>{t('profiles.previewNote')}</div>
-      </Card>
-
-      {/* 分区清单（档案包含的分区） */}
-      {s.sectionsInProfile.length > 0 && (
-        <Card className={css.card}>
-          <div className={css.groupLabel}>{t('profiles.previewSections')}</div>
-          <div className={css.statRow}>
-            {s.sectionsInProfile.map((section) => <Badge key={section} kind="info">{section}</Badge>)}
-          </div>
-        </Card>
-      )}
-
-      {/* 变更明细分组（与备份查看/对比同视觉：冲突红色 / 变更蓝色 / 路径黄色 / 已一致绿色 / 其他） */}
-      {groups.length > 0 && (
-        <Card className={css.card}>
-          <div className={css.groupLabel}>{t('profiles.previewItems')}</div>
-          {groups.map((group) => (
-            <div key={group.key} className={css.inspectGroup}>
-              <div className={css.statRow}>
-                <span className={css.groupLabel}>{t(groupLabelKey(group.key))}</span>
-                <Badge kind={group.kind}>{String(group.items.length)}</Badge>
-              </div>
-              <div className={css.reportScroll}>
-                <ul className={css.reportList}>
-                  {group.items.map((item) => (
-                    <li key={item.id}>
-                      <span className={`${css.kindTag} ${kindTagClass(group.kind)}`}>{item.kind}</span>
-                      {' '}{item.adapter}: {item.description}
-                      {item.detail !== undefined && <span className={css.hint}>（{item.detail}）</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          ))}
-        </Card>
+      {/* —— 表单级错误（无弹窗时也要可见） —— */}
+      {state.actionError !== null && state.renameTarget === null && state.deleteTarget === null && (
+        <Banner kind="error">{state.actionError}</Banner>
       )}
     </div>
   )
 }
 
-/** 切换结果（ok / failed / rolledBack；绑定 profileSwitchKind 语义）。 */
-function ProfileSwitchResultCard({ result, t }: {
-  result: ProfileSwitchResult
-  t: TranslateNS<'config-manager'>
-}) {
-  const kind = profileSwitchKind(result)
-  const okCount = result.executed.filter((e) => e.status === 'ok').length
-  const failed = result.executed.filter((e) => e.status === 'failed')
-  return (
-    <div>
-      <Banner kind={kind === 'ok' ? 'ok' : kind === 'rolledBack' ? 'error' : 'error'}>
-        {kind === 'ok'
-          ? t('profiles.switchDone', { count: String(okCount) })
-          : kind === 'rolledBack'
-            ? t('profiles.switchRolledBack')
-            : t('profiles.switchFailed')}
-      </Banner>
-      {result.warnings.length > 0 && (
-        <Banner kind="warn">{result.warnings.join('；')}</Banner>
-      )}
-      {failed.length > 0 && (
-        <div className={css.reportScroll}>
-          <ul className={css.reportList}>
-            {failed.map((f) => (
-              <li key={f.itemId}>{f.itemId}: {f.message ?? ''}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {result.needsRestart && <Banner kind="warn">{t('report.needsRestart')}</Banner>}
-    </div>
-  )
+/** 名称校验码 → 文案（保留名文案带 {name} 占位）。 */
+function nameIssueText(t: TranslateNS<'config-manager'>, name: string, issue: 'required' | 'tooLong' | 'illegal' | 'reserved'): string {
+  if (issue === 'required') return t('profiles.nameRequired')
+  if (issue === 'tooLong') return t('profiles.nameTooLong')
+  if (issue === 'reserved') return t('profiles.nameReserved', { name })
+  return t('profiles.nameInvalid')
 }
-

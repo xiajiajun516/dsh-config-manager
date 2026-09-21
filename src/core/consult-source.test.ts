@@ -1,7 +1,7 @@
 /**
  * 迁移前咨询源读取（Phase 7）单测。
  * 覆盖：export-zip 读取（manifest/checksums/sections/敏感暴露/可迁移性）、
- * local-snapshot 与 profile 合成源构建。
+ * local-snapshot 合成源构建。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ import path from 'node:path';
 import { Exporter } from './exporter.ts';
 import { createAdapters } from '../adapters/index.ts';
 import { makeContext } from '../adapters/test-helpers.ts';
-import { readExportZipSource, buildLocalSnapshotSource, buildProfileSource } from './consult-source.ts';
+import { readExportZipSource, buildLocalSnapshotSource } from './consult-source.ts';
 import { writeZip } from '../utils/zip.ts';
 import { buildManifest } from '../schema/manifest.ts';
 import { buildChecksums } from '../utils/hashing.ts';
@@ -144,20 +144,6 @@ test('consult-source: local-snapshot 合成源（verify fail → 完整性问题
   });
   assert.ok(data.manifestIssues.some((i) => i.severity === 'error'));
   assert.ok(data.checksumIssues.length > 0);
-});
-
-test('consult-source: profile 合成源', () => {
-  const ref: ConsultSourceRef = { type: 'profile', id: 'work' };
-  const data = buildProfileSource(ref, {
-    sections: new Map([['settings', {}], ['providers', {}]]),
-    switchPreview: { itemCount: 5, conflicts: 1, warnings: 0, sections: ['settings', 'providers'], errors: [] },
-    sourceDsh: '0.1.54',
-    sourcePlatform: 'win32',
-  });
-  assert.ok(data.manifest !== null);
-  assert.equal(data.migratability?.itemCount, 5);
-  assert.equal(data.migratability?.fatalConflicts, 1);
-  assert.equal(data.sections.size, 2);
 });
 
 test('consult-source: READ-ONLY（咨询不写任何文件）', async () => {

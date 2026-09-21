@@ -19,6 +19,8 @@ function makeReport(over: Partial<ConsultReport> = {}): ConsultReport {
     healthScore: 100,
     verdict: 'healthy',
     recommendation: 'proceed',
+    blockerCount: 0,
+    attentionCount: 0,
     recommendationReasons: [],
     dimensions: [
       { id: 'compatibility', score: 100, verdict: 'healthy', issues: [] },

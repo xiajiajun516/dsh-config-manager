@@ -45,9 +45,9 @@ const TMP_PREFIX = '.dshcm.';
 /** 合法 kind 集合（§5 COMPLETE 清单 + 评审补 'profile-import'）。 */
 const MIGRATION_KINDS = [
   'import', 'restore', 'rollback',
-  'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
+  'profile-create', 'profile-select', 'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
   'sync-apply', 'autosync', 'recovery',
-  'backup', 'snapshot-delete', 'snapshot-prune',
+  'backup', 'backup-manual', 'snapshot-delete', 'snapshot-prune',
 ] as const;
 
 // ---------- 类型 ----------

@@ -12,6 +12,7 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useEffect } from 'react'
 
+import { redact } from '../../security/redaction.ts'
 import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
 import { toast } from '../common/toast-store.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
@@ -244,7 +245,8 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
                 <Badge kind={it.severity === 'error' ? 'error' : it.severity === 'warning' ? 'warn' : 'info'}>
                   {severityLabel(it.severity, api.t)}
                 </Badge>
-                <span>{it.description}</span>
+                {/* 同步差异项描述由宿主/引擎拼装，可能含本地配置值 → 渲染前过 redact（安全自查） */}
+                <span>{redact(it.description)}</span>
                 {isConflict && (
                   <ConflictResolver
                     item={it}
@@ -325,12 +327,15 @@ function ConflictResolver({ item, resolution, busy, t, onResolve }: ConflictReso
     <div className={css.conflictItem}>
       {/* 变更详情（与导入恢复向导一致：如插件「当前 1.1 vs 备份 1.6」） */}
       {item.detail !== undefined && item.detail !== '' && (
-        <pre className={css.conflictDetail}>{item.detail}</pre>
+        /* 原来是 <pre> + .conflictDetail：overflow-wrap 在 pre 上无效（同 UI-01/F-05），
+           长 JSON 会横向溢出被裁 —— 改用普通块元素，脱敏同样在渲染前完成。 */
+        <div className={css.conflictDetail}>{redact(item.detail)}</div>
       )}
       {conflict?.diff !== undefined && (
         <details className={css.conflictDetail}>
           <summary>{t('syncflow.diff')}</summary>
-          <pre className={css.diffScroll}>{conflict.diff}</pre>
+          {/* diff 保留 <pre>（对齐语义有价值），容器 .diffScroll 自带横向滚动，不会裁切 */}
+          <pre className={css.diffScroll}>{redact(conflict.diff)}</pre>
         </details>
       )}
       {/* 与导入恢复向导 ConflictList 相同的两项单选（保留当前 / 使用备份） */}

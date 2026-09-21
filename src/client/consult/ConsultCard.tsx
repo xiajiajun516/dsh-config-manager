@@ -33,6 +33,14 @@ export function ConsultCard({ report, t, title }: ConsultCardProps) {
           {t('consult.healthScore', { score: String(view.healthScore) })}
         </Badge>
         <Badge kind={view.recommendationBadgeKind}>{view.recommendationLabel}</Badge>
+        {/* 结论的可核对依据：硬阻断（为什么不能导）与需处理项（要做什么）分开计数 ——
+            不再让一个分数代替结论（用户实测抱怨过「评分 89 却建议阻止执行」）。 */}
+        {view.blockerCount > 0 && (
+          <Badge kind="error">{t('consult.blockers', { count: String(view.blockerCount) })}</Badge>
+        )}
+        {view.attentionCount > 0 && (
+          <Badge kind="warn">{t('consult.attention', { count: String(view.attentionCount) })}</Badge>
+        )}
         <Badge kind="info">{t('consult.dryRun')}</Badge>
       </div>
 

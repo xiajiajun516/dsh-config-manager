@@ -305,12 +305,12 @@ test('I-09 未确认 → ImportNotConfirmedError 且零写入（安全阀）', a
 });
 
 /**
- * I-10 仅导入已批准分区（严格分层信任；安全不变式 (c) 回归）。
+ * I-10 仅导入已勾选的分区（用户 2026-09 决策后：市场通道与导入页同一套 Selection 语义）。
  *
- * 配置市场「逐分区批准」最终依赖：MarketPanel 把 plan 过滤为「仅已批准分区」的子计划
- * （src/client/market/market-view.ts buildApprovedPlan），再交给 executeImportPlan。
- * 本用例证明 Importer.executeImportPlan **只执行 plan.items 里出现的分区** —— 即使完整 plan
- * 含高风险分区（plugins/mcp），只要子计划里不含它们，就绝不写入。
+ * 市场通道的勾选最终依赖：`MarketImportReview` 把 plan 裁成「仅已勾选条目」的子计划
+ * （`src/ui/selection-model.ts` 的 buildSelectedPlan，与导入向导 execute() 里的 planFilter 同源），
+ * 再交给 executeImportPlan。本用例证明 Importer.executeImportPlan **只执行 plan.items 里出现的
+ * 分区** —— 即使完整 plan 含未勾选的高风险分区（plugins/mcp），只要子计划里不含它们，就绝不写入。
  */
 test('I-10 仅导入已批准分区：executeImportPlan 只执行子计划出现的高风险之外的已批准分区', async () => {
   await withTmp(async (dir) => {

@@ -21,6 +21,12 @@ export {
   type RestoreAction, type RestoreActionKind, type RestoreOptions,
   type RestorePlan, type RestoreReport, type SnapshotMeta,
 } from './restore.ts';
+/* —— 快照恢复的 git 风格改动预览（只读：变更状态 / 行数统计 / 逐行 hunks） —— */
+export {
+  snapshotFileDiff, summarizeRestoreChanges, SNAPSHOT_DIFF_LIMITS,
+  type RestoreChangeSummary, type SnapshotChangeEntry, type SnapshotChangeStatus,
+  type SnapshotFileDiff, type SnapshotFileDiffReason, type SnapshotFileDiffSide,
+} from './snapshot-diff.ts';
 export {
   computeCompatibility, describeCompatibility, describeSchemaStatus,
   validateSections,

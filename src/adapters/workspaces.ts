@@ -9,7 +9,7 @@ import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { WorkspaceRecord, WorkspacesSection } from '../schema/types.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 
@@ -19,14 +19,27 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
   readonly defaultIncluded = true;
   readonly portability = 'platformSpecific' as const;
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<WorkspacesSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<WorkspacesSection>> {
     const records = await ctx.workspace.listRecords();
+    // Phase 1 条目级选择：单元 = 一条工作区记录（id 与导入侧 `workspace:<id>` 一致）
+    const allow = options.includeItems?.['workspaces'];
+    const kept = allow === undefined ? records : records.filter((r) => allow.includes(`workspace:${r.id}`));
     return {
       sectionId: 'workspaces',
-      data: { version: 1, workspaces: records },
-      counts: { workspaces: records.length },
+      data: { version: 1, workspaces: kept },
+      counts: { workspaces: kept.length },
       warnings: [],
     };
+  }
+
+  /** 单元清单（零 I/O）：一条工作区记录 = 一个单元；标题缺失时退回 id。 */
+  listUnits(section: ExportSection<WorkspacesSection>): ExportUnit[] {
+    return section.data.workspaces.map((rec) => ({
+      id: `workspace:${rec.id}`,
+      label: rec.title !== undefined && rec.title !== '' ? rec.title : rec.id,
+      detail: rec.path,
+      sizeBytes: 0,
+    }));
   }
 
   async analyzeImport(data: WorkspacesSection, ctx: ImportContext): Promise<PlanItem[]> {

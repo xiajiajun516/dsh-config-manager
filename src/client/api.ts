@@ -27,9 +27,10 @@
  */
 
 import type { ImportAnalysis, ImportDecisions, ImportPlan, ImportResult } from '../core/types.ts';
-import type { ExportOptions, ExportReport } from '../core/types.ts';
+import type { ExportOptions, ExportReport, ExportUnit } from '../core/types.ts';
 import type { RestorePlan, RestoreReport, SnapshotMeta } from '../core/restore.ts';
-import type { ProfileMeta, ProfileSwitchResult, SwitchPreview } from '../profiles/profile-manager.ts';
+import type { RestoreChangeSummary, SnapshotFileDiff } from '../core/snapshot-diff.ts';
+import type { DshProfileDetail, DshProfileMeta, DshProfileSelection, DshProfilesSnapshot } from '../profiles/dsh-profile-shared.ts';
 
 import type { RunState } from '../core/run-registry.ts';
 import type { ConsultReport } from '../core/migration-consult.ts';
@@ -37,6 +38,7 @@ import type { Manifest, SectionId } from '../schema/types.ts';
 import type { BackupScheduleStatus, BackupRunResult, BackupScheduleDraft } from '../ui/backup-schedule.ts';
 import type { BackupFileMeta } from '../sync/backup-files.ts';
 import { zhUiT, type UiT } from '../ui/i18n.ts';
+import { failedSectionsFromResponse } from '../ui/export-flow.ts';
 
 /** Host 半健康检查响应（plugin 版本 / DSH 版本 / 平台，用于主页横幅与兼容性说明） */
 export interface ServiceStatus {
@@ -86,10 +88,53 @@ export interface BackupInspectResult {
 /** P2-⑫：导出前预览响应（不落盘 ZIP；各分区 counts + 估算大小） */
 export interface ExportPreviewResponse {
   ok: boolean;
-  sections: { section: SectionId; count: number; sizeBytes: number }[];
+  /**
+   * Phase 1：每个分区附带**可单独勾选的最小单元**清单（`items`）。
+   * items 为空数组 = 本分区不可细分（UI 只给整体开关）。单元由 adapter.listUnits()
+   * 零 I/O 派生，id 命名空间与导入侧 PlanItem.id 一致。
+   */
+  sections: { section: SectionId; count: number; sizeBytes: number; items: ExportUnit[] }[];
   totalSections: number;
   totalSizeBytes: number;
+  /** 读取失败的分区**数量**（既有契约，语义与类型均不变） */
   sectionsFailed: number;
+  /**
+   * 读取失败的分区 **id 列表**（t7，可选）。
+   *
+   * 宿主逐个分区调用 adapter.export 失败时一并收集。有了它，客户端不必再靠
+   * 「请求了但没回来」推断失败分区，可以直接精确标注。
+   *
+   * 向后兼容：**可选**字段 —— 旧宿主（或第三方实现）不回该字段时，客户端回退到
+   * 推断路径（见 `ui/export-flow.ts` 的 `failedSectionsFromResponse`）；
+   * 旧客户端看到未知字段也会忽略，不受影响。
+   */
+  failedSections?: SectionId[];
+}
+
+/**
+ * 从 /export-preview 响应算出「哪些分区的清单读取失败」（t7）。
+ *
+ * 两条来源合并：
+ *  1. **宿主精确清单** `response.failedSections`（新增可选字段）：路由逐个分区 export 失败时
+ *     点名的 id，最权威；
+ *  2. **推断**（`requested` − `response.sections`，见 src/ui/export-flow.ts 的
+ *     `failedSectionsFromResponse`）：旧宿主不回该字段时的兜底 —— 路由对每个请求过的分区
+ *     要么回一条清单、要么计入失败，因此「没回来 = 失败」，与改造前行为完全一致。
+ * 两者取并集（宿主正确时二者等价，故不会多报），保持 `requested` 顺序；
+ * `requested` 之外的 id 一律忽略（不越批标记）。
+ *
+ * 放在 API 层而非组件里：这是「解析响应」的纯逻辑，可 node 单测；React 壳只调用
+ * （AGENTS.md：禁止在 React 组件里写可测试业务逻辑）。
+ */
+export function resolveFailedSections(
+  requested: readonly SectionId[],
+  response: Pick<ExportPreviewResponse, 'sections' | 'failedSections'>,
+): SectionId[] {
+  const derived = failedSectionsFromResponse(requested, response.sections.map((s) => s.section));
+  const precise = response.failedSections;
+  if (precise === undefined) return derived;
+  const named = new Set(precise);
+  return requested.filter((s) => derived.includes(s) || named.has(s));
 }
 
 /** execute 端点请求体（对齐 ImportWizard.execute 的 opts） */
@@ -122,6 +167,8 @@ export interface RestoreResponse {
   plan?: RestorePlan;
   report?: RestoreReport;
   runId?: string;
+  /** git 风格预览：逐动作的变更状态 + 行数统计（dryRun=true 时由宿主附带；旧宿主不返回） */
+  changeSummary?: RestoreChangeSummary;
 }
 
 /** Star 引导弹窗状态（GET /star-prompt；纯偏好，无 secret） */
@@ -192,18 +239,19 @@ export const CONFIG_MANAGER_API = {
   restore: '/api/dsh-config-manager/restore',
   snapshotDelete: '/api/dsh-config-manager/snapshots/delete',
   snapshotPin: '/api/dsh-config-manager/snapshots/pin',
+  // git 风格恢复预览：单个文件的逐行差异（只读；点开文件才请求）
+  snapshotFileDiff: '/api/dsh-config-manager/snapshots/file-diff',
   backupSchedule: '/api/dsh-config-manager/backup-schedule',
   backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
   backupFiles: '/api/dsh-config-manager/backup-files',
   backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
   consult: '/api/dsh-config-manager/consult',
   profiles: '/api/dsh-config-manager/profiles',
-  profilesSave: '/api/dsh-config-manager/profiles/save',
+  profilesDetail: '/api/dsh-config-manager/profiles/detail',
+  profilesCreate: '/api/dsh-config-manager/profiles/create',
   profilesDelete: '/api/dsh-config-manager/profiles/delete',
   profilesRename: '/api/dsh-config-manager/profiles/rename',
-  profilesAnalyzeSwitch: '/api/dsh-config-manager/profiles/analyze-switch',
-  profilesExecuteSwitch: '/api/dsh-config-manager/profiles/execute-switch',
-  profilesImport: '/api/dsh-config-manager/profiles/import',
+  profilesSelect: '/api/dsh-config-manager/profiles/select',
   starPrompt: '/api/dsh-config-manager/star-prompt',
   releaseNotesPrompt: '/api/dsh-config-manager/release-notes-prompt',
 } as const;
@@ -320,6 +368,11 @@ export class ConfigManagerApi {
 
   // ------------------------------------------------------- export-preview
   /** P2-⑫：导出前只读预览（不落盘 ZIP）——「将打包 X 分区 / Y 条目 / 约 Z 大小」。 */
+  /**
+   * 只读清单（不落盘 ZIP）：分区 + 可勾选单元 + 估算大小。
+   * `only` 缺省 = 推荐分区；内容选择器按「已勾选分区」与「展开/勾选某分区」分批调用，
+   * 避免为了打开选择器就把 sessions 全量读一遍。
+   */
   async exportPreview(only?: SectionId[]): Promise<ExportPreviewResponse> {
     const response = await fetch(CONFIG_MANAGER_API.exportPreview, {
       method: 'POST',
@@ -472,12 +525,23 @@ export class ConfigManagerApi {
     return readJson<UploadResponse>(response, this.t);
   }
 
-  /** ImportPort.analyzeImport：零写入分析（校验/兼容性/差异/路径/秘密检测） */
-  async analyzeImport(zipPath: string): Promise<ImportAnalysis> {
+  /**
+   * ImportPort.analyzeImport：零写入分析（校验/兼容性/差异/路径/秘密检测）。
+   *
+   * `opts.decryptPassword`（仅内存）：提供即让宿主解开 secrets.enc，把
+   * `analysis.credentials`（仅 ref 名）一并回传（issue #39 Feature 2）——
+   * 客户端不必自己解析 .credentials.yaml。不传 = refs 为空数组。
+   */
+  async analyzeImport(zipPath: string, opts: { decryptPassword?: string } = {}): Promise<ImportAnalysis> {
     const response = await fetch(CONFIG_MANAGER_API.analyze, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ zipPath }),
+      body: JSON.stringify({
+        zipPath,
+        ...(opts.decryptPassword !== undefined && opts.decryptPassword !== ''
+          ? { decryptPassword: opts.decryptPassword }
+          : {}),
+      }),
     });
     return readJson<ImportAnalysis>(response, this.t);
   }
@@ -568,6 +632,25 @@ export class ConfigManagerApi {
     return readJson<RestoreResponse>(response, this.t);
   }
 
+  /**
+   * git 风格恢复预览：单个文件的逐行差异（只读，零写入）。
+   * before = 当前磁盘文件 / after = 快照 blob；越界 / 二进制 / 超限经响应里的 reason 表达。
+   */
+  async snapshotFileDiff(payload: {
+    snapshotId: string;
+    kind: SnapshotFileDiff['kind'];
+    target?: string;
+    blobPath?: string;
+  }): Promise<SnapshotFileDiff> {
+    const response = await fetch(CONFIG_MANAGER_API.snapshotFileDiff, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await readJson<{ diff: SnapshotFileDiff }>(response, this.t);
+    return body.diff;
+  }
+
   /** P1-⑧：手动删除单个快照（危险操作：该导入前回滚点不可恢复；`removed` 为是否实际删除）。 */
   async deleteSnapshot(snapshotId: string): Promise<{ removed: boolean }> {
     const response = await fetch(CONFIG_MANAGER_API.snapshotDelete, {
@@ -588,80 +671,61 @@ export class ConfigManagerApi {
     return readJson<{ ok: boolean; pinned: boolean }>(response, this.t);
   }
 
-  // ------------------------------------------------- 配置档案（m-profiles）
-  /** 列出全部 Profile（name/createdAt/updatedAt/sections/fileCount）。 */
-  async profilesList(): Promise<ProfileMeta[]> {
+  // ------------------------------------------------- 档案（DSH 自带 profile）
+  /** 列出 DSH profile：列表 + 当前运行 + 「下次启动」标记 + 起步模板。 */
+  async profilesList(): Promise<DshProfilesSnapshot> {
     const response = await fetch(CONFIG_MANAGER_API.profiles);
-    const body = await readJson<{ ok: boolean; profiles: ProfileMeta[] }>(response, this.t);
-    return body.profiles;
+    return readJson<DshProfilesSnapshot & { ok: boolean }>(response, this.t);
   }
 
-  /** 保存当前 DSH 配置为新 Profile（天然不含秘密值）。 */
-  async profileSave(name: string, sections?: SectionId[]): Promise<ProfileMeta> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesSave, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, sections }),
-    });
-    const body = await readJson<{ ok: boolean; profile: ProfileMeta }>(response, this.t);
+  /** 单个档案详情（package.json / cordis.patch.yml 原文；大文件原文截断为 null）。 */
+  async profileDetail(name: string): Promise<DshProfileDetail> {
+    const response = await fetch(`${CONFIG_MANAGER_API.profilesDetail}?name=${encodeURIComponent(name)}`);
+    const body = await readJson<{ ok: boolean; profile: DshProfileDetail }>(response, this.t);
     return body.profile;
   }
 
-  /** 删除 Profile（危险操作：该组配置快照不可恢复）。 */
-  async profileDelete(name: string): Promise<void> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesDelete, {
+  /** 新建档案（在 $DSH_HOME/profiles/<name> 写标准 profile 三件套；template = base/web/headless/sdk/…）。 */
+  async profileCreate(name: string, template: string): Promise<DshProfileMeta> {
+    const response = await fetch(CONFIG_MANAGER_API.profilesCreate, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, template }),
     });
-    await readJson<{ ok: boolean }>(response, this.t);
+    const body = await readJson<{ ok: boolean; profile: DshProfileMeta }>(response, this.t);
+    return body.profile;
   }
 
-  /** 重命名 Profile（目录级移动）。 */
-  async profileRename(name: string, newName: string): Promise<ProfileMeta> {
+  /** 重命名档案（目录级移动；当前运行中的档案被 host 拒绝）。 */
+  async profileRename(name: string, newName: string): Promise<DshProfileMeta> {
     const response = await fetch(CONFIG_MANAGER_API.profilesRename, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name, newName }),
     });
-    const body = await readJson<{ ok: boolean; profile: ProfileMeta }>(response, this.t);
+    const body = await readJson<{ ok: boolean; profile: DshProfileMeta }>(response, this.t);
     return body.profile;
   }
 
-  /** 切换前预览（只读，零写入）：分析切换到该 Profile 会产生的计划项。 */
-  async profileAnalyzeSwitch(name: string): Promise<SwitchPreview> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesAnalyzeSwitch, {
+  /** 物理删除档案目录（不可恢复；当前运行中的档案需显式 allowCurrent=true）。 */
+  async profileDelete(name: string, opts: { allowCurrent?: boolean } = {}): Promise<void> {
+    const response = await fetch(CONFIG_MANAGER_API.profilesDelete, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, allowCurrent: opts.allowCurrent === true }),
+    });
+    await readJson<{ ok: boolean }>(response, this.t);
+  }
+
+  /** 记录「下次启动」用哪个档案（name=null 清除标记）。DSH 不支持运行中切换，重启由用户完成。 */
+  async profileSelect(name: string | null): Promise<DshProfileSelection | null> {
+    const response = await fetch(CONFIG_MANAGER_API.profilesSelect, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    const body = await readJson<{ ok: boolean; preview: SwitchPreview }>(response, this.t);
-    return body.preview;
-  }
-
-  /** 执行切换（confirm=true 安全阀；走快照 + 分阶段 apply + 失败回滚；响应含 runId）。 */
-  async profileExecuteSwitch(name: string, opts: {
-    strategy?: 'merge' | 'replace' | 'skipExisting'
-    secretInputs?: Record<string, string>
-    rollbackOnError?: boolean
-  }): Promise<ProfileSwitchResult & { runId: string }> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesExecuteSwitch, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, confirm: true, ...opts }),
-    });
-    return readJson<ProfileSwitchResult & { runId: string }>(response, this.t);
-  }
-
-  /** 导入 Profile（content = profile.json 字符串；asName 可选覆盖目标名）。 */
-  async profileImport(content: string, asName?: string): Promise<ProfileMeta> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesImport, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ content, ...(asName !== undefined ? { asName } : {}) }),
-    });
-    const body = await readJson<{ ok: boolean; profile: ProfileMeta }>(response, this.t);
-    return body.profile;
+    const body = await readJson<{ ok: boolean; selection: DshProfileSelection | null }>(response, this.t);
+    return body.selection;
   }
 
   // ------------------------------------------------- 定时全量备份（快照 tab）

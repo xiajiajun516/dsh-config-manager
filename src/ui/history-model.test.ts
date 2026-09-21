@@ -9,6 +9,7 @@ import type { StoredMigrationHistoryEntry } from '../core/migration-history.ts';
 import {
   resultBadgeKind, kindLabelKey, groupByKind, summarize, applyRecent, filterByText,
   filterToQuery, collectHistoryKinds, collectHistoryResults, filterByKindResult,
+  formatHistorySections,
   HISTORY_KIND_OPTIONS, HISTORY_RESULT_OPTIONS,
 } from './history-model.ts';
 
@@ -36,12 +37,24 @@ test('kindLabelKey：映射为 history.kind.<kind> 键基名', () => {
   assert.equal(kindLabelKey('snapshot-prune'), 'history.kind.snapshot-prune');
 });
 
+test('formatHistorySections：空 → null；≤max 全列；>max 折叠为 +N', () => {
+  assert.equal(formatHistorySections([]), null, '无分区不渲染占位');
+  assert.equal(formatHistorySections(['settings']), 'settings');
+  assert.equal(formatHistorySections(['settings', 'skills', 'ui']), 'settings, skills, ui');
+  assert.equal(
+    formatHistorySections(['settings', 'skills', 'ui', 'mcp', 'plugins']),
+    'settings, skills, ui +2',
+    '超出上限折叠计数，避免整条铺满窄抽屉',
+  );
+  assert.equal(formatHistorySections(['a', 'b', 'c', 'd'], 2), 'a, b +2', 'max 可调');
+});
+
 test('HISTORY_KIND_OPTIONS：恰为 §5 全清单（含 profile-import）', () => {
   assert.deepEqual(HISTORY_KIND_OPTIONS, [
     'import', 'restore', 'rollback',
-    'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
+    'profile-create', 'profile-select', 'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
     'sync-apply', 'autosync', 'recovery',
-    'backup', 'snapshot-delete', 'snapshot-prune',
+    'backup', 'backup-manual', 'snapshot-delete', 'snapshot-prune',
   ]);
   assert.deepEqual(HISTORY_RESULT_OPTIONS, ['success', 'failed', 'skipped']);
 });

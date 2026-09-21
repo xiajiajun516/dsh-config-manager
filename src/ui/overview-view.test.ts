@@ -1,5 +1,5 @@
 /**
- * Overview 纯渲染模型测试（node:test，零依赖）：指标卡 / 健康判定 / 建议 /
+ * Overview 纯渲染模型测试（node:test，零依赖）：指标卡 / 健康判定 /
  * 最近活动 / 相对时间 / 空态。
  */
 import test from 'node:test'
@@ -13,7 +13,6 @@ import {
   overviewActivity,
   overviewEmptyState,
   overviewHealth,
-  overviewSuggestions,
   relTime,
   type OverviewInputs,
 } from './overview-view.ts'
@@ -156,23 +155,6 @@ test('overviewHealth: SAFE MODE 优先 error；全空 warn；正常 ok', () => {
   assert.equal(scheduleFail.textKey, 'health.scheduleFailed')
 
   assert.equal(overviewHealth(baseInputs()).kind, 'ok', '数据未加载不降级')
-})
-
-/* ---------------- 建议 ---------------- */
-
-test('overviewSuggestions: 未开启定时备份/未配置同步 → 两条建议；已配置则不提示；SAFE MODE 清空', () => {
-  const both = overviewSuggestions(baseInputs({ schedule: { enabled: false }, sync: { configured: false } }))
-  assert.deepEqual(both.map((s) => s.id), ['schedule', 'sync'])
-
-  const none = overviewSuggestions(baseInputs({ schedule: { enabled: true }, sync: { configured: true } }))
-  assert.equal(none.length, 0)
-
-  const blocked = overviewSuggestions(baseInputs({
-    recoveryRequired: true,
-    schedule: { enabled: false },
-    sync: { configured: false },
-  }))
-  assert.equal(blocked.length, 0, 'SAFE MODE 时不叠加建议')
 })
 
 /* ---------------- 最近活动 ---------------- */

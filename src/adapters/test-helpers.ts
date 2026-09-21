@@ -43,6 +43,19 @@ export class MemFs implements FileSystemFacade {
   async remove(relPath: string): Promise<void> {
     this.files.delete(this.key(relPath));
   }
+  /**
+   * 测试用 mtime 表（key 与 files 同一规则）。**未登记的文件返回 null**，
+   * 与真实门面「读不到时间」同语义 —— 让「把未知当最旧」这类缺陷在测试里必然暴露。
+   */
+  mtimes = new Map<string, number>();
+  /** 测试助手：登记某文件的 mtime（null = 恢复为「读不到」） */
+  setMtime(relPath: string, ms: number | null): void {
+    if (ms === null) this.mtimes.delete(this.key(relPath));
+    else this.mtimes.set(this.key(relPath), ms);
+  }
+  async mtimeMs(relPath: string): Promise<number | null> {
+    return this.mtimes.get(this.key(relPath)) ?? null;
+  }
   async listRecursive(dir: string): Promise<string[]> {
     const base = normalizePath(this.homeDir);
     const prefix = normalizePath(dir) === '' ? base : `${base}/${normalizePath(dir)}`;

@@ -6,7 +6,7 @@
  * ```
  * { "schemaVersion": 2,
  *   "channels": {
- *     "git":    { mode: 'default'|'advanced', sections: SectionId[], encrypt, includeSecrets },
+ *     "git":    { mode: 'default'|'advanced', sections: SectionId[], sessionsLimit, encrypt, includeSecrets },
  *     "webdav": { ... } } }
  * ```
  * - mode='default'（快速导出）：推送/自动同步使用全部 portable 推荐分区（sections 可空）；
@@ -39,7 +39,13 @@ export interface SyncSelection {
   mode: SyncSelectionMode;
   /** 高级模式勾选分区；default 模式可为空数组 */
   sections: SectionId[];
-  /** 手动推送默认加密快照（密码仅每次推送输入，绝不持久化） */
+  /**
+   * sessions（历史会话）分区同步的「最新 N 个会话」上限。
+   * 仅在 sections 里显式勾选 sessions 时生效；缺省 5（见 DEFAULT_SYNC_SESSIONS_LIMIT）。
+   * 0 = 勾了但不带任何会话；负数非法（读盘时按缺省处理）。
+   */
+  sessionsLimit: number;
+  /** 手动推送默认加密快照（开关持久化；密码本体存 DSH credentials，见 sync/selection 路由） */
   encrypt: boolean;
   /** 手动推送默认导出真实凭据值（安全：必须同时 encrypt；自动同步恒 false） */
   includeSecrets: boolean;
@@ -48,9 +54,34 @@ export interface SyncSelection {
 /** 全通道选择视图（v2 文件直接读取；status 路由一次返回两个通道的选择）。 */
 export type SyncSelectionByChannel = Record<SyncTransportType, SyncSelection>;
 
+/**
+ * 显式勾选才允许进入同步通道的「可选分区」（缺省全为 deviceSpecific，不在推荐分区里）。
+ *
+ * 目前只有 sessions（历史会话）：内容敏感 + 设备相关，**绝不默认进入同步通道**，
+ * 只有用户在同步分区弹窗里显式勾选才纳入；且必须带数量上限（见 DEFAULT_SYNC_SESSIONS_LIMIT），
+ * 避免一次把整棵会话树推上远端。凭据 / 密钥分区不在此列（结构性拒绝，永不进同步）。
+ */
+export const OPT_IN_SYNC_SECTIONS: readonly SectionId[] = ['sessions'];
+
+/** sessions 分区默认同步「最新 N 个会话」（用户可在弹窗里改；0 = 不带）。 */
+export const DEFAULT_SYNC_SESSIONS_LIMIT = 5;
+
+/** sessionsLimit 归一化：非整数 / 缺失 / 负数 → 默认值；超大 → 上限钳制。 */
+export function normalizeSessionsLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return DEFAULT_SYNC_SESSIONS_LIMIT;
+  return Math.min(value, 10000);
+}
+
 /** 缺省配置（首次无文件 / 损坏 / 不支持 schema 时回退） */
 export function defaultSyncSelection(): SyncSelection {
-  return { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [], encrypt: false, includeSecrets: false };
+  return {
+    schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
+    mode: 'default',
+    sections: [],
+    sessionsLimit: DEFAULT_SYNC_SESSIONS_LIMIT,
+    encrypt: false,
+    includeSecrets: false,
+  };
 }
 
 /**
@@ -72,6 +103,7 @@ function parseChannelSelection(obj: Record<string, unknown>): SyncSelection {
       (s): s is SectionId => typeof s === 'string' && s !== '',
     );
   }
+  sel.sessionsLimit = normalizeSessionsLimit(obj['sessionsLimit']);
   if (typeof obj['encrypt'] === 'boolean') sel.encrypt = obj['encrypt'];
   if (typeof obj['includeSecrets'] === 'boolean') sel.includeSecrets = obj['includeSecrets'];
   // 安全兜底：持久化数据被篡改导致 includeSecrets 但未 encrypt → 强制关掉导出密钥
@@ -140,8 +172,8 @@ export async function writeSyncSelection(dir: string, channel: SyncTransportType
   const payload: Record<string, unknown> = {
     schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
     channels: {
-      git: { mode: channels.git.mode, sections: channels.git.sections, encrypt: channels.git.encrypt, includeSecrets: channels.git.includeSecrets },
-      webdav: { mode: channels.webdav.mode, sections: channels.webdav.sections, encrypt: channels.webdav.encrypt, includeSecrets: channels.webdav.includeSecrets },
+      git: { mode: channels.git.mode, sections: channels.git.sections, sessionsLimit: channels.git.sessionsLimit, encrypt: channels.git.encrypt, includeSecrets: channels.git.includeSecrets },
+      webdav: { mode: channels.webdav.mode, sections: channels.webdav.sections, sessionsLimit: channels.webdav.sessionsLimit, encrypt: channels.webdav.encrypt, includeSecrets: channels.webdav.includeSecrets },
     },
   };
   const target = path.join(dir, SYNC_SELECTION_FILE);

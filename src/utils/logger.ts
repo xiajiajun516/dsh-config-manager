@@ -4,6 +4,20 @@
  */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+/** 合法日志级别集合（`DSH_CONFIG_MANAGER_LOG_LEVEL` 的取值）。 */
+export const LOG_LEVELS: readonly LogLevel[] = ['debug', 'info', 'warn', 'error'];
+
+/**
+ * 解析日志级别字符串（大小写 / 前后空白不敏感）；未提供或不合法 → fallback（缺省 warn）。
+ * 宿主入口用它解析 `DSH_CONFIG_MANAGER_LOG_LEVEL`：默认 warn —— 启动 dsh web 后控制台
+ * 只保留 warn/error，常规 info（挂载横幅、调度器跳过、导出/备份完成）不再刷屏；
+ * 排查时 `DSH_CONFIG_MANAGER_LOG_LEVEL=info`（或 debug）即可恢复逐条输出。
+ */
+export function parseLogLevel(raw: string | undefined, fallback: LogLevel = 'warn'): LogLevel {
+  const value = raw?.trim().toLowerCase();
+  return LOG_LEVELS.includes(value as LogLevel) ? (value as LogLevel) : fallback;
+}
+
 /** 敏感字段名黑名单（大小写不敏感；命中即掩码值，规范 §6 清单） */
 export const SENSITIVE_FIELD_BLACKLIST = [
   'password', 'passwd', 'token', 'accesstoken', 'refreshtoken', 'apikey',

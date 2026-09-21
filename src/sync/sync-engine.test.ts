@@ -236,6 +236,108 @@ test('push: sections 含非 portable / 未知分区 → 警告跳过，其余照
   }
 });
 
+test('push: 可选分区 sessions —— 无选项时跳过并告警；带 limit 时只带最新 N 个会话', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sessions-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    await ctx.fs.writeFile('sessions/--p--/old/session.jsonl.zstd', Buffer.from('old', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/old/session.jsonl.zstd', 1000);
+    await ctx.fs.writeFile('sessions/--p--/new/session.jsonl.zstd', Buffer.from('new', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/new/session.jsonl.zstd', 2000);
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+    const engine = new SyncEngine({
+      ctx,
+      transport,
+      stateDir: tmp,
+      adapters,
+      importer,
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    // ① 勾了 sessions 但**没有**给出 sessions 选项 → 与其它 deviceSpecific 分区一样跳过（安全默认）
+    const withoutOption = await engine.push({ snapshotId: 'sync-sessions-a', sections: ['settings', 'sessions'] });
+    assert.ok(!withoutOption.sections.includes('sessions'), 'sessions 未提供选项时不得进入快照');
+    assert.ok(
+      withoutOption.warnings.some((w) => w.includes('sessions')),
+      '跳过必须可见（不静默）: ' + withoutOption.warnings.join(' | '),
+    );
+
+    // ② 提供 limit → sessions 作为可选分区进入同步，且只带「最新 1 个会话」目录
+    const limited = await engine.push({ snapshotId: 'sync-sessions-b', sections: ['sessions'], sessions: { limit: 1 } });
+    assert.deepEqual(limited.sections, ['sessions']);
+    const uploaded = transport.snapshots.get('sync-sessions-b')!;
+    const files = (plainSections(uploaded.sections)['sessions'] as { files: { relativePath: string }[] }).files;
+    assert.deepEqual(files.map((f) => f.relativePath), ['--p--/new/session.jsonl.zstd']);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('pull: 可选分区 sessions —— 未开启则远端会话不进计划；开启后会话项可见（显式 opt-in）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sessions-pull-'));
+  try {
+    const transport = new MemSyncTransport();
+    const now = () => new Date('2026-08-16T12:00:00.000Z');
+    // 源机：两个会话 → 只推最新 1 个
+    const srcCtx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(srcCtx);
+    await srcCtx.fs.writeFile('sessions/--p--/old/session.jsonl.zstd', Buffer.from('old', 'utf8'));
+    srcCtx.fs.setMtime('sessions/--p--/old/session.jsonl.zstd', 1000);
+    await srcCtx.fs.writeFile('sessions/--p--/new/session.jsonl.zstd', Buffer.from('new', 'utf8'));
+    srcCtx.fs.setMtime('sessions/--p--/new/session.jsonl.zstd', 2000);
+    const srcAdapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const srcEngine = new SyncEngine({
+      ctx: srcCtx,
+      transport,
+      stateDir: path.join(tmp, 'src'),
+      adapters: srcAdapters,
+      importer: new Importer({ ctx: srcCtx, adapters: srcAdapters, snapshotStore: new MemSnapshotStore() }),
+      now,
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const pushed = await srcEngine.push({ snapshotId: 'sync-sessions-pull', sections: ['sessions'], sessions: { limit: 1 } });
+    assert.deepEqual(pushed.sections, ['sessions']);
+
+    // 目标机：默认（未开启可选分区）→ 远端会话分区不得出现在差异计划里
+    const dstCtx = makeContext('win32', 'C:\\Users\\bob');
+    const dstAdapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const dstImporter = new Importer({ ctx: dstCtx, adapters: dstAdapters, snapshotStore: new MemSnapshotStore() });
+    const plainEngine = new SyncEngine({
+      ctx: dstCtx,
+      transport,
+      stateDir: path.join(tmp, 'dst-plain'),
+      adapters: dstAdapters,
+      importer: dstImporter,
+      now,
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const plainReport = await plainEngine.pull({});
+    assert.ok(
+      !plainReport.changes.some((c) => c.adapter === 'sessions'),
+      '未开启 includeOptInSections 时不得出现会话项: ' + plainReport.changes.map((c) => c.adapter).join(','),
+    );
+
+    // 开启（= 用户在分区弹窗里勾了历史会话）→ 会话项进入计划
+    const optInEngine = new SyncEngine({
+      ctx: dstCtx,
+      transport,
+      stateDir: path.join(tmp, 'dst-optin'),
+      adapters: dstAdapters,
+      importer: dstImporter,
+      now,
+      includeOptInSections: true,
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const optInReport = await optInEngine.pull({});
+    assert.ok(
+      optInReport.changes.some((c) => c.adapter === 'sessions'),
+      '开启后会话项必须可见: ' + optInReport.changes.map((c) => c.adapter).join(','),
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('push: sections 全为无效/非 portable → ok=false + 明确 message', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sections-none-'));
   try {

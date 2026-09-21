@@ -10,6 +10,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
+import { redact } from '../../security/redaction.ts'
 import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ABOUT_META } from './about-view.ts'
@@ -352,6 +353,7 @@ export function ReleaseNotesDialog({
       {/* 头部：标题与关闭按钮 */}
       <Modal.Header
         title={t('about.releaseNotes.title')}
+        closeLabel={t('common.close')}
         onClose={onClose}
       />
 
@@ -370,7 +372,8 @@ export function ReleaseNotesDialog({
 
         {error !== null && (
           <div>
-            <Banner kind="error">{error}</Banner>
+            {/* G-04：release notes 的错误文本来自 GitHub 状态/网络响应 —— 展示前统一过 redact */}
+            <Banner kind="error">{redact(error)}</Banner>
             <div className={css.actionRow} style={{ marginTop: '8px' }}>
               <Button onClick={() => { void loadFirstPage() }}>
                 {t('about.releaseNotes.retry')}

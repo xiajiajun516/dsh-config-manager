@@ -1,6 +1,6 @@
 /**
- * m-market 单元测试（docs/design/marketplace.md §10 测试矩阵）。
- * 覆盖：解析（L1/L2）、安全校验（§6）、只读 reader、市场配置持久化、纯渲染模型。
+ * m-market 单元测试。
+ * 覆盖：解析（L1/L2）、安全校验、只读 reader、市场配置持久化、纯渲染模型。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

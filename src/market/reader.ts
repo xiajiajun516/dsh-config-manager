@@ -1,7 +1,7 @@
 /**
  * m-market：市场只读读取通道（MarketReader / GitMarketReader）。
  *
- * 与 docs/design/marketplace.md §4 对齐：
+ * 与 docs/design/2026-08-19-market-publish-design.md §3.2「GitMarketReader：按条目选择仓库」对齐：
  * - 市场用「只读 git fetch」，不复用 GitTransport 的写路径（commit/push/snapshots/<id>/ 布局）；
  * - 复用点：git 命令执行层（execFile promise 封装 / 脱敏 mask / SnapshotFs）+ validateRepoUrl；
  * - 每次读取：ensureRepo() 首次 git clone --depth 1，已存在副本则 git pull --ff-only；

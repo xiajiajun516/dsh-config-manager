@@ -123,6 +123,48 @@ test('push：includeSecrets 读取 .credentials.yaml → 加密为独立凭据�
   }
 });
 
+test('issue #39：v1（refs 块）布局的 .credentials.yaml 同样被识别（与导入路径同口径）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-v1-'));
+  try {
+    // DSH v1 布局：值在顶层 refs 块下，records 是会话记录（不是凭据 ref）
+    const v1Yaml = [
+      'version: 1',
+      'refs:',
+      '  DEEPSEEK_API_KEY: sk-real-cred-0001',
+      '  GITHUB_TOKEN: ghp_realcred0002',
+      'records:',
+      '  client-connection/browser-session:',
+      '    kind: grant',
+      '    payload:',
+      '      version: 1',
+      '      secret: session-secret-0003',
+      '',
+    ].join(String.fromCharCode(10));
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    await ctx.fs.writeFile('.credentials.yaml', Buffer.from(v1Yaml, 'utf8'));
+    const transport = new MemSyncTransport();
+    const engine = makeEngine(ctx, transport, tmp);
+
+    const report = await engine.push({ snapshotId: 'cred-v1', encrypt: true, password: PASSWORD, includeSecrets: true });
+    assert.equal(report.ok, true);
+    assert.ok(
+      !report.warnings.some((w) => w.includes('凭据文件')),
+      `refs 块能解析出凭据 → 不得告警「勾了导出密钥却读不到」，实际: ${report.warnings.join(' | ')}`,
+    );
+
+    const payload = transport.snapshots.get('cred-v1')!.credentials;
+    assert.ok(payload !== undefined, 'refs 块布局必须被认出，否则等于勾了导出密钥却什么都没带走');
+    const map = credentialsMapFromYaml(await decryptCredentialsPayload(payload!, PASSWORD));
+    assert.equal(map.get('DEEPSEEK_API_KEY'), 'sk-real-cred-0001');
+    assert.equal(map.get('GITHUB_TOKEN'), 'ghp_realcred0002');
+    assert.equal(map.size, 2, 'records 里的会话秘密不得混进凭据映射');
+    assert.ok(!JSON.stringify(transport.snapshots.get('cred-v1')).includes('session-secret-0003'));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('push：只加密不导出密钥 → 不带凭据载荷（默认安全不变量不破）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-enc-only-'));
   try {

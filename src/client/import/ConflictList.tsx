@@ -11,12 +11,20 @@
  *
  * 注意：不提供 "Review（稍后决定）" 选项——Review 会被收集器计为
  * unresolved，导致「下一步」永远禁用（死路）。要么决策，要么不进入本步。
- * 安全：冲突项不携带当前配置值（当前值可能含秘密，不回显），故不做值级 diff。
+ *
+ * 安全（t6 评审 round-1 登记的 high 及其修正）：
+ * - detail 由宿主按计划项拼接（settings/providers/mcp/workspaces 适配器），**可能携带未脱敏的
+ *   本地明文配置值**（实测 MCP 的 env / headers 原样回传，如 env.MCP_TOKEN、headers.Authorization）；
+ *   全仓没有 plan 级脱敏，因此本组件是最后一道闸门 —— description 与 detail 一律先过 `redact()`
+ *   再渲染（detail 先整体脱敏、再 `splitConflictDetail` 切分，两者互不干扰）。
+ * - 上方旧注释「冲突项不携带当前配置值」是被实测推翻的假设，勿据它去掉脱敏。
+ * - 渲染点由 `src/client/common/plan-text-redaction.test.ts` 源码守卫**按渲染点**钉死（G-05 修正过期路径）。
  */
 import { useState } from 'react'
 import { ConflictCollector } from '../../ui/conflict-view.ts'
 import type { ItemResolution } from '../../core/types.ts'
 import type { TranslateNS } from '../client-types.ts'
+import { redact } from '../../security/redaction.ts'
 import { Banner } from '../common/ui.tsx'
 import css from '../config-manager.module.css'
 
@@ -113,31 +121,41 @@ export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
 
       {items.map((view) => {
         const item = view.item
-        // 配置更改明细：切成 prefix/current/imported 三段分别换行（见 splitConflictDetail）
-        const detail = item.detail !== undefined && item.detail !== '' ? splitConflictDetail(item.detail) : null
+        /**
+         * 安全不变量（AGENTS.md UI 硬性规则 7 / DESIGN.md §7）：**展示文本渲染前必须过 redact()**。
+         * 冲突项的 description / detail 由宿主按计划项拼装，可能含**未脱敏的本地明文配置值**
+         * （实测：MCP 的 env / headers 会被原样回传，如 env.MCP_TOKEN、headers.Authorization；
+         * detail 由 settings/providers/mcp/workspaces 适配器拼接、analyzeImport 结果直接回传浏览器，
+         * 全仓没有 plan 级脱敏）—— UI 是最后一道闸门，这里必须自己兜住。
+         */
+        const safeDescription = redact(item.description)
+        // 先整体脱敏再切分：切分只依赖 `current=` / ` imported=` 字面标记，脱敏只替换值，互不干扰
+        const detail = item.detail !== undefined && item.detail !== ''
+          ? splitConflictDetail(redact(item.detail))
+          : null
         return (
           <div key={item.id} className={css.conflictItem}>
             <div className={css.conflictHead}>
               <span className={css.kindTag}>{item.adapter}</span>
-              <span className={`${css.conflictId} ${css.mono}`} title={item.description}>{item.description}</span>
-              {item.severity === 'error' && <span className={css.severityError}>error</span>}
+              <span className={`${css.conflictId} ${css.mono}`} title={safeDescription}>{safeDescription}</span>
+              {item.severity === 'error' && <span className={css.severityError}>{t('import.conflicts.severityError')}</span>}
             </div>
             {detail !== null && (
               <div className={css.conflictDetail}>
                 {detail.prefix !== null && <div className={css.conflictPrefix}>{detail.prefix}</div>}
                 <div className={css.conflictLine}>
-                  <span className={css.conflictLineLabel}>current</span>
+                  <span className={css.conflictLineLabel}>{t('import.conflicts.detailCurrent')}</span>
                   <span className={css.conflictLineValue}>{detail.current}</span>
                 </div>
                 {detail.imported !== null && (
                   <div className={css.conflictLine}>
-                    <span className={css.conflictLineLabel}>imported</span>
+                    <span className={css.conflictLineLabel}>{t('import.conflicts.detailImported')}</span>
                     <span className={css.conflictLineValue}>{detail.imported}</span>
                   </div>
                 )}
               </div>
             )}
-            <div className={css.conflictChoices} role="radiogroup" aria-label={item.description}>
+            <div className={css.conflictChoices} role="radiogroup" aria-label={safeDescription}>
               {RESOLUTION_OPTIONS.map((opt) => {
                 const selected = view.resolution === opt.value
                 return (
@@ -160,7 +178,7 @@ export function ConflictList({ collector, t, onChanged }: ConflictListProps) {
           </div>
         )
       })}
-      {items.length === 0 && <div className={css.empty}>No conflicts</div>}
+      {items.length === 0 && <div className={css.empty}>{t('import.conflicts.empty')}</div>}
       {void tick}
     </div>
   )

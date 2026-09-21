@@ -30,7 +30,7 @@ import type { MarketApi } from './market-api.ts'
 import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -48,8 +48,10 @@ import type {
   LoginView, MyConfigForm, MeStatusData, MyInstallSlice, MyInstallState, MyWizardSlice, MyWizardState,
 } from './my-configs-view.ts'
 import {
-  approvalRows, approvedAdapterSummary, buildApprovedPlan, defaultApprovals, marketDetailView,
+  marketDetailView,
 } from './market-view.ts'
+import { effectiveImportSelection, type Selection } from '../../ui/selection-model.ts'
+import { MarketImportReview } from './MarketImportReview.tsx'
 import css from '../config-manager.module.css'
 
 export interface MyConfigsViewProps {
@@ -62,6 +64,8 @@ export interface MyConfigsViewProps {
   /** GitHub 登录（复用 sync github device flow，同 token 槽） */
   syncApi: SyncApi
   t: TranslateNS<'config-manager-market'>
+  /** config-manager 字典（级联树 / 分区显示名 / 冲突决策列表；与 MarketPanel 同一份） */
+  cmT: TranslateNS<'config-manager'>
   /** 已上传条目（受控：MarketPanel 经 runStore 持有；null = 尚未加载） */
   myItems: MyItemEntry[] | null
   /** 列表加载错误（已 redact；null = 无） */
@@ -106,7 +110,7 @@ const initialGithubFlow: GithubFlowState = {
  */
 
 export function MyConfigsView({
-  meApi, api, importApi, syncApi, t, myItems, myItemsError, onMyItemsChange, myWizard, onMyWizardChange,
+  meApi, api, importApi, syncApi, t, cmT, myItems, myItemsError, onMyItemsChange, myWizard, onMyWizardChange,
   myInstall, onMyInstallChange, myConfirmDeleteId, onMyConfirmDeleteChange,
 }: MyConfigsViewProps) {
   const uiT = meApi.t // 展示层翻译器（myConfigs.* 键经 UiT；同 MarketPanel 用 api.t）
@@ -138,18 +142,12 @@ export function MyConfigsView({
   const [install, setInstall] = useState<MyInstallState | null>(() => restoreMyInstall(myInstall))
   /** 最近一次 install 全量（commitInstall 读最新值，避免闭包过期） */
   const installRef = useRef<MyInstallState | null>(install)
-  /**
-   * K-07：未批准任何分区（表单内联校验，保留就地提示）。
-   * 与「下载/导入失败」分流：失败走全局 Toast（install.error 仅作失败标记，不再页内渲染），
-   * 本提示位置紧邻导入按钮，用户修正勾选后立即消失。
-   */
-  const [noApprovalHint, setNoApprovalHint] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
-  /* ---------------- 弹窗交互（2026-08-21：上传/装回本地搬进弹窗 + 免责前置） ---------------- */
+  /* ---------------- 交互：上传向导弹窗 + 装回本地向导页 + 免责前置 ---------------- */
   /** 上传/更新向导弹窗开关（瞬态 UI，不持久化：切 tab 弹窗关闭，数据仍在 runStore） */
   const [uploadOpen, setUploadOpen] = useState(false)
-  /** 装回本地弹窗开关（同上） */
+  /** 是否在「装回本地向导页」（瞬态 UI；P2 起它是**页面**，不再是弹窗） */
   const [installOpen, setInstallOpen] = useState(false)
   /** 当前展示的免责弹窗操作（null = 无；upload/download/install 三操作分开记「不再提示」） */
   const [disclaimerKey, setDisclaimerKey] = useState<DisclaimerKey | null>(null)
@@ -169,7 +167,7 @@ export function MyConfigsView({
   }
   /** 待装回本地的目标条目（免责确认后取用；避免免责流程中闭包过期） */
   const pendingInstallEntry = useRef<MyItemEntry | null>(null)
-  /** 打开装回本地弹窗：未勾「不再提示」→ 先弹免责，确认后开弹窗并启动下载 */
+  /** 打开装回本地向导页：未勾「不再提示」→ 先弹免责，确认后进入向导页并启动下载 */
   const openInstall = (entry: MyItemEntry): void => {
     pendingInstallEntry.current = entry
     if (readDisclaimerDismissed('install', storage)) {
@@ -192,7 +190,7 @@ export function MyConfigsView({
     commitWizard(initialWizard('upload'))
     setListingStatus(null)
   }
-  /** 关闭装回本地弹窗：清 install 会话 */
+  /** 返回已上传列表：清 install 会话 */
   const closeInstall = (): void => {
     setInstallOpen(false)
     commitInstall(null)
@@ -312,7 +310,7 @@ export function MyConfigsView({
    * R-18：GitHub 流程失败统一出口「落状态 + 弹全局 Toast」，取代页内 error Banner。
    * 注意文本**先 redact 再入 state**：状态行 Badge 由 computeGithubLoginView 直接把
    * `github.error` 当 statusText 透出（该纯函数不做脱敏），先脱敏才能让 Badge 与 Toast
-   * 都不含敏感原文 —— 保持了原先 Banner 的 redact 安​全不变量。
+   * 都不含敏感原文 —— 保持了原先 Banner 的 redact 安全不变量。
    */
   const failGithub = (message: string): void => {
     const safe = redact(message)
@@ -603,54 +601,31 @@ export function MyConfigsView({
    *  竞态守卫：下载期间用户可切换装回另一条目（install.itemId 已变），晚到响应一律丢弃，
    *  防止「会话标题是 B、详情是 A」的串扰。 */
   const runDownload = async (entry: MyItemEntry): Promise<void> => {
-    commitInstall({ itemId: entry.id, detail: null, approvals: {}, importing: false, importResult: null, error: null })
-    setNoApprovalHint(false) // 新会话：清掉上一次的「未批准」就地提示
+    commitInstall({
+      itemId: entry.id, detail: null, selectionState: null, conflictResolutions: {},
+      importing: false, importResult: null, error: null,
+    })
     try {
       const detail = await api.download(entry.id, entry.repoUrl)
       if (installRef.current === null || installRef.current.itemId !== entry.id) return
-      commitInstall({ ...installRef.current, detail, approvals: defaultApprovals(detail.plan) })
+      // 选择态归零 = 默认全选（与导入页一致）；换条目后陈旧选择自动失效
+      commitInstall({ ...installRef.current, detail, selectionState: null, conflictResolutions: {} })
     } catch (err) {
       if (installRef.current === null || installRef.current.itemId !== entry.id) return
       // R-17：下载失败 → 全局 Toast。install.error 仍落一次，仅作「失败标记」用于停掉
-      // 弹窗内的加载 Spinner（detail 恒为 null，否则会一直转 = 用户误以为仍在加载）；不再页内渲染。
+      // 向导页内的加载 Spinner（detail 恒为 null，否则会一直转 = 用户误以为仍在加载）；不再页内渲染。
       patchInstall({ error: err instanceof Error ? err.message : String(err) })
       toast.error(redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
-  const runImport = async (): Promise<void> => {
-    if (install === null || install.detail === null) return
-    const approvedPlan = buildApprovedPlan(install.detail.plan, install.approvals)
-    if (approvedPlan.items.length === 0) {
-      // K-07：未批准任何分区属**表单内联校验**（非动作失败）→ 保留就地提示（紧邻导入按钮）
-      setNoApprovalHint(true)
-      return
-    }
-    setNoApprovalHint(false)
-    patchInstall({ importing: true, error: null })
-    try {
-      const executed = await importApi.executeImportPlan(
-        install.detail.zipPath,
-        approvedPlan,
-        { confirm: true, rollbackOnError: true },
-      )
-      patchInstall({ importing: false, importResult: executed })
-      // R-07：导入结果改全局 Toast（成功 ok / 失败 error），成功分支不再页内占位。
-      // needsRestart 追加语与旧 Banner 文案保持一致（成功/失败两侧都附）。
-      const okCount = executed.executed.filter((e) => e.status === 'ok').length
-      const failedCount = executed.executed.filter((e) => e.status === 'failed').length
-      const restartSuffix = executed.needsRestart ? ` · ${t('import.needsRestart')}` : ''
-      if (executed.ok) {
-        toast.ok(t('import.done', { count: String(okCount) }) + restartSuffix)
-      } else {
-        toast.error(t('import.failed', { count: String(failedCount) }) + restartSuffix)
-      }
-    } catch (err) {
-      // R-17：导入执行失败 → 全局 Toast（同样落 error 作失败标记）
-      patchInstall({ importing: false, error: err instanceof Error ? err.message : String(err) })
-      toast.error(redact(err instanceof Error ? err.message : String(err)))
-    }
-  }
+  /**
+   * 编辑中的勾选（绑 zipPath：换条目后旧选择自动失效 → 默认全选）。
+   * 与 MarketPanel / 导入向导同一套 effectiveImportSelection —— 不另写「陈旧选择」判定。
+   */
+  const pickerSelection: Selection | null = install?.detail === undefined || install.detail === null
+    ? null
+    : effectiveImportSelection(install.detail.plan, install.detail.zipPath, install.selectionState)
 
   /* ------------------------------------------------ 渲染模型装配（全部纯函数） */
 
@@ -780,6 +755,7 @@ export function MyConfigsView({
       >
         <Modal.Header
           title={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
+          closeLabel={t('common.close')}
           onClose={closeUpload}
           closeDisabled={wizard.running || wizard.validating}
           trailing={wizard.mode === 'update' ? <Badge kind="info">{t('myconfigs.update.hint')}</Badge> : undefined}
@@ -1035,27 +1011,13 @@ export function MyConfigsView({
     )
   }
 
-  /** 装回本地：下载 + 逐分区批准 + 执行导入（复用市场安全管道 + market-view 纯模型） */
+  /** 装回本地：下载 + 级联树勾选 + 执行导入（复用市场安全管道 + market-view 纯模型） */
   const renderInstall = (): ReactNode => {
     if (install === null) return null
     const { detail } = install
-    const approvalList = detail !== null ? approvalRows(detail.plan, install.approvals) : []
-    const approvalSummary = detail !== null ? approvedAdapterSummary(detail.plan, install.approvals) : null
     const detailView = detail !== null ? marketDetailView(detail, detail.repo ?? entryRepoUrl(install.itemId), true, uiT) : null
     return (
-      <Modal
-        open
-        onClose={closeInstall}
-        title={t('detail.title')}
-        wide
-        busy={install.importing}
-      >
-        <Modal.Header
-          title={`${t('detail.title')}：${install.itemId}`}
-          onClose={closeInstall}
-          closeDisabled={install.importing}
-        />
-        <Modal.Body scroll>
+      <>
         {/* R-17：下载/导入失败已由全局 Toast 告知（原 install.error Banner 移除）。
             下方 Spinner 以 install.error 为「失败标记」守卫：失败时 detail 恒为 null，
             若不守卫会一直旋转，让用户误以为仍在加载。 */}
@@ -1069,58 +1031,39 @@ export function MyConfigsView({
             <Badge kind={detailView.badge.valid ? 'ok' : 'error'}>{detailView.badge.statusText}</Badge>
             <Badge kind="info">{detailView.badge.sectionsText}</Badge>
           </div>
-          {approvalList.length > 0 && (<>
-            <span className={css.groupLabel}>{t('detail.approval.title')}</span>
-            {approvalSummary !== null && approvalSummary.highRiskTotal > 0 && (
-              <Banner kind="warn">{t('detail.approval.highRiskHint')}</Banner>
-            )}
-            <div className={css.conflictList}>
-              {approvalList.map((row) => (
-                <Checkbox
-                  key={row.adapter}
-                  checked={row.approved}
-                  onChange={(checked) => {
-                    if (installRef.current !== null) {
-                      patchInstall({ approvals: { ...installRef.current.approvals, [row.adapter]: checked } })
-                    }
-                  }}
-                  label={
-                    <span>
-                      <span className={css.conflictId}>{row.adapter}</span>
-                      {' '}
-                      <Badge kind={row.highRisk ? 'warn' : 'info'}>
-                        {row.highRisk ? t('detail.approval.requiresApproval') : t('detail.approval.safe')}
-                      </Badge>
-                      {' '}
-                      <Badge kind="info">{row.label}</Badge>
-                    </span>
-                  }
-                />
-              ))}
-            </div>
-            <div className={css.statRow}>
-              <Badge kind={approvalSummary !== null && approvalSummary.canImport ? 'ok' : 'warn'}>
-                {approvalSummary !== null
-                  ? t('detail.approval.count', { selected: String(approvalSummary.selected), total: String(approvalSummary.total) })
-                  : ''}
-              </Badge>
-            </div>
-          </>)}
-          <div className={css.actionRow}>
-            <Button
-              variant="primary"
-              disabled={install.importing || (approvalSummary !== null && !approvalSummary.canImport)}
-              onClick={() => { void runImport() }}
-            >
-              {install.importing ? <Spinner label={t('common.loading')} /> : t('detail.import')}
-            </Button>
-          </div>
-          {/* K-07：未批准任何分区（表单内联校验，保留就地提示；紧邻导入按钮，修正勾选后立即消失） */}
-          {noApprovalHint && <Banner kind="error">{t('detail.noApproval')}</Banner>}
+          {/* 导入审阅（2026-09）：与「浏览条目详情」共用同一个组件（R4d）—— 级联树勾选 +
+              就地高风险警示 + 逐项摘要 + 冲突决策 + 导入 + 导入后一键回滚。 */}
+          {detailView.canImport && pickerSelection !== null && (
+            <MarketImportReview
+              importApi={importApi}
+              t={t}
+              cmT={cmT}
+              zipPath={detail.zipPath}
+              plan={detail.plan}
+              selection={pickerSelection}
+              onSelectionChange={(next) => {
+                const zipPath = installRef.current?.detail?.zipPath
+                if (zipPath === undefined) return
+                patchInstall({ selectionState: { zipPath, selection: next } })
+              }}
+              resolutions={install.conflictResolutions}
+              onResolutionsChange={(next) => { patchInstall({ conflictResolutions: next }) }}
+              onPlanChange={(plan) => {
+                const cur = installRef.current
+                if (cur === null || cur.detail === null) return
+                patchInstall({ detail: { ...cur.detail, plan } })
+              }}
+              importing={install.importing}
+              onImportingChange={(value) => { patchInstall({ importing: value }) }}
+              result={install.importResult}
+              onResultChange={(result) => { patchInstall({ importResult: result }) }}
+              onErrorChange={(message) => { patchInstall({ error: message }) }}
+              itemName={detail.name}
+            />
+          )}
         </>)}
         {/* R-07：装回本地导入结果已由全局 Toast 送达（原 importResult Banner 移除） */}
-        </Modal.Body>
-      </Modal>
+      </>
     )
   }
 
@@ -1128,6 +1071,23 @@ export function MyConfigsView({
   function entryRepoUrl(itemId: string): string {
     const entry = (myItems ?? []).find((e) => e.id === itemId)
     return entry?.repoUrl ?? `https://github.com/${MARKET_UPSTREAM_OWNER}/${MARKET_UPSTREAM_REPO}`
+  }
+
+  /**
+   * 装回本地 = **页面级向导**（P2 2026-09）：它整块取代「我的配置」列表视图（不再是弹窗叠加），
+   * 与市场浏览侧的条目向导、以及导入页同构。所有 hooks 都在本行之前声明，故此处提前 return 合法。
+   */
+  if (installOpen && install !== null) {
+    return (
+      <div className={css.viewBody}>
+        <div className={css.headRow}>
+          <SectionTitle title={t('detail.title')} subtitle={install.itemId} />
+          <span className={css.statusSpacer} />
+          <Button disabled={install.importing} onClick={closeInstall}>{t('detail.back')}</Button>
+        </div>
+        {renderInstall()}
+      </div>
+    )
   }
 
   return (
@@ -1148,9 +1108,8 @@ export function MyConfigsView({
             <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
           </Card>
           {renderList()}
-          {/* 弹窗：上传/更新向导（uploadOpen）与装回本地（installOpen），条件渲染 */}
+          {/* 弹窗：上传/更新向导（uploadOpen）—— 装回本地已改为页面级向导（见上方提前 return） */}
           {uploadOpen && renderWizard()}
-          {installOpen && renderInstall()}
         </>
       )}
       {/* 免责弹窗（复用 ConfirmDialog + 「不再提示」勾选；三操作分开记） */}

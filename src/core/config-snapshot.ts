@@ -351,7 +351,7 @@ export async function pruneConfigSnapshots(
 
 /* ------------------------------------------------------------ 回放恢复 */
 
-/** 构建回放用 manifest（与 profiles/profile-manager.ts 的 buildProfileManifest 同构） */
+/** 构建回放用 manifest（与导入/导出管道的合成 manifest 同构） */
 function buildReplayManifest(ctx: HostContext): Manifest {
   const sections: Record<string, boolean> = {};
   for (const id of SECTION_IDS) sections[id] = false;

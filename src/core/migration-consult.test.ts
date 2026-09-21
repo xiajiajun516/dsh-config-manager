@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CRITICAL_THRESHOLD,
   computeConsultReport, computeDimensions, scoreCompatibility, scoreConsistency,
   scoreIntegrity, scoreSections, scoreSensitive, scoreMigratability,
   type ConsultSourceData, type ConsultTarget, type MigratabilityResult,
@@ -148,7 +149,10 @@ test('consult: 声明但数据缺失（非 missingSections）→ -30', () => {
   const d = scoreSections(data);
   // providers + credentialsStatus 各 -30 → 40
   assert.equal(d.score, 40);
-  assert.equal(d.verdict, 'critical');
+  // 证据驱动：分区缺失是 error 级提醒，但**引擎容忍**（只告警、照常导入）→
+  // 咨询就不能比引擎更凶（这正是「假建议」的来源：分数低 ≠ 不许导）。
+  assert.equal(d.verdict, 'needs-attention');
+  assert.ok(d.issues.every((i) => i.code === 'sections.unparseable'));
 });
 
 /* ---------------- 一致性维度 ---------------- */
@@ -204,7 +208,8 @@ test('consult: 敏感命中 → 每个 -5 封顶 -40', () => {
   const data = makeData({ sensitiveHits: [{ path: 'a', field: 'token' }, { path: 'b', field: 'password' }] });
   const d = scoreSensitive(data);
   assert.equal(d.score, 90);
-  assert.equal(d.verdict, 'healthy');
+  // 证据驱动：有 warning 就意味着「要用户看一眼」，不再因为分数 ≥90 就报 healthy
+  assert.equal(d.verdict, 'needs-attention');
 });
 
 test('consult: 敏感命中封顶 -40', () => {
@@ -233,11 +238,45 @@ test('consult: 可迁移性 !ok → 0 critical', () => {
   assert.equal(d.verdict, 'critical');
 });
 
-test('consult: 致命冲突 → 每个 -30', () => {
+test('consult: 冲突是「要你决定」而不是「致命」——不再把维度压成 critical', () => {
   const m: MigratabilityResult = { ok: true, itemCount: 3, fatalConflicts: 2, warnings: 0, sections: [], errors: [] };
   const d = scoreMigratability(makeData({ migratability: m }));
-  assert.equal(d.score, 40);
-  assert.equal(d.verdict, 'critical');
+  assert.equal(d.score, 70, '每个冲突 -15，封顶 -60');
+  assert.equal(d.verdict, 'needs-attention', '冲突需要决策，不是硬阻断');
+  assert.equal(d.issues.length, 1, '同类聚合成一条，不再刷 N 行同样的文案');
+  assert.match(d.issues[0]!.message, /2 处冲突/);
+});
+
+test('consult: 只有硬阻断才 block —— 2 处冲突 + 3 个悬空凭据引用 + 未加密秘密都不 block', () => {
+  // 用户实测抱怨的组合：健康分不低，却被建议「阻止执行」
+  const data = makeData({
+    containsSecrets: true,
+    encrypted: false,
+    migratability: { ok: true, itemCount: 12, fatalConflicts: 2, warnings: 3, sections: ['settings'], errors: [] },
+    sections: new Map<SectionId, unknown>([
+      ['settings', { namespaces: {
+        general: { value: { apiKeyEnv: 'A_KEY', passwordEnv: 'B_KEY', tokenEnv: 'C_KEY' } },
+      } }],
+      ['providers', { providers: { p1: { apiKeyEnv: 'D_KEY' } } }],
+      ['credentialsStatus', { credentials: [] }],
+    ]),
+  });
+  const report = computeConsultReport(data, TARGET, { allowBlock: true });
+  assert.equal(report.blockerCount, 0);
+  assert.equal(report.recommendation, 'review', '没有硬阻断 → 最多「需人工确认」，不得建议阻止');
+  assert.notEqual(report.verdict, 'critical');
+  assert.ok(report.attentionCount >= 3);
+  // 结论与评分不再互相打脸：没有硬阻断时分数保持量化值（不再被压到 critical 区间）
+  assert.ok(report.healthScore > CRITICAL_THRESHOLD);
+});
+
+test('consult: 硬阻断（schema 不支持）→ block，且分数被压进 critical 区间（不与结论矛盾）', () => {
+  const report = computeConsultReport(makeData({ schemaVersion: 99 }), TARGET, { allowBlock: true });
+  assert.equal(report.blockerCount, 1);
+  assert.equal(report.recommendation, 'block');
+  assert.equal(report.verdict, 'critical');
+  assert.ok(report.healthScore < CRITICAL_THRESHOLD, '有硬阻断时分数必须落在 critical 区间');
+  assert.match(report.recommendationReasons[0]!, /不受支持|schema/);
 });
 
 /* ---------------- 汇总：HealthScore / verdict / recommendation ---------------- */

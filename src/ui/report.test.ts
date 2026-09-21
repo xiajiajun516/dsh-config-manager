@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  formatBytes, importSectionStats, renderExportReport, renderImportReport,
+  exportCountsText, formatBytes, importSectionStats, renderExportReport, renderImportReport,
   renderRollbackReport, sectionFromItemId, suggestedActions,
 } from './report.ts';
 import { makeUiT } from './i18n.ts';
@@ -39,6 +39,15 @@ test('report: 导出报告含 Included/Excluded/Security/File（en / zh）', () 
   assert.ok(enText.includes('2 sensitive field(s) redacted'));
   const zhText = renderExportReport(makeExportReport(), zhT);
   assert.ok(zhText.includes('备份已创建'));
+});
+
+test('report: exportCountsText —— 计数单位中文化（zh/en），未知单位键原样回退', () => {
+  assert.equal(exportCountsText({ namespaces: 18 }, zhT), '18 个命名空间');
+  assert.equal(exportCountsText({ plugins: 10, patchLines: 11 }, zhT), '10 个插件，11 行补丁');
+  assert.equal(exportCountsText({ namespaces: 18 }, enT), '18 namespace(s)');
+  assert.equal(exportCountsText({ servers: 0 }, zhT), '0 个服务器', '0 是有效值，不能当空');
+  assert.equal(exportCountsText({ customThing: 2 }, zhT), '2 customThing', '未知单位键原样显示，不吞信息');
+  assert.equal(exportCountsText({}, zhT), '', '空 counts → 空串（由调用方渲染占位符）');
 });
 
 test('report: 导入报告分节统计', () => {

@@ -39,6 +39,7 @@ import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import { Modal } from '../common/Modal.tsx'
+import { sectionLabeler } from '../common/section-labels.ts'
 import { RefreshIcon } from '../common/Icon.tsx'
 import { runStore, toSyncStoreSlice, type SyncConfirmDecisions, type SyncStoreSlice } from '../run-store.ts'
 import { SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF } from './sync-api.ts'
@@ -51,11 +52,12 @@ import {
   computeGithubLoginView, computeRemoteReady, computeSyncButtons,
   defaultChannelSyncState, formatIntervalDuration, githubPollMessage, kindLabel, presetById,
   presetIdForUrl, privateRepoHint, pullReportView, pushPreviewView, pushReportView, readStoredChannel,
-  recommendedSyncSections, severityLabel, syncSectionGroups, syncSectionOptions,
+  DEFAULT_SYNC_SESSIONS_LIMIT, initialSyncSections, normalizeSessionsLimit, severityLabel,
+  syncSectionGroups, syncSectionOptions,
   WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
 import type {
-  ChannelSyncState, GithubLoginPhase, SyncChannel, SyncMode, SyncSectionOption,
+  ChannelSyncState, GithubLoginPhase, SyncChannel, SyncSectionOption,
 } from './sync-view.ts'
 import { SyncHistoryView } from './SyncHistoryView.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
@@ -64,6 +66,11 @@ import css from '../config-manager.module.css'
 export interface SyncSettingsViewProps {
   api: SyncApi
   t: TranslateNS<'config-manager-sync'>
+  /**
+   * config-manager 命名空间的翻译器：仅用于**分区显示名**（section-labels 的 sectionLabeler）。
+   * 分区名只经 common/section-labels.ts 的单一映射，禁止在本文件里另建一套（术语漂移）。
+   */
+  cmT: TranslateNS<'config-manager'>
 }
 
 /** P0-②：push 前预览弹窗的视图数据（持久化切片；非敏感，刷新后可恢复确认态） */
@@ -72,6 +79,23 @@ export interface PushPreviewSlice {
   preview: SyncPushPreview | null
   /** 弹窗是否打开（预览完成后自动打开；确认/关闭后关闭） */
   open: boolean
+}
+
+/**
+ * 分区选择保存的部分更新：未给出的字段沿用当前通道的既有值（saveSelection 内部合并）。
+ * 密码字段单独成组 —— 它们是**唯一**会写进本机凭据库（DSH credentials）的载荷。
+ */
+interface SelectionPatch {
+  sections?: SectionId[]
+  sessionsLimit?: number
+  encrypt?: boolean
+  includeSecrets?: boolean
+  /** 非空 = 写入本机凭据库（长期复用） */
+  encryptPassword?: string
+  decryptPassword?: string
+  /** 主动删除已保存的密码（优先级高于同字段的写入） */
+  clearEncryptPassword?: boolean
+  clearDecryptPassword?: boolean
 }
 
 interface SyncUiState {
@@ -209,15 +233,19 @@ function initFromStore(): SyncUiState {
   }
 }
 
-export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
+export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
   const [state, setState] = useState<SyncUiState>(initFromStore)
   const uiT = api.t // 客户端展示层翻译器（zh/en，见 ui/i18n.ts）
+  /** 分区显示名（section-labels 的单一映射；与导出选择器显示同一个中文名，见 §7「分区显示名」） */
+  const sectionName = sectionLabeler(cmT)
   /** 最新 state 镜像（commit/自动保存 flush 读取，避免闭包过期值） */
   const stateRef = useRef<SyncUiState>(state)
   /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
   const mountedRef = useRef(true)
   /** 通道配置弹窗开关（瞬态 UI：切 tab/刷新不持久化，弹窗不自动重开；DESIGN.md §8.12 约定） */
   const [channelOpen, setChannelOpen] = useState(false)
+  /** 同步分区选择弹窗开关（瞬态 UI：模式与勾选在弹窗内即时生效并持久化，关闭即完成） */
+  const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
 
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
@@ -272,18 +300,24 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
       // 无持久化 → 默认模式 + 推荐分区
       const selByCh = info.syncSelectionByChannel
       const autoByCh = info.autosyncByChannel
+      const credByCh = info.syncCredentialsByChannel
       const backfill = (ch: SyncChannel, cur: ChannelSyncState): Partial<ChannelSyncState> => {
         const sel = selByCh?.[ch]
         const auto = autoByCh?.[ch]
-        const persistedMode: SyncMode = sel?.mode === 'advanced' ? 'advanced' : 'default'
-        const persistedSections = sel !== undefined
-          ? sel.sections
-          : recommendedSyncSections(info.syncSections ?? [])
+        const cred = credByCh?.[ch]
+        // 模式概念已从 UI 移除：分区恒由用户手动勾选（落盘 mode 恒为 advanced）。
+        // 初始值 = initialSyncSections（首次 / 旧 default 模式 → 预勾选推荐分区；
+        // 用户主动清空 → 保持为空，绝不悄悄填回来）
+        const persistedSections = initialSyncSections(sel, info.syncSections ?? [])
         return {
-          syncMode: persistedMode,
+          syncMode: 'advanced',
           syncSections: persistedSections,
+          sessionsLimit: normalizeSessionsLimit(sel?.sessionsLimit),
           encrypt: sel?.encrypt ?? false,
           includeSecrets: sel?.includeSecrets ?? false,
+          // 「密码已保存」来自本机凭据库（只回布尔）；凭据库里没有 → 复位
+          encryptPasswordSaved: cred?.encryptPasswordConfigured ?? false,
+          decryptPasswordSaved: cred?.decryptPasswordConfigured ?? false,
           autosyncEnabled: auto?.enabled ?? false,
           autosyncInterval: auto?.interval ?? '30m',
         }
@@ -643,24 +677,28 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
 
   /** 组装 push/preview 的公共载荷（分区选择 + 加密选项；密码仅内存） */
   const buildPushPayload = (): SyncPushPayload & { encryptPassword?: string } => {
-    // 默认模式：不传 sections（= 全部 portable 推荐分区）；高级模式：传勾选分区
-    const selection =
-      chState.syncMode === 'advanced' && chState.syncSections.length > 0
-        ? { sections: chState.syncSections }
-        : {}
-    // 加密快照：勾选加密 → 携带密码（仅内存传输；密码错误由 Host 解密认证兜底）；
+    // 默认模式：不传 sections（= 全部 portable 推荐分区）；自定义模式：传勾选分区
+    const selection = chState.syncSections.length > 0 ? { sections: chState.syncSections } : {}
+    // 历史会话（可选分区）：只有真的勾选了 sessions 才携带选项 —— Host 侧没有该选项时
+    // 会把会话分区当普通非 portable 分区跳过（安全默认，绝不悄悄上行）。
+    const sessionsOpt = chState.syncSections.includes('sessions')
+      ? { sessions: { limit: chState.sessionsLimit } }
+      : {}
+    // 加密快照：勾选加密 → 携带密码（请求体内存传输；留空时 Host 用本机凭据库里的已保存密码）；
     // includeSecrets 必须伴随 encrypt（Host 安全断言兜底）
     const cryptoOpts =
       chState.encrypt || chState.includeSecrets
         ? { encrypt: true, encryptPassword: chState.encryptPassword, includeSecrets: chState.includeSecrets }
         : {}
-    return { ...payload(), ...selection, ...cryptoOpts }
+    return { ...payload(), ...selection, ...sessionsOpt, ...cryptoOpts }
   }
 
   /** P0-②：push 前只读预览（弹窗确认流程第一步）——不写远端，只展示「将推送什么」。 */
   const runPushPreview = async (): Promise<void> => {
     patch({ busy: 'push', pushReport: null, pullReport: null })
     try {
+      // 预览前先把加密密码落库（用户不必手动保存；失败只提示，不阻断预览）
+      await persistEncryptPassword()
       const preview = await api.pushPreview(buildPushPayload())
       patch({ busy: null, pushPreview: { preview, open: true } })
     } catch (err) {
@@ -674,8 +712,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const runPush = async (): Promise<void> => {
     patch({ busy: 'push', pushReport: null, pullReport: null })
     try {
+      // 推送前先把加密密码落库（下次推送不必重输）
+      await persistEncryptPassword()
       const report = await api.push(buildPushPayload())
-      // 成功即清空 token/webdavPassword/加密密码（已安全使用完；绝不持久化）；失败保留以便重试
+      // 成功即清空 token/webdavPassword/加密密码输入框；失败保留以便重试
       patch({
         busy: null, pushReport: report, pushPreview: { preview: null, open: false },
         ...(report.ok
@@ -683,6 +723,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           : {}),
       })
       if (report.ok) {
+        // 输入框清空，但「已保存」标记保留 —— 密码在本机凭据库里，下次留空即用
         patchChannel({ encryptPassword: '', encryptPasswordConfirm: '' })
         // M-19：推送终局回执（结果弹窗关闭后不再有任何痕迹）
         toast.ok(t('toast.pushDone'))
@@ -700,7 +741,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const runPull = async (): Promise<void> => {
     patch({ busy: 'pull', pullReport: null, pushReport: null })
     try {
-      // 解密密码（可选）：拉取加密快照时提供；仅内存传输
+      // 解密密码（可选）：先落库再拉取，下次不必重输。留空时由 Host 用本机凭据库里
+      // 已保存的密码 —— 且只在远端快照确实加密时才会被使用（engine.prepareSnapshot 判定）。
+      await persistDecryptPassword()
       const decrypt =
         chState.decryptPassword !== '' ? { decryptPassword: chState.decryptPassword } : {}
       const report = await api.pull({ ...payload(), ...decrypt })
@@ -714,64 +757,106 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
   }
 
-  /* ------------------------------------------------ 同步模式（默认/高级） */
+  /* ------------------------------------------------ 同步模式（默认/自定义） */
 
-  /** 保存当前通道的分区选择到 Host（持久化；自动同步与手动 push 共用；失败提示但不阻断本地 UI）。
-   *  附带持久化加密/密钥开关（密码不持久化）。 */
-  const saveSelection = async (mode: SyncMode, sections: SectionId[], encrypt = chState.encrypt, includeSecrets = chState.includeSecrets): Promise<void> => {
+  /**
+   * 保存当前通道的分区选择 + 加密选项到 Host（持久化；自动同步与手动 push 共用）。
+   *
+   * 同时是**同步密码的唯一落库入口**：带 encryptPassword / decryptPassword 时写入本机
+   * 凭据库（DSH credentials，值永不进 sync-selection.json / 日志 / 响应）；带 clear* 时
+   * 主动删除（用户取消勾选加密、或点「删除已保存密码」）。
+   * 失败只提示不阻断本地 UI（选择已即时生效；下次改动会重新落盘）。
+   */
+  const saveSelection = async (p: SelectionPatch = {}): Promise<void> => {
+    const ch = stateRef.current.channel
+    const cur = stateRef.current.byChannel[ch]
     try {
-      await api.saveSelection({ transport: state.channel, mode, sections, encrypt, includeSecrets })
+      const res = await api.saveSelection({
+        transport: ch,
+        // 恒 advanced：勾选集合就是同步范围（UI 已无模式概念）
+        mode: 'advanced',
+        sections: p.sections ?? cur.syncSections,
+        sessionsLimit: p.sessionsLimit ?? cur.sessionsLimit,
+        encrypt: p.encrypt ?? cur.encrypt,
+        includeSecrets: p.includeSecrets ?? cur.includeSecrets,
+        ...(p.encryptPassword !== undefined && p.encryptPassword !== '' ? { encryptPassword: p.encryptPassword } : {}),
+        ...(p.decryptPassword !== undefined && p.decryptPassword !== '' ? { decryptPassword: p.decryptPassword } : {}),
+        ...(p.clearEncryptPassword === true ? { clearEncryptPassword: true } : {}),
+        ...(p.clearDecryptPassword === true ? { clearDecryptPassword: true } : {}),
+      })
+      // 回填「已保存」布尔（Host 只回状态，永不回值）
+      patchChannelState(ch, {
+        encryptPasswordSaved: res.encryptPasswordConfigured === true,
+        decryptPasswordSaved: res.decryptPasswordConfigured === true,
+      })
     } catch (err) {
-      // R-20/M-22：同步设置持久化失败（此前写共享 error Banner，与刚点的模式页签相距整屏）
-      toast.error(`${t('toast.selectionSaveFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      // R-20/M-22：同步设置持久化失败（此前写共享 error Banner，与刚点的按钮相距整屏）
+      toast.error(t('toast.selectionSaveFailed') + '：' + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
-  /** 切换当前通道的同步模式并持久化（高级模式勾选沿用当前勾选，切回时保留）。 */
-  const setSyncMode = (mode: SyncMode): void => {
-    patchChannel({ syncMode: mode })
-    void saveSelection(mode, state.byChannel[state.channel].syncSections)
-  }
-
-  /** 当前通道高级模式勾选分区开关（增删 byChannel 勾选并立即持久化）。 */
+  /** 当前通道同步分区勾选开关（增删 byChannel 勾选并立即持久化）。 */
   const toggleSyncSection = (id: SectionId, checked: boolean): void => {
-    const cur = state.byChannel[state.channel].syncSections
+    const cur = stateRef.current.byChannel[stateRef.current.channel].syncSections
     const next = checked
       ? (cur.includes(id) ? cur : [...cur, id])
       : cur.filter((s) => s !== id)
     patchChannel({ syncSections: next })
-    void saveSelection(state.byChannel[state.channel].syncMode, next)
+    void saveSelection({ sections: next })
   }
 
-  /** 当前通道加密备份开关（持久化）。取消加密时若勾选着导出密钥 → 一并取消（密钥必须加密，安全底线）。 */
+  /** 历史会话（sessions）「最新 N 个」上限（弹窗内数字输入；即时持久化）。 */
+  const setSessionsLimit = (value: number): void => {
+    const next = normalizeSessionsLimit(value)
+    patchChannel({ sessionsLimit: next })
+    void saveSelection({ sessionsLimit: next })
+  }
+
+  /**
+   * 当前通道加密备份开关（持久化）。取消时：一并取消导出密钥 + **删除已保存的加密密码**
+   * （用户要求：手动取消勾选即清除保存的密码），并清空输入框（密钥必须加密，安全底线）。
+   */
   const setEncrypt = (next: boolean): void => {
     patchChannel({
       encrypt: next,
       includeSecrets: next ? chState.includeSecrets : false,
-      // 密码字段仅内存：取消加密时清空
-      ...(next ? {} : { encryptPassword: '', encryptPasswordConfirm: '' }),
+      ...(next ? {} : { encryptPassword: '', encryptPasswordConfirm: '', encryptPasswordSaved: false }),
     })
-    void saveSelection(
-      state.byChannel[state.channel].syncMode,
-      state.byChannel[state.channel].syncSections,
-      next,
-      next ? chState.includeSecrets : false,
-    )
+    void saveSelection({
+      encrypt: next,
+      includeSecrets: next ? chState.includeSecrets : false,
+      ...(next ? {} : { clearEncryptPassword: true }),
+    })
   }
 
   /** 当前通道导出密钥开关（持久化）。勾选时自动联动选中加密（密钥绝不明文进同步通道）。 */
   const setIncludeSecrets = (next: boolean): void => {
     patchChannel({ includeSecrets: next, encrypt: next ? true : chState.encrypt })
-    void saveSelection(
-      state.byChannel[state.channel].syncMode,
-      state.byChannel[state.channel].syncSections,
-      next ? true : chState.encrypt,
-      next,
-    )
+    void saveSelection({ includeSecrets: next, encrypt: next ? true : chState.encrypt })
   }
 
-  /** 默认（快速导出）模式的推荐分区数（渲染计数用；catalog 已只含 portable）。 */
-  const recommendedSectionCount = state.catalog.filter((c) => c.defaultIncluded).length
+  /**
+   * 加密密码落库（输入框失焦 / 推送前触发）。两个输入框都有值且一致才写 ——
+   * 半截密码绝不入库（否则下次会拿一个错误密码去加密备份）。
+   */
+  const persistEncryptPassword = async (): Promise<void> => {
+    const cs = stateRef.current.byChannel[stateRef.current.channel]
+    if (cs.encryptPassword === '' || cs.encryptPassword !== cs.encryptPasswordConfirm) return
+    await saveSelection({ encryptPassword: cs.encryptPassword })
+  }
+
+  /** 解密密码落库（输入框失焦 / 拉取前触发）。空串不写（删除请用「删除已保存密码」）。 */
+  const persistDecryptPassword = async (): Promise<void> => {
+    const cs = stateRef.current.byChannel[stateRef.current.channel]
+    if (cs.decryptPassword === '') return
+    await saveSelection({ decryptPassword: cs.decryptPassword })
+  }
+
+  /** 删除已保存的解密密码（用户主动删除；输入框内容一并清空）。 */
+  const clearSavedDecryptPassword = (): void => {
+    patchChannel({ decryptPassword: '', decryptPasswordSaved: false })
+    void saveSelection({ clearDecryptPassword: true })
+  }
 
   /* ------------------------------------------------ 一键同步（方案 A） */
 
@@ -783,7 +868,8 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
     }
     patch({ busy: 'sync', confirmSession: null, confirmDecisions: null, lastRestoreId: null })
     try {
-      // 解密密码（可选）：一键同步拉取加密快照时提供；仅内存传输
+      // 解密密码（可选）：先落库再同步；留空时 Host 用本机凭据库里已保存的密码
+      await persistDecryptPassword()
       const decrypt =
         chState.decryptPassword !== '' ? { decryptPassword: chState.decryptPassword } : {}
       const session = await api.sync({
@@ -866,13 +952,21 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
   const githubBusy =
     state.github.phase === 'starting' || state.github.phase === 'waiting' || state.github.phase === 'polling'
 
-  /** 高级模式勾选为空 → 禁止推送（默认模式不受限）。 */
-  const pushSelectionReady = chState.syncMode !== 'advanced' || chState.syncSections.length > 0
+  /** 勾选为空 → 禁止推送（勾选集合就是同步范围）。 */
+  const pushSelectionReady = chState.syncSections.length > 0
 
-  /** 加密推送校验：勾选加密时密码非空且两次一致（密码仅内存）。 */
+  /**
+   * 加密推送校验：勾选加密时，要么本机凭据库里已有密码（输入框留空即沿用），
+   * 要么两个输入框都填了且一致。密码本身只在内存 / 凭据库中出现。
+   */
   const encryptInvalid =
     (chState.encrypt || chState.includeSecrets) &&
-    (chState.encryptPassword === '' || chState.encryptPassword !== chState.encryptPasswordConfirm)
+    (
+      // 输入框填了 → 必须与确认框一致
+      (chState.encryptPassword !== '' && chState.encryptPassword !== chState.encryptPasswordConfirm) ||
+      // 输入框留空 → 必须已经有保存好的密码
+      (chState.encryptPassword === '' && !chState.encryptPasswordSaved)
+    )
 
   const autosyncText = chState.autosync !== null ? autosyncStatusText(chState.autosync, uiT) : t('autosync.statusNever')
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
@@ -964,6 +1058,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           >
             <Modal.Header
               title={t('channel.title')}
+              closeLabel={t('common.close')}
               onClose={closeChannelDialog}
               closeDisabled={state.savingConfig}
             />
@@ -1172,87 +1267,108 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             </Modal.Body>
           </Modal>
 
-          {/* 同步模式（当前通道）：默认（快速导出）/ 高级（自定义导出） */}
+          {/* 同步分区（当前通道）：全部选择收敛进「选择同步分区」弹窗（点按钮打开）。
+              **没有「快速导出 / 自定义导出」之分** —— 勾选集合就是同步范围。 */}
           <Card>
             <span className={css.groupLabel}>{t('mode.title')}</span>
             <span className={css.hint}>{t('mode.hint')}</span>
-            <div className={css.tabRow} role="tablist">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={chState.syncMode === 'default'}
-                data-active={chState.syncMode === 'default' ? '' : undefined}
-                className={css.modeTab}
-                disabled={state.busy !== null}
-                onClick={() => { setSyncMode('default') }}
-              >
-                {t('mode.default')}
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={chState.syncMode === 'advanced'}
-                data-active={chState.syncMode === 'advanced' ? '' : undefined}
-                className={css.modeTab}
-                disabled={state.busy !== null}
-                onClick={() => { setSyncMode('advanced') }}
-              >
-                {t('mode.advanced')}
-              </button>
+            <span className={css.categoryDesc}>
+              {state.catalog.length === 0
+                ? t('common.loading')
+                : t('mode.selectedCount', { n: String(chState.syncSections.length) })}
+            </span>
+            {/* .actionRowTop = 上方紧跟说明文案的操作行（自带 10px 上边距）：
+                普通 .actionRow 没有上边距，按钮会与上面的计数文字贴在一起。 */}
+            <div className={css.actionRowTop}>
+              <Button onClick={() => { setSectionPickerOpen(true) }} disabled={state.busy !== null}>
+                {t('mode.choose')}
+              </Button>
             </div>
-            <div className={css.modeHint}>
-              {chState.syncMode === 'default' ? t('mode.defaultHint') : t('mode.advancedHint')}
-            </div>
+            {chState.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
             <span className={css.hint}>{t('mode.persistHint')}</span>
+          </Card>
 
-            {chState.syncMode === 'advanced' && (
-              <>
-                <span className={css.groupLabel}>{t('mode.sectionsTitle')}</span>
-                {state.catalog.length === 0 ? (
-                  <span className={css.hint}>{t('common.loading')}</span>
-                ) : (
-                  /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章） */
-                  <div className={css.groupList}>
-                    {syncSectionGroups(state.catalog).map((g) => (
-                      <Card key={g.group} className={css.groupCard}>
-                        <div className={css.groupHeader}>
-                          <span className={css.groupLabel}>{g.label}</span>
-                          {g.note !== undefined && <span className={css.groupNote}>{g.note}</span>}
-                        </div>
-                        <div className={css.groupItems}>
-                          {g.items.map((s) => (
+          {/* 同步分区弹窗（Radix Modal，与通道配置弹窗同一体系）：分组勾选 + 「最新 N 个会话」。
+              分区一律由用户手动勾选（没有模式分段）。改动**即时生效并持久化**
+              （与导出选择器一致的弹窗语义），因此底部只有「完成」——没有「取消」
+              （取消会让用户以为改动被丢弃）。 */}
+          <Modal
+            open={sectionPickerOpen}
+            onClose={() => { setSectionPickerOpen(false) }}
+            title={t('mode.pickerTitle')}
+            wide
+          >
+            <Modal.Header
+              title={t('mode.pickerTitle')}
+              closeLabel={t('common.close')}
+              onClose={() => { setSectionPickerOpen(false) }}
+            />
+            <Modal.Body scroll style={{ maxHeight: '66vh' }}>
+              <span className={css.hint}>{t('mode.pickerHint')}</span>
+              {state.catalog.length === 0 ? (
+                <span className={css.hint}>{t('common.loading')}</span>
+              ) : (
+                /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章），
+                   分区名走 section-labels 单一映射 —— 与导出选择器显示**同一个中文名**。 */
+                <div className={css.groupList}>
+                  {syncSectionGroups(state.catalog).map((g) => (
+                    <Card key={g.group} className={css.groupCard}>
+                      <div className={css.groupHeader}>
+                        <span className={css.groupLabel}>{g.label}</span>
+                        {g.note !== undefined && <span className={css.groupNote}>{g.note}</span>}
+                      </div>
+                      <div className={css.groupItems}>
+                        {g.items.map((s) => (
+                          <div key={s.id} className={css.sectionOptionRow}>
                             <Checkbox
-                              key={s.id}
                               checked={chState.syncSections.includes(s.id)}
                               onChange={(checked) => { toggleSyncSection(s.id, checked) }}
                               label={
                                 <span className={css.categoryItem}>
-                                  <span className={css.categoryName}>{s.label}</span>
+                                  {/* 分区显示名只经 sectionLabeler（禁止在本文件另建一套名字） */}
+                                  <span className={css.categoryName}>{sectionName(s.id)}</span>
                                   <span className={css.categoryDesc}>{s.description}</span>
-                                  <Badge kind="info">{t('mode.sectionPortable')}</Badge>
+                                  {s.portability === 'portable' && <Badge kind="info">{t('mode.sectionPortable')}</Badge>}
+                                  {s.portability === 'deviceSpecific' && (
+                                    <Badge kind="warn">{t('mode.sectionDeviceSpecific')}</Badge>
+                                  )}
                                   {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
                                 </span>
                               }
                             />
-                          ))}
-                        </div>
-                      </Card>
-                    ))}
-                  </div>
-                )}
-                <span className={css.hint}>{t('mode.sectionsHint')}</span>
-                {chState.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
-              </>
-            )}
-
-            {chState.syncMode === 'default' && (
-              <span className={css.hint}>
-                {state.catalog.length === 0
-                  ? t('common.loading')
-                  : t('mode.defaultCount', { n: String(recommendedSectionCount) })}
-              </span>
-            )}
-          </Card>
+                            {/* 历史会话专属参数：只带「最新 N 个」（默认 5），避免整棵会话树上行。
+                                必须放在 Checkbox **之外** —— Checkbox 内部是 label 元素，
+                                把输入控件放进去会让点输入框也切换勾选。 */}
+                            {s.id === 'sessions' && chState.syncSections.includes('sessions') && (
+                              <label className={css.field}>
+                                <span className={css.fieldLabel}>{t('mode.sessionsLimit')}</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={10000}
+                                  className={css.input}
+                                  value={String(chState.sessionsLimit)}
+                                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                                    setSessionsLimit(e.target.value === '' ? DEFAULT_SYNC_SESSIONS_LIMIT : Number(e.target.value))
+                                  }}
+                                />
+                                <span className={css.hint}>{t('mode.sessionsLimitHint')}</span>
+                              </label>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+              )}
+              <span className={css.hint}>{t('mode.sectionsHint')}</span>
+              {chState.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
+            </Modal.Body>
+            <Modal.Footer>
+              <Button variant="primary" onClick={() => { setSectionPickerOpen(false) }}>{t('mode.pickerDone')}</Button>
+            </Modal.Footer>
+          </Modal>
 
           {/* 加密与密钥导出（当前通道手动推送；仿「导出备份·自定义模式」安全选项） */}
           <Card>
@@ -1263,6 +1379,9 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
               label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
             />
             <div className={css.hint}>{t('mode.encryptHint')}</div>
+            {chState.encrypt && chState.encryptPasswordSaved && (
+              <div className={css.hint}>{t('mode.passwordSavedHint')}</div>
+            )}
             {chState.encrypt && (
               <div className={css.secretFields}>
                 <label className={css.field}>
@@ -1272,7 +1391,10 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     className={css.input}
                     value={chState.encryptPassword}
                     autoComplete="new-password"
+                    placeholder={chState.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => { patchChannel({ encryptPassword: e.target.value }) }}
+                    // 失焦即落库（两个框一致才写）——用户不必手动保存，下次留空即沿用
+                    onBlur={() => { void persistEncryptPassword() }}
                   />
                 </label>
                 <label className={css.field}>
@@ -1282,15 +1404,18 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                     className={css.input}
                     value={chState.encryptPasswordConfirm}
                     autoComplete="new-password"
+                    placeholder={chState.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => { patchChannel({ encryptPasswordConfirm: e.target.value }) }}
+                    onBlur={() => { void persistEncryptPassword() }}
                   />
                 </label>
                 {chState.encryptPassword !== '' && chState.encryptPassword !== chState.encryptPasswordConfirm && (
                   <span className={css.formError}>{t('mode.passwordMismatch')}</span>
                 )}
-                {chState.encryptPassword === '' && (
+                {chState.encryptPassword === '' && !chState.encryptPasswordSaved && (
                   <span className={css.formError}>{t('mode.passwordRequired')}</span>
                 )}
+                <span className={css.hint}>{t('mode.passwordClearNotice')}</span>
               </div>
             )}
             <Checkbox
@@ -1302,7 +1427,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
             <span className={css.hint}>{t('mode.encryptAutosyncNotice')}</span>
           </Card>
 
-          {/* 解密密码（当前通道拉取/一键同步加密快照用；仅内存） */}
+          {/* 解密密码（当前通道拉取/一键同步加密快照用；输入即保存到本机凭据库） */}
           <Card>
             <label className={css.field}>
               <span className={css.fieldLabel}>{t('mode.decryptPassword')}</span>
@@ -1311,10 +1436,21 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
                 className={css.input}
                 value={chState.decryptPassword}
                 autoComplete="off"
+                placeholder={chState.decryptPasswordSaved ? t('mode.decryptPasswordPlaceholder') : undefined}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => { patchChannel({ decryptPassword: e.target.value }) }}
+                onBlur={() => { void persistDecryptPassword() }}
               />
               <span className={css.hint}>{t('mode.decryptPasswordHint')}</span>
             </label>
+            {chState.decryptPasswordSaved && (
+              <div className={css.actionRow}>
+                <span className={css.hint}>{t('mode.decryptPasswordSaved')}</span>
+                {/* 危险语义：删除本机已保存的密码（不可逆，用户主动操作） */}
+                <Button size="sm" variant="danger" onClick={clearSavedDecryptPassword}>
+                  {t('mode.clearSavedPassword')}
+                </Button>
+              </div>
+            )}
           </Card>
 
           {/* 一键同步 + 手动推送/拉取（当前通道） */}
@@ -1454,6 +1590,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           >
             <Modal.Header
               title={t('syncflow.pushPreviewTitle')}
+              closeLabel={t('common.close')}
               onClose={() => { patch({ pushPreview: { preview: null, open: false } }) }}
               closeDisabled={state.busy === 'push'}
             />
@@ -1487,6 +1624,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           >
             <Modal.Header
               title={t('push.title')}
+              closeLabel={t('common.close')}
               onClose={() => { patch({ pushReport: null }) }}
             />
             <Modal.Body scroll style={{ maxHeight: '70vh' }}>
@@ -1526,6 +1664,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           >
             <Modal.Header
               title={t('pull.title')}
+              closeLabel={t('common.close')}
               onClose={() => { patch({ pullReport: null }) }}
             />
             <Modal.Body scroll style={{ maxHeight: '70vh' }}>
@@ -1577,6 +1716,7 @@ export function SyncSettingsView({ api, t }: SyncSettingsViewProps) {
           >
             <Modal.Header
               title={t('syncflow.title')}
+              closeLabel={t('common.close')}
               onClose={cancelConfirm}
               closeDisabled={state.busy === 'sync'}
             />

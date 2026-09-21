@@ -22,7 +22,7 @@ import { PLUGIN_PATCH_REF_PREFIX } from '../core/backup.ts';
 import { parsePnpmPatchedDependencies, sanitizePnpmWorkspacePatches } from './pnpm-workspace.ts';
 import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection, PnpmPatchFile } from '../schema/types.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 
@@ -149,7 +149,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     this.localPack = localPack;
   }
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<PluginsSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<PluginsSection>> {
     const plugins: PluginEntry[] = [];
     const warnings: string[] = [];
     try {
@@ -255,24 +255,97 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       }
     }
 
+
+    // Phase 1 条目级选择：只保留白名单命中的单元。键缺省 = 全量（与改造前逐字节一致）；
+    // 空数组由 Exporter 在选定阶段整分区剔除，不会走到这里。
+    const allow = options.includeItems?.[this.id];
+    let keptPlugins = effectivePlugins;
+    let keptPatch = patch;
+    let keptWorkspace = pnpmWorkspace;
+    let keptPatchFiles = patchFiles;
+    let keptTarballs = localTarballs;
+    if (allow !== undefined) {
+      // 原子组（D5 / issue #35）：pnpm-workspace.yaml ↔ patch 文件必须同进同出 ——
+      // 声明在而文件不在会让目标机 pnpm 拒绝一切 add；文件在而声明不在则补丁静默失效。
+      // 这里用 every（全或无）做纵深防御：即使 UI 的 lockedWith 没生效也不会产出半套。
+      const wsId = 'plugins:pnpm-workspace';
+      const pfIds = (patchFiles ?? []).map((pf) => `plugins:patch:${normalizePath(pf.relativePath)}`);
+      const groupKept = [wsId, ...pfIds].every((id) => allow.includes(id));
+      keptWorkspace = groupKept ? pnpmWorkspace : null;
+      keptPatchFiles = groupKept ? patchFiles : undefined;
+      keptPlugins = effectivePlugins.filter((pl) => allow.includes(`plugin:${pl.name}`));
+      keptPatch = patch.filter((pl) => allow.includes(`patch:${pl.lineId}`));
+      // tarball 只跟随存活的插件（本地源插件的打包产物不得被孤立带走）
+      const alive = new Set(keptPlugins.map((pl) => pl.name));
+      keptTarballs = localTarballs?.filter((t) => alive.has(t.packageName));
+    }
     return {
       sectionId: 'plugins',
       data: {
         version: 1,
-        plugins: effectivePlugins,
-        patch,
-        pnpmWorkspace,
-        ...(localTarballs !== undefined ? { localTarballs } : {}),
-        ...(patchFiles !== undefined ? { patchFiles } : {}),
+        plugins: keptPlugins,
+        patch: keptPatch,
+        pnpmWorkspace: keptWorkspace,
+        ...(keptTarballs !== undefined ? { localTarballs: keptTarballs } : {}),
+        ...(keptPatchFiles !== undefined ? { patchFiles: keptPatchFiles } : {}),
       },
       counts: {
-        plugins: effectivePlugins.length,
-        patchLines: patch.length,
-        ...(localTarballs !== undefined ? { localTarballs: localTarballs.length } : {}),
-        ...(patchFiles !== undefined ? { patchFiles: patchFiles.length } : {}),
+        plugins: keptPlugins.length,
+        patchLines: keptPatch.length,
+        ...(keptTarballs !== undefined ? { localTarballs: keptTarballs.length } : {}),
+        ...(keptPatchFiles !== undefined ? { patchFiles: keptPatchFiles.length } : {}),
       },
       warnings,
     };
+  }
+
+  /**
+   * 单元清单（Phase 1；零 I/O：直接由 export 产物派生）。
+   *
+   * 单元 = 插件包 / cordis 补丁行 / pnpm-workspace.yaml / 单个 patch 文件。
+   * 后两者构成**原子组**：patchedDependencies 的声明与 patches/** 文件必须同进同出
+   * （issue #35 —— 只搬声明会让目标机 pnpm 拒绝一切 add），故互相写进 lockedWith，
+   * 由选择模型保证勾选/取消同步。
+   */
+  listUnits(section: ExportSection<PluginsSection>): ExportUnit[] {
+    const data = section.data;
+    const wsId = 'plugins:pnpm-workspace';
+    const patchFileIds = (data.patchFiles ?? []).map((pf) => `plugins:patch:${normalizePath(pf.relativePath)}`);
+    const group = [wsId, ...patchFileIds];
+    const units: ExportUnit[] = [];
+    for (const pl of data.plugins) {
+      const tarball = (data.localTarballs ?? []).find((t) => t.packageName === pl.name);
+      units.push({
+        id: `plugin:${pl.name}`,
+        label: pl.name,
+        detail: pl.version,
+        // base64 长度 → 原始字节数（仅用于展示体积，不求精确）
+        sizeBytes: tarball !== undefined ? Math.floor((tarball.base64.length * 3) / 4) : 0,
+        ...(tarball !== undefined ? { fileCount: 1 } : {}),
+      });
+    }
+    for (const line of data.patch) {
+      // 由 mcp / prompts adapter 管理的行不属本分区（applyItem 同样跳过），列出来只会误导用户
+      if (isManagedElsewhere(line.raw)) continue;
+      units.push({ id: `patch:${line.lineId}`, label: line.lineId, sizeBytes: 0 });
+    }
+    if (data.pnpmWorkspace !== undefined && data.pnpmWorkspace !== null && data.pnpmWorkspace !== '') {
+      units.push({
+        id: wsId,
+        label: 'pnpm-workspace.yaml',
+        sizeBytes: data.pnpmWorkspace.length,
+        ...(group.length > 1 ? { lockedWith: group } : {}),
+      });
+    }
+    for (const pf of data.patchFiles ?? []) {
+      units.push({
+        id: `plugins:patch:${normalizePath(pf.relativePath)}`,
+        label: pf.relativePath,
+        sizeBytes: Math.floor((pf.base64.length * 3) / 4),
+        ...(group.length > 1 ? { lockedWith: group } : {}),
+      });
+    }
+    return units;
   }
 
   /**

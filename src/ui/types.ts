@@ -15,8 +15,6 @@ import type {
 
 /* ---------------- 导出（规范 §1 / §21） ---------------- */
 
-export type ExportMode = 'quick' | 'custom';
-
 /** Custom Export 分组（规范 §1 分类；automation 组在 DSH 中无对应分区，UI 标注说明） */
 export type ExportGroup =
   | 'general' | 'ai' | 'extensions' | 'mcp' | 'customization'
@@ -173,7 +171,11 @@ export interface RollbackView {
 
 /** UI 层与 core 的导入端口（宿主注入真实 Importer；测试注入内存 mock） */
 export interface ImportPort {
-  analyzeImport(zipPath: string): Promise<ImportAnalysis>;
+  /**
+   * 零写入分析。`opts.decryptPassword`（仅内存，可选）：提供即让宿主解开 secrets.enc，
+   * 把 `analysis.credentials`（仅 ref 名，issue #39 Feature 2）一并回传。
+   */
+  analyzeImport(zipPath: string, opts?: { decryptPassword?: string }): Promise<ImportAnalysis>;
   createImportPlan(zipPath: string, decisions: ImportDecisions): Promise<ImportPlan>;
   /**
    * 解锁整体加密备份（只读，零写入）：用备份密码解密上传的加密容器，得到明文 ZIP

@@ -14,9 +14,10 @@ import { isPathSafe, isReservedInternalRel } from '../utils/paths.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection } from '../schema/types.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
+import { unitAllowed, unitsFromFiles } from './units.ts';
 
 export const DEFAULT_PLUGIN_FILE_WHITELIST: readonly string[] = ['dsh-ssh.json', 'pet.json'];
 
@@ -37,11 +38,15 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
     this.collectDir = collectDir === '' ? undefined : collectDir;
   }
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<FilesSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<FilesSection>> {
     const files: FilesSection['files'] = [];
     const seen = new Set<string>();
+    // Phase 1 条目级选择：**逐文件单元** —— 每个插件配置文件彼此独立，
+    // 不像技能/会话那样构成 bundle（collectDir 下每个文件可单独带走）。
+    const allow = options.includeItems?.[this.id];
     // 1) 白名单固定文件（不存在则跳过，dsh-ssh.json 等为按需创建）
     for (const rel of this.whitelist) {
+      if (!unitAllowed(allow, `${this.id}:${rel}`)) continue;
       try {
         const data = await ctx.fs.readFile(rel);
         files.push({ relativePath: rel, data, contentHash: sha256Hex(data) });
@@ -62,6 +67,7 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
       const rels = listing.paths;
       for (const rel of rels) {
         if (seen.has(rel)) continue;
+        if (!unitAllowed(allow, `${this.id}:${rel}`)) continue;
         try {
           const data = await ctx.fs.readFile(rel);
           files.push({ relativePath: rel, data, contentHash: sha256Hex(data) });
@@ -76,6 +82,11 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
       counts: { files: files.length },
       warnings: linkWarnings(msgOf(ctx), this.displayName, listing),
     };
+  }
+
+  /** 单元清单（零 I/O）：逐文件单元，id 与导入侧 `pluginFiles:<relPath>` 一致。 */
+  listUnits(section: ExportSection<FilesSection>): ExportUnit[] {
+    return unitsFromFiles(this.id, section.data.files, (rel) => rel);
   }
 
   async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {

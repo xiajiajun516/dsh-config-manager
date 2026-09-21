@@ -57,9 +57,11 @@ import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
 import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
-import { APPLY_ORDER, ProfileManager, isValidProfileName } from './profiles/index.ts'
+import { APPLY_ORDER } from './core/analyzer.ts'
+import { DSH_PROFILE_TEMPLATES, DshProfileError, DshProfileManager, type DshProfilesSnapshot } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
-import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, validateSnapshotForRestore, type RestorePlan, type RestoreReport, type RestoreSnapshotVerdict } from './core/restore.ts'
+import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, validateSnapshotForRestore, type RestoreActionKind, type RestorePlan, type RestoreReport, type RestoreSnapshotVerdict } from './core/restore.ts'
+import { snapshotFileDiff, summarizeRestoreChanges } from './core/snapshot-diff.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 // Phase 1 P0-1/P0-2：配置生命周期（自动快照 / 撤销 / 重做）与 P0-5 崩溃归因。
 // 监听工厂用真 fs.watch 注入（core 侧只依赖抽象，便于测试驱动时序）。
@@ -79,7 +81,7 @@ import { redactJournalText, isValidOperationId, isTerminalState, transitionJourn
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { computeConsultReport, type ConsultSourceRef, type ConsultSourceData, type MigratabilityResult } from './core/migration-consult.ts'
-import { readExportZipSource, buildLocalSnapshotSource, buildProfileSource } from './core/consult-source.ts'
+import { readExportZipSource, buildLocalSnapshotSource } from './core/consult-source.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
 import {
@@ -87,7 +89,7 @@ import {
   resolveProfileDir, resolveProfileNameFromArgv, readProfileManifest, runDshPlugin, validateProfileName,
 } from './core/plugin-cli.ts'
 import type {
-  ConfigAdapter, CredentialsFacade, FileSystemFacade, HostContext, ImportDecisions,
+  ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions,
   ImportPlan, NamespaceInfo, PatchFileFacade, PlanItem, PlanItemKind, PluginInfo, PluginsFacade,
   SettingsFacade, Snapshot, WorkspaceFacade,
 } from './core/types.ts'
@@ -96,6 +98,8 @@ import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
 import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
+import { collectCredentialRefs } from './security/credentials-yaml.ts'
+import { applySessionMeta, applySessionMetaToPlanItems, readSessionMeta } from './core/session-meta.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
 import { activeProxySummary } from './utils/proxy.ts'
@@ -136,7 +140,8 @@ import {
 } from './sync/sync-config.ts'
 import type { SyncConfig, FullSyncConfig, SyncTransportType } from './sync/sync-config.ts'
 import {
-  defaultSyncSelection, effectiveSections, readAllSyncSelections, readSyncSelection, writeSyncSelection,
+  defaultSyncSelection, effectiveSections, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
+  readAllSyncSelections, readSyncSelection, writeSyncSelection,
   SYNC_SELECTION_SCHEMA_VERSION,
 } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
@@ -169,7 +174,7 @@ import { stringifyJsonSafe } from './utils/json.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
 import { parseZip, zipToBuffer } from './utils/zip.ts'
 import { isSameOrChild, normalizePath } from './utils/paths.ts'
-import { createLogger, type Logger } from './utils/logger.ts'
+import { createLogger, parseLogLevel, type Logger } from './utils/logger.ts'
 
 /* ---------------------------------------------------------------- identity */
 
@@ -180,7 +185,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.61'
+const PLUGIN_VERSION = '0.1.62'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -262,6 +267,8 @@ const API = {
   // P1-⑧：快照管理（手动删除 + 置顶豁免自动清理）
   snapshotDelete: '/api/dsh-config-manager/snapshots/delete',
   snapshotPin: '/api/dsh-config-manager/snapshots/pin',
+  // git 风格恢复预览：单个文件的逐行差异（只读；点开文件才请求）
+  snapshotFileDiff: '/api/dsh-config-manager/snapshots/file-diff',
   // m-backup-schedule：定时全量备份（读/存 backup-schedule.json + 立即执行一次）
   backupSchedule: '/api/dsh-config-manager/backup-schedule',
   backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
@@ -314,14 +321,14 @@ const API = {
   meListing: '/api/dsh-config-manager/me/listing',
   meRelist: '/api/dsh-config-manager/me/relist',
   meDelete: '/api/dsh-config-manager/me/delete',
-  // m-profiles：配置档案（Profile = 一组可切换的配置快照；Save/List/Delete/Rename/Switch/Import）
+  // m-profiles：档案 = DSH 自带 profile（$DSH_HOME/profiles/<name>）；
+  // List/Detail/Create/Rename/Delete/Select（Select = 记录「下次启动」，DSH 不支持运行中切换）
   profiles: '/api/dsh-config-manager/profiles',
-  profilesSave: '/api/dsh-config-manager/profiles/save',
+  profilesDetail: '/api/dsh-config-manager/profiles/detail',
+  profilesCreate: '/api/dsh-config-manager/profiles/create',
   profilesDelete: '/api/dsh-config-manager/profiles/delete',
   profilesRename: '/api/dsh-config-manager/profiles/rename',
-  profilesAnalyzeSwitch: '/api/dsh-config-manager/profiles/analyze-switch',
-  profilesExecuteSwitch: '/api/dsh-config-manager/profiles/execute-switch',
-  profilesImport: '/api/dsh-config-manager/profiles/import',
+  profilesSelect: '/api/dsh-config-manager/profiles/select',
   // Phase 5：recovery 编排（prefix 路由，内部按 path 分发：status / <opId>/preview|confirm|execute|verify|retry|dismiss）
   recovery: '/api/dsh-config-manager/recovery',
   // Phase 6：迁移历史审计（统一历史引擎；只读 GET + 导出）
@@ -364,6 +371,24 @@ export const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN'
  * by WebDavTransport 经注入的 getPassword() resolve），永不进 URL / 请求头 / 日志。
  */
 export const SYNC_WEBDAV_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD'
+
+/**
+ * 同步快照「加密密码 / 解密密码」的 DSH credentials 引用名前缀（按通道各自独立）。
+ *
+ * 为什么放 DSH credentials：加密/解密密码跨会话必须可用（否则每次推送都要重新输入），
+ * 但**绝不允许**写进 sync-selection.json 一类同步文件（那等于把密码推上远端）。
+ * 与本插件既有的 token / WebDAV 口令同一套做法：值只存在于 DSH 凭据库，
+ * 宿主内部按需 resolve，**永不回传浏览器**（UI 只拿到 configured 布尔）。
+ * 引用名形如 DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD_GIT。
+ */
+export const SYNC_ENCRYPT_PASSWORD_REF_PREFIX = 'DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD'
+export const SYNC_DECRYPT_PASSWORD_REF_PREFIX = 'DSH_CONFIG_MANAGER_SYNC_DECRYPT_PASSWORD'
+
+/** ('ENCRYPT'|'DECRYPT', 'git'|'webdav') → 该通道的凭据引用名。 */
+export function syncPasswordRef(kind: 'ENCRYPT' | 'DECRYPT', channel: SyncTransportType): string {
+  const prefix = kind === 'ENCRYPT' ? SYNC_ENCRYPT_PASSWORD_REF_PREFIX : SYNC_DECRYPT_PASSWORD_REF_PREFIX
+  return prefix + '_' + channel.toUpperCase()
+}
 
 /** Cap on JSON request bodies (import plans can be large: 4 MB). */
 const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
@@ -428,6 +453,19 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 function queryParam(url: URL, name: string): string | undefined {
   const value = url.searchParams.get(name)
   return value === null ? undefined : value
+}
+
+/**
+ * 档案路由的错误响应：engine 的 DshProfileError 带 code（UI 据此映射本地化文案，
+ * 不显示裸英文码）；其它异常按 500 处理。
+ */
+function writeProfileError(res: ServerResponse, error: unknown): void {
+  if (error instanceof DshProfileError) {
+    const status = error.code === 'notFound' ? 404 : error.code === 'exists' ? 409 : 400
+    writeJson(res, status, { error: error.message, code: error.code })
+    return
+  }
+  writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
 }
 
 /** Stream a raw request body to a file, enforcing a byte cap. */
@@ -839,7 +877,7 @@ class DshPatchFileFacade implements PatchFileFacade {
 }
 
 /** File facade over $DSH_HOME, confined to the home root. */
-class DshFileSystemFacade implements FileSystemFacade {
+export class DshFileSystemFacade implements FileSystemFacade {
   private readonly homeDir: string
   private readonly msg: MsgFunc
 
@@ -893,6 +931,22 @@ class DshFileSystemFacade implements FileSystemFacade {
     return listRecursiveFollowingLinks(this.abs(dir), this.homeDir)
   }
 
+  /**
+   * 文件 mtime（毫秒；不存在 / 读不到 → null）。sessions 的「最新 N 个」依赖它：
+   * 排序用「最新一份会话日志」的时间，而不是目录 mtime（增量写入时不可靠）。
+   */
+  async mtimeMs(relPath: string): Promise<number | null> {
+    // 路径越界等安全错误必须向上抛（与其它方法一致）：被 catch 吞成 null 会让
+    // 「越界 = 读不到时间」看起来像正常缺文件，掩盖真实问题（实测由测试钉住）。
+    const target = this.abs(relPath)
+    try {
+      const st = await fs.stat(target)
+      return st.mtimeMs
+    } catch {
+      return null
+    }
+  }
+
   async mkdir(dir: string): Promise<void> {
     await fs.mkdir(this.abs(dir), { recursive: true })
   }
@@ -928,10 +982,10 @@ class ConfigManagerHostContext implements HostContext {
     this.profile = profile
     this.language = resolveAppLanguage(ctx)
     this.msg = makeMsg(this.language)
-    const level = process.env.DSH_CONFIG_MANAGER_LOG_LEVEL
-    this.log = createLogger({
-      level: level === 'debug' || level === 'info' || level === 'warn' || level === 'error' ? level : 'info',
-    })
+    // 日志级别缺省 warn：启动 dsh web 后控制台只留 warn/error —— 挂载横幅、调度器跳过、
+    // 导出/备份完成等常规 info 不再刷屏（用户要求移除启动后的日志噪音）；
+    // 排查时 DSH_CONFIG_MANAGER_LOG_LEVEL=info|debug 恢复逐条输出。
+    this.log = createLogger({ level: parseLogLevel(process.env.DSH_CONFIG_MANAGER_LOG_LEVEL) })
     this.settings = new DshSettingsFacade(ctx)
     this.credentials = new DshCredentialsFacade(ctx)
     this.patchFile = new DshPatchFileFacade(homeDir, profile, this.msg)
@@ -989,7 +1043,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, message: string):
 }
 
 /** Decrypt an encrypted backup's credentials (in-memory only; undefined when not applicable). */
-async function tryDecryptCredentials(
+export async function tryDecryptCredentials(
   zipPath: string,
   password: string | undefined,
 ): Promise<Map<string, string> | undefined> {
@@ -1013,13 +1067,9 @@ async function tryDecryptCredentials(
   } catch {
     return undefined
   }
-  const map = new Map<string, string>()
-  if (parsed !== null && typeof parsed === 'object') {
-    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof v === 'string' && v !== '') map.set(k, v)
-    }
-  }
-  return map
+  // 解析口径与同步引擎共用（security/credentials-yaml.ts）：顶层 refs 块（DSH v1 布局）
+  // 与预发布扁平布局都认，records 等嵌套结构忽略（issue #39）。
+  return collectCredentialRefs(parsed)
 }
 
 /** 解密错误 → 用户可读文本：BAD_PASSWORD 只报「密码错误」（不泄内部细节），其余原文 */
@@ -1198,6 +1248,22 @@ export function extractSyncSections(
   return out
 }
 
+/**
+ * push 请求体的 sessions 选项（历史会话「最新 N 个」上限）。
+ *
+ * 语义：**只有显式提供该对象**，sessions 才被允许进入同步通道（engine 的 opt-in 判定）；
+ * 形状非法（数组 / 标量 / 缺对象）→ undefined = 与其它 deviceSpecific 分区一样跳过并告警。
+ * limit 非法（非整数 / 负数）→ 归一化为宿主缺省（5）；超大 → 钳制。
+ */
+export function extractSyncSessions(body: Record<string, unknown>): { limit?: number } | undefined {
+  const raw = body['sessions']
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const limit = (raw as Record<string, unknown>)['limit']
+  return typeof limit === 'number' && Number.isInteger(limit) && limit >= 0
+    ? { limit: Math.min(limit, 10000) }
+    : {}
+}
+
 /** 需要人工决策的 PlanItemKind（一键同步 needsReview 判定 + 逐项确认标记）。
  * 注意：'Install'（安装插件）不在此列 —— 同步拉取差异时插件按「自动安装」处理：
  * 默认采纳、不逐项展示、无需手动选择（product requirement）。
@@ -1342,6 +1408,49 @@ export function buildRestoreBody(body: unknown): BuildRestoreBodyResult {
     return { ok: false, error: zhMsg('restore.invalidSnapshotId') }
   }
   return { ok: true, value: { snapshotId, dryRun: record['dryRun'] === true } }
+}
+
+/* ------------------------------------------- snapshots/file-diff（git 风格预览） */
+
+/** 只有这四类动作对应「文件内容变更」，可请求逐行差异。 */
+const DIFFABLE_RESTORE_KINDS: readonly RestoreActionKind[] = ['hostFileRestore', 'fileRestore', 'hostFileRemove', 'fileRemove'];
+
+export type BuildFileDiffBodyResult =
+  | { ok: true; value: { snapshotId: string; kind: RestoreActionKind; target?: string; blobPath?: string } }
+  | { ok: false; error: string }
+
+/**
+ * POST /snapshots/file-diff 请求体校验（纯函数）。
+ * target / blobPath 只是候选路径：真正的越界拦截在 core 的 homeAbs / blobAbs 护栏
+ * （本函数不做路径规范化，避免两处规则漂移）。
+ */
+export function buildFileDiffBody(body: unknown): BuildFileDiffBodyResult {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: 'invalid JSON body' }
+  }
+  const record = body as Record<string, unknown>
+  const snapshotId = record['snapshotId']
+  if (typeof snapshotId !== 'string' || snapshotId === '') {
+    return { ok: false, error: 'snapshotId is required' }
+  }
+  if (snapshotId === '.' || snapshotId === '..' || snapshotId.includes('/') || snapshotId.includes('\\')) {
+    return { ok: false, error: zhMsg('restore.invalidSnapshotId') }
+  }
+  const kind = record['kind']
+  if (typeof kind !== 'string' || !DIFFABLE_RESTORE_KINDS.includes(kind as RestoreActionKind)) {
+    return { ok: false, error: 'kind must be one of hostFileRestore/fileRestore/hostFileRemove/fileRemove' }
+  }
+  const rawTarget = record['target']
+  const rawBlob = record['blobPath']
+  return {
+    ok: true,
+    value: {
+      snapshotId,
+      kind: kind as RestoreActionKind,
+      target: typeof rawTarget === 'string' && rawTarget !== '' ? rawTarget : undefined,
+      blobPath: typeof rawBlob === 'string' && rawBlob !== '' ? rawBlob : undefined,
+    },
+  }
 }
 
 /**
@@ -1647,9 +1756,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
 
   /** 已知 adapter id 集合（push 请求体 sections 校验用）。 */
   const knownSyncSectionIds = new Set(adapters.map((a) => a.id))
-  /** 可同步分区目录（status 回填 UI「高级/自定义导出」勾选列表；只含 portable，与 SyncEngine 一致）。 */
+  /** 可同步分区目录（status 回填 UI「同步分区」勾选列表）。
+   *  只含 portable + 显式可选项（OPT_IN_SYNC_SECTIONS，目前只有 sessions）——
+   *  后者是 deviceSpecific，UI 必须显示设备相关徽章，且只有用户主动勾选才进同步通道。 */
   const syncSectionCatalog = adapters
-    .filter((a) => a.portability === 'portable')
+    .filter((a) => a.portability === 'portable' || OPT_IN_SYNC_SECTIONS.includes(a.id))
     .map((a) => ({ id: a.id, displayName: a.displayName, portability: a.portability, defaultIncluded: a.defaultIncluded }))
 
   const makeImporter = (): Importer => new Importer({
@@ -1671,22 +1782,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     msg,
   })
 
-  /** m-profiles：配置档案管理器（<dataDir>/profiles/<name>/profile.json；切换复用同一快照/回滚管道） */
-  const profiles = new ProfileManager({
+  /**
+   * m-profiles：档案管理器（DSH 自带 profile：$DSH_HOME/profiles/<name>）。
+   * currentProfile 惰性读取（config.profile / --profile / 缺省 web），列表里据此标注「当前运行」。
+   * 「切换」= 写 <dataDir>/next-profile 标记（DSH 无法在运行中切换 profile）。
+   */
+  const profiles = new DshProfileManager({
+    homeDir: host.homeDir,
     dataDir,
-    ctx: host,
-    adapters,
-    snapshotStore: new FileSnapshotStore({
-      dir: snapshotsDir,
-      // Phase 4 F3：recovery 引用保护
-      referencedSnapshotIds: () => host.phase3Recovery?.store.listReferencedSnapshotIds() ?? Promise.resolve(new Set<string>()),
-      // Phase 6：自动保留清理 → snapshot-prune 迁移历史（best-effort）
-      onPrune: (removedIds) => { void tryAppendSnapshotPrune(removedIds) },
-      // m-retention：可配置 GFS 保留策略（与导入器同一策略源）
-      retentionPolicy: () => retentionPolicyProvider(),
-      // m-retention：分层选择器由宿主注入（core 不反向依赖 sync）
-      pruneSelector: retentionPruneSelector,
-    }),
+    currentProfile: () => host.profile ?? 'web',
   })
 
   /** Fence + method guard (mirrors dsh-ssh). */
@@ -1798,26 +1902,70 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     }
   }
 
-  /** 指定通道的分区选择视图（{ mode, sections, encrypt, includeSecrets }，无 schemaVersion/密码）。 */
-  const selectionView = async (channel: SyncTransportType): Promise<{ mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean }> => {
+  /** 读取已保存的同步密码（DSH credentials；值只在宿主内使用，永不回传浏览器 / 日志）。 */
+  const resolveSyncPassword = async (ref: string): Promise<string | undefined> => {
+    try {
+      const resolved = await credentials.resolve(credentialRef(ref))
+      const value = resolved?.value
+      return typeof value === 'string' && value !== '' ? value : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** 某个同步密码槽位是否已配置（只回布尔，永不回值）。 */
+  const syncPasswordConfigured = async (ref: string): Promise<boolean> => {
+    try {
+      const info = await credentials.describe(credentialRef(ref))
+      return info.configured
+    } catch {
+      return false
+    }
+  }
+
+  /** 全部通道的「同步密码是否已保存」视图（只回布尔；密码值永不进任何响应）。 */
+  const syncCredentialsByChannelView = async (): Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean }>> => {
+    const describe = async (channel: SyncTransportType): Promise<{ encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean }> => ({
+      encryptPasswordConfigured: await syncPasswordConfigured(syncPasswordRef('ENCRYPT', channel)),
+      decryptPasswordConfigured: await syncPasswordConfigured(syncPasswordRef('DECRYPT', channel)),
+    })
+    const [git, webdav] = await Promise.all([describe('git'), describe('webdav')])
+    return { git, webdav }
+  }
+
+  /** 分区选择视图形状（无 schemaVersion；密码值永不进视图）。 */
+  type SelectionView = { mode: SyncSelectionMode; sections: SectionId[]; sessionsLimit: number; encrypt: boolean; includeSecrets: boolean }
+
+  /** 指定通道的分区选择视图。 */
+  const selectionView = async (channel: SyncTransportType): Promise<SelectionView> => {
     const sel = await ensureSelectionLoaded(channel)
-    return { mode: sel.mode, sections: sel.sections, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
+    return { mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
   }
 
   /** 全部通道的分区选择视图（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
-  const selectionViewByChannel = async (): Promise<Record<SyncTransportType, { mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean }>> => {
+  const selectionViewByChannel = async (): Promise<Record<SyncTransportType, SelectionView>> => {
     const all = await readAllSyncSelections(syncDir)
     selectionCache.git = all.git
     selectionCache.webdav = all.webdav
-    const view = (sel: SyncSelection): { mode: SyncSelectionMode; sections: SectionId[]; encrypt: boolean; includeSecrets: boolean } =>
-      ({ mode: sel.mode, sections: sel.sections, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets })
+    const view = (sel: SyncSelection): SelectionView =>
+      ({ mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets })
     return { git: view(all.git), webdav: view(all.webdav) }
+  }
+
+  /** 该通道的持久化选择是否显式勾选了「可选分区」（sessions）—— 决定用户驱动的拉取侧能否看见它。 */
+  const selectionHasOptInSections = (channel: SyncTransportType): boolean => {
+    const sel = selectionCache[channel]
+    if (sel === undefined) return false
+    const sections = effectiveSections(sel)
+    return sections !== undefined && sections.some((id) => OPT_IN_SYNC_SECTIONS.includes(id))
   }
 
   /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。
    *  同步范围（sections）来自持久化分区选择：advanced 模式 → 只处理勾选分区，
-   *  自动同步（merge/apply/push 全链路）与手动 push 共用此配置。 */
-  const makeSyncEngine = (cfg: SyncConfig): SyncEngine => {
+   *  自动同步（merge/apply/push 全链路）与手动 push 共用此配置。
+   *  opts.includeOptInSections：仅**用户驱动**的拉取/一键同步路由传 true（用户的选择里
+   *  确实勾了 sessions 时）—— 自动同步调用点一律不传，会话分区绝不悄悄下行。 */
+  const makeSyncEngine = (cfg: SyncConfig, engineOpts: { includeOptInSections?: boolean } = {}): SyncEngine => {
     let transport: SyncTransport
     if (isWebDavConfig(cfg)) {
       transport = new WebDavTransport({
@@ -1858,6 +2006,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       zipDir: tmpDir,
       msg,
       ...(sections === undefined ? {} : { sections }),
+      ...(engineOpts.includeOptInSections === true ? { includeOptInSections: true } : {}),
     })
   }
 
@@ -2112,6 +2261,28 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         const only = Array.isArray(body['only'])
           ? body['only'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
           : undefined
+        // Phase 1 条目级选择：{ '<section>': ['<unitId>', ...] }。
+        // 只接受已知分区 + 非空字符串；**过滤后为空的白名单一律忽略**（回落该分区全量）——
+        // 脏 body 绝不能静默缩小导出范围（宁可多导，不可静默少导）。
+        const includeItems: Partial<Record<SectionId, string[]>> = {}
+        const rawItems = body['includeItems']
+        if (rawItems !== null && typeof rawItems === 'object' && !Array.isArray(rawItems)) {
+          for (const [key, value] of Object.entries(rawItems as Record<string, unknown>)) {
+            if (!(SECTION_IDS as readonly string[]).includes(key)) continue
+            if (!Array.isArray(value)) continue
+            const ids = value.filter((x): x is string => typeof x === 'string' && x !== '')
+            if (ids.length > 0) includeItems[key as SectionId] = ids
+          }
+        }
+        // issue #39 Feature 1：会话按数量筛选（0=不带 / 负数=全带 / 正数=最新 N 个）。
+        // 只接受对象形状；limit 非数字（含缺省）→ 显式选中 sessions 但不限数量。
+        // 形状非法（数组 / 标量）一律忽略 = 现有行为（不显式选中会话）。
+        const sessionsBody = body['sessions']
+        const sessions = sessionsBody !== null && typeof sessionsBody === 'object' && !Array.isArray(sessionsBody)
+          ? (typeof (sessionsBody as Record<string, unknown>)['limit'] === 'number'
+              ? { limit: (sessionsBody as Record<string, number>)['limit'] as number }
+              : {})
+          : undefined
         // P0-④：自定义导出文件名（可选；缺省自动命名）。安全：合法 zip 文件名才接受
         // （isValidExportFileName 拒绝路径分隔符/非法字符）；输出恒在 exportsDir 内。
         // 兼容两种 key：outPath（ExportFlow 透传，语义=文件名）与 fileName（显式自定义名）。
@@ -2181,7 +2352,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             },
           })
           const result = await withTimeout(
-            exporter.export({ includeSecrets, only, outPath: plainZipPath }),
+            exporter.export({
+              includeSecrets,
+              only,
+              // 条目级选择：键存在才下发（空对象 = 未启用，与改造前完全一致）
+              ...(Object.keys(includeItems).length > 0 ? { includeItems } : {}),
+              // issue #39 Feature 1：会话按数量筛选（键存在才下发 = 现有行为不变）
+              ...(sessions !== undefined ? { sessions } : {}),
+              outPath: plainZipPath,
+            }),
             ROUTE_TIMEOUT_MS,
             msg('host.exportTimeout'),
           )
@@ -2237,9 +2416,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const selected = adapters
             .filter((a) => (only === undefined ? a.defaultIncluded : only.includes(a.id)))
             .map((a) => a.id)
-          const preview: { section: SectionId; count: number; sizeBytes: number }[] = []
+          const preview: { section: SectionId; count: number; sizeBytes: number; items: ExportUnit[] }[] = []
           let totalSize = 0
           let sectionsFailed = 0
+          // 失败分区的**精确 id 列表**（t7）：sectionsFailed 只是计数，客户端无法据此标注是哪几个
+          // 分区读取失败（只能靠「请求了但没回来」推断）。两个字段同时保留：计数是既有契约（旧客户端
+          // 仍按它渲染「N 个分区导出失败已跳过」），id 列表是新增的精确信息。
+          const failedSections: SectionId[] = []
           for (const adapter of adapters) {
             if (!selected.includes(adapter.id)) continue
             try {
@@ -2254,11 +2437,31 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 size = Buffer.byteLength(stringifyJsonSafe(section.data), 'utf8')
               }
               const count = section.counts ? Object.values(section.counts).reduce((a, b) => a + b, 0) : 0
-              preview.push({ section: adapter.id, count, sizeBytes: size })
+              // Phase 1：可单独勾选的单元。listUnits 是**零 I/O** 纯函数（输入即本次 export 的产物），
+              // 因此枚举明细不额外读盘；未实现 listUnits 的分区 items = [] = 不可细分（整体开关）。
+              let items: ExportUnit[] = []
+              try {
+                items = adapter.listUnits?.(section) ?? []
+              } catch {
+                // 单元枚举失败不拖垮预览：退化为「不可细分」，用户仍可整分区导出
+                items = []
+              }
+              preview.push({ section: adapter.id, count, sizeBytes: size, items })
               totalSize += size
             } catch {
               sectionsFailed += 1
+              failedSections.push(adapter.id)
               // 单项失败不拖垮预览（与真实导出同语义：分区级失败跳过）
+            }
+          }
+          // sessions 分区：补「界面标题 + 按工作区分组」（读 DSH 的 storages 缓存；只读尽力而为，
+          // 读不到就保持目录名 —— 绝不因为元数据缺失让预览失败）。
+          const sessionsEntry = preview.find((p) => p.section === 'sessions')
+          if (sessionsEntry !== undefined && sessionsEntry.items.length > 0) {
+            try {
+              sessionsEntry.items = applySessionMeta(sessionsEntry.items, await readSessionMeta(host))
+            } catch {
+              /* 保持目录名（旧行为） */
             }
           }
           writeJson(res, 200, {
@@ -2267,6 +2470,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             totalSections: preview.length,
             totalSizeBytes: totalSize,
             sectionsFailed,
+            // 新增可选字段（向后兼容：旧客户端忽略未知字段；旧宿主不回该字段时客户端回退到推断）
+            failedSections,
           })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
@@ -2428,8 +2633,22 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           writeJson(res, 400, { error: 'zipPath is required and must reference a staged backup' })
           return
         }
+        // issue #39 Feature 2：可选解密密码 —— 提供即解开 secrets.enc，把
+        // `credentials: { inArchive, refs, satisfied }` 一并回传（只回传 ref 名，永不回传值），
+        // 宿主不必自己解析 .credentials.yaml。未提供 = refs 为空数组，其余分析不变。
+        const analyzePassword = typeof body?.['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+          ? body['decryptPassword']
+          : undefined
         try {
-          writeJson(res, 200, await makeImporter().analyzeImport(zipPath))
+          let decryptedCredentials: Map<string, string> | undefined
+          try {
+            decryptedCredentials = await tryDecryptCredentials(zipPath, analyzePassword)
+          } catch (error) {
+            // 提供了密码却解不开（错密码 / 密文被篡改）：如实报错，不静默降级为「没有凭据」
+            writeJson(res, 400, { error: decryptErrorText(error, msg) })
+            return
+          }
+          writeJson(res, 200, await makeImporter().analyzeImport(zipPath, { decryptedCredentials }))
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2453,7 +2672,17 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         try {
-          writeJson(res, 200, await makeImporter().createImportPlan(zipPath, decisions))
+          const plan = await makeImporter().createImportPlan(zipPath, decisions)
+          // sessions 计划项：补「会话标题 + 工作区分组」（用户实测：导入页此前只显示会话目录名）。
+          // 只在计划真的含该分区时才读 storages；读不到就保持目录名，绝不让计划生成失败。
+          if (plan.items.some((i) => i.adapter === 'sessions')) {
+            try {
+              plan.items = applySessionMetaToPlanItems(plan.items, await readSessionMeta(host))
+            } catch {
+              /* 保持目录名（旧行为） */
+            }
+          }
+          writeJson(res, 200, plan)
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2672,7 +2901,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         try {
           if (dryRun) {
             // dry-run 零写入、只读探测：不登记 run（并发 dry-run 无害）
-            writeJson(res, 200, { dryRun: true, plan: await planRestore(restoreOpts) })
+            const plan = await planRestore(restoreOpts)
+            // git 风格恢复预览：逐动作的变更状态 + 行数统计（读取有上限，见 core/snapshot-diff.ts）。
+            // summarize 内部逐项兜底、绝不抛错 —— 统计失败不影响计划本身。
+            const changeSummary = await summarizeRestoreChanges({ plan, snapshotDir, homeDir: host.homeDir, msg })
+            writeJson(res, 200, { dryRun: true, plan, changeSummary })
             return
           }
           // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
@@ -2799,18 +3032,56 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
       }),
     },
-    // -------------------------------------------------- m-profiles
-    // 配置档案（Profile）：保存当前 DSH 配置为多套可切换快照（Work/Personal…）。
-    // 安全：Profile 名严格校验（ProfileManager 内部 isValidProfileName 防穿越）；
-    // 切换走「预览 → confirm → 快照 → 分阶段 apply → 失败回滚」与导入同一语义；
-    // Save 复用 adapter.export（天然不含秘密值）；全部路由 loopback fence。
+    // --------------------------------------- snapshots/file-diff（git 风格预览）
+    // 单个文件的逐行差异（只读）：before = 当前磁盘文件 / after = 快照 blob。
+    // 点开某个文件才请求（列表阶段只做轻量统计），避免会话类快照几百个文件时拖死弹窗。
+    // 越界（$DSH_HOME / 快照目录之外）、二进制、超限都返回结构化 reason 而非 5xx。
+    {
+      kind: 'exact',
+      path: API.snapshotFileDiff,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'POST')) return
+        const body = await readJsonBody(req)
+        const parsed = buildFileDiffBody(body)
+        if (!parsed.ok) {
+          writeJson(res, 400, { error: parsed.error })
+          return
+        }
+        const { snapshotId, kind, target, blobPath } = parsed.value
+        try {
+          const diff = await snapshotFileDiff({
+            snapshotDir: join(snapshotsDir, snapshotId),
+            homeDir: host.homeDir,
+            kind,
+            target,
+            blobPath,
+            msg,
+          })
+          writeJson(res, 200, { diff })
+        } catch (error) {
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
+      },
+    },
+    // -------------------------------------------------- m-profiles（档案 = DSH 自带 profile）
+    // 「档案」= DSH 的 profile（`$DSH_HOME/profiles/<name>`）：list / detail / create / rename /
+    // delete（物理删除）/ select（记录「下次启动」）。DSH **无法在运行中切换 profile** —— select
+    // 只写 <dataDir>/next-profile 标记并提示用户手动重启（`dsh --profile <name>`），不做任何进程操作。
+    // 安全：profile 名在 engine（+ core/plugin-cli.validateProfileName）里校验，防路径穿越/保留名；
+    // 读路由过 loopback fence，写路由再叠加 mutation gate（与 destructive 操作互斥 + SAFE MODE 阻断）。
     {
       kind: 'exact',
       path: API.profiles,
       handler: async (req, res) => {
         if (!guard(req, res, 'GET')) return
         try {
-          writeJson(res, 200, { ok: true, profiles: await profiles.list() })
+          writeJson(res, 200, {
+            ok: true,
+            profiles: profiles.list(),
+            current: host.profile ?? 'web',
+            selection: profiles.readSelection(),
+            templates: [...DSH_PROFILE_TEMPLATES],
+          } satisfies DshProfilesSnapshot & { ok: true })
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -2818,10 +3089,25 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     },
     {
       kind: 'exact',
-      path: API.profilesSave,
-      // P2-C（Phase 8）：profiles/save 接入 GLOBAL mutation lock（与 destructive 操作互斥；
-      // 保存档案期间确保 live config 不被并发改动，档案快照一致）。
-      handler: withMutationGate('profile-save', async (req, res) => {
+      path: API.profilesDetail,
+      handler: async (req, res) => {
+        if (!guard(req, res, 'GET')) return
+        const name = queryParam(new URL(req.url ?? '/', 'http://localhost'), 'name')
+        if (name === undefined || name === '') {
+          writeJson(res, 400, { error: 'name is required' })
+          return
+        }
+        try {
+          writeJson(res, 200, { ok: true, profile: profiles.detail(name) })
+        } catch (error) {
+          writeProfileError(res, error)
+        }
+      },
+    },
+    {
+      kind: 'exact',
+      path: API.profilesCreate,
+      handler: withMutationGate('profile-create', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2829,51 +3115,19 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
-        if (!isValidProfileName(name)) {
-          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
-          return
-        }
-        const sections = Array.isArray(body['sections'])
-          ? body['sections'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
-          : undefined
+        const template = typeof body['template'] === 'string' && body['template'] !== '' ? body['template'] : 'base'
         try {
-          const meta = await profiles.saveCurrent(name, sections === undefined ? {} : { sections })
+          const meta = profiles.create(name, template)
           const historyError = await tryAppendHistory({
-            kind: 'profile-save',
+            kind: 'profile-create',
             result: 'success',
-            sections: Array.isArray(meta?.sections) ? (meta.sections.filter((s) => typeof s === 'string') as string[]) : [],
+            sections: [meta.name],
             source: 'api',
-            summary: `保存配置档案 ${name}`,
+            summary: `新建档案 ${meta.name}（模板 ${template}）`,
           })
           writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
         } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      }),
-    },
-    {
-      kind: 'exact',
-      path: API.profilesDelete,
-      handler: withMutationGate('profile-delete', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const name = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)['name'] : undefined
-        if (typeof name !== 'string' || !isValidProfileName(name)) {
-          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
-          return
-        }
-        try {
-          await profiles.delete(name)
-          const historyError = await tryAppendHistory({
-            kind: 'profile-delete',
-            result: 'success',
-            sections: [name],
-            source: 'api',
-            summary: `删除配置档案 ${name}`,
-          })
-          writeJson(res, 200, historyError === undefined ? { ok: true } : { ok: true, historyWriteError: historyError })
-        } catch (error) {
-          writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
+          writeProfileError(res, error)
         }
       }),
     },
@@ -2889,48 +3143,26 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
         const newName = typeof body['newName'] === 'string' ? body['newName'].trim() : ''
-        if (!isValidProfileName(name) || !isValidProfileName(newName)) {
-          writeJson(res, 400, { error: 'name and newName must be valid profile names' })
-          return
-        }
         try {
-          const meta = await profiles.rename(name, newName)
+          const meta = profiles.rename(name, newName)
           const historyError = await tryAppendHistory({
             kind: 'profile-rename',
             result: 'success',
             sections: [name],
             source: 'api',
-            summary: `重命名配置档案 ${name} → ${newName}`,
+            summary: `重命名档案 ${name} → ${newName}`,
           })
           writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
         } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
+          writeProfileError(res, error)
         }
       }),
     },
     {
       kind: 'exact',
-      path: API.profilesAnalyzeSwitch,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const name = typeof body === 'object' && body !== null ? (body as Record<string, unknown>)['name'] : undefined
-        if (typeof name !== 'string' || !isValidProfileName(name)) {
-          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
-          return
-        }
-        try {
-          const preview = await profiles.analyzeSwitch(name)
-          writeJson(res, 200, { ok: true, preview })
-        } catch (error) {
-          writeJson(res, 404, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    {
-      kind: 'exact',
-      path: API.profilesExecuteSwitch,
-      handler: withMutationGate('profile-switch', async (req, res, lockCtx, journalCtx) => {
+      path: API.profilesDelete,
+      // 物理删除整个 profile 目录（含 node_modules），不可恢复；当前运行中的档案需显式 allowCurrent。
+      handler: withMutationGate('profile-delete', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
@@ -2938,99 +3170,53 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
-        if (!isValidProfileName(name)) {
-          writeJson(res, 400, { error: 'name is required and must be a valid profile name' })
-          return
-        }
-        const secretInputs =
-          body['secretInputs'] !== null && typeof body['secretInputs'] === 'object'
-            ? body['secretInputs'] as Record<string, string>
-            : {}
-        const resolutions =
-          body['resolutions'] !== null && typeof body['resolutions'] === 'object'
-            ? body['resolutions'] as Record<string, 'keepCurrent' | 'useImported' | 'review'>
-            : {}
-        const strategy = body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] as 'replace' | 'skipExisting' : 'merge'
-        // 执行开始登记 run（同 kind 已有进行中任务 → 409，与 /restore、/execute 同防重语义）
-        let run: RunState
+        const allowCurrent = body['allowCurrent'] === true
         try {
-          run = runs.register('profile-switch')
-        } catch (error) {
-          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
-          return
-        }
-        const runId = run.runId
-        try {
-          const result = await profiles.executeSwitch(name, {
-            confirm: body['confirm'] === true,
-            strategy,
-            resolutions,
-            secretInputs,
-            rollbackOnError: body['rollbackOnError'] !== false,
-            snapshotBinding: journalCtx,
-          })
-          runs.finish(runId, result)
-          // Phase 6：迁移历史（best-effort）。sections 从切换 preview 的分区。
-          const switchSections = (result as { sections?: string[] }).sections ?? []
+          profiles.remove(name, { allowCurrent })
           const historyError = await tryAppendHistory({
-            kind: 'profile-switch',
+            kind: 'profile-delete',
             result: 'success',
-            sections: switchSections,
-            operationId: journalCtx?.operationId,
-            runId,
+            sections: [name],
             source: 'api',
-            summary: `切换到配置档案 ${name}`,
+            summary: `删除档案 ${name}（物理删除目录）`,
           })
-          writeJson(res, 200, historyError === undefined ? { ...result, runId } : { ...result, runId, historyWriteError: historyError })
+          writeJson(res, 200, historyError === undefined ? { ok: true } : { ok: true, historyWriteError: historyError })
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          if (error instanceof ImportNotConfirmedError) {
-            runs.fail(runId, message)
-            writeJson(res, 400, { error: message, runId })
-          } else {
-            runs.fail(runId, message)
-            writeJson(res, 400, { error: message, runId })
-          }
+          writeProfileError(res, error)
         }
-      }, { deferredSnapshot: true }),
+      }),
     },
     {
       kind: 'exact',
-      path: API.profilesImport,
-      handler: withMutationGate('profile-import', async (req, res) => {
+      path: API.profilesSelect,
+      // 「下次启动」标记（<dataDir>/next-profile）：非破坏性，但仍是写操作 → 过 mutation gate 保持一致语义。
+      handler: withMutationGate('profile-select', async (req, res) => {
         if (!guard(req, res, 'POST')) return
         const body = await readJsonBody(req)
         if (body === undefined) {
           writeJson(res, 400, { error: 'invalid JSON body' })
           return
         }
-        const asName = typeof body['asName'] === 'string' && body['asName'].trim() !== '' ? body['asName'].trim() : undefined
-        const raw = typeof body['content'] === 'string' ? body['content'] : undefined
-        if (raw === undefined || raw === '') {
-          writeJson(res, 400, { error: 'content (profile.json string) is required' })
-          return
-        }
-        // 落盘到受控 tmpDir，再走 ProfileManager.importProfile（内部校验 version/sections/name）
-        const staged = join(tmpDir, `profile-import-${randomBytes(6).toString('hex')}.json`)
+        const raw = body['name']
+        const name = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null
         try {
-          await fs.writeFile(staged, raw, 'utf8')
-          const meta = await profiles.importProfile(staged, asName === undefined ? {} : { asName })
+          if (name === null) profiles.clearSelection()
+          else profiles.writeSelection(name)
           const historyError = await tryAppendHistory({
-            kind: 'profile-import',
+            kind: 'profile-select',
             result: 'success',
-            sections: Array.isArray(meta?.sections) ? (meta.sections.filter((s) => typeof s === 'string') as string[]) : [],
+            sections: name === null ? [] : [name],
             source: 'api',
-            summary: `导入配置档案${asName !== undefined ? ` ${asName}` : ''}`,
+            summary: name === null ? '取消下次启动档案设置' : `设置下次启动档案 ${name}`,
           })
-          writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
+          const selection = profiles.readSelection()
+          writeJson(res, 200, historyError === undefined ? { ok: true, selection } : { ok: true, selection, historyWriteError: historyError })
         } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        } finally {
-          await fs.rm(staged, { force: true }).catch(() => undefined)
+          writeProfileError(res, error)
         }
       }),
     },
-    // -------------------------------------------------- backup-schedule
+
     // 定时全量备份设置（GET 读 / PUT 存 sync/backup-schedule.json；无敏感字段）：
     // 保存后重排调度器（reload）；恒不含 secret、不加密（与自动同步同语义）。
     // 与全仓一致：每个方法分支都过 loopback fence（guard）——其他 /api/dsh-config-manager/*
@@ -3075,6 +3261,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     // ------------------------------------------------- backup-schedule/run
     // 立即执行一次全量备份（复用 BackupScheduler.runOnce，同一时刻防重）：
     // 返回执行结果（status/zip/skipReason/error）+ 最新配置（含 lastRun 状态）。
+    // issue #43：这是**用户手动**触发（概览「立即备份」/ 快照空态 CTA），故 manual: true 绕过
+    // 自动调度开关 enabled —— 缺省 enabled:false 时旧行为是按钮静默空转；自动/启动路径不受影响。
     // 同全仓：loopback fence（guard）——远程调用方不得触发宿主写盘操作。
     {
       kind: 'exact',
@@ -3082,7 +3270,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       handler: async (req, res) => {
         if (!guard(req, res, 'POST')) return
         try {
-          const run = await backupScheduler.runOnce()
+          const run = await backupScheduler.runOnce({ manual: true })
           const schedule = await readBackupSchedule(syncDir)
           writeJson(res, 200, { ok: true, run, schedule })
         } catch (error) {
@@ -3229,27 +3417,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
               sourcePlatform: host.platform,
             })
           } else {
-            // profile
-            const sections = await profiles.readSections(id)
-            let switchPreview = { itemCount: 0, conflicts: 0, warnings: 0, sections: [] as SectionId[], errors: [] as string[] }
-            try {
-              const preview = await profiles.analyzeSwitch(id)
-              switchPreview = {
-                itemCount: preview.items.length,
-                conflicts: preview.items.filter((i) => i.kind === 'Conflict').length,
-                warnings: preview.items.filter((i) => i.severity === 'warning').length,
-                sections: preview.sectionsInProfile,
-                errors: [],
-              }
-            } catch (err) {
-              switchPreview.errors = [err instanceof Error ? err.message : String(err)]
-            }
-            data = buildProfileSource(ref, {
-              sections,
-              switchPreview,
-              sourceDsh: host.dshVersion,
-              sourcePlatform: host.platform,
-            })
+            // 旧「配置档案」（profile.json 快照）源已随该功能一并移除：该类型不再有生产者。
+            writeJson(res, 400, { error: `unsupported consult source type: ${type}` })
+            return
           }
 
           const report = computeConsultReport(data, target, { allowBlock: true })
@@ -3308,6 +3478,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             syncSelection: await selectionView(transport),
             // 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道）
             syncSelectionByChannel: await selectionViewByChannel(),
+            // 全部通道的同步密码保存状态（加密/解密；只回布尔，值永不回传浏览器）
+            syncCredentialsByChannel: await syncCredentialsByChannelView(),
             // 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9）
             autosync: await buildAutosyncStatus(syncDir, transport),
             // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
@@ -3511,6 +3683,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== ''
               ? body['encryptPassword']
               : undefined
+          // 已保存的加密密码兜底（DSH credentials；用户不必每次重输）。请求体里的密码优先，
+          // 因为那是用户此刻输入的覆盖值；两者都没有 → 交给 engine 报「加密需要密码」。
+          const pushChannel: SyncTransportType = isWebDavConfig(syncCfg) ? 'webdav' : 'git'
+          const effectiveEncryptPassword = encryptPassword ?? await resolveSyncPassword(syncPasswordRef('ENCRYPT', pushChannel))
+          // 可选分区选项（历史会话「最新 N 个」）：只有显式提供才允许 sessions 进同步通道
+          const sessions = extractSyncSessions(body)
+          const sessionsOpt = sections !== undefined && sections.includes('sessions') && sessions !== undefined
+            ? { sessions }
+            : {}
           // P0-②：push 前只读预览（body.preview === true → 不写远端，只返回「将推送什么」）
           const preview = body['preview'] === true
           // 分支调用以保证 withTimeout 的泛型结果类型正确（SyncPushReport | SyncPushPreview）
@@ -3518,6 +3699,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             ? await withTimeout(
                 engine.previewPush({
                   ...(sections === undefined ? {} : { sections }),
+                  ...sessionsOpt,
                   ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets } : {}),
                 }),
                 ROUTE_TIMEOUT_MS,
@@ -3527,7 +3709,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 engine.push({
                   ...(snapshotId === undefined ? {} : { snapshotId }),
                   ...(sections === undefined ? {} : { sections }),
-                  ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: encryptPassword ?? '' } : {}),
+                  ...sessionsOpt,
+                  ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: effectiveEncryptPassword ?? '' } : {}),
                 }),
                 ROUTE_TIMEOUT_MS,
                 msg('host.syncPushTimeout'),
@@ -3554,16 +3737,20 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         try {
           const syncCfg = await prepareSync(body)
-          const engine = makeSyncEngine(syncCfg)
+          // 用户驱动的拉取：选择里勾了 sessions 时才让会话分区进入差异计划（自动同步不传）
+          const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(isWebDavConfig(syncCfg) ? 'webdav' : 'git') })
           const strategy =
             body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] : 'merge'
           const snapshotId =
             typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-          // 解密密码（加密快照拉取时提供；仅内存传输，绝不落盘/落日志）
+          // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
+          // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
+          // 不会误用密码」是引擎层保证，而不是靠这里猜。密码仅内存，绝不落盘/落日志。
+          const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', isWebDavConfig(syncCfg) ? 'webdav' : 'git'))
           const decryptPassword =
             typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
               ? body['decryptPassword']
-              : undefined
+              : savedDecryptPassword
           const report = await withTimeout(
             engine.pull({
               strategy,
@@ -3840,13 +4027,17 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         try {
           const syncCfg = await prepareSync(body)
-          const engine = makeSyncEngine(syncCfg)
+          // 用户驱动的一键同步：选择里勾了 sessions 时才让会话分区进入差异计划（自动同步不传）
+          const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(isWebDavConfig(syncCfg) ? 'webdav' : 'git') })
           const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-          // 解密密码（一键同步拉取加密快照时提供；仅内存传输，绝不落盘/落日志）
+          // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
+          // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
+          // 不会误用密码」是引擎层保证，而不是靠这里猜。密码仅内存，绝不落盘/落日志。
+          const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', isWebDavConfig(syncCfg) ? 'webdav' : 'git'))
           const decryptPassword =
             typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
               ? body['decryptPassword']
-              : undefined
+              : savedDecryptPassword
           const preview = await withTimeout(
             engine.preview({
               ...(snapshotId === undefined ? {} : { snapshotId }),
@@ -4077,14 +4268,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           const channel: SyncTransportType = body['transport'] === 'webdav' ? 'webdav' : 'git'
           const mode: SyncSelectionMode = body['mode'] === 'advanced' ? 'advanced' : 'default'
           const rawSections = Array.isArray(body['sections']) ? body['sections'] : []
-          const portableIds = new Set(syncSectionCatalog.map((s) => s.id))
+          const allowedIds = new Set(syncSectionCatalog.map((s) => s.id))
           for (const s of rawSections) {
             if (typeof s !== 'string' || s === '') {
               writeJson(res, 400, { error: 'sections must be an array of non-empty strings' })
               return
             }
-            if (!portableIds.has(s as SectionId)) {
-              writeJson(res, 400, { error: `unknown sync section: ${s}` })
+            if (!allowedIds.has(s as SectionId)) {
+              writeJson(res, 400, { error: 'unknown sync section: ' + s })
               return
             }
           }
@@ -4092,13 +4283,42 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
             schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
             mode,
             sections: [...new Set(rawSections as string[])] as SectionId[],
+            // sessions（历史会话）「最新 N 个」上限：仅在该分区被勾选时才有意义；归一化钳制
+            sessionsLimit: normalizeSessionsLimit(body['sessionsLimit']),
             encrypt: body['encrypt'] === true,
             // 安全兜底：includeSecrets 必须同时 encrypt（密钥绝不明文进同步通道）
             includeSecrets: body['includeSecrets'] === true && body['encrypt'] === true,
           }
+          // 加密/解密密码持久化（用户要求：勾选即记住，取消勾选或主动删除才清）。
+          // 值只写进 DSH credentials（绝不进 sync-selection.json / 日志 / 响应）；
+          // 清空优先于写入，避免「同一次请求既清又写」产生歧义。
+          const encryptRef = syncPasswordRef('ENCRYPT', channel)
+          const decryptRef = syncPasswordRef('DECRYPT', channel)
+          if (body['clearEncryptPassword'] === true) await credentials.unset(credentialRef(encryptRef))
+          else if (typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== '') {
+            await credentials.set(credentialRef(encryptRef), body['encryptPassword'])
+          }
+          if (body['clearDecryptPassword'] === true) await credentials.unset(credentialRef(decryptRef))
+          else if (typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== '') {
+            await credentials.set(credentialRef(decryptRef), body['decryptPassword'])
+          }
           await writeSyncSelection(syncDir, channel, next)
           selectionCache[channel] = next
-          writeJson(res, 200, { ok: true, transport: channel, mode: next.mode, sections: next.sections, encrypt: next.encrypt, includeSecrets: next.includeSecrets })
+          const [encryptPasswordConfigured, decryptPasswordConfigured] = await Promise.all([
+            syncPasswordConfigured(encryptRef),
+            syncPasswordConfigured(decryptRef),
+          ])
+          writeJson(res, 200, {
+            ok: true,
+            transport: channel,
+            mode: next.mode,
+            sections: next.sections,
+            sessionsLimit: next.sessionsLimit,
+            encrypt: next.encrypt,
+            includeSecrets: next.includeSecrets,
+            encryptPasswordConfigured,
+            decryptPasswordConfigured,
+          })
         } catch (error) {
           writeSyncRouteError(res, error)
         }

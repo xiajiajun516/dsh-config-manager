@@ -52,9 +52,9 @@ function makeRaw(partial: Partial<StoredMigrationHistoryEntry> = {}): Omit<Store
 test('COMPLETE：MigrationKind 枚举恰为 §5 全清单（含 profile-import）', () => {
   const expected = [
     'import', 'restore', 'rollback',
-    'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
+    'profile-create', 'profile-select', 'profile-switch', 'profile-delete', 'profile-rename', 'profile-save', 'profile-import',
     'sync-apply', 'autosync', 'recovery',
-    'backup', 'snapshot-delete', 'snapshot-prune',
+    'backup', 'backup-manual', 'snapshot-delete', 'snapshot-prune',
   ];
   for (const k of expected) assert.equal(isValidMigrationKind(k), true, k);
   assert.equal(isValidMigrationKind('export'), false);

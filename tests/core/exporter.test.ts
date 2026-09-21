@@ -453,6 +453,51 @@ test('G-09/H1 同一文件的多种命中形态只产生一条告警（字段名
   });
 });
 
+test('issue #39 F1 /sessions.limit：显式选中 sessions 分区并按「最新 N 个会话」筛选', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedFullSource(src);
+    // 三个会话（sessions 的 defaultIncluded=false：Quick Export 不带会话）
+    const sessions: [string, number][] = [['old', 1000], ['mid', 2000], ['new', 4000]];
+    for (const [id, ts] of sessions) {
+      await src.fs.writeFile(`sessions/--p--/${id}/session.jsonl.zstd`, Buffer.from(`session-${id}`, 'utf8'));
+      src.fs.setMtime(`sessions/--p--/${id}/session.jsonl.zstd`, ts);
+    }
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const run = (options: Parameters<Exporter['export']>[0], name: string) => new Exporter({
+      ctx: src, adapters, exporterVersion: '0.1.0', scanner: createSecretScanner(),
+      now: () => new Date('2026-08-14T12:00:00.000Z'),
+    }).export({ ...options, outPath: path.join(dir, name) });
+
+    // ① 键缺省 = 现有行为：会话不进备份
+    const base = await run({ includeSecrets: false }, 'base.zip');
+    assert.equal(base.manifest.sections.sessions, false, '未请求 sessions 时不得带上会话');
+
+    // ② limit=1 → 显式选中 + 只带最新 1 个会话
+    const one = await run({ includeSecrets: false, sessions: { limit: 1 } }, 'one.zip');
+    assert.equal(one.manifest.sections.sessions, true, 'sessions.limit 必须显式选中该分区');
+    const oneZip = parseZip(await fs.readFile(one.zipPath));
+    assert.deepEqual(
+      oneZip.names().filter((n) => n.startsWith('sessions/')).sort(),
+      ['sessions/--p--/new/session.jsonl.zstd'],
+    );
+    assert.ok(
+      one.report.warnings.some((w) => w.includes('只带最新 1 个')),
+      `报告应可见筛选结果，实际: ${one.report.warnings.join(' | ')}`,
+    );
+
+    // ③ limit=0 → 整个分区不带（不产出空载荷分区）
+    const zero = await run({ includeSecrets: false, sessions: { limit: 0 } }, 'zero.zip');
+    assert.equal(zero.manifest.sections.sessions, false);
+    const zeroZip = parseZip(await fs.readFile(zero.zipPath));
+    assert.equal(zeroZip.names().filter((n) => n.startsWith('sessions/')).length, 0);
+
+    // ④ limit<0 → 全带
+    const all = await run({ includeSecrets: false, sessions: { limit: -1 } }, 'all.zip');
+    const allZip = parseZip(await fs.readFile(all.zipPath));
+    assert.equal(allZip.names().filter((n) => n.startsWith('sessions/')).length, 3);
+  });
+});
 test('G-09/H1 文件数超过上限时：按文件截断 + 必须补一条汇总告警（截断不得静默）', async () => {
   await withTmp(async (dir) => {
     const src = makeContext('linux', '/home/g09h1c');

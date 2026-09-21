@@ -50,6 +50,7 @@
 | G-15 | Windows 无 OS process identity → 阈值内的 PID 复用残留锁仍判 UNKNOWN_STATE（issue #36） | ⚠️ **部分修复**（长过期可显式回收；精确区分 PID 复用仍未实现，见 §3） |
 | G-16 | 文件类分区静默跳过 junction/符号链接（issue #37） | ✅ 已修复（GUI 与 CLI 同一跟随内核 + 跳过/不可读均留痕；home 外目标仍拒绝且留痕） |
 | G-17 | 同步页「导出密钥」无数据源：勾选后不导出任何凭据，只跳过载荷的二次脱敏（issue #38） | ✅ 已修复（凭据作为独立密文载荷随加密快照迁移；拉取侧解密 → 逐条确认 → `credentials.set` 写回） |
+| G-18 | `.credentials.yaml` 的 `refs:` 块未被识别：包里带着凭据原文，导入后仍要求人工重填（issue #39） | ✅ 已修复（两处解析共用同一口径，v1 `refs:` 块与预发布扁平布局都认；误导性的「需人工重填」只在确实还缺 ref 时出现） |
 
 ---
 
@@ -184,8 +185,20 @@
 | 后果 | 用户勾选「导出密钥」后推送载荷与不勾时**逐字节相同**（唯一差异是 `manifest.containsSecrets` 由 `false` 变 `true`），却以为密钥已随同步迁移到另一台机器——文案与实现不符，且勾选动作实际**降低了防护**（结构化分区里的字面量凭据原样进快照）。 |
 | 修复位置 | ① 数据源：`SyncEngine.buildCredentialsPayload`（`src/sync/sync-engine.ts`）在 `includeSecrets` 时经 `ctx.fs.readFile` 读 `$DSH_HOME/.credentials.yaml` 原文，用本次调用的密码加密为**独立载荷** `SyncSnapshot.credentials`（`src/sync/transport.ts` 的 `EncryptedCredentials`；不进 `sections`，否则被 `FORBIDDEN_SECTIONS` 断言拒绝）；读不到 / 解析不出凭据 → **显式告警且不带载荷**，不静默成功。② 编解码：`src/sync/snapshot-crypto.ts` 的 `encryptCredentialsPayload` / `decryptCredentialsPayload` / `credentialsMapFromYaml`（与宿主导入路径 `tryDecryptCredentials` 同口径）；`src/sync/snapshot-json.ts` 透传（git 密文单文件 / WebDAV 通道）；`src/sync/layout.ts` 对散文件布局显式拒绝（绝不静默丢弃）。③ 拉取接线：`pull`/`preview` 解密出 `Map<ref, value>` 并生成 `MissingSecret` 计划项（`appendCredentialPlanItems`）；`applyItems` 把该 Map 作为 `executeImportPlan.decryptedCredentials`（此前硬编码 `undefined`）交给 credentials adapter → `credentials.set(ref, value)`。④ 会话：`SyncSessionStore` 仅内存保管该 Map（存值不存密码——能力更窄），apply-items 消费 / cancel / TTL 即消失。⑤ 可见性：推送预览新增「本次推送包含真实凭据值」提示（`SyncPushPreview.credentialsIncluded`）。 |
 | 不变量（未放宽） | `includeSecrets ⇒ encrypt` 仍强制；凭据载荷**只**存在于加密快照；非加密快照声明 `containsSecrets=true` 仍拒绝拉取；自动同步恒 `includeSecrets=false`（无密码，遇到加密快照跳过）；密码仅内存，绝不落盘 / 落日志 / 进响应体。 |
-| 验证方式 | `src/sync/sync-credentials.test.ts`（7 例：push 密文载荷 + 明文不入载荷 / 只加密不导密钥不带载荷 / 无凭据文件明确告警 / pull+preview 生成迁移项且报告不含值 / applyItems 带 Map 写回、不带则跳过 / 未加密快照携带凭据载荷被拒 / 散文件布局拒绝）；`src/client/sync/sync-push-preview.test.ts`（含凭据提示）。 |
-| 已知有损点 | 只搬运 `.credentials.yaml` **顶层字符串值**（与导出路径 `security/secrets.enc` 同口径）；嵌套结构 / 非字符串值不迁移。凭据写回**不可回滚**（DSH 不回读凭据值，属既有的技术限制）。 |
+| 验证方式 | `src/sync/sync-credentials.test.ts`（8 例：push 密文载荷 + 明文不入载荷 / v1 `refs:` 布局同口径 / 只加密不导密钥不带载荷 / 无凭据文件明确告警 / pull+preview 生成迁移项且报告不含值 / applyItems 带 Map 写回、不带则跳过 / 未加密快照携带凭据载荷被拒 / 散文件布局拒绝）；`src/client/sync/sync-push-preview.test.ts`（含凭据提示）。 |
+| 已知有损点 | 只搬运 `.credentials.yaml` 的**凭据字符串值**（v1 布局的 `refs:` 块 + 预发布扁平布局的顶层键，解析口径见 G-18；与导出路径 `security/secrets.enc` 同口径）；`records` 等嵌套结构 / 非字符串值不迁移。凭据写回**不可回滚**（DSH 不回读凭据值，属既有的技术限制）。 |
+
+### G-18 含 vault 的备份里带着凭据原文，导入后仍要求人工重填（issue #39）
+
+| 项 | 内容 |
+|---|---|
+| 基线问题 | 宿主导入路径 `tryDecryptCredentials`（`src/index.ts`）与同步引擎 `credentialsMapFromYaml`（`src/sync/snapshot-crypto.ts`）解析 `.credentials.yaml` 时**只认顶层字符串项**（DSH 预发布扁平布局）。DSH v1 布局把凭据值放在顶层 `refs:` 块下（文档形状：`version: 1` / `refs:` / `records:`，见 `dsh-credentials-local` 的 `parseCredentialsDocument`），而 `refs` 是对象 → 被 `typeof v === 'string'` **整段**过滤 → 解出的 Map 为空。 |
+| 后果 | `includeSecrets=true` 的加密备份里明明带着凭据原文（`security/secrets.enc` 可用导出密码解开），导入时 `/decrypt` 回传的 `refs` 恒为 `[]` → 导入向导的 `!decryptRefs.includes(s.ref)` 过滤失效（`ImportWizardView.tsx`）→ 所有 ref 进「待补录」清单；`/execute` 拿到的 `decryptedCredentials` 为空 → `result.missingSecrets` 非空。用户无从判断是「包里没有」还是「插件没认出来」。 |
+| 修复位置 | ① 新增唯一解析口径 `src/security/credentials-yaml.ts` 的 `collectCredentialRefs`：顶层字符串项（扁平布局）**与**顶层 `refs:` 块下的字符串项（v1 布局）都收，`records` / `payload` 等嵌套结构忽略（会话秘密不是凭据 ref）；两处调用点（`src/index.ts`、`src/sync/snapshot-crypto.ts`）改为共用它，杜绝「同一文件格式两处口径漂移」。② 收窄 `import.vaultMissing` 的误导：`includeSecrets=true` 时导出侧**不**镜像明文 vault（`src/core/exporter.ts` 的 4b），跨机 vault 必然为空；值已由包内密文回填（plan 的 ref 全部被 `decryptedCredentials` 满足）时改用新消息 `import.vaultCredentialsFromArchive` 如实说明，确实还缺 ref 时才保留「人工重填」。 |
+| 验证方式 | `src/security/credentials-yaml.test.ts`（8 例：v1 `refs:` 块 / 扁平布局 / 混排取并集且同名以 refs 为准 / 非字符串与空值丢弃 / 顶层非对象 / `refs` 块非对象 / 空 `refs`）；`tests/security/credentials-refs-import.test.ts`（2 例，走宿主真实路径 Exporter→`tryDecryptCredentials`→`executeImportPlan`：refs 块被认出 → `missingSecrets` 为空 + `credentials.set` 写回 + 不出现「需人工重填」；只覆盖部分 ref 时仍如实列出缺口）；`src/sync/sync-credentials.test.ts` 新增 v1 布局用例。**修复前实测**：两条集成用例失败（`decrypted.get('DEEPSEEK_API_KEY')` = `undefined`，`missingSecrets` = 两个 ref）。 |
+| 附带改动 | `tryDecryptCredentials` 由模块私有改为具名导出（供集成测试走宿主真实路径）；新增消息 key `import.vaultCredentialsFromArchive`（zh/en 同步，`src/core/messages.ts`）。 |
+| 未覆盖 | `src/adapters/workspaces.ts` 的 `applyItem` 用备份记录**整条覆盖**，会丢本机独有键（如 `archivedSessionIds`）—— 报告人自述「另开 issue」，本次未动。 |
+| 后续已补（本轮） | 报告人列的 API 三项已落地（同一 issue 的 Feature 1–3，语义见 `docs/spec/headless-consumption.md` §4.5）：① `/export` / `ExportOptions.sessions: { limit }` —— 0 = 不带 / 负数 = 全带 / 正数 = 最新 N 个；单位 = 会话目录（同一会话的新旧日志一起走），文件名判据 `^session(\.[A-Za-z0-9]+)*\.jsonl(\.zstd)?$` 不写死（`session.lock` 不算会话），排序用会话日志的最新 mtime（`FileSystemFacade.mtimeMs`；未实现则退回全量 + 告警，绝不把未知当最旧）；核心 `src/core/session-select.ts` + `SessionsAdapter.restrictUnits` + `Exporter` 的显式选中。② `/analyze` 可选 `decryptPassword` → `ImportAnalysis.credentials: { inArchive, refs, satisfied }`（只回传 ref 名，永不回传值）。③ `/execute` → `ImportResult.credentialsRestored`（从加密归档内解出并回填的条数，只增不改）。**仍未做**：`POST /sessions/group` —— 报告人自标「可选、量级较大」，需改写 DSH 会话存储（多帧 zstd 首帧 header）+ 写前备份 / 写后自检 / 失败回滚，属数据变更类高影响改动，留待单独决策。 |
 
 ### P-1 peerDependencies 体积：headless 消费者为浏览器半付费
 

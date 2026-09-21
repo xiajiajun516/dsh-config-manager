@@ -7,8 +7,34 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ImportWizard } from './import-wizard.ts';
+import { ImportWizard, mergeSecretInput } from './import-wizard.ts';
 import { MockImportPort, makeAnalysis, makeImportResult, makePlan } from './test-helpers.ts';
+
+/**
+ * UI-06 回归：补录页「看到的值 = 提交的值」。
+ * 该页是可来回切换的中间步骤，组件会卸载重挂 —— 提交集合必须在**最新集合上合并**，
+ * 否则会出现「回到该页输入框全空但旧值仍被提交」与「编辑一个字段丢掉其它 ref 的值」。
+ */
+test('import-wizard: mergeSecretInput 在最新集合上合并（不丢其它 ref、不复活已清空的值）', () => {
+  // 第一次填写
+  let inputs = mergeSecretInput({}, 'API_KEY', 'abc');
+  inputs = mergeSecretInput(inputs, 'OTHER', 'def');
+  assert.deepEqual(inputs, { API_KEY: 'abc', OTHER: 'def' });
+
+  // 回到该页后再改一个字段：另一个 ref 的值必须保留（原实现用空表覆盖 → 只剩当前 ref）
+  inputs = mergeSecretInput(inputs, 'API_KEY', 'xyz');
+  assert.deepEqual(inputs, { API_KEY: 'xyz', OTHER: 'def' });
+
+  // 清空单个 ref：只清它自己（不是清空整表）
+  inputs = mergeSecretInput(inputs, 'OTHER', '');
+  assert.deepEqual(inputs, { API_KEY: 'xyz', OTHER: '' });
+
+  // 不修改入参（纯函数；调用方以 store 快照为准）
+  const base = { A: '1' };
+  const next = mergeSecretInput(base, 'B', '2');
+  assert.deepEqual(base, { A: '1' });
+  assert.deepEqual(next, { A: '1', B: '2' });
+})
 
 test('import-wizard: selectZip 进入 compatibility 并保存 analysis', async () => {
   const port = new MockImportPort();

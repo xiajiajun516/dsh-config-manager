@@ -18,6 +18,7 @@ import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../sch
 import { DEFAULT_SENSITIVE_RELS, refreshVault } from '../security/vault.ts';
 import { writeZip } from '../utils/zip.ts';
 import { msgOf } from './messages.ts';
+import { normalizeSessionLimit } from './session-select.ts';
 import type { MsgFunc } from './messages.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
 import type {
@@ -206,8 +207,26 @@ export class Exporter {
     }
 
     // 1. 选定分区（only 过滤 + 默认包含）
+    //    条目级选择（Phase 1）：includeItems[s] === [] 表示用户把该分区整个取消了 ——
+    //    与「未勾选该分区」等价，在选定阶段即剔除，不产出空载荷分区，
+    //    manifest.sections / report.excluded 如实反映（绝不静默变成「导出成功但内容为空」）。
+    //    纵深防御：宿主已保证不下发空白名单，此处覆盖 CLI / 第三方直接调用 core 的情况。
+    // issue #39 Feature 1：`sessions: { limit }` 是**显式分区选择 + 数量筛选**。
+    // sessions 的 defaultIncluded=false（Quick Export 不带会话），所以键存在必须自己把该分区
+    // 选上；limit=0 反之把该分区整体剔除（等价于未勾选，不产出空载荷分区）。
+    const sessionsLimit = options.sessions === undefined
+      ? undefined
+      : normalizeSessionLimit(options.sessions.limit);
+    const sessionsRequested = options.sessions !== undefined && sessionsLimit !== 0;
     const selected = this.adapters
-      .filter((a) => (only === undefined ? a.defaultIncluded : only.includes(a.id)))
+      .filter((a) => {
+        if (a.id === 'sessions') {
+          if (sessionsLimit === 0) return false;
+          if (sessionsRequested) return true;
+        }
+        return only === undefined ? a.defaultIncluded : only.includes(a.id);
+      })
+      .filter((a) => (options.includeItems?.[a.id]?.length ?? 1) > 0)
       .map((a) => a.id);
 
     // 2. 逐 adapter 收集（导出数据）

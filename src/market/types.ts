@@ -2,7 +2,7 @@
  * m-market：配置市场的纯领域类型（src/market/）。
  * 与 src/schema/types.ts 同纪律：纯数据形状，零副作用，不 import 任何 DSH 运行时包。
  *
- * 分层信任（docs/design/marketplace.md §1）：
+ * 分层信任（三级不信任来源，逐级加严）：
  *  - L1 index.json（市场目录）→ 字段白名单，仅作浏览卡片展示，不直接作为导入依据；
  *  - L2 items/<id>/manifest.json → 校验 + 供应链/来源信息展示；sections/checksums 须与
  *    config.zip 实际内容一致才放行；

@@ -10,10 +10,42 @@ import type { SectionId } from '../../schema/types.ts'
 import type { GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
   autosyncIntervalMs, channelTabModels, computeAutosyncCountdown, computeGithubLoginView, computeRemoteReady, computeSyncButtons, computeSyncStatus,
-  defaultChannelSyncState, formatDateTime, formatIntervalDuration, formatLastSync, githubPollMessage, kindLabel, privateRepoHint,
+  DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, formatDateTime, formatIntervalDuration, formatLastSync,
+  githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
+
+/* ---------------------------------------------------------------- sessions 可选分区 */
+
+test('sync-view: normalizeSessionsLimit / defaultChannelSyncState —— 历史会话默认只带最新 5 个', () => {
+  assert.equal(DEFAULT_SYNC_SESSIONS_LIMIT, 5);
+  assert.equal(normalizeSessionsLimit(undefined), 5);
+  assert.equal(normalizeSessionsLimit(-1), 5);
+  assert.equal(normalizeSessionsLimit(0), 0, '0 = 勾选但不带会话');
+  assert.equal(normalizeSessionsLimit(999999), 10000);
+  const fresh = defaultChannelSyncState();
+  assert.equal(fresh.sessionsLimit, DEFAULT_SYNC_SESSIONS_LIMIT);
+  assert.equal(fresh.encryptPasswordSaved, false, '「密码已保存」只由宿主状态回填');
+  assert.equal(fresh.decryptPasswordSaved, false);
+});
+
+test('sync-view: initialSyncSections —— 首次打开预勾选推荐分区；用户主动清空则保持为空', () => {
+  const catalog: SyncSectionInfo[] = [
+    { id: 'settings', displayName: 'Settings', portability: 'portable', defaultIncluded: true },
+    { id: 'providers', displayName: 'Providers', portability: 'portable', defaultIncluded: true },
+    { id: 'sessions', displayName: 'Sessions', portability: 'deviceSpecific', defaultIncluded: false },
+  ]
+  assert.deepEqual(initialSyncSections(undefined, catalog), ['settings', 'providers'], '无持久化 → 预勾选推荐（仅 portable + 默认包含）')
+  assert.deepEqual(initialSyncSections({ mode: 'default', sections: [] }, catalog), ['settings', 'providers'], '旧 default 模式 → 预勾选推荐（升级不缩水）')
+  assert.deepEqual(
+    initialSyncSections({ mode: 'advanced', sections: ['settings', 'sessions'] }, catalog),
+    ['settings', 'sessions'],
+    '用户勾选（含可选分区 sessions）原样保留',
+  )
+  assert.deepEqual(initialSyncSections({ mode: 'advanced', sections: [] }, catalog), [], '用户主动清空 → 保持为空，绝不悄悄填回推荐分区')
+  assert.deepEqual(initialSyncSections({ mode: 'default', sections: [] }, []), [], '目录未加载 → 空数组（不编造分区）')
+})
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
 
@@ -473,7 +505,8 @@ test('sync-view: channelTabModels git 激活 → git active / webdav 未激活�
 
 test('sync-view: defaultChannelSyncState 每通道独立缺省值', () => {
   const git = defaultChannelSyncState()
-  assert.equal(git.syncMode, 'default')
+  // 模式概念已从 UI 移除：勾选集合就是同步范围，落盘恒为 advanced
+  assert.equal(git.syncMode, 'advanced')
   assert.deepEqual(git.syncSections, [])
   assert.equal(git.encrypt, false)
   assert.equal(git.includeSecrets, false)
@@ -486,6 +519,7 @@ test('sync-view: defaultChannelSyncState 每通道独立缺省值', () => {
   assert.equal(git.autosyncInterval, '30m')
   // 两通道缺省互不影响（同一默认工厂，调用即得独立实例）
   const webdav = defaultChannelSyncState()
-  webdav.syncMode = 'advanced'
-  assert.equal(git.syncMode, 'default', '修改一个通道缺省不影响另一个')
+  webdav.syncSections = ['settings']
+  assert.equal(git.syncMode, 'advanced', '修改一个通道缺省不影响另一个')
+  assert.deepEqual(git.syncSections, [], '另一个通道的勾选不受影响')
 })

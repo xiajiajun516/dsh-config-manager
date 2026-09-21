@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 import {
   backupDraftDirty,
   backupRunBadgeKind,
+  backupRunOutcome,
   backupRunSummary,
   normalizeRetentionPolicy,
   retentionPolicyEquals,
@@ -176,4 +177,63 @@ test('m-retention：backupDraftDirty 把策略改动算作未保存修改', () =
     false,
     '未经改动的缺省策略不算脏（旧宿主兼容）',
   )
+})
+
+/* ---------------- issue #43：立即备份结果的提示语义（不得假报成功） ---------------- */
+
+test('issue #43：success → ok 通道（唯一可报成功的状态）', () => {
+  assert.deepEqual(
+    backupRunOutcome({ status: 'success', zip: 'a.zip', sizeBytes: 1, consecutiveFailures: 0 }),
+    { kind: 'ok' },
+  )
+})
+
+test('issue #43：disabled（定时备份未启用）→ skipped 通道 + 结构化 reason', () => {
+  // 上报场景：宿主返回 {status:'skipped', skipReason:'disabled'}，旧客户端无条件 toast.ok('备份完成')
+  assert.deepEqual(
+    backupRunOutcome({ status: 'skipped', skipReason: 'disabled', consecutiveFailures: 0 }),
+    { kind: 'skipped', reason: 'disabled' },
+  )
+})
+
+test('issue #43：已知 skipReason token 各自映射（running / conflict / locked 语义不同）', () => {
+  const cases: [string, string][] = [
+    ['running', 'running'],
+    ['conflict', 'conflict'],
+    ['mutation-locked', 'locked'],
+  ]
+  for (const [token, expected] of cases) {
+    assert.deepEqual(
+      backupRunOutcome({ status: 'skipped', skipReason: token, consecutiveFailures: 0 }),
+      { kind: 'skipped', reason: expected },
+      token + ' → ' + expected,
+    )
+  }
+})
+
+test('issue #43：未知 skipReason 落 other 并原样带回（不吞信息，也不当作成功）', () => {
+  assert.deepEqual(
+    backupRunOutcome({ status: 'skipped', skipReason: 'weird-future-token', consecutiveFailures: 0 }),
+    { kind: 'skipped', reason: 'other', raw: 'weird-future-token' },
+  )
+  assert.deepEqual(
+    backupRunOutcome({ status: 'skipped', consecutiveFailures: 0 }),
+    { kind: 'skipped', reason: 'other' },
+  )
+})
+
+test('issue #43：failed → error 通道（带宿主错误文本；缺失则 null）', () => {
+  assert.deepEqual(
+    backupRunOutcome({ status: 'failed', error: 'boom', consecutiveFailures: 3 }),
+    { kind: 'error', message: 'boom' },
+  )
+  assert.deepEqual(
+    backupRunOutcome({ status: 'failed', consecutiveFailures: 3 }),
+    { kind: 'error', message: null },
+  )
+})
+
+test('issue #43：未知 status 落 error（fail-safe：绝不宣称成功）', () => {
+  const weird = { status: 'weird', consecutiveFailures: 0 } as unknown as Parameters<typeof backupRunOutcome>[0]
+  assert.deepEqual(backupRunOutcome(weird), { kind: 'error', message: null })
 })

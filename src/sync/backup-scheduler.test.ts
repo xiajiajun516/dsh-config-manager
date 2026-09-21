@@ -39,6 +39,8 @@ function makeScheduler(opts: {
   tmp: string;
   /** M1：可选注入强化 secret 扫描器（含 scanText）——验证定时备份文件类分区凭据告警 */
   scanner?: SecretScanner;
+  /** issue #43：可选收集迁移历史条目（验证「手动/定时」来源词与 kind） */
+  history?: { kind: string; result: string; summary: string }[];
 }) {
   const runs = new RunRegistry();
   let config = opts.cfg;
@@ -60,6 +62,11 @@ function makeScheduler(opts: {
     // 测试不用真实定时器：不调 start()
     // M1：缺省不传 scanner（保持旧行为：Exporter 落回 defaultSecretScanner，无 scanText）
     ...(opts.scanner === undefined ? {} : { scanner: opts.scanner }),
+    ...(opts.history === undefined ? {} : {
+      appendHistoryFn: async (entry: { kind: 'backup' | 'backup-manual'; result: 'success' | 'failed' | 'skipped'; summary: string }) => {
+        opts.history!.push({ kind: entry.kind, result: entry.result, summary: entry.summary });
+      },
+    }),
   });
   return { scheduler, runs, ctx, getConfig: () => config };
 }
@@ -136,6 +143,53 @@ test('runOnce: enabled=false → skipped(disabled)，不写配置', async () => 
     assert.equal(result.status, 'skipped');
     assert.equal(result.skipReason, 'disabled');
     assert.equal(getConfig().consecutiveFailures, 0, 'disabled 不写状态');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #43：runOnce({ manual: true }) 在 enabled=false 时仍真的产出一份备份（手动不空转）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-backup-sched-'));
+  try {
+    const cfg: BackupScheduleConfig = { enabled: false, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0 };
+    const history: { kind: string; result: string; summary: string }[] = [];
+    const { scheduler, getConfig } = makeScheduler({ cfg, tmp, history });
+    const result = await scheduler.runOnce({ manual: true });
+    assert.equal(result.status, 'success', '手动路径不得因 enabled=false 空转');
+    assert.ok(result.zip !== undefined && result.zip.startsWith('dsh-config-auto-') && result.zip.endsWith('.zip'));
+    const stat = await fs.stat(path.join(tmp, 'exports', result.zip));
+    assert.ok(stat.size > 0, 'ZIP 真的落盘');
+    // 关键不变量：手动执行绝不偷改自动调度开关（只如实记录运行状态）
+    const saved = getConfig();
+    assert.equal(saved.enabled, false, '手动备份不得把 enabled 改成 true');
+    assert.equal(saved.interval, '24h', '手动备份不得改写间隔档位');
+    assert.equal(saved.lastRunStatus, 'success');
+    assert.equal(saved.lastRunAt, new Date(1_000_000_000_000).toISOString());
+    // 迁移历史必须标注手动来源，不得冒充定时
+    assert.equal(history.length, 1);
+    assert.equal(history[0]!.kind, 'backup-manual', '手动备份必须与定时备份在迁移史里可区分（issue #43）');
+    assert.ok(history[0]!.summary.startsWith('手动备份完成：'), '历史摘要须为「手动备份完成：」，实际：' + history[0]!.summary);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #43：默认（自动）路径仍受 enabled 约束，且历史来源词保持「定时备份」', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-backup-sched-'));
+  try {
+    const disabled: BackupScheduleConfig = { enabled: false, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0 };
+    const { scheduler } = makeScheduler({ cfg: disabled, tmp });
+    const skipped = await scheduler.runOnce();
+    assert.equal(skipped.status, 'skipped');
+    assert.equal(skipped.skipReason, 'disabled', '红线：自动路径不得被 manual 绕过逻辑带偏');
+
+    const enabled: BackupScheduleConfig = { enabled: true, interval: '24h', startupMinIntervalMs: 3600000, consecutiveFailures: 0 };
+    const history: { kind: string; result: string; summary: string }[] = [];
+    const auto = makeScheduler({ cfg: enabled, tmp: path.join(tmp, 'auto'), history });
+    const done = await auto.scheduler.runOnce();
+    assert.equal(done.status, 'success');
+    assert.equal(history[0]!.kind, 'backup', '自动路径 kind 保持 backup');
+    assert.ok(history[0]!.summary.startsWith('定时备份完成：'), '自动路径来源词应保持「定时备份」，实际：' + history[0]!.summary);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -624,4 +678,23 @@ test('M1 源码守卫：index.ts 给 BackupScheduler 注入与 makeRoutes/regist
   const toolsStart = source.indexOf('registerModelTools(ctx, {');
   const toolsBody = source.slice(toolsStart, source.indexOf('\n  })', toolsStart));
   assert.ok(toolsBody.includes(`scanner: ${name},`), `registerModelTools 必须注入同一 scanner（scanner: ${name},）`);
+});
+
+/**
+ * issue #43 源码守卫：手动路由必须传 manual: true。
+ * 行为侧已由上面的 runOnce({manual:true}) 用例钉住，这里再钉**接线**——路由若退回裸 runOnce()，
+ * 「立即备份」在 enabled=false（从未配置过定时的用户）时又会静默空转，而按钮会报「备份完成」。
+ */
+test('issue #43 源码守卫：/backup-schedule/run 路由以 manual: true 调 runOnce（接线不得退回裸调用）', async () => {
+  const source = (await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  const start = source.indexOf('path: API.backupScheduleRun');
+  assert.ok(start > 0, '应能找到 backup-schedule/run 路由');
+  const end = source.indexOf('\n    },', start);
+  assert.ok(end > start, '应能找到该路由块的结尾');
+  const body = source.slice(start, end);
+  assert.ok(
+    body.includes('runOnce({ manual: true })'),
+    '手动路由必须以 runOnce({ manual: true }) 触发（否则 enabled=false 时按钮空转却报成功）',
+  );
+  assert.equal(body.includes('runOnce()'), false, '手动路由不得退回裸 runOnce()');
 });

@@ -139,7 +139,6 @@ test('m2-refresh: 非敏感表单状态往返恢复，敏感字段与导出结�
   first.patch({
     view: 'import',
     export: {
-      mode: 'custom',
       selection: ['settings', 'plugins'],
       includeSecrets: true,
       encrypt: true,
@@ -161,7 +160,6 @@ test('m2-refresh: 非敏感表单状态往返恢复，敏感字段与导出结�
   const second = new RunStore({ storage })
   const st = second.getSnapshot()
   assert.equal(st.view, 'import')
-  assert.equal(st.export.mode, 'custom')
   assert.deepEqual(st.export.selection, ['settings', 'plugins'])
   assert.equal(st.export.includeSecrets, true)
   assert.equal(st.export.encrypt, true, 'encrypt 为非敏感选项，刷新后恢复')
@@ -227,13 +225,13 @@ test('损坏或版本不符的存储数据回退默认并清除脏键', () => {
   const c1 = makeStorage()
   c1.storage.setItem(STATE_KEY, '{not-json')
   const corrupt = new RunStore({ storage: c1.storage })
-  assert.equal(corrupt.getSnapshot().export.mode, 'quick')
+  assert.ok(corrupt.getSnapshot().export.selection.includes('settings'), '损坏数据被清除 → 回到默认（推荐分区）')
   assert.equal(c1.raw(), null, '损坏数据被清除')
   // 版本不符
   const c2 = makeStorage()
   c2.storage.setItem(STATE_KEY, JSON.stringify({ v: 999 }))
   const wrongVersion = new RunStore({ storage: c2.storage })
-  assert.equal(wrongVersion.getSnapshot().export.mode, 'quick')
+  assert.ok(wrongVersion.getSnapshot().export.selection.includes('settings'))
   assert.equal(c2.raw(), null)
 })
 
@@ -738,11 +736,14 @@ function makeSyncPatch(): Parameters<RunStore['patch']>[0]['sync'] {
       git: {
         syncMode: 'default',
         syncSections: [],
+        sessionsLimit: 5,
         encrypt: false,
         includeSecrets: false,
         encryptPassword: '',
         encryptPasswordConfirm: '',
         decryptPassword: '',
+        encryptPasswordSaved: true,
+        decryptPasswordSaved: true,
         selectedSnapshotId: '',
         snapshots: [],
         autosync: null,
@@ -752,11 +753,14 @@ function makeSyncPatch(): Parameters<RunStore['patch']>[0]['sync'] {
       webdav: {
         syncMode: 'advanced',
         syncSections: ['settings', 'plugins'],
+        sessionsLimit: 5,
         encrypt: true,
         includeSecrets: true,
         encryptPassword: 'ENC-PASS-SECRET',
         encryptPasswordConfirm: 'ENC-PASS-SECRET',
         decryptPassword: 'DEC-PASS-SECRET',
+        encryptPasswordSaved: false,
+        decryptPasswordSaved: false,
         selectedSnapshotId: 'snap-xyz',
         snapshots: [],
         autosync: null,
@@ -833,7 +837,8 @@ test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复�
       category: 'sync',
       items: [{ id: 'm1', name: 'Market A', cacheState: 'cached' } as MarketListItem],
       detail: marketDetail,
-      approvals: { plugins: true },
+      selectionState: { zipPath: marketDetail.zipPath, selection: { sections: ['settings'], excluded: ['settings:x'] } },
+      conflictResolutions: { 'skills:bar': 'useImported' },
       importResult: null,
       error: 'market error',
       loadError: null,
@@ -872,7 +877,9 @@ test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复�
   assert.equal(st.sync.byChannel.webdav.syncMode, 'advanced', 'webdav 通道模式恢复')
   assert.deepEqual(st.sync.byChannel.webdav.syncSections, ['settings', 'plugins'], 'webdav 通道勾选恢复')
   assert.equal(st.sync.byChannel.webdav.selectedSnapshotId, 'snap-xyz')
-  assert.equal(st.sync.byChannel.git.syncMode, 'default', 'git 通道独立（未配置保持缺省）')
+  // 持久化切片按原样恢复（旧载荷里 git 是 'default'）；同步面板 loadStatus 会归一到
+  // advanced（勾选集合即同步范围），下次保存即以 advanced 落盘。
+  assert.equal(st.sync.byChannel.git.syncMode, 'default', 'git 通道独立（照原样恢复持久化值）')
   assert.deepEqual(st.sync.confirmSession, confirmSession, '确认会话刷新后恢复（宿主侧会话仍有效）')
   assert.equal(st.sync.error, 'sync error text')
   assert.equal(st.sync.token, '', 'git token 刷新后清空')
@@ -885,7 +892,12 @@ test('低频面板: 同步/市场/快照切片与当前面板刷新往返恢复�
   assert.equal(st.market.category, 'sync')
   assert.equal(st.market.items.length, 1)
   assert.deepEqual(st.market.detail, marketDetail, '详情（含 zipPath/plan）往返恢复')
-  assert.deepEqual(st.market.approvals, { plugins: true })
+  assert.deepEqual(
+    st.market.selectionState,
+    { zipPath: '/tmp/market-m1-abc.zip', selection: { sections: ['settings'], excluded: ['settings:x'] } },
+    '条目级勾选（绑 zipPath）往返恢复',
+  )
+  assert.deepEqual(st.market.conflictResolutions, { 'skills:bar': 'useImported' }, '逐项冲突决策往返恢复')
   assert.equal(st.market.error, 'market error')
   assert.equal(st.snapshots.selectedId, 'snap-1')
   assert.equal(st.snapshots.plan?.snapshotId, 'snap-1')
@@ -914,7 +926,7 @@ test('低频面板: 旧版 v1 载荷（无 panel/sync/market/snapshots 字段）
   assert.equal(st.panel, 'import', '旧载荷无 panel（旧「主视图」缺省）→ 由 view 映射到具体页面（Workbench Rebuild）')
   assert.equal(st.sync.channel, 'git')
   assert.equal(st.sync.byChannel.git.syncSections.length, 0)
-  assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道缺省')
+  assert.equal(st.sync.byChannel.webdav.syncMode, 'advanced', 'webdav 通道缺省（恒 advanced）')
   assert.deepEqual(st.market.items, [])
   assert.equal(st.snapshots.selectedId, null)
 })
@@ -949,7 +961,7 @@ test('低频面板: 旧版顶层 syncMode 载荷 → 迁移为 git 通道的 byC
   assert.equal(st.sync.byChannel.git.encrypt, true)
   assert.equal(st.sync.byChannel.git.encryptPassword, '', '迁移后加密密码仍强制清空')
   assert.equal(st.sync.byChannel.git.selectedSnapshotId, 'snap-old')
-  assert.equal(st.sync.byChannel.webdav.syncMode, 'default', 'webdav 通道保持缺省')
+  assert.equal(st.sync.byChannel.webdav.syncMode, 'advanced', 'webdav 通道保持缺省（恒 advanced）')
 })
 
 /* -------------------------------------------------- 聚合优化（2026-08）：一级 tab 8→6 的旧值迁移 */

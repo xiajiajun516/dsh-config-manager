@@ -38,8 +38,8 @@ import {
   type TransactionSnapshotContext,
 } from './types.ts';
 
-/** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后） */
-const APPLY_ORDER: readonly SectionId[] = [
+/** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后）。导出供宿主生命周期等复用同一顺序。 */
+export const APPLY_ORDER: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'prompts', 'skills', 'agentPresets',
   'agentInstructions', 'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
   // P1-1 修复：self 分区（插件自身配置 sync/market/ui-prefs）此前不在 APPLY_ORDER，
@@ -348,7 +348,15 @@ export class Analyzer {
 
   /* ---------------- 第 8 步：analyzeImport ---------------- */
 
-  async analyzeImport(zipPath: string): Promise<ImportAnalysis> {
+  /**
+   * @param opts.decryptedCredentials 宿主用备份密码解开 `security/secrets.enc` 后的
+   *   `ref → 值` Map（仅内存；issue #39 Feature 2）。**只用于统计 ref 名与「本机是否已配置」**，
+   *   绝不写回、绝不进任何返回值/日志。缺省（密码不存在/备份未加密）→ refs 为空数组。
+   */
+  async analyzeImport(
+    zipPath: string,
+    opts: { decryptedCredentials?: Map<string, string> } = {},
+  ): Promise<ImportAnalysis> {
     const bundle = await this.loadBundle(zipPath);
     const { manifest, zipWarnings } = bundle;
     const analyzed = await this.analyzeBundle(bundle);
@@ -420,6 +428,22 @@ export class Analyzer {
       toInstall,
     };
 
+    // issue #39 Feature 2：凭据可恢复性摘要。宿主不必自己解 secrets.enc 解析 YAML
+    // （那等于把 .credentials.yaml 的布局知识复制到每个宿主，正是 issue #39 的坑）。
+    // **只回传 ref 名**：值永不出现，连长度都不出现。
+    const refs = opts.decryptedCredentials === undefined
+      ? []
+      : [...opts.decryptedCredentials.keys()].sort();
+    const satisfied: string[] = [];
+    for (const ref of refs) {
+      try {
+        const status = await this.ctx.credentials.describe(ref);
+        if (status.configured === true) satisfied.push(ref);
+      } catch {
+        // 凭据服务不可用 / ref 不合法 → 保守判为「未满足」，不声称已就绪
+      }
+    }
+
     return {
       valid: errors.length === 0,
       errors,
@@ -433,6 +457,11 @@ export class Analyzer {
       secretCount,
       dependencyIssues,
       encrypted: manifest.security.encrypted,
+      credentials: {
+        inArchive: manifest.security.containsSecrets === true,
+        refs,
+        satisfied,
+      },
     };
   }
 
@@ -721,6 +750,10 @@ export class Analyzer {
     const missingSecrets = plan.missingSecrets
       .filter((s) => !importCtx.decryptedCredentials?.has(s.ref) && !importCtx.secretInputs[s.ref])
       .map((s) => s.ref);
+    // issue #39：从**加密归档内**解出并回填的条数（用户手工补录不计入）。只回传条数。
+    const credentialsRestored = plan.missingSecrets
+      .filter((s) => importCtx.decryptedCredentials?.has(s.ref) === true)
+      .length;
 
     // M1：导入成功 → 快照标记 done（元数据写失败只告警，不改变导入结论）
     await this.markSnapshotStatus(snapshot.id, 'done');
@@ -732,7 +765,18 @@ export class Analyzer {
       const vaultDataDir = path.join(this.ctx.homeDir, 'dsh-config-manager');
       const vault = await restoreVaultFiles(this.ctx.fs, vaultDataDir, this.ctx.homeDir, DEFAULT_SENSITIVE_RELS);
       for (const rel of vault.restored) warnings.push(this.msg('import.vaultRestored', { rel }));
-      for (const rel of vault.missing) warnings.push(this.msg('import.vaultMissing', { rel }));
+      // issue #39：includeSecrets=true 时凭据走包内密文、**不**镜像明文 vault（见 exporter 4b），
+      // 目标机 vault 必然为空。值已随包回填（plan 里全部 ref 被 decryptedCredentials 满足）时
+      // 再提示「跨机恢复需人工重填」纯属误导 —— 换成如实说明。只有确实还缺 ref 时才保留原提示。
+      const satisfiedByArchive = credentialsRestored > 0 && missingSecrets.length === 0;
+      if (satisfiedByArchive && vault.missing.length > 0) {
+        warnings.push(this.msg('import.vaultCredentialsFromArchive', {
+          count: String(credentialsRestored),
+          rel: vault.missing.join(', '),
+        }));
+      } else {
+        for (const rel of vault.missing) warnings.push(this.msg('import.vaultMissing', { rel }));
+      }
       for (const s of vault.skipped) {
         // targetExists = 目标已有更新的凭据，属预期跳过，不打扰用户
         if (s.reason !== 'targetExists') warnings.push(this.msg('import.vaultBackfillFailed', { rel: s.rel, reason: s.reason }));
@@ -750,6 +794,8 @@ export class Analyzer {
       rollback: null,
       snapshotId: snapshot.id,
       skippedTombstoned: plan.skippedTombstoned ?? [],
+      // issue #39 Feature 3：字段只增不改；未经归档恢复时省略（旧行为逐字节不变）
+      ...(credentialsRestored > 0 ? { credentialsRestored } : {}),
     };
   }
 

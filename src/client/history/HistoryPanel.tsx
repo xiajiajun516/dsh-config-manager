@@ -20,9 +20,11 @@ import { toast } from '../common/toast-store.ts'
 import {
   resultBadgeKind, kindLabelKey, groupByKind, summarize,
   filterByText, applyRecent, filterByKindResult,
-  collectHistoryKinds, collectHistoryResults,
+  collectHistoryKinds, collectHistoryResults, formatHistorySections,
   type HistoryFilter,
 } from '../../ui/history-model.ts'
+// 复用同步历史的时间格式化（本地紧凑时间 + 完整时间悬停）：两个历史视图的时间观感必须一致
+import { formatDateTime, formatDateTimeFull } from '../sync/history-model.ts'
 import type { StoredMigrationHistoryEntry } from '../../core/migration-history.ts'
 import css from '../config-manager.module.css'
 
@@ -98,7 +100,8 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     return (
       <div className={css.viewBody}>
         <SectionTitle title={t('history.title')} subtitle={t('history.subtitle')} />
-        <ErrorBanner error={new Error(redact(state.error ?? ''))} onRetry={() => void load()} />
+        {/* F-02：t 必传 —— 否则英文界面下错误标题/建议动作恒中文 */}
+        <ErrorBanner error={new Error(redact(state.error ?? ''))} onRetry={() => void load()} t={historyApi.t} />
       </div>
     )
   }
@@ -168,7 +171,8 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             value={state.filter.recent ?? 0}
             onChange={(e) => setFilter({ recent: Number(e.target.value) })}
           >
-            <option value="0">{t('history.filter.recent.all')}</option>
+            {/* 与前两个下拉同构（「<维度>: 全部」），否则窄抽屉里三个「全部」含义不明 */}
+            <option value="0">{t('history.filter.recent')}: {t('history.filter.recent.all')}</option>
             <option value="50">{t('history.filter.recent.50')}</option>
             <option value="200">{t('history.filter.recent.200')}</option>
           </select>
@@ -227,13 +231,20 @@ function HistoryList({ groups, t }: { groups: ReturnType<typeof groupByKind>; t:
 
 function HistoryRow({ entry, t }: { entry: StoredMigrationHistoryEntry; t: TranslateNS<'config-manager-history'> }) {
   const result = <Badge kind={resultBadgeKind(entry.result)}>{t(`history.result.${entry.result}`)}</Badge>
+  // 时间：本地紧凑时间（悬停给完整本地时间）。原样渲染 ISO（含 T/Z/毫秒）在 409px 抽屉里既占宽又难扫读。
+  const time = formatDateTime(entry.at)
+  const timeTitle = formatDateTimeFull(entry.at)
+  const sections = formatHistorySections(entry.sections)
   const summary = redact(entry.summary + (entry.error !== undefined ? ` — ${entry.error}` : ''))
+  // 两行结构：元信息（时间 · 结果 · 分区）+ 摘要独占一行 —— 摘要与元信息抢同一行时会被挤成碎片
   return (
     <div className={css.historyRow}>
       <div className={css.historyRowMain}>
-        <span className={css.historyTime}>{entry.at}</span>
-        {result}
-        <span className={css.historySections}>{redact(entry.sections.join(', '))}</span>
+        <div className={css.historyMeta}>
+          <span className={css.historyTime} title={timeTitle !== '' ? timeTitle : undefined}>{time}</span>
+          {result}
+          {sections !== null && <span className={css.historySections}>{redact(sections)}</span>}
+        </div>
         <span className={css.historySummary}>{summary}</span>
       </div>
     </div>

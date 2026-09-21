@@ -36,6 +36,9 @@ export interface ConsultView {
   recommendation: Recommendation;
   recommendationBadgeKind: ConsultBadgeKind;
   recommendationLabel: string;
+  /** 硬阻断项数（>0 才可能是 block）+ 需处理项数（warning/error 但非阻断） */
+  blockerCount: number;
+  attentionCount: number;
   reasons: string[];
   dimensions: ConsultDimensionView[];
   willApply: {
@@ -155,6 +158,8 @@ export function consultView(report: ConsultReport, t: UiT): ConsultView {
     recommendation: report.recommendation,
     recommendationBadgeKind: consultRecommendationBadgeKind(report.recommendation),
     recommendationLabel: consultRecommendationLabel(report.recommendation, t),
+    blockerCount: report.blockerCount,
+    attentionCount: report.attentionCount,
     reasons: report.recommendationReasons,
     dimensions,
     willApply: {

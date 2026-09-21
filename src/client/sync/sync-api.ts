@@ -86,10 +86,20 @@ export interface SyncStatusResponse {
   syncSelection?: SyncSelectionPayload;
   /** 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道） */
   syncSelectionByChannel?: Record<SyncTransportType, SyncSelectionPayload>;
+  /** 全部通道的「同步密码是否已保存」状态（只回布尔，密码值永不回传浏览器） */
+  syncCredentialsByChannel?: Record<SyncTransportType, SyncPasswordState>;
   /** 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9） */
   autosync?: AutosyncStatusResponse;
   /** 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道） */
   autosyncByChannel?: Record<SyncTransportType, AutosyncStatusResponse>;
+}
+
+/** 同步密码的保存状态（只回布尔；密码值永不回传浏览器）。 */
+export interface SyncPasswordState {
+  /** 加密备份密码是否已保存到本机凭据库（DSH credentials） */
+  encryptPasswordConfigured: boolean;
+  /** 解密密码是否已保存到本机凭据库 */
+  decryptPasswordConfigured: boolean;
 }
 
 /** 同步分区选择（POST /sync/selection 请求体 + status.syncSelection 响应；持久化于 Host）。
@@ -100,10 +110,26 @@ export interface SyncSelectionPayload {
   mode: 'default' | 'advanced';
   /** 高级模式勾选分区；default 模式可为空数组 */
   sections: SectionId[];
-  /** 手动推送默认加密快照（密码每次推送输入，不持久化） */
+  /** sessions（历史会话）分区同步「最新 N 个会话」上限；缺省 5 */
+  sessionsLimit?: number;
+  /** 手动推送默认加密快照（开关持久化；密码存 DSH credentials，见下） */
   encrypt?: boolean;
   /** 手动推送默认导出真实凭据值（必须同时 encrypt） */
   includeSecrets?: boolean;
+  /**
+   * 加密备份密码（可选）：非空 → 写入本机凭据库（DSH credentials）后长期复用。
+   * 只走请求体内存传输，绝不写入同步文件 / 日志 / 响应。
+   */
+  encryptPassword?: string;
+  /** 解密密码（可选）：非空 → 写入本机凭据库，拉取加密快照时自动使用 */
+  decryptPassword?: string;
+  /** 主动删除已保存的加密密码（用户取消勾选「加密备份」时） */
+  clearEncryptPassword?: boolean;
+  /** 主动删除已保存的解密密码（用户点「删除已保存密码」时） */
+  clearDecryptPassword?: boolean;
+  /** 响应/状态回填：密码是否已保存在本机凭据库（只回布尔，绝不回值） */
+  encryptPasswordConfigured?: boolean;
+  decryptPasswordConfigured?: boolean;
 }
 
 /** webdav 通道状态字段（无任何 secret 值；password 只报 passwordConfigured 布尔） */
@@ -156,8 +182,14 @@ export interface SyncPushPayload {
   url?: string;
   username?: string;
   password?: string;
-  /** 仅同步指定分区（缺省 = 全部 portable 推荐分区；即「默认/快速导出」vs「高级/自定义导出」） */
+  /** 仅同步指定分区（缺省 = 全部 portable 推荐分区；即「默认/快速导出」vs「自定义导出」） */
   sections?: SectionId[];
+  /**
+   * sessions（历史会话）分区选项。**只有显式提供它**，sessions 才被允许进入同步通道；
+   * limit = 只带「最新 N 个会话」（缺省 5；0 = 不带）。未提供 → 会话分区按普通
+   * 非 portable 分区跳过并告警（安全默认：内容敏感的会话绝不悄悄随同步上行）。
+   */
+  sessions?: { limit?: number };
   /** 加密快照（sections 载荷整体加密；开启时必须提供 encryptPassword） */
   encrypt?: boolean;
   /** 加密密码（仅本次请求体内存传输，Host 绝不落盘/落日志；encrypt=true 时必填） */

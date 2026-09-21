@@ -1,14 +1,16 @@
 /**
  * 配置市场区块的客户端渲染装配层（m-market-ui，node 可测）。
  *
- * 设计纪律（docs/design/marketplace.md §7.2 / §9 contract 表）：
+ * 设计纪律（市场设计上游依据 = docs/design/2026-08-19-market-publish-design.md：
+ * 旧的市场设计文档已在 2026-08-19 大写 Docs/ 清理中删除，其章节号在新文档中不存在，
+ * 故只引用该文件、不再引用 § 号）：
  *  - **共享渲染模型唯一权威 = Host 侧 `src/market/view.ts`**（marketStatusText /
  *    marketListSummary / computeItemBadge / marketItemWarnings / needsReview / toMarketListItem）。
  *    本文件原样 **re-export** 这些函数（单一来源，消重，避免与后端漂移）；
  *  - 本文件只保留**客户端专属**的 UI 装配函数（搜索/类别过滤、详情聚合、时间格式化、
  *    供应链警示的 warn/info 着色行、条目来源徽章）——这些不属共享模型，属前端薄层。
  *
- * 安全硬约束（§1 / §7.2）：供应链警示恒生成、needsReview 恒 true（re-export 自后端权威）。
+ * 安全硬约束（见上：供应链警示恒生成、needsReview 恒 true —— re-export 自后端权威）。
  */
 
 // —— 共享渲染模型：原样 re-export Host 权威（src/market/view.ts），不重复实现 ——
@@ -250,151 +252,15 @@ export function marketDetailView(
 }
 
 /* ----------------------------------------------------------------------------
- * 逐分区批准（安全不变式 (c)：插件/AGENTS.md 等高风险分区默认不导入，须逐项显式批准）。
+ * 市场通道的导入选择（2026-09 起）
  *
- * 严格分层信任：来自市场的条目任何分区都不自动默认全信任。**安全（低风险，默认勾选）**
- * 分区可随「确认导入」一起走；**高风险**分区（写文件 / 注入全局指令 / 安装插件 / 起 MCP /
- * 恢复会话等）默认不勾选，用户须在详情里逐项显式批准后才进入导入计划。
- * 所有函数无副作用、node 可测。
+ * 已删除「分区级布尔批准表」（MarketApprovals / defaultApprovals / buildApprovedPlan /
+ * approvalRows）与「高风险分区默认不勾」的严格分层信任默认：市场通道现在与导入页**完全同一套**
+ * 选择语义（`src/ui/selection-model.ts` 的 Selection：默认全选、「全选」含高风险分区），
+ * 由 `MarketImportReview` + 级联树承载，风险改由「就地高风险警示 + 免责声明 + 导入前快照 +
+ * 导入后一键回滚」承担。市场特有的展示关切（逐项摘要 / 已勾选高风险分区）在
+ * `src/ui/market-import.ts`，选择逻辑本身不在这里再实现一遍。
  * ------------------------------------------------------------------------- */
-
-/**
- * 高风险分区（默认不导入，须逐项显式批准）：
- *  - pluginFiles        ：把远端文件写进 $DSH_HOME（可覆盖本机插件配置文件）
- *  - agentInstructions  ：AGENTS.md 注入每个会话的全局指令（LLM 言行边界）
- *  - agentPresets       ：agent 预设（会话 persona / 行为模板）
- *  - sessions           ：session 文件（可带历史/敏感上下文）
- *  - mcp                ：注册 MCP 服务器（可接入外部工具/执行能力）
- *  - plugins            ：安装/更新插件（ExecutePlugin / Install 项，供应链最高风险）
- * 其余（settings/ui/providers/prompts/skills/workspaces/credentialsStatus…）默认勾选。
- */
-export const HIGH_RISK_ADAPTERS: ReadonlySet<SectionId> = new Set<SectionId>([
-  'pluginFiles', 'agentInstructions', 'agentPresets', 'sessions', 'mcp', 'plugins',
-]);
-
-/** 是否为高风险分区（需逐项显式批准，默认不导入）。 */
-export function isHighRiskAdapter(adapter: SectionId): boolean {
-  return HIGH_RISK_ADAPTERS.has(adapter);
-}
-
-/** PlanItemKind 是否需要重启 DSH 生效（Install 及插件级变更）。 */
-export function itemNeedsRestart(adapter: SectionId, kind: PlanItemKind): boolean {
-  if (kind === 'Install') return true;
-  if (adapter === 'plugins' || adapter === 'mcp' || adapter === 'agentPresets' || adapter === 'agentInstructions') return true;
-  return false;
-}
-
-/** 审批表：adapter → 是否勾选导入。 */
-export type MarketApprovals = Record<string, boolean>;
-
-/** 收集计划中出现过的分区（按 APPLY_ORDER 语义排序不重要，去重即可）。 */
-export function planAdapters(plan: ImportPlan): SectionId[] {
-  const set = new Set<SectionId>();
-  for (const item of plan.items) set.add(item.adapter);
-  return [...set];
-}
-
-/**
- * 默认批准表：低风险分区默认勾选（true）；高风险分区默认不勾选（false，须逐项显式批准）。
- * 这是严格分层信任的默认 —— 不提供「自动信任高风险来源」的默认。
- */
-export function defaultApprovals(plan: ImportPlan): MarketApprovals {
-  const out: MarketApprovals = {};
-  for (const adapter of planAdapters(plan)) {
-    out[adapter] = !isHighRiskAdapter(adapter);
-  }
-  return out;
-}
-
-/**
- * 按批准表过滤计划 → 仅保留已批准分区的项（供 executeImportPlan 执行的子计划，subPlan）。
- * - items：仅保留 approved[adapter]===true 的项；
- * - needsRestart：按已批准项里是否有需重启者重算（不再沿用整份计划的 needsRestart）；
- * - estimatedActions：仅保留已批准分区的计数；
- * - globalStrategy / missingSecrets / pathMappings：透传（导入的可选分区子集不改变这些）。
- * 返回与入参同形状的 ImportPlan，可直接交 executeImportPlan（analytic 只执行 plan.items）。
- */
-export function buildApprovedPlan(plan: ImportPlan, approvals: MarketApprovals): ImportPlan {
-  const items = plan.items.filter((it) => approvals[it.adapter] === true);
-  let needsRestart = false;
-  const estimatedActions: Record<string, number> = {};
-  for (const it of items) {
-    if (itemNeedsRestart(it.adapter, it.kind)) needsRestart = true;
-    estimatedActions[it.adapter] = (estimatedActions[it.adapter] ?? 0) + 1;
-  }
-  return {
-    items,
-    globalStrategy: plan.globalStrategy,
-    pathMappings: plan.pathMappings,
-    missingSecrets: plan.missingSecrets,
-    needsRestart,
-    // estimatedActions 仅用于进度/预估（不入执行依据==plan.items），部分键即可
-    estimatedActions: estimatedActions as ImportPlan['estimatedActions'],
-  };
-}
-
-export interface ApprovalSummary {
-  /** 计划中的分区总数 */
-  total: number;
-  /** 已批准分区数 */
-  selected: number;
-  /** 是否有至少一个批准的项（可导入） */
-  canImport: boolean;
-  /** 高风险分区里已批准的（提示需逐项批准已确认） */
-  highRiskSelected: number;
-  /** 高风险分区总数 */
-  highRiskTotal: number;
-}
-
-/** 批准表摘要（确认按钮可用性 + 提示徽章数据源，纯函数）。 */
-export function approvedAdapterSummary(plan: ImportPlan, approvals: MarketApprovals): ApprovalSummary {
-  const adapters = planAdapters(plan);
-  let selected = 0;
-  let highRiskSelected = 0;
-  let highRiskTotal = 0;
-  for (const a of adapters) {
-    if (approvals[a] === true) selected += 1;
-    if (isHighRiskAdapter(a)) {
-      highRiskTotal += 1;
-      if (approvals[a] === true) highRiskSelected += 1;
-    }
-  }
-  const hasItems = plan.items.some((it) => approvals[it.adapter] === true);
-  return { total: adapters.length, selected, canImport: hasItems, highRiskSelected, highRiskTotal };
-}
-
-/** 分区批准列表的渲染行（薄装配：adapter + 是否高风险 + 是否勾选 + 项数描述）。 */
-export interface ApprovalRow {
-  adapter: SectionId;
-  itemCount: number;
-  highRisk: boolean;
-  approved: boolean;
-  /** 该分区第一条项的 description（作分区标签，如「安装插件 ×3」） */
-  label: string;
-}
-
-/** 计划 → 分区批准列表（供详情视图逐项勾选渲染；纯函数）。 */
-export function approvalRows(plan: ImportPlan, approvals: MarketApprovals): ApprovalRow[] {
-  const byAdapter = new Map<SectionId, PlanItem[]>();
-  for (const item of plan.items) {
-    const list = byAdapter.get(item.adapter) ?? [];
-    list.push(item);
-    byAdapter.set(item.adapter, list);
-  }
-  const rows: ApprovalRow[] = [];
-  for (const adapter of planAdapters(plan)) {
-    const items = byAdapter.get(adapter) ?? [];
-    const label = items[0]?.description ?? adapter;
-    rows.push({
-      adapter,
-      itemCount: items.length,
-      highRisk: isHighRiskAdapter(adapter),
-      approved: approvals[adapter] === true,
-      label,
-    });
-  }
-  return rows;
-}
 
 /* ------------------------------------------------- P1-⑥ 市场条目「装后会动什么」摘要 */
 

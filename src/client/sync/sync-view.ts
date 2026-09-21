@@ -11,7 +11,7 @@ import type { PullChange, SyncPullReport, SyncPushPreview, SyncPushReport } from
 import { DEFAULT_CATEGORIES } from '../../ui/export-flow.ts';
 import { EXPORT_GROUPS, type ExportGroup } from '../../ui/types.ts';
 import type {
-  ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem,
+  ApplyItemsResponse, AutosyncInterval, AutosyncStatusResponse, GithubPollResponse, SyncConfirmItem, SyncSelectionPayload,
   SyncItemAdoption, SyncSectionInfo, SyncSnapshotLite, SyncStatusResponse,
 } from './sync-api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
@@ -81,9 +81,42 @@ export function syncSectionGroups(options: readonly SyncSectionOption[]): {
     .filter((g) => g.items.length > 0);
 }
 
-/** 默认（快速导出）模式的推荐同步分区：可移植且默认包含（与 ExportFlow.quickSelection 同口径）。 */
+/**
+ * sessions（历史会话）分区同步「最新 N 个会话」的默认值。
+ *
+ * 与宿主半 src/sync/sync-selection.ts 的 DEFAULT_SYNC_SESSIONS_LIMIT 同值（客户端 bundle
+ * 不能 import 宿主模块，故沿用 SYNC_CREDENTIAL_REF 那套「两处同值」的做法）。
+ * 历史会话内容敏感，**默认只带最新 5 个**，避免一次把整棵会话树推上远端。
+ */
+export const DEFAULT_SYNC_SESSIONS_LIMIT = 5
+
+/** sessionsLimit 归一化（与宿主同口径）：非整数 / 负数 → 默认值；上限 10000。 */
+export function normalizeSessionsLimit(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) return DEFAULT_SYNC_SESSIONS_LIMIT
+  return Math.min(value, 10000)
+}
+
+/** 推荐同步分区：可移植且默认包含（与 ExportFlow.quickSelection 同口径）。 */
 export function recommendedSyncSections(info: readonly SyncSectionInfo[]): SectionId[] {
   return info.filter((s) => s.portability === 'portable' && s.defaultIncluded).map((s) => s.id);
+}
+
+/**
+ * 载入时的同步分区初始值（分区弹窗「首次打开」预勾选推荐分区）。
+ *
+ * 三条规则，必须区分「从没配过」与「用户主动清空」：
+ *  - 无持久化（缺省 undefined）或旧 default 模式 → **预勾选推荐分区**
+ *    （升级后同步范围不缩水，也不用先配一遍才能用）；
+ *  - advanced + 非空勾选 → 原样保留用户的选择；
+ *  - advanced + **空勾选** → 保留为空（这是用户主动清空的选择，不能被悄悄填回来，
+ *    由「请至少勾选一个同步分区」提示 + 禁用推送兜底）。
+ */
+export function initialSyncSections(
+  selection: Pick<SyncSelectionPayload, 'mode' | 'sections'> | undefined,
+  catalog: readonly SyncSectionInfo[],
+): SectionId[] {
+  if (selection === undefined || selection.mode !== 'advanced') return recommendedSyncSections(catalog)
+  return [...selection.sections]
 }
 
 /* ---------------------------------------------------------------- 变更摘要 */
@@ -154,24 +187,38 @@ export type SyncChannel = 'git' | 'webdav';
 
 /**
  * 每个同步通道（git/webdav）各自独立的设置状态：
- * 自动同步、同步模式（默认/高级 + 分区勾选）、是否加密、远端快照互不共享。
+ * 自动同步、同步分区勾选、是否加密、远端快照互不共享。
  * 敏感字段（加密/解密密码）仅内存：成功后清空，绝不持久化/回显。
  */
 export interface ChannelSyncState {
-  /** 同步模式：默认（快速导出推荐分区） / 高级（自定义勾选分区） */
+  /**
+   * 同步模式（**宿主 schema 字段；UI 已无「默认/自定义」之分**）。
+   *
+   * 2026-09 起同步分区恒由用户在弹窗里手动勾选 → 客户端落盘恒为 'advanced'
+   * （宿主语义：只同步勾选分区）。'default' 只为旧持久化载荷与宿主 schema 保留。
+   */
   syncMode: SyncMode
-  /** 高级模式勾选的同步分区（初始 = 推荐分区；空 = 未勾选任何分区） */
+  /** 勾选的同步分区（初始 = 推荐分区；空 = 未勾选任何分区） */
   syncSections: SectionId[]
+  /** sessions 分区「最新 N 个会话」上限（持久化；缺省 5，仅勾选 sessions 时生效） */
+  sessionsLimit: number
   /** 手动推送默认加密快照（持久化开关；密码不持久化） */
   encrypt: boolean
   /** 手动推送默认导出真实凭据值（持久化开关；必须同时 encrypt） */
   includeSecrets: boolean
-  /** 加密密码（仅内存；推送成功后清空，绝不持久化/回显） */
+  /** 加密密码输入框（仅内存；已保存的密码在 DSH 凭据库里，不回显） */
   encryptPassword: string
   /** 加密密码确认（仅内存） */
   encryptPasswordConfirm: string
-  /** 解密密码（拉取/一键同步加密快照用；仅内存，绝不持久化） */
+  /** 解密密码输入框（仅内存；已保存的密码在 DSH 凭据库里，不回显） */
   decryptPassword: string
+  /**
+   * 加密备份密码是否已保存在本机凭据库（DSH credentials；只回布尔，值永不回传浏览器）。
+   * 为 true 时输入框留空即表示「沿用已保存密码」，不再要求重新输入。
+   */
+  encryptPasswordSaved: boolean
+  /** 解密密码是否已保存在本机凭据库（同上；用户点「删除已保存密码」才清除） */
+  decryptPasswordSaved: boolean
   /** 当前选中的历史快照 id（'' = 最新） */
   selectedSnapshotId: string
   /** 该通道远端历史快照列表（「选择历史快照」下拉数据源） */
@@ -189,13 +236,17 @@ export interface ChannelSyncState {
 /** 缺省每通道状态（未配置时各字段默认值）。 */
 export function defaultChannelSyncState(): ChannelSyncState {
   return {
-    syncMode: 'default',
+    // 恒为 advanced：勾选集合就是同步范围（详见 ChannelSyncState.syncMode 注释）
+    syncMode: 'advanced',
     syncSections: [],
+    sessionsLimit: DEFAULT_SYNC_SESSIONS_LIMIT,
     encrypt: false,
     includeSecrets: false,
     encryptPassword: '',
     encryptPasswordConfirm: '',
     decryptPassword: '',
+    encryptPasswordSaved: false,
+    decryptPasswordSaved: false,
     selectedSnapshotId: '',
     snapshots: [],
     loadingSnapshots: false,

@@ -1,5 +1,6 @@
 /**
- * m-market：市场条目安全校验管线（docs/design/marketplace.md §6）。
+ * m-market：市场条目安全校验管线（依据 docs/design/2026-08-19-market-publish-design.md
+ * §3.6 安全分析——该节明确引用本模块的校验管线作为威胁缓解）。
  * 下载条目（config.zip）后、生成 ImportPlan 之前依次执行，全部纯函数、node 可测。
  *
  * 复用现有「不可信输入」全部能力：parseZipHardened（Zip Slip / zip bomb / 路径安全）、

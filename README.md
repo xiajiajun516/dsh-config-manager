@@ -40,7 +40,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 
 ### Backup DeepSeek Harness configuration
 
-Create a portable backup of your DSH settings, model providers, plugins, MCP servers, skills, agent presets, profiles and workspace — one ZIP file, no secret values included by default.
+Create a portable backup of your DSH settings, model providers, plugins, MCP servers, skills, agent presets and workspace — one ZIP file, no secret values included by default. (DSH's own profiles — `$DSH_HOME/profiles/<name>`, i.e. which plugin stack to boot — are machine-local and are not migrated; the **Profiles** page can list/create/rename/delete them and record which one the next launch should use.)
 
 ### Restore DeepSeek Harness on another machine
 
@@ -78,8 +78,8 @@ Browse the built-in official market for ready-made configurations (model provide
 | 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
 | 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo or WebDAV** (secrets do not sync by default; encrypted snapshots can optionally carry encrypted credentials) |
 | ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d) — set-and-forget, secrets never included |
-| 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-section approval |
-| 🗂️ | **Profiles** | Save multiple setups (Work / Personal) and switch anytime — preview + auto-backup + rollback |
+| 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-item content selection (change summary + in-place high-risk flags) |
+| 🗂️ | **Profiles (DSH profiles)** | Manage `$DSH_HOME/profiles/<name>` directly: list / create from a shipped template / rename / hard delete / record which profile the next launch should use |
 | 🌐 | **Bilingual UI** | Interface, reports and error details follow the DSH app language (中文 / English) |
 | 🤖 | **Agent tools** | Backup / snapshot / restore / sync right from an agent session |
 
@@ -248,7 +248,7 @@ Push / pull your portable config between machines through **either of two channe
 - **WebDAV auth** uses HTTP Basic: the `username` is stored in the config and may be echoed back into the UI, while the `password` is read live from the DSH credentials slot `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` — it never appears in any sync file or log.
 - **Plugins auto-install**: when pulling diffs, plugins that are new in the backup are **installed automatically** on confirm — no manual per-item ticking in the diff list. Only **version-conflict** plugins still ask you to pick "Keep Current / Use Imported".
 - **Push preview before uploading** — the Push button first shows a read-only preview of what will be sent (sections + per-section counts + changed-vs-baseline markers, first-baseline notice) and only writes the remote after you confirm.
-- **Secrets do not sync by default**: every section goes through the `SecretScanner` (sensitive field values stripped) and the credential section is structurally excluded. With "Export secrets" checked and an encryption password set, `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext in a **separate credentials payload** of the encrypted snapshot (never inside any section); the receiving side decrypts it into per-ref "credential migration" items that are written back to the local credential store (`credentials.set`) only after you confirm. The password is memory-only and never persisted or logged; **auto sync never carries credentials** (it has no password and skips encrypted snapshots).
+- **Secrets do not sync by default**: every section goes through the `SecretScanner` (sensitive field values stripped) and the credential section is structurally excluded. With "Export secrets" checked and an encryption password set, `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext in a **separate credentials payload** of the encrypted snapshot (never inside any section); the receiving side decrypts it into per-ref "credential migration" items that are written back to the local credential store (`credentials.set`) only after you confirm. The encryption/decryption password is kept in a dedicated local DSH credential slot (`~/.dsh/.credentials.yaml`): it is remembered once "Encrypt backup" is checked (leave the fields empty to reuse it) and cleared when you uncheck it or press "Delete saved password" — never written to sync files, responses, logs or the exported backup, and never sent back to the browser. The decryption password is only ever used when the pulled snapshot is actually encrypted. **Auto sync never carries credentials** (it has no password and skips encrypted snapshots).
 
 ### 🛒 Configuration Marketplace
 
@@ -257,18 +257,27 @@ Browse and install ready-made configurations (model providers, plugins, MCP serv
 - **Built-in official market** — read-only, bound to the official public repo (official badge shown, not editable); first open auto-refreshes, manual refresh also available
 - **Search & filter** — keyword search (matches name / description / author / **categories**), category filter, **section filter** (items already downloaded list their sections; others are excluded with a hint), source filter (Official / Community), sorting (recently updated / most starred / name A–Z), and a ⭐ badge showing the **source repo's** star count (queried anonymously, no token involved)
 - **Impact preview** — the detail view shows "what installing this will change" (items updated / identical / conflicts / secrets to re-enter / DSH restart needed) before you approve anything
-- **Supply-chain warnings always shown** — source repo URL, "not officially reviewed", download time; **per-section approval** — high-risk sections (sessions / arbitrary files) are banned from listing outright, and every remaining section must be explicitly approved before the import is confirmed
+- **Supply-chain warnings always shown** — source repo URL, "not officially reviewed", download time; **per-item content selection** — the selection step lists what each item will change and flags high-risk sections in place (selected by default; unchecking excludes them from the import and the snapshot); high-risk content (sessions / arbitrary files) is still banned from listing outright
 - **Install reuses the safe import pipeline** — analyze → preview → auto-backup → apply → rollback; nothing is written before you confirm
 - **"My Configs"** — sign in with GitHub (device flow), upload a config to **your own public repo** in one click, and an **auto listing PR** is opened against the official market repo; manage your listings (status badges: not listed / PR pending / listed), update in one click, install back locally, or delist (auto de-listing PR)
 
-### 🗂️ Profiles
+### 🗂️ Profiles (= DSH's own profiles)
 
-Save multiple configurations (Work / Personal) and switch anytime; switching includes preview + auto-backup + rollback.
+A "profile" here is DSH's own profile (`$DSH_HOME/profiles/<name>`) — one **plugin stack (bundles) + dependencies + patch layer**,
+launched with `dsh --profile <name>`. This page reads and writes that directory directly instead of keeping its own config snapshots:
 
-- **Save current config** — pick a name and store the current DSH configuration (settings / providers / plugins / skills / agent presets…; no secrets, file sections embedded)
-- **Switch with safety** — preview first (zero writes) → confirm → automatic snapshot → staged apply; any failure rolls back fully
-- **Manage** — rename / delete (confirmed) / import an exported profile.json
-- Library is an independent tab: Settings → "Backup & Migration" → **Profiles**
+| Action | What it does |
+|---|---|
+| List / details | Bundle layers, dependencies, patch entries and size, patchReload, node_modules, mtime; details show the raw `package.json` and `cordis.patch.yml` (redacted before display) |
+| Create | Writes the standard three files under `$DSH_HOME/profiles/<name>` (equivalent to the shipped `initProfile`); starting templates: base / web / headless / sdk / sdk-minimal / acp |
+| Rename | Directory move + fixes the manifest name field; the running profile is refused |
+| Delete | **Hard-deletes the whole directory** (including node_modules); deleting the running profile needs an extra checkbox |
+| Next launch | Only records which profile to use next and shows the `dsh --profile <name>` restart command |
+
+> DSH **cannot switch profiles while running** (the profile comes from the launch flag and bundle layers resolve at boot),
+> so this page never touches processes — it records your choice and asks you to restart.
+> Third-party plugins must be installed into that profile separately (`dsh plugin --profile <name> add <pkg>`).
+> The tab lives at Settings → "Backup & Migration" → **Profiles**.
 
 ### 📸 Snapshot restore (undo an import)
 
@@ -488,6 +497,9 @@ No. A checksum mismatch rejects the import outright (protects against corruption
 
 **Q: Will re-importing duplicate things?**
 No. Items are deduplicated by stable IDs (plugin ID / MCP name / skill name…); existing items are skipped.
+
+**Q: Why is the console quiet after `dsh web` — how do I get the plugin logs back?**
+By design. Routine progress logs (mount banner, scheduler skips, export/backup completion) are emitted at `info`, and the shipped default level is `warn` — so only warnings and errors reach the terminal. Set `DSH_CONFIG_MANAGER_LOG_LEVEL=info` (or `debug`) before starting DSH to bring the verbose lines back.
 
 **Q: Does importing an encrypted backup require the password?**
 Yes. The import wizard asks for the export-time encryption password and verifies it before the import can proceed; the password is never saved — memory only. A wrong or missing password blocks the import (credentials are restored from the backup instead of being re-entered when the password is correct).

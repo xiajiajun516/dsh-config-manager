@@ -21,12 +21,17 @@ the **latest published version** only — please upgrade before reporting.
 - **凭据不可回读**：DSH 凭据槽位永不回读值，只做文件级读取
 - **日志全程脱敏**：`redactValue` 掩码所有敏感值；UI 渲染前所有错误/报告文本再过 `redact()` 兜底
 - **ZIP 视为不可信输入**：zip bomb 条目数上限、checksum 校验、Zip Slip 拒绝
-- **加密备份**：密码仅内存传入、不落盘不落日志；解密明文 ZIP 用完即清
+- **加密备份 / 导出**：密码仅内存传入、不落盘不落日志；解密明文 ZIP 用完即清
+- **同步通道密码**（唯一持久化例外）：勾选加密后，同步的加密/解密密码保存到 DSH credentials 的独立槽位，供跨会话复用；取消勾选或点「删除已保存密码」即清除。密码值永不写入同步文件、响应体、日志或导出备份，也不回传浏览器（UI 只拿 `configured` 布尔）
 
 This plugin enforces hard security invariants: secrets are not exported by
 default, credential values are never read back from DSH slots, all logs are
-redacted, ZIP archives are treated as untrusted input, and encryption
-passwords never touch disk or logs (see `DEVELOPERS.md`).
+redacted, ZIP archives are treated as untrusted input, and export encryption
+passwords never touch disk or logs. The one exception is the **sync channel**
+password: once encryption is enabled it is stored in a dedicated DSH credential
+slot for reuse (cleared when you uncheck encryption or press "Delete saved
+password") — never written to sync files, responses, logs or backups, and never
+sent back to the browser (see `DEVELOPERS.md`).
 
 ## 漏洞报告 / Reporting a Vulnerability
 
