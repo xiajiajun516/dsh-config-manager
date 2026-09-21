@@ -9,6 +9,48 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+## [0.1.63] - 2026-09-21
+
+> 0.1.62 的**跟进版**：采纳外部贡献者 [PR #44](https://github.com/xiajiajun516/dsh-config-manager/pull/44) 的两点稳健性改进，
+> 并加固一个**会卡住发版**的 CI flake。无新增功能、无破坏性变更。
+
+### 🐞 采纳 PR #44（外部贡献者 lux-liang）的两点
+
+- **空错误文本回退**：`failed` 且宿主错误文本为 `undefined` / 空串 / **全空白**时改为回退通用文案。0.1.62 用的
+  `run.error ?? null` 只挡 `undefined` / `null`，空串会渲染出「备份失败：」这种半截提示（`src/ui/backup-schedule.ts`）。
+- **未知 `skipReason` 不再暴露机器 token**：归一为本地化通用说明（`overview.quick.backupSkippedOther`），
+  与仓库既有纪律一致（`describeSkipReason` 对 `mutation-locked` 的同类处理：用户可见文本不留裸 token）。
+- 这两条来自 PR #44 的评审（贡献者把状态判定放进 `src/ui/overview-view.ts` 纯函数的做法方向正确，
+  但内容已被 0.1.62 覆盖，故该 PR 作为 superseded 关闭）；credit 同时记在 0.1.62 段的「🙏 致谢」与两份 README
+  新增的「🙏 贡献者」小节。
+
+### 🧪 修复会卡住发版的 CI flake（`src/utils/env-lock.test.ts`）
+
+- **现象**：`§11.1-c6`「sleep 70ms ×3，再断言 heartbeat `seq` 递增」是**墙钟假设** —— heartbeat 定时器在 CI
+  负载下可能整段采样窗口都没触发，实测失败 `heartbeat seq 应递增: 2,2,2`（同一 commit 重跑即过）。
+  产品侧 `seq` 用 `++this.heartbeatSeq`，单进程内严格单调，**问题只在测试用固定 sleep 猜定时器何时跑**。
+- **修复**：新增 `waitHeartbeatSeqAbove()` —— **有界等待观测到的推进**（20ms 轮询 + 5s 上限），并补「观测样本严格单调」
+  与「有界等待内至少推进一次」两条断言；`§11.1-c9` 的同类固定 sleep 一并加固。
+- **为什么必须修**：`publish.yml` 会跑全量测试且 fail-fast —— 这类 flake 迟早在某次发版时把 tag 卡红。
+- **验证**：6 个 CPU 满载进程下连跑 10 次全绿（加固前该断言依赖负载，无法保证）；
+  `typecheck` / 全量 2152 项 / `build` / build 后 bundle 护栏全绿。
+
+### 🎯 亮点 / Highlights (zh)
+
+- 🔧 **社区反馈落地**：外部贡献者指出的两处细节（空错误文本、未知原因裸 token）已修复并发布。
+- 🧪 **发版更稳**：修掉一个只在负载下出现、却会阻塞 `publish.yml` 的时序 flake。
+- 🙏 **贡献者名单**：两份 README 新增「🙏 贡献者」小节 —— GitHub 的 Contributors 图只统计**已合并**的提交，
+  被作为 superseded 关闭的 PR 作者不会出现在那里，故在此登记。
+
+### Highlights (en)
+
+- 🔧 **Community feedback shipped**: the two details an outside contributor flagged (empty error text rendering a dangling
+  "Backup failed:", unknown `skipReason` echoing a raw machine token) are fixed and released.
+- 🧪 **More reliable releases**: a load-only timing flake in `env-lock.test.ts` (fixed sleeps assuming timer ticks land) that
+  could block `publish.yml` — which runs the full suite and fails fast — is gone.
+- 🙏 **Contributors section** added to both READMEs: GitHub's Contributors graph only counts merged commits, so superseded
+  PR authors never appear there.
+
 ## [0.1.62] - 2026-09-21
 
 > 本版主题是**内容级选择 + 可读性 + 安全收口**：「只能按分区整块勾选」的时代结束——导出、导入、

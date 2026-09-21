@@ -454,6 +454,16 @@ dsh-config-manager backup --sections skills,self          # 收窄范围
 6. **快照恢复是离线的、诚实的**：离线引擎无法恢复的条目（快照无整文件备份时的 settings namespace / patch 行、存在 DSH storages 里的 workspace 记录）会如实列为跳过并指向在线回滚；凭据**值**绝不自动改写（只提示人工补录）；无插件基线的旧快照只提示人工核对新增插件
 7. **本地源插件（`link:` / `file:`）随备份打包**：导出时执行 `npm pack` 把本地开发中的插件打成 tarball 一并备份，导入时解包到 `$DSH_HOME/dsh-config-manager/local-plugins/` 后按 `file:` 安装。因此：① 备份体积会随本地插件的体积增大（单插件超过 100 MB 会被跳过并告警，建议先发布到 registry / git 再备份）；② 插件**源码**会进入备份（与「密钥永不进备份」不冲突——密钥仍被排除，这里进的是代码）；③ 打包需要本机有可用的 `npm`，无 npm 时该插件退化为原行为（保留原 spec，换机后仍需手工安装）
 
+## 🙏 贡献者
+
+- **lux-liang (Jialiang Liang)** —— [PR #44](https://github.com/xiajiajun516/dsh-config-manager/pull/44)：独立修复了 issue #43
+  「立即备份」假报成功的问题。其中两点比主线实现更稳，已采纳进 `main`：① `failed` 且宿主错误文本为空 / 全空白时
+  回退通用文案（否则会渲染出「备份失败：」这种半截提示）；② 未知 `skipReason` 归一为本地化说明，不把机器 token
+  摆到用户面前。他的提交未合并（该 PR 作为 superseded 关闭），因此**不会出现在 GitHub 的 Contributors 图上** ——
+  名单在此登记。
+- **问题报告**：`zhyx1996`（#38 同步「导出密钥」未生效）、`IPF-Sinon`（#39 凭据 `refs:` 块未被识别，并在自己的 fork
+  上完成实现与真机验证）、`zerginlaw`（#43「立即备份」空转却提示成功）—— 这三条报告各自驱动了一个修复。
+
 > 维护者与开发者：构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 
 ---

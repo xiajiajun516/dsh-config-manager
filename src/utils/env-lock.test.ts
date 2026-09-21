@@ -333,6 +333,28 @@ async function readOwnershipByMgr(mgr: EnvironmentLockManager): Promise<LockOwne
   catch { return null; }
 }
 
+/**
+ * 有界等待 heartbeat sidecar 的 seq 超过 `fromSeq`，返回最新记录（超时则返回当前值）。
+ *
+ * 为什么不能固定 sleep 猜定时器：`§11.1-c6` 原先「sleep 70ms ×3，再断言 seq 递增」，
+ * 而 heartbeat 定时器在 CI 负载下可能整段采样窗口都没触发 —— 实测失败 `heartbeat seq 应递增: 2,2,2`
+ * （同一 commit 重跑即过）。产品侧 seq 用 `++this.heartbeatSeq`，单进程内严格单调，
+ * 问题只在测试用墙钟猜「定时器何时跑」，故改为等待**观测到的**推进。
+ */
+async function waitHeartbeatSeqAbove(
+  hbPath: string,
+  fromSeq: number,
+  timeoutMs = 5000,
+): Promise<{ seq: number; heartbeatAt: number }> {
+  const deadline = Date.now() + timeoutMs
+  let rec = JSON.parse(await readText(hbPath)) as { seq: number; heartbeatAt: number }
+  while (rec.seq <= fromSeq && Date.now() < deadline) {
+    await sleepReal(20)
+    rec = JSON.parse(await readText(hbPath)) as { seq: number; heartbeatAt: number }
+  }
+  return rec
+}
+
 test('§11.1-c6 heartbeat sidecar 更新不替换 environment.lock（inode/内容不变）', async (t) => {
   const locksDir = tmp(t);
   const ctl = makeIo();
@@ -352,10 +374,12 @@ test('§11.1-c6 heartbeat sidecar 更新不替换 environment.lock（inode/内�
   const beforeText = await readText(path.join(locksDir, OWNERSHIP_FILE));
   // 等若干心跳周期（≥3 tick），期间只更新 sidecar
   const hbPath = path.join(locksDir, heartbeatFile(id));
-  const seqProbe: number[] = [];
-  for (let i = 0; i < 3; i++) {
-    await sleepReal(70);
-    seqProbe.push(JSON.parse(await readText(hbPath)).seq as number);
+  const seqProbe: number[] = [JSON.parse(await readText(hbPath)).seq as number];
+  for (let want = 1; want <= 3; want++) {
+    const prev = seqProbe[seqProbe.length - 1]!;
+    const next = await waitHeartbeatSeqAbove(hbPath, prev);
+    if (next.seq <= prev) break; // 有界等待超时：如实停止采样，由下面的断言报错（不假装更新过）
+    seqProbe.push(next.seq);
   }
   // ownership 内容绝对不变（无 rename/replace —— 若有 atomicWriteFile 替换 ownership 则内容会变/文件被换）
   const afterText = await readText(path.join(locksDir, OWNERSHIP_FILE));
@@ -366,7 +390,14 @@ test('§11.1-c6 heartbeat sidecar 更新不替换 environment.lock（inode/内�
     const ino2 = (await fs.stat(path.join(locksDir, OWNERSHIP_FILE))).ino;
     assert.equal(ino1, ino2, 'ownership inode 必须稳定');
   }
+  assert.ok(
+    seqProbe.length >= 2,
+    `heartbeat sidecar 应在有界等待内至少推进一次（观测采样 ${seqProbe.length} 次: ${seqProbe.join(',')}）`,
+  );
   assert.ok(seqProbe[seqProbe.length - 1]! > seqProbe[0]!, `heartbeat seq 应递增: ${seqProbe.join(',')}`);
+  for (let i = 1; i < seqProbe.length; i++) {
+    assert.ok(seqProbe[i]! > seqProbe[i - 1]!, `heartbeat seq 必须严格单调: ${seqProbe.join(',')}`);
+  }
   // heartbeat sidecar 内容绑定 ownerInstanceId
   const hb = JSON.parse(await readText(hbPath)) as { ownerInstanceId: string };
   assert.equal(hb.ownerInstanceId, id);
@@ -430,8 +461,8 @@ test('§11.1-c9 heartbeat 续期（注入时钟）+ 持续写 sidecar', async (t
   assert.equal(first.heartbeatAt, clk.clock(), '首写 heartbeatAt 使用注入时钟');
   // 推进时钟 + 等待若干 tick → heartbeatAt 跟随推进后的时钟（续期）
   clk.advance(5000);
-  await sleepReal(250);
-  const last = JSON.parse(await readText(hbPath)) as { heartbeatAt: number; seq: number };
+  // 有界等待下一次**实际** heartbeat 写（同样不固定 sleep 猜定时器；§11.1-c6 的同类加固）
+  const last = await waitHeartbeatSeqAbove(hbPath, first.seq, 5000);
   assert.ok(last.seq > first.seq, '续期后 seq 递增');
   assert.ok(last.heartbeatAt >= clk.clock() - 60, '续期 heartbeatAt 反映推进后的时钟');
   await mgr.release(res.token!);

@@ -515,6 +515,18 @@ Yes. The import wizard asks for the export-time encryption password and verifies
 5. **Encrypted backups**: a lost password means the `secrets.enc` can't be decrypted (by design — keep your password safe)
 6. **Snapshot restore is offline and honest**: entries the offline engine can't restore (settings namespaces / patch lines when the snapshot has no whole-file backup, workspace records stored in DSH storages) are reported as skipped with a pointer to online rollback; credential **values** are never auto-written (manual re-entry hint only); old snapshots without a plugin baseline only get a hint to remove added plugins manually
 
+## 🙏 Contributors
+
+- **lux-liang (Jialiang Liang)** — [PR #44](https://github.com/xiajiajun516/dsh-config-manager/pull/44): independently fixed the
+  issue #43 "Back up now" false-success bug. Two details from that patch were more robust than the mainline implementation and
+  have been adopted into `main`: (1) when `failed` comes back with an empty / whitespace-only error text, fall back to the
+  generic message instead of rendering a dangling "Backup failed:"; (2) an unknown `skipReason` is mapped to a localized
+  message rather than echoing the raw machine token. Because that PR was closed as superseded, **his commits never landed and
+  he does not appear in GitHub's Contributors graph** — so he is credited here.
+- **Bug reports**: `zhyx1996` (#38 sync "Export secrets" did nothing), `IPF-Sinon` (#39 the `.credentials.yaml` `refs:` block
+  was not recognized — they also implemented and machine-tested a fix in their own fork), `zerginlaw` (#43 "Back up now"
+  silently no-oped while toasting success). Each report drove one fix.
+
 > Maintainers & developers: see [DEVELOPERS.md](DEVELOPERS.md) for build, testing, auto-publishing and full technical notes.
 
 ---
