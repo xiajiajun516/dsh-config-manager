@@ -38,9 +38,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 ### 🎯 亮点 / Highlights (zh)
 
 - 🔧 **社区反馈落地**：外部贡献者指出的两处细节（空错误文本、未知原因裸 token）已修复并发布。
+- 🙏 **署名补记**：为让 GitHub 的 Contributors 列表如实计入这次贡献，PR #44 的提交 `1248200` 随后通过一次
+  **「保留其提交、树取主线」**的合并（`122317b`）成为 `main` 的祖先 —— 该合并**不取其代码**（合并后的树与
+  `v0.1.63` 逐字节一致），只用于记录署名；GitHub API 已确认「these commits are already merged」。
 - 🧪 **发版更稳**：修掉一个只在负载下出现、却会阻塞 `publish.yml` 的时序 flake。
-- 🙏 **贡献者名单**：两份 README 新增「🙏 贡献者」小节 —— GitHub 的 Contributors 图只统计**已合并**的提交，
-  被作为 superseded 关闭的 PR 作者不会出现在那里，故在此登记。
+- 🙏 **贡献者名单**：两份 README 新增「🙏 贡献者」小节（含本次 PR 与三条 issue 的报告人）。
 
 ### Highlights (en)
 
@@ -48,8 +50,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   "Backup failed:", unknown `skipReason` echoing a raw machine token) are fixed and released.
 - 🧪 **More reliable releases**: a load-only timing flake in `env-lock.test.ts` (fixed sleeps assuming timer ticks land) that
   could block `publish.yml` — which runs the full suite and fails fast — is gone.
-- 🙏 **Contributors section** added to both READMEs: GitHub's Contributors graph only counts merged commits, so superseded
-  PR authors never appear there.
+- 🙏 **Contributors section** added to both READMEs (this PR plus the three issue reporters).
 
 ## [0.1.62] - 2026-09-21
 

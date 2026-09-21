@@ -521,8 +521,10 @@ Yes. The import wizard asks for the export-time encryption password and verifies
   issue #43 "Back up now" false-success bug. Two details from that patch were more robust than the mainline implementation and
   have been adopted into `main`: (1) when `failed` comes back with an empty / whitespace-only error text, fall back to the
   generic message instead of rendering a dangling "Backup failed:"; (2) an unknown `skipReason` is mapped to a localized
-  message rather than echoing the raw machine token. Because that PR was closed as superseded, **his commits never landed and
-  he does not appear in GitHub's Contributors graph** — so he is credited here.
+  message rather than echoing the raw machine token. In addition, so that GitHub's contributor list records the
+  contribution, commit `1248200` was landed on `main` through a **"keep the commit, take the mainline tree"** merge
+  (`122317b`) — that merge takes **none** of its code (the resulting tree is byte-identical to the mainline) and exists purely
+  to record authorship, so GitHub now counts this contribution instead of leaving it invisible behind a closed PR.
 - **Bug reports**: `zhyx1996` (#38 sync "Export secrets" did nothing), `IPF-Sinon` (#39 the `.credentials.yaml` `refs:` block
   was not recognized — they also implemented and machine-tested a fix in their own fork), `zerginlaw` (#43 "Back up now"
   silently no-oped while toasting success). Each report drove one fix.

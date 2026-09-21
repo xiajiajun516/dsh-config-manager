@@ -459,8 +459,9 @@ dsh-config-manager backup --sections skills,self          # 收窄范围
 - **lux-liang (Jialiang Liang)** —— [PR #44](https://github.com/xiajiajun516/dsh-config-manager/pull/44)：独立修复了 issue #43
   「立即备份」假报成功的问题。其中两点比主线实现更稳，已采纳进 `main`：① `failed` 且宿主错误文本为空 / 全空白时
   回退通用文案（否则会渲染出「备份失败：」这种半截提示）；② 未知 `skipReason` 归一为本地化说明，不把机器 token
-  摆到用户面前。他的提交未合并（该 PR 作为 superseded 关闭），因此**不会出现在 GitHub 的 Contributors 图上** ——
-  名单在此登记。
+  摆到用户面前。此外，为了让 GitHub 的 Contributors 列表如实计入这次贡献，其提交 `1248200` 已通过一次
+  **「保留其提交、树取主线」**的合并（`122317b`）成为 `main` 的祖先 —— 该合并**不取其代码**（合并后的树与主线
+  逐字节一致），只用于记录署名；因此按 GitHub 的口径这次贡献已被计入（而非 closed 后无痕）。
 - **问题报告**：`zhyx1996`（#38 同步「导出密钥」未生效）、`IPF-Sinon`（#39 凭据 `refs:` 块未被识别，并在自己的 fork
   上完成实现与真机验证）、`zerginlaw`（#43「立即备份」空转却提示成功）—— 这三条报告各自驱动了一个修复。
 
