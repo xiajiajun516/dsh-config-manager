@@ -173,7 +173,7 @@ export type BackupSkipReason = 'disabled' | 'running' | 'conflict' | 'locked' | 
 /** 立即备份结果 → 客户端提示通道（壳据 kind 选 toast，据 reason 选文案键）。 */
 export type BackupRunOutcome =
   | { kind: 'ok' }
-  | { kind: 'skipped'; reason: BackupSkipReason; raw?: string }
+  | { kind: 'skipped'; reason: BackupSkipReason }
   | { kind: 'error'; message: string | null }
 
 /**
@@ -181,8 +181,11 @@ export type BackupRunOutcome =
  * （见 src/index.ts 的 backup-schedule/run 路由），所以**不能**用「有没有抛异常」判成败 ——
  * 那会把「定时备份未启用 → 一个备份文件都没产出」读成「备份完成」。
  *
- * 本函数只做语义投影（零文案）：success → ok；skipped → 结构化 reason；
+ * 本函数只做语义投影（零文案）：success → ok；skipped → 结构化 reason（**未知 token 归一为 other**，
+ * 绝不把机器 token 原样摆到用户面前——仓库既有纪律：用户可见文本里不留裸 token）；
  * 其余（含 failed 与未来新增 status）→ error，fail-safe 地绝不宣称成功。
+ * `failed` 但宿主没给出可用错误文本（undefined / 空串 / 全空白）→ message 为 null，由壳层回退通用文案
+ * （否则会渲染出「备份失败：」这种半截提示）。
  */
 export function backupRunOutcome(run: BackupRunResult): BackupRunOutcome {
   switch (run.status) {
@@ -194,13 +197,13 @@ export function backupRunOutcome(run: BackupRunResult): BackupRunOutcome {
         case 'running': return { kind: 'skipped', reason: 'running' }
         case 'conflict': return { kind: 'skipped', reason: 'conflict' }
         case 'mutation-locked': return { kind: 'skipped', reason: 'locked' }
-        default:
-          return run.skipReason === undefined || run.skipReason === ''
-            ? { kind: 'skipped', reason: 'other' }
-            : { kind: 'skipped', reason: 'other', raw: run.skipReason }
+        default: return { kind: 'skipped', reason: 'other' }
       }
     }
     default:
-      return { kind: 'error', message: run.error ?? null }
+      return {
+        kind: 'error',
+        message: run.error !== undefined && run.error.trim() !== '' ? run.error : null,
+      }
   }
 }

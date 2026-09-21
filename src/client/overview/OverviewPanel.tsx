@@ -235,7 +235,7 @@ export function OverviewPanel({ api, syncApi, historyApi, t, openActivity }: Ove
       if (outcome.kind === 'ok') {
         toast.ok(t('overview.quick.backupDone'))
       } else if (outcome.kind === 'skipped') {
-        toast.warn(t(BACKUP_SKIP_KEY[outcome.reason], outcome.raw !== undefined ? { reason: outcome.raw } : undefined))
+        toast.warn(t(BACKUP_SKIP_KEY[outcome.reason]))
       } else {
         toast.error(t('overview.quick.backupFailed', { message: redact(outcome.message ?? t('common.unknownError')) }))
       }

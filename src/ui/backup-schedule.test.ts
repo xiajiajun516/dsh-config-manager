@@ -211,10 +211,11 @@ test('issue #43：已知 skipReason token 各自映射（running / conflict / lo
   }
 })
 
-test('issue #43：未知 skipReason 落 other 并原样带回（不吞信息，也不当作成功）', () => {
+test('issue #43：未知 skipReason 归一为 other（不把机器 token 摆给用户，也不当作成功）', () => {
+  // PR #44（外部贡献者）意见：未知原因应给本地化的通用说明，而不是原样回传裸 token
   assert.deepEqual(
     backupRunOutcome({ status: 'skipped', skipReason: 'weird-future-token', consecutiveFailures: 0 }),
-    { kind: 'skipped', reason: 'other', raw: 'weird-future-token' },
+    { kind: 'skipped', reason: 'other' },
   )
   assert.deepEqual(
     backupRunOutcome({ status: 'skipped', consecutiveFailures: 0 }),
@@ -229,6 +230,15 @@ test('issue #43：failed → error 通道（带宿主错误文本；缺失则 nu
   )
   assert.deepEqual(
     backupRunOutcome({ status: 'failed', consecutiveFailures: 3 }),
+    { kind: 'error', message: null },
+  )
+  // 空串 / 全空白同样回退（PR #44 意见：否则壳层会渲染出「备份失败：」这种半截提示）
+  assert.deepEqual(
+    backupRunOutcome({ status: 'failed', error: '', consecutiveFailures: 3 }),
+    { kind: 'error', message: null },
+  )
+  assert.deepEqual(
+    backupRunOutcome({ status: 'failed', error: '   ', consecutiveFailures: 3 }),
     { kind: 'error', message: null },
   )
 })
