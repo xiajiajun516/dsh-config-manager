@@ -305,6 +305,14 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - `workspaces` 导入仍以备份记录**整条覆盖**、会丢本机独有键（`archivedSessionIds` 等）；导入写记录前也
   不建缺失目录。二者与 `POST /sessions/group` 一起留在 `known-gaps` G-18「未覆盖」。
 
+### 🙏 致谢 / Thanks
+
+- 外部贡献者 **lux-liang (Jialiang Liang)** 在 [PR #44](https://github.com/xiajiajun516/dsh-config-manager/pull/44) 中
+  独立修复了同一个 issue #43：诊断与补丁方向完全正确，且其中两点**比本版实现更稳**，已采纳并落地
+  （commit `d06dc11`）—— ① `failed` 且宿主错误文本为 `undefined` / 空串 / 全空白时回退通用文案（否则会渲染出
+  「备份失败：」这种半截提示）；② 未知 `skipReason` 归一为本地化通用说明，不再把机器 token 原样回传
+  （与仓库既有纪律一致：用户可见文本不留裸 token）。该 PR 因内容已被本版覆盖而作为 superseded 关闭。
+
 ### 🎯 亮点 / Highlights (zh)
 
 - 🧩 **终于能按「内容」勾选了**：导出 / 导入 / 市场共用一套「分区 → 最小可拆单元」级联树，技能目录、
