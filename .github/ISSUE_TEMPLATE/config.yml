@@ -1,0 +1,21 @@
+# 「新建 issue」页面的入口配置（GitHub issue template chooser）
+#
+# 1) blank_issues_enabled: false
+#    隐藏选择页底部的「Open a blank issue」入口，强制用户从 Bug 报告 / 功能建议
+#    两个模板里选一个 —— 模板自带 title 前缀与 labels，不会再出现「无标签、无信息」的 issue。
+# 2) contact_links
+#    在同一个选择页上给「不是 issue」的事情指路，避免提问/安全漏洞被当成 bug 提上来。
+#
+# 想恢复默认（把空白 issue 入口放回来）：删掉本文件即可。
+blank_issues_enabled: false
+
+contact_links:
+  - name: 💬 使用问题 / 想法讨论（Discussions）
+    url: https://github.com/xiajiajun516/dsh-config-manager/discussions
+    about: 不确定是不是 Bug、想问怎么用？请到 Discussions 提问，issue 区留给可复现的问题与需求。
+  - name: 🔒 安全漏洞 / 凭据泄露（私密报告）
+    url: https://github.com/xiajiajun516/dsh-config-manager/security/advisories/new
+    about: 涉及密钥泄漏、任意文件读写等安全问题，请走私密安全公告，不要公开提 issue。
+  - name: 📖 使用文档（README）
+    url: https://github.com/xiajiajun516/dsh-config-manager/blob/main/README.md
+    about: 安装、备份、导入、同步、市场的完整说明都在 README，提问前先看一眼。

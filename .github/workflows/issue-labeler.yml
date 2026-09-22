@@ -1,0 +1,55 @@
+# 新 issue 自动打标签：按标题前缀 [Bug] / [Feature] 兜底
+#
+# 为什么需要它：issue 模板里的 `labels: bug` 只在「用户从网页选模板创建」时生效。
+# 走 API / gh CLI / Agent 创建的 issue 会绕过模板，于是出现标题带 [Bug] 却没有任何标签的 issue
+# （例：#38 / #35 / #31 / #30 / #29 / #27 就是这样来的）。
+#
+# 规则（只看标题开头的 [...] 前缀段，大小写不敏感，不解析正文）：
+#   [Bug] / [BUG] / [bug]  -> bug
+#   [Feature] / [FEATURE]  -> enhancement
+#   [Feature] [Bug] xxx    -> enhancement + bug（双前缀标题两个都打）
+# 标题中后段出现的 [Bug] 不算（必须是开头）。
+#
+# 前置条件：这里用到的 bug / enhancement 标签必须已存在于仓库，否则 GitHub 静默忽略。
+name: Auto label issues
+
+on:
+  issues:
+    types: [opened]
+
+# 最小权限：标签属于 issue 资源，只需要 issues: write（不碰代码，不申请仓库写权限）
+permissions:
+  issues: write
+
+jobs:
+  label:
+    name: Label by title prefix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Add labels from title prefix
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+
+          title_lower=$(printf '%s' "$ISSUE_TITLE" | tr '[:upper:]' '[:lower:]')
+          # 只取标题开头连续的 [xxx] 前缀段；标题中后段的 [Bug] 不算
+          head_part=$(printf '%s' "$title_lower" | grep -oE '^[[:space:]]*(\[[^]]+\][[:space:]]*)+' || true)
+
+          labels=()
+          if [[ "$head_part" == *"[bug]"* ]]; then labels+=("bug"); fi
+          if [[ "$head_part" == *"[feature]"* ]]; then labels+=("enhancement"); fi
+
+          if [ "${#labels[@]}" -eq 0 ]; then
+            echo "标题开头没有 [Bug]/[Feature] 前缀，跳过：$ISSUE_TITLE"
+            exit 0
+          fi
+
+          for label in "${labels[@]}"; do
+            echo "-> #$ISSUE_NUMBER 添加标签：$label"
+            gh issue edit "$ISSUE_NUMBER" --repo "$REPO" --add-label "$label"
+          done
