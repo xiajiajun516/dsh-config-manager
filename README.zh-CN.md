@@ -90,17 +90,21 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 
 ## 📸 功能截图
 
+| 总览 | 备份与快照 |
+|:---:|:---:|
+| ![总览](assets/screenshot-overview-zh.png) | ![备份与快照](assets/screenshot-backups-zh.png) |
+
 | 导出备份 | 导入预览 |
 |:---:|:---:|
-| ![一键导出](assets/screenshot-export.png) | ![导入预览](assets/screenshot-import-preview.png) |
+| ![一键导出](assets/screenshot-export-zh.png) | ![导入预览](assets/screenshot-import-zh.png) |
 
-| 快照恢复 | 远程同步 |
+| 远程同步 | 配置市场 |
 |:---:|:---:|
-| ![快照恢复](assets/screenshot-snapshots.png) | ![远程同步](assets/screenshot-sync.png) |
+| ![远程同步](assets/screenshot-sync-zh.png) | ![配置市场](assets/screenshot-market-zh.png) |
 
-| 配置市场 |
+| 档案 Profiles |
 |:---:|
-| ![配置市场](assets/screenshot-market.png) |
+| ![档案 Profiles](assets/screenshot-profiles-zh.png) |
 
 ---
 

@@ -28,6 +28,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { sha256Hex } from '../utils/hashing.ts';
+import { FAIL_CLOSED_STARTUP, StartupRecoveryController } from './startup-barrier.ts';
 
 import {
   computeSafeBundles,
@@ -844,4 +845,29 @@ test('B-21 全流程往返：enter → status active → exit → status inactiv
   assert.equal(await readText(p.profilePatch), ORIGINAL_PROFILE_PATCH, '往返后 profile patch 与原始字节完全相等');
   assert.equal(await readText(p.homePatch), ORIGINAL_HOME_PATCH);
   assert.equal(await readText(p.packageJson), ORIGINAL_PACKAGE_JSON);
+});
+
+/* ---------------------------------------------------------------- 启动恢复 fail-closed（t16：P0-10） */
+
+/*
+ * 启动分类/探测抛错时的 fail-closed 姿态必须是**单一来源**（core/startup-barrier.ts 的
+ * FAIL_CLOSED_STARTUP）：只置「调度器不启动」而不同时置 SAFE MODE 属半套 fail-open
+ * （审计 P0-10：宿主 catch 曾如此 → inspectStartup 抛错时 destructive 路由不被阻断）。
+ * 本用例把该姿态钉成契约：包装器（StartupRecoveryController）与宿主 catch 必须一致消费它。
+ * 放在 boot-rescue.test.ts 是因为它与「启动期故障兜底」同域，且是 t16 的 in-scope 测试文件。
+ */
+test('P0-10：启动恢复抛错的 fail-closed 姿态为单一来源，且包装器与之一致', async () => {
+  assert.equal(FAIL_CLOSED_STARTUP.state.kind, 'RECOVERY_REQUIRED', '绝不默认 NORMAL');
+  assert.equal(FAIL_CLOSED_STARTUP.safeModeRequired, true, '无法证明环境干净 → 必须置 SAFE MODE');
+  assert.equal(FAIL_CLOSED_STARTUP.startSchedulers, false, 'destructive 调度器不得启动');
+
+  let started = 0;
+  const controller = new StartupRecoveryController(
+    { async classify(): Promise<never> { throw new Error('inspectStartup boom'); } },
+    { start: () => { started += 1; } },
+  );
+  const state = await controller.run();
+  assert.deepEqual(state, FAIL_CLOSED_STARTUP.state, '包装器必须收敛到同一 fail-closed 状态');
+  assert.equal(controller.startSchedulersIfAllowed(), false, '非 NORMAL 一律不启动调度器');
+  assert.equal(started, 0);
 });

@@ -12,6 +12,7 @@ import type { ZipArchive, ZipSafetyLimits } from '../utils/zip.ts';
 import type { MsgFunc } from './messages.ts';
 import { Analyzer } from './analyzer.ts';
 import type { PlanItemProgress } from './analyzer.ts';
+import type { BootSafetyReport } from './boot-safety.ts';
 import type {
   ConfigAdapter, HostContext, ImportAnalysis, ImportDecisions, ImportPlan,
   ImportResult, SnapshotStore, TransactionSnapshotContext,
@@ -48,6 +49,12 @@ export interface ExecuteOptions {
   onLog?: (line: string) => void;
   /** Phase 4 生产 journal↔snapshot 绑定（deferred；透传给 Analyzer；不传 = 无 journal 绑定） */
   snapshotBinding?: TransactionSnapshotContext;
+  /** 用户终止信号（透传给 Analyzer；只在计划项边界生效，见 analyzer.executeImportPlan） */
+  cancelSignal?: AbortSignal;
+  /** 安全点询问用户如何处置已应用部分（透传；缺省/抛错一律按 rollback 安全侧） */
+  onCancelDecision?: () => Promise<'rollback' | 'keep'>;
+  /** 「保留已应用项」分支的启动自洽审计（透传；不传 = 未审计，结果里如实标注） */
+  bootSafetyAudit?: () => Promise<BootSafetyReport>;
 }
 
 export class Importer {
@@ -69,9 +76,17 @@ export class Importer {
     return this.analyzer.analyzeImport(zipPath, opts);
   }
 
-  /** 步骤 9：Dry Run / Preview —— 合并用户冲突决策与路径映射，输出最终可执行计划（零写入） */
-  createImportPlan(zipPath: string, decisions: ImportDecisions): Promise<ImportPlan> {
-    return this.analyzer.createImportPlan(zipPath, decisions);
+  /**
+   * 步骤 9：Dry Run / Preview —— 合并用户冲突决策与路径映射，输出最终可执行计划（零写入）。
+   * `opts.decryptedCredentials`（仅内存）= 宿主已用备份密码解开的凭据：**参与计划生成**，
+   * 让「归档里有值」的凭据都进计划（否则它们永远不会被写回，见 Analyzer.createImportPlan）。
+   */
+  createImportPlan(
+    zipPath: string,
+    decisions: ImportDecisions,
+    opts: { decryptedCredentials?: Map<string, string> } = {},
+  ): Promise<ImportPlan> {
+    return this.analyzer.createImportPlan(zipPath, decisions, opts);
   }
 
   /** 步骤 10-14：确认 → 快照 → 执行 → 校验 → 结果；失败可整体回滚并如实报告 */
@@ -85,6 +100,9 @@ export class Importer {
       onItemStart: opts.onItemStart,
       onLog: opts.onLog,
       snapshotBinding: opts.snapshotBinding,
+      cancelSignal: opts.cancelSignal,
+      onCancelDecision: opts.onCancelDecision,
+      bootSafetyAudit: opts.bootSafetyAudit,
     });
   }
 }

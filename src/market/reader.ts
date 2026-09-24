@@ -12,7 +12,6 @@
  *   来源仓库 url-hash 分目录，index.json 永远从市场仓库读。
  */
 import { execFile } from 'node:child_process';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 

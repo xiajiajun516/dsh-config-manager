@@ -20,9 +20,9 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 import type { SectionId } from '../schema/types.ts';
+import { channelMap } from './sync-config.ts';
 import type { SyncTransportType } from './sync-config.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
@@ -45,6 +45,15 @@ export interface SyncSelection {
    * 0 = 勾了但不带任何会话；负数非法（读盘时按缺省处理）。
    */
   sessionsLimit: number;
+  /**
+   * 显式勾选的会话单元 id（形如 sessions:<projectKey>/<sessionId>；空数组 = 用
+   * sessionsLimit 的「最新 N 个」）。
+   *
+   * 为什么必须有它：sessionsLimit 只能说「最新几条」，用户无法点名要哪几次对话，也无法
+   * 把某次敏感对话排除在外（同步页补齐导出页早已有的逐会话勾选）。**非空时优先于
+   * sessionsLimit** —— 见 SyncPushOptions.sessions.include 的语义说明。
+   */
+  sessionsInclude: string[];
   /** 手动推送默认加密快照（开关持久化；密码本体存 DSH credentials，见 sync/selection 路由） */
   encrypt: boolean;
   /** 手动推送默认导出真实凭据值（安全：必须同时 encrypt；自动同步恒 false） */
@@ -79,9 +88,32 @@ export function defaultSyncSelection(): SyncSelection {
     mode: 'default',
     sections: [],
     sessionsLimit: DEFAULT_SYNC_SESSIONS_LIMIT,
+    sessionsInclude: [],
     encrypt: false,
     includeSecrets: false,
   };
+}
+
+/**
+ * sessionsInclude 归一化：非数组 → []；元素必须是非空字符串；按首次出现去重保序；
+ * 上限 5000 条（防止被篡改的持久化文件把 UI/请求体撑爆）。
+ *
+ * 只做形状归一化，不校验单元是否真实存在 —— 清单是执行期的输入，勾选是计划期的意图，
+ * 会话可能在两次同步之间被本机删掉（此时 adapter 的 includeItems 白名单自然匹配不到它，
+ * 结果是「少带一次对话」而不是报错）。
+ */
+export function normalizeSessionsInclude(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string' || item === '') continue;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+    if (out.length >= 5000) break;
+  }
+  return out;
 }
 
 /**
@@ -104,6 +136,7 @@ function parseChannelSelection(obj: Record<string, unknown>): SyncSelection {
     );
   }
   sel.sessionsLimit = normalizeSessionsLimit(obj['sessionsLimit']);
+  sel.sessionsInclude = normalizeSessionsInclude(obj['sessionsInclude']);
   if (typeof obj['encrypt'] === 'boolean') sel.encrypt = obj['encrypt'];
   if (typeof obj['includeSecrets'] === 'boolean') sel.includeSecrets = obj['includeSecrets'];
   // 安全兜底：持久化数据被篡改导致 includeSecrets 但未 encrypt → 强制关掉导出密钥
@@ -118,41 +151,37 @@ export async function readAllSyncSelections(dir: string): Promise<SyncSelectionB
   try {
     raw = await fs.readFile(file, 'utf8');
   } catch {
-    return { git: defaultSyncSelection(), webdav: defaultSyncSelection() };
+    return channelMap(() => defaultSyncSelection());
   }
   let parsed: unknown;
   try {
     parsed = parseJsonSafe(raw);
   } catch {
-    return { git: defaultSyncSelection(), webdav: defaultSyncSelection() };
+    return channelMap(() => defaultSyncSelection());
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { git: defaultSyncSelection(), webdav: defaultSyncSelection() };
+    return channelMap(() => defaultSyncSelection());
   }
   const obj = parsed as Record<string, unknown>;
   // schemaVersion：缺省视为 v1；非缺省但 != 2 → 回退缺省
   const ver = typeof obj['schemaVersion'] === 'number' ? obj['schemaVersion'] : 1;
   if (ver !== 1 && ver !== SYNC_SELECTION_SCHEMA_VERSION) {
-    return { git: defaultSyncSelection(), webdav: defaultSyncSelection() };
+    return channelMap(() => defaultSyncSelection());
   }
   if (ver === 1) {
     // v1 迁移：顶层字段 → git 通道（webdav 缺省；首次按 v2 写回时持久化）
-    return { git: parseChannelSelection(obj), webdav: defaultSyncSelection() };
+    return channelMap((ch) => (ch === 'git' ? parseChannelSelection(obj) : defaultSyncSelection()));
   }
   const channels = obj['channels'];
   const ch = channels !== null && typeof channels === 'object' && !Array.isArray(channels)
     ? channels as Record<string, unknown>
     : {};
-  const gitNs = ch['git'];
-  const webdavNs = ch['webdav'];
-  return {
-    git: gitNs !== null && typeof gitNs === 'object' && !Array.isArray(gitNs)
-      ? parseChannelSelection(gitNs as Record<string, unknown>)
-      : defaultSyncSelection(),
-    webdav: webdavNs !== null && typeof webdavNs === 'object' && !Array.isArray(webdavNs)
-      ? parseChannelSelection(webdavNs as Record<string, unknown>)
-      : defaultSyncSelection(),
-  };
+  return channelMap((channel) => {
+    const ns = ch[channel];
+    return ns !== null && typeof ns === 'object' && !Array.isArray(ns)
+      ? parseChannelSelection(ns as Record<string, unknown>)
+      : defaultSyncSelection();
+  });
 }
 
 /** 读取指定通道的分区选择配置；文件不存在 / 损坏 / 不支持 schema → 缺省值（不抛错）。 */
@@ -165,16 +194,19 @@ export async function readSyncSelection(dir: string, channel: SyncTransportType)
 export async function writeSyncSelection(dir: string, channel: SyncTransportType, sel: SyncSelection): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   const existing = await readAllSyncSelections(dir);
-  const channels: Record<SyncTransportType, SyncSelection> = {
-    git: channel === 'git' ? sel : existing.git,
-    webdav: channel === 'webdav' ? sel : existing.webdav,
-  };
+  const channels = channelMap((ch) => (ch === channel ? sel : existing[ch]));
   const payload: Record<string, unknown> = {
     schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
-    channels: {
-      git: { mode: channels.git.mode, sections: channels.git.sections, sessionsLimit: channels.git.sessionsLimit, encrypt: channels.git.encrypt, includeSecrets: channels.git.includeSecrets },
-      webdav: { mode: channels.webdav.mode, sections: channels.webdav.sections, sessionsLimit: channels.webdav.sessionsLimit, encrypt: channels.webdav.encrypt, includeSecrets: channels.webdav.includeSecrets },
-    },
+    channels: channelMap((ch) => ({
+      mode: channels[ch].mode,
+      sections: channels[ch].sections,
+      sessionsLimit: channels[ch].sessionsLimit,
+      // P0-3：显式点名的会话单元（空数组 = 「最新 N 个」模式）—— 落盘白名单必须含它，
+      // 否则写回时被静默丢掉（读回永远是空 = 用户点名白点了）
+      sessionsInclude: channels[ch].sessionsInclude,
+      encrypt: channels[ch].encrypt,
+      includeSecrets: channels[ch].includeSecrets,
+    })),
   };
   const target = path.join(dir, SYNC_SELECTION_FILE);
   const data = stringifyJsonSafe(payload, { space: 2 });

@@ -141,6 +141,72 @@ test('issue #39：宿主解析认 refs 块 → 凭据随包回填，不再进待
   });
 });
 
+test('G-19：归档里带值的凭据必须全部进计划并写回（含未被 settings 引用的 ref；本机已有也照常写回）', async () => {
+  await withTmp(async (dir) => {
+    const homeA = path.join(dir, 'home-a');
+    const src = makeContext('win32', homeA);
+    src.settings.ns.set('general', { value: { theme: 'dark' }, revision: 1, secrets: [] });
+    // 凭据文件里 3 个 ref，但只有 A6API_API_KEY 被 settings 引用（= credentialsStatus 会列出它）：
+    // DEEPSEEK_API_KEY 本机已配置（走「无值 → 本机已有 → Skip」判据），GHOST_PLUGIN_KEY 谁都不引用。
+    const yaml = [
+      'version: 1',
+      'refs:',
+      '  DEEPSEEK_API_KEY: sk-deep-0001',
+      '  A6API_API_KEY: sk-a6-0002',
+      '  GHOST_PLUGIN_KEY: sk-ghost-0003',
+      '',
+    ].join('\n');
+    await src.fs.writeFile(path.join(homeA, '.credentials.yaml'), Buffer.from(yaml, 'utf8'));
+    for (const ref of ['DEEPSEEK_API_KEY', 'A6API_API_KEY', 'GHOST_PLUGIN_KEY']) src.credentials.values.set(ref, 'placeholder');
+
+    const adapters = createAdapters({ namespaces: NS, credentialsRefs: async () => ['A6API_API_KEY'] });
+    const zipPath = path.join(dir, 'enc.zip');
+    await new Exporter({
+      ctx: src,
+      adapters,
+      scanner: createSecretScanner(),
+      encryption: createEncryptionProvider(PASSWORD),
+      now: () => new Date('2026-09-24T00:00:00.000Z'),
+    }).export({ includeSecrets: true, outPath: zipPath });
+
+    // 宿主真实解密路径：secrets.enc = .credentials.yaml 原文 → 三个 ref 都解出来
+    const decrypted = await tryDecryptCredentials(zipPath, PASSWORD);
+    assert.deepEqual([...decrypted!.keys()].sort(), ['A6API_API_KEY', 'DEEPSEEK_API_KEY', 'GHOST_PLUGIN_KEY']);
+
+    const dst = makeContext('win32', path.join(dir, 'home-b'));
+    dst.credentials.values.set('DEEPSEEK_API_KEY', 'sk-old-local'); // 目标机已有旧值
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
+    const decisions = { strategy: 'merge' as const, resolutions: {}, pathMappings: [] };
+
+    // ① 不传解密结果（旧行为）：只有被引用的 ref 进计划 → GHOST_PLUGIN_KEY 的值静默丢失（复现）
+    const bare = await importer.createImportPlan(zipPath, decisions);
+    assert.deepEqual(
+      bare.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [['secret:A6API_API_KEY', 'MissingSecret']],
+      '只认 credentialsStatus：未被 settings 引用的两个 ref 根本不在计划里（复现静默丢失）',
+    );
+
+    // ② 传解密结果（宿主 /plan 的真实路径）→ 归档里每个 ref 都进计划且执行期写回
+    const plan = await importer.createImportPlan(zipPath, decisions, { decryptedCredentials: decrypted });
+    assert.deepEqual(
+      plan.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [
+        ['secret:A6API_API_KEY', 'MissingSecret'],
+        ['secret:DEEPSEEK_API_KEY', 'MissingSecret'],
+        ['secret:GHOST_PLUGIN_KEY', 'MissingSecret'],
+      ],
+      '有值 → 一律可写回项（不因本机已配置而跳过）',
+    );
+    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, decryptedCredentials: decrypted });
+    assert.equal(result.ok, true);
+    assert.equal(dst.credentials.values.get('A6API_API_KEY'), 'sk-a6-0002');
+    assert.equal(dst.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-deep-0001', '归档值覆盖本机旧值');
+    assert.equal(dst.credentials.values.get('GHOST_PLUGIN_KEY'), 'sk-ghost-0003', '未被任何 settings 引用的 ref 也必须写回');
+    assert.equal(result.credentialsRestored, 3, '结果如实计入随归档恢复的条数');
+    assert.deepEqual(result.missingSecrets, []);
+  });
+});
+
 test('issue #39：包内仍缺 ref 时保留「人工重填」提示（不因新文案掩盖真实缺口）', async () => {
   await withTmp(async (dir) => {
     const src = await makeSource(path.join(dir, 'home-a'));

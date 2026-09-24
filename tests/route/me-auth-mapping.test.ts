@@ -21,6 +21,18 @@ import { GitHubApiError } from '../../src/market/github-repos.ts';
 
 const here = import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url));
 
+/** W1 起路由按域拆到 src/routes/*.ts：源码级守卫必须扫**全部**宿主路由源，否则会静默失去覆盖。 */
+async function hostRouteSource(): Promise<string> {
+  const root = path.resolve(here, '../..');
+  const parts = [await fs.readFile(path.join(root, 'src/index.ts'), 'utf8')];
+  const dir = path.join(root, 'src/routes');
+  for (const entry of (await fs.readdir(dir)).sort()) {
+    if (!entry.endsWith('.ts') || entry.endsWith('.test.ts')) continue;
+    parts.push(await fs.readFile(path.join(dir, entry), 'utf8'));
+  }
+  return parts.join('\n').replace(/\r\n/g, '\n');
+}
+
 test('M1 isGitHubAuthMissing：no_token（未配置 token）与 unauthorized（401 失效）同属未登录', () => {
   assert.equal(isGitHubAuthMissing(new GitHubApiError('GitHub token 未配置（请先登录）', 'no_token')), true);
   assert.equal(isGitHubAuthMissing(new GitHubApiError('Bad credentials', 'unauthorized', 401)), true);
@@ -37,7 +49,8 @@ test('M2 isGitHubAuthMissing：真实故障 / 非 GitHubApiError 一律 false（
 });
 
 test('M3 源码守卫：/me/* 路由统一走 isGitHubAuthMissing，无「只映射 unauthorized」残留', async () => {
-  const src = await fs.readFile(path.resolve(here, '../../src/index.ts'), 'utf8');
+  // W1：/me/* 路由已拆到 src/routes/me.ts —— 守卫改扫「宿主路由源」（index.ts + src/routes/**）
+  const src = await hostRouteSource();
 
   assert.ok(
     !src.includes("error.code === 'unauthorized' ? 401 : 500"),

@@ -359,20 +359,6 @@ test('config_sync_pull：空远端 → 零写入空差异', async () => {
 
 // ------------------------------------------------ 注册层（registerModelTools）
 
-/** 最小 mock Cordis ctx：tools 服务可选 + effect 收集 disposer（不跑副作用）。 */
-function mockCtx(toolsSvc: unknown): { ctx: Context; registered: string[]; effects: (() => void)[] } {
-  const registered: string[] = []
-  const effects: (() => void)[] = []
-  const ctx = {
-    get: (name: string) => (name === 'tools' ? toolsSvc : undefined),
-    tools: toolsSvc === null || toolsSvc === undefined
-      ? undefined
-      : { register: (def: { name: string }) => { registered.push(def.name); return () => {} } },
-    effect: (cb: () => void) => { effects.push(cb) },
-  } as unknown as Context
-  return { ctx, registered, effects }
-}
-
 test('registerModelTools：tools 服务存在 → 注册 5 个工具（走 ctx.get 结果，属性访问守卫不崩）', async () => {
   const { deps, tmp } = await makeDeps()
   try {

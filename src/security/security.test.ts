@@ -13,10 +13,11 @@ import path from 'node:path';
 import { Exporter } from '../core/exporter.ts';
 import { Importer } from '../core/importer.ts';
 import { createLogger, type Logger } from '../utils/logger.ts';
-import { zipToBuffer, parseZip, crc32, ZipSafetyError, type ZipWriteEntry } from '../utils/zip.ts';
+import { zipToBuffer, parseZip, crc32, ZipSafetyError, DEFAULT_ZIP_SAFETY_LIMITS } from '../utils/zip.ts';
 import { normalizePath } from '../utils/paths.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { CredentialsAdapter } from '../adapters/credentials.ts';
+import { credentialsMapFromYaml } from '../sync/snapshot-crypto.ts';
 import { parseManifest } from '../schema/manifest.ts';
 import type {
   ConfigAdapter, CredentialsFacade, ExportSection, FileSystemFacade, HostContext,
@@ -34,7 +35,7 @@ import {
 import type { ValuePattern, ConfiguredSecretPatterns } from './secret-scanner.ts';
 import {
   encryptCredentials, decryptCredentials, createEncryptionProvider,
-  SecurityError, SCHEMA_MAGIC, SCHEMA_VERSION, HEADER_LENGTH, SALT_LENGTH, IV_LENGTH,
+  SecurityError, SCHEMA_MAGIC, SCHEMA_VERSION, HEADER_LENGTH, SALT_LENGTH,
   SCRYPT_PARAMS,
   encryptArchive, decryptArchive, verifyEncryptedBlob, isArchiveBlob, ARCHIVE_MAGIC,
 } from './encryption.ts';
@@ -475,6 +476,46 @@ test('zip-security: 条目数超限 / 压缩体积超限拒绝', () => {
   // 压缩体积上限（store 条目 compSize = 数据长度；2 条各 1B，上限 1 则第二条触发）
   assert.throws(() => parseZipHardened(two, { maxCompressedBytes: 1 }), /压缩数据总量/);
 });
+
+test('zip-security: 强化检查已并入 core 默认解析器（parseZip ≡ parseZipHardened ≡ createHardenedZipParser()）', () => {
+  const symlinkAttrs = (0xa1ff << 16) >>> 0;
+  const normalAttrs = (0x81a4 << 16) >>> 0;
+  const duplicate = buildRawZipMany([
+    { name: 'a.txt', data: Buffer.from('1') },
+    { name: 'a.txt', data: Buffer.from('2') },
+  ]);
+  const fixtures: Uint8Array[] = [
+    zipToBuffer([{ name: 'a.txt', data: Buffer.from('x') }]), // 正常
+    buildRawZip('../evil.txt', Buffer.from('x')),             // Zip Slip
+    buildRawZip('link', Buffer.from('target'), symlinkAttrs), // symlink
+    buildRawZip('file.txt', Buffer.from('x'), normalAttrs),   // 普通 mode
+    duplicate,                                                // 重复条目名
+  ];
+  /** 判定投影：接受 → 'ACCEPT'；拒绝 → 类名 + 消息（逐字比较，避免「都拒绝但原因不同」的假一致） */
+  const decide = (fn: () => unknown): string => {
+    try { fn(); return 'ACCEPT'; } catch (err) {
+      return `REJECT:${err instanceof ZipSafetyError ? err.message : String(err)}`;
+    }
+  };
+  for (const buf of fixtures) {
+    const viaDefault = decide(() => parseZip(buf));
+    assert.equal(viaDefault, decide(() => parseZipHardened(buf)), '默认解析器与 parseZipHardened 判定必须一致');
+    assert.equal(viaDefault, decide(() => createHardenedZipParser()(buf)), '工厂（不传限额）与默认路径必须一致');
+  }
+  // 不是「两边都放行」的空一致：三类样本在**默认解析器**上都必须被拒
+  assert.match(decide(() => parseZip(buildRawZip('../evil.txt', Buffer.from('x')))), /^REJECT/);
+  assert.match(decide(() => parseZip(buildRawZip('link', Buffer.from('target'), symlinkAttrs))), /符号链接/);
+  assert.match(decide(() => parseZip(duplicate)), /重复/);
+
+  // 限额收敛等价性：显式传入默认限额与不传参，在越限样本上判定逐字一致
+  const overLimit = buildRawZipMany(
+    Array.from({ length: DEFAULT_ZIP_SAFETY_LIMITS.maxEntries + 1 }, (_, i) => ({ name: `f${i}.bin`, data: Buffer.alloc(0) })),
+  );
+  const explicitDefault = decide(() => createHardenedZipParser({ ...DEFAULT_ZIP_SAFETY_LIMITS })(overLimit));
+  assert.match(explicitDefault, /^REJECT:.*条目数 10001 超过上限 10000/);
+  assert.equal(explicitDefault, decide(() => createHardenedZipParser()(overLimit)), '显式默认限额 ≡ 缺省限额');
+});
+
 
 test('zip-security: safeExtractHardened 正常解压 + 可执行文件告警', async () => {
   await withTmp(async (dir) => {
@@ -1085,6 +1126,108 @@ test('集成: 加密备份导入强制密码——无解密结果拒绝，正确
     assert.equal(result.ok, true);
     assert.equal(result.missingSecrets.length, 0, '解密覆盖的凭据不再计入缺失');
     assert.equal(dst.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-super-secret-value');
+  });
+});
+
+test('集成: 归档携带的凭据必须**全部**进计划并写回（含未被 settings 引用的 ref；本机已有也照常写回）', async () => {
+  await withTmp(async (dir) => {
+    const homeDir = path.join(dir, 'home');
+    const src = new MockHostContext(homeDir);
+    src.settings.ns.set('general', { value: { theme: 'dark', apiKeyEnv: 'DEEPSEEK_API_KEY' }, revision: 1, secrets: [] });
+    // 凭据文件里有 2 个 ref，但只有 DEEPSEEK_API_KEY 被 settings 引用 —— 另一个是别的插件自用的，
+    // 它**永远不会**出现在 credentialsStatus 里（导出侧只收集被引用的 ref）。
+    const credentialsYaml = 'DEEPSEEK_API_KEY: sk-from-archive\nOTHER_PLUGIN_KEY: other-from-archive\n';
+    await src.fs.writeFile(path.join(homeDir, '.credentials.yaml'), Buffer.from(credentialsYaml, 'utf8'));
+    src.credentials.values.set('DEEPSEEK_API_KEY', 'sk-from-archive');
+
+    const credentialsAdapter = new CredentialsAdapter({ refs: async () => ['DEEPSEEK_API_KEY'] });
+    const adapters: ConfigAdapter[] = [new MiniSettingsAdapter(), credentialsAdapter];
+    const zipPath = path.join(dir, 'enc.zip');
+    const password = 'backup-password-123';
+    await new Exporter({
+      ctx: src,
+      adapters,
+      scanner: createSecretScanner(),
+      encryption: createEncryptionProvider(password),
+      now: () => new Date('2026-08-14T12:00:00.000Z'),
+    }).export({ includeSecrets: true, outPath: zipPath });
+
+    // 宿主侧解密（与生产同口径：读 ZIP 内的 secrets.enc → ref→值 Map，仅内存）
+    const archive = parseZip(await fs.readFile(zipPath));
+    const manifest = parseManifest(archive.readEntryText('manifest.json'));
+    const plaintext = await decryptCredentials(archive.readEntry('security/secrets.enc'), manifest.security.encryption!, password);
+    const decrypted = credentialsMapFromYaml(plaintext);
+    assert.deepEqual([...decrypted.keys()].sort(), ['DEEPSEEK_API_KEY', 'OTHER_PLUGIN_KEY'], '归档携带 .credentials.yaml 原文的全部 ref');
+
+    const decisions = { strategy: 'merge' as const, resolutions: {}, pathMappings: [] };
+
+    // ① 不传解密结果（旧行为）：只有被引用的 ref 进计划 —— OTHER_PLUGIN_KEY 的值会被静默丢掉
+    const dstBare = new MockHostContext(path.join(dir, 'dst-bare'));
+    const bareImporter = new Importer({ ctx: dstBare, adapters, snapshotStore: new MemSnapshotStore() });
+    const barePlan = await bareImporter.createImportPlan(zipPath, decisions);
+    assert.deepEqual(barePlan.missingSecrets.map((s) => s.ref), ['DEEPSEEK_API_KEY']);
+
+    // ② 传解密结果（生产路径：/plan 带上解密密码）→ 归档里每个 ref 都进计划
+    const dst = new MockHostContext(path.join(dir, 'dst'));
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
+    const plan = await importer.createImportPlan(zipPath, decisions, { decryptedCredentials: decrypted });
+    assert.deepEqual(
+      plan.missingSecrets.map((s) => s.ref).sort(),
+      ['DEEPSEEK_API_KEY', 'OTHER_PLUGIN_KEY'],
+      '归档带的凭据（含未被 settings 引用的 ref）都必须在计划里',
+    );
+    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, decryptedCredentials: decrypted });
+    assert.equal(result.ok, true);
+    assert.equal(dst.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-from-archive');
+    assert.equal(dst.credentials.values.get('OTHER_PLUGIN_KEY'), 'other-from-archive', '未被引用的 ref 也必须写回');
+    assert.equal(result.credentialsRestored, 2, '结果报告如实计入随归档恢复的条数');
+    assert.deepEqual(result.missingSecrets, [], '归档已覆盖 → 不再计入缺失');
+
+    // ③ 目标机**已经**配置同一凭据 → 归档带值仍照常写回（真机反馈：跳过 = 密钥没导入）
+    const dstExisting = new MockHostContext(path.join(dir, 'dst-existing'));
+    dstExisting.credentials.values.set('DEEPSEEK_API_KEY', 'sk-old-local');
+    const existingImporter = new Importer({ ctx: dstExisting, adapters, snapshotStore: new MemSnapshotStore() });
+    const existingPlan = await existingImporter.createImportPlan(zipPath, decisions, { decryptedCredentials: decrypted });
+    assert.ok(
+      existingPlan.items.some((i) => i.id === 'secret:DEEPSEEK_API_KEY' && i.kind === 'MissingSecret'),
+      '本机已配置但归档带值 → 仍是可写回项（不是 Skip）',
+    );
+    const existingResult = await existingImporter.executeImportPlan(zipPath, existingPlan, { confirm: true, decryptedCredentials: decrypted });
+    assert.equal(existingResult.ok, true);
+    assert.equal(dstExisting.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-from-archive', '归档值覆盖本机旧值（导出密钥的语义）');
+
+    // ④ 无值分支：本机已配置 + 归档不带该 ref 的值 → Skip（保留本机值，不再索要补录）
+    const noValue = new Map([['DEEPSEEK_API_KEY', 'sk-from-archive']]); // 只带其中一个 ref 的值
+    const dstPartial = new MockHostContext(path.join(dir, 'dst-partial'));
+    dstPartial.credentials.values.set('OTHER_PLUGIN_KEY', 'other-local');
+    const partialImporter = new Importer({ ctx: dstPartial, adapters, snapshotStore: new MemSnapshotStore() });
+    const partialPlan = await partialImporter.createImportPlan(zipPath, decisions, { decryptedCredentials: noValue });
+    assert.deepEqual(
+      partialPlan.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [['secret:DEEPSEEK_API_KEY', 'MissingSecret']],
+      'OTHER_PLUGIN_KEY 既不在归档值里、也不在 credentialsStatus 里 → 本就不该出现',
+    );
+
+    // ⑤ 无值 + 本机未配置 → 要求补录（credentialsStatus 声明的 ref 但归档没带值）
+    const dstNoValue = new MockHostContext(path.join(dir, 'dst-novalue'));
+    const noValueImporter = new Importer({ ctx: dstNoValue, adapters, snapshotStore: new MemSnapshotStore() });
+    const noValuePlan = await noValueImporter.createImportPlan(zipPath, decisions, { decryptedCredentials: new Map() });
+    assert.deepEqual(
+      noValuePlan.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [['secret:DEEPSEEK_API_KEY', 'MissingSecret']],
+      '只有 ref 名且本机没有 → 仍需用户补录',
+    );
+    // ⑥ 无值 + 本机已配置 → Skip（用户报告「已有的重复密钥也会提示」的修复点）
+    const dstHasValue = new MockHostContext(path.join(dir, 'dst-hasvalue'));
+    dstHasValue.credentials.values.set('DEEPSEEK_API_KEY', 'local-keep');
+    const hasValueImporter = new Importer({ ctx: dstHasValue, adapters, snapshotStore: new MemSnapshotStore() });
+    const hasValuePlan = await hasValueImporter.createImportPlan(zipPath, decisions, { decryptedCredentials: new Map() });
+    assert.deepEqual(
+      hasValuePlan.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [['secret:DEEPSEEK_API_KEY', 'Skip']],
+      '只有 ref 名 + 本机已配置 → Skip 信息项，不再索要补录',
+    );
+    assert.deepEqual(hasValuePlan.missingSecrets, [], 'Skip 项不进补录清单');
   });
 });
 

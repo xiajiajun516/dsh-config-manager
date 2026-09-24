@@ -21,11 +21,13 @@ import {
 import { migrateToCurrent } from '../migrations/index.ts';
 import { isAbsolutePath, applyPrefixMappings } from '../utils/paths.ts';
 import { parseZip, type ZipArchive, type ZipSafetyLimits } from '../utils/zip.ts';
+import type { BootSafetyReport } from './boot-safety.ts';
 import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
 import { loadTombstones, isTombstoned } from '../schema/tombstones.ts';
 import type { Tombstone, TombstoneKind } from '../schema/tombstones.ts';
 import { DEFAULT_SENSITIVE_RELS, restoreVaultFiles } from '../security/vault.ts';
-import { createSnapshot, resolveFileTarget, resolveFileTargetRel } from './backup.ts';
+import { createSnapshot, planItemWritesTarget, resolveFileTarget, resolveFileTargetRel } from './backup.ts';
+import { isCredentialConfigured } from './credential-status.ts';
 import { rollback } from './rollback.ts';
 import { computeCompatibility } from './validator.ts';
 import { msgOf } from './messages.ts';
@@ -34,18 +36,34 @@ import {
   ImportNotConfirmedError, ImportUserSkippedError, type ApplyResult, type ConfigAdapter,
   type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,
   type ImportDecisions, type ImportPlan, type ImportResult, type PathIssue,
-  type PathMapping, type PlanItem, type SkippedTombstone, type SnapshotStore,
+  type PathMapping, type PlanItem, type SkippedTombstone, type Snapshot, type SnapshotStore,
   type TransactionSnapshotContext,
 } from './types.ts';
 
-/** 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后）。导出供宿主生命周期等复用同一顺序。 */
-export const APPLY_ORDER: readonly SectionId[] = [
-  'settings', 'ui', 'providers', 'prompts', 'skills', 'agentPresets',
-  'agentInstructions', 'workspaces', 'pluginFiles', 'mcp', 'plugins', 'credentialsStatus',
-  // P1-1 修复：self 分区（插件自身配置 sync/market/ui-prefs）此前不在 APPLY_ORDER，
-  // 导致 plan 含 self 项但执行循环跳过、导入时被静默丢弃。加入执行顺序末尾（低风险配置文件）。
-  'self',
-];
+/**
+ * 导入执行**相位**（策略，不是分区清单）：只表达「谁必须排在后面」——
+ *  - 1：MCP 配置（改完需重启才生效）；
+ *  - 2：插件安装 / patch 行写入（副作用最大，历史上排在 MCP 之后）；
+ *  - 3：尾段 —— 凭据状态、插件自身配置（低风险配置文件，设计 §5.4 的收尾）。
+ * 未列出的分区一律相位 0（常规配置写入）。**新增分区无需改本表**。
+ */
+const APPLY_PHASE: Partial<Record<SectionId, 0 | 1 | 2 | 3>> = {
+  mcp: 1,
+  plugins: 2,
+  credentialsStatus: 3,
+  self: 3, // P1-1：self（插件自身配置）曾在手抄清单里漏掉 → 导入时被静默丢弃，现由派生兜住
+};
+
+/**
+ * 执行阶段顺序（设计 §5.4：副作用大的 patch/安装最后）。导出供宿主生命周期等复用同一顺序。
+ *
+ * t30：分区全集来自注册表 `SECTION_IDS`（已按 applyOrder 升序），本数组只做**稳定排序**按相位分层 ——
+ * 原先手抄的 13 项清单已删除，因此不再可能「漏抄一个分区 → 它的计划项被静默跳过」。
+ * 与历史顺序的逐项等价由 core/backup-plan.test.ts 钉住（相位内保持注册表顺序 ⇒ 真实分区相对次序不变）。
+ */
+export const APPLY_ORDER: readonly SectionId[] = [...SECTION_IDS].sort(
+  (a, b) => (APPLY_PHASE[a] ?? 0) - (APPLY_PHASE[b] ?? 0),
+);
 
 /** ZIP 内可执行文件扩展名黑名单（§19.6：只警告，本插件不执行任何脚本） */
 const EXECUTABLE_EXTENSIONS = new Set(['.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.so', '.dylib', '.bin', '.jar']);
@@ -128,6 +146,9 @@ export class Analyzer {
     this.snapshotStore = opts.snapshotStore;
     this.limits = opts.limits;
     this.dependencyChecker = opts.dependencyChecker;
+    // 默认回落 = core parseZip：**它本身就是最严解析器**（条目名/重复条目名/symlink/
+    // 本地文件头越界/条目数与体积限额）。注入点只用于特殊限额或测试替身，
+    // 不再是「默认弱解析 + 宿主注入强化版」的分工。
     this.parseZipFn = opts.parseZipOverride ?? parseZip;
     this.msg = opts.msg ?? msgOf(opts.ctx);
   }
@@ -340,7 +361,12 @@ export class Analyzer {
       sections,
       unsupportedSections: extraction.unsupportedSections,
       unsupportedVersions: extraction.unsupportedVersions,
-      sectionWarnings: extraction.warnings,
+      // issue #45 加固：包含会话却**完全没有工作区数据**的包（旧版插件导出的历史包就是这样）——会话能不能
+      // 显示完全取决于有没有工作区指向它的 cwd，导入前就必须让用户看见这条风险，而不是导入完发现「对话没了」。
+      sectionWarnings: [
+        ...extraction.warnings,
+        ...(sections.has('sessions') && !sections.has('workspaces') ? [this.msg('import.sessionsWithoutWorkspaces')] : []),
+      ],
       adapterItems,
       adapterIssues,
     };
@@ -465,30 +491,40 @@ export class Analyzer {
     };
   }
 
+  /** 文件集合分区 id：这些分区的相对路径必须逐字保留（见 ConfigAdapter.fileCollection）。 */
+  private fileCollectionIds(): ReadonlySet<string> {
+    return new Set(this.adapters.filter((a) => a.fileCollection === true).map((a) => a.id));
+  }
+
   /* ---------------- 第 9 步：createImportPlan（Dry Run 复用） ---------------- */
 
-  async createImportPlan(zipPath: string, decisions: ImportDecisions): Promise<ImportPlan> {
+  /**
+   * @param opts.decryptedCredentials 宿主用备份密码解开 `security/secrets.enc` 得到的 ref→值
+   *   （仅内存）。**必须**传进来：它决定「归档里到底有哪些凭据值」——加密备份可能携带
+   *   未被任何 settings namespace 引用的 ref（凭据文件是原文加密，不止 credentialsStatus 那几个），
+   *   这些值若不在计划里出现就永远不会被写回（真机反馈：导入密钥没生效）。
+   */
+  async createImportPlan(
+    zipPath: string,
+    decisions: ImportDecisions,
+    opts: { decryptedCredentials?: Map<string, string> } = {},
+  ): Promise<ImportPlan> {
     const bundle = await this.loadBundle(zipPath);
     const analyzed = await this.analyzeBundle(bundle);
     const { manifest } = bundle;
 
-    // 先把用户路径映射应用到各分区数据（PathMapper 先行：applyItem 拿到的已是映射后数据）
-    applyMappingsToSections(analyzed.sections, decisions.pathMappings);
-
-    const importCtx: ImportContext = {
-      manifest,
-      targetPlatform: this.ctx.platform,
-      target: this.ctx,
-      sections: analyzed.sections,
-      pathMappings: decisions.pathMappings,
-      resolutions: decisions.resolutions,
-      secretInputs: {},
-      log: this.ctx.log,
-      msg: this.msg,
-    };
+    // 跨机基础路径自动重定基（issue #45 用户补充）：导出机 DSH home ≠ 本机时，备份里位于导出机
+    // 基础路径之下的绝对路径（会话首帧 cwd / 工作区 path / mcp cwd…）一律改成「本机基础路径 +
+    // 同一后缀」。基础路径是机器身份、本机可精确得知，比让用户手填自由前缀映射更安全可控；
+    // 用户映射排在其后依次生效（可覆盖本规则），因此这是「默认更安全 + 仍可人工微调」。
+    // 只作用于结构化分区的路径叶值；文件集合分区（sessions 的 relativePath）永不被改写（见 applyMappingsToSections）。
+    const rebase = rebaseMapping(manifest.sourceHome, this.ctx.homeDir);
+    const effectiveMappings = rebase === undefined ? decisions.pathMappings : [rebase, ...decisions.pathMappings];
+    // 先应用映射（PathMapper 先行：applyItem 拿到的已是映射后数据）
+    applyMappingsToSections(analyzed.sections, effectiveMappings, this.fileCollectionIds());
 
     const items = analyzed.adapterItems.map((item) => applyItemResolution(item, decisions, this.msg));
-    const planMappings = mergePathMappings(items, decisions.pathMappings);
+    const planMappings = mergePathMappings(items, effectiveMappings);
 
     // F4 删除墓碑过滤：读取本地删除墓碑（<dataDir>/tombstones.json；缺失/损坏 → 空列表安全降级），
     // 剔除命中墓碑的计划项（插件 / 技能 / 文件类条目 + 分区级墓碑整分区跳过）。
@@ -496,8 +532,11 @@ export class Analyzer {
     const tombstones = await loadTombstones(this.ctx.fs, path.join(this.ctx.homeDir, 'dsh-config-manager'));
     const { items: planItems, skipped: skippedTombstoned } = applyTombstoneFilter(items, tombstones);
 
-    // MissingSecret：兜底——credentialsStatus 分区里已配置的凭据若没有对应计划项，补占位
-    ensureMissingSecrets(planItems, analyzed.sections, this.msg);
+    // 凭据计划项（MissingSecret / Skip）的唯一生成点 —— 规则见 buildCredentialPlanItems 文档。
+    await buildCredentialPlanItems(
+      planItems, analyzed.sections, opts.decryptedCredentials, this.msg,
+      (ref) => isCredentialConfigured(this.ctx, ref),
+    );
 
     const missingSecrets = planItems
       .filter((i) => i.kind === 'MissingSecret')
@@ -515,6 +554,7 @@ export class Analyzer {
       items: planItems,
       globalStrategy: decisions.strategy,
       pathMappings: planMappings,
+      ...(rebase !== undefined ? { automaticMappings: [rebase] } : {}),
       missingSecrets,
       needsRestart,
       estimatedActions,
@@ -544,11 +584,28 @@ export class Analyzer {
        * 保证快照 durable+verified 且 journal 已知先于任何写。不传 = 无 journal 绑定（非生产 journaled 路径）。
        */
       snapshotBinding?: TransactionSnapshotContext;
+      /**
+       * 用户终止信号（宿主 /runs/cancel 触发）。**只在计划项边界检查** ——
+       * 绝不在项中途 abort：那是 ImportContext.signal（「跳过当前项」）的语义。
+       * 与 rollbackOnError 无关：终止是独立于「失败策略」的用户动作。
+       */
+      cancelSignal?: AbortSignal;
+      /**
+       * 在安全点询问用户如何处置已应用部分。缺省 / 抛错 / 超时一律按 **rollback**（安全侧）。
+       * 宿主实现：把 run 置为「待决策」并阻塞等 /runs/cancel/decision。
+       */
+      onCancelDecision?: () => Promise<'rollback' | 'keep'>;
+      /**
+       * 「保留已应用项」分支的启动自洽审计（宿主注入；缺省 = 未审计，结果里如实标注）。
+       * 引擎在**所有分区收尾之后**调用 —— 审计必须看到最终盘面。实现不得抛错
+       * （调用方正在正常返回路径上，抛错会把已知结论换成异常并触发 journal SAFE MODE）。
+       */
+      bootSafetyAudit?: () => Promise<BootSafetyReport>;
     } = {},
   ): Promise<ImportResult> {
     const bundle = await this.loadBundle(zipPath);
     const analyzed = await this.analyzeBundle(bundle);
-    applyMappingsToSections(analyzed.sections, plan.pathMappings);
+    applyMappingsToSections(analyzed.sections, plan.pathMappings, this.fileCollectionIds());
 
     // 10. 用户确认（安全阀：不确认绝不动数据）
     if (opts.confirm !== true) {
@@ -628,6 +685,33 @@ export class Analyzer {
     const warnings: string[] = [...bundle.zipWarnings, ...bundle.migrationWarnings, ...analyzed.sectionWarnings];
     let needsRestart = plan.needsRestart;
     let anyFailed = false;
+    /** 用户终止已在**安全点**生效（项边界；当前项已完整结束）。 */
+    let cancelled = false;
+    /** 终止后用户的处置选择（null = 尚未询问）。 */
+    let cancelDecision: 'rollback' | 'keep' | null = null;
+    /** 保留分支已标记（决定快照状态与结果字段）。 */
+    let keptPartial = false;
+    let bootSafety: BootSafetyReport | null = null;
+
+    /**
+     * 安全点取消：只在**计划项边界**调用（当前项已完整 applyOne 结束）。
+     * 绝不中途 abort 单项 —— 那会把「半装插件 / 半写文件」留在盘上，正是本功能要避免的。
+     * 决策通道失败 / 抛错 → 一律按 rollback（安全侧），绝不把「已知结论」换成异常。
+     */
+    const requestCancel = async (): Promise<void> => {
+      cancelled = true;
+      try {
+        opts.onLog?.(this.msg('import.cancelRequested'));
+      } catch { /* 日志埋点失败不影响终止 */ }
+      let decision: 'rollback' | 'keep' = 'rollback';
+      try {
+        decision = (await opts.onCancelDecision?.()) ?? 'rollback';
+      } catch (err) {
+        this.ctx.log.warn(`终止决策通道失败，按安全侧默认回滚: ${err instanceof Error ? err.message : String(err)}`);
+        decision = 'rollback';
+      }
+      cancelDecision = decision === 'keep' ? 'keep' : 'rollback';
+    };
 
     // 12. 分阶段执行
     const byAdapter = new Map<SectionId, PlanItem[]>();
@@ -642,7 +726,13 @@ export class Analyzer {
     for (const adapterId of APPLY_ORDER) {
       const adapter = this.adapters.find((a) => a.id === adapterId);
       if (!adapter) continue;
+      // 终止已在上一分区的边界生效：不再开新分区（已跑到这里的分区仍会做下方收尾）
+      if (cancelled) break;
       for (const item of byAdapter.get(adapterId) ?? []) {
+        // 安全点：每项**开始之前**检查终止信号 —— 当前项要么完整跑完、要么根本没开始，
+        // 绝不留下半截项（半装插件 / 半写文件）。
+        if (!cancelled && opts.cancelSignal?.aborted === true) await requestCancel();
+        if (cancelled) break;
         // 每项一个 AbortController：宿主可 abort「当前项」（用户跳过当前插件）→
         // 该项子进程被杀、标记为 user-skipped；不影响后续项执行。
         const controller = new AbortController();
@@ -704,36 +794,143 @@ export class Analyzer {
         if (outcome.warning) warnings.push(outcome.warning);
         if (opts.rollbackOnError && outcome.executed.status === 'failed') break;
       }
-      if (opts.rollbackOnError && anyFailed) break;
+      // 分区收尾（issue #45 ④）：会话位置护栏等必须等本分区全部写完才做的动作。
+      // 「终止 + 回滚」例外：整笔马上要被回滚，再跑收尾纯属浪费且可能中途失败。
+      if (adapter.finalizeApply !== undefined && !(opts.rollbackOnError && anyFailed) && !(cancelled && cancelDecision === 'rollback')) {
+        let finalized: ApplyResult[] = [];
+        try {
+          finalized = await adapter.finalizeApply(importCtx);
+        } catch (error) {
+          // 收尾自身抛错 → 记非致命告警（绝不静默；也不把一个护栏失败升级成整体导入失败）
+          finalized = [{
+            ok: false,
+            warning: true,
+            message: `finalize ${adapterId}: ${error instanceof Error ? error.message : String(error)}`,
+          }];
+        }
+        for (const result of finalized) {
+          const status: ExecutedItem['status'] = result.ok ? 'ok' : result.warning === true ? 'warning' : 'failed';
+          executed.push({
+            itemId: `${adapterId}:finalize`,
+            status,
+            ...(result.message !== undefined ? { message: result.message } : {}),
+          });
+          if (status === 'failed') anyFailed = true;
+          if (status !== 'ok' && result.message !== undefined) warnings.push(result.message);
+        }
+      }
+      if ((cancelled && cancelDecision === 'rollback') || (opts.rollbackOnError && anyFailed)) break;
+    }
+
+    // 全部分区收尾之后的一次性收尾（issue #45）：把会话登记进工作区要求会话文件已写盘且首帧已按
+    // 映射改写/归位，而 workspaces 在 APPLY_ORDER 里排在 sessions 之前 —— 只能在所有分区收尾后再做。
+    // 「保留」分支**必须跑**这一段：有会话数据却没登记进工作区 = 用户看不到对话（issue #45 真机事故）。
+    if (!(opts.rollbackOnError && anyFailed) && !(cancelled && cancelDecision === 'rollback')) {
+      for (const adapterId of APPLY_ORDER) {
+        const adapter = this.adapters.find((a) => a.id === adapterId);
+        if (adapter?.finalizeImport === undefined) continue;
+        if ((byAdapter.get(adapterId)?.length ?? 0) === 0) continue;
+        let finalized: ApplyResult[] = [];
+        try {
+          finalized = await adapter.finalizeImport(importCtx);
+        } catch (error) {
+          finalized = [{
+            ok: false,
+            warning: true,
+            message: 'finalizeImport ' + adapterId + ': ' + (error instanceof Error ? error.message : String(error)),
+          }];
+        }
+        for (const result of finalized) {
+          const status: ExecutedItem['status'] = result.ok ? 'ok' : result.warning === true ? 'warning' : 'failed';
+          executed.push({
+            itemId: adapterId + ':finalizeImport',
+            status,
+            ...(result.message !== undefined ? { message: result.message } : {}),
+          });
+          if (status === 'failed') anyFailed = true;
+          if (status !== 'ok' && result.message !== undefined) warnings.push(result.message);
+        }
+      }
+    }
+
+    // 用户终止 + 选择「回滚」：与「失败整体回滚」复用同一条补偿路径（绝不新造第二份回滚）
+    if (cancelled && cancelDecision === 'rollback') {
+      const rolledBack = await this.rollbackApplied(snapshot, executed, warnings, plan, opts.snapshotBinding, 'cancelled')
+      return { ...rolledBack, cancelled: true, keptPartial: false }
+    }
+
+    /**
+     * 用户终止 + 选择「保留已应用项」：在安全点停下之后必须补齐三件事，否则「保留」就退化成
+     * 「把半成品丢给用户、DSH 起不来再让用户自己猜」：
+     *  ① 分区收尾（上方 finalizeApply / finalizeImport 已按条件跑完）；
+     *  ② journal 收敛：未执行项从 planned 显式改成 skipped —— journal 正常返回会被判
+     *     COMMITTED 并移出 active/（所以不会触发下次启动 SAFE MODE），但留着 planned 会让
+     *     事后审计读到「已提交」而盘面只应用了一部分，与审计 P0-3 是同一类「journal 与盘面不符」。
+     *     语义上沿用本仓库已钉死的 skipped = 「用户主动跳过」（issue #35），此处是用户主动放弃剩余项；
+     *  ③ 启动自洽审计：profile 插件清单里解析不到的包会让 DSH 下次启动直接失败。
+     *
+     * 快照**保持可用**（不标 done / 不标 rolled-back）——这是「保留」的可撤销承诺：
+     * 用户随时可以在「备份」页用这笔导入前快照手动回滚。
+     * 本分支**绝不允许抛错**：调用方处于正常返回路径上，抛错会把「已知结论：部分保留」换成
+     * 异常 → runJournaled 记 NEEDS_ATTENTION + SAFE MODE，正好是本功能要避免的结局。
+     */
+    if (cancelled && cancelDecision === 'keep') {
+      keptPartial = true;
+      const executedIds = new Set(executed.map((e) => e.itemId));
+      let abandoned = 0;
+      if (sb?.recordStep !== undefined) {
+        for (const item of plan.items) {
+          if (!beforeFpByItem.has(item.id) || executedIds.has(item.id)) continue;
+          abandoned += 1;
+          try {
+            const rel = Analyzer.fileRelFor(item, importCtx.target.profile);
+            await sb.recordStep({
+              id: item.id,
+              adapter: item.adapter,
+              kind: item.kind,
+              ref: rel !== null ? resolveFileTarget(importCtx.target, item.adapter, item.target?.ref ?? '') : '',
+              external: rel === null,
+              status: 'skipped',
+              beforeFp: beforeFpByItem.get(item.id) ?? null,
+              afterFp: null,
+              message: this.msg('import.cancelKeptSkippedItem'),
+            });
+          } catch (err) {
+            warnings.push(this.msg('import.cancelKeptJournalFailed', {
+              id: item.id,
+              reason: err instanceof Error ? err.message : String(err),
+            }));
+          }
+        }
+      }
+      try {
+        opts.onLog?.(this.msg('import.cancelKept', { applied: String(executedIds.size), skipped: String(abandoned) }));
+      } catch { /* 日志埋点失败不影响终止结论 */ }
+      if (opts.bootSafetyAudit === undefined) {
+        warnings.push(this.msg('import.cancelKeptNoAudit', { reason: 'audit-not-injected' }));
+      } else {
+        try {
+          bootSafety = await opts.bootSafetyAudit();
+          for (const issue of bootSafety.issues) warnings.push(issue.detail);
+          if (bootSafety.unchecked.length > 0) {
+            warnings.push(this.msg('import.cancelKeptUnchecked', { items: bootSafety.unchecked.join(', ') }));
+          }
+        } catch (err) {
+          bootSafety = null;
+          warnings.push(this.msg('import.cancelKeptNoAudit', { reason: err instanceof Error ? err.message : String(err) }));
+        }
+      }
     }
 
     // 失败整体回滚（rollbackOnError）：逆序补偿 + 诚实报告
     if (opts.rollbackOnError && anyFailed) {
-      const rollbackReport = await rollback({
-        ctx: this.ctx,
-        snapshot,
-        store: this.snapshotStore,
-        adapters: this.adapters,
-      });
-      // M1：回滚完成 → 快照标记 rolled-back（元数据写失败只告警，不影响回滚结论）
-      await this.markSnapshotStatus(snapshot.id, 'rolled-back');
-      this.ctx.log.warn(`导入失败，已回滚（${rollbackReport.full ? '完整' : '部分'}）`, {
-        failed: executed.filter((e) => e.status === 'failed').map((e) => e.itemId),
-      });
-      return {
-        ok: false,
-        executed,
-        needsRestart: false,
-        missingSecrets: [],
-        warnings,
-        rollback: rollbackReport,
-        snapshotId: snapshot.id,
-        skippedTombstoned: plan.skippedTombstoned ?? [],
-      };
+      return await this.rollbackApplied(snapshot, executed, warnings, plan, opts.snapshotBinding, 'failed')
     }
 
     // 13. 校验（执行后：对最终数据再 validate；失败仅告警，不掩盖已完成项）
-    for (const adapter of this.adapters) {
+    // 保留分支跳过：analyzed.sections 是整个包的数据，而盘上只有一部分，校验结论会系统性偏负
+    // （「该分区数据不完整」类告警）——那属于噪声，不是真问题。改由启动自洽审计报真实风险。
+    for (const adapter of keptPartial ? [] : this.adapters) {
       const data = analyzed.sections.get(adapter.id);
       if (data === undefined) continue;
       try {
@@ -755,8 +952,14 @@ export class Analyzer {
       .filter((s) => importCtx.decryptedCredentials?.has(s.ref) === true)
       .length;
 
-    // M1：导入成功 → 快照标记 done（元数据写失败只告警，不改变导入结论）
-    await this.markSnapshotStatus(snapshot.id, 'done');
+    // M1：导入成功 → 快照标记 done（元数据写失败只告警，不改变导入结论）。
+    // 保留分支**不标** done：这笔导入并没有完成，快照必须保持可用 —— 它是「保留」的可撤销承诺
+    // （用户可事后在「备份」页用它手动回滚）；标 done 会让它看起来像一笔正常完成的导入。
+    if (keptPartial) {
+      warnings.push(this.msg('import.cancelKeptSnapshotKept', { snapshotId: snapshot.id }));
+    } else {
+      await this.markSnapshotStatus(snapshot.id, 'done');
+    }
 
     // F1 vault 回填：导出时敏感文件（.credentials.yaml 等）明文未进备份（includeSecrets=false
     // 时镜像到 <dataDir>/vault），导入成功后从本机 vault 回填 $DSH_HOME；vault 缺失
@@ -786,7 +989,9 @@ export class Analyzer {
     }
 
     return {
-      ok: true, // 单项失败已如实记录在 executed；无未捕获异常即完成
+      // 单项失败已如实记录在 executed；无未捕获异常即完成。
+      // 保留分支恒 ok:false —— 这笔导入**没有完成**，只是用户选择了留下已应用部分。
+      ok: !keptPartial,
       executed,
       needsRestart,
       missingSecrets,
@@ -796,6 +1001,9 @@ export class Analyzer {
       skippedTombstoned: plan.skippedTombstoned ?? [],
       // issue #39 Feature 3：字段只增不改；未经归档恢复时省略（旧行为逐字节不变）
       ...(credentialsRestored > 0 ? { credentialsRestored } : {}),
+      // 终止语义（字段只增不改）：保留分支额外带上启动自洽审计结论；未审计时**不出现**该字段
+      ...(keptPartial ? { cancelled: true, keptPartial: true } : {}),
+      ...(keptPartial && bootSafety !== null ? { bootSafety } : {}),
     };
   }
 
@@ -808,17 +1016,61 @@ export class Analyzer {
     }
   }
 
+  /**
+   * 逆序补偿 + 诚实报告（两条触发路径共用：导入失败整体回滚 / 用户终止并选择回滚）。
+   *
+   * 审计 P0-3：必须把「已就地回滚」的结论上报给 journal 宿主（runJournaled）——
+   * 没有这条上报，宿主只能凭「fn 是否返回」推断成功，而这里是「回滚完成 + 正常返回
+   * ok:false」，于是整笔 operation 被误记成 COMMITTED 终态（回滚点失去 prune 豁免、
+   * 事后审计读到与盘面相反的结论）。可选调用：非 journaled 路径不传 snapshotBinding。
+   */
+  private async rollbackApplied(
+    snapshot: Snapshot,
+    executed: ExecutedItem[],
+    warnings: string[],
+    plan: ImportPlan,
+    binding: TransactionSnapshotContext | undefined,
+    cause: 'failed' | 'cancelled',
+  ): Promise<ImportResult> {
+    const rollbackReport = await rollback({
+      ctx: this.ctx,
+      snapshot,
+      store: this.snapshotStore,
+      adapters: this.adapters,
+    });
+    await reportRollbackToJournal(binding, {
+      full: rollbackReport.full,
+      failed: rollbackReport.failed.map((f) => f.item),
+    });
+    // M1：回滚完成 → 快照标记 rolled-back（元数据写失败只告警，不影响回滚结论）
+    await this.markSnapshotStatus(snapshot.id, 'rolled-back');
+    this.ctx.log.warn(
+      cause === 'cancelled'
+        ? `导入被用户终止，已回滚（${rollbackReport.full ? '完整' : '部分'}）`
+        : `导入失败，已回滚（${rollbackReport.full ? '完整' : '部分'}）`,
+      { failed: executed.filter((e) => e.status === 'failed').map((e) => e.itemId) },
+    );
+    return {
+      ok: false,
+      executed,
+      needsRestart: false,
+      missingSecrets: [],
+      warnings,
+      rollback: rollbackReport,
+      snapshotId: snapshot.id,
+      skippedTombstoned: plan.skippedTombstoned ?? [],
+    };
+  }
+
   /* -------------------------------------------------- P2-B 逐计划项指纹（Phase 8） */
 
   /**
    * 该计划项是否会产生真实 side effect（需 journal step 追踪）。
-   * 排除无副作用的「信息/跳过/错误」项与未采用其导入内容的 Conflict ——
-   * 这些不写目标，记录只会保守化 reconcile 而无收益。
+   * 与「会写目标」同一谓词（backup.planItemWritesTarget 单点）——信息/跳过/错误项与
+   * 未采用其导入内容的 Conflict 都不写目标，记录只会保守化 reconcile 而无收益。
    */
   private shouldJournalStep(item: PlanItem): boolean {
-    if (item.kind === 'Skip' || item.kind === 'Warning' || item.kind === 'MissingDependency' || item.kind === 'Error') return false;
-    if (item.kind === 'Conflict' && item.conflict?.resolution !== 'useImported') return false;
-    return true;
+    return planItemWritesTarget(item);
   }
 
   /** 文件类且可指纹 → 返回 home-relative 目标路径（posix）；否则 null（不可指纹外部项）。
@@ -848,28 +1100,32 @@ export class Analyzer {
   ): Promise<{ executed: ExecutedItem; needsRestart: boolean; warning?: string }> {
     // 执行日志（导入面板展示）：仅非敏感文本（项 id / 命令），绝不写密钥/密码/补录值
     const onLog = ctx.onLog;
-    if (
-      item.kind === 'Skip' ||
-      item.kind === 'Warning' ||
-      item.kind === 'MissingDependency' ||
-      (item.kind === 'Conflict' && item.conflict?.resolution !== 'useImported')
-    ) {
-      // Warning / MissingDependency 是信息项（依赖缺失、需人工注意），不调用 applyItem。
-      onLog?.(`– ${item.id}`);
-      return { executed: { itemId: item.id, status: 'skipped' }, needsRestart: false };
-    }
     if (item.kind === 'Error') {
+      // 硬失败项：如实记 failed，不调用 applyItem（也不写目标）
       onLog?.(`✗ ${item.id}`);
       return { executed: { itemId: item.id, status: 'failed', message: item.detail ?? item.description }, needsRestart: false };
     }
-    if (item.kind === 'MissingSecret') {
-      const ref = item.id.replace(/^secret:/, '');
-      const value = ctx.decryptedCredentials?.get(ref) ?? ctx.secretInputs[ref];
-      if (value === undefined || value === '') {
-        onLog?.(`– ${item.id}`);
-        return { executed: { itemId: item.id, status: 'skipped', message: this.msg('import.secretNotProvided') }, needsRestart: false };
-      }
-      // 补录值只经 adapter.applyItem 写入（m5 实现），引擎不直接触碰凭据
+    // 会不会写目标由 backup.planItemWritesTarget 单点决定（与快照范围同源，见该函数文档）：
+    // Skip / Warning / MissingDependency 是信息项；未采纳（keepCurrent / review / 未决策）的
+    // Conflict 不写；MissingSecret 无值时不写 —— 三类一律不调用 applyItem。
+    // 补录值只经 adapter.applyItem 写入（m5 实现），引擎不直接触碰凭据。
+    const secretRef = item.kind === 'MissingSecret' ? item.id.replace(/^secret:/, '') : null;
+    const writesTarget = planItemWritesTarget(item, {
+      secretValueAvailable: (ref) => {
+        const value = ctx.decryptedCredentials?.get(ref) ?? ctx.secretInputs[ref];
+        return value !== undefined && value !== '';
+      },
+    });
+    if (!writesTarget) {
+      onLog?.(`– ${item.id}`);
+      return {
+        executed: {
+          itemId: item.id,
+          status: 'skipped',
+          ...(secretRef !== null ? { message: this.msg('import.secretNotProvided') } : {}),
+        },
+        needsRestart: false,
+      };
     }
     onLog?.(`▶ ${item.id}`);
     try {
@@ -903,6 +1159,28 @@ export class Analyzer {
       };
     }
   }
+}
+
+/* ---------------- journal 结果上报（引擎 → 宿主） ---------------- */
+
+/**
+ * 引擎向 journal 宿主上报「已就地回滚」的最小面。
+ *
+ * 刻意在本文件内声明结构等价的最小类型，而不给 `core/types.ts` 的 TransactionSnapshotContext
+ * 增字段：该契约文件属并行会话的改动范围（t16 的 out of scope），且这只是**可选**上报 ——
+ * 非 journaled 调用方（CLI/测试）不传 snapshotBinding，行为逐字节不变。
+ * 实现侧见 `core/phase3-host.ts` 的 JournalRunContext.recordRollback（绝不抛错）。
+ */
+type RollbackReportingBinding = TransactionSnapshotContext & {
+  recordRollback?: (report: { full: boolean; failed: readonly string[] }) => Promise<void>;
+};
+
+async function reportRollbackToJournal(
+  binding: TransactionSnapshotContext | undefined,
+  report: { full: boolean; failed: readonly string[] },
+): Promise<void> {
+  const reporter = binding as RollbackReportingBinding | undefined;
+  await reporter?.recordRollback?.(report);
 }
 
 /* ---------------- 纯函数辅助 ---------------- */
@@ -973,6 +1251,26 @@ function applyItemResolution(item: PlanItem, decisions: ImportDecisions, msg: Ms
   return item; // merge + 未决策 → 保持 Conflict，由报告列明
 }
 
+/**
+ * 基础路径重定基规则：导出机 DSH home → 本机 DSH home（issue #45 用户补充）。
+ *
+ * 只在「两边的规范化路径都是绝对路径、且不相同」时生成；两侧都去掉尾部分隔符后比较，
+ * 避免 /opt/.dsh/ 与 /opt/.dsh 被判成不同而白跑一次全量替换。前缀匹配仍由 applyPrefixMappings
+ * 负责（必须落在段边界），所以 /opt/.dsh 不会误伤 /opt/.dsh-extra。
+ *
+ * @returns 映射规则；不需要重定基（缺 sourceHome / 相同 / 相对路径）→ undefined
+ */
+export function rebaseMapping(sourceHome: string | undefined, localHome: string): PathMapping | undefined {
+  if (sourceHome === undefined || sourceHome === '') return undefined;
+  const strip = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '');
+  const from = strip(sourceHome);
+  const to = strip(localHome ?? '');
+  if (from === '' || to === '' || from === to) return undefined;
+  const isAbsolute = (value: string): boolean => value.startsWith('/') || /^[a-zA-Z]:[\/]/.test(value);
+  if (!isAbsolute(from) || !isAbsolute(to)) return undefined;
+  return { oldPrefix: from, newPrefix: to, appliesTo: [] };
+}
+
 /** 路径映射合并：只保留「已解析」（newPrefix 非空）的映射用于执行期数据改写；
  * 未解决项（newPrefix 空）保留在 plan.items 里供 UI 提示，但不参与数据映射。 */
 function mergePathMappings(items: PlanItem[], userMappings: PathMapping[]): PathMapping[] {
@@ -983,10 +1281,22 @@ function mergePathMappings(items: PlanItem[], userMappings: PathMapping[]): Path
   return [...merged.values()];
 }
 
-/** 把映射应用到分区数据（PathMapper 先行：只替换匹配前缀的字符串叶值） */
-function applyMappingsToSections(sections: Map<SectionId, unknown>, mappings: PathMapping[]): void {
+/**
+ * 把映射应用到分区数据（PathMapper 先行：只替换匹配前缀的字符串叶值）。
+ *
+ * `fileCollectionIds` 里的分区一律跳过：`FileCollectionAdapter` 把 `relativePath` 当落盘路径用，
+ * 它必须逐字保留（issue #45 ④：改写会话文件的相对路径会让目标机下次启动直接报
+ * `corrupt session log`；pluginFiles/skills 等同理——丢位置等于丢归属）。
+ * 映射在这些分区上**没有任何合法作用**：文件内容存的是字节（`Uint8Array` 叶子），不会被改。
+ */
+export function applyMappingsToSections(
+  sections: Map<SectionId, unknown>,
+  mappings: PathMapping[],
+  fileCollectionIds: ReadonlySet<string> = new Set(),
+): void {
   if (mappings.length === 0) return;
   for (const [sectionId, data] of sections) {
+    if (fileCollectionIds.has(sectionId)) continue;
     const appliesTo: PathMapping['appliesTo'] =
       sectionId === 'workspaces' ? ['workspaces']
         : sectionId === 'mcp' ? ['mcp']
@@ -1036,24 +1346,74 @@ function judgePath(p: string, sourcePlatform: string, targetPlatform: string): P
   return { kind: 'missing', value: p };
 }
 
-/** MissingSecret 兜底：credentialsStatus 分区已配置凭据若无对应计划项，补占位 */
-function ensureMissingSecrets(items: PlanItem[], sections: Map<SectionId, unknown>, msg: MsgFunc): void {
+/**
+ * 凭据计划项（MissingSecret / Skip）在**导入路径**上的唯一生成点。
+ *
+ * ref 来源取**并集**：① credentialsStatus 里 configured=true 的 ref（源机声明「有」，
+ * 但普通备份不带值）；② 宿主解密出的归档 ref（`opts.decryptedCredentials`）——
+ * 加密备份携带的是 `.credentials.yaml` **原文**，可能含未被任何 settings namespace 引用的 ref
+ * （如其它插件自用的 key），只认 ① 会让这些值静默丢掉（真机反馈：导入密钥没生效）。
+ *
+ * 规则（与同步侧 sync-engine.appendCredentialPlanItems 同口径：**值的有无**优先于本机状态）：
+ *  - **有值** → MissingSecret「随加密备份恢复」：用户显式勾了「导出密钥」，导入即写回；
+ *    **不因本机已有而跳过**（跳过 = 用户以为密钥导入了、其实没写）。
+ *  - **无值**（只有 ref 名）→ 本机已配置 → Skip（保留本机值、不再索要补录，用户报告
+ *    「已有的重复密钥也会提示」）；本机没有 → MissingSecret「需要补录」。
+ *
+ * 凭据值不可回读，因此无值分支一律不覆盖本机已有值。
+ *
+ * @param decrypted 归档里解出的 ref→值（仅内存；undefined = 未提供密码/无凭据载荷）
+ * @param isConfiguredLocally 目标机是否已配置该 ref（读不到 → false，保守按需补录处理）
+ */
+async function buildCredentialPlanItems(
+  items: PlanItem[],
+  sections: Map<SectionId, unknown>,
+  decrypted: Map<string, string> | undefined,
+  msg: MsgFunc,
+  isConfiguredLocally: (ref: string) => Promise<boolean>,
+): Promise<void> {
   const creds = sections.get('credentialsStatus') as { credentials?: { ref?: string; configured?: boolean }[] } | undefined;
-  if (!creds?.credentials) return;
-  const existing = new Set(items.filter((i) => i.kind === 'MissingSecret').map((i) => i.id));
-  for (const c of creds.credentials) {
-    if (!c.ref || c.configured !== true) continue;
-    const id = `secret:${c.ref}`;
+  const declared: string[] = [];
+  for (const c of creds?.credentials ?? []) {
+    if (typeof c.ref === 'string' && c.ref !== '' && c.configured === true) declared.push(c.ref);
+  }
+  const refs = [...new Set([...declared, ...(decrypted?.keys() ?? [])])];
+  const existing = new Set(items.map((i) => i.id));
+  for (const ref of refs) {
+    const id = `secret:${ref}`;
     if (existing.has(id)) continue;
+    existing.add(id);
+    const target = { adapter: 'credentialsStatus' as const, ref };
+    if (decrypted?.has(ref) === true) {
+      items.push({
+        id,
+        kind: 'MissingSecret',
+        adapter: 'credentialsStatus',
+        description: msg('import.secretFromArchive', { ref }),
+        severity: 'warning',
+        target,
+      });
+      continue;
+    }
+    if (await isConfiguredLocally(ref)) {
+      items.push({
+        id,
+        kind: 'Skip',
+        adapter: 'credentialsStatus',
+        description: msg('import.secretAlreadyConfigured', { ref }),
+        severity: 'info',
+        target,
+      });
+      continue;
+    }
     items.push({
       id,
       kind: 'MissingSecret',
       adapter: 'credentialsStatus',
-      description: msg('import.secretMissingDesc', { ref: c.ref }),
+      description: msg('import.secretMissingDesc', { ref }),
       severity: 'warning',
-      target: { adapter: 'credentialsStatus', ref: c.ref },
+      target,
     });
-    existing.add(id);
   }
 }
 

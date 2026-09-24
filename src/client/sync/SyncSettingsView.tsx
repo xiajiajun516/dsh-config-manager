@@ -34,7 +34,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, Checkbox, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
@@ -42,23 +42,35 @@ import { Modal } from '../common/Modal.tsx'
 import { sectionLabeler } from '../common/section-labels.ts'
 import { RefreshIcon } from '../common/Icon.tsx'
 import { runStore, toSyncStoreSlice, type SyncConfirmDecisions, type SyncStoreSlice } from '../run-store.ts'
-import { SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF } from './sync-api.ts'
 import type {
-  AutosyncInterval, AutosyncStatusResponse, SyncApi, SyncPushPayload, SyncSectionInfo, SyncSnapshotLite,
-  SyncStartResponse, SyncStatusResponse,
+  AutosyncInterval, SyncApi, SyncPushPayload, SyncStartResponse, SyncStatusResponse,
 } from './sync-api.ts'
 import {
-  autosyncIntervalMs, autosyncStatusText, channelTabModels, computeAutosyncCountdown,
-  computeGithubLoginView, computeRemoteReady, computeSyncButtons,
-  defaultChannelSyncState, formatIntervalDuration, githubPollMessage, kindLabel, presetById,
-  presetIdForUrl, privateRepoHint, pullReportView, pushPreviewView, pushReportView, readStoredChannel,
-  DEFAULT_SYNC_SESSIONS_LIMIT, initialSyncSections, normalizeSessionsLimit, severityLabel,
-  syncSectionGroups, syncSectionOptions,
-  WEBDAV_PRESETS, writeStoredChannel,
+  computeGithubLoginView, computeRemoteReady, computeSyncButtons, defaultChannelSyncState,
+  githubPollMessage, kindLabel, pullReportView, pushPreviewView, pushReportView, readStoredChannel,
+  initialSyncSections, normalizeSessionsLimit, severityLabel, syncSectionOptions, writeStoredChannel,
 } from './sync-view.ts'
 import type {
   ChannelSyncState, GithubLoginPhase, SyncChannel, SyncSectionOption,
 } from './sync-view.ts'
+// t42：可测纯逻辑下沉到 src/ui（框架无关、node 可测）；本组件只做装配。
+import {
+  buildSelectionRequest, buildSyncChannelBody, buildSyncConfigBody, buildSyncPushBody,
+  channelBackfillFromStatus, computeEncryptInvalid, encryptToggle, githubPollDecision,
+  hasSelectedSections, includeSecretsToggle, isGithubFlowInFlight, resolveInitialChannel,
+  needsSessionInventory, saveQueueOnFlush, saveQueueOnRequest, saveQueueOnSettled, toggleSectionSelection,
+  SYNC_CONFIG_SAVE_DEBOUNCE_MS,
+} from '../../ui/sync-settings-view.ts'
+import type { SaveQueueState, SyncFormSnapshot } from '../../ui/sync-settings-view.ts'
+// t42 物理拆分：渲染段各自成文件（本领域目录平铺，不新增子目录），主文件只做装配
+import { SyncChannelEntryCard } from './SyncChannelEntryCard.tsx'
+import { ChannelConfigDialog } from './ChannelConfigDialog.tsx'
+import { SyncSectionPickerDialog } from './SyncSectionPickerDialog.tsx'
+import type { SelectionSection } from '../../ui/selection-model.ts'
+import type { ExportPreviewResponse } from '../api.ts'
+import { SecurityOptionsCard } from './SecurityOptionsCard.tsx'
+import { DecryptPasswordCard } from './DecryptPasswordCard.tsx'
+import { AutosyncCard } from './AutosyncCard.tsx'
 import { SyncHistoryView } from './SyncHistoryView.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
@@ -88,6 +100,8 @@ export interface PushPreviewSlice {
 interface SelectionPatch {
   sections?: SectionId[]
   sessionsLimit?: number
+  /** 会话点名清单（空数组 = 回到「最新 N 个」模式） */
+  sessionsInclude?: string[]
   encrypt?: boolean
   includeSecrets?: boolean
   /** 非空 = 写入本机凭据库（长期复用） */
@@ -165,8 +179,6 @@ const initialGithub: GithubUiState = {
   phase: 'idle', flowId: '', userCode: '', verificationUri: '', interval: 5, error: null,
 }
 
-const AUTOSYNC_INTERVAL_OPTIONS: AutosyncInterval[] = ['5m', '15m', '30m', '60m', '6h', '12h', '24h'];
-
 const initial: SyncUiState = {
   loading: true,
   loadError: null,
@@ -210,7 +222,7 @@ function initFromStore(): SyncUiState {
     // 通道：store 切片缺省为 'git'，无法区分「持久化过 git」与「从未持久化」；
     // 无明确记录（== 'git'）时回退 localStorage 记住的选择（initial.channel），
     // 避免升级后把用户此前记住的 webdav 通道冲掉
-    channel: s.channel !== 'git' ? s.channel : initial.channel,
+    channel: resolveInitialChannel(s.channel, readStoredChannel()),
     repoUrl: s.repoUrl,
     token: s.token,
     webdavUrl: s.webdavUrl,
@@ -246,6 +258,50 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
   const [channelOpen, setChannelOpen] = useState(false)
   /** 同步分区选择弹窗开关（瞬态 UI：模式与勾选在弹窗内即时生效并持久化，关闭即完成） */
   const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
+  /**
+   * P0-3：会话单元清单（逐会话勾选的数据源）。
+   *
+   * 惰性拉取（只有勾了 sessions 且打开分区弹窗才读）—— 真机会话库上千条，无条件读会白白
+   * 拖慢设置页。清单来自 /export-preview 的 sessions 分区（与导出页同一份 listUnits 口径）。
+   * 读取失败/为空 → 记住失败态，回到「最新 N 个」这条既有能力，绝不把弹窗卡在加载中。
+   */
+  const [sessionInv, setSessionInv] = useState<ExportPreviewResponse['sections'][number] | undefined>(undefined)
+  const [sessionInvPending, setSessionInvPending] = useState(false)
+  const sessionInvFailedRef = useRef(false)
+  const sessionInvInFlightRef = useRef(false)
+
+  /** 按需拉取会话清单（已取到 / 在途 / 已失败 → 不重复请求）。 */
+  const fetchSessionInventory = async (): Promise<void> => {
+    if (sessionInv !== undefined || sessionInvInFlightRef.current || sessionInvFailedRef.current) return
+    sessionInvInFlightRef.current = true
+    setSessionInvPending(true)
+    try {
+      const result = await api.exportPreview(['sessions'])
+      const node = result.sections.find((s) => s.section === 'sessions')
+      if (node === undefined) sessionInvFailedRef.current = true
+      else setSessionInv(node)
+    } catch {
+      sessionInvFailedRef.current = true
+    } finally {
+      sessionInvInFlightRef.current = false
+      setSessionInvPending(false)
+    }
+  }
+
+  /** 勾选会话分区 + 打开弹窗时补一次清单（清单未到货则先显示加载态）。 */
+  useEffect(() => {
+    if (!sectionPickerOpen) return
+    if (!needsSessionInventory(state.byChannel[state.channel].syncSections)) return
+    void fetchSessionInventory()
+    // 只在「弹窗打开」与「是否勾了会话」变化时触发；fetchSessionInventory 自身幂等
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sectionPickerOpen, state.byChannel[state.channel].syncSections])
+
+  /** 会话点名清单（持久化；空数组 = 回到「最新 N 个」模式）。 */
+  const setSessionsInclude = (ids: string[]): void => {
+    patchChannel({ sessionsInclude: ids })
+    void saveSelection({ sessionsInclude: ids })
+  }
 
   /**
    * 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。
@@ -270,6 +326,20 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
   const patchChannel = (p: Partial<ChannelSyncState>): void => patchChannelState(state.channel, p)
   /** 当前激活通道的设置状态（自动同步/模式/加密/快照）。 */
   const chState: ChannelSyncState = state.byChannel[state.channel]
+  /**
+   * P0-3：交给会话选择器的分区节点（未取到清单 → undefined，弹窗显示加载/失败态）。
+   * units 直接复用 /export-preview 的 items（与导出页同构，宿主已按最新活动时间倒序）。
+   */
+  const sessionPickerNode: SelectionSection | undefined = sessionInv === undefined
+    ? undefined
+    : {
+        section: 'sessions',
+        count: sessionInv.count,
+        sizeBytes: sessionInv.sizeBytes,
+        units: sessionInv.items,
+        portability: 'deviceSpecific',
+        sensitive: true,
+      }
   /** GitHub 流程态（不进 store 切片；commit 的镜像写幂等无害）。 */
   const patchGithub = (p: Partial<GithubUiState>): void => commit({
     ...stateRef.current,
@@ -277,11 +347,10 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
   })
   /** GitHub 轮询定时器（卸载/取消时清理，防止泄漏与跨流程串扰） */
   const githubPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  /** 通道配置自动保存：防抖 timer + 待发 payload（关闭设置页前 flush，不丢输入） */
+  /** 通道配置自动保存：防抖 timer（关闭设置页前 flush，不丢输入） */
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pendingSave = useRef<SyncPushPayload | null>(null)
-  /** 保存请求在途（防重入：保存中又排入新改动 → 完成后补发最新 payload） */
-  const savingRef = useRef(false)
+  /** 保存防重入状态机的纯数据（在途标记 + 待发改动；t42 起由 ui/sync-settings-view.ts 决策） */
+  const saveQueueRef = useRef<SaveQueueState>({ inFlight: false, pending: null })
   /** 正在拉取远端快照列表（按通道独立防抖/防并发） */
   const loadingSnapshotsRef = useRef<Record<SyncChannel, boolean>>({ git: false, webdav: false })
 
@@ -301,26 +370,17 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
       const selByCh = info.syncSelectionByChannel
       const autoByCh = info.autosyncByChannel
       const credByCh = info.syncCredentialsByChannel
-      const backfill = (ch: SyncChannel, cur: ChannelSyncState): Partial<ChannelSyncState> => {
+      // t42：字段回填（缺省值 / 凭据布尔 / 模式恒 advanced）下沉到 ui/sync-settings-view.ts；
+      // 「推荐分区」与「sessions 上限归一化」两条规则仍住在 sync-view.ts，这里算好传进去。
+      const backfill = (ch: SyncChannel): Partial<ChannelSyncState> => {
         const sel = selByCh?.[ch]
-        const auto = autoByCh?.[ch]
-        const cred = credByCh?.[ch]
-        // 模式概念已从 UI 移除：分区恒由用户手动勾选（落盘 mode 恒为 advanced）。
-        // 初始值 = initialSyncSections（首次 / 旧 default 模式 → 预勾选推荐分区；
-        // 用户主动清空 → 保持为空，绝不悄悄填回来）
-        const persistedSections = initialSyncSections(sel, info.syncSections ?? [])
-        return {
-          syncMode: 'advanced',
-          syncSections: persistedSections,
+        return channelBackfillFromStatus({
+          selection: sel,
+          autosync: autoByCh?.[ch],
+          credentials: credByCh?.[ch],
+          persistedSections: initialSyncSections(sel, info.syncSections ?? []),
           sessionsLimit: normalizeSessionsLimit(sel?.sessionsLimit),
-          encrypt: sel?.encrypt ?? false,
-          includeSecrets: sel?.includeSecrets ?? false,
-          // 「密码已保存」来自本机凭据库（只回布尔）；凭据库里没有 → 复位
-          encryptPasswordSaved: cred?.encryptPasswordConfigured ?? false,
-          decryptPasswordSaved: cred?.decryptPasswordConfigured ?? false,
-          autosyncEnabled: auto?.enabled ?? false,
-          autosyncInterval: auto?.interval ?? '30m',
-        }
+        })
       }
       patch({
         loading: false,
@@ -331,8 +391,8 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
         webdavUsername: info.webdav?.username ?? '',
         catalog,
         byChannel: {
-          git: { ...stateRef.current.byChannel.git, ...backfill('git', stateRef.current.byChannel.git) },
-          webdav: { ...stateRef.current.byChannel.webdav, ...backfill('webdav', stateRef.current.byChannel.webdav) },
+          git: { ...stateRef.current.byChannel.git, ...backfill('git') },
+          webdav: { ...stateRef.current.byChannel.webdav, ...backfill('webdav') },
         },
       })
       // 独立拉取 autosync（若 status 未带按通道状态则补一次）
@@ -433,7 +493,7 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
       saveTimer.current = null
     }
     // 关闭设置页前若还有未保存的改动：立即补发（host 侧落盘；此路径只发请求不 setState）
-    const pending = pendingSave.current
+    const pending = saveQueueRef.current.pending
     if (pending !== null) {
       void api.saveConfig(pending).catch(() => { /* 已卸载：静默，不打扰用户 */ })
     }
@@ -441,57 +501,34 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
     runStore.patch({ sync: toSyncStoreSlice(stateRef.current) })
   }, [])
 
-  /** 表单快照 → 请求体（按当前通道构建；空串不携带；password 仅内存不发回显） */
-  const payload = (): SyncPushPayload => {
-    if (state.channel === 'webdav') {
-      return {
-        transport: 'webdav',
-        url: state.webdavUrl.trim() !== '' ? state.webdavUrl.trim() : undefined,
-        username: state.webdavUsername.trim() !== '' ? state.webdavUsername.trim() : undefined,
-        password: state.webdavPassword !== '' ? state.webdavPassword : undefined,
-      }
-    }
-    return {
-      transport: 'git',
-      repoUrl: state.repoUrl.trim(),
-      token: state.token.trim() !== '' ? state.token : undefined,
-    }
-  }
+  /** 组件 state → 纯逻辑模块的入参（只取该模块用到的字段）。 */
+  const formOf = (s: SyncUiState): SyncFormSnapshot => ({
+    channel: s.channel,
+    repoUrl: s.repoUrl,
+    token: s.token,
+    webdavUrl: s.webdavUrl,
+    webdavUsername: s.webdavUsername,
+    webdavPassword: s.webdavPassword,
+  })
+
+  /** 表单快照 → 请求体（t42 起组装逻辑在 ui/sync-settings-view.ts，组件只装配） */
+  const payload = (): SyncPushPayload => buildSyncChannelBody(formOf(state))
 
   /* ------------------------------------------------ 通道配置持久化（自动保存 + 显式保存） */
 
   /** 按给定 state 构建「保存配置」请求体；当前通道远端地址未就绪（webdav url / git repoUrl 为空）
    *  → 返回 null（无可保存内容，自动保存跳过）。password/token 仅非空携带（空 = 沿用已保存凭据）。 */
-  const buildConfigPayload = (s: SyncUiState): SyncPushPayload | null => {
-    if (s.channel === 'webdav') {
-      const url = s.webdavUrl.trim()
-      if (url === '') return null
-      return {
-        transport: 'webdav',
-        url,
-        username: s.webdavUsername.trim() !== '' ? s.webdavUsername.trim() : undefined,
-        password: s.webdavPassword !== '' ? s.webdavPassword : undefined,
-      }
-    }
-    const repoUrl = s.repoUrl.trim()
-    if (repoUrl === '') return null
-    return {
-      transport: 'git',
-      repoUrl,
-      token: s.token.trim() !== '' ? s.token.trim() : undefined,
-    }
-  }
+  const buildConfigPayload = (s: SyncUiState): SyncPushPayload | null => buildSyncConfigBody(formOf(s))
 
   /** 实际发送保存请求：成功清空已入库的 password/token（与 push 一致）并刷新凭据徽章；
    *  失败保留表单值以便重试。防重入：保存中又排入新改动 → 完成后自动补发最新 payload。
    *  announce：仅「手动点保存」为 true —— 自动保存（输入防抖）成功时不弹 Toast，
    *  否则每次停顿改字段都会刷一条通知；但**失败必须始终提示**（用户的改动没落盘）。 */
   const doSaveConfig = async (payloadToSave: SyncPushPayload, announce = false): Promise<void> => {
-    if (savingRef.current) {
-      pendingSave.current = payloadToSave
-      return
-    }
-    savingRef.current = true
+    // t42：防重入状态机（在途 → 记下最新待发改动并返回 'queue'）在 ui/sync-settings-view.ts
+    const decision = saveQueueOnRequest(saveQueueRef.current, payloadToSave)
+    saveQueueRef.current = decision.state
+    if (decision.action === 'queue') return
     patch({ savingConfig: true })
     try {
       const saved = await api.saveConfig(payloadToSave)
@@ -533,20 +570,18 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
       toast.error(`${t('toast.configSaveFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
       patch({ savingConfig: false })
     } finally {
-      savingRef.current = false
       // 保存期间又排入的新改动 → 立即补发（保底，不丢输入）
-      if (pendingSave.current !== null) {
-        const p = pendingSave.current
-        pendingSave.current = null
-        void doSaveConfig(p, announce)
-      }
+      const settled = saveQueueOnSettled(saveQueueRef.current)
+      saveQueueRef.current = settled.state
+      if (settled.next !== null) void doSaveConfig(settled.next, announce)
     }
   }
 
   /** 表单改动 → 防抖 600ms 自动保存（取最新 state；地址未就绪时跳过）。 */
   const scheduleConfigSave = (): void => {
     const payloadToSave = buildConfigPayload(stateRef.current)
-    pendingSave.current = payloadToSave
+    // 待发改动也会被 null 覆盖（地址被清空 → 不保存），与原实现一致
+    saveQueueRef.current = { ...saveQueueRef.current, pending: payloadToSave }
     if (saveTimer.current !== null) clearTimeout(saveTimer.current)
     if (payloadToSave === null) {
       saveTimer.current = null
@@ -555,7 +590,7 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null
       flushConfigSave()
-    }, 600)
+    }, SYNC_CONFIG_SAVE_DEBOUNCE_MS)
   }
 
   /** 立即保存（「保存配置」按钮 / 防抖到点）：优先待发改动，否则按当前表单值。
@@ -565,15 +600,15 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
       clearTimeout(saveTimer.current)
       saveTimer.current = null
     }
-    const pending = pendingSave.current
-    pendingSave.current = null
-    const payloadToSave = pending ?? buildConfigPayload(stateRef.current)
-    if (payloadToSave === null) {
+    // t42：flush 取哪个载荷（优先待发改动，否则按当前表单值重建）由纯函数决策
+    const flushed = saveQueueOnFlush(saveQueueRef.current, buildConfigPayload(stateRef.current))
+    saveQueueRef.current = flushed.state
+    if (flushed.payload === null) {
       // M-17：手动点保存但地址未填写 → 此前直接 return（按钮看起来无反应），现给出明确提示
       if (announce) toast.info(t('toast.configNothingToSave'))
       return
     }
-    void doSaveConfig(payloadToSave, announce)
+    void doSaveConfig(flushed.payload, announce)
   }
 
   /* ------------------------------------------------ GitHub OAuth device flow */
@@ -607,9 +642,11 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
     patchGithub({ phase: 'polling' })
     try {
       const poll = await api.githubPoll(flowId)
-      if (poll.status === 'pending') {
+      // t42：下一步决策（pending 的自适应延迟 / interval 兜底 / 终止态）在 ui/sync-settings-view.ts
+      const decision = githubPollDecision(poll, state.github.interval)
+      if (decision.phase === 'waiting') {
         patchGithub({ phase: 'waiting' })
-        scheduleGithubPoll(flowId, poll.pollDelayMs ?? Math.max(state.github.interval, 1) * 1000)
+        scheduleGithubPoll(flowId, decision.delayMs ?? 0)
         return
       }
       const message = githubPollMessage(poll, uiT)
@@ -675,23 +712,13 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
     setChannelOpen(false)
   }
 
-  /** 组装 push/preview 的公共载荷（分区选择 + 加密选项；密码仅内存） */
-  const buildPushPayload = (): SyncPushPayload & { encryptPassword?: string } => {
-    // 默认模式：不传 sections（= 全部 portable 推荐分区）；自定义模式：传勾选分区
-    const selection = chState.syncSections.length > 0 ? { sections: chState.syncSections } : {}
-    // 历史会话（可选分区）：只有真的勾选了 sessions 才携带选项 —— Host 侧没有该选项时
-    // 会把会话分区当普通非 portable 分区跳过（安全默认，绝不悄悄上行）。
-    const sessionsOpt = chState.syncSections.includes('sessions')
-      ? { sessions: { limit: chState.sessionsLimit } }
-      : {}
-    // 加密快照：勾选加密 → 携带密码（请求体内存传输；留空时 Host 用本机凭据库里的已保存密码）；
-    // includeSecrets 必须伴随 encrypt（Host 安全断言兜底）
-    const cryptoOpts =
-      chState.encrypt || chState.includeSecrets
-        ? { encrypt: true, encryptPassword: chState.encryptPassword, includeSecrets: chState.includeSecrets }
-        : {}
-    return { ...payload(), ...selection, ...sessionsOpt, ...cryptoOpts }
-  }
+  /**
+   * 组装 push/preview 的公共载荷（分区选择 + 加密选项；密码仅内存）。
+   * t42：组装逻辑下沉到 ui/sync-settings-view.ts 的 buildSyncPushBody（node 单测覆盖
+   * 「sessions 必须显式放行」「includeSecrets ⇒ encrypt」两条安全默认）。
+   */
+  const buildPushPayload = (): SyncPushPayload & { encryptPassword?: string } =>
+    buildSyncPushBody(formOf(state), chState)
 
   /** P0-②：push 前只读预览（弹窗确认流程第一步）——不写远端，只展示「将推送什么」。 */
   const runPushPreview = async (): Promise<void> => {
@@ -771,19 +798,8 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
     const ch = stateRef.current.channel
     const cur = stateRef.current.byChannel[ch]
     try {
-      const res = await api.saveSelection({
-        transport: ch,
-        // 恒 advanced：勾选集合就是同步范围（UI 已无模式概念）
-        mode: 'advanced',
-        sections: p.sections ?? cur.syncSections,
-        sessionsLimit: p.sessionsLimit ?? cur.sessionsLimit,
-        encrypt: p.encrypt ?? cur.encrypt,
-        includeSecrets: p.includeSecrets ?? cur.includeSecrets,
-        ...(p.encryptPassword !== undefined && p.encryptPassword !== '' ? { encryptPassword: p.encryptPassword } : {}),
-        ...(p.decryptPassword !== undefined && p.decryptPassword !== '' ? { decryptPassword: p.decryptPassword } : {}),
-        ...(p.clearEncryptPassword === true ? { clearEncryptPassword: true } : {}),
-        ...(p.clearDecryptPassword === true ? { clearDecryptPassword: true } : {}),
-      })
+      // t42：请求体组装（恒 advanced / 未给出字段沿用当前值 / 空密码不携带）下沉到 ui/sync-settings-view.ts
+      const res = await api.saveSelection(buildSelectionRequest(ch, cur, p))
       // 回填「已保存」布尔（Host 只回状态，永不回值）
       patchChannelState(ch, {
         encryptPasswordSaved: res.encryptPasswordConfigured === true,
@@ -798,9 +814,7 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
   /** 当前通道同步分区勾选开关（增删 byChannel 勾选并立即持久化）。 */
   const toggleSyncSection = (id: SectionId, checked: boolean): void => {
     const cur = stateRef.current.byChannel[stateRef.current.channel].syncSections
-    const next = checked
-      ? (cur.includes(id) ? cur : [...cur, id])
-      : cur.filter((s) => s !== id)
+    const next = toggleSectionSelection(cur, id, checked)
     patchChannel({ syncSections: next })
     void saveSelection({ sections: next })
   }
@@ -817,22 +831,18 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
    * （用户要求：手动取消勾选即清除保存的密码），并清空输入框（密钥必须加密，安全底线）。
    */
   const setEncrypt = (next: boolean): void => {
-    patchChannel({
-      encrypt: next,
-      includeSecrets: next ? chState.includeSecrets : false,
-      ...(next ? {} : { encryptPassword: '', encryptPasswordConfirm: '', encryptPasswordSaved: false }),
-    })
-    void saveSelection({
-      encrypt: next,
-      includeSecrets: next ? chState.includeSecrets : false,
-      ...(next ? {} : { clearEncryptPassword: true }),
-    })
+    // t42：联动规则（关加密 ⇒ 取消导出密钥 + 清空输入 + 删已保存密码）在 ui/sync-settings-view.ts
+    const linked = encryptToggle(next, chState)
+    patchChannel(linked.channelPatch)
+    void saveSelection(linked.selectionPatch)
   }
 
   /** 当前通道导出密钥开关（持久化）。勾选时自动联动选中加密（密钥绝不明文进同步通道）。 */
   const setIncludeSecrets = (next: boolean): void => {
-    patchChannel({ includeSecrets: next, encrypt: next ? true : chState.encrypt })
-    void saveSelection({ includeSecrets: next, encrypt: next ? true : chState.encrypt })
+    // t42：勾「导出密钥」自动打开加密（密钥绝不明文上行）——规则在 ui/sync-settings-view.ts
+    const linked = includeSecretsToggle(next, chState)
+    patchChannel(linked.channelPatch)
+    void saveSelection(linked.selectionPatch)
   }
 
   /**
@@ -949,31 +959,19 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
     state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error, uiT,
   )
   /** GitHub 流程进行中（请求设备码 / 等待授权 / 轮询）：禁用 push/pull，避免无凭据操作 */
-  const githubBusy =
-    state.github.phase === 'starting' || state.github.phase === 'waiting' || state.github.phase === 'polling'
+  const githubBusy = isGithubFlowInFlight(state.github.phase)
 
   /** 勾选为空 → 禁止推送（勾选集合就是同步范围）。 */
-  const pushSelectionReady = chState.syncSections.length > 0
+  const pushSelectionReady = hasSelectedSections(chState)
 
   /**
    * 加密推送校验：勾选加密时，要么本机凭据库里已有密码（输入框留空即沿用），
    * 要么两个输入框都填了且一致。密码本身只在内存 / 凭据库中出现。
+   * t42：判定下沉到 ui/sync-settings-view.ts 的 computeEncryptInvalid（四条分支有单测）。
    */
-  const encryptInvalid =
-    (chState.encrypt || chState.includeSecrets) &&
-    (
-      // 输入框填了 → 必须与确认框一致
-      (chState.encryptPassword !== '' && chState.encryptPassword !== chState.encryptPasswordConfirm) ||
-      // 输入框留空 → 必须已经有保存好的密码
-      (chState.encryptPassword === '' && !chState.encryptPasswordSaved)
-    )
+  const encryptInvalid = computeEncryptInvalid(chState)
 
-  const autosyncText = chState.autosync !== null ? autosyncStatusText(chState.autosync, uiT) : t('autosync.statusNever')
-  /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
-  const autosyncCountdownMs = chState.autosync !== null && chState.autosync.elapsedMs >= 0
-    ? computeAutosyncCountdown(chState.autosync.elapsedMs, autosyncIntervalMs(chState.autosync.interval))
-    : null
-
+  // t42：自动同步文案 / 倒计时随卡片搬到 AutosyncCard 内派生（此处不再需要）
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
@@ -990,282 +988,40 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
             />
           )}
 
-          {/* 同步通道入口卡：通道配置改为弹窗驱动（点按钮 → 弹窗内配置 Git/WebDAV 通道；
-              弹窗样式复用市场操作弹窗体系，DESIGN.md §8.12） */}
-          <Card>
-            <span className={css.groupLabel}>{t('channel.title')}</span>
-            <span className={css.hint}>{t('channel.openHint')}</span>
-            <div className={css.statRow}>
-              <Badge kind="info">{state.channel === 'webdav' ? t('channel.webdav') : t('channel.git')}</Badge>
-              <Badge kind={remoteReady ? 'ok' : 'warn'}>
-                {remoteReady ? t('channel.configured') : t('channel.notConfigured')}
-              </Badge>
-              {state.channel === 'git' && state.statusInfo?.credentialConfigured === true && (
-                <Badge kind="ok">{t('config.tokenSaved')}</Badge>
-              )}
-              {state.channel === 'webdav' && state.statusInfo?.webdav?.passwordConfigured === true && (
-                <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>
-              )}
-            </div>
-            {/* 状态事实行（Workbench：配置状态/上次同步/可同步分区——未配置时也要给硬事实） */}
-            <div className={css.factGrid} style={{ marginTop: 8 }}>
-              <div className={css.factCell}>
-                <span className={css.factLabel}>{t('syncStatus.state')}</span>
-                <span className={css.factValue}>
-                  {state.statusInfo?.configured === true ? t('channel.configured') : t('channel.notConfigured')}
-                </span>
-              </div>
-              <div className={css.factCell}>
-                <span className={css.factLabel}>{t('syncStatus.lastSync')}</span>
-                <span className={css.factValue}>
-                  {state.statusInfo?.lastSyncAt !== undefined
-                    ? new Date(state.statusInfo.lastSyncAt).toLocaleString()
-                    : '—'}
-                </span>
-              </div>
-              {state.statusInfo?.sectionCount !== undefined && (
-                <div className={css.factCell}>
-                  <span className={css.factLabel}>{t('syncStatus.sections')}</span>
-                  <span className={`${css.factValue} ${css.mono}`}>{String(state.statusInfo.sectionCount)}</span>
-                </div>
-              )}
-              {remoteReady && (
-                <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
-                  <span className={css.factLabel}>{t('channel.currentUrl')}</span>
-                  <span className={css.factValue}>
-                    <span className={css.mono}>
-                      {(state.channel === 'webdav' ? state.webdavUrl : state.repoUrl).slice(0, 60)}
-                    </span>
-                  </span>
-                </div>
-              )}
-            </div>
-            <div className={css.actionRowTop}>
-              <Button variant="primary" onClick={openChannelDialog}>
-                {t('channel.open')}
-              </Button>
-            </div>
-          </Card>
-
-          {/* 通道配置弹窗（Radix Modal 统一 a11y：focus-trap / Esc / 焦点还原 / 滚动锁；
-              内含推送预览/推送结果/拉取结果/一键同步确认四个嵌套 Modal，Radix 支持嵌套弹窗） */}
-          <Modal
+          {/* 同步通道入口卡（渲染段拆到 SyncChannelEntryCard，t42） */}
+          <SyncChannelEntryCard
+            t={t}
+            channel={state.channel}
+            statusInfo={state.statusInfo}
+            remoteReady={remoteReady}
+            repoUrl={state.repoUrl}
+            webdavUrl={state.webdavUrl}
+            onOpen={openChannelDialog}
+          />
+          {/* 通道配置弹窗（渲染段拆到 ChannelConfigDialog，t42；含 GitHub/WebDAV 两通道表单） */}
+          <ChannelConfigDialog
             open={channelOpen}
+            t={t}
+            uiT={uiT}
+            channel={state.channel}
+            busy={state.busy !== null}
+            savingConfig={state.savingConfig}
+            remoteReady={remoteReady}
+            repoUrl={state.repoUrl}
+            token={state.token}
+            webdavUrl={state.webdavUrl}
+            webdavUsername={state.webdavUsername}
+            webdavPassword={state.webdavPassword}
+            statusInfo={state.statusInfo}
+            githubSignedIn={state.githubSignedIn}
+            githubView={githubView}
             onClose={closeChannelDialog}
-            title={t('channel.title')}
-            wide
-            busy={state.savingConfig}
-          >
-            <Modal.Header
-              title={t('channel.title')}
-              closeLabel={t('common.close')}
-              onClose={closeChannelDialog}
-              closeDisabled={state.savingConfig}
-            />
-            <Modal.Body scroll>
-
-          {/* 通道子 tab：GitHub / WebDAV（modeTabs 样式；两通道设置各自独立） */}
-          <div className={css.modeTabs} role="tablist">
-            {channelTabModels(state.channel, state.busy !== null || state.savingConfig).map((tab) => (
-              <button
-                key={tab.channel}
-                type="button"
-                role="tab"
-                aria-selected={tab.active}
-                data-active={tab.active ? '' : undefined}
-                className={css.modeTab}
-                disabled={tab.disabled}
-                onClick={() => { switchChannel(tab.channel) }}
-              >
-                {tab.channel === 'webdav' ? t('channel.webdav') : t('channel.git')}
-              </button>
-            ))}
-          </div>
-          <div className={css.modeHint}>{t('channel.perChannelHint')}</div>
-
-          {/* 私有仓库强制提示：仅 git 通道适用 */}
-          {state.channel === 'git' && <Banner kind="warn">{privateRepoHint(uiT)}</Banner>}
-
-            {/* git 通道分支 */}
-            {state.channel === 'git' && (
-              <>
-                <span className={css.groupLabel}>{t('config.title')}</span>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>{t('config.repoUrl')}</span>
-                  <input
-                    type="text"
-                    className={css.input}
-                    value={state.repoUrl}
-                    placeholder="https://github.com/user/private-repo.git"
-                    disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      patch({ repoUrl: e.target.value })
-                      scheduleConfigSave() // 改动自动保存（防抖；关闭设置页不丢输入）
-                    }}
-                  />
-                  <span className={css.hint}>{t('config.repoUrlHint')}</span>
-                </label>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>
-                    {t('config.token')}
-                    {' '}
-                    {state.statusInfo?.credentialConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
-                  </span>
-                  <input
-                    type="password"
-                    className={css.input}
-                    value={state.token}
-                    autoComplete="off"
-                    placeholder={t('config.tokenPlaceholder')}
-                    disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      patch({ token: e.target.value })
-                      scheduleConfigSave()
-                    }}
-                  />
-                  <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
-                </label>
-
-                {/* GitHub OAuth 登录（device flow）：弹窗内仅 git 通道显示；已登录（token 有效）时整块隐藏 */}
-                {state.githubSignedIn === false && (
-                  <>
-                    {state.statusInfo?.credentialConfigured === true && (
-                      <Banner kind="warn">{t('github.tokenInvalid')}</Banner>
-                    )}
-                    <span className={css.groupLabel}>{t('github.title')}</span>
-                    <span className={css.hint}>{t('github.description')}</span>
-                    {githubView.showCode && (
-                      <div className={css.statRow}>
-                        <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
-                        <a
-                          className={css.ghostButton}
-                          href={githubView.verificationUri}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ textDecoration: 'none' }}
-                        >
-                          {t('github.openAuth')}
-                        </a>
-                      </div>
-                    )}
-                    <div className={css.actionRow}>
-                      <Button
-                        variant="primary"
-                        disabled={!githubView.canStart || state.busy !== null}
-                        onClick={() => { void runGithubStart() }}
-                      >
-                        {githubView.startLabel}
-                      </Button>
-                      {githubView.canCancel && (
-                        <Button disabled={state.busy !== null} onClick={() => { void runGithubCancel() }}>
-                          {t('github.cancel')}
-                        </Button>
-                      )}
-                    </div>
-                    <div className={css.statRow}>
-                      <Badge kind={githubView.phase === 'success' ? 'ok' : githubView.phase === 'error' ? 'error' : 'warn'}>
-                        {githubView.statusText}
-                      </Badge>
-                    </div>
-                    {githubView.phase === 'error' && (
-                      <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
-                    )}
-                  </>
-                )}
-              </>
-            )}
-
-            {/* webdav 通道分支 */}
-            {state.channel === 'webdav' && (
-              <>
-                <span className={css.groupLabel}>{t('webdav.title')}</span>
-                {/* 常见 WebDAV 服务器预设：选择后填充 url 模板（含占位符待替换） */}
-                <span className={css.hint}>{t('webdav.presetHint')}</span>
-                <select
-                  className={css.select}
-                  value={presetIdForUrl(state.webdavUrl)}
-                  disabled={state.busy !== null}
-                  onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                    const p = presetById(e.target.value)
-                    patch({ webdavUrl: p.url })
-                    scheduleConfigSave()
-                  }}
-                >
-                  {WEBDAV_PRESETS.map((p) => (
-                    <option key={p.id} value={p.id}>{p.label}</option>
-                  ))}
-                </select>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>{t('webdav.url')}</span>
-                  <input
-                    type="text"
-                    className={css.input}
-                    value={state.webdavUrl}
-                    placeholder="https://dav.example.com/dav/config"
-                    disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      patch({ webdavUrl: e.target.value })
-                      scheduleConfigSave()
-                    }}
-                  />
-                  <span className={css.hint}>{t('webdav.urlHint')}</span>
-                </label>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>
-                    {t('webdav.username')}
-                    {' '}
-                    {state.statusInfo?.webdav?.usernameConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
-                  </span>
-                  <input
-                    type="text"
-                    className={css.input}
-                    value={state.webdavUsername}
-                    autoComplete="off"
-                    placeholder="alice"
-                    disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      patch({ webdavUsername: e.target.value })
-                      scheduleConfigSave()
-                    }}
-                  />
-                  <span className={css.hint}>{t('webdav.usernameHint')}</span>
-                </label>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>
-                    {t('webdav.password')}
-                    {' '}
-                    {state.statusInfo?.webdav?.passwordConfigured === true && <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>}
-                  </span>
-                  <input
-                    type="password"
-                    className={css.input}
-                    value={state.webdavPassword}
-                    autoComplete="off"
-                    placeholder={t('webdav.passwordPlaceholder')}
-                    disabled={state.busy !== null}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                      patch({ webdavPassword: e.target.value })
-                      scheduleConfigSave()
-                    }}
-                  />
-                  <span className={css.hint}>{t('webdav.passwordHint', { ref: SYNC_WEBDAV_CREDENTIAL_REF })}</span>
-                </label>
-              </>
-            )}
-
-            {/* 配置保存：改动自动保存（防抖，静默）；按钮立即保存并给出 Toast 回执（announce=true） */}
-            <div className={css.actionRow}>
-              <Button
-                variant="primary"
-                disabled={state.busy !== null || state.savingConfig || !remoteReady}
-                onClick={() => { flushConfigSave(true) }}
-              >
-                {state.savingConfig ? <Spinner label={t('config.saving')} /> : t('config.save')}
-              </Button>
-            </div>
-            <span className={css.hint}>{t('config.saveHint')}</span>
-            </Modal.Body>
-          </Modal>
+            onSwitchChannel={switchChannel}
+            onFormChange={(p) => { patch(p); scheduleConfigSave() }}
+            onGithubStart={() => { void runGithubStart() }}
+            onGithubCancel={() => { void runGithubCancel() }}
+            onSave={() => { flushConfigSave(true) }}
+          />
 
           {/* 同步分区（当前通道）：全部选择收敛进「选择同步分区」弹窗（点按钮打开）。
               **没有「快速导出 / 自定义导出」之分** —— 勾选集合就是同步范围。 */}
@@ -1288,171 +1044,42 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
             <span className={css.hint}>{t('mode.persistHint')}</span>
           </Card>
 
-          {/* 同步分区弹窗（Radix Modal，与通道配置弹窗同一体系）：分组勾选 + 「最新 N 个会话」。
-              分区一律由用户手动勾选（没有模式分段）。改动**即时生效并持久化**
-              （与导出选择器一致的弹窗语义），因此底部只有「完成」——没有「取消」
-              （取消会让用户以为改动被丢弃）。 */}
-          <Modal
+          {/* 同步分区弹窗（渲染段拆到 SyncSectionPickerDialog，t42） */}
+          <SyncSectionPickerDialog
             open={sectionPickerOpen}
+            t={t}
+            cmT={cmT}
+            sectionName={sectionName}
+            catalog={state.catalog}
+            sections={chState.syncSections}
+            sessionsLimit={chState.sessionsLimit}
+            sessionsInclude={chState.sessionsInclude}
+            sessionNode={sessionPickerNode}
+            sessionPending={sessionInvPending}
+            sessionFailed={sessionInvFailedRef.current}
+            onToggleSection={toggleSyncSection}
+            onSessionsLimit={setSessionsLimit}
+            onSessionsInclude={setSessionsInclude}
             onClose={() => { setSectionPickerOpen(false) }}
-            title={t('mode.pickerTitle')}
-            wide
-          >
-            <Modal.Header
-              title={t('mode.pickerTitle')}
-              closeLabel={t('common.close')}
-              onClose={() => { setSectionPickerOpen(false) }}
-            />
-            <Modal.Body scroll style={{ maxHeight: '66vh' }}>
-              <span className={css.hint}>{t('mode.pickerHint')}</span>
-              {state.catalog.length === 0 ? (
-                <span className={css.hint}>{t('common.loading')}</span>
-              ) : (
-                /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章），
-                   分区名走 section-labels 单一映射 —— 与导出选择器显示**同一个中文名**。 */
-                <div className={css.groupList}>
-                  {syncSectionGroups(state.catalog).map((g) => (
-                    <Card key={g.group} className={css.groupCard}>
-                      <div className={css.groupHeader}>
-                        <span className={css.groupLabel}>{g.label}</span>
-                        {g.note !== undefined && <span className={css.groupNote}>{g.note}</span>}
-                      </div>
-                      <div className={css.groupItems}>
-                        {g.items.map((s) => (
-                          <div key={s.id} className={css.sectionOptionRow}>
-                            <Checkbox
-                              checked={chState.syncSections.includes(s.id)}
-                              onChange={(checked) => { toggleSyncSection(s.id, checked) }}
-                              label={
-                                <span className={css.categoryItem}>
-                                  {/* 分区显示名只经 sectionLabeler（禁止在本文件另建一套名字） */}
-                                  <span className={css.categoryName}>{sectionName(s.id)}</span>
-                                  <span className={css.categoryDesc}>{s.description}</span>
-                                  {s.portability === 'portable' && <Badge kind="info">{t('mode.sectionPortable')}</Badge>}
-                                  {s.portability === 'deviceSpecific' && (
-                                    <Badge kind="warn">{t('mode.sectionDeviceSpecific')}</Badge>
-                                  )}
-                                  {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
-                                </span>
-                              }
-                            />
-                            {/* 历史会话专属参数：只带「最新 N 个」（默认 5），避免整棵会话树上行。
-                                必须放在 Checkbox **之外** —— Checkbox 内部是 label 元素，
-                                把输入控件放进去会让点输入框也切换勾选。 */}
-                            {s.id === 'sessions' && chState.syncSections.includes('sessions') && (
-                              <label className={css.field}>
-                                <span className={css.fieldLabel}>{t('mode.sessionsLimit')}</span>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={10000}
-                                  className={css.input}
-                                  value={String(chState.sessionsLimit)}
-                                  onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                                    setSessionsLimit(e.target.value === '' ? DEFAULT_SYNC_SESSIONS_LIMIT : Number(e.target.value))
-                                  }}
-                                />
-                                <span className={css.hint}>{t('mode.sessionsLimitHint')}</span>
-                              </label>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </Card>
-                  ))}
-                </div>
-              )}
-              <span className={css.hint}>{t('mode.sectionsHint')}</span>
-              {chState.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
-            </Modal.Body>
-            <Modal.Footer>
-              <Button variant="primary" onClick={() => { setSectionPickerOpen(false) }}>{t('mode.pickerDone')}</Button>
-            </Modal.Footer>
-          </Modal>
+          />
+          {/* 加密与密钥导出（渲染段拆到 SecurityOptionsCard，t42） */}
+          <SecurityOptionsCard
+            t={t}
+            settings={chState}
+            onToggleEncrypt={setEncrypt}
+            onToggleIncludeSecrets={setIncludeSecrets}
+            onPatchSettings={patchChannel}
+            onPersistEncryptPassword={() => { void persistEncryptPassword() }}
+          />
 
-          {/* 加密与密钥导出（当前通道手动推送；仿「导出备份·自定义模式」安全选项） */}
-          <Card>
-            <span className={css.groupLabel}>{t('mode.security')}</span>
-            <Checkbox
-              checked={chState.encrypt}
-              onChange={setEncrypt}
-              label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
-            />
-            <div className={css.hint}>{t('mode.encryptHint')}</div>
-            {chState.encrypt && chState.encryptPasswordSaved && (
-              <div className={css.hint}>{t('mode.passwordSavedHint')}</div>
-            )}
-            {chState.encrypt && (
-              <div className={css.secretFields}>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>{t('mode.password')}</span>
-                  <input
-                    type="password"
-                    className={css.input}
-                    value={chState.encryptPassword}
-                    autoComplete="new-password"
-                    placeholder={chState.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patchChannel({ encryptPassword: e.target.value }) }}
-                    // 失焦即落库（两个框一致才写）——用户不必手动保存，下次留空即沿用
-                    onBlur={() => { void persistEncryptPassword() }}
-                  />
-                </label>
-                <label className={css.field}>
-                  <span className={css.fieldLabel}>{t('mode.passwordConfirm')}</span>
-                  <input
-                    type="password"
-                    className={css.input}
-                    value={chState.encryptPasswordConfirm}
-                    autoComplete="new-password"
-                    placeholder={chState.encryptPasswordSaved ? t('mode.passwordPlaceholder') : undefined}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => { patchChannel({ encryptPasswordConfirm: e.target.value }) }}
-                    onBlur={() => { void persistEncryptPassword() }}
-                  />
-                </label>
-                {chState.encryptPassword !== '' && chState.encryptPassword !== chState.encryptPasswordConfirm && (
-                  <span className={css.formError}>{t('mode.passwordMismatch')}</span>
-                )}
-                {chState.encryptPassword === '' && !chState.encryptPasswordSaved && (
-                  <span className={css.formError}>{t('mode.passwordRequired')}</span>
-                )}
-                <span className={css.hint}>{t('mode.passwordClearNotice')}</span>
-              </div>
-            )}
-            <Checkbox
-              checked={chState.includeSecrets}
-              onChange={setIncludeSecrets}
-              label={<span className={css.categoryName}>{t('mode.includeSecrets')}</span>}
-            />
-            <div className={css.hint}>{t('mode.includeSecretsHint')}</div>
-            <span className={css.hint}>{t('mode.encryptAutosyncNotice')}</span>
-          </Card>
-
-          {/* 解密密码（当前通道拉取/一键同步加密快照用；输入即保存到本机凭据库） */}
-          <Card>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('mode.decryptPassword')}</span>
-              <input
-                type="password"
-                className={css.input}
-                value={chState.decryptPassword}
-                autoComplete="off"
-                placeholder={chState.decryptPasswordSaved ? t('mode.decryptPasswordPlaceholder') : undefined}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => { patchChannel({ decryptPassword: e.target.value }) }}
-                onBlur={() => { void persistDecryptPassword() }}
-              />
-              <span className={css.hint}>{t('mode.decryptPasswordHint')}</span>
-            </label>
-            {chState.decryptPasswordSaved && (
-              <div className={css.actionRow}>
-                <span className={css.hint}>{t('mode.decryptPasswordSaved')}</span>
-                {/* 危险语义：删除本机已保存的密码（不可逆，用户主动操作） */}
-                <Button size="sm" variant="danger" onClick={clearSavedDecryptPassword}>
-                  {t('mode.clearSavedPassword')}
-                </Button>
-              </div>
-            )}
-          </Card>
-
+          {/* 解密密码（渲染段拆到 DecryptPasswordCard，t42） */}
+          <DecryptPasswordCard
+            t={t}
+            settings={chState}
+            onPatchSettings={patchChannel}
+            onPersistDecryptPassword={() => { void persistDecryptPassword() }}
+            onClearSavedPassword={clearSavedDecryptPassword}
+          />
           {/* 一键同步 + 手动推送/拉取（当前通道） */}
           <div className={css.actionRow}>
             <Button
@@ -1534,49 +1161,15 @@ export function SyncSettingsView({ api, t, cmT }: SyncSettingsViewProps) {
               该字段承载 10+ 个动作的失败、渲染在全部卡片之后（用户触发点常在其上方视野外），
               且同文案会被 Toast 去重合并。现按动作分文案走右下角 Toast（见上方各 catch 分支）。 */}
 
-          {/* 自动同步设置（当前通道） */}
-          <Card>
-            <span className={css.groupLabel}>{t('autosync.title')}</span>
-            <span className={css.hint}>{t('autosync.description')}</span>
-            <label className={css.checkboxRow}>
-              <input
-                type="checkbox"
-                checked={chState.autosyncEnabled}
-                disabled={state.busy !== null}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => { void toggleAutosync(e.target.checked) }}
-              />
-              <span>{t('autosync.enable')}</span>
-            </label>
-            <label className={css.field}>
-              <span className={css.fieldLabel}>{t('autosync.interval')}</span>
-              <select
-                className={css.input}
-                value={chState.autosyncInterval}
-                disabled={state.busy !== null}
-                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-                  void updateAutosyncInterval(e.target.value as AutosyncInterval)
-                }}
-              >
-                {AUTOSYNC_INTERVAL_OPTIONS.map((iv) => (
-                  <option key={iv} value={iv}>{intervalLabel(iv, t)}</option>
-                ))}
-              </select>
-              <span className={css.hint}>{t('autosync.intervalHint')}</span>
-            </label>
-            <div className={css.statRow}>
-              <Badge kind={chState.autosync?.lastRunStatus === 'failed' ? 'error' : chState.autosync?.lastRunStatus === 'skipped' ? 'warn' : 'info'}>
-                {autosyncText}
-              </Badge>
-              {autosyncCountdownMs !== null && chState.autosyncEnabled && (
-                <Badge kind="info">
-                  {autosyncCountdownMs <= 0
-                    ? t('autosync.due')
-                    : t('autosync.nextRun', { time: formatIntervalDuration(autosyncCountdownMs, uiT) })}
-                </Badge>
-              )}
-            </div>
-          </Card>
-
+          {/* 自动同步设置（渲染段拆到 AutosyncCard，t42；文案/倒计时在卡内派生） */}
+          <AutosyncCard
+            t={t}
+            uiT={uiT}
+            settings={chState}
+            busy={state.busy !== null}
+            onToggleAutosync={(enabled) => { void toggleAutosync(enabled) }}
+            onUpdateInterval={(interval) => { void updateAutosyncInterval(interval) }}
+          />
           {/* P2：同步历史视图（Host /sync/history 端点；全局，含两通道记录） */}
           <SyncHistoryView api={api} t={t} />
 
@@ -1777,16 +1370,4 @@ function PushPreviewCard({ preview, t, uiT }: {
   )
 }
 
-/** AutosyncInterval → 可读标签（复用 i18n interval 键）。 */
-function intervalLabel(iv: AutosyncInterval, t: TranslateNS<'config-manager-sync'>): string {
-  switch (iv) {
-    case '5m': return t('autosync.interval5m');
-    case '15m': return t('autosync.interval15m');
-    case '30m': return t('autosync.interval30m');
-    case '60m': return t('autosync.interval60m');
-    case '6h': return t('autosync.interval6h');
-    case '12h': return t('autosync.interval12h');
-    case '24h': return t('autosync.interval24h');
-    default: return iv;
-  }
-}
+

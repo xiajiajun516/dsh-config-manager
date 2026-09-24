@@ -3,7 +3,7 @@
 > 本文件回答一个问题：**本插件支持哪个 DSH 版本区间，以及 DSH 升级时哪一部分会先破。**
 > 所有断言均标注取证位置（`file:line`）或标记为「未验证」。凡未实际读取文件确认的结论一律不写入本文件。
 
-- 适用插件版本：`dsh-config-manager@0.1.59`（`package.json:3`，与 `src/index.ts:170` 的 `PLUGIN_VERSION` 一致）
+- 适用插件版本：`dsh-config-manager@0.1.59`（`package.json:3`，与 `src/index.ts` 的 `export const PLUGIN_VERSION` 一致）
 - 取证环境：Windows，Node `v24.13.0`，npm `11.19.0`
 - 本机 DSH 部署：`@deepseek-ai/dsh@0.1.5-rc.1`（`D:\Apps\nodejs\node_global\node_modules\@deepseek-ai\dsh\package.json`）
 
@@ -29,7 +29,7 @@
 
 ### 1.1 硬依赖（写入 `inject`，缺失则插件 fiber 不挂载）
 
-`src/index.ts:167`：
+`src/index.ts` 的 `export const inject`：
 
 ```ts
 export const inject = ['settings', 'credentials']
@@ -37,28 +37,28 @@ export const inject = ['settings', 'credentials']
 
 | 服务 | 用途 | 取证位置 |
 |---|---|---|
-| `settings` | 读写 `$DSH_HOME/settings.yaml` 的非 UI 类 namespace（导出/导入/回滚/快照 diff），并经 `describe({redactSecrets:true})` 让 DSH 剥离已知秘密 | `src/index.ts:167`（inject）；`src/index.ts:503-527`（`DshSettingsFacade`）；`src/index.ts:424`（`resolveAppLanguage` 读 locale namespace）；`src/index.ts:4780`（列出全部 namespace） |
-| `credentials` | 凭据**状态**读写（`describe`/`set`/`unset`），用于同步 token、WebDAV 密码、GitHub device flow token 的槽位引用 | `src/index.ts:167`（inject）；`src/index.ts:530-550`（`DshCredentialsFacade`）；`src/index.ts:4842`（注入路由依赖） |
+| `settings` | 读写 `$DSH_HOME/settings.yaml` 的非 UI 类 namespace（导出/导入/回滚/快照 diff），并经 `describe({redactSecrets:true})` 让 DSH 剥离已知秘密 | `src/index.ts` 的 `export const inject`（inject）；`src/index.ts` 的 `class DshSettingsFacade`；`src/index.ts` 的 `resolveAppLanguage`（读 locale namespace）；`src/index.ts` 的 `createAdapters({ namespaces: … })` 注入点（列出全部 namespace：`ctx.settings.describe({redactSecrets:true})`） |
+| `credentials` | 凭据**状态**读写（`describe`/`set`/`unset`），用于同步 token、WebDAV 密码、GitHub device flow token 的槽位引用 | `src/index.ts` 的 `export const inject`（inject）；`src/index.ts` 的 `class DshCredentialsFacade`；`src/index.ts` 的 `makeRoutes({ credentials: ctx.credentials, … })` 调用（注入路由依赖） |
 
 ### 1.2 可选服务（一律 `ctx.get()` 惰取，缺失时降级而非崩溃）
 
-`src/index.ts:28-34` 明确记录了这一策略：「Optional services are read with ctx.get() at call time (never injected)」。
+`src/index.ts` 头部设计注释明确记录了这一策略：「Optional services are read with ctx.get() at call time (never injected)」。
 
 | 服务 | 用途 | 缺失时的行为 | 取证位置 |
 |---|---|---|---|
-| `workspaceRegistry` | 工作区记录的列举/建/删/改标题（`workspaces` 分区） | `listRecords()` 返回 `[]`；写入抛 `host.workspaceUnavailable` | `src/index.ts:462-465`（`readService`）；`src/index.ts:649`（唯一读取点）；`src/index.ts:652-681` |
-| `webServer` | 注册 `/api/dsh-config-manager/*` 全部 HTTP 路由 | 记一条 warn 并 `return`：**路由完全不注册**，引擎能力仍在但浏览器半不可用 | `src/index.ts:4867-4871` |
-| `tools` | 注册 5 个 Agent 可调用模型工具（`config_backup` 等） | 记一条 warn 并 `return`，跳过工具注册 | `src/core/model-tools.ts:306-310`；`src/core/model-tools.ts:320+`（`defineTool` 薄壳） |
+| `workspaceRegistry` | 工作区记录的列举/建/删/改标题（`workspaces` 分区） | `listRecords()` 返回 `[]`；写入抛 `host.workspaceUnavailable` | `src/index.ts` 的 `function readService`；`DshWorkspaceFacade.registry()`（唯一读取点）；`DshWorkspaceFacade` 的 `listRecords` / `writeRecord` / `removeRecord` / `attachSession` |
+| `webServer` | 注册 `/api/dsh-config-manager/*` 全部 HTTP 路由 | 记一条 warn 并 `return`：**路由完全不注册**，引擎能力仍在但浏览器半不可用 | `src/index.ts` 的 `readService<WebServer>(ctx, 'webServer')` 缺失分支（warn + `return`；路由注册见 `src/routes/kit.ts` 的 `registerRoutes`） |
+| `tools` | 注册 5 个 Agent 可调用模型工具（`config_backup` 等） | 记一条 warn 并 `return`，跳过工具注册 | `src/core/model-tools.ts`；`src/core/model-tools.ts:320+`（`defineTool` 薄壳） |
 
-> `src/core/model-tools.ts:313-315` 有一条硬约束注释：**必须**经 `ctx.get('tools')` 的返回值注册，绝不能写 `ctx.tools.register` —— Cordis 的属性访问要求插件声明 `inject:['tools']`，未声明时即使服务存在也会抛 `cannot get property X without inject`。`src/core/model-tools.test.ts:286-293` 用模拟 ctx 固定了这个守卫。
+> `src/core/model-tools.ts:313-315` 有一条硬约束注释：**必须**经 `ctx.get('tools')` 的返回值注册，绝不能写 `ctx.tools.register` —— Cordis 的属性访问要求插件声明 `inject:['tools']`，未声明时即使服务存在也会抛 `cannot get property X without inject`。`src/core/model-tools.test.ts` 用模拟 ctx 固定了这个守卫。
 
 ### 1.3 非 Cordis 服务、但同样是 host 侧「官方契约」的依赖
 
 | 依赖 | 用途 | 取证位置 |
 |---|---|---|
-| `@deepseek-ai/dsh-home-paths` 的 `resolveDshHome()` / `dshHomePath()` | 解析 `$DSH_HOME`（`homeDir`）与插件数据根 `$DSH_HOME/dsh-config-manager` | `src/index.ts:50`（import）；`src/index.ts:4635`、`4638` |
-| 官方 `dsh plugin --profile <name>` CLI | 插件安装/列举通道（pnpm forwarder），不依赖 `pluginMarketplace` / `pluginInventory` 服务 | `src/index.ts:31-34`（设计说明）；`src/core/plugin-cli.ts`（实现）；`src/index.ts:357-359`（调用） |
-| `$DSH_HOME/cordis.patch.yml` + `$DSH_HOME/profiles/<name>/cordis.patch.yml` 文件格式 | MCP / prompts 分区与插件激活行的读写对象（经 `js-yaml`，非官方服务） | `src/index.ts:685-704`；`src/index.ts:84`（`USER_PATCH_FILE`） |
+| `@deepseek-ai/dsh-home-paths` 的 `resolveDshHome()` / `dshHomePath()` | 解析 `$DSH_HOME`（`homeDir`）与插件数据根 `$DSH_HOME/dsh-config-manager` | `src/index.ts` 的 `import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'`（import）；`apply()` 内 `resolveDshHome()` 与 `dshHomePath('dsh-config-manager')` |
+| 官方 `dsh plugin --profile <name>` CLI | 插件安装/列举通道（pnpm forwarder），不依赖 `pluginMarketplace` / `pluginInventory` 服务 | `src/index.ts` 头部设计注释（不依赖 web-only `pluginMarketplace` / `pluginInventory`）；`src/core/plugin-cli.ts`（实现）；`src/index.ts` 的插件 CLI facade（`listInstalledPlugins()` / `runner(…, ['add', …])`） |
+| `$DSH_HOME/cordis.patch.yml` + `$DSH_HOME/profiles/<name>/cordis.patch.yml` 文件格式 | MCP / prompts 分区与插件激活行的读写对象（经 `js-yaml`，非官方服务） | `src/index.ts` 的 `PROFILE_PATCH_FILE`（`'cordis.patch.yml'`）与 patch 读写实现（`patchFile.readPatchLines` / `applyPatchChanges`）；`src/adapters/index.ts` 的 `USER_PATCH_FILE` —— 该常量在 `src/index.ts` 只被 import，未在那里定义 |
 
 **运行时真实 import 的官方包只有 4 个**（在构建产物 `lib/` 全量 `.js` 中按字符串计数验证）：
 
@@ -69,7 +69,7 @@ export const inject = ['settings', 'credentials']
 | `@deepseek-ai/dsh-home-paths` | `lib/index.js:44` | 1 |
 | `@deepseek-ai/dsh-tools` | `lib/core/model-tools.js` | 1 |
 
-其余 `@deepseek-ai/*` 在 `lib/` 中**出现 0 次** —— 即 `dsh-workspace`、`dsh-host-webserver` 是纯 `import type`（`src/index.ts:53-56`，源码注释明写 "Type-only … without any runtime import"），编译后不留痕迹。
+其余 `@deepseek-ai/*` 在 `lib/` 中**出现 0 次** —— 即 `dsh-workspace`、`dsh-host-webserver` 是纯 `import type`（`src/index.ts` 的 `import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'`，源码注释明写 "Type-only … without any runtime import"），编译后不留痕迹。
 
 ---
 
@@ -97,7 +97,7 @@ node:https   ← 仅出现在解释历史 bug 的注释文本里，不是真实�
 | `@deepseek-ai/dsh-client-runtime` | `ClientContext` 类型来源 | `src/client/client-types.ts:12` |
 | `@deepseek-ai/dsh-client-locale` | 拉入 `ctx.locale` 的 `Context` 合并（`locale.register` / `bind` / `getLocale`） | `src/client/index.ts:18`；`src/client/index.ts:87-105` |
 | `@deepseek-ai/dsh-client-ui-settings` | 拉入 `settings.section` 的 `SlotMap` 合并 | `src/client/index.ts:20`；`src/client/index.ts:111` |
-| `@deepseek-ai/dsh-client-ui-slots` | `SlotMap` / `LocaleNamespaceMap` / `TranslateNS` / `PropsRuntime` 合并表 | `src/client/client-types.ts:13,24,30,34,38`；`src/client/ConfigManagerSection.tsx:23`；`src/client/index.ts:22,50-63` |
+| `@deepseek-ai/dsh-client-ui-slots` | `SlotMap` / `LocaleNamespaceMap` / `TranslateNS` / `PropsRuntime` 合并表 | `src/client/client-types.ts`；`src/client/ConfigManagerSection.tsx:23`；`src/client/index.ts:22,50-63` |
 | `@deepseek-ai/dsh-client-connection` | 见 2.3 —— 仅出现在 `dsh.client.inject`，源码无 import | `package.json:63`（`dsh.client.inject`） |
 | `react` / `react-dom` | React 18 运行时，由 client 运行时以 seed 形式提供 | `package.json:106-107`；`tsdown.config.ts:99` |
 
@@ -208,7 +208,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | `0.1.5-rc.2`（profile 解析） | `SettingsConflictError, SettingsProvider, redactSecrets, default` |
 
 → **`settingsNamespace` / `deepEqualJson` / `installSettingsSection` 在 rc.6 → rc.2 之间被移除。**
-插件对此**有防御**：`src/index.ts:469-478` 的 `safeSettingsNamespace` 先探测 `typeof fn === 'function'`，不在时回退为正则校验的纯字符串；`src/index.ts:481-491` 的 `safeCredentialRef` 同构。这是 rc 期 API 漂移已被踩过的直接证据（源码注释点名兼容 `0.1.1` 与 `0.1.2-alpha.x`）。
+插件对此**有防御**：`src/index.ts` 的 `safeSettingsNamespace` 先探测 `typeof fn === 'function'`，不在时回退为正则校验的纯字符串；`src/index.ts` 的 `safeCredentialRef` 同构。这是 rc 期 API 漂移已被踩过的直接证据（源码注释点名兼容 `0.1.1` 与 `0.1.2-alpha.x`）。
 
 `dsh-credentials` 的导出：rc.6 为 4 项，rc.2 为 10 项（新增 `credentialKey` / `credentialKeyId` / `credentialKeyScope` / `isCredentialKeySegment` / `isCredentialRefName` / `parseCredentialKey`），`credentialRef` 两版都在 → **本插件不受影响**。
 
@@ -242,20 +242,20 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 | # | DSH 若改动 | 会破的部分 | 用户看到的现象 | 快速定位 |
 |---|---|---|---|---|
-| **R1** | `settings` 服务方法签名（`describe` 返回结构、`replace`/`update` 的 revision 语义）或 `settingsNamespace` 一类导出再次变动 | host 半全部读写路径：13 个 adapter 里的 settings/providers/credentials、回滚、快照 diff | 导出/导入/回滚报 `namespace not found` 或 revision 冲突；`设置` tab 空数据 | `ctx.get('settings')` 是否存在 → `src/index.ts:503-527`；`Object.keys(require('@deepseek-ai/dsh-settings'))` 比对 `settingsNamespace` |
-| **R2** | `credentials` 服务方法签名或 `credentialRef` 导出移除 | 同步 token / WebDAV 密码 / GitHub device flow 的槽位读写 | 同步配置保存后 `passwordConfigured` 恒 false；WebDAV/Git 同步鉴权失败 | `src/index.ts:530-550`；`Object.keys(require('@deepseek-ai/dsh-credentials'))` |
-| **R3** | `webServer` 服务名或 `register(route)` 契约变化 | **整个 `/api/dsh-config-manager/*` 路由族** | 设置页能打开但每个操作都失败；host 日志出现 `webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册` | `src/index.ts:4867-4871`（缺服务即打这条 warn）；确认 `ctx.get('webServer')` |
-| **R4** | `workspaceRegistry` 服务名或 `list/get/create/delete` 契约变化 | `workspaces` 分区 | 工作区列表导出为空；导入工作区报 `host.workspaceUnavailable` | `src/index.ts:648-650`（服务名硬编码 `'workspaceRegistry'`）；`src/index.ts:652-681` |
-| **R5** | `tools` 服务名或 `register(toolDef)` 契约变化 / `defineTool` 签名变化 | 5 个 Agent 模型工具（`config_backup` 等） | Agent 侧工具消失或调用报错；host 日志 `tools 服务不可用：跳过模型工具注册` | `src/core/model-tools.ts:306-310`；`src/core/model-tools.test.ts:286-293` 复现守卫 |
-| **R6** | `dshHomePath` / `resolveDshHome` 语义变化（`$DSH_HOME` 解析规则、返回路径形态） | 插件数据根、所有文件级读写、快照目录 | 数据写到意外位置；快照/导出列表「看不到刚做的备份」 | `src/index.ts:4635-4651`；直接 `console.log(resolveDshHome())` |
+| **R1** | `settings` 服务方法签名（`describe` 返回结构、`replace`/`update` 的 revision 语义）或 `settingsNamespace` 一类导出再次变动 | host 半全部读写路径：13 个 adapter 里的 settings/providers/credentials、回滚、快照 diff | 导出/导入/回滚报 `namespace not found` 或 revision 冲突；`设置` tab 空数据 | `ctx.get('settings')` 是否存在 → `src/index.ts` 的 `class DshSettingsFacade`；`Object.keys(require('@deepseek-ai/dsh-settings'))` 比对 `settingsNamespace` |
+| **R2** | `credentials` 服务方法签名或 `credentialRef` 导出移除 | 同步 token / WebDAV 密码 / GitHub device flow 的槽位读写 | 同步配置保存后 `passwordConfigured` 恒 false；WebDAV/Git 同步鉴权失败 | `src/index.ts` 的 `class DshCredentialsFacade`；`Object.keys(require('@deepseek-ai/dsh-credentials'))` |
+| **R3** | `webServer` 服务名或 `register(route)` 契约变化 | **整个 `/api/dsh-config-manager/*` 路由族** | 设置页能打开但每个操作都失败；host 日志出现 `webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册` | `src/index.ts` 的 `readService<WebServer>(ctx, 'webServer')` 缺失分支（缺服务即打这条 warn）；确认 `ctx.get('webServer')` |
+| **R4** | `workspaceRegistry` 服务名或 `list/get/create/delete` 契约变化 | `workspaces` 分区 | 工作区列表导出为空；导入工作区报 `host.workspaceUnavailable` | `DshWorkspaceFacade.registry()`（服务名硬编码 `'workspaceRegistry'`）；`DshWorkspaceFacade` 的其余方法 |
+| **R5** | `tools` 服务名或 `register(toolDef)` 契约变化 / `defineTool` 签名变化 | 5 个 Agent 模型工具（`config_backup` 等） | Agent 侧工具消失或调用报错；host 日志 `tools 服务不可用：跳过模型工具注册` | `src/core/model-tools.ts`；`src/core/model-tools.test.ts` 复现守卫 |
+| **R6** | `dshHomePath` / `resolveDshHome` 语义变化（`$DSH_HOME` 解析规则、返回路径形态） | 插件数据根、所有文件级读写、快照目录 | 数据写到意外位置；快照/导出列表「看不到刚做的备份」 | `apply()` 内 `resolveDshHome()` / `dshHomePath('dsh-config-manager')`；直接 `console.log(resolveDshHome())` |
 | **R7** | client 运行时 seed 表变化（移除 `react/jsx-runtime`，或 React 升到 19 与 peer `^18.2.0` 冲突） | **整个 client 半**（设置页整块） | 设置页 `config-manager` section 不出现，或页面出现 `client-modules: require("react/jsx-runtime") missed the module table` | 读 `dsh-web-frontend/dist/assets/index-*.js` 里的 seed 表（`by()` 函数，9 项）；读 `dsh-client-modules/lib/client.js:300-309` 的抛错点 |
 | **R8** | `settings.section` Slot 契约变化（owner props、`register` 字段、`inject` face 形态） | 设置页注册 | 设置页 section 消失或白屏；控制台报 Slot 注册失败 | `src/client/index.ts:111-118`；对照 DSH 的 `dsh-client-ui-settings` SlotMap |
 | **R9** | `ctx.locale.register/bind/getLocale` 契约变化 | 全部 5 套 locale 字典 + `UiT` | 界面文案回退成裸 key（如 `section.label`）或英文/中文错配 | `src/client/index.ts:87-105`；`src/ui/i18n.ts`（缺 key 静默返回 key 本身） |
 | **R10** | `dsh.client.inject` / `dsh.client.platform` 字段校验变严（例如要求 inject 名字必须命中 boot graph） | client 半装载 | 设置页不出现；控制台报 client-modules 图相关错误 | 现状为「未命中即跳过、不抛错」（`dsh-client-modules/lib/client.js:265-268`），若 DSH 改为抛错则本节结论失效 |
 | **R11** | 插件加载器改为**强制 peer / engines 校验** | 安装/启动期 | 插件装不上或启动即被拒；报 peer 冲突（因 profile 为 `0.1.5-rc.2`，默认语义不满足 `^0.1.0-rc.6`） | §3.3 的 semver 实测表；检查 profile 是否开了 `autoInstallPeers` |
 | **R12** | DSH 进入 `0.2.x` | 全部 peer 范围 | 同 R11，且与 rc 无关（`^0.1.0-rc.6` 的上界是 `0.2.0`） | §3.3 表末行 |
-| **R13** | `$DSH_HOME/cordis.patch.yml` 或 profile patch 文件格式变化 | MCP 分区、prompts 分区、插件激活行 | MCP/prompts 导入后不生效；`patch 行` 解析报错 | `src/index.ts:685-704`；`src/adapters/mcp.ts:98,114,160`；`src/adapters/prompts.ts:119,135,195-205` |
-| **R14** | profile 目录布局变化（`profiles/<name>/` 或 `profiles/node_modules`） | `resolveDshVersion`（版本显示）、`resolveProfileDir`、插件 CLI 通道 | 关于页版本显示 `unknown`；插件安装/列举失败 | `src/index.ts:434-448`（两个候选路径）；`src/core/plugin-cli.ts` |
+| **R13** | `$DSH_HOME/cordis.patch.yml` 或 profile patch 文件格式变化 | MCP 分区、prompts 分区、插件激活行 | MCP/prompts 导入后不生效；`patch 行` 解析报错 | `src/index.ts` 的 `PROFILE_PATCH_FILE` 与 patch 读写实现（`patchFile.readPatchLines`）；`src/adapters/mcp.ts`；`src/adapters/prompts.ts` |
+| **R14** | profile 目录布局变化（`profiles/<name>/` 或 `profiles/node_modules`） | `resolveDshVersion`（版本显示）、`resolveProfileDir`、插件 CLI 通道 | 关于页版本显示 `unknown`；插件安装/列举失败 | `src/index.ts` 的 `resolveDshVersion`（两个候选路径）；`src/core/plugin-cli.ts` |
 
 ### 5.1 按「先破顺序」排序的直觉
 
@@ -279,7 +279,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 ### 规则 M2 —— 任一硬依赖服务被移除或改名
 
-`inject` 中的 `settings` / `credentials`（`src/index.ts:167`）任一被 DSH 移除或改名 → **必须**升 major。
+`inject` 中的 `settings` / `credentials`（`src/index.ts` 的 `export const inject`）任一被 DSH 移除或改名 → **必须**升 major。
 理由：这会让插件 fiber 直接不挂载，属不可降级的破坏。
 
 ### 规则 M3 —— 可选服务契约破坏且无降级路径

@@ -25,7 +25,7 @@ export {
 /* ---------------------------------------------------------------- 客户端专属：搜索 / 类别 */
 
 import type { MarketItemDetail, MarketListItem } from '../../market/types.ts';
-import type { ImportAnalysis, ImportPlan, PlanItem, PlanItemKind } from '../../core/types.ts';
+import type { ImportAnalysis, ImportPlan, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 import { isOfficialMarket } from '../../market/builtin.ts';

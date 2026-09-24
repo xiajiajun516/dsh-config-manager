@@ -1,48 +1,44 @@
 /**
- * 各分区数据结构：ZIP 内 JSON 分区文件 → 解析/校验，以及分区文件路径表。
- * 类型本体在 types.ts；本文件是「分区数据如何落盘/读回」的唯一出口。
+ * 各分区数据结构：ZIP 内 JSON 分区文件 → 解析/校验。
+ * 类型本体在 types.ts；分区集合与 ZIP 内布局由 section-registry.ts **派生**（本文件不再保留副本）。
+ *
+ * 派生关系（历史上一份事实抄写多份，t29 起收敛）：
+ *   SECTION_IDS / SECTION_JSON_PATHS / SECTION_FILE_PREFIXES / isFileSection ← SECTION_REGISTRY
+ *   分区载荷版本校验 ← versions.ts 的 sectionDataVersionIssue（注册表 dataVersion 是唯一来源）
  */
 import { parseJsonSafe } from '../utils/json.ts';
 import { isPathSafe } from '../utils/paths.ts';
+import { sectionMetaOf } from './section-registry.ts';
+import { sectionDataVersionIssue } from './versions.ts';
 import type {
   CredentialsSection, FilesSection, McpSection, PluginsSection,
   PromptsSection, ProvidersSection, SectionData, SectionId,
   SettingsSection, UiSection, WorkspacesSection,
 } from './types.ts';
 
-/** 全部分区 id（manifest 校验与 adapter registry 共用） */
-export const SECTION_IDS: readonly SectionId[] = [
-  'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts',
-  'skills', 'agentPresets', 'agentInstructions', 'workspaces', 'pluginFiles',
-  'credentialsStatus', 'secrets', 'sessions', 'self',
-];
-
-/** JSON 分区在 ZIP 内的相对路径；文件类分区（skills 等）走目录前缀，不在此表 */
-export const SECTION_JSON_PATHS: Partial<Record<SectionId, string>> = {
-  settings: 'config/settings.json',
-  ui: 'config/ui.json',
-  providers: 'ai/providers.json',
-  plugins: 'plugins/plugins.json',
-  mcp: 'mcp/servers.json',
-  prompts: 'custom/prompts.json',
-  workspaces: 'workspaces/workspaces.json',
-  credentialsStatus: 'security/credentials.json',
-};
-
-/** 文件类分区在 ZIP 内的目录前缀 */
-export const SECTION_FILE_PREFIXES: Partial<Record<SectionId, string>> = {
-  skills: 'custom/skills/',
-  agentPresets: 'agents/presets/',
-  agentInstructions: 'custom/agent-instructions/',
-  pluginFiles: 'plugin-files/',
-  sessions: 'sessions/',
-  self: 'self/',
-};
-
-/** 该分区是否是「文件类」分区（ZIP 内以真实文件存放而非 JSON） */
-export function isFileSection(sectionId: SectionId): boolean {
-  return sectionId in SECTION_FILE_PREFIXES;
-}
+/* —— 分区集合与 ZIP 布局：单一来源是 section-registry.ts，此处仅原样再导出（保持既有 import 路径可用） —— */
+export {
+  SECTION_IDS,
+  SECTION_JSON_PATHS,
+  SECTION_FILE_PREFIXES,
+  isFileSection,
+  SECTION_REGISTRY,
+  SECTION_DATA_VERSION,
+  sectionMeta,
+  sectionMetaOf,
+  requireSectionMeta,
+  isSectionId,
+  jsonPathOf,
+  filePrefixOf,
+  PORTABLE_SECTION_IDS,
+  OPT_IN_SYNC_SECTION_IDS,
+  DEFAULT_INCLUDED_SECTION_IDS,
+} from './section-registry.ts';
+export type {
+  SectionMeta,
+  SectionPayload,
+  SectionPortability,
+} from './section-registry.ts';
 
 /** 从 ZIP 内 JSON 解析分区数据（深度保护 + 结构校验） */
 export function parseSectionJson<T extends SectionData>(sectionId: SectionId, raw: string): T {
@@ -57,23 +53,35 @@ export function parseSectionJson<T extends SectionData>(sectionId: SectionId, ra
 
 export interface SectionIssue { path: string; message: string; severity: 'error' | 'warning'; }
 
-/** 分区数据结构基础校验（version 字段 + 顶层形状） */
+/**
+ * 分区数据结构基础校验（载荷版本 + 顶层形状）—— **由注册表驱动**：
+ *  - 版本轴 → `versions.ts` 的 `sectionDataVersionIssue`（注册表 dataVersion 唯一来源）；
+ *  - 形状 → `SECTION_REGISTRY[id].payload.kind` 判别联合穷尽 switch（新增载荷形态编译期可见）；
+ *  - 未注册 id（只可能来自运行期强转）→ **显式报错**，绝不落到按其它分区语义处理的 default
+ *    （历史缺陷在 `core/backup.ts` 的 `engineSnapshotEntry` default 分支：曾把未知分区静默记成
+ *    settingsNamespace，导致该分区写入无法回滚；core/config-snapshot.ts:430 附近有对应修复注释）。
+ */
 export function validateSectionData(sectionId: SectionId, data: unknown): SectionIssue[] {
   const issues: SectionIssue[] = [];
   if (data === null || typeof data !== 'object') {
     return [{ path: '$', message: `分区 ${sectionId} 数据必须是对象`, severity: 'error' }];
   }
+  const meta = sectionMetaOf(sectionId);
+  if (meta === null) {
+    return [{ path: '$', message: `未注册分区 ${String(sectionId)}：拒绝校验（新增分区须在 schema/section-registry.ts 注册）`, severity: 'error' }];
+  }
   const obj = data as Record<string, unknown>;
-  if (obj['version'] !== 1) {
-    issues.push({ path: 'version', message: `分区 ${sectionId} 的 version 必须为 1（收到 ${String(obj['version'])}）`, severity: 'error' });
+  const versionIssue = sectionDataVersionIssue(meta.id, obj['version']);
+  if (versionIssue !== null) {
+    issues.push({ path: 'version', message: versionIssue, severity: 'error' });
     return issues;
   }
-  switch (sectionId) {
-    case 'settings':
-    case 'ui': {
+  const payload = meta.payload;
+  switch (payload.kind) {
+    case 'namespaces': {
       const ns = obj['namespaces'];
       if (ns === null || typeof ns !== 'object') {
-        issues.push({ path: 'namespaces', message: `分区 ${sectionId} 缺少 namespaces 对象`, severity: 'error' });
+        issues.push({ path: 'namespaces', message: `分区 ${meta.id} 缺少 namespaces 对象`, severity: 'error' });
       } else {
         for (const [name, rec] of Object.entries(ns as Record<string, unknown>)) {
           if (rec === null || typeof rec !== 'object') {
@@ -89,66 +97,63 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
       }
       break;
     }
-    case 'providers': {
-      const p = obj['providers'];
-      if (p === null || typeof p !== 'object') issues.push({ path: 'providers', message: '缺少 providers 对象', severity: 'error' });
+    case 'object': {
+      const value = obj[payload.key];
+      if (value === null || typeof value !== 'object') issues.push({ path: payload.key, message: `缺少 ${payload.key} 对象`, severity: 'error' });
       break;
     }
-    case 'plugins': {
-      if (!Array.isArray(obj['plugins'])) issues.push({ path: 'plugins', message: 'plugins 必须是数组', severity: 'error' });
-      if (obj['patch'] !== undefined && !Array.isArray(obj['patch'])) issues.push({ path: 'patch', message: 'patch 必须是数组', severity: 'error' });
-      // issue #35：patchFiles 会被写到 <home>/profiles/<profile>/<relativePath>，必须逐项校验
-      // （不可信 bundle 的路径穿越向量——与 file 类分区同级的防线）。
-      const patchFiles = obj['patchFiles'];
-      if (patchFiles !== undefined) {
-        if (!Array.isArray(patchFiles)) {
-          issues.push({ path: 'patchFiles', message: 'patchFiles 必须是数组', severity: 'error' });
-        } else {
-          patchFiles.forEach((pf, i) => {
-            const rec = (pf !== null && typeof pf === 'object') ? pf as Record<string, unknown> : null;
-            if (rec === null) {
-              issues.push({ path: `patchFiles[${i}]`, message: 'patch 文件条目必须是对象', severity: 'error' });
-              return;
-            }
-            const rel = rec['relativePath'];
-            if (typeof rel !== 'string' || rel === '' || !isPathSafe(rel)) {
-              issues.push({ path: `patchFiles[${i}].relativePath`, message: 'patch 文件路径必须是安全的相对路径（不得为绝对路径或含 ..）', severity: 'error' });
-            }
-            if (typeof rec['base64'] !== 'string') {
-              issues.push({ path: `patchFiles[${i}].base64`, message: 'patch 文件内容必须是 base64 字符串', severity: 'error' });
-            }
-          });
+    case 'array': {
+      if (!Array.isArray(obj[payload.key])) issues.push({ path: payload.key, message: `${payload.key} 必须是数组`, severity: 'error' });
+      for (const extra of payload.extraArrayKeys ?? []) {
+        if (obj[extra] !== undefined && !Array.isArray(obj[extra])) {
+          issues.push({ path: extra, message: `${extra} 必须是数组`, severity: 'error' });
+        }
+      }
+      if (payload.validatePatchFiles === true) {
+        // issue #35：patchFiles 会被写到 <home>/profiles/<profile>/<relativePath>，必须逐项校验
+        // （不可信 bundle 的路径穿越向量——与 file 类分区同级的防线）。
+        const patchFiles = obj['patchFiles'];
+        if (patchFiles !== undefined) {
+          if (!Array.isArray(patchFiles)) {
+            issues.push({ path: 'patchFiles', message: 'patchFiles 必须是数组', severity: 'error' });
+          } else {
+            patchFiles.forEach((pf, i) => {
+              const rec = (pf !== null && typeof pf === 'object') ? pf as Record<string, unknown> : null;
+              if (rec === null) {
+                issues.push({ path: `patchFiles[${i}]`, message: 'patch 文件条目必须是对象', severity: 'error' });
+                return;
+              }
+              const rel = rec['relativePath'];
+              if (typeof rel !== 'string' || rel === '' || !isPathSafe(rel)) {
+                issues.push({ path: `patchFiles[${i}].relativePath`, message: 'patch 文件路径必须是安全的相对路径（不得为绝对路径或含 ..）', severity: 'error' });
+              }
+              if (typeof rec['base64'] !== 'string') {
+                issues.push({ path: `patchFiles[${i}].base64`, message: 'patch 文件内容必须是 base64 字符串', severity: 'error' });
+              }
+            });
+          }
         }
       }
       break;
     }
-    case 'mcp': {
-      if (!Array.isArray(obj['servers'])) issues.push({ path: 'servers', message: 'servers 必须是数组', severity: 'error' });
-      break;
-    }
-    case 'prompts': {
-      if (!Array.isArray(obj['prompts'])) issues.push({ path: 'prompts', message: 'prompts 必须是数组', severity: 'error' });
-      break;
-    }
-    case 'workspaces': {
-      if (!Array.isArray(obj['workspaces'])) issues.push({ path: 'workspaces', message: 'workspaces 必须是数组', severity: 'error' });
-      break;
-    }
-    case 'credentialsStatus': {
-      if (!Array.isArray(obj['credentials'])) issues.push({ path: 'credentials', message: 'credentials 必须是数组', severity: 'error' });
-      break;
-    }
-    case 'skills':
-    case 'agentPresets':
-    case 'agentInstructions':
-    case 'pluginFiles':
-    case 'sessions':
-    case 'self': {
+    case 'files': {
       if (!Array.isArray(obj['files'])) issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
       break;
     }
-    default:
-      issues.push({ path: '$', message: `未知分区 ${sectionId}`, severity: 'error' });
+    case 'none': {
+      // secrets：凭据值走独立加密容器（.credentials.yaml / secrets.enc），没有分区 JSON 可校验
+      issues.push({
+        path: '$',
+        message: `分区 ${meta.id} 无 JSON 载荷（凭据值走独立加密容器，不参与分区 JSON 校验）`,
+        severity: 'error',
+      });
+      break;
+    }
+    default: {
+      // 判别联合已穷尽：新增 payload.kind 时此赋值会编译失败（提醒补校验分支）
+      const exhaustive: never = payload;
+      issues.push({ path: '$', message: `未处理的分区载荷形态 ${JSON.stringify(exhaustive)}`, severity: 'error' });
+    }
   }
   return issues;
 }

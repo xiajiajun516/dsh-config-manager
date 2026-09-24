@@ -4,13 +4,16 @@
  *  - update：进度字段落账并刷新 updatedAt；完成/失败后晚到更新被忽略
  *  - finish/fail：状态与 result/error 落账
  *  - get/listActive：过滤语义与不存在处理
- *  - 保留期清理：超过 retentionMs 后不可见（含长期 running 僵死任务）
+ *  - 保留期清理：终态 run 超过 retentionMs 后不可见；**running run 不受 retentionMs 影响**
+ *    （修 P0-6：两条后台调度器从 register 到 finish 从不写 update，updatedAt 恒为注册时刻，
+ *    旧实现会把还在跑的长任务一起删掉 —— 随后 /progress 恒 404、finish() 静默失效）；
+ *    长期不 settle 的 running run 另有 stalledRunMs 兜底（缺省远长于 retentionMs）
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  DEFAULT_RUN_RETENTION_MS, MAX_RUN_LOG_LINES, RunConflictError, RunRegistry,
+  DEFAULT_RUN_RETENTION_MS, DEFAULT_RUN_STALLED_MS, MAX_RUN_LOG_LINES, RunConflictError, RunRegistry,
 } from './run-registry.ts'
 
 test('register: 生成不可猜的 32 hex runId 且初始为 running', () => {
@@ -207,7 +210,7 @@ test('get/listActive: 只列出 running run；不存在返回 undefined', () => 
   assert.notEqual(reg.get(b.runId)?.detail, 'hacked')
 })
 
-test('保留期清理: 超过 retentionMs 后不可见（含长期 running 僵死任务）', () => {
+test('保留期清理: 终态 run 超过 retentionMs 后不可见', () => {
   let now = 0
   const reg = new RunRegistry({ retentionMs: 1000, now: () => now })
   const run = reg.register('export')
@@ -215,16 +218,64 @@ test('保留期清理: 超过 retentionMs 后不可见（含长期 running 僵�
   reg.finish(run.runId, { ok: true })
   assert.ok(reg.get(run.runId), '保留期内可见')
   now = 1501
-  assert.equal(reg.get(run.runId), undefined, '超过保留期清理')
+  assert.equal(reg.get(run.runId), undefined, '终态 run 超过保留期照旧清理')
   assert.equal(reg.listActive().length, 0)
 })
 
-test('保留期清理: 长时间不 settle 的 running run 同样被清理', () => {
+/**
+ * P0-6 回归：running run 绝不能因 updatedAt 陈旧被删。
+ * 现场：autosync / backup-schedule 从 register 到 finish 从不写 update/appendLog，
+ * updatedAt 恒为注册时刻 → 超过默认 30 分钟的后台任务会被下一次 /progress 轮询（内部先
+ * prune）删掉，随后 /progress 恒 404、finish() 静默返回 undefined、同 kind 防重失效。
+ */
+test('保留期清理 P0-6: updatedAt 陈旧的 running run 不被 prune 掉（get/listActive 仍可取得）', () => {
   let now = 0
   const reg = new RunRegistry({ retentionMs: 60000, now: () => now })
-  reg.register('import')
+  const run = reg.register('autosync')
+
+  now = 60001 // 超过 retentionMs；running run 期间一次 update 都没写（调度器真实形态）
+  const got = reg.get(run.runId)
+  assert.ok(got, 'running run 不得被 get() 的惰性 prune 掉')
+  assert.equal(got?.status, 'running')
+
+  const active = reg.listActive()
+  assert.equal(active.length, 1, 'running run 必须仍在活跃列表里（否则前端进度条消失）')
+  assert.equal(active[0]?.runId, run.runId)
+
+  // 任务照常收敛：finish 必须能拿到这条 run（旧实现返回 undefined，结果静默丢失）
+  const finished = reg.finish(run.runId, { ok: true })
+  assert.ok(finished, 'finish 不得因 run 被 prune 而静默返回 undefined')
+  assert.equal(finished?.status, 'done')
+
+  // running 期间的陈旧不阻塞同 kind 新 run 的语义不变（仍是 409 防重）
+  now = 120002
+  assert.equal(reg.get(run.runId), undefined, '转终态后回归 retentionMs 清理')
+})
+
+test('保留期清理 P0-6: running 期间不被清理，但同 kind 防重仍生效（不得静默放行并发）', () => {
+  let now = 0
+  const reg = new RunRegistry({ retentionMs: 1, now: () => now })
+  reg.register('backup-schedule')
+  now = 1000000
+  assert.throws(() => reg.register('backup-schedule'), RunConflictError, 'running run 必须继续挡住同 kind 新 run')
+})
+
+test('保留期清理: 长期不 settle 的 running run 由 stalledRunMs 兜底清理（缺省远长于 retentionMs）', () => {
+  let now = 0
+  const reg = new RunRegistry({ retentionMs: 60000, stalledRunMs: 600000, now: () => now })
+  const run = reg.register('import')
+
   now = 60001
-  assert.equal(reg.listActive().length, 0, '僵死 running run 也要清理')
+  assert.ok(reg.get(run.runId), '超过 retentionMs 但未到 stalledRunMs：running run 仍在')
+
+  now = 600001
+  assert.equal(reg.get(run.runId), undefined, '超过 stalledRunMs：僵死 running run 兜底清理（不永久堵住同 kind）')
+  assert.equal(reg.listActive().length, 0)
+})
+
+test('stalledRunMs: 缺省值为 6 小时（远长于 30 分钟 retention，避免误杀长任务）', () => {
+  assert.equal(DEFAULT_RUN_STALLED_MS, 6 * 60 * 60 * 1000)
+  assert.ok(DEFAULT_RUN_STALLED_MS > DEFAULT_RUN_RETENTION_MS, 'stalled 阈值必须显著长于终态保留期')
 })
 
 test('默认保留期常量为 30 分钟', () => {

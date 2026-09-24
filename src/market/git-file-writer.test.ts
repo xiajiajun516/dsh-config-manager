@@ -190,7 +190,7 @@ test('git-file-writer: 已存在工作副本 → pull --ff-only 而非重新 clo
 });
 
 test('git-file-writer: push 失败 → 错误消息脱敏（token 与 repoUrl 均被掩码）', async (t) => {
-  const { exec, calls } = installExec((call) => {
+  const { exec } = installExec((call) => {
     if (gitCommandOf(call) === 'diff') return { stdout: '', stderr: '', code: 1 }; // 有变化 → 走 commit + push
     if (gitCommandOf(call) === 'push') {
       return { stdout: '', stderr: `fatal: couldn't find remote ref ${TEST_TOKEN} @ ${'https://github.com/xiaojun/dsh-configs'}`, code: 128 };

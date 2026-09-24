@@ -156,7 +156,6 @@ test('marketUnitIndex：按单元归并「将改动 / 已一致 / 未勾选 / �
 })
 
 test('filterPickerNodes：四档筛选共用同一份单元判定；不可细分分区不被藏掉', () => {
-  const nodes = marketPickerNodes(PLAN)
   const plan: ImportPlan = {
     ...PLAN,
     items: [

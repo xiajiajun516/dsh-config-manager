@@ -87,17 +87,21 @@ Browse the built-in official market for ready-made configurations (model provide
 
 ## 📸 Screenshots
 
+| Overview | Backups & Snapshots |
+|:---:|:---:|
+| ![Overview](assets/screenshot-overview-en.png) | ![Backups and snapshots](assets/screenshot-backups-en.png) |
+
 | Export | Import Preview |
 |:---:|:---:|
-| ![One-click Export](assets/screenshot-export.png) | ![Import Preview](assets/screenshot-import-preview.png) |
+| ![One-click Export](assets/screenshot-export-en.png) | ![Import Preview](assets/screenshot-import-en.png) |
 
-| Snapshot Restore | Remote Sync |
+| Remote Sync | Configuration Market |
 |:---:|:---:|
-| ![Snapshot Restore](assets/screenshot-snapshots.png) | ![Remote Sync](assets/screenshot-sync.png) |
+| ![Remote Sync](assets/screenshot-sync-en.png) | ![Configuration Market](assets/screenshot-market-en.png) |
 
-| Configuration Market |
+| Profiles (DSH profiles) |
 |:---:|
-| ![Configuration Market](assets/screenshot-market.png) |
+| ![Profiles](assets/screenshot-profiles-en.png) |
 
 ---
 
@@ -331,6 +335,8 @@ dsh-config-manager verify [--id <file|path>] [--json]         # read-only check 
                           [--data-dir <dir>]
 dsh-config-manager backup [--sections <a,b,c>] [--out <path>] # offline file-level backup
                           [--dry-run] [--data-dir <dir>]
+dsh-config-manager sessions repair [--home <dir>] [--fix]     # offline session layout repair
+                                   [--keep <dir>] [--map old=new]...
 ```
 
 **`reinstall` — rescue when DSH is broken.** It reinstalls the `@deepseek-ai/dsh` launcher across platforms (uses the right command per OS: PowerShell on Windows, bash on Unix). By default it reinstalls the launcher + clears global caches; interactively it asks which **dangerous** clean-up items to include (settings / plugins / session data & credentials) — those are **not** selected by default, and any destructive choice requires a second confirmation by typing `YES` before anything runs. Before wiping any `~/.dsh` data it makes an emergency backup at `.reinstall-backup` (the `snapshots/` folder is deliberately never touched).
@@ -396,7 +402,7 @@ dsh-config-manager backup --sections skills,self          # narrow the scope
 
 `--sections` accepts `skills,agentPresets,agentInstructions,self,pluginFiles`. `pluginFiles` is **opt-in** (as in the GUI): it copies third-party plugin files verbatim, and `dsh-ssh.json` holds plaintext host passwords — select it only when you have looked at what is in there.
 
-**A typical rescue flow** when DSH won't start: ① `dsh-config-manager reinstall` to bring the launcher back (plus any clean-up), ② `dsh web` to start DSH again, ③ re-add the plugin from the registry, and ④ pull a snapshot from the remote repo (or run `dsh-config-manager restore`) to bring your config back. The CLI works at every step regardless of DSH's health.
+**A typical rescue flow** when DSH won't start: ① `dsh-config-manager reinstall` to bring the launcher back (plus any clean-up), ② if DSH reports a session-log error (`corrupt session log` / `duplicate JSONL session id`), run `dsh-config-manager sessions repair --fix` first — it repairs the log layout offline, ③ `dsh web` to start DSH again, ③ re-add the plugin from the registry, and ④ pull a snapshot from the remote repo (or run `dsh-config-manager restore`) to bring your config back. The CLI works at every step regardless of DSH's health.
 
 **`recover-stale-lock` — when every operation suddenly fails.** Before touching your config, the plugin claims a small environment lock (it records who is operating plus a heartbeat) so that two operations can never write your config at the same time. If a `dsh web` process is **force-killed** (Task Manager, `kill -9`), the lock file survives with a dead owner: the next operation is refused, and it stays refused **no matter how often you retry or restart DSH** — because the plugin deliberately never removes a lock on its own (a wrong guess could evict a live operation).
 
@@ -412,6 +418,25 @@ Symptoms and the fix:
 # safe: it inspects first and refuses unless the owner is proven dead (a live lock is never touched)
 dsh-config-manager recover-stale-lock
 ```
+
+**`sessions repair` — when DSH refuses to start over a session log.** DSH validates that each session log sits exactly where its own header says it belongs: `corrupt session log … header id and cwd identify …`, or `duplicate JSONL session id … in multiple project directories`. The plugin cannot help at that point (it only loads *inside* DSH), so this is the one repair path that works while DSH is down. It reads every session's first-frame cwd and moves the session directory under `projectKeyOf(cwd)` — the location DSH expects, derived from the log itself, never guessed.
+
+- **Dry run by default** (zero writes); `--fix` performs the moves. Exit code: dry runs always 0, `--fix` returns 1 if anything failed, conflicted or rolled back.
+- **`--map old=new`** (repeatable) is for cross-machine restores: a matching prefix rewrites the first-frame cwd before relocating the directory (every other frame is copied byte for byte). Targets that already exist are never overwritten.
+- **`--keep <dir>`** resolves duplicate ids: the copy you name is kept, the others are moved into `sessions/.cm-repair-quarantine-<timestamp>/` — moved, never deleted. Without `--keep` duplicates are reported only.
+
+```bash
+# see what would move (no writes at all)
+dsh-config-manager sessions repair
+# apply, mapping a source-machine prefix onto this machine
+dsh-config-manager sessions repair --fix --map 'C:/Users/alice=D:/Work'
+```
+
+If the two machines use **different DSH base paths** (e.g. `/opt/dsh/.dsh` vs a Windows drive path), the backup records the source base path and the import **rebases automatically** every path that lives under it (session cwd, workspace path, …) onto your local one — no mapping to type. User mappings still apply afterwards, so you can override anything.
+
+In the content picker, selecting sessions also selects the workspaces that own them (and unchecking a workspace unchecks its sessions).
+
+Cross-machine restores need no extra step in the GUI: **exporting sessions now carries the workspaces that own them**, and the path mapping you fill in the import wizard rewrites both the workspace paths and the sessions' first-frame cwd (relocating the directories accordingly) before the sessions are attached to those workspaces.
 
 **Plugins installed but the backup doesn't see them?** Check **Settings → DSH Config Manager → About**: it now shows which directory / profile the plugin list was read from, and how many plugins were detected. The list comes from `$DSH_HOME/profiles/<profile>/package.json` → `dependencies` (plus anything declared in `dsh.profile.bundles` that is not a dependency), where `<profile>` is resolved as `config.profile` → `--profile` → `web`. If the shown path is not the profile you installed into (Desktop builds may use a different profile or a different `DSH_HOME`), that is the cause — align `--profile` / `DSH_HOME` with it.
 

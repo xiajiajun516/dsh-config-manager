@@ -149,6 +149,8 @@ export class MockImportPort implements ImportPort {
   result: ImportResult;
   analyzeCalls = 0;
   planCalls: ImportDecisions[] = [];
+  /** 每次 createImportPlan 的附加参数（加密备份的计划期解密密码；仅内存） */
+  planOptsCalls: { decryptPassword?: string }[] = [];
   executeCalls: { confirm: boolean; secretInputs?: Record<string, string>; rollbackOnError: boolean; decryptPassword?: string; plan?: ImportPlan }[] = [];
 
   constructor(opts: {
@@ -165,8 +167,13 @@ export class MockImportPort implements ImportPort {
     this.analyzeCalls += 1;
     return this.analysis;
   }
-  async createImportPlan(_zip: string, decisions: ImportDecisions): Promise<ImportPlan> {
+  async createImportPlan(
+    _zip: string,
+    decisions: ImportDecisions,
+    opts: { decryptPassword?: string } = {},
+  ): Promise<ImportPlan> {
     this.planCalls.push(decisions);
+    this.planOptsCalls.push(opts);
     return this.plan;
   }
   async decryptArchive(zipPath: string): Promise<{ zipPath: string; refs: string[] }> {

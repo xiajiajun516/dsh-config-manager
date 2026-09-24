@@ -18,11 +18,10 @@ import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  MigrationStore, sanitizeEntry, queryHistory, summarizeHistory, renderExport,
+  MigrationStore, sanitizeEntry, queryHistory, renderExport,
   parseHistoryQuery, isValidMigrationKind, redactHistoryText,
-  makeHistoryFilename, isHistoryBasename, DEFAULT_MIGRATION_RETENTION,
-  MIGRATION_HISTORY_SCHEMA_VERSION,
-  type MigrationKind, type StoredMigrationHistoryEntry, type MigrationIo,
+  makeHistoryFilename, isHistoryBasename,
+  type StoredMigrationHistoryEntry, type MigrationIo,
 } from './migration-history.ts';
 
 function tmp(t: test.TestContext): string {
@@ -127,7 +126,6 @@ test('APPEND-ONLY：basename 校验——只认合法历史文件，忽略 tmp �
 test('APPEND-ONLY：retention 只删最旧合法条目，幂等，损坏文件不阻塞', async (t) => {
   const dir = tmp(t);
   const store = mkStore(dir);
-  const hist = path.join(dir, 'migration-history');
   // append 4 条，retention=2（保留最近 2 条）
   await store.append(makeRaw({ kind: 'import', at: '2026-08-30T12:00:00.000Z' }));
   await store.append(makeRaw({ kind: 'restore', at: '2026-08-30T12:01:00.000Z' }));

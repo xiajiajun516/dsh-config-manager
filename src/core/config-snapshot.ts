@@ -20,11 +20,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { parseJsonSafe } from '../utils/json.ts';
-import { SECTION_IDS } from '../schema/config.ts';
+import { SECTION_IDS, isSectionId } from '../schema/config.ts';
 import { CURRENT_SCHEMA_VERSION } from '../schema/versions.ts';
 import { msgOf, zhMsg } from './messages.ts';
 import type { MsgFunc } from './messages.ts';
 import { isValidSnapshotId } from './restore.ts';
+import { planItemWritesTarget } from './backup.ts';
 import { statesEqual, type ConfigState } from './config-state.ts';
 import type { ConfigSnapshotKind, UndoCandidate } from './undo.ts';
 import type { ConfigAdapter, ExportSection, HostContext, ImportContext } from './types.ts';
@@ -399,12 +400,18 @@ export interface ConfigSnapshotRestoreReport {
   needsRestart: boolean;
 }
 
-/** 非破坏性计划项：不调用 applyItem（与导入管线的「可执行 kinds」口径一致） */
-const NON_EXECUTABLE_KINDS = new Set(['Skip', 'Warning', 'MissingSecret', 'MissingDependency', 'PathMapping']);
+/**
+ * 回放的执行上下文：回放**没有**秘密输入来源（不传 secretInputs / decryptedCredentials），
+ * 因此 MissingSecret 恒不可执行 —— 与导入路径「无值 → skip」同一判定，
+ * 绝不是又一份 kind 清单（可执行集合单点派生自 backup.planItemWritesTarget）。
+ */
+const REPLAY_EXEC_CONTEXT = { secretValueAvailable: (): boolean => false } as const;
 
 /**
  * 回放一个配置快照：对每个分区 validate → analyzeImport → applyItem。
- * 与导入/Profile 切换共用 adapter 管线，因此行为一致、无第二套写入逻辑。
+ * 与导入/Profile 切换共用 adapter 管线**与同一套可执行集合判定**
+ * （backup.planItemWritesTarget，单点）：未采纳的 Conflict 与导入路径一致地 skip，
+ * 绝不再出现「导入是 skip、回放却 applyItem 静默覆盖」的双语义。
  * 单项失败不拖垮其余（如实计入 failed），与 rollback.ts 的尽力语义一致。
  */
 export async function restoreConfigSnapshot(
@@ -416,9 +423,14 @@ export async function restoreConfigSnapshot(
   const only = opts.only !== undefined ? new Set(opts.only) : null;
 
   const sections = new Map<SectionId, unknown>();
+  /** 快照里出现的**未注册分区**（旧版本写入 / 手改快照 / 未来分区被降级） */
+  const unknownSections: string[] = [];
   for (const [k, v] of Object.entries(snapshot.data)) {
-    if (only !== null && !only.has(k as SectionId)) continue;
-    sections.set(k as SectionId, v);
+    // t30：未注册分区**显式记录**（与 `only` 无关 —— 它本来就不会被回放），绝不静默丢弃、
+    // 更不按其它分区语义回放（旧缺陷见 backup.ts `engineSnapshotEntry` 的 default 分支）。
+    if (!isSectionId(k)) { unknownSections.push(k); continue; }
+    if (only !== null && !only.has(k)) continue;
+    sections.set(k, v);
   }
 
   const importCtx: ImportContext = {
@@ -447,7 +459,10 @@ export async function restoreConfigSnapshot(
     applied: [],
     skipped: [],
     failed: [],
-    invalidSections: [],
+    invalidSections: unknownSections.map((k) => ({
+      section: k as SectionId,
+      reason: `未注册分区「${k}」：已跳过回放（不按其它分区语义处理；新增分区需在 schema/section-registry.ts 注册）`,
+    })),
     needsRestart: false,
   };
 
@@ -482,7 +497,8 @@ export async function restoreConfigSnapshot(
         report.ok = false;
         continue;
       }
-      if (NON_EXECUTABLE_KINDS.has(item.kind)) {
+      if (!planItemWritesTarget(item, REPLAY_EXEC_CONTEXT)) {
+        // 信息项 / 未采纳的 Conflict / 无值凭据：不写目标，如实进报告（不静默）
         report.skipped.push(`${adapter.id}:${item.id}`);
         continue;
       }

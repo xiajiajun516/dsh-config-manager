@@ -7,9 +7,6 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
 
 import {
   AutoSyncScheduler, intervalToMs, shouldTriggerStartupRun, buildAutoApplyPlan,
@@ -24,6 +21,7 @@ import type { MergePlan, MergeSectionResult } from './merge.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
+import { SYNC_CHANNELS } from './sync-config.ts';
 import { syncIsConfigured } from './autosync-scheduler.ts';
 
 test('intervalToMs: 间隔换算正确', () => {
@@ -122,6 +120,34 @@ test('runOnce: 残留锁挡住 → skipped(mutation-locked) 且**写历史**（i
   assert.equal(entries[0]!.skipReason, 'mutation-locked');
   assert.equal(entries[0]!.transport, 'git');
   assert.equal(getConfig().consecutiveFailures, 0, '被锁挡下不计入连续失败');
+});
+/**
+ * 真机 bug 回归护栏（2026-09）：被锁挡下的两条早退路径必须**收敛 run 账**。
+ *
+ * 现场证据：sync-history 记下 `skipped / mutation-locked @19:30:45.104`，同刻注册的 run 25 分钟后
+ * 仍 updatedAt == createdAt → 运行中心「自动同步一直在加载」，且此后每次 autosync 都
+ * register → RunConflictError → 后台同步静默停摆。
+ */
+test('runOnce: 被锁挡下（stale）不得泄漏 running run —— 否则后台同步永久停摆', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const { scheduler, runs } = makeScheduler({ cfg, engine: {}, history: [], mutationLock: staleLockPort() });
+  await scheduler.runOnce('git');
+  assert.deepEqual(runs.listActive(), [], '被锁挡下后不得留下 running run（泄漏会挡住后续每一次 autosync）');
+  // 反向控制：泄漏时这个断言必须变红（run 仍在 running）
+  const again = await scheduler.runOnce('git');
+  assert.equal(again.skipReason, 'mutation-locked', '第二次仍是被锁挡下，而不是 conflict');
+});
+
+test('runOnce: acquire 抛错（锁目录 IO）同样不得泄漏 running run', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const throwingPort = {
+    acquire: async () => { throw new Error('lock dir IO error') },
+    validate: () => false,
+    release: async () => {},
+  } as unknown as Parameters<typeof makeScheduler>[0]['mutationLock'];
+  const { scheduler, runs } = makeScheduler({ cfg, engine: {}, history: [], mutationLock: throwingPort });
+  await scheduler.runOnce('git');
+  assert.deepEqual(runs.listActive(), [], 'acquire 抛错的路径同样必须收敛 run 账');
 });
 
 test('runOnce: 残留锁挡住 → 日志给出与 423 同源的 stale 指引（重试/重启无效 + 回收方式）', async () => {
@@ -520,3 +546,34 @@ test('双通道：git/webdav 同时 enabled → 各自独立排期；runOnce 写
   assert.deepEqual(configs.git, gitBefore, 'git 通道配置未被 webdav 运行改变');
   assert.equal(configs.webdav.lastRunStatus, 'success', 'webdav 通道写入自己的运行状态');
 });
+/* ---------------- t32：通道枚举唯一来源 ---------------- */
+
+test('t32：排期覆盖 SYNC_CHANNELS 的每个通道（长度取自枚举，不硬编码 2；此前同一数组写两遍）', async () => {
+  const seen: SyncTransportType[] = [];
+  const pending: Array<() => void> = [];
+  let timerSeq = 0;
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => ({}) as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(1_000_000_000_000),
+    readConfig: async (channel: SyncTransportType) => {
+      seen.push(channel);
+      return { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+    },
+    writeConfig: async () => {},
+    readSyncConfigFn: async () => null,
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn) => { pending.push(fn); timerSeq += 1; return String(timerSeq) as unknown as ReturnType<typeof setTimeout>; },
+    clearTimer: () => {},
+  });
+  scheduler.start();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual([...new Set(seen)].sort(), [...SYNC_CHANNELS].sort(), '每个通道都被请求过配置（refreshTimers + startupRuns 两处都不漏）');
+  assert.equal(pending.length, SYNC_CHANNELS.length, '排期数 = 枚举长度（不得硬编码 2）');
+  scheduler.stop();
+});
+

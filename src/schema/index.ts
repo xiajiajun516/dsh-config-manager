@@ -7,6 +7,9 @@
  *    `isTooNew` / `canImport` / `describeVersion` / `UnsupportedSchemaError`）；
  *  - 取到 `SECTION_IDS` / `SECTION_JSON_PATHS` / `SECTION_FILE_PREFIXES` / `isFileSection`，
  *    据此实现自己的 importer / exporter（ZIP 内路径与文件类分区前缀的唯一权威）；
+ *  - 取到**分区注册表**（`SECTION_REGISTRY` / `SectionMeta` / `sectionMeta` / `jsonPathOf` /
+ *    `PORTABLE_SECTION_IDS` / `OPT_IN_SYNC_SECTION_IDS` / `DEFAULT_INCLUDED_SECTION_IDS` …）——
+ *    「有哪些分区、各自什么形态/可移植性」的机器可读唯一来源，与 `docs/spec/` 的分区清单对应；
  *  - 引用 Bundle Format v1 的全部载荷类型。
  *
  * 为什么需要它：此前的 `exports["./schema"]` 指向 `./lib/schema/types.js`，而 `types.ts`
@@ -15,7 +18,9 @@
  * 版本工具**在包外无法导入**（它们定义在 `./versions.ts`，不在任何 exports 映射内）。
  * 本文件把 `./schema` 变成真实可用的运行时入口。
  *
- * 约束（勿破）：本文件只 import 同目录模块（`./config.ts` / `./types.ts` / `./versions.ts`）。
+ * 约束（勿破）：本文件只 import 同目录模块（`./config.ts` / `./section-registry.ts` / `./types.ts` /
+ * `./versions.ts`）。`section-registry.ts` 自身只 import 一个**类型**（`type { SectionId }`），
+ * 故本出口仍保持零 `node:` / 零 npm 依赖。
  * 不 import `../core/*`、不 import `node:*`、不 import 任何 UI / DSH 包——否则会破坏
  * headless 消费（见 `docs/spec/headless-consumption.md`）与 `tests/architecture-boundaries.test.ts`。
  */
@@ -40,6 +45,33 @@ export {
   SECTION_FILE_PREFIXES,
   isFileSection,
 } from './config.ts';
+
+/*
+ * —— 分区注册表（`section-registry.ts` 是分区元数据的唯一权威，t29） ——
+ * 上面的 `SECTION_IDS` / `SECTION_JSON_PATHS` / `SECTION_FILE_PREFIXES` / `isFileSection` 由 `./config.ts`
+ * 转出，这里再补上注册表本体的其余符号（同一个源模块，故不重复导出那四个名字，避免 duplicate export）。
+ * 对外意义：第三方实现者不必读源码即可枚举「有哪些分区、ZIP 内形态、可移植性、同步可选分区、默认勾选」。
+ */
+export {
+  SECTION_REGISTRY,
+  SECTION_DATA_VERSION,
+  sectionMeta,
+  sectionMetaOf,
+  requireSectionMeta,
+  isSectionId,
+  jsonPathOf,
+  filePrefixOf,
+  PORTABLE_SECTION_IDS,
+  OPT_IN_SYNC_SECTION_IDS,
+  DEFAULT_INCLUDED_SECTION_IDS,
+} from './section-registry.ts';
+
+export type {
+  SectionMeta,
+  SectionPayload,
+  SectionPortability,
+  SectionExportGroup,
+} from './section-registry.ts';
 
 /* —— 载荷类型（纯类型，运行时零开销） —— */
 export type {

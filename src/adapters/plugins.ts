@@ -13,7 +13,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { sha256Hex } from '../utils/hashing.ts';
 import { installSpecFor, resolveProfileNameFromArgv } from '../core/plugin-cli.ts';
-import { isLocalPluginSpec, isPackedLocalSpec, LOCAL_PLUGIN_DIR } from '../core/local-plugin-pack.ts';
+import { LOCAL_PLUGIN_DIR } from '../core/local-plugin-pack.ts';
 import type { PackLocalPluginsResult } from '../core/local-plugin-pack.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
@@ -25,6 +25,8 @@ import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 export const USER_PATCH_FILE = 'cordis.patch.yml';
 
@@ -136,9 +138,10 @@ function entriesOfRaw(raw: unknown): { config?: unknown }[] {
 
 export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   readonly id = 'plugins' as const;
-  readonly displayName = 'Plugins';
-  readonly defaultIncluded = true;
-  readonly portability = 'portable' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('plugins').displayName;
+  readonly defaultIncluded = sectionMeta('plugins').defaultIncluded;
+  readonly portability = sectionMeta('plugins').portability;
   /** 插件自身包名：导出 plugins 分区时不列自己（避免备份里出现「当前正在生成备份的插件」的自引用条目） */
   private readonly selfName: string;
   /** T1：本地源（link:/file:）插件打包钩子；未注入 = 不打包（保持改造前行为） */
@@ -644,45 +647,39 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   }
 
   async validate(data: PluginsSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'plugins' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (!Array.isArray(data.plugins)) {
-      issues.push({ path: 'plugins', message: msg('adapter.validate.array', { subject: 'plugins' }), severity: 'error' });
-    }
-    if (data.patch !== undefined && !Array.isArray(data.patch)) {
-      issues.push({ path: 'patch', message: msg('adapter.validate.array', { subject: 'patch' }), severity: 'error' });
-    }
-    if (data.pnpmWorkspace !== undefined && data.pnpmWorkspace !== null && typeof data.pnpmWorkspace !== 'string') {
-      issues.push({ path: 'pnpmWorkspace', message: msg('adapter.validate.string', { subject: 'pnpmWorkspace' }), severity: 'error' });
-    }
-    // T1：本地插件 tarball 载荷（缺省合法；存在时逐条校验形状与路径安全）
-    if (data.localTarballs !== undefined) {
-      if (!Array.isArray(data.localTarballs)) {
-        issues.push({ path: 'localTarballs', message: msg('adapter.validate.array', { subject: 'localTarballs' }), severity: 'error' });
-      } else {
-        data.localTarballs.forEach((t, i) => {
-          if (t === null || typeof t !== 'object') {
-            issues.push({ path: `localTarballs[${i}]`, message: msg('adapter.validate.object', { subject: 'localTarballs[]' }), severity: 'error' });
-            return;
-          }
-          for (const field of ['packageName', 'version', 'relativePath', 'base64'] as const) {
-            if (typeof t[field] !== 'string' || t[field] === '') {
-              issues.push({ path: `localTarballs[${i}].${field}`, message: msg('adapter.validate.string', { subject: field }), severity: 'error' });
-            }
-          }
-          // 相对路径必须落在 LOCAL_PLUGIN_DIR 之下且不含穿越段（防写 homeDir 外）
-          const rel = typeof t.relativePath === 'string' ? t.relativePath.replace(/\\/g, '/') : '';
-          if (rel !== '' && (!rel.startsWith(`${LOCAL_PLUGIN_DIR}/`) || rel.includes('..'))) {
-            issues.push({ path: `localTarballs[${i}].relativePath`, message: msg('adapter.validate.localTarballPath', { path: rel }), severity: 'error' });
-          }
-        });
+    return validateJsonSection<PluginsSection>('plugins', data, msg, (section, issues) => {
+      if (!Array.isArray(section.plugins)) {
+        issues.push({ path: 'plugins', message: msg('adapter.validate.array', { subject: 'plugins' }), severity: 'error' });
       }
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+      if (section.patch !== undefined && !Array.isArray(section.patch)) {
+        issues.push({ path: 'patch', message: msg('adapter.validate.array', { subject: 'patch' }), severity: 'error' });
+      }
+      if (section.pnpmWorkspace !== undefined && section.pnpmWorkspace !== null && typeof section.pnpmWorkspace !== 'string') {
+        issues.push({ path: 'pnpmWorkspace', message: msg('adapter.validate.string', { subject: 'pnpmWorkspace' }), severity: 'error' });
+      }
+      // T1：本地插件 tarball 载荷（缺省合法；存在时逐条校验形状与路径安全）
+      if (section.localTarballs !== undefined) {
+        if (!Array.isArray(section.localTarballs)) {
+          issues.push({ path: 'localTarballs', message: msg('adapter.validate.array', { subject: 'localTarballs' }), severity: 'error' });
+        } else {
+          section.localTarballs.forEach((t, i) => {
+            if (t === null || typeof t !== 'object') {
+              issues.push({ path: `localTarballs[${i}]`, message: msg('adapter.validate.object', { subject: 'localTarballs[]' }), severity: 'error' });
+              return;
+            }
+            for (const field of ['packageName', 'version', 'relativePath', 'base64'] as const) {
+              if (typeof t[field] !== 'string' || t[field] === '') {
+                issues.push({ path: `localTarballs[${i}].${field}`, message: msg('adapter.validate.string', { subject: field }), severity: 'error' });
+              }
+            }
+            // 相对路径必须落在 LOCAL_PLUGIN_DIR 之下且不含穿越段（防写 homeDir 外）
+            const rel = typeof t.relativePath === 'string' ? t.relativePath.replace(/\\/g, '/') : '';
+            if (rel !== '' && (!rel.startsWith(`${LOCAL_PLUGIN_DIR}/`) || rel.includes('..'))) {
+              issues.push({ path: `localTarballs[${i}].relativePath`, message: msg('adapter.validate.localTarballPath', { path: rel }), severity: 'error' });
+            }
+          });
+        }
+      }
+    });
   }
 }

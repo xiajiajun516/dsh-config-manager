@@ -115,6 +115,58 @@ export function importSectionStats(executed: readonly ExecutedItem[]): ImportSec
   return [...bySection.values()];
 }
 
+/** 导入结果总数（跨分区合计口径；结果页顶部「总览」徽章用，替代逐分区 `settings: 6✓ 12≈` 天书）。 */
+export interface ImportTotals {
+  ok: number;
+  skipped: number;
+  warned: number;
+  failed: number;
+  /** 需要用户关注的项数 = 警告 + 失败（跳过是「按预期未写」，不算问题）。 */
+  problems: number;
+}
+
+/** 汇总 executed 的总数（与 importSectionStats 同源口径：ok / skipped / warning / failed）。 */
+export function importTotals(executed: readonly ExecutedItem[]): ImportTotals {
+  const totals: ImportTotals = { ok: 0, skipped: 0, warned: 0, failed: 0, problems: 0 };
+  for (const e of executed) {
+    if (e.status === 'ok') totals.ok += 1;
+    else if (e.status === 'skipped') totals.skipped += 1;
+    else if (e.status === 'warning') totals.warned += 1;
+    else totals.failed += 1;
+  }
+  totals.problems = totals.warned + totals.failed;
+  return totals;
+}
+
+/** 结果页「需要你关注」清单条目（失败 / 警告项 + 所属分区）。 */
+export interface ImportProblem {
+  section: SectionId | 'other';
+  itemId: string;
+  status: 'failed' | 'warning';
+  message?: string;
+}
+
+/**
+ * 跨分区抽出失败 / 警告项（保持执行顺序）。
+ *
+ * 为什么需要：原先这些项的原因只以纯文本行埋在 `renderImportReport` 的等宽块里
+ * （`  说明: 插件 x 安装失败…`），用户看到「⚠ 5 需要注意」却不知道是哪 5 个；结构化
+ * 清单直接把「哪一项 + 什么原因」摆出来。
+ */
+export function importProblems(executed: readonly ExecutedItem[]): ImportProblem[] {
+  const out: ImportProblem[] = [];
+  for (const e of executed) {
+    if (e.status !== 'failed' && e.status !== 'warning') continue;
+    out.push({
+      section: sectionFromItemId(e.itemId),
+      itemId: e.itemId,
+      status: e.status,
+      ...(e.message !== undefined ? { message: e.message } : {}),
+    });
+  }
+  return out;
+}
+
 /** 导入报告渲染（含回滚状态；§22 动作按钮由 suggestedActions 给出） */
 export function renderImportReport(result: ImportResult, t: UiT = zhUiT): string {
   const lines: string[] = [result.ok ? t('report.importComplete') : t('report.importFailed'), ''];

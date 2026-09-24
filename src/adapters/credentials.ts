@@ -15,6 +15,8 @@ import type {
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { resolveNamespaces, type NamespaceProvider } from './settings.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 export type CredentialRefsProvider = (ctx: HostContext) => Promise<string[]>;
 
@@ -68,9 +70,10 @@ export interface CredentialsAdapterOptions {
 
 export class CredentialsAdapter implements ConfigAdapter<CredentialsSection> {
   readonly id = 'credentialsStatus' as const;
-  readonly displayName = 'Credentials';
-  readonly defaultIncluded = true;
-  readonly portability = 'deviceSpecific' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('credentialsStatus').displayName;
+  readonly defaultIncluded = sectionMeta('credentialsStatus').defaultIncluded;
+  readonly portability = sectionMeta('credentialsStatus').portability;
   private readonly refs: CredentialRefsProvider;
 
   constructor(options: CredentialsAdapterOptions = {}) {
@@ -118,26 +121,20 @@ export class CredentialsAdapter implements ConfigAdapter<CredentialsSection> {
   }
 
   async validate(data: CredentialsSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'credentials' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (!Array.isArray(data.credentials)) {
-      issues.push({ path: 'credentials', message: msg('adapter.validate.array', { subject: 'credentials' }), severity: 'error' });
-    } else {
-      for (const c of data.credentials) {
-        if (c === null || typeof c !== 'object' || typeof c.ref !== 'string' || c.ref === '') {
-          issues.push({ path: 'credentials[]', message: msg('adapter.validate.credentialRef'), severity: 'error' });
-        }
-        if (c.hasValue === true) {
-          // 安全不变量：普通导出恒不携带值；若备份声称有值，视为结构异常
-          issues.push({ path: `credentials.${c.ref}.hasValue`, message: msg('adapter.validate.hasValueFalse'), severity: 'error' });
+    return validateJsonSection<CredentialsSection>('credentialsStatus', data, msg, (section, issues) => {
+      if (!Array.isArray(section.credentials)) {
+        issues.push({ path: 'credentials', message: msg('adapter.validate.array', { subject: 'credentials' }), severity: 'error' });
+      } else {
+        for (const c of section.credentials) {
+          if (c === null || typeof c !== 'object' || typeof c.ref !== 'string' || c.ref === '') {
+            issues.push({ path: 'credentials[]', message: msg('adapter.validate.credentialRef'), severity: 'error' });
+          }
+          if (c.hasValue === true) {
+            // 安全不变量：普通导出恒不携带值；若备份声称有值，视为结构异常
+            issues.push({ path: `credentials.${c.ref}.hasValue`, message: msg('adapter.validate.hasValueFalse'), severity: 'error' });
+          }
         }
       }
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    }, 'credentials');
   }
 }

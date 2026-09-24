@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/xiajiajun516/dsh-config-manager/docs/spec/bundle-manifest.schema.json",
   "title": "DSH Config Manager Bundle Manifest (Bundle Format v1)",
-  "description": "bundle ZIP 内 manifest.json 的机器可校验形态。逐条对齐 docs/spec/bundle-format-v1.md §2（字段表 §2.2 / 未知字段 §2.3 / platform 取值 §2.4 / sections 键集合 §2.5），并以 src/schema/manifest.ts 的 validateManifest 为语义基准。约束强度原则：本 schema 声明的约束必须同时被 validateManifest 拒绝——比实现更严会产生「schema 拒收、实现接受」的假漂移（第三方的合法产物被本仓库判为非法），比实现更松则失去校验价值。据此：(1) required 仅含实现要求必须存在的字段；(2) 未知顶层字段与未知子字段一律允许（规格 §2.3：保留、不报错）；(3) sections 的键集合开放——未知分区键在实现里是 warning 而非 error（规格 §2.3 / 测试 M-04），本 schema 不得拒绝；(4) source.platform 不设 enum——实现只校验 typeof string（规格 §2.2 取证与 §11「未验证清单」），取值表见 x-platform-values；(5) security.encryption 的「对象」分支不设 required/属性约束——实现只做 typeof object 判定（规格 §2.2 取证：src/schema/manifest.ts:117-120），完整形状见 x-expected-encryption-info（说明性，不参与校验）；(6) exportedAt 的 ISO-8601 可解析性属语义校验，JSON Schema 无对应关键字，见 x-semantic-constraints。",
+  "description": "bundle ZIP 内 manifest.json 的机器可校验形态。逐条对齐 docs/spec/bundle-format-v1.md §2（字段表 §2.2 / 未知字段 §2.3 / platform 取值 §2.4 / sections 键集合 §2.5），并以 src/schema/manifest.ts 的 validateManifest 为语义基准。约束强度原则：本 schema 声明的约束必须同时被 validateManifest 拒绝——比实现更严会产生「schema 拒收、实现接受」的假漂移（第三方的合法产物被本仓库判为非法），比实现更松则失去校验价值。据此：(1) required 仅含实现要求必须存在的字段；(2) 未知顶层字段与未知子字段一律允许（规格 §2.3：保留、不报错）；(3) sections 的键集合开放——未知分区键在实现里是 warning 而非 error（规格 §2.3 / 测试 M-04），本 schema 不得拒绝；(4) source.platform 不设 enum——实现只校验 typeof string（规格 §2.2 取证与 §11「未验证清单」），取值表见 x-platform-values；(5) security.encryption 的「对象」分支不设 required/属性约束——实现只做 typeof object 判定（规格 §2.2 取证：`src/schema/manifest.ts`），完整形状见 x-expected-encryption-info（说明性，不参与校验）；(6) exportedAt 的 ISO-8601 可解析性属语义校验，JSON Schema 无对应关键字，见 x-semantic-constraints。",
   "x-format-version": "Bundle Format v1",
   "x-schema-version-constant": 1,
   "x-platform-values": [
@@ -14,6 +14,7 @@
     "skills", "agentPresets", "agentInstructions", "workspaces", "pluginFiles",
     "credentialsStatus", "secrets", "sessions", "self"
   ],
+  "x-section-ids-source": "分区 id 集合**以注册表为准**：唯一权威是 src/schema/section-registry.ts 的 SECTION_REGISTRY（机器可读，SECTION_IDS 是它按 applyOrder 派生的视图）。上面的 x-section-ids 只是本仓库导出端恒写形态的人读副本；分区增删时先改注册表，再由 src/schema/manifest-schema.test.ts 的 K-04 断言本副本与 SECTION_IDS 逐项一致（不一致即红灯）。",
   "x-expected-encryption-info": {
     "description": "说明性形状（规格 §4.4；类型定义 src/schema/types.ts:24-32）。不参与校验：validateManifest 只要求 security.encryption 是对象或 null。算法/KDF 与 KDF 参数值域由 src/security/encryption.ts 的解密器校验（aes-256-gcm / scrypt；N∈[2^14,2^20]、r∈[1,32]、p∈[1,32]、keyLength===32），不属 manifest 结构校验。",
     "required": ["algorithm", "kdf", "kdfParams", "salt", "iv", "authTag", "version"],
@@ -28,11 +29,11 @@
     }
   },
   "x-semantic-constraints": [
-    "exportedAt 必须可被 Date.parse 解析为合法时间（规格 §2.2；src/schema/manifest.ts:93-95）。JSON Schema 2020-12 无内置日期关键字，未以 pattern/format 表达。",
+    "exportedAt 必须可被 Date.parse 解析为合法时间（规格 §2.2；`src/schema/manifest.ts`）。JSON Schema 2020-12 无内置日期关键字，未以 pattern/format 表达。",
     "security.encryption 为对象时，其内部字段（algorithm/kdf/kdfParams/salt/iv/authTag/version）在解密阶段另有校验，见 x-expected-encryption-info。",
     "sections 中声明的未知分区键在实现里产生 warning（非 error）并被保留；导入层会丢弃其数据（规格 §7.2 / 缺口 G-01）。本 schema 不表达 warning 语义，故对未知键保持放行。",
     "schemaVersion 的「是否受支持」不属结构校验：实现按 isSupported/canImport 做版本协商（规格 §6），v>1 与 v<1 都硬失败。",
-    "已记录的实现缺口：validateManifest 用 `typeof enc !== 'object'` 判定 security.encryption（src/schema/manifest.ts:117-120），而 JavaScript 中数组的 typeof 也是 'object'，故数组被实现当作合法 encryption 接受。本 schema 按规格 §2.2/§4.4 只接受「对象或 null」，比实现更严——这是刻意的、已记录的落差，不是静默漂移。"
+    "已记录的实现缺口：validateManifest 用 `typeof enc !== 'object'` 判定 security.encryption（`src/schema/manifest.ts`），而 JavaScript 中数组的 typeof 也是 'object'，故数组被实现当作合法 encryption 接受。本 schema 按规格 §2.2/§4.4 只接受「对象或 null」，比实现更严——这是刻意的、已记录的落差，不是静默漂移。"
   ],
   "type": "object",
   "required": ["schemaVersion", "exporter", "source", "exportedAt", "sections", "security"],
@@ -77,7 +78,7 @@
         "containsSecrets": { "type": "boolean", "description": "bundle 是否携带真实凭据明文（默认 false）。" },
         "encrypted": { "type": "boolean", "description": "是否需要密码才能导入。" },
         "encryption": {
-          "description": "加密参数元数据；未加密时为 null。实现只校验「对象或 null」（src/schema/manifest.ts:117-120），对象内部形状见 x-expected-encryption-info。",
+          "description": "加密参数元数据；未加密时为 null。实现只校验「对象或 null」（`src/schema/manifest.ts`），对象内部形状见 x-expected-encryption-info。",
           "oneOf": [
             { "type": "object" },
             { "type": "null" }

@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PluginsAdapter, USER_PATCH_FILE } from './plugins.ts';
+import { PluginsAdapter } from './plugins.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 import type { PlanItem } from '../core/types.ts';
 

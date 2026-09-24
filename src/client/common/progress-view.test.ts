@@ -12,7 +12,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { computeProgressView } from './progress-view.ts'
+import { computeProgressView, progressBarMode } from './progress-view.ts'
 import type { RunProgress } from './progress-view.ts'
 import { makeUiT } from '../../ui/i18n.ts'
 
@@ -82,4 +82,36 @@ test('m3-render: 导入进度 → 内部计数徽章 plugins · 6/18 + 当前项
 test('m3-render: 未知阶段回退显示 stage id', () => {
   const view = computeProgressView({ stage: 'weird-stage' })
   assert.equal(view.label, 'weird-stage')
+})
+/**
+ * 真机 bug（用户报告「定时备份 / 自动同步 一直在加载」）：定时备份 / 自动同步 / 快照恢复这类 run
+ * 从不上报中间计数 → percent 恒 null；旧实现只要 percent 为 null 就走不定态分支，而那是**无限动画**，
+ * 于是「已完成」的任务也在一直滚动。轨道形态必须由 active 决定。
+ */
+test('进度轨道：无百分比 + 仍在跑 → 不定态动画', () => {
+  const view = computeProgressView({ stage: 'backing-up' })
+  assert.equal(view.percent, null)
+  assert.equal(progressBarMode(view, true), 'indeterminate')
+})
+
+test('进度轨道：无百分比 + 已结束 → 静止条（绝不动画；这是「一直在加载」的修复点）', () => {
+  const done = computeProgressView({ stage: 'done' })
+  assert.equal(progressBarMode(done, false), 'settled')
+  const failed = computeProgressView({ stage: 'failed' })
+  assert.equal(progressBarMode(failed, false), 'settled')
+})
+
+test('进度轨道：有百分比 → 定长（与 active 无关，结束态由调用方换色）', () => {
+  const view = computeProgressView({ stage: 'exporting', step: 2, total: 4 })
+  assert.equal(view.percent, 50)
+  assert.equal(progressBarMode(view, true), 'determinate')
+  assert.equal(progressBarMode(view, false), 'determinate')
+})
+
+test('按 run 类型的阶段文案不再串台：备份 / 同步 / 恢复各有自己的措辞', () => {
+  assert.equal(computeProgressView({ stage: 'backing-up' }, zhT).label, '正在备份配置…')
+  assert.equal(computeProgressView({ stage: 'syncing' }, zhT).label, '正在同步配置…')
+  assert.equal(computeProgressView({ stage: 'restoring' }, zhT).label, '正在恢复快照…')
+  assert.equal(computeProgressView({ stage: 'failed' }, zhT).label, '已失败')
+  assert.equal(computeProgressView({ stage: 'done' }, zhT).label, '已完成')
 })

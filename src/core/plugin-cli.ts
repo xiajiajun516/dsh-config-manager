@@ -17,7 +17,7 @@
 
 import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
 import { atomicWriteFileSync } from '../utils/atomic-write.ts'

@@ -685,9 +685,22 @@ test('M1 源码守卫：index.ts 给 BackupScheduler 注入与 makeRoutes/regist
  * 行为侧已由上面的 runOnce({manual:true}) 用例钉住，这里再钉**接线**——路由若退回裸 runOnce()，
  * 「立即备份」在 enabled=false（从未配置过定时的用户）时又会静默空转，而按钮会报「备份完成」。
  */
+/** W1 起路由按域拆到 src/routes/*.ts：源码级守卫必须扫**全部**宿主路由源，否则会静默失去覆盖。 */
+async function hostRouteSource(): Promise<string> {
+  const parts = [await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8')];
+  const dir = new URL('../routes/', import.meta.url);
+  for (const entry of (await fs.readdir(dir)).sort()) {
+    if (!entry.endsWith('.ts') || entry.endsWith('.test.ts')) continue;
+    parts.push(await fs.readFile(new URL(entry, dir), 'utf8'));
+  }
+  return parts.join('\n').replace(/\r\n/g, '\n');
+}
+
 test('issue #43 源码守卫：/backup-schedule/run 路由以 manual: true 调 runOnce（接线不得退回裸调用）', async () => {
-  const source = (await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
-  const start = source.indexOf('path: API.backupScheduleRun');
+  // W1：backup-schedule/run 路由已拆到 src/routes/backup.ts —— 扫「宿主路由源」（index.ts + src/routes/**）
+  const source = await hostRouteSource();
+  // W1 起路由路径写在 endpoint({ path: ...}) 声明里（不再是 API 常量表），故按字面量定位
+  const start = source.indexOf("'/api/dsh-config-manager/backup-schedule/run'");
   assert.ok(start > 0, '应能找到 backup-schedule/run 路由');
   const end = source.indexOf('\n    },', start);
   assert.ok(end > start, '应能找到该路由块的结尾');

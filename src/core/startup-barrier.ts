@@ -8,6 +8,13 @@
  *    `failClosed`：任何 inspect 抛错 → 归为 RECOVERY_REQUIRED/NEEDS_ATTENTION，绝不自动 NORMAL，schedulers 不启动。
  *
  * 不依赖全局 flag「稍后同步」赌时序——调用方必须 `await run()` 再据 state 决定。read-only 服务可继续（diagnostics/recovery UI）。
+ *
+ * **启动恢复的单一来源（审计 P0-10）**：本文件是启动分类与 fail-closed 姿态的唯一权威：
+ *  - 分类：`classifyStartup`（宿主 `src/index.ts` apply() 直接消费它）；
+ *  - fail-closed：`FAIL_CLOSED_STARTUP`（`StartupRecoveryController.run()` 的 catch 与宿主 apply() 的
+ *    启动探测 catch 共用同一常量）；
+ *  - `Phase3Recovery.startup()`（core/phase3-host.ts）是**未被任何生产/测试调用的等价薄包装**，
+ *    保留仅为历史 API 兼容——新增启动路径请走本文件，不要再写第四份「只关调度器」的半套 fail-open。
  */
 import { inspectStartup } from './reconcile.ts';
 import type { ReconcileProbeHooks, ReconcileEnv, ReconcileOptions } from './reconcile.ts';
@@ -56,6 +63,26 @@ export interface StartupSchedulers {
 }
 
 /**
+ * 启动分类/探测**抛错**时的 fail-closed 结论（单一来源，勿再各写一份）：
+ *  - `state`：绝不默认 NORMAL，归为 RECOVERY_REQUIRED；
+ *  - `safeModeRequired`：无法证明环境干净 → destructive 入口必须被阻断（内存标志 + durable 标记），
+ *    与 `Phase3Recovery.runJournaled` 异常分支的姿态一致；
+ *  - `startSchedulers`：一律 false。
+ *
+ * 消费方：`StartupRecoveryController.run()` 的 catch；宿主的启动分类 catch（src/index.ts apply()）。
+ * 只置「调度器不启动」而不置 SAFE MODE 属半套 fail-open —— 审计 P0-10 的实测缺口。
+ */
+export const FAIL_CLOSED_STARTUP: {
+  readonly state: StartupRecoveryState;
+  readonly safeModeRequired: true;
+  readonly startSchedulers: false;
+} = {
+  state: { kind: 'RECOVERY_REQUIRED' },
+  safeModeRequired: true,
+  startSchedulers: false,
+};
+
+/**
  * StartupRecoveryController：`await run()` 完成后调度器才可启动。
  * `startSchedulersIfAllowed()` 只在 NORMAL 启动（幂等）；否则（RECOVERY_REQUIRED/NEEDS_ATTENTION/UNKNOWN/LOCKED_LIVE）
  * 不启动 destructive schedulers（read-only host 仍活，diagnostics/recovery API 可用）。fail-closed：classify 抛错 → RECOVERY_REQUIRED。
@@ -76,8 +103,8 @@ export class StartupRecoveryController {
       const r = await this.classifier.classify();
       this.state = r.state;
     } catch (err) {
-      // fail closed：inspect 抛错 → 不默认 NORMAL
-      this.state = { kind: 'RECOVERY_REQUIRED', operationId: undefined };
+      // fail closed：inspect 抛错 → 不默认 NORMAL（与宿主 catch 共用同一姿态）
+      this.state = FAIL_CLOSED_STARTUP.state;
     } finally {
       this.settled = true;
     }

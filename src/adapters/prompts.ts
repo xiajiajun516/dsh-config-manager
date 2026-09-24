@@ -9,15 +9,16 @@
  *  - 均不存在 → Warning（不编造行名自动创建，提示手动配置）。
  * rules/commands 无独立存储（研究报告 §2.2），不实现。
  */
-import { isDeepStrictEqual } from 'node:util';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
-import type { PromptEntry, PromptsSection } from '../schema/types.ts';
+import type { PromptEntry } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { USER_PATCH_FILE } from './plugins.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 /** 导出记录：PromptEntry 之外记录来源行名（导入需要重建行时使用） */
 export interface PromptExportEntry extends PromptEntry {
@@ -108,9 +109,10 @@ export function buildPromptLine(lineId: string, prompt: PromptExportEntry): Reco
 
 export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
   readonly id = 'prompts' as const;
-  readonly displayName = 'Prompts';
-  readonly defaultIncluded = true;
-  readonly portability = 'portable' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('prompts').displayName;
+  readonly defaultIncluded = sectionMeta('prompts').defaultIncluded;
+  readonly portability = sectionMeta('prompts').portability;
 
   async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<PromptsExportSection>> {
     const warnings: string[] = [];
@@ -209,22 +211,16 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
   }
 
   async validate(data: PromptsExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'prompts' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (!Array.isArray(data.prompts)) {
-      issues.push({ path: 'prompts', message: msg('adapter.validate.array', { subject: 'prompts' }), severity: 'error' });
-    } else {
-      for (const p of data.prompts) {
-        if (p === null || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.text !== 'string') {
-          issues.push({ path: 'prompts[]', message: msg('adapter.validate.promptIdentity'), severity: 'error' });
+    return validateJsonSection<PromptsExportSection>('prompts', data, msg, (section, issues) => {
+      if (!Array.isArray(section.prompts)) {
+        issues.push({ path: 'prompts', message: msg('adapter.validate.array', { subject: 'prompts' }), severity: 'error' });
+      } else {
+        for (const p of section.prompts) {
+          if (p === null || typeof p !== 'object' || typeof p.name !== 'string' || typeof p.text !== 'string') {
+            issues.push({ path: 'prompts[]', message: msg('adapter.validate.promptIdentity'), severity: 'error' });
+          }
         }
       }
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    });
   }
 }

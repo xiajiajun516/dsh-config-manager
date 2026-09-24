@@ -36,6 +36,16 @@ export {
 } from './types.ts';
 export type * from './types.ts';
 
+/* —— 会话路径映射（issue #45：一条映射同时作用于 workspace.path 与会话首帧 cwd） —— */
+export { applyPathMapping, type PathMappingRule } from './path-mapping.ts';
+
+export {
+  planSessionRepair, sessionRepairNeedsAttention,
+  type SessionRepairAction, type SessionRepairActionKind, type SessionRepairOptions,
+  type SessionRepairPlan, type SessionRepairReason, type SessionRepairSummary,
+  type RepairSessionInput,
+} from './session-repair.ts';
+
 /* —— 迁移历史引擎（Phase 6） —— */
 export {
   MigrationStore, sanitizeEntry, queryHistory, summarizeHistory, renderExport,

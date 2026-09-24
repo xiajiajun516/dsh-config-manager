@@ -1,9 +1,11 @@
 /**
  * 结果报告（规范 §21 导出 / §22 导入 / §17 回滚，绑 src/ui/report.ts）。
  *
- * 直接调用 report.ts 的纯文本渲染器（renderExportReport / renderImportReport /
- * renderRollbackReport / suggestedActions / importSectionStats），React 只做外壳：
- * 标题 + 结构化统计徽章 + 文本详情 + 建议动作按钮。
+ * 直接调用 report.ts 的纯函数（renderExportReport / renderImportReport / renderRollbackReport /
+ * importSectionStats / importTotals / importProblems），React 只做外壳：
+ * 标题 + 结构化统计 + 「需要你关注」清单 + 分区明细 + 完整文本（渐进披露）。
+ * 导入的收尾动作（完成 / 重试）由**向导**的固定操作栏提供（ImportWizardView），
+ * 本组件不再渲染动作按钮（原先埋在报告卡底部，被挤压布局裁掉）。
  *
  * 安全约束：所有渲染文本展示前再过 `redact()` 兜底，Secret 不进入 UI。
  */
@@ -12,15 +14,17 @@ import type { SectionId } from '../../schema/types.ts'
 import {
   exportCountsText,
   formatBytes,
+  importProblems,
   importSectionStats,
+  importTotals,
   renderImportReport,
   renderRollbackReport,
-  suggestedActions,
+  type ImportProblem,
 } from '../../ui/report.ts'
-import type { ImportResultAction } from '../../ui/types.ts'
+import type { ImportSectionStat } from '../../ui/types.ts'
 import { redact } from '../../security/redaction.ts'
-import { zhUiT, type UiT, type UiTextKey } from '../../ui/i18n.ts'
-import { Badge, Button, Spinner, type BadgeKind } from './ui.tsx'
+import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import { Badge, Button, Spinner } from './ui.tsx'
 import css from '../config-manager.module.css'
 
 export type ReportViewKind = 'export' | 'import'
@@ -29,8 +33,6 @@ export interface ReportViewProps {
   kind: ReportViewKind
   exportReport?: ExportReport
   importResult?: ImportResult
-  /** 结果页动作回调（Fix Issues / View Details / Done） */
-  onAction?: (action: ImportResultAction) => void
   /** 下载导出文件的回调（导出报告场景） */
   onDownload?: () => void
   /** 下载进行中（导出报告场景：下载按钮 spinner + 禁用，防重复下载） */
@@ -43,25 +45,6 @@ export interface ReportViewProps {
    * （禁止让用户看见 pluginFiles 这类适配器 id）。
    */
   sectionLabel?: (id: SectionId) => string
-}
-
-/** 导入分区的统计徽章（由 report.importSectionStats 计算） */
-function SectionStatBadges({ result }: { result: ImportResult }) {
-  const stats = importSectionStats(result.executed)
-  return (
-    <div className={css.statRow}>
-      {stats.map((s) => {
-        let kind: BadgeKind = 'ok'
-        if (s.failed > 0) kind = 'error'
-        else if (s.skipped > 0) kind = 'warn'
-        return (
-          <Badge key={s.section} kind={kind}>
-            {s.section}: {s.ok}✓{s.skipped > 0 ? ` ${s.skipped}≈` : ''}{s.failed > 0 ? ` ${s.failed}✗` : ''}
-          </Badge>
-        )
-      })}
-    </div>
-  )
 }
 
 /** 导出报告的安全摘要（已包含 / 未包含 / 安全 徽章；文案走 UiT 字典，见 UI-03） */
@@ -165,25 +148,98 @@ function ExportDetails({ report, t, sectionLabel }: { report: ExportReport; t: U
 }
 
 /**
- * 动作按钮文案：suggestedActions() 返回的是 **动作 id**（'done' / 'fixIssues'…），
- * 不是用户可见文案。原实现直接把 id 渲染进按钮（中文界面显示「done」），
- * 这里映射到字典键再渲染（见 UI-02）。
+ * 导入结果「总览」徽章（跨分区合计）—— 取代逐分区 `settings: 6✓ 12≈` 的紧凑天书：
+ * 用户第一眼要的是「一共成了多少 / 有没有需要我处理的」。
  */
-const ACTION_LABEL: Record<ImportResultAction, UiTextKey> = {
-  fixIssues: 'report.action.fixIssues',
-  viewDetails: 'report.action.viewDetails',
-  done: 'report.action.done',
+function ImportTotalsRow({ result, t }: { result: ImportResult; t: UiT }) {
+  const totals = importTotals(result.executed)
+  return (
+    <div className={css.statRow}>
+      <Badge kind={totals.ok > 0 ? 'ok' : 'info'}>✓ {totals.ok} {t('report.importedRestored')}</Badge>
+      {totals.skipped > 0 && <Badge kind="info">≈ {totals.skipped} {t('report.skipped')}</Badge>}
+      {totals.warned > 0 && <Badge kind="warn">⚠ {totals.warned} {t('report.needAttention')}</Badge>}
+      {totals.failed > 0 && <Badge kind="error">✗ {totals.failed} {t('report.failed')}</Badge>}
+    </div>
+  )
+}
+
+/**
+ * 「需要你关注」：失败 / 警告项 + 原因的结构化清单（限高内滚）。
+ *
+ * 原实现把这些原因埋在纯文本报告里的一行（`  说明: 插件 x 安装失败…`），用户看到
+ * 「⚠ 5 需注意」却无从知道是哪 5 项、为什么；这里把「哪一项 + 什么原因」直接成列。
+ */
+function ImportProblemList({ problems, labelOf, t }: {
+  problems: ImportProblem[]
+  labelOf: (section: ImportProblem['section']) => string
+  t: UiT
+}) {
+  return (
+    <div className={css.reportBlock}>
+      <div className={css.groupLabel}>{t('report.problems', { count: String(problems.length) })}</div>
+      <div className={css.reportScroll}>
+        <ul className={css.reportList}>
+          {problems.map((p) => (
+            <li key={p.itemId} className={css.reportProblemRow}>
+              <div className={css.reportProblemHead}>
+                <Badge kind={p.status === 'failed' ? 'error' : 'warn'}>{labelOf(p.section)}</Badge>
+                <span className={css.reportProblemText}>{redact(p.itemId)}</span>
+              </div>
+              <div className={css.reportProblemReason}>{redact(p.message ?? t('report.unknownReason'))}</div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+/** 分区明细：每个分区一行「显示名 + ✓/≈/⚠/✗ 计数」（替代裸 id 的等宽文本行）。 */
+function ImportSectionTable({ stats, labelOf, t }: {
+  stats: ImportSectionStat[]
+  labelOf: (section: ImportProblem['section']) => string
+  t: UiT
+}) {
+  return (
+    <div className={css.reportBlock}>
+      <div className={css.groupLabel}>{t('report.sectionDetail')}</div>
+      <div className={css.reportScroll}>
+        <div className={css.reportBody}>
+          {stats.map((s) => (
+            <div key={s.section} className={css.reportSectionRow}>
+              <span className={css.sectionName}>{labelOf(s.section)}</span>
+              <span className={css.statusSpacer} />
+              <Badge kind="ok">✓ {s.ok}</Badge>
+              {s.skipped > 0 && <Badge kind="info">≈ {s.skipped}</Badge>}
+              {s.warned > 0 && <Badge kind="warn">⚠ {s.warned}</Badge>}
+              {s.failed > 0 && <Badge kind="error">✗ {s.failed}</Badge>}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /**
  * 结果报告视图。
- * 文本详情 = report.ts 渲染器的输出（已脱敏），展示前再过 redact() 双保险；
- * 以 <pre> 等宽块呈现保持对齐，容器套 .reportScroll 限高内滚（AGENTS.md §UI 硬性规则 8）。
+ * 导入：总览 + 「需要你关注」+ 分区明细 + 回滚 + 完整文本（渐进披露），正文全部过 redact()；
+ * 导出：结构化摘要 + 正文（既有）；限高内滚见 AGENTS.md §UI 硬性规则 8。
+ *
+ * 动作按钮**不在这里**：导入的收尾动作（完成 / 重试）属于向导的固定操作栏
+ * （ImportWizardView 的 .resultFooter）——原先埋在报告卡底部，被
+ * `flex + overflow:hidden` 的挤压布局裁掉，用户报告「导入完成后没有完成按钮」。
  */
-export function ReportView({ kind, exportReport, importResult, onAction, onDownload, downloadBusy = false, t = zhUiT, sectionLabel }: ReportViewProps) {
-  const actions = kind === 'import' && importResult !== undefined
-    ? suggestedActions(importResult)
+export function ReportView({ kind, exportReport, importResult, onDownload, downloadBusy = false, t = zhUiT, sectionLabel }: ReportViewProps) {
+  const importStats = kind === 'import' && importResult !== undefined
+    ? importSectionStats(importResult.executed)
     : []
+  const importProblemList = importResult !== undefined ? importProblems(importResult.executed) : []
+  /** 分区显示名（缺省回退裸 id；'other' 走 UiT 的 report.other）。 */
+  const labelOf = (section: ImportProblem['section']): string => {
+    if (section === 'other') return t('report.other')
+    return sectionLabel !== undefined ? sectionLabel(section) : section
+  }
 
   return (
     <div className={css.reportView}>
@@ -204,11 +260,29 @@ export function ReportView({ kind, exportReport, importResult, onAction, onDownl
         </>
       )}
       {kind === 'import' && importResult !== undefined && (
-        <>
-          <SectionStatBadges result={importResult} />
-          <div className={css.reportScroll}>
-            <pre className={css.reportText}>{redact(renderImportReport(importResult, t))}</pre>
+        /* .reportBody = 卡片内边距容器（与导出分支的 ExportDetails 同一个类，不与卡片边框贴合） */
+        <div className={css.reportBody}>
+          <div className={css.reportHeadline}>
+            {importResult.ok ? t('report.importComplete') : t('report.importFailed')}
           </div>
+          <ImportTotalsRow result={importResult} t={t} />
+          {(importResult.skippedTombstoned?.length ?? 0) > 0 && (
+            <div className={css.hint}>
+              {t('report.tombstonedSkipped', { count: String(importResult.skippedTombstoned!.length) })}
+            </div>
+          )}
+          {importProblemList.length > 0 && (
+            <ImportProblemList problems={importProblemList} labelOf={labelOf} t={t} />
+          )}
+          {importStats.length > 0 && <ImportSectionTable stats={importStats} labelOf={labelOf} t={t} />}
+          {importResult.warnings.length > 0 && (
+            <div className={css.reportBlock}>
+              <div className={css.groupLabel}>{t('report.warnings')}</div>
+              <ul className={css.reportList}>
+                {importResult.warnings.map((w, i) => <li key={i} className={css.reportWarningRow}>{redact(w)}</li>)}
+              </ul>
+            </div>
+          )}
           {importResult.rollback !== null && (
             <div className={css.rollbackBox}>
               <strong>{t('report.rollback')}</strong>
@@ -217,16 +291,16 @@ export function ReportView({ kind, exportReport, importResult, onAction, onDownl
               </div>
             </div>
           )}
-          {actions.length > 0 && (
-            <div className={css.reportFooter}>
-              {actions.map((a) => (
-                <Button key={a} variant={a === 'done' ? 'primary' : 'ghost'} onClick={() => onAction?.(a)}>
-                  {t(ACTION_LABEL[a])}
-                </Button>
-              ))}
+          {/* 完整文本报告（渐进披露）：结构化视图已是主路径，这里保留「想逐字核对」的原文入口
+              （逐项原因 / 墓碑跳过 / 缺失凭据 / 重启提示都在里面），也保证 renderImportReport
+              与结构化视图同源可对照。 */}
+          <details className={css.reportDetails}>
+            <summary>{t('report.fullText')}</summary>
+            <div className={css.reportScroll}>
+              <pre className={css.reportText}>{redact(renderImportReport(importResult, t))}</pre>
             </div>
-          )}
-        </>
+          </details>
+        </div>
       )}
     </div>
   )

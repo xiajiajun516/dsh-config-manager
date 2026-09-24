@@ -49,6 +49,23 @@ export interface ProgressView {
 }
 
 /**
+ * 进度条的三种渲染模式。
+ *
+ * **为什么必须由 active 决定、而不是「有没有百分比」决定**（真机 bug）：
+ * 定时备份 / 自动同步 / 快照恢复这类 run 从不上报中间计数（宿主一次 update 都不写），
+ * 于是 percent 恒为 null。旧实现只要 percent 为 null 就渲染 `progressIndeterminate` ——
+ * 那是**无限循环动画**，于是**已经「已完成」的任务仍然在无限滚动**，用户读到的结论就是
+ * 「一直在加载」。判定收进本函数（纯函数、可单测），组件只按结果渲染。
+ */
+export type ProgressBarMode = 'determinate' | 'indeterminate' | 'settled'
+
+/** 有百分比 → determinate；无百分比且仍在跑 → 不定态动画；无百分比且已结束 → 静止条（绝不动画）。 */
+export function progressBarMode(view: ProgressView, active: boolean): ProgressBarMode {
+  if (view.percent !== null) return 'determinate'
+  return active ? 'indeterminate' : 'settled'
+}
+
+/**
  * 把进度事件换算成渲染模型。
  * - percent：优先 ProgressEvent.step/total（控制器阶段进度 / 轮询的内部计数）；
  * - sectionBadge（当前分区，如 settings · 3/12）：label=分区 id、current=item

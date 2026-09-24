@@ -7,7 +7,7 @@
  * manifest 中不出现这些 section，产品 UI 说明「DSH 当前无此配置」；
  * rules 概念已由 agentInstructions（~/.dsh/AGENTS.md）承接。
  */
-import type { ConfigAdapter, HostContext } from '../core/types.ts';
+import type { ConfigAdapter } from '../core/types.ts';
 import { SettingsAdapter, type NamespaceProvider } from './settings.ts';
 import { UiAdapter } from './ui.ts';
 import { ProvidersAdapter } from './providers.ts';
@@ -92,3 +92,14 @@ export { PluginFilesAdapter, DEFAULT_PLUGIN_FILE_WHITELIST } from './plugin-file
 export { SessionsAdapter } from './sessions.ts';
 export { SelfAdapter, SELF_CONFIG_FILES } from './self.ts';
 export { FileCollectionAdapter } from './file-collection.ts';
+/* JSON 分区共享校验骨架（本导出是其接入点）。收敛轨迹：
+ *  · t31 抽出骨架，settings / ui / providers / plugins / mcp / prompts / credentials /
+ *    pluginFiles 八个分区的样板并入；
+ *  · t7 接上 workspaces.ts 与 file-collection.ts 基类的 version 守卫 + 形状检查收尾；
+ *  · t11 给骨架加了可选第 6 参 `objectMessageKey`（object 错误的文案键，缺省
+ *    `adapter.validate.object`），file-collection 的 object 守卫也并入并沿用文件类分区原专用键
+ *    `adapter.validate.fileSection`，故 5 个文件类分区的用户可见报错文案逐字不变。
+ * 现状：**9 个分区全部走共享骨架**（settings / ui / providers / plugins / mcp / prompts /
+ * credentialsStatus / pluginFiles / workspaces），文件类基类（skills / agentPresets /
+ * agentInstructions / sessions / self）同样走它 —— src/adapters 下不再有任何手写 validate 样板。 */
+export { validateJsonSection, type SectionIssues } from './json-section.ts';

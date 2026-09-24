@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  defaultSyncSelection, effectiveSections, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
+  defaultSyncSelection, effectiveSections, normalizeSessionsInclude, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
   readSyncSelection, writeSyncSelection,
   readAllSyncSelections, DEFAULT_SYNC_SESSIONS_LIMIT, SYNC_SELECTION_FILE, SYNC_SELECTION_SCHEMA_VERSION,
 } from './sync-selection.ts';
@@ -18,7 +18,7 @@ import {
 test('writeSyncSelection + readSyncSelection：advanced 模式写入 → 读回字段一致（git 通道）', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-rt-'));
   try {
-    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, encrypt: true, includeSecrets: true });
+    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: true, includeSecrets: true });
     const sel = await readSyncSelection(dir, 'git');
     assert.equal(sel.mode, 'advanced');
     assert.deepEqual(sel.sections, ['settings', 'skills']);
@@ -84,12 +84,12 @@ test('readSyncSelection：非法 mode / 非字符串 sections 元素 → 过滤�
 
 test('effectiveSections：advanced + 非空 → 勾选分区；default / advanced 空勾选 → undefined（全量）', () => {
   assert.deepEqual(
-    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, encrypt: false, includeSecrets: false }),
+    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false }),
     ['settings', 'skills'],
   );
   assert.equal(effectiveSections(defaultSyncSelection()), undefined, 'default 模式 = 全量推荐分区');
   assert.equal(
-    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: [], sessionsLimit: 5, encrypt: false, includeSecrets: false }),
+    effectiveSections({ schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: [], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false }),
     undefined,
     'advanced 但未勾选 → 回退全量（避免自动同步卡死）',
   );
@@ -112,8 +112,8 @@ test('readSyncSelection：includeSecrets 但未 encrypt（持久化被篡改）�
 test('按通道独立：写 webdav 不影响 git，反之亦然', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-perchannel-'));
   try {
-    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [], sessionsLimit: 5, encrypt: false, includeSecrets: false });
-    await writeSyncSelection(dir, 'webdav', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, encrypt: true, includeSecrets: true });
+    await writeSyncSelection(dir, 'git', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'default', sections: [], sessionsLimit: 5, sessionsInclude: [], encrypt: false, includeSecrets: false });
+    await writeSyncSelection(dir, 'webdav', { schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced', sections: ['settings', 'skills'], sessionsLimit: 5, sessionsInclude: [], encrypt: true, includeSecrets: true });
     const git = await readSyncSelection(dir, 'git');
     assert.equal(git.mode, 'default', 'git 通道保持 default');
     const webdav = await readSyncSelection(dir, 'webdav');
@@ -155,7 +155,7 @@ test('sessionsLimit: 缺省 5、写盘读回一致、非法值回退缺省、超
 
     await writeSyncSelection(dir, 'git', {
       schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced',
-      sections: ['settings', 'sessions'], sessionsLimit: 3, encrypt: false, includeSecrets: false,
+      sections: ['settings', 'sessions'], sessionsLimit: 3, sessionsInclude: [], encrypt: false, includeSecrets: false,
     });
     const sel = await readSyncSelection(dir, 'git');
     assert.equal(sel.sessionsLimit, 3, '写盘读回一致');
@@ -178,6 +178,42 @@ test('sessionsLimit: 缺省 5、写盘读回一致、非法值回退缺省、超
     );
     assert.equal((await readSyncSelection(dir, 'git')).sessionsLimit, 10000, '超大值钳制');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('sessionsInclude: 缺省空数组、写盘读回一致、非法条目被丢弃（P0-3 逐会话点名）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-include-'));
+  try {
+    const fresh = await readSyncSelection(dir, 'git');
+    assert.deepEqual(fresh.sessionsInclude, [], '无文件 → 空（= 「最新 N 个」模式）');
+
+    const picks = ['sessions:--p--/a', 'sessions:--p--/b'];
+    await writeSyncSelection(dir, 'git', {
+      schemaVersion: SYNC_SELECTION_SCHEMA_VERSION, mode: 'advanced',
+      sections: ['sessions'], sessionsLimit: 5, sessionsInclude: picks, encrypt: false, includeSecrets: false,
+    });
+    assert.deepEqual((await readSyncSelection(dir, 'git')).sessionsInclude, picks, '写盘读回一致');
+
+    // 被篡改/损坏的持久化文件：非数组 → []；元素非字符串/空串 → 丢弃；重复 → 去重保序
+    await fs.writeFile(
+      path.join(dir, SYNC_SELECTION_FILE),
+      JSON.stringify({ schemaVersion: 2, channels: { git: { sessionsInclude: ['a', 7, '', 'a', null, 'b'] } } }),
+      'utf8',
+    );
+    assert.deepEqual((await readSyncSelection(dir, 'git')).sessionsInclude, ['a', 'b']);
+    await fs.writeFile(
+      path.join(dir, SYNC_SELECTION_FILE),
+      JSON.stringify({ schemaVersion: 2, channels: { git: { sessionsInclude: 'a' } } }),
+      'utf8',
+    );
+    assert.deepEqual((await readSyncSelection(dir, 'git')).sessionsInclude, [], '非数组 → 空');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('normalizeSessionsInclude: 只收非空字符串（去重保序、上限 5000）', () => {
+  assert.deepEqual(normalizeSessionsInclude(undefined), []);
+  assert.deepEqual(normalizeSessionsInclude('x'), []);
+  assert.deepEqual(normalizeSessionsInclude(['a', 'a', '', 'b', 3]), ['a', 'b']);
+  assert.equal(normalizeSessionsInclude(Array.from({ length: 6000 }, (_, i) => 'u' + String(i))).length, 5000, '上限钳制');
 });
 
 test('normalizeSessionsLimit: 只有非负整数被接受', () => {

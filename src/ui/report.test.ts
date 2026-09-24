@@ -4,8 +4,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  exportCountsText, formatBytes, importSectionStats, renderExportReport, renderImportReport,
-  renderRollbackReport, sectionFromItemId, suggestedActions,
+  exportCountsText, formatBytes, importProblems, importSectionStats, importTotals,
+  renderExportReport, renderImportReport, renderRollbackReport, sectionFromItemId, suggestedActions,
 } from './report.ts';
 import { makeUiT } from './i18n.ts';
 import { makeExportReport, makeImportResult, makeRollbackReport } from './test-helpers.ts';
@@ -101,6 +101,36 @@ test('report: suggestedActions 仅「完成」（报告已内联全部详情，�
     executed: [{ itemId: 'mcp:m', status: 'failed' }],
   });
   assert.deepEqual(suggestedActions(failed), ['done']);
+});
+
+test('report: importTotals 汇总（ok/跳过/警告/失败 + problems 不含跳过）', () => {
+  const totals = importTotals(makeImportResult().executed);
+  assert.deepEqual(totals, { ok: 5, skipped: 2, warned: 0, failed: 0, problems: 0 });
+
+  const withIssues = importTotals([
+    { itemId: 'settings:a', status: 'ok' },
+    { itemId: 'plugin:x', status: 'warning', message: '装不上' },
+    { itemId: 'mcp:m', status: 'failed', message: 'npx 不存在' },
+    { itemId: 'plugin:y', status: 'skipped' },
+  ]);
+  assert.deepEqual(withIssues, { ok: 1, skipped: 1, warned: 1, failed: 1, problems: 2 });
+});
+
+test('report: importProblems 抽失败/警告项（带分区与原因，保持执行顺序）', () => {
+  const problems = importProblems([
+    { itemId: 'settings:a', status: 'ok' },
+    { itemId: 'plugin:x', status: 'warning', message: '插件 x 安装失败: npm 不可达' },
+    { itemId: 'plugin:y', status: 'skipped' },
+    { itemId: 'mcp:m', status: 'failed', message: 'npx 不存在' },
+    { itemId: 'weird', status: 'warning' },
+  ]);
+  assert.deepEqual(problems.map((p) => p.itemId), ['plugin:x', 'mcp:m', 'weird'], '只留失败/警告，顺序不变');
+  assert.equal(problems[0]!.section, 'plugins', '分区由 itemId 前缀推断（与分区统计同源）');
+  assert.equal(problems[0]!.status, 'warning');
+  assert.equal(problems[0]!.message, '插件 x 安装失败: npm 不可达');
+  assert.equal(problems[1]!.section, 'mcp');
+  assert.equal(problems[2]!.section, 'other', '未知前缀归 other');
+  assert.equal(problems[2]!.message, undefined, '无原因时不留 undefined 字段');
 });
 
 test('report: formatBytes', () => {

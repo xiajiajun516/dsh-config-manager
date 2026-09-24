@@ -19,7 +19,6 @@ const workDir = process.argv[2]!;
 const crashPoint = process.argv[3]!;
 const dataDir = path.join(workDir, 'data');
 const snapDir = path.join(dataDir, 'snapshots');
-const txDir = path.join(dataDir, 'transactions');
 const FP = 'fp-crash';
 const sideEffect = path.join(workDir, 'home', 'side-effect.txt');
 

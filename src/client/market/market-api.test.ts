@@ -5,6 +5,8 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { ConfigManagerApiError } from '../api.ts';
 import { MARKET_API, MarketApi } from './market-api.ts';
@@ -186,4 +188,38 @@ test('M-08 服务未挂载：404（非 JSON 体）→ ConfigManagerApiError 提�
     assert.match(err.message, /未挂载/);
     return true;
   });
+});
+
+/* ---------------------------------------------------------------- 源码级守卫（决策1：超时文案键） */
+
+/**
+ * 决策1 源码级守卫：市场请求的超时文案必须走**语境中立**的缺省键
+ * （`common/http.ts` 的 `DEFAULT_TIMEOUT_KEY = error.requestTimeout`），
+ * 不得再借用同步族键 `error.syncTimeout`——用户并未在做同步，借用会把诊断带偏
+ * （「同步请求超时…请检查网络与仓库可达性」）。
+ *
+ * 反向守卫：`src/client/sync/sync-api.ts` 必须保留 `error.syncTimeout`（它确实是同步族），
+ * 防止清理时把同步族语义一起抹掉（过度扩散）。
+ *
+ * 本仓库无 React 组件测试框架，源码级断言是既有守卫模式（见同目录 my-configs-split.test.ts、
+ * ../common/http-usage-guard.test.ts）。
+ */
+const readRelative = (rel: string): string =>
+  readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8').split('\r\n').join('\n');
+
+test('M-09 源码守卫：市场两文件不再出现 error.syncTimeout（改走缺省 error.requestTimeout）', () => {
+  for (const rel of ['market-api.ts', 'my-configs-api.ts']) {
+    assert.equal(
+      readRelative(rel).includes('error.syncTimeout'),
+      false,
+      `${rel} 不得再出现 error.syncTimeout：市场超时不是同步族，应走缺省 error.requestTimeout`,
+    );
+  }
+});
+
+test('M-10 源码守卫：sync-api.ts 仍用 error.syncTimeout（同步族语义不扩散）', () => {
+  assert.ok(
+    readRelative('../sync/sync-api.ts').includes("timeoutKey: 'error.syncTimeout'"),
+    'sync-api.ts 必须保留同步族超时键 timeoutKey: error.syncTimeout',
+  );
 });

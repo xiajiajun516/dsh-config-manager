@@ -12,11 +12,11 @@
  *  - zip 走 parseZipHardened（Zip Slip / zip bomb / 路径安全）+ 体积上限。
  */
 import { createHardenedZipParser } from '../security/zip-security.ts'
-import type { ZipSafetyLimits } from '../utils/zip.ts'
 import { sha256Hex } from '../utils/hashing.ts'
 import { parseManifest, MANIFEST_FILE } from '../schema/manifest.ts'
 import type { SectionId } from '../schema/types.ts'
 import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts'
+import { sectionMeta } from '../schema/section-registry.ts'
 import { scanAndRedact, scanText } from '../security/secret-scanner.ts'
 import { validateMarketRepoUrl } from './url.ts'
 import {
@@ -32,28 +32,14 @@ export class MarketPrepareError extends Error {
 }
 
 /**
- * 分区可移植性静态判定（F6 share 模式排除依据；对齐 src/adapters/* 的 portability 属性与
- * ui/export-flow.ts 内置目录——prepare 为纯函数不 import 运行时，故内联静态表）。
- * secrets 分区按 deviceSpecific 处理（分享模式绝不允许携带秘密内容本身）。
+ * 分区可移植性判定（F6 share 模式排除依据）——**唯一来源 = 分区注册表**（t31）。
+ *
+ * 改动前这里内联了一份 15 项静态表，与 `src/adapters/*` 的 `portability` 属性、
+ * `ui/export-flow.ts` 的内置目录三处并行维护（同一事实三份）。现在直接读注册表，
+ * 且 `sectionMeta` 对未注册 id 会抛错（不静默按 portable 放行）。
+ *
+ * 读侧纪律不变：本模块仍是纯函数（注册表零 node 依赖、无副作用），不引入任何运行时状态。
  */
-const SECTION_PORTABILITY: Record<SectionId, 'portable' | 'deviceSpecific' | 'platformSpecific'> = {
-  settings: 'portable',
-  ui: 'portable',
-  providers: 'portable',
-  plugins: 'portable',
-  mcp: 'platformSpecific',
-  prompts: 'portable',
-  skills: 'portable',
-  agentPresets: 'portable',
-  agentInstructions: 'portable',
-  workspaces: 'platformSpecific',
-  pluginFiles: 'deviceSpecific',
-  credentialsStatus: 'deviceSpecific',
-  secrets: 'deviceSpecific',
-  sessions: 'deviceSpecific',
-  self: 'portable', // self 的 portability 虽为 portable，但已在 BANNED_MARKET_SECTIONS 恒拒绝
-}
-
 /** 发布输入：用户填写的条目元数据 + 配置 zip 字节。 */
 export interface MarketPrepareInput {
   itemId: string
@@ -85,15 +71,9 @@ export interface MarketPrepareResult {
   warnings: string[]
 }
 
-const SAFE_ZIP_LIMITS: ZipSafetyLimits = {
-  maxEntries: 10_000,
-  maxTotalBytes: 500 * 1024 * 1024,
-  maxCompressedBytes: 200 * 1024 * 1024,
-  maxSingleBytes: 100 * 1024 * 1024,
-  maxRatio: 200,
-}
-
-const parseZipHardened = createHardenedZipParser(SAFE_ZIP_LIMITS)
+// 限额唯一来源 = utils/zip.ts 的 DEFAULT_ZIP_SAFETY_LIMITS（此处曾复制一份字面量，纯冗余）：
+// 不传 defaultLimits → 与默认解析路径、读侧上限逐项一致。
+const parseZipHardened = createHardenedZipParser()
 
 /**
  * 由用户配置 zip 生成市场条目包（纯函数，零写入；异常一律抛 MarketPrepareError）。
@@ -154,7 +134,7 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
   }
   // 6b2. 分享模式额外排除：deviceSpecific/platformSpecific 分区（比 BANNED 更严，与 BANNED 同语义——直接拒绝）
   if (isShare) {
-    const nonPortable = sections.filter((s) => SECTION_PORTABILITY[s] !== 'portable')
+    const nonPortable = sections.filter((s) => sectionMeta(s).portability !== 'portable')
     if (nonPortable.length > 0) {
       throw new MarketPrepareError(
         `分享模式禁止携带设备/平台相关分区 ${nonPortable.join(', ')}（含凭据状态 / 会话 / MCP / 工作区等），请仅导出通用可移植分区`,

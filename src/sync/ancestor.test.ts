@@ -83,7 +83,6 @@ test('pruneAncestors: 仅删超出 keep 的最旧副本；保留集合完整无�
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-ancestor-prune-'));
   try {
     for (let i = 0; i < 12; i++) {
-      const t = `2026-08-16T10:0${i % 10}:00.000Z`.replace('10:00', `10:${String(i).padStart(2, '0')}`);
       const iso = i < 10
         ? `2026-08-16T10:0${i}:00.000Z`
         : `2026-08-16T10:${i}:00.000Z`;

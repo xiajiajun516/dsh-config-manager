@@ -15,9 +15,11 @@ import type { ChangeEvent, ReactNode } from 'react'
 import type { SectionId } from '../../schema/types.ts'
 import type { TranslateNS } from '../client-types.ts'
 import {
-  filterSections, groupPickState, groupUnits, middleEllipsis, pickerSummary, sectionPickState,
+  applySessionParentCoupling,
+  applySessionWorkspaceCoupling,
+  filterSections, groupPickState, groupUnits, tailWeightedEllipsis, pickerSummary, sectionPickState,
   selectAll, selectedUnitCount, toggleSection, toggleUnit, toggleUnitGroup, visibleUnits,
-  type Selection, type SelectionSection, type SelectionUnit,
+  type Selection, type SelectionSection, type SelectionUnit, type SessionParentChange, type SessionWorkspaceCouplingFocus,
 } from '../../ui/selection-model.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { redact } from '../../security/redaction.ts'
@@ -107,6 +109,28 @@ export function ContentPicker({
    */
   const unreadSections = new Set([...pendingSections, ...failedSections]).size
   const label = (id: SectionId): string => sectionLabel?.(id) ?? id
+  /** 是否存在「会话 ↔ 工作区」联动对象（只在这种时候提示联动规则，平时不打扰）。 */
+  const hasLinkedPairs = nodes.some((n) => n.section === 'sessions' && n.units.length > 0)
+    && nodes.some((n) => n.section === 'workspaces' && n.units.some((u) => (u.sessionIds?.length ?? 0) > 0))
+  /**
+   * 勾选动作统一出口：先过一次「父对话 ↔ 子代理会话」联动，再过一次会话↔工作区联动。
+   *
+   * 顺序固定（先把会话集合闭合，再按会话认领工作区），两条语义都在 src/ui/selection-model.ts，node 可测。
+   * `parentChange` 只在**单个会话单元**被点击时传：批量动作（分区/分组/全选）没有单一方向，
+   * 走正向闭包（补齐父/子，绝不取消任何东西）。
+   */
+  const commit = (
+    next: Selection,
+    focus: SessionWorkspaceCouplingFocus = 'both',
+    parentChange?: SessionParentChange,
+  ): void => {
+    const coupled = applySessionParentCoupling(next, nodes, parentChange)
+    onChange(applySessionWorkspaceCoupling(coupled, nodes, focus))
+  }
+  /** 该分区属于哪一侧（决定联动方向）：会话侧 / 工作区侧 / 其它（两条都跑）。 */
+  const focusOf = (section: SectionId): SessionWorkspaceCouplingFocus => (
+    section === 'sessions' ? 'sessions' : section === 'workspaces' ? 'workspaces' : 'both'
+  )
 
   return (
     <div className={css.pickerRoot}>
@@ -118,12 +142,13 @@ export function ContentPicker({
           placeholder={t('picker.search')}
           onChange={(e: ChangeEvent<HTMLInputElement>) => { setQuery(e.target.value) }}
         />
-        <Button size="sm" onClick={() => { onChange(selectAll(nodes, true)) }}>{t('picker.selectAll')}</Button>
-        <Button size="sm" onClick={() => { onChange(selectAll(nodes, false)) }}>{t('picker.selectNone')}</Button>
+        <Button size="sm" onClick={() => { commit(selectAll(nodes, true)) }}>{t('picker.selectAll')}</Button>
+        <Button size="sm" onClick={() => { commit(selectAll(nodes, false)) }}>{t('picker.selectNone')}</Button>
       </div>
 
       {loading && <Spinner label={t('picker.loading')} />}
       {failedSections.length > 0 && <span className={css.hint}>{t('picker.unitsUnavailable')}</span>}
+      {hasLinkedPairs && <span className={css.hint}>{t('picker.sessionWorkspaceLinked')}</span>}
 
       {!loading && visible.length === 0 && <span className={css.hint}>{t('picker.empty')}</span>}
 
@@ -159,7 +184,7 @@ export function ContentPicker({
                   )}
                   <Checkbox
                     checked={state === 'all'}
-                    onChange={(checked) => { onChange(toggleSection(value, node, checked)) }}
+                    onChange={(checked) => { commit(toggleSection(value, node, checked), focusOf(node.section)) }}
                     label={
                       <span className={css.categoryItem}>
                         <span className={css.categoryName}>{label(node.section)}</span>
@@ -221,11 +246,11 @@ export function ContentPicker({
                             {group.label !== null && <span className={css.pickerChevronSpacer} aria-hidden="true" />}
                             <Checkbox
                               checked={!value.excluded.includes(u.id)}
-                              onChange={(checked) => { onChange(toggleUnit(value, nodes, u.id, checked)) }}
+                              onChange={(checked) => { commit(toggleUnit(value, nodes, u.id, checked), focusOf(node.section), { unitId: u.id, checked }) }}
                               label={
                                 <span className={css.categoryItem}>
                                   {/* 中段省略（保留尾部时间戳等区分信息）+ title 全文（UI-16，DESIGN.md §9.5） */}
-                                  <span className={css.pickerUnitName} title={safeLabel}>{middleEllipsis(safeLabel, UNIT_NAME_MAX)}</span>
+                                  <span className={css.pickerUnitName} title={safeLabel}>{tailWeightedEllipsis(safeLabel, UNIT_NAME_MAX)}</span>
                                   {u.lockedWith !== undefined && (
                                     <span title={t('picker.lockedHint')}><Badge kind="warn">{t('picker.locked')}</Badge></span>
                                   )}
@@ -264,7 +289,7 @@ export function ContentPicker({
                               </button>
                               <Checkbox
                                 checked={groupState === 'all'}
-                                onChange={(checked) => { onChange(toggleUnitGroup(value, node, group, checked)) }}
+                                onChange={(checked) => { commit(toggleUnitGroup(value, node, group, checked), focusOf(node.section)) }}
                                 label={
                                   <span className={css.categoryItem}>
                                     {/* 分组名是宿主直出字符串（工作区标题）→ 渲染前过 redact */}

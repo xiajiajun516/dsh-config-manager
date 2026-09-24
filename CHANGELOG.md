@@ -9,6 +9,50 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **Release workflow**: on tag push, CI extracts the current version's section as the release notes highlights;
 > the build fails fast if the section is missing, so you cannot forget to update it.
 
+## [0.1.64] - 2026-09-24
+
+> 本版主题是**会话跨机可信迁移 + 长任务可观测可终止 + 同步通道的会话管理**：一台机器的备份导到另一台，
+> 历史对话要在工作区里**真的看得见**（导出连带工作区、导入按路径映射改写会话首帧 cwd 再归位目录、
+> 把本次真正带走的会话声明进工作区记录）；所有长任务收敛到一个「运行」中心，能看进度、能等待你选择、能终止，
+> 残留的环境锁也能显式回收；同步通道补齐远端保留（GFS）、逐会话点名、内容寻址外置与删除墓碑，
+> 并修掉 issue #38 追加的两条凭据体验问题。
+>
+> **Theme**: sessions now migrate across machines believably (workspaces travel with them, the session log's
+> first-frame cwd is rebased and the directory relocated, and the sessions actually carried are declared in
+> their owning workspace records); long-running tasks get one "Runs" center with progress, decisions,
+> cancellation and stale-lock recovery; the sync channel gains real session management (GFS retention,
+> per-session picking, content-addressed blobs, deletion tombstones), plus issue #38's follow-up credential fixes.
+
+### 新增 / Added
+
+- 🗂️ **会话跨机迁移（issue #45）**：**导出**时自动连带会话所属工作区（勾了会话就把 `workspaces` 清单一起读，并做双向联动勾选），收尾把**本次真正带走的会话**按 cwd 目录键声明进所属工作区记录（`export.sessionsDeclaredInWorkspaces`）；**导入**时先按 `manifest.sourceHome` 自动重定基，再把用户路径映射应用到会话日志**首帧 cwd** 并归位到 `projectKeyOf(映射后 cwd)` 目录（搬不动就回滚首帧），最后把「记录声明的 ∪ 包内带数据的」会话登记进工作区。文件集合分区（sessions / pluginFiles / skills …）的 `relativePath` 是**身份不是配置**，永不参与导入期前缀映射——否则会话会落到 DSH 下次启动直接报错的目录里。DSH 已起不来时走离线 CLI：`dsh-config-manager sessions repair [--fix] [--keep <dir>] [--map old=new]`。
+  Sessions migrate across machines (issue #45): export now carries the workspaces owning the selected sessions and declares the sessions it actually took into those records; import rebases on `manifest.sourceHome`, applies your path mappings to the session log's first-frame `cwd`, relocates the directory to `projectKeyOf(mapped cwd)`, and registers "declared ∪ bundled" sessions. File-collection partitions never take part in import-time prefix mapping (their paths are identity, not configuration). When DSH can no longer start, use the offline CLI `dsh-config-manager sessions repair`.
+- 🛠️ **「运行」中心**：导出 / 导入 / 自动同步 / 一键同步 / 定时备份 / 快照恢复 / 档案切换 / 事故恢复集中在一处，实时显示进度与「成功 / 警告 / 失败 / 跳过」计数，并区分「进行中」与「等待你选择」；进行中的导入可**终止**，在「回滚到导入前」与「保留已应用项」之间二选一（后者紧接着做一次启动安全审计，并如实说明它只能降低、不能消除 DSH 启动失败的概率）；长时间到不了安全点时给出「跳过当前插件 / 重启 DSH」这类可执行建议；**残留环境锁**（持有进程已确证死亡）可显式回收，活锁只提示、不回收。已结束的任务保留 30 分钟，完整审计仍在「迁移历史」。
+  **Runs center**: export / import / autosync / one-click sync / scheduled backup / snapshot restore / profile switch / incident recovery in one place, with live progress, ok-warn-fail-skip counts, and a clear split between "running" and "waiting for your choice". A running import can be cancelled, and you choose between rolling back to the pre-import state and keeping what was already applied (the latter immediately runs a boot-safety audit, which lowers but cannot remove the chance of a DSH boot failure). Stale environment locks (holder proven dead) can be reclaimed explicitly; live locks are only reported. Finished runs stay visible for 30 minutes.
+- 🔐 **凭据迁移不再逐项点头（issue #38 追加）**：凭据计划项的判据统一为「**值的有无**优先于本机状态」——**随包 / 随快照带来的真实值**（`security/secrets.enc` 或 `SyncSnapshot.credentials` 解出的 ref）一律进计划并在执行期写回，**不因本机已配置而跳过**（跳过 = 用户以为密钥导入了、其实没写），文案为「随加密备份恢复」；**只有 ref 名而无值**时，本机已配置 → 直接 `Skip` 并说明「保留本机值、不再索要补录」（此前会为已存在的重复密钥反复提示），本机没有 → 才要求补录。同步确认列表的批量按钮改为覆盖**全部待确认项**（含「缺密钥」的凭据迁移项，只排除硬失败项）——此前批量只认冲突项，含 N 条凭据迁移项时按钮恒灰、只能逐条勾选。
+  **Credential migration no longer needs item-by-item clicks (issue #38 follow-up)**: credential plan items now follow "value presence beats local state" — a real value carried by the archive or snapshot is always planned and written back (never skipped just because the machine already has that ref, which would silently drop it), while a ref that only has a name becomes a `Skip` when the machine is already configured, and only asks for re-entry when it is not. The sync confirmation list's bulk buttons now cover every pending item (including "missing credential" migration items), leaving only hard failures for individual handling.
+- 🧭 **同步通道的会话管理**：① **远端保留接 GFS**——`retentionPolicy` 驱动远端清理，与本地备份共用同一份保留策略（缺省 `keepLast=10`，与旧硬编码上限逐字等价），刚推送的快照恒保留，「会话寿命 = 最近 10 次 push」的问题消除；② **逐会话点名**——「历史对话」既可只带最近 N 个，也可逐个勾选（点名优先于数量上限，一个都不勾 = 回到最近 N 个），只勾会话却没勾工作区时给出明确警告；③ **内容寻址外置**——`sessions` 在通道侧外置为 `blobs/<sha256>` + 引用文件，命中已有哈希即零传输，读回缺 blob **硬失败**（绝不降级为空分区），加密快照永不外置；④ **删除墓碑**——新删的会话累积成 `manifest.deletedSessions` 随快照传播，拉取 / 预览 / 合并按墓碑把命中的会话从**将要导入的载荷**里剔除（不删除本机数据），剔除与登记都写进报告，绝不静默。
+  **Sync-channel session management**: remote retention now follows the same GFS policy as local backups (the just-pushed snapshot is always kept); session sections can be picked per conversation, not only "latest N"; session payloads are externalized into a content-addressed `blobs/<sha256>` store (a hash hit means zero transfer, and a missing blob is a hard failure rather than an empty section; encrypted snapshots are never externalized); and deletions travel as tombstones that remove the affected sessions from the payload about to be imported without ever deleting local data — every removal and registration is reported, never silent.
+- 📄 **导入过程可读**：「导入向导」拆成步骤组件并新增**导入日志面板**（成功 / 跳过 / 警告 / 失败计数 + 「只看问题」过滤）；路径问题按「需指定新位置 / 跨平台路径 / 基础路径不同」分类提示；自动重定基（备份来自另一台机器的 `$DSH_HOME`）在预览里标注为「无需手工映射」；会话与工作区改为**联动勾选**——勾会话自动带上它所属的工作区、取消工作区连带取消它的会话（方向显式传入，避免两条规则互相抵消）。
+  **Readable imports**: the import wizard is split into step components and gains an import log panel (ok / skip / warn / fail counts plus a "problems only" filter); path issues are grouped into "needs a new location", "cross-platform path" and "different base path"; an automatic rebase (backup from another machine's `$DSH_HOME`) is labelled as needing no manual mapping; sessions and workspaces are now coupled in the picker — checking a session checks its workspace, unchecking a workspace unchecks its sessions.
+
+### 修复 / Fixed
+
+- **导入历史对话后在工作区里看不见（issue #45 ③，真机事故）**：导出只搬了注册表原样的 `sessionIds` —— 而它的覆盖率极低（真机实测 **570 条会话里只有 23 条**），用户勾选的对话往往**不在**里面；导入侧却要为记录里那 156 个「一个都没被导出」的 id 逐个登记失败，还把原因误报成「cwd 未映射」（照它改映射永远无效）。现在：**导出侧**按 cwd 目录键把本次真正带走的会话**声明进所属工作区记录**（按裸键去重、只增不减、写日志侧原名，报告出 `export.sessionsDeclaredInWorkspaces`）；**导入侧**登记目标 = 记录声明的 ∪ 包内带数据的，失败按「这次有没有带它的数据」分类（包外会话不再计为失败，改为一条信息行），并对每个会话先试声明形态、再试另一种命名形态（`session-<uuid>` ↔ 裸 `<uuid>` —— DSH 只认会话日志首帧 header 的 `id`）。
+  Sessions imported from a backup no longer stay invisible: the exporter now **declares the sessions it actually carries** in their owning workspace records, and the importer registers "declared ∪ bundled" sessions, classifies failures by whether the data was in the backup, and retries the other id spelling (`session-<uuid>` ↔ bare `<uuid>`).
+
+### 其它 / Also
+
+- 🧱 **宿主路由收敛**：全部路由改由 `src/routes/` 的 `endpoint()` kit 声明（回环 + 同源围栏、方法白名单、统一 JSON 解析与错误映射都在注册点统一包装），`src/index.ts` 只保留 8 条路由与装配；新增源码级守卫扫**全部**路由源（围栏 / 一致性 / 通道），避免只扫入口而静默失去覆盖。
+  **Host routes**: every route is now declared through the `src/routes/` `endpoint()` kit (loopback + same-origin fence, method whitelist, unified body parsing and error mapping at the registration point), with source-level guards scanning all route sources.
+- 📐 **会话日志的字节改写只在宿主侧**：新增 `src/utils/zstd-frame.ts`（多帧 zstd 纯字节工具）与 `src/utils/session-log.ts`（首帧 cwd 读取 / 改写 / 发布前自检 / 失败回滚）；Windows 上 rename 覆盖前先关闭读句柄，否则 EPERM。
+  **Session-log byte rewriting stays host-side**: new `zstd-frame.ts` (multi-frame zstd byte tool) and `session-log.ts` (first-frame cwd read / rewrite / pre-publish self-check / rollback); on Windows the read handle is closed before the rename.
+- 📄 **对外契约与文档同步**：新增 `docs/spec/sync-channel-v1.md`（同步通道快照格式：远端布局 / 内容寻址外置 / 删除墓碑）；`known-gaps.md` 登记 **G-19**（blob 外置不做协议协商）与 **G-20**（墓碑剔除不删本机数据）；`AGENTS.md` / `DESIGN.md` / `README` 同步更新。
+  **Contracts and docs**: new `docs/spec/sync-channel-v1.md` (sync-channel snapshot format: remote layout, content-addressed blobs, deletion tombstones); `known-gaps.md` registers **G-19** and **G-20**; `AGENTS.md` / `DESIGN.md` / the READMEs are updated.
+
+- 报告文案带上**真实失败原因**（此前 `attachSession` 的异常被 `catch {}` 吞掉，只剩一句对原因的猜测）；新增 `export.sessionsDeclaredInWorkspaces` 与 `adapter.workspaceSessionsOutsideBundle` 两条 zh/en 文案。
+- Report messages now carry the **real failure reason** instead of a guess; two new bilingual messages were added.
+
 ## [0.1.63] - 2026-09-21
 
 > 0.1.62 的**跟进版**：采纳外部贡献者 [PR #44](https://github.com/xiajiajun516/dsh-config-manager/pull/44) 的两点稳健性改进，

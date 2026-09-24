@@ -7,6 +7,7 @@
     "types": ["node", "react", "react-dom"],
     "jsx": "react-jsx",
     "strict": true,
+    "noUnusedLocals": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,

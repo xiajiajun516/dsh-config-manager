@@ -20,9 +20,13 @@ import {
   makeConfigSnapshotId, pruneConfigSnapshots, readConfigSnapshotMeta, restoreConfigSnapshot,
   saveConfigSnapshot, toUndoCandidate, updateConfigSnapshotMeta,
 } from './config-snapshot.ts';
-import { makeContext } from '../adapters/test-helpers.ts';
+import { createSnapshot } from './backup.ts';
+import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
+import { SettingsAdapter } from '../adapters/settings.ts';
 import type { ConfigState } from './config-state.ts';
-import type { ConfigAdapter, ExportSection, HostContext } from './types.ts';
+import type {
+  ConfigAdapter, ExportSection, HostContext, ImportPlan, PlanItem, PlanItemKind,
+} from './types.ts';
 import type { SectionId } from '../schema/types.ts';
 
 async function tmpDir(t: { after: (fn: () => Promise<void> | void) => void }, label: string): Promise<string> {
@@ -47,7 +51,7 @@ function ctx(): HostContext {
 function replayAdapter(
   id: SectionId,
   behavior: {
-    items?: { id: string; kind: string }[];
+    items?: { id: string; kind: string; conflict?: { itemId: string; resolution: string } }[];
     invalid?: boolean;
     applyFails?: boolean;
   } = {},
@@ -73,6 +77,7 @@ function replayAdapter(
         description: it.id,
         severity: 'info' as const,
         target: { adapter: id, ref: it.id },
+        ...(it.conflict !== undefined ? { conflict: it.conflict as never } : {}),
       }));
     },
     async applyItem(item: { id: string }) {
@@ -366,4 +371,189 @@ test('toUndoCandidate：只为 undo 规划暴露最小字段', async (t) => {
   const candidate = toUndoCandidate(meta);
   assert.deepEqual(Object.keys(candidate).sort(), ['consumed', 'createdAt', 'id', 'kind', 'state']);
   assert.equal(candidate.id, meta.id);
+});
+
+/* ------------------------------------------------------------ 快照范围与回放可执行集合（P0-4 / P0-5 回归） */
+
+/** 构造最小计划项：快照条目的种类只由 target.adapter 决定，故统一用 settings 目标，
+ *  本组测试只关心「哪些 kind 会写目标 → 是否进快照范围」。 */
+function planItem(kind: PlanItemKind, ref: string, extra: Partial<PlanItem> = {}): PlanItem {
+  return {
+    id: `${kind}:${ref}`, kind, adapter: 'settings', description: ref, severity: 'info',
+    target: { adapter: 'settings', ref },
+    ...extra,
+  };
+}
+
+function planOf(items: PlanItem[]): ImportPlan {
+  return {
+    items,
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: {} as ImportPlan['estimatedActions'],
+  };
+}
+
+/*
+ * 回归（P0-4）：快照范围必须覆盖**每一个会写目标的 kind**。
+ * 修复前 backup.ts 用一份与执行侧不同源的 kind 清单收集目标（不含 PathMapping 与
+ * Conflict）→ 这两类项会写目标却不在快照里：导入失败回滚 / 恢复都撤不掉原值，
+ * 而报告仍声称「已快照、可回滚」。断言：会写的必须进快照；不写的不许占快照条目。
+ */
+test('createSnapshot：会写目标的 kind 一个都不能漏（PathMapping / Conflict(useImported)）', async () => {
+  const c = makeContext('win32', 'C:/home/.dsh', 'web');
+  const plan = planOf([
+    planItem('Create', 'ns-create'),
+    planItem('Update', 'ns-update'),
+    planItem('Install', 'ns-install'),
+    planItem('MissingSecret', 'ns-secret'),
+    planItem('PathMapping', 'ns-pathmap'),
+    planItem('Conflict', 'ns-conflict-use', {
+      conflict: { itemId: 'Conflict:ns-conflict-use', resolution: 'useImported' },
+    }),
+    planItem('Conflict', 'ns-conflict-review'),
+    planItem('Skip', 'ns-skip'),
+    planItem('Warning', 'ns-warning'),
+    planItem('MissingDependency', 'ns-dependency'),
+    planItem('Error', 'ns-error'),
+  ]);
+  const snapshot = await createSnapshot({
+    ctx: c, plan, sourceZip: 'unit.zip', store: new MemSnapshotStore(), adapters: [],
+  });
+  const refs = new Set(snapshot.entries.map((e) => e.ref));
+
+  const mustSnapshot: [string, string][] = [
+    ['Create', 'ns-create'],
+    ['Update', 'ns-update'],
+    ['Install', 'ns-install'],
+    ['MissingSecret', 'ns-secret'],
+    ['PathMapping', 'ns-pathmap'],
+    ['Conflict(useImported)', 'ns-conflict-use'],
+  ];
+  for (const [kind, ref] of mustSnapshot) {
+    assert.ok(refs.has(ref), `${kind} 会写目标，必须在快照范围内（否则「写了撤不掉」）`);
+  }
+  for (const ref of ['ns-conflict-review', 'ns-skip', 'ns-warning', 'ns-dependency', 'ns-error']) {
+    assert.equal(refs.has(ref), false, `${ref} 不写目标，不应占用快照条目`);
+  }
+});
+
+/*
+ * 回归（P0-5）：回放的「可执行集合」必须与导入路径同源。
+ * 修复前 config-snapshot.ts 自持 NON_EXECUTABLE_KINDS（不含 Conflict）→ 未采纳的
+ * Conflict 会被交给 applyItem（settings adapter 无条件 settings.replace）静默覆盖本地值；
+ * 而导入路径对同一项是 skip。断言：未采纳的 Conflict 不执行，显式采纳与 PathMapping 仍执行。
+ */
+test('restoreConfigSnapshot：未采纳的 Conflict 不写目标；显式采纳与 PathMapping 保持可执行', async (t) => {
+  const dir = await tmpDir(t, 'replayconflict');
+  const sections = new Map<SectionId, ExportSection>([['settings', exported('settings', { v: 1 })]]);
+  const meta = await saveConfigSnapshot({ dir, kind: 'auto', reason: 'r', sections, state: state() });
+  const adapter = replayAdapter('settings', {
+    items: [
+      { id: 'conflict-review', kind: 'Conflict' },
+      { id: 'conflict-keep', kind: 'Conflict', conflict: { itemId: 'settings:conflict-keep', resolution: 'keepCurrent' } },
+      { id: 'conflict-use', kind: 'Conflict', conflict: { itemId: 'settings:conflict-use', resolution: 'useImported' } },
+      { id: 'path-map', kind: 'PathMapping' },
+      { id: 'need-secret', kind: 'MissingSecret' },
+    ],
+  });
+  const report = await restoreConfigSnapshot({ dir, id: meta.id, adapters: [adapter], ctx: ctx() });
+  assert.deepEqual(
+    adapter.applied,
+    ['conflict-use', 'path-map'],
+    '未采纳的 Conflict 绝不能写目标；显式 useImported 与 PathMapping 保持既有可执行语义',
+  );
+  assert.deepEqual(
+    report.skipped,
+    ['settings:conflict-review', 'settings:conflict-keep', 'settings:need-secret'],
+    '跳过的项必须如实进报告（不静默）',
+  );
+  assert.equal(report.ok, true);
+});
+
+/*
+ * 回归（P0-5）实证：真实 settings adapter + 真实回放管线。
+ * 快照里 demo={mode:from-snapshot}，目标机已经是 demo={mode:local-change}（revision 7）
+ * → analyzeImport 产出未采纳的 Conflict。修复前回放会调 settings.replace 把本地值覆盖成
+ * 快照值（revision 递增），用户的新改动无声消失。断言：本地值 / revision 原样保留。
+ */
+test('restoreConfigSnapshot：本地值不同的 namespace 不被静默 replace 覆盖（P0-5 实证）', async (t) => {
+  const dir = await tmpDir(t, 'replayreplace');
+  const snapshotValue = { mode: 'from-snapshot' };
+  const localValue = { mode: 'local-change' };
+  const sections = new Map<SectionId, ExportSection>([
+    ['settings', exported('settings', {
+      version: 1,
+      namespaces: { demo: { value: snapshotValue, revision: 1, secrets: [] } },
+    })],
+  ]);
+  const meta = await saveConfigSnapshot({ dir, kind: 'auto', reason: 'r', sections, state: state() });
+  const c = makeContext('win32', 'C:/home/.dsh', 'web');
+  c.settings.ns.set('demo', { value: localValue, revision: 7, secrets: [] });
+
+  const report = await restoreConfigSnapshot({
+    dir, id: meta.id, adapters: [new SettingsAdapter(['demo'])], ctx: c,
+  });
+
+  assert.deepEqual(c.settings.ns.get('demo')?.value, localValue, '未采纳的冲突不得覆盖本地值');
+  assert.equal(c.settings.ns.get('demo')?.revision, 7, 'revision 不得递增（即没有发生 settings.replace）');
+  assert.deepEqual(report.applied, []);
+  assert.deepEqual(report.skipped, ['settings:settings:demo']);
+});
+
+
+/* ------------------------------------------------------------ 未注册分区不得静默错分（t30 / core-flow#F-10） */
+
+/*
+ * 回归（F-10）：engineSnapshotEntry（core/backup.ts）的旧 default 分支把**未知分区**静默记成
+ * settingsNamespace 条目（连 existed 都没有）→ 回滚把它当「原本不存在」而什么都不做：
+ * 该分区的写入永远撤不掉，而报告仍声称「已快照、可回滚」。修复后 default 分支只做编译期穷尽断言 +
+ * 运行期显式报错，secrets（已注册但无分区载荷）也有自己的显式报错分支。
+ * 构造方式：伪造一个未注册 id 的 plan 项（等价于被篡改的 plan / 旧 journal 反序列化）。
+ */
+test('createSnapshot：未注册分区必须显式报错，绝不静默按 settingsNamespace 记录', async () => {
+  const c = makeContext('win32', 'C:/home/.dsh', 'web');
+  const plan = planOf([
+    planItem('Update', 'ghost-ref', { target: { adapter: 'ghostSection' as SectionId, ref: 'ghost-ref' } }),
+  ]);
+  await assert.rejects(
+    () => createSnapshot({ ctx: c, plan, sourceZip: 'unit.zip', store: new MemSnapshotStore(), adapters: [] }),
+    /不支持分区|未在 schema\/section-registry\.ts 注册/,
+    '未注册分区必须得到错误，而不是被静默记成 settingsNamespace',
+  );
+});
+
+test('createSnapshot：secrets 分区不作为快照目标（显式报错而非落到 default）', async () => {
+  const c = makeContext('win32', 'C:/home/.dsh', 'web');
+  const plan = planOf([
+    planItem('Update', 'cred-ref', { target: { adapter: 'secrets' as SectionId, ref: 'cred-ref' } }),
+  ]);
+  await assert.rejects(
+    () => createSnapshot({ ctx: c, plan, sourceZip: 'unit.zip', store: new MemSnapshotStore(), adapters: [] }),
+    /secrets 分区/,
+    'secrets 无 adapter / 无分区载荷 → 不应作为快照目标',
+  );
+});
+
+test('restoreConfigSnapshot：快照里的未注册分区必须显式进报告，绝不静默丢弃/错分', async (t) => {
+  const dir = await tmpDir(t, 'replayghost');
+  const sections = new Map<SectionId, ExportSection>([
+    ['ghostSection' as SectionId, exported('ghostSection' as SectionId, { v: 1 })],
+    ['settings', exported('settings', { version: 1, namespaces: {} })],
+  ]);
+  const meta = await saveConfigSnapshot({ dir, kind: 'auto', reason: 'r', sections, state: state() });
+
+  const applied: string[] = [];
+  const replay = replayAdapter('settings', { items: [{ id: 'a', kind: 'Create' }] });
+  const report = await restoreConfigSnapshot({
+    dir, id: meta.id, adapters: [replay, { ...replayAdapter('ghostSection' as SectionId), applyItem: async () => { applied.push('ghost'); return { ok: true }; } }],
+    ctx: ctx(),
+  });
+
+  assert.equal(report.invalidSections.length, 1, '未注册分区必须显式记录在报告里');
+  assert.equal(report.invalidSections[0]!.section, 'ghostSection');
+  assert.match(report.invalidSections[0]!.reason, /未注册分区/);
+  assert.deepEqual(applied, [], '未注册分区绝不被任何 adapter 回放（不按其它分区语义处理）');
 });

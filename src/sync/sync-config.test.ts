@@ -16,11 +16,15 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { stripJsComments } from '../utils/bundle-scan.ts';
 
 import {
   readSyncConfig, readFullSyncConfig, writeSyncConfig, isGitConfig, isWebDavConfig,
   SYNC_CONFIG_FILE, SYNC_CONFIG_SCHEMA_VERSION, SYNC_CONFIG_SUPPORTED_VERSIONS,
   validateWebDavUrl, type SyncConfig,
+  SYNC_CHANNELS, channelOf, channelMap, isSyncTransportType, parseSyncChannel,
 } from './sync-config.ts';
 
 test('writeSyncConfig + readSyncConfig（git 通道）：写入 v3 双命名空间形态（无另一通道时不写空命名空间）', async () => {
@@ -308,3 +312,131 @@ test('validateWebDavUrl：合法 http(s) 地址 → 返回 null（合法）', ()
   assert.equal(validateWebDavUrl('https://dav.example.com/remote.php/dav/files/user'), null);
   assert.equal(validateWebDavUrl('http://dav.local:8080/'), null);
 });
+/* ---------------- t32：通道枚举唯一来源（SYNC_CHANNELS / channelOf / channelMap） ---------------- */
+
+test('t32：SYNC_CHANNELS 是通道枚举唯一来源；isSyncTransportType / parseSyncChannel 同源', () => {
+  assert.deepEqual([...SYNC_CHANNELS], ['git', 'webdav']);
+  for (const ch of SYNC_CHANNELS) {
+    assert.equal(isSyncTransportType(ch), true);
+    assert.equal(parseSyncChannel(ch), ch);
+  }
+  // 非法/缺失一律 undefined（缺省由调用方决定，不在此静默兜底成 git）
+  assert.equal(isSyncTransportType('ftp'), false);
+  assert.equal(isSyncTransportType(undefined), false);
+  assert.equal(isSyncTransportType(null), false);
+  assert.equal(isSyncTransportType(1), false);
+  assert.equal(parseSyncChannel('ftp'), undefined);
+  assert.equal(parseSyncChannel(undefined), undefined);
+});
+
+test('t32：channelOf 是「配置 → 通道」的唯一判定口径（等价于原 isWebDavConfig ? webdav : git）', () => {
+  const git: SyncConfig = { schemaVersion: 2, transport: 'git', git: { repoUrl: 'x' } };
+  const webdav: SyncConfig = { schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com' } };
+  assert.equal(channelOf(git), 'git');
+  assert.equal(channelOf(webdav), 'webdav');
+  // 与既有守卫同口径（两者都读 transport，不得出现第二套判定）
+  assert.equal(channelOf(git), isGitConfig(git) ? 'git' : 'webdav');
+  assert.equal(channelOf(webdav), isWebDavConfig(webdav) ? 'webdav' : 'git');
+});
+
+test('t32：channelMap 覆盖 SYNC_CHANNELS 全通道（Record 构造不再逐处穷举字面量）', () => {
+  const seen: string[] = [];
+  const out = channelMap((channel) => {
+    seen.push(channel);
+    return channel + '!';
+  });
+  assert.deepEqual([...seen], [...SYNC_CHANNELS], '回调按 SYNC_CHANNELS 顺序对每个通道各调用一次');
+  assert.deepEqual(out, { git: 'git!', webdav: 'webdav!' });
+});
+
+/** 递归收集 src 下的地面代码（*.ts / *.tsx，排除 *.test.ts 与 *.d.ts） */
+async function collectSourceFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  const entries = await fs.readdir(dir, { withFileTypes: true });
+  for (const e of entries) {
+    const abs = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      out.push(...(await collectSourceFiles(abs)));
+    } else if ((e.name.endsWith('.ts') || e.name.endsWith('.tsx')) && !e.name.endsWith('.test.ts') && !e.name.endsWith('.d.ts')) {
+      out.push(abs);
+    }
+  }
+  return out;
+}
+
+/**
+ * t32 源码守卫：通道字面量数组只允许出现在唯一声明处；任何其它出现都必须带「客户端镜像」标记
+ * （satisfies readonly SyncTransportType[] + 穷尽检查），否则视为偷偷多出一份枚举
+ * （历史上 autosync-scheduler 把同一个数组写了两遍，漏改一处即某通道永不排期）。
+ */
+test('t32 源码守卫：地面代码里通道数组只有一处声明（其余只允许被守卫的客户端镜像）', async () => {
+  const srcRoot = fileURLToPath(new URL('..', import.meta.url));
+  const files = await collectSourceFiles(srcRoot);
+  const needle = "'git', 'webdav'";
+  const hits: Array<{ file: string; line: number; text: string }> = [];
+  for (const file of files) {
+    const rel = path.relative(srcRoot, file).split(path.sep).join('/');
+    const content = await fs.readFile(file, 'utf8');
+    content.split(String.fromCharCode(10)).forEach((line, i) => {
+      if (line.includes(needle)) hits.push({ file: rel, line: i + 1, text: line.trim() });
+    });
+  }
+  const canonical = hits.filter((h) => h.text.includes('export const SYNC_CHANNELS'));
+  assert.equal(canonical.length, 1, 'SYNC_CHANNELS 必须且只能声明一次: ' + JSON.stringify(hits));
+  assert.equal(canonical[0]!.file, 'sync/sync-config.ts', '唯一声明处必须是 src/sync/sync-config.ts');
+  const others = hits.filter((h) => h.text !== canonical[0]!.text || h.file !== canonical[0]!.file);
+  for (const h of others) {
+    assert.ok(
+      h.text.includes('satisfies readonly SyncTransportType[]'),
+      '除 SYNC_CHANNELS 外只允许带穷尽检查标记的客户端镜像: ' + h.file + ':' + String(h.line) + ' ' + h.text,
+    );
+  }
+  // 宿主 sync 目录不得再出现通道数组字面量（客户端镜像在 src/client/sync/ 下，不在此列）
+  const hostDupes = others.filter((h) => h.file.startsWith('sync/') || h.file.startsWith('core/'));
+  assert.deepEqual(hostDupes, [], '宿主代码不得出现第二处通道数组: ' + JSON.stringify(hostDupes));
+});
+
+/**
+ * t33/B7 源码守卫（t40 的 findings B7-GUARD-SCOPE 收尾 / t47 落地）：
+ * src/index.ts（host 路由层）不得再手写通道数组字面量与裸通道三元判定 ——
+ * 一律消费 t32 建立的单一来源（SYNC_CHANNELS / channelOf / parseSyncChannel）。
+ *
+ * 为什么不用原文 includes / indexOf：本工作流已两次踩到「锚到注释里的同名串」——
+ * index.ts 的注释里本来就写着 isWebDavConfig(cfg) ? 'webdav' : 'git' 这类描述文本，
+ * 直接对原文匹配会假阳；一旦解析失衡又可能假阴。这里复用仓库既有内核
+ * utils/bundle-scan.ts 的 stripJsComments（注释剥离 + 保留行号；对反引号/引号失衡有
+ * 「多趟并集」的既有设计），取两个极端模式（tpl+str 与 opaque-both）后
+ * **只采信两趟都保留内容的行**：注释行在任一趟都会被清空，故不会命中。
+ *
+ * 已实测的载重与抗注释（%TEMP% 隔离副本，仓库零写入）：
+ *  - 注释诱饵（注释里写 ['git', 'webdav'] 与 isWebDavConfig(cfg) ? 'webdav' : 'git'）→ 本守卫保持绿；
+ *    同一实验里 t32 的旧守卫（原文 includes）会误报 —— 正是本守卫存在的原因；
+ *  - 把诱饵换成真实代码 → 本守卫变红并报出行号（当时为 5868 / 5869）。
+ */
+test('t33/B7 源码守卫：src/index.ts 不再手写通道数组/裸通道三元，全部消费单一来源', async () => {
+  const indexSrc = await fs.readFile(fileURLToPath(new URL('../index.ts', import.meta.url)), 'utf8')
+  const tplMode = stripJsComments(indexSrc, true, false)
+  const opaqueMode = stripJsComments(indexSrc, false, true)
+  const tplLines = tplMode.split(String.fromCharCode(10))
+  const opaqueLines = opaqueMode.split(String.fromCharCode(10))
+  const bad: string[] = []
+  tplLines.forEach((line, i) => {
+    const t = line.trim()
+    // 只有两趟都认为这里是「真实代码」时才判定（注释在其中一趟必被清空）
+    if (t === '' || (opaqueLines[i] ?? '').trim() === '') return
+    if (t.includes("['git', 'webdav']") || t.includes("['git','webdav']")) bad.push(String(i + 1) + ': 通道数组字面量 ' + t)
+    if (t.includes("? 'webdav' : 'git'") || t.includes("?'webdav':'git'")) bad.push(String(i + 1) + ': 裸通道三元判定 ' + t)
+  })
+  assert.deepEqual(bad, [], 'src/index.ts 不得再手写通道判定/枚举（应消费 channelOf / parseSyncChannel / SYNC_CHANNELS）:' + String.fromCharCode(10) + bad.join(String.fromCharCode(10)))
+  // 正向断言：确实接上了单一来源（否则上面可能因「什么都没写」而假绿）
+  assert.ok(
+    tplMode.includes('channelOf, parseSyncChannel, SYNC_CHANNELS')
+    || (tplMode.includes('parseSyncChannel') && tplMode.includes('channelOf')),
+    'src/index.ts 必须从 ./sync/sync-config.ts 导入单一来源 API',
+  )
+  assert.ok(
+    tplMode.includes('for (const channel of SYNC_CHANNELS)') || tplMode.includes('SYNC_CHANNELS.map('),
+    'src/index.ts 的通道集合必须由 SYNC_CHANNELS 派生（不得穷举字面量）',
+  )
+})
+

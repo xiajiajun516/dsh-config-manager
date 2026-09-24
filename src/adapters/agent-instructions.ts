@@ -13,12 +13,14 @@ import { msgOf } from '../core/messages.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
 import type { FilesSection } from '../schema/types.ts';
 import type { ExportOptions, ExportSection, HostContext } from '../core/types.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
 
 export class AgentInstructionsAdapter extends FileCollectionAdapter {
   readonly id = 'agentInstructions' as const;
-  readonly displayName = 'Agent Instructions';
-  readonly defaultIncluded = true;
-  readonly portability = 'portable' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('agentInstructions').displayName;
+  readonly defaultIncluded = sectionMeta('agentInstructions').defaultIncluded;
+  readonly portability = sectionMeta('agentInstructions').portability;
   readonly baseDir = '';
 
   /** 用户全局指令文件（相对 homeDir；同时是 schema 端该分区唯一的文件） */

@@ -96,7 +96,7 @@ export interface RecoveryOrchestrator {
 }
 
 export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): RecoveryOrchestrator {
-  const { store, runs, snapshotsDir, host, msg, snapshotExists, getEnvironmentFingerprint, clearSafeMode, inspectLockState, recoverStaleLock } = deps;
+  const { store, runs, snapshotsDir, host, snapshotExists, getEnvironmentFingerprint, clearSafeMode, inspectLockState, recoverStaleLock } = deps;
 
   /**
    * 只读 recovery decision（不修改 journal）。**不用 reconcileActive**：其 §6.5 硬门控会把

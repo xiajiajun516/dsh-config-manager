@@ -2,15 +2,21 @@
  * m-sync-transport：散文件目录布局。
  * 快照根目录 = manifest.json + 按 SECTION_JSON_PATHS 平铺的 JSON 分区
  *            + 按 SECTION_FILE_PREFIXES 的文件类分区目录（skills 等真实文件）。
- * 复用 src/schema/config.ts 的路径表；核心逻辑经 SnapshotFs 注入（默认 node:fs/promises）。
+ * 分区集合 / ZIP 路径表 / 文件类前缀一律来自 src/schema/section-registry.ts（唯一权威，不再抄写分区名；
+ * t32 起本文件直接从注册表派生，不经 schema/config.ts 的中转再导出）。
+ * 核心逻辑经 SnapshotFs 注入（默认 node:fs/promises）。
  */
 import path from 'node:path';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
-import { SECTION_FILE_PREFIXES, SECTION_JSON_PATHS } from '../schema/config.ts';
+import {
+  filePrefixOf, jsonPathOf, SECTION_FILE_PREFIXES, SECTION_IDS, SECTION_JSON_PATHS,
+} from '../schema/section-registry.ts';
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
+import { BLOB_SECTIONS, isBlobRefsSection, refsToSection, sectionToBlobRefs } from './blob-store.ts';
+import type { BlobSink } from './blob-store.ts';
 import { hashSection } from './sync-state.ts';
 import type { SyncSnapshot } from './transport.ts';
 import { isEncryptedSections } from './transport.ts';
@@ -25,6 +31,23 @@ export const SNAPSHOT_MANIFEST_FILE = 'manifest.json';
  * 注意：占位内容不得含换行 —— Windows core.autocrlf 会把 LF 转 CRLF，内容校验会失败。
  */
 export const SNAPSHOT_KEEP_FILE = '.gitkeep';
+
+/**
+ * 内容寻址外置（P1-4）：文件类分区若走 blob 仓，快照目录里用本文件记录引用
+ * （`<section>.blobs.json`），不再写 `<prefix>/**` 的字节。
+ */
+export const SNAPSHOT_BLOB_REFS_SUFFIX = '.blobs.json';
+export function blobRefsFile(sid: SectionId): string {
+  return `${sid}${SNAPSHOT_BLOB_REFS_SUFFIX}`;
+}
+
+/** 外置选项：**缺省不外置**（行为与改造前逐字节一致）；只有通道传了仓才启用。 */
+export interface SnapshotBlobOptions {
+  /** blob 仓（通道实现：git = 仓库内 blobs/ 目录；webdav = 远端集合） */
+  blobs?: BlobSink;
+  /** 允许外置的分区（缺省 BLOB_SECTIONS = sessions） */
+  sections?: readonly SectionId[];
+}
 export const SNAPSHOT_KEEP_CONTENT = 'DSH Config Manager sync placeholder (keep empty section dir)';
 const SNAPSHOT_KEEP_BYTES = new TextEncoder().encode(SNAPSHOT_KEEP_CONTENT);
 
@@ -46,11 +69,19 @@ export interface SnapshotDirManifest {
   sectionHashes: Partial<Record<SectionId, string>>;
 }
 
-/** 布局支持的分区 = SECTION_JSON_PATHS ∪ SECTION_FILE_PREFIXES（secrets 等不在内） */
+/**
+ * 布局支持的分区 = 有 JSON 载荷（jsonPathOf）或有文件类前缀（filePrefixOf）的分区；
+ * secrets（payload.kind='none'，走独立加密容器）不在内。
+ *
+ * 从**注册表**派生（不再抄写分区名），且与历史表达式
+ * `[...Object.keys(SECTION_JSON_PATHS), ...Object.keys(SECTION_FILE_PREFIXES)]` **逐项同序**
+ * （JSON 分区在前、文件类在后，组内保持注册表 applyOrder）—— 键顺序是行为的一部分，
+ * 派生式已按该顺序实测比对（t32）。成员判定（includes）本身与顺序无关，但保持一致以免误读。
+ */
 const LAYOUT_SECTION_IDS: readonly SectionId[] = [
-  ...Object.keys(SECTION_JSON_PATHS),
-  ...Object.keys(SECTION_FILE_PREFIXES),
-] as SectionId[];
+  ...SECTION_IDS.filter((id) => jsonPathOf(id) !== null),
+  ...SECTION_IDS.filter((id) => filePrefixOf(id) !== null),
+];
 
 /**
  * 文件相对路径安全检查：拒绝空/'.'/'..'、绝对路径、Windows 盘符、反斜杠、
@@ -93,6 +124,7 @@ export async function writeSnapshotToDir(
   snapshot: SyncSnapshot,
   dir: string,
   fsx: SnapshotFs = createSnapshotFs(),
+  opts: SnapshotBlobOptions = {},
 ): Promise<SnapshotDirManifest> {
   // 加密快照不写散文件目录（本地不落盘：密文/明文都不落；远端已存密文）
   if (isEncryptedSections(snapshot.sections)) {
@@ -139,10 +171,19 @@ export async function writeSnapshotToDir(
     await fsx.writeFile(abs, new TextEncoder().encode(stringifyJsonSafe(data, { space: 2 })));
   }
 
-  // 文件类分区：目录前缀 + 真实文件
+  // 文件类分区：目录前缀 + 真实文件；走外置的分区只写引用文件（字节进 blob 仓）
+  const blobSections = new Set<SectionId>(opts.sections ?? BLOB_SECTIONS);
+  const blobs = opts.blobs;
   for (const [sid, prefix] of Object.entries(SECTION_FILE_PREFIXES)) {
     const data = snapshot.sections[sid as SectionId] as FilesSection | undefined;
     if (data === undefined) continue;
+    if (blobs !== undefined && blobSections.has(sid as SectionId)) {
+      // sectionHashes 仍按**明文分区**计算（上面已算完）——读回侧才能在不解包的情况下比较
+      const refs = await sectionToBlobRefs(data, blobs);
+      const refsAbs = joinFs(dir, blobRefsFile(sid as SectionId));
+      await fsx.writeFile(refsAbs, new TextEncoder().encode(stringifyJsonSafe(refs, { space: 2 })));
+      continue;
+    }
     const baseAbs = joinFs(dir, prefix);
     await fsx.mkdir(baseAbs); // 空文件类分区也保留目录（读回可还原空 files）
     for (const file of data.files) {
@@ -164,7 +205,7 @@ export async function writeSnapshotToDir(
 export async function readSnapshotFromDir(
   dir: string,
   fsx: SnapshotFs = createSnapshotFs(),
-  opts: { missingFileDir?: 'throw' | 'empty' } = {},
+  opts: { missingFileDir?: 'throw' | 'empty' } & SnapshotBlobOptions = {},
 ): Promise<SyncSnapshot> {
   const manifestAbs = joinFs(dir, SNAPSHOT_MANIFEST_FILE);
   if (!(await fsx.exists(manifestAbs))) {
@@ -203,6 +244,19 @@ export async function readSnapshotFromDir(
   // 文件类分区
   for (const [sid, prefix] of Object.entries(SECTION_FILE_PREFIXES)) {
     if (!(sid in manifest.sectionHashes)) continue;
+    // 外置引用形态（P1-4）：从 blob 仓取回字节；仓缺失/引用损坏一律硬失败（绝不降级为空分区）
+    const refsAbs = joinFs(dir, blobRefsFile(sid as SectionId));
+    if (await fsx.exists(refsAbs)) {
+      const parsedRefs = parseJsonSafe(Buffer.from(await fsx.readFile(refsAbs)).toString('utf8'));
+      if (!isBlobRefsSection(parsedRefs)) {
+        throw new Error(`外置引用文件形状非法: ${blobRefsFile(sid as SectionId)}`);
+      }
+      if (opts.blobs === undefined) {
+        throw new Error(`快照的 ${sid} 分区是内容寻址外置形态，但当前通道未提供 blob 仓`);
+      }
+      sections[sid as SectionId] = await refsToSection(parsedRefs, opts.blobs);
+      continue;
+    }
     const baseAbs = joinFs(dir, prefix);
     if (!(await fsx.isDir(baseAbs))) {
       if (opts.missingFileDir === 'empty') {

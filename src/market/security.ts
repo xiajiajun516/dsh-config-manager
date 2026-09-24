@@ -11,7 +11,6 @@
  * errors[]，不进入导入预览，不落配置。
  */
 import { createHardenedZipParser } from '../security/zip-security.ts';
-import type { ZipSafetyLimits } from '../utils/zip.ts';
 import { verifyChecksums, sha256Hex } from '../utils/hashing.ts';
 import { parseManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest.ts';
 import { validateSectionData, SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../schema/config.ts';
@@ -36,15 +35,9 @@ export interface MarketItemValidationResult {
   checksumsOk: boolean;
 }
 
-const SAFE_ZIP_LIMITS: ZipSafetyLimits = {
-  maxEntries: 10_000,
-  maxTotalBytes: 500 * 1024 * 1024,
-  maxCompressedBytes: 200 * 1024 * 1024,
-  maxSingleBytes: 100 * 1024 * 1024,
-  maxRatio: 200,
-};
-
-const parseZipHardened = createHardenedZipParser(SAFE_ZIP_LIMITS);
+// 限额唯一来源 = utils/zip.ts 的 DEFAULT_ZIP_SAFETY_LIMITS（此处曾复制一份字面量，纯冗余）：
+// 不传 defaultLimits → 与默认解析路径、读侧上限逐项一致。
+const parseZipHardened = createHardenedZipParser();
 
 /**
  * 校验市场条目（§6 全管线，零写入）。
@@ -59,7 +52,6 @@ export function validateMarketItem(
   manifestRaw: string,
   zipBytes: Uint8Array,
 ): MarketItemValidationResult {
-  const errors: string[] = [];
   const warnings: string[] = generateSupplyChainWarnings(itemId);
 
   // 1. 来源一致：manifest.json.id === itemId

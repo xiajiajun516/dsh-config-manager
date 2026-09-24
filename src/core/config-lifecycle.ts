@@ -156,7 +156,6 @@ export class ConfigLifecycle {
   private readonly opts: ConfigLifecycleOptions;
   private readonly echo = new EchoRegistry();
   private watcher: DebouncedWatcher | null = null;
-  private lastAutoAt: string | null = null;
   private flushRunning = false;
   private disposed = false;
   /**
@@ -567,7 +566,6 @@ export class ConfigLifecycle {
     this.echo.clear(); // 真实变更发生 → 清空登记，避免后续合法修改被误判为回声
     this.lastReplayState = null;
     const meta = await this.saveSnapshot({ kind: 'auto', reason: 'config-change', trigger: 'watcher' }, captured);
-    this.lastAutoAt = meta.createdAt;
     this.opts.onAutoSnapshot?.(meta);
   }
 }

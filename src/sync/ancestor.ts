@@ -25,6 +25,29 @@ export async function loadAncestor(
   return await readSnapshotFromDir(dir, fsx);
 }
 
+/**
+ * 同 loadAncestor，但「目录不存在 / 不可读 / 损坏」→ undefined（P0-7 的降级路径，供三方合并用）。
+ *
+ * 为什么需要它：祖先副本是**可缺失**的 —— 加密快照 push 不落明文副本、副本会被
+ * pruneAncestors 裁剪、跨机/手工清理也可能删掉它。此时三方合并应退化为「无祖先」的两方合并
+ * （merge.ts：local ≠ remote → 整分区 conflict，交用户在同步 UI 里裁决），而不是把整轮自动同步
+ * 打成 failed 并每轮复现（旧实现把祖先目录名存进 lastSnapshotId，加密 push 后下一轮 merge 直接抛
+ * 「快照目录缺少 manifest.json」）。具体失败原因不再上报：落到合并结果里就是「分区级 conflict」，
+ * 用户可见且可裁决。loadAncestor 的「不存在即抛」契约保持不变（显式读取祖先仍应大声失败）。
+ */
+export async function tryLoadAncestor(
+  localSnapshotsDir: string,
+  snapshotId: string,
+  fsx: SnapshotFs = createSnapshotFs(),
+): Promise<SyncSnapshot | undefined> {
+  if (typeof snapshotId !== 'string' || snapshotId === '') return undefined;
+  try {
+    return await readSnapshotFromDir(joinFs(localSnapshotsDir, snapshotId), fsx);
+  } catch {
+    return undefined;
+  }
+}
+
 /** 把合并后的快照写入本地祖先副本目录（覆盖同名 id）。 */
 export async function writeAncestor(
   localSnapshotsDir: string,

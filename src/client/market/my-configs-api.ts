@@ -1,8 +1,8 @@
 /**
  * 「我的配置」（一键上传 / 查看 / 更新）浏览器半 —— `/api/dsh-config-manager/me/*` 的类型化 fetch 封装。
  *
- * 仿 `../sync/sync-api.ts` 与 `market-api.ts` 同款模式：自持端点常量与 readJson/postJson
- * 小工具，独立于 `../api.ts` 与 `market-api.ts`，只新增不修改既有面。
+ * 端点常量与请求封装都是**单一来源**：路由常量见 `common/routes.ts`，
+ * `readJson` / `getJson` / `postJson`（统一超时 + 取消 + 错误映射）见 `common/http.ts`（W4 收敛）。
  *
  * 端点契约（Host 半 src/index.ts 的 makeRoutes 按 docs/design/2026-08-20-my-configs-design.md §4.2 实现）：
  * ```
@@ -24,28 +24,20 @@
 import type {
   DeleteResult, ListingStatusResponse, MyItemEntry, MyRepoForm, UploadResult,
 } from '../../market/my-repo.ts';
-import { ConfigManagerApiError } from '../api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import { LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
+import { MY_CONFIGS_API } from '../common/routes.ts';
 
 // 便捷重导出：Host 半 my-repo.ts 领域类型（client 消费单一来源，避免漂移）
 export type { DeleteResult, ListingStatusResponse, MyItemEntry, MyRepoForm, UploadResult };
 
 /* ---------------------------------------------------------------- 端点常量 */
 
-/** 「我的配置」端点常量（与 Host 半 API 常量保持一致） */
-export const MY_CONFIGS_API = {
-  base: '/api/dsh-config-manager/me',
-  status: '/api/dsh-config-manager/me/status',
-  upload: '/api/dsh-config-manager/me/upload',
-  items: '/api/dsh-config-manager/me/items',
-  update: '/api/dsh-config-manager/me/update',
-  listing: '/api/dsh-config-manager/me/listing',
-  relist: '/api/dsh-config-manager/me/relist',
-  delete: '/api/dsh-config-manager/me/delete',
-} as const;
+/** 「我的配置」端点常量：**唯一来源** = `common/routes.ts`（W4 单点化），此处重导出保持导入面。 */
+export { MY_CONFIGS_API };
 
-/** 「我的配置」请求超时（ms）：上传/更新含 git clone/push/fork/PR，与 market/sync 对齐量级 */
-const MY_CONFIGS_TIMEOUT_MS = 5 * 60 * 1000;
+/** 「我的配置」请求选项（长操作 5 分钟；超时文案沿用缺省 `error.requestTimeout`（语境中立的通用超时，按秒插值））。 */
+const MY_CONFIGS_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS };
 
 /* ---------------------------------------------------------------- 响应/请求类型 */
 
@@ -84,53 +76,7 @@ export interface MyItemsResponse {
   items: MyItemEntry[]
 }
 
-/* ---------------------------------------------------------------- fetch 工具 */
-
-/** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError（与 api.ts 同款） */
-async function readJson<T>(response: Response, t: UiT): Promise<T> {
-  const notMountedMessage = t('error.notMounted');
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
-    throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
-  }
-  if (!response.ok) {
-    const message =
-      typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : response.status === 404
-          ? notMountedMessage
-          : `HTTP ${response.status}`;
-    throw new ConfigManagerApiError(message);
-  }
-  return body as T;
-}
-
-/** POST JSON 请求（带超时：宿主卡死时 UI 拿到明确错误而不是永远转圈） */
-async function postJson<T>(path: string, body: unknown, t: UiT): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), MY_CONFIGS_TIMEOUT_MS);
-  try {
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    return await readJson<T>(response, t);
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw new ConfigManagerApiError(
-        t('error.syncTimeout', { minutes: String(Math.round(MY_CONFIGS_TIMEOUT_MS / 60000)) }),
-      );
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/* ---------------------------------------------------------------- 请求选项 */
 
 /* ---------------------------------------------------------------- MyConfigsApi */
 
@@ -146,36 +92,36 @@ export class MyConfigsApi {
 
   /** 读取登录态 + 用户配置仓库状态（token 失效 → Host 返回 401/未登录，UI 引导重新登录） */
   async meStatus(): Promise<MyMeStatusResponse> {
-    return postJson<MyMeStatusResponse>(MY_CONFIGS_API.status, {}, this.t);
+    return postJson<MyMeStatusResponse>(MY_CONFIGS_API.status, {}, this.t, MY_CONFIGS_OPTS);
   }
 
   /** 一键上传：校验 → 建/复用仓库 → 写入用户仓库 → fork → 改官方 index → 提收录 PR */
   async meUpload(payload: { zipPath: string; form: MyConfigsFormPayload }): Promise<MyUploadResult> {
-    return postJson<MyUploadResult>(MY_CONFIGS_API.upload, payload, this.t);
+    return postJson<MyUploadResult>(MY_CONFIGS_API.upload, payload, this.t, MY_CONFIGS_OPTS);
   }
 
   /** 读取已上传条目列表（用户仓库 index.json；每条目含 Host 侧判定的收录状态） */
   async meItems(): Promise<MyItemsResponse> {
-    return postJson<MyItemsResponse>(MY_CONFIGS_API.items, {}, this.t);
+    return postJson<MyItemsResponse>(MY_CONFIGS_API.items, {}, this.t, MY_CONFIGS_OPTS);
   }
 
   /** 一键更新：version 自动 +1，复用/重开收录 PR */
   async meUpdate(payload: { zipPath: string; form: MyConfigsFormPayload }): Promise<MyUploadResult> {
-    return postJson<MyUploadResult>(MY_CONFIGS_API.update, payload, this.t);
+    return postJson<MyUploadResult>(MY_CONFIGS_API.update, payload, this.t, MY_CONFIGS_OPTS);
   }
 
   /** 查询收录/下架任务状态（结果卡轮询；任务表未命中时 Host 回退 GitHub 实况推导；无任务无实况 → null） */
   async meListing(itemId: string): Promise<ListingStatusResponse | null> {
-    return postJson<ListingStatusResponse | null>(MY_CONFIGS_API.listing, { itemId }, this.t);
+    return postJson<ListingStatusResponse | null>(MY_CONFIGS_API.listing, { itemId }, this.t, MY_CONFIGS_OPTS);
   }
 
   /** 重新提交收录（失败/重启丢失后重试；幂等复用已存在 fork/open PR） */
   async meRelist(itemId: string): Promise<ListingStatusResponse> {
-    return postJson<ListingStatusResponse>(MY_CONFIGS_API.relist, { itemId }, this.t);
+    return postJson<ListingStatusResponse>(MY_CONFIGS_API.relist, { itemId }, this.t, MY_CONFIGS_OPTS);
   }
 
   /** 删除条目（同步删本地索引+文件；已收录自动后台提下架 PR；待审核自动关闭收录 PR） */
   async meDelete(itemId: string): Promise<DeleteResult> {
-    return postJson<DeleteResult>(MY_CONFIGS_API.delete, { itemId }, this.t);
+    return postJson<DeleteResult>(MY_CONFIGS_API.delete, { itemId }, this.t, MY_CONFIGS_OPTS);
   }
 }

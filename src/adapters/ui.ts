@@ -11,6 +11,8 @@ import type {
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { collectNamespaceRecords, planNamespaceItems, applyNamespaceItem, resolveNamespaces, type NamespaceProvider } from './settings.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 /** UI 类 namespace 前缀名单（设计 §4.1；随新插件扩展，只影响「某一 namespace 归哪一边」，不影响数据完整性） */
 export const KNOWN_UI_NAMESPACE_PREFIXES: readonly string[] = [
@@ -59,9 +61,10 @@ export const UI_MIGRATION_NOTES: UiSection['uiMigrationNotes'] = [
 
 export class UiAdapter implements ConfigAdapter<UiSection> {
   readonly id = 'ui' as const;
-  readonly displayName = 'UI Preferences';
-  readonly defaultIncluded = true;
-  readonly portability = 'portable' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('ui').displayName;
+  readonly defaultIncluded = sectionMeta('ui').defaultIncluded;
+  readonly portability = sectionMeta('ui').portability;
   private readonly namespaces: string[] | NamespaceProvider;
 
   constructor(namespaces: string[] | NamespaceProvider = []) {
@@ -90,19 +93,13 @@ export class UiAdapter implements ConfigAdapter<UiSection> {
   }
 
   async validate(data: UiSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'ui' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (data.namespaces === null || typeof data.namespaces !== 'object') {
-      issues.push({ path: 'namespaces', message: msg('adapter.validate.missingObject', { subject: 'namespaces' }), severity: 'error' });
-    }
-    if (data.uiMigrationNotes !== undefined && !Array.isArray(data.uiMigrationNotes)) {
-      issues.push({ path: 'uiMigrationNotes', message: msg('adapter.validate.array', { subject: 'uiMigrationNotes' }), severity: 'error' });
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    return validateJsonSection<UiSection>('ui', data, msg, (section, issues) => {
+      if (section.namespaces === null || typeof section.namespaces !== 'object') {
+        issues.push({ path: 'namespaces', message: msg('adapter.validate.missingObject', { subject: 'namespaces' }), severity: 'error' });
+      }
+      if (section.uiMigrationNotes !== undefined && !Array.isArray(section.uiMigrationNotes)) {
+        issues.push({ path: 'uiMigrationNotes', message: msg('adapter.validate.array', { subject: 'uiMigrationNotes' }), severity: 'error' });
+      }
+    });
   }
 }

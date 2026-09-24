@@ -229,7 +229,7 @@ Shell（`ConfigManagerSection`）：导航条 + 页面内容 + 状态栏 + 活�
     pluginFiles / self 等分区的渲染零变化）；③ 点一个分组 = **只勾这一组** —— 稀疏表示下
     `toggleUnitGroup` 必须在分区未勾选时把其余单元**显式排除**，否则「勾一个工作区」会静默变成
     「该分区全选」（`src/ui/selection-model.test.ts` 有专门回归）。
-  - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`middleEllipsis(label, 44)`，
+  - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
     保留尾部时间戳/版本等区分信息，见 §9 anti-pattern 5）+ `min-width:0 / max-width:280px /
     text-overflow: ellipsis` 兜底 —— 长路径/长会话标题不得撑宽列表产生横向滚动条。
     `.pickerUnitName` 的完整值进 `title`（值是脱敏后的）；`.pickerUnitDetail`（副标题）**只做 CSS 省略、不进 `title`**
@@ -294,6 +294,47 @@ Shell（`ConfigManagerSection`）：导航条 + 页面内容 + 状态栏 + 活�
   与宿主同一层叠上下文（与迁移前内联 `dialogMask` 的层级语义一致）。
 - Drawer：`.drawerMask/.drawerPanel`（右侧 400px；Esc 仅在面板内消费，`stopPropagation`
   避免关闭宿主弹窗）。
+- **运行中心（2026-09，活动抽屉第三段「进行中」）**：`.runsCenter/.runsSummary/.runsCardHead/
+  .runsCardTitle/.runsCounts/.runsLogTail/.runsLogLine/.runsCardActions/.runsOption(.runsOptionTitle
+  / .runsOptionDesc/.runsOptionTag)` + 状态栏入口 `.statusAction`。
+  - **入口双点、正文一处**：状态栏那句「N 个任务进行中」（`.statusText`）在有任务时**整句变成按钮**
+    （`.statusAction`，无边框无底色，只加 hover 下划线 + 焦点环 —— 它是状态文本，不该看起来像按钮），
+    点开抽屉并落到「进行中」段；正文只有抽屉里的运行中心一份。**不新增一级页签**：564×720 下
+    7 个英文页签已溢出（见上「页签条溢出可发现性」），运行任务又是跨页面的，抽屉才是它的正确容器。
+  - **三段式 Segmented**：进行中（瞬时态，`/runs?scope=recent`）→ 迁移历史（持久审计）→ 关于。
+    两者**不得合并成一个视图**：前者终态 30 分钟后会被宿主 prune，混进历史页会出现
+    「刷新后历史里少了一半」的认知撕裂。
+  - **决策框不是普通确认框**：`Modal` + `.runsOption` 单选卡（两个语义不同的出口：回滚 / 保留），
+    代价数字（已应用 / 未执行）写在正文顶部，默认项带 `.runsOptionTag`「推荐」标记（推荐项跟随用户
+    既有的「失败不回滚」偏好），底部动作走 `Modal.Footer`（`.statusSpacer` 推靠右）。
+    「保留」下方**必须**带 `Banner kind="warn"`：审计只能压低 DSH 启动失败的概率，不能保证。
+  - 长内容纪律：日志尾部 `.runsLogTail` 限高 108px 内滚（同 §2 长列表规则），卡片列表靠在抽屉
+    自身的 `.drawerBody` 滚动里，**不得**再嵌套一层滚动容器。
+  - **进度轨道三态（真机 bug 修复，用户报告「定时备份 / 自动同步 一直在加载」）**：轨道形态由
+    `progressBarMode(view, active)`（纯函数，`src/client/common/progress-view.ts`）决定 ——
+    有百分比 → 定长；**无百分比且在跑** → `.progressIndeterminate` 不定态动画；
+    **无百分比且已结束 → 静止满格条**（此前不看 `active`，只要没百分比就渲染无限动画，于是
+    「已完成」的任务永远在滚动）。结束态默认 `.progressBarDone`（success 绿），失败时由
+    ProgressBar 的 `failed` 换 `.progressBarFailed`（state-error）—— 失败的任务**不得**染成成功绿。
+  - **阶段文案按 run 类型分开**（`src/client/run-store.ts` 的 `RUN_STAGE`）：备份 / 同步 / 快照恢复 /
+    档案切换 / 事故恢复各有措辞（`progress.backingUp` / `syncing` / `restoring` / `switchingProfile` /
+    `recovering`），**不得**再用导入的「正在应用配置…」兜住所有类型；已结束的 run 用
+    `progress.done` / `progress.failed` 结论文案，不再显示进行时。
+  - **终止等待必须可见（`.runsWarnNote`，2026-09）**：终止是**协作式**的（只在计划项边界生效），
+    所以卡片必须写出「已请求终止：等当前计划项结束后暂停（已等待 N 分钟）」（`.hint` 灰底），
+    超过 `CANCEL_STUCK_AFTER_MS`（2 分钟）升级为 `.runsWarnNote`（warn 描边 + warn tint）+
+    `.runsWarnNoteDetail` 给出路：先「跳过当前插件」、否则重启 DSH。**绝不**留一个还能点、
+    但点了没有任何新效果的「终止」按钮（已请求过就不再渲染该按钮）。
+  - **环境锁卡片（同段，2026-09）**：残留锁此前只存在于「备份 → 事故恢复」，用户在运行中心里看不见它 ——
+    而它正是「导入终止不了、写操作一直被 423」的当事者。三态语义必须分开：
+    `FREE` **不渲染卡片**（空闲是常态）；`LOCKED` 渲染为 `Badge kind="info"`「使用中」**且不给回收按钮**
+    （宿主按设计拒绝回收活锁，给按钮只会让人反复点）；其余（`STALE_LOCK_DETECTED` / `UNKNOWN_STATE` /
+    IO/权限）渲染为 `Badge kind="warn"`「需要处理」+ 主按钮「回收残留锁」；失败/被拒必须如实提示
+    （`runs.lock.recoverRefused` / `recoverFailed`），**不得**报成功。回收动作 `userConfirmed=true`
+    只由用户点击表达。
+  - **每张卡片带相对时间**（`.runsCardTime`，右贴）：没有它，「正在跑」与「几小时前就结束的僵尸卡片」
+    在界面上完全一样。保留期说明 `.hint` **始终显示**（空列表时解释「为什么什么都没有」，
+    有列表时解释「为什么只有这些」）。
 
 ### 布局行原语（2026-09 补：把「行」的语义与间距集中定义，禁止各处内联 margin）
 - `.actionRow`：通用操作行（flex + nowrap→wrap，`margin: 0 0 10px`）。
@@ -416,6 +457,30 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 - **导入向导**：6 阶段 Stepper + 分步页面；导入执行页含命令日志面板（`.logPanel`，
   智能贴底滚动 + 「↓ 新输出」提示）。稀疏步骤（选择 ZIP）用 `.sparseFill` **顶部对齐**
   （`justify-content: flex-start`）：内容贴顶、紧跟步骤条，不再垂直居中悬在页面中段。
+  - **步骤条的阶段输入（2026-09 修复）**：向导 `step` 一旦进入 `importing`/`result`，它就压过
+    `phase`（规则 = `ui/import-stepper.ts` 的 `importStepperSource`）。原因：`phase` 会**停在最后一道
+    闸门 `confirm`**（向导流程不回退，也没有「执行/完成」这两个 `FlowPhase`），只看 `phase` 会让
+    步骤条在执行中与导入完成后都卡在「4 确认」——用户报告的原始现场。
+  - **执行日志面板（.logPanel，2026-09 可读性改造）**：宿主 `RunRegistry.log` 是扁平行流水
+    （`▶ item` / `$ dsh plugin …` / `✓|⚠|✗|–|⏭ item`），由纯函数 `ui/import-log.ts`
+    （`buildImportLogModel` / `filterImportLogEntries`）**按 itemId 合并成一条记录**：状态行
+    按级别着色（`.logLine[data-level='fail'|'warn'|'ok'|'skip'|'running']`），命令与说明缩进为
+    `.logDetail`（`data-kind='command'|'text'`），表头显示计数（`.logCounts`：
+    成功/跳过/警告/失败）并提供 `.logFilterButton`「只看问题」（警告+失败+进行中）。
+    组件在 `import/ImportLogPanel.tsx`；两条脱敏登记点随之指向该文件
+    （`plan-text-redaction.test.ts` 的 `import-log-*`）。
+  - **结果页布局纪律（用户报告「导入完成后没有完成按钮」）**：结果正文（报告卡 + 收尾清单）
+    独占一个滚动区 `.resultScroll`（`flex: 1 1 auto; min-height: 0; overflow-y: auto`），
+    收尾操作栏 `.resultFooter`（`flex: none`）固定在底部。**不得**把报告卡与操作按钮放在同一个
+    受挤压的 flex 列里：`.reportView` 是 `overflow: hidden` 的 flex 项（自动最小尺寸为 0），
+    被压缩后会把底部的动作行**整行裁掉** —— 特征现象是「内容都在、按钮凭空消失」。
+    同类清单（收尾清单 `.nextStepsList`）按 §第 8 条限高内滚，避免把结果页撑成长页。
+  - **导入结果报告（2026-09 结构化）**：`ReportView` 的 import 分支渲染
+    总览徽章（`importTotals`：✓/≈/⚠/✗ 四个数）+「需要你关注」清单（`importProblems`：
+    分区 + 计划项 id + 原因，限高内滚）+ 分区明细（`importSectionStats` + `sectionLabeler(t)`，
+    不再让用户看见 `pluginFiles` 这类适配器 id）+ 回滚块 + **完整文本报告**（`<details>` 渐进披露，
+    仍走 `renderImportReport` 过 `redact()`）。分区显示名走 `report.other` 兜底未知前缀。
+    **动作按钮不在报告卡里**：导入的收尾动作（完成/重试）属于向导的 `.resultFooter`。
   - **空选择守卫（UI-05）**：预览步勾选被清空时，`Banner kind="warn"`（`import.nothingSelected`）
     就地提示并禁用「下一步」，确认页的「确认导入」同样禁用 —— 与导出侧 `nothingSelected`
     同一套语义（空选择不推进、也不允许执行成一次「成功但什么都没做」的导入）。
@@ -517,7 +582,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     （`src/ui/i18n.ts`，`UiTextKey`）。报告/错误/进度文本属于后者 —— 传给渲染器的
     `t` 必须一路带下去（`renderExportReport(report, t)`），否则英文界面里报告正文会是中文。
   - **动作 id 不是文案**：`suggestedActions()` 之类返回的是动作 id（`done`/`fixIssues`），
-    渲染前必须映射到字典键（`ReportView` 的 `ACTION_LABEL`），禁止把 id 直接渲染进按钮。
+    渲染前必须映射到字典键（导入结果页的收尾按钮走 `import.done`），禁止把 id 直接渲染进按钮。
   - **分区显示名**：`SectionId → 文案` 的单一映射是 `common/section-labels.ts`
     （`SECTION_LABEL_KEY` / `sectionLabel(id, t)` / `sectionLabeler(t)`，`Record<SectionId, …>`
     全量覆盖 ⇒ 新增分区忘配文案会编译失败）。导出选择器、导入选择器、兼容性页分区网格、

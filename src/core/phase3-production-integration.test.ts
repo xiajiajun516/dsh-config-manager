@@ -84,7 +84,7 @@ test('P0-A：fn 异常 → NEEDS_ATTENTION + durable SAFE MODE + rethrow', async
   );
   assert.equal(await recovery.store.readSafeMode(), true);
   assert.equal(recovery.safeModeActive, true);
-  const ops = await recovery.store.scanActive();
+  await recovery.store.scanActive();
   // fn 异常后 journal 进入 NEEDS_ATTENTION（terminal）→ moveToCompleted 可规整，但 SAFE MODE 已 durable
   assert.equal(await recovery.store.readSafeMode(), true);
 });

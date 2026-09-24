@@ -114,7 +114,7 @@ test('listInstalledPlugins: 版本取 node_modules 真实落盘版本（声明 ^
 });
 
 test('listInstalledPlugins: 声明了依赖但未实际安装 → version 空串不抛', () => {
-  const { homeDir, profileDir, cleanup } = makeTempProfile({ 'ghost-dep': '^9.9.9' });
+  const { homeDir, cleanup } = makeTempProfile({ 'ghost-dep': '^9.9.9' });
   try {
     // 不写 node_modules/ghost-dep：node_modules 缺失不应让 listInstalled 抛错
     const list = listInstalledPlugins(homeDir, 'web');
@@ -161,7 +161,7 @@ test('reconcileBundles: 当前依赖但非 bundle 的条目移出；从未是依
   // 语义对齐官方 dsh reconcilePlugins（plugin-9h8shc4d.js）：移除条件 =
   // 「(之前或当前)是依赖 且 不再声明 bundle patch」——从未是依赖的 bundles 条目
   // 视为手动维护的层，永远保留（in-box 同理不碰）。
-  const { homeDir, profileDir, cleanup } = makeTempProfile(
+  const { profileDir, cleanup } = makeTempProfile(
     { 'pkg-bundle': '1.0.0', 'pkg-plain': '1.0.0' },
     ['pkg-plain', 'stale-pkg'],
   );

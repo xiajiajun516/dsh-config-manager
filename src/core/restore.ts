@@ -662,8 +662,11 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
         case 'hostFileRestore': {
           const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
-          const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!, msg));
-          await atomicWriteFile(abs, data);
+          // 流式拷贝（t46）：blob → 目标文件经 copyFile，**不经内存中转**。改动前是
+          // readFile + atomicWriteFile —— 整个 blob 进堆，大 home 下与快照载荷叠加成双份驻留
+          // （本机 32MB blob 实测 +32.0MB arrayBuffers；改用本原语后 +0.0MB）。
+          // 与同文件 copyToPreRestore 的既有做法一致（那里一直用的就是 atomicCopyFile）。
+          await atomicCopyFile(blobAbs(snapshotDir, action.blobPath!, msg), abs);
           report.restored.push(action.target!);
           break;
         }
@@ -679,8 +682,11 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
         case 'fileRestore': {
           const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
-          const data = await fs.readFile(blobAbs(snapshotDir, action.blobPath!, msg));
-          await atomicWriteFile(abs, data);
+          // 流式拷贝（t46）：blob → 目标文件经 copyFile，**不经内存中转**。改动前是
+          // readFile + atomicWriteFile —— 整个 blob 进堆，大 home 下与快照载荷叠加成双份驻留
+          // （本机 32MB blob 实测 +32.0MB arrayBuffers；改用本原语后 +0.0MB）。
+          // 与同文件 copyToPreRestore 的既有做法一致（那里一直用的就是 atomicCopyFile）。
+          await atomicCopyFile(blobAbs(snapshotDir, action.blobPath!, msg), abs);
           report.restored.push(action.target!);
           break;
         }

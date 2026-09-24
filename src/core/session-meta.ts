@@ -13,35 +13,15 @@
  * 可靠性姿态（DSH 内部存储，格式可能变）：**只读、尽力而为、绝不抛错** —— 任何读取/解析失败
  * 都退化成空索引，导出与预览照常工作（选择器退回「显示目录名」的旧行为）。不认识的形状一律忽略。
  */
-import type { ExportUnit, HostContext } from './types.ts';
+import type { ExportUnit, HostContext, SessionParentRelation } from './types.ts';
 
 const SESSION_PROJCACHE = 'storages/session_projcache.json';
 const WORKSPACE_STORE = 'storages/workspace.json';
 
-/**
- * 项目目录键（与 DSH `dsh-session-persistence-jsonl` 的 `projectKey()` 同算法）：
- * 分隔符（`/` `\\` `:`）折叠成一个 `-`，非 `[A-Za-z0-9._-]` 的字符转 `~XXXX`，截断到 251，
- * 最后包成 `--…--`。用于把工作区路径映射到 `~/.dsh/sessions/<项目键>/` 目录。
- */
-export function projectKeyOf(cwd: string): string {
-  let readable = '';
-  let separatorRun = false;
-  for (let i = 0; i < cwd.length; i++) {
-    const code = cwd.charCodeAt(i);
-    const ch = String.fromCharCode(code);
-    if (ch === '/' || ch === '\\' || ch === ':') {
-      if (!separatorRun) readable += '-';
-      separatorRun = true;
-    } else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
-      readable += ch;
-      separatorRun = false;
-    } else {
-      readable += '~' + code.toString(16).toUpperCase().padStart(4, '0');
-      separatorRun = false;
-    }
-  }
-  return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`;
-}
+// projectKeyOf 已下移到**零依赖**模块 `session-select.ts`（客户端勾选联动要按 cwd 目录键认领工作区，
+// 而本模块会用 Buffer 读 DSH 存储缓存，不能进浏览器 bundle）。这里 re-export，既有导入路径逐字不变。
+import { projectKeyOf, sessionIdKey } from './session-select.ts';
+export { projectKeyOf };
 
 /** 单个会话的可用元数据（全部可选：缓存里缺哪项就少哪项，绝不猜）。 */
 export interface SessionMetaEntry {
@@ -154,7 +134,9 @@ export function applySessionMetaToPlanItems<
     if (item.adapter !== sectionId) return item;
     const parsed = sessionIdOfUnit(sectionId, item.unitId ?? item.id);
     if (parsed === null) return item;
-    const meta = index.bySessionId.get(parsed.sessionId);
+    // 索引键 = **去掉 `session-` 前缀**的裸键，而单元 id 末段是**目录名**（两种形态并存）→ 必须先归一化，
+    // 否则 `session-<uuid>` 形态的会话永远拿不到标题（真机实测：同一项目 731 个会话目录里 164 个是这种形态）。
+    const meta = index.bySessionId.get(sessionIdKey(parsed.sessionId));
     const group = index.workspaceTitleByProjectKey.get(parsed.projectKey) ?? parsed.projectKey;
     return {
       ...item,
@@ -165,22 +147,71 @@ export function applySessionMetaToPlanItems<
 }
 
 /**
+ * 「子代理会话 → 父对话」映射（**裸键**）：DSH 会话存储的父子关系 → `Map<子会话裸键, 父对话裸键>`。
+ *
+ * 只收 `subagent === true` 的会话 —— origin 非 subagent 的会话即使带 parentSession 也是**顶层行**
+ * （DSH 工作区列表口径，与 `SessionsAdapter.coupleSessionParents` 完全一致）；非法形状一律忽略。
+ */
+export function subagentParentMap(
+  relations: ReadonlyMap<string, SessionParentRelation> | undefined,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  if (relations === undefined) return out;
+  for (const [childId, relation] of relations) {
+    if (!relation.subagent) continue;
+    const parent = sessionIdKey(relation.parent);
+    const child = sessionIdKey(childId);
+    if (parent === '' || child === '') continue;
+    out.set(child, parent);
+  }
+  return out;
+}
+
+/**
+ * 给 sessions 单元标出「父对话」（纯联动/展示字段，不动 id/kind/target）：只有子代理会话会有值。
+ *
+ * 用途：导出选择器的「父 ↔ 子会话」勾选联动（勾父自动勾上它的子代理会话、勾子自动带上父）。
+ * 非 sessions 分区 / 形状不符 / 映射里查不到 → 原样返回（**不猜**：宁可不联动，也不凭 id 编关系）。
+ */
+export function applySessionParentLinks<T extends { id: string; parentSessionId?: string }>(
+  units: readonly T[],
+  parentOf: ReadonlyMap<string, string> | undefined,
+  sectionId = 'sessions',
+): T[] {
+  if (parentOf === undefined || parentOf.size === 0) return [...units];
+  return units.map((unit) => {
+    const parsed = sessionIdOfUnit(sectionId, unit.id);
+    if (parsed === null) return unit;
+    const parent = parentOf.get(sessionIdKey(parsed.sessionId));
+    return parent === undefined ? unit : { ...unit, parentSessionId: parent };
+  });
+}
+
+/**
  * 给 sessions 分区的单元补上「界面标题 + 工作区分组」，并按「工作区 → 最近在前」排序。
  *
  * - `label`：会话标题（缓存里没有 → 退回会话目录名，绝不编造）；
  * - `detail`：工作区绝对路径（未知 → 不回填）；
  * - `group`：工作区标题（未知 → 用项目键兜底，保证每个会话都有归属，不出现「未归类」坟场）；
  * - 其它分区的单元原样返回（ids 不变 —— 勾选/导出契约只认 id）。
+ *
+ * @param activityAt 会话**裸键**（`sessionIdKey`）→ 最近活跃时间（毫秒），由宿主在预览期用会话日志
+ *   文件 mtime 现算（`ConfigAdapter.unitActivityTimes`）。为什么必须有这条兜底：元数据缓存
+ *   （`storages/session_projcache.json`）只覆盖**一部分**会话（真机实测：同一项目 731 个会话目录里
+ *   347 个不在缓存内），只用缓存时间会让这些会话全部落到组尾、退化成按 uuid 字典序排 ——
+ *   用户看到的就是「历史对话没有按最新到最旧排序」。缓存里有精确的 lastPromptAt 时仍以它为第一口径。
  */
 export function applySessionMeta(
   units: readonly ExportUnit[],
   index: SessionMetaIndex,
   sectionId = 'sessions',
+  activityAt?: ReadonlyMap<string, number>,
 ): ExportUnit[] {
   const enriched = units.map((unit) => {
     const parsed = sessionIdOfUnit(sectionId, unit.id);
     if (parsed === null) return unit;
-    const meta = index.bySessionId.get(parsed.sessionId);
+    // 同 applySessionMetaToPlanItems：索引键是裸键，单元 id 末段是目录名 → 查表前必须归一化
+    const meta = index.bySessionId.get(sessionIdKey(parsed.sessionId));
     const workspaceTitle = index.workspaceTitleByProjectKey.get(parsed.projectKey);
     const workspacePath = index.workspacePathByProjectKey.get(parsed.projectKey);
     const detail = workspacePath ?? meta?.cwd ?? unit.detail;
@@ -199,8 +230,10 @@ export function applySessionMeta(
   }
   const atOf = (unit: ExportUnit): number => {
     const parsed = sessionIdOfUnit(sectionId, unit.id);
-    const at = parsed === null ? undefined : index.bySessionId.get(parsed.sessionId)?.lastActivityAt;
-    return at ?? -1;
+    if (parsed === null) return -1;
+    const bare = sessionIdKey(parsed.sessionId);
+    // 第一口径 = 元数据缓存的「最后一次提问时间」；缓存里没有这条会话 → 退回宿主现算的日志 mtime
+    return index.bySessionId.get(bare)?.lastActivityAt ?? activityAt?.get(bare) ?? -1;
   };
   return enriched.sort((a, b) => {
     const ga = a.group !== undefined ? (groupOrder.get(a.group) ?? 0) : -1;

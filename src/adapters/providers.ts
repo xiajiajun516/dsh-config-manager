@@ -14,6 +14,8 @@ import type {
   ImportContext, NamespaceInfo, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { resolveNamespaces, isEmptyValue, type NamespaceProvider } from './settings.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 /** 导出记录：ProviderEntry 之外附加 namespace 级元数据（导入写回用），满足 ProvidersSection 形状 */
 export interface ProviderExportEntry extends ProviderEntry {
@@ -41,9 +43,10 @@ function stripEntry(entry: ProviderExportEntry): Record<string, unknown> {
 
 export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
   readonly id = 'providers' as const;
-  readonly displayName = 'Providers & Models';
-  readonly defaultIncluded = true;
-  readonly portability = 'portable' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('providers').displayName;
+  readonly defaultIncluded = sectionMeta('providers').defaultIncluded;
+  readonly portability = sectionMeta('providers').portability;
   private readonly namespaces: string[] | NamespaceProvider;
 
   constructor(namespaces: string[] | NamespaceProvider = DEFAULT_PROVIDER_NAMESPACES as unknown as string[]) {
@@ -145,29 +148,23 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
   }
 
   async validate(data: ProviderExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'providers' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (data.providers === null || typeof data.providers !== 'object') {
-      issues.push({ path: 'providers', message: msg('adapter.validate.missingObject', { subject: 'providers' }), severity: 'error' });
-    } else {
-      for (const [route, entry] of Object.entries(data.providers)) {
-        if (entry === null || typeof entry !== 'object') {
-          issues.push({ path: `providers.${route}`, message: msg('adapter.validate.recordObject', { subject: 'provider' }), severity: 'error' });
-          continue;
-        }
-        if (typeof entry.namespace !== 'string' || entry.namespace === '') {
-          issues.push({ path: `providers.${route}.namespace`, message: msg('adapter.validate.sourceNamespace'), severity: 'error' });
-        }
-        if (typeof entry.revision !== 'number') {
-          issues.push({ path: `providers.${route}.revision`, message: msg('adapter.validate.number', { subject: 'revision' }), severity: 'error' });
+    return validateJsonSection<ProviderExportSection>('providers', data, msg, (section, issues) => {
+      if (section.providers === null || typeof section.providers !== 'object') {
+        issues.push({ path: 'providers', message: msg('adapter.validate.missingObject', { subject: 'providers' }), severity: 'error' });
+      } else {
+        for (const [route, entry] of Object.entries(section.providers)) {
+          if (entry === null || typeof entry !== 'object') {
+            issues.push({ path: `providers.${route}`, message: msg('adapter.validate.recordObject', { subject: 'provider' }), severity: 'error' });
+            continue;
+          }
+          if (typeof entry.namespace !== 'string' || entry.namespace === '') {
+            issues.push({ path: `providers.${route}.namespace`, message: msg('adapter.validate.sourceNamespace'), severity: 'error' });
+          }
+          if (typeof entry.revision !== 'number') {
+            issues.push({ path: `providers.${route}.revision`, message: msg('adapter.validate.number', { subject: 'revision' }), severity: 'error' });
+          }
         }
       }
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    });
   }
 }

@@ -13,9 +13,9 @@ export function normalizePath(p: string): string {
 }
 
 /** 转当前平台原生路径 */
-export function toNativePath(p: string): string {
+export function toNativePath(p: string, platform: string = process.platform): string {
   const norm = normalizePath(p);
-  if (process.platform === 'win32') return norm.replaceAll('/', '\\');
+  if (platform === 'win32') return norm.replaceAll('/', '\\');
   return norm;
 }
 

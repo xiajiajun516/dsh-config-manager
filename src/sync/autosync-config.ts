@@ -16,8 +16,8 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
+import { channelMap } from './sync-config.ts';
 import type { SyncTransportType } from './sync-config.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
@@ -102,35 +102,32 @@ export async function readAllAutosyncConfigs(dir: string): Promise<AutosyncConfi
   try {
     raw = await fs.readFile(file, 'utf8');
   } catch {
-    return { git: defaultAutosyncConfig(), webdav: defaultAutosyncConfig() };
+    return channelMap(() => defaultAutosyncConfig());
   }
   let parsed: unknown;
   try {
     parsed = parseJsonSafe(raw);
   } catch {
-    return { git: defaultAutosyncConfig(), webdav: defaultAutosyncConfig() };
+    return channelMap(() => defaultAutosyncConfig());
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { git: defaultAutosyncConfig(), webdav: defaultAutosyncConfig() };
+    return channelMap(() => defaultAutosyncConfig());
   }
   const obj = parsed as Record<string, unknown>;
   // schemaVersion：缺省视为 v1；非缺省但 != 2 → 回退缺省
   const ver = typeof obj['schemaVersion'] === 'number' ? obj['schemaVersion'] : 1;
   if (ver !== 1 && ver !== AUTOSYNC_CONFIG_SCHEMA_VERSION) {
-    return { git: defaultAutosyncConfig(), webdav: defaultAutosyncConfig() };
+    return channelMap(() => defaultAutosyncConfig());
   }
   if (ver === 1) {
     // v1 迁移：顶层字段 → git 通道（webdav 缺省；首次按 v2 写回时持久化）
-    return { git: parseV1Channel(obj), webdav: defaultAutosyncConfig() };
+    return channelMap((ch) => (ch === 'git' ? parseV1Channel(obj) : defaultAutosyncConfig()));
   }
   const channels = obj['channels'];
   const ch = channels !== null && typeof channels === 'object' && !Array.isArray(channels)
     ? channels as Record<string, unknown>
     : {};
-  return {
-    git: parseV2Channel(ch['git']),
-    webdav: parseV2Channel(ch['webdav']),
-  };
+  return channelMap((channel) => parseV2Channel(ch[channel]));
 }
 
 /** 读取指定通道的自动同步配置；文件不存在 / 损坏 / 不支持 schema → 缺省值（不抛错）。 */
@@ -143,16 +140,10 @@ export async function readAutosyncConfig(dir: string, channel: SyncTransportType
 export async function writeAutosyncConfig(dir: string, channel: SyncTransportType, cfg: AutosyncConfig): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
   const existing = await readAllAutosyncConfigs(dir);
-  const channels: Record<SyncTransportType, AutosyncConfig> = {
-    git: channel === 'git' ? cfg : existing.git,
-    webdav: channel === 'webdav' ? cfg : existing.webdav,
-  };
+  const channels = channelMap((ch) => (ch === channel ? cfg : existing[ch]));
   const payload: Record<string, unknown> = {
     schemaVersion: AUTOSYNC_CONFIG_SCHEMA_VERSION,
-    channels: {
-      git: toChannelPayload(channels.git),
-      webdav: toChannelPayload(channels.webdav),
-    },
+    channels: channelMap((ch) => toChannelPayload(channels[ch])),
   };
   const target = path.join(dir, AUTOSYNC_CONFIG_FILE);
   const data = stringifyJsonSafe(payload, { space: 2 });

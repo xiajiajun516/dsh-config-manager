@@ -11,7 +11,7 @@
  * 所有换算逻辑在 progress-view.ts 的 computeProgressView()（纯函数，可单测）；
  * 本组件只做渲染。未知阶段回退显示 id 本身。
  */
-import { computeProgressView } from './progress-view.ts'
+import { computeProgressView, progressBarMode } from './progress-view.ts'
 import type { RunProgress } from './progress-view.ts'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
@@ -19,15 +19,25 @@ import css from '../config-manager.module.css'
 export interface ProgressBarProps {
   /** 当前进度事件（null = 未开始）；普通 ProgressEvent 亦兼容 */
   event: RunProgress | null
-  /** 是否正在执行（false 时显示为完成态） */
+  /** 是否正在执行（false 时显示为结束态；无百分比时**不再渲染无限动画**） */
   active: boolean
+  /** 已结束且结论为失败：结束态不得渲染成「成功绿」（导出页不传，行为不变） */
+  failed?: boolean
 }
 
 /**
  * 进度条：阶段文字 + 分区/内部计数徽章 + 当前项名 + 百分比。
+ *
+ * 轨道形态由 `progressBarMode`（纯函数，可单测）决定：有百分比 → 定长；
+ * 无百分比且在跑 → 不定态动画；**无百分比且已结束 → 静止条**（这条是 bugfix：
+ * 此前「已完成」的任务因为没有百分比也走不定态分支，动画永不停 → 看起来一直在加载）。
  */
-export function ProgressBar({ event, active }: ProgressBarProps) {
+export function ProgressBar({ event, active, failed }: ProgressBarProps) {
   const view = computeProgressView(event)
+  const mode = progressBarMode(view, active)
+  const fillClass = active
+    ? css.progressBar
+    : failed === true ? `${css.progressBar} ${css.progressBarFailed}` : `${css.progressBar} ${css.progressBarDone}`
 
   return (
     <div className={css.progressBlock}>
@@ -51,13 +61,12 @@ export function ProgressBar({ event, active }: ProgressBarProps) {
         {view.percent !== null && <span className={css.progressPercent}>{view.percent}%</span>}
       </div>
       <div className={css.progressTrack}>
-        {view.percent !== null ? (
-          <div
-            className={`${css.progressBar} ${active ? '' : css.progressBarDone}`}
-            style={{ width: `${view.percent}%` }}
-          />
-        ) : (
+        {mode === 'indeterminate' ? (
           <div className={`${css.progressBar} ${css.progressIndeterminate}`} />
+        ) : (
+          // settled（已结束但宿主没上报过计数）：画一条**满格的静止条**，语义交给状态徽章；
+          // 绝不画成 0% 空条 —— 那读起来像「还没开始」，而这些都是已经结束的任务。
+          <div className={fillClass} style={{ width: `${mode === 'settled' ? 100 : view.percent}%` }} />
         )}
       </div>
     </div>

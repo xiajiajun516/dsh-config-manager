@@ -8,8 +8,8 @@ import assert from 'node:assert/strict'
 import type { ApplyItemsResponse, AutosyncStatusResponse, SyncConfirmItem } from './sync-api.ts'
 import {
   applyItemsReportView, autosyncIntervalMs, autosyncStatusText, buildAdoptions,
-  computeAutosyncCountdown, isReviewItem, isToolchainChangeItem, keepLocalAll, reviewItems,
-  summarizeConfirmItems, useRemoteAll,
+  computeAutosyncCountdown, hasBulkDecidable, isBulkDecidable, isReviewItem, isToolchainChangeItem,
+  keepLocalAll, reviewItems, summarizeConfirmItems, useRemoteAll,
 } from './sync-view.ts'
 
 /* ---------------------------------------------------------------- 一键同步差异确认 */
@@ -100,7 +100,7 @@ test('sync-view: reviewItems 只保留需人工决策项（统计仍基于全量
   assert.equal(summarizeConfirmItems(items).total, 4)
 })
 
-test('sync-view: keepLocalAll 所有 Conflict → keepLocal + adopt=false', () => {
+test('sync-view: keepLocalAll 覆盖全部待确认项（Conflict 连带 resolution；非决策项不动）', () => {
   const items: SyncConfirmItem[] = [
     confirmItem({ itemId: 'a', kind: 'Conflict', defaultAdopt: false }),
     confirmItem({ itemId: 'b', kind: 'Update' }),
@@ -113,16 +113,42 @@ test('sync-view: keepLocalAll 所有 Conflict → keepLocal + adopt=false', () =
   ])
 })
 
-test('sync-view: useRemoteAll 所有 Conflict → useRemote + adopt=true', () => {
+test('sync-view: useRemoteAll 覆盖 MissingSecret 等非冲突项（用户报告：缺密钥只能逐条勾）', () => {
   const items: SyncConfirmItem[] = [
     confirmItem({ itemId: 'a', kind: 'Conflict', defaultAdopt: false }),
     confirmItem({ itemId: 'b', kind: 'Update' }),
     confirmItem({ itemId: 'c', kind: 'MissingSecret', defaultAdopt: false }),
+    confirmItem({ itemId: 'd', kind: 'MissingSecret', defaultAdopt: false }),
+    confirmItem({ itemId: 'e', kind: 'Error', severity: 'error', defaultAdopt: false }),
   ]
   const decisions = useRemoteAll(items)
   assert.deepEqual(decisions, [
     { itemId: 'a', resolution: 'useRemote', adopt: true },
+    { itemId: 'c', adopt: true },
+    { itemId: 'd', adopt: true },
+  ], 'Error 项不进批量（硬失败项必须逐项裁决）；插件 Update 等非决策项保持默认')
+  // 反向：全部保留当前配置同样覆盖缺密钥项
+  assert.deepEqual(keepLocalAll(items), [
+    { itemId: 'a', resolution: 'keepLocal', adopt: false },
+    { itemId: 'c', adopt: false },
+    { itemId: 'd', adopt: false },
   ])
+})
+
+test('sync-view: isBulkDecidable / hasBulkDecidable 与确认列表同口径（Error 除外）', () => {
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'MissingSecret' })), true)
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'MissingDependency' })), true)
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'Warning' })), true)
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'PathMapping' })), true)
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'Conflict' })), true)
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'Error' })), false, 'Error 是硬失败项，需逐项处理')
+  assert.equal(isBulkDecidable(confirmItem({ kind: 'Update' })), false, '非决策项不进确认列表')
+  // issue #35：改变工具链行为的项（kind 可能是 Update）也进确认列表 → 同样可批量决策
+  assert.equal(isBulkDecidable(confirmItem({ itemId: 'plugins:pnpm-workspace', kind: 'Update', detail: '剔除 1 条声明' })), true)
+
+  // 按钮禁用判据：列表里一个可批量决策项都没有 → 禁用（此前只看 Conflict，缺密钥列表里按钮恒灰）
+  assert.equal(hasBulkDecidable([confirmItem({ kind: 'Error', defaultAdopt: false })]), false)
+  assert.equal(hasBulkDecidable([confirmItem({ kind: 'Error', defaultAdopt: false }), confirmItem({ itemId: 'z', kind: 'MissingSecret', defaultAdopt: false })]), true)
 })
 
 test('sync-view: buildAdoptions 收集用户决策；未列出项视为 adopt=false', () => {

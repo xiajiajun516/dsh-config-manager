@@ -11,6 +11,7 @@
  * 测试注入内存 mock —— 本层零依赖 core 实现。
  */
 import type { Manifest, SectionId } from '../schema/types.ts';
+import { SECTION_IDS, sectionMeta } from '../schema/section-registry.ts';
 import type { ExportOptions, ExportReport } from '../core/types.ts';
 import {
   EXPORT_GROUPS, type ExportCategory, type ExportGroup,
@@ -74,7 +75,7 @@ export interface SelectionValidation {
 
 export interface ExportFlowOptions {
   port: ExportPort;
-  /** 分类目录（缺省用内置目录，与 adapters 的 displayName/defaultIncluded/portability 对齐） */
+  /** 分类目录（缺省用内置目录 —— 由分区注册表派生，见 DEFAULT_CATEGORIES） */
   categories?: ExportCategory[];
   onProgress?: ProgressListener;
   /** 报告渲染翻译器（zh/en，见 i18n.ts） */
@@ -89,23 +90,69 @@ export interface ExportRunResult {
   text: string;
 }
 
-/** 内置分类目录（与 src/adapters/* 的 displayName/defaultIncluded/portability 对齐，研究报告 §2.2） */
-export const DEFAULT_CATEGORIES: readonly ExportCategory[] = [
-  { id: 'settings', label: 'Settings', description: 'DSH 全局设置（namespace 分区，redacted）', defaultIncluded: true, portability: 'portable', group: 'general' },
-  { id: 'providers', label: 'Providers & Models', description: 'LLM Provider / Model / 默认模型 / BaseURL', defaultIncluded: true, portability: 'portable', group: 'ai' },
-  { id: 'plugins', label: 'Plugins', description: '已安装插件清单与启用状态（不含二进制）', defaultIncluded: true, portability: 'portable', group: 'extensions' },
-  { id: 'pluginFiles', label: 'Plugin Files', description: '插件自有配置文件（白名单 + plugin-config/ 目录，整文件复制）', defaultIncluded: false, portability: 'deviceSpecific', group: 'extensions' },
-  { id: 'self', label: 'Plugin Self Config', description: '本插件自身配置（同步/自动同步/分区选择/UI 偏好/市场；sync-*.json 等，不含凭据值）', defaultIncluded: true, portability: 'portable', group: 'extensions' },
-  { id: 'mcp', label: 'MCP Servers', description: 'MCP 服务器组合配置（需重启生效）', defaultIncluded: true, portability: 'platformSpecific', group: 'mcp' },
-  { id: 'prompts', label: 'Prompts', description: 'System Prompt / Plan Mode 提示', defaultIncluded: true, portability: 'portable', group: 'customization' },
-  { id: 'skills', label: 'Skills', description: '用户技能文件（~/.dsh/skills）', defaultIncluded: true, portability: 'portable', group: 'customization' },
-  { id: 'agentPresets', label: 'Agent Presets', description: 'Agent 预设（~/.dsh/.agent-presets）', defaultIncluded: true, portability: 'portable', group: 'customization' },
-  { id: 'agentInstructions', label: 'Agent Instructions', description: '全局指令文件（~/.dsh/AGENTS.md，注入每个会话）', defaultIncluded: true, portability: 'portable', group: 'customization' },
-  { id: 'workspaces', label: 'Workspaces', description: '工作区记录（含绝对路径，需路径映射）', defaultIncluded: true, portability: 'platformSpecific', group: 'workspace' },
-  { id: 'ui', label: 'UI Preferences', description: 'UI 类 settings namespace（localStorage 项仅说明）', defaultIncluded: true, portability: 'portable', group: 'ui' },
-  { id: 'credentialsStatus', label: 'Credentials Status', description: '凭据状态（configured 标记，永不导出值）', defaultIncluded: true, portability: 'deviceSpecific', group: 'optional', sensitive: true },
-  { id: 'sessions', label: 'Sessions', description: '历史会话（默认关闭，含敏感内容）', defaultIncluded: false, portability: 'deviceSpecific', group: 'optional' },
-] as const;
+/**
+ * 目录条目描述（**报告文本 / 日志**用，非 UI 显示名）—— 只存在于本文件，无第二份副本。
+ *
+ * 键类型 `Exclude<SectionId, 'secrets'>`：secrets 无 ZIP 载荷、不进导出目录，
+ * 因此除它以外的分区**全部**必须有描述 —— 漏一个即编译失败（与注册表同一穷举纪律）。
+ */
+const CATEGORY_DESCRIPTIONS: Record<Exclude<SectionId, 'secrets'>, string> = {
+  settings: 'DSH 全局设置（namespace 分区，redacted）',
+  providers: 'LLM Provider / Model / 默认模型 / BaseURL',
+  plugins: '已安装插件清单与启用状态（不含二进制）',
+  pluginFiles: '插件自有配置文件（白名单 + plugin-config/ 目录，整文件复制）',
+  self: '本插件自身配置（同步/自动同步/分区选择/UI 偏好/市场；sync-*.json 等，不含凭据值）',
+  mcp: 'MCP 服务器组合配置（需重启生效）',
+  prompts: 'System Prompt / Plan Mode 提示',
+  skills: '用户技能文件（~/.dsh/skills）',
+  agentPresets: 'Agent 预设（~/.dsh/.agent-presets）',
+  agentInstructions: '全局指令文件（~/.dsh/AGENTS.md，注入每个会话）',
+  workspaces: '工作区记录（含绝对路径，需路径映射）',
+  ui: 'UI 类 settings namespace（localStorage 项仅说明）',
+  credentialsStatus: '凭据状态（configured 标记，永不导出值）',
+  sessions: '历史会话（默认关闭，含敏感内容）',
+};
+
+/** 需在 UI 标注安全提示、但绝不显示值的分区（凭据状态只有 configured 标记） */
+const SENSITIVE_SECTIONS: ReadonlySet<SectionId> = new Set<SectionId>(['credentialsStatus']);
+
+/**
+ * 内置分类目录 —— **从分区注册表派生**（t31）。
+ *
+ * 改动前这里与 `src/adapters/*` 各自维护一份 defaultIncluded / portability / 显示名，
+ * 是「同一事实两处维护」的典型（且 credentialsStatus 的显示名已经漂移）。现在：
+ *  - `label` ← `sectionMeta(id).displayName`（唯一英文规范名，与 client 字典 section.<id> 的 en 一致）；
+ *  - `group` ← `sectionMeta(id).group`；
+ *  - `defaultIncluded` / `portability` ← 注册表同名派生值；
+ *  - 只有 `description`（报告文案）与 `sensitive`（安全提示）留在本文件。
+ *
+ * **顺序是行为的一部分**（Custom Export 树的展示顺序）：外层按 `EXPORT_GROUPS` 顺序、
+ * 内层按 `SECTION_IDS`（= applyOrder 升序），与改造前的手写顺序逐项一致。
+ * `payload.kind === 'none'` 的分区（secrets）不进目录 —— 其值走独立加密容器。
+ */
+function buildDefaultCategories(): readonly ExportCategory[] {
+  const categories: ExportCategory[] = [];
+  for (const group of EXPORT_GROUPS) {
+    for (const id of SECTION_IDS) {
+      const meta = sectionMeta(id);
+      if (meta.payload.kind === 'none') continue;
+      if (meta.group !== group.id) continue;
+      categories.push({
+        id,
+        label: meta.displayName,
+        description: CATEGORY_DESCRIPTIONS[id as Exclude<SectionId, 'secrets'>],
+        defaultIncluded: meta.defaultIncluded,
+        portability: meta.portability,
+        group: meta.group,
+        ...(SENSITIVE_SECTIONS.has(id) ? { sensitive: true } : {}),
+      });
+    }
+  }
+  return categories;
+}
+
+/** 内置分类目录（注册表派生；宿主可经 ExportFlowOptions.categories 覆盖） */
+export const DEFAULT_CATEGORIES: readonly ExportCategory[] = buildDefaultCategories();
 
 export class ExportFlow {
   readonly categories: readonly ExportCategory[];

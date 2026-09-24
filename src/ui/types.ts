@@ -176,7 +176,16 @@ export interface ImportPort {
    * 把 `analysis.credentials`（仅 ref 名，issue #39 Feature 2）一并回传。
    */
   analyzeImport(zipPath: string, opts?: { decryptPassword?: string }): Promise<ImportAnalysis>;
-  createImportPlan(zipPath: string, decisions: ImportDecisions): Promise<ImportPlan>;
+  /**
+   * 生成导入计划（Dry Run，零写入）。`opts.decryptPassword`（仅内存，可选）：加密备份必须传，
+   * 宿主据此解开 secrets.enc 让**归档里带值的凭据**都进计划——否则这些值永远不会被写回
+   * （真机反馈：导入密钥没生效）。不传 = 只按 credentialsStatus 的 ref 名判定。
+   */
+  createImportPlan(
+    zipPath: string,
+    decisions: ImportDecisions,
+    opts?: { decryptPassword?: string },
+  ): Promise<ImportPlan>;
   /**
    * 解锁整体加密备份（只读，零写入）：用备份密码解密上传的加密容器，得到明文 ZIP
    * 写入受控临时目录并返回新的 zipPath，供 analyze/plan/execute 引用。

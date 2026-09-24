@@ -8,6 +8,7 @@
 import type { PlanItem, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import type { PullChange, SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { SyncTransportType } from '../../sync/sync-config.ts';
 import { DEFAULT_CATEGORIES } from '../../ui/export-flow.ts';
 import { EXPORT_GROUPS, type ExportGroup } from '../../ui/types.ts';
 import type {
@@ -180,8 +181,28 @@ export function severityLabel(severity: PlanItem['severity'], t: UiT = zhUiT): s
 
 /* ---------------------------------------------------------------- 按钮状态 */
 
-/** 远程同步通道类型：git（默认）或 webdav */
-export type SyncChannel = 'git' | 'webdav';
+/** 远程同步通道类型：git（默认）或 webdav。类型唯一来源 = 宿主 SYNC_CHANNELS（type-only 别名）。 */
+export type SyncChannel = SyncTransportType;
+
+/**
+ * 客户端侧通道清单（**唯一一份运行期镜像**）。
+ *
+ * 为什么不能直接 import 宿主的 SYNC_CHANNELS：宿主 src/sync/sync-config.ts 依赖 node:fs / node:path，
+ * 而 client bundle 必须自包含（不得 import node 模块）——值导入会把 node:fs 带进浏览器产物。
+ * 因此这里镜像一份运行期值，并用下面的**编译期穷尽检查**钉住：宿主新增通道而此处没跟上时，
+ * typecheck 会直接失败，而不是静默漏掉一个通道（t32：通道枚举收口）。
+ */
+const CLIENT_SYNC_CHANNELS = ['git', 'webdav'] as const satisfies readonly SyncTransportType[];
+
+type UncoveredChannel = Exclude<SyncTransportType, (typeof CLIENT_SYNC_CHANNELS)[number]>;
+/** 穷尽检查：UncoveredChannel 非 never（宿主加了通道、镜像没加）时该行类型不成立 → 编译报错。 */
+const clientChannelsAreExhaustive: UncoveredChannel extends never ? true : never = true;
+void clientChannelsAreExhaustive;
+
+/** 通道值守卫（localStorage 等原始输入）。 */
+function isClientChannel(value: unknown): value is SyncChannel {
+  return typeof value === 'string' && (CLIENT_SYNC_CHANNELS as readonly string[]).includes(value);
+}
 
 /* ---------------------------------------------------------------- 每通道独立状态 */
 
@@ -202,6 +223,8 @@ export interface ChannelSyncState {
   syncSections: SectionId[]
   /** sessions 分区「最新 N 个会话」上限（持久化；缺省 5，仅勾选 sessions 时生效） */
   sessionsLimit: number
+  /** 显式点名的会话单元 id（持久化；非空时优先于 sessionsLimit，空 = 「最新 N 个」模式） */
+  sessionsInclude: string[]
   /** 手动推送默认加密快照（持久化开关；密码不持久化） */
   encrypt: boolean
   /** 手动推送默认导出真实凭据值（持久化开关；必须同时 encrypt） */
@@ -240,6 +263,7 @@ export function defaultChannelSyncState(): ChannelSyncState {
     syncMode: 'advanced',
     syncSections: [],
     sessionsLimit: DEFAULT_SYNC_SESSIONS_LIMIT,
+    sessionsInclude: [],
     encrypt: false,
     includeSecrets: false,
     encryptPassword: '',
@@ -265,7 +289,7 @@ export interface ChannelTabModel {
 
 /** 通道子 tab 列表：git/webdav 两个 tab；busy 时全部禁用（防并发操作切换）。 */
 export function channelTabModels(active: SyncChannel, busy: boolean): ChannelTabModel[] {
-  return (['git', 'webdav'] as const).map((channel) => ({
+  return CLIENT_SYNC_CHANNELS.map((channel) => ({
     channel,
     active: channel === active,
     disabled: busy,
@@ -286,7 +310,7 @@ export function readStoredChannel(storage?: Pick<Storage, 'getItem'> | null): Sy
   if (s === null) return null;
   try {
     const v = s.getItem(SYNC_CHANNEL_STORAGE_KEY);
-    return v === 'webdav' || v === 'git' ? v : null;
+    return isClientChannel(v) ? v : null;
   } catch {
     return null; // localStorage 不可用（隐私模式等）静默降级
   }
@@ -666,31 +690,57 @@ export function reviewItems(items: readonly SyncConfirmItem[]): SyncConfirmItem[
  */
 export type SyncConflictResolution = 'keepLocal' | 'useRemote';
 
-/** 单条 Conflict 项的批量决策（resolution + adopt）。 */
-export interface ConflictDecision {
+/** 单条批量决策：adopt +（仅 Conflict 项需要）解决方式。 */
+export interface BulkDecision {
   itemId: string;
-  resolution: SyncConflictResolution;
   adopt: boolean;
+  /** 仅 Conflict 项：批量决策必须连带给出解决方式，否则 buildAdoptions 抛错。 */
+  resolution?: SyncConflictResolution;
+}
+
+/** 旧名保留（宿主 core 另有同名类型；本模块内的引用点不必逐个改名）。 */
+export type ConflictDecision = BulkDecision;
+
+/**
+ * 批量决策覆盖的项 = **确认列表里的全部项**（与 reviewItems 同口径），但排除 Error：
+ * Error 是硬失败项（执行侧恒记 failed，可能触发整体回滚），不能让一个批量按钮替用户做决定。
+ *
+ * 用户报告「导入密钥时无法一键勾选，需要逐个勾『缺密钥』」：此前批量按钮只作用于 Conflict，
+ * 列表里 N 条凭据迁移项（MissingSecret）只能手动逐条点。
+ */
+export function isBulkDecidable(item: Pick<SyncConfirmItem, 'itemId' | 'kind' | 'detail'>): boolean {
+  if (item.kind === 'Error') return false;
+  return CONFIRM_REVIEW_KINDS.has(item.kind) || isToolchainChangeItem(item);
+}
+
+/** 是否存在可批量决策项 —— 批量按钮禁用判据与触发条件同源（避免两处规则漂移）。 */
+export function hasBulkDecidable(items: readonly SyncConfirmItem[]): boolean {
+  return items.some((it) => isBulkDecidable(it));
 }
 
 /**
- * 「全部保留本地」：所有 Conflict 项 → resolution=keepLocal、adopt=false。
- * 仅作用于 Conflict 项，非 Conflict 项的 adopt 保持默认。
+ * 「全部保留当前配置」：全部可批量决策项 → adopt=false；
+ * Conflict 项附带 resolution=keepLocal（不连带给解决方式会被 buildAdoptions 拒绝）。
  */
-export function keepLocalAll(items: readonly SyncConfirmItem[]): ConflictDecision[] {
+export function keepLocalAll(items: readonly SyncConfirmItem[]): BulkDecision[] {
   return items
-    .filter((it) => it.kind === 'Conflict')
-    .map((it) => ({ itemId: it.itemId, resolution: 'keepLocal', adopt: false }));
+    .filter((it) => isBulkDecidable(it))
+    .map((it) => (it.kind === 'Conflict'
+      ? { itemId: it.itemId, resolution: 'keepLocal' as const, adopt: false }
+      : { itemId: it.itemId, adopt: false }));
 }
 
 /**
- * 「全部采用远端」：所有 Conflict 项 → resolution=useRemote、adopt=true。
- * 仅作用于 Conflict 项，非 Conflict 项的 adopt 保持默认。
+ * 「全部使用备份配置」：全部可批量决策项 → adopt=true；
+ * Conflict 项附带 resolution=useRemote。无值的 MissingSecret 项即便被采纳也只是记 skipped
+ * （执行侧 planItemWritesTarget 判定），不会误写。
  */
-export function useRemoteAll(items: readonly SyncConfirmItem[]): ConflictDecision[] {
+export function useRemoteAll(items: readonly SyncConfirmItem[]): BulkDecision[] {
   return items
-    .filter((it) => it.kind === 'Conflict')
-    .map((it) => ({ itemId: it.itemId, resolution: 'useRemote', adopt: true }));
+    .filter((it) => isBulkDecidable(it))
+    .map((it) => (it.kind === 'Conflict'
+      ? { itemId: it.itemId, resolution: 'useRemote' as const, adopt: true }
+      : { itemId: it.itemId, adopt: true }));
 }
 
 export interface SyncConfirmSummary {

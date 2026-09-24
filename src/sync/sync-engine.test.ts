@@ -14,7 +14,8 @@ import path from 'node:path';
 
 import { SyncEngine, MAX_REMOTE_SNAPSHOTS } from './sync-engine.ts';
 import type { SyncApplyPlan } from './risk.ts';
-import { hashSection, loadSyncState, SYNC_STATE_FILE } from './sync-state.ts';
+import { hashSection, loadSyncState, saveSyncState, SYNC_STATE_FILE, SYNC_STATE_SCHEMA_VERSION } from './sync-state.ts';
+import { buildAutoApplyPlan } from './autosync-scheduler.ts';
 import { decryptSectionsPayload } from './snapshot-crypto.ts';
 import { computeSnapshotMeta } from './transport.ts';
 import { isEncryptedSections } from './transport.ts';
@@ -26,6 +27,9 @@ import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import { Importer } from '../core/importer.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { SectionData } from '../schema/types.ts';
+import { Phase3Recovery, readSafeModeMarkerSync } from '../core/phase3-host.ts';
+import type { JournalRunContext } from '../core/phase3-host.ts';
+import type { MutationLockContext } from '../utils/env-lock.ts';
 
 /** 测试辅助：取明文 sections（同步测试构造/上传的快照均为普通快照，非加密载荷）。 */
 function plainSections(s: SyncSnapshot['sections']): Partial<Record<SectionId, SectionData>> {
@@ -125,7 +129,7 @@ test('push: 收集 portable 分区 → 上传快照 → 更新 sync-state → �
     assert.equal(state.sections['settings']?.updatedAt, '2026-08-16T12:00:00.000Z');
     assert.deepEqual(state.transport, { type: 'memory', ref: '' });
     const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
-    assert.equal(raw.schemaVersion, 2);
+    assert.equal(raw.schemaVersion, 3);
 
     // 本地散文件副本（复用 t2 layout 布局）
     assert.ok((await fs.stat(path.join(local, 'sync-001', 'manifest.json'))).isFile());
@@ -271,6 +275,45 @@ test('push: 可选分区 sessions —— 无选项时跳过并告警；带 limit
     const uploaded = transport.snapshots.get('sync-sessions-b')!;
     const files = (plainSections(uploaded.sections)['sessions'] as { files: { relativePath: string }[] }).files;
     assert.deepEqual(files.map((f) => f.relativePath), ['--p--/new/session.jsonl.zstd']);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('P0-3: sessions.include 显式点名优先于 limit（只带我勾中的对话）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-sessions-include-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    await ctx.fs.writeFile('sessions/--p--/a/session.jsonl.zstd', Buffer.from('a', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/a/session.jsonl.zstd', 1000);
+    await ctx.fs.writeFile('sessions/--p--/b/session.jsonl.zstd', Buffer.from('b', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/b/session.jsonl.zstd', 2000);
+    await ctx.fs.writeFile('sessions/--p--/c/session.jsonl.zstd', Buffer.from('c', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/c/session.jsonl.zstd', 3000);
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    // limit=0（不带任何会话）+ include=[最旧的 a] → 用户点名必须赢（limit 让位）
+    const picked = await engine.push({
+      snapshotId: 'sync-include',
+      sections: ['sessions'],
+      sessions: { limit: 0, include: ['sessions:--p--/a'] },
+    });
+    assert.deepEqual(picked.sections, ['sessions']);
+    const files = (plainSections(transport.snapshots.get('sync-include')!.sections)['sessions'] as { files: { relativePath: string }[] }).files;
+    assert.deepEqual(files.map((f) => f.relativePath), ['--p--/a/session.jsonl.zstd'], '只带被点名的对话');
+
+    // include 为空 → 回到 limit 语义（「最新 1 个」）
+    const fallback = await engine.push({ snapshotId: 'sync-limit', sections: ['sessions'], sessions: { limit: 1, include: [] } });
+    assert.equal(fallback.ok, true);
+    const files2 = (plainSections(transport.snapshots.get('sync-limit')!.sections)['sessions'] as { files: { relativePath: string }[] }).files;
+    assert.deepEqual(files2.map((f) => f.relativePath), ['--p--/c/session.jsonl.zstd'], '空 include = 回到「最新 1 个」');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -643,6 +686,16 @@ class MockImporter {
   ok = true;
   executeCalls = 0;
   warnings: string[] = [];
+  /** 审计 P0-23：executeImportPlan 收到的 snapshotBinding（undefined = 调用方未透传绑定）。 */
+  receivedBinding: unknown = undefined;
+  /**
+   * 审计 P0-23：失败时是否模拟「引擎已就地回滚」的上报 —— 即 analyzer.ts:711-725 的真实行为：
+   * rollbackOnError 触发整体回滚 → 经 binding.recordRollback 上报 → 再正常返回 ok:false。
+   * 缺省 false：与改造前逐字一致，不影响既有用例。
+   */
+  reportRollbackOnFailure = false;
+  /** 上报的回滚完整度（false = 半回滚态 → 应留下 durable SAFE MODE）。 */
+  rollbackFull = true;
   analyzeImpl: () => Promise<unknown> = async () => ({ valid: true, compatibility: 'full' });
   createPlanImpl: () => Promise<unknown> = async () => ({
     items: [{ id: 'mock', kind: 'Update', adapter: 'settings', description: 'mock', severity: 'info', target: undefined }],
@@ -665,6 +718,14 @@ class MockImporter {
   async createImportPlan(_zipPath: string, _decisions: unknown): Promise<unknown> { return await this.createPlanImpl(); }
   async executeImportPlan(_zipPath: string, _plan: unknown, _opts: unknown): Promise<unknown> {
     this.executeCalls += 1;
+    const binding = (_opts as {
+      snapshotBinding?: { recordRollback?: (r: { full: boolean; failed: readonly string[] }) => Promise<void> };
+    } | undefined)?.snapshotBinding;
+    this.receivedBinding = binding;
+    // 与真实引擎同序：先在 fn 内部完成整体回滚并上报，再正常返回 ok:false。
+    if (this.reportRollbackOnFailure && binding?.recordRollback !== undefined) {
+      await binding.recordRollback({ full: this.rollbackFull, failed: [] });
+    }
     return await this.executeImpl();
   }
 }
@@ -714,9 +775,11 @@ test('applyMergePlan: 成功路径 → ApplyReport{ok:true, applied, restoreId, 
     assert.equal(report.review.length, 0);
     assert.equal(report.warnings.length, 0);
     assert.equal(mock.executeCalls, 1, 'Importer.executeImportPlan 应被调用一次');
-    // 祖先基线应被更新：sync-state.lastSnapshotId 非空 + 落 ancestor 副本
+    // 祖先基线应被更新（P0-7）：本地祖先副本目录名落 ancestorId；
+    // 未经 merge() 的直接调用拿不到远端 id → lastSnapshotId 保持 ''（诚实未知，不冒充远端 id）
     const state = await loadSyncState(tmp);
-    assert.notEqual(state.lastSnapshotId, '', 'push 后 lastSnapshotId 已被 recordBaseline 更新');
+    assert.notEqual(state.ancestorId ?? '', '', 'recordBaseline 应记录本地祖先副本目录名');
+    assert.equal(state.lastSnapshotId, '', '远端 id 未知时 lastSnapshotId 保持空');
     // localSnapshotsDir 下应有写出的祖先目录
     const dirs = await fs.readdir(localDir);
     assert.ok(dirs.length > 0, '祖先副本已写入');
@@ -952,7 +1015,7 @@ test('applyItems: 成功路径 → 执行子计划 + recordBaseline', async () =
     const mock = new MockImporter();
     mock.ok = true;
     const engine = makeEngineWithMockImporter({
-      ctx, transport, stateDir: tmp, mockImporter: mock,
+      ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'snapshots'), mockImporter: mock,
     });
 
     // 需要真实 ZIP 路径（applyItems 用 executeImportPlan 的 zipPath）
@@ -960,15 +1023,16 @@ test('applyItems: 成功路径 → 执行子计划 + recordBaseline', async () =
     const zipPath = path.join(tmp, 'session.zip');
     await fs.writeFile(zipPath, 'mock-zip-content');
 
-    const report = await engine.applyItems(zipPath, makeImportPlan('ok'));
+    const report = await engine.applyItems(zipPath, makeImportPlan('ok'), { remoteSnapshotId: 'sync-remote-ok' });
     assert.equal(report.ok, true);
     assert.deepEqual(report.applied, ['settings']);
     assert.notEqual(report.restoreId, '', 'restoreId 应非空');
     assert.equal(report.rolledBack, false);
     assert.equal(mock.executeCalls, 1, 'Importer.executeImportPlan 应被调用一次');
-    // recordBaseline 应被调用（lastSnapshotId 非空）
+    // recordBaseline 应被调用（P0-7：远端 id 由调用方透传 → lastSnapshotId；本地副本目录名 → ancestorId）
     const state = await loadSyncState(tmp);
-    assert.notEqual(state.lastSnapshotId, '', 'applyItems 成功后 lastSnapshotId 非空');
+    assert.equal(state.lastSnapshotId, 'sync-remote-ok', 'applyItems 成功后 lastSnapshotId = 调用方给的远端快照 id');
+    assert.notEqual(state.ancestorId ?? '', '', 'applyItems 成功后 ancestorId 非空（本地祖先副本）');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }
@@ -1143,6 +1207,93 @@ test('push: 裁剪单个 delete 失败 → 只告警不上抛，其余旧快照�
   }
 });
 
+// ─── t5b：m-retention —— 远端保留接 GFS 分层（不再绑死「推了几次配置」） ───────
+
+/** 预置一个指定创建时间的远端快照（GFS 分层用例需要跨月/跨年的时间分布） */
+function seedRemoteSnapshotAt(transport: MemSyncTransport, id: string, createdAt: string): void {
+  const snap: SyncSnapshot = {
+    id,
+    createdAt,
+    manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+    sections: { settings: { version: 1, namespaces: {} } },
+  };
+  transport.snapshots.set(id, snap);
+  transport.metas.push(computeSnapshotMeta(snap));
+}
+
+test('push: 注入分层保留策略 → 远端按「最近 N + 每月一份」裁剪，旧月份代表存活', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-gfs-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshotAt(transport, 'r-jan', '2026-01-05T00:00:00.000Z');
+    seedRemoteSnapshotAt(transport, 'r-feb', '2026-02-10T00:00:00.000Z');
+    seedRemoteSnapshotAt(transport, 'r-mar-1', '2026-03-01T00:00:00.000Z');
+    seedRemoteSnapshotAt(transport, 'r-mar-2', '2026-03-20T00:00:00.000Z');
+    seedRemoteSnapshotAt(transport, 'r-apr', '2026-04-02T00:00:00.000Z');
+    // keepLast=1（本次 push 的 sync-new 占掉）+ keepMonthly=2（2026-08 与 2026-04）
+    const engine = makeEngine({
+      ctx, transport, stateDir: tmp,
+      extra: { retentionPolicy: () => ({ keepLast: 1, keepMonthly: 2, keepYearly: 0 }) },
+    });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true);
+    assert.ok(transport.snapshots.has('sync-new'), '刚 push 的快照恒保留');
+    // 每月一份：最新月 2026-08（sync-new）之后是 2026-04 的代表
+    assert.ok(transport.snapshots.has('r-apr'), '2026-04 的月代表应保留');
+    // 超出月度额度与最近额度的旧月份全被裁掉
+    for (const id of ['r-jan', 'r-feb', 'r-mar-1', 'r-mar-2']) {
+      assert.ok(!transport.snapshots.has(id), `${id} 应被分层策略裁掉`);
+    }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 三层全关（0/0/0）→ 只保留刚 push 的快照（"只留最新"语义，绝不连它一起删）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-zero-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshotAt(transport, 'r-1', '2026-01-05T00:00:00.000Z');
+    seedRemoteSnapshotAt(transport, 'r-2', '2026-02-05T00:00:00.000Z');
+    const engine = makeEngine({
+      ctx, transport, stateDir: tmp,
+      extra: { retentionPolicy: () => ({ keepLast: 0, keepMonthly: 0, keepYearly: 0 }) },
+    });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true);
+    assert.deepEqual([...transport.snapshots.keys()], ['sync-new'], '全关策略下只剩刚 push 的快照');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 保留策略提供者抛错 → 回退缺省策略（保守多留，不误删远端快照）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-prune-fallback-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 13);
+    const engine = makeEngine({
+      ctx, transport, stateDir: tmp,
+      extra: { retentionPolicy: () => { throw new Error('schedule unreadable'); } },
+    });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true);
+    assert.equal(transport.snapshots.size, MAX_REMOTE_SNAPSHOTS, '回退缺省后仍保留最新 10 个');
+    assert.ok(transport.snapshots.has('sync-new'));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 // ─── t6：事件驱动触发检测（§3.1 本地变化 / §3.2 远端新快照） ─────────────────
 
 test('hasNewRemoteSnapshot: 空远端→false；从未同步且远端非空→true；远端最新=祖先→false；比祖先新→true', async () => {
@@ -1265,6 +1416,646 @@ test('push + webdav 快照级跳过：同 id 同内容二次 push → 不重复 
     // 远端快照文件仍存在且为首次内容
     const remote = files.get('https://dav.example.com/dav/config/dsh-config-manager/sync-001.json');
     assert.ok(remote !== undefined && remote.length > 0, '远端快照文件存在');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------- P0-7：基线指针语义（远端 id vs 本地祖先目录名） ---------------- */
+
+/** 远端快照构造（普通明文快照；settings.general = light 与 seedSource 的 dark 不同） */
+function mkRemote(id: string, createdAt: string, theme: string, revision: number): SyncSnapshot {
+  return {
+    id,
+    createdAt,
+    manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+    sections: {
+      settings: {
+        version: 1,
+        namespaces: { general: { value: { theme, language: 'zh-CN' }, revision, secrets: [] } },
+      },
+    },
+  };
+}
+
+test('P0-7: 加密快照 push 后，下一轮 merge 不再抛「快照目录缺少 manifest.json」→ 降级为两方合并', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-p07-enc-merge-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const local = path.join(tmp, 'ancestors');
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: local });
+
+    // 加密 push：按既有安全语义不落本地明文祖先副本
+    const push = await engine.push({ snapshotId: 'sync-enc-1', encrypt: true, password: 'pw-12345678' });
+    assert.equal(push.ok, true);
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-enc-1', 'lastSnapshotId 必须等于远端快照 id');
+    assert.equal(state.ancestorId ?? '', '', '加密 push 不落本地祖先副本 → ancestorId 必须为空');
+
+    // 另一台机器推了一个普通快照 → 自动同步会走 merge（修复前：loadAncestor 抛错 → 整轮 failed 且每轮复现）
+    const remote2 = mkRemote('remote-2', '2026-08-16T13:00:00.000Z', 'light', 9);
+    transport.snapshots.set(remote2.id, remote2);
+    transport.metas.push(computeSnapshotMeta(remote2));
+
+    const plan = await engine.merge();
+    const settings = plan.sections.find((s) => s.id === 'settings');
+    assert.ok(settings, 'merge 必须返回 settings 分区结果');
+    assert.equal(settings!.decision, 'conflict', '祖先缺失 → 两方差异按整分区 conflict 交用户裁决');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('P0-7: 祖先副本缺失（被裁剪/清理）时 merge 同样降级为两方合并，不抛错', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-p07-ghost-anc-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const remote = mkRemote('remote-ghost', '2026-08-16T12:00:00.000Z', 'light', 4);
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    // 旧状态（v2 形态）：lastSnapshotId 指向一个本地**并不存在**的祖先目录
+    await saveSyncState(tmp, {
+      schemaVersion: 2,
+      lastSyncAt: '2026-08-15T00:00:00.000Z',
+      sections: { settings: { hash: '0'.repeat(64), updatedAt: '2026-08-15T00:00:00.000Z' } },
+      lastSnapshotId: 'ghost-ancestor',
+    });
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'ancestors') });
+
+    const plan = await engine.merge();
+    const settings = plan.sections.find((s) => s.id === 'settings');
+    assert.ok(settings, 'merge 必须返回 settings 分区结果（不抛错）');
+    assert.equal(settings!.decision, 'conflict');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('P0-7: merge + applyMergePlan 后 lastSnapshotId = 远端快照 id → hasNewRemoteSnapshot() 返回 false', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-p07-apply-'));
+  const localDir = path.join(tmp, 'snapshots');
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = true;
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: localDir, mockImporter: mock,
+    });
+
+    // 本机先推一个基线（普通快照 → 落本地祖先副本）
+    assert.equal((await engine.push({ snapshotId: 'sync-r1' })).ok, true);
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '刚推完 → 远端无新生');
+
+    // 另一台机器推了 sync-r2 → 自动同步 Phase A 走 merge → applyMergePlan
+    const remote2 = mkRemote('sync-r2', '2026-08-16T13:00:00.000Z', 'light', 9);
+    transport.snapshots.set(remote2.id, remote2);
+    transport.metas.push(computeSnapshotMeta(remote2));
+    assert.equal(await engine.hasNewRemoteSnapshot(), true, '远端出现新快照 → true');
+
+    const plan = await engine.merge();
+    const apply = buildAutoApplyPlan(plan);
+    assert.ok(apply.autoApply.length > 0, '本地未改、远端改了 → 应有可自动应用项');
+    const report = await engine.applyMergePlan(apply);
+    assert.equal(report.ok, true);
+
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-r2', 'apply 后基线指针必须是**远端**快照 id');
+    assert.notEqual(state.ancestorId ?? '', '', '本地祖先副本目录名写在独立字段');
+    assert.notEqual(state.ancestorId, state.lastSnapshotId, '两个 id 语义不同，不得混用同一字段');
+    assert.equal(await engine.hasNewRemoteSnapshot(), false, '远端最新已应用 → 不应再判「有新生」（每轮白跑 list+download+merge）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('P0-7: applyItems 显式给远端 id → lastSnapshotId 写远端 id；不给 → 写 ""（诚实未知，不冒充远端 id）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-p07-applyitems-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = true;
+    const zipPath = path.join(tmp, 'session.zip');
+    await fs.writeFile(zipPath, 'mock-zip-content');
+
+    const withRemote = makeEngineWithMockImporter({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'snapshots'), mockImporter: mock });
+    assert.equal((await withRemote.applyItems(zipPath, makeImportPlan('remote-id'), { remoteSnapshotId: 'sync-r9' })).ok, true);
+    const s1 = await loadSyncState(tmp);
+    assert.equal(s1.lastSnapshotId, 'sync-r9', '显式远端 id 必须落到 lastSnapshotId');
+    assert.notEqual(s1.ancestorId ?? '', '', '本地祖先副本仍记录在 ancestorId');
+
+    const noRemote = makeEngineWithMockImporter({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'snapshots'), mockImporter: mock });
+    assert.equal((await noRemote.applyItems(zipPath, makeImportPlan('unknown-id'))).ok, true);
+    const s2 = await loadSyncState(tmp);
+    assert.equal(s2.lastSnapshotId, '', '远端 id 未知时写 ""（而不是把本地随机 id 冒充远端 id）');
+    assert.notEqual(s2.ancestorId ?? '', '', '仍落本地祖先副本目录名');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * P0-7 收尾 · 源码守卫：一键同步的 /sync/apply-items 路由必须把**会话里的远端快照 id**透传给 applyItems。
+ * 行为侧由上面的引擎级用例钉住（传入 → sync-state.lastSnapshotId = 远端快照 id）；这里钉**接线**：
+ * 路由若退回不传，一键同步后 lastSnapshotId 会停在 ''（诚实未知），自动同步要多跑一整轮
+ * list+download+merge 才收敛。同款守卫样板见 src/sync/backup-scheduler.test.ts（issue #43 / M1）。
+ */
+/** W1 起路由按域拆到 src/routes/*.ts：源码级守卫必须扫**全部**宿主路由源，否则会静默失去覆盖。 */
+async function hostRouteSource(): Promise<string> {
+  const parts = [await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8')];
+  const dir = new URL('../routes/', import.meta.url);
+  for (const entry of (await fs.readdir(dir)).sort()) {
+    if (!entry.endsWith('.ts') || entry.endsWith('.test.ts')) continue;
+    parts.push(await fs.readFile(new URL(entry, dir), 'utf8'));
+  }
+  return parts.join('\n').replace(/\r\n/g, '\n');
+}
+
+test('P0-7 源码守卫：/sync/apply-items 以 remoteSnapshotId: session.snapshotId 调 applyItems', async () => {
+  // 归一化行尾：Windows 工作区是 CRLF、CI 是 LF；守卫按文本解析源码，写死行尾会只在一边通过
+  // （用 fromCharCode 而不是正则里的转义序列，避免转义层数差异把源码写坏）
+  // W1：/sync/apply-items 路由已拆到 src/routes/sync.ts —— 扫「宿主路由源」（index.ts + src/routes/**）
+  const source = await hostRouteSource();
+  const callIdx = source.indexOf('await engine.applyItems(');
+  assert.ok(callIdx > 0, '应能找到 engine.applyItems(...) 调用');
+  // 该调用紧随其后即 options 字面量：取其窗口做接线断言
+  const options = source.slice(callIdx, callIdx + 800);
+  assert.ok(
+    /remoteSnapshotId:\s*session\.snapshotId/.test(options),
+    'applyItems 必须传 remoteSnapshotId: session.snapshotId（P0-7：否则一键同步后基线指针停在空串）',
+  );
+  assert.equal(/remoteSnapshotId:\s*''/.test(options), false, 'remoteSnapshotId 不得硬编码空串');
+  // 取值来源：会话登记时写入的正是本次拉取到的远端快照 id（不是本地临时 id）
+  assert.ok(
+    source.includes('snapshotId: preview.snapshotId,'),
+    '同步会话必须登记 preview.snapshotId 作为 session.snapshotId（该值即远端快照 id）',
+  );
+});
+/**
+ * P0-7 收尾 · 引擎级端到端（宿主调用形状）：一键同步 = preview() → 同步会话持有 snapshotId →
+ * applyItems(..., { remoteSnapshotId: session.snapshotId })。断言基线远端指针收敛到本轮拉取的远端快照 id。
+ */
+test('P0-7 收尾：一键同步（preview → applyItems 带 remoteSnapshotId）后 lastSnapshotId = 远端快照 id', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-p07-onclick-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const remote = mkRemote('remote-one-click', '2026-08-16T12:00:00.000Z', 'light', 7);
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    const mock = new MockImporter();
+    mock.ok = true;
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'snapshots'), mockImporter: mock,
+    });
+
+    const preview = await engine.preview();
+    assert.equal(preview.ok, true);
+    assert.equal(preview.snapshotId, 'remote-one-click', 'preview 返回本轮拉取的远端快照 id');
+    assert.ok(preview.plan !== null, 'preview 应产出计划');
+
+    // 宿主路由 /sync/apply-items 的调用形状（src/index.ts：remoteSnapshotId: session.snapshotId）
+    const report = await engine.applyItems(preview.zipPath, preview.plan!, {
+      remoteSnapshotId: preview.snapshotId,
+    });
+    assert.equal(report.ok, true);
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'remote-one-click', '一键同步后基线远端指针必须收敛到远端快照 id（不是空串）');
+    assert.notEqual(state.ancestorId ?? '', '', '本地祖先副本目录名写在独立字段');
+
+    // 清理 preview 创建并交给调用方的临时 ZIP 目录
+    await fs.rm(path.dirname(preview.zipPath), { recursive: true, force: true });
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ─── 审计 P0-23：自动同步回滚必须被 journal 感知（不得再被记成 COMMITTED） ──────────────
+
+/** intent journal 用的 lock context（形状同 withMutationLock 产出的 token）。 */
+const JOURNAL_LOCK_CTX: MutationLockContext = {
+  token: { tokenId: 't-p023', managerId: 'm-test', instanceId: 'autosync-test', acquiredAt: 1 },
+};
+
+/** P0-23 的输入计划：单个 useRemote 项 → autoApply 非空，会真正走到 executeImportPlan。 */
+function makeApplyPlan(): SyncApplyPlan {
+  return {
+    autoApply: [{
+      id: 'settings',
+      decision: 'useRemote',
+      conflicts: [],
+      merged: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 5, secrets: [] } } },
+    }],
+    review: [],
+    skipped: [],
+  };
+}
+
+/**
+ * P0-23 的核心用例：自动同步路径（runExternalIntent → applyMergePlan → executeImportPlan）
+ * 在导入内部完成**整体回滚**后，journal 终态必须是 ROLLED_BACK。
+ *
+ * 修复前必红：runExternalIntent 只投递 { operationId }（没有绑定面），这份 ctx 到不了
+ * applyMergePlan，引擎的上报到不了 journal，尾操作照旧写 COMMITTED。
+ */
+test('P0-23: 自动同步 apply 内部整体回滚 → journal 终态 ROLLED_BACK（不得 COMMITTED）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-p023-rollback-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const mock = new MockImporter();
+    mock.ok = false;                  // 强制失败项 → applyMergePlan 走整体回滚
+    mock.reportRollbackOnFailure = true; // 引擎已就地回滚并上报（analyzer 的真实行为）
+    mock.rollbackFull = true;         // 完整回滚 → 不应置 SAFE MODE
+    const engine = makeEngineWithMockImporter({
+      ctx, transport: new MemSyncTransport(), stateDir: tmp, mockImporter: mock,
+    });
+    const recovery = new Phase3Recovery({
+      dataDir: tmp, packageVersion: '0.1.63', environmentFingerprint: 'fp-p023',
+    });
+
+    const apply = makeApplyPlan();
+    // 与 autosync-scheduler 的 rawApply 一致：把 intent journal 的 ctx 作为 snapshotBinding 透传
+    const rawApply = async (c?: JournalRunContext): Promise<unknown> =>
+      engine.applyMergePlan(apply, c !== undefined ? { snapshotBinding: c } : {});
+
+    const { operationId, result } = await recovery.runExternalIntent({
+      operationType: 'autosync-apply',
+      lockCtx: JOURNAL_LOCK_CTX,
+      intent: { adapter: 'sync', ref: 'git', kind: 'Apply' },
+      fn: rawApply,
+    });
+
+    assert.equal((result as { ok: boolean }).ok, false, 'applyMergePlan 必须走失败（内部回滚）路径');
+    assert.equal(mock.executeCalls, 1, 'Importer.executeImportPlan 应被调用一次');
+    assert.equal(
+      typeof (mock.receivedBinding as { recordRollback?: unknown } | undefined)?.recordRollback,
+      'function',
+      'applyMergePlan 必须把带 recordRollback 的绑定面透传给 executeImportPlan（否则上报无门）',
+    );
+    const terminal = await recovery.store.terminalStateOf(operationId);
+    assert.notEqual(terminal, 'COMMITTED', '已回滚的 operation 绝不能被记成 COMMITTED');
+    assert.equal(terminal, 'ROLLED_BACK', '上报回滚后终态应为 ROLLED_BACK');
+    assert.equal(
+      readSafeModeMarkerSync(tmp), 'clear',
+      '完整回滚（full=true）不置 SAFE MODE —— 不过度阻断',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * P0-23 半回滚：rollback.full === false（存在补偿失败项）必须留下 durable SAFE MODE，
+ * 行为与用户侧导入路径（analyzer 上报 → runJournaled 分支）逐字一致。
+ */
+test('P0-23: 自动同步 apply 半回滚 → ROLLED_BACK 且 SAFE MODE 标记可见', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-p023-partial-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const mock = new MockImporter();
+    mock.ok = false;
+    mock.reportRollbackOnFailure = true;
+    mock.rollbackFull = false;        // 半回滚态
+    const engine = makeEngineWithMockImporter({
+      ctx, transport: new MemSyncTransport(), stateDir: tmp, mockImporter: mock,
+    });
+    const recovery = new Phase3Recovery({
+      dataDir: tmp, packageVersion: '0.1.63', environmentFingerprint: 'fp-p023',
+    });
+
+    const apply = makeApplyPlan();
+    const { operationId } = await recovery.runExternalIntent({
+      operationType: 'autosync-apply',
+      lockCtx: JOURNAL_LOCK_CTX,
+      intent: { adapter: 'sync', ref: 'git', kind: 'Apply' },
+      fn: async (c?: JournalRunContext) =>
+        engine.applyMergePlan(apply, c !== undefined ? { snapshotBinding: c } : {}),
+    });
+
+    assert.equal(await recovery.store.terminalStateOf(operationId), 'ROLLED_BACK');
+    assert.equal(
+      readSafeModeMarkerSync(tmp), 'blocked',
+      '半回滚必须留下 durable SAFE MODE（下次启动不判 NORMAL），与导入路径一致',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * P0-23 反例守卫：终态只由**显式上报**决定，绝不按返回值形状推断。
+ * ok:false 但引擎未上报回滚（例如执行前就失败、什么都没写）→ 不得凭空写 ROLLED_BACK。
+ */
+test('P0-23: 无回滚上报时不得凭 ok:false 形状推断成 ROLLED_BACK', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-p023-noreport-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const mock = new MockImporter();
+    mock.ok = false;
+    mock.reportRollbackOnFailure = false; // 引擎未上报（形状不可推断）
+    const engine = makeEngineWithMockImporter({
+      ctx, transport: new MemSyncTransport(), stateDir: tmp, mockImporter: mock,
+    });
+    const recovery = new Phase3Recovery({
+      dataDir: tmp, packageVersion: '0.1.63', environmentFingerprint: 'fp-p023',
+    });
+
+    const apply = makeApplyPlan();
+    const { operationId } = await recovery.runExternalIntent({
+      operationType: 'autosync-apply',
+      lockCtx: JOURNAL_LOCK_CTX,
+      intent: { adapter: 'sync', ref: 'git', kind: 'Apply' },
+      fn: async (c?: JournalRunContext) =>
+        engine.applyMergePlan(apply, c !== undefined ? { snapshotBinding: c } : {}),
+    });
+
+    assert.notEqual(
+      await recovery.store.terminalStateOf(operationId), 'ROLLED_BACK',
+      '没有显式上报就不得写 ROLLED_BACK —— 终态判定不能靠返回值形状猜',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/**
+ * P0-23 源码守卫：真实调用方（autosync-scheduler）必须提供绑定。
+ * 只给 applyMergePlan 加参数而无人传值 = 死参数，本用例专门钉住这一点。
+ */
+test('P0-23 源码守卫：autosync-scheduler 以 snapshotBinding 调 applyMergePlan', async () => {
+  const src = await fs.readFile(new URL('./autosync-scheduler.ts', import.meta.url), 'utf8');
+  // 锚在**真实调用点**（rawApply 的赋值）而非注释里的同名字符串：文件头注释也含
+  // "engine.applyMergePlan(apply)"，直接 indexOf 会命中注释，守卫就成了假绿。
+  const callIdx = src.indexOf('const rawApply = async');
+  assert.ok(callIdx > 0, '应能找到 rawApply 定义（applyMergePlan 的真实调用点）');
+  const call = src.slice(callIdx, callIdx + 500);
+  assert.ok(
+    call.includes('snapshotBinding'),
+    'autosync-scheduler 必须把 intent ctx 作为 snapshotBinding 传给 applyMergePlan，实际调用片段：' + call,
+  );
+});
+
+// ─── P0-2：跨机基础路径重定基（快照携带 sourceHome → 拉取计划自动重定基） ──────────
+
+
+// ─── P1-5：会话删除墓碑（本地删 → 跨机传播 → 旧快照不复活） ────────────────────
+
+test('P1-5: push 检测本地删除 → 墓碑进 manifest + sync-state，并给出可见告警', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-tombstone-push-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    await ctx.fs.writeFile('sessions/--p--/b/session.jsonl.zstd', Buffer.from('b', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/b/session.jsonl.zstd', 2000);
+    // 上次推送记录里有 a 与 b；本机只剩 b（= 用户把 a 删了；无需真删文件即可复现判据）
+    await saveSyncState(tmp, {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '2026-08-15T00:00:00.000Z',
+      sections: {},
+      lastSnapshotId: 'sync-prev',
+      ancestorId: '',
+      sessionUnits: ['sessions:--p--/a', 'sessions:--p--/b'],
+      deletedSessions: [],
+    });
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    const report = await engine.push({ snapshotId: 'sync-tomb', sections: ['sessions'], sessions: {} });
+    assert.equal(report.ok, true);
+    assert.deepEqual(
+      transport.snapshots.get('sync-tomb')!.manifest.deletedSessions,
+      ['sessions:--p--/a'],
+      '被删掉的会话必须写进快照 manifest 的墓碑',
+    );
+    assert.ok(
+      report.warnings.some((w) => w.includes('已记录') || w.includes('Recorded')),
+      '记录删除必须可见（绝不静默）: ' + report.warnings.join(' | '),
+    );
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(state.sessionUnits, ['sessions:--p--/b'], '本次实际带走的会话单元');
+    assert.deepEqual(state.deletedSessions, ['sessions:--p--/a'], '墓碑累积进状态（下轮继续传）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('P1-5: 本机枚举不到任何会话 / 未推 sessions → 绝不覆盖既有记录（不猜成全删）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-tombstone-noop-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    // 本机一个会话都没有（目录读不到或真为空）
+    await saveSyncState(tmp, {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '', sections: {}, lastSnapshotId: '', ancestorId: '',
+      sessionUnits: ['sessions:--p--/a'],
+      deletedSessions: ['sessions:--q--/old'],
+    });
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    // 只推 settings（不含 sessions）→ 完全不动簿记
+    await engine.push({ snapshotId: 'sync-settings-only', sections: ['settings'] });
+    const afterSettings = await loadSyncState(tmp);
+    assert.deepEqual(afterSettings.sessionUnits, ['sessions:--p--/a'], '未推 sessions → 保留原记录');
+    assert.deepEqual(afterSettings.deletedSessions, ['sessions:--q--/old']);
+
+    // 推 sessions 但本机枚举为空 → 同样不覆盖（把「读不到」当「全删」会一次性标错几百条）
+    const report = await engine.push({ snapshotId: 'sync-empty-sessions', sections: ['sessions'], sessions: {} });
+    assert.equal(report.ok, true);
+    const afterEmpty = await loadSyncState(tmp);
+    assert.deepEqual(afterEmpty.sessionUnits, ['sessions:--p--/a'], '枚举为空 → 不覆盖');
+    assert.deepEqual(afterEmpty.deletedSessions, ['sessions:--q--/old']);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('P1-5: pull 按远端墓碑剔除已删除的会话（旧快照不复活）+ 提示可见', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-tombstone-pull-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\bob');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const remote: SyncSnapshot = {
+      id: 'remote-old-with-a',
+      createdAt: '2026-08-15T10:00:00.000Z',
+      manifest: {
+        schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32',
+        sectionIds: ['sessions'], containsSecrets: false,
+        deletedSessions: ['sessions:--p--/a'],
+      },
+      sections: {
+        sessions: {
+          version: 1,
+          files: [
+            { relativePath: '--p--/a/session.jsonl.zstd', data: new Uint8Array(Buffer.from('a')), contentHash: '' },
+            { relativePath: '--p--/b/session.jsonl.zstd', data: new Uint8Array(Buffer.from('b')), contentHash: '' },
+          ],
+        },
+      },
+    };
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      includeOptInSections: true,
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    const preview = await engine.preview();
+    try {
+      assert.ok(preview.plan !== null, 'preview 应产出计划');
+      assert.ok(
+        !preview.plan!.items.some((i) => i.id.includes('--p--/a')),
+        '墓碑命中的会话绝不能被旧快照带回：' + preview.plan!.items.map((i) => i.id).join(', '),
+      );
+      assert.ok(preview.plan!.items.some((i) => i.id.includes('--p--/b')), '其余会话照常进计划');
+      assert.ok((preview.message ?? '').includes('1'), '剔除必须可见（绝不静默）: ' + String(preview.message));
+    } finally {
+      await fs.rm(path.dirname(preview.zipPath), { recursive: true, force: true });
+    }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 快照 manifest 携带导出机 sourceHome（跨机重定基的数据源）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-sourcehome-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-home' });
+    assert.equal(report.ok, true);
+    const home = transport.snapshots.get('sync-home')!.manifest.sourceHome;
+    assert.equal(home, ctx.homeDir, '快照必须记录导出机 DSH home');
+    assert.notEqual(home ?? '', '', '不能是空串（空串等于没记）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/** 构造一个带 workspaces 数据的远端快照（sourceHome 可选，缺省 = 旧构建的包）。 */
+function mkCrossMachineRemote(id: string, sourceHome: string | undefined): SyncSnapshot {
+  return {
+    id,
+    createdAt: '2026-08-15T10:00:00.000Z',
+    manifest: {
+      schemaVersion: 1,
+      dshVersion: '1.2.3',
+      platform: 'win32',
+      sectionIds: ['settings', 'workspaces'],
+      containsSecrets: false,
+      ...(sourceHome === undefined ? {} : { sourceHome }),
+    },
+    sections: {
+      settings: { version: 1, namespaces: {} },
+      workspaces: {
+        version: 1,
+        workspaces: [{ id: 'ws-1', path: 'C:\\Users\\alice\\proj', title: 'proj', sessionIds: [] }],
+      },
+    },
+  };
+}
+
+test('preview: 远端 sourceHome ≠ 本机 → 自动重定基进入计划（排在用户映射之前）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-rebase-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\bob');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const remote = mkCrossMachineRemote('remote-cross', 'C:\\Users\\alice');
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const preview = await engine.preview();
+    try {
+      assert.ok(preview.plan !== null, 'preview 应产出计划');
+      assert.deepEqual(
+        preview.plan!.automaticMappings,
+        [{ oldPrefix: 'C:/Users/alice', newPrefix: 'C:/Users/bob', appliesTo: [] }],
+        '导出机 home → 本机 home 的自动重定基必须进入计划',
+      );
+      assert.equal(preview.plan!.pathMappings[0]?.oldPrefix, 'C:/Users/alice', '重定基排在映射列表最前');
+    } finally {
+      await fs.rm(path.dirname(preview.zipPath), { recursive: true, force: true });
+    }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('preview: 旧快照缺 sourceHome → 不生成自动重定基（不猜，行为与改造前一致）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-rebase-legacy-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\bob');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const remote = mkCrossMachineRemote('remote-legacy', undefined);
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const preview = await engine.preview();
+    try {
+      assert.ok(preview.plan !== null, 'preview 应产出计划');
+      assert.equal(preview.plan!.automaticMappings, undefined, '缺 sourceHome 时绝不猜一个重定基规则');
+      assert.deepEqual(preview.plan!.pathMappings, [], '没有用户映射 → 空映射列表');
+    } finally {
+      await fs.rm(path.dirname(preview.zipPath), { recursive: true, force: true });
+    }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('preview: 用户路径映射随请求进入计划，且排在自动重定基之后', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-rebase-user-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\bob');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const remote = mkCrossMachineRemote('remote-user-map', 'C:\\Users\\alice');
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const preview = await engine.preview({
+      pathMappings: [{ oldPrefix: 'C:/Users/bob/proj', newPrefix: 'D:/work/proj', appliesTo: [] }],
+    });
+    try {
+      assert.ok(preview.plan !== null, 'preview 应产出计划');
+      const olds = preview.plan!.pathMappings.map((m) => m.oldPrefix);
+      assert.deepEqual(olds, ['C:/Users/alice', 'C:/Users/bob/proj'], '自动重定基在前、用户映射在后');
+    } finally {
+      await fs.rm(path.dirname(preview.zipPath), { recursive: true, force: true });
+    }
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

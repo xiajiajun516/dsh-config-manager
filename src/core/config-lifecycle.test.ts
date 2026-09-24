@@ -13,6 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,9 +21,14 @@ import path from 'node:path';
 import {
   ConfigLifecycle, echoCandidatePaths, profileCriticalRels, watchDirsFor, BOOT_CRITICAL_RELS,
 } from './config-lifecycle.ts';
-import { listConfigSnapshots } from './config-snapshot.ts';
-import { makeContext } from '../adapters/test-helpers.ts';
+import { Phase3Recovery, readSafeModeMarkerSync } from './phase3-host.ts';
+import { createJournalEntry, transitionJournalState } from './journal.ts';
+import { Exporter } from './exporter.ts';
+import { Importer } from './importer.ts';
+import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import type { TimerApi, WatchFactory } from './watcher.ts';
+import type { ImportPlan } from './types.ts';
+import type { MutationLockContext } from '../utils/env-lock.ts';
 import type { ConfigAdapter, ExportSection, HostContext } from './types.ts';
 import type { SectionId } from '../schema/types.ts';
 
@@ -284,6 +290,66 @@ test('redo：撤销后又有真实变更 → 被拒（绝不覆盖用户新改�
   assert.equal(redo.ok, false);
   assert.equal(redo.reason, 'superseded-by-newer-change');
   assert.equal(JSON.parse(await fs.readFile(h.configFile, 'utf8')).v, 3, '不得被回退');
+});
+
+/*
+ * 回归（P0-5）：撤销/重做回放**不得**把「未采纳的 Conflict」交给 applyItem。
+ *
+ * 修复前 config-snapshot 的回放自持一份 kind 清单（NON_EXECUTABLE_KINDS 不含 Conflict），
+ * 于是回放对冲突项照调 applyItem —— settings adapter 无条件 settings.replace，
+ * 目标机与快照不同的本地值被静默覆盖（用户的新改动无声消失），而导入路径对同一项是 skip。
+ * 本用例的 adapter 无论目标当前值如何都产出 Conflict（不带 resolution），applyItem 会写文件，
+ * 因此「文件是否被写回快照值」就是判定式。
+ */
+test('undo 回放：未采纳的 Conflict 不得静默写目标（P0-5 回归）', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-lifecycle-conflict-'));
+  t.after(async () => { await fs.rm(home, { recursive: true, force: true }); });
+  const configFile = path.join(home, 'settings.yaml');
+  await fs.writeFile(configFile, JSON.stringify({ v: 1 }), 'utf8');
+
+  const calls = { apply: 0 };
+  const adapter: ConfigAdapter = {
+    id: 'settings',
+    displayName: 'settings',
+    defaultIncluded: true,
+    portability: 'portable',
+    async export(): Promise<ExportSection> {
+      try {
+        return { sectionId: 'settings', data: JSON.parse(await fs.readFile(configFile, 'utf8')) as Record<string, unknown>, counts: { n: 1 }, warnings: [] };
+      } catch {
+        return { sectionId: 'settings', data: {}, counts: { n: 1 }, warnings: [] };
+      }
+    },
+    async validate() { return { valid: true, issues: [] }; },
+    async analyzeImport() {
+      return [{
+        id: 'settings:conflict', kind: 'Conflict' as const, adapter: 'settings' as const,
+        description: '本地值与快照不同', severity: 'warning' as const,
+        target: { adapter: 'settings' as const, ref: 'settings' },
+      }];
+    },
+    async applyItem(_item, ctx) {
+      calls.apply += 1;
+      await fs.writeFile(configFile, JSON.stringify(ctx.sections.get('settings') ?? {}), 'utf8');
+      return { ok: true };
+    },
+  };
+  const lifecycle = new ConfigLifecycle({
+    dir: path.join(home, 'snapshots'), adapters: [adapter], ctx: makeContext('win32', home, 'web'),
+    profile: 'web', autoEnabled: false,
+  });
+
+  await lifecycle.snapshot({ kind: 'manual', reason: 'seed' });      // 快照记录 {v:1}
+  await fs.writeFile(configFile, JSON.stringify({ v: 2 }), 'utf8');  // 本地真实变更 → 与快照不同
+
+  const outcome = await lifecycle.undo();
+  assert.equal(calls.apply, 0, '回放不得把未采纳的 Conflict 交给 applyItem（否则静默覆盖本地值）');
+  assert.deepEqual(JSON.parse(await fs.readFile(configFile, 'utf8')), { v: 2 }, '本地值必须原样保留');
+  assert.equal(outcome.ok, true, '跳过冲突项不算失败');
+  assert.ok(
+    (outcome.report?.skipped ?? []).some((s) => s.includes('conflict')),
+    '跳过的冲突项必须如实进报告（不得静默）',
+  );
 });
 
 /* ------------------------------------------------------------ status */
@@ -724,4 +790,191 @@ test('自动快照端到端：抑制窗口之外才投递的回声事件也被�
 
   // 而重做通道必须还活着
   assert.equal((await h.lifecycle.status()).canRedo, true, '重做通道不得被回声快照堵死');
+});
+
+/* ---------------------------------------------- Phase 3 终态 / SAFE MODE（t16：P0-3） */
+
+/*
+ * 本组用真实 Phase3Recovery.runJournaled（Web gate / restore / model-tools 都经它）复现审计 P0-3：
+ * 导入引擎在失败分支【已完成整体回滚】后正常返回 { ok:false, rollback }，而 runJournaled 只凭
+ * 「fn 是否返回」推断成功 → 整笔 operation 被记成 COMMITTED 终态（回滚点随之失去 prune 豁免、
+ * 事后审计读到与盘面相反的结论）。修复后必须由引擎经 ctx.recordRollback 上报，终态为 ROLLED_BACK。
+ *
+ * 放在本文件是因为 t16 的 in-scope 测试文件只有 config-lifecycle.test.ts 与 boot-rescue.test.ts。
+ */
+
+function lockCtxOf(instance = 'owner-t16'): MutationLockContext {
+  return { token: { tokenId: 't', managerId: 'm', instanceId: instance, acquiredAt: Date.now() } };
+}
+
+async function makeRecovery(
+  t: { after: (fn: () => Promise<void> | void) => void },
+): Promise<{ recovery: Phase3Recovery; dir: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-p03-'));
+  t.after(async () => { await fs.rm(dir, { recursive: true, force: true }); });
+  const recovery = new Phase3Recovery({ dataDir: dir, packageVersion: '0.1.63', environmentFingerprint: 'fp-t16' });
+  await recovery.store.ensureDirs();
+  return { recovery, dir };
+}
+
+/** 引擎侧的记录面（可选调用：非 journaled 路径不传 binding；与 analyzer 的实现同形） */
+interface RollbackReporterLike {
+  recordRollback?: (report: { full: boolean; failed: readonly string[] }) => Promise<void>;
+}
+
+test('P0-3：fn 内部已完成回滚（full=false）→ 终态 ROLLED_BACK + durable SAFE MODE，绝不写 COMMITTED', async (t) => {
+  const { recovery, dir } = await makeRecovery(t);
+
+  const { operationId, result } = await recovery.runJournaled<{ ok: boolean }>({
+    operationType: 'import-apply',
+    lockCtx: lockCtxOf(),
+    deferredSnapshot: true,
+    fn: async (ctx) => {
+      const jc = ctx as unknown as RollbackReporterLike;
+      // 导入引擎：快照绑定 → 首个 mutation 前 markApplying → 失败 → 整体回滚（有补偿失败项）
+      await jc.recordRollback?.({ full: false, failed: ['credential:demo'] });
+      return { ok: false };
+    },
+  });
+
+  assert.deepEqual(result, { ok: false }, 'fn 返回值不变（引擎仍把回滚报告交给 HTTP 层）');
+  const j = await recovery.store.load(operationId);
+  assert.ok(j !== null);
+  assert.notEqual(j.state, 'COMMITTED', '已回滚的 operation 绝不能被记为 COMMITTED 终态');
+  assert.equal(j.state, 'ROLLED_BACK');
+  assert.deepEqual(j.rollback.failed, ['credential:demo'], 'journal 必须留下回滚报告（可审计）');
+  assert.equal(j.rollback.full, false);
+  assert.equal(recovery.safeModeActive, true, '部分回滚 → destructive 入口必须被阻断');
+  assert.equal(await recovery.store.readSafeMode(), true, 'durable 标记：下次启动据此不判 NORMAL');
+  assert.equal(readSafeModeMarkerSync(dir), 'blocked', '宿主/CLI 同步探测必须看到阻断');
+});
+
+test('P0-3：fn 内部完整回滚（full=true）→ ROLLED_BACK 且不置 SAFE MODE（不过度阻断）', async (t) => {
+  const { recovery } = await makeRecovery(t);
+
+  const { operationId } = await recovery.runJournaled<{ ok: boolean }>({
+    operationType: 'import-apply',
+    lockCtx: lockCtxOf('owner-t16-full'),
+    deferredSnapshot: true,
+    fn: async (ctx) => {
+      await (ctx as unknown as RollbackReporterLike).recordRollback?.({ full: true, failed: [] });
+      return { ok: false };
+    },
+  });
+
+  const j = await recovery.store.load(operationId);
+  assert.ok(j !== null);
+  assert.equal(j.state, 'ROLLED_BACK');
+  assert.equal(recovery.safeModeActive, false, '完整回滚已回到导入前状态 → 无需 SAFE MODE');
+  assert.equal(await recovery.store.readSafeMode(), false);
+});
+
+test('P0-3：已回滚但未收敛的回滚点仍受 prune 豁免保护；COMMITTED / 完整回滚不保护', async (t) => {
+  const { recovery } = await makeRecovery(t);
+  const mk = async (state: 'COMMITTED' | 'ROLLED_BACK', snapshotId: string, full: boolean): Promise<void> => {
+    const opId = randomUUID();
+    await recovery.store.create(createJournalEntry('import-apply', {
+      operationId: opId, ownerInstanceId: 'o', lockId: 'o', packageVersion: '0', environmentFingerprint: 'fp-t16',
+    }, new Date().toISOString()));
+    await recovery.store.update(opId, (j) => ({ ...j, snapshotId, state: 'APPLYING' }));
+    await recovery.store.update(opId, (j) => (state === 'COMMITTED'
+      ? transitionJournalState(transitionJournalState(j, 'VALIDATING'), 'COMMITTED')
+      : {
+          ...transitionJournalState(transitionJournalState(j, 'ROLLING_BACK'), 'ROLLED_BACK'),
+          rollback: { ...j.rollback, full },
+        }));
+    await recovery.store.moveToCompleted(opId);
+  };
+  await mk('ROLLED_BACK', 'snap-incomplete', false);
+  await mk('ROLLED_BACK', 'snap-complete', true);
+  await mk('COMMITTED', 'snap-committed', true);
+
+  const refs = await recovery.store.listReferencedSnapshotIds();
+  assert.equal(refs.has('snap-incomplete'), true, '半回滚态的恢复点绝不可被自动淘汰');
+  assert.equal(refs.has('snap-complete'), false, '完整回滚：快照已消费，可被保留策略清理');
+  assert.equal(refs.has('snap-committed'), false, 'COMMITTED 已消费，不保护');
+});
+
+/*
+ * 端到端（P0-3 的**真实生产链路**）：Importer.executeImportPlan 在失败分支完成整体回滚后
+ * 正常返回 { ok:false, rollback }，宿主是 runJournaled —— 本用例把两者按 src/index.ts 的
+ * 真实接法串起来（runJournaled 的 journalCtx 作为 executeImportPlan 的 snapshotBinding），
+ * 断言 journal 终态是 ROLLED_BACK 且回滚报告进 journal（修复前为 COMMITTED）。
+ * 同时断言 HTTP 层拿到的返回值形状不变（ok:false + rollback 报告仍在）。
+ */
+test('P0-3 端到端：executeImportPlan 整体回滚 → journal 记 ROLLED_BACK（不是 COMMITTED），返回值形状不变', async (t) => {
+  const { recovery } = await makeRecovery(t);
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-p03-e2e-'));
+  t.after(async () => { await fs.rm(workDir, { recursive: true, force: true }); });
+  const zipPath = path.join(workDir, 'backup.zip');
+
+  // 1) 造一个真实备份 ZIP（settings 分区含 demo namespace）
+  const srcCtx = makeContext('win32', 'C:/src/.dsh', 'web');
+  const sectionData = { version: 1, namespaces: { demo: { value: { a: 1 }, revision: 1, secrets: [] } } };
+  const baseAdapter = (over: Partial<ConfigAdapter>): ConfigAdapter => ({
+    id: 'settings', displayName: 'settings', defaultIncluded: true, portability: 'portable',
+    async export() { return { sectionId: 'settings', data: sectionData, counts: { n: 1 }, warnings: [] }; },
+    async validate() { return { valid: true, issues: [] }; },
+    async analyzeImport() { return []; },
+    async applyItem() { return { ok: true }; },
+    ...over,
+  } as ConfigAdapter);
+  await new Exporter({ ctx: srcCtx, adapters: [baseAdapter({})], now: () => new Date('2026-09-13T00:00:00.000Z') })
+    .export({ includeSecrets: false, outPath: zipPath });
+
+  // 2) 目标机：demo 已存在（快照可登记原值），applyItem 必失败 → 触发整体回滚
+  const dstCtx = makeContext('win32', 'C:/dst/.dsh', 'web');
+  dstCtx.settings.ns.set('demo', { value: { a: 0 }, revision: 3, secrets: [] });
+  const failing = baseAdapter({
+    async analyzeImport() {
+      return [{
+        id: 'settings:demo', kind: 'Update' as const, adapter: 'settings' as const,
+        description: 'demo', severity: 'info' as const, target: { adapter: 'settings' as const, ref: 'demo' },
+      }];
+    },
+    async applyItem() { return { ok: false, message: 'boom' }; },
+  });
+  const store = new MemSnapshotStore();
+  const importer = new Importer({ ctx: dstCtx, adapters: [failing], snapshotStore: store });
+  const plan: ImportPlan = {
+    items: [{
+      id: 'settings:demo', kind: 'Update', adapter: 'settings', description: 'demo', severity: 'info',
+      target: { adapter: 'settings', ref: 'demo' },
+    }],
+    globalStrategy: 'merge', pathMappings: [], missingSecrets: [], needsRestart: false,
+    estimatedActions: {} as ImportPlan['estimatedActions'],
+  };
+
+  // 3) 真实接法：宿主 gate 的 journalCtx 作为引擎的 snapshotBinding
+  const engine: { result: { ok: boolean; rollback: unknown } | null } = { result: null };
+  const { operationId } = await recovery.runJournaled({
+    operationType: 'import-apply',
+    lockCtx: lockCtxOf('owner-t16-e2e'),
+    deferredSnapshot: true,
+    fn: async (jctx) => {
+      const r = await importer.executeImportPlan(zipPath, plan, {
+        confirm: true,
+        rollbackOnError: true,
+        snapshotBinding: jctx,
+      });
+      engine.result = { ok: r.ok, rollback: r.rollback };
+      return r;
+    },
+  });
+
+  assert.equal(engine.result?.ok, false, '引擎仍以 ok:false 返回（HTTP 层报告形状不变）');
+  assert.ok(engine.result?.rollback !== null, '回滚报告仍随返回值交给调用方');
+  assert.deepEqual(
+    store.snapshots.get([...store.snapshots.keys()][0]!)?.status,
+    'rolled-back',
+    '引擎侧仍把快照标记为 rolled-back',
+  );
+
+  const j = await recovery.store.load(operationId);
+  assert.ok(j !== null);
+  assert.notEqual(j.state, 'COMMITTED', '端到端：已回滚的导入绝不能被 journal 记为 COMMITTED');
+  assert.equal(j.state, 'ROLLED_BACK');
+  assert.deepEqual(j.rollback.failed, [], '补偿全部成功 → journal 记 full');
+  assert.equal(j.rollback.full, true);
+  assert.equal(await recovery.store.readSafeMode(), false, '完整回滚不置 SAFE MODE');
 });

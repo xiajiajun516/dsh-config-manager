@@ -26,65 +26,17 @@ import type {
   RecoveryConfirmResult, RecoveryDismissResult, RecoveryExecuteResult,
   RecoveryLockRecoverResult, RecoveryPort, RecoveryPreview, RecoveryStatus, RecoveryVerifyResult,
 } from '../../ui/types.ts';
-import { ConfigManagerApiError } from '../api.ts';
+import { ConfigManagerApiError, getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import { RECOVERY_API } from '../common/routes.ts';
 
-/** recovery 端点常量（与 Host 半 src/index.ts API.recovery 前缀保持一致）。 */
-export const RECOVERY_API = {
-  base: '/api/dsh-config-manager/recovery',
-  status: '/api/dsh-config-manager/recovery/status',
-  /** issue #31：残留锁显式回收（非 operationId 路径；'lock' 不是 UUID）。 */
-  lockRecover: '/api/dsh-config-manager/recovery/lock/recover',
-} as const;
+/** recovery 端点常量：**唯一来源** = `common/routes.ts`（W4 单点化），此处重导出保持导入面。 */
+export { RECOVERY_API };
 
-/** recovery 请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐（restore/rollback 可能较慢）。 */
-const RECOVERY_TIMEOUT_MS = 5 * 60 * 1000;
+/** recovery 请求选项（长操作 5 分钟；超时文案沿用 `error.recoveryTimeout`，分钟插值）。 */
+const RECOVERY_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS, timeoutKey: 'error.recoveryTimeout' };
 
-/** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError（与 api.ts 同款）。 */
-async function readJson<T>(response: Response, t: UiT): Promise<T> {
-  const notMountedMessage = t('error.notMounted');
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
-    throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
-  }
-  if (!response.ok) {
-    const message =
-      typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : response.status === 404
-          ? notMountedMessage
-          : `HTTP ${response.status}`;
-    throw new ConfigManagerApiError(message);
-  }
-  return body as T;
-}
-
-/** POST JSON 请求（带超时：宿主卡死时 UI 拿到明确错误而不是永远转圈）。 */
-async function postJson<T>(path: string, body: unknown, t: UiT): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), RECOVERY_TIMEOUT_MS);
-  try {
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    return await readJson<T>(response, t);
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw new ConfigManagerApiError(
-        t('error.recoveryTimeout', { minutes: String(Math.round(RECOVERY_TIMEOUT_MS / 60000)) }),
-      );
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/* 请求封装（readJson / getJson / postJson：统一超时 + 取消 + 错误映射）见 common/http.ts。 */
 
 /** operationId 严格 UUID 校验（与 Host 侧 isValidOperationId 一致；防路径穿越）。 */
 const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -105,39 +57,37 @@ export class RecoveryApi implements RecoveryPort {
 
   /** GET /recovery/status：列出未解决 operation + reconcile decision。 */
   async status(): Promise<RecoveryStatus> {
-    const response = await fetch(RECOVERY_API.status);
-    return readJson<RecoveryStatus>(response, this.t);
+    return getJson<RecoveryStatus>(RECOVERY_API.status, this.t, RECOVERY_OPTS);
   }
 
   /** GET /recovery/:operationId/preview：只读恢复预览（restore plan + verification plan）。 */
   async preview(operationId: string): Promise<RecoveryPreview> {
-    const response = await fetch(operationPath(operationId, 'preview'));
-    return readJson<RecoveryPreview>(response, this.t);
+    return getJson<RecoveryPreview>(operationPath(operationId, 'preview'), this.t, RECOVERY_OPTS);
   }
 
   /** POST /recovery/:operationId/confirm：确认恢复（journal 保持 NEEDS_ATTENTION）。 */
   async confirm(operationId: string, userConfirmed: boolean): Promise<RecoveryConfirmResult> {
-    return postJson<RecoveryConfirmResult>(operationPath(operationId, 'confirm'), { userConfirmed }, this.t);
+    return postJson<RecoveryConfirmResult>(operationPath(operationId, 'confirm'), { userConfirmed }, this.t, RECOVERY_OPTS);
   }
 
   /** POST /recovery/:operationId/execute：执行恢复/回滚（NEEDS_ATTENTION → RECOVERING）。 */
   async execute(operationId: string, userConfirmed: boolean): Promise<RecoveryExecuteResult> {
-    return postJson<RecoveryExecuteResult>(operationPath(operationId, 'execute'), { userConfirmed }, this.t);
+    return postJson<RecoveryExecuteResult>(operationPath(operationId, 'execute'), { userConfirmed }, this.t, RECOVERY_OPTS);
   }
 
   /** POST /recovery/:operationId/verify：post-recovery verification（原子写 verification + terminal）。 */
   async verify(operationId: string): Promise<RecoveryVerifyResult> {
-    return postJson<RecoveryVerifyResult>(operationPath(operationId, 'verify'), {}, this.t);
+    return postJson<RecoveryVerifyResult>(operationPath(operationId, 'verify'), {}, this.t, RECOVERY_OPTS);
   }
 
   /** POST /recovery/:operationId/retry：验证失败后重跑 execute + verify。 */
   async retry(operationId: string, userConfirmed: boolean): Promise<RecoveryExecuteResult> {
-    return postJson<RecoveryExecuteResult>(operationPath(operationId, 'retry'), { userConfirmed }, this.t);
+    return postJson<RecoveryExecuteResult>(operationPath(operationId, 'retry'), { userConfirmed }, this.t, RECOVERY_OPTS);
   }
 
   /** POST /recovery/:operationId/dismiss：放弃恢复（quarantine，不销毁证据）。 */
   async dismiss(operationId: string, userConfirmed: boolean): Promise<RecoveryDismissResult> {
-    return postJson<RecoveryDismissResult>(operationPath(operationId, 'dismiss'), { userConfirmed }, this.t);
+    return postJson<RecoveryDismissResult>(operationPath(operationId, 'dismiss'), { userConfirmed }, this.t, RECOVERY_OPTS);
   }
 
   /**
@@ -146,6 +96,6 @@ export class RecoveryApi implements RecoveryPort {
    * 调用方必须先经过显式确认弹窗。
    */
   async recoverStaleLock(userConfirmed: boolean): Promise<RecoveryLockRecoverResult> {
-    return postJson<RecoveryLockRecoverResult>(RECOVERY_API.lockRecover, { userConfirmed }, this.t);
+    return postJson<RecoveryLockRecoverResult>(RECOVERY_API.lockRecover, { userConfirmed }, this.t, RECOVERY_OPTS);
   }
 }

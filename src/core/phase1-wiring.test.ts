@@ -89,14 +89,23 @@ test('P0 接线：lifecycle 的 mutation 路由走 withMutationGate + guard', ()
     assert.ok(body.includes(`withMutationGate('${op}'`), `缺少 mutation gate: ${op}`);
   }
   assert.ok(body.includes("withMutationGate(`lifecycle-${segments[0]}`"), 'undo/redo 应共用一个 gate');
-  assert.ok(body.includes('isLoopbackRequest(req)'), 'lifecycle 路由必须拒绝非 loopback');
-  assert.ok(body.includes("guard(rq, rs, 'POST')"), 'mutation 必须校验方法');
+  // W1（route kit）：围栏（loopback + 同源）与方法判定不再逐路由手写，而是由 endpoint() 在注册点
+  // 统一包装（src/routes/kit.ts 是唯一实现）。这里改为守住「该路由确实经 kit 声明且方法白名单正确」。
+  // 注意窗口从 'path: API.lifecycle' 起，故断言落在窗口内的后半段
+  assert.ok(
+    body.includes("methods: ['GET', 'POST'] }"),
+    'lifecycle 必须经 route kit 声明（围栏/方法判定由注册点统一包装）',
+  );
+  assert.ok(
+    INDEX_SRC.includes("endpoint({ kind: 'prefix', path: API.lifecycle, methods: ['GET', 'POST'] }"),
+    'lifecycle 必须用 endpoint() 声明（不再自造围栏/自判方法）',
+  );
 });
 
 test('P0 接线：崩溃归因路由为只读 GET', () => {
   const start = INDEX_SRC.indexOf('path: API.crash');
   const body = INDEX_SRC.slice(start, start + 1400);
-  assert.ok(body.includes("guard(req, res, 'GET')"), 'crash 路由应为只读 GET');
+  assert.ok(body.includes("path: API.crash, methods: ['GET']"), 'crash 路由应为只读 GET（经 route kit 声明）');
   assert.ok(body.includes('lastGoodSnapshotId'), '应返回 last-good 快照 id');
 });
 

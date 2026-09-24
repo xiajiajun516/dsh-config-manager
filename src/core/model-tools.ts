@@ -33,7 +33,7 @@ import type { SyncEngine } from '../sync/sync-engine.ts'
 import { createEncryptionProvider } from '../security/encryption.ts'
 import { SECTION_IDS } from '../schema/config.ts'
 import type { SectionId } from '../schema/types.ts'
-import { readFullSyncConfig, readSyncConfigFor } from '../sync/sync-config.ts'
+import { parseSyncChannel, readFullSyncConfig, readSyncConfigFor, SYNC_CHANNELS } from '../sync/sync-config.ts'
 import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
 import type { ConfigAdapter, HostContext, SecretScanner } from './types.ts'
 import { runWithMutationLock } from '../utils/env-lock.ts'
@@ -94,11 +94,9 @@ async function resolveEngine(
   deps: ModelToolsDeps,
   channel?: SyncTransportType,
 ): Promise<{ engine: SyncEngine; channel: SyncTransportType }> {
-  let ch: SyncTransportType = channel ?? 'git'
-  if (channel === undefined) {
-    const full = await readFullSyncConfig(deps.syncDir)
-    if (full !== null && full.transport === 'webdav') ch = 'webdav'
-  }
+  // 未显式指定通道 → 取已配置的活动通道（唯一判定口径 parseSyncChannel；缺省 git）
+  const full = channel === undefined ? await readFullSyncConfig(deps.syncDir) : null
+  const ch: SyncTransportType = channel ?? parseSyncChannel(full?.transport) ?? 'git'
   const cfg = await readSyncConfigFor(deps.syncDir, ch)
   if (cfg === null) {
     throw new Error(`同步通道 ${ch} 尚未配置（sync-config.json 缺失或损坏）`)
@@ -399,7 +397,7 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
     parameters: {
       channel: {
         type: 'string',
-        enum: ['git', 'webdav'],
+        enum: [...SYNC_CHANNELS],
         description: '同步通道；缺省 = 已配置的活动通道',
       },
       sections: {
@@ -436,7 +434,7 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
     parameters: {
       channel: {
         type: 'string',
-        enum: ['git', 'webdav'],
+        enum: [...SYNC_CHANNELS],
         description: '同步通道；缺省 = 已配置的活动通道',
       },
       snapshotId: {

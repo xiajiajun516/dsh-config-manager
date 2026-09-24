@@ -239,6 +239,83 @@ test('pull/preview：凭据载荷解密 → 计划含迁移项 + 返回仅内存
   }
 });
 
+test('有值的凭据一律进计划（本机已有也照常写回）——快照带密钥时导入必须真生效', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-existing-'));
+  try {
+    const transport = new MemSyncTransport();
+    const srcCtx = makeContext('win32', 'C:\\Users\\alice');
+    await makeSource(srcCtx);
+    await makeEngine(srcCtx, transport, tmp).push({
+      snapshotId: 'cred-remote', encrypt: true, password: PASSWORD, includeSecrets: true,
+    });
+
+    // 目标机**已经**有 DEEPSEEK_API_KEY（旧值）——快照里带了新值，用户显式勾了「导出密钥」
+    const dstCtx = makeTarget();
+    dstCtx.credentials.values.set('DEEPSEEK_API_KEY', 'sk-local-existing');
+    const engine = makeEngine(dstCtx, transport, tmp);
+
+    const preview = await engine.preview({ password: PASSWORD });
+    const secretItems = preview.plan!.items
+      .filter((i) => i.id.startsWith('secret:'))
+      .map((i) => [i.id, i.kind]);
+    assert.deepEqual(secretItems, [
+      ['secret:DEEPSEEK_API_KEY', 'MissingSecret'],
+      ['secret:GITHUB_TOKEN', 'MissingSecret'],
+    ], '有值 → 一律可写回项（不因本机已有而跳过，否则密钥等于没同步）');
+    assert.deepEqual(
+      preview.plan!.missingSecrets.map((s) => s.ref),
+      ['DEEPSEEK_API_KEY', 'GITHUB_TOKEN'],
+      'missingSecrets 与 items 同源（否则结果报告漏掉随快照恢复的凭据）',
+    );
+
+    // 执行侧：采纳后写回快照里的值（覆盖本机旧值 —— 这正是「导出密钥」的语义）
+    const plan = {
+      ...preview.plan!,
+      items: preview.plan!.items.filter((i) => i.id.startsWith('secret:')),
+    };
+    const report = await engine.applyItems(preview.zipPath, plan, { credentials: preview.credentials });
+    assert.deepEqual(report.failed, []);
+    assert.equal(dstCtx.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-real-cred-0001', '快照里的值必须写回');
+    assert.equal(dstCtx.credentials.values.get('GITHUB_TOKEN'), 'ghp_realcred0002');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('不同步凭据值时：快照里根本没有 credentialsStatus → 不产生任何凭据项（无值分支的来源说明）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-namonly-'));
+  try {
+    const transport = new MemSyncTransport();
+    const srcCtx = makeContext('win32', 'C:\\Users\\alice');
+    await makeSource(srcCtx);
+    // 源机确实配置了凭据（describe 报 configured=true）
+    srcCtx.credentials.values.set('DEEPSEEK_API_KEY', 'sk-real-cred-0001');
+    const push = await makeEngine(srcCtx, transport, tmp).push({ snapshotId: 'cred-no-payload' });
+    assert.equal(push.ok, true);
+    // credentialsStatus 是 deviceSpecific → 永不进同步通道（只有 includeSecrets 的凭据载荷能带 ref）
+    assert.equal(
+      transport.snapshots.get('cred-no-payload')!.credentials,
+      undefined,
+      '未勾「导出密钥」→ 无凭据载荷',
+    );
+    assert.ok(
+      !('credentialsStatus' in (transport.snapshots.get('cred-no-payload')!.sections as Record<string, unknown>)),
+      'credentialsStatus 属 deviceSpecific 分区 → 快照不含它',
+    );
+
+    const dstCtx = makeTarget();
+    dstCtx.credentials.values.set('DEEPSEEK_API_KEY', 'sk-local-existing');
+    const preview = await makeEngine(dstCtx, transport, tmp).preview();
+    assert.deepEqual(
+      preview.plan!.items.filter((i) => i.id.startsWith('secret:')),
+      [],
+      '既无值、又无凭据状态分区 → 同步不该凭空要求补录',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('applyItems：带凭据 Map → credentials.set 写回本机；不带 → 跳过且不写入', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-apply-'));
   try {

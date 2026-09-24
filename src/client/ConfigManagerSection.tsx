@@ -32,8 +32,8 @@ import { SyncSettingsView } from './sync/SyncSettingsView.tsx'
 import { MarketPanel } from './market/MarketPanel.tsx'
 import { AboutPanel } from './about/AboutPanel.tsx'
 import { ProfilesPanel } from './profiles/ProfilesPanel.tsx'
-import { RecoveryPanel } from './recovery/RecoveryPanel.tsx'
 import { HistoryPanel } from './history/HistoryPanel.tsx'
+import { RunsCenter } from './common/RunsCenter.tsx'
 import { LifecyclePanel } from './lifecycle/LifecyclePanel.tsx'
 import { toRecoveryView } from './recovery/recovery-view.ts'
 import { ConfirmDialog } from './common/ConfirmDialog.tsx'
@@ -99,7 +99,7 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
 
   /* ---------------- 活动与关于抽屉（drawerOpen 本地瞬态；子视图 moreSub 持久化） ---------------- */
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const openDrawer = (sub: 'history' | 'about'): void => {
+  const openDrawer = (sub: 'runs' | 'history' | 'about'): void => {
     runStore.patch({ more: { moreSub: sub } })
     setDrawerOpen(true)
   }
@@ -421,7 +421,21 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
       {/* 底部状态栏：运行状态 + 版本 */}
       <footer className={css.statusBar}>
         <StatusDot kind={statusKind} pulse={runningCount > 0} />
-        <span className={css.statusText}>{statusText}</span>
+        {/* 状态栏 = 运行中心的入口：有任务在跑时必须可点。
+            此前这里是**死文本** —— 关掉设置弹窗后，正在跑的导入在界面上再无任何入口。 */}
+        {runningCount > 0 ? (
+          <button
+            type="button"
+            className={`${css.statusText} ${css.statusAction}`}
+            title={t('shell.status.runningAction')}
+            aria-label={t('shell.status.runningAction')}
+            onClick={() => { openDrawer('runs') }}
+          >
+            {statusText}
+          </button>
+        ) : (
+          <span className={css.statusText}>{statusText}</span>
+        )}
         <span className={css.statusSpacer} />
         {version !== null && (
           <span className={css.statusMeta}>
@@ -454,18 +468,35 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
             <div style={{ padding: '10px 14px 0' }}>
               <Segmented
                 items={[
+                  // 语义排序：进行中（瞬时） → 迁移历史（持久审计） → 关于
+                  { id: 'runs', label: t('shell.drawer.runs') },
                   { id: 'history', label: historyT('view.history') },
                   { id: 'about', label: t('view.about') },
                 ]}
                 active={state.more.moreSub}
-                onChange={(id) => { runStore.patch({ more: { moreSub: id === 'about' ? 'about' : 'history' } }) }}
+                onChange={(id) => {
+                  runStore.patch({
+                    more: { moreSub: id === 'about' ? 'about' : id === 'runs' ? 'runs' : 'history' },
+                  })
+                }}
                 ariaLabel={t('shell.drawer.title')}
               />
             </div>
             <div className={css.drawerBody}>
-              {state.more.moreSub === 'history'
-                ? <HistoryPanel historyApi={historyApi} t={historyT} />
-                : <AboutPanel api={api} t={t} />}
+              {state.more.moreSub === 'runs'
+                ? (
+                  <RunsCenter
+                    api={api}
+                    // 事故恢复端口：运行中心用它显示/回收环境锁（残留锁的可见入口）
+                    recoveryApi={recoveryApi}
+                    t={t}
+                    // 决策框默认选项跟随用户既有的「失败不回滚」偏好（不推翻他的心智）
+                    defaultRollbackOnError={state.import.rollbackOnError}
+                  />
+                )
+                : state.more.moreSub === 'history'
+                  ? <HistoryPanel historyApi={historyApi} t={historyT} />
+                  : <AboutPanel api={api} t={t} />}
             </div>
           </aside>
         </>

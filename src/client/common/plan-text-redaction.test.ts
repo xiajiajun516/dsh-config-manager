@@ -84,11 +84,33 @@ const RENDER_POINTS: RenderPoint[] = [
     why: '分析告警（含 ZIP 条目名等攻击者可控字符串）',
   },
   {
-    id: 'import-log-line',
-    file: 'src/client/import/ImportWizardView.tsx',
-    redacted: R('className={css.logLine}>{redact(line)}</div>'),
-    bare: R('className={css.logLine}>{line}</div>'),
-    why: '导入执行日志行（宿主 /progress 回传的命令输出）',
+    id: 'import-log-item-line',
+    file: 'src/client/import/ImportLogPanel.tsx',
+    redacted: R('className={css.logLine} data-level={entry.level}>{redact(logEntryTitle(entry))}</div>'),
+    bare: R('className={css.logLine} data-level={entry.level}>{logEntryTitle(entry)}</div>'),
+    why: '导入日志的项状态行（itemId 来自宿主 /progress；脱敏后渲染）',
+  },
+  {
+    id: 'import-log-detail-line',
+    file: 'src/client/import/ImportLogPanel.tsx',
+    redacted: R('className={css.logDetail} data-kind={detail.kind}>{redact(detail.text)}</div>'),
+    bare: R('className={css.logDetail} data-kind={detail.kind}>{detail.text}</div>'),
+    why: '导入日志的明细行（子进程命令行 / 引擎说明文本）',
+  },
+  /* ---------------- 导入结果报告（2026-09 结构化结果页） ---------------- */
+  {
+    id: 'import-report-problem-item',
+    file: 'src/client/common/ReportView.tsx',
+    redacted: R('<span className={css.reportProblemText}>{redact(p.itemId)}</span>'),
+    bare: R('<span className={css.reportProblemText}>{p.itemId}</span>'),
+    why: '结果页「需要你关注」的失败/警告项 id（宿主 executed 回传）',
+  },
+  {
+    id: 'import-report-problem-reason',
+    file: 'src/client/common/ReportView.tsx',
+    redacted: R('{redact(p.message ?? t(\'report.unknownReason\'))}'),
+    bare: R('{p.message ?? t(\'report.unknownReason\')}'),
+    why: '结果页失败/警告项的原因文本（适配器拼装，可能内联本地路径/配置片段）',
   },
   /* ---------------- 档案（DSH profile）原文 ---------------- */
   {
@@ -182,8 +204,8 @@ const RENDER_POINTS: RenderPoint[] = [
   {
     id: 'picker-unit-label-title',
     file: 'src/client/common/ContentPicker.tsx',
-    redacted: R('title={safeLabel}>{middleEllipsis(safeLabel, UNIT_NAME_MAX)}</span>'),
-    bare: R('title={u.label}>{middleEllipsis(u.label, UNIT_NAME_MAX)}</span>'),
+    redacted: R('title={safeLabel}>{tailWeightedEllipsis(safeLabel, UNIT_NAME_MAX)}</span>'),
+    bare: R('title={u.label}>{tailWeightedEllipsis(u.label, UNIT_NAME_MAX)}</span>'),
     why: '单元名的 title 与可见文本（先脱敏、后省略）',
   },
   {

@@ -10,7 +10,6 @@
  * kind/result/sections 均为枚举常量，无 secret 承载面。
  */
 import { useEffect, useRef, useState } from 'react'
-import type { ReactNode } from 'react'
 import { redact } from '../../security/redaction.ts'
 import { HistoryApi, type HistoryListResult, type HistoryExportFormat } from './history-api.ts'
 import type { TranslateNS } from '../client-types.ts'

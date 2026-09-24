@@ -32,12 +32,13 @@ import type { Logger } from '../utils/logger.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
+import type { JournalRunContext } from '../core/phase3-host.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
 import { withMutationLock, LOCK_BLOCK_MESSAGE } from '../utils/env-lock.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
-import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './autosync-config.ts';
-import { readSyncConfigFor, isGitConfig, isWebDavConfig } from './sync-config.ts';
+import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
+import { readSyncConfigFor, isGitConfig, isWebDavConfig, SYNC_CHANNELS } from './sync-config.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
 import { readSyncHistory, appendAutosyncEntry } from './sync-history.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
@@ -128,7 +129,12 @@ export interface AutoSyncSchedulerOptions {
       operationType: string;
       lockCtx: MutationLockContext;
       intent: { adapter: string; ref: string; kind: string };
-      fn: () => Promise<unknown>;
+      /**
+       * 审计 P0-23：上下文与 runJournaled **共用同一份绑定面**（含 recordRollback）。
+       * 自动同步 apply 必须把它透传给 applyMergePlan，否则引擎内部完成的整体回滚
+       * 会被 executeImportPlan 正常返回，最终被记成 COMMITTED（已回滚却报成功）。
+       */
+      fn: (ctx?: JournalRunContext) => Promise<unknown>;
     }): Promise<{ operationId: string; result: unknown }>;
   };
 }
@@ -137,7 +143,6 @@ export class AutoSyncScheduler {
   private readonly syncDir: string;
   private readonly host: { log: Logger };
   private readonly makeSyncEngine: (cfg: SyncConfig) => SyncEngine;
-  private readonly msg: MsgFunc;
   private readonly runs: RunRegistry;
   private readonly now: () => Date;
   private readonly readConfig: (channel: SyncTransportType) => Promise<AutosyncConfig>;
@@ -151,7 +156,7 @@ export class AutoSyncScheduler {
   private readonly detectLocalChange: (engine: SyncEngine) => Promise<boolean>;
   private readonly mutationLock: MutationLockPort | undefined;
   private readonly isBlocked: (() => boolean) | undefined;
-  private readonly phase3Recovery: { runExternalIntent(opts: { operationType: string; lockCtx: MutationLockContext; intent: { adapter: string; ref: string; kind: string }; fn: () => Promise<unknown> }): Promise<{ operationId: string; result: unknown }> } | undefined;
+  private readonly phase3Recovery: { runExternalIntent(opts: { operationType: string; lockCtx: MutationLockContext; intent: { adapter: string; ref: string; kind: string }; fn: (ctx?: JournalRunContext) => Promise<unknown> }): Promise<{ operationId: string; result: unknown }> } | undefined;
   /** 本次 runOnce 由 withMutationLock 取得的下游锁上下文（供 apply/push journal-wrap），非线程级。 */
   private lockCtxForJournal: MutationLockContext | null = null;
 
@@ -164,7 +169,6 @@ export class AutoSyncScheduler {
     this.syncDir = opts.syncDir;
     this.host = opts.host;
     this.makeSyncEngine = opts.makeSyncEngine;
-    this.msg = opts.msg;
     this.runs = opts.runs;
     this.now = opts.now ?? (() => new Date());
     this.readConfig = opts.readConfig ?? ((channel) => readAutosyncConfig(this.syncDir, channel));
@@ -209,7 +213,8 @@ export class AutoSyncScheduler {
   private refreshTimers(): void {
     for (const timer of this.timers.values()) this.clearTimer(timer);
     this.timers.clear();
-    const channels: SyncTransportType[] = ['git', 'webdav'];
+    // 通道清单唯一来源 = SYNC_CHANNELS（此前同一数组在本文件写了两遍：漏改一处即某通道永不排期）
+    const channels = SYNC_CHANNELS;
     for (const channel of channels) {
       void this.readConfig(channel).then((cfg) => {
         if (this.stopped || !cfg.enabled) return;
@@ -235,7 +240,8 @@ export class AutoSyncScheduler {
 
   /** 启动触发下载合并（每个 enabled 通道；受各自 startupMinIntervalMs 阈值约束）。 */
   private async startupRuns(): Promise<void> {
-    const channels: SyncTransportType[] = ['git', 'webdav'];
+    // 通道清单唯一来源 = SYNC_CHANNELS（此前同一数组在本文件写了两遍：漏改一处即某通道永不排期）
+    const channels = SYNC_CHANNELS;
     for (const channel of channels) {
       try {
         const cfg = await this.readConfig(channel);
@@ -277,6 +283,24 @@ export class AutoSyncScheduler {
       return { status: 'skipped', direction: 'none', skipReason: 'conflict', historyId, consecutiveFailures: cfg.consecutiveFailures };
     }
 
+    /**
+     * 收敛 run 账。**注册之后的每一条提前 return 都必须先调用它**。
+     *
+     * 为什么要有这个函数（真机 bug，2026-09）：锁获取段（下面 Phase 2）位于主 try **之外**，
+     * 那两个 mutation-locked 早退曾经直接 return —— run 于是永久停在 running。实测证据：
+     * sync-history 记下 `skipped / mutation-locked @19:30:45.104`，同刻注册的 run 直到 25 分钟后
+     * 仍 updatedAt == createdAt；此后每次 autosync 都 `register('autosync')` → RunConflictError
+     * → 后台同步静默停摆（正是下面 finally 注释警告的后果），运行中心里那张卡片也「一直在加载」。
+     */
+    const finishRun = (): void => {
+      if (runId === null) return;
+      try {
+        this.runs.finish(runId, { kind: 'autosync' });
+      } catch {
+        /* 尽力而为：收尾失败不影响同步结果 */
+      }
+    };
+
     // Phase 2 锁：autosync 的 apply（写本地配置）与 push（写远端+本地散文件）属 GLOBAL mutation。
     // 获取失败（另一项 DSH 任务进行中）→ skipped(mutation-locked)；成功则在整个 runOnce 持锁并在 finally 释放。
     // 无锁环境（测试未注入 mutationLock）→ 不锁定，直接执行（与旧行为一致）。
@@ -303,6 +327,7 @@ export class AutoSyncScheduler {
             createdAt: nowIso,
             failureCountAtRun: cfg.consecutiveFailures,
           });
+          finishRun();
           return {
             status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId,
             consecutiveFailures: cfg.consecutiveFailures,
@@ -321,6 +346,7 @@ export class AutoSyncScheduler {
           createdAt: nowIso,
           failureCountAtRun: cfg.consecutiveFailures,
         });
+        finishRun();
         return { status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId, consecutiveFailures: cfg.consecutiveFailures };
       }
     }
@@ -439,7 +465,13 @@ export class AutoSyncScheduler {
           // 此处不立即返回，让 Phase C 依据 localDirty 决定是否上传本地改动。
         } else {
           // Phase B: 写入本地（applyMergePlan，无 review-queue 写）。P0-A：包 intent journal。
-          const rawApply = async () => engine.applyMergePlan(apply);
+          const rawApply = async (ctx?: JournalRunContext) => engine.applyMergePlan(
+            apply,
+            // 审计 P0-23（真实调用方提供绑定）：把 intent journal 的绑定面透传下去，使
+            // applyMergePlan 内部的整体回滚经 recordRollback 上报 → 终态 ROLLED_BACK 而非 COMMITTED。
+            // 无 phase3Recovery（无锁环境/测试）时不传绑定，行为与改造前逐字一致。
+            ctx !== undefined ? { snapshotBinding: ctx } : {},
+          );
           const applyReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
             ? (await this.phase3Recovery.runExternalIntent({
                 operationType: 'autosync-apply', lockCtx: this.lockCtxForJournal,
@@ -549,16 +581,10 @@ export class AutoSyncScheduler {
       return result;
     } finally {
       this.running = false;
-      // 收尾 RunRegistry：不 finish 会让 autosync 的 running 记录滞留
-      // （保留期 30 分钟），期间任何再次 runOnce 都会 register('autosync')
-      // → RunConflictError → 永远 skip(conflict)，后台同步就此停摆。
-      if (runId !== null) {
-        try {
-          this.runs.finish(runId, { kind: 'autosync' });
-        } catch {
-          /* 尽力而为：收尾失败不影响同步结果 */
-        }
-      }
+      // 收尾 RunRegistry：不 finish 会让 autosync 的 running 记录滞留，期间任何再次 runOnce
+      // 都会 register('autosync') → RunConflictError → 永远 skip(conflict)，后台同步就此停摆。
+      // 同一收敛点也必须在**主 try 之外**的早退路径上调用（见 finishRun 的注释）。
+      finishRun();
       // Phase 2 锁：始终释放（若本次成功获取）
       if (releaseLock !== null) {
         await releaseLock().catch(() => { /* 尽力而为 */ });

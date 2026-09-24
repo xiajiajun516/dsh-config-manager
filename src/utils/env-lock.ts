@@ -28,7 +28,6 @@ import { atomicWriteFile } from './atomic-write.ts'
 
 // ---------- 常量 ----------
 
-const WINDOWS = process.platform === 'win32'
 /** 锁目录相对 dataDir */
 export const LOCKS_DIR = 'locks'
 /** 所有权记录文件名（immutable） */
@@ -279,6 +278,17 @@ export interface RecoverResult {
   detail?: string
 }
 
+/**
+ * heartbeat 定时器注入面（缺省 = 全局 setInterval/clearInterval）。
+ * 测试注入手动 tick 的假定时器后，心跳推进**完全确定**（不依赖墙钟/事件循环负载），
+ * 断言可写成「tick 后读到的值」而不是「等 N 毫秒后猜测」。
+ */
+export interface LockTimerApi {
+  /** 返回值即句柄（真实实现是 Timeout；测试实现可是任意对象） */
+  setInterval(fn: () => void | Promise<void>, ms: number): unknown
+  clearInterval(handle: unknown): void
+}
+
 export interface EnvLockManagerOptions {
   /** dataDir（缺省 ~/.dsh/dsh-config-manager）—— 锁在 <dataDir>/locks */
   dataDir?: string
@@ -307,6 +317,8 @@ export interface EnvLockManagerOptions {
   lockVersion?: string
   /** heartbeat 续期写失败回调（留痕；不中断 mutation） */
   onHeartbeatWriteFailure?: (err: unknown) => void
+  /** heartbeat 定时器（测试可注入手动 tick 的假定时器；缺省用全局定时器） */
+  timers?: LockTimerApi
 }
 
 /** 默认 io 实现 */
@@ -322,26 +334,14 @@ function defaultIo(): EnvLockIo {
   }
 }
 
+/** 默认 heartbeat 定时器实现（全局定时器；unref 由调用方按句柄能力决定） */
+const defaultTimers: LockTimerApi = {
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (handle) => { clearInterval(handle as ReturnType<typeof setInterval>) },
+}
+
 /** 默认进程探测（跨平台 best-effort；OS identity 能力由平台决定） */
 function defaultProbe(): ProcessIdentityProbe {
-  const selfOsIdentity = (() => {
-    try {
-      if (process.platform === 'linux') {
-        // /proc/<pid>/stat 第 22 字段 = starttime（tick 数）
-        const l = fssync.readFileSync(`/proc/${process.pid}/stat`, 'utf8').toString()
-        const afterComm = l.slice(l.lastIndexOf(')') + 1).trim().split(/\s+/)
-        // 格式: state ppid ... starttime：comm 后第一字段是 state，starttime 是第 22 个（index 21 起）
-        return `linux:${afterComm[21] ?? 'unknown'}`
-      }
-      if (process.platform === 'darwin') return `darwin:${process.pid}:${Date.now()}` // 不可靠 → 保守返回占位
-      if (process.platform === 'win32') {
-        // Windows 无简单 /proc；best-effort 用 process 自身属性（不真验 PID reuse，交给 probe 标记能力）
-        return null
-      }
-      return null
-    } catch { return null }
-  })()
-
   const canGetOsIdentity = (): boolean => {
     // Linux /proc 可靠；Windows/macOS 由 probe 运行时二次探测决定，这里保守：仅声明 Linux 能力
     return process.platform === 'linux'
@@ -434,12 +434,14 @@ export class EnvironmentLockManager {
   private readonly defaultTarget: string
   /** 本 manager 唯一 id（forever token 校验用） */
   private readonly managerId: string
+  /** heartbeat 定时器注入面（缺省全局定时器） */
+  private readonly timers: LockTimerApi
   /** 本 manager 持有的当前活跃 token（单锁单持有者） */
   private activeToken: MutationLockToken | null = null
-  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  /** heartbeat 定时器句柄（注入面返回值，类型未知 → 用 null 判「未启动」） */
+  private heartbeatTimer: unknown = null
   private heartbeatSeq = 0
   private readonly activeInstanceId: string
-  private heartbeatDegraded = false
   /** 串行化的 heartbeat 写链（**最后一次写**的 promise）；release 前用于 drain，见 drainHeartbeat */
   private pendingHeartbeat: Promise<void> = Promise.resolve()
   /** 瞬时错误（EBUSY 等）有界重试计数 */
@@ -457,9 +459,6 @@ export class EnvironmentLockManager {
     return true
   }
 
-  /** 重置瞬时重试计数（每次 acquire 成功/失败收敛时调用） */
-  private resetTransientRetries(): void { this.transientRetries = 0 }
-
   constructor(opts: EnvLockManagerOptions = {}) {
     this.locksDir = opts.locksDir ?? path.join(opts.dataDir ?? path.join(os.homedir(), '.dsh', 'dsh-config-manager'), LOCKS_DIR)
     this.io = opts.io ?? defaultIo()
@@ -473,6 +472,7 @@ export class EnvironmentLockManager {
     this.acquireTimeoutMs = opts.acquireTimeoutMs ?? DEFAULT_ACQUIRE_TIMEOUT_MS
     this.lockVersion = opts.lockVersion ?? '0.1.0'
     this.onHeartbeatWriteFailure = opts.onHeartbeatWriteFailure ?? (() => {})
+    this.timers = opts.timers ?? defaultTimers
     this.defaultOp = opts.op ?? 'mutation'
     this.defaultTarget = opts.target ?? 'unknown'
     this.managerId = randomHex(16)
@@ -599,7 +599,6 @@ export class EnvironmentLockManager {
       }
       this.activeToken = token
       this.heartbeatSeq = 0
-      this.heartbeatDegraded = false
       this.startHeartbeat()
       return { state: 'ACQUIRED', token, detail: `op=${op}` }
     }
@@ -642,7 +641,6 @@ export class EnvironmentLockManager {
     if (st.kind === 'missing') {
       // ownership 文件不存在：已被清除/尚未落盘 → 视为已释放；清 token + 尽力清 heartbeat
       // 先清 token（writeHeartbeat 的「不再写」闸门）再 drain，最后清理 sidecar（同成功路径的顺序理由）
-      this.heartbeatDegraded = false
       this.activeToken = null
       await this.drainHeartbeat()
       await this.cleanupHeartbeat(instanceId).catch(() => {})
@@ -650,13 +648,20 @@ export class EnvironmentLockManager {
     }
     if (st.kind === 'corrupt') {
       // ownership 存在但损坏/不可读：无法确证属于自己 → ownership-lost，不 unlink（防误删他人/异常文件）
-      this.heartbeatDegraded = false
       this.activeToken = null
+      // 与成功路径同序：先清 token（「不再写」闸门）再 drain，保证在途原子写（tmp→rename）在本方法返回前落地，
+      // 不留给调用方的目录清理（Windows 上即 rmSync ENOTEMPTY / .dshcm.*.tmp 残留）。
+      await this.drainHeartbeat()
       throw new EnvironmentLockOwnedByAnotherError(
         `release: 磁盘 ownership 无法读取/损坏（可能被异常恢复或人工修改），拒绝 unlink（ownership-lost）`,
       )
     }
     if (st.rec.owner.instanceId !== instanceId) {
+      // 保留 activeToken（调用方可能修复 ownership 后重试 release），但**必须 drain 在途写**：
+      // 定时器已在方法开头 stopHeartbeat()，故此刻起不会再排入新写，drain 有界且确定。
+      // 不 drain 则已启动的 tmp→rename 会在本方法抛出**之后**落盘，与调用方的目录清理竞争
+      // （本仓库实测：紧接 release 的 rmSync(dir) 在 200 次循环里约 19% 抛 ENOTEMPTY）。
+      await this.drainHeartbeat()
       throw new EnvironmentLockOwnedByAnotherError(
         `release: 磁盘 ownership.instanceId=${st.rec.owner.instanceId} !== 本 token ${instanceId}（ownership-lost）`,
       )
@@ -667,13 +672,15 @@ export class EnvironmentLockManager {
     } catch (e) {
       // unlink 失败：**保留 activeToken**（仍持有该磁盘 inode），调用方可重试 release；
       // 绝不在此清空 token（否则锁卡死在磁盘而令牌失效）。
+      // 同 ownership-lost 分支：抛错前 drain 在途写（定时器已停 → drain 有界），
+      // 否则调用方随后的目录清理会与已启动的 tmp→rename 竞争。
+      await this.drainHeartbeat()
       throw new EnvironmentLockIOError(`release: unlink ${this.ownershipPath} 失败: ${e instanceof Error ? e.message : String(e)}`, e)
     }
     // unlink 成功 → 释放完成：**先清 token 再 drain**，最后清自己的 heartbeat sidecar。
     // 顺序关键：activeToken=null 必须早于 drain —— 否则 interval 可能在 drain 返回之后、cleanup 之前
     // 再排入一次写并真正落盘，把刚删掉的 sidecar 复活（writeHeartbeat 以 activeToken===null 作为「不再写」的闸门）。
     // 本仓库实测：顺序颠倒时 L3 回归用例可稳定复现 sidecar 复活（该用例正是捕获了这一点）。
-    this.heartbeatDegraded = false
     this.activeToken = null
     await this.drainHeartbeat()
     await this.cleanupHeartbeat(instanceId).catch(() => {})
@@ -683,8 +690,11 @@ export class EnvironmentLockManager {
 
   private startHeartbeat(): void {
     if (this.heartbeatTimer !== null) return
-    this.heartbeatTimer = setInterval(() => { void this.trackHeartbeat() }, Math.max(this.heartbeatIntervalMs, 50))
-    if (this.heartbeatTimer.unref) this.heartbeatTimer.unref()
+    // 回调**返回**写链 promise（不再 `void` 吞掉）：注入的假定时器据此 await 一次 tick 的落盘，
+    // 使心跳推进在测试里完全确定（全局定时器下返回值被忽略，行为不变）。
+    this.heartbeatTimer = this.timers.setInterval(() => this.trackHeartbeat(), Math.max(this.heartbeatIntervalMs, 50))
+    const handle = this.heartbeatTimer as { unref?: () => void } | null | undefined
+    if (handle !== null && handle !== undefined && typeof handle.unref === 'function') handle.unref()
     // 立即写一次，确立初始 heartbeat（stale 窗口从此刻起）——走 trackHeartbeat 纳入可 drain 的串行链：
     // 否则这个 fire-and-forget 的写可能在 release 清理 sidecar 之后才落盘，把 sidecar 重新创建（或残留 .dshcm.*.tmp），
     // 在 Windows 上即表现为目录清理竞态（after-hook rmSync ENOTEMPTY）。
@@ -693,9 +703,33 @@ export class EnvironmentLockManager {
 
   private stopHeartbeat(): void {
     if (this.heartbeatTimer !== null) {
-      clearInterval(this.heartbeatTimer)
+      this.timers.clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
+  }
+
+  /**
+   * 等待**当前在途**的 heartbeat 写完成（不改变持有状态、不停定时器）。
+   * 首写在 startHeartbeat() 中**同步**入链，故 acquire() 之后调用本方法必然等到首写落盘。
+   *
+   * 语义边界（本文件只保留这一套 drain，勿再引入第二套）：
+   *  - 本方法 = **只等**：给「某次心跳必须已落盘」当确定性前提（测试的 waitHeartbeat / c6 / c9 / c10）。
+   *  - `stopHeartbeatAndDrain()` = **停定时器再等**：收尾静止（测试 after-hook 删目录前）。
+   *  - `release()` 内部复用同一个私有 `drainHeartbeat()`，且**每一条**退出路径（含各类抛错分支）都先 drain。
+   */
+  async flushHeartbeat(): Promise<void> {
+    await this.drainHeartbeat()
+  }
+
+  /**
+   * **收尾静止**：停掉 heartbeat 定时器并等待在途写结束。返回后本 manager 不会再产生任何文件写入，
+   * 调用方可安全删除 locks 目录（`rmSync(recursive)` 不会在遍历途中被新写入打断 ——
+   * 这正是 Windows 上 after-hook ENOTEMPTY 的根因）。不 unlink ownership/sidecar：
+   * 锁的持有状态与磁盘内容由调用方的 release 决定。
+   */
+  async stopHeartbeatAndDrain(): Promise<void> {
+    this.stopHeartbeat()
+    await this.drainHeartbeat()
   }
 
   /**
@@ -703,8 +737,12 @@ export class EnvironmentLockManager {
    * 为什么必要：writeHeartbeat 走 atomicWriteFile（tmp 写入 → rename），是异步多步操作。
    * 若 release 只 stopHeartbeat + unlink sidecar 而不等待，一个已启动的写会在 unlink 之后才 rename，
    * 于是把刚删掉的 sidecar **重新创建**（或残留 .dshcm.*.tmp）——Windows 上即 after-hook rmSync ENOTEMPTY。
-   * 调用点保证：release 先同步 stopHeartbeat() 并置 activeToken=null，故此刻起不会有新的写开始；
-   * 因此 drain 之后 cleanupHeartbeat 删除的 sidecar 不会再被复活。
+   * 调用点保证：release 开头**先同步 stopHeartbeat()**，其后任何时候都不会再排入新写，drain 因而有界且确定。
+   * 因此 release 的**每一条**退出路径都必须先 drain 再返回/抛出（成功、ownership missing、corrupt、
+   * instanceId 不匹配、unlink 失败）—— 漏掉任何一条，已启动的 tmp→rename 都会在 release 返回后落盘，
+   * 与调用方的目录清理竞争（Windows 实测：after-hook rmSync ENOTEMPTY / .dshcm.*.tmp 残留；
+   * 被漏掉的正是 ownership-lost 分支，200 次循环约 19% 复现）。置 activeToken=null 的路径仍须
+   * **先清 token 再 drain**，否则 interval 可在 drain 返回后、cleanup 前再排入一次写，把刚删的 sidecar 复活。
    */
   private async drainHeartbeat(): Promise<void> {
     try { await this.pendingHeartbeat } catch { /* writeHeartbeat 自身已吞错；此处仅防御 */ }
@@ -727,9 +765,7 @@ export class EnvironmentLockManager {
     const sbPath = path.join(this.locksDir, `${HEARTBEAT_PREFIX}${this.activeInstanceId}`)
     try {
       await atomicWriteFile(sbPath, encode(rec), { mode: 0o600 })
-      this.heartbeatDegraded = false
     } catch (e) {
-      this.heartbeatDegraded = true
       this.onHeartbeatWriteFailure(e)
     }
   }

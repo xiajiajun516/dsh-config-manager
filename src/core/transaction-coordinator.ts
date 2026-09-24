@@ -123,7 +123,7 @@ export class MutationTransactionCoordinator {
       packageVersion: this.deps.packageVersion,
       environmentFingerprint: this.deps.environmentFingerprint,
     }, new Date().toISOString());
-    let journal: OperationJournal = await this.deps.store.create(entry);
+    await this.deps.store.create(entry);
 
     let snapshotId: string | null = null;
     try {
@@ -131,7 +131,7 @@ export class MutationTransactionCoordinator {
       if (op.createSnapshot !== undefined) {
         const snap = await op.createSnapshot();
         snapshotId = snap.snapshotId;
-        journal = await this.deps.store.update(operationId, (j) => {
+        await this.deps.store.update(operationId, (j) => {
           const next = { ...j, snapshotId };
           return transitionJournalState(next, 'SNAPSHOT_CREATED');
         });
@@ -148,7 +148,7 @@ export class MutationTransactionCoordinator {
           beforeFp: null, afterFp: null, status: 'planned', appliedAt: null,
         };
       }
-      journal = await this.deps.store.update(operationId, (j) => {
+      await this.deps.store.update(operationId, (j) => {
         const withSteps = { ...j, plannedSteps, steps: { ...j.steps, ...stepMap } };
         return transitionJournalState(withSteps, 'APPLYING');
       });

@@ -7,8 +7,8 @@
  * 子命令：
  *   snapshots [--data-dir <dir>]         列出快照（listSnapshots）
  *   restore [--id <uuid>] [--dry-run]    恢复到导入前状态（planRestore 预览 / restore 执行）
- *           [--data-dir <dir>] [--profile <name>] [--settings <path>]
- *   reinstall [--version <v>] [--yes] [--list] [--wipe-config] [--dry-run]
+ *           [--data-dir <dir>] [--data-root <dir>] [--profile <name>] [--settings <path>]
+ *   reinstall [--version <v>] [--yes] [--list] [--wipe-config] [--dry-run] [--data-root <dir>]
  *             一键重装 DSH 程序（交互多选 + 二次确认 / 跨平台执行）
  *   verify [--id <file|path>] [--json] [--data-dir <dir>]
  *             离线只读自检备份 ZIP（结构 + integrity/checksums 完整性；不改一个字节）
@@ -17,6 +17,9 @@
  *   help | --help | -h                    显示全部命令与说明
  *
  * 缺省数据目录 = $DSH_HOME/dsh-config-manager/snapshots（$DSH_HOME 缺省 ~/.dsh）。
+ * 破坏性命令（restore / reinstall）的 SAFE MODE 门按「控制面根」定位标记：
+ *   --data-root 显式给出 → 只用它；否则用 --data-dir 本身及其父目录 + 缺省根 $DSH_HOME/dsh-config-manager。
+ * 插件配置了自定义 dataDir 时必须显式传 --data-root，否则安全门只能按候选位置保守检查。
  */
 import os from 'node:os';
 import fssync from 'node:fs';
@@ -34,10 +37,11 @@ import {
 import {
   REINSTALL_ITEMS, buildReinstallPlan, isWindows, detectInstalledDshVersion,
   writeReinstallRecoveryPoint,
-  type ReinstallPlan, type ReinstallItemId, type ReinstallStep,
+  type ReinstallPlan, type ReinstallItemId,
 } from '../core/reinstall.ts';
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError } from '../utils/env-lock.ts';
-import { Phase3Recovery } from '../core/phase3-host.ts';
+import { runSessionsRepair } from './sessions-repair.ts';
+import { Phase3Recovery, readSafeModeMarkerSync, safeModeMarkerPath } from '../core/phase3-host.ts';
 import {
   verifyBackupZip, type BackupVerifyResult, type BackupVerifyVerdict,
 } from '../core/backup-verify.ts';
@@ -56,12 +60,17 @@ import type { Manifest, SectionId } from '../schema/types.ts';
 
 export type CliCommand =
   | 'snapshots' | 'restore' | 'reinstall' | 'recover-stale-lock'
-  | 'verify' | 'backup' | 'help';
+  | 'verify' | 'backup' | 'sessions' | 'help';
 
 export interface CliOptions {
   command: CliCommand;
-  /** --data-dir：快照数据目录覆盖 */
+  /** --data-dir：快照数据目录（verify/backup 下为导出目录）覆盖 */
   dataDir?: string;
+  /**
+   * --data-root：插件数据根 dataDir（宿主 config.dataDir；SAFE MODE / 环境锁 / journal 都在它之下）。
+   * 插件配置了自定义 dataDir 时必须显式给出——CLI 无法从 --data-dir 唯一反推该根。
+   */
+  dataRoot?: string;
   /** --id：目标快照 id（restore 缺省取最近非 rolled-back） */
   id?: string;
   /** --dry-run：只打印计划（restore / reinstall） */
@@ -84,14 +93,23 @@ export interface CliOptions {
   sections?: string;
   /** --out <path>：backup 输出 ZIP 路径（缺省写入导出目录，自动去重不覆盖） */
   out?: string;
+  /** --home <dir>：sessions repair 要修复的 DSH home（缺省 $DSH_HOME） */
+  home?: string;
+  /** --fix：sessions repair 真的落盘（缺省只报告） */
+  fix?: boolean;
+  /** --keep <dir>：sessions repair 的重复 id 保留哪一份（其余移入隔离目录，不删除） */
+  keep?: string;
+  /** --map old=new：sessions repair 的路径映射（可重复） */
+  maps?: string[];
   /** verify 的位置参数（文件名或路径；与 --id 同义，最多一个） */
   positionals: string[];
 }
 
 export type ParseResult = { ok: true; options: CliOptions } | { ok: false; error: string };
 
-const VALUE_FLAGS = new Map<string, 'dataDir' | 'id' | 'profile' | 'settings' | 'sections' | 'out'>([
+const VALUE_FLAGS = new Map<string, 'dataDir' | 'dataRoot' | 'id' | 'profile' | 'settings' | 'sections' | 'out'>([
   ['--data-dir', 'dataDir'],
+  ['--data-root', 'dataRoot'],
   ['--id', 'id'],
   ['--profile', 'profile'],
   ['--settings', 'settings'],
@@ -136,16 +154,62 @@ function parseCliDataDir(argv: readonly string[]): ParseResult {
   return { ok: true, options };
 }
 
+/**
+ * sessions 专用解析：sessions repair [--home <dir>] [--fix] [--keep <dir>] [--map old=new]... [--json]
+ *
+ * 与 recover-stale-lock 同样的姿态：独立解析器，只接受本动作真正有意义的参数（绝不悄悄忽略）。
+ */
+function parseCliSessions(argv: readonly string[]): ParseResult {
+  const options: CliOptions = {
+    command: 'sessions', dryRun: false, profile: 'web', yes: false, list: false,
+    wipeConfig: false, json: false, positionals: [], maps: [],
+  };
+  const rest = argv.slice(1);
+  const action = rest[0];
+  if (action === undefined) return { ok: false, error: 'sessions 需要子动作 / missing action: sessions repair' };
+  if (action !== 'repair') return { ok: false, error: 'sessions 只支持 repair / unsupported action: ' + action };
+  options.positionals.push(action);
+  for (let i = 1; i < rest.length; i += 1) {
+    const flag = rest[i]!;
+    if (flag === '--fix') { options.fix = true; continue; }
+    if (flag === '--json') { options.json = true; continue; }
+    if (flag === '--home' || flag === '--keep' || flag === '--map') {
+      const value = rest[i + 1];
+      if (value === undefined || value === '' || value.startsWith('-')) {
+        return { ok: false, error: '参数 ' + flag + ' 缺少值 / missing value for ' + flag };
+      }
+      if (flag === '--home') options.home = value;
+      else if (flag === '--keep') options.keep = value;
+      else options.maps!.push(value);
+      i += 1;
+      continue;
+    }
+    if (flag.startsWith('--home=') || flag.startsWith('--keep=') || flag.startsWith('--map=')) {
+      const at = flag.indexOf('=');
+      const name = flag.slice(0, at);
+      const value = flag.slice(at + 1);
+      if (value === '') return { ok: false, error: '参数 ' + name + ' 缺少值 / missing value for ' + name };
+      if (name === '--home') options.home = value;
+      else if (name === '--keep') options.keep = value;
+      else options.maps!.push(value);
+      continue;
+    }
+    return { ok: false, error: '未知参数 / unknown flag: ' + flag };
+  }
+  return { ok: true, options };
+}
+
 /** 解析 CLI 参数（纯函数；help 返回 command:'help'，未知/缺值返回错误） */
 export function parseCli(argv: readonly string[]): ParseResult {  const command = argv[0];
   if (command === undefined) return { ok: false, error: '缺少子命令 / missing subcommand' };
   if (command === '--help' || command === '-h' || command === 'help') {
     return { ok: true, options: { command: 'help', dryRun: false, profile: 'web', yes: false, list: false, wipeConfig: false, json: false, positionals: [] } };
   }
-  if (command !== 'snapshots' && command !== 'restore' && command !== 'reinstall'
+  if (command !== 'snapshots' && command !== 'restore' && command !== 'reinstall' && command !== 'sessions'
     && command !== 'recover-stale-lock' && command !== 'verify' && command !== 'backup') {
     return { ok: false, error: `未知子命令 / unknown subcommand: ${command}` };
   }
+  if (command === 'sessions') return parseCliSessions(argv);
   if (command === 'recover-stale-lock') {
     // recover-stale-lock：独立显式 recovery，不接受 destructive 执行参数（只能 --data-dir 定位锁目录）
     for (const flag of argv.slice(1)) {
@@ -270,25 +334,57 @@ export function resolveDataDir(flag: string | undefined, env: Record<string, str
   return path.join(resolveDshHome(env), 'dsh-config-manager', 'snapshots');
 }
 
-/** Phase 3 SAFE MODE durable 标记路径：<dataDir>/transactions/safe-mode（dataDir = $DSH_HOME/dsh-config-manager）。 */
-function safeModeMarkerPath(homeDir: string): string {
-  return path.join(homeDir, 'dsh-config-manager', 'transactions', 'safe-mode');
+/**
+ * 插件「控制面根」候选（= 宿主 config.dataDir）：SAFE MODE 标记（<root>/transactions/safe-mode）、
+ * 环境锁（<root>/locks）、journal 都在它之下 —— 与 src/index.ts 的 dataDir 派生、core/phase3-host.ts 的
+ * safeModeMarkerPath 同一语义。
+ *
+ * CLI 的 --data-dir 只表达「快照目录 / 导出目录」，单凭它无法区分两种真实用法：
+ *   a) --data-dir <root>/snapshots（文档语义）→ 控制面根 = 其父目录；b) --data-dir <root>（直接给数据根）；
+ * 两者都进候选，另恒加缺省根 $DSH_HOME/dsh-config-manager —— 多查几处只会更保守，不会放过标记。
+ * --data-root 显式给出时以它为准（权威判定，不再叠加推断候选）。
+ */
+export function resolveControlRoots(
+  opts: { dataRoot?: string; dataDir?: string } = {},
+  env: Record<string, string | undefined> = process.env,
+): string[] {
+  const out: string[] = [];
+  const add = (dir: string): void => {
+    const abs = path.resolve(dir);
+    if (!out.includes(abs)) out.push(abs);
+  };
+  if (opts.dataRoot !== undefined && opts.dataRoot !== '') {
+    add(opts.dataRoot);
+    return out;
+  }
+  if (opts.dataDir !== undefined && opts.dataDir !== '') {
+    add(opts.dataDir);
+    add(path.dirname(path.resolve(opts.dataDir)));
+  }
+  add(path.join(resolveDshHome(env), 'dsh-config-manager'));
+  return out;
 }
 
-/** 检查 Phase 3 SAFE MODE：存在未恢复 transaction → CLI destructive 应拒绝（返回错误文案，否则 null）。 */
-export function checkSafeModeBlocked(homeDir: string): string | null {
-  try {
-    const p = safeModeMarkerPath(homeDir);
-    if (fssync.existsSync(p)) {
-      const text = fssync.readFileSync(p, 'utf8');
-      if (/blocked|true/i.test(text)) {
-        return '存在未恢复的配置 transaction（SAFE MODE 激活）。destructive 操作被阻断：请先用恢复流程处理（GUI 恢复 / 显式 recover）后再重试。';
-      }
-    }
-    return null;
-  } catch {
-    return null; // 读不到标记不阻断（离线 CLI 保守放行读取类）
+/**
+ * Phase 3 SAFE MODE 门：任一候选控制面根下存在 durable 标记 → 返回错误文案（调用方必须拒绝执行）。
+ * 返回 null = 明确未阻断。
+ * fail-closed：标记无法读取 / 无法判定（'unknown'）一律拒绝 —— 「读不到就放行」正是审计 P0-11 的静默旁路。
+ */
+export function checkSafeModeBlocked(roots: readonly string[]): string | null {
+  if (roots.length === 0) {
+    return '无法确定插件数据目录（控制面根），出于安全考虑拒绝执行 / cannot determine the plugin data root; refusing to run';
   }
+  for (const root of roots) {
+    const marker = safeModeMarkerPath(root);
+    const state = readSafeModeMarkerSync(root);
+    if (state === 'blocked') {
+      return `存在未恢复的配置 transaction（SAFE MODE 激活，标记：${marker}）。destructive 操作被阻断：请先用恢复流程处理（GUI 恢复 / 显式 recover）后再重试。`;
+    }
+    if (state === 'unknown') {
+      return `无法读取 SAFE MODE 标记（${marker}）或无法判定其状态，无法确认是否安全，已拒绝执行 / cannot read or determine the SAFE MODE marker; refusing to run.`;
+    }
+  }
+  return null;
 }
 
 /** 快照 id 校验：拒绝路径分隔符/保留名（防 join 越界） */
@@ -348,9 +444,10 @@ export function printUsage(io: CliIo = defaultIo): void {
       '  dsh-config-manager snapshots [--data-dir <dir>]',
       '      列出快照 / list snapshots',
       '  dsh-config-manager restore [--id <uuid>] [--dry-run] [--data-dir <dir>]',
-      '                            [--profile <name>] [--settings <path>]',
+      '                            [--data-root <dir>] [--profile <name>] [--settings <path>]',
       '      恢复到导入前状态 / restore to pre-import state（--dry-run 只打印计划）',
       '  dsh-config-manager reinstall [--version <v>] [--yes] [--list] [--wipe-config] [--dry-run]',
+      '                            [--data-root <dir>]',
       '      一键重装 DSH 程序（交互多选 + 二次确认），DSH 损坏时救急 / reinstall DSH',
       '  dsh-config-manager recover-stale-lock [--data-dir <dir>]',
       '      回收残留的环境锁（上次进程被强制结束留下的死锁）',
@@ -369,12 +466,22 @@ export function printUsage(io: CliIo = defaultIo): void {
       '      离线文件级备份（导出目录内生成与 GUI 同结构的 ZIP，落盘后自动自检）',
       '      / offline file-level backup（dropped ZIP is self-verified）',
       '      只打包离线可直读的分区；凭据类文件（凭据文件名 / .env / *.pem）永不进入备份。',
+      '  dsh-config-manager sessions repair [--home <dir>] [--fix] [--keep <dir>] [--map old=new]...',
+      '      离线修复会话日志布局（DSH 已起不来时的唯一通道）/ offline session layout repair',
+      '      按每条会话 header 的 cwd 把目录归位到 projectKeyOf(cwd)；缺省只报告，--fix 才落盘。',
+      '      --map 用于跨机恢复：old=new 前缀映射会先改写会话日志第 1 帧 header（其余帧逐字节保留）。',
+      '      重复 id（同一会话出现在多个 projectKey 目录）只在 --keep <目录> 点名保留谁时，',
+      '      才把其它副本移进 sessions/.cm-repair-quarantine-<时间戳>/（只搬不删）。',
+      '      Exit code: dry-run 恒 0；--fix 有失败/冲突/回滚 → 1。',
       '  dsh-config-manager help',
       '      显示全部命令与说明 / show all commands',
       '',
       '选项 / Options:',
-      '  --data-dir <dir>   快照数据目录（缺省 $DSH_HOME/dsh-config-manager/snapshots；',
-      '                     recover-stale-lock 用它定位环境锁所在的数据目录）',
+      '  --data-dir <dir>   快照数据目录（缺省 $DSH_HOME/dsh-config-manager/snapshots；verify/backup',
+      '                     下为导出目录；recover-stale-lock 用它定位环境锁所在的数据目录）',
+      '  --data-root <dir>  插件数据根 dataDir（宿主 config.dataDir；SAFE MODE / 环境锁 / journal 所在根）',
+      '                     缺省 $DSH_HOME/dsh-config-manager。插件配置了自定义 dataDir 时，破坏性命令',
+      '                     （restore / reinstall）必须显式传它，否则安全门只按候选位置保守检查。',
       '  --id <uuid>        目标快照 id（缺省取最近一个非 rolled-back 快照）',
       '  --dry-run          只打印计划，不执行 / print plan only',
       '  --profile <name>   管理的 DSH profile（缺省 web）',
@@ -386,6 +493,10 @@ export function printUsage(io: CliIo = defaultIo): void {
       '  --json             verify 输出机器可读 JSON / machine-readable output',
       '  --sections <list>  backup 分区白名单（逗号分隔；缺省 ' + DEFAULT_BACKUP_SECTIONS.join(',') + '）',
       '  --out <path>       backup 输出 ZIP 路径（缺省自动命名，绝不覆盖既有文件）',
+      '  --home <dir>       sessions repair 的 DSH home（缺省 $DSH_HOME，即 ~/.dsh）',
+      '  --fix              sessions repair 真的落盘（缺省只打印计划）',
+      '  --keep <dir>       重复 id 时保留哪一份会话目录（其余移入隔离目录，不删除）',
+      '  --map old=new      路径前缀映射（可重复；命中即改写会话首帧 cwd）',
     ].join('\n'),
   );
 }
@@ -590,7 +701,8 @@ async function runReinstall(
     }
 
     // Phase 3 SAFE MODE：存在未恢复 transaction → 拒绝 destructive（CLI 不旁路 SAFE MODE）。
-    const safeMsg = checkSafeModeBlocked(resolveDshHome(env));
+    // 控制面根按候选定位（--data-root → --data-dir 派生 → 缺省根），不再写死 $DSH_HOME/dsh-config-manager。
+    const safeMsg = checkSafeModeBlocked(resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env));
     if (safeMsg !== null) {
       io.error(`拒绝执行：${safeMsg}`);
       return 1;
@@ -712,6 +824,19 @@ export async function runCli(
   if (options.command === 'backup') {
     return runBackup(options, io, env);
   }
+  if (options.command === 'sessions') {
+    // 离线修复：不碰 $DSH_HOME 的其它部分、不需要环境锁（只读写会话目录，且默认 dry-run）
+    return runSessionsRepair(
+      {
+        home: options.home ?? resolveDshHome(env),
+        fix: options.fix === true,
+        ...(options.keep !== undefined ? { keep: options.keep } : {}),
+        maps: options.maps ?? [],
+        json: options.json,
+      },
+      io,
+    );
+  }
 
   const lockDataDir = resolveDataDir(options.dataDir, env);
   const lockHome = resolveDshHome(env);
@@ -778,7 +903,8 @@ export async function runCli(
     return 0;
   }
   // Phase 3 SAFE MODE：存在未恢复 transaction → 拒绝 destructive（CLI 不旁路 SAFE MODE）。
-  const safeMsg2 = checkSafeModeBlocked(resolveDshHome(env));
+  // 候选根与真实 restore 的锁目录/journal 根同源（均为 <root> = dirname(快照目录) 的那一族）。
+  const safeMsg2 = checkSafeModeBlocked(resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env));
   if (safeMsg2 !== null) {
     io.error(`拒绝执行：${safeMsg2}`);
     return 1;

@@ -37,6 +37,16 @@ export interface Manifest {
   exporter: { name: string; version: string };
   source: { dshVersion: string; platform: Platform; arch: string };
   exportedAt: string; // ISO-8601 UTC
+  /**
+   * **导出机的 DSH home 绝对路径**（如 /opt/dsh/.dsh、C:\Users\x\.dsh）；旧包没有这个字段。
+   *
+   * 用途：跨机导入时**自动重定基** —— 备份里位于「导出机基础路径」之下的绝对路径（会话首帧 cwd、
+   * 工作区 path、mcp cwd…）一律改成「本机基础路径 + 同一后缀」。基础路径是机器身份、本机可精确
+   * 得知，因此比让用户手填自由前缀映射更安全可控；用户映射仍在其后依次生效（可覆盖本规则）。
+   *
+   * 宽容读取：非字符串/缺失一律按「未知」处理（不重定基，不报错）。
+   */
+  sourceHome?: string;
   sections: Record<SectionId, boolean>;
   security: {
     containsSecrets: boolean;
@@ -118,9 +128,9 @@ export interface PatchLine { file: string; lineId: string; raw: unknown; }
  * 且 defaultIncluded=false —— 后者会让「快速导出」（默认路径）拿不到 tarball，
  * 而「本地插件换机丢失」恰恰是最需要默认覆盖的场景。
  *
- * 为什么不新增分区 id：新增 SectionId 需同步 SECTION_IDS / SECTION_FILE_PREFIXES /
- * manifest 校验 / analyzer / exporter / market BANNED / sync layout 共 7 处契约，
- * 风险远大于收益；本字段落在既有 plugins 分区内即可被全部既有机制正确处理。
+ * 为什么不新增分区 id：新增 SectionId 需同步 SectionId 联合 + section-registry 注册 +
+ * 该分区 adapter 三处（t29 起分区集合由 `schema/section-registry.ts` 唯一派生，
+ * 历史那 7~9 处清单抄写已收敛）；本字段落在既有 plugins 分区内即可被全部既有机制正确处理。
  *
  * 安全：base64 仅为传输编码，不做任何执行；导入端只把解包出的 tgz 交给官方
  * `dsh plugin add` 通道。**市场侧已在发布与导入两端同时拒绝携带本字段的条目**

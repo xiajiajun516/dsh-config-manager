@@ -16,10 +16,14 @@
 
 | 文件名 | 内容建议 |
 |---|---|
-| `screenshot-export.png` | 一键导出界面 |
-| `screenshot-import-preview.png` | 导入前预览（dry-run） |
-| `screenshot-snapshots.png` | 快照恢复列表 |
-| `screenshot-sync.png` | 远程同步界面 |
-| `screenshot-market.png` | 配置市场界面 |
+| `screenshot-overview-en.png` / `screenshot-overview-zh.png` | 总览（Overview） |
+| `screenshot-backups-en.png` / `screenshot-backups-zh.png` | 备份与快照列表 |
+| `screenshot-export-en.png` / `screenshot-export-zh.png` | 一键导出界面 |
+| `screenshot-import-en.png` / `screenshot-import-zh.png` | 导入向导第一步（选择 ZIP 文件） |
+| `screenshot-sync-en.png` / `screenshot-sync-zh.png` | 远程同步界面 |
+| `screenshot-market-en.png` / `screenshot-market-zh.png` | 配置市场界面 |
+| `screenshot-profiles-en.png` / `screenshot-profiles-zh.png` | 档案（DSH Profiles）界面 |
+
+命名规则：`screenshot-<页面>-<语言>.png`；`-en` 供仓库根 `README.md` 引用，`-zh` 供 `README.zh-CN.md` 引用，7 个页面共 14 张。改名或换图后必须同步 `screenshots.json`，并向 `awesome-dsh-plugin` 提交更新，否则列表页的图片链接会 404。
 
 图片内容、张数、顺序随时可以改——换图时同步更新 `screenshots.json` 并提交新的 PR（只改自己那条）。

@@ -94,7 +94,9 @@ POST /api/dsh-config-manager/backup-files/delete  body: { name } → { ok, remov
 | `types.ts` 的 `EXPORT_GROUPS` / `ProgressEvent` / `ImportPreviewSummary` | 导出勾选目录 / 进度条 / 预览摘要 |
 | `import-wizard.ts` 的 `ImportWizard` | `import/ImportWizardView.tsx`（port=api） |
 | `conflict-view.ts` 的 `ConflictCollector` | `import/ConflictList.tsx` |
-| `report.ts` 的 `renderExportReport` / `renderImportReport` / `renderRollbackReport` / `suggestedActions` / `importSectionStats` | `common/ReportView.tsx` |
+| `report.ts` 的 `renderExportReport` / `renderImportReport` / `renderRollbackReport` / `importSectionStats` / `importTotals` / `importProblems` | `common/ReportView.tsx` |
+| `import-log.ts` 的 `buildImportLogModel` / `filterImportLogEntries` / `importLogLevelIcon` | `import/ImportLogPanel.tsx` |
+| `import-stepper.ts` 的 `importStepperModel` / `importStepperSource` | `import/ImportWizardView.tsx` |
 | `errors.ts` 的 `toActionableError` / `formatActionableError` | `common/ErrorBanner.tsx` |
 | `progress.ts` 的 `stageText` / `ProgressTracker` | `common/ProgressBar.tsx` |
 | `security/redaction.ts` 的 `redact` | 全部文本展示前的强制脱敏（双保险） |

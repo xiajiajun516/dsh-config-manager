@@ -1208,6 +1208,11 @@ button.statCard:focus-visible {
   background: var(--dsw-alias-state-success-primary);
 }
 
+/* 已结束但结论为失败：绝不沿用 success 绿（运行中心里失败的任务必须一眼看出不是「成功」） */
+.progressBarFailed {
+  background: var(--dsw-alias-state-error-primary);
+}
+
 .progressIndeterminate {
   position: absolute;
   top: 0;
@@ -1537,6 +1542,174 @@ button.statCard:focus-visible {
   overflow-y: auto;
   padding: 12px 14px;
 }
+/* ------------------------------------------------------------------
+   运行中心（活动抽屉「进行中」段，2026-09）
+   为什么在这里：运行任务是**跨页面**的 —— 状态栏那句「N 个任务进行中」现在可点
+   （.statusAction），抽屉第三段是面板本体。二者共用同一入口语义，样式也共用一套。
+   长列表纪律：日志尾部限高内滚（runsLogTail），禁止把抽屉撑成整页长条。
+   ------------------------------------------------------------------ */
+.statusAction {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.statusAction:hover {
+  color: var(--dsw-alias-label-primary);
+  text-decoration: underline;
+}
+
+.statusAction:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+.runsCenter {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.runsSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.runsSummaryTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dsw-alias-label-primary);
+}
+
+.runsCardHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0 0 8px;
+}
+
+.runsCardTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 终止请求「等不到安全点」的提示：普通等待用 .hint（灰），超阈值升级为警示色 + 出路文案 */
+.runsWarnNote {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--dsw-alias-state-warn-primary) 45%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 10%, transparent);
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runsWarnNoteDetail {
+  margin: 4px 0 0;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runsCardTime {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+.runsCounts {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runsLogTail {
+  margin: 8px 0 0;
+  max-height: 108px;
+  overflow-y: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-base);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.runsLogLine {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.runsCardActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 0;
+}
+
+.runsOption {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  font: inherit;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.runsOption:hover {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.runsOption:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}
+
+.runsOption[data-active] {
+  border-color: var(--dsw-alias-state-business-primary);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent);
+}
+
+.runsOptionTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.runsOptionDesc {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.runsOptionTag {
+  padding: 0 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 14%, transparent);
+  color: var(--dsw-alias-state-business-primary);
+}
+
 
 /* 通用操作行 */
 .actionRow {
@@ -1546,6 +1719,8 @@ button.statCard:focus-visible {
   flex-wrap: wrap;
   margin: 0 0 10px;
 }
+
+
 
 /* 上方有说明文案的操作行（如「通道配置」按钮紧跟在 hint 之后）：
    补一点上边距，避免按钮与说明文字贴在一起。 */
@@ -2266,6 +2441,23 @@ button.statCard:focus-visible {
   /* 页面根即纵向 flex：最后一个内容块可用 margin-top:auto / flex 填充贴底 */
 }
 
+/* 结果页（导入完成）正文滚动区：正文里报告卡与收尾清单都可能很长，独占滚动区后
+   底部操作栏（.resultFooter）不再被 `flex` 挤压裁掉（用户报告：没有完成按钮）。 */
+.resultScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 结果页固定操作栏：flex: none —— 绝不参与收缩，始终贴在面板底部可见 */
+.resultFooter {
+  flex: none;
+  align-items: center;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--dsw-alias-border-l1);
+}
+
 /* 页面可伸展填充块（如总览的最近活动卡） */
 .fillCard {
   flex: 1 1 auto;
@@ -2439,7 +2631,7 @@ button.statCard:focus-visible {
 .pickerUnitName {
   font-size: 11.5px;
   color: var(--dsw-alias-label-primary);
-  /* 长单元名（长路径 / 会话标题）不得撑宽列表（UI-16）：文本已由 middleEllipsis 中段省略，
+  /* 长单元名（长路径 / 会话标题）不得撑宽列表（UI-16）：文本已由 tailWeightedEllipsis 中段省略，
      这里再用 CSS 省略兜底实际容器宽度，行宽始终跟随容器而不是内容。完整值走 title。 */
   min-width: 0;
   max-width: 280px;
@@ -2896,6 +3088,69 @@ button.statCard:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* 日志表头计数：把 500 行流水压成「成功/跳过/警告/失败」四个数（可选「只看问题」） */
+.logCounts {
+  font-weight: 500;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.logFilterButton {
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--dsw-alias-state-business-primary);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.logFilterButton[data-active] {
+  color: var(--dsw-alias-label-primary);
+  font-weight: 700;
+}
+
+/* 一条计划项（同 itemId 的开始/命令/收尾合并）：与相邻项之间用细分隔线分段，
+   避免合并后仍读成一屏连续流水 */
+.logEntry + .logEntry {
+  border-top: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 55%, transparent);
+}
+
+/* 项状态行：按级别着色（✗ 红 / ⚠ 黄 / ✓ 绿 / ⏭ 灰 / ▶ 主文本）—— 一眼看出哪些要处理 */
+.logLine[data-level='fail'] {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.logLine[data-level='warn'] {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.logLine[data-level='ok'] {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.logLine[data-level='skip'] {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.logLine[data-level='running'] {
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 明细行（子进程命令行 / 说明文本）：缩进挂在所属项下，弱化到三级文本色 */
+.logDetail {
+  padding: 0 10px 0 22px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--dsw-alias-label-tertiary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.logDetail[data-kind='command'] {
+  color: var(--dsw-alias-label-secondary);
+}
+
 .logEmpty {
   padding: 12px;
   font-size: 11px;
@@ -2926,6 +3181,75 @@ button.statCard:focus-visible {
 .reportList {
   display: flex;
   flex-direction: column;
+}
+
+/* 报告内的结构化分块（总览 / 需要你关注 / 分区明细 / 注意事项）之间的呼吸 */
+.reportBlock {
+  margin-bottom: 10px;
+}
+
+/* 「需要你关注」单条：首行 = 分区徽章 + 计划项 id，次行 = 原因（窄画布下双行比三列好读） */
+.reportProblemRow {
+  padding: 6px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 50%, transparent);
+}
+
+.reportProblemRow:last-child {
+  border-bottom: none;
+}
+
+.reportProblemHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reportProblemText {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-primary);
+  overflow-wrap: anywhere;
+}
+
+.reportProblemReason {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* 分区明细行：显示名 + 右侧计数徽章（沿用 .sectionGrid 的视觉） */
+.reportSectionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.reportWarningRow {
+  padding: 2px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dsw-alias-state-warn-primary);
+  overflow-wrap: anywhere;
+}
+
+/* 完整文本报告（渐进披露）：结构化视图是主路径，这里是「逐字核对」的原文入口 */
+.reportDetails {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.reportDetails > summary {
+  cursor: pointer;
+  padding: 2px 0;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.reportDetails .reportScroll {
+  margin-top: 6px;
 }
 
 /* 报告卡内的限高视口：只保留 .reportScroll 的「限高 + 内滚」，去掉它自带的描边/圆角/底色 ——
@@ -3275,6 +3599,13 @@ button.statCard:focus-visible {
 
 .nextStepsGroup {
   margin-bottom: 10px;
+}
+
+/* 收尾清单可能几十项（重启生效项）：限高内滚，避免把结果页撑成长页
+   （AGENTS.md §UI 硬性规则 8：长列表限高内滚） */
+.nextStepsList {
+  max-height: 132px;
+  overflow-y: auto;
 }
 
 .rollbackBox {

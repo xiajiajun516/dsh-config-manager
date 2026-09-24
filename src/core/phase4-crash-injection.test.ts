@@ -10,14 +10,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { JournalStore } from './journal.ts';
-import { Phase3Recovery } from './phase3-host.ts';
 import { reconcileActive } from './reconcile.ts';
 import { verifySnapshot } from './backup.ts';
 
@@ -58,7 +56,7 @@ async function assertRecovery(
   point: string,
   expect: { journalState?: string[]; snapshotReady?: boolean; expectRecovered?: boolean },
 ): Promise<void> {
-  const { workDir, dataDir } = await runCrashPoint(t, point);
+  const { dataDir } = await runCrashPoint(t, point);
   const snapDir = path.join(dataDir, 'snapshots');
   const j = await readJournal(dataDir);
   const txnDir = path.join(dataDir, 'transactions');

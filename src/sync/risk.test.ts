@@ -5,8 +5,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SECTION_RISK_TIER, classifyMergePlan, summarizeApplyPlan } from './risk.ts';
+import { SECTION_RISK_TIER, classifyMergePlan, riskTierOf, summarizeApplyPlan } from './risk.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
+import { SECTION_IDS, SECTION_REGISTRY } from '../schema/section-registry.ts';
+import type { SectionId } from '../schema/types.ts';
 
 const sec = (
   id: MergeSectionResult['id'],
@@ -25,6 +27,35 @@ test('SECTION_RISK_TIER：规划表约定的映射正确', () => {
   assert.equal(SECTION_RISK_TIER.mcp, 'medium');
   assert.equal(SECTION_RISK_TIER.credentialsStatus, 'high');
   assert.equal(SECTION_RISK_TIER.secrets, 'high');
+});
+
+test('SECTION_RISK_TIER：是注册表的派生视图（分级字面量只存在于 section-registry.ts）', () => {
+  assert.deepEqual(
+    { ...SECTION_RISK_TIER },
+    Object.fromEntries(SECTION_IDS.map((id) => [id, SECTION_REGISTRY[id].riskTier])),
+  );
+});
+
+test('riskTierOf：读注册表；未注册 id → undefined（绝不落回默认 low）', () => {
+  for (const id of SECTION_IDS) {
+    assert.equal(riskTierOf(id), SECTION_REGISTRY[id].riskTier, `${id} 必须取注册表分级`);
+  }
+  // 远端快照 manifest 可携带任意字符串 → 一律 undefined（调用方按待审处理）
+  assert.equal(riskTierOf('ghost' as SectionId), undefined);
+  assert.equal(riskTierOf('toString' as SectionId), undefined, '原型链键不得命中');
+  assert.notEqual(riskTierOf('ghost' as SectionId), 'low', '未注册分区不得被当成 low 自动应用');
+});
+
+test('classifyMergePlan：未注册分区（远端任意 id）进 review，不被自动应用', () => {
+  const plan: MergePlan = { sections: [
+    sec('ghost' as MergeSectionResult['id'], 'useRemote', { version: 1, namespaces: {} }),
+    sec('settings', 'useRemote', { version: 1, namespaces: {} }),
+  ]};
+  const out = classifyMergePlan(plan, { firstSync: false });
+  assert.equal(out.autoApply.length, 1, '仅已注册的 low 分区自动应用');
+  assert.equal(out.autoApply[0]?.id, 'settings');
+  assert.equal(out.review.length, 1, '未注册分区必须待审');
+  assert.equal(out.review[0]?.id, 'ghost');
 });
 
 test('classifyMergePlan：firstSync=false 时低风险 useRemote/keepLocal → autoApply', () => {

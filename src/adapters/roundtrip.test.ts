@@ -162,6 +162,50 @@ test('集成往返：win32 → linux（路径映射 + Secret 不泄 + 补录报�
   }
 });
 
+test('集成：目标机已配置的凭据不再索要补录（Skip 信息项替代 MissingSecret）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-adapters-secrets-'));
+  try {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedSource(src);
+    const adapters = createAdapters({ namespaces: NS });
+    const zipPath = path.join(tmp, 'secrets.zip');
+    await new Exporter({ ctx: src, adapters, exporterVersion: '0.1.0' })
+      .export({ includeSecrets: false, outPath: zipPath });
+
+    const dst = makeContext('win32', 'C:\\Users\\alice');
+    for (const n of NS) dst.settings.registered.add(n);
+    // 目标机已经有 DEEPSEEK_API_KEY，OPENAI_API_KEY 没有
+    dst.credentials.values.set('DEEPSEEK_API_KEY', 'sk-local-existing');
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] });
+
+    const kinds = plan.items
+      .filter((i) => i.id.startsWith('secret:'))
+      .map((i) => [i.id, i.kind]);
+    assert.deepEqual(kinds, [
+      ['secret:DEEPSEEK_API_KEY', 'Skip'],
+      ['secret:OPENAI_API_KEY', 'MissingSecret'],
+    ], '已配置凭据降级为 Skip；未配置凭据仍需补录');
+    assert.deepEqual(
+      plan.missingSecrets.map((s) => s.ref),
+      ['OPENAI_API_KEY'],
+      '待补录清单不含本机已有的凭据',
+    );
+
+    // 执行：Skip 项不写目标 → 本机已有值原样保留
+    const result = await importer.executeImportPlan(zipPath, plan, {
+      confirm: true,
+      secretInputs: { OPENAI_API_KEY: 'sk-reentered' },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(dst.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-local-existing', '已有值不得被覆盖');
+    assert.equal(dst.credentials.values.get('OPENAI_API_KEY'), 'sk-reentered');
+    assert.deepEqual(result.missingSecrets, [], '两项都已满足（一项本机已有、一项已补录）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('集成：pluginFiles 默认不导出 / sessions 默认不导出（manifest 标记 false）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-adapters-opt-'));
   try {

@@ -18,8 +18,17 @@ import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../sch
 import { DEFAULT_SENSITIVE_RELS, refreshVault } from '../security/vault.ts';
 import { writeZip } from '../utils/zip.ts';
 import { msgOf } from './messages.ts';
-import { normalizeSessionLimit } from './session-select.ts';
+import { declareBundledSessionsInWorkspaces, normalizeSessionLimit, sessionIdKey } from './session-select.ts';
+// issue #45 连带匹配的第二判据：工作区 path 的 cwd 目录键（DSH 的 sessionIds 覆盖率很低，见 coupleSessionWorkspaces）
+import { projectKeyOf } from './session-meta.ts';
 import type { MsgFunc } from './messages.ts';
+
+/** 会话单元 id（`sessions:<项目键>/<目录名>`）→ cwd 目录键（项目键）；形状不符 → undefined。 */
+function projectKeyOfUnitId(unitId: string): string | undefined {
+  const rest = unitId.startsWith('sessions:') ? unitId.slice('sessions:'.length) : unitId
+  const slash = rest.lastIndexOf('/')
+  return slash <= 0 ? undefined : rest.slice(0, slash)
+}
 import type { Manifest, SectionId } from '../schema/types.ts';
 import type {
   ConfigAdapter, EncryptionProvider, ExportOptions, ExportReport,
@@ -197,6 +206,56 @@ export class Exporter {
   }
 
   /**
+   * 勾选/导出 sessions 时，自动把这些会话所属的工作区记录纳入导出范围（issue #45）。
+   *
+   * 为什么必须自动：DSH 里会话能不能显示出来取决于「有没有一条工作区记录指向它的 cwd 且 id 在
+   * sessionIds 里」—— 只带会话文件不带工作区，目标机必然「数据恢复了却显示不出来」。这条依赖不该
+   * 由用户来记。
+   *
+   * 「所属」判定（宽进严出）：用户做了条目级选择时精确匹配 sessionIds；只给了 sessions.limit
+   * （选中的是「最新 N 个」，此刻还不知道是哪几个）或整分区选择时，凡声明了 sessionIds 的工作区都算。
+   *
+   * **一条都没匹配上时不再放弃**（真机事故加固）：只要本机存在工作区记录，就整分区带上 —— 会话能否显示
+   * 完全取决于「有没有工作区指向它的 cwd」，多带几条纯元数据（path/title/sessionIds）没有副作用，而漏带
+   * 的代价是用户以为对话丢了。读不到注册表、或本机一条记录都没有时如实返回，交由报告层显式告警。
+   *
+   * @returns 连带结果：ids = 要带的工作区单元 id；total = 本机记录总数；matched = 是否按会话归属匹配出来；
+   *   unreadable = 注册表读不到（此时 ids 恒为空、不做任何白名单限制，绝不因为这里失败而让导出整体失败）
+   */
+  private async coupleSessionWorkspaces(options: ExportOptions): Promise<{ ids: string[]; total: number; matched: boolean; unreadable: boolean }> {
+    const selectedSessions = options.includeItems?.['sessions'];
+    let records: { id: string; path: string; sessionIds: string[] }[];
+    try {
+      records = await this.ctx.workspace.listRecords();
+    } catch {
+      return { ids: [], total: 0, matched: false, unreadable: true };
+    }
+    const sessionIds = selectedSessions === undefined
+      ? undefined
+      // 单元末段是**目录名**（`session-<uuid>` / 裸 `<uuid>` 两种形态并存），注册表一律 `session-<uuid>`：
+      // 必须归一化后比较，否则「所属」判定对绝大多数会话失配（真机实测 546/570 失配）。
+      : new Set(selectedSessions.map((unit) => sessionIdKey(unit.split('/').pop() ?? '')).filter((value) => value !== ''));
+    // 第二判据：会话 cwd 的目录键 == 工作区 path 的目录键（与 DSH 把会话显示在工作区下的口径一致）。
+    // 为什么必须有：注册表 sessionIds 覆盖率很低（真机实测：一次可选择的 570 条会话里只有 23 条在里面），
+    // 只按 sessionIds 匹配会让绝大多数会话「认不出所属工作区」，连带就退化成「整分区带上」。
+    const projectKeys = selectedSessions === undefined
+      ? undefined
+      : new Set(selectedSessions.map(projectKeyOfUnitId).filter((value): value is string => value !== undefined));
+    const owned = records
+      .filter((rec) => {
+        // 数量筛选（limit）：此刻还不知道是哪几条 → 保持既有宽进口径：只连带「声明过会话」的工作区
+        if (sessionIds === undefined || projectKeys === undefined) return rec.sessionIds.length > 0;
+        if (rec.sessionIds.some((id) => sessionIds.has(sessionIdKey(id)))) return true;
+        return rec.path !== '' && projectKeys.has(projectKeyOf(rec.path));
+      })
+      .map((rec) => 'workspace:' + rec.id);
+    const picked = options.includeItems?.['workspaces'] ?? [];
+    // 匹配上 → 只带「所属」的（用户自己勾选的照旧并集）；一条都没匹配上 → 整分区带上（广撒网比漏带安全）。
+    const target = owned.length > 0 ? owned : records.map((rec) => 'workspace:' + rec.id);
+    return { ids: [...new Set([...picked, ...target])], total: records.length, matched: owned.length > 0, unreadable: false };
+  }
+
+  /**
    * 导出：收集 → 过滤 → checksum → manifest → ZIP。
    * 返回 zipPath（含文件名）、manifest、报告。
    */
@@ -218,20 +277,47 @@ export class Exporter {
       ? undefined
       : normalizeSessionLimit(options.sessions.limit);
     const sessionsRequested = options.sessions !== undefined && sessionsLimit !== 0;
+    // issue #45：导出会话必须连带其所属工作区（否则目标机上会话显示不出来）。
+    // 「导出了会话」有三种表达方式：sessions 键（数量筛选）、only 列表、条目级 includeItems.sessions。
+    const sessionsSelected = sessionsRequested
+      || (options.only?.includes('sessions') ?? false)
+      || (options.includeItems?.['sessions']?.length ?? 0) > 0;
+    // 加固（真机事故复现）：只要导出会话，工作区**一定**跟着走 —— 归属判定不出来就整分区带上，
+    // 连一条工作区记录都没有也必须显式告警。绝不产出「有会话、没工作区」的包：那在目标机上就是
+    // 「数据恢复了却看不见」，用户会直接理解成「对话丢了」。
+    const coupling = sessionsSelected ? await this.coupleSessionWorkspaces(options) : undefined;
+    const carryWorkspaces = coupling !== undefined && coupling.ids.length > 0;
+    // 连带白名单必须与分区选定共用**同一份** includeItems：否则用户「把工作区全部取消勾选」
+    // （includeItems.workspaces = []）会在第二个 filter 里把刚被强制选中的分区再挡掉。
+    const effectiveIncludeItems: Partial<Record<SectionId, string[]>> | undefined = carryWorkspaces
+      ? { ...options.includeItems, workspaces: coupling.ids }
+      : options.includeItems;
     const selected = this.adapters
       .filter((a) => {
         if (a.id === 'sessions') {
           if (sessionsLimit === 0) return false;
           if (sessionsRequested) return true;
         }
+        // issue #45：勾选/导出 sessions 时，工作区分区**强制**跟着走（用户没勾也要带 —— 不带就必然显示不出来）
+        if (a.id === 'workspaces' && carryWorkspaces) return true;
         return only === undefined ? a.defaultIncluded : only.includes(a.id);
       })
-      .filter((a) => (options.includeItems?.[a.id]?.length ?? 1) > 0)
+      .filter((a) => (effectiveIncludeItems?.[a.id]?.length ?? 1) > 0)
       .map((a) => a.id);
 
     // 2. 逐 adapter 收集（导出数据）
     const sections: ExportSection[] = [];
+    const effectiveOptions: ExportOptions = effectiveIncludeItems === options.includeItems
+      ? options
+      : { ...options, includeItems: effectiveIncludeItems };
     const warnings: string[] = [];
+    // 连带行为必须**永远**在报告里可见：带了几条 / 一条都没匹配上（整分区带上）/ 本机根本没有记录。
+    if (coupling !== undefined) {
+      if (coupling.unreadable) warnings.push(this.msg('export.sessionsWorkspacesUnreadable'));
+      else if (coupling.total === 0) warnings.push(this.msg('export.sessionsWithoutWorkspaces'));
+      else if (coupling.matched) warnings.push(this.msg('export.sessionsWorkspacesCoupled', { count: String(coupling.ids.length) }));
+      else warnings.push(this.msg('export.sessionsWorkspacesCarriedAll', { count: String(coupling.ids.length) }));
+    }
     const redactedHits: SensitiveHit[] = [];
     const included: ExportReport['included'] = [];
     const excluded: SectionId[] = this.adapters.filter((a) => !selected.includes(a.id)).map((a) => a.id);
@@ -248,7 +334,7 @@ export class Exporter {
       }
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, options);
+        section = await adapter.export(this.ctx, effectiveOptions);
       } catch (err) {
         // 单个分区失败不拖垮整体（§34.17）；如实告警并跳过
         warnings.push(this.msg('export.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
@@ -295,6 +381,25 @@ export class Exporter {
       sections.push({ ...section, data: sanitized });
       included.push({ section: adapter.id, counts: section.counts });
       warnings.push(...section.warnings);
+    }
+
+    // issue #45 ③（真机事故加固）：导出会话时让包**自洽** —— 把本次真正带走的会话 id 声明进所属工作区记录。
+    // 为什么必须：DSH 注册表的 sessionIds 覆盖率极低（真机实测 570 条里只有 23 条在里面），用户勾选的
+    // 对话往往**不在**里面 —— 于是目标机上「工作区记录里没有它 → 没有任何人把它登记进工作区 → 对话
+    // 看不见」（真机复现：导出 3 次对话 + 7 条工作区，导入后 3 次对话全部不可见，反倒刷出 156 条
+    // 「未能登记」的误报）。**只增不减**：注册表原有的 id 保留，它们对「目标机本来就有这些会话」的
+    // 场景仍然有用；包内没带数据的 id 由导入侧按「不在此包内」如实分类，不再当成路径映射错误。
+    if (sessionsSelected) {
+      const sessionsSection = sections.find((s) => s.sectionId === 'sessions');
+      const workspacesSection = sections.find((s) => s.sectionId === 'workspaces');
+      if (sessionsSection !== undefined && workspacesSection !== undefined) {
+        const linked = declareBundledSessionsInWorkspaces(sessionsSection.data, workspacesSection.data);
+        if (linked.declared > 0) {
+          warnings.push(this.msg('export.sessionsDeclaredInWorkspaces', {
+            count: String(linked.declared), workspaces: String(linked.workspaces),
+          }));
+        }
+      }
     }
 
     // 4. 组装 ZIP 条目（JSON 分区 + 文件类分区 + secrets.enc + checksums + manifest）
@@ -370,6 +475,8 @@ export class Exporter {
 
     // 6. manifest（最后写：需要完整分区与安全信息）
     const manifest = buildManifest({
+      // 跨机基础路径重定基的依据（issue #45）：本机 DSH home 随包走
+      sourceHome: this.ctx.homeDir,
       exporterVersion: this.exporterVersion,
       dshVersion: this.ctx.dshVersion,
       platform: this.ctx.platform as Manifest['source']['platform'],

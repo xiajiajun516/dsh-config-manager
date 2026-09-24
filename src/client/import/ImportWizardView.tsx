@@ -25,176 +25,54 @@
  * 控制器实例（ImportWizard）由 store 缓存复用；每次 wizard 动作后 syncWizard()
  * 把控制器快照镜像进 store（非敏感字段持久化）。
  */
-import { memo, useEffect, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
 import { useSyncExternalStore } from 'react'
-import { ConflictCollector } from '../../ui/conflict-view.ts'
-import { nextFlowPhase, type FlowPhase } from '../../ui/flow.ts'
-import { importStepperModel, type ImportStageKey } from '../../ui/import-stepper.ts'
+import { importStepperModel, importStepperSource, type ImportStageKey } from '../../ui/import-stepper.ts'
 import { importNextSteps } from '../../ui/next-steps.ts'
-import { mergeSecretInput } from '../../ui/import-wizard.ts'
+import {
+  compatibilityBadgeKind, compatibilityLevel, importBasePathNotices, importPreviewStageAfter,
+  isSkippablePluginInstall, pendingSecretRequests, type CompatibilityLevel,
+} from '../../ui/import-wizard.ts'
+import { pickerSummary, sectionsFromPlan, type Selection } from '../../ui/selection-model.ts'
 import type { ImportPreviewSummary } from '../../ui/types.ts'
-import type { ImportPlan, ImportResult } from '../../core/types.ts'
-import type { ConsultReport } from '../../core/migration-consult.ts'
-import type { ConfigManagerApi, UploadResponse } from '../api.ts'
+import type { ImportAnalysis, ImportPlan, ImportResult } from '../../core/types.ts'
+import type { UiT } from '../../ui/i18n.ts'
+import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { runStore } from '../run-store.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner, Stepper } from '../common/ui.tsx'
-import { ChevronDownIcon } from '../common/Icon.tsx'
+import {
+  Badge, Banner, Button, Card, SectionTitle, Stepper,
+} from '../common/ui.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
+import type { RunProgress } from '../common/progress-view.ts'
 import { ReportView } from '../common/ReportView.tsx'
-import {
-  ContentPicker,
-} from '../common/ContentPicker.tsx'
-import {
-  buildSelectedPlan, effectiveImportPlan, effectiveImportSelection, excludedPlanItems, pickerSummary,
-  sectionsFromPlan, selectionHasItems,
-  type Selection,
-} from '../../ui/selection-model.ts'
+import { ContentPicker } from '../common/ContentPicker.tsx'
 import { sectionLabel, sectionLabeler } from '../common/section-labels.ts'
-import { ConflictList } from './ConflictList.tsx'
-import { PathMappingForm } from './PathMappingForm.tsx'
-import { ConsultCard } from '../consult/ConsultCard.tsx'
 import { redact } from '../../security/redaction.ts'
+import { fileSelectModel, shouldRenderSelect } from './import-file-select.ts'
 import {
-  applyPickedFile, browseLabelKey, cancelSelection, consumePickedFile, fileSelectModel, shouldRenderSelect,
-} from './import-file-select.ts'
+  AnalyzingStep, ConflictsStage, ConfirmStage, ConsultStage, DecryptArchiveStep,
+  PathMappingStage, SecretsStage, SelectStep,
+} from './import-wizard-steps.tsx'
+import { useImportWizardController } from './use-import-wizard-controller.ts'
+import { ImportLogPanel } from './ImportLogPanel.tsx'
 import css from '../config-manager.module.css'
-
 export interface ImportWizardViewProps {
   api: ConfigManagerApi
   t: TranslateNS<'config-manager'>
 }
 
-/** 中间流程阶段（wizard.step 之外的 UI 层页面）——定义见 src/ui/flow.ts */
-
 /**
- * 密钥补录表单（仅内存收集，值不外泄；onChange 写入 store 的仅内存字段）。
- *
- * 受控组件（UI-06）：输入值直接来自 store 的 `secretInputs` —— 本组件**不自己持有**输入
- * 状态。原因：该页是可来回切换的中间步骤，组件会随阶段切换卸载重挂；若以本地 state 为准，
- * 「上一步」再回来会显示空输入框而提交集合里仍是旧值（看到的值 ≠ 提交的值），
- * 且在空表上编辑任一字段会把其它 ref 已填的值丢掉。合并一律经 mergeSecretInput（src/ui）。
+ * 兼容性等级 → 字典键：src/ui 只产出**等级语义**（可测），客户端字典键留在这一侧
+ * —— src/ui 不感知客户端 i18n 字典（分层：user-visible 文案只在 client 侧解析）。
  */
-function SecretsForm({
-  missing,
-  value,
-  t,
-  onChange,
-}: {
-  missing: { ref: string; required: boolean }[]
-  /** 当前提交集合（store 的 secretInputs；唯一事实） */
-  value: Record<string, string>
-  t: TranslateNS<'config-manager'>
-  onChange: (inputs: Record<string, string>) => void
-}) {
-  const setRef = (ref: string, next: string): void => {
-    onChange(mergeSecretInput(value, ref, next))
-  }
-  return (
-    <div className={css.secretsList}>
-      <div className={css.hint}>{t('import.secrets.hint')}</div>
-      {missing.length === 0 && <Empty>{t('import.secrets.none')}</Empty>}
-      {missing.map((s) => (
-        <label key={s.ref} className={css.field}>
-          <span className={css.fieldLabel}>
-            {s.ref} {s.required ? t('import.secrets.required') : t('import.secrets.optional')}
-          </span>
-          <input
-            type="password"
-            className={css.input}
-            autoComplete="off"
-            value={value[s.ref] ?? ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => { setRef(s.ref, e.target.value) }}
-          />
-        </label>
-      ))}
-    </div>
-  )
+const COMPATIBILITY_SCORE_KEYS: Record<CompatibilityLevel, Parameters<TranslateNS<'config-manager'>>[0]> = {
+  unsupported: 'import.compatibility.score.unsupported',
+  partial: 'import.compatibility.score.partial',
+  good: 'import.compatibility.score.good',
+  excellent: 'import.compatibility.score.excellent',
 }
 
-/**
- * 导入执行日志面板（importing 步骤进度条下方）：展示导入过程中执行的命令
- * （逐计划项操作 `▶/✓/⚠/✗/–` + 子进程命令行 `$ dsh plugin …`）。
- * - 数据来自 Host RunRegistry（经 /progress 轮询回传），行文本仅非敏感内容，
- *   渲染前再过 redact() 兜底（安全不变量：UI 展示文本先脱敏）；
- * - 限高内滚（logScroll）；**智能自动滚动**：仅当用户贴近底部时跟随最新行；
- *   用户向上滚动查看历史时不强制拉回，改显示「↓ 新输出」提示，点击再滚到底部；
- * - memo 自定义比较：lines 数组为同一引用被 append（RunState.log push 不换引用），
- *   按引用浅比较无法感知新行 —— 比较长度 + t 引用，避免整页轮询反复重渲染整个列表。
- */
-function ImportLogPanelBase({ lines, t }: { lines: string[]; t: TranslateNS<'config-manager'> }) {
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  /** 是否贴底（用户上滚置 false；滚动回底部自动恢复） */
-  const stickRef = useRef(true)
-  /** 用户上滚后是否有新行到达（显示「↓ 新输出」；点击跳到底部清除） */
-  const [hasNewOutput, setHasNewOutput] = useState(false)
-  /**
-   * 上次渲染的数组引用（新输出 = 引用变化）。依赖 appendLog 的**不可变写入**：
-   * 每次追加都生成新数组（run-registry.ts）——行数封顶后长度恒定，但引用必变，
-   * 以引用判断才能感知截断后的新行（长度比较在 500 行封顶时失效）。
-   */
-  const prevLinesRef = useRef(lines)
-
-  useEffect(() => {
-    const el = scrollRef.current
-    if (el === null) return
-    const hasNew = lines !== prevLinesRef.current
-    prevLinesRef.current = lines
-    if (stickRef.current) {
-      el.scrollTop = el.scrollHeight
-      setHasNewOutput(false)
-    } else if (hasNew) {
-      // 用户已上滚且有新行到达：提示而非强制拉回（§24 自动滚动纪律）
-      setHasNewOutput(true)
-    }
-  }, [lines])
-
-  /** 滚动中更新贴底状态（上滚 → 停止跟随；滚回底部 → 恢复跟随并清除提示） */
-  const onScroll = (): void => {
-    const el = scrollRef.current
-    if (el === null) return
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-    stickRef.current = nearBottom
-    if (nearBottom) setHasNewOutput(false)
-  }
-
-  /** 「↓ 新输出」：跳到底部 + 恢复跟随 */
-  const jumpToBottom = (): void => {
-    const el = scrollRef.current
-    if (el !== null) el.scrollTop = el.scrollHeight
-    stickRef.current = true
-    setHasNewOutput(false)
-  }
-
-  return (
-    <div className={css.logPanel}>
-      <div className={css.logHeader}>
-        {t('import.log.title')}
-        {hasNewOutput && (
-          <button type="button" className={css.logJumpButton} onClick={jumpToBottom}>
-            <ChevronDownIcon size={13} /> {t('import.log.newOutput')}
-          </button>
-        )}
-      </div>
-      <div className={css.logScroll} ref={scrollRef} onScroll={onScroll}>
-        {lines.length === 0
-          ? <div className={css.logEmpty}>{t('import.log.empty')}</div>
-          : lines.map((line, i) => (
-            <div key={i} className={css.logLine}>{redact(line)}</div>
-          ))}
-      </div>
-    </div>
-  )
-}
-
-/** memo：lines 数组经 appendLog **不可变追加**（每次 append 换新引用，run-registry.ts）——
- *  自定义比较以「数组引用 + t 引用」为准：引用未变 = 无新输出，跳过整个列表重渲染；
- *  引用已变 = 有新行（含 500 行封顶后长度不变的情况），必须重渲染。 */
-const ImportLogPanel = memo(ImportLogPanelBase, (prev, next) =>
-  prev.lines === next.lines && prev.t === next.t,
-)
 
 /**
  * 导入/同步后收尾清单（P0-① / P2-⑪，绑 src/ui/next-steps.ts 的 importNextSteps 纯函数）。
@@ -224,7 +102,7 @@ function NextStepsCard({ plan, result, t }: {
         <div className={css.nextStepsGroup}>
           <div className={css.groupLabel}>{t('nextSteps.restart.title', { count: String(steps.restartItems.length) })}</div>
           <div className={css.hint}>{t('nextSteps.restart.hint')}</div>
-          <ul className={css.reportList}>
+          <ul className={`${css.reportList} ${css.nextStepsList}`}>
             {steps.restartItems.map((item) => (
               // description 由宿主按计划项拼装（可能含 MCP env/headers 等本地配置片段）→ 渲染前过 redact
               <li key={item.id}>{item.adapter}: {redact(item.description)}</li>
@@ -236,7 +114,7 @@ function NextStepsCard({ plan, result, t }: {
         <div className={css.nextStepsGroup}>
           <div className={css.groupLabel}>{t('nextSteps.secrets.title', { count: String(steps.missingSecrets.length) })}</div>
           <div className={css.hint}>{t('nextSteps.secrets.hint')}</div>
-          <ul className={css.reportList}>
+          <ul className={`${css.reportList} ${css.nextStepsList}`}>
             {steps.missingSecrets.map((ref) => <li key={ref}>{ref}</li>)}
           </ul>
         </div>
@@ -251,394 +129,284 @@ function NextStepsCard({ plan, result, t }: {
   )
 }
 
+/* ---------------- 步骤视图（t45：从 ImportWizardBody 抽出；JSX 逐字保留，仅参数化） ---------------- */
+
+/** 未选文件 / 已选待分析（step=select）：文件选择页。 */
+function CompatibilityStep(props: {
+  analysis: ImportAnalysis
+  error: string | null
+  onNext: () => void
+  onReset: () => void
+  apiT: UiT
+  t: TranslateNS<'config-manager'>
+}) {
+  const { analysis, error, onNext, onReset, apiT, t } = props
+  const level = compatibilityLevel(analysis.compatibility)
+  const scoreKey = COMPATIBILITY_SCORE_KEYS[level]
+  return (
+    <div className={css.viewBody}>
+      <SectionTitle title={t('import.compatibility.title')} />
+      <div className={css.statRow}>
+        <Badge kind={compatibilityBadgeKind(level)}>
+          {t('import.compatibility.score', { score: t(scoreKey) })}
+        </Badge>
+        <Badge kind="info">{t('import.compatibility.sections', { count: String(analysis.sectionsInZip.length) })}</Badge>
+        <Badge kind="info">{t('import.compatibility.plugins', { installed: String(analysis.pluginSummary.installed), toInstall: String(analysis.pluginSummary.toInstall) })}</Badge>
+        {analysis.pathIssues.length > 0 && <Badge kind="warn">{t('import.compatibility.paths', { count: String(analysis.pathIssues.length) })}</Badge>}
+        {analysis.secretCount > 0 && <Badge kind="warn">{t('import.compatibility.secrets', { count: String(analysis.secretCount) })}</Badge>}
+        {analysis.encrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
+      </div>
+      {analysis.warnings.length > 0 && (
+        <Banner kind="warn">
+          {analysis.warnings.map((w, i) => <div key={i}>{redact(w)}</div>)}
+        </Banner>
+      )}
+      {/* 备份包含的分区（两列网格；与总览「分区构成」同模式） */}
+      <Card>
+        <div className={css.groupHeader}>
+          <span className={css.groupLabel}>{t('import.compatibility.sectionsTitle')}</span>
+          <span className={css.statusSpacer} />
+        </div>
+        <div className={css.sectionGrid}>
+          {analysis.sectionsInZip.map((s) => (
+            <div key={s} className={css.sectionRow}>
+              <span className={css.sectionName}>{sectionLabel(s, t)}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+      {error !== null && <ErrorBanner error={error} onRetry={onNext} t={apiT} />}
+      <div className={css.actionRow}>
+        <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
+        <Button variant="primary" onClick={onNext}>{t('common.next')}</Button>
+      </div>
+    </div>
+  )
+}
+
+
+/** 预览步第 1 页：迁移前咨询（只读结论 + 依据）。 */
+function ContentSelectStage(props: {
+  summary: ImportPreviewSummary
+  /** 已自动重定基的基础路径（导出机 → 本机）；空 = 本次没有跨机重定基，不显示提示行 */
+  rebaseNotices: { from: string; to: string }[]
+  isEncrypted: boolean
+  hasPlan: boolean
+  nothingSelected: boolean
+  selectionNodes: ReturnType<typeof sectionsFromPlan>
+  selectionValue: Selection
+  onSelectionChange: (next: Selection) => void
+  error: string | null
+  onNext: () => void
+  onReset: () => void
+  apiT: UiT
+  t: TranslateNS<'config-manager'>
+}) {
+  const {
+    summary, rebaseNotices, isEncrypted, hasPlan, nothingSelected, selectionNodes, selectionValue, onSelectionChange,
+    error, onNext, onReset, apiT, t,
+  } = props
+  return (
+    <div className={css.viewBody}>
+      <SectionTitle title={t('import.picker.title')} subtitle={t('import.picker.hint')} />
+      <div className={css.statRow}>
+        <Badge kind={summary.willChange > 0 ? 'info' : 'ok'}>{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>
+        {summary.unchanged > 0 && <Badge kind="ok">{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}
+        {summary.settingsUpdates > 0 && <Badge kind="info">{t('import.preview.settings', { count: String(summary.settingsUpdates) })}</Badge>}
+        {summary.pluginsToInstall > 0 && <Badge kind="info">{t('import.preview.plugins', { count: String(summary.pluginsToInstall) })}</Badge>}
+        {summary.mcpAdds > 0 && <Badge kind="info">{t('import.preview.mcp', { count: String(summary.mcpAdds) })}</Badge>}
+        {/* UI-25：提示词维度此前漏渲染（模型 ImportPreviewSummary.prompts 与字典 import.preview.prompts 都在） */}
+        {summary.prompts > 0 && <Badge kind="info">{t('import.preview.prompts', { count: String(summary.prompts) })}</Badge>}
+        {summary.pathMappingsNeeded > 0 && <Badge kind="warn">{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
+        {summary.secretsNeeded > 0 && !isEncrypted && <Badge kind="warn">{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
+        {summary.conflicts > 0 && <Badge kind="error">{t('import.preview.conflicts', { count: String(summary.conflicts) })}</Badge>}
+        {isEncrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
+      </div>
+      {isEncrypted && <Banner kind="warn">{t('import.decrypt.previewHint')}</Banner>}
+      {/* issue #45：跨机基础路径不同时自动重定基 —— 如实告诉用户「这一步不需要手工映射」 */}
+      {rebaseNotices.map((notice) => (
+        <Banner key={notice.from} kind="info">
+          {t('import.preview.rebase', { from: redact(notice.from), to: redact(notice.to) })}
+        </Banner>
+      ))}
+      {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
+      {error !== null && <ErrorBanner error={error} onRetry={onNext} t={apiT} />}
+      {hasPlan && (
+        <Card className={css.optionsCard}>
+          <ContentPicker
+            nodes={selectionNodes}
+            value={selectionValue}
+            onChange={onSelectionChange}
+            t={t}
+            sectionLabel={sectionLabeler(t)}
+            mode="import"
+          />
+        </Card>
+      )}
+      {nothingSelected && <Banner kind="warn">{t('import.nothingSelected')}</Banner>}
+      <div className={css.actionRow}>
+        <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
+        <Button
+          variant="primary"
+          disabled={nothingSelected}
+          onClick={onNext}
+        >
+          {t('common.next')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** 解锁整体加密备份容器（phase=decrypt-archive）。 */
+function ImportingStep(props: {
+  progress: RunProgress | null
+  isPluginInstall: boolean
+  skipRequested: boolean
+  running: boolean
+  error: string | null
+  errors: string[]
+  onSkip: () => void
+  onRetry: () => void
+  apiT: UiT
+  t: TranslateNS<'config-manager'>
+}) {
+  const { progress, isPluginInstall, skipRequested, running, error, errors, onSkip, onRetry, apiT, t } = props
+  const logLines = progress?.log ?? []
+  return (
+    <div className={css.viewBody}>
+      <ProgressBar event={progress} active />
+      <ImportLogPanel lines={logLines} t={t} />
+      {isPluginInstall && (
+        <div className={css.actionRow}>
+          <Button variant="ghost" onClick={onSkip}>
+            {t('import.skipCurrent')}
+          </Button>
+        </div>
+      )}
+      {skipRequested && <div className={css.hint}>{t('import.skipPending')}</div>}
+      <div className={css.hint}>{t('import.importing')}</div>
+      {/* P0-8：失败后（running=false）必须给出重试入口 —— 与 ExportView 的
+          ErrorBanner(onRetry) 对齐，并保留执行中不暴露重试（避免重复启动 run）。
+          正常路径下向导已把 step 退回确认页（那里也有重试按钮），这里是兜底。 */}
+      {error !== null && (
+        <ErrorBanner
+          error={error}
+          onRetry={running ? undefined : onRetry}
+          retrying={running}
+          t={apiT}
+        />
+      )}
+      <ErrorList errors={errors} />
+    </div>
+  )
+}
+
 /**
- * 导入向导主视图（内部体）：各步骤 early-return 的渲染链。
- * 外层由 ImportWizardView 包装步骤条（Stepper），本体保持零改动。
+ * 结果页（step=result）：固定操作栏（完成 / 重试）+ 可滚动的正文。
+ * 正文独占 `.resultScroll`、操作栏 `.resultFooter` 不参与收缩 —— 否则报告卡
+ * （`overflow:hidden` 的 flex 项）被挤压后会把「完成」裁掉（用户报告）。详见 CSS 注释。
  */
+function ResultStep(props: {
+  result: ImportResult
+  plan: ImportPlan | null
+  retryable: number
+  running: boolean
+  excludedCount: number
+  error: string | null
+  onReset: () => void
+  onRetry: () => void
+  apiT: UiT
+  t: TranslateNS<'config-manager'>
+}) {
+  const { result, plan, retryable, running, excludedCount, error, onReset, onRetry, apiT, t } = props
+  return (
+    <div className={css.viewBody}>
+      <SectionTitle title={t('report.import.title')} />
+      <div className={css.resultScroll}>
+        {excludedCount > 0 && (
+          <Banner kind="info">{t('import.excludedByUser', { count: String(excludedCount) })}</Banner>
+        )}
+        <ReportView
+          kind="import"
+          importResult={result}
+          // F-01：必须显式传 t —— ReportView 缺省 t=zhUiT，英文界面下报告正文会恒为中文
+          t={apiT}
+          // UI-08：分区显示名只经 section-labels 的单一映射（不再让用户看见 pluginFiles 这类适配器 id）
+          sectionLabel={sectionLabeler(t)}
+        />
+        {/* P0-①/P2-⑪：导入后收尾清单（重启生效项 / 补录凭据 / 失败可重试项），替代单行 needsRestart Banner */}
+        <NextStepsCard plan={plan} result={result} t={t} />
+        {/* P0-8：失败后同样给出重试入口（仅当确有可重试项，避免触发「没有可重试的项」）。
+            下方操作栏的「重试」按钮已覆盖同一语义，这里让错误横幅也可直接重试。 */}
+        {error !== null && (
+          <ErrorBanner
+            error={error}
+            onRetry={!running && retryable > 0 ? onRetry : undefined}
+            retrying={running}
+            t={apiT}
+          />
+        )}
+      </div>
+      <div className={`${css.actionRow} ${css.resultFooter}`}>
+        {retryable > 0 && (
+          <Button disabled={running} onClick={onRetry}>
+            {t('import.retrySkipped', { count: String(retryable) })}
+          </Button>
+        )}
+        <span className={css.statusSpacer} />
+        <Button variant="primary" onClick={onReset}>{t('import.done')}</Button>
+      </div>
+    </div>
+  )
+}
+
 function ImportWizardBody({ api, t }: ImportWizardViewProps) {
-  // m2：状态统一来自模块级 store；控制器实例由 store 缓存复用（不重建）
-  const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
-  const imp = state.import
-  const wizard = runStore.importWizard(api)
-
-  const step = imp.step
-  const phase = imp.phase
-  const progress = imp.progress
-  const error = imp.error
-  const uploading = imp.uploading
-  const running = imp.running
-  const rollbackOnError = imp.rollbackOnError
-  const conflictCollector = imp.conflictCollector
-  const pathMappings = imp.pathMappings
-  const secretInputs = imp.secretInputs
-  const decryptRefs = imp.decryptRefs
-  const isEncrypted = imp.analysis?.encrypted === true
-
-  /* ---------- Phase 2：导入内容选择（分区 → 最小单元） ---------- */
-  // 生效选择：未选择 / 换了 ZIP（陈旧）→ 默认全选。陈旧选择若被沿用，会因分区 id 不在新计划里
-  // 而把导入静默变成「什么都没做」——所以选择与 zipPath 绑定，这里做失效回落。
-  const effectiveSelection = effectiveImportSelection(imp.plan, imp.zipPath, imp.importSelection)
-  /** 裁剪后的子计划：冲突列表 / 密钥补录 / 执行**全部**以它为准（唯一定义处见 selection-model） */
-  const selectedPlan = effectiveImportPlan(imp.plan, imp.zipPath, imp.importSelection)
-  const selectionNodes = imp.plan === null ? [] : sectionsFromPlan(imp.plan)
-  const selectionValue: Selection = effectiveSelection ?? { sections: [], excluded: [] }
-  /** 用户主动取消的项数：结果页据此把「你取消的」与「引擎跳过的」分开说，不被混为一谈 */
-  const excludedCount = imp.plan === null ? 0 : excludedPlanItems(imp.plan, selectionValue).length
-  /**
-   * 「全不选」守卫（UI-05）：勾选被清空时，执行这次导入不会写入任何东西 —— 但引擎仍会
-   * 建安全快照并返回成功，界面会显示「导入完成」。与导出侧同一套空选择语义：预览步
-   * 就地提示 + 禁用「下一步」；确认页的「确认导入」同样禁用（防御性，防止从别处推进）。
-   */
-  const nothingSelected = imp.plan !== null && !selectionHasItems(imp.plan, selectionValue)
-  const applyImportSelection = (next: Selection): void => {
-    if (imp.zipPath === null) return
-    runStore.patch({ import: { importSelection: { zipPath: imp.zipPath, selection: next } } })
-  }
-  // 上传备份是否整体加密容器（需先解锁才可分析）；非敏感、刷新恢复
-  const containerEncrypted = imp.containerEncrypted
-  // 容器是否已解锁（仅内存；刷新后要求重输密码重新解锁）
-  const archiveUnlocked = imp.archiveUnlocked
-  const fileInput = useRef<HTMLInputElement | null>(null)
-  /**
-   * 选择代数（取消选择时递增）：作废在途的选择上传/分析，
-   * 防止「取消后旧请求仍把向导推进/写错误」的竞态。
-   */
-  const pickGeneration = useRef(0)
-  /** decrypt-archive 阶段（解锁加密容器）的本地状态（不持久化） */
-  const [unlocking, setUnlocking] = useState(false)
-  const [archiveUnlockError, setArchiveUnlockError] = useState<string | null>(null)
-  /** 解锁阶段密码输入（本地 state，不上报 store 的敏感持久化键） */
-  const [archivePassword, setArchivePassword] = useState('')
-  /** Phase 7 迁移前咨询：预览步的咨询报告（本地 state，非敏感） */
-  const [consultReport, setConsultReport] = useState<ConsultReport | null>(null)
-  const [consultLoading, setConsultLoading] = useState(false)
-  /**
-   * 预览步的两页：先「迁移前咨询」（只读结论 + 依据），点下一步才是「选择要导入的内容」。
-   * 本地 state（不持久化）：换备份或重走流程时回到咨询页（见下方 zipPath effect）。
-   */
-  const [previewStage, setPreviewStage] = useState<'consult' | 'select'>('consult')
-
-  const setPhase = (next: FlowPhase): void => {
-    runStore.patch({ import: { phase: next } })
-  }
-
-  /* ---------- 阶段判定 ---------- */
-
-  const hasConflicts = (imp.plan?.items ?? []).some((i) => i.kind === 'Conflict')
-  const hasPathIssues = (imp.analysis?.pathIssues.length ?? 0) > 0
-  // 加密备份：解密已覆盖的凭据（decryptRefs）不需用户补录，仅剩余项进入 secrets 阶段
-  const hasSecrets = (imp.plan?.missingSecrets ?? []).some((s) => !decryptRefs.includes(s.ref))
-
-  /**
-   * 适用阶段的有序列表（仅含需要用户处理 + 确认页）。
-   * hasConflicts/hasPathIssues/hasSecrets 基于原始 analysis/plan（Dry Run 产物），
-   * 在流程中不会因已解决而重算——所以导航必须只前进（见 nextFlowPhase），
-   * 而不是靠"当前阶段 != X"判定（那会让已完成阶段被重新命中、跳回上一步）。
-   * 整体加密容器（containerEncrypted && !archiveUnlocked）恒先插入 decrypt-archive：
-   * 不解锁不得分析/继续导入。解密密码只在解锁时输入一次（导出时容器密码与
-   * 内部 secrets.enc 密码同源），不再有独立的 decrypt 阶段。
-   */
-  const applicablePhases = (): FlowPhase[] => {
-    const list: FlowPhase[] = []
-    if (containerEncrypted && !archiveUnlocked) list.push('decrypt-archive')
-    if (hasConflicts) list.push('conflicts')
-    if (hasPathIssues) list.push('path-mapping')
-    if (hasSecrets) list.push('secrets')
-    list.push('confirm')
-    return list
-  }
-
-  /** 从某阶段完成后进入的下一个阶段：只前进（from 不在列表时取第一项） */
-  const nextPhase = (from: FlowPhase): FlowPhase => nextFlowPhase(applicablePhases(), from)
-
-  /* ---------- 动作 ---------- */
-
-  /** 选择并上传 ZIP → wizard.selectZip（analyzing → compatibility）。
-   * 换选不变式：每次选择都以最新文件为准（applyPickedFile 替换旧选择）；
-   * pickGeneration 守卫作废取消后在途的旧请求。
-   * 整体加密容器（upload.containerType === 'encrypted'）：不能直接按 ZIP 分析，
-   * 先进入「解锁加密备份」（decrypt-archive）阶段，解锁成功后再走 selectZip。 */
-  const onPickFile = async (file: File | undefined): Promise<void> => {
-    if (file === undefined) return
-    const generation = pickGeneration.current
-    const next = applyPickedFile(fileSelectModel(imp.selectedFileName, uploading), file)
-    // 换文件：清空上一份备份的仅内存解密状态（密码/凭据覆盖清单/容器解锁）
-    runStore.patch({
-      import: {
-        uploading: next.busy,
-        error: null,
-        selectedFileName: next.selectedName,
-        decryptPassword: '',
-        decryptRefs: [],
-        archiveUnlocked: false,
-        containerEncrypted: false,
-      },
-    })
-    try {
-      const uploaded: UploadResponse = await api.upload(file)
-      if (generation !== pickGeneration.current) return // 用户已取消本次选择
-      if (uploaded.containerType === 'encrypted') {
-        // 加密容器：告知向导（含容器路径，syncWizard 不会把 zipPath 覆盖回 null）
-        // + 进入解锁阶段；analysis 留待解锁后
-        wizard.setArchiveEncrypted(true, uploaded.zipPath)
-        runStore.patch({
-          import: {
-            containerEncrypted: true,
-            archiveUnlocked: false,
-            zipPath: uploaded.zipPath,
-            phase: 'decrypt-archive',
-          },
-        })
-        runStore.syncWizard()
-        return
-      }
-      const analysis = await wizard.selectZip(uploaded.zipPath)
-      void analysis
-      if (generation !== pickGeneration.current) return
-      runStore.syncWizard()
-    } catch (err) {
-      if (generation !== pickGeneration.current) return
-      runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
-      runStore.syncWizard()
-    } finally {
-      if (generation === pickGeneration.current) {
-        runStore.patch({ import: { uploading: false } })
-      }
-    }
-  }
-
-  /** 取消当前选择：回 idle 并清空 input value（同一文件可再次选择触发 onChange）。 */
-  const cancelPick = (): void => {
-    pickGeneration.current += 1
-    const idle = cancelSelection(fileSelectModel(imp.selectedFileName, uploading))
-    runStore.patch({ import: { selectedFileName: idle.selectedName, uploading: idle.busy, error: null } })
-    if (fileInput.current !== null) fileInput.current.value = ''
-  }
-
-  /**
-   * 一键导入（快照面板「备份文件 → 导入」）：消费 runStore.snapshots.importBackup，
-   * 跳过上传直接对宿主 exports 目录的 zipPath 执行 selectZip（analyze 零写入）。
-   * 一次性瞬态：消费后立即清空，刷新/重挂载不会重放；与 onPickFile 共用
-   * pickGeneration 竞态守卫（用户取消选择后晚到的分析结果丢弃）。
-   */
-  useEffect(() => {
-    const req = runStore.getSnapshot().snapshots.importBackup
-    if (req === null) return
-    runStore.patch({ snapshots: { importBackup: null } })
-    const generation = pickGeneration.current
-    runStore.patch({
-      import: {
-        selectedFileName: req.name,
-        uploading: true,
-        error: null,
-        // 换文件：清空上一份备份的仅内存解密状态（与 onPickFile 一致）
-        decryptPassword: '',
-        decryptRefs: [],
-        archiveUnlocked: false,
-        containerEncrypted: false,
-      },
-    })
-    wizard.selectZip(req.zipPath)
-      .then(() => {
-        if (generation !== pickGeneration.current) return
-        runStore.syncWizard()
-      })
-      .catch((err) => {
-        if (generation !== pickGeneration.current) return
-        runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
-        runStore.syncWizard()
-      })
-      .finally(() => {
-        if (generation === pickGeneration.current) {
-          runStore.patch({ import: { uploading: false } })
-        }
-      })
-  }, [api])
-
-  /** Phase 7 迁移前咨询：预览步对当前 ZIP 生成咨询报告（只读，零写入）。
-   *  zipPath 变化 / 进入 preview 步时重新获取；失败静默（咨询是建议性，不阻断导入）。 */
-  useEffect(() => {
-    if (step !== 'preview' || imp.zipPath === null) return
-    let cancelled = false
-    setConsultLoading(true)
-    api.consult({ type: 'export-zip', id: imp.zipPath })
-      .then((report) => { if (!cancelled) setConsultReport(report) })
-      .catch(() => { if (!cancelled) setConsultReport(null) })
-      .finally(() => { if (!cancelled) setConsultLoading(false) })
-    return () => { cancelled = true }
-  }, [step, imp.zipPath, api])
-
-  /** 换了一份备份（或重新开始）→ 回到「迁移前咨询」这一页，而不是直接落到内容选择 */
-  useEffect(() => {
-    setPreviewStage('consult')
-  }, [imp.zipPath])
-
-  /** Compatibility → Preview */
-  const goPreview = async (): Promise<void> => {
-    runStore.patch({ import: { error: null } })
-    try {
-      await wizard.confirmCompatibility()
-      runStore.syncWizard()
-    } catch (err) {
-      runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
-      runStore.syncWizard()
-    }
-  }
-
-  /** 进入 conflicts 阶段（先创建 collector） */
-  const enterConflicts = (): void => {
-    // Phase 2：基于**裁剪后**的计划 —— 用户没勾的项不该把他拖进冲突解决
-    const plan = selectedPlan
-    if (plan !== null && imp.conflictCollector === null) {
-      runStore.patch({ import: { conflictCollector: new ConflictCollector(plan) } })
-    }
-    setPhase('conflicts')
-  }
-
-  /** Conflicts 完成：写入决策 → 下一阶段（决策同时持久化，切 tab/刷新可恢复） */
-  const finishConflicts = (): void => {
-    if (imp.conflictCollector !== null) {
-      const resolutions = imp.conflictCollector.toResolutions()
-      wizard.setResolutions(resolutions)
-      runStore.patch({ import: { conflictResolutions: resolutions } })
-    }
-    setPhase(nextPhase('conflicts'))
-  }
-
-  /** Path Mapping 完成：写入映射 → 下一阶段 */
-  const finishPathMapping = (): void => {
-    wizard.setPathMappings(pathMappings)
-    setPhase(nextPhase('path-mapping'))
-  }
-
-  /** Secrets 完成：写入补录值（仅内存）→ Confirm */
-  const finishSecrets = (): void => {
-    wizard.setSecretInputs(secretInputs)
-    setPhase('confirm')
-  }
-
-  /** 解锁整体加密备份容器（只读，零写入）：解密 → 明文 ZIP → selectZip 继续分析。
-   * 导出时容器密码与备份内 secrets.enc 密码同源（同一 password 派生两层加密）：
-   * 解锁请求在 Host 端顺带解出内部凭据覆盖清单（refs）一并返回，此密码直接作为
-   * 解密密码交给向导——整个导入只输入这一次密码，没有第二个密码校验页面。 */
-  const onUnlockArchive = async (): Promise<void> => {
-    if (imp.zipPath === null) return
-    // 竞态守卫：解锁/继续分析期间用户可能点「重新选择」（resetWizard 递增 pickGeneration），
-    // 此时丢弃在途结果，防止晚到的 selectZip 把已重置的向导推进到 compatibility。
-    const generation = pickGeneration.current
-    setUnlocking(true)
-    setArchiveUnlockError(null)
-    try {
-      const { refs } = await wizard.unlockArchive(imp.zipPath, archivePassword)
-      if (generation !== pickGeneration.current) return
-      // 容器密码即内部凭据解密密码：交给向导（execute 时解密 secrets.enc 用）
-      wizard.setDecryptPassword(archivePassword)
-      // refs 为解锁时顺带解出的凭据覆盖清单（非值）：secrets 阶段据此剔除已恢复项
-      runStore.patch({
-        import: {
-          archiveUnlocked: true,
-          decryptPassword: archivePassword,
-          decryptRefs: refs,
-        },
-      })
-      runStore.syncWizard()
-      // 解锁成功：继续「选 ZIP → 分析 → 兼容性」流程（selectZip 内部步进到 compatibility）
-      const analysis = await wizard.selectZip(imp.zipPath!)
-      void analysis
-      if (generation !== pickGeneration.current) return
-      runStore.syncWizard()
-      // 解锁后 phase 不再停留在 decrypt-archive，否则 preview 页会被解锁页劫持。
-      // 用最新 store 快照计算下一阶段：decrypt-archive 已解锁（archiveUnlocked=true）
-      // 不再适用，nextFlowPhase 取第一项——conflicts、path-mapping、secrets 或 confirm。
-      runStore.patch({ import: { phase: 'preview' } })
-    } catch (err) {
-      if (generation !== pickGeneration.current) return
-      setArchiveUnlockError(err instanceof Error ? err.message : String(err))
-      runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
-      runStore.syncWizard()
-    } finally {
-      setUnlocking(false)
-    }
-  }
-
-  /** Confirm 执行：confirm=true（安全阀）+ 用户回滚策略 */
-  const execute = async (opts?: { retry?: boolean }): Promise<void> => {
-    runStore.patch({ import: { error: null, running: true, skipRequested: false } })
-    // m3：请求进行期间经 /runs 发现 runId 并轮询 /progress（500ms）显示真实进度
-    runStore.watchRunning('import', 500)
-    try {
-      // 重试 = 只重跑「失败 + 用户跳过」的子集（结果页「重试」按钮）
-      const promise = opts?.retry === true
-        ? wizard.executeRetry({ rollbackOnError })
-        : wizard.execute({
-            confirm: true,
-            rollbackOnError,
-            // Phase 2：Dry Run 与真实执行用**同一套**裁剪逻辑（唯一定义处 = ui/selection-model）
-            planFilter: (plan) => {
-              const sel = effectiveImportSelection(plan, imp.zipPath, imp.importSelection)
-              return sel === null ? plan : buildSelectedPlan(plan, sel)
-            },
-          })
-      // execute() 已同步置 step='importing'：立即镜像，保证执行期间刷新时持久化的是 importing
-      runStore.syncWizard()
-      const result = await promise
-      // 响应含 runId（/progress 查询与刷新恢复用）；控制器类型不含，运行时对象有
-      const runId = (result as { runId?: unknown }).runId
-      runStore.patch({ import: { runId: typeof runId === 'string' ? runId : null, skipRequested: false } })
-      runStore.syncWizard()
-    } catch (err) {
-      runStore.patch({ import: { error: err instanceof Error ? err.message : String(err) } })
-      runStore.syncWizard()
-    } finally {
-      runStore.stopRunWatch('import')
-      runStore.patch({ import: { running: false } })
-    }
-  }
-
-  /**
-   * 跳过当前正在安装的插件（导入中）：通知宿主 abort 当前项子进程 →
-   * kill + 清理半装状态 → 该项标记 user-skipped → 导入继续其余项。
-   */
-  const skipCurrent = async (): Promise<void> => {
-    const runId = imp.runId
-    if (runId === null || imp.skipRequested) return
-    runStore.patch({ import: { skipRequested: true } })
-    try {
-      await api.skipExecute(runId)
-    } catch {
-      // 跳过请求失败（run 已结束等）：复位标记，下次轮询由 UI 状态自然处理
-      runStore.patch({ import: { skipRequested: false } })
-    }
-  }
-
-  /** 重置向导（重新导入） */
-  const resetWizard = (): void => {
-    pickGeneration.current += 1
-    wizard.reset()
-    runStore.syncWizard()
-    runStore.patch({
-      import: {
-        phase: 'preview',
-        uploading: false,
-        running: false,
-        progress: null,
-        error: null,
-        runId: null,
-        selectedFileName: null,
-        conflictCollector: null,
-        conflictStrategy: 'merge',
-        conflictResolutions: {},
-        pathMappings: [],
-        importSelection: null,
-        secretInputs: {},
-        decryptPassword: '',
-        decryptRefs: [],
-        containerEncrypted: false,
-        archiveUnlocked: false,
-        skipRequested: false,
-      },
-    })
-  }
+  const {
+    imp,
+    wizard,
+    step,
+    phase,
+    progress,
+    error,
+    uploading,
+    running,
+    rollbackOnError,
+    conflictCollector,
+    pathMappings,
+    secretInputs,
+    decryptRefs,
+    isEncrypted,
+    selectedPlan,
+    selectionNodes,
+    selectionValue,
+    excludedCount,
+    nothingSelected,
+    applyImportSelection,
+    fileInput,
+    setPhase,
+    nextPhase,
+    onPickFile,
+    cancelPick,
+    goPreview,
+    enterConflicts,
+    finishConflicts,
+    finishPathMapping,
+    finishSecrets,
+    onUnlockArchive,
+    execute,
+    skipCurrent,
+    resetWizard,
+    unlocking,
+    archiveUnlockError,
+    setArchiveUnlockError,
+    archivePassword,
+    setArchivePassword,
+    consultReport,
+    consultLoading,
+    previewStage,
+    setPreviewStage,
+  } = useImportWizardController(api, t)
 
   /* ---------- 各步骤渲染 ---------- */
 
@@ -646,103 +414,45 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   // shouldRenderSelect 保证此时渲染解锁页而非文件选择页（import-decrypt-archive-render 回归）。
   if (shouldRenderSelect(step, phase)) {
     // 换选模型：由 store 的 selectedFileName/uploading 推导（import-file-reselection）
-    const selectModel = fileSelectModel(imp.selectedFileName, uploading)
     return (
-      <div className={`${css.viewBody} ${css.sparseFill}`}>
-        <SectionTitle title={t('import.select.title')} subtitle={t('import.select.hint')} />
-        <input
-          ref={fileInput}
-          type="file"
-          accept=".zip,application/zip"
-          className={css.hiddenFile}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            // 恒清空 input value → 同一文件再次选择也会触发 onChange（同文件换选）
-            const file = consumePickedFile(e.target.files?.[0], e.target)
-            void onPickFile(file)
-          }}
-        />
-        {selectModel.selectedName !== null && (
-          <div className={css.hint} data-testid="import-selected-file">
-            {t('import.select.file', { name: selectModel.selectedName })}
-          </div>
-        )}
-        <div className={css.actionRow} style={{ marginBottom: 0 }}>
-          {selectModel.selectedName !== null && (
-            <Button variant="ghost" onClick={cancelPick}>
-              {t('import.select.cancel')}
-            </Button>
-          )}
-          <Button
-            variant="primary"
-            disabled={uploading}
-            onClick={() => { fileInput.current?.click() }}
-          >
-            {uploading ? <Spinner label={t('import.analyzing')} /> : t(browseLabelKey(selectModel.selectedName !== null))}
-          </Button>
-        </div>
-        {error !== null && <ErrorBanner error={error} onRetry={resetWizard} t={api.t} />}
-      </div>
+      <SelectStep
+        fileInput={fileInput}
+        selectModel={fileSelectModel(imp.selectedFileName, uploading)}
+        uploading={uploading}
+        error={error}
+        onCancel={cancelPick}
+        onPickFile={(file) => { void onPickFile(file) }}
+        onReset={resetWizard}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
   if (step === 'analyzing') {
     return (
-      <div className={css.viewBody}>
-        <ProgressBar event={progress} active />
-        {error !== null && <ErrorBanner error={error} onRetry={resetWizard} t={api.t} />}
-        <ErrorList errors={imp.errors} />
-      </div>
+      <AnalyzingStep
+        progress={progress}
+        error={error}
+        errors={imp.errors}
+        onReset={resetWizard}
+        apiT={api.t}
+      />
     )
   }
 
   if (step === 'compatibility') {
     const analysis = imp.analysis
     if (analysis === null) return null
-    const scoreKey = analysis.compatibility === 'unsupported'
-      ? 'import.compatibility.score.unsupported'
-      : analysis.compatibility === 'partial'
-        ? 'import.compatibility.score.partial'
-        : analysis.compatibility === 'good'
-          ? 'import.compatibility.score.good'
-          : 'import.compatibility.score.excellent'
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.compatibility.title')} />
-        <div className={css.statRow}>
-          <Badge kind={analysis.compatibility === 'unsupported' ? 'error' : analysis.compatibility === 'partial' ? 'warn' : 'ok'}>
-            {t('import.compatibility.score', { score: t(scoreKey as Parameters<TranslateNS<'config-manager'>>[0]) })}
-          </Badge>
-          <Badge kind="info">{t('import.compatibility.sections', { count: String(analysis.sectionsInZip.length) })}</Badge>
-          <Badge kind="info">{t('import.compatibility.plugins', { installed: String(analysis.pluginSummary.installed), toInstall: String(analysis.pluginSummary.toInstall) })}</Badge>
-          {analysis.pathIssues.length > 0 && <Badge kind="warn">{t('import.compatibility.paths', { count: String(analysis.pathIssues.length) })}</Badge>}
-          {analysis.secretCount > 0 && <Badge kind="warn">{t('import.compatibility.secrets', { count: String(analysis.secretCount) })}</Badge>}
-          {analysis.encrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
-        </div>
-        {analysis.warnings.length > 0 && (
-          <Banner kind="warn">
-            {analysis.warnings.map((w, i) => <div key={i}>{redact(w)}</div>)}
-          </Banner>
-        )}
-        {/* 备份包含的分区（两列网格；与总览「分区构成」同模式） */}
-        <Card>
-          <div className={css.groupHeader}>
-            <span className={css.groupLabel}>{t('import.compatibility.sectionsTitle')}</span>
-            <span className={css.statusSpacer} />
-          </div>
-          <div className={css.sectionGrid}>
-            {analysis.sectionsInZip.map((s) => (
-              <div key={s} className={css.sectionRow}>
-                <span className={css.sectionName}>{sectionLabel(s, t)}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-        {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
-          <Button variant="primary" onClick={() => { void goPreview() }}>{t('common.next')}</Button>
-        </div>
-      </div>
+      <CompatibilityStep
+        analysis={analysis}
+        error={error}
+        onNext={() => { void goPreview() }}
+        onReset={resetWizard}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
@@ -754,70 +464,37 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
      */
     if (previewStage === 'consult') {
       return (
-        <div className={css.viewBody}>
-          <SectionTitle title={t('import.preview.title')} subtitle={t('import.consult.hint')} />
-          {consultLoading && <Spinner label={api.t('consult.loading')} />}
-          {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
-          {!consultLoading && consultReport === null && (
-            <Banner kind="info">{t('import.consult.unavailable')}</Banner>
-          )}
-          {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
-          <div className={css.actionRow}>
-            <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
-            <Button variant="primary" onClick={() => { setPreviewStage('select') }}>
-              {t('import.consult.next')}
-            </Button>
-          </div>
-        </div>
+        <ConsultStage
+          consultLoading={consultLoading}
+          consultReport={consultReport}
+          error={error}
+          onNext={() => { setPreviewStage(importPreviewStageAfter('next', previewStage)) }}
+          onReset={resetWizard}
+          apiT={api.t}
+          t={t}
+        />
       )
     }
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.picker.title')} subtitle={t('import.picker.hint')} />
-        <div className={css.statRow}>
-          <Badge kind={summary.willChange > 0 ? 'info' : 'ok'}>{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>
-          {summary.unchanged > 0 && <Badge kind="ok">{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}
-          {summary.settingsUpdates > 0 && <Badge kind="info">{t('import.preview.settings', { count: String(summary.settingsUpdates) })}</Badge>}
-          {summary.pluginsToInstall > 0 && <Badge kind="info">{t('import.preview.plugins', { count: String(summary.pluginsToInstall) })}</Badge>}
-          {summary.mcpAdds > 0 && <Badge kind="info">{t('import.preview.mcp', { count: String(summary.mcpAdds) })}</Badge>}
-          {/* UI-25：提示词维度此前漏渲染（模型 ImportPreviewSummary.prompts 与字典 import.preview.prompts 都在） */}
-          {summary.prompts > 0 && <Badge kind="info">{t('import.preview.prompts', { count: String(summary.prompts) })}</Badge>}
-          {summary.pathMappingsNeeded > 0 && <Badge kind="warn">{t('import.preview.paths', { count: String(summary.pathMappingsNeeded) })}</Badge>}
-          {summary.secretsNeeded > 0 && !isEncrypted && <Badge kind="warn">{t('import.preview.secrets', { count: String(summary.secretsNeeded) })}</Badge>}
-          {summary.conflicts > 0 && <Badge kind="error">{t('import.preview.conflicts', { count: String(summary.conflicts) })}</Badge>}
-          {isEncrypted && <Badge kind="error">🔒 {t('import.decrypt.badge')}</Badge>}
-        </div>
-        {isEncrypted && <Banner kind="warn">{t('import.decrypt.previewHint')}</Banner>}
-        {summary.needsRestart && <Banner kind="warn">{t('import.preview.restart')}</Banner>}
-        {error !== null && <ErrorBanner error={error} onRetry={() => { void goPreview() }} t={api.t} />}
-        {imp.plan !== null && (
-          <Card className={css.optionsCard}>
-            <ContentPicker
-              nodes={selectionNodes}
-              value={selectionValue}
-              onChange={applyImportSelection}
-              t={t}
-              sectionLabel={sectionLabeler(t)}
-              mode="import"
-            />
-          </Card>
-        )}
-        {nothingSelected && <Banner kind="warn">{t('import.nothingSelected')}</Banner>}
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
-          <Button
-            variant="primary"
-            disabled={nothingSelected}
-            onClick={() => {
-              const next = nextPhase('preview')
-              setPhase(next)
-              if (next === 'conflicts') enterConflicts()
-            }}
-          >
-            {t('common.next')}
-          </Button>
-        </div>
-      </div>
+      <ContentSelectStage
+        summary={summary}
+        rebaseNotices={importBasePathNotices(imp.plan)}
+        isEncrypted={isEncrypted}
+        hasPlan={imp.plan !== null}
+        nothingSelected={nothingSelected}
+        selectionNodes={selectionNodes}
+        selectionValue={selectionValue}
+        onSelectionChange={applyImportSelection}
+        error={error}
+        onNext={() => {
+          const next = nextPhase('preview')
+          setPhase(next)
+          if (next === 'conflicts') enterConflicts()
+        }}
+        onReset={resetWizard}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
@@ -827,91 +504,65 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
   // 解密容器阶段（decrypt-archive）：发生在任何分析之前（step 可能仍是 select）。
   if (phase === 'decrypt-archive') {
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.decryptArchive.title')} subtitle={t('import.decryptArchive.hint')} />
-        <input
-          type="password"
-          className={css.input}
-          autoComplete="off"
-          placeholder={t('import.decryptArchive.passwordPlaceholder')}
-          value={archivePassword}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => {
-            setArchivePassword(e.target.value)
-            setArchiveUnlockError(null)
-          }}
-        />
-        {archiveUnlockError !== null && <ErrorBanner error={archiveUnlockError} t={api.t} />}
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={resetWizard}>{t('import.select.reselect')}</Button>
-          <Button
-            variant="primary"
-            disabled={archivePassword === '' || unlocking}
-            onClick={() => { void onUnlockArchive() }}
-          >
-            {unlocking ? <Spinner label={t('import.decryptArchive.unlocking')} /> : t('import.decryptArchive.unlock')}
-          </Button>
-        </div>
-      </div>
+      <DecryptArchiveStep
+        password={archivePassword}
+        onPasswordChange={(next) => {
+          setArchivePassword(next)
+          setArchiveUnlockError(null)
+        }}
+        unlockError={archiveUnlockError}
+        unlocking={unlocking}
+        onUnlock={() => { void onUnlockArchive() }}
+        onReset={resetWizard}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
   if (phase === 'conflicts' && step === 'preview') {
     if (conflictCollector === null || imp.plan === null) return null
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.conflicts.title')} subtitle={t('import.conflicts.hint')} />
-        <ConflictList
-          collector={conflictCollector}
-          t={t}
-          onChanged={() => {
-            // 逐项决策实时持久化（非敏感），切 tab/刷新后可由 plan + 决策重建 collector
-            if (imp.conflictCollector !== null) {
-              runStore.patch({ import: { conflictResolutions: imp.conflictCollector.toResolutions() } })
-            }
-          }}
-        />
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
-          <Button variant="primary" disabled={conflictCollector.hasUnresolved} onClick={finishConflicts}>
-            {t('common.next')}
-          </Button>
-        </div>
-      </div>
+      <ConflictsStage
+        collector={conflictCollector}
+        onChanged={() => {
+          // 逐项决策实时持久化（非敏感），切 tab/刷新后可由 plan + 决策重建 collector
+          if (imp.conflictCollector !== null) {
+            runStore.patch({ import: { conflictResolutions: imp.conflictCollector.toResolutions() } })
+          }
+        }}
+        onBack={() => { setPhase('preview') }}
+        onNext={finishConflicts}
+        t={t}
+      />
     )
   }
 
   if (phase === 'path-mapping' && step === 'preview') {
-    const issues = imp.analysis?.pathIssues ?? []
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.paths.title')} subtitle={t('import.paths.hint')} />
-        <PathMappingForm issues={issues} initial={pathMappings} t={t} onChange={(mappings) => { runStore.patch({ import: { pathMappings: mappings } }) }} />
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
-          <Button variant="primary" onClick={finishPathMapping}>{t('common.next')}</Button>
-        </div>
-      </div>
+      <PathMappingStage
+        issues={imp.analysis?.pathIssues ?? []}
+        mappings={pathMappings}
+        onMappingsChange={(mappings) => { runStore.patch({ import: { pathMappings: mappings } }) }}
+        onBack={() => { setPhase('preview') }}
+        onNext={finishPathMapping}
+        t={t}
+      />
     )
   }
 
   if (phase === 'secrets' && step === 'preview') {
     // 加密备份：解密已覆盖的凭据（decryptRefs）由备份密码恢复，不再要求补录
     // Phase 2：只补录**仍会导入**的凭据 —— 用户取消的插件不该再索要它的密钥
-    const missing = (selectedPlan?.missingSecrets ?? []).filter((s) => !decryptRefs.includes(s.ref))
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('import.secrets.title')} />
-        <SecretsForm
-          missing={missing}
-          value={secretInputs}
-          t={t}
-          onChange={(inputs) => { runStore.patch({ import: { secretInputs: inputs } }) }}
-        />
-        <div className={css.actionRow}>
-          <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
-          <Button variant="primary" onClick={finishSecrets}>{t('common.next')}</Button>
-        </div>
-      </div>
+      <SecretsStage
+        missing={pendingSecretRequests(selectedPlan, decryptRefs)}
+        value={secretInputs}
+        onValueChange={(inputs) => { runStore.patch({ import: { secretInputs: inputs } }) }}
+        onBack={() => { setPhase('preview') }}
+        onNext={finishSecrets}
+        t={t}
+      />
     )
   }
 
@@ -920,73 +571,44 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
      * UI-14：确认页是最后一道闸门，必须能核对「将导入什么」——
      * 口径与选择器 footer **同源**（同一个 pickerSummary + 同一份 selectionNodes/selectionValue）。
      */
-    const confirmSummary = pickerSummary(selectionValue, selectionNodes)
     return (
-      <div className={css.viewBody}>
-        <Card className={css.optionsCard}>
-          {/* UI-13：提示语必须随「失败时整体回滚」勾选状态切换 ——
-              该复选框可取消，取消后仍承诺「失败时整体回滚」是自相矛盾的文案 */}
-          <Banner kind="info">
-            {rollbackOnError ? t('import.confirm.warning') : t('import.confirm.warningNoRollback')}
-          </Banner>
-          {isEncrypted && decryptRefs.length > 0 && (
-            <Banner kind="ok">{t('import.confirm.encrypted', { count: String(decryptRefs.length) })}</Banner>
-          )}
-          {/* UI-14：将导入的分区/条目合计（与预览步选择器同源）+ 被用户取消的项数 */}
-          <div className={css.hint}>
-            {t('picker.summaryImport', {
-              sections: String(confirmSummary.sections),
-              units: String(confirmSummary.units),
-            })}
-          </div>
-          {excludedCount > 0 && (
-            <div className={css.hint}>{t('import.excludedByUser', { count: String(excludedCount) })}</div>
-          )}
-          <Checkbox
-            checked={rollbackOnError}
-            onChange={(v) => {
-              wizard.setRollbackOnError(v)
-              runStore.patch({ import: { rollbackOnError: v } })
-            }}
-            label={t('import.rollbackOnError')}
-          />
-          <div className={css.actionRow}>
-            <Button variant="ghost" onClick={() => { setPhase('preview') }}>{t('common.back')}</Button>
-            {/* m3-lock：进行中禁用「确认导入」，防止重复启动；
-                空选择同样禁用（UI-05：不让「什么都没勾」走完最后一道闸门） */}
-            <Button variant="primary" disabled={running || nothingSelected} onClick={() => { void execute() }}>
-              {t('import.confirm.execute')}
-            </Button>
-          </div>
-        </Card>
-        {error !== null && <ErrorBanner error={error} onRetry={() => { void execute() }} t={api.t} />}
-      </div>
+      <ConfirmStage
+        rollbackOnError={rollbackOnError}
+        onRollbackChange={(v) => {
+          wizard.setRollbackOnError(v)
+          runStore.patch({ import: { rollbackOnError: v } })
+        }}
+        isEncrypted={isEncrypted}
+        decryptRefs={decryptRefs}
+        summary={pickerSummary(selectionValue, selectionNodes)}
+        excludedCount={excludedCount}
+        running={running}
+        nothingSelected={nothingSelected}
+        error={error}
+        onBack={() => { setPhase('preview') }}
+        onExecute={() => { void execute() }}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
   if (step === 'importing') {
-    // 执行日志：进度条下方展示导入过程中执行的命令（/progress 轮询带回，非敏感）
-    const logLines = progress?.log ?? []
-    // 跳过按钮：仅当「当前正在安装插件」时显示（detail=正在执行项 id，plugin: 前缀）。
+    // 执行日志与跳过按钮的判定已下沉（ui/import-wizard.ts）：
     // 跳过 = 宿主 kill 该插件子进程 + 清理半装状态 → 该项标记 user-skipped → 继续其余项。
-    const currentItem = progress?.detail ?? ''
-    const isPluginInstall = running && currentItem.startsWith('plugin:') && !imp.skipRequested
     return (
-      <div className={css.viewBody}>
-        <ProgressBar event={progress} active />
-        <ImportLogPanel lines={logLines} t={t} />
-        {isPluginInstall && (
-          <div className={css.actionRow}>
-            <Button variant="ghost" onClick={() => { void skipCurrent() }}>
-              {t('import.skipCurrent')}
-            </Button>
-          </div>
-        )}
-        {imp.skipRequested && <div className={css.hint}>{t('import.skipPending')}</div>}
-        <div className={css.hint}>{t('import.importing')}</div>
-        {error !== null && <ErrorBanner error={error} t={api.t} />}
-        <ErrorList errors={imp.errors} />
-      </div>
+      <ImportingStep
+        progress={progress}
+        isPluginInstall={isSkippablePluginInstall(progress?.detail, running, imp.skipRequested)}
+        skipRequested={imp.skipRequested}
+        running={running}
+        error={error}
+        errors={imp.errors}
+        onSkip={() => { void skipCurrent() }}
+        onRetry={() => { void execute() }}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
@@ -994,35 +616,19 @@ function ImportWizardBody({ api, t }: ImportWizardViewProps) {
     const result = imp.result
     if (result === null) return null
     // 重试：只重跑「失败 + 用户跳过」的项（ReportView 内联报告已有明细）
-    const retryable = wizard.retryableCount()
     return (
-      <div className={css.viewBody}>
-        <SectionTitle title={t('report.import.title')} />
-        {excludedCount > 0 && (
-          <Banner kind="info">{t('import.excludedByUser', { count: String(excludedCount) })}</Banner>
-        )}
-        <ReportView
-          kind="import"
-          importResult={result}
-          onAction={(action) => {
-            if (action === 'done') resetWizard()
-            // 报告已内联展示全部失败/警告项与回滚详情（§22/§23），无额外动作页
-          }}
-          // F-01：必须显式传 t —— ReportView 缺省 t=zhUiT，英文界面下报告正文与动作按钮
-          // 会恒为中文（导出路径一直是这么传的，这里补齐）
-          t={api.t}
-        />
-        {retryable > 0 && (
-          <div className={css.actionRow}>
-            <Button variant="primary" disabled={running} onClick={() => { void execute({ retry: true }) }}>
-              {t('import.retrySkipped', { count: String(retryable) })}
-            </Button>
-          </div>
-        )}
-        {/* P0-①/P2-⑪：导入后收尾清单（重启生效项 / 补录凭据 / 失败可重试项），替代单行 needsRestart Banner */}
-        <NextStepsCard plan={imp.plan} result={result} t={t} />
-        {error !== null && <ErrorBanner error={error} t={api.t} />}
-      </div>
+      <ResultStep
+        result={result}
+        plan={imp.plan}
+        retryable={wizard.retryableCount()}
+        running={running}
+        excludedCount={excludedCount}
+        error={error}
+        onReset={resetWizard}
+        onRetry={() => { void execute({ retry: true }) }}
+        apiT={api.t}
+        t={t}
+      />
     )
   }
 
@@ -1052,9 +658,9 @@ export function ImportWizardView(props: ImportWizardViewProps) {
   const { t } = props
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const imp = state.import
-  // phase === 'preview' 时真实阶段看 step（select/analyzing/compatibility/preview/importing/result）；
-  // 其余 phase（decrypt-archive/conflicts/path-mapping/secrets/confirm）本身就是流程阶段。
-  const model = importStepperModel(imp.phase === 'preview' ? imp.step : imp.phase)
+  // 阶段输入的选择规则见 ui/import-stepper.ts（step 进 importing/result 时以 step 为准，
+  // 否则执行中与完成后都会卡在「4 确认」——用户报告）
+  const model = importStepperModel(importStepperSource(imp.step, imp.phase))
   const labels = stageLabels(t)
   const current = model.steps[model.index]!
   return (

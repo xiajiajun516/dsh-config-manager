@@ -11,7 +11,9 @@
  *  - 校验通过时不得产生 errors；缺分区载荷只出 warnings 不改 verdict；
  *  - 离线备份收集：分区映射（relativePath 按 baseDir 裁剪）、凭据黑名单、
  *    保留命名空间排除、symlink 跳过、pluginFiles 默认不收（opt-in）；
- *  - 闭环：收集 → 打包 → 自检必须 `OK`（证明产物真的可校验、结构自洽）。
+ *  - 闭环：收集 → 打包 → 自检必须 `OK`（证明产物真的可校验、结构自洽）；
+ *  - CLI SAFE MODE 门（审计 P0-11）：标记路径与 journal 单点一致；自定义 dataDir（--data-dir 的父目录 /
+ *    --data-root）下的标记必须阻断；无标记不误伤；无法判定时 fail-closed。
  *
  * 测试 zip 一律用既有 `src/utils/zip.ts` 的 `writeZip` 真实构造（不 mock 压缩层）。
  */
@@ -32,6 +34,9 @@ import { stringifyJsonSafe } from '../../src/utils/json.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../../src/schema/manifest.ts';
 import type { Manifest, SectionId } from '../../src/schema/types.ts';
 import type { ZipWriteEntry } from '../../src/utils/zip.ts';
+import { JournalStore, SAFE_MODE_MARKER, TRANSACTIONS_DIR } from '../../src/core/journal.ts';
+import { readSafeModeMarkerSync, safeModeMarkerPath } from '../../src/core/phase3-host.ts';
+import { checkSafeModeBlocked, parseCli, resolveControlRoots } from '../../src/cli/index.ts';
 
 async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-t2-'));
@@ -637,5 +642,164 @@ test('T2-V17 惰性 Map 的 get/has 语义与 missing 归类正确', async () =>
     assert.match(r.errors.join(' '), /缺失/, '不存在的条目应归为 missing');
     assert.match(r.errors.join(' '), /ghost\.md/, '必须点名缺失条目');
     assert.doesNotMatch(r.errors.join(' '), /无法读取/, 'missing 不应被误报为 unreadable');
+  });
+});
+
+/* --------------------------------------------------- SAFE MODE 门（审计 P0-11） */
+
+/*
+ * 审计 P0-11：CLI 的破坏性操作 SAFE MODE 门曾写死 `$DSH_HOME/dsh-config-manager`。
+ * 宿主 dataDir 由 config.dataDir 决定（src/index.ts 的 apply()）→ 自定义 dataDir 时 CLI 读的是
+ * 另一个目录，于是「存在未恢复 transaction」也照常执行 destructive（静默旁路）。
+ *
+ * 修复后：控制面根按候选解析（--data-root → --data-dir 本身及其父目录 → 缺省根），
+ * 标记路径与 journal 单点一致（core/phase3-host.ts safeModeMarkerPath / readSafeModeMarkerSync），
+ * 且「无法判定」时 fail-closed（拒绝执行）。
+ */
+
+/** 写一份与 JournalStore.writeSafeMode(true) 同格式的 durable 标记（清除语义是删文件，不是写 false）。 */
+async function writeSafeModeMarker(root: string): Promise<void> {
+  const dir = path.join(root, TRANSACTIONS_DIR);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(
+    path.join(dir, SAFE_MODE_MARKER),
+    `${JSON.stringify({ blocked: true, at: new Date().toISOString() }, null, 2)}\n`,
+  );
+}
+
+test('P0-11-01 SAFE MODE 门：缺省 dataDir（$DSH_HOME/dsh-config-manager）下的标记必须阻断', async () => {
+  await withTmp(async (tmp) => {
+    const env = { DSH_HOME: tmp };
+    const root = path.join(tmp, 'dsh-config-manager');
+    await writeSafeModeMarker(root);
+    const roots = resolveControlRoots({}, env);
+    assert.ok(roots.includes(path.resolve(root)), '缺省控制面根必须在候选内');
+    const msg = checkSafeModeBlocked(roots);
+    assert.ok(msg !== null, '缺省根下存在 SAFE MODE 标记 → 必须拒绝执行');
+    assert.ok(msg.includes(safeModeMarkerPath(root)), '错误文案必须点名真实标记路径');
+  });
+});
+
+test('P0-11-02 SAFE MODE 门：自定义 dataDir（--data-dir <root>/snapshots）下的标记必须阻断【回归】', async () => {
+  await withTmp(async (tmp) => {
+    const customRoot = path.join(tmp, 'custom-data');
+    const snapshotsDir = path.join(customRoot, 'snapshots');
+    await fs.mkdir(snapshotsDir, { recursive: true });
+    await writeSafeModeMarker(customRoot);
+    const env = { DSH_HOME: path.join(tmp, 'fakedsh') }; // 缺省位置没有标记
+    const roots = resolveControlRoots({ dataDir: snapshotsDir }, env);
+    assert.ok(roots.includes(path.resolve(customRoot)), '--data-dir 的父目录（真实控制面根）必须在候选内');
+    const msg = checkSafeModeBlocked(roots);
+    assert.ok(
+      msg !== null,
+      '自定义 dataDir 下的 SAFE MODE 标记必须阻断 —— 修复前这里返回 null（静默放行 destructive）',
+    );
+    assert.ok(msg.includes(safeModeMarkerPath(customRoot)), '文案必须指向真实标记');
+  });
+});
+
+test('P0-11-03 SAFE MODE 门：--data-dir 直接给数据根 / --data-root 显式给根，都必须阻断且后者权威', async () => {
+  await withTmp(async (tmp) => {
+    const customRoot = path.join(tmp, 'custom-root');
+    await writeSafeModeMarker(customRoot);
+    const env = { DSH_HOME: path.join(tmp, 'fakedsh') };
+    // a) 把插件数据根直接传进 --data-dir
+    assert.ok(checkSafeModeBlocked(resolveControlRoots({ dataDir: customRoot }, env)) !== null,
+      '--data-dir 直接指向数据根时也必须阻断');
+    // b) --data-root 权威：只按它判定（不叠加推断候选）
+    const other = path.join(tmp, 'elsewhere');
+    assert.deepEqual(resolveControlRoots({ dataRoot: customRoot, dataDir: other }, env), [path.resolve(customRoot)]);
+    assert.ok(checkSafeModeBlocked(resolveControlRoots({ dataRoot: customRoot }, env)) !== null);
+    // c) --data-root 解析成新选项（修复前 --data-root 是未知参数）
+    const parsed = parseCli(['restore', '--data-root', customRoot]);
+    assert.equal(parsed.ok, true, 'restore 必须接受 --data-root');
+    assert.equal(parsed.ok === true ? parsed.options.dataRoot : null, customRoot);
+  });
+});
+
+test('P0-11-04 SAFE MODE 门：任何候选位置都没有标记 → 不阻断（不误伤正常 restore/reinstall）', async () => {
+  await withTmp(async (tmp) => {
+    const snapshotsDir = path.join(tmp, 'clean-root', 'snapshots');
+    await fs.mkdir(snapshotsDir, { recursive: true });
+    const env = { DSH_HOME: path.join(tmp, 'fakedsh') };
+    assert.equal(checkSafeModeBlocked(resolveControlRoots({ dataDir: snapshotsDir }, env)), null,
+      '无标记 → 必须放行（不误伤正常 restore/reinstall）');
+    // 判据与 journal 一致：只有内容含 blocked/true 才算阻断（真实清除语义是删除文件，见 writeSafeMode(false)）
+    const root = path.join(tmp, 'clean-root');
+    await fs.mkdir(path.join(root, TRANSACTIONS_DIR), { recursive: true });
+    await fs.writeFile(path.join(root, TRANSACTIONS_DIR, SAFE_MODE_MARKER), '{"state":"clear"}\n');
+    assert.equal(checkSafeModeBlocked(resolveControlRoots({ dataDir: snapshotsDir }, env)), null,
+      '内容未表示阻断时不得误判为 SAFE MODE');
+  });
+});
+
+test('P0-11-05 SAFE MODE 门 fail-closed：标记无法读取 → 拒绝执行（不得静默放行）', async () => {
+  await withTmp(async (tmp) => {
+    const root = path.join(tmp, 'unreadable');
+    // 用同名目录占位：existsSync=true 但 readFileSync 抛错（EISDIR）→ 状态 unknown → fail-closed
+    await fs.mkdir(path.join(root, TRANSACTIONS_DIR, SAFE_MODE_MARKER), { recursive: true });
+    const msg = checkSafeModeBlocked(resolveControlRoots({ dataRoot: root }, { DSH_HOME: path.join(tmp, 'fakedsh') }));
+    assert.ok(msg !== null, '无法判定的标记必须拒绝执行');
+    assert.match(msg, /无法读取 SAFE MODE 标记/);
+  });
+});
+
+test('P0-11-06 与 journal 单点一致：JournalStore 写出的标记必须正好被 CLI 门读到', async () => {
+  await withTmp(async (tmp) => {
+    const root = path.join(tmp, 'journal-root');
+    const store = new JournalStore({ transactionsDir: path.join(root, TRANSACTIONS_DIR) });
+    const env = { DSH_HOME: path.join(tmp, 'fakedsh') };
+    const roots = resolveControlRoots({ dataRoot: root }, env);
+    assert.equal(checkSafeModeBlocked(roots), null, '未写标记前不得阻断');
+    await store.writeSafeMode(true);
+    assert.notEqual(checkSafeModeBlocked(roots), null, 'journal 写入的 SAFE MODE 必须被 CLI 门读到');
+    await store.writeSafeMode(false);
+    assert.equal(checkSafeModeBlocked(roots), null, 'journal 清除 SAFE MODE 后必须放行');
+    assert.equal(safeModeMarkerPath(root), path.join(root, TRANSACTIONS_DIR, SAFE_MODE_MARKER),
+      '标记路径必须由 journal 的常量单点派生');
+  });
+});
+
+test('P0-11-07 源码守卫：CLI 不得自带 marker 字面量（路径只来自 core/phase3-host.ts）', async () => {
+  const source = (await fs.readFile(new URL('../../src/cli/index.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  assert.doesNotMatch(source, /'safe-mode'/, "CLI 不得再写 marker 文件名字面量 'safe-mode'");
+  assert.doesNotMatch(source, /'transactions'/, "CLI 不得再写 transactions 目录字面量");
+  assert.match(source, /safeModeMarkerPath/, 'CLI 必须复用 core 的 safeModeMarkerPath');
+  assert.match(source, /checkSafeModeBlocked\(resolveControlRoots\(/, '破坏性入口必须走候选根解析');
+});
+
+test('P0-11-08 SAFE MODE 门 fail-closed：祖先不是目录（transactions 是普通文件）→ 必须拒绝【回归】', async () => {
+  await withTmp(async (tmp) => {
+    const root = path.join(tmp, 'broken-layout');
+    await fs.mkdir(root, { recursive: true });
+    // transactions 被占成普通文件：marker 路径 stat 报 ENOENT/ENOTDIR，existsSync 只回 false
+    await fs.writeFile(path.join(root, TRANSACTIONS_DIR), 'not a directory\n');
+    assert.equal(readSafeModeMarkerSync(root), 'unknown',
+      '祖先不是目录 → 必须判 unknown（修复前 existsSync 判 clear = 静默放行）');
+    const msg = checkSafeModeBlocked(resolveControlRoots({ dataRoot: root }, { DSH_HOME: path.join(tmp, 'fakedsh') }));
+    assert.ok(msg !== null, '布局不可判定时破坏性操作必须被拒绝');
+    assert.match(msg, /无法读取 SAFE MODE 标记/);
+  });
+});
+
+test('P0-11-09 SAFE MODE 门：确实不存在才判 clear（不得把正常路径也变成拒绝）', async () => {
+  await withTmp(async (tmp) => {
+    const env = { DSH_HOME: path.join(tmp, 'fakedsh') };
+    // a) 数据根完全不存在
+    const missingRoot = path.join(tmp, 'missing-root');
+    assert.equal(readSafeModeMarkerSync(missingRoot), 'clear', '数据根不存在 = 没有标记 → clear');
+    // b) 数据根存在但 transactions 目录不存在
+    const noTx = path.join(tmp, 'no-tx');
+    await fs.mkdir(noTx, { recursive: true });
+    assert.equal(readSafeModeMarkerSync(noTx), 'clear', 'transactions 目录不存在 = 没有标记 → clear');
+    // c) transactions 目录存在但 marker 不存在
+    const noMarker = path.join(tmp, 'no-marker');
+    await fs.mkdir(path.join(noMarker, TRANSACTIONS_DIR), { recursive: true });
+    assert.equal(readSafeModeMarkerSync(noMarker), 'clear', '标记不存在 → clear');
+    assert.equal(checkSafeModeBlocked(resolveControlRoots({ dataRoot: noMarker }, env)), null, '不得误判为阻断');
+    // d) 标记存在且表示阻断 → blocked
+    const blockedRoot = path.join(tmp, 'blocked-root');
+    await writeSafeModeMarker(blockedRoot);
+    assert.equal(readSafeModeMarkerSync(blockedRoot), 'blocked');
   });
 });

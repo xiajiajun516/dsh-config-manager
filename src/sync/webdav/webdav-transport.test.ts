@@ -19,7 +19,7 @@ import type { Server } from 'node:http';
 
 import { WebDavTransport, WebDavTransportError } from './webdav-transport.ts';
 import type { WebDavRequestFn, WebDavResponse, WebDavTransportOptions } from './webdav-transport.ts';
-import { computeSnapshotMeta, sectionsEqual } from '../transport.ts';
+import { computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, sectionsEqual, SyncTransportError } from '../transport.ts';
 import type { SyncSnapshot, SyncSnapshotMeta } from '../transport.ts';
 import { encryptSectionsPayload } from '../snapshot-crypto.ts';
 import type { SectionData, SectionId } from '../../schema/types.ts';
@@ -556,7 +556,6 @@ function startTestServer(
   handler: (rec: ServerRec, res: http.ServerResponse) => void,
 ): Promise<{ server: Server; port: number }> {
   return new Promise((resolvePromise, rejectPromise) => {
-    const recs: ServerRec[] = [];
     const server = http.createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(Buffer.from(c)));
@@ -867,5 +866,126 @@ test('重定向：300（非跟随 3xx）→ 按失败处理（明确报 HTTP 状
     await closeServer(server);
   }
 });
+/* ---------------- t24：统一错误面 / 超时口径 / 幂等读重试 ---------------- */
+
+test('t24：超时口径统一——默认取共用 DEFAULT_SYNC_TIMEOUT_MS（不收紧），可注入覆盖', async () => {
+  const seen: number[] = [];
+  const t1 = new WebDavTransport(makeOptions({
+    request: async (_m, _u, opts) => { seen.push(opts?.timeoutMs ?? -1); return res(404, ''); },
+  }));
+  await t1.list();
+  assert.equal(seen[0], DEFAULT_SYNC_TIMEOUT_MS, 'webdav 通道默认超时 = 两条通道共用常量');
+  assert.ok(DEFAULT_SYNC_TIMEOUT_MS >= 120_000, '统一不得收紧（原值 120s）');
+  const seen2: number[] = [];
+  const t2 = new WebDavTransport(makeOptions({
+    timeoutMs: 5000,
+    request: async (_m, _u, opts) => { seen2.push(opts?.timeoutMs ?? -1); return res(404, ''); },
+  }));
+  await t2.list();
+  assert.equal(seen2[0], 5000, '宿主注入的 timeoutMs 必须生效');
+});
+
+test('t24：幂等读（list）遇 503 → 指数退避重试后成功', async () => {
+  const calls = makeCalls();
+  let gets = 0;
+  const meta = computeSnapshotMeta(sampleSnapshot());
+  const t = new WebDavTransport(makeOptions({
+    retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+    request: mockReq(calls, () => {
+      gets += 1;
+      return gets === 1 ? res(503, 'busy') : res(200, JSON.stringify([meta]));
+    }),
+  }));
+  const listed = await t.list();
+  assert.deepEqual(listed.map((m) => m.id), ['snap-001'], '重试后应解析出索引');
+  assert.equal(calls.length, 2, '第一次 503 → 重试一次即成功');
+});
+
+test('t24：幂等读（download）遇 429（限流）→ 重试后成功', async () => {
+  const snap = sampleSnapshot();
+  let gets = 0;
+  const t = new WebDavTransport(makeOptions({
+    retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+    request: mockReq(makeCalls(), (m) => {
+      if (m.method === 'GET') {
+        gets += 1;
+        return gets === 1 ? res(429, 'slow down') : res(200, JSON.stringify(snap));
+      }
+      return res(404, '');
+    }),
+  }));
+  const got = await t.download('snap-001');
+  assert.equal(got.id, 'snap-001');
+  assert.equal(gets, 2, '429 与 5xx 同级可重试');
+});
+
+test('t24：重试耗尽后上抛带分类的错误（server / retryable / status），尝试次数 = attempts', async () => {
+  let gets = 0;
+  const t = new WebDavTransport(makeOptions({
+    retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+    request: mockReq(makeCalls(), () => { gets += 1; return res(500, 'boom'); }),
+  }));
+  await assert.rejects(t.list(), (err: unknown) => {
+    assert.ok(err instanceof WebDavTransportError, '仍必须是 WebDavTransportError');
+    assert.ok(err instanceof SyncTransportError, 'WebDavTransportError 必须继承统一基类');
+    assert.equal(err.kind, 'server');
+    assert.equal(err.retryable, true);
+    assert.equal(err.status, 500);
+    return true;
+  });
+  assert.equal(gets, 3, 'attempts=3 → 恰好 3 次尝试');
+});
+
+test('t24：不可重试（401 鉴权失败）→ 只尝试一次且分类 auth', async () => {
+  let gets = 0;
+  const t = new WebDavTransport(makeOptions({
+    retry: { attempts: 5, baseDelayMs: 1, sleep: async () => {} },
+    request: mockReq(makeCalls(), () => { gets += 1; return res(401, 'denied'); }),
+  }));
+  await assert.rejects(t.list(), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.equal(err.kind, 'auth');
+    assert.equal(err.retryable, false);
+    assert.equal(err.status, 401);
+    return true;
+  });
+  assert.equal(gets, 1, '鉴权失败重试无意义 → 不重试');
+});
+
+test('t24：请求层网络异常（ECONNRESET）→ 归一为 network 分类并重试', async () => {
+  let n = 0;
+  const t = new WebDavTransport(makeOptions({
+    retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+    request: async () => {
+      n += 1;
+      if (n === 1) throw new Error('read ECONNRESET');
+      return res(404, '');
+    },
+  }));
+  assert.deepEqual(await t.list(), [], '重试后应成功返回空索引');
+  assert.equal(n, 2, '连接重置 → 重试一次');
+});
+
+test('t24：写操作（upload）绝不重试——PUT 快照 503 只尝试一次（避免留孤儿文件）', async () => {
+  const calls = makeCalls();
+  let putSnap = 0;
+  const t = new WebDavTransport(makeOptions({
+    retry: { attempts: 5, baseDelayMs: 1, sleep: async () => {} },
+    request: mockReq(calls, (m) => {
+      if (m.method === 'MKCOL') return res(201, '');
+      if (m.method === 'GET') return res(404, '');
+      if (m.method === 'PUT') { putSnap += 1; return res(503, 'busy'); }
+      return res(404, '');
+    }),
+  }));
+  await assert.rejects(t.upload(sampleSnapshot()), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.equal(err.kind, 'server', '503 → 分类为可重试的 server（分类可见）');
+    assert.equal(err.retryable, true);
+    return true;
+  });
+  assert.equal(putSnap, 1, '写操作绝不重试（即使 attempts=5；PUT 快照与 PUT index 之间失败会留孤儿）');
+});
+
 
 

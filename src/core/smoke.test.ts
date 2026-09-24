@@ -21,7 +21,6 @@ import { computeCompatibility } from './validator.ts';
 import { createLogger, type Logger } from '../utils/logger.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { sha256Hex } from '../utils/hashing.ts';
-import { UnsupportedSchemaError } from '../schema/versions.ts';
 import { ImportNotConfirmedError, ImportUserSkippedError } from './types.ts';
 import type {
   FilesSection, NamespaceRecord, SettingsSection, WorkspaceRecord, WorkspacesSection,
@@ -30,7 +29,7 @@ import type {
   ApplyResult, ConfigAdapter, CredentialsFacade, ExportSection, FileSystemFacade,
   HostContext, ImportContext, NamespaceInfo, PatchFileFacade,
   PlanItem, PluginsFacade, SettingsFacade, Snapshot,
-  SnapshotEntry, SnapshotStore, SnapshotTarget, ValidationResult,
+  SnapshotStore, ValidationResult,
   WorkspaceFacade,
 } from './types.ts';
 

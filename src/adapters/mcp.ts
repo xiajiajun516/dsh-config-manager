@@ -9,7 +9,9 @@
 import { isDeepStrictEqual } from 'node:util';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
-import type { McpServerEntry, McpSection } from '../schema/types.ts';
+import type { McpServerEntry } from '../schema/types.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, PlanItem, ValidationResult,
@@ -87,9 +89,10 @@ function newLineId(serverName: string): string {
 
 export class McpAdapter implements ConfigAdapter<McpExportSection> {
   readonly id = 'mcp' as const;
-  readonly displayName = 'MCP Servers';
-  readonly defaultIncluded = true;
-  readonly portability = 'platformSpecific' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('mcp').displayName;
+  readonly defaultIncluded = sectionMeta('mcp').defaultIncluded;
+  readonly portability = sectionMeta('mcp').portability;
 
   async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<McpExportSection>> {
     const warnings: string[] = [];
@@ -164,22 +167,16 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
   }
 
   async validate(data: McpExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'mcp' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (!Array.isArray(data.servers)) {
-      issues.push({ path: 'servers', message: msg('adapter.validate.array', { subject: 'servers' }), severity: 'error' });
-    } else {
-      for (const s of data.servers) {
-        if (s === null || typeof s !== 'object' || typeof s.serverName !== 'string' || s.serverName === '') {
-          issues.push({ path: 'servers[]', message: msg('adapter.validate.serverName'), severity: 'error' });
+    return validateJsonSection<McpExportSection>('mcp', data, msg, (section, issues) => {
+      if (!Array.isArray(section.servers)) {
+        issues.push({ path: 'servers', message: msg('adapter.validate.array', { subject: 'servers' }), severity: 'error' });
+      } else {
+        for (const s of section.servers) {
+          if (s === null || typeof s !== 'object' || typeof s.serverName !== 'string' || s.serverName === '') {
+            issues.push({ path: 'servers[]', message: msg('adapter.validate.serverName'), severity: 'error' });
+          }
         }
       }
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    });
   }
 }

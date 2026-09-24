@@ -11,6 +11,7 @@ import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { JournalStore, createJournalEntry, type OperationJournal, type JournalStep } from './journal.ts';
+import { Phase3Recovery, safeModeMarkerPath } from './phase3-host.ts';
 import {
   reconcileActive, executeRecovery, inspectStartup, recomputeRecoveryDecision,
   type ReconcileProbeHooks, type ReconcileEnv,
@@ -390,3 +391,64 @@ test('executeRecovery：rollback 无 executor → failed（不执行）', async 
   assert.equal(r, 'failed');
   assert.equal((await store.load(id))?.state, 'NEEDS_ATTENTION', '无 executor 不得迁移状态');
 });
+// ---------- t37：durable SAFE MODE 标记的**三态**消费（unknown 必须与 clear 区分，并按各消费点 fail-closed） ----------
+
+test('t37：标记存在但不可判定（安全模式路径被目录占位）→ durableSafeState=unknown 且 safeModeRequired=true', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  await store.ensureDirs();
+  // 标记路径上是目录（非普通文件）→ classifySafeModeMarker: kind='not-file' → 'unknown'
+  await fs.mkdir(safeModeMarkerPath(dir), { recursive: true });
+  const insp = await inspectStartup(store, hooks(), env, {}, 'FREE');
+  assert.equal(insp.durableSafeState, 'unknown', 'unknown 必须与 clear 区分开（旧实现把它压成 boolean false）');
+  assert.equal(insp.safeModeRequired, true, '无法判定 → fail-closed，绝不读成「没有标记」');
+});
+
+test('t37：标记存在但读不出（无读权限）→ unknown 且 fail-closed', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  await store.ensureDirs();
+  // 先写一个合法标记，再把它读回一遍确认 blocked，然后替换成不可读形态（目录）——覆盖 'unreadable'/非普通文件两条 unknown 路径
+  await fs.writeFile(safeModeMarkerPath(dir), 'blocked', 'utf8');
+  assert.equal(await store.readSafeModeState(), 'blocked');
+  await fs.rm(safeModeMarkerPath(dir), { recursive: true, force: true });
+  await fs.mkdir(safeModeMarkerPath(dir), { recursive: true });
+  const insp = await inspectStartup(store, hooks(), env, {}, 'FREE');
+  assert.equal(insp.durableSafeState, 'unknown');
+  assert.equal(insp.safeModeRequired, true);
+});
+
+test('t37 对照：确实没有标记 → durableSafeState=clear 且不因标记阻断（unknown ≠ clear）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  await store.ensureDirs();
+  const insp = await inspectStartup(store, hooks(), env, {}, 'FREE');
+  assert.equal(insp.durableSafeState, 'clear', '标记确实不存在 + 布局可信 → clear');
+  assert.equal(insp.safeModeRequired, false, 'clear 不得被误升为阻断');
+});
+
+test('t37：标记为 blocked → durableSafeState=blocked 且 safeModeRequired=true（既有阻断语义不变）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  await store.writeSafeMode(true);
+  const insp = await inspectStartup(store, hooks(), env, {}, 'FREE');
+  assert.equal(insp.durableSafeState, 'blocked');
+  assert.equal(insp.safeModeRequired, true);
+});
+
+test('t37：Phase3Recovery.refreshSafeMode 消费三态（unknown → isBlocked 阻断）；clearSafeMode 清理通道不变', async (t) => {
+  const dir = tmp(t);
+  const recovery = new Phase3Recovery({ dataDir: dir, packageVersion: '0.1.54', environmentFingerprint: 'fp-t37' });
+  await fs.mkdir(safeModeMarkerPath(dir), { recursive: true });
+  await recovery.refreshSafeMode();
+  assert.equal(recovery.lastSafeModeState, 'unknown', 'unknown 不与 clear 混淆');
+  assert.equal(recovery.isBlocked(), true, '无法判定 → mutation 闸门 fail-closed（旧实现 readSafeMode().catch(()=>false) → false）');
+  // 清理通道：用户显式 recovery → clearSafeMode（写标记 false + 内存复位）
+  await fs.rm(safeModeMarkerPath(dir), { recursive: true, force: true });
+  await recovery.clearSafeMode();
+  assert.equal(recovery.lastSafeModeState, 'clear');
+  assert.equal(recovery.isBlocked(), false, '清理通道行为不变');
+  await recovery.refreshSafeMode();
+  assert.equal(recovery.lastSafeModeState, 'clear', '标记已清除 → 刷新后仍为 clear');
+});
+

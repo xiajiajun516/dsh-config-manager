@@ -30,6 +30,7 @@ import { runStore, type SnapshotsSubTab } from '../run-store.ts'
 import { toast } from '../common/toast-store.ts'
 import { toRecoveryView } from '../recovery/recovery-view.ts'
 import { formatBytes } from '../../ui/report.ts'
+import { midEllipsis } from '../../ui/mid-ellipsis.ts'
 import {
   buildOverviewMetrics,
   overviewActivity,
@@ -145,15 +146,6 @@ function displaySummary(summary: string, t: TranslateNS<'config-manager'>): stri
   if (!r.includes('[REDACTED]')) return r
   const redactedName = t('overview.activity.redacted')
   return r.replaceAll('[REDACTED].zip', redactedName).replaceAll('[REDACTED]', '…')
-}
-
-/** 中段省略（路径/文件名：保留头尾，中段 …——尾部时间戳是唯一区分信息）。 */
-function midEllipsis(s: string, max: number): string {
-  if (s.length <= max) return s
-  const keep = max - 1
-  const head = Math.ceil(keep / 2)
-  const tail = keep - head
-  return `${s.slice(0, head)}…${s.slice(-tail)}`
 }
 
 /** 从文件路径取目录（纯字符串；win32 反斜杠与 posix 斜杠都认）。 */

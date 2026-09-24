@@ -17,11 +17,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { RunStore, STATE_KEY, type StoreStorage } from './run-store.ts'
+import { RunStore, STATE_KEY, redactPersistedValue, toPersistedState, type PersistedState, type StoreStorage } from './run-store.ts'
 import type { RunProgress } from './common/progress-view.ts'
 import { MAX_RUN_LOG_LINES, type RunState } from '../core/run-registry.ts'
 import type { RestoreReport } from '../core/restore.ts'
-import type { ImportDecisions } from '../core/types.ts'
+import type { ImportDecisions, ImportPlan } from '../core/types.ts'
+import { REDACTED } from '../security/redaction.ts'
 import type { ConfigManagerApi } from './api.ts'
 import {
   makeAnalysis, makeExportReport, makeImportResult, makeManifest, makePlan,
@@ -212,7 +213,7 @@ test('m2-refresh: 导出结果/进度/进行中为内存切片瞬态——不写
 })
 
 test('损坏或版本不符的存储数据回退默认并清除脏键', () => {
-  const { storage, raw } = makeStorage()
+  const { raw } = makeStorage()
   raw() // no-op to satisfy lint-like usage
   // 非 JSON
   let s = makeStorage()
@@ -737,6 +738,7 @@ function makeSyncPatch(): Parameters<RunStore['patch']>[0]['sync'] {
         syncMode: 'default',
         syncSections: [],
         sessionsLimit: 5,
+        sessionsInclude: [],
         encrypt: false,
         includeSecrets: false,
         encryptPassword: '',
@@ -754,6 +756,7 @@ function makeSyncPatch(): Parameters<RunStore['patch']>[0]['sync'] {
         syncMode: 'advanced',
         syncSections: ['settings', 'plugins'],
         sessionsLimit: 5,
+        sessionsInclude: [],
         encrypt: true,
         includeSecrets: true,
         encryptPassword: 'ENC-PASS-SECRET',
@@ -1240,4 +1243,419 @@ test('m2-resume: store 镜像显示恢复中但 host 无活跃 recovery run → 
   const rec = store.getSnapshot().recovery
   assert.equal(rec.running, false, '无宿主 run 时 running 复位（不残留 UI 假状态）')
   assert.ok(rec.actionError !== null, '如实提示结果不可恢复')
+})
+
+/* --------------------------------- P0-8 导入失败后不再卡在 step='importing' */
+
+test('P0-8: 导入执行抛错 → 向导 step 回退到执行前（确认页），store 镜像不滞留 importing', async () => {
+  const api = makeApi({
+    createImportPlan: async () => makePlan(),
+    executeImportPlan: async () => { throw new Error('宿主执行失败：备份文件不可读') },
+  })
+  const store = new RunStore({ storage: null })
+  // 先落到「确认页」状态，再取 store 缓存的控制器 —— 控制器由 store rehydrate（与视图同一条链）
+  store.patch({
+    import: {
+      step: 'preview', phase: 'confirm', zipPath: '/tmp/x.zip',
+      analysis: makeAnalysis(), plan: makePlan(),
+    },
+  })
+  const wizard = store.importWizard(api)
+  assert.equal(wizard.snapshot().step, 'preview')
+
+  await assert.rejects(() => wizard.execute({ confirm: true }), /宿主执行失败/)
+  assert.equal(wizard.snapshot().step, 'preview', '控制器回退到执行前的确认页（可重试）')
+  assert.notEqual(wizard.snapshot().step, 'importing', '控制器不得停留在 importing')
+  assert.ok(wizard.snapshot().errors.length > 0, '失败原因进 errors（结果/确认页可见）')
+
+  // 视图的 catch 会 syncWizard()（ImportWizardView.tsx 的 execute catch）→ store 跟随控制器
+  store.syncWizard()
+  const imp = store.getSnapshot().import
+  assert.notEqual(imp.step, 'importing', 'store 镜像不得滞留 importing')
+  assert.equal(imp.step, 'preview', '回到确认页（有「确认导入」与错误重试入口）')
+  assert.equal(imp.plan !== null, true, '计划保留 —— 用户可直接重试，无需重走向导')
+})
+
+test('P0-8: 结果页「重试」失败 → step 回退到结果页（不吞掉结果报告）', async () => {
+  const plan = makePlan({ items: [makePlanItem({ id: 'plugin:x', kind: 'Install', adapter: 'plugins' })] })
+  const result = makeImportResult({ executed: [{ itemId: 'plugin:x', status: 'failed' }] })
+  const api = makeApi({
+    createImportPlan: async () => plan,
+    executeImportPlan: async () => { throw new Error('宿主执行失败：重试仍然失败') },
+  })
+  const store = new RunStore({ storage: null })
+  store.patch({
+    import: { step: 'result', phase: 'confirm', zipPath: '/tmp/x.zip', analysis: makeAnalysis(), plan, result },
+  })
+  const wizard = store.importWizard(api)
+  assert.equal(wizard.snapshot().step, 'result')
+
+  await assert.rejects(() => wizard.executeRetry({}), /重试仍然失败/)
+  assert.equal(wizard.snapshot().step, 'result', '重试失败回到结果页（可再次重试，报告不丢）')
+  store.syncWizard()
+  assert.equal(store.getSnapshot().import.step, 'result')
+})
+
+test('P0-8: 轮询发现 import run 失败 → store 兜底回到确认页（不再停在 importing）', async () => {
+  const failed: RunState = {
+    runId: RUN_ID, kind: 'import', status: 'failed',
+    section: null, sectionTotal: null, item: null, itemTotal: null, detail: null, log: [],
+    error: '宿主执行失败：单项 apply 抛错', createdAt: 1, updatedAt: 3,
+  }
+  const api = makeApi({
+    runs: async () => [runningRun('import')],
+    progress: async () => failed,
+  })
+  const store = new RunStore({ storage: null, pollIntervalMs: 5 })
+  store.patch({
+    import: {
+      step: 'importing', running: true, runId: RUN_ID, zipPath: '/tmp/x.zip',
+      analysis: makeAnalysis(), plan: makePlan(),
+    },
+  })
+  store.importWizard(api) // 控制器 rehydrate 为 importing（轮询失败时它还没回退）
+  store.watchRunning('import', 5)
+
+  await waitFor(() => store.getSnapshot().import.error !== null, 2000, '失败回填 error')
+  const imp = store.getSnapshot().import
+  assert.notEqual(imp.step, 'importing', '不得滞留 importing')
+  assert.equal(imp.step, 'preview', '兜底回到确认页（可重试）')
+  assert.equal(imp.running, false)
+  assert.equal(imp.progress, null)
+  assert.ok(imp.errors.length > 0, '失败原因进 errors')
+  store.stopResume()
+})
+
+/* --------------------------- P0-9 落盘前统一脱敏 + 默认拒绝、显式放行 */
+
+/** P0-9 夹具用的明文凭据形态（命中 kv 字段名 + sk- 值形状两道规则）。 */
+const P0_9_SECRET = 'sk-live-ABCDEFGH12345678'
+
+test('P0-9: 宿主载荷（plan/analysis/result/confirmSession/snapshots.plan/market.detail）落盘前已脱敏', () => {
+  const { storage, raw } = makeStorage()
+  const store = new RunStore({ storage })
+  const analysis = makeAnalysis({ warnings: [`MCP_TOKEN=${P0_9_SECRET}`] })
+  const plan = makePlan({
+    items: [
+      makePlanItem({ id: 'settings:general', kind: 'Create', description: '创建设置 general' }),
+      makePlanItem({
+        id: 'secret:K1', kind: 'MissingSecret', adapter: 'credentialsStatus', description: '凭据 K1 需要补录',
+      }),
+      makePlanItem({
+        id: 'mcp:srv', kind: 'Create', adapter: 'mcp', description: '创建 MCP srv',
+        detail: `env={"MCP_TOKEN":"${P0_9_SECRET}"}`,
+      }),
+    ],
+  })
+  const result = makeImportResult({ warnings: [`Authorization: Bearer ${P0_9_SECRET}`] })
+  const confirmSession: SyncStartResponse = {
+    ok: true, syncSessionId: 'sync-session-p09', snapshotId: 'snap-1',
+    needsReview: true, compatibility: 'good',
+    items: [{
+      itemId: 'mcp:srv', adapter: 'mcp', kind: 'Conflict', description: '更新 MCP srv',
+      severity: 'warning', defaultAdopt: false, adopt: false,
+      detail: `MCP_TOKEN=${P0_9_SECRET}`,
+      conflict: {
+        path: 'mcp.json', kind: 'key',
+        local: { MCP_TOKEN: P0_9_SECRET },
+        diff: `-"MCP_TOKEN": "${P0_9_SECRET}"`,
+      },
+    }],
+  }
+  store.patch({
+    import: { analysis, plan, result, conflictResolutions: { 'secret:K1': 'useImported' } },
+    sync: { confirmSession },
+    snapshots: {
+      plan: {
+        snapshotId: 'snap-1', createdAt: '2026-01-01T00:00:00Z', sourceZip: 'x.zip',
+        actions: [{
+          kind: 'credentialHint', description: '凭据补录',
+          detail: `MCP_TOKEN=${P0_9_SECRET}`, manualHint: `Authorization: Bearer ${P0_9_SECRET}`,
+        }],
+        summary: {
+          hostFileRestores: 0, hostFileRemoves: 0, pluginRemoves: 0,
+          fileRestores: 0, fileRemoves: 0, credentialHints: 1, skips: 0,
+        },
+        pluginBaselineConfirmed: true,
+      },
+    },
+    market: {
+      detail: {
+        id: 'm1', name: 'Market A', version: '1.0.0', sections: ['settings'],
+        downloadedAt: '2026-01-01T00:00:00Z', status: 'valid', warnings: ['第三方来源'],
+        zipPath: '/tmp/market-m1.zip', analysis, plan,
+      },
+    },
+  })
+
+  const text = raw()
+  assert.ok(text !== null, 'patch 后已同步持久化')
+  assert.ok(!text.includes(P0_9_SECRET), '明文密钥不得落入 sessionStorage')
+  assert.ok(text.includes('***REDACTED***'), '命中敏感形态的值替换为 REDACTED 标记')
+
+  const persisted = toPersistedState(store.getSnapshot())
+  // 覆盖点逐个确认（任一漏点都会让上面的整体断言失败，这里给出可定位的失败信息）
+  assert.ok(!JSON.stringify(persisted.import.analysis).includes(P0_9_SECRET), 'analysis 已脱敏')
+  assert.ok(!JSON.stringify(persisted.import.plan).includes(P0_9_SECRET), 'plan 已脱敏')
+  assert.ok(!JSON.stringify(persisted.import.result).includes(P0_9_SECRET), 'result 已脱敏')
+  assert.ok(!JSON.stringify(persisted.sync.confirmSession).includes(P0_9_SECRET), 'confirmSession（含 conflict.diff/local）已脱敏')
+  assert.ok(!JSON.stringify(persisted.snapshots.plan).includes(P0_9_SECRET), 'snapshots.plan 已脱敏')
+  assert.ok(!JSON.stringify(persisted.market.detail).includes(P0_9_SECRET), 'market.detail（含 plan/analysis）已脱敏')
+
+  // 反向：不能误伤 —— 无敏感形态的文本原样保留，功能字段（id / 决策键）不被改写
+  assert.equal(persisted.import.plan?.items[0]?.description, '创建设置 general', '普通描述原样保留')
+  assert.equal(persisted.import.plan?.items[1]?.id, 'secret:K1', 'plan item id 是功能字段（宿主按它执行）→ 不脱敏')
+  assert.deepEqual(persisted.import.conflictResolutions, { 'secret:K1': 'useImported' }, '逐项决策按 item id 键控 → 不脱敏')
+  assert.equal(persisted.sync.confirmSession?.items[0]?.itemId, 'mcp:srv', '确认项 itemId 是功能字段 → 不脱敏')
+})
+
+test('P0-9: redactPersistedValue 只递归普通对象/数组（Date/Uint8Array 不重建）', () => {
+  const when = new Date('2026-01-01T00:00:00Z')
+  assert.equal(redactPersistedValue(when), when, 'Date 原样返回')
+  const bytes = new Uint8Array([1, 2, 3])
+  assert.equal(redactPersistedValue(bytes), bytes, 'Uint8Array 原样返回')
+  assert.equal(redactPersistedValue('TOKEN=abc123'), 'TOKEN=***REDACTED***', '字符串按字段名形态脱敏')
+  assert.equal(redactPersistedValue('TOKEN=abc123'), redactPersistedValue('TOKEN=abc123'), '幂等')
+})
+
+test('P0-9: 放行清单之外的未知字段默认不落盘（各切片，含 byChannel）', () => {
+  const { storage, raw } = makeStorage()
+  const store = new RunStore({ storage })
+  store.patch({ export: { selection: ['settings'] } })
+  // 模拟「未来往各切片加了一个敏感字段」：默认拒绝 → 不得落盘
+  const snap = store.getSnapshot() as unknown as {
+    export: Record<string, unknown>
+    import: Record<string, unknown>
+    sync: Record<string, unknown> & { byChannel: { git: Record<string, unknown> } }
+    market: Record<string, unknown>
+    snapshots: Record<string, unknown>
+    profiles: Record<string, unknown>
+    recovery: Record<string, unknown>
+    more: Record<string, unknown>
+  }
+  snap.export['futureSecret'] = 'LEAK-EXPORT'
+  snap.import['futureToken'] = 'LEAK-IMPORT'
+  snap.sync['futurePassword'] = 'LEAK-SYNC'
+  snap.sync.byChannel.git['futureSecret'] = 'LEAK-CHANNEL'
+  snap.market['futureKey'] = 'LEAK-MARKET'
+  snap.snapshots['futureSecret'] = 'LEAK-SNAPSHOTS'
+  snap.profiles['futureSecret'] = 'LEAK-PROFILES'
+  snap.recovery['futureSecret'] = 'LEAK-RECOVERY'
+  snap.more['futureSecret'] = 'LEAK-MORE'
+
+  store.save() // 走唯一写盘路径
+  const text = raw()
+  assert.ok(text !== null)
+  for (const leak of [
+    'LEAK-EXPORT', 'LEAK-IMPORT', 'LEAK-SYNC', 'LEAK-CHANNEL',
+    'LEAK-MARKET', 'LEAK-SNAPSHOTS', 'LEAK-PROFILES', 'LEAK-RECOVERY', 'LEAK-MORE',
+  ]) {
+    assert.ok(!text.includes(leak), `${leak} 不得落盘（放行清单之外默认拒绝）`)
+  }
+  assert.deepEqual(toPersistedState(store.getSnapshot()).export.selection, ['settings'], '显式放行字段仍落盘')
+})
+
+test('P0-9: 持久化字段清单显式化（键集合断言 —— 新增字段必须显式放行）', () => {
+  const store = new RunStore({ storage: null })
+  const p: PersistedState = toPersistedState(store.getSnapshot())
+  const keys = (o: object): string[] => Object.keys(o).sort()
+  assert.deepEqual(keys(p.export), ['encrypt', 'error', 'excludedUnits', 'fileName', 'includeSecrets', 'note', 'selection'])
+  assert.deepEqual(keys(p.import), [
+    'analysis', 'conflictResolutions', 'conflictStrategy', 'containerEncrypted', 'error', 'errors',
+    'importSelection', 'pathMappings', 'phase', 'plan', 'progress', 'result', 'rollbackOnError',
+    'runId', 'running', 'selectedFileName', 'step', 'uploading', 'zipPath',
+  ])
+  assert.deepEqual(keys(p.sync), [
+    'byChannel', 'channel', 'confirmDecisions', 'confirmSession', 'error', 'lastRestoreId',
+    'loadError', 'pullReport', 'pushPreview', 'pushReport', 'repoUrl', 'webdavUrl', 'webdavUsername',
+  ])
+  assert.deepEqual(keys(p.sync.byChannel.git), [
+    'autosync', 'autosyncEnabled', 'autosyncInterval', 'encrypt', 'includeSecrets',
+    'loadingSnapshots', 'selectedSnapshotId', 'sessionsInclude', 'sessionsLimit', 'snapshots',
+    'syncMode', 'syncSections',
+  ])
+  assert.deepEqual(keys(p.market), [
+    'category', 'conflictResolutions', 'detail', 'error', 'importResult', 'items', 'loadError',
+    'myConfirmDeleteId', 'myInstall', 'myItems', 'myItemsError', 'myWizard', 'search',
+    'sectionFilter', 'selectionState', 'sortKey', 'source', 'subView',
+  ])
+  assert.deepEqual(keys(p.snapshots), [
+    'actionError', 'backupDraft', 'changeSummary', 'error', 'importBackup', 'plan', 'report',
+    'running', 'selectedId', 'subTab',
+  ])
+  assert.deepEqual(keys(p.profiles), ['current', 'error', 'loadError', 'profiles', 'selectedName', 'selection'])
+  assert.deepEqual(keys(p.recovery), ['actionError', 'error', 'preview', 'running', 'selectedOperationId', 'status', 'verifyResult'])
+  assert.deepEqual(keys(p.more), ['moreSub'])
+  // 瞬态与凭据不得出现在任何切片（回归护栏）
+  assert.equal(p.snapshots.running, false)
+  assert.equal(p.snapshots.importBackup, null)
+  assert.equal(p.recovery.running, false)
+})
+
+/* ------------------- t27：脱敏结果按引用缓存（回收 P0-9 的性能代价） */
+
+/** 第二条明文凭据形态（替换/失效用例用；与 P0_9_SECRET 不同值）。 */
+const T27_SECRET = 'sk-live-ZZZZZZZZ99999999'
+
+test('t27: 同一对象引用 → 复用脱敏结果（不重复深脱敏）；对象被替换 → 缓存失效并重算', () => {
+  const { storage } = makeStorage()
+  const store = new RunStore({ storage })
+  const plan = makePlan({
+    items: [makePlanItem({ id: 'mcp:srv', adapter: 'mcp', kind: 'Create', description: '创建 MCP srv', detail: `MCP_TOKEN=${P0_9_SECRET}` })],
+  })
+  store.patch({ import: { plan } })
+
+  const first = toPersistedState(store.getSnapshot())
+  const second = toPersistedState(store.getSnapshot())
+  // 引用相同 = 直接复用缓存对象（重新计算必然产生新对象）→ 证明没有重复深脱敏
+  assert.equal(second.import.plan, first.import.plan, '同一引用未变化 → 命中缓存，复用同一结果对象')
+  assert.equal(second.import.plan?.items[0]?.detail, 'MCP_TOKEN=***REDACTED***', '命中的结果仍是脱敏后的值')
+  assert.ok(!JSON.stringify(second.import.plan).includes(P0_9_SECRET), '缓存命中不得把明文带回来')
+
+  // 对象被替换（引用变化）→ 必须重算：新载荷的新敏感值也要脱敏
+  const replaced = makePlan({
+    items: [makePlanItem({ id: 'mcp:srv', adapter: 'mcp', kind: 'Create', description: '创建 MCP srv', detail: `MCP_TOKEN=${T27_SECRET}` })],
+  })
+  store.patch({ import: { plan: replaced } })
+  const third = toPersistedState(store.getSnapshot())
+  assert.notEqual(third.import.plan, second.import.plan, '引用变化 → 不得复用旧缓存结果')
+  assert.ok(!JSON.stringify(third.import.plan).includes(T27_SECRET), '替换后的新载荷同样被脱敏（缓存不得掩盖内容变化）')
+  assert.ok(JSON.stringify(third.import.plan).includes('***REDACTED***'))
+})
+
+test('t27: 缓存命中的输出与冷路径（同内容新引用）逐字段一致', () => {
+  const { storage } = makeStorage()
+  const store = new RunStore({ storage })
+  const analysis = makeAnalysis({ warnings: [`MCP_TOKEN=${P0_9_SECRET}`] })
+  const plan = makePlan({
+    items: [
+      makePlanItem({ id: 'settings:general', kind: 'Create', description: '创建设置 general' }),
+      makePlanItem({ id: 'secret:K1', kind: 'MissingSecret', adapter: 'credentialsStatus', description: '凭据 K1 需要补录' }),
+      makePlanItem({ id: 'mcp:srv', kind: 'Create', adapter: 'mcp', detail: `env={"MCP_TOKEN":"${P0_9_SECRET}"}` }),
+    ],
+  })
+  const result = makeImportResult({ warnings: [`Authorization: Bearer ${P0_9_SECRET}`] })
+  store.patch({ import: { analysis, plan, result } })
+
+  const warm = toPersistedState(store.getSnapshot())          // 第二次起走缓存
+  const warmAgain = toPersistedState(store.getSnapshot())
+  assert.equal(warmAgain.import.plan, warm.import.plan, '第二次调用命中缓存')
+
+  // 冷路径：deepClone 造出「内容相同、引用全新」的载荷 → 必然重新计算
+  const coldStore = new RunStore({ storage: null })
+  coldStore.patch({
+    import: {
+      analysis: structuredClone(analysis),
+      plan: structuredClone(plan),
+      result: structuredClone(result),
+    },
+  })
+  const cold = toPersistedState(coldStore.getSnapshot())
+  assert.notEqual(cold.import.plan, warm.import.plan, '冷路径是不同对象（确为重新计算）')
+  assert.deepEqual(cold.import, warm.import, '缓存命中与冷路径的 import 投影逐字段一致')
+  assert.deepEqual(cold.sync, warm.sync)
+  assert.deepEqual(cold.snapshots, warm.snapshots)
+  // 功能字段与普通文本也不能被缓存路径改写
+  assert.equal(warm.import.plan?.items[1]?.id, 'secret:K1')
+  assert.equal(warm.import.plan?.items[0]?.description, '创建设置 general')
+})
+
+/** 造一条 levels 层嵌套的对象链（最深处放一个可指定的叶子值）。 */
+function nestChain(levels: number, leaf: Record<string, unknown>): Record<string, unknown> {
+  const root: Record<string, unknown> = {}
+  let node = root
+  for (let i = 0; i < levels; i++) {
+    const next: Record<string, unknown> = {}
+    node['child'] = next
+    node = next
+  }
+  Object.assign(node, leaf)
+  return root
+}
+
+test('t27: 深度上限处的替换行为不因缓存而改变（同一载荷两个深度各留一份）', () => {
+  // 40 层嵌套：超过 REDACT_MAX_DEPTH=32 → 超限子树整棵替换为占位（t38 起），
+  // 缓存按「引用 + 深度」分开存，所以命中路径与冷路径必须给出完全一样的结果。
+  const deep = (levels: number): Record<string, unknown> => {
+    const root: Record<string, unknown> = {}
+    let node = root
+    for (let i = 0; i < levels; i++) {
+      const next: Record<string, unknown> = {}
+      node['child'] = next
+      node = next
+    }
+    node['token'] = `MCP_TOKEN=${P0_9_SECRET}`
+    return root
+  }
+  const payload = { deep: deep(40), shallow: { detail: `MCP_TOKEN=${P0_9_SECRET}` } }
+  const warm = redactPersistedValue(payload)
+  const warmAgain = redactPersistedValue(payload)
+  assert.equal(warmAgain, warm, '同一引用重复调用复用缓存对象')
+  const cold = redactPersistedValue(structuredClone(payload))
+  assert.deepEqual(cold, warm, '命中缓存与冷计算输出一致（含超限子树替换处）')
+  // t38 起超限子树整棵替换为占位 → 深层明文不再穿透（原「不脱敏」断言已随之翻转）
+  assert.equal(JSON.stringify(warm).includes(P0_9_SECRET), false, '超限子树内的明文不得出现在结果里')
+  assert.equal(warm.shallow.detail, 'MCP_TOKEN=***REDACTED***', '上限内的浅处仍按常规规则脱敏')
+  // 下钻到超限边界：payload 根 = 0 层、deep 链首节点 = 1 层，替换发生在第 32 层
+  let node: unknown = warm.deep
+  let depth = 1
+  while (typeof node === 'object' && node !== null && depth < 64) {
+    node = (node as Record<string, unknown>)['child']
+    depth += 1
+  }
+  assert.equal(node, REDACTED, `超限子树整棵替换为占位（同一引用时命中缓存里的占位；实际在第 ${depth} 层停止下钻）`)
+  assert.equal(depth, 32, '替换发生在第 32 层（= REDACT_MAX_DEPTH）')
+})
+
+test('t38: 超深子树整棵替换为占位 —— 第 33 层及更深的 sk- 值不进入落盘结果', () => {
+  const { storage, raw } = makeStorage()
+  const store = new RunStore({ storage })
+  // 绝对深度：plan 根 = 0 层、deepBranch = 1 层，之后每层 child +1。
+  // 在第 33 / 35 / 37 层各挂一个明文 sk- 值 —— 它们的父节点在第 32 层（= REDACT_MAX_DEPTH）起被整棵替换。
+  const branch = nestChain(36, {})
+  for (const absoluteDepth of [33, 35, 37]) {
+    let node: Record<string, unknown> = branch
+    for (let depth = 2; depth <= absoluteDepth - 1; depth += 1) {
+      node = node['child'] as Record<string, unknown>
+    }
+    node['token'] = `MCP_TOKEN=${P0_9_SECRET}`
+  }
+  const plan = {
+    ...makePlan({
+      items: [makePlanItem({
+        id: 'mcp:srv', adapter: 'mcp', kind: 'Create', description: '创建 MCP srv',
+        detail: `MCP_TOKEN=${P0_9_SECRET}`,
+      })],
+    }),
+    deepBranch: branch,
+  }
+  store.patch({ import: { plan: plan as unknown as ImportPlan } })
+
+  const text = raw()
+  assert.ok(text !== null, 'patch 后已同步持久化')
+  assert.equal(text.includes(P0_9_SECRET), false, '第 33 层及更深的明文 sk- 值不得进入落盘结果')
+  const persisted = toPersistedState(store.getSnapshot())
+  assert.equal(JSON.stringify(persisted.import.plan).includes(P0_9_SECRET), false, 'plan 里的深层明文同样不落盘')
+  // 覆盖未缩小：上限内的那一个明文照常被 redact()
+  assert.equal(persisted.import.plan?.items[0]?.detail, 'MCP_TOKEN=***REDACTED***', '上限内的明文仍按常规规则脱敏')
+  // 超限子树整棵替换：从 deepBranch（1 层）下钻，在第 32 层停止且该处是占位
+  let node: unknown = (persisted.import.plan as unknown as Record<string, unknown>)['deepBranch']
+  let depth = 1
+  while (typeof node === 'object' && node !== null && depth < 64) {
+    node = (node as Record<string, unknown>)['child']
+    depth += 1
+  }
+  assert.equal(node, REDACTED, `超限处应为占位（实际在第 ${depth} 层停止下钻）`)
+  assert.equal(depth, 32, '整棵替换发生在第 32 层（= REDACT_MAX_DEPTH）')
+})
+
+test('t38: 同一对象在浅处与超限处各留一份 —— 深度仍参与缓存键、互不污染', () => {
+  const shared = { detail: `MCP_TOKEN=${P0_9_SECRET}` }
+  const payload = { shallow: shared, deep: nestChain(40, { leaf: shared }) }
+  const out = redactPersistedValue(payload)
+  assert.equal(out.shallow.detail, 'MCP_TOKEN=***REDACTED***', '浅处的同一对象按常规规则脱敏')
+  let node: unknown = out.deep
+  while (typeof node === 'object' && node !== null) node = (node as Record<string, unknown>)['child']
+  assert.equal(node, REDACTED, '深处的同一对象被整棵替换为占位（缓存未把浅处结果串到深处）')
+  assert.equal(JSON.stringify(out).includes(P0_9_SECRET), false, '两种深度都不泄漏明文')
 })

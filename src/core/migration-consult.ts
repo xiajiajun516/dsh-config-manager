@@ -199,11 +199,6 @@ function clampScore(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
-function worstVerdict(a: HealthVerdict, b: HealthVerdict): HealthVerdict {
-  const rank: Record<HealthVerdict, number> = { healthy: 0, 'needs-attention': 1, critical: 2 };
-  return rank[a] >= rank[b] ? a : b;
-}
-
 /* ---------------- 各维度评分 ---------------- */
 
 /** 兼容性维度：复用 computeCompatibility（扩展而非重写） */

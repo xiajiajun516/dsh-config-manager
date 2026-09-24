@@ -16,6 +16,8 @@
  */
 import type { SectionId } from '../schema/types.ts'
 import type { ImportPlan, PlanItem, PlanItemKind, Portability } from '../core/types.ts'
+// 运行时依赖：会话 id 归一化（零依赖纯函数，客户端 bundle 可安全内联）
+import { projectKeyOf, sessionIdKey } from '../core/session-select.ts'
 
 /** 一个可单独勾选的最小单元（来自 /export-preview 的 items）。 */
 export interface SelectionUnit {
@@ -33,6 +35,30 @@ export interface SelectionUnit {
    * 与既有分区（skills / pluginFiles / …）的表现完全一致。纯展示层，不参与勾选契约。
    */
   group?: string
+  /**
+   * 本单元拥有的会话 id（工作区单元专用；issue #45）。
+   *
+   * 用途：勾选联动 —— 勾了会话就自动勾上它所属的工作区，取消工作区就取消它的会话。
+   * 取值 = 工作区记录 sessionIds **原样**（DSH 一律写 `session-<uuid>`）；与会话单元 id 的末段（目录名，
+   * 可能是 `session-<uuid>` 也可能是裸 `<uuid>`）用 `sessionIdKey()` 归一化后配对 —— 两种形态直接做
+   * 字符串比较会失配（真机实测 546/570 会话因此联不上工作区）。
+   */
+  sessionIds?: string[]
+  /**
+   * 本单元 **path 的 cwd 目录键**（工作区单元专用；issue #45 勾选联动的第二判据）。
+   *
+   * 为什么需要它：DSH 注册表 `sessionIds` 覆盖率很低（真机实测一次可选择的 570 条会话里只有 23 条在
+   * 里面），而 DSH 自己按「会话 cwd 的目录键 == 工作区 path 的目录键」会话显示在工作区下。勾选联动若
+   * 只认 sessionIds，就会出现「界面明明把对话挂在某工作区下、勾它却不联动」。
+   */
+  projectKey?: string
+  /**
+   * 父对话的会话裸键（**只有子代理会话才有值**；宿主在 /export-preview 里按 DSH 的会话存储关系下发）。
+   *
+   * 用途：「父 ↔ 子代理会话」勾选联动（勾父自动勾上它的子代理会话、勾子自动带上父）。没有这个字段
+   * 时联动整段失效 —— 界面勾了什么与包里装了什么就会不一致（真机事故：勾 2 条、包里 41 条）。
+   */
+  parentSessionId?: string
 }
 
 /** 一个分区及其可勾选单元；units 为空 = 本分区不可细分（UI 只给整体开关）。 */
@@ -104,7 +130,7 @@ export function visibleUnits(
  * 纯函数（node 可测）：只改显示文本，不改数据；完整值由调用方放进 `title`。
  * 与 CSS `text-overflow: ellipsis` 叠加使用（CSS 兜底实际容器宽度）。
  */
-export function middleEllipsis(text: string, max = 44): string {
+export function tailWeightedEllipsis(text: string, max = 44): string {
   if (max <= 1 || text.length <= max) return text
   // 尾部预算 ≈ 40%（不少于 8 字符）：时间戳/版本/扩展名比头部更有区分度。
   // 但必须给「头部 + …」留位置，否则 max 很小时（如 4）截断结果会超过 max。
@@ -139,6 +165,9 @@ export function sectionsFromPreview(
       sizeBytes: u.sizeBytes,
       ...(u.lockedWith !== undefined ? { lockedWith: u.lockedWith } : {}),
       ...(u.group !== undefined ? { group: u.group } : {}),
+      ...(u.sessionIds !== undefined ? { sessionIds: u.sessionIds } : {}),
+      ...(u.projectKey !== undefined ? { projectKey: u.projectKey } : {}),
+      ...(u.parentSessionId !== undefined ? { parentSessionId: u.parentSessionId } : {}),
     })),
   }))
 }
@@ -376,6 +405,251 @@ export function buildExportRequest(sel: Selection, nodes: SelectionSection[]): E
 }
 
 /** 搜索过滤：按分区名/单元名/副标题匹配；命中的分区保留其全部单元（便于继续勾选同分区其它项）。 */
+/** 会话单元 id（sessions:<projectKey>/<sessionId>）→ sessionId；非会话单元 → undefined。 */
+/**
+ * 会话单元 id（`sessions:<项目键>/<目录名>`）→ **cwd 目录键**（项目键）；非会话单元 / 形状不符 → undefined。
+ *
+ * 用途：勾选联动的第二判据 —— 与工作区单元的 `projectKey` 比较，口径与 DSH「把会话显示在工作区下」一致。
+ */
+/**
+ * 工作区单元的 cwd 目录键：宿主直出的 `projectKey` 优先，缺省时用 `detail`（= 工作区绝对路径）现算。
+ *
+ * 为什么要有兜底：`projectKey` 是后加的宿主字段，**旧宿主**（未重启的 DSH 进程）不会回传它，而工作区单元的
+ * `detail` 一直就是绝对路径。只在 detail 形如绝对路径时才现算 —— 计划项的 detail 是描述文案
+ * （如 `current={...} imported={...}`），绝不会被误当成路径。
+ */
+export function workspaceProjectKeyOf(unit: { projectKey?: string; detail?: string }): string | undefined {
+  if (unit.projectKey !== undefined && unit.projectKey !== '') return unit.projectKey
+  const detail = unit.detail
+  if (detail === undefined) return undefined
+  if (!/^[a-zA-Z]:[\\/]/.test(detail) && !detail.startsWith('/')) return undefined
+  return projectKeyOf(detail)
+}
+
+export function sessionProjectKeyOfUnit(unitId: string): string | undefined {
+  if (!unitId.startsWith('sessions:')) return undefined
+  const rest = unitId.slice('sessions:'.length)
+  const slash = rest.lastIndexOf('/')
+  return slash <= 0 ? undefined : rest.slice(0, slash)
+}
+
+export function sessionIdOfUnit(unitId: string): string | undefined {
+  if (!unitId.startsWith('sessions:')) return undefined
+  const rest = unitId.slice('sessions:'.length)
+  const slash = rest.lastIndexOf('/')
+  return slash < 0 ? undefined : rest.slice(slash + 1)
+}
+
+/* ----------------------------------------------------------------------------------
+   会话「父对话 ↔ 子代理会话」联动（用户明确要求：勾父自动勾上它的 subagent 会话）
+   ---------------------------------------------------------------------------------- */
+
+/** 本次勾选动作（哪个单元、点完后是勾还是取消）—— 父/子两条规则必须按动作方向定夺。 */
+export interface SessionParentChange {
+  unitId: string
+  checked: boolean
+}
+
+/**
+ * 父对话 ↔ 子代理会话联动。三件事，全部由**用户勾选的父对话**这一侧驱动：
+ *  - **勾父** → 连带勾上它的子代理会话（传递：子会话自己还有子会话也一起带）；
+ *  - **勾子** → 连带勾上它的父对话（父链向上传递）—— 与导出的「向上补父对话」同口径，
+ *    否则界面勾了子、包里却多出父，勾选与包内容不一致；
+ *  - **取消父** → 连带取消它的子代理会话；**取消子** → 只取消这一条（父对话留着）。
+ *
+ * 为什么必须按动作方向（而不是无脑闭包）：两条规则会互相抵消 —— 取消父之后若还跑
+ * 「已勾选的子 ⇒ 勾上父」，父立刻被勾回来（与工作区联动完全同一个坑，见 focus 的注释）。
+ *
+ * @param change 本次点击的单元与状态；缺省（分区/分组/全选等批量动作、清单到货后补跑）
+ *   只做**正向闭包**：已勾选的父把子补齐、已勾选的子把父补齐，绝不取消任何东西。
+ */
+export function applySessionParentCoupling(
+  sel: Selection,
+  nodes: SelectionSection[],
+  change?: SessionParentChange,
+): Selection {
+  const sessions = nodes.filter((n) => n.section === 'sessions').flatMap((n) => n.units)
+  if (sessions.length === 0) return sel
+  const byBare = new Map<string, SelectionUnit>()
+  for (const unit of sessions) {
+    const bare = sessionIdOfUnit(unit.id)
+    if (bare !== undefined) byBare.set(sessionIdKey(bare), unit)
+  }
+  const children = sessions.filter((u) => u.parentSessionId !== undefined)
+  if (children.length === 0) return sel
+  const parentOf = (unit: SelectionUnit): SelectionUnit | undefined => {
+    const parent = unit.parentSessionId
+    return parent === undefined ? undefined : byBare.get(sessionIdKey(parent))
+  }
+  const childrenOf = (unit: SelectionUnit): SelectionUnit[] => {
+    const bare = sessionIdOfUnit(unit.id)
+    if (bare === undefined) return []
+    const key = sessionIdKey(bare)
+    return children.filter((c) => sessionIdKey(c.parentSessionId ?? '') === key)
+  }
+  /** 单元 id → 分区（取消勾选一个单元时要知道它属于哪个分区）。 */
+  const sectionOf = new Map<string, SectionId>()
+  for (const node of nodes) for (const unit of node.units) sectionOf.set(unit.id, node.section)
+  // 不能用 isUnitSelected（稀疏表示的「未排除即选中」对整个分区没勾会误判，见 sectionPickState）
+  const isPicked = (state: Selection, unitId: string): boolean => {
+    const section = sectionOf.get(unitId)
+    return section !== undefined && state.sections.includes(section) && !state.excluded.includes(unitId)
+  }
+
+  /** 正向闭包：从 start 出发把父链与子（传递）都勾上。 */
+  const selectClosure = (state: Selection, start: SelectionUnit): Selection => {
+    let out = state
+    const upSeen = new Set<string>()
+    let cur: SelectionUnit | undefined = start
+    while (cur !== undefined) {
+      const bare = sessionIdOfUnit(cur.id)
+      if (bare === undefined || upSeen.has(sessionIdKey(bare))) break
+      upSeen.add(sessionIdKey(bare))
+      const parent = parentOf(cur)
+      if (parent === undefined) break
+      if (!isPicked(out, parent.id)) out = toggleUnit(out, nodes, parent.id, true)
+      cur = parent
+    }
+    const queue: SelectionUnit[] = [start]
+    const downSeen = new Set<string>()
+    while (queue.length > 0) {
+      const unit = queue.shift()
+      if (unit === undefined) break
+      const bare = sessionIdOfUnit(unit.id)
+      if (bare === undefined || downSeen.has(sessionIdKey(bare))) continue
+      downSeen.add(sessionIdKey(bare))
+      for (const child of childrenOf(unit)) {
+        if (!isPicked(out, child.id)) out = toggleUnit(out, nodes, child.id, true)
+        queue.push(child)
+      }
+    }
+    return out
+  }
+
+  /** 反向：取消 start 的整棵子树（start 自己由调用方那次 toggleUnit 处理）。 */
+  const unselectSubtree = (state: Selection, start: SelectionUnit): Selection => {
+    let out = state
+    const queue: SelectionUnit[] = [start]
+    const seen = new Set<string>()
+    while (queue.length > 0) {
+      const unit = queue.shift()
+      if (unit === undefined) break
+      const bare = sessionIdOfUnit(unit.id)
+      if (bare === undefined || seen.has(sessionIdKey(bare))) continue
+      seen.add(sessionIdKey(bare))
+      for (const child of childrenOf(unit)) {
+        if (isPicked(out, child.id)) out = toggleUnit(out, nodes, child.id, false)
+        queue.push(child)
+      }
+    }
+    return out
+  }
+
+  if (change === undefined) {
+    let out = sel
+    for (const unit of sessions) {
+      if (!isPicked(out, unit.id)) continue
+      out = selectClosure(out, unit)
+    }
+    return out
+  }
+  const changed = sessions.find((u) => u.id === change.unitId)
+  if (changed === undefined) return sel
+  return change.checked ? selectClosure(sel, changed) : unselectSubtree(sel, changed)
+}
+
+/**
+ * 会话 ↔ 工作区联动（issue #45）：① 勾了会话 → 自动勾上「拥有它的工作区」；② 取消工作区 → 它的会话也取消。
+ *
+ * 为什么写在选择模型层：导出页与导入向导共用同一个 ContentPicker，规则写一次两端行为一致
+ * （「同样的勾选框不一样的行为」是本仓库明确要消灭的状态）。只按 sessionIds 匹配、不翻译路径：
+ * 跨机时工作区路径与会话 cwd 都是源机形态，按路径匹配不可靠。无 sessionIds 的单元一律不参与联动（不猜）。
+ */
+/**
+ * 本次勾选动作的方向：① 只勾会话 → 带上其工作区；② 只动工作区 → 撤销未勾工作区的会话；both = 两条都跑。
+ *
+ * 为什么必须有方向：两条规则在「会话勾着、它的工作区却被取消」这种状态下会互相抵消（谁后跑谁翻盘）。
+ * 用动作方向定夺，行为才是确定的：取消工作区一定连带取消它的会话，勾上会话一定带上它的工作区。
+ */
+export type SessionWorkspaceCouplingFocus = 'sessions' | 'workspaces' | 'both'
+
+/**
+ * 会话↔工作区联动需要的**伙伴分区**（导出页的清单是逐分区惰性拉的）。
+ *
+ * 联动的唯一数据源是**工作区单元上的 `sessionIds`**：勾了会话但工作区清单还没读出来 → 没有 sessionIds 可读 →
+ * 联动**静默失效**（用户真机复验：取消工作区后再勾一个对话，对应工作区不会回来）。所以只要勾了会话，就
+ * 必须把工作区清单一起读出来；工作区记录是纯元数据（每条几十字节），这点代价可以忽略。
+ *
+ * 反向刻意不加（勾着工作区、会话清单没读）：那种状态下会话单元根本不在选择器里，没有需要联动的会话。
+ */
+export function couplingInventorySections(sections: readonly SectionId[]): SectionId[] {
+  if (!sections.includes('sessions') || sections.includes('workspaces')) return [...sections]
+  return [...sections, 'workspaces']
+}
+
+/** 两份选择是否等价（按集合；用于「清单到货后补一次联动」避免无谓写库 / 自激渲染）。 */
+export function sameSelection(a: Selection, b: Selection): boolean {
+  if (a.sections.length !== b.sections.length || a.excluded.length !== b.excluded.length) return false
+  const sections = new Set(a.sections)
+  const excluded = new Set(a.excluded)
+  return b.sections.every((s) => sections.has(s)) && b.excluded.every((s) => excluded.has(s))
+}
+
+export function applySessionWorkspaceCoupling(
+  sel: Selection,
+  nodes: SelectionSection[],
+  focus: SessionWorkspaceCouplingFocus = 'both',
+): Selection {
+  const sessionUnits = nodes.filter((n) => n.section === 'sessions').flatMap((n) => n.units)
+  const workspaceUnits = nodes
+    .filter((n) => n.section === 'workspaces')
+    .flatMap((n) => n.units)
+    // 参与联动的判据：有 sessionIds（注册表归属）或有 cwd 目录键（宿主给 / 由 detail 现算）。都没有 → 不参与。
+    .filter((u) => (u.sessionIds?.length ?? 0) > 0 || workspaceProjectKeyOf(u) !== undefined)
+  if (sessionUnits.length === 0 || workspaceUnits.length === 0) return sel
+  /**
+   * 本工作区单元是否拥有该会话。两套判据缺一不可：
+   *  ① 注册表 `sessionIds`（精确归属，目录名两种形态归一化后比较）；
+   *  ② **cwd 目录键相同**（`projectKey`）—— DSH 的 sessionIds 覆盖率很低（真机实测：可选择的 570 条会话里
+   *     只有 23 条在里面），而 DSH 自己就是按「会话 cwd 的目录键 == 工作区 path 的目录键」把会话显示在
+   *     工作区下的；只认 sessionIds 就会出现「界面把对话挂在某工作区下、勾它却不联动」。
+   */
+  const owns = (ws: SelectionUnit, unit: SelectionUnit): boolean => {
+    const sessionId = sessionIdOfUnit(unit.id)
+    if (sessionId !== undefined && (ws.sessionIds ?? []).some((id) => sessionIdKey(id) === sessionIdKey(sessionId))) return true
+    const projectKey = sessionProjectKeyOfUnit(unit.id)
+    if (projectKey === undefined) return false
+    return workspaceProjectKeyOf(ws) === projectKey
+  }
+  // 不能用 isUnitSelected：它是稀疏表示下的「未排除即选中」，对「整个分区没勾」会误判为已选。
+  const sectionOf = new Map<string, SectionId>()
+  for (const node of nodes) for (const unit of node.units) sectionOf.set(unit.id, node.section)
+  const isPicked = (state: Selection, unitId: string): boolean => {
+    const section = sectionOf.get(unitId)
+    return section !== undefined && state.sections.includes(section) && !state.excluded.includes(unitId)
+  }
+  let next = sel
+  // ② 取消工作区后不能留下「有主、但主人全被取消」的会话（不变量；先跑，冲突时以「取消工作区」为准）。
+  //    以**会话**为中心判定：同一 cwd 目录键下若还有别的已勾工作区，会话就名正言顺地留着（重复 path 不误伤）。
+  if (focus !== 'sessions') {
+    for (const unit of sessionUnits) {
+      if (!isPicked(next, unit.id)) continue
+      const owners = workspaceUnits.filter((ws) => owns(ws, unit))
+      if (owners.length === 0) continue // 无主会话（注册表没登记、目录键也对不上）不参与联动：不猜、不动
+      if (owners.some((ws) => isPicked(next, ws.id))) continue
+      next = toggleUnit(next, nodes, unit.id, false)
+    }
+  }
+  // ① 勾了会话 → 自动勾上拥有它的工作区
+  if (focus !== 'workspaces') {
+    for (const ws of workspaceUnits) {
+      const ownsSelected = sessionUnits.some((unit) => isPicked(next, unit.id) && owns(ws, unit))
+      if (ownsSelected && !isPicked(next, ws.id)) next = toggleUnit(next, nodes, ws.id, true)
+    }
+  }
+  return next
+}
+
 export function filterSections(nodes: SelectionSection[], query: string): SelectionSection[] {
   const q = query.trim().toLowerCase()
   if (q === '') return nodes
@@ -473,6 +747,8 @@ export function sectionsFromPlan(plan: ImportPlan): SelectionSection[] {
         // 宿主给的展示名优先（sessions 的会话标题）；缺省退回单元 id 剥前缀（会话目录名）
         label: item.label ?? unitLabel(unitId, item.adapter),
         ...(item.group !== undefined ? { group: item.group } : {}),
+        ...(item.sessionIds !== undefined ? { sessionIds: item.sessionIds } : {}),
+        ...(item.projectKey !== undefined ? { projectKey: item.projectKey } : {}),
         sizeBytes: 0,
       })
     }

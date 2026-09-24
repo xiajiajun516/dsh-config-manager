@@ -1,8 +1,9 @@
 /**
  * 远程同步浏览器半 —— `/api/dsh-config-manager/sync/*` 的类型化 fetch 封装。
  *
- * 独立于 `../api.ts`（ConfigManagerApi 为并行会话已改文件，禁碰）：本文件自持
- * 端点常量与 readJson/postJson 小工具（与 api.ts 同款模式），只新增不修改。
+ * 端点常量与请求封装都是**单一来源**：路由常量见 `common/routes.ts`，
+ * `readJson` / `getJson` / `postJson`（统一超时 + 取消 + 错误映射）见 `common/http.ts` ——
+ * 本文件不再自定义副本（W4 收敛）。
  *
  * 端点契约（Host 半 src/index.ts 的 makeRoutes 按此实现）：
  * ```
@@ -23,33 +24,17 @@
  *  - 本文件不 import 任何 node 模块（纯浏览器 bundle；sync-engine 仅作 type-only 引用）。
  */
 import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts';
+import type { SyncTransportType as HostSyncTransportType } from '../../sync/sync-config.ts';
 import type { PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
-import { ConfigManagerApiError } from '../api.ts';
 import type { ConsultReport } from '../../core/migration-consult.ts';
+import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
+import { CONFIG_MANAGER_API, SYNC_API } from '../common/routes.ts';
+import type { ExportPreviewResponse } from '../api.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
 
-/** 同步端点常量（与 Host 半 src/index.ts API 常量保持一致） */
-export const SYNC_API = {
-  base: '/api/dsh-config-manager/sync',
-  status: '/api/dsh-config-manager/sync/status',
-  push: '/api/dsh-config-manager/sync/push',
-  pull: '/api/dsh-config-manager/sync/pull',
-  githubStart: '/api/dsh-config-manager/sync/github/start',
-  githubPoll: '/api/dsh-config-manager/sync/github/poll',
-  githubCancel: '/api/dsh-config-manager/sync/github/cancel',
-  githubValidate: '/api/dsh-config-manager/sync/github/validate',
-  history: '/api/dsh-config-manager/sync/history',
-  snapshotsList: '/api/dsh-config-manager/sync/snapshots-list',
-  sync: '/api/dsh-config-manager/sync/sync',
-  applyItems: '/api/dsh-config-manager/sync/apply-items',
-  cancel: '/api/dsh-config-manager/sync/cancel',
-  autosync: '/api/dsh-config-manager/sync/autosync',
-  selection: '/api/dsh-config-manager/sync/selection',
-  config: '/api/dsh-config-manager/sync/config',
-  uiPrefs: '/api/dsh-config-manager/sync/ui-prefs',
-  rollback: '/api/dsh-config-manager/sync/rollback',
-} as const;
+/** 同步端点常量：**唯一来源** = `common/routes.ts`（W4 单点化），此处重导出保持既有导入面。 */
+export { SYNC_API };
 
 /** DSH credentials 中的同步 token 引用名（Host 半同值；仅供提示文案使用，值由 Host 读写） */
 export const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN';
@@ -57,8 +42,12 @@ export const SYNC_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_TOKEN';
 /** WebDAV 通道密码在 DSH credentials 中的引用名（Host 半同值；仅供提示文案使用，值由 Host 读写） */
 export const SYNC_WEBDAV_CREDENTIAL_REF = 'DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD';
 
-/** 远程同步通道类型：git（默认）或 webdav */
-export type SyncTransportType = 'git' | 'webdav';
+/**
+ * 远程同步通道类型：git（默认）或 webdav。
+ * **唯一来源** = 宿主 src/sync/sync-config.ts 的 SYNC_CHANNELS（此处仅 type-only 别名：
+ * 客户端 bundle 必须自包含，type-only 引用会被完全擦除，不会把宿主的 node:fs 带进浏览器产物）。
+ */
+export type SyncTransportType = HostSyncTransportType;
 
 /** GET /sync/status 响应：配置/凭据/上次同步的只读事实（无任何 secret 值） */
 export interface SyncStatusResponse {
@@ -79,7 +68,7 @@ export interface SyncStatusResponse {
   sectionCount: number;
   transport?: { type: string; ref: string };
   /** 上次选择的同步通道（磁盘 ui-prefs.json；UI 回填优先于此，localStorage 仅兜底） */
-  lastSyncChannel?: 'git' | 'webdav';
+  lastSyncChannel?: SyncTransportType;
   /** 可同步分区目录（「高级/自定义导出」勾选列表；host adapters 唯一事实源，只含 portable） */
   syncSections?: SyncSectionInfo[];
   /** 当前分区选择（当前激活通道；UI 回填用，自动同步与手动 push 共用） */
@@ -112,6 +101,11 @@ export interface SyncSelectionPayload {
   sections: SectionId[];
   /** sessions（历史会话）分区同步「最新 N 个会话」上限；缺省 5 */
   sessionsLimit?: number;
+  /**
+   * 显式点名的会话单元 id（非空时优先于 sessionsLimit；空数组 = 回到「最新 N 个」模式）。
+   * 与导出选择器的单元 id 同一命名空间（sessions:<projectKey>/<sessionId>）。
+   */
+  sessionsInclude?: string[];
   /** 手动推送默认加密快照（开关持久化；密码存 DSH credentials，见下） */
   encrypt?: boolean;
   /** 手动推送默认导出真实凭据值（必须同时 encrypt） */
@@ -188,8 +182,11 @@ export interface SyncPushPayload {
    * sessions（历史会话）分区选项。**只有显式提供它**，sessions 才被允许进入同步通道；
    * limit = 只带「最新 N 个会话」（缺省 5；0 = 不带）。未提供 → 会话分区按普通
    * 非 portable 分区跳过并告警（安全默认：内容敏感的会话绝不悄悄随同步上行）。
+   *
+   * include（显式点名的会话单元 id，形如 sessions:<projectKey>/<sessionId>）非空时
+   * **优先于 limit** —— 用户点名的对话必须赢（宿主侧见 SyncEngineOptions 的说明）。
    */
-  sessions?: { limit?: number };
+  sessions?: { limit?: number; include?: string[] };
   /** 加密快照（sections 载荷整体加密；开启时必须提供 encryptPassword） */
   encrypt?: boolean;
   /** 加密密码（仅本次请求体内存传输，Host 绝不落盘/落日志；encrypt=true 时必填） */
@@ -423,54 +420,8 @@ export interface GithubValidateResponse {
   login?: string;
 }
 
-/** 同步请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐（git 网络操作可能较慢） */
-const SYNC_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError（与 api.ts 同款） */
-async function readJson<T>(response: Response, t: UiT): Promise<T> {
-  const notMountedMessage = t('error.notMounted');
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
-    throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
-  }
-  if (!response.ok) {
-    const message =
-      typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : response.status === 404
-          ? notMountedMessage
-          : `HTTP ${response.status}`;
-    throw new ConfigManagerApiError(message);
-  }
-  return body as T;
-}
-
-/** POST JSON 请求（带超时：宿主卡死时 UI 拿到明确错误而不是永远转圈） */
-async function postJson<T>(path: string, body: unknown, t: UiT): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SYNC_TIMEOUT_MS);
-  try {
-    const response = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    return await readJson<T>(response, t);
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw new ConfigManagerApiError(
-        t('error.syncTimeout', { minutes: String(Math.round(SYNC_TIMEOUT_MS / 60000)) }),
-      );
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/** 同步请求选项（长操作 5 分钟；超时文案沿用 `error.syncTimeout`，分钟插值）。 */
+const SYNC_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS, timeoutKey: 'error.syncTimeout' };
 
 /** 远程同步浏览器半数据入口（备份与迁移页第 4 个 tab 的注入业务面） */
 export class SyncApi {
@@ -481,76 +432,84 @@ export class SyncApi {
 
   /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数） */
   async status(): Promise<SyncStatusResponse> {
-    const response = await fetch(SYNC_API.status);
-    return readJson<SyncStatusResponse>(response, this.t);
+    return getJson<SyncStatusResponse>(SYNC_API.status, this.t, SYNC_OPTS);
+  }
+
+  /**
+   * 分区条目清单（复用 /export-preview；**只读**，不写任何内容）。
+   *
+   * 用途：同步页的「逐会话勾选」需要单元清单（sessions 的每个会话目录 + 其所属工作区），
+   * 而清单的权威来源就是导出预览那条路由（adapter.listUnits()）。类型用 type-only 引入 ——
+   * 不会把 api.ts 的运行时依赖带进 bundle，也不会与之形成运行时循环。
+   */
+  async exportPreview(only?: SectionId[]): Promise<ExportPreviewResponse> {
+    return postJson<ExportPreviewResponse>(CONFIG_MANAGER_API.exportPreview, { only }, this.t, SYNC_OPTS);
   }
 
   /** 推送：导出 portable 分区 → 提交到私有 Git 仓库 → 更新 sync-state */
   async push(payload: SyncPushPayload): Promise<SyncPushReport> {
-    return postJson<SyncPushReport>(SYNC_API.push, payload, this.t);
+    return postJson<SyncPushReport>(SYNC_API.push, payload, this.t, SYNC_OPTS);
   }
 
   /** P0-②：push 前只读预览（「将推送什么」，零写入远端）——body.preview=true 触发 */
   async pushPreview(payload: SyncPushPayload): Promise<SyncPushPreview> {
-    return postJson<SyncPushPreview>(SYNC_API.push, { ...payload, preview: true }, this.t);
+    return postJson<SyncPushPreview>(SYNC_API.push, { ...payload, preview: true }, this.t, SYNC_OPTS);
   }
 
   /** 拉取差异预览：拉取远端最新快照 → 只读分析（绝不执行导入） */
   async pull(payload: SyncPullPayload): Promise<SyncPullReport> {
-    return postJson<SyncPullReport>(SYNC_API.pull, payload, this.t);
+    return postJson<SyncPullReport>(SYNC_API.pull, payload, this.t, SYNC_OPTS);
   }
 
   /** GitHub OAuth device flow：发起登录，返回一次性用户码 + 授权页 URL + flowId */
   async githubStart(): Promise<GithubDeviceFlowStartResponse> {
-    return postJson<GithubDeviceFlowStartResponse>(SYNC_API.githubStart, {}, this.t);
+    return postJson<GithubDeviceFlowStartResponse>(SYNC_API.githubStart, {}, this.t, SYNC_OPTS);
   }
 
   /** GitHub OAuth device flow：凭 flowId 轮询授权结果（成功时 token 已由 Host 写入 credentials） */
   async githubPoll(flowId: string): Promise<GithubPollResponse> {
-    return postJson<GithubPollResponse>(SYNC_API.githubPoll, { flowId }, this.t);
+    return postJson<GithubPollResponse>(SYNC_API.githubPoll, { flowId }, this.t, SYNC_OPTS);
   }
 
   /** GitHub OAuth device flow：取消（丢弃宿主侧登记，零副作用） */
   async githubCancel(flowId: string): Promise<{ ok: boolean }> {
-    return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId }, this.t);
+    return postJson<{ ok: boolean }>(SYNC_API.githubCancel, { flowId }, this.t, SYNC_OPTS);
   }
 
   /** GitHub token 有效性校验（判定「是否已登录」：token 存在且 GitHub API 接受；
    *  401 → valid:false 引导重新登录；非 401 错误向上抛，UI 兜底不误判登出） */
   async githubValidate(): Promise<GithubValidateResponse> {
-    return postJson<GithubValidateResponse>(SYNC_API.githubValidate, {}, this.t);
+    return postJson<GithubValidateResponse>(SYNC_API.githubValidate, {}, this.t, SYNC_OPTS);
   }
 
   /** 同步历史：列出本地祖先快照 + 自动同步执行记录（按 createdAt 倒序合并）。 */
   async history(): Promise<SyncHistoryResponse> {
-    const response = await fetch(SYNC_API.history);
-    return readJson<SyncHistoryResponse>(response, this.t);
+    return getJson<SyncHistoryResponse>(SYNC_API.history, this.t, SYNC_OPTS);
   }
 
   /** 远端历史快照列表（供「选择历史快照」下拉）。 */
   async snapshotsList(payload: SyncPushPayload): Promise<SyncSnapshotsListResponse> {
-    return postJson<SyncSnapshotsListResponse>(SYNC_API.snapshotsList, payload, this.t);
+    return postJson<SyncSnapshotsListResponse>(SYNC_API.snapshotsList, payload, this.t, SYNC_OPTS);
   }
 
   /** 一键同步第一步：拉取 → 差异确认会话（items 逐项确认，暂不导入）。 */
   async sync(payload: SyncStartPayload): Promise<SyncStartResponse> {
-    return postJson<SyncStartResponse>(SYNC_API.sync, payload, this.t);
+    return postJson<SyncStartResponse>(SYNC_API.sync, payload, this.t, SYNC_OPTS);
   }
 
   /** 一键同步第二步：按用户对差异项的逐项决策执行导入。 */
   async applyItems(payload: ApplyItemsPayload): Promise<ApplyItemsResponse> {
-    return postJson<ApplyItemsResponse>(SYNC_API.applyItems, payload, this.t);
+    return postJson<ApplyItemsResponse>(SYNC_API.applyItems, payload, this.t, SYNC_OPTS);
   }
 
   /** 取消/清理差异确认会话（丢弃临时 ZIP，零副作用）。 */
   async cancel(syncSessionId: string): Promise<{ ok: boolean }> {
-    return postJson<{ ok: boolean }>(SYNC_API.cancel, { syncSessionId }, this.t);
+    return postJson<{ ok: boolean }>(SYNC_API.cancel, { syncSessionId }, this.t, SYNC_OPTS);
   }
 
   /** 自动同步状态（GET /sync/autosync 返回全部通道的 { git, webdav }，各自独立）。 */
   async autosyncStatusAll(): Promise<Record<SyncTransportType, AutosyncStatusResponse>> {
-    const response = await fetch(SYNC_API.autosync);
-    return readJson<Record<SyncTransportType, AutosyncStatusResponse>>(response, this.t);
+    return getJson<Record<SyncTransportType, AutosyncStatusResponse>>(SYNC_API.autosync, this.t, SYNC_OPTS);
   }
 
   /** 自动同步状态（指定通道；从全部通道状态中取）。 */
@@ -561,34 +520,34 @@ export class SyncApi {
 
   /** 自动同步配置更新（POST /sync/autosync；payload.transport 指定目标通道）。 */
   async autosyncUpdate(payload: AutosyncUpdatePayload): Promise<AutosyncStatusResponse> {
-    return postJson<AutosyncStatusResponse>(SYNC_API.autosync, payload, this.t);
+    return postJson<AutosyncStatusResponse>(SYNC_API.autosync, payload, this.t, SYNC_OPTS);
   }
 
   /** 保存同步分区选择（POST /sync/selection）：模式 + 勾选分区持久化到 Host。
    *  自动同步调度器与手动 push 共用此配置（刷新/重启后仍然生效）。 */
   async saveSelection(payload: SyncSelectionPayload): Promise<SyncSelectionPayload> {
-    return postJson<SyncSelectionPayload>(SYNC_API.selection, payload, this.t);
+    return postJson<SyncSelectionPayload>(SYNC_API.selection, payload, this.t, SYNC_OPTS);
   }
 
   /** 保存同步通道配置（POST /sync/config）：url/username/password（git: repoUrl/token）持久化。
    *  password/token 经 Host 写入 DSH credentials（值永不回传）；返回凭据布尔供 UI 刷新徽章。 */
   async saveConfig(payload: SyncPushPayload): Promise<SyncConfigSaveResponse> {
-    return postJson<SyncConfigSaveResponse>(SYNC_API.config, payload, this.t);
+    return postJson<SyncConfigSaveResponse>(SYNC_API.config, payload, this.t, SYNC_OPTS);
   }
 
   /** 保存插件 UI 偏好（POST /sync/ui-prefs）：当前为上次选择的同步通道（ui-prefs.json，
    *  随 self 分区进导出备份）。纯偏好无 secret；失败由调用方静默降级（localStorage 兜底）。 */
-  async saveUiPrefs(payload: { lastSyncChannel?: 'git' | 'webdav' }): Promise<{ ok: boolean; lastSyncChannel?: 'git' | 'webdav' }> {
-    return postJson<{ ok: boolean; lastSyncChannel?: 'git' | 'webdav' }>(SYNC_API.uiPrefs, payload, this.t);
+  async saveUiPrefs(payload: { lastSyncChannel?: SyncTransportType }): Promise<{ ok: boolean; lastSyncChannel?: SyncTransportType }> {
+    return postJson<{ ok: boolean; lastSyncChannel?: SyncTransportType }>(SYNC_API.uiPrefs, payload, this.t, SYNC_OPTS);
   }
 
   /** 一键回滚：按 restoreId 调用 backup→rollback */
   async rollback(payload: { restoreId: string }): Promise<{ ok: boolean; full: boolean }> {
-    return postJson<{ ok: boolean; full: boolean }>(SYNC_API.rollback, payload, this.t);
+    return postJson<{ ok: boolean; full: boolean }>(SYNC_API.rollback, payload, this.t, SYNC_OPTS);
   }
 
   /** Phase 7 迁移前咨询（只读健康评分 + 建议）：对远端快照生成咨询报告。 */
   async consult(input: { type: 'remote-snapshot'; id: string; snapshotId?: string }): Promise<ConsultReport> {
-    return postJson<ConsultReport>('/api/dsh-config-manager/consult', input, this.t);
+    return postJson<ConsultReport>(CONFIG_MANAGER_API.consult, input, this.t, SYNC_OPTS);
   }
 }

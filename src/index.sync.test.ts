@@ -229,6 +229,14 @@ test('extractSyncSessions: 只有显式给出对象才返回选项（形状非�
   assert.deepEqual(extractSyncSessions({ sessions: { limit: 0 } }), { limit: 0 }, '0 = 勾选但不带会话');
 });
 
+test('extractSyncSessions: include（P0-3 显式点名）—— 只收合法形状，空清单不出现', () => {
+  assert.deepEqual(extractSyncSessions({ sessions: { limit: 5, include: ['a', 'b'] } }), { limit: 5, include: ['a', 'b'] });
+  assert.deepEqual(extractSyncSessions({ sessions: { include: ['a'] } }), { include: ['a'] });
+  assert.deepEqual(extractSyncSessions({ sessions: { include: [] } }), {}, '空清单 = 不下发（回到「最新 N 个」）');
+  assert.deepEqual(extractSyncSessions({ sessions: { include: ['a', '', 7, 'a'] } }), { include: ['a'] }, '非法条目丢弃 + 去重');
+  assert.deepEqual(extractSyncSessions({ sessions: { include: 'a' } }), {}, '非数组 → 不下发');
+});
+
 test('extractSyncSessions: limit 非法（负数 / 小数 / 非数字）→ 归一为「不限数量」而不是丢弃选项', () => {
   assert.deepEqual(extractSyncSessions({ sessions: { limit: -3 } }), {}, '负数非法 → 不限数量');
   assert.deepEqual(extractSyncSessions({ sessions: { limit: 1.5 } }), {});

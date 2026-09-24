@@ -84,6 +84,22 @@ export interface ExportUnit {
   /** 原子组：必须与本单元同进同出的其它单元 id（如 pnpm-workspace.yaml ↔ patch 文件） */
   lockedWith?: string[];
   /**
+   * 本单元**拥有的会话 id**（工作区单元专用；issue #45）。
+   *
+   * 用途：勾选联动 —— 勾了会话就自动勾上它所属的工作区，取消工作区就取消它的会话。
+   * 取值 = 工作区记录 sessionIds 原样（`session-<uuid>` 形态，与会话单元 id 的末段目录名归一化后配对），
+   * 不翻译路径（跨机时路径不可靠）。
+   */
+  sessionIds?: string[];
+  /**
+   * 本单元 **path 的 cwd 目录键**（`projectKeyOf(path)`；工作区单元专用；issue #45）。
+   *
+   * 为什么需要第二判据：DSH 的 `sessionIds` **只登记了一部分会话**（真机实测：一次可选择 570 条会话里
+   * 只有 23 条落在 sessionIds 内），而 DSH 自己按「会话 cwd 的目录键 == 工作区 path 的目录键」把会话显示在
+   * 工作区下。勾选联动必须与**显示口径**一致，否则用户在界面上看到对话挂在某工作区下、勾它却不联动。
+   */
+  projectKey?: string;
+  /**
    * 分组名（同分区内的二级分组；如 sessions 按工作区聚合——用户要求「按工作区分类对话」）。
    *
    * 语义：**纯展示层分组**，不参与勾选/导出契约（契约只认 id）。缺省 = 该单元按现有方式
@@ -91,6 +107,15 @@ export interface ExportUnit {
    * （工作区标题 / 项目键），UI 渲染前同样要过 redact()。
    */
   group?: string;
+  /**
+   * 父对话的会话裸键（`sessionIdKey(目录名)`；**只有 `origin='subagent'` 的子代理会话才有值**）。
+   *
+   * 用途：导出选择器里的「父 ↔ 子会话」勾选联动（勾父自动勾上它的子代理会话；勾子自动带上父）。
+   * 为什么必须由宿主下发：父子关系只存在于 DSH 的会话存储里（`SessionStoreFacade.parentRelations()`），
+   * 浏览器侧无从推断 —— 不下发时联动静默失效，界面勾选与包内容就会不一致（用户实测：勾 2 条、
+   * 包里 41 条）。非 sessions 分区 / 非子代理会话一律不设该字段（不猜）。
+   */
+  parentSessionId?: string;
 }
 
 export interface ValidationResult {
@@ -156,6 +181,119 @@ export interface WorkspaceFacade {
   listRecords(): Promise<WorkspaceRecord[]>;
   writeRecord(record: WorkspaceRecord): Promise<void>;
   removeRecord?(id: string): Promise<void>;
+  /**
+   * 把一个**已存储在目标机**的会话登记进工作区（issue #45 会话归位）。
+   *
+   * 对应 DSH `workspaceRegistry` 的 `Workspace.attachSession()`：DSH 自己会读会话 header、
+   * 用 realpath 校验 cwd 必须等于该工作区 path，再走 storage domain 原子写入 sessionIds
+   * （自动去重，并按 cwd 剪掉不属于本工作区的候选）。因此插件**不得**旁路直写 workspace.json。
+   *
+   * 可选：未实现（或 registry 不可用）时，归位功能只能产出计划、不能落地。
+   */
+  attachSession?(workspaceId: string, sessionId: string): Promise<void>;
+}
+
+
+
+/**
+ * 会话存储端口（会话归位用；宿主侧对接 `ctx.sessionPersistence`）。
+ *
+ * 纪律：**该端口不暴露任何字节级细节**——多帧 zstd 与「目录由 header cwd 推导」是 DSH
+ * 私有存储格式，格式知识只允许存在于宿主适配器里（core 保持与 DSH 解耦）。
+ */
+export interface SessionStoreFacade {
+  /**
+   * 让工作区注册表重新索引某个会话的 header —— 改写后**必须**调用：注册表内存里仍是旧 cwd，
+   * 不刷新的话 `attachSession` 会拿旧 cwd 做 realpath 校验而失败。
+   * 返回 false = 宿主无法刷新（诚实降级：需重启 DSH 后再执行一次归位）。
+   */
+  reindexSessionHeader?(sessionId: string): Promise<boolean>;
+  /**
+   * 只读：从会话日志的**字节**里取出首帧 header 的 cwd（issue #45 ④ 导入期位置校验用）。
+   *
+   * 为什么是字节而不是路径：导入时才刚写完文件、甚至可能处在「位置与 header 不一致」的
+   * 中间态 —— 此时会话存储的 list/解析接口会**抛错**（DSH 的 `corrupt session log`），
+   * 只有「拿字节自己解首帧」这条路仍然可用。zstd 知识留在宿主侧，core 不碰格式。
+   * 解不出来（非日志 / 非 zstd / 首帧不完整）→ 返回 undefined（调用方按「无法判定」处理，绝不猜）。
+   */
+  readLogCwd?(bytes: Uint8Array): string | undefined;
+  /**
+   * 按**路径**把一个会话目录搬到目标 projectKey 段下（同 `moveSession` 的安全约束：
+   * 同一会话根内、目标已存在不覆盖、POSIX 有 `session.lock` 不搬、搬后自检失败回滚）。
+   *
+   * 与 `moveSession` 的区别：这条不依赖会话存储的解析接口（导入刚写完时那里可能是坏的），
+   * 只认路径。`sessionDirRel` = 相对会话根的目录（`<projectKey>/<会话目录>`）。
+   */
+  relocateDir?(sessionDirRel: string, targetProjectKey: string): Promise<SessionMoveResult>;
+  /**
+   * 按**路径**改写一个会话目录下全部 generation 的首帧 header cwd（导入期跨机路径映射用）。
+   *
+   * 与 rewriteCwd 的区别：这条不依赖会话存储的解析接口（导入刚写完时那里可能是坏的），只认路径。
+   * sessionDirRel = 相对会话根的目录（projectKey/会话目录）。宿主契约：只替换第 1 帧、
+   * 其余帧逐字节保留、发布前自检 + 原子替换，失败不发布并尽量回滚已改写的其它 generation。
+   */
+  rewriteLogDir?(sessionDirRel: string, newCwd: string): Promise<SessionRewriteResult>;
+  /**
+   * 只读：本机会话的**父子关系**（子会话 id → 父会话 id，均按日志 header 原样形态）。
+   *
+   * 为什么需要：DSH 工作区把子代理会话显示在父对话的树状图下面，导出父对话时必须连带它的
+   * 子会话（否则目标机上那棵树是空的）；而逐个读日志首帧去反查父子关系等于把整棵会话树读一遍
+   * （用户实测会话树数百 MB）。宿主用 DSH 自己的存储列举实现（解析成本在 DSH 侧已付）。
+   * 缺省 = 无法连带子会话（本次导出只有「子会话带父对话」这一个方向，如实反映在报告里）。
+   */
+  parentRelations?(): Promise<Map<string, SessionParentRelation>>;
+}
+
+/**
+ * 一条会话的父关系（宿主从 DSH 存储列举得到）。
+ *
+ * `subagent` = 该会话自己是不是**子代理会话**（header.origin === 'subagent'）：DSH 只把子代理会话
+ * 显示在父对话之下，`origin` 非 subagent 的会话即使有 parentSession 也是顶层行 —— 连带导出必须按
+ * 这个标记筛选，否则会把顶层对话也当成「树上的子节点」带进来。
+ */
+export interface SessionParentRelation {
+  parent: string;
+  subagent: boolean;
+}
+
+/** 会话日志首帧 header 改写结果（issue #45 P3）。 */
+export interface SessionRewriteResult {
+  ok: boolean;
+  /** 实际改写的文件绝对路径（一个会话可能有多份 generation，必须一起改） */
+  rewritten?: string[];
+  /** ok=false 时的机器可读原因 */
+  reason?: SessionRewriteReason;
+}
+
+  /** 改写失败/不可用的原因（文案由宿主适配器/CLI 输出层决定；core 不产出用户文案）。 */
+export type SessionRewriteReason =
+  /** 运行时缺 zstd 能力或宿主未实现该能力 */
+  | 'unavailable'
+  /** 会话目录被其它进程持有（POSIX 的 session.lock） */
+  | 'locked'
+  /** 找不到会话日志文件 */
+  | 'no-log'
+  /** 不是 zstd 容器（魔数/帧结构损坏） */
+  | 'not-zstd'
+  /** 首帧不完整（撕裂日志） */
+  | 'torn-frame'
+  /** 首帧超出读取上限（异常文件，不猜） */
+  | 'frame-too-large'
+  /** files 里的 cwd 与预期不符（不擅自改别人的会话） */
+  | 'cwd-mismatch'
+  /** 首帧不是单行 JSON 对象，或序列化会改动其它字段 */
+  | 'invalid-header'
+  /** 写临时文件 / 原子替换失败 */
+  | 'write-failed'
+  /** 发布前自检不过 */
+  | 'verify-failed';
+
+/** 会话目录搬迁结果（moved=false 时 reason 说明为什么没搬，属正常路径而非异常）。 */
+export interface SessionMoveResult {
+  moved: boolean;
+  from?: string;
+  to?: string;
+  reason?: 'no-current-log' | 'already-there' | 'conflict' | 'locked' | 'unavailable';
 }
 
 export interface PatchChange { lineId: string; raw: unknown; action: 'insert' | 'update' | 'remove'; }
@@ -185,6 +323,27 @@ export interface FileSystemFacade {
    */
   mtimeMs?(relPath: string): Promise<number | null>;
   mkdir(dir: string): Promise<void>;
+  /**
+   * 绝对路径的 realpath（issue #45 会话归位用）。
+   *
+   * 语义与 DSH `realpathNormalize` 对齐：只接受**已存在**的目录，解析符号链接 / `..` / 结尾斜杠
+   * 后返回规范化绝对路径；路径不存在或不可解析 → null（**不得**退回原字符串：那会把
+   * 「不存在的源机路径」误判成可归位）。
+   *
+   * 可选：未实现时归位功能只产出 ungrouped 计划 + 告警，绝不猜测 cwd 与工作区是否同一目录。
+   */
+  realpathDir?(absPath: string): Promise<string | null>;
+  /**
+   * 确保绝对路径目录存在（issue #45 已知缺口：导入工作区记录前不建目录 → DSH `create()`
+   * 的 realpath 直接 ENOENT，只留一句非致命警告）。
+   *
+   * 语义：只接受**完全限定**的绝对路径；拒绝含 `..` 的路径（即使 resolve 会折叠它，
+   * 也说明来源可疑 —— 路径来自备份，属不可信输入）；已存在 → 返回空数组；
+   * 否则递归创建并返回**实际新建**的目录（由外到内），供报告如实展示。
+   *
+   * 可选：未实现时调用方退回既有行为（不建目录 → 由 DSH 报 realpath 失败的非致命警告）。
+   */
+  ensureDir?(absPath: string): Promise<string[]>;
 }
 
 /** DSH 运行时门面：m3 只依赖此接口；m5 用真实 ctx.settings/credentials/… 实现 */
@@ -200,6 +359,12 @@ export interface HostContext {
   workspace: WorkspaceFacade;
   patchFile: PatchFileFacade;
   fs: FileSystemFacade;
+  /**
+   * 会话存储端口（issue #45 会话归位；宿主注入对应 `ctx.sessionPersistence`）。
+   *
+   * 可选：缺省时归位功能整体不可用（依赖它的调用点必须报「宿主未提供会话存储」而不是静默成功）。
+   */
+  sessions?: SessionStoreFacade;
   /** 当前管理的 DSH profile 名（如 web）；引擎用它定位 profiles/<profile>/cordis.patch.yml。宿主不暴露时缺省 */
   profile?: string;
   /**
@@ -272,6 +437,10 @@ export interface PlanItem {
   label?: string;
   /** 单元的**二级分组名**（可选，同 `/export-preview` 的 `ExportUnit.group` 语义；纯展示）。 */
   group?: string;
+  /** 本项对应的**工作区记录拥有的会话 id**（工作区计划项专用；issue #45 勾选联动）。 */
+  sessionIds?: string[];
+  /** 本工作区计划项 **path 的 cwd 目录键**（`projectKeyOf(path)`；issue #45 勾选联动第二判据）。 */
+  projectKey?: string;
   kind: PlanItemKind;
   adapter: SectionId;
   description: string;
@@ -347,6 +516,13 @@ export interface ImportPlan {
   items: PlanItem[];
   globalStrategy: GlobalConflictStrategy;
   pathMappings: PathMapping[];
+  /**
+   * 本次**自动**加入的基础路径重定基规则（导出机 DSH home → 本机 DSH home；issue #45）。
+   *
+   * 只读展示用：它已被并入 pathMappings（排在最前，用户映射随后生效）。缺省 = 两边基础路径相同
+   * 或旧包没带 sourceHome（此时不做任何自动改写，行为与改造前一致）。
+   */
+  automaticMappings?: PathMapping[];
   missingSecrets: { ref: string; required: boolean }[];
   needsRestart: boolean;
   estimatedActions: Record<SectionId, number>;
@@ -387,6 +563,27 @@ export interface ImportResult {
    * 只回传条数，绝不回传 ref 名或值——结果会进 run 账并回传浏览器。
    */
   credentialsRestored?: number;
+  /**
+   * 用户在运行中心终止了本次导入（宿主 /runs/cancel 在**计划项边界**协作式取消）。
+   * true 时 executed 只覆盖已尝试的项，且 keptPartial 表明用户如何处置已应用部分。
+   */
+  cancelled?: boolean;
+  /**
+   * 终止时用户选择「保留已应用项」（cancelled=true 时才有意义）。
+   * 保留 = 在安全点停下 + 跑完分区收尾 + 未执行项在 journal 里显式标 skipped。
+   * 此时快照**保持可用**（不标 done / 不标 rolled-back），用户可事后在「备份」页手动回滚。
+   */
+  keptPartial?: boolean;
+  /**
+   * keptPartial=true 时的启动自洽审计结论（缺省 = 未审计，UI 必须如实说「未验证」）。
+   * 字段只增不改：旧客户端忽略它即可。
+   */
+  bootSafety?: {
+    verdict: 'safe' | 'repaired' | 'unsafe';
+    issues: { id: string; severity: 'warn' | 'error'; detail: string; fixed: boolean }[];
+    prunedBundles: { name: string; reason: string }[];
+    unchecked: string[];
+  };
 }
 
 /* ---------------- 导入上下文（传给 adapter.analyzeImport / applyItem） ---------------- */
@@ -588,6 +785,15 @@ export interface ConfigAdapter<TSection = unknown> {
   readonly displayName: string;
   readonly defaultIncluded: boolean;
   readonly portability: Portability;
+  /**
+   * 可选：本分区是「文件集合」——相对路径本身就是身份，不是可配置内容。
+   *
+   * 导入时的前缀映射**绝不**套用到这类分区：`FileCollectionAdapter` 拿 `relativePath`
+   * 当落盘路径，改写它等于把文件搬到 DSH 期望之外的位置。sessions 尤其致命——位置一旦
+   * 与 `projectKeyOf(首帧 cwd)/id` 不一致，目标机**下次启动直接失败**
+   * （`corrupt session log … header id and cwd identify …`，issue #45 ④ 实测）。
+   */
+  readonly fileCollection?: boolean;
 
   /** 读取当前 DSH 该类别配置 → 导出数据（无秘密值）。
    *  实现方应尊重 `options.includeItems?.[this.id]`（条目级选择，见 adapters/units.ts）。 */
@@ -604,8 +810,46 @@ export interface ConfigAdapter<TSection = unknown> {
    */
   listUnits?(section: ExportSection<TSection>): ExportUnit[];
 
+  /**
+   * 可选：单元级「最近活跃时间」（毫秒），键 = **会话裸键**（`sessionIdKey(目录名)`）。
+   *
+   * 用途：导出选择器的排序时间源（`/export-preview` 在枚举单元后调用）。为什么不能只靠
+   * `storages/session_projcache.json` 的 lastPromptAt：那份缓存只覆盖一部分会话（真机实测：同一项目
+   * 731 个会话目录里 347 个不在缓存内），缺时间的会话会退化成按 uuid 排序、全部堆在组尾。
+   * 目前只有 sessions 分区实现（数据源 = 会话日志文件 mtime）；未实现 / 时间未知 → 空 Map，
+   * 调用方按「时间未知」处理，绝不猜成 0。
+   */
+  unitActivityTimes?(ctx: HostContext, section: ExportSection<TSection>): Promise<Map<string, number>>;
+
+  /**
+   * 可选：枚举本机**全部**单元 id（不是本次勾选的那部分）。
+   *
+   * 用途：会话删除墓碑（P1-5）——「上次推过、本机已不存在」才是「用户删了它」；只看本次
+   * 勾选集合会把「这次没勾」误判成删除，把还在的对话打成墓碑。未实现 / 枚举失败 → 调用方
+   * 跳过删除检测（保守方向：宁可漏报删除，绝不误标）。
+   */
+  listAllUnitIds?(ctx: HostContext): Promise<string[]>;
+
   /** 分析导入数据与目标 DSH 的差异 → 计划项（纯计算，零写入） */
   analyzeImport(data: TSection, ctx: ImportContext): Promise<PlanItem[]>;
+
+  /**
+   * 可选：本分区**全部计划项写完之后**的分区级收尾（issue #45 ④）。
+   *
+   * 为什么需要这一层：有些判定必须等整个分区写完才有意义 —— 一个会话目录含多份 generation，
+   * 若在单文件 `applyItem` 里边写边搬，后续文件会被写回旧路径。返回逐条结果（ok / warning / failed），
+   * 引擎按现有规则记入 `executed`：warning 非致命、failed 按 `rollbackOnError` 决定是否回滚。
+   */
+  finalizeApply?(ctx: ImportContext): Promise<ApplyResult[]>;
+
+  /**
+   * 可选：**全部**分区收尾完成之后的最后一次收尾（issue #45）。
+   *
+   * 与 finalizeApply 的区别：finalizeApply 只保证「本分区写完」，而「把会话登记进工作区」要求
+   * 会话文件已写盘**且**首帧 cwd 已按映射改写/归位 —— 工作区分区在 APPLY_ORDER 里排在会话之前，
+   * 所以这件事必须等所有分区收尾后再做，否则 attachSession 拿旧 cwd 校验必然失败。
+   */
+  finalizeImport?(ctx: ImportContext): Promise<ApplyResult[]>;
 
   /** 执行单个计划项（Importer 引擎按阶段调度） */
   applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult>;

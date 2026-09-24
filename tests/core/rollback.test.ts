@@ -143,7 +143,7 @@ test('E-02 部分回滚：凭据值不可回读 → full=false + manualHint（�
 
     const dst = makeContext('win32', 'C:\\Users\\bob');
     // 目标 general/skills/workspace/mcp 已存在（可回滚）；llm-deepseek 已注册但为空（Create 初始化，可恢复为空）；
-    // DEEPSEEK_API_KEY 凭据已存在（值不可回读 → 回滚只能 manualHint，构成部分回滚）
+    // DEEPSEEK_API_KEY 在**计划生成之后**才配置（见下方注释）→ 回滚只能 manualHint，构成部分回滚
     dst.settings.registered.add('llm-deepseek');
     dst.settings.ns.set('general', { value: { theme: 'light' }, revision: 7, secrets: [] });
     await dst.fs.writeFile('skills/coding.md', Buffer.from('# OLD skill content\n', 'utf8'));
@@ -152,8 +152,6 @@ test('E-02 部分回滚：凭据值不可回读 → full=false + manualHint（�
       lineId: 'mcp-fs',
       raw: { id: 'mcp-fs', name: 'dsh-mcp-client', config: { serverName: 'filesystem', command: 'node', args: ['old.js'] } },
     });
-    dst.credentials.values.set('DEEPSEEK_API_KEY', 'old-secret');
-
     const adapters = createAdapters({ namespaces: NS });
     const flaky = adapters.map((a) => (a.id === 'workspaces' ? new FlakyAdapter(a, 'workspace:ws-ops') : a));
     const importer = new Importer({ ctx: dst, adapters: flaky, snapshotStore: new MemSnapshotStore() });
@@ -164,6 +162,10 @@ test('E-02 部分回滚：凭据值不可回读 → full=false + manualHint（�
       pathMappings: [{ oldPrefix: 'C:\\Users\\alice', newPrefix: 'C:\\Users\\bob', appliesTo: ['workspaces', 'mcp'] }],
     });
     assert.ok(plan.items.some((i) => i.id === 'settings:llm-deepseek' && i.kind === 'Create'), 'llm-deepseek 应为 Create');
+    // **计划生成之后**才让目标机拥有旧凭据（同机另一窗口刚配置好 / 调用方自带的旧计划重放）：
+    // 计划里这条 MissingSecret 仍可执行 → 快照记 existed=true → 回滚无法回读原值，构成部分回滚。
+    // 计划生成时目标就已配置同一凭据的情形，现在由 Skip 信息项覆盖（见 roundtrip.test.ts 的用例）。
+    dst.credentials.values.set('DEEPSEEK_API_KEY', 'old-secret');
 
     const result = await importer.executeImportPlan(zipPath, plan, {
       confirm: true,

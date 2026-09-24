@@ -12,7 +12,7 @@
  *  - 随 self 分区进入导出备份，迁移到新机器时恢复；
  *  - localStorage 仅保留为前端同步读取的降级通道（status 未带回填时的兜底）。
  *
- * 字段 { schemaVersion, lastSyncChannel?: 'git' | 'webdav',
+ * 字段 { schemaVersion, lastSyncChannel?: SyncTransportType（git / webdav）,
  *         starPromptFirstSeenAt?: number, starPromptDismissed?: boolean,
  *         starPromptClicked?: boolean }：
  * - 缺省/未配置 = undefined（UI 回退到 sync-config.transport / 首次进入页面）；
@@ -22,16 +22,18 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
+import { parseSyncChannel } from './sync-config.ts';
+import type { SyncTransportType } from './sync-config.ts';
 
 export const UI_PREFS_FILE = 'ui-prefs.json';
 export const UI_PREFS_SCHEMA_VERSION = 1;
 
-/** 同步通道类型（与 sync-selection / sync-config 共享语义；避免循环 import 自行声明） */
-export type UiPrefsChannel = 'git' | 'webdav';
+/** 同步通道类型：**唯一来源** = sync-config 的 SYNC_CHANNELS（type-only 引用，无运行期耦合，
+ *  也不会与 sync-config 形成循环 import）。 */
+export type UiPrefsChannel = SyncTransportType;
 
 /** 插件自身 UI 偏好（持久化面）。 */
 export interface UiPrefs {
@@ -81,8 +83,10 @@ export async function readUiPrefs(dir: string): Promise<UiPrefs> {
     return defaultUiPrefs();
   }
   const prefs = defaultUiPrefs();
-  if (obj['lastSyncChannel'] === 'git' || obj['lastSyncChannel'] === 'webdav') {
-    prefs.lastSyncChannel = obj['lastSyncChannel'];
+  // 通道合法性只认唯一枚举（SYNC_CHANNELS）：新增通道无需在此补字面量
+  const lastChannel = parseSyncChannel(obj['lastSyncChannel']);
+  if (lastChannel !== undefined) {
+    prefs.lastSyncChannel = lastChannel;
   }
   if (typeof obj['starPromptFirstSeenAt'] === 'number' && Number.isFinite(obj['starPromptFirstSeenAt'])) {
     prefs.starPromptFirstSeenAt = obj['starPromptFirstSeenAt'];

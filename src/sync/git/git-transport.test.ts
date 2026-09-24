@@ -13,9 +13,10 @@ import { execFile } from 'node:child_process';
 import { GitTransport, GitTransportError } from './git-transport.ts';
 import type { GitExecFn, GitExecResult, GitTransportOptions } from './git-transport.ts';
 import { encryptSectionsPayload } from '../snapshot-crypto.ts';
-import { computeSnapshotMeta, isEncryptedSections } from '../transport.ts';
+import { computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections, SyncTransportError } from '../transport.ts';
 import type { SyncSnapshot } from '../transport.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
+import { sha256Hex } from '../../utils/hashing.ts';
 
 /* ---------------- helpers ---------------- */
 
@@ -671,3 +672,204 @@ test('集成：裁剪删除旧快照 → 每次 delete 独立 commit+push，add 
   const dirs = await fs.readdir(path.join(workDir, 'snapshots'));
   assert.deepEqual(dirs, ['snap-04']);
 });
+/* ---------------- t24：统一错误面 / 超时口径 / 幂等读重试 ---------------- */
+
+test('t24：超时口径统一——默认取共用 DEFAULT_SYNC_TIMEOUT_MS（不少于原 60000），可注入覆盖', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const seen: number[] = [];
+  const def = new GitTransport(makeOptions({
+    workDir: dir,
+    exec: async (_cmd, _args, opts) => { seen.push(opts.timeoutMs ?? -1); return { stdout: '', stderr: '', code: 0 }; },
+  }));
+  await def.list();
+  assert.ok(seen.length > 0, 'git 命令应带超时');
+  assert.equal(seen[0], DEFAULT_SYNC_TIMEOUT_MS, 'git 通道默认超时 = 两条通道共用常量');
+  assert.ok(DEFAULT_SYNC_TIMEOUT_MS >= 60_000, '统一不得收紧（原 git 60s / webdav 120s）');
+  const custom: number[] = [];
+  const customTransport = new GitTransport(makeOptions({
+    workDir: dir,
+    timeoutMs: 5000,
+    exec: async (_cmd, _args, opts) => { custom.push(opts.timeoutMs ?? -1); return { stdout: '', stderr: '', code: 0 }; },
+  }));
+  await customTransport.list();
+  assert.equal(custom[0], 5000, '宿主注入的 timeoutMs 必须生效');
+});
+
+/** 构造「rev-parse 恒成功（会走 pull）+ pull 按脚本返回」的 exec */
+function pullScriptedExec(calls: CallRecord[], pullResults: GitExecResult[]): GitExecFn {
+  let i = 0;
+  return async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
+    if (joined.includes('pull')) {
+      const r = pullResults[Math.min(i, pullResults.length - 1)]!;
+      i += 1;
+      return r;
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+}
+
+test('t24：幂等读（list）遇瞬时网络故障 → 指数退避重试后成功', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec = pullScriptedExec(calls, [
+    { stdout: '', stderr: 'fatal: unable to access ...: Connection reset by peer', code: 128 },
+    { stdout: '', stderr: '', code: 0 },
+  ]);
+  const transport = new GitTransport(makeOptions({
+    workDir: dir, exec, retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+  }));
+  assert.deepEqual(await transport.list(), [], '重试后应成功（空远端）');
+  assert.equal(joinedArgs(calls, 'pull').length, 2, '第一次瞬时失败 → 重试一次即成功');
+});
+
+test('t24：重试耗尽后上抛带分类的错误（network / retryable=true），尝试次数 = attempts', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec = pullScriptedExec(calls, [{ stdout: '', stderr: 'fatal: Could not resolve host: github.com', code: 128 }]);
+  const transport = new GitTransport(makeOptions({
+    workDir: dir, exec, retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+  }));
+  await assert.rejects(transport.list(), (err: unknown) => {
+    assert.ok(err instanceof GitTransportError, '仍必须是 GitTransportError');
+    assert.ok(err instanceof SyncTransportError, 'GitTransportError 必须继承统一基类（上层拿得到分类）');
+    assert.equal(err.kind, 'network');
+    assert.equal(err.retryable, true);
+    return true;
+  });
+  assert.equal(joinedArgs(calls, 'pull').length, 3, 'attempts=3 → 恰好 3 次尝试');
+});
+
+test('t24：不可重试错误（仓库不存在 / 鉴权失败）→ 只尝试一次且分类正确', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const cases: Array<[string, string]> = [
+    ['fatal: repository https://github.com/a/b.git not found', 'notfound'],
+    ['fatal: Authentication failed for https://github.com/a/b.git', 'auth'],
+  ];
+  for (const [stderr, kind] of cases) {
+    const calls: CallRecord[] = [];
+    const exec = pullScriptedExec(calls, [{ stdout: '', stderr, code: 128 }]);
+    const transport = new GitTransport(makeOptions({
+      workDir: dir, exec, retry: { attempts: 5, baseDelayMs: 1, sleep: async () => {} },
+    }));
+    await assert.rejects(transport.list(), (err: unknown) => {
+      assert.ok(err instanceof SyncTransportError);
+      assert.equal(err.kind, kind, '分类: ' + stderr);
+      assert.equal(err.retryable, false, '不可重试: ' + stderr);
+      return true;
+    });
+    assert.equal(joinedArgs(calls, 'pull').length, 1, '不可重试错误不得重试: ' + stderr);
+  }
+});
+
+test('t24：首次使用（空目录）clone 遇瞬时超时 → 重试后成功', async (t) => {
+  const dir = await makeTempDir(t); // 空目录 → 走 clone
+  let cloneCalls = 0;
+  const exec: GitExecFn = async (_cmd, args) => {
+    const joined = args.join(' ');
+    if (joined.includes('clone')) {
+      cloneCalls += 1;
+      return cloneCalls === 1
+        ? { stdout: '', stderr: 'fatal: unable to access ...: Connection timed out after 30000 ms', code: 128 }
+        : { stdout: '', stderr: '', code: 0 };
+    }
+    if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({
+    workDir: dir, exec, retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
+  }));
+  assert.deepEqual(await transport.list(), []);
+  assert.equal(cloneCalls, 2, 'clone 超时应重试一次');
+});
+
+test('t24：写操作（upload）绝不重试——push 失败即使分类可重试也只尝试一次', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
+    if (joined.includes('diff') && joined.includes('--quiet')) return { stdout: '', stderr: '', code: 1 };
+    if (joined.includes('push')) return { stdout: '', stderr: 'remote: HTTP 503 Service Unavailable', code: 1 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({
+    workDir: dir, exec, retry: { attempts: 5, baseDelayMs: 1, sleep: async () => {} },
+  }));
+  await assert.rejects(transport.upload(sampleSnapshot()), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.equal(err.kind, 'server', '503 → 分类为可重试的 server（分类对上层可见）');
+    assert.equal(err.retryable, true);
+    return true;
+  });
+  assert.equal(joinedArgs(calls, 'push').length, 1, 'push 有远端副作用 → 即使 attempts=5 也只尝试一次');
+});
+test('t24：退避为指数递增并受 maxDelayMs 上限（baseDelayMs=100、max=150 → 100、150）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec = pullScriptedExec(calls, [{ stdout: '', stderr: 'fatal: Connection reset by peer', code: 128 }]);
+  const delays: number[] = [];
+  const transport = new GitTransport(makeOptions({
+    workDir: dir,
+    exec,
+    retry: {
+      attempts: 3,
+      baseDelayMs: 100,
+      maxDelayMs: 150,
+      sleep: async () => {},
+      onRetry: (info) => { delays.push(info.delayMs); },
+    },
+  }));
+  await assert.rejects(transport.list());
+  assert.deepEqual(delays, [100, 150], '退避指数递增且被 maxDelayMs 截断');
+});
+
+/* ---------------- P1-4：内容寻址外置（sessions → blobs/） ---------------- */
+
+test('P1-4 集成：sessions 外置到 blobs/（引用文件替代目录）+ 同内容零重写 + 读回无损 + GC 保护窗', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } });
+
+  const bytes = Buffer.from('SESSION-BYTES-' + 'y'.repeat(32), 'utf8');
+  const hash = sha256Hex(bytes);
+  const mk = (id: string): SyncSnapshot => sampleSnapshot({
+    id,
+    createdAt: '2026-08-16T12:00:00.000Z',
+    manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['sessions'], containsSecrets: false },
+    sections: {
+      sessions: {
+        version: 1,
+        files: [{ relativePath: '--p--/a/session.jsonl.zstd', data: new Uint8Array(bytes), contentHash: hash }],
+      },
+    },
+  } as Partial<SyncSnapshot>);
+
+  await transport.upload(mk('snap-blob-a'));
+  const blobAbs = path.join(workDir, 'blobs', hash);
+  assert.ok((await fs.stat(blobAbs)).isFile(), 'blob 落在跨快照共享的 blobs/');
+  const snapDir = path.join(workDir, 'snapshots', 'snap-blob-a');
+  assert.ok((await fs.stat(path.join(snapDir, 'sessions.blobs.json'))).isFile(), '快照内写引用文件');
+  await assert.rejects(() => fs.stat(path.join(snapDir, 'sessions')), '外置分区不得再写 <prefix>/ 目录');
+
+  // 同内容第二份快照 → put 幂等跳过，blob 文件一个字节都不重写
+  const before = (await fs.stat(blobAbs)).mtimeMs;
+  await new Promise((resolve) => { setTimeout(resolve, 25); });
+  await transport.upload(mk('snap-blob-b'));
+  assert.equal((await fs.stat(blobAbs)).mtimeMs, before, '内容未变 → 零重写（P1-4 核心收益）');
+
+  // 读回：从 blob 仓回填字节（含 contentHash）
+  const back = await transport.download('snap-blob-a');
+  const files = (back.sections as Record<string, FilesSection>)['sessions']!.files;
+  assert.equal(Buffer.from(files[0]!.data).toString('utf8'), bytes.toString('utf8'));
+  assert.equal(files[0]!.contentHash, hash);
+
+  // GC：两份快照都删掉后，blob 仍在（10 分钟保护窗 —— 防与并发 push 竞态）
+  await transport.delete('snap-blob-a');
+  await transport.delete('snap-blob-b');
+  assert.ok((await fs.stat(blobAbs)).isFile(), '保护窗内的 blob 不删（并发安全阀）');
+});
+

@@ -23,7 +23,7 @@ const INDEX_ALLOWED = new Set(['schemaVersion', 'name', 'description', 'items'])
 const INDEX_ITEM_ALLOWED = new Set(['id', 'name', 'description', 'author', 'version', 'updatedAt', 'categories', 'repo']);
 const MANIFEST_ALLOWED = new Set([
   'schemaVersion', 'id', 'name', 'version', 'author', 'description', 'updatedAt',
-  'categories', 'sections', 'provenance', 'checksums',
+  'categories', 'mode', 'sections', 'provenance', 'checksums',
 ]);
 const PROVENANCE_ALLOWED = new Set(['source', 'note']);
 const CHECKSUMS_ALLOWED = new Set(['zip']);
@@ -160,7 +160,8 @@ export function parseMarketIndex(raw: string): ParseIndexResult {
 /**
  * 解析单条目清单 items/<id>/manifest.json（L2）。
  * 未知字段/越界字段一律进 errors；id 必须过 SAFE_ITEM_ID_RE；
- * sections 每项必须 ∈ SECTION_IDS；checksums.zip 必须为非空字符串。
+ * sections 每项必须 ∈ SECTION_IDS；checksums.zip 必须为非空字符串；
+ * mode（可选，发布模式标记）取值必须 ∈ migrate | share —— 与 prepare 的写入侧同源。
  */
 export function parseMarketItemManifest(raw: string): ParseItemManifestResult {
   if (typeof raw !== 'string' || raw === '') {
@@ -206,6 +207,19 @@ export function parseMarketItemManifest(raw: string): ParseItemManifestResult {
       return { ok: false, manifest: null, errors: [`manifest.json.sections 含未知分区: ${String(s)}`] };
     }
   }
+  // 可选发布模式：仅接受 migrate | share。发布侧 prepare 在 share 模式会写入该字段
+  //（缺失 = migrate 缺省，向后兼容既有产物）；非法取值必须拒绝，不得静默忽略。
+  let mode: MarketItemManifest['mode'];
+  if (obj['mode'] !== undefined) {
+    const rawMode = obj['mode'];
+    // 逐字面量比较（不用 `as`）：MarketPublishMode 若新增/改名取值，赋值处会编译失败，
+    // 白名单与类型不会各自漂移。
+    if (rawMode !== 'migrate' && rawMode !== 'share') {
+      return { ok: false, manifest: null, errors: [`manifest.json.mode 非法: ${JSON.stringify(rawMode)}（仅接受 migrate | share）`] };
+    }
+    mode = rawMode;
+  }
+
   const checksums = obj['checksums'];
   if (checksums === null || typeof checksums !== 'object' || Array.isArray(checksums)) {
     return { ok: false, manifest: null, errors: ['manifest.json.checksums 必须是对象'] };
@@ -245,6 +259,14 @@ export function parseMarketItemManifest(raw: string): ParseItemManifestResult {
     };
   }
 
+  // 可选字段的类型校验必须先于 errors 收敛判定：此前它们在返回对象字面量里调用，
+  // 而只有 errors 为空才会走到那里 → 非法类型（如 author: 123）被当成「字段不存在」静默接受。
+  // 顺序与 L1 的 parseMarketIndex 一致（先算值 → 收敛 errors → 再返回）。
+  const author = optString(obj, 'author', errors, '$');
+  const description = optString(obj, 'description', errors, '$');
+  const updatedAt = optString(obj, 'updatedAt', errors, '$');
+  const categories = optStringArray(obj, 'categories', errors, '$');
+
   if (errors.length > 0) return { ok: false, manifest: null, errors };
 
   return {
@@ -254,10 +276,11 @@ export function parseMarketItemManifest(raw: string): ParseItemManifestResult {
       id,
       name,
       version,
-      author: optString(obj, 'author', errors, '$'),
-      description: optString(obj, 'description', errors, '$'),
-      updatedAt: optString(obj, 'updatedAt', errors, '$'),
-      categories: optStringArray(obj, 'categories', errors, '$'),
+      author,
+      description,
+      updatedAt,
+      categories,
+      ...(mode !== undefined ? { mode } : {}),
       sections: sections as SectionId[],
       ...(provenance !== undefined ? { provenance } : {}),
       checksums: { zip },

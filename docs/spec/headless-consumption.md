@@ -60,17 +60,29 @@ DSH 的 client loader 只取这一个 `client.js`，不解析额外模块，因�
 | 说明符 | 产物 | 需要的依赖 | 适用场景 |
 |---|---|---|---|
 | `dsh-config-manager/core` | `lib/core/index.js` | **无**（零外部 import） | headless 引擎消费 ✅ |
-| `dsh-config-manager/schema` | `lib/schema/types.js` | **无**（零 import） | 只要类型（**无运行时值**，见下） |
+| `dsh-config-manager/schema` | `lib/schema/index.js` | **无**（零 import） | 类型 + 运行时值（版本判定 / 分区注册表；见下） |
 | `dsh-config-manager` | `lib/index.js` | `js-yaml` + DSH peer 包 | 作为 DSH host 插件加载 |
 | `dsh-config-manager/client` | `lib/client.js` | `react` / `react-dom`（宿主提供） | DSH client loader |
 
 > `dsh-config-manager/core` 的产物**只 import 相对路径**，不 import 任何外部包——这是
 > 「零成本消费」的技术依据。
 >
-> ⚠️ `dsh-config-manager/schema` 指向 `lib/schema/types.js`，它是一个**纯类型模块**
-> （编译后零运行时导出）。schema 版本常量 `CURRENT_SCHEMA_VERSION` 定义在
-> `src/schema/versions.ts`，**不在 `exports` 映射内**，无法从包外导入。需要该常量时，
-> 请从 `dsh-config-manager/core` 的导出面寻找等价能力，或直接把版本号作为配置传入。
+> `dsh-config-manager/schema` 指向 `lib/schema/index.js`（**运行时入口**，源码 `src/schema/index.ts`；零 `node:` / 零 npm 依赖）。
+> 除全部载荷类型外，它还导出 **24 个运行时值**（实测 `node -e "import('dsh-config-manager/schema')"` → 24 个键）：
+> 版本判定（`CURRENT_SCHEMA_VERSION` / `MIN_SUPPORTED_SCHEMA_VERSION` / `UnsupportedSchemaError` / `isCurrent` /
+> `isSupported` / `needsMigration` / `isTooNew` / `canImport` / `describeVersion`，9 个）、
+> 分区表（`SECTION_IDS` / `SECTION_JSON_PATHS` / `SECTION_FILE_PREFIXES` / `isFileSection`，4 个）与
+> 分区注册表（`SECTION_REGISTRY` / `SECTION_DATA_VERSION` / `sectionMeta` / `sectionMetaOf` / `requireSectionMeta` /
+> `isSectionId` / `jsonPathOf` / `filePrefixOf` / `PORTABLE_SECTION_IDS` / `OPT_IN_SYNC_SECTION_IDS` /
+> `DEFAULT_INCLUDED_SECTION_IDS`，11 个）。
+>
+> **`SECTION_REGISTRY` 是分区清单的机器可读唯一来源**（「有哪些分区、ZIP 内形态、可移植性、同步可选分区、
+> 默认勾选」）——第三方实现自己的 importer/exporter 时据此枚举，不必读 `src/`；
+> `docs/spec/bundle-format-v1.md` §2.5 的清单即由它派生。
+>
+> **历史（已修复）**：该入口曾指向 `lib/schema/types.js`（纯类型模块，编译产物零运行时导出），第三方 `import`
+> 只会拿到 `{}`，`CURRENT_SCHEMA_VERSION` 等**在包外无法导入**。缺口登记见 `known-gaps.md` 的 **L2**；
+> 回归护栏：`tests/packaging-contract.test.ts`（断言 `exports["./schema"]` 指向 `lib/schema/index.js` / `.d.ts`）。
 
 CLI 入口（`bin: dsh-config-manager` → `lib/cli/index.js`）同样只用 Node 内置模块 +
 相对路径，可在零依赖环境下运行。
@@ -104,6 +116,11 @@ const analyzer = new Analyzer({ ctx, adapters, snapshotStore, limits, dependency
 
 const analysis = await analyzer.analyzeImport(zipPath)      // → ImportAnalysis
 const plan = await analyzer.createImportPlan(zipPath, decisions)  // → ImportPlan
+
+// 加密备份（includeSecrets）：**必须**把用备份密码解出的凭据一并传给计划生成，
+// 否则「归档里带值、但未被任何 settings namespace 引用」的凭据不会进计划，
+// 执行期也就不写回（值静默丢失）。同一份 Map 之后还要交给 executeImportPlan。
+const planEnc = await analyzer.createImportPlan(zipPath, decisions, { decryptedCredentials })
 // 真正落盘才需要 executeImportPlan(plan, …)
 ```
 
@@ -156,6 +173,43 @@ const result = await analyzer.executeImportPlan(zipPath, plan, { confirm: true, 
 `/analyze` 请求体加可选 `decryptPassword`（提供即解开 `security/secrets.enc` 并回传 `credentials`）；
 `/execute` 结果加 `credentialsRestored`。
 
+### 4.6 会话跨机恢复：导出连带工作区 + 导入期一条映射改两处（issue #45）
+
+> **旧接口已移除**：`/core` 不再导出 `groupSessions`，宿主不再提供 `POST /sessions/group`，
+> 界面上也不再有一个独立的「会话归位」面板 —— 会话的归属关系改由**导出/导入这对动作本身**保证。
+
+**导出侧（自动连带工作区）**：只要本次导出包含 sessions 分区（`sessions` 键 / `only` 含 `sessions` /
+条目级 `includeItems.sessions`），导出器就会把**拥有这些会话的工作区记录**（`WorkspaceRecord`，含
+`sessionIds`）一并纳入 `workspaces` 分区，并在报告里给一行 `export.sessionsWorkspacesCoupled`（`{ count }`）。
+理由是硬依赖：DSH 只按「有没有一条工作区记录指向该会话的 cwd 且 id 在 `sessionIds` 里」决定会话显不显示，
+不带工作区的会话在目标机必然看不到。条目级选择时按 `sessionIds` 精确匹配；只给 `sessions.limit`
+（选中的是「最新 N 个」，此刻还不知道是哪几个）时，凡声明了 `sessionIds` 的工作区都算。
+
+**导入侧（一条映射同时改两处）**：用户在导入向导里填的路径映射（`ImportPlan.pathMappings`）同时作用于
+① `workspace.path`（`analyzer.applyMappingsToSections`）与 ② **会话日志首帧 cwd**
+（`SessionsAdapter.finalizeApply` → 宿主 `SessionStoreFacade.rewriteLogDir`）。顺序与一致性：
+
+1. 会话分区整个写完之后，逐会话从**字节**读出首帧 cwd（`readLogCwd`；此刻存储的解析接口可能正处在
+   「位置与 header 不一致」的坏状态，只有自己解字节这条路可用）；
+2. 命中映射 → `rewriteLogDir` 只替换**第 1 帧**（其余帧逐字节流式保留；重压缩用与 DSH 同款的带内容
+   校验和帧；写临时文件 + 发布前自检 + 原子替换；同一会话**全部 generation** 一起改，中途失败回滚已改写项）；
+3. 目录归位到 `projectKeyOf(映射后 cwd)`（`relocateDir`：目标已存在不覆盖、目录内有 `session.lock` 不搬、
+   搬后自检失败回滚）；
+4. 搬不动 → **回滚首帧改写**（绝不留「header 与位置不一致」的半套状态：DSH 下次启动会直接报
+   `corrupt session log`）；回滚也失败 → 按硬失败上报（`rollbackOnError` 时宁可整体回滚）；
+5. 未命中映射 → 只做原有位置护栏（目录段 ≠ `projectKeyOf(首帧 cwd)` 就归位，只搬目录、不改内容）。
+
+**收尾阶段（全部分区写完之后）**：`ConfigAdapter.finalizeImport` 把工作区记录里声明的会话逐个
+`attachSession`（DSH 自己读 header、按 cwd 的 realpath 校验），成功/待登记如实计入报告（未登记成功记
+warning，绝不让「会话没进工作区」静默通过）。为什么必须放在这里：`APPLY_ORDER` 把 `workspaces` 排在
+`sessions` 之前，在 `applyItem` 里登记时会话文件还没写完、首帧还没改写，必然失败 —— 这正是旧症结
+「数据恢复了却显示不出来」。
+
+**边界**：会话**没有任何工作区**（或对应工作区不在备份里）时，导入侧不会凭空建工作区，目标机上仍然
+看不到它；这类情况用离线 CLI 兜底（`dsh-config-manager sessions repair`，见 README 的 CLI 章节），
+或在 DSH 里手动把该目录添加为工作区。读写会话日志字节的能力只存在于宿主侧（`src/utils/session-log.ts`
+是宿主适配器与 CLI 的唯一实现，`/core` 不碰 DSH 存储格式）。
+
 ---
 
 ## 5. 边界与限制
@@ -167,10 +221,10 @@ const result = await analyzer.executeImportPlan(zipPath, plan, { confirm: true, 
   只消费 `/core` 与 `/schema` 的消费者实际上不会加载它。
 - `react` / `react-dom` 是 **peerDependencies**，由 DSH client runtime 提供，
   消费者不需要（也不应该）自行安装来跑 headless 引擎。
-  但**注意**：npm 7+ 默认会自动安装 peer（除非该 peer 已标记 optional，而本包当前
-  **没有** `peerDependenciesMeta`），所以 headless 消费者实际会被装进约 4.7 MB 的
-  React 栈，而 host 半（`lib/index.js`）**完全不引用 react**。这是已登记缺口，
-  处置建议见 `docs/spec/known-gaps.md` §G-11（**未在本轮修改安装语义**）。
+  但**注意**：npm 7+ 默认会自动安装 peer——本包用 **`peerDependenciesMeta` 把全部 16 个 peer 标成
+  `optional: true`**，所以 npm 不再自动装 peer，headless 消费者实际只装 `js-yaml`（隔离安装实测见 §7：
+  16 个 UNMET peer，无 React 栈）。该不变量由 `tests/packaging-contract.test.ts` 钉死（peer 全 optional
+  ＋ `dependencies` 仅 `js-yaml`）；历史缺口 `P-1` / `P-2` 见 `docs/spec/known-gaps.md`（已修复）。
 - 引擎与 DSH 解耦：`src/core/` 只依赖 `ConfigAdapter` / `HostContext` 抽象与内存 mock。
   需要真实文件系统/凭据时，由调用方提供对应实现。
 
@@ -236,7 +290,7 @@ npm ls --all
 #     +-- js-yaml@5.4.2
 #     | `-- argparse@2.0.1
 #     `-- (16 个 UNMET peerDependencies —— 由 DSH 宿主提供)
-#          14 个 @deepseek-ai/* + react + react-dom（2 个 React peer，见 docs/spec/known-gaps.md §G-11）
+#          14 个 @deepseek-ai/* + react + react-dom（2 个 React peer，见 docs/spec/known-gaps.md §P-1）
 
 node -e "import('dsh-config-manager/core')"     # 32 exports，加载成功
 node --check node_modules/dsh-config-manager/lib/client.js   # exit 0

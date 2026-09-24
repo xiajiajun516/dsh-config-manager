@@ -7,8 +7,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ImportWizard, mergeSecretInput } from './import-wizard.ts';
-import { MockImportPort, makeAnalysis, makeImportResult, makePlan } from './test-helpers.ts';
+import {
+  ImportWizard, compatibilityBadgeKind, compatibilityLevel, importApplicablePhases, importBasePathNotices, importFlowFlags,
+  importPreviewStageAfter, isSkippablePluginInstall, mergeSecretInput, nextImportPhase, pendingSecretRequests,
+} from './import-wizard.ts';
+import { MockImportPort, makeAnalysis, makeImportResult, makePlan, makePlanItem } from './test-helpers.ts';
+import type { ImportPlan } from '../core/types.ts';
 
 /**
  * UI-06 回归：补录页「看到的值 = 提交的值」。
@@ -102,6 +106,28 @@ test('import-wizard: 用户可选 rollbackOnError=false（单项失败继续 §3
   await wiz.confirmCompatibility();
   await wiz.execute({ confirm: true, rollbackOnError: false });
   assert.equal(port.executeCalls[0]!.rollbackOnError, false);
+});
+
+test('import-wizard: 加密备份的解密密码同时传给 createImportPlan（否则归档里的凭据不进计划）', async () => {
+  const port = new MockImportPort();
+  port.analysis = makeAnalysis({ encrypted: true });
+  const wiz = new ImportWizard({ port });
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  assert.deepEqual(port.planOptsCalls[0], {}, '未设密码时不传 decryptPassword（普通备份）');
+
+  wiz.setDecryptPassword('backup-password-123');
+  await wiz.execute({ confirm: true });
+  assert.deepEqual(
+    port.planOptsCalls[1],
+    { decryptPassword: 'backup-password-123' },
+    'execute 前重建计划必须带上解密密码：计划缺少归档凭据 = 导入时值被静默丢掉',
+  );
+
+  wiz.reset();
+  await wiz.selectZip('y.zip');
+  await wiz.confirmCompatibility();
+  assert.deepEqual(port.planOptsCalls[2], {}, 'reset 后不残留密码');
 });
 
 test('import-wizard: 加密备份的解密密码经 execute 传给端口（仅内存）', async () => {
@@ -284,4 +310,106 @@ test('import-wizard: executeRetry 只重跑「失败 + 用户跳过」的子集�
     '重试计划只含 failed/用户跳过 项（顺序按原计划）',
   );
   assert.equal(retryPlan.pathMappings.length, 0, '子集计划保留 pathMappings');
+});
+
+/* ---------------- t45：从 ImportWizardView 迁出的流程/派生纯函数（此前无测试） ---------------- */
+
+const conflictPlan = (): ImportPlan => makePlan({
+  items: [
+    makePlanItem({ id: 'settings:a', kind: 'Conflict', description: '冲突 a' }),
+    makePlanItem({ id: 'settings:b', kind: 'Create', description: '创建 b' }),
+  ],
+});
+
+test('importFlowFlags：从 Dry Run 产物派生「是否有该阶段」三标志', () => {
+  assert.deepEqual(importFlowFlags({ plan: null, analysis: null, decryptRefs: [] }), {
+    hasConflicts: false, hasPathIssues: false, hasSecrets: false,
+  });
+  assert.deepEqual(importFlowFlags({ plan: makePlan(), analysis: makeAnalysis(), decryptRefs: [] }), {
+    hasConflicts: false, hasPathIssues: false, hasSecrets: true,
+  });
+  assert.equal(importFlowFlags({ plan: conflictPlan(), analysis: null, decryptRefs: [] }).hasConflicts, true);
+  assert.equal(
+    importFlowFlags({ plan: null, analysis: makeAnalysis({ pathIssues: [{ path: 'C:/x', reason: 'r' }] as never }), decryptRefs: [] }).hasPathIssues,
+    true,
+  );
+  // 解密已覆盖的 ref 不再要求补录 → 无 secrets 阶段
+  assert.equal(importFlowFlags({ plan: makePlan(), analysis: null, decryptRefs: ['K1'] }).hasSecrets, false);
+  assert.equal(importFlowFlags({ plan: makePlan(), analysis: null, decryptRefs: ['OTHER'] }).hasSecrets, true);
+});
+
+test('pendingSecretRequests：剔除解密已覆盖的 ref，无 plan → 空数组', () => {
+  assert.deepEqual(pendingSecretRequests(null, []), []);
+  assert.deepEqual(pendingSecretRequests(makePlan(), []), [{ ref: 'K1', required: true }]);
+  assert.deepEqual(pendingSecretRequests(makePlan(), ['K1']), []);
+});
+
+test('importApplicablePhases：阶段有序且只含需处理项；加密容器未解锁恒排最前', () => {
+  assert.deepEqual(
+    importApplicablePhases({ containerEncrypted: false, archiveUnlocked: false, hasConflicts: false, hasPathIssues: false, hasSecrets: false }),
+    ['confirm'],
+  );
+  assert.deepEqual(
+    importApplicablePhases({ containerEncrypted: false, archiveUnlocked: false, hasConflicts: true, hasPathIssues: true, hasSecrets: true }),
+    ['conflicts', 'path-mapping', 'secrets', 'confirm'],
+  );
+  assert.deepEqual(
+    importApplicablePhases({ containerEncrypted: true, archiveUnlocked: false, hasConflicts: true, hasPathIssues: false, hasSecrets: false }),
+    ['decrypt-archive', 'conflicts', 'confirm'],
+    '未解锁 → decrypt-archive 第一',
+  );
+  assert.deepEqual(
+    importApplicablePhases({ containerEncrypted: true, archiveUnlocked: true, hasConflicts: false, hasPathIssues: false, hasSecrets: false }),
+    ['confirm'],
+    '已解锁 → 不再有 decrypt-archive',
+  );
+});
+
+test('nextImportPhase：只前进（不回退已过阶段），confirm 原地', () => {
+  const inputs = { containerEncrypted: false, archiveUnlocked: false, hasConflicts: true, hasPathIssues: true, hasSecrets: true };
+  assert.equal(nextImportPhase(inputs, 'preview'), 'conflicts', 'from 不在列表 → 取第一项');
+  assert.equal(nextImportPhase(inputs, 'conflicts'), 'path-mapping');
+  assert.equal(nextImportPhase(inputs, 'path-mapping'), 'secrets');
+  assert.equal(nextImportPhase(inputs, 'secrets'), 'confirm');
+  assert.equal(nextImportPhase(inputs, 'confirm'), 'confirm', 'confirm 是终点，原地返回');
+  // 已解决阶段仍出现在列表中，但「从后面回来」不会被重新命中（只前进）
+  assert.equal(nextImportPhase(inputs, 'secrets'), 'confirm');
+});
+
+test('compatibilityLevel / compatibilityBadgeKind：四级映射 + 未知值回落 excellent（此前无测试的分支）', () => {
+  for (const c of ['unsupported', 'partial', 'good', 'excellent'] as const) {
+    assert.equal(compatibilityLevel(c), c);
+  }
+  assert.equal(compatibilityLevel('something-new-from-host'), 'excellent', '未知值按历史行为落到 excellent');
+  assert.equal(compatibilityBadgeKind('unsupported'), 'error');
+  assert.equal(compatibilityBadgeKind('partial'), 'warn');
+  assert.equal(compatibilityBadgeKind('good'), 'ok');
+  assert.equal(compatibilityBadgeKind('excellent'), 'ok');
+});
+
+test('importPreviewStageAfter：换备份回咨询页；「下一步」进内容选择页（幂等）', () => {
+  assert.equal(importPreviewStageAfter('new-zip', 'select'), 'consult');
+  assert.equal(importPreviewStageAfter('new-zip', 'consult'), 'consult');
+  assert.equal(importPreviewStageAfter('next', 'consult'), 'select');
+  assert.equal(importPreviewStageAfter('next', 'select'), 'select', '已在该页保持');
+});
+
+test('isSkippablePluginInstall：仅插件安装中且未请求跳过时可跳过（此前无测试的分支）', () => {
+  assert.equal(isSkippablePluginInstall('plugin:@x/y', true, false), true);
+  assert.equal(isSkippablePluginInstall('plugin:left-pad', true, true), false, '已请求跳过 → 不再显示');
+  assert.equal(isSkippablePluginInstall('plugin:x', false, false), false, '未在运行 → 不显示');
+  assert.equal(isSkippablePluginInstall('settings:a', true, false), false, '非插件项不可跳过');
+  assert.equal(isSkippablePluginInstall(undefined, true, false), false, '无 detail 不显示');
+  assert.equal(isSkippablePluginInstall('', true, false), false);
+});
+
+/* ---------------- issue #45：跨机基础路径自动重定基的提示行 ---------------- */
+
+test('importBasePathNotices：有自动重定基规则才产出提示行（null / 无规则 → 空）', () => {
+  assert.deepEqual(importBasePathNotices(null), []);
+  assert.deepEqual(importBasePathNotices({}), [], '同机导入（无 automaticMappings）不显示任何提示');
+  assert.deepEqual(
+    importBasePathNotices({ automaticMappings: [{ oldPrefix: '/opt/dsh/.dsh', newPrefix: 'C:/Users/me/.dsh' }] }),
+    [{ from: '/opt/dsh/.dsh', to: 'C:/Users/me/.dsh' }],
+  );
 });

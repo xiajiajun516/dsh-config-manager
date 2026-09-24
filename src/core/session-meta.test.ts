@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { makeContext } from '../adapters/test-helpers.ts';
 import type { ExportUnit } from './types.ts';
-import { applySessionMeta, applySessionMetaToPlanItems, projectKeyOf, readSessionMeta } from './session-meta.ts';
+import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, projectKeyOf, readSessionMeta, subagentParentMap } from './session-meta.ts';
 
 const HOME = 'C:\\Users\\alice';
 const UUID_A = '19495390-402b-463d-a4cc-882287c1f04e';
@@ -169,4 +169,62 @@ test('applySessionMeta：组内按最近活跃倒序；未知工作区用项目�
   assert.deepEqual(inProject, ['新会话', '旧会话'], '组内最近活跃在前');
   const elsewhere = out.find((u) => u.id.includes('Elsewhere'))!;
   assert.equal(elsewhere.group, '--D-Elsewhere--', '工作区注册表里没有 → 用项目键兜底，不留「未归类」坟场');
+});
+
+test('applySessionMeta：session- 前缀目录名同样拿到标题与活跃时间（真机：查表未归一化 → 丢标题 + 掉到组尾）', async () => {
+  const meta = await readSessionMeta(await seedStorages(HOME));
+  // 单元 id 末段是**目录名**：真机同一台机器上 `session-<uuid>` 与裸 `<uuid>` 两种形态并存。
+  // 输入刻意把带前缀的那条放在后面：修好之前它查不到缓存（无标题、时间为 -1）→ 一定被排到最后。
+  const units = [unit(`${PROJECT}/${UUID_B}`), unit(`${PROJECT}/session-${UUID_A}`)];
+  const out = applySessionMeta(units, meta);
+
+  assert.equal(out[0]!.id, `sessions:${PROJECT}/session-${UUID_A}`, '带前缀目录名按缓存里的活跃时间排在前面');
+  assert.equal(out[0]!.label, '推送更新到 GitHub 并发布新版本', '带前缀目录名也要命中缓存（裸键归一化）');
+  assert.equal(out[0]!.group, 'dsh-config-manager');
+});
+
+test('applySessionMeta：缓存没覆盖的会话用宿主现算的 mtime 兜底排序（缓存时间仍是第一口径）', async () => {
+  const meta = await readSessionMeta(await seedStorages(HOME));
+  const inCache = UUID_A; // 缓存里有 lastPromptAt = 1789245897999
+  const noCacheOld = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const noCacheNew = 'bbbbbbbb-0000-0000-0000-000000000002';
+  const activityAt = new Map<string, number>([
+    [noCacheOld, 5000],
+    [noCacheNew, 9000],
+    [inCache, 9999999999999], // 再新也不该盖过缓存里的 lastPromptAt
+  ]);
+  const units = [unit(`${PROJECT}/${noCacheOld}`), unit(`${PROJECT}/${inCache}`), unit(`${PROJECT}/${noCacheNew}`)];
+  const out = applySessionMeta(units, meta, 'sessions', activityAt);
+
+  assert.deepEqual(out.map((u) => u.id), [
+    `sessions:${PROJECT}/${inCache}`,
+    `sessions:${PROJECT}/${noCacheNew}`,
+    `sessions:${PROJECT}/${noCacheOld}`,
+  ], '缓存时间优先，其余按日志 mtime 倒序 —— 缺时间的会话不再成堆掉到组尾按 uuid 排');
+});
+
+test('subagentParentMap：只收 origin=subagent 的关系，键值都归一化成裸键', () => {
+  const map = subagentParentMap(new Map([
+    ['session-c1', { parent: 'session-P', subagent: true }],
+    ['c2', { parent: 'P', subagent: true }],
+    ['x', { parent: 'P', subagent: false }], // 非 subagent 的会话即使带 parentSession 也是顶层行 → 不收
+  ]));
+  assert.deepEqual([...map.entries()].sort(), [['c1', 'P'], ['c2', 'P']]);
+  assert.equal(subagentParentMap(undefined).size, 0, '宿主不提供关系 → 空映射（联动静默失效，不猜）');
+  assert.equal(subagentParentMap(new Map([['a', { parent: '', subagent: true }]])).size, 0, '空父 id 忽略');
+});
+
+test('applySessionParentLinks：子代理会话标出父对话（两种目录名形态都认得出），其它单元原样', () => {
+  const parentOf = new Map([['c1', 'P']]);
+  const units: ExportUnit[] = [
+    { id: `sessions:${PROJECT}/session-c1`, label: 'c1', sizeBytes: 1 },
+    { id: `sessions:${PROJECT}/session-P`, label: 'P', sizeBytes: 1 },
+    { id: 'skills:coding', label: 'coding', sizeBytes: 1 },
+  ];
+  const out = applySessionParentLinks(units, parentOf);
+  assert.equal(out[0]!.parentSessionId, 'P', 'session-<uuid> 形态的目录名也认得出（裸键归一化）');
+  assert.equal(out[1]!.parentSessionId, undefined, '父对话本身没有父字段（不编造）');
+  assert.equal(out[2]!.parentSessionId, undefined, '非 sessions 分区原样透传');
+  assert.equal(units[0]!.parentSessionId, undefined, '纯函数：不改原对象');
+  assert.deepEqual(applySessionParentLinks(units, new Map()), units, '空映射 → 原样返回');
 });

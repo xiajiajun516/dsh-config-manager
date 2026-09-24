@@ -1,7 +1,6 @@
 /**
  * 整体校验与兼容性评分（规范 §18 完整性 / §30 兼容性评分 / 导入后校验）。
  */
-import { validateManifest } from '../schema/manifest.ts';
 import { validateSectionData } from '../schema/config.ts';
 import { canImport, describeVersion } from '../schema/versions.ts';
 import type { SectionId } from '../schema/types.ts';

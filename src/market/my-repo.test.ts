@@ -18,8 +18,10 @@ import { GitHubApiError, MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from './g
 import type { GitHubForkInfo, GitHubPullRequestInfo, GitHubPullRequestParams, GitHubRepoInfo, GitHubUserInfo } from './github-repos.ts';
 import type { GitHubRestLike, MyItemEntry, MyRepoForm } from './my-repo.ts';
 import { MyRepoError, MyRepoService, delistBranchFor, prBranchFor, slugifyItemId, uniqueItemId, bumpVersion } from './my-repo.ts';
-import { MarketPrepareError } from './prepare.ts';
+import { MarketPrepareError, prepareMarketItem } from './prepare.ts';
 import type { MarketPrepareInput, MarketPrepareResult } from './prepare.ts';
+import { zipToBuffer, type ZipWriteEntry } from '../utils/zip.ts';
+import { sha256Hex } from '../utils/hashing.ts';
 import type { GitFileWriter, GitFileWriteCall, GitFileWriterResult } from './git-file-writer.ts';
 import type { SectionId } from '../schema/types.ts';
 
@@ -32,6 +34,25 @@ const OFFICIAL_URL = 'https://github.com/xiajiajun516/dsh-config-market';
 /* ---------------------------------------------------------------- 夹具数据 */
 
 const ZIP_BYTES = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x01]);
+
+/** 真实合法 Export zip（settings 分区 + 内部 checksums/manifest），供真实 prepareMarketItem 使用。 */
+function makeRealZip(): Uint8Array {
+  const settingsJson = JSON.stringify({ version: 1, namespaces: {} }, null, 2);
+  const manifest = {
+    schemaVersion: 1,
+    exporter: { name: 'DSH Config Manager', version: 'test' },
+    source: { dshVersion: '1.0.0', platform: 'linux', arch: 'x64' },
+    exportedAt: '2026-08-20T00:00:00.000Z',
+    sections: { settings: true },
+    security: { containsSecrets: false, encrypted: false, encryption: null },
+  };
+  const entries: ZipWriteEntry[] = [
+    { name: 'config/settings.json', data: Buffer.from(settingsJson) },
+    { name: 'integrity/checksums.json', data: Buffer.from(JSON.stringify({ 'config/settings.json': sha256Hex(Buffer.from(settingsJson)) })) },
+    { name: 'manifest.json', data: Buffer.from(JSON.stringify(manifest)) },
+  ];
+  return Buffer.from(zipToBuffer(entries));
+}
 
 const USER_INDEX_EMPTY = JSON.stringify({ schemaVersion: 1, name: '我的配置仓库', items: [] });
 
@@ -91,7 +112,10 @@ function makePrepare() {
   return { prepare, prepareInputs };
 }
 
-function makeHarness(overrides: RestOverrides = {}, opts: { userIndex?: string; officialIndex?: string } = {}): Harness {
+function makeHarness(
+  overrides: RestOverrides = {},
+  opts: { userIndex?: string; officialIndex?: string; prepare?: (input: MarketPrepareInput) => MarketPrepareResult } = {},
+): Harness {
   const gitCalls: GitFileWriteCall[] = [];
   /** 动态用户仓库 index（初始=opts.userIndex ?? 空；gitWriter 写入后更新，readFile 读取最新——后台收录要读回条目） */
   let liveUserIndex = opts.userIndex ?? USER_INDEX_EMPTY;
@@ -150,7 +174,11 @@ function makeHarness(overrides: RestOverrides = {}, opts: { userIndex?: string; 
     closePullRequest: async () => { restCalls.push('closePullRequest'); throw new Error('closePullRequest 默认不调用'); },
     ...overrides,
   };
-  const { prepare, prepareInputs } = makePrepare();
+  // 默认用 stub prepare（多数用例只关心编排）；round-trip 回归用例注入真实 prepareMarketItem，
+  // 以覆盖「stub manifest 不含 mode」曾掩盖的那条故障路径。
+  const stub = makePrepare();
+  const prepare = opts.prepare ?? stub.prepare;
+  const prepareInputs = stub.prepareInputs;
   const service = new MyRepoService({
     prepare,
     rest,
@@ -312,7 +340,7 @@ test('my-repo: PR 复用（open PR 未合并）→ 不重复创建', async () =>
       return openPrs;
     },
   });
-  const result = await h.service.upload({ zipBytes: ZIP_BYTES, form: form() });
+  await h.service.upload({ zipBytes: ZIP_BYTES, form: form() });
 
   // 后台收录完成：复用已有 open PR（head 匹配）
   const listing = await h.service.waitForListing('my-config');
@@ -680,4 +708,29 @@ test('my-repo: form.mode=share 透传给 prepare（分享模式强制拦截）�
   assert.equal(result2.ok, true);
   assert.equal(h2.prepareInputs.length, 1);
   assert.equal('mode' in h2.prepareInputs[0]!, false, 'migrate 缺省不透传 mode');
+});
+
+/**
+ * P0 回归：注入**真实 prepareMarketItem**（上面用例用的是 stub manifest，不含 mode —— 正是它掩盖了故障）。
+ * share 模式的真实产物含 mode 字段，曾因消费侧白名单缺 mode 而 parsePreparedManifest 失败 →
+ * upload 返回 ok:false + errorCode 'internal'（用户看到的是「内部错误」，实际是契约漂移）。
+ */
+test('my-repo: share 模式 + 真实 prepare 产物 → upload ok（不再抛 internal 契约漂移）', async () => {
+  const zip = makeRealZip();
+  const h = makeHarness({}, { prepare: prepareMarketItem });
+  const result = await h.service.upload({ zipBytes: zip, form: form({ name: 'Share Real', mode: 'share' }) });
+
+  assert.equal(result.ok, true, `share 上传必须成功，error=${result.error ?? ''} / code=${result.errorCode ?? ''}`);
+  assert.equal(result.errorCode, undefined);
+  assert.equal(result.version, '1.0.0');
+  assert.equal(result.listing, 'pending', '上传成功 → 收录流程转入后台 pending');
+
+  // 写入用户仓库的 L2 manifest 必须带着 mode 标记（发布 → 落盘全链路）
+  const manifestEntry = h.gitCalls[0]?.entries.find((x) => x.path.endsWith('/manifest.json'));
+  assert.ok(manifestEntry, 'writeFiles 必须包含 items/<id>/manifest.json');
+  const written = JSON.parse(String(manifestEntry.content)) as Record<string, unknown>;
+  assert.equal(written['mode'], 'share', '落盘的 L2 manifest 必须含 mode');
+
+  // 反向确认：真实产物里的 mode 正是曾经被白名单拒收的字段
+  assert.equal(String(manifestEntry.content).includes('"mode"'), true);
 });

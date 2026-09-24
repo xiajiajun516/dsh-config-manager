@@ -16,6 +16,7 @@ import {
   environmentFingerprint, isValidOperationId, isJournalBasename,
   VALID_OPERATION_ID_RE,
 } from './journal.ts';
+import { readSafeModeMarkerSync, safeModeMarkerPath } from './phase3-host.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 
 const LOCK_CTX = {
@@ -36,8 +37,6 @@ function mkStore(dir: string) {
   return new JournalStore({ transactionsDir: path.join(dir, 'transactions') });
 }
 
-/** 读文件原始字节（测 ownership/immutability） */
-async function readBytes(p: string): Promise<Buffer> { return fs.readFile(p); }
 async function exists(p: string): Promise<boolean> { try { await fs.access(p); return true; } catch { return false; } }
 
 // ---------- 状态机 ----------
@@ -254,4 +253,62 @@ test('journal write 失败时不落盘（atomicWrite throw = target 未变）', 
 test('sha256 指纹辅助可用', () => {
   const h = sha256Hex(new TextEncoder().encode('hello'));
   assert.match(h, /^[0-9a-f]{64}$/);
+});
+
+// ---------- SAFE MODE：判定单一来源（t26：两份判据收敛） ----------
+
+/**
+ * 三态读取：优先用 readSafeModeState（修复后新增）；修复前该方法不存在 → 退化为 boolean 兼容面
+ * （unknown 无法表达 → 落成 clear），于是「无法判定」的两条用例会立刻暴露差异。
+ */
+async function journalSafeModeState(store: JournalStore): Promise<string> {
+  const probe = store as JournalStore & { readSafeModeState?: () => Promise<string> };
+  if (typeof probe.readSafeModeState === 'function') return probe.readSafeModeState();
+  return (await store.readSafeMode()) ? 'blocked' : 'clear';
+}
+
+test('SAFE MODE：journal 与宿主同步探测对同一 marker 判定一致（含「无法判定」→ unknown）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const markerDir = path.join(dir, 'transactions');
+  await fs.mkdir(markerDir, { recursive: true });
+  const marker = path.join(markerDir, 'safe-mode');
+
+  // 路径口径单源（宿主/CLI 沿用 phase3-host 的 re-export）
+  assert.equal(safeModeMarkerPath(dir), marker);
+
+  // ① 标记不存在（布局完好）→ 两侧 clear
+  assert.equal(await journalSafeModeState(store), 'clear');
+  assert.equal(readSafeModeMarkerSync(dir), 'clear');
+  assert.equal(await store.readSafeMode(), false);
+
+  // ② 阻断内容 → 两侧 blocked（同一内容判据）
+  await fs.writeFile(marker, JSON.stringify({ blocked: true, at: '2026-09-22T00:00:00.000Z' }), 'utf8');
+  assert.equal(await journalSafeModeState(store), 'blocked');
+  assert.equal(readSafeModeMarkerSync(dir), 'blocked');
+  assert.equal(await store.readSafeMode(), true);
+
+  // ③ 非阻断内容 → 两侧 clear。注意内容判据是**包含式**（含 blocked/true 即阻断），
+  //    所以「清理」形态由 writeSafeMode(false) 删文件表达，不会出现 blocked:false 的标记。
+  await fs.writeFile(marker, 'reset by user', 'utf8');
+  assert.equal(await journalSafeModeState(store), 'clear');
+  assert.equal(readSafeModeMarkerSync(dir), 'clear');
+  assert.equal(await store.readSafeMode(), false);
+
+  // ④ 「无法判定」：标记存在但不是普通文件 → 两侧 unknown，绝不静默放行
+  //    修复前 journal 侧读目录抛错/吞错，被当成「没有标记」（放行），与同步侧结论相反。
+  await fs.rm(marker, { force: true });
+  await fs.mkdir(marker, { recursive: true });
+  assert.equal(readSafeModeMarkerSync(dir), 'unknown', '同步侧 fail-closed');
+  const verdict = await journalSafeModeState(store).catch(() => 'threw');
+  assert.equal(verdict, 'unknown', `journal 侧必须同判（修复前：抛错或误判 clear）；实际 ${verdict}`);
+  assert.equal(await store.readSafeMode(), false, 'boolean 兼容面：unknown 不在此层提升为阻断（与 probeSafeModeSync 同姿态）');
+  await fs.rm(marker, { recursive: true, force: true });
+
+  // ⑤ 祖先布局损坏：transactions 是普通文件（Windows 上 statSync 只报 ENOENT，靠祖先核对兜住）
+  const dir2 = tmp(t);
+  await fs.writeFile(path.join(dir2, 'transactions'), 'not a dir', 'utf8');
+  const store2 = mkStore(dir2);
+  assert.equal(readSafeModeMarkerSync(dir2), 'unknown', '布局不可信 → fail-closed');
+  assert.equal(await journalSafeModeState(store2), 'unknown', 'journal 侧必须同判（修复前误判 clear）');
 });

@@ -15,6 +15,7 @@
  *  - 不保存任何 secret（错误/recovery.reason 须过强 redaction）。
  */
 import fs from 'node:fs/promises';
+import fssync from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
@@ -420,14 +421,20 @@ export class JournalStore {
 
   /**
    * 收集已被「可恢复 / 未收敛 journal」引用的 snapshotId（Phase 4 F3 prune 保护）：
-   * 扫描 active/ + quarantine/ 下的 journal，凡 state 非 COMMITTED（即可能仍需 recovery /
-   * NEEDS_ATTENTION / ROLLING_BACK / RECOVERY_REQUIRED / 非终态）且 snapshotId 合法
-   * → 收集。返回 Set<string>。COMMITTED 的 snapshot 已消费，不保护（可被 retention 淘汰）。
-   * 该集合用于 FileSnapshotStore.prune 豁免 —— 引用的 recovery snapshot 绝不可被自动淘汰。
+   * 扫描 active/ + quarantine/ + completed/ 下的 journal，凡「快照仍可能被 recovery/人工恢复用到」
+   * 且 snapshotId 合法 → 收集。返回 Set<string>。该集合用于 FileSnapshotStore.prune 豁免 ——
+   * 引用的 recovery snapshot 绝不可被自动淘汰。
+   *
+   * 什么算「已消费」（不保护）：
+   *  - COMMITTED：apply 成功，快照用完；
+   *  - ROLLED_BACK 且 rollback.full === true：完整回滚，盘面已回到导入前状态。
+   * 审计 P0-3：**半回滚态**（ROLLED_BACK + full === false）与 NEEDS_ATTENTION / ROLLING_BACK /
+   * RECOVERING 仍需 recovery 或人工恢复 —— 它们会被规整进 completed/，所以 completed/ 必须一起扫，
+   * 否则「已回滚但没回滚干净」的回滚点会在 10 次快照后被静默淘汰（而它正是用户唯一的退路）。
    */
   async listReferencedSnapshotIds(): Promise<Set<string>> {
     const out = new Set<string>();
-    const dirs = [this.activeDir(), this.quarantineDir()];
+    const dirs = [this.activeDir(), this.quarantineDir(), this.completedDir()];
     for (const dir of dirs) {
       for (const name of await this.io.readdirNames(dir)) {
         if (!isJournalBasename(name)) continue;
@@ -436,6 +443,7 @@ export class JournalStore {
         const j = parseSafe(text);
         if (j === null) continue;
         if (j.state === 'COMMITTED') continue; // 已消费，不保护
+        if (j.state === 'ROLLED_BACK' && j.rollback.full === true) continue; // 完整回滚：已回到导入前状态
         if (typeof j.snapshotId === 'string' && j.snapshotId !== '') out.add(j.snapshotId);
       }
     }
@@ -444,12 +452,27 @@ export class JournalStore {
 
   // ---------- SAFE MODE ----------
 
-  /** 读 SAFE MODE（RECOVERY_REQUIRED / NEEDS_ATTENTION）持久标记。存在且内容为 blocked → true。 */
+  /** 祖先布局核对链（SAFE MODE 判定用）：<transactionsDir> → 其父目录。 */
+  private safeModeLayoutRoots(): string[] {
+    return [this.transactionsDir, path.dirname(this.transactionsDir)];
+  }
+
+  /**
+   * 读 SAFE MODE 标记（三态）。
+   *
+   * 审计 t26 收敛：本方法过去自带**第二份判定**（`/blocked|true/i` 正则 + `io.exists` 判存在），
+   * 与宿主/CLI 的 `readSafeModeMarkerSync` 是两套判据 —— 同一 marker 在「无法判定」场景下结论相反
+   * （旧实现把 IO 错误/目录占位当成「没有标记」→ 放行；同步侧返回 unknown 让调用方 fail-closed）。
+   * 现在判定（含祖先布局核对）**只有 readSafeModeMarkerStateSync 一处实现**，两侧天然一致。
+   */
+  async readSafeModeState(): Promise<SafeModeMarkerState> {
+    return readSafeModeMarkerStateSync(this.safeModePath(), this.safeModeLayoutRoots());
+  }
+
+  /** 读 SAFE MODE（boolean 兼容面）：只有 'blocked' 视为阻断；'unknown' 的 fail-closed 决策由上层做
+   *  （与 `Phase3Recovery.probeSafeModeSync` 同姿态：本层不把无法判定提升为阻断）。 */
   async readSafeMode(): Promise<boolean> {
-    const p = this.safeModePath();
-    if (!(await this.io.exists(p))) return false;
-    const text = await this.io.readFileText(p);
-    return /blocked|true/i.test(text);
+    return (await this.readSafeModeState()) === 'blocked';
   }
 
   /** 写/清 SAFE MODE 标记（atomic）。 */
@@ -485,6 +508,125 @@ export class JournalStore {
 }
 
 // ---------- Environment Fingerprint ----------
+
+/* ------------------------------------------------------- SAFE MODE 标记（判定单一来源） */
+
+/**
+ * durable SAFE MODE 标记的**路径 + 内容判据 + 三态分类**（唯一来源）。
+ *
+ * 审计 t26：标记的三件事（路径 / 正则 / 「无法判定」如何处理）过去分散在 journal.ts（本类的
+ * readSafeMode）与 phase3-host.ts（readSafeModeMarkerSync）两处，任一侧改动都会让同一 marker
+ * 得出不同结论。现在：
+ *  - 路径：本函数的 safeModeMarkerPath（phase3-host 只做 re-export）；
+ *  - 内容判据：isSafeModeMarkerBlocking（**唯一正则**）；
+ *  - 三态分类：classifySafeModeMarker（纯函数：IO 事实 → 三态；当前唯一采集方是
+ *    syncSafeModeMarkerFacts —— 将来新增读取路径必须复用它，而不是再写一份判据）；
+ *  - 读取实现：readSafeModeMarkerStateSync（宿主 apply() 同步阶段、CLI 离线门与
+ *    JournalStore.readSafeModeState 共用同一份）。
+ */
+export type SafeModeMarkerState = 'blocked' | 'clear' | 'unknown';
+
+/** durable SAFE MODE 标记的规范路径：`<dataDir>/transactions/safe-mode`。
+ *  host 同步探测与 CLI 离线安全门必须走这一处定义，不得在别处再写一份字面量（审计 P0-11）。 */
+export function safeModeMarkerPath(dataDir: string): string {
+  return path.join(dataDir, TRANSACTIONS_DIR, SAFE_MODE_MARKER);
+}
+
+/** 标记内容判据（**唯一正则**）：内容含 blocked/true 即视为阻断。 */
+export function isSafeModeMarkerBlocking(text: string): boolean {
+  return /blocked|true/i.test(text);
+}
+
+/** 判定事实：两条 IO 后端各自采集，判定规则统一走 classifySafeModeMarker。 */
+export type SafeModeMarkerFacts =
+  | { kind: 'file'; text: string }              // 标记存在、是普通文件、内容已读出
+  | { kind: 'absent'; layoutTrusted: boolean }  // 标记不存在；layoutTrusted=false = 路径被非目录/断链挡住
+  | { kind: 'not-file' }                        // 目录/设备等占位：布局不可信
+  | { kind: 'unreadable' };                     // 存在但读不出（权限 / IO 失败）
+
+/**
+ * 标记判定的**单一分类规则**（纯函数；同步/异步两条读取路径共用）：
+ *  - 普通文件 → 内容判据（blocked / clear）；
+ *  - 不存在且祖先布局可信 → clear（数据目录里本来没有标记，不误伤正常路径）；
+ *  - 其余（不存在但路径被挡、存在却读不出、非普通文件）→ **unknown**：
+ *    调用方必须 fail-closed，绝不当成「没有标记」放行（审计 P0-11 / t15 实测教训）。
+ */
+export function classifySafeModeMarker(facts: SafeModeMarkerFacts): SafeModeMarkerState {
+  if (facts.kind === 'file') return isSafeModeMarkerBlocking(facts.text) ? 'blocked' : 'clear';
+  if (facts.kind === 'absent') return facts.layoutTrusted ? 'clear' : 'unknown';
+  return 'unknown';
+}
+
+/**
+ * 单层祖先判定：'dir'（存在且是目录）/ 'absent'（确实不存在）/ 'unknown'（存在但不可穿透 / 不是目录 / 其它 IO 失败）。
+ * statSync 跟随链接；若 stat 报 ENOENT 但 lstat 仍能命中（悬空符号链接）→ unknown，不放行。
+ */
+function classifyAncestor(dir: string): 'dir' | 'absent' | 'unknown' {
+  try {
+    return fssync.statSync(dir).isDirectory() ? 'dir' : 'unknown';
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'unknown';
+  }
+  try {
+    fssync.lstatSync(dir);
+    return 'unknown'; // ENOENT 但条目仍在（悬空链接 / 无法穿透）
+  } catch {
+    return 'absent';
+  }
+}
+
+/**
+ * marker 报 ENOENT 时区分「确实不存在」与「祖先不是目录 / 不可访问」：
+ * 逐层核对 layoutRoots（从最近到最远）：命中 'unknown' → 布局不可信 → unknown；
+ * 命中 'dir' → 标记确实不存在 → 可信；全部 'absent' → 数据目录都不存在 → 可信。
+ */
+function isMarkerLayoutTrusted(layoutRoots: readonly string[]): boolean {
+  for (const ancestor of layoutRoots) {
+    const verdict = classifyAncestor(ancestor);
+    if (verdict === 'unknown') return false;
+    if (verdict === 'dir') return true;
+  }
+  return true;
+}
+
+/** 按真实文件系统采集标记事实（同步路径）。 */
+function syncSafeModeMarkerFacts(markerPath: string, layoutRoots: readonly string[]): SafeModeMarkerFacts {
+  let st: ReturnType<typeof fssync.statSync>;
+  try {
+    st = fssync.statSync(markerPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'unreadable' };
+    return { kind: 'absent', layoutTrusted: isMarkerLayoutTrusted(layoutRoots) };
+  }
+  // 目录/设备等占位：不是「没有标记」，而是布局不可信 → fail-closed
+  if (!st.isFile()) return { kind: 'not-file' };
+  try {
+    return { kind: 'file', text: fssync.readFileSync(markerPath, 'utf8') };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+/**
+ * 同步读取 SAFE MODE 标记（**唯一读取实现**）：宿主 apply() 同步阶段、CLI 离线门与
+ * `JournalStore.readSafeModeState()` 共用，保证同一 marker 只有一种判定。
+ *
+ * **不得用 existsSync 判存在**：它对 ENOTDIR（祖先不是目录）/ 权限类 stat 失败一律返回 false，
+ * 会把「无法判定」误判成「没有标记」而放行（审计 P0-11 残留；t15 实测 `transactions` 是普通文件
+ * 时 existsSync=false → 旧实现判 clear → destructive 静默放行）。Windows 上路径穿过普通文件时
+ * statSync 报 ENOENT（不是 ENOTDIR），故 errno 分类必须配合祖先目录核对。
+ */
+export function readSafeModeMarkerStateSync(
+  markerPath: string,
+  layoutRoots: readonly string[],
+): SafeModeMarkerState {
+  return classifySafeModeMarker(syncSafeModeMarkerFacts(markerPath, layoutRoots));
+}
+
+/** 便捷入口：按规范布局（`<dataDir>/transactions/safe-mode`，祖先核对 transactions → dataDir）。 */
+export function readSafeModeMarkerSync(dataDir: string): SafeModeMarkerState {
+  return readSafeModeMarkerStateSync(safeModeMarkerPath(dataDir), [path.join(dataDir, TRANSACTIONS_DIR), dataDir]);
+}
 
 /**
  * 环境指纹：hash(hostname + 持久化 per-install 随机 token)。

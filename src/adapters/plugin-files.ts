@@ -18,14 +18,17 @@ import type {
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { unitAllowed, unitsFromFiles } from './units.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 export const DEFAULT_PLUGIN_FILE_WHITELIST: readonly string[] = ['dsh-ssh.json', 'pet.json'];
 
 export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
   readonly id = 'pluginFiles' as const;
-  readonly displayName = 'Plugin Files';
-  readonly defaultIncluded = false;
-  readonly portability = 'deviceSpecific' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('pluginFiles').displayName;
+  readonly defaultIncluded = sectionMeta('pluginFiles').defaultIncluded;
+  readonly portability = sectionMeta('pluginFiles').portability;
   private readonly whitelist: string[];
   /** 约定配置目录（相对 ~/.dsh 根，如 'plugin-config'）；递归收集其下所有文件。undefined = 不收集。 */
   private readonly collectDir?: string;
@@ -142,16 +145,10 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
   }
 
   async validate(data: FilesSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'pluginFiles' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (!Array.isArray(data.files)) {
-      issues.push({ path: 'files', message: msg('adapter.validate.array', { subject: 'files' }), severity: 'error' });
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    return validateJsonSection<FilesSection>('pluginFiles', data, msg, (section, issues) => {
+      if (!Array.isArray(section.files)) {
+        issues.push({ path: 'files', message: msg('adapter.validate.array', { subject: 'files' }), severity: 'error' });
+      }
+    });
   }
 }

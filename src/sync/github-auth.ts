@@ -125,11 +125,9 @@ async function parseGitHubJson(response: Response, context: string): Promise<Rec
  */
 export class GitHubAuthClient {
   private readonly fetcher: typeof fetch;
-  private readonly now: () => number;
 
   constructor(options: GitHubAuthOptions = {}) {
     this.fetcher = options.fetcher ?? defaultFetcher();
-    this.now = options.now ?? (() => Date.now());
   }
 
   /**

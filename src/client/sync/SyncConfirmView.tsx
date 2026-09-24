@@ -19,8 +19,8 @@ import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
 import {
-  buildAdoptions, keepLocalAll, kindLabel, reviewItems, severityLabel,
-  summarizeConfirmItems, useRemoteAll, type SyncConflictResolution,
+  buildAdoptions, hasBulkDecidable, keepLocalAll, kindLabel, reviewItems, severityLabel,
+  summarizeConfirmItems, useRemoteAll, type BulkDecision, type SyncConflictResolution,
 } from './sync-view.ts'
 import type { ApplyItemsResponse } from './sync-api.ts'
 import type { TranslateNS } from '../client-types.ts'
@@ -94,7 +94,9 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   ), [items, states]);
 
   // 仅需人工决策的项进入确认列表；非决策项（Create/Update 等）默认自动采用，不逐项展示
-  const displayItems = useMemo(() => reviewItems(items), [items]);
+  const displayItems = useMemo(() => reviewItems(items), [items])
+  // 批量按钮的可用性：列表里存在可批量决策项（Error 项除外，需逐项处理）
+  const bulkDecidable = useMemo(() => hasBulkDecidable(displayItems), [displayItems]);
 
   const setAdopted = (itemId: string, adopted: boolean): void => {
     const existing: ItemState = states[itemId] ?? { adopted: false, resolution: undefined };
@@ -106,8 +108,8 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
     onDecisionsChange({ ...(decisions ?? {}), [itemId]: { adopted: existing.adopted, resolution } });
   };
 
-  // 批量决策（仅作用于 Conflict 项；非 Conflict 项的 adopt 保持默认）
-  const applyBulkDecision = (bulk: readonly { itemId: string; resolution: ConflictResolution; adopt: boolean }[]): void => {
+  // 批量决策（作用于确认列表里的全部项：Conflict 项连带给出解决方式，其余项只改 adopt）
+  const applyBulkDecision = (bulk: readonly BulkDecision[]): void => {
     if (bulk.length === 0) return;
     const next: SyncConfirmDecisions = { ...(decisions ?? {}) };
     for (const d of bulk) {
@@ -214,12 +216,12 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       </div>
       <span className={css.hint}>{t('syncflow.adoptHint')}</span>
 
-      {/* 批量决策（仅作用于 Conflict 项） */}
+      {/* 批量决策（作用于确认列表里的全部项；Error 项不在其列，需逐项处理） */}
       <div className={css.actionRow}>
-        <Button variant="ghost" disabled={busy || displayItems.filter((it) => it.kind === 'Conflict').length === 0} onClick={() => { applyBulkDecision(keepLocalAll(items)) }}>
+        <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(keepLocalAll(items)) }}>
           {t('syncflow.keepLocalAll')}
         </Button>
-        <Button variant="primary" disabled={busy || displayItems.filter((it) => it.kind === 'Conflict').length === 0} onClick={() => { applyBulkDecision(useRemoteAll(items)) }}>
+        <Button variant="primary" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(useRemoteAll(items)) }}>
           {t('syncflow.useRemoteAll')}
         </Button>
         <span className={css.hint}>{t('syncflow.bulkHint')}</span>

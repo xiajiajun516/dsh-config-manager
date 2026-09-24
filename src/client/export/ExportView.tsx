@@ -27,7 +27,9 @@ import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ChangeEvent } from 'react'
 import { normalizeExportFileName } from '../../ui/export-flow.ts'
 import {
-  buildExportRequest, pickerSummary, type Selection, type SelectionSection,
+  applySessionParentCoupling, applySessionWorkspaceCoupling, buildExportRequest, couplingInventorySections,
+  pickerSummary, sameSelection,
+  type Selection, type SelectionSection,
 } from '../../ui/selection-model.ts'
 import { formatBytes } from '../../ui/report.ts'
 import type { SectionId } from '../../schema/types.ts'
@@ -143,7 +145,7 @@ export function ExportView({ api, t }: ExportViewProps) {
    * 勾选变化由 applyPicker 负责触发，这里只在挂载时补第一次。
    */
   useEffect(() => {
-    void fetchInventory(runStore.getSnapshot().export.selection)
+    void fetchInventory(couplingInventorySections(runStore.getSnapshot().export.selection))
     // 只在挂载时取一次；后续勾选变化由 applyPicker 触发
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -177,6 +179,27 @@ export function ExportView({ api, t }: ExportViewProps) {
    * 只有一条导出流程，勾选状态就是唯一事实。
    */
   const pickerValue: Selection = { sections: selection, excluded: excludedUnits }
+
+  /**
+   * 工作区清单**到货后补一次联动**（issue #45 用户真机复验：链式选择必须真的生效）。
+   *
+   * 为什么需要：清单是异步逐分区拉的。用户勾一个对话/勾上会话分区时，若工作区清单还没到，`sessionIds`
+   * 无处可读，联动只能空转（对应工作区不会自动勾上），而用户的点击动作早已结束。于是在清单到货后按
+   * 「勾了会话 → 带上拥有它的工作区」补一次；方向**固定为 sessions**：绝不因为补联动去悄悄取消用户勾的会话。
+   * 幂等：结果等价就不写库，避免自激渲染。
+   */
+  useEffect(() => {
+    if (inv['workspaces'] === undefined) return
+    // 先补「父对话 ↔ 子代理会话」闭包（`parentSessionId` 随会话清单到货，旧构建留下的勾选也在这里被补齐），
+    // 再补「会话 → 工作区」。两条都是**只增不减**的正向闭包：绝不取消用户勾过的会话。
+    const withParents = applySessionParentCoupling(pickerValue, pickerNodes)
+    const next = applySessionWorkspaceCoupling(withParents, pickerNodes, 'sessions')
+    if (sameSelection(next, pickerValue)) return
+    runStore.patch({ export: { selection: next.sections, excludedUnits: next.excluded } })
+    void fetchInventory(couplingInventorySections(next.sections))
+    // 依赖只取「清单」与「当前选择」；pickerNodes / pickerValue 每次渲染都是新对象，放进依赖会自激
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inv, selection, excludedUnits])
 
   /** 本次会导出什么（选择器 → 请求参数）。同时用作「没有任何内容」的守卫。 */
   const exportRequest = buildExportRequest(pickerValue, pickerNodes)
@@ -233,7 +256,8 @@ export function ExportView({ api, t }: ExportViewProps) {
   const applyPicker = (next: Selection): void => {
     runStore.patch({ export: { selection: next.sections, excludedUnits: next.excluded } })
     // 新勾选的分区立即取清单，否则它只显示为「不可细分的整体开关」
-    void fetchInventory(next.sections)
+    // 勾了会话就必须连带把工作区清单读出来（联动的数据源在它身上，没读到 = 联动空转）
+    void fetchInventory(couplingInventorySections(next.sections))
   }
 
   const setIncludeSecrets = (next: boolean): void => {

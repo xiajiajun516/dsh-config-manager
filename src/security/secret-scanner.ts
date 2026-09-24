@@ -378,7 +378,7 @@ export function scanText(text: string, opts: SecretScannerOptions = {}): Sensiti
     const line = lines[i]!;
     const linePath = `line:${i + 1}`;
     // 字段名形态
-    for (const { re, json } of FIELD_VALUE_RE) {
+    for (const { re } of FIELD_VALUE_RE) {
       re.lastIndex = 0;
       let m: RegExpExecArray | null;
       while ((m = re.exec(line)) !== null) {

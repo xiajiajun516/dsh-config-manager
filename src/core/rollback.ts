@@ -117,7 +117,7 @@ async function compensateOne(
 
 /** 回滚：逆序补偿全部条目；返回诚实报告（full / partial） */
 export async function rollback(opts: RollbackOptions): Promise<RollbackReport> {
-  const { ctx, snapshot, store, adapters, entryDone } = opts;
+  const { ctx, snapshot, store, adapters } = opts;
   const restored: string[] = [];
   const failed: RollbackReport['failed'] = [];
 

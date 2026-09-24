@@ -12,7 +12,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { JournalStore, createJournalEntry } from './journal.ts';
-import { reconcileActive, inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './reconcile.ts';
+import { reconcileActive, inspectStartup } from './reconcile.ts';
 import { MutationTransactionCoordinator, type CoordinatedOperation } from './transaction-coordinator.ts';
 import type { MutationLockContext } from '../utils/env-lock.ts';
 

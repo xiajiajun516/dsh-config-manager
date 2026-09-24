@@ -39,6 +39,17 @@ import type { BackupScheduleStatus, BackupRunResult, BackupScheduleDraft } from 
 import type { BackupFileMeta } from '../sync/backup-files.ts';
 import { zhUiT, type UiT } from '../ui/i18n.ts';
 import { failedSectionsFromResponse } from '../ui/export-flow.ts';
+import { CONFIG_MANAGER_API } from './common/routes.ts';
+import {
+  ConfigManagerApiError,
+  getJson,
+  LONG_REQUEST_TIMEOUT_MS,
+  openStream,
+  postJson,
+  requestJson,
+  type RequestOptions,
+  type StreamHandle,
+} from './common/http.ts';
 
 /** Host 半健康检查响应（plugin 版本 / DSH 版本 / 平台，用于主页横幅与兼容性说明） */
 export interface ServiceStatus {
@@ -220,74 +231,17 @@ export interface ReleaseNotesPromptSaveResponse {
   dismissed: boolean;
 }
 
-/** 路由族常量（集中管理，与 Host 半的路由前缀保持一致） */
-export const CONFIG_MANAGER_API = {
-  base: '/api/dsh-config-manager',
-  status: '/api/dsh-config-manager/status',
-  export: '/api/dsh-config-manager/export',
-  exportPreview: '/api/dsh-config-manager/export-preview',
-  download: '/api/dsh-config-manager/download',
-  upload: '/api/dsh-config-manager/upload',
-  analyze: '/api/dsh-config-manager/analyze',
-  plan: '/api/dsh-config-manager/plan',
-  execute: '/api/dsh-config-manager/execute',
-  skipExecute: '/api/dsh-config-manager/execute/skip',
-  decryptArchive: '/api/dsh-config-manager/decrypt-archive',
-  progress: '/api/dsh-config-manager/progress',
-  runs: '/api/dsh-config-manager/runs',
-  snapshots: '/api/dsh-config-manager/snapshots',
-  restore: '/api/dsh-config-manager/restore',
-  snapshotDelete: '/api/dsh-config-manager/snapshots/delete',
-  snapshotPin: '/api/dsh-config-manager/snapshots/pin',
-  // git 风格恢复预览：单个文件的逐行差异（只读；点开文件才请求）
-  snapshotFileDiff: '/api/dsh-config-manager/snapshots/file-diff',
-  backupSchedule: '/api/dsh-config-manager/backup-schedule',
-  backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
-  backupFiles: '/api/dsh-config-manager/backup-files',
-  backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
-  consult: '/api/dsh-config-manager/consult',
-  profiles: '/api/dsh-config-manager/profiles',
-  profilesDetail: '/api/dsh-config-manager/profiles/detail',
-  profilesCreate: '/api/dsh-config-manager/profiles/create',
-  profilesDelete: '/api/dsh-config-manager/profiles/delete',
-  profilesRename: '/api/dsh-config-manager/profiles/rename',
-  profilesSelect: '/api/dsh-config-manager/profiles/select',
-  starPrompt: '/api/dsh-config-manager/star-prompt',
-  releaseNotesPrompt: '/api/dsh-config-manager/release-notes-prompt',
-} as const;
+/**
+ * 路由族常量与请求封装的**唯一来源**都在 `common/` 下（W4 收敛）：
+ *  - 路由常量 → `common/routes.ts`；
+ *  - `readJson` / `getJson` / `postJson`（超时 + 取消）与 `ConfigManagerApiError` → `common/http.ts`。
+ * 此处重导出，保持既有导入面不变（`import { CONFIG_MANAGER_API } from '../client/api.ts'` 等）。
+ */
+export { CONFIG_MANAGER_API };
+export { ConfigManagerApiError } from './common/http.ts';
 
-/** 导出请求超时（ms）：与 Host 半 ROUTE_TIMEOUT_MS 对齐，防止宿主卡死时 UI 无限等待 */
-const EXPORT_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** 携带路由 JSON error 消息的错误类型 */
-export class ConfigManagerApiError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ConfigManagerApiError';
-  }
-}
-
-/** 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError */
-async function readJson<T>(response: Response, t: UiT): Promise<T> {
-  const notMountedMessage = t('error.notMounted');
-  let body: unknown;
-  try {
-    body = await response.json();
-  } catch {
-    if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
-    throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
-  }
-  if (!response.ok) {
-    const message =
-      typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
-        ? (body as { error: string }).error
-        : response.status === 404
-          ? notMountedMessage
-          : `HTTP ${response.status}`;
-    throw new ConfigManagerApiError(message);
-  }
-  return body as T;
-}
+/** 长操作请求选项（5 分钟；超时文案走默认键 `error.requestTimeout`，导出族另有专属键）。 */
+const LONG_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS };
 
 /** query-string 辅助（跳过 undefined/空串，与 dsh-ssh 一致） */
 function query(params: Record<string, string | number | undefined>): string {
@@ -355,15 +309,13 @@ export class ConfigManagerApi {
   // ------------------------------------------------------------- status
   /** 健康/版本检查（主页横幅：插件版本 / DSH 版本 / 平台） */
   async status(): Promise<ServiceStatus> {
-    const response = await fetch(CONFIG_MANAGER_API.status);
-    return readJson<ServiceStatus>(response, this.t);
+    return getJson<ServiceStatus>(CONFIG_MANAGER_API.status, this.t);
   }
 
   // ------------------------------------------------------------- star-prompt
   /** Star 引导弹窗状态（进入页面时判定是否展示 / 是否补记首次使用时间）。 */
   async starPromptStatus(): Promise<StarPromptStatus> {
-    const response = await fetch(CONFIG_MANAGER_API.starPrompt);
-    return readJson<StarPromptStatus>(response, this.t);
+    return getJson<StarPromptStatus>(CONFIG_MANAGER_API.starPrompt, this.t);
   }
 
   // ------------------------------------------------------- export-preview
@@ -374,12 +326,8 @@ export class ConfigManagerApi {
    * 避免为了打开选择器就把 sessions 全量读一遍。
    */
   async exportPreview(only?: SectionId[]): Promise<ExportPreviewResponse> {
-    const response = await fetch(CONFIG_MANAGER_API.exportPreview, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ only }),
-    });
-    return readJson<ExportPreviewResponse>(response, this.t);
+    // 预览要逐分区问 adapter（大 home 上可能不慢但也不是纯 K/V 读）：长操作档位。
+    return postJson<ExportPreviewResponse>(CONFIG_MANAGER_API.exportPreview, { only }, this.t, LONG_OPTS);
   }
 
   /** 保存 Star 引导弹窗状态（局部更新：firstSeenAt / dismissed / clicked）。
@@ -389,19 +337,13 @@ export class ConfigManagerApi {
     if (patch.firstSeenAt !== undefined) body.firstSeenAt = patch.firstSeenAt;
     if (patch.dismissed === true) body.dismissed = true;
     if (patch.clicked === true) body.clicked = true;
-    const response = await fetch(CONFIG_MANAGER_API.starPrompt, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return readJson<StarPromptSaveResponse>(response, this.t);
+    return postJson<StarPromptSaveResponse>(CONFIG_MANAGER_API.starPrompt, body, this.t);
   }
 
   // ------------------------------------------------------------- release-notes-prompt
   /** 更新内容弹窗状态（进入页面时判定是否展示 / 是否已永不提示）。 */
   async releaseNotesPromptStatus(): Promise<ReleaseNotesPromptStatus> {
-    const response = await fetch(CONFIG_MANAGER_API.releaseNotesPrompt);
-    return readJson<ReleaseNotesPromptStatus>(response, this.t);
+    return getJson<ReleaseNotesPromptStatus>(CONFIG_MANAGER_API.releaseNotesPrompt, this.t);
   }
 
   /** 保存更新内容弹窗状态（局部更新：lastSeenVersion / dismissed）。 */
@@ -409,40 +351,22 @@ export class ConfigManagerApi {
     const body: ReleaseNotesPromptPatch = {};
     if (patch.lastSeenVersion !== undefined) body.lastSeenVersion = patch.lastSeenVersion;
     if (patch.dismissed === true) body.dismissed = true;
-    const response = await fetch(CONFIG_MANAGER_API.releaseNotesPrompt, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return readJson<ReleaseNotesPromptSaveResponse>(response, this.t);
+    return postJson<ReleaseNotesPromptSaveResponse>(CONFIG_MANAGER_API.releaseNotesPrompt, body, this.t);
   }
 
   // ------------------------------------------------------------- export
   /** ExportPort.export：调用 Host 侧导出编排（core Exporter）。加密密码随请求体传输（仅内存）。
-   * 带 AbortController 超时：宿主若卡死，客户端得到明确错误而不是永远停在进度条。 */
+   * 带 5 分钟超时（AbortController 在 common/http.ts）：宿主若卡死，客户端得到明确错误而不是永远停在进度条。 */
   async export(options: ExportOptions): Promise<ExportResponse> {
     const body: ExportOptions & { password?: string } = {
       ...options,
       password: this.exportPassword ?? undefined,
     };
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), EXPORT_TIMEOUT_MS);
-    try {
-      const response = await fetch(CONFIG_MANAGER_API.export, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      return await readJson<ExportResponse>(response, this.t);
-    } catch (err) {
-      if (controller.signal.aborted) {
-        throw new ConfigManagerApiError(this.t('error.exportTimeout', { minutes: String(Math.round(EXPORT_TIMEOUT_MS / 60000)) }));
-      }
-      throw err;
-    } finally {
-      clearTimeout(timer);
-    }
+    // 长操作（5 分钟）：超时文案沿用 error.exportTimeout（分钟插值），与改造前一致。
+    return postJson<ExportResponse>(CONFIG_MANAGER_API.export, body, this.t, {
+      timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+      timeoutKey: 'error.exportTimeout',
+    });
   }
 
   /**
@@ -451,13 +375,33 @@ export class ConfigManagerApi {
    *   静默下载到「下载」目录，无需用户额外操作（导出完成即可自动调用）；
    * - saveDialog: true：优先 File System Access API 流式落盘（不占整文件内存），
    *   用户可在系统保存对话框中选择位置；不可用/取消时回退 Blob 下载。
+   *
+   * 请求本身走 `common/http.ts` 的 `openStream`（唯一封装）：headers 阶段有超时，
+   * 正文阶段是**空闲超时**（每读一块数据重置）——宿主卡死时下载明确失败而非永久转圈。
    */
   async download(
     zipPath: string,
     opts?: DownloadOptions,
     onProgress?: (received: number, total: number) => void,
   ): Promise<DownloadResult> {
-    const response = await fetch(CONFIG_MANAGER_API.download + query({ path: zipPath }));
+    const stream = await openStream(CONFIG_MANAGER_API.download + query({ path: zipPath }), this.t);
+    try {
+      return await this.saveDownloaded(stream, zipPath, opts, onProgress);
+    } catch (err) {
+      throw stream.mapTimeout(err);
+    } finally {
+      stream.close();
+    }
+  }
+
+  /** 读取流式下载响应并落盘（流式写优先；不可用时 Blob + <a download> 兜底）。 */
+  private async saveDownloaded(
+    stream: StreamHandle,
+    zipPath: string,
+    opts?: DownloadOptions,
+    onProgress?: (received: number, total: number) => void,
+  ): Promise<DownloadResult> {
+    const response = stream.response;
     if (!response.ok || response.body === null) {
       const text = await response.text().catch(() => '');
       throw new ConfigManagerApiError(text !== '' ? text : this.t('error.downloadFailed', { status: String(response.status) }));
@@ -475,6 +419,8 @@ export class ConfigManagerApi {
     const chunks: Uint8Array<ArrayBuffer>[] = [];
     let received = 0;
     if (usePicker) {
+      // 用户在系统保存对话框里的停留不计入空闲超时（交互不是「宿主无响应」）。
+      stream.pause();
       try {
         const picker = (window as WindowWithFileSystemAccess).showSaveFilePicker!;
         const handle = await picker.call(window, { suggestedName: filename });
@@ -482,6 +428,8 @@ export class ConfigManagerApi {
       } catch {
         // 用户取消保存对话框或 API 不可用：回退内存 Blob + <a download>。
         writable = undefined;
+      } finally {
+        stream.resume();
       }
     }
     for (;;) {
@@ -493,6 +441,7 @@ export class ConfigManagerApi {
         chunks.push(value as Uint8Array<ArrayBuffer>);
       }
       received += value.length;
+      stream.keepAlive();
       onProgress?.(received, total);
     }
     if (writable !== undefined) {
@@ -518,11 +467,13 @@ export class ConfigManagerApi {
   // ------------------------------------------------------------- import
   /** 上传用户选择的 ZIP 到 Host 受控临时目录，返回可引用的 zipPath（dsh-ssh 同款原始字节上传） */
   async upload(file: File): Promise<UploadResponse> {
-    const response = await fetch(CONFIG_MANAGER_API.upload + query({ name: file.name }), {
-      method: 'POST',
-      body: file,
-    });
-    return readJson<UploadResponse>(response, this.t);
+    // 上传大 ZIP 可能较慢：长操作档位（5 分钟）。
+    return requestJson<UploadResponse>(
+      CONFIG_MANAGER_API.upload + query({ name: file.name }),
+      { method: 'POST', body: file },
+      this.t,
+      LONG_OPTS,
+    );
   }
 
   /**
@@ -533,37 +484,46 @@ export class ConfigManagerApi {
    * 客户端不必自己解析 .credentials.yaml。不传 = refs 为空数组。
    */
   async analyzeImport(zipPath: string, opts: { decryptPassword?: string } = {}): Promise<ImportAnalysis> {
-    const response = await fetch(CONFIG_MANAGER_API.analyze, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
+    return postJson<ImportAnalysis>(
+      CONFIG_MANAGER_API.analyze,
+      {
         zipPath,
         ...(opts.decryptPassword !== undefined && opts.decryptPassword !== ''
           ? { decryptPassword: opts.decryptPassword }
           : {}),
-      }),
-    });
-    return readJson<ImportAnalysis>(response, this.t);
+      },
+      this.t,
+      LONG_OPTS,
+    );
   }
 
-  /** ImportPort.createImportPlan：用用户决策（冲突/路径映射/策略）生成最终计划（Dry Run 零写入） */
-  async createImportPlan(zipPath: string, decisions: ImportDecisions): Promise<ImportPlan> {
-    const response = await fetch(CONFIG_MANAGER_API.plan, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ zipPath, decisions }),
-    });
-    return readJson<ImportPlan>(response, this.t);
+  /**
+   * ImportPort.createImportPlan：用用户决策（冲突/路径映射/策略）生成最终计划（Dry Run 零写入）。
+   * `opts.decryptPassword`（仅内存）：加密备份必须与 /analyze、/execute 传同一个密码，
+   * 让计划包含「归档里带值的凭据」——否则导入时这些值不会被写回。
+   */
+  async createImportPlan(
+    zipPath: string,
+    decisions: ImportDecisions,
+    opts: { decryptPassword?: string } = {},
+  ): Promise<ImportPlan> {
+    return postJson<ImportPlan>(
+      CONFIG_MANAGER_API.plan,
+      {
+        zipPath,
+        decisions,
+        ...(opts.decryptPassword !== undefined && opts.decryptPassword !== ''
+          ? { decryptPassword: opts.decryptPassword }
+          : {}),
+      },
+      this.t,
+      LONG_OPTS,
+    );
   }
 
   /** ImportPort.decryptArchive：解锁整体加密备份容器 → 明文 ZIP 路径 + 解密覆盖的凭据 ref 名 */
   async decryptArchive(zipPath: string, password: string): Promise<DecryptArchiveResponse> {
-    const response = await fetch(CONFIG_MANAGER_API.decryptArchive, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ zipPath, password }),
-    });
-    return readJson<DecryptArchiveResponse>(response, this.t);
+    return postJson<DecryptArchiveResponse>(CONFIG_MANAGER_API.decryptArchive, { zipPath, password }, this.t, LONG_OPTS);
   }
 
   /** ImportPort.executeImportPlan：快照→分阶段 apply→validate→commit/rollback */
@@ -582,54 +542,63 @@ export class ConfigManagerApi {
         decryptPassword: opts.decryptPassword,
       },
     };
-    const response = await fetch(CONFIG_MANAGER_API.execute, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    return readJson<ImportResult & { runId: string }>(response, this.t);
+    return postJson<ImportResult & { runId: string }>(CONFIG_MANAGER_API.execute, payload, this.t, LONG_OPTS);
   }
 
   // ------------------------------------------------------------- run 进度
-  /** m1：查询单个 run 的实时状态（执行中轮询 / 刷新恢复用；404 = 已过保留期或不存在） */
+  /**
+   * m1：查询单个 run 的实时状态（执行中轮询 / 刷新恢复用；404 = 已过保留期或不存在）。
+   *
+   * 超时用**普通档位**（30s）：`run-store.pollRun` 只在 promise 拒绝时才走 `applyGone`
+   * （把 run 判为「已结束/不可恢复」并停止轮询），所以这里必须**有界**但不能过短 ——
+   * 宿主事件循环被大操作短暂占住时，误报的代价（丢掉进度跟踪）高于晚 30 秒收敛。
+   */
   async progress(runId: string): Promise<RunState> {
-    const response = await fetch(CONFIG_MANAGER_API.progress + query({ runId }));
-    return readJson<RunState>(response, this.t);
+    return getJson<RunState>(CONFIG_MANAGER_API.progress + query({ runId }), this.t);
   }
 
-  /** m1：列出当前活跃（running）的 run（刷新后重新订阅进行中任务的入口） */
+  /** m1：列出当前活跃（running）的 run（刷新后重新订阅进行中任务的入口；超时同上）。 */
   async runs(): Promise<RunState[]> {
-    const response = await fetch(CONFIG_MANAGER_API.runs);
-    return readJson<RunState[]>(response, this.t);
+    return getJson<RunState[]>(CONFIG_MANAGER_API.runs, this.t);
   }
 
   /** 导入中「跳过当前插件」：宿主 abort 当前计划项的中止控制器（kill 子进程 + 清半装状态）。
    * 404 = run 不在执行（已完成/无进行中导入）。 */
   async skipExecute(runId: string): Promise<{ skipped: boolean }> {
-    const response = await fetch(CONFIG_MANAGER_API.skipExecute, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ runId }),
-    });
-    return readJson<{ skipped: boolean }>(response, this.t);
+    return postJson<{ skipped: boolean }>(CONFIG_MANAGER_API.skipExecute, { runId }, this.t, LONG_OPTS);
+  }
+
+  /**
+   * 运行中心：列出最近的 run（含刚结束的；终态受宿主保留期约束，**不是**持久审计）。
+   * 一次拿全「进行中 + 刚结束」，避免运行中心同时开两条轮询链。
+   */
+  async runsRecent(): Promise<RunState[]> {
+    return getJson<RunState[]>(CONFIG_MANAGER_API.runs + query({ scope: 'recent' }), this.t);
+  }
+
+  /**
+   * 运行中心：请求终止。协作式取消 —— 宿主在**计划项边界**暂停并把 run 置为「待决策」，
+   * 由 decideRunCancel 回传处置方式。409 = 该任务类型没有安全点（目前只有导入支持）。
+   */
+  async cancelRun(runId: string): Promise<{ requested: boolean }> {
+    return postJson<{ requested: boolean }>(CONFIG_MANAGER_API.runsCancel, { runId }, this.t, LONG_OPTS);
+  }
+
+  /** 运行中心：把「回滚 / 保留已应用项」的选择回传给停在安全点的引擎。 */
+  async decideRunCancel(runId: string, decision: 'rollback' | 'keep'): Promise<{ accepted: boolean }> {
+    return postJson<{ accepted: boolean }>(CONFIG_MANAGER_API.runsCancelDecision, { runId, decision }, this.t, LONG_OPTS);
   }
 
   // ------------------------------------------------------- 快照恢复（M4）
   /** 列出全部快照元信息（createdAt 倒序；含 status/条目数/宿主文件数/插件数） */
   async snapshots(): Promise<SnapshotMeta[]> {
-    const response = await fetch(CONFIG_MANAGER_API.snapshots);
-    const body = await readJson<{ snapshots: SnapshotMeta[] }>(response, this.t);
+    const body = await getJson<{ snapshots: SnapshotMeta[] }>(CONFIG_MANAGER_API.snapshots, this.t);
     return body.snapshots;
   }
 
   /** 快照恢复：dryRun=true 只取动作计划（零写入）；false 执行并返回诚实报告 */
   async restoreSnapshot(snapshotId: string, dryRun: boolean): Promise<RestoreResponse> {
-    const response = await fetch(CONFIG_MANAGER_API.restore, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ snapshotId, dryRun }),
-    });
-    return readJson<RestoreResponse>(response, this.t);
+    return postJson<RestoreResponse>(CONFIG_MANAGER_API.restore, { snapshotId, dryRun }, this.t, LONG_OPTS);
   }
 
   /**
@@ -642,148 +611,102 @@ export class ConfigManagerApi {
     target?: string;
     blobPath?: string;
   }): Promise<SnapshotFileDiff> {
-    const response = await fetch(CONFIG_MANAGER_API.snapshotFileDiff, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const body = await readJson<{ diff: SnapshotFileDiff }>(response, this.t);
+    const body = await postJson<{ diff: SnapshotFileDiff }>(CONFIG_MANAGER_API.snapshotFileDiff, payload, this.t);
     return body.diff;
   }
 
   /** P1-⑧：手动删除单个快照（危险操作：该导入前回滚点不可恢复；`removed` 为是否实际删除）。 */
   async deleteSnapshot(snapshotId: string): Promise<{ removed: boolean }> {
-    const response = await fetch(CONFIG_MANAGER_API.snapshotDelete, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ snapshotId }),
-    });
-    return readJson<{ ok: boolean; removed: boolean }>(response, this.t);
+    return postJson<{ ok: boolean; removed: boolean }>(CONFIG_MANAGER_API.snapshotDelete, { snapshotId }, this.t);
   }
 
   /** P1-⑧：置顶/取消置顶快照（置顶快照豁免自动保留清理，只能手动删除）。 */
   async setSnapshotPinned(snapshotId: string, pinned: boolean): Promise<{ pinned: boolean }> {
-    const response = await fetch(CONFIG_MANAGER_API.snapshotPin, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ snapshotId, pinned }),
-    });
-    return readJson<{ ok: boolean; pinned: boolean }>(response, this.t);
+    return postJson<{ ok: boolean; pinned: boolean }>(CONFIG_MANAGER_API.snapshotPin, { snapshotId, pinned }, this.t);
   }
 
   // ------------------------------------------------- 档案（DSH 自带 profile）
   /** 列出 DSH profile：列表 + 当前运行 + 「下次启动」标记 + 起步模板。 */
   async profilesList(): Promise<DshProfilesSnapshot> {
-    const response = await fetch(CONFIG_MANAGER_API.profiles);
-    return readJson<DshProfilesSnapshot & { ok: boolean }>(response, this.t);
+    return getJson<DshProfilesSnapshot & { ok: boolean }>(CONFIG_MANAGER_API.profiles, this.t);
   }
 
   /** 单个档案详情（package.json / cordis.patch.yml 原文；大文件原文截断为 null）。 */
   async profileDetail(name: string): Promise<DshProfileDetail> {
-    const response = await fetch(`${CONFIG_MANAGER_API.profilesDetail}?name=${encodeURIComponent(name)}`);
-    const body = await readJson<{ ok: boolean; profile: DshProfileDetail }>(response, this.t);
+    const body = await getJson<{ ok: boolean; profile: DshProfileDetail }>(
+      `${CONFIG_MANAGER_API.profilesDetail}?name=${encodeURIComponent(name)}`,
+      this.t,
+    );
     return body.profile;
   }
 
   /** 新建档案（在 $DSH_HOME/profiles/<name> 写标准 profile 三件套；template = base/web/headless/sdk/…）。 */
   async profileCreate(name: string, template: string): Promise<DshProfileMeta> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesCreate, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, template }),
-    });
-    const body = await readJson<{ ok: boolean; profile: DshProfileMeta }>(response, this.t);
+    const body = await postJson<{ ok: boolean; profile: DshProfileMeta }>(CONFIG_MANAGER_API.profilesCreate, { name, template }, this.t);
     return body.profile;
   }
 
   /** 重命名档案（目录级移动；当前运行中的档案被 host 拒绝）。 */
   async profileRename(name: string, newName: string): Promise<DshProfileMeta> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesRename, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, newName }),
-    });
-    const body = await readJson<{ ok: boolean; profile: DshProfileMeta }>(response, this.t);
+    const body = await postJson<{ ok: boolean; profile: DshProfileMeta }>(CONFIG_MANAGER_API.profilesRename, { name, newName }, this.t);
     return body.profile;
   }
 
   /** 物理删除档案目录（不可恢复；当前运行中的档案需显式 allowCurrent=true）。 */
   async profileDelete(name: string, opts: { allowCurrent?: boolean } = {}): Promise<void> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesDelete, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name, allowCurrent: opts.allowCurrent === true }),
-    });
-    await readJson<{ ok: boolean }>(response, this.t);
+    await postJson<{ ok: boolean }>(
+      CONFIG_MANAGER_API.profilesDelete,
+      { name, allowCurrent: opts.allowCurrent === true },
+      this.t,
+    );
   }
 
   /** 记录「下次启动」用哪个档案（name=null 清除标记）。DSH 不支持运行中切换，重启由用户完成。 */
   async profileSelect(name: string | null): Promise<DshProfileSelection | null> {
-    const response = await fetch(CONFIG_MANAGER_API.profilesSelect, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    const body = await readJson<{ ok: boolean; selection: DshProfileSelection | null }>(response, this.t);
+    const body = await postJson<{ ok: boolean; selection: DshProfileSelection | null }>(CONFIG_MANAGER_API.profilesSelect, { name }, this.t);
     return body.selection;
   }
 
   // ------------------------------------------------- 定时全量备份（快照 tab）
   /** 读取定时备份配置（enabled / interval / 上次运行状态；无敏感字段）。 */
   async backupSchedule(): Promise<BackupScheduleStatus> {
-    const response = await fetch(CONFIG_MANAGER_API.backupSchedule);
-    const body = await readJson<{ schedule: BackupScheduleStatus }>(response, this.t);
+    const body = await getJson<{ schedule: BackupScheduleStatus }>(CONFIG_MANAGER_API.backupSchedule, this.t);
     return body.schedule;
   }
 
   /** 保存定时备份设置（enabled + interval）；Host 校验后原子写 + 重排调度器。 */
   async saveBackupSchedule(draft: BackupScheduleDraft): Promise<BackupScheduleStatus> {
-    const response = await fetch(CONFIG_MANAGER_API.backupSchedule, {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(draft),
-    });
-    const body = await readJson<{ schedule: BackupScheduleStatus }>(response, this.t);
+    const body = await requestJson<{ schedule: BackupScheduleStatus }>(
+      CONFIG_MANAGER_API.backupSchedule,
+      { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(draft) },
+      this.t,
+    );
     return body.schedule;
   }
 
   /** 立即执行一次全量备份（复用调度器 runOnce，防重；返回执行结果 + 最新配置）。 */
   async runBackupNow(): Promise<{ run: BackupRunResult; schedule: BackupScheduleStatus }> {
-    const response = await fetch(CONFIG_MANAGER_API.backupScheduleRun, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    return readJson<{ run: BackupRunResult; schedule: BackupScheduleStatus }>(response, this.t);
+    // 立即全量备份可能跑数分钟：长操作档位。
+    return postJson<{ run: BackupRunResult; schedule: BackupScheduleStatus }>(CONFIG_MANAGER_API.backupScheduleRun, {}, this.t, LONG_OPTS);
   }
 
   // ------------------------------------------------- 备份文件管理（快照 tab）
   /** 列出导出目录（exports/*.zip）下的全部备份文件（时间倒序；含来源 auto/manual）。 */
   async listBackupFiles(): Promise<BackupFileMeta[]> {
-    const response = await fetch(CONFIG_MANAGER_API.backupFiles);
-    const body = await readJson<{ ok: boolean; files: BackupFileMeta[] }>(response, this.t);
+    const body = await getJson<{ ok: boolean; files: BackupFileMeta[] }>(CONFIG_MANAGER_API.backupFiles, this.t);
     return body.files;
   }
 
   /** 删除一个备份文件（危险操作：不可恢复；仅限 exports 目录内 .zip）。 */
   async deleteBackupFile(name: string): Promise<{ removed: boolean }> {
-    const response = await fetch(CONFIG_MANAGER_API.backupFilesDelete, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-    return readJson<{ ok: boolean; removed: boolean }>(response, this.t);
+    return postJson<{ ok: boolean; removed: boolean }>(CONFIG_MANAGER_API.backupFilesDelete, { name }, this.t);
   }
 
   // ------------------------------------------------- Phase 7 迁移前咨询
   /** 迁移前咨询（只读健康评分 + 建议）：对 4 种可迁移源生成统一咨询报告。 */
   async consult(input: { type: 'export-zip' | 'local-snapshot' | 'remote-snapshot' | 'profile'; id: string; snapshotId?: string }): Promise<ConsultReport> {
-    const response = await fetch(CONFIG_MANAGER_API.consult, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    return readJson<ConsultReport>(response, this.t);
+    // 只读咨询要读备份/快照内容：长操作档位。
+    return postJson<ConsultReport>(CONFIG_MANAGER_API.consult, input, this.t, LONG_OPTS);
   }
 
   // ------------------------------------------------- P1-⑦/P2-⑬ 备份内容查看 / 差异对比

@@ -31,8 +31,46 @@ import { atomicWriteFile } from '../utils/atomic-write.ts';
 
 export const SYNC_CONFIG_FILE = 'sync-config.json';
 
-/** 同步通道类型（git / webdav；host 侧统一引用，autosync-config / sync-selection 复用）。 */
-export type SyncTransportType = 'git' | 'webdav';
+/**
+ * 同步通道枚举（**唯一声明处**，t32）：所有「有哪些通道 / 通道列表 / 通道判定」的唯一事实源。
+ *
+ * 为什么要单一来源：此前 SyncTransportType 在 sync-config / ui-prefs / client sync-api /
+ * client sync-view 各自声明一遍，通道数组也在 autosync-scheduler 里写了两遍 ——「改一处漏一处」
+ * 的表现是某个通道**静默**不再排期 / 不再落盘，而不是报错。新增通道只改这里：typecheck 会在
+ * 所有 Record<SyncTransportType, X> 的构造处与穷尽检查处报错。
+ */
+export const SYNC_CHANNELS = ['git', 'webdav'] as const;
+
+/** 同步通道类型（由 SYNC_CHANNELS 派生；host 侧与 client 半统一引用）。 */
+export type SyncTransportType = (typeof SYNC_CHANNELS)[number];
+
+/** 通道值守卫（用于请求体 / localStorage / 磁盘 JSON 的原始输入校验）。 */
+export function isSyncTransportType(value: unknown): value is SyncTransportType {
+  return typeof value === 'string' && (SYNC_CHANNELS as readonly string[]).includes(value);
+}
+
+/** 严格解析通道值：非法/缺失 → undefined（缺省由调用方决定，**不在此静默兜底成 git**）。 */
+export function parseSyncChannel(value: unknown): SyncTransportType | undefined {
+  return isSyncTransportType(value) ? value : undefined;
+}
+
+/**
+ * 配置 → 通道：**唯一判定口径**（替代散落的 `isWebDavConfig(cfg) ? 'webdav' : 'git'`）。
+ * SyncConfig 是可辨识联合，transport 字段本身就是通道，无需先过守卫再分支。
+ */
+export function channelOf(cfg: SyncConfig): SyncTransportType {
+  return cfg.transport;
+}
+
+/**
+ * `Record<SyncTransportType, T>` 的统一构造器：遍历 SYNC_CHANNELS 生成。新增通道时无需
+ * 在每处穷举字面量（漏写的表现曾是「该通道的配置永远读不到 / 写不回」，静默且难查）。
+ */
+export function channelMap<T>(make: (channel: SyncTransportType) => T): Record<SyncTransportType, T> {
+  const out = {} as Record<SyncTransportType, T>;
+  for (const channel of SYNC_CHANNELS) out[channel] = make(channel);
+  return out;
+}
 
 /** 当前 sync-config.json schema 版本号（v3：双命名空间共存，切换通道不丢失另一通道配置）。 */
 export const SYNC_CONFIG_SCHEMA_VERSION = 3;
@@ -57,7 +95,7 @@ export interface WebDavConfig {
  * 与可辨识联合 SyncConfig 不同：git 和 webdav 命名空间同时存在，可能缺失。
  */
 export interface FullSyncConfig {
-  transport: 'git' | 'webdav';
+  transport: SyncTransportType;
   git?: GitConfig;
   webdav?: WebDavConfig;
 }
@@ -136,7 +174,8 @@ export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
 
   // v2 / v3：顶层 transport 选择（v3 双命名空间并存，按 transport 返回对应通道）
   const transport = obj['transport'];
-  if (transport !== 'git' && transport !== 'webdav') return null;
+  // 通道合法性只认唯一枚举（SYNC_CHANNELS）：新增通道无需在此补字面量
+  if (!isSyncTransportType(transport)) return null;
   if (transport === 'git') {
     const git = parseV2GitNamespace(obj['git']);
     if (git === null) return null;
@@ -190,13 +229,15 @@ export async function readFullSyncConfig(dir: string): Promise<FullSyncConfig | 
   const both = await readBothNamespaces(file)
   if (both.git === undefined && both.webdav === undefined) return null
   // 从原始文件读取当前活动 transport 字段
-  let transport: 'git' | 'webdav' = 'git'
+  let transport: SyncTransportType = 'git'
   try {
     const raw = await fs.readFile(file, 'utf8')
     const parsed = parseJsonSafe(raw)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
       const o = parsed as Record<string, unknown>
-      if (o['transport'] === 'webdav') transport = 'webdav'
+      // 与 parseSyncBody 同口径：只接受已知通道值，其它一律保持缺省 git
+      const parsedChannel = parseSyncChannel(o['transport'])
+      if (parsedChannel !== undefined) transport = parsedChannel
     }
   } catch { /* 默认 git */ }
   return { transport, git: both.git, webdav: both.webdav }

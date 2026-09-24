@@ -13,7 +13,8 @@
  *    导入为 ImportResult），不含秘密值。
  *
  * 生命周期：register（running）→ update（进度）→ finish（done+result）/
- * fail（failed+error）；超过保留期（默认 30 分钟）的 run 在任意读操作时惰性清理。
+ * fail（failed+error）；**终态** run 超过保留期（默认 30 分钟）在任意读操作时惰性清理。
+ * running run 不受 retentionMs 影响（只受 stalledRunMs 兜底），原因见 prune()。
  * 并发纪律：同一 kind 已有 running 的 run 时，register 抛 RunConflictError
  * （宿主路由以 409 拒绝新任务，防止重复导出/导入）。
  */
@@ -50,6 +51,19 @@ export interface RunState {
   result?: unknown
   /** 失败时的错误消息（非敏感）。 */
   error?: string
+  /**
+   * 「已暂停，等待用户决策」（用户终止导入后，宿主等 /runs/cancel/decision）。
+   * 非 null 时 UI 必须弹出「回滚 / 保留已应用项」选择；轮询方据此区分
+   * 「run 卡住了」与「run 在等人」——没有这个字段，界面只能干等。
+   */
+  pendingDecision?: 'cancel' | null
+  /**
+   * 终止请求到达时刻（毫秒；null/缺省 = 未请求终止）。
+   * 终止是**协作式**的：请求先到、真正生效要等当前计划项结束。等多久用户必须看得见 ——
+   * 没有这个时间戳，界面只能说一句「完成当前任务后终止」，用户无从判断是「在装插件（正常）」
+   * 还是「卡死了（要重启）」。
+   */
+  cancelRequestedAt?: number | null
   createdAt: number
   updatedAt: number
 }
@@ -82,12 +96,35 @@ export class RunConflictError extends Error {
   }
 }
 
-/** 完成/失败后的默认保留时长（30 分钟）。 */
+/** 完成/失败后的默认保留时长（30 分钟）。**只作用于终态 run**。 */
 export const DEFAULT_RUN_RETENTION_MS = 30 * 60 * 1000
 
+/**
+ * running run 的兜底清理阈值（6 小时）。
+ *
+ * 为什么必须与 retentionMs 分开：本注册表**没有心跳** —— run 的 updatedAt 只在
+ * update()/appendLog()/finish()/fail() 时刷新，而 autosync 与 backup-schedule 两条后台
+ * 路径从 register 到 finish 一次 update 都不写，updatedAt 恒等于注册时刻。沿用 30 分钟
+ * 阈值时，一次跨机大仓库自动同步（或大配置定时备份）跑到第 31 分钟就会被下一次
+ * /progress 轮询顺带删掉：此后 /progress 恒 404、finish(runId,…) 静默返回 undefined
+ * （业务结果永久丢失）、register() 的同 kind 防重同时失效。
+ *
+ * 取 6 小时：远长于任何正常后台任务，仍能回收「进程内永远不会 settle」的僵死 run，
+ * 避免它永久堵住同 kind 的新任务。
+ */
+export const DEFAULT_RUN_STALLED_MS = 6 * 60 * 60 * 1000
+
 export interface RunRegistryOptions {
-  /** 完成/失败后保留时长（默认 30 分钟）；超期 run 在下次访问时清理。 */
+  /** 完成/失败后保留时长（默认 30 分钟）；超期 run 在下次访问时清理。**只作用于终态 run**。 */
   retentionMs?: number
+  /**
+   * running run 的兜底清理阈值（默认 6 小时）。
+   *
+   * running 状态下 updatedAt 可能长期不变（本注册表无心跳，调度器不写 update），
+   * 因此**不得**用 retentionMs 判定 running run —— 那会删掉仍在跑的长任务。
+   * 只有超过本阈值仍未 settle 的 running run 才按僵死回收。
+   */
+  stalledRunMs?: number
   /** 时间源（测试注入）。 */
   now?: () => number
   /** 消息翻译器（缺省 zh；冲突错误文案随应用语言）。 */
@@ -101,11 +138,13 @@ export interface RunRegistryOptions {
 export class RunRegistry {
   private readonly runs = new Map<string, RunState>()
   private readonly retentionMs: number
+  private readonly stalledRunMs: number
   private readonly now: () => number
   private readonly msg: MsgFunc
 
   constructor(opts: RunRegistryOptions = {}) {
     this.retentionMs = opts.retentionMs ?? DEFAULT_RUN_RETENTION_MS
+    this.stalledRunMs = opts.stalledRunMs ?? DEFAULT_RUN_STALLED_MS
     this.now = opts.now ?? (() => Date.now())
     this.msg = opts.msg ?? zhMsg
   }
@@ -127,6 +166,8 @@ export class RunRegistry {
       itemTotal: null,
       detail: null,
       log: [],
+      pendingDecision: null,
+      cancelRequestedAt: null,
       createdAt: now,
       updatedAt: now,
     }
@@ -166,6 +207,44 @@ export class RunRegistry {
     return { ...run }
   }
 
+  /**
+   * 记录「终止请求已到达」（幂等：重复请求保留首个时刻，界面显示的是真实等待时长）。
+   * run 不存在或已终态返回 undefined / 当前状态副本（与 update() 同一防御语义）。
+   */
+  requestCancel(runId: string): RunState | undefined {
+    const run = this.runs.get(runId)
+    if (run === undefined) return undefined
+    if (run.status !== 'running') return { ...run }
+    run.cancelRequestedAt = run.cancelRequestedAt ?? this.now()
+    run.updatedAt = this.now()
+    return { ...run }
+  }
+
+  /**
+   * 标记 / 清除「等待用户决策」。run 不存在或已终态返回 undefined / 当前状态副本
+   * （与 update() 同一防御语义：终态后的晚到写入被忽略）。
+   */
+  setPendingDecision(runId: string, value: 'cancel' | null): RunState | undefined {
+    const run = this.runs.get(runId)
+    if (run === undefined) return undefined
+    if (run.status !== 'running') return { ...run }
+    run.pendingDecision = value
+    run.updatedAt = this.now()
+    return { ...run }
+  }
+
+  /**
+   * 列出最近有更新的 run（含 running 与终态），按 updatedAt 倒序，供「运行中心」一次拿全。
+   * 终态受 retentionMs 约束（30 分钟后被 prune 掉）——**不是**持久审计，迁移历史才是。
+   */
+  listRecent(limit = 20): RunState[] {
+    this.prune()
+    return [...this.runs.values()]
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .slice(0, Math.max(0, limit))
+      .map((r) => ({ ...r }))
+  }
+
   /** 读单个 run；超过保留期或不存在返回 undefined。 */
   get(runId: string): RunState | undefined {
     this.prune()
@@ -199,10 +278,22 @@ export class RunRegistry {
     return { ...run }
   }
 
-  /** 惰性清理：超过保留期的 run（含长期 running 的僵死任务）全部移除。 */
+  /**
+   * 惰性清理：**按状态分两档**判定，绝不把仍在跑的 run 当成过期垃圾删掉。
+   *
+   *  - 终态（done/failed）：按 retentionMs 回收（原行为，供 /progress 刷新恢复窗口消费）；
+   *  - running：按 stalledRunMs 回收 —— 本注册表没有心跳，autosync / backup-schedule
+   *    从 register 到 finish 从不写 update/appendLog，updatedAt 恒为注册时刻，用
+   *    retentionMs 判定等于「按注册时刻起算 30 分钟」无条件删除，长任务必然中招
+   *    （实测形态：第 31 分钟的一次 /progress 轮询 → run 消失 → finish 静默失效）。
+   *    stalledRunMs 缺省 6 小时，只回收真正永不 settle 的僵死 run。
+   */
   private prune(): void {
-    const cutoff = this.now() - this.retentionMs
+    const now = this.now()
+    const terminalCutoff = now - this.retentionMs
+    const stalledCutoff = now - this.stalledRunMs
     for (const [id, run] of this.runs) {
+      const cutoff = run.status === 'running' ? stalledCutoff : terminalCutoff
       if (run.updatedAt < cutoff) this.runs.delete(id)
     }
   }

@@ -18,6 +18,7 @@ import type {
 import type { ImportPort, ImportPreviewSummary, ImportStep, ProgressListener, WizardSnapshot } from './types.ts';
 import { EXECUTING_STAGE, IMPORT_STAGES, ProgressTracker } from './progress.ts';
 import { formatActionableError, toActionableError } from './errors.ts';
+import { nextFlowPhase, type FlowPhase } from './flow.ts';
 
 export interface ImportWizardOptions {
   port: ImportPort;
@@ -41,6 +42,106 @@ export function mergeSecretInput(
   value: string,
 ): Record<string, string> {
   return { ...current, [ref]: value }
+}
+
+/* ---------------- 流程与派生（t45：从 src/client/import/ImportWizardView.tsx 迁出，node 可测） ---------------- */
+
+/** 导入适用阶段判定输入（全部来自 Dry Run 产物与仅内存的容器状态；不含任何 React 状态） */
+export interface ImportFlowInputs {
+  /** 上传的是整体加密容器（DCA1）—— 未解锁前不得分析/继续 */
+  containerEncrypted: boolean
+  /** 容器已解锁（仅内存；刷新后需重输密码） */
+  archiveUnlocked: boolean
+  hasConflicts: boolean
+  hasPathIssues: boolean
+  hasSecrets: boolean
+}
+
+/**
+ * 仍需用户补录的凭据：剔除「解密已覆盖」的 ref（加密备份解锁时顺带恢复了这些凭据）。
+ * secrets 阶段的数据与「是否存在 secrets 阶段」的判定共用本函数（此前组件里各写一遍 filter）。
+ */
+export function pendingSecretRequests(
+  plan: Pick<ImportPlan, 'missingSecrets'> | null,
+  decryptRefs: readonly string[],
+): { ref: string; required: boolean }[] {
+  return (plan?.missingSecrets ?? []).filter((s) => !decryptRefs.includes(s.ref))
+}
+
+/**
+ * 从 Dry Run 原始产物派生三个「是否有该阶段」标志。
+ * 语义：基于原始 analysis/plan，**不因用户已解决而重算**（见 flow.ts 的只前进导航）。
+ */
+export function importFlowFlags(args: {
+  plan: Pick<ImportPlan, 'items' | 'missingSecrets'> | null
+  analysis: Pick<ImportAnalysis, 'pathIssues'> | null
+  decryptRefs: readonly string[]
+}): { hasConflicts: boolean; hasPathIssues: boolean; hasSecrets: boolean } {
+  return {
+    hasConflicts: (args.plan?.items ?? []).some((i) => i.kind === 'Conflict'),
+    hasPathIssues: (args.analysis?.pathIssues.length ?? 0) > 0,
+    hasSecrets: pendingSecretRequests(args.plan, args.decryptRefs).length > 0,
+  }
+}
+
+/**
+ * 适用阶段的有序列表（仅含需要用户处理的阶段 + 确认页）。
+ * 整体加密容器未解锁时恒先插入 decrypt-archive：不解锁不得分析/继续导入。
+ */
+export function importApplicablePhases(inputs: ImportFlowInputs): FlowPhase[] {
+  const list: FlowPhase[] = []
+  if (inputs.containerEncrypted && !inputs.archiveUnlocked) list.push('decrypt-archive')
+  if (inputs.hasConflicts) list.push('conflicts')
+  if (inputs.hasPathIssues) list.push('path-mapping')
+  if (inputs.hasSecrets) list.push('secrets')
+  list.push('confirm')
+  return list
+}
+
+/** 阶段推进（只前进）：在适用阶段列表里取 from 的下一项（from 不在列表 → 取第一项） */
+export function nextImportPhase(inputs: ImportFlowInputs, from: FlowPhase): FlowPhase {
+  return nextFlowPhase(importApplicablePhases(inputs), from)
+}
+
+/** 兼容性等级（与 ImportAnalysis.compatibility 同域；运行时出现未知值 → 按历史行为落到 'excellent'） */
+export type CompatibilityLevel = 'unsupported' | 'partial' | 'good' | 'excellent'
+
+export function compatibilityLevel(compatibility: ImportAnalysis['compatibility'] | string): CompatibilityLevel {
+  return compatibility === 'unsupported' || compatibility === 'partial' || compatibility === 'good'
+    ? compatibility
+    : 'excellent'
+}
+
+/** 兼容性徽章语义（Badge kind）；未支持=error、部分=warn、其余=ok */
+export function compatibilityBadgeKind(level: CompatibilityLevel): 'error' | 'warn' | 'ok' {
+  return level === 'unsupported' ? 'error' : level === 'partial' ? 'warn' : 'ok'
+}
+
+/** 预览步的两页：迁移前咨询（只读结论）/ 选择要导入的内容 */
+export type ImportPreviewStage = 'consult' | 'select'
+
+/**
+ * 预览步状态转移：换备份/重走流程 → 回咨询页（不让上一份备份的选择残留）；
+ * 点「下一步」→ 内容选择页（已在该页时保持）。
+ */
+export function importPreviewStageAfter(
+  event: 'new-zip' | 'next',
+  current: ImportPreviewStage,
+): ImportPreviewStage {
+  if (event === 'new-zip') return 'consult'
+  return current === 'consult' ? 'select' : current
+}
+
+/**
+ * 导入中是否可「跳过当前项」：仅当**正在安装插件**（/progress 的 detail 是正在执行项 id，
+ * 插件安装项带 `plugin:` 前缀）且尚未请求过跳过。其余项（配置写入等）不可跳过。
+ */
+export function isSkippablePluginInstall(
+  detail: string | undefined,
+  running: boolean,
+  skipRequested: boolean,
+): boolean {
+  return running && (detail ?? '').startsWith('plugin:') && !skipRequested
 }
 
 export class ImportWizard {
@@ -154,12 +255,20 @@ export class ImportWizard {
     }
   }
 
+  /**
+   * 计划期共用参数：解密密码（仅内存）。加密备份的计划生成也必须能看到归档里的凭据，
+   * 否则「随加密备份恢复」的凭据不会进计划、导入时静默丢掉（execute 侧同源传参）。
+   */
+  private planOpts(): { decryptPassword?: string } {
+    return this.decryptPassword === '' ? {} : { decryptPassword: this.decryptPassword };
+  }
+
   /** 步骤 3→4：用户确认兼容性后进入 Preview（Dry Run：用当前决策生成计划摘要，零写入） */
   async confirmCompatibility(): Promise<ImportPlan> {
     if (this.analysis === null || this.zipPath === null) {
       throw new Error('尚未完成分析，请先选择备份文件');
     }
-    this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions);
+    this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions, this.planOpts());
     this.step = 'preview';
     return this.plan;
   }
@@ -241,13 +350,17 @@ export class ImportWizard {
       throw new Error('导入未确认：必须确认后才允许修改任何数据');
     }
     const rollbackOnError = opts.rollbackOnError ?? this.rollbackOnError;
+    // P0-8：记住执行前的步骤 —— 执行抛错时回到该步骤（确认页/结果页）。
+    // 不回退就会永久停在 'importing'：视图按 step 分支渲染，只剩错误横幅、
+    // 没有任何可重试的出口，用户只能刷新页面（刷新走 resume 的兜底复位）。
+    const previousStep = this.step;
     this.step = 'importing';
     // 快照由 Host 端在 executeImportPlan 内部第一步创建；此处只发开始阶段。
     this.tracker.emit('creating-snapshot');
 
     try {
       // 用最终决策重建计划（与预览逻辑一致，保证 Dry Run 与真实导入一致）
-      this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions);
+      this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions, this.planOpts());
       if (opts.planFilter !== undefined) this.plan = opts.planFilter(this.plan);
       // executeImportPlan 是一个单次 HTTP 请求：Host 端串行跑完全部计划项
       // （插件安装为 npm 串行，耗时最长）。请求期间没有任何中间进度事件可
@@ -273,6 +386,9 @@ export class ImportWizard {
       return this.result;
     } catch (err) {
       this.errors.push(formatActionableError(toActionableError(err)));
+      // P0-8：失败回退到执行前步骤（正常是 'preview' = 确认页，那里有重试按钮）；
+      // 计划与错误都已保留，用户可直接再次确认执行。
+      this.step = previousStep;
       throw err;
     }
   }
@@ -307,6 +423,9 @@ export class ImportWizard {
       throw new Error('没有失败或跳过的项需要重试');
     }
     const rollbackOnError = opts.rollbackOnError ?? this.rollbackOnError;
+    // P0-8：同 execute() —— 重试失败也回退到执行前步骤（结果页），
+    // 否则「重试」按钮点下去失败后会停在 importing，页面再无出口。
+    const previousStep = this.step;
     this.step = 'importing';
     this.tracker.emit('creating-snapshot');
     try {
@@ -325,6 +444,7 @@ export class ImportWizard {
       return this.result;
     } catch (err) {
       this.errors.push(formatActionableError(toActionableError(err)));
+      this.step = previousStep;
       throw err;
     }
   }
@@ -343,4 +463,17 @@ export class ImportWizard {
     this.archiveUnlocked = false;
     this.unlockedZipPath = null;
   }
+}
+
+/**
+ * 导入计划 → 「已自动重定基」提示行（issue #45：跨机基础路径不同，见 ImportPlan.automaticMappings）。
+ *
+ * 形态用结构化参数（只读 oldPrefix/newPrefix 两个字段）：宿主/引擎只需给出这两项，
+ * 本模块不必依赖 core 的具体类型，也不猜别的字段。
+ */
+export function importBasePathNotices(
+  plan: { automaticMappings?: readonly { oldPrefix: string; newPrefix: string }[] } | null,
+): { from: string; to: string }[] {
+  if (plan === null) return []
+  return (plan.automaticMappings ?? []).map((rule) => ({ from: rule.oldPrefix, to: rule.newPrefix }))
 }

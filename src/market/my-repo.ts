@@ -304,11 +304,6 @@ function toUserIndexItem(m: MarketItemManifest): MarketIndexItem {
   };
 }
 
-/** manifest → 官方市场 index 条目（带 repo 自托管引用，指向用户公开仓库） */
-function toOfficialIndexItem(m: MarketItemManifest, repoUrl: string): MarketIndexItem {
-  return { ...toUserIndexItem(m), repo: repoUrl };
-}
-
 /** 错误分类：GitHubApiError / MyRepoError / MarketPrepareError 取其 code；其余 'internal' */
 function classifyError(err: unknown): string {
   if (err instanceof GitHubApiError || err instanceof MyRepoError) return err.code;
@@ -341,7 +336,6 @@ export class MyRepoService {
   private readonly prepare: (input: MarketPrepareInput) => MarketPrepareResult;
   private readonly rest: GitHubRestLike;
   private readonly gitWriter: GitFileWriter;
-  private readonly tokenProvider: () => Promise<string>;
   private readonly now: () => Date;
   private readonly workDirRoot: string;
   /** 后台市场任务表（收录/下架；key=itemId；内存态，重启丢失 → 列表状态徽章回退 + relist/删除可重提） */
@@ -358,7 +352,6 @@ export class MyRepoService {
     }
     this.prepare = options.prepare;
     this.rest = options.rest;
-    this.tokenProvider = options.tokenProvider;
     this.now = options.now ?? (() => new Date());
     this.workDirRoot = options.workDirRoot ?? join(os.tmpdir(), 'dsh-config-manager-my-configs');
     this.gitWriter = options.gitWriter ?? createGitFileWriter({ credentials: { getToken: options.tokenProvider } });

@@ -18,6 +18,10 @@
  * 状态组件内自持（useState），非敏感切片（已上传列表 myItems + 错误）为**受控 props**：
  * 经 MarketPanel 的 commit/patch 统一镜像进模块级 runStore（market.myItems / myItemsError），
  * 切 tab 不丢；刷新后免重拉（与 MarketPanel 浏览态同单店镜像策略）。
+ * 结构（t49 物理拆分，主文件 1151 → 823 行）：本文件只做状态编排 + 装配，四个 render 段各一个
+ * 平铺子组件（不新增子目录）：MyConfigsLoginCard.tsx（登录卡 + 设备码）/ MyConfigsWizard.tsx
+ * （上传·更新弹窗）/ MyConfigsList.tsx（已上传列表）/ MyConfigsInstall.tsx（装回本地向导页）；
+ * 可测纯逻辑在 ../../ui/my-configs-view.ts（t44 下沉），拆分结构由 my-configs-split.test.ts 守护。
  * 安全：token 只存宿主凭据槽；密码/表单无敏感字段；所有展示文本渲染前过 redact() 兜底；
  * 本文件不 import 任何 node 模块（纯浏览器 bundle）。
  */
@@ -30,13 +34,11 @@ import type { MarketApi } from './market-api.ts'
 import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
-import { Badge, Banner, Button, Card, Empty, Field, SectionTitle, Spinner } from '../common/ui.tsx'
-import { Modal } from '../common/Modal.tsx'
+import { Button, Card, SectionTitle } from '../common/ui.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
-import { computeGithubLoginView, githubPollMessage } from '../sync/sync-view.ts'
-import type { GithubLoginPhase } from '../sync/sync-view.ts'
+import { githubPollMessage } from '../sync/sync-view.ts'
 import { readDisclaimerDismissed, writeDisclaimerDismissed } from './disclaimer.ts'
 import type { DisclaimerKey } from './disclaimer.ts'
 import {
@@ -47,11 +49,18 @@ import {
 import type {
   LoginView, MyConfigForm, MeStatusData, MyInstallSlice, MyInstallState, MyWizardSlice, MyWizardState,
 } from './my-configs-view.ts'
+import type { Selection } from '../../ui/selection-model.ts'
 import {
-  marketDetailView,
-} from './market-view.ts'
-import { effectiveImportSelection, type Selection } from '../../ui/selection-model.ts'
-import { MarketImportReview } from './MarketImportReview.tsx'
+  INITIAL_MY_GITHUB_FLOW, MY_LISTING_POLL_INTERVAL_MS, myEntryRepoUrl, myGithubFlowAfterCancel,
+  myGithubFlowAfterFailure, myGithubFlowAfterPoll, myGithubFlowFromStart, myGithubFlowPolling,
+  myGithubFlowStarting, myGithubStartDelayMs, myListingPollStep, myPickerSelection,
+  myShouldResetWizardOnDisclaimerCancel,
+} from '../../ui/my-configs-view.ts'
+import type { MyGithubFlowState } from '../../ui/my-configs-view.ts'
+import { MyConfigsInstall } from './MyConfigsInstall.tsx'
+import { MyConfigsList } from './MyConfigsList.tsx'
+import { MyConfigsLoginCard } from './MyConfigsLoginCard.tsx'
+import { MyConfigsWizard } from './MyConfigsWizard.tsx'
 import css from '../config-manager.module.css'
 
 export interface MyConfigsViewProps {
@@ -86,20 +95,9 @@ export interface MyConfigsViewProps {
   onMyConfirmDeleteChange: (id: string | null) => void
 }
 
-/* -------------------------------- GitHub device flow 状态（仅内存，token 只存宿主） */
-
-interface GithubFlowState {
-  phase: GithubLoginPhase
-  flowId: string
-  userCode: string
-  verificationUri: string
-  interval: number
-  error: string | null
-}
-
-const initialGithubFlow: GithubFlowState = {
-  phase: 'idle', flowId: '', userCode: '', verificationUri: '', interval: 5, error: null,
-}
+/* -------------------------------- GitHub device flow 状态（仅内存，token 只存宿主）
+ * 状态与迁移判定（starting/polling/waiting/error、轮询延时、取消）已下沉到
+ * src/ui/my-configs-view.ts（t44；框架无关、node 可测）。本组件只持定时器与请求编排。 */
 
 /**
  * 上传/更新向导状态（全量模型在 my-configs-view.ts 的 MyWizardState；本组件持有的是
@@ -120,7 +118,7 @@ export function MyConfigsView({
   const [statusLoading, setStatusLoading] = useState(true)
   const [statusFailed, setStatusFailed] = useState(false)
   /* GitHub device flow（复用 sync 路由） */
-  const [github, setGithub] = useState<GithubFlowState>(initialGithubFlow)
+  const [github, setGithub] = useState<MyGithubFlowState>(INITIAL_MY_GITHUB_FLOW)
   const githubPollTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   /* ---------------- 已上传列表（受控：MarketPanel 持有并镜像 runStore market.myItems） ---------------- */
@@ -209,10 +207,11 @@ export function MyConfigsView({
       if (entry !== null && entry !== undefined) void runDownload(entry)
     }
   }
-  /** 取消免责弹窗：关闭，不打开操作弹窗；若向导处于 update 残留态则重置为上传初始态 */
+  /** 取消免责弹窗：关闭，不打开操作弹窗；若向导处于 update 残留态则重置为上传初始态
+   *  （「是否重置」判定在 ui/my-configs-view.ts 的 myShouldResetWizardOnDisclaimerCancel，node 可测） */
   const cancelDisclaimer = (): void => {
     setDisclaimerKey(null)
-    if (disclaimerKey === 'upload' && wizardRef.current.mode === 'update') {
+    if (myShouldResetWizardOnDisclaimerCancel(disclaimerKey, wizardRef.current.mode)) {
       commitWizard(initialWizard('upload'))
       setListingStatus(null)
     }
@@ -314,23 +313,16 @@ export function MyConfigsView({
    */
   const failGithub = (message: string): void => {
     const safe = redact(message)
-    setGithub((g) => ({ ...g, phase: 'error', error: safe }))
+    setGithub((g) => myGithubFlowAfterFailure(g, safe))
     toast.error(safe)
   }
 
   const runGithubStart = async (): Promise<void> => {
-    setGithub((g) => ({ ...g, phase: 'starting', error: null }))
+    setGithub((g) => myGithubFlowStarting(g))
     try {
       const info = await syncApi.githubStart()
-      setGithub({
-        phase: 'waiting',
-        flowId: info.flowId,
-        userCode: info.userCode,
-        verificationUri: info.verificationUri,
-        interval: info.interval,
-        error: null,
-      })
-      scheduleGithubPoll(info.flowId, Math.max(info.interval, 1) * 1000)
+      setGithub(myGithubFlowFromStart(info))
+      scheduleGithubPoll(info.flowId, myGithubStartDelayMs(info.interval))
     } catch (err) {
       failGithub(err instanceof Error ? err.message : String(err))
     }
@@ -342,23 +334,27 @@ export function MyConfigsView({
   }
 
   const runGithubPoll = async (flowId: string): Promise<void> => {
-    setGithub((g) => ({ ...g, phase: 'polling' }))
+    setGithub((g) => myGithubFlowPolling(g))
     try {
       const poll: GithubPollResponse = await syncApi.githubPoll(flowId)
-      if (poll.status === 'pending') {
-        setGithub((g) => ({ ...g, phase: 'waiting' }))
-        scheduleGithubPoll(flowId, poll.pollDelayMs ?? Math.max(github.interval, 1) * 1000)
+      // 失败文案只在非 pending 时取（与原先「pending 先 return」逐字等价）；文案同样先 redact 再入状态
+      const step = myGithubFlowAfterPoll(
+        github, poll, poll.status === 'pending' ? '' : redact(githubPollMessage(poll, uiT)),
+      )
+      if (step.outcome === 'pending') {
+        setGithub(step.next)
+        scheduleGithubPoll(flowId, step.delayMs ?? myGithubStartDelayMs(github.interval))
         return
       }
-      const message = githubPollMessage(poll, uiT)
-      if (poll.status === 'success') {
-        setGithub(initialGithubFlow)
+      setGithub(step.next)
+      if (step.outcome === 'success') {
         // token 已由宿主写入 credentials：刷新登录态 + 列表
         const s = await loadStatus()
         if (s !== null && s.loggedIn) void loadItems({ silent: true })
-      } else {
-        failGithub(message)
+        return
       }
+      // failed：与原 failGithub 同路（状态已落 error，这里只补常驻 Toast）
+      toast.error(step.next.error ?? '')
     } catch (err) {
       failGithub(err instanceof Error ? err.message : String(err))
     }
@@ -369,8 +365,8 @@ export function MyConfigsView({
       clearTimeout(githubPollTimer.current)
       githubPollTimer.current = null
     }
-    const flowId = github.flowId
-    setGithub(initialGithubFlow)
+    const { flowId, next } = myGithubFlowAfterCancel(github)
+    setGithub(next)
     if (flowId !== '') {
       try { await syncApi.githubCancel(flowId) } catch { /* 取消失败无需打扰用户 */ }
     }
@@ -515,27 +511,30 @@ export function MyConfigsView({
   const startListingPoll = (itemId: string): void => {
     if (listingPollTimer.current !== null) clearTimeout(listingPollTimer.current)
     let count = 0
+    /** 远端明确回答「没有该任务」（重启丢失/从未提交）时的收尾状态：由列表徽章体现，不再轮询 */
+    const doneFallback: ListingStatusResponse = { itemId, listing: 'done', prNumber: null, prUrl: null }
     const tick = (): void => {
       void (async () => {
+        // 步进判定在 src/ui/my-configs-view.ts（t44 下沉；node 可测）：「请求抛错」与「远端明确回答
+        // null」是两条不同分支，靠 networkFailed 区分（前者继续轮询，后者用 doneFallback 收尾）。
+        let response: ListingStatusResponse | null = null
+        let networkFailed = false
         try {
-          const s = await meApi.meListing(itemId)
-          if (s === null) {
-            // 任务表未命中且实况也无（重启丢失/从未提交）→ 停止轮询，状态由列表徽章体现
-            setListingStatus({ itemId, listing: 'done', prNumber: null, prUrl: null })
-            return
-          }
-          setListingStatus(s)
-          notifyListingFailure(s)
-          if (s.listing !== 'pending') return // done/failed → 停止轮询
+          response = await meApi.meListing(itemId)
         } catch {
-          // 轮询失败不打断：下一轮继续
+          networkFailed = true
         }
-        count += 1
-        if (count >= 40) {
+        const step = myListingPollStep<ListingStatusResponse>({ response, networkFailed, doneFallback, count })
+        if (step.status !== null) {
+          setListingStatus(step.status)
+          if (step.notifyFailure) notifyListingFailure(step.status)
+        }
+        count = step.count
+        if (step.stop) {
           listingPollTimer.current = null
           return
         }
-        listingPollTimer.current = setTimeout(tick, 3000)
+        listingPollTimer.current = setTimeout(tick, MY_LISTING_POLL_INTERVAL_MS)
       })()
     }
     tick()
@@ -621,11 +620,10 @@ export function MyConfigsView({
 
   /**
    * 编辑中的勾选（绑 zipPath：换条目后旧选择自动失效 → 默认全选）。
-   * 与 MarketPanel / 导入向导同一套 effectiveImportSelection —— 不另写「陈旧选择」判定。
+   * 判定在 src/ui/my-configs-view.ts 的 myPickerSelection（内部走与 MarketPanel / 导入向导同一套
+   * effectiveImportSelection）—— 组件侧不另写「陈旧选择」判定。
    */
-  const pickerSelection: Selection | null = install?.detail === undefined || install.detail === null
-    ? null
-    : effectiveImportSelection(install.detail.plan, install.detail.zipPath, install.selectionState)
+  const pickerSelection: Selection | null = myPickerSelection(install)
 
   /* ------------------------------------------------ 渲染模型装配（全部纯函数） */
 
@@ -636,9 +634,6 @@ export function MyConfigsView({
     authFailed: statusFailed,
   })
 
-  /** GitHub 登录卡渲染模型（复用 sync-view 纯函数：状态行 / 按钮态 / 展示设备码） */
-  const githubView = computeGithubLoginView(github.phase, github.userCode, github.verificationUri, github.error, uiT)
-
   /** 已上传条目投影（Host 状态 → 徽章模型） */
   const itemViews = (myItems ?? []).map((entry) => {
     const status = itemStatusFromHost(entry)
@@ -647,430 +642,107 @@ export function MyConfigsView({
   })
   const summary = summarizeMyItems(itemViews.map((v) => v.view))
   const autoBadges = autoFieldBadges(uiT)
-  const targetRepo = `${MARKET_UPSTREAM_OWNER}/${MARKET_UPSTREAM_REPO}`
 
-  /** 设备码 + 授权页链接展示（waiting/polling 时） */
-  const renderDeviceCode = (): ReactNode => (
-    <div className={css.statRow}>
-      <Badge kind="info">{t('myconfigs.login.userCode', { code: githubView.userCode })}</Badge>
-      <a className={css.ghostButton} href={githubView.verificationUri} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
-        {t('myconfigs.login.openAuth')}
-      </a>
-    </div>
+  /* -------------------------------- 渲染分区（t49 已物理拆分）：本组件只做「编排 + 装配」
+   *  每段一个平铺子组件文件（不新增子目录），下方 render 函数只是各自的 props 适配：
+   *  renderLoginCard（登录卡 + 设备码片段）→ ./MyConfigsLoginCard.tsx
+   *  renderWizard（上传·更新向导弹窗）      → ./MyConfigsWizard.tsx
+   *  renderList（已上传条目列表）           → ./MyConfigsList.tsx
+   *  renderInstall（装回本地向导页；installOpen 时整块取代列表，见文件末尾提前 return）→ ./MyConfigsInstall.tsx
+   *  判定逻辑归 ../../ui/my-configs-view.ts（t44 下沉，node 可测）与 ./my-configs-view.ts（客户端装配模型），
+   *  展示原语归 ../common/ui.tsx —— 新增逻辑先归位到模型层，别再写进组件体。 */
+
+  /** 登录卡（未登录 / token 失效 → device flow；已登录 → @login + 固定目标仓库只读展示）
+   *  渲染与设备码片段已拆到 ./MyConfigsLoginCard.tsx（t49）；这里只装配状态与回调。 */
+  const renderLoginCard = (): ReactNode => (
+    <MyConfigsLoginCard
+      loginView={loginView}
+      github={github}
+      t={t}
+      uiT={uiT}
+      onStart={() => { void runGithubStart() }}
+      onCancel={() => { void runGithubCancel() }}
+    />
   )
 
-  /** 登录卡（未登录 / token 失效 → device flow；已登录 → @login + 固定目标仓库只读展示） */
-  const renderLoginCard = (): ReactNode => {
-    if (loginView.kind === 'loading') {
-      return (
-        <Card>
-          <div className={css.statRow}>
-            <span className={css.groupLabel}>{t('myconfigs.login.title')}</span>
-            <Spinner label={t('myconfigs.login.checking')} />
-          </div>
-        </Card>
-      )
+  /** 重置向导：update 模式轻量重置（只清 zip/校验，**保留预填表单**）；upload 模式完全重置
+   *  （原先内联在 renderWizard 里；弹窗迁到 ./MyConfigsWizard.tsx 后由容器持有，语义不变） */
+  const resetWizard = (): void => {
+    const w = wizardRef.current
+    if (w.mode === 'update') {
+      commitWizard({
+        ...initialWizard('update'),
+        step: 'form',
+        form: { ...w.form },
+      })
+    } else {
+      commitWizard(initialWizard('upload'))
     }
-    if (loginView.kind === 'logged-out' || loginView.kind === 'token-invalid') {
-      return (
-        <Card>
-          <div className={css.actionRow}>
-            <span className={css.groupLabel}>{t('myconfigs.login.title')}</span>
-            <Button variant="primary" disabled={!githubView.canStart} onClick={() => { void runGithubStart() }}>
-              {githubView.startLabel}
-            </Button>
-            {githubView.canCancel && (
-              <Button disabled={github.phase === 'starting'} onClick={() => { void runGithubCancel() }}>
-                {t('myconfigs.login.cancel')}
-              </Button>
-            )}
-          </div>
-          <span className={css.hint}>{t('myconfigs.login.hint')}</span>
-          {loginView.kind === 'token-invalid' && <Banner kind="warn">{t('myconfigs.error.loadStatus')}</Banner>}
-          {githubView.showCode && renderDeviceCode()}
-          <div className={css.statRow}>
-            <Badge kind={githubView.phase === 'error' ? 'error' : 'warn'}>{githubView.statusText}</Badge>
-          </div>
-          {/* R-18：失败详情已由 failGithub() 走全局 Toast；此处保留状态行 Badge（持续状态展示，非回执） */}
-        </Card>
-      )
-    }
-    // logged-in：@login + 固定目标仓库（只读）+ 配置仓库状态
-    return (
-      <Card>
-        <div className={css.actionRow}>
-          <span className={css.groupLabel}>{t('myconfigs.login.title')}</span>
-          <Badge kind="ok">{t('myconfigs.login.loggedInAs', { login: loginView.login })}</Badge>
-        </div>
-        <div className={css.statRow}>
-          <Badge kind="info">{t('myconfigs.login.targetRepo', { repo: targetRepo })}</Badge>
-        </div>
-        <div className={css.statRow}>
-          {loginView.repoExists
-            ? <Badge kind="ok">{t('myconfigs.login.repoReady', { repo: loginView.repoUrl })}</Badge>
-            : <Badge kind="warn">{t('myconfigs.login.repoMissing')}</Badge>}
-        </div>
-      </Card>
-    )
+    setListingStatus(null)
   }
 
-  /** 上传 / 更新向导卡片（选 zip → 校验 → 表单 → 结果） */
-  const renderWizard = (): ReactNode => {
-    /** PR 链接（优先实时任务状态；收录完成后由轮询补上，或直接取同步结果） */
-    const prLink = ((): { url: string; label: string } | null => {
-      const live = listingStatus
-      const url = (live !== null && live.prUrl !== null && live.prUrl !== '')
-        ? live.prUrl
-        : (wizardRef.current.result?.prUrl ?? null)
-      if (url === null || url === '') return null
-      const number = live !== null && live.prNumber !== null ? live.prNumber : wizardRef.current.result?.prNumber
-      return {
-        url,
-        label: number !== null && number !== undefined
-          ? t('myconfigs.result.pr', { number: String(number) })
-          : t('myconfigs.result.openPr'),
-      }
-    })()
-    /** 重置：update 模式轻量重置（只清 zip/校验，**保留预填表单**）；upload 模式完全重置 */
-    const reset = (): void => {
-      const w = wizardRef.current
-      if (w.mode === 'update') {
-        commitWizard({
-          ...initialWizard('update'),
-          step: 'form',
-          form: { ...w.form },
-        })
-      } else {
-        commitWizard(initialWizard('upload'))
-      }
-      setListingStatus(null)
-    }
-    return (
-      <Modal
-        open
-        onClose={closeUpload}
-        title={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
-        wide
-        busy={wizard.running || wizard.validating}
-      >
-        <Modal.Header
-          title={wizard.mode === 'update' ? t('myconfigs.update.title') : t('myconfigs.upload.title')}
-          closeLabel={t('common.close')}
-          onClose={closeUpload}
-          closeDisabled={wizard.running || wizard.validating}
-          trailing={wizard.mode === 'update' ? <Badge kind="info">{t('myconfigs.update.hint')}</Badge> : undefined}
-        />
-        <Modal.Body scroll>
+  /** 上传 / 更新向导卡片（选 zip → 校验 → 表单 → 结果）
+   *  弹窗渲染已拆到 ./MyConfigsWizard.tsx（t49）；这里只装配状态与回调（PR 链接来源判定也在子组件内
+   *  复用 ui/my-configs-view.ts 的 myPrLinkSource）。 */
+  const renderWizard = (): ReactNode => (
+    <MyConfigsWizard
+      wizard={wizard}
+      listingStatus={listingStatus}
+      t={t}
+      fileInput={fileInput}
+      autoBadges={autoBadges}
+      onClose={closeUpload}
+      onPickFile={(file) => { void onPickFile(file) }}
+      onFormField={onFormField}
+      onRunUpload={() => { void runUpload() }}
+      onCancelUpdate={cancelUpdate}
+      onRelist={(itemId) => { void runRelist(itemId) }}
+      onReset={resetWizard}
+    />
+  )
 
-        {/* 步骤 1：选配置包 */}
-        {wizard.step === 'select' && (<>
-          <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".zip,application/zip"
-            className={css.hiddenFile}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              const picked = e.target.files?.[0]
-              e.target.value = ''
-              void onPickFile(picked)
-            }}
-          />
-          <div className={css.actionRow}>
-            <Button variant="primary" disabled={wizard.running} onClick={() => { fileInput.current?.click() }}>
-              {t('myconfigs.upload.select')}
-            </Button>
-          </div>
-        </>)}
+  /** 已上传列表（条目卡片 + 状态徽章 + 行操作）
+   *  列表渲染已拆到 ./MyConfigsList.tsx（t49）；这里只装配投影行（itemViews/summary）与行操作回调。 */
+  const renderList = (): ReactNode => (
+    <MyConfigsList
+      t={t}
+      myItems={myItems}
+      myItemsError={myItemsError}
+      listLoading={listLoading}
+      itemViews={itemViews}
+      summary={summary}
+      install={install}
+      deletingId={deletingId}
+      onRefresh={() => { void loadItems() }}
+      onChangeDeleteConfirm={onMyConfirmDeleteChange}
+      onOpenUpdate={(entry) => { startUpdate(entry); openUpload() }}
+      onOpenInstall={(entry) => { openInstall(entry) }}
+    />
+  )
 
-        {/* 步骤 2：本地校验（dry-run 零写入；选完 zip 自动执行，通过即自动进表单，
-            本步骤仅短暂展示「校验中」；失败时展示错误 + 重新选择） */}
-        {wizard.step === 'validate' && (<>
-          <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
-          {wizard.fileName !== null && (
-            <div className={css.statRow}>
-              <Badge kind="info">{t('myconfigs.upload.selected', { name: wizard.fileName })}</Badge>
-            </div>
-          )}
-          <div className={css.actionRow}>
-            <Button
-              variant="primary"
-              disabled={wizard.validating}
-              onClick={reset}
-            >
-              {wizard.validating ? <Spinner label={t('myconfigs.upload.validating')} /> : t('myconfigs.upload.reselect')}
-            </Button>
-          </div>
-          {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
-        </>)}
-
-        {/* 步骤 3：精简表单（仅 name/description/categories；其余系统自动） → 上传/更新 */}
-        {wizard.step === 'form' && (<>
-          {/* update 模式：表单页内嵌「选择新 ZIP」入口（选中自动校验，通过后才可一键更新） */}
-          {wizard.mode === 'update' && (<>
-            <span className={css.hint}>{t('myconfigs.update.zipHint')}</span>
-            <input
-              ref={fileInput}
-              type="file"
-              accept=".zip,application/zip"
-              className={css.hiddenFile}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                const picked = e.target.files?.[0]
-                e.target.value = ''
-                void onPickFile(picked)
-              }}
-            />
-            <div className={css.actionRow}>
-              <Button variant="primary" disabled={wizard.validating || wizard.running} onClick={() => { fileInput.current?.click() }}>
-                {wizard.fileName !== null && wizard.zipPath !== null
-                  ? t('myconfigs.upload.selected', { name: wizard.fileName })
-                  : t('myconfigs.update.selectZip')}
-              </Button>
-              {wizard.zipPath !== null && (
-                <Button disabled={wizard.validating || wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>
-              )}
-            </div>
-            {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
-          </>)}
-          {wizard.validated && (
-            <div className={css.statRow}>
-              <Badge kind="ok">{t('myconfigs.upload.validateOk')}</Badge>
-            </div>
-          )}
-          <Field label={t('myconfigs.upload.form.name')} hint={t('myconfigs.upload.form.nameHint')}>
-            <input className={css.input} value={wizard.form.name} onChange={(e) => { onFormField('name', e.target.value) }} />
-            {wizard.formErrors.name !== null && <span className={css.formError}>{redact(wizard.formErrors.name)}</span>}
-          </Field>
-          <Field label={t('myconfigs.upload.form.description')}>
-            <textarea className={css.input} value={wizard.form.description} onChange={(e) => { onFormField('description', e.target.value) }} />
-          </Field>
-          <Field label={t('myconfigs.upload.form.categories')}>
-            <input className={css.input} value={wizard.form.categories} onChange={(e) => { onFormField('categories', e.target.value) }} />
-          </Field>
-          {/* F6 发布模式：迁移（全带）/ 分享（自动排除敏感分区 + 强制隐私拦截）—— 复用既有 conflictOptions/radioLabel 单选样式 */}
-          <Field label={t('myconfigs.upload.mode.title')}>
-            <div className={css.conflictOptions}>
-              {([
-                ['migrate', t('myconfigs.upload.mode.migrate')],
-                ['share', t('myconfigs.upload.mode.share')],
-              ] as const).map(([value, label]) => (
-                <label key={value} className={css.radioLabel}>
-                  <input
-                    type="radio"
-                    name="my-config-publish-mode"
-                    checked={wizard.form.publishMode === value}
-                    disabled={wizard.running || wizard.validating}
-                    onChange={() => { onFormField('publishMode', value) }}
-                  />
-                  <span>{label}</span>
-                </label>
-              ))}
-            </div>
-            {wizard.form.publishMode === 'share' && (
-              <span className={css.hint}>{t('myconfigs.upload.mode.shareHint')}</span>
-            )}
-          </Field>
-          {/* 系统自动字段（id/author/version/updatedAt 徽章，无需填写） */}
-          <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>
-          <div className={css.statRow}>
-            {autoBadges.map((b) => (
-              <Badge key={b.field} kind="info">{b.label}：{b.autoText}</Badge>
-            ))}
-          </div>
-          <div className={css.actionRow}>
-            <Button
-              variant="primary"
-              disabled={
-                wizard.validated !== true || wizard.running || wizard.zipPath === null
-                || !myConfigFormValid(wizard.formErrors)
-              }
-              onClick={() => { void runUpload() }}
-            >
-              {wizard.running
-                ? <Spinner label={wizard.mode === 'update' ? t('myconfigs.update.running') : t('myconfigs.upload.running')} />
-                : (wizard.mode === 'update' ? t('myconfigs.update.run') : t('myconfigs.upload.run'))}
-            </Button>
-            {wizard.mode === 'update' && (
-              <Button disabled={wizard.running || wizard.validating} onClick={cancelUpdate}>{t('common.cancel')}</Button>
-            )}
-            {wizard.mode === 'upload' && <Button disabled={wizard.running} onClick={reset}>{t('myconfigs.upload.reselect')}</Button>}
-          </div>
-        </>)}
-
-        {/* R-14：向导失败提示已由全局 Toast 送达（原 wizard.error Banner 移除） */}
-
-        {/* 结果卡：收录状态（异步）/ PR 链接 / 仓库链接 / sha256 / 分区。
-            R-19：上传/更新**失败**分支已由 runUpload 的全局 Toast 告知，此处只渲染成功结果卡
-            （失败分支本无其他可展示内容，故整块以 ok 守卫）。 */}
-        {wizard.result !== null && wizard.result.ok && (<>
-            <span className={css.groupLabel}>{t('myconfigs.result.title')}</span>
-            <div className={css.statRow}>
-              <Badge kind="ok">{t('myconfigs.result.version', { version: wizard.result.version })}</Badge>
-              <Badge kind="info">{t('myconfigs.result.sha256', { hash: wizard.result.sha256 })}</Badge>
-              <Badge kind="info">{t('myconfigs.result.sections', { sections: wizard.result.sections.join(', ') })}</Badge>
-            </div>
-            {/* 收录状态：pending=后台处理中（轮询中）；failed=失败可重试；done=已提交（PR 链接）。
-                R-16：失败**原因**改由常驻 Toast 送达（见 notifyListingFailure），此处保留徽章 + 重试按钮 */}
-            {wizard.result.listing === 'pending' && (
-              <div className={css.statRow}>
-                {listingStatus !== null && listingStatus.listing === 'failed' ? (
-                  <>
-                    <Badge kind="error">{t('myconfigs.result.listingFailed')}</Badge>
-                    <Button variant="danger" onClick={() => { void runRelist(wizard.result!.itemId) }}>
-                      {t('myconfigs.result.relist')}
-                    </Button>
-                  </>
-                ) : (
-                  <Badge kind="info">{t('myconfigs.result.listingPending')}</Badge>
-                )}
-              </div>
-            )}
-            <div className={css.actionRow}>
-              <Badge kind="info">{t('myconfigs.result.repo')}</Badge>
-              <Button href={wizard.result.repoUrl}>{t('myconfigs.result.openRepo')}</Button>
-              {(prLink !== null) && (
-                <Button href={prLink.url}>{prLink.label}</Button>
-              )}
-            </div>
-        </>)}
-        </Modal.Body>
-      </Modal>
-    )
-  }
-
-  /** 已上传列表（条目卡片 + 状态徽章 + 行操作） */
-  const renderList = (): ReactNode => {
-    return (
-      <Card>
-        <div className={css.headRow}>
-          <span className={css.groupLabel}>{t('myconfigs.list.title')}</span>
-          {/* 撑开剩余空间：Badge 与刷新按钮成组贴右，刷新按钮为该行最右元素 */}
-          <span className={css.statusSpacer} />
-          {myItems !== null && (
-            <Badge kind="info">
-              {t('myconfigs.list.summary', {
-                total: String(summary.total),
-                listed: String(summary.listed),
-                pending: String(summary.pendingPr),
-                none: String(summary.notListed),
-              })}
-            </Badge>
-          )}
-          <Button disabled={listLoading} onClick={() => { void loadItems() }}>
-            {listLoading ? <Spinner label={t('myconfigs.list.loading')} /> : t('myconfigs.list.refresh')}
-          </Button>
-        </div>
-        {myItemsError !== null && <Banner kind="error">{redact(myItemsError)}</Banner>}
-        {listLoading && myItems === null && <div className={css.statRow}><Spinner label={t('myconfigs.list.loading')} /></div>}
-        {!listLoading && myItems !== null && myItems.length === 0 && <Empty>{t('myconfigs.list.empty')}</Empty>}
-        {!listLoading && itemViews.length > 0 && (
-          <div className={css.snapshotList}>
-            {itemViews.map(({ entry, view, badge }) => (
-              <div key={view.id} className={css.statRow} style={{ paddingTop: 4 }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className={css.conflictHead}>
-                    <span className={css.conflictId}>{view.name}</span>
-                    {view.version !== '' && <Badge kind="info">{view.version}</Badge>}
-                  </div>
-                  <div className={css.statRow}>
-                    <Badge kind={badge.kind}>{badge.text}</Badge>
-                    {view.stars !== undefined && (
-                      <Badge kind="info" title={t('list.starsHint')}>{t('list.stars', { count: String(view.stars) })}</Badge>
-                    )}
-                    {view.author !== '' && <Badge kind="info">{view.author}</Badge>}
-                    {view.updatedAt !== '' && <Badge kind="info">{view.updatedAt}</Badge>}
-                    {view.categories.map((c) => <Badge key={c} kind="info">{c}</Badge>)}
-                  </div>
-                </div>
-                <div className={css.rowActions}>
-                  <Button onClick={() => { startUpdate(entry); openUpload() }}>{t('myconfigs.item.update')}</Button>
-                  <Button
-                    disabled={install !== null && install.detail === null}
-                    onClick={() => { openInstall(entry) }}
-                  >
-                    {t('myconfigs.item.install')}
-                  </Button>
-                  {entry.repoUrl !== '' && <Button href={entry.repoUrl}>{t('myconfigs.list.openRepo')}</Button>}
-                  {badge.kind === 'warn' && badge.prUrl !== undefined && badge.prUrl !== '' && (
-                    <Button href={badge.prUrl}>{t('myconfigs.item.openPr')}</Button>
-                  )}
-                  {/* 删除：danger 按钮 → 弹窗二次确认（ConfirmDialog；不可恢复，已收录自动提交下架 PR） */}
-                  <Button
-                    variant="danger"
-                    disabled={deletingId !== null}
-                    onClick={() => { onMyConfirmDeleteChange(view.id) }}
-                  >
-                    {t('myconfigs.delete.run')}
-                  </Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    )
-  }
-
-  /** 装回本地：下载 + 级联树勾选 + 执行导入（复用市场安全管道 + market-view 纯模型） */
+  /** 装回本地：下载 + 级联树勾选 + 执行导入（复用市场安全管道 + market-view 纯模型）
+   *  块内渲染已拆到 ./MyConfigsInstall.tsx（t49）；这里只装配状态、勾选与仓库 URL。 */
   const renderInstall = (): ReactNode => {
     if (install === null) return null
-    const { detail } = install
-    const detailView = detail !== null ? marketDetailView(detail, detail.repo ?? entryRepoUrl(install.itemId), true, uiT) : null
     return (
-      <>
-        {/* R-17：下载/导入失败已由全局 Toast 告知（原 install.error Banner 移除）。
-            下方 Spinner 以 install.error 为「失败标记」守卫：失败时 detail 恒为 null，
-            若不守卫会一直旋转，让用户误以为仍在加载。 */}
-        {detail === null && install.error === null && <div className={css.statRow}><Spinner label={t('list.loading')} /></div>}
-        {detail === null && install.error !== null && (
-          <div className={css.statRow}><span className={css.hint}>{t('myconfigs.install.failed')}</span></div>
-        )}
-        {detail !== null && detailView !== null && (<>
-          <Banner kind="warn"><strong>{t('detail.needReview')}</strong></Banner>
-          <div className={css.statRow}>
-            <Badge kind={detailView.badge.valid ? 'ok' : 'error'}>{detailView.badge.statusText}</Badge>
-            <Badge kind="info">{detailView.badge.sectionsText}</Badge>
-          </div>
-          {/* 导入审阅（2026-09）：与「浏览条目详情」共用同一个组件（R4d）—— 级联树勾选 +
-              就地高风险警示 + 逐项摘要 + 冲突决策 + 导入 + 导入后一键回滚。 */}
-          {detailView.canImport && pickerSelection !== null && (
-            <MarketImportReview
-              importApi={importApi}
-              t={t}
-              cmT={cmT}
-              zipPath={detail.zipPath}
-              plan={detail.plan}
-              selection={pickerSelection}
-              onSelectionChange={(next) => {
-                const zipPath = installRef.current?.detail?.zipPath
-                if (zipPath === undefined) return
-                patchInstall({ selectionState: { zipPath, selection: next } })
-              }}
-              resolutions={install.conflictResolutions}
-              onResolutionsChange={(next) => { patchInstall({ conflictResolutions: next }) }}
-              onPlanChange={(plan) => {
-                const cur = installRef.current
-                if (cur === null || cur.detail === null) return
-                patchInstall({ detail: { ...cur.detail, plan } })
-              }}
-              importing={install.importing}
-              onImportingChange={(value) => { patchInstall({ importing: value }) }}
-              result={install.importResult}
-              onResultChange={(result) => { patchInstall({ importResult: result }) }}
-              onErrorChange={(message) => { patchInstall({ error: message }) }}
-              itemName={detail.name}
-            />
-          )}
-        </>)}
-        {/* R-07：装回本地导入结果已由全局 Toast 送达（原 importResult Banner 移除） */}
-      </>
+      <MyConfigsInstall
+        install={install}
+        installRef={installRef}
+        pickerSelection={pickerSelection}
+        repoUrl={entryRepoUrl(install.itemId)}
+        importApi={importApi}
+        t={t}
+        cmT={cmT}
+        uiT={uiT}
+        patchInstall={patchInstall}
+      />
     )
   }
 
-  /** 装回本地详情展示用的仓库 URL（供应链警示来源行；取条目 repoUrl 兜底固定目标仓库） */
+  /** 装回本地详情展示用的仓库 URL（取条目 repoUrl 兜底固定目标仓库）；规则见 ui/my-configs-view.ts
+   *  的 myEntryRepoUrl：空串同样回落（原先 `??` 对空串不回落 → href="" 死链），唯一一处有意收紧。 */
   function entryRepoUrl(itemId: string): string {
-    const entry = (myItems ?? []).find((e) => e.id === itemId)
-    return entry?.repoUrl ?? `https://github.com/${MARKET_UPSTREAM_OWNER}/${MARKET_UPSTREAM_REPO}`
+    return myEntryRepoUrl(myItems ?? [], itemId, `https://github.com/${MARKET_UPSTREAM_OWNER}/${MARKET_UPSTREAM_REPO}`)
   }
 
   /**

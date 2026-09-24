@@ -13,8 +13,8 @@
  *  - 用户显式确认后才 prove stale → recover → acquire → reconcile。
  */
 import {
-  JournalStore, isTerminalState, transitionJournalState, JOURNAL_SCHEMA_VERSION,
-  type OperationJournal, type JournalStep,
+  JournalStore, isTerminalState, transitionJournalState,
+  type OperationJournal, type JournalStep, type SafeModeMarkerState,
 } from './journal.ts';
 
 // ---------- 注入 hooks（引擎/宿主具体化） ----------
@@ -462,6 +462,13 @@ export interface StartupInspection {
   recoveryRequired: boolean;
   decisions: ReconcileDecision[];
   unresolved: string[];
+  /**
+   * durable SAFE MODE 标记的三态判定（t37）：'blocked' / 'clear' / **'unknown'**。
+   * 单独暴露的原因：`safeModeRequired` 是聚合结论（还可能因 corrupt journal / needs-attention 为 true），
+   * 消费方与事后审计需要区分「标记确实不存在」与「标记在但无法判定」——后者已按 fail-closed 计入
+   * `safeModeRequired`，这里如实透出，绝不把 unknown 压成 clear。
+   */
+  durableSafeState: SafeModeMarkerState;
 }
 
 /**
@@ -491,8 +498,16 @@ export async function inspectStartup(
     recoveryRequired = true;
     await store.writeSafeMode(true).catch(() => undefined);
   }
-  // 读 durable SAFE MODE 标记（跨重启保持阻断）：即使 active 已规整，标记在则仍须阻断
-  const durableSafe = await store.readSafeMode().catch(() => false);
+  // 读 durable SAFE MODE 标记（跨重启保持阻断）：即使 active 已规整，标记在则仍须阻断。
+  //
+  // t37：消费**三态**而不是 boolean 兼容面 —— classifySafeModeMarker 的契约是「调用方必须 fail-closed」，
+  // 因此只有 'clear'（确实没有标记）才不因标记阻断；'blocked' 与 'unknown'（标记存在但无法判定 / 布局
+  // 不可信 / 读不出）一律计入 safeModeRequired。旧实现 `readSafeMode().catch(() => false)` 把「无法判定」
+  // 读成「没有标记」（fail-open 外观），在 startup 这道最后的门上不可接受。
+  const durableSafeState = await store.readSafeModeState();
+  const durableSafe = durableSafeState !== 'clear';
   const safeModeRequired = outcome.safeModeRequired || recoveryRequired || durableSafe;
-  return { safeModeRequired, recoveryRequired, decisions: outcome.decisions, unresolved: outcome.unresolved };
+  return {
+    safeModeRequired, recoveryRequired, decisions: outcome.decisions, unresolved: outcome.unresolved, durableSafeState,
+  };
 }

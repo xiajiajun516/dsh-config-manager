@@ -59,7 +59,13 @@ const STAGE_KEYS: Record<string, UiTextKey> = {
   'validating-config': 'progress.validatingConfig',
   'rolling-back': 'progress.rollingBack',
   executing: 'progress.executing',
+  syncing: 'progress.syncing',
+  'backing-up': 'progress.backingUp',
+  restoring: 'progress.restoring',
+  'switching-profile': 'progress.switchingProfile',
+  recovering: 'progress.recovering',
   done: 'progress.done',
+  failed: 'progress.failed',
 };
 
 /** 阶段 id → 用户可读文案（未知阶段回退 id） */

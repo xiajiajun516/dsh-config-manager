@@ -63,10 +63,12 @@ test('saveSyncState / loadSyncState: 完整往返（含 transport 字段）', as
       },
       transport: { type: 'git', ref: 'main' },
       lastSnapshotId: 'sync-abc',
+      ancestorId: '',
     };
     await saveSyncState(tmp, state);
     const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
     assert.equal(raw.schemaVersion, SYNC_STATE_SCHEMA_VERSION);
+    assert.equal(raw.ancestorId, '', 'ancestorId 与 lastSnapshotId 一并落盘（v3）');
     assert.deepEqual(await loadSyncState(tmp), state);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
@@ -153,11 +155,92 @@ test('saveSyncState / loadSyncState: lastSnapshotId 非空往返', async () => {
       lastSyncAt: '2026-08-16T12:00:00.000Z',
       sections: {},
       lastSnapshotId: 'sync-deadbeef-1234',
+      ancestorId: 'sync-ancestor-beef',
     };
     await saveSyncState(tmp, state);
     const loaded = await loadSyncState(tmp);
     assert.equal(loaded.lastSnapshotId, 'sync-deadbeef-1234');
+    assert.equal(loaded.ancestorId, 'sync-ancestor-beef', '两个 id 各自独立往返');
     assert.deepEqual(loaded, state);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------- P0-7：lastSnapshotId（远端 id）与 ancestorId（本地祖先目录名）分离 ---------------- */
+
+test('loadSyncState: v2 文件的 lastSnapshotId 同时迁移为 ancestorId（两语义混用的旧状态不丢基线）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-v2-anc-'));
+  try {
+    await fs.writeFile(
+      path.join(tmp, SYNC_STATE_FILE),
+      JSON.stringify({
+        schemaVersion: 2,
+        lastSyncAt: '2026-08-15T00:00:00.000Z',
+        sections: { settings: { hash: 'd'.repeat(64), updatedAt: '2026-08-15T00:00:00.000Z' } },
+        lastSnapshotId: 'sync-v2-mixed',
+      }),
+      'utf8',
+    );
+    const state = await loadSyncState(tmp);
+    assert.equal(state.schemaVersion, SYNC_STATE_SCHEMA_VERSION, '内存中升级到当前版本');
+    assert.equal(state.lastSnapshotId, 'sync-v2-mixed', '远端指针原样保留（push 路径下该值本就是远端 id）');
+    assert.equal(state.ancestorId, 'sync-v2-mixed', 'v2 混用的值同时作为本地祖先副本目录名（旧基线不丢）');
+    assert.equal(state.sections.settings?.hash, 'd'.repeat(64), '分区基线哈希不丢');
+    // 磁盘上仍是 v2（不就地升级，首次 saveSyncState 时才写新版本）
+    const onDisk = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
+    assert.equal(onDisk.schemaVersion, 2);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('loadSyncState: v1 文件（无祖先指针）→ lastSnapshotId 与 ancestorId 均为空', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-v1-anc-'));
+  try {
+    await fs.writeFile(
+      path.join(tmp, SYNC_STATE_FILE),
+      JSON.stringify({ schemaVersion: 1, lastSyncAt: '2026-08-15T00:00:00.000Z', sections: {} }),
+      'utf8',
+    );
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, '');
+    assert.equal(state.ancestorId, '');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('saveSyncState / loadSyncState: ancestorId 与 lastSnapshotId 相互独立地往返', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-v3-split-'));
+  try {
+    const state: SyncState = {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '2026-08-16T12:00:00.000Z',
+      sections: {},
+      lastSnapshotId: 'remote-snap-7',
+      ancestorId: 'local-anc-9',
+    };
+    await saveSyncState(tmp, state);
+    const loaded = await loadSyncState(tmp);
+    assert.equal(loaded.lastSnapshotId, 'remote-snap-7');
+    assert.equal(loaded.ancestorId, 'local-anc-9');
+    assert.deepEqual(loaded, state);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('loadSyncState: 非字符串 ancestorId（损坏/被篡改）→ 按「无本地祖先副本」处理，不抛错', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-anc-bad-'));
+  try {
+    await fs.writeFile(
+      path.join(tmp, SYNC_STATE_FILE),
+      JSON.stringify({ schemaVersion: 3, lastSyncAt: '', sections: {}, lastSnapshotId: '', ancestorId: 42 }),
+      'utf8',
+    );
+    const state = await loadSyncState(tmp);
+    assert.equal(state.ancestorId, '', '未知形态的目录名不采用（merge 会退化为两方合并）');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

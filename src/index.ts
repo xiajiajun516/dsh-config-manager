@@ -36,7 +36,7 @@
 
 import { randomBytes } from 'node:crypto'
 import { execFile } from 'node:child_process'
-import { createReadStream, createWriteStream, mkdirSync, readFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -50,120 +50,86 @@ import type { CredentialProvider } from '@deepseek-ai/dsh-credentials'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 // Type-only: pull the Cordis Context augmentations (webServer / workspaceRegistry)
 // and the WebRoute contract without any runtime import.
-import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { WebRoute, WebServer } from '@deepseek-ai/dsh-host-webserver'
-import type {} from '@deepseek-ai/dsh-workspace'
 import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import * as yaml from 'js-yaml'
 
+import { endpoint, registerRoutes, requireJsonObject, writeJson, readJsonBody, writeJsonError, writeRouteError, errorMessage, RouteError } from './routes/kit.ts'
+import { buildRoutes } from './routes/index.ts'
+import type { RecoveryOrchestrator } from './core/recovery-orchestrator.ts'
+import type { Portability } from './core/types.ts'
 import { Exporter, FileSnapshotStore, Importer, verifySnapshot } from './core/index.ts'
 import { APPLY_ORDER } from './core/analyzer.ts'
-import { DSH_PROFILE_TEMPLATES, DshProfileError, DshProfileManager, type DshProfilesSnapshot } from './profiles/index.ts'
+import { DshProfileError, DshProfileManager } from './profiles/index.ts'
 import { cleanupCaches } from './core/cache-cleaner.ts'
-import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnapshotPinned, validateSnapshotForRestore, type RestoreActionKind, type RestorePlan, type RestoreReport, type RestoreSnapshotVerdict } from './core/restore.ts'
-import { snapshotFileDiff, summarizeRestoreChanges } from './core/snapshot-diff.ts'
+import { isValidSnapshotId, planRestore, type RestoreActionKind, type RestorePlan, type RestoreReport } from './core/restore.ts'
 import { rollback as performRollback } from './core/rollback.ts'
 // Phase 1 P0-1/P0-2：配置生命周期（自动快照 / 撤销 / 重做）与 P0-5 崩溃归因。
 // 监听工厂用真 fs.watch 注入（core 侧只依赖抽象，便于测试驱动时序）。
 import { ConfigLifecycle } from './core/config-lifecycle.ts'
 import { deleteConfigSnapshot } from './core/config-snapshot.ts'
-import {
-  adviceFor, beginBoot, computeBootAlert, listCandidateLogs, markBootOk,
-  readBootState, readCrashLogTail, writeBootState,
-} from './core/crash-report.ts'
+import { adviceFor, beginBoot, computeBootAlert, listCandidateLogs, markBootOk, readBootState, readCrashLogTail, writeBootState } from './core/crash-report.ts'
 // Phase 1 P0-3：启动救援模式（备份 patch/package.json → 写最小 patch → 中和 bundles）
 import { enterRescueMode, exitRescueMode, rescueModeStatus } from './core/boot-rescue.ts'
+import { auditBootSafety } from './core/boot-safety.ts'
+import type { BootSafetyReport } from './core/boot-safety.ts'
 import { watch as fsWatch } from 'node:fs'
-import { recomputeRecoveryDecision, executeRecovery } from './core/reconcile.ts'
-import { verifyRecovery, recoveryTerminalState } from './core/verify-recovery.ts'
 import { createRecoveryOrchestrator, type RecoveryExecutorFns } from './core/recovery-orchestrator.ts'
-import { redactJournalText, isValidOperationId, isTerminalState, transitionJournalState, JournalStore, type OperationJournal } from './core/journal.ts'
+import { JournalStore } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
-import { computeConsultReport, type ConsultSourceRef, type ConsultSourceData, type MigratabilityResult } from './core/migration-consult.ts'
-import { readExportZipSource, buildLocalSnapshotSource } from './core/consult-source.ts'
 import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
 import type { MsgFunc } from './core/messages.ts'
-import {
-  cleanupAbortedInstall, hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins,
-  resolveProfileDir, resolveProfileNameFromArgv, readProfileManifest, runDshPlugin, validateProfileName,
-} from './core/plugin-cli.ts'
-import type {
-  ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions,
-  ImportPlan, NamespaceInfo, PatchFileFacade, PlanItem, PlanItemKind, PluginInfo, PluginsFacade,
-  SettingsFacade, Snapshot, WorkspaceFacade,
-} from './core/types.ts'
-import { ImportNotConfirmedError, ImportUserSkippedError } from './core/types.ts'
+import { cleanupAbortedInstall, hasDshBundlePatch, installErrorFor, installSpecFor, listInstalledPlugins, resolveProfileDir, resolveProfileNameFromArgv, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
+import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, WorkspaceFacade } from './core/types.ts'
+import { ImportUserSkippedError } from './core/types.ts'
 import { createAdapters, USER_PATCH_FILE } from './adapters/index.ts'
 import { createLocalPluginPackHook } from './core/local-plugin-host.ts'
-import { createEncryptionProvider, decryptCredentials, decryptArchive, SecurityError, encryptArchive, isArchiveBlob, verifyEncryptedBlob } from './security/index.ts'
+import { createEncryptionProvider, decryptCredentials, SecurityError, encryptArchive } from './security/index.ts'
 import { createHardenedZipParser } from './security/zip-security.ts'
 import { collectCredentialRefs } from './security/credentials-yaml.ts'
-import { applySessionMeta, applySessionMetaToPlanItems, readSessionMeta } from './core/session-meta.ts'
+import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, readSessionMeta, subagentParentMap } from './core/session-meta.ts'
+import { PROJECT_KEY_RE, readLogCwdFromBytes, rewriteSessionLogDir } from './utils/session-log.ts'
 import { atomicCopyFile, atomicWriteFile } from './utils/atomic-write.ts'
 import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailableError, type MutationLockContext } from './utils/env-lock.ts'
 import { activeProxySummary } from './utils/proxy.ts'
 import { listRecursiveFollowingLinks } from './utils/recursive-walk.ts'
 import { Phase3Recovery, TransactionRecoveryRequiredError, mapLockStateForStartup } from './core/phase3-host.ts'
 import type { JournalRunContext } from './core/phase3-host.ts'
-import { classifyStartup } from './core/startup-barrier.ts'
+import { classifyStartup, FAIL_CLOSED_STARTUP } from './core/startup-barrier.ts'
 import type { MutationLockPort } from './utils/env-lock.ts'
 import type { RecursiveListing } from './utils/recursive-walk.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
 import { WebDavTransport } from './sync/webdav/webdav-transport.ts'
 import { DeviceFlowStore, GitHubAuthClient } from './sync/github-auth.ts'
 import { SyncEngine } from './sync/sync-engine.ts'
-import type { ApplyItemsReport } from './sync/sync-engine.ts'
 import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { BackupScheduler } from './sync/backup-scheduler.ts'
-import { readBackupSchedule, writeBackupSchedule } from './sync/backup-schedule-config.ts'
-import type { BackupScheduleConfig } from './sync/backup-schedule-config.ts'
-import { AUTO_BACKUP_PREFIX, deleteBackupFile, isValidBackupFileName, isValidExportFileName, listBackupFiles, resolveNonCollidingExportName, writeBackupNote } from './sync/backup-files.ts'
+import { readBackupSchedule } from './sync/backup-schedule-config.ts'
+import { AUTO_BACKUP_PREFIX, isValidExportFileName, resolveNonCollidingExportName, writeBackupNote } from './sync/backup-files.ts'
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './sync/retention-policy.ts'
 import type { RetentionPolicy } from './sync/retention-policy.ts'
 import type { PruneSelector } from './core/backup.ts'
 import { selectPruneCandidates } from './core/backup.ts'
-import { validateBackupScheduleDraft } from './ui/backup-schedule.ts'
-import { readAllAutosyncConfigs, readAutosyncConfig, writeAutosyncConfig } from './sync/autosync-config.ts'
-import type { AutosyncConfig, AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
-import { appendAutosyncEntry, readSyncHistory } from './sync/sync-history.ts'
-import {
-  MigrationStore, queryHistory, summarizeHistory, renderExport, parseHistoryQuery,
-  type MigrationKind, type MigrationResult, type ReadMigrationResult,
-  type StoredMigrationHistoryEntry, MIGRATION_HISTORY_DIR,
-} from './core/migration-history.ts'
-import { loadSyncState, saveSyncState } from './sync/sync-state.ts'
-import {
-  readSyncConfig, readSyncConfigFor, readFullSyncConfig, writeSyncConfig, validateRepoUrl, validateWebDavUrl,
-  isGitConfig, isWebDavConfig,
-} from './sync/sync-config.ts'
-import type { SyncConfig, FullSyncConfig, SyncTransportType } from './sync/sync-config.ts'
-import {
-  defaultSyncSelection, effectiveSections, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
-  readAllSyncSelections, readSyncSelection, writeSyncSelection,
-  SYNC_SELECTION_SCHEMA_VERSION,
-} from './sync/sync-selection.ts'
+import { readAllAutosyncConfigs, readAutosyncConfig } from './sync/autosync-config.ts'
+import type { AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
+import { appendAutosyncEntry } from './sync/sync-history.ts'
+import { MigrationStore, type MigrationKind, type MigrationResult, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
+import { readSyncConfig, validateRepoUrl, validateWebDavUrl, isWebDavConfig, channelOf, parseSyncChannel, SYNC_CHANNELS } from './sync/sync-config.ts'
+import type { SyncConfig, SyncTransportType } from './sync/sync-config.ts'
+import { defaultSyncSelection, effectiveSections, normalizeSessionsInclude, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readSyncSelection } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
-import { readUiPrefs, updateUiPrefs } from './sync/ui-prefs.ts'
-import type { UiPrefsChannel } from './sync/ui-prefs.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
-import { parseMarketIndex, parseMarketItemManifest } from './market/index-parser.ts'
-import { BUILTIN_MARKET_URL, isOfficialMarket } from './market/builtin.ts'
-import { validateMarketItem } from './market/security.ts'
+import { parseMarketIndex } from './market/index-parser.ts'
 import { prepareMarketItem } from './market/prepare.ts'
-import { validateMarketRepoUrl } from './market/url.ts'
-import { marketItemWarnings, toMarketListItem } from './market/view.ts'
-import type {
-  MarketDownloadResult, MarketIndex, MarketItemDetail, MarketListItem, MarketSummary,
-} from './market/types.ts'
+import type { MarketIndex, MarketSummary } from './market/types.ts'
 import { GitHubAuthRest, GitHubApiError } from './market/github-repos.ts'
-import { MyRepoError, MyRepoService, USER_CONFIGS_REPO, userConfigsRepoUrl } from './market/my-repo.ts'
+import { MyRepoService } from './market/my-repo.ts'
 import { createGitFileWriter } from './market/git-file-writer.ts'
 import { parseGitHubRepoUrl } from './market/repo-url.ts'
 import { StarCache } from './market/star-cache.ts'
-import { redact } from './security/redaction.ts'
 import { createConfiguredSecretScanner } from './security/secret-scanner.ts'
 import type { ConfiguredSecretPatterns } from './security/secret-scanner.ts'
 import type { SecretScanner } from './core/types.ts'
@@ -172,8 +138,8 @@ import { MANIFEST_FILE, parseManifest } from './schema/manifest.ts'
 import { isFileSection, SECTION_IDS } from './schema/config.ts'
 import { stringifyJsonSafe } from './utils/json.ts'
 import type { Manifest, SectionId, WorkspaceRecord } from './schema/types.ts'
-import { parseZip, zipToBuffer } from './utils/zip.ts'
-import { isSameOrChild, normalizePath } from './utils/paths.ts'
+import { parseZip } from './utils/zip.ts'
+import { isSameOrChild } from './utils/paths.ts'
 import { createLogger, parseLogLevel, type Logger } from './utils/logger.ts'
 
 /* ---------------------------------------------------------------- identity */
@@ -185,7 +151,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-const PLUGIN_VERSION = '0.1.63'
+export const PLUGIN_VERSION = '0.1.64'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -195,7 +161,7 @@ const PLUGIN_NAME = 'dsh-config-manager'
  * 与 package.json 的 repository 字段保持一致；界面不可改（硬编码，参照
  * 「一键上传」目标仓库先例）。仅在 GET /star-prompt 响应中返回，供弹窗按钮跳转。
  */
-const STAR_PROMPT_REPO_URL = 'https://github.com/xiajiajun516/dsh-config-manager'
+export const STAR_PROMPT_REPO_URL = 'https://github.com/xiajiajun516/dsh-config-manager'
 
 /** 缓存自动清理周期：24 小时（启动即清一次 + 此后每日一次；与 cache-cleaner 保留期独立） */
 const CACHE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -247,97 +213,20 @@ export interface Config {
 
 /* ---------------------------------------------------------------- constants */
 
-/** Route family — must match the browser half's CONFIG_MANAGER_API exactly. */
-const API = {
+/**
+ * 本文件保留的 8 条路由的路径（被源码级守卫按文件窗口钉住，见下方 routesList 注释）。
+ *
+ * 其余 57 条路由的路径**声明在各自的组文件里**（src/routes/*.ts 的 endpoint({ path, methods })）——
+ * 新增一条 API 只需那一条声明，不再有「常量表 + 路由对象」两处要同步。
+ */
+export const API = {
   status: '/api/dsh-config-manager/status',
   export: '/api/dsh-config-manager/export',
-  // P2-⑫：导出前只读预览（不落盘 ZIP；返回各分区 counts + 估算大小）
   exportPreview: '/api/dsh-config-manager/export-preview',
-  download: '/api/dsh-config-manager/download',
-  upload: '/api/dsh-config-manager/upload',
   analyze: '/api/dsh-config-manager/analyze',
   plan: '/api/dsh-config-manager/plan',
-  execute: '/api/dsh-config-manager/execute',
-  skipExecute: '/api/dsh-config-manager/execute/skip',
-  decryptArchive: '/api/dsh-config-manager/decrypt-archive',
-  progress: '/api/dsh-config-manager/progress',
-  runs: '/api/dsh-config-manager/runs',
-  snapshots: '/api/dsh-config-manager/snapshots',
-  restore: '/api/dsh-config-manager/restore',
-  // P1-⑧：快照管理（手动删除 + 置顶豁免自动清理）
-  snapshotDelete: '/api/dsh-config-manager/snapshots/delete',
-  snapshotPin: '/api/dsh-config-manager/snapshots/pin',
-  // git 风格恢复预览：单个文件的逐行差异（只读；点开文件才请求）
-  snapshotFileDiff: '/api/dsh-config-manager/snapshots/file-diff',
-  // m-backup-schedule：定时全量备份（读/存 backup-schedule.json + 立即执行一次）
-  backupSchedule: '/api/dsh-config-manager/backup-schedule',
-  backupScheduleRun: '/api/dsh-config-manager/backup-schedule/run',
-  // m-backup-files：导出产物管理（列出 exports/*.zip + 删除；下载复用 /download）
-  backupFiles: '/api/dsh-config-manager/backup-files',
-  backupFilesDelete: '/api/dsh-config-manager/backup-files/delete',
-  // Phase 7：迁移前咨询（只读健康评分 + 建议；POST，loopback fence）
-  consult: '/api/dsh-config-manager/consult',
-  // m-sync-ui：远程同步（Git 私有仓库通道）
-  syncStatus: '/api/dsh-config-manager/sync/status',
-  syncPush: '/api/dsh-config-manager/sync/push',
-  syncPull: '/api/dsh-config-manager/sync/pull',
-  // m-github-oauth：GitHub OAuth device flow 登录（start → 展示授权码 → poll → token 入库）
-  syncGithubStart: '/api/dsh-config-manager/sync/github/start',
-  syncGithubPoll: '/api/dsh-config-manager/sync/github/poll',
-  syncGithubCancel: '/api/dsh-config-manager/sync/github/cancel',
-  // m-sync-github-valid：校验已存 token 是否有效（决定「已登录」→ 隐藏登录区块）
-  syncGithubValidate: '/api/dsh-config-manager/sync/github/validate',
-  // P2：同步历史 / 自动应用 / 一键回滚
-  syncHistory: '/api/dsh-config-manager/sync/history',
-  syncRollback: '/api/dsh-config-manager/sync/rollback',
-  // m-sync-v2：一键同步（差异确认会话）+ 自动同步 + 历史快照
-  syncSnapshotsList: '/api/dsh-config-manager/sync/snapshots-list',
-  syncSync: '/api/dsh-config-manager/sync/sync',
-  syncApplyItems: '/api/dsh-config-manager/sync/apply-items',
-  syncCancel: '/api/dsh-config-manager/sync/cancel',
-  syncAutosync: '/api/dsh-config-manager/sync/autosync',
-  // m-sync-selection：同步分区选择持久化（默认/高级模式 + 勾选分区；自动同步共用）
-  syncSelection: '/api/dsh-config-manager/sync/selection',
-  // m-sync-config：同步通道配置保存（UI 表单自动保存 /「保存配置」按钮；凭据写 DSH credentials）
-  syncConfig: '/api/dsh-config-manager/sync/config',
-  // m-self：插件 UI 偏好（如上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
-  syncUiPrefs: '/api/dsh-config-manager/sync/ui-prefs',
-  // m-star-prompt：Star 引导弹窗状态（复用 ui-prefs.json；GET 读 + POST 局部更新）
-  starPrompt: '/api/dsh-config-manager/star-prompt',
-  // 版本更新内容弹窗状态（复用 ui-prefs.json；GET 读 + POST 局部更新）
-  releaseNotesPrompt: '/api/dsh-config-manager/release-notes-prompt',
-  // m-market：配置市场（内置单仓库，只读公开仓库：浏览 + 下载 + 安全校验；apply 复用 execute）
-  marketStatus: '/api/dsh-config-manager/market/status',
-  marketRefresh: '/api/dsh-config-manager/market/refresh',
-  marketBrowse: '/api/dsh-config-manager/market/browse',
-  marketDownload: '/api/dsh-config-manager/market/download',
-  marketPrepare: '/api/dsh-config-manager/market/prepare',
-  // m-my-configs：「一键上传 / 我的配置」（目标仓库固定 xiajiajun516/dsh-config-market；
-  // 登录复用 sync/github/start|poll|cancel，不重复实现；/me/items 401 → 未登录）
-  meStatus: '/api/dsh-config-manager/me/status',
-  meUpload: '/api/dsh-config-manager/me/upload',
-  meItems: '/api/dsh-config-manager/me/items',
-  meUpdate: '/api/dsh-config-manager/me/update',
-  meListing: '/api/dsh-config-manager/me/listing',
-  meRelist: '/api/dsh-config-manager/me/relist',
-  meDelete: '/api/dsh-config-manager/me/delete',
-  // m-profiles：档案 = DSH 自带 profile（$DSH_HOME/profiles/<name>）；
-  // List/Detail/Create/Rename/Delete/Select（Select = 记录「下次启动」，DSH 不支持运行中切换）
-  profiles: '/api/dsh-config-manager/profiles',
-  profilesDetail: '/api/dsh-config-manager/profiles/detail',
-  profilesCreate: '/api/dsh-config-manager/profiles/create',
-  profilesDelete: '/api/dsh-config-manager/profiles/delete',
-  profilesRename: '/api/dsh-config-manager/profiles/rename',
-  profilesSelect: '/api/dsh-config-manager/profiles/select',
-  // Phase 5：recovery 编排（prefix 路由，内部按 path 分发：status / <opId>/preview|confirm|execute|verify|retry|dismiss）
-  recovery: '/api/dsh-config-manager/recovery',
-  // Phase 6：迁移历史审计（统一历史引擎；只读 GET + 导出）
-  history: '/api/dsh-config-manager/history',
-  historyExport: '/api/dsh-config-manager/history/export',
-  // Phase 1 P0-1/P0-2：配置生命周期（自动快照 / 撤销 / 重做）与崩溃归因
   lifecycle: '/api/dsh-config-manager/lifecycle',
   crash: '/api/dsh-config-manager/crash',
-  // Phase 1 P0-3：启动救援模式（禁用其它插件使 DSH 能启动）
   rescue: '/api/dsh-config-manager/rescue',
 } as const
 
@@ -390,86 +279,23 @@ export function syncPasswordRef(kind: 'ENCRYPT' | 'DECRYPT', channel: SyncTransp
   return prefix + '_' + channel.toUpperCase()
 }
 
-/** Cap on JSON request bodies (import plans can be large: 4 MB). */
-const MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
-
-/** Cap on raw upload bodies (staged to the controlled tmp dir). */
-const MAX_UPLOAD_BYTES = 256 * 1024 * 1024
-
-/* ---------------------------------------------------------- loopback fence */
-
-/** Loopback literal check plus browser same-origin markers (dsh-ssh's fence). */
-function isLoopbackRequest(request: IncomingMessage): boolean {
-  const address = request.socket.remoteAddress
-  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
-  const host = request.headers.host
-  if (typeof host !== 'string') return false
-  let hostUrl: URL
-  try {
-    hostUrl = new URL(`http://${host}`)
-  } catch {
-    return false
-  }
-  if (hostUrl.hostname !== '127.0.0.1' && hostUrl.hostname !== 'localhost' && hostUrl.hostname !== '[::1]') return false
-  if (request.headers['sec-fetch-site'] === 'cross-site') return false
-  const origin = request.headers.origin
-  if (origin === undefined) return true
-  try {
-    return new URL(origin).host === hostUrl.host
-  } catch {
-    return false
-  }
-}
-
-/* ---------------------------------------------------------------- responses */
-
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body)
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'referrer-policy': 'no-referrer',
-  })
-  res.end(payload)
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
-  const chunks: Buffer[] = []
-  let size = 0
-  for await (const chunk of req) {
-    const buffer = chunk as Buffer
-    size += buffer.length
-    if (size > MAX_JSON_BODY_BYTES) return undefined
-    chunks.push(buffer)
-  }
-  try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** URL query helper (first value, decoded). */
-function queryParam(url: URL, name: string): string | undefined {
-  const value = url.searchParams.get(name)
-  return value === null ? undefined : value
-}
-
+/* 路由基础设施（loopback 围栏 / writeJson / readJsonBody / queryParam / endpoint / 错误映射）
+ * 已收敛到 src/routes/kit.ts —— 全仓只有那一份实现。 */
 /**
  * 档案路由的错误响应：engine 的 DshProfileError 带 code（UI 据此映射本地化文案，
  * 不显示裸英文码）；其它异常按 500 处理。
  */
-function writeProfileError(res: ServerResponse, error: unknown): void {
+export function writeProfileError(res: ServerResponse, error: unknown): void {
   if (error instanceof DshProfileError) {
     const status = error.code === 'notFound' ? 404 : error.code === 'exists' ? 409 : 400
-    writeJson(res, status, { error: error.message, code: error.code })
+    writeJsonError(res, status, error.message, error.code)
     return
   }
-  writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+  writeJsonError(res, 500, errorMessage(error))
 }
 
 /** Stream a raw request body to a file, enforcing a byte cap. */
-async function writeRequestBodyToFile(req: IncomingMessage, dest: string, maxBytes: number): Promise<number> {
+export async function writeRequestBodyToFile(req: IncomingMessage, dest: string, maxBytes: number): Promise<number> {
   const sink = createWriteStream(dest)
   let size = 0
   await new Promise<void>((resolvePromise, reject) => {
@@ -562,7 +388,7 @@ function safeCredentialRef(ref: string): any {
   }
   return ref
 }
-const credentialRef = safeCredentialRef
+export const credentialRef = safeCredentialRef
 
 
 /** Settings facade over the real ctx.settings (describe() is namespace-less). */
@@ -718,7 +544,7 @@ class DshWorkspaceFacade implements WorkspaceFacade {
     this.msg = msg
   }
 
-  private registry(): { list(): { id: unknown; path: string; title: string; sessionIds: readonly unknown[]; createdAt: string; updatedAt: string }[]; get(id: unknown): { title: string; setTitle(title: string): Promise<void> } | undefined; create(path: string, title?: string): Promise<unknown>; delete(id: unknown): Promise<boolean> } | undefined {
+  private registry(): { list(): { id: unknown; path: string; title: string; sessionIds: readonly unknown[]; createdAt: string; updatedAt: string }[]; get(id: unknown): { title: string; setTitle(title: string): Promise<void>; attachSession(sessionId: string): Promise<void> } | undefined; create(path: string, title?: string): Promise<unknown>; delete(id: unknown): Promise<boolean> } | undefined {
     return readService(this.ctx, 'workspaceRegistry')
   }
 
@@ -751,6 +577,177 @@ class DshWorkspaceFacade implements WorkspaceFacade {
     const registry = this.registry()
     if (!registry) return
     await registry.delete(id as unknown as WorkspaceId)
+  }
+
+  /**
+   * 把一个已存储会话登记进工作区（issue #45 会话归位）。
+   *
+   * 走 DSH `workspaceRegistry` 的实体方法 `attachSession`：
+   *  - DSH 自己读会话 header 并用 realpath 校验 cwd 必须等于该工作区 path（不匹配直接拒绝）；
+   *  - 写入走 storage domain 的原子 update（内存权威与磁盘同时更新），并按 cwd 剪掉不属于
+   *    本工作区的候选 —— 因此**不需要**插件做「注册表合并 / 去重 / 备份回滚」，
+   *    更**不得**旁路直写 storages/workspace.json。
+   */
+  async attachSession(workspaceId: string, sessionId: string): Promise<void> {
+    const registry = this.registry()
+    if (!registry) throw new Error(this.msg('host.workspaceUnavailable'))
+    const existing = registry.get(workspaceId as unknown as WorkspaceId)
+    if (!existing) throw new Error(this.msg('host.workspaceMissingTarget', { id: workspaceId }))
+    await existing.attachSession(sessionId)
+  }
+}
+
+// 字节级工具（projectKey 形状 / 首帧 cwd 读写 / 多 generation 改写）已抽到 utils/session-log.ts：
+// 宿主在线路径与 CLI 离线修复共用同一份实现（避免两处口径漂移）。
+
+export class DshSessionStoreFacade implements SessionStoreFacade {
+  private readonly ctx: Context
+  /** DSH 缺省会话根（配置改过时只影响快路径命中率，慢路径仍正确） */
+  private readonly root: string
+
+  constructor(ctx: Context, homeDir: string, msg: MsgFunc = zhMsg) {
+    this.ctx = ctx
+    this.root = join(homeDir, 'sessions')
+  }
+
+  /**
+   * 按**相对会话根**的目录搬迁会话目录（issue #45 ④ 导入期归位）。
+   *
+   * 与 `moveSession` 同一套安全约束，区别只在「怎么找到目录」：这条**不依赖会话存储的解析接口** ——
+   * 刚导入完、位置还与 header 不一致时，存储的 list/解析会抛错（DSH 的 corrupt session log），
+   * 只有按路径搬这一条路可用。
+   */
+  async relocateDir(sessionDirRel: string, targetProjectKey: string): Promise<SessionMoveResult> {
+    if (!PROJECT_KEY_RE.test(targetProjectKey)) return { moved: false, reason: 'unavailable' }
+    const dir = this.sessionDirFromRel(sessionDirRel)
+    if (dir === undefined) return { moved: false, reason: 'unavailable' }
+    return await this.relocateDirAbsolute(dir, targetProjectKey)
+  }
+
+  /**
+   * 按**路径**改写一个会话目录下全部 generation 的首帧 cwd（导入期跨机映射用，issue #45）。
+   *
+   * 与 rewriteCwd 的区别：这条不依赖会话存储的解析接口（导入刚写完时那里可能是坏的），只认路径。
+   * 安全序列与在线改写完全一致（utils/session-log.ts 的 rewriteSessionLogDir）：只换第 1 帧、
+   * 尾部逐字节流式拷贝、发布前自检、失败回滚其它 generation。
+   */
+  async rewriteLogDir(sessionDirRel: string, newCwd: string): Promise<SessionRewriteResult> {
+    const dir = this.sessionDirFromRel(sessionDirRel)
+    if (dir === undefined) return { ok: false, reason: 'unavailable' }
+    // POSIX：目录内的内核锁文件存在 ⇒ 可能被其它进程持有（Windows 无锁文件，用命名信号量）
+    if (process.platform !== 'win32' && await this.exists(join(dir, 'session.lock'))) {
+      return { ok: false, reason: 'locked' }
+    }
+    return await rewriteSessionLogDir(dir, newCwd)
+  }
+
+  /** 相对会话根的目录 → 绝对目录（越界 / 含 .. / 空一律 undefined，绝不拼出会话根之外的路径）。 */
+  private sessionDirFromRel(sessionDirRel: string): string | undefined {
+    const rel = sessionDirRel.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+    if (rel === '' || rel.includes('..')) return undefined
+    const dir = resolve(join(this.root, rel))
+    return isSameOrChild(dir, resolve(this.root)) ? dir : undefined
+  }
+
+  /**
+   * 只读：从会话日志**字节**里取出首帧 header 的 cwd（issue #45 ④ 导入期校验用）。
+   * 解不出来（非 zstd / 首帧不完整 / 非单行 JSON / 无 cwd）→ undefined：调用方按「无法判定」处理，绝不猜。
+   */
+  readLogCwd(bytes: Uint8Array): string | undefined {
+    return readLogCwdFromBytes(bytes)
+  }
+
+  /** 搬迁实现（绝对目录；目标段白名单 + 不覆盖 + 锁文件 + 搬后自检失败回滚）。 */
+  private async relocateDirAbsolute(dir: string, targetProjectKey: string): Promise<SessionMoveResult> {
+    // 目标段白名单：非法/越界一律不搬（绝不拼出根目录之外的路径）
+    if (!PROJECT_KEY_RE.test(targetProjectKey)) return { moved: false, reason: 'unavailable' }
+    const projectDir = dirname(dir)
+    const root = dirname(projectDir)
+    const fromProjectKey = basename(projectDir)
+    if (fromProjectKey === targetProjectKey) return { moved: false, reason: 'already-there', from: dir }
+    const target = join(root, targetProjectKey, basename(dir))
+    if (await this.exists(target)) return { moved: false, reason: 'conflict', from: dir, to: target }
+    // POSIX：目录内的内核锁文件存在 ⇒ 可能被其它进程持有（Windows 无锁文件，用命名信号量）
+    if (process.platform !== 'win32' && await this.exists(join(dir, 'session.lock'))) {
+      return { moved: false, reason: 'locked', from: dir, to: target }
+    }
+    try {
+      await fs.mkdir(dirname(target), { recursive: true })
+      await fs.rename(dir, target)
+    } catch {
+      return { moved: false, reason: 'unavailable', from: dir, to: target }
+    }
+    // 自检：目标存在且原目录已不在；不满足 → 回滚（尽力而为）并报不可用
+    if (!(await this.exists(target)) || await this.exists(dir)) {
+      try {
+        await fs.rename(target, dir)
+      } catch {
+        // 回滚失败：报告不可用，由调用方展示（绝不谎报成功）
+      }
+      return { moved: false, reason: 'unavailable', from: dir, to: target }
+    }
+    return { moved: true, from: dir, to: target }
+  }
+
+  /**
+   * 让工作区注册表重新索引某个会话的 header（改写后**必须**调用）。
+   *
+   * 为什么需要：注册表在启动时就把所有已存储会话的 header 缓存进内存，`attachSession`
+   * 走的正是这份缓存 —— 改写磁盘后若不刷新，校验用的仍是旧 cwd（在目标机不解析）而必然失败。
+   *
+   * 实现依赖 DSH `WorkspaceRegistry` 的 `indexHeader`（d.ts 标为 private，运行时可调用）：
+   * 这是本功能对 DSH 内部唯一的越界点，**刻意只用一个方法、且永不整体重建索引**
+   * （整体重建 replaceHeaderIndex 会清空 sessionPaths，可能连带隐藏本进程的活跃会话）。
+   * 不可用/失败 → 返回 false，由调用方如实标注「需重启 DSH 后再执行一次归位」。
+   */
+  async reindexSessionHeader(sessionId: string): Promise<boolean> {
+    const registry = readService<{ indexHeader?: (header: unknown) => unknown }>(this.ctx, 'workspaceRegistry')
+    // 会话存储服务：只用来取出该会话的最新 header（注册表内存里的那份可能已被改写作废）
+    const store = readService<{ list(): Promise<readonly { header?: { id?: unknown } }[]> }>(this.ctx, 'sessionPersistence')
+    if (registry === undefined || typeof registry.indexHeader !== 'function' || store === undefined) return false
+    try {
+      const snapshots = await store.list()
+      const fresh = snapshots.find((snapshot) => snapshot.header?.id === sessionId)?.header
+      if (fresh === undefined) return false
+      await registry.indexHeader(fresh)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 本机会话的父子关系（子会话 id → 父会话 id）。
+   *
+   * 实现走 DSH 会话存储的列举（与 `session/list` 同一数据源）：只取 header 的 `parentSession`，
+   * 不解析任何日志字节 —— 让「导出父对话时连带子代理会话」不为此读一遍整棵会话树。
+   * 字段名以磁盘 header 为准（`parentSession`；DSH 的 RPC 投影才改名为 `parentSessionId`）。
+   * 服务缺失 / 列举失败 → 空 Map（调用方按「无法连带」处理，绝不假装带全）。
+   */
+  async parentRelations(): Promise<Map<string, SessionParentRelation>> {
+    const out = new Map<string, SessionParentRelation>()
+    const store = readService<{ list(): Promise<readonly { header?: { id?: unknown; parentSession?: unknown; origin?: unknown } }[]> }>(this.ctx, 'sessionPersistence')
+    if (store === undefined) return out
+    try {
+      for (const snapshot of await store.list()) {
+        const id = snapshot.header?.id
+        const parent = snapshot.header?.parentSession
+        if (typeof id !== 'string' || id === '' || typeof parent !== 'string' || parent === '') continue
+        out.set(id, { parent, subagent: snapshot.header?.origin === 'subagent' })
+      }
+    } catch {
+      return new Map<string, SessionParentRelation>()
+    }
+    return out
+  }
+
+  private async exists(path: string): Promise<boolean> {
+    try {
+      await fs.access(path)
+      return true
+    } catch {
+      return false
+    }
   }
 }
 
@@ -950,10 +947,63 @@ export class DshFileSystemFacade implements FileSystemFacade {
   async mkdir(dir: string): Promise<void> {
     await fs.mkdir(this.abs(dir), { recursive: true })
   }
+
+  /**
+   * 绝对路径 realpath（issue #45 会话归位）。
+   *
+   * 与 DSH 的 realpathNormalize 同语义：只接受**已存在**的目录，解析符号链接 / `..` /
+   * 结尾斜杠后返回规范化路径；不存在 / 非目录 / 权限不足 → null（**绝不**回退原字符串，
+   * 否则「源机不存在的 cwd」会被误判成与某个工作区同一目录）。
+   *
+   * 注意：本方法走绝对路径，不受 home 目录边界限制——入参只可能来自会话 header 的 cwd
+   * 与工作区记录的 path，都已是绝对路径；越界字符串由 realpath 自身失败兜底。
+   */
+  async realpathDir(absPath: string): Promise<string | null> {
+    try {
+      const target = await fs.realpath(resolve(absPath))
+      const st = await fs.stat(target)
+      return st.isDirectory() ? target : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * 建缺失目录（issue #45：导入工作区记录前把缺失的项目目录建出来）。
+   *
+   * 安全边界（路径来自备份 = 不可信输入）：
+   *  - 必须是完全限定的绝对路径（相对路径拒绝 —— 会跟随进程 cwd）；
+   *  - 任何 `..` 段一律拒绝（即便 resolve 会折叠，也说明来源可疑）；
+   *  - 已存在的层级不动；返回**实际新建**的目录（由外到内）供报告展示；
+   *  - 路径上出现同名文件（非目录）→ 抛错，由调用方按非致命警告处理（绝不静默）。
+   */
+  async ensureDir(absPath: string): Promise<string[]> {
+    if (!isAbsolute(absPath)) throw new Error(this.msg('host.fsPathNotAbsolute', { path: absPath }))
+    if (absPath.split(/[\\/]+/).includes('..')) throw new Error(this.msg('host.fsPathDotDot', { path: absPath }))
+    const target = resolve(absPath)
+    const missing: string[] = []
+    let probe = target
+    for (;;) {
+      try {
+        const st = await fs.stat(probe)
+        if (!st.isDirectory()) throw new Error(this.msg('host.fsPathNotDirectory', { path: probe }))
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        missing.push(probe)
+      }
+      const parent = dirname(probe)
+      if (parent === probe) break
+      probe = parent
+    }
+    if (missing.length === 0) return []
+    await fs.mkdir(target, { recursive: true })
+    return missing.reverse()
+  }
 }
 
 /** The engine's HostContext over real DSH services. */
-class ConfigManagerHostContext implements HostContext {
+export class ConfigManagerHostContext implements HostContext {
   readonly platform: string = process.platform
   readonly arch: string = process.arch
   readonly homeDir: string
@@ -969,6 +1019,8 @@ class ConfigManagerHostContext implements HostContext {
   readonly workspace: WorkspaceFacade
   readonly patchFile: PatchFileFacade
   readonly fs: FileSystemFacade
+  /** 会话存储端口（issue #45 会话归位；对 ctx.sessionPersistence 的薄适配） */
+  readonly sessions: SessionStoreFacade
   /** Phase 2 跨进程环境锁端口（宿主注入；测试 mock 不注入 → 无锁环境） */
   mutationLock?: MutationLockPort
   /** Phase 3 SAFE MODE：注入同步谓词（读内存标志，供 withMutationLock isBlocked 用；env-lock 不识 policy） */
@@ -992,13 +1044,14 @@ class ConfigManagerHostContext implements HostContext {
     this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile, undefined, this.msg)
     this.workspace = new DshWorkspaceFacade(ctx, this.msg)
     this.fs = new DshFileSystemFacade(homeDir, this.msg)
+    this.sessions = new DshSessionStoreFacade(ctx, homeDir, this.msg)
   }
 }
 
 /* ---------------------------------------------------------------- routes */
 
 /** Controlled staging roots guard. */
-function isControlledPath(target: string, roots: string[]): boolean {
+export function isControlledPath(target: string, roots: string[]): boolean {
   const t = resolve(target)
   return roots.some((root) => isSameOrChild(t, resolve(root)))
 }
@@ -1023,14 +1076,14 @@ async function dependencyAvailable(command: string): Promise<boolean> {
 
 /** 导出/导入执行超时（ms）。正常导出秒级完成；此上限只兜底「宿主卡死」场景，
  * 让客户端拿到明确错误而不是永远停在进度条。 */
-const ROUTE_TIMEOUT_MS = 5 * 60 * 1000
+export const ROUTE_TIMEOUT_MS = 5 * 60 * 1000
 
 /** WebDAV 单请求超时（ms）：慢速 WebDAV（如坚果云限速）上传大快照/读写索引
  * 需要比 git 通道更宽裕的窗口；错误消息会带上实际 ms，便于用户判断。 */
 const WEBDAV_TIMEOUT_MS = 120_000
 
 /** 带超时的 Promise：超时以明确错误拒绝（promise 自身由调用方负责，此处只计时）。 */
-async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+export async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => reject(new Error(message)), ms)
@@ -1072,8 +1125,28 @@ export async function tryDecryptCredentials(
   return collectCredentialRefs(parsed)
 }
 
+/**
+ * 路由组依赖（src/routes/**）的真值类型。
+ *
+ * 为什么是「打印出来的字面类型」而不是 ReturnType<typeof makeRouteEnv>：makeRouteEnv 是
+ * makeRoutes 内部的闭包构造，TypeScript 不能把函数内的推断类型导出。做法是：临时加一行
+ * const probe: number = makeRouteEnv()，用 tsc --noEmit --noErrorTruncation 打印推断类型
+ * （见 W1 报告的重测配方），把结果落到这里；makeRoutes 里的 const routeEnv: RouteEnvInferred =
+ * 注解保证两侧不漂移（新增依赖漏登记会在构造点报错）。
+ */
+/**
+ * 路由组依赖（src/routes/**）的真值类型。
+ *
+ * 为什么是「打印出来的字面类型」而不是 ReturnType<typeof makeRouteEnv>：makeRouteEnv 是
+ * makeRoutes 内部的闭包构造，TypeScript 不能把函数内的推断类型导出。做法是：临时加一行
+ * const probe: number = makeRouteEnv()，用 tsc --noEmit --noErrorTruncation 打印推断类型
+ * （见 W1 报告的重测配方），把结果落到这里；makeRoutes 里的 const routeEnv: RouteEnvInferred =
+ * 注解保证两侧不漂移（新增依赖漏登记会在构造点报错）。
+ */
+export type RouteEnvInferred = { adapters: ConfigAdapter<unknown>[]; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { includeOptInSections?: boolean; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<"git" | "webdav", SyncSelection>>; selectionHasOptInSections: (channel: SyncTransportType) => boolean; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
+
 /** 解密错误 → 用户可读文本：BAD_PASSWORD 只报「密码错误」（不泄内部细节），其余原文 */
-function decryptErrorText(error: unknown, msg: MsgFunc): string {
+export function decryptErrorText(error: unknown, msg: MsgFunc): string {
   if (error instanceof SecurityError && error.code === 'BAD_PASSWORD') {
     return msg('import.encryptedPasswordWrong')
   }
@@ -1114,25 +1187,18 @@ interface RoutesDeps {
 
 /* -------------------------------------------------- sync 路由（m-sync-ui） */
 
-/** 同步路由可预期的请求级错误（status 缺省 400；引擎/传输失败走 500） */
-export class SyncRouteError extends Error {
-  readonly status: number
-
+/** 同步路由可预期的请求级错误（status 缺省 400；引擎/传输失败走 500）。
+ * 继承 kit 的 RouteError → 错误→HTTP 映射全仓只有 writeRouteError 一份。 */
+export class SyncRouteError extends RouteError {
   constructor(message: string, status: number = 400) {
-    super(message)
+    super(message, status)
     this.name = 'SyncRouteError'
-    this.status = status
   }
 }
 
-/** 同步路由错误统一出口：SyncRouteError 用其 status，其余 500（GitTransport 错误消息已脱敏） */
+/** 同步路由错误出口：等价于 kit 的统一出口（SyncRouteError 是 RouteError 子类，status 保真）。 */
 export function writeSyncRouteError(res: ServerResponse, error: unknown): void {
-  if (error instanceof SyncRouteError) {
-    writeJson(res, error.status, { error: error.message })
-    return
-  }
-  const message = error instanceof Error ? error.message : String(error)
-  writeJson(res, 500, { error: message })
+  writeRouteError(res, error)
 }
 
 /** parseSyncBody 的凭据写入依赖（只用到 set；测试可注入内存 mock）。 */
@@ -1152,7 +1218,7 @@ export async function parseSyncBody(
   body: Record<string, unknown>,
   deps: ParseSyncBodyDeps,
 ): Promise<SyncConfig> {
-  const transport = body['transport'] === 'webdav' ? 'webdav' : 'git'
+  const transport = parseSyncChannel(body['transport']) ?? 'git'
   if (transport === 'webdav') {
     const url = typeof body['url'] === 'string' ? body['url'].trim() : ''
     if (url === '') throw new SyncRouteError('url is required for webdav')
@@ -1255,13 +1321,19 @@ export function extractSyncSections(
  * 形状非法（数组 / 标量 / 缺对象）→ undefined = 与其它 deviceSpecific 分区一样跳过并告警。
  * limit 非法（非整数 / 负数）→ 归一化为宿主缺省（5）；超大 → 钳制。
  */
-export function extractSyncSessions(body: Record<string, unknown>): { limit?: number } | undefined {
+export function extractSyncSessions(body: Record<string, unknown>): { limit?: number; include?: string[] } | undefined {
   const raw = body['sessions']
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
-  const limit = (raw as Record<string, unknown>)['limit']
-  return typeof limit === 'number' && Number.isInteger(limit) && limit >= 0
-    ? { limit: Math.min(limit, 10000) }
-    : {}
+  const rec = raw as Record<string, unknown>
+  const limit = rec['limit']
+  const out: { limit?: number; include?: string[] } =
+    typeof limit === 'number' && Number.isInteger(limit) && limit >= 0
+      ? { limit: Math.min(limit, 10000) }
+      : {}
+  // 显式勾选的会话单元（非空时优先于 limit；形状非法一律丢弃，不猜）
+  const include = normalizeSessionsInclude(rec['include'])
+  if (include.length > 0) out.include = include
+  return out
 }
 
 /** 需要人工决策的 PlanItemKind（一键同步 needsReview 判定 + 逐项确认标记）。
@@ -1269,7 +1341,7 @@ export function extractSyncSessions(body: Record<string, unknown>): { limit?: nu
  * 默认采纳、不逐项展示、无需手动选择（product requirement）。
  * issue #35：'Warning' 必须**可见**——它承载「本次同步会剔除哪些无法满足的声明」这类
  * 改变配置语义的信息；此前非决策项默认自动采用且不展示，用户只看到「同步成功」。 */
-const REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
+export const REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
   'Conflict', 'MissingSecret', 'MissingDependency', 'Error', 'PathMapping', 'Warning',
 ])
 
@@ -1282,7 +1354,7 @@ const REVIEW_KINDS: ReadonlySet<PlanItemKind> = new Set([
  * 默认不采用反而会静默丢掉 allowBuilds / 冷静期配置）。
  * 注意：与客户端 sync-view.ts 的同名判定必须保持一致（两侧刻意重复，避免跨端 import）。
  */
-function isToolchainChangeItem(item: { itemId: string; detail?: string | undefined }): boolean {
+export function isToolchainChangeItem(item: { itemId: string; detail?: string | undefined }): boolean {
   return item.itemId === 'plugins:pnpm-workspace' && item.detail !== undefined && item.detail !== ''
 }
 
@@ -1302,7 +1374,7 @@ interface SyncConfirmItem {
 }
 
 /** 把 ImportPlan 投影为逐项可确认的差异项（默认采用 Create/Update/Install；人工项默认不采用）。 */
-function planToConfirmItems(plan: ImportPlan): SyncConfirmItem[] {
+export function planToConfirmItems(plan: ImportPlan): SyncConfirmItem[] {
   return plan.items.map((item) => {
     const manual = REVIEW_KINDS.has(item.kind)
     let conflict: SyncConfirmItem['conflict']
@@ -1332,12 +1404,12 @@ function planToConfirmItems(plan: ImportPlan): SyncConfirmItem[] {
 }
 
 /** autosync interval 类型守卫 */
-function isAutosyncInterval(v: unknown): v is AutosyncInterval {
+export function isAutosyncInterval(v: unknown): v is AutosyncInterval {
   return v === '5m' || v === '15m' || v === '30m' || v === '60m' || v === '6h' || v === '12h' || v === '24h'
 }
 
 /** 自动同步状态响应（GET /sync/autosync 与 POST 回填；读盘计算 elapsedMs）。 */
-async function buildAutosyncStatus(dir: string, channel: SyncTransportType): Promise<AutosyncStatusResponse> {
+export async function buildAutosyncStatus(dir: string, channel: SyncTransportType): Promise<AutosyncStatusResponse> {
   const cfg = await readAutosyncConfig(dir, channel)
   const elapsedMs = cfg.lastRunAt === undefined || cfg.lastRunAt === ''
     ? -1
@@ -1355,7 +1427,7 @@ async function buildAutosyncStatus(dir: string, channel: SyncTransportType): Pro
 }
 
 /** 全部通道的自动同步状态（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
-async function buildAutosyncStatusByChannel(dir: string): Promise<Record<SyncTransportType, AutosyncStatusResponse>> {
+export async function buildAutosyncStatusByChannel(dir: string): Promise<Record<SyncTransportType, AutosyncStatusResponse>> {
   const all = await readAllAutosyncConfigs(dir)
   const build = async (channel: SyncTransportType): Promise<AutosyncStatusResponse> => {
     const cfg = all[channel]
@@ -1373,7 +1445,10 @@ async function buildAutosyncStatusByChannel(dir: string): Promise<Record<SyncTra
       ...(cfg.lastRunHistoryId !== undefined ? { lastRunHistoryId: cfg.lastRunHistoryId } : {}),
     }
   }
-  return { git: await build('git'), webdav: await build('webdav') }
+  const out = {} as Record<SyncTransportType, AutosyncStatusResponse>
+  // t32/B7：通道集合来自唯一枚举（顺序与逐个 await 语义不变）
+  for (const channel of SYNC_CHANNELS) out[channel] = await build(channel)
+  return out
 }
 
 /** GET /sync/autosync 响应类型（与 sync-api.ts AutosyncStatusResponse 对齐） */
@@ -1546,7 +1621,7 @@ export async function executeRestorePlan(
 }
 
 /** 宿主 restore 执行器装配：ctx.fs（home-relative）+ 快照目录（node fs）+ runDshPlugin。 */
-function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: string): RestoreExecutor {
+export function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: string): RestoreExecutor {
   const profileDir = resolveProfileDir(host.homeDir, profile)
   let seq = 0
   return {
@@ -1580,7 +1655,7 @@ function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: st
  * name 必填（非空字符串，trim 后取）；description 可选字符串；categories 可选字符串数组；
  * mode 可选 'migrate' | 'share'（F6 分享模式，非法值忽略→缺省 migrate）。非法 → null（调用方返回 400）。
  */
-function parseMeForm(raw: unknown): { name: string; id?: string; description?: string; categories?: string[]; mode?: 'migrate' | 'share' } | null {
+export function parseMeForm(raw: unknown): { name: string; id?: string; description?: string; categories?: string[]; mode?: 'migrate' | 'share' } | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
   const obj = raw as Record<string, unknown>
   const name = typeof obj['name'] === 'string' ? obj['name'].trim() : ''
@@ -1624,6 +1699,9 @@ export interface PluginDiagnostics {
   /** dsh.profile.bundles 声明（非空即「替换默认插件栈」） */
   bundles: string[]
 }
+
+type SelectionView = { mode: SyncSelectionMode; sections: SectionId[]; sessionsLimit: number; sessionsInclude: string[]; encrypt: boolean; includeSecrets: boolean }
+
 
 /**
  * 读取插件诊断信息（issue #28）：把「插件到底读了哪个目录 / 哪个 profile / 看到什么」变成
@@ -1754,6 +1832,49 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
    * 进程生命周期内存登记；同 kind 并发被 RunRegistry 拒绝，单 run 恒只有一个当前项。 */
   const runAbortControllers = new Map<string, AbortController>()
 
+  /**
+   * 运行中心：**run 级**终止通道（/runs/cancel → 安全点暂停 → /runs/cancel/decision）。
+   * 与 runAbortControllers（**项级**「跳过当前插件」）是两套信号，语义不同，绝不合并：
+   *  - 项级 signal：abort 当前项的子进程（kill 进程树 + 清半装），导入继续；
+   *  - run 级 signal：只在计划项边界生效，然后由用户选择「回滚」或「保留已应用项」。
+   * decided 保证「用户选择」与「等待超时」只有一方生效（超时按安全侧默认回滚）。
+   */
+  const runCancels = new Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>()
+  /** 等用户选择的超时（缺省 5 分钟）：超时按安全侧默认回滚，绝不让 run 永久卡在安全点。 */
+  const CANCEL_DECISION_TIMEOUT_MS = 5 * 60 * 1000
+
+  /**
+   * bundle 可解析探测（启动自洽审计用）。**保守优先**：只有「所有探测根都找不到它」才判不可解析。
+   * 探测根 = profile 目录 / homeDir / 插件 dataDir / 进程 cwd 下的 node_modules —— DSH 也会从
+   * 自己的安装位置解析 bundle，本机探不到核心包属预期，故 core 侧对 @deepseek-ai/* 静默保留。
+   * 宁可少剪也不要误剪：误剪一个用户 bundle = 那个插件静默不再加载。
+   */
+  const bundleResolvable = async (name: string): Promise<boolean> => {
+    const probe = (root: string): boolean => {
+      try { return existsSync(join(root, 'node_modules', ...name.split('/'), 'package.json')) } catch { return false }
+    }
+    for (const root of [join(host.homeDir, 'profiles', host.profile ?? 'web'), host.homeDir, dataDir, process.cwd()]) {
+      if (probe(root)) return true
+    }
+    return false
+  }
+
+  /**
+   * 「保留已应用项」分支的启动自洽审计（core 只出判据，读/写/解析能力全部由宿主注入）。
+   * 这是「用户选择保留之后，DSH 还能起来吗」的唯一保证来源；缺了它 core 会如实标注「未审计」。
+   */
+  const bootSafetyAudit = async (): Promise<BootSafetyReport> => auditBootSafety({
+    profile: host.profile ?? 'web',
+    readText: async (relPath) => {
+      // readFile 的静态类型是 Uint8Array（不是 Buffer）：必须显式走 Buffer 才能给 toString 传编码
+      try { return Buffer.from(await host.fs.readFile(relPath)).toString('utf8') } catch { return null }
+    },
+    writeText: async (relPath, text) => { await host.fs.writeFile(relPath, Buffer.from(text, 'utf8')) },
+    resolveBundle: bundleResolvable,
+    parseYaml: (text) => yaml.load(text),
+    msg,
+  })
+
   /** 已知 adapter id 集合（push 请求体 sections 校验用）。 */
   const knownSyncSectionIds = new Set(adapters.map((a) => a.id))
   /** 可同步分区目录（status 回填 UI「同步分区」勾选列表）。
@@ -1793,18 +1914,6 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     currentProfile: () => host.profile ?? 'web',
   })
 
-  /** Fence + method guard (mirrors dsh-ssh). */
-  const guard = (req: IncomingMessage, res: ServerResponse, method: string): boolean => {
-    if (!isLoopbackRequest(req)) {
-      writeJson(res, 403, { error: 'forbidden: loopback-only' })
-      return false
-    }
-    if (req.method !== method) {
-      writeJson(res, 405, { error: `method not allowed: ${req.method}` })
-      return false
-    }
-    return true
-  }
 
   /**
    * Phase 2 跨进程锁路由门（destructive 公共入口）。
@@ -1929,26 +2038,26 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       encryptPasswordConfigured: await syncPasswordConfigured(syncPasswordRef('ENCRYPT', channel)),
       decryptPasswordConfigured: await syncPasswordConfigured(syncPasswordRef('DECRYPT', channel)),
     })
-    const [git, webdav] = await Promise.all([describe('git'), describe('webdav')])
-    return { git, webdav }
+    // t32/B7：通道集合来自唯一枚举（保持 Promise.all 并发语义）
+    const pairs = await Promise.all(SYNC_CHANNELS.map(async (channel) => [channel, await describe(channel)] as const))
+    return Object.fromEntries(pairs) as Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean }>
   }
 
   /** 分区选择视图形状（无 schemaVersion；密码值永不进视图）。 */
-  type SelectionView = { mode: SyncSelectionMode; sections: SectionId[]; sessionsLimit: number; encrypt: boolean; includeSecrets: boolean }
 
+  /** 全部通道的分区选择视图（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
   /** 指定通道的分区选择视图。 */
   const selectionView = async (channel: SyncTransportType): Promise<SelectionView> => {
     const sel = await ensureSelectionLoaded(channel)
-    return { mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
+    return { mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, sessionsInclude: sel.sessionsInclude, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets }
   }
 
-  /** 全部通道的分区选择视图（status 路由一次返回；UI 按当前 tab 取对应通道）。 */
   const selectionViewByChannel = async (): Promise<Record<SyncTransportType, SelectionView>> => {
     const all = await readAllSyncSelections(syncDir)
     selectionCache.git = all.git
     selectionCache.webdav = all.webdav
     const view = (sel: SyncSelection): SelectionView =>
-      ({ mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets })
+      ({ mode: sel.mode, sections: sel.sections, sessionsLimit: sel.sessionsLimit, sessionsInclude: sel.sessionsInclude, encrypt: sel.encrypt, includeSecrets: sel.includeSecrets })
     return { git: view(all.git), webdav: view(all.webdav) }
   }
 
@@ -1994,7 +2103,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         msg,
       })
     }
-    const channel: SyncTransportType = isWebDavConfig(cfg) ? 'webdav' : 'git'
+    const channel: SyncTransportType = channelOf(cfg)
     const sections = effectiveSections(selectionCache[channel] ?? defaultSyncSelection())
     return new SyncEngine({
       ctx: host,
@@ -2007,6 +2116,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       msg,
       ...(sections === undefined ? {} : { sections }),
       ...(engineOpts.includeOptInSections === true ? { includeOptInSections: true } : {}),
+      // m-retention：远端快照裁剪与本地备份产物共用同一份 GFS 保留策略（缺省 = 最近 10 个，
+      // 与改造前逐字等价）；用户改完策略即时生效（每次 prune 都重读）。
+      retentionPolicy: () => retentionPolicyProvider(),
     })
   }
 
@@ -2224,13 +2336,80 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     },
   })
 
+  /**
+   * 路由组的显式依赖（W1）：src/routes/** 只从这里取依赖，不再靠闭包捕获。
+   * 类型由本构造推断（RouteEnvInferred）→ 组文件与构造点共用一份真值。
+   */
+  function makeRouteEnv() {
+    return {
+      adapters,
+      backupScheduler,
+      buildMarketSummary,
+      credentials,
+      dataDir,
+      exportsDir,
+      githubAuth,
+      githubClientId,
+      githubClientSecret,
+      githubFlows,
+      history,
+      host,
+      itemCached,
+      knownSyncSectionIds,
+      makeImporter,
+      makeMarketReader,
+      makeRecoveryExecutors,
+      makeSyncEngine,
+      marketBootAutoRefreshed: { value: marketBootAutoRefreshed },
+      marketCacheIndex,
+      marketCacheItemDir,
+      marketStarCache,
+      marketWorkDir,
+      meGitHubRest,
+      meService,
+      meTokenProvider,
+      msg,
+      prepareSync,
+      profiles,
+      pruneStagedMarketZips,
+      readCachedIndexObj,
+      recoveryOrchestrator,
+      resolveSyncPassword,
+      bootSafetyAudit,
+      cancelDecisionTimeoutMs: CANCEL_DECISION_TIMEOUT_MS,
+      roots,
+      runAbortControllers,
+      runCancels,
+      runs,
+      scheduler,
+      selectionCache,
+      selectionHasOptInSections,
+      selectionView,
+      selectionViewByChannel,
+      snapshotEntrySections,
+      snapshotsDir,
+      syncCredentialsByChannelView,
+      syncDir,
+      syncPasswordConfigured,
+      syncSectionCatalog,
+      syncSessions,
+      tmpDir,
+      tryAppendHistory,
+      withMutationGate,
+      writeItemCache,
+    }
+  }
+
+  /**
+   * 路由表：本文件只保留被源码级守卫按**文件窗口**钉住的 8 条（host-entry 审计 F-04 记录的
+   * tests/host/**、src/core/model-tools.test.ts、src/core/phase1-wiring.test.ts 的窗口断言）。
+   * 其余 57 条已按域拆到 src/routes/*.ts，由 buildRoutes 组装。
+   * 注册顺序不影响匹配：命名路由必须互不相同（webServer 契约）。
+   */
+  const routeEnv: RouteEnvInferred = makeRouteEnv()
   const routesList: WebRoute[] = [
     // ------------------------------------------------------------- status
-    {
-      kind: 'exact',
-      path: API.status,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
+    endpoint({ path: API.status, methods: ['GET'] }, async (req, res) => {
         // issue #28 诊断位：把「插件实际读的是哪个目录 / 哪个 profile / 看到几个插件」暴露出来。
         // 插件清单来自 <homeDir>/profiles/<profile>/package.json 的 dependencies，三处任一
         // 与实际情况不符（Desktop 用了别的 profile / 别的 DSH_HOME，或插件只写在 dsh.profile.bundles
@@ -2244,19 +2423,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           arch: host.arch,
           ...pluginDiag,
         })
-      },
-    },
+    }),
     // ------------------------------------------------------------- export
-    {
-      kind: 'exact',
-      path: API.export,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
+    endpoint({ path: API.export, methods: ['POST'] }, async (req, res) => {
+        const body = await requireJsonObject(req)
         const includeSecrets = body['includeSecrets'] === true
         const only = Array.isArray(body['only'])
           ? body['only'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
@@ -2393,22 +2563,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           host.log.error('导出失败', { error: message })
           writeJson(res, 500, { error: message, runId })
         }
-      },
-    },
+    }),
     // ---------------------------------------------------- export-preview
     // P2-⑫：导出前只读预览（不落盘 ZIP）：对选中分区逐个 adapter.export 收集 counts
     // （与真实导出一致的 secret 剥离，不导出任何值），估算 JSON 载荷大小，返回可展示摘要。
     // 零写入；loopback fence 必备。
-    {
-      kind: 'exact',
-      path: API.exportPreview,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
+    endpoint({ path: API.exportPreview, methods: ['POST'] }, async (req, res) => {
+        const body = await requireJsonObject(req)
         const only = Array.isArray(body?.['only'])
           ? body['only'].filter((x): x is SectionId => typeof x === 'string' && (SECTION_IDS as readonly string[]).includes(x))
           : undefined
@@ -2423,6 +2584,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           // 分区读取失败（只能靠「请求了但没回来」推断）。两个字段同时保留：计数是既有契约（旧客户端
           // 仍按它渲染「N 个分区导出失败已跳过」），id 列表是新增的精确信息。
           const failedSections: SectionId[] = []
+          /** sessions 的单元级活跃时间（会话日志 mtime）—— 选择器「历史对话按最新到最旧」的排序兜底 */
+          let sessionActivityTimes: Map<string, number> | undefined
           for (const adapter of adapters) {
             if (!selected.includes(adapter.id)) continue
             try {
@@ -2446,6 +2609,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
                 // 单元枚举失败不拖垮预览：退化为「不可细分」，用户仍可整分区导出
                 items = []
               }
+              // sessions：单元级活跃时间（会话日志 mtime）—— 元数据缓存没覆盖的会话靠它排序
+              if (adapter.id === 'sessions' && items.length > 0 && adapter.unitActivityTimes !== undefined) {
+                try {
+                  sessionActivityTimes = await adapter.unitActivityTimes(host, section)
+                } catch {
+                  sessionActivityTimes = undefined
+                }
+              }
               preview.push({ section: adapter.id, count, sizeBytes: size, items })
               totalSize += size
             } catch {
@@ -2454,14 +2625,25 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
               // 单项失败不拖垮预览（与真实导出同语义：分区级失败跳过）
             }
           }
-          // sessions 分区：补「界面标题 + 按工作区分组」（读 DSH 的 storages 缓存；只读尽力而为，
-          // 读不到就保持目录名 —— 绝不因为元数据缺失让预览失败）。
+          // sessions 分区：补「界面标题 + 按工作区分组」，并按「工作区 → 最近活跃在前」排序
+          // （时间第一口径 = DSH storages 缓存里的 lastPromptAt，缓存没覆盖的会话用上面现算的日志 mtime；
+          // 两者都拿不到就排在组尾）。整段只读尽力而为，读不到就保持目录名 —— 绝不因为元数据缺失让预览失败。
           const sessionsEntry = preview.find((p) => p.section === 'sessions')
           if (sessionsEntry !== undefined && sessionsEntry.items.length > 0) {
             try {
-              sessionsEntry.items = applySessionMeta(sessionsEntry.items, await readSessionMeta(host))
+              sessionsEntry.items = applySessionMeta(sessionsEntry.items, await readSessionMeta(host), 'sessions', sessionActivityTimes)
             } catch {
               /* 保持目录名（旧行为） */
+            }
+            // 子代理会话标出「父对话」：选择器据此做「勾父带子 / 勾子带父」联动。宿主不下发这份关系，
+            // 界面就无从联动（用户实测：勾 2 条、包里 41 条）。尽力而为：读不到就不标（预览照常）。
+            const facade = host.sessions
+            if (facade?.parentRelations !== undefined) {
+              try {
+                sessionsEntry.items = applySessionParentLinks(sessionsEntry.items, subagentParentMap(await facade.parentRelations()))
+              } catch {
+                /* 关系读不到 → 不标父对话（不猜），联动静默失效但预览不受影响 */
+              }
             }
           }
           writeJson(res, 200, {
@@ -2476,157 +2658,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
-    },
-    // ------------------------------------------------------------ download
-    {
-      kind: 'exact',
-      path: API.download,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const p = queryParam(url, 'path')
-        if (p === undefined || p === '') {
-          writeJson(res, 400, { error: 'path query parameter is required' })
-          return
-        }
-        const target = resolve(p)
-        if (!isControlledPath(target, roots)) {
-          writeJson(res, 403, { error: 'path outside controlled staging area' })
-          return
-        }
-        let stat
-        try {
-          stat = await fs.stat(target)
-        } catch {
-          writeJson(res, 404, { error: 'file not found' })
-          return
-        }
-        if (!stat.isFile()) {
-          writeJson(res, 400, { error: 'not a file' })
-          return
-        }
-        res.writeHead(200, {
-          'content-type': 'application/octet-stream',
-          'content-length': String(stat.size),
-          'content-disposition': `attachment; filename="${basename(target).replace(/"/g, '')}"`,
-          'referrer-policy': 'no-referrer',
-        })
-        await new Promise<void>((resolvePromise, reject) => {
-          const source = createReadStream(target)
-          source.on('error', reject)
-          res.on('error', reject)
-          source.pipe(res)
-          source.on('end', resolvePromise)
-        })
-      },
-    },
-    // -------------------------------------------------------------- upload
-    {
-      kind: 'exact',
-      path: API.upload,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const name = queryParam(url, 'name') ?? 'backup.zip'
-        const declared = Number(req.headers['content-length'])
-        if (Number.isFinite(declared) && declared > MAX_UPLOAD_BYTES) {
-          writeJson(res, 413, { error: 'upload body too large' })
-          return
-        }
-        const tmp = join(tmpDir, `upload-${randomBytes(6).toString('hex')}.zip`)
-        try {
-          const sizeBytes = await writeRequestBodyToFile(req, tmp, MAX_UPLOAD_BYTES)
-          // 探测上传文件是否为整体加密备份容器（DCA1 magic）：加密容器不能直接当作 ZIP 解析，
-          // UI 据此插入「解锁加密备份」阶段（decrypt-archive），解出明文 ZIP 后再走导入。
-          let containerType: 'zip' | 'encrypted' = 'zip'
-          try {
-            const first = await fs.readFile(tmp)
-            containerType = isArchiveBlob(first) ? 'encrypted' : 'zip'
-          } catch {
-            containerType = 'zip'
-          }
-          writeJson(res, 200, { zipPath: tmp, name, sizeBytes, containerType })
-        } catch (error) {
-          await fs.rm(tmp, { force: true }).catch(() => undefined)
-          if (!res.headersSent) {
-            writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          } else {
-            res.destroy()
-          }
-        }
-      },
-    },
-    // ------------------------------------------------------ decrypt-archive
-    // 整体加密备份容器的解锁（只读，零写入到任何配置）：用备份密码解密上传的加密容器，
-    // 得到明文 ZIP 写入受控临时目录并返回新 zipPath，供 analyze/plan/execute 引用。
-    // 导出时容器密码与内部 secrets.enc 密码同源（同一 password 派生两层加密），
-    // 因此顺带在明文 ZIP 上解出内部凭据覆盖清单（refs，非值）一并返回——
-    // 导入全程只需输入这一次密码，无需第二个密码校验页面。
-    // 密码仅内存随请求体传入，绝不落盘/落日志；解出的明文 ZIP 亦为临时文件，导入结束后清理。
-    {
-      kind: 'exact',
-      path: API.decryptArchive,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const encryptedPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
-        if (encryptedPath === '' || !isControlledPath(encryptedPath, roots)) {
-          writeJson(res, 400, { error: 'zipPath is required and must reference a staged backup' })
-          return
-        }
-        const password =
-          typeof body?.['password'] === 'string' && body['password'] !== '' ? body['password'] : undefined
-        if (password === undefined) {
-          writeJson(res, 400, { error: msg('import.encryptedPasswordRequired') })
-          return
-        }
-        let plainZipPath: string | null = null
-        try {
-          const container = await fs.readFile(encryptedPath)
-          if (!isArchiveBlob(container)) {
-            writeJson(res, 400, { error: msg('import.notEncryptedContainer') })
-            return
-          }
-          // 校验密码（只读）+ 取真实解密参数
-          const verified = await verifyEncryptedBlob(container, password)
-          if (!verified.valid) {
-            writeJson(res, 400, { error: msg('import.notEncryptedContainer') })
-            return
-          }
-          if (!verified.ok || verified.info === null || verified.kdf === null) {
-            writeJson(res, 400, { error: decryptErrorText(new SecurityError('BAD_PASSWORD', '解密认证失败'), msg) })
-            return
-          }
-          // 解密得到明文 ZIP（Security-sensitive transient：随机独占名 + 0600 + 先权限后写，用后即删）
-          const plain = await decryptArchive(container, verified.info, verified.kdf, password)
-          plainZipPath = join(tmpDir, `decrypted-${randomBytes(6).toString('hex')}.zip`)
-          await atomicWriteFile(plainZipPath, plain, { mode: 0o600, symlink: 'reject' })
-          // 顺带解出内部凭据覆盖清单（同一密码；旧版 DSC1-only 备份无 secrets.enc → 空）
-          let refs: string[] = []
-          try {
-            const decrypted = await tryDecryptCredentials(plainZipPath, password)
-            if (decrypted !== undefined) refs = [...decrypted.keys()]
-          } catch {
-            // 内部凭据解密失败不影响容器解锁结果（密码已通过容器 GCM 认证）
-          }
-          writeJson(res, 200, { zipPath: plainZipPath, refs })
-        } catch (error) {
-          if (plainZipPath !== null) await fs.rm(plainZipPath, { force: true }).catch(() => undefined)
-          writeJson(res, 400, { error: decryptErrorText(error, msg) })
-        }
-      },
-    },
+    }),
     // ------------------------------------------------------------- analyze
-    {
-      kind: 'exact',
-      path: API.analyze,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
+    endpoint({ path: API.analyze, methods: ['POST'] }, async (req, res) => {
         const body = await readJsonBody(req)
         const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
         if (zipPath === '' || !isControlledPath(zipPath, roots)) {
@@ -2652,14 +2686,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
-    },
+    }),
     // ---------------------------------------------------------------- plan
-    {
-      kind: 'exact',
-      path: API.plan,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
+    endpoint({ path: API.plan, methods: ['POST'] }, async (req, res) => {
         const body = await readJsonBody(req)
         const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
         if (zipPath === '' || !isControlledPath(zipPath, roots)) {
@@ -2671,8 +2700,21 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           writeJson(res, 400, { error: 'decisions is required' })
           return
         }
+        // 加密备份的密码（仅内存，与 /analyze、/execute 同源）：计划生成必须知道「归档里有哪些
+        // 凭据值」——否则这些值不会进计划，导入时被静默丢掉（真机反馈：导入密钥没生效）。
+        const planPassword = typeof body?.['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+          ? body['decryptPassword']
+          : undefined
         try {
-          const plan = await makeImporter().createImportPlan(zipPath, decisions)
+          let decryptedCredentials: Map<string, string> | undefined
+          try {
+            decryptedCredentials = await tryDecryptCredentials(zipPath, planPassword)
+          } catch (error) {
+            // 提供了密码却解不开（错密码 / 密文被篡改）：如实报错，绝不静默降级为「没有凭据」
+            writeJson(res, 400, { error: decryptErrorText(error, msg) })
+            return
+          }
+          const plan = await makeImporter().createImportPlan(zipPath, decisions, { decryptedCredentials })
           // sessions 计划项：补「会话标题 + 工作区分组」（用户实测：导入页此前只显示会话目录名）。
           // 只在计划真的含该分区时才读 storages；读不到就保持目录名，绝不让计划生成失败。
           if (plan.items.some((i) => i.adapter === 'sessions')) {
@@ -2686,2275 +2728,12 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
-    },
-    // ------------------------------------------------------------ progress
-    // m1：查询单个 run 的实时状态（轮询 / 刷新恢复用；runId 不可猜，走 loopback-only 守卫）
-    {
-      kind: 'exact',
-      path: API.progress,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const runId = queryParam(url, 'runId')
-        if (runId === undefined || runId === '') {
-          writeJson(res, 400, { error: 'runId query parameter is required' })
-          return
-        }
-        const state = runs.get(runId)
-        if (state === undefined) {
-          writeJson(res, 404, { error: msg('run.notFound', { runId }) })
-          return
-        }
-        writeJson(res, 200, state)
-      },
-    },
-    // ----------------------------------------------------------------- runs
-    // m1：列出当前活跃（running）的 run（刷新恢复时重新订阅进度用）
-    {
-      kind: 'exact',
-      path: API.runs,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        writeJson(res, 200, runs.listActive())
-      },
-    },
-    // ------------------------------------------------------------- execute
-    {
-      kind: 'exact',
-      path: API.execute,
-      handler: withMutationGate('import-apply', async (req, res, lockCtx, journalCtx) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
-        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
-          writeJson(res, 400, { error: 'zipPath is required and must reference a staged backup' })
-          return
-        }
-        const plan = body?.['plan'] as ImportPlan | undefined
-        if (plan === undefined || typeof plan !== 'object' || !Array.isArray(plan['items'])) {
-          writeJson(res, 400, { error: 'plan is required and must be an ImportPlan' })
-          return
-        }
-        const opts = (body?.['opts'] ?? {}) as Record<string, unknown>
-        // 加密备份的解密密码（仅内存，来自导入向导 decrypt 阶段；绝不落盘/落日志）。
-        // core 层强制：加密备份必须成功解密后才允许执行（import.encryptedPasswordRequired）。
-        const decryptPassword =
-          typeof opts['decryptPassword'] === 'string' && opts['decryptPassword'] !== ''
-            ? opts['decryptPassword']
-            : undefined
-        // m1：执行开始注册 run（同 kind 已有进行中任务 → 409 拒绝，防止重复导入）
-        let run: RunState
-        try {
-          run = runs.register('import')
-        } catch (error) {
-          writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
-          return
-        }
-        const runId = run.runId
-        // 用户「跳过当前插件」通道：登记本 run 的当前项中止控制器（/execute/skip abort 它）
-        const abortController = new AbortController()
-        runAbortControllers.set(runId, abortController)
-        try {
-          let decryptedCredentials: Map<string, string> | undefined
-          try {
-            decryptedCredentials = await tryDecryptCredentials(zipPath, decryptPassword)
-          } catch (error) {
-            // 解密失败（密码错误/篡改）：转用户可读错误，不落 run 账（未开始执行）
-            throw new Error(decryptErrorText(error, msg))
-          }
-          const result = await makeImporter().executeImportPlan(zipPath, plan, {
-            confirm: opts['confirm'] === true,
-            secretInputs:
-              opts['secretInputs'] !== null && typeof opts['secretInputs'] === 'object'
-                ? opts['secretInputs'] as Record<string, string>
-                : {},
-            rollbackOnError: opts['rollbackOnError'] === true,
-            decryptedCredentials,
-            // Phase 4 生产 snapshot 接线：deferred journal 绑定的 ctx 透传给引擎，
-            // 使快照创建后立即 bindSnapshot（SNAPSHOT_CREATED）→ markApplying（APPLYING）再执行。
-            snapshotBinding: journalCtx,
-            // m1 埋点：每开始一个计划项实时更新 run 状态（detail=当前执行项，
-            // 供 UI 显示「正在安装插件 X」/ 判定跳过按钮；/progress 轮询可见）
-            onItemStart: (info) => {
-              runs.update(runId, {
-                section: info.adapter,
-                item: info.index,
-                itemTotal: info.total,
-                detail: info.detail,
-              })
-            },
-            // m1 埋点：每完成一个计划项实时更新 run 状态（/progress 轮询可见）
-            onItem: (info) => {
-              runs.update(runId, {
-                section: info.adapter,
-                item: info.index,
-                itemTotal: info.total,
-                detail: info.detail ?? info.adapter,
-              })
-            },
-            // 执行日志：逐计划项操作 + 子进程命令行。宿主侧先 redact 再落账，
-            // 保证 RunState.log 恒为非敏感（/progress 轮询回传浏览器）。
-            onLog: (line) => {
-              runs.appendLog(runId, redact(line))
-            },
-          })
-          // 结束写结果：导入结果落账（供 /progress 查询与刷新恢复）
-          runs.finish(runId, result)
-          // Phase 6：迁移历史（best-effort）。sections 从导入计划的 items[].adapter 去重派生。
-          const importSections = Array.from(
-            new Set(plan.items.map((i) => (i as { adapter?: string }).adapter).filter((s): s is string => typeof s === 'string' && s !== '')),
-          )
-          const historyError = await tryAppendHistory({
-            kind: 'import',
-            result: result.ok ? 'success' : 'failed',
-            sections: importSections,
-            operationId: journalCtx?.operationId,
-            snapshotId: result.snapshotId ?? undefined,
-            runId,
-            source: 'api',
-            summary: `导入完成：${importSections.join(', ') || '无分区'}（执行 ${result.executed.length} 项）`,
-            error: result.ok ? undefined : '导入未完全成功',
-          })
-          writeJson(res, 200, historyError === undefined ? { ...result, runId } : { ...result, runId, historyWriteError: historyError })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          runs.fail(runId, message)
-          host.log.error('导入执行失败', { error: message })
-          writeJson(res, 400, { error: message, runId })
-        } finally {
-          runAbortControllers.delete(runId)
-        }
-      }, { deferredSnapshot: true }),
-    },
-    // -------------------------------------------------- execute/skip
-    // 用户跳过当前计划项（导入中，目前仅插件安装）：abort 当前项的中止控制器 → 引擎
-    // 捕获 ImportUserSkippedError 记为 user-skipped，导入继续执行其余项。
-    {
-      kind: 'exact',
-      path: API.skipExecute,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const runId = typeof body?.['runId'] === 'string' ? body['runId'] : ''
-        if (runId === '') {
-          writeJson(res, 400, { error: 'runId is required' })
-          return
-        }
-        const controller = runAbortControllers.get(runId)
-        if (controller === undefined) {
-          writeJson(res, 404, { error: 'no running import found for this runId' })
-          return
-        }
-        controller.abort()
-        writeJson(res, 200, { skipped: true })
-      },
-    },
-    // ---------------------------------------------------------- snapshots
-    // M4：列出快照元信息（id/createdAt/sourceZip/status/计数，createdAt 倒序）
-    {
-      kind: 'exact',
-      path: API.snapshots,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          writeJson(res, 200, { snapshots: await listSnapshots(snapshotsDir) })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------------ restore
-    // M4：快照恢复。dryRun=true 只返回动作计划（planRestore，零写入）；
-    // 真实执行 = 计划 → 宿主执行器（ctx.fs 整文件/文件还原 + runDshPlugin 卸载插件）
-    // → 与 CLI 一致的诚实报告 { restored/removedPlugins/manualHints/failed/skipped }。
-    //
-    // **并发防护（P1-1）**：真实执行（dryRun=false）经 runs.register('restore') 登记——
-    // 同 kind 已有 running 时抛 RunConflictError → 409 拒绝。这是宿主侧的权威防重
-    // （前端 loading 只是 UX）：即使两个 tab / 刷新后重复点击，同一时刻至多一个
-    // restore 在执行（不同快照并发恢复会交错写文件，同快照并发会互相覆盖
-    // pre-restore 双保险备份，都是真实数据风险）。进度经 onAction 埋点更新
-    // RunRegistry（/progress 轮询 + /runs 刷新恢复可见）；响应含 runId。
-    {
-      kind: 'exact',
-      path: API.restore,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const parsed = buildRestoreBody(body)
-        if (!parsed.ok) {
-          writeJson(res, 400, { error: parsed.error })
-          return
-        }
-        const { snapshotId, dryRun } = parsed.value
-        const snapshotDir = join(snapshotsDir, snapshotId)
-        const restoreOpts = {
-          snapshotDir,
-          homeDir: host.homeDir,
-          profile: host.profile,
-          settingsPath: undefined,
-          msg,
-          // Phase 4 统一恢复校验：所有 restore 入口传 snapshotsRoot → 同一验证强度（存在/READY/manifest/blob-hash/symlink/provenance）
-          snapshotsRoot: snapshotsDir,
-          environmentFingerprint: host.phase3Recovery?.recoveryEnvFingerprint ?? undefined,
-        }
-        try {
-          if (dryRun) {
-            // dry-run 零写入、只读探测：不登记 run（并发 dry-run 无害）
-            const plan = await planRestore(restoreOpts)
-            // git 风格恢复预览：逐动作的变更状态 + 行数统计（读取有上限，见 core/snapshot-diff.ts）。
-            // summarize 内部逐项兜底、绝不抛错 —— 统计失败不影响计划本身。
-            const changeSummary = await summarizeRestoreChanges({ plan, snapshotDir, homeDir: host.homeDir, msg })
-            writeJson(res, 200, { dryRun: true, plan, changeSummary })
-            return
-          }
-          // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
-          await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId, isBlocked: () => host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
-            const executeRestore = async (): Promise<void> => {
-              // 先登记 run（同 kind running → 409 拒绝重复恢复）
-              let run: RunState
-              try {
-                run = runs.register('restore')
-              } catch (error) {
-                writeJson(res, 409, { error: error instanceof Error ? error.message : String(error) })
-                return
-              }
-              const runId = run.runId
-              try {
-                const plan = await planRestore(restoreOpts)
-                const report = await executeRestorePlan(
-                  plan,
-                  makeRestoreExecutor(snapshotDir, host, host.profile),
-                  // m1 埋点：每执行一个恢复动作实时更新 run 状态（/progress 轮询可见）
-                  (info) => {
-                    runs.update(runId, {
-                      section: 'restore',
-                      item: info.index,
-                      itemTotal: info.total,
-                      detail: info.detail,
-                    })
-                  },
-                )
-                runs.finish(runId, report)
-                // Phase 6：迁移历史（best-effort）。sections 从快照 entries 的 adapter 去重派生。
-                const restoreSections = await snapshotEntrySections(snapshotDir)
-                const historyError = await tryAppendHistory({
-                  kind: 'restore',
-                  result: 'success',
-                  sections: restoreSections,
-                  snapshotId: snapshotId,
-                  runId,
-                  source: 'api',
-                  summary: `恢复快照 ${snapshotId}：还原 ${report.restored.length} 项${report.removedPlugins.length > 0 ? `，卸载插件 ${report.removedPlugins.length}` : ''}`,
-                })
-                writeJson(res, 200, historyError === undefined ? { dryRun: false, report, runId } : { dryRun: false, report, runId, historyWriteError: historyError })
-              } catch (error) {
-                const message = error instanceof Error ? error.message : String(error)
-                runs.fail(runId, message)
-                writeJson(res, 400, { error: message, runId })
-              }
-            }
-            // Step 3 P0-A：真实 restore 在已持锁下创建 journal（不 double-acquire；release 由本 gate）
-            if (host.phase3Recovery !== undefined && lockCtx !== null) {
-              await host.phase3Recovery.runJournaled({ operationType: 'restore', lockCtx, fn: executeRestore })
-            } else {
-              await executeRestore()
-            }
-          })
-        } catch (error) {
-          if (error instanceof EnvironmentLockUnavailableError) {
-            host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
-            writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-          } else if (error instanceof TransactionRecoveryRequiredError) {
-            writeJson(res, 423, { error: error.message, code: 'transaction-recovery-required' })
-          } else {
-            writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-          }
-        }
-      },
-    },
-    // ------------------------------------------- snapshots/delete（P1-⑧）
-    // 手动删除单个快照（危险操作：该导入前回滚点不可恢复）。loopback fence（guard）；
-    // 只接受合法快照 id（deleteSnapshot 内防穿越）。与自动保留清理不同：置顶快照
-    // 只能在这里被用户手动删除。
-    {
-      kind: 'exact',
-      path: API.snapshotDelete,
-      handler: withMutationGate('snapshot-delete', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          const body = await readJsonBody(req)
-          const id = typeof body === 'object' && body !== null
-            ? (body as Record<string, unknown>)['snapshotId']
-            : undefined
-          if (!isValidSnapshotId(id)) {
-            writeJson(res, 400, { error: 'snapshotId is required and must be a valid snapshot id' })
-            return
-          }
-          const removed = await deleteSnapshot(snapshotsDir, id)
-          const historyError = await tryAppendHistory({
-            kind: 'snapshot-delete',
-            result: 'success',
-            sections: [id],
-            snapshotId: id,
-            source: 'api',
-            summary: `删除快照 ${id}`,
-          })
-          writeJson(res, 200, historyError === undefined ? { ok: true, removed } : { ok: true, removed, historyWriteError: historyError })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      }),
-    },
-    // --------------------------------------------- snapshots/pin（P1-⑧）
-    // 置顶/取消置顶快照：置顶快照豁免「最多保留 N 个」的自动清理（只能手动删除）。
-    // 纯元数据写（重写 snapshot.json 的 pinned 字段）；loopback fence 必备。
-    {
-      kind: 'exact',
-      path: API.snapshotPin,
-      handler: withMutationGate('snapshot-pin', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          const body = await readJsonBody(req)
-          const id = typeof body === 'object' && body !== null
-            ? (body as Record<string, unknown>)['snapshotId']
-            : undefined
-          const pinned = (body as Record<string, unknown> | undefined)?.['pinned'] === true
-          if (!isValidSnapshotId(id)) {
-            writeJson(res, 400, { error: 'snapshotId is required and must be a valid snapshot id' })
-            return
-          }
-          await setSnapshotPinned(snapshotsDir, id, pinned)
-          writeJson(res, 200, { ok: true, pinned })
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          writeJson(res, 404, { error: message })
-        }
-      }),
-    },
-    // --------------------------------------- snapshots/file-diff（git 风格预览）
-    // 单个文件的逐行差异（只读）：before = 当前磁盘文件 / after = 快照 blob。
-    // 点开某个文件才请求（列表阶段只做轻量统计），避免会话类快照几百个文件时拖死弹窗。
-    // 越界（$DSH_HOME / 快照目录之外）、二进制、超限都返回结构化 reason 而非 5xx。
-    {
-      kind: 'exact',
-      path: API.snapshotFileDiff,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const parsed = buildFileDiffBody(body)
-        if (!parsed.ok) {
-          writeJson(res, 400, { error: parsed.error })
-          return
-        }
-        const { snapshotId, kind, target, blobPath } = parsed.value
-        try {
-          const diff = await snapshotFileDiff({
-            snapshotDir: join(snapshotsDir, snapshotId),
-            homeDir: host.homeDir,
-            kind,
-            target,
-            blobPath,
-            msg,
-          })
-          writeJson(res, 200, { diff })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // -------------------------------------------------- m-profiles（档案 = DSH 自带 profile）
-    // 「档案」= DSH 的 profile（`$DSH_HOME/profiles/<name>`）：list / detail / create / rename /
-    // delete（物理删除）/ select（记录「下次启动」）。DSH **无法在运行中切换 profile** —— select
-    // 只写 <dataDir>/next-profile 标记并提示用户手动重启（`dsh --profile <name>`），不做任何进程操作。
-    // 安全：profile 名在 engine（+ core/plugin-cli.validateProfileName）里校验，防路径穿越/保留名；
-    // 读路由过 loopback fence，写路由再叠加 mutation gate（与 destructive 操作互斥 + SAFE MODE 阻断）。
-    {
-      kind: 'exact',
-      path: API.profiles,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          writeJson(res, 200, {
-            ok: true,
-            profiles: profiles.list(),
-            current: host.profile ?? 'web',
-            selection: profiles.readSelection(),
-            templates: [...DSH_PROFILE_TEMPLATES],
-          } satisfies DshProfilesSnapshot & { ok: true })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    {
-      kind: 'exact',
-      path: API.profilesDetail,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        const name = queryParam(new URL(req.url ?? '/', 'http://localhost'), 'name')
-        if (name === undefined || name === '') {
-          writeJson(res, 400, { error: 'name is required' })
-          return
-        }
-        try {
-          writeJson(res, 200, { ok: true, profile: profiles.detail(name) })
-        } catch (error) {
-          writeProfileError(res, error)
-        }
-      },
-    },
-    {
-      kind: 'exact',
-      path: API.profilesCreate,
-      handler: withMutationGate('profile-create', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
-        const template = typeof body['template'] === 'string' && body['template'] !== '' ? body['template'] : 'base'
-        try {
-          const meta = profiles.create(name, template)
-          const historyError = await tryAppendHistory({
-            kind: 'profile-create',
-            result: 'success',
-            sections: [meta.name],
-            source: 'api',
-            summary: `新建档案 ${meta.name}（模板 ${template}）`,
-          })
-          writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
-        } catch (error) {
-          writeProfileError(res, error)
-        }
-      }),
-    },
-    {
-      kind: 'exact',
-      path: API.profilesRename,
-      handler: withMutationGate('profile-rename', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
-        const newName = typeof body['newName'] === 'string' ? body['newName'].trim() : ''
-        try {
-          const meta = profiles.rename(name, newName)
-          const historyError = await tryAppendHistory({
-            kind: 'profile-rename',
-            result: 'success',
-            sections: [name],
-            source: 'api',
-            summary: `重命名档案 ${name} → ${newName}`,
-          })
-          writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
-        } catch (error) {
-          writeProfileError(res, error)
-        }
-      }),
-    },
-    {
-      kind: 'exact',
-      path: API.profilesDelete,
-      // 物理删除整个 profile 目录（含 node_modules），不可恢复；当前运行中的档案需显式 allowCurrent。
-      handler: withMutationGate('profile-delete', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
-        const allowCurrent = body['allowCurrent'] === true
-        try {
-          profiles.remove(name, { allowCurrent })
-          const historyError = await tryAppendHistory({
-            kind: 'profile-delete',
-            result: 'success',
-            sections: [name],
-            source: 'api',
-            summary: `删除档案 ${name}（物理删除目录）`,
-          })
-          writeJson(res, 200, historyError === undefined ? { ok: true } : { ok: true, historyWriteError: historyError })
-        } catch (error) {
-          writeProfileError(res, error)
-        }
-      }),
-    },
-    {
-      kind: 'exact',
-      path: API.profilesSelect,
-      // 「下次启动」标记（<dataDir>/next-profile）：非破坏性，但仍是写操作 → 过 mutation gate 保持一致语义。
-      handler: withMutationGate('profile-select', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const raw = body['name']
-        const name = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null
-        try {
-          if (name === null) profiles.clearSelection()
-          else profiles.writeSelection(name)
-          const historyError = await tryAppendHistory({
-            kind: 'profile-select',
-            result: 'success',
-            sections: name === null ? [] : [name],
-            source: 'api',
-            summary: name === null ? '取消下次启动档案设置' : `设置下次启动档案 ${name}`,
-          })
-          const selection = profiles.readSelection()
-          writeJson(res, 200, historyError === undefined ? { ok: true, selection } : { ok: true, selection, historyWriteError: historyError })
-        } catch (error) {
-          writeProfileError(res, error)
-        }
-      }),
-    },
-
-    // 定时全量备份设置（GET 读 / PUT 存 sync/backup-schedule.json；无敏感字段）：
-    // 保存后重排调度器（reload）；恒不含 secret、不加密（与自动同步同语义）。
-    // 与全仓一致：每个方法分支都过 loopback fence（guard）——其他 /api/dsh-config-manager/*
-    // 路由全部首行 guard，新增路由不得遗漏（安全不变量：仅 loopback + 同源可访问）。
-    {
-      kind: 'exact',
-      path: API.backupSchedule,
-      handler: async (req, res) => {
-        if (req.method === 'GET') {
-          if (!guard(req, res, 'GET')) return
-          try {
-            writeJson(res, 200, { schedule: await readBackupSchedule(syncDir) })
-          } catch (error) {
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-          }
-          return
-        }
-        if (req.method === 'PUT') {
-          if (!guard(req, res, 'PUT')) return
-          try {
-            const body = await readJsonBody(req)
-            const parsed = validateBackupScheduleDraft(body)
-            if (!parsed.ok) {
-              writeJson(res, 400, { error: parsed.error })
-              return
-            }
-            const current = await readBackupSchedule(syncDir)
-            const next: BackupScheduleConfig = { ...current, ...parsed.value }
-            // m-retention：保留策略保存（草稿给了就用草稿值，否则保留既有；缺省由读取层补齐）
-            next.retention = parsed.value.retention ?? current.retention ?? { ...DEFAULT_RETENTION_POLICY }
-            await writeBackupSchedule(syncDir, next)
-            await backupScheduler.reload()
-            writeJson(res, 200, { ok: true, schedule: next })
-          } catch (error) {
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-          }
-          return
-        }
-        writeJson(res, 405, { error: `method ${req.method} not allowed` })
-      },
-    },
-    // ------------------------------------------------- backup-schedule/run
-    // 立即执行一次全量备份（复用 BackupScheduler.runOnce，同一时刻防重）：
-    // 返回执行结果（status/zip/skipReason/error）+ 最新配置（含 lastRun 状态）。
-    // issue #43：这是**用户手动**触发（概览「立即备份」/ 快照空态 CTA），故 manual: true 绕过
-    // 自动调度开关 enabled —— 缺省 enabled:false 时旧行为是按钮静默空转；自动/启动路径不受影响。
-    // 同全仓：loopback fence（guard）——远程调用方不得触发宿主写盘操作。
-    {
-      kind: 'exact',
-      path: API.backupScheduleRun,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          const run = await backupScheduler.runOnce({ manual: true })
-          const schedule = await readBackupSchedule(syncDir)
-          writeJson(res, 200, { ok: true, run, schedule })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------ backup-files
-    // 导出产物管理（m-backup-files）：列出 exports/*.zip（名称/大小/时间/来源，
-    // 时间倒序）+ 删除单个备份文件。下载复用 /download（roots 已含 exportsDir）。
-    // 安全：删除只接受文件名（服务端 basename 校验防路径穿越）；恒 loopback guard。
-    {
-      kind: 'exact',
-      path: API.backupFiles,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          writeJson(res, 200, { ok: true, files: await listBackupFiles(exportsDir) })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    {
-      kind: 'exact',
-      path: API.backupFilesDelete,
-      handler: withMutationGate('backup-file-delete', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          const body = await readJsonBody(req)
-          const name = typeof body === 'object' && body !== null
-            ? (body as Record<string, unknown>)['name']
-            : undefined
-          if (!isValidBackupFileName(name)) {
-            writeJson(res, 400, { error: 'name must be a .zip file name (no path separators)' })
-            return
-          }
-          const removed = await deleteBackupFile(exportsDir, name)
-          writeJson(res, 200, { ok: true, removed })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      }),
-    },
-    // ------------------------------------------------------ consult
-    // Phase 7：迁移前咨询（只读健康评分 + 建议）。POST，loopback fence。
-    // 对 4 种可迁移源（export-zip / local-snapshot / remote-snapshot / profile）生成
-    // 统一咨询报告。**只读**：不写配置/快照/journal；临时 ZIP 用 try/finally 立即清理。
-    {
-      kind: 'exact',
-      path: API.consult,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          const body = await readJsonBody(req)
-          const type = body?.['type']
-          const id = body?.['id']
-          const snapshotId = body?.['snapshotId']
-          if (typeof type !== 'string' || typeof id !== 'string' || id === '') {
-            writeJson(res, 400, { error: 'type and id are required' })
-            return
-          }
-          if (!['export-zip', 'local-snapshot', 'remote-snapshot', 'profile'].includes(type)) {
-            writeJson(res, 400, { error: `unknown consult type: ${type}` })
-            return
-          }
-          const ref: ConsultSourceRef = {
-            type: type as ConsultSourceRef['type'],
-            id,
-            snapshotId: typeof snapshotId === 'string' ? snapshotId : undefined,
-          }
-          const target = { targetDsh: host.dshVersion, targetPlatform: host.platform }
-          const computeMigratability = async (zipPath: string): Promise<MigratabilityResult> => {
-            try {
-              const importer = makeImporter()
-              const analysis = await importer.analyzeImport(zipPath)
-              const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] })
-              return {
-                ok: analysis.valid,
-                itemCount: plan.items.length,
-                fatalConflicts: plan.items.filter((i) => i.kind === 'Conflict').length,
-                warnings: plan.items.filter((i) => i.severity === 'warning').length,
-                sections: analysis.sectionsInZip,
-                errors: analysis.errors,
-              }
-            } catch (err) {
-              return { ok: false, itemCount: 0, fatalConflicts: 0, warnings: 0, sections: [], errors: [err instanceof Error ? err.message : String(err)] }
-            }
-          }
-
-          let data: ConsultSourceData
-          if (type === 'export-zip') {
-            data = await readExportZipSource(ref, id, { computeMigratability })
-          } else if (type === 'remote-snapshot') {
-            // 用持久化 sync 配置构建引擎，下载快照 → 临时 ZIP → 读取（try/finally 清理）
-            const syncCfg = await prepareSync({})
-            const engine = makeSyncEngine(syncCfg)
-            const preview = await engine.preview({ snapshotId: ref.snapshotId ?? id })
-            if (!preview.ok || preview.zipPath === '') {
-              writeJson(res, 400, { error: preview.message ?? '远端快照不可用' })
-              return
-            }
-            try {
-              data = await readExportZipSource(ref, preview.zipPath, { computeMigratability })
-            } finally {
-              await fs.rm(dirname(preview.zipPath), { recursive: true, force: true }).catch(() => undefined)
-            }
-          } else if (type === 'local-snapshot') {
-            if (!isValidSnapshotId(id)) {
-              writeJson(res, 400, { error: 'invalid snapshot id' })
-              return
-            }
-            const verify = await verifySnapshot(snapshotsDir, id)
-            const snapshotDir = join(snapshotsDir, id)
-            // 从快照条目推导将恢复的分区（entries[].adapter）
-            const snapshot = await new FileSnapshotStore({ dir: snapshotsDir }).load(id).catch(() => null)
-            const snapshotSections = new Map<SectionId, unknown>()
-            for (const e of snapshot?.entries ?? []) {
-              if (e.adapter !== undefined) snapshotSections.set(e.adapter, {})
-            }
-            let restorePlan = { itemCount: 0, conflicts: 0, warnings: 0, sections: [] as SectionId[], errors: [] as string[] }
-            try {
-              const plan = await planRestore({
-                snapshotDir,
-                homeDir: host.homeDir,
-                profile: host.profile ?? 'web',
-                snapshotsRoot: snapshotsDir,
-              })
-              restorePlan = {
-                itemCount: plan.actions.length,
-                conflicts: plan.actions.filter((a) => a.kind === 'skip').length,
-                warnings: plan.actions.filter((a) => a.kind === 'skip').length,
-                sections: [...snapshotSections.keys()],
-                errors: [],
-              }
-            } catch (err) {
-              restorePlan.errors = [err instanceof Error ? err.message : String(err)]
-            }
-            data = buildLocalSnapshotSource(ref, {
-              sections: snapshotSections,
-              verify,
-              restorePlan,
-              sourceDsh: host.dshVersion,
-              sourcePlatform: host.platform,
-            })
-          } else {
-            // 旧「配置档案」（profile.json 快照）源已随该功能一并移除：该类型不再有生产者。
-            writeJson(res, 400, { error: `unsupported consult source type: ${type}` })
-            return
-          }
-
-          const report = computeConsultReport(data, target, { allowBlock: true })
-          writeJson(res, 200, report)
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/status
-    // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
-    {
-      kind: 'exact',
-      path: API.syncStatus,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          // 完整双命名空间配置：repoUrl / webdav.url 无论当前通道都回填，
-          // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失
-          const full = await readFullSyncConfig(syncDir)
-          const state = await loadSyncState(syncDir)
-          const [cred, webdavCred] = await Promise.all([
-            credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
-            credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
-          ])
-          const transport: SyncConfig['transport'] = full !== null && full.transport === 'webdav' ? 'webdav' : 'git'
-          // m-self：插件 UI 偏好（上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
-          const uiPrefs = await readUiPrefs(syncDir)
-          // webdav 配置视图（配置过即返回，与当前通道无关：供表单在 git ↔ webdav 切换时回填）
-          const webdav = full?.webdav !== undefined
-            ? {
-                url: full.webdav.url,
-                // username 非敏感可回显，供表单回填
-                username: full.webdav.username,
-                usernameConfigured: typeof full.webdav.username === 'string' && full.webdav.username !== '',
-                passwordConfigured: webdavCred.configured,
-              }
-            : undefined
-          writeJson(res, 200, {
-            ok: true,
-            configured: full !== null,
-            transport,
-            repoUrl: full?.git?.repoUrl,
-            credentialConfigured: cred.configured,
-            credentialWritable: cred.writable === true,
-            // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）
-            ...(webdav !== undefined ? { webdav } : {}),
-            lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
-            sectionCount: Object.keys(state.sections).length,
-            lastTransport: state.transport,
-            // 上次选择的同步通道（磁盘 ui-prefs；UI 回填优先于此，localStorage 仅兜底）
-            lastSyncChannel: uiPrefs.lastSyncChannel,
-            // 可同步分区目录（「高级/自定义导出」勾选列表；只含 portable，无 secret 值）
-            syncSections: syncSectionCatalog,
-            // 当前分区选择（默认/高级模式 + 勾选分区；当前激活通道；UI 回填用，自动同步共用）
-            syncSelection: await selectionView(transport),
-            // 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道）
-            syncSelectionByChannel: await selectionViewByChannel(),
-            // 全部通道的同步密码保存状态（加密/解密；只回布尔，值永不回传浏览器）
-            syncCredentialsByChannel: await syncCredentialsByChannelView(),
-            // 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9）
-            autosync: await buildAutosyncStatus(syncDir, transport),
-            // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
-            autosyncByChannel: await buildAutosyncStatusByChannel(syncDir),
-          })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/config
-    // m-sync-config：保存同步通道配置（parseSyncBody 校验 + password/token 写 DSH credentials +
-    // writeSyncConfig 落盘）。UI 表单自动保存 /「保存配置」按钮调用；响应为轻量状态视图
-    // （仅凭据布尔，无 secret 值），供 UI 直接刷新徽章而不必重拉 status 覆盖正在编辑的表单。
-    {
-      kind: 'exact',
-      path: API.syncConfig,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncCfg = await prepareSync(body)
-          await writeSyncConfig(syncDir, syncCfg)
-          const [cred, webdavCred] = await Promise.all([
-            credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
-            credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
-          ])
-          writeJson(res, 200, {
-            ok: true,
-            configured: true,
-            transport: syncCfg.transport,
-            credentialConfigured: cred.configured,
-            webdav: isWebDavConfig(syncCfg)
-              ? {
-                  usernameConfigured: typeof syncCfg.webdav.username === 'string' && syncCfg.webdav.username !== '',
-                  passwordConfigured: webdavCred.configured,
-                }
-              : undefined,
-          })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/ui-prefs
-    // m-self：保存插件 UI 偏好（当前为上次选择的同步通道；ui-prefs.json，随 self 分区进备份）。
-    // 纯偏好、无 secret；失败仅提示，不阻断同步主流程。
-    // 经 updateUiPrefs 局部合并写：不覆盖其他端点（star-prompt）刚写入的字段。
-    {
-      kind: 'exact',
-      path: API.syncUiPrefs,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const channel: UiPrefsChannel | undefined = body['lastSyncChannel'] === 'webdav' ? 'webdav' : body['lastSyncChannel'] === 'git' ? 'git' : undefined
-          await updateUiPrefs(syncDir, { ...(channel !== undefined ? { lastSyncChannel: channel } : {}) })
-          writeJson(res, 200, { ok: true, lastSyncChannel: channel })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ star-prompt
-    // m-star-prompt：Star 引导弹窗状态（复用 ui-prefs.json；随 self 分区进备份）。
-    // GET → 返回仓库地址 + 弹窗状态（UI 挂载时判定是否展示 / 是否补记首次使用时间）；
-    // POST → 局部更新（firstSeenAt / dismissed / clicked 白名单），经 updateUiPrefs
-    // 合并写，不覆盖 sync/ui-prefs 的 lastSyncChannel。纯偏好、无 secret。
-    {
-      kind: 'exact',
-      path: API.starPrompt,
-      handler: async (req, res) => {
-        if (req.method === 'GET') {
-          if (!guard(req, res, 'GET')) return
-          try {
-            const prefs = await readUiPrefs(syncDir)
-            writeJson(res, 200, {
-              ok: true,
-              repoUrl: STAR_PROMPT_REPO_URL,
-              firstSeenAt: prefs.starPromptFirstSeenAt,
-              dismissed: prefs.starPromptDismissed === true,
-              clicked: prefs.starPromptClicked === true,
-            })
-          } catch (error) {
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-          }
-          return
-        }
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const patch: Record<string, unknown> = {}
-          const firstSeenAt = body['firstSeenAt']
-          if (typeof firstSeenAt === 'number' && Number.isFinite(firstSeenAt)) {
-            patch['starPromptFirstSeenAt'] = firstSeenAt
-          }
-          if (body['dismissed'] === true) {
-            patch['starPromptDismissed'] = true
-          }
-          if (body['clicked'] === true) {
-            patch['starPromptClicked'] = true
-          }
-          const next = await updateUiPrefs(syncDir, patch)
-          writeJson(res, 200, {
-            ok: true,
-            firstSeenAt: next.starPromptFirstSeenAt,
-            dismissed: next.starPromptDismissed === true,
-            clicked: next.starPromptClicked === true,
-          })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------ release-notes-prompt
-    // 版本更新内容弹窗状态（复用 ui-prefs.json；随 self 分区进备份）。
-    // GET → 返回当前插件版本 + 上次已读版本 + 是否永不提示；
-    // POST → 局部更新（lastSeenVersion / dismissed 白名单），经 updateUiPrefs 合并写。
-    {
-      kind: 'exact',
-      path: API.releaseNotesPrompt,
-      handler: async (req, res) => {
-        if (req.method === 'GET') {
-          if (!guard(req, res, 'GET')) return
-          try {
-            const prefs = await readUiPrefs(syncDir)
-            writeJson(res, 200, {
-              ok: true,
-              lastSeenVersion: prefs.releaseNotesLastSeenVersion,
-              dismissed: prefs.releaseNotesDismissed === true,
-              currentVersion: PLUGIN_VERSION,
-            })
-          } catch (error) {
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-          }
-          return
-        }
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const patch: Record<string, unknown> = {}
-          const lastSeenVersion = body['lastSeenVersion']
-          if (typeof lastSeenVersion === 'string' && lastSeenVersion.trim().length > 0) {
-            patch['releaseNotesLastSeenVersion'] = lastSeenVersion.trim()
-          }
-          if (body['dismissed'] === true) {
-            patch['releaseNotesDismissed'] = true
-          }
-          const next = await updateUiPrefs(syncDir, patch)
-          writeJson(res, 200, {
-            ok: true,
-            lastSeenVersion: next.releaseNotesLastSeenVersion,
-            dismissed: next.releaseNotesDismissed === true,
-          })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/push
-    // m-sync-ui：推送（导出 portable 分区 → 提交私有仓库 → 更新 sync-state）。
-    // token 可选：非空先写入 DSH credentials；成功则记忆仓库配置（回填表单用）。
-    // sections 可选（高级/自定义导出）：只推送勾选的分区；缺省 = 默认模式全部推荐分区。
-    {
-      kind: 'exact',
-      path: API.syncPush,
-      handler: withMutationGate('sync-push', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncCfg = await prepareSync(body)
-          const engine = makeSyncEngine(syncCfg)
-          const snapshotId =
-            typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-          const sections = extractSyncSections(body, knownSyncSectionIds)
-          // 加密快照选项：encrypt=true 时携带密码（仅内存传输，绝不落盘/落日志）；
-          // includeSecrets=true 由 engine 强制要求 encrypt（密钥绝不明文进同步通道）
-          const encrypt = body['encrypt'] === true
-          const includeSecrets = body['includeSecrets'] === true
-          const encryptPassword =
-            typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== ''
-              ? body['encryptPassword']
-              : undefined
-          // 已保存的加密密码兜底（DSH credentials；用户不必每次重输）。请求体里的密码优先，
-          // 因为那是用户此刻输入的覆盖值；两者都没有 → 交给 engine 报「加密需要密码」。
-          const pushChannel: SyncTransportType = isWebDavConfig(syncCfg) ? 'webdav' : 'git'
-          const effectiveEncryptPassword = encryptPassword ?? await resolveSyncPassword(syncPasswordRef('ENCRYPT', pushChannel))
-          // 可选分区选项（历史会话「最新 N 个」）：只有显式提供才允许 sessions 进同步通道
-          const sessions = extractSyncSessions(body)
-          const sessionsOpt = sections !== undefined && sections.includes('sessions') && sessions !== undefined
-            ? { sessions }
-            : {}
-          // P0-②：push 前只读预览（body.preview === true → 不写远端，只返回「将推送什么」）
-          const preview = body['preview'] === true
-          // 分支调用以保证 withTimeout 的泛型结果类型正确（SyncPushReport | SyncPushPreview）
-          const report = preview
-            ? await withTimeout(
-                engine.previewPush({
-                  ...(sections === undefined ? {} : { sections }),
-                  ...sessionsOpt,
-                  ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets } : {}),
-                }),
-                ROUTE_TIMEOUT_MS,
-                msg('host.syncPushTimeout'),
-              )
-            : await withTimeout(
-                engine.push({
-                  ...(snapshotId === undefined ? {} : { snapshotId }),
-                  ...(sections === undefined ? {} : { sections }),
-                  ...sessionsOpt,
-                  ...(encrypt || includeSecrets ? { encrypt: true, includeSecrets, password: effectiveEncryptPassword ?? '' } : {}),
-                }),
-                ROUTE_TIMEOUT_MS,
-                msg('host.syncPushTimeout'),
-              )
-          await writeSyncConfig(syncDir, syncCfg)
-          writeJson(res, 200, report)
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      }),
-    },
-    // ------------------------------------------------------ sync/pull
-    // m-sync-ui：拉取差异预览（只读：list/download → 转临时 ZIP → Importer 分析出计划摘要）。
-    // 绝不直接写配置、绝不执行导入（executeImportPlan 由上层按用户确认驱动）。
-    {
-      kind: 'exact',
-      path: API.syncPull,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncCfg = await prepareSync(body)
-          // 用户驱动的拉取：选择里勾了 sessions 时才让会话分区进入差异计划（自动同步不传）
-          const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(isWebDavConfig(syncCfg) ? 'webdav' : 'git') })
-          const strategy =
-            body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] : 'merge'
-          const snapshotId =
-            typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-          // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
-          // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
-          // 不会误用密码」是引擎层保证，而不是靠这里猜。密码仅内存，绝不落盘/落日志。
-          const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', isWebDavConfig(syncCfg) ? 'webdav' : 'git'))
-          const decryptPassword =
-            typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
-              ? body['decryptPassword']
-              : savedDecryptPassword
-          const report = await withTimeout(
-            engine.pull({
-              strategy,
-              ...(snapshotId === undefined ? {} : { snapshotId }),
-              ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
-            }),
-            ROUTE_TIMEOUT_MS,
-            msg('host.syncPullTimeout'),
-          )
-          await writeSyncConfig(syncDir, syncCfg)
-          writeJson(res, 200, report)
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // -------------------------------------------------- sync/github/start
-    // m-github-oauth：发起 GitHub OAuth device flow。请求 GitHub 取设备码，宿主登记
-    // （flowId → device_code 只存内存），返回 UI 展示用的 user_code + 授权页 URL。
-    // client_id 来自插件配置；未配置时给出可操作指引（不会凭空认证）。
-    {
-      kind: 'exact',
-      path: API.syncGithubStart,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        if (githubClientId === undefined || githubClientId === '') {
-          writeJson(res, 400, {
-            error: msg('host.githubMissingClientId'),
-          })
-          return
-        }
-        try {
-          const started = await githubAuth.startDeviceFlow(githubClientId)
-          const flowId = DeviceFlowStore.newFlowId()
-          githubFlows.set(flowId, {
-            deviceCode: started.deviceCode,
-            clientId: githubClientId,
-            clientSecret: githubClientSecret,
-            interval: started.interval,
-            expiresAt: Date.now() + started.expiresIn * 1000,
-          })
-          // device_code 绝不回传；只回 UI 需要的展示信息
-          writeJson(res, 200, {
-            flowId,
-            userCode: started.userCode,
-            verificationUri: started.verificationUri,
-            expiresIn: started.expiresIn,
-            interval: started.interval,
-          })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // -------------------------------------------------- sync/github/poll
-    // m-github-oauth：轮询授权结果。凭 flowId 取回宿主登记的 device_code → GitHub 换 token
-    // → 成功则立即写入 DSH credentials（SYNC_CREDENTIAL_REF，与手动 token 同槽），
-    // token 绝不回传浏览器；pending 返回下次轮询延迟；终止态（denied/expired/error）清理登记。
-    {
-      kind: 'exact',
-      path: API.syncGithubPoll,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const flowId = typeof body?.['flowId'] === 'string' ? body['flowId'] : ''
-        if (flowId === '') {
-          writeJson(res, 400, { error: 'flowId is required' })
-          return
-        }
-        const flow = githubFlows.get(flowId)
-        if (flow === undefined) {
-          writeJson(res, 400, { error: msg('host.githubFlowGone') })
-          return
-        }
-        try {
-          const result = await githubAuth.pollForToken({
-            clientId: flow.clientId,
-            deviceCode: flow.deviceCode,
-            clientSecret: flow.clientSecret,
-            interval: flow.interval,
-          })
-          if (result.status === 'success' && result.accessToken !== undefined) {
-            await credentials.set(credentialRef(SYNC_CREDENTIAL_REF), result.accessToken)
-            githubFlows.delete(flowId)
-            host.log.info('GitHub OAuth 登录成功（token 已写入 DSH credentials）')
-            writeJson(res, 200, { status: 'success', credentialConfigured: true })
-            return
-          }
-          if (result.status === 'pending') {
-            writeJson(res, 200, { status: 'pending', pollDelayMs: result.pollDelayMs })
-            return
-          }
-          // 终止态：清理登记，把状态 + 可展示消息回给 UI（不含任何秘密）
-          githubFlows.delete(flowId)
-          writeJson(res, 200, {
-            status: result.status,
-            ...(result.message !== undefined ? { message: result.message } : {}),
-            ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
-          })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // -------------------------------------------------- sync/github/cancel
-    // m-github-oauth：取消登录流程（丢弃宿主侧 device_code 登记，零副作用）。
-    {
-      kind: 'exact',
-      path: API.syncGithubCancel,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const flowId = typeof body?.['flowId'] === 'string' ? body['flowId'] : ''
-        if (flowId === '') {
-          writeJson(res, 400, { error: 'flowId is required' })
-          return
-        }
-        githubFlows.delete(flowId)
-        writeJson(res, 200, { ok: true })
-      },
-    },
-    // -------------------------------------------------- sync/github/validate
-    // m-sync-github-valid：校验 SYNC_CREDENTIAL_REF 中已存 token 是否有效（GET /user），
-    // 供 UI 判定「是否已登录」→ 已登录隐藏 GitHub 登录区块、token 失效则重新展示。
-    // 只回布尔 + 登录名（非敏感），token 值绝不回传；仅 401（无效/过期）→ valid:false，
-    // 其余错误（网络/限流）向上抛，由 UI 兜底（不误判登出）。
-    {
-      kind: 'exact',
-      path: API.syncGithubValidate,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          let configured = false
-          let valid = false
-          let login: string | undefined
-          const resolved = await meTokenProvider()
-          configured = resolved !== ''
-          if (configured) {
-            try {
-              const user = await meGitHubRest.getUser()
-              valid = true
-              login = user.login
-            } catch (error) {
-              // 仅 401（token 无效/过期）→ 视为未登录；其余错误（网络/限流）向上抛
-              if (!(error instanceof GitHubApiError && error.code === 'unauthorized')) throw error
-            }
-          }
-          writeJson(res, 200, {
-            ok: true,
-            configured,
-            valid,
-            ...(login !== undefined ? { login } : {}),
-          })
-        } catch (error) {
-          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/history
-    // P2：列出本地祖先快照目录的 manifest.json（id/createdAt/sectionHashes），
-    // 同时统计 review-queue 中关联到该 snapshotId 的项数。
-    {
-      kind: 'exact',
-      path: API.syncHistory,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          const localDir = join(syncDir, 'snapshots')
-          const entries = await fs.readdir(localDir).catch(() => [])
-          const rows: Array<{ id: string; createdAt: string; sectionCount: number; reviewCount: number; transport?: string }> = []
-          for (const name of entries) {
-            const dir = join(localDir, name)
-            const stat = await fs.stat(dir).catch(() => null)
-            if (!stat?.isDirectory()) continue
-            const manifestPath = join(dir, 'manifest.json')
-            const raw = await fs.readFile(manifestPath, 'utf8').catch(() => null)
-            if (raw === null) continue
-            try {
-              const m = JSON.parse(raw) as { id?: unknown; createdAt?: unknown; sectionHashes?: unknown; manifest?: { transport?: unknown } }
-              if (typeof m.id !== 'string' || typeof m.createdAt !== 'string') continue
-              const sectionCount = m.sectionHashes && typeof m.sectionHashes === 'object'
-                ? Object.keys(m.sectionHashes as Record<string, unknown>).length
-                : 0
-              // 触发通道（push/apply 落盘时写入各快照 manifest.transport；旧快照为 undefined）
-              const transport = m.manifest && typeof m.manifest === 'object' && typeof m.manifest.transport === 'string'
-                ? m.manifest.transport
-                : undefined
-              rows.push({ id: m.id, createdAt: m.createdAt, sectionCount, reviewCount: 0, ...(transport !== undefined ? { transport } : {}) })
-            } catch { /* skip malformed */ }
-          }
-          // 关联 review-queue 计数
-          const rqPath = join(syncDir, 'sync-review-queue.json')
-          const rqRaw = await fs.readFile(rqPath, 'utf8').catch(() => null)
-          if (rqRaw !== null) {
-            try {
-              const rq = JSON.parse(rqRaw) as { items?: Array<{ snapshotId?: string }> }
-              const byId = new Map<string, number>()
-              for (const it of rq.items ?? []) {
-                if (typeof it.snapshotId === 'string') {
-                  byId.set(it.snapshotId, (byId.get(it.snapshotId) ?? 0) + 1)
-                }
-              }
-              for (const r of rows) {
-                const c = byId.get(r.id)
-                if (c !== undefined) r.reviewCount = c
-              }
-            } catch { /* skip */ }
-          }
-          rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
-          // 合并自动同步执行记录（sync-history.json）
-          const hist = await readSyncHistory(syncDir)
-          const merged = [
-            ...rows.map((r) => ({ ...r, kind: 'apply' as const })),
-            ...hist.autosyncEntries.map((e) => ({
-              id: e.createdAt,
-              createdAt: e.createdAt,
-              kind: 'autosync' as const,
-              autosync: e,
-            })),
-          ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
-          writeJson(res, 200, { entries: merged })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/snapshots-list
-    // m-sync-v2：远端历史快照列表（供「选择历史快照」下拉）。
-    {
-      kind: 'exact',
-      path: API.syncSnapshotsList,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncCfg = await prepareSync(body)
-          const engine = makeSyncEngine(syncCfg)
-          const metas = await withTimeout(
-            engine.listSnapshots(),
-            ROUTE_TIMEOUT_MS,
-            msg('host.syncPullTimeout'),
-          )
-          const snapshots = [...metas]
-            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
-            .map((m) => ({
-              id: m.id,
-              createdAt: m.createdAt,
-              sectionCount: m.manifest.sectionIds.length,
-              platform: m.manifest.platform,
-              dshVersion: m.manifest.dshVersion,
-            }))
-          const state = await loadSyncState(syncDir)
-          writeJson(res, 200, { ok: true, snapshots, currentSnapshotId: state.lastSnapshotId === '' ? undefined : state.lastSnapshotId })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/sync
-    // m-sync-v2：一键同步第一步 —— 拉取 → 差异确认会话（内存登记临时 ZIP + ImportPlan）。
-    {
-      kind: 'exact',
-      path: API.syncSync,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncCfg = await prepareSync(body)
-          // 用户驱动的一键同步：选择里勾了 sessions 时才让会话分区进入差异计划（自动同步不传）
-          const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(isWebDavConfig(syncCfg) ? 'webdav' : 'git') })
-          const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-          // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
-          // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
-          // 不会误用密码」是引擎层保证，而不是靠这里猜。密码仅内存，绝不落盘/落日志。
-          const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', isWebDavConfig(syncCfg) ? 'webdav' : 'git'))
-          const decryptPassword =
-            typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
-              ? body['decryptPassword']
-              : savedDecryptPassword
-          const preview = await withTimeout(
-            engine.preview({
-              ...(snapshotId === undefined ? {} : { snapshotId }),
-              ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
-            }),
-            ROUTE_TIMEOUT_MS,
-            msg('host.syncPullTimeout'),
-          )
-          if (!preview.ok || preview.plan === null || preview.analysis === null) {
-            writeJson(res, 200, { ok: false, syncSessionId: '', snapshotId: preview.snapshotId, items: [], needsReview: false, compatibility: 'unsupported', message: preview.message ?? '同步预览失败' })
-            return
-          }
-          const syncSessionId = syncSessions.set({
-            zipPath: preview.zipPath,
-            plan: preview.plan,
-            analysis: preview.analysis,
-            snapshotId: preview.snapshotId,
-            config: syncCfg,
-            // issue #38：随加密快照迁移的凭据（仅内存；apply-items 时写回本机）。
-            // 绝不进响应体：下面只回 items/needsReview 等非敏感字段。
-            credentials: preview.credentials,
-          })
-          const items = planToConfirmItems(preview.plan)
-          const needsReview = items.some((i) => REVIEW_KINDS.has(i.kind) || isToolchainChangeItem(i))
-    || preview.analysis.pathIssues.length > 0
-          writeJson(res, 200, {
-            ok: true,
-            syncSessionId,
-            snapshotId: preview.snapshotId,
-            items,
-            needsReview,
-            compatibility: preview.analysis.compatibility,
-          })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/apply-items
-    // m-sync-v2：一键同步第二步 —— 按用户对差异项的逐项决策执行导入。
-    {
-      kind: 'exact',
-      path: API.syncApplyItems,
-      handler: withMutationGate('sync-apply', async (req, res, lockCtx, journalCtx) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncSessionId = typeof body['syncSessionId'] === 'string' ? body['syncSessionId'] : ''
-          const session = syncSessions.get(syncSessionId)
-          if (session === undefined) {
-            writeJson(res, 400, { error: '同步会话不存在或已过期，请重新拉取预览' })
-            return
-          }
-          const adoptions = Array.isArray(body['adoptions']) ? body['adoptions'] : []
-          // 构造子计划（仅含采纳项）
-          const byId = new Map<string, { adopt: boolean; resolution?: string }>()
-          for (const a of adoptions as Array<Record<string, unknown>>) {
-            if (typeof a?.['itemId'] !== 'string') continue
-            byId.set(a['itemId'], { adopt: a['adopt'] === true, resolution: typeof a['resolution'] === 'string' ? a['resolution'] : undefined })
-          }
-          // 构造子计划（仅含采纳项）。同步冲突决策 useRemote → 核心 importer 的
-          // useImported（item 转成 Update，applyOne 才会真正写远端值），
-          // keepLocal/skip 从子计划剔除（keepCurrent/skip 语义：不写）。
-          // 与导入恢复向导（ConflictList keepCurrent/useImported）的决策语义完全一致。
-          const subItems: PlanItem[] = session.plan.items.flatMap((item) => {
-            const d = byId.get(item.id)
-            if (d === undefined || !d.adopt) return []
-            // Conflict 项必须有 resolution；keepLocal/skip 不写入本地 → 剔除
-            if (item.kind === 'Conflict') {
-              if (d.resolution === undefined) throw new SyncRouteError(`冲突项 ${item.id} 必须提供 resolution（useRemote/keepLocal/skip）`)
-              if (d.resolution === 'keepLocal' || d.resolution === 'skip') return []
-              // useRemote → 转成 Update 计划项（镜像 analyzer.applyItemResolution 的
-              // useImported 分支），applyOne 才会把远端值真正写进本地。
-              const c = (item as { conflict?: { itemId?: string } }).conflict
-              return [{
-                ...item,
-                kind: 'Update' as const,
-                severity: 'info' as const,
-                conflict: { itemId: c?.itemId ?? item.id, resolution: 'useImported' as const },
-              } as PlanItem]
-            }
-            return [item]
-          })
-          const subPlan: ImportPlan = {
-            ...session.plan,
-            items: subItems,
-          }
-          // 消费会话（同一 session 只允许一次 apply-items）
-          syncSessions.delete(syncSessionId)
-          let engine: SyncEngine
-          let report: ApplyItemsReport
-          try {
-            engine = makeSyncEngine(session.config)
-            report = await engine.applyItems(session.zipPath, subPlan, {
-              onItem: (info) => { /* 进度可选：runs 已由 applyItems 内部处理 */ },
-              snapshotBinding: journalCtx,
-              // issue #38：把会话里的凭据 Map 交给 credentials adapter 写回本机（仅内存）
-              ...(session.credentials !== undefined ? { credentials: session.credentials } : {}),
-            })
-          } finally {
-            // 用完再清理临时 ZIP（此前在 applyItems 读取前就删除 → ENOENT：无法读取备份文件）
-            await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
-          }
-          const historyError = await tryAppendHistory({
-            kind: 'sync-apply',
-            result: report.ok ? 'success' : 'failed',
-            sections: Array.isArray(report.applied) ? report.applied.filter((s): s is string => typeof s === 'string') : subItems.map((i) => (i as { adapter?: string }).adapter).filter((s): s is string => typeof s === 'string' && s !== ''),
-            operationId: journalCtx?.operationId,
-            snapshotId: report.restoreId ?? undefined,
-            source: 'api',
-            summary: `一键同步应用：${(Array.isArray(report.applied) ? report.applied.length : subItems.length)} 项${report.rolledBack === true ? '（已回滚）' : ''}`,
-            error: report.ok ? undefined : '同步应用未完全成功',
-          })
-          writeJson(res, 200, historyError === undefined ? {
-            ok: report.ok,
-            applied: report.applied,
-            skipped: subItems.map((i) => i.id),
-            needsRestart: report.needsRestart === true,
-            warnings: report.warnings,
-            restoreId: report.restoreId,
-            rolledBack: report.rolledBack,
-            failed: report.failed,
-            result: report.result,
-          } : {
-            ok: report.ok,
-            applied: report.applied,
-            skipped: subItems.map((i) => i.id),
-            needsRestart: report.needsRestart === true,
-            warnings: report.warnings,
-            restoreId: report.restoreId,
-            rolledBack: report.rolledBack,
-            failed: report.failed,
-            result: report.result,
-            historyWriteError: historyError,
-          })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      }, { deferredSnapshot: true }),
-    },
-    // ------------------------------------------------------ sync/cancel
-    // m-sync-v2：取消 / 清理差异确认会话（丢弃临时 ZIP，零副作用）。
-    {
-      kind: 'exact',
-      path: API.syncCancel,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const syncSessionId = typeof body['syncSessionId'] === 'string' ? body['syncSessionId'] : ''
-          if (syncSessionId !== '') {
-            const session = syncSessions.get(syncSessionId)
-            if (session !== undefined) {
-              await fs.rm(dirname(session.zipPath), { recursive: true, force: true }).catch(() => { /* 尽力清理临时 ZIP */ })
-            }
-            syncSessions.delete(syncSessionId)
-          }
-          writeJson(res, 200, { ok: true })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/autosync
-    // m-sync-v2：自动同步配置读写（按通道：git/webdav 各自的开关 + 间隔 + 启动阈值 + 状态）。
-    // GET = 读全部通道状态（{ git, webdav }）；POST = 写指定通道（body.transport，缺省 git）。
-    // 同一路径注册为一个 exact 路由（方法内部分发），避免 webserver 对重复 exact 路径报错。
-    {
-      kind: 'exact',
-      path: API.syncAutosync,
-      handler: async (req, res) => {
-        if (req.method === 'GET') {
-          if (!guard(req, res, 'GET')) return
-          try {
-            writeJson(res, 200, await buildAutosyncStatusByChannel(syncDir))
-          } catch (error) {
-            writeSyncRouteError(res, error)
-          }
-          return
-        }
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          // 按通道读写：git/webdav 各自的自动同步配置与运行状态独立（缺省 git 兜底）
-          const channel: SyncTransportType = body['transport'] === 'webdav' ? 'webdav' : 'git'
-          const cfg = await readAutosyncConfig(syncDir, channel)
-          if (typeof body['enabled'] === 'boolean') cfg.enabled = body['enabled']
-          if (typeof body['interval'] === 'string' && isAutosyncInterval(body['interval'])) cfg.interval = body['interval']
-          if (typeof body['startupMinIntervalMs'] === 'number' && Number.isFinite(body['startupMinIntervalMs']) && body['startupMinIntervalMs'] > 0) {
-            cfg.startupMinIntervalMs = body['startupMinIntervalMs']
-          }
-          await writeAutosyncConfig(syncDir, channel, cfg)
-          if (scheduler) scheduler.reload().catch(() => { /* 尽力而为 */ })
-          writeJson(res, 200, await buildAutosyncStatus(syncDir, channel))
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/selection
-    // m-sync-selection：保存同步分区选择（按通道：git/webdav 各自的模式 + 勾选分区）。
-    // 持久化到 sync-selection.json；自动同步调度器与手动 push 共用（makeSyncEngine 注入）。
-    // sections 元素必须是可同步（portable）分区 id；mode 非法 → 回退 default。
-    {
-      kind: 'exact',
-      path: API.syncSelection,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          // 按通道读写：git/webdav 各自的模式与分区勾选独立（缺省 git 兜底）
-          const channel: SyncTransportType = body['transport'] === 'webdav' ? 'webdav' : 'git'
-          const mode: SyncSelectionMode = body['mode'] === 'advanced' ? 'advanced' : 'default'
-          const rawSections = Array.isArray(body['sections']) ? body['sections'] : []
-          const allowedIds = new Set(syncSectionCatalog.map((s) => s.id))
-          for (const s of rawSections) {
-            if (typeof s !== 'string' || s === '') {
-              writeJson(res, 400, { error: 'sections must be an array of non-empty strings' })
-              return
-            }
-            if (!allowedIds.has(s as SectionId)) {
-              writeJson(res, 400, { error: 'unknown sync section: ' + s })
-              return
-            }
-          }
-          const next: SyncSelection = {
-            schemaVersion: SYNC_SELECTION_SCHEMA_VERSION,
-            mode,
-            sections: [...new Set(rawSections as string[])] as SectionId[],
-            // sessions（历史会话）「最新 N 个」上限：仅在该分区被勾选时才有意义；归一化钳制
-            sessionsLimit: normalizeSessionsLimit(body['sessionsLimit']),
-            encrypt: body['encrypt'] === true,
-            // 安全兜底：includeSecrets 必须同时 encrypt（密钥绝不明文进同步通道）
-            includeSecrets: body['includeSecrets'] === true && body['encrypt'] === true,
-          }
-          // 加密/解密密码持久化（用户要求：勾选即记住，取消勾选或主动删除才清）。
-          // 值只写进 DSH credentials（绝不进 sync-selection.json / 日志 / 响应）；
-          // 清空优先于写入，避免「同一次请求既清又写」产生歧义。
-          const encryptRef = syncPasswordRef('ENCRYPT', channel)
-          const decryptRef = syncPasswordRef('DECRYPT', channel)
-          if (body['clearEncryptPassword'] === true) await credentials.unset(credentialRef(encryptRef))
-          else if (typeof body['encryptPassword'] === 'string' && body['encryptPassword'] !== '') {
-            await credentials.set(credentialRef(encryptRef), body['encryptPassword'])
-          }
-          if (body['clearDecryptPassword'] === true) await credentials.unset(credentialRef(decryptRef))
-          else if (typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== '') {
-            await credentials.set(credentialRef(decryptRef), body['decryptPassword'])
-          }
-          await writeSyncSelection(syncDir, channel, next)
-          selectionCache[channel] = next
-          const [encryptPasswordConfigured, decryptPasswordConfigured] = await Promise.all([
-            syncPasswordConfigured(encryptRef),
-            syncPasswordConfigured(decryptRef),
-          ])
-          writeJson(res, 200, {
-            ok: true,
-            transport: channel,
-            mode: next.mode,
-            sections: next.sections,
-            sessionsLimit: next.sessionsLimit,
-            encrypt: next.encrypt,
-            includeSecrets: next.includeSecrets,
-            encryptPasswordConfigured,
-            decryptPasswordConfigured,
-          })
-        } catch (error) {
-          writeSyncRouteError(res, error)
-        }
-      },
-    },
-    // ------------------------------------------------------ sync/rollback
-    // P2：UI 一键回滚入口（按 apply 返回的 restoreId 调用 backup→rollback）。
-    {
-      kind: 'exact',
-      path: API.syncRollback,
-      handler: withMutationGate('sync-rollback', async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        try {
-          const restoreId = typeof body['restoreId'] === 'string' ? body['restoreId'] : ''
-          if (restoreId === '') {
-            writeJson(res, 400, { error: 'restoreId required' })
-            return
-          }
-          const store = new FileSnapshotStore({ dir: join(syncDir, 'snapshots') })
-          const snap = await store.load(restoreId)
-          const report = await performRollback({ ctx: host, snapshot: snap, store, adapters })
-          const historyError = await tryAppendHistory({
-            kind: 'rollback',
-            result: 'success',
-            sections: [],
-            snapshotId: restoreId,
-            source: 'api',
-            summary: `一键同步回滚（${restoreId}）`,
-          })
-          writeJson(res, 200, historyError === undefined ? { ok: true, full: report.full } : { ok: true, full: report.full, historyWriteError: historyError })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      }),
-    },
-    // ---------------------------------------------------- market/status
-    // 内置单市场（只读、不可编辑）：恒返回内置仓库摘要。无 add/remove —— 市场绑定内置仓库。
-    {
-      kind: 'exact',
-      path: API.marketStatus,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          const summary = await buildMarketSummary({ url: BUILTIN_MARKET_URL, addedAt: '' })
-          writeJson(res, 200, {
-            ok: true,
-            configured: true,
-            markets: [summary],
-            // 首次打开市场页自动更新一次的判据：本次 dsh 启动后是否已刷新过（进程内存，重启重置）
-            bootAutoRefreshed: marketBootAutoRefreshed,
-          })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ---------------------------------------------------- market/refresh
-    {
-      kind: 'exact',
-      path: API.marketRefresh,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        // 内置单市场：url 可省略，缺省用 BUILTIN_MARKET_URL（保留接受 url 以兼容旧调用方与 env 覆盖）
-        const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
-          ? body['url']
-          : BUILTIN_MARKET_URL
-        try {
-          const reader = makeMarketReader()
-          const { text, fetchedAt } = await reader.readIndex({ url, workDir: marketWorkDir(url) })
-          const parsed = parseMarketIndex(text)
-          if (!parsed.ok) {
-            writeJson(res, 400, { error: `market index invalid: ${parsed.errors.join('; ')}` })
-            return
-          }
-          // 写缓存 index（供离线重复浏览）。内容始终视为不可信，读取时再结构校验。
-          await fs.mkdir(dirname(marketCacheIndex(url)), { recursive: true })
-          await fs.writeFile(marketCacheIndex(url), text, 'utf8')
-          // 刷新成功 → 置位「本次启动已刷新」标记（手动「拉取最新」同样生效；失败不置位，下次打开可重试）
-          marketBootAutoRefreshed = true
-          const summary = await buildMarketSummary({ url, addedAt: new Date().toISOString() })
-          writeJson(res, 200, { ok: true, items: parsed.index!.items, market: { ...summary, lastFetchedAt: fetchedAt } })
-        } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ---------------------------------------------------- market/browse
-    {
-      kind: 'exact',
-      path: API.marketBrowse,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        // 内置单市场：url 缺省用 BUILTIN_MARKET_URL（兼容旧调用方与 env 覆盖）
-        const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
-          ? body['url']
-          : BUILTIN_MARKET_URL
-        try {
-          // 缓存 index 缺失 → 先拉取（refresh 语义）；已存在则直接用缓存。
-          let index: MarketIndex | null = await readCachedIndexObj(url)
-          if (index === null) {
-            const reader = makeMarketReader()
-            const { text } = await reader.readIndex({ url, workDir: marketWorkDir(url) })
-            const parsed = parseMarketIndex(text)
-            if (!parsed.ok) {
-              writeJson(res, 400, { error: `market index invalid: ${parsed.errors.join('; ')}` })
-              return
-            }
-            index = parsed.index!
-            await fs.mkdir(dirname(marketCacheIndex(url)), { recursive: true })
-            await fs.writeFile(marketCacheIndex(url), text, 'utf8')
-          }
-          const items: MarketListItem[] = []
-          for (const item of index.items) {
-            const cacheState = await itemCached(url, item.id) ? 'cached' : 'none'
-            // P2-⑭：已缓存条目从 L2 manifest 合并 sections（供列表分区筛选）；未缓存条目
-            // sections 缺省（= 未知，筛选时排除并提示需先「查看详情」下载）。
-            let sections: SectionId[] | undefined
-            if (cacheState === 'cached') {
-              try {
-                const manifestRaw = await fs.readFile(join(marketCacheItemDir(url), item.id, 'manifest.json'), 'utf8')
-                const parsed = parseMarketItemManifest(manifestRaw)
-                if (parsed.ok && parsed.manifest !== null) sections = parsed.manifest.sections
-              } catch {
-                // 缓存 manifest 读取失败：sections 保持 undefined（筛选降级为未知）
-              }
-            }
-            items.push({ ...toMarketListItem(item, cacheState), ...(sections !== undefined ? { sections } : {}) })
-          }
-          // star 数据（仓库级）：收集条目来源仓库 URL（repo ?? 市场 URL）去重后批量查缓存，
-          // 并入浏览列表。查询失败/非 GitHub 仓库 → 该项 stars 缺省（undefined），UI 显示「—」。
-          if (items.length > 0) {
-            const repoUrls = [...new Set(items.map((it) => it.repo ?? url))]
-            const starsByUrl = await marketStarCache.getMany(repoUrls)
-            for (const it of items) {
-              const stars = starsByUrl.get(it.repo ?? url)
-              if (stars !== undefined) it.stars = stars
-            }
-          }
-          writeJson(res, 200, { ok: true, items })
-        } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ---------------------------------------------------- market/download
-    // 拉取 manifest + config.zip → 安全校验（§6）→ valid 则落受控临时区 + dry-run 分析/计划。
-    // 真正落盘由用户确认后走既有 POST /execute（zipPath + plan）。零写入到确认。
-    {
-      kind: 'exact',
-      path: API.marketDownload,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        // 内置单市场：url 缺省用 BUILTIN_MARKET_URL；itemId 必填；repo 可选（条目来源仓库，发布者自托管）
-        const url = (body !== undefined && typeof body['url'] === 'string' && body['url'] !== '')
-          ? body['url']
-          : BUILTIN_MARKET_URL
-        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
-        if (itemId === '') {
-          writeJson(res, 400, { error: 'itemId required' })
-          return
-        }
-        // repo 可选：条目来源仓库。非法（含 userinfo / 空白 / 非 http(s) 形态）→ 400，永不注入凭据。
-        const repo = (typeof body?.['repo'] === 'string' && body['repo'] !== '') ? body['repo'] : undefined
-        if (repo !== undefined) {
-          const repoErr = validateMarketRepoUrl(repo)
-          if (repoErr !== null) {
-            writeJson(res, 400, { error: `repo invalid: ${repoErr}` })
-            return
-          }
-        }
-        try {
-          const reader = makeMarketReader()
-          // 条目仓库与市场仓库分离时，workDir 按来源仓库 url-hash 分目录（天然隔离）
-          const sourceRepo = repo ?? url
-          const workDir = marketWorkDir(sourceRepo)
-          const { text: manifestRaw } = await reader.readItemManifest({ url, workDir, itemId, repo })
-          const { data: zipBytes } = await reader.readItemZip({ url, workDir, itemId, repo })
-
-          const validation = validateMarketItem(itemId, manifestRaw, zipBytes)
-          const manifest = validation.manifest
-          // 供应链警示恒生成（marketItemWarnings 模型层）；download 时间；来源 URL 带条目仓库
-          const downloadedAt = new Date().toISOString()
-          const warnings = manifest !== null
-            ? marketItemWarnings(manifest, sourceRepo, downloadedAt, msg)
-            : [`条目 ${itemId} 来自公共网络市场，未经官方审核（供应链警示）`]
-
-          const base: MarketItemDetail = {
-            id: itemId,
-            name: manifest?.name ?? itemId,
-            version: manifest?.version ?? '',
-            author: manifest?.author,
-            description: manifest?.description,
-            updatedAt: manifest?.updatedAt,
-            sections: validation.sections,
-            repo: sourceRepo,
-            provenance: manifest?.provenance,
-            downloadedAt,
-            status: validation.status,
-            errors: validation.errors,
-            warnings,
-          }
-
-          if (validation.status === 'invalid') {
-            // 校验失败 → 返回 MarketItemDetail（status:'invalid' + errors/warnings），不进入导入预览。
-            writeJson(res, 200, base)
-            return
-          }
-
-          // valid：落受控临时区（tmpDir 已是 /execute 的 controlled root）
-          // 先懒 GC 清理过期市场暂存 zip，避免未确认导入的暂存文件堆积
-          await pruneStagedMarketZips()
-          const zipPath = join(tmpDir, `market-${itemId}-${randomBytes(6).toString('hex')}.zip`)
-          await fs.writeFile(zipPath, zipBytes)
-          // 写条目缓存（manifest + config.zip）供离线重复查看
-          await writeItemCache(url, itemId, manifestRaw, zipBytes)
-
-          // dry-run 分析 + 计划（零写入）：复用现有 importer
-          const importer = makeImporter()
-          const analysis = await importer.analyzeImport(zipPath)
-          const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] })
-
-          const download: MarketDownloadResult = { ...base, zipPath, analysis, plan }
-          writeJson(res, 200, download)
-        } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ---------------------------------------------------- market/prepare
-    // 发布向导：由「用户上传的配置 zip + 用户填写元数据」生成市场条目包
-    // （L2 manifest + config.zip SHA-256 + sections），供 UI 展示/复制与引导推送。
-    // 零写入配置：只在受控临时区生成发布目录；插件不做任何 git 写操作、不持有凭据。
-    {
-      kind: 'exact',
-      path: API.marketPrepare,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const zipPath = typeof body?.['zipPath'] === 'string' ? body['zipPath'] : ''
-        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
-          writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
-          return
-        }
-        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
-        const name = typeof body?.['name'] === 'string' ? body['name'] : ''
-        const version = typeof body?.['version'] === 'string' ? body['version'] : undefined
-        const description = typeof body?.['description'] === 'string' ? body['description'] : undefined
-        const author = typeof body?.['author'] === 'string' ? body['author'] : undefined
-        const repoUrl = typeof body?.['repoUrl'] === 'string' && body['repoUrl'] !== '' ? body['repoUrl'] : undefined
-        const categoriesRaw = body?.['categories']
-        const categories = Array.isArray(categoriesRaw)
-          ? categoriesRaw.filter((c): c is string => typeof c === 'string')
-          : undefined
-        // F6 分享模式：share 强制排除 deviceSpecific/platformSpecific 分区 + 保守档内容扫描拦截
-        // （prepare.ts 内实现）；migrate 缺省。非法值一律回退 migrate。
-        const mode = body?.['mode'] === 'share' ? 'share' : 'migrate'
-        try {
-          const zipBytes = await fs.readFile(zipPath)
-          const result = prepareMarketItem({ itemId, name, version, description, author, repoUrl, categories, zipBytes, mode })
-          // 发布目录落到受控临时区（供 UI 展示目录结构；不写任何配置）
-          const dir = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}`)
-          const itemDir = join(dir, 'items', itemId)
-          await fs.mkdir(itemDir, { recursive: true })
-          await fs.writeFile(join(itemDir, 'manifest.json'), result.manifestText, 'utf8')
-          await fs.writeFile(join(itemDir, 'config.zip'), zipBytes)
-          // 打包发布目录为 zip（供 /download 端点下载；zip 由懒 GC 清理），
-          // 打包后删除中间目录，避免 publish-* 目录在 tmpDir 无限累积
-          const publishZip = join(tmpDir, `publish-${itemId}-${randomBytes(6).toString('hex')}.zip`)
-          await fs.writeFile(publishZip, Buffer.from(zipToBuffer([
-            { name: `items/${itemId}/manifest.json`, data: Buffer.from(result.manifestText, 'utf8') },
-            { name: `items/${itemId}/config.zip`, data: Buffer.from(zipBytes) },
-          ])))
-          await fs.rm(dir, { force: true, recursive: true }).catch(() => undefined)
-          writeJson(res, 200, {
-            ok: true,
-            dir,
-            zipPath: publishZip,
-            manifestText: result.manifestText,
-            sha256: result.sha256,
-            sections: result.sections,
-            warnings: result.warnings,
-          })
-        } catch (error) {
-          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/status
-    // 「一键上传 / 我的配置」登录状态：resolve SYNC_CREDENTIAL_REF token → GET /user。
-    // 401 → loggedIn:false（未登录）；token 值不出模块外，只回传 login 用户名。
-    {
-      kind: 'exact',
-      path: API.meStatus,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          let loggedIn = false
-          let login: string | undefined
-          try {
-            const user = await meGitHubRest.getUser()
-            loggedIn = true
-            login = user.login
-          } catch (error) {
-            // 未配置 token 与 401（token 无效/过期）同属「未登录」→ loggedIn:false；
-            // 其余错误（网络/限流/服务端）向上抛，不能被伪装成「未登录」
-            if (!isGitHubAuthMissing(error)) throw error
-          }
-          const repoUrl = login !== undefined ? userConfigsRepoUrl(login) : undefined
-          const repoExists = login !== undefined ? await meGitHubRest.repoExists(login, USER_CONFIGS_REPO) : false
-          writeJson(res, 200, {
-            loggedIn,
-            ...(login !== undefined ? { login } : {}),
-            ...(repoUrl !== undefined ? { repoUrl } : {}),
-            repoExists,
-          })
-        } catch (error) {
-          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/upload
-    // 一键上传：zipPath 必须来自受控上传临时区（复用 /market/prepare 规则）；
-    // form 仅 { name, description?, categories? }（name 必填）；元数据全自动由 MyRepoService 生成。
-    {
-      kind: 'exact',
-      path: API.meUpload,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const zipPath = typeof body['zipPath'] === 'string' ? body['zipPath'] : ''
-        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
-          writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
-          return
-        }
-        const form = parseMeForm(body['form'])
-        if (form === null) {
-          writeJson(res, 400, { error: 'form is required and name must be a non-empty string' })
-          return
-        }
-        try {
-          const zipBytes = await fs.readFile(zipPath)
-          // MyRepoService 内部已做 prepare 8 道校验 + 秘密扫描（失败 → ok:false，零推送）
-          const result = await meService.upload({ zipBytes, form })
-          writeJson(res, 200, result)
-        } catch (error) {
-          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/items
-    // 查看已上传：读用户仓库 index.json + 收录状态（未收录 / PR 待审核 / 已收录）。
-    // 401（token 过期）→ 401 + 脱敏错误，UI 引导重新登录。
-    {
-      kind: 'exact',
-      path: API.meItems,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        try {
-          const items = await meService.listItems()
-          writeJson(res, 200, { items })
-        } catch (error) {
-          const status = isGitHubAuthMissing(error) ? 401 : 500
-          writeJson(res, status, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/update
-    // 一键更新：同 upload 时序；version 纯自动 +1、id 不变；PR 未合并 force push 更新 / 已合并基于最新 main 重开。
-    {
-      kind: 'exact',
-      path: API.meUpdate,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        if (body === undefined) {
-          writeJson(res, 400, { error: 'invalid JSON body' })
-          return
-        }
-        const zipPath = typeof body['zipPath'] === 'string' ? body['zipPath'] : ''
-        if (zipPath === '' || !isControlledPath(zipPath, roots)) {
-          writeJson(res, 400, { error: 'zipPath is required and must reference a staged upload' })
-          return
-        }
-        const form = parseMeForm(body['form'])
-        if (form === null) {
-          writeJson(res, 400, { error: 'form is required and name must be a non-empty string' })
-          return
-        }
-        try {
-          const zipBytes = await fs.readFile(zipPath)
-          const result = await meService.update({ zipBytes, form })
-          writeJson(res, 200, result)
-        } catch (error) {
-          writeJson(res, 500, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/listing
-    // 查询收录/下架任务状态（结果卡轮询）：任务表命中 → 直接返回；未命中 → 回退 GitHub 实况推导；
-    // 无任务且无实况 → 200 null。401（token 过期）→ 401，UI 引导重新登录。
-    {
-      kind: 'exact',
-      path: API.meListing,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
-        if (itemId === '') {
-          writeJson(res, 400, { error: 'itemId is required' })
-          return
-        }
-        try {
-          const status = await meService.listingStatus(itemId)
-          writeJson(res, 200, status) // null → 200 null
-        } catch (error) {
-          const status = isGitHubAuthMissing(error) ? 401 : 500
-          writeJson(res, status, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/relist
-    // 重新提交收录（收录失败 / 进程重启丢失后的一键重试）：幂等复用已存在 fork/open PR。
-    {
-      kind: 'exact',
-      path: API.meRelist,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
-        if (itemId === '') {
-          writeJson(res, 400, { error: 'itemId is required' })
-          return
-        }
-        try {
-          const status = await meService.relist(itemId)
-          writeJson(res, 200, status)
-        } catch (error) {
-          const code = isGitHubAuthMissing(error) ? 401 : 500
-          const message = error instanceof MyRepoError && error.code === 'item_not_found'
-            ? 404
-            : code
-          writeJson(res, message, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ---------------------------------------------------- me/delete
-    // 删除条目：同步删用户仓库索引 + items/<id>/ 文件；已收录 → 后台异步提下架 PR；待审核 → 关闭收录 PR。
-    {
-      kind: 'exact',
-      path: API.meDelete,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
-        const body = await readJsonBody(req)
-        const itemId = typeof body?.['itemId'] === 'string' ? body['itemId'] : ''
-        if (itemId === '') {
-          writeJson(res, 400, { error: 'itemId is required' })
-          return
-        }
-        try {
-          const result = await meService.deleteItem(itemId)
-          writeJson(res, 200, result)
-        } catch (error) {
-          const code = isGitHubAuthMissing(error) ? 401 : 500
-          const message = error instanceof MyRepoError && error.code === 'item_not_found'
-            ? 404
-            : code
-          writeJson(res, message, { error: redact(error instanceof Error ? error.message : String(error)) })
-        }
-      },
-    },
-    // ------------------------------------------------------------ history
-    // Phase 6：迁移历史审计（统一历史引擎）。只读 GET：列表（过滤）+ 导出。
-    // loopback fence（guard）与全仓一致——仅同源 + loopback 可访问。
-    {
-      kind: 'exact',
-      path: API.history,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          const url = new URL(req.url ?? '/', 'http://localhost')
-          const q = parseHistoryQuery(Object.fromEntries(url.searchParams))
-          const { entries, corrupted } = await history.read()
-          const filtered = queryHistory(entries, q)
-          const stats = summarizeHistory(filtered)
-          writeJson(res, 200, { ok: true, entries: filtered, stats, corrupted })
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    {
-      kind: 'exact',
-      path: API.historyExport,
-      handler: async (req, res) => {
-        if (!guard(req, res, 'GET')) return
-        try {
-          const url = new URL(req.url ?? '/', 'http://localhost')
-          const format = url.searchParams.get('format') === 'markdown' ? 'markdown' : 'json'
-          const q = parseHistoryQuery(Object.fromEntries(url.searchParams))
-          const { entries } = await history.read()
-          const filtered = queryHistory(entries, q)
-          const text = renderExport(filtered, format, host.language)
-          if (format === 'markdown') {
-            res.writeHead(200, {
-              'Content-Type': 'text/markdown; charset=utf-8',
-              'Content-Disposition': 'attachment; filename="migration-history.md"',
-            })
-            res.end(text)
-          } else {
-            writeJson(res, 200, { ok: true, generatedAt: new Date().toISOString(), text })
-          }
-        } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
-    // ------------------------------------------------------------ recovery
-    // Phase 5：recovery 编排（prefix 路由，内部按 path 分发）。
-    // 禁用 withMutationGate（避免 double-journal）；mutation 路由经 withMutationLock + loopback fence。
-    {
-      kind: 'prefix',
-      path: API.recovery,
-      handler: async (req, res) => {
-        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: 'forbidden: loopback-only' }); return }
-        const url = new URL(req.url ?? '/', 'http://localhost')
-        const rel = url.pathname.slice(API.recovery.length).replace(/^\/+/, '')
-        const segments = rel.split('/').filter(Boolean)
-        if (segments.length === 0) { writeJson(res, 404, { error: 'not found' }); return }
-        if (segments[0] === 'status') {
-          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed' }); return }
-          const r = await recoveryOrchestrator.status()
-          writeJson(res, r.status, r.body)
-          return
-        }
-        // issue #31：残留锁的显式回收路由（POST /recovery/lock/recover）。
-        // 必须放在 :operationId 解析**之前**——'lock' 不是 UUID，落到下面会被
-        // 400 invalid operationId 挡掉（那正是「文案指向空面板」的同一类错位）。
-        if (segments[0] === 'lock') {
-          if (segments.length !== 2 || segments[1] !== 'recover') { writeJson(res, 404, { error: 'not found' }); return }
-          if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed' }); return }
-          try {
-            // ⚠️ 故意**不**经 runWithMutationLock/withMutationGate：要回收的正是那把挡住
-            // acquire 的残留锁——先取锁必然拿到 STALE_LOCK_DETECTED 并抛 423，回收将永远
-            // 无法执行（与 CLI recover-stale-lock 同策略：只 inspect + prove stale + 原子回收，
-            // 判定在 EnvironmentLockManager.recoverStaleLock 内部重做，本路由不做删除决策）。
-            const body = await readJsonBody(req)
-            const r = await recoveryOrchestrator.recoverStaleLock(body?.['userConfirmed'] === true)
-            // Phase 6：审计史（成功与拒绝都记，便于事后追查「谁在什么时候回收了锁」）
-            await tryAppendHistory({
-              kind: 'recovery',
-              result: r.status === 200 ? 'success' : r.status >= 500 ? 'failed' : 'skipped',
-              sections: [],
-              source: 'recovery',
-              summary: '恢复操作 recover-stale-lock',
-            })
-            writeJson(res, r.status, r.body)
-          } catch (error) {
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-          }
-          return
-        }
-        if (segments.length !== 2) { writeJson(res, 404, { error: 'not found' }); return }
-        const operationId = segments[0]!
-        const action = segments[1]!
-        if (!isValidOperationId(operationId)) { writeJson(res, 400, { error: 'invalid operationId' }); return }
-        const methodFor: Record<string, 'GET' | 'POST'> = { preview: 'GET', confirm: 'POST', execute: 'POST', verify: 'POST', retry: 'POST', dismiss: 'POST' }
-        const expected = methodFor[action]
-        if (expected === undefined) { writeJson(res, 404, { error: 'not found' }); return }
-        if (req.method !== expected) { writeJson(res, 405, { error: 'method not allowed' }); return }
-        try {
-          if (action === 'preview') {
-            const r = await recoveryOrchestrator.preview(operationId)
-            writeJson(res, r.status, r.body)
-            return
-          }
-          // mutation 路由：withMutationLock（Phase 2 GLOBAL 锁）+ loopback fence；不 double-journal。
-          // 不传 isBlocked：recovery 是解决 SAFE MODE 的机制，若被 SAFE MODE 阻断会死锁。
-          await runWithMutationLock(host.mutationLock, { op: `recovery-${action}`, target: operationId }, async () => {
-            const body = await readJsonBody(req)
-            const userConfirmed = body?.['userConfirmed'] === true
-            let r
-            if (action === 'confirm') r = await recoveryOrchestrator.confirm(operationId, userConfirmed)
-            else if (action === 'execute') r = await recoveryOrchestrator.execute(operationId, userConfirmed, makeRecoveryExecutors)
-            else if (action === 'verify') r = await recoveryOrchestrator.verify(operationId)
-            else if (action === 'retry') r = await recoveryOrchestrator.retry(operationId, userConfirmed, makeRecoveryExecutors)
-            else if (action === 'dismiss') r = await recoveryOrchestrator.dismiss(operationId, userConfirmed)
-            else r = { status: 404, body: { error: 'not found' } } as const
-            // Phase 6：recovery 迁移历史（best-effort）。在 mutation 结果（execute/retry/verify/dismiss）后记。
-            if (action === 'execute' || action === 'retry' || action === 'verify' || action === 'dismiss') {
-              await tryAppendHistory({
-                kind: 'recovery',
-                result: r.status === 200 ? 'success' : r.status >= 500 ? 'failed' : 'skipped',
-                sections: [],
-                operationId,
-                source: 'recovery',
-                summary: `恢复操作 ${action}`,
-                error: r.status >= 400 && typeof r.body?.['error'] === 'string' ? String(r.body['error']) : undefined,
-              })
-            }
-            writeJson(res, r.status, r.body)
-          })
-        } catch (error) {
-          if (error instanceof EnvironmentLockUnavailableError) {
-            host.log.warn(`mutation lock blocked: op=${error.op} reason=${error.reason}${error.detail !== undefined ? ` detail=${error.detail}` : ''}`)
-            writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-            return
-          }
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-        }
-      },
-    },
+    }),
     // ------------------------------------------------------------ Phase 1 P0
     // 配置生命周期（自动快照 / 撤销 / 重做）：prefix 路由，内部按 path 分发。
     // mutation 动作经 withMutationGate（GLOBAL 锁 + SAFE MODE 闸门）；status 只读不加锁。
-    {
-      kind: 'prefix',
-      path: API.lifecycle,
-      handler: async (req, res) => {
+    endpoint({ kind: 'prefix', path: API.lifecycle, methods: ['GET', 'POST'] }, async (req, res) => {
         if (!LIFECYCLE_ENABLED) { writeJson(res, 503, { ok: false, code: 'feature-disabled', message: 'disaster recovery is temporarily disabled' }); return }
-        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: 'forbidden: loopback-only' }); return }
         const url = new URL(req.url ?? '/', 'http://localhost')
         const rel = url.pathname.slice(API.lifecycle.length).replace(/^\/+/, '')
         const segments = rel.split('/').filter(Boolean)
@@ -4979,7 +2758,6 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         if (segments[0] === 'snapshot') {
           await withMutationGate('lifecycle-snapshot', async (rq, rs) => {
-            if (!guard(rq, rs, 'POST')) return
             try {
               const body = await readJsonBody(rq)
               const meta = await lifecycle.snapshot({
@@ -4999,7 +2777,6 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         if (segments[0] === 'undo' || segments[0] === 'redo') {
           await withMutationGate(`lifecycle-${segments[0]}`, async (rq, rs) => {
-            if (!guard(rq, rs, 'POST')) return
             try {
               const outcome = segments[0] === 'undo' ? await lifecycle.undo() : await lifecycle.redo()
               writeJson(rs, 200, {
@@ -5017,7 +2794,6 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         }
         if (segments[0] === 'remove') {
           await withMutationGate('lifecycle-remove', async (rq, rs) => {
-            if (!guard(rq, rs, 'POST')) return
             try {
               const body = await readJsonBody(rq)
               const id = typeof body?.['id'] === 'string' ? body['id'] : ''
@@ -5030,15 +2806,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         writeJson(res, 404, { error: 'not found' })
-      },
-    },
+    }),
     // 崩溃归因（P0-5）：只读。上次启动是否异常 + 归因 + 建议动作 + last-good 快照。
-    {
-      kind: 'exact',
-      path: API.crash,
-      handler: async (req, res) => {
+    endpoint({ path: API.crash, methods: ['GET'] }, async (req, res) => {
         if (!LIFECYCLE_ENABLED) { writeJson(res, 503, { ok: false, code: 'feature-disabled', message: 'disaster recovery is temporarily disabled' }); return }
-        if (!guard(req, res, 'GET')) return
         try {
           const prev = await readBootState(join(dataDir, 'config-snapshots'))
           const alert = computeBootAlert(prev, null)
@@ -5057,19 +2828,14 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
-    },
+    }),
     // 启动救援模式（P0-3）：on = 备份三处原件后，把 profile patch 改写成只挂载本插件的最小内容、
     // 置空 home patch，并把 dsh.profile.bundles 收窄为 DSH 核心（@deepseek-ai/*）与本插件自身
     // —— 其余用户插件本次启动不挂载（这才是「禁用其它插件」，只中和 patch 层救不了
     // 「插件代码自己把 DSH 搞挂」）；off = 从备份完整还原。两侧都只动
     // cordis.patch.yml / package.json / state.json，可完全回退。
-    {
-      kind: 'exact',
-      path: API.rescue,
-      handler: async (req, res) => {
+    endpoint({ path: API.rescue, methods: ['GET', 'POST'] }, async (req, res) => {
         if (!LIFECYCLE_ENABLED) { writeJson(res, 503, { ok: false, code: 'feature-disabled', message: 'disaster recovery is temporarily disabled' }); return }
-        if (!isLoopbackRequest(req)) { writeJson(res, 403, { error: 'forbidden: loopback-only' }); return }
         const homeDir = host.homeDir
         const profile = host.profile ?? 'web'
         try {
@@ -5113,8 +2879,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
-      },
-    },
+    }),
+    ...buildRoutes(routeEnv),
   ]
   return { routes: routesList, scheduler, makeSyncEngine, lifecycle }
 }
@@ -5264,16 +3030,23 @@ export function apply(ctx: Context, config?: Config): void {
         }
       }
     } catch (err) {
-      // fail-closed：inspectStartup 抛错不默认 NORMAL → 不启动调度器（read-only host 存活）
+      // fail-closed（审计 P0-10）：inspectStartup 抛错不默认 NORMAL。只置「调度器不启动」是半套
+      // fail-open —— 此刻无法证明环境干净，destructive 路由必须一并被阻断：置内存 SAFE MODE
+      // （isBlocked 谓词立即生效）+ 写 durable 标记（下次启动不判 NORMAL），与 phase3-host.ts
+      // runJournaled 异常分支的姿态一致。清理通道仍是用户显式 recovery（clearSafeMode）。
       startupStateResolved = true
-      shouldStartSchedulers = false
+      shouldStartSchedulers = FAIL_CLOSED_STARTUP.startSchedulers
+      if (FAIL_CLOSED_STARTUP.safeModeRequired) {
+        phase3Recovery.safeModeActive = true
+        await phase3Recovery.store.writeSafeMode(true).catch(() => undefined)
+      }
       // fail-closed 也是「本次启动成功了」：host 存活（read-only），不该被判为崩溃。
       if (LIFECYCLE_ENABLED) {
         try {
           await writeBootState(bootStateDir, markBootOk((await readBootState(bootStateDir)) ?? beginBoot(process.pid, null)))
         } catch { /* best-effort */ }
       }
-      host.log.warn('Phase 3 启动 reconcile 失败（fail-closed：destructive 调度器不启动）', {
+      host.log.warn('Phase 3 启动 reconcile 失败（fail-closed：SAFE MODE 已置、destructive 路由与调度器均被阻断）', {
         error: err instanceof Error ? err.message : String(err),
       })
     }
@@ -5428,7 +3201,7 @@ export function apply(ctx: Context, config?: Config): void {
     return
   }
   ctx.effect(() => {
-    const disposers = routes.map((route) => webServer.register(route))
+    const disposers = registerRoutes(webServer, routes)
     return () => {
       for (const dispose of disposers) dispose()
     }

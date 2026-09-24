@@ -112,17 +112,11 @@ export interface AutosyncHistoryRow {
 
 /* ---------------------------------------------------------------- 展示辅助（UI 重构新增） */
 /**
- * 中段省略：保留头尾，中段以 … 替代（尾部才是区分信息，不可被截掉）。
- * 与 SnapshotsPanel 的同名私有函数语义一致；此处导出以便本模块复用 + 单测覆盖
- * （不在组件间跨文件 import 私有函数）。
+ * 中段省略：唯一实现在 `../../ui/mid-ellipsis.ts`（t6 去重——此前本文件自带一份与
+ * `ui/snapshots-view.ts`、`OverviewPanel.tsx` 逐字相同的实现，默认 `max = 26`）。
+ * 此处保留同名再导出，让既有调用点（`./SyncHistoryView.tsx` 与本目录单测）按原路径引用。
  */
-export function midEllipsis(s: string, max = 26): string {
-  if (s.length <= max) return s;
-  const keep = max - 1;
-  const head = Math.ceil(keep / 2);
-  const tail = keep - head;
-  return `${s.slice(0, head)}…${s.slice(-tail)}`;
-}
+export { midEllipsis } from '../../ui/mid-ellipsis.ts';
 
 /**
  * 自动同步状态 → Badge 语义色。

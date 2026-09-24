@@ -13,6 +13,17 @@ import type { TranslateNS } from '../client-types.ts'
 import { Banner } from '../common/ui.tsx'
 import css from '../config-manager.module.css'
 
+/**
+ * 路径来源徽章 → 字典键（UI-18 同款做法：core 只给**形态语义**，用户可见文案只在这里解析）。
+ * 此前直接渲染 `issue.kind` 字面量（missing / platformMismatch）—— 用户报告「源路径永远是 missing」：
+ * core 的 missing 语义是「需为本机指定新位置」（**不做存在性探测**），不是「源路径不存在」。
+ */
+const PATH_ISSUE_LABEL: Record<PathIssue['kind'], Parameters<TranslateNS<'config-manager'>>[0]> = {
+  missing: 'import.paths.kind.missing',
+  platformMismatch: 'import.paths.kind.platformMismatch',
+  homeMismatch: 'import.paths.kind.homeMismatch',
+}
+
 export interface PathMappingFormProps {
   /** 分析结果中的路径问题（每条生成一行映射输入） */
   issues: PathIssue[]
@@ -63,7 +74,7 @@ export function PathMappingForm({ issues, initial, t, onChange }: PathMappingFor
             {/* 块级 label：标题独占一行（原 span 为行内元素，会与 input 挤在同一行） */}
             <div className={css.fieldLabel}>{t('import.paths.old')}</div>
             <pre className={css.pathValue}>{issue.value}</pre>
-            <span className={css.pathIssueKind}>{issue.kind}</span>
+            <span className={css.pathIssueKind}>{t(PATH_ISSUE_LABEL[issue.kind])}</span>
           </div>
           <div className={css.pathNew}>
             <div className={css.fieldLabel}>{t('import.paths.new')}</div>

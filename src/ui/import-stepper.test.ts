@@ -4,7 +4,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { IMPORT_STAGES, importStepperModel, stageOf } from './import-stepper.ts'
+import { IMPORT_STAGES, importStepperModel, importStepperSource, stageOf } from './import-stepper.ts'
 
 test('stageOf: 九个 ImportStep + FlowPhase 全部映射到 6 阶段', () => {
   assert.equal(stageOf('select'), 'select')
@@ -49,4 +49,28 @@ test('importStepperModel: importing 阶段映射正确（执行中）', () => {
   const m = importStepperModel('importing')
   assert.equal(m.index, 4)
   assert.equal(m.steps[4]!.state, 'current')
+})
+
+/**
+ * 回归（用户报告）：执行中 / 完成后的步骤条不得停在「确认」。
+ * phase 会停在 confirm（向导不回退，且没有「执行/完成」这两个 FlowPhase），
+ * 所以这两个阶段必须由 step 决定。
+ */
+test('importStepperSource: step 进入 importing/result 时压过停在 confirm 的 phase', () => {
+  assert.equal(importStepperSource('importing', 'confirm'), 'importing')
+  assert.equal(importStepperSource('result', 'confirm'), 'result')
+  // 端到端：步骤条索引必须分别落在「执行」「完成」
+  assert.equal(importStepperModel(importStepperSource('importing', 'confirm')).index, 4)
+  const done = importStepperModel(importStepperSource('result', 'confirm'))
+  assert.equal(done.index, 5)
+  assert.equal(done.steps[4]!.state, 'done')
+  assert.equal(done.steps[5]!.state, 'current')
+})
+
+test('importStepperSource: 其余组合保持原判定（preview 看 step，流程阶段看 phase）', () => {
+  assert.equal(importStepperSource('select', 'preview'), 'select')
+  assert.equal(importStepperSource('preview', 'preview'), 'preview')
+  assert.equal(importStepperSource('preview', 'confirm'), 'confirm')
+  assert.equal(importStepperSource('preview', 'conflicts'), 'conflicts')
+  assert.equal(importStepperSource('select', 'decrypt-archive'), 'decrypt-archive')
 })

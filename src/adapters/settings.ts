@@ -15,6 +15,8 @@ import type {
   ImportContext, NamespaceInfo, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { isUiNamespace } from './ui.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
+import { validateJsonSection } from './json-section.ts';
 
 /** namespace 清单提供者：宿主从 settings.yaml 顶层 key / 插件注册表获得 */
 export type NamespaceProvider = (ctx: HostContext) => Promise<string[]> | string[];
@@ -127,9 +129,10 @@ export async function applyNamespaceItem(
 
 export class SettingsAdapter implements ConfigAdapter<SettingsSection> {
   readonly id = 'settings' as const;
-  readonly displayName = 'Settings';
-  readonly defaultIncluded = true;
-  readonly portability = 'portable' as const;
+  // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
+  readonly displayName = sectionMeta('settings').displayName;
+  readonly defaultIncluded = sectionMeta('settings').defaultIncluded;
+  readonly portability = sectionMeta('settings').portability;
   private readonly namespaces: string[] | NamespaceProvider;
 
   constructor(namespaces: string[] | NamespaceProvider = []) {
@@ -159,29 +162,23 @@ export class SettingsAdapter implements ConfigAdapter<SettingsSection> {
   }
 
   async validate(data: SettingsSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
-    const issues: ValidationResult['issues'] = [];
-    if (data === null || typeof data !== 'object') {
-      return { valid: false, issues: [{ path: '$', message: msg('adapter.validate.object', { subject: 'settings' }), severity: 'error' }] };
-    }
-    if (data.version !== 1) {
-      issues.push({ path: 'version', message: msg('adapter.validate.version', { value: String(data.version) }), severity: 'error' });
-    }
-    if (data.namespaces === null || typeof data.namespaces !== 'object') {
-      issues.push({ path: 'namespaces', message: msg('adapter.validate.missingObject', { subject: 'namespaces' }), severity: 'error' });
-    } else {
-      for (const [name, rec] of Object.entries(data.namespaces)) {
-        if (rec === null || typeof rec !== 'object') {
-          issues.push({ path: `namespaces.${name}`, message: msg('adapter.validate.recordObject', { subject: 'namespace' }), severity: 'error' });
-          continue;
-        }
-        if (typeof rec.revision !== 'number') {
-          issues.push({ path: `namespaces.${name}.revision`, message: msg('adapter.validate.number', { subject: 'revision' }), severity: 'error' });
-        }
-        if (!('value' in rec)) {
-          issues.push({ path: `namespaces.${name}.value`, message: msg('adapter.validate.missingValue'), severity: 'error' });
+    return validateJsonSection<SettingsSection>('settings', data, msg, (section, issues) => {
+      if (section.namespaces === null || typeof section.namespaces !== 'object') {
+        issues.push({ path: 'namespaces', message: msg('adapter.validate.missingObject', { subject: 'namespaces' }), severity: 'error' });
+      } else {
+        for (const [name, rec] of Object.entries(section.namespaces)) {
+          if (rec === null || typeof rec !== 'object') {
+            issues.push({ path: `namespaces.${name}`, message: msg('adapter.validate.recordObject', { subject: 'namespace' }), severity: 'error' });
+            continue;
+          }
+          if (typeof rec.revision !== 'number') {
+            issues.push({ path: `namespaces.${name}.revision`, message: msg('adapter.validate.number', { subject: 'revision' }), severity: 'error' });
+          }
+          if (!('value' in rec)) {
+            issues.push({ path: `namespaces.${name}.value`, message: msg('adapter.validate.missingValue'), severity: 'error' });
+          }
         }
       }
-    }
-    return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+    });
   }
 }

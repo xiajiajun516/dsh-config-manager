@@ -8,12 +8,13 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { zipToBuffer, type ZipWriteEntry } from '../utils/zip.ts';
+import { zipToBuffer, DEFAULT_ZIP_SAFETY_LIMITS, type ZipWriteEntry } from '../utils/zip.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import type { SnapshotFs } from '../sync/fs.ts';
 import { validateRepoUrl } from '../sync/sync-config.ts';
 import { parseMarketIndex, parseMarketItemManifest } from './index-parser.ts';
 import { validateMarketItem } from './security.ts';
+import { prepareMarketItem } from './prepare.ts';
 import { GitMarketReader } from './reader.ts';
 import {
   addMarket, emptyMarketConfig, readMarketConfig, removeMarket, writeMarketConfig,
@@ -145,6 +146,124 @@ test('解析：L2 manifest 未知分区拒绝', () => {
   assert.equal(res.ok, false);
 });
 
+/**
+ * P0 回归：share 模式发布契约漂移。
+ * prepare 在 share 模式把 `mode: 'share'` 写进 L2 manifest（prepare.ts），
+ * 而消费侧 MANIFEST_ALLOWED 曾不含 mode → 解析 ok:false「含未知字段: mode」，
+ * 于是上传侧抛 internal、市场端把分享条目判 invalid。
+ * 本用例用**真实 prepare 产物**（不是 stub）走完「发布 → 解析 → 消费侧校验」全链路。
+ */
+test('round-trip：share 模式真实 prepare 产物必须被解析器与消费侧接受（契约漂移回归）', () => {
+  const zip = makeValidZip();
+  const prepared = prepareMarketItem({ itemId: 'share-one', name: 'Share One', mode: 'share', zipBytes: zip });
+  const manifestObj = JSON.parse(prepared.manifestText) as Record<string, unknown>;
+  assert.equal(manifestObj['mode'], 'share', '前置条件：prepare 在 share 模式必须落 mode 标记');
+
+  const parsed = parseMarketItemManifest(prepared.manifestText);
+  assert.equal(parsed.ok, true, `prepare 产物必须可被自家解析器接受，errors=${parsed.errors.join('; ')}`);
+  assert.equal(parsed.manifest?.mode, 'share', 'mode 应被解析器透出（消费侧可见发布模式）');
+
+  const validated = validateMarketItem('share-one', prepared.manifestText, zip);
+  assert.equal(validated.status, 'valid', `分享条目在市场端必须 valid，errors=${validated.errors.join('; ')}`);
+  assert.equal(validated.manifest?.mode, 'share');
+});
+
+test('round-trip：migrate 模式（不含 mode）既有行为不变', () => {
+  const zip = makeValidZip();
+  const prepared = prepareMarketItem({ itemId: 'migrate-one', name: 'Migrate One', zipBytes: zip });
+  assert.equal('mode' in (JSON.parse(prepared.manifestText) as Record<string, unknown>), false, 'migrate 缺省不写 mode');
+
+  const parsed = parseMarketItemManifest(prepared.manifestText);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.manifest?.mode, undefined, '无 mode 时不应凭空造出该字段');
+  assert.equal(validateMarketItem('migrate-one', prepared.manifestText, zip).status, 'valid');
+});
+
+test('解析：L2 manifest mode 取值非法 → 进入 errors 并拒绝（只接受 migrate | share）', () => {
+  for (const bad of ['evil', 'SHARE', '', 1, null, {}]) {
+    const res = parseMarketItemManifest(JSON.stringify({
+      schemaVersion: 1, id: 'foo', name: 'n', version: '1',
+      sections: ['settings'], checksums: { zip: 'aaa' }, mode: bad,
+    }));
+    assert.equal(res.ok, false, `mode=${JSON.stringify(bad)} 必须被拒绝`);
+    assert.match(res.errors.join(), /mode/, `mode=${JSON.stringify(bad)} 的错误必须点名 mode`);
+  }
+  // 合法取值放行
+  for (const good of ['migrate', 'share']) {
+    const res = parseMarketItemManifest(JSON.stringify({
+      schemaVersion: 1, id: 'foo', name: 'n', version: '1',
+      sections: ['settings'], checksums: { zip: 'aaa' }, mode: good,
+    }));
+    assert.equal(res.ok, true, `mode=${good} 必须放行`);
+    assert.equal(res.manifest?.mode, good);
+  }
+});
+
+test('解析：L2 manifest 未知字段仍整体拒绝（mode 白名单不得放宽其它字段）', () => {
+  const res = parseMarketItemManifest(JSON.stringify({
+    schemaVersion: 1, id: 'foo', name: 'n', version: '1',
+    sections: ['settings'], checksums: { zip: 'aaa' }, mode: 'share', evil: 'x',
+  }));
+  assert.equal(res.ok, false);
+  assert.match(res.errors.join(), /未知字段/);
+});
+
+/**
+ * 回归：author / description / updatedAt / categories 的类型校验此前位于
+ * `if (errors.length > 0) return ...` **之后**（它们在返回对象字面量里调用），
+ * errors 恒为空 → optString / optStringArray 推入的错误被静默丢弃，
+ * `author: 123` 这类非法类型被当成「字段不存在」接受。
+ */
+test('解析：L2 manifest 可选字段类型非法 → 进入 errors 并拒绝（此前被静默接受）', () => {
+  const base = { schemaVersion: 1, id: 'foo', name: 'n', version: '1', sections: ['settings'], checksums: { zip: 'aaa' } };
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ['author', { author: 123 }],
+    ['author', { author: null }],
+    ['description', { description: 5 }],
+    ['updatedAt', { updatedAt: {} }],
+    ['categories', { categories: 'nope' }],
+    ['categories', { categories: ['ok', 1] }],
+  ];
+  for (const [field, extra] of cases) {
+    const res = parseMarketItemManifest(JSON.stringify({ ...base, ...extra }));
+    assert.equal(res.ok, false, `${field}=${JSON.stringify(extra[field])} 必须被拒绝`);
+    assert.match(res.errors.join(), new RegExp(field), `错误必须点名 ${field}`);
+  }
+  // 多字段同时非法 → 全部进入 errors（不因首个错误短路）
+  const multi = parseMarketItemManifest(JSON.stringify({ ...base, author: 1, description: 2, updatedAt: 3, categories: 4 }));
+  assert.equal(multi.ok, false);
+  for (const f of ['author', 'description', 'updatedAt', 'categories']) {
+    assert.match(multi.errors.join(), new RegExp(f), `多字段非法时 ${f} 也必须出现在 errors`);
+  }
+});
+
+test('解析：L2 manifest 可选字段合法（含空串/空数组）→ 解析结果与既有行为逐字段一致', () => {
+  const base = { schemaVersion: 1, id: 'foo', name: 'n', version: '1', sections: ['settings'], checksums: { zip: 'aaa' } };
+  const expectations: Array<[Record<string, unknown>, Record<string, unknown>]> = [
+    [{}, {}],
+    [
+      { author: 'me', description: 'd', updatedAt: '2026-01-01T00:00:00.000Z', categories: ['a', 'b'] },
+      { author: 'me', description: 'd', updatedAt: '2026-01-01T00:00:00.000Z', categories: ['a', 'b'] },
+    ],
+    [{ author: '', description: '', updatedAt: '' }, { author: '', description: '', updatedAt: '' }],
+    [{ categories: [] }, { categories: [] }],
+    [{ mode: 'migrate' }, { mode: 'migrate' }],
+  ];
+  for (const [extra, expected] of expectations) {
+    const res = parseMarketItemManifest(JSON.stringify({ ...base, ...extra }));
+    assert.equal(res.ok, true, `合法输入 ${JSON.stringify(extra)} 不得被拒绝`);
+    assert.deepEqual(res.errors, []);
+    // 消费侧可见的投影（JSON，undefined 键被丢弃）必须与既有行为逐字段一致
+    assert.deepEqual(JSON.parse(JSON.stringify(res.manifest)), { ...base, ...expected }, '合法输入的解析结果必须与既有行为一致');
+  }
+  // 对象形状不变：author/description/updatedAt/categories 始终是自有键（值可为 undefined），
+  // 与既有实现一致 —— 避免消费侧 `in` / Object.keys 语义变化。
+  assert.deepEqual(
+    Object.keys(parseMarketItemManifest(JSON.stringify(base)).manifest!).sort(),
+    ['schemaVersion', 'id', 'name', 'version', 'author', 'description', 'updatedAt', 'categories', 'sections', 'checksums'].sort(),
+  );
+});
+
 /* ---------------- 安全校验（§6） ---------------- */
 
 test('校验：正常条目 valid', () => {
@@ -221,6 +340,32 @@ test('校验：zip bomb（超大压缩比/条目）拒绝', () => {
   const zip = Buffer.from(zipToBuffer(entries));
   const res = validateMarketItem('foo', makeItemManifest('foo', zip), zip);
   assert.equal(res.status, 'invalid');
+});
+
+/** EOCD 签名（与 utils/zip.ts 的 EOCD_SIG 同值；该常量未导出，故此处内联）。 */
+const EOCD_SIG = Buffer.from([0x50, 0x4b, 0x05, 0x06]);
+
+/**
+ * 构造「EOCD 声明条目数 = n」的 ZIP（实际只含 1 条）。
+ * 默认解析器在遍历中央目录**之前**先读 EOCD 的 16 位条目数字段判上限（utils/zip.ts:298/304），
+ * 因此这个样本足以驱动读侧防线，且**不需要写侧放宽限额** —— t36 之后那条路径已关闭
+ * （zipToBuffer 会把 maxEntries 钳到读侧上限，写不出「读不回来」的 ZIP）。
+ */
+function zipDeclaringEntries(n: number): Buffer {
+  const zip = Buffer.from(zipToBuffer([{ name: 'self/f0.json', data: Buffer.from('{}') }]));
+  const eocdIdx = zip.lastIndexOf(EOCD_SIG);
+  assert.ok(eocdIdx > 0, '样本 ZIP 必须含 EOCD');
+  zip.writeUInt16LE(n, eocdIdx + 10);
+  return zip;
+}
+
+test('校验：条目数超过读侧上限（10000）的 config.zip 拒绝 —— 限额收敛到唯一来源后市场通道仍按默认限额', () => {
+  // t36：不再借「写侧放宽限额」造样本（该不对称缺口已关闭）；改为直接声明 EOCD 条目数，
+  // 断言口径（条目数 10001 超过上限 10000）与改动前逐字一致。
+  const zip = zipDeclaringEntries(DEFAULT_ZIP_SAFETY_LIMITS.maxEntries + 1);
+  const res = validateMarketItem('big-item', makeItemManifest('big-item', zip), zip);
+  assert.equal(res.status, 'invalid');
+  assert.match(res.errors.join(), /条目数 10001 超过上限 10000/);
 });
 
 test('校验：内部 checksum 不匹配拒绝', () => {

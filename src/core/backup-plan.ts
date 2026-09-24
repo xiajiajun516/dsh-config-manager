@@ -42,7 +42,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { listRecursiveFollowingLinks } from '../utils/recursive-walk.ts';
 import { normalizePath, isPathSafe, isReservedInternalRel } from '../utils/paths.ts';
-import { SECTION_FILE_PREFIXES } from '../schema/config.ts';
+import { SECTION_FILE_PREFIXES, SECTION_IDS, requireSectionMeta } from '../schema/config.ts';
 import type { SectionId } from '../schema/types.ts';
 
 /**
@@ -72,6 +72,13 @@ export const OFFLINE_BACKUP_SECTIONS: readonly SectionId[] = [
 export const OFFLINE_UNAVAILABLE_SECTIONS: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'workspaces', 'credentialsStatus',
 ] as const;
+
+// 加载期自检（注册表派生，t30）：三个离线清单里的 id 必须都是**已注册分区**。
+// 「离线可收集性」是注册表未建模的另一条轴（要脱离 DSH 读盘收集），故这三份清单仍是显式声明；
+// 但拼错 id / 分区改名过去会让该分区「静默永不收集、永不报告」，现在模块加载即失败。
+for (const id of [...DEFAULT_BACKUP_SECTIONS, ...OPT_IN_BACKUP_SECTIONS, ...OFFLINE_UNAVAILABLE_SECTIONS]) {
+  requireSectionMeta(id);
+}
 
 /**
  * 凭据类文件名黑名单（**整文件即秘密**，绝不进备份）。与 `security/vault.ts` 的
@@ -313,15 +320,16 @@ export async function collectBackupEntries(
   return { entries, sections, warnings, included, empty };
 }
 
-/** 把收集结果归纳成 manifest.sections 布尔表（未收集的分区一律 false，绝不虚报） */
+/**
+ * 把收集结果归纳成 manifest.sections 布尔表（未收集的分区一律 false，绝不虚报）。
+ *
+ * t30：分区全集由注册表 `SECTION_IDS` 派生，**不再手抄 15 项清单** —— 新增分区无需改本文件，
+ * 也不可能因为漏抄某一行而让该分区在 manifest 里凭空消失（缺键 = 按 false 处理 = 恢复侧认为
+ * 「备份不含该分区」）。
+ */
 export function buildSectionFlags(included: readonly SectionId[]): Record<SectionId, boolean> {
   const has = new Set<string>(included);
-  const all: SectionId[] = [
-    'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'workspaces',
-    'skills', 'agentPresets', 'agentInstructions', 'pluginFiles', 'sessions', 'self',
-    'credentialsStatus', 'secrets',
-  ];
   const flags = {} as Record<SectionId, boolean>;
-  for (const id of all) flags[id] = has.has(id);
+  for (const id of SECTION_IDS) flags[id] = has.has(id);
   return flags;
 }

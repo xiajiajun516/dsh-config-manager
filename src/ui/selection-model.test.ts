@@ -13,7 +13,7 @@ import {
   buildExportRequest, buildSelectedPlan, defaultSelection,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
   groupPickState, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter, isPlanItemExcluded, isUnitSelected,
-  middleEllipsis, pickerSummary,
+  tailWeightedEllipsis, pickerSummary,
   sectionPickState, sectionsFromPlan, sectionsFromPreview, selectedUnitCount, selectAll,
   selectionHasItems, toggleSection, toggleUnit, toggleUnitGroup, unitLabel,
   visibleUnits, UNIT_RENDER_LIMIT,
@@ -392,20 +392,20 @@ test('分组级勾选：点一个分组 = 只勾这一组（不得静默变成�
   assert.deepEqual(buildExportRequest(sel, [section]), { only: [] })
 })
 
-test('middleEllipsis：中段省略且保留尾部（时间戳/版本等区分信息，UI-16）', () => {
+test('tailWeightedEllipsis：中段省略且保留尾部（时间戳/版本等区分信息，UI-16）', () => {
   const long = '2026-09-20T10-00-00-backup-session-name-with-a-very-long-tail-2026-09-20.zip'
-  const cut = middleEllipsis(long, 44)
+  const cut = tailWeightedEllipsis(long, 44)
   assert.ok(cut.length <= 44, `截断后不得超长（实际 ${cut.length}）`)
   assert.ok(cut.includes('…'), '中段用 … 收掉')
   assert.ok(cut.endsWith(long.slice(-8)), '尾部（区分信息所在）必须保留')
   assert.ok(cut.startsWith(long.slice(0, 4)), '头部保留')
 
   // 短文本原样（不动数据）
-  assert.equal(middleEllipsis('short', 44), 'short')
-  assert.equal(middleEllipsis('exactly-eleven', 14), 'exactly-eleven')
+  assert.equal(tailWeightedEllipsis('short', 44), 'short')
+  assert.equal(tailWeightedEllipsis('exactly-eleven', 14), 'exactly-eleven')
   // 极端 max 不产生 NaN / 空串
-  assert.equal(middleEllipsis('abcdef', 1), 'abcdef')
-  assert.ok(middleEllipsis('abcdef', 4).length <= 4)
+  assert.equal(tailWeightedEllipsis('abcdef', 1), 'abcdef')
+  assert.ok(tailWeightedEllipsis('abcdef', 4).length <= 4)
 })
 
 test('selectionHasItems：「全不选」= 计划里一项都没留下（UI-05 的执行守卫）', () => {
@@ -501,3 +501,264 @@ test('unitLabel：剥掉分区/实体前缀（市场逐项摘要与级联树同�
   assert.equal(unitLabel('mcp:server-a', 'mcp'), 'server-a')
 })
 
+
+/* ---------------- issue #45：会话 ↔ 工作区联动勾选 ---------------- */
+
+import { applySessionWorkspaceCoupling, couplingInventorySections, sameSelection, sessionIdOfUnit } from './selection-model.ts';
+
+/** 两个分区的联动夹具：会话 s1/s2/s3 分属工作区 w1（s1）/ w2（s2,s3）。 */
+function linkedNodes(): SelectionSection[] {
+  return [
+    {
+      section: 'sessions',
+      count: 3,
+      sizeBytes: 0,
+      units: [
+        { id: 'sessions:--p--/s1', label: 's1', sizeBytes: 0 },
+        { id: 'sessions:--p--/s2', label: 's2', sizeBytes: 0 },
+        { id: 'sessions:--p--/s3', label: 's3', sizeBytes: 0 },
+      ],
+    },
+    {
+      section: 'workspaces',
+      count: 2,
+      sizeBytes: 0,
+      units: [
+        { id: 'workspace:w1', label: 'w1', sizeBytes: 0, sessionIds: ['s1'] },
+        { id: 'workspace:w2', label: 'w2', sizeBytes: 0, sessionIds: ['s2', 's3'] },
+      ],
+    },
+    { section: 'settings', count: 1, sizeBytes: 0, units: [{ id: 'settings:x', label: 'x', sizeBytes: 0 }] },
+  ]
+}
+
+test('会话单元 id → sessionId 解析（只认 sessions: 前缀与最后一段）', () => {
+  assert.equal(sessionIdOfUnit('sessions:--p--/session-a'), 'session-a');
+  assert.equal(sessionIdOfUnit('workspace:w1'), undefined);
+  assert.equal(sessionIdOfUnit('sessions:noslash'), undefined);
+});
+
+test('勾了会话 → 自动勾上拥有它的工作区（导出/导入同一套规则）', () => {
+  const nodes = linkedNodes();
+  const onlyS1 = toggleUnit({ sections: [], excluded: [] }, nodes, 'sessions:--p--/s1', true);
+  const coupled = applySessionWorkspaceCoupling(onlyS1, nodes, 'sessions');
+  assert.equal(isUnitSelected(coupled, 'workspace:w1'), true, 'w1 拥有 s1 → 自动勾上');
+  assert.equal(isUnitSelected(coupled, 'workspace:w2'), false, 'w2 没被牵动');
+  assert.equal(isUnitSelected(coupled, 'sessions:--p--/s1'), true);
+  assert.equal(isUnitSelected(coupled, 'sessions:--p--/s2'), false, '没勾的会话不受影响');
+});
+
+test('取消工作区 → 它的会话一起取消（其余工作区的会话不动）', () => {
+  const nodes = linkedNodes();
+  const all = selectAll(nodes, true);
+  const off = toggleUnit(all, nodes, 'workspace:w1', false);
+  const coupled = applySessionWorkspaceCoupling(off, nodes, 'workspaces');
+  assert.equal(isUnitSelected(coupled, 'sessions:--p--/s1'), false, 'w1 的会话被取消');
+  assert.equal(isUnitSelected(coupled, 'workspace:w1'), false);
+  assert.equal(isUnitSelected(coupled, 'sessions:--p--/s2'), true, 'w2 的会话保持勾选');
+  assert.equal(isUnitSelected(coupled, 'workspace:w2'), true);
+});
+
+test('取消整个工作区分区 → 它的会话也全部取消；没有 sessionIds 的工作区不参与联动', () => {
+  const nodes = linkedNodes();
+  const all = selectAll(nodes, true);
+  const wsNode = nodes.find((n) => n.section === 'workspaces')!;
+  const coupled = applySessionWorkspaceCoupling(toggleSection(all, wsNode, false), nodes, 'workspaces');
+  assert.equal(isUnitSelected(coupled, 'sessions:--p--/s1'), false);
+  assert.equal(isUnitSelected(coupled, 'sessions:--p--/s3'), false);
+  assert.equal(isUnitSelected(coupled, 'settings:x'), true, '无关分区不受影响');
+  const noOwners: SelectionSection[] = [
+    { section: 'sessions', count: 1, sizeBytes: 0, units: [{ id: 'sessions:--p--/s1', label: 's1', sizeBytes: 0 }] },
+    { section: 'workspaces', count: 1, sizeBytes: 0, units: [{ id: 'workspace:w9', label: 'w9', sizeBytes: 0 }] },
+  ];
+  const untouched = applySessionWorkspaceCoupling(toggleUnit({ sections: [], excluded: [] }, noOwners, 'sessions:--p--/s1', true), noOwners);
+  assert.equal(untouched.sections.includes('workspaces'), false, '没有 sessionIds 的工作区不被猜着勾上（workspaces 分区仍未选）');
+});
+test('couplingInventorySections：勾了会话就必须把工作区清单一起读（否则联动没有数据可依）', () => {
+  assert.deepEqual(couplingInventorySections([]), []);
+  assert.deepEqual(couplingInventorySections(['settings']), ['settings']);
+  assert.deepEqual(couplingInventorySections(['sessions']), ['sessions', 'workspaces']);
+  assert.deepEqual(couplingInventorySections(['sessions', 'workspaces']), ['sessions', 'workspaces'], '已有就不重复加');
+  assert.deepEqual(couplingInventorySections(['workspaces']), ['workspaces'], '反向不加：没勾会话时不需要会话清单');
+});
+
+test('sameSelection：集合等价即视为相同（清单到货补联动时用它避免自激写库）', () => {
+  assert.equal(sameSelection({ sections: ['settings'], excluded: ['x'] }, { sections: ['settings'], excluded: ['x'] }), true);
+  assert.equal(sameSelection({ sections: [], excluded: [] }, { sections: [], excluded: ['x'] }), false);
+  assert.equal(sameSelection({ sections: ['settings'], excluded: [] }, { sections: ['settings', 'plugins'], excluded: [] }), false);
+});
+
+test('链式选择（用户真机场景）：勾了一个对话，工作区清单到货后它自动回来', () => {
+  const nodes = linkedNodes();
+  const wsNode = nodes.find((n) => n.section === 'workspaces')!;
+  // 起点：默认勾选（工作区在、会话不在）→ 用户取消整个工作区分区
+  const off = applySessionWorkspaceCoupling(toggleSection({ sections: ['workspaces', 'settings'], excluded: [] }, wsNode, false), nodes, 'workspaces');
+  assert.equal(off.sections.includes('workspaces'), false, '工作区被取消');
+  // 用户勾一个对话：此刻工作区清单还没读到（units 为空）
+  const noInv: SelectionSection[] = nodes.map((n) => (n.section === 'workspaces' ? { ...n, units: [] } : n));
+  const clicked = applySessionWorkspaceCoupling(toggleUnit(off, noInv, 'sessions:--p--/s1', true), noInv, 'sessions');
+  assert.equal(clicked.sections.includes('sessions'), true, '会话分区被带进选择');
+  assert.equal(clicked.sections.includes('workspaces'), false, '清单缺失时联动只能空转（这就是用户看到的 bug）');
+  // 清单到货 → 导出页的补联动 effect 做同一件事（方向固定 sessions）
+  const synced = applySessionWorkspaceCoupling(clicked, nodes, 'sessions');
+  assert.equal(synced.sections.includes('workspaces'), true, '工作区分区回到勾选状态');
+  assert.equal(isUnitSelected(synced, 'workspace:w1'), true, '拥有 s1 的工作区被自动勾上');
+  assert.equal(isUnitSelected(synced, 'workspace:w2'), false, '其它工作区保持排除（不会顺带把 660 个会话带进来）');
+  assert.equal(isUnitSelected(synced, 'sessions:--p--/s1'), true, '用户勾的对话保持勾选');
+});
+test('链式选择：会话目录名两种形态（裸 uuid / session-<uuid>）必须都能配上工作区', () => {
+  // 真机实测：同一台机器上 806 个会话目录里 158 个是 session-<uuid>、648 个是裸 <uuid>，
+  // 而工作区注册表一律写 session-<uuid>。会话单元的末段是**目录名**，两种形态必须归一化后配对。
+  const bare = '2b549283-846a-47ab-a438-d69d977d48e3';
+  const ids = ['session-' + bare, 'session-80cede7e-7543-4a3a-a927-4465ba9791f8'];
+  const both: SelectionSection[] = [
+    { section: 'sessions', count: 2, sizeBytes: 0, units: [
+      { id: 'sessions:--p--/' + bare, label: bare, sizeBytes: 0 },
+      { id: 'sessions:--p--/session-80cede7e-7543-4a3a-a927-4465ba9791f8', label: 'old', sizeBytes: 0 },
+    ] },
+    { section: 'workspaces', count: 2, sizeBytes: 0, units: [
+      { id: 'workspace:ws-new', label: 'new', sizeBytes: 0, sessionIds: [ids[0]!] },
+      { id: 'workspace:ws-old', label: 'old', sizeBytes: 0, sessionIds: [ids[1]!] },
+    ] },
+  ];
+  // ① 勾「裸 uuid」形态的对话 → 对应工作区（登记的是 session-<uuid>）必须自动勾上
+  const picked = applySessionWorkspaceCoupling(toggleUnit({ sections: [], excluded: [] }, both, 'sessions:--p--/' + bare, true), both, 'sessions');
+  assert.equal(isUnitSelected(picked, 'workspace:ws-new'), true, '裸 uuid 对话 → 拥有它的工作区自动勾上');
+  assert.equal(isUnitSelected(picked, 'workspace:ws-old'), false, '另一个工作区不受影响');
+  // ② 反向：取消该工作区 → 裸 uuid 形态的对话一起取消
+  const off = applySessionWorkspaceCoupling(toggleUnit(selectAll(both, true), both, 'workspace:ws-new', false), both, 'workspaces');
+  assert.equal(isUnitSelected(off, 'sessions:--p--/' + bare), false, '取消工作区 → 裸 uuid 会话一起取消');
+  assert.equal(isUnitSelected(off, 'sessions:--p--/session-80cede7e-7543-4a3a-a927-4465ba9791f8'), true, '别的会话不动');
+});
+test('链式选择：工作区没有 sessionIds（DSH 只登记了一部分会话）→ 按 cwd 目录键认领', () => {
+  // 真机实测：一次可选择的 570 条会话里只有 23 条落在工作区 sessionIds 内 —— 只认 sessionIds 的联动
+  // 对绝大多数对话「点了没反应」，而界面又明明把它们挂在该工作区下（DSH 按 cwd 目录键分组）。
+  const repo = '--D-Projects-personal-dsh-config-manager--';
+  const tools = '--D-Tools--';
+  const nodes: SelectionSection[] = [
+    { section: 'sessions', count: 2, sizeBytes: 0, units: [
+      { id: 'sessions:' + repo + '/2b549283-846a-47ab-a438-d69d977d48e3', label: 'a', sizeBytes: 0 },
+      { id: 'sessions:' + tools + '/a2830ada-f421-4f9a-9172-1acdfab978fe', label: 'b', sizeBytes: 0 },
+    ] },
+    { section: 'workspaces', count: 2, sizeBytes: 0, units: [
+      { id: 'workspace:ws-repo', label: 'repo', sizeBytes: 0, sessionIds: ['session-someone-else'], projectKey: repo },
+      { id: 'workspace:ws-tools', label: 'tools', sizeBytes: 0, projectKey: tools },
+    ] },
+  ];
+  const picked = applySessionWorkspaceCoupling(toggleUnit({ sections: [], excluded: [] }, nodes, 'sessions:' + repo + '/2b549283-846a-47ab-a438-d69d977d48e3', true), nodes, 'sessions');
+  assert.equal(isUnitSelected(picked, 'workspace:ws-repo'), true, '靠 cwd 目录键认领（sessionIds 里没有它）');
+  assert.equal(isUnitSelected(picked, 'workspace:ws-tools'), false, '别的目录键的工作区不动');
+  const off = applySessionWorkspaceCoupling(toggleUnit(selectAll(nodes, true), nodes, 'workspace:ws-repo', false), nodes, 'workspaces');
+  assert.equal(isUnitSelected(off, 'sessions:' + repo + '/2b549283-846a-47ab-a438-d69d977d48e3'), false, '取消工作区 → 该目录下的会话一起取消');
+  assert.equal(isUnitSelected(off, 'sessions:' + tools + '/a2830ada-f421-4f9a-9172-1acdfab978fe'), true, '别的目录的会话不动');
+});
+
+test('链式选择：旧宿主不回传 projectKey 时用 detail（工作区绝对路径）现算；描述文案不猜', () => {
+  const repo = '--D-Projects-personal-dsh-config-manager--';
+  const nodes: SelectionSection[] = [
+    { section: 'sessions', count: 1, sizeBytes: 0, units: [{ id: 'sessions:' + repo + '/x', label: 'x', sizeBytes: 0 }] },
+    { section: 'workspaces', count: 2, sizeBytes: 0, units: [
+      { id: 'workspace:ws-by-detail', label: 'by-detail', sizeBytes: 0, detail: 'D:/Projects/personal/dsh-config-manager' },
+      { id: 'workspace:ws-desc', label: 'desc', sizeBytes: 0, detail: 'current={"id":"x"} imported={"id":"y"}' },
+    ] },
+  ];
+  const picked = applySessionWorkspaceCoupling(toggleUnit({ sections: [], excluded: [] }, nodes, 'sessions:' + repo + '/x', true), nodes, 'sessions');
+  assert.equal(isUnitSelected(picked, 'workspace:ws-by-detail'), true, 'detail 是绝对路径 → 现算目录键并认领');
+  assert.equal(isUnitSelected(picked, 'workspace:ws-desc'), false, '非路径的 detail（描述文案）不参与联动（不猜）');
+});
+
+/* ---------------- 父对话 ↔ 子代理会话联动（用户需求：勾父自动勾上它的 subagent 会话） ---------------- */
+
+import { applySessionParentCoupling, type SelectionUnit, type SessionParentChange } from './selection-model.ts';
+
+/**
+ * 会话族夹具（全部在同一个工作区目录下）：
+ *   p1 ─ c1、c9（子代理）、c2（子代理，自己还有子代理 g1）
+ *   p3 ─ c3；p2 独立顶层会话。
+ * c9 的父 id 刻意写成 `session-p1` 前缀形态（真机：同一台机器上 `session-<uuid>` 与裸 `<uuid>` 并存），
+ * 验证「归一化后配对」。
+ */
+function parentLinkedNodes(): SelectionSection[] {
+  const units: SelectionUnit[] = [
+    { id: 'sessions:--p--/p1', label: 'p1', sizeBytes: 0 },
+    { id: 'sessions:--p--/p2', label: 'p2', sizeBytes: 0 },
+    { id: 'sessions:--p--/p3', label: 'p3', sizeBytes: 0 },
+    { id: 'sessions:--p--/c1', label: 'c1', sizeBytes: 0, parentSessionId: 'p1' },
+    { id: 'sessions:--p--/c2', label: 'c2', sizeBytes: 0, parentSessionId: 'p1' },
+    { id: 'sessions:--p--/g1', label: 'g1', sizeBytes: 0, parentSessionId: 'c2' },
+    { id: 'sessions:--p--/c3', label: 'c3', sizeBytes: 0, parentSessionId: 'p3' },
+    { id: 'sessions:--p--/c9', label: 'c9', sizeBytes: 0, parentSessionId: 'session-p1' },
+  ]
+  return [{ section: 'sessions', count: units.length, sizeBytes: 0, units }]
+}
+
+/** 模拟 ContentPicker 的 commit 顺序：先 toggleUnit，再过父子联动。 */
+function click(nodes: SelectionSection[], sel: Selection, unitId: string, checked: boolean): Selection {
+  const change: SessionParentChange = { unitId, checked }
+  return applySessionParentCoupling(toggleUnit(sel, nodes, unitId, checked), nodes, change)
+}
+
+test('勾父对话 → 自动勾上它的子代理会话（含嵌套孙），无关会话不跟着走', () => {
+  const nodes = parentLinkedNodes()
+  const picked = click(nodes, { sections: [], excluded: [] }, 'sessions:--p--/p1', true)
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/c1'), true, '直接子会话自动勾上')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/c2'), true, '另一个直接子会话也勾上')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/g1'), true, '嵌套子代理会话（孙）也一起带')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/c9'), true, '同一父对话的全部子会话都带上')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/p2'), false, '无关的顶层会话不跟着走')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/p3'), false, '别人的父对话不跟着走')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/c3'), false, '别人的子会话不跟着走（绝不顺带兄弟）')
+})
+
+test('勾子代理会话 → 自动带上它的父对话（父链向上），不带兄弟', () => {
+  const nodes = parentLinkedNodes()
+  const picked = click(nodes, { sections: [], excluded: [] }, 'sessions:--p--/c1', true)
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/p1'), true, '父对话自动勾上（与引擎的「向上补父」同口径）')
+  assert.equal(isUnitSelected(picked, 'sessions:--p--/c2'), false, '兄弟子会话不被带上')
+  // 多层：勾孙 → 子与父都要勾上
+  const deep = click(nodes, { sections: [], excluded: [] }, 'sessions:--p--/g1', true)
+  assert.equal(isUnitSelected(deep, 'sessions:--p--/c2'), true, '中间那层也勾上')
+  assert.equal(isUnitSelected(deep, 'sessions:--p--/p1'), true, '一路到顶')
+})
+
+test('取消父对话 → 它的子代理会话一起取消；取消子代理会话 → 只取消这一条', () => {
+  const nodes = parentLinkedNodes()
+  const all = click(nodes, { sections: [], excluded: [] }, 'sessions:--p--/p1', true)
+  const offParent = click(nodes, all, 'sessions:--p--/p1', false)
+  assert.equal(isUnitSelected(offParent, 'sessions:--p--/p1'), false)
+  assert.equal(isUnitSelected(offParent, 'sessions:--p--/c1'), false, '取消父 → 子一起取消（否则界面与包内容不一致）')
+  assert.equal(isUnitSelected(offParent, 'sessions:--p--/g1'), false, '整棵子树都取消')
+  assert.equal(isUnitSelected(offParent, 'sessions:--p--/p3'), false, '别人的族不受影响（本来就没勾）')
+
+  const offChild = click(nodes, all, 'sessions:--p--/c1', false)
+  assert.equal(isUnitSelected(offChild, 'sessions:--p--/c1'), false, '只取消被点的那条子会话')
+  assert.equal(isUnitSelected(offChild, 'sessions:--p--/p1'), true, '父对话留着（用户明确排除了这一条）')
+  assert.equal(isUnitSelected(offChild, 'sessions:--p--/c2'), true, '兄弟子会话不动')
+})
+
+test('批量动作（无动作方向）走正向闭包：只补齐，绝不取消任何已勾选的会话', () => {
+  const nodes = parentLinkedNodes()
+  // 用户先只勾了子会话（引擎会向上补父），再点「全选」以外的批量路径：这里用「分区勾上」模拟
+  const partial: Selection = {
+    sections: ['sessions'],
+    excluded: ['sessions:--p--/g1', 'sessions:--p--/p1', 'sessions:--p--/p3', 'sessions:--p--/c3'],
+  }
+  const synced = applySessionParentCoupling(partial, nodes)
+  assert.equal(isUnitSelected(synced, 'sessions:--p--/p1'), true, '已勾选的子会话把父补齐')
+  assert.equal(isUnitSelected(synced, 'sessions:--p--/g1'), true, '已勾选的父把子补齐')
+  assert.equal(isUnitSelected(synced, 'sessions:--p--/p3'), false, '没勾的族不补')
+  // 幂等：再跑一次结果等价
+  assert.deepEqual(applySessionParentCoupling(synced, nodes), synced)
+})
+
+test('无 parentSessionId（旧宿主 / 非 sessions 分区 / 导入页）→ 原样返回，不猜', () => {
+  const plain: SelectionSection[] = [{ section: 'sessions', count: 2, sizeBytes: 0, units: [
+    { id: 'sessions:--p--/a', label: 'a', sizeBytes: 0 },
+    { id: 'sessions:--p--/b', label: 'b', sizeBytes: 0 },
+  ] }]
+  const sel = click(plain, { sections: [], excluded: [] }, 'sessions:--p--/a', true)
+  assert.deepEqual(sel.sections, ['sessions'])
+  assert.equal(isUnitSelected(sel, 'sessions:--p--/b'), false, '没有任何父子关系 → 联动整段不生效')
+  const other: SelectionSection[] = [{ section: 'skills', count: 1, sizeBytes: 0, units: [{ id: 'skills:s', label: 's', sizeBytes: 0 }] }]
+  assert.deepEqual(applySessionParentCoupling({ sections: ['skills'], excluded: [] }, other), { sections: ['skills'], excluded: [] })
+})

@@ -18,7 +18,7 @@ import fssync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { parseCli } from '../cli/index.ts';
 import {
   EnvironmentLockManager,
@@ -33,6 +33,7 @@ import {
   RECOVERING_PREFIX,
   type LockOwnershipRecord,
   type ProcessIdentityProbe,
+  type EnvLockManagerOptions,
 } from './env-lock.ts';
 
 /* ---------------------------------------------------------------- 工具 */
@@ -41,9 +42,37 @@ const here = import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url))
 /** env-lock.ts 绝对路径（子进程动态 import 用 file:// URL） */
 const ENV_LOCK_ABS = path.resolve(here, 'env-lock.ts');
 
+/**
+ * 本测试创建的 manager 登记表：收尾时统一「静止」后再删目录。
+ *
+ * ENOTEMPTY 的**确定性**修法（等条件成立/显式 drain，不是重试或加大 sleep）：
+ * acquire 之后没有成功 release 的用例会留下写者：定时器仍在跑（从未 release），或定时器已停但
+ * 在途的 atomicWriteFile（tmp → rename）尚未落地（release 的抛错分支已由产品侧 drain 兜住，
+ * 本夹具是**第二层**：把「收尾时本进程对该目录已无写者」变成确定前提）。
+ * 写者与 `t.after` 的 rmSync 目录遍历竞争 —— Windows 上即 `ENOTEMPTY`（本工作流实测 4 次）。
+ * 静止之后本进程对该目录不再有任何写者，rmSync 才真正确定。
+ */
+const trackedManagers = new WeakMap<test.TestContext, EnvironmentLockManager[]>();
+
+/** 创建 manager 并登记到本测试的收尾清单（测试内的 manager 一律走这里，别直接 new） */
+function lockManager(t: test.TestContext, opts: EnvLockManagerOptions = {}): EnvironmentLockManager {
+  const mgr = new EnvironmentLockManager(opts);
+  const list = trackedManagers.get(t) ?? [];
+  list.push(mgr);
+  trackedManagers.set(t, list);
+  return mgr;
+}
+
 function tmp(t: test.TestContext): string {
   const dir = fssync.mkdtempSync(path.join(os.tmpdir(), 'env-lock-'));
-  t.after(() => fssync.rmSync(dir, { recursive: true, force: true }));
+  t.after(async () => {
+    // ① 静止：停定时器 + 等在途写完成（等待条件成立，而非重试删除）
+    for (const mgr of trackedManagers.get(t) ?? []) {
+      await mgr.stopHeartbeatAndDrain().catch(() => { /* 收尾尽力而为（本身不产生写） */ });
+    }
+    // ② 此刻不可能再有本进程的写者 → 目录可确定性删除（无需重试/加大超时）
+    fssync.rmSync(dir, { recursive: true, force: true });
+  });
   return dir;
 }
 
@@ -68,14 +97,9 @@ function heartbeatFile(instanceId: string): string {
   return `${HEARTBEAT_PREFIX}${instanceId}`;
 }
 
-/** 等待某 instanceId 的 heartbeat sidecar 落盘（acquire 后首写为异步，需等待才能确保 inspect 判 fresh） */
-async function waitHeartbeat(locksDir: string, instanceId: string): Promise<void> {
-  const p = path.join(locksDir, heartbeatFile(instanceId));
-  const t0 = Date.now();
-  while (!fssync.existsSync(p)) {
-    if (Date.now() - t0 > 4000) throw new Error(`heartbeat sidecar 未在预期时间内落盘: ${p}`);
-    await sleepReal(20);
-  }
+/** 等该 manager 的 heartbeat sidecar 落盘：显式 drain 其写链（acquire 后首写异步，且判 fresh 前必须已落盘） */
+async function waitHeartbeat(mgr: EnvironmentLockManager): Promise<void> {
+  await mgr.flushHeartbeat();
 }
 
 /** 注入面包装的真实 IO（基于 node:fs/promises），支持按路径故障注入 + rename 后钩子 */
@@ -232,7 +256,7 @@ const { EnvironmentLockManager } = await import(pathToFileURL(process.env.LOCK_A
 test('§11.1-c1 `open(wx)` 独占创建：并发 acquire 只有一个成功（多 manager 同目录）', async (t) => {
   const locksDir = tmp(t);
   const n = 6;
-  const mgrs = Array.from({ length: n }, () => new EnvironmentLockManager({ locksDir }));
+  const mgrs = Array.from({ length: n }, () => lockManager(t, { locksDir }));
   const results = await Promise.all(mgrs.map((m) => m.acquire({ op: 'concurrent' })));
   const winners = results.filter((r) => r.state === 'ACQUIRED');
   assert.equal(winners.length, 1, `必须恰好一个 ACQUIRED，实际 ${results.map((r) => r.state).join(',')}`);
@@ -240,7 +264,7 @@ test('§11.1-c1 `open(wx)` 独占创建：并发 acquire 只有一个成功（�
   assert.equal(losers.length, n - 1);
   // 唯一持有者释放后可再 acquire
   await mgrs[results.findIndex((r) => r.state === 'ACQUIRED')]!.release(winners[0]!.token!);
-  const againMgr = new EnvironmentLockManager({ locksDir });
+  const againMgr = lockManager(t, { locksDir });
   const again = await againMgr.acquire({ op: 're' });
   assert.equal(again.state, 'ACQUIRED');
   await againMgr.release(again.token!);
@@ -248,8 +272,8 @@ test('§11.1-c1 `open(wx)` 独占创建：并发 acquire 只有一个成功（�
 
 test('§11.1-c2 不存在 exists→write 竞态：并发双 acquire 至少失败其一', async (t) => {
   const locksDir = tmp(t);
-  const a = new EnvironmentLockManager({ locksDir });
-  const b = new EnvironmentLockManager({ locksDir });
+  const a = lockManager(t, { locksDir });
+  const b = lockManager(t, { locksDir });
   const [ra, rb] = await Promise.all([a.acquire({ op: 'x' }), b.acquire({ op: 'y' })]);
   assert.notEqual(ra.state === 'ACQUIRED', rb.state === 'ACQUIRED', '双 acquire 不能同时成功（源码无 exists→write）');
   const winner = ra.state === 'ACQUIRED' ? a : b;
@@ -260,7 +284,7 @@ test('§11.1-c2 不存在 exists→write 竞态：并发双 acquire 至少失败
 test('§11.1-c3 持句柄 = 持锁（child process）：父 acquire 后，child 同 locksDir acquire → 失败', async (t) => {
   const dir = tmp(t);
   const locksDir = path.join(dir, 'locks');
-  const parent = new EnvironmentLockManager({ locksDir });
+  const parent = lockManager(t, { locksDir });
   const pres = await parent.acquire({ op: 'parent-hold' });
   assert.equal(pres.state, 'ACQUIRED');
 
@@ -285,7 +309,7 @@ process.exit(1); // 期望被拒：非 0 指示「未获得锁」；父进程根
 test('§11.1-c4 release：close→unlink；unlink 失败抛 EnvironmentLockIOError 且保留 activeToken（可重试）', async (t) => {
   const locksDir = tmp(t);
   const ctl = makeIo();
-  const mgr = new EnvironmentLockManager({ locksDir, io: ctl.io });
+  const mgr = lockManager(t, { locksDir, io: ctl.io });
   const res = await mgr.acquire({ op: 'u' });
   assert.equal(res.state, 'ACQUIRED');
   const token = res.token!;
@@ -306,7 +330,7 @@ test('§11.1-c4 release：close→unlink；unlink 失败抛 EnvironmentLockIOErr
 
 test('§11.1-c5 owner metadata 写入/读回一致', async (t) => {
   const locksDir = tmp(t);
-  const mgr = new EnvironmentLockManager({
+  const mgr = lockManager(t, {
     locksDir,
     op: 'import',
     target: 'executeImportPlan',
@@ -340,15 +364,22 @@ async function readOwnershipByMgr(mgr: EnvironmentLockManager): Promise<LockOwne
  * 而 heartbeat 定时器在 CI 负载下可能整段采样窗口都没触发 —— 实测失败 `heartbeat seq 应递增: 2,2,2`
  * （同一 commit 重跑即过）。产品侧 seq 用 `++this.heartbeatSeq`，单进程内严格单调，
  * 问题只在测试用墙钟猜「定时器何时跑」，故改为等待**观测到的**推进。
+ *
+ * `minHeartbeatAt`（§11.1-c9 用）：60ms 定时器同样由**墙钟**驱动，故「acquire → 推进注入时钟」之间
+ * 可能已经跑完一整轮 tick —— 那条记录的 seq 更大，但 heartbeatAt 仍是**推进前**的时钟。只等 seq 递增
+ * 会把这条「合法但陈旧」的续期当成「推进后的续期」（§11.1-c9 实测形态：seq 递增成立、heartbeatAt 断言失败）。
+ * 传入推进后的时钟 = 等到**推进之后发起**的那次写；陈旧记录被**跳过**，而不是把断言调松。
+ * 超时仍如实返回最后观测到的记录，由调用方断言报错（产品侧不再续期 / 心跳不跟随注入时钟时必然失败）。
  */
 async function waitHeartbeatSeqAbove(
   hbPath: string,
   fromSeq: number,
   timeoutMs = 5000,
+  minHeartbeatAt = Number.NEGATIVE_INFINITY,
 ): Promise<{ seq: number; heartbeatAt: number }> {
   const deadline = Date.now() + timeoutMs
   let rec = JSON.parse(await readText(hbPath)) as { seq: number; heartbeatAt: number }
-  while (rec.seq <= fromSeq && Date.now() < deadline) {
+  while ((rec.seq <= fromSeq || rec.heartbeatAt < minHeartbeatAt) && Date.now() < deadline) {
     await sleepReal(20)
     rec = JSON.parse(await readText(hbPath)) as { seq: number; heartbeatAt: number }
   }
@@ -358,19 +389,14 @@ async function waitHeartbeatSeqAbove(
 test('§11.1-c6 heartbeat sidecar 更新不替换 environment.lock（inode/内容不变）', async (t) => {
   const locksDir = tmp(t);
   const ctl = makeIo();
-  const mgr = new EnvironmentLockManager({ locksDir, io: ctl.io, heartbeatIntervalMs: 50 });
+  const mgr = lockManager(t, { locksDir, io: ctl.io, heartbeatIntervalMs: 50 });
   const res = await mgr.acquire({ op: 'hb' });
   assert.equal(res.state, 'ACQUIRED');
   const id = res.token!.instanceId;
-  // 等待首个 heartbeat sidecar 落盘
-  let sawSb = false;
-  for (let i = 0; i < 100; i++) {
-    const files = await mgr.listLockFiles();
-    if (files.some((n) => n === heartbeatFile(id))) { sawSb = true; break; }
-    await sleepReal(20);
-  }
+  // 显式等首写落盘（acquire 的首写同步入链 → drain 必然覆盖它），不再用 2s 有界轮询猜定时器
+  await mgr.flushHeartbeat();
+  const sawSb = (await mgr.listLockFiles()).some((n) => n === heartbeatFile(id));
   assert.ok(sawSb, 'heartbeat sidecar 应已创建');
-  const ownerCtl = ctl.io; // real fs
   const beforeText = await readText(path.join(locksDir, OWNERSHIP_FILE));
   // 等若干心跳周期（≥3 tick），期间只更新 sidecar
   const hbPath = path.join(locksDir, heartbeatFile(id));
@@ -407,7 +433,7 @@ test('§11.1-c6 heartbeat sidecar 更新不替换 environment.lock（inode/内�
 test('§11.1-c7 old heartbeat sidecar 不影响新 owner（不同 instanceId 文件名隔离）', async (t) => {
   const locksDir = tmp(t);
   // A 持有并释放；期间人为残留一个其它 owner 的 heartbeat
-  const a = new EnvironmentLockManager({ locksDir });
+  const a = lockManager(t, { locksDir });
   const ra = await a.acquire({ op: 'a' });
   const idA = ra.token!.instanceId;
   await fs.writeFile(path.join(locksDir, heartbeatFile('foreign-owner')), JSON.stringify({
@@ -419,12 +445,12 @@ test('§11.1-c7 old heartbeat sidecar 不影响新 owner（不同 instanceId 文
   assert.ok(fssync.existsSync(path.join(locksDir, heartbeatFile('foreign-owner'))), '其它 owner 的 heartbeat 不得被误删');
 
   // 新 owner B acquire：不同 instanceId → 文件名不同
-  const b = new EnvironmentLockManager({ locksDir });
+  const b = lockManager(t, { locksDir });
   const rb = await b.acquire({ op: 'b' });
   const idB = rb.token!.instanceId;
   assert.notEqual(idB, idA);
   // 模拟 B 的锁 + 新鲜 heartbeat：inspect 只依据 B 自己的 sidecar，忽略 foreign 残留
-  await waitHeartbeat(locksDir, idB); // 等首写 heartbeat 落盘，避免异步 race 误判 expired
+  await waitHeartbeat(b); // 等首写 heartbeat 落盘，避免异步 race 误判 expired
   const insp = await b.inspectLockState();
   assert.equal(insp.state, 'LOCKED', 'fresh heartbeat（新 owner 自己的 sidecar）→ LOCKED，不受旧的 foreign heartbeat 影响');
   await b.release(rb.token!);
@@ -432,7 +458,7 @@ test('§11.1-c7 old heartbeat sidecar 不影响新 owner（不同 instanceId 文
 
 test('§11.1-c8 release instanceId mismatch → 抛 EnvironmentLockOwnedByAnotherError + 不 unlink', async (t) => {
   const locksDir = tmp(t);
-  const mgr = new EnvironmentLockManager({ locksDir });
+  const mgr = lockManager(t, { locksDir });
   const res = await mgr.acquire({ op: 'rel' });
   const token = res.token!;
   // 外部篡改 ownership.instanceId（模拟异常恢复/人工修改/他方接管）
@@ -450,19 +476,30 @@ test('§11.1-c9 heartbeat 续期（注入时钟）+ 持续写 sidecar', async (t
   const locksDir = tmp(t);
   const clk = makeClock();
   const ctl = makeIo();
-  const mgr = new EnvironmentLockManager({ locksDir, io: ctl.io, now: clk.clock, heartbeatIntervalMs: 60 });
+  const mgr = lockManager(t, { locksDir, io: ctl.io, now: clk.clock, heartbeatIntervalMs: 60 });
   const res = await mgr.acquire({ op: 'lease' });
   assert.equal(res.state, 'ACQUIRED');
   const id = res.token!.instanceId;
   const hbPath = path.join(locksDir, heartbeatFile(id));
-  // 等待首写
-  for (let i = 0; i < 100; i++) { if (fssync.existsSync(hbPath)) break; await sleepReal(20); }
+  // 显式等首写落盘。原先的 2s 有界轮询在负载下可能不够 → 轮询退出后 readText 抛 ENOENT（偶发失败）
+  await mgr.flushHeartbeat();
   const first = JSON.parse(await readText(hbPath)) as { heartbeatAt: number; seq: number };
   assert.equal(first.heartbeatAt, clk.clock(), '首写 heartbeatAt 使用注入时钟');
   // 推进时钟 + 等待若干 tick → heartbeatAt 跟随推进后的时钟（续期）
   clk.advance(5000);
-  // 有界等待下一次**实际** heartbeat 写（同样不固定 sleep 猜定时器；§11.1-c6 的同类加固）
-  const last = await waitHeartbeatSeqAbove(hbPath, first.seq, 5000);
+  // 有界等待**推进之后发起**的那次 heartbeat 写（不固定 sleep 猜定时器；§11.1-c6 的同类加固）。
+  //
+  // 失败时间线（原实现只等 seq 递增，故仍偶发失败 —— 0.1.63 声明的「同类加固」只覆盖了「等多久」，
+  // 没覆盖「等到的是哪一次写」）：60ms 心跳定时器由**墙钟**驱动，而 acquire() 之后到 advance() 之前
+  // 还要跑 flushHeartbeat()（drain 首写）+ readText()，全量套件负载下这段墙钟可能已跨过一个 tick：
+  //   t0        acquire() 返回（首写同步入链、定时器注册，interval=60ms）
+  //   t0+ε      flushHeartbeat() → first = { seq: 1, heartbeatAt: 5_000_000 }
+  //   t0+60     （负载下提前发生）定时器 tick → sidecar 落盘 seq: 2，heartbeatAt 仍是 5_000_000
+  //   t0+120    clk.advance(5000) → clock() = 5_005_000
+  //   t0+120    waitHeartbeatSeqAbove(…, 1) 立刻观测到 seq: 2 → 断言 1 成立、断言 2 失败
+  // 带 minHeartbeatAt = 推进后的时钟 = 「等到推进之后发起的那次写」：上面那条陈旧记录被跳过，
+  // 下一条 tick（≤60ms 后，墙钟推进后必然发生）以新时钟落盘，断言 1/2 同时成立。
+  const last = await waitHeartbeatSeqAbove(hbPath, first.seq, 5000, clk.clock() - 60);
   assert.ok(last.seq > first.seq, '续期后 seq 递增');
   assert.ok(last.heartbeatAt >= clk.clock() - 60, '续期 heartbeatAt 反映推进后的时钟');
   await mgr.release(res.token!);
@@ -472,7 +509,7 @@ test('§11.1-c10 heartbeat write failure → degraded 标记 + 不中断 + 无�
   const locksDir = tmp(t);
   const failures: unknown[] = [];
   const ctl = makeIo();
-  const mgr = new EnvironmentLockManager({
+  const mgr = lockManager(t, {
     locksDir,
     io: ctl.io,
     heartbeatIntervalMs: 300,
@@ -482,13 +519,14 @@ test('§11.1-c10 heartbeat write failure → degraded 标记 + 不中断 + 无�
   assert.equal(res.state, 'ACQUIRED');
   const id = res.token!.instanceId;
   const hbPath = path.join(locksDir, heartbeatFile(id));
-  // 等待首写落盘
-  for (let i = 0; i < 100; i++) { if (fssync.existsSync(hbPath)) break; await sleepReal(20); }
+  // 显式等首写落盘（不再有界轮询猜定时器）
+  await mgr.flushHeartbeat();
   // 用同路径目录替换 sidecar → 下一次 atomicWriteFile 的 rename 失败（sidecar 更新失败）
   await fs.rm(hbPath, { force: true });
   await fs.mkdir(hbPath);
   const ownerBefore = await readText(path.join(locksDir, OWNERSHIP_FILE));
-  await sleepReal(900); // 覆盖一个心跳周期 + atomicWriteFile 重试窗口
+  // 有界等待**观测到**失败回调，而不是固定 sleep 900ms 猜周期（负载下 900ms 内可能一次都没触发 → 偶发）
+  for (let i = 0; i < 250 && failures.length === 0; i++) await sleepReal(20); // 上界 5s（条件一旦成立即返回）
   assert.ok(failures.length > 0, 'heartbeat 写失败应触发 onHeartbeatWriteFailure（degraded 标记）');
   assert.equal(mgr.isHolding, true, 'heartbeat 失败不得中断当前 mutation（锁仍持有）');
   const ownerAfter = await readText(path.join(locksDir, OWNERSHIP_FILE));
@@ -510,7 +548,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     // 重新写一份 fresh（让 heartbeatAt = clk.clock()）
     await seedHeartbeat(locksDir, 'fresh', clk.clock());
     const p = makeProbe();
-    const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     const s = await m.inspectLockState();
     assert.equal(s.state, 'LOCKED', 'heartbeat fresh → LOCKED');
     await fs.rm(path.join(locksDir, OWNERSHIP_FILE), { force: true });
@@ -521,7 +559,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     await seedOwnership(locksDir, { instanceId: 'dead', pid: 2222, osIdentity: 'osY' });
     await seedHeartbeat(locksDir, 'dead', clk.clock() - 2000);
     const p = makeProbe(); p.respond(() => ({ alive: false, osProcessStartIdentity: null }));
-    const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     assert.equal((await m.inspectLockState()).state, 'STALE_LOCK_DETECTED');
     await fs.rm(path.join(locksDir, OWNERSHIP_FILE), { force: true });
     await fs.rm(path.join(locksDir, heartbeatFile('dead')), { force: true });
@@ -531,7 +569,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     await seedOwnership(locksDir, { instanceId: 'reuse', pid: 3333, osIdentity: 'osOld' });
     await seedHeartbeat(locksDir, 'reuse', clk.clock() - 2000);
     const p = makeProbe(); p.respond(() => ({ alive: true, osProcessStartIdentity: 'osNew' }));
-    const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     assert.equal((await m.inspectLockState()).state, 'STALE_LOCK_DETECTED', 'PID reuse → STALE');
     await fs.rm(path.join(locksDir, OWNERSHIP_FILE), { force: true });
     await fs.rm(path.join(locksDir, heartbeatFile('reuse')), { force: true });
@@ -541,7 +579,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     await seedOwnership(locksDir, { instanceId: 'alive', pid: 4444, osIdentity: 'osSame' });
     await seedHeartbeat(locksDir, 'alive', clk.clock() - 2000);
     const p = makeProbe(); p.respond(() => ({ alive: true, osProcessStartIdentity: 'osSame' }));
-    const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     assert.equal((await m.inspectLockState()).state, 'LOCKED', 'alive + identity 同 → LOCKED');
     await fs.rm(path.join(locksDir, OWNERSHIP_FILE), { force: true });
     await fs.rm(path.join(locksDir, heartbeatFile('alive')), { force: true });
@@ -551,7 +589,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     await seedOwnership(locksDir, { instanceId: 'unk', pid: 5555, osIdentity: 'osU' });
     await seedHeartbeat(locksDir, 'unk', clk.clock() - 2000);
     const p = makeProbe(); p.respond(() => { throw new Error('probe unavailable'); });
-    const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     assert.equal((await m.inspectLockState()).state, 'UNKNOWN_STATE', 'probe 失败 → UNKNOWN_STATE');
     await fs.rm(path.join(locksDir, OWNERSHIP_FILE), { force: true });
     await fs.rm(path.join(locksDir, heartbeatFile('unk')), { force: true });
@@ -561,7 +599,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     await seedOwnership(locksDir, { instanceId: 'c', pid: 6666, osIdentity: null });
     await seedHeartbeat(locksDir, 'c', clk.clock() - 2000);
     const p = makeProbe(); p.canOs(false); p.respond(() => ({ alive: true, osProcessStartIdentity: null }));
-    const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     assert.equal((await m.inspectLockState()).state, 'UNKNOWN_STATE', '无法取得 OS identity → UNKNOWN_STATE');
     await fs.rm(path.join(locksDir, OWNERSHIP_FILE), { force: true });
     await fs.rm(path.join(locksDir, heartbeatFile('c')), { force: true });
@@ -574,7 +612,7 @@ test('§11.1-c11 stale 判定状态表（可注入 probe）', async (t) => {
     const hbAbs = path.join(locksDir, heartbeatFile('ac'));
     ctl.failReadWhen((p) => p === hbAbs);
     const p = makeProbe();
-    const m = new EnvironmentLockManager({ locksDir, io: ctl.io, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
+    const m = lockManager(t, { locksDir, io: ctl.io, now: clk.clock, probe: p.probe, staleAfterMs: 1000 });
     assert.equal((await m.inspectLockState()).state, 'UNKNOWN_STATE', 'heartbeat 读失败 → UNKNOWN_STATE');
   }
 });
@@ -590,7 +628,7 @@ test('§11.1-c11b issue #36：心跳**长过期** + pid 存活 + 身份不可验
   const p = makeProbe(); p.canOs(false); p.respond(() => ({ alive: true, osProcessStartIdentity: null }));
 
   // ① 默认阈值（max(30×staleAfterMs, 30min)）下应判 STALE —— 这正是此前永远卡在 UNKNOWN_STATE 的用例
-  const m = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 10_000 });
+  const m = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 10_000 });
   const s = await m.inspectLockState();
   assert.equal(s.state, 'STALE_LOCK_DETECTED', `长过期残留锁必须可识别（此前恒 UNKNOWN_STATE）: ${s.detail}`);
   assert.match(s.detail ?? '', /残留锁/, '诊断必须说清「可显式回收」');
@@ -614,21 +652,21 @@ test('§11.1-c11c issue #36 边界：未达长过期阈值仍保守 UNKNOWN_STAT
   // ① 只过期 2s（阈值 60s）→ 仍 UNKNOWN_STATE：活着的 owner 只是心跳降级，绝不放宽
   await seedOwnership(locksDir, { instanceId: 'short', pid: 7001, osIdentity: null });
   await seedHeartbeat(locksDir, 'short', clk.clock() - 2_000);
-  const m1 = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
+  const m1 = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
   assert.equal((await m1.inspectLockState()).state, 'UNKNOWN_STATE', '短过期不得判 stale');
   assert.equal((await m1.recoverStaleLock()).ok, false, '短过期不得被显式回收');
 
   // ② heartbeat sidecar 完全缺失（不是"读过且很旧"）→ 无从判断过期时长 → 保守 UNKNOWN_STATE
   await seedOwnership(locksDir, { instanceId: 'nohb', pid: 7002, osIdentity: null });
   await fs.rm(path.join(locksDir, heartbeatFile('nohb')), { force: true });
-  const m2 = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
+  const m2 = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
   assert.equal((await m2.inspectLockState()).state, 'UNKNOWN_STATE', 'sidecar 缺失不得当作"长过期"');
 
   // ③ 阈值注入可调：过期 61s > 阈值 60s → STALE（证明阈值真的参与判定，而非硬编码天数）
   //    （② 已把 ownership 换成 nohb，这里要连 ownership 一起换回 short）
   await seedOwnership(locksDir, { instanceId: 'short', pid: 7001, osIdentity: null });
   await seedHeartbeat(locksDir, 'short', clk.clock() - 61_000);
-  const m3 = new EnvironmentLockManager({ locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
+  const m3 = lockManager(t, { locksDir, now: clk.clock, probe: p.probe, staleAfterMs: 1000, longExpiredAfterMs: 60_000 });
   assert.equal((await m3.inspectLockState()).state, 'STALE_LOCK_DETECTED', '越过阈值即判 stale');
 });
 
@@ -637,7 +675,7 @@ test('§11.1-c12 definitely stale → acquire 返回 STALE_LOCK_DETECTED（不�
   await seedOwnership(locksDir, { instanceId: 'dead2', pid: 8888 });
   await seedHeartbeat(locksDir, 'dead2', Date.now() - 20_000);
   const p = makeProbe(); p.respond(() => ({ alive: false, osProcessStartIdentity: null }));
-  const m = new EnvironmentLockManager({ locksDir, probe: p.probe, staleAfterMs: 10_000 });
+  const m = lockManager(t, { locksDir, probe: p.probe, staleAfterMs: 10_000 });
   const res = await m.acquire({ op: 'x' });
   assert.equal(res.state, 'STALE_LOCK_DETECTED');
   assert.ok(fssync.existsSync(path.join(locksDir, OWNERSHIP_FILE)), 'STALE 判定绝不自动 unlink');
@@ -649,8 +687,8 @@ test('§11.1-c13 两 contender 同时发现 stale → 都不自动 destructive t
   await seedHeartbeat(locksDir, 'dead3', Date.now() - 20_000);
   const pA = makeProbe(); pA.respond(() => ({ alive: false, osProcessStartIdentity: null }));
   const pB = makeProbe(); pB.respond(() => ({ alive: false, osProcessStartIdentity: null }));
-  const a = new EnvironmentLockManager({ locksDir, probe: pA.probe, staleAfterMs: 10_000 });
-  const b = new EnvironmentLockManager({ locksDir, probe: pB.probe, staleAfterMs: 10_000 });
+  const a = lockManager(t, { locksDir, probe: pA.probe, staleAfterMs: 10_000 });
+  const b = lockManager(t, { locksDir, probe: pB.probe, staleAfterMs: 10_000 });
   const [ra, rb] = await Promise.all([a.acquire({ op: 'a' }), b.acquire({ op: 'b' })]);
   assert.equal(ra.state, 'STALE_LOCK_DETECTED');
   assert.equal(rb.state, 'STALE_LOCK_DETECTED');
@@ -675,7 +713,7 @@ test('§11.1-c14 recovery 只删被 rename 捕获且二次验证的 inode；新 
     }
   });
   const p = makeProbe(); p.respond(() => ({ alive: false, osProcessStartIdentity: null }));
-  const m = new EnvironmentLockManager({ locksDir, io: ctl.io, probe: p.probe, staleAfterMs: 10_000 });
+  const m = lockManager(t, { locksDir, io: ctl.io, probe: p.probe, staleAfterMs: 10_000 });
   const r = await m.recoverStaleLock();
   assert.equal(r.ok, true, `recovery 应成功: ${r.detail}`);
   assert.equal(r.removed, true);
@@ -708,7 +746,10 @@ test('§11.1-c16 崩溃模拟（child）：持锁后 exit → 残留 lock；reco
 const mgr = new EnvironmentLockManager({ locksDir: process.env.LOCKS_DIR, now: () => Date.now() - 20000, heartbeatIntervalMs: 100000 });
 const res = await mgr.acquire({ op: 'crash' });
 if (res.state !== 'ACQUIRED') { console.log('FAIL ' + res.state); process.exit(2); }
-await new Promise(r => setTimeout(r, 300)); // 让首次（过期的）heartbeat 落盘
+// 有界等待**观测到** sidecar 落盘再退出：acquire 的首写是异步 fire-and-forget，固定 300ms 在负载下
+// 可能还没落盘 → 父进程「崩溃后应残留 heartbeat sidecar」断言偶发失败（墙钟猜测 → 条件等待）。
+// 显式等首写落盘（首写同步入链 → 确定性等待，不用 sleep / 轮询去猜定时器）
+await mgr.flushHeartbeat();
 console.log('HELD');
 process.exit(0);
 `;
@@ -722,16 +763,16 @@ process.exit(0);
   assert.ok(files.includes(OWNERSHIP_FILE), `崩溃后应残留 environment.lock: ${files.join(',')}`);
   assert.ok(files.some((n) => n.startsWith(HEARTBEAT_PREFIX)), '崩溃后应残留 heartbeat sidecar');
   // 父进程探测：child 已退出 → heartbeat 过期 + PID 确证死亡 → STALE
-  const insp = await new EnvironmentLockManager({ locksDir, staleAfterMs: 10_000 }).inspectLockState();
+  const insp = await lockManager(t, { locksDir, staleAfterMs: 10_000 }).inspectLockState();
   assert.equal(insp.state, 'STALE_LOCK_DETECTED');
   // 显式 recover 成功
-  const rec = await new EnvironmentLockManager({ locksDir, staleAfterMs: 10_000 }).recoverStaleLock();
+  const rec = await lockManager(t, { locksDir, staleAfterMs: 10_000 }).recoverStaleLock();
   assert.equal(rec.ok, true);
   assert.equal(rec.removed, true);
   // 回收后可重新 acquire
-  const again = await new EnvironmentLockManager({ locksDir, staleAfterMs: 10_000 }).acquire({ op: 'post' });
+  const again = await lockManager(t, { locksDir, staleAfterMs: 10_000 }).acquire({ op: 'post' });
   assert.equal(again.state, 'ACQUIRED');
-  await new EnvironmentLockManager({ locksDir }).release(again.token!);
+  await lockManager(t, { locksDir }).release(again.token!);
 });
 
 test('§11.1-c17 跨进程互斥集成（child）：A 持锁 → B acquire 被拒 → A release → B 成功', async (t) => {
@@ -743,20 +784,29 @@ const mgrA = new EnvironmentLockManager({ locksDir: process.env.LOCKS_DIR, heart
 const res = await mgrA.acquire({ op: 'A' });
 if (res.state !== 'ACQUIRED') { console.log('A-FAIL ' + res.state); process.exit(2); }
 console.log('HELD');
-await new Promise(r => setTimeout(r, 2500));
+// 显式等待父进程的 release 信号，而不是固定 2500ms 停留窗口：负载下父进程的 B-acquire 可能晚于窗口结束，
+// A 提前 release 会让 B 意外拿到锁（偶发）。等待条件成立 → 持有期与墙钟无关。
+const { existsSync } = await import('node:fs');
+const heldFrom = Date.now();
+while (!existsSync(process.env.RELEASE_SIGNAL)) {
+  if (Date.now() - heldFrom > 20000) { console.log('A-TIMEOUT'); process.exit(3); }
+  await new Promise(r => setTimeout(r, 10));
+}
 await mgrA.release(res.token);
 console.log('RELEASED');
 process.exit(0);
 `;
   const file = path.join(dir, 'child17.mjs');
   await fs.writeFile(file, childScript);
-  const h = spawnNode(childScript, file, { LOCKS_DIR: locksDir });
+  const sigPath = path.join(dir, 'release.signal');
+  const h = spawnNode(childScript, file, { LOCKS_DIR: locksDir, RELEASE_SIGNAL: sigPath });
   await waitForSub(() => h.getStdout(), 'HELD');
   // B（父进程同目录）acquire 被拒
-  const b = new EnvironmentLockManager({ locksDir });
+  const b = lockManager(t, { locksDir });
   const rb = await b.acquire({ op: 'B' });
   assert.notEqual(rb.state, 'ACQUIRED', 'A 持锁期间 B 不得获得锁');
-  // 等 A release
+  // 断言完成后才放行 A（信号驱动，见子进程脚本注释）→ 等 A release
+  await fs.writeFile(sigPath, 'go');
   await waitForSub(() => h.getStdout(), 'RELEASED');
   assert.equal(await h.exit, 0);
   // B 再 acquire 成功
@@ -767,7 +817,7 @@ process.exit(0);
 
 test('§11.1-c18 Windows close→unlink 语义（本机实跑：release 后无句柄占用、可再次 acquire）', async (t) => {
   const locksDir = tmp(t);
-  const mgr = new EnvironmentLockManager({ locksDir });
+  const mgr = lockManager(t, { locksDir });
   const r1 = await mgr.acquire({ op: 'win' });
   assert.equal(r1.state, 'ACQUIRED');
   assert.equal(mgr.isHolding, true);
@@ -785,11 +835,11 @@ test('§11.1-c18 Windows close→unlink 语义（本机实跑：release 后无�
 
 test('§11.1-c19 同 manager 同 instanceId 两次 acquire：第二次 LOCKED（token 模型，非 reentrant）', async (t) => {
   const locksDir = tmp(t);
-  const mgr = new EnvironmentLockManager({ locksDir });
+  const mgr = lockManager(t, { locksDir });
   const r1 = await mgr.acquire({ op: 'import' });
   assert.equal(r1.state, 'ACQUIRED');
   // 同一 manager、同一 instanceId，再次 acquire 必须被拒（operation-scoped，禁止 process-level reentrant）
-  await waitHeartbeat(locksDir, r1.token!.instanceId); // 等首写 heartbeat 落盘，确保 EEXIST→inspect 判 fresh→LOCKED（确定性）
+  await waitHeartbeat(mgr); // 等首写 heartbeat 落盘，确保 EEXIST→inspect 判 fresh→LOCKED（确定性）
   const r2 = await mgr.acquire({ op: 'restore' });
   assert.notEqual(r2.state, 'ACQUIRED', '同 manager 并发 acquire 不得 reentrant 放行');
   assert.equal(r2.state, 'LOCKED', '已有活跃持有（无 parent token）→ LOCKED 被挡');
@@ -800,7 +850,7 @@ test('§11.1-c19 同 manager 同 instanceId 两次 acquire：第二次 LOCKED（
 
 test('§11.1-c20 nested rollback token 传递：withMutationLock 收到有效 parentContext → 复用不 reacquire，release 不释放父 token', async (t) => {
   const locksDir = tmp(t);
-  const lock = new EnvironmentLockManager({ locksDir });
+  const lock = lockManager(t, { locksDir });
   const outer = await withMutationLock(lock, { op: 'import', target: 'executeImportPlan' });
   assert.ok(outer.context !== null, '顶层 import 应获得锁');
   assert.equal(lock.isHolding, true);
@@ -820,8 +870,8 @@ test('§11.1-c20 nested rollback token 传递：withMutationLock 收到有效 pa
 
 test('§11.1-c21 foreign token：manager A 的 token 传给 manager B → validate false；不能绕过 acquire', async (t) => {
   const locksDir = tmp(t);
-  const a = new EnvironmentLockManager({ locksDir });
-  const b = new EnvironmentLockManager({ locksDir });
+  const a = lockManager(t, { locksDir });
+  const b = lockManager(t, { locksDir });
   const ra = await a.acquire({ op: 'import' });
   assert.equal(ra.state, 'ACQUIRED');
   const tokenA = ra.token!;
@@ -840,7 +890,7 @@ test('§11.1-c21 foreign token：manager A 的 token 传给 manager B → valida
 
 test('§11.1-c22 released token：release 后原 token → validate false，不授权 nested', async (t) => {
   const locksDir = tmp(t);
-  const lock = new EnvironmentLockManager({ locksDir });
+  const lock = lockManager(t, { locksDir });
   const r = await lock.acquire({ op: 'import' });
   const tok = r.token!;
   await lock.release(tok);
@@ -855,7 +905,7 @@ test('§11.1-c22 released token：release 后原 token → validate false，不�
 
 test('§11.1-c23 同 EnvLockManager 三个并发 acquire → 仅一个 ACQUIRED', async (t) => {
   const locksDir = tmp(t);
-  const lock = new EnvironmentLockManager({ locksDir });
+  const lock = lockManager(t, { locksDir });
   const results = await Promise.all([
     lock.acquire({ op: 'a' }),
     lock.acquire({ op: 'b' }),
@@ -872,7 +922,7 @@ test('§11.1-c24 EPERM/EACCES 且无既有 lock → PERMISSION_ERROR / LOCK_IO_E
     const locksDir = tmp(t);
     const ctl = makeIo();
     ctl.failOpenWhen((p) => p.endsWith(OWNERSHIP_FILE), 'EPERM');
-    const m = new EnvironmentLockManager({ locksDir, io: ctl.io });
+    const m = lockManager(t, { locksDir, io: ctl.io });
     const res = await m.acquire({ op: 'perm' });
     assert.equal(res.state, 'PERMISSION_ERROR', 'EPERM 无既有锁 → PERMISSION_ERROR，不得误报 LOCKED');
   }
@@ -881,7 +931,7 @@ test('§11.1-c24 EPERM/EACCES 且无既有 lock → PERMISSION_ERROR / LOCK_IO_E
     const locksDir = tmp(t);
     const ctl = makeIo();
     ctl.failOpenWhen((p) => p.endsWith(OWNERSHIP_FILE), 'EACCES');
-    const m = new EnvironmentLockManager({ locksDir, io: ctl.io });
+    const m = lockManager(t, { locksDir, io: ctl.io });
     const res = await m.acquire({ op: 'acc' });
     assert.equal(res.state, 'PERMISSION_ERROR');
   }
@@ -890,7 +940,7 @@ test('§11.1-c24 EPERM/EACCES 且无既有 lock → PERMISSION_ERROR / LOCK_IO_E
     const locksDir = tmp(t);
     const ctl = makeIo();
     ctl.failOpenWhen((p) => p.endsWith(OWNERSHIP_FILE)); // 无 code
-    const m = new EnvironmentLockManager({ locksDir, io: ctl.io });
+    const m = lockManager(t, { locksDir, io: ctl.io });
     const res = await m.acquire({ op: 'io' });
     assert.equal(res.state, 'LOCK_IO_ERROR');
   }
@@ -923,7 +973,7 @@ test('§11.1-c25 recovery 二次验证失败 + successor 已存在 → successor
       await fs.writeFile(a, JSON.stringify(successor));
     }
   });
-  const m = new EnvironmentLockManager({ locksDir, io: ctl.io, probe: p.probe, staleAfterMs: 10_000 });
+  const m = lockManager(t, { locksDir, io: ctl.io, probe: p.probe, staleAfterMs: 10_000 });
   const r = await m.recoverStaleLock();
   assert.equal(r.ok, false);
   assert.equal(r.removed, false);
@@ -950,9 +1000,9 @@ test('§11-c26 withMutationLock/runWithMutationLock：无 port 直接执行不�
   // 有 port 且锁被占 → context null（destructive 不执行）
   {
     const locksDir = tmp(t);
-    const holder = new EnvironmentLockManager({ locksDir });
+    const holder = lockManager(t, { locksDir });
     const rh = await holder.acquire({ op: 'hold' });
-    const other = new EnvironmentLockManager({ locksDir });
+    const other = lockManager(t, { locksDir });
     const w = await withMutationLock(other, { op: 'restore' });
     assert.equal(w.context, null, '锁被占 → context null（blocked）');
     let fnCalled = false;
@@ -968,41 +1018,19 @@ test('§11-c26 withMutationLock/runWithMutationLock：无 port 直接执行不�
 /* ------------------------------------------------ L3 回归：release 必须 drain 在途 heartbeat 写 */
 
 /**
- * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget。
- * writeHeartbeat 走 atomicWriteFile（tmp 写 → rename，异步多步），若 release 只 stopHeartbeat + unlink sidecar
- * 而不等待在途写，该写会在 unlink **之后**才 rename → 把 sidecar 重新创建（并可能残留 .dshcm.*.tmp），
- * 于是测试 after-hook 的 rmSync(dir) 报 ENOTEMPTY。
- * 本用例用注入 io 把 rename 拖慢（100ms），让 release 必然发生在「写已启动但未落盘」的窗口内。
- */
-/* ------------------------------------------------ L3 回归：release 必须 drain 在途 heartbeat 写 */
-
-/**
- * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget。
- * writeHeartbeat 走 atomicWriteFile（tmp 写 → rename，异步多步）；若 release 只 stopHeartbeat + unlink sidecar
- * 而不等待在途写，该写会在 unlink **之后**才 rename → 把 sidecar 重新创建（或残留 .dshcm.*.tmp），
- * 于是测试 after-hook 的 rmSync(dir) 报 ENOTEMPTY。
- *
- * 为了让「release 时确有在途 heartbeat 写」可确定复现（不依赖机器快慢）：在 sidecar 路径上先放一个**目录**，
- * 使 atomicWriteFile 的 rename 目标被占用 → renameWithRetry 进入有界退避重试（25/50/100ms，约 175ms），
- * 期间该写必然处于在途状态。修复后 release 会 drain 它（于是 rename 的重试窗口结束、临时文件被清理），
- * 再删除占位目录；未修复时 cleanupHeartbeat 与在途 rename 竞争 → 目录/临时文件残留（after-hook rmSync 失败）。
- */
-/* ------------------------------------------------ L3 回归：release 必须 drain 在途 heartbeat 写 */
-
-/**
- * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget。
- * writeHeartbeat 走 atomicWriteFile（同目录 tmp 写 → rename，异步多步）；若 release 只 stopHeartbeat + unlink sidecar
- * 而不等待在途写，该写会在 unlink **之后**才 rename → 把 sidecar 重新创建，或把 .dshcm.*.tmp 留在 locks 目录里，
- * 于是测试 after-hook 的 rmSync(dir) 报 ENOTEMPTY。
+ * L3 回归（Windows flake 根因）：startHeartbeat 的首次写（及 interval 写）曾是 fire-and-forget，
+ * writeHeartbeat 走 atomicWriteFile（同目录 tmp 写 → rename，异步多步）。若 release 的某条退出路径
+ * 只 stopHeartbeat 而不等待在途写，该写会在 release **返回之后**才 rename → 把 sidecar 重新创建，
+ * 或把 .dshcm.*.tmp 留在 locks 目录里；测试 after-hook 的 rmSync(dir) 随即报 ENOTEMPTY。
  *
  * 为了让「release 时确有在途 heartbeat 写」可确定复现（不依赖机器快慢）：在 sidecar 路径上先放一个**目录**，
  * 使 atomicWriteFile 的 rename 目标被占用 → renameWithRetry 进入有界退避重试（25/50/100ms，约 175ms），
  * 期间该写必然处于在途状态（实测：pre-release 目录里可稳定看到 .dshcm.*.tmp）。
- * 修复后 release 会先 stopHeartbeat + 清 activeToken，再 drain 在途写（重试窗口结束、临时文件被清理），最后清 sidecar。
+ * 修复后 release 在**每一条**退出路径（含抛错分支）返回前都会 drain：重试窗口结束、临时文件被清理。
  */
 test('L3 release 必须 drain 在途 heartbeat 写：不得残留原子写临时文件（after-hook rmSync ENOTEMPTY 根因）', async (t) => {
   const locksDir = tmp(t);
-  const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 1 });
+  const mgr = lockManager(t, { locksDir, heartbeatIntervalMs: 1 });
   const res = await mgr.acquire({ op: 'hb-drain' });
   assert.equal(res.state, 'ACQUIRED');
   const id = res.token!.instanceId;
@@ -1035,10 +1063,45 @@ test('L3 release 必须 drain 在途 heartbeat 写：不得残留原子写临时
 
 test('L3 release 后 locks 目录必须完全为空（模拟 after-hook rmSync 前提）', async (t) => {
   const locksDir = tmp(t);
-  const mgr = new EnvironmentLockManager({ locksDir, heartbeatIntervalMs: 50 });
+  const mgr = lockManager(t, { locksDir, heartbeatIntervalMs: 50 });
   const res = await mgr.acquire({ op: 'hb-empty' });
   assert.equal(res.state, 'ACQUIRED');
   await mgr.release(res.token!);
   assert.deepEqual(fssync.readdirSync(locksDir), [], 'release 后 locks 目录必须为空（无 sidecar / 无 .tmp 残留）');
+});
+
+test('L3-2 release 的 ownership-lost 分支必须 drain 在途 heartbeat 写（after-hook rmSync ENOTEMPTY 真根因）', async (t) => {
+  const locksDir = tmp(t);
+  const mgr = lockManager(t, { locksDir, heartbeatIntervalMs: 100 });
+  const res = await mgr.acquire({ op: 'hb-lost' });
+  assert.equal(res.state, 'ACQUIRED');
+  const hbPath = path.join(locksDir, heartbeatFile(res.token!.instanceId));
+  // 占用 sidecar 路径（目录）→ 在途写必然进入有界退避重试窗口（≈175ms），使「release 时确有在途写」可确定复现
+  let occupied = false;
+  for (let i = 0; i < 50 && !occupied; i++) {
+    try { await fs.rm(hbPath, { force: true }); await fs.mkdir(hbPath); occupied = true; }
+    catch { await sleepReal(10); }
+  }
+  assert.equal(occupied, true, '应能把 sidecar 路径占位为目录（用于制造确定性的在途写）');
+  await sleepReal(60); // 至少一次写已进入退避重试窗口
+  // 篡改 ownership.instanceId → release 走 ownership-lost 分支（抛错、不 unlink、保留 activeToken）
+  const owner = (await readOwnershipByMgr(mgr))!;
+  owner.owner.instanceId = 'EVIL-OTHER';
+  await fs.writeFile(mgr.ownershipPath, JSON.stringify(owner));
+  await assert.rejects(
+    () => mgr.release(res.token!),
+    (e) => e instanceof EnvironmentLockOwnedByAnotherError,
+  );
+  // 核心断言：release **抛错返回时**在途写必须已 drain。未 drain 时该写会在此之后才 rename/清理，
+  // 与调用方的目录清理竞争 —— 直接复刻 after-hook rmSync：200 次循环实测约 19% 抛 ENOTEMPTY。
+  const leftovers = fssync.readdirSync(locksDir).filter((n) => n.startsWith('.dshcm.'));
+  assert.deepEqual(leftovers, [], 'release 抛错返回后不得残留原子写临时文件（L3-2 根因）');
+  // 且此后目录必须静止：drain 之后定时器已停、写链已空 → 不可能再有写落地
+  const frozen = fssync.readdirSync(locksDir).sort().join('|');
+  await sleepReal(400);
+  assert.equal(fssync.readdirSync(locksDir).sort().join('|'), frozen, 'release 抛错返回后 locks 目录不得再被写入');
+  // 清理占位目录；ownership 刻意保留（ownership-lost 分支不 unlink）
+  try { await fs.rmdir(hbPath); } catch { /* 已被写链清理 */ }
+  assert.deepEqual(fssync.readdirSync(locksDir), [OWNERSHIP_FILE], '兜底清理后只剩 ownership（ownership-lost 不 unlink）');
 });
 

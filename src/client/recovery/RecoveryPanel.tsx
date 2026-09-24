@@ -27,7 +27,7 @@ import { toast } from '../common/toast-store.ts'
 import { runStore, type RecoveryStoreSlice } from '../run-store.ts'
 import {
   isSnapshotTrusted, isVerdictAttention, isVerdictSuccess, toRecoveryPreviewView,
-  toRecoveryView, verdictToUiState, type RecoveryUiState,
+  toRecoveryView,
 } from './recovery-view.ts'
 import css from '../config-manager.module.css'
 
@@ -321,7 +321,6 @@ export function RecoveryPanel({ recoveryApi, t }: RecoveryPanelProps) {
     ? state.recovery.incidents.find((i) => i.operationId === state.selectedOperationId)
     : undefined
   const previewView = state.preview !== null ? toRecoveryPreviewView(state.preview) : null
-  const uiState: RecoveryUiState = view?.state ?? 'NORMAL'
 
   return (
     <div className={css.viewBody}>

@@ -143,8 +143,20 @@ test('recoverStaleLock：未被判定为 stale → ok=false（绝不谎称成功
  * 同时锁分支必须排在 :operationId 解析之前——'lock' 不是 UUID，否则会被 400 挡掉。
  * 按文本解析源码前先归一化行尾（Windows 工作区 CRLF / CI LF），否则守卫只在一边通过。
  */
+/** W1 起路由按域拆到 src/routes/*.ts：源码级守卫必须扫**全部**宿主路由源，否则会静默失去覆盖。 */
+async function hostRouteSource(): Promise<string> {
+  const parts = [await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8')];
+  const dir = new URL('../routes/', import.meta.url);
+  for (const entry of (await fs.readdir(dir)).sort()) {
+    if (!entry.endsWith('.ts') || entry.endsWith('.test.ts')) continue;
+    parts.push(await fs.readFile(new URL(entry, dir), 'utf8'));
+  }
+  return parts.join('\n').replace(/\r\n/g, '\n');
+}
+
 test('源码守卫：/recovery/lock/recover 分支先于 operationId 解析，且不经 acquire（否则回收必然失败）', async () => {
-  const source = (await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+  // W1：recovery 路由已拆到 src/routes/recovery.ts —— 扫「宿主路由源」（index.ts + src/routes/**）
+  const source = await hostRouteSource();
 
   const lockBranch = source.indexOf("if (segments[0] === 'lock') {");
   assert.ok(lockBranch > 0, '应能找到残留锁回收分支（segments[0] === \'lock\'）');

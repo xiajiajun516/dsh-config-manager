@@ -29,24 +29,42 @@ import { requestOnce, type RawResponse } from '../../utils/proxy.ts';
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
-import { computeSnapshotMeta, sectionsEqual } from '../transport.ts';
-import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
+import { BLOB_SECTIONS, gcBlobs, isBlobRefsSection, isFilesSectionLike, referencedBlobHashes, refsToSection, sectionToBlobRefs } from '../blob-store.ts';
+import type { BlobRefsSection, BlobSink } from '../blob-store.ts';
+import {
+  classifyHttpStatus, classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS,
+  isEncryptedSections, sectionsEqual, SyncTransportError, withSyncRetry,
+} from '../transport.ts';
+import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
+import type {
+  SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
+} from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 
 /** 快照 id 安全字符集：字母数字开头，仅 . _ -；防路径穿越与 URL 注入 */
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** 保留 id：与 index.json 冲突（id 'index' 会占用索引文件路径） */
-const RESERVED_IDS = new Set(['index']);
+const RESERVED_IDS = new Set(['index', 'blobs', 'blobs-index']);
 /**
- * 默认单请求超时（ms）。WebDAV 上传大快照（含多个分区配置）与读写索引在慢速
- * 服务器（如坚果云限速、自建 NAS）下较慢，30s 常不够 → 提高至 120s；
- * 业务侧（makeSyncEngine）还会显式传 timeoutMs 覆盖默认值。
+ * 单请求超时缺省值 = 两条同步通道**共用**的 DEFAULT_SYNC_TIMEOUT_MS（120000）。
+ * WebDAV 上传大快照（含多个分区配置）与读写索引在慢速服务器（如坚果云限速、自建 NAS）
+ * 下较慢，30s 常不够 → 该共用值取原两条通道里的较大者；业务侧（makeSyncEngine）
+ * 仍可显式传 timeoutMs 覆盖。不再在本文件里另留一个通道私有常量。
  */
-const DEFAULT_TIMEOUT_MS = 120_000;
 /** 错误消息里截取的响应体最大长度（防超大/二进制响应撑爆消息） */
 const ERR_BODY_MAX = 500;
 const SNAPSHOTS_SEG = 'dsh-config-manager';
 const INDEX_FILE = 'index.json';
+/**
+ * 内容寻址 blob 仓（P1-4）：与快照同集合下的 `blobs/` 子集合 + `blobs-index.json`
+ * （哈希 → 写入时间；GC 需要「有哪些 blob」而 WebDAV 的 PROPFIND 在本客户端未实现，
+ * 用一份索引文件代替。索引**失败安全**：漏记 → 该 blob 永不被 GC 删（只占空间）；
+ * 多记 → 对已不存在的 blob 发 DELETE，幂等无害）。
+ */
+const BLOBS_SEG = 'blobs';
+const BLOBS_INDEX_FILE = 'blobs-index.json';
+/** 内容哈希形状（sha256 hex）：blob 路径只接受它，杜绝路径穿越 */
+const BLOB_HASH_RE = /^[a-f0-9]{64}$/;
 const REDACTED = '[REDACTED]';
 /** 自动跟随的重定向状态码（RFC 7231/9110） */
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -90,15 +108,22 @@ export interface WebDavTransportOptions {
   credentials: WebDavCredentialProvider;
   /** 可注入 request（测试 mock 用）；缺省 = 全局 fetch + AbortController 超时 */
   request?: WebDavRequestFn;
-  /** 单请求超时 ms，默认 120000（慢速 WebDAV 上传大快照需要宽裕窗口；0 = 不超时） */
+  /** 单请求超时 ms；缺省 = 两条通道共用的 DEFAULT_SYNC_TIMEOUT_MS（120000）；0 = 不超时 */
   timeoutMs?: number;
+  /** 幂等读操作（list/download）的网络重试参数；缺省 attempts=3、250ms 起指数退避。
+   *  写操作（upload/delete）**不使用**该参数（PUT 快照与 PUT index 之间失败会留孤儿文件）。 */
+  retry?: SyncRetryOptions;
   /** 消息翻译器（缺省 zh） */
   msg?: MsgFunc;
 }
 
-export class WebDavTransportError extends Error {
-  constructor(message: string) {
-    super(message);
+/**
+ * WebDAV 通道错误：继承统一错误基类（kind / retryable / status 分类对上层可见）。
+ * 分类口径：HTTP 状态走 classifyHttpStatus，请求层异常走 classifyNetworkErrorText。
+ */
+export class WebDavTransportError extends SyncTransportError {
+  constructor(message: string, opts: SyncTransportErrorOptions = {}) {
+    super(message, opts);
     this.name = 'WebDavTransportError';
   }
 }
@@ -235,6 +260,7 @@ export class WebDavTransport implements SyncTransport {
     credentials: WebDavCredentialProvider;
     request: WebDavRequestFn;
     timeoutMs: number;
+    retry: SyncRetryOptions;
     msg: MsgFunc;
   };
 
@@ -244,7 +270,8 @@ export class WebDavTransport implements SyncTransport {
       username: '',
       credentials: { getPassword: async () => '' },
       request: defaultRequest,
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutMs: DEFAULT_SYNC_TIMEOUT_MS,
+      retry: {},
       msg: zhMsg,
     };
     this.validateOptions(options);
@@ -254,18 +281,22 @@ export class WebDavTransport implements SyncTransport {
     if (options.request !== undefined) this.o.request = options.request;
     if (options.timeoutMs !== undefined) this.o.timeoutMs = options.timeoutMs;
     if (options.msg !== undefined) this.o.msg = options.msg;
+    if (options.retry !== undefined) this.o.retry = options.retry;
   }
 
   /** 列出远端已有快照（按 createdAt 升序）。index.json 缺失视为空。 */
   async list(): Promise<SyncSnapshotMeta[]> {
-    const pwd = await this.passwordOnce();
-    const url = this.indexUrl();
-    const res = await this.send('GET', url, pwd);
-    if (res.status === 404) return []; // 缺失视为空
-    if (!res.ok) {
-      throw new WebDavTransportError(await this.failText('GET', url, res, pwd));
-    }
-    return this.parseIndex(await res.text(), url, pwd);
+    // 幂等读：仅 GET index.json，无本地/远端写副作用 → 瞬时网络故障走有限指数退避重试
+    return await withSyncRetry(async () => {
+      const pwd = await this.passwordOnce();
+      const url = this.indexUrl();
+      const res = await this.send('GET', url, pwd);
+      if (res.status === 404) return []; // 缺失视为空
+      if (!res.ok) {
+        throw new WebDavTransportError(await this.failText('GET', url, res, pwd), classifyHttpStatus(res.status));
+      }
+      return this.parseIndex(await res.text(), url, pwd);
+    }, this.o.retry);
   }
 
   /** 上传快照：幂等 MKCOL → 快照级跳过判定（同 id 且内容全等则免上传）→ PUT <id>.json
@@ -286,10 +317,13 @@ export class WebDavTransport implements SyncTransport {
       return existing;
     }
     // 先写快照文件（JSON 序列化：文件字节 base64 编码，往返无损）
+    // P1-4：会话等大分区先外置到内容寻址仓（未变内容零传输），快照里只留引用
+    const freshBlobs = new Map<string, number>();
+    const stored = await this.externalize(snapshot, pwd, freshBlobs);
     const snapUrl = this.snapshotUrl(snapshot.id);
-    const snapRes = await this.send('PUT', snapUrl, pwd, { body: serializeSnapshot(snapshot) });
+    const snapRes = await this.send('PUT', snapUrl, pwd, { body: serializeSnapshot(stored) });
     if (!snapRes.ok) {
-      throw new WebDavTransportError(await this.failText('PUT', snapUrl, snapRes, pwd));
+      throw new WebDavTransportError(await this.failText('PUT', snapUrl, snapRes, pwd), classifyHttpStatus(snapRes.status));
     }
     // 再写合并后的 index（保留其它 id、覆盖同 id）—— meta 最后落盘
     const idxUrl = this.indexUrl();
@@ -298,24 +332,34 @@ export class WebDavTransport implements SyncTransport {
     merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
     const putIdx = await this.send('PUT', idxUrl, pwd, { body: JSON.stringify(merged) });
     if (!putIdx.ok) {
-      throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd));
+      throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
     }
+    // blob 索引最后落盘（漏记只占空间、不会误删，见 BLOBS_SEG 注释）
+    if (freshBlobs.size > 0) await this.appendBlobIndex(freshBlobs, pwd);
     return meta;
   }
 
   /** 下载快照完整载荷。不存在的 id 必须抛错（契约）。 */
   async download(id: string): Promise<SyncSnapshot> {
     this.assertSafeId(id);
-    const pwd = await this.passwordOnce();
-    const url = this.snapshotUrl(id);
-    const res = await this.send('GET', url, pwd);
+    // 幂等读：仅 GET 快照文件，重试不会产生任何写副作用
+    return await withSyncRetry(async () => {
+      const pwd = await this.passwordOnce();
+      const url = this.snapshotUrl(id);
+      const res = await this.send('GET', url, pwd);
     if (res.status === 404) {
-      throw new WebDavTransportError(this.o.msg('sync.webdav.snapshotMissing', { id, url }));
+      throw new WebDavTransportError(
+        this.o.msg('sync.webdav.snapshotMissing', { id, url }),
+        { kind: 'notfound', retryable: false, status: 404 },
+      );
     }
-    if (!res.ok) {
-      throw new WebDavTransportError(await this.failText('GET', url, res, pwd));
-    }
-    return this.parseSnapshot(await res.text(), id);
+      if (!res.ok) {
+        throw new WebDavTransportError(await this.failText('GET', url, res, pwd), classifyHttpStatus(res.status));
+      }
+      const snap = this.parseSnapshot(await res.text(), id);
+      // P1-4：外置分区从 blob 仓取回字节（缺 blob → 硬失败，绝不降级成空分区）
+      return await this.rehydrate(snap, pwd);
+    }, this.o.retry);
   }
 
   /** 删除远端快照并从 index 摘除（写回合并后的 index）；文件不存在视为成功。 */
@@ -334,7 +378,7 @@ export class WebDavTransport implements SyncTransport {
     const url = this.snapshotUrl(id);
     const res = await this.send('DELETE', url, pwd);
     if (!res.ok && res.status !== 404) {
-      throw new WebDavTransportError(await this.failText('DELETE', url, res, pwd));
+      throw new WebDavTransportError(await this.failText('DELETE', url, res, pwd), classifyHttpStatus(res.status));
     }
     // 若 index 中无该 id，则无需写回
     const remaining = idx.filter((m) => m.id !== id);
@@ -343,11 +387,174 @@ export class WebDavTransport implements SyncTransport {
     }
     const putIdx = await this.send('PUT', idxUrl, pwd, { body: JSON.stringify(remaining) });
     if (!putIdx.ok) {
-      throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd));
+      throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
     }
+    // P1-4：快照被裁掉后回收无人引用的 blob（best-effort，失败不影响删除结果）
+    await this.gcBlobStore(pwd, remaining).catch(() => undefined);
   }
 
   /* ---------------- 内部实现 ---------------- */
+
+  /* ---------------- P1-4：内容寻址 blob 仓 ---------------- */
+
+  private blobsColUrl(): string {
+    return `${this.snapshotsColUrl()}/${BLOBS_SEG}`;
+  }
+
+  private blobUrl(hash: string): string {
+    return `${this.blobsColUrl()}/${hash}`;
+  }
+
+  private blobsIndexUrl(): string {
+    return `${this.snapshotsColUrl()}/${BLOBS_INDEX_FILE}`;
+  }
+
+  /** 幂等创建 blobs 集合（405/301 等「已存在」语义一律视为成功，与 ensureCollection 同口径）。 */
+  private async ensureBlobsCollection(pwd: string): Promise<void> {
+    const url = this.blobsColUrl();
+    const res = await this.send('MKCOL', url, pwd);
+    const okStatuses = new Set([200, 201, 204, 301, 302, 303, 405]);
+    if (!okStatuses.has(res.status)) {
+      throw new WebDavTransportError(await this.failText('MKCOL', url, res, pwd), classifyHttpStatus(res.status));
+    }
+  }
+
+  /** 把本次新写入的 blob 合并进远端索引（写失败 → 抛错，调用方看到的是上传失败而非静默漏记）。 */
+  private async appendBlobIndex(fresh: Map<string, number>, pwd: string): Promise<void> {
+    const index = await this.readBlobIndex(pwd);
+    for (const [hash, at] of fresh) index[hash] = at;
+    await this.writeBlobIndex(pwd, index);
+  }
+
+  /** 读取 blob 索引（哈希 → 写入时间 ms）；缺失/损坏 → 空（GC 只会「少删」，不会误删）。 */
+  private async readBlobIndex(pwd: string): Promise<Record<string, number>> {
+    const url = this.blobsIndexUrl();
+    const res = await this.send('GET', url, pwd);
+    if (res.status === 404) return {};
+    if (!res.ok) return {};
+    try {
+      const parsed = parseJsonSafe(await res.text());
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      const out: Record<string, number> = {};
+      for (const [hash, at] of Object.entries(parsed as Record<string, unknown>)) {
+        if (BLOB_HASH_RE.test(hash) && typeof at === 'number' && Number.isFinite(at)) out[hash] = at;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
+  private async writeBlobIndex(pwd: string, index: Record<string, number>): Promise<void> {
+    const url = this.blobsIndexUrl();
+    const res = await this.send('PUT', url, pwd, { body: JSON.stringify(index) });
+    if (!res.ok) {
+      throw new WebDavTransportError(await this.failText('PUT', url, res, pwd), classifyHttpStatus(res.status));
+    }
+  }
+
+  /**
+   * blob 仓端口。`index` 是「仓里有哪些 blob」的权威视图（GC 与跳过判定同源）：
+   * 命中索引 = 零传输；失败安全的取舍见 BLOBS_SEG 注释。
+   */
+  private blobSink(pwd: string, index: Record<string, number>, fresh: Map<string, number>): BlobSink {
+    return {
+      put: async (hash, bytes) => {
+        if (!BLOB_HASH_RE.test(hash)) {
+          throw new WebDavTransportError(`内容哈希形状非法，拒绝写入 blob 仓: ${hash}`);
+        }
+        if (index[hash] !== undefined) return; // 内容未变 → 一个字都不传（P1-4 的核心收益）
+        const url = this.blobUrl(hash);
+        const res = await this.send('PUT', url, pwd, { body: Buffer.from(bytes).toString('base64') });
+        if (!res.ok) {
+          throw new WebDavTransportError(await this.failText('PUT', url, res, pwd), classifyHttpStatus(res.status));
+        }
+        const at = Date.now();
+        index[hash] = at;
+        fresh.set(hash, at);
+      },
+      get: async (hash) => {
+        if (!BLOB_HASH_RE.test(hash)) return null;
+        const url = this.blobUrl(hash);
+        const res = await this.send('GET', url, pwd);
+        if (res.status === 404) return null;
+        if (!res.ok) {
+          throw new WebDavTransportError(await this.failText('GET', url, res, pwd), classifyHttpStatus(res.status));
+        }
+        return new Uint8Array(Buffer.from((await res.text()).trim(), 'base64'));
+      },
+      delete: async (hash) => {
+        if (!BLOB_HASH_RE.test(hash)) return;
+        await this.send('DELETE', this.blobUrl(hash), pwd); // 不存在视为成功
+        delete index[hash];
+      },
+      list: async () => Object.entries(index).map(([hash, mtimeMs]) => ({ hash, mtimeMs })),
+    };
+  }
+
+  /** 上传前把外置分区换成引用形态（加密快照整体密文，永不外置）。 */
+  private async externalize(
+    snapshot: SyncSnapshot,
+    pwd: string,
+    fresh: Map<string, number>,
+  ): Promise<SyncSnapshot> {
+    if (isEncryptedSections(snapshot.sections)) return snapshot;
+    const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
+    const targets = BLOB_SECTIONS.filter((sid) => isFilesSectionLike(plain[sid]));
+    if (targets.length === 0) return snapshot;
+    await this.ensureBlobsCollection(pwd);
+    const index = await this.readBlobIndex(pwd);
+    const sink = this.blobSink(pwd, index, fresh);
+    const next: Partial<Record<SectionId, SectionData>> = { ...plain };
+    for (const sid of targets) {
+      // ContentHash 已在适配器侧算好（FilesSection.files[].contentHash），这里只是落仓 + 建引用
+      const refs = await sectionToBlobRefs(plain[sid] as FilesSection, sink);
+      next[sid] = refs as unknown as SectionData;
+    }
+    return { ...snapshot, sections: next };
+  }
+
+  /** 下载后把引用形态还原成文件分区（缺 blob → 硬失败）。 */
+  private async rehydrate(snapshot: SyncSnapshot, pwd: string): Promise<SyncSnapshot> {
+    if (isEncryptedSections(snapshot.sections)) return snapshot;
+    const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
+    const targets = BLOB_SECTIONS.filter((sid) => isBlobRefsSection(plain[sid]));
+    if (targets.length === 0) return snapshot;
+    const sink = this.blobSink(pwd, {}, new Map());
+    const next: Partial<Record<SectionId, SectionData>> = { ...plain };
+    for (const sid of targets) {
+      const files = await refsToSection(plain[sid] as unknown as BlobRefsSection, sink);
+      next[sid] = files as unknown as SectionData;
+    }
+    return { ...snapshot, sections: next };
+  }
+
+  /**
+   * blob 仓 GC（P1-4）：逐份读取**仍存在**的快照 JSON，收集被引用的哈希，删除无人引用且
+   * 超过保护窗口的 blob。读坏任一份快照 → 本轮直接放弃（宁可留垃圾，不可删在用的）。
+   */
+  private async gcBlobStore(pwd: string, remaining: SyncSnapshotMeta[]): Promise<void> {
+    const index = await this.readBlobIndex(pwd);
+    if (Object.keys(index).length === 0) return;
+    const referenced = new Set<string>();
+    for (const meta of remaining) {
+      const res = await this.send('GET', this.snapshotUrl(meta.id), pwd);
+      if (!res.ok) continue;
+      let snap: SyncSnapshot;
+      try {
+        snap = deserializeSnapshot(await res.text());
+      } catch {
+        return;
+      }
+      const plain = snap.sections as Partial<Record<SectionId, unknown>>;
+      for (const sid of BLOB_SECTIONS) {
+        for (const hash of referencedBlobHashes(plain[sid])) referenced.add(hash);
+      }
+    }
+    const deleted = await gcBlobs({ sink: this.blobSink(pwd, index, new Map()), referenced, nowMs: Date.now() });
+    if (deleted.length === 0) return;
+    await this.writeBlobIndex(pwd, index);
+  }
 
   private validateOptions(options: WebDavTransportOptions): void {
     const msg = options.msg ?? zhMsg;
@@ -412,7 +619,7 @@ export class WebDavTransport implements SyncTransport {
     const res = await this.send('MKCOL', url, pwd);
     const okStatuses = new Set([200, 201, 204, 301, 302, 303, 405]);
     if (okStatuses.has(res.status)) return;
-    throw new WebDavTransportError(await this.failText('MKCOL', url, res, pwd));
+    throw new WebDavTransportError(await this.failText('MKCOL', url, res, pwd), classifyHttpStatus(res.status));
   }
 
   /** 读 index（缺失 → []；非法 → 抛错）。 */
@@ -421,7 +628,7 @@ export class WebDavTransport implements SyncTransport {
     const res = await this.send('GET', url, pwd);
     if (res.status === 404) return [];
     if (!res.ok) {
-      throw new WebDavTransportError(await this.failText('GET', url, res, pwd));
+      throw new WebDavTransportError(await this.failText('GET', url, res, pwd), classifyHttpStatus(res.status));
     }
     return this.parseIndex(await res.text(), url, pwd);
   }
@@ -433,10 +640,14 @@ export class WebDavTransport implements SyncTransport {
     } catch (err) {
       throw new WebDavTransportError(
         this.o.msg('sync.webdav.indexInvalid', { url, err: this.mask(String((err as Error)?.message ?? ''), pwd) }),
+        { kind: 'protocol', retryable: false },
       );
     }
     if (!Array.isArray(parsed)) {
-      throw new WebDavTransportError(this.o.msg('sync.webdav.indexInvalid', { url, err: 'not an array' }));
+      throw new WebDavTransportError(
+        this.o.msg('sync.webdav.indexInvalid', { url, err: 'not an array' }),
+        { kind: 'protocol', retryable: false },
+      );
     }
     const valid = (m: unknown): m is SyncSnapshotMeta =>
       typeof m === 'object' && m !== null
@@ -445,7 +656,10 @@ export class WebDavTransport implements SyncTransport {
       && typeof (m as SyncSnapshotMeta).manifest === 'object' && (m as SyncSnapshotMeta).manifest !== null
       && typeof (m as SyncSnapshotMeta).sections === 'object' && (m as SyncSnapshotMeta).sections !== null;
     if (!parsed.every(valid)) {
-      throw new WebDavTransportError(this.o.msg('sync.webdav.indexInvalid', { url, err: 'invalid entry' }));
+      throw new WebDavTransportError(
+        this.o.msg('sync.webdav.indexInvalid', { url, err: 'invalid entry' }),
+        { kind: 'protocol', retryable: false },
+      );
     }
     const metas = parsed as SyncSnapshotMeta[];
     metas.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
@@ -458,6 +672,7 @@ export class WebDavTransport implements SyncTransport {
     } catch (err) {
       throw new WebDavTransportError(
         this.o.msg('sync.webdav.snapshotInvalid', { id, err: this.mask(String((err as Error)?.message ?? ''), '') }),
+        { kind: 'protocol', retryable: false },
       );
     }
   }
@@ -480,14 +695,17 @@ export class WebDavTransport implements SyncTransport {
       return await this.o.request(method, url, { headers, body: opts.body, timeoutMs: this.o.timeoutMs });
     } catch (err) {
       if (this.isTimeout(err)) {
+        // 超时 = 瞬时故障（可重试）：分类随错误上抛，上层不必解析 message
         throw new WebDavTransportError(
           this.o.msg('sync.webdav.timeout', { method, url, timeout: String(this.o.timeoutMs) }),
+          { kind: 'timeout', retryable: true, cause: err },
         );
       }
       if (err instanceof Error && err.name === 'RedirectError') {
         // 默认 request 的重定向跳数超限（如 302 循环）→ 归一为清晰消息，避免暴露内部跳转详情
         throw new WebDavTransportError(
           this.o.msg('sync.webdav.tooManyRedirects', { method, url, n: String(MAX_REDIRECTS) }),
+          { kind: 'protocol', retryable: false, cause: err },
         );
       }
       const rawMsg = err instanceof Error
@@ -495,6 +713,7 @@ export class WebDavTransport implements SyncTransport {
         : String(err);
       throw new WebDavTransportError(
         this.o.msg('sync.webdav.requestError', { method, url, err: this.mask(rawMsg, pwd) }),
+        { ...classifyNetworkErrorText(rawMsg), cause: err },
       );
     }
   }

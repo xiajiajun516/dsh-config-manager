@@ -21,6 +21,8 @@ export interface BuildManifestInput {
   encrypted: boolean;
   encryption: Manifest['security']['encryption'];
   exportedAt?: string; // 测试可注入固定时间
+  /** 导出机的 DSH home（可选；见 Manifest.sourceHome，用于跨机基础路径重定基） */
+  sourceHome?: string;
 }
 
 /** 构造 manifest（schemaVersion 恒为当前版本，集中于此） */
@@ -34,6 +36,7 @@ export function buildManifest(input: BuildManifestInput): Manifest {
       arch: input.arch,
     },
     exportedAt: input.exportedAt ?? new Date().toISOString(),
+    ...(input.sourceHome !== undefined && input.sourceHome !== '' ? { sourceHome: input.sourceHome } : {}),
     sections: input.sections,
     security: {
       containsSecrets: input.containsSecrets,

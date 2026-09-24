@@ -25,11 +25,18 @@ import { promisify } from 'node:util';
 
 import { createSnapshotFs, joinFs } from '../fs.ts';
 import type { SnapshotFs } from '../fs.ts';
-import { readSnapshotFromDir, SNAPSHOT_KEEP_CONTENT, SNAPSHOT_KEEP_FILE, SNAPSHOT_MANIFEST_FILE, writeSnapshotToDir } from '../layout.ts';
+import { readSnapshotFromDir, SNAPSHOT_BLOB_REFS_SUFFIX, SNAPSHOT_KEEP_CONTENT, SNAPSHOT_KEEP_FILE, SNAPSHOT_MANIFEST_FILE, writeSnapshotToDir } from '../layout.ts';
 import type { SnapshotDirManifest } from '../layout.ts';
+import { BLOB_SECTIONS, gcBlobs, referencedBlobHashes } from '../blob-store.ts';
+import type { BlobSink } from '../blob-store.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
-import { computeSnapshotMeta, isEncryptedSections } from '../transport.ts';
-import type { SyncSnapshot, SyncSnapshotMeta, SyncTransport } from '../transport.ts';
+import {
+  classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections,
+  SyncTransportError, withSyncRetry,
+} from '../transport.ts';
+import type {
+  SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
+} from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 import { atomicWriteFile } from '../../utils/atomic-write.ts';
 import { SECTION_FILE_PREFIXES } from '../../schema/config.ts';
@@ -67,8 +74,10 @@ export interface GitTransportOptions {
   workDir: string;
   /** token 提供者（http(s) 远端必填；本地/ssh 远端不会被调用） */
   credentials: GitCredentialProvider;
-  /** 单条 git 命令超时 ms，默认 60000 */
+  /** 单条 git 命令超时 ms；缺省 = 两条通道共用的 DEFAULT_SYNC_TIMEOUT_MS（120000，只放宽不收紧） */
   timeoutMs?: number;
+  /** 幂等读操作（list/download 的 clone/pull）的网络重试参数；缺省 attempts=3、250ms 起指数退避 */
+  retry?: SyncRetryOptions;
   /** 注入 exec（测试 mock 用）；缺省 = execFile 封装 */
   exec?: GitExecFn;
   /** 提交作者（写入远端历史），默认 DSH Config Sync <sync@dsh.local> */
@@ -79,9 +88,13 @@ export interface GitTransportOptions {
   msg?: MsgFunc;
 }
 
-export class GitTransportError extends Error {
-  constructor(message: string) {
-    super(message);
+/**
+ * git 通道错误：继承统一错误基类（kind / retryable / status 分类对上层可见）。
+ * 分类口径见 transport.ts 的 classifyNetworkErrorText / classifyHttpStatus。
+ */
+export class GitTransportError extends SyncTransportError {
+  constructor(message: string, opts: SyncTransportErrorOptions = {}) {
+    super(message, opts);
     this.name = 'GitTransportError';
   }
 }
@@ -90,7 +103,14 @@ const SNAPSHOTS_REL = 'snapshots';
 /** 加密快照的「密文单文件」目录：整个快照 JSON（含密文载荷）以 <id>.json 提交。
  *  加密快照不写散文件目录（密文无法平铺为明文 JSON 分区；远端已存密文）。 */
 const SNAPSHOTS_ENCRYPTED_REL = 'snapshots-encrypted';
-const DEFAULT_TIMEOUT_MS = 60_000;
+/**
+ * 内容寻址 blob 仓在仓库内的相对目录（P1-4）。
+ *
+ * 为什么即使是 git 通道也要显式共享目录：git 本身按 blob 去重**存储**，但每个快照 commit
+ * 仍要重写工作树里的整份会话文件（数十 MB × N）。把字节放进跨快照共享的 blobs/ 后，
+ * 内容没变 = 文件路径已存在 = 一个字都不写、也不进本次 diff。
+ */
+const BLOBS_REL = 'blobs';
 const DEFAULT_AUTHOR: GitAuthor = { name: 'DSH Config Sync', email: 'sync@dsh.local' };
 const DEFAULT_CREDENTIAL_USERNAME = 'oauth2';
 /** 快照 id 安全字符集：字母数字开头，仅 . _ -；防路径穿越与 commit message 注入 */
@@ -107,10 +127,17 @@ const defaultExec: GitExecFn = async (cmd, args, opts) => {
     });
     return { stdout: String(stdout), stderr: String(stderr), code: 0 };
   } catch (err) {
-    const e = err as { code?: number; stdout?: string; stderr?: string };
+    const e = err as { code?: number | string; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
+    const detail = String(e.stderr ?? '') !== '' ? String(e.stderr) : (err instanceof Error ? err.message : String(err));
+    // 超时（execFile 到点 kill）在 git 的 stderr 里常常是空的：补一句可判定的文字，
+    // 让 transport.ts 的统一分类器把它识别成 timeout（瞬时、可重试），而不是 unknown。
+    const timedOut = e.killed === true || e.signal === 'SIGTERM' || e.code === 'ETIMEDOUT';
+    const stderr = timedOut && !/timed out|timeout/i.test(detail)
+      ? `git command timed out after ${String(opts.timeoutMs ?? 0)}ms: ${detail}`
+      : detail;
     return {
       stdout: String(e.stdout ?? ''),
-      stderr: String(e.stderr ?? (err instanceof Error ? err.message : String(err))),
+      stderr,
       code: typeof e.code === 'number' ? e.code : 1,
     };
   }
@@ -128,6 +155,7 @@ export class GitTransport implements SyncTransport {
   private readonly o: GitTransportOptions & {
     gitBin: string;
     timeoutMs: number;
+    retry: SyncRetryOptions;
     author: GitAuthor;
     credentialUsername: string;
     exec: GitExecFn;
@@ -153,7 +181,8 @@ export class GitTransport implements SyncTransport {
       workDir: options.workDir,
       credentials: options.credentials,
       gitBin: 'git',
-      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: options.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS,
+      retry: options.retry ?? {},
       exec: options.exec ?? defaultExec,
       author: options.author ?? DEFAULT_AUTHOR,
       credentialUsername: options.credentialUsername ?? DEFAULT_CREDENTIAL_USERNAME,
@@ -169,7 +198,8 @@ export class GitTransport implements SyncTransport {
    *  与 snapshots-encrypted/（密文单文件）两个目录（先 pull 同步远端）。 */
   async list(): Promise<SyncSnapshotMeta[]> {
     await this.ensureRepo();
-    await this.pullFromRemote();
+    // 幂等读：网络故障（连接重置/超时/DNS）允许一次有限重试；工作副本无写副作用
+    await this.pullFromRemote({ retryable: true });
     const fsx = createSnapshotFs();
     const metas: SyncSnapshotMeta[] = [];
     // 明文散文件目录
@@ -230,12 +260,16 @@ export class GitTransport implements SyncTransport {
     } else {
       const dir = this.snapshotDir(snapshot.id);
       if (await fsx.exists(dir)) await fsx.remove(dir); // 覆盖语义：先清旧目录，避免残留旧文件
-      await writeSnapshotToDir(snapshot, dir, fsx);
+      // P1-4：会话等大分区改为内容寻址外置（写进共享 blobs/，快照只留引用）
+      await writeSnapshotToDir(snapshot, dir, fsx, { blobs: this.blobSink(fsx), sections: BLOB_SECTIONS });
       // git 不跟踪空目录：为空文件类分区目录写占位文件，保证远端保留目录。
       // 占位文件不参与 manifest.sectionHashes（基于传入数据计算）；读回时按名+内容过滤。
       // 否则空分区（如未安装 skills）上传后目录在远端丢失，B 机全新 clone 下载即失败。
       const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
+      const blobSections = new Set<string>(BLOB_SECTIONS);
       for (const [sid, prefix] of Object.entries(SECTION_FILE_PREFIXES)) {
+        // 外置分区不写 <prefix>/ 目录（引用文件已在 writeSnapshotToDir 里写好），无需占位文件
+        if (blobSections.has(sid)) continue;
         const data = plain[sid as SectionId] as FilesSection | undefined;
         if (data === undefined || data.files.length > 0) continue;
         // joinFs 只接受两个参数，占位路径拼进 prefix 一起传
@@ -245,7 +279,9 @@ export class GitTransport implements SyncTransport {
       await fsx.remove(this.encryptedSnapshotFile(snapshot.id));
       rel = `${SNAPSHOTS_REL}/${snapshot.id}`;
     }
-    await this.runGit(['add', '--', rel]);
+    // blob 仓与快照同一次提交：引用文件与它引用的字节绝不跨 commit 分离
+    const hasBlobs = await fsx.exists(this.blobsDir());
+    await this.runGit(hasBlobs ? ['add', '--', rel, BLOBS_REL] : ['add', '--', rel]);
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
     if (diff.code !== 0) {
       const verb = existed ? 'update' : 'add';
@@ -259,13 +295,18 @@ export class GitTransport implements SyncTransport {
   async download(id: string): Promise<SyncSnapshot> {
     this.assertSafeId(id);
     await this.ensureRepo();
-    await this.pullFromRemote();
+    // 幂等读：网络故障允许一次有限重试（只读远端/工作副本，无写副作用）
+    await this.pullFromRemote({ retryable: true });
     const fsx = createSnapshotFs();
     // 优先散文件目录（明文布局）；其次密文单文件（加密布局）
     // missingFileDir='empty'：git 不跟踪空目录 → 目录缺失 = 空文件分区（非损坏；
     // 提交原子性保证非空目录不会缺失），兼容旧版插件上传的无占位快照
     if (await fsx.isDir(this.snapshotDir(id))) {
-      return readSnapshotFromDir(this.snapshotDir(id), fsx, { missingFileDir: 'empty' });
+      return readSnapshotFromDir(this.snapshotDir(id), fsx, {
+        missingFileDir: 'empty',
+        // P1-4：外置分区从 blobs/ 取回字节（缺 blob → 硬失败，绝不降级成空分区）
+        blobs: this.blobSink(fsx),
+      });
     }
     const encFile = this.encryptedSnapshotFile(id);
     if (await fsx.exists(encFile)) {
@@ -306,6 +347,8 @@ export class GitTransport implements SyncTransport {
       await this.runGit(['commit', '-m', `sync: delete snapshot ${id}`]);
       await this.runGit(['push', '-u', 'origin', 'HEAD'], { withCredential: true });
     }
+    // P1-4：快照被裁掉后回收无人引用的 blob（best-effort，失败不影响删除结果）
+    await this.gcBlobStore(fsx).catch(() => undefined);
   }
 
   /**
@@ -338,25 +381,45 @@ export class GitTransport implements SyncTransport {
       this.repoReady = true;
       return;
     }
+    const gitDir = path.join(this.o.workDir, '.git');
     const entries = await fsx.readdir(this.o.workDir);
     if (entries.length > 0) {
-      throw new GitTransportError(this.msg('sync.git.workDirNotRepo', { dir: this.o.workDir }));
+      throw new GitTransportError(
+        this.msg('sync.git.workDirNotRepo', { dir: this.o.workDir }),
+        { kind: 'protocol', retryable: false },
+      );
     }
-    await this.runGit(['clone', this.o.repoUrl, '.'], { cwd: this.o.workDir, withCredential: true });
+    // 首次 clone 也是网络操作，且失败时工作副本仍为空（幂等）→ 允许有限指数退避重试；
+    // 每次尝试前重查 .git：上一次尝试其实建出了仓库就视为成功，避免「目录非空」误判。
+    await withSyncRetry(async () => {
+      if (await fsx.exists(gitDir)) return;
+      await this.runGit(['clone', this.o.repoUrl, '.'], { cwd: this.o.workDir, withCredential: true });
+    }, this.o.retry);
     // 仓库级提交身份（写入远端历史，可经 author 选项覆盖；不改全局配置）
     await this.runGit(['config', 'user.name', this.o.author.name]);
     await this.runGit(['config', 'user.email', this.o.author.email]);
     this.repoReady = true;
   }
 
-  /** pull --ff-only 同步远端；无本地提交（全新仓库）或无 upstream 时静默跳过 */
-  private async pullFromRemote(): Promise<void> {
+  /**
+   * pull --ff-only 同步远端；无本地提交（全新仓库）或无 upstream 时静默跳过。
+   * opts.retryable=true（仅 list / download 等**幂等读**路径传）：瞬时网络故障走有限指数退避重试。
+   * 写路径（upload / delete）不传 → 一次即止（push 有远端副作用，重试可能造成重复写入）。
+   */
+  private async pullFromRemote(opts: { retryable?: boolean } = {}): Promise<void> {
     const head = await this.runGit(['rev-parse', '--verify', '--quiet', 'HEAD'], { allowNonZero: true });
     if (head.code !== 0) return; // 无本地提交 → 无可 pull
-    const res = await this.runGit(['pull', '--ff-only'], { withCredential: true, allowNonZero: true });
-    if (res.code === 0) return;
-    if (/no tracking information/i.test(res.stderr)) return; // 无 upstream（初始状态）→ 跳过
-    throw new GitTransportError(this.msg('sync.git.pullFailed', { err: this.mask(res.stderr, await this.readTokenOnce()) }));
+    const attempt = async (): Promise<void> => {
+      const res = await this.runGit(['pull', '--ff-only'], { withCredential: true, allowNonZero: true });
+      if (res.code === 0) return;
+      if (/no tracking information/i.test(res.stderr)) return; // 无 upstream（初始状态）→ 跳过
+      throw new GitTransportError(
+        this.msg('sync.git.pullFailed', { err: this.mask(res.stderr, await this.readTokenOnce()) }),
+        classifyNetworkErrorText(res.stderr),
+      );
+    };
+    if (opts.retryable === true) await withSyncRetry(attempt, this.o.retry);
+    else await attempt();
   }
 
   /** 执行 git 命令；withCredential=true 时注入 credential helper（token 不进 argv），失败时错误消息脱敏 */
@@ -377,11 +440,21 @@ export class GitTransport implements SyncTransport {
     try {
       const result = await this.o.exec(this.o.gitBin, [...extra, ...args], { cwd, timeoutMs: this.o.timeoutMs });
       if (result.code !== 0 && !opts.allowNonZero) {
+        // 统一分类（超时 / 网络 / 鉴权 / 5xx…）：上层可据 kind / retryable 分流，不必解析 message
         throw new GitTransportError(
           this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) }),
+          classifyNetworkErrorText(result.stderr + ' ' + result.stdout),
         );
       }
       return result;
+    } catch (err) {
+      if (err instanceof GitTransportError) throw err;
+      // 注入的 exec 实现可能直接抛错（默认实现只返回非零 code）——同样归一为带分类的传输层错误
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new GitTransportError(
+        this.msg('sync.git.cmdFailed', { args: args.join(' '), code: 'exec', err: this.mask(detail, token) }),
+        { ...classifyNetworkErrorText(detail), cause: err },
+      );
     } finally {
       if (cleanup) await cleanup();
     }
@@ -432,6 +505,82 @@ export class GitTransport implements SyncTransport {
       out = out.split(token).join('[REDACTED]').split(encodeURIComponent(token)).join('[REDACTED]');
     }
     return out;
+  }
+
+  private blobsDir(): string {
+    return path.join(this.o.workDir, BLOBS_REL);
+  }
+
+  /**
+   * git 通道的 blob 仓实现：工作树内 `blobs/<sha256>`（跨快照共享、按内容寻址）。
+   * put 幂等（已存在即跳过）—— 这正是「未变会话不再重传/重写」的落点。
+   */
+  private blobSink(fsx: SnapshotFs): BlobSink {
+    const base = this.blobsDir();
+    return {
+      put: async (hash, bytes) => {
+        const abs = joinFs(base, hash);
+        if (await fsx.exists(abs)) return;
+        await fsx.mkdir(base);
+        await fsx.writeFile(abs, bytes);
+      },
+      get: async (hash) => {
+        const abs = joinFs(base, hash);
+        if (!(await fsx.exists(abs))) return null;
+        return fsx.readFile(abs);
+      },
+      delete: async (hash) => {
+        await fsx.remove(joinFs(base, hash));
+      },
+      list: async () => {
+        const names = await fsx.readdir(base);
+        const out: { hash: string; mtimeMs: number }[] = [];
+        for (const name of names) {
+          if (name === '' || name === '.' || name === '..') continue;
+          const abs = joinFs(base, name);
+          if (await fsx.isDir(abs)) continue;
+          try {
+            out.push({ hash: name, mtimeMs: (await fs.stat(abs)).mtimeMs });
+          } catch {
+            /* 列不到时间 → 视为「刚写入」（保守不删） */
+            out.push({ hash: name, mtimeMs: Date.now() });
+          }
+        }
+        return out;
+      },
+    };
+  }
+
+  /**
+   * blob 仓 GC（P1-4）：扫描**仍存在**的快照目录里的 <section>.blobs.json，删除无人引用且
+   * 超过保护窗口的 blob。任何引用文件读不出来 → **本轮直接放弃**（宁可留垃圾，不可删在用的）。
+   * best-effort：失败不影响调用方（删除快照本身已成功）。
+   */
+  private async gcBlobStore(fsx: SnapshotFs): Promise<void> {
+    if (!(await fsx.exists(this.blobsDir()))) return;
+    const referenced = new Set<string>();
+    let readable = true;
+    for (const name of await fsx.readdir(this.snapshotsDir())) {
+      const dir = joinFs(this.snapshotsDir(), name);
+      if (!(await fsx.isDir(dir))) continue;
+      for (const file of await fsx.readdir(dir)) {
+        if (!file.endsWith(SNAPSHOT_BLOB_REFS_SUFFIX)) continue;
+        try {
+          const parsed = parseJsonSafe(Buffer.from(await fsx.readFile(joinFs(dir, file))).toString('utf8'));
+          for (const hash of referencedBlobHashes(parsed)) referenced.add(hash);
+        } catch {
+          readable = false;
+        }
+      }
+    }
+    if (!readable) return;
+    const deleted = await gcBlobs({ sink: this.blobSink(fsx), referenced, nowMs: Date.now() });
+    if (deleted.length === 0) return;
+    await this.runGit(['add', '-A', '--', BLOBS_REL]);
+    const diff = await this.runGit(['diff', '--cached', '--quiet'], { allowNonZero: true });
+    if (diff.code === 0) return;
+    await this.runGit(['commit', '-m', `sync: gc ${deleted.length} blob(s)`]);
+    await this.runGit(['push', '-u', 'origin', 'HEAD'], { withCredential: true });
   }
 
   private assertSafeId(id: string): void {

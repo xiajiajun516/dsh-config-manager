@@ -18,47 +18,42 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import { redact } from '../../security/redaction.ts'
-import type { RestorePlan, RestoreReport, SnapshotMeta } from '../../core/restore.ts'
+import type { SnapshotMeta } from '../../core/restore.ts'
 import type { ConsultReport } from '../../core/migration-consult.ts'
-import type { RestoreChangeSummary } from '../../core/snapshot-diff.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
 import { RestorePlanView } from './RestorePlanView.tsx'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { RecoveryPort } from '../../ui/types.ts'
 import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
-import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, Segmented, Spinner, StatusDot } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Empty, IconButton, Segmented, Spinner } from '../common/ui.tsx'
 import { toast } from '../common/toast-store.ts'
-import { SnapshotIcon, RefreshIcon, DownloadIcon, ImportIcon, InspectIcon, DeleteIcon, ClockIcon, PencilIcon, MessageIcon } from '../common/Icon.tsx'
+import { RefreshIcon, DownloadIcon, ImportIcon, InspectIcon, DeleteIcon, ClockIcon, PencilIcon, MessageIcon } from '../common/Icon.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
-import { runStore, toSnapshotsStoreSlice, type SnapshotsStoreSlice, type SnapshotsSubTab } from '../run-store.ts'
+import { runStore, toSnapshotsStoreSlice, type SnapshotsSubTab } from '../run-store.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
 import type { BackupInspectResult } from '../api.ts'
 import { inspectGroupedChanges, inspectSections, inspectSummary } from '../../ui/backup-inspect.ts'
 import type { InspectGroupKey } from '../../ui/backup-inspect.ts'
 import { formatBytes } from '../../ui/report.ts'
-// issue #31：宿主回传的 skipReason 是机器 token（如 'mutation-locked'），必须经统一映射
-// 再展示——否则备份卡「上次运行」直接显示英文裸 token。
-import { describeSkipReason } from '../sync/history-model.ts'
 import {
-  BACKUP_INTERVAL_OPTIONS,
   DEFAULT_RETENTION_POLICY,
-  RETENTION_FIELDS,
-  RETENTION_FIELD_LIMITS,
-  WEEKDAY_OPTIONS,
-  backupDraftDirty,
-  backupRunBadgeKind,
-  hasRetentionTiers,
   normalizeRetentionPolicy,
-  validateBackupScheduleDraft,
-  type BackupInterval,
-  type BackupRunStatus,
-  type BackupScheduleDraft,
-  type BackupScheduleStatus,
-  type BackupWeeklySchedule,
   type RetentionPolicy,
 } from '../../ui/backup-schedule.ts'
+import {
+  filterBackupFiles,
+  formatBackupFileTime,
+  isUnreadableNote,
+  midEllipsis,
+  planHasExecutableActions,
+  snapshotsPanelStateFromStore,
+  type SnapshotsPanelState,
+} from '../../ui/snapshots-view.ts'
+import { BackupScheduleCard } from './BackupScheduleCard.tsx'
+import { SnapshotsEmptyState } from './SnapshotsEmptyState.tsx'
+import { SnapshotsListTable } from './SnapshotsListTable.tsx'
 import css from '../config-manager.module.css'
 
 export interface SnapshotsPanelProps {
@@ -69,22 +64,11 @@ export interface SnapshotsPanelProps {
   recoveryT: TranslateNS<'config-manager-recovery'>
 }
 
-interface PanelState {
-  status: 'loading' | 'ready' | 'error'
-  error: string | null
-  metas: SnapshotMeta[]
-  selectedId: string | null
-  planning: boolean
-  plan: RestorePlan | null
-  /** git 风格预览：宿主返回的逐动作变更状态 + 行数统计（null = 旧宿主未返回） */
-  changeSummary: RestoreChangeSummary | null
-  running: boolean
-  report: RestoreReport | null
-  /** 仅承载「恢复计划（dry-run）加载失败」——渲染点在计划预览弹窗内。
-   *  其余动作失败（执行恢复/置顶/删除）走全局 Toast，绝不写这里：
-   *  那些动作发生时弹窗已关闭，写进来等于没有任何渲染点（曾经就是这样静默丢失的）。 */
-  actionError: string | null
-}
+/**
+ * 面板状态：定义与「从 store 切片恢复」的投影都在 src/ui/snapshots-view.ts
+ * （框架无关、node 可测）——本组件只持有与提交它。
+ */
+type PanelState = SnapshotsPanelState
 
 /** P1-⑧：手动删除快照的确认目标（null = 无） */
 interface SnapshotDeleteTarget {
@@ -100,67 +84,10 @@ interface SnapshotDeleteTarget {
  */
 export const SNAPSHOT_RETENTION_LIMIT = DEFAULT_RETENTION_POLICY.keepLast
 
-/** 中段省略（文件名：保留头尾，中段 …——尾部时间戳是唯一区分信息，不可被截掉）。 */
-function midEllipsis(s: string, max = 26): string {
-  if (s.length <= max) return s
-  const keep = max - 1
-  const head = Math.ceil(keep / 2)
-  const tail = keep - head
-  return `${s.slice(0, head)}…${s.slice(-tail)}`
-}
 
-const initial: PanelState = {
-  status: 'loading',
-  error: null,
-  metas: [],
-  selectedId: null,
-  planning: false,
-  plan: null,
-  changeSummary: null,
-  running: false,
-  report: null,
-  actionError: null,
-}
-
-function statusLabel(t: TranslateNS<'config-manager'>, status: SnapshotMeta['status']): string {
-  switch (status) {
-    case 'pending': return t('snapshots.status.pending')
-    case 'done': return t('snapshots.status.done')
-    case 'rolled-back': return t('snapshots.status.rolled-back')
-    default: return t('snapshots.status.unknown')
-  }
-}
-
-function statusBadgeKind(status: SnapshotMeta['status']): 'info' | 'ok' | 'warn' | 'error' {
-  switch (status) {
-    case 'pending': return 'info'
-    case 'done': return 'ok'
-    case 'rolled-back': return 'warn'
-    default: return 'error'
-  }
-}
-
-/**
- * 从 runStore 恢复上次的快照面板状态（切页回 / 刷新后挂载）。
- * 无敏感字段；plan/report 为纯数据，可安全序列化恢复。
- * running 来自 store 镜像（刷新后经 runStore.resume() 以宿主 /runs 为权威重新置位）。
- */
-function initFromStore(): PanelState {
-  const s: SnapshotsStoreSlice = runStore.getSnapshot().snapshots
-  return {
-    ...initial,
-    selectedId: s.selectedId,
-    running: s.running,
-    plan: s.plan,
-    changeSummary: s.changeSummary,
-    report: s.report,
-    actionError: s.actionError,
-    error: s.error,
-  }
-}
 
 export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPanelProps) {
-  const [state, setState] = useState<PanelState>(initFromStore)
+  const [state, setState] = useState<PanelState>(() => snapshotsPanelStateFromStore(runStore.getSnapshot().snapshots))
   /** 最新 state 镜像（commit/卸载 flush 读取，避免闭包过期值） */
   const stateRef = useRef<PanelState>(state)
   /** 挂载守卫：卸载后不再 setState（store 镜像仍执行，异步结果照常落库） */
@@ -422,92 +349,25 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
           )}
 
           {state.status === 'ready' && state.metas.length === 0 && (
-            /* 空态页：垂直居中 + 图形 + 双 CTA（立即备份 / 查看备份文件） */
-            <div className={css.emptyHero}>
-              <span className={css.emptyHeroSymbol} aria-hidden="true"><SnapshotIcon size={28} /></span>
-              <span className={css.emptyHeroTitle}>{t('snapshots.empty.title')}</span>
-              <span className={css.emptyHeroBody}>{t('snapshots.empty.body')}</span>
-              <div className={css.toolRow} style={{ justifyContent: 'center', marginBottom: 0 }}>
-                <Button size="sm" onClick={() => { switchSubTab('files') }}>{t('snapshots.empty.viewFiles')}</Button>
-                <Button size="sm" variant="primary" onClick={() => {
-                  api.runBackupNow().then(() => { setBackupFilesTick((n) => n + 1) }, () => {})
-                }}>
-                  {t('snapshots.empty.runBackup')}
-                </Button>
-              </div>
-            </div>
+            <SnapshotsEmptyState
+              t={t}
+              onViewFiles={() => { switchSubTab('files') }}
+              onRunBackup={() => { api.runBackupNow().then(() => { setBackupFilesTick((n) => n + 1) }, () => {}) }}
+            />
           )}
 
           {state.status === 'ready' && state.metas.length > 0 && (
             <>
-              <div className={css.hint} style={{ marginBottom: 8 }}>
-                {/* m-retention：分母取宿主真实策略（可配置）；宿主未返回时回退缺省常量 */}
-                {t('snapshots.retentionHint', {
-                  count: String((retentionPolicy ?? DEFAULT_RETENTION_POLICY).keepLast),
-                })}
-              </div>
-              <div className={css.tableWrap}>
-                <div className={css.tableScroll}>
-                  <table className={`${css.dataTable} ${css.tableFixed}`}>
-                    <thead>
-                      <tr>
-                        <th style={{ width: 118 }}>{t('snapshots.createdAt')}</th>
-                        <th>{t('snapshots.sourceZip')}</th>
-                        <th style={{ width: 68 }}>{t('snapshots.status')}</th>
-                        <th className={css.num} style={{ width: 46 }}>{t('snapshots.entries')}</th>
-                        <th className={css.num} style={{ width: 46 }}>{t('snapshots.plugins')}</th>
-                        <th className={css.cellActions} style={{ width: 120 }}>{t('snapshots.actions')}</th>
-                      </tr>
-                    </thead>
-                    <tbody role="listbox" aria-label={t('snapshots.selectHint')}>
-                      {state.metas.map((meta) => {
-                        const selected = meta.id === state.selectedId
-                        return (
-                          <tr
-                            key={meta.id}
-                            role="option"
-                            aria-selected={selected}
-                            /* 选中淡底：DESIGN.md 数据表 pattern（.dataTable tbody tr[data-selected]），
-                               须与 aria-selected 同步给出，否则 listbox 选中态只剩语义没有视觉反馈 */
-                            data-selected={selected ? '' : undefined}
-                            style={{ cursor: 'pointer' }}
-                            tabIndex={0}
-                            onClick={() => { select(meta.id) }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault()
-                                select(meta.id)
-                              }
-                            }}
-                          >
-                            <td>
-                              <span title={meta.id}>
-                                {meta.pinned === true && '📌 '}{new Date(meta.createdAt).toLocaleString()}
-                              </span>
-                            </td>
-                            <td className={css.dim}>
-                              <span className={css.mono} title={meta.sourceZip} style={{ fontSize: '11px' }}>{meta.sourceZip}</span>
-                            </td>
-                            <td><Badge kind={statusBadgeKind(meta.status)}>{statusLabel(t, meta.status)}</Badge></td>
-                            <td className={css.num}>{meta.entryCount}</td>
-                            <td className={css.num}>{meta.beforePluginCount}</td>
-                            <td className={css.cellActions}>
-                              <span className={css.rowActions}>
-                                <Button size="sm" disabled={managing} onClick={() => { togglePin(meta) }}>
-                                  {meta.pinned === true ? t('snapshots.unpin') : t('snapshots.pin')}
-                                </Button>
-                                <Button size="sm" variant="danger" disabled={managing} onClick={() => { setDeleteTarget({ id: meta.id, createdAt: meta.createdAt }) }}>
-                                  {t('snapshots.delete')}
-                                </Button>
-                              </span>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <SnapshotsListTable
+                t={t}
+                metas={state.metas}
+                selectedId={state.selectedId}
+                managing={managing}
+                retentionLimit={(retentionPolicy ?? DEFAULT_RETENTION_POLICY).keepLast}
+                onSelect={select}
+                onTogglePin={togglePin}
+                onRequestDelete={(meta) => { setDeleteTarget({ id: meta.id, createdAt: meta.createdAt }) }}
+              />
 
               {state.report !== null && (
                 <>
@@ -578,7 +438,7 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
               </Button>
               <Button
                 variant="danger"
-                disabled={state.running || state.plan === null || state.plan.actions.every((a) => a.kind === 'skip')}
+                disabled={state.running || !planHasExecutableActions(state.plan)}
                 onClick={requestExecute}
               >
                 {state.running ? t('snapshots.executing') : t('snapshots.execute')}
@@ -619,434 +479,6 @@ export function SnapshotsPanel({ api, t, recoveryApi, recoveryT }: SnapshotsPane
   )
 }
 
-/* ------------------------------------------------- 定时全量备份设置卡 */
-
-/** 间隔档位 → 字典键（t 的类型是字面量联合，switch 保持类型安全）。 */
-function intervalLabel(t: TranslateNS<'config-manager'>, interval: BackupInterval): string {
-  switch (interval) {
-    case '6h': return t('backupSchedule.interval.6h')
-    case '12h': return t('backupSchedule.interval.12h')
-    case '24h': return t('backupSchedule.interval.24h')
-    case '7d': return t('backupSchedule.interval.7d')
-    case 'custom': return t('backupSchedule.interval.custom')
-  }
-}
-
-/** 星期序号 → 字典键（0-6；switch 保持类型安全）。 */
-function weekdayLabel(t: TranslateNS<'config-manager'>, dayOfWeek: number): string {
-  switch (dayOfWeek) {
-    case 0: return t('backupSchedule.weekday.sunday')
-    case 1: return t('backupSchedule.weekday.monday')
-    case 2: return t('backupSchedule.weekday.tuesday')
-    case 3: return t('backupSchedule.weekday.wednesday')
-    case 4: return t('backupSchedule.weekday.thursday')
-    case 5: return t('backupSchedule.weekday.friday')
-    case 6: return t('backupSchedule.weekday.saturday')
-    default: return String(dayOfWeek)
-  }
-}
-
-/** 上次运行状态 → 字典键。 */
-function runStatusLabel(t: TranslateNS<'config-manager'>, status: BackupRunStatus | undefined): string {
-  switch (status) {
-    case 'success': return t('backupSchedule.status.success')
-    case 'skipped': return t('backupSchedule.status.skipped')
-    case 'failed': return t('backupSchedule.status.failed')
-    default: return '—'
-  }
-}
-
-function formatRunTime(iso: string | undefined): string {
-  if (iso === undefined || iso === '') return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
-}
-
-/**
- * 定时全量备份设置卡：总开关 + 间隔档位 + 上次运行状态 + 保存 / 立即备份。
- * 状态自持；草稿镜像 runStore.snapshots.backupDraft（未保存修改切页/刷新保留），
- * 保存成功清草稿（宿主配置为权威）。
- */
-function BackupScheduleCard({ api, t, onBackupDone }: {
-  api: ConfigManagerApi
-  t: TranslateNS<'config-manager'>
-  /** 「立即备份」成功完成后回调（父组件据此刷新备份文件列表） */
-  onBackupDone?: () => void
-}) {
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
-  const [error, setError] = useState<string | null>(null)
-  const [draft, setDraft] = useState<BackupScheduleDraft>({ enabled: false, interval: '24h' })
-  const [saved, setSaved] = useState<BackupScheduleStatus | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [running, setRunning] = useState(false)
-  const [lastRun, setLastRun] = useState<BackupRunStatus | undefined>(undefined)
-  const [lastRunDetail, setLastRunDetail] = useState<string | null>(null)
-  const [draftError, setDraftError] = useState<string | null>(null)
-  /** m-retention：保留策略草稿（三层；与 interval/customSchedule 同属草稿，随保存一起提交） */
-  const [retentionDraft, setRetentionDraft] = useState<RetentionPolicy>(DEFAULT_RETENTION_POLICY)
-  /** 挂载守卫：切页卸载后异步回调只更新 store（草稿），不再 setState */
-  const mountedRef = useRef(true)
-
-  useEffect(() => () => { mountedRef.current = false }, [])
-
-  const load = (): void => {
-    setStatus('loading')
-    setError(null)
-    api.backupSchedule().then(
-      (schedule) => {
-        if (!mountedRef.current) return
-        setSaved(schedule)
-        // 有未保存草稿（切页回来）则保留，否则以宿主配置为权威
-        setDraft(runStore.getSnapshot().snapshots.backupDraft ?? {
-          enabled: schedule.enabled,
-          interval: schedule.interval,
-          ...(schedule.customSchedule !== undefined ? { customSchedule: schedule.customSchedule } : {}),
-          retention: normalizeRetentionPolicy(schedule.retention),
-        })
-        // m-retention：未保存草稿里的策略优先（切页回来不丢），否则取宿主真值（缺省补齐）
-        setRetentionDraft(
-          normalizeRetentionPolicy(runStore.getSnapshot().snapshots.backupDraft?.retention ?? schedule.retention),
-        )
-        setLastRun(schedule.lastRunStatus)
-        setLastRunDetail(formatRunTime(schedule.lastRunAt))
-        setStatus('ready')
-      },
-      (err) => {
-        if (!mountedRef.current) return
-        setStatus('error')
-        setError(err instanceof Error ? err.message : String(err))
-      },
-    )
-  }
-
-  useEffect(load, [api])
-
-  const updateDraft = (next: BackupScheduleDraft): void => {
-    setDraft(next)
-    runStore.patch({ snapshots: { backupDraft: next } })
-  }
-
-  /** m-retention：更新保留策略草稿（随 enabled/interval 一起提交；同时镜像 runStore 防切页丢失） */
-  const updateRetention = (next: RetentionPolicy): void => {
-    setRetentionDraft(next)
-    updateDraft({ ...draft, retention: next })
-  }
-
-  const save = (): void => {
-    if (saving || running) return
-    // m-retention：策略草稿合并进提交体（单入口校验：非法整数/超范围在此被拦下）
-    const parsed = validateBackupScheduleDraft({ ...draft, retention: retentionDraft })
-    if (!parsed.ok) {
-      // 表单内联校验：位置有语义（紧邻被校验的控件），保留就地提示而非 Toast
-      setDraftError(parsed.error)
-      return
-    }
-    setSaving(true)
-    setDraftError(null)
-    api.saveBackupSchedule(parsed.value).then(
-      (schedule) => {
-        // 宿主已保存：无论面板是否仍挂载都清 store 草稿（否则切回会显示陈旧未保存态）
-        runStore.patch({ snapshots: { backupDraft: null } })
-        if (!mountedRef.current) return
-        setSaved(schedule)
-        setDraft({
-          enabled: schedule.enabled,
-          interval: schedule.interval,
-          ...(schedule.customSchedule !== undefined ? { customSchedule: schedule.customSchedule } : {}),
-          retention: normalizeRetentionPolicy(schedule.retention),
-        })
-        // 以宿主回传为权威回填策略草稿（宿主持久化后的真值）
-        setRetentionDraft(normalizeRetentionPolicy(schedule.retention))
-        setLastRun(schedule.lastRunStatus)
-        setLastRunDetail(formatRunTime(schedule.lastRunAt))
-        setSaving(false)
-        toast.ok(t('backupSchedule.saved'))
-      },
-      (err) => {
-        if (!mountedRef.current) return
-        setSaving(false)
-        toast.error(err instanceof Error ? err.message : String(err))
-      },
-    )
-  }
-
-  const runNow = (): void => {
-    if (running || saving) return
-    setRunning(true)
-    setDraftError(null)
-    api.runBackupNow().then(
-      (res) => {
-        if (mountedRef.current) {
-          setSaved(res.schedule)
-          // 运行结果不回写策略草稿（用户可能正在编辑；宿主配置已是权威，保存时以草稿为准）
-          setLastRun(res.run.status)
-          setLastRunDetail(res.run.zip !== undefined && res.run.zip !== ''
-            ? res.run.zip
-            : (res.run.skipReason !== undefined ? describeSkipReason(res.run.skipReason) : formatRunTime(res.schedule.lastRunAt)))
-          setRunning(false)
-        }
-        // 无论面板是否仍挂载都通知父组件刷新备份文件列表（新 ZIP 已落盘）
-        onBackupDone?.()
-      },
-      (err) => {
-        if (!mountedRef.current) return
-        setRunning(false)
-        toast.error(err instanceof Error ? err.message : String(err))
-      },
-    )
-  }
-
-  // m-retention：脏判定同时看策略草稿（策略改动也要让「保存设置」可点）
-  const dirty = backupDraftDirty({ ...draft, retention: retentionDraft }, saved)
-  const busy = saving || running
-  /**
-   * 事实行「备份间隔」文案：整行事实统一取宿主权威值 saved（与事实行语义一致，
-   * 也与 SyncSettingsView 的状态事实行同源——草稿编辑只在下方设置行体现，
-   * 未保存前不改写事实行，避免把未生效的档位显示成已生效）。
-   * custom 档在窄格内显示具体时刻（如「周一 03:00」），其余档位用档位文案；
-   * 均由既有 locale 键拼出，不新增文案键。
-   */
-  const intervalFact = saved === null || !saved.enabled
-    ? '—'
-    : saved.interval === 'custom'
-      ? `${weekdayLabel(t, saved.customSchedule?.dayOfWeek ?? 1)} ${String(saved.customSchedule?.hour ?? 3).padStart(2, '0')}:${String(saved.customSchedule?.minute ?? 0).padStart(2, '0')}`
-      : intervalLabel(t, saved.interval)
-
-  return (
-    <Card>
-      {/* 头部：标题 + 上次运行结果徽章 + 右侧动作（时间已下移到事实行，头部不再重复） */}
-      <div className={css.groupHeader}>
-        <span className={css.groupLabel}>{t('backupSchedule.title')}</span>
-        {lastRun !== undefined && (
-          <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
-        )}
-        <span className={css.statusSpacer} />
-        <Button
-          variant="primary"
-          size="sm"
-          disabled={busy || !dirty}
-          onClick={save}
-          title={dirty ? undefined : t('backupSchedule.saved')}
-        >
-          {saving ? <Spinner /> : t('backupSchedule.save')}
-        </Button>
-        <Button size="sm" disabled={busy || !(saved?.enabled ?? false)} onClick={runNow}>
-          {running ? <Spinner /> : t('backupSchedule.runNow')}
-        </Button>
-      </div>
-
-      {status === 'loading' && <Spinner label={t('backupSchedule.loading')} />}
-
-      {status === 'error' && (
-        <Banner kind="error">
-          {t('backupSchedule.error')}
-          <Button variant="primary" onClick={load}>{t('common.retry')}</Button>
-        </Banner>
-      )}
-
-      {status === 'ready' && (
-        <>
-          {/* 事实行：开关状态 / 备份间隔（各占半行）+ 上次运行（独占整行）。
-              整行统一取宿主权威值 saved（未保存的草稿编辑不改写事实行，避免把未生效的
-              档位显示成已生效）；时间已从头部移到这里，头部不再重复展示。
-              .factGrid 是 4 列网格，前两格各 span 2 → 上半行两等分、无空列留白。 */}
-          <div className={css.factGrid} style={{ marginTop: 8 }}>
-            <div className={css.factCell} style={{ gridColumn: 'span 2' }}>
-              <span className={css.factLabel}>{t('snapshots.status')}</span>
-              <span className={css.factValue}>
-                {/* 复用既有 .infoValue（inline-flex + 居中 + gap，且不覆盖字号/颜色）做图标文字对齐 */}
-                <span className={css.infoValue}>
-                  <StatusDot kind={(saved?.enabled ?? false) ? 'ok' : 'idle'} />
-                  {(saved?.enabled ?? false) ? t('overview.state.on') : t('overview.state.off')}
-                </span>
-              </span>
-            </div>
-            <div className={css.factCell} style={{ gridColumn: 'span 2' }}>
-              <span className={css.factLabel}>{t('backupSchedule.interval')}</span>
-              <span className={css.factValue}>{intervalFact}</span>
-            </div>
-            {/* 上次运行独占整行（grid-column:1/-1）：lastRunDetail 在「立即备份」成功后
-                是 ZIP 相对路径（可较长），四列窄格会被 text-overflow 截断成「…」。 */}
-            <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
-              <span className={css.factLabel}>{t('backupSchedule.lastRun')}</span>
-              <span className={css.factValue}>
-                {lastRun === undefined
-                  /* 从未运行：只给一句事实，不补「—」占位（避免「从未运行 —」的双重否定感） */
-                  ? <span className={css.hint}>{t('backupSchedule.never')}</span>
-                  : (
-                    <span className={css.infoValue}>
-                      <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusLabel(t, lastRun)}</Badge>
-                      <span className={css.mono}>
-                        {lastRunDetail !== null && lastRunDetail !== '' ? lastRunDetail : '—'}
-                      </span>
-                    </span>
-                  )}
-              </span>
-            </div>
-          </div>
-          {/* 卡片级说明（小字）：保留在事实行下方、设置行上方 —— 信息分层依次是
-              头部（标题/徽章/动作）→ 事实行 → 说明 → 设置 */}
-          <div className={css.hint} style={{ marginTop: 8 }}>{t('backupSchedule.hint')}</div>
-
-          {/* 设置行：开关（短标签）+（已开启时）间隔 / 周几 / 时刻 */}
-          <div className={css.actionRow} style={{ marginTop: 10, marginBottom: 0 }}>
-            <Checkbox
-              checked={draft.enabled}
-              onChange={(checked) => { updateDraft({ ...draft, enabled: checked }) }}
-              label={t('backupSchedule.enabled')}
-              disabled={busy}
-            />
-            {draft.enabled && (
-              <select
-                className={css.select}
-                value={draft.interval}
-                disabled={busy}
-                style={{ width: 'auto' }}
-                onChange={(event) => { updateDraft({ ...draft, interval: event.target.value as BackupInterval }) }}
-              >
-                {BACKUP_INTERVAL_OPTIONS.map((interval) => (
-                  <option key={interval} value={interval}>{intervalLabel(t, interval)}</option>
-                ))}
-              </select>
-            )}
-            {draft.enabled && draft.interval === 'custom' && (
-              <select
-                className={css.select}
-                value={draft.customSchedule?.dayOfWeek ?? 1}
-                disabled={busy}
-                style={{ width: 'auto' }}
-                onChange={(event) => {
-                  updateDraft({
-                    ...draft,
-                    customSchedule: {
-                      dayOfWeek: Number(event.target.value),
-                      hour: draft.customSchedule?.hour ?? 3,
-                      minute: draft.customSchedule?.minute ?? 0,
-                    },
-                  })
-                }}
-              >
-                {WEEKDAY_OPTIONS.map((w) => (
-                  <option key={w.value} value={w.value}>{weekdayLabel(t, w.value)}</option>
-                ))}
-              </select>
-            )}
-            {draft.enabled && draft.interval === 'custom' && (
-              <select
-                className={css.select}
-                value={draft.customSchedule?.hour ?? 3}
-                disabled={busy}
-                style={{ width: 'auto' }}
-                onChange={(event) => {
-                  updateDraft({
-                    ...draft,
-                    customSchedule: {
-                      dayOfWeek: draft.customSchedule?.dayOfWeek ?? 1,
-                      hour: Number(event.target.value),
-                      minute: draft.customSchedule?.minute ?? 0,
-                    },
-                  })
-                }}
-              >
-                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
-              </select>
-            )}
-            {draft.enabled && draft.interval === 'custom' && (
-              <select
-                className={css.select}
-                value={draft.customSchedule?.minute ?? 0}
-                disabled={busy}
-                style={{ width: 'auto' }}
-                onChange={(event) => {
-                  updateDraft({
-                    ...draft,
-                    customSchedule: {
-                      dayOfWeek: draft.customSchedule?.dayOfWeek ?? 1,
-                      hour: draft.customSchedule?.hour ?? 3,
-                      minute: Number(event.target.value),
-                    },
-                  })
-                }}
-              >
-                {[0, 15, 30, 45].map((m) => <option key={m} value={m}>{String(m).padStart(2, '0')}</option>)}
-              </select>
-            )}
-          </div>
-          {/* 设置行说明：勾选启用后启动即执行一次（行为说明；卡片级 hint 只讲「备什么」，
-              此处讲「何时跑」，两者语义不重复，故仅在已开启时出现，避免未开启时的说明噪音） */}
-          {draft.enabled && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.enabledHint')}</div>}
-          {/* custom 档专属说明：仅在已开启且选中自定义档时出现，紧贴上面的三个时刻下拉 */}
-          {draft.enabled && draft.interval === 'custom' && <div className={css.hint} style={{ marginTop: 6 }}>{t('backupSchedule.customHint')}</div>}
-
-          {/* m-retention：保留策略（GFS 分层；快照 + 定时备份共用）——无常量硬编码，值全来自本卡片状态 */}
-          <div className={css.groupHeader} style={{ marginTop: 12 }}>
-            <span className={css.groupLabel}>{t('retention.title')}</span>
-            <span className={css.statusSpacer} />
-            <span className={css.hint}>
-              {!hasRetentionTiers(retentionDraft) && t('retention.tiersOff')}
-            </span>
-          </div>
-          <div className={css.hint} style={{ marginBottom: 8 }}>{t('retention.hint')}</div>
-          <div className={css.actionRow} style={{ marginBottom: 0 }}>
-            {RETENTION_FIELDS.map((field) => {
-              const limits = RETENTION_FIELD_LIMITS[field]
-              const unit = field === 'keepLast'
-                ? t('retention.unit')
-                : field === 'keepMonthly' ? t('retention.months') : t('retention.years')
-              return (
-                <label key={field} className={css.field} style={{ margin: 0 }}>
-                  <span className={css.fieldLabel}>
-                    {field === 'keepLast'
-                      ? t('retention.keepLast')
-                      : field === 'keepMonthly' ? t('retention.keepMonthly') : t('retention.keepYearly')}
-                  </span>
-                  <input
-                    className={css.input}
-                    type="number"
-                    min={limits.min}
-                    max={limits.max}
-                    step={1}
-                    value={retentionDraft[field]}
-                    disabled={busy}
-                    style={{ width: 88 }}
-                    aria-label={t('retention.title')}
-                    onChange={(event) => {
-                      // 空输入/非法文本 → 视为 0（受控 input 不吞掉用户输入，保存时再由校验层把关）
-                      const raw = event.target.value
-                      const parsed = raw === '' ? 0 : Number(raw)
-                      updateRetention({
-                        ...retentionDraft,
-                        [field]: Number.isFinite(parsed) ? parsed : 0,
-                      })
-                    }}
-                  />
-                  <span className={css.hint}>{unit}</span>
-                </label>
-              )
-            })}
-          </div>
-          {/* 三层字段各自的行为说明（紧贴对应输入；仅在有分层时才需要，未启用时是噪音） */}
-          {hasRetentionTiers(retentionDraft) && (
-            <div className={css.hint} style={{ marginTop: 6 }}>
-              {t('retention.keepLastHint')} · {t('retention.keepMonthlyHint')} · {t('retention.keepYearlyHint')}
-            </div>
-          )}
-          <div className={css.hint} style={{ marginTop: 6 }}>{t('retention.appliesTo')}</div>
-          {/* P1-⑨：连续失败主动标红（≥1 次失败即在设置卡内醒目提示，恒在卡片底部、成块不被拆散） */}
-          {(saved?.consecutiveFailures ?? 0) > 0 && (
-            <div style={{ marginTop: 8 }}>
-              <Banner kind="error" >
-                {t('backupSchedule.consecutiveFailures', { count: String(saved!.consecutiveFailures) })}
-              </Banner>
-            </div>
-          )}
-        </>
-      )}
-
-      {draftError !== null && <Banner kind="error">{draftError}</Banner>}
-    </Card>
-  )
-}
 
 /* ------------------------------------------------- 备份文件管理卡 */
 
@@ -1106,13 +538,8 @@ function BackupFilesCard({ api, t, refreshTick }: {
     load()
   }, [refreshTick])
 
-  /** 搜索过滤（P0-④）：文件名 + 备注子串匹配（大小写不敏感）；空查询不过滤 */
-  const visibleFiles = search.trim() === ''
-    ? files
-    : files.filter((f) => {
-      const q = search.trim().toLowerCase()
-      return f.name.toLowerCase().includes(q) || (f.note ?? '').toLowerCase().includes(q)
-    })
+  /** 搜索过滤（P0-④）：纯函数在 ../../ui/snapshots-view.ts（node 可测）；空查询不过滤。 */
+  const visibleFiles = filterBackupFiles(files, search)
 
   const download = (file: BackupFileMeta): void => {
     void api.download(file.path, { saveDialog: true }).catch((err) => {
@@ -1165,17 +592,6 @@ function BackupFilesCard({ api, t, refreshTick }: {
     )
   }
 
-  /** 修改时间（等宽 YYYY-MM-DD HH:mm；完整本地时间在 title）。 */
-  const fullTime = (ms: number): string => {
-    const d = new Date(ms)
-    if (Number.isNaN(d.getTime())) return ''
-    const p = (n: number): string => String(n).padStart(2, '0')
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-  }
-
-  /** 备注展示：全问号/控制符（编码损坏）→ 可读文案，其余原样。 */
-  const noteText = (note: string): string =>
-    /^[?\s]+$/.test(note) ? t('backupFiles.noteUnreadable') : note
 
   return (
     <Card className={`${css.activityCard} ${css.fillCard}`}>
@@ -1231,14 +647,14 @@ function BackupFilesCard({ api, t, refreshTick }: {
                             {file.source === 'auto' ? t('backupFiles.source.auto') : t('backupFiles.source.manual')}
                           </Badge>
                           {file.note !== null && file.note !== undefined && file.note !== '' && (
-                            <span className={css.cellMetaNote} title={file.note}><MessageIcon size={11} /><span className={css.cellMetaNoteText}>{noteText(file.note)}</span></span>
+                            <span className={css.cellMetaNote} title={file.note}><MessageIcon size={11} /><span className={css.cellMetaNoteText}>{isUnreadableNote(file.note) ? t('backupFiles.noteUnreadable') : file.note}</span></span>
                           )}
                         </span>
                       </div>
                     </td>
                     <td className={css.num}>{formatBytes(file.sizeBytes)}</td>
                     <td className={css.dim} title={new Date(file.mtimeMs).toLocaleString()}>
-                      <span className={css.mono} style={{ fontSize: '11px' }}>{fullTime(file.mtimeMs)}</span>
+                      <span className={css.mono} style={{ fontSize: '11px' }}>{formatBackupFileTime(file.mtimeMs)}</span>
                     </td>
                     <td className={css.cellActions}>
                       <span className={css.rowActions}>

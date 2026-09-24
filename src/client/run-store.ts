@@ -56,6 +56,7 @@ import type { SyncPushReport, SyncPullReport, SyncPushPreview } from '../sync/sy
 import type { SyncStartResponse } from './sync/sync-api.ts'
 import type { ChannelSyncState, SyncChannel } from './sync/sync-view.ts'
 import { DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState } from './sync/sync-view.ts'
+import { REDACTED, redact } from '../security/redaction.ts'
 
 import type { MyItemEntry } from './market/my-configs-api.ts'
 import type { MyInstallSlice, MyWizardSlice } from './market/my-configs-view.ts'
@@ -289,8 +290,8 @@ export interface RecoveryStoreSlice {
  * （切 tab/刷新恢复）；关于/历史面板自身的低频状态组件内自持，不关联本切片。
  */
 export interface MoreStoreSlice {
-  /** 「更多」下的子视图：迁移历史 / 关于 */
-  moreSub: 'history' | 'about'
+  /** 「更多」下的子视图：进行中 / 迁移历史 / 关于 */
+  moreSub: 'runs' | 'history' | 'about'
 }
 
 /** 「更多」子视图类型。 */
@@ -736,68 +737,251 @@ export function toRecoveryStoreSlice(s: RecoveryStoreSlice): RecoveryStoreSlice 
   }
 }
 
+/* --------------------------------- 落盘投影：默认拒绝 + 显式放行 + 值级脱敏 */
+
 /**
- * 持久化白名单：解构剔除敏感字段（password/passwordConfirm/secretInputs/decryptPassword）
- * 与不可序列化的实例字段（conflictCollector），以及同步面板的凭据字段
- * （token/webdavPassword/encryptPassword/encryptPasswordConfirm/decryptPassword ——
- * 含 byChannel 内每通道的加密/解密密码）与瞬态字段（busy/savingConfig —— 刷新后
- * 回复空闲，不把「进行中」状态带到新页面）；导出面板的结果字段（result/downloaded）
- * 与进行中/进度（running/progress/runId）同为内存切片瞬态一并剔除（刷新/关闭 DSH
- * 后不残留上次导出报告），其余原样落入 sessionStorage。
- * 这是 sessionStorage 的唯一写入路径 —— 敏感值在此被硬性隔离。
+ * 深度脱敏时**必须原样保留**的功能字段名（宿主按它们执行 / 快照登记 / 逐项决策）。
+ *
+ * 为什么需要例外：`redact()` 的结构化模式会把 `secret:K1` 这类**标识符**当成
+ * `field: value` 形态脱敏（字段名 `secret` 命中敏感名单）。这类值既是 plan item 的 id、
+ * 也是宿主执行时对项的键，改写会让导入对不上项；而它们本身不是配置内容、不含秘密。
+ */
+const PERSIST_FUNCTIONAL_KEYS: ReadonlySet<string> = new Set([
+  'id', 'itemId', 'unitId', 'ref', 'adapter', 'kind',
+])
+
+/**
+ * 深脱敏的递归深度上限（防御病态/循环结构；宿主载荷来自 JSON.parse，实际远不及此）。
+ *
+ * t38：到达上限时**整棵子树替换为占位**（不再是「原样返回」），于是
+ * ① 深层明文不可能借上限穿透到 sessionStorage；
+ * ② 同一节点的脱敏结果与「从哪个深度进入」有关（浅处是脱敏投影、超限处是占位）
+ *    —— 缓存键必须带上深度，见下。
+ */
+const REDACT_MAX_DEPTH = 32
+
+/**
+ * 超深子树的占位值（t38）：复用渲染路径同一个脱敏标记（security/redaction.ts 的
+ * `REDACTED`）—— **不新增用户可见文案**（AGENTS.md §i18n：文案进字典；这里刻意复用
+ * 已有常量，既不改 locales 也不新造中/英文字符串）。
+ *
+ * 可读性语义：刷新后若真有超深分支被替换，界面与持久化载荷里显示的就是用户已经熟悉的
+ * `***REDACTED***`，语义 =「这里原本有内容，按安全策略整棵屏蔽」，而不是「数据丢失」。
+ * 真实宿主载荷（plan → items[] → conflict → local/remote …）深度约 4~5 层，远不及上限，
+ * 所以这是纯防御路径；一旦命中，宁可牺牲这部分可读性也不让明文落盘。
+ */
+const REDACT_DEPTH_PLACEHOLDER: string = REDACTED
+
+/**
+ * 深脱敏结果缓存（t27：回收 P0-9 引入的重复计算）。
+ *
+ * **键 = 对象引用（WeakMap）+ 递归深度**，值是节点 → 已脱敏投影：
+ * - 用 WeakMap 而不是序列化指纹：序列化本身就是要省掉的开销；引用比较是 O(1)，
+ *   且键随载荷一起被 GC（不会拖住配置体量的大对象）；
+ * - 深度一起进键：超限子树被替换为占位（t38）、浅处是脱敏投影，跨深度复用会让输出与「直接脱敏」不一致
+ *   —— 缓存**只允许省计算，不允许改变结果**。每个节点按其实际出现的每个深度各留一份
+ *   （通常 1~2 个），因此共享子对象（如 market.detail.analysis 与 import.analysis 是
+ *   同一对象）不会互相覆盖、也不会互相污染；
+ * - **不可变前提**：这些宿主载荷在 store 里只被**整体替换**、从不原地修改
+ *   （证据：ui/import-wizard.ts 只有 `this.plan = ...` 赋值；ui/conflict-view.ts 的
+ *   ConflictCollector 对 plan 只读、决策另存 Map）。所以「同一引用 = 同一内容」成立。
+ *   若将来有代码**原地改载荷内容**，必须改成替换新对象，否则缓存会返回陈旧结果。
+ *
+ * 命中粒度 = 每个载荷节点：热路径（导入/恢复轮询每 500ms 一次 patch）只替换切片里的
+ * progress/runId，载荷根引用不变 → 根节点直接命中，整棵子树零重算。
+ */
+const redactCache = new WeakMap<object, Map<number, unknown>>()
+
+/** 取缓存（按引用 + 深度）。 */
+function readRedactCache(value: object, depth: number): { hit: true; value: unknown } | { hit: false } {
+  const byDepth = redactCache.get(value)
+  if (byDepth === undefined) return { hit: false }
+  if (!byDepth.has(depth)) return { hit: false }
+  return { hit: true, value: byDepth.get(depth) }
+}
+
+/** 写缓存（按引用 + 深度）。 */
+function writeRedactCache(value: object, depth: number, out: unknown): void {
+  const byDepth = redactCache.get(value)
+  if (byDepth === undefined) {
+    redactCache.set(value, new Map([[depth, out]]))
+    return
+  }
+  byDepth.set(depth, out)
+}
+
+/**
+ * 落盘前的**值级脱敏**（P0-9）：递归遍历宿主下发的载荷（plan / analysis / result /
+ * confirmSession / snapshots.plan / market.detail 等），把每个字符串过一遍 `redact()`
+ * —— 命中「敏感字段名（JSON / kv / colon 形态）」或「密钥值形状（sk- / JWT / AKIA /
+ * PEM / Bearer / URL query）」的值替换为 `***REDACTED***`。
+ *
+ * 为什么落盘也要做：`redact()` 此前只守渲染路径（组件渲染前才调用），而 sessionStorage
+ * 是同一份文本的**第二条出口** —— 落盘后刷新又会被 applyPersisted 读回内存。
+ *
+ * - 只递归普通对象/数组/字符串；深度在上限内时 Date / Uint8Array / 类实例原样返回（不重建）；
+ * - 功能字段（PERSIST_FUNCTIONAL_KEYS）整棵子树跳过，保证 id/ref 不被改写；
+ * - **超过 REDACT_MAX_DEPTH 的子树整棵替换为 REDACT_DEPTH_PLACEHOLDER**（t38）：既不下钻
+ *   也不原样返回 —— 深层明文绝不落盘（代价是该分支不可读，语义见占位常量注释）；
+ * - 幂等：`***REDACTED***` 不匹配任何模式（见 security/redaction.ts）；
+ * - 结果按「引用 + 深度」缓存（t27），未变化的载荷不重复深脱敏。
+ */
+export function redactPersistedValue<T>(value: T, depth = 0): T {
+  if (typeof value === 'string') return redact(value) as unknown as T
+  if (value === null || typeof value !== 'object') return value
+  const cached = readRedactCache(value, depth)
+  if (cached.hit) return cached.value as T
+  if (depth >= REDACT_MAX_DEPTH) {
+    // t38：超深子树**整棵替换为占位** —— 数组与非普通对象一视同仁，此前是「原样返回」。
+    // 注：字符串不会走到这里（其父对象在 depth == 上限-1 时才递归下来，字符串按常规规则
+    // 脱敏），所以「超限即占位」不会让任何**可达**字符串逃过脱敏。
+    writeRedactCache(value, depth, REDACT_DEPTH_PLACEHOLDER)
+    return REDACT_DEPTH_PLACEHOLDER as unknown as T
+  }
+  if (Array.isArray(value)) {
+    const out = value.map((item) => redactPersistedValue(item, depth + 1))
+    writeRedactCache(value, depth, out)
+    return out as unknown as T
+  }
+  const proto: object | null = Object.getPrototypeOf(value) as object | null
+  if (proto !== Object.prototype && proto !== null) return value
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = PERSIST_FUNCTIONAL_KEYS.has(key) ? item : redactPersistedValue(item, depth + 1)
+  }
+  writeRedactCache(value, depth, out)
+  return out as unknown as T
+}
+
+/**
+ * 持久化投影（**默认拒绝、显式放行**）：只有下面**逐字段列出**的字段会落入 sessionStorage。
+ *
+ * 为什么改成显式清单（P0-9）：旧实现是「解构剔除已知敏感字段 + 其余 `...rest` 原样落盘」
+ * —— 默认放行。任何人往 LiveState/切片加一个敏感字段都会静默落盘，而注释与 AGENTS.md
+ * 却写着「未显式放行不会落盘」，评审时不会有人看这里。现在新增字段**默认不落盘**，
+ * 要落盘必须在这张清单里显式加一行（run-store.test.ts 有清单断言兜底）。
+ *
+ * 同时：宿主下发的载荷（import 的 plan/analysis/result、snapshots.plan、sync.confirmSession、
+ * market.detail）在落盘前统一过 `redactPersistedValue()` —— 脱敏不再只是渲染路径的事。
+ *
+ * 仅内存、绝不落盘：密码类（password/passwordConfirm/secretInputs/decryptPassword/
+ * decryptRefs/archiveUnlocked/conflictCollector；同步 token/webdavPassword/加密与解密密码，
+ * 以及宿主凭据库的「已保存」布尔投影）；导出结果与进度瞬态（result/downloaded/running/
+ * progress/runId）；导入中的「跳过当前」标记；快照/恢复的 running 与「一键导入」请求。
  */
 export function toPersistedState(state: StoreState): PersistedState {
-  const {
-    password: _password, passwordConfirm: _passwordConfirm,
-    // 导出结果/进度为内存切片瞬态（切 tab 由模块级单例保留、刷新/关闭 DSH 清空）：
-    // 不落盘，旧导出报告与「已保存」提示不残留展示 —— 与 sync 面板 busy 同级
-    result: _result, downloaded: _downloaded, running: _running,
-    progress: _progress, runId: _runId,
-    ...exportRest
-  } = state.export
-  const {
-    secretInputs: _secretInputs, decryptPassword: _decryptPassword, decryptRefs: _decryptRefs,
-    archiveUnlocked: _archiveUnlocked, conflictCollector: _conflictCollector,
-    // 导入中「跳过当前」为内存瞬态（刷新后复位，避免遗留禁用态）
-    skipRequested: _skipRequested, ...importRest
-  } = state.import
-  const {
-    token: _token, webdavPassword: _webdavPassword, busy: _busy, savingConfig: _savingConfig,
-    ...syncRest
-  } = state.sync
-  // byChannel 内每通道的密码类字段同样硬性剔除（安全不变量：不落盘任何密码）
-  const stripChannelSensitive = (c: ChannelSyncState): PersistedChannelSyncState => {
-    const {
-      encryptPassword: _ep, encryptPasswordConfirm: _epc, decryptPassword: _dp,
-      encryptPasswordSaved: _eps, decryptPasswordSaved: _dps,
-      ...rest
-    } = c
-    return rest
-  }
+  const exp = state.export
+  const imp = state.import
+  const sync = state.sync
+  /**
+   * 每通道状态（显式放行）：encryptPasswordSaved / decryptPasswordSaved 是**宿主凭据库的投影**
+   * （只由 /sync/status 回填），落盘会在用户从别处删除密码后留下「已保存」的假象 → 不放行。
+   */
+  const pickChannel = (c: ChannelSyncState): PersistedChannelSyncState => ({
+    syncMode: c.syncMode,
+    syncSections: [...c.syncSections],
+    sessionsLimit: c.sessionsLimit,
+    // 历史对话的显式点名清单（非敏感配置；空 = 「最新 N 个」模式）
+    sessionsInclude: [...c.sessionsInclude],
+    encrypt: c.encrypt,
+    includeSecrets: c.includeSecrets,
+    selectedSnapshotId: c.selectedSnapshotId,
+    // 快照列表按值复制，避免落盘对象与运行时切片共享可变数组
+    snapshots: [...c.snapshots],
+    loadingSnapshots: c.loadingSnapshots === true,
+    autosync: c.autosync,
+    autosyncEnabled: c.autosyncEnabled,
+    autosyncInterval: c.autosyncInterval,
+  })
   return {
     v: 1,
     view: state.view,
     panel: state.panel,
-    export: exportRest,
-    import: importRest,
-    sync: {
-      ...syncRest,
-      byChannel: {
-        git: stripChannelSensitive(state.sync.byChannel.git),
-        webdav: stripChannelSensitive(state.sync.byChannel.webdav),
-      },
+    export: {
+      selection: [...exp.selection],
+      excludedUnits: [...exp.excludedUnits],
+      includeSecrets: exp.includeSecrets,
+      encrypt: exp.encrypt,
+      fileName: exp.fileName,
+      note: exp.note,
+      error: exp.error,
     },
-    market: state.market,
+    import: {
+      step: imp.step,
+      zipPath: imp.zipPath,
+      selectedFileName: imp.selectedFileName,
+      containerEncrypted: imp.containerEncrypted,
+      analysis: redactPersistedValue(imp.analysis),
+      plan: redactPersistedValue(imp.plan),
+      result: redactPersistedValue(imp.result),
+      rollbackOnError: imp.rollbackOnError,
+      errors: redactPersistedValue(imp.errors),
+      phase: imp.phase,
+      conflictStrategy: imp.conflictStrategy,
+      conflictResolutions: { ...imp.conflictResolutions },
+      pathMappings: imp.pathMappings.map((m) => ({ ...m, appliesTo: [...m.appliesTo] })),
+      importSelection: imp.importSelection,
+      uploading: imp.uploading,
+      running: imp.running,
+      progress: imp.progress,
+      error: imp.error,
+      runId: imp.runId,
+    },
+    sync: {
+      channel: sync.channel,
+      repoUrl: sync.repoUrl,
+      webdavUrl: sync.webdavUrl,
+      webdavUsername: sync.webdavUsername,
+      byChannel: {
+        git: pickChannel(sync.byChannel.git),
+        webdav: pickChannel(sync.byChannel.webdav),
+      },
+      pushReport: sync.pushReport,
+      pullReport: sync.pullReport,
+      pushPreview: sync.pushPreview,
+      confirmSession: redactPersistedValue(sync.confirmSession),
+      confirmDecisions: sync.confirmDecisions,
+      lastRestoreId: sync.lastRestoreId,
+      error: sync.error,
+      loadError: sync.loadError,
+    },
+    market: {
+      subView: state.market.subView,
+      search: state.market.search,
+      category: state.market.category,
+      sectionFilter: state.market.sectionFilter,
+      source: state.market.source,
+      sortKey: state.market.sortKey,
+      items: state.market.items,
+      detail: redactPersistedValue(state.market.detail),
+      selectionState: state.market.selectionState,
+      conflictResolutions: state.market.conflictResolutions,
+      importResult: redactPersistedValue(state.market.importResult),
+      error: state.market.error,
+      loadError: state.market.loadError,
+      myItems: state.market.myItems,
+      myItemsError: state.market.myItemsError,
+      myWizard: state.market.myWizard,
+      myInstall: state.market.myInstall,
+      myConfirmDeleteId: state.market.myConfirmDeleteId,
+    },
     snapshots: {
-      ...state.snapshots,
+      selectedId: state.snapshots.selectedId,
+      plan: redactPersistedValue(state.snapshots.plan),
+      changeSummary: state.snapshots.changeSummary,
       // 快照恢复 running 为内存切片瞬态：不落盘 —— 恢复是否仍在执行以宿主
       // RunRegistry（/runs + /progress）为权威，刷新后由 resume() 重新发现；
       // 持久化「running=true」会把浏览器陈旧状态误当成宿主真实状态（P1-1 原则）。
       running: false,
+      report: redactPersistedValue(state.snapshots.report),
+      actionError: state.snapshots.actionError,
+      error: state.snapshots.error,
+      backupDraft: state.snapshots.backupDraft,
       // 「一键导入」请求为一次性内存瞬态：不落盘（刷新后回到导入向导 select 步骤）
       importBackup: null,
+      subTab: state.snapshots.subTab,
     },
-    // 档案切片为非敏感（profile 定义本身不含秘密值）：原样持久化（切 tab/刷新不丢列表）
+    // 档案切片为非敏感（profile 定义本身不含秘密值）：显式放行列表即全部字段
     profiles: {
       profiles: state.profiles.profiles,
       selection: state.profiles.selection,
@@ -806,15 +990,19 @@ export function toPersistedState(state: StoreState): PersistedState {
       error: state.profiles.error,
       loadError: state.profiles.loadError,
     },
-    // recovery 切片为非敏感（incidents/preview/verifyResult 无秘密值）：原样持久化；
-    // running 为内存切片瞬态：不落盘 —— 恢复是否仍在执行以宿主 RunRegistry
-    // （/runs + /progress）为权威，刷新后由 resume() 重新发现（P1-1 原则）。
+    // recovery 切片为非敏感（incidents/preview/verifyResult 无秘密值）；running 为内存
+    // 切片瞬态：不落盘（宿主 RunRegistry 为权威，刷新后由 resume() 重新发现）
     recovery: {
-      ...state.recovery,
+      status: state.recovery.status,
+      selectedOperationId: state.recovery.selectedOperationId,
+      preview: state.recovery.preview,
+      verifyResult: state.recovery.verifyResult,
       running: false,
+      error: state.recovery.error,
+      actionError: state.recovery.actionError,
     },
-    // 「更多」切片为非敏感（仅记录子视图 history/about）：原样持久化（切 tab/刷新恢复）
-    more: state.more,
+    // 「更多」切片为非敏感（仅记录子视图 history/about）
+    more: { moreSub: state.more.moreSub },
   }
 }
 
@@ -965,9 +1153,38 @@ export function rebuildConflictCollector(
  * - section/sectionTotal 与 item/itemTotal 单独保留给分区徽章/内部计数徽章；
  * - detail = 当前项名（导出时恒为分区名，ProgressBar 侧会去冗余）。
  */
+/**
+ * 运行中心也用它：进度条/分区徽章/内部计数徽章的口径与导入向导页必须**完全一致**
+ * （两处各自手写一份映射，迟早会出现「同一 run 两个页面显示不同百分比」）。
+ */
+export function runStateProgress(state: RunState): RunProgress {
+  return mapRunProgress(state.kind, state)
+}
+
+/**
+ * run 类型 → 运行中的阶段文案 id（阶段表见 `src/ui/progress.ts` 的 STAGE_KEYS）。
+ *
+ * 为什么必须按类型分开：原先「非导出」一律映射成 `executing`，于是**定时备份 / 自动同步 /
+ * 快照恢复**在运行中心里全都显示「正在应用配置（插件安装可能需要较长时间）…」—— 那是导入的文案，
+ * 与用户正在做的事无关，观感上就是「一直卡在同一句话」（用户报告）。
+ */
+const RUN_STAGE: Record<RunKind, string> = {
+  export: 'exporting',
+  import: 'executing',
+  autosync: 'syncing',
+  'sync-apply': 'syncing',
+  'backup-schedule': 'backing-up',
+  restore: 'restoring',
+  'profile-switch': 'switching-profile',
+  recovery: 'recovering',
+}
+
 function mapRunProgress(kind: RunKind, state: RunState): RunProgress {
   return {
-    stage: kind === 'export' ? 'exporting' : 'executing',
+    // 已结束的 run 不再显示「正在进行」的文案：结论由状态徽章承担，进度行只描述结果
+    stage: state.status === 'running'
+      ? (RUN_STAGE[kind] ?? 'executing')
+      : state.status === 'done' ? 'done' : 'failed',
     detail: state.detail ?? undefined,
     step: state.item ?? undefined,
     total: state.itemTotal ?? undefined,
@@ -1170,6 +1387,7 @@ export class RunStore {
                 ? legacySync['syncSections'] as SectionId[]
                 : [],
               sessionsLimit: DEFAULT_SYNC_SESSIONS_LIMIT,
+              sessionsInclude: [],
               encrypt: legacySync['encrypt'] === true,
               includeSecrets: legacySync['includeSecrets'] === true,
               selectedSnapshotId: typeof legacySync['selectedSnapshotId'] === 'string'
@@ -1236,7 +1454,11 @@ export class RunStore {
         running: false,
       },
       // 「更多」切片非敏感（仅子视图 history/about），原样恢复；moreSub 非法值归一为 about
-      more: { moreSub: parsed.more.moreSub === 'history' ? 'history' : 'about' },
+      more: {
+        moreSub: parsed.more.moreSub === 'history'
+          ? 'history'
+          : parsed.more.moreSub === 'runs' ? 'runs' : 'about',
+      },
     }
     // 安全兜底：整体加密备份容器已解锁标志绝不从存储恢复（archiveUnlocked 必为 false）→
     // 刷新后只要仍标记为加密容器且已越过 decrypt-archive 阶段，就强制退回重新解锁。
@@ -1611,12 +1833,21 @@ export class RunStore {
       })
     } else {
       const wizard = this.importWizardInst
+      // P0-8：失败后必须回到「可重试」的步骤 —— 不能停在 'importing'（视图按 step 分支
+      // 渲染，只剩错误横幅、没有出口，用户只能刷新页面）。控制器是 step 的权威来源：
+      // 它自己的 catch 已把 step 退回执行前步骤（正常是确认页 'preview'，结果页重试失败
+      // 则回 'result'），这里镜像它；控制器尚未回退（轮询先于响应到达）或实例缺失时，
+      // 兜底退回确认页（那里有「确认导入」与 ErrorBanner 的重试入口）。
+      let stepAfterFailure: ImportWizardStep = 'preview'
       if (wizard !== null) {
+        const restored = wizard.snapshot().step
+        if (restored !== 'importing') stepAfterFailure = restored
         const internals = wizard as unknown as WizardInternals
         internals.errors = [...internals.errors, state.error ?? '导入失败']
       }
       this.patch({
         import: {
+          step: stepAfterFailure,
           running: false,
           progress: null,
           error: state.error ?? '导入失败',

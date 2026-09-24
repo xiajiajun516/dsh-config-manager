@@ -17,6 +17,10 @@ export class MemFs implements FileSystemFacade {
   files = new Map<string, Uint8Array>();
   /** 可选（issue #37）：详细的链接遍历。测试按需注入；缺省走 listRecursive 回退路径。 */
   listRecursiveDetailed?: FileSystemFacade['listRecursiveDetailed'];
+  /** 可选（issue #45）：建缺失目录能力。测试按需注入；缺省维持「宿主不支持该能力」的旧行为。 */
+  ensureDir?: FileSystemFacade['ensureDir'];
+  /** 可选（issue #45）：绝对路径 realpath。测试按需注入；缺省维持「宿主不支持」的旧行为。 */
+  realpathDir?: FileSystemFacade['realpathDir'];
   private readonly homeDir: string;
   constructor(homeDir: string) {
     this.homeDir = homeDir;
@@ -150,6 +154,8 @@ export class MemPlugins implements PluginsFacade {
 
 export class MemWorkspace implements WorkspaceFacade {
   records = new Map<string, WorkspaceRecord>();
+  /** 可选（issue #45）：测试按需注入的会话登记钩子；缺省维持「宿主不支持该能力」的旧行为。 */
+  attachSession?: WorkspaceFacade['attachSession'];
   async listRecords(): Promise<WorkspaceRecord[]> { return [...this.records.values()]; }
   async writeRecord(r: WorkspaceRecord): Promise<void> { this.records.set(r.id, r); }
   async removeRecord(id: string): Promise<void> { this.records.delete(id); }
@@ -209,6 +215,8 @@ export class MockHostContext implements HostContext {
   workspace = new MemWorkspace();
   patchFile = new MemPatch();
   fs: MemFs;
+  /** 可选（issue #45）：会话存储端口；测试按需注入（缺省 = 宿主未提供该能力）。 */
+  sessions?: HostContext['sessions'];
   constructor(platform: string, homeDir: string, profile?: string) {
     this.platform = platform;
     this.homeDir = homeDir;
