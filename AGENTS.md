@@ -28,7 +28,7 @@ src/profiles/  档案=DSH自带profile：dsh-profile-shared(零依赖类型/常�
 src/ui/        框架无关UI逻辑(纯函数/控制器，无React，node可测)  ← 业务逻辑必须在此
 src/utils/     paths/zip/hashing/json/logger/atomic-write/env-lock/recursive-walk（跟随 junction 的递归遍历内核，issue #37）
 src/client/    React壳(浏览器半)  ← 只做装配
-tests/ 集成测试(node --test)；docs/design/ 设计文档；docs/spec/ 对外契约(格式规格/schema/兼容矩阵/已知缺口)
+tests/ 集成测试(node --test)；docs/README.md 文档索引；docs/design/ 设计文档；docs/spec/ 对外契约(格式规格/schema/兼容矩阵/已知缺口)；\n               docs/seo/ 曝光审计记录；docs/handoff/ 阶段交接文档(历史归档，非当前状态)；其余文档一律进 docs/，根目录只放对外文档
 ```
 
 ### UI 分层铁律
