@@ -1,5 +1,8 @@
 # UI_REFACTOR_HANDOFF.md — DSH Config Manager 前端 UI 处理交接文档
 
+> 📦 **历史归档**（阶段交接记录，非当前状态）：本文的「当前任务范围」是针对当时接手的 UI 打磨阶段而写。
+> 后续 UI 改动已进 `DESIGN.md`，UI/样式决策一律以 `DESIGN.md` 为唯一权威。
+
 > 为「接手前端 UI 美化的新 AI Agent」而写。生成时间基于当前 main 分支（UI Workbench 全量重建已完成并提交）。
 > 本文件不是 README、不是教程、不是产品介绍，而是 **Frontend UI Refactoring Handoff**。
 
