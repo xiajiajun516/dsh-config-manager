@@ -153,10 +153,11 @@ Every step confirms and backs up first — **it never modifies your config direc
 
 ```
 Select ZIP → validate file → check integrity → check schema → compatibility check
-    → scan contents → build import plan → preview & confirm
-    → auto-backup current config → apply → validate → done
+    → scan contents → build import plan → migration consult (verdict + evidence)
+    → choose what to import → per-item conflict decisions → path mapping / secrets re-entry
+    → confirm import → auto-backup current config → apply → validate → done
                       │
-                      └─ failed midway? → automatically restored (rollback)
+                      └─ failed midway? → automatically restored (rollback, can be switched off on the confirm page)
 ```
 
 ---
@@ -420,22 +421,19 @@ Every import creates a **safety snapshot** first. If something feels off afterwa
 - **Pin important snapshots** — a pinned snapshot is exempt from auto-pruning and can only be deleted manually
 - **Manual delete** — remove any snapshot (danger, confirmed) when you no longer need that rollback point
 
-**Backup Files management** (Library → **"Backup files"** source):
-- List every export ZIP (manual + scheduled) with source badge, size, time and your custom **note**
+**Backup files** (Library → **"Backup files"** source):
+
+- Every export ZIP in `exports/` (manual + scheduled) with its source badge, size, time and your **note**
 - **Search** by file name or note
 - **Inspect / Compare** — read-only preview of what the backup contains (sections + per-section counts) and the diff against your current config (zero writes) before deciding to import
+- Download, import straight back, delete
 
----
-
-
-**Backup files & disk usage**: the Library's **"Backup files"** source manages everything in
-`exports/` (manual exports + scheduled backups): download, import straight back, inspect, delete, search by
-name or note. **Environment → Maintenance & Diagnostics** hosts the **"Disk usage"** card, which lists what
-this plugin itself occupies (exports, pre-import snapshots, sync config and working copies, marketplace
-cache, temp staging, logs, transaction log, …) and labels each item's cleanup policy: **regenerated on
-demand** (caches/staging), **retained** (exports for 7 days, scheduled backups keep the latest N), or **your
-data / safety net** (snapshots and sync — never auto-cleaned). **"Clean now"** clears only regenerable caches
-by default; reclaiming expired backups is an explicit opt-in with a confirmation. Snapshots and sync data are
+**Disk usage** (Environment → Maintenance & Diagnostics): the "Disk usage" card lists what this plugin
+itself occupies (exports, pre-import snapshots, sync config and working copies, marketplace cache, temp
+staging, logs, transaction log, …) and labels each item's cleanup policy: **regenerated on demand**
+(caches/staging), **retained** (exports for 7 days, scheduled backups keep the latest N), or **your data /
+safety net** (snapshots and sync — never auto-cleaned). **"Clean now"** clears only regenerable caches by
+default; reclaiming expired backups is an explicit opt-in with a confirmation. Snapshots and sync data are
 never touched, and unreadable directories are reported as "not measured" instead of a misleading 0 bytes.
 
 ---
@@ -592,6 +590,17 @@ Cross-machine restores need no extra step in the GUI: **exporting sessions now c
 
 **Plugins installed but the backup doesn't see them?** Check **Settings → Backup & Migration → the About icon at the top right**: it shows which directory / profile the plugin list was read from, and how many plugins were detected. The list comes from `$DSH_HOME/profiles/<profile>/package.json` → `dependencies` (plus anything declared in `dsh.profile.bundles` that is not a dependency), where `<profile>` is resolved as `config.profile` → `--profile` → `web`. If the shown path is not the profile you installed into (Desktop builds may use a different profile or a different `DSH_HOME`), that is the cause — align `--profile` / `DSH_HOME` with it.
 
+**`web` — the offline rescue console (for when you would rather click than type).** It starts a small web page bound to **127.0.0.1 only** and lays out the same diagnostics and rescue actions in a browser:
+
+```bash
+dsh-config-manager web            # starts it and opens your browser (the terminal prints a one-time token URL)
+```
+
+- **Read-only:** running instances / SAFE MODE / leftover lock / snapshots / exported backups (with one-click verification) / disk usage / session health / profiles and their instances.
+- **Write actions (each needs an explicit confirmation in the page, and every one calls the same implementation as the CLI):** ① relocate misplaced sessions ② clear rebuildable caches and expired exports ③ reclaim a stale environment lock ④ start/stop a profile's standalone instance ⑤ **unlock an encrypted backup** (decrypted in memory, lists entries only — never written to disk) ⑥ **restore a snapshot** (see the per-item plan first, zero writes; restoring copies current files to `<snapshot>/pre-restore/` first) ⑦ **offline export** (file-based sections, self-checked right after writing) ⑧ **reinstall DSH** (uninstall + reinstall the global CLI; **requires a 6-character code printed only in the terminal**).
+- **Safety:** loopback-only binding; a one-time token printed to your terminal is exchanged for an HttpOnly + SameSite=Strict session cookie; the page has no scripts and no external resources. `Ctrl+C` or the idle timeout (30 minutes by default) shuts it down.
+- **Preconditions:** session relocation and restore need DSH stopped; with an unresolved SAFE MODE transaction or a leftover environment lock every write action is refused (the page says why). **Import** (writing a bundle back into this machine) stays on the GUI/CLI — structural sections need live DSH services.
+
 ### 🌐 Behind a proxy? (GitHub login / sync)
 
 Node's built-in `fetch()` does **not** read `HTTP_PROXY` / `HTTPS_PROXY` by default, so on networks where GitHub is only reachable through a local proxy, "Sign in with GitHub" would previously fail with `请求 GitHub 设备码失败：fetch failed` even though your browser and `git` work fine.
@@ -620,17 +629,6 @@ How it behaves:
 - This is **plugin-private**: it never changes global/process-wide network settings (unlike `NODE_USE_ENV_PROXY`, which affects the whole host process including model API calls).
 
 Alternative (host-wide): set `NODE_USE_ENV_PROXY=1` **before starting DSH** (Node 24+); note this also routes the host's own outbound traffic, not just this plugin's.
-
-**`web` — the offline rescue console (for when you would rather click than type).** It starts a small web page bound to **127.0.0.1 only** and lays out the same diagnostics and rescue actions in a browser:
-
-```bash
-dsh-config-manager web            # starts it and opens your browser (the terminal prints a one-time token URL)
-```
-
-- **Read-only:** running instances / SAFE MODE / leftover lock / snapshots / exported backups (with one-click verification) / disk usage / session health / profiles and their instances.
-- **Write actions (each needs an explicit confirmation in the page, and every one calls the same implementation as the CLI):** ① relocate misplaced sessions ② clear rebuildable caches and expired exports ③ reclaim a stale environment lock ④ start/stop a profile's standalone instance ⑤ **unlock an encrypted backup** (decrypted in memory, lists entries only — never written to disk) ⑥ **restore a snapshot** (see the per-item plan first, zero writes; restoring copies current files to `<snapshot>/pre-restore/` first) ⑦ **offline export** (file-based sections, self-checked right after writing) ⑧ **reinstall DSH** (uninstall + reinstall the global CLI; **requires a 6-character code printed only in the terminal**).
-- **Safety:** loopback-only binding; a one-time token printed to your terminal is exchanged for an HttpOnly + SameSite=Strict session cookie; the page has no scripts and no external resources. `Ctrl+C` or the idle timeout (30 minutes by default) shuts it down.
-- **Preconditions:** session relocation and restore need DSH stopped; with an unresolved SAFE MODE transaction or a leftover environment lock every write action is refused (the page says why). **Import** (writing a bundle back into this machine) stays on the GUI/CLI — structural sections need live DSH services.
 
 ### 🤖 Agent tools (for AI assistants)
 

@@ -64,7 +64,7 @@ DSH 是你的 AI 助手工作台，里面存着你的各种设置：模型配置
 
 ### 定时自动全量备份
 
-在首页的「定时备份」卡里开启（6h / 12h / 24h / 7d，或自定义「每周固定星期与时刻」），DSH 会在后台按周期悄悄保留一份全新的全量配置备份——密钥永不包含，无需密码也能安心躺在磁盘上；保留多少份由同一张卡的「保留策略」（最近 N 份 + 每月 1 份 + 每年 1 份）决定。
+在首页的「定时备份」卡里开启（6h / 12h / 24h / 7d，或自定义「每周固定星期与时刻」），DSH 会在后台按周期悄悄保留一份全新的全量配置备份——密钥永不包含，无需密码也能安心躺在磁盘上；保留多少份由同一张卡的「保留策略」（最近 N 份 + 每月 1 份 + 每年 1 份）决定，连续失败会在卡里标红。
 
 ### 从配置市场发现并安装共享配置
 
@@ -288,11 +288,16 @@ allowBuilds:
 
 > 导出只读、不写任何配置。文件内含清单 + 各分区数据 + SHA-256 校验和，默认命名 `dsh-config-<日期>-<6 位随机>.zip`（撞名自动递进，不覆盖已有备份）。
 
+**导出补充：**
+- **导出前就能看**：构成卡在导出之前就给出会进包的分区与预估体积（不含密钥），不必先导出再翻报告
+- **自定义文件名与备注**：文件名默认自动生成，也可自己起名；备注会显示在产物库的**「备份文件」**列表里（备注随 `self` 分区一起被备份 / 同步带走）
+
 ### 📥 导入（安全流程）
 
 - **未确认不写入**：分析、预览阶段零修改
 - **先备份再导入**：执行前自动备份将被修改的配置
 - **失败自动回滚**：按你的选择整体回滚或跳过失败项继续
+- **导入后的下一步清单**：结果页会列出需要重启 DSH 的项（按插件 / MCP）、待补录的凭据，以及可重试的失败 / 跳过项
 
 ### 👀 导入预览（Dry Run）
 
@@ -360,6 +365,7 @@ allowBuilds:
 - **切换通道重新开始**：各通道的远端快照 / 共同祖先**互不共享**。换一条通道（或断开重配）就是从新远端的空基线重新开始——请先推送一个新快照。
 - **WebDAV 认证**采用 HTTP Basic：`username` 存配置、可在界面回显；`password` 则实时从 DSH credentials 槽位 `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` 读取——绝不出现于任何同步文件或日志。
 - **插件自动安装**：拉取差异时，备份里新增的插件会在确认导入时**自动安装**，无需在差异列表里逐项手动勾选；只有**版本冲突**的插件仍需要你决定「保留当前 / 使用备份」。
+- **推送前先预览**：「推送」按钮先给出只读预览（分区 + 各分区条目数 + 相对基线的改动标记；没有基线时提示这是首个基线），确认后才真正写远端。
 - **密钥默认不同步**：同步载荷逐分区过 `SecretScanner`（敏感字段值剥离），凭据分区结构性排除。勾选「导出密钥」并设置加密密码后，`~/.dsh/.credentials.yaml` 以 scrypt + AES-256-GCM 密文作为**独立凭据载荷**随加密快照上行（不放进任何分区）；拉取侧解密后生成逐条「凭据迁移」项，你确认采纳才写回本机凭据（`credentials.set`）。加密/解密密码保存在本机 DSH 凭据库（`~/.dsh/.credentials.yaml` 的独立槽位）：勾选「加密备份」后自动记住（输入框留空即沿用），取消勾选或点「删除已保存密码」即清除 —— 密码绝不写入同步文件、响应、日志或导出备份，也绝不回传浏览器；解密密码只在拉取的快照确实加密时才会被使用。**自动同步恒不含凭据**（无密码可用，遇到加密快照会跳过）。
 
 ### 🛒 配置市场（Marketplace）
@@ -367,7 +373,8 @@ allowBuilds:
 浏览并一键安装社区分享的现成配置（模型 / Provider、插件、MCP、技能、Agent 预设……）。入口在**产物库底栏的「逛市场 / 发布到市场」**（也可用 ⌘K）——它是**流程面板**，不是一级页面：
 
 - **内置官方市场**——只读、绑定官方公开仓库（官方徽章，不可编辑）；首次打开自动刷新，也支持手动拉取最新
-- **搜索与筛选**——关键词搜索、类别过滤、来源筛选（官方 / 个人）、排序（最近更新 / ⭐ 最多 / 名称 A–Z），并显示**来源仓库**的 ⭐ star 数（匿名查询，不触碰任何 token）
+- **搜索与筛选**——关键词搜索（匹配名称 / 描述 / 作者 / **分类**）、类别过滤、**分区筛选**（已下载过的条目会列出自己的分区，其余条目标注提示后排除）、来源筛选（官方 / 个人）、排序（最近更新 / ⭐ 最多 / 名称 A–Z），并显示**来源仓库**的 ⭐ star 数（匿名查询，不触碰任何 token）
+- **影响预览**——详情页在确认之前就列出「装它会改什么」（更新项 / 一致项 / 冲突项 / 待补录密钥 / 需要重启 DSH）
 - **供应链警示恒展示**——来源仓库 URL +「未经官方审核」+ 下载时间；**逐项内容选择**——选择页列出每个单元「本次将改动什么」并就地标出高风险分区（默认勾选，取消勾选即不导入、也不进快照）；历史会话 / 任意文件类高风险内容仍直接禁止上架
 - **安装复用安全导入管道**——分析 → 预览 → 自动备份 → 执行 → 回滚；确认前零写入
 - **「我的配置」**——GitHub 登录（device flow）后一键上传到**你自己的公开仓库**，并自动向官方市场仓库提交**收录 PR**；管理已上传条目（收录状态徽章：未收录 / PR 待审核 / 已收录）、一键更新、装回本地、删除（自动下架 PR）
@@ -408,8 +415,18 @@ allowBuilds:
 
 **GUI**：产物库 → 源筛选切到**「本机快照」**→ 行内 ⋯ → **「恢复」**→ 先看恢复计划（dry-run，零写入；git 风格的逐行对照）→ 确认执行。行内还有「查看与对比 / 迁移前咨询 / 置顶 / 删除」等能力，按该行是什么产物给。
 
-**备份文件**：产物库的**「备份文件」**来源统一管理 `exports/` 里的导出产物（手动导出 + 定时备份）——
-可下载、直接导入恢复、查看内容、删除，并按文件名/备注搜索。
+**快照管理**：
+
+- **保留份数可见**：保留多少份由你的**保留策略**决定（首页「定时备份」卡；默认保留最新 **10** 份），列表里有提示
+- **置顶重要快照**：置顶的快照豁免自动清理，只能手动删除
+- **手动删除**：不再需要这个回滚点时可直接删除（危险操作，有二次确认）
+
+**备份文件**（产物库 → **「备份文件」**来源）：
+
+- 列出 `exports/` 里每一份导出 ZIP（手动导出 + 定时备份），带来源徽章、体积、时间与你写的**备注**
+- 按文件名或备注**搜索**
+- **查看与对比**：导入前先只读预览它包含什么（分区 + 各分区条目数）以及与当前配置的差异（零写入）
+- 下载、直接导入恢复、删除
 
 **磁盘占用**：在**环境 → 维护与诊断**的**「磁盘占用」卡**里，逐项列出本插件自己占用的空间
 （导出备份 / 导入前快照 / 同步配置与工作副本 / 市场缓存 / 临时暂存 / 日志 / 事务日志 …），
@@ -433,19 +450,40 @@ npm install -g dsh-config-manager@latest --omit=peer
 
 > ⚠️ 只安装/更新插件（`dsh plugin --profile web add ...`）只启用 GUI，**不会**产生 `dsh-config-manager` 命令。请先执行上面这条安装命令，然后使用下面任意命令。
 
-全部命令（`dsh-config-manager help` 也会列出）：
+全部命令（`dsh-config-manager help` 也会按风险分组列出；`dsh-config-manager <命令> --help` 打印该命令的参数、退出码与示例）：
 
 ```text
-dsh-config-manager help                                        # 列出全部命令与参数
+# 离线救急台（本机网页，最省打字）
+dsh-config-manager web [--port <n>] [--no-open] [--home <dir>]
+                       [--data-root <dir>] [--idle-timeout <min>]
+
+# 只读检查（绝不改你的配置）
 dsh-config-manager snapshots [--data-dir <dir>]                # 列出快照（最新在前）
-dsh-config-manager restore [--id <id>] [--dry-run]
-                           [--profile <name>] [--settings <path>]
-dsh-config-manager reinstall [--version <v>] [--yes] [--list]
-                             [--wipe-config] [--dry-run]       # 一键重装 DSH 程序本体
-dsh-config-manager verify [--id <文件|路径>] [--json]          # 只读自检备份 ZIP
-                          [--data-dir <dir>]
-dsh-config-manager backup [--sections <a,b,c>] [--out <path>] # 离线文件级备份
+dsh-config-manager verify [<文件|路径>] [--json]                 # 只读自检备份 ZIP
+                           [--data-dir <dir>]
+dsh-config-manager sessions list   [--home <dir>] [--json]     # 列出本机会话
+dsh-config-manager sessions doctor [--home <dir>] [--json]     # 会话体检 + 建议
+
+# 备份与迁移（只写新文件）
+dsh-config-manager backup [--sections <a,b,c>] [--out <path>]  # 离线文件级备份
                           [--dry-run] [--data-dir <dir>]
+dsh-config-manager import --from <来源> [--dry-run]              # 外部 agent 配置 → bundle ZIP
+                           [--out <路径>] [--cwd <dir>] [--data-dir <dir>]
+
+# 修复（会写本机 —— 先用 --dry-run 预览）
+dsh-config-manager restore [--id <id>] [--dry-run]             # 回滚到某份导入前快照
+                           [--data-dir <dir>] [--data-root <dir>]
+                           [--profile <name>] [--settings <path>]
+dsh-config-manager sessions repair [--home <dir>] [--fix]      # 离线会话布局归位
+                                   [--keep <dir>] [--map old=new]...
+dsh-config-manager recover-stale-lock [--data-dir <dir>]       # 回收残留锁（见下）
+
+# 危险（改 DSH 安装本体 / 可能清数据）
+dsh-config-manager reinstall [--version <v>] [--yes] [--list]
+                             [--wipe-config] [--dry-run] [--data-root <dir>]
+
+# 帮助
+dsh-config-manager help [command]                              # 总览 / 单条命令详情
 ```
 
 **`reinstall` —— DSH 损坏时的救急重装。** 跨平台一键重装 `@deepseek-ai/dsh` 启动器（按操作系统自动选用正确命令：Windows 走 PowerShell、Unix 走 bash）。默认重装启动器 + 清全局残留缓存；交互式多选会询问是否勾选**危险**清理项（设置 / 插件 / 会话与凭据）——这些**默认不勾选**，且只要涉及删数据的动作，执行前都必须**二次确认输入 `YES`**。清空 `~/.dsh` 数据前会先做一份 `.reinstall-backup` 紧急备份（`snapshots/` 目录按设计绝不触碰）。
@@ -516,6 +554,42 @@ dsh-config-manager backup --sections skills,self          # 收窄范围
 
 **典型救急流程**（DSH 起不来时）：① `dsh-config-manager reinstall` 先把启动器重装回来（必要时顺带清理），② 若 DSH 报会话日志错误（`corrupt session log` / `duplicate JSONL session id`），先跑 `dsh-config-manager sessions repair --fix` 把日志目录离线归位，③ `dsh web` 重新启动 DSH，④ 从仓库装回插件，⑤ 从远程仓库拉取快照（或执行 `dsh-config-manager restore`）把配置恢复回来。整个流程中 CLI 全程可用，与 DSH 是否健康无关。
 
+**`recover-stale-lock` —— 每次操作都突然失败时用这个。** 动你的配置之前，插件会先占一把小的环境锁（记录谁在操作 + 心跳），让两个操作永远不可能同时写配置。如果某个 `dsh web` 进程被**强杀**（任务管理器 / `kill -9`），锁文件会带着一个已经死掉的持有者留在盘上：下一次操作被拒，而且**重试多少次、重启 DSH 都没用** —— 因为插件刻意从不自行删锁（猜错就会把正在进行的操作踢掉）。
+
+症状与修法：
+
+| 症状 | 含义 | 修法 |
+|---|---|---|
+| 「另一个任务正在运行，请稍后重试。」 | 有活着的操作持锁 | 等一会儿，它会自己清 |
+| 「检测到上次异常退出残留的配置锁…重试或重启 DSH 均无效」（日志里是 `自动同步已跳过`） | 持有者进程**已被证明死亡**（残留锁） | 跑下面这条命令，或用 GUI **事故恢复 → 回收残留锁** |
+| 同一句提示，但持有者 PID 被一个无关进程**复用**了（Windows 常见） | 心跳已陈旧很久，锁仍被判成残留 | 同样的修法 —— 心跳陈旧时间远超阈值后即可回收 |
+
+```bash
+# 安全：先检查，证明持有者已死才回收（活着的锁绝不碰）
+dsh-config-manager recover-stale-lock
+```
+
+**`sessions repair` —— DSH 因为会话日志起不来时用这个。** DSH 校验每条会话日志必须正好待在自己 header 声明的目录里：`corrupt session log … header id and cwd identify …`，或 `duplicate JSONL session id … in multiple project directories`。这时插件帮不上忙（它只在 DSH *内部*加载），而这是唯一能在 DSH 停着时工作的修复路径。它读每条会话首帧的 cwd，把会话目录搬到 `projectKeyOf(cwd)` —— 位置从日志本身推导，绝不猜。
+
+- **默认 dry run**（零写入）；`--fix` 才真的搬。退出码：dry run 恒 0，`--fix` 有任何失败 / 冲突 / 回滚则 1。
+- **`--map old=new`**（可重复）用于跨机恢复：前缀命中时先改写首帧 cwd 再搬目录（其余帧逐字节拷贝）。目标已存在时绝不覆盖。
+- **`--keep <dir>`** 解决重复 id：你点名的副本保留，其余移入 `sessions/.cm-repair-quarantine-<时间戳>/` —— 只移动、绝不删除。不给 `--keep` 时只报告重复、不动。
+
+```bash
+# 先看会搬什么（完全不写盘）
+dsh-config-manager sessions repair
+# 执行，并把源机前缀映射到本机
+dsh-config-manager sessions repair --fix --map 'C:/Users/alice=D:/Work'
+```
+
+两台机器的 **DSH 基础路径不同**时（如 `/opt/dsh/.dsh` 对 Windows 盘符路径），备份里记着源机基础路径，导入会**自动重定基**：把它下面所有路径（会话 cwd、工作区路径…）落到你本机的路径上 —— 不用手填映射。用户映射仍在其后生效，可覆盖任何一条。
+
+在内容选择器里，勾选会话会连带勾选拥有它们的工作区（取消勾选工作区也会取消它的会话）。
+
+跨机恢复在 GUI 里不需要额外步骤：**导出会话现在会连带带上拥有它们的工作区**，导入向导里填的路径映射会同时改写工作区路径与会话首帧 cwd（并相应搬目录），然后才把这些会话登记到那些工作区上。
+
+**插件装好了但备份看不到？** 检查 **设置 → 备份与迁移 → 导航右上角的「关于」图标**：它会显示插件清单是从哪个目录 / profile 读的、识别到几个插件。清单来自 `$DSH_HOME/profiles/<profile>/package.json` → `dependencies`（外加 `dsh.profile.bundles` 里声明、但不是依赖的项），`<profile>` 按 `config.profile` → `--profile` → `web` 解析。如果显示的路径不是你装插件的那个 profile（桌面端可能用别的 profile 或别的 `DSH_HOME`），那就是原因 —— 把 `--profile` / `DSH_HOME` 对齐即可。
+
 **`web` —— 离线救急台（不想在终端里敲命令时用这个）。** 它在本机起一个**只绑 127.0.0.1** 的小网页，
 把上面的诊断信息与救急动作都摊在浏览器里：
 
@@ -532,6 +606,35 @@ dsh-config-manager web            # 启动并自动打开浏览器（终端里�
 会话 cookie，用过即废；页面零脚本、零外链。`Ctrl+C` 或空闲超时（缺省 30 分钟）即退出。
 - **门槛**：会话归位与恢复快照需要 DSH 已停止；有 SAFE MODE 未结案或残留环境锁时写动作一律被拒（页面会写明原因）。
   **导入**（把 bundle 写回本机）留在 GUI/CLI —— 结构化分区需要 DSH 服务层在线。
+
+### 🌐 走代理？(GitHub 登录 / 同步)
+
+Node 内置的 `fetch()` 默认**不读** `HTTP_PROXY` / `HTTPS_PROXY`，所以在「GitHub 只能经本地代理访问」的网络里，「用 GitHub 登录」以前会直接失败：`请求 GitHub 设备码失败：fetch failed` —— 哪怕你的浏览器和 `git` 都正常。
+
+**现在插件会把自己的出站请求自动走你的代理** —— 只要保证代理环境变量对 DSH 进程可见：
+
+```bash
+# macOS / Linux —— 启动 dsh 之前
+export HTTPS_PROXY=http://127.0.0.1:7897
+export NO_PROXY=localhost,127.0.0.1
+dsh web
+```
+
+```powershell
+# Windows PowerShell
+$env:HTTPS_PROXY='http://127.0.0.1:7897'; dsh web
+```
+
+行为细节：
+
+- **覆盖插件全部出站**：GitHub API + device flow 登录（`fetch`）与 WebDAV 同步（原生 `http`/`https`），`https` 目标含 `CONNECT` 隧道；
+- **没配代理就零影响** —— 没有代理变量时行为一字不变；
+- **尊重 `NO_PROXY`**（`*`、精确主机、`example.com` 后缀、可选 `:port`）；
+- **`DSH_CONFIG_MANAGER_PROXY=off`** 强制直连（即使有代理变量）；
+- URL 里的代理凭据只用于 `Proxy-Authorization`，且**绝不记日志**；启动日志会打印一份脱敏的代理摘要，便于确认路由是否生效；
+- 这是**插件私有**行为：绝不改全局 / 进程级网络设置（不同于 `NODE_USE_ENV_PROXY`，那会影响整个宿主进程，包括模型 API 调用）。
+
+替代方案（宿主级）：在启动 DSH **之前**设 `NODE_USE_ENV_PROXY=1`（Node 24+）；注意这会把宿主自己的出站流量也一起走代理，不只是本插件。
 
 ### 🤖 Agent 可调用的模型工具
 
