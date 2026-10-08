@@ -67,6 +67,12 @@ const PREFIX_ROUTED = new Set<string>([
   // （`segments[0] === 'sessions'` 下的 `repair` / `rollback` 子路径），不新增宿主注册路由条目。
   RECOVERY_API.sessionsRepair,
   RECOVERY_API.sessionsRollback,
+  // G-30：checkpoint（三态同点检查点）—— 由 recovery prefix 路由内部按 path 分发
+  // （`segments[0] === 'checkpoints'` 下的 storage / capture / <id>/{preview,rewind,delete}），
+  // 不新增宿主注册路由条目，因此 route-parity 的 78 条快照不变。
+  RECOVERY_API.checkpoints,
+  RECOVERY_API.checkpointsStorage,
+  RECOVERY_API.checkpointsCapture,
 ]);
 
 const ROUTE_LITERAL = /'(\/api\/dsh-config-manager[^']*)'/g;

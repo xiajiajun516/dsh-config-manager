@@ -82,7 +82,7 @@ test('A1 生效作用域内零硬编码中文（缺陷 0）', () => {
 
 /* ------------------------------------------------------------------ A5 */
 
-test('A5 白名单无过期条目 + 计数锚定（4 条 / 128 命中）+ reason 可核验', () => {
+test('A5 白名单无过期条目 + 计数锚定（4 条 / 132 命中）+ reason 可核验', () => {
   assert.equal(allowlistIssues.length, 0, allowlistIssues.join('\n'));
   assert.equal(I18N_ALLOWLIST.length, ALLOWLIST_ENTRY_COUNT, '迁移期不得新增豁免（新增条目需走 captain + t2 所有者）');
   assert.equal(allowlistedHits, ALLOWLIST_TOTAL_HITS, '白名单总命中数必须恒为 ' + ALLOWLIST_TOTAL_HITS + '，实测 ' + allowlistedHits);

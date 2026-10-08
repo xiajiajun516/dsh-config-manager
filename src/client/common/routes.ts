@@ -154,6 +154,14 @@ export const RECOVERY_API = {
   sessionsRepair: `${API_BASE}/recovery/sessions/repair`,
   /** T8：按 repairId 回滚一次修复（同上）。 */
   sessionsRollback: `${API_BASE}/recovery/sessions/rollback`,
+  /**
+   * G-30：checkpoint（会话 / 工作区 / 插件配置「三态同点」检查点）族 —— 同样挂在 recovery prefix
+   * 路由内部按 path 分发，**不新增注册路由条目**（78 条路由快照不变）。
+   * `<id>` 段由调用方拼接（宿主侧校验 id 形态，越界一律 400/404）。
+   */
+  checkpoints: `${API_BASE}/recovery/checkpoints`,
+  checkpointsStorage: `${API_BASE}/recovery/checkpoints/storage`,
+  checkpointsCapture: `${API_BASE}/recovery/checkpoints/capture`,
 } as const;
 
 /** 迁移历史审计路由族（只读列表 + 导出）。 */

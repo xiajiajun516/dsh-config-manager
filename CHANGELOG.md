@@ -21,10 +21,52 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **{{本版主题}}**：{{一句话中文主题}}
+> **本版主题**：把「读不到 ≠ 没有」与「不假装成功」两条口径推到 CLI、同步与检查点三处 —— 恢复预览不再漂移、部分回滚不再说成整体成功、
+> `dcm restore` 补上第三道写入门，并且把早已交付却**点不到**的三态检查点接进界面。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: push the "unreadable ≠ absent" and "never pretend success" rules through the CLI, sync and checkpoints — restore previews can no
+> longer drift, a partial rollback is no longer reported as full success, `dcm restore` enforces the third write gate, and the long-delivered but
+> **unreachable** three-state checkpoint feature is now wired into the UI.
 
+### 🆕 新增 · Added
+
+> **检查点接进界面：会话 / 工作区 / 插件配置「三态同点」现在拍得到、回滚得了**（**G-30 收口**）：宿主侧能力（引擎 + 7 条子路径 + 23 条测试）
+> 早已交付，但 `src/client/**` **零消费者** —— 这条能力对用户根本不存在（点不到）。现在**环境 → 维护与诊断**新增「检查点」卡，
+> ⌘K 同族新增一条「检查点（回到某个时刻）」命令直达同一落点。卡片能力：**拍点**（工作区路径分块逐行填，
+> 另给「用该会话的 cwd 填充」一键填入；从会话体检列表点名关联会话；可选备注；可选保护）、**台账列表**（三态徽章 + 同点跨度 +
+> 区分手动点与回滚前保护点）、**只读预览**（逐段 覆盖/其中不同/已不存在/检查点之后新建 计数 + 会话游标 now→target + 同点判定）、
+> **逐段勾选回滚**（默认只勾可回滚段；三态不全的记录必须显式勾「允许部分」）、**删除**（保护点与回滚前保护点禁用）。
+> 全部判定在 `src/ui/checkpoint-view.ts`（框架无关、7 条单测），组件只装配；回滚仍走宿主侧 **fail-closed 确认门** —— 界面必须显式点
+> danger 确认，缺省/假值一律零写入。
+> - **如实说明三条边界**：① 捕获表单**留空 = 只拍插件配置**，该点三态不全、缺省不可回滚（表单里就写明）；② 会话日志 >32 MiB 时只有游标
+>   没有字节副本 → 该段不可回滚（按原因码说明，绝不假装能回）；③ 存储栈不可用时按结构化 guidance 说清「现在不能用」，台账列表仍可看。
+> - **范围**：本轮**只做 GUI**（CLI 入口另议）；**不新增任何宿主路由**（仍在 recovery prefix 内按 path 分发，78 条路由快照不变）；
+>   第 7 条子路径（单条详情）没有消费者故不进端口（预览已带回 summary 与同点判定）。
+> - **护栏**：`src/ui/checkpoint-view.test.ts`（7 条：未知码回落 unknown / note 与技术细节渲染前脱敏 / 可回滚与可删除判定 /
+>   默认只勾可回滚段 / 会话候选按活跃倒序且 cwd 缺失不猜 / 分块解析 trim+去重）、`src/client/common/client-route-parity.test.ts`（三条新路径
+>   登记为 prefix 路由）、`src/ui/commands.test.ts`（命令表 ↔ 壳层分发双向一致）。
+>
+> **Checkpoints are now wired into the UI: session / workspace / plugin-config "three states at one point" can be captured and rewound**
+> (**closes G-30**): the host side (engine + 7 sub-paths + 23 tests) shipped long ago, but `src/client/**` had **zero consumers** — the capability
+> did not exist for users. **Environment → Maintenance & diagnostics** now has a checkpoint card, and ⌘K gains a "Checkpoints (go back to a
+> moment)" command pointing at the same place: **capture** (workspace path chunks, one per line, plus a one-click "fill with this session's cwd";
+> pick a session from the session-health list; optional note; optional protection), a **ledger list** (three-state badges, same-point spread,
+> manual vs. pre-rewind protection points), a **read-only preview** (per-segment overwrite / differ / missing / created-after counts, session cursor
+> now→target, same-point verdict), **per-segment rewind** (only restorable segments are checked by default; an incomplete record requires explicitly
+> ticking "allow partial"), and **delete** (disabled for protected and pre-rewind points). All decisions live in `src/ui/checkpoint-view.ts`
+> (framework-free, 7 tests) — the component only assembles. Rewinding still goes through the host's **fail-closed confirmation gate**: the UI must
+> explicitly confirm via a danger dialog, and anything else writes zero bytes.
+> - **Three boundaries stated honestly**: ① leaving the capture form empty captures only the plugin config — that point is incomplete and cannot be
+>   rewound by default (the form says so); ② session logs over 32 MiB keep only a cursor, so that segment cannot be rewound (the UI says why);
+>   ③ when the storage stack is unavailable the card explains it via structured guidance while the ledger list stays readable.
+> - **Scope**: GUI only this round (CLI entry deferred); **no new host routes** (still dispatched inside the recovery prefix, the 78-route snapshot is
+>   unchanged); the 7th sub-path (single-record detail) has no consumer, so it is not part of the port (the preview already returns the summary and the
+>   same-point verdict).
+> - **Guards**: `src/ui/checkpoint-view.test.ts` (7 cases: unknown codes fall back to `unknown`, notes and technical details are redacted before render,
+>   rewindable/removable decisions, default segment selection, session candidates sorted by activity with a never-guessed cwd, chunk parsing),
+>   `src/client/common/client-route-parity.test.ts` (the three new paths are registered as prefix-routed) and `src/ui/commands.test.ts`
+>   (command table ↔ shell dispatch, both directions).
+>
 ### 🔧 变更 · Changed
 
 > **恢复「预览 = 执行」不再漂移**（第二轮审查）：预览后磁盘若发生变化，执行时同一份快照可能多出

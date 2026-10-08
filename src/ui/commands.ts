@@ -38,7 +38,7 @@ export type PaletteTitleKey =
   | 'nav.market' | 'task.title.publish'
   | 'nav.export' | 'nav.import' | 'environment.tab.maintenance' | 'foreign.source.title'
   | 'task.title.runs' | 'task.title.history' | 'task.title.about'
-  | 'palette.rescue.recovery' | 'palette.rescue.mode'
+  | 'palette.rescue.recovery' | 'palette.rescue.mode' | 'palette.rescue.checkpoint'
   | 'library.source.all' | 'library.kind.snapshot' | 'library.kind.backupFile'
   | 'library.kind.remote' | 'library.kind.market'
 
@@ -189,6 +189,14 @@ export const COMMANDS: readonly CommandItem[] = [
     group: 'rescue',
     titleKey: 'palette.rescue.mode',
     keywords: ['rescue', 'mode', 'profile', 'bundles', '救援', '救援模式', '逃生'],
+  },
+  {
+    // G-30：检查点（会话 / 工作区 / 配置「三态同点」）—— 与事故恢复同一子视图，
+    // 键盘可达（卡片本身在环境页维护与诊断里，⌘K 直达同一落点）。
+    id: 'checkpoint.open',
+    group: 'rescue',
+    titleKey: 'palette.rescue.checkpoint',
+    keywords: ['checkpoint', 'rewind', 'cursor', 'snapshot', '检查点', '回滚', '回到', '游标'],
   },
 ]
 

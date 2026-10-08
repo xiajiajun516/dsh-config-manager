@@ -13,7 +13,7 @@
  *          recoveryZh|historyZh|gistZh|s3Zh 的对象字面量区间）
  *  - 作用域：DCM_I18N_GUARD_SCOPE（逗号分隔的 workspace 相对 POSIX 前缀，目录段边界匹配）
  *
- * t16 加固（守卫产物加固，不改任何 src/** 源码；全量仍 hits=0 / allowlisted=128）：
+ * t16 加固（守卫产物加固，不改任何 src/** 源码；全量 hits=0 / allowlisted=128 → 2026-10-08 起 132）：
  *  - E3 归属门禁：zh 对象字面量的豁免**不再只按标识符名**——必须可归属到「已注册目录 / 已知字典文件」，
  *    否则该对象里的中文照常计入命中。归属判据见 `isCatalogOwnerFile`：
  *      · 文件自身调用 `registerMessageCatalog(` / `registerBaseMessageCatalog(` / `makeCatalogMsg(`；或
@@ -510,7 +510,7 @@ export interface I18nAllowlistEntry {
 }
 
 /**
- * 白名单（4 条，合计 128 命中）。
+ * 白名单（4 条，合计 132 命中；2026-10-08 起 commands.ts 49 → 53 —— 新增 checkpoint 命令的 4 个中文匹配词）。
  *
  * t1 §3.5 初始 2 条 73 命中；t12 经 captain 裁决（依据 t3 取证 + 内核复算）增补 2 条 55 命中：
  * 两处都是「匹配模式 / 检索同义词」而非用户可见文案（迁走会让中文匹配能力消失，或把中文搬进
@@ -530,7 +530,7 @@ export const I18N_ALLOWLIST: readonly I18nAllowlistEntry[] = [
   },
   {
     file: 'src/ui/commands.ts',
-    expectedHits: 49,
+    expectedHits: 53,
     reason: 'COMMANDS[].keywords 是命令面板的**检索同义词**、不是文案：唯一消费方 filterCommands → matchScore 只对关键词做 toLowerCase / startsWith / includes 并折成分档数值（本文件 :196-207），返回值 CommandMatch 只带 {item, disabled}，关键词从不作为文本离开本模块；面板可见标题由调用方注入 titleOf(titleKey)（:222 / :237），由壳层 src/client/common/CommandPalette.tsx:20+ 用 t(item.titleKey) 渲染客户端字典 src/client/locales.ts；文件头 :7-12 自述「零依赖、与语言无关：文案键只声明字面量联合」。中文词只是让中文用户搜得到命令，删掉只会让检索退化、不改变任何显示文本',
   },
   {
@@ -540,8 +540,8 @@ export const I18N_ALLOWLIST: readonly I18nAllowlistEntry[] = [
   },
 ] as const;
 
-/** 白名单总命中数（A5 锚定：t1 初始 73 + t12 授权增量 55）。 */
-export const ALLOWLIST_TOTAL_HITS = 128;
+/** 白名单总命中数（A5 锚定：t1 初始 73 + t12 授权增量 55 + 2026-10-08 checkpoint 命令 4）。 */
+export const ALLOWLIST_TOTAL_HITS = 132;
 /** 白名单条目数（A5 锚定「迁移期不得新增豁免」：t1 初始 2 + t12 授权的 2）。 */
 export const ALLOWLIST_ENTRY_COUNT = 4;
 

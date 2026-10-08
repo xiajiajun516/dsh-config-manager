@@ -27,6 +27,7 @@ const TITLES: Record<string, string> = {
   'task.title.publish': '发布到市场',
   'palette.rescue.recovery': '事故恢复',
   'palette.rescue.mode': '救援模式',
+  'palette.rescue.checkpoint': '检查点（回到某个时刻）',
   'library.source.all': '全部',
   'library.kind.snapshot': '快照',
   'library.kind.backupFile': '备份文件',

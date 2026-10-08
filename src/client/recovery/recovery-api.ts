@@ -35,7 +35,17 @@ import type {
   SessionRepairResult,
   SessionRepairRollbackResult,
 } from '../../ui/session-inventory-view.ts';
-import type { SessionLayoutResponse } from '../../ui/session-layout-view.ts';
+import type { SessionLayoutResponse } from '../../ui/session-layout-view.ts'
+import type {
+  CheckpointCaptureInput,
+  CheckpointCaptureResult,
+  CheckpointListResult,
+  CheckpointPreviewResult,
+  CheckpointRemoveResult,
+  CheckpointRewindResult,
+  CheckpointState,
+  CheckpointStorageStatus,
+} from '../../ui/checkpoint-view.ts';
 import { ConfigManagerApiError, getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { RECOVERY_API } from '../common/routes.ts';
@@ -49,7 +59,20 @@ const RECOVERY_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS, time
 /* 请求封装（readJson / getJson / postJson：统一超时 + 取消 + 错误映射）见 common/http.ts。 */
 
 /** operationId 严格 UUID 校验（与 Host 侧 isValidOperationId 一致；防路径穿越）。 */
-const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * checkpoint 台账 id → 子路径（G-30）。
+ *
+ * 只接受 `[A-Za-z0-9._-]{1,128}`：id 是宿主生成的，这里**只做形态收窄**（与 operationId 的
+ * UUID 校验同一条理由 —— 防路径穿越）；不合形态的 id 直接抛，绝不拼进 URL 让宿主去兜。
+ */
+const CHECKPOINT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
+function checkpointPath(id: string, sub: string): string {
+  // 不合形态 = 编程错误（id 只可能来自宿主回传的列表），直接抛；**绝不回显原始 id**
+  if (!CHECKPOINT_ID_RE.test(id)) throw new Error('checkpoint id invalid')
+  return RECOVERY_API.checkpoints + '/' + id + '/' + sub
+};
 
 /**
  * E2：`POST /recovery/sessions/layout`（布局归位 / 重复 id 隔离）。
@@ -104,6 +127,64 @@ export class RecoveryApi implements RecoveryPort {
     // 有损动作（截断）必须显式放行；宿主也会再判一次（缺省拒绝）
     if (allowLossy === true) body['allowLossy'] = true
     return postJson<SessionRepairResult>(RECOVERY_API.sessionsRepair, body, this.t, RECOVERY_OPTS)
+  }
+
+  /* ------------------------------------------------- G-30 checkpoint（三态同点检查点） */
+
+  /**
+   * GET /recovery/checkpoints（G-30）：台账列表 + 存储栈状态。
+   *
+   * 列表本身**只读**：SAFE MODE 下也能看（宿主侧只有 rewind / delete 被 423 拦下），
+   * 因此界面必须能「看得见、但按钮说明为什么点不了」。
+   */
+  async checkpoints(): Promise<CheckpointListResult> {
+    return getJson<CheckpointListResult>(RECOVERY_API.checkpoints, this.t, RECOVERY_OPTS)
+  }
+
+  /** GET /recovery/checkpoints/storage（G-30）：存储栈探针（不可用时带结构化 guidance）。 */
+  async checkpointStorage(): Promise<CheckpointStorageStatus> {
+    return getJson<CheckpointStorageStatus>(RECOVERY_API.checkpointsStorage, this.t, RECOVERY_OPTS)
+  }
+
+  /**
+   * POST /recovery/checkpoints/capture（G-30）：拍一个检查点（写路径）。
+   *
+   * chunks 是**显式绝对路径分块**（引擎只在这些分块内覆盖）；unitId 由宿主解析成会话根内的
+   * 真实日志（解析不出来一律 400，绝不猜）。note / protect 可选。
+   */
+  async captureCheckpoint(input: CheckpointCaptureInput): Promise<CheckpointCaptureResult> {
+    const body: Record<string, unknown> = {}
+    if (input.chunks !== undefined && input.chunks.length > 0) body['chunks'] = [...input.chunks]
+    if (input.unitId !== undefined && input.unitId !== '') body['unitId'] = input.unitId
+    if (input.note !== undefined && input.note !== '') body['note'] = input.note
+    if (input.protect === true) body['protect'] = true
+    return postJson<CheckpointCaptureResult>(RECOVERY_API.checkpointsCapture, body, this.t, RECOVERY_OPTS)
+  }
+
+  /** GET /recovery/checkpoints/<id>/preview（G-30）：只读预演（零写入；逐段 planned/changed/missing/leftovers）。 */
+  async previewCheckpoint(id: string): Promise<CheckpointPreviewResult> {
+    return getJson<CheckpointPreviewResult>(checkpointPath(id, 'preview'), this.t, RECOVERY_OPTS)
+  }
+
+  /**
+   * POST /recovery/checkpoints/<id>/rewind（G-30）：单命令回滚。
+   *
+   * **确认门是 fail-closed**：`confirm` 必须恰好 true（宿主缺省/假值/字符串一律 409 denied + 零写入）。
+   * 本方法把 confirm 作为**显式参数**收，绝不自动置 true —— 由确认弹窗的 onClick 传进来。
+   */
+  async rewindCheckpoint(
+    id: string,
+    opts: { confirm: boolean; segments?: readonly CheckpointState[]; allowPartial?: boolean },
+  ): Promise<CheckpointRewindResult> {
+    const body: Record<string, unknown> = { confirm: opts.confirm === true }
+    if (opts.segments !== undefined && opts.segments.length > 0) body['segments'] = [...opts.segments]
+    if (opts.allowPartial === true) body['allowPartial'] = true
+    return postJson<CheckpointRewindResult>(checkpointPath(id, 'rewind'), body, this.t, RECOVERY_OPTS)
+  }
+
+  /** POST /recovery/checkpoints/<id>/delete（G-30）：删除（保护点 / guard 点由宿主拒绝）。 */
+  async removeCheckpoint(id: string): Promise<CheckpointRemoveResult> {
+    return postJson<CheckpointRemoveResult>(checkpointPath(id, 'delete'), {}, this.t, RECOVERY_OPTS)
   }
 
   /** POST /recovery/sessions/rollback（T8）：按台账 repairId 回滚（客户端不传路径）。 */

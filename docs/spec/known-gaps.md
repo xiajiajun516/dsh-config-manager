@@ -62,7 +62,7 @@
 | G-27 | 加密同步快照 >64 MiB 时远端列表恒为空、拉取报「快照损坏」、自动同步恒 `upToDate`，而 push 报成功（issue #59） | ✅ 已修复（读取侧改用自产载荷专用上限 + 读不出来的一律回传可见，见 §1） |
 | G-28 | WebDAV 密码输入框被无关状态更新自动清空（issue #60） | ✅ 已修复（`commit()` 经 `patchSyncPasswords` 把在途输入写回内存；持久化白名单不变，见 §1） |
 | G-29 | 会话在应用内**读不出来**：官方 `session.export` 通道（原样 ZIP，含子会话与附件）此前**从未接入** | ✅ 已修复（只读探测/流式代理路由 + 体检弹窗逐行下载入口；判据按 **500** 而非过时的 501，见 §1） |
-| G-30 | checkpoint（会话 / 工作区 / 配置三态同点检查点）：宿主能力已交付（引擎 + 7 条子路径），但 **`src/client/**` 零消费者** → 用户点不到 | ⚠️ **部分交付：宿主能力已可用，界面未接线**（见 §3） |
+| G-30 | checkpoint（会话 / 工作区 / 配置三态同点检查点）：宿主能力已交付（引擎 + 7 条子路径），**界面已于 2026-10-08 接线** | ✅ **已接线可用**（GUI：环境 → 维护与诊断「检查点」卡 + ⌘K 命令；CLI 入口与「单条详情」子路径仍无消费者，见 §3） |
 | G-31 | 云端点同步通道（S3 兼容系 ×5 / GitHub Gist）：**已接线可用**（通道枚举 / 路由 / UI / 引擎全路径） | ✅ 已交付（`SYNC_CHANNELS = ['git','webdav','s3','gist']`，声明处 = 零依赖 `src/utils/shared-constants.ts`；s3/oss/cos/minio/kodo/gist 六类端点可用。**未对真实云端点做端到端验证**（本批无真实凭据）；gist 刻意不外置 blob 见 **G-34**） |
 | G-32 | SQLite 只读探测的**写副作用**（WAL 库被就地打开会新建 `<db>-shm`/`<db>-wal`）与 `immutable=1` 在 `-wal` 非空时**静默丢数据** | ✅ 已处置（`sqlite.ts` 三态打开计划 direct / immutable / copy + 1 GiB 上限 + **绝不退回就地打开**；四条残余风险见 §3） |
 | G-33 | 备份不到外壳的 MCP 与技能：patch 只读 home 层、技能不落目录（issue #71） | ✅ 已修复（patch 行按层读取并写回原层、技能经 `ctx.skills` 服务收编、快照与回滚记录层，见 §1） |
@@ -476,14 +476,14 @@
 | 为什么有意不修 | 删除会话是**不可回滚**的破坏性动作（DSH 无回收站、快照回滚不覆盖会话字节）。把它做成同步的自动副作用，会在「对端误删 / 对端只是没勾选」时静默毁掉本机数据。当前实现把它降级为**信息**（墓碑在拉取报告里可见），把删除留给用户显式动作。 |
 | 若将来要做 | 需要：① 适配器侧的会话删除能力（宿主 `sessionPersistence` 支持 + 审计）；② 新的计划项种类 + 逐项确认 UI（不得并入自动应用）；③ 与「导入前强制快照」的可回滚语义对齐（会话字节当前不可回滚）。 |
 
-### G-30 checkpoint（会话 / 工作区 / 配置三态同点检查点）：宿主能力已交付，但**界面未接线**
+### G-30 checkpoint（会话 / 工作区 / 配置三态同点检查点）：**已接线可用**（2026-10-08）
 
 | 项 | 内容 |
 |---|---|
 | 背景 | C-1 Q4 交付了 checkpoint 引擎（`src/core/checkpoint.ts`：三态捕获 + 内容指纹 + `samePointVerdictOf` 同点判定 + fail-closed 确认门 + 对象仓 / 台账降级）与 recovery prefix 下的 **7 条子路径**：`GET /recovery/checkpoints`、`GET /recovery/checkpoints/storage`、`POST /recovery/checkpoints/capture`、`GET /recovery/checkpoints/<id>`、`GET /recovery/checkpoints/<id>/preview`、`POST /recovery/checkpoints/<id>/rewind`、`POST /recovery/checkpoints/<id>/delete`（挂在既有 prefix 路由内分发，**不新增 `endpoint()` 条目**，因此 76 条路由快照不变）。宿主侧语义完整：预览零写入、未确认回滚 → 409 `denied` 且**零字节写入**、保护点 / guard 点不可删、存储栈不可用 → 503 + 结构化 guidance、SAFE MODE 下回滚/删除 423 而只读列表/预览不受影响。 |
-| **当前状态** | **⚠️ 部分交付：宿主能力已可用，界面未接线** —— `src/client/**` 对该族**只有字典键、没有任何消费者**：`src/client/recovery/recovery-locales.ts` 有完整的 `checkpoint.*`（zh/en）文案，但把该文件排除后 grep `checkpoint` 在 `src/client` 下 **0 命中**（`ConfigManagerApi` 没有 checkpoints 方法，`RecoveryPanel` 也没有任何调用）。结果：这条能力对用户**不存在** —— 点不到。 |
-| 缺什么才能用 | ① `src/client/api.ts` 的 `ConfigManagerApi` 补 list / storage / read / capture / preview / rewind / delete 共 7 条调用；② `RecoveryPanel` 增「检查点」区块（捕获：选工作区分块 + 会话；现状列表；预览；回滚必须走确认弹窗并显式传 `userConfirmed: true`；删除对保护点 / guard 点禁用），`storage.available === false` 时按 `guidance[]` 如实显示「存储栈不可用」，不假装可用；③ 文案键已齐（`checkpoint.*`，zh/en），只差接线；④ **工作区分块（chunks）的来源未定**：引擎只接受显式绝对路径分块，界面需要一个路径输入 / 选择来源（可先复用既有路径输入原语），否则只能捕获会话态、回滚面不完整。 |
-| 验证方式 | 引擎：`src/core/checkpoint.test.ts`（**18** 条：真实磁盘三态捕获、同点/跨度判定、保护点与 guard 点、分叉门、篡改记录、存储降级）；路由接口面：`tests/route/recovery-checkpoints.test.ts`（**5** 条，真 http server：七形态可达 / 409+denied+零写入 / 404/405/400 / 503+guidance / 保护点 / SAFE MODE）。**界面侧零测试** —— 没有任何自动化证据表明用户能用上它，这正是本条登记的意义。 |
+| **当前状态** | ✅ **已接线可用（2026-10-08）**：环境 → 维护与诊断新增 `src/client/recovery/CheckpointCard.tsx`（紧跟会话体检卡：捕获表单的「关联会话」直接复用会话体检扫出来的 rows），⌘K 新增 `checkpoint.open`（与「事故恢复 / 救援模式」同族、同落点）。卡片覆盖 list / storage / capture / preview / rewind / delete 六条子路径：拍点（分块逐行填 + 「用该会话的 cwd 填充」+ 点名会话 + 可选备注 + 可选保护）、台账列表（三态徽章 / 同点跨度 / 手动点 vs 回滚前保护点）、只读预览（逐段 planned/changed/missing/leftovers + 会话游标 now→target + 同点判定）、逐段勾选回滚（默认只勾可回滚段；三态不全需显式勾「允许部分」）、删除（保护点与 guard 点禁用）。**判定全在 `src/ui/checkpoint-view.ts`**（框架无关、7 条单测），组件只装配。 |
+| 仍未做（如实登记） | ① **CLI 入口**（`dcm checkpoint list/capture/rewind`）本轮未做 —— 用户明确只授权 GUI；② **「单条详情」子路径（`GET /recovery/checkpoints/<id>`）仍无消费者**，故未进客户端端口（预览已带回 `summary` 与同点判定，界面不需要额外一次往返）；③ **工作区分块仍是「手填 + cwd 一键填充」**，没有工作区选择器（引擎只接受显式绝对路径，这是刻意的：分块即回滚边界，不做隐式推断）；④ 界面侧**无真机点击验证**（本会话无浏览器交互）—— 证据是 typecheck + 单测 + 路由/命令守卫，不是「点过了」。 |
+| 验证方式 | 引擎：`src/core/checkpoint.test.ts`（**18** 条：真实磁盘三态捕获、同点/跨度判定、保护点与 guard 点、分叉门、篡改记录、存储降级）；路由接口面：`tests/route/recovery-checkpoints.test.ts`（**5** 条，真 http server：七形态可达 / 409+denied+零写入 / 404/405/400 / 503+guidance / 保护点 / SAFE MODE）；**界面侧（2026-10-08 起有证据）**：`src/ui/checkpoint-view.test.ts`（**7** 条：未知码/未知态回落 unknown、note 与技术细节渲染前脱敏、可回滚与可删除判定、默认只勾可回滚段、会话候选按活跃倒序且 cwd 缺失不猜、分块解析 trim+去重）、`src/client/common/client-route-parity.test.ts`（三条新客户端路径登记为 prefix 路由，宿主路由快照仍 78 条）、`src/ui/commands.test.ts`（命令表 ↔ 壳层 `runCommand` 双向一致）。 |
 | 已知限制 | 见 §4.1（T14-F3 / T14-F4）。 |
 
 ### G-31 云端点同步通道（S3 兼容系 ×5 / GitHub Gist）：**已接线可用**

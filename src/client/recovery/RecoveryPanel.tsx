@@ -19,10 +19,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import type { RecoveryPort } from '../../ui/types.ts'
+import type { CheckpointPort } from '../../ui/checkpoint-view.ts'
 import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../../ui/types.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
 import { DiskUsageCard } from '../environment/maintenance/DiskUsageCard.tsx'
+import { CheckpointCard } from './CheckpointCard.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
@@ -94,7 +96,7 @@ const redactErrorText = (err: unknown): string => redact(err instanceof Error ? 
  * 调用点（按 RecoveryPort 传值）原样可编译；运行时若真缺失，面板走 `sessions.layout.apiMissing`
  * 如实提示并且**一条也不执行**，绝不假装有能力。
  */
-type LayoutRecoveryApi = RecoveryPort & Partial<SessionLayoutPort>
+type LayoutRecoveryApi = RecoveryPort & Partial<SessionLayoutPort> & Partial<CheckpointPort>
 
 export interface RecoveryPanelProps {
   /** 事故处置（崩溃归因 + 救援模式）API；与 recoveryApi 同属「事故恢复」子 tab */
@@ -1440,6 +1442,11 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
 
       {/* T5：会话体检（只读）—— 与「我的对话去哪了」是同一件事，故与事故恢复同屏 */}
       <SessionHealthCard recoveryApi={recoveryApi} t={t} copyT={props.copyT} diskApi={props.diskApi} />
+
+      {/* G-30：检查点（会话 / 工作区 / 插件配置「三态同点」）—— 紧跟在会话体检之后：
+          捕获表单的「关联会话」直接复用会话体检扫出来的 rows（unitId + sessionId + cwd + 活跃时间），
+          而它要解决的正是同一件事（事故后把三态退回某个时刻）。 */}
+      <CheckpointCard recoveryApi={recoveryApi} t={t} />
 
       {/* SAFE MODE / recovery-required 状态提示（正常态不渲染任何横幅——无事项即静默） */}
       {view?.recoveryRequired === true && (

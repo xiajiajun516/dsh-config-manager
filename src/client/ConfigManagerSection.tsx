@@ -453,6 +453,8 @@ const navLayoutResult = navWidths === null
       case 'recovery.open': openMaintenance(); return
       // 救援模式：与事故恢复同一子视图（救援卡在其中）；两条命令都必须存在（§3.6）
       case 'rescue.open': openMaintenance(); return
+      // G-30：检查点卡也在维护与诊断里（紧跟会话体检），命令直达同一落点
+      case 'checkpoint.open': openMaintenance(); return
       default: return
     }
   }

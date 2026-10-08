@@ -831,6 +831,8 @@ export const zh = {
   'palette.view.about': '关于',
   'palette.rescue.recovery': '事故恢复',
   'palette.rescue.mode': '救援模式',
+  // G-30：检查点（三态同点）命令标题
+  'palette.rescue.checkpoint': '检查点（回到某个时刻）',
   'import.reason.schemaUnsupported': '包内 schema 版本 v{version} 超出本插件支持范围',
   'import.reason.missingSections': '备份声明但包内缺失 {count} 个分区：{sections}',
   'import.reason.sourceNewer': '备份来自更新的 DSH（{source} → 本机 {target}）：可能有本机不认识的配置',
@@ -1747,6 +1749,8 @@ export const en: Record<keyof typeof zh, string> = {
   'palette.view.about': 'About',
   'palette.rescue.recovery': 'Incident recovery',
   'palette.rescue.mode': 'Rescue mode',
+  // G-30: checkpoint (three states at one point) command title
+  'palette.rescue.checkpoint': 'Checkpoints (go back to a moment)',
   'import.reason.schemaUnsupported': 'The bundle uses schema v{version}, beyond what this plugin supports',
   'import.reason.missingSections': 'Declared by the backup but missing from the archive: {count} section(s) — {sections}',
   'import.reason.sourceNewer': 'Backup comes from a newer DSH ({source} → local {target}): it may contain settings this build does not know',
