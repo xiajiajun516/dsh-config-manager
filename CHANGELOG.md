@@ -129,25 +129,30 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
-> **英文界面下首页状态条不再变形**（真机截图反馈）：状态条按 32px **单行**设计，而英文标签比中文长约 50%
-> —— 实测 5 段合计 688px > 565px 画布的可用 530px，折行后两行文字被挤进 32px 的框里、第二行贴着下边框，
-> 换行处还多出一条与上一行不对齐的分隔线。改法两条：① **英文标签按画布实测收窄**（健康段 `All healthy`、
-> `Backups` / `Snapshots` / `Auto backup` / `Sync`，合计 481px、余量 49px ⇒ 常见状态恢复单行；中文文案一字未动）；
-> ② **折行仍可能发生**（如「尚无备份」长文案），此时靠 `row-gap: 6px` + 段内 `padding: 4px 12px` 折出两行呼吸
-> —— 单行时这两条都不生效、观感不变（段被 stretch 到 32px）。
-> - **护栏**：`css-scale-guard`（间距仍走 9 档：6/4/12）、`locale-hardcode-guard`、`i18n-hardcoded-guard`；
->   复核口径 = 用 Segoe UI 11/12px 量文本宽度，与截图像素实测误差 2%。
+> **首页状态条：英文不再变形、中文不再被裁**（两轮真机截图反馈）：状态条按 32px **单行**设计，而英文标签比
+> 中文长约 50%（实测 5 段 688px > 画布可用 ~527px），折行后两行被挤进 32px 的框里、第二行贴着下边框。第一轮
+> 只补行距 / 段内上下内边距后，又暴露出第二层根因：`.statStrip` 自身没有 `flex: none`，而 `.viewBody` 是 column
+> flex 容器 —— 面板内容一高它就被压回 `min-height`(32px)，折行的第二行于是**溢出到工具栏底下被按钮盖住**
+> （中文同样中招；改前折行内容恰好 30px 能塞进 32px，所以只显拥挤不显裁切）。现在三条一起落地：
+> ① `flex: none`（页头行永不参与纵向收缩）；② 段内左右内边距 12→8px（中文 547px→491px、英文 481px→441px），
+> 中英文**都回到单行**；③ 折行兜底 `row-gap: 6px` + 段内上下 4px，两行有呼吸、不再压框。中文文案一字未动，
+> 英文 5 条标签按画布实测收窄（`All healthy` / `Backups` / `Snapshots` / `Auto backup` / `Sync`）。
+> - **护栏**：`css-scale-guard`（间距 6/4/8 仍在 9 档内）、`locale-hardcode-guard`、`i18n-hardcoded-guard`；
+>   复核口径 = 用 Segoe UI / Microsoft YaHei 11/12px 量文本宽度（与截图像素实测误差 2%）。
 >
-> **The home status strip no longer deforms in English** (reported with a screenshot): the strip is designed as a single
-> 32px **row**, but English labels run ~50% longer than Chinese — 688px of content against 530px available in the 565px
-> canvas — so it wrapped inside a 32px box: the second line hugged the bottom border and a misaligned divider appeared
-> at the wrap point. Two fixes: ① **English labels trimmed against the real canvas** (`All healthy`, `Backups`,
-> `Snapshots`, `Auto backup`, `Sync` — 481px total, 49px headroom, so the common state is one line again; Chinese copy
-> untouched); ② **wrapping can still happen** (long copy such as the "no backups" state) and is now given room by
-> `row-gap: 6px` plus a per-segment `padding: 4px 12px` — neither applies to the single-row case, so that look is
-> unchanged (segments stretch to 32px).
-> - **Guards**: `css-scale-guard` (spacing stays on the 9-step scale: 6/4/12), `locale-hardcode-guard`,
->   `i18n-hardcoded-guard`; the width model was calibrated against the screenshot pixels (2% error).
+> **Home status strip: no more deformation in English, no more clipping in Chinese** (two rounds of real-device
+> screenshots): the strip is designed as a single 32px row, but English labels run ~50% longer than Chinese (688px of
+> content vs ~527px available). After the first round only added row spacing and vertical padding, a second root cause
+> surfaced: `.statStrip` itself had no `flex: none`, and `.viewBody` is a column flex container — once the panel grows,
+> the strip is forced back to its `min-height` (32px) and the wrapped second row **overflows underneath the toolbar and
+> gets covered by the buttons** (Chinese was hit the same way; before, the wrapped content happened to be exactly 30px
+> and fit inside 32px, so it looked cramped rather than clipped). Three fixes: ① `flex: none` (a header row never
+> shrinks vertically); ② horizontal padding 12→8px per segment (Chinese 547px→491px, English 481px→441px) so **both
+> languages are back on one line**; ③ wrap fallback `row-gap: 6px` + 4px vertical padding so a wrapped strip breathes.
+> Chinese copy is untouched; the five English labels were trimmed against the measured canvas (`All healthy` /
+> `Backups` / `Snapshots` / `Auto backup` / `Sync`).
+> - **Guards**: `css-scale-guard` (6/4/8 stay on the 9-step scale), `locale-hardcode-guard`, `i18n-hardcoded-guard`;
+>   the width model was calibrated against screenshot pixels with Segoe UI / Microsoft YaHei at 11/12px (2% error).
 
 > **英文界面零中文：切到 English 后界面仍有大量中文（两个一次性语言绑定根因 + 全仓中文硬编码）**：
 > ① 客户端 `src/client/index.ts` 在插件加载时**一次性绑定** `uiT`（`makeUiT(ctx.locale.getLocale().active …)` 是快照），

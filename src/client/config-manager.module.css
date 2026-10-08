@@ -2720,11 +2720,16 @@
      第二行贴着下边框（原实现如此）。放得下时（单行）这两条都不生效，观感不变。 */
   flex-wrap: wrap;
   row-gap: 6px;
+  /* 绝不参与纵向收缩（2026-10-08 真机回归）：.viewBody 是 column flex 容器，子项默认 flex-shrink:1，
+     面板内容一高，本状态条就被压回 min-height(32px)，折行的第二行于是溢出到工具栏底下被按钮盖住
+     （改前的折行内容恰好 30px 能塞进 32px，所以只显拥挤不显裁切；加行距/内边距后立刻暴露）。
+     状态条是页头行：必须按内容撑高，空间不够时由下方内容滚动，而不是把它压扁。 */
+  flex: none;
 }
 
-/* 末段不被容器右缘裁切：预留内边距，保证最后一个指标值完整可见 */
+/* 末段不被容器右缘裁切：与段内左右内边距同宽（8px），保证最后一个指标值完整可见 */
 .statStrip > :last-child {
-  padding-right: 12px;
+  padding-right: 8px;
 }
 
 .statStrip[data-tone='error'] {
@@ -2741,8 +2746,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  /* 上下 4px：仅在**折行**时让两行文字离开边框；单行时整段被 stretch 到 32px，视觉与 0 无异 */
-  padding: 4px 12px;
+  /* 左右 8px（原 12px）：中文 5 段实测 547px > 画布可用 ~527px，收窄 20px 才回到单行（2026-10-08 真机）；
+     上下 4px：仅在**折行**时让两行文字离开边框，单行时整段被 stretch 到 32px，视觉与 0 无异 */
+  padding: 4px 8px;
   font-size: 12px;
   font-weight: 600;
   color: var(--dsw-alias-label-primary);
@@ -2776,7 +2782,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  padding: 4px 8px;
   border: none;
   border-left: 1px solid var(--dsw-alias-border-l1);
   background: none;
