@@ -103,8 +103,11 @@ async function backupHostFiles(
     try {
       existed = await ctx.fs.exists(relPath);
     } catch (err) {
+      // 探测自身失败 = 存在性判不出来：按「存在但不可读」登记。**绝不写 existed:false** ——
+      // 那会被恢复侧读成「当时确实不存在」，进而删掉用户真实的文件。
       ctx.log.warn(`快照探测宿主文件失败 ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
-      existed = false;
+      backups.push({ relPath, blobPath: '', existed: true, unreadable: true });
+      continue;
     }
     if (!existed) {
       backups.push({ relPath, blobPath: '', existed: false });
@@ -115,8 +118,10 @@ async function backupHostFiles(
       blobs.set(blobPath, await ctx.fs.readFile(relPath));
       backups.push({ relPath, blobPath, existed: true });
     } catch (err) {
+      // 文件确实存在、只是这次读不出来（占用/权限/IO）：登记 existed=true + unreadable，
+      // 恢复侧据此只跳过并告警，绝不进入「删除」分支（见 HostFileBackup.unreadable）。
       ctx.log.warn(`快照读取宿主文件失败 ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
-      backups.push({ relPath, blobPath: '', existed: false });
+      backups.push({ relPath, blobPath: '', existed: true, unreadable: true });
     }
   }
   return backups;
@@ -534,6 +539,11 @@ export interface FileSnapshotStoreOptions {
    * 未注入 → `fallbackPruneSelector`（只按 keepLast，等价既有 FIFO；分层字段被忽略 = 保守少删）。
    */
   pruneSelector?: PruneSelector;
+  /**
+   * 诊断回调（可选）：保留清理**被放弃**或失败时的可见线索。
+   * 缺省 = 不记录（不改变行为）；宿主接 `host.log.warn` —— 「这轮为什么没清理」必须能查。
+   */
+  onWarn?: (message: string) => void;
 }
 
 /** 文件快照存储：<dir>/<id>/snapshot.json + <dir>/<id>/blobs/* */
@@ -588,7 +598,9 @@ export class FileSnapshotStore implements SnapshotStore {
     try {
       await this.prune();
     } catch (err) {
-      // 快照已 READY + verified；prune 失败（EBUSY/EPERM）不应把刚成功的快照判为 unusable
+      // 快照已 READY + verified；prune 失败（EBUSY/EPERM）不应把刚成功的快照判为 unusable ——
+      // 但必须留痕：保留清理长期失败会让快照无限堆积，用户与日志都看不到线索。
+      this.options.onWarn?.('快照保留清理失败（快照本身已就绪发布，不受影响）：' + (err instanceof Error ? err.message : String(err)));
     }
     return snapshot.id;
   }
@@ -632,7 +644,18 @@ export class FileSnapshotStore implements SnapshotStore {
   private async prune(): Promise<void> {
     const dir = this.options.dir;
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    const referenced = await this.options.referencedSnapshotIds?.().catch(() => new Set<string>()) ?? new Set<string>();
+    // F3：被未收敛 journal 引用的快照**绝不自动清理**。判据是「读不到 ≠ 没有引用」——
+    // 引用提供者抛错时**放弃本轮清理**，绝不按空集合继续删：一次瞬时 IO 错就可能删掉
+    // 事故恢复唯一的回滚点（那是 SAFE MODE 的唯一证据）。此前这里是 `.catch(() => new Set())`。
+    let referenced = new Set<string>();
+    if (this.options.referencedSnapshotIds !== undefined) {
+      try {
+        referenced = await this.options.referencedSnapshotIds();
+      } catch (err) {
+        this.options.onWarn?.('快照保留清理已放弃：读取 recovery 引用集合失败（' + (err instanceof Error ? err.message : String(err)) + '）');
+        return;
+      }
+    }
     // m-retention：策略读取失败 → 回退缺省（绝不因策略提供者异常而误删/崩溃）
     const policy = await Promise.resolve()
       .then(() => this.options.retentionPolicy?.() ?? defaultRetentionPolicyLike())

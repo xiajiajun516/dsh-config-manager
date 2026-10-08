@@ -434,9 +434,11 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
     const currentExists = await fileExists(abs);
     if (backup.existed) {
       if (backup.blobPath === '') {
+        // unreadable = 拍快照时文件存在但读不出来：本次**只跳过并如实说明**，绝不因为
+        // 「快照里没有字节」就把它当成「当时不存在」（那会在恢复时删掉用户真实的文件）。
         actions.push({
           kind: 'skip',
-          description: msg('restore.hostNoBlobInfo', { path: backup.relPath }),
+          description: msg(backup.unreadable === true ? 'restore.hostUnreadable' : 'restore.hostNoBlobInfo', { path: backup.relPath }),
           target: backup.relPath,
         });
         continue;

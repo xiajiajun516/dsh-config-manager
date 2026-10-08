@@ -2622,6 +2622,8 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       retentionPolicy: () => retentionPolicyProvider(),
       // m-retention：分层选择器由宿主注入（core 不反向依赖 sync）
       pruneSelector: retentionPruneSelector,
+      // 保留清理被放弃/失败的唯一可见线索（core 不持 logger，由宿主接 host.log）
+      onWarn: (message) => { host.log.warn(message) },
     }),
     parseZipOverride: createHardenedZipParser(),
     dependencyChecker: dependencyAvailable,

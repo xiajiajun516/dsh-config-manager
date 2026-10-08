@@ -576,7 +576,8 @@ export function pushReportView(report: SyncPushReport | null, t: UiT = zhUiT): P
 export interface PushPreviewView {
   ok: boolean;
   /** 将推送的分区行（含计数 + 是否相对基线有变化） */
-  rows: { section: string; count: number; changed: boolean }[];
+  /** 分区 id 来自宿主 SyncPushPreviewSection.section（SectionId）——写 string 会让渲染侧被迫转型 */
+  rows: { section: SectionId; count: number; changed: boolean }[];
   /** 变更分区数（要展示「新增/更新 N 个分区」） */
   changedCount: number;
   /** 远端现有快照数（0 = 首次推送创建首个基线） */

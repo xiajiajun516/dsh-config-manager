@@ -45,7 +45,7 @@ import {
   relTime,
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
-import { Badge, Button, Card, Spinner, StatusDot, Stepper } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Spinner, StatusDot, Stepper } from '../common/ui.tsx'
 import { BackupIcon, ExportIcon, ImportIcon, SyncIcon } from '../common/Icon.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { Modal } from '../common/Modal.tsx'
@@ -142,6 +142,11 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   const store = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const [data, setData] = useState<OverviewData>(initialData)
   const [loading, setLoading] = useState(true)
+  /** 首屏 5 个只读请求的失败情况（null = 全部成功 / 还没跑过）。
+   *  为什么必须有它：此前 allSettled 把失败一律吞成 null，而健康判定对 null 不降级 ——
+   *  宿主接口整体不可达时，用户看到的是绿色「配置健康」+「暂无操作记录」，
+   *  读起来像「一切正常只是没操作过」，真实原因与重试入口都不可见。 */
+  const [loadError, setLoadError] = useState<{ count: number; message: string } | null>(null)
   const [backupRunning, setBackupRunning] = useState(false)
   /** 卸载后不再 setState（异步回调竞态防护） */
   const aliveRef = useRef(true)
@@ -149,7 +154,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
 
   /** 首屏：5 个毫秒级只读接口；settle 即渲染（不 await 分区预览） */
   const loadFast = useCallback(async (): Promise<void> => {
-    const [backups, snapshots, schedule, sync, history] = await Promise.allSettled([
+    const results = await Promise.allSettled([
       api.listBackupFiles(),
       api.snapshots(),
       api.backupSchedule(),
@@ -157,13 +162,20 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       historyApi.list({}),
     ])
     if (!aliveRef.current) return
+    // 失败必须留痕（数量 + 第一条原因）；成功时清掉上一轮的错误。
+    const failures = results.flatMap((r) => (r.status === 'rejected' ? [r.reason] : []))
+    const first = failures[0]
+    setLoadError(failures.length === 0 ? null : {
+      count: failures.length,
+      message: first instanceof Error ? first.message : String(first),
+    })
     setData((prev) => ({
       ...prev,
-      backups: backups.status === 'fulfilled' ? backups.value : null,
-      snapshots: snapshots.status === 'fulfilled' ? snapshots.value : null,
-      schedule: schedule.status === 'fulfilled' ? schedule.value : null,
-      sync: sync.status === 'fulfilled' ? sync.value : null,
-      history: history.status === 'fulfilled' ? history.value : null,
+      backups: results[0].status === 'fulfilled' ? results[0].value : null,
+      snapshots: results[1].status === 'fulfilled' ? results[1].value : null,
+      schedule: results[2].status === 'fulfilled' ? results[2].value : null,
+      sync: results[3].status === 'fulfilled' ? results[3].value : null,
+      history: results[4].status === 'fulfilled' ? results[4].value : null,
     }))
     setLoading(false)
   }, [api, syncApi, historyApi])
@@ -307,6 +319,15 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
 
   return (
     <div className={css.viewBody}>
+      {/* 0. 读取失败横幅：必须排在状态条之前 —— 数据没拿到时，绿色健康点是假的。
+          重试复用同一条 load()（不新增刷新路径）。 */}
+      {loadError !== null && (
+        <Banner kind="error">
+          {t('overview.loadFailed', { count: String(loadError.count), message: redact(loadError.message) })}
+          {' '}
+          <Button size="sm" loading={loading} onClick={() => { void load() }}>{t('common.retry')}</Button>
+        </Banner>
+      )}
       {/* 1. 状态条：健康点 + 指标段（可点击，名词在前） */}
       <div className={css.statStrip} data-tone={health.kind === 'ok' ? undefined : health.kind}>
         {recoveryRequired ? (
@@ -401,7 +422,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
               <span className={css.activityTitle}>{t('overview.activity.title')}</span>
             </div>
             {activity.length === 0
-              ? <div className={css.activityEmpty}>{t('overview.activity.empty')}</div>
+              ? <div className={css.activityEmpty}>{data.history === null && !loading ? t('overview.activity.unavailable') : t('overview.activity.empty')}</div>
               : (
                 <div className={css.activityRows}>
                   {activity.map((item, i) => {

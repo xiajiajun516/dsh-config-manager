@@ -19,7 +19,7 @@ import { Banner } from '../common/ui.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import type { SyncApi } from './sync-api.ts'
-import type { SyncChannel } from './sync-view.ts'
+import { SYNC_CHANNEL_LABEL_KEY, type SyncChannel } from './sync-view.ts'
 
 export function ChannelClearConfirmDialog({ open, channel, api, t, onCancel, onCleared }: {
   open: boolean
@@ -30,7 +30,10 @@ export function ChannelClearConfirmDialog({ open, channel, api, t, onCancel, onC
   /** 成功回调：调用方据此清表单残留、撤销在途自动保存并重拉 status（本组件不碰页面状态） */
   onCleared: () => void
 }) {
-  const channelLabel = channel === 'webdav' ? t('channel.webdav') : t('channel.git')
+  // 四个通道一律走穷尽映射（SYNC_CHANNEL_LABEL_KEY: Record<SyncChannel, SyncKey>）：
+  // 此前写成「webdav ? webdav : git」，在 s3/gist 卡上点「断开配置」时，危险确认框与成功回执
+  // 都会把该通道说成「Git 私有仓库」——用户会以为断错了通道而取消（或反之误判已断的通道）。
+  const channelLabel = t(SYNC_CHANNEL_LABEL_KEY[channel])
   return (
     <ConfirmDialog
       open={open}

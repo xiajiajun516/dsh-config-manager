@@ -344,3 +344,55 @@ test('F-4: normalizeDshVersion 归一（去空白 / unknown 丢弃 / 非字符�
   assert.equal(normalizeDshVersion(undefined), undefined);
   assert.equal(normalizeDshVersion(42), undefined);
 });
+
+/* ---------------- 宿主文件「存在但读不出来」不得记成 existed:false（数据安全） ---------------- */
+
+test('备份：宿主文件存在但读不出来 → existed=true + unreadable=true（绝不写 existed:false）', async (t) => {
+  const dir = await tmpDir(t, 'unreadable');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  // 让 settings.yaml 这一次读不出来（占用 / 权限 / IO 错的等价物）
+  const fsFacade = ctx.fs as { readFile: (rel: string) => Promise<Uint8Array> };
+  const original = fsFacade.readFile.bind(ctx.fs);
+  fsFacade.readFile = async (rel: string) => {
+    if (rel === 'settings.yaml') throw new Error('EBUSY: resource busy or locked');
+    return original(rel);
+  };
+  const store = new FileSnapshotStore({ dir });
+  const snapshot = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  const settings = (snapshot.hostFileBackups ?? []).find((b) => b.relPath === 'settings.yaml');
+  assert.ok(settings, 'settings.yaml 必须仍被登记（绝不因读失败而消失）');
+  assert.equal(settings.existed, true, '存在但读不到 → existed 必须为 true（写成 false 会在恢复时删掉用户真实文件）');
+  assert.equal(settings.unreadable, true, '必须显式标注 unreadable');
+  assert.equal(settings.blobPath, '', '读不到 → 没有 blob');
+  const patch = (snapshot.hostFileBackups ?? []).find((b) => b.relPath === 'cordis.patch.yml');
+  assert.equal(patch?.existed, true, '其余宿主文件照常读');
+  assert.equal(patch?.unreadable, undefined, '读得到的条目不得被标 unreadable');
+  assert.equal((await verifySnapshot(dir, snapshot.id)).ok, true, 'unreadable 条目不得破坏 durable+verified');
+});
+
+/* ---------------- 保留清理 fail-closed：引用集合读不出来时本轮绝不删（数据安全） ---------------- */
+
+test('保留清理：recovery 引用集合读不出来 → 本轮放弃清理，绝不按空集合删（F3 不可回退）', async (t) => {
+  const dir = await tmpDir(t, 'prune-ref');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  let scans = 0;
+  const warned: string[] = [];
+  const store = new FileSnapshotStore({
+    dir,
+    // 引用扫描一次瞬时失败（EACCES / IO 错）—— 此前会被 .catch 成空集合，随即按「无人引用」继续删
+    referencedSnapshotIds: async () => { scans += 1; throw new Error('EACCES: permission denied'); },
+    retentionPolicy: () => ({ keepLast: 1, keepMonthly: 0, keepYearly: 0 }),
+    onWarn: (message) => { warned.push(message) },
+  });
+
+  const first = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+  const second = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  assert.ok(scans >= 1, 'prune 必须真的问过 recovery 引用集合（否则本用例不成立）');
+  const remaining = (await fs.readdir(dir)).sort();
+  assert.deepEqual(remaining, [first.id, second.id].sort(), '读不到引用集合时本轮必须放弃清理 —— 两个快照都得留着');
+  assert.ok(warned.some((m) => m.includes('放弃')), '放弃必须留痕（绝不静默）：' + JSON.stringify(warned));
+});

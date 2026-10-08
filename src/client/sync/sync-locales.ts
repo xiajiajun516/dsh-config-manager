@@ -150,6 +150,9 @@ export const zh = {
   // P0-②：push 前只读预览确认弹窗
   'syncflow.pushPreviewTitle': '确认推送',
   'syncflow.pushPreviewSections': '将推送的分区',
+  // 推送预览逐行标签（原先硬编码英文 'changed' / 'unchanged'，中文界面里是英文枚举）
+  'syncflow.pushChanged': '有改动',
+  'syncflow.pushUnchanged': '无改动',
   'syncflow.pushConfirm': '确认推送',
   'syncflow.pushing': '正在推送…',
   'syncflow.pushFirstBaseline': '远端暂无快照：本次将创建首个同步基线',
@@ -487,6 +490,9 @@ export const en: Record<keyof typeof zh, string> = {
   // P0-②: push read-only preview confirm dialog
   'syncflow.pushPreviewTitle': 'Confirm Push',
   'syncflow.pushPreviewSections': 'Sections to push',
+  // Per-row labels for the push preview (previously hardcoded English literals)
+  'syncflow.pushChanged': 'Changed',
+  'syncflow.pushUnchanged': 'Unchanged',
   'syncflow.pushConfirm': 'Push',
   'syncflow.pushing': 'Pushing…',
   'syncflow.pushFirstBaseline': 'No remote snapshots yet: this push creates the first sync baseline',

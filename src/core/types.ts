@@ -941,11 +941,19 @@ export interface SnapshotManifest {
 
 /** 宿主整文件备份登记（M1）：导入前对 $DSH_HOME 关键文件的整文件快照。
  * relPath 相对 $DSH_HOME（如 settings.yaml / cordis.patch.yml / profiles/<p>/cordis.patch.yml），
- * blobPath 为快照内 blob 路径（existed=false 时为空串，表示该文件当时不存在）。 */
+ * blobPath 为快照内 blob 路径（existed=false 时为空串，表示该文件当时确实不存在）。 */
 export interface HostFileBackup {
   relPath: string;
   blobPath: string;
   existed: boolean;
+  /**
+   * 探测到**存在**、但这一次读不出来（EACCES / EBUSY / IO 错）：existed 仍为 true、blobPath 为空串。
+   *
+   * 为什么必须与 existed:false 分开：恢复侧「快照里没有、现在有 → 删掉」这条动作是按 existed 判定的，
+   * 把「没读到」写成「本来不存在」会让恢复**删掉用户真实的文件**（Windows 上 settings.yaml 被占用即触发）。
+   * 存在但读不到的条目一律只跳过并如实告警，绝不参与删除判定（与「读不到 ≠ 没有」同一条口径）。
+   */
+  unreadable?: boolean;
 }
 
 export interface Snapshot {

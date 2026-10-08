@@ -157,8 +157,9 @@ export interface SessionRepairRollbackResult {
  *
  * T4 的工具生命周期码（`missing-message-id` / `empty-tool-call-id` / `dangling-tool-call` /
  * `tool-result-id-mismatch` / `duplicate-tool-call-id`）同样**只报不修**，刻意不进本集合：
- * 修复它们必须真的改写消息/工具行，超出「只读体检」的范围。界面沿用既有**直接渲染机器 code**
- * 的路径（本轮不新增 locale key、不改渲染路径、不新增散文文案）。
+ * 修复它们必须真的改写消息/工具行，超出「只读体检」的范围。
+ * 界面文案经 src/ui/session-issue-labels.ts 映射成词典键（**绝不裸渲染机器 code**；
+ * 未知码回落 sessions.issue.unknown）—— 与 sessionLayoutReasonKey / cloudIssueKey 同一条判据。
  */
 export const SESSION_REPAIRABLE_ISSUE_CODES: ReadonlySet<string> = new Set([
   'replay-duplicate-rows',

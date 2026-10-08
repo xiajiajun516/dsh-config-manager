@@ -83,6 +83,9 @@ export const zh = {
   'overview.quick.sync': '远程同步',
   'overview.activity.title': '最近活动',
   'overview.activity.empty': '暂无操作记录（执行备份 / 导入 / 同步后在这里显示）',
+  'overview.activity.unavailable': '活动记录读取失败（这不是「没有记录」）',
+  // 首屏 5 个只读请求有失败时如实说清（此前失败被吞成 null，页面仍显示绿色健康 + 空活动）
+  'overview.loadFailed': '有 {count} 项数据读取失败：{message} —— 下面的指标可能不完整',
   'overview.empty.title': '开始保护你的配置',
   'overview.empty.body': '创建第一个备份或快照后，这里会展示配置健康状态与最近活动。',
   'overview.empty.step1': '创建第一份备份',
@@ -992,6 +995,9 @@ export const en: Record<keyof typeof zh, string> = {
   'overview.quick.sync': 'Remote sync',
   'overview.activity.title': 'Recent activity',
   'overview.activity.empty': 'No activity yet (backups / imports / syncs will appear here)',
+  'overview.activity.unavailable': 'The activity log could not be read (this is not \"no activity\")',
+  // Say it plainly when some of the five read-only requests failed (failures used to be swallowed into null)
+  'overview.loadFailed': '{count} data request(s) failed: {message} — the metrics below may be incomplete',
   'overview.empty.title': 'Start protecting your configuration',
   'overview.empty.step1': 'Create a backup',
   'overview.empty.step2': 'Export the ZIP',

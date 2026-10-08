@@ -16,7 +16,7 @@
  *
  * 安全：message 由调用方传入（渲染前已 redact 兜底）；本组件不触碰任何凭据。
  */
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { Button } from './ui.tsx'
 import { Modal } from './Modal.tsx'
 import css from '../config-manager.module.css'
@@ -60,6 +60,10 @@ export function ConfirmDialog({
   const handleBackdropClose = backdropClose ?? onCancel
   /** 取消按钮 ref：Radix 打开时把初始焦点重定向到此（危险确认不默认落破坏性的确认按钮） */
   const cancelRef = useRef<HTMLButtonElement | null>(null)
+  /** 正文说明的 DOM id：交由 Modal 设 aria-describedby。
+   *  只设 aria-label 时读屏只会播报标题（如「删除档案」），而**后果说明**不会在打开时被读出。 */
+  const messageId = useId()
+  const hasMessage = message !== undefined && message !== ''
 
   const handleConfirm = (): void => {
     if (busy) return
@@ -77,10 +81,10 @@ export function ConfirmDialog({
   }
 
   return (
-    <Modal open={open} onClose={handleBackdropClose} title={title} busy={busy} onOpenAutoFocus={onOpenAutoFocus}>
+    <Modal open={open} onClose={handleBackdropClose} title={title} busy={busy} onOpenAutoFocus={onOpenAutoFocus} describedById={hasMessage ? messageId : undefined}>
       <Modal.Header title={title} />
       <Modal.Body scroll>
-        {message !== undefined && message !== '' && <div>{message}</div>}
+        {hasMessage && <div id={messageId}>{message}</div>}
         {children}
       </Modal.Body>
       <Modal.Footer>

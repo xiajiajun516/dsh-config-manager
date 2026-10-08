@@ -79,7 +79,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         <div className={css.factCell}>
           <span className={css.factLabel}>{t('syncStatus.state')}</span>
           <span className={css.factValue}>
-            {statusInfo?.configured === true ? t('channel.configured') : t('channel.notConfigured')}
+            {/* 判据必须与徽章同源（本卡自己的 remoteReady）：statusInfo.configured 是**全局**语义
+                （任一通道配置过即为 true），照它渲染会让「只配了 git」时另外三张卡同时出现
+                「未配置」徽章 +「已配置」事实行。 */}
+            {remoteReady ? t('channel.configured') : t('channel.notConfigured')}
           </span>
         </div>
         <div className={css.factCell}>

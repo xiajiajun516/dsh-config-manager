@@ -60,6 +60,7 @@ import {
   type SessionLayoutPlanView,
   type SessionLayoutPort,
 } from '../../ui/session-layout-view.ts'
+import { sessionIssuesText } from '../../ui/session-issue-labels.ts'
 import {
   sessionExportEntryState,
   sessionExportReasonText,
@@ -475,7 +476,7 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
             <div key={candidate.unitId} className={css.snapshotRow}>
               <span className={css.snapshotRowMain} title={candidate.unitId}>{candidate.sessionId}</span>
               <span className={css.snapshotRowFacts}>
-                {candidate.issueCodes.join(' · ')} · {candidate.projectKey}
+                {sessionIssuesText(candidate.issueCodes, t)} · {candidate.projectKey}
               </span>
             </div>
           ))}
@@ -937,7 +938,7 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                               <Badge kind={row.badgeKind}>{t(row.severityKey)}</Badge>
                               {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
                             </span>
-                            <span className={css.snapshotRowIssues}>{row.issueCodes.join(' · ')}</span>
+                            <span className={css.snapshotRowIssues}>{sessionIssuesText(row.issueCodes, t)}</span>
                             <span className={css.snapshotRowFacts}>
                               {[
                                 row.versionText,

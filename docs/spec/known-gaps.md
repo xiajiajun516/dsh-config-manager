@@ -68,6 +68,7 @@
 | G-33 | 备份不到外壳的 MCP 与技能：patch 只读 home 层、技能不落目录（issue #71） | ✅ 已修复（patch 行按层读取并写回原层、技能经 `ctx.skills` 服务收编、快照与回滚记录层，见 §1） |
 | G-34 | GitHub Gist 通道**刻意不外置 blob**（一次 GET 全量返回 / 单文件超限截断 / 文件数上限三条限制）→ 大分区（会话）不适合走 gist | ⚠️ **刻意设计的能力边界，不是缺陷**（gist 定位 = 配置类分区的低门槛远端；界面缺「gist 不适合大分区」提示，建议见 §3） |
 | G-35 | 同步通道对**远端 404 的可靠性假设**：blob GC 只按索引条目收集引用 → ① **索引可读但陈旧**（孤儿快照文件在索引外）、② **引用者文件这一读 404 而远端其实仍在**，两种形态都会把**仍在用的 blob** 回收 → **内容不可恢复** | ⚠️ **未修复（已核实残余，非原任务引入）**：t42 已堵住 `delete()` 侧的「索引 404 真缺失」；`upload()` 侧仍待 **t66/t67**（登记时 pending）；根治需通道侧补列举原语（WebDAV PROPFIND / S3 ListObjectsV2），见 §3 |
+| G-37 | 宿主整文件快照把「存在但读不出来」记成 `existed:false`（恢复时删掉用户真实文件）+ 保留清理在「recovery 引用集合读不出来」时按空集合继续删（可能删掉 SAFE MODE 唯一回滚点） | ✅ **已修复**（2026-10-08 UX 审查：`existed:true` + `unreadable:true` + 计划只跳过；引用扫描失败即放弃本轮 prune + `onWarn` 可见，见 §3） |
 | G-36 | **值形状判定的大小写边界**：auth-scheme `bearer` 原为大小写敏感（`bearer` / `BEARER` 明文进包且 refs/skipped 皆空）；厂商前缀 `sk-` / `AKIA` / `ghp_` / `github_pat_` 的大小写变体（`SK-` / `akia` / `GHP_` …）**按决策不剥离** | ⚠️ **部分修复（t72）**：`bearer` 已按 RFC 7235 / 6750 大小写不敏感剥离（含过剥控制）；厂商前缀**刻意保持敏感**、登记为已知边界（见 §3 G-36） |
 
 ---
@@ -543,6 +544,14 @@
 | 验证方式 | `node --test src/security/secret-scanner.test.ts`（`t72-a` 大小写变体命中 / `t72-b` 规范形态不变 / `t72-c` 过剥控制 / `t72-d` 厂商前缀边界钉事实）；真实管道：`node --test src/foreign/mcp-value-shape.test.ts` 的 `t72-e`（env/headers/args 三通道零残留 + 引用名/码可见）。 |
 | 证据 | 来源 = `outputs/bug-audit/review-foreign-envhdr/REVIEW-t58-t40-report.md`（t58 §1/§2 的 payload 原文与谓词对照）+ `t58-verify-probe.mjs` / `t58-pipeline-check.mjs`；修复与本条登记 = t72。 |
 
+### G-37 宿主整文件快照的「存在但读不出来」与保留清理的 fail-open（2026-10-08 UX 审查）
+
+| 项 | 内容 |
+|---|---|
+| 现象 | ① `backupHostFiles`（`src/core/backup.ts`）在 `ctx.fs.readFile` 失败时落 `existed:false` —— 恢复侧 `planRestore` 把「快照里没有、现在有」判成 `hostFileRemove`，于是一次回滚**删掉用户真实的 settings.yaml** 并计入 restored（Windows 上文件被别的进程占用即触发）。② `prune` 的 recovery 引用豁免是 `.catch(() => new Set())` —— journal 扫描一次瞬时失败（EACCES / IO）被当成「无人引用」，可能删掉 SAFE MODE 恢复唯一的回滚点。 |
+| 修法 | ① 读失败 / 存在性探测失败一律登记 `existed:true` + `unreadable:true`（无 blob）；`planRestore` 对这类条目只 `skip` 并说明「拍快照时存在但读不出来（占用/权限）」（`restore.hostUnreadable`），**绝不进入删除分支**。② 引用集合读不到即**放弃本轮清理**（宁可少删），并新增 `FileSnapshotStoreOptions.onWarn`（宿主接 `host.log.warn`）让「这轮为什么没清理 / 清理为什么失败」可见。 |
+| 护栏 | `src/core/backup.test.ts`（存在但读不出来 → existed/unreadable/blobPath 三字段 + durable+verified 不破；引用扫描抛错 → 两个快照都留着 + 有告警）、`tests/core/restore.test.ts` 的 `R-host-unreadable`（计划里零 `hostFileRemove`，说明含「读不出来」）。 |
+| 未做 | 宿主整文件与**文件类分区**仍是两条读失败口径（后者「存在但读不到」会抛错、经分区级告警可见）；把宿主文件的 unreadable 也接进导出报告告警面属另一条线，本轮未做。 |
 ### G-24 剩余未做项（M1 复核，2026-10-06）
 
 > 本轮（M1）落地清单与口径见 §1 的「M1 落地」「M1 口径」两行。以下是**仍未做**的部分，逐条登记：
@@ -551,7 +560,7 @@
 |---|---|---|
 | ① | **header 重建**（首帧不可读时按目录名 + 最早可解事件重建）——设计稿 §10.2 视为「低损失」，但**重建 header 等于发明数据**，需先确定不与「绝不猜」冲突 | ❌ 未做 |
 | ② | **跨版本转码**（把 pre-v4 代际真正升级成当前代际并发布新 generation） | ❌ 未做（真 codec 门只**验证**，不改写代际） |
-| ③ | **issue code 的 UI 本地化**：Panel 仍原样渲染机器 code（`src/client/recovery/RecoveryPanel.tsx` 的 `issueCodes.join(' · ')`）；注意 **issue `detail` 不进 UI 模型**（`SessionHealthDisplayRow` 只有 `issueCodes`） | ❌ 未做 |
+| ③ | ~~**issue code 的 UI 本地化**~~：**✅ 已修复（2026-10-08 UX 审查）**——新增 `src/ui/session-issue-labels.ts`（19 条码 → `sessions.issue.*` 词典键，`satisfies Record<SessionHealthIssueCode, string>` 让 core 新增码漏配即编译失败；未知码回落 `sessions.issue.unknown`，**绝不裸渲染**），`RecoveryPanel.tsx` 的两处渲染点（会话体检行 + 布局归位候选行）改走它；zh/en 词典各补 20 键。护栏 `src/ui/session-issue-labels.test.ts`。**仍保留**：issue `detail` 不进 UI 模型（`SessionHealthDisplayRow` 只有 `issueCodes`）—— 本轮不动 | ✅ 已修复（detail 仍未上屏） |
 | ④ | **磁盘级恢复**（会话目录/索引层面的重建与修复） | ❌ 未做 |
 | ⑤ | **真 codec 门是低覆盖护栏**：官方 catalog 只在 DSH 安装树（桌面端在 `app.asar` 内），磁盘副本可能是旧代际且没有 children 版 API；本机 1195 units 中最新代际 v0=**442** / v3=**522** / v4=**231**（< v4 占 **80.67%**）。细化：默认解析下 **v0 与 v4 均 `unavailable`**（v4 因 catalog.currentVersion 3 ≠ 4），**v3 是例外**（`header.version === 该 catalog 的 currentVersion`，静态版按 API 闸门放行并 `verified`）；**asar 抽取已作为产品路径（M2，2026-10-07）**：`src/utils/asar-read.ts` 把安装树里的 `app.asar` 抽取成临时候选根，且**版本解析与 catalog 候选规划共用同一条锚点链**（安装锚 → 环境锚 → 运行时锚 → profiles 树），避免两者从不同锚点互相自证；仍读不出来时如实 `unavailable`（`verify.verified=false`、不写成功台账） | ⚠️ 已知（护栏而非全库体检；M2 已把 asar 接成候选锚） |
 | ⑥ | ~~**React 面板仍把 `unavailable` 的修复呈现为成功**，且**未映射** `verify-failed` / `target-changed` 两个新 reason~~ | ✅ 已落地（M2，2026-10-07；checkpoint `45c34f2`）：面板改走 `src/ui/session-verify.ts` 的同源判定 —— `verify.verified=false` 一律渲染为「未验证」而不是成功，新增 `verify-failed` / `target-changed` 两个 reason 的文案键（未知 reason 回落 `unknown`，**绝不渲染裸码**），并补了「结果不被无关操作清空」的回归断言。**另一条同源缺陷也已修（M2，`506f767`）**：批量修复的失败分支曾丢 `verify`/`rolledBack`，导致 `rolledBack:false`（可能处于中间态）在面板上与成功无异 |

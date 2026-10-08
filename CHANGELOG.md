@@ -25,6 +25,41 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🔧 变更 · Changed
+
+> **「存在但读不出来」的宿主文件不再被记成「当时不存在」（数据安全）**：导入前快照登记
+> settings.yaml / cordis.patch.yml / `profiles/<p>/*` 时，只要文件当下读不出来（Windows 上被别的进程占用、
+> 权限、IO 错），此前会落 `existed:false`。恢复侧据此判定「快照里没有、现在有 → 删掉」，
+> 于是一次回滚**会把用户真实的 settings.yaml 删除**，还会在报告里算作 restored。现在读不出来一律登记
+> `existed:true` + `unreadable:true`（无 blob）；恢复计划对这类条目**只跳过并如实说明**
+> 「拍快照时存在但读不出来（占用/权限），本次不动它」，**绝不进入删除分支**；连「存在性探测本身失败」
+> 也按「存在但不可读」处理（读不到 ≠ 没有）。
+> - **护栏**：`src/core/backup.test.ts`（存在但读不出来 → existed/unreadable/blobPath 三个字段 + durable+verified 不破）；
+>   `tests/core/restore.test.ts` 的 `R-host-unreadable`（目标机上文件真实存在 → 计划里零 `hostFileRemove`，说明含「读不出来」）。
+>
+> **Host files that existed but could not be read are no longer recorded as "did not exist" (data safety)**:
+> when the pre-import snapshot registered settings.yaml / cordis.patch.yml / `profiles/<p>/*` and the file could not be
+> read at that moment (in use on Windows, permissions, IO error), it used to be written as `existed:false`. Restore reads
+> that as "absent in the snapshot, present now → delete", so one rollback **deleted the user's real settings.yaml** and
+> counted it as restored. Such files are now recorded as `existed:true` + `unreadable:true` (no blob) and the restore plan
+> **only skips them with an honest explanation** — it never enters the delete branch. A failed existence probe is treated
+> the same way (cannot read ≠ absent).
+> - **Guards**: `src/core/backup.test.ts`; `R-host-unreadable` in `tests/core/restore.test.ts`.
+
+> **保留清理遇「引用集合读不出来」不再按空集合继续删**：prune 的 recovery 豁免此前是
+> `.catch(() => new Set())` —— journal 扫描一次瞬时失败（EACCES / IO 错）就会被当成「无人引用」，
+> 可能删掉 SAFE MODE 恢复唯一的回滚点。现在**读不到就放弃本轮清理**（宁可少删），并新增
+> `FileSnapshotStoreOptions.onWarn`（宿主接 `host.log.warn`），让「这轮为什么没清理 / 清理为什么失败」
+> 第一次可查（此前是纯静默）。
+> - **护栏**：`src/core/backup.test.ts`（引用扫描抛错 → 两个快照都留着 + 有告警）。
+>
+> **Snapshot pruning no longer proceeds on an unreadable reference set**: the recovery exemption used to be
+> `.catch(() => new Set())`, so one transient journal-scan failure (EACCES / IO) was read as "nothing is referenced" and
+> could delete the rollback point that SAFE MODE recovery depends on. Pruning now **gives up this round** (rather than
+> deleting), and a new `FileSnapshotStoreOptions.onWarn` hook (wired to `host.log.warn`) makes "why was nothing pruned /
+> why did pruning fail" visible for the first time.
+> - **Guards**: `src/core/backup.test.ts`.
+
 ### 🐛 修复 · Fixed
 
 > **技能自带的 node_modules 让定时备份永久失败（issue #76）**：文件类分区的递归收集此前没有依赖目录排除项 ——
@@ -74,6 +109,46 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >   `src/core/backup-plan.test.ts`.
 > - **Still not done (recorded honestly)**: scheduled and manual backups **still accept no section range** — this
 >   round removed the field cause only; alternatives 2/3 in issue #76 are not implemented.
+
+> **本轮 UX 审查的 11 处体验修复（会话体检 / 同步 / 市场 / 首页 / 产物库 / 确认弹窗）**：全部只改既有功能的呈现与状态反馈，不新增功能、不改工作流。
+> - **会话体检不再把机器码甩给用户**：19 条问题码（location-mismatch / duplicate-id / missing-message-id …）映射成中英短标签，未知码回落「未识别的问题」——**绝不裸渲染机器码**（映射表 `src/ui/session-issue-labels.ts`，`satisfies Record<SessionHealthIssueCode, string>` 让新增码漏配即编译失败；护栏 `src/ui/session-issue-labels.test.ts`）。
+> - **断开通道的确认框不再说错通道**：s3 / gist 卡上点「断开配置」此前一律显示「Git 私有仓库」；改用既有的穷尽映射 `SYNC_CHANNEL_LABEL_KEY`。
+> - **通道卡不再自相矛盾**：事实行「同步状态」用的是**全局** `statusInfo.configured`（任一通道配过即为 true），而徽章用本通道判据 —— 只配了 git 时另外三张卡同时显示「未配置」+「已配置」。事实行改与本通道徽章同源。
+> - **拉取失败不再弹绿色「拉取完成」**：宿主对校验不通过的快照仍回 HTTP 200 + `ok:false`，此前无条件报成功；现在按 `report.ok` 分流（与推送路径同口径）。
+> - **推送预览不再混英文与裸分区 id**：`changed` / `unchanged` 进字典，分区名走同一个 `sectionLabeler`。
+> - **同步状态加载失败不再永远显示「加载中…」**：补 `loadError` 分支，显示「加载同步状态失败」，与同屏顶部的红色横幅一致。
+> - **市场加载失败不再被渲染成中性空态**：改为红色横幅（`redact` 后）+ 就地重试；错误原文此前被整个丢弃。
+> - **首页不再把「读不到」说成「一切正常」**：5 个只读请求的失败此前被 `allSettled` 吞成 null，页面仍显示绿色健康点与「暂无操作记录」；现在有失败横幅（含失败项数与第一条原因，可重试），活动区区分「读取失败」与「没有记录」。
+> - **产物库不再先亮「暂无备份文件」**：本机两源已就绪但为空、远端/市场仍在路上时，先给加载态而不是空态结论（已有行照旧原地渲染）。
+> - **确认弹窗的后果说明进了无障碍树**：Modal 新增 `describedById` → `aria-describedby`，ConfirmDialog 关联可见正文；此前屏幕阅读器只播报标题（删除/回滚的后果不会被读出）。
+> - **停止实例的确认改用 danger 语义**：它会中断该实例里正在跑的会话，此前与「删除不可恢复」在视觉上无法区分。
+>
+> **Eleven UX fixes from this audit round (session health / sync / market / home / library / confirm dialogs)** — all of them
+> only change presentation and state feedback of existing features; no new features, no workflow changes.
+> - **Session health stops printing machine codes**: 19 issue codes are mapped to zh/en labels with an "unrecognized issue"
+>   fallback (never the bare code); the map is `src/ui/session-issue-labels.ts` and `satisfies Record<SessionHealthIssueCode, string>`
+>   makes a missing mapping a compile error (`src/ui/session-issue-labels.test.ts`).
+> - **Disconnecting a channel no longer names the wrong channel**: on the s3 / gist cards the confirmation used to say
+>   "Git private repo"; it now uses the existing exhaustive `SYNC_CHANNEL_LABEL_KEY` map.
+> - **Channel card no longer contradicts itself**: the "sync status" fact row used the **global** `statusInfo.configured`
+>   while the badge used per-channel readiness; the fact row now shares the badge's per-channel source.
+> - **A failed pull no longer shows a green "pull complete"** toast: the host still answers HTTP 200 with `ok:false` for a
+>   snapshot that fails validation; the toast now branches on `report.ok`, matching the push path.
+> - **Push preview no longer mixes English literals and raw section ids**: the labels live in the dictionary and section
+>   names go through the shared `sectionLabeler`.
+> - **A failed sync-status load no longer shows "loading…" forever**: an explicit failure text is rendered instead.
+> - **Market load failures are no longer rendered as a neutral empty state**: an error banner (redacted) plus an inline
+>   retry replaces it; the original error text used to be discarded.
+> - **Home no longer reads "cannot load" as "all fine"**: failures of the five read-only requests were swallowed into null
+>   while the page still showed a green health dot and "no activity yet"; there is now a failure banner (count + first
+>   reason + retry) and the activity card distinguishes "read failed" from "no records".
+> - **Library no longer flashes "no backup files"**: while remote/market sources are still in flight it shows a loading
+>   state instead of an empty conclusion (already-loaded rows still render immediately).
+> - **Confirm dialog consequences reach the accessibility tree**: Modal gained `describedById` → `aria-describedby` and
+>   ConfirmDialog wires its visible message to it; screen readers previously announced only the title.
+> - **Stopping a DSH instance now uses danger semantics** in its confirmation (it interrupts that instance's running
+>   sessions), matching delete / rollback / disconnect.
+
 
 ## [0.1.71] - 2026-10-08
 

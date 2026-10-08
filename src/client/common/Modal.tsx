@@ -68,6 +68,10 @@ export interface ModalProps {
   /** Radix 打开时的初始焦点重定向（如 ConfirmDialog 把焦点派发到取消按钮）。
    *  Radix 传入的是可 preventDefault 的 DOM Event。 */
   onOpenAutoFocus?: (e: Event) => void
+  /** 说明文本节点的 id（Radix Content 据此设 aria-describedby）：
+   *  确认框的「后果说明」必须被屏幕阅读器读到 —— 只设 aria-label 时打开弹窗只播报标题。
+   *  传 id 而不是文本，是为了让可见正文本身就是被描述的那一段（不重复渲染、不动视觉）。 */
+  describedById?: string
   /** 卡片额外内联样式（如 ReleaseNotes 的自定义宽度/最大高度）；常规布局仍走 CSS 类 */
   cardStyle?: CSSProperties
   children?: ReactNode
@@ -76,7 +80,7 @@ export interface ModalProps {
 /**
  * 统一弹窗容器（Radix Dialog）。busy 时禁用 Esc 与遮罩关闭。
  */
-export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, cardStyle, children }: ModalProps) {
+export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, cardStyle, describedById, children }: ModalProps) {
   /**
    * Portal 容器解析 —— 三条纪律（顺序即重要性，别改回 useEffect）：
    *
@@ -114,6 +118,9 @@ export function Modal({ open, onClose, title, wide, busy, onOpenAutoFocus, cardS
           className={`${css.dialogContentCenter} ${css.dialogCard}${wide === true ? ` ${css.dialogWide}` : ''}`}
           style={cardStyle}
           aria-label={title}
+          // 说明文本（危险确认的后果）必须进无障碍树：Radix 只在存在 Dialog.Description 时
+          // 自动接 aria-describedby，而我们的正文由调用方自渲染 —— 因此显式传 id（视觉零变化）。
+          aria-describedby={describedById}
           // 「这是我们自己的弹窗卡片」标记：Select 的弹层据此决定挂载点 —— 弹层**必须**进弹窗内容子树，
           // 否则会被 radix 的 body{pointer-events:none}、外部交互判定与 RemoveScroll 滚动锁挡死
           // （2026-10-04 用户反馈「选项点不动」；见 common/Select.tsx 的 resolveMenuHost）。

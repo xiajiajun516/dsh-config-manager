@@ -596,7 +596,17 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       {/* 条目列表（浏览） */}
       {!downloadOpen && (
         <Card>
-          {state.loadError !== null && <Empty>{t('list.empty')}</Empty>}
+          {/* 加载失败必须说清原因并可就地重试：此前把 loadError 渲染成中性空态文案
+              （「内置市场尚未加载，请先『拉取最新』」），错误原文被整个丢弃 ——
+              用户只会反复点刷新，永远不知是宿主没就绪、网络不通还是本地 index 读不出来。 */}
+          {state.loadError !== null && (
+            <>
+              <Banner kind="error">{redact(state.loadError)}</Banner>
+              <div className={css.actionRow}>
+                <Button loading={state.loading} onClick={() => { void loadStatus() }}>{t('common.retry')}</Button>
+              </div>
+            </>
+          )}
           {state.loadError === null && (<>
             {/* 筛选控件 2×2 网格（搜索框跨两列 + 4 个 select 两两一行）：
                 上一轮全局 .input/.select 的 width:100% 已移除，靠本网格类承担排布，

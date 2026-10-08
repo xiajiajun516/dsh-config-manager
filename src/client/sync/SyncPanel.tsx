@@ -916,8 +916,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       const report = await api.pull({ ...payload(), ...decrypt })
       patch({ busy: null, pullReport: report, token: '', webdavPassword: '' })
       patchChannel({ decryptPassword: '' })
-      // M-19：拉取终局回执（弹窗关闭后无痕迹）
-      toast.ok(t('toast.pullDone'))
+      // 必须按 report.ok 分流（与 runPush 同口径）：校验不通过时宿主仍回 HTTP 200 + ok:false。
+      if (report.ok) toast.ok(t('toast.pullDone'))
+      else toast.error(t('toast.pullFailed'))
     } catch (err) {
       patch({ busy: null })
       toast.error(`${t('toast.pullFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
@@ -1172,9 +1173,10 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                 的断行。标题内联沿用 AboutPanel / EnvironmentPanel 的既有写法（零新增样式）。 */}
             <span className={css.groupLabel}>{t('mode.title')} <InfoHint text={t('mode.hint')} label={t('common.infoHint')} /></span>
             <span className={css.categoryDesc}>
-              {state.catalog.length === 0
-                ? t('common.loading')
-                : t('mode.selectedCount', { n: String(cs.syncSections.length) })}
+              {/* 三分支缺一不可：失败时 catalog 恒空，只判 catalog 会把「失败」显示成「加载中…」 */}
+              {state.loadError !== null ? t('load.failed')
+                : state.catalog.length === 0 ? t('common.loading')
+                  : t('mode.selectedCount', { n: String(cs.syncSections.length) })}
             </span>
             <div className={css.actionRowTop}>
               <Button onClick={() => { openSectionPickerFor(channel) }} disabled={busy}>
@@ -1390,7 +1392,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               closeDisabled={state.busy === 'push'}
             />
             <Modal.Body scroll>
-              <PushPreviewCard preview={state.pushPreview.preview} t={t} uiT={uiT} />
+              <PushPreviewCard preview={state.pushPreview.preview} t={t} uiT={uiT} sectionName={sectionName} />
             </Modal.Body>
             <Modal.Footer>
               <Button
@@ -1538,10 +1540,11 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 }
 
 /** P0-②：push 预览内容（绑 src/ui/i18n.ts 的 UiT 文案；纯展示，无敏感字段）。 */
-function PushPreviewCard({ preview, t, uiT }: {
+function PushPreviewCard({ preview, t, uiT, sectionName }: {
   preview: SyncPushPreview | null
   t: TranslateNS<'config-manager-sync'>
   uiT: UiT
+  sectionName: (id: SectionId) => string
 }) {
   const view = pushPreviewView(preview, uiT)
   if (view === null) return null
@@ -1561,8 +1564,8 @@ function PushPreviewCard({ preview, t, uiT }: {
           <ul className={css.reportList}>
             {view.rows.map((row) => (
               <li key={row.section}>
-                <span className={css.kindTag}>{row.changed ? 'changed' : 'unchanged'}</span>
-                {' '}{row.section} · {row.count}
+                <span className={css.kindTag}>{row.changed ? t('syncflow.pushChanged') : t('syncflow.pushUnchanged')}</span>
+                {' '}{sectionName(row.section)} · {row.count}
               </li>
             ))}
           </ul>

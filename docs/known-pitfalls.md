@@ -520,3 +520,17 @@ d`。
 
 
 
+
+## 宿主整文件快照的「存在但读不出来」与保留清理的 fail-open（2026-10-08，UX 审查；known-gaps G-37）
+
+**现象 ①（数据安全，会删用户文件）**：导入前快照登记 `$DSH_HOME` 关键文件（settings.yaml / settings.json / cordis.patch.yml / `profiles/<p>/cordis.patch.yml` / `profiles/<p>/pnpm-workspace.yaml`）时，`backupHostFiles`（`src/core/backup.ts`）把 `ctx.fs.readFile` 的失败写成了 `{ existed: false, blobPath: '' }`。恢复侧 `planRestore`（`src/core/restore.ts`）对 `existed === false` 的分支是「快照时不存在、现在存在 → `hostFileRemove`」，于是**一次回滚会删掉用户真实的 settings.yaml**，并在 `report.restored` 里算作已还原。触发面很普通：Windows 上 settings.yaml 被别的进程占用（EBUSY）或 EACCES。注意这与「文件类分区存在但读不到必须显式失败」是同一条铁律，只是宿主整文件这条路径此前把它吞掉了（文件类分区走 `engineSnapshotEntry` 时读失败会抛错）。
+
+**修法**：读失败与「存在性探测本身失败」一律登记 `existed: true` + `unreadable: true`（无 blob）。`planRestore` 对 `existed && blobPath === ''` 的条目**只 `skip`**，且按 `unreadable` 选用专门文案 `restore.hostUnreadable`（「拍快照时存在但读不出来（占用/权限），本次不动它；请手动核对」），**绝不进入删除分支**。`verify-recovery.ts` 对 `existed=true` + 无 blob 本来就判 `unverifiable`（不是失败），所以这条改动不破坏快照一致性校验。
+
+**现象 ②（保留清理 fail-open）**：`FileSnapshotStore.prune` 的 recovery 豁免是 `this.options.referencedSnapshotIds?.().catch(() => new Set())` —— journal 扫描一次瞬时失败（EACCES / IO）就被当成「无人引用」，随后按保留策略正常删最旧快照，**可能删掉未收敛 incident 指向的回滚点**（那是 SAFE MODE 恢复唯一的证据）。
+
+**修法**：引用集合**读不到就放弃本轮清理**（`return`，宁可少删），并新增 `FileSnapshotStoreOptions.onWarn`（宿主接 `host.log.warn`），让「这轮为什么没清理 / 清理为什么失败」第一次可查；`finalizeSnapshot` 里 prune 失败的那个空 catch 也接上同一回调（快照本身已 READY，不因此判为失败）。
+
+**护栏**：`src/core/backup.test.ts` —— ①「存在但读不出来 → existed/unreadable/blobPath 三字段 + durable+verified 不破」；②「引用扫描抛错 → 两个快照都留着 + 有告警」。`tests/core/restore.test.ts` 的 `R-host-unreadable`：目标机上文件真实存在时，计划里**零 `hostFileRemove`**、说明含「读不出来」。
+
+**未做（如实）**：宿主整文件与文件类分区仍是两条读失败口径（后者上抛成分区级告警）；把宿主文件的 `unreadable` 也接进导出报告的告警面属另一条线。

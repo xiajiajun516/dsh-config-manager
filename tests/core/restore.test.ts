@@ -449,3 +449,27 @@ test('F-4 restore：版本不同不阻断执行 —— 告警进报告、无失�
     assert.equal(await fs.readFile(path.join(f.homeDir, 'settings.yaml'), 'utf8'), 'SNAPSHOT settings\n', '还原照常执行')
   });
 });
+
+/* ---------------- 数据安全：存在但读不出来的宿主文件绝不产生删除动作 ---------------- */
+
+test('R-host-unreadable: 快照里 existed=true + unreadable 的宿主文件 → 只跳过并说明，绝不 hostFileRemove', async () => {
+  await withTmp(async (tmp) => {
+    const snapshot = makeSnapshot({
+      // 拍快照时 settings.yaml 存在、但读不出来（占用/权限）：existed=true + unreadable + 无 blob
+      hostFileBackups: [{ relPath: 'settings.yaml', blobPath: '', existed: true, unreadable: true }],
+    });
+    const f = await makeFixture(tmp, snapshot);
+    await seedCurrent(f); // 目标机上 settings.yaml 真实存在 —— 正是最危险的情形
+
+    const plan = await planRestore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web' });
+
+    assert.deepEqual(
+      plan.actions.filter((a) => a.kind === 'hostFileRemove'),
+      [],
+      '「读不到」绝不能被当成「当时不存在」，否则恢复会删掉用户真实的文件',
+    );
+    const skips = plan.actions.filter((a) => a.kind === 'skip' && a.target === 'settings.yaml');
+    assert.equal(skips.length, 1, '存在但读不出来的条目必须只跳过');
+    assert.match(skips[0]!.description, /读不出来/, '说明必须点出「拍快照时读不出来」，而不是含糊的「缺少 blob 副本」');
+  });
+});

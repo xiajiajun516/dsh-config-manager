@@ -151,6 +151,12 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
   /** 加密项计数：只数**当前筛选后**的行（底部徽章必须与眼前列表一致，见 footer 注释） */
   const encryptedCount = useMemo(() => filtered.filter((row) => row.badges.includes('encrypted')).length, [filtered])
 
+  /** 首屏「本机两个源已就绪但为空」时仍需等其余来源：远端要串行打 /sync/status + /sync/snapshots、
+   *  市场要走网络，通常慢于本机两源。若只按本机两源判空，页面会先写「暂无备份文件」，
+   *  几百毫秒后远端/市场行才冒出来 —— 中间那段窗口用户会以为产物库是空的。
+   *  注意这里**只影响空态**：已有行时照旧原地渲染（stale-while-revalidate 不被破坏）。 */
+  const anySourcePending = snapshots.status === 'loading' || files.status === 'loading'
+    || remote.status === 'loading' || market.status === 'loading'
   const loading = snapshots.status === 'loading' || files.status === 'loading'
 
   return (
@@ -195,13 +201,15 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
 
       {/* 加载态 / 空态与列表**同一条高度契约**（.libraryListState）：三者都吃掉剩余高度，
           底栏因此恒贴底（只在有数据时才需要列表本身，空态不该让页面塌成半截）。 */}
-      {loading && (
+      {/* 还有来源在路上（本机两源已就绪但为空）时也走加载态：绝不先给「暂无产物」的结论。
+          与空态共用同一个 .libraryListState 契约（守卫要求恰好两处：加载态 + 空态）。 */}
+      {(loading || (anySourcePending && filtered.length === 0)) && (
         <div className={css.libraryListState}>
           <Spinner label={t('common.loading')} />
         </div>
       )}
 
-      {!loading && filtered.length === 0 && (
+      {!loading && !anySourcePending && filtered.length === 0 && (
         <div className={css.libraryListState}>
           <Empty>
             {lib.query.trim() !== '' || lib.sourceFilter !== null

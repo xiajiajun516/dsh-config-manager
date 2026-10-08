@@ -854,6 +854,9 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
           : undefined}
         confirmLabel={t('profiles.stop')}
         cancelLabel={t('common.cancel')}
+        // 会中断该实例里正在跑的会话（profiles.stopMessage 明说）——与删除/回滚/断开同属破坏性动作，
+        // 确认层用 danger 语义（此前只有主色，与「删除不可恢复」在视觉上无法区分）。
+        danger
         busy={state.stopping !== null}
         onConfirm={() => { if (stopTarget !== null) doStop(stopTarget) }}
         onCancel={() => { patch({ stopTargetName: null, error: null }) }}
