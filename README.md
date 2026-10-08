@@ -723,9 +723,20 @@ Found a bug, a misaligned panel, a button that does nothing — or just have an 
   The report came with upstream evidence (host artwork frames of 48/36 px and 40/30 px, the official published bundle
   icons, the fixture SVG) and the PR shipped a 16/30/36/48 × dark/light acceptance sheet plus a written argument for
   keeping the proposal's palette over the plugin's brand blue.
-- **Bug reports**: `zhyx1996` (#38 sync "Export secrets" did nothing), `IPF-Sinon` (#39 the `.credentials.yaml` `refs:` block
-  was not recognized — they also implemented and machine-tested a fix in their own fork), `zerginlaw` (#43 "Back up now"
-  silently no-oped while toasting success). Each report drove one fix.
+- **iuuuuuuuu** — [PR #67](https://github.com/xiajiajun516/dsh-config-manager/pull/67) (merge `780af10`),
+  [PR #68](https://github.com/xiajiajun516/dsh-config-manager/pull/68) (`16e13c1`) and
+  [PR #72](https://github.com/xiajiajun516/dsh-config-manager/pull/72) (`6e552a0`): (1) a **repository picker** for the git
+  sync channel — choose from the **private** repositories the token can see (sorted by most recently updated; public
+  repositories are never listed), or create a private one inline; the create request does not even carry `private`, so
+  there is no way to express "public" on the client and the constraint lives on the host side. Along the way it fixed
+  the link-traversal boundary check that mixed `realpath` spellings (Windows 8.3 short names and macOS `/var` →
+  `/private/var` were misjudged `outside-home`, so linked content was silently dropped while the backup reported
+  success). (2) The Overview first paint no longer waits for a full read-only preview — the `plugins` section gained a
+  `preview()` (no more one `npm pack` per local plugin) and `settings` / `credentialsStatus` are read back in one call
+  instead of one `describe` per namespace (24 namespaces × 12 local plugins, 27.6 s of preview on a real machine).
+  (3) The issue #71 fix — MCP servers and skills configured in the shell were not backed up at all: patch rows are now
+  read per layer and written back to their own layer, and skills are collected through the shell's `skills` service.
+  All three shipped with unit tests and route / source-level guards.
 
 > Maintainers & developers: see [DEVELOPERS.md](DEVELOPERS.md) for build, testing, auto-publishing and full technical notes.
 

@@ -616,8 +616,16 @@ dsh-config-manager web            # 启动并自动打开浏览器（终端里�
   36×36 无底框的 `icon.svg`（issue #61，对齐官方插件图标约定）。反馈自带上游取证（宿主图位 48/36 与 40/30、
   官方随包发布的图标形态与官方 fixture），PR 里附 16/30/36/48 × 深浅双主题实况图，并对「不换成品牌蓝」写了
   可复核的理由（后片若同色，深色模式下两层会融成一块、16px 读不出前后关系）。
-- **问题报告**：`zhyx1996`（#38 同步「导出密钥」未生效）、`IPF-Sinon`（#39 凭据 `refs:` 块未被识别，并在自己的 fork
-  上完成实现与真机验证）、`zerginlaw`（#43「立即备份」空转却提示成功）—— 这三条报告各自驱动了一个修复。
+- **iuuuuuuuu** —— [PR #67](https://github.com/xiajiajun516/dsh-config-manager/pull/67)（合并提交 `780af10`）、
+  [PR #68](https://github.com/xiajiajun516/dsh-config-manager/pull/68)（`16e13c1`）、
+  [PR #72](https://github.com/xiajiajun516/dsh-config-manager/pull/72)（`6e552a0`）：① git 同步通道有了**仓库选择器** ——
+  从当前 token 可见的**私有**仓库里选（按最近更新排序，公开仓库不进列表），或就地新建私有仓库并自动选中；新建请求体
+  根本不带 `private`，客户端连表达「公开」的途径都没有，安全约束落在宿主侧；顺带修掉链接跟随边界判定的 `realpath` 口径
+  （Windows 8.3 短名与 macOS `/var` → `/private/var` 曾被误判 `outside-home`，备份报成功却静默丢内容）。
+  ② 「总览」首屏不再等一次全量预览：`plugins` 分区补上 `preview()`（不再逐个 spawn `npm pack`），`settings` 与
+  `credentialsStatus` 一次读回全部 namespace 而不是逐个 `describe`（真机 24 个 namespace × 12 个本地源插件，
+  全量预览 27.6 s）。③ 修 issue #71「外壳里配好的 MCP 与 Skills 备份不到」：patch 行按层读取、写回原层，技能改经
+  外壳的 `skills` 服务收编。三个 PR 均带单测与路由 / 源码级守卫。
 
 > 维护者与开发者：构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 
