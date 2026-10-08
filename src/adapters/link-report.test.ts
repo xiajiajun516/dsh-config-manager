@@ -8,7 +8,7 @@ import { zhMsg } from '../core/messages.ts';
 import type { FileSystemFacade } from '../core/types.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
 
-const clean: RecursiveListing = { paths: ['skills/a.md'], skippedLinks: [], followedLinks: 0, unreadableDirs: [] };
+const clean: RecursiveListing = { paths: ['skills/a.md'], skippedLinks: [], skippedDepDirs: [], followedLinks: 0, unreadableDirs: [] };
 
 test('linkWarnings：无链接 → 零告警（不制造噪音）', () => {
   assert.deepEqual(linkWarnings(zhMsg, 'Skills', clean), []);
@@ -26,6 +26,7 @@ test('linkWarnings：跳过项按原因归并，给出数量、原因与路径',
   const out = linkWarnings(zhMsg, 'Skills', {
     paths: [],
     followedLinks: 1,
+    skippedDepDirs: [],
     unreadableDirs: [],
     skippedLinks: [
       { path: 'skills/self', reason: 'loop' },
@@ -48,7 +49,7 @@ test('linkWarnings：跳过项按原因归并，给出数量、原因与路径',
 
 test('linkWarnings：目录读取失败也必须告警（其内容同样未进备份）', () => {
   const out = linkWarnings(zhMsg, 'Skills', {
-    paths: [], followedLinks: 0, skippedLinks: [], unreadableDirs: ['skills/locked', 'skills/denied'],
+    paths: [], followedLinks: 0, skippedLinks: [], skippedDepDirs: [], unreadableDirs: ['skills/locked', 'skills/denied'],
   });
   assert.equal(out.length, 1);
   assert.match(out[0]!, /2 个目录读取失败/);
@@ -61,5 +62,24 @@ test('listFilesDetailed：宿主未实现 detailed 时回退到 listRecursive（
   const listing = await listFilesDetailed(fs, 'skills');
   assert.deepEqual(listing.paths, ['skills/x.md']);
   assert.deepEqual(listing.skippedLinks, []);
+  assert.deepEqual(listing.skippedDepDirs, []);
   assert.equal(listing.followedLinks, 0);
+});
+
+test('issue #76：跳过的 node_modules 依赖目录必须告警（点名路径 + 文件数 + 可重建说明）', () => {
+  const out = linkWarnings(zhMsg, 'Skills', {
+    ...clean,
+    skippedDepDirs: [
+      { path: 'skills/md2pdf/node_modules', files: 11625 },
+      { path: 'skills/other/node_modules', files: null },
+    ],
+  });
+  assert.equal(out.length, 1, '汇总成一条，不逐目录刷屏');
+  const line = out[0]!;
+  assert.match(line, /2 个运行时依赖目录/);
+  assert.match(line, /未进备份/);
+  assert.match(line, /skills\/md2pdf\/node_modules/);
+  assert.match(line, /11625 个文件/);
+  assert.match(line, /文件数未统计/, '计数预算耗尽时不得猜一个数（更不得写成 0）');
+  assert.match(line, /重新安装依赖/);
 });

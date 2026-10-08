@@ -40,7 +40,7 @@ export class AgentInstructionsAdapter extends FileCollectionAdapter {
    * （单文件代价可忽略，且 `collect` 之后还要读它）。读不到 → 空清单（与「文件不存在 = 空分区」同语义）。
    */
   protected override async listRelPaths(ctx: HostContext): Promise<RecursiveListing> {
-    const empty: RecursiveListing = { paths: [], skippedLinks: [], followedLinks: 0, unreadableDirs: [] };
+    const empty: RecursiveListing = { paths: [], skippedLinks: [], skippedDepDirs: [], followedLinks: 0, unreadableDirs: [] };
     const rel = AgentInstructionsAdapter.FILE;
     try {
       if (ctx.fs.statSize !== undefined) {

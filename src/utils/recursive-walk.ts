@@ -27,11 +27,35 @@ export interface SkippedLink {
   reason: 'loop' | 'outside-home' | 'broken' | 'unreadable' | 'too-deep';
 }
 
+/**
+ * 被整棵跳过的「运行时依赖目录」（任意深度的 `node_modules`，issue #76）。
+ *
+ * 为什么是硬规则：技能目录自带依赖时，`skills` 分区能被遍历出上万个条目，撞上导出侧的
+ * 10 000 条目闸门 → **定时备份永久失败且用户无解**（定时备份与「立即备份」都没有分区范围，
+ * `backup-schedule.json` 也没有排除项）。而 `plugins` 分区早就按 `npm pack` 的产物度量
+ * （`core/local-plugin-pack.ts` 明写「node_modules 由 npm pack 自身排除」）、宿主的
+ * `dirSizeBytes` 也显式跳过它 —— 同一个概念此前在通用递归里缺了同一排除项。
+ *
+ * 依赖树可由包内保留的 `package.json` / lock 重建，不属于用户配置，故不进备份；
+ * 但**必须留痕**（见 RecursiveListing.skippedDepDirs），绝不静默。
+ */
+export const EXCLUDED_DEP_DIR_NAMES: readonly string[] = ['node_modules'];
+
+/** 被跳过的运行时依赖目录（内容未进备份；必须在报告里可见） */
+export interface SkippedDepDir {
+  /** homeDir 相对路径（被跳过的目录本身） */
+  path: string;
+  /** 该目录下递归的普通文件数；null = 计数预算耗尽未统计（不猜，也不假装是 0） */
+  files: number | null;
+}
+
 export interface RecursiveListing {
   /** homeDir 相对、斜杠分隔、已排序的文件路径 */
   paths: string[];
   /** 被跳过的链接（含原因）；空 = 本次遍历无内容缺失 */
   skippedLinks: SkippedLink[];
+  /** 因「可重建的运行时依赖」整棵跳过的目录（EXCLUDED_DEP_DIR_NAMES）；空 = 本次没有跳过 */
+  skippedDepDirs: SkippedDepDir[];
   /** 成功跟随（内容已收集）的链接数；用于「链接结构不会被还原」的提示 */
   followedLinks: number;
   /** 读取失败的目录（ACL / 竞态删除等）——这些目录下的内容同样没进备份，必须留痕 */
@@ -41,12 +65,48 @@ export interface RecursiveListing {
 /** 深度上限：防御病态目录树 / realpath 去重失效时的栈爆炸 */
 const MAX_DEPTH = 64;
 
+/**
+ * 依赖目录计数的**全局预算**（本次遍历合计；按**条目**扣，文件与目录都算）。
+ *
+ * 计数只走 readdir（不 stat、不读内容、不跟随链接），但病态树仍可能是成千上万次系统调用 ——
+ * 超预算即停，未统计的目录记 `files: null`。宁可少一个数字，也不让「跳过一个目录」变成
+ * 第二次全量遍历；按条目而非只按文件扣，是为了挡「上万层空目录」这种只要目录不要文件的树。
+ */
+const MAX_DEP_FILES_COUNTED = 100_000;
+
 function normalizeSlashes(p: string): string {
   return p.split(path.sep).join('/');
 }
 
 async function realpathSafe(p: string): Promise<string | null> {
   try { return await fs.realpath(p) } catch { return null }
+}
+
+/** 该路径（跟随链接）是否目录；读不到 → false（按「不是依赖目录」处理，宁可多带不可误丢） */
+async function statIsDir(p: string): Promise<boolean> {
+  try { return (await fs.stat(p)).isDirectory() } catch { return false }
+}
+
+/**
+ * 只数文件个数的有界递归（不 stat、不读内容、不跟随链接；预算按条目扣，见 MAX_DEP_FILES_COUNTED）。
+ * @returns 完整计数；预算耗尽 → null（下界不冒充精确值）
+ */
+async function countFilesBounded(dir: string, budget: { left: number }): Promise<number | null> {
+  let files = 0;
+  const stack: string[] = [dir];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (cur === undefined) break;
+    let entries: Dirent[];
+    try { entries = await fs.readdir(cur, { withFileTypes: true }) } catch { continue }
+    for (const entry of entries) {
+      if (budget.left <= 0) return null;
+      budget.left -= 1;
+      if (entry.isDirectory()) { stack.push(path.join(cur, entry.name)); continue }
+      if (entry.isFile()) files += 1;
+    }
+  }
+  return files;
 }
 
 /**
@@ -64,6 +124,8 @@ export async function listRecursiveFollowingLinks(baseDir: string, homeDir: stri
   const homeReal = (await realpathSafe(home)) ?? home;
   const paths: string[] = [];
   const skippedLinks: SkippedLink[] = [];
+  const skippedDepDirs: SkippedDepDir[] = [];
+  const depFileBudget = { left: MAX_DEP_FILES_COUNTED };
   const unreadableDirs: string[] = [];
   let followedLinks = 0;
   /** 已进入过的目录 realpath（防环 / 防同一目标被两条链接重复收集） */
@@ -103,6 +165,18 @@ export async function listRecursiveFollowingLinks(baseDir: string, homeDir: stri
     for (const entry of entries) {
       const abs = path.join(dir, entry.name);
       const entryRel = rel(abs);
+      // issue #76：运行时依赖目录**整棵跳过**（任意深度）。内容不进备份，但必须留痕（见 SkippedDepDir）。
+      // 链接形态也算（junction 指向的 node_modules 同样是依赖树）；判不出类型时按普通目录继续走。
+      if (
+        EXCLUDED_DEP_DIR_NAMES.includes(entry.name)
+        && (entry.isDirectory() || (entry.isSymbolicLink() && (await statIsDir(abs))))
+      ) {
+        skippedDepDirs.push({
+          path: entryRel,
+          files: depFileBudget.left > 0 ? await countFilesBounded(abs, depFileBudget) : null,
+        });
+        continue;
+      }
       if (entry.isDirectory()) {
         await walk(abs, depth + 1, null);
       } else if (entry.isFile()) {
@@ -140,5 +214,5 @@ export async function listRecursiveFollowingLinks(baseDir: string, homeDir: stri
   };
 
   await walk(base, 0, null);
-  return { paths: paths.sort(), skippedLinks, followedLinks, unreadableDirs };
+  return { paths: paths.sort(), skippedLinks, skippedDepDirs, followedLinks, unreadableDirs };
 }

@@ -25,6 +25,56 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+> **技能自带的 node_modules 让定时备份永久失败（issue #76）**：文件类分区的递归收集此前没有依赖目录排除项 ——
+> 技能目录里只要装了自己的依赖，`skills` 分区就会被遍历出上万个条目（真机：`~/.dsh/skills/md2pdf` 的
+> `node_modules` 11 625 个文件 ⇒ 分区 **11 629** 条、全量备份 **11 681** 条），撞上导出侧的 10 000 条目闸门，
+> **定时备份与「立即备份」双双永久失败**，而这两条路径都不接受分区范围、`backup-schedule.json` 也没有排除项
+> ⇒ 用户侧无解。现在**任意深度的 `node_modules` 整棵跳过**（依赖树可由包内保留的 `package.json` / lock 重建，
+> 与 `plugins` 分区的 `npm pack` 口径一致），并把它**写进导出报告 / 只读预览 / 离线 CLI 的告警**
+> （跳过了哪些目录、各多少文件；计数超预算时如实写「未统计」而不猜）—— 绝不静默。排除落在遍历内核，
+> 因此宿主门面、预览与离线 CLI 三处口径天然一致。10 000 条目上限**不动**（它是「导出必须能导回」的不变量，
+> 有意不加宽）。
+> - **行为变化（如实记）**：备份包内**不再包含**技能 / 预设目录下的 `node_modules`；目标机恢复后需在该技能
+>   目录重新 `npm install`（包内保留 `package.json` / lock，告警文案已写明）。恰好叫 `node_modules` 的
+>   **普通文件**、以及 `notes-node_modules` / `node_modules.md` 这类相似名**照常进包**。
+> - **护栏**：`src/utils/recursive-walk.test.ts`（任意深度命中 + 文件计数 + 同名普通文件不误伤 + 不混进
+>   `skippedLinks`）、`src/adapters/link-report.test.ts`（文案含路径 / 文件数 /「未统计不猜」）、
+>   `src/adapters/files.test.ts`（skills 导出报告里可见）、`src/core/backup-plan.test.ts`
+>   （真实临时目录跑离线 `collectBackupEntries`：归档无 `node_modules/`，告警有行）。
+> - **顺带修正（如实记）**：离线 CLI 备份（`dcm backup`）的跳过告警此前会把**已是 homeDir 相对**的路径
+>   再叠一层分区前缀（真机规模探针里打印成 `skills/skills/md2pdf/node_modules`）——现在只打印一次，
+>   与相邻的「目录读取失败」行同口径；`src/core/backup-plan.test.ts` 钉住。
+> - **仍未做（如实记）**：定时备份 / 立即备份**依旧不支持分区范围** —— 本轮修掉的是现场成因，
+>   issue #76 里「让无人值守路径也能缩小范围」的备选 2/3 未实现。
+>
+> **A skill shipping its own node_modules permanently broke scheduled backups (issue #76)**: the file-section walker
+> had no dependency-directory exclusion, so one skill with local deps pushed the `skills` section past ten thousand
+> entries (measured: `~/.dsh/skills/md2pdf`'s `node_modules` = 11,625 files ⇒ **11,629** section entries,
+> **11,681** total), tripping the writer's 10,000-entry gate — **both scheduled and "back up now" failed forever**,
+> and neither path accepts a section range (`backup-schedule.json` has no exclusion field either), leaving the user
+> no way out. `node_modules` at **any depth** is now skipped whole (the dependency tree is rebuildable from the
+> bundled `package.json` / lock, matching the `plugins` section's `npm pack` semantics), and the skip is
+> **reported in the export report, the read-only preview and the offline CLI warnings** (which directories, how many
+> files; when the counting budget runs out it says "not measured" instead of guessing) — never silent. The exclusion
+> lives in the walk kernel, so the host facade, the preview and the offline CLI agree by construction. The 10,000-entry
+> limit is **unchanged** (it is the "what we export must import back" invariant, deliberately not widened).
+> - **Behaviour change (recorded honestly)**: bundles no longer contain `node_modules` under skill/preset directories;
+>   after restoring, run `npm install` in that skill directory on the target (the `package.json` / lock stay in the
+>   bundle and the warning says so). A **regular file** literally named `node_modules`, and look-alikes such as
+>   `notes-node_modules` / `node_modules.md`, are still included.
+> - **Guards**: `src/utils/recursive-walk.test.ts` (any-depth hit + file count + same-named regular file untouched +
+>   not mixed into `skippedLinks`), `src/adapters/link-report.test.ts` (path / file count / "not measured" never
+>   guessed), `src/adapters/files.test.ts` (visible in the skills export report), `src/core/backup-plan.test.ts`
+>   (real temp dir through the offline `collectBackupEntries`: no `node_modules/` in the archive, one warning line).
+> - **Adjacent fix (recorded honestly)**: the offline CLI (`dcm backup`) skip warnings used to prepend a section
+>   prefix to an already **homeDir-relative** path (the real-scale probe printed `skills/skills/md2pdf/node_modules`);
+>   it is now printed once, matching the neighbouring "directory unreadable" line. Pinned by
+>   `src/core/backup-plan.test.ts`.
+> - **Still not done (recorded honestly)**: scheduled and manual backups **still accept no section range** — this
+>   round removed the field cause only; alternatives 2/3 in issue #76 are not implemented.
+
 ## [0.1.71] - 2026-10-08
 
 > **本版主题：修「从其它 agent 导入」在 v4 桌面端整批丢会话** —— 外部来源的会话转码器此前只认 DSH 会话格式 v3，

@@ -166,3 +166,46 @@ test('cli-F2：超过深度上限的**普通目录**必须留痕，不得静默�
   );
 });
 
+test('issue #76：node_modules（任意深度）整棵跳过并留痕；同名文件与相似名不受影响', async (t) => {
+  const home = tmpDir('dshcm-deps-');
+  t.after(() => fssync.rmSync(home, { recursive: true, force: true }));
+
+  // 技能本体（依赖树之外的每一个文件都必须照常进清单）
+  await fs.mkdir(path.join(home, 'skills', 'md2pdf', 'scripts'), { recursive: true });
+  await fs.writeFile(path.join(home, 'skills', 'md2pdf', 'SKILL.md'), 'S');
+  await fs.writeFile(path.join(home, 'skills', 'md2pdf', 'package.json'), '{}');
+  await fs.writeFile(path.join(home, 'skills', 'md2pdf', 'scripts', 'convert.js'), 'C');
+  // 自带依赖树（真机现场：11 625 个文件 → skills 分区 11 629 条 → 撞 10 000 条目闸门）
+  const deps = path.join(home, 'skills', 'md2pdf', 'node_modules', 'marked', 'lib');
+  await fs.mkdir(deps, { recursive: true });
+  for (let i = 0; i < 25; i += 1) await fs.writeFile(path.join(deps, 'f' + i + '.js'), 'x');
+  // 任意深度同样生效
+  await fs.mkdir(path.join(home, 'skills', 'deep', 'a', 'node_modules', 'pkg'), { recursive: true });
+  await fs.writeFile(path.join(home, 'skills', 'deep', 'a', 'node_modules', 'pkg', 'i.js'), 'x');
+  // 判据是「目录名」，不是子串：同名文件与相似名一律保留
+  await fs.mkdir(path.join(home, 'skills', 'plain'), { recursive: true });
+  await fs.writeFile(path.join(home, 'skills', 'plain', 'node_modules'), 'A REGULAR FILE NAMED node_modules');
+  await fs.writeFile(path.join(home, 'skills', 'notes-node_modules'), 'NOT A DEP DIR');
+  await fs.writeFile(path.join(home, 'skills', 'node_modules.md'), 'NOT A DEP DIR');
+
+  const listing = await listRecursiveFollowingLinks(path.join(home, 'skills'), home);
+
+  assert.deepEqual(
+    listing.paths.filter((p) => p.includes('node_modules/')),
+    [],
+    '依赖树一个文件都不得进清单: ' + listing.paths.join(','),
+  );
+  assert.ok(listing.paths.includes('skills/md2pdf/SKILL.md'), '技能本体必须照常进清单');
+  assert.ok(listing.paths.includes('skills/md2pdf/package.json'), 'package.json 留在包里（目标机据此重建依赖）');
+  assert.ok(listing.paths.includes('skills/md2pdf/scripts/convert.js'));
+  assert.ok(listing.paths.includes('skills/plain/node_modules'), '同名**文件**不是依赖目录，不得误丢');
+  assert.ok(listing.paths.includes('skills/notes-node_modules'));
+  assert.ok(listing.paths.includes('skills/node_modules.md'));
+
+  // 留痕：目录 + 文件数（否则又是「备份成功但缺内容」）
+  const skipped = new Map(listing.skippedDepDirs.map((d) => [d.path, d.files]));
+  assert.equal(skipped.get('skills/md2pdf/node_modules'), 25, '必须报出依赖目录的文件数');
+  assert.equal(skipped.get('skills/deep/a/node_modules'), 1, '任意深度的依赖目录同样留痕');
+  assert.equal(listing.skippedLinks.length, 0, '依赖目录不是链接跳过，不得混进 skippedLinks');
+});
+

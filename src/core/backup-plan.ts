@@ -32,6 +32,8 @@
  *    目标越出 homeDir 或断链的链接跳过但**写进 warnings**——绝不静默少收内容；
  *    普通目录**超过层级上限**同样留痕（cli-F2），且告警措辞按**真实来源**分派（t37：链接类 vs 目录超深）；
  *  - 命中 `isReservedInternalRel` 的内部命名空间（locks/snapshots/transactions…）跳过；
+ *  - 运行时依赖目录 node_modules（任意深度）**整棵跳过**（issue #76：与 plugins 分区的 npm pack 同口径，
+ *    依赖树可由包内 package.json / lock 重建），跳过了哪些目录、各多少文件一律写进 warnings；
  *  - `pluginFiles`（`dsh-ssh.json` 等第三方插件自有文件）**默认不收**：该分区与 GUI
  *    侧同为 deviceSpecific「任意文件直通、无内容过滤」，`dsh-ssh.json` 里是明文主机
  *    密码——必须由用户显式 `--sections pluginFiles` 选中，并附带显式告警
@@ -190,9 +192,12 @@ export interface BackupCollection {
  * 跳过原因；而 `too-deep` 自 cli-F2 起对**普通目录**同样会记录（此前只有链接超深才记）—— 整块内容被
  * 深度上限裁掉时若仍写成「链接未进备份」，用户看到的原因就与真实来源（目录层级超出上限）不符。
  * 措辞里**不编具体层数**：上限常量住在 utils/recursive-walk.ts，本模块不 import 它的私有常量。
+ *
+ * 路径**不叠加分区前缀**：内核返回的 `s.path` 已是 homeDir 相对路径（含分区目录），再加一层
+ * 会打印成 `skills/skills/...`（真机规模探针实测），与相邻的「目录读取失败」行口径也不一致。
  */
-function skippedLinkWarning(label: string, s: SkippedLink): string {
-  const at = `${label}/${s.path}（${s.reason}）`;
+function skippedLinkWarning(s: SkippedLink): string {
+  const at = `${s.path}（${s.reason}）`;
   if (s.reason === 'too-deep') {
     return `层级超过上限未进备份（目录或链接目标超出深度上限） / nesting limit exceeded, content NOT in this backup: ${at}`;
   }
@@ -210,14 +215,20 @@ async function listFilesRecursive(
   dirAbs: string,
   homeDir: string,
   warnings: string[],
-  label: string,
 ): Promise<string[]> {
   const listing = await listRecursiveFollowingLinks(dirAbs, homeDir);
   for (const s of listing.skippedLinks) {
-    warnings.push(skippedLinkWarning(label, s));
+    warnings.push(skippedLinkWarning(s));
   }
   for (const dir of listing.unreadableDirs) {
     warnings.push(`目录读取失败，其内容未进备份 / directory unreadable, content NOT in this backup: ${dir}`);
+  }
+  // issue #76：运行时依赖目录整棵跳过（内容未进备份）——必须可见，绝不静默。
+  for (const dep of listing.skippedDepDirs) {
+    const files = dep.files === null
+      ? '文件数未统计 / count not measured'
+      : `${dep.files} 个文件 / ${dep.files} file(s)`;
+    warnings.push(`运行时依赖目录未进备份（可重建，目标机需重新安装依赖）/ runtime dependency directory NOT in this backup (rebuildable; reinstall on the target): ${dep.path}（${files}）`);
   }
   if (listing.followedLinks > 0) {
     warnings.push(`已跟随 ${listing.followedLinks} 个链接目录收集内容 / followed ${listing.followedLinks} linked director(ies)`);
@@ -319,7 +330,7 @@ export async function collectBackupEntries(
     // 2) 递归目录（跟随 junction/符号链接；未跟随的链接与不可读目录写进 warnings）
     for (const dirRel of spec.dirs ?? []) {
       const dirAbs = path.join(homeDir, ...normalizePath(dirRel).split('/'));
-      const rels = await listFilesRecursive(dirAbs, homeDir, warnings, normalizePath(dirRel));
+      const rels = await listFilesRecursive(dirAbs, homeDir, warnings);
       for (const homeRel of rels) await consider(homeRel);
     }
 

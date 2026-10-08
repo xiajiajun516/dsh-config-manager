@@ -9,7 +9,7 @@
  */
 import type { FileSystemFacade } from '../core/types.ts';
 import type { MsgFunc } from '../core/messages.ts';
-import type { RecursiveListing, SkippedLink } from '../utils/recursive-walk.ts';
+import type { RecursiveListing, SkippedDepDir, SkippedLink } from '../utils/recursive-walk.ts';
 
 /** 跳过原因 → 消息 key（与 SkippedLink.reason 一一对应，穷尽映射） */
 const REASON_KEY: Record<SkippedLink['reason'], string> = {
@@ -23,10 +23,27 @@ const REASON_KEY: Record<SkippedLink['reason'], string> = {
 /** 单条原因下最多列出的路径数（其余折叠为计数，避免把报告撑爆） */
 const MAX_PATHS_PER_REASON = 5
 
+/**
+ * 被跳过的依赖目录 → 详情片段（路径 + 文件数，issue #76）。
+ *
+ * 文件数是**量级说明**而非完整性判据：计数预算耗尽时如实写「未统计」，绝不猜一个数
+ * （把未知写成 0 会被读成「这个目录是空的」）。
+ */
+function depDirDetail(msg: MsgFunc, dirs: SkippedDepDir[]): string {
+  const shown = dirs.slice(0, MAX_PATHS_PER_REASON).map((dir) => {
+    const files = dir.files === null
+      ? msg('adapter.depsDirFilesUnknown')
+      : msg('adapter.depsDirFiles', { count: String(dir.files) })
+    return `${dir.path}（${files}）`
+  })
+  const more = dirs.length - shown.length
+  return (more > 0 ? [...shown, `(+ ${more})`] : shown).join(', ')
+}
+
 /** 取遍历结果：宿主未实现 listRecursiveDetailed（旧版/测试 mock）时回退，行为与旧版一致。 */
 export async function listFilesDetailed(fs: FileSystemFacade, dir: string): Promise<RecursiveListing> {
   if (fs.listRecursiveDetailed !== undefined) return fs.listRecursiveDetailed(dir)
-  return { paths: await fs.listRecursive(dir), skippedLinks: [], followedLinks: 0, unreadableDirs: [] }
+  return { paths: await fs.listRecursive(dir), skippedLinks: [], skippedDepDirs: [], followedLinks: 0, unreadableDirs: [] }
 }
 
 /** 把遍历结果转成告警行（无链接时返回空数组 —— 不制造噪音）。 */
@@ -55,6 +72,12 @@ export function linkWarnings(msg: MsgFunc, type: string, listing: RecursiveListi
       ? ` (+ ${listing.unreadableDirs.length - MAX_PATHS_PER_REASON})` : ''
     out.push(msg('adapter.dirsUnreadable', {
       type, count: String(listing.unreadableDirs.length), detail: `${shown}${more}`,
+    }))
+  }
+  // issue #76：运行时依赖目录整棵跳过（内容未进备份）——与链接/不可读目录同等对待：必须可见，绝不静默。
+  if (listing.skippedDepDirs.length > 0) {
+    out.push(msg('adapter.depsDirsSkipped', {
+      type, count: String(listing.skippedDepDirs.length), detail: depDirDetail(msg, listing.skippedDepDirs),
     }))
   }
   return out

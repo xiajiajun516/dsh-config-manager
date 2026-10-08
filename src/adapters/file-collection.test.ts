@@ -152,6 +152,7 @@ test('字节闸门：单元的成员在遍历结果里不连续时同样整块�
   ctx.fs.listRecursiveDetailed = async () => ({
     paths: ['skills/a/1.md', 'skills/b/1.md', 'skills/a/2.md'],
     skippedLinks: [],
+    skippedDepDirs: [],
     followedLinks: 0,
     unreadableDirs: [],
   });

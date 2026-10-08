@@ -501,6 +501,14 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 
 取证（表内各列）：`src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`payload.zipPath` / `payload.filePrefix`，即路径与前缀）、`src/adapters/index.ts:52-74`（挂载）、各 adapter 的 `defaultIncluded`/`portability` 字段（`src/adapters/*.ts`，例如 `src/adapters/plugins.ts`、`src/adapters/mcp.ts`、`src/adapters/credentials.ts`、`src/adapters/workspaces.ts`）。
 
+> **写侧排除项：`node_modules` 不进包（issue #76）**。文件类分区的递归收集会**整棵跳过任意深度的 `node_modules` 目录**
+> （`src/utils/recursive-walk.ts` 的 `EXCLUDED_DEP_DIR_NAMES`）：技能 / 预设目录自带运行时依赖时，一个技能就能贡献上万个条目，
+> 撞上 §1.3 的 10000 条目闸门会让**定时备份永久失败**（无人值守路径没有分区范围可收窄，`backup-schedule.json` 也没有排除项）。
+> 依赖树可由包内保留的 `package.json` / lock 重建，故与 `plugins` 分区的 `npm pack` 口径一致（`src/core/local-plugin-pack.ts`：
+> node_modules 由 npm pack 自身排除）。**绝不静默**：被跳过的目录与其文件数写进导出报告、只读预览与离线 CLI 的 warnings
+> （`adapter.depsDirsSkipped` / `adapter.depsDirFiles`，见 `src/utils/recursive-walk.ts` 的 `RecursiveListing.skippedDepDirs`）。
+> 第三方 exporter **可以**选择带上 `node_modules`（读侧不因此拒收），但必须自行保证总条目数落在 §1.3 的限额内。
+
 ### 3.3 各分区载荷的必需字段（不满足即 **error → 整体拒绝导入**）
 
 校验分两道：`validateSectionData`（结构，`src/schema/config.ts` 的 `validateSectionData`（`payload.kind` 判别 switch））与各 adapter 的 `validate()`。**第一道失败会抛错中断整个导入**（`src/core/analyzer.ts` 的 `extractSections`（`validateSectionData` 失败 → 抛错中断）），第二道失败只把该分区从计划中剔除并记 error（`src/core/analyzer.ts` 的 `analyzeBundle`（adapter `validate()` 失败 → 剔除该分区并记 error））。

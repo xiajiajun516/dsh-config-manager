@@ -169,8 +169,36 @@ test('t37 skippedLinks 措辞：普通目录超深不得被描述成「链接」
     assert.match(depthLine, /层级超过上限/, '普通目录超深的原因必须指向层级上限，实际：' + depthLine);
     assert.doesNotMatch(depthLine, /链接未进备份/, '普通目录超深不得被描述成链接问题，实际：' + depthLine);
     assert.match(linkLine, /链接未进备份/, '链接类跳过仍必须是链接措辞，实际：' + linkLine);
+    // issue #76 附带修正：内核返回的已是 homeDir 相对路径，**不得再叠一层分区前缀**（曾打印成 skills/skills/outlink）
+    assert.match(linkLine, /skills\/outlink（/, '路径必须只出现一次且为 homeDir 相对形态，实际：' + linkLine);
+    assert.doesNotMatch(linkLine, /skills\/skills\//, '不得叠加分区前缀（skills/skills/…），实际：' + linkLine);
   } finally {
     await fs.rm(home, { recursive: true, force: true });
     await fs.rm(outside, { recursive: true, force: true });
+  }
+});
+
+test('issue #76：离线备份跳过 skills 下的 node_modules，并在 warnings 里说明（真机形态）', async () => {
+  const os = await import('node:os');
+  const { collectBackupEntries } = await import('./backup-plan.ts');
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'dcm-bp-deps-'));
+  try {
+    const nm = path.join(home, 'skills', 'md2pdf', 'node_modules', 'marked');
+    await fs.mkdir(nm, { recursive: true });
+    await fs.writeFile(path.join(home, 'skills', 'md2pdf', 'SKILL.md'), 'S');
+    await fs.writeFile(path.join(home, 'skills', 'md2pdf', 'package.json'), '{}');
+    await fs.writeFile(path.join(nm, 'index.js'), 'M');
+    await fs.writeFile(path.join(nm, 'extra.js'), 'M');
+
+    const plan = await collectBackupEntries(home, ['skills']);
+    const names = plan.entries.map((e) => e.name);
+    assert.ok(names.some((n) => n.endsWith('md2pdf/SKILL.md')), '技能本体必须进归档: ' + names.join(','));
+    assert.ok(names.some((n) => n.endsWith('md2pdf/package.json')), 'package.json 必须进归档（目标机据此重建依赖）');
+    assert.deepEqual(names.filter((n) => n.includes('node_modules/')), [], '依赖树不得进归档: ' + names.join(','));
+    const line = plan.warnings.find((w) => w.includes('运行时依赖目录')) ?? '';
+    assert.ok(line.length > 0, '缺依赖目录告警: ' + plan.warnings.join(' | '));
+    assert.match(line, /2 个文件/, '必须报出被跳过的文件数量级');
+  } finally {
+    await fs.rm(home, { recursive: true, force: true });
   }
 });

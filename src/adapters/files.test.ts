@@ -215,6 +215,7 @@ test('issue #37: skills 导出把「跟随/跳过的链接」写进 warnings（�
   src.fs.listRecursiveDetailed = async () => ({
     paths: ['skills/coding.md', 'skills/shared/inner.md'],
     skippedLinks: [{ path: 'skills/broken', reason: 'broken' }],
+    skippedDepDirs: [],
     followedLinks: 1,
     unreadableDirs: [],
   });
@@ -223,6 +224,32 @@ test('issue #37: skills 导出把「跟随/跳过的链接」写进 warnings（�
   assert.equal(out.warnings.some((w) => w.includes('链接目录')), true, `缺「已跟随链接」告警: ${out.warnings.join(' | ')}`);
   assert.equal(out.warnings.some((w) => w.includes('未进备份')), true, `缺「跳过链接」告警: ${out.warnings.join(' | ')}`);
   assert.equal(out.warnings.some((w) => w.includes('skills/broken')), true, '必须点名被跳过的链接');
+});
+
+test('issue #76: skills 导出跳过 node_modules 依赖目录，并在导出报告里说明（不静默）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  await src.fs.writeFile('skills/md2pdf/SKILL.md', Buffer.from('# md2pdf\n', 'utf8'));
+  await src.fs.writeFile('skills/md2pdf/package.json', Buffer.from('{"name":"md2pdf"}\n', 'utf8'));
+  // 宿主枚举已按 issue #76 排除依赖树，并把它带回来（真实 walk 的形态）
+  src.fs.listRecursiveDetailed = async () => ({
+    paths: ['skills/md2pdf/SKILL.md', 'skills/md2pdf/package.json'],
+    skippedLinks: [],
+    skippedDepDirs: [{ path: 'skills/md2pdf/node_modules', files: 11625 }],
+    followedLinks: 0,
+    unreadableDirs: [],
+  });
+
+  const out = await new SkillsAdapter().export(src, { includeSecrets: false });
+  assert.deepEqual(
+    out.data.files.map((f) => f.relativePath).sort(),
+    ['md2pdf/SKILL.md', 'md2pdf/package.json'],
+    '依赖树不得进包，技能本体与 package.json 必须进',
+  );
+  const line = out.warnings.find((w) => w.includes('运行时依赖目录')) ?? '';
+  assert.ok(line.length > 0, '缺依赖目录告警: ' + out.warnings.join(' | '));
+  assert.match(line, /11625 个文件/);
+  assert.match(line, /未进备份/);
+  assert.doesNotMatch(line, /链接/, '依赖目录不是链接问题，措辞不得混淆');
 });
 
 test('agentPresets: 目录 bundle 文件收集与写入（.agent-presets 基准目录）', async () => {

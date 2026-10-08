@@ -63,7 +63,7 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
     }
     // 2) 约定配置目录递归收集（相对 ~/.dsh 根的完整路径；与白名单文件去重）
     // issue #37：与 skills 等同一条遍历（跟随 junction/符号链接 + 跳过留痕）
-    let listing: RecursiveListing = { paths: [], skippedLinks: [], followedLinks: 0, unreadableDirs: [] };
+    let listing: RecursiveListing = { paths: [], skippedLinks: [], skippedDepDirs: [], followedLinks: 0, unreadableDirs: [] };
     if (this.collectDir !== undefined) {
       try {
         listing = await listFilesDetailed(ctx.fs, this.collectDir);

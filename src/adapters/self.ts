@@ -137,7 +137,7 @@ export class SelfAdapter extends FileCollectionAdapter {
    * 同时是单元 id（self:<rel>）与 includeItems 的比对键 —— 不能随平台漂移成反斜杠。
    */
   protected override async listRelPaths(ctx: HostContext): Promise<RecursiveListing> {
-    const empty: RecursiveListing = { paths: [], skippedLinks: [], followedLinks: 0, unreadableDirs: [] };
+    const empty: RecursiveListing = { paths: [], skippedLinks: [], skippedDepDirs: [], followedLinks: 0, unreadableDirs: [] };
     const found: string[] = [];
     for (const rel of SELF_CONFIG_FILES) {
       const full = `${this.baseDir}/${rel}`;

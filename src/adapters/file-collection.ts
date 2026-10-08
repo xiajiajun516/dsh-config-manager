@@ -191,7 +191,7 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
     // issue #37：用「跟随 junction/符号链接」的遍历，并把跟随/跳过的链接写进告警——
     // 此前链接目录及其全部内容被静默排除，备份仍报成功。
     // 枚举走 listRelPaths 钩子（单文件分区覆写它，避免对 home 根整目录递归）。
-    let listing: RecursiveListing = { paths: [], skippedLinks: [], followedLinks: 0, unreadableDirs: [] };
+    let listing: RecursiveListing = { paths: [], skippedLinks: [], skippedDepDirs: [], followedLinks: 0, unreadableDirs: [] };
     try {
       listing = await this.listRelPaths(ctx);
     } catch {

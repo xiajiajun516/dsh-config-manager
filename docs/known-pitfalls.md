@@ -497,5 +497,26 @@ d`。
 
 **护栏**：`src/utils/session-verify.test.ts`（锚点链顺序 / env-anchor / install-anchor / 等价性翻转 / catalog 缓存按 `headerVersion` 重跑）；`src/utils/asar-read.test.ts`（asar 抽取 / 路径拆分 / 缓存根）；对照复核脚本 `.tmp/m2/g1/e2e.mjs`（带锚 vs 不带锚）。
 
+## 技能自带 `node_modules` 撞 ZIP 条目上限：定时备份永久失败（2026-10-08，issue #76）
+
+> 与 `AGENTS.md` §📌 常见坑「文件类分区收集一律走 `utils/recursive-walk.ts`」同序：这里是证据、量化数据与复现路径。
+
+**真机现场（报告者提供；Windows 11 26100 / 桌面端 0.2.0-rc.2 / 插件 0.1.71）**：`C:\Users\ll\.dsh\skills\md2pdf` 自带 `scripts/convert.js` 与它自己的 `node_modules`（marked / mermaid / puppeteer-core 的传递依赖，148.6 MB / 11 625 个文件）。于是 `skills` 分区条目数 = **11 629**、全量备份 = **11 681** —— 撞上 `src/utils/zip.ts:41` 的 `DEFAULT_ZIP_SAFETY_LIMITS.maxEntries = 10_000`，`backup-schedule.json` 连续 3 次失败（`consecutiveFailures: 3`），产物目录里一份 auto 备份都没有。同一文本出现在三处（界面提示 / `lastRunMessage` / `dsh-config-manager/migration-history/*.backup-manual.json` 的 `result: "failed"`）。
+
+**为什么用户侧无解（本条真正要记住的部分）**：定时备份与「立即备份」共用 `BackupScheduler.runOnce` —— `src/sync/backup-scheduler.ts:280` 的 `exporter.export()` 只传 `includeSecrets/outPath`、不传 `only` ⇒ `src/core/exporter.ts:303` 落回 `defaultIncluded`（`skills` 缺省 true）；`src/routes/backup.ts:232` 的「立即备份」就是同一条 `runOnce({manual:true})`（`manual` 只绕过 `enabled` 开关）。`backup-schedule.json` 的 schema（`src/sync/backup-schedule-config.ts:59-81`）没有分区/排除字段，界面上也没有可勾选的范围 —— **能选分区的只有导出**。
+
+**口径不一致（修复前）**：`plugins` 分区按 `npm pack` 的产物度量，`src/core/local-plugin-pack.ts:19` 明写「绝不递归整个插件目录（node_modules 由 npm pack 自身排除）」，宿主 `dirSizeBytes` 也在 `src/index.ts:1419` 显式 `continue` 掉 `node_modules`；而 `skills` 走 `src/utils/recursive-walk.ts` 的通用递归时没有任何排除项 —— 同一个概念两套口径。
+
+**不得用「调大上限」修**：写侧上限被 `src/utils/zip.ts:107` 钳到读侧默认值（只允许收紧），`src/utils/zip.test.ts:143` 有一条断言钉住读侧 10 000「不得调整」，`docs/spec/bundle-format-v1.md:123` 又把这个数写进了对外契约。「导出必须能导回」优先于「把巨树塞进包」。
+
+**修法**：`utils/recursive-walk.ts` 新增 `EXCLUDED_DEP_DIR_NAMES = ['node_modules']`，在遍历里对**任意深度**的同名目录（目录本体，或 junction 指向的目录；**同名普通文件不误伤**）整棵跳过，并记进 `RecursiveListing.skippedDepDirs`（`path` + `files`）。文件数是 readdir-only 的**有界计数**（全局预算 `MAX_DEP_FILES_COUNTED = 100_000`，超预算记 `null` —— **不猜、也不假装是 0**）。两个消费侧同源告警：`adapters/link-report.ts`（GUI 导出报告与只读预览，`adapter.depsDirsSkipped` / `adapter.depsDirFiles`）与 `core/backup-plan.ts`（离线 CLI `dcm backup`）。排除落在**内核**，所以宿主门面 `ctx.fs.listRecursiveDetailed`、预览与离线 CLI 三处口径天然一致（预览与导出必须逐项相等的既有约束，见 AGENTS.md「只读预览与导出必须同口径」）。
+
+**护栏**：`src/utils/recursive-walk.test.ts`「issue #76：node_modules（任意深度）整棵跳过并留痕；同名文件与相似名不受影响」（钉住 25 个文件的计数、深层命中、`plain/node_modules` 普通文件与 `notes-node_modules` / `node_modules.md` 保留、不混进 `skippedLinks`）、`src/adapters/link-report.test.ts`（文案含路径 / 文件数 / 「重新安装依赖」；未统计不猜）、`src/adapters/files.test.ts`（skills 导出报告可见，措辞不得混成链接问题）、`src/core/backup-plan.test.ts`（真实临时目录跑 `collectBackupEntries`：归档里没有 `node_modules/`，warnings 里有依赖目录行）。
+
+**顺带修正**：离线 CLI 的跳过告警此前把分区前缀叠在**已是 homeDir 相对**的路径上（真机规模探针打出 `skills/skills/md2pdf/node_modules`），现只打印一次（`src/core/backup-plan.test.ts` 的 t37 用例同时钉住 `skills/outlink` 且不含 `skills/skills/`）。
+
+**残留（如实）**：① 包内不含依赖树 ⇒ 目标机恢复后需在该技能目录重新 `npm install`（包内保留 `package.json` / lock，告警文案已写明）；② 定时备份 / 立即备份**仍然不支持分区范围** —— 排除依赖树消除了本条现场成因，但「无人值守路径没有收敛手段」这个结构性缺口仍在（issue #76 里列为备选 2/3，本轮未做）。
+
+
 
 
