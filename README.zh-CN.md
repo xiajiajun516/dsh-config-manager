@@ -120,23 +120,13 @@ DSH 生态里这个方向有几个插件，它们解决的问题并不相同—�
 
 ## 📸 功能截图
 
-> ⚠️ 下列截图摄于 **2026-09 的旧版界面**（当时是「总览 / 备份 / 导出 / 导入 / 同步 / 市场 / 档案」七页签）。现在的界面是 **首页 / 产物库 / 同步 / 环境** 四个一级页面 + 流程面板（见下文），页签与布局都已改变 —— **截图待重拍**，请以正文描述与实际界面为准。
-
-| 总览（现「首页」） | 备份与快照（现「产物库」） |
+| 首页 | 产物库 |
 |:---:|:---:|
-| ![总览](assets/screenshot-overview-zh.png) | ![备份与快照](assets/screenshot-backups-zh.png) |
+| ![首页](assets/screenshot-overview-zh.png) | ![产物库](assets/screenshot-backups-zh.png) |
 
-| 导出备份（现「导出」流程面板） | 导入预览（现「导入」流程面板） |
+| 同步（四条通道卡） | 环境 · 档案 |
 |:---:|:---:|
-| ![一键导出](assets/screenshot-export-zh.png) | ![导入预览](assets/screenshot-import-zh.png) |
-
-| 远程同步（现「同步」页） | 配置市场（现「逛市场」流程面板） |
-|:---:|:---:|
-| ![远程同步](assets/screenshot-sync-zh.png) | ![配置市场](assets/screenshot-market-zh.png) |
-
-| 档案 Profiles（现「环境 → 档案」） |
-|:---:|
-| ![档案 Profiles](assets/screenshot-profiles-zh.png) |
+| ![同步](assets/screenshot-sync-zh.png) | ![环境 · 档案](assets/screenshot-profiles-zh.png) |
 
 ---
 

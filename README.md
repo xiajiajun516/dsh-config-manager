@@ -119,23 +119,13 @@ Several DSH plugins live in this space and they solve different problems — pic
 
 ## 📸 Screenshots
 
-> ⚠️ The screenshots below were taken on the **previous UI (2026-09)**, when the tabs were Overview / Backups / Export / Import / Sync / Market / Profiles. The current UI is **Home / Library / Sync / Environment** (four top-level pages) plus flow panels (see below): tabs and layout have changed, so **the screenshots are pending a re-shoot** — trust the prose and the actual UI.
-
-| Overview (now "Home") | Backups & Snapshots (now "Library") |
+| Home | Library |
 |:---:|:---:|
-| ![Overview](assets/screenshot-overview-en.png) | ![Backups and snapshots](assets/screenshot-backups-en.png) |
+| ![Home](assets/screenshot-overview-en.png) | ![Library](assets/screenshot-backups-en.png) |
 
-| Export (now the "Export" flow panel) | Import Preview (now the "Import" flow panel) |
+| Sync (four channel cards) | Environment · Profiles |
 |:---:|:---:|
-| ![One-click Export](assets/screenshot-export-en.png) | ![Import Preview](assets/screenshot-import-en.png) |
-
-| Remote Sync (now the "Sync" page) | Configuration Market (now the "Browse market" flow panel) |
-|:---:|:---:|
-| ![Remote Sync](assets/screenshot-sync-en.png) | ![Configuration Market](assets/screenshot-market-en.png) |
-
-| Profiles (now "Environment → Profiles") |
-|:---:|
-| ![Profiles](assets/screenshot-profiles-en.png) |
+| ![Sync](assets/screenshot-sync-en.png) | ![Environment · Profiles](assets/screenshot-profiles-en.png) |
 
 ---
 
