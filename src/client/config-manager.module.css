@@ -2714,9 +2714,12 @@
   background: var(--dsw-alias-bg-layer-2);
   margin-bottom: 10px;
   /* 放不下就**换行**，绝不隐藏：v1 的「隐藏滚动条 + 渐隐遮罩」已被真机判定为不可发现
-     （导航条因此改成「更多 ▾」）。状态条只有 5 段，换行是最诚实的处理（窄画布 / 长英文才会发生），
-     且不改变放得下时的观感。 */
+     （导航条因此改成「更多 ▾」）。状态条只有 5 段，换行是最诚实的处理
+     （2026-10-08 实测：英文 5 段 688px > 可用 530px，必然折行 —— 真机反馈「英文下该面板变形」）。
+     折行时两行**必须有呼吸**：row-gap + 段内上下 padding；否则两行文字会被挤进 32px 的框里、
+     第二行贴着下边框（原实现如此）。放得下时（单行）这两条都不生效，观感不变。 */
   flex-wrap: wrap;
+  row-gap: 6px;
 }
 
 /* 末段不被容器右缘裁切：预留内边距，保证最后一个指标值完整可见 */
@@ -2738,7 +2741,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
+  /* 上下 4px：仅在**折行**时让两行文字离开边框；单行时整段被 stretch 到 32px，视觉与 0 无异 */
+  padding: 4px 12px;
   font-size: 12px;
   font-weight: 600;
   color: var(--dsw-alias-label-primary);
@@ -2772,7 +2776,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 12px;
+  padding: 4px 12px;
   border: none;
   border-left: 1px solid var(--dsw-alias-border-l1);
   background: none;
