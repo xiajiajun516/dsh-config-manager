@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { atomicWriteFileSync } from '../utils/atomic-write.ts'
 import { readTextSafe, sanitizeFilePart } from './dsh-profile-io.ts'
 import { DshProfileError } from './dsh-profile-manager.ts'
+import { profilesMsg } from './messages.ts'
 import { resolveProcessControl, stopPid, type ProcessControlDeps } from './process-control.ts'
 import type { DshProfileStopResult } from './dsh-profile-launcher.ts'
 
@@ -209,7 +210,7 @@ export class DshProfileRuntimeRegistry {
     if (record.pid === this.pid) throw new DshProfileError('currentProfile')
     const outcome = await stopPid(record.pid, this.proc)
     if (outcome === 'failed') {
-      throw new DshProfileError('stopFailed', `stopFailed: pid ${String(record.pid)} 仍在运行`)
+      throw new DshProfileError('stopFailed', profilesMsg('profiles.stopFailed', { pid: record.pid }))
     }
     rmSync(this.fileFor(name), { force: true })
     return { name, result: outcome, port: record.port ?? undefined }

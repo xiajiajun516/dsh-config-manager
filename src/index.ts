@@ -75,7 +75,8 @@ import { createRecoveryOrchestrator, type RecoveryExecutorFns } from './core/rec
 import { JournalStore } from './core/journal.ts'
 import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
-import { makeMsg, msgOf, zhMsg } from './core/messages.ts'
+import { msgOf, zhMsg } from './core/messages.ts'
+import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import type { MsgFunc } from './core/messages.ts'
 import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, installSpecFor, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
@@ -1484,8 +1485,10 @@ export class ConfigManagerHostContext implements HostContext {
   readonly profileDir: string
   readonly log: Logger
   readonly msg: MsgFunc
-  /** 应用语言（resolveAppLanguage；导出历史报告 locale 用） */
-  readonly language: 'zh' | 'en'
+  /** 应用语言（**调用期解析**：resolveAppLanguage 的活源；导出历史报告 locale 用） */
+  get language(): 'zh' | 'en' {
+    return getEngineLocale()
+  }
   readonly settings: SettingsFacade
   readonly credentials: CredentialsFacade
   readonly plugins: PluginsFacade
@@ -1540,8 +1543,15 @@ export class ConfigManagerHostContext implements HostContext {
       dshPackageJsonCandidates(homeDir, profile, installAnchor), sessionFormatTried)
     this.profile = profile
     this.profileDir = resolveProfileDir(homeDir, profile)
-    this.language = resolveAppLanguage(ctx)
-    this.msg = makeMsg(this.language)
+    // 引擎语言运行时（t2）：语言必须在「取文案那一刻」解析，而不是在装配那一刻 ——
+    // 原先 this.msg = makeMsg(resolveAppLanguage(ctx)) 只在 apply() 时求值一次，用户切到
+    // English 后宿主产出的报告/计划/错误文本永远停在加载时语言。
+    // 构造期先按当前语言设定一次（未设定时行为等于 zh），再注册「调用期解析」的活源：
+    // 之后每次取文案都跟随用户语言（resolveAppLanguage 走 ctx.settings.describe，
+    // 非请求路径由 LANGUAGE_TTL_MS 兜底缓存）。
+    setEngineLocale(resolveAppLanguage(ctx))
+    setEngineLanguageSource(() => resolveAppLanguage(ctx))
+    this.msg = engineMsg
     // 日志级别缺省 warn：启动 dsh web 后控制台只留 warn/error —— 挂载横幅、调度器跳过、
     // 导出/备份完成等常规 info 不再刷屏（用户要求移除启动后的日志噪音）；
     // 排查时 DSH_CONFIG_MANAGER_LOG_LEVEL=info|debug 恢复逐条输出。
@@ -1549,9 +1559,10 @@ export class ConfigManagerHostContext implements HostContext {
     if (this.sessionFormatVersion === undefined) {
       // 绝不静默：解析不到就明说体检不可用（用户仍能导出/导入，只是拿不到格式告警），
       // 并把已尝试的路径一并给出。
+      const separator = this.msg('host.sessionFormatPathSeparator')
       const triedText = sessionFormatTried.length > 6
-        ? sessionFormatTried.slice(0, 6).join('、') + ' 等'
-        : sessionFormatTried.join('、')
+        ? this.msg('host.sessionFormatPathsTruncated', { paths: sessionFormatTried.slice(0, 6).join(separator) })
+        : sessionFormatTried.join(separator)
       this.log.warn('无法解析本机 DSH 的会话格式版本：导入/同步不做「会话格式是否可读」体检'
         + `（已尝试 ${sessionFormatTried.length} 处：${triedText}）`)
     }
@@ -1767,7 +1778,7 @@ export async function parseSyncBody(
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
         throw new SyncRouteError(
-          `WebDAV 口令写入 DSH credentials 失败：${reason}（请在 DSH 凭据管理里配置 ${SYNC_WEBDAV_CREDENTIAL_REF} 后重试）`,
+          engineMsg('host.syncWebdavPasswordWriteFailed', { reason, ref: SYNC_WEBDAV_CREDENTIAL_REF }),
         )
       }
     }
@@ -1789,7 +1800,7 @@ export async function parseSyncBody(
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error)
       throw new SyncRouteError(
-        `token 写入 DSH credentials 失败：${reason}（请在 DSH 凭据管理里配置 ${SYNC_CREDENTIAL_REF} 后重试）`,
+        engineMsg('host.syncTokenWriteFailed', { reason, ref: SYNC_CREDENTIAL_REF }),
       )
     }
   }
@@ -1809,7 +1820,7 @@ function syncStr(value: unknown): string {
 function cloudCredentialWriteError(ref: string, kind: string, error: unknown): SyncRouteError {
   const reason = error instanceof Error ? error.message : String(error)
   return new SyncRouteError(
-    kind + ' 写入 DSH credentials 失败：' + reason + '（请在 DSH 凭据管理里配置 ' + ref + ' 后重试）',
+    engineMsg('host.syncCredentialWriteFailed', { kind, reason, ref }),
     400,
     'cloud.credentialsWriteFailed',
   )
@@ -1854,7 +1865,7 @@ async function parseCloudS3Body(
     try {
       await deps.credentials.set(credentialRef(ref), secret)
     } catch (error) {
-      throw cloudCredentialWriteError(ref, 'S3 密钥', error)
+      throw cloudCredentialWriteError(ref, engineMsg('host.syncKindS3Secret'), error)
     }
   }
   return {
@@ -2227,7 +2238,7 @@ export async function executeRestorePlan(
         case 'hostFileRestore':
         case 'fileRestore': {
           if (action.target === undefined || action.blobPath === undefined) {
-            throw new Error('恢复动作缺少 target/blobPath')
+            throw new Error(engineMsg('restore.missingTargetBlob'))
           }
           if (await exec.existsHome(action.target)) await exec.savePreRestore(action.target)
           await exec.writeHome(action.target, await exec.readBlob(action.blobPath))
@@ -2236,7 +2247,7 @@ export async function executeRestorePlan(
         }
         case 'hostFileRemove':
         case 'fileRemove': {
-          if (action.target === undefined) throw new Error('恢复动作缺少 target')
+          if (action.target === undefined) throw new Error(engineMsg('restore.missingTarget'))
           if (await exec.existsHome(action.target)) {
             await exec.savePreRestore(action.target)
             await exec.removeHome(action.target)
@@ -2245,12 +2256,12 @@ export async function executeRestorePlan(
           break
         }
         case 'pluginRemove': {
-          if (action.pluginName === undefined) throw new Error('恢复动作缺少插件名')
+          if (action.pluginName === undefined) throw new Error(engineMsg('restore.missingPluginName'))
           const result = await exec.uninstallPlugin(action.pluginName)
           if (result.ok) {
             report.removedPlugins.push(action.pluginName)
           } else {
-            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? '卸载失败' })
+            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? engineMsg('restore.pluginRemoveFailed') })
           }
           break
         }
@@ -2261,7 +2272,7 @@ export async function executeRestorePlan(
           report.skipped.push(action.description)
           break
         default:
-          report.skipped.push(`未知动作 ${String(action.kind)}: ${action.description}`)
+          report.skipped.push(engineMsg('restore.unknownAction', { kind: String(action.kind), description: action.description }))
       }
     } catch (err) {
       report.failed.push({
@@ -2545,7 +2556,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         result: 'success',
         sections: [],
         source: 'api',
-        summary: `自动保留清理删除 ${removedIds.length} 个旧快照`,
+        summary: engineMsg('host.snapshotPruneSummary', { count: removedIds.length }),
       })
     } catch (error) {
       host.log.warn('快照保留清理历史写入失败（best-effort）', { error: error instanceof Error ? error.message : String(error) })
@@ -2939,7 +2950,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         result: entry.status === 'success' ? 'success' : entry.status === 'skipped' ? 'skipped' : 'failed',
         sections: entry.appliedSections ?? [],
         source: 'autosync',
-        summary: `自动同步 ${entry.direction}${entry.transport !== undefined ? `（${entry.transport}）` : ''}`,
+        summary: engineMsg('host.autosyncSummary', {
+          direction: entry.direction,
+          transportSuffix: entry.transport !== undefined ? engineMsg('host.autosyncTransportSuffix', { transport: entry.transport }) : '',
+        }),
         error: entry.status === 'failed' ? (entry.error ?? entry.skipReason) : undefined,
       }).catch(() => undefined)
     },

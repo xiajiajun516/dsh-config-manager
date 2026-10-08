@@ -42,6 +42,7 @@ import { stringifyJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { redact } from '../security/redaction.ts';
 import type { SectionId } from '../schema/types.ts';
+import { marketMsg } from './messages-market.ts';
 
 /* ---------------------------------------------------------------- 常量（固定规则，无配置入口） */
 
@@ -50,8 +51,10 @@ import type { SectionId } from '../schema/types.ts';
 
 /** 用户公开仓库固定名：<login>/dsh-configs（系统按规则生成，不可配置） */
 export const USER_CONFIGS_REPO = 'dsh-configs';
-/** 用户仓库 index.json 的名称/描述（展示用） */
-export const USER_INDEX_NAME = '我的配置仓库';
+/** 用户仓库 index.json 的名称/描述（展示用；按当前界面语言在**取用时**解析，不冻结在模块加载期） */
+export function userIndexName(): string {
+  return marketMsg('market.myRepo.indexName');
+}
 /** PR 分支固定名模式：dsh-market-sync/<itemId>（收录） */
 export const PR_BRANCH_PREFIX = 'dsh-market-sync';
 /** 下架 PR 分支固定名模式：dsh-market-delist/<itemId>（删除已收录条目；独立分支避免与收录分支混淆，
@@ -274,7 +277,7 @@ export function bumpVersion(version: string): string {
 
 /** 空用户索引（首次上传时创建） */
 function emptyIndex(): MarketIndex {
-  return { schemaVersion: MARKET_INDEX_SCHEMA_VERSION, name: USER_INDEX_NAME, items: [] };
+  return { schemaVersion: MARKET_INDEX_SCHEMA_VERSION, name: userIndexName(), items: [] };
 }
 
 /** upsert 条目：同 id 覆盖（保持原位置），否则追加 */
@@ -345,10 +348,10 @@ export class MyRepoService {
 
   constructor(options: MyRepoServiceOptions) {
     if (options.prepare === null || typeof options.prepare !== 'function') {
-      throw new MyRepoError('prepare 必填');
+      throw new MyRepoError(marketMsg('market.myRepo.prepareRequired'));
     }
     if (options.rest === null || typeof options.rest !== 'object') {
-      throw new MyRepoError('rest 必填');
+      throw new MyRepoError(marketMsg('market.myRepo.restRequired'));
     }
     this.prepare = options.prepare;
     this.rest = options.rest;
@@ -376,7 +379,7 @@ export class MyRepoService {
     if (indexText === null) return []; // 从未上传
     const parsed = parseMarketIndex(indexText);
     if (!parsed.ok || parsed.index === null) {
-      throw new MyRepoError('用户仓库 index.json 无法解析（可能被外部修改）', 'index_invalid');
+      throw new MyRepoError(marketMsg('market.myRepo.userIndexUnparsable'), 'index_invalid');
     }
     // 收录状态：官方 index 含该 id → listed；否则按设计 §4.5 以 head=<login>:<branch>
     // 过滤 open PR（避免跨用户同名分支误报）→ pr-pending；否则 not-listed
@@ -462,7 +465,7 @@ export class MyRepoService {
     const { index } = await this.readUserIndex(login);
     const item = index.items.find((it) => it.id === itemId);
     if (item === undefined) {
-      throw new MyRepoError(`未找到条目 ${itemId}（可能已被删除），请刷新列表后重试`, 'item_not_found');
+      throw new MyRepoError(marketMsg('market.myRepo.itemNotFound', { itemId }), 'item_not_found');
     }
     const repoUrl = userConfigsRepoUrl(login);
     this.launchListing({
@@ -483,7 +486,7 @@ export class MyRepoService {
       const job = this.listingJobs.get(itemId);
       if (job !== undefined && job.status !== 'pending') return this.toListingStatus(job);
       if (Date.now() >= deadline) {
-        throw new MyRepoError(`等待市场任务超时（${itemId}）`, 'internal');
+        throw new MyRepoError(marketMsg('market.myRepo.listingTimeout', { itemId }), 'internal');
       }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -509,7 +512,7 @@ export class MyRepoService {
       const { index } = await this.readUserIndex(login);
       const item = index.items.find((it) => it.id === itemId);
       if (item === undefined) {
-        throw new MyRepoError(`未找到要删除的条目 ${itemId}（可能已被删除），请刷新列表后重试`, 'item_not_found');
+        throw new MyRepoError(marketMsg('market.myRepo.itemToDeleteNotFound', { itemId }), 'item_not_found');
       }
 
       // ② 移除条目 + 删除 items/<itemId>/ 目录 → 写回 index.json（per-login 串行）
@@ -548,7 +551,7 @@ export class MyRepoService {
           delisted: true,
           prNumber: null,
           prUrl: null,
-          warnings: ['该条目已收录官方市场，已自动提交下架 PR；合并前官方市场可能仍显示该条目'],
+          warnings: [marketMsg('market.myRepo.delistPrSubmitted')],
         };
       }
       // 未收录 → 关闭待审核的收录 PR（如有）
@@ -564,7 +567,7 @@ export class MyRepoService {
           delisted: false,
           prNumber: pr.number,
           prUrl: pr.htmlUrl,
-          warnings: ['已关闭该条目的待审核收录 PR'],
+          warnings: [marketMsg('market.myRepo.pendingPrClosed')],
         };
       }
       return { ok: true, itemId, delisted: false, prNumber: null, prUrl: null, warnings: [] };
@@ -616,11 +619,11 @@ export class MyRepoService {
           version = bumpVersion(existing.version ?? '0.0.0');
         } else if (explicitId !== null) {
           // 明确要求更新一个不存在的 id → 报错（避免静默新建导致用户以为更新成功）
-          throw new MyRepoError(`未找到要更新的条目 ${explicitId}（可能已被移除），请刷新列表后重试`, 'item_not_found');
+          throw new MyRepoError(marketMsg('market.myRepo.itemToUpdateNotFound', { itemId: explicitId }), 'item_not_found');
         } else {
           itemId = uniqueItemId(baseId, ids); // 名称变化 → 作为新条目
           version = '1.0.0';
-          warnings.push('未找到同名已上传条目，名称变化将作为新条目发布');
+          warnings.push(marketMsg('market.myRepo.nameChangedNewItem'));
         }
       } else {
         itemId = uniqueItemId(baseId, ids);
@@ -711,7 +714,7 @@ export class MyRepoService {
     if (text === null) return { index: emptyIndex(), exists: false };
     const parsed = parseMarketIndex(text);
     if (!parsed.ok || parsed.index === null) {
-      throw new MyRepoError('用户仓库 index.json 无法解析（可能被外部修改），已中止，请检查后重试', 'index_invalid');
+      throw new MyRepoError(marketMsg('market.myRepo.userIndexUnparsableAborted'), 'index_invalid');
     }
     return { index: parsed.index, exists: true };
   }
@@ -720,11 +723,11 @@ export class MyRepoService {
   private async readOfficialIndex(): Promise<{ index: MarketIndex }> {
     const text = await this.rest.readFile(MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO, 'index.json');
     if (text === null) {
-      throw new MyRepoError('官方市场 index.json 不存在', 'official_index_missing');
+      throw new MyRepoError(marketMsg('market.myRepo.officialIndexMissing'), 'official_index_missing');
     }
     const parsed = parseMarketIndex(text);
     if (!parsed.ok || parsed.index === null) {
-      throw new MyRepoError('官方市场 index.json 无法解析', 'official_index_invalid');
+      throw new MyRepoError(marketMsg('market.myRepo.officialIndexUnparsable'), 'official_index_invalid');
     }
     return { index: parsed.index };
   }
@@ -733,7 +736,7 @@ export class MyRepoService {
   private parsePreparedManifest(manifestText: string): MarketItemManifest {
     const parsed = parseMarketItemManifest(manifestText);
     if (!parsed.ok || parsed.manifest === null) {
-      throw new MyRepoError('prepare 生成的 manifest 无效', 'internal');
+      throw new MyRepoError(marketMsg('market.myRepo.preparedManifestInvalid'), 'internal');
     }
     return parsed.manifest;
   }
@@ -751,7 +754,7 @@ export class MyRepoService {
         fork: false,
       };
     }
-    return this.rest.createPublicRepo(USER_CONFIGS_REPO, '我的配置仓库（dsh-config-manager 自动发布）');
+    return this.rest.createPublicRepo(USER_CONFIGS_REPO, marketMsg('market.myRepo.repoDescription'));
   }
 
   /** ⑨ ensure PR：open PR（head=<login>:<branch>）存在 → 复用；否则 openPullRequest(base=main)。
@@ -770,26 +773,26 @@ export class MyRepoService {
       return this.rest.openPullRequest({
         head,
         base: 'main',
-        title: `市场下架：${itemId}`,
+        title: marketMsg('market.myRepo.delistPrTitle', { itemId }),
         body: [
-          `由 dsh-config-manager「删除条目」自动提交。`,
+          marketMsg('market.myRepo.delistPrIntro'),
           '',
-          `- 条目：${itemId}`,
-          `- 操作：从官方市场 index.json 移除该条目（下架）`,
-          `- 内容：原条目内容位于用户公开仓库，已随删除移除`,
+          marketMsg('market.myRepo.delistPrItemLine', { itemId }),
+          marketMsg('market.myRepo.delistPrAction'),
+          marketMsg('market.myRepo.delistPrContent'),
         ].join('\n'),
       });
     }
     return this.rest.openPullRequest({
       head,
       base: 'main',
-      title: `市场收录：${itemId} v${version}`,
+      title: marketMsg('market.myRepo.listPrTitle', { itemId, version }),
       body: [
-        `由 dsh-config-manager「一键上传」自动提交。`,
+        marketMsg('market.myRepo.listPrIntro'),
         '',
-        `- 条目：${itemId} v${version}`,
-        `- 内容托管：用户公开仓库（见 index.json 条目 repo 字段）`,
-        `- 校验：dsh-config-market CI（validate.yml）将自动执行 8 道校验与秘密扫描`,
+        marketMsg('market.myRepo.listPrItemLine', { itemId, version }),
+        marketMsg('market.myRepo.listPrHosting'),
+        marketMsg('market.myRepo.listPrValidation'),
       ].join('\n'),
     });
   }
@@ -844,7 +847,7 @@ export class MyRepoService {
       const { index } = await this.readUserIndex(job.login);
       const item = index.items.find((it) => it.id === job.itemId);
       if (item === undefined) {
-        throw new MyRepoError(`条目 ${job.itemId} 已不在用户仓库（可能已删除），任务终止`, 'item_not_found');
+        throw new MyRepoError(marketMsg('market.myRepo.itemGoneFromUserRepo', { itemId: job.itemId }), 'item_not_found');
       }
       updatedOfficial = upsertIndexItem(officialIndex.index, { ...item, repo: job.repoUrl });
       commitMsg = `market: ${item.version !== undefined && item.version !== '' ? 'update' : 'add'} ${job.itemId} v${job.version}`;

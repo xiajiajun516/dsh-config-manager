@@ -22,11 +22,12 @@ import { inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './r
 import { OWNERSHIP_FILE, type LockState, type MutationLockContext } from '../utils/env-lock.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import type { JournalStepRecord } from './types.ts';
+import { engineMsg } from './messages-core.ts';
 
 /** 存在未收敛的 active transaction → 拒绝创建第二个（active≤1）。 */
 export class TransactionRecoveryRequiredError extends Error {
   constructor(opId: string) {
-    super(`active transaction ${opId} 未收敛（待 recover / reconcile），拒绝创建新 transaction`)
+    super(engineMsg('core.phase3.transactionNotConverged', { opId }))
     this.name = 'TransactionRecoveryRequiredError'
   }
 }
@@ -330,7 +331,7 @@ export class Phase3Recovery {
         const snapId = await snapshotProvider();
         // P1-2 修复：snapshotProvider 返回 null 表示快照创建失败 → 显式 abort（不得在无快照下继续 mutation）
         if (snapId === null) {
-          throw new Error(`snapshotProvider 返回 null（快照创建失败），abort operation ${operationType}`);
+          throw new Error(engineMsg('core.phase3.snapshotProviderNull', { operationType }));
         }
         await journalCtx.bindSnapshot(snapId);
       } else if (deferredSnapshot !== true) {
@@ -446,7 +447,7 @@ export class Phase3Recovery {
       environmentFingerprint: this.environmentFingerprint || 'unknown',
       ownerInstanceId,
       bindSnapshot: async (snapshotId: string) => {
-        if (snapshotId === null || snapshotId === '') throw new Error('bindSnapshot: snapshotId 为空');
+        if (snapshotId === null || snapshotId === '') throw new Error(engineMsg('core.phase3.bindSnapshotEmptyId'));
         // Reviewer A P2①：持久化失败必须传播（fail-closed）——若 journal 无法 durable 绑定 SNAPSHOT_CREATED，
         // 引擎的 await bindSnapshot 抛错 → fn 抛错 → runJournaled catch（NEEDS_ATTENTION），mutation 绝不在无绑定下继续。
         await this.store.update(opId, (j) => {
@@ -454,7 +455,7 @@ export class Phase3Recovery {
           if (next.state === 'CREATED') next = transitionJournalState(next, 'SNAPSHOT_CREATED');
           else if (next.state === 'SNAPSHOT_CREATED') { /* 幂等：已绑定 */ }
           else if (next.state === 'APPLYING') { /* 允许：绑定已晚但幂等记录 */ }
-          else throw new Error(`bindSnapshot 非法 state: ${next.state}`);
+          else throw new Error(engineMsg('core.phase3.bindSnapshotIllegalState', { state: next.state }));
           return next;
         });
       },

@@ -10,9 +10,12 @@
  *  - zh 值 = 既有中文文案原样（缺省行为/测试断言不变）；
  *  - en 值类型为 Record<keyof typeof zh, string> —— 缺键/多键即编译错误；
  *  - 消息以 {param} 插值，缺失参数原样保留，便于排查；
- *  - 未知键回退 zh，再回退键名本身（绝不抛错）。
+ *  - 未知键回退 zh，再回退键名本身（绝不抛错）；
+ *  - 目录是**追加式**的：新增键只追加，既有键的 zh/en 取值逐字不变（既有 372 键的指纹冻结在
+ *    src/core/engine-locale.test.ts）；registerMessageCatalog 注册的追加目录只在既有目录未命中时生效。
  */
-import type { MsgFunc, MsgParams } from './msg-types.ts';
+import type { MsgFunc } from './msg-types.ts';
+import { interpolate, registerBaseMessageCatalog, registeredMessage } from './engine-locale.ts';
 
 export type { MsgFunc, MsgParams } from './msg-types.ts';
 
@@ -201,6 +204,14 @@ export const zh = {
   'host.fsPathEscape': '路径越界: {path}',
   'host.activationRowFailed': '插件 {pkg} 已安装，但激活行写入 profile 补丁失败：{reason}（重启后该插件可能未激活；修复后重试安装即可幂等补行）',
   'host.syncTokenWriteFailed': 'token 写入 DSH credentials 失败：{reason}（请在 DSH 凭据管理里配置 {ref} 后重试）',
+  'host.syncWebdavPasswordWriteFailed': 'WebDAV 口令写入 DSH credentials 失败：{reason}（请在 DSH 凭据管理里配置 {ref} 后重试）',
+  'host.syncCredentialWriteFailed': '{kind} 写入 DSH credentials 失败：{reason}（请在 DSH 凭据管理里配置 {ref} 后重试）',
+  'host.syncKindS3Secret': 'S3 密钥',
+  'host.sessionFormatPathSeparator': '、',
+  'host.sessionFormatPathsTruncated': '{paths} 等',
+  'host.snapshotPruneSummary': '自动保留清理删除 {count} 个旧快照',
+  'host.autosyncSummary': '自动同步 {direction}{transportSuffix}',
+  'host.autosyncTransportSuffix': '（{transport}）',
   'host.githubMissingClientId': '未配置 GitHub OAuth client_id：请在插件配置中设置 githubClientId（GitHub → Settings → Developer settings → OAuth Apps 注册应用获取）',
   'host.githubFlowGone': 'GitHub 登录流程不存在或已过期，请重新开始',
   'host.restoreBlobEscape': 'blob 路径越界: {blob}',
@@ -601,6 +612,14 @@ export const en: Record<keyof typeof zh, string> = {
   'host.fsPathEscape': 'Path outside home directory: {path}',
   'host.activationRowFailed': 'Plugin {pkg} is installed, but writing the activation row into the profile patch failed: {reason} (the plugin may be inactive until restart; retrying the install after fixing is idempotent)',
   'host.syncTokenWriteFailed': 'Failed to write the token into DSH credentials: {reason} (configure {ref} in DSH credential management, then retry)',
+  'host.syncWebdavPasswordWriteFailed': 'Failed to write the WebDAV password into DSH credentials: {reason} (configure {ref} in DSH credential management, then retry)',
+  'host.syncCredentialWriteFailed': 'Failed to write {kind} into DSH credentials: {reason} (configure {ref} in DSH credential management, then retry)',
+  'host.syncKindS3Secret': 'the S3 secret',
+  'host.sessionFormatPathSeparator': ', ',
+  'host.sessionFormatPathsTruncated': '{paths}, among others',
+  'host.snapshotPruneSummary': 'Automatic retention cleanup removed {count} old snapshot(s)',
+  'host.autosyncSummary': 'Autosync {direction}{transportSuffix}',
+  'host.autosyncTransportSuffix': ' ({transport})',
   'host.githubMissingClientId': 'GitHub OAuth client_id is not configured: set githubClientId in the plugin config (GitHub → Settings → Developer settings → OAuth Apps → register an app)',
   'host.githubFlowGone': 'The GitHub sign-in flow does not exist or has expired; please start over',
   'host.restoreBlobEscape': 'Blob path outside snapshot directory: {blob}',
@@ -815,29 +834,28 @@ export const en: Record<keyof typeof zh, string> = {
   // ---------- session grouping (issue #45: relocate restored sessions by cwd) ----------
 };
 
-/** 插值：{param} → 形参值；缺参原样保留（便于排查）。 */
-function interpolate(template: string, params?: MsgParams): string {
-  if (params === undefined) return template;
-  return template.replace(/\{(\w+)\}/g, (match, key: string) => {
-    const value = params[key];
-    return value === undefined ? match : String(value);
-  });
-}
-
-/** 构造 MsgFunc：en → en 目录（缺键回退 zh）；其余 → zh。 */
+/**
+ * 构造 MsgFunc：en → en 目录（缺键回退 zh）；其余 → zh。
+ *
+ * 查找顺序（自 t2 起）：既有目录 → en 语言下回退既有 zh → 注册目录（registerMessageCatalog；
+ * **只在既有目录未命中时生效**）→ 键名。既有 372 键的取值逐字不变（engine-locale.test.ts 有冻结指纹）。
+ * 插值实现已移入 engine-locale.ts（与 engineMsg 共用同一份，避免两份实现漂移）。
+ */
 export function makeMsg(lang: 'zh' | 'en' | string | undefined): MsgFunc {
-  const langKey = lang === 'en' ? 'en' : 'zh'
-  const dict = langKey === 'en' ? en : zh
-  const fallback = langKey === 'en' ? zh : undefined
+  const langKey: 'zh' | 'en' = lang === 'en' ? 'en' : 'zh'
+  const dict = (langKey === 'en' ? en : zh) as Readonly<Record<string, string>>
+  const fallback = langKey === 'en' ? (zh as Readonly<Record<string, string>>) : undefined
   return (key, params) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const template = (dict as any)[key] ?? (fallback as any)?.[key] ?? key
+    const template = dict[key] ?? fallback?.[key] ?? registeredMessage(langKey, key) ?? key
     return interpolate(template, params)
   }
 }
 
 /** 缺省目录（zh）：未注入 msg 的引擎/测试路径使用，行为与改造前完全一致。 */
 export const zhMsg: MsgFunc = makeMsg('zh');
+
+/** 把基础目录交给引擎语言运行时（engineMsg 用；本模块不反向被 import，避免循环依赖）。 */
+registerBaseMessageCatalog({ zh, en });
 
 /** 从「可能携带 msg 的对象」取翻译器；缺省 zh。 */
 export function msgOf(ctx: { msg?: MsgFunc } | undefined): MsgFunc {

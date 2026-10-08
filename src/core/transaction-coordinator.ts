@@ -19,6 +19,7 @@ import {
   isTerminalState, generateOperationId, redactJournalText, type OperationJournal,
 } from './journal.ts';
 import type { MutationLockContext, MutationLockPort } from '../utils/env-lock.ts';
+import { engineMsg } from './messages-core.ts';
 
 // ---------- 类型 ----------
 
@@ -109,9 +110,9 @@ export class MutationTransactionCoordinator {
         : 'needs-attention';
       if (recovered === 'recovered' || recovered === 'rolled-back') {
         // 残留已收敛 → 可继续；但本函数语义：先返回，调用方重试 run
-        return { outcome: 'RECOVERY_REQUIRED', operationId: activeCheck.residue, reason: `残留 active transaction ${activeCheck.residue} 待处理，请重试` };
+        return { outcome: 'RECOVERY_REQUIRED', operationId: activeCheck.residue, reason: engineMsg('core.txn.residuePending', { residue: activeCheck.residue }) };
       }
-      return { outcome: 'RECOVERY_REQUIRED', operationId: activeCheck.residue, reason: `存在 unresolved active transaction ${activeCheck.residue}` };
+      return { outcome: 'RECOVERY_REQUIRED', operationId: activeCheck.residue, reason: engineMsg('core.txn.unresolvedActive', { residue: activeCheck.residue }) };
     }
 
     // 3. 创建 journal
@@ -227,7 +228,7 @@ export class MutationTransactionCoordinator {
       if (current !== null && isTerminalState(current.state)) {
         // 已 terminal（如 COMMITTED 后 move 抛错 → 保持 terminal，不回滚）
         const opId = operationId;
-        return { outcome: 'NEEDS_ATTENTION', operationId: opId, reason: `tail/commit 后异常：${msg}`, snapshotId };
+        return { outcome: 'NEEDS_ATTENTION', operationId: opId, reason: engineMsg('core.txn.tailCommitFailed', { message: msg }), snapshotId };
       }
       return await this.finalizeAttention(operationId, msg, snapshotId, context);
     }

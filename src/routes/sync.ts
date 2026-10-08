@@ -731,7 +731,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           msg('host.syncPullTimeout'),
         )
         if (!preview.ok || preview.plan === null || preview.analysis === null) {
-          writeJson(res, 200, { ok: false, syncSessionId: '', snapshotId: preview.snapshotId, items: [], needsReview: false, compatibility: 'unsupported', message: preview.message ?? '同步预览失败' })
+          writeJson(res, 200, { ok: false, syncSessionId: '', snapshotId: preview.snapshotId, items: [], needsReview: false, compatibility: 'unsupported', message: preview.message ?? msg('route.syncPreviewFailed') })
           return
         }
         // T1：abort 处置在**预览阶段**就阻断（此刻仍零写入：临时 ZIP 与内存会话都还没登记）。
@@ -777,7 +777,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         const syncSessionId = typeof body['syncSessionId'] === 'string' ? body['syncSessionId'] : ''
         const session = syncSessions.get(syncSessionId)
         if (session === undefined) {
-          writeJson(res, 400, { error: '同步会话不存在或已过期，请重新拉取预览' })
+          writeJson(res, 400, { error: msg('route.syncSessionExpired') })
           return
         }
         // T1：abort 处置在**应用前**再判一次（客户端可能绕过 preview 直接 apply，或预览后改了处置）。
@@ -804,7 +804,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           if (d === undefined || !d.adopt) return []
           // Conflict 项必须有 resolution；keepLocal/skip 不写入本地 → 剔除
           if (item.kind === 'Conflict') {
-            if (d.resolution === undefined) throw new SyncRouteError(`冲突项 ${item.id} 必须提供 resolution（useRemote/keepLocal/skip）`)
+            if (d.resolution === undefined) throw new SyncRouteError(msg('route.syncConflictResolutionRequired', { id: item.id }))
             if (d.resolution === 'keepLocal' || d.resolution === 'skip') return []
             // useRemote → 转成 Update 计划项（镜像 analyzer.applyItemResolution 的
             // useImported 分支），applyOne 才会把远端值真正写进本地。
@@ -850,10 +850,14 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           source: 'api',
           // issue #56：历史如实区分「全部成功 / 部分成功（N 项未生效）」——
           // 此前 ok:true 一律写「N 项」+ 无 error，用户在历史里看到的就是一次干净的成功。
-          summary: `一键同步应用：${(Array.isArray(report.applied) ? report.applied.length : subItems.length)} 项${report.rolledBack === true ? (report.rollbackFull === false ? '（回滚未完成）' : '（已回滚）') : ''}${report.ineffective.length > 0 ? `（${report.ineffective.length} 项未生效）` : ''}`,
+          summary: msg('route.syncApplySummary', {
+            count: Array.isArray(report.applied) ? report.applied.length : subItems.length,
+            status: report.rolledBack === true ? (report.rollbackFull === false ? msg('route.syncRollbackIncomplete') : msg('route.syncRolledBack')) : '',
+            ineffective: report.ineffective.length > 0 ? msg('route.syncIneffectiveSuffix', { count: report.ineffective.length }) : '',
+          }),
           error: report.ok
-            ? (report.ineffective.length > 0 ? '同步应用部分成功：有项未生效（见告警明细）' : undefined)
-            : '同步应用未完全成功',
+            ? (report.ineffective.length > 0 ? msg('route.syncApplyPartial') : undefined)
+            : msg('route.syncApplyFailed'),
         })
         writeJson(res, 200, historyError === undefined ? {
           ok: report.ok,
@@ -1023,7 +1027,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           sections: [],
           snapshotId: restoreId,
           source: 'api',
-          summary: `一键同步回滚（${restoreId}）`,
+          summary: msg('route.syncRollbackSummary', { id: restoreId }),
         })
         // 诚实回传：full=false 时把 failed（含 manualHint）一并给出，界面据此列出「哪些项没回滚、
         // 需要人工补录」而不是无条件报「已回滚」。CLI 侧同口径见 src/cli/actions.ts 的 rollback 文案。

@@ -28,7 +28,7 @@ export function UnreadableSnapshotsBanner({
     <Banner kind="warn">
       {t('snapshots.unreadableHint', {
         n: String(items.length),
-        files: items.map((u) => baseName(u.file)).join('、'),
+        files: items.map((u) => baseName(u.file)).join(t('common.listSeparator')),
       })}
     </Banner>
   )

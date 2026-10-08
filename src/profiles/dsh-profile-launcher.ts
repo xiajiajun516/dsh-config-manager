@@ -30,6 +30,7 @@ import { resolveDesktopCarrier } from '../utils/desktop-carrier.ts'
 import { isRecord } from '../utils/guards.ts'
 import { DshProfileError } from './dsh-profile-manager.ts'
 import { readTextSafe, sanitizeFilePart } from './dsh-profile-io.ts'
+import { profilesMsg } from './messages.ts'
 import { resolveProcessControl, stopPid, type ResolvedProcessControl } from './process-control.ts'
 import {
   DSH_PROFILE_LAUNCH_TIMEOUT_MS, isLaunchableShape, isManagedProfileName,
@@ -259,7 +260,7 @@ export class DshProfileLauncher {
     const rest = records.filter((r) => r.name !== name)
     const outcome = await stopPid(record.pid, this.proc)
     if (outcome === 'failed') {
-      throw new DshProfileError('stopFailed', 'stopFailed: pid ' + String(record.pid) + ' 仍在运行')
+      throw new DshProfileError('stopFailed', profilesMsg('profiles.stopFailed', { pid: record.pid }))
     }
     this.deps.writeState(serializeLaunches(rest))
     return { name, result: outcome, port: record.port }

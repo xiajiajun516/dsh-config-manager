@@ -30,6 +30,15 @@ export const s3Zh = {
   'sync.s3.indexInvalid': '{url} 解析失败或结构非法: {err}',
   'sync.s3.snapshotInvalid': '快照 {id} 解析失败或结构非法: {err}',
   'sync.s3.indexMissingWithContent': '远端已有内容但索引 {url} 缺失（HTTP 404）：拒绝以空集合覆盖权威索引，本次上传已中止（零写入）',
+  // ---- t6（英文界面零中文）：变体说明（供 UI/文档用 msg() 解析；本字段自 t6 起是**目录键**而非文案）、
+  // 方言兜底与 blob 仓哈希形状守卫。键落本地目录 ⇒ composeMsg(host, s3Msg) 与「不传 msg」两条路径都不露裸键名。
+  'sync.s3.providerNoteS3': 'AWS S3（默认 us-east-1；AWS 中国区/自建网关请覆盖 endpoint）',
+  'sync.s3.providerNoteOss': '阿里云 OSS（region 必填，如 cn-hangzhou；签名方言 OSS4，头名 x-oss-*）',
+  'sync.s3.providerNoteCos': '腾讯云 COS（region 必填，如 ap-guangzhou；2024 年后新建桶只支持 virtual-host 寻址）',
+  'sync.s3.providerNoteMinio': 'MinIO / 自建网关（endpoint 必填；默认 path-style，配了域名才用 virtual-host）',
+  'sync.s3.providerNoteKodo': '七牛 Kodo S3 兼容（region 必填，如 cn-east-1；endpoint 可覆盖）',
+  'sync.s3.unknownSignatureDialect': '未知签名方言: {id}',
+  'sync.s3.blobHashInvalid': '内容哈希形状非法，拒绝写入 blob 仓: {hash}',
 } as const;
 
 export const s3En: Record<keyof typeof s3Zh, string> = {
@@ -51,6 +60,13 @@ export const s3En: Record<keyof typeof s3Zh, string> = {
   'sync.s3.indexInvalid': '{url} failed to parse or is structurally invalid: {err}',
   'sync.s3.snapshotInvalid': 'Snapshot {id} failed to parse or is structurally invalid: {err}',
   'sync.s3.indexMissingWithContent': 'The remote already has content but index {url} is missing (HTTP 404): refusing to overwrite the authoritative index with an empty set; this upload was aborted (zero writes)',
+  'sync.s3.providerNoteS3': 'AWS S3 (defaults to us-east-1; override endpoint for AWS China or self-hosted gateways)',
+  'sync.s3.providerNoteOss': 'Alibaba Cloud OSS (region required, e.g. cn-hangzhou; OSS4 signature dialect with x-oss-* headers)',
+  'sync.s3.providerNoteCos': 'Tencent Cloud COS (region required, e.g. ap-guangzhou; buckets created after 2024 only support virtual-host addressing)',
+  'sync.s3.providerNoteMinio': 'MinIO / self-hosted gateway (endpoint required; path-style by default, virtual-host only when a domain is configured)',
+  'sync.s3.providerNoteKodo': 'Qiniu Kodo S3-compatible (region required, e.g. cn-east-1; endpoint can be overridden)',
+  'sync.s3.unknownSignatureDialect': 'Unknown signature dialect: {id}',
+  'sync.s3.blobHashInvalid': 'Malformed content hash; refusing to write to the blob store: {hash}',
 };
 
 /** 插值：{param} → 形参值；缺参原样保留（与 core/messages.ts 同口径）。 */

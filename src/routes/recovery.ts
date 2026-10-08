@@ -8,6 +8,9 @@
 import { join } from 'node:path'
 
 import { endpoint, readJsonBody, writeJson } from './kit.ts'
+// t6：「英文界面零中文」——迁移历史 summary 一律由目录键产生；engineMsg 与宿主 makeRouteEnv 的
+// `msg` 同源（t2 起 this.msg = engineMsg），但它是**活翻译器**，不依赖 env 是否注入取词器。
+import { engineMsg } from './messages.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { isValidOperationId } from '../core/journal.ts'
@@ -173,7 +176,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
                   const repairId = typeof body['repairId'] === 'string' ? body['repairId'] : ''
                   if (repairId === '') { writeJson(res, 400, { error: 'repairId required' }); return }
                   const result = await rollbackSessionRepair({ homeDir, dataDir, repairId })
-                  await tryAppendHistory({ kind: 'recovery', result: result.ok ? 'success' : 'skipped', sections: [], source: 'recovery', summary: '会话修复回滚' })
+                  await tryAppendHistory({ kind: 'recovery', result: result.ok ? 'success' : 'skipped', sections: [], source: 'recovery', summary: engineMsg('route.recoverySessionRepairRollback') })
                   writeJson(res, 200, result)
                   return
                 }
@@ -198,8 +201,8 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
                   sections: [],
                   source: 'recovery',
                   summary: result.ok
-                    ? '会话修复（丢弃重放重复行 ' + String(result.droppedRows ?? 0) + ' 行）'
-                    : '会话修复被拒绝：' + String(result.reason),
+                    ? engineMsg('route.recoverySessionRepairDropped', { count: String(result.droppedRows ?? 0) })
+                    : engineMsg('route.recoverySessionRepairRejected', { reason: String(result.reason) }),
                 })
                 writeJson(res, 200, result)
               },
@@ -258,8 +261,8 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
                   sections: [],
                   source: 'recovery',
                   summary: result.ok
-                    ? '会话布局归位（搬运/隔离 ' + String(result.applied) + ' 条）'
-                    : '会话布局归位未全部完成（成功 ' + String(result.applied) + '，失败 ' + String(result.failed) + '，跳过 ' + String(result.skipped) + '）',
+                    ? engineMsg('route.recoverySessionLayoutApplied', { count: String(result.applied) })
+                    : engineMsg('route.recoverySessionLayoutPartial', { applied: String(result.applied), failed: String(result.failed), skipped: String(result.skipped) }),
                 })
                 writeJson(res, 200, result)
               },
@@ -380,7 +383,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
                 result: 'success',
                 sections: [],
                 source: 'recovery',
-                summary: '检查点捕获（三态同点）',
+                summary: engineMsg('route.recoveryCheckpointCapture'),
               })
             }
             reply(result)
@@ -447,7 +450,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
               result: result.outcome === 'restored' ? 'success' : result.outcome === 'partial' ? 'skipped' : 'failed',
               sections: [],
               source: 'recovery',
-              summary: '检查点回滚（三态同点）：' + result.outcome,
+              summary: engineMsg('route.recoveryCheckpointRollback', { outcome: String(result.outcome) }),
               error: result.outcome === 'denied' || result.outcome === 'failed'
                 ? String(result.code) + (result.detail !== undefined ? ' ' + result.detail : '')
                 : undefined,
@@ -509,7 +512,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             result: r.status === 200 ? 'success' : r.status >= 500 ? 'failed' : 'skipped',
             sections: [],
             source: 'recovery',
-            summary: '恢复操作 recover-stale-lock',
+            summary: engineMsg('route.recoveryOperationSummary', { action: 'recover-stale-lock' }),
           })
           writeJson(res, r.status, r.body)
         } catch (error) {
@@ -533,7 +536,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             result: r.status === 200 ? 'success' : r.status >= 500 ? 'failed' : 'skipped',
             sections: [],
             source: 'recovery',
-            summary: '恢复操作 clear-safe-mode',
+            summary: engineMsg('route.recoveryOperationSummary', { action: 'clear-safe-mode' }),
           })
           writeJson(res, r.status, r.body)
         } catch (error) {
@@ -575,7 +578,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
               sections: [],
               operationId,
               source: 'recovery',
-              summary: `恢复操作 ${action}`,
+              summary: engineMsg('route.recoveryOperationSummary', { action }),
               error: r.status >= 400 && typeof r.body?.['error'] === 'string' ? String(r.body['error']) : undefined,
             })
           }

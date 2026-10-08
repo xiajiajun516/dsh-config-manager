@@ -21,6 +21,7 @@ import {
   ZipSafetyError,
   type ZipSafetyLimits,
 } from '../utils/zip.ts';
+import { securityMsg } from './messages.ts';
 
 export { isPathSafe } from '../utils/paths.ts';
 
@@ -83,13 +84,13 @@ export async function safeExtractHardened(
       if (meta.isDirectory) continue;
       const target = path.join(destDir, ...meta.name.split('/'));
       if (!isSameOrChild(target, destDir)) {
-        throw new ZipSafetyError(`解压目标越界: ${meta.name}`);
+        throw new ZipSafetyError(securityMsg('security.zipTargetOutOfBounds', { name: meta.name }));
       }
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, archive.readEntry(meta.name));
       extracted.push(meta.name);
       if (isExecutableName(meta.name)) {
-        warnings.push(`条目 "${meta.name}" 是潜在可执行文件，本插件不会执行它`);
+        warnings.push(securityMsg('security.zipExecutableEntry', { name: meta.name }));
       }
     }
     // 解压后复查：全部产物必须是普通文件（防 symlink 逃逸 / 非常规写入）
@@ -97,7 +98,7 @@ export async function safeExtractHardened(
       const p = path.join(destDir, ...rel.split('/'));
       const st = await fs.lstat(p);
       if (!st.isFile()) {
-        throw new ZipSafetyError(`解压产物不是普通文件: ${rel}`);
+        throw new ZipSafetyError(securityMsg('security.zipEntryNotRegularFile', { rel }));
       }
     }
     return { files: extracted, warnings };

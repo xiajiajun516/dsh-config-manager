@@ -213,6 +213,8 @@ export const zh = {
   'myconfigs.error.loadItems': '已上传列表读取失败',
   // 公共
   'common.cancel': '取消',
+  // 标点也属界面文案：英文界面不得出现全角冒号（自动字段徽章的 label：value 分隔）
+  'common.labelSeparator': '：',
   'common.close': '关闭',
   'common.retry': '重试',
   'common.loading': '加载中…',
@@ -403,6 +405,7 @@ export const en: Record<keyof typeof zh, string> = {
   'myconfigs.error.loadStatus': 'Failed to read sign-in status',
   'myconfigs.error.loadItems': 'Failed to read uploaded items',
   'common.cancel': 'Cancel',
+  'common.labelSeparator': ': ',
   'common.close': 'Close',
   'common.retry': 'Retry',
   'common.loading': 'Loading…',

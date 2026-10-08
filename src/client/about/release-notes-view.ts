@@ -8,6 +8,7 @@
  * - 分页获取 releases 并判断 hasMore
  * - 轻量级安全 Markdown 分块解析器（纯文本结构化，零 dangerouslySetInnerHTML / 零 XSS 风险）
  */
+import type { TranslateNS } from '../client-types.ts';
 
 export interface GitHubReleaseRaw {
   id?: number;
@@ -154,6 +155,7 @@ export async function fetchReleases(
   page = 1,
   perPage = 5,
   fetcher: typeof fetch = globalThis.fetch,
+  t: TranslateNS<'config-manager'>,
 ): Promise<FetchReleasesResult> {
   const url = buildReleasesApiUrl(repoUrl, page, perPage);
   const res = await fetcher(url, {
@@ -164,12 +166,12 @@ export async function fetchReleases(
 
   if (!res.ok) {
     if (res.status === 403 || res.status === 429) {
-      throw new Error('GitHub API 速率限制（Rate limit exceeded），请稍后再试或直接在 GitHub 上查看。');
+      throw new Error(t('about.releaseNotes.rateLimited'));
     }
     if (res.status === 404) {
       return { releases: [], hasMore: false, page };
     }
-    throw new Error(`GitHub API 请求失败 (${res.status} ${res.statusText})`);
+    throw new Error(t('about.releaseNotes.fetchFailed', { status: String(res.status), statusText: res.statusText }));
   }
 
   const json: unknown = await res.json();

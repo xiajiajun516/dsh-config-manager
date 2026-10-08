@@ -3,7 +3,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { UiAdapter, isUiNamespace, UI_MIGRATION_NOTES } from './ui.ts';
+import { UiAdapter, isUiNamespace, uiMigrationNotes } from './ui.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 
 const NS = ['general', 'theme', 'pet', 'dsh-better-sidebar', 'llm-deepseek'];
@@ -32,7 +32,7 @@ test('ui: 导出只含 UI namespace + uiMigrationNotes（纯说明）', async ()
   assert.equal(out.counts.namespaces, 2);
   assert.ok(out.data.uiMigrationNotes.length >= 1);
   assert.equal(out.data.uiMigrationNotes[0]?.migratable, false);
-  assert.equal(UI_MIGRATION_NOTES.length, out.data.uiMigrationNotes.length);
+  assert.equal(uiMigrationNotes().length, out.data.uiMigrationNotes.length);
 
   const v = await adapter.validate(out.data);
   assert.equal(v.valid, true);

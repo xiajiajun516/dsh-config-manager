@@ -34,6 +34,7 @@ import { defaultFetcher } from '../utils/proxy.ts';
 // 从本文件导入会把 node:https 拉进浏览器 bundle，导致插件加载失败）。
 // 同时 import（本文件内部要用）与 export（保持既有导入路径的向后兼容）。
 import { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO } from './upstream.ts';
+import { marketMsg } from './messages-market.ts';
 
 export { MARKET_UPSTREAM_OWNER, MARKET_UPSTREAM_REPO };
 
@@ -140,7 +141,7 @@ export class GitHubApiError extends Error {
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new GitHubApiError('GitHub API 返回了无法识别的数据结构', 'invalid_response');
+    throw new GitHubApiError(marketMsg('market.github.invalidResponseShape'), 'invalid_response');
   }
   return value as Record<string, unknown>;
 }
@@ -148,7 +149,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 function getStr(obj: Record<string, unknown>, key: string): string {
   const v = obj[key];
   if (typeof v !== 'string' || v === '') {
-    throw new GitHubApiError(`GitHub API 响应缺少必要字段 ${key}`, 'invalid_response');
+    throw new GitHubApiError(marketMsg('market.github.missingField', { key }), 'invalid_response');
   }
   return v;
 }
@@ -161,7 +162,7 @@ function getOptStr(obj: Record<string, unknown>, key: string): string | undefine
 function getNum(obj: Record<string, unknown>, key: string): number {
   const v = obj[key];
   if (typeof v !== 'number' || !Number.isFinite(v)) {
-    throw new GitHubApiError(`GitHub API 响应缺少必要字段 ${key}`, 'invalid_response');
+    throw new GitHubApiError(marketMsg('market.github.missingField', { key }), 'invalid_response');
   }
   return v;
 }
@@ -169,7 +170,7 @@ function getNum(obj: Record<string, unknown>, key: string): number {
 function getBool(obj: Record<string, unknown>, key: string): boolean {
   const v = obj[key];
   if (typeof v !== 'boolean') {
-    throw new GitHubApiError(`GitHub API 响应缺少必要字段 ${key}`, 'invalid_response');
+    throw new GitHubApiError(marketMsg('market.github.missingField', { key }), 'invalid_response');
   }
   return v;
 }
@@ -341,7 +342,7 @@ export class GitHubAuthRest {
     query.set('per_page', '100');
     const data = await this.requestJson('GET', `/user/repos?${query.toString()}`);
     if (!Array.isArray(data)) {
-      throw new GitHubApiError('GitHub repos 响应不是数组', 'invalid_response');
+      throw new GitHubApiError(marketMsg('market.github.reposNotArray'), 'invalid_response');
     }
     const cap = Math.min(Math.max(limit, 1), 100);
     return data.slice(0, cap).map((item) => toRepoSummary(item));
@@ -377,16 +378,16 @@ export class GitHubAuthRest {
     const data = await safeParseJson(response);
     const obj = asRecord(data);
     if (obj['type'] !== 'file') {
-      throw new GitHubApiError('GitHub contents 路径不是文件（目录 / 子模块不可作为文本读取）', 'not_a_file');
+      throw new GitHubApiError(marketMsg('market.github.notAFile'), 'not_a_file');
     }
     const content = obj['content'];
     const encoding = obj['encoding'];
     // 允许空串（0 字节空文件 GitHub 返回 content:""）；缺失/非 string 才是异常
     if (typeof content !== 'string') {
-      throw new GitHubApiError('GitHub contents 响应缺少文件内容', 'invalid_response');
+      throw new GitHubApiError(marketMsg('market.github.missingFileContent'), 'invalid_response');
     }
     if (typeof encoding === 'string' && encoding !== '' && encoding !== 'base64') {
-      throw new GitHubApiError(`不支持的 contents 编码：${encoding}`, 'invalid_response');
+      throw new GitHubApiError(marketMsg('market.github.unsupportedEncoding', { encoding }), 'invalid_response');
     }
     return Buffer.from(content, 'base64').toString('utf8');
   }
@@ -434,7 +435,7 @@ export class GitHubAuthRest {
     if (head !== undefined && head !== '') query.set('head', head);
     const data = await this.requestJson('GET', `/repos/${seg(owner)}/${seg(repo)}/pulls?${query.toString()}`);
     if (!Array.isArray(data)) {
-      throw new GitHubApiError('GitHub pulls 响应不是数组', 'invalid_response');
+      throw new GitHubApiError(marketMsg('market.github.pullsNotArray'), 'invalid_response');
     }
     return data.map((item) => toPullInfo(item));
   }
@@ -463,7 +464,7 @@ export class GitHubAuthRest {
     const parentName = parentFullNameOf(obj);
     if (isFork !== true || parentName !== `${owner}/${repo}`) {
       throw new GitHubApiError(
-        '你的同名仓库已存在但不是本市场的 fork，无法自动收录，请改名或删除后重试',
+        marketMsg('market.github.forkNameConflict'),
         'fork_name_conflict',
       );
     }
@@ -498,7 +499,7 @@ export class GitHubAuthRest {
         throw await this.apiError(response);
       }
       if (this.now() >= deadline) {
-        throw new GitHubApiError('fork 创建超时（GitHub 异步创建，请稍后重试）', 'fork_timeout');
+        throw new GitHubApiError(marketMsg('market.github.forkTimeout'), 'fork_timeout');
       }
       await delay(this.pollIntervalMs);
     }
@@ -528,7 +529,7 @@ export class GitHubAuthRest {
   private async request(path: string, init: RequestInit = {}): Promise<Response> {
     const token = await this.tokenProvider();
     if (typeof token !== 'string' || token === '') {
-      throw new GitHubApiError('GitHub token 未配置（请先登录）', 'no_token');
+      throw new GitHubApiError(marketMsg('market.github.noToken'), 'no_token');
     }
     const headers = new Headers(init.headers);
     headers.set('accept', 'application/vnd.github+json');
@@ -539,7 +540,7 @@ export class GitHubAuthRest {
       response = await this.fetcher(GITHUB_API_BASE + path, { ...init, headers });
     } catch (err) {
       throw new GitHubApiError(
-        `GitHub API 请求失败：${redact(err instanceof Error ? err.message : String(err))}`,
+        marketMsg('market.github.requestFailed', { reason: redact(err instanceof Error ? err.message : String(err)) }),
         'network_error',
       );
     }
@@ -559,7 +560,7 @@ export class GitHubAuthRest {
       response = await this.fetcher(GITHUB_API_BASE + path, { ...init, headers });
     } catch (err) {
       throw new GitHubApiError(
-        `GitHub API 请求失败：${redact(err instanceof Error ? err.message : String(err))}`,
+        marketMsg('market.github.requestFailed', { reason: redact(err instanceof Error ? err.message : String(err)) }),
         'network_error',
       );
     }
@@ -574,7 +575,7 @@ export class GitHubAuthRest {
     const obj = asRecord(data);
     const stars = obj['stargazers_count'];
     if (typeof stars !== 'number' || !Number.isFinite(stars) || stars < 0) {
-      throw new GitHubApiError('GitHub API 响应缺少有效的 stargazers_count', 'invalid_response');
+      throw new GitHubApiError(marketMsg('market.github.invalidStars'), 'invalid_response');
     }
     return stars;
   }
@@ -610,8 +611,10 @@ export class GitHubAuthRest {
     }
     const rateLimited = response.headers.get('x-ratelimit-remaining') === '0';
     const code = classifyErrorCode(status, rateLimited);
-    const detail = ghMessage !== '' ? `：${ghMessage}` : '';
-    return new GitHubApiError(redact(`GitHub API 错误（HTTP ${status}）${detail}`), code, status);
+    const text = ghMessage !== ''
+      ? marketMsg('market.github.apiErrorWithMessage', { status, message: ghMessage })
+      : marketMsg('market.github.apiError', { status });
+    return new GitHubApiError(redact(text), code, status);
   }
 }
 
@@ -622,6 +625,6 @@ async function safeParseJson(response: Response): Promise<unknown> {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new GitHubApiError('GitHub API 返回了无法解析的响应，请稍后重试', 'invalid_response', response.status);
+    throw new GitHubApiError(marketMsg('market.github.unparsableResponse'), 'invalid_response', response.status);
   }
 }

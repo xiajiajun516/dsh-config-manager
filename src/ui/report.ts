@@ -9,7 +9,7 @@ import type {
   ExecutedItem, ExportReport, ImportResult, RollbackReport,
 } from '../core/types.ts';
 import type { ImportResultAction, ImportSectionStat } from './types.ts';
-import { zhUiT, type UiT, type UiTextKey } from './i18n.ts';
+import type { UiT, UiTextKey } from './i18n.ts';
 
 /* ---------------- §21 导出报告 ---------------- */
 
@@ -40,17 +40,18 @@ const COUNT_UNIT_KEY: Record<string, UiTextKey> = {
  * 一个分区的 counts → 一行中文计数文本（如「18 个命名空间，3 条说明」）。
  * 空 counts → 空串（调用方按「—」渲染，不要在这里编一个 0）。
  */
-export function exportCountsText(counts: Record<string, number>, t: UiT = zhUiT): string {
+export function exportCountsText(counts: Record<string, number>, t: UiT): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(counts)) {
     if (typeof value !== 'number' || !Number.isFinite(value)) continue;
     const unitKey = COUNT_UNIT_KEY[key];
     parts.push(unitKey === undefined ? String(value) + ' ' + key : String(value) + ' ' + t(unitKey));
   }
-  return parts.join('，');
+  // 分隔符也走字典：英文用半角逗号（全角标点在英文界面同样是缺陷）
+  return parts.join(t('report.unitSeparator'));
 }
 
-export function renderExportReport(report: ExportReport, t: UiT = zhUiT): string {
+export function renderExportReport(report: ExportReport, t: UiT): string {
   const lines: string[] = [t('report.backupCreated'), ''];
   lines.push(t('report.included'));
   for (const { section, counts } of report.included) {
@@ -168,7 +169,7 @@ export function importProblems(executed: readonly ExecutedItem[]): ImportProblem
 }
 
 /** 导入报告渲染（含回滚状态；§22 动作按钮由 suggestedActions 给出） */
-export function renderImportReport(result: ImportResult, t: UiT = zhUiT): string {
+export function renderImportReport(result: ImportResult, t: UiT): string {
   const lines: string[] = [result.ok ? t('report.importComplete') : t('report.importFailed'), ''];
   // F4：被删除墓碑过滤的条目提示（用户明确删过、不复活）
   if ((result.skippedTombstoned?.length ?? 0) > 0) {
@@ -213,7 +214,7 @@ export function suggestedActions(_result: ImportResult): ImportResultAction[] {
 /* ---------------- §17 回滚报告 ---------------- */
 
 /** 回滚报告渲染（full / partial + 人工恢复清单） */
-export function renderRollbackReport(rr: RollbackReport, t: UiT = zhUiT): string {
+export function renderRollbackReport(rr: RollbackReport, t: UiT): string {
   if (rr.full) {
     return t('report.rollbackFull');
   }

@@ -43,7 +43,10 @@ export interface S3ProviderVariant {
   endpointTemplate?: string;
   /** 默认寻址风格：true = path-style（<endpoint>/<bucket>/<key>），false = virtual-host（<bucket>.<endpoint>/<key>） */
   defaultPathStyle: boolean;
-  /** 变体说明（供 UI/文档映射成字典键；不是用户最终文案） */
+  /**
+   * 变体说明的**目录键**（自 t6 起字段是键而不是文案 —— 中文只存在于 `sync/s3/messages.ts` 的本地目录，
+   * 经 `s3Msg` / `composeMsg(host, s3Msg)` 解析成当前语言；本字段本身不渲染）。
+   */
   note: string;
 }
 
@@ -55,26 +58,26 @@ export const S3_PROVIDER_VARIANTS: Record<S3CompatProvider, S3ProviderVariant> =
   s3: {
     id: 's3', dialectId: 'aws4', service: 's3', defaultRegion: 'us-east-1',
     endpointTemplate: 'https://s3.{region}.amazonaws.com', defaultPathStyle: false,
-    note: 'AWS S3（默认 us-east-1；AWS 中国区/自建网关请覆盖 endpoint）',
+    note: 'sync.s3.providerNoteS3',
   },
   oss: {
     id: 'oss', dialectId: 'oss4', service: 'oss',
     endpointTemplate: 'https://oss-{region}.aliyuncs.com', defaultPathStyle: false,
-    note: '阿里云 OSS（region 必填，如 cn-hangzhou；签名方言 OSS4，头名 x-oss-*）',
+    note: 'sync.s3.providerNoteOss',
   },
   cos: {
     id: 'cos', dialectId: 'aws4', service: 's3',
     endpointTemplate: 'https://cos.{region}.myqcloud.com', defaultPathStyle: false,
-    note: '腾讯云 COS（region 必填，如 ap-guangzhou；2024 年后新建桶只支持 virtual-host 寻址）',
+    note: 'sync.s3.providerNoteCos',
   },
   minio: {
     id: 'minio', dialectId: 'aws4', service: 's3', defaultRegion: 'us-east-1', defaultPathStyle: true,
-    note: 'MinIO / 自建网关（endpoint 必填；默认 path-style，配了域名才用 virtual-host）',
+    note: 'sync.s3.providerNoteMinio',
   },
   kodo: {
     id: 'kodo', dialectId: 'aws4', service: 's3',
     endpointTemplate: 'https://s3-{region}.qiniucs.com', defaultPathStyle: false,
-    note: '七牛 Kodo S3 兼容（region 必填，如 cn-east-1；endpoint 可覆盖）',
+    note: 'sync.s3.providerNoteKodo',
   },
 };
 

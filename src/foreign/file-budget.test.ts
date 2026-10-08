@@ -244,6 +244,8 @@ test('C 来源形状：共享模块清单是封闭集合（新模块必须显式
   const shared = modules.filter((m) => !isSourceShaped(m));
   const expected = [
     'bundle.ts', 'claude-sessions.ts', 'kernel.ts',
+    /* t6 新增：本域追加消息目录（零 source 形状；中文只在这里，装配期抛错的文案经 engineMsg 取）。 */
+    'messages.ts',
     /* 档 B 新增的 5 个共享地基（零 source 形状，但也不是来源模块）： */
     'platform-paths.ts', 'registry.ts', 'session-ir.ts', 'session-read.ts', 'session-source.ts',
     'source-modules.ts', 'sqlite.ts', 'truth-table.ts', 'types.ts',

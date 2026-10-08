@@ -154,7 +154,7 @@ export function importRoutes(env: RoutesEnv): WebRoute[] {
           return
         }
         if (!verified.ok || verified.info === null || verified.kdf === null) {
-          writeJson(res, 400, { error: decryptErrorText(new SecurityError('BAD_PASSWORD', '解密认证失败'), msg) })
+          writeJson(res, 400, { error: decryptErrorText(new SecurityError('BAD_PASSWORD', msg('route.decryptAuthFailed')), msg) })
           return
         }
         // 解密得到明文 ZIP（Security-sensitive transient：随机独占名 + 0600 + 先权限后写，用后即删）
@@ -322,8 +322,8 @@ export function importRoutes(env: RoutesEnv): WebRoute[] {
           snapshotId: result.snapshotId ?? undefined,
           runId,
           source: 'api',
-          summary: `导入完成：${importSections.join(', ') || '无分区'}（执行 ${result.executed.length} 项）`,
-          error: result.ok ? undefined : '导入未完全成功',
+          summary: msg('route.importHistorySummary', { sections: importSections.join(', ') || msg('route.importNoSections'), count: result.executed.length }),
+          error: result.ok ? undefined : msg('route.importIncomplete'),
         })
         writeJson(res, 200, historyError === undefined ? { ...result, runId } : { ...result, runId, historyWriteError: historyError })
       } catch (error) {

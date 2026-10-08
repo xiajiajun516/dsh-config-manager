@@ -17,6 +17,7 @@
 import { normalizePlatform } from './platform-paths.ts';
 import { draftFromTranscript, sessionSourceOf } from './session-source.ts';
 import type { RootProbeOptions } from './session-source.ts';
+import { engineMsg } from './messages.ts';
 import { FOREIGN_TRUTH_TABLES } from './truth-table.ts';
 import type { ForeignTruthTableEntry } from './truth-table.ts';
 import type { ForeignSource } from './registry.ts';
@@ -29,7 +30,7 @@ export const QWEN_PROVIDER = 'qwen';
 
 function truthEntryOf(id: ForeignSourceId): ForeignTruthTableEntry {
   const found = FOREIGN_TRUTH_TABLES.find((entry) => entry.id === id);
-  if (found === undefined) throw new Error('真值表缺少来源定义: ' + id);
+  if (found === undefined) throw new Error(engineMsg('foreign.truthTableMissingSource', { id }));
   return found;
 }
 

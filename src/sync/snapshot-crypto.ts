@@ -19,6 +19,7 @@ import type { EncryptionInfo, SectionData, SectionId } from '../schema/types.ts'
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { sectionsFromJsonSafe, sectionsToJsonSafe } from './snapshot-json.ts';
 import type { EncryptedCredentials, EncryptedSections } from './transport.ts';
+import { engineMsg } from './messages.ts';
 
 /**
  * 加密整个明文 sections Record → 密文载荷（info 进 manifest 非秘密参数；data 为 base64 密文）。
@@ -29,7 +30,7 @@ export async function encryptSectionsPayload(
   sections: Partial<Record<SectionId, SectionData>>,
   password: string,
 ): Promise<EncryptedSections> {
-  if (password === '') throw new Error('加密密码不能为空');
+  if (password === '') throw new Error(engineMsg('sync.encryptPasswordRequired'));
   const { blob, info } = await encryptCredentials(stringifyJsonSafe(sectionsToJsonSafe(sections)), password);
   return { encrypted: { info, data: Buffer.from(blob).toString('base64') } };
 }
@@ -39,11 +40,11 @@ export async function decryptSectionsPayload(
   payload: EncryptedSections['encrypted'],
   password: string,
 ): Promise<Partial<Record<SectionId, SectionData>>> {
-  if (password === '') throw new Error('解密密码不能为空');
+  if (password === '') throw new Error(engineMsg('sync.decryptPasswordRequired'));
   const plain = await decryptCredentials(Buffer.from(payload.data, 'base64'), payload.info, password);
   const parsed = parseJsonSafe(plain);
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('加密快照内容损坏：解密后不是有效的分区对象');
+    throw new Error(engineMsg('sync.encryptedContentInvalid'));
   }
   return sectionsFromJsonSafe(parsed) as Partial<Record<SectionId, SectionData>>;
 }
@@ -63,7 +64,7 @@ export async function encryptCredentialsPayload(
   plaintext: string,
   password: string,
 ): Promise<EncryptedCredentials> {
-  if (password === '') throw new Error('加密密码不能为空');
+  if (password === '') throw new Error(engineMsg('sync.encryptPasswordRequired'));
   const { blob, info } = await encryptCredentials(plaintext, password);
   return { info, data: Buffer.from(blob).toString('base64') };
 }
@@ -73,7 +74,7 @@ export async function decryptCredentialsPayload(
   payload: EncryptedCredentials,
   password: string,
 ): Promise<string> {
-  if (password === '') throw new Error('解密密码不能为空');
+  if (password === '') throw new Error(engineMsg('sync.decryptPasswordRequired'));
   return await decryptCredentials(Buffer.from(payload.data, 'base64'), payload.info, password);
 }
 

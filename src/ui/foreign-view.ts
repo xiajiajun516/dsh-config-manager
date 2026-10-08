@@ -235,7 +235,7 @@ export function foreignSourceRow(source: ForeignSourceStatusInput, t: UiT): Fore
   const known = knownId !== null
   const label = knownId !== null
     ? t(SOURCE_LABEL_KEY[knownId])
-    : t('foreign.source.unknown') + '（' + source.id + '）'
+    : t('foreign.source.unknownWithId', { id: source.id })
   const skips = (source.skipped ?? []).map((s) => foreignSkipLine(s, t))
   const paths = [...source.paths]
   const badge: ForeignBadgeKind = !source.found ? 'info' : skips.length > 0 ? 'warn' : 'ok'

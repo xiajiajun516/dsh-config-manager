@@ -23,6 +23,7 @@ import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import tls from 'node:tls'
+import { utilsMsg } from './messages-utils.ts'
 
 /** 代理相关环境变量（大小写兼容后的归一形态） */
 export interface ProxyEnv {
@@ -179,7 +180,7 @@ function connectToProxy(proxy: URL, timeoutMs: number): Promise<net.Socket> {
       : net.connect({ host: proxy.hostname, port }, onConnect)
     socket.setTimeout(timeoutMs, () => {
       socket.destroy()
-      reject(new Error(`代理连接超时 / proxy connect timed out (${timeoutMs}ms)`))
+      reject(new Error(utilsMsg('utils.proxy.connectTimeout', { ms: timeoutMs })))
     })
     socket.once('error', (err) => { reject(err) })
   })
@@ -216,7 +217,7 @@ async function openTunnel(target: URL, proxy: URL, timeoutMs: number): Promise<n
       if (end === -1) {
         if (buffered.length > 8192) {
           socket.off('data', onData)
-          fail('代理 CONNECT 响应异常（头部过长）/ malformed CONNECT response')
+          fail(utilsMsg('utils.proxy.malformedConnectResponse'))
         }
         return
       }
@@ -224,7 +225,7 @@ async function openTunnel(target: URL, proxy: URL, timeoutMs: number): Promise<n
       const head = buffered.slice(0, end)
       const status = Number((head.split('\r\n')[0] ?? '').split(' ')[1])
       if (status !== 200) {
-        fail(`代理拒绝 CONNECT（HTTP ${status}）/ proxy refused CONNECT`)
+        fail(utilsMsg('utils.proxy.refusedConnect', { status }))
         return
       }
       // CONNECT 响应头之后的字节已属隧道数据 → 回填，避免 TLS 握手丢包
@@ -234,7 +235,7 @@ async function openTunnel(target: URL, proxy: URL, timeoutMs: number): Promise<n
     }
     socket.on('data', onData)
     socket.once('error', (err) => { socket.off('data', onData); reject(err) })
-    socket.once('close', () => { socket.off('data', onData); reject(new Error('代理连接在 CONNECT 完成前关闭 / proxy closed during CONNECT')) })
+    socket.once('close', () => { socket.off('data', onData); reject(new Error(utilsMsg('utils.proxy.closedDuringConnect'))) })
     socket.write(lines.join('\r\n'))
   })
 }

@@ -15,6 +15,7 @@ import {
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
+import { zhUiT } from '../../ui/i18n.ts'
 
 /* ---------------------------------------------------------------- sessions 可选分区 */
 
@@ -50,7 +51,7 @@ test('sync-view: initialSyncSections —— 首次打开预勾选推荐分区；
 /* ---------------------------------------------------------------- 私有仓库提示 */
 
 test('sync-view: 私有仓库强制提示文案存在且强调私有', () => {
-  const hint = privateRepoHint()
+  const hint = privateRepoHint(zhUiT)
   assert.match(hint, /私有/)
   assert.match(hint, /public/)
   assert.match(hint, /token/)
@@ -66,7 +67,7 @@ const SYNC_CATALOG: SyncSectionInfo[] = [
 ];
 
 test('sync-view: syncSectionOptions 把 host 目录投影为勾选项（保 id 顺序 + 导出目录分组/描述补充）', () => {
-  const opts = syncSectionOptions(SYNC_CATALOG)
+  const opts = syncSectionOptions(SYNC_CATALOG, zhUiT)
   assert.deepEqual(opts.map((o) => o.id), ['settings', 'providers', 'plugins', 'skills'])
   assert.equal(opts[0]?.label, 'Settings')
   assert.equal(opts[0]?.defaultIncluded, true)
@@ -82,14 +83,14 @@ test('sync-view: syncSectionOptions 把 host 目录投影为勾选项（保 id �
 test('sync-view: syncSectionOptions 未知分区 id → 兜底（description 空、group=general）', () => {
   const opts = syncSectionOptions([
     { id: 'nope' as SectionId, displayName: 'Nope', portability: 'portable', defaultIncluded: true },
-  ])
+  ], zhUiT)
   assert.equal(opts[0]?.label, 'Nope')
   assert.equal(opts[0]?.description, '')
   assert.equal(opts[0]?.group, 'general')
 });
 
 test('sync-view: syncSectionGroups 按导出分组投影（与「导出备份·自定义模式」同构，空组省略）', () => {
-  const groups = syncSectionGroups(syncSectionOptions(SYNC_CATALOG))
+  const groups = syncSectionGroups(syncSectionOptions(SYNC_CATALOG, zhUiT), zhUiT)
   // settings(general) + providers(ai) + plugins(extensions) + skills(customization)
   assert.deepEqual(groups.map((g) => g.group), ['general', 'ai', 'extensions', 'customization'])
   assert.equal(groups[0]?.label, 'General')
@@ -114,13 +115,13 @@ test('sync-view: recommendedSyncSections 排除非 portable / 非默认包含分
 
 test('sync-view: 空/缺省目录 → 推荐分区为空数组（UI 显示「至少选一个」场景）', () => {
   assert.deepEqual(recommendedSyncSections([]), [])
-  assert.deepEqual(syncSectionOptions([]), [])
+  assert.deepEqual(syncSectionOptions([], zhUiT), [])
 });
 
 /* ---------------------------------------------------------------- 按钮状态 */
 
 test('sync-view: 空闲 + 活动通道地址未就绪 → 两个按钮都禁用', () => {
-  const b = computeSyncButtons(null, false)
+  const b = computeSyncButtons(null, false, zhUiT)
   assert.equal(b.canPush, false)
   assert.equal(b.canPull, false)
   assert.equal(b.pushLabel, '推送到远端')
@@ -128,13 +129,13 @@ test('sync-view: 空闲 + 活动通道地址未就绪 → 两个按钮都禁用'
 })
 
 test('sync-view: 空闲 + 活动通道地址就绪 → 两个按钮可用', () => {
-  const b = computeSyncButtons(null, true)
+  const b = computeSyncButtons(null, true, zhUiT)
   assert.equal(b.canPush, true)
   assert.equal(b.canPull, true)
 })
 
 test('sync-view: push 进行中 → 按钮禁用且文案切换为正在推送（防并发）', () => {
-  const b = computeSyncButtons('push', true)
+  const b = computeSyncButtons('push', true, zhUiT)
   assert.equal(b.canPush, false)
   assert.equal(b.canPull, false)
   assert.equal(b.pushLabel, '正在推送…')
@@ -142,7 +143,7 @@ test('sync-view: push 进行中 → 按钮禁用且文案切换为正在推送�
 })
 
 test('sync-view: pull 进行中 → 两个按钮都禁用，pull 文案切换', () => {
-  const b = computeSyncButtons('pull', true)
+  const b = computeSyncButtons('pull', true, zhUiT)
   assert.equal(b.canPush, false)
   assert.equal(b.canPull, false)
   assert.equal(b.pullLabel, '正在拉取…')
@@ -191,19 +192,19 @@ test('sync-view: summarizePullChanges 空数组 → total 0 且不需决策', ()
 })
 
 test('sync-view: kindLabel / severityLabel 覆盖关键类型', () => {
-  assert.equal(kindLabel('Conflict'), '冲突')
-  assert.equal(kindLabel('Install'), '安装')
-  assert.equal(kindLabel('MissingSecret'), '缺密钥')
-  assert.equal(severityLabel('error'), '错误')
-  assert.equal(severityLabel('warning'), '警告')
-  assert.equal(severityLabel('info'), '信息')
+  assert.equal(kindLabel('Conflict', zhUiT), '冲突')
+  assert.equal(kindLabel('Install', zhUiT), '安装')
+  assert.equal(kindLabel('MissingSecret', zhUiT), '缺密钥')
+  assert.equal(severityLabel('error', zhUiT), '错误')
+  assert.equal(severityLabel('warning', zhUiT), '警告')
+  assert.equal(severityLabel('info', zhUiT), '信息')
 })
 
 /* ---------------------------------------------------------------- push 报告渲染 */
 
 test('sync-view: push 成功报告 → ok 头部含快照 id + 分区透传', () => {
   const report: SyncPushReport = { ok: true, snapshotId: 'sync-1', sections: ['settings', 'plugins'], warnings: [] }
-  const view = pushReportView(report)
+  const view = pushReportView(report, zhUiT)
   assert.notEqual(view, null)
   assert.equal(view?.kind, 'ok')
   assert.match(view?.headline ?? '', /sync-1/)
@@ -212,21 +213,21 @@ test('sync-view: push 成功报告 → ok 头部含快照 id + 分区透传', ()
 
 test('sync-view: push 失败报告 → error 显示引擎 message', () => {
   const report: SyncPushReport = { ok: false, snapshotId: '', sections: [], warnings: [], message: '全部导出失败' }
-  const view = pushReportView(report)
+  const view = pushReportView(report, zhUiT)
   assert.equal(view?.kind, 'error')
   assert.equal(view?.headline, '全部导出失败')
 })
 
 test('sync-view: null 报告 → null（不渲染卡片）', () => {
-  assert.equal(pushReportView(null), null)
-  assert.equal(pullReportView(null), null)
+  assert.equal(pushReportView(null, zhUiT), null)
+  assert.equal(pullReportView(null, zhUiT), null)
 })
 
 /* ---------------------------------------------------------------- pull 报告渲染 */
 
 test('sync-view: pull 无变更 → empty 渲染（无差异列表）', () => {
   const report: SyncPullReport = { ok: true, snapshotId: 'sync-1', changes: [], needsReview: false }
-  const view = pullReportView(report)
+  const view = pullReportView(report, zhUiT)
   assert.equal(view?.kind, 'empty')
   assert.equal(view?.summary, null)
 })
@@ -241,7 +242,7 @@ test('sync-view: pull 差异报告 → ok + 摘要计数 + needsReview + 只读�
     ],
     needsReview: true,
   }
-  const view = pullReportView(report)
+  const view = pullReportView(report, zhUiT)
   assert.equal(view?.kind, 'ok')
   assert.match(view?.headline ?? '', /sync-9/)
   assert.equal(view?.summary?.total, 2)
@@ -254,7 +255,7 @@ test('sync-view: pull 差异报告 → ok + 摘要计数 + needsReview + 只读�
 
 test('sync-view: pull 失败 → error 渲染', () => {
   const report: SyncPullReport = { ok: false, snapshotId: '', changes: [], needsReview: false, message: '认证失败' }
-  const view = pullReportView(report)
+  const view = pullReportView(report, zhUiT)
   assert.equal(view?.kind, 'error')
   assert.equal(view?.headline, '认证失败')
 })
@@ -262,18 +263,18 @@ test('sync-view: pull 失败 → error 渲染', () => {
 /* ---------------------------------------------------------------- 状态行 */
 
 test('sync-view: 加载中 → loading 状态', () => {
-  const s = computeSyncStatus(null, true, null)
+  const s = computeSyncStatus(null, true, null, zhUiT)
   assert.equal(s.kind, 'loading')
 })
 
 test('sync-view: 加载失败 → error 状态带消息', () => {
-  const s = computeSyncStatus(null, false, '网络错误')
+  const s = computeSyncStatus(null, false, '网络错误', zhUiT)
   assert.equal(s.kind, 'error')
   assert.equal(s.text, '网络错误')
 })
 
 test('sync-view: 未配置仓库 → unconfigured 提示', () => {
-  const s = computeSyncStatus(null, false, null)
+  const s = computeSyncStatus(null, false, null, zhUiT)
   assert.equal(s.kind, 'unconfigured')
   assert.match(s.text, /尚未配置/)
 })
@@ -283,7 +284,7 @@ test('sync-view: 已配置但缺凭据 → ready 文案提示未配置凭据', (
     ok: true, configured: true, repoUrl: 'https://github.com/u/r.git',
     credentialConfigured: false, credentialWritable: true, lastSyncAt: undefined, sectionCount: 0,
   }
-  const s = computeSyncStatus(info, false, null)
+  const s = computeSyncStatus(info, false, null, zhUiT)
   assert.equal(s.kind, 'ready')
   assert.match(s.text, /未配置凭据/)
 })
@@ -295,7 +296,7 @@ test('sync-view: 已配置 + 凭据就绪 + 上次同步 → ready 文案含日�
     lastSyncAt: '2026-08-16T10:30:00.000Z', sectionCount: 3,
     transport: { type: 'git', ref: 'main' },
   }
-  const s = computeSyncStatus(info, false, null)
+  const s = computeSyncStatus(info, false, null, zhUiT)
   assert.equal(s.kind, 'ready')
   assert.match(s.text, /凭据已配置/)
   assert.match(s.text, /上次同步/)
@@ -310,7 +311,7 @@ test('sync-view: webdav 通道 → ready 文案回显通道类型（webdav + 服
     lastSyncAt: '2026-08-16T10:30:00.000Z', sectionCount: 2,
     transport: { type: 'webdav', ref: 'https://dav.example.com/dav/config' },
   }
-  const s = computeSyncStatus(info, false, null)
+  const s = computeSyncStatus(info, false, null, zhUiT)
   assert.equal(s.kind, 'ready')
   assert.match(s.text, /凭据已配置/)
   assert.match(s.text, /webdav/)
@@ -320,12 +321,12 @@ test('sync-view: webdav 通道 → ready 文案回显通道类型（webdav + 服
 /* ---------------------------------------------------------------- 时间格式化 */
 
 test('sync-view: formatLastSync 空值 → 从未同步', () => {
-  assert.equal(formatLastSync(undefined), '从未同步')
-  assert.equal(formatLastSync(''), '从未同步')
+  assert.equal(formatLastSync(undefined, zhUiT), '从未同步')
+  assert.equal(formatLastSync('', zhUiT), '从未同步')
 })
 
 test('sync-view: formatLastSync / formatDateTime 合法 ISO → 本地可读格式', () => {
-  const text = formatLastSync('2026-08-16T10:30:00.000Z')
+  const text = formatLastSync('2026-08-16T10:30:00.000Z', zhUiT)
   assert.match(text, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/)
   assert.equal(formatDateTime('not-a-date'), 'not-a-date')
 })
@@ -333,7 +334,7 @@ test('sync-view: formatLastSync / formatDateTime 合法 ISO → 本地可读格�
 /* ------------------------------------------------ GitHub 登录视图模型 */
 
 test('sync-view: github 登录 idle → 可开始、不展示代码区块、无错误', () => {
-  const v = computeGithubLoginView('idle', '', '', null)
+  const v = computeGithubLoginView('idle', '', '', null, zhUiT)
   assert.equal(v.phase, 'idle')
   assert.equal(v.canStart, true)
   assert.equal(v.canCancel, false)
@@ -342,14 +343,14 @@ test('sync-view: github 登录 idle → 可开始、不展示代码区块、无�
 })
 
 test('sync-view: github 登录 starting → 不可重复发起、显示进行中文案', () => {
-  const v = computeGithubLoginView('starting', '', '', null)
+  const v = computeGithubLoginView('starting', '', '', null, zhUiT)
   assert.equal(v.canStart, false)
   assert.equal(v.canCancel, true)
   assert.match(v.statusText, /发起/)
 })
 
 test('sync-view: github 登录 waiting → 展示设备码与授权链接、可取消', () => {
-  const v = computeGithubLoginView('waiting', 'ABCD-EFGH', 'https://github.com/login/device', null)
+  const v = computeGithubLoginView('waiting', 'ABCD-EFGH', 'https://github.com/login/device', null, zhUiT)
   assert.equal(v.showCode, true)
   assert.equal(v.canCancel, true)
   assert.equal(v.userCode, 'ABCD-EFGH')
@@ -358,7 +359,7 @@ test('sync-view: github 登录 waiting → 展示设备码与授权链接、可�
 })
 
 test('sync-view: github 登录 polling → 仍展示代码区块且可取消', () => {
-  const v = computeGithubLoginView('polling', 'ABCD-EFGH', 'https://github.com/login/device', null)
+  const v = computeGithubLoginView('polling', 'ABCD-EFGH', 'https://github.com/login/device', null, zhUiT)
   assert.equal(v.showCode, true)
   assert.equal(v.canCancel, true)
   assert.equal(v.canStart, false)
@@ -366,14 +367,14 @@ test('sync-view: github 登录 polling → 仍展示代码区块且可取消', (
 })
 
 test('sync-view: github 登录 success → 成功文案、代码区块隐藏', () => {
-  const v = computeGithubLoginView('success', 'ABCD-EFGH', 'https://github.com/login/device', null)
+  const v = computeGithubLoginView('success', 'ABCD-EFGH', 'https://github.com/login/device', null, zhUiT)
   assert.equal(v.showCode, false)
   assert.equal(v.canStart, false)
   assert.match(v.statusText, /已安全写入/)
 })
 
 test('sync-view: github 登录 error → 展示错误 + 重新登录入口', () => {
-  const v = computeGithubLoginView('error', '', '', '授权被拒绝')
+  const v = computeGithubLoginView('error', '', '', '授权被拒绝', zhUiT)
   assert.equal(v.canStart, true)
   assert.equal(v.canCancel, false)
   assert.equal(v.error, '授权被拒绝')
@@ -383,15 +384,15 @@ test('sync-view: github 登录 error → 展示错误 + 重新登录入口', () 
 
 test('sync-view: githubPollMessage 映射轮询终止态（denied/expired/error/success）', () => {
   const denied: GithubPollResponse = { status: 'denied' }
-  assert.match(githubPollMessage(denied), /拒绝/)
+  assert.match(githubPollMessage(denied, zhUiT), /拒绝/)
   const expired: GithubPollResponse = { status: 'expired' }
-  assert.match(githubPollMessage(expired), /过期/)
+  assert.match(githubPollMessage(expired, zhUiT), /过期/)
   const error: GithubPollResponse = { status: 'error', errorCode: 'incorrect_device_code', message: '设备码不匹配' }
-  assert.match(githubPollMessage(error), /设备码不匹配/)
+  assert.match(githubPollMessage(error, zhUiT), /设备码不匹配/)
   const success: GithubPollResponse = { status: 'success', credentialConfigured: true }
-  assert.match(githubPollMessage(success), /已安全写入/)
+  assert.match(githubPollMessage(success, zhUiT), /已安全写入/)
   const pending: GithubPollResponse = { status: 'pending', pollDelayMs: 5000 }
-  assert.equal(githubPollMessage(pending), '', 'pending 不是终止态，不应产生消息')
+  assert.equal(githubPollMessage(pending, zhUiT), '', 'pending 不是终止态，不应产生消息')
 })
 
 /* ---------------------------------------------------------------- 自动同步倒计时 */
@@ -416,19 +417,19 @@ test('sync-view: computeAutosyncCountdown 已到期 → 0；未到 → interval 
 
 test('sync-view: formatIntervalDuration 输出真实剩余时长（不再把 <1 小时一律显示成 30 分钟）', () => {
   // 回归：旧实现 `if (minutes < 60) return '30 分钟'` 导致 5m 间隔永远显示「约 30 分钟后」
-  assert.equal(formatIntervalDuration(4 * 60 * 1000), '4 分钟')
-  assert.equal(formatIntervalDuration(5 * 60 * 1000), '5 分钟')
-  assert.equal(formatIntervalDuration(30 * 60 * 1000), '30 分钟')
+  assert.equal(formatIntervalDuration(4 * 60 * 1000, zhUiT), '4 分钟')
+  assert.equal(formatIntervalDuration(5 * 60 * 1000, zhUiT), '5 分钟')
+  assert.equal(formatIntervalDuration(30 * 60 * 1000, zhUiT), '30 分钟')
   // 整 60 分钟进位为 1 小时
-  assert.equal(formatIntervalDuration(60 * 60 * 1000), '1 小时')
+  assert.equal(formatIntervalDuration(60 * 60 * 1000, zhUiT), '1 小时')
   // 向上取整：90 分钟 → 2 小时；6 小时整 → 6 小时
-  assert.equal(formatIntervalDuration(90 * 60 * 1000), '2 小时')
-  assert.equal(formatIntervalDuration(6 * 60 * 60 * 1000), '6 小时')
+  assert.equal(formatIntervalDuration(90 * 60 * 1000, zhUiT), '2 小时')
+  assert.equal(formatIntervalDuration(6 * 60 * 60 * 1000, zhUiT), '6 小时')
   // 跨天：24 小时 → 1 天；48 小时 → 2 天
-  assert.equal(formatIntervalDuration(24 * 60 * 60 * 1000), '1 天')
-  assert.equal(formatIntervalDuration(48 * 60 * 60 * 1000), '2 天')
+  assert.equal(formatIntervalDuration(24 * 60 * 60 * 1000, zhUiT), '1 天')
+  assert.equal(formatIntervalDuration(48 * 60 * 60 * 1000, zhUiT), '2 天')
   // 已到期/异常值兜底为 1 分钟，不出现 0 分钟
-  assert.equal(formatIntervalDuration(0), '1 分钟')
+  assert.equal(formatIntervalDuration(0, zhUiT), '1 分钟')
 })
 
 /* ---------------------------------------------------------------- WebDAV 预设 */

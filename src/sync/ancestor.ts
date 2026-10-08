@@ -4,6 +4,7 @@
  * 纯逻辑 + 可注入 fs；不触碰真实 ~/.dsh。
  */
 import { createSnapshotFs, joinFs } from './fs.ts';
+import { engineMsg } from './messages.ts';
 import type { SnapshotFs } from './fs.ts';
 import { readSnapshotFromDir, writeSnapshotToDir } from './layout.ts';
 import { SNAPSHOT_MANIFEST_FILE } from './layout.ts';
@@ -19,7 +20,7 @@ export async function loadAncestor(
   fsx: SnapshotFs = createSnapshotFs(),
 ): Promise<SyncSnapshot> {
   if (typeof snapshotId !== 'string' || snapshotId === '') {
-    throw new Error('loadAncestor: snapshotId 不能为空');
+    throw new Error(engineMsg('sync.ancestorSnapshotIdRequired'));
   }
   const dir = joinFs(localSnapshotsDir, snapshotId);
   return await readSnapshotFromDir(dir, fsx);

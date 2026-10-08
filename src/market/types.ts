@@ -10,6 +10,7 @@
  */
 import type { ImportAnalysis, ImportPlan } from '../core/types.ts';
 import type { SectionId } from '../schema/types.ts';
+import { marketMsg } from './messages-market.ts';
 
 /** index.json schema 版本（本版恒 1） */
 export const MARKET_INDEX_SCHEMA_VERSION = 1;
@@ -47,7 +48,7 @@ export const SAFE_ITEM_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 /** 校验 itemId 是否合法；不合法抛错（防 items/<id>/ 越界）。 */
 export function assertSafeItemId(id: string): void {
   if (typeof id !== 'string' || !SAFE_ITEM_ID_RE.test(id)) {
-    throw new Error(`非法市场条目 id: ${JSON.stringify(id)}（仅允许字母数字开头，字符限 . _ -）`);
+    throw new Error(marketMsg('market.types.itemIdInvalid', { id: JSON.stringify(id) }));
   }
 }
 

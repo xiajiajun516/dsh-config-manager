@@ -4,6 +4,8 @@
  * 再对结果做显式栈 walk 检查深度（避免 walk 自身递归爆栈）。
  */
 
+import { utilsMsg } from './messages-utils.ts';
+
 export const DEFAULT_MAX_JSON_DEPTH = 64;
 export const DEFAULT_MAX_JSON_BYTES = 64 * 1024 * 1024;
 
@@ -22,7 +24,7 @@ export const DEFAULT_MAX_JSON_BYTES = 64 * 1024 * 1024;
 export const MAX_OWN_PAYLOAD_JSON_BYTES = 512 * 1024 * 1024;
 
 export class JsonDepthError extends Error {
-  constructor(message = `JSON 嵌套深度超过上限 ${DEFAULT_MAX_JSON_DEPTH}`) {
+  constructor(message = utilsMsg('utils.json.depthDefault', { max: DEFAULT_MAX_JSON_DEPTH })) {
     super(message);
     this.name = 'JsonDepthError';
   }
@@ -58,19 +60,19 @@ export function parseJsonSafe(
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_JSON_DEPTH;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_JSON_BYTES;
   if (text.length > maxBytes) {
-    throw new JsonDepthError(`JSON 体积超过上限 ${maxBytes} 字节`);
+    throw new JsonDepthError(utilsMsg('utils.json.bytesExceeded', { max: maxBytes }));
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
     // 引擎栈限制导致的深层嵌套也会以 RangeError 出现 → 归一为 JsonDepthError
-    if (err instanceof RangeError) throw new JsonDepthError(`JSON 解析失败（可能是嵌套过深）: ${String(err.message)}`);
+    if (err instanceof RangeError) throw new JsonDepthError(utilsMsg('utils.json.parseFailedDeep', { reason: String(err.message) }));
     throw err;
   }
   const depth = measureDepth(parsed);
   if (depth > maxDepth) {
-    throw new JsonDepthError(`JSON 嵌套深度 ${depth} 超过上限 ${maxDepth}`);
+    throw new JsonDepthError(utilsMsg('utils.json.depthExceeded', { depth, max: maxDepth }));
   }
   return parsed;
 }
@@ -79,7 +81,7 @@ export function parseJsonSafe(
 export function stringifyJsonSafe(value: unknown, opts: { maxDepth?: number; space?: number } = {}): string {
   const maxDepth = opts.maxDepth ?? DEFAULT_MAX_JSON_DEPTH;
   const depth = measureDepth(value);
-  if (depth > maxDepth) throw new JsonDepthError(`JSON 嵌套深度 ${depth} 超过上限 ${maxDepth}`);
+  if (depth > maxDepth) throw new JsonDepthError(utilsMsg('utils.json.depthExceeded', { depth, max: maxDepth }));
   return JSON.stringify(value, null, opts.space);
 }
 

@@ -17,7 +17,7 @@
 import type { StoredMigrationHistoryEntry, MigrationKind, MigrationResult } from '../../core/migration-history.ts';
 import type { MigrationHistoryStats } from '../../core/migration-history.ts';
 import { getJson, openStream, readJson, type RequestOptions } from '../common/http.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import type { UiT } from '../../ui/i18n.ts';
 import { HISTORY_API } from '../common/routes.ts';
 
 /** 迁移历史端点常量：**唯一来源** = `common/routes.ts`（W4 单点化），此处重导出保持导入面。 */
@@ -48,7 +48,7 @@ export type HistoryExportFormat = 'json' | 'markdown';
 /** History 浏览器半数据入口。 */
 export class HistoryApi {
   readonly t: UiT;
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t;
   }
 

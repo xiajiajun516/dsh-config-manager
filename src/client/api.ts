@@ -42,7 +42,7 @@ import type { SessionExportProbe } from './session-export/session-export-view.ts
 import type { ForeignSkip } from '../foreign/types.ts';
 import type { ForeignSourcesResponse as ForeignSourcesViewInput } from '../ui/foreign-view.ts';
 import type { DiskUsageReport } from '../core/disk-usage.ts';
-import { zhUiT, type UiT } from '../ui/i18n.ts';
+import type { UiT } from '../ui/i18n.ts';
 import { failedSectionsFromResponse } from '../ui/export-flow.ts';
 import type { SessionFormatDisposition } from '../ui/session-format-disposition.ts';
 import { CONFIG_MANAGER_API } from './common/routes.ts';
@@ -351,7 +351,7 @@ export class ConfigManagerApi {
   /** 客户端展示层翻译器（zh 源 / en 镜像，见 ui/i18n.ts）。 */
   readonly t: UiT
 
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t
   }
 

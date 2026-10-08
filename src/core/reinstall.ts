@@ -21,6 +21,7 @@
  *    显式亮出独立开关删除。
  */
 
+import { engineMsg } from './messages-core.ts';
 import os from 'node:os'
 import path from 'node:path'
 
@@ -40,39 +41,43 @@ export interface ReinstallItemDef {
   defaultOn: boolean
 }
 
+/**
+ * 类别清单。label/desc 写成 **getter**（访问时才解析语言）：本常量在模块加载期求值，
+ * 若直接调用 engineMsg 会把文案冻结成加载时的语言 —— 正是本次 i18n 改造要修的根因。
+ */
 export const REINSTALL_ITEMS: readonly ReinstallItemDef[] = [
   {
     id: 'program',
-    label: 'DSH 程序本体',
-    desc: '卸载并重装 @deepseek-ai/dsh 全局启动器（核心动作）',
+    get label() { return engineMsg('core.reinstall.programLabel') },
+    get desc() { return engineMsg('core.reinstall.programDesc') },
     destructive: false,
     defaultOn: true,
   },
   {
     id: 'cache',
-    label: '全局残留缓存',
-    desc: '清 pnpm store 与 npm cache（可选）',
+    get label() { return engineMsg('core.reinstall.cacheLabel') },
+    get desc() { return engineMsg('core.reinstall.cacheDesc') },
     destructive: false,
     defaultOn: true,
   },
   {
     id: 'settings',
-    label: '~/.dsh 设置',
-    desc: '清空 settings.yaml 等配置（不可逆）',
+    get label() { return engineMsg('core.reinstall.settingsLabel') },
+    get desc() { return engineMsg('core.reinstall.settingsDesc') },
     destructive: true,
     defaultOn: false,
   },
   {
     id: 'plugins',
-    label: '~/.dsh 已装插件',
-    desc: '清空 profiles 下已装插件依赖（不可逆）',
+    get label() { return engineMsg('core.reinstall.pluginsLabel') },
+    get desc() { return engineMsg('core.reinstall.pluginsDesc') },
     destructive: true,
     defaultOn: false,
   },
   {
     id: 'data',
-    label: '会话记录与凭据',
-    desc: '清空 sessions 会话与 .credentials.yaml 凭据（最高风险，强制二次确认）',
+    get label() { return engineMsg('core.reinstall.dataLabel') },
+    get desc() { return engineMsg('core.reinstall.dataDesc') },
     destructive: true,
     defaultOn: false,
   },
@@ -216,22 +221,22 @@ export async function buildReinstallPlan(
     const globalRoot = await resolveNpmGlobalRoot(exec)
     const dshGlobalDir = path.join(globalRoot, '@deepseek-ai', 'dsh')
     steps.push({
-      label: '卸载全局 @deepseek-ai/dsh',
+      label: engineMsg('core.reinstall.stepUninstallGlobal'),
       command: 'npm uninstall -g @deepseek-ai/dsh',
       dangerous: false,
     })
     steps.push({
-      label: '清理全局残留 @deepseek-ai/dsh',
+      label: engineMsg('core.reinstall.stepCleanGlobal'),
       command: rmCommand(dshGlobalDir, platform),
       dangerous: false,
     })
     steps.push({
-      label: `安装全局 @deepseek-ai/dsh@${versionSpec}`,
+      label: engineMsg('core.reinstall.stepInstallGlobal', { version: versionSpec }),
       command: `npm install -g @deepseek-ai/dsh@${versionSpec}`,
       dangerous: false,
     })
     steps.push({
-      label: '验证版本（dsh --version）',
+      label: engineMsg('core.reinstall.stepVerifyVersion'),
       command: 'dsh --version',
       dangerous: false,
     })
@@ -241,13 +246,13 @@ export async function buildReinstallPlan(
     const pnpmStore = resolvePnpmStoreDir(env, platform)
     if (pnpmStore !== null) {
       steps.push({
-        label: '清理 pnpm store',
+        label: engineMsg('core.reinstall.stepCleanPnpmStore'),
         command: rmCommand(pnpmStore, platform),
         dangerous: false,
       })
     }
     steps.push({
-      label: '清理 npm cache',
+      label: engineMsg('core.reinstall.stepCleanNpmCache'),
       command: 'npm cache clean --force',
       dangerous: false,
     })
@@ -259,33 +264,33 @@ export async function buildReinstallPlan(
   // 但历史会话/凭据在此备份，作为抢救兜底）。
   if (wipeConfig) {
     steps.push({
-      label: '备份 ~/.dsh 到同级 .reinstall-backup（抢救兜底）',
+      label: engineMsg('core.reinstall.stepBackupHome'),
       command: copyDirCommand(dshHome, `${dshHome}.reinstall-backup`, platform),
       dangerous: true,
     })
   }
   if (selection.has('settings')) {
     steps.push({
-      label: '清空 ~/.dsh 设置（settings.yaml 等）',
+      label: engineMsg('core.reinstall.stepWipeSettings'),
       command: rmCommand(path.join(dshHome, 'settings.yaml'), platform),
       dangerous: true,
     })
   }
   if (selection.has('plugins')) {
     steps.push({
-      label: '清空 ~/.dsh 已装插件（profiles/*/node_modules）',
+      label: engineMsg('core.reinstall.stepWipePlugins'),
       command: rmCommand(path.join(dshHome, 'profiles'), platform),
       dangerous: true,
     })
   }
   if (selection.has('data')) {
     steps.push({
-      label: '清空会话记录（sessions/）',
+      label: engineMsg('core.reinstall.stepWipeSessions'),
       command: rmCommand(path.join(dshHome, 'sessions'), platform),
       dangerous: true,
     })
     steps.push({
-      label: '清空凭据（.credentials.yaml，仅删除文件）',
+      label: engineMsg('core.reinstall.stepWipeCredentials'),
       command: rmCommand(path.join(dshHome, '.credentials.yaml'), platform),
       dangerous: true,
     })

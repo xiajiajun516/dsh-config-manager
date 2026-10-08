@@ -71,6 +71,7 @@ import crypto from 'node:crypto'
 import { atomicWriteFile } from '../utils/atomic-write.ts'
 import { sha256Hex } from '../utils/hashing.ts'
 import { isRecord } from '../utils/guards.ts'
+import { engineMsg } from './messages-core.ts'
 
 /* ------------------------------------------------------------------ 常量 */
 
@@ -690,7 +691,7 @@ export class CheckpointEngine {
   private async captureSession(logPath: string | undefined, sessionId: string | null): Promise<CheckpointTrack<CheckpointSessionPayload>> {
     const capturedAt = this.stamp()
     if (typeof logPath !== 'string' || logPath === '') {
-      return this.emptyTrack('session', capturedAt, 'no-session-input', 'sessionLogPath 未提供')
+      return this.emptyTrack('session', capturedAt, 'no-session-input', engineMsg('core.checkpoint.sessionLogPathMissing'))
     }
     try {
       const realRoot = await fs.realpath(this.sessionsRoot).catch(() => undefined)
@@ -802,7 +803,7 @@ export class CheckpointEngine {
 
   private async captureWorkspace(chunks: readonly string[]): Promise<CheckpointTrack<CheckpointWorkspacePayload>> {
     const capturedAt = this.stamp()
-    if (chunks.length === 0) return this.emptyTrack('workspace', capturedAt, 'no-chunks', 'chunks 为空')
+    if (chunks.length === 0) return this.emptyTrack('workspace', capturedAt, 'no-chunks', engineMsg('core.checkpoint.chunksEmpty'))
     const payload: CheckpointWorkspacePayload = {
       chunks: [...chunks],
       files: [],
@@ -1300,7 +1301,7 @@ export class CheckpointEngine {
     }
     const requested = uniqueStates(input.segments ?? CHECKPOINT_REWIND_ORDER)
     if (requested.length === 0) {
-      return this.result({ outcome: 'denied', code: 'invalid-input', detail: 'segments 为空', id: input.id, storage, warnings })
+      return this.result({ outcome: 'denied', code: 'invalid-input', detail: engineMsg('core.checkpoint.segmentsEmpty'), id: input.id, storage, warnings })
     }
     // 回滚前保护点（照搬竞品：先拍当前状态）
     const guardPolicy = input.guardPolicy ?? this.guardPolicy

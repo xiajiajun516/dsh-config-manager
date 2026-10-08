@@ -12,6 +12,7 @@
  *  - 若发现 stale lock + incomplete journal → RECOVERY_REQUIRED / SAFE MODE，不自动 recoverStaleLock；
  *  - 用户显式确认后才 prove stale → recover → acquire → reconcile。
  */
+import { engineMsg } from './messages-core.ts';
 import {
   JournalStore, isTerminalState, transitionJournalState,
   type OperationJournal, type JournalStep, type SafeModeMarkerState,
@@ -126,7 +127,7 @@ async function reconcileOne(
   const j = await store.loadActive(operationId);
   if (j === null) {
     // 存在但 parse/校验失败 → corrupt → quarantine
-    const reason = `journal ${operationId} 无法解析或 schema 非法（隔离处理）`;
+    const reason = engineMsg('core.reconcile.journalUnparsable', { opId: operationId });
     if (opts.autoQuarantine !== false) {
       try {
         await store.quarantine(operationId, reason);
@@ -138,7 +139,7 @@ async function reconcileOne(
 
   // live owner 检查
   if (await env.isLiveOwner(j)) {
-    return { decision: { operationId, kind: 'live', reason: 'owner 存活，live operation 进行中', snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+    return { decision: { operationId, kind: 'live', reason: engineMsg('core.reconcile.ownerLive'), snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
   }
 
   // P1-A：ownership binding 强制校验（显式 recovery 捕获的 crashed ownership 证据）。
@@ -147,7 +148,7 @@ async function reconcileOne(
     const bindingOk = j.ownerInstanceId === env.expectedOwnershipInstanceId
       && j.lockId === env.expectedOwnershipInstanceId; // lockId = 同 epoch identity（ownerInstanceId）
     if (!bindingOk) {
-      const reason = `ownership binding 不匹配（journal.ownerInstanceId/lockId 非 crashed ownership ${env.expectedOwnershipInstanceId}），不作 trusted 恢复`;
+      const reason = engineMsg('core.reconcile.bindingMismatch', { instanceId: env.expectedOwnershipInstanceId });
       await store.writeSafeMode(true).catch(() => undefined);
       await store.appendRecoveryHistory('binding-mismatch', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined);
       return { decision: { operationId, kind: 'needs-attention', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
@@ -156,7 +157,7 @@ async function reconcileOne(
 
   // env fingerprint
   if (env.environmentFingerprint && j.environmentFingerprint && env.environmentFingerprint !== j.environmentFingerprint) {
-    const reason = `environment fingerprint 不匹配（跨机/环境变化），不自动恢复`;
+    const reason = engineMsg('core.reconcile.envMismatch');
     await store.writeSafeMode(true).catch(() => undefined);
     return { decision: { operationId, kind: 'env-mismatch', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
   }
@@ -166,19 +167,20 @@ async function reconcileOne(
     if (j.state === 'NEEDS_ATTENTION') {
       // NEEDS_ATTENTION 是「待用户确认」状态，保持 active 可见（不静默规整），SAFE MODE
       await store.writeSafeMode(true).catch(() => undefined);
-      return { decision: { operationId, kind: 'needs-attention', reason: 'NEEDS_ATTENTION 待用户确认', snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
+      return { decision: { operationId, kind: 'needs-attention', reason: engineMsg('core.reconcile.needsAttentionConfirm'), snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
     }
     // COMMITTED / ROLLED_BACK / RECOVERED 遗留 → 规整
     if (opts.organizeTerminal !== false) {
       try { await store.moveToCompleted(operationId); } catch { /* move 失败不影响 */ }
     }
-    return { decision: { operationId, kind: 'organized', reason: `terminal(${j.state}) journal 规整到 completed`, snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+    return { decision: { operationId, kind: 'organized', reason: engineMsg('core.reconcile.terminalOrganized', { state: j.state }), snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
   }
 
   // 回滚进行中（ROLLING_BACK）或已部分补偿（entryDone 非空）：**绝不判 RECOVERED**
   // （P0-B：崩溃在回滚中 = 半回滚态，判 recovered 会把破坏状态误报为成功）。
   if (j.state === 'ROLLING_BACK' || Object.keys(j.rollback.entryDone ?? {}).length > 0) {
-    const reason = `回滚中断（${j.state === 'ROLLING_BACK' ? 'ROLLING_BACK' : `entryDone ${Object.keys(j.rollback.entryDone).join(',')}`}），需显式续跑回滚（用户确认）`;
+    const rollbackDetail = j.state === 'ROLLING_BACK' ? 'ROLLING_BACK' : `entryDone ${Object.keys(j.rollback.entryDone).join(',')}`;
+    const reason = engineMsg('core.reconcile.rollbackInterrupted', { detail: rollbackDetail });
     await store.writeSafeMode(true).catch(() => undefined);
     await store.appendRecoveryHistory('rollback-interrupted', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined);
     return { decision: { operationId, kind: 'rollback-continue', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
@@ -194,7 +196,7 @@ async function reconcileOne(
     const v = j.recoveryVerification;
     const verified = v !== undefined && (v.verdict === 'MATCH' || v.verdict === 'PARTIAL_MATCH');
     if (!verified) {
-      const reason = 'RECOVERING 且 recovery 未验证（无 recoveryVerification 或 verdict 非 MATCH/PARTIAL_MATCH），绝不自动 RECOVERED';
+      const reason = engineMsg('core.reconcile.recoveringUnverified');
       await store.writeSafeMode(true).catch(() => undefined);
       await store.update(operationId, (cur) => {
         let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
@@ -221,7 +223,7 @@ async function reconcileOne(
       // Review D P2：plannedSteps 引用悬空（steps 缺条目）→ 不可证明，绝不能经 noop 判 RECOVERED。
       anyUnprovable = true;
       allDoneConfirmed = false;
-      details.push(`planned step ${stepId} 缺少 steps 条目（损坏/篡改 journal）`);
+      details.push(engineMsg('core.reconcile.danglingPlannedStep', { stepId }));
       continue;
     }
 
@@ -244,9 +246,9 @@ async function reconcileOne(
       let verdict: StepFingerprintVerdict;
       try { verdict = await hooks.verifyStepFingerprint(step); } catch { verdict = 'unable'; }
       if (verdict === 'after-match') { anyApplied = true; continue; }
-      if (verdict === 'before-match') { anyApplied = false; details.push(`step ${step.ref} 未可靠完成（磁盘==before）`); allDoneConfirmed = false; anyUnprovable = true; continue; }
+      if (verdict === 'before-match') { anyApplied = false; details.push(engineMsg('core.reconcile.stepNotReliablyDone', { ref: step.ref })); allDoneConfirmed = false; anyUnprovable = true; continue; }
       anyUnprovable = true; allDoneConfirmed = false;
-      details.push(`step ${step.ref} 指纹 ${verdict}`);
+      details.push(engineMsg('core.reconcile.stepFingerprint', { ref: step.ref, verdict }));
     } else {
       // planned/attention/failed → 未完成
       allDoneConfirmed = false;
@@ -279,13 +281,13 @@ async function reconcileOne(
       });
       await store.moveToCompleted(operationId).catch(() => undefined);
       await store.appendRecoveryHistory('noop', { operationId, at: new Date().toISOString(), reason: 'no mutation started' }).catch(() => undefined);
-      return { decision: { operationId, kind: 'noop', reason: 'mutation 未开始，安全完成', snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+      return { decision: { operationId, kind: 'noop', reason: engineMsg('core.reconcile.mutationNotStarted'), snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
     }
     // APPLYING（或其它非 terminal）：mutation 可能已开始，无法证明
     if (j.snapshotId !== null && snapshotExists) {
       // 有 trusted bound snapshot → rollback-recommended（需用户确认）
       await store.writeSafeMode(true).catch(() => undefined);
-      const reason = 'opaque APPLYING（空 steps）且 mutation 可能已开始，有 trusted snapshot 可回滚（需用户确认）';
+      const reason = engineMsg('core.reconcile.opaqueRollbackAvailable');
       await store.update(operationId, (cur) => {
         let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
         next = { ...next, error: next.error || reason, recovery: { ...next.recovery, reason, attempts: next.recovery.attempts + 1 } };
@@ -296,7 +298,7 @@ async function reconcileOne(
     }
     // 无 trusted snapshot → NEEDS_ATTENTION（SAFE MODE）
     await store.writeSafeMode(true).catch(() => undefined);
-    const reason = 'opaque APPLYING（空 steps）且 mutation 可能已开始，无 trusted snapshot 可回滚';
+    const reason = engineMsg('core.reconcile.opaqueNoSnapshot');
     await store.update(operationId, (cur) => {
       let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
       next = { ...next, error: next.error || reason, recovery: { ...next.recovery, reason, attempts: next.recovery.attempts + 1 } };
@@ -328,13 +330,14 @@ async function reconcileOne(
     });
     await store.moveToCompleted(operationId).catch(() => undefined);
     await store.appendRecoveryHistory('noop', { operationId, at: new Date().toISOString(), reason: 'no step applied' }).catch(() => undefined);
-    return { decision: { operationId, kind: 'noop', reason: '无副作用可恢复，安全完成', snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
+    return { decision: { operationId, kind: 'noop', reason: engineMsg('core.reconcile.noSideEffects'), snapshotId: j.snapshotId }, safeMode: false, unresolved: false };
   }
 
   if (anyUnprovable || anyExternalUnknown || !snapshotExists) {
     // 不可证明 / 外部未知 / 快照缺失 → NEEDS_ATTENTION（SAFE MODE）
     await store.writeSafeMode(true).catch(() => undefined);
-    const reason = `不可证明步骤: ${details.join('; ') || '外部副作用未知'}` + (snapshotExists ? '' : '；快照缺失');
+    const reason = engineMsg('core.reconcile.unprovableSteps', { details: details.join('; ') || engineMsg('core.reconcile.externalSideEffectsUnknown') })
+      + (snapshotExists ? '' : engineMsg('core.reconcile.snapshotMissingSuffix'));
     await store.update(operationId, (cur) => {
       let next = transitionJournalState(cur, 'NEEDS_ATTENTION');
       next = { ...next, error: next.error || reason, recovery: { ...next.recovery, reason, attempts: next.recovery.attempts + 1 } };
@@ -346,7 +349,7 @@ async function reconcileOne(
 
   // 快照有效 + 已应用部分 + 无不可证明 → rollback 可安全执行（需用户确认）
   await store.writeSafeMode(true).catch(() => undefined);
-  const reason = '部分 step 已应用，可安全回滚（需用户确认）';
+  const reason = engineMsg('core.reconcile.partialApplied');
   return { decision: { operationId, kind: 'rollback-recommended', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
 }
 

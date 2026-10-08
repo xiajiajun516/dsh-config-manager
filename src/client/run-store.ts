@@ -41,6 +41,9 @@ import {
   type SessionFormatDisposition,
 } from '../ui/session-format-disposition.ts'
 import { renderExportReport } from '../ui/report.ts'
+// 模块级单例没有「调用方」可以传 UiT：直接用**活**翻译器（随 DSH 语言变化，非 zh 一律 en）。
+// 此前这里的提示文案是硬编码中文，英文界面下原样透出。
+import { liveUiT } from '../ui/i18n.ts'
 import type { FlowPhase } from '../ui/flow.ts'
 import type { ImportStep } from '../ui/types.ts'
 import { isQuickRecommended } from '../ui/types.ts'
@@ -1817,7 +1820,7 @@ export class RunStore {
           running: false,
           progress: null,
           runId: null,
-          error: '上次导出任务已结束但结果无法恢复，请重新导出',
+          error: liveUiT('run.exportResultLost'),
         },
       })
     }
@@ -1847,7 +1850,7 @@ export class RunStore {
           conflictCollector: null,
           selectedFileName: null,
           errors: [],
-          error: '上次导入任务已结束或超过保留期，结果无法恢复，请重新导入',
+          error: liveUiT('run.importResultLost'),
         },
       })
     }
@@ -1866,7 +1869,7 @@ export class RunStore {
       this.patch({
         snapshots: {
           running: false,
-          actionError: '上次恢复任务已结束但结果无法恢复，请重新执行',
+          actionError: liveUiT('run.restoreResultLost'),
         },
       })
     }
@@ -1885,7 +1888,7 @@ export class RunStore {
       this.patch({
         recovery: {
           running: false,
-          actionError: '上次恢复任务已结束但结果无法恢复，请重新执行',
+          actionError: liveUiT('run.restoreResultLost'),
         },
       })
     }
@@ -2015,7 +2018,7 @@ export class RunStore {
           export: {
             running: false,
             progress: { stage: 'done', step: 1, total: 1 },
-            result: { ...result, text: renderExportReport(result.report) },
+            result: { ...result, text: renderExportReport(result.report, liveUiT) },
             downloaded: false,
           },
         })
@@ -2026,7 +2029,7 @@ export class RunStore {
             progress: null,
             result: null,
             downloaded: false,
-            error: state.error ?? '导出失败（结果不可用）',
+            error: state.error ?? liveUiT('run.exportUnavailable'),
           },
         })
       }
@@ -2043,7 +2046,7 @@ export class RunStore {
         })
       } else {
         this.patch({
-          snapshots: { running: false, actionError: state.error ?? '恢复失败（结果不可用）' },
+          snapshots: { running: false, actionError: state.error ?? liveUiT('run.restoreUnavailable') },
         })
       }
       return
@@ -2093,15 +2096,15 @@ export class RunStore {
         const restored = wizard.snapshot().step
         if (restored !== 'importing') stepAfterFailure = restored
         const internals = wizard as unknown as WizardInternals
-        internals.errors = [...internals.errors, state.error ?? '导入失败']
+        internals.errors = [...internals.errors, state.error ?? liveUiT('report.importFailed')]
       }
       this.patch({
         import: {
           step: stepAfterFailure,
           running: false,
           progress: null,
-          error: state.error ?? '导入失败',
-          errors: [...this.state.import.errors, state.error ?? '导入失败'],
+          error: state.error ?? liveUiT('report.importFailed'),
+          errors: [...this.state.import.errors, state.error ?? liveUiT('report.importFailed')],
         },
       })
     }
@@ -2115,7 +2118,7 @@ export class RunStore {
           running: false,
           progress: null,
           runId: null,
-          error: '任务已结束或超过保留期，进度不可恢复',
+          error: liveUiT('run.progressLost'),
         },
       })
     } else if (kind === 'restore') {
@@ -2124,7 +2127,7 @@ export class RunStore {
       this.patch({
         snapshots: {
           running: false,
-          actionError: '恢复任务已结束或超过保留期，进度不可恢复',
+          actionError: liveUiT('run.restoreProgressLost'),
         },
       })
     } else if (kind === 'recovery') {
@@ -2133,7 +2136,7 @@ export class RunStore {
       this.patch({
         recovery: {
           running: false,
-          actionError: '恢复任务已结束或超过保留期，进度不可恢复',
+          actionError: liveUiT('run.restoreProgressLost'),
         },
       })
     } else {
@@ -2148,7 +2151,7 @@ export class RunStore {
           conflictCollector: null,
           selectedFileName: null,
           errors: [],
-          error: '任务已结束或超过保留期，进度不可恢复',
+          error: liveUiT('run.progressLost'),
         },
       })
     }

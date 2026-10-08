@@ -27,7 +27,7 @@ export {
 import type { MarketItemDetail, MarketListItem } from '../../market/types.ts';
 import type { ImportAnalysis, ImportPlan, PlanItemKind } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import type { UiT } from '../../ui/i18n.ts';
 import { isOfficialMarket } from '../../market/builtin.ts';
 
 /* ---------------------------------------------------------------- 客户端专属：来源徽章 */
@@ -193,7 +193,7 @@ export interface SupplyChainLine {
 export function marketWarningsLines(
   detail: MarketItemDetail,
   url: string,
-  t: UiT = zhUiT,
+  t: UiT,
 ): SupplyChainLine[] {
   const raw = marketItemWarnings(
     detail.provenance !== undefined || detail.author !== undefined ? { name: detail.name, author: detail.author, provenance: detail.provenance } : undefined,
@@ -234,7 +234,7 @@ export function marketDetailView(
   detail: MarketItemDetail,
   url: string,
   showBack: boolean,
-  t: UiT = zhUiT,
+  t: UiT,
 ): MarketDetailView {
   const badge = computeItemBadge(detail, t);
   return {

@@ -87,6 +87,60 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+> **英文界面零中文：切到 English 后界面仍有大量中文（两个一次性语言绑定根因 + 全仓中文硬编码）**：
+> ① 客户端 `src/client/index.ts` 在插件加载时**一次性绑定** `uiT`（`makeUiT(ctx.locale.getLocale().active …)` 是快照），
+> 用户切到 English 后所有走 `UiT` 的报告 / 错误 / 进度 / 导入向导 / 同步 / 市场文案**永远停在加载时那门语言**；
+> ② 宿主 `this.msg = makeMsg(resolveAppLanguage(ctx))` 同样在装配期冻结（宿主产出的报告 / 计划 / 错误经 API 回浏览器渲染，
+> `src/routes/kit.ts` 原样回传 `error.message` ⇒ 引擎里的中文会逐字出现在 ErrorBanner）。现在**语言在「取文案那一刻」解析**：
+> 客户端 `makeLiveUiT(read)`（`src/ui/i18n.ts`，接线在 `src/client/index.ts`），宿主 / 引擎 `engineMsg` +
+> `setEngineLanguageSource(() => resolveAppLanguage(ctx))` + `invalidateEngineLocale()`（`src/core/engine-locale.ts`；路由注册点
+> `src/routes/kit.ts` 的 `endpoint()` 每请求失效，`LANGUAGE_TTL_MS = 1000` 只给调度器 / 后台任务兜底），并新增
+> `registerMessageCatalog` 让各域目录（core / market / utils / sync / schema / routes / security / adapters / foreign / migrations / profiles / s3 / gist）
+> 并入既有 zh/en 目录。**全部用户可见中文已迁入目录**（20 本目录 3446 键：zh 逐字不变、en 一律补齐；迁移前既有 372 键的
+> zh/en 指纹冻结在 `src/core/engine-locale.test.ts`，只许追加）。
+> - **护栏**：`tests/helpers/i18n-scan.ts` + `tests/i18n-hardcoded-guard.test.ts` 的**静态守卫**（逐字符词法状态机；豁免源码注释、
+>   `log.*` / `console.*` 实参、目录 zh 区）。全量 `node --test tests/i18n-hardcoded-guard.test.ts` 退出码 0
+>   （`scope=ALL files=<扫描文件数> hits=0 allowlisted=128`）；作用域自检 `DCM_I18N_GUARD_SCOPE=<前缀>` 只收窄文件列表。
+>   **实测红→绿：迁移前 1107 + 白名单 73 = 1180 条命中 → 0**（t2 落守卫后 1084+73，t12 落白名单两条后 hits 再减 55）。
+>   白名单 4 条 / 128 命中全部是**已登记的非渲染匹配文本**：`src/foreign/truth-table.ts` 61（取证数据）、
+>   `src/ui/test-helpers.ts` 12（仅供 `*.test.ts`）、`src/ui/commands.ts` 49（命令面板检索同义词）、
+>   `src/ui/errors.ts` 6（把宿主错误消息映射到友好标题的正则字面量）；新增豁免只能走 captain 审批。
+> - **刻意保留中文的排除项**：`src/cli/**`（终端 CLI 与离线救急台）、源码注释、`log.*` / `console.*` 实参、`*.test.ts`。
+> - **残余（如实登记，详见 `docs/design/2026-10-08-i18n-en-hardcoding.md` §3.9 / §7 与 `docs/known-pitfalls.md`）**：
+>   `src/core/model-tools.ts` 的 5 条工具描述在 apply 期解析（DSH「注册即快照」⇒ 会话中途切语言不即时更新）；
+>   只有**精确 `'zh'`** 视为中文（`'zh-Hans'` / `'zh-TW'` 回落 en；DSH 内建仅 zh/en）；`src/cli/index.ts:1025` 仍按文案子串判 corrupt 锁（CLI 恒 zh 故当前正确）。
+> - **验证口径**：结论来自静态守卫 + `npm test`（**收尾实测 4057 用例 / 4055 pass / 0 fail / 2 skipped**）+ `typecheck` / `typecheck:tests` / `build`；
+>   **真机逐页签 DOM 抽查未做**（验证会话无浏览器通道），不当作已通过。
+
+> **Zero Chinese in the English UI: switching to English still showed plenty of Chinese (two one-shot language bindings + repo-wide hardcoded Chinese)**:
+> (1) the client bound `uiT` **once** at plugin load (`makeUiT(ctx.locale.getLocale().active …)` is a snapshot), so every report / error /
+> progress / import-wizard / sync / market string going through `UiT` **stayed in the load-time language** after the user switched to English;
+> (2) the host froze `this.msg = makeMsg(resolveAppLanguage(ctx))` at assembly time (host reports / plans / errors are rendered back in the
+> browser and `src/routes/kit.ts` returns `error.message` verbatim, so engine Chinese showed up word-for-word in the ErrorBanner). The language
+> is now **resolved at the moment the text is read**: `makeLiveUiT(read)` on the client (`src/ui/i18n.ts`, wired in `src/client/index.ts`),
+> `engineMsg` + `setEngineLanguageSource(() => resolveAppLanguage(ctx))` + `invalidateEngineLocale()` on the host / engine
+> (`src/core/engine-locale.ts`; the route registration point `endpoint()` in `src/routes/kit.ts` invalidates per request, `LANGUAGE_TTL_MS = 1000`
+> only backstops schedulers / background work), plus `registerMessageCatalog` so the per-domain catalogs (core / market / utils / sync / schema /
+> routes / security / adapters / foreign / migrations / profiles / s3 / gist) merge into the existing zh/en catalogs. **All user-visible Chinese
+> moved into catalogs** (20 catalogs, 3446 keys: zh byte-identical, en filled in; the frozen fingerprint of the pre-existing 372 keys lives in
+> `src/core/engine-locale.test.ts` and is append-only).
+> - **Guards**: the **static guard** in `tests/helpers/i18n-scan.ts` + `tests/i18n-hardcoded-guard.test.ts` (character-level lexer; exemptions:
+>   source comments, `log.*` / `console.*` arguments, catalog zh regions). Full run `node --test tests/i18n-hardcoded-guard.test.ts` exits 0
+>   (`scope=ALL files=<scanned file count> hits=0 allowlisted=128`); the scoped self-check `DCM_I18N_GUARD_SCOPE=<prefixes>` only narrows the file list.
+>   **Measured red → green: 1107 + 73 allowlisted = 1180 hits before the migration → 0** (1084+73 right after t2 landed the guard; the two
+>   whitelist entries from t12 removed another 55). The 4-entry / 128-hit allowlist is entirely **registered non-rendered matching text**:
+>   `src/foreign/truth-table.ts` 61 (evidence data), `src/ui/test-helpers.ts` 12 (only used by `*.test.ts`), `src/ui/commands.ts` 49
+>   (command-palette search synonyms), `src/ui/errors.ts` 6 (regex literals that map host error messages to friendly titles); new exemptions
+>   require captain approval.
+> - **Deliberately still Chinese**: `src/cli/**` (terminal CLI + offline rescue console), source comments, `log.*` / `console.*` arguments, `*.test.ts`.
+> - **Residuals (recorded, not hidden — see `docs/design/2026-10-08-i18n-en-hardcoding.md` §3.9 / §7 and `docs/known-pitfalls.md`)**: the 5 tool
+>   descriptions in `src/core/model-tools.ts` resolve at apply time (DSH "registration is a snapshot" ⇒ mid-session switches are not picked up);
+>   only the exact id `'zh'` counts as Chinese (`'zh-Hans'` / `'zh-TW'` fall back to en; DSH ships only zh/en); `src/cli/index.ts:1025` still decides
+>   the corrupt lock by a message substring (correct today because the CLI is always zh).
+> - **Verification scope**: conclusions come from the static guard + `npm test` (**measured at wrap-up: 4057 tests, 4055 pass / 0 fail / 2 skipped**) + `typecheck` /
+>   `typecheck:tests` / `build`; the **real-machine per-tab DOM walk was not done** (no browser channel in the verification session) and is not
+>   claimed as passing.
+
 > **技能自带的 node_modules 让定时备份永久失败（issue #76）**：文件类分区的递归收集此前没有依赖目录排除项 ——
 > 技能目录里只要装了自己的依赖，`skills` 分区就会被遍历出上万个条目（真机：`~/.dsh/skills/md2pdf` 的
 > `node_modules` 11 625 个文件 ⇒ 分区 **11 629** 条、全量备份 **11 681** 条），撞上导出侧的 10 000 条目闸门，

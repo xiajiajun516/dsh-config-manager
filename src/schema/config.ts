@@ -8,7 +8,8 @@
  */
 import { parseJsonSafe } from '../utils/json.ts';
 import { isPathSafe } from '../utils/paths.ts';
-import { sectionMetaOf } from './section-registry.ts';
+import { schemaMsg } from './messages.ts';
+import { sectionMetaOf, type SectionMeta } from './section-registry.ts';
 import { sectionDataVersionIssue } from './versions.ts';
 import type { SectionData, SectionId } from './types.ts';
 
@@ -22,7 +23,6 @@ export {
   SECTION_DATA_VERSION,
   sectionMeta,
   sectionMetaOf,
-  requireSectionMeta,
   isSectionId,
   jsonPathOf,
   filePrefixOf,
@@ -36,13 +36,29 @@ export type {
   SectionPortability,
 } from './section-registry.ts';
 
+/**
+ * 拿不到元数据就**显式失败**（绝不让未注册分区按其它分区语义继续）。
+ * core 侧修正「未知分区静默记成 settingsNamespace」时用它替代 default 分支。
+ *
+ * t7：本函数原在 `section-registry.ts`；该模块受「只 import 一个类型」的零依赖铁律约束
+ * （client bundle 侧 `ui/export-flow.ts` 也在用它），故把唯一的用户可见文案抛出点迁到本文件
+ * （已持有本域消息目录）。public surface 不变：`config.ts` 与 `schema/index.ts` 仍照旧导出它。
+ */
+export function requireSectionMeta(id: string): SectionMeta {
+  const meta = sectionMetaOf(id);
+  if (meta === null) {
+    throw new Error(schemaMsg('schema.sectionNotRegistered', { section: id }));
+  }
+  return meta;
+}
+
 /** 从 ZIP 内 JSON 解析分区数据（深度保护 + 结构校验） */
 export function parseSectionJson<T extends SectionData>(sectionId: SectionId, raw: string): T {
   const parsed = parseJsonSafe(raw) as T;
   const issues = validateSectionData(sectionId, parsed);
   const errors = issues.filter((i) => i.severity === 'error');
   if (errors.length > 0) {
-    throw new Error(`分区 ${sectionId} 数据无效: ${errors.map((e) => e.message).join('; ')}`);
+    throw new Error(schemaMsg('schema.sectionDataInvalid', { section: sectionId, issues: errors.map((e) => e.message).join('; ') }));
   }
   return parsed;
 }
@@ -60,11 +76,11 @@ export interface SectionIssue { path: string; message: string; severity: 'error'
 export function validateSectionData(sectionId: SectionId, data: unknown): SectionIssue[] {
   const issues: SectionIssue[] = [];
   if (data === null || typeof data !== 'object') {
-    return [{ path: '$', message: `分区 ${sectionId} 数据必须是对象`, severity: 'error' }];
+    return [{ path: '$', message: schemaMsg('schema.sectionDataMustBeObject', { section: sectionId }), severity: 'error' }];
   }
   const meta = sectionMetaOf(sectionId);
   if (meta === null) {
-    return [{ path: '$', message: `未注册分区 ${String(sectionId)}：拒绝校验（新增分区须在 schema/section-registry.ts 注册）`, severity: 'error' }];
+    return [{ path: '$', message: schemaMsg('schema.sectionUnregistered', { section: String(sectionId) }), severity: 'error' }];
   }
   const obj = data as Record<string, unknown>;
   const versionIssue = sectionDataVersionIssue(meta.id, obj['version']);
@@ -77,32 +93,32 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
     case 'namespaces': {
       const ns = obj['namespaces'];
       if (ns === null || typeof ns !== 'object') {
-        issues.push({ path: 'namespaces', message: `分区 ${meta.id} 缺少 namespaces 对象`, severity: 'error' });
+        issues.push({ path: 'namespaces', message: schemaMsg('schema.namespacesMissing', { section: meta.id }), severity: 'error' });
       } else {
         for (const [name, rec] of Object.entries(ns as Record<string, unknown>)) {
           if (rec === null || typeof rec !== 'object') {
-            issues.push({ path: `namespaces.${name}`, message: 'namespace 记录必须是对象', severity: 'error' });
+            issues.push({ path: `namespaces.${name}`, message: schemaMsg('schema.namespaceRecordMustBeObject'), severity: 'error' });
             continue;
           }
           const r = rec as Record<string, unknown>;
-          if (typeof r['revision'] !== 'number') issues.push({ path: `namespaces.${name}.revision`, message: 'revision 必须是数字', severity: 'error' });
-          if (!('value' in r)) issues.push({ path: `namespaces.${name}.value`, message: '缺少 value', severity: 'error' });
+          if (typeof r['revision'] !== 'number') issues.push({ path: `namespaces.${name}.revision`, message: schemaMsg('schema.revisionMustBeNumber'), severity: 'error' });
+          if (!('value' in r)) issues.push({ path: `namespaces.${name}.value`, message: schemaMsg('schema.valueMissing'), severity: 'error' });
           const secrets = r['secrets'];
-          if (secrets !== undefined && !Array.isArray(secrets)) issues.push({ path: `namespaces.${name}.secrets`, message: 'secrets 必须是数组', severity: 'error' });
+          if (secrets !== undefined && !Array.isArray(secrets)) issues.push({ path: `namespaces.${name}.secrets`, message: schemaMsg('schema.secretsMustBeArray'), severity: 'error' });
         }
       }
       break;
     }
     case 'object': {
       const value = obj[payload.key];
-      if (value === null || typeof value !== 'object') issues.push({ path: payload.key, message: `缺少 ${payload.key} 对象`, severity: 'error' });
+      if (value === null || typeof value !== 'object') issues.push({ path: payload.key, message: schemaMsg('schema.objectMissing', { key: payload.key }), severity: 'error' });
       break;
     }
     case 'array': {
-      if (!Array.isArray(obj[payload.key])) issues.push({ path: payload.key, message: `${payload.key} 必须是数组`, severity: 'error' });
+      if (!Array.isArray(obj[payload.key])) issues.push({ path: payload.key, message: schemaMsg('schema.keyMustBeArray', { key: payload.key }), severity: 'error' });
       for (const extra of payload.extraArrayKeys ?? []) {
         if (obj[extra] !== undefined && !Array.isArray(obj[extra])) {
-          issues.push({ path: extra, message: `${extra} 必须是数组`, severity: 'error' });
+          issues.push({ path: extra, message: schemaMsg('schema.keyMustBeArray', { key: extra }), severity: 'error' });
         }
       }
       if (payload.validatePatchFiles === true) {
@@ -111,20 +127,20 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
         const patchFiles = obj['patchFiles'];
         if (patchFiles !== undefined) {
           if (!Array.isArray(patchFiles)) {
-            issues.push({ path: 'patchFiles', message: 'patchFiles 必须是数组', severity: 'error' });
+            issues.push({ path: 'patchFiles', message: schemaMsg('schema.keyMustBeArray', { key: 'patchFiles' }), severity: 'error' });
           } else {
             patchFiles.forEach((pf, i) => {
               const rec = (pf !== null && typeof pf === 'object') ? pf as Record<string, unknown> : null;
               if (rec === null) {
-                issues.push({ path: `patchFiles[${i}]`, message: 'patch 文件条目必须是对象', severity: 'error' });
+                issues.push({ path: `patchFiles[${i}]`, message: schemaMsg('schema.patchFileEntryMustBeObject'), severity: 'error' });
                 return;
               }
               const rel = rec['relativePath'];
               if (typeof rel !== 'string' || rel === '' || !isPathSafe(rel)) {
-                issues.push({ path: `patchFiles[${i}].relativePath`, message: 'patch 文件路径必须是安全的相对路径（不得为绝对路径或含 ..）', severity: 'error' });
+                issues.push({ path: `patchFiles[${i}].relativePath`, message: schemaMsg('schema.patchFilePathUnsafe'), severity: 'error' });
               }
               if (typeof rec['base64'] !== 'string') {
-                issues.push({ path: `patchFiles[${i}].base64`, message: 'patch 文件内容必须是 base64 字符串', severity: 'error' });
+                issues.push({ path: `patchFiles[${i}].base64`, message: schemaMsg('schema.patchFileContentMustBeBase64'), severity: 'error' });
               }
             });
           }
@@ -135,7 +151,7 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
     case 'files': {
       const files = obj['files'];
       if (!Array.isArray(files)) {
-        issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
+        issues.push({ path: 'files', message: schemaMsg('schema.keyMustBeArray', { key: 'files' }), severity: 'error' });
         break;
       }
       // 与 patchFiles 同级的防线（此前只判了 Array.isArray）：relativePath 会被写到 <home> 之下，
@@ -143,12 +159,12 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
       files.forEach((entry, i) => {
         const rec = (entry !== null && typeof entry === 'object') ? entry as Record<string, unknown> : null;
         if (rec === null) {
-          issues.push({ path: `files[${i}]`, message: '文件条目必须是对象', severity: 'error' });
+          issues.push({ path: `files[${i}]`, message: schemaMsg('schema.fileEntryMustBeObject'), severity: 'error' });
           return;
         }
         const rel = rec['relativePath'];
         if (typeof rel !== 'string' || rel === '' || !isPathSafe(rel)) {
-          issues.push({ path: `files[${i}].relativePath`, message: '文件路径必须是安全的相对路径（不得为绝对路径或含 ..）', severity: 'error' });
+          issues.push({ path: `files[${i}].relativePath`, message: schemaMsg('schema.filePathUnsafe'), severity: 'error' });
         }
       });
       break;
@@ -157,7 +173,7 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
       // secrets：凭据值走独立加密容器（.credentials.yaml / secrets.enc），没有分区 JSON 可校验
       issues.push({
         path: '$',
-        message: `分区 ${meta.id} 无 JSON 载荷（凭据值走独立加密容器，不参与分区 JSON 校验）`,
+        message: schemaMsg('schema.sectionNoJsonPayload', { section: meta.id }),
         severity: 'error',
       });
       break;
@@ -165,7 +181,7 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
     default: {
       // 判别联合已穷尽：新增 payload.kind 时此赋值会编译失败（提醒补校验分支）
       const exhaustive: never = payload;
-      issues.push({ path: '$', message: `未处理的分区载荷形态 ${JSON.stringify(exhaustive)}`, severity: 'error' });
+      issues.push({ path: '$', message: schemaMsg('schema.unhandledPayloadKind', { payload: JSON.stringify(exhaustive) }), severity: 'error' });
     }
   }
   return issues;

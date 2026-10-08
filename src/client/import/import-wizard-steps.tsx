@@ -162,7 +162,7 @@ export function AnalyzingStep(props: {
   const { progress, error, errors, onReset, apiT } = props
   return (
     <div className={css.viewBody}>
-      <ProgressBar event={progress} active />
+      <ProgressBar event={progress} active t={apiT} />
       {error !== null && <ErrorBanner error={error} onRetry={onReset} t={apiT} />}
       <ErrorList errors={errors} />
     </div>

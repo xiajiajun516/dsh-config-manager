@@ -23,7 +23,7 @@ import {
 } from '../../ui/report.ts'
 import type { ImportSectionStat } from '../../ui/types.ts'
 import { redact } from '../../security/redaction.ts'
-import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import { Badge, Button } from './ui.tsx'
 import css from '../config-manager.module.css'
 
@@ -37,8 +37,8 @@ export interface ReportViewProps {
   onDownload?: () => void
   /** 下载进行中（导出报告场景：下载按钮 spinner + 禁用，防重复下载） */
   downloadBusy?: boolean
-  /** 展示层翻译器（缺省 zh；与 ErrorBanner 同策略，不绑定 settings 命名空间） */
-  t?: UiT
+  /** 展示层翻译器（**必传**：英文界面不得回落中文；不绑定 settings 命名空间，故用 UiT） */
+  t: UiT
   /**
    * 分区显示名（SectionId → 文案）。导出报告的分区清单**必须**传 section-labels 的
    * sectionLabeler(t)（分区名的单一映射）；缺省回退裸 id，只允许用于非 UI 场合
@@ -230,7 +230,7 @@ function ImportSectionTable({ stats, labelOf, t }: {
  * （ImportWizardView 的 .resultFooter）——原先埋在报告卡底部，被
  * `flex + overflow:hidden` 的挤压布局裁掉，用户报告「导入完成后没有完成按钮」。
  */
-export function ReportView({ kind, exportReport, importResult, onDownload, downloadBusy = false, t = zhUiT, sectionLabel }: ReportViewProps) {
+export function ReportView({ kind, exportReport, importResult, onDownload, downloadBusy = false, t, sectionLabel }: ReportViewProps) {
   const importStats = kind === 'import' && importResult !== undefined
     ? importSectionStats(importResult.executed)
     : []

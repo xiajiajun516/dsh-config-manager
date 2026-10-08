@@ -28,6 +28,7 @@
  *    （实测 `verifyChecksums` 只调用 `map.get()`，不会整体物化 Map）。
  *    对 MB 级的 DSH 配置备份完全可接受。
  */
+import { engineMsg } from './messages-core.ts';
 import fs from 'node:fs/promises';
 import { verifyChecksums } from '../utils/hashing.ts';
 import { isENOENT } from '../utils/guards.ts';
@@ -146,18 +147,18 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
   try {
     const stat = await fs.stat(zipPath);
     if (!stat.isFile()) {
-      errors.push(`不是普通文件（目录或特殊文件）/ not a regular file: ${zipPath}`);
+      errors.push(engineMsg('core.backupVerify.notRegularFile', { zip: zipPath }));
       return makeResult(zipPath, 'MISSING', errors, warnings);
     }
     sizeBytes = stat.size;
     buf = await fs.readFile(zipPath);
   } catch (err) {
     if (isENOENT(err)) {
-      errors.push(`备份文件不存在 / backup file not found: ${zipPath}`);
+      errors.push(engineMsg('core.backupVerify.fileNotFound', { zip: zipPath }));
       return makeResult(zipPath, 'MISSING', errors, warnings);
     }
     // 文件在但读不动（EACCES / EBUSY / IO 错）：这是自检自身的失败，不是「备份坏了」
-    errors.push(`备份文件不可读 / backup file unreadable: ${msgOfError(err)}`);
+    errors.push(engineMsg('core.backupVerify.fileUnreadable', { reason: msgOfError(err) }));
     return makeResult(zipPath, 'VERIFY_ERROR', errors, warnings);
   }
 
@@ -170,7 +171,7 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
     /* ---------------- 2. 打开为 ZIP ---------------- */
     // 整体加密容器不是 ZIP（先识别，给出比「ZIP 损坏」准确得多的结论）
     if (isArchiveBlob(buf)) {
-      errors.push('整体加密备份容器（DCA1）需先用密码解密为 ZIP 才能自检 / encrypted container must be decrypted first');
+      errors.push(engineMsg('core.backupVerify.encryptedContainer'));
       return withSize('UNSUPPORTED');
     }
 
@@ -178,7 +179,7 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
     try {
       archive = createHardenedZipParser()(buf);
     } catch (err) {
-      errors.push(`ZIP 无法打开 / cannot open as ZIP: ${msgOfError(err)}`);
+      errors.push(engineMsg('core.backupVerify.cannotOpenZip', { reason: msgOfError(err) }));
       return withSize('CORRUPT');
     }
     const metas = archive.entries();
@@ -187,13 +188,13 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
       file: zipPath, verdict, sizeBytes, entryCount, errors, warnings,
     });
     if (entryCount === 0) {
-      errors.push('空 ZIP（0 条目）/ empty archive');
+      errors.push(engineMsg('core.backupVerify.emptyArchive'));
       return withEntries('CORRUPT');
     }
 
     /* ---------------- 3. manifest.json ---------------- */
     if (!archive.has(MANIFEST_FILE)) {
-      errors.push(`缺少 ${MANIFEST_FILE}（不是本插件导出的备份）/ ${MANIFEST_FILE} missing`);
+      errors.push(engineMsg('core.backupVerify.missingManifest', { file: MANIFEST_FILE }));
       return withEntries('CORRUPT');
     }
     let manifestRaw: string;
@@ -201,14 +202,14 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
       manifestRaw = archive.readEntryText(MANIFEST_FILE);
     } catch (err) {
       // 条目本身读不出来（CRC 失败/解压失败）→ 归档损坏，而非 manifest 语义非法
-      errors.push(`${MANIFEST_FILE} 无法读取（归档损坏）/ unreadable entry: ${msgOfError(err)}`);
+      errors.push(engineMsg('core.backupVerify.manifestUnreadable', { file: MANIFEST_FILE, reason: msgOfError(err) }));
       return withEntries('CORRUPT');
     }
     let manifest: Manifest;
     try {
       manifest = parseManifest(manifestRaw);
     } catch (err) {
-      errors.push(`${MANIFEST_FILE} 非法 / invalid manifest: ${msgOfError(err)}`);
+      errors.push(engineMsg('core.backupVerify.invalidManifest', { file: MANIFEST_FILE, reason: msgOfError(err) }));
       return withEntries('CORRUPT');
     }
     const sections = Object.entries(manifest.sections ?? {})
@@ -220,13 +221,13 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
 
     if (!isSupported(manifest.schemaVersion)) {
       // 版本超范围是「本插件读不了」，不是「备份坏了」——明确区分，避免误导用户重导
-      errors.push(`schema 版本不受支持 / unsupported schema version: ${describeVersion(manifest.schemaVersion)}`);
+      errors.push(engineMsg('core.backupVerify.unsupportedSchema', { version: describeVersion(manifest.schemaVersion) }));
       return withManifest('UNSUPPORTED');
     }
 
     /* ---------------- 4. integrity/checksums.json ---------------- */
     if (!archive.has(CHECKSUMS_FILE)) {
-      errors.push(`缺少 ${CHECKSUMS_FILE}（无法做完整性校验）/ ${CHECKSUMS_FILE} missing`);
+      errors.push(engineMsg('core.backupVerify.missingChecksums', { file: CHECKSUMS_FILE }));
       return withManifest('CORRUPT');
     }
     let table: Record<string, string>;
@@ -234,7 +235,7 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
       table = parseChecksumsTable(archive.readEntryText(CHECKSUMS_FILE));
     } catch (err) {
       // readEntryText 的 CRC/解压失败与「表结构非法」都归 CORRUPT（两者都说明备份不可信）
-      errors.push(`${CHECKSUMS_FILE} 非法或不可读 / invalid or unreadable checksums table: ${msgOfError(err)}`);
+      errors.push(engineMsg('core.backupVerify.invalidChecksums', { file: CHECKSUMS_FILE, reason: msgOfError(err) }));
       return withManifest('CORRUPT');
     }
 
@@ -243,7 +244,7 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
     const unreadableNames = new Set<string>();
     const unreadable: string[] = [];
     const lazyEntries = new LazyEntryMap(archive, unreadableNames, (name, reason) => {
-      unreadable.push(`${name}（${reason}）`);
+      unreadable.push(engineMsg('core.backupVerify.unreadableEntry', { name, reason }));
     });
     const tableKeys = Object.keys(table);
     const check = verifyChecksums(lazyEntries, table);
@@ -254,10 +255,10 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
     // 4b. 结构提示：未纳入校验表的条目（导出器只把 manifest 与校验表自身排除在外）
     if (tableKeys.length === 0) {
       if (entryCount > NON_DATA_ENTRIES.size) {
-        errors.push('校验表为空但归档含数据条目 / empty checksums table with data entries');
+        errors.push(engineMsg('core.backupVerify.emptyTableWithData'));
         return withManifest('CORRUPT');
       }
-      warnings.push('校验表为空（归档仅含 manifest 与校验表自身）/ empty checksums table');
+      warnings.push(engineMsg('core.backupVerify.emptyTable'));
     }
     const covered = new Set(tableKeys);
     const uncovered = metas
@@ -265,7 +266,7 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
       .map((m) => m.name);
     if (uncovered.length > 0) {
       const shown = uncovered.slice(0, 5).join(', ');
-      warnings.push(`含未纳入校验表的条目 ${uncovered.length} 个 / entries not covered by checksums: ${shown}${uncovered.length > 5 ? ', …' : ''}`);
+      warnings.push(engineMsg('core.backupVerify.uncoveredEntries', { count: uncovered.length, shown, suffix: uncovered.length > 5 ? ', …' : '' }));
     }
 
     // 4c. 结构提示：manifest 声明包含的分区在归档内应有对应条目
@@ -274,30 +275,30 @@ export async function verifyBackupZip(zipPath: string): Promise<BackupVerifyResu
       const jsonPath = SECTION_JSON_PATHS[id as SectionId];
       if (prefix !== undefined) {
         if (!metas.some((m) => m.name.startsWith(prefix) && m.name !== prefix)) {
-          warnings.push(`manifest 声明分区 ${id} 但归档内无对应文件 / declared section has no entries: ${id}`);
+          warnings.push(engineMsg('core.backupVerify.declaredSectionNoEntries', { id }));
         }
       } else if (jsonPath !== undefined && !archive.has(jsonPath)) {
-        warnings.push(`manifest 声明分区 ${id} 但缺少 ${jsonPath} / declared section payload missing: ${id}`);
+        warnings.push(engineMsg('core.backupVerify.declaredSectionPayloadMissing', { id, path: jsonPath }));
       }
     }
     if (manifest.security?.encrypted === true && !metas.some((m) => SECRETS_ENC_RE.test(m.name))) {
-      warnings.push('manifest 标记加密但归档内无凭据密文条目 / encrypted flag without secrets entry');
+      warnings.push(engineMsg('core.backupVerify.encryptedFlagNoSecrets'));
     }
 
     /* ---------------- 裁决 ---------------- */
     if (missing.length > 0) {
-      errors.push(`校验表内条目缺失（${missing.length}）/ missing entries: ${missing.join(', ')}`);
+      errors.push(engineMsg('core.backupVerify.missingEntries', { count: missing.length, list: missing.join(', ') }));
     }
     if (mismatched.length > 0) {
-      errors.push(`条目 SHA-256 不符（${mismatched.length}）/ hash mismatch: ${mismatched.join(', ')}`);
+      errors.push(engineMsg('core.backupVerify.hashMismatch', { count: mismatched.length, list: mismatched.join(', ') }));
     }
     if (unreadable.length > 0) {
-      errors.push(`条目无法读取（${unreadable.length}）/ unreadable entries: ${unreadable.join(', ')}`);
+      errors.push(engineMsg('core.backupVerify.unreadableEntries', { count: unreadable.length, list: unreadable.join(', ') }));
     }
     return withManifest(missing.length > 0 || mismatched.length > 0 || unreadable.length > 0 ? 'CORRUPT' : 'OK');
   } catch (err) {
     // 5. 自检自身异常：如实报 VERIFY_ERROR，绝不降级成 OK
-    errors.push(`自检过程异常 / verification error: ${msgOfError(err)}`);
+    errors.push(engineMsg('core.backupVerify.verificationError', { reason: msgOfError(err) }));
     return withSize('VERIFY_ERROR');
   }
 }

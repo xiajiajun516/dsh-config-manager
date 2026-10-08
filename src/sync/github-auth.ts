@@ -24,6 +24,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { defaultFetcher } from '../utils/proxy.ts';
+import { engineMsg } from './messages.ts';
 
 /** GitHub device flow 第一步：请求设备码 */
 export const GITHUB_DEVICE_CODE_URL = 'https://github.com/login/device/code';
@@ -102,7 +103,7 @@ export type ExchangeDeviceCodeResult =
 async function parseGitHubJson(response: Response, context: string): Promise<Record<string, unknown>> {
   const text = await response.text();
   if (text.trim() === '') {
-    throw new GitHubAuthError(`${context}: GitHub 返回空响应（HTTP ${response.status}）`, 'empty_response', response.status);
+    throw new GitHubAuthError(engineMsg('sync.githubEmptyResponse', { context, status: response.status }), 'empty_response', response.status);
   }
   try {
     const parsed: unknown = JSON.parse(text);
@@ -112,7 +113,7 @@ async function parseGitHubJson(response: Response, context: string): Promise<Rec
     return parsed as Record<string, unknown>;
   } catch {
     throw new GitHubAuthError(
-      `${context}: GitHub 返回了无法解析的响应（HTTP ${response.status}），请稍后重试`,
+      engineMsg('sync.githubInvalidJson', { context, status: response.status }),
       'invalid_json',
       response.status,
     );
@@ -136,7 +137,7 @@ export class GitHubAuthClient {
    */
   async startDeviceFlow(clientId: string, scope: string = GITHUB_DEVICE_FLOW_SCOPE): Promise<DeviceFlowStartResult> {
     if (typeof clientId !== 'string' || clientId === '') {
-      throw new GitHubAuthError('client_id 必须是非空字符串', 'invalid_client_id');
+      throw new GitHubAuthError(engineMsg('sync.githubClientIdRequired'), 'invalid_client_id');
     }
     const body = new URLSearchParams();
     body.set('client_id', clientId);
@@ -151,17 +152,17 @@ export class GitHubAuthClient {
       });
     } catch (err) {
       throw new GitHubAuthError(
-        `请求 GitHub 设备码失败：${err instanceof Error ? err.message : String(err)}`,
+        engineMsg('sync.githubDeviceCodeRequestFailed', { err: err instanceof Error ? err.message : String(err) }),
         'network_error',
       );
     }
 
-    const parsed = await parseGitHubJson(response, '请求设备码');
+    const parsed = await parseGitHubJson(response, engineMsg('sync.githubContextDeviceCode'));
     const ghError = parsed['error'];
     if (typeof ghError === 'string' && ghError !== '') {
       const desc = parsed['error_description'];
       throw new GitHubAuthError(
-        `GitHub 拒绝了设备码请求：${typeof desc === 'string' && desc !== '' ? desc : ghError}`,
+        engineMsg('sync.githubDeviceCodeDenied', { detail: typeof desc === 'string' && desc !== '' ? desc : ghError }),
         ghError,
         response.status,
       );
@@ -172,7 +173,7 @@ export class GitHubAuthClient {
     if (typeof deviceCode !== 'string' || deviceCode === ''
       || typeof userCode !== 'string' || userCode === ''
       || typeof verificationUri !== 'string' || verificationUri === '') {
-      throw new GitHubAuthError('GitHub 设备码响应缺少必要字段（device_code/user_code/verification_uri）', 'invalid_response', response.status);
+      throw new GitHubAuthError(engineMsg('sync.githubDeviceCodeFieldsMissing'), 'invalid_response', response.status);
     }
     const expiresIn = typeof parsed['expires_in'] === 'number' && Number.isFinite(parsed['expires_in'])
       ? Math.min(Math.max(Math.floor(parsed['expires_in']), 1), DEVICE_CODE_MAX_EXPIRES_IN)
@@ -206,12 +207,12 @@ export class GitHubAuthClient {
       });
     } catch (err) {
       throw new GitHubAuthError(
-        `交换 GitHub token 失败：${err instanceof Error ? err.message : String(err)}`,
+        engineMsg('sync.githubTokenExchangeFailed', { err: err instanceof Error ? err.message : String(err) }),
         'network_error',
       );
     }
 
-    const parsed = await parseGitHubJson(response, '交换 token');
+    const parsed = await parseGitHubJson(response, engineMsg('sync.githubContextTokenExchange'));
     const accessToken = parsed['access_token'];
     if (typeof accessToken === 'string' && accessToken !== '') {
       return { ok: true, accessToken };

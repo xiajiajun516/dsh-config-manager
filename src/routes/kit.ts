@@ -17,11 +17,14 @@
  * 新增一条路由 = 在所属组文件里加一条 `endpoint({ path, methods, kind? }, handler)` 声明，
  * 围栏/方法/异常处理由 kit 统一提供，无需再写样板。
  *
- * 分层：本文件只依赖 node:http。WebRoute 刻意在本地结构化声明（与
+ * 分层：本文件依赖 node:http + `src/core/engine-locale.ts`（t6 起的引擎语言运行时：请求入口失效 +
+ * 注册点断言文案）。WebRoute 刻意在本地结构化声明（与
  * @deepseek-ai/dsh-host-webserver 的同名接口结构等价），因为架构边界测试规定
  * @deepseek-ai/* 只能出现在 src/index.ts 与 src/client/（见 tests/architecture-boundaries.test.ts）。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { invalidateEngineLocale } from '../core/engine-locale.ts'
+import { engineMsg } from './messages.ts'
 
 /* --------------------------------------------------------------- 路由形状 */
 
@@ -187,6 +190,9 @@ export function endpoint(spec: EndpointSpec, handler: EndpointHandler): WebRoute
     kind: spec.kind ?? 'exact',
     path: spec.path,
     handler: async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+      // 「英文界面零中文」（t6）：请求入口强制失效语言缓存 —— 用户切语言后**下一次请求**就必须拿到新语言。
+      // 不接也有 LANGUAGE_TTL_MS=1000 的兜底上界；TTL 只给调度器/后台任务这类非请求路径用。
+      invalidateEngineLocale()
       if (!isLoopbackRequest(req)) {
         writeJsonError(res, 403, 'forbidden: loopback-only')
         return
@@ -230,7 +236,7 @@ export function registerRoutes(registry: RouteRegistry, routes: readonly WebRout
   return routes.map((route) => {
     const spec = routeSpecOf(route)
     if (spec === undefined) {
-      throw new Error(`路由 ${route.path} 未经 route kit 声明（endpoint()）——禁止裸 handler（安全不变量：围栏必须在注册点统一包装）`)
+      throw new Error(engineMsg('route.kitUnregistered', { path: route.path }))
     }
     return registry.register(route)
   })

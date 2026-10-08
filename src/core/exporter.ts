@@ -18,6 +18,7 @@ import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../sch
 import { DEFAULT_SENSITIVE_RELS, refreshVault } from '../security/vault.ts';
 import { writeZip } from '../utils/zip.ts';
 import { msgOf } from './messages.ts';
+import { engineMsg } from './messages-core.ts';
 import { declareBundledSessionsInWorkspaces, normalizeSessionLimit, sessionIdKey } from './session-select.ts';
 // issue #45 连带匹配的第二判据：工作区 path 的 cwd 目录键（DSH 的 sessionIds 覆盖率很低，见 coupleSessionWorkspaces）
 import { projectKeyOf } from './session-meta.ts';
@@ -370,11 +371,10 @@ export class Exporter {
             warnings.push(this.msg('export.fileSectionSecrets', { section: adapter.id, path: hitPath }));
           }
           // 被截断的文件数必须**显式**汇总告警，否则截断本身又变成静默丢失。
-          // 说明：此处未新增消息键（如 export.fileSectionSecretsTruncated）是为避免与并行任务冲突
-          // （src/core/messages.ts 属他人改动范围）；故复用 export.fileSectionSecrets，仅 path 传汇总文案。
+          // 文案在 t4 域目录（src/core/messages-core.ts）：不再借用 export.fileSectionSecrets 传中文 path 值。
           const truncatedCount = hitPaths.length - warnedPaths.length;
           if (truncatedCount > 0) {
-            warnings.push(this.msg('export.fileSectionSecrets', { section: adapter.id, path: `（另有 ${truncatedCount} 个文件命中，详见报告）` }));
+            warnings.push(engineMsg('core.exporter.fileSectionSecretsTruncated', { section: adapter.id, count: truncatedCount }));
           }
         }
       }

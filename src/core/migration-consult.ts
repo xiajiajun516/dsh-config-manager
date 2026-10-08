@@ -20,6 +20,7 @@
  * 复用现有：computeCompatibility（扩展而非重写）、validateManifest、scanAndRedact、
  * integrity/zip-security、import-wizard 分析管线（宿主填充 migratability）。
  */
+import { engineMsg } from './messages-core.ts';
 import { computeCompatibility } from './validator.ts';
 import type { CompatibilityScore } from './types.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
@@ -212,7 +213,7 @@ export function scoreCompatibility(
   if (data.manifest === null) {
     compat = 'unsupported';
     score = 0;
-    issues.push({ severity: 'error', code: 'compatibility.noManifest', message: '无法评估兼容性：manifest 缺失' });
+    issues.push({ severity: 'error', code: 'compatibility.noManifest', message: engineMsg('core.consult.compatNoManifest') });
   } else {
     compat = computeCompatibility({
       sourceDsh: data.sourceDsh,
@@ -227,11 +228,11 @@ export function scoreCompatibility(
       case 'good': score = 90; break;
       case 'partial':
         score = 60;
-        issues.push({ severity: 'warning', code: 'compatibility.partial', message: '部分兼容：跨平台 / 分区缺失 / 版本超前，需人工确认' });
+        issues.push({ severity: 'warning', code: 'compatibility.partial', message: engineMsg('core.consult.compatPartial') });
         break;
       case 'unsupported':
         score = 0;
-        issues.push({ severity: 'error', code: 'compatibility.unsupported', message: '不受支持：schema 超出本插件支持范围' });
+        issues.push({ severity: 'error', code: 'compatibility.unsupported', message: engineMsg('core.consult.compatUnsupported') });
         break;
     }
   }
@@ -244,30 +245,30 @@ export function scoreIntegrity(data: ConsultSourceData): HealthDimension {
   let score = 100;
   if (data.manifest === null) {
     score = 0;
-    issues.push({ severity: 'error', code: 'integrity.noManifest', message: 'manifest 缺失，无法校验结构完整性' });
+    issues.push({ severity: 'error', code: 'integrity.noManifest', message: engineMsg('core.consult.integrityNoManifest') });
   } else {
     for (const issue of data.manifestIssues) {
       if (issue.severity === 'error') {
         score -= 30;
-        issues.push({ severity: 'error', code: 'integrity.manifestInvalid', message: `manifest 无效：${issue.message}`, evidence: issue.path });
+        issues.push({ severity: 'error', code: 'integrity.manifestInvalid', message: engineMsg('core.consult.manifestInvalid', { message: issue.message }), evidence: issue.path });
       } else {
         score -= 10;
-        issues.push({ severity: 'warning', code: 'integrity.manifestWarning', message: `manifest 警告：${issue.message}`, evidence: issue.path });
+        issues.push({ severity: 'warning', code: 'integrity.manifestWarning', message: engineMsg('core.consult.manifestWarning', { message: issue.message }), evidence: issue.path });
       }
     }
   }
   for (const c of data.checksumIssues) {
     score -= 30;
-    issues.push({ severity: 'error', code: 'integrity.checksumMismatch', message: `完整性校验失败：${c}` });
+    issues.push({ severity: 'error', code: 'integrity.checksumMismatch', message: engineMsg('core.consult.checksumMismatch', { reason: c }) });
   }
   // 源无 checksum 表（manifest 存在但 checksums 缺失）→ warning（轻度完整性顾虑）
   if (data.manifest !== null && data.checksums === null) {
     score -= 10;
-    issues.push({ severity: 'warning', code: 'integrity.noChecksums', message: '源缺少 checksum 表，无法校验条目完整性' });
+    issues.push({ severity: 'warning', code: 'integrity.noChecksums', message: engineMsg('core.consult.noChecksums') });
   }
   for (const z of data.zipSlipIssues) {
     score -= 30;
-    issues.push({ severity: 'error', code: 'integrity.zipSlip', message: `ZIP 路径越界：${z}` });
+    issues.push({ severity: 'error', code: 'integrity.zipSlip', message: engineMsg('core.consult.zipSlip', { path: z }) });
   }
   return { id: 'integrity', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
 }
@@ -278,7 +279,7 @@ export function scoreSections(data: ConsultSourceData): HealthDimension {
   let score = 100;
   for (const sid of data.missingSections) {
     score -= 20;
-    issues.push({ severity: 'warning', code: 'sections.missing', message: `声明包含但数据缺失：${sid}`, evidence: sid });
+    issues.push({ severity: 'warning', code: 'sections.missing', message: engineMsg('core.consult.sectionDataMissing', { section: sid }), evidence: sid });
   }
   // 分区数据不可解析（manifest 声明但 sections 中无对应数据且非 missingSections 覆盖）
   if (data.manifest !== null) {
@@ -287,7 +288,7 @@ export function scoreSections(data: ConsultSourceData): HealthDimension {
       if (data.missingSections.includes(sid)) continue;
       if (!data.sections.has(sid)) {
         score -= 30;
-        issues.push({ severity: 'error', code: 'sections.unparseable', message: `分区数据不可解析：${sid}`, evidence: sid });
+        issues.push({ severity: 'error', code: 'sections.unparseable', message: engineMsg('core.consult.sectionUnparseable', { section: sid }), evidence: sid });
       }
     }
   }
@@ -369,12 +370,12 @@ export function scoreConsistency(data: ConsultSourceData): HealthDimension {
   const dangling = [...referenced].filter((ref) => !declared.has(ref));
   if (dangling.length > 0) {
     score -= Math.min(dangling.length * 15, 45);
-    const shown = dangling.slice(0, 5).join('、');
-    const more = dangling.length > 5 ? ` 等 ${dangling.length} 个` : '';
+    const shown = dangling.slice(0, 5).join(engineMsg('core.consult.listSeparator'));
+    const more = dangling.length > 5 ? engineMsg('core.consult.andMore', { count: dangling.length }) : '';
     issues.push({
       severity: 'warning',
       code: 'consistency.danglingCredentialRef',
-      message: `备份引用了 ${dangling.length} 个未在凭据分区声明的凭据（导入后本机若缺值需补录）：${shown}${more}`,
+      message: engineMsg('core.consult.danglingCredentialRef', { count: dangling.length, shown, more }),
       evidence: dangling.join(', '),
     });
   }
@@ -387,7 +388,7 @@ export function scoreSensitive(data: ConsultSourceData): HealthDimension {
   let score = 100;
   if (data.containsSecrets && !data.encrypted) {
     score -= 40;
-    issues.push({ severity: 'error', code: 'sensitive.unencryptedSecrets', message: '快照含未加密秘密（凭据值明文暴露）' });
+    issues.push({ severity: 'error', code: 'sensitive.unencryptedSecrets', message: engineMsg('core.consult.unencryptedSecrets') });
   }
   const hitCount = data.sensitiveHits.length;
   if (hitCount > 0) {
@@ -396,7 +397,7 @@ export function scoreSensitive(data: ConsultSourceData): HealthDimension {
     issues.push({
       severity: 'warning',
       code: 'sensitive.hits',
-      message: `检测到 ${hitCount} 处敏感字段暴露（已脱敏）`,
+      message: engineMsg('core.consult.sensitiveHits', { count: hitCount }),
     });
   }
   return { id: 'sensitive', score: clampScore(score), verdict: dimensionVerdict(issues), issues };
@@ -410,10 +411,10 @@ export function scoreMigratability(data: ConsultSourceData): HealthDimension {
   if (m === null) {
     // 未评估可迁移性 = warning 级 → needs-attention（60），与 warning 标签一致（不落到 critical）
     score = 60;
-    issues.push({ severity: 'warning', code: 'migratability.notEvaluated', message: '未评估可迁移性（dry-run 未执行）' });
+    issues.push({ severity: 'warning', code: 'migratability.notEvaluated', message: engineMsg('core.consult.migratabilityNotEvaluated') });
   } else if (!m.ok) {
     score = 0;
-    issues.push({ severity: 'error', code: 'migratability.failed', message: '可迁移性检查失败：dry-run 无法通过' });
+    issues.push({ severity: 'error', code: 'migratability.failed', message: engineMsg('core.consult.migratabilityFailed') });
     for (const e of m.errors) {
       issues.push({ severity: 'error', code: 'migratability.error', message: e });
     }
@@ -429,7 +430,7 @@ export function scoreMigratability(data: ConsultSourceData): HealthDimension {
       issues.push({
         severity: 'warning',
         code: 'migratability.conflicts',
-        message: `有 ${m.fatalConflicts} 处冲突需要你决定保留哪一边（下一步可逐个选择；默认不覆盖本机）`,
+        message: engineMsg('core.consult.conflicts', { count: m.fatalConflicts }),
       });
     }
     if (m.warnings > 0) {
@@ -437,7 +438,7 @@ export function scoreMigratability(data: ConsultSourceData): HealthDimension {
       issues.push({
         severity: 'warning',
         code: 'migratability.warning',
-        message: `另有 ${m.warnings} 项需要留意（不影响导入能否成功）`,
+        message: engineMsg('core.consult.warnings', { count: m.warnings }),
       });
     }
   }

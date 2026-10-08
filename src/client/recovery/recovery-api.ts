@@ -37,7 +37,7 @@ import type {
 } from '../../ui/session-inventory-view.ts';
 import type { SessionLayoutResponse } from '../../ui/session-layout-view.ts';
 import { ConfigManagerApiError, getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import type { UiT } from '../../ui/i18n.ts';
 import { RECOVERY_API } from '../common/routes.ts';
 
 /** recovery 端点常量：**唯一来源** = `common/routes.ts`（W4 单点化），此处重导出保持导入面。 */
@@ -70,7 +70,7 @@ function operationPath(operationId: string, action: string): string {
 /** Recovery 浏览器半数据入口（实现 RecoveryPort 契约）。 */
 export class RecoveryApi implements RecoveryPort {
   readonly t: UiT
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t
   }
 

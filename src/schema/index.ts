@@ -19,10 +19,12 @@
  * 本文件把 `./schema` 变成真实可用的运行时入口。
  *
  * 约束（勿破）：本文件只 import 同目录模块（`./config.ts` / `./section-registry.ts` / `./types.ts` /
- * `./versions.ts`）。`section-registry.ts` 自身只 import 一个**类型**（`type { SectionId }`），
- * 故本出口仍保持零 `node:` / 零 npm 依赖。
- * 不 import `../core/*`、不 import `node:*`、不 import 任何 UI / DSH 包——否则会破坏
- * headless 消费（见 `docs/spec/headless-consumption.md`）与 `tests/architecture-boundaries.test.ts`。
+ * `./versions.ts`）。`section-registry.ts` 自身仍然只 import 一个**类型**（`type { SectionId }`；
+ * 未注册分区的错误文案 t7 起在 `config.ts`，见那里）。
+ * 目标性质是**零 `node:` / 零 npm / 零 @deepseek-ai 依赖**（headless 消费：
+ * `docs/spec/headless-consumption.md`；client bundle 自包含）。唯一的跨层依赖是本域消息目录
+ * （`./messages.ts` → `../core/engine-locale.ts`，纯函数、零 node / 零 npm），不破坏该性质；
+ * 除此之外不得 import `../core/*`、`node:*` 或任何 UI / DSH 包。
  */
 
 /* —— 版本判定（唯一出口，业务代码零散落 `if (v === 1)`） —— */
@@ -44,6 +46,7 @@ export {
   SECTION_JSON_PATHS,
   SECTION_FILE_PREFIXES,
   isFileSection,
+  requireSectionMeta,
 } from './config.ts';
 
 /*
@@ -57,7 +60,6 @@ export {
   SECTION_DATA_VERSION,
   sectionMeta,
   sectionMetaOf,
-  requireSectionMeta,
   isSectionId,
   jsonPathOf,
   filePrefixOf,

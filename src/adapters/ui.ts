@@ -3,9 +3,10 @@
  * 数据源 = settings.yaml 中「UI 类」namespace（pet / dsh-better-sidebar / remote-web-ui / ui-onboarding / skin 等）。
  * localStorage 等 Host 不可迁移的 UI 状态以 uiMigrationNotes 纯说明形式导出（不含任何值）。
  */
-import type { NamespaceRecord, UiSection } from '../schema/types.ts';
+import type { NamespaceRecord, UiMigrationNote, UiSection } from '../schema/types.ts';
 import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
+import { engineMsg } from './messages.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
   ImportContext, PlanItem, ValidationResult,
@@ -34,30 +35,29 @@ export function isUiNamespace(name: string): boolean {
   return KNOWN_UI_NAMESPACE_PREFIXES.some((p) => lower.startsWith(p.toLowerCase()));
 }
 
-/** localStorage 等 Host 无通道的 UI 状态说明（纯说明，不含值；研究报告 §2.2/§4.4） */
-export const UI_MIGRATION_NOTES: UiSection['uiMigrationNotes'] = [
-  {
-    plugin: 'dsh-task-board',
-    storage: 'localStorage',
-    key: 'dsh.taskBoard.v1',
-    migratable: false,
-    reason: '任务看板数据存于浏览器 localStorage，Host 侧无访问通道，需在目标机器重新配置',
-  },
-  {
-    plugin: 'dsh-aionui-panel',
-    storage: 'localStorage',
-    key: 'aionui-panel.*',
-    migratable: false,
-    reason: '面板宽度/折叠状态存于浏览器 localStorage，Host 侧无访问通道，需在目标机器重新配置',
-  },
-  {
-    plugin: 'dsh-client-ui-*',
-    storage: 'localStorage',
-    key: '*',
-    migratable: false,
-    reason: '浏览器端 UI 状态无法经 Host API 迁移',
-  },
+/**
+ * localStorage 等 Host 无通道的 UI 状态说明（纯说明，不含值；研究报告 §2.2/§4.4）。
+ *
+ * t6（英文界面零中文）：说明行的 `reason` 是用户可见文案 ⇒ 表里只放**目录键**，取文案在导出期现取
+ * （`uiMigrationNotes(msg)`）—— 这样导出的说明行跟随界面语言，而不是冻结在装配期语言。
+ * （表本身是数据；中文只存在于 adapters 域的追加目录 `src/adapters/messages.ts`。）
+ */
+const UI_MIGRATION_NOTE_ROWS: ReadonlyArray<Omit<UiMigrationNote, 'reason'> & { reasonKey: string }> = [
+  { plugin: 'dsh-task-board', storage: 'localStorage', key: 'dsh.taskBoard.v1', migratable: false, reasonKey: 'adapter.uiLocalStorageTaskBoard' },
+  { plugin: 'dsh-aionui-panel', storage: 'localStorage', key: 'aionui-panel.*', migratable: false, reasonKey: 'adapter.uiLocalStoragePanel' },
+  { plugin: 'dsh-client-ui-*', storage: 'localStorage', key: '*', migratable: false, reasonKey: 'adapter.uiLocalStorageGeneric' },
 ];
+
+/** UI 迁移说明行（取文案在调用期现取；缺省 = 当前引擎语言的 engineMsg）。 */
+export function uiMigrationNotes(msg: MsgFunc = engineMsg): UiSection['uiMigrationNotes'] {
+  return UI_MIGRATION_NOTE_ROWS.map((row) => ({
+    plugin: row.plugin,
+    storage: row.storage,
+    key: row.key,
+    migratable: row.migratable,
+    reason: msg(row.reasonKey),
+  }));
+}
 
 export class UiAdapter implements ConfigAdapter<UiSection> {
   readonly id = 'ui' as const;
@@ -76,10 +76,11 @@ export class UiAdapter implements ConfigAdapter<UiSection> {
     const all = await resolveNamespaces(this.namespaces, ctx);
     const uiNames = all.filter((n) => isUiNamespace(n));
     const namespaces: Record<string, NamespaceRecord> = await collectNamespaceRecords(ctx, uiNames, warnings);
+    const notes = uiMigrationNotes(ctx.msg);
     return {
       sectionId: 'ui',
-      data: { version: 1, namespaces, uiMigrationNotes: UI_MIGRATION_NOTES },
-      counts: { namespaces: Object.keys(namespaces).length, notes: UI_MIGRATION_NOTES.length },
+      data: { version: 1, namespaces, uiMigrationNotes: notes },
+      counts: { namespaces: Object.keys(namespaces).length, notes: notes.length },
       warnings,
     };
   }

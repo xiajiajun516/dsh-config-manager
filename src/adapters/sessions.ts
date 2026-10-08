@@ -10,6 +10,8 @@
 import { FileCollectionAdapter } from './file-collection.ts';
 import { listFilesDetailed } from './link-report.ts';
 import { msgOf } from '../core/messages.ts';
+// t6：注册 adapters 域追加目录（本模块只消费注入的 msg，故只引它的注册副作用）。
+import './messages.ts';
 import { groupSessionUnits, isSessionLogFileName, normalizeSessionLimit, pickLatestSessionUnits, sessionIdKey } from '../core/session-select.ts';
 import { projectKeyOf } from '../core/session-meta.ts';
 import { applyPathMapping } from '../core/path-mapping.ts';
@@ -367,7 +369,7 @@ export class SessionsAdapter extends FileCollectionAdapter {
       if (present.has(sessionIdKey(next.sessionId))) continue;
       const dirRel = await this.findSessionDir(ctx, next.sessionId, next.key, allKeys);
       if (dirRel === null) {
-        uncoupled.push(next.sessionId + '（' + msg('export.sessionRelationNotFound') + '）');
+        uncoupled.push(msg('adapter.sessionUncoupledNote', { id: next.sessionId, reason: msg('export.sessionRelationNotFound') }));
         continue;
       }
       const listing = await listFilesDetailed(ctx.fs, dirRel);
@@ -381,7 +383,7 @@ export class SessionsAdapter extends FileCollectionAdapter {
         loaded.push({ relativePath: this.relPathOf(rel), data, contentHash: sha256Hex(data) });
       }
       if (tooLarge || loaded.length === 0) {
-        uncoupled.push(next.sessionId + '（' + msg('export.sessionParentTooLarge') + '）');
+        uncoupled.push(msg('adapter.sessionUncoupledNote', { id: next.sessionId, reason: msg('export.sessionParentTooLarge') }));
         continue;
       }
       usedBytes += unitBytes;

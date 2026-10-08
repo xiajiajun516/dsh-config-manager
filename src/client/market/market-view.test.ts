@@ -235,8 +235,8 @@ test('market-view: sortMarketItems 稳定性（同值保持原相对顺序）', 
 /* ---------------------------------------------------------------- 客户端专属：供应链警示着色 + 详情聚合 */
 
 test('market-view: marketWarningsLines 恒非空且首条为 warn（非官方审核）', () => {
-  const valid = marketWarningsLines(detail({ status: 'valid' }), 'https://github.com/u/m')
-  const invalid = marketWarningsLines(detail({ status: 'invalid', errors: ['x'] }), 'https://github.com/u/m')
+  const valid = marketWarningsLines(detail({ status: 'valid' }), 'https://github.com/u/m', zhUiT)
+  const invalid = marketWarningsLines(detail({ status: 'invalid', errors: ['x'] }), 'https://github.com/u/m', zhUiT)
   assert.ok(valid.length > 0)
   assert.equal(valid[0]?.kind, 'warn')
   assert.equal(invalid[0]?.kind, 'warn')
@@ -246,7 +246,7 @@ test('market-view: marketWarningsLines 恒非空且首条为 warn（非官方审
 test('market-view: marketWarningsLines 含来源 URL / 作者 / provenance（着色 info）', () => {
   const lines = marketWarningsLines(
     detail({ author: 'alice', provenance: { source: 'https://gh.com/alice', note: '自述' } }),
-    'https://github.com/u/m',
+    'https://github.com/u/m', zhUiT
   )
   const text = lines.map((l) => l.text).join('\n')
   assert.match(text, /https:\/\/github\.com\/u\/m/)
@@ -256,7 +256,7 @@ test('market-view: marketWarningsLines 含来源 URL / 作者 / provenance（着
 })
 
 test('market-view: marketDetailView valid + 有分区 → canImport 且带警示/空错误', () => {
-  const v = marketDetailView(detail({ status: 'valid', sections: ['settings'] }), 'https://x', true)
+  const v = marketDetailView(detail({ status: 'valid', sections: ['settings'] }), 'https://x', true, zhUiT)
   assert.equal(v.canImport, true)
   assert.deepEqual(v.errors, [])
   assert.ok(v.warnings.length > 0)
@@ -265,7 +265,7 @@ test('market-view: marketDetailView valid + 有分区 → canImport 且带警示
 })
 
 test('market-view: marketDetailView invalid → canImport=false 且 errors 透传、badge error', () => {
-  const v = marketDetailView(detail({ status: 'invalid', errors: ['zip 越界', 'checksum 不符'] }), 'https://x', false)
+  const v = marketDetailView(detail({ status: 'invalid', errors: ['zip 越界', 'checksum 不符'] }), 'https://x', false, zhUiT)
   assert.equal(v.canImport, false)
   assert.deepEqual(v.errors, ['zip 越界', 'checksum 不符'])
   assert.equal(v.badge.statusKind, 'error')
@@ -273,7 +273,7 @@ test('market-view: marketDetailView invalid → canImport=false 且 errors 透�
 })
 
 test('market-view: marketDetailView valid 但空分区 → 不可导入（无从导入）', () => {
-  const v = marketDetailView(detail({ status: 'valid', sections: [] }), 'https://x', true)
+  const v = marketDetailView(detail({ status: 'valid', sections: [] }), 'https://x', true, zhUiT)
   assert.equal(v.canImport, false)
 })
 

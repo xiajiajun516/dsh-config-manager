@@ -38,6 +38,7 @@ import { readCursor } from './read-cursor.ts';
 import { readHermes, resolveHermesHome } from './read-hermes.ts';
 import { normalizePlatform, roamingAppDataDir, xdgDataHome } from './platform-paths.ts';
 import type { ForeignPlatform } from './platform-paths.ts';
+import { engineMsg } from './messages.ts';
 import { FOREIGN_TRUTH_TABLES } from './truth-table.ts';
 import type { ForeignTruthTableEntry } from './truth-table.ts';
 /* ---- 档 B 24 个会话类来源的装配点（每一条自带 wiring，经 sessionSourceOf 收口）---- */
@@ -221,10 +222,10 @@ function describeForeignSourceError(
   sourceId: string,
   available: readonly string[],
 ): string {
-  const list = available.length > 0 ? available.join(', ') : '(空)';
-  if (code === 'duplicate-source') return '外部来源 id 重复注册: ' + sourceId + '；可用: ' + list;
-  if (code === 'unknown-source') return '未知外部来源 id: ' + sourceId + '；可用: ' + list;
-  return '外部来源定义非法: ' + sourceId + '；可用: ' + list;
+  const list = available.length > 0 ? available.join(', ') : engineMsg('foreign.availableSourcesEmpty');
+  if (code === 'duplicate-source') return engineMsg('foreign.duplicateSourceId', { id: sourceId, available: list });
+  if (code === 'unknown-source') return engineMsg('foreign.unknownSourceId', { id: sourceId, available: list });
+  return engineMsg('foreign.invalidSourceDefinition', { id: sourceId, available: list });
 }
 
 /* ---------------- 注册表 ---------------- */
@@ -278,7 +279,7 @@ function assertValidSource(source: ForeignSource, available: readonly string[]):
   const raw = source as { id?: unknown; labelKey?: unknown; detect?: unknown; build?: unknown };
   const id = typeof raw.id === 'string' ? raw.id : '';
   if (!isForeignSourceId(id)) {
-    throw new ForeignSourceError('invalid-source', id === '' ? '(无 id)' : id, available);
+    throw new ForeignSourceError('invalid-source', id === '' ? engineMsg('foreign.sourceIdMissing') : id, available);
   }
   if (typeof raw.labelKey !== 'string' || raw.labelKey === '') {
     throw new ForeignSourceError('invalid-source', id, available);
@@ -426,7 +427,7 @@ async function probeTree(
 function truthEntryOf(id: ForeignSourceId): ForeignTruthTableEntry {
   const found = FOREIGN_TRUTH_TABLES.find((entry) => entry.id === id);
   if (found === undefined) {
-    throw new Error('真值表缺少来源定义: ' + id + '（truth-table.ts 是 evidence/probePaths 的单一事实源）');
+    throw new Error(engineMsg('foreign.truthTableMissingSourceDetailed', { id }));
   }
   return found;
 }

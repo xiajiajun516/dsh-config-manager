@@ -162,7 +162,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               <span className={css.groupLabel}>{t('github.title')} <InfoHint text={t('github.description')} label={t('common.infoHint')} /></span>
               {githubView.showCode && (
                 <div className={css.statRow}>
-                  <Badge kind="info">{t('github.userCode')}：<strong>{githubView.userCode}</strong></Badge>
+                  <Badge kind="info">{t('github.userCode')}{t('common.labelSeparator')}<strong>{githubView.userCode}</strong></Badge>
                   <a
                     className={css.ghostButton}
                     href={githubView.verificationUri}
@@ -216,7 +216,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 const preset = presetById(next)
                 onFormChange({ webdavUrl: preset.url })
               }}
-              options={WEBDAV_PRESETS.map((preset) => ({ value: preset.id, label: preset.label }))}
+              options={WEBDAV_PRESETS.map((preset) => ({ value: preset.id, label: t(preset.labelKey) }))}
             />
             <InfoHint text={t('webdav.presetHint')} label={t('common.infoHint')} />
           </div>

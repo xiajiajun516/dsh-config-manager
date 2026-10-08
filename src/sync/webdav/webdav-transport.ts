@@ -28,6 +28,9 @@
 import { requestOnce, type RawResponse } from '../../utils/proxy.ts';
 import { zhMsg } from '../../core/messages.ts';
 import { composeMsg } from '../s3/messages.ts';
+// t6：「英文界面零中文」——注册同步域追加目录（this.o.msg 缺省 = zhMsg，其查找链会查注册目录；
+// sync.webdav.blobHashInvalid 这类新键必须能解析，绝不露裸键名）。
+import '../messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
 import { BLOB_SECTIONS, gcBlobs, isBlobRefsSection, isFilesSectionLike, referencedBlobHashes, refsToSection, sectionToBlobRefs } from '../blob-store.ts';
@@ -547,7 +550,7 @@ export class WebDavTransport implements SyncTransport {
     return {
       put: async (hash, bytes) => {
         if (!BLOB_HASH_RE.test(hash)) {
-          throw new WebDavTransportError(`内容哈希形状非法，拒绝写入 blob 仓: ${hash}`);
+          throw new WebDavTransportError(this.o.msg('sync.webdav.blobHashInvalid', { hash }));
         }
         if (index[hash] !== undefined) return; // 内容未变 → 一个字都不传（P1-4 的核心收益）
         const url = this.blobUrl(hash);

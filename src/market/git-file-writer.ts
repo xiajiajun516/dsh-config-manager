@@ -26,6 +26,7 @@ import { promisify } from 'node:util';
 import { validateRepoUrl } from '../sync/sync-config.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { quoteGitValue } from '../utils/git-quote.ts';
+import { marketMsg } from './messages-market.ts';
 import type { GitAuthor, GitCredentialProvider, GitExecFn, GitExecResult } from '../sync/git/git-transport.ts';
 
 const execFileAsync = promisify(execFile);
@@ -125,12 +126,12 @@ function makeMask(repoUrl: string, token: string): (text: string) => string {
 /** 校验仓库地址：http(s)（validateRepoUrl 拒绝 userinfo/空白）；非法抛 GitFileWriterError */
 function validateAndNormalizeRepoUrl(repoUrl: string): string {
   if (typeof repoUrl !== 'string' || repoUrl.trim() === '') {
-    throw new GitFileWriterError('仓库地址不能为空');
+    throw new GitFileWriterError(marketMsg('market.gitWriter.repoUrlEmpty'));
   }
   const err = validateRepoUrl(repoUrl);
-  if (err !== null) throw new GitFileWriterError(`仓库地址非法: ${err}`);
+  if (err !== null) throw new GitFileWriterError(marketMsg('market.gitWriter.repoUrlInvalid', { reason: err }));
   if (!/^https?:\/\//i.test(repoUrl.trim())) {
-    throw new GitFileWriterError('仅支持 http(s) 仓库地址（token 经 credential helper 注入，不拼入 URL）');
+    throw new GitFileWriterError(marketMsg('market.gitWriter.repoUrlScheme'));
   }
   return repoUrl.trim();
 }
@@ -147,7 +148,7 @@ export class GitFileWriterClient implements GitFileWriter {
   constructor(options: CreateGitFileWriterOptions) {
     if (options.credentials === null || typeof options.credentials !== 'object'
       || typeof options.credentials.getToken !== 'function') {
-      throw new GitFileWriterError('credentials provider 必填');
+      throw new GitFileWriterError(marketMsg('market.gitWriter.credentialsRequired'));
     }
     this.credentials = options.credentials;
     this.gitBin = 'git';
@@ -168,10 +169,10 @@ export class GitFileWriterClient implements GitFileWriter {
   async writeFiles(call: GitFileWriteCall): Promise<GitFileWriterResult> {
     const repoUrl = validateAndNormalizeRepoUrl(call.repoUrl);
     if (typeof call.workDir !== 'string' || call.workDir === '') {
-      throw new GitFileWriterError('workDir 不能为空');
+      throw new GitFileWriterError(marketMsg('market.gitWriter.workDirEmpty'));
     }
     if (!Array.isArray(call.entries) || call.entries.length === 0) {
-      throw new GitFileWriterError('entries 不能为空');
+      throw new GitFileWriterError(marketMsg('market.gitWriter.entriesEmpty'));
     }
     const token = await this.credentials.getToken();
     const mask = makeMask(repoUrl, token);
@@ -186,7 +187,7 @@ export class GitFileWriterClient implements GitFileWriter {
       const base = call.baseRef && call.baseRef !== '' ? call.baseRef : await this.detectDefaultBase(call.workDir, token, mask);
       const co = await this.runGit(['checkout', '-B', branch, base], { cwd: call.workDir, token, mask });
       if (co.code !== 0) {
-        throw new GitFileWriterError(mask(`切换分支失败（${co.stderr}）`));
+        throw new GitFileWriterError(mask(marketMsg('market.gitWriter.checkoutFailed', { stderr: co.stderr })));
       }
     }
     for (const entry of call.entries) {
@@ -196,7 +197,7 @@ export class GitFileWriterClient implements GitFileWriter {
     }
     const add = await this.runGit(['add', '-A', '--', '.'], { cwd: call.workDir, token, mask });
     if (add.code !== 0) {
-      throw new GitFileWriterError(mask(`git add 失败（${add.stderr}）`));
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.addFailed', { stderr: add.stderr })));
     }
     const diff = await this.runGit(['diff', '--cached', '--quiet'], { cwd: call.workDir, allowNonZero: true, token, mask });
     if (diff.code === 0) {
@@ -204,14 +205,14 @@ export class GitFileWriterClient implements GitFileWriter {
     }
     const commit = await this.runGit(['commit', '-m', call.commitMessage], { cwd: call.workDir, token, mask });
     if (commit.code !== 0) {
-      throw new GitFileWriterError(mask(`git commit 失败（${commit.stderr}）`));
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.commitFailed', { stderr: commit.stderr })));
     }
     const pushArgs = branch !== ''
       ? ['push', '-u', 'origin', branch, ...(call.force === true ? ['--force-with-lease'] : [])]
       : ['push', '-u', 'origin', 'HEAD'];
     const push = await this.runGit(pushArgs, { cwd: call.workDir, withCredential: true, token, mask });
     if (push.code !== 0) {
-      throw new GitFileWriterError(mask(`git push 失败（${push.stderr}）`));
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.pushFailed', { stderr: push.stderr })));
     }
     return { pushed: true, branch: branch !== '' ? branch : 'default' };
   }
@@ -237,7 +238,7 @@ export class GitFileWriterClient implements GitFileWriter {
     try {
       const result = await this.exec(this.gitBin, [...extra, ...args], { cwd, timeoutMs: this.timeoutMs });
       if (result.code !== 0 && !opts.allowNonZero) {
-        throw new GitFileWriterError(opts.mask(`git ${args.join(' ')} 失败: ${result.stderr}`));
+        throw new GitFileWriterError(opts.mask(marketMsg('market.gitWriter.commandFailed', { args: args.join(' '), stderr: result.stderr })));
       }
       return result;
     } finally {
@@ -276,19 +277,19 @@ export class GitFileWriterClient implements GitFileWriter {
     if (!isRepo) {
       const entries = await fs.readdir(workDir).catch(() => [] as string[]);
       if (entries.length > 0) {
-        throw new GitFileWriterError(`工作副本目录非空且不是 git 仓库: ${workDir}`);
+        throw new GitFileWriterError(marketMsg('market.gitWriter.workDirNotEmpty', { workDir }));
       }
       const clone = await this.runGit(['clone', repoUrl, '.'], { cwd: workDir, withCredential: true, token, mask });
       if (clone.code !== 0) {
-        throw new GitFileWriterError(mask(`克隆仓库失败（${clone.stderr}）`));
+        throw new GitFileWriterError(mask(marketMsg('market.gitWriter.cloneFailed', { stderr: clone.stderr })));
       }
       const cfgName = await this.runGit(['config', 'user.name', this.author.name], { cwd: workDir, token, mask });
       if (cfgName.code !== 0) {
-        throw new GitFileWriterError(mask(`配置提交身份失败（${cfgName.stderr}）`));
+        throw new GitFileWriterError(mask(marketMsg('market.gitWriter.identityFailed', { stderr: cfgName.stderr })));
       }
       const cfgMail = await this.runGit(['config', 'user.email', this.author.email], { cwd: workDir, token, mask });
       if (cfgMail.code !== 0) {
-        throw new GitFileWriterError(mask(`配置提交身份失败（${cfgMail.stderr}）`));
+        throw new GitFileWriterError(mask(marketMsg('market.gitWriter.identityFailed', { stderr: cfgMail.stderr })));
       }
       return;
     }
@@ -297,7 +298,7 @@ export class GitFileWriterClient implements GitFileWriter {
     if (head.code !== 0) return;
     const pull = await this.runGit(['pull', '--ff-only'], { cwd: workDir, withCredential: true, allowNonZero: true, token, mask });
     if (pull.code !== 0 && !/no tracking information/i.test(pull.stderr)) {
-      throw new GitFileWriterError(mask(`拉取远端失败（${pull.stderr}）`));
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.pullFailed', { stderr: pull.stderr })));
     }
   }
 
@@ -308,12 +309,12 @@ export class GitFileWriterClient implements GitFileWriter {
     if (getUrl.code !== 0) {
       const add = await this.runGit(['remote', 'add', 'upstream', upstreamUrl], { cwd: workDir, token, mask });
       if (add.code !== 0) {
-        throw new GitFileWriterError(mask(`添加 upstream 远端失败（${add.stderr}）`));
+        throw new GitFileWriterError(mask(marketMsg('market.gitWriter.upstreamAddFailed', { stderr: add.stderr })));
       }
     }
     const fetch = await this.runGit(['fetch', 'upstream'], { cwd: workDir, allowNonZero: true, token, mask });
     if (fetch.code !== 0) {
-      throw new GitFileWriterError(mask(`拉取官方仓库失败（${fetch.stderr}）`));
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.upstreamFetchFailed', { stderr: fetch.stderr })));
     }
   }
 
@@ -323,7 +324,7 @@ export class GitFileWriterClient implements GitFileWriter {
       const res = await this.runGit(['rev-parse', '--verify', '--quiet', ref], { cwd: workDir, allowNonZero: true, token, mask });
       if (res.code === 0) return ref;
     }
-    throw new GitFileWriterError('无法确定远端默认分支（origin/main 或 origin/master）');
+    throw new GitFileWriterError(marketMsg('market.gitWriter.defaultBranchUnknown'));
   }
 }
 

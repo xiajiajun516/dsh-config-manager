@@ -15,6 +15,16 @@ import {
   findReleaseForVersion,
   normalizeReleaseVersion,
 } from './release-notes-view.ts';
+import { zh } from '../locales.ts';
+import type { TranslateNS } from '../client-types.ts';
+
+/** 测试用翻译器：zh 目录 + {param} 插值（与 ctx.locale.bind 同口径）。 */
+const t = ((key: string, params?: Record<string, string | number>) => {
+  const template: string = (zh as Record<string, string>)[key] ?? key;
+  return params === undefined
+    ? template
+    : template.replace(/\{(\w+)\}/g, (m, k: string) => (params[k] === undefined ? m : String(params[k])));
+}) as TranslateNS<'config-manager'>;
 
 test('parseGitHubRepo: 正确解析 GitHub 仓库 URL', () => {
   assert.deepEqual(parseGitHubRepo('https://github.com/xiajiajun516/dsh-config-manager'), {
@@ -110,13 +120,13 @@ test('fetchReleases: 正常分页拉取与 hasMore 判定', async () => {
   }) as unknown as Response;
 
   // perPage=2 返回 2 条 → hasMore=true
-  const res1 = await fetchReleases('https://github.com/xiajiajun516/dsh-config-manager', 1, 2, mockFetcher as typeof fetch);
+  const res1 = await fetchReleases('https://github.com/xiajiajun516/dsh-config-manager', 1, 2, mockFetcher as typeof fetch, t);
   assert.equal(res1.releases.length, 2);
   assert.equal(res1.hasMore, true);
   assert.equal(res1.page, 1);
 
   // perPage=5 返回 2 条 → hasMore=false
-  const res2 = await fetchReleases('https://github.com/xiajiajun516/dsh-config-manager', 1, 5, mockFetcher as typeof fetch);
+  const res2 = await fetchReleases('https://github.com/xiajiajun516/dsh-config-manager', 1, 5, mockFetcher as typeof fetch, t);
   assert.equal(res2.releases.length, 2);
   assert.equal(res2.hasMore, false);
 });
@@ -128,7 +138,7 @@ test('fetchReleases: 错误处理（403 限流 / 404 / 500）', async () => {
     statusText: 'Forbidden',
   }) as unknown as Response;
   await assert.rejects(
-    () => fetchReleases('https://github.com/foo/bar', 1, 5, mock403 as typeof fetch),
+    () => fetchReleases('https://github.com/foo/bar', 1, 5, mock403 as typeof fetch, t),
     /速率限制|Rate limit/,
   );
 
@@ -137,7 +147,7 @@ test('fetchReleases: 错误处理（403 限流 / 404 / 500）', async () => {
     status: 404,
     statusText: 'Not Found',
   }) as unknown as Response;
-  const res404 = await fetchReleases('https://github.com/foo/bar', 1, 5, mock404 as typeof fetch);
+  const res404 = await fetchReleases('https://github.com/foo/bar', 1, 5, mock404 as typeof fetch, t);
   assert.deepEqual(res404.releases, []);
   assert.equal(res404.hasMore, false);
 });

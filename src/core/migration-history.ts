@@ -30,6 +30,7 @@ import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { maskHighEntropy, redact } from '../security/redaction.ts';
 import { scanAndRedact } from '../security/secret-scanner.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { coreText, engineMsg } from './messages-core.ts';
 
 // ---------- 常量 ----------
 
@@ -335,7 +336,7 @@ export class MigrationStore {
       await this.io.mkdir(this.dir, { recursive: true });
       let guard = 0;
       while (await this.io.exists(target)) {
-        if (++guard > 8) return { ok: false, entry, error: 'history filename collision (retry 上限)' };
+        if (++guard > 8) return { ok: false, entry, error: engineMsg('core.migrationHistory.filenameCollision') };
         filename = makeHistoryFilename(new Date(at + guard), entry.kind);
         target = path.join(this.dir, filename);
       }
@@ -420,10 +421,23 @@ export function summarizeHistory(entries: StoredMigrationHistoryEntry[]): Migrat
 
 /** 导出报告（纯函数）。渲染文本统一过 redact() 兜底（安全不变量）。 */
 export function renderExport(entries: StoredMigrationHistoryEntry[], format: ExportFormat, locale: 'zh' | 'en' = 'zh'): string {
-  const L = locale === 'zh'
-    ? { title: 'DSH 配置迁移历史', total: '总数', empty: '暂无迁移记录', kind: '操作', time: '时间', result: '结果', sections: '分区', detail: '摘要' }
-    : { title: 'DSH Config Migration History', total: 'Total', empty: 'No migration records', kind: 'Operation', time: 'Time', result: 'Result', sections: 'Sections', detail: 'Summary' };
-  const resultLabel = (r: MigrationResult): string => r === 'success' ? (locale === 'zh' ? '成功' : 'success') : r === 'failed' ? (locale === 'zh' ? '失败' : 'failed') : (locale === 'zh' ? '跳过' : 'skipped');
+  // 显式 locale 形参（不是全局语言运行时）：从本域目录直接取对应语言的文案，语义与改造前逐字一致。
+  const T = (key: Parameters<typeof coreText>[1]): string => coreText(locale, key);
+  const L = {
+    title: T('core.migrationHistory.title'),
+    total: T('core.migrationHistory.total'),
+    empty: T('core.migrationHistory.empty'),
+    kind: T('core.migrationHistory.kind'),
+    time: T('core.migrationHistory.time'),
+    result: T('core.migrationHistory.result'),
+    sections: T('core.migrationHistory.sections'),
+    detail: T('core.migrationHistory.detail'),
+  };
+  const resultLabel = (r: MigrationResult): string => r === 'success'
+    ? T('core.migrationHistory.resultSuccess')
+    : r === 'failed'
+      ? T('core.migrationHistory.resultFailed')
+      : T('core.migrationHistory.resultSkipped');
 
   if (format === 'json') {
     const stats = summarizeHistory(entries);

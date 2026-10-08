@@ -42,8 +42,10 @@
  *     `PORTABLE_SECTION_IDS` / … / sync/risk.ts 的 `SECTION_RISK_TIER`）；
  *     同一事实只允许存在一份字面量（载荷版本收敛为 `SECTION_DATA_VERSION`，
  *     风险分级收敛为各条目的 `riskTier`）；
- *  e. **未注册分区不静默**：`sectionMetaOf` / `requireSectionMeta` 让运行期拿到未注册 id 时
- *     显式失败（`validateSectionData` 已按此实现），绝不落到某个 default 分支按其它分区语义处理
+ *  e. **未注册分区不静默**：`sectionMetaOf`（本文件）与 `requireSectionMeta`（t7 起迁到
+ *     `config.ts` —— 用户可见文案必须走消息目录，而本文件受「只 import 一个类型」的零依赖铁律约束）
+ *     让运行期拿到未注册 id 时显式失败（`validateSectionData` 已按此实现），
+ *     绝不落到某个 default 分支按其它分区语义处理
  *     （历史缺陷在 `core/backup.ts` 的 `engineSnapshotEntry` default 分支；
  *     修复与回归用例见 `core/config-snapshot.ts:430` 附近与 `core/config-snapshot.test.ts`）。
  *
@@ -57,7 +59,8 @@
  *  - 需要风险等级 → `sectionMeta(id).riskTier`（sync 侧经 `riskTierOf(id)`；未注册 → undefined → 待审）；
  *  - 需要校验分区载荷 version → `versions.ts` 的 `isSupportedSectionDataVersion` /
  *    `sectionDataVersionIssue`（唯一校验函数），或直接比对 `sectionMeta(id).dataVersion`；
- *  - 需要「拿不到就显式报错」→ `requireSectionMeta(id)`（throw）/ `sectionMetaOf(value)`（null）。
+ *  - 需要「拿不到就显式报错」→ `requireSectionMeta(id)`（throw；t7 起由 `config.ts` 导出）/
+ *    `sectionMetaOf(value)`（null）。
  *
  * 注意：本模块的分区 id 联合仍在 `types.ts`（保持对既有 import 路径零破坏）；本文件只依赖它的类型。
  */
@@ -380,20 +383,6 @@ export function sectionMetaOf(value: unknown): SectionMeta | null {
 /** 类型安全的元数据读取（id 已是 SectionId） */
 export function sectionMeta(id: SectionId): SectionMeta {
   return SECTION_REGISTRY[id];
-}
-
-/**
- * 拿不到元数据就**显式失败**（绝不让未注册分区按其它分区语义继续）。
- * core 侧修正「未知分区静默记成 settingsNamespace」时用它替代 default 分支。
- */
-export function requireSectionMeta(id: string): SectionMeta {
-  const meta = sectionMetaOf(id);
-  if (meta === null) {
-    throw new Error(
-      `未注册分区「${id}」：拒绝按其它分区语义处理；新增分区必须在 src/schema/section-registry.ts 注册`,
-    );
-  }
-  return meta;
 }
 
 /** 该 id 是否是已注册分区（运行期守卫；配合 manifest 的未知键告警使用） */

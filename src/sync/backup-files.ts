@@ -17,6 +17,7 @@ import path from 'node:path'
 import { isDefaultRetentionPolicy, selectRetentionKeepers } from './retention-policy.ts'
 import type { RetentionPolicy } from './retention-policy.ts'
 import { readContainerKind, type BackupContainerKind } from '../security/container-kind.ts'
+import { engineMsg } from './messages.ts'
 
 /** 定时备份产物前缀（区别于手动导出的 dsh-config-；同时是来源标识与清理豁免依据） */
 export const AUTO_BACKUP_PREFIX = 'dsh-config-auto-'
@@ -152,7 +153,7 @@ export async function listBackupFiles(exportsDir: string, options: ListBackupFil
   } catch (error) {
     const code = (error as { code?: string }).code
     if (code !== 'ENOENT') {
-      options.unreadable = '导出目录读不出来（' + String(code ?? 'unknown') + '）：' + exportsDir
+      options.unreadable = engineMsg('sync.backupExportsDirUnreadable', { code: String(code ?? 'unknown'), dir: exportsDir })
     }
     return []
   }
@@ -198,7 +199,7 @@ export function isValidBackupFileName(name: unknown): name is string {
  */
 export async function deleteBackupFile(exportsDir: string, name: string): Promise<boolean> {
   if (!isValidBackupFileName(name)) {
-    throw new Error(`非法备份文件名: ${name}`)
+    throw new Error(engineMsg('sync.backupFileNameInvalid', { name }))
   }
   const target = path.join(exportsDir, name)
   let removed = false

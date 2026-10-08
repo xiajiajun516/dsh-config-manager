@@ -29,6 +29,7 @@ import {
 import { RunRegistry, type RunState } from './run-registry.ts';
 import type { HostContext, Snapshot } from './types.ts';
 import type { MsgFunc } from './messages.ts';
+import { engineMsg } from './messages-core.ts';
 
 /** 路由注入的恢复执行器（restore / rollback 引擎；测试注入 mock）。 */
 export interface RecoveryExecutorFns {
@@ -195,8 +196,8 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
         performRestore: executors.performRestore, performRollback: executors.performRollback,
       }, true);
       if (result === 'failed') {
-        runs.fail(runId, 'recovery 执行失败');
-        return { status: 400, body: { error: 'recovery 执行失败', runId } };
+        runs.fail(runId, engineMsg('core.recovery.executeFailed'));
+        return { status: 400, body: { error: engineMsg('core.recovery.executeFailed'), runId } };
       }
       runs.finish(runId, { decision: decisionKind, state: 'RECOVERING' });
       return { status: 200, body: { ok: true, operationId, decision: decisionKind, state: 'RECOVERING', runId } };
@@ -290,10 +291,10 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       if (userConfirmed !== true) return { status: 400, body: { error: 'userConfirmed required' } };
       const j = await store.loadActive(operationId);
       if (j === null) return { status: 404, body: { error: 'operation not found' } };
-      if (j.state !== 'NEEDS_ATTENTION') return { status: 409, body: { error: `journal state ${j.state} 不允许 confirm` } };
-      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: 'journal 无 trusted snapshot，无法恢复' } };
+      if (j.state !== 'NEEDS_ATTENTION') return { status: 409, body: { error: engineMsg('core.recovery.stateNotAllowed', { state: j.state, action: 'confirm' }) } };
+      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: engineMsg('core.recovery.noTrustedSnapshot') } };
       const verdict = await validateSnapshotVerdict(j.snapshotId);
-      if (verdict !== 'TRUSTED_OPERATION_SNAPSHOT') return { status: 400, body: { error: `snapshot 不可信: ${verdict}` } };
+      if (verdict !== 'TRUSTED_OPERATION_SNAPSHOT') return { status: 400, body: { error: engineMsg('core.recovery.snapshotUntrusted', { verdict }) } };
       // journal 保持 NEEDS_ATTENTION（confirm 不转 RECOVERING）
       return { status: 200, body: { ok: true, operationId, snapshotId: j.snapshotId, verdict } };
     },
@@ -303,12 +304,12 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       if (userConfirmed !== true) return { status: 400, body: { error: 'userConfirmed required' } };
       const j = await store.loadActive(operationId);
       if (j === null) return { status: 404, body: { error: 'operation not found' } };
-      if (j.state !== 'NEEDS_ATTENTION' && j.state !== 'RECOVERING') return { status: 409, body: { error: `journal state ${j.state} 不允许 execute` } };
-      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: 'journal 无 trusted snapshot，无法恢复' } };
+      if (j.state !== 'NEEDS_ATTENTION' && j.state !== 'RECOVERING') return { status: 409, body: { error: engineMsg('core.recovery.stateNotAllowed', { state: j.state, action: 'execute' }) } };
+      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: engineMsg('core.recovery.noTrustedSnapshot') } };
       const d = await decision(j);
-      if (d === 'needs-attention') return { status: 400, body: { error: 'recovery decision 为 needs-attention，无法自动执行' } };
+      if (d === 'needs-attention') return { status: 400, body: { error: engineMsg('core.recovery.needsAttentionNoAuto') } };
       const verdict = await validateSnapshotVerdict(j.snapshotId);
-      if (verdict !== 'TRUSTED_OPERATION_SNAPSHOT') return { status: 400, body: { error: `snapshot 不可信: ${verdict}` } };
+      if (verdict !== 'TRUSTED_OPERATION_SNAPSHOT') return { status: 400, body: { error: engineMsg('core.recovery.snapshotUntrusted', { verdict }) } };
       return runExecution(operationId, j, d, makeExecutors);
     },
 
@@ -316,13 +317,13 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       if (!isValidOperationId(operationId)) return { status: 400, body: { error: 'invalid operationId' } };
       const j = await store.loadActive(operationId);
       if (j === null) return { status: 404, body: { error: 'operation not found' } };
-      if (j.state !== 'RECOVERING') return { status: 409, body: { error: `journal state ${j.state} 不允许 verify` } };
-      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: 'journal 无 trusted snapshot' } };
+      if (j.state !== 'RECOVERING') return { status: 409, body: { error: engineMsg('core.recovery.stateNotAllowed', { state: j.state, action: 'verify' }) } };
+      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: engineMsg('core.recovery.noTrustedSnapshotShort') } };
       let snap: Snapshot;
       try {
         snap = await new FileSnapshotStore({ dir: snapshotsDir }).load(j.snapshotId);
       } catch {
-        return { status: 400, body: { error: 'snapshot 无法加载' } };
+        return { status: 400, body: { error: engineMsg('core.recovery.snapshotLoadFailed') } };
       }
       const verification = await verifyRecovery(snap, host, { snapshotsRoot: snapshotsDir, environmentFingerprint: getEnvironmentFingerprint(), expectedOperationId: j.operationId });
       const terminal = recoveryTerminalState(verification.verdict);
@@ -351,12 +352,12 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       if (userConfirmed !== true) return { status: 400, body: { error: 'userConfirmed required' } };
       const j = await store.loadActive(operationId);
       if (j === null) return { status: 404, body: { error: 'operation not found' } };
-      if (j.state !== 'NEEDS_ATTENTION') return { status: 409, body: { error: `journal state ${j.state} 不允许 retry` } };
-      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: 'journal 无 trusted snapshot' } };
+      if (j.state !== 'NEEDS_ATTENTION') return { status: 409, body: { error: engineMsg('core.recovery.stateNotAllowed', { state: j.state, action: 'retry' }) } };
+      if (j.snapshotId === null || j.snapshotId === '') return { status: 400, body: { error: engineMsg('core.recovery.noTrustedSnapshotShort') } };
       const d = await decision(j);
-      if (d === 'needs-attention') return { status: 400, body: { error: 'recovery decision 为 needs-attention，无法 retry' } };
+      if (d === 'needs-attention') return { status: 400, body: { error: engineMsg('core.recovery.needsAttentionNoRetry') } };
       const verdict = await validateSnapshotVerdict(j.snapshotId);
-      if (verdict !== 'TRUSTED_OPERATION_SNAPSHOT') return { status: 400, body: { error: `snapshot 不可信: ${verdict}` } };
+      if (verdict !== 'TRUSTED_OPERATION_SNAPSHOT') return { status: 400, body: { error: engineMsg('core.recovery.snapshotUntrusted', { verdict }) } };
       return runExecution(operationId, j, d, makeExecutors);
     },
 
@@ -367,7 +368,7 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       if (j === null) return { status: 404, body: { error: 'operation not found' } };
       // dismiss → quarantine（用户放弃；不删除 snapshot/journal evidence，不强行 RECOVERED）
       const result = await executeRecovery(store, { operationId, action: 'dismiss', snapshotId: j.snapshotId }, true);
-      if (result === 'failed') return { status: 400, body: { error: 'dismiss 失败' } };
+      if (result === 'failed') return { status: 400, body: { error: engineMsg('core.recovery.dismissFailed') } };
       // issue #56：放弃恢复 = 该 incident 结案 —— 若没有别的未解决 incident，必须同时解除保护。
       // 此前这里只 quarantine 不清 SAFE MODE，而唯一的清除点挂在 verify(ROLLED_BACK) 上，
       // 事务已被移出 active/ ⇒ 那条分支永远走不到：界面显示「暂无待处理」，写操作却持续 423，
@@ -429,7 +430,7 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
         }
         if (!res.ok) {
           // 拒绝是正常结果（活锁/无法证明 stale/二次验证失败），不是 500
-          return { status: 200, body: { ok: false, removed: false, state: res.state, reason: res.detail ?? '未判定为 stale，已拒绝回收' } };
+          return { status: 200, body: { ok: false, removed: false, state: res.state, reason: res.detail ?? engineMsg('core.recovery.lockNotStale') } };
         }
         // 回收成功后 stale 分类已消失；锁态交由客户端重新拉取 status 刷新
         return { status: 200, body: { ok: true, removed: res.removed, state: res.state } };

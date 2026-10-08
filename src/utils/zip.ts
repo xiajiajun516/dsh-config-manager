@@ -17,6 +17,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { parseJsonSafe } from './json.ts';
 import { isPathSafe, isSameOrChild } from './paths.ts';
+import { utilsMsg } from './messages-utils.ts';
 
 export interface ZipEntryMeta {
   name: string;
@@ -107,7 +108,7 @@ export function assertZipEntryCount(count: number, limits: ZipSafetyLimits = {})
   const max = Math.min(limits.maxEntries ?? readSideMax, readSideMax, ZIP_MAX_WRITABLE_ENTRIES);
   if (count > max) {
     throw new ZipSafetyError(
-      `ZIP 条目数 ${count} 超过上限 ${max}（导出上限与读取上限一致；请缩小导出分区范围后重试）`,
+      utilsMsg('utils.zip.entryCountWriteExceeded', { count, max }),
     );
   }
 }
@@ -203,7 +204,7 @@ export function zipToBuffer(entries: ZipWriteEntry[], limits: ZipSafetyLimits = 
 
   for (const entry of entries) {
     if (!isPathSafe(entry.name)) {
-      throw new ZipSafetyError(`拒绝写入不安全的条目名: ${entry.name}`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.unsafeEntryNameWrite', { name: entry.name }));
     }
     const nameBuf = Buffer.from(entry.name, 'utf8');
     const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data);
@@ -241,7 +242,7 @@ export async function writeZip(zipPath: string, entries: ZipWriteEntry[], limits
   assertZipEntryCount(entries.length, limits);
   // 先全量校验条目名：不安全的名字在**落任何字节之前**拒绝（与 zipToBuffer 的拒绝顺序一致）
   const prepared = entries.map((entry) => {
-    if (!isPathSafe(entry.name)) throw new ZipSafetyError(`拒绝写入不安全的条目名: ${entry.name}`);
+    if (!isPathSafe(entry.name)) throw new ZipSafetyError(utilsMsg('utils.zip.unsafeEntryNameWrite', { name: entry.name }));
     return {
       nameBuf: Buffer.from(entry.name, 'utf8'),
       data: Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data),
@@ -365,10 +366,10 @@ export class ZipArchive {
       try {
         out = zlib.inflateRawSync(raw, { maxOutputLength: this.limits.maxSingleBytes });
       } catch (err) {
-        throw new ZipSafetyError(`条目 "${name}" 解压失败: ${err instanceof Error ? err.message : String(err)}`);
+        throw new ZipSafetyError(utilsMsg('utils.zip.entryInflateFailed', { name, reason: err instanceof Error ? err.message : String(err) }));
       }
     } else {
-      throw new ZipSafetyError(`条目 "${name}" 使用未知压缩方法 ${meta.method}`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.unknownCompression', { name, method: meta.method }));
     }
     return this.accept(name, meta, out);
   }
@@ -392,10 +393,10 @@ export class ZipArchive {
       try {
         out = await inflateRawAsync(raw, this.limits.maxSingleBytes);
       } catch (err) {
-        throw new ZipSafetyError(`条目 "${name}" 解压失败: ${err instanceof Error ? err.message : String(err)}`);
+        throw new ZipSafetyError(utilsMsg('utils.zip.entryInflateFailed', { name, reason: err instanceof Error ? err.message : String(err) }));
       }
     } else {
-      throw new ZipSafetyError(`条目 "${name}" 使用未知压缩方法 ${meta.method}`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.unknownCompression', { name, method: meta.method }));
     }
     return this.accept(name, meta, out);
   }
@@ -403,7 +404,7 @@ export class ZipArchive {
   /** 条目元数据查找（不存在 → 抛错）。解压前后的判据由调用方共享。 */
   private metaOf(name: string): ZipEntryMeta {
     const meta = this.metas.find((m) => m.name === name);
-    if (!meta) throw new ZipSafetyError(`ZIP 中不存在条目: ${name}`);
+    if (!meta) throw new ZipSafetyError(utilsMsg('utils.zip.entryMissing', { name }));
     return meta;
   }
 
@@ -412,13 +413,13 @@ export class ZipArchive {
     const lhOffset = meta.localOffset;
     const lh = this.buf.subarray(lhOffset, lhOffset + 30);
     if (lh.length < 30 || lh.readUInt32LE(0) !== LOCAL_SIG) {
-      throw new ZipSafetyError(`条目 "${name}" 的本地文件头损坏`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.localHeaderCorrupt', { name }));
     }
     const nameLen = lh.readUInt16LE(26);
     const extraLen = lh.readUInt16LE(28);
     const dataStart = lhOffset + 30 + nameLen + extraLen;
     if (dataStart + meta.compressedSize > this.buf.length) {
-      throw new ZipSafetyError(`条目 "${name}" 数据越界`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.dataOutOfRange', { name }));
     }
     return this.buf.subarray(dataStart, dataStart + meta.compressedSize);
   }
@@ -426,20 +427,20 @@ export class ZipArchive {
   /** 解压后的验收：尺寸 → CRC32 → 解压总量预算 → 压缩比（zip bomb）。两处解压路径共用同一套判据。 */
   private accept(name: string, meta: ZipEntryMeta, out: Buffer): Buffer {
     if (out.length !== meta.uncompressedSize) {
-      throw new ZipSafetyError(`条目 "${name}" 解压尺寸不符（${out.length} ≠ ${meta.uncompressedSize}）`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.sizeMismatch', { name, actual: out.length, expected: meta.uncompressedSize }));
     }
     if (crc32(out) !== meta.crc32) {
-      throw new ZipSafetyError(`条目 "${name}" CRC32 校验失败（ZIP 已损坏）`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.crcMismatch', { name }));
     }
 
     this.totalUncompressed += out.length;
     if (this.totalUncompressed > this.limits.maxTotalBytes) {
-      throw new ZipSafetyError('ZIP 解压总字节数超过上限');
+      throw new ZipSafetyError(utilsMsg('utils.zip.totalUncompressedExceeded'));
     }
     if (meta.compressedSize > 0) {
       const ratio = out.length / meta.compressedSize;
       if (ratio > this.limits.maxRatio) {
-        throw new ZipSafetyError(`条目 "${name}" 压缩比 ${ratio.toFixed(1)} 超过上限（疑似 zip bomb）`);
+        throw new ZipSafetyError(utilsMsg('utils.zip.ratioExceeded', { name, ratio: ratio.toFixed(1) }));
       }
     }
     return out;
@@ -464,20 +465,20 @@ export class ZipArchive {
 export function parseZip(buf: Uint8Array, limits: ZipSafetyLimits = {}): ZipArchive {
   const merged: Required<ZipSafetyLimits> = { ...DEFAULT_ZIP_SAFETY_LIMITS, ...limits };
   const b = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
-  if (b.length < 22) throw new ZipSafetyError('不是合法的 ZIP 文件（体积过小）');
+  if (b.length < 22) throw new ZipSafetyError(utilsMsg('utils.zip.tooSmall'));
 
   const eocdIdx = b.lastIndexOf(EOCD_SIG);
   if (eocdIdx < 0 || eocdIdx + 22 > b.length) {
-    throw new ZipSafetyError('不是合法的 ZIP 文件（缺少中央目录结束记录）');
+    throw new ZipSafetyError(utilsMsg('utils.zip.missingEocd'));
   }
   const totalEntries = b.readUInt16LE(eocdIdx + 10);
   const cdSize = b.readUInt32LE(eocdIdx + 12);
   const cdOffset = b.readUInt32LE(eocdIdx + 16);
   if (cdOffset + cdSize > b.length) {
-    throw new ZipSafetyError('中央目录越界（ZIP 损坏）');
+    throw new ZipSafetyError(utilsMsg('utils.zip.centralDirOutOfRange'));
   }
   if (totalEntries > merged.maxEntries) {
-    throw new ZipSafetyError(`ZIP 条目数 ${totalEntries} 超过上限 ${merged.maxEntries}`);
+    throw new ZipSafetyError(utilsMsg('utils.zip.entryCountReadExceeded', { count: totalEntries, max: merged.maxEntries }));
   }
 
   const metas: ZipEntryMeta[] = [];
@@ -486,8 +487,8 @@ export function parseZip(buf: Uint8Array, limits: ZipSafetyLimits = {}): ZipArch
   let pos = cdOffset;
   let compressedTotal = 0;
   for (let i = 0; i < totalEntries; i++) {
-    if (pos + 46 > cdOffset + cdSize) throw new ZipSafetyError('中央目录条目越界（ZIP 损坏）');
-    if (b.readUInt32LE(pos) !== CENTRAL_SIG) throw new ZipSafetyError('中央目录签名损坏');
+    if (pos + 46 > cdOffset + cdSize) throw new ZipSafetyError(utilsMsg('utils.zip.centralEntryOutOfRange'));
+    if (b.readUInt32LE(pos) !== CENTRAL_SIG) throw new ZipSafetyError(utilsMsg('utils.zip.centralSignatureCorrupt'));
     const method = b.readUInt16LE(pos + 10);
     const crc = b.readUInt32LE(pos + 16);
     const compSize = b.readUInt32LE(pos + 20);
@@ -499,21 +500,21 @@ export function parseZip(buf: Uint8Array, limits: ZipSafetyLimits = {}): ZipArch
     const localOffset = b.readUInt32LE(pos + 42);
     const name = b.subarray(pos + 46, pos + 46 + nameLen).toString('utf8');
 
-    if (!isPathSafe(name)) throw new ZipSafetyError(`ZIP 条目名不安全: ${name}`);
+    if (!isPathSafe(name)) throw new ZipSafetyError(utilsMsg('utils.zip.unsafeEntryName', { name }));
     // —— 以下三项原属 security/zip-security.ts 的 parseZipHardened，现并入默认解析器 ——
     // （默认值即最严：未注入 parseZipOverride 的调用方不再拿到「弱版」）
-    if (seenNames.has(name)) throw new ZipSafetyError(`ZIP 条目名重复: ${name}`);
+    if (seenNames.has(name)) throw new ZipSafetyError(utilsMsg('utils.zip.duplicateEntryName', { name }));
     seenNames.add(name);
     if (((externalAttrs >>> 16) & S_IFMT) === S_IFLNK) {
-      throw new ZipSafetyError(`ZIP 含符号链接条目，已拒绝: ${name}`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.symlinkEntryRejected', { name }));
     }
     if (localOffset + 30 > b.length) {
-      throw new ZipSafetyError(`条目 "${name}" 本地文件头越界`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.localHeaderOutOfRange', { name }));
     }
 
     compressedTotal += compSize;
     if (compressedTotal > merged.maxCompressedBytes) {
-      throw new ZipSafetyError('ZIP 压缩数据总量超过上限');
+      throw new ZipSafetyError(utilsMsg('utils.zip.compressedTotalExceeded'));
     }
     metas.push({
       name,
@@ -546,7 +547,7 @@ export async function safeExtract(
     if (meta.isDirectory) continue;
     const target = path.join(destDir, ...meta.name.split('/'));
     if (!isSameOrChild(target, destDir)) {
-      throw new ZipSafetyError(`解压目标越界: ${meta.name}`);
+      throw new ZipSafetyError(utilsMsg('utils.zip.extractTargetOutOfRange', { name: meta.name }));
     }
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, archive.readEntry(meta.name));

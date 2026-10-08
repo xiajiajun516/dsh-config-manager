@@ -155,7 +155,7 @@ export function ReleaseNotesDialog({
     isFetchingRef.current = true
 
     try {
-      const result = await fetchReleases(repoUrl, 1, PAGE_SIZE)
+      const result = await fetchReleases(repoUrl, 1, PAGE_SIZE, globalThis.fetch, t)
       setReleases(result.releases)
       setHasMore(result.hasMore)
       setPage(1)
@@ -175,7 +175,7 @@ export function ReleaseNotesDialog({
     const nextPage = page + 1
 
     try {
-      const result = await fetchReleases(repoUrl, nextPage, PAGE_SIZE)
+      const result = await fetchReleases(repoUrl, nextPage, PAGE_SIZE, globalThis.fetch, t)
       setReleases((prev) => [...prev, ...result.releases])
       setHasMore(result.hasMore)
       setPage(nextPage)

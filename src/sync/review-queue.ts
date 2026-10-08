@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
+import { engineMsg } from './messages.ts';
 
 export const REVIEW_QUEUE_FILE = 'sync-review-queue.json';
 
@@ -55,21 +56,21 @@ export async function readReviewQueue(
     const raw = await fsx.readFile(file, 'utf8');
     const parsed = parseJsonSafe(raw);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error('sync-review-queue.json 损坏：必须是对象');
+      throw new Error(engineMsg('sync.reviewQueueNotObject'));
     }
     const obj = parsed as Record<string, unknown>;
     if (!Array.isArray(obj['items'])) {
-      throw new Error('sync-review-queue.json 损坏：items 必须是数组');
+      throw new Error(engineMsg('sync.reviewQueueItemsNotArray'));
     }
     const items: ReviewQueueItem[] = [];
     for (const it of obj['items']) {
       if (it === null || typeof it !== 'object' || Array.isArray(it)) {
-        throw new Error('sync-review-queue.json 损坏：每个 item 必须是对象');
+        throw new Error(engineMsg('sync.reviewQueueItemNotObject'));
       }
       const i = it as Record<string, unknown>;
       if (typeof i['id'] !== 'string' || typeof i['sectionId'] !== 'string'
         || typeof i['kind'] !== 'string' || typeof i['description'] !== 'string') {
-        throw new Error('sync-review-queue.json 损坏：item 必须含字符串 id/sectionId/kind/description');
+        throw new Error(engineMsg('sync.reviewQueueItemFieldsMissing'));
       }
       items.push(i as unknown as ReviewQueueItem);
     }
@@ -144,7 +145,7 @@ export async function resolveItem(
 ): Promise<ReviewQueue> {
   const current = await readReviewQueue(stateDir, fsx);
   const idx = current.items.findIndex((i) => i.id === itemId);
-  if (idx === -1) throw new Error(`resolveItem: 未找到 itemId ${itemId}`);
+  if (idx === -1) throw new Error(engineMsg('sync.reviewQueueItemNotFound', { id: itemId }));
   current.items[idx] = { ...current.items[idx]!, decision, decidedAt: now().toISOString() };
   current.updatedAt = now().toISOString();
   await writeReviewQueue(stateDir, current, fsx);

@@ -6,6 +6,7 @@
  */
 import { CURRENT_SCHEMA_VERSION, MIN_SUPPORTED_SCHEMA_VERSION, UnsupportedSchemaError } from '../schema/versions.ts';
 import { V1_TO_V2 } from './v1-to-v2.ts';
+import { migMsg } from './messages-migrations.ts';
 
 export interface MigrationStep {
   from: number;
@@ -29,7 +30,7 @@ export const MIGRATIONS: MigrationStep[] = [V1_TO_V2];
 /** 注册新迁移步骤（供未来版本追加；保持链式无环：from 严格递增） */
 export function registerMigration(step: MigrationStep): void {
   const dup = MIGRATIONS.find((s) => s.from === step.from || s.to === step.to);
-  if (dup) throw new Error(`迁移步骤冲突: ${step.from}→${step.to} 与 ${dup.from}→${dup.to} 重叠`);
+  if (dup) throw new Error(migMsg('migrations.stepConflict', { stepFrom: step.from, stepTo: step.to, dupFrom: dup.from, dupTo: dup.to }));
   MIGRATIONS.push(step);
   MIGRATIONS.sort((a, b) => a.from - b.from);
 }
@@ -46,10 +47,10 @@ export function migrateToCurrent(doc: unknown, fromVersion: number, targetVersio
     return { doc, migratedFrom: fromVersion, applied: [] };
   }
   if (fromVersion > targetVersion) {
-    throw new UnsupportedSchemaError(fromVersion, `备份 schema v${fromVersion} 高于当前 v${targetVersion}，需升级本插件`);
+    throw new UnsupportedSchemaError(fromVersion, migMsg('migrations.schemaTooNew', { from: fromVersion, target: targetVersion }));
   }
   if (fromVersion < MIN_SUPPORTED_SCHEMA_VERSION) {
-    throw new UnsupportedSchemaError(fromVersion, `备份 schema v${fromVersion} 低于最低支持 v${MIN_SUPPORTED_SCHEMA_VERSION}`);
+    throw new UnsupportedSchemaError(fromVersion, migMsg('migrations.schemaTooOld', { from: fromVersion, min: MIN_SUPPORTED_SCHEMA_VERSION }));
   }
 
   let current = doc;
@@ -58,10 +59,10 @@ export function migrateToCurrent(doc: unknown, fromVersion: number, targetVersio
   while (version < targetVersion) {
     const step = MIGRATIONS.find((s) => s.from === version && s.to <= targetVersion);
     if (!step) {
-      throw new UnsupportedSchemaError(version, `没有从 schema v${version} 到 v${targetVersion} 的迁移路径`);
+      throw new UnsupportedSchemaError(version, migMsg('migrations.noPath', { from: version, to: targetVersion }));
     }
     if (step.to <= step.from) {
-      throw new Error(`迁移步骤 ${step.from}→${step.to} 未前进（注册表损坏）`);
+      throw new Error(migMsg('migrations.stepNotAdvanced', { from: step.from, to: step.to }));
     }
     current = step.migrate(current);
     applied.push({ from: step.from, to: step.to });

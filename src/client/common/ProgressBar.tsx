@@ -13,6 +13,7 @@
  */
 import { computeProgressView, progressBarMode } from './progress-view.ts'
 import type { RunProgress } from './progress-view.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 
@@ -23,6 +24,11 @@ export interface ProgressBarProps {
   active: boolean
   /** 已结束且结论为失败：结束态不得渲染成「成功绿」（导出页不传，行为不变） */
   failed?: boolean
+  /**
+   * 展示层翻译器（**必传**：阶段文案要按当前语言渲染；英文界面不得回落中文）。
+   * 此前组件内隐式用 zhUiT 缺省值，切到英文后进度文案恒为中文。
+   */
+  t: UiT
 }
 
 /**
@@ -32,8 +38,8 @@ export interface ProgressBarProps {
  * 无百分比且在跑 → 不定态动画；**无百分比且已结束 → 静止条**（这条是 bugfix：
  * 此前「已完成」的任务因为没有百分比也走不定态分支，动画永不停 → 看起来一直在加载）。
  */
-export function ProgressBar({ event, active, failed }: ProgressBarProps) {
-  const view = computeProgressView(event)
+export function ProgressBar({ event, active, failed, t }: ProgressBarProps) {
+  const view = computeProgressView(event, t)
   const mode = progressBarMode(view, active)
   const fillClass = active
     ? css.progressBar

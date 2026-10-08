@@ -20,6 +20,7 @@
  */
 import { randomBytes } from 'node:crypto'
 import { zhMsg } from './messages.ts'
+import { engineMsg } from './messages-core.ts'
 import type { MsgFunc } from './messages.ts'
 
 /** run 类型：导出 / 导入 / 自动同步 / 一键同步逐项应用 / 定时备份 / 快照恢复 / 配置档案切换 / recovery 恢复。 */
@@ -80,15 +81,15 @@ export class RunConflictError extends Error {
       kind === 'export'
         ? msg('run.conflict.export', { runId })
         : kind === 'autosync'
-          ? '自动同步已在进行中'
+          ? engineMsg('core.run.autosyncBusy')
           : kind === 'sync-apply'
-            ? '一键同步已在进行中'
+            ? engineMsg('core.run.syncApplyBusy')
             : kind === 'backup-schedule'
-              ? '定时备份已在进行中'
+              ? engineMsg('core.run.backupScheduleBusy')
               : kind === 'restore'
-                ? '快照恢复已在进行中（请等待当前恢复完成）'
+                ? engineMsg('core.run.restoreBusy')
                 : kind === 'recovery'
-                  ? '恢复/回滚已在进行中（请等待当前恢复完成）'
+                  ? engineMsg('core.run.recoveryBusy')
                   : msg('run.conflict.import', { runId }),
     )
     this.name = 'RunConflictError'

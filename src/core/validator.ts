@@ -4,6 +4,7 @@
 import { validateSectionData } from '../schema/config.ts';
 import { canImport, describeVersion } from '../schema/versions.ts';
 import type { SectionId } from '../schema/types.ts';
+import { engineMsg } from './messages-core.ts';
 import type { CompatibilityInput, CompatibilityReason, CompatibilityScore, ValidationResult } from './types.ts';
 
 export { validateManifest } from '../schema/manifest.ts';
@@ -102,10 +103,10 @@ export function computeCompatibility(input: CompatibilityInput): CompatibilitySc
 /** 兼容性得分的可读描述（UI 报告用） */
 export function describeCompatibility(score: CompatibilityScore): string {
   switch (score) {
-    case 'excellent': return 'Excellent — 完美兼容（同平台、无缺失、schema 支持）';
-    case 'good': return 'Good — 兼容（旧版备份导入新版 DSH）';
-    case 'partial': return 'Partial — 部分兼容（跨平台/分区缺失/版本超前，需人工确认）';
-    case 'unsupported': return 'Unsupported — 不受支持（schema 超出范围）';
+    case 'excellent': return engineMsg('core.compat.excellent');
+    case 'good': return engineMsg('core.compat.good');
+    case 'partial': return engineMsg('core.compat.partial');
+    case 'unsupported': return engineMsg('core.compat.unsupported');
   }
 }
 

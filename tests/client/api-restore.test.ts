@@ -7,6 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { ConfigManagerApi, CONFIG_MANAGER_API, ConfigManagerApiError } from '../../src/client/api.ts';
+import { zhUiT } from '../../src/ui/i18n.ts';
 import type { SnapshotMeta } from '../../src/core/restore.ts';
 
 interface FetchCall {
@@ -44,7 +45,7 @@ test('C-01 api.snapshots()：GET 到 /snapshots，解析 { snapshots }', async (
     return jsonResponse(200, { snapshots: metas });
   });
 
-  const api = new ConfigManagerApi();
+  const api = new ConfigManagerApi(zhUiT);
   const result = await api.snapshots();
   assert.deepEqual(result, metas);
   assert.equal(called?.url, CONFIG_MANAGER_API.snapshots);
@@ -58,7 +59,7 @@ test('C-02 api.restoreSnapshot()：POST /restore，dryRun=true/false 请求体�
     return jsonResponse(200, { dryRun: true, plan: { snapshotId: 'snap-1', actions: [] } });
   });
 
-  const api = new ConfigManagerApi();
+  const api = new ConfigManagerApi(zhUiT);
   const result = await api.restoreSnapshot('snap-1', true);
   assert.equal(result.dryRun, true);
   assert.equal(calls.length, 1);
@@ -73,7 +74,7 @@ test('C-03 api.restoreSnapshot()：dryRun=false 透传并解析 report', async (
     dryRun: false,
     report: { snapshotId: 'snap-1', restored: ['settings.yaml'], removedPlugins: [], manualHints: [], failed: [], skipped: [] },
   }));
-  const api = new ConfigManagerApi();
+  const api = new ConfigManagerApi(zhUiT);
   const result = await api.restoreSnapshot('snap-1', false);
   assert.equal(result.dryRun, false);
   assert.deepEqual(result.report?.restored, ['settings.yaml']);
@@ -81,7 +82,7 @@ test('C-03 api.restoreSnapshot()：dryRun=false 透传并解析 report', async (
 
 test('C-04 错误映射：4xx 携带 error 消息 → ConfigManagerApiError', async () => {
   installFetchMock(() => jsonResponse(400, { error: 'snapshotId is required' }));
-  const api = new ConfigManagerApi();
+  const api = new ConfigManagerApi(zhUiT);
   await assert.rejects(api.restoreSnapshot('', false), (err: unknown) => {
     assert.ok(err instanceof ConfigManagerApiError);
     assert.match(err.message, /snapshotId is required/);

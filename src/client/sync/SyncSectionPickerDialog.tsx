@@ -20,6 +20,7 @@ import type { SelectionSection } from '../../ui/selection-model.ts'
 import {
   initialSessionPicks, pickedSessionIds, sessionPickerSelection,
 } from '../../ui/sync-settings-view.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import { DEFAULT_SYNC_SESSIONS_LIMIT, syncSectionGroups } from './sync-view.ts'
 import type { SyncSectionOption } from './sync-view.ts'
 import css from '../config-manager.module.css'
@@ -30,8 +31,10 @@ import css from '../config-manager.module.css'
  * （与导出选择器一致的弹窗语义），因此底部只有「完成」—— 没有「取消」
  * （取消会让用户以为改动被丢弃）。
  */
-export function SyncSectionPickerDialog({ open, t, cmT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, sessionNode, sessionPending, sessionFailed, onToggleSection, onSessionsLimit, onSessionsInclude, onClose }: {
+export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalog, sections, sessionsLimit, sessionsInclude, sessionNode, sessionPending, sessionFailed, onToggleSection, onSessionsLimit, onSessionsInclude, onClose }: {
   t: TranslateNS<'config-manager-sync'>
+  /** ui 命名空间的翻译器（UiT）：分区描述与分组说明的**字典键**由它解析（英文界面零中文） */
+  uiT: UiT
   /** config-manager 命名空间的翻译器：ContentPicker 的搜索/全选/合计文案来自它 */
   cmT: TranslateNS<'config-manager'>
   open: boolean
@@ -119,7 +122,7 @@ export function SyncSectionPickerDialog({ open, t, cmT, sectionName, catalog, se
           /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章），
              分区名走 section-labels 单一映射 —— 与导出选择器显示**同一个中文名**。 */
           <div className={css.groupList}>
-            {syncSectionGroups(catalog).map((g) => (
+            {syncSectionGroups(catalog, uiT).map((g) => (
               <Card key={g.group} className={css.groupCard}>
                 <div className={css.groupHeader}>
                   <span className={css.groupLabel}>{g.label}</span>

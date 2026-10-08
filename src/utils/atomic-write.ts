@@ -21,6 +21,7 @@ import fssync from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { isENOENT } from './guards.ts';
+import { utilsMsg } from './messages-utils.ts';
 
 // ---------- 常量 ----------
 
@@ -184,11 +185,11 @@ function withContext(e: unknown, target: string, op: string): Error {
  * 目标 basename，防止恶意 base 把 tmp 引出目标目录。返回安全 base。
  */
 export function sanitizeTmpBase(base: string): string {
-  if (base === '' || base === '.' || base === '..') throw new Error(`原子写：非法目标文件名「${base}」`);
-  if (/[\\/:*?"<>|]/.test(base)) throw new Error(`原子写：目标文件名含非法字符「${base}」`);
+  if (base === '' || base === '.' || base === '..') throw new Error(utilsMsg('utils.atomicWrite.invalidBaseName', { base }));
+  if (/[\\/:*?"<>|]/.test(base)) throw new Error(utilsMsg('utils.atomicWrite.illegalChars', { base }));
   for (let i = 0; i < base.length; i++) {
     const c = base.charCodeAt(i);
-    if (c < 0x20 || c === 0x7f) throw new Error(`原子写：目标文件名含控制字符「${base}」`);
+    if (c < 0x20 || c === 0x7f) throw new Error(utilsMsg('utils.atomicWrite.controlChars', { base }));
   }
   return base;
 }
@@ -198,7 +199,7 @@ async function resolveTarget(i: AtomicIo, target: string, symlink: SymlinkPolicy
   const l = await i.lstat(target);
   if (l && l.isSymbolicLink()) {
     if (symlink === 'reject') {
-      throw new Error(`原子写：目标为符号链接且策略为 reject，拒绝写入「${target}」`);
+      throw new Error(utilsMsg('utils.atomicWrite.symlinkRejected', { target }));
     }
     // follow：解析真实路径写真实文件（保留用户符号链接结构）
     return i.realpath(target);
@@ -353,7 +354,7 @@ export function atomicWriteFileSync(target: string, data: string | Uint8Array, r
   const resolveTargetSync = (): string => {
     const l = i.lstat(target);
     if (l && l.isSymbolicLink()) {
-      if (opts.symlink === 'reject') throw new Error(`原子写（同步）：目标为符号链接且策略为 reject，拒绝写入「${target}」`);
+      if (opts.symlink === 'reject') throw new Error(utilsMsg('utils.atomicWrite.symlinkRejectedSync', { target }));
       return i.realpath(target);
     }
     return target;

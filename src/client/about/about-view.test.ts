@@ -11,6 +11,16 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { ABOUT_LINKS, ABOUT_META, aboutStatusRows, aboutUpdateView, aboutUpgradeCommand, buildFeedbackSnippet, deriveAboutLinks } from './about-view.ts'
+import { zh } from '../locales.ts'
+import type { TranslateNS } from '../client-types.ts'
+
+/** 测试用翻译器：zh 目录 + {param} 插值（与 ctx.locale.bind 同口径）。 */
+const t = ((key: string, params?: Record<string, string | number>) => {
+  const template: string = (zh as Record<string, string>)[key] ?? key
+  return params === undefined
+    ? template
+    : template.replace(/\{(\w+)\}/g, (m, k: string) => (params[k] === undefined ? m : String(params[k])))
+}) as TranslateNS<'config-manager'>
 
 /* ---------------------------------------------------------------- 链接派生 */
 
@@ -99,7 +109,7 @@ test('about-view: buildFeedbackSnippet 无诊断位时只输出环境三行', ()
     dshVersion: '1.2.3',
     platform: 'win32',
     arch: 'x64',
-  }))
+  }), t)
   assert.equal(
     text,
     [
@@ -121,7 +131,7 @@ test('about-view: buildFeedbackSnippet 带诊断位时追加 profile 与插件�
     profile: 'web',
     installedPluginCount: 7,
   })
-  const text = buildFeedbackSnippet(rows)
+  const text = buildFeedbackSnippet(rows, t)
   assert.ok(text.includes('- profile: web'))
   assert.ok(text.includes('- 插件清单目录 / Plugin dir: C:/Users/me/.dsh/profiles/web'))
   assert.equal(text.split('\n').length, 6)
@@ -133,7 +143,7 @@ test('about-view: buildFeedbackSnippet 版本号为空时回落 unknown（不产
     dshVersion: '',
     platform: 'win32',
     arch: 'x64',
-  }))
+  }), t)
   assert.ok(text.includes('- 插件版本 / Plugin: unknown'))
   assert.ok(text.includes('- DSH 版本 / DSH: unknown'))
 })

@@ -194,6 +194,7 @@ export const uiZh = {
   'sync.neverSyncedShort': '从未同步',
   'sync.pushFailed': '推送失败',
   'sync.pushOk': '推送成功（快照 {id}）',
+  'sync.conflictUnresolved': '冲突项 {id} 必须先选择解决方式（保留当前 / 使用导入）',
   'sync.pushPreviewHeadline': '将推送 {total} 个分区（{changed} 个有变化）',
   'sync.pushPreviewHint': '以上为只读预览，不会写入远端。确认后点击「推送」才真正上传。',
   'sync.pushPreviewEncrypted': '加密快照：载荷将整体加密，各分区相对基线的变化不可比对。',
@@ -535,6 +536,41 @@ export const uiZh = {
   'foreign.lossy.entry-backslash.detail': 'ZIP 条目名里出现在中段的反斜杠不会被拒绝：同一个包在 Windows 目标上会被当作路径分隔符（落成多级目录），在 POSIX 目标上只是一个普通字符。本实现刻意不改这一格式行为；界面无法逐条检查条目名，跨平台导入后请核对这类文件是否落在预期位置。',
   'foreign.lossy.prompt-persona-reshape.title': 'prompts 的 systemPrompt 形状变化',
   'foreign.lossy.prompt-persona-reshape.detail': '源里的 systemPrompt 是字符串，导入落盘时写成带 persona 字段的对象：persona 文本无损，字段形状改变。兼容性评分不会为这一条给出原因 —— 它不改变内容，只改变形态。',
+  // ---------- 英文界面零中文（t3）：静态目录 / 纯逻辑层的文案 ----------
+  // 导出分类目录的**描述**：静态目录（ui/export-flow.ts）只留键，渲染层用 t() 解析
+  // （见 ExportCategory.descriptionKey）。此前这些中文硬编码在纯逻辑层。
+  'export.category.settings': 'DSH 全局设置（namespace 分区，redacted）',
+  'export.category.providers': 'LLM Provider / Model / 默认模型 / BaseURL',
+  'export.category.plugins': '已安装插件清单与启用状态（不含二进制）',
+  'export.category.pluginFiles': '插件自有配置文件（白名单 + plugin-config/ 目录，整文件复制）',
+  'export.category.self': '本插件自身配置（同步/自动同步/分区选择/UI 偏好/市场；sync-*.json 等，不含凭据值）',
+  'export.category.mcp': 'MCP 服务器组合配置（需重启生效）',
+  'export.category.prompts': 'System Prompt / Plan Mode 提示',
+  'export.category.skills': '用户技能文件（~/.dsh/skills）',
+  'export.category.agentPresets': 'Agent 预设（~/.dsh/.agent-presets）',
+  'export.category.agentInstructions': '全局指令文件（~/.dsh/AGENTS.md，注入每个会话）',
+  'export.category.workspaces': '工作区记录（含绝对路径，需路径映射）',
+  'export.category.ui': 'UI 类 settings namespace（localStorage 项仅说明）',
+  'export.category.credentialsStatus': '凭据状态（configured 标记，永不导出值）',
+  'export.category.sessions': '历史会话（默认关闭，含敏感内容）',
+  'export.group.automationNote': 'DSH 当前无 Workflows / Commands 配置文件（运行时注册），无迁移内容',
+  // 计数文本的分隔符（report.ts 的 exportCountsText）：英文用半角逗号
+  'report.unitSeparator': '，',
+  'foreign.source.unknownWithId': '未识别的来源（{id}）',
+  // 导入向导状态机（ui/import-wizard.ts）的错误文案
+  'import.analysisFailed': '备份分析失败',
+  'import.analysisIncomplete': '尚未完成分析，请先选择备份文件',
+  'import.notConfirmed': '导入未确认：必须确认后才允许修改任何数据',
+  'import.retryNoResult': '没有可重试的导入结果',
+  'import.retryNothing': '没有失败或跳过的项需要重试',
+  // 运行态（client/run-store.ts）的「结果/进度不可恢复」提示
+  'run.exportResultLost': '上次导出任务已结束但结果无法恢复，请重新导出',
+  'run.importResultLost': '上次导入任务已结束或超过保留期，结果无法恢复，请重新导入',
+  'run.restoreResultLost': '上次恢复任务已结束但结果无法恢复，请重新执行',
+  'run.exportUnavailable': '导出失败（结果不可用）',
+  'run.restoreUnavailable': '恢复失败（结果不可用）',
+  'run.progressLost': '任务已结束或超过保留期，进度不可恢复',
+  'run.restoreProgressLost': '恢复任务已结束或超过保留期，进度不可恢复',
 } as const;
 
 export type UiTextKey = keyof typeof uiZh;
@@ -713,6 +749,7 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.neverSyncedShort': 'Never synced',
   'sync.pushFailed': 'Push failed',
   'sync.pushOk': 'Push succeeded (snapshot {id})',
+  'sync.conflictUnresolved': 'Conflict item {id} must be resolved first (keep current / use imported)',
   'sync.pushPreviewHeadline': 'Will push {total} section(s) ({changed} changed)',
   'sync.pushPreviewHint': 'Read-only preview above — nothing is written to the remote. Click "Push" to actually upload.',
   'sync.pushPreviewEncrypted': 'Encrypted snapshot: the payload is encrypted as a whole; per-section changes vs the baseline cannot be compared.',
@@ -1042,6 +1079,36 @@ export const uiEn: Record<UiTextKey, string> = {
   'foreign.lossy.entry-backslash.detail': 'A backslash in the middle of a ZIP entry name is not rejected: the same bundle treats it as a path separator on Windows targets (creating extra directory levels) and as an ordinary character on POSIX targets. This format behaviour is left unchanged on purpose; the UI cannot inspect entry names one by one, so check where such files landed after a cross-platform import.',
   'foreign.lossy.prompt-persona-reshape.title': 'prompts systemPrompt changes shape',
   'foreign.lossy.prompt-persona-reshape.detail': 'A source systemPrompt is a string and is written back as an object with a persona field: the persona text is lossless, the field shape changes. The compatibility score gives no reason for this one because it changes the form, not the content.',
+  // --- English-UI zero-Chinese (t3): static catalogs / pure logic layer ---
+  'export.category.settings': 'Global DSH settings (namespace sections, redacted)',
+  'export.category.providers': 'LLM providers / models / default model / base URL',
+  'export.category.plugins': 'Installed plugin list and enablement (binaries excluded)',
+  'export.category.pluginFiles': "Plugins' own config files (allowlist + plugin-config/, copied whole)",
+  'export.category.self': "This plugin's own config (sync / autosync / section selection / UI prefs / market; sync-*.json etc., no credential values)",
+  'export.category.mcp': 'MCP server composition (restart required)',
+  'export.category.prompts': 'System prompt / Plan Mode prompts',
+  'export.category.skills': 'Your skill files (~/.dsh/skills)',
+  'export.category.agentPresets': 'Agent presets (~/.dsh/.agent-presets)',
+  'export.category.agentInstructions': 'Global instruction files (~/.dsh/AGENTS.md, injected into every session)',
+  'export.category.workspaces': 'Workspace records (absolute paths included; path mapping needed)',
+  'export.category.ui': 'UI-class settings namespaces (localStorage items are described only)',
+  'export.category.credentialsStatus': 'Credential status (configured flags; values are never exported)',
+  'export.category.sessions': 'Session history (off by default; contains sensitive content)',
+  'export.group.automationNote': 'DSH currently has no Workflows / Commands config files (registered at runtime), so there is nothing to migrate',
+  'report.unitSeparator': ', ',
+  'foreign.source.unknownWithId': 'Unrecognised source ({id})',
+  'import.analysisFailed': 'Backup analysis failed',
+  'import.analysisIncomplete': 'Analysis is not finished yet — pick a backup file first',
+  'import.notConfirmed': 'Import not confirmed: nothing may be modified until you confirm',
+  'import.retryNoResult': 'There is no import result to retry',
+  'import.retryNothing': 'There are no failed or skipped items to retry',
+  'run.exportResultLost': 'The previous export finished but its result cannot be recovered; please export again',
+  'run.importResultLost': 'The previous import finished or its retention window expired; the result cannot be recovered — please import again',
+  'run.restoreResultLost': 'The previous restore finished but its result cannot be recovered; please run it again',
+  'run.exportUnavailable': 'Export failed (result unavailable)',
+  'run.restoreUnavailable': 'Restore failed (result unavailable)',
+  'run.progressLost': 'The task finished or exceeded its retention window; progress cannot be recovered',
+  'run.restoreProgressLost': 'The restore task finished or exceeded its retention window; progress cannot be recovered',
 };
 
 /** UI 翻译函数：key → 当前语言文案（{param} 插值；未知键回退 zh/键名）。 */
@@ -1060,6 +1127,52 @@ export function makeUiT(lang: 'zh' | 'en'): UiT {
     );
   };
 }
+
+/**
+ * 客户端渲染层的语言来源标识：`'zh'` 之外的任何值一律按 `'en'` 处理
+ * （英文界面**不得**回落中文：`'ja'` 等未知语言一律回落 en）。
+ */
+export type UiLanguageId = 'zh' | 'en';
+
+/**
+ * 构造**活的** UI 翻译器（「英文界面零中文」的根因修复）。
+ *
+ * `read()` 在**每次取文案时**调用 —— 与 DSH 官方 `ctx.locale.bind(ns)` 的 `t` 同语义
+ * （官方 `bind` → `translate` 每次调用都读当前 locale 快照）。`makeUiT(lang)` 是**加载期快照**，
+ * 只在「明确要固定语言」的路径使用（测试、离线/未注入路径）；客户端 `apply()` 里禁止用它 ——
+ * 把语言钉死在插件加载那一刻，正是「切到 English 后本插件文案恒为中文」的成因。
+ *
+ * 回落链与 `makeUiT` 逐字一致：目标语言缺键 → zh → 键名；`{param}` 缺参原样保留。
+ */
+export function makeLiveUiT(read: () => string): UiT {
+  const en = makeUiT('en');
+  const zh = makeUiT('zh');
+  return (key, params) => (read() === 'zh' ? zh(key, params) : en(key, params));
+}
+
+/** 模块级语言来源（由客户端 `apply()` 经 setUiLanguageSource 接线；未接线 = zh，行为与改造前一致）。 */
+let uiLanguageSource: () => string = () => 'zh';
+
+/**
+ * 接线模块级活翻译器（`liveUiT`）的语言来源。
+ *
+ * 为什么需要它：`runStore` 这类**模块级单例**没有「调用方」可以传 `UiT`，而它们产出的文案
+ * 同样必须随语言切换 —— 让它们直接用活翻译器，而不是拿 `zhUiT` 当缺省值把语言钉死。
+ */
+export function setUiLanguageSource(read: () => string): void {
+  uiLanguageSource = read;
+}
+
+/** 当前语言（活源：每次调用读一次；非 'zh' 一律 'en'）—— 模块级消费者选目录时用。 */
+export function currentUiLanguage(): UiLanguageId {
+  return uiLanguageSource() === 'zh' ? 'zh' : 'en';
+}
+
+/**
+ * 模块级**活**翻译器：每次调用都读当前语言来源。
+ * 未接线（测试 / 离线 / 未注入路径）时等价于 `zhUiT`；客户端接线后随 DSH locale 变化。
+ */
+export const liveUiT: UiT = makeLiveUiT(() => uiLanguageSource());
 
 /** 缺省 UI 翻译（zh）：未注入的渲染路径行为与改造前完全一致。 */
 export const zhUiT: UiT = makeUiT('zh');

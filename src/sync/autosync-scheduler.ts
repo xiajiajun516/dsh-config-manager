@@ -38,6 +38,7 @@ import type { JournalRunContext } from '../core/phase3-host.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
 import { withMutationLock, LOCK_BLOCK_MESSAGE } from '../utils/env-lock.ts';
+import { engineMsg } from './messages.ts';
 import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig, isS3Config, isGistConfig, SYNC_CHANNELS } from './sync-config.ts';
@@ -493,7 +494,7 @@ export class AutoSyncScheduler {
             : await rawApply();
           appliedSections = applyReport.applied as SectionId[];
           if (!applyReport.ok) {
-            const error = applyReport.warnings.join('; ') || 'applyMergePlan 执行失败';
+            const error = applyReport.warnings.join('; ') || engineMsg('sync.autosyncApplyMergeFailed');
             const result: AutosyncRunResult = {
               status: 'failed', direction: 'pull', error, historyId,
               consecutiveFailures: cfg.consecutiveFailures + 1,
@@ -521,7 +522,7 @@ export class AutoSyncScheduler {
               })).result as import('./sync-engine.ts').SyncPushReport
             : await rawPush();
           if (!pushReport.ok) {
-            const error = pushReport.message ?? 'push 失败';
+            const error = pushReport.message ?? engineMsg('sync.autosyncPushFailed');
             const result: AutosyncRunResult = {
               status: 'failed', direction: appliedSections.length ? 'both' : 'push',
               appliedSections, error, historyId,
@@ -638,7 +639,7 @@ export class AutoSyncScheduler {
           entry.notifiedAt = nowIso;
           await this.writeConfig(channel, {
             ...(await this.readConfig(channel)),
-            lastRunMessage: `连续失败 ${failures} 次，已通知`,
+            lastRunMessage: engineMsg('sync.autosyncConsecutiveFailureNotified', { count: failures }),
           });
         }
       }).catch(() => { /* 尽力而为 */ });

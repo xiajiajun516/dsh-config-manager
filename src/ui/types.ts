@@ -19,6 +19,8 @@ import type {
   ItemResolution, PathIssue, PlanItem, Portability, SessionFormatDisposition,
 } from '../core/types.ts';
 import type { SelfUpdateFailureCode } from '../utils/shared-constants.ts';
+// 只导入**类型**：文案键在这里出现，文案本身由渲染层用 UiT 解析（静态目录不再放中文/英文句子）。
+import type { UiTextKey } from './i18n.ts';
 
 /* ---------------- 导出（规范 §1 / §21） ---------------- */
 
@@ -31,7 +33,11 @@ export type ExportGroup =
 export interface ExportCategory {
   id: SectionId;
   label: string;
-  description: string;
+  /**
+   * 描述文案的**字典键**（英文界面零中文：静态目录只留键，渲染层 t(descriptionKey) 取词）。
+   * 此前这里是硬编码中文字符串，英文界面下会原样透出。
+   */
+  descriptionKey: UiTextKey;
   defaultIncluded: boolean;
   portability: Portability;
   group: ExportGroup;
@@ -42,8 +48,8 @@ export interface ExportCategory {
 export interface ExportGroupDef {
   id: ExportGroup;
   label: string;
-  /** automation 组在 DSH 无对应配置时的说明 */
-  note?: string;
+  /** automation 组在 DSH 无对应配置时的说明（**字典键**：由渲染层用 UiT 解析） */
+  noteKey?: UiTextKey;
 }
 
 /** Custom Export 分组目录（规范 §1；automation 组 DSH 无对应分区，仅说明） */
@@ -53,7 +59,7 @@ export const EXPORT_GROUPS: readonly ExportGroupDef[] = [
   { id: 'extensions', label: 'Extensions' },
   { id: 'mcp', label: 'MCP / Tools' },
   { id: 'customization', label: 'Customization' },
-  { id: 'automation', label: 'Automation', note: 'DSH 当前无 Workflows / Commands 配置文件（运行时注册），无迁移内容' },
+  { id: 'automation', label: 'Automation', noteKey: 'export.group.automationNote' },
   { id: 'workspace', label: 'Workspace' },
   { id: 'ui', label: 'UI' },
   { id: 'optional', label: 'Optional Data' },

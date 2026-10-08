@@ -20,7 +20,7 @@ const enT = makeUiT('en')
 const zhT = makeUiT('zh')
 
 test('m3-render: null 事件 → 空渲染模型', () => {
-  const view = computeProgressView(null)
+  const view = computeProgressView(null, zhT)
   assert.equal(view.label, '')
   assert.equal(view.percent, null)
   assert.equal(view.sectionBadge, null)
@@ -41,7 +41,7 @@ test('m3-render: 兼容路径 —— 普通 ProgressEvent 走原逻辑（阶段 
 })
 
 test('m3-render: 无 step/total → 不定态（percent null）', () => {
-  const view = computeProgressView({ stage: 'executing', detail: 'running' })
+  const view = computeProgressView({ stage: 'executing', detail: 'running' }, zhT)
   assert.equal(view.percent, null)
 })
 
@@ -55,7 +55,7 @@ test('m3-render: 导出进度 → 分区徽章 settings · 3/12（内部计数�
     itemTotal: 12,
     detail: 'settings',
   }
-  const view = computeProgressView(event)
+  const view = computeProgressView(event, zhT)
   assert.equal(view.percent, 25, '百分比 = item/itemTotal = 3/12')
   assert.deepEqual(view.sectionBadge, { label: 'settings', current: 3, total: 12 })
   assert.equal(view.countBadge, null, '导出内部计数与分区计数同源 → 去冗余')
@@ -72,7 +72,7 @@ test('m3-render: 导入进度 → 内部计数徽章 plugins · 6/18 + 当前项
     itemTotal: 18,
     detail: 'plugin:pkg-a',
   }
-  const view = computeProgressView(event)
+  const view = computeProgressView(event, zhT)
   assert.equal(view.percent, 33)
   assert.equal(view.sectionBadge, null, '导入无分区总数语义')
   assert.deepEqual(view.countBadge, { label: 'plugins', current: 6, total: 18 })
@@ -80,7 +80,7 @@ test('m3-render: 导入进度 → 内部计数徽章 plugins · 6/18 + 当前项
 })
 
 test('m3-render: 未知阶段回退显示 stage id', () => {
-  const view = computeProgressView({ stage: 'weird-stage' })
+  const view = computeProgressView({ stage: 'weird-stage' }, zhT)
   assert.equal(view.label, 'weird-stage')
 })
 /**
@@ -89,20 +89,20 @@ test('m3-render: 未知阶段回退显示 stage id', () => {
  * 于是「已完成」的任务也在一直滚动。轨道形态必须由 active 决定。
  */
 test('进度轨道：无百分比 + 仍在跑 → 不定态动画', () => {
-  const view = computeProgressView({ stage: 'backing-up' })
+  const view = computeProgressView({ stage: 'backing-up' }, zhT)
   assert.equal(view.percent, null)
   assert.equal(progressBarMode(view, true), 'indeterminate')
 })
 
 test('进度轨道：无百分比 + 已结束 → 静止条（绝不动画；这是「一直在加载」的修复点）', () => {
-  const done = computeProgressView({ stage: 'done' })
+  const done = computeProgressView({ stage: 'done' }, zhT)
   assert.equal(progressBarMode(done, false), 'settled')
-  const failed = computeProgressView({ stage: 'failed' })
+  const failed = computeProgressView({ stage: 'failed' }, zhT)
   assert.equal(progressBarMode(failed, false), 'settled')
 })
 
 test('进度轨道：有百分比 → 定长（与 active 无关，结束态由调用方换色）', () => {
-  const view = computeProgressView({ stage: 'exporting', step: 2, total: 4 })
+  const view = computeProgressView({ stage: 'exporting', step: 2, total: 4 }, zhT)
   assert.equal(view.percent, 50)
   assert.equal(progressBarMode(view, true), 'determinate')
   assert.equal(progressBarMode(view, false), 'determinate')

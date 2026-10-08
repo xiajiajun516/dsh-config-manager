@@ -19,6 +19,7 @@
 import fs from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
+import { utilsMsg } from './messages-utils.ts';
 
 import { isSessionLogName } from './session-log.ts';
 import {
@@ -397,7 +398,7 @@ export function planSessionLogRepair(bytes: Uint8Array, opts: { allowLossy?: boo
     const referencing = firstKeptRowReferencing(rows, keptWithoutCloser, candidateSeqs);
     if (referencing !== undefined) {
       closerSkippedByReference = true;
-      warnings.push('收尾块区间的 seq 被保留行引用 → 本次不丢弃该收尾块（避免把引用静默改指）');
+      warnings.push(utilsMsg('utils.sessionRepair.closerReferenced'));
     } else {
       const anomalyAfter = walkRows(rows, keptWithoutCloser).firstAnomalyIndex;
       const makesNewAnomaly = anomalyAfter >= 0 && (anomalyBeforeCloser < 0 || anomalyAfter < anomalyBeforeCloser);
@@ -432,9 +433,9 @@ export function planSessionLogRepair(bytes: Uint8Array, opts: { allowLossy?: boo
     const closure = compareReferenceClosure(rows, before, kept, keptAfterTruncation);
     if (closure.missing.length > 0 || closure.redirected.length > 0) {
       warnings.push(
-        '截断会让保留行的引用失去目标或被改指（seq ' +
-          [...closure.missing, ...closure.redirected].sort((a, b) => a - b).join(', ') +
-          '）→ 拒绝本次修复',
+        utilsMsg('utils.sessionRepair.truncateBreaksRefs', {
+          seqs: [...closure.missing, ...closure.redirected].sort((a, b) => a - b).join(', '),
+        }),
       );
       return { ok: false, reason: 'dropped-ref', actions: [], lossy: false, warnings };
     }
@@ -457,10 +458,10 @@ export function planSessionLogRepair(bytes: Uint8Array, opts: { allowLossy?: boo
   // 先前就存在的悬空引用（引用的 seq 本来就不在日志里）**只告警**，绝不 refuse。
   const finalClosure = compareReferenceClosure(rows, before, kept, kept);
   if (finalClosure.missing.length > 0 || finalClosure.redirected.length > 0) {
-    warnings.push('保留行引用到本次将被丢弃的行（seq ' + [...finalClosure.missing, ...finalClosure.redirected].join(', ') + '）→ 拒绝本次修复');
+    warnings.push(utilsMsg('utils.sessionRepair.keptRefersDropped', { seqs: [...finalClosure.missing, ...finalClosure.redirected].join(', ') }));
     return { ok: false, reason: 'dropped-ref', actions, lossy: false, warnings };
   }
-  for (const seq of finalClosure.dangling) warnings.push('先前就存在的悬空引用：seq ' + String(seq) + '（本次修复未丢弃它）');
+  for (const seq of finalClosure.dangling) warnings.push(utilsMsg('utils.sessionRepair.danglingRef', { seq }));
   return {
     ok: true,
     actions,
@@ -485,7 +486,7 @@ function buildActions(
   if (dupRows > 0) {
     actions.push({
       code: 'drop-duplicate-rows',
-      detail: '丢弃 ' + String(dupRows) + ' 行重放重复事件（字节相同 + seq 相同）',
+      detail: utilsMsg('utils.sessionRepair.dropDuplicateRows', { rows: dupRows }),
       lossy: false,
       rows: dupRows,
     });
@@ -493,7 +494,7 @@ function buildActions(
   if (closerDropped && closerRun !== undefined) {
     actions.push({
       code: 'drop-synthetic-closer',
-      detail: '丢弃 ' + String(closerRun.end - closerRun.start) + ' 行崩溃恢复补写的收尾块（turn ' + String(closerRun.turn) + ' 之后仍在续写，真实内容保留）',
+      detail: utilsMsg('utils.sessionRepair.dropSyntheticCloser', { rows: closerRun.end - closerRun.start, turn: closerRun.turn }),
       lossy: false,
       rows: closerRun.end - closerRun.start,
     });
@@ -501,7 +502,7 @@ function buildActions(
   if (truncateRows > 0) {
     actions.push({
       code: 'truncate-tail',
-      detail: '在首个异常处截断：丢弃其后 ' + String(truncateRows) + ' 行（**有损**，备份可回滚）',
+      detail: utilsMsg('utils.sessionRepair.truncateTail', { rows: truncateRows }),
       lossy: true,
       rows: truncateRows,
     });

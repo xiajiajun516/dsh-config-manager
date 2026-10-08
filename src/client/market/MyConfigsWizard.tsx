@@ -189,7 +189,7 @@ export function MyConfigsWizard({
         <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>
         <div className={css.statRow}>
           {autoBadges.map((b) => (
-            <Badge key={b.field} kind="info">{b.label}：{b.autoText}</Badge>
+            <Badge key={b.field} kind="info">{b.label}{t('common.labelSeparator')}{b.autoText}</Badge>
           ))}
         </div>
         <div className={css.actionRow}>

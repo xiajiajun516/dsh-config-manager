@@ -8,7 +8,7 @@
 import { useMemo } from 'react'
 import { toActionableError } from '../../ui/errors.ts'
 import { redact } from '../../security/redaction.ts'
-import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import { Button } from './ui.tsx'
 import { ArrowRightIcon } from './Icon.tsx'
 import css from '../config-manager.module.css'
@@ -20,8 +20,8 @@ export interface ErrorBannerProps {
   onRetry?: () => void
   /** 重试中的 loading 态 */
   retrying?: boolean
-  /** 展示层翻译器（缺省 zh；ErrorBanner 为通用组件，不绑定 settings 命名空间字典） */
-  t?: UiT
+  /** 展示层翻译器（**必传**：英文界面不得回落中文；通用组件，不绑定 settings 命名空间字典） */
+  t: UiT
 }
 
 /**
@@ -29,7 +29,7 @@ export interface ErrorBannerProps {
  * 文本在渲染前再经 redact() 兜底（双保险），Reason 以等宽块展示。
  * 重试按钮：进行中（retrying）时显示 Spinner 并禁用（防重复点击）。
  */
-export function ErrorBanner({ error, onRetry, retrying, t = zhUiT }: ErrorBannerProps) {
+export function ErrorBanner({ error, onRetry, retrying, t }: ErrorBannerProps) {
   /**
    * UI-20：解析结果必须由 `error` **派生**（useMemo），不能是只在挂载时求值一次的 useState ——
    * 同一横幅上 error 被替换后（如连续两次失败原因不同），标题/原因/建议动作/可重试判定会

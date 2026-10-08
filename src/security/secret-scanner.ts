@@ -26,6 +26,7 @@
  */
 import { JsonDepthError } from '../utils/json.ts';
 import type { SecretScanner, SensitiveHit } from '../core/types.ts';
+import { securityMsg } from './messages.ts';
 
 /** 剥离占位（与 core defaultSecretScanner 语义一致：空串 = 需补录提示） */
 export const REDACTED_PLACEHOLDER = '';
@@ -359,7 +360,7 @@ export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): {
   while (stack.length > 0) {
     const frame = stack.pop()!;
     const { src, dst, path, depth } = frame;
-    if (depth > maxDepth) throw new JsonDepthError(`扫描深度 ${depth} 超过上限 ${maxDepth}`);
+    if (depth > maxDepth) throw new JsonDepthError(securityMsg('security.scanDepthExceeded', { depth, max: maxDepth }));
     if (src instanceof Uint8Array) continue;
 
     if (Array.isArray(src)) {
@@ -368,7 +369,7 @@ export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): {
         const v = src[i];
         const childPath = `${path}[${i}]`;
         if (v !== null && typeof v === 'object' && !(v instanceof Uint8Array)) {
-          if (visited.has(v)) throw new Error(`检测到循环引用，无法扫描（路径 ${childPath}）`);
+          if (visited.has(v)) throw new Error(securityMsg('security.circularReference', { path: childPath }));
           visited.add(v);
           const childOut: unknown = Array.isArray(v) ? [] : {};
           outArr.push(childOut);
@@ -393,7 +394,7 @@ export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): {
         continue;
       }
       if (v !== null && typeof v === 'object' && !(v instanceof Uint8Array)) {
-        if (visited.has(v)) throw new Error(`检测到循环引用，无法扫描（路径 ${childPath}）`);
+        if (visited.has(v)) throw new Error(securityMsg('security.circularReference', { path: childPath }));
         visited.add(v);
         const childOut: unknown = Array.isArray(v) ? [] : {};
         outObj[k] = childOut;

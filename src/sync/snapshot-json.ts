@@ -16,6 +16,7 @@ import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { MAX_OWN_PAYLOAD_JSON_BYTES, parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import type { EncryptedCredentials, EncryptedSections, SyncSnapshot } from './transport.ts';
 import { isEncryptedCredentials, isEncryptedSections } from './transport.ts';
+import { engineMsg } from './messages.ts';
 
 /** 二进制数据在 JSON 中的标记对象键（base64 载荷）。 */
 const BIN_KEY = '$bin';
@@ -87,7 +88,7 @@ export function sectionsToJsonSafe(sections: SyncSnapshot['sections']): SyncSnap
 export function sectionsFromJsonSafe(sections: unknown): SyncSnapshot['sections'] {
   if (isEncryptedSections(sections)) return sections as EncryptedSections;
   if (sections === null || typeof sections !== 'object' || Array.isArray(sections)) {
-    throw new Error('快照 sections 必须是对象');
+    throw new Error(engineMsg('sync.snapshotSectionsNotObject'));
   }
   const out: Partial<Record<SectionId, SectionData>> = {};
   for (const [id, data] of Object.entries(sections as Record<string, unknown>)) {
@@ -126,7 +127,7 @@ export function deserializeSnapshot(raw: string): SyncSnapshot {
     && typeof snap.manifest === 'object' && snap.manifest !== null
     && typeof snap.sections === 'object' && snap.sections !== null;
   if (!okShape) {
-    throw new Error('快照 JSON 形状非法（缺少 id/createdAt/manifest/sections）');
+    throw new Error(engineMsg('sync.snapshotJsonInvalid'));
   }
   // issue #38：凭据载荷（形状不合法 → 视为不存在，不让坏数据破坏整份快照解析）
   const rawCredentials = (snap as { credentials?: unknown }).credentials;

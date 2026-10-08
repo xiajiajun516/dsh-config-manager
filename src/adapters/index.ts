@@ -77,7 +77,7 @@ export type { NamespaceProvider } from './settings.ts';
 export type { CredentialRefsProvider } from './credentials.ts';
 
 export { SettingsAdapter } from './settings.ts';
-export { UiAdapter, isUiNamespace, KNOWN_UI_NAMESPACE_PREFIXES, UI_MIGRATION_NOTES } from './ui.ts';
+export { UiAdapter, isUiNamespace, KNOWN_UI_NAMESPACE_PREFIXES, uiMigrationNotes } from './ui.ts';
 export { ProvidersAdapter, DEFAULT_PROVIDER_NAMESPACES, type ProviderExportEntry, type ProviderExportSection } from './providers.ts';
 export { PluginsAdapter, USER_PATCH_FILE } from './plugins.ts';
 export type { LocalPluginPackHook } from './plugins.ts';

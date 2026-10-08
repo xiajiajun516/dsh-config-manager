@@ -144,7 +144,11 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
                 snapshotId: snapshotId,
                 runId,
                 source: 'api',
-                summary: `恢复快照 ${snapshotId}：还原 ${report.restored.length} 项${report.removedPlugins.length > 0 ? `，卸载插件 ${report.removedPlugins.length}` : ''}`,
+                summary: msg('route.snapshotRestoreSummary', {
+                  id: snapshotId,
+                  count: report.restored.length,
+                  suffix: report.removedPlugins.length > 0 ? msg('route.snapshotRestoreRemovedPluginsSuffix', { count: report.removedPlugins.length }) : '',
+                }),
               })
               writeJson(res, 200, historyError === undefined ? { dryRun: false, report, runId } : { dryRun: false, report, runId, historyWriteError: historyError })
             } catch (error) {
@@ -209,7 +213,7 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
           sections: [id],
           snapshotId: id,
           source: 'api',
-          summary: `删除快照 ${id}`,
+          summary: msg('route.snapshotDeleteSummary', { id }),
         })
         writeJson(res, 200, historyError === undefined ? { ok: true, removed } : { ok: true, removed, historyWriteError: historyError })
       } catch (error) {

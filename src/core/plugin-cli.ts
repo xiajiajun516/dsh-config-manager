@@ -15,6 +15,7 @@
  * 只依赖 node 内置模块，零 DSH 运行时依赖（M5 的 TDD 可直接单测本模块）。
  */
 
+import { engineMsg } from './messages-core.ts';
 import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
@@ -609,35 +610,35 @@ export function classifyDshPluginFailure(output: string): DshPluginFailure | nul
     return {
       code: 'hoist-pattern-diff',
       recoverable: true,
-      message: 'profile 的 node_modules 由旧版 pnpm 创建，与当前 pnpm 的默认配置不兼容；在 profile 目录执行一次 pnpm install 重建后重试 / this profile\'s node_modules was created by a different pnpm major; rebuild it (pnpm install) before retrying',
+      message: engineMsg('core.pluginCli.hoistPatternDiff'),
     }
   }
   if (output.includes('ERR_PNPM_ADDING_TO_ROOT')) {
     return {
       code: 'adding-to-root',
       recoverable: true,
-      message: 'profile 是 pnpm workspace，当前 dsh CLI 转发未带 -w 被 pnpm 拒绝；可手动执行 dsh plugin --profile <name> add -w <pkg> / pnpm refused to add at a workspace root (missing -w); run dsh plugin --profile <name> add -w <pkg> by hand',
+      message: engineMsg('core.pluginCli.addingToRoot'),
     }
   }
   if (/--workspace-root may only be used inside a workspace/i.test(output)) {
     return {
       code: 'not-a-workspace',
       recoverable: false,
-      message: 'profile 目录不是 pnpm workspace，却传入了 -w，因此被 pnpm 拒绝 / -w was passed but the profile is not a pnpm workspace, so pnpm refused the operation',
+      message: engineMsg('core.pluginCli.notAWorkspace'),
     }
   }
   if (output.includes('ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION') || output.includes('ERR_PNPM_NO_MATURE_MATCHING_VERSION')) {
     return {
       code: 'release-age-violation',
       recoverable: true,
-      message: 'profile 里有刚发布不久的插件版本，pnpm 的安全等待期检查拒绝了本次改动（即使改的是别的插件）；等待发布期满，或临时以 --config.minimumReleaseAge=0 重试 / a recently-published plugin version in this profile trips pnpm\'s fresh-release safety check, blocking any change (even to other plugins); wait for the release to mature, or retry once with --config.minimumReleaseAge=0',
+      message: engineMsg('core.pluginCli.releaseAgeViolation'),
     }
   }
   if (output.includes('ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED') || /git-hosted package "[^"]+" needs to execute build scripts/i.test(output)) {
     return {
       code: 'git-build-blocked',
       recoverable: false,
-      message: '该 git 插件需要在安装时执行构建脚本，被 pnpm 的 allowBuilds 白名单拦截；把 pnpm 提示的包名加入 profile 的 pnpm-workspace.yaml 的 allowBuilds 后重试 / this git-hosted plugin needs to run its build script at install time, which pnpm blocks until allowed — add the exact package pnpm printed to allowBuilds in the profile\'s pnpm-workspace.yaml, then re-run',
+      message: engineMsg('core.pluginCli.gitBuildBlocked'),
     }
   }
   // issue #35：pnpm-workspace.yaml 的 patchedDependencies 指向不存在的 patch 文件时，
@@ -647,29 +648,27 @@ export function classifyDshPluginFailure(output: string): DshPluginFailure | nul
     // 路径可能含盘符冒号（C:\...），故按整行取、再切掉尾随的 ':' 或 ': <错误文本>'
     const raw = /Failed to read patch file\s+([^\r\n]+)/i.exec(output)?.[1]?.trim()
     const file = raw === undefined ? undefined : raw.split(/:\s/)[0]?.replace(/:\s*$/, '').trim()
-    const zh = file === undefined ? '' : `（${file}）`
-    const en = file === undefined ? '' : ` (${file})`
+    const patchSuffix = file === undefined ? '' : engineMsg('core.pluginCli.parenValue', { value: file })
     return {
       code: 'patch-file-missing',
       recoverable: false,
-      message: `profile 的 pnpm-workspace.yaml 声明了 patchedDependencies，但对应的 patch 文件不存在${zh}；pnpm 因此拒绝任何安装（含与补丁无关的插件）。把缺失的 patch 文件放回 profile 的 patches/ 目录，或从 pnpm-workspace.yaml 删除该条目后重试 / the profile's pnpm-workspace.yaml declares patchedDependencies but the patch file is missing${en}; pnpm then refuses every install (even unrelated plugins). Put the patch file back under the profile's patches/ directory, or remove that entry from pnpm-workspace.yaml and retry`,
+      message: engineMsg('core.pluginCli.patchFileMissing', { patch: patchSuffix }),
     }
   }
   if (output.includes('ERR_PNPM_FETCH_404')) {
     const pkg = /GET\s+\S*\/([^/\s]+):/.exec(output)?.[1]?.replace(/%2[Ff]/g, '/')
-    const zh = pkg === undefined ? '' : `（${pkg}）`
-    const en = pkg === undefined ? '' : ` (${pkg})`
+    const pkgSuffix = pkg === undefined ? '' : engineMsg('core.pluginCli.parenValue', { value: pkg })
     return {
       code: 'fetch-404',
       recoverable: false,
-      message: `有一个依赖在 registry 上不存在${zh}，pnpm 拒绝任何安装操作；它可能是之前失败操作残留在 profile package.json 里的幽灵依赖（手动删除该行），也可能是需要登录的私有包 / a dependency cannot be resolved from the registry${en}; pnpm refuses every install while it is present — it may be a ghost entry left in the profile's package.json by an earlier failed operation (remove that line by hand), or a private package needing registry credentials`,
+      message: engineMsg('core.pluginCli.fetch404', { pkg: pkgSuffix }),
     }
   }
   if (isTransientDshPluginFailure(output)) {
     return {
       code: 'transient-network',
       recoverable: true,
-      message: '拉取依赖时网络临时失败（安装会重放整个依赖树，任何一个既有依赖抖动都会中断本次操作）；稍后直接重试通常即可 / a transient network failure while fetching dependencies (installs replay the whole dependency tree, so any existing dependency can hiccup); a plain retry usually succeeds',
+      message: engineMsg('core.pluginCli.transientNetwork'),
     }
   }
   // 桌面端保留档案：普通 dsh CLI（< 0.2 的旧版尤其）对 `--profile desktop` 直接报
@@ -680,14 +679,14 @@ export function classifyDshPluginFailure(output: string): DshPluginFailure | nul
     return {
       code: 'desktop-profile-reserved',
       recoverable: false,
-      message: 'desktop 是 DeepSeek Harness Desktop 独占管理的保留档案，普通 dsh CLI 拒绝操作它；请在桌面端应用内重试（新版本插件会自动改用桌面端自带的 CLI 载体），或改用其它档案 / the "desktop" profile is managed exclusively by the DeepSeek Harness Desktop application and the plain dsh CLI refuses to touch it; retry from inside the Desktop app (a current version of this plugin switches to the Desktop-bundled CLI carrier) or target another profile',
+      message: engineMsg('core.pluginCli.desktopProfileReserved'),
     }
   }
   if (output.includes('pnpm not found on PATH')) {
     return {
       code: 'pnpm-missing',
       recoverable: false,
-      message: '找不到 pnpm（dsh 转发 pnpm 失败）：请先安装 pnpm（npm install -g pnpm 或 corepack enable pnpm），然后重试 / pnpm is not on PATH (dsh forwards to pnpm): install pnpm (npm install -g pnpm or corepack enable pnpm) and retry',
+      message: engineMsg('core.pluginCli.pnpmMissing'),
     }
   }
   return null
@@ -696,18 +695,18 @@ export function classifyDshPluginFailure(output: string): DshPluginFailure | nul
 /** 安装失败 → 分类后的双语可读 Error；未识别则保留 stderr 尾部摘要。 */
 export function installErrorFor(pkg: string, result: DshPluginResult): Error {
   if (result.spawnError !== undefined && /ENOENT|EINVAL/.test(result.spawnError)) {
-    return new Error(`无法启动 dsh CLI（${result.spawnError}）：请确认 dsh 已安装且在 PATH 上，然后重试安装 ${pkg} / cannot start dsh CLI (${result.spawnError}): make sure dsh is installed and on PATH, then retry installing ${pkg}`)
+    return new Error(engineMsg('core.pluginCli.dshCliStartFailed', { spawnError: result.spawnError, pkg }))
   }
   if (result.timedOut) {
-    return new Error(`安装 ${pkg} 超时（进程已终止，默认 15 分钟）：请检查网络或稍后重试 / install ${pkg} timed out (process killed, default 15 min): check your network and retry later`)
+    return new Error(engineMsg('core.pluginCli.installTimeout', { pkg }))
   }
   const output = `${result.stderr}\n${result.stdout}`
   const failure = classifyDshPluginFailure(output)
   if (failure !== null) {
-    return new Error(`安装 ${pkg} 失败（${failure.code}）：${failure.message}`)
+    return new Error(engineMsg('core.pluginCli.installFailed', { pkg, code: failure.code, message: failure.message }))
   }
   const tail = (result.stderr.trim().split('\n').slice(-8).join('\n')
     || result.stdout.trim().split('\n').slice(-8).join('\n')
-    || '无输出')
-  return new Error(`dsh plugin 安装 ${pkg} 失败（exit ${String(result.exitCode)}）：${tail}`)
+    || engineMsg('core.pluginCli.noOutput'))
+  return new Error(engineMsg('core.pluginCli.installFailedWithTail', { pkg, exitCode: String(result.exitCode), tail }))
 }

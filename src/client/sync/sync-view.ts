@@ -18,10 +18,10 @@ import type {
 import { SYNC_CHANNELS } from '../../utils/shared-constants.ts';
 // zh 源目录按**值**引入：本文件的渲染模型（UiT 字典不含 syncflow.* 键）需要为「回滚未完成」
 // 这类 sync 命名空间文案取词；组件可经 syncText 参数注入自己的翻译器（缺省 = zh 源）。
-import { zh as syncZhCatalog, type SyncKey } from './sync-locales.ts';
+import { en as syncEnCatalog, zh as syncZhCatalog, type SyncKey } from './sync-locales.ts';
 import type { CloudConfigIssueCode } from '../../ui/sync-settings-view.ts';
 import type { S3CompatProvider } from '../../sync/sync-config.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import { currentUiLanguage, type UiT } from '../../ui/i18n.ts';
 
 /* ---------------------------------------------------------------- 私有仓库提示 */
 
@@ -39,7 +39,7 @@ export function needsGitToken(repoUrl: string): boolean {
   return /^https?:\/\//i.test(repoUrl.trim());
 }
 
-export function privateRepoHint(t: UiT = zhUiT): string {
+export function privateRepoHint(t: UiT): string {
   return t('sync.privateRepoHint');
 }
 
@@ -64,14 +64,15 @@ export interface SyncSectionOption {
 /** host 目录（SyncSectionInfo[]）→ UI 勾选项（保留 id 顺序）。
  *  同步分区必为导出目录（DEFAULT_CATEGORIES）的可移植子集：分组/描述从导出目录
  *  补充（单一事实源，与「导出备份·自定义模式」的目录保持一致），未命中 id 兜底。 */
-export function syncSectionOptions(info: readonly SyncSectionInfo[]): SyncSectionOption[] {
+export function syncSectionOptions(info: readonly SyncSectionInfo[], t: UiT): SyncSectionOption[] {
   const meta = new Map(DEFAULT_CATEGORIES.map((c) => [c.id, c]));
   return info.map((s) => {
     const cat = meta.get(s.id);
     return {
       id: s.id,
       label: s.displayName,
-      description: cat?.description ?? '',
+      // 描述是**字典键**（英文界面零中文）：在这里按当前语言解析，渲染层直接显示
+      description: cat !== undefined ? t(cat.descriptionKey) : '',
       group: cat?.group ?? 'general',
       portability: s.portability,
       defaultIncluded: s.defaultIncluded,
@@ -81,7 +82,7 @@ export function syncSectionOptions(info: readonly SyncSectionInfo[]): SyncSectio
 
 /** 高级模式勾选目录 → 按导出分组（EXPORT_GROUPS）投影：与「导出备份·自定义模式」同构，
  *  空分组省略；UI 直接渲染 groupCard。 */
-export function syncSectionGroups(options: readonly SyncSectionOption[]): {
+export function syncSectionGroups(options: readonly SyncSectionOption[], t: UiT): {
   group: ExportGroup;
   label: string;
   note?: string;
@@ -91,7 +92,7 @@ export function syncSectionGroups(options: readonly SyncSectionOption[]): {
     .map((g) => ({
       group: g.id,
       label: g.label,
-      ...(g.note !== undefined ? { note: g.note } : {}),
+      ...(g.noteKey !== undefined ? { note: t(g.noteKey) } : {}),
       items: options.filter((o) => o.group === g.id),
     }))
     .filter((g) => g.items.length > 0);
@@ -169,7 +170,7 @@ export function summarizePullChanges(changes: readonly PullChange[]): PullChange
 }
 
 /** PlanItemKind → 短标签（列表徽章） */
-export function kindLabel(kind: PlanItemKind, t: UiT = zhUiT): string {
+export function kindLabel(kind: PlanItemKind, t: UiT): string {
   switch (kind) {
     case 'Create': return t('sync.kind.create');
     case 'Update': return t('sync.kind.update');
@@ -186,7 +187,7 @@ export function kindLabel(kind: PlanItemKind, t: UiT = zhUiT): string {
 }
 
 /** severity → 短标签 */
-export function severityLabel(severity: PlanItem['severity'], t: UiT = zhUiT): string {
+export function severityLabel(severity: PlanItem['severity'], t: UiT): string {
   switch (severity) {
     case 'error': return t('sync.severity.error');
     case 'warning': return t('sync.severity.warning');
@@ -446,10 +447,11 @@ function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
 
 /* ---------------------------------------------------------------- WebDAV 预设 */
 
-/** 常见 WebDAV 服务器预设：label 展示名 + url 模板（含 <占位> 待用户替换）。 */
+/** 常见 WebDAV 服务器预设：labelKey 展示名键 + url 模板（含 <占位> 待用户替换）。 */
 export interface WebDavPreset {
   id: string;
-  label: string;
+  /** 展示名的**字典键**（sync 命名空间；与 SYNC_CHANNEL_LABEL_KEY / S3_PROVIDER_LABEL_KEY 同口径） */
+  labelKey: SyncKey;
   /** url 模板；可能含 <server>/<user> 占位符，用户需替换为真实地址 */
   url: string;
   /** 是否需要用户替换占位符 */
@@ -458,13 +460,13 @@ export interface WebDavPreset {
 
 /** 内置常见 WebDAV 服务器（预设下拉数据源；第一项为自定义）。 */
 export const WEBDAV_PRESETS: readonly WebDavPreset[] = [
-  { id: 'custom', label: 'Custom URL', url: '', hasPlaceholder: false },
-  { id: 'jianguoyun', label: '坚果云 (Jianguoyun)', url: 'https://dav.jianguoyun.com/dav/', hasPlaceholder: false },
-  { id: 'nextcloud', label: 'Nextcloud', url: 'https://<server>/remote.php/dav/files/<user>/', hasPlaceholder: true },
-  { id: 'owncloud', label: 'ownCloud', url: 'https://<server>/remote.php/dav/files/<user>/', hasPlaceholder: true },
-  { id: 'seafile', label: 'Seafile', url: 'https://<server>/seafdav/', hasPlaceholder: true },
-  { id: 'synology', label: 'Synology NAS (WebDAV)', url: 'https://<nas-ip>:5006/', hasPlaceholder: true },
-  { id: 'box', label: 'Box', url: 'https://dav.box.com/dav/', hasPlaceholder: false },
+  { id: 'custom', labelKey: 'webdav.preset.custom', url: '', hasPlaceholder: false },
+  { id: 'jianguoyun', labelKey: 'webdav.preset.jianguoyun', url: 'https://dav.jianguoyun.com/dav/', hasPlaceholder: false },
+  { id: 'nextcloud', labelKey: 'webdav.preset.nextcloud', url: 'https://<server>/remote.php/dav/files/<user>/', hasPlaceholder: true },
+  { id: 'owncloud', labelKey: 'webdav.preset.owncloud', url: 'https://<server>/remote.php/dav/files/<user>/', hasPlaceholder: true },
+  { id: 'seafile', labelKey: 'webdav.preset.seafile', url: 'https://<server>/seafdav/', hasPlaceholder: true },
+  { id: 'synology', labelKey: 'webdav.preset.synology', url: 'https://<nas-ip>:5006/', hasPlaceholder: true },
+  { id: 'box', labelKey: 'webdav.preset.box', url: 'https://dav.box.com/dav/', hasPlaceholder: false },
 ];
 
 /** 默认预设（自定义）对应的 id。 */
@@ -506,7 +508,7 @@ export interface SyncButtons {
  * - 活动通道远端地址未就绪（remoteReady=false）→ 禁用（无从同步）；
  * - busy 时按钮文案切换为「正在推送/拉取…」（配 Spinner）。
  */
-export function computeSyncButtons(busy: 'sync' | 'push' | 'pull' | 'apply' | 'rollback' | null, remoteReady: boolean, t: UiT = zhUiT): SyncButtons {
+export function computeSyncButtons(busy: 'sync' | 'push' | 'pull' | 'apply' | 'rollback' | null, remoteReady: boolean, t: UiT): SyncButtons {
   const idle = busy === null;
   const enabled = idle && remoteReady;
   return {
@@ -531,7 +533,7 @@ export function computeSyncStatus(
   statusInfo: SyncStatusResponse | null,
   loading: boolean,
   error: string | null,
-  t: UiT = zhUiT,
+  t: UiT,
 ): SyncStatusSummary {
   if (loading) return { kind: 'loading', text: t('sync.statusLoading') };
   if (error !== null) return { kind: 'error', text: error };
@@ -565,7 +567,7 @@ export function formatDateTime(iso: string): string {
 }
 
 /** 上次同步时间的展示文本（'' / undefined = 从未同步） */
-export function formatLastSync(iso: string | undefined, t: UiT = zhUiT): string {
+export function formatLastSync(iso: string | undefined, t: UiT): string {
   if (iso === undefined || iso === '') return t('sync.neverSyncedShort');
   return formatDateTime(iso);
 }
@@ -580,7 +582,7 @@ export interface PushReportView {
 }
 
 /** push 报告 → 渲染模型（ok 头部带快照 id；失败显示引擎 message；分区与告警透传） */
-export function pushReportView(report: SyncPushReport | null, t: UiT = zhUiT): PushReportView | null {
+export function pushReportView(report: SyncPushReport | null, t: UiT): PushReportView | null {
   if (report === null) return null;
   if (!report.ok) {
     return { kind: 'error', headline: report.message ?? t('sync.pushFailed'), sections: report.sections, warnings: report.warnings };
@@ -615,7 +617,7 @@ export interface PushPreviewView {
 }
 
 /** push 预览 → 渲染模型（P0-②）：列分区 + 变更计数 + 远端基线提示。 */
-export function pushPreviewView(preview: SyncPushPreview | null, t: UiT = zhUiT): PushPreviewView | null {
+export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPreviewView | null {
   if (preview === null) return null;
   if (!preview.ok) {
     return {
@@ -650,7 +652,7 @@ export interface PullReportView {
 }
 
 /** pull 报告 → 渲染模型（差异预览；empty = 无变更；error = 拉取失败） */
-export function pullReportView(report: SyncPullReport | null, t: UiT = zhUiT): PullReportView | null {
+export function pullReportView(report: SyncPullReport | null, t: UiT): PullReportView | null {
   if (report === null) return null;
   if (!report.ok) {
     return { kind: 'error', headline: report.message ?? t('sync.pullFailed'), summary: null, previewHint: '' };
@@ -700,7 +702,7 @@ export function computeGithubLoginView(
   userCode: string,
   verificationUri: string,
   error: string | null,
-  t: UiT = zhUiT,
+  t: UiT,
 ): GithubLoginView {
   const inFlight = phase === 'starting' || phase === 'waiting' || phase === 'polling';
   let statusText: string;
@@ -739,7 +741,7 @@ export function computeGithubLoginView(
 }
 
 /** 轮询终止态 → 用户可读消息（pending 不是终止态，返回空串；成功/拒绝/过期/错误给出明确文案） */
-export function githubPollMessage(poll: GithubPollResponse, t: UiT = zhUiT): string {
+export function githubPollMessage(poll: GithubPollResponse, t: UiT): string {
   switch (poll.status) {
     case 'success':
       return t('sync.github.pollSuccess');
@@ -918,6 +920,7 @@ export function buildAdoptions(
   items: readonly SyncConfirmItem[],
   adopted: ReadonlyMap<string, boolean>,
   resolutions: ReadonlyMap<string, SyncConflictResolution>,
+  t: UiT,
 ): SyncItemAdoption[] {
   const out: SyncItemAdoption[] = [];
   for (const it of items) {
@@ -926,7 +929,7 @@ export function buildAdoptions(
     if (it.kind === 'Conflict') {
       const resolution = resolutions.get(it.itemId);
       if (resolution === undefined) {
-        throw new Error(`冲突项 ${it.itemId} 必须先选择解决方式（保留当前 / 使用导入）`);
+        throw new Error(t('sync.conflictUnresolved', { id: it.itemId }));
       }
       adoption.resolution = resolution;
     }
@@ -946,7 +949,10 @@ export type ApplyItemsViewKind = 'ok' | 'partial' | 'failed' | 'rolledBack' | 'r
 
 /** sync 命名空间的取词器（缺省 = 该字典的 zh 源；组件可注入自己的 t 以本地化）。 */
 export type SyncTextFn = (key: SyncKey) => string
-const defaultSyncText: SyncTextFn = (key) => syncZhCatalog[key]
+// **活**取词器（不是 zh 快照）：sync 命名空间的 zh/en 目录都在手边，按当前语言取词 ——
+// 否则英文界面上「回滚未完成」这类只住在 sync 字典的文案会原样透出中文。
+const defaultSyncText: SyncTextFn = (key) =>
+  (currentUiLanguage() === 'zh' ? syncZhCatalog : syncEnCatalog)[key]
 
 export interface ApplyItemsView {
   kind: ApplyItemsViewKind;
@@ -969,7 +975,7 @@ export interface ApplyItemsView {
 /** apply-items 执行结果 → 渲染模型（ok / partial / failed / 整体回滚 / 回滚未完成）。 */
 export function applyItemsReportView(
   report: ApplyItemsResponse | null,
-  t: UiT = zhUiT,
+  t: UiT,
   syncText: SyncTextFn = defaultSyncText,
 ): ApplyItemsView | null {
   if (report === null) return null;
@@ -1033,7 +1039,7 @@ export function computeAutosyncCountdown(elapsedMs: number, intervalMs: number):
  * 剩余时长 → 可读文案（向上取整，避免出现「0 分钟」；≤0 视为 1 分钟兜底）。
  * 例：4 分钟 →「4 分钟」；90 分钟 →「2 小时」；30 小时 →「2 天」。
  */
-export function formatIntervalDuration(ms: number, t: UiT = zhUiT): string {
+export function formatIntervalDuration(ms: number, t: UiT): string {
   const totalMinutes = Math.max(1, Math.ceil(ms / 60000));
   if (totalMinutes < 60) return t('sync.duration.min', { n: totalMinutes });
   const totalHours = Math.ceil(totalMinutes / 60);
@@ -1043,7 +1049,7 @@ export function formatIntervalDuration(ms: number, t: UiT = zhUiT): string {
 }
 
 /** 自动同步状态行的可读文案（未运行 / 上次状态 / 连续失败计数）。 */
-export function autosyncStatusText(status: AutosyncStatusResponse, t: UiT = zhUiT): string {
+export function autosyncStatusText(status: AutosyncStatusResponse, t: UiT): string {
   if (status.lastRunAt === undefined || status.lastRunAt === '' || status.lastRunStatus === undefined) {
     return t('sync.autosyncNever');
   }

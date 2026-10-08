@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import { ConfigManagerApiError } from '../api.ts';
 import { SYNC_API, SYNC_WEBDAV_CREDENTIAL_REF, SyncApi } from './sync-api.ts';
+import { zhUiT } from '../../ui/i18n.ts';
 
 interface FetchCall {
   url: string;
@@ -57,7 +58,7 @@ test('S-01 api.status()：GET 到 /sync/status，解析配置/凭据/上次同�
   // 经读取函数解除闭包赋值导致的 CFA 窄化（called 在回调内赋值，外部保持 null 窄化）
   const lastCall = (): FetchCall | null => called;
 
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.configured, true);
   assert.equal(result.repoUrl, 'https://github.com/u/r.git');
@@ -73,7 +74,7 @@ test('S-02 api.push()：POST /sync/push，请求体携带 repoUrl/token', async 
     return jsonResponse(200, { ok: true, snapshotId: 'sync-1', sections: ['settings'], warnings: [] });
   });
 
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.push({ repoUrl: 'https://github.com/u/r.git', token: 'ghp_secret' });
   assert.equal(result.ok, true);
   assert.equal(result.snapshotId, 'sync-1');
@@ -97,7 +98,7 @@ test('S-03 api.pull()：POST /sync/pull，strategy 缺省透传 merge，响应�
     });
   });
 
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.pull({ repoUrl: 'https://github.com/u/r.git', strategy: 'merge' });
   assert.equal(result.changes.length, 1);
   assert.equal(result.changes[0]?.kind, 'Conflict');
@@ -109,7 +110,7 @@ test('S-03 api.pull()：POST /sync/pull，strategy 缺省透传 merge，响应�
 
 test('S-04 错误映射：4xx 携带 error → ConfigManagerApiError', async () => {
   installFetchMock(() => jsonResponse(400, { error: 'repoUrl is required' }));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   await assert.rejects(api.push({ repoUrl: '' }), (err: unknown) => {
     assert.ok(err instanceof ConfigManagerApiError);
     assert.match(err.message, /repoUrl is required/);
@@ -120,7 +121,7 @@ test('S-04 错误映射：4xx 携带 error → ConfigManagerApiError', async () 
 test('S-05 服务未挂载：404（非 JSON 体）→ ConfigManagerApiError 提示插件未加载', async () => {
   // 路由不存在时宿主返回 404 但无 JSON error → readJson 兜底为「插件未挂载」提示
   installFetchMock(() => new Response('Not Found', { status: 404 }));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   await assert.rejects(api.status(), (err: unknown) => {
     assert.ok(err instanceof ConfigManagerApiError);
     assert.match(err.message, /未挂载/);
@@ -141,7 +142,7 @@ test('S-06 api.githubStart()：POST /sync/github/start，解析 flowId/userCode/
     return jsonResponse(200, body);
   });
 
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.githubStart();
   assert.equal(result.flowId, 'flow-1');
   assert.equal(result.userCode, 'ABCD-EFGH');
@@ -157,7 +158,7 @@ test('S-07 api.githubPoll()：POST /sync/github/poll 携带 flowId；pending 透
     return jsonResponse(200, { status: 'pending', pollDelayMs: 5000 });
   });
 
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.githubPoll('flow-1');
   assert.equal(result.status, 'pending');
   assert.equal(result.pollDelayMs, 5000);
@@ -168,7 +169,7 @@ test('S-07 api.githubPoll()：POST /sync/github/poll 携带 flowId；pending 透
 
 test('S-08 api.githubPoll() 成功 → 响应只含状态，token 永不回传', async () => {
   installFetchMock(() => jsonResponse(200, { status: 'success', credentialConfigured: true }));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.githubPoll('flow-1');
   assert.equal(result.status, 'success');
   assert.equal(result.credentialConfigured, true);
@@ -182,7 +183,7 @@ test('S-09 api.githubCancel()：POST /sync/github/cancel 携带 flowId', async (
     calls.push(call);
     return jsonResponse(200, { ok: true });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.githubCancel('flow-1');
   assert.equal(result.ok, true);
   assert.equal(calls[0]?.url, SYNC_API.githubCancel);
@@ -206,7 +207,7 @@ test('S-10 api.snapshotsList()：POST /sync/snapshots-list，解析倒序快照�
     calls.push(call);
     return jsonResponse(200, body);
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.snapshotsList({ repoUrl: 'https://github.com/u/r.git' });
   assert.equal(result.ok, true);
   assert.equal(result.snapshots.length, 2);
@@ -230,7 +231,7 @@ test('S-11 api.sync()：POST /sync/sync，请求体携带 snapshotId；响应含
     calls.push(call);
     return jsonResponse(200, body);
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.sync({ repoUrl: 'https://github.com/u/r.git', snapshotId: 'sync-3' });
   assert.equal(result.syncSessionId, 'sess-1');
   assert.equal(result.items.length, 1);
@@ -250,7 +251,7 @@ test('S-12 api.applyItems()：POST /sync/apply-items，携带 adoptions（含 Co
     calls.push(call);
     return jsonResponse(200, body);
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.applyItems({
     syncSessionId: 'sess-1',
     adoptions: [
@@ -273,7 +274,7 @@ test('S-13 api.cancel()：POST /sync/cancel 携带 syncSessionId', async () => {
     calls.push(call);
     return jsonResponse(200, { ok: true });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.cancel('sess-1');
   assert.equal(result.ok, true);
   assert.equal(calls[0]?.url, SYNC_API.cancel);
@@ -297,7 +298,7 @@ test('S-14 api.autosyncStatus()：GET /sync/autosync 返回 { git, webdav }，�
     return jsonResponse(200, body);
   });
   const lastCall = (): FetchCall | null => called;
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.autosyncStatus('git');
   assert.equal(result.enabled, true);
   assert.equal(result.interval, '30m');
@@ -319,7 +320,7 @@ test('S-15 api.autosyncUpdate()：POST /sync/autosync，请求体携带 transpor
     calls.push(call);
     return jsonResponse(200, body);
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.autosyncUpdate({ transport: 'webdav', enabled: true, interval: '60m' });
   assert.equal(result.enabled, true);
   assert.equal(result.interval, '60m');
@@ -345,7 +346,7 @@ test('S-16 api.history()：GET /sync/history，解析 { entries }（含 autosync
     ],
   };
   installFetchMock(() => jsonResponse(200, body));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.history();
   assert.equal(result.entries.length, 2);
   assert.equal(result.entries[0]?.kind, 'apply');
@@ -374,7 +375,7 @@ test('S-18 api.status()：webdav 通道 → 解析 webdav 配置状态（url/use
     return jsonResponse(200, body);
   });
   const lastCall = (): FetchCall | null => called;
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.webdav?.url, 'https://dav.example.com/dav/config');
   assert.equal(result.webdav?.username, 'alice', 'status 可回传 username 值（非敏感，供表单回填）');
@@ -390,7 +391,7 @@ test('S-19 api.push()：transport=webdav → 请求体携带顶层扁平 url/use
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-w1', sections: [], warnings: [] });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.push({
     transport: 'webdav',
     url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass',
@@ -413,7 +414,7 @@ test('S-20 api.pull()：transport=webdav 请求体透传扁平 webdav 配置', a
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-w1', changes: [], needsReview: false });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   await api.pull({ transport: 'webdav', url: 'https://dav.example.com/dav/config', username: 'alice', password: 'secret-pass' });
   assert.equal(calls[0]?.url, SYNC_API.pull);
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
@@ -428,7 +429,7 @@ test('S-21 git 通道缺省：不带 transport → 请求体仍只含 git 字段
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-1', sections: [], warnings: [] });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   await api.push({ repoUrl: 'https://github.com/u/r.git', token: 't' });
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
   assert.equal(sent['transport'], undefined, '缺省不声明 transport（Host 视为 git）');
@@ -442,7 +443,7 @@ test('S-22 api.push()：高级（自定义导出）模式 → 请求体携带 se
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-sel', sections: ['settings'], warnings: [] });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   // 高级模式：传勾选分区
   await api.push({ repoUrl: 'https://github.com/u/r.git', sections: ['settings', 'skills'] });
   assert.equal(calls.length, 1);
@@ -474,7 +475,7 @@ test('S-23 api.status()：解析 syncSections（可同步分区目录，无 secr
     return jsonResponse(200, body);
   });
   const lastCall = (): FetchCall | null => called;
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.syncSections?.length, 2);
   assert.equal(result.syncSections?.[0]?.id, 'settings');
@@ -493,7 +494,7 @@ test('S-24 api.status()：解析 syncSelection（持久化分区选择，UI 回�
     return jsonResponse(200, body);
   });
   const lastCall = (): FetchCall | null => called;
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.syncSelection?.mode, 'advanced');
   assert.deepEqual(result.syncSelection?.sections, ['settings', 'skills']);
@@ -506,7 +507,7 @@ test('S-25 api.saveSelection()：POST /sync/selection 携带 transport + mode + 
     calls.push(call);
     return jsonResponse(200, { ok: true, transport: 'webdav', mode: 'advanced', sections: ['settings', 'skills'] });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.saveSelection({ transport: 'webdav', mode: 'advanced', sections: ['settings', 'skills'] });
   assert.equal(result.mode, 'advanced');
   assert.equal(calls.length, 1);
@@ -524,7 +525,7 @@ test('S-26 api.push()：加密快照 → 请求体携带 encrypt/encryptPassword
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-enc', sections: ['settings'], warnings: [] });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   await api.push({
     repoUrl: 'https://github.com/u/r.git',
     encrypt: true,
@@ -544,7 +545,7 @@ test('S-27 api.pull()：拉取加密快照 → 请求体携带 decryptPassword�
     calls.push(call);
     return jsonResponse(200, { ok: true, snapshotId: 'sync-enc', changes: [], needsReview: false });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   await api.pull({ repoUrl: 'https://github.com/u/r.git', decryptPassword: 'pw-12345678' });
   assert.equal(calls[0]?.url, SYNC_API.pull);
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>;
@@ -557,7 +558,7 @@ test('S-28 api.status()：syncSelection 含 encrypt/includeSecrets 开关（UI �
     syncSelection: { mode: 'advanced', sections: ['settings'], encrypt: true, includeSecrets: true },
   };
   installFetchMock(() => jsonResponse(200, body));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.syncSelection?.encrypt, true);
   assert.equal(result.syncSelection?.includeSecrets, true);
@@ -576,7 +577,7 @@ test('S-28b api.status()：syncSelectionByChannel / autosyncByChannel 按通道�
     },
   };
   installFetchMock(() => jsonResponse(200, body));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.syncSelectionByChannel?.git.mode, 'default', 'git 通道选择独立');
   assert.equal(result.syncSelectionByChannel?.webdav.mode, 'advanced');
@@ -592,7 +593,7 @@ test('S-29 api.saveUiPrefs()：POST /sync/ui-prefs 携带 lastSyncChannel（磁�
     calls.push(call);
     return jsonResponse(200, { ok: true, lastSyncChannel: 'webdav' });
   });
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.saveUiPrefs({ lastSyncChannel: 'webdav' });
   assert.equal(result.lastSyncChannel, 'webdav');
   assert.equal(calls.length, 1);
@@ -608,7 +609,7 @@ test('S-30 api.status()：lastSyncChannel 回填（磁盘 ui-prefs；UI 通道�
     lastSyncChannel: 'webdav',
   };
   installFetchMock(() => jsonResponse(200, body));
-  const api = new SyncApi();
+  const api = new SyncApi(zhUiT);
   const result = await api.status();
   assert.equal(result.lastSyncChannel, 'webdav');
 });
@@ -619,7 +620,7 @@ test('S-31 api.githubListRepositories()：GET 列举仓库（不设 method，只
     calls.push(call)
     return jsonResponse(200, { ok: true, repos: [REPO_SUMMARY] })
   })
-  const api = new SyncApi()
+  const api = new SyncApi(zhUiT)
   const result = await api.githubListRepositories()
   assert.equal(calls.length, 1)
   assert.equal(calls[0]?.url, SYNC_API.githubRepositories)
@@ -634,7 +635,7 @@ test('S-32 api.githubCreateRepository()：POST 新建仓库，请求体不含 pr
     calls.push(call)
     return jsonResponse(200, { ok: true, repo: REPO_SUMMARY })
   })
-  const api = new SyncApi()
+  const api = new SyncApi(zhUiT)
   const result = await api.githubCreateRepository('  dsh-configs  ', ' 我的配置 ')
   assert.equal(calls[0]?.url, SYNC_API.githubRepositories)
   assert.equal(calls[0]?.init?.method, 'POST')
@@ -651,7 +652,7 @@ test('S-33 api.githubCreateRepository()：描述为空时不发送 description �
     calls.push(call)
     return jsonResponse(200, { ok: true, repo: REPO_SUMMARY })
   })
-  const api = new SyncApi()
+  const api = new SyncApi(zhUiT)
   await api.githubCreateRepository('dsh-configs', '   ')
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>
   assert.ok(!('description' in sent), '空描述不占字段（与 GitHub 默认描述口径一致）')
@@ -668,7 +669,7 @@ test('S-34 api.rollback()：POST /sync/rollback 透传 full=false 与 failed（�
     calls.push(call)
     return jsonResponse(200, body)
   })
-  const api = new SyncApi()
+  const api = new SyncApi(zhUiT)
   const result = await api.rollback({ restoreId: 'rest-9' })
   assert.equal(result.full, false)
   assert.equal(result.failed?.length, 1, '未回滚项必须透传（旧实现只回 ok/full，界面据此误报「已回滚」）')

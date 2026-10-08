@@ -32,7 +32,7 @@ import type {
   MarketBrowseResponse, MarketDownloadResult, MarketItemDetail, MarketListItem,
   MarketPreparePayload, MarketPrepareResponse, MarketRefreshResponse, MarketStatusResponse,
 } from '../../market/types.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import type { UiT } from '../../ui/i18n.ts';
 import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import { MARKET_API } from '../common/routes.ts';
 
@@ -52,7 +52,7 @@ const MARKET_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS };
 /** 配置市场浏览器半数据入口（备份与迁移页第 5 个 tab 的注入业务面） */
 export class MarketApi {
   readonly t: UiT
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t
   }
 

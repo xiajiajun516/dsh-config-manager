@@ -260,8 +260,9 @@ const RENDER_POINTS: RenderPoint[] = [
   {
     id: 'sync-repo-picker-load-error',
     file: 'src/client/sync/SyncRepositoryPicker.tsx',
-    redacted: R('{t(\'repoPicker.loadFailed\')}（{redact(loadError)}）'),
-    bare: R('{t(\'repoPicker.loadFailed\')}（{loadError}）'),
+    // t3：括号改走字典（common.parens，英文界面不得出现全角括号），脱敏点不变
+    redacted: R("{t('repoPicker.loadFailed')}{t('common.parens', { text: redact(loadError) })}"),
+    bare: R("{t('repoPicker.loadFailed')}{t('common.parens', { text: loadError })}"),
     why: '仓库列表拉取失败文本（GitHub 状态/网络响应）',
   },
   {

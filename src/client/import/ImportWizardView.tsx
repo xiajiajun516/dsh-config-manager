@@ -345,7 +345,7 @@ function ImportingStep(props: {
   const logLines = progress?.log ?? []
   return (
     <div className={css.viewBody}>
-      <ProgressBar event={progress} active />
+      <ProgressBar event={progress} active t={apiT} />
       <ImportLogPanel lines={logLines} t={t} />
       {isPluginInstall && (
         <div className={css.actionRow}>
@@ -400,7 +400,8 @@ function ResultStep(props: {
         <ReportView
           kind="import"
           importResult={result}
-          // F-01：必须显式传 t —— ReportView 缺省 t=zhUiT，英文界面下报告正文会恒为中文
+          // F-01：必须显式传 t —— ReportView 的 t 是**必传** prop（类型强制；t3 已移除 zhUiT 缺省，
+          // 不传即编译失败），英文界面下报告正文才不会恒为中文
           t={apiT}
           // UI-08：分区显示名只经 section-labels 的单一映射（不再让用户看见 pluginFiles 这类适配器 id）
           sectionLabel={sectionLabeler(t)}

@@ -155,7 +155,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           <div className={css.actionRow}>
             <InfoHint text={t('about.feedbackHint')} label={t('common.infoHint')} />
             <CopyButton
-              text={buildFeedbackSnippet(state.rows)}
+              text={buildFeedbackSnippet(state.rows, t)}
               label={t('about.copyEnv')}
               t={t}
             />

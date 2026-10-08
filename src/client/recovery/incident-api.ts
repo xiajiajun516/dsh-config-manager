@@ -13,7 +13,7 @@
  * 安全约束：错误文本由 Host 侧脱敏；进入救援模式是高风险写盘动作，confirm 必须由调用方在
  * 显式确认弹窗后传入 —— 本层绝不代填。本文件不 import 任何 node 模块（纯浏览器 bundle）。
  */
-import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts'
 import { INCIDENT_API } from '../common/routes.ts'
 
@@ -62,7 +62,7 @@ export interface RescueActionResult {
 /** 事故恢复（崩溃归因 + 救援模式）浏览器半数据入口。 */
 export class IncidentApi {
   readonly t: UiT
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t
   }
 

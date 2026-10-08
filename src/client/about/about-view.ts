@@ -16,6 +16,7 @@
  */
 import type { PluginUpdateCheckResult } from '../../ui/types.ts';
 import type { ConfigManagerKey } from '../locales.ts';
+import type { TranslateNS } from '../client-types.ts';
 
 /** 插件的公开元数据（静态常量，来源见设计文档 §3 信息表） */
 export interface AboutMeta {
@@ -151,17 +152,20 @@ function diagnosticsRow(status: AboutStatusInput): AboutDiagnosticsRow | null {
  *
  * 不含任何敏感信息：只有版本号、平台标识、profile 名与插件清单目录（目录用于排查
  * profile / DSH_HOME 不匹配，不是凭据）。诊断位缺失（老宿主）时只输出前三行。
+ *
+ * 文案一律走 config-manager 字典（英文界面零中文）：此前这里是双语硬编码字面量
+ * （'### 环境 / Environment' …），英文界面下会原样透出中文。
  */
-export function buildFeedbackSnippet(rows: AboutStatusRows): string {
+export function buildFeedbackSnippet(rows: AboutStatusRows, t: TranslateNS<'config-manager'>): string {
   const lines = [
-    '### 环境 / Environment',
-    `- 插件版本 / Plugin: ${rows.version || 'unknown'}`,
-    `- DSH 版本 / DSH: ${rows.dsh || 'unknown'}`,
-    `- 平台 / Platform: ${rows.platform || 'unknown'}`,
+    t('about.snippet.environment'),
+    t('about.snippet.plugin', { version: rows.version || 'unknown' }),
+    t('about.snippet.dsh', { version: rows.dsh || 'unknown' }),
+    t('about.snippet.platform', { platform: rows.platform || 'unknown' }),
   ];
   if (rows.diagnostics !== null) {
     lines.push(`- profile: ${rows.diagnostics.profile}`);
-    lines.push(`- 插件清单目录 / Plugin dir: ${rows.diagnostics.profileDir}`);
+    lines.push(t('about.snippet.pluginDir', { dir: rows.diagnostics.profileDir }));
   }
   return lines.join('\n');
 }

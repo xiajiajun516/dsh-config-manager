@@ -230,7 +230,8 @@ function snapshotRow(s: SnapshotInput, t: UiT): ArtifactRow {
       { label: t('library.detail.plugins'), value: group(s.beforePluginCount) },
       { label: t('library.detail.pinned'), value: s.pinned === true ? t('library.value.yes') : t('library.value.no') },
     ],
-    searchText: [s.id, 'snapshot', '本机快照'].join(' ').toLowerCase(),
+    // 检索词也属界面文案（按当前语言的用户输入匹配；字面量中文会让英文界面命中中文词）
+    searchText: [s.id, 'snapshot', t('library.kind.snapshot')].join(' ').toLowerCase(),
   }
 }
 
@@ -295,7 +296,7 @@ function remoteSnapshotRow(r: RemoteSnapshotInput, input: ArtifactInput, t: UiT)
       { label: t('library.detail.platform'), value: r.platform },
       { label: t('library.detail.dsh'), value: r.dshVersion },
     ],
-    searchText: [r.id, r.platform, 'remote', '远端快照'].join(' ').toLowerCase(),
+    searchText: [r.id, r.platform, 'remote', t('library.kind.remote')].join(' ').toLowerCase(),
   }
 }
 
@@ -321,7 +322,7 @@ function marketRow(m: MarketItemInput, t: UiT): ArtifactRow {
       ...(m.version === undefined || m.version === '' ? [] : [{ label: t('library.detail.version'), value: `v${m.version}` }]),
       ...(m.updatedAt === undefined ? [] : [{ label: t('library.detail.updated'), value: '', iso: m.updatedAt }]),
     ],
-    searchText: [m.id, m.name, m.author ?? '', 'market', '市场'].join(' ').toLowerCase(),
+    searchText: [m.id, m.name, m.author ?? '', 'market', t('library.kind.market')].join(' ').toLowerCase(),
   }
 }
 

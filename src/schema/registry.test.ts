@@ -8,7 +8,8 @@
  *  2. **编译期穷举**的运行时可见面：注册表键集合 === SECTION_IDS，且每个已注册 id 的 id 字段自洽；
  *     （「漏注册 → tsc 报错」由 tsc 实证，见任务 output）
  *  3. **零 node 依赖**：静态扫描 section-registry.ts 的 import 清单（client bundle 自包含铁律）；
- *  4. **未注册分区不静默**：sectionMetaOf / requireSectionMeta / validateSectionData 三处都要显式失败。
+ *  4. **未注册分区不静默**：sectionMetaOf（section-registry）/ requireSectionMeta（config，t7 起）/
+ *     validateSectionData 三处都要显式失败。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,14 +29,13 @@ import {
   isFileSection,
   isSectionId,
   jsonPathOf,
-  requireSectionMeta,
   sectionMeta,
   sectionMetaOf,
   type SectionMeta,
   type SectionRiskTier,
 } from './section-registry.ts';
 import type { SectionId } from './types.ts';
-import { validateSectionData } from './config.ts';
+import { requireSectionMeta, validateSectionData } from './config.ts';
 import {
   isSupportedSectionDataVersion,
   sectionDataVersion,

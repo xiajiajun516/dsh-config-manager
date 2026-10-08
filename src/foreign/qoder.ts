@@ -16,6 +16,7 @@
 import { normalizePlatform } from './platform-paths.ts';
 import { draftFromTranscript, sessionSourceOf } from './session-source.ts';
 import type { RootProbeOptions } from './session-source.ts';
+import { engineMsg } from './messages.ts';
 import { FOREIGN_TRUTH_TABLES } from './truth-table.ts';
 import type { ForeignTruthTableEntry } from './truth-table.ts';
 import type { ForeignSource } from './registry.ts';
@@ -29,7 +30,7 @@ export const QODER_PROVIDER = 'qoder';
 /** 按 id 取真值表条目；缺条目 = 装配期错误（宁可炸，也不悄悄少一份取证声明） */
 function truthEntryOf(id: ForeignSourceId): ForeignTruthTableEntry {
   const found = FOREIGN_TRUTH_TABLES.find((entry) => entry.id === id);
-  if (found === undefined) throw new Error('真值表缺少来源定义: ' + id);
+  if (found === undefined) throw new Error(engineMsg('foreign.truthTableMissingSource', { id }));
   return found;
 }
 

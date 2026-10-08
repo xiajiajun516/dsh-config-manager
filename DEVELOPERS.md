@@ -265,30 +265,34 @@ CI 门禁：`.github/workflows/ci.yml` 对 `pull_request`→main 与 `push`→ma
 - 控制器(`ExportFlow/ImportWizard`)由 runStore 缓存复用，**禁止每次渲染 new**；刷新恢复经 `writeWizardSnapshot()` 受控 rehydrate。
 
 #### i18n
-- 文案进字典：React 壳 `t('key')`(zh 源/en 镜像，`ConfigManagerKey` 编译校验)；`src/ui/` 走 `src/ui/i18n.ts` `UiT`(`makeUiT`)。
+- 文案进字典：React 壳 `t('key')`(zh 源/en 镜像，`ConfigManagerKey` 编译校验)；`src/ui/` 走 `src/ui/i18n.ts` `UiT`；宿主 / 引擎走 `src/core/engine-locale.ts` 的 `engineMsg`（各域目录经 `registerMessageCatalog` 并入）。
 - **禁止硬编码用户可见字符串**。
+- **语言在「取文案那一刻」解析，不在装配那一刻**（2026-10-08 根因修复）：客户端 `makeLiveUiT(read)`（`src/ui/i18n.ts`；模块级 `liveUiT` 由 `setUiLanguageSource(read)` 接线在 `src/client/index.ts`），宿主 / 引擎 `engineMsg` + `setEngineLanguageSource(() => resolveAppLanguage(ctx))`（`src/index.ts` 构造期），路由注册点 `src/routes/kit.ts` 的 `endpoint()` 每请求 `invalidateEngineLocale()`；`LANGUAGE_TTL_MS = 1000` 只给非请求路径（调度器 / 后台任务）兜底。**不得**在 `apply()` 里写 `makeUiT(...)` / `makeMsg(...)` 快照（那是「切到 English 后界面仍有中文」的根因）。
+- **静态守卫（回归门禁）**：全量 `node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 全仓零命中；摘要行 `DCM_I18N_GUARD scope=ALL files=<扫描文件数> hits=0 allowlisted=128`（**不变量是 `hits=0` / `allowlisted=128`**；`files=` 随新增源文件增长））；作用域自检 `$env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'; node --test tests/i18n-hardcoded-guard.test.ts`。
+  `DCM_I18N_GUARD_SCOPE` = 逗号分隔的 **workspace 相对 POSIX 前缀**，按**目录段边界**匹配（`src/client` 不命中 `src/client2`），**只收窄文件列表**（E1–E3 豁免、白名单过期断言、内核自检始终全局生效）；未设置 / 全空白 = 全量；非法值（绝对路径 / 反斜杠 / `..` 段）**直接失败**，绝不静默当空集。内核 `tests/helpers/i18n-scan.ts`、用例 `tests/i18n-hardcoded-guard.test.ts`（扫描集 = `src/**` − `src/cli/**` − `*.test.ts` − `fixtures/**`，+ `locale/en.json` / `locale/zh.json`；注释 / `log.*`·`console.*` 实参 / 目录 zh 区豁免）。
+- **新增用户可见文案必须进目录**（zh 逐字保留、en 补齐）；新增白名单豁免只能走 captain → `tests/helpers/i18n-scan.ts`（条目计数精确锚定：**4 条 / 128 命中**）。
 
 ##### 字典共 7 套；「查不到 key」不等于是缺陷（排查前必读）
 写文案时要放进**正确的那一套**；反过来，**判断「某 key 是否存在」时必须先确认 `t` 的来源**，否则会系统性误报：
 
 | 字典 | zh/en | `t` 的来源 | 缺 key 行为 |
 |---|---|---|---|
-| `src/client/locales.ts` | 695 / 695 | 组件 props `t`（`ConfigManagerKey`） | **编译期报错** |
-| `src/ui/i18n.ts` | 370 / 370 | `UiT`（`api.t` / `zhUiT` / props） | **静默返回 key 本身** |
-| `src/core/messages.ts` | 353 / 353 | host/adapter `msg()` | 编译期（`keyof typeof zh`） |
+| `src/client/locales.ts` | 873 / 873 | 组件 props `t`（`ConfigManagerKey`） | **编译期报错** |
+| `src/ui/i18n.ts` | 528 / 528 | `UiT`（`api.t` / `liveUiT` / props） | **静默返回 key 本身** |
+| `src/core/messages.ts` | 380 / 380 | host/adapter `msg()`（`engineMsg`） | 编译期（`keyof typeof zh`） |
 | `history-locales.ts` | 54 / 54 | `historyT` → ns `config-manager-history` | 静默 |
-| `market-locales.ts` | 182 / 182 | `marketT` → ns `config-manager-market` | 静默 |
-| `recovery-locales.ts` | 170 / 170 | `recoveryT` → ns `config-manager-recovery` | 静默 |
-| `sync-locales.ts` | 219 / 219 | `syncT` → ns `config-manager-sync` | 静默 |
+| `market-locales.ts` | 184 / 184 | `marketT` → ns `config-manager-market` | 静默 |
+| `recovery-locales.ts` | 385 / 385 | `recoveryT` → ns `config-manager-recovery` | 静默 |
+| `sync-locales.ts` | 336 / 336 | `syncT` → ns `config-manager-sync` | 静默 |
 
-> 上表数量为 **2026-10-02 重数**（ⓘ 说明性文案迁移收口时实测，node 直读字典对象逐个计数）：7 套字典的 zh / en **键集合完全相等**、无重复键。
-> **ⓘ 迁移（2026-10）的净增**：`locales.ts` / `market-locales.ts` / `recovery-locales.ts` / `sync-locales.ts` 各 **+1**
-> （键 `common.infoHint`，zh「查看说明」/ en「Show description」，四本同键同值；由 `src/client/common/info-hint-guard.test.ts` 的 t6-4 钉住），
-> `history-locales.ts` **+0**（history 零 MOVE、全目录无 ⓘ，故不要求该键）。表内其余增量来自本轮之前的工作树改动 ——
+> 上表数量为 **2026-10-08 重数**（「英文界面零中文」迁移收口时实测，node 直读字典对象逐个计数）：7 套字典的 zh / en **键集合完全相等**、无重复键、**en 零 CJK**。
+> **本轮（2026-10-08）的净增**：`locales.ts` 695→873、`ui/i18n.ts` 370→528、`core/messages.ts` **372→380**（8 个 `host.*` 来自 t2 的宿主入口迁移，其余来自各域迁入；**口径注意**：本行上方「2026-10-02 重数」记的 `353` 是**更早的旧实测**，本轮**迁移前基线是 372**，两个数字不得混用）、
+> `market-locales.ts` 182→184、`recovery-locales.ts` 170→385、`sync-locales.ts` 219→336；`history-locales.ts` 54→54（无新增）。
+> **迁移只新增键**：既有键的 zh 取值逐字不变（372 键指纹冻结在 `src/core/engine-locale.test.ts`），en 一律补齐 ——
 > 因此**必须按重数更新，不得按旧值 +1 硬算**。
 > 数量历史（不同时点，勿混用）：`locales.ts` HEAD 517（本机脚本按 `'key':` 字面量统计；t1 审计报告写 533 属其统计口径）
 > → t3 复核 558（批次一新增文案后）→ t12 收口前 522 → 2026-09-20 最终态 506（t12 删除 16 个 `overview.*` 死键）
-> → **2026-10-02 重数 695**（此后工作树累计新增，含 ⓘ 的 +1）。
+> → **2026-10-02 重数 695**（此后工作树累计新增，含 ⓘ 的 +1）→ **2026-10-08 重数 873**（英文界面零中文迁移收口）。
 > 改动文案后如要引用数量，请重新实测，不要沿用旧数字。
 
 **重数命令（仓库根；逐套打印 zh / en 键数与键集合相等判定）**：
@@ -297,9 +301,34 @@ CI 门禁：`.github/workflows/ci.yml` 对 `pull_request`→main 与 `push`→ma
 node --input-type=module -e "for (const r of [['./src/client/locales.ts','zh','en'],['./src/ui/i18n.ts','uiZh','uiEn'],['./src/core/messages.ts','zh','en'],['./src/client/history/history-locales.ts','zh','en'],['./src/client/market/market-locales.ts','zh','en'],['./src/client/recovery/recovery-locales.ts','zh','en'],['./src/client/sync/sync-locales.ts','zh','en']]) { const m = await import(new URL(r[0], new URL('file://' + process.cwd() + '/')).href); const z = Object.keys(m[r[1]]); const e = Object.keys(m[r[2]]); console.log(r[0], 'zh=' + z.length, 'en=' + e.length, 'same=' + (z.length === e.length && z.every((k) => k in m[r[2]]))) }"
 ```
 
-实测输出（2026-10-02）：`locales.ts` 695/695 · `ui/i18n.ts` 370/370 · `core/messages.ts` 353/353 ·
-`history-locales.ts` 54/54 · `market-locales.ts` 182/182 · `recovery-locales.ts` 170/170 · `sync-locales.ts` 219/219
-（七套全部 `same=true`）。
+实测输出（2026-10-08）：`locales.ts` 873/873 · `ui/i18n.ts` 528/528 · `core/messages.ts` 380/380 ·
+`history-locales.ts` 54/54 · `market-locales.ts` 184/184 · `recovery-locales.ts` 385/385 · `sync-locales.ts` 336/336
+（七套全部 `same=true`、`enCJK=0`）。
+
+##### 引擎侧域目录（`registerMessageCatalog` 并入，2026-10-08 现测）
+`src/core/messages.ts` 的 zh/en 是**基础目录**（迁移前 372 键，t2 起 380）；各域另有一本**自注册目录**
+（`registerMessageCatalog({ id, zh, en })`，模块加载即注册，**只在基础目录未命中时生效**，键类型 = `keyof typeof zh`）：
+
+| 目录 | zh/en | 目录 | zh/en |
+|---|---|---|---|
+| `src/core/messages-core.ts` | 268 / 268 | `src/sync/s3/messages.ts` | 25 / 25 |
+| `src/market/messages-market.ts` | 127 / 127 | `src/sync/gist/messages.ts` | 16 / 16 |
+| `src/utils/messages-utils.ts` | 85 / 85 | `src/adapters/messages.ts` | 12 / 12 |
+| `src/sync/messages.ts` | 57 / 57 | `src/foreign/messages.ts` | 9 / 9 |
+| `src/schema/messages.ts` | 41 / 41 | `src/migrations/messages-migrations.ts` | 5 / 5 |
+| `src/routes/messages.ts` | 36 / 36 | `src/profiles/messages.ts` | 1 / 1 |
+| `src/security/messages.ts` | 24 / 24 | | |
+
+> **20 本目录合计 3446 个 zh 键**（含上面 7 套；每本 zh/en 键集合相等、en 零 CJK）。
+> **口径**：目录数按 **20 本**（7 套客户端字典 + 13 本引擎侧域目录，**含既有的 s3 / gist 命名空间目录**）计；t8 独立验证报告的「19 本 / 3430 键」是**不含 gist** 的口径 —— 两个都对，引用时必须写清口径。
+> 引擎侧查找顺序：**基础目录 → en 回退基础 zh → 注册目录（同语言 → zh）→ 键名**；`engineMsg` 与 `makeMsg` 同口径，
+> 未知键回退键名、绝不抛错。各域目录只许**追加**键（基础目录的 372 键有冻结指纹，改既有键即红）。
+
+**全量重数命令（20 本目录；含 `same` 与 `enCJK` 判定）**：
+
+```bash
+node --input-type=module -e "for (const r of [['./src/client/locales.ts','zh','en'],['./src/ui/i18n.ts','uiZh','uiEn'],['./src/core/messages.ts','zh','en'],['./src/client/history/history-locales.ts','zh','en'],['./src/client/market/market-locales.ts','zh','en'],['./src/client/recovery/recovery-locales.ts','zh','en'],['./src/client/sync/sync-locales.ts','zh','en'],['./src/core/messages-core.ts','zh','en'],['./src/market/messages-market.ts','zh','en'],['./src/utils/messages-utils.ts','zh','en'],['./src/sync/messages.ts','zh','en'],['./src/schema/messages.ts','zh','en'],['./src/routes/messages.ts','zh','en'],['./src/security/messages.ts','zh','en'],['./src/adapters/messages.ts','zh','en'],['./src/foreign/messages.ts','zh','en'],['./src/migrations/messages-migrations.ts','zh','en'],['./src/profiles/messages.ts','zh','en'],['./src/sync/s3/messages.ts','s3Zh','s3En'],['./src/sync/gist/messages.ts','gistZh','gistEn']]) { const m = await import(new URL(r[0], new URL('file://' + process.cwd() + '/')).href); const z = Object.keys(m[r[1]]); const e = Object.keys(m[r[2]]); const same = z.length === e.length && z.every((k) => k in m[r[2]]); const cjk = e.filter((k) => /[\u2E80-\u2EFF\u3000-\u303F\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uFE30-\uFE4F\uFF01-\uFF60\uFFE0-\uFFE6]/u.test(m[r[2]][k])).length; console.log(r[0].padEnd(44), 'zh=' + z.length, 'en=' + e.length, 'same=' + same, 'enCJK=' + cjk) }"
+```
 
 **第四个坑：`t` 可经 props 注入 → 静态归属不可判。**
 `ConsultCard` 声明 `t: UiT`（不是本地字典），由调用方传 `t={api.t}`。因此「按文件在哪个目录就查哪套字典」**永远判不对**；实测这种静态归属扫描会产生 **600+ 处假阳性**（`error.*`/`history.*`/`myconfigs.*`/`report.*` 等全是注入式 `t`）。

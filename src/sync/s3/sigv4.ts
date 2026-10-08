@@ -20,6 +20,8 @@
  */
 import { createHash, createHmac } from 'node:crypto';
 
+import { s3Msg } from './messages.ts';
+
 /** 签名方言：AWS SigV4 与阿里云 OSS4 共用一套流程，差异全部收敛在这里。 */
 export type SigV4DialectId = 'aws4' | 'oss4';
 
@@ -82,7 +84,7 @@ export const OSS_SIG_V4: SigV4Dialect = {
 export function sigV4Dialect(id: SigV4DialectId): SigV4Dialect {
   if (id === 'aws4') return AWS_SIG_V4;
   if (id === 'oss4') return OSS_SIG_V4;
-  throw new Error('未知签名方言: ' + String(id));
+  throw new Error(s3Msg('sync.s3.unknownSignatureDialect', { id: String(id) }));
 }
 
 /** SHA-256 十六进制小写。 */

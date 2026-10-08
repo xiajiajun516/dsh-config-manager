@@ -26,9 +26,20 @@ export const zh = {
   'section.self': '插件自身配置',
   // 视图切换
   'view.about': '关于',
+  // 关于页「一键复制环境信息」片段（提 issue 用）：zh 保留双语标题（维护者可读），en 纯英文
+  'about.snippet.environment': '### 环境 / Environment',
+  // 更新内容拉取失败（GitHub API）：错误对象里也必须是当前语言
+  'about.releaseNotes.rateLimited': 'GitHub API 速率限制（Rate limit exceeded），请稍后再试或直接在 GitHub 上查看。',
+  'about.releaseNotes.fetchFailed': 'GitHub API 请求失败 ({status} {statusText})',
+  'about.snippet.plugin': '- 插件版本 / Plugin: {version}',
+  'about.snippet.dsh': '- DSH 版本 / DSH: {version}',
+  'about.snippet.platform': '- 平台 / Platform: {platform}',
+  'about.snippet.pluginDir': '- 插件清单目录 / Plugin dir: {dir}',
   // 公共
   'common.close': '关闭',
   'common.cancel': '取消',
+  // 标点也属界面文案：英文界面不得出现全角冒号（label：value 形态的分隔符走这个词条）
+  'common.labelSeparator': '：',
   'common.back': '上一步',
   'common.next': '下一步',
   'common.retry': '重试',
@@ -951,8 +962,16 @@ export const en: Record<keyof typeof zh, string> = {
   'section.sessions': 'Sessions',
   'section.self': 'Plugin Self Config',
   'view.about': 'About',
+  'about.snippet.environment': '### Environment',
+  'about.releaseNotes.rateLimited': 'GitHub API rate limit exceeded — please try again later, or view the release notes directly on GitHub.',
+  'about.releaseNotes.fetchFailed': 'GitHub API request failed ({status} {statusText})',
+  'about.snippet.plugin': '- Plugin version: {version}',
+  'about.snippet.dsh': '- DSH version: {version}',
+  'about.snippet.platform': '- Platform: {platform}',
+  'about.snippet.pluginDir': '- Plugin directory: {dir}',
   'common.close': 'Close',
   'common.cancel': 'Cancel',
+  'common.labelSeparator': ': ',
   'common.back': 'Back',
   'common.next': 'Next',
   'common.retry': 'Retry',

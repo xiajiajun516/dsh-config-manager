@@ -20,6 +20,7 @@
  * cordis.patch.yml）；workspaceRecord 离线无法经 DSH storages 恢复 → 如实提示。
  * 旧快照（无 beforePlugins / hostFileBackups）兼容：缺基线的部分只提示不动作。
  */
+import { engineMsg } from './messages-core.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -281,10 +282,10 @@ export interface RestoreSnapshotValidation {
 /** 递归检查快照目录内关键文件非 symlink（F25：拒绝 symlink 化 metadata/blob 写穿）。 */
 async function assertNoSnapshotSymlink(dir: string, rel: string): Promise<string | null> {
   const p = path.join(dir, rel);
-  if (!isWithinHome(dir, p)) return `路径越界: ${rel}`;
+  if (!isWithinHome(dir, p)) return engineMsg('core.restore.pathEscaped', { rel });
   try {
     const st = await fs.lstat(p);
-    if (st.isSymbolicLink()) return `symlink 化关键文件: ${rel}`;
+    if (st.isSymbolicLink()) return engineMsg('core.restore.symlinkCriticalFile', { rel });
     return null;
   } catch {
     // 缺失由 verify/logic 处理（此处不判缺失）
@@ -310,12 +311,12 @@ export async function validateSnapshotForRestore(
   env?: { environmentFingerprint?: string },
 ): Promise<RestoreSnapshotValidation> {
   const id = path.basename(snapshotDir);
-  if (!isValidSnapshotId(id)) return { verdict: 'INVALID', reason: 'snapshotId 非法' };
+  if (!isValidSnapshotId(id)) return { verdict: 'INVALID', reason: engineMsg('core.restore.invalidSnapshotId') };
 
   // 目录边界：snapshotDir 必须紧邻 snapshotsRoot 下的一层
   const rel = path.relative(snapshotsRoot, snapshotDir).split(path.sep).join('/');
   if (rel === '' || rel.includes('/') || !isWithinHome(snapshotsRoot, snapshotDir)) {
-    return { verdict: 'INVALID', reason: '快照目录越界或非直接子目录' };
+    return { verdict: 'INVALID', reason: engineMsg('core.restore.snapshotDirOutOfBounds') };
   }
 
   // 关键文件 symlink 检查（F25）
@@ -339,7 +340,7 @@ export async function validateSnapshotForRestore(
   const blobEntries = await fs.readdir(blobsDir, { withFileTypes: true }).catch(() => [] as Array<{ name: string; isSymbolicLink(): boolean }>);
   for (const be of blobEntries) {
     if (be.isSymbolicLink()) {
-      return { verdict: 'UNSAFE_PATH', reason: `blob 是 symlink: ${be.name}` };
+      return { verdict: 'UNSAFE_PATH', reason: engineMsg('core.restore.blobSymlink', { name: be.name }) };
     }
   }
 
@@ -352,9 +353,9 @@ export async function validateSnapshotForRestore(
   } catch {
     /* verifySnapshot 已报缺失 */
   }
-  if (snapshot === null || typeof snapshot !== 'object') return { verdict: 'CORRUPT', reason: 'snapshot.json 无法解析' };
+  if (snapshot === null || typeof snapshot !== 'object') return { verdict: 'CORRUPT', reason: engineMsg('core.restore.snapshotJsonUnparsable') };
   if (!manifestExists && snapshot.readiness === undefined) {
-    return { verdict: 'LEGACY_REQUIRES_CONFIRMATION', reason: '旧快照（无 manifest/READY），需显式确认后恢复' };
+    return { verdict: 'LEGACY_REQUIRES_CONFIRMATION', reason: engineMsg('core.restore.legacyNeedsConfirm') };
   }
 
   // 结构 + 完整性（磁盘重读，不信任内存）
@@ -364,18 +365,18 @@ export async function validateSnapshotForRestore(
   // 环境绑定（WRONG_ENVIRONMENT）
   if (env?.environmentFingerprint && snapshot.readiness === 'READY' && snapshot.environmentFingerprint
     && snapshot.environmentFingerprint !== env.environmentFingerprint) {
-    return { verdict: 'WRONG_ENVIRONMENT', reason: 'environmentFingerprint 不匹配（可能来自其他机器/安装）' };
+    return { verdict: 'WRONG_ENVIRONMENT', reason: engineMsg('core.restore.envFingerprintMismatch') };
   }
 
   // provenance 分类
   const hasBinding = snapshot.operationId !== undefined || snapshot.environmentFingerprint !== undefined || snapshot.ownerInstanceId !== undefined;
   if (snapshot.readiness === undefined) {
-    return { verdict: 'LEGACY_REQUIRES_CONFIRMATION', reason: '旧快照（无 readiness），需显式确认后恢复' };
+    return { verdict: 'LEGACY_REQUIRES_CONFIRMATION', reason: engineMsg('core.restore.legacyNoReadiness') };
   }
   if (!hasBinding) {
-    return { verdict: 'TRUSTED_MANUAL_LOCAL', reason: '完整性通过，但非 operation-bound（手动/本地快照）' };
+    return { verdict: 'TRUSTED_MANUAL_LOCAL', reason: engineMsg('core.restore.trustedManualLocal') };
   }
-  return { verdict: 'TRUSTED_OPERATION_SNAPSHOT', reason: 'READY + manifest 完整 + op/env/owner binding 匹配' };
+  return { verdict: 'TRUSTED_OPERATION_SNAPSHOT', reason: engineMsg('core.restore.trustedOperationSnapshot') };
 }
 
 
@@ -852,7 +853,7 @@ export async function listSnapshots(
     // 其余（EACCES / EPERM / ENOTDIR…）经 out.unreadable 回传，由调用方如实展示。
     const code = (error as { code?: string }).code;
     if (code !== 'ENOENT' && out !== undefined) {
-      out.unreadable = '快照目录读不出来（' + String(code ?? 'unknown') + '）：' + dir;
+      out.unreadable = engineMsg('core.restore.snapshotDirUnreadable', { code: String(code ?? 'unknown'), dir });
     }
     return [];
   }
@@ -893,11 +894,11 @@ export function isValidSnapshotId(id: unknown): id is string {
  *  不存在视为成功（幂等）。返回是否实际删除。 */
 export async function deleteSnapshot(snapshotsDir: string, id: string): Promise<boolean> {
   if (!isValidSnapshotId(id)) {
-    throw new Error(`非法快照 id: ${JSON.stringify(id)}`);
+    throw new Error(engineMsg('core.restore.illegalSnapshotId', { id: JSON.stringify(id) }));
   }
   const target = path.join(snapshotsDir, id);
   if (!target.startsWith(path.resolve(snapshotsDir) + path.sep)) {
-    throw new Error(`快照路径越界: ${id}`);
+    throw new Error(engineMsg('core.restore.snapshotPathEscaped', { id }));
   }
   try {
     await fs.stat(target);
@@ -912,12 +913,12 @@ export async function deleteSnapshot(snapshotsDir: string, id: string): Promise<
  *  只接受合法 id；快照不存在抛错。 */
 export async function setSnapshotPinned(snapshotsDir: string, id: string, pinned: boolean): Promise<boolean> {
   if (!isValidSnapshotId(id)) {
-    throw new Error(`非法快照 id: ${JSON.stringify(id)}`);
+    throw new Error(engineMsg('core.restore.illegalSnapshotId', { id: JSON.stringify(id) }));
   }
   const file = path.join(snapshotsDir, id, 'snapshot.json');
   const resolvedRoot = path.resolve(snapshotsDir) + path.sep;
   if (!file.startsWith(resolvedRoot)) {
-    throw new Error(`快照路径越界: ${id}`);
+    throw new Error(engineMsg('core.restore.snapshotPathEscaped', { id }));
   }
   const snapshot = parseJsonSafe(await fs.readFile(file, 'utf8')) as Snapshot;
   snapshot.pinned = pinned;

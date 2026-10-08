@@ -23,6 +23,7 @@
 import path from 'node:path';
 import type { FileSystemFacade } from '../core/types.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
+import { securityMsg } from './messages.ts';
 
 /**
  * 默认敏感文件清单（相对 $DSH_HOME）：当前 DSH 唯一「整文件即秘密」的文件
@@ -68,7 +69,7 @@ export interface VaultEntry {
 
 /** rel 必须为安全相对路径（拒绝绝对路径 / .. / 盘符 / NUL），防路径穿越 */
 function assertSafeRel(rel: string): void {
-  if (!isPathSafe(rel)) throw new Error(`vault: 非法敏感文件路径 "${rel}"`);
+  if (!isPathSafe(rel)) throw new Error(securityMsg('security.vaultUnsafePath', { path: rel }));
 }
 
 /** 校验 + 归一化 rel 清单（统一 / 分隔，与 FileSystemFacade.listRecursive 产出对齐） */

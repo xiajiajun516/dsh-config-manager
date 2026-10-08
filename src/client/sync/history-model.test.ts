@@ -79,17 +79,20 @@ test('directionLabel / autosyncStatusLabel：方向与状态映射（走字典�
   assert.equal(autosyncStatusLabel('partial', enT), 'Partial');
 });
 
-test('describeSkipReason：已知原因走字典；未落字典的三类保持现状（F1 残留，见 findings.md）', () => {
+test('describeSkipReason：七类已知原因全部走字典（F1 收口：不再有硬编码中文）', () => {
   assert.equal(describeSkipReason('conflict', zhT), syncZh['history.autosyncReasonConflict']);
   assert.equal(describeSkipReason('no-remote', zhT), syncZh['history.autosyncReasonNoRemote']);
   assert.equal(describeSkipReason('not-configured', zhT), syncZh['history.autosyncReasonNotConfigured']);
   assert.equal(describeSkipReason('network', zhT), syncZh['history.autosyncReasonNetwork']);
   assert.equal(describeSkipReason('conflict', enT), syncEn['history.autosyncReasonConflict']);
-  // F1 残留（sync-locales.ts 在外部团队在改清单内，暂不能补键）—— 这三类的现状被钉住，
-  // 一旦补键就必须同时改这里，避免「悄悄漏掉一类」。
-  assert.equal(describeSkipReason('encrypted', zhT), '远端快照已加密，自动同步跳过（请手动同步）');
+  // F1 收口（t3）：encrypted / mutation-locked / 未知 三类也已补键，en 界面下不再透出中文
+  assert.equal(describeSkipReason('encrypted', zhT), syncZh['history.autosyncReasonEncrypted']);
+  assert.equal(describeSkipReason('encrypted', enT), syncEn['history.autosyncReasonEncrypted']);
+  assert.equal(describeSkipReason('mutation-locked', zhT), syncZh['history.autosyncReasonMutationLocked']);
+  assert.equal(describeSkipReason(undefined, zhT), syncZh['history.autosyncReasonUnknown']);
+  assert.equal(describeSkipReason(undefined, enT), syncEn['history.autosyncReasonUnknown']);
+  // 未知原因仍原样透出宿主回传的串（不吞信息）
   assert.equal(describeSkipReason('weird', zhT), 'weird');
-  assert.equal(describeSkipReason(undefined, zhT), '未知');
 });
 
 // issue #31：宿主统一以 'mutation-locked' 落历史（不细分 LOCKED/STALE）→ 界面不得透出裸 token。

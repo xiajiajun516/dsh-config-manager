@@ -19,6 +19,7 @@ import { writeZip } from '../utils/zip.ts';
 import type { ZipWriteEntry } from '../utils/zip.ts';
 import type { Platform, SectionId } from '../schema/types.ts';
 import type { ForeignImportResult, ForeignSkip } from './types.ts';
+import { engineMsg } from './messages.ts';
 
 export interface ForeignBundleOptions {
   result: ForeignImportResult;
@@ -57,7 +58,7 @@ export async function writeForeignBundle(opts: ForeignBundleOptions): Promise<Fo
     if (isFileSection(s.sectionId)) {
       const prefix = SECTION_FILE_PREFIXES[s.sectionId];
       if (prefix === undefined) {
-        throw new Error('外部导入：文件类分区缺少 ZIP 前缀 ' + s.sectionId);
+        throw new Error(engineMsg('foreign.bundleFileSectionPrefixMissing', { section: s.sectionId }));
       }
       const files = s.files ?? [];
       if (files.length === 0) continue;
@@ -67,7 +68,7 @@ export async function writeForeignBundle(opts: ForeignBundleOptions): Promise<Fo
     } else {
       const jsonPath = SECTION_JSON_PATHS[s.sectionId];
       if (jsonPath === undefined) {
-        throw new Error('外部导入：JSON 类分区缺少 ZIP 路径 ' + s.sectionId);
+        throw new Error(engineMsg('foreign.bundleJsonSectionPathMissing', { section: s.sectionId }));
       }
       if (s.data === undefined) continue;
       flags[s.sectionId] = true;

@@ -23,6 +23,7 @@ import {
 } from './session-format-disposition.ts';
 import { EXECUTING_STAGE, IMPORT_STAGES, ProgressTracker } from './progress.ts';
 import { formatActionableError, toActionableError } from './errors.ts';
+import { liveUiT, type UiT } from './i18n.ts';
 import { nextFlowPhase, type FlowPhase } from './flow.ts';
 
 export interface ImportWizardOptions {
@@ -30,6 +31,11 @@ export interface ImportWizardOptions {
   onProgress?: ProgressListener;
   /** 默认回滚策略（场景 E：true=整体回滚；UI 可在执行前覆盖） */
   defaultRollbackOnError?: boolean;
+  /**
+   * 渲染层翻译器（UiT）。缺省 = **活**翻译器 `liveUiT`（随 DSH 语言变化）——
+   * 绝不是 `zhUiT` 那种加载期快照：英文界面下向导的错误文案不得回落中文。
+   */
+  t?: UiT;
 }
 
 /**
@@ -270,12 +276,14 @@ export class ImportWizard {
    * decryptArchive 端点解出明文 ZIP 并返回新 zipPath，后续 analyze/plan/execute 都基于它。
    */
   private unlockedZipPath: string | null = null;
+  private readonly t: UiT;
 
   constructor(opts: ImportWizardOptions) {
     this.port = opts.port;
     this.onProgress = opts.onProgress;
     this.tracker = new ProgressTracker(IMPORT_STAGES, this.onProgress);
     this.rollbackOnError = opts.defaultRollbackOnError ?? true;
+    this.t = opts.t ?? liveUiT;
   }
 
   /** 当前状态快照（React 绑定 / 测试断言用） */
@@ -341,15 +349,15 @@ export class ImportWizard {
       this.tracker.emit('checking-compatibility');
       if (!this.analysis.valid) {
         // 分析失败（完整性/schema/兼容性）：错误进 errors，UI 停在失败态
-        this.errors.push(...this.analysis.errors.map((e) => formatActionableError(toActionableError(new Error(e)))));
-        throw new Error(this.analysis.errors.join('; ') || '备份分析失败');
+        this.errors.push(...this.analysis.errors.map((e) => formatActionableError(toActionableError(new Error(e)), this.t)));
+        throw new Error(this.analysis.errors.join('; ') || this.t('import.analysisFailed'));
       }
       this.step = 'compatibility';
       return this.analysis;
     } catch (err) {
       // 仅当尚未记录分析错误时才追加（避免重复）
       if (this.errors.length === 0) {
-        this.errors.push(formatActionableError(toActionableError(err)));
+        this.errors.push(formatActionableError(toActionableError(err, { t: this.t }), this.t));
       }
       throw err;
     }
@@ -370,7 +378,7 @@ export class ImportWizard {
   /** 步骤 3→4：用户确认兼容性后进入 Preview（Dry Run：用当前决策生成计划摘要，零写入） */
   async confirmCompatibility(): Promise<ImportPlan> {
     if (this.analysis === null || this.zipPath === null) {
-      throw new Error('尚未完成分析，请先选择备份文件');
+      throw new Error(this.t('import.analysisIncomplete'));
     }
     this.plan = await this.port.createImportPlan(this.resolvedZipPath(), this.decisions, this.planOpts());
     this.step = 'preview';
@@ -464,10 +472,10 @@ export class ImportWizard {
     planFilter?: (plan: ImportPlan) => ImportPlan;
   }): Promise<ImportResult> {
     if (this.zipPath === null || this.analysis === null) {
-      throw new Error('尚未完成分析，请先选择备份文件');
+      throw new Error(this.t('import.analysisIncomplete'));
     }
     if (opts.confirm !== true) {
-      throw new Error('导入未确认：必须确认后才允许修改任何数据');
+      throw new Error(this.t('import.notConfirmed'));
     }
     const rollbackOnError = opts.rollbackOnError ?? this.rollbackOnError;
     // P0-8：记住执行前的步骤 —— 执行抛错时回到该步骤（确认页/结果页）。
@@ -507,7 +515,7 @@ export class ImportWizard {
       this.step = 'result';
       return this.result;
     } catch (err) {
-      this.errors.push(formatActionableError(toActionableError(err)));
+      this.errors.push(formatActionableError(toActionableError(err, { t: this.t }), this.t));
       // P0-8：失败回退到执行前步骤（正常是 'preview' = 确认页，那里有重试按钮）；
       // 计划与错误都已保留，用户可直接再次确认执行。
       this.step = previousStep;
@@ -537,12 +545,12 @@ export class ImportWizard {
    */
   async executeRetry(opts: { rollbackOnError?: boolean }): Promise<ImportResult> {
     if (this.plan === null || this.result === null) {
-      throw new Error('没有可重试的导入结果');
+      throw new Error(this.t('import.retryNoResult'));
     }
     const retryable = this.retryableIds();
     const subset = this.plan.items.filter((i) => retryable.has(i.id));
     if (subset.length === 0) {
-      throw new Error('没有失败或跳过的项需要重试');
+      throw new Error(this.t('import.retryNothing'));
     }
     const rollbackOnError = opts.rollbackOnError ?? this.rollbackOnError;
     // P0-8：同 execute() —— 重试失败也回退到执行前步骤（结果页），
@@ -566,7 +574,7 @@ export class ImportWizard {
       this.step = 'result';
       return this.result;
     } catch (err) {
-      this.errors.push(formatActionableError(toActionableError(err)));
+      this.errors.push(formatActionableError(toActionableError(err, { t: this.t }), this.t));
       this.step = previousStep;
       throw err;
     }

@@ -504,7 +504,7 @@ export function ExportView({ api, t }: ExportViewProps) {
         </Modal.Footer>
       </Modal>
 
-      {running && <ProgressBar event={progress} active />}
+      {running && <ProgressBar event={progress} active t={api.t} />}
 
       {error !== null && (
         <ErrorBanner error={error} onRetry={() => { void runExport() }} retrying={running} t={api.t} />

@@ -5,7 +5,7 @@
  * ProgressTracker 供导出/导入控制器在调用 core 前后发出阶段事件（UI 不冻结）。
  */
 import type { ProgressEvent, ProgressListener } from './types.ts';
-import { zhUiT, type UiT, type UiTextKey } from './i18n.ts';
+import type { UiT, UiTextKey } from './i18n.ts';
 
 /** 导出阶段文案（规范 §29 Export 示例） */
 export const EXPORT_STAGES: readonly string[] = [
@@ -69,7 +69,7 @@ const STAGE_KEYS: Record<string, UiTextKey> = {
 };
 
 /** 阶段 id → 用户可读文案（未知阶段回退 id） */
-export function stageText(stage: string, t: UiT = zhUiT): string {
+export function stageText(stage: string, t: UiT): string {
   const key = STAGE_KEYS[stage];
   return key !== undefined ? t(key) : stage;
 }

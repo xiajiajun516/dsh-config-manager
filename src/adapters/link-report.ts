@@ -9,6 +9,8 @@
  */
 import type { FileSystemFacade } from '../core/types.ts';
 import type { MsgFunc } from '../core/messages.ts';
+// t6：注册 adapters 域追加目录（本模块只消费注入的 msg，故只引它的注册副作用）。
+import './messages.ts';
 import type { RecursiveListing, SkippedDepDir, SkippedLink } from '../utils/recursive-walk.ts';
 
 /** 跳过原因 → 消息 key（与 SkippedLink.reason 一一对应，穷尽映射） */
@@ -34,7 +36,7 @@ function depDirDetail(msg: MsgFunc, dirs: SkippedDepDir[]): string {
     const files = dir.files === null
       ? msg('adapter.depsDirFilesUnknown')
       : msg('adapter.depsDirFiles', { count: String(dir.files) })
-    return `${dir.path}（${files}）`
+    return msg('adapter.linkDirEntry', { path: dir.path, files })
   })
   const more = dirs.length - shown.length
   return (more > 0 ? [...shown, `(+ ${more})`] : shown).join(', ')
@@ -62,8 +64,8 @@ export function linkWarnings(msg: MsgFunc, type: string, listing: RecursiveListi
     const detail = [...byReason.entries()].map(([reason, paths]) => {
       const shown = paths.slice(0, MAX_PATHS_PER_REASON).join(', ')
       const more = paths.length > MAX_PATHS_PER_REASON ? ` (+ ${paths.length - MAX_PATHS_PER_REASON})` : ''
-      return `${msg(REASON_KEY[reason])} ${paths.length} 个: ${shown}${more}`
-    }).join('；')
+      return msg('adapter.linkSkipLine', { reason: msg(REASON_KEY[reason]), count: paths.length, paths: shown, more })
+    }).join(msg('adapter.listSeparator'))
     out.push(msg('adapter.linksSkipped', { type, count: String(listing.skippedLinks.length), detail }))
   }
   if (listing.unreadableDirs.length > 0) {

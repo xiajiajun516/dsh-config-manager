@@ -14,6 +14,8 @@
  */
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
+// t6：注册 adapters 域追加目录（本模块只消费注入的 msg，故只引它的注册副作用）。
+import './messages.ts';
 import type { PromptEntry } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
@@ -159,7 +161,11 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
           items.push({
             id, kind: 'Conflict', adapter: 'prompts',
             description: msg('adapter.promptDiff', { name: p.name }),
-            detail: `行 ${p.sourceLineId} current=${JSON.stringify(sameName.text).slice(0, 80)} imported=${JSON.stringify(p.text).slice(0, 80)}`,
+            detail: msg('adapter.promptDiffDetail', {
+              line: String(p.sourceLineId),
+              current: JSON.stringify(sameName.text).slice(0, 80),
+              imported: JSON.stringify(p.text).slice(0, 80),
+            }),
             severity: 'warning',
             // 层身份随计划项走：快照按这一层记原行、回滚才能写回原文件（issue #71）
             target: { adapter: 'prompts', ref: p.sourceLineId ?? '', file: targetLine.file },

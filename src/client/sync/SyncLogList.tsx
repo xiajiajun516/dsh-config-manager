@@ -83,7 +83,7 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
 
   return (
     <Card>
-      <SectionTitle title={t('history.title') + '（' + String(rows.length) + '）'} />
+      <SectionTitle title={t('history.title') + t('common.parens', { text: String(rows.length) })} />
       {/* 头部统计摘要（先扫结论）；失败/跳过仅在存在时出现，并给语义色 */}
       <div className={css.statRow} aria-label={t('history.stats.summary')}>
         <Badge kind="info">{t('history.stats.total', { count: String(stats.total) })}</Badge>

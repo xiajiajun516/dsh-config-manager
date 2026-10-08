@@ -84,10 +84,9 @@ export function autosyncStatusLabel(status: AutosyncHistoryEntry['status'], t: S
 /**
  * 跳过原因 → 可读描述（host 透传语义；未知原因回退原串）。
  *
- * client-F1（部分修复）：conflict / no-remote / not-configured / network 四类走已存在的
- * history.autosyncReason* 字典键；encrypted / mutation-locked / 未知 三类**仍为字面中文**
- * —— 它们在 sync-locales.ts 里没有对应键，而该文件在外部团队在改清单内（不可写）。
- * 补键后这里一并字典化，见 findings.md 的 client-F1 defer 段。
+ * client-F1（本次收口）：conflict / no-remote / not-configured / network / encrypted /
+ * mutation-locked / 未知 **七类全部**走 history.autosyncReason* 字典键 —— 此前后三类是
+ * 硬编码中文（sync-locales.ts 当时不可写），英文界面下会原样透出。
  */
 export function describeSkipReason(reason: string | undefined, t: SyncTranslate): string {
   switch (reason) {
@@ -95,15 +94,13 @@ export function describeSkipReason(reason: string | undefined, t: SyncTranslate)
     case 'no-remote': return t('history.autosyncReasonNoRemote');
     case 'not-configured': return t('history.autosyncReasonNotConfigured');
     case 'network': return t('history.autosyncReasonNetwork');
-    // F1 残留（需新增 sync-locales 键 history.autosyncReasonEncrypted）
-    case 'encrypted': return '远端快照已加密，自动同步跳过（请手动同步）';
+    case 'encrypted': return t('history.autosyncReasonEncrypted');
     // issue #31：宿主侧的分类锁判定（LOCKED/STALE/UNKNOWN）统一以 'mutation-locked' 落历史，
     // 客户端拿不到细分 reason → 文案必须同时覆盖「活锁占用」与「残留锁需回收」两种可能，
     // 并给出可操作方向（否则界面只显示裸 token，用户无从判断要不要处理）。
-    // F1 残留（需新增 sync-locales 键 history.autosyncReasonMutationLocked）
-    case 'mutation-locked': return '环境锁被占用（另一项任务进行中，或存在需回收的残留锁）';
-    // F1 残留（需新增 sync-locales 键 history.autosyncReasonUnknown）
-    default: return reason ?? '未知';
+    case 'mutation-locked': return t('history.autosyncReasonMutationLocked');
+    // 未知原因：宿主回传的原串优先（不吞信息），缺串时给可读兜底
+    default: return reason ?? t('history.autosyncReasonUnknown');
   }
 }
 

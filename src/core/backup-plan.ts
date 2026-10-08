@@ -41,6 +41,7 @@
  *
  * 零 DSH 运行时依赖：仅 `node:fs/promises` + `node:path` + 本仓库零依赖模块。
  */
+import { engineMsg } from './messages-core.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { listRecursiveFollowingLinks } from '../utils/recursive-walk.ts';
@@ -138,7 +139,7 @@ const SECTION_SPECS: Partial<Record<SectionId, SectionCollectSpec>> = {
     files: ['dsh-ssh.json', 'pet.json'],
     dirs: ['plugin-config'],
     label: 'Plugin Files',
-    risk: '第三方插件自有文件不受控（dsh-ssh.json 内含明文主机密码等），仅在你确认内容后才应纳入备份',
+    get risk() { return engineMsg('core.backupPlan.pluginFilesRisk') },
   },
   // adapters/self.ts（baseDir='dsh-config-manager'，SELF_CONFIG_FILES 白名单）
   self: {
@@ -197,11 +198,11 @@ export interface BackupCollection {
  * 会打印成 `skills/skills/...`（真机规模探针实测），与相邻的「目录读取失败」行口径也不一致。
  */
 function skippedLinkWarning(s: SkippedLink): string {
-  const at = `${s.path}（${s.reason}）`;
+  const at = engineMsg('core.backupPlan.pathWithReason', { path: s.path, reason: s.reason });
   if (s.reason === 'too-deep') {
-    return `层级超过上限未进备份（目录或链接目标超出深度上限） / nesting limit exceeded, content NOT in this backup: ${at}`;
+    return engineMsg('core.backupPlan.tooDeep', { at });
   }
-  return `链接未进备份 / link NOT in this backup: ${at}`;
+  return engineMsg('core.backupPlan.linkSkipped', { at });
 }
 
 /**
@@ -221,17 +222,17 @@ async function listFilesRecursive(
     warnings.push(skippedLinkWarning(s));
   }
   for (const dir of listing.unreadableDirs) {
-    warnings.push(`目录读取失败，其内容未进备份 / directory unreadable, content NOT in this backup: ${dir}`);
+    warnings.push(engineMsg('core.backupPlan.dirUnreadable', { dir }));
   }
   // issue #76：运行时依赖目录整棵跳过（内容未进备份）——必须可见，绝不静默。
   for (const dep of listing.skippedDepDirs) {
     const files = dep.files === null
-      ? '文件数未统计 / count not measured'
-      : `${dep.files} 个文件 / ${dep.files} file(s)`;
-    warnings.push(`运行时依赖目录未进备份（可重建，目标机需重新安装依赖）/ runtime dependency directory NOT in this backup (rebuildable; reinstall on the target): ${dep.path}（${files}）`);
+      ? engineMsg('core.backupPlan.countNotMeasured')
+      : engineMsg('core.backupPlan.fileCount', { count: dep.files });
+    warnings.push(engineMsg('core.backupPlan.depDirSkipped', { path: dep.path, files }));
   }
   if (listing.followedLinks > 0) {
-    warnings.push(`已跟随 ${listing.followedLinks} 个链接目录收集内容 / followed ${listing.followedLinks} linked director(ies)`);
+    warnings.push(engineMsg('core.backupPlan.followedLinks', { count: listing.followedLinks }));
   }
   return listing.paths;
 }
@@ -245,15 +246,15 @@ function toRelativePath(baseDir: string, homeRel: string): string {
 
 /** `--sections` 取值校验：返回选中分区或可读错误（未知 id 一律拒绝并列出合法值） */
 export function parseSectionsArg(raw: string): { ok: true; sections: SectionId[] } | { ok: false; error: string } {
-  const parts = raw.split(/[,，\s]+/).filter((p) => p !== '');
+  const parts = raw.split(/[,\uFF0C\s]+/).filter((p) => p !== '');
   if (parts.length === 0) {
-    return { ok: false, error: '`--sections` 缺值 / missing value for `--sections`' };
+    return { ok: false, error: engineMsg('core.backupPlan.sectionsMissingValue') };
   }
   const unknown = parts.filter((p) => !(OFFLINE_BACKUP_SECTIONS as readonly string[]).includes(p));
   if (unknown.length > 0) {
     return {
       ok: false,
-      error: `未知分区 / unknown section(s): ${unknown.join(', ')}（可用 / available: ${OFFLINE_BACKUP_SECTIONS.join(', ')}）`,
+      error: engineMsg('core.backupPlan.unknownSections', { unknown: unknown.join(', '), available: OFFLINE_BACKUP_SECTIONS.join(', ') }),
     };
   }
   // 去重并保持声明顺序，保证产物可复现
@@ -286,7 +287,7 @@ export async function collectBackupEntries(
     let excluded = 0;
     const push = (zipName: string, data: Uint8Array): void => {
       if (!isPathSafe(zipName)) {
-        warnings.push(`跳过不安全条目名 / unsafe entry name skipped: ${zipName}`);
+        warnings.push(engineMsg('core.backupPlan.unsafeEntryName', { name: zipName }));
         excluded += 1;
         return;
       }
@@ -308,7 +309,7 @@ export async function collectBackupEntries(
       } catch (err) {
         // 不存在 → 静默跳过（按需创建的文件，如 dsh-ssh.json）
         if ((err as { code?: string }).code !== 'ENOENT') {
-          warnings.push(`探测失败 / stat failed: ${norm}（${err instanceof Error ? err.message : String(err)}）`);
+          warnings.push(engineMsg('core.backupPlan.statFailed', { path: norm, reason: err instanceof Error ? err.message : String(err) }));
         }
         return;
       }
@@ -320,7 +321,7 @@ export async function collectBackupEntries(
         const data = await fs.readFile(abs);
         push(`${prefix}${toRelativePath(spec.baseDir, norm)}`, new Uint8Array(data));
       } catch (err) {
-        warnings.push(`读取失败 / read failed: ${norm}（${err instanceof Error ? err.message : String(err)}）`);
+        warnings.push(engineMsg('core.backupPlan.readFailed', { path: norm, reason: err instanceof Error ? err.message : String(err) }));
       }
     };
 
@@ -342,7 +343,7 @@ export async function collectBackupEntries(
       included.push(sectionId);
     } else {
       empty.push(sectionId);
-      warnings.push(`分区无内容，未写入 / section empty, skipped: ${sectionId}`);
+      warnings.push(engineMsg('core.backupPlan.sectionEmpty', { section: sectionId }));
     }
   }
 

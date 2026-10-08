@@ -37,7 +37,7 @@ import type { ConsultReport } from '../../core/migration-consult.ts';
 import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import { CONFIG_MANAGER_API, SYNC_API } from '../common/routes.ts';
 import type { ExportPreviewResponse } from '../api.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import type { UiT } from '../../ui/i18n.ts';
 import { repoCreateBody } from '../../ui/sync-repository-picker.ts';
 
 /** 同步端点常量：**唯一来源** = `common/routes.ts`（W4 单点化），此处重导出保持既有导入面。 */
@@ -569,7 +569,7 @@ const SYNC_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS, timeoutK
 /** 远程同步浏览器半数据入口（备份与迁移页第 4 个 tab 的注入业务面） */
 export class SyncApi {
   readonly t: UiT
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t
   }
 

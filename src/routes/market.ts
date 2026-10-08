@@ -174,7 +174,7 @@ export function marketRoutes(env: RoutesEnv): WebRoute[] {
         const downloadedAt = new Date().toISOString()
         const warnings = manifest !== null
           ? marketItemWarnings(manifest, sourceRepo, downloadedAt, msg)
-          : [`条目 ${itemId} 来自公共网络市场，未经官方审核（供应链警示）`]
+          : [msg('route.marketItemSupplyChainWarning', { id: itemId })]
 
         const base: MarketItemDetail = {
           id: itemId,

@@ -21,6 +21,7 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import type { EncryptionInfo } from '../schema/types.ts';
 import type { EncryptionProvider } from '../core/types.ts';
+import { securityMsg } from './messages.ts';
 
 const scryptAsync = promisify(crypto.scrypt) as (
   password: crypto.BinaryLike,
@@ -82,7 +83,7 @@ export async function encryptCredentials(
   plaintext: string,
   password: string,
 ): Promise<{ blob: Uint8Array; info: EncryptionInfo }> {
-  if (password === '') throw new SecurityError('BAD_PASSWORD', '加密密码不能为空');
+  if (password === '') throw new SecurityError('BAD_PASSWORD', securityMsg('security.encryptionPasswordEmpty'));
   // 产品决策（2026-09-13）：加密**不做任何密码强度校验**——用户提供的任何密码都必须可用。
   // 请勿在此重新加入强度闸门；用户自定的密码策略不由本插件约束。
   const salt = crypto.randomBytes(SALT_LENGTH);
@@ -118,18 +119,18 @@ export async function decryptCredentials(
   password: string,
 ): Promise<string> {
   if (blob.length < HEADER_LENGTH) {
-    throw new SecurityError('TAMPERED', 'secrets.enc 体积过小（截断或损坏）');
+    throw new SecurityError('TAMPERED', securityMsg('security.secretsBlobTooSmall'));
   }
   const magic = Buffer.from(blob.subarray(0, 4)).toString('ascii');
   if (magic !== SCHEMA_MAGIC) {
-    throw new SecurityError('UNSUPPORTED_FORMAT', `未知文件格式 magic "${magic}"，不是本插件产物`);
+    throw new SecurityError('UNSUPPORTED_FORMAT', securityMsg('security.unknownFileMagic', { magic }));
   }
   const version = blob[4]!;
   if (version !== SCHEMA_VERSION) {
-    throw new SecurityError('UNSUPPORTED_FORMAT', `不支持的 secrets.enc 版本 ${version}`);
+    throw new SecurityError('UNSUPPORTED_FORMAT', securityMsg('security.unsupportedSecretsVersion', { version }));
   }
   if (info.algorithm !== 'aes-256-gcm' || info.kdf !== 'scrypt' || !validateKdfParams(info.kdfParams)) {
-    throw new SecurityError('UNSUPPORTED_FORMAT', 'manifest 加密参数非法或不受支持');
+    throw new SecurityError('UNSUPPORTED_FORMAT', securityMsg('security.invalidEncryptionParams'));
   }
 
   const blobSalt = blob.subarray(5, 5 + SALT_LENGTH);
@@ -140,14 +141,14 @@ export async function decryptCredentials(
     info.iv !== Buffer.from(blobIv).toString('base64') ||
     info.authTag !== Buffer.from(blobTag).toString('base64')
   ) {
-    throw new SecurityError('TAMPERED', 'secrets.enc 与 manifest 加密参数不一致（可能被篡改）');
+    throw new SecurityError('TAMPERED', securityMsg('security.encryptionParamsMismatch'));
   }
 
   let key: Buffer;
   try {
     key = await deriveKey(password, blobSalt, info.kdfParams);
   } catch (err) {
-    throw new SecurityError('BAD_PASSWORD', `密钥派生失败: ${err instanceof Error ? err.message : String(err)}`);
+    throw new SecurityError('BAD_PASSWORD', securityMsg('security.keyDerivationFailed', { reason: err instanceof Error ? err.message : String(err) }));
   }
 
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, blobIv);
@@ -159,7 +160,7 @@ export async function decryptCredentials(
     ]);
     return decrypted.toString('utf8');
   } catch {
-    throw new SecurityError('BAD_PASSWORD', '解密认证失败：密码错误或密文被篡改');
+    throw new SecurityError('BAD_PASSWORD', securityMsg('security.decryptAuthFailed'));
   }
 }
 
@@ -194,7 +195,7 @@ export async function encryptArchive(
   plainZip: Uint8Array,
   password: string,
 ): Promise<{ blob: Uint8Array; info: EncryptionInfo; kdf: { salt: Buffer; iv: Buffer } }> {
-  if (password === '') throw new SecurityError('BAD_PASSWORD', '加密密码不能为空');
+  if (password === '') throw new SecurityError('BAD_PASSWORD', securityMsg('security.encryptionPasswordEmpty'));
   // 产品决策（2026-09-13）：加密**不做任何密码强度校验**——用户提供的任何密码都必须可用。
   // 请勿在此重新加入强度闸门；用户自定的密码策略不由本插件约束。
   const salt = crypto.randomBytes(SALT_LENGTH);
@@ -231,15 +232,15 @@ export async function decryptArchive(
   password: string,
 ): Promise<Uint8Array> {
   if (blob.length < HEADER_LENGTH) {
-    throw new SecurityError('TAMPERED', '加密备份容器体积过小（截断或损坏）');
+    throw new SecurityError('TAMPERED', securityMsg('security.archiveBlobTooSmall'));
   }
   const magic = Buffer.from(blob.subarray(0, 4)).toString('ascii');
   if (magic !== ARCHIVE_MAGIC) {
-    throw new SecurityError('UNSUPPORTED_FORMAT', `未知文件格式 magic "${magic}"，不是本插件产物`);
+    throw new SecurityError('UNSUPPORTED_FORMAT', securityMsg('security.unknownFileMagic', { magic }));
   }
   const version = blob[4]!;
   if (version !== ARCHIVE_VERSION) {
-    throw new SecurityError('UNSUPPORTED_FORMAT', `不支持的加密备份版本 ${version}`);
+    throw new SecurityError('UNSUPPORTED_FORMAT', securityMsg('security.unsupportedArchiveVersion', { version }));
   }
   const blobSalt = Buffer.from(blob.subarray(5, 5 + SALT_LENGTH));
   const blobIv = Buffer.from(blob.subarray(5 + SALT_LENGTH, 5 + SALT_LENGTH + IV_LENGTH));
@@ -251,14 +252,14 @@ export async function decryptArchive(
     !blobSalt.equals(paramSalt) ||
     !blobIv.equals(paramIv)
   ) {
-    throw new SecurityError('TAMPERED', '加密备份参数不一致（可能被篡改）');
+    throw new SecurityError('TAMPERED', securityMsg('security.archiveParamsMismatch'));
   }
 
   let key: Buffer;
   try {
     key = await deriveKey(password, blobSalt, info.kdfParams);
   } catch (err) {
-    throw new SecurityError('BAD_PASSWORD', `密钥派生失败: ${err instanceof Error ? err.message : String(err)}`);
+    throw new SecurityError('BAD_PASSWORD', securityMsg('security.keyDerivationFailed', { reason: err instanceof Error ? err.message : String(err) }));
   }
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, blobIv);
   decipher.setAuthTag(blobTag);
@@ -268,7 +269,7 @@ export async function decryptArchive(
       decipher.final(),
     ]);
   } catch {
-    throw new SecurityError('BAD_PASSWORD', '解密认证失败：密码错误或密文被篡改');
+    throw new SecurityError('BAD_PASSWORD', securityMsg('security.decryptAuthFailed'));
   }
 }
 

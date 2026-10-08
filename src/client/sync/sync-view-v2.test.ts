@@ -12,6 +12,7 @@ import {
   isBulkDecidable, isReviewItem, isToolchainChangeItem,
   keepLocalAll, needsGitToken, reviewItems, summarizeConfirmItems, useRemoteAll,
 } from './sync-view.ts'
+import { zhUiT } from '../../ui/i18n.ts'
 
 /* ---------------------------------------------------------------- 一键同步差异确认 */
 
@@ -164,7 +165,7 @@ test('sync-view: buildAdoptions 收集用户决策；未列出项视为 adopt=fa
     ['c', true],
   ])
   const resolutions = new Map<string, 'useRemote' | 'keepLocal'>([['c', 'useRemote']])
-  const out = buildAdoptions(items, adopted, resolutions)
+  const out = buildAdoptions(items, adopted, resolutions, zhUiT)
   // 只有 adopt=true 的项进列表（a、c）；b 未采纳剔除
   const ids = out.map((o) => o.itemId)
   assert.deepEqual(ids, ['a', 'c'])
@@ -177,7 +178,7 @@ test('sync-view: buildAdoptions Conflict 项未给 resolution → 抛错（强�
   ]
   const adopted = new Map<string, boolean>([['c', true]])
   const resolutions = new Map<string, 'useRemote' | 'keepLocal'>()
-  assert.throws(() => buildAdoptions(items, adopted, resolutions), /解决/)
+  assert.throws(() => buildAdoptions(items, adopted, resolutions, zhUiT), /解决/)
 })
 
 test('sync-view: applyItemsReportView 成功 → ok 头部含 applied 计数与 restoreId', () => {
@@ -185,7 +186,7 @@ test('sync-view: applyItemsReportView 成功 → ok 头部含 applied 计数与 
     ok: true, applied: ['settings', 'plugins'], skipped: [], needsRestart: false,
     warnings: [], restoreId: 'rest-1', rolledBack: false, failed: [], result: {},
   }
-  const view = applyItemsReportView(report)
+  const view = applyItemsReportView(report, zhUiT)
   assert.notEqual(view, null)
   assert.equal(view?.kind, 'ok')
   assert.match(view?.headline ?? '', /2/)
@@ -198,13 +199,13 @@ test('sync-view: applyItemsReportView 失败且整体回滚 → rolledBack 渲�
     warnings: [], restoreId: 'rest-2', rolledBack: true,
     failed: [{ itemId: 'x', message: '导入失败' }], result: {},
   }
-  const view = applyItemsReportView(report)
+  const view = applyItemsReportView(report, zhUiT)
   assert.equal(view?.kind, 'rolledBack')
   assert.equal(view?.restoreId, 'rest-2')
 })
 
 test('sync-view: applyItemsReportView null → null', () => {
-  assert.equal(applyItemsReportView(null), null)
+  assert.equal(applyItemsReportView(null, zhUiT), null)
 })
 
 /* ---------- issue #56：ok=true 但有未生效项（warning）必须呈现为「部分成功」 ---------- */
@@ -218,7 +219,7 @@ test('issue#56：有未生效项时 kind=partial（不得显示为成功）', ()
     ineffective: [{ itemId: 'plugins:some-plugin', adapter: 'plugins', message: '插件 some-plugin 安装失败：release-age-violation' }],
     result: {},
   }
-  const view = applyItemsReportView(report)
+  const view = applyItemsReportView(report, zhUiT)
   assert.equal(view?.kind, 'partial', 'ok=true 但有未生效项 ⇒ partial，绝不是 ok')
   assert.match(view?.headline ?? '', /1/, '头部要给出未生效条数')
   assert.deepEqual(view?.ineffective.map((i) => i.itemId), ['plugins:some-plugin'])
@@ -232,9 +233,9 @@ test('issue#56：未生效项不影响「全部成功」判定（空/缺字段 �
     warnings: [], restoreId: 'r', rolledBack: false, failed: [], result: {},
   } as ApplyItemsResponse
   // 空数组（新宿主明确回报「没有未生效项」）
-  assert.equal(applyItemsReportView({ ...base, ineffective: [] })?.kind, 'ok')
+  assert.equal(applyItemsReportView({ ...base, ineffective: [] }, zhUiT)?.kind, 'ok')
   // 缺字段（旧宿主）→ 按无未生效项处理，绝不误报部分成功
-  assert.equal(applyItemsReportView(base)?.kind, 'ok')
+  assert.equal(applyItemsReportView(base, zhUiT)?.kind, 'ok')
 })
 
 /* ---------------------------------------------------------------- 自动同步 */
@@ -277,18 +278,18 @@ test('sync-view: autosyncStatusText 覆盖未运行 / 各状态', () => {
   const status: AutosyncStatusResponse = {
     enabled: true, interval: '30m', consecutiveFailures: 0, elapsedMs: -1,
   }
-  assert.match(autosyncStatusText(status), /从未运行/)
+  assert.match(autosyncStatusText(status, zhUiT), /从未运行/)
   const ran: AutosyncStatusResponse = {
     enabled: true, interval: '30m', consecutiveFailures: 0, elapsedMs: 0,
     lastRunAt: '2026-08-17T10:00:00.000Z', lastRunStatus: 'success',
   }
-  assert.match(autosyncStatusText(ran), /成功/)
+  assert.match(autosyncStatusText(ran, zhUiT), /成功/)
   const failed: AutosyncStatusResponse = {
     enabled: true, interval: '30m', consecutiveFailures: 3, elapsedMs: 0,
     lastRunAt: '2026-08-17T10:00:00.000Z', lastRunStatus: 'failed', lastRunMessage: '认证失败',
   }
-  assert.match(autosyncStatusText(failed), /失败/)
-  assert.match(autosyncStatusText(failed), /连续失败 3 次/)
+  assert.match(autosyncStatusText(failed, zhUiT), /失败/)
+  assert.match(autosyncStatusText(failed, zhUiT), /连续失败 3 次/)
 })
 
 /* ---------------------- 诚实性：整体回滚「未完成」必须单独成态 ---------------------- */
@@ -300,7 +301,7 @@ test('回滚未完成（rollbackFull=false）：kind=rollbackIncomplete，绝不
     restoreId: 'rest-x', rolledBack: true, rollbackFull: false,
     failed: [{ itemId: 'x', message: '导入失败' }], result: {},
   }
-  const view = applyItemsReportView(report)
+  const view = applyItemsReportView(report, zhUiT)
   assert.equal(view?.kind, 'rollbackIncomplete', '半回滚必须与 rolledBack（整体已回滚）分开')
   assert.equal(view?.rollbackFull, false)
   assert.doesNotMatch(view?.headline ?? '', /已整体回滚/, '不得复用断言「已整体回滚」的失败文案')
@@ -314,7 +315,7 @@ test('回滚未完成：headline 走 sync 字典专用键（可注入本地化�
     ok: false, applied: [], skipped: [], needsRestart: false, warnings: [],
     restoreId: 'r', rolledBack: true, rollbackFull: false, failed: [], result: {},
   }
-  const view = applyItemsReportView(report, undefined, (key) => 'SYNC:' + key)
+  const view = applyItemsReportView(report, zhUiT, (key) => 'SYNC:' + key)
   assert.equal(view?.headline, 'SYNC:syncflow.importRollbackIncomplete')
 })
 
@@ -323,7 +324,7 @@ test('旧宿主不返回 rollbackFull：rolledBack=true 仍按「已整体回滚
     ok: false, applied: [], skipped: [], needsRestart: false, warnings: [],
     restoreId: 'r', rolledBack: true, failed: [{ itemId: 'x' }], result: {},
   }
-  assert.equal(applyItemsReportView(report)?.kind, 'rolledBack')
+  assert.equal(applyItemsReportView(report, zhUiT)?.kind, 'rolledBack')
 })
 
 /* ---------------------- G-34：gist 通道不适合大分区 ---------------------- */

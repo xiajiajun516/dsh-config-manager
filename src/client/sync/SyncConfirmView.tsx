@@ -157,7 +157,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
         const res = states[it.itemId]?.resolution;
         if (res !== undefined) resolutions.set(it.itemId, res);
       }
-      const adoptions = buildAdoptions(items, adoptedMap, resolutions);
+      const adoptions = buildAdoptions(items, adoptedMap, resolutions, api.t);
       // T1：一键同步的确认页尚无「中止 / 跳过 / 引导」三选一控件（服务端已支持三态校验），
       // 因此显式传 `guide`：不改变既有写入行为，也避免缺省 abort 把用户挡在门外。
       const result = await api.applyItems({ syncSessionId, adoptions, sessionFormatDisposition: 'guide' });
@@ -362,7 +362,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
                     {(rollbackResult.failed ?? []).map((f, i) => (
                       <li key={i}>
                         {redact(f.item)} —— {redact(f.reason)}
-                        {f.manualHint !== undefined && f.manualHint !== '' ? '（' + redact(f.manualHint) + '）' : ''}
+                        {f.manualHint !== undefined && f.manualHint !== '' ? t('common.parens', { text: redact(f.manualHint) }) : ''}
                       </li>
                     ))}
                   </ul>

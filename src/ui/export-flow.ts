@@ -19,7 +19,7 @@ import {
 } from './types.ts';
 import { EXPORT_STAGES, ProgressTracker } from './progress.ts';
 import { renderExportReport } from './report.ts';
-import { zhUiT, type UiT } from './i18n.ts';
+import { liveUiT, type UiT, type UiTextKey } from './i18n.ts';
 
 /** UI → core 的导出端口（宿主注入 Exporter.export；测试注入 mock） */
 export interface ExportPort {
@@ -83,26 +83,28 @@ export interface ExportRunResult {
 }
 
 /**
- * 目录条目描述（**报告文本 / 日志**用，非 UI 显示名）—— 只存在于本文件，无第二份副本。
+ * 目录条目描述的**字典键**（报告文本 / 日志 / 勾选目录用，非分区显示名）——
+ * 文案本身在 `ui/i18n.ts`（zh 源 / en 镜像），这里只留键：静态目录混着中文字面量时，
+ * 英文界面会把中文原样透出（且这些字符串原先只存在于本文件，无第二份副本）。
  *
  * 键类型 `Exclude<SectionId, 'secrets'>`：secrets 无 ZIP 载荷、不进导出目录，
  * 因此除它以外的分区**全部**必须有描述 —— 漏一个即编译失败（与注册表同一穷举纪律）。
  */
-const CATEGORY_DESCRIPTIONS: Record<Exclude<SectionId, 'secrets'>, string> = {
-  settings: 'DSH 全局设置（namespace 分区，redacted）',
-  providers: 'LLM Provider / Model / 默认模型 / BaseURL',
-  plugins: '已安装插件清单与启用状态（不含二进制）',
-  pluginFiles: '插件自有配置文件（白名单 + plugin-config/ 目录，整文件复制）',
-  self: '本插件自身配置（同步/自动同步/分区选择/UI 偏好/市场；sync-*.json 等，不含凭据值）',
-  mcp: 'MCP 服务器组合配置（需重启生效）',
-  prompts: 'System Prompt / Plan Mode 提示',
-  skills: '用户技能文件（~/.dsh/skills）',
-  agentPresets: 'Agent 预设（~/.dsh/.agent-presets）',
-  agentInstructions: '全局指令文件（~/.dsh/AGENTS.md，注入每个会话）',
-  workspaces: '工作区记录（含绝对路径，需路径映射）',
-  ui: 'UI 类 settings namespace（localStorage 项仅说明）',
-  credentialsStatus: '凭据状态（configured 标记，永不导出值）',
-  sessions: '历史会话（默认关闭，含敏感内容）',
+const CATEGORY_DESCRIPTION_KEY: Record<Exclude<SectionId, 'secrets'>, UiTextKey> = {
+  settings: 'export.category.settings',
+  providers: 'export.category.providers',
+  plugins: 'export.category.plugins',
+  pluginFiles: 'export.category.pluginFiles',
+  self: 'export.category.self',
+  mcp: 'export.category.mcp',
+  prompts: 'export.category.prompts',
+  skills: 'export.category.skills',
+  agentPresets: 'export.category.agentPresets',
+  agentInstructions: 'export.category.agentInstructions',
+  workspaces: 'export.category.workspaces',
+  ui: 'export.category.ui',
+  credentialsStatus: 'export.category.credentialsStatus',
+  sessions: 'export.category.sessions',
 };
 
 /** 需在 UI 标注安全提示、但绝不显示值的分区（凭据状态只有 configured 标记） */
@@ -132,7 +134,7 @@ function buildDefaultCategories(): readonly ExportCategory[] {
       categories.push({
         id,
         label: meta.displayName,
-        description: CATEGORY_DESCRIPTIONS[id as Exclude<SectionId, 'secrets'>],
+        descriptionKey: CATEGORY_DESCRIPTION_KEY[id as Exclude<SectionId, 'secrets'>],
         defaultIncluded: meta.defaultIncluded,
         portability: meta.portability,
         group: meta.group,
@@ -156,7 +158,8 @@ export class ExportFlow {
     this.port = opts.port;
     this.categories = opts.categories ?? DEFAULT_CATEGORIES;
     this.onProgress = opts.onProgress;
-    this.t = opts.t ?? zhUiT;
+    // 缺省用**活**翻译器（随 DSH 语言变化）：构造期快照会在切到英文后恒为中文。
+    this.t = opts.t ?? liveUiT;
   }
 
   /** Quick Export 推荐分区（defaultIncluded 且非 deviceSpecific） */
@@ -169,7 +172,8 @@ export class ExportFlow {
     return EXPORT_GROUPS.map((g) => ({
       group: g.id,
       label: g.label,
-      note: g.note,
+      // 说明文案按当前语言取词（键住在 EXPORT_GROUPS；此处才解析）
+      ...(g.noteKey !== undefined ? { note: this.t(g.noteKey) } : {}),
       categories: this.categories.filter((c) => c.group === g.id),
     }));
   }

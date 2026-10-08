@@ -258,7 +258,10 @@ function incidentStateLabel(t: TranslateNS<'config-manager-recovery'>, state: st
 const EMPTY_COPY_T: TranslateNS<'config-manager'> = ((key: string) => key) as TranslateNS<'config-manager'>
 
 function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPanelProps, 'recoveryApi' | 't' | 'copyT' | 'diskApi'>) {
-  /** 剪贴板反馈的翻译器（config-manager 命名空间；缺省退到 zhUiT 兜底）。 */
+  /**
+   * 剪贴板反馈的翻译器（config-manager 命名空间）。缺省 = `EMPTY_COPY_T`（**返回键名本身**，
+   * 与字典缺键的回退语义一致）—— 不传 copyT 时渲染的是键名，缺省路径不会出现中文。
+   */
   const clipboardT = copyT ?? EMPTY_COPY_T
   /** 体检结果住**卡片**里：弹窗每次打开重新扫一遍（scanVersion 变化即重扫），关掉不留一屏陈旧数据。 */
   const [response, setResponse] = useState<SessionHealthResponse | null>(null)

@@ -19,6 +19,7 @@
  */
 import type { FilesSection, SectionId } from '../schema/types.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { engineMsg } from './messages.ts';
 
 /**
  * 走内容寻址外置的分区。
@@ -95,7 +96,7 @@ export async function refsToSection(refs: BlobRefsSection, sink: BlobSink): Prom
   for (const ref of refs.blobRefs) {
     const data = await sink.get(ref.blobHash);
     if (data === null) {
-      throw new Error(`内容的 blob 缺失（${ref.blobHash}，${ref.relativePath}）：远端仓不完整，拒绝降级为空分区`);
+      throw new Error(engineMsg('sync.blobMissing', { hash: ref.blobHash, path: ref.relativePath }));
     }
     files.push({ relativePath: ref.relativePath, data, contentHash: ref.blobHash });
   }

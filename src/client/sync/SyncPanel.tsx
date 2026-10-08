@@ -445,7 +445,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   // 未接线的值一律按「无记录」处理并回落 localStorage 记忆 —— 不把未接线通道混进 UI 状态机。
   const remembered: SyncChannel | null = isClientChannel(info.lastSyncChannel) ? info.lastSyncChannel : readStoredChannel()
       // 可同步分区目录回填（host adapters 唯一事实源；仅 portable；两通道共用）
-      const catalog = info.syncSections !== undefined ? syncSectionOptions(info.syncSections) : []
+      const catalog = info.syncSections !== undefined ? syncSectionOptions(info.syncSections, uiT) : []
       // 每通道回填：优先该通道的持久化配置（syncSelectionByChannel / autosyncByChannel）；
       // 无持久化 → 默认模式 + 推荐分区
       const selByCh = info.syncSelectionByChannel
@@ -506,7 +506,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       })
     } catch (err) {
       // R-20：读取自动同步状态失败（此前写入页面最底部的共享 error Banner，常滚出视野）
-      toast.error(`${t('toast.autosyncLoadFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.autosyncLoadFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -548,7 +548,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     } catch (err) {
       // M-18/M-21：拉取远端快照失败原先完全静默（下拉留空），用户无法区分
       // 「远端确实没有快照」与「读取失败」。不阻断主流程，仅以 Toast 如实告知。
-      toast.error(`${t('toast.snapshotsLoadFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.snapshotsLoadFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     } finally {
       loadingSnapshotsRef.current[ch] = false
       patchChannelState(ch, { loadingSnapshots: false })
@@ -665,7 +665,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       }
     } catch (err) {
       // R-20：保存失败**始终**提示（无论手动还是自动）——用户的改动没有落盘
-      toast.error(`${t('toast.configSaveFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.configSaveFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
       patch({ savingConfig: false })
     } finally {
       // 保存期间又排入的新改动 → 立即补发（保底，不丢输入）
@@ -872,7 +872,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     } catch (err) {
       // R-20：预览失败（此前写共享 error Banner，渲染在页面最底部而按钮在中部）
       patch({ busy: null })
-      toast.error(`${t('toast.pushPreviewFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.pushPreviewFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -902,7 +902,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       }
     } catch (err) {
       patch({ busy: null })
-      toast.error(`${t('toast.pushFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.pushFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -922,7 +922,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       else toast.error(t('toast.pullFailed'))
     } catch (err) {
       patch({ busy: null })
-      toast.error(`${t('toast.pullFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.pullFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -949,7 +949,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       })
     } catch (err) {
       // R-20/M-22：同步设置持久化失败（此前写共享 error Banner，与刚点的按钮相距整屏）
-      toast.error(t('toast.selectionSaveFailed') + '：' + redact(err instanceof Error ? err.message : String(err)))
+      toast.error(t('toast.selectionSaveFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -1038,7 +1038,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       if (!session.ok) {
         // R-20：一键同步启动失败（宿主明确回报 message，无异常抛出）
         patch({ busy: null })
-        toast.error(`${t('toast.syncStartFailed')}：${redact(session.message ?? t('syncflow.syncFailed'))}`)
+        toast.error(t('toast.syncStartFailed') + t('common.labelSeparator') + redact(session.message ?? t('syncflow.syncFailed')))
         return
       }
       patch({ busy: null, confirmSession: session, confirmDecisions: null, token: '', webdavPassword: '' })
@@ -1046,7 +1046,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       void loadSnapshots()
     } catch (err) {
       patch({ busy: null })
-      toast.error(`${t('toast.syncStartFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.syncStartFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -1083,7 +1083,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       toast.ok(t('toast.autosyncUpdated'))
     } catch (err) {
       // R-20/M-20：失败必须提示 —— 界面是乐观更新，用户会以为开关已生效
-      toast.error(`${t('toast.autosyncUpdateFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.autosyncUpdateFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -1094,7 +1094,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       patchChannelOf(channel, { autosync: updated, autosyncEnabled: updated.enabled, autosyncInterval: updated.interval })
       toast.ok(t('toast.autosyncUpdated'))
     } catch (err) {
-      toast.error(`${t('toast.autosyncUpdateFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+      toast.error(t('toast.autosyncUpdateFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -1300,7 +1300,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               的前提条件，必须常驻到用户重试成功，不能交给会自动消失的 Toast。 */}
           {state.loadError !== null && (
             <ErrorBanner
-              error={`${t('load.failed')}：${redact(state.loadError)}`}
+              error={t('load.failed') + t('common.labelSeparator') + redact(state.loadError)}
               onRetry={() => { void loadStatus() }}
               retrying={state.loading}
               t={api.t}
@@ -1353,6 +1353,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             open={sectionPickerOpen}
             t={t}
             cmT={cmT}
+            uiT={uiT}
             sectionName={sectionName}
             catalog={state.catalog}
             sections={chState.syncSections}

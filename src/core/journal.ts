@@ -21,6 +21,7 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { maskHighEntropy, redact } from '../security/redaction.ts';
+import { engineMsg } from './messages-core.ts';
 
 /**
  * journal 专用文本脱敏（Security P1-1 / §29 已并入）：
@@ -194,7 +195,7 @@ export function createJournalEntry(
 /** 把 journal 从旧状态迁移到新状态（校验合法 transition；非法抛错）。纯函数。 */
 export function transitionJournalState(j: OperationJournal, to: JournalState): OperationJournal {
   if (!isValidTransition(j.state, to)) {
-    throw new Error(`非法 journal state transition: ${j.state} → ${to} (op ${j.operationId})`);
+    throw new Error(engineMsg('core.journal.illegalTransition', { from: j.state, to, opId: j.operationId }));
   }
   return { ...j, state: to, updatedAt: new Date().toISOString() };
 }
@@ -352,7 +353,7 @@ export class JournalStore {
 
   /** 写 journal（atomic + 0600 + symlink reject）。返回写入后的 journal。 */
   async persist(operationId: string, j: OperationJournal): Promise<OperationJournal> {
-    if (!isValidOperationId(operationId)) throw new Error(`非法 operationId: ${JSON.stringify(operationId)}`);
+    if (!isValidOperationId(operationId)) throw new Error(engineMsg('core.journal.illegalOperationId', { opId: JSON.stringify(operationId) }));
     await this.ensureDirs();
     const updated = { ...j, updatedAt: new Date().toISOString() };
     await this.io.writeAll(this.activePath(operationId), `${JSON.stringify(updated, null, 2)}\n`);
@@ -391,7 +392,7 @@ export class JournalStore {
   /** 更新 journal（按 updater 修改后原子持久化）。不负责 transition 校验（调用方经 transitionJournalState）。 */
   async update(operationId: string, updater: (j: OperationJournal) => OperationJournal): Promise<OperationJournal> {
     const cur = await this.loadActive(operationId);
-    if (cur === null) throw new Error(`journal 不存在或损坏: ${operationId}`);
+    if (cur === null) throw new Error(engineMsg('core.journal.notFoundOrCorrupt', { opId: operationId }));
     return this.persist(operationId, updater(cur));
   }
 
@@ -428,7 +429,7 @@ export class JournalStore {
 
   /** move active → completed（terminal journal 规整；复用 rename，失败抛错由调用方策略处理）。 */
   async moveToCompleted(operationId: string): Promise<void> {
-    if (!isValidOperationId(operationId)) throw new Error(`非法 operationId`);;
+    if (!isValidOperationId(operationId)) throw new Error(engineMsg('core.journal.illegalOperationIdBare'));;
     await this.ensureDirs();
     const src = this.activePath(operationId);
     if (!(await this.io.exists(src))) return; // 已不在 active（幂等）
@@ -436,7 +437,7 @@ export class JournalStore {
     const j = await this.loadActive(operationId);
     if (j === null) return;
     if (!isTerminalState(j.state)) {
-      throw new Error(`moveToCompleted 仅接受 terminal journal: ${operationId} state=${j.state}`);
+      throw new Error(engineMsg('core.journal.notTerminal', { opId: operationId, state: j.state }));
     }
     const dst = this.completedPath(operationId);
     if (await this.io.exists(dst)) {

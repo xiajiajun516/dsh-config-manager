@@ -50,6 +50,7 @@ import { hashSection, loadSyncState, saveSyncState } from './sync-state.ts';
 import type { EncryptedCredentials, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
 import { isEncryptedSections } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
+import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor } from './ancestor.ts';
 import type { MergePlan } from './merge.ts';
@@ -268,21 +269,21 @@ async function rollbackForFailure(
 ): Promise<{ full: boolean; warnings: string[] }> {
   try {
     const report = await rollback({ ctx, snapshot, store, adapters })
-    return { full: report.full, warnings: rollbackFailureWarnings(report) }
+    return { full: report.full, warnings: rollbackFailureWarnings(report, msgOf(ctx)) }
   } catch (err) {
     // 回滚自身抛错 = 无法证明任何一项已还原：如实报「不完整」并留痕，绝不 noop
     return {
       full: false,
-      warnings: ['回滚失败（未能证明已恢复）：' + (err instanceof Error ? err.message : String(err))],
+      warnings: [engineMsg('sync.rollbackProofFailed', { err: err instanceof Error ? err.message : String(err) })],
     }
   }
 }
 
 /** RollbackReport.failed → 可读告警行（带 manualHint：人工怎么补）。 */
-function rollbackFailureWarnings(report: RollbackReport): string[] {
+function rollbackFailureWarnings(report: RollbackReport, msg: MsgFunc = engineMsg): string[] {
   return report.failed.map((f) => {
-    const hint = f.manualHint !== undefined && f.manualHint !== '' ? '（' + f.manualHint + '）' : ''
-    return '回滚未完成：' + f.item + ' —— ' + f.reason + hint
+    const hint = f.manualHint !== undefined && f.manualHint !== '' ? msg('sync.rollbackManualHintParen', { hint: f.manualHint }) : ''
+    return msg('sync.rollbackIncomplete', { item: f.item, reason: f.reason, hint })
   })
 }
 
@@ -1268,7 +1269,7 @@ export class SyncEngine {
     sourceHome?: string;
   } = {}): Promise<ApplyReport> {
     if (!this.importer) {
-      throw new Error('applyMergePlan: SyncEngine 缺少 importer（需在 options 中注入）');
+      throw new Error(this.msg('sync.applyMergePlanNoImporter'));
     }
     const appliedIds = apply.autoApply.map((r) => r.id);
     // 0) 空 autoApply：无物可应用，直接短路（不构造 ZIP、不调 Importer）
@@ -1325,7 +1326,7 @@ export class SyncEngine {
           restoreId: '',
           rolledBack: false,
           review: [],
-          warnings: [`应用前快照失败：${backupErr instanceof Error ? backupErr.message : String(backupErr)}`],
+          warnings: [this.msg('sync.preApplySnapshotFailed', { err: backupErr instanceof Error ? backupErr.message : String(backupErr) })],
         };
       }
       // 3) 真正执行：Importer.executeImportPlan（rollbackOnError=true → 任一失败整体回滚）
@@ -1409,7 +1410,7 @@ export class SyncEngine {
     } = {},
   ): Promise<ApplyItemsReport> {
     if (!this.importer) {
-      throw new Error('applyItems: SyncEngine 缺少 importer（需在 options 中注入）');
+      throw new Error(this.msg('sync.applyItemsNoImporter'));
     }
     if (subPlan.items.length === 0) {
       return { ok: true, applied: [], restoreId: '', rolledBack: false, warnings: [], failed: [], ineffective: [], result: null };
@@ -1432,7 +1433,7 @@ export class SyncEngine {
         applied: [],
         restoreId: '',
         rolledBack: false,
-        warnings: [`应用前快照失败：${backupErr instanceof Error ? backupErr.message : String(backupErr)}`],
+        warnings: [this.msg('sync.preApplySnapshotFailed', { err: backupErr instanceof Error ? backupErr.message : String(backupErr) })],
         failed: subPlan.items.map((i) => ({ itemId: i.id })),
         // 快照都没建成 ⇒ 一项都没执行，全部项都未生效（与 failed 同源，界面按硬失败处理）
         ineffective: [],
@@ -1511,7 +1512,7 @@ export class SyncEngine {
   private async snapshotToZip(snapshot: SyncSnapshot, portableIds: Set<SectionId>): Promise<string> {
     // 防御：加密快照必须已由调用方解密（prepareSnapshot）；此处不处理密文载荷
     if (isEncryptedSections(snapshot.sections)) {
-      throw new Error('快照仍为加密载荷，无法转 ZIP（需先解密）');
+      throw new Error(this.msg('sync.snapshotStillEncrypted'));
     }
     const entries: ZipWriteEntry[] = [];
     const sectionFlags = {} as Record<SectionId, boolean>;

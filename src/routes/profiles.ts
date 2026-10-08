@@ -6,6 +6,8 @@
  */
 
 import { endpoint, requireJsonObject, writeJson, queryParam } from './kit.ts'
+// t6：「英文界面零中文」——迁移历史 summary 一律由目录键产生（engineMsg 与宿主 msg 同源，且是活翻译器）。
+import { engineMsg } from './messages.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { writeProfileError } from '../index.ts'
@@ -105,7 +107,7 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
           result: 'success',
           sections: [name],
           source: 'api',
-          summary: `启动档案 ${name}（独立实例 :${String(launch.port)}）`,
+          summary: engineMsg('route.profileLaunchSummary', { name, port: String(launch.port) }),
         })
         const running = runningView()
         writeJson(res, 200, historyError === undefined ? { ok: true, launch, running } : { ok: true, launch, running, historyWriteError: historyError })
@@ -136,7 +138,7 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
           result: 'success',
           sections: [meta.name],
           source: 'api',
-          summary: `新建档案 ${meta.name}（模板 ${template}）`,
+          summary: engineMsg('route.profileCreateSummary', { name: meta.name, template }),
         })
         writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
       } catch (error) {
@@ -175,7 +177,7 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
           result: 'success',
           sections: [meta.name],
           source: 'api',
-          summary: `复制档案 ${name} → ${meta.name}${meta.hasNodeModules ? '' : '（未含 node_modules）'}`,
+          summary: engineMsg('route.profileCopySummary', { from: name, to: meta.name, suffix: meta.hasNodeModules ? '' : engineMsg('route.profileCopyNoNodeModules') }),
         })
         writeJson(res, 200, historyError === undefined
           ? { ok: true, profile: meta, copy }
@@ -195,7 +197,7 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
           result: 'success',
           sections: [name],
           source: 'api',
-          summary: `重命名档案 ${name} → ${newName}`,
+          summary: engineMsg('route.profileRenameSummary', { from: name, to: newName }),
         })
         writeJson(res, 200, historyError === undefined ? { ok: true, profile: meta } : { ok: true, profile: meta, historyWriteError: historyError })
       } catch (error) {
@@ -216,7 +218,7 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
           result: 'success',
           sections: [name],
           source: 'api',
-          summary: `删除档案 ${name}（物理删除目录）`,
+          summary: engineMsg('route.profileDeleteSummary', { name }),
         })
         writeJson(res, 200, historyError === undefined ? { ok: true } : { ok: true, historyWriteError: historyError })
       } catch (error) {
@@ -242,7 +244,11 @@ export function profileRoutes(env: RoutesEnv): WebRoute[] {
           result: 'success',
           sections: [name],
           source: 'api',
-          summary: `停止档案 ${name}（${owned ? '本插件启动的独立实例' : '其他实例'}${stopped.port !== undefined ? ` :${String(stopped.port)}` : ''}）`,
+          summary: engineMsg('route.profileStopSummary', {
+            name,
+            kind: owned ? engineMsg('route.profileStopOwned') : engineMsg('route.profileStopExternal'),
+            port: stopped.port !== undefined ? ` :${String(stopped.port)}` : '',
+          }),
         })
         const running = runningView()
         writeJson(res, 200, historyError === undefined ? { ok: true, stopped, running } : { ok: true, stopped, running, historyWriteError: historyError })

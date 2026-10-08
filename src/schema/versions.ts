@@ -10,6 +10,7 @@
  *     唯一来源是 `section-registry.ts` 各分区条目的 `dataVersion`，
  *     历史上有 11 处 `data.version !== 1` 字面量，现已收敛到此处两个函数。
  */
+import { schemaMsg } from './messages.ts';
 import { SECTION_REGISTRY } from './section-registry.ts';
 import type { SectionId } from './types.ts';
 
@@ -56,10 +57,10 @@ export function canImport(v: number): boolean {
 
 /** 版本的可读描述（报告/日志用） */
 export function describeVersion(v: number): string {
-  if (isTooNew(v)) return `schema v${v}（高于当前 ${CURRENT_SCHEMA_VERSION}，需升级插件）`;
-  if (needsMigration(v)) return `schema v${v}（旧版，将迁移到 v${CURRENT_SCHEMA_VERSION}）`;
-  if (isCurrent(v)) return `schema v${v}（当前版本）`;
-  return `schema v${v}（低于最低支持 ${MIN_SUPPORTED_SCHEMA_VERSION}，不受支持）`;
+  if (isTooNew(v)) return schemaMsg('schema.versionTooNew', { version: v, current: CURRENT_SCHEMA_VERSION });
+  if (needsMigration(v)) return schemaMsg('schema.versionNeedsMigration', { version: v, current: CURRENT_SCHEMA_VERSION });
+  if (isCurrent(v)) return schemaMsg('schema.versionCurrent', { version: v });
+  return schemaMsg('schema.versionBelowMinimum', { version: v, minimum: MIN_SUPPORTED_SCHEMA_VERSION });
 }
 
 /* ---------------------------------------------------------------- 分区载荷版本（第二条版本轴） */
@@ -81,5 +82,5 @@ export function isSupportedSectionDataVersion(sectionId: SectionId, version: unk
 /** 分区载荷版本问题描述（合法 → null）。文案与历史 `validateSectionData` 逐字一致。 */
 export function sectionDataVersionIssue(sectionId: SectionId, version: unknown): string | null {
   if (isSupportedSectionDataVersion(sectionId, version)) return null;
-  return `分区 ${sectionId} 的 version 必须为 ${SECTION_REGISTRY[sectionId].dataVersion}（收到 ${String(version)}）`;
+  return schemaMsg('schema.sectionDataVersionMismatch', { section: sectionId, expected: SECTION_REGISTRY[sectionId].dataVersion, actual: String(version) });
 }

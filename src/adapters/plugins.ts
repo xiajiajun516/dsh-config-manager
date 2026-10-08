@@ -18,6 +18,7 @@ import { classifyPluginSpec, LOCAL_PLUGIN_DIR, resolveLocalPluginPath } from '..
 import type { PackLocalPluginsResult } from '../core/local-plugin-pack.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
+import { engineMsg } from './messages.ts';
 import { stringifyJsonSafe } from '../utils/json.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { isENOENT } from '../utils/guards.ts';
@@ -77,7 +78,7 @@ function tarballOf(data: PluginsSection, pkgName: string): LocalPluginTarball | 
 export function localTarballCacheName(relativePath: string): string {
   const base = relativePath.split('/').pop() ?? '';
   if (base === '' || base.includes('\\') || base === '.' || base === '..') {
-    throw new Error(`非法 tarball 相对路径: ${relativePath}`);
+    throw new Error(engineMsg('adapter.tarballRelPathInvalid', { path: relativePath }));
   }
   return base;
 }
@@ -697,7 +698,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
             names: clean.dropped.map((d) => d.name).join(', '),
           }));
         }
-        return { ok: true, needsRestart: true, message: notes.join('；') };
+        return { ok: true, needsRestart: true, message: notes.join(msg('adapter.listSeparator')) };
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         return {
@@ -730,7 +731,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
             spec = `file:${abs}`;
           } catch (err) {
             // 解包失败不阻断安装尝试：退回原 spec（可能失败，但会如实报错而非静默丢失）
-            ctx.onLog?.(`本地插件 ${name} 的 tarball 解包失败，回退原始 spec：${err instanceof Error ? err.message : String(err)}`);
+            ctx.onLog?.(msg('adapter.localTarballUnpackFailed', { name, err: err instanceof Error ? err.message : String(err) }));
           }
         }
         // 执行日志：记录实际将发起的子进程命令行（与宿主 DshPluginsFacade 的

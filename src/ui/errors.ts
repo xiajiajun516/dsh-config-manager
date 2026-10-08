@@ -7,7 +7,7 @@
  *  - 文案经 UiT 注入（zh 源 / en 镜像，见 i18n.ts）。
  */
 import { redact } from '../security/redaction.ts';
-import { zhUiT, type UiT } from './i18n.ts';
+import { liveUiT, type UiT } from './i18n.ts';
 
 /** 可操作错误（UI 渲染为 Reason / Suggested action 两段） */
 export interface ActionableError {
@@ -77,7 +77,8 @@ function buildErrorRules(t: UiT): readonly ErrorRule[] {
 
 /** 将任意错误转换为可操作错误（消息已脱敏，不泄漏 Secret） */
 export function toActionableError(err: unknown, opts?: { item?: string; fallbackTitle?: string; t?: UiT }): ActionableError {
-  const t = opts?.t ?? zhUiT;
+  // 缺省用**活**翻译器：未注入路径也要随语言切换（zhUiT 是加载期快照）
+  const t = opts?.t ?? liveUiT;
   const raw = err instanceof Error ? err.message : String(err ?? t('commonUnknownError'));
   const message = redact(raw);
   const rule = buildErrorRules(t).find((r) => r.match(message));
@@ -91,7 +92,7 @@ export function toActionableError(err: unknown, opts?: { item?: string; fallback
 }
 
 /** 格式化为用户可读的多行文本（Reason / Suggested action） */
-export function formatActionableError(e: ActionableError, t: UiT = zhUiT): string {
+export function formatActionableError(e: ActionableError, t: UiT): string {
   const lines = [e.title];
   lines.push(`${t('error.reason')}: ${e.reason}`);
   if (e.suggestedAction) lines.push(`${t('error.suggestedAction')}: ${e.suggestedAction}`);

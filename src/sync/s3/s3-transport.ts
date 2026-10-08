@@ -559,7 +559,7 @@ export class S3Transport implements SyncTransport {
     return {
       put: async (hash, bytes) => {
         if (!BLOB_HASH_RE.test(hash)) {
-          throw new S3TransportError('内容哈希形状非法，拒绝写入 blob 仓: ' + hash);
+          throw new S3TransportError(this.o.msg('sync.s3.blobHashInvalid', { hash }));
         }
         if (index[hash] !== undefined) return; // 内容未变 → 一个字都不传
         const sent = await this.send('PUT', blobKey(this.target.prefix, hash), {

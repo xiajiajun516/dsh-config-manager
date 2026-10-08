@@ -17,6 +17,7 @@ import {
   verifyChecksums as coreVerifyChecksums,
 } from '../utils/hashing.ts';
 import type { ChecksumVerifyResult } from '../utils/hashing.ts';
+import { securityMsg } from './messages.ts';
 
 export const SHA256_HEX_RE = /^[0-9a-f]{64}$/i;
 /** 与 core ZIP 条目数上限一致的默认表大小上限 */
@@ -48,22 +49,22 @@ export function parseChecksumsTable(
   const maxEntries = opts.maxEntries ?? DEFAULT_MAX_CHECKSUM_ENTRIES;
   const parsed = parseJsonSafe(raw);
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('checksums.json 必须是 JSON 对象');
+    throw new Error(securityMsg('security.checksumsMustBeJsonObject'));
   }
   const entries = Object.entries(parsed as Record<string, unknown>);
   if (entries.length > maxEntries) {
-    throw new Error(`checksums.json 条目数 ${entries.length} 超过上限 ${maxEntries}`);
+    throw new Error(securityMsg('security.checksumsTooManyEntries', { count: entries.length, max: maxEntries }));
   }
   const table: Record<string, string> = {};
   for (const [relPath, hash] of entries) {
     if (DANGEROUS_KEYS.has(relPath)) {
-      throw new Error(`checksums.json 含危险键 "${relPath}"，已拒绝`);
+      throw new Error(securityMsg('security.checksumsDangerousKey', { path: relPath }));
     }
     if (relPath === '' || relPath.includes('\\') || relPath.startsWith('/')) {
-      throw new Error(`checksums.json 含非法相对路径 "${relPath}"`);
+      throw new Error(securityMsg('security.checksumsIllegalPath', { path: relPath }));
     }
     if (typeof hash !== 'string' || !SHA256_HEX_RE.test(hash)) {
-      throw new Error(`checksums.json["${relPath}"] 不是合法的 SHA-256 hex`);
+      throw new Error(securityMsg('security.checksumsNotSha256', { path: relPath }));
     }
     table[relPath] = hash;
   }
@@ -94,8 +95,8 @@ export function verifyChecksumsJson(
 /** 人类可读的不匹配摘要（给「Backup integrity check failed」错误消息用） */
 export function describeMismatches(result: ChecksumVerifyResult): string {
   const parts = [
-    ...result.mismatches.map((m) => `"${m}" (hash 不符)`),
-    ...result.missing.map((m) => `"${m}" (缺失)`),
+    ...result.mismatches.map((m) => securityMsg('security.checksumMismatch', { path: m })),
+    ...result.missing.map((m) => securityMsg('security.checksumMissing', { path: m })),
   ];
   return parts.join(', ');
 }

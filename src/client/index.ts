@@ -23,7 +23,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { ConfigManagerApi } from './api.ts'
 import { ConfigManagerSection } from './ConfigManagerSection.tsx'
 import { en, zh, type ConfigManagerKey } from './locales.ts'
-import { makeUiT, type UiT } from '../ui/i18n.ts'
+import { makeLiveUiT, setUiLanguageSource, type UiT } from '../ui/i18n.ts'
 import { SyncApi } from './sync/sync-api.ts'
 import { en as syncEn, zh as syncZh, type SyncKey } from './sync/sync-locales.ts'
 import { MarketApi } from './market/market-api.ts'
@@ -90,8 +90,13 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(HISTORY_NS, { zh: historyZh, en: historyEn }), 'config-manager: history dictionaries')
 
   const t = ctx.locale.bind(NS)
-  // 客户端展示层（报告/错误/进度/sync-view/market-view）翻译器：locale active 为 'en' 时用 en 目录。
-  const uiT: UiT = makeUiT(ctx.locale.getLocale().active === 'en' ? 'en' : 'zh')
+  // 客户端展示层（报告/错误/进度/sync-view/market-view）翻译器：**每次取文案时**读当前 DSH locale。
+  // 此前用的是加载期快照构造器 makeUiT（把语言钉死在 apply() 那一刻）—— 用户切到 English 后文案恒为中文；
+  // 非 'zh' 的语言一律回落 en（英文界面不得回落中文）。
+  const readLanguage = (): string => ctx.locale.getLocale().active
+  // 模块级单例（runStore 等）用同一个活源：它们没有调用方可以传 UiT。
+  setUiLanguageSource(readLanguage)
+  const uiT: UiT = makeLiveUiT(readLanguage)
   const api = new ConfigManagerApi(uiT)
   const syncT = ctx.locale.bind(SYNC_NS)
   const syncApi = new SyncApi(uiT)

@@ -5,6 +5,7 @@
  * 快照不保存 credential 值（DSH 永不回读值）——credential 条目只记 existed 标志，
  * 回滚时 existed=true 的条目如实标记「值需人工补录」。
  */
+import { engineMsg } from './messages-core.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -147,7 +148,7 @@ const FILE_BASES: Partial<Record<SectionId, string>> = {
 // 其它分区语义处理」同类缺陷）。注册表新增文件类分区时若忘了在这里补，进程启动即失败。
 for (const id of SECTION_IDS) {
   if (isFileSection(id) && FILE_BASES[id] === undefined) {
-    throw new Error(`分区 ${id} 是文件类分区，但 core/backup.ts 的 FILE_BASES 未给基准目录（拒绝静默退回 homeDir 根）`);
+    throw new Error(engineMsg('core.backup.fileSectionBaseMissing', { section: id }));
   }
 }
 
@@ -321,7 +322,7 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
       // secrets 已注册但**没有 adapter、也没有 ZIP 内分区 JSON**（凭据值走独立加密容器 secrets.enc）。
       // 任何计划项都不应以它为快照目标 —— 显式报错，而不是落到 default 分支。
       throw new Error(
-        'secrets 分区没有 adapter / 无分区载荷，不应作为快照目标（凭据值走独立加密容器，绝不进快照）',
+        engineMsg('core.backup.secretsSectionNotSnapshotTarget'),
       );
     default: {
       // 编译期穷举断言：SectionId 的每一项都已被上面的 case 处理 → 此处 target.adapter 收窄为 never。
@@ -331,8 +332,7 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
       // 旧实现在这里静默返回 settingsNamespace 条目（连 existed 都没有）→ 回滚把该目标当「原本不存在」
       // 而不做任何补偿：该分区的写入永远撤不掉，报告却仍说「已快照、可回滚」（审计 core-flow#F-10）。
       throw new Error(
-        `快照不支持分区「${String(unhandled)}」：它未在 schema/section-registry.ts 注册（或缺少快照实现）；`
-        + '拒绝按其它分区语义静默记录（那会让该分区的写入无法回滚）',
+        engineMsg('core.backup.sectionUnsupported', { section: String(unhandled) }),
       );
     }
   }
@@ -564,7 +564,7 @@ export class FileSnapshotStore implements SnapshotStore {
    */
   private async writeBlob(dir: string, blobPath: string, data: Uint8Array, hashes: Record<string, string>): Promise<void> {
     const target = path.join(dir, blobPath);
-    if (!target.startsWith(dir)) throw new Error(`快照 blob 路径越界: ${blobPath}`);
+    if (!target.startsWith(dir)) throw new Error(engineMsg('core.backup.blobPathEscaped', { path: blobPath }));
     await fs.mkdir(path.dirname(target), { recursive: true });
     await atomicWriteFile(target, data);
     hashes[blobPath] = sha256Hex(data);
@@ -589,7 +589,7 @@ export class FileSnapshotStore implements SnapshotStore {
     // 4) 验证（从磁盘重读，不信任内存对象）
     const verified = await verifySnapshot(this.options.dir, snapshot.id);
     if (!verified.ok) {
-      throw new Error(`快照 ${snapshot.id} 验证失败: ${verified.reason}`);
+      throw new Error(engineMsg('core.backup.snapshotVerifyFailed', { id: snapshot.id, reason: verified.reason ?? '' }));
     }
     // 5) 原子发布 READY（重写 snapshot.json readiness='READY'；metadataHash 稳定不受影响）
     const ready = { ...snapshot, readiness: 'READY' as const };
@@ -600,7 +600,7 @@ export class FileSnapshotStore implements SnapshotStore {
     } catch (err) {
       // 快照已 READY + verified；prune 失败（EBUSY/EPERM）不应把刚成功的快照判为 unusable ——
       // 但必须留痕：保留清理长期失败会让快照无限堆积，用户与日志都看不到线索。
-      this.options.onWarn?.('快照保留清理失败（快照本身已就绪发布，不受影响）：' + (err instanceof Error ? err.message : String(err)));
+      this.options.onWarn?.(engineMsg('core.backup.pruneFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
     return snapshot.id;
   }
@@ -652,7 +652,7 @@ export class FileSnapshotStore implements SnapshotStore {
       try {
         referenced = await this.options.referencedSnapshotIds();
       } catch (err) {
-        this.options.onWarn?.('快照保留清理已放弃：读取 recovery 引用集合失败（' + (err instanceof Error ? err.message : String(err)) + '）');
+        this.options.onWarn?.(engineMsg('core.backup.pruneAbandoned', { reason: err instanceof Error ? err.message : String(err) }));
         return;
       }
     }
@@ -671,7 +671,7 @@ export class FileSnapshotStore implements SnapshotStore {
         // **绝不猜**：pinned/被引用的判断是对着这份 snapshot.json 做的，删除却会打在另一个目录上 ——
         // 跳过并留痕（手工改名/半截拷贝残留会出现这种形态）。
         if (parsed.id !== entry.name) {
-          this.options.onWarn?.('快照目录名与内部 id 不一致，已跳过自动清理：' + entry.name + '（内部 id ' + parsed.id + '）');
+          this.options.onWarn?.(engineMsg('core.backup.dirNameIdMismatch', { dir: entry.name, id: parsed.id }));
           continue;
         }
         if (parsed.pinned === true) continue; // 置顶快照豁免自动清理
@@ -702,7 +702,7 @@ export class FileSnapshotStore implements SnapshotStore {
   async readBlob(id: string, blobPath: string): Promise<Uint8Array> {
     const target = path.join(this.snapshotDir(id), blobPath);
     const dir = this.options.dir;
-    if (!target.startsWith(dir)) throw new Error(`快照 blob 路径越界: ${blobPath}`);
+    if (!target.startsWith(dir)) throw new Error(engineMsg('core.backup.blobPathEscaped', { path: blobPath }));
     return fs.readFile(target);
   }
 
@@ -742,51 +742,51 @@ export interface SnapshotVerifyResult {
 export async function verifySnapshot(snapshotsDir: string, id: string): Promise<SnapshotVerifyResult> {
   const dir = path.join(snapshotsDir, id);
   if (!dir.startsWith(path.resolve(snapshotsDir) + path.sep)) {
-    return { ok: false, reason: '快照路径越界' };
+    return { ok: false, reason: engineMsg('core.backup.snapshotPathEscaped') };
   }
   let raw: string;
   try {
     raw = await fs.readFile(path.join(dir, 'snapshot.json'), 'utf8');
   } catch {
-    return { ok: false, reason: 'snapshot.json 缺失' };
+    return { ok: false, reason: engineMsg('core.backup.snapshotJsonMissing') };
   }
   const snapshot = parseJsonSafe(raw) as Snapshot;
   if (snapshot === null || typeof snapshot !== 'object' || typeof snapshot.id !== 'string' || snapshot.id === '') {
-    return { ok: false, reason: 'snapshot.json 非法' };
+    return { ok: false, reason: engineMsg('core.backup.snapshotJsonInvalid') };
   }
   if (snapshot.id !== id) {
-    return { ok: false, reason: 'snapshot.id 与目录不匹配' };
+    return { ok: false, reason: engineMsg('core.backup.snapshotIdDirMismatch') };
   }
   let manifestRaw: string;
   try {
     manifestRaw = await fs.readFile(path.join(dir, 'manifest.json'), 'utf8');
   } catch {
-    return { ok: false, reason: 'manifest.json 缺失' };
+    return { ok: false, reason: engineMsg('core.backup.manifestMissing') };
   }
   const manifest = parseJsonSafe(manifestRaw) as SnapshotManifest;
   if (manifest === null || typeof manifest !== 'object' || manifest.snapshotId !== id) {
-    return { ok: false, reason: 'manifest 非法或 snapshotId 不匹配' };
+    return { ok: false, reason: engineMsg('core.backup.manifestInvalid') };
   }
   // entryCount 匹配（manifest 声明条目数与实际一致，防计数篡改）
   if (typeof manifest.entryCount !== 'number' || manifest.entryCount !== snapshot.entries.length) {
-    return { ok: false, reason: 'manifest.entryCount 与 snapshot.entries 不一致（篡改）' };
+    return { ok: false, reason: engineMsg('core.backup.entryCountMismatch') };
   }
   // metadataHash 匹配（破坏性内容）
   if (computeMetadataHash(snapshot) !== manifest.metadataHash) {
-    return { ok: false, reason: 'metadataHash 不匹配（破坏性内容被篡改）' };
+    return { ok: false, reason: engineMsg('core.backup.metadataHashMismatch') };
   }
   // blob hashes 匹配 + 存在
   for (const [blobPath, expectedHash] of Object.entries(manifest.blobHashes)) {
     const target = path.join(dir, blobPath);
-    if (!target.startsWith(dir)) return { ok: false, reason: `blob 路径越界: ${blobPath}` };
+    if (!target.startsWith(dir)) return { ok: false, reason: engineMsg('core.backup.blobPathEscaped', { path: blobPath }) };
     let data: Uint8Array;
     try {
       data = await fs.readFile(target);
     } catch {
-      return { ok: false, reason: `blob 缺失: ${blobPath}` };
+      return { ok: false, reason: engineMsg('core.backup.blobMissing', { path: blobPath }) };
     }
     if (sha256Hex(data) !== expectedHash) {
-      return { ok: false, reason: `blob hash 不匹配: ${blobPath}` };
+      return { ok: false, reason: engineMsg('core.backup.blobHashMismatch', { path: blobPath }) };
     }
   }
   // Review C P2：snapshot.json 引用的每个 blob（entries.copiedTo / hostFileBackups.blobPath）都必须被 manifest 覆盖，
@@ -800,7 +800,7 @@ export async function verifySnapshot(snapshotsDir: string, id: string): Promise<
   }
   for (const relBlob of referencedBlobs) {
     if (!(relBlob in manifest.blobHashes)) {
-      return { ok: false, reason: `snapshot 引用的 blob 未在 manifest 中: ${relBlob}` };
+      return { ok: false, reason: engineMsg('core.backup.blobNotInManifest', { blob: relBlob }) };
     }
   }
   return { ok: true };

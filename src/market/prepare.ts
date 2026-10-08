@@ -23,6 +23,7 @@ import {
   assertSafeItemId, BANNED_MARKET_SECTIONS, MARKET_ITEM_SCHEMA_VERSION, MAX_MARKET_ZIP_BYTES,
 } from './types.ts'
 import type { MarketItemManifest, MarketPublishMode } from './types.ts'
+import { marketMsg } from './messages-market.ts'
 
 export class MarketPrepareError extends Error {
   constructor(message: string) {
@@ -85,51 +86,51 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
   // 1. id / name 基础校验
   assertSafeItemId(input.itemId)
   if (typeof input.name !== 'string' || input.name.trim() === '') {
-    throw new MarketPrepareError('name 必填')
+    throw new MarketPrepareError(marketMsg('market.prepare.nameRequired'))
   }
   // 2. repoUrl 可选校验（强制 http(s)，拒绝 userinfo / git@/ssh；非法即拒绝发布）
   const repoUrl = typeof input.repoUrl === 'string' && input.repoUrl.trim() !== '' ? input.repoUrl.trim() : undefined
   if (repoUrl !== undefined) {
     const err = validateMarketRepoUrl(repoUrl)
-    if (err !== null) throw new MarketPrepareError(`repoUrl 非法: ${err}`)
+    if (err !== null) throw new MarketPrepareError(marketMsg('market.prepare.repoUrlInvalid', { reason: err }))
   }
   // 3. zip 体积上限（zip bomb 首道闸，与 security.ts 一致）
   const buf = Buffer.isBuffer(input.zipBytes) ? input.zipBytes : Buffer.from(input.zipBytes)
   if (buf.length > MAX_MARKET_ZIP_BYTES) {
-    throw new MarketPrepareError(`config.zip 体积 ${buf.length} 超过上限 ${MAX_MARKET_ZIP_BYTES} 字节`)
+    throw new MarketPrepareError(marketMsg('market.prepare.zipTooLarge', { size: buf.length, max: MAX_MARKET_ZIP_BYTES }))
   }
   // 4. 加固解包（Zip Slip / 绝对路径 / 恶意条目；异常 → 拒绝）
   let archive
   try {
     archive = parseZipHardened(buf)
   } catch (err) {
-    throw new MarketPrepareError(`config.zip 安全解析失败: ${err instanceof Error ? err.message : String(err)}`)
+    throw new MarketPrepareError(marketMsg('market.prepare.zipParseFailed', { reason: err instanceof Error ? err.message : String(err) }))
   }
   // 5. 内部 manifest + secrets 硬约束
   if (!archive.has(MANIFEST_FILE)) {
-    throw new MarketPrepareError('config.zip 缺少内部 manifest.json（须为导出/备份格式）')
+    throw new MarketPrepareError(marketMsg('market.prepare.zipMissingManifest'))
   }
   let internalManifest
   try {
     internalManifest = parseManifest(archive.readEntryText(MANIFEST_FILE))
   } catch (err) {
-    throw new MarketPrepareError(`config.zip 内部 manifest 无效: ${err instanceof Error ? err.message : String(err)}`)
+    throw new MarketPrepareError(marketMsg('market.prepare.zipManifestInvalid', { reason: err instanceof Error ? err.message : String(err) }))
   }
   if (internalManifest.security.containsSecrets) {
-    throw new MarketPrepareError('zip 声明 containsSecrets=true，市场通道永不携带秘密，拒绝发布')
+    throw new MarketPrepareError(marketMsg('market.prepare.zipContainsSecrets'))
   }
   // 6. sections = 内部 manifest 启用的分区（空 → 无可发布内容）
   const sections = (Object.entries(internalManifest.sections) as [SectionId, boolean][])
     .filter(([, on]) => on)
     .map(([id]) => id)
   if (sections.length === 0) {
-    throw new MarketPrepareError('zip 无启用分区，无可发布内容')
+    throw new MarketPrepareError(marketMsg('market.prepare.zipNoSections'))
   }
   // 6b. 市场条目禁止分区（BANNED_MARKET_SECTIONS：sessions 历史会话 / pluginFiles 任意文件 / self 本地环境）
   const bannedHit = sections.filter((s) => BANNED_MARKET_SECTIONS.includes(s))
   if (bannedHit.length > 0) {
     throw new MarketPrepareError(
-      `zip 包含禁止分区 ${bannedHit.join(', ')}（sessions=历史会话 / pluginFiles=任意文件 / self=本地环境），市场条目禁止携带`,
+      marketMsg('market.prepare.bannedSections', { sections: bannedHit.join(', ') }),
     )
   }
   // 6b2. 分享模式额外排除：deviceSpecific/platformSpecific 分区（比 BANNED 更严，与 BANNED 同语义——直接拒绝）
@@ -137,7 +138,7 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     const nonPortable = sections.filter((s) => sectionMeta(s).portability !== 'portable')
     if (nonPortable.length > 0) {
       throw new MarketPrepareError(
-        `分享模式禁止携带设备/平台相关分区 ${nonPortable.join(', ')}（含凭据状态 / 会话 / MCP / 工作区等），请仅导出通用可移植分区`,
+        marketMsg('market.prepare.shareNonPortableSections', { sections: nonPortable.join(', ') }),
       )
     }
   }
@@ -152,14 +153,14 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     const tb = pluginsJson?.localTarballs
     if (Array.isArray(tb) && tb.length > 0) {
       throw new MarketPrepareError(
-        `zip 的 plugins 分区携带 ${tb.length} 个本地插件 tarball（localTarballs），禁止发布到市场（内嵌插件代码不可经公开仓库审阅；本地插件迁移请用自己的备份）`,
+        marketMsg('market.prepare.localTarballsRejected', { count: tb.length }),
       )
     }
     // issue #35：patchFiles 同类拒绝（patch 在安装时改写依赖代码，同样不可经公开仓库审阅）
     const pfs = pluginsJson?.patchFiles
     if (Array.isArray(pfs) && pfs.length > 0) {
       throw new MarketPrepareError(
-        `zip 的 plugins 分区携带 ${pfs.length} 个 pnpm patch 文件（patchFiles），禁止发布到市场（会在安装时改写依赖代码；请用自己的备份迁移）`,
+        marketMsg('market.prepare.patchFilesRejected', { count: pfs.length }),
       )
     }
   }
@@ -199,7 +200,9 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     const limit = isShare ? 10 : 3
     const suffix = scanHits.length > limit ? '…' : ''
     throw new MarketPrepareError(
-      `检测到疑似敏感内容（${scanHits.slice(0, limit).join('；')}${suffix}），市场条目禁止携带凭据，请脱敏后重试`,
+      marketMsg('market.prepare.sensitiveContent', {
+        hits: scanHits.slice(0, limit).join(marketMsg('market.prepare.scanHitSeparator')) + suffix,
+      }),
     )
   }
   // 7. SHA-256 + 生成 L2 manifest
@@ -226,8 +229,8 @@ export function prepareMarketItem(input: MarketPrepareInput): MarketPrepareResul
     sha256,
     sections,
     warnings: [
-      '条目将发布至公共网络市场，未经官方审核（供应链警示）',
-      '发布内容为不可信输入，下载方导入前会逐项核对',
+      marketMsg('market.prepare.warningPublicMarket'),
+      marketMsg('market.prepare.warningUntrustedInput'),
     ],
   }
 }

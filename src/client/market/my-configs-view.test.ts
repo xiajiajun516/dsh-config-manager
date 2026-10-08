@@ -70,7 +70,7 @@ test('my-configs-view: validateMyConfigForm 名称必填（空 / 纯空白 → �
 })
 
 test('my-configs-view: validateMyConfigForm 名称合法（trim 后非空）→ 无错误', () => {
-  const errs = validateMyConfigForm({ ...EMPTY_MY_CONFIG_FORM, name: ' 我的配置 ' })
+  const errs = validateMyConfigForm({ ...EMPTY_MY_CONFIG_FORM, name: ' 我的配置 ' }, zhUiT)
   assert.equal(errs.name, null)
 })
 
@@ -159,7 +159,7 @@ test('my-configs-view: itemStatusFromHost pr-pending 无 prUrl → 空串兜底�
   const st = itemStatusFromHost({ status: 'pr-pending' })
   assert.deepEqual(st, { kind: 'pending-pr', prUrl: '', prNumber: undefined })
   // 经徽章模板仍出文本（PR 待审核），链接缺省不炸
-  const badge = itemStatusBadge(st)
+  const badge = itemStatusBadge(st, zhUiT)
   assert.equal(badge.kind, 'warn')
   assert.equal(badge.text, 'PR 待审核')
 })
@@ -167,7 +167,7 @@ test('my-configs-view: itemStatusFromHost pr-pending 无 prUrl → 空串兜底�
 test('my-configs-view: itemStatusFromHost + toMyItemView 组合投影（Host 条目 → 视图行）', () => {
   const view = toMyItemView(
     { id: 'cfg-a', name: '我的配置', version: '1.0.0', categories: ['plugins'], author: 'alice' },
-    itemStatusFromHost({ status: 'pr-pending', prUrl: 'https://github.com/x/pr/3' }),
+    itemStatusFromHost({ status: 'pr-pending', prUrl: 'https://github.com/x/pr/3' }), zhUiT
   )
   assert.equal(view.name, '我的配置')
   assert.deepEqual(view.status, { kind: 'pending-pr', prUrl: 'https://github.com/x/pr/3', prNumber: undefined })
@@ -180,7 +180,7 @@ test('my-configs-view: itemStatusFromHost + toMyItemView 组合投影（Host 条
 test('my-configs-view: toMyItemView 全字段透传（name/version/updatedAt/categories/author）', () => {
   const v = toMyItemView(
     item({ id: 'cfg-a', name: '我的配置', version: '1.2.0', updatedAt: '2026-08-20T10:00:00.000Z', categories: ['plugins'], author: 'alice' }),
-    { kind: 'listed' },
+    { kind: 'listed' }, zhUiT
   )
   assert.equal(v.id, 'cfg-a')
   assert.equal(v.name, '我的配置')
@@ -191,7 +191,7 @@ test('my-configs-view: toMyItemView 全字段透传（name/version/updatedAt/cat
 })
 
 test('my-configs-view: toMyItemView 字段缺失兜底（name 回退 id；其余空串/空数组）', () => {
-  const v = toMyItemView(item({ id: 'cfg-a' }), { kind: 'not-listed' })
+  const v = toMyItemView(item({ id: 'cfg-a' }), { kind: 'not-listed' }, zhUiT)
   assert.equal(v.name, 'cfg-a', 'name 缺省回退 id')
   assert.equal(v.version, '')
   assert.equal(v.updatedAt, '')
@@ -200,17 +200,17 @@ test('my-configs-view: toMyItemView 字段缺失兜底（name 回退 id；其余
 })
 
 test('my-configs-view: toMyItemView name 纯空白也回退 id', () => {
-  const v = toMyItemView(item({ id: 'cfg-a', name: '  ' }), { kind: 'not-listed' })
+  const v = toMyItemView(item({ id: 'cfg-a', name: '  ' }), { kind: 'not-listed' }, zhUiT)
   assert.equal(v.name, 'cfg-a')
 })
 
 test('my-configs-view: toMyItemView 带 stars → 透传（仓库级 star 展示位）', () => {
-  const v = toMyItemView(item({ id: 'cfg-a', stars: 42 }), { kind: 'listed' })
+  const v = toMyItemView(item({ id: 'cfg-a', stars: 42 }), { kind: 'listed' }, zhUiT)
   assert.equal(v.stars, 42)
 })
 
 test('my-configs-view: toMyItemView 无 stars → undefined（UI 不显示 ⭐）', () => {
-  const v = toMyItemView(item({ id: 'cfg-a' }), { kind: 'not-listed' })
+  const v = toMyItemView(item({ id: 'cfg-a' }), { kind: 'not-listed' }, zhUiT)
   assert.equal(v.stars, undefined)
 })
 
@@ -222,7 +222,7 @@ test('my-configs-view: buildMyItemsView stars 随条目传播', () => {
     ],
     officialListedIds: new Set(['a', 'b']),
     openPrs: [],
-  })
+  }, zhUiT)
   assert.equal(views[0]!.stars, 5)
   assert.equal(views[1]!.stars, undefined)
 })
@@ -230,15 +230,15 @@ test('my-configs-view: buildMyItemsView stars 随条目传播', () => {
 /* ---------------------------------------------------------------- 徽章模板 */
 
 test('my-configs-view: itemStatusBadge 三态 → 语义 kind（ok=已收录 / warn=PR 待审核 / info=未收录）', () => {
-  const listed = itemStatusBadge({ kind: 'listed' })
+  const listed = itemStatusBadge({ kind: 'listed' }, zhUiT)
   assert.equal(listed.kind, 'ok')
   assert.equal(listed.text, '已收录')
-  const pending = itemStatusBadge({ kind: 'pending-pr', prNumber: 3, prUrl: 'https://github.com/x/pr/3' })
+  const pending = itemStatusBadge({ kind: 'pending-pr', prNumber: 3, prUrl: 'https://github.com/x/pr/3' }, zhUiT)
   assert.equal(pending.kind, 'warn')
   assert.equal(pending.text, 'PR 待审核')
   assert.equal(pending.prUrl, 'https://github.com/x/pr/3')
   assert.equal(pending.prNumber, 3)
-  const none = itemStatusBadge({ kind: 'not-listed' })
+  const none = itemStatusBadge({ kind: 'not-listed' }, zhUiT)
   assert.equal(none.kind, 'info')
   assert.equal(none.text, '未收录')
 })
@@ -253,7 +253,7 @@ test('my-configs-view: itemStatusBadge en 镜像（kind 不变，文案英文）
 /* ---------------------------------------------------------------- 列表装配与摘要 */
 
 test('my-configs-view: buildMyItemsView 空列表 → 空数组（边界）', () => {
-  assert.deepEqual(buildMyItemsView({ items: [], officialListedIds: new Set(), openPrs: [] }), [])
+  assert.deepEqual(buildMyItemsView({ items: [], officialListedIds: new Set(), openPrs: [] }, zhUiT), [])
 })
 
 test('my-configs-view: buildMyItemsView 混合状态按 officialListedIds + openPr head 分支推导', () => {
@@ -265,7 +265,7 @@ test('my-configs-view: buildMyItemsView 混合状态按 officialListedIds + open
     ],
     officialListedIds: new Set(['a']),
     openPrs: [openPr({ number: 1, head: 'dsh-market-sync/b' })],
-  })
+  }, zhUiT)
   assert.equal(views.length, 3)
   assert.deepEqual(views[0]?.status, { kind: 'listed' })
   assert.deepEqual(views[1]?.status, { kind: 'pending-pr', prNumber: 1, prUrl: 'https://github.com/xiajiajun516/dsh-config-market/pull/1' })
@@ -280,7 +280,7 @@ test('my-configs-view: buildMyItemsView open PR head 分支不匹配 → 仍视�
     items: [item({ id: 'x', name: 'X' })],
     officialListedIds: new Set(),
     openPrs: [openPr({ number: 9, head: 'dsh-market-sync/other' })],
-  })
+  }, zhUiT)
   assert.deepEqual(views[0]?.status, { kind: 'not-listed' })
 })
 
@@ -290,12 +290,13 @@ test('my-configs-view: summarizeMyItems 统计（空 → 全零；混合 → 分
     items: [item({ id: 'a' }), item({ id: 'b' }), item({ id: 'c' }), item({ id: 'd' })],
     officialListedIds: new Set(['a', 'b']),
     openPrs: [openPr({ number: 1, head: 'dsh-market-sync/c' })],
-  })
+  }, zhUiT)
   assert.deepEqual(summarizeMyItems(views), { total: 4, listed: 2, pendingPr: 1, notListed: 1 })
 })
 
-test('my-configs-view: 引用 zhUiT 默认参数路径（makeUiT 之外的同语义断言）', () => {
-  // zhUiT 是 makeUiT('zh') 的实例，行为一致；直接经导出函数默认参数走通
+test('my-configs-view: 引用 zhUiT 显式翻译器路径（makeUiT 之外的同语义断言）', () => {
+  // zhUiT 是 makeUiT('zh') 的实例，行为一致；这些导出函数自 t3 起 t 为**必传**（不再有任何语言缺省），
+  // 因此这里显式传入 —— 断言与改造前逐字相同，覆盖的是「显式 zh 翻译器」这条路径
   assert.equal(itemStatusBadge({ kind: 'listed' }, zhUiT).text, '已收录')
   assert.equal(validateMyConfigForm({ ...EMPTY_MY_CONFIG_FORM, name: ' ' }, zhUiT).name, '名称不能为空')
 })
@@ -380,7 +381,7 @@ test('my-configs-view: toMyWizardSlice 去掉瞬态字段（validating/running/f
 })
 
 test('my-configs-view: restoreMyWizard(null) → EMPTY 语义（step select、瞬态归零、formErrors 无错）', () => {
-  const w = restoreMyWizard(null)
+  const w = restoreMyWizard(null, zhUiT)
   assert.equal(w.mode, 'upload')
   assert.equal(w.step, 'select')
   assert.equal(w.zipPath, null)
@@ -410,7 +411,7 @@ test('my-configs-view: restoreMyWizard(slice) → 瞬态归零、formErrors 按 
     result: uploadResult(),
     error: null,
   }
-  const w = restoreMyWizard(slice)
+  const w = restoreMyWizard(slice, zhUiT)
   assert.equal(w.mode, 'update')
   assert.equal(w.step, 'form')
   assert.equal(w.zipPath, slice.zipPath)
@@ -424,9 +425,9 @@ test('my-configs-view: restoreMyWizard(slice) → 瞬态归零、formErrors 按 
   assert.equal(w.error, null)
   assert.notEqual(w.form, slice.form, 'form 为新对象，不共享切片引用')
   // form.name 为空 → formErrors.name 重算为非 null
-  const w2 = restoreMyWizard({ ...slice, form: { ...slice.form, name: '   ' } })
+  const w2 = restoreMyWizard({ ...slice, form: { ...slice.form, name: '   ' } }, zhUiT)
   assert.notEqual(w2.formErrors.name, null, '空白名称 → 重算出错误')
-  assert.equal(w2.formErrors.name, validateMyConfigForm({ ...slice.form, name: '   ' }).name)
+  assert.equal(w2.formErrors.name, validateMyConfigForm({ ...slice.form, name: '   ' }, zhUiT).name)
 })
 
 test('my-configs-view: initialWizard(mode) → 指定模式、step select、空表单', () => {

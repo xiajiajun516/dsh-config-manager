@@ -24,6 +24,7 @@
  *
  * 本模块为纯函数（fs 经 node:fs + HostContext 门面注入），可独立测试。
  */
+import { engineMsg } from './messages-core.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
@@ -58,7 +59,7 @@ function toRelPath(homeDir: string, abs: string): string {
 /** 快照目录内 blob 绝对路径（防 snapshot.json 里伪造 ../ 越界读） */
 function blobAbs(snapshotDir: string, blobPath: string): string {
   const abs = path.resolve(snapshotDir, blobPath);
-  if (!isWithinHome(snapshotDir, abs)) throw new Error(`blob 路径越界: ${blobPath}`);
+  if (!isWithinHome(snapshotDir, abs)) throw new Error(engineMsg('core.verifyRecovery.blobPathEscaped', { path: blobPath }));
   return abs;
 }
 
@@ -99,12 +100,12 @@ export async function verifyRecovery(
   if (val.verdict !== 'TRUSTED_OPERATION_SNAPSHOT') {
     return {
       verdict: 'VERIFICATION_ERROR',
-      details: [`快照重验失败: ${val.verdict}${val.reason ? ` — ${val.reason}` : ''}`],
+      details: [engineMsg('core.verifyRecovery.revalidateFailed', { verdict: val.verdict }) + (val.reason ? ` — ${val.reason}` : '')],
       manualHints: [],
       at,
     };
   }
-  details.push('快照重验通过（TRUSTED_OPERATION_SNAPSHOT）');
+  details.push(engineMsg('core.verifyRecovery.revalidatePassed'));
 
   // 2) 从磁盘重读 snapshot.json 作为权威（不信任传入的 snapshot 对象，防 execute→verify 间替换）。
   let diskSnapshot: Snapshot;
@@ -112,17 +113,17 @@ export async function verifyRecovery(
     const raw = await fs.readFile(path.join(snapshotDir, 'snapshot.json'), 'utf8');
     diskSnapshot = JSON.parse(raw) as Snapshot;
   } catch (err) {
-    return { verdict: 'VERIFICATION_ERROR', details: [...details, `snapshot.json 重读失败: ${err instanceof Error ? err.message : String(err)}`], manualHints: [], at };
+    return { verdict: 'VERIFICATION_ERROR', details: [...details, engineMsg('core.verifyRecovery.snapshotJsonRereadFailed', { reason: err instanceof Error ? err.message : String(err) })], manualHints: [], at };
   }
 
   // 3) environment binding（validateSnapshotForRestore 已查，此处双保险）
   if (diskSnapshot.environmentFingerprint && diskSnapshot.environmentFingerprint !== opts.environmentFingerprint) {
-    return { verdict: 'VERIFICATION_ERROR', details: [...details, 'environmentFingerprint 不匹配（WRONG_ENVIRONMENT）'], manualHints: [], at };
+    return { verdict: 'VERIFICATION_ERROR', details: [...details, engineMsg('core.verifyRecovery.envMismatch')], manualHints: [], at };
   }
 
   // 3b) operation binding（journal.operationId ↔ snapshot.operationId 双向一致；WRONG_OPERATION 拒绝）
   if (opts.expectedOperationId !== undefined && diskSnapshot.operationId !== opts.expectedOperationId) {
-    return { verdict: 'VERIFICATION_ERROR', details: [...details, `operationId 不匹配（WRONG_OPERATION）: snapshot=${diskSnapshot.operationId ?? '(无)'} expected=${opts.expectedOperationId}`], manualHints: [], at };
+    return { verdict: 'VERIFICATION_ERROR', details: [...details, engineMsg('core.verifyRecovery.operationMismatch', { snapshot: diskSnapshot.operationId ?? engineMsg('core.verifyRecovery.none'), expected: opts.expectedOperationId ?? '' })], manualHints: [], at };
   }
 
   let mismatch = false;
@@ -135,12 +136,12 @@ export async function verifyRecovery(
     if (backup.existed) {
       if (backup.blobPath === '') {
         unverifiable = true;
-        details.push(`host file 无 blob 信息: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileNoBlob', { rel }));
         continue;
       }
       if (!(await ctx.fs.exists(rel))) {
         mismatch = true;
-        details.push(`host file 缺失: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileMissing', { rel }));
         continue;
       }
       let blob: Uint8Array;
@@ -148,23 +149,23 @@ export async function verifyRecovery(
         blob = await fs.readFile(blobAbs(snapshotDir, backup.blobPath));
       } catch {
         unverifiable = true;
-        details.push(`host file blob 读取失败: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileBlobReadFailed', { rel }));
         continue;
       }
       const current = await ctx.fs.readFile(rel);
       if (!bufEq(current, blob)) {
         mismatch = true;
-        details.push(`host file 内容不匹配: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileContentMismatch', { rel }));
       } else {
-        details.push(`host file 匹配: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileMatch', { rel }));
       }
     } else {
       // snapshot expects absent → target 必须不存在（删除动作失败 → 残留被检测）
       if (await ctx.fs.exists(rel)) {
         mismatch = true;
-        details.push(`应删除目标仍存在: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileStillPresent', { rel }));
       } else {
-        details.push(`删除目标已不存在: ${rel}`);
+        details.push(engineMsg('core.verifyRecovery.hostFileAlreadyGone', { rel }));
       }
     }
   }
@@ -175,13 +176,13 @@ export async function verifyRecovery(
     const rel = toRelPath(ctx.homeDir, resolveFileAbs(ctx.homeDir, entry.adapter, entry.ref));
     if (rel === '') {
       unverifiable = true;
-      details.push(`file 路径越界: ${entry.adapter}:${entry.ref}`);
+      details.push(engineMsg('core.verifyRecovery.filePathEscaped', { ref: `${entry.adapter}:${entry.ref}` }));
       continue;
     }
     if (entry.existed && entry.copiedTo) {
       if (!(await ctx.fs.exists(rel))) {
         mismatch = true;
-        details.push(`file 缺失: ${entry.adapter}:${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.fileMissing', { ref: `${entry.adapter}:${entry.ref}` }));
         continue;
       }
       let blob: Uint8Array;
@@ -189,22 +190,22 @@ export async function verifyRecovery(
         blob = await fs.readFile(blobAbs(snapshotDir, entry.copiedTo));
       } catch {
         unverifiable = true;
-        details.push(`file blob 读取失败: ${entry.adapter}:${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.fileBlobReadFailed', { ref: `${entry.adapter}:${entry.ref}` }));
         continue;
       }
       const current = await ctx.fs.readFile(rel);
       if (!bufEq(current, blob)) {
         mismatch = true;
-        details.push(`file 内容不匹配: ${entry.adapter}:${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.fileContentMismatch', { ref: `${entry.adapter}:${entry.ref}` }));
       } else {
-        details.push(`file 匹配: ${entry.adapter}:${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.fileMatch', { ref: `${entry.adapter}:${entry.ref}` }));
       }
     } else if (!entry.existed) {
       if (await ctx.fs.exists(rel)) {
         mismatch = true;
-        details.push(`应删除 file 目标仍存在: ${entry.adapter}:${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.fileStillPresent', { ref: `${entry.adapter}:${entry.ref}` }));
       } else {
-        details.push(`删除 file 目标已不存在: ${entry.adapter}:${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.fileAlreadyGone', { ref: `${entry.adapter}:${entry.ref}` }));
       }
     }
   }
@@ -214,8 +215,8 @@ export async function verifyRecovery(
   const beforePlugins = diskSnapshot.beforePlugins;
   if (beforePlugins === undefined) {
     unverifiable = true;
-    details.push('快照无 beforePlugins 基线，插件状态不可验证');
-    manualHints.push('插件状态无法自动验证（快照无基线），请人工确认已装插件');
+    details.push(engineMsg('core.verifyRecovery.pluginsNoBaseline'));
+    manualHints.push(engineMsg('core.verifyRecovery.pluginsNoBaselineHint'));
   } else {
     try {
       const current = await ctx.plugins.listInstalled();
@@ -223,14 +224,14 @@ export async function verifyRecovery(
       const added = current.filter((p) => !beforeNames.has(p.name));
       if (added.length > 0) {
         mismatch = true;
-        details.push(`导入期间新增插件未移除: ${added.map((p) => p.name).join(', ')}`);
+        details.push(engineMsg('core.verifyRecovery.pluginsAdded', { names: added.map((p) => p.name).join(', ') }));
       } else {
-        details.push('插件状态匹配（无新增插件）');
+        details.push(engineMsg('core.verifyRecovery.pluginsMatch'));
       }
     } catch {
       unverifiable = true;
-      details.push('插件状态无法验证（listInstalled 失败）');
-      manualHints.push('插件状态无法自动验证（listInstalled 失败），请人工确认已装插件');
+      details.push(engineMsg('core.verifyRecovery.pluginsVerifyFailed'));
+      manualHints.push(engineMsg('core.verifyRecovery.pluginsVerifyFailedHint'));
     }
   }
 
@@ -241,14 +242,14 @@ export async function verifyRecovery(
       const current = await ctx.settings.describe(entry.ref);
       if (!isDeepStrictEqual(current.value, entry.before)) {
         mismatch = true;
-        details.push(`settings 不匹配: ${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.settingsMismatch', { ref: entry.ref }));
       } else {
-        details.push(`settings 匹配: ${entry.ref}`);
+        details.push(engineMsg('core.verifyRecovery.settingsMatch', { ref: entry.ref }));
       }
     } catch {
       unverifiable = true;
-      details.push(`settings 无法验证: ${entry.ref}`);
-      manualHints.push(`settings 无法自动验证（${entry.ref}），请人工确认`);
+      details.push(engineMsg('core.verifyRecovery.settingsVerifyFailed', { ref: entry.ref }));
+      manualHints.push(engineMsg('core.verifyRecovery.settingsVerifyFailedHint', { ref: entry.ref }));
     }
   }
 

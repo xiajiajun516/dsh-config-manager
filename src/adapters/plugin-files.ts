@@ -8,6 +8,7 @@
  */
 import { sha256Hex } from '../utils/hashing.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
+import { engineMsg } from './messages.ts';
 import { linkWarnings, listFilesDetailed } from './link-report.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
 import { isPathSafe, isReservedInternalRel } from '../utils/paths.ts';
@@ -36,7 +37,7 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
   constructor(whitelist: string[] = [...DEFAULT_PLUGIN_FILE_WHITELIST], collectDir?: string) {
     this.whitelist = whitelist;
     if (collectDir !== undefined && collectDir !== '' && !isPathSafe(collectDir)) {
-      throw new Error(`pluginFiles collectDir 非法（须为相对 ~/.dsh 根的安全路径）: ${collectDir}`);
+      throw new Error(engineMsg('adapter.pluginFilesCollectDirInvalid', { dir: collectDir }));
     }
     this.collectDir = collectDir === '' ? undefined : collectDir;
   }

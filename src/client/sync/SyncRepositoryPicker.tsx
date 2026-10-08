@@ -123,7 +123,7 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err)
       setCreateError(detail)
-      toast.error(t('repoPicker.createFailed') + '：' + redact(detail))
+      toast.error(t('repoPicker.createFailed') + t('common.labelSeparator') + redact(detail))
     } finally {
       setCreating(false)
     }
@@ -166,7 +166,7 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
         {/* 空态 / 失败说明留在原地（不进 ⓘ）：用户正卡在这里，说明必须看得见 */}
         {loaded && privateRepos.length === 0 && <span className={css.hint}>{t('repoPicker.empty')}</span>}
         {loadError !== null && (
-          <span className={css.formError}>{t('repoPicker.loadFailed')}（{redact(loadError)}）</span>
+          <span className={css.formError}>{t('repoPicker.loadFailed')}{t('common.parens', { text: redact(loadError) })}</span>
         )}
       </div>
       {createOpen && (

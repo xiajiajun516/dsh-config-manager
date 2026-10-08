@@ -75,7 +75,7 @@ export function PluginUpdateDialog({
     setApply({ kind: 'idle' })
     void (async () => {
       try {
-        const result = await fetchReleases(repoUrl, 1, PAGE_SIZE)
+        const result = await fetchReleases(repoUrl, 1, PAGE_SIZE, globalThis.fetch, t)
         if (cancelled) return
         const match = findReleaseForVersion(result.releases, latest)
         setNotes({ kind: 'loaded', release: match.release, exact: match.exact })

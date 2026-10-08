@@ -12,7 +12,7 @@
  * 走原逻辑 —— 阶段文案 + step/total 百分比，无徽章。
  */
 import { stageText } from '../../ui/progress.ts'
-import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import type { ProgressEvent } from '../../ui/types.ts'
 
 /** m3: 客户端进度事件 = ProgressEvent 超集（RunState 轮询映射产物；可 JSON 序列化）。 */
@@ -75,7 +75,7 @@ export function progressBarMode(view: ProgressView, active: boolean): ProgressBa
  *   → 置 null，避免「3/12 3/12」重复；
  * - detail（当前项名）：非空且不等于分区 id（导出时 detail 恒为分区 id，去冗余）。
  */
-export function computeProgressView(event: RunProgress | null, t: UiT = zhUiT): ProgressView {
+export function computeProgressView(event: RunProgress | null, t: UiT): ProgressView {
   if (event === null) {
     return { label: '', percent: null, sectionBadge: null, countBadge: null, detail: null }
   }

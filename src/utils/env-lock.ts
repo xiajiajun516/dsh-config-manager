@@ -29,6 +29,7 @@ import os from 'node:os'
 import crypto from 'node:crypto'
 import { atomicWriteFile } from './atomic-write.ts'
 import { isENOENT } from './guards.ts'
+import { utilsMsg } from './messages-utils.ts'
 
 // ---------- 常量 ----------
 
@@ -481,12 +482,12 @@ export function createPlatformProcessIdentityProbe(opts: ProcessIdentityProbeOpt
       } else {
         // 平台不支持 / 其它错误 → 探测失败（不确定），抛错由上层归为 UNKNOWN_STATE；
         // **绝不要**伪装成「确证死亡」——否则会把失败的探测当成 stale 删除许可。
-        throw new Error(`进程探测失败 pid=${pid}: ${(e as Error)?.message ?? String(e)}`)
+        throw new Error(utilsMsg('utils.envLock.probeFailed', { pid, reason: (e as Error)?.message ?? String(e) }))
       }
     }
     if (!aliveConfirmed) {
       // 防御：理论上到不了这里
-      throw new Error(`进程探测未确定 pid=${pid}`)
+      throw new Error(utilsMsg('utils.envLock.probeUndetermined', { pid }))
     }
     if (!alive) return { alive, osProcessStartIdentity: null }
     if (platform === 'linux') {
@@ -631,7 +632,7 @@ export class EnvironmentLockManager {
       try {
         await this.io.mkdir(this.locksDir, { recursive: true })
       } catch (e) {
-        return classifyIoError(e, `创建锁目录 ${this.locksDir}`, this.io)
+        return classifyIoError(e, utilsMsg('utils.envLock.mkdirLocksDir', { dir: this.locksDir }), this.io)
       }
 
       // —— 独占创建所有权文件（唯一所有权获取原语）——
@@ -676,7 +677,7 @@ export class EnvironmentLockManager {
           }
           // 无既有锁 → 权限/ACL/文件系统错误（可能目录不可写 / ACL 拒绝），非锁占用
           return exists === false
-            ? { state: 'PERMISSION_ERROR', token: null, detail: `open('wx') ${this.ownershipPath}: 权限/ACL 错误 (${code})，且未发现既有锁文件` }
+            ? { state: 'PERMISSION_ERROR', token: null, detail: utilsMsg('utils.envLock.openWxPermissionNoExisting', { path: this.ownershipPath, code }) }
             : classifyIoError(e, `open('wx') ${this.ownershipPath}`, this.io)
         }
         return classifyIoError(e, `open('wx') ${this.ownershipPath}`, this.io)
@@ -708,7 +709,7 @@ export class EnvironmentLockManager {
         if (handle) try { await handle.close() } catch { /* ignore */ }
         this.activeToken = null
         try { await this.io.unlink(this.ownershipPath) } catch { /* 清理失败留痕由上层 */ }
-        return classifyIoError(e, `写入 owner ${this.ownershipPath}`, this.io)
+        return classifyIoError(e, utilsMsg('utils.envLock.writeOwner', { path: this.ownershipPath }), this.io)
       }
 
       // —— 确立 token + 启动 heartbeat ——
@@ -753,7 +754,7 @@ export class EnvironmentLockManager {
     if (!this.validate(token)) {
       // 可能已 release 或 foreign：幂等返回（已 release 再次 release 无害）
       if (this.activeToken === null) return
-      throw new EnvironmentLockOwnedByAnotherError('release: token 不匹配当前持有（foreign/已被接管），拒绝 unlink')
+      throw new EnvironmentLockOwnedByAnotherError(utilsMsg('utils.envLock.releaseForeignToken'))
     }
     const instanceId = this.activeInstanceId
     this.stopHeartbeat()
@@ -773,9 +774,7 @@ export class EnvironmentLockManager {
       // 与成功路径同序：先清 token（「不再写」闸门）再 drain，保证在途原子写（tmp→rename）在本方法返回前落地，
       // 不留给调用方的目录清理（Windows 上即 rmSync ENOTEMPTY / .dshcm.*.tmp 残留）。
       await this.drainHeartbeat()
-      throw new EnvironmentLockOwnedByAnotherError(
-        `release: 磁盘 ownership 无法读取/损坏（可能被异常恢复或人工修改），拒绝 unlink（ownership-lost）`,
-      )
+      throw new EnvironmentLockOwnedByAnotherError(utilsMsg('utils.envLock.releaseOwnershipUnreadable'))
     }
     if (st.rec.owner.instanceId !== instanceId) {
       // 保留 activeToken（调用方可能修复 ownership 后重试 release），但**必须 drain 在途写**：
@@ -784,7 +783,7 @@ export class EnvironmentLockManager {
       // （本仓库实测：紧接 release 的 rmSync(dir) 在 200 次循环里约 19% 抛 ENOTEMPTY）。
       await this.drainHeartbeat()
       throw new EnvironmentLockOwnedByAnotherError(
-        `release: 磁盘 ownership.instanceId=${st.rec.owner.instanceId} !== 本 token ${instanceId}（ownership-lost）`,
+        utilsMsg('utils.envLock.releaseOwnershipMismatch', { diskId: st.rec.owner.instanceId, tokenId: instanceId }),
       )
     }
     // —— matching：unlink ——（acquire 成功后句柄已 close，此处只有 unlink）
@@ -796,7 +795,7 @@ export class EnvironmentLockManager {
       // 同 ownership-lost 分支：抛错前 drain 在途写（定时器已停 → drain 有界），
       // 否则调用方随后的目录清理会与已启动的 tmp→rename 竞争。
       await this.drainHeartbeat()
-      throw new EnvironmentLockIOError(`release: unlink ${this.ownershipPath} 失败: ${e instanceof Error ? e.message : String(e)}`, e)
+      throw new EnvironmentLockIOError(utilsMsg('utils.envLock.releaseUnlinkFailed', { path: this.ownershipPath, reason: e instanceof Error ? e.message : String(e) }), e)
     }
     // unlink 成功 → 释放完成：**先清 token 再 drain**，最后清自己的 heartbeat sidecar。
     // 顺序关键：activeToken=null 必须早于 drain —— 否则 interval 可能在 drain 返回之后、cleanup 之前
@@ -949,16 +948,16 @@ export class EnvironmentLockManager {
    *  heartbeat expired + PID alive + identity 相同 → LOCKED (owner alive / heartbeat degraded)
    *  probe 无法可靠确定                 → UNKNOWN_STATE
    */
-  async inspectLockState(): Promise<{ state: LockState; detail?: string }> {
+  async inspectLockState(): Promise<{ state: LockState; detail?: string; corruptOwnership?: boolean }> {
     const st = await this.readOwnershipState()
     if (st.kind === 'missing') {
       // 无所有权文件：可能在创建中，或已被清除 → 保守按"非空闲"处理
-      return { state: 'LOCKED', detail: 'ownership file 不存在（可能正被创建中）' }
+      return { state: 'LOCKED', detail: utilsMsg('utils.envLock.ownershipMissing') }
     }
     if (st.kind === 'corrupt') {
       // 存在但空/损坏/ACL 不可读：崩溃窗口残留（open('wx') 后未写完 owner 即死），无有效 owner
       // 无从误删；acquire 侧不执行（UNKNOWN_STATE），但显式 recovery 可安全回收（见 recoverStaleLock）
-      return { state: 'UNKNOWN_STATE', detail: 'ownership 存在但无有效 owner（可能崩溃残留空/损坏文件），不删除、不执行；可用 --recover-stale-lock 回收' }
+      return { state: 'UNKNOWN_STATE', corruptOwnership: true, detail: utilsMsg('utils.envLock.ownershipCorrupt') }
     }
     const rec = st.rec
     // heartbeat 读取失败（EACCES）→ 无法确认 fresh → 保守不判 stale（避免误删）
@@ -968,8 +967,8 @@ export class EnvironmentLockManager {
     } catch (e) {
       const code = (e as { code?: string }).code
       return code === 'EACCES' || code === 'EPERM'
-        ? { state: 'UNKNOWN_STATE', detail: '无法读取 heartbeat（权限/ACL），保守拒绝' }
-        : { state: 'UNKNOWN_STATE', detail: 'heartbeat 读取失败，保守拒绝' }
+        ? { state: 'UNKNOWN_STATE', detail: utilsMsg('utils.envLock.heartbeatPermissionDenied') }
+        : { state: 'UNKNOWN_STATE', detail: utilsMsg('utils.envLock.heartbeatReadFailed') }
     }
     const now = this.now()
     const heartbeatFresh = heartbeat !== null && (now - heartbeat.heartbeatAt) <= this.staleAfterMs
@@ -983,11 +982,11 @@ export class EnvironmentLockManager {
     try {
       ident = await this.probe.probe(rec.owner.pid)
     } catch {
-      return { state: 'UNKNOWN_STATE', detail: `进程探测失败 pid=${rec.owner.pid}` }
+      return { state: 'UNKNOWN_STATE', detail: utilsMsg('utils.envLock.probeFailedShort', { pid: rec.owner.pid }) }
     }
     // 确证死亡（ESRCH）→ STALE（不依赖 OS identity 能力）
     if (!ident.alive) {
-      return { state: 'STALE_LOCK_DETECTED', detail: `owner pid=${rec.owner.pid} 确证不存在 (heartbeat expired)` }
+      return { state: 'STALE_LOCK_DETECTED', detail: utilsMsg('utils.envLock.ownerConfirmedDead', { pid: rec.owner.pid }) }
     }
     // PID 存活：需 OS identity 区分「reuse」与「同一进程 alive（heartbeat degraded）」
     // —— capability/值缺失 → 无法可靠确定 → UNKNOWN_STATE（保守拒删）
@@ -1000,19 +999,19 @@ export class EnvironmentLockManager {
       if (longExpired !== null) {
         return {
           state: 'STALE_LOCK_DETECTED',
-          detail: `owner pid=${rec.owner.pid} 存活但无法验证进程身份（可能是 PID 复用），且 heartbeat ${longExpired} → 判定为残留锁，可显式回收`,
+          detail: utilsMsg('utils.envLock.ownerAliveUnverifiable', { pid: rec.owner.pid, longExpired }),
         }
       }
       return {
         state: 'UNKNOWN_STATE',
-        detail: `heartbeat 过期且 pid=${rec.owner.pid} 存活，但无法可靠取得 OS process identity，保守拒绝删除`,
+        detail: utilsMsg('utils.envLock.heartbeatExpiredNoIdentity', { pid: rec.owner.pid }),
       }
     }
     if (rec.owner.osProcessStartIdentity !== ident.osProcessStartIdentity) {
-      return { state: 'STALE_LOCK_DETECTED', detail: `pid reuse：pid=${rec.owner.pid} identity 与 recorded 不同` }
+      return { state: 'STALE_LOCK_DETECTED', detail: utilsMsg('utils.envLock.pidReuse', { pid: rec.owner.pid }) }
     }
     // alive 且 identity 相同 → owner alive（heartbeat degraded 保护）
-    return { state: 'LOCKED', detail: 'owner 进程存活（heartbeat 可能 degraded），非 stale' }
+    return { state: 'LOCKED', detail: utilsMsg('utils.envLock.ownerAliveDegraded') }
   }
 
   /* ------------------------------------------------------------ recover (explicit) */
@@ -1026,21 +1025,24 @@ export class EnvironmentLockManager {
   async recoverStaleLock(): Promise<RecoverResult> {
     // 1. inspect：必须 definitely stale 或 corrupt（崩溃残留无有效 owner）
     const insp = await this.inspectLockState()
-    const isCorruptReclaim = insp.state === 'UNKNOWN_STATE' && insp.detail?.includes('无有效 owner')
-    if (insp.state !== 'STALE_LOCK_DETECTED' && !isCorruptReclaim) {
-      return { ok: false, removed: false, state: insp.state, detail: insp.detail ?? '非 stale，拒绝 recovery' }
-    }
     const st = await this.readOwnershipState()
+    // 「无有效 owner」的崩溃残留（ownership 文件损坏/空）可显式回收。
+    // 判据必须是**结构性的**（inspectLockState 的 corruptOwnership / readOwnershipState 的 kind）——
+    // **不得**再依赖 detail 文案子串：detail 自 t5 起按界面语言本地化，按子串判定在英文界面下会失效。
+    const isCorruptReclaim = insp.state === 'UNKNOWN_STATE' && st.kind === 'corrupt'
+    if (insp.state !== 'STALE_LOCK_DETECTED' && !isCorruptReclaim) {
+      return { ok: false, removed: false, state: insp.state, detail: insp.detail ?? utilsMsg('utils.envLock.notStaleRefuseRecovery') }
+    }
     const rec = st.kind === 'ok' ? st.rec : null
     if (st.kind === 'missing') {
-      return { ok: false, removed: false, state: 'LOCKED', detail: 'ownership 已消失（被他人接管/清除），停止 recovery' }
+      return { ok: false, removed: false, state: 'LOCKED', detail: utilsMsg('utils.envLock.ownershipGone') }
     }
     // 2. 原子 rename 捕获当前 inode
     const recoveringPath = path.join(this.locksDir, `${RECOVERING_PREFIX}${randomHex(8)}`)
     try {
       await this.io.rename(this.ownershipPath, recoveringPath)
     } catch (e) {
-      return { ok: false, removed: false, state: classifyIoError(e, `rename ${this.ownershipPath} → ${recoveringPath}`, this.io).state, detail: '捕获 rename 失败（可能被他人接管），停止' }
+      return { ok: false, removed: false, state: classifyIoError(e, `rename ${this.ownershipPath} → ${recoveringPath}`, this.io).state, detail: utilsMsg('utils.envLock.captureRenameFailed') }
     }
     // 3. 二次验证：captured 内容仍是被判 stale 的那个 owner
     let capturedText: string
@@ -1048,7 +1050,7 @@ export class EnvironmentLockManager {
       capturedText = await this.io.readFileText(recoveringPath)
     } catch (e) {
       // 读不到 captured（异常）→ quarantine，不 rename 回
-      return { ok: false, removed: false, state: 'LOCK_IO_ERROR', detail: '捕获文件读取失败，保留 recovering 供诊断' }
+      return { ok: false, removed: false, state: 'LOCK_IO_ERROR', detail: utilsMsg('utils.envLock.captureReadFailed') }
     }
     const captured = readLockJsonSafe(capturedText) as LockOwnershipRecord | null
     if (isCorruptReclaim) {
@@ -1058,7 +1060,7 @@ export class EnvironmentLockManager {
         // captured 突然变得有效（异常：rename 后被人写入）→ 保守 quarantine，不删
         return {
           ok: false, removed: false, state: 'UNKNOWN_STATE',
-          detail: `corrupt 回收二次验证异常：captured 具有效 owner，保留 ${path.basename(recoveringPath)} quarantine；不覆盖当前 environment.lock`,
+          detail: utilsMsg('utils.envLock.corruptReclaimAnomaly', { name: path.basename(recoveringPath) }),
         }
       }
     } else {
@@ -1069,7 +1071,7 @@ export class EnvironmentLockManager {
         // 二次验证失败 → quarantine：不 rename 回 environment.lock（防覆盖 successor），保留 recovering 文件
         return {
           ok: false, removed: false, state: 'UNKNOWN_STATE',
-          detail: `二次验证失败：保留 ${path.basename(recoveringPath)} quarantine；不覆盖当前 environment.lock（若有 successor）`,
+          detail: utilsMsg('utils.envLock.reverifyFailed', { name: path.basename(recoveringPath) }),
         }
       }
     }
@@ -1077,7 +1079,7 @@ export class EnvironmentLockManager {
     try {
       await this.io.unlink(recoveringPath)
     } catch (e) {
-      return { ok: false, removed: false, state: classifyIoError(e, `unlink ${recoveringPath}`, this.io).state, detail: '删除 captured 失败' }
+      return { ok: false, removed: false, state: classifyIoError(e, `unlink ${recoveringPath}`, this.io).state, detail: utilsMsg('utils.envLock.removeCapturedFailed') }
     }
     // 5. 清理该 owner 的 heartbeat sidecar（按 stale instanceId 匹配；corrupt 时 rec=null 跳过）
     if (rec !== null) {
@@ -1088,7 +1090,9 @@ export class EnvironmentLockManager {
     }
     return {
       ok: true, removed: true, state: 'STALE_LOCK_DETECTED',
-      detail: rec !== null ? `已移除 stale ownership (op=${(rec as LockOwnershipRecord).op}, pid=${(rec as LockOwnershipRecord).owner.pid})` : '已移除 corrupt/崩溃残留所有权文件',
+      detail: rec !== null
+        ? utilsMsg('utils.envLock.removedStaleOwnership', { op: (rec as LockOwnershipRecord).op, pid: (rec as LockOwnershipRecord).owner.pid })
+        : utilsMsg('utils.envLock.removedCorruptOwnership'),
     }
   }
 
@@ -1120,7 +1124,7 @@ export class EnvironmentLockManager {
     if (heartbeat === null) return null
     const age = now - heartbeat.heartbeatAt
     if (!(age >= this.longExpiredAfterMs)) return null // NaN / 负值（时钟回拨）→ 保守
-    return `已过期 ${formatDuration(age)}（阈值 ${formatDuration(this.longExpiredAfterMs)}）`
+    return utilsMsg('utils.envLock.longExpired', { age: formatDuration(age), threshold: formatDuration(this.longExpiredAfterMs) })
   }
 
   /* ------------------------------------------------------------ diag */
@@ -1142,10 +1146,10 @@ function encode(v: unknown): Uint8Array {
 
 /** 毫秒 → 可读时长（诊断文案用；不追求精确，只求用户能一眼判断「多久没心跳了」） */
 function formatDuration(ms: number): string {
-  if (ms >= 86_400_000) return `${(ms / 86_400_000).toFixed(1)} 天`
-  if (ms >= 3_600_000) return `${(ms / 3_600_000).toFixed(1)} 小时`
-  if (ms >= 60_000) return `${Math.round(ms / 60_000)} 分钟`
-  return `${Math.round(ms / 1000)} 秒`
+  if (ms >= 86_400_000) return utilsMsg('utils.envLock.durationDays', { value: (ms / 86_400_000).toFixed(1) })
+  if (ms >= 3_600_000) return utilsMsg('utils.envLock.durationHours', { value: (ms / 3_600_000).toFixed(1) })
+  if (ms >= 60_000) return utilsMsg('utils.envLock.durationMinutes', { value: Math.round(ms / 60_000) })
+  return utilsMsg('utils.envLock.durationSeconds', { value: Math.round(ms / 1000) })
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1156,7 +1160,7 @@ function sleep(ms: number): Promise<void> {
 function classifyIoError(e: unknown, what: string, io: EnvLockIo): { state: LockState; token: null; detail: string } {
   const code = (e as { code?: string }).code
   if (code === 'EACCES' || code === 'EPERM') {
-    return { state: 'PERMISSION_ERROR', token: null, detail: `${what}: 权限/ACL 错误 (${code})，非锁占用` }
+    return { state: 'PERMISSION_ERROR', token: null, detail: utilsMsg('utils.envLock.ioPermissionNotLock', { what, code }) }
   }
   return { state: 'LOCK_IO_ERROR', token: null, detail: `${what}: ${e instanceof Error ? e.message : String(e)}` }
 }
@@ -1196,26 +1200,27 @@ export type LockBlockReason =
 /** 按分类生成用户可读的友好文案（内部诊断不进入此文案；op/reason 作为字段供日志使用）。
  *  导出：后台调度器（自动同步/定时备份）被挡时用同一份文案写日志，避免两处文案漂移。 */
 export const LOCK_BLOCK_MESSAGE: Record<LockBlockReason, string> = {
-  locked: '另一个任务正在运行，请稍后重试。',
-  blocked: '配置修改已被保护，请先处理恢复事项后再继续。',
-  unavailable: '操作暂时无法执行，请稍后重试；若持续失败请查看日志。',
+  // getter 形态：**取文案的那一刻**才解析语言（写成模块级常量会像改造前的宿主 msg 一样，
+  // 被冻结在模块加载时那门语言 —— 用户切到 English 后仍是中文）。
+  get locked() { return utilsMsg('utils.envLock.block.locked') },
+  get blocked() { return utilsMsg('utils.envLock.block.blocked') },
+  get unavailable() { return utilsMsg('utils.envLock.block.unavailable') },
   // 必须说清「重试/重启都不会好」并给出可操作路径：否则用户只会一遍遍重试（issue #27 实测如此）。
   // issue #31：文案承诺的「事故恢复」入口必须真的能回收残留锁——GUI 已接线
   // （GET /recovery/status 的 lock 字段 + POST /recovery/lock/recover），两处入口都真实可达。
-  stale: '检测到上次异常退出残留的配置锁（其持有进程已不存在），操作已被阻止。'
-    + '该锁不会自动清除，重试或重启 DSH 均无效：请在「事故恢复」中点击「回收残留锁」，'
-    + '或运行 dsh-config-manager recover-stale-lock 回收后再重试。',
+  get stale() { return utilsMsg('utils.envLock.block.stale') },
 }
 
 /** 分类的**简短**文案（单行、可用于表格单元格/迁移历史摘要/日志前缀）。
  *  与 LOCK_BLOCK_MESSAGE 同源同分类：长文案给「需要完整指引」的场景（423 响应/告警日志），
  *  短文案给「一行放不下长句」的场景。分开定义避免任一处再自造文案（issue #31 的漂移根因）。 */
 export const LOCK_BLOCK_BRIEF: Record<LockBlockReason, string> = {
-  locked: '环境锁被另一项任务占用',
-  blocked: '配置修改已被保护，需先处理恢复事项',
-  unavailable: '环境锁暂时不可用',
+  // 同 LOCK_BLOCK_MESSAGE：getter 形态保证「取文案时才解析语言」。
+  get locked() { return utilsMsg('utils.envLock.brief.locked') },
+  get blocked() { return utilsMsg('utils.envLock.brief.blocked') },
+  get unavailable() { return utilsMsg('utils.envLock.brief.unavailable') },
   // stale 必须点出「残留」——否则用户会像 issue #31 那样等 9 天（57 次静默跳过）。
-  stale: '残留配置锁（持有进程已不存在），需先回收',
+  get stale() { return utilsMsg('utils.envLock.brief.stale') },
 }
 
 /** destructive 必须成功获取 Environment Lock；否则抛此错（被另一进程/操作持有，或锁不可用）。

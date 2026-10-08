@@ -18,6 +18,7 @@ import type {
 } from './types.ts';
 import { SECTION_IDS } from '../schema/config.ts';
 import type { SectionId } from '../schema/types.ts';
+import { marketMsg } from './messages-market.ts';
 
 const INDEX_ALLOWED = new Set(['schemaVersion', 'name', 'description', 'items']);
 const INDEX_ITEM_ALLOWED = new Set(['id', 'name', 'description', 'author', 'version', 'updatedAt', 'categories', 'repo']);
@@ -38,7 +39,7 @@ function optString(obj: Record<string, unknown>, key: string, errors: string[], 
   const v = obj[key];
   if (v === undefined) return undefined;
   if (typeof v !== 'string') {
-    errors.push(`${path}.${key} 必须是字符串`);
+    errors.push(marketMsg('market.index.fieldMustBeString', { path: `${path}.${key}` }));
     return undefined;
   }
   return v;
@@ -49,7 +50,7 @@ function optStringArray(obj: Record<string, unknown>, key: string, errors: strin
   const v = obj[key];
   if (v === undefined) return undefined;
   if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
-    errors.push(`${path}.${key} 必须是字符串数组`);
+    errors.push(marketMsg('market.index.fieldMustBeStringArray', { path: `${path}.${key}` }));
     return undefined;
   }
   return v as string[];
@@ -62,23 +63,23 @@ function optStringArray(obj: Record<string, unknown>, key: string, errors: strin
  */
 function parseIndexItem(raw: unknown, errors: string[], inPath: string, dropped: { n: number }): MarketIndexItem | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    errors.push(`${inPath} 必须是对象`);
+    errors.push(marketMsg('market.index.mustBeObject', { path: inPath }));
     return null;
   }
   const obj = raw as Record<string, unknown>;
   const uf = unknownFields(obj, INDEX_ITEM_ALLOWED);
   if (uf.length > 0) {
-    errors.push(`${inPath} 含未知字段: ${uf.join(', ')}`);
+    errors.push(marketMsg('market.index.unknownFields', { path: inPath, fields: uf.join(', ') }));
     return null;
   }
   const id = obj['id'];
   if (typeof id !== 'string' || !SAFE_ITEM_ID_RE.test(id)) {
-    errors.push(`${inPath}.id 非法: ${JSON.stringify(id)}（仅允许字母数字开头，字符限 . _ -）`);
+    errors.push(marketMsg('market.index.idInvalid', { path: inPath, id: JSON.stringify(id) }));
     return null;
   }
   const name = obj['name'];
   if (typeof name !== 'string' || name === '') {
-    errors.push(`${inPath}.name 必须是非空字符串`);
+    errors.push(marketMsg('market.index.nameEmpty', { path: inPath }));
     return null;
   }
   // repo 可选：条目来源仓库（发布者自托管）。非法（含 userinfo / 空白 / 非字符串）→ 仅丢弃该条目。
@@ -109,29 +110,29 @@ function parseIndexItem(raw: unknown, errors: string[], inPath: string, dropped:
  */
 export function parseMarketIndex(raw: string): ParseIndexResult {
   if (typeof raw !== 'string' || raw === '') {
-    return { ok: false, index: null, errors: ['index.json 内容为空'] };
+    return { ok: false, index: null, errors: [marketMsg('market.index.contentEmpty')] };
   }
   let parsed: unknown;
   try {
     parsed = parseJsonSafe(raw);
   } catch (err) {
-    return { ok: false, index: null, errors: [`index.json 解析失败: ${err instanceof Error ? err.message : String(err)}`] };
+    return { ok: false, index: null, errors: [marketMsg('market.index.parseFailed', { reason: err instanceof Error ? err.message : String(err) })] };
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, index: null, errors: ['index.json 必须是对象'] };
+    return { ok: false, index: null, errors: [marketMsg('market.index.rootNotObject')] };
   }
   const obj = parsed as Record<string, unknown>;
   const errors: string[] = [];
 
   const uf = unknownFields(obj, INDEX_ALLOWED);
   if (uf.length > 0) {
-    return { ok: false, index: null, errors: [`index.json 含未知字段: ${uf.join(', ')}`] };
+    return { ok: false, index: null, errors: [marketMsg('market.index.rootUnknownFields', { fields: uf.join(', ') })] };
   }
   if (obj['schemaVersion'] !== MARKET_INDEX_SCHEMA_VERSION) {
-    return { ok: false, index: null, errors: [`index.json schemaVersion 必须是 ${MARKET_INDEX_SCHEMA_VERSION}（收到 ${String(obj['schemaVersion'])}）`] };
+    return { ok: false, index: null, errors: [marketMsg('market.index.schemaVersion', { expected: MARKET_INDEX_SCHEMA_VERSION, actual: String(obj['schemaVersion']) })] };
   }
   if (obj['items'] === undefined || !Array.isArray(obj['items'])) {
-    return { ok: false, index: null, errors: ['index.json 缺少 items 数组'] };
+    return { ok: false, index: null, errors: [marketMsg('market.index.itemsMissing')] };
   }
   const items: MarketIndexItem[] = [];
   const dropped = { n: 0 };
@@ -165,46 +166,46 @@ export function parseMarketIndex(raw: string): ParseIndexResult {
  */
 export function parseMarketItemManifest(raw: string): ParseItemManifestResult {
   if (typeof raw !== 'string' || raw === '') {
-    return { ok: false, manifest: null, errors: ['manifest.json 内容为空'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.contentEmpty')] };
   }
   let parsed: unknown;
   try {
     parsed = parseJsonSafe(raw);
   } catch (err) {
-    return { ok: false, manifest: null, errors: [`manifest.json 解析失败: ${err instanceof Error ? err.message : String(err)}`] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.parseFailed', { reason: err instanceof Error ? err.message : String(err) })] };
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, manifest: null, errors: ['manifest.json 必须是对象'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.rootNotObject')] };
   }
   const obj = parsed as Record<string, unknown>;
   const errors: string[] = [];
 
   const uf = unknownFields(obj, MANIFEST_ALLOWED);
   if (uf.length > 0) {
-    return { ok: false, manifest: null, errors: [`manifest.json 含未知字段: ${uf.join(', ')}`] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.unknownFields', { fields: uf.join(', ') })] };
   }
   if (obj['schemaVersion'] !== MARKET_ITEM_SCHEMA_VERSION) {
-    return { ok: false, manifest: null, errors: [`manifest.json schemaVersion 必须是 ${MARKET_ITEM_SCHEMA_VERSION}（收到 ${String(obj['schemaVersion'])}）`] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.schemaVersion', { expected: MARKET_ITEM_SCHEMA_VERSION, actual: String(obj['schemaVersion']) })] };
   }
   const id = obj['id'];
   if (typeof id !== 'string' || !SAFE_ITEM_ID_RE.test(id)) {
-    return { ok: false, manifest: null, errors: [`manifest.json.id 非法: ${JSON.stringify(id)}`] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.idInvalid', { id: JSON.stringify(id) })] };
   }
   const name = obj['name'];
   if (typeof name !== 'string' || name === '') {
-    return { ok: false, manifest: null, errors: ['manifest.json.name 必须是非空字符串'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.nameEmpty')] };
   }
   const version = obj['version'];
   if (typeof version !== 'string' || version === '') {
-    return { ok: false, manifest: null, errors: ['manifest.json.version 必须是非空字符串'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.versionEmpty')] };
   }
   if (!Array.isArray(obj['sections']) || obj['sections'].some((s) => typeof s !== 'string')) {
-    return { ok: false, manifest: null, errors: ['manifest.json.sections 必须是字符串数组'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.sectionsNotArray')] };
   }
   const sections = obj['sections'] as unknown[];
   for (const s of sections) {
     if (!(SECTION_IDS as readonly string[]).includes(s as string)) {
-      return { ok: false, manifest: null, errors: [`manifest.json.sections 含未知分区: ${String(s)}`] };
+      return { ok: false, manifest: null, errors: [marketMsg('market.manifest.unknownSection', { section: String(s) })] };
     }
   }
   // 可选发布模式：仅接受 migrate | share。发布侧 prepare 在 share 模式会写入该字段
@@ -215,43 +216,43 @@ export function parseMarketItemManifest(raw: string): ParseItemManifestResult {
     // 逐字面量比较（不用 `as`）：MarketPublishMode 若新增/改名取值，赋值处会编译失败，
     // 白名单与类型不会各自漂移。
     if (rawMode !== 'migrate' && rawMode !== 'share') {
-      return { ok: false, manifest: null, errors: [`manifest.json.mode 非法: ${JSON.stringify(rawMode)}（仅接受 migrate | share）`] };
+      return { ok: false, manifest: null, errors: [marketMsg('market.manifest.modeInvalid', { mode: JSON.stringify(rawMode) })] };
     }
     mode = rawMode;
   }
 
   const checksums = obj['checksums'];
   if (checksums === null || typeof checksums !== 'object' || Array.isArray(checksums)) {
-    return { ok: false, manifest: null, errors: ['manifest.json.checksums 必须是对象'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.checksumsNotObject')] };
   }
   const csObj = checksums as Record<string, unknown>;
   const csUf = unknownFields(csObj, CHECKSUMS_ALLOWED);
   if (csUf.length > 0) {
-    return { ok: false, manifest: null, errors: [`manifest.json.checksums 含未知字段: ${csUf.join(', ')}`] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.checksumsUnknownFields', { fields: csUf.join(', ') })] };
   }
   const zip = csObj['zip'];
   if (typeof zip !== 'string' || zip === '') {
-    return { ok: false, manifest: null, errors: ['manifest.json.checksums.zip 必须是非空字符串'] };
+    return { ok: false, manifest: null, errors: [marketMsg('market.manifest.checksumsZipEmpty')] };
   }
 
   let provenance: MarketItemManifest['provenance'];
   if (obj['provenance'] !== undefined) {
     const p = obj['provenance'];
     if (p === null || typeof p !== 'object' || Array.isArray(p)) {
-      return { ok: false, manifest: null, errors: ['manifest.json.provenance 必须是对象'] };
+      return { ok: false, manifest: null, errors: [marketMsg('market.manifest.provenanceNotObject')] };
     }
     const pObj = p as Record<string, unknown>;
     const pUf = unknownFields(pObj, PROVENANCE_ALLOWED);
     if (pUf.length > 0) {
-      return { ok: false, manifest: null, errors: [`manifest.json.provenance 含未知字段: ${pUf.join(', ')}`] };
+      return { ok: false, manifest: null, errors: [marketMsg('market.manifest.provenanceUnknownFields', { fields: pUf.join(', ') })] };
     }
     const source = pObj['source'];
     const note = pObj['note'];
     if (source !== undefined && typeof source !== 'string') {
-      return { ok: false, manifest: null, errors: ['manifest.json.provenance.source 必须是字符串'] };
+      return { ok: false, manifest: null, errors: [marketMsg('market.manifest.provenanceSourceNotString')] };
     }
     if (note !== undefined && typeof note !== 'string') {
-      return { ok: false, manifest: null, errors: ['manifest.json.provenance.note 必须是字符串'] };
+      return { ok: false, manifest: null, errors: [marketMsg('market.manifest.provenanceNoteNotString')] };
     }
     provenance = {
       ...(source !== undefined ? { source } : {}),

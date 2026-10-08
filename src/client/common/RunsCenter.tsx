@@ -209,6 +209,7 @@ export function RunsCenter({ api, recoveryApi, t, defaultRollbackOnError }: Runs
               active={card.status === 'running'}
               // 失败的任务绝不能渲染成「成功绿」（结束态的默认色是 success）
               failed={card.status === 'failed'}
+              t={api.t}
             />
             {card.counts !== null && (
               <div className={css.runsCounts}>

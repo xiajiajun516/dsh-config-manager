@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 
 import { computeProgressView } from './progress-view.ts'
 import type { RunProgress } from './progress-view.ts'
+import { zhUiT } from '../../ui/i18n.ts'
 
 test('m3-render 边界: step/total 与 item/itemTotal 并存时百分比优先 step/total', () => {
   // 若误用 item/itemTotal 会算出 25%（3/12）；文档行为是优先 step/total → 33%
@@ -28,33 +29,33 @@ test('m3-render 边界: step/total 与 item/itemTotal 并存时百分比优先 s
     itemTotal: 12,
     detail: 'settings',
   }
-  const view = computeProgressView(event)
+  const view = computeProgressView(event, zhUiT)
   assert.equal(view.percent, 33, '百分比取 step/total（1/3 → 33%）而非 item/itemTotal')
   assert.deepEqual(view.sectionBadge, { label: 'settings', current: 3, total: 12 }, '徽章仍用分区计数')
 })
 
 test('m3-render 边界: sectionTotal 为 0 → 无分区徽章（total 必须 >0）', () => {
-  const view = computeProgressView({ stage: 'executing', section: 'plugins', sectionTotal: 0, item: 2, itemTotal: 10 })
+  const view = computeProgressView({ stage: 'executing', section: 'plugins', sectionTotal: 0, item: 2, itemTotal: 10 }, zhUiT)
   assert.equal(view.sectionBadge, null, 'total=0 时不渲染分区徽章')
   assert.deepEqual(view.countBadge, { label: 'plugins', current: 2, total: 10 }, '内部计数徽章不受影响')
 })
 
 test('m3-render 边界: itemTotal 为 0 → 无内部计数徽章且百分比不定态（除零防御）', () => {
-  const view = computeProgressView({ stage: 'executing', section: 'plugins', item: 0, itemTotal: 0, detail: 'x' })
+  const view = computeProgressView({ stage: 'executing', section: 'plugins', item: 0, itemTotal: 0, detail: 'x' }, zhUiT)
   assert.equal(view.countBadge, null, 'itemTotal=0 不渲染计数徽章')
   assert.equal(view.percent, null, 'total=0 时百分比不定态（避免除零）')
   assert.equal(view.detail, 'x', 'detail 与 section 不同时保留')
 })
 
 test('m3-render 边界: section 有值但 item 为 null → 分区徽章不渲染（徽章需 current）', () => {
-  const view = computeProgressView({ stage: 'executing', section: 'settings', sectionTotal: 5, item: null, itemTotal: 5 })
+  const view = computeProgressView({ stage: 'executing', section: 'settings', sectionTotal: 5, item: null, itemTotal: 5 }, zhUiT)
   assert.equal(view.sectionBadge, null)
   assert.equal(view.countBadge, null)
   assert.equal(view.percent, null, '无 step/total 且 item null → 不定态')
 })
 
 test('m3-render 边界: 百分比取整（Math.round 而非截断）', () => {
-  assert.equal(computeProgressView({ stage: 'exporting', step: 1, total: 3 }).percent, 33)
-  assert.equal(computeProgressView({ stage: 'exporting', step: 2, total: 3 }).percent, 67)
-  assert.equal(computeProgressView({ stage: 'exporting', step: 1, total: 6 }).percent, 17)
+  assert.equal(computeProgressView({ stage: 'exporting', step: 1, total: 3 }, zhUiT).percent, 33)
+  assert.equal(computeProgressView({ stage: 'exporting', step: 2, total: 3 }, zhUiT).percent, 67)
+  assert.equal(computeProgressView({ stage: 'exporting', step: 1, total: 6 }, zhUiT).percent, 17)
 })

@@ -7,13 +7,14 @@
  * 复用 sync 的 validateRepoUrl（拒绝 userinfo / 空白），叠加 scheme 强制。
  */
 import { validateRepoUrl } from '../sync/sync-config.ts'
+import { marketMsg } from './messages-market.ts'
 
 /** 校验市场仓库地址；合法返回 null，非法返回错误消息。仅接受 http(s)，拒绝 git@/ssh/空白/含 userinfo。 */
 export function validateMarketRepoUrl(repoUrl: string): string | null {
   const err = validateRepoUrl(repoUrl)
   if (err !== null) return err
   if (!/^https?:\/\//i.test(repoUrl.trim())) {
-    return '市场仓库地址仅支持 http(s)（拒绝 git@/ssh 等形态）'
+    return marketMsg('market.url.schemeUnsupported')
   }
   return null
 }

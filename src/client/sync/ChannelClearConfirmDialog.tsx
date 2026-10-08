@@ -48,7 +48,7 @@ export function ChannelClearConfirmDialog({ open, channel, api, t, onCancel, onC
           toast.ok(t('toast.channelCleared', { channel: channelLabel }))
           onCleared()
         } catch (err) {
-          toast.error(`${t('toast.channelClearFailed')}：${redact(err instanceof Error ? err.message : String(err))}`)
+          toast.error(t('toast.channelClearFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
         }
       }}
       onCancel={onCancel}

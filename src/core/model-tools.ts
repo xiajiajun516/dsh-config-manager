@@ -20,6 +20,7 @@
  *   - config_sync_pull 零写入（只 analyze+plan 出差异）；落地需另走确认导入管道；
  *   - 分区/路径走既有白名单（SECTION_IDS 过滤；同步引擎 portable + FORBIDDEN_SECTIONS 双保险）。
  */
+import { engineMsg } from './messages-core.ts';
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { randomBytes } from 'node:crypto'
@@ -68,7 +69,7 @@ export interface ModelToolsDeps {
 /** 快照 id 校验：拒绝路径分隔符与 `.`/`..`（防 join(snapshotsDir, id) 越界）。 */
 function assertValidSnapshotId(snapshotId: string): void {
   if (snapshotId === '' || snapshotId.includes('/') || snapshotId.includes('\\')) {
-    throw new Error(`非法快照 id：${JSON.stringify(snapshotId)}`)
+    throw new Error(engineMsg('core.modelTools.illegalSnapshotId', { id: JSON.stringify(snapshotId) }))
   }
 }
 
@@ -99,7 +100,7 @@ async function resolveEngine(
   const ch: SyncTransportType = channel ?? parseSyncChannel(full?.transport) ?? 'git'
   const cfg = await readSyncConfigFor(deps.syncDir, ch)
   if (cfg === null) {
-    throw new Error(`同步通道 ${ch} 尚未配置（sync-config.json 缺失或损坏）`)
+    throw new Error(engineMsg('core.modelTools.syncChannelNotConfigured', { channel: ch }))
   }
   return { engine: deps.makeSyncEngine(cfg), channel: ch }
 }
@@ -171,7 +172,7 @@ export function createModelTools(deps: ModelToolsDeps) {
       const { snapshotId, confirm } = input
       assertValidSnapshotId(snapshotId)
       if (!(await snapshotDirExists(deps, snapshotId))) {
-        throw new Error(`快照不存在：${snapshotId}（用 config_list_snapshots 查看可用快照）`)
+        throw new Error(engineMsg('core.modelTools.snapshotNotFound', { id: snapshotId }))
       }
       const snapshotDir = join(deps.snapshotsDir, snapshotId)
       // profile：host.profile 由宿主 resolveProfileName 保证非空（缺省 'web'，见 ConfigManagerHostContext），
@@ -315,7 +316,7 @@ type ModelTools = ReturnType<typeof createModelTools>
 export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
   const toolsSvc = ctx.get('tools')
   if (toolsSvc === null || toolsSvc === undefined || typeof toolsSvc !== 'object') {
-    deps.host.log.warn?.('tools 服务不可用：跳过模型工具注册（引擎能力仍可用）')
+    deps.host.log.warn?.(engineMsg('core.modelTools.toolsServiceUnavailable'))
     return
   }
   const tools: ModelTools = createModelTools(deps)
@@ -329,22 +330,22 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
 
   register(defineTool({
     name: 'config_backup',
-    description: '全量备份 DSH 配置到本地 exports 目录（默认不含 secret；可传 password 加密导出）。返回 ZIP 文件名/大小/分区清单/加密状态。',
+    description: engineMsg('core.modelTools.backupToolDesc'),
     parameters: {
       only: {
         type: 'array',
         items: { type: 'string', enum: [...SECTION_IDS] },
-        description: '仅导出的分区 id 白名单；缺省 = 全部推荐分区',
+        description: engineMsg('core.modelTools.backupOnlyParam'),
       },
       password: {
         type: 'string',
-        description: '可选：加密备份密码（仅内存，不落盘/不回显；提供即加密导出）',
+        description: engineMsg('core.modelTools.backupPasswordParam'),
       },
     },
     output: {
       schema: {
         type: 'json',
-        description: '备份结果（zip 文件名 / sizeBytes / 分区清单 / excluded / encrypted / containsSecrets / redactedHits / warnings）',
+        description: engineMsg('core.modelTools.backupOutputDesc'),
       },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
@@ -355,12 +356,12 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
 
   register(defineTool({
     name: 'config_list_snapshots',
-    description: '列出 DSH 配置的本地回滚快照（id / 创建时间 / 来源 / 状态 / 条目数），供后续 config_restore 使用。',
+    description: engineMsg('core.modelTools.listSnapshotsToolDesc'),
     parameters: {},
     output: {
       schema: {
         type: 'json',
-        description: '快照数组（id / createdAt / sourceZip / status / entryCount）',
+        description: engineMsg('core.modelTools.listSnapshotsOutputDesc'),
       },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
@@ -372,20 +373,20 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
   register(defineTool({
     name: 'config_restore',
     description:
-      '恢复到指定快照。默认只返回动作计划（零写入）；确认要真实执行时传 confirm:true（会覆盖/删除 $DSH_HOME 文件并卸载导入期间新增插件，属破坏性操作，务必先预览）。',
+      engineMsg('core.modelTools.restoreToolDesc'),
     parameters: {
       snapshotId: {
         type: 'string',
         required: true,
-        description: '要恢复的快照 id（用 config_list_snapshots 获取）',
+        description: engineMsg('core.modelTools.restoreSnapshotIdParam'),
       },
       confirm: {
         type: 'boolean',
-        description: 'true 才真实执行恢复；缺省 false 只预览计划（零写入）',
+        description: engineMsg('core.modelTools.restoreConfirmParam'),
       },
     },
     output: {
-      schema: { type: 'json', description: 'dryRun=true 时为恢复计划；dryRun=false 时为执行报告' },
+      schema: { type: 'json', description: engineMsg('core.modelTools.restoreOutputDesc') },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
     async execute(args) {
@@ -396,33 +397,33 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
   register(defineTool({
     name: 'config_sync_push',
     description:
-      '手动推送 DSH 配置同步到远端（Git/WebDAV），复用已持久化的通道配置。写远端属主动操作；加密/含凭据须传 password 且引擎强制 encrypt。',
+      engineMsg('core.modelTools.syncPushToolDesc'),
     parameters: {
       channel: {
         type: 'string',
         enum: [...SYNC_CHANNELS],
-        description: '同步通道；缺省 = 已配置的活动通道',
+        description: engineMsg('core.modelTools.channelParam'),
       },
       sections: {
         type: 'array',
         items: { type: 'string', enum: [...SECTION_IDS] },
-        description: '仅推送的分区；缺省 = 全部推荐 portable 分区（非 portable 自动跳过）',
+        description: engineMsg('core.modelTools.syncPushSectionsParam'),
       },
       encrypt: {
         type: 'boolean',
-        description: '加密快照；开启必须提供 password',
+        description: engineMsg('core.modelTools.syncPushEncryptParam'),
       },
       includeSecrets: {
         type: 'boolean',
-        description: '推送真实凭据值（必须同时 encrypt=true，否则引擎拒绝）',
+        description: engineMsg('core.modelTools.syncPushIncludeSecretsParam'),
       },
       password: {
         type: 'string',
-        description: '加密密码（仅内存，不落盘/不回显）',
+        description: engineMsg('core.modelTools.syncPushPasswordParam'),
       },
     },
     output: {
-      schema: { type: 'json', description: '推送报告（snapshotId / 实际同步分区 / 告警）' },
+      schema: { type: 'json', description: engineMsg('core.modelTools.syncPushOutputDesc') },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
     async execute(args) {
@@ -433,29 +434,29 @@ export function registerModelTools(ctx: Context, deps: ModelToolsDeps): void {
   register(defineTool({
     name: 'config_sync_pull',
     description:
-      '拉取远端同步差异预览（Git/WebDAV，零写入：只下载 + 分析出差异报告，绝不直接写配置）。若要落地差异需另走确认导入管道。',
+      engineMsg('core.modelTools.syncPullToolDesc'),
     parameters: {
       channel: {
         type: 'string',
         enum: [...SYNC_CHANNELS],
-        description: '同步通道；缺省 = 已配置的活动通道',
+        description: engineMsg('core.modelTools.channelParam'),
       },
       snapshotId: {
         type: 'string',
-        description: '远端快照 id；缺省 = 最新',
+        description: engineMsg('core.modelTools.syncPullSnapshotIdParam'),
       },
       strategy: {
         type: 'string',
         enum: ['merge', 'replace', 'skipExisting'],
-        description: '冲突全局策略；缺省 merge（冲突保留待决策）',
+        description: engineMsg('core.modelTools.syncPullStrategyParam'),
       },
       password: {
         type: 'string',
-        description: '解密密码（加密快照需要；仅内存）',
+        description: engineMsg('core.modelTools.syncPullPasswordParam'),
       },
     },
     output: {
-      schema: { type: 'json', description: '差异报告（changes 列表 / needsReview）' },
+      schema: { type: 'json', description: engineMsg('core.modelTools.syncPullOutputDesc') },
       render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }],
     },
     async execute(args) {

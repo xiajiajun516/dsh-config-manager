@@ -24,6 +24,7 @@
  *    或复用 P0-1 的 config_backup 模型工具在 agent 会话内驱动。
  */
 import type { Logger } from '../utils/logger.ts';
+import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
 import type { ConfigAdapter, HostContext, SecretScanner } from '../core/types.ts';
@@ -240,7 +241,7 @@ export class BackupScheduler {
   async runOnce(opts: { manual?: boolean } = {}): Promise<BackupRunResult> {
     const manual = opts.manual === true;
     /** 日志 / 迁移历史的来源词：手动触发不得冒充「定时备份」。 */
-    const trigger = manual ? '手动备份' : '定时备份';
+    const trigger = manual ? engineMsg('sync.backupTriggerManual') : engineMsg('sync.backupTriggerScheduled');
     if (this.running) {
       return { status: 'skipped', skipReason: 'running', consecutiveFailures: 0 };
     }
@@ -380,7 +381,7 @@ export class BackupScheduler {
     if (this.appendHistoryFn === undefined) return;
     // issue #43：手动与定时备份在同一份迁移史里必须可区分 —— 来源词与 kind 同源判定，
     // 避免「日志说手动、条目说定时」两处漂移。
-    const trigger = manual ? '手动备份' : '定时备份';
+    const trigger = manual ? engineMsg('sync.backupTriggerManual') : engineMsg('sync.backupTriggerScheduled');
     try {
       await this.appendHistoryFn({
         kind: manual ? 'backup-manual' : 'backup',
@@ -388,10 +389,10 @@ export class BackupScheduler {
         sections: result.status === 'success' ? (result.sections ?? []) : [],
         source: 'backup-scheduler',
         summary: result.status === 'success'
-          ? `${trigger}完成：${result.zip ?? ''}`
+          ? engineMsg('sync.backupHistoryDone', { trigger, zip: result.zip ?? '' })
           : result.status === 'skipped'
-            ? `${trigger}跳过：${lockReason !== undefined ? LOCK_BLOCK_BRIEF[lockReason] : (result.skipReason ?? '')}`
-            : `${trigger}失败`,
+            ? engineMsg('sync.backupHistorySkipped', { trigger, reason: lockReason !== undefined ? LOCK_BLOCK_BRIEF[lockReason] : (result.skipReason ?? '') })
+            : engineMsg('sync.backupHistoryFailed', { trigger }),
         error: result.status === 'failed' ? (result.error ?? undefined) : undefined,
       });
     } catch (err) {

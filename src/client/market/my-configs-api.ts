@@ -24,7 +24,7 @@
 import type {
   DeleteResult, ListingStatusResponse, MyItemEntry, MyRepoForm, UploadResult,
 } from '../../market/my-repo.ts';
-import { zhUiT, type UiT } from '../../ui/i18n.ts';
+import type { UiT } from '../../ui/i18n.ts';
 import { LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import { MY_CONFIGS_API } from '../common/routes.ts';
 
@@ -86,7 +86,7 @@ export interface MyItemsResponse {
  */
 export class MyConfigsApi {
   readonly t: UiT
-  constructor(t: UiT = zhUiT) {
+  constructor(t: UiT) {
     this.t = t
   }
 

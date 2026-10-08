@@ -125,7 +125,7 @@ export function MyConfigsView({
   const [listLoading, setListLoading] = useState(false)
 
   /* ---------------- 向导（受控：切片来自 runStore；瞬态本地重建）/ 装回本地 / 删除 ---------------- */
-  const [wizard, setWizard] = useState<MyWizardState>(() => restoreMyWizard(myWizard))
+  const [wizard, setWizard] = useState<MyWizardState>(() => restoreMyWizard(myWizard, uiT))
   /** 最近一次 wizard 全量（commitWizard 读最新值，避免闭包过期） */
   const wizardRef = useRef<MyWizardState>(wizard)
   /** 收录/下架任务状态（结果卡轮询 /me/listing 的实时结果） */

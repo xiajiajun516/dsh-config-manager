@@ -544,3 +544,34 @@ d`。
 **③ 面向用户的清单必须从单一事实源派生。** 救急台 404 / 405 / 错误页的「可用页面」提示此前有三份互不相同的硬编码（还把 JSON 端点 `/healthz` 当页面推荐）。现在统一由 `page.ts` 的 `CONSOLE_PAGE_NAV` 经 `consolePagesHint()` 派生，并新增 `src/cli/web/console-route-parity.test.ts` 做**双向**断言（路由 `(method,path)` ↔ 硬编码快照、导航表 ↔ 路由集合）—— 多一条/少一条都红，这正是这类漂移能长期存活的原因。
 
 **未做（如实）**：`--profile` 有意放行 `web`（runWeb 真的把它当救急台目标档案用）；「可用页面」严格等于 8 项头部导航，因此 `/lock` / `/verify`（首页动作卡入口）不在该提示里；`runWeb` 的 `locksDir` 现恒为 `<root>/locks`（不再走 `resolveRecoverLocksDir` 的候选根探测，`recover-stale-lock` 命令未改）。
+
+## 英文界面零中文：守卫口径、白名单与残余（2026-10-08；与 AGENTS.md §i18n 同源）
+
+**根因（两个一次性语言绑定）**：① 客户端 `src/client/index.ts` 在插件加载时用 `makeUiT(ctx.locale.getLocale().active === 'en' ? 'en' : 'zh')` 把 `uiT` **快照**进闭包 —— 而 `ctx.locale.getLocale()` 的官方契约是「当前不可变快照」（不是活查询），DSH 官方 `ctx.locale.bind(ns)` 的 `t` 才是活函数（每次读 `snapshot.active`）⇒ 用户切到 English 后，所有走 `UiT` 的报告 / 错误 / 进度 / 导入向导 / 同步 / 市场文案**永远是加载时那门语言**；② 宿主 `this.msg = makeMsg(resolveAppLanguage(ctx))` 同样在装配期冻结，而 `src/routes/kit.ts` 的 `errorMessage` 会把 `error.message` 原样回浏览器 ⇒ 引擎里的中文**逐字出现在 ErrorBanner**。
+
+**修法**：语言在「取文案那一刻」解析 —— `makeLiveUiT(read)`（客户端 `src/ui/i18n.ts`，`setUiLanguageSource` 接线）+ `engineMsg` / `setEngineLanguageSource` / `invalidateEngineLocale`（`src/core/engine-locale.ts`；路由注册点 `endpoint()` 每请求失效，`LANGUAGE_TTL_MS = 1000` 只兜底调度器 / 后台任务）+ `registerMessageCatalog`（各域目录并入既有 zh/en，**只在既有目录未命中时生效**）。**不得**再在 `apply()` 里出现 `makeUiT(...)` / `makeMsg(...)` 快照。
+
+**守卫口径（冻结）**：`tests/helpers/i18n-scan.ts`（逐字符词法状态机 code/comment/string；命中单位 = 字面量 × 行）+ `tests/i18n-hardcoded-guard.test.ts`。
+
+- 扫描集 = `src/**/*.{ts,tsx,json}` − `src/cli/**` − `**/*.test.ts(x)` − `src/**/fixtures/**` + `locale/en.json` + `locale/zh.json`（后者整文件豁免）。**`src/**/*.css` 不在扫描集**：实测 `src/client/config-manager.module.css` 14917 个 CJK **全在注释内**（剥离注释后 0）⇒ 当前无漏，但将来 `content: '中文'` 或中文字体名会静默漏过（属契约级留白，需另行决策）。
+- 三条豁免：E1 注释、E2 `log.*` / `console.*` 实参区间、E3 目录 zh 区。**E2 的 callee 判定要求 `(` 紧贴 callee** ⇒ `log.info ('中文')`（括号前有空格）不享豁免（保守误红，方向安全）。
+- 命令：全量 `node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 零命中，摘要行 `DCM_I18N_GUARD scope=ALL files=… hits=0 allowlisted=128`）；作用域 `$env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'`（只收窄文件列表；非法值直接失败；空集不算通过）。
+- 白名单 4 条 / 128 命中（**整文件豁免** + 计数精确锚定；新增只能走 captain）：`src/foreign/truth-table.ts` 61（取证数据，从不渲染）、`src/ui/test-helpers.ts` 12（仅供 `*.test.ts`，不进 bundle）、`src/ui/commands.ts` 49（`COMMANDS[].keywords` 是命令面板**检索同义词**：`matchScore` 只做 toLowerCase/startsWith/includes 折成分档数值，返回值只带 `{item, disabled}`，可见标题走 `titleOf(titleKey)` → 壳层 `t()`）、`src/ui/errors.ts` 6（`buildErrorRules()` 的 `match` 正则只对宿主错误消息 `.test()` 挑规则，正则不进返回值；显示文本走 `error.*.title/.action`）。
+- 实测基线（同一工作树口径）：迁移前红 **1107 + 白名单 73 = 1180** → t2 落守卫后 **1084 + 73 = 1157** → t12 落两条白名单后 hits **再减 55**（49 + 6）→ 最终 `hits=0 / allowlisted=128`；扫描文件数 412 → 424。
+
+**并发期门禁口径（迁移期，2026-10-08）**：多个实现任务并行改同一棵工作树时，整树 `npm run typecheck` / `npm run typecheck:tests` / `npm test` 的报错**若全部落在自己作用域之外**，不作为个体任务失败判据 —— 实测同一命令连续三次运行的报错文件集不断变化（`src/client/sync/**` → `src/schema/**`，错误数 5 → 85 → 70）且零条涉及当事任务的文件。个体任务只跑 `DCM_I18N_GUARD_SCOPE` 作用域门禁 + 自己文件的隔离类型检查；全树门禁由 t8（独立验证）与 t11（集成）在全部实现落地后统一执行。**t12 是这条口径的第一次实际适用**：交付完成、作用域门禁 `exit 0`，但 verify 的 `typecheck:tests` 被在途编辑挡住 ⇒ 走 amend 报回 captain，**没有**为了绿灯放宽口径。
+
+**残余（如实登记，不得隐去）**：
+
+1. `src/core/model-tools.ts` 的 5 条工具描述在 `apply()` 期解析（DSH 工具注册是「**注册即快照**」）⇒ 会话中途切语言不即时更新，要重启 DSH。
+2. 各域目录的键归属自检口径 = 「调用点引用的键必须存在于**已注册**目录」；键类型另由 `tsc` 强制。新增域目录必须同时 `registerMessageCatalog`，否则 `engineMsg` 只回退键名（可见缺陷，不崩溃）。
+3. `src/cli/index.ts:1025` 仍按文案子串 `detail.includes('无有效 owner')` 判 corrupt 锁 —— CLI 恒 zh 故当前正确；**若 CLI 将来接语言源必须改成结构性判据**（参照 `src/utils/env-lock.ts` 的 `corruptOwnership`）。
+4. 语言映射边界：只有**精确 `'zh'`** 视为中文，`'zh-Hans'` / `'zh-TW'` 等语言包 id 回落 en（DSH 内建仅 zh/en，当前无实际影响；引入 zh-* 语言包前必须决策是否改前缀匹配）。
+5. 白名单是**整文件**豁免（无按行锚定 / 无到期日）—— 新增中文仍会因计数漂移立刻变红，但通道本身可被审批拓宽（t9 评审 F1）。
+6. **E3 归属门禁：t16 首版有旁路 → t17 判 failed → t18 修复 → t19 独立复验 verdict=pass（另报 2 条 low 残余 V1-①/②）；fail-closed 已由 t17/t19 认可**：
+   · **旁路（F2，重开）**：t16 的 `isCatalogOwnerFile`（`tests/helpers/i18n-scan.ts:229-231`）直接在**原始文本**上跑 `CATALOG_OWNER_CALL_RE` ⇒ 注释 / 字符串里提一句 `registerMessageCatalog(` 就给整文件授予 zh 豁免。t17 探针 `src/ui/__t17_probe_comment.ts` 复现 ★ 反例（全量守卫 `exit 0`）。**现树影响面 0**（没有这种文件），但通道可被无声拓宽。修复：**t18** 把判据收紧为「只认 **code 位置**的 `register*MessageCatalog` / `makeCatalogMsg` 调用」（`codeOnlyText` 掩码 + 原始文本快速预筛 + 自检 **S12**），**t19 独立复验 verdict=pass**（注释版 / 字符串版 → `exit 1` 并点名、真实调用 → `exit 0`、掩码不拼假匹配、fail-closed 与边界回归全过、两个守卫产物 SHA256 与探针前逐字相同）。**残余 low（V1）**：① 正则**无左边界** ⇒ `myregisterMessageCatalog(` 这类后缀名仍授予整文件豁免；② **类型注解 / 声明形态**（`registerMessageCatalog(id: string, …): void`）也算「调用」——**不得**写「任何文本形态都不能绕开归属」；**现树无假属主**（14 个含匹配文件里只有 engine-locale.ts 的定义形态与 s3/messages.ts，均不持有用户可见 zh 字典）。
+   · **已认可**：fail-closed（词法区间 / E2 括号 / E3 大括号未闭合 ⇒ 不豁免 + `ScanAnomaly`；守卫 A3 报「不可判定（扫描区间未闭合）」、S10 六种样本）与归属门禁的**正例**（S9 / S11）—— t17 结论原文：「t16 的 fail-closed（A3）与归属门禁的正例都成立」。
+   · **仍然存在**：白名单整文件豁免（F1）与 F4 的三条口径留白（`log.info ('中文')` 保守误红、A2 的门禁是全量运行、`.css` 不在扫描集）。
+   · 实测（收尾）：全量 `exit 0 / files=424 hits=0 allowlisted=128`、守卫 17/17、`npm test` 4057 用例 / 4055 pass / 0 fail / 2 skipped；`files=` 随新增源文件与在途探针浮动，**不变量是 `hits=0` / `allowlisted=128`**。
+
+**验证口径（未做即如实）**：结论来自静态守卫 + `npm test`（4052 用例 4050 pass / 0 fail / 2 skipped）+ `typecheck` / `typecheck:tests` / `build`；**真机逐页签 DOM 抽查未做**（验证会话无浏览器通道），不当作已通过。

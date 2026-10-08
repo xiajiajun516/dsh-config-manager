@@ -16,7 +16,7 @@
  * 安全硬约束：本层只做展示推导，不接触 token / 凭据；PR URL 由调用方提供，
  * 渲染前仍过 redact() 兜底（与全站一致）。
  */
-import { zhUiT, type UiT } from '../../ui/i18n.ts'
+import type { UiT } from '../../ui/i18n.ts'
 import type { UploadResult } from '../../market/my-repo.ts'
 import type { MarketDownloadResult } from '../../market/types.ts'
 import type { ImportResult, ItemResolution } from '../../core/types.ts'
@@ -100,7 +100,7 @@ export interface MyConfigFormErrors {
 }
 
 /** 表单校验：名称必填（trim 后非空）。描述/类别可选。 */
-export function validateMyConfigForm(form: MyConfigForm, t: UiT = zhUiT): MyConfigFormErrors {
+export function validateMyConfigForm(form: MyConfigForm, t: UiT): MyConfigFormErrors {
   return { name: form.name.trim() === '' ? t('myConfigs.form.errorName') : null }
 }
 
@@ -200,7 +200,7 @@ export function toMyWizardSlice(w: MyWizardState): MyWizardSlice {
  * 持久化切片 → 全量状态（null → 全新向导）。瞬态字段归零（validating/running 恒 false），
  * formErrors 按 form 经 validateMyConfigForm 重算；form 拷贝新对象（不共享切片引用）。
  */
-export function restoreMyWizard(slice: MyWizardSlice | null): MyWizardState {
+export function restoreMyWizard(slice: MyWizardSlice | null, t: UiT): MyWizardState {
   if (slice === null) return { ...EMPTY_MY_WIZARD, form: { ...EMPTY_MY_CONFIG_FORM } }
   return {
     mode: slice.mode,
@@ -211,7 +211,7 @@ export function restoreMyWizard(slice: MyWizardSlice | null): MyWizardState {
     validated: slice.validated,
     validationError: slice.validationError,
     form: { ...slice.form },
-    formErrors: validateMyConfigForm(slice.form),
+    formErrors: validateMyConfigForm(slice.form, t),
     running: false,
     result: slice.result,
     error: slice.error,
@@ -301,7 +301,7 @@ export interface AutoFieldBadge {
 }
 
 /** 系统自动字段徽章列表（id/作者/版本/更新时间 → 「系统自动」徽章）。 */
-export function autoFieldBadges(t: UiT = zhUiT): AutoFieldBadge[] {
+export function autoFieldBadges(t: UiT): AutoFieldBadge[] {
   const autoText = t('myConfigs.autoField')
   const labels: { field: MyConfigAutoField; label: string }[] = [
     { field: 'id', label: t('myConfigs.field.id') },
@@ -410,7 +410,7 @@ export function itemStatusFromHost(entry: {
 }
 
 /** 收录状态 → 徽章模板（ok=已收录 / warn=PR 待审核 / info=未收录）。 */
-export function itemStatusBadge(status: ItemStatus, t: UiT = zhUiT): ItemStatusBadge {
+export function itemStatusBadge(status: ItemStatus, t: UiT): ItemStatusBadge {
   switch (status.kind) {
     case 'listed':
       return { kind: 'ok', text: t('myConfigs.status.listed') }
@@ -438,7 +438,7 @@ export interface MyItemView {
 }
 
 /** 条目投影：缺失字段给默认值（name 缺省回退 id；其余空串/空数组）。 */
-export function toMyItemView(item: MyItemSource, status: ItemStatus, t: UiT = zhUiT): MyItemView {
+export function toMyItemView(item: MyItemSource, status: ItemStatus, t: UiT): MyItemView {
   return {
     id: item.id,
     name: item.name !== undefined && item.name.trim() !== '' ? item.name : item.id,
@@ -462,7 +462,7 @@ export interface MyItemsInput {
 }
 
 /** 列表级装配：每条目推导收录状态 + 投影 + 徽章（React 壳只渲染）。 */
-export function buildMyItemsView(input: MyItemsInput, t: UiT = zhUiT): MyItemView[] {
+export function buildMyItemsView(input: MyItemsInput, t: UiT): MyItemView[] {
   return input.items.map((item) => {
     const officialListed = input.officialListedIds.has(item.id)
     const openPr = input.openPrs.find((p) => p.head === prBranchFor(item.id)) ?? null

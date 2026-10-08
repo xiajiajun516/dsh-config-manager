@@ -15,6 +15,7 @@ import { packLocalPlugins, parsePackOutput } from './local-plugin-pack.ts';
 import { quoteCmdArg } from './plugin-cli.ts';
 import type { PackExec, PackExecResult, PackLocalPluginsResult } from './local-plugin-pack.ts';
 import type { HostContext } from './types.ts';
+import { engineMsg } from './messages-core.ts';
 
 /**
  * 本地源插件打包钩子签名。
@@ -69,7 +70,7 @@ const defaultExec: PackExec = (file, args, opts) =>
       if (settled) return;
       settled = true;
       child.kill();
-      resolve({ stdout, stderr: `${stderr}\nnpm pack 超时（${timeoutMs}ms）已终止`, code: 1 });
+      resolve({ stdout, stderr: engineMsg('core.localPluginHost.packTimeout', { stderr, timeoutMs }), code: 1 });
     }, timeoutMs);
     timer.unref?.();
 
@@ -124,7 +125,7 @@ export function createLocalPluginPackHook(opts: LocalPluginPackHookOptions): Loc
       return {
         packed: [],
         rewritten: {},
-        warnings: [`本地插件打包临时目录创建失败，已跳过本地插件打包: ${err instanceof Error ? err.message : String(err)}`],
+        warnings: [engineMsg('core.localPluginHost.tmpDirCreateFailed', { reason: err instanceof Error ? err.message : String(err) })],
       };
     }
 

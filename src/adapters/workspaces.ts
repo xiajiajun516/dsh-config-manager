@@ -8,6 +8,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { normalizePath } from '../utils/paths.ts';
 import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
+// t6：注册 adapters 域追加目录（本模块只消费注入的 msg，故只引它的注册副作用）。
+import './messages.ts';
 import type { WorkspaceRecord, WorkspacesSection } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
@@ -214,14 +216,16 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
       // 目标端无法写入（如路径 realpath 失败/目录不存在）→ 非致命警告（§34.17），
       // 不触发整体回滚——否则一个失效路径会拖垮已成功导入的其余配置。
       const reason = err instanceof Error ? err.message : String(err);
-      const detail = notes.length > 0 ? '（' + notes.join('；') + '）' : '';
+      const detail = notes.length > 0
+        ? ctx.msg('adapter.workspaceNotesParen', { notes: notes.join(ctx.msg('adapter.listSeparator')) })
+        : '';
       return {
         ok: false,
         warning: true,
         message: ctx.msg('adapter.workspaceWriteFailed', { ref, msg: reason }) + detail,
       };
     }
-    return { ok: true, ...(notes.length > 0 ? { message: notes.join('；') } : {}) };
+    return { ok: true, ...(notes.length > 0 ? { message: notes.join(ctx.msg('adapter.listSeparator')) } : {}) };
   }
 
   /**
@@ -431,7 +435,7 @@ async function registerImportedSessions(
   const outsideNote = outsideFailed > 0
     ? ctx.msg('adapter.workspaceSessionsOutsideBundle', { count: String(outsideFailed) })
     : '';
-  const compose = (head: string): string => (outsideNote === '' || head === '' ? head + outsideNote : head + '；' + outsideNote);
+  const compose = (head: string): string => (outsideNote === '' || head === '' ? head + outsideNote : head + ctx.msg('adapter.listSeparator') + outsideNote);
   if (bundledFailed > 0) {
     return {
       message: compose(ctx.msg('adapter.workspaceSessionsPending', {

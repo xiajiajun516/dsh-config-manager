@@ -7,6 +7,7 @@
  * 核心逻辑经 SnapshotFs 注入（默认 node:fs/promises）。
  */
 import path from 'node:path';
+import { engineMsg } from './messages.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import {
@@ -128,18 +129,18 @@ export async function writeSnapshotToDir(
 ): Promise<SnapshotDirManifest> {
   // 加密快照不写散文件目录（本地不落盘：密文/明文都不落；远端已存密文）
   if (isEncryptedSections(snapshot.sections)) {
-    throw new Error('加密快照不写散文件目录（本地不落盘；请直接使用密文传输）');
+    throw new Error(engineMsg('sync.layoutEncryptedDirUnsupported'));
   }
   // issue #38：凭据载荷只随加密快照的密文单文件布局传输。散文件布局无法承载它，
   // 静默丢弃 = 「勾了导出密钥却什么也没导」，因此这里显式拒绝（调用方本不该走到这里）。
   if (snapshot.credentials !== undefined) {
-    throw new Error('凭据载荷只能随加密快照的密文单文件布局传输（散文件目录不落任何凭据）');
+    throw new Error(engineMsg('sync.layoutCredentialsNeedEncryptedLayout'));
   }
   const sectionHashes: SnapshotDirManifest['sectionHashes'] = {};
   for (const [id, data] of Object.entries(snapshot.sections)) {
     const sid = id as SectionId;
     if (!LAYOUT_SECTION_IDS.includes(sid)) {
-      throw new Error(`分区 ${sid} 不在散文件布局支持范围（SECTION_JSON_PATHS / SECTION_FILE_PREFIXES）`);
+      throw new Error(engineMsg('sync.layoutSectionUnsupported', { section: sid }));
     }
     sectionHashes[sid] = hashSection(data as SectionData);
   }
@@ -148,7 +149,7 @@ export async function writeSnapshotToDir(
     if (!(sid in SECTION_FILE_PREFIXES)) continue;
     for (const file of (data as FilesSection).files) {
       if (!isSafeRelPath(file.relativePath)) {
-        throw new Error(`非法文件相对路径: ${file.relativePath}（分区 ${sid}）`);
+        throw new Error(engineMsg('sync.layoutFileRelPathInvalid', { path: file.relativePath, section: sid }));
       }
     }
   }
@@ -209,17 +210,17 @@ export async function readSnapshotFromDir(
 ): Promise<SyncSnapshot> {
   const manifestAbs = joinFs(dir, SNAPSHOT_MANIFEST_FILE);
   if (!(await fsx.exists(manifestAbs))) {
-    throw new Error(`快照目录缺少 ${SNAPSHOT_MANIFEST_FILE}: ${dir}`);
+    throw new Error(engineMsg('sync.layoutManifestMissing', { file: SNAPSHOT_MANIFEST_FILE, dir }));
   }
   const parsed = parseJsonSafe(Buffer.from(await fsx.readFile(manifestAbs)).toString('utf8'));
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('manifest.json 损坏：必须是对象');
+    throw new Error(engineMsg('sync.layoutManifestNotObject'));
   }
   const m = parsed as Record<string, unknown>;
   if (typeof m['id'] !== 'string' || typeof m['createdAt'] !== 'string'
     || m['manifest'] === null || typeof m['manifest'] !== 'object'
     || m['sectionHashes'] === null || typeof m['sectionHashes'] !== 'object') {
-    throw new Error('manifest.json 损坏：缺少 id/createdAt/manifest/sectionHashes');
+    throw new Error(engineMsg('sync.layoutManifestMissingFields'));
   }
   const manifest = parsed as SnapshotDirManifest;
 
@@ -227,7 +228,7 @@ export async function readSnapshotFromDir(
   const declared = Object.keys(manifest.sectionHashes) as SectionId[];
   for (const sid of declared) {
     if (!LAYOUT_SECTION_IDS.includes(sid)) {
-      throw new Error(`manifest 声明了布局不支持的分区 ${sid}`);
+      throw new Error(engineMsg('sync.layoutManifestSectionUnsupported', { section: sid }));
     }
   }
 
@@ -236,7 +237,7 @@ export async function readSnapshotFromDir(
     if (!(sid in manifest.sectionHashes)) continue;
     const abs = joinFs(dir, rel);
     if (!(await fsx.exists(abs))) {
-      throw new Error(`快照缺少 JSON 分区文件 ${rel}（${sid}）`);
+      throw new Error(engineMsg('sync.layoutJsonSectionMissing', { path: rel, section: sid }));
     }
     sections[sid as SectionId] = parseJsonSafe(Buffer.from(await fsx.readFile(abs)).toString('utf8')) as SectionData;
   }
@@ -249,10 +250,10 @@ export async function readSnapshotFromDir(
     if (await fsx.exists(refsAbs)) {
       const parsedRefs = parseJsonSafe(Buffer.from(await fsx.readFile(refsAbs)).toString('utf8'));
       if (!isBlobRefsSection(parsedRefs)) {
-        throw new Error(`外置引用文件形状非法: ${blobRefsFile(sid as SectionId)}`);
+        throw new Error(engineMsg('sync.layoutBlobRefsInvalid', { file: blobRefsFile(sid as SectionId) }));
       }
       if (opts.blobs === undefined) {
-        throw new Error(`快照的 ${sid} 分区是内容寻址外置形态，但当前通道未提供 blob 仓`);
+        throw new Error(engineMsg('sync.layoutBlobRefsNoSink', { section: sid }));
       }
       sections[sid as SectionId] = await refsToSection(parsedRefs, opts.blobs);
       continue;
@@ -264,7 +265,7 @@ export async function readSnapshotFromDir(
         sections[sid as SectionId] = { version: 1, files: [] };
         continue;
       }
-      throw new Error(`快照缺少文件分区目录 ${prefix}（${sid}）`);
+      throw new Error(engineMsg('sync.layoutFileSectionDirMissing', { prefix, section: sid }));
     }
     const rels = await listSnapshotFiles(fsx, baseAbs);
     const files: FilesSection['files'] = [];

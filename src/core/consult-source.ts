@@ -19,6 +19,7 @@ import { SECTION_JSON_PATHS, SECTION_FILE_PREFIXES, isFileSection } from '../sch
 import { scanAndRedact, scanText } from '../security/secret-scanner.ts';
 import type { Manifest, SectionId } from '../schema/types.ts';
 import type { ConsultSourceData, ConsultSourceRef, MigratabilityResult } from './migration-consult.ts';
+import { engineMsg } from './messages-core.ts';
 
 export interface ConsultSourceReaderOptions {
   /** 计算可迁移性（宿主注入；缺省 null = 不评估） */
@@ -75,11 +76,11 @@ export async function readExportZipSource(
         const parsed = JSON.parse(archive.readEntryText(MANIFEST_FILE));
         manifestIssues = validateManifest(parsed);
       } catch {
-        manifestIssues = [{ path: '$', message: 'manifest 无法解析', severity: 'error' }];
+        manifestIssues = [{ path: '$', message: engineMsg('core.consult.manifestUnparsable'), severity: 'error' }];
       }
     }
   } else {
-    manifestIssues = [{ path: '$', message: 'manifest 缺失', severity: 'error' }];
+    manifestIssues = [{ path: '$', message: engineMsg('core.consult.manifestMissing'), severity: 'error' }];
   }
 
   // 3. checksums（捕获不匹配，不抛错）
@@ -94,8 +95,8 @@ export async function readExportZipSource(
       }
       const result = verifyChecksumsJson(entries, archive.readEntryText(CHECKSUMS_FILE));
       checksums = result.ok ? {} : null;
-      for (const m of result.mismatches) checksumIssues.push(`"${m}" (hash 不符)`);
-      for (const m of result.missing) checksumIssues.push(`"${m}" (缺失)`);
+      for (const m of result.mismatches) checksumIssues.push(engineMsg('core.consult.hashMismatch', { name: m }));
+      for (const m of result.missing) checksumIssues.push(engineMsg('core.consult.entryMissing', { name: m }));
     } catch (err) {
       checksumIssues.push(err instanceof Error ? err.message : String(err));
     }
@@ -205,8 +206,8 @@ export function buildLocalSnapshotSource(
     sections: sectionFlags,
     security: { containsSecrets: false, encrypted: false, encryption: null },
   };
-  const manifestIssues = input.verify.ok ? [] : [{ path: '$', message: input.verify.reason ?? '快照完整性校验失败', severity: 'error' as const }];
-  const checksumIssues = input.verify.ok ? [] : [input.verify.reason ?? '快照完整性校验失败'];
+  const manifestIssues = input.verify.ok ? [] : [{ path: '$', message: input.verify.reason ?? engineMsg('core.consult.snapshotIntegrityFailed'), severity: 'error' as const }];
+  const checksumIssues = input.verify.ok ? [] : [input.verify.reason ?? engineMsg('core.consult.snapshotIntegrityFailed')];
   const migratability: MigratabilityResult = {
     ok: input.restorePlan.errors.length === 0,
     itemCount: input.restorePlan.itemCount,

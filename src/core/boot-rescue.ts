@@ -35,6 +35,7 @@ import path from 'node:path';
 
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { sha256Hex } from '../utils/hashing.ts';
+import { engineMsg } from './messages-core.ts';
 
 /* ---------------------------------------------------------------- 常量 */
 
@@ -414,14 +415,14 @@ export interface RescueSelfMount {
 /** 救援模式 profile patch 的头注释（说明本文件被谁接管、bundle 层的实际状态）。 */
 const RESCUE_PATCH_HEADER_LINES = [
   '# dsh-config-manager RESCUE MODE',
-  '# 本文件（profile patch 层）已被救援模式接管；home patch 同时被置空。',
+  engineMsg('core.bootRescue.patchTakenOver'),
 ];
 
 /** 救援模式 profile patch 的头注释（按 bundle 处理方式给出准确说明，不得夸大能力）。 */
 function rescuePatchHeader(bundlesDisabled: boolean): string {
   const note = bundlesDisabled
-    ? '# dsh.profile.bundles 已被收窄为 DSH 核心与救援插件自身，被禁用的包同时已从 dependencies 临时摘除：其余用户插件本次启动不挂载。'
-    : '# 注意：dsh.profile.bundles 里的插件仍由 bundle 层挂载（本次只裁剪了不可解析的 bundle）。';
+    ? engineMsg('core.bootRescue.bundlesNarrowed')
+    : engineMsg('core.bootRescue.bundlesNote');
   return [...RESCUE_PATCH_HEADER_LINES, note, ''].join('\n');
 }
 

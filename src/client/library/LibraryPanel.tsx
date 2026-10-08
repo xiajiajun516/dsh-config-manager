@@ -198,7 +198,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
 
       {/* 快照目录读不出来（不是「没有快照」）：与来源失败同一层级地如实说明 */}
       {snapshotsUnreadable !== null && (
-        <div className={css.hint}>{t('library.snapshotsUnreadable')}：{redact(snapshotsUnreadable)}</div>
+        <div className={css.hint}>{t('library.snapshotsUnreadable')}{t('common.labelSeparator')}{redact(snapshotsUnreadable)}</div>
       )}
 
       {/* 某个来源读不到：一条 warn + 重试，既不静默跳过，也不整页报错（§6.7） */}

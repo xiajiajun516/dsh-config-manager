@@ -18,6 +18,7 @@ import type { Manifest, SectionId } from '../schema/types.ts';
 import { parseMarketItemManifest } from './index-parser.ts';
 import { MAX_MARKET_ZIP_BYTES, BANNED_MARKET_SECTIONS } from './types.ts';
 import type { MarketItemManifest } from './types.ts';
+import { marketMsg } from './messages-market.ts';
 
 export interface MarketItemValidationResult {
   status: 'valid' | 'invalid';
@@ -61,20 +62,20 @@ export function validateMarketItem(
   }
   const manifest = parsedManifest.manifest!;
   if (manifest.id !== itemId) {
-    return { status: 'invalid', errors: [`清单 id 与请求条目不一致: ${manifest.id} ≠ ${itemId}`], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.manifestIdMismatch', { manifestId: manifest.id, itemId })], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
   }
 
   const buf = Buffer.isBuffer(zipBytes) ? zipBytes : Buffer.from(zipBytes);
 
   // 2. 字节体积上限（zip bomb 首道闸）
   if (buf.length > MAX_MARKET_ZIP_BYTES) {
-    return { status: 'invalid', errors: [`config.zip 体积 ${buf.length} 超过上限 ${MAX_MARKET_ZIP_BYTES} 字节`], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.zipTooLarge', { size: buf.length, max: MAX_MARKET_ZIP_BYTES })], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
   }
 
   // 3. L2↔L3 一致性：清单声明的 config.zip SHA-256 与实际一致
   const actualSha = sha256Hex(buf);
   if (manifest.checksums.zip !== actualSha) {
-    return { status: 'invalid', errors: [`清单声明的 config.zip SHA-256 与实际不符`], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.zipShaMismatch')], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
   }
 
   // 4. Zip 加固解包（Zip Slip / 绝对路径 / 恶意条目 / 重复 / symlink；异常 → 拒绝整包）
@@ -82,21 +83,21 @@ export function validateMarketItem(
   try {
     archive = parseZipHardened(buf);
   } catch (err) {
-    return { status: 'invalid', errors: [`config.zip 安全解析失败: ${err instanceof Error ? err.message : String(err)}`], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.zipParseFailed', { reason: err instanceof Error ? err.message : String(err) })], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
   }
 
   // 5. 内部 manifest + 分区校验
   if (!archive.has(MANIFEST_FILE)) {
-    return { status: 'invalid', errors: ['config.zip 缺少内部 manifest.json'], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.zipMissingManifest')], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
   }
   let internalManifest: Manifest;
   try {
     internalManifest = parseManifest(archive.readEntryText(MANIFEST_FILE));
   } catch (err) {
-    return { status: 'invalid', errors: [`config.zip 内部 manifest 无效: ${err instanceof Error ? err.message : String(err)}`], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.zipManifestInvalid', { reason: err instanceof Error ? err.message : String(err) })], warnings, manifest, internalManifest: null, sections: [], checksumsOk: false };
   }
   if (internalManifest.security.containsSecrets) {
-    return { status: 'invalid', errors: ['config.zip 声明 containsSecrets=true，市场通道永不携带秘密，拒绝'], warnings, manifest, internalManifest, sections: [], checksumsOk: false };
+    return { status: 'invalid', errors: [marketMsg('market.security.zipContainsSecrets')], warnings, manifest, internalManifest, sections: [], checksumsOk: false };
   }
 
   // 6. 内部 checksum 校验（integrity/checksums.json ↔ 实际条目）
@@ -116,10 +117,10 @@ export function validateMarketItem(
       const result = verifyChecksums(entries, table);
       checksumsOk = result.ok;
       if (!checksumsOk) {
-        return { status: 'invalid', errors: [`config.zip 内部完整性校验失败: ${[...result.mismatches, ...result.missing].join(', ')}`], warnings, manifest, internalManifest, sections: [], checksumsOk: false };
+        return { status: 'invalid', errors: [marketMsg('market.security.checksumMismatch', { entries: [...result.mismatches, ...result.missing].join(', ') })], warnings, manifest, internalManifest, sections: [], checksumsOk: false };
       }
     } catch (err) {
-      return { status: 'invalid', errors: [`config.zip 内部 checksums 解析失败: ${err instanceof Error ? err.message : String(err)}`], warnings, manifest, internalManifest, sections: [], checksumsOk: false };
+      return { status: 'invalid', errors: [marketMsg('market.security.checksumsParseFailed', { reason: err instanceof Error ? err.message : String(err) })], warnings, manifest, internalManifest, sections: [], checksumsOk: false };
     }
   }
 
@@ -129,7 +130,7 @@ export function validateMarketItem(
     // 市场条目禁止分区（BANNED_MARKET_SECTIONS：sessions 历史会话 / pluginFiles 任意文件 / self 本地环境）：
     // 与 secrets 同级硬约束（产品决策 2026-08-19，guide docs/design/2026-08-19-market-repo-setup-guide.md）。
     if (BANNED_MARKET_SECTIONS.includes(sectionId)) {
-      return { status: 'invalid', errors: [`config.zip 包含禁止分区 ${sectionId}（sessions=历史会话 / pluginFiles=任意文件 / self=本地环境），市场条目禁止携带`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+      return { status: 'invalid', errors: [marketMsg('market.security.bannedSection', { section: sectionId })], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }
     if (isFileSection(sectionId)) {
       // 文件类分区：以文件形式进入 ZIP，结构校验由 security/safeExtract 在导入期做。
@@ -138,25 +139,25 @@ export function validateMarketItem(
       // 与 sync 通道对空分区的语义一致（空分区参与 manifest 标记但不产生任何文件）。
       // 仅加 warning 提示，不拒绝；JSON 分区仍严格要求文件存在（有内容才可能 enabled）。
       if (!archive.names().some((n) => n.startsWith(SECTION_FILE_PREFIXES[sectionId]!))) {
-        warnings.push(`config.zip 中分区 ${sectionId} 为空（无文件），导入后不产生任何效果`);
+        warnings.push(marketMsg('market.security.emptyFileSection', { section: sectionId }));
       }
       continue;
     }
     const jsonPath = SECTION_JSON_PATHS[sectionId];
     if (jsonPath === undefined) continue;
     if (!archive.has(jsonPath)) {
-      return { status: 'invalid', errors: [`config.zip 缺少分区文件 ${jsonPath}（${sectionId}）`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+      return { status: 'invalid', errors: [marketMsg('market.security.missingSectionFile', { path: jsonPath, section: sectionId })], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }
     let data: unknown;
     try {
       data = archive.readEntryJson(jsonPath);
     } catch (err) {
-      return { status: 'invalid', errors: [`分区 ${sectionId} 数据解析失败: ${err instanceof Error ? err.message : String(err)}`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+      return { status: 'invalid', errors: [marketMsg('market.security.sectionParseFailed', { section: sectionId, reason: err instanceof Error ? err.message : String(err) })], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }
     const issues = validateSectionData(sectionId, data);
     const hardErrors = issues.filter((i) => i.severity === 'error');
     if (hardErrors.length > 0) {
-      return { status: 'invalid', errors: [`分区 ${sectionId} 数据无效: ${hardErrors.map((e) => e.message).join('; ')}`], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+      return { status: 'invalid', errors: [marketMsg('market.security.sectionInvalid', { section: sectionId, errors: hardErrors.map((e) => e.message).join('; ') })], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }
     // T1 供应链约束：plugins 分区禁止携带本地插件 tarball（localTarballs）。
     //
@@ -170,7 +171,7 @@ export function validateMarketItem(
       if (Array.isArray(tarballs) && tarballs.length > 0) {
         return {
           status: 'invalid',
-          errors: [`config.zip 的 plugins 分区携带 ${tarballs.length} 个本地插件 tarball（localTarballs），市场条目禁止携带内嵌插件代码（供应链防线；本地插件迁移请用自己的备份，不要经公共市场分发）`],
+          errors: [marketMsg('market.security.localTarballsRejected', { count: tarballs.length })],
           warnings, manifest, internalManifest, sections: [], checksumsOk: true,
         };
       }
@@ -180,7 +181,7 @@ export function validateMarketItem(
       if (Array.isArray(patchFiles) && patchFiles.length > 0) {
         return {
           status: 'invalid',
-          errors: [`config.zip 的 plugins 分区携带 ${patchFiles.length} 个 pnpm patch 文件（patchFiles），市场条目禁止携带会在安装时改写依赖代码的内容（供应链防线；请用自己的备份迁移）`],
+          errors: [marketMsg('market.security.patchFilesRejected', { count: patchFiles.length })],
           warnings, manifest, internalManifest, sections: [], checksumsOk: true,
         };
       }
@@ -194,7 +195,7 @@ export function validateMarketItem(
     .map(([id]) => id);
   const intersection = l3Sections.filter((id) => l2Sections.has(id));
   if (intersection.length === 0) {
-    return { status: 'invalid', errors: ['清单 sections 与 config.zip 内部 sections 无交集'], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
+    return { status: 'invalid', errors: [marketMsg('market.security.sectionsNoIntersection')], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
   }
 
   return { status: 'valid', errors: [], warnings, manifest, internalManifest, sections: intersection, checksumsOk };
@@ -206,7 +207,7 @@ export function validateMarketItem(
  */
 export function generateSupplyChainWarnings(itemId: string): string[] {
   return [
-    `条目 ${itemId} 来自公共网络市场，未经官方审核（供应链警示）`,
-    '下载内容为不可信输入，导入前请逐项核对',
+    marketMsg('market.security.warningFromPublicMarket', { itemId }),
+    marketMsg('market.security.warningUntrustedContent'),
   ];
 }

@@ -15,6 +15,7 @@ import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { SyncTransportType } from './sync-config.ts';
+import { engineMsg } from './messages.ts';
 
 export const SYNC_HISTORY_FILE = 'sync-history.json';
 export const SYNC_HISTORY_SCHEMA_VERSION = 1;
@@ -68,26 +69,26 @@ export async function readSyncHistory(dir: string): Promise<SyncHistoryFile> {
   try {
     parsed = parseJsonSafe(raw);
   } catch {
-    throw new Error(`${SYNC_HISTORY_FILE} 损坏：JSON 解析失败`);
+    throw new Error(engineMsg('sync.historyJsonParseFailed', { file: SYNC_HISTORY_FILE }));
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${SYNC_HISTORY_FILE} 损坏：必须是对象`);
+    throw new Error(engineMsg('sync.historyNotObject', { file: SYNC_HISTORY_FILE }));
   }
   const obj = parsed as Record<string, unknown>;
   if (obj['schemaVersion'] !== SYNC_HISTORY_SCHEMA_VERSION) {
-    throw new Error(`${SYNC_HISTORY_FILE} 损坏：schemaVersion 必须是 ${SYNC_HISTORY_SCHEMA_VERSION}`);
+    throw new Error(engineMsg('sync.historySchemaVersionMismatch', { file: SYNC_HISTORY_FILE, version: SYNC_HISTORY_SCHEMA_VERSION }));
   }
   if (!Array.isArray(obj['autosyncEntries'])) {
-    throw new Error(`${SYNC_HISTORY_FILE} 损坏：autosyncEntries 必须是数组`);
+    throw new Error(engineMsg('sync.historyEntriesNotArray', { file: SYNC_HISTORY_FILE }));
   }
   const entries: AutosyncHistoryEntry[] = [];
   for (const it of obj['autosyncEntries']) {
     if (it === null || typeof it !== 'object' || Array.isArray(it)) {
-      throw new Error(`${SYNC_HISTORY_FILE} 损坏：每个 entry 必须是对象`);
+      throw new Error(engineMsg('sync.historyEntryNotObject', { file: SYNC_HISTORY_FILE }));
     }
     const e = it as Record<string, unknown>;
     if (typeof e['direction'] !== 'string' || typeof e['status'] !== 'string' || typeof e['createdAt'] !== 'string') {
-      throw new Error(`${SYNC_HISTORY_FILE} 损坏：entry 必须含字符串 direction/status/createdAt`);
+      throw new Error(engineMsg('sync.historyEntryFieldsMissing', { file: SYNC_HISTORY_FILE }));
     }
     entries.push(it as unknown as AutosyncHistoryEntry);
   }

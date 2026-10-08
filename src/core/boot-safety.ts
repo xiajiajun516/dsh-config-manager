@@ -23,6 +23,7 @@ import type { BundleResolver } from './boot-rescue.ts';
 import { BOOT_CRITICAL_RELS, profileCriticalRels } from './boot-paths.ts';
 import type { MsgFunc } from './messages.ts';
 import { zhMsg } from './messages.ts';
+import { engineMsg } from './messages-core.ts';
 
 /** 审计问题 id（稳定；测试与 UI 判定用，展示文本一律走 msg）。 */
 export type BootSafetyIssueId =
@@ -167,7 +168,7 @@ export async function auditBootSafety(deps: BootSafetyDeps): Promise<BootSafetyR
           // 只剔除「不可解析且非核心」的条目：其余条目（含解析不出的核心项）原样保留
           const drop = new Set(prunable.map((p) => p.name))
           const next = (Array.isArray(bundles) ? bundles : []).filter((b) => !(typeof b === 'string' && drop.has(b))) as string[]
-          if (!writeBundles(pkg, next)) throw new Error('dsh.profile.bundles 不是数组或结构异常')
+          if (!writeBundles(pkg, next)) throw new Error(engineMsg('core.bootSafety.bundlesNotArray'))
           await deps.writeText(pkgRel, JSON.stringify(pkg, null, 2) + '\n')
           written = true
         } catch (err) {

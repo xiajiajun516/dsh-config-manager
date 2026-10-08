@@ -18,6 +18,7 @@ import { draftFromTranscript } from './session-source.ts';
 import type { RootProbeOptions, SessionDraft } from './session-source.ts';
 import { sessionSourceOf } from './session-source.ts';
 import type { ForeignSource } from './registry.ts';
+import { engineMsg } from './messages.ts';
 import { FOREIGN_TRUTH_TABLES } from './truth-table.ts';
 import type { ForeignTruthTableEntry } from './truth-table.ts';
 import type { ForeignEvidenceKind, ForeignSourceId } from './types.ts';
@@ -27,7 +28,7 @@ import { crushProjectDbPath, crushRegistryPath, readCrush } from './read-crush.t
 /** 真值表条目（找不到即装配期炸：宁可炸，也不让来源悄悄少一份取证声明 —— 与 registry.ts 同口径） */
 function truthEntryOf(id: ForeignSourceId): ForeignTruthTableEntry {
   const found = FOREIGN_TRUTH_TABLES.find((entry) => entry.id === id);
-  if (found === undefined) throw new Error('真值表缺少来源定义: ' + id);
+  if (found === undefined) throw new Error(engineMsg('foreign.truthTableMissingSource', { id }));
   return found;
 }
 

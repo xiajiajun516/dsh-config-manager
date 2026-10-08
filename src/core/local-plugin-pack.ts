@@ -22,6 +22,7 @@
  *  - 单个插件打包失败**不中断导出**，只记 warning（与「单分区失败不拖垮整体」同语义）。
  */
 import path from 'node:path';
+import { engineMsg } from './messages-core.ts';
 
 /* ---------------- 常量 ---------------- */
 
@@ -322,7 +323,7 @@ export async function packLocalPlugins(
   try {
     await opts.mkdir(opts.packDir);
   } catch (err) {
-    warnings.push(`本地插件打包目录创建失败，已跳过全部本地插件: ${reasonOf(err)}`);
+    warnings.push(engineMsg('core.localPluginPack.dirCreateFailed', { reason: reasonOf(err) }));
     return { packed, rewritten, warnings };
   }
 
@@ -342,7 +343,7 @@ export async function packLocalPlugins(
         const data = await opts.readFile(sourcePath);
         if (data.byteLength > maxBytes) {
           warnings.push(
-            `本地插件 ${plugin.name} 的 tarball 超过上限（${data.byteLength} > ${maxBytes} 字节），已跳过打包`,
+            engineMsg('core.localPluginPack.tarballTooLarge', { name: plugin.name, size: data.byteLength, max: maxBytes }),
           );
           continue;
         }
@@ -366,14 +367,18 @@ export async function packLocalPlugins(
       });
       if (result.code !== 0) {
         warnings.push(
-          `本地插件 ${plugin.name} 打包失败（npm pack 退出码 ${result.code ?? 'null'}）：${firstLine(result.stderr) || firstLine(result.stdout) || '无输出'}`,
+          engineMsg('core.localPluginPack.packFailed', {
+            name: plugin.name,
+            code: result.code ?? 'null',
+            detail: firstLine(result.stderr) || firstLine(result.stdout) || engineMsg('core.localPluginPack.noOutput'),
+          }),
         );
         continue;
       }
 
       const filename = parsePackOutput(result.stdout, plugin.name, plugin.version);
       if (filename === null) {
-        warnings.push(`本地插件 ${plugin.name} 打包失败：无法从 npm pack 输出解析文件名`);
+        warnings.push(engineMsg('core.localPluginPack.parseFilenameFailed', { name: plugin.name }));
         continue;
       }
 
@@ -381,7 +386,7 @@ export async function packLocalPlugins(
       const data = await opts.readFile(tgzPath);
       if (data.byteLength > maxBytes) {
         warnings.push(
-          `本地插件 ${plugin.name} 的 tarball 超过上限（${data.byteLength} > ${maxBytes} 字节），已跳过打包`,
+          engineMsg('core.localPluginPack.tarballTooLarge', { name: plugin.name, size: data.byteLength, max: maxBytes }),
         );
         continue;
       }
@@ -397,7 +402,7 @@ export async function packLocalPlugins(
       });
       rewritten[plugin.name] = rewrittenSpec;
     } catch (err) {
-      warnings.push(`本地插件 ${plugin.name} 打包失败：${reasonOf(err)}`);
+      warnings.push(engineMsg('core.localPluginPack.packError', { name: plugin.name, reason: reasonOf(err) }));
     }
   }
 
