@@ -133,7 +133,24 @@ export function validateSectionData(sectionId: SectionId, data: unknown): Sectio
       break;
     }
     case 'files': {
-      if (!Array.isArray(obj['files'])) issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
+      const files = obj['files'];
+      if (!Array.isArray(files)) {
+        issues.push({ path: 'files', message: 'files 必须是数组', severity: 'error' });
+        break;
+      }
+      // 与 patchFiles 同级的防线（此前只判了 Array.isArray）：relativePath 会被写到 <home> 之下，
+      // 不可信 bundle 的路径穿越向量必须逐项过 isPathSafe（不得为绝对路径 / 含 ..）。
+      files.forEach((entry, i) => {
+        const rec = (entry !== null && typeof entry === 'object') ? entry as Record<string, unknown> : null;
+        if (rec === null) {
+          issues.push({ path: `files[${i}]`, message: '文件条目必须是对象', severity: 'error' });
+          return;
+        }
+        const rel = rec['relativePath'];
+        if (typeof rel !== 'string' || rel === '' || !isPathSafe(rel)) {
+          issues.push({ path: `files[${i}].relativePath`, message: '文件路径必须是安全的相对路径（不得为绝对路径或含 ..）', severity: 'error' });
+        }
+      });
       break;
     }
     case 'none': {

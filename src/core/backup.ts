@@ -667,9 +667,16 @@ export class FileSnapshotStore implements SnapshotStore {
       try {
         const parsed = parseJsonSafe(await fs.readFile(path.join(dir, entry.name, 'snapshot.json'), 'utf8')) as Snapshot;
         if (typeof parsed.id !== 'string' || parsed.id === '' || typeof parsed.createdAt !== 'string') continue;
+        // 删除目标只能是**目录名**（下面 path.join(dir, id) 就是按它删的）。目录名与内部 id 不一致时
+        // **绝不猜**：pinned/被引用的判断是对着这份 snapshot.json 做的，删除却会打在另一个目录上 ——
+        // 跳过并留痕（手工改名/半截拷贝残留会出现这种形态）。
+        if (parsed.id !== entry.name) {
+          this.options.onWarn?.('快照目录名与内部 id 不一致，已跳过自动清理：' + entry.name + '（内部 id ' + parsed.id + '）');
+          continue;
+        }
         if (parsed.pinned === true) continue; // 置顶快照豁免自动清理
-        if (referenced.has(parsed.id)) continue; // Phase 4 F3：recovery 引用豁免
-        metas.push({ id: parsed.id, createdAt: parsed.createdAt });
+        if (referenced.has(entry.name)) continue; // Phase 4 F3：recovery 引用豁免
+        metas.push({ id: entry.name, createdAt: parsed.createdAt });
       } catch {
         // 损坏 / 非快照目录：跳过（与 listSnapshots 语义一致）
       }

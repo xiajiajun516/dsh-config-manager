@@ -10,6 +10,7 @@
  * 「绝不猜」：缺字段一律不显示该列（不填 0、不写「未知」当结论）。
  */
 import type { SessionHealthSeverity } from '../core/session-health.ts'
+import { redact } from '../security/redaction.ts'
 
 /** 路由返回的一行（与宿主 session-health 的 SessionHealthRow 同构；此处只取展示所需）。 */
 export interface SessionHealthRowView {
@@ -202,6 +203,12 @@ export interface SessionHealthDisplayRow {
   badgeKind: 'info' | 'ok' | 'warn' | 'error'
   /** 问题码列表（文案由界面映射；顺序 = 由重到轻） */
   issueCodes: string[]
+  /**
+   * 问题的**补充事实**（core 的 `issue.detail`，如「seq 12→18」/「3 row(s)」）合并成一行；
+   * null = 没有任何 detail。此前 detail 完全不进 UI 模型，用户只能看到「有事件无法解析」而不知道
+   * 规模。渲染前过 redact（与其它宿主/扫描文本同一条铁律）。
+   */
+  issueDetailText: string | null
   /** 版本徽章文本（缺省 = 不显示） */
   versionText: string | null
   /** 归属工作区目录键（缺省 = 不显示） */
@@ -248,6 +255,12 @@ export function sessionHealthRows(response: SessionHealthResponse | null): Sessi
     severityKey: SESSION_SEVERITY_KEYS[row.severity],
     badgeKind: sessionSeverityBadgeKind(row.severity),
     issueCodes: row.issues.map((issue) => issue.code),
+    issueDetailText: (() => {
+      const parts = row.issues
+        .map((issue) => issue.detail)
+        .filter((detail): detail is string => typeof detail === 'string' && detail !== '')
+      return parts.length === 0 ? null : redact(parts.join(' · '))
+    })(),
     versionText: row.version !== undefined ? 'v' + String(row.version) : null,
     projectKeyText: row.projectKey !== '' ? row.projectKey : null,
     subagent: row.origin === 'subagent',

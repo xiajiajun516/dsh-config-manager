@@ -54,6 +54,17 @@ const VALUE_PATTERNS = REDACTION_VALUE_PATTERNS;
 /** URL query 中的敏感参数值（保留参数名，只替换值） */
 const URL_QUERY_RE = /([?&](?:token|api[_-]?key|key|secret|access[_-]?token|password|auth)=)([^&\s"']+)/gi;
 
+/**
+ * URL **内嵌凭据**（\`scheme://user:password@host\`，GitLab/Gitea 常见的 \`https://oauth2:<token>@…\`）。
+ *
+ * 为什么必须补这一条：URL_QUERY_RE 只认 query 参数，而 userinfo 形态的凭据此前在**三条通道**
+ * 都不被掩码 —— 日志、界面渲染、以及 sessionStorage 落盘（run-store 的 \`redactPersistedValue\`）。
+ * 宿主侧 sync-config 的 validateRepoUrl/validateWebDavUrl 本来就拒绝带 userinfo 的地址，
+ * 所以这里只影响「掩码」：不改任何合法输入的行为，只让非法规格里的凭据不再明文可见。
+ * 只替换密码段（用户名保留可读），与 URL_QUERY_RE 的取舍一致。
+ */
+const URL_USERINFO_RE = /(\/\/[^\/@\s:]+:)([^\/@\s]+)(@)/g;
+
 /* ---------------- 高熵长 token（journal / 迁移历史强脱敏共用） ---------------- */
 
 /** 高熵值形状（长 hex/base64/随机 id）：结构化 redact() 覆盖不了任意 secret，journal / 迁移
@@ -120,6 +131,7 @@ export function redact(text: string, blacklist: readonly string[] = []): string 
     out = out.replace(re, REDACTED);
   }
   out = out.replace(URL_QUERY_RE, `$1${REDACTED}`);
+  out = out.replace(URL_USERINFO_RE, `$1${REDACTED}$3`);
   return out;
 }
 
@@ -147,6 +159,7 @@ export function createRedactor(blacklist: readonly string[] = []): (text: string
       out = out.replace(re, REDACTED);
     }
     out = out.replace(URL_QUERY_RE, `$1${REDACTED}`);
+    out = out.replace(URL_USERINFO_RE, `$1${REDACTED}$3`);
     return out;
   };
 }

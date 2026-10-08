@@ -27,6 +27,7 @@ import type { SessionHealthScanResult } from '../../utils/session-health-scan.ts
 import { createExec } from './exec.ts'
 import { writeHtml } from './http.ts'
 import {
+  consolePagesHint,
   escCapability,
   renderDiskPage, renderExportPage, renderHomePage, renderLockPage, renderMessagePage,
   renderProfilesPage, renderReinstallPage, renderRestorePage, renderResultPage, renderSessionsPage,
@@ -52,7 +53,7 @@ function renderConsoleError(res: ServerResponse, status: number, message: string
   writeHtml(res, status, renderMessagePage(
     status === 404 ? '目标不存在' : status === 400 ? '请求无法处理' : '操作未完成',
     message,
-    status === 404 ? '可用页面：/（首页）、/disk、/sessions、/lock、/profiles、/healthz' : '',
+    status === 404 ? consolePagesHint() : '',
   ))
 }
 

@@ -25,7 +25,7 @@ import { defaultSecretScanner } from '../core/exporter.ts';
 import { Importer } from '../core/importer.ts';
 import type {
   ConfigAdapter, ExportSection, GlobalConflictStrategy, HostContext,
-  ImportAnalysis, ImportPlan, ImportResult, PathMapping, PlanItem, PlanItemKind, SecretScanner,
+  ImportAnalysis, ImportPlan, ImportResult, PathMapping, PlanItem, PlanItemKind, RollbackReport, SecretScanner,
 } from '../core/types.ts';
 import { isFileSection, SECTION_FILE_PREFIXES, SECTION_JSON_PATHS } from '../schema/config.ts';
 import { buildManifest, CHECKSUMS_FILE, MANIFEST_FILE } from '../schema/manifest.ts';
@@ -240,10 +240,50 @@ export interface ApplyReport {
   restoreId: string;
   /** 是否触发了整体回滚 */
   rolledBack: boolean;
+  /**
+   * 整体回滚是否**完整**（诚实性，2026-10）。rolledBack=true 只说明触发了回滚，
+   * 不代表每一项都补偿成功（典型：原本已存在的凭据值 DSH 不可回读、无法自动恢复）。
+   * false 时失败项已并入 warnings，界面不得渲染成「整体成功回滚」。
+   * 缺省 undefined = 没触发回滚（既有布尔字段语义不变）。
+   */
+  rollbackFull?: boolean;
   /** 失败时移到 review 队列的项（ReviewQueueItem 形态供 UI 直接渲染） */
   review: import('./review-queue.ts').ReviewQueueItem[];
-  /** 来自 Importer.ImportResult 的 warnings；UI 可用于红条提示 */
+  /** 来自 Importer.ImportResult 的 warnings；UI 可用于红条提示（含回滚未完成项） */
   warnings: string[];
+}
+
+/**
+ * 失败路径的**显式兜底回滚**：把 core 的 RollbackReport 翻成「是否完整 + 告警行」。
+ *
+ * 为什么不能像改造前那样 catch 后 noop：回滚抛错或部分补偿失败会被静默吞掉，而调用方
+ * 紧接着写 rolledBack: true，界面于是把「有改动没恢复」渲染成「已整体回滚」。
+ * 现在失败项逐条进 warnings，完整度经 rollbackFull 如实回传。
+ */
+async function rollbackForFailure(
+  ctx: HostContext,
+  snapshot: Snapshot,
+  store: SnapshotStore,
+  adapters: ConfigAdapter[] | undefined,
+): Promise<{ full: boolean; warnings: string[] }> {
+  try {
+    const report = await rollback({ ctx, snapshot, store, adapters })
+    return { full: report.full, warnings: rollbackFailureWarnings(report) }
+  } catch (err) {
+    // 回滚自身抛错 = 无法证明任何一项已还原：如实报「不完整」并留痕，绝不 noop
+    return {
+      full: false,
+      warnings: ['回滚失败（未能证明已恢复）：' + (err instanceof Error ? err.message : String(err))],
+    }
+  }
+}
+
+/** RollbackReport.failed → 可读告警行（带 manualHint：人工怎么补）。 */
+function rollbackFailureWarnings(report: RollbackReport): string[] {
+  return report.failed.map((f) => {
+    const hint = f.manualHint !== undefined && f.manualHint !== '' ? '（' + f.manualHint + '）' : ''
+    return '回滚未完成：' + f.item + ' —— ' + f.reason + hint
+  })
 }
 
 /** applyItems 报告（§3.4 ApplyItemsResponse 的服务端形态） */
@@ -257,6 +297,12 @@ export interface ApplyItemsReport {
   restoreId: string;
   /** 任一失败是否整体回滚 */
   rolledBack: boolean;
+  /**
+   * 整体回滚是否**完整**（诚实性，2026-10；与 ApplyReport.rollbackFull 同一语义）：
+   * rolledBack=true 只说明触发了整体回滚。false = 有改动没能恢复，失败项已并入 warnings。
+   * 缺省 undefined = 未触发回滚（既有布尔字段语义不变）。
+   */
+  rollbackFull?: boolean;
   warnings: string[];
   failed: { itemId: string; message?: string }[];
   /**
@@ -1295,7 +1341,8 @@ export class SyncEngine {
         snapshotBinding: opts.snapshotBinding,
       });
       if (!result.ok) {
-        try { await rollback({ ctx: this.ctx, snapshot, store, adapters: this.adapters }); } catch { /* noop */ }
+        // 兜底回滚：把「是否完整」与失败项一并回传（绝不吞掉，也绝不把部分回滚说成整体回滚）
+        const rb = await rollbackForFailure(this.ctx, snapshot, store, this.adapters)
         // 失败路径不再写 review-queue（§7.4）：历史 skipped/failed 标记由上层（路由/调度器）写入。
         return {
           ok: false,
@@ -1303,7 +1350,8 @@ export class SyncEngine {
           restoreId: snapshot.id,
           rolledBack: true,
           review: [],
-          warnings: result.warnings ?? [],
+          warnings: [...(result.warnings ?? []), ...rb.warnings],
+          rollbackFull: rb.full,
         };
       }
       // 5) 全成功 → recordBaseline（更新祖先基线指向合并后的快照）
@@ -1404,17 +1452,19 @@ export class SyncEngine {
     });
 
     if (!result.ok) {
-      // executeImportPlan 已内部回滚（rollbackOnError）；这里再显式 rollback 兜底（幂等）
-      try { await rollback({ ctx: this.ctx, snapshot, store, adapters: this.adapters }); } catch { /* noop */ }
+      // executeImportPlan 已内部回滚（rollbackOnError）；这里再显式 rollback 兜底（幂等），
+      // 并把「是否完整」与失败项如实回传（改造前 noop + 硬编码 rolledBack:true 会掩盖半回滚）
+      const rb = await rollbackForFailure(this.ctx, snapshot, store, this.adapters)
       return {
         ok: false,
         applied: [],
         restoreId: snapshot.id,
         rolledBack: true,
-        warnings: result.warnings ?? [],
+        warnings: [...(result.warnings ?? []), ...rb.warnings],
         failed: result.executed.filter((e) => e.status === 'failed').map((e) => ({ itemId: e.itemId, message: e.message })),
         ineffective: result.ineffective ?? [],
         result,
+        rollbackFull: rb.full,
       };
     }
 

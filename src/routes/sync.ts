@@ -850,7 +850,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           source: 'api',
           // issue #56：历史如实区分「全部成功 / 部分成功（N 项未生效）」——
           // 此前 ok:true 一律写「N 项」+ 无 error，用户在历史里看到的就是一次干净的成功。
-          summary: `一键同步应用：${(Array.isArray(report.applied) ? report.applied.length : subItems.length)} 项${report.rolledBack === true ? '（已回滚）' : ''}${report.ineffective.length > 0 ? `（${report.ineffective.length} 项未生效）` : ''}`,
+          summary: `一键同步应用：${(Array.isArray(report.applied) ? report.applied.length : subItems.length)} 项${report.rolledBack === true ? (report.rollbackFull === false ? '（回滚未完成）' : '（已回滚）') : ''}${report.ineffective.length > 0 ? `（${report.ineffective.length} 项未生效）` : ''}`,
           error: report.ok
             ? (report.ineffective.length > 0 ? '同步应用部分成功：有项未生效（见告警明细）' : undefined)
             : '同步应用未完全成功',
@@ -863,6 +863,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           warnings: report.warnings,
           restoreId: report.restoreId,
           rolledBack: report.rolledBack,
+          // 诚实性（2026-10）：整体回滚是否完整（false = 有项没恢复，失败项已并入 warnings）
+          ...(report.rollbackFull === undefined ? {} : { rollbackFull: report.rollbackFull }),
           failed: report.failed,
           // issue #56：未生效项（warning）单独回传，界面据此把「成功」降级为「部分成功」
           ineffective: report.ineffective,
@@ -875,6 +877,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           warnings: report.warnings,
           restoreId: report.restoreId,
           rolledBack: report.rolledBack,
+          // 诚实性（2026-10）：整体回滚是否完整（false = 有项没恢复，失败项已并入 warnings）
+          ...(report.rollbackFull === undefined ? {} : { rollbackFull: report.rollbackFull }),
           failed: report.failed,
           ineffective: report.ineffective,
           result: report.result,
@@ -1021,7 +1025,10 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           source: 'api',
           summary: `一键同步回滚（${restoreId}）`,
         })
-        writeJson(res, 200, historyError === undefined ? { ok: true, full: report.full } : { ok: true, full: report.full, historyWriteError: historyError })
+        // 诚实回传：full=false 时把 failed（含 manualHint）一并给出，界面据此列出「哪些项没回滚、
+        // 需要人工补录」而不是无条件报「已回滚」。CLI 侧同口径见 src/cli/actions.ts 的 rollback 文案。
+        const payload = { ok: true, full: report.full, failed: report.failed }
+        writeJson(res, 200, historyError === undefined ? payload : { ...payload, historyWriteError: historyError })
       } catch (error) {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
       }

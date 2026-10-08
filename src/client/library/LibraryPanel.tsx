@@ -23,6 +23,7 @@ import type { TranslateNS } from '../client-types.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
 import { runStore, type LibraryStoreSlice } from '../run-store.ts'
 import { Badge, Button, Card, Empty, Spinner } from '../common/ui.tsx'
+import { redact } from '../../security/redaction.ts'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ArtifactRowView } from './ArtifactRow.tsx'
 import css from '../config-manager.module.css'
@@ -68,6 +69,8 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
   const [files, setFiles] = useState<SourceState<BackupFileMeta>>(initialSource)
   const [remote, setRemote] = useState<SourceState<SyncSnapshotLite>>(initialSource)
   const [market, setMarket] = useState<SourceState<{ id: string; name: string; author?: string; version?: string; updatedAt?: string }>>(initialSource)
+  /** 快照目录读不出来的事实（宿主 out.unreadable；null = 正常） */
+  const [snapshotsUnreadable, setSnapshotsUnreadable] = useState<string | null>(null)
   const [currentRemoteId, setCurrentRemoteId] = useState<string | null>(null)
   const [remoteChannel, setRemoteChannel] = useState<'git' | 'webdav' | null>(null)
   /** 面板内部的刷新信号（失败源卡片里的「重试」）；外部的走 props.refreshTick */
@@ -95,7 +98,11 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         (err: unknown) => { if (mounted.current) setter({ status: 'error', items: [], error: String(err instanceof Error ? err.message : err) }) },
       )
     }
-    put(setSnapshots, api.snapshots())
+    // 走 detailed 版本：把「读不出来」与「没有快照」分开（此前路由丢了这个信号）
+    put(setSnapshots, api.snapshotsDetailed().then((res) => {
+      if (mounted.current) setSnapshotsUnreadable(res.unreadable)
+      return res.snapshots
+    }))
     put(setFiles, api.listBackupFiles())
     // 远端快照：payload 必须带通道与地址 —— 宿主 prepareSync 需要 repoUrl/url，
     // 只传 {} 会被 400 `repoUrl is required` 挡回（此前该源恒失败，页面显示「1 个来源读取失败」）。
@@ -188,6 +195,11 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         aria-label={t('library.searchPlaceholder')}
         onChange={(event) => { runStore.patch({ library: { query: event.target.value } }) }}
       />
+
+      {/* 快照目录读不出来（不是「没有快照」）：与来源失败同一层级地如实说明 */}
+      {snapshotsUnreadable !== null && (
+        <div className={css.hint}>{t('library.snapshotsUnreadable')}：{redact(snapshotsUnreadable)}</div>
+      )}
 
       {/* 某个来源读不到：一条 warn + 重试，既不静默跳过，也不整页报错（§6.7） */}
       {failedSources > 0 && (

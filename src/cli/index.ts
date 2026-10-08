@@ -139,8 +139,23 @@ const BACKUP_ONLY_FLAGS = new Set(['--sections', '--out']);
 /** backup 明确不支持的 restore 系参数（--dry-run 对 backup 有效，故不在此表） */
 const BACKUP_REJECTED_FLAGS = new Set(['--id', '--profile', '--settings']);
 
-/** 仅 restore 子命令允许的参数 */
-const RESTORE_ONLY_FLAGS = new Set(['--id', '--dry-run', '--profile', '--settings']);
+/**
+ * 每个参数**真正被哪些子命令使用**（白名单，而不是「想起来才拒绝某一条」）。
+ *
+ * 为什么要有这张表：此前只有 `snapshots` 会拒绝 restore 系参数，于是
+ * `verify --dry-run / --profile / --settings` 被**悄悄接受并忽略** —— 用户会以为自检跑成了
+ * 「只读预演」。纪律是「本命令用不到的参数一律拒绝」，而不是「反正不影响结果就算了」。
+ */
+const FLAG_ALLOWED_COMMANDS = new Map<string, ReadonlySet<CliCommand>>([
+  // --id：restore 的目标快照；verify 把它当位置参数的等价写法（见 help 的 verify 段）。
+  ['--id', new Set<CliCommand>(['restore', 'verify'])],
+  // --dry-run：restore（只打印计划）/ reinstall（只打印重装步骤）/ backup（只打印打包清单）。
+  ['--dry-run', new Set<CliCommand>(['restore', 'reinstall', 'backup'])],
+  // --profile：restore 要恢复的档案；web 用它决定救急台操作哪个档案（两条都真的在用，故放行）。
+  ['--profile', new Set<CliCommand>(['restore', 'web'])],
+  // --settings：只有 restore 的「覆盖 settings 文件路径」用得到。
+  ['--settings', new Set<CliCommand>(['restore'])],
+]);
 
 /** 仅 reinstall 子命令允许的参数 */
 const REINSTALL_ONLY_FLAGS = new Set(['--yes', '--list', '--wipe-config', '--version']);
@@ -349,8 +364,10 @@ export function parseCli(argv: readonly string[]): ParseResult {  const command 
       options.json = true;
       continue;
     }
-    if (command === 'snapshots' && RESTORE_ONLY_FLAGS.has(flag)) {
-      return { ok: false, error: `snapshots 子命令不支持参数 / flag not allowed here: ${flag}` };
+    // 本命令用不到的参数一律拒绝（绝不「悄悄接受并忽略」）：白名单见 FLAG_ALLOWED_COMMANDS。
+    const allowedCommands = FLAG_ALLOWED_COMMANDS.get(flag);
+    if (allowedCommands !== undefined && !allowedCommands.has(command)) {
+      return { ok: false, error: `${command} 子命令不支持参数 / flag not allowed here: ${flag}` };
     }
     if (command !== 'reinstall' && REINSTALL_ONLY_FLAGS.has(flag)) {
       return { ok: false, error: `${command} 子命令不支持参数 / flag not allowed here: ${flag}` };
@@ -1022,7 +1039,15 @@ export async function runCli(
   const dataDir = lockDataDir;
 
   if (options.command === 'snapshots') {
-    const metas = await listSnapshots(dataDir);
+    // 「读不到」≠「没有快照」（core/restore.ts 的 listSnapshots 只有 ENOENT 才算没有）：
+    // 目录存在却读不出来时必须把事实打到 stderr 并以非 0 退出，绝不显示成「无快照」。
+    const probe: { unreadable?: string } = {};
+    const metas = await listSnapshots(dataDir, probe);
+    if (probe.unreadable !== undefined) {
+      io.error(probe.unreadable);
+      io.error('读不到 ≠ 没有快照：请检查该目录的权限/形态，或用 --data-dir 指定正确位置。/ unreadable is not the same as no snapshots');
+      return 1;
+    }
     printSnapshots(metas, io);
     return 0;
   }
@@ -1030,7 +1055,14 @@ export async function runCli(
   // restore
   let id = options.id;
   if (id === undefined) {
-    const picked = pickDefaultSnapshotId(await listSnapshots(dataDir));
+    // 与 snapshots 同一口径：读不出来时如实打印（restore 的退出语义不变 —— 拿不到候选快照即拒绝执行）。
+    const probe: { unreadable?: string } = {};
+    const picked = pickDefaultSnapshotId(await listSnapshots(dataDir, probe));
+    if (probe.unreadable !== undefined) {
+      io.error(probe.unreadable);
+      io.error('读不到 ≠ 没有快照：恢复拒绝在「不知道有哪些快照」的状态下继续。/ unreadable is not the same as no snapshots; refusing to restore');
+      return 1;
+    }
     if (picked === null) {
       io.error('没有可用快照（无快照或全部已回滚）/ no usable snapshot (none or all rolled-back)');
       return 1;
@@ -1059,7 +1091,8 @@ export async function runCli(
   }
   // Phase 3 SAFE MODE：存在未恢复 transaction → 拒绝 destructive（CLI 不旁路 SAFE MODE）。
   // 候选根与真实 restore 的锁目录/journal 根同源（均为 <root> = dirname(快照目录) 的那一族）。
-  const safeMsg2 = checkSafeModeBlocked(resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env));
+  const controlRoots = resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env);
+  const safeMsg2 = checkSafeModeBlocked(controlRoots);
   if (safeMsg2 !== null) {
     io.error(`拒绝执行：${safeMsg2}`);
     return 1;
@@ -1076,12 +1109,25 @@ export async function runCli(
     // Phase 3 P0-A：CLI restore 也创建 durable journal（关闭 bypass）。
     const recovery = new Phase3Recovery({ dataDir: path.dirname(dataDir), packageVersion: '0.1.0', fingerprintDataDir: path.dirname(dataDir) });
     await recovery.initFingerprint().catch(() => undefined);
-    const report = await runWithMutationLock(lock, { op: 'cli-restore', target: id }, async (lockCtx) => {
-      if (lockCtx !== null) {
-        return (await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: () => restore(restoreOptions) })).result;
-      }
-      return restore(restoreOptions);
+    const outcome = await runWithMutationLock(lock, { op: 'cli-restore', target: id }, async (lockCtx) => {
+      // 第三道门（与救急台 actions.ts 的 checkWriteGates 同源、同序：SAFE MODE → 残留锁 → DSH 未运行）：
+      // 恢复会覆盖/删除 $DSH_HOME 下**正在被实例使用**的文件。放在持有环境锁之后，于是「残留锁」仍先于它报出。
+      const running = await readRunningInstances(controlRoots);
+      if (running.length > 0) return { kind: 'dsh-running' as const, running };
+      return {
+        kind: 'restore' as const,
+        report: lockCtx !== null
+          ? (await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: () => restore(restoreOptions) })).result
+          : await restore(restoreOptions),
+      };
     });
+    if (outcome.kind === 'dsh-running') {
+      io.error('检测到 DSH 正在运行（' + outcome.running.map((i) => i.name + ' pid=' + String(i.pid)).join('、')
+        + '）：请先关闭 DSH 再执行恢复 —— 恢复会覆盖/删除 $DSH_HOME 下正在使用的文件。');
+      io.error('如 DSH 已起不来（无法正常关闭），改用本机救急台：dcm web（「恢复」页与 CLI 同一实现，可先停实例/回收残留锁）。');
+      return 1;
+    }
+    const report = outcome.report;
     printReport(report, io);
     return report.failed.length > 0 ? 1 : 0;
   } catch (err) {
@@ -1095,15 +1141,54 @@ export async function runCli(
 
 /* ------------------------------------------------------------ web：离线只读救急台 */
 
+/** 救急台的目录事实（由 --data-dir / --data-root 统一派生；四处只认这一份）。 */
+export interface WebPaths {
+  /** 插件数据根（快照/导出/锁都挂在它下面） */
+  root: string
+  /** 与 root 同值（RescuePaths.dataDir 的语义） */
+  dataDir: string
+  snapshotsDir: string
+  exportsDir: string
+  locksDir: string
+  controlRoots: string[]
+}
+
+/**
+ * 派生救急台要用的四个目录 —— **root 只算一次**，再同时派生 snapshots / exports / locks / dataDir。
+ *
+ * 为什么必须统一：`--data-dir` 的历史语义是「快照目录 / 导出目录」，尾段命中 `snapshots`/`exports`
+ * 时要**上溯一层**才是数据根。此前只对「那一条」取原值、另一条仍 `path.join(dataDir, ...)`，
+ * 于是 `--data-dir <root>/snapshots` 会派生出 `<root>/snapshots/exports`（半上溯）——
+ * 命令行与网页看到的目录事实立刻分叉。`--data-root` 恒为准。
+ */
+export function resolveWebPaths(
+  opts: { dataRoot?: string; dataDir?: string } = {},
+  env: Record<string, string | undefined> = process.env,
+): WebPaths {
+  const explicitRoot = opts.dataRoot !== undefined && opts.dataRoot !== '' ? path.resolve(opts.dataRoot) : undefined;
+  const explicitDataDir = opts.dataDir !== undefined && opts.dataDir !== '' ? path.resolve(opts.dataDir) : undefined;
+  const root = explicitRoot
+    ?? (explicitDataDir === undefined
+      ? path.join(resolveDshHome(env), 'dsh-config-manager')
+      : ['snapshots', 'exports'].includes(path.basename(explicitDataDir))
+        ? path.dirname(explicitDataDir)
+        : explicitDataDir);
+  return {
+    root,
+    dataDir: root,
+    snapshotsDir: path.join(root, 'snapshots'),
+    exportsDir: path.join(root, 'exports'),
+    locksDir: path.join(root, 'locks'),
+    controlRoots: resolveControlRoots({ dataRoot: explicitRoot, dataDir: explicitDataDir }, env),
+  };
+}
+
 /**
  * 启动离线救急台（**只读**）。
  *
  * 为什么目录要在这一侧解析：`--data-dir / --data-root` 的既有语义只有本文件的 resolve* 系列说了算——
  * 网页与各子命令必须看到同一份目录事实，否则迟早出现「命令行说没有、网页说有一个」的分叉。
- * 这里统一按**控制面根**派生（`<root>/snapshots` 与 `<root>/exports`）。`--data-dir` 的历史语义是
- * 「快照目录 / 导出目录」，所以尾段命中 `snapshots` / `exports` 时会**上溯一层**再派生
- * （否则 <root>/snapshots 会变成 <root>/snapshots/snapshots，快照列表恒空 —— 验收 F6）；
- * `--data-root` 仍恒为准。
+ * 目录派生统一走 `resolveWebPaths()`（`--data-dir` 尾段命中 snapshots/exports 时上溯一层；`--data-root` 恒为准）。
  *
  * 服务端只绑 127.0.0.1，端口缺省 0（内核分配）；启动后打印带一次性 token 的 URL 并打开浏览器。
  */
@@ -1113,21 +1198,8 @@ async function runWeb(
   env: Record<string, string | undefined>,
 ): Promise<number> {
   const homeDir = options.home ?? resolveDshHome(env);
-  const controlRoots = resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env);
-  const dataDir = controlRoots[0] ?? path.join(homeDir, 'dsh-config-manager');
-  // --data-dir 的历史语义是「快照目录 / 导出目录」：用户按该语义传 <root>/snapshots 时，
-  // 不能把它本身当作数据根（否则会派生出 <root>/snapshots/snapshots，真实快照必然看不见 —— 验收 F6）。
-  // 尾段命中 snapshots / exports 就上溯一层；显式 --data-root 仍以它为准。
-  const resolvedSnapshotsDir = options.dataRoot === undefined
-    && options.dataDir !== undefined
-    && ['snapshots', 'exports'].includes(path.basename(path.resolve(options.dataDir)))
-    ? path.resolve(options.dataDir)
-    : path.join(dataDir, 'snapshots');
-  const snapshotsDir = resolvedSnapshotsDir;
-  const exportsDir = options.dataDir !== undefined && path.basename(path.resolve(options.dataDir)) === 'exports'
-    ? path.resolve(options.dataDir)
-    : path.join(dataDir, 'exports');
-  const locksDir = resolveRecoverLocksDir({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env);
+  const { dataDir, snapshotsDir, exportsDir, locksDir, controlRoots } =
+    resolveWebPaths({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env);
   // 懒加载：http 服务端代码不进其他子命令（尤其 reinstall/restore 的救急路径）的启动链路
   const { startConsoleServer } = await import('./web/server.ts');
   const server = await startConsoleServer({
@@ -1139,6 +1211,9 @@ async function runWeb(
       locksDir,
       controlRoots,
       profile: options.profile,
+      // 离线导出的 manifest.exporter.version 用**真实 CLI 版本**（与 backup 同一口径），
+      // 不再写死 'rescue-console' —— 那会让产物声称一个不存在的导出器版本。
+      exporterVersion: CLI_EXPORTER_VERSION,
     },
     version: CLI_EXPORTER_VERSION,
     port: options.port ?? 0,

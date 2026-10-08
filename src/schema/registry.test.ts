@@ -291,3 +291,17 @@ test('registry: configSnapshot 逐分区表态，且 sessions / secrets 不进�
     '口径成员 == 逐项列出的配置类分区（多一个都会静默扩大采集面）',
   );
 });
+
+test('registry: files 分区逐项校验 relativePath（与 patchFiles 同级防线，防路径穿越）', () => {
+  const ok = validateSectionData('pluginFiles', { version: 1, files: [{ relativePath: 'plugins/a/b.js', data: 'x' }] });
+  assert.deepEqual(ok, [], '合法相对路径不得报错（不误伤既有产物）');
+  for (const bad of ['/abs/path.js', '../escape.js', '..', '\\lead.js']) {
+    const issues = validateSectionData('pluginFiles', { version: 1, files: [{ relativePath: bad, data: 'x' }] });
+    assert.ok(
+      issues.some((i) => i.path === 'files[0].relativePath'),
+      '不安全相对路径必须报错：' + bad,
+    );
+  }
+  const badEntry = validateSectionData('pluginFiles', { version: 1, files: [42] });
+  assert.ok(badEntry.some((i) => i.path === 'files[0]'), '非对象条目不得静默放过');
+});

@@ -18,7 +18,7 @@ import { isLoopbackRequest, registerRoutes, routeSpecOf, RouteError, type HttpMe
 import type { RescuePaths } from '../actions.ts'
 import { openInBrowser } from './browser.ts'
 import { writeHtml } from './http.ts'
-import { renderMessagePage } from './page.ts'
+import { consolePagesHint, renderMessagePage } from './page.ts'
 import { buildConsoleRoutes } from './routes.ts'
 
 /** 会话 cookie 名（HttpOnly + SameSite=Strict，仅本机回环使用）。 */
@@ -174,7 +174,7 @@ export async function startConsoleServer(options: ConsoleServerOptions): Promise
     }
     const route = table.get(url.pathname)
     if (route === undefined) {
-      writeHtml(res, 404, renderMessagePage('页面不存在', '没有这个路径：' + url.pathname, '可用页面：/（首页）、/disk、/sessions、/healthz'))
+      writeHtml(res, 404, renderMessagePage('页面不存在', '没有这个路径：' + url.pathname, consolePagesHint()))
       return
     }
     // 方法白名单（cli-F4）：kit 的 405 出口写的是 **JSON**（给插件 API 客户端用），而救急台是
@@ -185,7 +185,7 @@ export async function startConsoleServer(options: ConsoleServerOptions): Promise
       writeHtml(res, 405, renderMessagePage(
         '方法不被允许',
         '这个地址只接受 ' + spec.methods.join(' / ') + ' 请求（收到 ' + String(req.method ?? '') + '）。',
-        '可用页面：/（首页）、/disk、/sessions、/lock、/profiles、/healthz',
+        consolePagesHint(),
       ))
       return
     }
@@ -201,7 +201,7 @@ export async function startConsoleServer(options: ConsoleServerOptions): Promise
       writeHtml(res, status, renderMessagePage(
         status === 404 ? '页面 / 目标不存在' : '操作未完成',
         message,
-        status === 404 ? '可用页面：/（首页）、/disk、/sessions、/lock、/profiles、/healthz' : '',
+        status === 404 ? consolePagesHint() : '',
       ))
     }
   }

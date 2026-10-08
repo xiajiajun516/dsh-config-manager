@@ -67,7 +67,9 @@ export async function runSessionsInspect(options: SessionsInspectOptions, io: Se
   const blocking = result.summary.bySeverity.blocksStartup + result.summary.bySeverity.unloadable;
   if (options.json) {
     io.log(JSON.stringify({
-      ok: true,
+      // ok 与退出码**同源**（0 ⟺ 无阻断级问题）：此前恒 true，存在不可加载会话时
+      // CI 会看到 ok:true 而退出码 1 —— 两个字段互相矛盾，机器消费者只会信错一个。
+      ok: blocking === 0,
       readOnly: true,
       sessionsDir: result.sessionsDir,
       summary: { ...result.summary, untested: result.untested, unreadableEntries: result.unreadableEntries },

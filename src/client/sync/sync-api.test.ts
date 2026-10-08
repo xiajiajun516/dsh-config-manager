@@ -656,3 +656,26 @@ test('S-33 api.githubCreateRepository()：描述为空时不发送 description �
   const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>
   assert.ok(!('description' in sent), '空描述不占字段（与 GitHub 默认描述口径一致）')
 });
+
+test('S-34 api.rollback()：POST /sync/rollback 透传 full=false 与 failed（未回滚项 + 人工提示）', async () => {
+  const body = {
+    ok: true,
+    full: false,
+    failed: [{ item: 'credentialsStatus:DEEPSEEK_API_KEY', reason: 'DSH 不回读凭据值，无法自动恢复', manualHint: '请重新补录该凭据' }],
+  }
+  const calls: FetchCall[] = []
+  installFetchMock((call) => {
+    calls.push(call)
+    return jsonResponse(200, body)
+  })
+  const api = new SyncApi()
+  const result = await api.rollback({ restoreId: 'rest-9' })
+  assert.equal(result.full, false)
+  assert.equal(result.failed?.length, 1, '未回滚项必须透传（旧实现只回 ok/full，界面据此误报「已回滚」）')
+  assert.equal(result.failed?.[0]?.item, 'credentialsStatus:DEEPSEEK_API_KEY')
+  assert.equal(result.failed?.[0]?.manualHint, '请重新补录该凭据')
+  assert.equal(calls[0]?.url, SYNC_API.rollback)
+  assert.equal(calls[0]?.init?.method, 'POST')
+  const sent = JSON.parse(String(calls[0]?.init?.body ?? '{}')) as Record<string, unknown>
+  assert.equal(sent['restoreId'], 'rest-9')
+});

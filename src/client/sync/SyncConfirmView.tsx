@@ -22,7 +22,7 @@ import {
   buildAdoptions, confirmListSummary, hasBulkDecidable, keepLocalAll, kindLabel, reviewItems, severityLabel,
   summarizeConfirmItems, useRemoteAll, type BulkDecision, type SyncConflictResolution,
 } from './sync-view.ts'
-import type { ApplyItemsResponse } from './sync-api.ts'
+import type { ApplyItemsResponse, SyncRollbackResponse } from './sync-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncConfirmDecisions } from '../run-store.ts'
 import { compatibilityBadgeKind, compatibilityLevel, type CompatibilityLevel } from '../../ui/import-wizard.ts'
@@ -86,6 +86,8 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   // 执行阶段：'idle' | 'applying' | 'done' | 'failed' | 'cancelling'
   const [phase, setPhase] = useState<'idle' | 'applying' | 'done' | 'failed' | 'cancelling'>('idle');
   const [applyResult, setApplyResult] = useState<ApplyItemsResponse | null>(null);
+  /** 一键回滚的诚实结果：full=false 时留在界面列出未恢复项（绝不只弹一句「已回滚」） */
+  const [rollbackResult, setRollbackResult] = useState<SyncRollbackResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Phase 7 迁移前咨询：远端快照咨询报告（本地 state，非敏感） */
   const [consultReport, setConsultReport] = useState<ConsultReport | null>(null);
@@ -196,13 +198,23 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
     setPhase('applying');
     setError(null);
     try {
-      await api.rollback({ restoreId });
+      const result = await api.rollback({ restoreId });
+      const failed = result.failed ?? [];
       setPhase('done');
       setApplyResult(null);
-      // R-04：回滚成功改走 Toast（原 ok Banner 只在「回滚成功」这一条路径出现；
-      // 操作已完成、用户可离开，不需要停留阅读）。下方「关闭」按钮保留。
-      toast.ok(t('syncflow.rollbackDone'));
-      onRollbackDone?.();
+      if (result.full === false) {
+        // 诚实性（2026-10）：部分回滚**绝不**弹「已回滚」Toast —— 留在卡里列出未恢复项
+        // 与人工提示（凭据这类无法自动恢复的项会带 manualHint）。
+        setRollbackResult(result);
+        toast.warn(t('syncflow.rollbackPartialToast', { n: String(failed.length) }));
+        // 回滚没完成 ⇒ 不通知上层清空 lastRestoreId：那个回滚点仍然相关，用户可能想重试/排查。
+      } else {
+        setRollbackResult(null);
+        // R-04：回滚成功改走 Toast（原 ok Banner 只在「回滚成功」这一条路径出现；
+        // 操作已完成、用户可离开，不需要停留阅读）。下方「关闭」按钮保留。
+        toast.ok(t('syncflow.rollbackDone'));
+        onRollbackDone?.();
+      }
     } catch (err) {
       setPhase('failed');
       setError(err instanceof Error ? err.message : String(err));
@@ -336,6 +348,28 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       )}
       {(phase === 'done' || phase === 'failed') && applyResult === null && (
         <>
+          {/* 诚实性（2026-10）：回滚未完成（full=false）时逐条列出未恢复项与人工提示，
+              绝不用「已回滚」这一句话盖过去。完整回滚仍走 Toast（见 runRollback）。 */}
+          {rollbackResult !== null && rollbackResult.full === false && (
+            <>
+              <Banner kind="error">
+                {t('syncflow.rollbackIncomplete', { n: String((rollbackResult.failed ?? []).length) })}
+              </Banner>
+              {(rollbackResult.failed ?? []).length > 0 && (
+                <div>
+                  <span className={css.fieldLabel}>{t('syncflow.rollbackFailedItems')}</span>
+                  <ul className={css.warnList}>
+                    {(rollbackResult.failed ?? []).map((f, i) => (
+                      <li key={i}>
+                        {redact(f.item)} —— {redact(f.reason)}
+                        {f.manualHint !== undefined && f.manualHint !== '' ? '（' + redact(f.manualHint) + '）' : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
           {/* R-04：回滚成功的 ok Banner 已改为 Toast（见 runRollback）。此处仅保留收尾「关闭」按钮；
              一并消除了原实现在 runApply 抛错（phase=failed 且 applyResult 仍为 null）时
               误显示「已回滚到应用前」的问题 —— 那种情况下方 error Banner 才是唯一事实。 */}
@@ -418,7 +452,11 @@ function ApplyResultCard({ result, busy, t, onRollback }: ApplyResultCardProps):
       {/* R-05：成功分支已改走 Toast（见 runApply）；此处只保留失败 Banner ——
           K-06 要求失败后用户停留本卡阅读 warnings 明细并决定是否回滚，
           自动消失的 Toast 无法承载这个决策入口。 */}
-      {!ok && <Banner kind="error">{t('syncflow.importFailed')}</Banner>}
+      {!ok && (result.rollbackFull === false
+        // 诚实性（2026-10）：rolledBack=true 但整体回滚未完成时，'syncflow.importFailed'
+        //（文案断言「已整体回滚」）是错的 —— 换专用措辞，未恢复项见下方 warnings 列表。
+        ? <Banner kind="error">{t('syncflow.importRollbackIncomplete')}</Banner>
+        : <Banner kind="error">{t('syncflow.importFailed')}</Banner>)}
       {/* issue #56：部分成功必须**留在卡里**（Toast 会消失，而用户需要据此判断
           「我这次到底缺了什么、要不要回滚」）。措辞与事实同强度：不是失败，是 N 项没生效。 */}
       {ok && ineffective.length > 0 && (

@@ -18,7 +18,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { REDACTION_VALUE_PATTERNS, REDACTED, redact } from './redaction.ts';
+import { REDACTION_VALUE_PATTERNS, REDACTED, createRedactor, redact } from './redaction.ts';
 import { SECRET_VALUE_PATTERNS, matchSecretValuePattern } from './secret-scanner.ts';
 
 /** 真实凭据形态语料（scanner 必须命中；redact 必须掩掉原文） */
@@ -146,4 +146,20 @@ test('t78-f（**t83 后范围收窄**）：显示层「更宽」只对未加形�
   assert.equal(redact('sk-your-key-here'), 'sk-your-key-here', 't83 后：显示层与 scanner 一致放行');
   assert.equal(matchSecretValuePattern('Bearer example-token-here'), null, 'scanner 侧放行（示例形态）');
   assert.ok(redact('Bearer example-token-here').includes(REDACTED), 'redact 侧仍掩（显示层更宽，未变）');
+});
+
+/* ---------------- URL 内嵌凭据（userinfo 形态）必须掩码 ---------------- */
+
+test('redact：scheme://user:password@host 的密码段被掩码（用户名保留），且幂等', () => {
+  const out = redact('clone https://oauth2:GLPAT-SECRETVALUE@gitlab.example.com/u/r.git now');
+  assert.equal(out.includes('GLPAT-SECRETVALUE'), false, 'URL 内嵌凭据不得明文保留');
+  assert.ok(out.includes('oauth2'), '用户名保留可读（与 URL_QUERY_RE 同一取舍）');
+  assert.ok(out.includes('gitlab.example.com'), '主机名不受影响');
+  assert.equal(redact(out), out, '幂等：重复脱敏结果不变');
+  // query 形态的既有行为不变
+  assert.equal(redact('https://h/p?token=abc123456').includes('abc123456'), false, 'query token 仍被掩码');
+  // 没有 userinfo 的普通 URL 一字不改
+  assert.equal(redact('https://gitlab.example.com/u/r.git'), 'https://gitlab.example.com/u/r.git');
+  // createRedactor 与 redact 同源（同一份规则）
+  assert.equal(createRedactor()('https://u:p4ssword@h/x').includes('p4ssword'), false);
 });

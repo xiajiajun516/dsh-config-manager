@@ -384,7 +384,37 @@ export interface ApplyItemsResponse {
    * 旧宿主不返回 → undefined（按「无未生效项」处理，不误报）。
    */
   ineffective?: { itemId: string; adapter: string; message?: string }[];
+  /**
+   * 「整体回滚是否完整」（诚实性，2026-10）。`rolledBack=true` 只说「触发了整体回滚」，
+   * 不代表每一项都补偿成功（典型：原本已存在的凭据值 DSH 不可回读 → 无法自动恢复）。
+   * 此时引擎把失败项并入 `warnings`，并置 `rollbackFull=false`；界面据此**不得**
+   * 显示成「已整体回滚」，必须列出未恢复项。
+   * 旧宿主不返回 → undefined（按旧的「已整体回滚」文案处理，不误报）。
+   */
+  rollbackFull?: boolean;
   result: unknown;
+}
+
+/** POST /sync/rollback 响应：一键回滚的诚实结果（full=false 时 failed 列出未回滚项）。 */
+export interface SyncRollbackResponse {
+  ok: boolean;
+  /** 是否**每一项**都补偿成功（false = 部分回滚，配置可能停留在中间状态） */
+  full: boolean;
+  /**
+   * 未回滚项（full=false 时非空）。`reason` = 为什么没能恢复；`manualHint` = 人工怎么补
+   * （如「请重新补录该凭据」）。旧宿主不返回 → undefined（按「无未回滚项」处理）。
+   */
+  failed?: SyncRollbackFailedItem[];
+  /** 同步历史写入失败（回滚本身已完成；仅提示） */
+  historyWriteError?: string;
+}
+
+/** 单条未回滚项。 */
+export interface SyncRollbackFailedItem {
+  /** 形如 `<adapter>:<ref>` */
+  item: string;
+  reason: string;
+  manualHint?: string;
 }
 
 /* ---------------------------------------------------------------- 自动同步 */
@@ -698,9 +728,9 @@ export class SyncApi {
     return postJson<{ ok: boolean; lastSyncChannel?: SyncTransportType }>(SYNC_API.uiPrefs, payload, this.t, SYNC_OPTS);
   }
 
-  /** 一键回滚：按 restoreId 调用 backup→rollback */
-  async rollback(payload: { restoreId: string }): Promise<{ ok: boolean; full: boolean }> {
-    return postJson<{ ok: boolean; full: boolean }>(SYNC_API.rollback, payload, this.t, SYNC_OPTS);
+  /** 一键回滚：按 restoreId 调用 backup→rollback（full=false 时 failed 列出未回滚项与人工提示） */
+  async rollback(payload: { restoreId: string }): Promise<SyncRollbackResponse> {
+    return postJson<SyncRollbackResponse>(SYNC_API.rollback, payload, this.t, SYNC_OPTS);
   }
 
   /** Phase 7 迁移前咨询（只读健康评分 + 建议）：对远端快照生成咨询报告。 */

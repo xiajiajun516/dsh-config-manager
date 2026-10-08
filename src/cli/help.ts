@@ -155,7 +155,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '离线救急台（本机网页）',
     usage: 'web',
     summary: '离线救急台：只读诊断 + 逐项确认的修复',
-    usageLines: ['web [--port <n>] [--no-open] [--home <dir>] [--data-root <dir>] [--idle-timeout <min>]'],
+    usageLines: ['web [--port <n>] [--no-open] [--home <dir>] [--data-dir <dir>] [--data-root <dir>] [--profile <name>] [--idle-timeout <min>]'],
     description: [
       '启动一个只绑 127.0.0.1 的本机网页，把诊断与修复动作摆成能点的界面：',
       '实例心跳 / SAFE MODE / 残留锁 / 快照 / 备份自检 / 磁盘占用 / 会话体检 / 档案实例。',
@@ -171,7 +171,9 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
           { flag: '--no-open', desc: '启动后不打开浏览器（SSH / 无桌面场景）' },
           { flag: '--idle-timeout <min>', desc: '空闲多少分钟自动退出（0 = 不自动退出；缺省 30）' },
           { flag: '--home <dir>', desc: '要查看的 DSH home（缺省 $DSH_HOME，即 ~/.dsh）' },
-          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传）' },
+          { flag: '--data-dir <dir>', desc: '快照 / 导出目录（历史语义）：尾段是 snapshots / exports 时按它的父目录当数据根，再派生 快照/导出/锁 三个目录；否则整条按数据根处理（缺省 $DSH_HOME/dsh-config-manager）' },
+          { flag: '--data-root <dir>', desc: '插件数据根 dataDir（自定义时必须显式传；给了就以它为准）' },
+          { flag: '--profile <name>', desc: '救急台操作的 DSH profile（缺省 web；影响「恢复」页的目标档案）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
@@ -195,6 +197,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
       '快照是每次导入前自动留下的整机配置副本；本命令只读，按新→旧列出：',
       'ID / 创建时间 / 来源 ZIP / 状态 / 条目数 / 宿主文件数 / 插件数。',
       '没有任何快照时打印「无快照」并照常返回 0。',
+      '目录存在却读不出来（权限 / 路径被文件占住）时，把事实打到 stderr 并以非 0 退出 —— 读不到 ≠ 没有快照。',
     ],
     sections: [
       {
@@ -204,7 +207,13 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
           { flag: '-h, --help', desc: '显示本页' },
         ],
       },
-      { title: '退出码', entries: [{ flag: '0', desc: '列出成功（没有快照也是 0）' }] },
+      {
+        title: '退出码',
+        entries: [
+          { flag: '0', desc: '列出成功（目录不存在、没有快照也是 0）' },
+          { flag: '1', desc: '快照目录存在但读不出来（≠ 没有快照；原因打到 stderr）' },
+        ],
+      },
     ],
     examples: ['dcm snapshots', 'dcm snapshots --data-dir D:/rescue/snapshots'],
   },
@@ -213,7 +222,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     title: '只读自检备份 ZIP',
     usage: 'verify [<file|path>]',
     summary: '只读自检备份 ZIP（无参 = 导出目录全部）',
-    usageLines: ['verify [<file|path>] [--json] [--data-dir <dir>]'],
+    usageLines: ['verify [<file|path> | --id <file|path>] [--json] [--data-dir <dir>]'],
     description: [
       '重新读取备份 ZIP，核对结构与 integrity/checksums.json 的逐条 SHA-256；全程零写入。',
       '无参数时校验导出目录下全部 *.zip；也可以给一个文件名或完整路径。',
@@ -234,6 +243,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
         title: '选项',
         entries: [
           { flag: '--json', desc: '机器可读输出（退出码仍为 0/1；出错的 JSON 也走 stdout）' },
+          { flag: '--id <file|path>', desc: '待校验目标（文件名或路径）；与位置参数同义，同时给出时以 --id 为准' },
           { flag: '--data-dir <dir>', desc: '导出目录（缺省 $DSH_HOME/dsh-config-manager/exports）' },
           { flag: '-h, --help', desc: '显示本页' },
         ],
@@ -330,8 +340,9 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
     description: [
       '把配置恢复到该快照的状态：每个被覆盖或被删除的文件先拷到 <快照目录>/pre-restore/，以便反悔。',
       '不带 --id 时挑最近一个非 rolled-back 的快照；--dry-run 只打印计划，零写入。',
-      '真正执行前有两道门，任一不过就拒绝（没有 --force）：',
-      '  ① SAFE MODE 存在未恢复的 transaction；② 环境锁被别的任务持有。',
+      '真正执行前有三道门，任一不过就拒绝（没有 --force）：',
+      '  ① SAFE MODE 存在未恢复的 transaction；② 环境锁被别的任务持有；',
+      '  ③ 本机有 DSH 实例在跑（恢复会覆盖/删除它正在使用的文件）——关掉 DSH，或改用 dcm web 救急台。',
     ],
     sections: [
       {
@@ -350,7 +361,7 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
         title: '退出码',
         entries: [
           { flag: '0', desc: '全部动作成功（--dry-run 恒 0）' },
-          { flag: '1', desc: '有失败步骤 / 没有可用快照 / id 非法 / SAFE MODE 或环境锁拒绝' },
+          { flag: '1', desc: '有失败步骤 / 没有可用快照 / 快照目录读不出来 / id 非法 / SAFE MODE、环境锁或「DSH 在跑」拒绝' },
         ],
       },
     ],
@@ -374,6 +385,8 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
       '--map old=new 用于跨机恢复：命中前缀会先改写首帧 cwd，其余帧逐字节保留。',
       '--keep <dir> 处理重复 id：点名保留哪一份，其余移进 sessions/.cm-repair-quarantine-<时间戳>/（只搬不删）。',
       '写盘前会检查 DSH 是否在跑；在跑则拒绝，避免边读边改。',
+      '--json 的 ok 与退出码同源：0（无阻断级问题）时为 true，否则 false —— 两者不会互相矛盾。',
+      '会话根不存在或存在却读不出来时，repair 都如实报错并非 0 退出（读不到 ≠ 没有会话）。',
     ],
     sections: [
       {
@@ -398,9 +411,9 @@ export const COMMAND_HELP: readonly CommandHelp[] = [
       {
         title: '退出码',
         entries: [
-          { flag: '0', desc: '无阻断问题；repair 的 dry-run 恒 0' },
-          { flag: '1', desc: '有阻断问题；repair 的 --fix 有失败/冲突/回滚；参数错误' },
-          { flag: '2', desc: 'list / doctor 找不到会话根目录' },
+          { flag: '0', desc: '无阻断问题；repair 的 dry-run 恒 0（--json 的 ok 同时为 true）' },
+          { flag: '1', desc: '有阻断问题（--json 的 ok 为 false）；repair 的 --fix 有失败/冲突/回滚；repair 的会话根不存在或读不出来；参数错误' },
+          { flag: '2', desc: 'list / doctor 找不到会话根目录（repair 的同一情形是 1）' },
         ],
       },
     ],

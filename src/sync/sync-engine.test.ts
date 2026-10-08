@@ -843,6 +843,7 @@ test('applyMergePlan: 失败路径 → 整体回滚 + enqueueItems + ApplyReport
     const report = await engine.applyMergePlan(apply);
     assert.equal(report.ok, false, 'failure path → ok:false');
     assert.equal(report.rolledBack, true);
+    assert.equal(report.rollbackFull, true, '完整回滚 → rollbackFull:true（既有 rolledBack 语义不变）');
     assert.equal(report.applied.length, 0);
     assert.notEqual(report.restoreId, '', 'restoreId 应透传以便排查');
     assert.deepEqual(report.review, [], '不再写 review-queue（§7.4）');
@@ -1087,6 +1088,7 @@ test('applyItems: 失败路径 → 整体回滚 + ok:false', async () => {
     const report = await engine.applyItems(zipPath, makeImportPlan('fail'));
     assert.equal(report.ok, false);
     assert.equal(report.rolledBack, true);
+    assert.equal(report.rollbackFull, true, '完整回滚 → rollbackFull:true（既有 rolledBack 语义不变）');
     assert.notEqual(report.restoreId, '', 'restoreId 应透传');
     // 不再写 review-queue
     const rqPath = path.join(tmp, 'sync-review-queue.json');
@@ -2087,6 +2089,85 @@ test('preview: 用户路径映射随请求进入计划，且排在自动重定�
     } finally {
       await fs.rm(path.dirname(preview.zipPath), { recursive: true, force: true });
     }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/* --------- 诚实性（2026-10）：部分回滚必须如实回传（rollbackFull + 失败项并入 warnings） --------- */
+
+/** 目标机已有该凭据的计划项：快照 existed=true → DSH 不可回读 → 回滚必然失败。 */
+function makeCredentialPlan(ref: string): ImportPlan {
+  return {
+    items: [{
+      id: `secret:${ref}`,
+      kind: 'MissingSecret',
+      adapter: 'credentialsStatus',
+      description: `补录凭据 ${ref}`,
+      severity: 'warning',
+      target: { adapter: 'credentialsStatus', ref },
+    }],
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: {} as unknown as Record<SectionId, number>,
+  };
+}
+
+test('applyItems: 半回滚（凭据 existed=true 不可回读）→ rollbackFull:false 且失败项并入 warnings', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applyitems-partial-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.credentials.values.set('K', 'old-secret'); // 目标机原本已配置 → 快照 existed=true
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = false;
+    const engine = makeEngineWithMockImporter({ ctx, transport, stateDir: tmp, mockImporter: mock });
+    const zipPath = path.join(tmp, 'session.zip');
+    await fs.writeFile(zipPath, 'mock-zip-content');
+
+    const report = await engine.applyItems(zipPath, makeCredentialPlan('K'));
+    assert.equal(report.ok, false);
+    assert.equal(report.rolledBack, true, '旧字段语义不变：确实触发了整体回滚');
+    assert.equal(report.rollbackFull, false, '凭据不可回读 → 回滚不完整，必须如实回传');
+    const rollbackWarnings = report.warnings.filter((w) => w.includes('回滚未完成'));
+    assert.equal(rollbackWarnings.length, 1, '未回滚项必须进 warnings（改造前被 catch 吞掉）');
+    assert.match(rollbackWarnings[0]!, /credentialsStatus:K/);
+    assert.match(rollbackWarnings[0]!, /请人工重新填写/, 'manualHint 必须一并给出');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergePlan: 半回滚 → rollbackFull:false 且失败项并入 warnings（不吞、不硬编码）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applymerge-partial-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.credentials.values.set('K', 'old-secret');
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = false;
+    mock.createPlanImpl = async () => makeCredentialPlan('K');
+    const engine = makeEngineWithMockImporter({ ctx, transport, stateDir: tmp, mockImporter: mock });
+    const apply: SyncApplyPlan = {
+      autoApply: [{
+        id: 'settings',
+        decision: 'useRemote',
+        conflicts: [],
+        merged: { version: 1, namespaces: { general: { value: { theme: 'light' }, revision: 5, secrets: [] } } },
+      }],
+      review: [], skipped: [],
+    };
+    const report = await engine.applyMergePlan(apply);
+    assert.equal(report.ok, false);
+    assert.equal(report.rolledBack, true, '旧字段语义不变：确实触发了整体回滚');
+    assert.equal(report.rollbackFull, false, '回滚不完整必须如实回传，绝不硬编码 rolledBack 为「已全部回滚」');
+    const rollbackWarnings = report.warnings.filter((w) => w.includes('回滚未完成'));
+    assert.equal(rollbackWarnings.length, 1, '未回滚项必须进 warnings');
+    assert.match(rollbackWarnings[0]!, /credentialsStatus:K/);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

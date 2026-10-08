@@ -82,9 +82,23 @@ test('T6 CLI：--json 给机器可读结果（readOnly 声明 + summary + rows�
     const { lines, io } = collect();
     const code = await runSessionsInspect({ home, action: 'list', json: true }, io);
     assert.equal(code, 0);
-    const parsed = JSON.parse(lines.join('\n')) as { readOnly: boolean; rows: unknown[]; summary: { total: number } };
+    const parsed = JSON.parse(lines.join('\n')) as { ok: boolean; readOnly: boolean; rows: unknown[]; summary: { total: number } };
     assert.equal(parsed.readOnly, true, '输出必须声明只读');
+    assert.equal(parsed.ok, true, '无阻断问题 → ok 与退出码（0）同源');
     assert.equal(parsed.summary.total, 1);
     assert.equal(parsed.rows.length, 1);
+  });
+});
+
+test('T6 CLI：--json 的 ok 与退出码同源（有不可加载会话时为 false，不再恒 true）', { skip: !CAPABLE }, async () => {
+  await withTmp(async (home) => {
+    const dir = path.join(home, 'sessions', KEY, 'broken');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'session.jsonl.zstd'), Buffer.from('not zstd'));
+    const { lines, io } = collect();
+    const code = await runSessionsInspect({ home, action: 'doctor', json: true }, io);
+    assert.equal(code, 1, '存在不可加载会话 → 退出码 1');
+    const parsed = JSON.parse(lines.join('\n')) as { ok: boolean };
+    assert.equal(parsed.ok, false, 'ok 必须与退出码同源（此前恒 true，机器消费者只会信错一个）');
   });
 });

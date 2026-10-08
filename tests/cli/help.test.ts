@@ -124,7 +124,8 @@ test('H-05 runCli：help <命令> 打详情页；未知主题报错并回落速�
   assert.equal(await runCli(['help', 'verify'], ok.io, {}), 0);
   const okText = ok.out.join('\n');
   assert.match(okText, /^verify — /, '必须直接打 verify 详情页');
-  assert.match(okText, /dcm verify \[<file\|path>\]/);
+  // 用法行如实列出 --id（2026-10-08：verify 现在文档化 --id 别名；位置参数与 --id 二选一）
+  assert.match(okText, /dcm verify \[<file\|path> \| --id <file\|path>\]/);
 
   const viaFlag = captureIo();
   assert.equal(await runCli(['backup', '--help'], viaFlag.io, {}), 0);

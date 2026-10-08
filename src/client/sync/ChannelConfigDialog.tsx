@@ -18,6 +18,7 @@ import {
   cloudIssueKey, cloudSecretRefName, presetById, presetIdForUrl, privateRepoHint,
   S3_PROVIDER_LABEL_KEY, SYNC_CHANNEL_LABEL_KEY, WEBDAV_PRESETS,
 } from './sync-view.ts'
+import { GIST_LARGE_SECTION_HINT_KEY } from './sync-view.ts'
 import type { GithubLoginView } from './sync-view.ts'
 import { S3_PROVIDERS } from '../../ui/sync-settings-view.ts'
 import type { CloudFormIssue, SyncFormSnapshot } from '../../ui/sync-settings-view.ts'
@@ -378,6 +379,8 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
       {channel === 'gist' && (
         <>
           <span className={css.groupLabel}>{t('cloud.gistTitle')}</span>
+          {/* G-34：gist 刻意不外置 blob（一次 GET 全量 / 单文件超限截断 / 文件数上限）⇒ 大分区不适合走 gist */}
+          <span className={css.hint}>{t(GIST_LARGE_SECTION_HINT_KEY)}</span>
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.gistId')} <InfoHint text={t('cloud.gistIdHint')} label={t('common.infoHint')} /></span>
             <input

@@ -16,6 +16,17 @@ import { buildFileDiffBody, buildRestoreBody, executeRestorePlan, makeRestoreExe
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { isENOENT } from '../utils/guards.ts'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+
+/**
+ * 恢复计划指纹（预览-执行一致性）：只取「动作类型 + 目标 + blob」三列 —— 描述文案、详情、顺序无关的
+ * 易变字段一律不进，保证同一份快照 + 同一磁盘状态下指纹稳定。内容变化不会改变指纹（同 kind/target），
+ * 只有**动作集合真的变了**（文件出现/消失、插件增删）才会不同 —— 那正是需要用户重新确认的情况。
+ */
+function restorePlanFingerprint(plan: Awaited<ReturnType<typeof planRestore>>): string {
+  const lines = plan.actions.map((action) => [action.kind, action.target ?? '', action.blobPath ?? ''].join('\u0000'))
+  return createHash('sha256').update(lines.join('\n')).digest('hex')
+}
 
 export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
   const {
@@ -32,7 +43,11 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
     // M4：列出快照元信息（id/createdAt/sourceZip/status/计数，createdAt 倒序）
     endpoint({ path: '/api/dsh-config-manager/snapshots', methods: ['GET'] }, async (req, res) => {
       try {
-        writeJson(res, 200, { snapshots: await listSnapshots(snapshotsDir) })
+        // 「读不到」与「没有」必须分清（core 的 out.unreadable，验收 F2）：快照目录被权限/占位挡住时
+        // 一律回传事实，界面据此渲染告警 —— 此前这个信号在路由层被丢掉，用户看到的是空列表。
+        const out: { unreadable?: string } = {}
+        const snapshots = await listSnapshots(snapshotsDir, out)
+        writeJson(res, 200, { snapshots, unreadable: out.unreadable ?? null })
       } catch (error) {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
       }
@@ -78,7 +93,8 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
           // git 风格恢复预览：逐动作的变更状态 + 行数统计（读取有上限，见 core/snapshot-diff.ts）。
           // summarize 内部逐项兜底、绝不抛错 —— 统计失败不影响计划本身。
           const changeSummary = await summarizeRestoreChanges({ plan, snapshotDir, homeDir: host.homeDir, msg })
-          writeJson(res, 200, { dryRun: true, plan, changeSummary })
+          // 指纹随预览一起下发：执行时带回来即可发现「确认后磁盘又变了」
+          writeJson(res, 200, { dryRun: true, plan, changeSummary, planFingerprint: restorePlanFingerprint(plan) })
           return
         }
         // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
@@ -95,6 +111,16 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
             const runId = run.runId
             try {
               const plan = await planRestore(restoreOpts)
+              // 预览-执行一致性：客户端带了预览指纹而当前计划与之不符 → 拒绝（409）并让用户重新预览。
+              // 为什么必须挡：用户确认的是「还原 A/B」，此刻磁盘已被改动的话，同一份快照可能多出
+              // hostFileRemove / fileRemove 这类**破坏性**动作 —— 确认内容与实际执行内容不一致且无人提示。
+              const expectedFingerprint = parsed.value.planFingerprint
+              if (expectedFingerprint !== undefined && expectedFingerprint !== restorePlanFingerprint(plan)) {
+                host.log.warn('恢复被拒：预览后计划已变化', { snapshotId })
+                runs.fail(runId, 'plan-changed')
+                writeJson(res, 409, { error: 'plan-changed', code: 'plan-changed', runId })
+                return
+              }
               const report = await executeRestorePlan(
                 plan,
                 makeRestoreExecutor(snapshotDir, host, host.profile),
@@ -158,6 +184,23 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
         if (!isValidSnapshotId(id)) {
           writeJson(res, 400, { error: 'snapshotId is required and must be a valid snapshot id' })
           return
+        }
+        // Phase 4 F3 同源：被未收敛 journal 引用的快照是 SAFE MODE 恢复的唯一证据 ——
+        // 自动保留清理早已豁免它们，手动删除也必须挡住（此前只校验了 id 形状）。
+        // 读不到引用集合时**保守拒绝**（与自动 prune 的 fail-closed 同一条口径），并让原因可辨。
+        if (host.phase3Recovery !== undefined) {
+          let referenced: Set<string>
+          try {
+            referenced = await host.phase3Recovery.store.listReferencedSnapshotIds()
+          } catch (error) {
+            host.log.warn('快照删除被拒：读取 recovery 引用集合失败', { error: error instanceof Error ? error.message : String(error) })
+            writeJson(res, 409, { error: 'recovery-reference-unreadable', code: 'recovery-reference-unreadable' })
+            return
+          }
+          if (referenced.has(id)) {
+            writeJson(res, 409, { error: 'snapshot-referenced-by-recovery', code: 'snapshot-referenced-by-recovery' })
+            return
+          }
         }
         const removed = await deleteSnapshot(snapshotsDir, id)
         const historyError = await tryAppendHistory({

@@ -32,6 +32,8 @@ export const zh = {
   'common.back': '上一步',
   'common.next': '下一步',
   'common.retry': '重试',
+  // 落盘失败（sessionStorage 配额满/不可用）：状态还在内存里，但刷新即丢 —— 必须说清
+  'common.saveFailed': '浏览器存储写入失败：当前进度仍在本页内存中，刷新会丢失',
   'common.loading': '加载中…',
   'common.unknownError': '未知错误',
   // client-F6：拼接类标点走字典（英文界面不得出现全角括号 / 顿号）
@@ -795,6 +797,13 @@ export const zh = {
   'library.refresh': '刷新',
   'library.searchPlaceholder': '搜索文件名 / 备注 / 快照 id',
   'library.sourceFailed': '{count} 个来源读取失败',
+  // 读不到 ≠ 没有：快照目录被权限/占位挡住时如实说明（宿主 out.unreadable 透传）
+  'library.snapshotsUnreadable': '有快照目录读不出来（这不是「没有快照」）',
+  // 预览后磁盘已变化：绝不执行另一套没确认过的动作，请重新预览
+  'snapshots.planChanged': '环境在预览后发生了变化，恢复已取消 —— 请重新预览确认',
+  // 删除快照被 recovery 引用挡住（与自动保留清理的 F3 豁免同源）
+  'library.snapshotReferencedByRecovery': '该快照是事故恢复的回滚点，已拒绝删除（请先处理恢复事项）',
+  'library.snapshotReferenceUnreadable': '读不到恢复引用清单，已保守拒绝删除（请重试）',
   'library.retry': '重试',
   'library.emptyFiltered': '没有匹配的产物',
   'library.delete': '删除',
@@ -947,6 +956,8 @@ export const en: Record<keyof typeof zh, string> = {
   'common.back': 'Back',
   'common.next': 'Next',
   'common.retry': 'Retry',
+  // Persist failure (sessionStorage quota / unavailable): state is in memory but a refresh loses it
+  'common.saveFailed': 'Could not write browser storage: the current progress stays in this page only and is lost on refresh',
   'common.loading': 'Loading…',
   'common.unknownError': 'Unknown error',
   'common.parens': '({text})',
@@ -1694,6 +1705,13 @@ export const en: Record<keyof typeof zh, string> = {
   'library.refresh': 'Refresh',
   'library.searchPlaceholder': 'Search file name / note / snapshot id',
   'library.sourceFailed': '{count} sources failed to load',
+  // "cannot read" is not "no snapshots": surface the host's out.unreadable fact
+  'library.snapshotsUnreadable': 'Some snapshot directories could not be read (this is not "no snapshots")',
+  // The environment changed after the preview: never run a different, unconfirmed plan
+  'snapshots.planChanged': 'The environment changed after the preview, so the restore was cancelled — preview again to confirm',
+  // Deleting a snapshot that recovery still references is refused (same F3 exemption as auto-prune)
+  'library.snapshotReferencedByRecovery': 'This snapshot is a recovery rollback point — deletion refused (resolve the recovery items first)',
+  'library.snapshotReferenceUnreadable': 'The recovery reference list could not be read — deletion conservatively refused (please retry)',
   'library.retry': 'Retry',
   'library.emptyFiltered': 'No matching artifacts',
   'library.delete': 'Delete',

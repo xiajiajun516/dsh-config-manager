@@ -20,6 +20,8 @@ import {
   sessionRepairRowMessage, sessionVerifyNoteOf, stopProfile, unlockEncryptedBackup, type SessionLogRepairRow,
 } from './actions.ts'
 import type { SessionVerifyResult } from '../utils/session-verify.ts'
+import { parseZip } from '../utils/zip.ts'
+import { MANIFEST_FILE } from '../schema/manifest.ts'
 
 async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dcm-actions-'))
@@ -397,6 +399,32 @@ test('V4-01 离线导出：真的产出 ZIP 并自检通过；不可收集的分
     assert.equal(await existsAt(result.outPath!), true, '产物必须落盘')
     assert.equal((result.entryCount ?? 0) > 0, true)
     assert.equal((result.unavailableSections ?? []).includes('settings'), true, '离线不可收集的分区必须如实列出')
+  })
+})
+
+test('V4-01b 离线导出的 manifest.exporter.version 用真实版本（不再写死 rescue-console）', async () => {
+  await withTmp(async (tmp) => {
+    const home = path.join(tmp, 'home')
+    await fs.mkdir(path.join(home, 'skills', 'demo'), { recursive: true })
+    await fs.writeFile(path.join(home, 'skills', 'demo', 'SKILL.md'), '# demo\n')
+    const dataDir = path.join(home, 'dsh-config-manager')
+    const paths = {
+      homeDir: home, dataDir,
+      snapshotsDir: path.join(dataDir, 'snapshots'),
+      exportsDir: path.join(dataDir, 'exports'),
+      locksDir: path.join(dataDir, 'locks'),
+      controlRoots: [dataDir],
+      profile: 'web',
+      exporterVersion: '9.9.9-test',
+    }
+    const result = await exportOfflineBackup(paths, ['skills'])
+    assert.equal(result.ok, true, result.message)
+    const buf = await fs.readFile(result.outPath!)
+    const manifest = JSON.parse(
+      Buffer.from(parseZip(buf).readEntry(MANIFEST_FILE)).toString('utf8'),
+    ) as { exporter?: { name?: string; version?: string } }
+    assert.equal(manifest.exporter?.version, '9.9.9-test', 'manifest 必须写调用方注入的真实版本')
+    assert.notEqual(manifest.exporter?.version, 'rescue-console', '不得再写死假的导出器版本')
   })
 })
 

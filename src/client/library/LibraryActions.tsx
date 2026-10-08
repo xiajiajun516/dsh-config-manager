@@ -39,6 +39,18 @@ import css from '../config-manager.module.css'
  */
 const redactErrorText = (err: unknown): string => redact(err instanceof Error ? err.message : String(err))
 
+/**
+ * 删除快照的失败文案：宿主用**码**区分两种拒绝（被事故恢复引用 / 引用清单读不出来），
+ * 界面必须映射成本地化文案 —— 裸码上屏等于「用户看不懂为什么删不掉」。
+ * 未知错误仍走 redactErrorText（脱敏不放松）。
+ */
+const snapshotDeleteErrorText = (err: unknown, t: TranslateNS<'config-manager'>): string => {
+  const raw = err instanceof Error ? err.message : String(err)
+  if (raw.includes('snapshot-referenced-by-recovery')) return t('library.snapshotReferencedByRecovery')
+  if (raw.includes('recovery-reference-unreadable')) return t('library.snapshotReferenceUnreadable')
+  return redactErrorText(err)
+}
+
 /** 一次待执行的行内动作（由 LibraryPanel 冒泡上来）。 */
 export interface LibraryActionTarget {
   capability: ArtifactCapability
@@ -70,6 +82,8 @@ interface PlanState {
   loading: boolean
   plan: Awaited<ReturnType<ConfigManagerApi['restoreSnapshot']>>['plan'] | null
   changeSummary: Awaited<ReturnType<ConfigManagerApi['restoreSnapshot']>>['changeSummary'] | undefined
+  /** 预览时宿主给的计划指纹：执行时回传，让宿主发现「确认后磁盘又变了」（旧宿主不返回 → undefined） */
+  planFingerprint: string | undefined
   error: string | null
 }
 
@@ -120,18 +134,18 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
     generation.current = gen
     switch (capability) {
       case 'restore': {
-        setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: true, plan: null, changeSummary: undefined, error: null })
+        setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: true, plan: null, changeSummary: undefined, planFingerprint: undefined, error: null })
         // v3（用户要求）：恢复计划弹窗**不再内嵌「迁移前咨询」卡** —— 那个弹窗的职责是
         // 「这次恢复会改什么 + 确认执行」；咨询报告有自己的入口（产物库行 ⋯ 菜单 →「迁移前咨询」），
         // 想看报告的人可以单独打开。顺带省掉一次重量级请求（consult 要读快照内容做评分）。
         api.restoreSnapshot(row.ref.snapshotId ?? '', true).then(
           (res) => {
             if (!mounted.current || gen !== generation.current) return
-            setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: res.plan ?? null, changeSummary: res.changeSummary, error: null })
+            setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: res.plan ?? null, changeSummary: res.changeSummary, planFingerprint: res.planFingerprint, error: null })
           },
           (err) => {
             if (!mounted.current || gen !== generation.current) return
-            setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: null, changeSummary: undefined, error: err instanceof Error ? err.message : String(err) })
+            setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: null, changeSummary: undefined, planFingerprint: undefined, error: err instanceof Error ? err.message : String(err) })
           },
         )
         return
@@ -293,9 +307,19 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
     setRunning(true)
     setConfirmRestore(false)
     runStoreWatch()
-    api.restoreSnapshot(snapshotId, false).then(
+    // 带上预览时的计划指纹：磁盘在这中间变了 → 宿主 409 plan-changed（绝不静默执行另一套动作）
+    api.restoreSnapshot(snapshotId, false, plan?.planFingerprint).then(
       (res) => { if (mounted.current) { setRunning(false); setReport(res.report ?? null); setPlan(null); onChanged() } },
-      (err) => { if (mounted.current) { setRunning(false); setPlan(null) } toast.error(redactErrorText(err)) },
+      (err) => {
+        if (mounted.current) { setRunning(false); setPlan(null) }
+        const raw = err instanceof Error ? err.message : String(err)
+        if (raw.includes('plan-changed')) {
+          // 环境已变化：说清并让用户重新预览（比执行一套没确认过的动作安全）
+          toast.error(t('snapshots.planChanged'))
+          return
+        }
+        toast.error(redactErrorText(err))
+      },
     ).finally(() => { runStoreStopWatch() })
   }
 
@@ -306,7 +330,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
     if (row.kind === 'snapshot') {
       api.deleteSnapshot(row.ref.snapshotId ?? '').then(
         () => { toast.ok(t('snapshots.deleted')); done() },
-        (err) => { if (mounted.current) setConfirmDelete(null); toast.error(redactErrorText(err)) },
+        (err) => { if (mounted.current) setConfirmDelete(null); toast.error(snapshotDeleteErrorText(err, t)) },
       )
       return
     }

@@ -396,3 +396,27 @@ test('保留清理：recovery 引用集合读不出来 → 本轮放弃清理，
   assert.deepEqual(remaining, [first.id, second.id].sort(), '读不到引用集合时本轮必须放弃清理 —— 两个快照都得留着');
   assert.ok(warned.some((m) => m.includes('放弃')), '放弃必须留痕（绝不静默）：' + JSON.stringify(warned));
 });
+
+/* ---------------- 保留清理：目录名 ≠ 内部 id 时跳过并留痕（数据安全） ---------------- */
+
+test('保留清理：快照目录名与内部 id 不一致时跳过并留痕（绝不按内部 id 删另一个目录）', async (t) => {
+  const dir = await tmpDir(t, 'prune-name');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  const warned: string[] = [];
+  const store = new FileSnapshotStore({
+    dir,
+    retentionPolicy: () => ({ keepLast: 1, keepMonthly: 0, keepYearly: 0 }),
+    onWarn: (message) => { warned.push(message) },
+  });
+  const first = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+  // 手工制造「目录名 ≠ 内部 id」（改名目录 / 半截拷贝残留的真机形态）
+  const renamed = path.join(dir, 'zzz-renamed-dir');
+  await fs.rename(path.join(dir, first.id), renamed);
+  const second = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  const remaining = (await fs.readdir(dir)).sort();
+  assert.ok(remaining.includes('zzz-renamed-dir'), '目录名与内部 id 不一致的目录绝不能被当成候选删掉');
+  assert.ok(remaining.includes(second.id), '新建的快照当然还在');
+  assert.ok(warned.some((m) => m.includes('不一致')), '跳过必须留痕（绝不静默）：' + JSON.stringify(warned));
+});

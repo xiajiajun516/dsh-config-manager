@@ -325,16 +325,22 @@ export interface SegmentedProps {
   ariaLabel?: string
 }
 
-/** 分段控件（页内子视图切换；受控）。 */
+/**
+ * 分段控件（页内子视图切换 / 筛选；受控）。
+ *
+ * ARIA 口径：这是**按钮组**（role=group + aria-pressed），不是 tabs —— 两个调用点
+ * （环境页子视图、市场筛选）都没有 tabpanel 容器，用 role=tab 会让读屏用户听到
+ * 「标签页 2/2」却找不到对应面板（全仓 grep 无 role="tabpanel"）。要升级成真 tabs，
+ * 必须先给内容容器补 role=tabpanel + id 配对（导航条已按此实现）。
+ */
 export function Segmented({ items, active, onChange, ariaLabel }: SegmentedProps) {
   return (
-    <div className={css.segGroup} role="tablist" aria-label={ariaLabel}>
+    <div className={css.segGroup} role="group" aria-label={ariaLabel}>
       {items.map((item) => (
         <button
           key={item.id}
           type="button"
-          role="tab"
-          aria-selected={item.id === active}
+          aria-pressed={item.id === active}
           data-active={item.id === active ? '' : undefined}
           className={css.segItem}
           onClick={() => { onChange(item.id) }}

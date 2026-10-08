@@ -2713,12 +2713,10 @@
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
   margin-bottom: 10px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.statStrip::-webkit-scrollbar {
-  display: none;
+  /* 放不下就**换行**，绝不隐藏：v1 的「隐藏滚动条 + 渐隐遮罩」已被真机判定为不可发现
+     （导航条因此改成「更多 ▾」）。状态条只有 5 段，换行是最诚实的处理（窄画布 / 长英文才会发生），
+     且不改变放得下时的观感。 */
+  flex-wrap: wrap;
 }
 
 /* 末段不被容器右缘裁切：预留内边距，保证最后一个指标值完整可见 */

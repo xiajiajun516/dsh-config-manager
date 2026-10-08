@@ -252,19 +252,30 @@ function section(title: string, body: string): string {
  */
 const RESTORE_PAGE_LABEL = '恢复'
 
+/**
+ * 救急台的**页面导航表（唯一事实源）**：头部导航与 404 / 405 / 错误页的「可用页面」清单
+ * 全部由它派生 —— 此前那三处各写一份、且与现实不一致（把 JSON 自述的 `/healthz` 说成页面，
+ * 又漏掉 `/restore` / `/export`）。`/healthz` 是 JSON 自述、不是页面，故不在表内。
+ */
+export const CONSOLE_PAGE_NAV: ReadonlyArray<{ key: PageChrome['active']; href: string; label: string }> = [
+  { key: 'home', href: '/', label: '首页' },
+  { key: 'disk', href: '/disk', label: '磁盘占用' },
+  { key: 'sessions', href: '/sessions', label: '会话体检' },
+  { key: 'profiles', href: '/profiles', label: '档案与实例' },
+  { key: 'restore', href: '/restore', label: RESTORE_PAGE_LABEL },
+  { key: 'export', href: '/export', label: '导出' },
+  { key: 'unlock', href: '/unlock', label: '解锁' },
+  { key: 'reinstall', href: '/reinstall', label: '重装' },
+]
+
+/** 「可用页面」提示行（404 / 405 / 错误页共用这一份派生结果，不再各写一份）。 */
+export function consolePagesHint(): string {
+  return '可用页面：' + CONSOLE_PAGE_NAV.map((item) => item.href + '（' + item.label + '）').join('、')
+}
+
 function renderHeader(chrome: PageChrome, subtitle: string): string {
-  const items: Array<[PageChrome['active'], string, string]> = [
-    ['home', '/', '首页'],
-    ['disk', '/disk', '磁盘占用'],
-    ['sessions', '/sessions', '会话体检'],
-    ['profiles', '/profiles', '档案与实例'],
-    ['restore', '/restore', RESTORE_PAGE_LABEL],
-    ['export', '/export', '导出'],
-    ['unlock', '/unlock', '解锁'],
-    ['reinstall', '/reinstall', '重装'],
-  ]
-  const links = items
-    .map(([key, href, label]) => '<a href="' + href + '"' + (chrome.active === key ? ' class="active"' : '') + '>' + esc(label) + '</a>')
+  const links = CONSOLE_PAGE_NAV
+    .map((item) => '<a href="' + item.href + '"' + (chrome.active === item.key ? ' class="active"' : '') + '>' + esc(item.label) + '</a>')
     .join('')
   const themeSwitch = '<div class="themeSwitch" role="group" aria-label="配色"><span>配色</span>'
     + [['auto', '自动'], ['light', '浅色'], ['dark', '深色']]

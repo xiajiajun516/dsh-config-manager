@@ -62,6 +62,7 @@ import type {
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
   githubPollMessage, isClientChannel, kindLabel, pullReportView, pushPreviewView, pushReportView, readStoredChannel,
+  gistSessionsRiskKey,
   initialSyncSections, normalizeSessionsLimit, severityLabel, syncSectionOptions, writeStoredChannel,
 } from './sync-view.ts'
 import type {
@@ -916,7 +917,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       const report = await api.pull({ ...payload(), ...decrypt })
       patch({ busy: null, pullReport: report, token: '', webdavPassword: '' })
       patchChannel({ decryptPassword: '' })
-      // 必须按 report.ok 分流（与 runPush 同口径）：校验不通过时宿主仍回 HTTP 200 + ok:false。
+      // 必须按 report.ok 分流（与 runPush 同口径）：校验不通过时宿主仍回 HTTP 200 + ok:false
       if (report.ok) toast.ok(t('toast.pullDone'))
       else toast.error(t('toast.pullFailed'))
     } catch (err) {
@@ -1173,7 +1174,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                 的断行。标题内联沿用 AboutPanel / EnvironmentPanel 的既有写法（零新增样式）。 */}
             <span className={css.groupLabel}>{t('mode.title')} <InfoHint text={t('mode.hint')} label={t('common.infoHint')} /></span>
             <span className={css.categoryDesc}>
-              {/* 三分支缺一不可：失败时 catalog 恒空，只判 catalog 会把「失败」显示成「加载中…」 */}
               {state.loadError !== null ? t('load.failed')
                 : state.catalog.length === 0 ? t('common.loading')
                   : t('mode.selectedCount', { n: String(cs.syncSections.length) })}
@@ -1185,6 +1185,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               <InfoHint text={t('mode.persistHint')} label={t('common.infoHint')} />
             </div>
             {cs.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
+            {gistSessionsRiskKey(channel, cs.syncSections) !== null && <Banner kind="warn">{t(gistSessionsRiskKey(channel, cs.syncSections)!)}</Banner>}
           </Card>
         )}
         {ready && (

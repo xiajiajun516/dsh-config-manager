@@ -67,19 +67,31 @@ export function parseRepairMaps(maps: readonly string[]): { mappings: PathMappin
   return { mappings, errors };
 }
 
-/** 扫描 <home>/sessions：projectKey 段 → 会话目录 → 首帧 cwd。任何读不出的都如实记为「无法判定」。 */
-async function scanSessions(sessionsRoot: string, io: SessionsRepairIo): Promise<ScannedSession[]> {
+/** 一次扫描的结果：会话清单 + **会话根本身是否读得出来**（后者与「没有会话」是两件事）。 */
+interface ScanResult {
+  sessions: ScannedSession[];
+  /** false = readdir 会话根失败（ENOTDIR / EACCES…）：此时 sessions 必为空，但**不等于没有会话** */
+  rootReadable: boolean;
+}
+
+/**
+ * 扫描 <home>/sessions：projectKey 段 → 会话目录 → 首帧 cwd。任何读不出的都如实记为「无法判定」。
+ *
+ * 返回值里必须带 rootReadable：会话根存在但读不出来时，空列表只能说明「扫描失败」，
+ * 调用方据此拒绝给出「无需修复」+ exit 0（读不到 ≠ 无会话 —— 验收 F2 同口径）。
+ */
+async function scanSessions(sessionsRoot: string, io: SessionsRepairIo): Promise<ScanResult> {
   const out: ScannedSession[] = [];
   let projectDirs: import('node:fs').Dirent[];
   try {
     projectDirs = await fs.readdir(sessionsRoot, { withFileTypes: true });
   } catch (error) {
     // 会话根不是目录 / 读不出来（ENOTDIR、EACCES…）：绝不能把裸异常抛给调用方
-    // （救急台会因此吐一段 Node 原始 JSON 500 —— 验收 F3）。如实报错并返回空扫描结果。
+    // （救急台会因此吐一段 Node 原始 JSON 500 —— 验收 F3）。如实报错并标记「根不可读」。
     const code = (error as { code?: string }).code;
     io.error('会话根读不出来 / sessions root not readable（' + String(code ?? 'unknown') + '）: ' + sessionsRoot);
     io.error(error instanceof Error ? error.message : String(error));
-    return out;
+    return { sessions: out, rootReadable: false };
   }
   for (const entry of projectDirs) {
     if (!entry.isDirectory()) continue;
@@ -112,7 +124,7 @@ async function scanSessions(sessionsRoot: string, io: SessionsRepairIo): Promise
       });
     }
   }
-  return out;
+  return { sessions: out, rootReadable: true };
 }
 
 /** 隔离目录：同一轮修复一个时间戳目录；**只搬不删**（用户可自行处理）。 */
@@ -137,8 +149,22 @@ export async function runSessionsRepair(options: SessionsRepairOptions, io: Sess
   for (const error of parsed.errors) io.error(error);
   if (parsed.errors.length > 0) return 1;
 
-  const scanned = await scanSessions(sessionsRoot, io);
-  const plan = planSessionRepair(scanned, {
+  const scan = await scanSessions(sessionsRoot, io);
+  if (!scan.rootReadable) {
+    // 「读不到」≠「没有会话」：根存在但读不出来时，空扫描结果只说明**扫描失败** ——
+    // 绝不能给出「无需修复」+ exit 0（那等于把「读不到」说成「没问题」），--json 也不得回 ok:true。
+    const message = '会话根存在但读不出来：读不到 ≠ 没有会话 / sessions root exists but is unreadable; '
+      + 'unreadable is not the same as no sessions: ' + sessionsRoot;
+    io.error(message);
+    if (options.json) {
+      io.log(JSON.stringify({
+        ok: false, rootReadable: false, dryRun: options.fix !== true,
+        home: options.home, root: sessionsRoot, error: message,
+      }, null, 2));
+    }
+    return 1;
+  }
+  const plan = planSessionRepair(scan.sessions, {
     mappings: parsed.mappings,
     ...(options.keep !== undefined ? { keep: options.keep } : {}),
   });

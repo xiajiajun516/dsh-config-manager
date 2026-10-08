@@ -27,6 +27,7 @@ import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.t
 import type { ServiceStatus } from './api.ts'
 import { runStore, type LibraryStoreSlice, type PanelId, type TaskState } from './run-store.ts'
 import { navLayout } from '../ui/nav-model.ts'
+import { toast } from './common/toast-store.ts'
 import { COMMANDS, type CommandContext } from '../ui/commands.ts'
 import { MoreMenu } from './common/MoreMenu.tsx'
 import { CommandPalette } from './common/CommandPalette.tsx'
@@ -130,7 +131,14 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
     return () => { observer?.disconnect() }
   }, [t])
 
-  const navLayoutResult = navWidths === null
+  /**
+ * ARIA tabs 模式的 DOM id：tab ↔ tabpanel 必须互相指认（此前只有 role=tab，读屏听到「标签页 2/4」
+ * 却找不到对应面板）。常量放在装配层，id 只在本组件内使用。
+ */
+const NAV_TAB_ID = (id: PanelId): string => 'cm-nav-tab-' + id
+const PAGE_PANEL_ID = 'cm-page-panel'
+
+const navLayoutResult = navWidths === null
     // 未测量 = **全部可见**：宁可横向溢出（视觉瑕疵），也不能因为量不出来而藏页签（功能丢失）
     ? { visible: NAV_ITEMS.map((_, i) => i), overflow: [] as number[] }
     : navLayout(navWidths.items, navWidths.avail, navWidths.more, NAV_GAP)
@@ -280,6 +288,13 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
       runStore.stopResume()
     }
   }, [api])
+
+  /* ---------------- 落盘失败的可见通道（sessionStorage 配额满时刷新即丢） ----------------
+     store 不持有词典，提示文案由壳层给；只提示一次（配额满时 patch 很频繁，逐次弹会刷屏）。 */
+  useEffect(() => {
+    runStore.setSaveErrorNotifier(() => { toast.warn(t('common.saveFailed')) })
+    return () => { runStore.setSaveErrorNotifier(null) }
+  }, [t])
 
   /* ---------------- 全局 SAFE MODE 状态（跨页面可见兜底） ---------------- */
   const recoveryStatus = state.recovery.status
@@ -510,9 +525,12 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           {visibleNav.map((item) => (
             <button
               key={item.id}
+              id={NAV_TAB_ID(item.id)}
               type="button"
               role="tab"
               aria-selected={panel === item.id}
+              // ARIA tabs 模式：tab 必须指认它控制的面板（此前只有 role=tab，读屏找不到对应面板）
+              aria-controls={PAGE_PANEL_ID}
               data-active={panel === item.id ? '' : undefined}
               className={css.navTab}
               onClick={() => { goto(item.id) }}
@@ -584,7 +602,15 @@ export function ConfigManagerSection({ api, syncApi, syncT, marketApi, myConfigs
           滚动位置、展开的那一行、已拉到的数据都还在。
           key={panel}：换页时重建本节点，让 pageEnter 动画重放一次（CSS 动画只在元素创建时播放）。 */}
       <div className={css.shellContent}>
-        <main className={css.shellMain}>
+        {/* ARIA tabs 模式的面板侧：id 与 nav tab 的 aria-controls 配对，aria-labelledby 指回当前页签。
+            tabIndex=-1 让「切页签后把焦点送进内容」这条键盘路径可达（不改变既有 tab 顺序）。 */}
+        <main
+          className={css.shellMain}
+          id={PAGE_PANEL_ID}
+          role="tabpanel"
+          aria-labelledby={NAV_TAB_ID(panel)}
+          tabIndex={-1}
+        >
           <div className={css.pagePad} key={panel}>{page}</div>
         </main>
         {/** 产物库的行内动作：**在 task 面板之外**渲染（它的 Modal 不能被面板的定位上下文吃掉） */}

@@ -224,6 +224,8 @@ export interface RestoreResponse {
   runId?: string;
   /** git 风格预览：逐动作的变更状态 + 行数统计（dryRun=true 时由宿主附带；旧宿主不返回） */
   changeSummary?: RestoreChangeSummary;
+  /** 恢复计划指纹（dryRun=true 时由宿主附带；执行时回传以发现「确认后磁盘又变了」；旧宿主不返回） */
+  planFingerprint?: string;
 }
 
 /** Star 引导弹窗状态（GET /star-prompt；纯偏好，无 secret） */
@@ -651,13 +653,23 @@ export class ConfigManagerApi {
   // ------------------------------------------------------- 快照恢复（M4）
   /** 列出全部快照元信息（createdAt 倒序；含 status/条目数/宿主文件数/插件数） */
   async snapshots(): Promise<SnapshotMeta[]> {
-    const body = await getJson<{ snapshots: SnapshotMeta[] }>(CONFIG_MANAGER_API.snapshots, this.t);
-    return body.snapshots;
+    return (await this.snapshotsDetailed()).snapshots;
+  }
+
+  /**
+   * 同 `snapshots()`，但把「快照目录读不出来」的事实一并带回（宿主 out.unreadable 透传）。
+   * 为什么需要：读不出来与「没有快照」必须分清 —— 只拿数组会让界面把 EACCES 渲染成空列表。
+   */
+  async snapshotsDetailed(): Promise<{ snapshots: SnapshotMeta[]; unreadable: string | null }> {
+    const body = await getJson<{ snapshots: SnapshotMeta[]; unreadable?: string | null }>(CONFIG_MANAGER_API.snapshots, this.t);
+    return { snapshots: body.snapshots, unreadable: body.unreadable ?? null };
   }
 
   /** 快照恢复：dryRun=true 只取动作计划（零写入）；false 执行并返回诚实报告 */
-  async restoreSnapshot(snapshotId: string, dryRun: boolean): Promise<RestoreResponse> {
-    return postJson<RestoreResponse>(CONFIG_MANAGER_API.restore, { snapshotId, dryRun }, this.t, LONG_OPTS);
+  async restoreSnapshot(snapshotId: string, dryRun: boolean, planFingerprint?: string): Promise<RestoreResponse> {
+    // planFingerprint 只在**执行**时回传（预览时没有意义）；缺省不下发 = 旧宿主/旧调用点行为不变。
+    const body = planFingerprint !== undefined ? { snapshotId, dryRun, planFingerprint } : { snapshotId, dryRun };
+    return postJson<RestoreResponse>(CONFIG_MANAGER_API.restore, body, this.t, LONG_OPTS);
   }
 
   /**

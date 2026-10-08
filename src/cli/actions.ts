@@ -306,6 +306,12 @@ export interface RescuePaths {
   locksDir: string
   controlRoots: readonly string[]
   profile: string
+  /**
+   * 离线导出的 manifest.exporter.version（CLI 传真实版本；缺省 = 中性占位）。
+   * 为什么不在这里再算一次版本：actions.ts 不得 import ./index.ts（会成环），
+   * 而版本号只有 CLI 侧从 package.json 读得到 —— 由 runWeb 经本结构注入。
+   */
+  exporterVersion?: string
 }
 
 export interface RescueStatus {
@@ -419,7 +425,9 @@ export type WriteGateOutcome = { ok: true } | WriteGateRefusal
 /**
  * 写动作的前置门（与 CLI `sessions repair --fix` 同一判据）。
  *
- * `needsDshStopped`：只有**改写会话字节**的动作才需要「DSH 已停」这一条（清理缓存不需要）。
+ * `needsDshStopped`：**改写/搬动会话字节**的动作（会话布局归位 repairSessions、字节级就地修复
+ * repairSessionLogInline）与**快照恢复**（runSnapshotRestore 会覆盖/删除 `$DSH_HOME` 下正在使用的文件）
+ * 都要「DSH 已停」这一条；磁盘清理不需要（只碰可重建缓存）。
  */
 export async function checkWriteGates(
   controlRoots: readonly string[],
@@ -1356,7 +1364,8 @@ export async function exportOfflineBackup(
     }
     const checksums = buildChecksums(collection.entries)
     const manifest = buildManifest({
-      exporterVersion: 'rescue-console',
+      // 真实版本（runWeb 经 RescuePaths 注入）；拿不到时给中性占位，绝不谎报某个具体版本。
+      exporterVersion: paths.exporterVersion ?? '0.0.0-unknown',
       // 离线探测不到真实 DSH 版本：如实标注，不谎报
       dshVersion: 'cli-offline',
       platform: process.platform as never,

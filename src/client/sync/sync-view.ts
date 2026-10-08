@@ -16,7 +16,9 @@ import type {
 } from './sync-api.ts';
 // 通道枚举的唯一声明处（**零依赖**，可被浏览器半运行时 import）：加一条通道只改这里一处。
 import { SYNC_CHANNELS } from '../../utils/shared-constants.ts';
-import type { SyncKey } from './sync-locales.ts';
+// zh 源目录按**值**引入：本文件的渲染模型（UiT 字典不含 syncflow.* 键）需要为「回滚未完成」
+// 这类 sync 命名空间文案取词；组件可经 syncText 参数注入自己的翻译器（缺省 = zh 源）。
+import { zh as syncZhCatalog, type SyncKey } from './sync-locales.ts';
 import type { CloudConfigIssueCode } from '../../ui/sync-settings-view.ts';
 import type { S3CompatProvider } from '../../sync/sync-config.ts';
 import { zhUiT, type UiT } from '../../ui/i18n.ts';
@@ -284,6 +286,26 @@ export function cloudIssueKey(code: string): SyncKey | null {
   return Object.prototype.hasOwnProperty.call(SYNC_CLOUD_ISSUE_KEY, code)
     ? (SYNC_CLOUD_ISSUE_KEY[code as CloudConfigIssueCode | ExtraCloudIssueCode] ?? null)
     : null;
+}
+
+/* ------------------------------------------------ G-34：gist 通道不适合大分区 */
+
+/**
+ * G-34（docs/spec/known-gaps.md）：gist 通道**刻意不做内容寻址外置** —— 一次 GET 把全部
+ * 文件内容取回、单文件内容超限会被截断、文件数还有上限，因此会话这类大分区不适合走 gist。
+ *
+ * 本常量 = 「gist 表单」常驻提示的字典键（组件按它取 sync 字典文案渲染 hint）。
+ */
+export const GIST_LARGE_SECTION_HINT_KEY: SyncKey = 'cloud.gistLargeSectionHint'
+
+/**
+ * 「通道 = gist 且勾选 sessions」时的风险提示键；不满足 → null。
+ *
+ * 只做判定、不渲染、**不改选择器逻辑**（不阻止勾选、不动勾选集合）—— 组件拿到非 null 时
+ * 用 sync 字典渲染一条 warn Banner（复用既有 hint / Banner 机制，不新增设置项与样式）。
+ */
+export function gistSessionsRiskKey(channel: SyncChannel, sections: readonly SectionId[]): SyncKey | null {
+  return channel === 'gist' && sections.includes('sessions') ? 'mode.gistSessionsWarn' : null
 }
 
 /**
@@ -920,7 +942,11 @@ export function buildAdoptions(
  * `ok` 因此仍为 true；用户看到「已导入 N 个分区」就以为全部成功，
  * 而排在插件之后的步骤（凭据写入）根本没执行 —— 真机表现就是「模型列表同步过来了、密钥没进来」。
  */
-export type ApplyItemsViewKind = 'ok' | 'partial' | 'failed' | 'rolledBack';
+export type ApplyItemsViewKind = 'ok' | 'partial' | 'failed' | 'rolledBack' | 'rollbackIncomplete';
+
+/** sync 命名空间的取词器（缺省 = 该字典的 zh 源；组件可注入自己的 t 以本地化）。 */
+export type SyncTextFn = (key: SyncKey) => string
+const defaultSyncText: SyncTextFn = (key) => syncZhCatalog[key]
 
 export interface ApplyItemsView {
   kind: ApplyItemsViewKind;
@@ -931,30 +957,45 @@ export interface ApplyItemsView {
   ineffective: { itemId: string; adapter: string; message?: string }[];
   restoreId: string;
   needsRestart: boolean;
+  /**
+   * 整体回滚是否**完整**（诚实性，2026-10）：`rolledBack=true` 只说明触发了整体回滚，
+   * 不代表每一项都补偿成功（凭据原本存在 → DSH 不可回读，无法自动恢复）。
+   * false 时 kind='rollbackIncomplete' —— **绝不**渲染成「已整体回滚」。
+   * 旧宿主不返回 → 字段缺席（按旧的「已整体回滚」处理，不误报）。
+   */
+  rollbackFull?: boolean;
 }
 
-/** apply-items 执行结果 → 渲染模型（ok / failed / 整体回滚）。 */
+/** apply-items 执行结果 → 渲染模型（ok / partial / failed / 整体回滚 / 回滚未完成）。 */
 export function applyItemsReportView(
   report: ApplyItemsResponse | null,
   t: UiT = zhUiT,
+  syncText: SyncTextFn = defaultSyncText,
 ): ApplyItemsView | null {
   if (report === null) return null;
   const failedOnly = report.failed.length > 0 && !report.ok;
   // 旧宿主不返回 ineffective → 空数组（按「无未生效项」处理，绝不据此误报部分成功）
   const ineffective = report.ineffective ?? [];
-  const kind: ApplyItemsViewKind = !report.ok && report.rolledBack
-    ? 'rolledBack'
-    : failedOnly
-      ? 'failed'
-      : ineffective.length > 0
-        ? 'partial'
-        : 'ok';
+  const kind: ApplyItemsViewKind = !report.ok && report.rollbackFull === false
+    // 回滚**未完成**优先于「已整体回滚」：半回滚态的配置可能停在中间状态，必须单独成态
+    ? 'rollbackIncomplete'
+    : !report.ok && report.rolledBack
+      ? 'rolledBack'
+      : failedOnly
+        ? 'failed'
+        : ineffective.length > 0
+          ? 'partial'
+          : 'ok';
   const headline = kind === 'ok'
     ? t('sync.importDone', { n: String(report.applied.length) })
     : kind === 'partial'
       // 不用「失败」措辞：这次同步**大部分成功**，只是有 N 项没生效 —— 措辞必须与事实同强度
       ? t('sync.importPartial', { n: String(ineffective.length) })
-      : t('sync.importFailed');
+      // 回滚未完成：UiT 字典没有这个键（'sync.importFailed' 的文案断言「已整体回滚」），
+      // 取 sync 字典的专用文案 —— 措辞与事实同强度，绝不把半回滚说成已回滚
+      : kind === 'rollbackIncomplete'
+        ? syncText('syncflow.importRollbackIncomplete')
+        : t('sync.importFailed');
   return {
     kind,
     headline,
@@ -963,6 +1004,7 @@ export function applyItemsReportView(
     ineffective,
     restoreId: report.restoreId,
     needsRestart: report.needsRestart,
+    ...(report.rollbackFull !== undefined ? { rollbackFull: report.rollbackFull } : {}),
   };
 }
 

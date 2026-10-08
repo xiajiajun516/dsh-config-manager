@@ -108,6 +108,9 @@ export interface StoreStorage {
 /** sessionStorage 键。 */
 export const STATE_KEY = 'dsh.cfgMgr.state.v1'
 
+/** 高频进度 patch 的落盘合并窗口（ms）：轮询每 500ms 一次，合并到 1s 一次。 */
+const SAVE_DEBOUNCE_MS = 1000
+
 /**
  * 导出页的初始勾选 = **推荐分区**（可迁移、非设备专属），之后由内容选择器调整。
  * 判据与 ExportFlow.quickSelection() 共用同一个 isQuickRecommended —— 一处规则，两个调用点。
@@ -1054,13 +1057,17 @@ export function toPersistedState(state: StoreState): PersistedState {
     },
     sync: {
       channel: sync.channel,
-      repoUrl: sync.repoUrl,
-      webdavUrl: sync.webdavUrl,
+      // 同步地址与报告也过值级脱敏：repoUrl/webdavUrl 里若被粘贴进 userinfo 凭据
+      // （https://oauth2:<token>@host/…），落 sessionStorage 就等于把凭据写进浏览器。
+      // 宿主 validateRepoUrl/validateWebDavUrl 本来就拒绝这种地址，所以这里只影响掩码，不改合法输入。
+      // webdavUsername 是**非敏感**字段（保留可读），刻意不掩（掩了会让回填的表单变 ***）。
+      repoUrl: redactPersistedValue(sync.repoUrl),
+      webdavUrl: redactPersistedValue(sync.webdavUrl),
       webdavUsername: sync.webdavUsername,
       byChannel: channelMapOf((ch) => pickChannel(sync.byChannel[ch])),
-      pushReport: sync.pushReport,
-      pullReport: sync.pullReport,
-      pushPreview: sync.pushPreview,
+      pushReport: redactPersistedValue(sync.pushReport),
+      pullReport: redactPersistedValue(sync.pullReport),
+      pushPreview: redactPersistedValue(sync.pushPreview),
       confirmSession: redactPersistedValue(sync.confirmSession),
       confirmDecisions: sync.confirmDecisions,
       lastRestoreId: sync.lastRestoreId,
@@ -1456,6 +1463,50 @@ export class RunStore {
     this.notify()
   }
 
+  /**
+   * 落盘节流（默认 ~1s 合并）：导入/同步期间 watchRunning 每 500ms 一次 patch，每次都
+   * `JSON.stringify(toPersistedState(state))` 整份序列化 + 写 sessionStorage —— 大 plan 下这是
+   * 可观测的开销。合并窗口内的多次 patch 只落盘一次；`pagehide` 前强制 flush（见 saveSoon）。
+   */
+  private saveTimer: ReturnType<typeof setTimeout> | null = null
+  /** 是否已就落盘失败提示过一次（配额满时只提示一次，绝不每 patch 弹）。 */
+  private saveFailureNotified = false
+  /** 落盘失败的可见通道（壳层注入本地化文案；缺省 null = 与改造前一致：静默）。 */
+  private saveErrorNotifier: (() => void) | null = null
+  /** pagehide 只绑一次。 */
+  private flushBound = false
+
+  /** 壳层注入「落盘失败」的提示通道（本地化文案由壳层给，store 不持有词典）。 */
+  setSaveErrorNotifier(fn: (() => void) | null): void {
+    this.saveErrorNotifier = fn
+  }
+
+  /** 合并窗口内的落盘请求（首次调用排定一次）。 */
+  private saveSoon(): void {
+    this.bindFlushOnHide()
+    if (this.saveTimer !== null) return
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null
+      this.save()
+    }, SAVE_DEBOUNCE_MS)
+  }
+
+  /** 立即落盘（pagehide / 需要确定性写盘时调用）。 */
+  flushSave(): void {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer)
+      this.saveTimer = null
+    }
+    this.save()
+  }
+
+  private bindFlushOnHide(): void {
+    if (this.flushBound || typeof window === 'undefined') return
+    this.flushBound = true
+    // 关页/切后台前把合并窗口内的改动落盘（否则节流窗口里的最后一次改动会丢）
+    window.addEventListener('pagehide', () => { this.flushSave() })
+  }
+
   /** 浅合并补丁并立即持久化（保存走白名单，敏感字段不落盘）。 */
   patch(patchObj: StorePatch): void {
     this.state = {
@@ -1473,7 +1524,11 @@ export class RunStore {
       task: patchObj.task !== undefined ? patchObj.task : this.state.task,
     }
     this.notify()
-    this.save()
+    // **只合并导入进度**（轮询每 500ms 一次，载荷含最多 500 行日志 —— 这才是真正的开销）。
+    // 其余 patch（含 export.progress）一律立即落盘：既有语义与既有测试都按「patch 后已同步持久化」断言，
+    // 扩大合并范围会静默改变那些行为。
+    if (patchObj.import?.progress !== undefined) this.saveSoon()
+    else this.save()
   }
 
   /** 把 ImportWizard 控制器的 snapshot() 镜像进 store（wizard 动作后调用）。 */
@@ -1688,7 +1743,12 @@ export class RunStore {
     try {
       this.storage.setItem(STATE_KEY, JSON.stringify(toPersistedState(this.state)))
     } catch {
-      // 存储满/不可用：静默降级，状态仍完整存在于内存
+      // 存储满/不可用：状态仍完整存在于内存，但**刷新即丢** —— 首次失败时经壳层注入的通道提示一次
+      //（未注入则与改造前一致：静默）。绝不每次 patch 都弹（配额满时 patch 很频繁）。
+      if (!this.saveFailureNotified) {
+        this.saveFailureNotified = true
+        try { this.saveErrorNotifier?.() } catch { /* 提示失败不影响主流程 */ }
+      }
     }
   }
 

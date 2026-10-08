@@ -938,7 +938,11 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                               <Badge kind={row.badgeKind}>{t(row.severityKey)}</Badge>
                               {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
                             </span>
-                            <span className={css.snapshotRowIssues}>{sessionIssuesText(row.issueCodes, t)}</span>
+                            {/* detail 走 title（补充事实，不撑破行宽）：悬停即可看到规模（如「3 row(s)」） */}
+                            <span
+                              className={css.snapshotRowIssues}
+                              title={row.issueDetailText ?? undefined}
+                            >{sessionIssuesText(row.issueCodes, t)}</span>
                             <span className={css.snapshotRowFacts}>
                               {[
                                 row.versionText,

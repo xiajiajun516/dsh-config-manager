@@ -27,6 +27,31 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **恢复「预览 = 执行」不再漂移**（第二轮审查）：预览后磁盘若发生变化，执行时同一份快照可能多出
+> `hostFileRemove` / `fileRemove` 这类**破坏性**动作，而用户确认的是另一套动作 —— 此前无人提示。现在
+> 预览回传**计划指纹**（动作 kind + target + blobPath 的 sha256），执行时带回来校验：不一致即
+> **409 `plan-changed`**，界面提示「环境在预览后发生了变化，请重新预览」。旧客户端不带指纹 → 行为一字不变。
+> - **护栏**：`tests/route/` 既有恢复路由用例全绿（指纹只取三列，内容变化不改变指纹）。
+>
+> **Restore preview and execution can no longer drift apart**: if the disk changed after the preview, executing the same
+> snapshot could add destructive actions (`hostFileRemove` / `fileRemove`) that the user never confirmed. The preview now
+> returns a **plan fingerprint** (sha256 over action kind + target + blobPath) and execution verifies it: a mismatch returns
+> **409 `plan-changed`** and the UI asks the user to preview again. Old clients that send no fingerprint behave exactly as before.
+>
+> **一键同步的「回滚」不再把部分回滚说成整体成功**（第二轮审查）：凭据 `existed=true` 时永远回滚不了
+> （只产出 reason + manualHint），而 `/sync/rollback` 此前只回 `{ok, full}`，`failed` / `manualHint` 全丢，
+> 界面无条件弹「已回滚到应用前」。现在响应带 `failed[]`（含 manualHint），界面在 `full=false` 时改出**未回滚项**
+> 与人工提示（不再弹成功、不再收尾）；同步引擎内部的二次回滚同样接收报告、失败项并入 warnings，并新增
+> `rollbackFull`（`rolledBack` 旧语义保持不变），「回滚未完成」在面板里单独成态。
+> - **护栏**：`tests/route/sync-rollback-route.test.ts`（full=false 必须回传未回滚项 / 干净回滚 full=true 不失真）、
+>   `src/sync/sync-engine.test.ts`（两条半回滚用例）、`src/client/sync/sync-view-v2.test.ts`（rollbackIncomplete 分支）。
+>
+> **One-click sync rollback no longer reports a partial rollback as full success**: credentials with `existed=true` can never
+> be rolled back (they only produce a reason + manualHint), yet `/sync/rollback` returned only `{ok, full}` and the UI always
+> toasted "rolled back". The response now carries `failed[]` (with manualHint), the UI lists the items that were **not** rolled
+> back instead of claiming success, and the engine's internal second rollback reports its failures into `warnings` with a new
+> `rollbackFull` flag (`rolledBack` keeps its old meaning).
+>
 > **「存在但读不出来」的宿主文件不再被记成「当时不存在」（数据安全）**：导入前快照登记
 > settings.yaml / cordis.patch.yml / `profiles/<p>/*` 时，只要文件当下读不出来（Windows 上被别的进程占用、
 > 权限、IO 错），此前会落 `existed:false`。恢复侧据此判定「快照里没有、现在有 → 删掉」，
@@ -149,6 +174,49 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Stopping a DSH instance now uses danger semantics** in its confirmation (it interrupts that instance's running
 >   sessions), matching delete / rollback / disconnect.
 
+
+> **第二轮审查的其余落地（客户端 / 核心 / 提示）**：
+> - **保留清理不再可能删错目录**：快照目录名与 `snapshot.json` 里的 id 不一致时（手工改名 / 半截拷贝残留）**跳过并留痕**，绝不按内部 id 去删另一个目录。护栏：`src/core/backup.test.ts`。
+> - **导出失败不再留明文临时 ZIP**：清理移进 `finally`（加密失败 / 磁盘满 / 超时都会清），加密产物改**原子落盘**（不再留一个名字正常的半截 `.zip`）。
+> - **快照目录「读不出来」不再显示成「没有快照」**：`/snapshots` 回传 core 的 `out.unreadable`，产物库如实告警（新键 `library.snapshotsUnreadable`）；CLI 侧同一口径见 CLI 条目。
+> - **删除被事故恢复引用的回滚点会被拒绝**：与自动保留清理的 F3 豁免同源；引用清单读不出来时**保守拒绝**（fail-closed），两种码在界面映射成本地化文案（绝不裸码上屏）。
+> - **`files` 分区的 `relativePath` 逐项过 `isPathSafe`**（与 `patchFiles` 同级防线）：不可信 bundle 的路径穿越向量不再只靠 ZIP 条目名兜住。护栏：`src/schema/registry.test.ts`。
+> - **同步 URL 内嵌凭据不再明文落 sessionStorage**：`redact()` 补 URL userinfo 形态（`https://oauth2:<token>@…`），落盘投影覆盖 `repoUrl` / `webdavUrl` / 推送与拉取报告。宿主本来就拒绝带 userinfo 的地址，因此**不改变任何合法输入的行为**。护栏：`src/security/redaction.test.ts`。
+> - **会话体检的问题细节可见**：core 的 `issue.detail`（如「3 row(s)」/「seq 12→18」）进展示模型并脱敏，问题行悬停即可看到规模（此前 detail 完全不进 UI）。
+> - **首页状态条放不下时换行**，不再隐藏横向滚动条（与导航条「隐藏滚动 = 不可发现」的既有教训一致）。
+> - **高频进度落盘合并到 1s**（此前导入/同步轮询每 500ms 整份 `JSON.stringify` + 写 sessionStorage），`pagehide` 前强制 flush；sessionStorage 配额满时**首次失败可见提示一次**（此前静默，刷新即丢）。
+> - **无障碍**：导航条补齐 ARIA tabs 语义（tab ↔ tabpanel 互指 `aria-controls` / `aria-labelledby`）；`Segmented` 降级为按钮组（`role=group` + `aria-pressed`）—— 它没有 tabpanel 容器，用 `role=tab` 会让读屏用户听到「标签页」却找不到面板。
+> - **G-34 gist 提示落地**：gist 表单常驻说明（一次 GET 全量 / 单文件超限截断 / 文件数上限 ⇒ 大分区不适合），且「通道 = gist 且勾选 sessions」时出风险横幅。
+>
+> **Second audit round — everything else (client / core / hints)**: snapshot pruning can no longer delete the wrong directory
+> (directory name ≠ internal id → skip with a warning); failed exports clean up their plaintext temp ZIP in `finally` and the
+> encrypted output is written atomically; an unreadable snapshot directory is reported instead of shown as "no snapshots";
+> deleting a snapshot that recovery still references is refused (fail-closed, localized codes); `files[].relativePath` is
+> validated with `isPathSafe`; URL-embedded credentials are masked before they reach sessionStorage; session issue details are
+> surfaced (redacted) on hover; the home status strip wraps instead of hiding its scrollbar; high-frequency progress persistence
+> is coalesced to 1s with a visible first-failure notice; the nav has proper ARIA tabs semantics while `Segmented` is a button
+> group; and the G-34 gist hints are visible in the form and as a risk banner.
+>
+
+> **CLI 与离线救急台（第二轮审查）**：
+> - **`dcm restore` 补第三道写入门「本机没有 DSH 在跑」**：此前浏览器里被明确拒绝的动作，在终端能直接覆盖 `$DSH_HOME`（settings/plugins/workspaces 登记）。现在与救急台 `checkWriteGates` 同源同序（SAFE MODE → 环境锁 → DSH 未运行），拒绝时给出两条出路（先关 DSH，或改用 `dcm web` 救急台）；`--dry-run` 仍只打印计划（门只在真实执行前）。护栏：`src/cli/index-guards.test.ts` 的 G-06/G-07。
+> - **`dcm snapshots` / `dcm restore` 不再把「快照目录读不出来」显示成「没有快照」**：传 core 的 `out.unreadable`，读不到时打印事实并让 `snapshots` 以非 0 退出（目录真不存在仍是「无快照」+ 0）。护栏：G-03/G-05。
+> - **`dcm sessions doctor --json` 的 `ok` 与退出码同源**（`blocking === 0`）：此前恒 `true`，用 `jq .ok` 判健康的 CI/脚本会把「阻断启动 N 条」读成一切正常。
+> - **`dcm sessions repair`：会话根存在但读不出来时明说「读不到 ≠ 没有会话」并 exit 1**（此前打印「无需修复」+ 0；`--json` 不再回 `ok:true`）。护栏：`src/cli/sessions-repair.test.ts` 的 RP-01/02。
+> - **参数纪律**：`verify` 不再静默忽略 `--dry-run` / `--profile` / `--settings` —— 改为**按命令白名单**放行（`--dry-run` 只给 restore/reinstall/backup，`--profile` 只给 restore/web，`--id` 给 restore/verify），help 的 verify 段补 `--id` 与真实语义。
+> - **`dcm web --data-dir` 的错位修掉**：此前只在 basename 命中 snapshots/exports 时对**那一条**取原值，另一条被拼到 leaf 下面；现在统一先算 root 再派生 snapshots/exports/locks/dataDir，help 补 `--data-dir` 的真实语义。
+> - **救急台 404/405/错误页的「可用页面」清单改为从 `page.ts` 导航表派生**（此前三处硬编码互不一致，还把 JSON 端点 `/healthz` 当页面推荐）。
+> - **救急台离线导出的 `manifest.exporter.version` 用真实版本**（此前写死 `'rescue-console'`，与 CLI 通路的真实版本口径不一致）。
+> - **新增护栏**：`src/cli/web/console-route-parity.test.ts`（路由 `(method,path)` 双向快照 + 导航表 ↔ 路由集合双向一致 + 「可用页面」派生锚点）—— 这条正是上一条能长期存活的原因。
+>
+> **CLI and offline rescue console (second audit round)**: `dcm restore` now enforces the same "no DSH running" write gate as
+> the rescue console (SAFE MODE → env lock → DSH stopped), with `--dry-run` still printing the plan only; `dcm snapshots` /
+> `dcm restore` report an unreadable snapshot directory instead of "no snapshots" (non-zero exit); `sessions doctor --json`'s
+> `ok` matches its exit code (`blocking === 0`); `sessions repair` says "cannot read ≠ no sessions" and exits 1 when the session
+> root is unreadable; `verify` no longer silently ignores `--dry-run` / `--profile` / `--settings` (per-command flag allowlist);
+> `dcm web --data-dir` derives all four directories from one root; the console's "available pages" hint is derived from the nav
+> table; the offline export records the real exporter version; and a new route-parity guard pins all of it.
+>
 
 ## [0.1.71] - 2026-10-08
 

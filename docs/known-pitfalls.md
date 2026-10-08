@@ -534,3 +534,13 @@ d`。
 **护栏**：`src/core/backup.test.ts` —— ①「存在但读不出来 → existed/unreadable/blobPath 三字段 + durable+verified 不破」；②「引用扫描抛错 → 两个快照都留着 + 有告警」。`tests/core/restore.test.ts` 的 `R-host-unreadable`：目标机上文件真实存在时，计划里**零 `hostFileRemove`**、说明含「读不出来」。
 
 **未做（如实）**：宿主整文件与文件类分区仍是两条读失败口径（后者上抛成分区级告警）；把宿主文件的 `unreadable` 也接进导出报告的告警面属另一条线。
+
+## CLI 与救急台的一致性三条（2026-10-08 UX 审查）
+
+**① 同一个动作，两端的写入门必须同源。** `dcm restore` 此前只过 `checkSafeModeBlocked` + 环境锁，而救急台走 `checkWriteGates(..., { needsDshStopped: true })`（src/cli/actions.ts）—— 结果是「浏览器里被拒的动作，终端里能直接覆盖 $DSH_HOME 的 settings/plugins/workspaces 登记」。现在 CLI 补上第三道门（顺序与救急台一致：SAFE MODE → 环境锁 → DSH 未运行），拒绝时给出两条出路（先关 DSH / 改用 `dcm web`），`--dry-run` 仍只打印计划（门只在真实执行前）。护栏：`src/cli/index-guards.test.ts` 的 G-06（DSH 在跑 → 拒绝且 settings.yaml 一字节未改）/ G-07（dry-run 不受门影响）。
+
+**② 机器可读字段必须与退出码同源。** `sessions doctor --json` 的 `ok` 曾恒为 `true`，而退出码可能是 1（`blocking > 0`）—— 用 `jq .ok` 判健康的 CI 会把「阻断启动 N 条」读成一切正常。现在 `ok = blocking === 0`。同族：`sessions repair` 在会话根存在但读不出来时不再打印「无需修复」+ exit 0，而是明说「读不到 ≠ 没有会话」并 exit 1（`--json` 回 `ok:false`）；护栏 `src/cli/sessions-repair.test.ts` RP-01/02。
+
+**③ 面向用户的清单必须从单一事实源派生。** 救急台 404 / 405 / 错误页的「可用页面」提示此前有三份互不相同的硬编码（还把 JSON 端点 `/healthz` 当页面推荐）。现在统一由 `page.ts` 的 `CONSOLE_PAGE_NAV` 经 `consolePagesHint()` 派生，并新增 `src/cli/web/console-route-parity.test.ts` 做**双向**断言（路由 `(method,path)` ↔ 硬编码快照、导航表 ↔ 路由集合）—— 多一条/少一条都红，这正是这类漂移能长期存活的原因。
+
+**未做（如实）**：`--profile` 有意放行 `web`（runWeb 真的把它当救急台目标档案用）；「可用页面」严格等于 8 项头部导航，因此 `/lock` / `/verify`（首页动作卡入口）不在该提示里；`runWeb` 的 `locksDir` 现恒为 `<root>/locks`（不再走 `resolveRecoverLocksDir` 的候选根探测，`recover-stale-lock` 命令未改）。

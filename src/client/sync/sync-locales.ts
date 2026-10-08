@@ -146,6 +146,11 @@ export const zh = {
   'syncflow.rollback': '回滚到应用前',
   'syncflow.rollingBack': '正在回滚…',
   'syncflow.rollbackDone': '已回滚到应用前',
+  // 诚实性（2026-10）：部分回滚绝不报「已回滚」——列出未恢复项与人工提示
+  'syncflow.rollbackPartialToast': '回滚未完成：{n} 项没能恢复',
+  'syncflow.rollbackIncomplete': '回滚未完成：{n} 项无法自动恢复（配置可能停留在中间状态）',
+  'syncflow.rollbackFailedItems': '未回滚项（需人工处理）',
+  'syncflow.importRollbackIncomplete': '导入失败，且整体回滚未完成：有改动没能恢复（见下方告警）',
   'syncflow.needsRestart': '部分改动需要重启 DSH 后生效',
   // P0-②：push 前只读预览确认弹窗
   'syncflow.pushPreviewTitle': '确认推送',
@@ -173,6 +178,7 @@ export const zh = {
   'mode.sessionsPickHint': '点名后只同步勾中的对话（优先于上面的数量上限）；一个都不勾 = 回到「最近 N 个」模式。',
   'mode.sessionsPickReset': '改为「最近 N 个」',
   'mode.sessionsWorkspaceWarn': '已勾选历史对话，但没有勾选「工作区」分区：目标机上这些对话可能归属不到任何工作区而显示不出来。建议一并勾选「工作区」。',
+  'mode.gistSessionsWarn': '当前通道是 GitHub Gist，且勾选了「历史会话」：gist 会一次取回全部文件内容、单文件超限即截断、文件数还有上限，大分区同步可能失败或内容被截断。建议改用 Git / WebDAV / 对象存储通道同步历史会话，或取消勾选该分区。',
   'mode.persistHint': '分区选择已保存到本机：自动同步和手动推送都会使用此配置（重启后仍生效）。',
   'mode.choose': '选择同步分区',
   'mode.pickerTitle': '选择同步分区',
@@ -329,6 +335,8 @@ export const zh = {
   'cloud.secretPlaceholder': '••••••••',
   'cloud.gistId': 'Gist ID',
   'cloud.gistIdHint': 'gist 地址末段的十六进制 id（如 https://gist.github.com/<用户>/<id>）。',
+  // G-34：gist 刻意不做内容寻址外置（一次 GET 全量、单文件超限截断、文件数上限）→ 大分区不适合
+  'cloud.gistLargeSectionHint': 'gist 通道不做内容外置：一次请求就把全部文件内容取回、单文件超限会被截断，且文件数有上限 —— 历史会话这类大分区不适合走 gist，请改用 Git / WebDAV / 对象存储通道。',
   'cloud.apiBaseUrl': 'API 根地址（可选）',
   'cloud.apiBaseUrlHint': '留空 = https://api.github.com；GitHub Enterprise 可改为自建地址。',
   'cloud.filePrefix': '文件名前缀（可选）',
@@ -486,6 +494,11 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.rollback': 'Rollback',
   'syncflow.rollingBack': 'Rolling back…',
   'syncflow.rollbackDone': 'Rolled back',
+  // Honesty (2026-10): a partial rollback is never reported as "rolled back"
+  'syncflow.rollbackPartialToast': 'Rollback incomplete: {n} item(s) could not be restored',
+  'syncflow.rollbackIncomplete': 'Rollback incomplete: {n} item(s) could not be restored automatically (the configuration may be left partially changed)',
+  'syncflow.rollbackFailedItems': 'Items not rolled back (need manual handling)',
+  'syncflow.importRollbackIncomplete': 'Import failed and the overall rollback did not complete: some changes could not be restored (see the warnings below)',
   'syncflow.needsRestart': 'Some changes require a DSH restart to take effect',
   // P0-②: push read-only preview confirm dialog
   'syncflow.pushPreviewTitle': 'Confirm Push',
@@ -513,6 +526,7 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.sessionsPickHint': 'Only the picked conversations are synced (this wins over the count above). Picking none returns to the "latest N" mode.',
   'mode.sessionsPickReset': 'Use "latest N" instead',
   'mode.sessionsWorkspaceWarn': 'Conversations are selected but the "Workspaces" section is not: on the target machine they may not be attributed to any workspace and stay invisible. Selecting "Workspaces" too is recommended.',
+  'mode.gistSessionsWarn': 'The current channel is GitHub Gist and "Conversations" is selected: a gist returns all file content in one request, truncates any oversized single file, and caps the number of files, so syncing a large section may fail or be truncated. Use a Git / WebDAV / object-storage channel for conversations, or clear that section.',
   'mode.persistHint': 'The section selection is saved locally: both auto sync and manual push use this configuration (persists across restarts).',
   'mode.choose': 'Choose sync sections',
   'mode.pickerTitle': 'Choose Sync Sections',
@@ -664,6 +678,8 @@ export const en: Record<keyof typeof zh, string> = {
   'cloud.secretPlaceholder': '••••••••',
   'cloud.gistId': 'Gist ID',
   'cloud.gistIdHint': 'The hex id at the end of the gist URL (e.g. https://gist.github.com/<user>/<id>).',
+  // G-34: gist deliberately has no content-addressed offloading (one full GET, per-file truncation, file cap)
+  'cloud.gistLargeSectionHint': 'The gist channel does no content offloading: a single request returns all file content, any oversized single file is truncated, and the number of files is capped — large sections such as conversations are a poor fit. Use a Git / WebDAV / object-storage channel instead.',
   'cloud.apiBaseUrl': 'API base URL (optional)',
   'cloud.apiBaseUrlHint': 'Blank = https://api.github.com; change it for GitHub Enterprise.',
   'cloud.filePrefix': 'File name prefix (optional)',

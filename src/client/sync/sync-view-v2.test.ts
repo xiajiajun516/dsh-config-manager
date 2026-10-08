@@ -8,7 +8,8 @@ import assert from 'node:assert/strict'
 import type { ApplyItemsResponse, AutosyncStatusResponse, SyncConfirmItem } from './sync-api.ts'
 import {
   applyItemsReportView, autosyncIntervalMs, autosyncStatusText, buildAdoptions, confirmListSummary,
-  computeAutosyncCountdown, hasBulkDecidable, isBulkDecidable, isReviewItem, isToolchainChangeItem,
+  computeAutosyncCountdown, GIST_LARGE_SECTION_HINT_KEY, gistSessionsRiskKey, hasBulkDecidable,
+  isBulkDecidable, isReviewItem, isToolchainChangeItem,
   keepLocalAll, needsGitToken, reviewItems, summarizeConfirmItems, useRemoteAll,
 } from './sync-view.ts'
 
@@ -288,4 +289,54 @@ test('sync-view: autosyncStatusText 覆盖未运行 / 各状态', () => {
   }
   assert.match(autosyncStatusText(failed), /失败/)
   assert.match(autosyncStatusText(failed), /连续失败 3 次/)
+})
+
+/* ---------------------- 诚实性：整体回滚「未完成」必须单独成态 ---------------------- */
+
+test('回滚未完成（rollbackFull=false）：kind=rollbackIncomplete，绝不渲染成「已整体回滚」', () => {
+  const report: ApplyItemsResponse = {
+    ok: false, applied: [], skipped: [], needsRestart: false,
+    warnings: ['回滚未完成：credentialsStatus:K —— DSH 不回读凭据值，无法自动恢复（请重新补录该凭据）'],
+    restoreId: 'rest-x', rolledBack: true, rollbackFull: false,
+    failed: [{ itemId: 'x', message: '导入失败' }], result: {},
+  }
+  const view = applyItemsReportView(report)
+  assert.equal(view?.kind, 'rollbackIncomplete', '半回滚必须与 rolledBack（整体已回滚）分开')
+  assert.equal(view?.rollbackFull, false)
+  assert.doesNotMatch(view?.headline ?? '', /已整体回滚/, '不得复用断言「已整体回滚」的失败文案')
+  assert.match(view?.headline ?? '', /回滚未完成/)
+  // 未恢复项在 warnings 里逐条给出（引擎已并入），界面据此列出
+  assert.match(view?.warnings.join(' ') ?? '', /credentialsStatus:K/)
+})
+
+test('回滚未完成：headline 走 sync 字典专用键（可注入本地化取词器）', () => {
+  const report: ApplyItemsResponse = {
+    ok: false, applied: [], skipped: [], needsRestart: false, warnings: [],
+    restoreId: 'r', rolledBack: true, rollbackFull: false, failed: [], result: {},
+  }
+  const view = applyItemsReportView(report, undefined, (key) => 'SYNC:' + key)
+  assert.equal(view?.headline, 'SYNC:syncflow.importRollbackIncomplete')
+})
+
+test('旧宿主不返回 rollbackFull：rolledBack=true 仍按「已整体回滚」处理（不误报半回滚）', () => {
+  const report: ApplyItemsResponse = {
+    ok: false, applied: [], skipped: [], needsRestart: false, warnings: [],
+    restoreId: 'r', rolledBack: true, failed: [{ itemId: 'x' }], result: {},
+  }
+  assert.equal(applyItemsReportView(report)?.kind, 'rolledBack')
+})
+
+/* ---------------------- G-34：gist 通道不适合大分区 ---------------------- */
+
+test('G-34：通道=gist 且勾选 sessions → 风险提示键；其它组合 → null', () => {
+  assert.equal(gistSessionsRiskKey('gist', ['sessions']), 'mode.gistSessionsWarn')
+  assert.equal(gistSessionsRiskKey('gist', ['skills', 'sessions']), 'mode.gistSessionsWarn', '顺序无关')
+  assert.equal(gistSessionsRiskKey('git', ['sessions']), null, '非 gist 通道不提示')
+  assert.equal(gistSessionsRiskKey('s3', ['sessions']), null)
+  assert.equal(gistSessionsRiskKey('gist', ['skills']), null, '没勾 sessions 不提示')
+  assert.equal(gistSessionsRiskKey('gist', []), null)
+})
+
+test('G-34：gist 表单常驻提示键指向 sync 字典的专用文案', () => {
+  assert.equal(GIST_LARGE_SECTION_HINT_KEY, 'cloud.gistLargeSectionHint')
 })

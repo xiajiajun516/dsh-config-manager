@@ -2111,7 +2111,7 @@ interface AutosyncStatusResponse {
 
 /** POST /restore 请求体校验（纯函数；snapshotId 拒绝路径分隔符防 join 越界）。 */
 export type BuildRestoreBodyResult =
-  | { ok: true; value: { snapshotId: string; dryRun: boolean } }
+  | { ok: true; value: { snapshotId: string; dryRun: boolean; planFingerprint?: string } }
   | { ok: false; error: string }
 
 export function buildRestoreBody(body: unknown): BuildRestoreBodyResult {
@@ -2126,7 +2126,16 @@ export function buildRestoreBody(body: unknown): BuildRestoreBodyResult {
   if (snapshotId === '.' || snapshotId === '..' || snapshotId.includes('/') || snapshotId.includes('\\')) {
     return { ok: false, error: zhMsg('restore.invalidSnapshotId') }
   }
-  return { ok: true, value: { snapshotId, dryRun: record['dryRun'] === true } }
+  // 预览-执行一致性（P3）：客户端把预览时拿到的计划指纹带回来；缺省 = 旧客户端，行为不变。
+  const planFingerprint = record['planFingerprint']
+  return {
+    ok: true,
+    value: {
+      snapshotId,
+      dryRun: record['dryRun'] === true,
+      ...(typeof planFingerprint === 'string' && planFingerprint !== '' ? { planFingerprint } : {}),
+    },
+  }
 }
 
 /* ------------------------------------------- snapshots/file-diff（git 风格预览） */
@@ -3318,10 +3327,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           return
         }
         const runId = run.runId
+        // 临时明文 ZIP 的路径必须在 try **之外**声明：失败分支也要能清理（见 finally）。
+        const plainZipPath = join(tmpDir, `export-plain-${randomBytes(4).toString('hex')}.zip`)
         try {
           // 先由 Exporter 产出标准明文 ZIP（含 manifest/checksums；若 includeSecrets 需要
           // 加密提供者来生成 secrets.enc —— 整体容器的外层加密再保护整个文件）。core 不感知外层容器。
-          const plainZipPath = join(tmpDir, `export-plain-${randomBytes(4).toString('hex')}.zip`)
           const exporter = new Exporter({
             ctx: host,
             adapters,
@@ -3363,9 +3373,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           if (password !== undefined) {
             const plainZip = await fs.readFile(plainZipPath)
             const { blob } = await encryptArchive(plainZip, password)
-            await fs.writeFile(outPath, blob)
-            // 临时明文 ZIP 立即清理，磁盘不残留明文备份
-            await fs.rm(plainZipPath, { force: true }).catch(() => undefined)
+            // 原子落盘：直接 writeFile 中途失败会留下一个**名字正常**的半截 .zip（会出现在产物库里）。
+            // 临时明文 ZIP 的清理统一由 finally 负责（成功 / 失败都清）。
+            await atomicWriteFile(outPath, blob)
           } else {
             await fs.rename(plainZipPath, outPath)
           }
@@ -3387,6 +3397,11 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
           runs.fail(runId, message)
           host.log.error('导出失败', { error: message })
           writeJson(res, 500, { error: message, runId })
+        } finally {
+          // 明文临时 ZIP 必须在这里清：失败分支（加密失败 / 磁盘满 / 超时）此前**不清理**，
+          // 含全部非敏感配置的明文会留在 <dataDir>/tmp 直到 24h 缓存清理 —— 与「磁盘不残留明文备份」
+          // 的承诺不符。成功路径已 rename 或已原子写入，这里对不存在的路径是 no-op（force: true）。
+          await fs.rm(plainZipPath, { force: true }).catch(() => undefined)
         }
     }),
     // ---------------------------------------------------- export-preview
