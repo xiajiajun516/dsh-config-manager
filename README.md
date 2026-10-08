@@ -47,7 +47,7 @@ DSH is your AI assistant workbench — it holds your settings: model configs, pl
 
 ### Backup DeepSeek Harness configuration
 
-Create a portable backup of your DSH settings, model providers, plugins, MCP servers, skills, agent presets and workspace — one ZIP file, no secret values included by default. (DSH's own profiles — `$DSH_HOME/profiles/<name>`, i.e. which plugin stack to boot — are machine-local and are **not** part of the backup; the **Profiles** page manages them instead — list / create / rename / delete, plus launching or stopping an independent instance for one.)
+Create a portable backup of your DSH settings, model providers, plugins, MCP servers, skills, agent presets and workspace — one ZIP file, no secret values included by default. (DSH's own profiles — `$DSH_HOME/profiles/<name>`, i.e. which plugin stack to boot — are machine-local and are **not** part of the backup; the **Environment → Profiles** view manages them instead — list / create / rename / delete, plus launching or stopping an independent instance for one.)
 
 ### Restore DeepSeek Harness on another machine
 
@@ -59,11 +59,11 @@ Move your complete DeepSeek Harness setup without manually reinstalling plugins,
 
 ### Sync DSH configuration across machines
 
-Keep portable configuration synchronized between machines through a private Git repository or WebDAV — secrets do not sync by default (the payload is run through the SecretScanner); check "Export secrets" with an encryption password and `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext inside the encrypted snapshot, so another machine can restore the credentials while the remote (Git host / WebDAV provider) only ever sees ciphertext.
+Keep portable configuration synchronized between machines through a private Git repository, WebDAV, an S3-compatible object store (AWS S3 / Alibaba OSS / Tencent COS / MinIO / Qiniu Kodo) or GitHub Gist — secrets do not sync by default (the payload is run through the SecretScanner); check "Export secrets" with an encryption password and `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext inside the encrypted snapshot, so another machine can restore the credentials while the remote (Git host / WebDAV / object store / Gist) only ever sees ciphertext.
 
 ### Schedule automatic full backups
 
-Turn on scheduled backups (6h / 12h / 24h / 7d — or a **custom weekly weekday & time**) and DSH quietly keeps a fresh full backup of your configuration in the background — secrets are never included, so it stays safe on disk without a password. Consecutive failures are highlighted in red in the settings card.
+Turn on scheduled backups in the **Home → Scheduled backup** card (6h / 12h / 24h / 7d — or a **custom weekly weekday & time**) and DSH quietly keeps a fresh full backup of your configuration in the background — secrets are never included, so it stays safe on disk without a password. How many are kept is decided by the **retention policy** in the same card (last N + one per month + one per year), and consecutive failures are highlighted in red.
 
 ### Discover & install configurations from the marketplace
 
@@ -82,7 +82,7 @@ Several DSH plugins live in this space and they solve different problems — pic
 | Plugin | Strongest at | Where DSH Config Manager goes further |
 |---|---|---|
 | [xiaoyuyu6420/dsh-backup](https://github.com/xiaoyuyu6420/dsh-backup) | One-command `~/.dsh` snapshots from the CLI, plus session doctor / upgrade snapshots / rescue console | Review-before-write GUI flow (dry-run preview, per-item conflict decisions, automatic rollback), cross-machine path remapping, encrypted credential payload, configuration marketplace |
-| [muyifc/dsh-config-sync](https://github.com/muyifc/dsh-config-sync) | Export / import DSH configuration to a portable, password-encrypted file, callable from tool calls | 13–14 sections (plugins / MCP / skills / workspaces / session logs …), scheduled backups, Git + WebDAV sync per channel, session migration with path rebase |
+| [muyifc/dsh-config-sync](https://github.com/muyifc/dsh-config-sync) | Export / import DSH configuration to a portable, password-encrypted file, callable from tool calls | 13–14 sections (plugins / MCP / skills / workspaces / session logs …), scheduled backups, four sync channels (Git / WebDAV / object storage / Gist), session migration with path rebase |
 | [dickpy/dsh-cloud-sync](https://github.com/dickpy/dsh-cloud-sync) · [weibaohui/dsh-sync](https://github.com/weibaohui/dsh-sync) | Keeping machines consistent through WebDAV / S3 or a private Git mirror | Sync is one of five capabilities here — alongside export/import, scheduling, marketplace and profile instance launch/stop |
 | `cp -r ~/.dsh` (or Git on the home dir) | Free, zero setup, fine for a purely textual config | No secret handling, no path remapping, no capture of `link:` / `file:` plugin installs, no session-log work, no conflict handling or rollback |
 
@@ -94,24 +94,24 @@ Several DSH plugins live in this space and they solve different problems — pic
 
 | Icon | Feature | In one line |
 |:---:|---|---|
-| 🚀 | **One-click Export** | Package your recommended config into a ZIP |
+| 🚀 | **One-click Export** | Open the export flow — the recommended sections are pre-ticked — and package a ZIP in one click (adjust section by section, item by item if you want) |
 | 📦 | **One-click Import** | Restore your environment on another machine |
-| 👀 | **Preview before import** | Full preview first — **never touches your config silently** |
-| ⚔️ | **Conflict handling** | Keep Current / Use Imported — you decide |
+| 👀 | **Preview before import** | Read the migration consult verdict and its evidence first, then pick content item by item and resolve conflicts one by one — **never touches your config silently** |
+| ⚔️ | **Conflict handling** | Keep current / Use backup — you decide (with bulk buttons) |
 | 🗺️ | **Path auto-mapping** | Detects dead absolute paths and lets you remap them |
 | 🔒 | **Secret safety** | API Keys are not exported by default — non-encrypted imports ask you to re-enter; encrypted backups restore them with the password |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
-| 📸 | **Snapshot restore** | Undo an import: whole-file restore + uninstall added plugins (CLI & GUI) |
-| 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo or WebDAV** (secrets do not sync by default; encrypted snapshots can optionally carry encrypted credentials) |
-| ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d) — set-and-forget, secrets never included |
-| 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-item content selection (change summary + in-place high-risk flags) |
-| 🗂️ | **Profiles (DSH profiles)** | Manage `$DSH_HOME/profiles/<name>` directly: list / create from a shipped template / rename / hard delete / **launch this profile (independent instance)** / **stop the instance** (the row button flips between Launch and Stop with the running state) |
+| 📸 | **Snapshot restore** | In the Library, hit "Restore" on a pre-import snapshot: review the line-by-line restore plan, then whole-file restore + uninstall added plugins (CLI & GUI) |
+| 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo / WebDAV / S3-compatible object storage / GitHub Gist** — each channel is configured on its own (secrets do not sync by default; encrypted snapshots can optionally carry encrypted credentials) |
+| ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d, or a custom weekly time) — set-and-forget, secrets never included |
+| 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-item content selection (change summary + in-place high-risk flags); entry: Library footer "Browse market / Publish to market", or ⌘K |
+| 🗂️ | **Profiles (DSH profiles)** | Under **Environment → Profiles**, manage `$DSH_HOME/profiles/<name>` directly: list / create from a shipped template / rename / hard delete / **launch this profile (independent instance)** / **stop the instance** (the row button flips between Launch and Stop with the running state) |
 | 🌐 | **Bilingual UI** | Interface, reports and error details follow the DSH app language (中文 / English) |
 | 🧩 | **Local plugin migration** | `link:` / `file:` development plugins are packed into the backup, so switching machines does not lose them |
 | 🗄️ | **Configurable retention (GFS tiers)** | "keep the last N + one per month + one per year" — the defaults are equivalent to the previous behaviour |
 | 🤖 | **Agent tools** | Backup / snapshot / restore / sync right from an agent session |
-| 💾 | **Disk usage report** | The backups page shows how much space the plugin's own artifacts take (backups / snapshots / sync copies / caches / staging) with a three-tier cleanup policy; **one-click cleanup only touches regenerable caches and expired backups** — snapshots and sync data are never removed there |
-| ⬆️ | **Update check** | The About page reads the latest version from npm (read-only, cached 10 minutes); when there is a newer one it offers a copyable upgrade command **and** a one-click **Update now** that installs exactly that version — DSH must then be restarted, and the plugin never restarts it for you. Offline failures are reported honestly and affect nothing else |
+| 💾 | **Disk usage report** | **Environment → Maintenance & Diagnostics** shows how much space the plugin's own artifacts take (backups / snapshots / sync copies / caches / staging) with a three-tier cleanup policy; **one-click cleanup only touches regenerable caches and expired backups** — snapshots and sync data are never removed there |
+| ⬆️ | **Update check** | The About panel (top-right nav icon) reads the latest version from npm (read-only, cached 10 minutes); when there is a newer one it offers a copyable upgrade command **and** a one-click **Update now** that installs exactly that version — DSH must then be restarted, and the plugin never restarts it for you. Offline failures are reported honestly and affect nothing else |
 | 🧭 | **Compatibility explained** | Before importing you see "source DSH version / platform → local" plus **structured reasons** for the score (cross-platform / missing sections / newer source …) instead of a bare "partial" |
 | 🧳 | **Import from other AI agents** | Read Claude Code / Cursor / Codex / Hermes / Antigravity … configuration **and chat history** on this machine, translate it into a standard bundle, then import through the usual preview / conflict / rollback flow |
 
@@ -119,21 +119,13 @@ Several DSH plugins live in this space and they solve different problems — pic
 
 ## 📸 Screenshots
 
-| Overview | Backups & Snapshots |
+| Home | Library |
 |:---:|:---:|
-| ![Overview](assets/screenshot-overview-en.png) | ![Backups and snapshots](assets/screenshot-backups-en.png) |
+| ![Home](assets/screenshot-overview-en.png) | ![Library](assets/screenshot-backups-en.png) |
 
-| Export | Import Preview |
+| Sync (four channel cards) | Environment · Profiles |
 |:---:|:---:|
-| ![One-click Export](assets/screenshot-export-en.png) | ![Import Preview](assets/screenshot-import-en.png) |
-
-| Remote Sync | Configuration Market |
-|:---:|:---:|
-| ![Remote Sync](assets/screenshot-sync-en.png) | ![Configuration Market](assets/screenshot-market-en.png) |
-
-| Profiles (DSH profiles) |
-|:---:|
-| ![Profiles](assets/screenshot-profiles-en.png) |
+| ![Sync](assets/screenshot-sync-en.png) | ![Environment · Profiles](assets/screenshot-profiles-en.png) |
 
 ---
 
@@ -151,10 +143,11 @@ Every step confirms and backs up first — **it never modifies your config direc
 
 ```
 Select ZIP → validate file → check integrity → check schema → compatibility check
-    → scan contents → build import plan → preview & confirm
-    → auto-backup current config → apply → validate → done
+    → scan contents → build import plan → migration consult (verdict + evidence)
+    → choose what to import → per-item conflict decisions → path mapping / secrets re-entry
+    → confirm import → auto-backup current config → apply → validate → done
                       │
-                      └─ failed midway? → automatically restored (rollback)
+                      └─ failed midway? → automatically restored (rollback, can be switched off on the confirm page)
 ```
 
 ---
@@ -195,7 +188,7 @@ dsh plugin --profile web add dsh-config-manager@latest
 > dsh plugin --profile web add "dsh-config-manager@$(npm view dsh-config-manager version)"
 > ```
 >
-> After restarting DSH, **Settings → Backup & Migration → About** shows the version you are actually running (and pops up the release notes whenever it changes).
+> After restarting DSH, **Settings → Backup & Migration → the About icon at the top right** shows the version you are actually running (and pops up the release notes whenever it changes).
 >
 > - Or disable the age gate entirely with a one-liner (adds `minimumReleaseAge: 0` at the top of the profile's `pnpm-workspace.yaml`):
 >   ```powershell
@@ -247,34 +240,42 @@ allowBuilds:
 
 ## 🚀 Quick start (3-minute tour)
 
+> **Where things are**: there are only 4 top-level pages — **Home** (how this machine is doing, plus the four actions Back up now / Export / Import / Remote sync), **Library** (local snapshots / backup files / remote snapshots / marketplace configs — every "thing" lives in this one list), **Sync** (four channel cards: Git / WebDAV / object storage / Gist) and **Environment** (Profiles / Maintenance & Diagnostics). **Export, import, browse market and publish to market are flow panels**: open them from the Home toolbar or the Library footer, switch pages to collapse, switch back to continue. The four icons at the top right are the ⌘K command palette, activity, migration history and About.
+
 ```
 Machine A (export)
-  1. Open DSH → Settings → "Backup & Migration"
-  2. Click "Export Configuration" → choose "Quick Export"
-  3. You get dsh-config-2026-08-14.zip (the report confirms no secrets inside)
+  1. Open DSH → Settings → "Backup & Migration" → Home
+  2. Click "Export" in the toolbar → the recommended sections are already ticked (change them via "Choose what to export")
+  3. Click "Start export" → the ZIP is downloaded automatically as dsh-config-<date>-<random>.zip (the report confirms no secrets inside)
 
 Copy the ZIP to Machine B (import)
-  1. Open DSH → "Backup & Migration" → "Import Configuration"
-  2. Select the ZIP → wait for analysis → review the "Import Preview"
-  3. Path issues? → choose new paths (batch mapping supported)
-  4. Conflicts? → choose Keep Current / Use Imported
-  5. Confirm import → wait
-  6. Re-enter any missing API Keys as prompted
-  7. ✅ Settings / plugins / MCP / skills / workspace / global instructions (AGENTS.md) are back
+  1. Open DSH → "Backup & Migration" → click "Import" on Home (or "Import from file" in the Library footer)
+  2. Select the ZIP → wait for analysis → read the migration consult verdict and evidence → "Next: choose what to import"
+  3. Tick the content you want (anything unticked is neither imported nor snapshotted)
+  4. Path issues? → fill in new paths under "Path mapping" (batch prefix mapping supported)
+  5. Conflicts? → pick "Keep current / Use backup" per item (bulk buttons included)
+  6. "Confirm import" → wait (a safety snapshot is taken first; "roll back everything on failure" can be switched off on the confirm page)
+  7. Re-enter any missing API Keys as prompted
+  8. ✅ Settings / plugins / MCP / skills / workspace / global instructions (AGENTS.md) are back
 ```
 
 ---
 
 ## 🧩 Features
 
-### 📤 Export (two modes)
+### 📤 Export (one flow + a content picker)
 
-| Mode | Description |
+Open the **Export** flow panel (Home toolbar → "Export", or the Library footer → "Manual export") and do it on one screen:
+
+| Area | Description |
 |---|---|
-| **Quick Export** (recommended) | One-click: settings / UI / models / plugins / MCP / skills / agent presets / global instructions (AGENTS.md) / workspaces… |
-| **Custom Export** | Tick the categories you want |
+| Choose what to export | Opens the content picker: **section → smallest splittable unit**, ticked item by item; the recommended sections (portable, not device-specific) are pre-ticked and can be changed any time |
+| Security options | Two independent switches: "Encrypt backup" (scrypt + AES-256-GCM) and "Export secrets"; ticking Export secrets auto-enables encryption (secrets are never plaintext) |
+| File name & note | Your own file name plus a note (the note makes it findable in the Library); illegal characters are pointed out right at the field |
+| What will be exported | An always-visible composition card: every section that will really go in, its item count and total size; **unreadable sections say "loading / read failed" instead of a fake 0** |
+| Result | On completion the ZIP is **downloaded automatically** to your browser's download folder (the report offers it again); the report lists sections and warnings item by item |
 
-> Output: `dsh-config-<date>.zip` with manifest + per-category data + SHA-256 checksums.
+> Export is read-only — it writes no configuration. The file carries a manifest + per-section data + SHA-256 checksums and defaults to `dsh-config-<date>-<6 random chars>.zip` (a name clash increments instead of overwriting an existing backup).
 
 **Export extras:**
 - **Preview before export** — see what will be packaged (section count + estimated size, no secrets) before anything is written
@@ -303,8 +304,10 @@ When the target already has a same-named item, you choose:
 
 | Option | Meaning |
 |---|---|
-| **Keep Current** | Leave the target's config untouched |
-| **Use Imported** | Overwrite with the backup's value |
+| **Keep current** | Leave the target's config untouched |
+| **Use backup** | Overwrite with the backup's value |
+
+There are also two bulk buttons at the top of the list ("Keep all current" / "Use all from backup").
 
 > Note: a "decide later / review" option is intentionally **not** offered — an undecided conflict would block the import from proceeding. Every conflict must be resolved before continuing.
 
@@ -324,7 +327,7 @@ You do not have to rebuild another agent's setup by hand.
 - **What travels** — MCP servers, skills, global instructions (as `AGENTS.md`), and **chat history together with the workspaces those conversations belong to** (29 sources; conversations are re-encoded into DSH's session-log format and placed by their recorded `cwd`).
 - **What does not** — secret **values** are never read: only the key names are recorded so the plan can ask you to re-enter them. Structures DSH has no equivalent for (Claude Code hooks, slash commands, …) are reported as explicit codes rather than silently dropped.
 - **Honest skips** — a conversation with no recorded `cwd` cannot be placed and is reported as skipped (never guessed into some other project); known lossy items are listed **before** the import runs.
-- **Entry points** — Settings → "Backup & Migration" → Import → **"Import from another agent"**, the ⌘K command, or the CLI: `dcm import --from <source> [--dry-run] [--out <path>]`.
+- **Entry points** — Home toolbar → "Import" → **"Import from another agent"** (Home also has a direct entry), the ⌘K command, or the CLI: `dcm import --from <source> [--dry-run] [--out <path>]`.
 
 ### 🔒 Secrets
 
@@ -335,25 +338,28 @@ You do not have to rebuild another agent's setup by hand.
 | Encrypted backup import | The export-time password is required: enter → verify → credentials are restored; **no password, no import** |
 | After non-encrypted import | "3 secrets need re-entry" — values stay in memory only |
 
-### 🔄 Remote Sync (Git / WebDAV)
+### 🔄 Remote Sync (four channels)
 
-Push / pull your portable config between machines through **either of two channels** — usage is identical except for the transport itself:
+The **Sync** page renders one card per channel, **all four always visible** (unconfigured ones are a short state with the configure button inside) — Git private repo / WebDAV server / object storage (S3-compatible: AWS S3, Alibaba OSS, Tencent COS, MinIO, Qiniu Kodo) / GitHub Gist:
 
-| | Git private repo | WebDAV |
+| Channel | Endpoint (non-secret fields) | Credentials (DSH credentials only, never read back) |
 |:---:|---|---|
-| **Endpoint** | `repoUrl` | `webdav.url` |
-| **Credentials** | auth token in DSH credentials (`DSH_CONFIG_MANAGER_SYNC_TOKEN`) | `username` stored in the config (echoed in the UI); **password never synced / never logged** — DSH credentials `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` |
+| **Git private repo** | `repoUrl` (pick from the **private** repos the current token can see, or create a new private one inline) | access token → `DSH_CONFIG_MANAGER_SYNC_TOKEN` |
+| **WebDAV** | `webdav.url` | `username` stored in the config (echoed in the UI); **password never synced / never logged** → `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` |
+| **Object storage (S3-compatible)** | endpoint / region / bucket / object key prefix / AccessKey ID (an identifier, may be echoed) | AccessKey Secret → that channel's own credential slot (the sync file keeps only a "configured" marker) |
+| **GitHub Gist** | gist id / API base / file prefix | Gist token → that channel's own credential slot |
 
-- **Remote retention follows your backup schedule**: both channels keep the same policy as local backups — by default the newest **10** snapshots, plus optional "one per month / one per year" tiers — and the snapshot you just pushed is always kept; older ones are deleted automatically.
-- **Switching channels starts fresh**: Git and WebDAV do **not** share snapshots or a common ancestor. When you switch transport, sync begins again from the new remote's empty baseline — push a fresh snapshot first.
+- **Every channel is configured on its own**: sync sections, auto sync (switch + fallback poll interval), encryption and "Export secrets", remote snapshots and the encrypt/decrypt passwords are all **per channel**, inside that channel's own card (configured cards collapse, so four expanded cards cannot overflow the canvas).
+- **Remote retention follows your backup schedule**: by default the newest **10** snapshots, plus optional "one per month / one per year" tiers — and the snapshot you just pushed is always kept; older ones are deleted automatically.
+- **Switching channels starts fresh**: channels do **not** share snapshots or a common ancestor. When you switch transport (or reconfigure one), sync begins again from the new remote's empty baseline — push a fresh snapshot first.
 - **WebDAV auth** uses HTTP Basic: the `username` is stored in the config and may be echoed back into the UI, while the `password` is read live from the DSH credentials slot `DSH_CONFIG_MANAGER_SYNC_WEBDAV_PASSWORD` — it never appears in any sync file or log.
-- **Plugins auto-install**: when pulling diffs, plugins that are new in the backup are **installed automatically** on confirm — no manual per-item ticking in the diff list. Only **version-conflict** plugins still ask you to pick "Keep Current / Use Imported".
+- **Plugins auto-install**: when pulling diffs, plugins that are new in the backup are **installed automatically** on confirm — no manual per-item ticking in the diff list. Only **version-conflict** plugins still ask you to pick "Keep current / Use backup".
 - **Push preview before uploading** — the Push button first shows a read-only preview of what will be sent (sections + per-section counts + changed-vs-baseline markers, first-baseline notice) and only writes the remote after you confirm.
 - **Secrets do not sync by default**: every section goes through the `SecretScanner` (sensitive field values stripped) and the credential section is structurally excluded. With "Export secrets" checked and an encryption password set, `~/.dsh/.credentials.yaml` travels as scrypt + AES-256-GCM ciphertext in a **separate credentials payload** of the encrypted snapshot (never inside any section); the receiving side decrypts it into per-ref "credential migration" items that are written back to the local credential store (`credentials.set`) only after you confirm. The encryption/decryption password is kept in a dedicated local DSH credential slot (`~/.dsh/.credentials.yaml`): it is remembered once "Encrypt backup" is checked (leave the fields empty to reuse it) and cleared when you uncheck it or press "Delete saved password" — never written to sync files, responses, logs or the exported backup, and never sent back to the browser. The decryption password is only ever used when the pulled snapshot is actually encrypted. **Auto sync never carries credentials** (it has no password and skips encrypted snapshots).
 
 ### 🛒 Configuration Marketplace
 
-Browse and install ready-made configurations (model providers, plugins, MCP servers, skills, agent presets…) shared by the community:
+Browse and install ready-made configurations (model providers, plugins, MCP servers, skills, agent presets…) shared by the community. The entry point is the **Library footer ("Browse market / Publish to market")** (or ⌘K) — it is a **flow panel**, not a top-level page:
 
 - **Built-in official market** — read-only, bound to the official public repo (official badge shown, not editable); first open auto-refreshes, manual refresh also available
 - **Search & filter** — keyword search (matches name / description / author / **categories**), category filter, **section filter** (items already downloaded list their sections; others are excluded with a hint), source filter (Official / Community), sorting (recently updated / most starred / name A–Z), and a ⭐ badge showing the **source repo's** star count (queried anonymously, no token involved)
@@ -365,7 +371,7 @@ Browse and install ready-made configurations (model providers, plugins, MCP serv
 ### 🗂️ Profiles (= DSH's own profiles)
 
 A "profile" here is DSH's own profile (`$DSH_HOME/profiles/<name>`) — one **plugin stack (bundles) + dependencies + patch layer**,
-launched with `dsh --profile <name>`. This page reads and writes that directory directly instead of keeping its own config snapshots:
+launched with `dsh --profile <name>`. **Environment → Profiles** reads and writes that directory directly instead of keeping its own config snapshots:
 
 | Action | What it does |
 |---|---|
@@ -380,12 +386,12 @@ launched with `dsh --profile <name>`. This page reads and writes that directory 
 > **Why there is no "set as next launch"** (button and marker removed in 2026-09): DSH has **no "default / next launch
 > profile" state** — the profile comes only from the launch arguments (`dsh <name>` / `--profile <name>`; `dsh web` is a
 > hard-coded alias), so any "which profile to use next" marker has **no consumer at all**: the `dsh web` you type
-> yourself still boots web after a restart. Only two mechanisms really switch profiles: ① this page's "launch this
+> yourself still boots web after a restart. Only two mechanisms really switch profiles: ① the Profiles view's "launch this
 > profile" (an extra instance, no interruption, stoppable at any time), ② pointing your launch command/shortcut at
 > `dsh --profile <name>` (ecosystem tools such as dshm and DSH Launcher all spawn instances from an external launcher).
 > Instances started by this plugin are recorded in `<dataDir>/launches.json` (pid/port/log), which is why they can be
 > stopped; third-party plugins must be installed into that profile separately (`dsh plugin --profile <name> add <pkg>`).
-> The tab lives at Settings → "Backup & Migration" → **Profiles**.
+> The view lives at Settings → "Backup & Migration" → **Environment → Profiles**.
 
 ### 📸 Snapshot restore (undo an import)
 
@@ -398,30 +404,27 @@ Every import creates a **safety snapshot** first. If something feels off afterwa
 | File compensation | skills / agentPresets / agentInstructions / pluginFiles / sessions blobs are written back to their original paths |
 | Credentials | DSH never reads credential values back — you get a manual re-entry hint instead |
 
-**GUI**: Settings → "Backup & Migration" → **Snapshots & Restore** tab → pick a snapshot → preview the plan (dry-run, zero writes) → confirm.
+**GUI**: Library → switch the source filter to **"Local snapshots"** → the row's ⋯ menu → **"Restore"** → review the plan (dry-run, zero writes; a git-style line-by-line comparison) → confirm. The same menu offers "Inspect & compare / Migration consult / Pin / Delete", depending on what that row is.
 
 **Snapshot management:**
-- **Retention is visible** — up to **10** snapshots are kept automatically (oldest pruned); the hint is shown in the list
+- **Retention is visible** — how many snapshots are kept is up to your **retention policy** (Home → Scheduled backup card; the default keeps the newest **10**); the hint is shown in the list
 - **Pin important snapshots** — a pinned snapshot is exempt from auto-pruning and can only be deleted manually
 - **Manual delete** — remove any snapshot (danger, confirmed) when you no longer need that rollback point
 
-**Backup Files management** (same tab → "Backup Files"):
-- List every export ZIP (manual + scheduled) with source badge, size, time and your custom **note**
+**Backup files** (Library → **"Backup files"** source):
+
+- Every export ZIP in `exports/` (manual + scheduled) with its source badge, size, time and your **note**
 - **Search** by file name or note
 - **Inspect / Compare** — read-only preview of what the backup contains (sections + per-section counts) and the diff against your current config (zero writes) before deciding to import
+- Download, import straight back, delete
 
----
-
-
-**Backup files & disk usage**: the **"Backup Files"** sub-tab (Backups → snapshot tab) manages everything in
-`exports/` (manual exports + scheduled backups): download, import straight back, inspect, delete, search by
-name or note. The **"Disk Usage"** card on the same page lists what this plugin itself occupies (exports,
-pre-import snapshots, sync config and Git working copies, marketplace cache, temp staging, logs, transaction
-log, …) and labels each item's cleanup policy: **regenerated on demand** (caches/staging), **retained**
-(exports for 7 days, scheduled backups keep the latest N), or **your data / safety net** (snapshots and sync —
-never auto-cleaned). **"Clean now"** clears only regenerable caches by default; reclaiming expired backups is
-an explicit opt-in with a confirmation. Snapshots and sync data are never touched, and unreadable directories
-are reported as "not measured" instead of a misleading 0 bytes.
+**Disk usage** (Environment → Maintenance & Diagnostics): the "Disk usage" card lists what this plugin
+itself occupies (exports, pre-import snapshots, sync config and working copies, marketplace cache, temp
+staging, logs, transaction log, …) and labels each item's cleanup policy: **regenerated on demand**
+(caches/staging), **retained** (exports for 7 days, scheduled backups keep the latest N), or **your data /
+safety net** (snapshots and sync — never auto-cleaned). **"Clean now"** clears only regenerable caches by
+default; reclaiming expired backups is an explicit opt-in with a confirmation. Snapshots and sync data are
+never touched, and unreadable directories are reported as "not measured" instead of a misleading 0 bytes.
 
 ---
 
@@ -575,7 +578,18 @@ In the content picker, selecting sessions also selects the workspaces that own t
 
 Cross-machine restores need no extra step in the GUI: **exporting sessions now carries the workspaces that own them**, and the path mapping you fill in the import wizard rewrites both the workspace paths and the sessions' first-frame cwd (relocating the directories accordingly) before the sessions are attached to those workspaces.
 
-**Plugins installed but the backup doesn't see them?** Check **Settings → DSH Config Manager → About**: it now shows which directory / profile the plugin list was read from, and how many plugins were detected. The list comes from `$DSH_HOME/profiles/<profile>/package.json` → `dependencies` (plus anything declared in `dsh.profile.bundles` that is not a dependency), where `<profile>` is resolved as `config.profile` → `--profile` → `web`. If the shown path is not the profile you installed into (Desktop builds may use a different profile or a different `DSH_HOME`), that is the cause — align `--profile` / `DSH_HOME` with it.
+**Plugins installed but the backup doesn't see them?** Check **Settings → Backup & Migration → the About icon at the top right**: it shows which directory / profile the plugin list was read from, and how many plugins were detected. The list comes from `$DSH_HOME/profiles/<profile>/package.json` → `dependencies` (plus anything declared in `dsh.profile.bundles` that is not a dependency), where `<profile>` is resolved as `config.profile` → `--profile` → `web`. If the shown path is not the profile you installed into (Desktop builds may use a different profile or a different `DSH_HOME`), that is the cause — align `--profile` / `DSH_HOME` with it.
+
+**`web` — the offline rescue console (for when you would rather click than type).** It starts a small web page bound to **127.0.0.1 only** and lays out the same diagnostics and rescue actions in a browser:
+
+```bash
+dsh-config-manager web            # starts it and opens your browser (the terminal prints a one-time token URL)
+```
+
+- **Read-only:** running instances / SAFE MODE / leftover lock / snapshots / exported backups (with one-click verification) / disk usage / session health / profiles and their instances.
+- **Write actions (each needs an explicit confirmation in the page, and every one calls the same implementation as the CLI):** ① relocate misplaced sessions ② clear rebuildable caches and expired exports ③ reclaim a stale environment lock ④ start/stop a profile's standalone instance ⑤ **unlock an encrypted backup** (decrypted in memory, lists entries only — never written to disk) ⑥ **restore a snapshot** (see the per-item plan first, zero writes; restoring copies current files to `<snapshot>/pre-restore/` first) ⑦ **offline export** (file-based sections, self-checked right after writing) ⑧ **reinstall DSH** (uninstall + reinstall the global CLI; **requires a 6-character code printed only in the terminal**).
+- **Safety:** loopback-only binding; a one-time token printed to your terminal is exchanged for an HttpOnly + SameSite=Strict session cookie; the page has no scripts and no external resources. `Ctrl+C` or the idle timeout (30 minutes by default) shuts it down.
+- **Preconditions:** session relocation and restore need DSH stopped; with an unresolved SAFE MODE transaction or a leftover environment lock every write action is refused (the page says why). **Import** (writing a bundle back into this machine) stays on the GUI/CLI — structural sections need live DSH services.
 
 ### 🌐 Behind a proxy? (GitHub login / sync)
 
@@ -605,17 +619,6 @@ How it behaves:
 - This is **plugin-private**: it never changes global/process-wide network settings (unlike `NODE_USE_ENV_PROXY`, which affects the whole host process including model API calls).
 
 Alternative (host-wide): set `NODE_USE_ENV_PROXY=1` **before starting DSH** (Node 24+); note this also routes the host's own outbound traffic, not just this plugin's.
-
-**`web` — the offline rescue console (for when you would rather click than type).** It starts a small web page bound to **127.0.0.1 only** and lays out the same diagnostics and rescue actions in a browser:
-
-```bash
-dsh-config-manager web            # starts it and opens your browser (the terminal prints a one-time token URL)
-```
-
-- **Read-only:** running instances / SAFE MODE / leftover lock / snapshots / exported backups (with one-click verification) / disk usage / session health / profiles and their instances.
-- **Write actions (each needs an explicit confirmation in the page, and every one calls the same implementation as the CLI):** ① relocate misplaced sessions ② clear rebuildable caches and expired exports ③ reclaim a stale environment lock ④ start/stop a profile's standalone instance ⑤ **unlock an encrypted backup** (decrypted in memory, lists entries only — never written to disk) ⑥ **restore a snapshot** (see the per-item plan first, zero writes; restoring copies current files to `<snapshot>/pre-restore/` first) ⑦ **offline export** (file-based sections, self-checked right after writing) ⑧ **reinstall DSH** (uninstall + reinstall the global CLI; **requires a 6-character code printed only in the terminal**).
-- **Safety:** loopback-only binding; a one-time token printed to your terminal is exchanged for an HttpOnly + SameSite=Strict session cookie; the page has no scripts and no external resources. `Ctrl+C` or the idle timeout (30 minutes by default) shuts it down.
-- **Preconditions:** session relocation and restore need DSH stopped; with an unresolved SAFE MODE transaction or a leftover environment lock every write action is refused (the page says why). **Import** (writing a bundle back into this machine) stays on the GUI/CLI — structural sections need live DSH services.
 
 ### 🤖 Agent tools (for AI assistants)
 
@@ -660,7 +663,7 @@ Once the plugin is installed the tools appear automatically in every agent sessi
 Not by default. The default backup **never contains any secret value** — only records which keys you'll need to re-enter. If you explicitly choose an **encrypted backup**, secrets are included, but only as scrypt + AES-256-GCM ciphertext (random salt & IV per export) — never plaintext.
 
 **Q: Will importing overwrite my existing config?**
-Not silently. Conflicts ask you to choose (Keep Current / Use Imported); the target is auto-backed-up and can roll back.
+Not silently. Conflicts ask you to choose per item (Keep current / Use backup, with bulk buttons); the target is auto-snapshotted first and can roll back.
 
 **Q: Does it work across platforms (Windows → macOS)?**
 Yes. Dead absolute paths are detected and remapped (batch replacement supported).
@@ -669,7 +672,7 @@ Yes. Dead absolute paths are detected and remapped (batch replacement supported)
 No. A checksum mismatch rejects the import outright (protects against corruption or tampering).
 
 **Q: Will re-importing duplicate things?**
-No. Items are matched by stable IDs (plugin ID / MCP name / skill name…): identical ones are skipped, and ones that differ from the target surface as **conflicts you decide** (Keep Current / Use Imported) — nothing is overwritten silently.
+No. Items are matched by stable IDs (plugin ID / MCP name / skill name…): identical ones are skipped, and ones that differ from the target surface as **conflicts you decide** (Keep current / Use backup) — nothing is overwritten silently.
 
 **Q: Why is the console quiet after `dsh web` — how do I get the plugin logs back?**
 By design. Routine progress logs (mount banner, scheduler skips, export/backup completion) are emitted at `info`, and the shipped default level is `warn` — so only warnings and errors reach the terminal. Set `DSH_CONFIG_MANAGER_LOG_LEVEL=info` (or `debug`) before starting DSH to bring the verbose lines back.
@@ -702,7 +705,7 @@ Found a bug, a misaligned panel, a button that does nothing — or just have an 
 | 💬 **Not sure whether it is a bug — just asking** | [Discussions](https://github.com/xiajiajun516/dsh-config-manager/discussions) |
 | 🔒 **Security issue / leaked credential** | [Private security advisory](https://github.com/xiajiajun516/dsh-config-manager/security/advisories/new) (please do not open a public issue) |
 
-**Report straight from the plugin**: Settings → Backup & Migration → **About** → "Issues"; or hit **Copy environment info** on that page — plugin version / DSH version / platform are included, so you can paste it into the issue instead of typing version numbers.
+**Report straight from the plugin**: Settings → Backup & Migration → the **About icon at the top right** → "Issues"; or hit **Copy environment info** there — plugin version / DSH version / platform are included, so you can paste it into the issue instead of typing version numbers.
 
 **Every report gets followed up**: a new issue receives an immediate reply and the `needs-triage` label, and progress is visible in the labels (`needs-info` → `confirmed` → `fixed`). Fixed problems end up in [CHANGELOG.md](CHANGELOG.md) under the release that fixed them, tagged with the issue number (e.g. #38 / #43 / #45) — that is where a report finally lands.
 
@@ -723,9 +726,20 @@ Found a bug, a misaligned panel, a button that does nothing — or just have an 
   The report came with upstream evidence (host artwork frames of 48/36 px and 40/30 px, the official published bundle
   icons, the fixture SVG) and the PR shipped a 16/30/36/48 × dark/light acceptance sheet plus a written argument for
   keeping the proposal's palette over the plugin's brand blue.
-- **Bug reports**: `zhyx1996` (#38 sync "Export secrets" did nothing), `IPF-Sinon` (#39 the `.credentials.yaml` `refs:` block
-  was not recognized — they also implemented and machine-tested a fix in their own fork), `zerginlaw` (#43 "Back up now"
-  silently no-oped while toasting success). Each report drove one fix.
+- **iuuuuuuuu** — [PR #67](https://github.com/xiajiajun516/dsh-config-manager/pull/67) (merge `780af10`),
+  [PR #68](https://github.com/xiajiajun516/dsh-config-manager/pull/68) (`16e13c1`) and
+  [PR #72](https://github.com/xiajiajun516/dsh-config-manager/pull/72) (`6e552a0`): (1) a **repository picker** for the git
+  sync channel — choose from the **private** repositories the token can see (sorted by most recently updated; public
+  repositories are never listed), or create a private one inline; the create request does not even carry `private`, so
+  there is no way to express "public" on the client and the constraint lives on the host side. Along the way it fixed
+  the link-traversal boundary check that mixed `realpath` spellings (Windows 8.3 short names and macOS `/var` →
+  `/private/var` were misjudged `outside-home`, so linked content was silently dropped while the backup reported
+  success). (2) The Overview first paint no longer waits for a full read-only preview — the `plugins` section gained a
+  `preview()` (no more one `npm pack` per local plugin) and `settings` / `credentialsStatus` are read back in one call
+  instead of one `describe` per namespace (24 namespaces × 12 local plugins, 27.6 s of preview on a real machine).
+  (3) The issue #71 fix — MCP servers and skills configured in the shell were not backed up at all: patch rows are now
+  read per layer and written back to their own layer, and skills are collected through the shell's `skills` service.
+  All three shipped with unit tests and route / source-level guards.
 
 > Maintainers & developers: see [DEVELOPERS.md](DEVELOPERS.md) for build, testing, auto-publishing and full technical notes.
 

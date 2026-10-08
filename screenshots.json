@@ -2,10 +2,7 @@
   "https://github.com/xiajiajun516/dsh-config-manager": [
     "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-overview-en.png",
     "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-backups-en.png",
-    "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-export-en.png",
-    "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-import-en.png",
     "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-sync-en.png",
-    "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-market-en.png",
     "https://raw.githubusercontent.com/xiajiajun516/dsh-config-manager/main/assets/screenshot-profiles-en.png"
   ]
 }
