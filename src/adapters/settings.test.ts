@@ -6,7 +6,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SettingsAdapter } from './settings.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
-import type { PlanItem } from '../core/types.ts';
+import type { PlanItem, SensitiveHit } from '../core/types.ts';
+import { createSecretScanner } from '../security/secret-scanner.ts';
 
 const NS = ['general', 'theme', 'llm-deepseek'];
 
@@ -174,5 +175,41 @@ test('settings: describeAll 抛错时退回逐名路径（快路径失败不得�
   const out = await new SettingsAdapter(['general']).export(ctx, { includeSecrets: false });
   assert.equal(out.data.namespaces['general']?.revision, 3, '退回逐名 describe 后仍要读到值');
   assert.deepEqual(out.warnings, []);
+});
+
+test('settings: value/base 共享同一嵌套对象不得触发强化 scanner 的循环误报（用户上报 2026-10-09）', async () => {
+  const ctx = makeContext('win32', 'C:\\Users\\alice');
+  // 真实 DSH 的 describe() 同时回传 value（生效值）与 base（组合层）：未被用户覆盖的嵌套分组在两处是
+  // 同一个对象 → 导出结构里出现 DAG 共享引用。旧版全局 visited 判环会把它读成
+  // 「检测到循环引用，无法扫描（路径 namespaces.<ns>.value.<key>）」，整次备份失败。
+  const dream = { enabled: true, idleMinutes: 180, apiKey: 'sk-live-abcdefgh12345' };
+  ctx.settings.ns.set('meow-memory', {
+    value: { promptLang: 'zh', dream },
+    base: { promptLang: 'zh', dream },
+    revision: 3,
+    secrets: [],
+  });
+  const adapter = new SettingsAdapter(['meow-memory']);
+  const exported = await adapter.export(ctx, { includeSecrets: false });
+  const rec = exported.data.namespaces['meow-memory'];
+  // 前置条件：导出的 value/base 确实共享同一个对象（否则这条测试没覆盖到目标形态）
+  assert.strictEqual(
+    (rec?.value as { dream?: unknown } | undefined)?.dream,
+    (rec?.base as { dream?: unknown } | undefined)?.dream,
+    'value/base 必须共享同一 dream 对象',
+  );
+
+  const scanner = createSecretScanner();
+  let scanned: { sanitized: unknown; hits: SensitiveHit[] } | undefined;
+  assert.doesNotThrow(() => { scanned = scanner.scanAndRedact(exported.data); }, '共享引用不得被误判为循环');
+  const outRec = (scanned!.sanitized as {
+    namespaces: Record<string, { value: { dream: Record<string, unknown> }; base: { dream: Record<string, unknown> } }>;
+  }).namespaces['meow-memory']!;
+  // 两个分支都要在，且各自完成脱敏（不能因为共享就丢分支或漏剥）
+  assert.equal(outRec.value.dream['apiKey'], '', 'value 分支脱敏');
+  assert.equal(outRec.base.dream['apiKey'], '', 'base 分支脱敏');
+  assert.equal(outRec.value.dream['idleMinutes'], 180, '非敏感字段保留');
+  assert.ok(scanned!.hits.some((h) => h.path === 'namespaces.meow-memory.value.dream.apiKey'));
+  assert.ok(scanned!.hits.some((h) => h.path === 'namespaces.meow-memory.base.dream.apiKey'));
 });
 

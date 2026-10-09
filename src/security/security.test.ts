@@ -727,6 +727,53 @@ test('scanner: 深层嵌套上限（≤64 通过，超限抛错）与循环引�
   assert.throws(() => scanAndRedact(cyclic), /循环引用/);
 });
 
+test('scanner: DAG 共享引用不得被误判为循环（用户上报 2026-10-09：settings value/base 共享 → 备份整体失败）', () => {
+  // 同一对象被两处引用（彼此不是祖先关系）是合法数据：settings 的 value/base 共享未覆盖的嵌套分组、
+  // providers 的多 route 共享 raw 都长这样。判环只看祖先链 → 放行，且两个分支各自完成脱敏。
+  const dream = { enabled: true, idleMinutes: 180, apiKey: 'sk-live-abcdefgh12345' };
+  const data = {
+    namespaces: {
+      'meow-memory': {
+        value: { promptLang: 'zh', dream },
+        base: { promptLang: 'zh', dream },
+        revision: 3,
+        secrets: [],
+      },
+    },
+  };
+  const { sanitized, hits } = scanAndRedact(data);
+  const rec = (sanitized as {
+    namespaces: Record<string, { value: { dream: Record<string, unknown> }; base: { dream: Record<string, unknown> } }>;
+  }).namespaces['meow-memory']!;
+  assert.equal(rec.value.dream['apiKey'], REDACTED_PLACEHOLDER, 'value 分支必须脱敏');
+  assert.equal(rec.base.dream['apiKey'], REDACTED_PLACEHOLDER, 'base 分支必须脱敏');
+  assert.equal(rec.value.dream['idleMinutes'], 180, '非敏感字段保留');
+  assert.equal(rec.base.dream['idleMinutes'], 180);
+  assert.notStrictEqual(rec.value.dream, rec.base.dream, '输出必须是各自独立的副本');
+  assert.ok(hits.some((h) => h.path === 'namespaces.meow-memory.value.dream.apiKey'), '命中路径须点名 value 分支');
+  assert.ok(hits.some((h) => h.path === 'namespaces.meow-memory.base.dream.apiKey'), '命中路径须点名 base 分支');
+});
+
+test('scanner: 数组分支的共享引用放行，真环（对象环 / 数组环 / 深层回指）仍必须抛', () => {
+  const shared = { token: 'ghp_abcdefghijklmnopqrstuvwxyz012345' };
+  const { sanitized } = scanAndRedact({ a: { x: shared }, b: { y: shared }, c: { z: shared } });
+  const s = sanitized as { a: { x: { token: string } }; b: { y: { token: string } }; c: { z: { token: string } } };
+  assert.equal(s.a.x.token, REDACTED_PLACEHOLDER);
+  assert.equal(s.b.y.token, REDACTED_PLACEHOLDER);
+  assert.equal(s.c.z.token, REDACTED_PLACEHOLDER);
+  assert.notStrictEqual(s.a.x, s.b.y, '三处共享引用必须各写一份独立副本');
+
+  // 数组自环
+  const arrayCycle: unknown[] = [1];
+  arrayCycle.push(arrayCycle);
+  assert.throws(() => scanAndRedact({ x: arrayCycle }), /循环引用/);
+
+  // 同一对象既是自己的祖先（隔着若干层回指）→ 仍必须抛，不能因为「见过」就放行
+  const root: Record<string, unknown> = {};
+  root['deep'] = { mid: { back: root } };
+  assert.throws(() => scanAndRedact(root), /循环引用/);
+});
+
 test('scanner: Uint8Array 跳过、数组根、空字符串不报 hit、extra 名单扩展', () => {
   const bin = new Uint8Array([1, 2, 3]);
   const input = { data: bin, empty: '', clientSecret2: 'x', normal: 42 };

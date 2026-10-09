@@ -22,6 +22,8 @@
  *  - 高熵 base64 默认关（误伤率高）。
  *
  * 实现不变量：返回 sanitized 为**全新对象**（不改原数据）；迭代式显式栈（防爆栈）+ 深度上限；
+ * 判环只看**当前路径的祖先链**（`ancestors`）——同一对象被两处引用（DAG）不是环，用全局 visited
+ * 会把共享引用误判成循环引用并让整次导出失败；
  * 命中记录只含路径与字段名，**值永不外泄**。
  */
 import { JsonDepthError } from '../utils/json.ts';
@@ -352,14 +354,16 @@ export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): {
   if (data instanceof Uint8Array) return { sanitized: data, hits };
 
   const rootOut: unknown = Array.isArray(data) ? [] : {};
-  interface Frame { src: unknown; dst: unknown; path: string; depth: number }
-  const stack: Frame[] = [{ src: data, dst: rootOut, path: '', depth: 1 }];
-  const visited = new WeakSet<object>();
-  visited.add(data as object);
+  // 判环判据 = **当前路径的祖先链**，绝不是「本次扫描见过的对象集合」：settings 的 value/base 共享
+  // 未覆盖的嵌套分组、providers 的多 route 共享 raw 等 DAG 形态都是合法数据，全局 visited 会把它们
+  // 误判成「检测到循环引用」并让整次导出/同步失败（用户上报 2026-10-09：备份失败 → intent journal
+  // 记 NEEDS_ATTENTION + durable SAFE MODE）。祖先链只回答「它是不是它自己的祖先」。
+  interface Frame { src: unknown; dst: unknown; path: string; depth: number; ancestors: ReadonlySet<object> }
+  const stack: Frame[] = [{ src: data, dst: rootOut, path: '', depth: 1, ancestors: new Set<object>([data as object]) }];
 
   while (stack.length > 0) {
     const frame = stack.pop()!;
-    const { src, dst, path, depth } = frame;
+    const { src, dst, path, depth, ancestors } = frame;
     if (depth > maxDepth) throw new JsonDepthError(securityMsg('security.scanDepthExceeded', { depth, max: maxDepth }));
     if (src instanceof Uint8Array) continue;
 
@@ -369,11 +373,12 @@ export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): {
         const v = src[i];
         const childPath = `${path}[${i}]`;
         if (v !== null && typeof v === 'object' && !(v instanceof Uint8Array)) {
-          if (visited.has(v)) throw new Error(securityMsg('security.circularReference', { path: childPath }));
-          visited.add(v);
+          if (ancestors.has(v)) throw new Error(securityMsg('security.circularReference', { path: childPath }));
+          const childAncestors = new Set(ancestors);
+          childAncestors.add(v);
           const childOut: unknown = Array.isArray(v) ? [] : {};
           outArr.push(childOut);
-          stack.push({ src: v, dst: childOut, path: childPath, depth: depth + 1 });
+          stack.push({ src: v, dst: childOut, path: childPath, depth: depth + 1, ancestors: childAncestors });
         } else {
           outArr.push(v);
         }
@@ -394,11 +399,12 @@ export function scanAndRedact(data: unknown, opts: SecretScannerOptions = {}): {
         continue;
       }
       if (v !== null && typeof v === 'object' && !(v instanceof Uint8Array)) {
-        if (visited.has(v)) throw new Error(securityMsg('security.circularReference', { path: childPath }));
-        visited.add(v);
+        if (ancestors.has(v)) throw new Error(securityMsg('security.circularReference', { path: childPath }));
+        const childAncestors = new Set(ancestors);
+        childAncestors.add(v);
         const childOut: unknown = Array.isArray(v) ? [] : {};
         outObj[k] = childOut;
-        stack.push({ src: v, dst: childOut, path: childPath, depth: depth + 1 });
+        stack.push({ src: v, dst: childOut, path: childPath, depth: depth + 1, ancestors: childAncestors });
       } else {
         outObj[k] = v;
       }

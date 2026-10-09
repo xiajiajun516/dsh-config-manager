@@ -129,6 +129,30 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+> **备份/导出不再把「共享引用」误判成循环引用**（用户上报 2026-10-09，0.1.66 真机）：敏感扫描器判环用的是
+> **全局 visited**（"本次扫描见过的对象"），而 settings 分区的 `value` 与 `base` 在未被用户覆盖的嵌套分组上
+> 是**同一个对象**（DAG 共享引用，不是环），于是扫描抛 `检测到循环引用，无法扫描（路径 namespaces.<ns>.value.<key>）`，
+> 整次备份失败、导出目录为空；又因为备份跑在 intent journal 内，异常还会写 `NEEDS_ATTENTION` + durable SAFE MODE，
+> 把用户连锁顶进「写操作持续 423」的死结（0.1.66 的现场）。现在判环只看**当前路径的祖先链**（`ancestors`）：
+> 共享引用放行（输出各写一份独立副本），真环（对象环 / 数组环 / 深层回指）照旧抛错，深度上限与脱敏语义一字未动。
+> 影响面不止 settings —— 同一个扫描器被 exporter / sync / market / foreign / consult / migration-history 等 10 处
+> 调用点复用，任何分区的共享引用都会踩到。
+> - **护栏**：`src/security/security.test.ts`（DAG 放行 + 两个分支各自脱敏 + 真环仍抛）、
+>   `src/adapters/settings.test.ts`（value/base 共享的 settings 导出过 scanner 不抛）。
+>
+> **Backups no longer mistake shared references for cycles** (user report, 2026-10-09): the secret scanner's cycle
+> detection used a **global visited set** ("objects seen during this scan"), but a settings section's `value` and `base`
+> share the same object for nested groups the user never overrode — a DAG, not a cycle. The scan threw
+> `Circular reference detected, cannot scan (path namespaces.<ns>.value.<key>)`, the whole backup failed, and because the
+> backup runs inside an intent journal the exception also wrote `NEEDS_ATTENTION` plus a durable SAFE MODE, leaving the
+> user with persistent 423 responses on every write (the 0.1.66 scene). Cycle detection now consults only the
+> **ancestor chain of the current path**: shared references pass (each occurrence gets its own copy), real cycles
+> (object / array / deep back-reference) still throw, and the depth limit and redaction semantics are unchanged. The same
+> scanner is reused by exporter / sync / market / foreign / consult / migration-history (10 call sites), so the fix covers
+> every section, not just settings.
+> - **Guards**: `src/security/security.test.ts` (DAG passes with both branches redacted; real cycles still throw),
+>   `src/adapters/settings.test.ts` (a settings export with a shared value/base survives the scanner).
+
 > **首页状态条：英文不再变形、中文不再被裁**（两轮真机截图反馈）：状态条按 32px **单行**设计，而英文标签比
 > 中文长约 50%（实测 5 段 688px > 画布可用 ~527px），折行后两行被挤进 32px 的框里、第二行贴着下边框。第一轮
 > 只补行距 / 段内上下内边距后，又暴露出第二层根因：`.statStrip` 自身没有 `flex: none`，而 `.viewBody` 是 column
