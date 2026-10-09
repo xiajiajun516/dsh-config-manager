@@ -140,9 +140,15 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
                             <span className={css.categoryName}>{sectionName(s.id)}</span>
                             <span className={css.categoryDesc}>{s.description}</span>
                             {s.portability === 'portable' && <Badge kind="info">{t('mode.sectionPortable')}</Badge>}
+                            {s.portability === 'platformSpecific' && (
+                              <Badge kind="warn">{t('mode.sectionPlatformSpecific')}</Badge>
+                            )}
                             {s.portability === 'deviceSpecific' && (
                               <Badge kind="warn">{t('mode.sectionDeviceSpecific')}</Badge>
                             )}
+                            {/* issue #78：MCP 的机器相关内容（绝对路径 command / cwd、缺运行时）走 ⓘ，
+                                与「机制说明进 InfoHint」的同一条纪律（见 info-hint-guard）。 */}
+                            {s.id === 'mcp' && <InfoHint text={t('mode.mcpHint')} label={t('common.infoHint')} />}
                             {s.defaultIncluded && <Badge kind="ok">{t('mode.sectionRecommended')}</Badge>}
                           </span>
                         }

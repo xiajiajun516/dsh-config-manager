@@ -30,6 +30,43 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🆕 新增 · Added
 
+> **MCP 服务器可以走同步通道了（可选分区，逐分区放行）**（issue #78）：v0.1.69 起同步通道（Git / WebDAV / 对象存储 / Gist）
+> **只处理 portable 分区**，而 `mcp` 注册为 `platformSpecific` —— 高级模式勾上它只会得到 `sync.skipNonPortable` 警告，
+> 快照里**从来没有这个分区**，换机后只能手写 `dsh-mcp-client` 行。
+> - **单一事实源**：分区注册表新增 `syncOptIn: 'off' | 'manual' | 'auto'`（此前 `optInSync: boolean` 是**死字段**，真正的白名单
+>   是 `sync-selection.ts` 里手写的 `['sessions']` —— 两份字面量、零护栏）。`mcp='auto'`（勾选后手动与自动同步都带）、
+>   `sessions='manual'`（仍只跟随手动 push/pull）、其余 `'off'`；`OPT_IN_SYNC_SECTIONS` 改为注册表派生视图。
+> - **放行粒度从布尔改为分区集合**：`SyncEngineOptions.includeOptInSections: boolean` → `optInSections: readonly SectionId[]`。
+>   旧布尔是「任一可选分区被勾 → 拉取侧放行**全部**可选分区」，加了 mcp 之后会变成「只勾 mcp 也会把远端会话拉下来」——
+>   这条回归在 `sync-engine.test.ts` 有专门用例钉住。自动同步仍只放行 `'auto'` 档，**会话绝不悄悄上行/下行**。
+> - **如实说明**：拉取侧 mcp 是 medium 风险 → `classifyMergePlan` 把它放进 **review（差异确认）**，自动同步**不会静默写入** mcp
+>   （首次同步更是全量待审）；也就是「自动同步」只保证远端快照带上了它，目标机落盘仍需一次人工确认。
+> - **界面**：同步分区弹窗给 `platformSpecific` 补上「平台相关」徽章（此前这类分区只显示「推荐」，看着像可移植），
+>   并给 MCP 行加 ⓘ 说明（patch 行按层写回；npx / uvx / pipx 装的可跨机；绝对路径 command / cwd 或目标机缺运行时时以导入分析提示为准）。
+> - **护栏**：`src/sync/sync-engine.test.ts`（3 条：未放行跳过并告警 / 放行 mcp 不得连带放行 sessions（推 + 拉）/ 自动同步档 push 携带 mcp）、
+>   `src/sync/sync-selection.test.ts`（白名单 = 注册表派生；auto 档 = `['mcp']`）、`src/schema/registry.test.ts`。
+
+> **MCP servers can now travel over the sync channel (opt-in section, per-section granting)** (issue #78): since v0.1.69 the sync channel
+> (Git / WebDAV / object storage / Gist) **only handles portable sections**, while `mcp` is registered `platformSpecific` — ticking it in advanced
+> mode only produced a `sync.skipNonPortable` warning and the section was **never** in the snapshot, so the target machine had to have its
+> `dsh-mcp-client` rows written by hand.
+> - **Single source of truth**: the section registry gains `syncOptIn: 'off' | 'manual' | 'auto'` (the old `optInSync: boolean` was a **dead field**;
+>   the real whitelist was the hand-written `['sessions']` in `sync-selection.ts` — two literals, zero guards). `mcp='auto'` (carried by both manual
+>   and auto sync once ticked), `sessions='manual'` (still manual push/pull only), everything else `'off'`; `OPT_IN_SYNC_SECTIONS` is now derived.
+> - **Granting is per section, not a boolean**: `SyncEngineOptions.includeOptInSections: boolean` → `optInSections: readonly SectionId[]`. The old
+>   boolean meant "any opt-in section ticked → grant **all** opt-in sections on pull", which with mcp added would have pulled remote sessions down
+>   even when only mcp was ticked; `sync-engine.test.ts` pins that regression. Auto sync still grants only the `'auto'` tier, so **sessions are
+>   never uploaded or downloaded silently**.
+> - **Stated honestly**: on the pull side mcp is `medium` risk, so `classifyMergePlan` puts it in **review (diff confirmation)** — auto sync does
+>   **not** apply mcp silently (a first sync reviews everything). Auto sync only guarantees the remote snapshot carries it; writing it locally still
+>   needs one human confirmation.
+> - **UI**: the sync-section dialog now badges `platformSpecific` sections as "Platform-dependent" (previously such a section only showed
+>   "Recommended", looking portable) and adds an ⓘ for MCP rows (patch rows are restored to their own layer; npx / uvx / pipx installs are portable;
+>   absolute-path command / cwd or a missing runtime on the target is reported by the import analysis).
+> - **Guards**: `src/sync/sync-engine.test.ts` (3 cases: skipped + warned when not granted / granting mcp must not grant sessions (push and pull)
+>   / auto-sync push carries mcp), `src/sync/sync-selection.test.ts` (whitelist derived from the registry; auto tier = `['mcp']`),
+>   `src/schema/registry.test.ts`.
+
 > **检查点接进界面：会话 / 工作区 / 插件配置「三态同点」现在拍得到、回滚得了**（**G-30 收口**）：宿主侧能力（引擎 + 7 条子路径 + 23 条测试）
 > 早已交付，但 `src/client/**` **零消费者** —— 这条能力对用户根本不存在（点不到）。现在**环境 → 维护与诊断**新增「检查点」卡，
 > ⌘K 同族新增一条「检查点（回到某个时刻）」命令直达同一落点。卡片能力：**拍点**（工作区路径分块逐行填，

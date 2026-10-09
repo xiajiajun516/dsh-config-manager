@@ -288,6 +288,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | **R11** | 插件加载器改为**强制 peer / engines 校验**（0.1.7 起已落地为兼容闸） | 安装/启动期 | 插件装不上，或启动即被**静默跳过**（stderr 一行 `skipping profile bundle`） | 闸门判定式见 §3.3；peer 范围必须在 `{includePrerelease:true}` 下满足实际 runtime（`tests/packaging-contract.test.ts` 的 P-3 已钉住 14 条 peer 的形状） |
 | **R12** | DSH 进入 `0.3.x` | 全部 peer 范围 | 同 R11（现行上界 `<0.3.0-0` 恰好挡住 `0.3.0-0` 及以上的预发布版；`0.2.x` 已放行） | §3.3 现行区间表末行；越过 0.3 前必须按 M8 重采证据集 |
 | **R13** | `$DSH_HOME/cordis.patch.yml` 或 profile patch 文件格式变化（含**合并顺序**变化） | MCP 分区、prompts 分区、插件激活行 | MCP/prompts 导入后不生效；`patch 行` 解析报错；**同一条 lineId 在两层各一份时以哪层为准**（本插件按 home 层优先，与 DSH 的合并序一致） | `src/core/patch-layers.ts` 的 `readEffectivePatchLines`（两层读取 + 按层优先去重）与 `patchLayerRels`；`src/index.ts` 的 `DshPatchFileFacade`（`patchFile.readPatchLines`）；`src/adapters/mcp.ts`；`src/adapters/prompts.ts` |
+| **R15** | DSH 的 MCP 配置形态变化：`dsh-mcp-client` patch 行的字段（`config.serverName` / `command` / `args` / `cwd` / `url`）或合并顺序变化 | `mcp` 分区的导出/导入与**同步通道**（可选分区） | MCP 服务器导入后不出现、或参数错位；同步时 `mcp` 分区内容为空 | `src/adapters/mcp.ts`（`extractMcpServers` 按 `config.serverName` 判定 + 两形态兼容）、`src/core/patch-layers.ts`（按层读回）、`src/schema/section-registry.ts` 的 `mcp.syncOptIn='auto'`（issue #78；放行集合由 `SyncEngineOptions.optInSections` 决定） |
 | **R14** | profile 目录布局变化（`profiles/<name>/` 或 `profiles/node_modules`） | `resolveDshVersion`（版本显示）、`resolveProfileDir`、插件 CLI 通道 | 关于页版本显示 `unknown`；插件安装/列举失败 | `src/index.ts` 的 `resolveDshVersion`（两个候选路径）；`src/core/plugin-cli.ts` |
 
 ### 5.1 按「先破顺序」排序的直觉

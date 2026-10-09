@@ -22,6 +22,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type { SectionId } from '../schema/types.ts';
+import { AUTO_SYNC_OPT_IN_SECTION_IDS, OPT_IN_SYNC_SECTION_IDS } from '../schema/section-registry.ts';
 import { channelMap } from './sync-config.ts';
 import type { SyncTransportType } from './sync-config.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
@@ -64,13 +65,25 @@ export interface SyncSelection {
 export type SyncSelectionByChannel = Record<SyncTransportType, SyncSelection>;
 
 /**
- * 显式勾选才允许进入同步通道的「可选分区」（缺省全为 deviceSpecific，不在推荐分区里）。
+ * 显式勾选才允许进入同步通道的「可选分区」。
  *
- * 目前只有 sessions（历史会话）：内容敏感 + 设备相关，**绝不默认进入同步通道**，
- * 只有用户在同步分区弹窗里显式勾选才纳入；且必须带数量上限（见 DEFAULT_SYNC_SESSIONS_LIMIT），
- * 避免一次把整棵会话树推上远端。凭据 / 密钥分区不在此列（结构性拒绝，永不进同步）。
+ * **单一事实源 = 分区注册表**（\`SectionMeta.syncOptIn !== 'off'\`）。本文件此前手写
+ * \`['sessions']\`，与 \`section-registry.ts\` 的同名字段是**两份字面量、零护栏**
+ * （改一处漏一处不会报错）—— issue #78 收敛为派生视图，并在测试里钉住。
+ *
+ * 当前 = mcp（'auto'，命令 / 路径可能机器相关）+ sessions（'manual'，内容敏感 + 设备相关）。
+ * 凭据 / 密钥分区不在此列（结构性拒绝，永不进同步）。
  */
-export const OPT_IN_SYNC_SECTIONS: readonly SectionId[] = ['sessions'];
+export const OPT_IN_SYNC_SECTIONS: readonly SectionId[] = OPT_IN_SYNC_SECTION_IDS;
+
+/**
+ * 「可选分区」里**允许参与自动同步**的子集（当前 = mcp）。
+ *
+ * 手动与自动的差别只在这里：sessions 是内容隐私 / 设备相关，自动同步绝不带
+ * （「会话绝不悄悄下行」从注释变成可测断言）；mcp 只是命令 / 路径可能与目标机不同，
+ * 用户显式勾选后手动与自动都带。
+ */
+export const AUTO_SYNC_OPT_IN_SECTIONS: readonly SectionId[] = AUTO_SYNC_OPT_IN_SECTION_IDS;
 
 /** sessions 分区默认同步「最新 N 个会话」（用户可在弹窗里改；0 = 不带）。 */
 export const DEFAULT_SYNC_SESSIONS_LIMIT = 5;

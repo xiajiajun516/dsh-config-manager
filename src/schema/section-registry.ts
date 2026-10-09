@@ -16,7 +16,7 @@
  *        此前写死的注册表锚点已与实测不符、复核后纠正；实测命令见下）：
  *        - `schema/section-registry.ts` 的 `SECTION_REGISTRY: Record<SectionId, SectionMeta>`（报错落在该声明处）——
  *          缺 id → TS2741；该条目需逐项填 displayName / group / payload（zipPath 或 filePrefix）/ dataVersion /
- *          applyOrder / portability / optInSync / defaultIncluded / **riskTier** / **configSnapshot**；
+ *          applyOrder / portability / syncOptIn / defaultIncluded / **riskTier** / **configSnapshot**；
  *        - `core/backup.ts` 的 `const unhandled: never = target.adapter` 穷尽 switch → TS2322；
  *        - `client/common/section-labels.ts` 的 `SECTION_LABEL_KEY: Record<SectionId, ConfigManagerKey>` i18n 标签 → TS2741；
  *        - `ui/export-flow.ts` 的 `CATEGORY_DESCRIPTIONS: Record<Exclude<SectionId,'secrets'>, string>` → TS2741；
@@ -53,7 +53,8 @@
  *  - 需要「分区集合」→ `SECTION_IDS`（按 applyOrder 升序，与历史数组逐项一致）；
  *  - 需要 ZIP 路径 → `jsonPathOf(id)`（null = 该分区无 JSON 载荷）或 `SECTION_JSON_PATHS`；
  *  - 需要文件类目录前缀 → `filePrefixOf(id)`（null = 非文件类）或 `SECTION_FILE_PREFIXES`；
- *  - 需要 portability → `sectionMeta(id).portability`；需要同步可选分区 → `OPT_IN_SYNC_SECTION_IDS`；
+ *  - 需要 portability → `sectionMeta(id).portability`；需要同步可选分区 → `OPT_IN_SYNC_SECTION_IDS`
+ *    （其中允许自动同步的子集 → `AUTO_SYNC_OPT_IN_SECTION_IDS`）；
  *  - 需要「快速导出默认勾选」→ `DEFAULT_INCLUDED_SECTION_IDS`；
  *  - 需要灾备（配置状态快照）采集口径 → `CONFIG_SNAPSHOT_SECTION_IDS`；
  *  - 需要风险等级 → `sectionMeta(id).riskTier`（sync 侧经 `riskTierOf(id)`；未注册 → undefined → 待审）；
@@ -75,6 +76,13 @@ export type SectionPortability = 'portable' | 'deviceSpecific' | 'platformSpecif
  * 这是**产品决策**，因此与其它分区事实一样必须逐分区显式表态（t34 起并入 SectionMeta）。
  */
 export type SectionRiskTier = 'low' | 'medium' | 'high';
+
+/**
+ * 同步准入档位（见 \`SectionMeta.syncOptIn\`）：
+ * 'off' = 不进同步通道；'manual' = 显式勾选且**只跟随手动 push/pull**；
+ * 'auto' = 显式勾选后手动与自动同步都带。
+ */
+export type SectionSyncOptIn = 'off' | 'manual' | 'auto';
 
 /**
  * 分区载荷形态（决定 ZIP 内表示 + 结构校验方式）。
@@ -132,8 +140,16 @@ export interface SectionMeta {
   readonly applyOrder: number;
   /** 可移植性（同步/分享/市场据此过滤） */
   readonly portability: SectionPortability;
-  /** 同步「可选分区」：永不默认进入同步通道，必须推/拉两侧显式放行（当前仅 sessions） */
-  readonly optInSync: boolean;
+  /**
+   * 同步准入档位（非 portable 分区的显式准入；portable 分区恒为 'off'，走默认通道）。
+   *  - 'off'    = 永不进入同步通道；
+   *  - 'manual' = 必须用户在同步分区弹窗里显式勾选，且**只跟随用户驱动的手动 push/pull**；
+   *               自动同步永不带（内容隐私 / 设备相关，例如 sessions）；
+   *  - 'auto'   = 用户显式勾选后，手动与自动同步都带（内容可跨机，只是命令 / 路径可能与
+   *               目标机不同，例如 mcp）。
+   * **必填**（Record<SectionId, SectionMeta> 强制）：新增分区漏填即 tsc 报错。
+   */
+  readonly syncOptIn: SectionSyncOptIn;
   /** 快速导出（Quick Export）默认勾选（deviceSpecific 分区即使 true 也不会被推荐） */
   readonly defaultIncluded: boolean;
   /**
@@ -164,7 +180,9 @@ export const SECTION_DATA_VERSION = 1 as const;
  *  - `portability` / `defaultIncluded` ← 各 adapter 的 `portability` / `defaultIncluded`，
  *    以及 `ui/export-flow.ts` 的内置目录、`market/prepare.ts` 的 SECTION_PORTABILITY
  *    （三者此前必须人工保持一致，现以本表为源）；
- *  - `optInSync` ← `sync/sync-selection.ts` 的 OPT_IN_SYNC_SECTIONS（当前仅 sessions）；
+ *  - `syncOptIn` ← **本表声明**（mcp='auto' / sessions='manual' / 其余 'off'），
+ *    `sync/sync-selection.ts` 的 OPT_IN_SYNC_SECTIONS 与 `AUTO_SYNC_OPT_IN_SECTION_IDS` 都是它的派生视图
+ *    （此前是两份手写字面量、零护栏 —— issue #78 收敛为单一事实源）；
  *  - `applyOrder` ← 历史 SECTION_IDS 数组顺序（1 起，连续）。
  */
 export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
@@ -177,7 +195,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 1,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -190,7 +208,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 2,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -203,7 +221,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 3,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -219,7 +237,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 4,
     riskTier: 'medium',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -232,7 +250,10 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 5,
     riskTier: 'medium',
     portability: 'platformSpecific',
-    optInSync: false,
+    // issue #78：MCP 行只写 patch 行（导入期按层写回），按包安装的 stdio server
+    // （npx / uvx / pipx）配置本身可跨机 —— 只是命令 / cwd 可能与目标机不同，
+    // 由导入分析期 warning 提示。用户显式勾选后，手动与自动同步都带。
+    syncOptIn: 'auto',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -245,7 +266,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 6,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -258,7 +279,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 7,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -271,7 +292,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 8,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -284,7 +305,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 9,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -297,7 +318,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 10,
     riskTier: 'medium',
     portability: 'platformSpecific',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -310,7 +331,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 11,
     riskTier: 'high',
     portability: 'deviceSpecific',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: false,
     configSnapshot: true,
   },
@@ -323,7 +344,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 12,
     riskTier: 'high',
     portability: 'deviceSpecific',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -337,7 +358,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 13,
     riskTier: 'high',
     portability: 'deviceSpecific',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: false,
     configSnapshot: false,
   },
@@ -350,7 +371,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 14,
     riskTier: 'high',
     portability: 'deviceSpecific',
-    optInSync: true,
+    syncOptIn: 'manual',
     defaultIncluded: false,
     configSnapshot: false,
   },
@@ -363,7 +384,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     applyOrder: 15,
     riskTier: 'low',
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
   },
@@ -426,9 +447,24 @@ export const PORTABLE_SECTION_IDS: readonly SectionId[] = SECTION_IDS.filter(
   (id) => SECTION_REGISTRY[id].portability === 'portable',
 );
 
-/** 同步「可选分区」：永不默认进入同步通道，必须推/拉两侧显式放行（当前仅 sessions） */
+/**
+ * 同步「可选分区」：非 portable、必须推/拉两侧显式放行的分区（syncOptIn !== 'off'）。
+ * 当前 = ['mcp', 'sessions']。**顺序按 applyOrder**（mcp=5 在 sessions=14 之前）。
+ */
 export const OPT_IN_SYNC_SECTION_IDS: readonly SectionId[] = SECTION_IDS.filter(
-  (id) => SECTION_REGISTRY[id].optInSync,
+  (id) => SECTION_REGISTRY[id].syncOptIn !== 'off',
+);
+
+/**
+ * 「可选分区」里**允许参与自动同步**的子集（syncOptIn === 'auto'）。
+ *
+ * 为什么必须单独一档：可选分区的准入理由不同 ——
+ *  - sessions 是**内容隐私 / 设备相关**（high 风险，自动同步绝不带，绝不悄悄下行会话）；
+ *  - mcp 只是**命令 / 路径可能与目标机不同**（medium 风险，用户勾了就该跟着自动同步走）。
+ * 用一个布尔没法表达这层差别，会退化成「勾了 mcp 顺带放行 sessions」。
+ */
+export const AUTO_SYNC_OPT_IN_SECTION_IDS: readonly SectionId[] = SECTION_IDS.filter(
+  (id) => SECTION_REGISTRY[id].syncOptIn === 'auto',
 );
 
 /** 快速导出默认勾选的分区（deviceSpecific 仍需 UI 就地警示，见 export-flow） */

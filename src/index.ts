@@ -132,7 +132,7 @@ import {
 } from './routes/session-format.ts'
 import type { SessionFormatDisposition } from './core/types.ts'
 import type { SyncConfig, SyncTransportType } from './sync/sync-config.ts'
-import { defaultSyncSelection, effectiveSections, normalizeSessionsInclude, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readSyncSelection } from './sync/sync-selection.ts'
+import { AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, normalizeSessionsInclude, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readSyncSelection } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
 import type { SyncTransport } from './sync/transport.ts'
 import { GitMarketReader } from './market/reader.ts'
@@ -1682,7 +1682,7 @@ export async function tryDecryptCredentials(
  * （见 W1 报告的重测配方），把结果落到这里；makeRoutes 里的 const routeEnv: RouteEnvInferred =
  * 注解保证两侧不漂移（新增依赖漏登记会在构造点报错）。
  */
-export type RouteEnvInferred = { sessionExportFetch: ((input: string, init: RequestInit) => Promise<Response>) | undefined; sessionExportPort: number | undefined; adapters: ConfigAdapter<unknown>[]; sessionHealth: { homeDir: string; targetFormatVersion: () => number | undefined; workspaceKeys: () => Promise<ReadonlySet<string>>; knownSessionIds: () => Promise<ReadonlySet<string>>; }; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { includeOptInSections?: boolean; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketDir: string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; profileLauncher: DshProfileLauncher; profileRuntime: DshProfileRuntimeRegistry; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<SyncTransportType, SyncSelection>>; selectionHasOptInSections: (channel: SyncTransportType) => boolean; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); selfUpdate: (targetVersion: string) => Promise<SelfUpdateOutcome>; writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
+export type RouteEnvInferred = { sessionExportFetch: ((input: string, init: RequestInit) => Promise<Response>) | undefined; sessionExportPort: number | undefined; adapters: ConfigAdapter<unknown>[]; sessionHealth: { homeDir: string; targetFormatVersion: () => number | undefined; workspaceKeys: () => Promise<ReadonlySet<string>>; knownSessionIds: () => Promise<ReadonlySet<string>>; }; backupScheduler: BackupScheduler; bootSafetyAudit: () => Promise<BootSafetyReport>; cancelDecisionTimeoutMs: number; buildMarketSummary: (e: { url: string; addedAt: string; }) => Promise<MarketSummary>; credentials: CredentialProvider; dataDir: string; exportsDir: string; githubAuth: GitHubAuthClient; githubClientId: string | undefined; githubClientSecret: string | undefined; githubFlows: DeviceFlowStore; history: MigrationStore; host: ConfigManagerHostContext; itemCached: (url: string, itemId: string) => Promise<boolean>; knownSyncSectionIds: Set<SectionId>; makeImporter: () => Importer; makeMarketReader: () => GitMarketReader; makeRecoveryExecutors: (runId: string) => RecoveryExecutorFns; makeSyncEngine: (cfg: SyncConfig, engineOpts?: { optInSections?: readonly SectionId[]; }) => SyncEngine; marketBootAutoRefreshed: { value: boolean; }; marketCacheIndex: (url: string) => string; marketDir: string; marketCacheItemDir: (url: string) => string; marketStarCache: StarCache; marketWorkDir: (url: string) => string; meGitHubRest: GitHubAuthRest; meService: MyRepoService; meTokenProvider: () => Promise<string>; msg: MsgFunc; prepareSync: (body: Record<string, unknown>) => Promise<SyncConfig>; profileLauncher: DshProfileLauncher; profileRuntime: DshProfileRuntimeRegistry; profiles: DshProfileManager; pruneStagedMarketZips: () => Promise<void>; readCachedIndexObj: (url: string) => Promise<MarketIndex | null>; recoveryOrchestrator: RecoveryOrchestrator; resolveSyncPassword: (ref: string) => Promise<string | undefined>; roots: string[]; runAbortControllers: Map<string, AbortController>; runCancels: Map<string, { signal: AbortController; settle: (d: 'rollback' | 'keep') => void; decided: boolean }>; runs: RunRegistry; scheduler: AutoSyncScheduler; selectionCache: Partial<Record<SyncTransportType, SyncSelection>>; selectionOptInSections: (channel: SyncTransportType, onlyAuto?: boolean) => SectionId[]; selectionView: (channel: SyncTransportType) => Promise<SelectionView>; selectionViewByChannel: () => Promise<Record<SyncTransportType, SelectionView>>; snapshotEntrySections: (snapshotDir: string) => Promise<string[]>; snapshotsDir: string; syncCredentialsByChannelView: () => Promise<Record<SyncTransportType, { encryptPasswordConfigured: boolean; decryptPasswordConfigured: boolean; }>>; syncDir: string; syncPasswordConfigured: (ref: string) => Promise<boolean>; syncSectionCatalog: { id: SectionId; displayName: string; portability: Portability; defaultIncluded: boolean; }[]; syncSessions: SyncSessionStore; tmpDir: string; tryAppendHistory: (raw: { kind: MigrationKind; result: MigrationResult; sections: string[]; operationId?: string; snapshotId?: string; runId?: string; source: 'api' | 'autosync' | 'backup-scheduler' | 'recovery' | 'cli' | 'internal'; summary: string; error?: string; }) => Promise<string | undefined>; withMutationGate: (op: string, handler: (req: IncomingMessage, res: ServerResponse, lockCtx?: MutationLockContext, journalCtx?: JournalRunContext) => Promise<void>, opts?: { journaled?: boolean; deferredSnapshot?: boolean; }) => ((req: IncomingMessage, res: ServerResponse) => Promise<void>); selfUpdate: (targetVersion: string) => Promise<SelfUpdateOutcome>; writeItemCache: (url: string, itemId: string, manifestRaw: string, zipBytes: Uint8Array) => Promise<void>; }
 
 /** 解密错误 → 用户可读文本：BAD_PASSWORD 只报「密码错误」（不泄内部细节），其余原文 */
 export function decryptErrorText(error: unknown, msg: MsgFunc): string {
@@ -2621,7 +2621,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   /** 已知 adapter id 集合（push 请求体 sections 校验用）。 */
   const knownSyncSectionIds = new Set(adapters.map((a) => a.id))
   /** 可同步分区目录（status 回填 UI「同步分区」勾选列表）。
-   *  只含 portable + 显式可选项（OPT_IN_SYNC_SECTIONS，目前只有 sessions）——
+   *  只含 portable + 显式可选项（OPT_IN_SYNC_SECTIONS，当前 mcp / sessions）——
    *  后者是 deviceSpecific，UI 必须显示设备相关徽章，且只有用户主动勾选才进同步通道。 */
   const syncSectionCatalog = adapters
     .filter((a) => a.portability === 'portable' || OPT_IN_SYNC_SECTIONS.includes(a.id))
@@ -2833,20 +2833,27 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     return out
   }
 
-  /** 该通道的持久化选择是否显式勾选了「可选分区」（sessions）—— 决定用户驱动的拉取侧能否看见它。 */
-  const selectionHasOptInSections = (channel: SyncTransportType): boolean => {
+  /**
+   * 该通道持久化选择里**显式勾选**的可选分区（与注册表白名单取交集；缺省 / 默认模式 → 空集）。
+   *
+   * onlyAuto=true 时只保留 'auto' 档（AUTO_SYNC_OPT_IN_SECTIONS）—— 自动同步调用点的口径：
+   * mcp 跟着走，sessions（'manual'）绝不悄悄下行/上行。
+   */
+  const selectionOptInSections = (channel: SyncTransportType, onlyAuto = false): SectionId[] => {
     const sel = selectionCache[channel]
-    if (sel === undefined) return false
+    if (sel === undefined) return []
     const sections = effectiveSections(sel)
-    return sections !== undefined && sections.some((id) => OPT_IN_SYNC_SECTIONS.includes(id))
+    if (sections === undefined) return []
+    const allowed = onlyAuto ? AUTO_SYNC_OPT_IN_SECTIONS : OPT_IN_SYNC_SECTIONS
+    return sections.filter((id) => allowed.includes(id))
   }
 
   /** 构造 SyncEngine：按 transport 分支构造对应传输（git → GitTransport；webdav → WebDavTransport）。
    *  同步范围（sections）来自持久化分区选择：advanced 模式 → 只处理勾选分区，
    *  自动同步（merge/apply/push 全链路）与手动 push 共用此配置。
-   *  opts.includeOptInSections：仅**用户驱动**的拉取/一键同步路由传 true（用户的选择里
-   *  确实勾了 sessions 时）—— 自动同步调用点一律不传，会话分区绝不悄悄下行。 */
-  const makeSyncEngine = (cfg: SyncConfig, engineOpts: { includeOptInSections?: boolean } = {}): SyncEngine => {
+   *  opts.optInSections：本次显式放行的可选分区集合 —— 用户驱动的手动 push/pull 传
+   *  「选择里勾的全部可选分区」，自动同步只传 'auto' 档（sessions 绝不悄悄下行/上行）。 */
+  const makeSyncEngine = (cfg: SyncConfig, engineOpts: { optInSections?: readonly SectionId[] } = {}): SyncEngine => {
     let transport: SyncTransport
     if (isWebDavConfig(cfg)) {
       transport = new WebDavTransport({
@@ -2922,7 +2929,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       zipDir: tmpDir,
       msg,
       ...(sections === undefined ? {} : { sections }),
-      ...(engineOpts.includeOptInSections === true ? { includeOptInSections: true } : {}),
+      ...(engineOpts.optInSections === undefined || engineOpts.optInSections.length === 0
+        ? {}
+        : { optInSections: engineOpts.optInSections }),
       // m-retention：远端快照裁剪与本地备份产物共用同一份 GFS 保留策略（缺省 = 最近 10 个，
       // 与改造前逐字等价）；用户改完策略即时生效（每次 prune 都重读）。
       retentionPolicy: () => retentionPolicyProvider(),
@@ -2936,7 +2945,9 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   const scheduler = new AutoSyncScheduler({
     syncDir,
     host,
-    makeSyncEngine,
+    // 自动同步只放行 'auto' 档可选分区（当前 = mcp）：sessions（'manual'）绝不悄悄下行/上行。
+    // 口径钉在**注入处**而不是调度器内部 —— 调度器只负责「用哪个引擎」，准入由宿主决定。
+    makeSyncEngine: (cfg: SyncConfig) => makeSyncEngine(cfg, { optInSections: selectionOptInSections(channelOf(cfg), true) }),
     msg,
     runs,
     mutationLock: host.mutationLock,
@@ -3217,7 +3228,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       runs,
       scheduler,
       selectionCache,
-      selectionHasOptInSections,
+      selectionOptInSections,
       selectionView,
       selectionViewByChannel,
       snapshotEntrySections,

@@ -292,16 +292,28 @@ test('push: 可选分区 sessions —— 无选项时跳过并告警；带 limit
       now: () => new Date('2026-08-16T12:00:00.000Z'),
     } as ConstructorParameters<typeof SyncEngine>[0]);
 
-    // ① 勾了 sessions 但**没有**给出 sessions 选项 → 与其它 deviceSpecific 分区一样跳过（安全默认）
-    const withoutOption = await engine.push({ snapshotId: 'sync-sessions-a', sections: ['settings', 'sessions'] });
-    assert.ok(!withoutOption.sections.includes('sessions'), 'sessions 未提供选项时不得进入快照');
+    // ① 引擎**未放行**可选分区（optInSections 缺省 = 空集）→ 即使请求带了 sessions 参数也一律跳过。
+    //    issue #78：放行由构造期决定；sessions 参数只决定「带哪几个」，不再兼任开关。
+    const withoutOption = await engine.push({
+      snapshotId: 'sync-sessions-a', sections: ['settings', 'sessions'], sessions: { limit: 1 },
+    });
+    assert.ok(!withoutOption.sections.includes('sessions'), 'sessions 未被放行时不得进入快照');
     assert.ok(
       withoutOption.warnings.some((w) => w.includes('sessions')),
       '跳过必须可见（不静默）: ' + withoutOption.warnings.join(' | '),
     );
 
-    // ② 提供 limit → sessions 作为可选分区进入同步，且只带「最新 1 个会话」目录
-    const limited = await engine.push({ snapshotId: 'sync-sessions-b', sections: ['sessions'], sessions: { limit: 1 } });
+    // ② 引擎显式放行 sessions（= 用户在分区弹窗里勾了它）→ 作为可选分区进入同步，且只带「最新 1 个」
+    const optInEngine = new SyncEngine({
+      ctx,
+      transport,
+      stateDir: path.join(tmp, 'optin'),
+      adapters,
+      importer,
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+      optInSections: ['sessions'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const limited = await optInEngine.push({ snapshotId: 'sync-sessions-b', sections: ['sessions'], sessions: { limit: 1 } });
     assert.deepEqual(limited.sections, ['sessions']);
     const uploaded = transport.snapshots.get('sync-sessions-b')!;
     const files = (plainSections(uploaded.sections)['sessions'] as { files: { relativePath: string }[] }).files;
@@ -328,6 +340,7 @@ test('P0-3: sessions.include 显式点名优先于 limit（只带我勾中的对
       ctx, transport, stateDir: tmp, adapters,
       importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
       now: () => new Date('2026-08-16T12:00:00.000Z'),
+      optInSections: ['sessions'],
     } as ConstructorParameters<typeof SyncEngine>[0]);
 
     // limit=0（不带任何会话）+ include=[最旧的 a] → 用户点名必须赢（limit 让位）
@@ -370,6 +383,7 @@ test('pull: 可选分区 sessions —— 未开启则远端会话不进计划；
       adapters: srcAdapters,
       importer: new Importer({ ctx: srcCtx, adapters: srcAdapters, snapshotStore: new MemSnapshotStore() }),
       now,
+      optInSections: ['sessions'],
     } as ConstructorParameters<typeof SyncEngine>[0]);
     const pushed = await srcEngine.push({ snapshotId: 'sync-sessions-pull', sections: ['sessions'], sessions: { limit: 1 } });
     assert.deepEqual(pushed.sections, ['sessions']);
@@ -389,7 +403,7 @@ test('pull: 可选分区 sessions —— 未开启则远端会话不进计划；
     const plainReport = await plainEngine.pull({});
     assert.ok(
       !plainReport.changes.some((c) => c.adapter === 'sessions'),
-      '未开启 includeOptInSections 时不得出现会话项: ' + plainReport.changes.map((c) => c.adapter).join(','),
+      '未放行可选分区时不得出现会话项: ' + plainReport.changes.map((c) => c.adapter).join(','),
     );
 
     // 开启（= 用户在分区弹窗里勾了历史会话）→ 会话项进入计划
@@ -400,7 +414,7 @@ test('pull: 可选分区 sessions —— 未开启则远端会话不进计划；
       adapters: dstAdapters,
       importer: dstImporter,
       now,
-      includeOptInSections: true,
+      optInSections: ['sessions'],
     } as ConstructorParameters<typeof SyncEngine>[0]);
     const optInReport = await optInEngine.pull({});
     assert.ok(
@@ -1867,6 +1881,7 @@ test('P1-5: push 检测本地删除 → 墓碑进 manifest + sync-state，并给
       ctx, transport, stateDir: tmp, adapters,
       importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
       now: () => new Date('2026-08-16T12:00:00.000Z'),
+      optInSections: ['sessions'],
     } as ConstructorParameters<typeof SyncEngine>[0]);
 
     const report = await engine.push({ snapshotId: 'sync-tomb', sections: ['sessions'], sessions: {} });
@@ -1905,6 +1920,7 @@ test('P1-5: 本机枚举不到任何会话 / 未推 sessions → 绝不覆盖既
     const engine = new SyncEngine({
       ctx, transport, stateDir: tmp, adapters,
       importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      optInSections: ['sessions'],
     } as ConstructorParameters<typeof SyncEngine>[0]);
 
     // 只推 settings（不含 sessions）→ 完全不动簿记
@@ -1954,7 +1970,7 @@ test('P1-5: pull 按远端墓碑剔除已删除的会话（旧快照不复活）
     const engine = new SyncEngine({
       ctx, transport, stateDir: tmp, adapters,
       importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
-      includeOptInSections: true,
+      optInSections: ['sessions'],
       now: () => new Date('2026-08-16T12:00:00.000Z'),
     } as ConstructorParameters<typeof SyncEngine>[0]);
 
@@ -2168,6 +2184,127 @@ test('applyMergePlan: 半回滚 → rollbackFull:false 且失败项并入 warnin
     const rollbackWarnings = report.warnings.filter((w) => w.includes('回滚未完成'));
     assert.equal(rollbackWarnings.length, 1, '未回滚项必须进 warnings');
     assert.match(rollbackWarnings[0]!, /credentialsStatus:K/);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+/* ---------------------------------------------------------------- issue #78：mcp 可选分区 */
+
+/** 播种一行 dsh-mcp-client patch（mcp adapter 的数据源）。 */
+function seedMcp(ctx: ReturnType<typeof makeContext>): void {
+  ctx.patchFile.lines.set('mcp-citra', {
+    lineId: 'mcp-citra',
+    raw: {
+      id: 'mcp-citra',
+      name: 'dsh-mcp-client',
+      config: { serverName: 'citra', command: 'npx', args: ['-y', '@sylphx/citra'] },
+    },
+  });
+}
+
+test('issue #78: mcp 为可选分区 —— 未放行则跳过并告警；放行后进快照；**放行 mcp 绝不连带放行 sessions**', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-mcp-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    seedMcp(ctx);
+    await ctx.fs.writeFile('sessions/--p--/s1/session.jsonl.zstd', Buffer.from('s1', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/s1/session.jsonl.zstd', 1000);
+
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const now = () => new Date('2026-08-16T12:00:00.000Z');
+    const importer = new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() });
+
+    // ① 未放行（optInSections 缺省）→ 与其它非 portable 分区一样跳过，且跳过可见
+    const plain = new SyncEngine({
+      ctx, transport, stateDir: path.join(tmp, 'plain'), adapters, importer, now,
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const skipped = await plain.push({ snapshotId: 'sync-mcp-off', sections: ['settings', 'mcp'] });
+    assert.ok(!skipped.sections.includes('mcp'), 'mcp 未放行时不得进入快照');
+    assert.ok(
+      skipped.warnings.some((w) => w.includes('mcp')),
+      '跳过必须可见（不静默）: ' + skipped.warnings.join(' | '),
+    );
+
+    // ② 显式放行 mcp（= 用户在分区弹窗里勾了它）→ 进快照；sessions 不在放行集合 → 必须被挡下。
+    //    这是旧布尔实现（includeOptInSections）会漏的回归点：勾 mcp 会连带放行 sessions。
+    const optIn = new SyncEngine({
+      ctx, transport, stateDir: path.join(tmp, 'optin'), adapters, importer, now, optInSections: ['mcp'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const pushed = await optIn.push({
+      snapshotId: 'sync-mcp-on', sections: ['mcp', 'sessions'], sessions: { limit: 1 },
+    });
+    assert.deepEqual(pushed.sections, ['mcp'], '只放行 mcp：sessions 即使被勾选也必须挡下');
+    const servers = (plainSections(transport.snapshots.get('sync-mcp-on')!.sections)['mcp'] as {
+      servers: { serverName: string }[];
+    }).servers;
+    assert.deepEqual(servers.map((s) => s.serverName), ['citra'], 'MCP 服务器必须完整进入快照');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #78: 自动同步档 —— push() 不带 sections 也带走放行的 mcp；sessions 绝不悄悄上行', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-mcp-auto-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    seedMcp(ctx);
+    await ctx.fs.writeFile('sessions/--p--/s1/session.jsonl.zstd', Buffer.from('s1', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/s1/session.jsonl.zstd', 1000);
+
+    const transport = new MemSyncTransport();
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    // 自动同步调用形态：engine.push() 无参数 + 只放行 'auto' 档（AUTO_SYNC_OPT_IN_SECTION_IDS）
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      optInSections: ['mcp'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    const report = await engine.push({ snapshotId: 'sync-auto-mcp' });
+    assert.ok(report.sections.includes('mcp'), '自动同步 push 必须带走放行的 mcp: ' + report.sections.join(','));
+    assert.ok(!report.sections.includes('sessions'), 'sessions（manual 档）绝不悄悄上行: ' + report.sections.join(','));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('issue #78: 拉取侧 —— 只放行 mcp 时，远端快照里的 sessions 绝不能被连带拉进差异计划', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-mcp-pull-'));
+  try {
+    const now = () => new Date('2026-08-16T12:00:00.000Z');
+    const transport = new MemSyncTransport();
+
+    // 源机：放行 mcp + sessions → 远端快照同时含两者
+    const srcCtx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(srcCtx);
+    seedMcp(srcCtx);
+    await srcCtx.fs.writeFile('sessions/--p--/s1/session.jsonl.zstd', Buffer.from('s1', 'utf8'));
+    srcCtx.fs.setMtime('sessions/--p--/s1/session.jsonl.zstd', 1000);
+    const srcAdapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const srcEngine = new SyncEngine({
+      ctx: srcCtx, transport, stateDir: path.join(tmp, 'src'), adapters: srcAdapters,
+      importer: new Importer({ ctx: srcCtx, adapters: srcAdapters, snapshotStore: new MemSnapshotStore() }),
+      now, optInSections: ['mcp', 'sessions'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const pushed = await srcEngine.push({ snapshotId: 'sync-both', sections: ['mcp', 'sessions'], sessions: { limit: 1 } });
+    assert.deepEqual(pushed.sections.sort(), ['mcp', 'sessions'], '源机快照必须两者都在');
+
+    // 目标机：只放行 mcp（选择里没勾 sessions）→ sessions 不得出现在差异计划里
+    const dstCtx = makeContext('win32', 'C:\\Users\\bob');
+    const dstAdapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const dstEngine = new SyncEngine({
+      ctx: dstCtx, transport, stateDir: path.join(tmp, 'dst'), adapters: dstAdapters,
+      importer: new Importer({ ctx: dstCtx, adapters: dstAdapters, snapshotStore: new MemSnapshotStore() }),
+      now, optInSections: ['mcp'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+    const report = await dstEngine.pull({ snapshotId: 'sync-both' });
+    const ids = report.changes.map((c) => c.adapter);
+    assert.ok(ids.includes('mcp'), '放行的 mcp 必须在计划里: ' + ids.join(','));
+    assert.ok(!ids.includes('sessions'), '未放行的 sessions 绝不能被 mcp 连带放行: ' + ids.join(','));
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

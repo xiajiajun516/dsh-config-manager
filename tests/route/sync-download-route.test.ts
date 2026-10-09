@@ -60,7 +60,8 @@ function envFor(h: Harness, names: string[] = []): never {
       },
     }),
     resolveSyncPassword: async () => undefined,
-    selectionHasOptInSections: () => false,
+    // issue #78：放行集合（本用例不涉及可选分区 → 空集）
+    selectionOptInSections: () => [],
     // 与生产同语义的「直通」包壳（本组多条写路由在**构造期**就会调它包 handler）
     withMutationGate: (_op: string, handler: unknown) => handler,
   }

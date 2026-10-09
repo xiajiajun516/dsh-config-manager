@@ -586,6 +586,7 @@
 - **`prompts` 的 `systemPrompt` 形态**：源 namespace / patch 行里是字符串 `systemPrompt: "…"`，导入落盘形态为对象 `{ persona: "…" }`。persona **文本**无损，但字段**形状**改变（`RT-01` 已注明）。
 - **已知分区内的未知字段不写回目标（分区相关，勿一句话概括）**：导入不是 round-trip 复制，而是把已知语义落到目标。规格 §7.3 实测结论是**分区相关**的：`settings` / `ui` / `mcp` / `prompts` / `credentialsStatus` → 未知字段不写回；`workspaces[]` 记录、`plugins.patch[].raw`、`providers.raw` → 会随「整体搬运」落到目标。因此**不要声称「未知字段会被保留到目标」，也不要声称「一律被丢弃」**。
 - **文件类分区的 secret 命中不剥离内容**：G-09 修复后只「报告 + 告警」，命中的文件内容**原样进包**（见 §1 G-09 的边界）。
+- **`mcp` 分区的同步语义（issue #78，2026-10-09 起）**：`mcp` 是**可选分区**（`syncOptIn='auto'`），不勾就不进同步通道；勾选后手动与自动同步都带。三条已知边界：① 内容里 `command` / `args` / `cwd` 是**机器相关**的 —— 绝对路径或目标机缺 `npx` / `uvx` 运行时，配置照样写入，但服务器在目标机可能起不来（靠导入分析期告警，不是拒收）；② 拉取侧 `mcp` 是 `medium` 风险 → 落**差异确认（review）**，自动同步不静默写入；③ HTTP 型 server 的 `env` / `headers` 会随包走，未经 `includeSecrets` 时经 `SecretScanner` 脱敏（与普通备份同口径）。
 - **离线 CLI `backup` 收不到插件注册表里的技能**：GUI 导出经 `ctx.skills` 收编外壳技能（见 §1 G-33），而 CLI 有「绝不 import `@deepseek-ai/*`」的硬约束（`src/core/backup-plan.ts:6-10`），只能扫 `$DSH_HOME/skills` 目录；真机上该目录可能**根本不存在**，此时 CLI 备份的 `skills` 分区为空，并在报告里如实列为空分区（`分区无内容，未写入 / section empty, skipped: skills`）。这是**有意的能力边界**（不是静默丢失，也不是 G-33 的残留）：要完整的技能备份请在 DSH 健康时用 GUI 导出。
 
 ### 4.1 checkpoint 的两条已知限制（T14-F3 / T14-F4）

@@ -96,7 +96,7 @@ test('registry: 派生的可移植性 / 可选分区 / 默认勾选与既有声�
     'settings', 'ui', 'providers', 'plugins', 'prompts', 'skills',
     'agentPresets', 'agentInstructions', 'self',
   ]);
-  assert.deepEqual([...OPT_IN_SYNC_SECTION_IDS], ['sessions'], '可选分区当前仅 sessions（sync/selection 既有断言一致）');
+  assert.deepEqual([...OPT_IN_SYNC_SECTION_IDS], ['mcp', 'sessions'], '可选分区 = syncOptIn !== off（issue #78）');
   assert.deepEqual([...DEFAULT_INCLUDED_SECTION_IDS], [
     'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'skills',
     'agentPresets', 'agentInstructions', 'workspaces', 'credentialsStatus', 'self',
@@ -250,7 +250,7 @@ test('registry: riskTier 是 SectionMeta 的必填字段（类型层强制，缺
     dataVersion: SECTION_DATA_VERSION,
     applyOrder: 99,
     portability: 'portable',
-    optInSync: false,
+    syncOptIn: 'off',
     defaultIncluded: true,
     riskTier: 'low',
     configSnapshot: true,

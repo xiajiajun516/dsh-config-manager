@@ -90,14 +90,17 @@ export interface SyncEngineOptions {
   /** 消息翻译器（缺省 ctx.msg ?? zh） */
   msg?: MsgFunc;
   /**
-   * 显式开启「可选分区」（OPT_IN_SYNC_SECTIONS，目前只有 sessions）在**拉取/合并/应用**侧
-   * 的参与：只有 true 时，远端快照里的可选分区才会进入临时 ZIP 与合并输入。
+   * 本次运行**显式放行的「可选分区」集合**（拉取/合并/应用 + 推送两侧共用）。
    *
-   * 缺省 false —— 自动同步等无用户确认的路径永不拉取会话；宿主只在**用户驱动**的
-   * pull / 一键同步路由上、且用户持久化的分区选择确实包含该可选分区时才传 true。
-   * （推送侧不受它影响：push 由 opts.sessions 单独把关。）
+   * 缺省空集 —— 可选分区默认永不参与同步。宿主按「该分区允许哪种驱动」决定传什么：
+   *  - 手动 push/pull / 一键同步 → 持久化选择里的全部可选分区（OPT_IN_SYNC_SECTIONS ∩ 勾选）；
+   *  - 自动同步 / model-tools → 只传 'auto' 档（AUTO_SYNC_OPT_IN_SECTION_IDS ∩ 勾选），
+   *    sessions（'manual'）因此**绝不悄悄下行/上行**。
+   *
+   * 为什么是集合而不是布尔：布尔只能表达「全放行 / 全不放行」，勾了 mcp 会连带放行
+   * sessions（issue #78 的回归点）。集合化后每个分区独立放行。
    */
-  includeOptInSections?: boolean;
+  optInSections?: readonly SectionId[];
   /**
    * 同步范围（高级/自定义导出模式持久化配置）：只处理这些 portable 分区。
    * 缺省 = 全部 portable 推荐分区。应用于 push / merge / applyMergePlan / applyItems
@@ -123,12 +126,15 @@ export interface SyncPushOptions {
   /** 仅同步指定分区（缺省 = 全部 portable 推荐分区，即「默认/快速导出」模式）。
    *  传入非 portable 或未知分区 → 忽略并告警（同步通道安全约束：
    *  deviceSpecific/platformSpecific 默认永不进入同步通道；未知 id 不静默吞掉）。
-   *  例外：OPT_IN_SYNC_SECTIONS 里的分区（目前只有 sessions）在**同时提供对应选项**
-   *  （见 sessions）时才纳入 —— 没有选项一律按非 portable 跳过并告警。 */
+   *  例外：构造期显式放行的可选分区（SyncEngineOptions.optInSections）才纳入 ——
+   *  未被放行的一律按非 portable 跳过并告警（不静默）。 */
   sections?: SectionId[];
   /**
-   * sessions（历史会话）分区选项：只有显式给出它，sessions 才被允许进入同步通道
-   * （「最新 N 个会话」上限）。缺省 / 未提供 → sessions 与其它 deviceSpecific 分区同样被跳过。
+   * sessions（历史会话）分区的**导出参数**（「最新 N 个会话」上限 / 逐会话点名）。
+   *
+   * 注意：它**不再兼任放行开关** —— 是否允许 sessions 进通道只由构造期
+   * SyncEngineOptions.optInSections 决定（issue #78 把「放行」与「参数」拆开，
+   * 否则勾了 mcp 会顺带解锁 sessions）。这里只决定「带哪几个会话」。
    *
    * include（显式勾选的会话单元 id，形如 sessions:<projectKey>/<sessionId>）非空时
    * **优先于 limit**：用户点名的对话必须赢；此时不施加「最新 N 个」数量筛选，否则会退化成
@@ -351,7 +357,8 @@ export class SyncEngine {
   private readonly fsx: SnapshotFs;
   private readonly msg: MsgFunc;
   private readonly sections: readonly SectionId[] | undefined;
-  private readonly includeOptInSections: boolean;
+  /** 本次显式放行的可选分区（构造期已归一：只可能是 OPT_IN_SYNC_SECTIONS 的注册项） */
+  private readonly optInSections: ReadonlySet<SectionId>;
   /** 远端快照保留策略提供者（缺省 = 保守的「保留最近 10 个」，与改造前逐字等价） */
   private readonly retentionPolicyProvider: () => RetentionPolicy | Promise<RetentionPolicy>;
   /**
@@ -395,7 +402,10 @@ export class SyncEngine {
     this.fsx = opts.fsx ?? createSnapshotFs();
     this.msg = opts.msg ?? msgOf(opts.ctx);
     this.sections = opts.sections !== undefined && opts.sections.length > 0 ? [...opts.sections] : undefined;
-    this.includeOptInSections = opts.includeOptInSections === true;
+    // 归一：只有注册表声明的「可选分区」能被放行 —— 调用方传错 id 不会凭空解锁别的分区
+    this.optInSections = new Set(
+      (opts.optInSections ?? []).filter((id) => OPT_IN_SYNC_SECTIONS.includes(id)),
+    );
     this.retentionPolicyProvider = opts.retentionPolicy ?? (() => DEFAULT_RETENTION_POLICY);
   }
 
@@ -411,7 +421,7 @@ export class SyncEngine {
 
   /**
    * 拉取/合并侧的分区范围 id 集合：portable（受注入的同步范围约束）
-   * + 实例显式开启时的可选分区（sessions）。
+   * + **本次显式放行**的可选分区（optInSections）。
    *
    * 为什么单独一个助手：pull/preview/merge 都要把「远端快照里的哪些分区转进临时 ZIP」，
    * 三处必须同一口径；散开写 `portableAdapters().map(...)` 迟早漏掉一处（漏掉的表现是
@@ -419,12 +429,14 @@ export class SyncEngine {
    */
   private pullSectionIds(): Set<SectionId> {
     const ids = this.portableAdapters().map((a) => a.id);
-    if (this.includeOptInSections) {
-      for (const a of this.adapters) {
-        if (OPT_IN_SYNC_SECTIONS.includes(a.id)) ids.push(a.id);
-      }
-    }
+    for (const a of this.optInAdapters()) ids.push(a.id);
     return new Set(ids);
+  }
+
+  /** 本次显式放行的「可选分区」adapter（空集 = 一个都不放行；顺序跟随 adapters） */
+  private optInAdapters(): ConfigAdapter[] {
+    if (this.optInSections.size === 0) return [];
+    return this.adapters.filter((a) => this.optInSections.has(a.id));
   }
 
   /**
@@ -432,22 +444,21 @@ export class SyncEngine {
    * - sections 缺省/空 → 全部 portable（「默认/快速导出」模式）；
    * - sections 显式给出 → 只取 portable 且命中的（「高级/自定义导出」模式）；
    *   非 portable / 未知分区 → 警告跳过（安全约束 + 不静默，用户能看见自己勾了哪个无效项）；
-   * - 例外：OPT_IN_SYNC_SECTIONS（sessions）在调用方**显式提供选项**（sessions 参数）时
-   *   才作为候选取出 —— 它是 deviceSpecific，但用户主动勾选 + 数量上限后允许同步。
+   * - 例外：本次构造显式放行的可选分区（optInSections，见 SyncEngineOptions）作为候选取出。
+   *   缺省空集 → 与改造前逐字等价（可选分区一律不进同步通道）。
    */
   private pushTargets(
     sections: readonly SectionId[] | undefined,
     warnings: string[],
-    opts?: { sessions?: { limit?: number } },
   ): ConfigAdapter[] {
     const portable = this.portableAdapters();
-    if (sections === undefined || sections.length === 0) return portable;
+    const optIn = this.optInAdapters();
+    // 默认模式（未指定 sections）：portable 全量 + 本次显式放行的可选分区。
+    // 自动同步的 push() 不带 sections，可选分区能否上榜完全由构造期 optInSections 决定
+    // （scheduler 只传 'auto' 档 → sessions 永不悄悄上行）。
+    if (sections === undefined || sections.length === 0) return [...portable, ...optIn];
     const byId = new Map(portable.map((a) => [a.id, a]));
-    if (opts?.sessions !== undefined) {
-      for (const a of this.adapters) {
-        if (OPT_IN_SYNC_SECTIONS.includes(a.id)) byId.set(a.id, a);
-      }
-    }
+    for (const a of optIn) byId.set(a.id, a);
     const out: ConfigAdapter[] = [];
     for (const id of sections) {
       const adapter = byId.get(id);
@@ -621,7 +632,7 @@ export class SyncEngine {
       throw new Error(this.msg('sync.encryptRequiresPassword'));
     }
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
-    const targets = this.pushTargets(opts.sections, warnings, opts);
+    const targets = this.pushTargets(opts.sections, warnings);
     for (const adapter of targets) {
       let section: ExportSection;
       try {
@@ -740,7 +751,7 @@ export class SyncEngine {
         credentialsIncluded = false; // 读不到 = 不会带凭据；预览如实显示 false
       }
     }
-    const targets = this.pushTargets(opts.sections, warnings, opts);
+    const targets = this.pushTargets(opts.sections, warnings);
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const counts: Partial<Record<SectionId, number>> = {};
     for (const adapter of targets) {

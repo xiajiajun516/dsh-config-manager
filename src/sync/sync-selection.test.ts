@@ -10,10 +10,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  defaultSyncSelection, effectiveSections, normalizeSessionsInclude, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
+  AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, normalizeSessionsInclude, normalizeSessionsLimit, OPT_IN_SYNC_SECTIONS,
   readSyncSelection, writeSyncSelection,
   readAllSyncSelections, DEFAULT_SYNC_SESSIONS_LIMIT, SYNC_SELECTION_FILE, SYNC_SELECTION_SCHEMA_VERSION,
 } from './sync-selection.ts';
+import { OPT_IN_SYNC_SECTION_IDS } from '../schema/section-registry.ts';
+import type { SectionId } from '../schema/types.ts';
 
 test('writeSyncSelection + readSyncSelection：advanced 模式写入 → 读回字段一致（git 通道）', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-selection-rt-'));
@@ -227,8 +229,16 @@ test('normalizeSessionsLimit: 只有非负整数被接受', () => {
 });
 
 test('OPT_IN_SYNC_SECTIONS: 只含需要用户显式勾选的可选分区，凭据类分区永不入选', () => {
-  assert.deepEqual([...OPT_IN_SYNC_SECTIONS], ['sessions']);
+  // 单一事实源 = 分区注册表（issue #78：此前是本文件手写的 ['sessions']，与注册表字段两份字面量、零护栏）
+  assert.deepEqual([...OPT_IN_SYNC_SECTIONS], ['mcp', 'sessions']);
+  assert.deepEqual([...OPT_IN_SYNC_SECTIONS], [...OPT_IN_SYNC_SECTION_IDS], '必须与注册表派生视图逐项一致');
   for (const forbidden of ['credentialsStatus', 'secrets', 'settings'] as const) {
     assert.ok(!OPT_IN_SYNC_SECTIONS.includes(forbidden), '可选分区白名单不得含 ' + forbidden);
   }
+});
+
+test('AUTO_SYNC_OPT_IN_SECTIONS: 自动同步只放行 auto 档 —— mcp 在、sessions 不在（会话绝不悄悄上下行）', () => {
+  assert.deepEqual([...AUTO_SYNC_OPT_IN_SECTIONS], ['mcp']);
+  assert.ok(!AUTO_SYNC_OPT_IN_SECTIONS.includes('sessions' as SectionId), 'sessions 只允许手动 push/pull');
+  assert.ok(OPT_IN_SYNC_SECTIONS.includes('mcp' as SectionId), 'mcp 必须是可选分区（默认错过通道）');
 });

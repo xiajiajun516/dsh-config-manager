@@ -57,7 +57,7 @@ test('sync-F6：downloadSnapshot 必须把墓碑剔除数量回传（可见，�
       stateDir,
       adapters: [sessionsAdapter],
       msg: (k: string) => k,
-      includeOptInSections: true,
+      optInSections: ['sessions'],
       snapshotId: () => 'sync-local-9',
     });
     const ret = await engine.downloadSnapshot({ dir: outDir, name: 'remote.zip' });

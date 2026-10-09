@@ -118,7 +118,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     resolveSyncPassword,
     scheduler,
     selectionCache,
-    selectionHasOptInSections,
+    selectionOptInSections,
     selectionView,
     selectionViewByChannel,
     syncCredentialsByChannelView,
@@ -295,7 +295,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       const body = await requireJsonObject(req)
       try {
         const syncCfg = await prepareSync(body)
-        const engine = makeSyncEngine(syncCfg)
+        // 用户驱动的推送：放行持久化选择里勾选的可选分区（mcp / sessions），否则它们按非 portable 跳过
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
         const snapshotId =
           typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
         const sections = extractSyncSections(body, knownSyncSectionIds)
@@ -311,7 +312,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 因为那是用户此刻输入的覆盖值；两者都没有 → 交给 engine 报「加密需要密码」。
         const pushChannel: SyncTransportType = channelOf(syncCfg)
         const effectiveEncryptPassword = encryptPassword ?? await resolveSyncPassword(syncPasswordRef('ENCRYPT', pushChannel))
-        // 可选分区选项（历史会话「最新 N 个」）：只有显式提供才允许 sessions 进同步通道
+        // sessions 的导出参数（「最新 N 个」/ 逐会话点名）；**放行**由引擎的 optInSections 决定
         const sessions = extractSyncSessions(body)
         const sessionsOpt = sections !== undefined && sections.includes('sessions') && sessions !== undefined
           ? { sessions }
@@ -352,8 +353,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       const body = await requireJsonObject(req)
       try {
         const syncCfg = await prepareSync(body)
-        // 用户驱动的拉取：选择里勾了 sessions 时才让会话分区进入差异计划（自动同步不传）
-        const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(channelOf(syncCfg)) })
+        // 用户驱动的拉取：放行持久化选择里勾选的**全部**可选分区（自动同步只放行 'auto' 档）
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
         const strategy =
           body['strategy'] === 'replace' || body['strategy'] === 'skipExisting' ? body['strategy'] : 'merge'
         const snapshotId =
@@ -616,7 +617,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       const body = await requireJsonObject(req)
       try {
         const syncCfg = await prepareSync(body)
-        const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(channelOf(syncCfg)) })
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
         const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
         // 可选落地文件名（产物库「下载」要给用户一个可辨识的名字，而不是固定的 snapshot.zip）。
         // 不安全的名字直接 400 而不是「静默换名」：它会进 path.join(dir, name)，白名单是唯一防线。
@@ -708,8 +709,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       const body = await requireJsonObject(req)
       try {
         const syncCfg = await prepareSync(body)
-        // 用户驱动的一键同步：选择里勾了 sessions 时才让会话分区进入差异计划（自动同步不传）
-        const engine = makeSyncEngine(syncCfg, { includeOptInSections: selectionHasOptInSections(channelOf(syncCfg)) })
+        // 用户驱动的一键同步：放行持久化选择里勾选的**全部**可选分区（自动同步只放行 'auto' 档）
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
         const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
         // 解密密码：请求体 > 已保存（DSH credentials）。明文快照根本不会被解密
         // （engine.prepareSnapshot 只在 manifest.encrypted 时才用密码），因此「未加密备份
