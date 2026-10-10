@@ -511,7 +511,8 @@ test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restor
     const wsSegment = arr(obj(rewound.json)['segments']).map(obj).find((s) => s['state'] === 'workspace')
     assert.equal(wsSegment?.['status'], 'restored')
     assert.equal(wsSegment?.['restored'], 0)
-    assert.equal(wsSegment?.['reasonCode'], 'nothing-to-restore')
+    // T10：「没记录任何文件」有自己的码（与「有记录但全部一致」分开）
+    assert.equal(wsSegment?.['reasonCode'], 'no-recorded-files')
     assert.deepEqual(obj(rewound.json)['skippedSegments'], [], '「执行过、0 变更」不同于「没执行」')
 
     // ② 所有被请求的段都无事可做：**200** + outcome=restored + code=nothing-to-restore（旧版这里是 500）
@@ -576,6 +577,11 @@ test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restor
     assert.equal(obj(second.json)['outcome'], 'restored')
     assert.equal(obj(second.json)['code'], 'nothing-to-restore')
     assert.equal(arr(obj(second.json)['segments']).map(obj)[0]?.['restored'], 0)
+    assert.equal(
+      arr(obj(second.json)['segments']).map(obj)[0]?.['reasonCode'],
+      'nothing-to-restore',
+      '「有记录但全部一致」必须是另一个码（不是 no-recorded-files）',
+    )
     assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1', '无事可做也绝不改写内容')
 
     // ⑥ 真失败仍 500：台账被篡改成不可能满足的指纹 → 零写入 + restore-failed
@@ -596,6 +602,80 @@ test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restor
     assert.equal(tampered.status, 500, JSON.stringify(tampered.json).slice(0, 400))
     assert.equal(obj(tampered.json)['outcome'], 'failed')
     assert.equal(obj(tampered.json)['code'], 'restore-failed')
+  } finally {
+    await server.close()
+    await h.cleanup()
+  }
+})
+
+/* ========== R8-8 T10：台账只读 ⇒ 没有幽灵 guardPointId；ledger-write-failed 真可达 ========== */
+
+/** 只读台账探针（同引擎单测）：挡不住写就跳过，绝不伪造结论。 */
+async function ledgerWritable(file: string): Promise<boolean> {
+  try {
+    await fs.appendFile(file, '')
+    return true
+  } catch {
+    return false
+  }
+}
+
+test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入、无幽灵 guardPointId）；delete 500 ledger-write-failed', async (t) => {
+  const h = await makeHarness()
+  const server = await startServer(h)
+  const ledgerPath = path.join(h.dataDir, 'rollback-points', 'index.json')
+  try {
+    const id = await makePoint(h)
+    await fs.writeFile(path.join(h.workspaceDir, 'x.txt'), 'X-BROKEN')
+
+    await fs.chmod(ledgerPath, 0o444)
+    if (await ledgerWritable(ledgerPath)) {
+      t.skip('本机 chmod 后台账仍可写，无法构造台账写失败')
+      return
+    }
+    try {
+      // ① require 档：留不下救援点 = S5 硬门 ⇒ 整体中止（旧版这里是 200 + 一个查不到的 guardPointId）
+      const required = await server.call('/rollback-points/' + id + '/rewind', {
+        method: 'POST',
+        body: { userConfirmed: true, preRewindGuard: 'require' },
+      })
+      assert.equal(required.status, 500, JSON.stringify(required.json).slice(0, 400))
+      assert.equal(obj(required.json)['outcome'], 'failed')
+      assert.equal(obj(required.json)['code'], 'guard-failed')
+      assert.equal(obj(required.json)['guardPointId'], undefined, '留不下救援点就绝不能报 guardPointId')
+      assert.equal(obj(required.json)['childSessionId'], undefined, '中止 ⇒ 不 fork')
+      assert.deepEqual(arr(obj(required.json)['segments']), [], '中止 ⇒ 一段都不执行')
+      assert.deepEqual(h.forkCalls, [], '中止 ⇒ 连 fork 都不许发生')
+      assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X-BROKEN', '零写入')
+
+      // ② 缺省 warn 档：告警后继续，但同样不报 guardPointId（旧版会报幽灵点）
+      const warned = await server.call('/rollback-points/' + id + '/rewind', {
+        method: 'POST',
+        body: { userConfirmed: true, segments: ['workspace'] },
+      })
+      assert.equal(warned.status, 200, JSON.stringify(warned.json).slice(0, 400))
+      assert.equal(obj(warned.json)['outcome'], 'restored')
+      assert.equal(obj(warned.json)['guardPointId'], undefined)
+      assert.equal(
+        arr(obj(warned.json)['warnings']).map((w) => String(obj(w)['code'])).includes('rollback.warn.guardFailed'),
+        true,
+        JSON.stringify(obj(warned.json)['warnings']),
+      )
+      assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1', 'warn 档照常回退工作区')
+
+      // ③ ledger-write-failed 在路由上的可达点 = delete（引擎 remove 直接回它）⇒ 500，且零写入
+      const del = await server.call('/rollback-points/' + id + '/delete', {
+        method: 'POST',
+        body: { userConfirmed: true },
+      })
+      assert.equal(del.status, 500, JSON.stringify(del.json).slice(0, 400))
+      assert.equal(obj(del.json)['code'], 'ledger-write-failed', 'delete 路径必须让这个码真的可达')
+      assert.equal(obj(del.json)['ok'], false)
+    } finally {
+      await fs.chmod(ledgerPath, 0o666)
+    }
+    // 只读期间零写入：记录还在
+    assert.equal(arr(obj((await server.call('/rollback-points')).json)['points']).length, 1, '被拒的删除不得动台账')
   } finally {
     await server.close()
     await h.cleanup()

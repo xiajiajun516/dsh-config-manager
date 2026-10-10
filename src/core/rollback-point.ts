@@ -23,6 +23,8 @@
  *   `skippedCount` 仍是跳过事件总数、如实回传 —— **绝不静默丢弃，也不整点丢弃**。
  * - **S5 安全链**：只读预览（零写入）→ 二次确认（`userConfirmed` 必须**恰好** true，
  *   否则 `confirmation-required`）→ 恢复前自动留**救援点**（guard）→ 写回 →
+ *   **T10：救援点的成败判据是「台账真的写进去了」（`appendRecord` 成功）**，不是「拿到了内存 record」：
+ *   写失败时 `require` 档整体中止（`guard-failed`、零写入），`warn` 档只告警继续且**不报** `guardPointId`。
  *   **逐文件重新读回并核对 SHA-256**；任一不符或任一写失败 → **整体回滚到恢复前状态**
  *   （把每个被触碰文件写回前像；本来不存在的就删掉我们刚创建的那个）→ 结构化失败。
  *   写路径由路由层过 withMutationLock + SAFE MODE（引擎不持锁）。
@@ -163,6 +165,12 @@ export type RollbackCode =
   | 'restore-failed'
   | 'verify-failed'
   | 'nothing-to-restore'
+  /**
+   * T10：该态**没有记录任何文件**（工作区段 files=0）—— 与「有记录但全部已一致」严格分开：
+   * 界面必须说两句不同的话（「这点没记录文件」vs「工作区已与该点一致」），
+   * 而 `detail` 是技术细节、**不能**当用户可见分派依据。只出现在 segments[].reasonCode。
+   */
+  | 'no-recorded-files'
   | 'mutation-locked'
   | 'method-not-allowed'
   | 'session-missing'
@@ -403,7 +411,9 @@ export interface RollbackPreviewFile {
   removed: number | null
   /**
    * true = 本次没有可信行数（added/removed 均为 null）：任一侧超过单文件上限、单张预览累计上限、
-   * 行级比对步数上限，或内容不是文本，或对象仓读不出。**宁可说「不知道」，也绝不谎报行数。**
+   * 行级比对步数上限，或内容不是文本，或对象仓读不出，或**当前文件 stat 失败但不是 ENOENT**
+   * （存在性未知 —— 这种条目 status 仍给 'overwrite'，绝不谎报成 create）。
+   * **宁可说「不知道」，也绝不谎报行数。**
    */
   truncated: boolean
 }
@@ -697,7 +707,19 @@ function lineDiffCounts(
   return { added: (d + m - n) / 2, removed: (d - m + n) / 2 }
 }
 
-/** 「本次没有可信行数」的统一返回值（超限 / 非文本 / 对象读不出）。 */
+/**
+ * T10：`preview` 里 `fs.stat` 失败的**唯一**分类口径。
+ * **只有 ENOENT** 才表示「当前确实不存在」→ 回退会重新创建它（create + 快照行数）；
+ * 其余一切（EACCES / EPERM / ELOOP / ENOTDIR / ERR_INVALID_ARG_VALUE / 拿不到 errno）
+ * 都是「存在性与可读性**未知**」⇒ 绝不报成 create +N/-0，必须 status 照给 + added/removed=null + truncated=true。
+ * 判据只看 errno **code**，不看 message（message 里出现 ENOENT 不算数）。
+ */
+export function classifyPreviewStatFailure(error: unknown): 'missing' | 'unavailable' {
+  const code = error !== null && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+  return code === 'ENOENT' ? 'missing' : 'unavailable'
+}
+
+/** 「本次没有可信行数」的统一返回值（超限 / 非文本 / 对象读不出 / stat 失败但不是 ENOENT）。 */
 function previewCountsUnavailable(): { added: number | null; removed: number | null; truncated: boolean } {
   return { added: null, removed: null, truncated: true }
 }
@@ -1506,7 +1528,10 @@ export class RollbackPointEngine {
     }
     const stored = await this.appendRecord(record)
     if (!stored.ok) {
-      return { ok: false, code: 'ledger-write-failed', detail: stored.detail, point: record, guidance: [], storage }
+      // T10（S5 安全链）：台账**真的没写进去** ⇒ 不返回这个内存 record。
+      // 旧实现把它一起返回，消费方（rewind 的救援点 / tracker）拿 `point.id` 当「留点成功」，
+      // 于是对外报出一个台账里根本查不到的**幽灵 id**。判据只有一条：appendRecord 真的成功。
+      return { ok: false, code: 'ledger-write-failed', detail: stored.detail, guidance: [], storage }
     }
     return { ok: true, code: 'ok', point: record, guidance: [], storage }
   }
@@ -1584,21 +1609,33 @@ export class RollbackPointEngine {
   }
 
   /**
-   * E1：一个**执行过但无事可做**的段（工作区已与快照一致 / 记录在案的条目数为 0）。
+   * E1：一个**执行过但无事可做**的段。T10 起按原因分成两个码（界面据此说两句不同的话，
+   * **不靠 detail 分派**）：
+   * - `'nothing-to-restore'`：记录了条目、但全部已与快照一致（工作区已与该点一致）；
+   * - `'no-recorded-files'`：该态**没有记录任何文件**（例如捕获时分块不可用 / 空分块）。
    *
    * status 用 'restored' 而不是 'skipped' —— 它不是「没执行」，而是「执行了、0 变更」（restored=0）；
-   * 于是 rewind 能靠它把「无事可做」与「真失败」分开（见 rewind 的 allNoop）。
-   * 用户可见文案由界面按 reasonCode 'nothing-to-restore' 映射 —— 这不是错误。
+   * 于是 rewind 能靠它把「无事可做」与「真失败」分开（见 rewind 的 allNoop）。两者都不是错误。
    */
-  private noopSegment(state: RollbackStateKind, detail: string): RollbackSegmentResult {
+  private noopSegment(
+    state: RollbackStateKind,
+    reasonCode: 'nothing-to-restore' | 'no-recorded-files',
+    detail: string,
+  ): RollbackSegmentResult {
     return {
-      state, status: 'restored', reasonCode: 'nothing-to-restore', detail: [detail],
+      state, status: 'restored', reasonCode, detail: [detail],
       restored: 0, failed: 0, leftovers: [], leftoversTruncated: false,
     }
   }
 
   /**
-   * E1：单个「会被改动的文件」的行级统计 = **快照对象内容 vs 当前文件内容**。
+   * E1：单个「会被改动的文件」的行级统计 —— 方向**只有一侧**，别读反：
+   * **current → snapshot**（=「这次回退会给该文件新增/删除多少行」），与 `RollbackPreviewFile`
+   * 的 `added` / `removed` 字段注释同一口径：
+   *  · `added`   = 快照里有、当前**没有**的行 ⇒ 回退会**加进去**的行数；
+   *  · `removed` = 当前有、快照里**没有**的行 ⇒ 回退会**删掉**的行数。
+   * 对应到实现：`lineDiffCounts(before, after)` 的 **`after` 是快照（回退目标）**、`before` 是当前文件。
+   *
    * 任何一条超限、读不出、非文本 ⇒ 返回 null 数字 + truncated（调用方照给 status，但**不给数字**）。
    * `budget` 是**单张预览**共享的累计预算（字节 + 步数），跨条目生效。
    */
@@ -1685,18 +1722,21 @@ export class RollbackPointEngine {
       const changedFiles: RollbackPreviewFile[] = []
       // 单张预览共享的比对预算（字节 + 步数）；只有真的会被改动的条目才消耗它
       const diffBudget = { bytes: 0, work: 0 }
+      // T10：stat 的三种结局分开表达 —— 「不存在（ENOENT）」与「存在性未知（其它 errno）」绝不混为一谈
+      type PreviewStatOutcome =
+        | { kind: 'ok'; size: number; regular: boolean }
+        | { kind: 'missing' }
+        | { kind: 'unavailable' }
       for (const file of wsPayload.files) {
-        let size: number | null = null
-        let regular = false
+        let outcome: PreviewStatOutcome
         try {
           const stat = await fs.stat(file.path)
-          regular = stat.isFile()
-          size = stat.size
-        } catch {
-          size = null
+          outcome = { kind: 'ok', size: stat.size, regular: stat.isFile() }
+        } catch (error) {
+          outcome = classifyPreviewStatFailure(error) === 'missing' ? { kind: 'missing' } : { kind: 'unavailable' }
         }
-        if (size === null) {
-          // 记录里的文件当前已不存在 ⇒ 回退会重新创建它
+        if (outcome.kind === 'missing') {
+          // **只有 ENOENT** 才算「当前确实不存在」⇒ 回退会重新创建它
           missing += 1
           changedFiles.push({
             path: file.path, status: 'create',
@@ -1704,6 +1744,15 @@ export class RollbackPointEngine {
           })
           continue
         }
+        if (outcome.kind === 'unavailable') {
+          // 存在性未知（EACCES 等）：**不得**报成 create +N/-0，也不给行数 —— 只说「会被尝试写入」。
+          // 计入 different 的理由：回退一定会尝试写它（restoreWorkspace 里「已一致」判定失败即视为需要写），
+          // 这样 overwrite = 已一致 + different + missing 的算术仍然成立。
+          different += 1
+          changedFiles.push({ path: file.path, status: 'overwrite', ...previewCountsUnavailable() })
+          continue
+        }
+        const { size, regular } = outcome
         const sizeMatches = regular && size === file.bytes
         const withinCaps = file.bytes <= this.previewDiffMaxFileBytes && size <= this.previewDiffMaxFileBytes
         let current: Uint8Array | null = null
@@ -1857,7 +1906,10 @@ export class RollbackPointEngine {
         boundaryEndSeq: sessionPayload?.boundaryEndSeq ?? null,
         unitId: record.unitId,
       })
-      if (guard.point !== undefined && (guardPolicy !== 'require' || !guard.point.incomplete)) {
+      // T10：成败判据 = **appendRecord 真的成功**（guard.ok），而不是「拿到了内存 record」。
+      // 留不下救援点就是 S5 的硬门：require 档**整体中止、零写入、不返回 childSessionId**；
+      // warn 档按既有策略只告警继续，但同样**不报** guardPointId（绝不报幽灵点）。
+      if (guard.ok === true && guard.point !== undefined && (guardPolicy !== 'require' || !guard.point.incomplete)) {
         guardPointId = guard.point.id
       } else {
         const detail = guard.detail ?? guard.code
@@ -1935,7 +1987,9 @@ export class RollbackPointEngine {
       return this.emptySegment('workspace', track.reasonCode ?? 'capture-failed', 'track-not-ok')
     }
     // E1：记录在案的条目数为 0 = 成功、0 变更（不是失败，更不是 500）
-    if (payload.files.length === 0) return this.noopSegment('workspace', 'files=0 nothingToDo=true')
+    // T10：**没有记录任何文件** 与「记录了但全部已一致」是两件不同的事，给不同的码
+    // （界面据此说「该点没记录文件」而不是「工作区已与该点一致」）。
+    if (payload.files.length === 0) return this.noopSegment('workspace', 'no-recorded-files', 'files=0 nothingToDo=true')
     const detail: string[] = []
     const writable: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
     let failed = 0
@@ -1994,7 +2048,7 @@ export class RollbackPointEngine {
     }
     if (needed.length === 0) {
       // 记录在案的路径全都已与快照一致 ⇒ 该段成功、0 变更（不是失败、也不中止整体）
-      const noop = this.noopSegment('workspace', 'unchanged=' + String(unchanged) + ' nothingToDo=true')
+      const noop = this.noopSegment('workspace', 'nothing-to-restore', 'unchanged=' + String(unchanged) + ' nothingToDo=true')
       noop.leftovers = leftovers.leftovers
       noop.leftoversTruncated = leftovers.truncated
       return noop
@@ -2333,7 +2387,9 @@ export class RollbackAutoTracker {
       chunks: binding.chunks ?? [],
       note: this.mechanism === 'poll' ? 'auto:poll' : 'auto:turn',
     })
-    if (result.point === undefined) {
+    // T10：写台账失败（ok=false）绝不算留点成功 —— 否则 tracker 会记住一个台账里不存在的 pointId，
+    // 后续 rewind/详情都查不到它。（capturePoint 失败时也不再回传 point，这条判据是第二道保险。）
+    if (result.ok !== true || result.point === undefined) {
       return { captured: false, code: result.code, detail: result.detail }
     }
     if (info.turn !== null) {

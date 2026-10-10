@@ -38,7 +38,7 @@ import { sessionHealthNextSteps } from '../index.ts'
  *   mutation-locked                                      → 423
  *   method-not-allowed                                   → 405
  *   outcome=partial                                      → 200
- *   outcome=failed / restore-failed / guard-failed / ledger-write-failed → 500
+ *   outcome=failed / restore-failed / guard-failed / ledger-write-failed → 500（ledger-write-failed 在路由上的可达点只有 delete：引擎 remove 写台账失败时直接回它；rewind 路径**不可达** —— 引擎 capturePoint 写失败在 rewind 里一律转成 guard-failed，见 T10）
  *   nothing-to-restore                                   → 200
  *     （E1：它表示「没有可恢复的内容」= 成功、0 变更（工作区已与该点一致，或该态没有记录任何文件），
  *      整体 outcome 仍是 'restored'。旧版把它与真失败同级映射成 500，用户看到「回滚失败并提示错误500」

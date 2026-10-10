@@ -35,6 +35,7 @@ import {
   ROLLBACK_POINTS_DIR_NAME,
   RollbackAutoTracker,
   RollbackPointEngine,
+  classifyPreviewStatFailure,
   isInsidePath,
   resolveTurnBoundary,
   rollbackSessionBindingOf,
@@ -1294,7 +1295,8 @@ test('R-26 E1：工作区段无可恢复内容（files=0）不再中止整体 �
   const ws = rewound.segments.find((s) => s.state === 'workspace')
   assert.equal(ws?.status, 'restored', JSON.stringify(ws))
   assert.equal(ws?.restored, 0)
-  assert.equal(ws?.reasonCode, 'nothing-to-restore')
+  // T10：该点**没有记录任何文件** ⇒ 独立码（与「有记录但全部一致」分开，界面要说两句不同的话）
+  assert.equal(ws?.reasonCode, 'no-recorded-files')
   assert.deepEqual(rewound.skippedSegments, [], '「执行过、0 变更」不同于「没执行」')
   // 会话段照常执行：子会话真的 fork 了，整体仍是成功（不是 500）
   assert.deepEqual(calls, [{ sessionId: 'session-1111', boundarySeq: 1 }], '会话段必须继续执行')
@@ -1324,7 +1326,7 @@ test('R-27 E1：所有段都无可恢复内容 → outcome=restored + code=nothi
   assert.equal(onlyWorkspace.outcome, 'restored', JSON.stringify(onlyWorkspace.segments))
   assert.equal(onlyWorkspace.code, 'nothing-to-restore')
   assert.equal(onlyWorkspace.ok, true)
-  assert.equal(onlyWorkspace.segments[0]?.reasonCode, 'nothing-to-restore')
+  assert.equal(onlyWorkspace.segments[0]?.reasonCode, 'no-recorded-files')
 
   // ② 两段都无事可做（工作区 0 文件 + 会话没有可用捕获）⇒ 同样是成功、0 变更
   const both = await engine.rewind({ id: record.id, userConfirmed: true, allowPartial: true, guardPolicy: 'off' })
@@ -1447,4 +1449,215 @@ test('R-29 E1：空文件边界 + 超限保护（status 照给，added/removed �
   assert.equal(bin?.truncated, true)
   assert.equal(bin?.added, null)
   assert.equal(bin?.removed, null)
+})
+
+/* ==================== T10：安全链（幽灵 guardPointId）与 stat 失败语义 ==================== */
+
+/** 只读台账探针：真写一次（空追加）判断本机 chmod 是否真的挡住了写（挡不住就跳过，不伪造结论）。 */
+async function ledgerWritable(file: string): Promise<boolean> {
+  try {
+    await fs.appendFile(file, '')
+    return true
+  } catch {
+    return false
+  }
+}
+
+test('R-30 T10：台账写失败 ⇒ 没有幽灵 guardPointId（require 档整体中止、零写入、不 fork）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  assert.notEqual(id, '')
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2')
+
+  const ledgerPath = path.join(engine.storeDir, 'index.json')
+  const before = await readText(ledgerPath)
+  await fs.chmod(ledgerPath, 0o444)
+  try {
+    if (await ledgerWritable(ledgerPath)) {
+      t.skip('本机 chmod 后 index.json 仍可写，无法构造台账写失败')
+      return
+    }
+    // 前置事实：写台账失败时 capturePoint **不再**回传内存 record
+    // （旧实现回传它，消费方拿 point.id 当「留点成功」⇒ 幽灵 id）
+    const blocked = await capturePoint(engine, fx)
+    assert.equal(blocked.ok, false, JSON.stringify(blocked))
+    assert.equal(blocked.code, 'ledger-write-failed')
+    assert.equal(blocked.point, undefined, '写失败不得回传一个可被误当成功的 record')
+
+    // S5 硬门：留不下救援点 ⇒ 整体中止
+    const rewound = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'require' })
+    assert.equal(rewound.outcome, 'failed', JSON.stringify(rewound))
+    assert.equal(rewound.code, 'guard-failed', String(rewound.detail ?? ''))
+    assert.equal(rewound.guardPointId, undefined, '留不下救援点就绝不能报 guardPointId')
+    assert.equal(rewound.childSessionId, undefined, '中止 ⇒ 不 fork')
+    assert.deepEqual(rewound.segments, [], '中止 ⇒ 一段都不执行（零写入）')
+    assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A2', '零写入')
+
+    // warn 档：按既有策略只要告警继续，但同样**不报** guardPointId
+    const warned = await engine.rewind({ id, userConfirmed: true, segments: ['workspace'] })
+    assert.equal(warned.outcome, 'restored', JSON.stringify(warned))
+    assert.equal(warned.guardPointId, undefined, 'warn 档也不得报幽灵救援点')
+    assert.ok(warned.warnings.some((w) => w.code === 'rollback.warn.guardFailed'), JSON.stringify(warned.warnings))
+    assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A1', 'warn 档照常回退工作区')
+  } finally {
+    await fs.chmod(ledgerPath, 0o666)
+  }
+  assert.equal(await readText(ledgerPath), before, '整个过程台账一个字节都没被写')
+})
+
+test('R-31 T10：留点成功时 guardPointId 必然可 read（台账里真有它）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2')
+
+  // 缺省 warn 档也要求「真的留下救援点」
+  const rewound = await engine.rewind({ id, userConfirmed: true })
+  assert.equal(rewound.outcome, 'restored', JSON.stringify(rewound))
+  const guardId = rewound.guardPointId
+  assert.equal(typeof guardId, 'string', JSON.stringify(rewound))
+  assert.notEqual(guardId, '')
+  const readBack = await engine.read(guardId ?? '')
+  assert.equal(readBack.error, undefined, String(readBack.error ?? ''))
+  assert.equal(readBack.point?.id, guardId, 'guardPointId 必须能在台账里查到')
+  assert.equal(readBack.point?.kind, 'guard')
+  assert.ok((await ledgerOf(engine)).records.some((r) => r.id === guardId))
+
+  // 再回退一次：报出来的每个 id 都要查得到（不是同一个，也不是幽灵）
+  const again = await engine.rewind({ id, userConfirmed: true, segments: ['workspace'] })
+  assert.notEqual(again.guardPointId, guardId)
+  assert.equal((await engine.read(again.guardPointId ?? '')).point?.id, again.guardPointId)
+})
+
+test('R-32 T10：台账写失败时 tracker 不得报 captured=true（不能记住幽灵 pointId）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const tracker = new RollbackAutoTracker({ engine })
+  tracker.registerSession({
+    sessionId: 'session-1111',
+    unitId: 'proj-key/session-1111',
+    logPath: fx.logFile,
+    chunks: [fx.workspaceDir],
+  })
+  const first = await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 1 } })
+  assert.equal(first.captured, true, first.detail ?? '')
+  assert.equal(typeof first.pointId, 'string')
+
+  const ledgerPath = path.join(engine.storeDir, 'index.json')
+  await fs.chmod(ledgerPath, 0o444)
+  try {
+    if (await ledgerWritable(ledgerPath)) {
+      t.skip('本机 chmod 后 index.json 仍可写，无法构造台账写失败')
+      return
+    }
+    const second = await tracker.noteEvent({ sessionId: 'session-1111', seq: 12, type: 'turn/end', data: { turn: 2 } })
+    assert.equal(second.captured, false, JSON.stringify(second))
+    assert.equal(second.pointId, undefined, '写失败不得报 pointId')
+    assert.equal(second.code, 'ledger-write-failed')
+    assert.equal((await ledgerOf(engine)).records.length, 1, '台账里绝不能出现第二个点')
+  } finally {
+    await fs.chmod(ledgerPath, 0o666)
+  }
+})
+
+test('R-33 T10：preview 的 stat 失败语义 —— 只有 ENOENT 才算「当前不存在」', async (t) => {
+  // ① 纯函数口径（本机无法确定性构造 EACCES，故把判定函数本身钉死）
+  assert.equal(classifyPreviewStatFailure({ code: 'ENOENT' }), 'missing')
+  assert.equal(
+    classifyPreviewStatFailure(new Error('ENOENT: no such file or directory, stat x')),
+    'unavailable',
+    '只看 errno code，不看 message',
+  )
+  for (const code of ['EACCES', 'EPERM', 'ELOOP', 'ENOTDIR', 'EBUSY', 'ERR_INVALID_ARG_VALUE', 'UNKNOWN']) {
+    assert.equal(classifyPreviewStatFailure({ code }), 'unavailable', code)
+  }
+  assert.equal(classifyPreviewStatFailure(null), 'unavailable')
+  assert.equal(classifyPreviewStatFailure('ENOENT'), 'unavailable')
+  assert.equal(classifyPreviewStatFailure({ code: 2 }), 'unavailable')
+
+  // ② 真 fs.stat 的**非 ENOENT** 失败贯穿整条预览：含 NUL 的非法路径 → ERR_INVALID_ARG_VALUE
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  const ledgerPath = path.join(engine.storeDir, 'index.json')
+  interface TamperableRecord { id: string; workspace: { payload: { files: { path: string }[] } | null } }
+  const ledger = JSON.parse(await readText(ledgerPath)) as { records: TamperableRecord[] }
+  const record = ledger.records.find((r) => r.id === id)
+  assert.ok(record !== undefined && record.workspace.payload !== null)
+  const victim = record.workspace.payload?.files.find((f) => f.path.endsWith('a.txt'))
+  assert.ok(victim !== undefined)
+  victim.path = path.join(fx.workspaceDir, 'a' + String.fromCharCode(0) + '.txt')
+  await fs.writeFile(ledgerPath, JSON.stringify(ledger))
+
+  const preview = await engine.preview(id)
+  assert.equal(preview.workspace.missing, 0, '非 ENOENT 的 stat 失败**不是**「当前不存在」')
+  assert.equal(preview.workspace.different, 1)
+  assert.equal(preview.workspace.files.length, 1)
+  const entry = preview.workspace.files[0]
+  assert.equal(entry?.status, 'overwrite', '存在性未知 ⇒ 绝不报成 create')
+  assert.equal(entry?.added, null)
+  assert.equal(entry?.removed, null)
+  assert.equal(entry?.truncated, true)
+
+  // ③ 对照：真的不存在（ENOENT）仍然是 create + 快照行数
+  const fresh = await makeFixture()
+  t.after(fresh.cleanup)
+  const engine2 = makeEngine(fresh)
+  const captured2 = await capturePoint(engine2, fresh)
+  await fs.rm(path.join(fresh.workspaceDir, 'a.txt'))
+  const preview2 = await engine2.preview(captured2.point?.id ?? '')
+  assert.equal(preview2.workspace.missing, 1)
+  const gone = preview2.workspace.files.find((f) => f.path.endsWith('a.txt'))
+  assert.equal(gone?.status, 'create')
+  assert.equal(gone?.added, 1)
+  assert.equal(gone?.removed, 0)
+  assert.equal(gone?.truncated, false)
+})
+
+test('R-34 T10：工作区段「没记录文件」与「记录但全部一致」必须给不同的 reasonCode', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+
+  // ① 记录在案的条目数 = 0（空分块）→ no-recorded-files
+  const emptyDir = path.join(fx.root, 'empty-ws')
+  await fs.mkdir(emptyDir, { recursive: true })
+  const engine = makeEngine(fx)
+  const empty = await engine.capturePoint({ chunks: [emptyDir] })
+  assert.equal(empty.point?.workspace.payload?.files.length, 0)
+  const noFiles = await engine.rewind({
+    id: empty.point?.id ?? '', userConfirmed: true, allowPartial: true, segments: ['workspace'], guardPolicy: 'off',
+  })
+  const noFilesSegment = noFiles.segments.find((s) => s.state === 'workspace')
+  assert.equal(noFilesSegment?.reasonCode, 'no-recorded-files', JSON.stringify(noFilesSegment))
+  assert.equal(noFilesSegment?.status, 'restored')
+  assert.equal(noFilesSegment?.restored, 0)
+  assert.equal(noFiles.outcome, 'restored')
+  assert.equal(noFiles.code, 'nothing-to-restore', '整体码不变（「没有可恢复的内容」）')
+
+  // ② 有记录、但全部已与快照一致 → nothing-to-restore（**不是**同一个码）
+  const sameDir = path.join(fx.root, 'same-ws')
+  await fs.mkdir(sameDir, { recursive: true })
+  await fs.writeFile(path.join(sameDir, 'x.txt'), 'X1\n')
+  const engine2 = makeEngine(fx)
+  const same = await engine2.capturePoint({ chunks: [sameDir] })
+  assert.equal(same.point?.workspace.payload?.files.length, 1)
+  const unchanged = await engine2.rewind({
+    id: same.point?.id ?? '', userConfirmed: true, allowPartial: true, segments: ['workspace'], guardPolicy: 'off',
+  })
+  const unchangedSegment = unchanged.segments.find((s) => s.state === 'workspace')
+  assert.equal(unchangedSegment?.reasonCode, 'nothing-to-restore', JSON.stringify(unchangedSegment))
+  assert.equal(unchangedSegment?.restored, 0)
+  assert.notEqual(
+    unchangedSegment?.reasonCode,
+    noFilesSegment?.reasonCode,
+    '两条路径必须是不同的码（界面据此说两句不同的话，不靠 detail 分派）',
+  )
 })
