@@ -38,7 +38,11 @@ import { sessionHealthNextSteps } from '../index.ts'
  *   mutation-locked                                      → 423
  *   method-not-allowed                                   → 405
  *   outcome=partial                                      → 200
- *   outcome=failed / restore-failed / guard-failed / ledger-write-failed / nothing-to-restore → 500
+ *   outcome=failed / restore-failed / guard-failed / ledger-write-failed → 500
+ *   nothing-to-restore                                   → 200
+ *     （E1：它表示「没有可恢复的内容」= 成功、0 变更（工作区已与该点一致，或该态没有记录任何文件），
+ *      整体 outcome 仍是 'restored'。旧版把它与真失败同级映射成 500，用户看到「回滚失败并提示错误500」
+ *      —— 语义错位，不是真失败。code 仍在 body 里，界面照常出「该回滚点没有可恢复的内容」。）
  *   其余（ok / deleted / 其它内部分级码出现在 segments[].reasonCode）→ 200
  */
 function rollbackHttpStatus(value: { ok?: boolean; code?: string; outcome?: string }): number {
@@ -51,7 +55,8 @@ function rollbackHttpStatus(value: { ok?: boolean; code?: string; outcome?: stri
   if (value.outcome === 'denied') return 409
   if (value.outcome === 'partial') return 200
   if (value.outcome === 'failed') return 500
-  if (value.code === 'restore-failed' || value.code === 'guard-failed' || value.code === 'ledger-write-failed' || value.code === 'nothing-to-restore') return 500
+  // E1：nothing-to-restore **不在**这一行 —— 「没有可恢复的内容」是成功、0 变更，走 200（见上表）
+  if (value.code === 'restore-failed' || value.code === 'guard-failed' || value.code === 'ledger-write-failed') return 500
   return 200
 }
 

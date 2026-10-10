@@ -483,3 +483,121 @@ test('R8-6 救援点：preview canRestore=true/canRemove=false，POST rewind →
     await h.cleanup()
   }
 })
+
+/* ======== R8-7 E1：nothing-to-restore 是 200（不是 500）+ 预览逐文件行级统计 ======== */
+
+test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restore）；0 文件变更但会话可回退 → 200 且真的 fork', async () => {
+  const h = await makeHarness()
+  const server = await startServer(h)
+  try {
+    const emptyDir = path.join(h.root, 'empty-ws')
+    await fs.mkdir(emptyDir, { recursive: true })
+
+    // ① 工作区 0 文件 + 会话可回退：工作区段「成功、0 变更」，会话段照常 fork
+    const id = await makePoint(h, { chunks: [emptyDir] })
+    const emptyPreview = await server.call('/rollback-points/' + id + '/preview')
+    assert.equal(emptyPreview.status, 200, JSON.stringify(emptyPreview.json))
+    assert.deepEqual(obj(obj(emptyPreview.json)['workspace'])['files'], [], '没有会被改动的文件 ⇒ 空数组')
+
+    const rewound = await server.call('/rollback-points/' + id + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, preRewindGuard: 'off' },
+    })
+    assert.equal(rewound.status, 200, JSON.stringify(rewound.json).slice(0, 500))
+    assert.equal(obj(rewound.json)['outcome'], 'restored')
+    assert.equal(obj(rewound.json)['code'], 'ok', '工作区 0 变更不该把整体拖成失败 / 部分')
+    assert.equal(obj(rewound.json)['childSessionId'], 'child-' + SESSION_ID, '会话必须真的 fork 了')
+    assert.deepEqual(h.forkCalls, [{ sessionId: SESSION_ID, boundarySeq: 1 }])
+    const wsSegment = arr(obj(rewound.json)['segments']).map(obj).find((s) => s['state'] === 'workspace')
+    assert.equal(wsSegment?.['status'], 'restored')
+    assert.equal(wsSegment?.['restored'], 0)
+    assert.equal(wsSegment?.['reasonCode'], 'nothing-to-restore')
+    assert.deepEqual(obj(rewound.json)['skippedSegments'], [], '「执行过、0 变更」不同于「没执行」')
+
+    // ② 所有被请求的段都无事可做：**200** + outcome=restored + code=nothing-to-restore（旧版这里是 500）
+    const onlyFiles = await server.call('/rollback-points/' + id + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, preRewindGuard: 'off', mode: 'files' },
+    })
+    assert.equal(onlyFiles.status, 200, JSON.stringify(onlyFiles.json).slice(0, 500))
+    assert.equal(obj(onlyFiles.json)['outcome'], 'restored')
+    assert.equal(obj(onlyFiles.json)['code'], 'nothing-to-restore')
+    assert.equal(obj(onlyFiles.json)['ok'], true)
+
+    // ③ 预览逐文件行级统计：完全一致 ⇒ 空数组；改一个文件 ⇒ 该文件带 added/removed
+    const id2 = await makePoint(h)
+    const clean = await server.call('/rollback-points/' + id2 + '/preview')
+    assert.equal(clean.status, 200)
+    const cleanWs = obj(obj(clean.json)['workspace'])
+    assert.equal(cleanWs['overwrite'], 1)
+    assert.equal(cleanWs['different'], 0)
+    assert.deepEqual(cleanWs['files'], [], '内容一致 ⇒ 空数组，而不是逐条列出')
+    await fs.writeFile(path.join(h.workspaceDir, 'x.txt'), 'X1\nX2\nX3')
+    const changed = await server.call('/rollback-points/' + id2 + '/preview')
+    assert.equal(changed.status, 200)
+    const changedWs = obj(obj(changed.json)['workspace'])
+    assert.equal(changedWs['different'], 1)
+    assert.deepEqual(arr(changedWs['files']).map(obj), [{
+      path: path.join(h.workspaceDir, 'x.txt'),
+      status: 'overwrite',
+      added: 0,
+      removed: 2,
+      truncated: false,
+    }], '快照 1 行 vs 当前 3 行 ⇒ 覆盖回退删掉 2 行')
+    assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1\nX2\nX3', '预览必须零写入')
+    // 反向：当前被清空 ⇒ 覆盖回退补回快照的那 1 行
+    await fs.writeFile(path.join(h.workspaceDir, 'x.txt'), '')
+    const grown = await server.call('/rollback-points/' + id2 + '/preview')
+    assert.deepEqual(arr(obj(obj(grown.json)['workspace'])['files']).map(obj), [{
+      path: path.join(h.workspaceDir, 'x.txt'),
+      status: 'overwrite',
+      added: 1,
+      removed: 0,
+      truncated: false,
+    }])
+    await fs.writeFile(path.join(h.workspaceDir, 'x.txt'), 'X1\nX2\nX3')
+
+    // ④ 真的回退一次（覆盖回快照）→ 200 restored/ok
+    const first = await server.call('/rollback-points/' + id2 + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, preRewindGuard: 'off', mode: 'files' },
+    })
+    assert.equal(first.status, 200, JSON.stringify(first.json).slice(0, 400))
+    assert.equal(obj(first.json)['outcome'], 'restored')
+    assert.equal(obj(first.json)['code'], 'ok')
+    assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1')
+
+    // ⑤ 工作区已与该点一致时再回退 ⇒ 「成功、0 变更」= 200 + nothing-to-restore（截图 1 那一幕）
+    const second = await server.call('/rollback-points/' + id2 + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, preRewindGuard: 'off', mode: 'files' },
+    })
+    assert.equal(second.status, 200, JSON.stringify(second.json).slice(0, 500))
+    assert.equal(obj(second.json)['outcome'], 'restored')
+    assert.equal(obj(second.json)['code'], 'nothing-to-restore')
+    assert.equal(arr(obj(second.json)['segments']).map(obj)[0]?.['restored'], 0)
+    assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1', '无事可做也绝不改写内容')
+
+    // ⑥ 真失败仍 500：台账被篡改成不可能满足的指纹 → 零写入 + restore-failed
+    const ledgerPath = path.join(h.dataDir, 'rollback-points', 'index.json')
+    interface TamperableRecord {
+      id: string
+      workspace: { payload: { files: { path: string; sha256: string }[] } | null }
+    }
+    const ledger = JSON.parse(await readText(ledgerPath)) as { records: TamperableRecord[] }
+    const target = ledger.records.find((r) => r.id === id2)
+    assert.ok(target !== undefined && target.workspace.payload !== null)
+    for (const file of target.workspace.payload?.files ?? []) file.sha256 = '0'.repeat(64)
+    await fs.writeFile(ledgerPath, JSON.stringify(ledger))
+    const tampered = await server.call('/rollback-points/' + id2 + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, preRewindGuard: 'off', mode: 'files' },
+    })
+    assert.equal(tampered.status, 500, JSON.stringify(tampered.json).slice(0, 400))
+    assert.equal(obj(tampered.json)['outcome'], 'failed')
+    assert.equal(obj(tampered.json)['code'], 'restore-failed')
+  } finally {
+    await server.close()
+    await h.cleanup()
+  }
+})

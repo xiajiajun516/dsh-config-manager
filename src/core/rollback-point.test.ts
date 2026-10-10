@@ -19,6 +19,8 @@
  *  - 预览零写入（R-13）、mode 三选一（R-14）、存储降级（R-15）、
  *    台账损坏不崩（R-16）、删除 + 对象回收（R-17）、
  *    轮询回退（R-18）、分块不可用（R-19）
+ *  - E1：nothing-to-restore 是「成功、0 变更」（R-26 / R-27）
+ *    与预览逐文件行级统计（R-28 / R-29）
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -1258,4 +1260,191 @@ test('R-25 preview 准入：guard 可回退不可删、protected 两者皆否、
   const removed = await engine.remove(guardId)
   assert.equal(removed.ok, false)
   assert.equal(removed.code, 'protected-point')
+})
+
+/* ================================== E1 nothing-to-restore 不再是失败 */
+
+test('R-26 E1：工作区段无可恢复内容（files=0）不再中止整体 —— 会话照常 fork 出子会话', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const emptyDir = path.join(fx.root, 'empty-ws')
+  await fs.mkdir(emptyDir, { recursive: true })
+  const calls: RollbackForkInput[] = []
+  const engine = makeEngine(fx, {
+    fork: async (input) => { calls.push(input); return { ok: true, childSessionId: 'child-empty' } },
+  })
+  const captured = await engine.capturePoint({
+    chunks: [emptyDir],
+    sessionId: 'session-1111',
+    unitId: 'proj-key/session-1111',
+    sessionLogPath: fx.logFile,
+    cursorSeq: 3,
+    turnSeq: 2,
+    boundarySeq: 1,
+    boundaryEndSeq: 6,
+  })
+  const record = captured.point
+  assert.ok(record !== undefined)
+  assert.equal(record.workspace.ok, true)
+  assert.equal(record.workspace.payload?.files.length, 0, '夹具必须真的记录 0 个文件')
+  assert.equal(record.incomplete, false, '两态都在，记录不算不全')
+
+  const rewound = await engine.rewind({ id: record.id, userConfirmed: true, guardPolicy: 'off' })
+  // 工作区段 = 「成功、0 变更」：不是失败、也不进 skippedSegments（它**执行过**）
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.status, 'restored', JSON.stringify(ws))
+  assert.equal(ws?.restored, 0)
+  assert.equal(ws?.reasonCode, 'nothing-to-restore')
+  assert.deepEqual(rewound.skippedSegments, [], '「执行过、0 变更」不同于「没执行」')
+  // 会话段照常执行：子会话真的 fork 了，整体仍是成功（不是 500）
+  assert.deepEqual(calls, [{ sessionId: 'session-1111', boundarySeq: 1 }], '会话段必须继续执行')
+  assert.equal(rewound.segments.find((s) => s.state === 'session')?.status, 'restored')
+  assert.equal(rewound.childSessionId, 'child-empty')
+  assert.equal(rewound.outcome, 'restored', JSON.stringify(rewound.segments))
+  assert.equal(rewound.code, 'ok')
+  assert.equal(rewound.ok, true)
+})
+
+test('R-27 E1：所有段都无可恢复内容 → outcome=restored + code=nothing-to-restore（不是 failed）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const emptyDir = path.join(fx.root, 'empty-ws')
+  await fs.mkdir(emptyDir, { recursive: true })
+  const engine = makeEngine(fx)
+  // 只录工作区（无会话输入）⇒ 会话段没有可用捕获（skipped），工作区段文件数 = 0
+  const captured = await engine.capturePoint({ chunks: [emptyDir] })
+  const record = captured.point
+  assert.ok(record !== undefined)
+  assert.equal(record.incomplete, true)
+
+  // ① 只请求工作区段：该段「执行过、0 变更」⇒ 整体成功、0 变更
+  const onlyWorkspace = await engine.rewind({
+    id: record.id, userConfirmed: true, allowPartial: true, segments: ['workspace'], guardPolicy: 'off',
+  })
+  assert.equal(onlyWorkspace.outcome, 'restored', JSON.stringify(onlyWorkspace.segments))
+  assert.equal(onlyWorkspace.code, 'nothing-to-restore')
+  assert.equal(onlyWorkspace.ok, true)
+  assert.equal(onlyWorkspace.segments[0]?.reasonCode, 'nothing-to-restore')
+
+  // ② 两段都无事可做（工作区 0 文件 + 会话没有可用捕获）⇒ 同样是成功、0 变更
+  const both = await engine.rewind({ id: record.id, userConfirmed: true, allowPartial: true, guardPolicy: 'off' })
+  assert.equal(both.outcome, 'restored', JSON.stringify(both.segments))
+  assert.equal(both.code, 'nothing-to-restore')
+  assert.equal(both.ok, true)
+  assert.equal(both.segments.length, 2)
+})
+
+/* ================================== E1 预览：逐文件行级统计 */
+
+test('R-28 E1：预览只列会被改动的文件，added/removed 来自「快照对象 vs 当前内容」的行级 diff', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  await fs.writeFile(path.join(fx.workspaceDir, 'empty.txt'), '')
+  await fs.writeFile(path.join(fx.workspaceDir, 'multi.txt'), 'L1\nL2\nL3\n')
+  const engine = makeEngine(fx)
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  assert.equal(captured.point?.workspace.payload?.files.length, 4)
+
+  // ① 完全一致（截图里「要盖 353 项 / 其中 0 项内容不同」那一幕）⇒ **空数组**，而不是逐条列出
+  const untouched = await engine.preview(id)
+  assert.equal(untouched.workspace.overwrite, 4, '既有计数字段保持向后兼容')
+  assert.equal(untouched.workspace.different, 0)
+  assert.equal(untouched.workspace.missing, 0)
+  assert.equal(untouched.workspace.createdAfter, 0)
+  assert.deepEqual(untouched.workspace.files, [])
+  assert.equal(untouched.canRestore, true)
+
+  // ② 三种真实改动：行增减 / 清空（回退要补行）/ 删文件（回退会重建）
+  await fs.writeFile(path.join(fx.workspaceDir, 'multi.txt'), 'L1\nL3\nL4\n')
+  await fs.writeFile(path.join(fx.workspaceDir, 'empty.txt'), 'X\nY\n')
+  await fs.rm(path.join(fx.workspaceDir, 'src', 'b.txt'))
+
+  const preview = await engine.preview(id)
+  assert.equal(preview.workspace.different, 2)
+  assert.equal(preview.workspace.missing, 1)
+  assert.equal(preview.workspace.createdAfter, 0)
+  const files = preview.workspace.files
+  assert.deepEqual(files.map((f) => path.basename(f.path)), ['empty.txt', 'multi.txt', 'b.txt'], '只列会被改动的文件（a.txt 一致 ⇒ 不列）')
+  const byName = new Map(files.map((f) => [path.basename(f.path), f]))
+  assert.deepEqual(
+    byName.get('multi.txt'),
+    { path: path.join(fx.workspaceDir, 'multi.txt'), status: 'overwrite', added: 1, removed: 1, truncated: false },
+    'L1/L3/L4 → L1/L2/L3：新增 1 行（L2）、删除 1 行（L4）',
+  )
+  assert.deepEqual(
+    byName.get('empty.txt'),
+    { path: path.join(fx.workspaceDir, 'empty.txt'), status: 'overwrite', added: 0, removed: 2, truncated: false },
+    '快照是空文件（0 行）⇒ 覆盖回退会删掉当前的 2 行',
+  )
+  assert.deepEqual(
+    byName.get('b.txt'),
+    { path: path.join(fx.workspaceDir, 'src', 'b.txt'), status: 'create', added: 1, removed: 0, truncated: false },
+    '当前已不存在 ⇒ create，新增 = 快照行数',
+  )
+  for (const f of files) {
+    assert.ok(f.status === 'overwrite' || f.status === 'create', '回退绝不删除文件 ⇒ 列表里不会出现 delete')
+  }
+  // 预览零写入：内容与统计都来自只读
+  assert.equal(await readText(path.join(fx.workspaceDir, 'multi.txt')), 'L1\nL3\nL4\n')
+})
+
+test('R-29 E1：空文件边界 + 超限保护（status 照给，added/removed 置 null 且 truncated=true，绝不谎报）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  await fs.writeFile(path.join(fx.workspaceDir, 'empty.txt'), '')
+  await fs.writeFile(path.join(fx.workspaceDir, 'multi.txt'), 'L1\nL2\nL3\n')
+  await fs.writeFile(path.join(fx.workspaceDir, 'swap.txt'), 'S1\nS2\nS3\n')
+  const engine = makeEngine(fx)
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+
+  // ① 空文件边界（快照 0 字节）→ 当前 2 行：覆盖回退会删掉这 2 行（不是「没变化」）
+  await fs.writeFile(path.join(fx.workspaceDir, 'empty.txt'), 'X\nY\n')
+  // ② 反向边界（快照 3 行）→ 当前被清空：覆盖回退会补回 3 行
+  await fs.writeFile(path.join(fx.workspaceDir, 'multi.txt'), '')
+  // ③ 当前多出的行 → removed；④ 纯换序（行集合相同、顺序不同）→ 真 diff 仍报 1/1
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A1\nEXTRA1\nEXTRA2\n')
+  await fs.writeFile(path.join(fx.workspaceDir, 'swap.txt'), 'S1\nS3\nS2\n')
+
+  const boundary = await engine.preview(id)
+  const pick = (name: string) => boundary.workspace.files.find((f) => f.path.endsWith(name))
+  assert.deepEqual([pick('empty.txt')?.added, pick('empty.txt')?.removed], [0, 2])
+  assert.deepEqual([pick('multi.txt')?.added, pick('multi.txt')?.removed], [3, 0])
+  assert.deepEqual([pick('a.txt')?.added, pick('a.txt')?.removed], [0, 2])
+  assert.deepEqual([pick('swap.txt')?.added, pick('swap.txt')?.removed], [1, 1], '行级 diff 不是「集合差」：换序也算 1 增 1 删')
+  for (const f of boundary.workspace.files) assert.equal(f.truncated, false)
+
+  // ⑤ 单文件超限：status 照给、数字不给（不谎报）
+  const tiny = makeEngine(fx, { previewDiffMaxFileBytes: 4 })
+  const capped = (await tiny.preview(id)).workspace.files.find((f) => f.path.endsWith('swap.txt'))
+  assert.equal(capped?.status, 'overwrite', '超限也必须照给 status')
+  assert.equal(capped?.added, null)
+  assert.equal(capped?.removed, null)
+  assert.equal(capped?.truncated, true)
+
+  // ⑥ 单张预览累计字节超限：其后每一条都只给 status
+  const totalPreview = await makeEngine(fx, { previewDiffMaxTotalBytes: 1 }).preview(id)
+  assert.ok(totalPreview.workspace.files.length > 0)
+  assert.ok(totalPreview.workspace.files.every((f) => f.truncated && f.added === null && f.removed === null))
+
+  // ⑦ 行级比对步数超限：需要真比对的条目放弃（null + truncated），但「一侧为空」的边界步数为 0，仍给数字
+  const noWork = await makeEngine(fx, { previewDiffMaxWork: 0 }).preview(id)
+  const noWorkSwap = noWork.workspace.files.find((f) => f.path.endsWith('swap.txt'))
+  assert.equal(noWorkSwap?.truncated, true)
+  assert.equal(noWorkSwap?.added, null)
+  const noWorkMulti = noWork.workspace.files.find((f) => f.path.endsWith('multi.txt'))
+  assert.deepEqual([noWorkMulti?.added, noWorkMulti?.removed], [3, 0])
+
+  // ⑧ 非文本内容不做行统计（编不出来的行数 ⇒ null + truncated，而不是猜一个数）
+  const binary = Buffer.from([0x42, 0x49, 0x4e, 0x00, 0x01, 0x02])
+  await fs.writeFile(path.join(fx.workspaceDir, 'bin.dat'), binary)
+  const engine2 = makeEngine(fx)
+  const recaptured = await capturePoint(engine2, fx)
+  await fs.writeFile(path.join(fx.workspaceDir, 'bin.dat'), Buffer.from([0x42, 0x49, 0x4e, 0x00, 0x09, 0x08]))
+  const bin = (await engine2.preview(recaptured.point?.id ?? '')).workspace.files.find((f) => f.path.endsWith('bin.dat'))
+  assert.equal(bin?.status, 'overwrite')
+  assert.equal(bin?.truncated, true)
+  assert.equal(bin?.added, null)
+  assert.equal(bin?.removed, null)
 })

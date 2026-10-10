@@ -91,6 +91,23 @@ export const ROLLBACK_DEFAULT_POLL_INTERVAL_MS = 5_000
 export const ROLLBACK_LEFTOVER_LIST_LIMIT = 20
 export const ROLLBACK_DETAIL_LIMIT = 50
 
+/**
+ * E1：预览里「逐文件行级统计」的规模上限。四条**只影响** `workspace.files[].added/removed`：
+ * 触到任一条的条目仍然照给 status，但 added/removed 置 null 且 truncated=true ——
+ * **宁可说「不知道」，也绝不谎报行数**。
+ *
+ * 为什么需要：预览要读「快照对象 + 当前文件」两份内容再做行级 diff，而一个点的记录可能有上千条目；
+ * 没有上限时一次预览就能把宿主的 I/O 与 CPU 拖住。
+ * - 单文件 1 MiB：单条目的读写/解码都钉在一个小上限内（绝大多数源码文件远小于它）；
+ * - 单张预览累计 32 MiB：与捕获期字节预算（`ROLLBACK_DEFAULT_MAX_BYTES`）同量级；
+ * - 单文件 8e6 步 / 单张预览 32e6 步：行级 diff 是 Myers O((N+M)·D)，步数上限就是时间上限
+ *   （32e6 步在毫秒~百毫秒量级），避免「大文件被整篇改写」这种最坏情形把请求拖死。
+ */
+export const ROLLBACK_PREVIEW_DIFF_MAX_FILE_BYTES = 1024 * 1024
+export const ROLLBACK_PREVIEW_DIFF_MAX_TOTAL_BYTES = 32 * 1024 * 1024
+export const ROLLBACK_PREVIEW_DIFF_MAX_WORK = 8_000_000
+export const ROLLBACK_PREVIEW_DIFF_TOTAL_WORK = 32_000_000
+
 /** 恢复顺序（工作区在前；工作区失败即中止后面的会话段） */
 export const ROLLBACK_REWIND_ORDER = ['workspace', 'session'] as const
 
@@ -365,6 +382,32 @@ export interface RollbackForkCarrier {
   forkSession?: (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string } | { error: string }>
 }
 
+/** 预览里「回退会改动的一个文件」的动作。 */
+export type RollbackPreviewFileStatus = 'overwrite' | 'create' | 'delete'
+
+/**
+ * E1：逐文件的行级统计（简洁版预览弹窗的数据源）。
+ * **只列真的会被改动的文件** —— 已与快照一致的条目一个都不列（353 项里 0 项不同 ⇒ 空数组）。
+ */
+export interface RollbackPreviewFile {
+  path: string
+  /**
+   * overwrite = 覆盖已有文件；create = 当前不存在（回退会重新创建）。
+   * `delete` **当前永远不会出现**：回退只覆盖记录在案的路径，绝不删除任何文件
+   * （未记录与该点之后新建的文件只进 leftovers 报告）—— 保留该取值只为契约形状向前兼容。
+   */
+  status: RollbackPreviewFileStatus
+  /** 回退会让该文件**新增**的行数；null = 本次不给数字（见 truncated） */
+  added: number | null
+  /** 回退会从该文件**删除**的行数；null = 本次不给数字（见 truncated） */
+  removed: number | null
+  /**
+   * true = 本次没有可信行数（added/removed 均为 null）：任一侧超过单文件上限、单张预览累计上限、
+   * 行级比对步数上限，或内容不是文本，或对象仓读不出。**宁可说「不知道」，也绝不谎报行数。**
+   */
+  truncated: boolean
+}
+
 export interface RollbackPreviewWorkspace {
   /** 记录在案、会被覆盖的条目数 */
   overwrite: number
@@ -374,6 +417,8 @@ export interface RollbackPreviewWorkspace {
   missing: number
   /** 回滚点之后新建、**绝不删除**的条目数 */
   createdAfter: number
+  /** E1：逐文件行级统计；**只含会被改动的文件**（内容已一致的一个都不列） */
+  files: RollbackPreviewFile[]
   leftovers: string[]
   leftoversTruncated: boolean
   chunks: string[]
@@ -513,6 +558,11 @@ export interface RollbackEngineOptions {
   fork?: RollbackForkSeam
   /** 写回 seam（缺省 = atomicWriteFile + symlink:'reject'）；测试可注入以验证「校验失败整体回滚」 */
   writeFile?: (target: string, bytes: Uint8Array) => Promise<void>
+  /** E1：预览行级统计的规模上限（缺省见 ROLLBACK_PREVIEW_DIFF_*）；注入小值即可确定性地覆盖 truncated 分支 */
+  previewDiffMaxFileBytes?: number
+  previewDiffMaxTotalBytes?: number
+  previewDiffMaxWork?: number
+  previewDiffTotalWork?: number
   /** best-effort 日志（清理失败等；绝不抛给调用方） */
   log?: (line: string) => void
 }
@@ -546,6 +596,110 @@ function errorDetail(error: unknown): string {
 
 function pushDetail(list: string[], line: string): void {
   if (list.length < ROLLBACK_DETAIL_LIMIT) list.push(line)
+}
+
+/* ------------------------------------------------ E1：行级统计（纯函数） */
+
+const DIFF_TEXT_DECODER = new TextDecoder('utf-8', { fatal: false })
+
+/** 二进制判据：前 8 KiB 出现 NUL 字节 → 不是文本，「行数」没有意义（**不猜、不谎报**）。 */
+function looksBinary(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, 8192)
+  for (let i = 0; i < head.length; i += 1) {
+    if (head[i] === 0) return true
+  }
+  return false
+}
+
+/**
+ * 行切分口径（**空文件边界的唯一事实源**）：
+ * - 0 字节 = 0 行；
+ * - `'\n'` = 1 行（一个空行）；
+ * - 末尾换行不产生多余的一行（`'a\nb\n'` 与 `'a\nb'` 都是 2 行）；
+ * - CRLF / CR / LF 都算行分隔符 ⇒「只有换行风格不同」不会被谎报成行增减。
+ */
+function splitDiffLines(text: string): string[] {
+  const parts = text.split(/\r\n|\r|\n/)
+  if (parts.length > 0 && parts[parts.length - 1] === '') parts.pop()
+  return parts
+}
+
+/**
+ * Myers 最短编辑脚本长度 D（O((N+M)·D) 步）。**只在需要长度时**如此实现：
+ * 典型编辑（局部小改）D 很小 ⇒ 快；整篇改写时步数会爆炸 ⇒ 由 `limit` 截断并如实返回未完成。
+ * `used` 是真实消耗的步数（中止时也要把预算扣掉，避免总预算被绕过）。
+ */
+function cappedEditDistance(
+  a: readonly string[],
+  b: readonly string[],
+  limit: number,
+): { ok: true; distance: number; used: number } | { ok: false; used: number } {
+  const n = a.length
+  const m = b.length
+  if (n === 0 || m === 0) return { ok: true, distance: n + m, used: 0 }
+  const max = n + m
+  const offset = max
+  const v = new Int32Array(2 * max + 1)
+  let used = 0
+  for (let d = 0; d <= max; d += 1) {
+    for (let k = -d; k <= d; k += 2) {
+      used += 1
+      if (used > limit) return { ok: false, used: used - 1 }
+      const down = k === -d || (k !== d && (v[k - 1 + offset] ?? 0) < (v[k + 1 + offset] ?? 0))
+      let x = down ? (v[k + 1 + offset] ?? 0) : (v[k - 1 + offset] ?? 0) + 1
+      let y = x - k
+      while (x < n && y < m && a[x] === b[y]) {
+        used += 1
+        if (used > limit) return { ok: false, used: used - 1 }
+        x += 1
+        y += 1
+      }
+      v[k + offset] = x
+      if (x >= n && y >= m) return { ok: true, distance: d, used }
+    }
+  }
+  return { ok: true, distance: max, used }
+}
+
+/**
+ * 行级 diff 计数：把「before → after 的最短编辑脚本」拆成 added / removed。
+ * 由 `added - removed = m - n` 与 `added + removed = D` 解出：
+ *   added = (D + m - n) / 2、removed = (D - m + n) / 2（与 LCS 口径等价：added = after 独有行数）。
+ *
+ * 先折掉公共前后缀（典型编辑只动一小段 ⇒ 内存与步数都随之变小），再对中间段跑 Myers；
+ * 步数超过 `maxWork` 或单张预览的总预算（`budget.work`）时返回 null ——
+ * 调用方如实置 added/removed = null + truncated，**绝不用近似值糊过去**。
+ */
+function lineDiffCounts(
+  before: readonly string[],
+  after: readonly string[],
+  maxWork: number,
+  totalWork: number,
+  budget: { work: number },
+): { added: number; removed: number } | null {
+  let head = 0
+  const maxHead = Math.min(before.length, after.length)
+  while (head < maxHead && before[head] === after[head]) head += 1
+  let endBefore = before.length
+  let endAfter = after.length
+  while (endBefore > head && endAfter > head && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore -= 1
+    endAfter -= 1
+  }
+  const n = endBefore - head
+  const m = endAfter - head
+  if (n === 0 || m === 0) return { added: m, removed: n }
+  const limit = Math.min(maxWork, Math.max(0, totalWork - budget.work))
+  const outcome = cappedEditDistance(before.slice(head, endBefore), after.slice(head, endAfter), limit)
+  budget.work += outcome.used
+  if (!outcome.ok) return null
+  const d = outcome.distance
+  return { added: (d + m - n) / 2, removed: (d - m + n) / 2 }
+}
+
+/** 「本次没有可信行数」的统一返回值（超限 / 非文本 / 对象读不出）。 */
+function previewCountsUnavailable(): { added: number | null; removed: number | null; truncated: boolean } {
+  return { added: null, removed: null, truncated: true }
 }
 
 function storageGuidance(root: string, detail: string): RollbackGuidance[] {
@@ -817,6 +971,10 @@ export class RollbackPointEngine {
   private readonly probe: RollbackStorageProbe | undefined
   private readonly forkSeam: RollbackForkSeam | undefined
   private readonly writeSeam: ((target: string, bytes: Uint8Array) => Promise<void>) | undefined
+  private readonly previewDiffMaxFileBytes: number
+  private readonly previewDiffMaxTotalBytes: number
+  private readonly previewDiffMaxWork: number
+  private readonly previewDiffTotalWork: number
   private readonly log: ((line: string) => void) | undefined
 
   private lastStamp = 0
@@ -843,6 +1001,10 @@ export class RollbackPointEngine {
     this.probe = options.storage
     this.forkSeam = options.fork
     this.writeSeam = options.writeFile
+    this.previewDiffMaxFileBytes = options.previewDiffMaxFileBytes ?? ROLLBACK_PREVIEW_DIFF_MAX_FILE_BYTES
+    this.previewDiffMaxTotalBytes = options.previewDiffMaxTotalBytes ?? ROLLBACK_PREVIEW_DIFF_MAX_TOTAL_BYTES
+    this.previewDiffMaxWork = options.previewDiffMaxWork ?? ROLLBACK_PREVIEW_DIFF_MAX_WORK
+    this.previewDiffTotalWork = options.previewDiffTotalWork ?? ROLLBACK_PREVIEW_DIFF_TOTAL_WORK
     this.log = options.log
   }
 
@@ -1421,6 +1583,66 @@ export class RollbackPointEngine {
     return { leftovers, truncated, count }
   }
 
+  /**
+   * E1：一个**执行过但无事可做**的段（工作区已与快照一致 / 记录在案的条目数为 0）。
+   *
+   * status 用 'restored' 而不是 'skipped' —— 它不是「没执行」，而是「执行了、0 变更」（restored=0）；
+   * 于是 rewind 能靠它把「无事可做」与「真失败」分开（见 rewind 的 allNoop）。
+   * 用户可见文案由界面按 reasonCode 'nothing-to-restore' 映射 —— 这不是错误。
+   */
+  private noopSegment(state: RollbackStateKind, detail: string): RollbackSegmentResult {
+    return {
+      state, status: 'restored', reasonCode: 'nothing-to-restore', detail: [detail],
+      restored: 0, failed: 0, leftovers: [], leftoversTruncated: false,
+    }
+  }
+
+  /**
+   * E1：单个「会被改动的文件」的行级统计 = **快照对象内容 vs 当前文件内容**。
+   * 任何一条超限、读不出、非文本 ⇒ 返回 null 数字 + truncated（调用方照给 status，但**不给数字**）。
+   * `budget` 是**单张预览**共享的累计预算（字节 + 步数），跨条目生效。
+   */
+  private async previewFileCounts(
+    file: RollbackWorkspaceFile,
+    current: Uint8Array | null,
+    status: RollbackPreviewFileStatus,
+    budget: { bytes: number; work: number },
+  ): Promise<{ added: number | null; removed: number | null; truncated: boolean }> {
+    const currentBytes = current === null ? 0 : current.byteLength
+    if (file.bytes > this.previewDiffMaxFileBytes || currentBytes > this.previewDiffMaxFileBytes) {
+      return previewCountsUnavailable()
+    }
+    if (budget.bytes + file.bytes + currentBytes > this.previewDiffMaxTotalBytes) {
+      return previewCountsUnavailable()
+    }
+    budget.bytes += file.bytes + currentBytes
+    let snapshot: Uint8Array
+    try {
+      snapshot = await this.readObject(file.object)
+    } catch {
+      // 对象仓读不出（缺失 / 越界 / 权限）：status 照给，行数不给
+      return previewCountsUnavailable()
+    }
+    if (looksBinary(snapshot) || (current !== null && looksBinary(current))) {
+      return previewCountsUnavailable()
+    }
+    const target = splitDiffLines(DIFF_TEXT_DECODER.decode(snapshot))
+    // 当前不存在 ⇒ 回退只会**新建**该文件：新增 = 快照行数、删除 = 0
+    if (status === 'create') return { added: target.length, removed: 0, truncated: false }
+    // 存在但读不出（目录 / 权限）⇒ 没有 before 可比，**不给数字**
+    if (current === null) return previewCountsUnavailable()
+    // 步数预算由 lineDiffCounts 直接记进共享 budget（中止时也扣满 limit，**总预算不可绕过**）
+    const counts = lineDiffCounts(
+      splitDiffLines(DIFF_TEXT_DECODER.decode(current)),
+      target,
+      this.previewDiffMaxWork,
+      this.previewDiffTotalWork,
+      budget,
+    )
+    if (counts === null) return previewCountsUnavailable()
+    return { added: counts.added, removed: counts.removed, truncated: false }
+  }
+
   /** 只读预览：零写入（不过确认门、不拍 guard、不写任何字节）。 */
   async preview(id: string): Promise<RollbackPreviewResult> {
     const storage = await this.storageStatus()
@@ -1428,7 +1650,7 @@ export class RollbackPointEngine {
     const warnings: RollbackGuidance[] = []
     if (ledger.error !== undefined) warnings.push({ code: 'rollback.warn.ledgerUnreadable', detail: ledger.error })
     const workspace: RollbackPreviewWorkspace = {
-      overwrite: 0, different: 0, missing: 0, createdAfter: 0,
+      overwrite: 0, different: 0, missing: 0, createdAfter: 0, files: [],
       leftovers: [], leftoversTruncated: false, chunks: [], available: false, reasonCode: null,
       skippedCount: 0, truncated: false,
     }
@@ -1459,24 +1681,47 @@ export class RollbackPointEngine {
       const captured = new Set(wsPayload.files.map((f) => pathKey(f.path)))
       let different = 0
       let missing = 0
+      // E1：逐文件行级统计 —— **只列会被改动的文件**（内容已一致的一个都不列）
+      const changedFiles: RollbackPreviewFile[] = []
+      // 单张预览共享的比对预算（字节 + 步数）；只有真的会被改动的条目才消耗它
+      const diffBudget = { bytes: 0, work: 0 }
       for (const file of wsPayload.files) {
-        let stat
+        let size: number | null = null
+        let regular = false
         try {
-          stat = await fs.stat(file.path)
+          const stat = await fs.stat(file.path)
+          regular = stat.isFile()
+          size = stat.size
         } catch {
+          size = null
+        }
+        if (size === null) {
+          // 记录里的文件当前已不存在 ⇒ 回退会重新创建它
           missing += 1
+          changedFiles.push({
+            path: file.path, status: 'create',
+            ...(await this.previewFileCounts(file, null, 'create', diffBudget)),
+          })
           continue
         }
-        if (!stat.isFile() || stat.size !== file.bytes) {
-          different += 1
-          continue
+        const sizeMatches = regular && size === file.bytes
+        const withinCaps = file.bytes <= this.previewDiffMaxFileBytes && size <= this.previewDiffMaxFileBytes
+        let current: Uint8Array | null = null
+        // 读当前内容的两个理由：① 大小一致时必须比 hash（判「内容真的变了吗」）；
+        // ② 大小不一致时也得读一次才能给行级统计（超限的大文件不白读）。
+        if (regular && (sizeMatches || withinCaps)) {
+          try {
+            current = await fs.readFile(file.path)
+          } catch {
+            current = null
+          }
         }
-        try {
-          const current = await fs.readFile(file.path)
-          if (sha256Hex(current) !== file.sha256) different += 1
-        } catch {
-          different += 1
-        }
+        if (sizeMatches && current !== null && sha256Hex(current) === file.sha256) continue
+        different += 1
+        changedFiles.push({
+          path: file.path, status: 'overwrite',
+          ...(await this.previewFileCounts(file, current, 'overwrite', diffBudget)),
+        })
       }
       const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
       const leftovers = await this.scanLeftovers(wsPayload.chunks, captured, sink)
@@ -1484,6 +1729,7 @@ export class RollbackPointEngine {
       workspace.different = different
       workspace.missing = missing
       workspace.createdAfter = leftovers.count
+      workspace.files = changedFiles
       workspace.leftovers = leftovers.leftovers
       workspace.leftoversTruncated = leftovers.truncated
       // 捕获期的跳过计数与截断标记如实回传（列表被记录上限截断时 skippedCount 仍是真实总数）
@@ -1641,16 +1887,26 @@ export class RollbackPointEngine {
     for (const guidance of this.trackWarnings(record)) warnings.push(guidance)
     const anyFailed = segments.some((s) => s.status === 'failed')
     const workspaceFailed = segments.some((s) => s.state === 'workspace' && s.status === 'failed')
-    const allSkipped = segments.length > 0 && segments.every((s) => s.status === 'skipped')
+    const anySkipped = segments.some((s) => s.status === 'skipped')
+    /**
+     * E1：「没有可恢复的内容」不是失败（也**不再是 500**）：
+     * - `status='restored' && restored===0`：段**执行过**、0 变更（工作区已与快照一致，
+     *   或该态压根没有记录任何文件）；
+     * - `status='skipped'`：该态没有可用的捕获 ⇒ 同样无事可做（reasonCode 如实回传）。
+     * 只有**所有**被请求的段都无事可做，整体才是「成功、0 变更」= outcome 'restored' +
+     * code 'nothing-to-restore'；只要有一段真的动了东西或真的失败，就按原口径判（partial / failed）。
+     */
+    const allNoop = segments.length > 0
+      && segments.every((s) => s.status === 'skipped' || (s.status === 'restored' && s.restored === 0))
     let outcome: RollbackOutcome
     let code: RollbackCode
     if (workspaceFailed) {
       outcome = 'failed'
       code = 'restore-failed'
-    } else if (allSkipped) {
-      outcome = 'failed'
+    } else if (allNoop) {
+      outcome = 'restored'
       code = 'nothing-to-restore'
-    } else if (anyFailed || segments.some((s) => s.status === 'skipped')) {
+    } else if (anyFailed || anySkipped) {
       outcome = 'partial'
       code = anyFailed ? 'restore-failed' : 'ok'
     } else {
@@ -1678,7 +1934,8 @@ export class RollbackPointEngine {
     if (!track.ok || payload === null) {
       return this.emptySegment('workspace', track.reasonCode ?? 'capture-failed', 'track-not-ok')
     }
-    if (payload.files.length === 0) return this.emptySegment('workspace', 'nothing-to-restore', 'files=0')
+    // E1：记录在案的条目数为 0 = 成功、0 变更（不是失败，更不是 500）
+    if (payload.files.length === 0) return this.noopSegment('workspace', 'files=0 nothingToDo=true')
     const detail: string[] = []
     const writable: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
     let failed = 0
@@ -1715,9 +1972,36 @@ export class RollbackPointEngine {
         leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
       }
     }
-    // 前像（内存）：失败时要能整体回到恢复前状态
-    const pre: { path: string; existed: boolean; bytes: Uint8Array | null }[] = []
+    // E1：内容已与快照一致的条目**不再写** —— 「0 变更」就要是真的 0 次写入
+    // （否则工作区已与该点一致时也会重写全部文件，白耗 I/O 并抖动 mtime）。
+    const needed: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
+    let unchanged = 0
     for (const item of writable) {
+      let identical = false
+      try {
+        const stat = await fs.stat(item.file.path)
+        if (stat.isFile() && stat.size === item.file.bytes) {
+          identical = sha256Hex(await fs.readFile(item.file.path)) === item.file.sha256
+        }
+      } catch {
+        identical = false
+      }
+      if (identical) {
+        unchanged += 1
+        continue
+      }
+      needed.push(item)
+    }
+    if (needed.length === 0) {
+      // 记录在案的路径全都已与快照一致 ⇒ 该段成功、0 变更（不是失败、也不中止整体）
+      const noop = this.noopSegment('workspace', 'unchanged=' + String(unchanged) + ' nothingToDo=true')
+      noop.leftovers = leftovers.leftovers
+      noop.leftoversTruncated = leftovers.truncated
+      return noop
+    }
+    // 前像（内存）：失败时要能整体回到恢复前状态 —— 只覆盖**真会被写**的文件
+    const pre: { path: string; existed: boolean; bytes: Uint8Array | null }[] = []
+    for (const item of needed) {
       let bytes: Uint8Array | null = null
       try {
         bytes = await fs.readFile(item.file.path)
@@ -1728,7 +2012,7 @@ export class RollbackPointEngine {
     }
     let restored = 0
     let writtenBytes = 0
-    for (const item of writable) {
+    for (const item of needed) {
       try {
         await this.writeFile(item.file.path, item.bytes)
         restored += 1
@@ -1741,7 +2025,7 @@ export class RollbackPointEngine {
     // 阶段 3：逐文件复核（重新读回并核对 SHA-256）
     const mismatched: string[] = []
     if (failed === 0) {
-      for (const item of writable) {
+      for (const item of needed) {
         try {
           const current = await fs.readFile(item.file.path)
           if (sha256Hex(current) !== item.file.sha256) mismatched.push(item.file.path)
@@ -1762,7 +2046,7 @@ export class RollbackPointEngine {
       }
       for (const target of mismatched) pushDetail(detail, 'verify-mismatch ' + target)
       for (const line of rollbackFailed) pushDetail(detail, 'rolled-back-failed ' + line)
-      detail.push('restored=0 failed=' + String(failed + mismatched.length) + ' rolledBack=' + String(pre.length - rollbackFailed.length))
+      detail.push('restored=0 failed=' + String(failed + mismatched.length) + ' rolledBack=' + String(pre.length - rollbackFailed.length) + ' unchanged=' + String(unchanged))
       return {
         state: 'workspace', status: 'failed',
         reasonCode: mismatched.length > 0 ? 'verify-failed' : 'restore-failed',
@@ -1774,7 +2058,7 @@ export class RollbackPointEngine {
         guidance: [{ code: 'rollback.guidance.workspaceRolledBack', detail: rollbackFailed.length > 0 ? rollbackFailed.join(' ') : undefined }],
       }
     }
-    detail.push('restored=' + String(restored) + ' verified=' + String(writable.length) + ' leftovers=' + String(leftovers.count))
+    detail.push('restored=' + String(restored) + ' verified=' + String(needed.length) + ' unchanged=' + String(unchanged) + ' leftovers=' + String(leftovers.count))
     return {
       state: 'workspace', status: 'restored', detail,
       restored, failed: 0,
