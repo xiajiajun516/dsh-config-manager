@@ -43,8 +43,18 @@ import {
   planChatNodeRegistration,
   projectChatEntryText,
   resetChatPointCache,
+  shouldRetryChatPoint,
+  CHAT_POINT_LOOKUP_WINDOW_MS,
+  CHAT_POINT_RETRY_DELAYS_MS,
   type ChatEntryDisabledCode,
+  type ChatPointLookup,
 } from './chat-entry-view.ts'
+// T6：重试循环与「一个实例只跑一轮窗口」的状态机住在自己的模块里（可被 node 直接加载断言）
+import {
+  ChatPointWindowController,
+  retryChatPointUntilHit,
+  type ChatPointWindowState,
+} from './chat-point-window.ts'
 import { declaredSlotKind, mountChatNodeEntry, registerChatNodeEntry } from './chat-node-registration.ts'
 import {
   CHAT_ENTRY_MODE_DEFAULT,
@@ -389,20 +399,24 @@ const MISSING = { resolved: true, point: null }
 const UNRESOLVED = { resolved: false, point: null }
 
 test('button matrix: every state maps to an enabled button or its own provable disabled reason', () => {
-  const cases: { name: string; node: unknown; sessionId: string; lookup: unknown; pending: boolean; expect: string }[] = [
+  const cases: { name: string; node: unknown; sessionId: string; lookup: unknown; pending: boolean; retrying?: boolean; expect: string }[] = [
     { name: 'closed + hit', node: nodeOf(), sessionId: 's1', lookup: CLOSED, pending: false, expect: 'enabled' },
     { name: 'closed + no point', node: nodeOf(), sessionId: 's1', lookup: MISSING, pending: false, expect: 'noPoint' },
     // 读失败（resolved=false 且不在途）→ 乐观可点：判据未知时**不**说「没有点」，让对话框走宿主的错误路径
     { name: 'closed + read failed (unknown verdict)', node: nodeOf(), sessionId: 's1', lookup: UNRESOLVED, pending: false, expect: 'enabled' },
     { name: 'closed + first paint before the read starts', node: nodeOf(), sessionId: 's1', lookup: null, pending: false, expect: 'enabled' },
     { name: 'closed + reading in flight', node: nodeOf(), sessionId: 's1', lookup: null, pending: true, expect: 'pointsPending' },
+    // R1：列表已读到但**空** + 重试窗口还开着 ⇒ 暂态，不得说「没有回滚点」（窗口关后同一状态才是 noPoint）
+    { name: 'closed + empty list while the retry window is open', node: nodeOf(), sessionId: 's1', lookup: MISSING, pending: false, retrying: true, expect: 'pointsPending' },
+    // T9：窗口开着、**首读还在途**（lookup 仍为 null）同样是「还没结论」⇒ 正在读取，不得乐观放行
+    { name: 'closed + first read in flight while the window is open', node: nodeOf(), sessionId: 's1', lookup: null, pending: false, retrying: true, expect: 'pointsPending' },
     { name: 'turn open', node: nodeOf({ status: 'open' }), sessionId: 's1', lookup: CLOSED, pending: false, expect: 'turnOpen' },
     { name: 'turn status unknown', node: nodeOf({ status: 'unknown' }), sessionId: 's1', lookup: CLOSED, pending: false, expect: 'turnUnknown' },
     { name: 'no verifiable turn number', node: { kind: 'user', data: { content: [] } }, sessionId: 's1', lookup: CLOSED, pending: false, expect: 'noTurn' },
     { name: 'no sessionId', node: nodeOf(), sessionId: '', lookup: CLOSED, pending: false, expect: 'noSession' },
   ]
   for (const item of cases) {
-    const state = chatEntryButtonState({ node: item.node, sessionId: item.sessionId, lookup: item.lookup as never, pending: item.pending })
+    const state = chatEntryButtonState({ node: item.node, sessionId: item.sessionId, lookup: item.lookup as never, pending: item.pending, retrying: item.retrying })
     if (item.expect === 'enabled') assert.equal(state.kind, 'enabled', item.name)
     else {
       assert.equal(state.kind, 'disabled', item.name)
@@ -484,6 +498,483 @@ test('point lookup: concurrent reads dedupe into one request; a failed read stay
   const failed = await lookupPointForTurn({ port: boom, sessionId: 's1', turn: 3 })
   assert.deepEqual(failed, { point: null, resolved: false }, 'a failed read is "unknown", never a proven absence')
   resetChatPointCache()
+})
+
+/* ------------------------------------------------------------ ⑥b 收尾竞态：有界重试 + 空结果不锁死（R1） */
+
+const R1_HIT: ChatPointLookup = { point: { id: 'p-turn-3-auto', createdAt: 9, sessionId: 's1', turn: 3, kind: 'auto' }, resolved: true }
+const R1_EMPTY: ChatPointLookup = { point: null, resolved: true }
+const R1_UNRESOLVED: ChatPointLookup = { point: null, resolved: false }
+
+/**
+ * 确定性排程器 + 假时钟（**与 chat-entry-mount 的注入式排程器同一套做法**）：
+ * 每次 `schedule` 把回调放进队列、同时按该档推进假时钟；`flush()` 排空队列并让出事件循环，
+ * 使被 await 的重试循环继续跑 —— 所以用例既不用真睡 23 s，也能逐项断言「排了哪几次、等了多久」。
+ */
+function retryHarness(startAt = 0) {
+  const queue: { fn: () => void; delayMs: number }[] = []
+  const delays: number[] = []
+  let clock = startAt
+  /** 让出一次事件循环 —— 被 await 的循环/状态机借此把下一轮排进来。 */
+  const tick = async (): Promise<void> => { await new Promise<void>((resolve) => { setImmediate(resolve) }) }
+  /** **时钟在回调触发时前进**（与真 setTimeout 同一因果顺序，别在排程时前进 —— 那会让「时钟没动」的护栏误触发）。 */
+  const fire = (entry: { fn: () => void; delayMs: number }): void => { clock += entry.delayMs; entry.fn() }
+  return {
+    now: () => clock,
+    retry: (fn: () => void, delayMs: number) => { delays.push(delayMs); queue.push({ fn, delayMs }) },
+    /**
+     * 排空调度队列；**若有给定 promise，则在它有界 tick 内 settle 之前一直驱动**（确定性）。
+     *
+     * 为什么要一起驱动：重试循环在被 await 的微任务链里推进，队列可能在一瞬间是空的
+     * （刚执行完一个回调、下一档还没排进来）—— 只看 `queue.length === 0` 就退出会**过早**。
+     * 既然循环承诺「要么命中、要么有界结束」，这里就用 tick 上限兜底：循环挂死时用例会失败，
+     * 而不是把测试一起拖死。
+     *
+     * @returns 该 promise 是否在预算内 settle（无 promise 时为 true）
+     */
+    /**
+     * 只推进 **`steps`** 个已排程的回调（不等到跑完）—— 用于「中途取消」这类用例：
+     * 先让循环跑一步（首读 + 第一次重试），再从外部取消。
+     */
+    pump: async (steps: number): Promise<void> => {
+      for (let i = 0; i < steps; i += 1) {
+        await tick()
+        const entry = queue.shift()
+        if (entry !== undefined) fire(entry)
+        await tick() // 让循环/状态机的微任务链跑完再返回（否则「刚触发」的状态读到一半）
+      }
+    },
+    flush: async (run?: Promise<unknown>, ticks = 300): Promise<boolean> => {
+      let settled = run === undefined
+      if (run !== undefined) void run.then(() => { settled = true }, () => { settled = true })
+      for (let i = 0; i < ticks; i += 1) {
+        await tick()
+        // 先看还有没有待执行的排程（settled 可能在这一步的微任务里刚刚变 true，但队列里还有回调）
+        const entry = queue.shift()
+        if (entry !== undefined) { fire(entry); continue }
+        // 队列空了才算真的跑完（循环要么在该 tick 里排下一档，要么已经 settle）
+        if (settled) return true
+      }
+      return settled
+    },
+    delays,
+  }
+}
+
+test('R1 window: the retry schedule is a fixed 5-step backoff bounded inside an explicit window', () => {
+  // 验收要求「在注释与测试里写一个明确值」：这里把三个数字逐项钉住
+  assert.deepEqual([...CHAT_POINT_RETRY_DELAYS_MS], [500, 1_500, 3_000, 6_000, 12_000], '退避表 = 0.5 / 1.5 / 3 / 6 / 12 s')
+  const cumulative = CHAT_POINT_RETRY_DELAYS_MS.reduce((sum, delay) => sum + delay, 0)
+  assert.equal(cumulative, 23_000, '退避表累计 23 s')
+  assert.equal(CHAT_POINT_LOOKUP_WINDOW_MS, 30_000, '窗口是明确的 30 s（落在 10–30 s 区间）')
+  assert.ok(cumulative < CHAT_POINT_LOOKUP_WINDOW_MS, '退避表必须落在窗口内（最后一轮读得到，而不是注定超窗）')
+  for (let i = 1; i < CHAT_POINT_RETRY_DELAYS_MS.length; i += 1) {
+    assert.ok((CHAT_POINT_RETRY_DELAYS_MS[i] as number) > (CHAT_POINT_RETRY_DELAYS_MS[i - 1] as number), '退避必须严格递增（否则就是轮询）')
+  }
+  assert.deepEqual(CHAT_POINT_RETRY_DELAYS_MS, [...CHAT_POINT_RETRY_DELAYS_MS].sort((a, b) => a - b), '退避表本身必须有序')
+})
+
+test('R1 empty session: retries are bounded (6 reads total, 5 waits, zero further read after the window)', async () => {
+  const h = retryHarness()
+  const forces: boolean[] = []
+  const run = retryChatPointUntilHit({
+    attempt: async (force) => { forces.push(force); return R1_EMPTY },
+    retry: h.retry,
+    now: h.now,
+  })
+  assert.equal(await h.flush(run), true, '窗口结束时循环必须已 settle（不是悬挂）')
+  const { result, reads } = (await run) as { result: ChatPointLookup; reads: number }
+  assert.deepEqual(forces, [false, true, true, true, true, true], '首读走普通读，其后每一轮都强制刷新（跳过那 30 s 缓存）')
+  assert.equal(reads, 6, '窗口内恰好 6 次读取：1 次首读 + 5 次重试（不是无限轮询）')
+  assert.deepEqual(h.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '每一次重试都按退避表的下一档排程')
+  assert.equal(h.delays.reduce((sum, delay) => sum + delay, 0), 23_000)
+  assert.deepEqual(result, R1_EMPTY, '窗口结束仍为空 ⇒ 调用点从此可以说「没有回滚点」')
+  assert.equal(h.now() < CHAT_POINT_LOOKUP_WINDOW_MS, true, '整个重试过程都在窗口内结束')
+})
+
+test('R1 hit: the first hit stops the schedule immediately (no further read is ever scheduled)', async () => {
+  const h = retryHarness()
+  const forces: boolean[] = []
+  const run = retryChatPointUntilHit({
+    attempt: async (force) => { forces.push(force); return forces.length >= 3 ? R1_HIT : R1_EMPTY },
+    retry: h.retry,
+    now: h.now,
+  })
+  assert.equal(await h.flush(run), true, '命中时循环必须已 settle')
+  const { result, reads } = (await run) as { result: ChatPointLookup; reads: number }
+  assert.equal(reads, 3, '第三次读到点 ⇒ 停止（不再读第 4 次）')
+  assert.deepEqual(forces, [false, true, true])
+  assert.deepEqual(h.delays, [500, 1_500], '只排了命中前的两次重试：命中后一个定时器都不再排（不 churn）')
+  assert.equal(result.point?.id, 'p-turn-3-auto')
+  assert.equal(shouldRetryChatPoint(result), false, '命中即停的唯一判据')
+  assert.equal(shouldRetryChatPoint(R1_EMPTY), true, '读到空列表仍是暂态，必须继续（这正是旧实现永久禁用的根因）')
+  assert.equal(shouldRetryChatPoint(R1_UNRESOLVED), true, '读失败是判据未知，同样不能当成「没有」')
+  assert.equal(shouldRetryChatPoint(null), true)
+})
+
+test('R1 late write（真机时序：收尾后 7.8 s 才写完点）：重试把这个回合的点抓回来', async () => {
+  // 真机：turn/end 之后引擎还要 7.8 s 才写完点 ⇒ 首读必空、后续轮才可能命中。
+  // 这里用**假时钟上的晚到写回**同构复现：宿主在第 LATE_AT 毫秒之前返回空列表，之后才返回点。
+  const LATE_AT = 1_600
+  const { port } = fakePort([])
+  const late: RollbackPointPort = {
+    ...port,
+    rollbackPoints: async () => ({ points: Date.now() - startedAt >= LATE_AT ? POINTS : [], storage: { available: true } }),
+  } as RollbackPointPort
+  const startedAt = Date.now() // 必须在 port 被调用之前取值（闭包里读它）
+  resetChatPointCache()
+  let reads = 0
+  const { result, reads: total } = await retryChatPointUntilHit({
+    attempt: (force) => { reads += 1; return lookupPointForTurn({ port: late, sessionId: 's1', turn: 3, force }) },
+    // 3/3/3 s 一档 = 退避表的压缩版（假窗口 10 s）：第 1 档 3 s 时仍空、第 2 档 6 s 时撞上晚到的写回
+    delays: [3_000, 3_000, 3_000],
+    windowMs: 10_000,
+  })
+  assert.equal(result.resolved, true)
+  assert.equal(result.point?.id, 'p-turn-3-auto', '空 → 有点的时序里，重试必须把点抓回来（而不是把空列表当真值）')
+  assert.ok(reads >= 2 && total >= 2, '至少读了两轮才可能撞上晚到的写回，实际 reads=' + String(total))
+  resetChatPointCache()
+})
+
+test('R1 force: 强制刷新绕过 30 s 列表缓存（跳过缓存读、写回新结果），且不破在途去重', async () => {
+  resetChatPointCache()
+  const { port, calls } = fakePort([]) // 首读：列表里还没有这个回合的点（真机的空窗）
+  const first = await lookupPointForTurn({ port, sessionId: 's1', turn: 3 })
+  assert.equal(first.point, null)
+  assert.equal(calls(), 1)
+  // 非强制：30 s 缓存内的第二次读**不会**再发请求（空结果被缓存 —— 旧实现就死在这里）
+  await lookupPointForTurn({ port, sessionId: 's1', turn: 3 })
+  assert.equal(calls(), 1, '非强制读走缓存（30 s TTL 一个字没动）')
+  // 强制：跳过缓存读、真的再读一次宿主
+  await lookupPointForTurn({ port, sessionId: 's1', turn: 3, force: true })
+  assert.equal(calls(), 2, 'force 必须真的再读一次宿主（否则空结果会锁死 30 s）')
+  // 且**写回**新结果：宿主侧之后出现了这个回合的点，下一次非强制读立刻拿得到
+  const grown = {
+    ...fakePort().port,
+    rollbackPoints: async () => ({ points: POINTS, storage: { available: true } }),
+  } as RollbackPointPort
+  const fresh = await lookupPointForTurn({ port: grown, sessionId: 's1', turn: 3, force: true })
+  assert.equal(fresh.point?.id, 'p-turn-3-auto', 'force 的结果必须写回缓存')
+  const cachedHit = await lookupPointForTurn({ port: grown, sessionId: 's1', turn: 3 })
+  assert.equal(cachedHit.point?.id, 'p-turn-3-auto', '写回之后按缓存读也命中（不是「每次都必须 force」）')
+  resetChatPointCache()
+})
+
+test('R1 wiring：组件接了有界重试，且窗口状态交给一次性状态机（不让 effect 自己重开窗口）', () => {
+  const src = sourceOf('ChatEntryView.tsx')
+  assert.match(src, /import \{ ChatPointWindowController, type ChatPointWindowState \} from '\.\/chat-point-window\.ts'/, '窗口状态机必须来自纯模块（可被 node 断言）')
+  // T9/RR2-A：实例必须建在 effect **体内**；放进 useMemo 会被 StrictMode 的第二次 effect 复用 ⇒ 永久死窗
+  assert.match(src, /const controller = new ChatPointWindowController\(\{/, '实例必须在 effect 体内新建（一次 effect 调用 = 一个新实例）')
+  assert.doesNotMatch(src, /useMemo\(\s*\(\)\s*=>\s*new ChatPointWindowController/, 'RR2-A：不得再把实例放进 useMemo（那正是 StrictMode 双调用下窗口永久死掉的根因）')
+  assert.match(src, /attempt: \(force\) => lookupPointForTurn\(\{ port, sessionId, turn[^)]*force \}\)/, '重试轮必须传 force 以跳过那 30 s 缓存')
+  assert.match(src, /chatEntryButtonState\(\{ node, sessionId, lookup, pending: false, retrying \}\)/, '按钮状态机由 retrying（窗口开着）单一驱动，不再需要手写的 pending 标志')
+  assert.match(src, /controller\.start\(\)/, '挂载后必须启动这一轮窗口')
+  assert.match(src, /return \(\) => \{ controller\.dispose\(\) \}/, '卸载/依赖变化必须走取消通道（F2）')
+  assert.doesNotMatch(src, /retryTimerRef/, 'F2：重试定时器 ref / clearTimeout 的旧做法必须消失（改走取消通道）')
+  assert.match(src, /\}, \[canLookup, port, sessionId, turn\]\)/, 'F1：effect 依赖只有 canLookup / 会话 / 回合 —— 不含任何 React 状态')
+  assert.doesNotMatch(src, /\[canLookup, [^\]]*lookup/, 'F1：依赖里不得含 lookup（窗口关后那次 setState 会重跑 effect）')
+  assert.doesNotMatch(src, /windowClosed/, 'T9：windowOpen 取代了 windowClosed（去双重否定，少一处可能漂移的标志）')
+  assert.doesNotMatch(src, /if \(!canLookup \|\| turn === null \|\| lookup !== null\) return undefined/, '旧的「读到过就永不重查」条件必须已经消失')
+})
+
+/* ------------------------------------------------------------ ⑥c T6：窗口不重开（F1）+ 可取消（F2） */
+
+test('F1：点始终不出现时，一个实例只跑一轮（窗口关后把时钟推过 3 个窗口仍恒为 6 次读）', async () => {
+  const h = retryHarness()
+  let reads = 0
+  const seen: ChatPointWindowState[] = []
+  const controller = new ChatPointWindowController({
+    attempt: async () => { reads += 1; return R1_EMPTY },
+    onState: (state) => { seen.push(state) },
+    retry: h.retry,
+    now: h.now,
+  })
+  controller.start()
+  await h.flush()
+  assert.equal(reads, 6, '一轮窗口 = 1 次首读 + 5 次重试')
+  assert.deepEqual(h.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '恰好按退避表排了 5 档')
+  const closedAt = h.now()
+  assert.equal(closedAt, 23_000, '窗口在退避表走完那一刻关掉（累计 23 s）')
+  assert.equal(controller.state().open, false, '窗口已关')
+  assert.deepEqual(controller.state().lookup, R1_EMPTY, '关窗时的结果就是末次读的结果（空 ⇒ 之后才允许说「没有回滚点」）')
+
+  // 推过 3 个窗口时长：同实例再 start() 若干次，读次数必须**恒为 6**（不是 18）
+  for (let round = 0; round < 3; round += 1) { controller.start(); await h.flush() }
+  assert.equal(h.now(), 23_000, '时钟没有再前进（没有新的排程 ⇒ 没有任何新的等待）')
+  assert.equal(reads, 6, 'F1：时钟推过 3 个窗口后读取次数仍恒为 6（旧实现会是 6×4=24）')
+  assert.deepEqual(h.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '再也没有新的排程（零 churn）')
+  assert.equal(seen.length, 2, '状态回调恰好两次：开窗一次 + 关窗一次（没有周期性重开）')
+  assert.deepEqual(seen[0], { lookup: null, open: true }, '开窗态：还不知道结果，窗口开着 ⇒ 界面显示「正在读取」')
+})
+
+test('F1 证实（旧形态是「每 settle 一次就重开一轮」）：同样的假时钟下 4 轮 = 24 次读', async () => {
+  // 旧组件的形态：effect 依赖含 lookup ⇒ 每一轮窗口 settle（setLookup 写新对象）就重跑 effect、
+  // 守卫只挡「已命中」⇒ 再开一轮。这里把那个形态**逐字建模**成可执行断言 ——
+  // 它证明 F1 不是猜测：同样的退避表与窗口，4 轮会读到 24 次（修复后同一时钟下恒为 6 次）。
+  const h = retryHarness()
+  let reads = 0
+  for (let round = 0; round < 4; round += 1) {
+    const run = retryChatPointUntilHit({ attempt: async () => { reads += 1; return R1_EMPTY }, retry: h.retry, now: h.now })
+    assert.equal(await h.flush(run), true, '第 ' + String(round + 1) + ' 轮窗口照常收尾（这正是它会重开的原因）')
+    await run
+  }
+  assert.equal(reads, 24, '旧形态 4 轮 = 24 次读（F1 的周期性重开：每 ~23 s 一轮）')
+  assert.equal(h.delays.length, 20, '旧形态一共排了 20 档（4 × 5）')
+})
+
+test('F1：新实例 = 用户的「再次触发」仍能重新开一轮（不得永久锁死）', async () => {
+  const h1 = retryHarness()
+  let reads1 = 0
+  const first = new ChatPointWindowController({ attempt: async () => { reads1 += 1; return R1_EMPTY }, onState: () => {}, retry: h1.retry, now: h1.now })
+  first.start()
+  await h1.flush()
+  assert.equal(reads1, 6, '第一次挂载跑满一轮')
+  first.dispose()
+  await h1.flush()
+  assert.equal(reads1, 6, 'dispose 之后一次请求都不再发')
+
+  // 重新挂载 / 会话切换 = 新实例（独立窗口）：窗口关过不是「永久锁死」
+  const h2 = retryHarness()
+  let reads2 = 0
+  const second = new ChatPointWindowController({ attempt: async () => { reads2 += 1; return R1_EMPTY }, onState: () => {}, retry: h2.retry, now: h2.now })
+  second.start()
+  await h2.flush()
+  assert.equal(reads2, 6, '新实例必须能重新跑一轮（用户再次触发不被永久锁死）')
+  assert.deepEqual(h2.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '新实例自己有完整的一轮窗口')
+})
+
+test('F1 边界：窗口关后 start() 不会重开；重新挂载（新实例）能重新开一轮 —— 可执行版本', async () => {
+  const h = retryHarness()
+  let reads = 0
+  let controller = new ChatPointWindowController({ attempt: async () => { reads += 1; return R1_EMPTY }, onState: () => {}, retry: h.retry, now: h.now })
+  controller.start()
+  await h.flush()
+  assert.equal(controller.state().open, false)
+  assert.equal(reads, 6)
+  controller.start() // 重入（等价于 effect 重跑）—— 不得重开
+  await h.flush()
+  assert.equal(reads, 6, '窗口已关 ⇒ start() 是 no-op（F1 的核心不变量）')
+  // 重新挂载 = 新实例
+  controller = new ChatPointWindowController({ attempt: async () => { reads += 1; return R1_EMPTY }, onState: () => {}, retry: h.retry, now: h.now })
+  controller.start()
+  await h.flush()
+  assert.equal(reads, 12, '新实例照常跑一轮（6 + 6）—— 「已跑过」只限实例，不是永久锁死')
+})
+
+test('F2：取消通道 —— dispose 后循环在有界 tick 内 settle，且宿主读取次数不再增加', async () => {
+  const h = retryHarness()
+  let reads = 0
+  let cancelled = false
+  const run = retryChatPointUntilHit({
+    attempt: async () => { reads += 1; return R1_EMPTY },
+    retry: h.retry,
+    now: h.now,
+    isCancelled: () => cancelled,
+  })
+  await h.pump(1) // 只跑到第一次重试（排程里还有下一档）
+  assert.equal(reads, 2, '取消之前已经读了 2 次（首读 + 第一次重试）')
+  const scheduledAtCancel = h.delays.length
+  cancelled = true
+  assert.equal(await h.flush(run), true, 'F2：被取消的循环必须在有限 tick 内 settle（旧实现在这里悬挂）')
+  assert.equal(reads, 2, '取消之后一次宿主读取都不再发生')
+  assert.equal(h.delays.length, scheduledAtCancel, '取消之后不再排任何新定时器')
+})
+
+test('F2：取消发生在等待定时器期间 ⇒ 立刻收尾、不再进下一轮读（把时钟推过整个窗口也不动）', async () => {
+  const h = retryHarness()
+  let reads = 0
+  let cancelled = false
+  const run = retryChatPointUntilHit({ attempt: async () => { reads += 1; return R1_EMPTY }, retry: h.retry, now: h.now, isCancelled: () => cancelled })
+  await h.pump(1) // 首读 + 第一次重试（正处在「等下一档」的 await 里）
+  assert.equal(reads, 2)
+  cancelled = true
+  assert.equal(await h.flush(run), true, '循环已 settle（没有悬挂的 await）')
+  assert.equal(reads, 2, '卸载后宿主读取次数不再增加')
+  // 取消之后继续推排程：队列里再也没有新东西 ⇒ 一次读都不会多（窗口不再重开）
+  await h.pump(5)
+  assert.equal(reads, 2, '卸载后继续推进排程也不会有任何新读取')
+})
+
+test('F2 组件侧：dispose 之后就再也不会有状态回调（卸载后 pending 不再被写）', async () => {
+  const h = retryHarness()
+  const states: ChatPointWindowState[] = []
+  let reads = 0
+  const controller = new ChatPointWindowController({
+    attempt: async () => { reads += 1; return R1_EMPTY },
+    onState: (state) => { states.push(state) },
+    retry: h.retry,
+    now: h.now,
+  })
+  controller.start()
+  assert.deepEqual(states, [{ lookup: null, open: true }], '启动那一刻先回调「窗口开着、还没有结果」')
+  controller.dispose() // 卸载：组件不再需要任何状态
+  await h.flush()
+  await new Promise<void>((resolve) => { setImmediate(resolve) })
+  assert.equal(states.length, 1, 'dispose 之后不再有 onState 回调（不会在卸载后 setState）')
+  assert.equal(reads, 1, '取消在第一次读之后立即生效：只有那一次已经在途的读')
+})
+
+/* ------------------------------------------------------------ ⑥d T9：StrictMode 双调用（RR2-A）+ dispose 语义（RR2-B） */
+
+test('RR2-A：StrictMode 双调用（effect → cleanup → effect）后窗口必须关掉、按钮必须能到 enabled', async () => {
+  const h = retryHarness()
+  let globalReads = 0
+  const all: ChatPointWindowState[] = []
+  /**
+   * **与组件 effect 逐字同形**的一次调用：新建实例（修法①）+ start + 返回它自己的 onState 记录。
+   * 组件就是这么写的（controller 在 effect 体内 new），所以 StrictMode 的
+   * `effect → cleanup → effect` 序列在这里就是可执行断言。
+   */
+  const effectRun = (hitAfter: number): { controller: ChatPointWindowController; states: ChatPointWindowState[] } => {
+    const own: ChatPointWindowState[] = []
+    let ownReads = 0
+    const controller = new ChatPointWindowController({
+      attempt: async () => { globalReads += 1; ownReads += 1; return ownReads >= hitAfter ? R1_HIT : R1_EMPTY },
+      onState: (state) => { own.push(state); all.push(state) },
+      retry: h.retry,
+      now: h.now,
+    })
+    controller.start()
+    return { controller, states: own }
+  }
+
+  // ① 第一次 effect 调用：首读在途（此时按钮态 = pointsPending，这是对的）
+  const first = effectRun(99) // 永不命中
+  assert.equal(globalReads, 1, '第一次调用发出首读')
+  assert.deepEqual(first.states, [{ lookup: null, open: true }], '开窗一次（还不知道结果 ⇒ 显示「正在读取」）')
+  // ② StrictMode 立刻 cleanup（同一实例被 dispose）
+  first.controller.dispose()
+  assert.equal(first.controller.state().open, false, '①：被 dispose 的实例不得再声称「窗口开着」（旧实现恒 open: true）')
+  // ③ 第二次 effect 调用：**新实例**（修法①）—— 窗口必须照常工作
+  const second = effectRun(2) // 第二次读（一次重试）就命中
+  assert.equal(await h.flush(), true, '新实例这一轮必须跑到收尾')
+  assert.equal(second.controller.state().open, false, '①：窗口必须被正常关掉（旧实现这里永久 open: true）')
+  assert.equal(second.controller.state().lookup?.point?.id, 'p-turn-3-auto', '②：点出现时必须读到点')
+  // ② 派生按钮态：命中 ⇒ enabled —— 不得停在 pointsPending
+  const button = chatEntryButtonState({
+    node: nodeOf(),
+    sessionId: 's1',
+    lookup: second.controller.state().lookup,
+    pending: false,
+    retrying: second.controller.state().open,
+  })
+  assert.equal(button.kind, 'enabled', '②：修好后按钮必须能到 enabled（旧实现永久停在禁用的「正在读取」）')
+  // ① reviewer 的反向判据：**出现 closed onState**，且活下来的那个实例恰好开/关各一次
+  assert.equal(second.states.length, 2, '①：关窗的那个实例恰好两次 onState（开窗 + 关窗）')
+  assert.deepEqual(second.states.map((state) => state.open), [true, false], '①：第二次是 closed onState')
+  assert.equal(all.filter((state) => !state.open).length, 1, '①：整个序列里恰有一次关窗（不再有「永久开窗」的实例）')
+  // ③ 次数与退避仍在界内、不叠加
+  assert.equal(globalReads, 3, '③：被取消的 1 次 + 新实例的 2 次（每实例 ≤6）')
+  assert.deepEqual(h.delays, [500], '③：新实例只排了一档（第二次读就命中 ⇒ 命中即停）')
+  assert.ok(h.now() < CHAT_POINT_LOOKUP_WINDOW_MS, '③：虚拟 23 s 以内 < 30 s 窗口')
+  second.controller.start()
+  await h.flush()
+  assert.equal(globalReads, 3, '③：窗口关掉后 start() 仍是 no-op（重跑不叠加）')
+})
+
+test('RR2-A/② 空场景：StrictMode 序列后窗口关且仍为空 ⇒ 按钮必须是 noPoint（不得停在 pointsPending）', async () => {
+  const h = retryHarness()
+  let reads = 0
+  /** 与组件 effect 同形的一次调用：新实例 + start。 */
+  const effectRun = (): ChatPointWindowController => {
+    const controller = new ChatPointWindowController({
+      attempt: async () => { reads += 1; return R1_EMPTY },
+      onState: () => {},
+      retry: h.retry,
+      now: h.now,
+    })
+    controller.start()
+    return controller
+  }
+  const first = effectRun()
+  first.dispose()
+  const second = effectRun() // StrictMode 的第二次 effect
+  assert.equal(await h.flush(), true, '第二次调用这一轮必须跑到收尾')
+  assert.equal(second.state().open, false, '①：窗口必须关掉（不是永久「正在读取」）')
+  assert.deepEqual(second.state().lookup, R1_EMPTY, '关窗时的结论：这个回合（此刻）没有点')
+  assert.equal(reads, 7, '②：被取消的 1 次 + 新实例完整一轮 6 次（每实例 ≤6）')
+  assert.deepEqual(h.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '②：只有新实例排了那 5 档（被取消的实例零排程）')
+  const button = chatEntryButtonState({
+    node: nodeOf(),
+    sessionId: 's1',
+    lookup: second.state().lookup,
+    pending: false,
+    retrying: second.state().open,
+  })
+  assert.equal(button.kind, 'disabled', '②：窗口关且仍空 ⇒ 禁用')
+  assert.equal(button.kind === 'disabled' ? button.code : 'enabled', 'noPoint', '②：必须是 noPoint（而不是永久 pointsPending）')
+})
+
+test('RR2-A/④ 非 StrictMode 回归：一次 effect = 一轮恒 6 读，窗口关后 start() 仍 no-op', async () => {
+  const h = retryHarness()
+  let reads = 0
+  const states: ChatPointWindowState[] = []
+  const controller = new ChatPointWindowController({
+    attempt: async () => { reads += 1; return R1_EMPTY },
+    onState: (state) => { states.push(state) },
+    retry: h.retry,
+    now: h.now,
+  })
+  controller.start()
+  await h.flush()
+  assert.equal(reads, 6, '④：一轮 = 1 次首读 + 5 次重试')
+  assert.deepEqual(h.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '④：退避恰好 5 档')
+  assert.equal(h.now(), 23_000, '④：虚拟 23 s')
+  assert.ok(h.now() < CHAT_POINT_LOOKUP_WINDOW_MS, '④：23 s < 30 s 窗口')
+  assert.deepEqual(states.map((state) => state.open), [true, false], '④：开窗 + 关窗各一次')
+  assert.equal(controller.state().open, false)
+  controller.start()
+  await h.flush()
+  assert.equal(reads, 6, '④：窗口关后 start() 仍是 no-op（不叠加）')
+  assert.deepEqual(h.delays, [...CHAT_POINT_RETRY_DELAYS_MS], '④：零新排程')
+})
+
+test('RR2-A/③ 连续 3 个 StrictMode 回合：每个被取消的实例最多 1 次读、零残留排程', async () => {
+  const h = retryHarness()
+  let reads = 0
+  const perInstance: number[] = []
+  for (let round = 0; round < 3; round += 1) {
+    let own = 0
+    // 一次 effect 调用 = 一个新实例；StrictMode 紧接着 cleanup ⇒ 只可能有一次在途读
+    const controller = new ChatPointWindowController({
+      attempt: async () => { reads += 1; own += 1; return R1_EMPTY },
+      onState: () => {},
+      retry: h.retry,
+      now: h.now,
+    })
+    controller.start()
+    controller.dispose()
+    perInstance.push(own)
+    await h.flush()
+  }
+  assert.deepEqual(perInstance, [1, 1, 1], '③：每个被取消的实例只读了那一次在途读')
+  assert.equal(reads, 3, '③：3 个回合共 3 次读（没有叠加成 3×6）')
+  assert.deepEqual(h.delays, [], '③：读回来时才发现被取消 ⇒ 连一档排程都不排（取消的最早生效点）')
+})
+
+test('RR2-B：dispose 只置取消 + 把 state 记为已关窗，**不回调** onState（不制造卸载后 setState）', async () => {
+  const h = retryHarness()
+  let reads = 0
+  const states: ChatPointWindowState[] = []
+  const controller = new ChatPointWindowController({
+    attempt: async () => { reads += 1; return R1_EMPTY },
+    onState: (state) => { states.push(state) },
+    retry: h.retry,
+    now: h.now,
+  })
+  controller.start()
+  assert.equal(states.length, 1, 'start ⇒ 一次开窗回调')
+  controller.dispose()
+  assert.equal(controller.state().open, false, 'RR2-B：dispose 后 state 不再声称窗口开着（注释与实现一致）')
+  assert.equal(states.length, 1, 'RR2-B：dispose 不回调（此刻调用点正在卸载/换会话）')
+  assert.equal(await h.flush(), true, '被取消的循环立即 settle')
+  await new Promise<void>((resolve) => { setImmediate(resolve) })
+  assert.equal(states.length, 1, '循环 settle 也不再回调：窗口终值只能读 state()')
+  assert.equal(reads, 1, '在途那次读之后不再有新读')
+  assert.deepEqual(h.delays, [], 'dispose 之后连一档排程都不排')
+  controller.start()
+  await h.flush()
+  assert.equal(reads, 1, 'dispose 是永久停手：再 start() 也不复活（不得用「忽略 dispose」绕过）')
 })
 
 /* ------------------------------------------------------------ ② 气泡能力面（文本/图片/文件/rest） */

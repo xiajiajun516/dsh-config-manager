@@ -16,6 +16,11 @@
  *     （宿主是 JsonBlock，我们标记成 raw 块交给渲染层，绝不静默丢弃）。
  *  ③ **按钮状态机**：回滚点命中与否（同会话 + 同回合 + 优先 auto）→ 可点 / 一个可证明的禁用原因
  *     （字典键，zh/en 同步）。惰取一次列表、按会话缓存，避免每条消息各发一次请求。
+ *  ④ **收尾竞态的有界重试**（R1）：引擎在回合**收尾之后**还要几秒才写完这个回合的点（真机 7.8 s），
+ *     所以「第一次读到空列表」是**暂态**、不是结论。窗口内按固定退避再读（每轮强制刷新、绕过那 30 s
+ *     列表缓存），**命中即停**；窗口没关就如实显示「正在读取」，只有窗口关且仍为空才说「没有回滚点」。
+ *     T6 起窗口是**一次性**的（`ChatPointWindowController`：一个实例最多一轮、可 dispose 取消）——
+ *     组件 effect 重跑不会重开窗口；「用户再次触发」靠**新实例**（重新挂载 / 会话或回合变化）。
  *
  * 纪律：本文件 **不产出任何用户可见文案**（只回字典键）；**不 import node 模块、不 import src/core**；
  * 不 import React（React 壳在 ChatEntryView.tsx，便于本文件在 node --test 下零依赖直跑）。
@@ -383,8 +388,9 @@ export type ChatEntryButton =
  *  · `noTurn`         —— 节点里取不到可核实的回合号（未识别宿主版本 / 未来形状漂移）；
  *  · `turnOpen`       —— `node.location.turn.status === 'open'`：回合**确实**没结束，留点还没发生；
  *  · `noSession`      —— 没有 sessionId，无法按「同会话」匹配；
- *  · `pointsPending`  —— 惰取一次回滚点列表还没回来（**不假装没有**）；
- *  · `noPoint`        —— 列表已读到、没有「同会话 + 同回合」的点（已证实）；
+ *  · `pointsPending`  —— 惰取还没回来，或**收尾后的有界重试窗口还没关**（窗口内列表读到空只是暂态，
+ *                         所以如实说「正在读取」；**不假装没有**）；
+ *  · `noPoint`        —— 列表已读到、没有「同会话 + 同回合」的点，**且重试窗口已关**（已证实）；
  *  · `turnUnknown`    —— `status` 不是 `'closed'` 也不是 `'open'`（unknown / 读不到）：
  *                         不能证明回合已收尾，也不能证明没结束，如实说「收尾状态未知」。
  */
@@ -425,15 +431,25 @@ export function chatEntryTurnPhase(turn: ChatNodeTurn | null): ChatEntryTurnPhas
  *  ③ 没有 sessionId → `noSession`；
  *  ④ 收尾状态 unknown → `turnUnknown`（不假装已收尾）；
  *  ⑤ 列表还没读回来：
- *     · 惰取在途 → `pointsPending`；
- *     · 惰取**失败**（读不出来）→ **乐观可点**（点开走宿主错误路径，界面不撒谎说「没有点」）；
- *  ⑥ 已读到列表：命中 → enabled；没命中 → `noPoint`。
+ *     · 惰取在途（`pending`）或**重试窗口还开着**（`retrying`）→ `pointsPending`；
+ *     · 惰取**失败**（读不出来）且窗口已关 → **乐观可点**（点开走宿主错误路径，界面不撒谎说「没有点」）；
+ *  ⑥ 已读到列表：命中 → enabled；没命中 → 重试窗口内 `pointsPending`、窗口关后 `noPoint`
+ *     （R1：引擎在收尾之后还要几秒才写完点，窗口内的空列表是暂态；把暂态说成「没有」就是不诚实）。
+ *
+ * `pending` 与 `retrying` 的关系：前者是「这一次读在途」，后者是「窗口还开着」（含首读在途、含读到空
+ * 还会再读、含读失败还会再读）。两个都表示**还没结论**，所以两个都归 `pointsPending`；
+ * 调用点通常只需给 `retrying`（窗口状态机是唯一真相），`pending` 留给不接状态机的旧调用点。
  */
 export function chatEntryButtonState(options: {
   node: unknown
   sessionId: string | null | undefined
   lookup: ChatPointLookup | null | undefined
   pending: boolean
+  /**
+   * 收尾后的有界重试窗口还开着（R1/R9）：**还没拿到结论**（首读在途 / 读到空还会再读 / 读失败还会再读）
+   * ⇒ `pointsPending`。缺省 false = 旧调用点的行为逐字不变。
+   */
+  retrying?: boolean
 }): ChatEntryButton {
   const turn = chatNodeTurn(options.node)
   if (turn === null) return { kind: 'disabled', code: 'noTurn', key: CHAT_ENTRY_DISABLED_KEYS.noTurn }
@@ -445,12 +461,55 @@ export function chatEntryButtonState(options: {
   if (phase === 'unknown') return { kind: 'disabled', code: 'turnUnknown', key: CHAT_ENTRY_DISABLED_KEYS.turnUnknown }
   const lookup = options.lookup
   if (lookup === null || lookup === undefined || lookup.resolved !== true) {
-    if (options.pending) return { kind: 'disabled', code: 'pointsPending', key: CHAT_ENTRY_DISABLED_KEYS.pointsPending }
+    // 「这一次读在途」与「窗口还开着」都是「还没结论」—— 都不许说成「没有回滚点」，也都不该乐观放行
+    if (options.pending || options.retrying === true) {
+      return { kind: 'disabled', code: 'pointsPending', key: CHAT_ENTRY_DISABLED_KEYS.pointsPending }
+    }
     return { kind: 'enabled', turn: turn.turn }
   }
-  if (lookup.point === null) return { kind: 'disabled', code: 'noPoint', key: CHAT_ENTRY_DISABLED_KEYS.noPoint }
+  if (lookup.point === null) {
+    if (options.retrying === true) return { kind: 'disabled', code: 'pointsPending', key: CHAT_ENTRY_DISABLED_KEYS.pointsPending }
+    return { kind: 'disabled', code: 'noPoint', key: CHAT_ENTRY_DISABLED_KEYS.noPoint }
+  }
   return { kind: 'enabled', turn: turn.turn }
 }
+
+/* ------------------------------------------------------------ 收尾竞态：有界重试（R1） */
+
+/**
+ * 重试窗口长度：**30 s**（毫秒）。判据是「从挂载/收尾那一刻起累计的墙上时间」，不是尝试次数。
+ *
+ * 为什么是 30 s：真机实测引擎在**回合收尾之后 7.8 s** 才写完这个回合的点
+ * （turn/end 20:03:38.658Z → 点 createdAt 20:03:46.434Z）。30 s 给足「慢机器 / 大盘 355 文件」的余量，
+ * 同时是一个**有界**的等待：用户最多等 30 s 就能拿到一个诚实的结论（命中，或「没有回滚点」），
+ * 而不是被一次空结果永久禁用。窗口内最多 6 次列表读取（1 次首读 + 5 次重试），**不是轮询**。
+ */
+export const CHAT_POINT_LOOKUP_WINDOW_MS = 30_000
+
+/**
+ * 固定退避表（毫秒）—— 每次「没命中」之后等这么久再读下一轮，**表走完就停**。
+ *
+ * 0.5 / 1.5 / 3 / 6 / 12 s ⇒ 累计 23 s（< 30 s 窗口），覆盖真机 7.8 s 的落点，晚到的写回也抓得住。
+ * 选固定表而不是纯指数：间隔可被单测逐项断言 —— 「有界重试」的判据必须是可核对的数字。
+ */
+export const CHAT_POINT_RETRY_DELAYS_MS: readonly number[] = [500, 1_500, 3_000, 6_000, 12_000]
+
+/**
+ * 这一轮读完之后**还该不该再读**（纯判定，**不看时钟**，只吃结果）。
+ *
+ * 命中 → 立即 false（命中即停：不再排重试、不再发请求，避免无谓 churn）；
+ * 未命中（读到空列表 = 暂态，或读失败 = 判据未知）→ true，由调用点按退避表排下一轮。
+ * 这里刻意**不**把「已读到空列表」当成长期真值 —— 那正是 R1 要修的那个 bug 的根。
+ */
+export function shouldRetryChatPoint(lookup: ChatPointLookup | null | undefined): boolean {
+  if (lookup === null || lookup === undefined) return true
+  return lookup.point === null
+}
+
+/* 重试循环（`retryChatPointUntilHit`，含取消钩子）与「一个挂载只跑一轮窗口」的状态机
+   （`ChatPointWindowController`）都住在 `chat-point-window.ts`（T6 起）：那里是**一次性实例**语义
+   （start 幂等），所以 effect 重跑不会再开第二轮窗口。这里全额 re-export，调用点与单测的 import 面不变。 */
+export { retryChatPointUntilHit, ChatPointWindowController, type ChatPointWindowState } from './chat-point-window.ts'
 
 /* ------------------------------------------------------------ 整视图模型 + 错误边界 */
 
@@ -567,12 +626,16 @@ export function resetChatPointCache(): void {
 /**
  * 读该会话的回滚点列表 → 匹配（**复用** `findPointForTurn`：同会话 + 同回合 + 优先 auto，单一实现）。
  *
- * 三条为什么：
+ * 四条为什么：
  *  · **按会话缓存列表**：每条用户消息各挂一颗按钮，若按回合发请求，一条 50 轮的对话首屏就是 50 次
  *    列表读取；这里整份列表按会话缓存 + 在途去重，N 条消息 → 1 次请求；
  *  · **失败不缓存**（下次重试）：读不出来是**判据未知**，不是「确知没有点」—— 如实回 `resolved:false`，
  *    调用点据此保持乐观可点，让用户在对话框里看到宿主的真实错误，而不是一句假的「没有回滚点」；
- *  · 匹配**不在本层做缓存**（列表缓存了，匹配是纯函数、代价可忽略），所以列表一更新就立刻生效。
+ *  · **匹配不在本层做缓存**（列表缓存了，匹配是纯函数、代价可忽略），所以列表一更新就立刻生效；
+ *  · `force`（R1 新增）= **空结果不锁死**的唯一通道：跳过那次缓存读，去宿主再读一遍并**写回**新结果。
+ *    重试轮必须用它 —— 否则那 30 s TTL 会把「收尾时读到的一次空列表」锁成这 30 s 的**假事实**，
+ *    而点其实在几秒后就被引擎写出来了。注意 force **不**破坏在途去重：同会话已有读取在途时仍复用它
+ *    （那是同一次真读，不是缓存），所以 N 条消息一起重试时仍然只发 1 个请求。
  */
 export async function lookupPointForTurn(options: {
   port: RollbackPointPort
@@ -580,10 +643,12 @@ export async function lookupPointForTurn(options: {
   turn: number
   now?: number
   cacheMs?: number
+  /** true = 跳过缓存读（重试轮用）；读回来的结果照常写回缓存。 */
+  force?: boolean
 }): Promise<ChatPointLookup> {
   const now = options.now ?? Date.now()
   const ttl = options.cacheMs ?? CHAT_POINT_CACHE_MS
-  const cached = pointListCache.get(options.sessionId)
+  const cached = options.force === true ? undefined : pointListCache.get(options.sessionId)
   if (cached !== undefined && now - cached.at < ttl) {
     return { point: findPointForTurn(cached.points, options.sessionId, options.turn), resolved: true }
   }

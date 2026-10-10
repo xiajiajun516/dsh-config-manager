@@ -215,6 +215,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **救援模式与 `reconcileBundles` 的硬冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出时逐字节还原）；救援激活期间 `reconcileBundles` 一律停手。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly 会话 cookie，其余 403；读路径只读、写路径各自过 CLI 同源写入门；判定不许重写；**绝不等于「插件 API 无认证」**。
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
+- **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。证据 → `docs/lessons/recovery-console.md`。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的每会话上限**（`ROLLBACK_MAX_GUARDS_PER_SESSION`，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`

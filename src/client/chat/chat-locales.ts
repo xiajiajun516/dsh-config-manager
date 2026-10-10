@@ -70,7 +70,10 @@ export const zh = {
   'chat.entry.disabled.turnOpen': '这个回合还没结束，还没有回滚点',
   /** 禁用③：缺少 sessionId，无法按「同会话」匹配 */
   'chat.entry.disabled.noSession': '取不到会话标识，无法匹配回滚点',
-  /** 禁用④：惰取一次回滚点列表还没回来（不假装「没有」） */
+  /**
+   * 禁用④：还没读到，或**收尾后的有界重试窗口还开着**（列表读到空只是暂态 —— 引擎在收尾后
+   * 还要几秒才写完点，真机 7.8 s）。窗口内**不得**说「没有回滚点」，所以这里如实说「正在读取」。
+   */
   'chat.entry.disabled.pointsPending': '正在读取回滚点…',
   /** 禁用⑤：已读到列表、确实没有「同会话 + 同回合」的点 */
   'chat.entry.disabled.noPoint': '这个回合还没有回滚点',

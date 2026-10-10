@@ -38,6 +38,7 @@ import {
   type ChatEntryFile,
   type ChatPointLookup,
 } from './chat-entry-view.ts'
+import { ChatPointWindowController, type ChatPointWindowState } from './chat-point-window.ts'
 import type { ChildOpenState } from './rollback-entry-view.ts'
 // 槽位契约的类型镜像（SlotMap 的 conversation.chat.node entry），见该文件头部说明。
 import type {} from './chat-slots.ts'
@@ -149,31 +150,55 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
 function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
-  const [pending, setPending] = useState(false)
+  /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
+  const [windowOpen, setWindowOpen] = useState(false)
   const [dialogTurn, setDialogTurn] = useState<number | null>(null)
-  const button = chatEntryButtonState({ node, sessionId, lookup, pending })
   const turn = view.turnNumber
   const phase = chatEntryTurnPhase(turn === null ? null : { turn, status: view.turnStatus })
+  /**
+   * 「还没拿到结论」⇒ 按钮如实显示「正在读取回滚点…」（**不许**说成「没有回滚点」）：
+   *  · 窗口开着（首读在途 / 读到空还会再读 / 读失败还会再读）→ `pointsPending`；
+   *  · 窗口关掉且仍为空 → `noPoint`（此时才是「已证实没有」）。
+   * 判据只用状态机给的两个事实（`windowOpen` + `lookup`），没有第三个需要手工同步的标志。
+   */
+  const retrying = windowOpen && (lookup === null || lookup.point === null)
+  const button = chatEntryButtonState({ node, sessionId, lookup, pending: false, retrying })
 
   /**
-   * 惰取一次回滚点列表（按会话 + 回合缓存、失败不缓存、在途去重）。
+   * 读回滚点列表：**收尾之后的有界重试**（R1），不是一次性的惰取。
    *
-   * 为什么在**挂载后**异步读而不是渲染期读：渲染期发请求会随每次重渲染放大；这里一次挂载一次，
-   * 读到之前按钮如实标 `pointsPending`（**不假装没有**）。只在「回合已收尾」时才读 ——
-   * 收尾未知/未结束的回合注定没有点，不浪费这次请求（按钮此时已经如实禁用了）。
+   * 为什么必须重试：引擎在回合**收尾之后**才写点 —— 真机实测 turn/end 之后 **7.8 s**
+   * （session-e3a7953c…：turn/end 20:03:38.658Z → 该回合的点 createdAt 20:03:46.434Z）。
+   * 旧实现的 effect 条件是「读到过就永不重查」，于是首读撞上那个空窗就**永久禁用**；
+   * 现在按 `CHAT_POINT_RETRY_DELAYS_MS`（0.5/1.5/3/6/12 s）在 `CHAT_POINT_LOOKUP_WINDOW_MS`
+   * 窗口内再读，**命中即停**（命中后一个请求都不再发）。
+   *
+   * **一次 effect 调用 = 一个新实例**（T9 / RR2-A）：React StrictMode 会走
+   * `effect → cleanup → effect` 双调用。实例若跨调用复用（此前放在 `useMemo` 里），第二次 `start()`
+   * 会因为 `started` 已置位而变成 no-op，而被 dispose 的那个循环又永不回调 ⇒ 窗口**永久**停在
+   * `open: true`、按钮永久停在「正在读取回滚点…」禁用（与原始症状同一类）。每次 effect 各建实例即无此路径。
+   *
+   * 又因为依赖里**没有任何 React 状态**（只有 `canLookup` / `port` / `sessionId` / `turn`），
+   * 状态回调不会把 effect 再跑一遍 ⇒ 同时满足 F1「一个挂载只跑一轮窗口」（不周期性重开）。
+   *
+   * 只在「回合已收尾」时才读 —— 收尾未知/未结束的回合注定没有点，不浪费这次请求（按钮此时已如实禁用）。
+   * 「用户再次触发」= 重新挂载（切档 / 重进会话）或会话/回合变化 ⇒ 新实例；不需要刷新页面。
    */
   const canLookup = turn !== null && phase === 'closed' && sessionId !== ''
   useEffect(() => {
-    if (!canLookup || turn === null || lookup !== null) return undefined
-    let alive = true
-    setPending(true)
-    void lookupPointForTurn({ port, sessionId, turn }).then((result) => {
-      if (!alive) return
-      setPending(false)
-      setLookup(result)
+    if (!canLookup || turn === null) return undefined
+    const controller = new ChatPointWindowController({
+      attempt: (force) => lookupPointForTurn({ port, sessionId, turn, force }),
+      onState: (state: ChatPointWindowState) => {
+        setLookup(state.lookup)
+        setWindowOpen(state.open)
+      },
     })
-    return () => { alive = false }
-  }, [canLookup, turn, lookup, port, sessionId])
+    controller.start()
+    // F2：取消通道（循环立即 settle）。dispose **不回调** onState —— 这里正是卸载/换会话，
+    // 回调只会在卸载后 setState（RR2-B：语义与注释对齐，见 chat-point-window.ts 的 dispose 文档）。
+    return () => { controller.dispose() }
+  }, [canLookup, port, sessionId, turn])
 
   const openDialog = useCallback(() => {
     if (button.kind !== 'enabled') return
@@ -249,6 +274,9 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
             aria-label={t('chat.entry.label')}
             title={reasonKey === null ? t('chat.entry.label') : t(reasonKey as 'chat.entry.disabled.noTurn')}
             onClick={openDialog}
+            /* 只读判据（零样式、零文案）：重试窗口开着时置位 —— 排障时一眼看出「正在读取」是暂态还是终态 */
+            data-chat-entry-window-open={windowOpen ? '' : undefined}
+            data-chat-entry-window-closed={windowOpen ? undefined : ''}
           >
             <RefreshIcon size={13} />
           </button>
