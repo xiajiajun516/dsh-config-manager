@@ -4976,3 +4976,192 @@ button.profileRowMain:hover {
   color: var(--dsw-alias-label-tertiary);
   font-variant-numeric: tabular-nums;
 }
+
+/* ================================================================ §15b Chat entry（每条用户消息一个回退入口）
+
+   定位：本插件**接管** ui-chat 的 conversation.chat.node / user 渲染器后，自己渲染的用户消息气泡。
+   它渲染在**插件设置页子树之外**（聊天流里，不是 .section 的 DOM 子树），因此 §1 定义在 .section
+   上的 --cm-* token 在这里**不会继承** —— .chatEntryScope 把用到的那一小撮就地重声明一次。
+   ⚠️ 这里**不新增 token 档位**（字号/间距/圆角全部复用 §1 已冻结的档位）：
+   宿主用户气泡用的是 --dsw-radius-xl / --dsw-specific-bubble / 14px，本仓库 token 层没有这三档，
+   所以观感差异是**已知且如实登记**的（圆角小一点、底色走 --cm-surface-2、字号 12.5px），
+   如需逐像素一致必须先改 DESIGN.md §3–§5 —— 本任务明确不做。
+
+   类名与审查口径：
+   · .chatBubble 负责「用户消息绝不消失」的**可见文本**承载（white-space: pre-wrap 保留换行/空白）；
+   · .chatFallbackBubble 只给错误边界降级出来的纯文本气泡加一层可见标记（仍在同一视觉体系内）。 */
+
+.chatEntryScope {
+  --cm-text-1: var(--dsw-alias-label-primary);
+  --cm-text-3: var(--dsw-alias-label-tertiary);
+  --cm-surface-2: var(--dsw-alias-bg-layer-2);
+  --cm-line-1: var(--dsw-alias-border-l1);
+  --cm-fs-meta: 11px;
+  --cm-fs-base: 12.5px;
+  --cm-sp-2: 4px;
+  --cm-sp-3: 6px;
+  --cm-sp-4: 8px;
+  --cm-sp-5: 10px;
+  --cm-sp-6: 12px;
+  --cm-sp-8: 16px;
+  --cm-r-2: 6px;
+  --cm-r-3: 8px;
+  display: block;
+  min-width: 0;
+  color: var(--cm-text-1);
+  font-size: var(--cm-fs-base);
+  line-height: 1.5;
+}
+
+/* 用户消息行：右对齐（与宿主 .userRow 同构） */
+.chatEntryRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cm-sp-3);
+}
+
+/* 气泡列：限宽（宿主是 min(画布宽 * .702, 82%)；我们是固定近似，见文件头注释） */
+.chatEntryStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cm-sp-4);
+  min-width: 0;
+  max-width: min(620px, 82%);
+}
+
+/* 用户气泡：pre-wrap 保留换行与空白（禁用! 会改文案语义），长词强制断行 */
+.chatBubble {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-3);
+  max-width: 100%;
+  padding: var(--cm-sp-5) var(--cm-sp-8);
+  border-radius: var(--cm-r-3);
+  background: var(--cm-surface-2);
+  color: var(--cm-text-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chatBubbleText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 错误边界降级出来的纯文本气泡：左侧一条警示线，仍然是一条正常气泡（消息不消失） */
+.chatFallbackBubble {
+  border-left: 2px solid var(--cm-text-1);
+}
+
+/* 附件行（图片 + 文件卡）：宿主是 .attachmentRow，横向排列、允许换行 */
+.chatAttachmentRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: var(--cm-sp-2);
+  min-width: 0;
+}
+
+/* 文件卡：扩展名徽标 + 文件名 + 体积（宿主用 ui-primitives 的 FileTypeIcon，本仓库拿不到，
+   用扩展名徽标做**类型图标兜底** —— 不新增图标、不新增依赖） */
+.chatFileCard {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cm-sp-3);
+  max-width: 100%;
+  padding: var(--cm-sp-2) var(--cm-sp-4);
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-2);
+  background: var(--cm-surface-2);
+  font-size: var(--cm-fs-meta);
+}
+
+.chatFileExt {
+  flex: none;
+  padding: 0 var(--cm-sp-2);
+  border-radius: var(--cm-r-2);
+  background: var(--cm-line-1);
+  color: var(--cm-text-1);
+  font-size: var(--cm-fs-meta);
+  letter-spacing: 0.02em;
+}
+
+.chatFileName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chatFileMeta {
+  flex: none;
+  color: var(--cm-text-3);
+  font-size: var(--cm-fs-meta);
+}
+
+/* 未知 / rest 块：宿主是 JsonBlock，这里用原生 details + 预格式化 JSON */
+.chatRawBlock {
+  font-size: var(--cm-fs-meta);
+  color: var(--cm-text-3);
+}
+
+.chatRawSummary {
+  cursor: pointer;
+}
+
+.chatRawPre {
+  max-height: 220px;
+  margin: var(--cm-sp-2) 0 0;
+  padding: var(--cm-sp-3);
+  overflow: auto;
+  border-radius: var(--cm-r-2);
+  background: var(--cm-surface-2);
+  color: var(--cm-text-3);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 动作行：时间 + 复制 + 回退（宿主把 MessageIconActions 与气泡并排在同一行） */
+.chatEntryActions {
+  display: flex;
+  align-items: center;
+  gap: var(--cm-sp-2);
+}
+
+.chatEntryTime {
+  color: var(--cm-text-3);
+  font-size: var(--cm-fs-meta);
+}
+
+.chatEntryDisabledWrap {
+  display: inline-flex;
+}
+
+.chatEntryNotice {
+  max-width: min(620px, 82%);
+  color: var(--cm-text-3);
+  font-size: var(--cm-fs-meta);
+}
+
+/* 复制动作按钮：26px 触达区，与 IconButton 观感同源（图标走 currentColor） */
+.chatActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--cm-r-2);
+  background: transparent;
+  color: var(--cm-text-3);
+  cursor: pointer;
+}
+
+.chatActionBtn:hover {
+  background: var(--cm-line-1);
+  color: var(--cm-text-1);
+}

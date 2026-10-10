@@ -40,6 +40,29 @@ export const zh = {
   'chat.rewind.running': '正在回退…',
   /** 关闭对话框（Modal.Header 的 closeLabel 必须是已翻译文案） */
   'chat.close': '关闭',
+  /* —— T1：每条用户消息一个入口（接管 conversation.chat.node 的 user key）—— */
+  /** 复制动作（与 native 复制的 aria-label 同义） */
+  'chat.entry.copy': '复制这条消息',
+  /** 复制成功的 1 秒反馈 */
+  'chat.entry.copied': '已复制',
+  /** content 里我们无法理解的块（宿主叫「附加内容块」；这里必须原样兜底上屏，不得静默丢弃） */
+  'chat.entry.extraBlock': '附加内容块',
+  /** 兜底块过长时的截断说明（{total} = 原始字符数） */
+  'chat.entry.truncated': '已截断，共 {total} 字符',
+  /** owner 没给图片渲染位（宿主版本差异）：图片我们绝不自己渲染，如实说 */
+  'chat.entry.noImageRenderer': '宿主没有提供图片渲染位，这条消息里的图片无法显示',
+  /** 禁用①：节点里取不到可核实的回合号（与宿主同一条读法：location.kind 必须是 turn/step） */
+  'chat.entry.disabled.noTurn': '取不到可核实的回合号（当前 DSH 版本未提供），无法在聊天里回退',
+  /** 禁用②：回合还在进行中 —— 真的还没到留点那一刻 */
+  'chat.entry.disabled.turnOpen': '这个回合还没结束，还没有回滚点',
+  /** 禁用③：缺少 sessionId，无法按「同会话」匹配 */
+  'chat.entry.disabled.noSession': '取不到会话标识，无法匹配回滚点',
+  /** 禁用④：惰取一次回滚点列表还没回来（不假装「没有」） */
+  'chat.entry.disabled.pointsPending': '正在读取回滚点…',
+  /** 禁用⑤：已读到列表、确实没有「同会话 + 同回合」的点 */
+  'chat.entry.disabled.noPoint': '这个回合还没有回滚点',
+  /** 禁用⑥：收尾状态既不是 closed 也不是 open（读不到 / unknown）——不能证明已收尾，也不说成没结束 */
+  'chat.entry.disabled.turnUnknown': '这个回合的收尾状态未知，暂不可回退',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -54,6 +77,17 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.preview.reasonUnknown': 'This rollback point cannot be restored right now, but the host gave no reason (cause unknown)',
   'chat.rewind.running': 'Rewinding\u2026',
   'chat.close': 'Close',
+  'chat.entry.copy': 'Copy this message',
+  'chat.entry.copied': 'Copied',
+  'chat.entry.extraBlock': 'Extra content block',
+  'chat.entry.truncated': 'truncated, {total} characters total',
+  'chat.entry.noImageRenderer': 'The host exposes no image render seat, so images in this message cannot be shown',
+  'chat.entry.disabled.noTurn': 'No verifiable turn number is available (the installed DSH version does not provide one), so rewinding from the chat is unavailable',
+  'chat.entry.disabled.turnOpen': 'This turn has not finished yet, so no rollback point exists',
+  'chat.entry.disabled.noSession': 'No session identity is available, so rollback points cannot be matched',
+  'chat.entry.disabled.pointsPending': 'Reading the rollback points\u2026',
+  'chat.entry.disabled.noPoint': 'This turn has no rollback point yet',
+  'chat.entry.disabled.turnUnknown': 'This turn\u2019s closing state is unknown, so rewinding is unavailable for now',
 };
 
 export type ChatKey = keyof typeof zh;

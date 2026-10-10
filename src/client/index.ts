@@ -36,6 +36,7 @@ import { IncidentApi } from './recovery/incident-api.ts'
 import { en as historyEn, zh as historyZh, type HistoryKey } from './history/history-locales.ts'
 import { en as chatEn, zh as chatZh, type ChatKey } from './chat/chat-locales.ts'
 import { RollbackTurnEntry, type RollbackTurnEntryInjected } from './chat/RollbackTurnEntry.tsx'
+import { ChatEntryNodeView, type ChatEntryViewInjected } from './chat/ChatEntryView.tsx'
 import {
   buildSessionNavigator,
   CHAT_ENTRY_ID,
@@ -46,7 +47,10 @@ import {
   registerChatEntry,
   type ChildOpenState,
 } from './chat/rollback-entry-view.ts'
-// 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并）：注册 `conversation.chat.turnTail` 前必须加载。
+import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
+import { mountChatNodeEntry } from './chat/chat-node-registration.ts'
+// 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并）：
+// 注册 `conversation.chat.node`（user cell）与 `conversation.chat.turnTail` 前都必须加载。
 import type {} from './chat/chat-slots.ts'
 
 /** 本插件拥有的 locale namespace。 */
@@ -143,18 +147,6 @@ export function apply(ctx: ClientContext): void {
     inject: () => ({ api, syncApi, syncT, marketApi, marketT, myConfigsApi, recoveryApi, recoveryT, historyApi, historyT, incidentApi, uiT }),
   }, ConfigManagerSection))
 
-  /**
-   * 聊天内「↺ 回退」入口（T4）：ui-chat 的回合尾 list 位（`conversation.chat.turnTail`）。
-   *
-   * 选型 = 追加一个 list 条目（**新 id**，replaceRisk: none，不遮蔽任何 shipped UI）。
-   * 为什么不用「每条用户消息行内动作」（dsh-rewind 的 priority -1 接管 `conversation.chat.node` 的
-   * `user` key）：那是 keyed 位的遮蔽语义，要让按钮与原文同时出现就得把宿主的用户消息渲染器整段
-   * 复制过来（含它自己的 CSS Modules）—— 上游 UI 抄一份的维护债，且必然与既有观感分叉；而本功能的
-   * 留点单位本来就是回合（S1）。完整论证与后果见 `src/client/chat/chat-slots.ts` 头部注释。
-   *
-   * 注入面：端口（T2 的 RecoveryApi，组件绝不直接 fetch）+ 回退词汇翻译器（recovery 字典单点）
-   * + 子会话导航（**可选**：`ctx.sessions` 缺失时入口仍可回退，只是不能自动打开子会话并如实降级）。
-   */
   // 会话导航面惰取（**不用** `ctx.<svc>` 属性访问：未在 inject 里声明的服务做属性访问会抛，见 AGENTS.md 的 DI 纪律）：
   //   真机 0.2 = `ctx.uiWorkspace.openSession(childId)`（ui-chat 自己的 fork 流程同款，证据见 T20 output §F1）；
   //   旧版兼容 = `ctx.sessions.open`（**存在才用** —— 0.2 的 sessions 面没有 open，绝不能包一个必然抛的包装）；
@@ -165,6 +157,49 @@ export function apply(ctx: ClientContext): void {
   // uiWorkspace 记成「本客户端没有导航入口」（假降级）。每次调用重读一次（只读 get，代价可忽略）。
   const openChild = (childId: string): Promise<ChildOpenState> =>
     openChildSession(buildSessionNavigator(navigationSourcesOf(ctx)), childId)
+
+  /**
+   * 两个聊天入口共用的**同一份注入面**（端口 + 回退词汇 + 子会话导航）。
+   *
+   * 端口 = T2 的 RecoveryApi（组件绝不直接 fetch）；`rt` = recovery 字典（rollback.* 词汇单点）；
+   * 子会话导航**可选**：`ctx.sessions` 缺失时入口仍可回退，只是不能自动打开子会话并如实降级。
+   */
+  const chatEntryInjected = (_sessionId: string): ChatEntryViewInjected & RollbackTurnEntryInjected => ({
+    port: recoveryApi,
+    rt: recoveryT,
+    openChildSession: openChild,
+  })
+
+  /**
+   * **主入口**（T1）：接管 `conversation.chat.node` 的 `user` key —— 每条用户消息一颗「回退」按钮。
+   *
+   * 为什么只能接管：该 key **没有 children 表**（宿主只对 turn-tail 声明了子位），framework 没有
+   * 「往用户消息里追加 UI」的位子。priority **-1** 遮蔽宿主的 UserMessageNodeView（同 key 同 priority
+   * 会抛，所以 -1 是与宿主并存的唯一合法取值），气泡外观由本仓库复刻（宿主组件与 CSS Modules 都
+   * 是 ui-chat 私有、不可导入）。完整证据见 `src/client/chat/chat-slots.ts` 头部注释。
+   *
+   * **偏好门**：偏好 = 「整回合」时 `registerChatNodeEntry` **一次都不注册**（宿主渲染器原样工作，
+   * 入口退回下面的回合尾 list 位）；形态探测失败（0.1.x 契约不同）同样只跳过这一个入口。
+   */
+  ctx.slots.inject(CHAT_NODE_SLOT, () => mountChatNodeEntry({
+    probe: { spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT) },
+    register: () => ctx.slots.register({
+      name: CHAT_NODE_SLOT,
+      key: CHAT_NODE_USER_KEY,
+      priority: CHAT_NODE_PRIORITY,
+      locale: CHAT_NS,
+      inject: chatEntryInjected,
+    }, ChatEntryNodeView),
+  }))
+
+  /**
+   * **兜底入口**（T4，保留不动）：ui-chat 的回合尾 list 位（`conversation.chat.turnTail`）。
+   *
+   * 与主入口的分工：偏好为「整回合」时，这里就是唯一的入口（整回合一个）；偏好为「每条消息」时
+   * 两个入口同时在 —— 回合尾那颗的语义没变（回退这个回合），两条路径打开的是**同一个**复核对话框。
+   *
+   * 选型 = 追加一个 list 条目（**新 id**，replaceRisk: none，不遮蔽任何 shipped UI）。
+   */
   ctx.slots.inject(CHAT_ENTRY_SLOT, () => registerChatEntry({
     // 声明形态探测（T9-F2）：0.1.x 把同一 key 声明成 chain（select 必填），按 list 形态（id/order）注册会抛。
     probe: { spec: (key) => ctx.slots.spec(key) },
@@ -173,11 +208,7 @@ export function apply(ctx: ClientContext): void {
       id: CHAT_ENTRY_ID,
       order: CHAT_ENTRY_ORDER,
       locale: CHAT_NS,
-      inject: (sessionId: string): RollbackTurnEntryInjected => ({
-        port: recoveryApi,
-        rt: recoveryT,
-        openChildSession: openChild,
-      }),
+      inject: chatEntryInjected,
     }, RollbackTurnEntry),
   }))
 }
