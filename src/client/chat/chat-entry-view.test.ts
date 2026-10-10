@@ -28,15 +28,17 @@ import {
   CHAT_NODE_PRIORITY,
   CHAT_NODE_SLOT,
   CHAT_NODE_USER_KEY,
+  chatEntryCompactOf,
   chatNodeKind,
   chatNodeTurn,
   fileExtensionOf,
   fileSizeTextOf,
   formatChatEntryClock,
-  imageRenderOwnersOf,
   lookupPointForTurn,
   plainTextOf,
+  planChatEntryAttachments,
   planChatNodeRegistration,
+  projectChatEntryText,
   resetChatPointCache,
   type ChatEntryDisabledCode,
 } from './chat-entry-view.ts'
@@ -435,14 +437,14 @@ test('bubble images: payload is forwarded verbatim (only renderMessageImages may
   const view = buildChatEntryBubble([{ type: 'text', text: 'x' }, { type: 'image', attachment }])
   assert.equal(view.images.length, 1)
   assert.deepEqual(view.images[0], { attachment })
-  // 逐张一次调用（宿主 attachments.map 的逐字同构）：单图 owner 只带一张
-  assert.deepEqual(imageRenderOwnersOf(view), [{ images: [{ attachment }], align: 'end', compact: false }])
+  // 逐张一次调用（宿主 attachments.map 的逐字同构）：单图 owner 只带一张；单个附件 ⇒ compact=false
+  assert.deepEqual(planChatEntryAttachments(view), [{ kind: 'image', index: 0, owner: { images: [{ attachment }], align: 'end', compact: false } }])
   const two = buildChatEntryBubble([{ type: 'image', attachment }, { type: 'image', attachment: { id: 'a2' } }])
   assert.deepEqual(
-    imageRenderOwnersOf(two),
+    planChatEntryAttachments(two),
     [
-      { images: [{ attachment }], align: 'end', compact: true },
-      { images: [{ attachment: { id: 'a2' } }], align: 'end', compact: true },
+      { kind: 'image', index: 0, owner: { images: [{ attachment }], align: 'end', compact: true } },
+      { kind: 'image', index: 1, owner: { images: [{ attachment: { id: 'a2' } }], align: 'end', compact: true } },
     ],
     'one call per image, compact mirrors the host attachments.length > 1',
   )
@@ -450,6 +452,40 @@ test('bubble images: payload is forwarded verbatim (only renderMessageImages may
   const noAttachment = buildChatEntryBubble([{ type: 'image' }])
   assert.equal(noAttachment.images.length, 0)
   assert.equal(noAttachment.raw.length, 1)
+})
+
+test('attachments: one ordered list in content order + compact counts ALL attachments (D1/D2)', () => {
+  // 反例（t4 复核给的例子）：file 在前、image 在后 —— 旧实现固定「先图片后文件」，顺序是反的；
+  // compact 旧实现只看图片数（这里 images.length=1 ⇒ false），宿主看**附件总数**（2 ⇒ true）。
+  const fileFirst = buildChatEntryBubble([
+    { type: 'file', attachment: { name: 'first.txt', bytes: 3 } },
+    { type: 'image', attachment: { id: 'a' } },
+  ])
+  assert.deepEqual(fileFirst.attachments.map((item) => item.kind), ['file', 'image'], 'attachment order must follow content order')
+  assert.equal(chatEntryCompactOf(fileFirst), true, 'file + image = 2 attachments => compact (host rule)')
+  const plan = planChatEntryAttachments(fileFirst)
+  assert.deepEqual(plan.map((item) => item.kind), ['file', 'image'], 'the render plan keeps content order')
+  assert.equal(plan[0]?.kind === 'file' ? plan[0].size : null, '3B', 'file card size text rides along')
+  assert.equal(plan[1]?.kind === 'image' ? plan[1].owner.compact : null, true, 'the image owner carries the total-attachment compact flag')
+
+  // 单个文件 ⇒ compact=false（附件总数 1）；图片 + 两个文件 ⇒ true
+  assert.equal(chatEntryCompactOf(buildChatEntryBubble([{ type: 'file', attachment: { name: 'a.txt', bytes: 1 } }])), false)
+  assert.equal(chatEntryCompactOf(buildChatEntryBubble([
+    { type: 'image', attachment: { id: 'i' } },
+    { type: 'file', attachment: { name: 'a.txt', bytes: 1 } },
+    { type: 'file', attachment: { name: 'b.txt', bytes: 2 } },
+  ])), true)
+
+  // 三者交错时逐项顺序 = content 顺序，且 images/files 是它的派生视图（同一份真相）
+  const mixed = buildChatEntryBubble([
+    { type: 'image', attachment: { id: 'i1' } },
+    { type: 'file', attachment: { name: 'f1.txt', bytes: 1 } },
+    { type: 'image', attachment: { id: 'i2' } },
+    { type: 'file', attachment: { name: 'f2.txt', bytes: 2 } },
+  ])
+  assert.deepEqual(mixed.attachments.map((item) => item.kind), ['image', 'file', 'image', 'file'])
+  assert.deepEqual(mixed.files.map((file) => file.name), ['f1.txt', 'f2.txt'])
+  assert.deepEqual(mixed.images.map((image) => image.attachment), [{ id: 'i1' }, { id: 'i2' }])
 })
 
 test('bubble file cards: file name + extension + size; a missing byte count stays unknown (no fake 0 B)', () => {
@@ -460,12 +496,27 @@ test('bubble file cards: file name + extension + size; a missing byte count stay
   ])
   assert.equal(view.files.length, 3)
   assert.deepEqual(view.files[0], { name: 'C:/tmp/report.final.PDF', ext: 'PDF', bytes: 1536 })
-  assert.equal(fileSizeTextOf(view.files[0]!.bytes), '1.5 KB')
+  assert.equal(fileSizeTextOf(view.files[0]!.bytes), '1.5KB')
   assert.deepEqual(view.files[1], { name: 'noext', ext: null, bytes: null })
   assert.equal(fileSizeTextOf(null), null)
-  assert.equal(fileSizeTextOf(512), '512 B')
-  assert.equal(fileExtensionOf('.gitignore'), null)
+  // 宿主 fileSizeText 逐字复刻：**无空格**；判的是**单位值** < 10 才带一位小数，≥10 取整
+  assert.equal(fileSizeTextOf(0), '0B')
+  assert.equal(fileSizeTextOf(512), '512B')
+  assert.equal(fileSizeTextOf(1024), '1.0KB')
+  assert.equal(fileSizeTextOf(4.3 * 1024), '4.3KB')
+  assert.equal(fileSizeTextOf(20 * 1024), '20KB')
+  assert.equal(fileSizeTextOf(1536 * 1024), '1.5MB')
+  assert.equal(fileSizeTextOf(10 * 1024 * 1024), '10MB')
+  assert.equal(fileSizeTextOf(2.5 * 1024 * 1024 * 1024), '2.5GB')
+  assert.equal(fileSizeTextOf(-1), null, 'a negative byte count is unknown, never "-1B"')
+  // 宿主 fileExtension：**前导点也算后缀**（'.gitignore' → 'gitignore'）；末尾点 → 空串 → 无徽标。
+  // 长度上限 8 也照宿主：宿主文件卡那行 meta 就是 fileExtension(name).toUpperCase().slice(0, 8)。
+  assert.equal(fileExtensionOf('.gitignore'), 'GITIGNOR')
+  assert.equal(fileExtensionOf('a.'), null)
+  assert.equal(fileExtensionOf('D:/x/y/report.pdf'), 'PDF')
   assert.equal(fileExtensionOf('a.b.c'), 'C')
+  assert.equal(fileExtensionOf('no-dot-at-all'), null, 'no dot = no extension')
+  assert.equal(fileExtensionOf('file.verylongextension12345'), 'VERYLONG', 'the 8-character display cap is the host rule')
 })
 
 test('bubble rest: unknown blocks always reach the renderer (nothing is silently dropped)', () => {
@@ -501,9 +552,38 @@ test('view model: node data drives the bubble; referenceLabels/skillNames are re
   assert.ok(view.clock !== null && view.clock !== '', 'a numeric data.time renders as a clock')
 })
 
-test('clock: numeric milliseconds format; a missing/hostile timestamp never fabricates the current time', () => {
+test('session wire form: the projection collapses @[label](dsh-session:…) to its label (D5)', () => {
+  // 宿主 SESSION_WIRE_RE 的形状：@[ + label（不含 ] 与换行） + ](dsh-session: + 非空白 id + )；
+  // 捕获组 1 = 给人看的 label（宿主 projectUserText 用它当 chip 文本）。
+  assert.equal(projectChatEntryText('see @[Some session](dsh-session:eyJhIjoxfQ) please'), 'see Some session please')
+  assert.equal(projectChatEntryText('a @[x](dsh-session:1) b @[y](dsh-session:2)'), 'a x b y', 'every occurrence is replaced')
+  assert.equal(projectChatEntryText('no wire here'), 'no wire here')
+  assert.equal(projectChatEntryText('@[broken](dsh-session:'), '@[broken](dsh-session:', 'an unterminated wire form is left as-is')
+  assert.equal(projectChatEntryText('mail me at a@[b](not-session:1)'), 'mail me at a@[b](not-session:1)', 'only the dsh-session form is a reference')
+  // 投影必须发生在**气泡文本**上（用户看不到机器编码），且 referenceLabels 仍被读入视图模型
+  const bubble = buildChatEntryBubble([
+    { type: 'text', text: 'q @[Session A](dsh-session:aaa)' },
+    { type: 'text', text: ' and @[Session B](dsh-session:bbb)' },
+  ])
+  assert.equal(bubble.text, 'q Session A and Session B')
+  assert.ok(!bubble.text.includes('dsh-session:'), 'the wire form must never reach the screen')
+  const view = buildChatEntryView({
+    kind: 'user',
+    data: { content: [{ type: 'text', text: '@[Session A](dsh-session:aaa)' }], referenceLabels: ['Session A', 'Session B'] },
+  })
+  assert.deepEqual(view.referenceLabels, ['Session A', 'Session B'], 'referenceLabels drive the summary line')
+  // 崩溃降级路径同样不许打印线格式
+  assert.equal(plainTextOf([{ type: 'text', text: '@[Session A](dsh-session:aaa)' }]), 'Session A')
+})
+
+test('clock: fixed 24-hour zero-padded HH:mm (host format, D4); missing/hostile timestamps stay unknown', () => {
+  // 用**本地时间构造**，断言与运行时时区无关：05:04 必须补零、15:04 必须还是 15 点（不是 3 点）
+  assert.equal(formatChatEntryClock(new Date(2026, 9, 10, 5, 4).getTime()), '05:04')
+  assert.equal(formatChatEntryClock(new Date(2026, 9, 10, 15, 4).getTime()), '15:04')
+  assert.equal(formatChatEntryClock(new Date(2026, 0, 1, 0, 0).getTime()), '00:00')
+  assert.equal(formatChatEntryClock(new Date(2026, 0, 1, 23, 59).getTime()), '23:59')
   const formatted = formatChatEntryClock(1_700_000_000_000)
-  assert.ok(formatted !== null && formatted.length > 0)
+  assert.ok(formatted !== null && /^\d{2}:\d{2}$/.test(formatted), 'always HH:mm: ' + String(formatted))
   assert.equal(formatChatEntryClock(null), null)
   assert.equal(formatChatEntryClock(Number.NaN), null)
   assert.equal(formatChatEntryClock(Number.POSITIVE_INFINITY), null)

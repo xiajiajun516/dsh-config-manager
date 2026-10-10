@@ -50,3 +50,81 @@ test('布局守卫：小节用卡片容器 + groupLabel 标题 + snapshotList/re
     '长列表必须限高内滚（.snapshotList + .reportScroll）',
   );
 });
+
+/* ---------------------------------------------- T2：聊天内回退入口形态开关（回滚卡内） */
+
+const ROLLBACK_CARD_PATH = 'src/client/recovery/RollbackCard.tsx';
+
+/**
+ * T2 源码级守卫：「工作区 + 会话回滚」卡上的**聊天内回退入口形态**开关。
+ *
+ * 为什么要有这条：开关是 captain 承诺给用户的「一键退回回合尾」保险，坏在三种地方**类型检查
+ * 与纯函数单测都看不见**：
+ *  ① 位置 —— 若挂在台账加载分支里，回滚点列表读不出来时这个保险正好不可用；
+ *  ② 外观 —— 自造开关/内联样式 = 第二套视觉体系（DESIGN.md 硬约束）；
+ *  ③ 通道 —— 直接写 localStorage 会**绕过 T1 的热切换**（切换变成「下次加载生效」，与界面
+ *     文案「立即生效」矛盾），也造出第二套持久化通道。
+ * 本用例把这三条都钉成红灯（对照 T1 的偏好模块 chat-entry-pref.ts）。
+ */
+test('T2：回滚卡的聊天入口开关位置/原语/通道（panel 小节三件套 + 只走偏好模块）', () => {
+  const src = readFileSync(ROLLBACK_CARD_PATH, 'utf8');
+
+  // ① 必须在回滚卡**内**，且排在台账状态分支**之前**（列表读不出来时它仍要可用）
+  const cardAt = src.indexOf('<Card>');
+  const labelAt = src.indexOf("t('rollback.chatEntry.label')");
+  const cardEndAt = src.indexOf('</Card>');
+  const readyAt = src.indexOf("status === 'ready'");
+  assert.ok(cardAt >= 0 && cardEndAt > cardAt, '找不到回滚卡的 <Card> 容器');
+  assert.ok(labelAt > cardAt && labelAt < cardEndAt, '开关必须渲染在回滚卡内（小节外层 = .card）');
+  assert.ok(readyAt > 0 && labelAt < readyAt, '开关必须排在台账状态分支之前 —— 否则列表读不出来时这颗保险正好不可用');
+
+  // ② 复用既有原语（标题走 .groupLabel / 说明走 .hint / 切换走 common/ui.tsx 的 Segmented）
+  assert.match(
+    src,
+    /<div className=\{css\.groupLabel\}>\{t\('rollback\.chatEntry\.label'\)\}<\/div>/,
+    '开关标题必须走 .groupLabel（与面板其它小节同一把尺子）',
+  );
+  assert.match(
+    src,
+    /<div className=\{css\.hint\}>\{t\('rollback\.chatEntry\.hint'\)\}<\/div>/,
+    '开关说明必须走 .hint',
+  );
+  assert.match(
+    src,
+    /<Segmented[\s\S]{0,400}onChange=\{applyChatEntryMode\}/,
+    '切换必须复用 common/ui.tsx 的 Segmented（禁止自造开关组件/内联样式）',
+  );
+  assert.ok(
+    src.includes("ariaLabel={t('rollback.chatEntry.label')}"),
+    '分段控件必须带**已翻译**的无障碍名（不得硬编码字符串）',
+  );
+  assert.ok(
+    src.includes('CHAT_ENTRY_MODES.map('),
+    '两档选项必须由偏好模块的档位列表派生（手写死两档 ⇒ 加档就漏）',
+  );
+
+  // ③ 通道：只走 T1 的偏好模块（不得直碰 localStorage / 不得自造第二套通道）
+  //    判据只看**代码**：注释里说明「绝不直接读写 localStorage」是文档，不是缺陷
+  //    （整行 // 与 /* */ 一律剥掉；真实调用点不会只活在注释里）。
+  const stripComments = (text: string): string => text
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '');
+  assert.equal(stripComments(src).includes('localStorage'), false, '组件不得直接读写 localStorage：偏好唯一入口是 chat-entry-pref');
+  // 反向对照：同一条判据对「注释提到 + 代码真的调用」必须命中（证明剥离不是把整份源码抹空）
+  assert.equal(
+    stripComments('/* 注释里提到 localStorage */\nconst raw = localStorage.getItem("dcm.k")\n').includes('localStorage'),
+    true,
+    '剥离注释的判据必须保留真实代码：真实调用点仍要被抓到',
+  );
+  assert.ok(src.includes("from '../chat/chat-entry-pref.ts'"), '偏好必须来自 T1 的 chat-entry-pref（唯一来源）');
+  assert.ok(src.includes('readChatEntryMode('), '当前值必须从偏好读取（缺省 = 每条用户消息）');
+  assert.ok(
+    src.includes('useState<ChatEntryMode>(() => readChatEntryMode())'),
+    '开关初值必须是偏好读出来的值（缺省 = 每条用户消息；不得另存一份状态/不得硬编码缺省）',
+  );
+  assert.ok(src.includes('active={chatEntryMode}'), '分段控件的选中值必须绑到该状态（界面与偏好不脱钩）');
+  assert.ok(
+    src.includes('writeChatEntryMode('),
+    '写入必须走 writeChatEntryMode —— 只有它通知订阅者，T1 才会 dispose → register（否则要刷新才生效）',
+  );
+});

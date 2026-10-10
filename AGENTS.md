@@ -83,7 +83,7 @@ tests/        node --test 集成测试 · docs/（design/spec/seo/handoff/lesson
 
 ### TS/命名
 - **import type**（`verbatimModuleSyntax` 强制）；类型合并用 `declare module`+`import type{}`。
-- React：函数组件+hooks，无 class/高阶组件；props 显式 `XxxProps`；导出类型汇总于 `src/client/index.ts`。
+- React：函数组件+hooks，无 class/高阶组件（**唯一显式例外** = `ChatEntryErrorBoundary`：React 18 仅 class 能 `getDerivedStateFromError` / `componentDidCatch`；证据与边界见 `docs/lessons/recovery-console.md`）；props 显式 `XxxProps`；导出类型汇总于 `src/client/index.ts`。
 - 命名：组件/类型/类 PascalCase，函数/变量 camelCase，常量 UPPER_SNAKE，CSS 类名 camelCase。
 - 分号暂未统一——跟随所在文件风格，勿同一次 diff 混改。
 

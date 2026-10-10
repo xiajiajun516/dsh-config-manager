@@ -49,7 +49,17 @@ import type {
   RollbackRewindResult,
 } from '../../ui/rollback-view.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+// T2：聊天内回退入口形态的偏好（**唯一来源** = T1 的 chat-entry-pref）。
+// 本组件只调用它的读/写函数：写入走 writeChatEntryMode 才会触发 T1 的热切换（值真变 → dispose → register），
+// 因此切换**无需重启、无需刷新**；绝不在此处直接读写 localStorage（那会绕过热切换、并造出第二套通道）。
+import {
+  CHAT_ENTRY_MODES,
+  isChatEntryMode,
+  readChatEntryMode,
+  writeChatEntryMode,
+  type ChatEntryMode,
+} from '../chat/chat-entry-pref.ts'
+import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -63,6 +73,15 @@ export interface RollbackCardProps {
 
 /** 宿主错误文本渲染前统一过 redact（AGENTS.md UI 硬性规则 7）。 */
 const redactErrorText = (err: unknown): string => redact(err instanceof Error ? err.message : String(err))
+
+/**
+ * T2：两档形态 → 面板文案键（**穷尽映射**：`Record<ChatEntryMode, string>` 让「新增一档却忘了文案」
+ * 变成编译错误）。选项本身由偏好模块的 `CHAT_ENTRY_MODES` 派生，本组件不写形态字面量。
+ */
+const CHAT_ENTRY_LABEL_KEYS: Record<ChatEntryMode, string> = {
+  'per-message': 'rollback.chatEntry.perMessage',
+  'turn': 'rollback.chatEntry.turn',
+}
 
 /** \`ConfigManagerApiError\` 的机器码（宿主在 409/423/404 上回传；缺失即 null）。 */
 function apiCodeOf(err: unknown): string | null {
@@ -96,6 +115,26 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const [deleteTarget, setDeleteTarget] = useState<RollbackPointRowView | null>(null)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
+
+  /**
+   * T2：聊天内回退入口形态（每条用户消息 / 整回合）。
+   *
+   * 当前值**从偏好读取**（缺省 = 每条用户消息，见 T1 的 readChatEntryMode）；写入只走
+   * `writeChatEntryMode` —— 它值真变才通知订阅者，T1 的 mountChatNodeEntry 收到即
+   * dispose → register，所以切换是**即时**的（无需重启、也无需刷新）。
+   *
+   * 写失败（storage 不可用 / 配额：storage 本身不写、偏好**没有变**）时**回读真实值**再如实说明
+   * 「这次切换没有生效」，绝不把界面留在「显示已切换但实际没切换」的假状态。
+   */
+  const [chatEntryMode, setChatEntryMode] = useState<ChatEntryMode>(() => readChatEntryMode())
+  const [chatEntrySaveFailed, setChatEntrySaveFailed] = useState(false)
+
+  const applyChatEntryMode = (next: string): void => {
+    if (!isChatEntryMode(next)) return
+    if (writeChatEntryMode(next)) { setChatEntryMode(next); setChatEntrySaveFailed(false); return }
+    setChatEntryMode(readChatEntryMode())
+    setChatEntrySaveFailed(true)
+  }
 
   const fail = (err: unknown): void => {
     if (!mounted.current) return
@@ -199,6 +238,23 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
     <>
       <Card>
         <SectionTitle title={t('rollback.title')} subtitle={t('rollback.desc')} />
+
+        {/* T2：聊天内回退入口形态开关。放在台账之前 = 与列表加载状态无关 ——
+            它是「本插件接管 user 渲染器出问题时一键退回回合尾」的保险，读不出台账时也必须能用。 */}
+        <div className={css.groupLabel}>{t('rollback.chatEntry.label')}</div>
+        <div className={css.actionRow}>
+          <Segmented
+            ariaLabel={t('rollback.chatEntry.label')}
+            active={chatEntryMode}
+            items={CHAT_ENTRY_MODES.map((entryMode) => ({
+              id: entryMode,
+              label: t(dyn(CHAT_ENTRY_LABEL_KEYS[entryMode])),
+            }))}
+            onChange={applyChatEntryMode}
+          />
+        </div>
+        <div className={css.hint}>{t('rollback.chatEntry.hint')}</div>
+        {chatEntrySaveFailed && <Banner kind="warn">{t('rollback.chatEntry.saveFailed')}</Banner>}
 
         {!hasApi && <Banner kind="warn">{t('rollback.apiMissing')}</Banner>}
 

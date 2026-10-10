@@ -30,8 +30,7 @@ import {
   buildChatEntryView,
   chatEntryButtonState,
   chatEntryTurnPhase,
-  fileSizeTextOf,
-  imageRenderOwnersOf,
+  planChatEntryAttachments,
   lookupPointForTurn,
   rawBlockText,
   CHAT_ENTRY_WARN_PREFIX,
@@ -136,9 +135,14 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
 /**
  * 一条用户消息的行主体：气泡（文本/图片/文件卡/时间/复制）+ 我们那颗「回退」按钮。
  *
- * 与宿主 UserStyleBubble 的逐条对照见任务 output 的能力对照表；三条**差距**在这里重复一次：
- *  · 引用/技能 chip：宿主把 referenceLabels / skillNames 交给 ui-primitives 的 projectUserText
- *    在正文内部渲染（包私有、不可导入）⇒ 我们**不接线**、也不另起一段文字（不编造内容）；
+ * 与宿主 UserStyleBubble 的逐条对照见任务 output 的能力对照表。**下面按现状分别写**（t12 修正：
+ * 旧注释把「引用」与「技能」并成同一句结论，已与本文件下方的渲染不符 —— 前者已复刻、后者仍未做）：
+ *  · **引用（会话引用）**：**已复刻**——线格式 `@[label](dsh-session:…)` 在纯投影层换成 label 文本
+ *    （`projectChatEntryText`），且 `data.referenceLabels` 非空时渲染**宿主的引用汇总行**
+ *    （见下方 `css.chatEntryReference` + `t('chat.entry.referenceSummary')` 那段，文案与宿主
+ *    `引用会话 · {labels}` 逐字同义）。**仍有的差距**只有 chip 的**外观与可点开**（已追认）。
+ *  · **技能（skillNames）**：**仍不渲染** —— 宿主交给 ui-primitives 的 `projectUserText` 在正文内部
+ *    把它渲染成 chip（包私有、不可导入）⇒ 我们不为技能产出任何界面元素（不编造内容）。
  *  · 文件类型图标：宿主用 ui-primitives 的 FileTypeIcon（包私有）⇒ 我们用**扩展名徽标**兜底；
  *  · 气泡底色：宿主直接用 `--dsw-specific-bubble`，本仓库 token 层没有这一档 ⇒ 用 `--cm-surface-2`
  *    （亮/暗主题下都是「比底更强的面」），不改 DESIGN 体系、不新增 token。
@@ -178,26 +182,31 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
   }, [button])
 
   const bubble: ChatEntryBubbleView = view.bubble
-  const files = bubble.files.map((file, index) => (
-    <FileCard key={'file-' + String(index)} file={file} size={fileSizeTextOf(file.bytes)} />
-  ))
-  // 逐张调用（与宿主 attachments.map 一图一调用逐字同构）；owner 没给渲染位时整组不渲染并如实提示
-  const imageOwners = bubble.images.length === 0 || typeof renderMessageImages !== 'function' ? [] : imageRenderOwnersOf(bubble)
-  const images = imageOwners.length === 0
-    ? null
-    : imageOwners.map((owner, index) => (
-      <Fragment key={'image:' + String(index)}>{(renderMessageImages as MessageImagesRenderer)(owner)}</Fragment>
-    ))
+  /**
+   * 附件按**content 原始顺序**输出（宿主 `attachments.map` 同构）：图片走 owner 的
+   * `renderMessageImages`（每张一次调用），文件走文件卡 —— 两类**共用同一条序列**，
+   * 绝不重排成「先图片后文件」（t4 复核 D2）。
+   */
+  const canRenderImages = typeof renderMessageImages === 'function'
+  const attachmentNodes = planChatEntryAttachments(bubble).map((item) => item.kind === 'image'
+    ? (canRenderImages
+        ? (
+          <Fragment key={'image:' + String(item.index)}>
+            {(renderMessageImages as MessageImagesRenderer)(item.owner)}
+          </Fragment>
+          )
+        : null)
+    : <FileCard key={'file:' + String(item.index)} file={item.file} size={item.size} />)
+  const hasAttachments = attachmentNodes.some((node) => node !== null)
   const reasonKey = button.kind === 'disabled' ? button.key : null
 
   return (
     <div className={css.chatEntryScope}>
       <div className={css.chatEntryRow}>
         <div className={css.chatEntryStack}>
-          {(files.length > 0 || images !== null) && (
+          {hasAttachments && (
             <div className={css.chatAttachmentRow} data-message-attachments="">
-              {images}
-              {files}
+              {attachmentNodes}
             </div>
           )}
           {bubble.showBubble && (
@@ -213,8 +222,17 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
               ))}
             </div>
           )}
-          {typeof renderMessageImages !== 'function' && bubble.images.length > 0 && (
+          {!canRenderImages && bubble.images.length > 0 && (
             <div className={css.chatEntryNotice}>{t('chat.entry.noImageRenderer')}</div>
+          )}
+          {/* 引用会话汇总行：宿主在气泡下方渲染 referenceSummary（`引用会话 · {labels}`）。
+              我们复刻这一行（文案在 chat 字典里，**不依赖 ui-primitives**）；`data-ref-chip` 供探针定位。 */}
+          {view.referenceLabels.length > 0 && (
+            <div className={css.chatEntryReference} data-ref-chip="">
+              {t('chat.entry.referenceSummary', {
+                labels: view.referenceLabels.join(t('chat.entry.referenceSeparator')),
+              })}
+            </div>
           )}
         </div>
         <div className={css.chatEntryActions}>

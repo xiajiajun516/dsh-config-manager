@@ -138,10 +138,22 @@ export interface ChatEntryRawBlock {
   payload: unknown
 }
 
+/**
+ * 一个附件（**有序**，按 content 里出现的次序）：宿主 `UserStyleBubble` 就是
+ * `attachments.map((attachment, index) => …)` —— 图片与文件卡共用**同一条序列**、各占一个位置。
+ */
+export type ChatEntryAttachment =
+  | { kind: 'image'; image: ChatEntryImage }
+  | { kind: 'file'; file: ChatEntryFile }
+
 export interface ChatEntryBubbleView {
-  /** 文本块拼接结果（宿主 `texts.join('')`，逐字保留换行与空白）。 */
+  /** 文本块拼接结果（宿主 `texts.join('')`，逐字保留换行与空白；会话引用的线格式已投影成 label）。 */
   text: string
+  /** **有序附件列表**：渲染层必须按这个顺序输出（宿主不区分「先图片后文件」）。 */
+  attachments: ChatEntryAttachment[]
+  /** 图片附件（= `attachments` 里的 image 项，顺序一致；用于计数与「无渲染位」提示）。 */
   images: ChatEntryImage[]
+  /** 文件附件（= `attachments` 里的 file 项，顺序一致）。 */
   files: ChatEntryFile[]
   /** rest / 未知块：**必须上屏**（渲染层用 JsonBlock 同款 JSON 视图），不得静默丢弃。 */
   raw: ChatEntryRawBlock[]
@@ -168,8 +180,17 @@ export interface ChatEntryNodeDataView {
 }
 
 export const CHAT_ENTRY_ALIGN = 'end' as const
-/** 宿主：`compactImages = attachments.length > 1`。 */
+/**
+ * 宿主：`const compactImages = attachments.length > 1` —— 这里的 `attachments` 是
+ * **全部附件**（图片 + 文件，= contentParts 吐出的那个数组），**不是「图片数」**。
+ * 阈值 1 = 「附件多于一个」。
+ */
 export const CHAT_ENTRY_COMPACT_THRESHOLD = 1
+
+/** 宿主 `compactImages` 的同一口径：**附件总数**（图片 + 文件）> 1。 */
+export function chatEntryCompactOf(view: ChatEntryBubbleView): boolean {
+  return view.attachments.length > CHAT_ENTRY_COMPACT_THRESHOLD
+}
 
 /** 读节点 data 的三个字段（读不到一律回安全值）。 */
 export function readChatEntryNodeData(node: unknown): ChatEntryNodeDataView {
@@ -188,48 +209,92 @@ export function readChatEntryNodeData(node: unknown): ChatEntryNodeDataView {
   }
 }
 
+/** 两位补零（宿主 `pad2`）。 */
+function pad2(value: number): string {
+  return value < 10 ? '0' + String(value) : String(value)
+}
+
 /**
- * 时间戳 → 动作行里显示的时钟文本（宿主 `formatMessageClock(time, t, day)` 的同位置替代）。
+ * 时间戳 → 动作行里显示的时钟文本 —— 宿主 `formatMessageClock` 的**逐字复刻**（只取时刻那一半）：
  *
- * 为什么用 `toLocaleTimeString` 而不是自己拼 HH:MM：宿主按语言/时区/日历（含 12 小时制与
- * 非公历日历）格式化，浏览器 Intl 是同一套数据源；我们只用它取**时刻**，
- * 日期归属（今天 / 昨天）由宿主那条路径负责 —— 我们**不复制**那套日历逻辑（少一处漂移）。
+ *   const clock = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;   // **固定 24 小时制、补零**
+ *
+ * 为什么不用浏览器 Intl 的小时/分钟格式化：它随语言变成 12 小时制（en-US 下 '05:04 PM'），
+ * 与宿主那一列的时间**在同一屏里就不一致**（t4 复核 D4）。时区仍走本地（与宿主同一把尺子）。
+ *
+ * 已追认差距（G-39，登记归 t11）：**非当天不加日期**（宿主会补 `clock.md`/`clock.ymd` 前缀）。
  * 读不到时间就回 null（动作行不渲染时间，**不编造当前时刻**）。
  */
 export function formatChatEntryClock(time: number | null): string | null {
   if (time === null || !Number.isFinite(time)) return null
   const date = new Date(time)
   if (Number.isNaN(date.getTime())) return null
-  try {
-    return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  } catch {
-    return null
-  }
+  return pad2(date.getHours()) + ':' + pad2(date.getMinutes())
 }
 
-/** 扩展名：取最后一个 `.` 之后的部分（大写、≤8 字符）；无扩展名 / 隐藏文件回 null。 */
+/* ------------------------------------------------------------ 会话语义引用（线格式 → label） */
+
+/**
+ * 会话引用的**线格式**：`@[label](dsh-session:<id>)` —— 逐字取自宿主 ui-primitives 的
+ * `SESSION_WIRE_RE = /@\[([^\]\n]+)\]\(dsh-session:[^)\s]+\)/gu`（同一个正则、同一个捕获组语义：
+ * `wire[1]` 是给人看的 label）。
+ */
+export const CHAT_SESSION_WIRE_RE = /@\[([^\]\n]+)\]\(dsh-session:[^)\s]+\)/gu
+
+/**
+ * 正文的**最小文本投影**：把会话引用线格式换成它的人类可读 label。
+ *
+ * 宿主做的是「换成 chip 节点」（`projectUserText`，还会把裸 `@name` 也装饰成 chip、把引用汇总成
+ * 一行 referenceSummary）；我们**不做 chip**（ui-primitives 包私有、不可导入，见 G-39 已追认差距），
+ * 但**绝不把线格式原样打给用户看** —— 那是机器的编码，正常人读不了（t4 复核 D5，medium）。
+ * 与宿主一致的边界：只认 `dsh-session:` 的括号形式；`g` flag 下逐处替换，正则自身 lastIndex 置零。
+ */
+export function projectChatEntryText(text: string): string {
+  if (text.indexOf('@[') < 0) return text
+  CHAT_SESSION_WIRE_RE.lastIndex = 0
+  return text.replace(CHAT_SESSION_WIRE_RE, '$1')
+}
+
+/**
+ * 扩展名 → 文件卡上的短徽标：宿主 `fileExtension` + 宿主那行 meta 的同一截断
+ * （`fileExtension(name).toUpperCase().slice(0, 8)`）；后缀为空（无点 / 点在末尾）回 null。
+ *
+ * 与宿主的两点对齐说明：① **前导点算后缀**（`.gitignore` → `gitignore` → 徽标 `GITIGNOR`）；
+ * ② 上限 8 字符是宿主**显示层**的截断，不是我们自己加的花样。 */
 export function fileExtensionOf(name: string): string | null {
   // 路径分隔符同时认 / 与 \（宿主给的是用户文件路径，可能来自 Windows）
   const lastSlash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
   const base = name.slice(lastSlash + 1)
   const dot = base.lastIndexOf('.')
-  if (dot <= 0 || dot === base.length - 1) return null
-  const ext = base.slice(dot + 1).toUpperCase()
-  return ext.length > 8 ? ext.slice(0, 8) : ext
+  // 宿主 fileExtension：`dot < 0 ? "" : name.slice(dot + 1)` —— **前导点也算后缀**（'.gitignore' → 'gitignore'），
+  // 末尾点是空串（宿主那边 filter(Boolean) 后不显示徽标）。这里同样只在空串时回 null。
+  const ext = dot < 0 ? '' : base.slice(dot + 1)
+  if (ext === '') return null
+  const upper = ext.toUpperCase()
+  return upper.length > 8 ? upper.slice(0, 8) : upper
 }
 
 /**
- * 字节数 → 展示字符串（宿主 fileSizeText 的结构同形：B/KB/MB/GB，一位小数）。
- * 读不到字节数回 null（渲染层据此整段不显示，**不编造 0 B**）。
+ * 字节数 → 展示字符串 —— 宿主 `fileSizeText` 的**逐字复刻**：
+ *
+ *   bytes < 1024        → `${bytes}B`                       （**无空格**）
+ *   kb < 1024           → `${kb < 10 ? kb.toFixed(1) : Math.round(kb)}KB`   （≥10 取整：'20KB'）
+ *   mb < 1024           → 同规则 MB
+ *   否则                → 同规则 GB
+ *
+ * 三条注意：① 阈值判的是**单位值**（kb/mb/gb）是否 < 10，不是字节数；② 单位与数字之间**没有空格**；
+ * ③ 读不到 / 负数一律回 null（渲染层整段不显示，**不编造 0B**）—— 宿主对负数会打出 "-5B"，
+ *    那条路径在消息附件里不可达（bytes 来自宿主自己的附件元数据），我们选择如实留空。
  */
 export function fileSizeTextOf(bytes: number | null): string | null {
   if (bytes === null || !Number.isFinite(bytes) || bytes < 0) return null
-  if (bytes < 1024) return String(bytes) + ' B'
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let value = bytes / 1024
-  let index = 0
-  while (value >= 1024 && index < units.length - 1) { value /= 1024; index += 1 }
-  return value.toFixed(1) + ' ' + (units[index] ?? 'KB')
+  if (bytes < 1024) return String(bytes) + 'B'
+  const kb = bytes / 1024
+  if (kb < 1024) return String(kb < 10 ? kb.toFixed(1) : Math.round(kb)) + 'KB'
+  const mb = kb / 1024
+  if (mb < 1024) return String(mb < 10 ? mb.toFixed(1) : Math.round(mb)) + 'MB'
+  const gb = mb / 1024
+  return String(gb < 10 ? gb.toFixed(1) : Math.round(gb)) + 'GB'
 }
 
 /**
@@ -242,52 +307,68 @@ export function fileSizeTextOf(bytes: number | null): string | null {
  */
 export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
   if (typeof content === 'string') {
-    return { text: content, images: [], files: [], raw: [], showBubble: content !== '' }
+    const text = projectChatEntryText(content)
+    return { text, attachments: [], images: [], files: [], raw: [], showBubble: text !== '' }
   }
   if (!Array.isArray(content)) {
-    return { text: '', images: [], files: [], raw: content === null || content === undefined ? [] : [{ id: '0', payload: content }], showBubble: content !== null && content !== undefined }
+    return { text: '', attachments: [], images: [], files: [], raw: content === null || content === undefined ? [] : [{ id: '0', payload: content }], showBubble: content !== null && content !== undefined }
   }
   const texts: string[] = []
-  const images: ChatEntryImage[] = []
-  const files: ChatEntryFile[] = []
+  const attachments: ChatEntryAttachment[] = []
   const raw: ChatEntryRawBlock[] = []
   content.forEach((block, index) => {
     const record = asRecord(block)
     const type = record?.['type']
     if (type === 'text' && typeof record?.['text'] === 'string') {
-      texts.push(record['text'] as string)
+      // 宿主把这条文本交给 projectUserText（会话引用渲染成 chip）；我们做**最小文本投影**：线格式 → label
+      texts.push(projectChatEntryText(record['text'] as string))
       return
     }
     if (type === 'image' && record?.['attachment'] !== undefined) {
-      images.push({ attachment: record['attachment'] })
+      attachments.push({ kind: 'image', image: { attachment: record['attachment'] } })
       return
     }
     if (type === 'file' && record?.['attachment'] !== undefined) {
       const attachment = asRecord(record['attachment'])
       const name = attachment?.['name']
       const bytes = attachment?.['bytes']
-      files.push({
-        name: typeof name === 'string' && name !== '' ? name : '',
-        ext: typeof name === 'string' ? fileExtensionOf(name) : null,
-        bytes: typeof bytes === 'number' && Number.isFinite(bytes) ? bytes : null,
+      attachments.push({
+        kind: 'file',
+        file: {
+          name: typeof name === 'string' && name !== '' ? name : '',
+          ext: typeof name === 'string' ? fileExtensionOf(name) : null,
+          bytes: typeof bytes === 'number' && Number.isFinite(bytes) ? bytes : null,
+        },
       })
       return
     }
     raw.push({ id: String(index), payload: block })
   })
   const text = texts.join('')
-  return { text, images, files, raw, showBubble: text !== '' || raw.length > 0 }
+  // images / files 是 attachments 的**派生视图**（不独立积累，避免两处真相与顺序漂移）
+  const images = attachments.flatMap((item) => (item.kind === 'image' ? [item.image] : []))
+  const files = attachments.flatMap((item) => (item.kind === 'file' ? [item.file] : []))
+  return { text, attachments, images, files, raw, showBubble: text !== '' || raw.length > 0 }
 }
 
+/** 渲染计划的一项：图片带 owner 载荷，文件带名称/扩展名/体积文本。 */
+export type ChatEntryAttachmentPlan =
+  | { kind: 'image'; index: number; owner: HostImageRenderOwner }
+  | { kind: 'file'; index: number; file: ChatEntryFile; size: string | null }
+
 /**
- * 图片渲染位载荷：**每张图一次调用**（宿主 `UserStyleBubble` 就是
- * `attachments.map((attachment, index) => renderMessageImages({ images: [attachment.image], align: 'end', compact }))`，
- * 每次调用 = 一个独立的 `conversation.message.images` slot 出现点，渲染器可能是**单图**语义）。
- * 把整组塞进一次调用会改变渲染器的行为 —— 所以这里逐张、逐字复刻宿主。
+ * 有序附件 → 渲染计划（宿主 `attachments.map` 的逐字同构）：
+ *  · **顺序 = content 原始顺序**（绝不重排成「先图片后文件」）；
+ *  · 图片**每张一次** `renderMessageImages({ images: [image], align: 'end', compact })`
+ *    —— 每次调用 = 一个独立的 `conversation.message.images` slot 出现点，渲染器按**单图**语义工作，
+ *    所以不能把整组塞进一次调用；
+ *  · `compact` 按**附件总数**算（见 `chatEntryCompactOf`）。
  */
-export function imageRenderOwnersOf(view: ChatEntryBubbleView): HostImageRenderOwner[] {
-  const compact = view.images.length > CHAT_ENTRY_COMPACT_THRESHOLD
-  return view.images.map((image) => ({ images: [image], align: CHAT_ENTRY_ALIGN, compact }))
+export function planChatEntryAttachments(view: ChatEntryBubbleView): ChatEntryAttachmentPlan[] {
+  const compact = chatEntryCompactOf(view)
+  return view.attachments.map((attachment, index) => attachment.kind === 'image'
+    ? { kind: 'image', index, owner: { images: [attachment.image], align: CHAT_ENTRY_ALIGN, compact } }
+    : { kind: 'file', index, file: attachment.file, size: fileSizeTextOf(attachment.file.bytes) })
 }
 
 /* ------------------------------------------------------------ 按钮状态机 */
@@ -438,7 +519,7 @@ export function plainTextOf(content: unknown): string {
   return content.map((block) => {
     const record = asRecord(block)
     if (record === null) return rawBlockText(block)
-    if (record['type'] === 'text' && typeof record['text'] === 'string') return record['text']
+    if (record['type'] === 'text' && typeof record['text'] === 'string') return projectChatEntryText(record['text'])
     // 文件块：降级气泡里至少要看见**文件名**（比一串 JSON 有用得多）
     if (record['type'] === 'file') {
       const name = asRecord(record['attachment'])?.['name']

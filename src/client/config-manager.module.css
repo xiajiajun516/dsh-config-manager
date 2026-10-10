@@ -5146,6 +5146,13 @@ button.profileRowMain:hover {
   font-size: var(--cm-fs-meta);
 }
 
+/* 引用会话汇总行（宿主 .referenceSummary：气泡下方一行 tertiary 小字）。
+   我们只复刻这一行的**文本**；chip 外观与可点开能力仍是已登记差距（G-39）。 */
+.chatEntryReference {
+  color: var(--cm-text-3);
+  font-size: var(--cm-fs-meta);
+}
+
 /* 复制动作按钮：26px 触达区，与 IconButton 观感同源（图标走 currentColor） */
 .chatActionBtn {
   display: inline-flex;

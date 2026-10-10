@@ -428,6 +428,16 @@ export const zh = {
   'rollback.delete.confirmMessage': '只删除台账记录与内容副本，不会改动工作区与会话。受保护点与回退前救援点由引擎一律拒绝删除；救援点超出每会话上限时会自动淘汰最旧的。',
   'rollback.delete.protected': '该回滚点不可删除：受保护点与救援点一律被引擎拒绝（救援点超出每会话上限时自动淘汰最旧的）',
   'rollback.storage.unavailable': '回滚点存储不可用（现状列表仍可查看）',
+  /* —— T2：聊天内回退入口形态开关（偏好单一来源 = src/client/chat/chat-entry-pref.ts，缺省「每条用户消息」）——
+   * 两档话术与 T1 的真实行为逐条对齐：per-message = 本插件接管该条用户消息的气泡渲染并在气泡里放按钮；
+   * turn = **连注册都不做**（宿主 UserMessageNodeView 原样渲染），入口退回既有的回合尾 list 位。
+   * 「立即生效」可证：T1 的 mountChatNodeEntry 订阅 subscribeChatEntryMode，值真变即 dispose → register。
+   * 说明里刻意写明「只记在这台浏览器」（localStorage；不进 self 分区、不进导出包），避免被当成会跟着备份走。 */
+  'rollback.chatEntry.label': '聊天内回退入口',
+  'rollback.chatEntry.hint': '「每条用户消息」= 本插件接管每条用户消息的气泡渲染，在气泡里放一颗「回退」按钮；「整回合」= 完全不接管，宿主按原样渲染消息，入口只剩回合尾那一颗。切换立即生效（无需重启、也无需刷新），本插件接管出问题时用这里一键退回。偏好只记在这台浏览器里（不进导出包）。',
+  'rollback.chatEntry.perMessage': '每条用户消息',
+  'rollback.chatEntry.turn': '整回合',
+  'rollback.chatEntry.saveFailed': '偏好没能写进浏览器存储（隐私模式、存储被禁用或已满），所以这次切换没有生效：聊天入口形态保持原样。',
   // t54：中断的档案复制残留（cross-F3）—— 独立形态 + 只给删除
   'recovery.incomplete.title': '未完成的档案副本',
   'recovery.incomplete.hint': '这些目录带「复制进行中」标记但没有 package.json，是复制被中断留下的半截副本；不能启动，只能删除（只列出有标记的目录 —— 用户手工建的目录不会出现在这里）。',
@@ -903,6 +913,12 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.delete.confirmMessage': 'This deletes only the ledger record and its content copies; the workspace and sessions are untouched. Protected points and pre-rewind rescue points are always refused by the engine; rescue points beyond their per-session limit are evicted automatically (oldest first).',
   'rollback.delete.protected': 'This rollback point cannot be deleted: protected points and rescue points are always refused by the engine (rescue points beyond their per-session limit are evicted automatically, oldest first)',
   'rollback.storage.unavailable': 'Rollback-point storage is unavailable (the current list remains viewable)',
+  /* T2: chat rewind entry form switch (single source of the preference = src/client/chat/chat-entry-pref.ts, default 'per-message') */
+  'rollback.chatEntry.label': 'Chat rewind entry',
+  'rollback.chatEntry.hint': '"Per user message" means this plugin takes over the bubble rendering of every user message and puts a "Rewind" button inside that bubble; "Whole turn" means it does not take over at all, so the host renders messages as-is and the only entry left is the one at the turn tail. Switching takes effect immediately (no restart and no page refresh); use this to fall back with one click if the plugin renderer misbehaves. The preference is remembered only in this browser (it is not part of exported backups).',
+  'rollback.chatEntry.perMessage': 'Per user message',
+  'rollback.chatEntry.turn': 'Whole turn',
+  'rollback.chatEntry.saveFailed': 'The preference could not be written to browser storage (private mode, storage disabled or full), so this switch did not take effect: the chat entry form stays unchanged.',
   'recovery.incomplete.title': 'Unfinished profile copy',
   'recovery.incomplete.hint': 'These directories carry a "copy in progress" marker but no package.json: a half-finished copy left by an interrupted copy. They cannot be launched, only deleted (only marked directories are listed — hand-made directories never appear here).',
   'recovery.incomplete.from': 'From: {name}',

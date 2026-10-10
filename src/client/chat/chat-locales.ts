@@ -51,6 +51,10 @@ export const zh = {
   'chat.entry.truncated': '已截断，共 {total} 字符',
   /** owner 没给图片渲染位（宿主版本差异）：图片我们绝不自己渲染，如实说 */
   'chat.entry.noImageRenderer': '宿主没有提供图片渲染位，这条消息里的图片无法显示',
+  /** 引用会话汇总行（宿主 ui-chat 的 message.referenceSummary，逐字同义；★ 非 ui-primitives 依赖） */
+  'chat.entry.referenceSummary': '引用会话 · {labels}',
+  /** 汇总行里多个 label 之间的分隔符（宿主 message.referenceSeparator：zh 用顿号、en 用逗号空格） */
+  'chat.entry.referenceSeparator': '、',
   /** 禁用①：节点里取不到可核实的回合号（与宿主同一条读法：location.kind 必须是 turn/step） */
   'chat.entry.disabled.noTurn': '取不到可核实的回合号（当前 DSH 版本未提供），无法在聊天里回退',
   /** 禁用②：回合还在进行中 —— 真的还没到留点那一刻 */
@@ -82,6 +86,8 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.entry.extraBlock': 'Extra content block',
   'chat.entry.truncated': 'truncated, {total} characters total',
   'chat.entry.noImageRenderer': 'The host exposes no image render seat, so images in this message cannot be shown',
+  'chat.entry.referenceSummary': 'Referenced session \u00b7 {labels}',
+  'chat.entry.referenceSeparator': ', ',
   'chat.entry.disabled.noTurn': 'No verifiable turn number is available (the installed DSH version does not provide one), so rewinding from the chat is unavailable',
   'chat.entry.disabled.turnOpen': 'This turn has not finished yet, so no rollback point exists',
   'chat.entry.disabled.noSession': 'No session identity is available, so rollback points cannot be matched',

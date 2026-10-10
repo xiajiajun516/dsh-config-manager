@@ -1035,6 +1035,24 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   随 `overview.suggest.*` 死键一并删除（全仓 grep 确认零引用，含字符串/动态引用；对应单测同步移除），
   `src/ui/overview-view.ts` 不再产出 `overview.suggest.*` 键。
 
+### 聊天内入口：接管 `conversation.chat.node` / user（2026-10-10）
+
+**定位**：本插件在 ui-chat 聊天流里渲染的那条**用户消息气泡 + 「回退」按钮**。它渲染在会话消息流里、不在插件设置页子树内，所以 §1 定义在 `.section` 上的 `--cm-*` **不会继承** —— `.chatEntryScope` 就地重声明
+用到的那一小撮（`--cm-text-1/3`、`--cm-surface-2`、`--cm-line-1`、`--cm-fs-*`、`--cm-sp-*`、`--cm-r-*`），**不新增任何 token 档位**（新档位必须先改 §3–§5）。类清单 = `config-manager.module.css` §15b。
+
+- **接管是唯一路径**：宿主 `conversation.chat.node` 的 `user` key 是 keyed 遮蔽位且**没有 children 表**，framework 没有「往每条用户消息里追加 UI」的位子；我们以 `priority -1` 遮蔽宿主的 `UserMessageNodeView`
+  （同一 cell 的同一 priority 再注册会抛，故 -1 是与宿主并存的唯一合法值），并**复刻**那条气泡的外观（宿主组件与其 CSS Modules 是 ui-chat 私有的，不可导入）。图片**必须**走 owner 给的
+  `renderMessageImages`（逐张一次调用，与宿主 `attachments.map` 同形），本仓库不自己实现图片渲染。
+- **错误边界是 class 组件**（`ChatEntryErrorBoundary`）：React 18 只有 class 能声明 `getDerivedStateFromError` / `componentDidCatch` —— 这是本仓「函数组件 + hooks，无 class」规范的
+  **唯一显式例外**，**不得**照此扩大范围。降级 = **纯文本气泡**（`.chatFallbackBubble`，左侧一条警示线 + `data-chat-entry-fallback` 标记 + ASCII `console.warn`），语义是「用户消息绝不消失」。
+- **按钮语义 = ghost**（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
+- **已确认的三条观感差距**（如实登记，不修）：① 引用 / 技能 chip 不显示（`referenceLabels` / `skillNames` 是 ui-primitives 的包私有投影，拿不到也不编造）；② 文件类型图标退化为**扩展名徽标**
+  （`.chatFileExt` —— ui-primitives 的 `FileTypeIcon` / `fileExtension` 不在其导出表）；③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：气泡底色 `--cm-surface-2`（宿主 `--dsw-specific-bubble`，本仓库 token 层没有这一档）、
+  圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+- **形态开关**：两档偏好（`per-message` 缺省 / `turn`）经 `src/client/chat/chat-entry-pref.ts` 存 localStorage 键 `dcm.chat-entry-mode`，热切换；面板入口以 T2 交付为准。
+- **升级风险**：宿主改用户消息渲染器 / 槽位契约 → 复刻老旧或错位。软失败：声明形态不是 `keyed` 就**跳过注册**（只丢这一个入口），回合号取不到就**如实禁用按钮**（每个禁用原因有自己的字典键）。
+  风险与差距登记 = `docs/spec/known-gaps.md` G-39。
+
 ### 说明性文案分层（InfoHint，2026-10）
 
 判定规则**已冻结**，逐字适用，**不得自行扩大或缩小**。承载体是 `common/InfoHint.tsx`；

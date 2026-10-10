@@ -1,14 +1,19 @@
 /**
  * 聊天回合尾的「↺ 回退」入口 —— `conversation.chat.turnTail`（ui-chat 的 list 位）的一个条目。
  *
- * 选型依据（详见 chat-slots.ts 的头部注释；这里只留结论）：
- *  · 首选方案是接管 `conversation.chat.node` 的 `user` key（priority -1，按钮做进每条用户消息），
- *    实探结论 = **不可行**：那是 keyed 位的「遮蔽」语义（同 key 同 priority 直接抛，priority -1 会
- *    顶掉 shipped 的 UserMessageNodeView），要让按钮与原文同时出现就必须把宿主那条消息渲染器
- *    （markdown / 图片 / 文件提及 / hover 动作 + 它自己的 CSS Modules）整段复制进本仓库 ——
- *    上游 UI 抄一份的维护债，且必然与既有观感分叉。
- *  · 本功能的留点单位本来就是**回合**（S1），回合尾才是它的位置 → 退到
- *    `conversation.chat.turnTail`（整回合一个入口，追加新 id，replaceRisk: 'none'，不遮蔽任何 shipped UI）。
+ * 两个入口的分工（两档由 T2 的面板开关切换；偏好读写见 `chat-entry-pref.ts`）：
+ *  · **主入口（T1 已上线）**= 接管 `conversation.chat.node` 的 `user` key（priority -1，按钮内嵌到
+ *    **每一条**用户消息），实现在 `ChatEntryView.tsx` + `chat-entry-view.ts`。这条路**是可行的**：
+ *    keyed 位按 priority 升序取最低者渲染，宿主缺省 0 ⇒ 我们的 -1 遮蔽它（**同 key 同 priority 会抛**，
+ *    所以 -1 是唯一合法并存值）；代价是那条气泡要自己复刻（宿主 UserStyleBubble / MessageIconActions /
+ *    文件卡 / CSS Modules 全是 ui-chat 私有、不可导入），能力面对照表与三处已知差距见 T1 output §3。
+ *    槽位声明、真机证据与版本差异详见 `chat-slots.ts` 的头部注释。
+ *  · **本组件** = 偏好为「整回合」时的入口，同时也是主入口的**兜底路径**（偏好为「每条消息」时两个入口
+ *    并存）：在 `conversation.chat.turnTail` 追加一个新 id（replaceRisk: 'none'，不遮蔽任何 shipped UI）。
+ *    本功能的留点单位是**回合**（S1），回合尾这颗按钮的语义没变（回退这个回合）。
+ *
+ * 两条路径打开的是**同一个**复核对话框（`RollbackReviewDialog.tsx`），判定层共用
+ * `rollback-entry-view.ts`。
  *
  * 组件的全部判定都在 `rollback-entry-view.ts`（node 可测）；这里只做装配与开关状态。
  *
