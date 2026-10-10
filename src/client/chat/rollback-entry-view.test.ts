@@ -35,6 +35,7 @@ import {
   childOpenHintKey,
   codeKeyOfError,
   confirmOnSubmit,
+  createInFlightLock,
   defaultDraft,
   entryVisibleForTurn,
   errorDetail,
@@ -47,9 +48,12 @@ import {
   readRollbackPreviewFiles,
   registerChatEntry,
   requestRewind,
+  rewindSubmittable,
+  rollbackChildSession,
   rollbackPreviewNote,
   rollbackPreviewVerdict,
   segmentsForMode,
+  submitButtonEnabled,
   type ChatSlotProbe,
   type RewindDraft,
   type SessionNavigator,
@@ -132,7 +136,9 @@ test('未二次确认：非布尔 true（缺省 / 假值）同样 blocked', asyn
 test('确认后：请求体逐字段成形（userConfirmed 恰好 true + 固定 mode + guard=require）', async () => {
   const { port, calls } = fakePort()
   const draft = confirmedDraft()
-  assert.equal(canSubmitRewind(draft, null), false, '没有预览判定时提交按钮不可用（但已确认的请求体仍可成形）')
+  // F5：这条断言测的是 **wire 侧提交判据**（canSubmitRewind），不是「按钮可用性」——
+  // 按钮可用性一律由 enablement 判据（rewindSubmittable / submitButtonEnabled）负责。
+  assert.equal(canSubmitRewind(draft, null), false, '没有预览判定时 wire 侧提交判据为 false（但已确认的请求体仍可成形）')
   const options = buildRewindOptions(draft)
   assert.deepEqual(options, { userConfirmed: true, mode: 'files+session', preRewindGuard: 'require' })
   const attempt = await requestRewind(port, 'point-1', draft)
@@ -817,7 +823,7 @@ test('T15 假尾句禁令（句子层面）：凡 changesSomething=true，实测
   }
 })
 
-test('T15 形状 (d) 断言：workspace 一致 + session.restorable=true → 句不含「无需恢复」且按钮可点', () => {
+test('T15 形状 (d) 断言：workspace 一致 + session.restorable=true → 句不含「无需恢复」，且已确认草稿的 wire 侧提交判据为 true', () => {
   const preview: RollbackPreviewResult = {
     ok: true, id: 'p', storage: { available: true }, canRestore: true,
     workspace: { available: true, overwrite: 5, different: 0 },
@@ -828,7 +834,291 @@ test('T15 形状 (d) 断言：workspace 一致 + session.restorable=true → 句
   const note = rollbackPreviewNote({ workspace: preview.workspace, session: preview.session, canRestore: verdict.canRestore })
   const sentence = renderPreviewNote(note)
   assert.ok(sentence !== null && !sentence.includes('无需恢复'), '(d) 形状不得含「无需恢复」：' + String(sentence))
-  assert.equal(canSubmitRewind(confirmedDraft(), preview), true, '该形状下按钮必须可点（预览 + 确认两步）')
+  // F1/F5：这里断言的是 **wire 侧提交判据**（canSubmitRewind 要求恰好 confirmed），**不是**「按钮可点」。
+  // `confirmedDraft()` 是真实 UI **永远到不了**的状态（初始草稿恒未确认、确认只在点击那一刻置位），
+  // 拿它主张可点性正是 R1 缺陷被夹具掩盖的方式。可点性一律由 enablement 判据断言（见下面的 R1/R2 用例）。
+  assert.equal(canSubmitRewind(confirmedDraft(), preview), true, '已确认草稿下 wire 侧提交判据为 true')
+})
+
+/* ---------------------------------------------- R1：enablement 与确认判据分离（主按钮永久禁用的根因） */
+
+/**
+ * 用户截图那一屏（preview 四态里的 ③a）：工作区与该回退点一致（**无文件变更** —— `files` 为空、
+ * `different` / `missing` 为 0）+ 会话仍可回退（`session.restorable === true`）。
+ * 真机缺陷现场就是这一屏：文案正常、主按钮却灰色不可点。
+ */
+const screenshotPreview = (): RollbackPreviewResult => ({
+  ok: true, id: 'p', storage: { available: true }, canRestore: true,
+  workspace: { available: true, overwrite: 5, different: 0, missing: 0, createdAfter: 0, skippedCount: 0, truncated: false, files: [] },
+  session: { available: true, restorable: true },
+} as RollbackPreviewResult)
+
+/** 工作区**真会写文件**的一屏（文件列表非空 + 会话可回退）。 */
+const filesPreview = (): RollbackPreviewResult => ({
+  ok: true, id: 'p', storage: { available: true }, canRestore: true,
+  workspace: { available: true, overwrite: 2, different: 1, missing: 0 },
+  session: { available: true, restorable: true },
+} as RollbackPreviewResult)
+
+/** 只有会话段可回退的一屏（工作区态没有可用记录）。 */
+const sessionOnlyPreview = (): RollbackPreviewResult => ({
+  ok: true, id: 'p', storage: { available: true }, canRestore: true,
+  workspace: { available: false, reasonCode: 'nothing-to-restore' },
+  session: { available: true, restorable: true },
+} as RollbackPreviewResult)
+
+test('R1 可点性回归（**真实初始态**）：defaultDraft(preview)（confirmed:false）+ canRestore ⇒ 主按钮可点', () => {
+  for (const build of [screenshotPreview, filesPreview, sessionOnlyPreview]) {
+    const preview = build()
+    // 真实初始态 = defaultDraft（未确认）。断言**不得**再用 confirmedDraft() 夹具 —— 那正是掩盖本缺陷的原因。
+    const draft = defaultDraft(preview)
+    assert.equal(draft.confirmed, false, '对话框初始草稿必须未确认')
+    assert.equal(rollbackPreviewVerdict(preview).canRestore, true, '前提：这些预览宿主允许回退')
+    assert.equal(rewindSubmittable(draft, preview), true, '真实初始态下主按钮必须可点（旧实现恒为 false）')
+    // enablement 与确认彻底无关：confirmed 取任何值都不改变可点性
+    for (const bogus of [undefined, false, 0, 1, 'true', null]) {
+      const weird = { ...draft, confirmed: bogus as unknown as boolean }
+      assert.equal(rewindSubmittable(weird, preview), true, 'enablement 不得看 confirmed：' + String(bogus))
+    }
+    assert.equal(confirmOnSubmit(draft)?.confirmed, true, '确认仍只能由 confirmOnSubmit 置位')
+  }
+})
+
+test('R1 源级：对话框的 submitEnabled 走 enablement 判据，不依赖 draft.confirmed（绑定细节见 R2/F2）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.match(dialog, /const submitEnabled = submitButtonEnabled\(\{[^}]*pointId[^}]*\}\)/, 'enablement 必须走 submitButtonEnabled（不含确认、含 pointId）')
+  assert.doesNotMatch(dialog, /submitEnabled = canSubmitRewind\(/, 'submitEnabled 不得再用「要求 confirmed」的提交判据（循环依赖的根因）')
+  assert.doesNotMatch(dialog, /submitEnabled = [^\n]*draft\.confirmed/, 'submitEnabled 不得直接读 draft.confirmed')
+})
+
+test('R1 确认门未松：可点 ≠ 已确认；未确认仍 blocked 且端口零调用，点一次才 userConfirmed=true', async () => {
+  const preview = screenshotPreview()
+  const { port, calls } = fakePort()
+  const draft = defaultDraft(preview)
+  assert.equal(rewindSubmittable(draft, preview), true, '按钮可点')
+  assert.equal(canSubmitRewind(draft, preview), false, '但提交判据仍要求 confirmed（确认门一字未松）')
+  // 同一份判据的不变量：提交 = enablement + 恰好 confirmed
+  assert.equal(canSubmitRewind(confirmOnSubmit(draft) as RewindDraft, preview), rewindSubmittable(draft, preview))
+  assert.equal(buildRewindOptions(draft), null, '未确认时请求体都不成形')
+  const blocked = await requestRewind(port, 'point-1', draft)
+  assert.equal(blocked.kind, 'blocked')
+  assert.equal(calls.length, 0, '未确认时端口零调用')
+  // 点一次 = confirmOnSubmit 置位 ⇒ 请求体 userConfirmed 恰好 true，端口恰好一次
+  const clicked = confirmOnSubmit(draft) as RewindDraft
+  assert.equal(clicked.confirmed, true)
+  assert.equal(draft.confirmed, false, '原草稿不被就地改写（React 状态更新语义）')
+  assert.equal(canSubmitRewind(clicked, preview), true)
+  assert.deepEqual(buildRewindOptions(clicked), { userConfirmed: true, mode: 'files+session', preRewindGuard: 'require' })
+  const attempt = await requestRewind(port, 'point-1', clicked)
+  assert.equal(attempt.kind, 'ok')
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0]?.options, { userConfirmed: true, mode: 'files+session', preRewindGuard: 'require' })
+})
+
+test('R1 不放宽：canRestore=false 的点（受保护 / 两态不全 / 无可用段）enablement 仍必须 false', () => {
+  const base = { ok: true, id: 'p', storage: { available: true } } as const
+  const cases: { name: string; preview: RollbackPreviewResult | null }[] = [
+    { name: '受保护点', preview: { ...base, canRestore: false, workspace: { available: true }, session: { available: true, restorable: true }, point: { id: 'p', createdAt: 1, protected: true } } as never },
+    { name: '两态不全的点', preview: { ...base, canRestore: false, workspace: { available: true }, session: { available: true, restorable: true }, point: { id: 'p', createdAt: 1, incomplete: true } } as never },
+    { name: '两段都不可回退', preview: { ...base, canRestore: true, workspace: { available: false }, session: { available: false, restorable: false } } as never },
+    { name: 'preview 为 null', preview: null },
+  ]
+  for (const item of cases) {
+    assert.equal(rollbackPreviewVerdict(item.preview).canRestore, false, '前提：该形状不可回退 —— ' + item.name)
+    const draft = defaultDraft(item.preview)
+    assert.equal(rewindSubmittable(draft, item.preview), false, '不可回退的点主按钮必须仍禁用（' + item.name + '）')
+    assert.equal(canSubmitRewind(confirmOnSubmit(draft) as RewindDraft, item.preview), false, '确认之后也仍不可提交（' + item.name + '）')
+  }
+  assert.equal(rewindSubmittable(null, screenshotPreview()), false, 'draft=null 不可点')
+  assert.equal(rewindSubmittable({ ...defaultDraft(null), mode: 'nope' as never }, screenshotPreview()), false, '段集合为空不可点')
+})
+
+test('R1 用户截图那一屏（③a）：文件列表为空 + 会话仍可回退 ⇒ 可点，点下去真会 fork 子会话', async () => {
+  const preview = screenshotPreview()
+  const verdict = rollbackPreviewVerdict(preview)
+  assert.equal(verdict.canRestore, true)
+  const note = rollbackPreviewNote({ workspace: preview.workspace, session: preview.session, canRestore: verdict.canRestore })
+  assert.equal(note.kind, 'workspace-consistent-session', '这就是截图那一屏（工作区一致 + 会话仍会回退）')
+  assert.equal(readRollbackPreviewFiles(preview.workspace).length, 0, '工作区无文件变更 ⇒ 文件列表为空')
+  const draft = defaultDraft(preview)
+  assert.equal(rewindSubmittable(draft, preview), true, '截图那一屏主按钮必须可点')
+  assert.equal(submitButtonEnabled({ draft, preview, pointId: 'point-1', busy: false }), true, '对话框主按钮（含 pointId / busy 维度）也必须可点')
+  const { port, calls } = fakePort()
+  const attempt = await requestRewind(port, 'point-1', confirmOnSubmit(draft) as RewindDraft)
+  assert.equal(attempt.kind, 'ok')
+  assert.equal(calls.length, 1)
+  const child = attempt.kind === 'ok' ? rollbackChildSession(attempt.result) : null
+  assert.equal(child?.id, 'child-1', '点下去真会 fork 子会话（结果带回 childSessionId）')
+})
+
+/* ------------------------------------- R2：把判据绑到按钮（t3 F2）+ 幂等（F4）+ 维度对齐（F3） */
+
+/**
+ * footer 段里的 **Button 元素**（逐个截成独立字符串）。
+ *
+ * t7 的 R2-F2-01 根因：旧守卫判的是「footer 这段文本里**出现过**该字符串」，不要求它落在
+ * **主按钮元素**上 ⇒ 把 `disabled={!submitEnabled}` 挪到取消按钮、主按钮改 `disabled={false}`（M9）
+ * 或 `disabled={busy}`（M9b）时仍全绿 —— 主按钮变成无条件可点，正是 t3-F2 的 M2 缺陷原样复活。
+ * 所以必须先按元素切分，再在**元素内**判绑定。
+ */
+function footerButtonElements(source: string): string[] {
+  const footer = source.slice(source.indexOf('css.dialogFooter'))
+  const elements: string[] = []
+  let cursor = 0
+  for (;;) {
+    const start = footer.indexOf('<Button', cursor)
+    if (start === -1) break
+    const end = footer.indexOf('</Button>', start)
+    if (end === -1) break
+    elements.push(footer.slice(start, end + '</Button>'.length))
+    cursor = end + '</Button>'.length
+  }
+  return elements
+}
+
+/** 主按钮元素（footer 里带 `variant="primary"` 的那一个）；找不到 ⇒ null（守卫按失败处理）。 */
+function primaryButtonElement(source: string): string | null {
+  return footerButtonElements(source).find((el) => el.includes('variant="primary"')) ?? null
+}
+
+/** 取消/关闭按钮元素（footer 里带 `onClose` 的那一个）。 */
+function cancelButtonElement(source: string): string | null {
+  return footerButtonElements(source).find((el) => el.includes('onClose')) ?? null
+}
+
+/**
+ * 「判据 → **主按钮元素**」的绑定判据（对源码文本求值，**位置敏感**）。抽成函数是为了做**反向自检**：
+ * 对注入式改坏的源码必须返回 false，否则这条守卫只是「文本存在」式的假绿（t3 F2 的初衷 / t7 R2-F2-01）。
+ *
+ * 为什么只能源码级：本仓没有 DOM 测试环境（无 jsdom / react-test-renderer，bundle 依赖 DSH 运行时），
+ * 组件无法在 node:test 里渲染 ⇒「判据绑到按钮」只能断言源码结构；但断言必须能被变异打红。
+ */
+function submitButtonBound(source: string): boolean {
+  const primary = primaryButtonElement(source)
+  if (primary === null) return false
+  // 位置敏感：两样都必须落在**主按钮元素内**（M9/M9b 把 disabled 挪到取消按钮 ⇒ 这里不成立）
+  if (!/disabled=\{!submitEnabled\}/.test(primary)) return false
+  if (!/onClick=\{\(\) => \{ void submit\(\) \}\}/.test(primary)) return false
+  // enablement 判据本身必须是含 pointId 的那一份（t3 F3）
+  return /const submitEnabled = submitButtonEnabled\(\{[^}]*pointId[^}]*\}\)/.test(source)
+}
+
+/** 复刻 t7 探针 `probe-binding-guard.mjs` 的变异写法：先保护取消按钮，只改主按钮那一处，再写回取消按钮文本。 */
+const DIALOG_PRIMARY_TEXT = 'disabled={!submitEnabled}'
+const DIALOG_CANCEL_TEXT = 'disabled={busy} onClick={onClose}'
+function mutateButtons(source: string, primary: string, cancel: string): string {
+  return source
+    .split(DIALOG_CANCEL_TEXT).join('@@CANCEL@@')
+    .replace(DIALOG_PRIMARY_TEXT, primary)
+    .split('@@CANCEL@@').join(cancel)
+}
+
+test('R2/F2 + R3 判据绑到**主按钮元素**（位置敏感；变异矩阵 M1/M2/M9/M9b/M3/M4 红、M9c 绿）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.equal(submitButtonBound(dialog), true, 'BASE：主按钮元素同时受 enablement 门与 submit 回调约束，且 enablement 走含 pointId 的判据')
+  // 反向断言：enablement 门只由**主按钮**承担 —— 取消按钮不得绑定 submit（它只负责关闭）；
+  // 且「同一文本**只**出现在取消按钮上」不构成绑定（下面 M9/M9b 两格：守卫必须判失败）。
+  // ⚠️ 这里**不能**写成「取消按钮文本上不得出现该串」：那会把 M9c（无害冗余）判红，
+  //    与要求的变异矩阵（M9c 必须仍绿）冲突 —— 已实测。位置敏感的正确形态是
+  //    「**主按钮元素内必须有**」，而不是「别处不许有」。
+  const primary = primaryButtonElement(dialog)
+  const cancel = cancelButtonElement(dialog)
+  assert.ok(primary !== null, 'footer 必须有主按钮元素')
+  assert.ok(cancel !== null, 'footer 必须有取消/关闭按钮元素')
+  assert.match(primary, /disabled=\{!submitEnabled\}/)
+  assert.match(primary, /onClick=\{\(\) => \{ void submit\(\) \}\}/)
+  assert.doesNotMatch(cancel, /void submit\(\)/, '取消按钮不得绑定 submit（它只负责关闭）')
+  // —— 变异矩阵（in-memory 副本，不动工作树；RED = 守卫必须 false）——
+  const red: [string, string, string][] = [
+    ['M1  主按钮 → disabled={busy}（取消按钮不动）', 'disabled={busy}', DIALOG_CANCEL_TEXT],
+    ['M2  主按钮 → disabled={false}（取消按钮不动）', 'disabled={false}', DIALOG_CANCEL_TEXT],
+    ['M9  主按钮 → disabled={false}，文本挪到取消按钮', 'disabled={false}', 'disabled={!submitEnabled} onClick={onClose}'],
+    ['M9b 主按钮 → disabled={busy}，文本挪到取消按钮', 'disabled={busy}', 'disabled={!submitEnabled} onClick={onClose}'],
+    ['M1b 主按钮 → disabled={submitEnabled}（门反了）', 'disabled={submitEnabled}', DIALOG_CANCEL_TEXT],
+    ['M1c 主按钮 → disabled={!rewindSubmittable(draft, preview)}（丢掉 pointId/busy 维度）', 'disabled={!rewindSubmittable(draft, preview)}', DIALOG_CANCEL_TEXT],
+  ]
+  for (const [name, primaryText, cancelText] of red) {
+    const mutated = mutateButtons(dialog, primaryText, cancelText)
+    assert.notEqual(mutated, dialog, '变异必须真的改到源码：' + name)
+    assert.equal(submitButtonBound(mutated), false, '变异必须打红：' + name)
+  }
+  // M9c：主按钮不动、取消按钮**多写一份同样的文本**（纯冗余）⇒ 守卫必须**仍绿**。
+  // 注意（与验收措辞的取舍）：因此「取消按钮文本上不得出现该串」**不能**作为守卫条件 —— 那会把
+  // 无害冗余判红（t7 记录的 M9c 过敏）。位置敏感的正确形态是「**主按钮元素内必须有**」，
+  // 而不是「别处不许有」；反向断言落在 BASE 上（取消按钮本来就不带），不落在变异态上。
+  const m9c = mutateButtons(dialog, DIALOG_PRIMARY_TEXT, 'disabled={!submitEnabled} onClick={onClose}')
+  // 幂等写法（不给 notEqual 前置）：本用例必须**在 M9c 形态的副本上也成立** —— 那时这次「变异」
+  // 是 no-op，要求它「真的改到源码」会把无害冗余判红，正是 t7 记录的 M9c 过敏。这里改为断言
+  // 「取消按钮确实带上了该文本」+「守卫仍为 true」。
+  assert.match(cancelButtonElement(m9c) ?? '', /disabled=\{!submitEnabled\}/, 'M9c 形态：取消按钮确实带上了该文本')
+  assert.equal(submitButtonBound(m9c), true, 'M9c（取消按钮重复同一文本、主按钮不动）必须仍绿')
+  // M3：enablement 回退成「要求 confirmed」的提交判据（= R1 缺陷再注入）
+  const m3 = dialog.replace(/const submitEnabled = submitButtonEnabled\(\{[^}]*\}\)/, 'const submitEnabled = canSubmitRewind(draft, preview) && !busy')
+  assert.notEqual(m3, dialog, 'M3 变异必须真的改到源码')
+  assert.equal(submitButtonBound(m3), false, 'M3（enablement 回退成 canSubmitRewind）必须打红')
+  // M4：onClick 解绑（F2 的另一半）
+  const m4 = dialog.replace('onClick={() => { void submit() }}', 'onClick={() => {}}')
+  assert.notEqual(m4, dialog, 'M4 变异必须真的改到源码')
+  assert.equal(submitButtonBound(m4), false, 'M4（onClick 解绑）必须打红')
+})
+
+test('R2/F1 夹具纪律：不得用「已确认草稿」当 enablement 夹具（真实 UI 永远到不了那个状态）', () => {
+  const preview = screenshotPreview()
+  const real = defaultDraft(preview)   // 对话框真实初始态
+  const afterClick = confirmedDraft()  // 只在点击那一刻之后才存在的状态
+  assert.equal(real.confirmed, false, '真实初始态恒未确认')
+  assert.equal(confirmOnSubmit(real)?.confirmed, true)
+  // 同一份预览下两个夹具在 canSubmitRewind 上正好相反 —— 这正是 R1 缺陷被夹具掩盖的方式：
+  assert.equal(canSubmitRewind(afterClick, preview), true, '已确认草稿 → wire 侧提交判据 true')
+  assert.equal(canSubmitRewind(real, preview), false, '真实初始态 → wire 侧提交判据 false')
+  // 可点性只能用 enablement 判据断言，且它对「确认与否」不敏感（这就是两个判据的分工）
+  assert.equal(rewindSubmittable(real, preview), true)
+  assert.equal(submitButtonEnabled({ draft: real, preview, pointId: 'p', busy: false }), true)
+  assert.equal(submitButtonEnabled({ draft: afterClick, preview, pointId: 'p', busy: false }), true, 'enablement 不得对 confirmed 敏感')
+})
+
+test('R2/F3 enablement 维度与执行体同宽：pointId === null 时主按钮必须禁用', () => {
+  const preview = screenshotPreview()
+  const draft = defaultDraft(preview)
+  assert.equal(rewindSubmittable(draft, preview), true, '前提：预览本身可提交')
+  assert.equal(submitButtonEnabled({ draft, preview, pointId: null, busy: false }), false, '没有可写目标（pointId=null）⇒ 按钮禁用（submit() 同样会早退）')
+  assert.equal(submitButtonEnabled({ draft, preview, pointId: 'p', busy: false }), true, '有目标且不在忙 ⇒ 可点')
+  assert.equal(submitButtonEnabled({ draft, preview, pointId: 'p', busy: true }), false, '在途 ⇒ 禁用')
+  const blocked = { ok: true, id: 'p', storage: { available: true }, canRestore: false, point: { id: 'p', createdAt: 1, protected: true } } as never
+  assert.equal(submitButtonEnabled({ draft: defaultDraft(blocked), preview: blocked, pointId: 'p', busy: false }), false, '不可回退的点即使有 pointId 也仍禁用（不放宽）')
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.match(dialog, /const submitEnabled = submitButtonEnabled\(\{[^}]*pointId[^}]*\}\)/, '对话框必须把 pointId 传进 enablement 判据（否则 F3 的维度又脱节）')
+})
+
+test('R2/F4 同步幂等锁：同一 tick 的两次提交只发 1 次写请求（busy 是异步 setState，挡不住）', async () => {
+  // 这段就是对话框 submit 的执行体（去掉 React setState）：确认 → 成形 → 发请求；
+  // 对话框用**同一个** createInFlightLock（源级绑定见下一条用例）。
+  const { port, calls } = fakePort()
+  const preview = screenshotPreview()
+  const draft = defaultDraft(preview)
+  const submitLock = createInFlightLock()
+  const submit = (): Promise<boolean> => submitLock(async () => {
+    const confirmed = confirmOnSubmit(draft) as RewindDraft
+    if (!canSubmitRewind(confirmed, preview)) return
+    await requestRewind(port, 'point-1', confirmed)
+  })
+  // 同一 tick 连续两次派发（双击 / 按键重复 / 程序化 dispatchEvent）：此时 busy 还没被 setState 刷新
+  const [first, second] = await Promise.all([submit(), submit()])
+  assert.equal(first, true, '第一次真的执行了')
+  assert.equal(second, false, '第二次被同步锁挡下（task 未执行）')
+  assert.equal(calls.length, 1, '端口调用次数恒为 1（busy 单独当锁时会变 2）')
+  // finally 释放 ⇒ 结束后仍可重试（不是永久熔断）
+  assert.equal(await submit(), true, '锁在结束后释放')
+  assert.equal(calls.length, 2)
+})
+
+test('R2/F4 源级：对话框写路径由同一把同步幂等锁包住（含反向自检）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  const writePathLocked = (source: string): boolean =>
+    /useRef\(createInFlightLock\(\)\)\.current/.test(source) && /submitLock\(async \(\) => \{/.test(source)
+  assert.equal(writePathLocked(dialog), true, 'submit 必须走 submitLock（同一 tick 幂等）')
+  assert.equal(writePathLocked(dialog.replace('useRef(createInFlightLock()).current', 'null as never')), false, '拿掉锁必须打红')
+  assert.equal(writePathLocked(dialog.replace('submitLock(async () => {', 'void (async () => {')), false, '绕过锁必须打红')
 })
 
 test('T15 ① 的 {reason} 插的是**翻译后的文本**（不是键名、不是机器码）', () => {
@@ -891,7 +1181,7 @@ test('失败原因：可读文案 + 真实 code + detail（段级失败同样收
   assert.deepEqual(chatRewindFailure({ ok: false, outcome: 'failed', code: 'brand-new' } as never).keys, ['rollback.code.unknown'])
 })
 
-test('告警不禁用回退（S4：允许部分覆盖 —— 有告警仍可提交）', () => {
+test('告警不禁用回退（S4：允许部分覆盖 —— 已确认草稿的 wire 侧提交判据仍为 true）', () => {
   const preview = {
     ok: true, id: 'p', storage: { available: true }, canRestore: true,
     warnings: [{ code: 'rollback.warn.trackDegraded' }],
@@ -899,7 +1189,7 @@ test('告警不禁用回退（S4：允许部分覆盖 —— 有告警仍可提�
     workspace: { available: true, overwrite: 1, different: 0, missing: 0, createdAfter: 0, skippedCount: 1, truncated: true },
   } as never
   const draft = confirmedDraft()
-  assert.equal(canSubmitRewind(draft, preview), true, '有告警 / 有截断也必须能提交（规格允许部分覆盖）')
+  assert.equal(canSubmitRewind(draft, preview), true, '有告警 / 有截断时 wire 侧提交判据仍为 true（规格允许部分覆盖）')
   assert.equal(buildRewindOptions(draft)?.mode, 'files+session', 'mode 恒为固定档位，与告警无关')
 })
 

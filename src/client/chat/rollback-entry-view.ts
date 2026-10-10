@@ -21,6 +21,11 @@
  *     那一刻本身就是确认，`requestRewind` 收到 `confirmed: true` 才成形。这是对上一版
  *     「勾选二次确认」的**有意替换**：确认门从「勾选框」挪到「对话框本身」（见 `RewindDraft`
  *     与 `TOMBSTONE` 注释），宿主侧的 fail-closed 确认门（userConfirmed 恰好 true）一个字没动。
+ *  ⑥ **「能不能提交」与「是否已确认」是两个判据**（R1 修复）：`rewindSubmittable` 只回答
+ *     「这次提交本身是否成立」（固定段集合非空 + 宿主允许回退），**绝不看 `confirmed`**；
+ *     `canSubmitRewind` 在它之上再加「恰好 confirmed === true」。把 confirmed 当**按钮可用性**
+ *     的前置会造成循环依赖 —— 确认只在 `confirmOnSubmit`（点按钮那一刻）置位，而按钮又被
+ *     未确认禁用 ⇒ 主按钮永久禁用、整个回退功能不可用（真机截图实证）。确认门本身一字未松。
  */
 import { redact } from '../../security/redaction.ts'
 import { readChatEntryMode, type ChatEntryMode } from './chat-entry-pref.ts'
@@ -322,18 +327,64 @@ export function confirmOnSubmit(draft: RewindDraft | null): RewindDraft | null {
 }
 
 /**
- * 主按钮是否可用：用户已确认（点按钮那一刻置位）+ 固定段集合非空 + **宿主允许回退**。
+ * 这次提交**本身**是否成立（= 固定段集合非空 + **宿主允许回退**）—— enablement 与提交共用的那一半。
+ *
+ * **绝不看 `confirmed`**：确认是「点击那一刻」的事（`confirmOnSubmit`），只属于写请求门，
+ * 不属于「这次提交是否可行」的判据。
+ */
+function rewindViable(draft: RewindDraft | null, preview: RollbackPreviewResult | null): boolean {
+  if (draft === null) return false
+  const segments = segmentsForMode(draft.mode)
+  if (segments.length === 0) return false
+  return rollbackPreviewVerdict(preview).canRestore
+}
+
+/**
+ * 主按钮**是否可点**（enablement 判据）：与「点下去会不会真的提交」同口径 —— 只要这次提交
+ * 本身成立（`rewindViable`），按钮就可点，**与 `confirmed` 无关**。
+ *
+ * R1 的根因（真机截图实证：主按钮永久灰色）：确认只可能由**点击那个按钮**置位
+ * （`confirmOnSubmit` 在 `submit()` 里调用），旧实现却把 `draft.confirmed` 当成按钮可用性的前置
+ * ⇒ 按钮因未确认而禁用、确认又只能靠点这个按钮 ⇒ 循环依赖，整个回退功能不可用。
+ * 因此可点性必须与确认彻底分开：按钮可点 = 这次提交可行。**这不放宽任何门** ——
+ * `canRestore === false`（受保护点 / 两态不全 / 没有可用段 …）时本判据照旧返回 false，按钮仍禁用。
+ */
+export function rewindSubmittable(draft: RewindDraft | null, preview: RollbackPreviewResult | null): boolean {
+  return rewindViable(draft, preview)
+}
+
+/**
+ * 主按钮的**完整 enablement**（对话框接线实际用的那一份）：可提交 + **已命中回滚点** + 不在忙。
+ *
+ * F3：`submit()` 自己要求 `pointId !== null`（没有可写目标就没有请求体），enablement 必须与它同宽 ——
+ * 否则「按钮亮着但点下去静默无反应」就是新的不实（按钮可用性承诺了这次点击会做点什么）。
+ * `pointId === null` 在对话框里只存在于「列表已读、预览未到」的窗口，原子置位下当前不可达；
+ * 这里纳入它是为了让**判据的维度与执行体一致**，而不是依赖「当前不可达」这种会腐烂的推理。
+ */
+export function submitButtonEnabled(input: {
+  draft: RewindDraft | null
+  preview: RollbackPreviewResult | null
+  /** 命中的回滚点 id（唯一写路径的目标）；null = 还没有可写目标。 */
+  pointId: string | null
+  /** 是否已有一次提交在途（写入过程中的 UI 锁；**不是**同一 tick 的幂等锁）。 */
+  busy: boolean
+}): boolean {
+  if (input.pointId === null) return false
+  if (input.busy) return false
+  return rewindSubmittable(input.draft, input.preview)
+}
+
+/**
+ * **提交**（写请求成形）的门：`rewindSubmittable` 的全部条件 + 用户已确认（点按钮那一刻置位）
+ * + 固定段集合非空 + **宿主允许回退**。确认门一字未松。
  *
  * 与旧版的口径差异（有意）：旧版在「两态不全」时允许勾选 `allowPartial` 后放行；简洁版没有
  * 这个勾选，两态不全的点在界面上如实说不可回退（按钮禁用），**不假装能退**。
  */
 export function canSubmitRewind(draft: RewindDraft | null, preview: RollbackPreviewResult | null): boolean {
-  if (draft === null) return false
-  if (draft.confirmed !== true) return false
-  const segments = segmentsForMode(draft.mode)
-  if (segments.length === 0) return false
+  if (draft === null || draft.confirmed !== true) return false
   // 点「回退」即 userConfirmed=true：确认门由对话框本身承担（预览 → 点按钮 两步）。
-  return rollbackPreviewVerdict(preview).canRestore
+  return rewindViable(draft, preview)
 }
 
 /**
@@ -367,6 +418,32 @@ export function codeKeyOfError(error: unknown): string {
 export function errorDetail(error: unknown): string | null {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   return message === '' ? null : redact(message)
+}
+
+/* ------------------------------------------------------------ 同一 tick 的同步幂等锁（F4） */
+
+/**
+ * **同步幂等锁**（single-flight）：`run(task)` 同步置位 in-flight 标记后才执行 task；
+ * 标记已被占用时的调用**不执行 task**、直接返回 `false`。返回值 = 「这次是否真的执行了」。
+ * `finally` 释放 ⇒ 一次失败之后仍可重试（不是永久熔断）。
+ *
+ * 为什么必须有它（t3 F4）：`busy` 是 React 的**异步** setState —— 同一 tick 里第二次程序化派发
+ * （双击、按键重复、程序化 dispatchEvent）看到的仍是 `busy === false`，单靠 busy 闸门会发**两次**
+ * 写请求；而回退是写操作（覆盖 + fork 会话），必须恰好一次。锁的置位发生在第一个 `await` 之前，
+ * 所以那个窗口根本不存在。它不是 UI 状态，因此也不参与渲染。
+ */
+export function createInFlightLock(): (task: () => Promise<void>) => Promise<boolean> {
+  let locked = false
+  return async (task) => {
+    if (locked) return false
+    locked = true
+    try {
+      await task()
+      return true
+    } finally {
+      locked = false
+    }
+  }
 }
 
 /**

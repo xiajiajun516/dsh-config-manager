@@ -47,6 +47,7 @@ import {
   chatRewindSummary,
   codeKeyOfError,
   confirmOnSubmit,
+  createInFlightLock,
   defaultDraft,
   errorDetail,
   findPointForTurn,
@@ -57,6 +58,7 @@ import {
   rollbackPreviewNote,
   rollbackPreviewVerdict,
   rollbackRewindCounts,
+  submitButtonEnabled,
   type ChildOpenState,
   type RewindDraft,
 } from './rollback-entry-view.ts'
@@ -118,6 +120,12 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   const [childId, setChildId] = useState<string | null>(null)
   const [childState, setChildState] = useState<ChildOpenState | 'opening' | null>(null)
   const alive = useRef(true)
+  /**
+   * 同一 tick 的**同步幂等锁**（t3 F4）：`busy` 是异步 setState，挡不住同一 tick 里的第二次派发
+   * （双击 / 按键重复 / 程序化 dispatchEvent）—— 那会发出两次写请求。这把锁在第一个 `await` 之前
+   * **同步**置位，保证回退写请求恰好一次；`finally` 释放，失败后仍可重试。
+   */
+  const submitLock = useRef(createInFlightLock()).current
 
   useEffect(() => {
     alive.current = true
@@ -170,11 +178,11 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
 
   /**
    * 提交（唯一写路径）：**点主按钮 = 用户确认**（`confirmOnSubmit` 置 confirmed），
-   * 再交给 `canSubmitRewind` / `requestRewind` 的 fail-closed 判定。
+   * 再交给 `canSubmitRewind` / `requestRewind` 的 fail-closed 判定；整段由同步幂等锁包住（F4）。
    * 返回 200 且 `code='nothing-to-restore'` 时**不是失败**：下面按 noop 摘要如实呈现
    *（E1：工作区与该回退点一致，HTTP 200）。
    */
-  const submit = async (): Promise<void> => {
+  const submit = (): Promise<boolean> => submitLock(async () => {
     if (pointId === null || busy) return
     const confirmedDraft = confirmOnSubmit(draft)
     if (!canSubmitRewind(confirmedDraft, preview)) return
@@ -193,7 +201,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
       setChildId(child.id)
       await tryOpenChild(child.id)
     }
-  }
+  })
 
   const verdict = rollbackPreviewVerdict(preview)
   /**
@@ -226,7 +234,10 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   const failure = result === null ? { code: null, detail: null, keys: [] } : chatRewindFailure(result)
   const counts = rollbackRewindCounts(result)
   const outcome = result === null ? null : rollbackOutcome(result.outcome)
-  const submitEnabled = canSubmitRewind(draft, preview) && !busy
+  // R1：enablement 用「这次提交可行」判据（不含 confirmed）；确认只由 submit() 里
+  // confirmOnSubmit 置位，绝不能反过来当前置 —— 否则按钮因未确认禁用、确认又只能靠点按钮（死锁）。
+  // R2/F3：判据维度必须与 submit() 的执行体同宽（含「已有可写目标 pointId」与忙态）。
+  const submitEnabled = submitButtonEnabled({ draft, preview, pointId, busy })
   const warnings = preview?.warnings ?? []
 
   return (
