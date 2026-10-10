@@ -17,7 +17,7 @@
  *
  * 组件的全部判定在 `chat-entry-view.ts`（node 可测）：本文件只做装配、订阅与渲染。
  */
-import { Component, createElement, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Component, Fragment, createElement, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TranslateNS } from '../client-types.ts'
 import type { RollbackPointPort } from '../../ui/rollback-view.ts'
@@ -31,7 +31,7 @@ import {
   chatEntryButtonState,
   chatEntryTurnPhase,
   fileSizeTextOf,
-  imageRenderOwnerOf,
+  imageRenderOwnersOf,
   lookupPointForTurn,
   rawBlockText,
   CHAT_ENTRY_WARN_PREFIX,
@@ -181,9 +181,13 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
   const files = bubble.files.map((file, index) => (
     <FileCard key={'file-' + String(index)} file={file} size={fileSizeTextOf(file.bytes)} />
   ))
-  const images = bubble.images.length === 0 || typeof renderMessageImages !== 'function'
+  // 逐张调用（与宿主 attachments.map 一图一调用逐字同构）；owner 没给渲染位时整组不渲染并如实提示
+  const imageOwners = bubble.images.length === 0 || typeof renderMessageImages !== 'function' ? [] : imageRenderOwnersOf(bubble)
+  const images = imageOwners.length === 0
     ? null
-    : (renderMessageImages as MessageImagesRenderer)(imageRenderOwnerOf(bubble))
+    : imageOwners.map((owner, index) => (
+      <Fragment key={'image:' + String(index)}>{(renderMessageImages as MessageImagesRenderer)(owner)}</Fragment>
+    ))
   const reasonKey = button.kind === 'disabled' ? button.key : null
 
   return (

@@ -33,7 +33,7 @@ import {
   fileExtensionOf,
   fileSizeTextOf,
   formatChatEntryClock,
-  imageRenderOwnerOf,
+  imageRenderOwnersOf,
   lookupPointForTurn,
   plainTextOf,
   planChatNodeRegistration,
@@ -435,10 +435,17 @@ test('bubble images: payload is forwarded verbatim (only renderMessageImages may
   const view = buildChatEntryBubble([{ type: 'text', text: 'x' }, { type: 'image', attachment }])
   assert.equal(view.images.length, 1)
   assert.deepEqual(view.images[0], { attachment })
-  const single = imageRenderOwnerOf(view)
-  assert.deepEqual(single, { images: [{ attachment }], align: 'end', compact: false })
+  // 逐张一次调用（宿主 attachments.map 的逐字同构）：单图 owner 只带一张
+  assert.deepEqual(imageRenderOwnersOf(view), [{ images: [{ attachment }], align: 'end', compact: false }])
   const two = buildChatEntryBubble([{ type: 'image', attachment }, { type: 'image', attachment: { id: 'a2' } }])
-  assert.deepEqual(imageRenderOwnerOf(two), { images: two.images, align: 'end', compact: true }, 'compact mirrors the host attachments.length > 1')
+  assert.deepEqual(
+    imageRenderOwnersOf(two),
+    [
+      { images: [{ attachment }], align: 'end', compact: true },
+      { images: [{ attachment: { id: 'a2' } }], align: 'end', compact: true },
+    ],
+    'one call per image, compact mirrors the host attachments.length > 1',
+  )
   // 没有 attachment 的 image 块必须进 rest，绝不静默丢
   const noAttachment = buildChatEntryBubble([{ type: 'image' }])
   assert.equal(noAttachment.images.length, 0)

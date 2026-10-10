@@ -279,9 +279,15 @@ export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
   return { text, images, files, raw, showBubble: text !== '' || raw.length > 0 }
 }
 
-/** 图片渲染位载荷（宿主 `compact = attachments.length > 1`；align 恒 'end'）。 */
-export function imageRenderOwnerOf(view: ChatEntryBubbleView): HostImageRenderOwner {
-  return { images: view.images, align: CHAT_ENTRY_ALIGN, compact: view.images.length > CHAT_ENTRY_COMPACT_THRESHOLD }
+/**
+ * 图片渲染位载荷：**每张图一次调用**（宿主 `UserStyleBubble` 就是
+ * `attachments.map((attachment, index) => renderMessageImages({ images: [attachment.image], align: 'end', compact }))`，
+ * 每次调用 = 一个独立的 `conversation.message.images` slot 出现点，渲染器可能是**单图**语义）。
+ * 把整组塞进一次调用会改变渲染器的行为 —— 所以这里逐张、逐字复刻宿主。
+ */
+export function imageRenderOwnersOf(view: ChatEntryBubbleView): HostImageRenderOwner[] {
+  const compact = view.images.length > CHAT_ENTRY_COMPACT_THRESHOLD
+  return view.images.map((image) => ({ images: [image], align: CHAT_ENTRY_ALIGN, compact }))
 }
 
 /* ------------------------------------------------------------ 按钮状态机 */
