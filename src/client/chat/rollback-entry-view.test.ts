@@ -24,10 +24,12 @@ import {
   CHAT_ENTRY_SLOT,
   CHAT_REWIND_MODE,
   ROLLBACK_NOTHING_TO_RESTORE_KEY,
+  ROLLBACK_NO_RECORDED_FILES_CODE,
   buildRewindOptions,
   buildSessionNavigator,
   canSubmitRewind,
   chatFileChangeAvailable,
+  chatRewindFailed,
   chatRewindFailure,
   chatRewindSummary,
   childOpenHintKey,
@@ -45,6 +47,7 @@ import {
   readRollbackPreviewFiles,
   registerChatEntry,
   requestRewind,
+  rollbackPreviewNote,
   rollbackPreviewVerdict,
   segmentsForMode,
   type ChatSlotProbe,
@@ -52,7 +55,7 @@ import {
   type SessionNavigator,
 } from './rollback-entry-view.ts'
 import { en as chatEn, zh as chatZh } from './chat-locales.ts'
-import { ROLLBACK_CODES, ROLLBACK_CODE_UNKNOWN_KEY, type RollbackPointPort, type RollbackRewindResult } from '../../ui/rollback-view.ts'
+import { ROLLBACK_CODES, ROLLBACK_CODE_UNKNOWN_KEY, type RollbackPointPort, type RollbackPreviewResult, type RollbackRewindResult } from '../../ui/rollback-view.ts'
 import { en as recoveryEn, zh as recoveryZh } from '../recovery/recovery-locales.ts'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
@@ -579,7 +582,10 @@ test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块�
   const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
   // 保留：文件列表与行数、空列表那一行、结果一行摘要、失败原因 code 行
   assert.match(dialog, /rollback\.preview\.files\.title/, '必须有「将被回退的文件」小节')
-  assert.match(dialog, /rollback\.preview\.files\.empty/, '空列表必须显示「工作区与该回退点一致，无需恢复」')
+  // 空列表那一行自 T15 起由 ui 层判定函数给出（四态：不可用 / 没记录文件 / 一致但会话回退 / 一致无事可做），
+  // 所以这里钉的是**接线**（对话框调 rollbackPreviewNote 并把 noteText 上屏），键值本身钉在 ui 层与 T15 用例里。
+  assert.match(dialog, /rollbackPreviewNote\(\{/, '空列表文案必须走 ui 层的四态判定（一处实现）')
+  assert.match(dialog, /noteText !== null \? <div className=\{css\.hint\}>\{noteText\}<\/div> : null/, '空列表必须把判定结果上屏（key=null 时才不说话）')
   assert.match(dialog, /readRollbackPreviewFiles\(/, '文件列表必须取自 E1 的 preview.workspace.files')
   assert.match(dialog, /chatRewindSummary\(/, '结果必须走一行摘要')
   assert.match(dialog, /chatRewindFailure\(/, '失败原因必须走同一个判定点')
@@ -595,9 +601,11 @@ test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块�
   ]) {
     assert.doesNotMatch(dialog, gone, '已删除的块不得回到对话框：' + String(gone))
   }
-  // 底部只有两个按钮：主按钮（回退）+ 取消/关闭
+  // 底部只有两个按钮：主按钮（回退）+ 取消/关闭（T13 非回归项：底部**恰好 2 个**）
+  const footer = dialog.slice(dialog.indexOf('css.dialogFooter'))
+  assert.equal([...footer.matchAll(/<Button\b/g)].length, 2, '弹窗底部必须恰好 2 个按钮（回退 + 取消/关闭）')
   const buttons = [...dialog.matchAll(/<Button\b/g)].length
-  assert.equal(buttons, 3, '底部主按钮 + 取消 + 子会话「打开」按钮（有 fork 时才有）')
+  assert.equal(buttons, 3, '全弹窗 3 个按钮 = 底部 2 个 + 子会话「打开」（有 fork 时才有）')
 })
 
 test('结果一行摘要：nothing-to-restore 是**成功**（不是失败），其余走既有 outcome 徽章', () => {
@@ -609,6 +617,262 @@ test('结果一行摘要：nothing-to-restore 是**成功**（不是失败），
   assert.deepEqual(chatRewindSummary(null), { kind: 'plain', key: null })
   assert.ok(zhHas(ROLLBACK_NOTHING_TO_RESTORE_KEY) && enHas(ROLLBACK_NOTHING_TO_RESTORE_KEY), 'noop 文案键必须在 recovery 字典 zh/en 里')
   assert.ok((recoveryZh as Record<string, string>)[ROLLBACK_NOTHING_TO_RESTORE_KEY]?.includes('无需恢复') === true, 'zh 逐字：工作区与该回退点一致，无需恢复')
+})
+
+/* ------------------------------------------------------------ T13/F2：只有真失败才渲染失败原因盒 */
+
+test('T13/F2 结果种类 → 是否渲染失败原因盒（判据只看 outcome/status/code，不解析 detail）', () => {
+  const cases: { name: string; result: unknown; expect: boolean }[] = [
+    { name: 'null（还没提交）', result: null, expect: false },
+    // —— 成功 / 无需恢复：一律不渲染（F2 的缺陷就是这几种也弹了失败盒）——
+    { name: '③ restored + nothing-to-restore（全部一致）', result: { ok: true, outcome: 'restored', code: 'nothing-to-restore', segments: [{ state: 'workspace', status: 'restored', reasonCode: 'nothing-to-restore', restored: 0 }] }, expect: false },
+    { name: '② restored + nothing-to-restore（no-recorded-files）', result: { ok: true, outcome: 'restored', code: 'nothing-to-restore', segments: [{ state: 'workspace', status: 'restored', reasonCode: ROLLBACK_NO_RECORDED_FILES_CODE, restored: 0 }] }, expect: false },
+    // ① 被跳过的段（含 capture-failed 这类 reasonCode）是「该态没有可用捕获」，不是回退失败
+    { name: '① restored + nothing-to-restore（skipped 段 reasonCode=capture-failed）', result: { ok: true, outcome: 'restored', code: 'nothing-to-restore', segments: [{ state: 'workspace', status: 'skipped', reasonCode: 'capture-failed' }] }, expect: false },
+    { name: 'restored + ok（真的恢复了）', result: { ok: true, outcome: 'restored', code: 'ok', segments: [{ state: 'workspace', status: 'restored', restored: 3 }] }, expect: false },
+    { name: 'partial + ok（只有 skipped，没有 failed）', result: { ok: true, outcome: 'partial', code: 'ok', segments: [{ state: 'workspace', status: 'restored', restored: 2 }, { state: 'session', status: 'skipped', reasonCode: 'session-missing' }] }, expect: false },
+    { name: '未知 outcome 且无失败证据（不猜）', result: { ok: true, outcome: 'weird', code: 'weird-code', segments: [{ state: 'workspace', status: 'restored', restored: 1 }] }, expect: false },
+    // —— 真失败：渲染原因行 ——
+    { name: 'failed + restore-failed', result: { ok: false, outcome: 'failed', code: 'restore-failed', detail: 'boom', segments: [{ state: 'workspace', status: 'failed', reasonCode: 'restore-failed' }] }, expect: true },
+    { name: 'denied（零写入拒绝）', result: { ok: false, outcome: 'denied', code: 'protected-point' }, expect: true },
+    { name: 'partial + 段级 failed', result: { ok: true, outcome: 'partial', code: 'ok', segments: [{ state: 'workspace', status: 'restored', restored: 2 }, { state: 'session', status: 'failed', reasonCode: 'fork-failed' }] }, expect: true },
+    { name: 'restored 但顶层是 guard-failed（*-failed 码）', result: { ok: false, outcome: 'restored', code: 'guard-failed' }, expect: true },
+    { name: 'failed + ledger-write-failed', result: { ok: false, outcome: 'failed', code: 'ledger-write-failed' }, expect: true },
+  ]
+  for (const item of cases) {
+    assert.equal(chatRewindFailed(item.result as never), item.expect, item.name)
+  }
+})
+
+test('T13/F2 对话框接线：失败原因盒必须由 chatRewindFailed 门控（不得无条件渲染）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.match(dialog, /const failed = chatRewindFailed\(result\)/, '对话框必须先算 failed')
+  assert.match(dialog, /\{failed && \(failure\.keys\.length > 0 \|\| failure\.detail !== null\)/, '失败盒必须带 failed 门控')
+  assert.doesNotMatch(dialog, /\{failure\.keys\.length > 0 && \(/, '不得再出现无门控的失败盒（F2 的根因）')
+})
+
+/* ------------------------------------------------------------ T11：三情形纯分派（①②③） */
+
+const summaryKeys = (): { noop: string; noRecord: string; noFiles: string } => ({
+  noop: 'rollback.preview.result.noop',
+  noRecord: 'rollback.preview.result.noRecord',
+  noFiles: 'rollback.preview.result.noFiles',
+})
+
+test('T11 ① 存在 status===skipped 的段 ⇒ 「没有可用的记录（原因：该段 code 键）」，绝不说成「一致」', () => {
+  const keys = summaryKeys()
+  const skipped = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [
+      { state: 'workspace', status: 'restored', reasonCode: 'nothing-to-restore', restored: 0 },
+      { state: 'session', status: 'skipped', reasonCode: 'session-missing' },
+    ],
+  } as never)
+  assert.deepEqual(skipped, { kind: 'no-record', key: keys.noRecord, reasonKey: 'rollback.code.session-missing' })
+  assert.notEqual((skipped as { key: string }).key, keys.noop, '① 不得渲染成「与该点一致」')
+  // 原因键必须走字典映射：未知码回落 unknown（不裸渲染机器码）
+  const unknown = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'skipped', reasonCode: 'brand-new-code' }],
+  } as never)
+  assert.equal((unknown as { reasonKey: string }).reasonKey, ROLLBACK_CODE_UNKNOWN_KEY)
+  // 段没给 reasonCode（怪形状）同样回落 unknown，而不是编一个原因
+  const noCode = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'skipped' }],
+  } as never)
+  assert.equal((noCode as { reasonKey: string }).reasonKey, ROLLBACK_CODE_UNKNOWN_KEY)
+  // 多个 skipped 段 ⇒ 取**第一个**（顺序确定，不猜归属）
+  const first = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [
+      { state: 'workspace', status: 'skipped', reasonCode: 'no-chunks' },
+      { state: 'session', status: 'skipped', reasonCode: 'session-missing' },
+    ],
+  } as never)
+  assert.equal((first as { reasonKey: string }).reasonKey, 'rollback.code.no-chunks')
+})
+
+test('T11 ② 存在 reasonCode===no-recorded-files 的段 ⇒ 「没有记录任何文件」（与 ③ 分开）', () => {
+  const keys = summaryKeys()
+  const noFiles = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'restored', reasonCode: ROLLBACK_NO_RECORDED_FILES_CODE, restored: 0 }],
+  } as never)
+  assert.deepEqual(noFiles, { kind: 'no-files', key: keys.noFiles })
+  assert.equal(ROLLBACK_NO_RECORDED_FILES_CODE, 'no-recorded-files', '引擎码名必须逐字（改名即红）')
+  // ③ 记录了条目且全部已一致（reasonCode=nothing-to-restore）⇒ 仍是「与该点一致」
+  const consistent = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [
+      { state: 'workspace', status: 'restored', reasonCode: 'nothing-to-restore', restored: 0 },
+      { state: 'session', status: 'restored', reasonCode: 'nothing-to-restore', restored: 0 },
+    ],
+  } as never)
+  assert.deepEqual(consistent, { kind: 'noop', key: keys.noop })
+  // 优先级：① 先于 ②（同时存在 skipped 段与 no-recorded-files 段 ⇒ 说「没有可用的记录」）
+  const both = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [
+      { state: 'workspace', status: 'restored', reasonCode: ROLLBACK_NO_RECORDED_FILES_CODE, restored: 0 },
+      { state: 'session', status: 'skipped', reasonCode: 'no-boundary' },
+    ],
+  } as never)
+  assert.equal(both.kind, 'no-record')
+  assert.equal((both as { reasonKey: string }).reasonKey, 'rollback.code.no-boundary')
+})
+
+test('T11 分派只读 status/reasonCode：**绝不解析 detail**（同 detail 不同 status ⇒ 不同结论）', () => {
+  const keys = summaryKeys()
+  // 两条结果的 detail 完全一样、只有 status 不同 ⇒ 结论必须不同（若实现偷看 detail 就会同形）
+  const detail = ['unchanged=353 nothingToDo=true']
+  const asSkipped = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'skipped', reasonCode: 'capture-failed', detail }],
+  } as never)
+  const asConsistent = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'restored', reasonCode: 'nothing-to-restore', restored: 0, detail }],
+  } as never)
+  assert.equal(asSkipped.kind, 'no-record')
+  assert.deepEqual(asConsistent, { kind: 'noop', key: keys.noop })
+  // 反过来：detail 不同、status/reasonCode 相同 ⇒ 结论必须相同
+  const a = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'restored', reasonCode: ROLLBACK_NO_RECORDED_FILES_CODE, restored: 0, detail: ['files=0 nothingToDo=true'] }],
+  } as never)
+  const b = chatRewindSummary({
+    ok: true, outcome: 'restored', code: 'nothing-to-restore',
+    segments: [{ state: 'workspace', status: 'restored', reasonCode: ROLLBACK_NO_RECORDED_FILES_CODE, restored: 0, detail: ['随便什么技术细节'] }],
+  } as never)
+  assert.deepEqual(a, b)
+  // 只有顶层 code === 'nothing-to-restore' 才走这套：partial（真的动了东西）不得说「无需恢复」
+  assert.equal(chatRewindSummary({
+    ok: true, outcome: 'partial', code: 'ok',
+    segments: [{ state: 'workspace', status: 'restored', restored: 2 }, { state: 'session', status: 'skipped', reasonCode: 'session-missing' }],
+  } as never).kind, 'plain')
+})
+
+test('T11 对话框接线：no-record 摘要必须把**原因键的文本**插进 {reason}（不是键名、不是机器码）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.match(dialog, /summary\.kind === 'no-record'/, '对话框必须按 no-record 分支走带原因的渲染')
+  assert.match(dialog, /reason: rt\(rk\(summary\.reasonKey\)\)/, '插值必须是该原因键**翻译后**的文本')
+  assert.doesNotMatch(dialog, /reason: summary\.reasonKey/, '不得把字典键名（或机器码）当文案插进去')
+  assert.doesNotMatch(dialog, /reason: code\b/, '不得把裸机器码当文案插进去')
+})
+
+/* ------------------------------------------------------------ T15：预览态四句（实测渲染句）+ 假尾句禁令 */
+
+/** 与对话框同一渲染规则：把 rollbackPreviewNote 的结果渲染成**实测句**（含 {reason} 插值）。 */
+function renderPreviewNote(note: { key: string | null; reasonKey: string | null }): string | null {
+  if (note.key === null) return null
+  const dict = recoveryZh as Record<string, string>
+  const sentence = dict[note.key] ?? ''
+  if (note.reasonKey === null) return sentence
+  return sentence.replace('{reason}', dict[note.reasonKey] ?? '')
+}
+
+test('T15 预览态四态：四种 preview 形状渲染出四句互不相同的话（集合 size=4）', () => {
+  const shapes = {
+    // (a) 工作区态不可用
+    a: { workspace: { available: false, reasonCode: 'chunk-not-found' }, session: { restorable: false } },
+    // (b) available 且 overwrite===0（该点没记录任何文件）
+    b: { workspace: { available: true, overwrite: 0, different: 0 }, session: { restorable: false } },
+    // (c) 工作区一致但会话仍会回退 ⇒ 不得出现「无需恢复」
+    c: { workspace: { available: true, overwrite: 5, different: 0 }, session: { restorable: true } },
+    // (d) 工作区一致且会话也不可回退
+    d: { workspace: { available: true, overwrite: 5, different: 0 }, session: { restorable: false } },
+  }
+  const rendered = {
+    a: renderPreviewNote(rollbackPreviewNote(shapes.a as never)),
+    b: renderPreviewNote(rollbackPreviewNote(shapes.b as never)),
+    c: renderPreviewNote(rollbackPreviewNote(shapes.c as never)),
+    d: renderPreviewNote(rollbackPreviewNote(shapes.d as never)),
+  }
+  for (const [name, sentence] of Object.entries(rendered)) assert.ok(sentence !== null && sentence !== '', name + ' 必须有可上屏的句子')
+  assert.equal(new Set(Object.values(rendered)).size, 4, '四种情形的实测句必须两两不同：' + JSON.stringify(rendered))
+  // (b) 与结果态的「没有记录任何文件」共用同一句（同字典键）
+  assert.equal(rendered.b, (recoveryZh as Record<string, string>)['rollback.preview.result.noFiles'])
+  // (c) 只说工作区 + 会话仍会回退；**不含**「无需恢复」
+  assert.ok(rendered.c !== null && !rendered.c.includes('无需恢复'), '(c) 是假尾句的典型：不得含「无需恢复」')
+  assert.ok(rendered.c !== null && rendered.c.includes('会话仍会回退到该点之前'))
+  // (d) 才说「无需恢复」
+  assert.ok(rendered.d !== null && rendered.d.includes('无需恢复'))
+})
+
+test('T15 假尾句禁令（句子层面）：凡 changesSomething=true，实测句一律不含「无需恢复」', () => {
+  const shapes = [
+    { workspace: { available: false, reasonCode: 'chunk-not-found' }, session: { restorable: true } },
+    { workspace: { available: true, overwrite: 0, different: 0 }, session: { restorable: true } },
+    { workspace: { available: true, overwrite: 5, different: 0 }, session: { restorable: true } },
+    { workspace: { available: true, overwrite: 5, different: 2 }, session: { restorable: true } },
+    { workspace: null, session: { restorable: true } },
+  ]
+  for (const shape of shapes) {
+    const note = rollbackPreviewNote(shape as never)
+    assert.equal(note.changesSomething, true, '这些形状点下去都会改动什么：' + JSON.stringify(shape))
+    const sentence = renderPreviewNote(note)
+    if (sentence === null) continue
+    assert.ok(!sentence.includes('无需恢复'), '假尾句禁令：' + JSON.stringify(shape) + ' → ' + sentence)
+  }
+})
+
+test('T15 形状 (d) 断言：workspace 一致 + session.restorable=true → 句不含「无需恢复」且按钮可点', () => {
+  const preview: RollbackPreviewResult = {
+    ok: true, id: 'p', storage: { available: true }, canRestore: true,
+    workspace: { available: true, overwrite: 5, different: 0 },
+    session: { restorable: true },
+  }
+  const verdict = rollbackPreviewVerdict(preview)
+  assert.equal(verdict.canRestore, true)
+  const note = rollbackPreviewNote({ workspace: preview.workspace, session: preview.session, canRestore: verdict.canRestore })
+  const sentence = renderPreviewNote(note)
+  assert.ok(sentence !== null && !sentence.includes('无需恢复'), '(d) 形状不得含「无需恢复」：' + String(sentence))
+  assert.equal(canSubmitRewind(confirmedDraft(), preview), true, '该形状下按钮必须可点（预览 + 确认两步）')
+})
+
+test('T15 ① 的 {reason} 插的是**翻译后的文本**（不是键名、不是机器码）', () => {
+  const note = rollbackPreviewNote({ workspace: { available: false, reasonCode: 'chunk-not-found' }, session: { restorable: false } })
+  const sentence = renderPreviewNote(note)
+  const dict = recoveryZh as Record<string, string>
+  assert.ok(sentence !== null && sentence.includes(dict['rollback.code.chunk-not-found'] as string), '必须插原因键的字典文本')
+  assert.ok(sentence !== null && !sentence.includes('chunk-not-found'), '不得把机器码插进去')
+  assert.ok(sentence !== null && !sentence.includes('{reason}'), '占位符必须被替换')
+  assert.ok(sentence !== null && !sentence.includes('rollback.code.'), '不得把字典键名插进去')
+})
+
+test('T15 对话框接线（源级）：预览态句走 rollbackPreviewNote 一处实现 + 原因键插翻译文本', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.match(dialog, /rollbackPreviewNote\(\{/, '对话框必须调用 ui 层的判定函数（一处实现）')
+  assert.match(dialog, /reason: rt\(rk\(note\.reasonKey\)\)/, '原因必须插翻译后的文本')
+  assert.match(dialog, /noteText !== null \? <div className=\{css\.hint\}>\{noteText\}<\/div> : null/, 'key=null 时宁可不说话')
+  assert.doesNotMatch(dialog, /\{rt\('rollback\.preview\.files\.empty'\)\}/, '预览态句不得再硬编码「一致」那一句')
+})
+
+test('T11 三句话的字典键 zh/en 齐备且 zh 逐字（en 是镜像）', () => {
+  const keys = summaryKeys()
+  for (const key of [...Object.values(keys), 'rollback.code.no-recorded-files']) {
+    assert.ok(zhHas(key), 'recovery 字典 zh 缺键：' + key)
+    assert.ok(enHas(key), 'recovery 字典 en 缺键：' + key)
+  }
+  const zhDict = recoveryZh as Record<string, string>
+  const enDict = recoveryEn as Record<string, string>
+  assert.equal(zhDict[keys.noop], '工作区与该回退点一致，无需恢复')
+  assert.equal(zhDict[keys.noFiles], '该回退点没有记录任何文件，无需恢复')
+  assert.equal(zhDict[keys.noRecord], '该回退点没有可用的记录（原因：{reason}），无需恢复')
+  assert.equal(zhDict['rollback.code.no-recorded-files'], '该回退点没有记录任何文件')
+  // 三句必须互不相同（否则「三种情形说三句话」是假的）
+  assert.equal(new Set([zhDict[keys.noop], zhDict[keys.noFiles], zhDict[keys.noRecord]]).size, 3)
+  // {reason} 占位符只出现在 ①（其余两句没有插值，多写会原样渲染成 {reason}）
+  assert.ok(zhDict[keys.noRecord]?.includes('{reason}') === true)
+  assert.ok(zhDict[keys.noop]?.includes('{') !== true && zhDict[keys.noFiles]?.includes('{') !== true)
+  // en 镜像：非空、无 CJK、语义对应（各含 nothing to restore）
+  for (const key of Object.values(keys)) {
+    const value = enDict[key] ?? ''
+    assert.ok(value !== '', 'en 值不得为空：' + key)
+    assert.doesNotMatch(value, /[\u4e00-\u9fff]/, 'en 值不得含中文：' + key)
+    assert.match(value, /nothing to restore/i, 'en 三句都要说清「无需恢复」：' + key)
+  }
 })
 
 test('失败原因：可读文案 + 真实 code + detail（段级失败同样收），detail 渲染前过 redact', () => {
@@ -676,8 +940,11 @@ test('预览文件读法：null / 缺字段 / 非数字一律「行数未统计�
   assert.deepEqual(rows[1], { path: 'C:/p/half.ts', status: 'overwrite', added: 5, removed: null, truncated: true }, '缺一侧 ⇒ 整条「未统计」')
   assert.deepEqual(rows[2], { path: 'C:/p/weird.ts', status: 'overwrite', added: null, removed: null, truncated: true }, '字符串数字不猜')
   assert.equal(chatFileChangeAvailable(rows), false, '一条可信行数都没有 ⇒ 显示一句「行数未统计」说明')
-  // 未知 status 原样透传但不改变渲染（界面不按变更类型分派文案）
-  assert.equal(readRollbackPreviewFiles({ files: [{ path: 'x', status: 'rename' }] })[0]?.status, 'rename')
+  // 未知 status 收敛成 'unknown'（只认引擎枚举名；**不改变渲染** —— 界面不按变更类型分派文案，
+  // 用户看到的始终是「路径 + 增删行数」，因此这条收敛对任何对外行为都是零影响）
+  assert.equal(readRollbackPreviewFiles({ files: [{ path: 'x', status: 'rename' }] })[0]?.status, 'unknown')
+  assert.equal(readRollbackPreviewFiles({ files: [{ path: 'x', status: 42 }] })[0]?.status, 'unknown')
+  assert.equal(readRollbackPreviewFiles({ files: [{ path: 'x', status: 'create' }] })[0]?.status, 'create', '引擎枚举名原样保留')
   assert.equal(previewFileStatusKnown('overwrite') && previewFileStatusKnown('create') && previewFileStatusKnown('delete'), true)
   assert.equal(previewFileStatusKnown('rename'), false, '白名单只用于断言：delete 保留在取值集合里（引擎当前永不产出）')
 })

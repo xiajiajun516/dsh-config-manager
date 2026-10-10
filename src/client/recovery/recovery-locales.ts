@@ -343,6 +343,10 @@ export const zh = {
   'rollback.code.restore-failed': '回退失败（详见逐条细节）',
   'rollback.code.verify-failed': '回退后逐文件校验未通过，已整体回滚到回退前状态',
   'rollback.code.nothing-to-restore': '该回滚点没有可恢复的内容',
+  /* T10/T11：工作区段 **files=0**（该点压根没记录任何文件）的独立码 —— 与
+     `nothing-to-restore`（记录了条目但全部已与快照一致）是**两件不同的事**，界面上必须说两句不同的话：
+     前者「没有记录任何文件」，后者「工作区与该回退点一致」。只出现在 segments[].reasonCode。 */
+  'rollback.code.no-recorded-files': '该回退点没有记录任何文件',
   'rollback.code.guard-failed': '回退前的救援点没能留下，已中止（零写入）',
   'rollback.code.session-missing': '会话日志不存在',
   'rollback.code.session-out-of-root': '会话日志不在本机会话根内，已拒绝',
@@ -398,12 +402,30 @@ export const zh = {
    * 所以这里没有「删除文件」这类文案。 */
   'rollback.preview.files.title': '将被回退的文件：',
   'rollback.preview.files.empty': '工作区与该回退点一致，无需恢复',
+  /* —— T15：**预览态**（点「回退」之前那一屏）的四态文案 ——
+   * 判据只来自 preview 字段（available / overwrite / different / missing / reasonCode /
+   * session.restorable + 宿主 canRestore），**禁止解析 detail**；判定函数 = src/ui/rollback-view.ts 的
+   * rollbackPreviewNote()（一处实现，聊天对话框调用它）。
+   * ③a 与 ①② 的「会话仍会回退」变体都**不含**「无需恢复」——点下去真会 fork 子会话，
+   * 说「无需恢复」就是假尾句（假尾句禁令）。 */
+  'rollback.preview.files.unavailable': '该回退点的工作区态没有可用的记录（原因：{reason}），无需恢复',
+  'rollback.preview.files.unavailableSession': '该回退点的工作区态没有可用的记录（原因：{reason}）；会话仍会回退到该点之前',
+  'rollback.preview.files.noFilesSession': '该回退点没有记录任何文件；会话仍会回退到该点之前',
+  'rollback.preview.files.consistentSession': '工作区与该回退点一致（会话仍会回退到该点之前）',
   'rollback.preview.file.added': '+{n} 行',
   'rollback.preview.file.removed': '−{n} 行',
   'rollback.preview.file.unknown': '行数未统计',
   'rollback.preview.file.unknownHint': '这些文件的行数没有统计出来（文件过大、不是文本或内容副本读不出来）—— 回退仍会照常覆盖它们。',
-  /* 结果一行摘要：nothing-to-restore 是**成功**（HTTP 200、恢复 0 项），不是失败 —— 说「无需恢复」 */
+  /* 结果一行摘要：nothing-to-restore 是**成功**（HTTP 200、恢复 0 项），不是失败 —— 说「无需恢复」。
+     T11：同一句「无需恢复」下**三种情形必须说三句不同的话**，纯按 segments[].status / reasonCode 分派
+     （禁解析 detail、禁自造码）：
+       · noop     = ③ 记录了条目且全部已与快照一致 ⇒「工作区与该回退点一致」；
+       · noRecord = ① 存在 status==='skipped' 的段（该态没有可用捕获）⇒「没有可用的记录（原因：…）」；
+       · noFiles  = ② 存在 reasonCode==='no-recorded-files' 的段（该点没记录任何文件）。
+     {reason} 是**该段 reasonCode 的字典键文本**（未知码回落 unknown，绝不裸渲染机器码）。 */
   'rollback.preview.result.noop': '工作区与该回退点一致，无需恢复',
+  'rollback.preview.result.noRecord': '该回退点没有可用的记录（原因：{reason}），无需恢复',
+  'rollback.preview.result.noFiles': '该回退点没有记录任何文件，无需恢复',
   'rollback.preview.result.code': 'code：{code}',
   'rollback.preview.warningsTitle': '该点的告警',
   'rollback.preview.cursorBytes': '会话日志 {now} → {target} 字节',
@@ -844,6 +866,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.code.restore-failed': 'Rewind failed (see the per-item details)',
   'rollback.code.verify-failed': 'Post-rewind per-file verification failed; everything was rolled back to the pre-rewind state',
   'rollback.code.nothing-to-restore': 'This rollback point has nothing to restore',
+  'rollback.code.no-recorded-files': 'This rollback point recorded no files',
   'rollback.code.guard-failed': 'The pre-rewind rescue point could not be kept, so the rewind was aborted (zero writes)',
   'rollback.code.session-missing': 'Session log not found',
   'rollback.code.session-out-of-root': 'Session log is outside the local session root; refused',
@@ -892,11 +915,17 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.leftoversTitle': 'Files this point does not record (never deleted)',
   'rollback.preview.files.title': 'Files that will be rewound:',
   'rollback.preview.files.empty': 'The workspace already matches this rollback point, nothing to restore',
+  'rollback.preview.files.unavailable': 'The workspace state of this rollback point has no usable record (reason: {reason}), nothing to restore',
+  'rollback.preview.files.unavailableSession': 'The workspace state of this rollback point has no usable record (reason: {reason}); the session will still be rewound to before this point',
+  'rollback.preview.files.noFilesSession': 'This rollback point recorded no files; the session will still be rewound to before this point',
+  'rollback.preview.files.consistentSession': 'The workspace already matches this rollback point (the session will still be rewound to before this point)',
   'rollback.preview.file.added': '+{n} lines',
   'rollback.preview.file.removed': '\u2212{n} lines',
   'rollback.preview.file.unknown': 'line counts not measured',
   'rollback.preview.file.unknownHint': 'Line counts could not be measured for these files (too large, not text, or the content copy is unreadable) \u2014 the rewind will still overwrite them.',
   'rollback.preview.result.noop': 'The workspace already matches this rollback point, nothing to restore',
+  'rollback.preview.result.noRecord': 'This rollback point has no usable record (reason: {reason}), nothing to restore',
+  'rollback.preview.result.noFiles': 'This rollback point recorded no files, nothing to restore',
   'rollback.preview.result.code': 'code: {code}',
   'rollback.preview.warningsTitle': 'Warnings for this point',
   'rollback.preview.cursorBytes': 'Session log {now} → {target} bytes',

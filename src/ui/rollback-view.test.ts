@@ -1,7 +1,7 @@
 /**
  * rollback 展示模型的护栏（纯函数；对应 src/ui/rollback-view.ts）。
  *
- * 钉住六件事：
+ * 钉住七件事：
  *  ① 未知码 / 未知态 / 未知来源**回落 unknown 键**（绝不裸渲染机器码）；
  *  ② 用户自由文本（note）与宿主技术细节（detail / guidance.detail / 路径清单）**渲染前必过 redact**；
  *  ③ 「可回退 / 可删除」的判定（受保护 / 两态不全 / 段可回退性 / 至少一段可用）；
@@ -9,7 +9,9 @@
  *  ⑤ 预览计数文案（overwrite / different / missing / createdAfter；清单按长度算）；
  *  ⑥ **只出现 workspace + session 两态**（源码级：第三态 config 已绝迹）；
  *  ⑦ 按会话分组的时间线（组内保序 / 组间按最新时间倒序 / 未知会话排最后）+ 时间线行事实
- *     （文件数 / 是否有会话游标）+ 预览的字节游标（t3 面板要用的三样）。
+ *     （文件数 / 是否有会话游标）+ 预览的字节游标（t3 面板要用的三样）；
+ *  ⑧ E1 逐文件行级统计的形状（`workspace.files`）：null 不当 0 外，**与引擎侧类型逐字对齐**
+ *     （源码级钉住 path/status/added/removed/truncated 五字段与四种 status 枚举名）。
  *
  * 字段口径与 T1 宿主侧 src/core/rollback-point.ts 逐字段对齐（2026-10-10 双人确认）。
  */
@@ -52,6 +54,7 @@ import {
   rollbackOutcome,
   rollbackPointRows,
   rollbackPreviewGuidance,
+  rollbackPreviewNote,
   rollbackPreviewRows,
   rollbackPreviewVerdict,
   rollbackPreviewWarnings,
@@ -61,6 +64,7 @@ import {
   rollbackStateKey,
   type RollbackListResult,
   type RollbackPointSummary,
+  type RollbackPreviewFile,
   type RollbackPreviewResult,
   type RollbackRewindResult,
   type RollbackSegmentSummary,
@@ -143,6 +147,158 @@ test('未知 code 回落 unknown（白名单外的机器码绝不裸渲染）', 
   assert.equal(warnUnknown?.key, ROLLBACK_WARN_UNKNOWN_KEY, '未知告警回落 rollback.warn.unknown（不是指引 unknown）')
   assert.deepEqual(rollbackGuidanceRows(undefined), [])
 })
+
+/* ------------------------------------------------------------ T15：预览态四态分派（一处实现） */
+
+const previewNoteKeys = {
+  unavailable: 'rollback.preview.files.unavailable',
+  unavailableSession: 'rollback.preview.files.unavailableSession',
+  noFiles: 'rollback.preview.result.noFiles',
+  noFilesSession: 'rollback.preview.files.noFilesSession',
+  consistentSession: 'rollback.preview.files.consistentSession',
+  consistentNoop: 'rollback.preview.files.empty',
+}
+
+test('T15 预览态四态分派：(a) 工作区不可用 / (b) 没记录任何文件 / (c) 一致但会话仍回退 / (d) 一致且无事可做', () => {
+  const a = rollbackPreviewNote({ workspace: { available: false, reasonCode: 'chunk-not-found' }, session: { restorable: false } })
+  assert.equal(a.kind, 'workspace-unavailable')
+  assert.equal(a.key, previewNoteKeys.unavailable)
+  assert.equal(a.reasonKey, 'rollback.code.chunk-not-found')
+  assert.equal(a.changesSomething, false, '工作区不可用 + 会话不可回退 ⇒ 真的无事可做')
+  const b = rollbackPreviewNote({ workspace: { available: true, overwrite: 0, different: 0 }, session: { restorable: false } })
+  assert.equal(b.kind, 'no-recorded-files')
+  assert.equal(b.key, previewNoteKeys.noFiles, '与结果态共用同一句「没有记录任何文件」')
+  assert.equal(b.reasonKey, null)
+  const c = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0 }, session: { restorable: true } })
+  assert.equal(c.kind, 'workspace-consistent-session')
+  assert.equal(c.key, previewNoteKeys.consistentSession)
+  assert.equal(c.changesSomething, true, '会话会 fork ⇒ 点下去真会改动什么')
+  const d = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0 }, session: { restorable: false } })
+  assert.equal(d.kind, 'workspace-consistent-noop')
+  assert.equal(d.key, previewNoteKeys.consistentNoop)
+  assert.equal(d.changesSomething, false)
+})
+
+test('T15 优先级：① 不可用 > ② 没记录文件 > ③a 一致但会话回退 > ③b 无事可做', () => {
+  const oneOverTwo = rollbackPreviewNote({ workspace: { available: false, overwrite: 0, reasonCode: 'no-chunks' }, session: { restorable: true } })
+  assert.equal(oneOverTwo.kind, 'workspace-unavailable')
+  assert.equal(oneOverTwo.key, previewNoteKeys.unavailableSession, '① 且会话会 fork ⇒ 用不含「无需恢复」的变体')
+  assert.equal(oneOverTwo.changesSomething, true)
+  const twoOverThree = rollbackPreviewNote({ workspace: { available: true, overwrite: 0, different: 0 }, session: { restorable: true } })
+  assert.equal(twoOverThree.kind, 'no-recorded-files')
+  assert.equal(twoOverThree.key, previewNoteKeys.noFilesSession)
+  assert.notEqual(twoOverThree.key, previewNoteKeys.consistentSession)
+  const threeA = rollbackPreviewNote({ workspace: { available: true, overwrite: 3, different: 0 }, session: { restorable: true } })
+  assert.equal(threeA.kind, 'workspace-consistent-session')
+})
+
+test('T15 工作区真会写文件 ⇒ 不上屏任何「一致」句（key=null，由文件列表说话）', () => {
+  const changes = rollbackPreviewNote({ workspace: { available: true, overwrite: 9, different: 3 }, session: { restorable: false } })
+  assert.equal(changes.kind, 'workspace-changes')
+  assert.equal(changes.key, null, '有变更时不得上一句「一致/无需恢复」')
+  assert.equal(changes.changesSomething, true)
+  const missing = rollbackPreviewNote({ workspace: { available: true, overwrite: 9, different: 0, missing: 2 }, session: { restorable: false } })
+  assert.equal(missing.kind, 'workspace-changes', 'missing>0 同样会写文件（重新创建）')
+})
+
+test('T15 假尾句禁令（键层面）：changesSomething=true 时 key 必为 null 或**非**「无需恢复」键', () => {
+  const noopKeys = new Set([previewNoteKeys.consistentNoop, previewNoteKeys.noFiles, previewNoteKeys.unavailable])
+  const shapes = [
+    { workspace: { available: false, reasonCode: 'chunk-not-found' }, session: { restorable: true } },
+    { workspace: { available: false }, session: { restorable: false } },
+    { workspace: { available: true, overwrite: 0 }, session: { restorable: true } },
+    { workspace: { available: true, overwrite: 0 }, session: { restorable: false } },
+    { workspace: { available: true, overwrite: 5, different: 0 }, session: { restorable: true } },
+    { workspace: { available: true, overwrite: 5, different: 0 }, session: { restorable: false } },
+    { workspace: { available: true, overwrite: 5, different: 2 }, session: { restorable: true } },
+    { workspace: null, session: { restorable: true } },
+  ]
+  for (const shape of shapes) {
+    const note = rollbackPreviewNote(shape as never)
+    if (!note.changesSomething) continue
+    assert.ok(note.key === null || !noopKeys.has(note.key), '会改动什么时不得用「无需恢复」类键：' + JSON.stringify(shape) + ' → ' + String(note.key))
+  }
+  const blocked = rollbackPreviewNote({ workspace: { available: true, overwrite: 3, different: 0 }, session: { restorable: true }, canRestore: false })
+  assert.equal(blocked.sessionForks, false)
+  assert.equal(blocked.key, previewNoteKeys.consistentNoop)
+})
+
+test('T15 ① 的原因键来源：workspace.reasonCode 优先 → 段摘要回落 → unknown（绝不编原因）', () => {
+  assert.equal(rollbackPreviewNote({ workspace: { available: false, reasonCode: 'no-chunks' } }).reasonKey, 'rollback.code.no-chunks')
+  assert.equal(rollbackPreviewNote({ workspace: { available: false }, segments: [{ state: 'workspace', reasonCode: 'chunk-not-found' }] }).reasonKey, 'rollback.code.chunk-not-found')
+  assert.equal(rollbackPreviewNote({ workspace: { available: false }, segments: [{ state: 'session', reasonCode: 'no-boundary' }] }).reasonKey, ROLLBACK_CODE_UNKNOWN_KEY, '只认 workspace 段')
+  assert.equal(rollbackPreviewNote({ workspace: { available: false } }).reasonKey, ROLLBACK_CODE_UNKNOWN_KEY)
+  assert.equal(rollbackPreviewNote({ workspace: { available: false, reasonCode: 'brand-new-code' } }).reasonKey, ROLLBACK_CODE_UNKNOWN_KEY, '白名单外回落 unknown（不裸渲染机器码）')
+  assert.equal(rollbackPreviewNote({ workspace: null }).kind, 'workspace-unavailable', '没有工作区信息 ⇒ 不能说「一致」')
+})
+
+/* ------------------------------------------------------------ T11 防漂移：镜像 != 引擎码表即红 */
+
+/**
+ * 从引擎源码里读出 `RollbackCode` union 的全部成员（行扫描：成员行形如 `  | 'code'`）。
+ * 遇到空行即认为 union 结束（后面是下一个声明）；union 内部允许 JSDoc/行注释（本次 t10 就插了一段）。
+ */
+function engineCodeUnion(source: string): string[] {
+  const start = source.indexOf('export type RollbackCode =')
+  assert.notEqual(start, -1, '引擎里找不到 RollbackCode union（改名即红 —— 镜像对照会失去单一来源）')
+  const codes: string[] = []
+  for (const line of source.slice(start).split('\n').slice(1)) {
+    const trimmed = line.trim()
+    if (trimmed === '') break
+    if (trimmed.startsWith('|')) {
+      const found = /'([a-z0-9-]+)'/.exec(trimmed)
+      if (found !== null) codes.push(found[1] as string)
+      continue
+    }
+    if (trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('//')) continue
+    break
+  }
+  return codes
+}
+
+/** 从本文件的 `ROLLBACK_CODES` 镜像块里读出全部条目（先去掉注释，避免注释里的引号被当成码）。 */
+function mirrorCodeList(source: string): string[] {
+  const block = /export const ROLLBACK_CODES: readonly string\[\] = \[([\s\S]*?)\n\]/.exec(source)
+  assert.notEqual(block, null, '找不到 ROLLBACK_CODES 镜像块（改名即红）')
+  const body = ((block as RegExpExecArray)[1] ?? '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')
+  return [...body.matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1] as string)
+}
+
+test('T11 防漂移：客户端码表镜像与引擎 RollbackCode union **双向集合相等**', () => {
+  const engine = fs.readFileSync(fileURLToPath(new URL('../../src/core/rollback-point.ts', import.meta.url)), 'utf8')
+  const ui = fs.readFileSync(SOURCE_PATH, 'utf8')
+  const engineCodes = engineCodeUnion(engine)
+  const mirror = mirrorCodeList(ui)
+  // 解析器自检：两侧都必须真的解析出内容，否则「相等」是空集对空集的假绿
+  assert.ok(engineCodes.length >= 30, '引擎码表解析结果太少（解析器失效？）：' + engineCodes.length)
+  assert.ok(mirror.length >= 30, '镜像解析结果太少（解析器失效？）：' + mirror.length)
+  assert.ok(engineCodes.includes('ok') && mirror.includes('ok'), '解析器自检：至少要有 ok')
+  // 双向断言：引擎新增码忘了补镜像（本次 t10 no-recorded-files 静默漂移的根因）/ 镜像多写了引擎没有的码，都立刻红
+  assert.deepEqual(mirror.filter((code) => !engineCodes.includes(code)), [], '客户端镜像里有引擎码表没有的码')
+  assert.deepEqual(engineCodes.filter((code) => !mirror.includes(code)), [], '引擎码表里有码没进客户端镜像（补码时请同步 src/ui/rollback-view.ts）')
+  // 两侧都不得有重复项（重复项会让集合相等断言失去意义）
+  assert.equal(new Set(engineCodes).size, engineCodes.length, '引擎码表有重复成员')
+  assert.equal(new Set(mirror).size, mirror.length, '客户端镜像有重复成员')
+  // t11 的分派硬依赖这个字面量 ⇒ 逐字钉住（改名即红，两处都要改）
+  assert.ok(engineCodes.includes('no-recorded-files'), '引擎码表必须有 no-recorded-files（t10）')
+  assert.ok(mirror.includes('no-recorded-files'), '客户端镜像必须有 no-recorded-files（t11）')
+  assert.equal(rollbackCodeKey('no-recorded-files'), 'rollback.code.no-recorded-files', '新码必须映射到自己的字典键（否则界面显示 unknown）')
+  assert.notEqual(rollbackCodeKey('no-recorded-files'), ROLLBACK_CODE_UNKNOWN_KEY)
+})
+
+/** 反自检：注入式漂移必须被抓到（否则守卫可能因解析失效而永远绿灯 —— 本仓 scale-06 同款纪律）。 */
+test('T11 防漂移反自检：注入「引擎有、镜像没有」的码必须被抓到；注释里的假码不得被当成真码', () => {
+  const fakeEngine = "export type RollbackCode =\n  | 'ok'\n  | 'brand-new-code'\n\n"
+  const fakeMirror = "export const ROLLBACK_CODES: readonly string[] = [\n  'ok',\n  // 注释里的 'fake-code' 不算码\n  /* 'another-fake' */\n]"
+  const engineCodes = engineCodeUnion(fakeEngine)
+  const mirrorCodes = mirrorCodeList(fakeMirror)
+  assert.deepEqual(engineCodes, ['ok', 'brand-new-code'], 'union 解析必须逐字取到成员')
+  assert.deepEqual(mirrorCodes, ['ok'], '镜像解析必须去掉注释（注释里的引号不得被当成码）')
+  assert.deepEqual(engineCodes.filter((code) => !mirrorCodes.includes(code)), ['brand-new-code'], '注入的漂移必须被这条断言抓到')
+  // 反向：镜像多写的码同样被抓到
+  assert.deepEqual(['ok', 'stale-code'].filter((code) => !mirrorCodes.includes(code)), ['stale-code'])
+})
+
 
 test('note / detail / guidance.detail / 路径清单 渲染前必过 redact', () => {
   const rows = rollbackPointRows(list([point({ note: 'before refactor password=Hunter2Secret' })]))
@@ -482,3 +638,62 @@ test('留存口径（S6）：每会话 20 / 全局 50 由本模块单点声明',
   assert.equal(ROLLBACK_MAX_POINTS_PER_SESSION, 20)
   assert.equal(ROLLBACK_MAX_POINTS_TOTAL, 50)
 })
+/* ------------------------------------------------------------ ⑧ E1：逐文件行级统计（workspace.files） */
+
+test('E1 预览文件行级统计：workspace.files 原样映射，added/removed 为 null 时**不谎报 0**', () => {
+  // 三条真实形状：有可信行数的覆盖 / 本次没统计出来的覆盖 / 重新创建
+  const overwrite: RollbackPreviewFile = { path: 'C:/ws/a.ts', status: 'overwrite', added: 12, removed: 3, truncated: false }
+  const unmeasured: RollbackPreviewFile = { path: 'C:/ws/big.bin', status: 'overwrite', added: null, removed: null, truncated: true }
+  const created: RollbackPreviewFile = { path: 'C:/ws/new.ts', status: 'create', added: 7, removed: 0, truncated: false }
+  const preview: RollbackPreviewResult = {
+    ok: true, id: 'rp-files', storage: { available: true }, canRestore: true,
+    workspace: { overwrite: 3, different: 2, missing: 1, createdAfter: 0, files: [overwrite, unmeasured, created] },
+    session: { restorable: true },
+  }
+  const files = preview.workspace?.files ?? []
+  assert.equal(files.length, 3)
+  assert.deepEqual(files[0], overwrite)
+  // 「不知道」不是 0：两侧 null 原样保留 + truncated=true（界面据此说「行数未统计」）
+  assert.equal(files[1]?.added, null)
+  assert.equal(files[1]?.removed, null)
+  assert.equal(files[1]?.truncated, true)
+  assert.notEqual(files[1]?.added, 0, '未统计绝不能被当成 0 行新增')
+  // create 的语义：新增 = 快照行数、删除 = 0（0 在这里是**可信**的具体数字，与 null 是两回事）
+  assert.deepEqual(files[2], { path: 'C:/ws/new.ts', status: 'create', added: 7, removed: 0, truncated: false })
+  // delete 只在取值集合里（引擎当前永不产出 —— 回退只覆盖、绝不删除文件）
+  const statuses: RollbackPreviewFile['status'][] = ['overwrite', 'create', 'delete']
+  assert.deepEqual(statuses, ['overwrite', 'create', 'delete'])
+  // 空数组 = 工作区与该回退点一致（E1：只列会被改动的文件）
+  const consistent: RollbackPreviewResult = { ok: true, id: 'rp-same', storage: { available: true }, workspace: { files: [] }, session: {} }
+  assert.deepEqual(consistent.workspace?.files, [])
+  // 字段缺省（老响应 / 老宿主）必须**不抛、不凭空造值**，且既有判定行为一字不变
+  const legacy: RollbackPreviewResult = { ok: true, id: 'rp-legacy', storage: { available: true }, workspace: { overwrite: 2 }, session: {} }
+  assert.equal(legacy.workspace?.files, undefined, '缺字段就是「没有这条信息」，不得谎报成空数组')
+  assert.equal(rollbackPreviewVerdict(legacy).canRestore, false, '判定只看 available/restorable/code，与 files 无关')
+  assert.equal(rollbackPreviewRows(legacy)[0]?.counts.find((c) => c.key === 'rollback.preview.overwrite')?.n, 2, '既有计数不受影响')
+})
+
+test('E1 类型与引擎逐字同形（源码级）：五字段 + 三种 status + files 必须可选', () => {
+  const ui = fs.readFileSync(SOURCE_PATH, 'utf8')
+  const engine = fs.readFileSync(fileURLToPath(new URL('../../src/core/rollback-point.ts', import.meta.url)), 'utf8')
+  // ① UI 侧类型确实带上了这五个字段（缺一个即红 —— 聊天侧就又要退回结构化读取）
+  const uiFile = /export interface RollbackPreviewFile \{([\s\S]*?)\n\}/.exec(ui)?.[1] ?? ''
+  for (const field of ['path', 'status', 'added', 'removed', 'truncated']) {
+    assert.ok(new RegExp('\\b' + field + '\\s*[:?]').test(uiFile), 'UI 侧 RollbackPreviewFile 缺字段：' + field)
+  }
+  // ② 引擎侧同名类型形状一致（两侧永远同形；引擎改字段即红，提示同步）
+  const engineFile = /export interface RollbackPreviewFile \{([\s\S]*?)\n\}/.exec(engine)?.[1] ?? ''
+  for (const field of ['path', 'status', 'added', 'removed', 'truncated']) {
+    assert.ok(new RegExp('\\b' + field + '\\s*[:?]').test(engineFile), '引擎侧 RollbackPreviewFile 缺字段：' + field)
+  }
+  // ③ status 三种取值两侧同名（delete 保留在取值集合里、当前引擎永不产出）
+  assert.match(ui, /RollbackPreviewFileStatus = 'overwrite' \| 'create' \| 'delete'/, 'UI 侧 status 枚举形状必须逐字')
+  assert.match(engine, /RollbackPreviewFileStatus = 'overwrite' \| 'create' \| 'delete'/, '引擎侧 status 枚举形状必须逐字')
+  // ④ workspace.files 必须是**可选**字段（向后兼容老响应）
+  assert.match(ui, /files\?: RollbackPreviewFile\[\]/, 'files 必须是可选字段，缺省回落「没有这条信息」')
+  // ⑤ 聊天侧不再自带一份重复形状（收敛成同一份类型）
+  const chat = fs.readFileSync(fileURLToPath(new URL('../client/chat/rollback-entry-view.ts', import.meta.url)), 'utf8')
+  assert.match(chat, /Omit<RollbackPreviewFile, 'status'>/, '聊天侧的预览文件行类型必须复用 UI 的唯一形状（只补运行时兜底态）')
+  assert.match(chat, /type RollbackPreviewFile\b/, '复用必须来自 src/ui 的类型导入（不是又抄一份字段表）')
+})
+

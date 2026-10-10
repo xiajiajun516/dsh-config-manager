@@ -42,6 +42,7 @@ import css from '../config-manager.module.css'
 import {
   canSubmitRewind,
   chatFileChangeAvailable,
+  chatRewindFailed,
   chatRewindFailure,
   chatRewindSummary,
   codeKeyOfError,
@@ -53,6 +54,7 @@ import {
   requestRewind,
   rollbackChildSession,
   rollbackOutcome,
+  rollbackPreviewNote,
   rollbackPreviewVerdict,
   rollbackRewindCounts,
   type ChildOpenState,
@@ -194,9 +196,33 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   }
 
   const verdict = rollbackPreviewVerdict(preview)
+  /**
+   * 预览态那句「工作区怎样怎样」= **一处实现**（src/ui/rollback-view.ts 的 rollbackPreviewNote）：
+   * 判据只来自 preview 字段 + 宿主 canRestore，四种情形说四句不同的话（③a 不含「无需恢复」——
+   * 点下去真会 fork 子会话，说「无需恢复」是假尾句）。
+   */
+  const note = rollbackPreviewNote({
+    workspace: preview?.workspace,
+    session: preview?.session,
+    segments: preview?.point?.segments,
+    canRestore: verdict.canRestore,
+  })
+  const noteText = note.key === null
+    ? null
+    : note.reasonKey === null
+      ? rt(rk(note.key))
+      : rt(rk(note.key), { reason: rt(rk(note.reasonKey)) })
   const files = readRollbackPreviewFiles(preview?.workspace)
   const hasCounts = chatFileChangeAvailable(files)
   const summary = chatRewindSummary(result)
+  /** F2：只有**真失败**才渲染下面的「失败原因」盒（成功 / 无需恢复的结果不得弹失败信息）。 */
+  const failed = chatRewindFailed(result)
+  /** 摘要文本：① 需要把「该段 reasonCode 的字典键文本」插进 {reason}（未知码回落 unknown）。 */
+  const summaryText = summary.kind === 'plain'
+    ? null
+    : summary.kind === 'no-record'
+      ? rt(rk(summary.key), { reason: rt(rk(summary.reasonKey)) })
+      : rt(rk(summary.key))
   const failure = result === null ? { code: null, detail: null, keys: [] } : chatRewindFailure(result)
   const counts = rollbackRewindCounts(result)
   const outcome = result === null ? null : rollbackOutcome(result.outcome)
@@ -238,7 +264,9 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
               <>
                 {/* ① 被回退的文件（只列会被改动的；空列表 ⇒ 一行「无需恢复」） */}
                 {files.length === 0 ? (
-                  <div className={css.hint}>{rt('rollback.preview.files.empty')}</div>
+                  // 预览态四态句：由 rollbackPreviewNote 决定（key=null 时本情形没有该类句子可说，
+                  // 宁可不说话，也不上一句不实的「一致」）
+                  noteText !== null ? <div className={css.hint}>{noteText}</div> : null
                 ) : (
                   <>
                     <div className={css.hint}>{rt('rollback.preview.files.title')}</div>
@@ -285,20 +313,24 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
 
             {state === 'ready' && result !== null && (
               <>
-                {/* ④ 结果：**一行摘要**（nothing-to-restore ⇒ 「工作区与该回退点一致，无需恢复」） */}
+                {/* ④ 结果：**一行摘要** —— 「成功、0 变更」下三种情形说三句不同的话（T11）：
+                       · 与该点一致 / 该点没有记录任何文件 / 该态没有可用记录（原因：{该段 code 键}）。
+                       原因键走 rollbackCodeKey（未知码回落 unknown），**不裸渲染机器码**；
+                       都不是失败 ⇒ 成功徽章（outcome=failed/partial 时不走这套，由下面 ⑤ 如实呈现）。 */}
                 <div className={css.statRow}>
-                  {summary.key !== null
-                    ? <Badge kind="ok">{rt(rk(summary.key))}</Badge>
+                  {summaryText !== null
+                    ? <Badge kind="ok">{summaryText}</Badge>
                     : outcome !== null && <Badge kind={outcome.badgeKind}>{rt(rk(outcome.key))}</Badge>}
-                  {summary.key === null && (
+                  {summaryText === null && (
                     <span className={css.hint}>
                       {rt('rollback.rewind.result.counts', { restored: counts.restored, failed: counts.failed, leftovers: counts.leftovers })}
                     </span>
                   )}
                 </div>
 
-                {/* ⑤ 失败原因：可读文案 + 真实 code + detail（不裸渲染机器码，但也不藏） */}
-                {failure.keys.length > 0 && (
+                {/* ⑤ 失败原因：**只有真失败才渲染**（F2）—— 成功 / 无需恢复的结果一个字都不弹。
+                      真失败时给：可读文案 + 真实 code + detail（不裸渲染机器码，但也不藏）。 */}
+                {failed && (failure.keys.length > 0 || failure.detail !== null) && (
                   <div className={css.rollbackBox}>
                     {failure.keys.map((key) => (
                       <div key={key} className={css.warnText}>{rt(rk(key))}</div>

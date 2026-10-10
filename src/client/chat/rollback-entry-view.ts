@@ -30,12 +30,15 @@ import {
   rollbackCodeKey,
   rollbackModeSegments,
   rollbackOutcome,
+  rollbackPreviewNote,
   rollbackPreviewVerdict,
   rollbackRewindCounts,
   rollbackStateKey,
   type RollbackMode,
   type RollbackPointPort,
   type RollbackPointSummary,
+  type RollbackPreviewFile,
+  type RollbackPreviewFileStatus,
   type RollbackPreviewResult,
   type RollbackRewindOptions,
   type RollbackRewindResult,
@@ -96,41 +99,39 @@ export function segmentsForMode(mode: string | null | undefined): RollbackState[
 /**
  * 一张预览里「会被改动」的文件（E1 引擎 `preview.workspace.files` 的**逐条对齐**读法）。
  *
- * 形状（E1 冻结）：`{ path, status: 'overwrite'|'create'|'delete', added, removed, truncated }`
- * ——**只列会被改动的文件**（内容已一致的一个都不列 ⇒ 工作区与该回退点一致时是**空数组**）。
- * 三条不可越过的事实：
- *  · `added` / `removed` 可能是 **null**：单文件超上限 / 非文本 / 对象仓读不出 ⇒ 界面说
- *    「行数未统计」，**绝不写成 0**（0 是一个可被证伪的具体断言）；
+ * 形状 = `src/ui/rollback-view.ts` 的 `RollbackPreviewFile`（**唯一一份形状**，本类型只是给它补上
+ * 运行时兜底态：读不出的 status 归 `'unknown'`，而不是编一个引擎取值）。三条不可越过的事实：
+ *  · **只列会被改动的文件**（内容已一致的一个都不列 ⇒ 工作区与该回退点一致时是**空数组**）；
+ *  · `added` / `removed` 可能是 **null**：单文件超上限 / 累计超限 / 步骤超限 / 非文本 / 对象仓读不出
+ *    ⇒ 界面说「行数未统计」，**绝不写成 0**（0 是一个可被证伪的具体断言）；
  *  · `status` 目前只会是 `overwrite` / `create`：回退只覆盖、**绝不删除**文件（引擎 R-28）；
- *    `delete` 保留在取值集合里只为形状完整 —— 我们不解释它、也不为它编文案；
- *  · 未知 status / 缺字段一律按「行数未知」处理，但**这一行仍然要上屏**（路径是已知事实）。
+ *    `delete` 保留在取值集合里只为形状完整 —— 我们不解释它、也不为它编文案。
  */
-export interface ChatPreviewFileRow {
-  /** 绝对路径（界面原样显示；`whitespace: pre-wrap` + `break-all` 承接长路径）。 */
-  path: string
-  /** 'overwrite' | 'create' | 引擎将来可能新增的取值（原样透传，不猜语义）。 */
-  status: string
-  /** 回退会新增的行数；null = 本次没有可信数字（见 truncated）。 */
-  added: number | null
-  /** 回退会删除的行数；null = 同上。 */
-  removed: number | null
-  /** true = 这一条本次没有可信行数（界面显示「行数未统计」，不是 0）。 */
-  truncated: boolean
-}
+export type ChatPreviewFileRow = Omit<RollbackPreviewFile, 'status'> & { status: RollbackPreviewFileStatus | 'unknown' }
 
-/** `preview.workspace.files` 的取值域（类型未收录时的静态兜底）。 */
-const PREVIEW_FILE_STATUSES: readonly string[] = ['overwrite', 'create', 'delete']
+/**
+ * `preview.workspace.files` 的取值域 —— 与 ui 层 `RollbackPreviewFileStatus` 用映射类型**绑定**：
+ * 枚举一变（加/删取值）本常量即编译期报错，不存在「两处各写一份、悄悄漂移」。
+ */
+const PREVIEW_FILE_STATUSES: readonly RollbackPreviewFileStatus[] =
+  (['overwrite', 'create', 'delete'] satisfies readonly RollbackPreviewFileStatus[])
 
 function previewCountOf(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+/** 引擎取值白名单判定（枚举名 —— 类型层已由映射类型绑定，这里只做运行期判定）。 */
+function isPreviewFileStatus(value: unknown): value is RollbackPreviewFileStatus {
+  return typeof value === 'string' && (PREVIEW_FILE_STATUSES as readonly string[]).includes(value)
+}
+
 /**
  * 读 `preview.workspace.files` —— **宽度接收 + 逐字段判定**（与 chat-entry-view 的节点读法同纪律）。
  *
- * 为什么不用静态类型：`src/ui/rollback-view.ts` 的 `RollbackWorkspacePreview` 目前没有收这个
- * 字段（E1 在引擎侧先行落地），这里按结构读、逐字段判，缺什么降级什么；等类型补上之后
- * 本函数仍是唯一读点，把手改回去只改这一处。
+ * 形状已在类型层补齐（`RollbackWorkspacePreview.files`），但**运行期仍必须逐字段判**：
+ * 这里吃的是宿主 JSON 响应（老宿主没有该字段，怪形状也可能出现），静态类型管不了线上的字节。
+ * 判据：路径读不出就跳过这一条（不编「未知文件」占位）；数字非有限数一律 null（**不谎报 0**）；
+ * status 只认引擎枚举，其余归 `'unknown'`（原样透传机器码没有意义）。
  */
 export function readRollbackPreviewFiles(workspace: unknown): ChatPreviewFileRow[] {
   const files = (workspace as { files?: unknown } | null | undefined)?.files
@@ -142,12 +143,11 @@ export function readRollbackPreviewFiles(workspace: unknown): ChatPreviewFileRow
     const path = record['path']
     // 路径读不出 ⇒ 这一条对用户没有任何信息量，跳过（不编一条「未知文件」占位）
     if (typeof path !== 'string' || path === '') continue
-    const status = record['status']
     const added = previewCountOf(record['added'])
     const removed = previewCountOf(record['removed'])
     rows.push({
       path,
-      status: typeof status === 'string' && status !== '' ? status : 'unknown',
+      status: isPreviewFileStatus(record['status']) ? record['status'] : 'unknown',
       added,
       removed,
       // 引擎给了 truncated=true 一律照收；两个数字缺一个也一样（界面口径与之一致：null ⇒ 未统计）
@@ -167,22 +167,83 @@ export function chatFileChangeAvailable(files: readonly ChatPreviewFileRow[]): b
  * 界面**不**按它分派文案 —— 用户要的是「有哪些文件、增删多少行」，不是变更类型分类。
  */
 export function previewFileStatusKnown(status: string): boolean {
-  return PREVIEW_FILE_STATUSES.includes(status)
+  return isPreviewFileStatus(status)
 }
 
 /* ------------------------------------------------------------ 回退结果一句话 + 失败原因 */
 
+/** T10 新增的内部码：该态**没有记录任何文件**（工作区段 files=0）；只出现在 segments[].reasonCode。 */
+export const ROLLBACK_NO_RECORDED_FILES_CODE = 'no-recorded-files'
+
 /**
  * 结果摘要 —— **一行**说清这次回退到底发生了什么（用户 2026-10-10 第三条要求：结果不再逐段铺开）。
  *
- * `nothing-to-restore` 的**唯一**落点：工作区与该回退点一致（引擎 E1 语义：outcome='restored'、
- * restored=0、code='nothing-to-restore'，HTTP **200**）。它不是失败：说「无需恢复」，
- * 绝不当成错误弹给用户。
+ * `nothing-to-restore` 是**成功**（引擎 E1/T10 语义：outcome='restored'、restored=0，HTTP **200**），
+ * 不是失败。但「成功、0 变更」底下有**三件不同的事**（T11 起分开说；旧行为把三种都渲染成
+ * 「工作区与该回退点一致」，那是把「没有记录」说成「一致」，违背本仓「两侧诚实」）：
+ *  · `noop`      = ③ 记录了条目、且全部已与快照一致（该段 reasonCode='nothing-to-restore'）；
+ *  · `no-record` = ① **存在 status==='skipped' 的段**（该态没有可用捕获 / 没有稳定边界 / fork 不可用…）
+ *                   ⇒ 说「没有可用的记录（原因：{该段 reasonCode 键}）」；
+ *  · `no-files`  = ② **存在 reasonCode==='no-recorded-files' 的段**（该点压根没记录任何文件）。
+ *
+ * 分派依据**只有** `segments[].status` / `segments[].reasonCode`：
+ *  · **禁止解析 `detail`** —— 它的契约是「逐条事实（技术细节，非用户可见文案）」，拿它当分派依据
+ *    等于把内部字符串当接口（T10 之前 files=0 与 unchanged 只能靠 detail 区分，所以才新增了码）；
+ *  · **禁止自造客户端原因键** —— 原因键一律走 `rollbackCodeKey`（白名单外回落 `rollback.code.unknown`）。
+ * 顺序即优先级（与验收逐字一致）：① skipped → ② no-recorded-files → ③ 其余。
+ * 只有**顶层 code === 'nothing-to-restore'** 时才走这套分派：outcome=partial 等情形说明真的动了东西，
+ * 那时说「无需恢复」才是撒谎（回落 `plain`，由 outcome 徽章 + 计数如实呈现）。
  */
-export function chatRewindSummary(result: RollbackRewindResult | null): { kind: 'noop' | 'plain'; key: string | null } {
+export type ChatRewindSummary =
+  | { kind: 'plain'; key: null }
+  | { kind: 'noop'; key: string }
+  | { kind: 'no-record'; key: string; reasonKey: string }
+  | { kind: 'no-files'; key: string }
+
+export function chatRewindSummary(result: RollbackRewindResult | null): ChatRewindSummary {
   if (result === null) return { kind: 'plain', key: null }
-  if (result.code === 'nothing-to-restore') return { kind: 'noop', key: 'rollback.preview.result.noop' }
-  return { kind: 'plain', key: null }
+  if (result.code !== 'nothing-to-restore') return { kind: 'plain', key: null }
+  const segments = Array.isArray(result.segments) ? result.segments : []
+  // ① 段被跳过（该态没有可用捕获）—— 取**第一个**被跳过的段作为原因来源（顺序确定，不猜归属）
+  const skipped = segments.find((segment) => segment.status === 'skipped')
+  if (skipped !== undefined) {
+    const code = typeof skipped.reasonCode === 'string' && skipped.reasonCode !== '' ? skipped.reasonCode : null
+    return {
+      kind: 'no-record',
+      key: 'rollback.preview.result.noRecord',
+      reasonKey: code === null ? ROLLBACK_CODE_UNKNOWN_KEY : rollbackCodeKey(code),
+    }
+  }
+  // ② 该点没有记录任何文件（T10 的独立码）
+  if (segments.some((segment) => segment.reasonCode === ROLLBACK_NO_RECORDED_FILES_CODE)) {
+    return { kind: 'no-files', key: 'rollback.preview.result.noFiles' }
+  }
+  // ③ 其余：记录了条目且全部已一致
+  return { kind: 'noop', key: 'rollback.preview.result.noop' }
+}
+
+/**
+ * 这次回退**真的失败了吗**（T13/F2：只有真失败才渲染「失败原因」盒）。
+ *
+ * 判据（与验收逐字一致，且**只看结果里的 outcome/status/code**，不解析 detail）：
+ *  · `outcome === 'failed' | 'denied'` → 真失败；
+ *  · 任一段 `status === 'failed'` → 真失败（partial 里也可能有段级失败）；
+ *  · 顶层 code 以 `-failed` 结尾（`restore-failed` / `guard-failed` / `ledger-write-failed`）→ 真失败。
+ *
+ * **明确不算失败的**（它们不是「回退失败」，各有自己的诚实说法）：
+ *  · `restored` + `nothing-to-restore`（成功、0 变更）—— 三种情形由 `chatRewindSummary` 说三句不同的话；
+ *  · 被**跳过**的段（`status==='skipped'`）及其 reasonCode（含 `capture-failed`）—— 那是「该态没有可用
+ *    捕获」（**为什么**跳过），不是「这次回退失败」；把它当失败就会让成功结果也弹失败盒（正是 F2 的缺陷）。
+ * 未知 outcome 且没有任何失败证据时**不渲染**（宁可不猜：outcome 徽章已如实显示 unknown）。
+ */
+export function chatRewindFailed(result: RollbackRewindResult | null): boolean {
+  if (result === null) return false
+  const outcome = typeof result.outcome === 'string' ? result.outcome : ''
+  if (outcome === 'failed' || outcome === 'denied') return true
+  const segments = Array.isArray(result.segments) ? result.segments : []
+  if (segments.some((segment) => segment.status === 'failed')) return true
+  const code = typeof result.code === 'string' ? result.code : ''
+  return code.endsWith('-failed')
 }
 
 /**
@@ -191,6 +252,7 @@ export function chatRewindSummary(result: RollbackRewindResult | null): { kind: 
  * 三件事各司其职：`key` 给人看（用户能读懂的句子）、`code` 给排障（机器码**同时**显示，
  * 但不当成主文案）、`detail` 是宿主的逐条技术细节（渲染前过 redact）。
  * 段级 code 与结果级 code **都收**（真实失败可能只说在某一级）——去重后逐条渲染，绝不静默吞掉。
+ * **渲染门在调用点**：只有 `chatRewindFailed(result) === true` 时才把这里的结果上屏（F2）。
  */
 export function chatRewindFailure(result: RollbackRewindResult | null): { code: string | null; detail: string | null; keys: string[] } {
   if (result === null) return { code: null, detail: null, keys: [] }
@@ -332,6 +394,7 @@ export async function requestRewind(
 export {
   rollbackChildSession,
   rollbackOutcome,
+  rollbackPreviewNote,
   rollbackPreviewVerdict,
   rollbackRewindCounts,
   rollbackStateKey,

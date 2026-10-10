@@ -44,11 +44,10 @@ import {
   CHAT_ENTRY_SLOT,
   navigationSourcesOf,
   openChildSession,
-  registerChatEntry,
   type ChildOpenState,
 } from './chat/rollback-entry-view.ts'
 import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
-import { mountChatNodeEntry } from './chat/chat-node-registration.ts'
+import { mountChatEntries } from './chat/chat-entry-mount.ts'
 // 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并）：
 // 注册 `conversation.chat.node`（user cell）与 `conversation.chat.turnTail` 前都必须加载。
 import type {} from './chat/chat-slots.ts'
@@ -171,44 +170,59 @@ export function apply(ctx: ClientContext): void {
   })
 
   /**
-   * **主入口**（T1）：接管 `conversation.chat.node` 的 `user` key —— 每条用户消息一颗「回退」按钮。
+   * **两个回退入口 = 一次同源挂载**（T13 修 F1：切档后两档必须仍然互斥）。
    *
-   * 为什么只能接管：该 key **没有 children 表**（宿主只对 turn-tail 声明了子位），framework 没有
-   * 「往用户消息里追加 UI」的位子。priority **-1** 遮蔽宿主的 UserMessageNodeView（同 key 同 priority
-   * 会抛，所以 -1 是与宿主并存的唯一合法取值），气泡外观由本仓库复刻（宿主组件与 CSS Modules 都
-   * 是 ui-chat 私有、不可导入）。完整证据见 `src/client/chat/chat-slots.ts` 头部注释。
+   * 分工（两档互斥，恒只有一颗入口）：
+   *  · 「每条用户消息」档（缺省）= 接管 `conversation.chat.node` 的 `user` key（priority -1 遮蔽宿主
+   *    UserMessageNodeView；该 key **没有 children 表**，所以只能接管、不能追加），每条用户消息一颗
+   *    icon；为什么只能接管、气泡为何要自复刻、-1 为何是唯一合法优先级 → `src/client/chat/chat-slots.ts`
+   *    头部注释；
+   *  · 「整回合」档 = ui-chat 的回合尾 list 位 `conversation.chat.turnTail`（**新 id** 追加一个条目，
+   *    replaceRisk: none，不遮蔽任何 shipped UI）。
+   * 两档打开的是**同一个**预览对话框（`RollbackReviewDialog`），只是触发点不同。
    *
-   * **偏好门**：偏好 = 「整回合」时 `registerChatNodeEntry` **一次都不注册**（宿主渲染器原样工作，
-   * 入口退回下面的回合尾 list 位）；形态探测失败（0.1.x 契约不同）同样只跳过这一个入口。
+   * 为什么不再「一个 inject 挂一个入口」（F1 的根因）：那样只有 chat.node 侧订阅偏好，turnTail 只在
+   * **装配期**读一次 ⇒ 切到「整回合」后活 cell=0（没有入口）、切回「每条消息」后活 cell=2（同屏两个
+   * 回退按钮）。现在两个 inject 回调都只是把**同一个挂载**的引用计数 +1（第一次出现时挂上、最后一个
+   * 消失时退掉），由 `mountChatEntries` 用**同一次偏好订阅**决定「这次该注册哪一个」：
+   * 切档 = 先退掉两个、再按新档注册恰好一个（顺序固定；同 cell 同 priority 重复注册会抛）。
+   * 形态探测/偏好门/异常软化仍在两侧各自实现里（0.1.x 的 chain 形态、keyed 形态不符、register 抛错
+   * 都只丢这一个入口，不打挂插件）。
    */
-  ctx.slots.inject(CHAT_NODE_SLOT, () => mountChatNodeEntry({
-    probe: { spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT) },
-    register: () => ctx.slots.register({
-      name: CHAT_NODE_SLOT,
-      key: CHAT_NODE_USER_KEY,
-      priority: CHAT_NODE_PRIORITY,
-      locale: CHAT_NS,
-      inject: chatEntryInjected,
-    }, ChatEntryNodeView),
-  }))
+  let chatEntryMountRefs = 0
+  let disposeChatEntryMount = (): void => {}
+  const holdChatEntryMount = (): (() => void) => {
+    chatEntryMountRefs += 1
+    if (chatEntryMountRefs === 1) {
+      disposeChatEntryMount = mountChatEntries({
+        nodeProbe: { spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT) },
+        // 声明形态探测（T9-F2）：0.1.x 把同一 key 声明成 chain（select 必填），按 list 形态（id/order）注册会抛。
+        tailProbe: { spec: (key) => ctx.slots.spec(key) },
+        registerNode: () => ctx.slots.register({
+          name: CHAT_NODE_SLOT,
+          key: CHAT_NODE_USER_KEY,
+          priority: CHAT_NODE_PRIORITY,
+          locale: CHAT_NS,
+          inject: chatEntryInjected,
+        }, ChatEntryNodeView),
+        registerTurnTail: () => ctx.slots.register({
+          name: CHAT_ENTRY_SLOT,
+          id: CHAT_ENTRY_ID,
+          order: CHAT_ENTRY_ORDER,
+          locale: CHAT_NS,
+          inject: chatEntryInjected,
+        }, RollbackTurnEntry),
+      })
+    }
+    return () => {
+      chatEntryMountRefs -= 1
+      if (chatEntryMountRefs > 0) return
+      chatEntryMountRefs = 0
+      disposeChatEntryMount()
+      disposeChatEntryMount = (): void => {}
+    }
+  }
 
-  /**
-   * **兜底入口**（T4，保留不动）：ui-chat 的回合尾 list 位（`conversation.chat.turnTail`）。
-   *
-   * 与主入口的分工：偏好为「整回合」时，这里就是唯一的入口（整回合一个）；偏好为「每条消息」时
-   * 两个入口同时在 —— 回合尾那颗的语义没变（回退这个回合），两条路径打开的是**同一个**复核对话框。
-   *
-   * 选型 = 追加一个 list 条目（**新 id**，replaceRisk: none，不遮蔽任何 shipped UI）。
-   */
-  ctx.slots.inject(CHAT_ENTRY_SLOT, () => registerChatEntry({
-    // 声明形态探测（T9-F2）：0.1.x 把同一 key 声明成 chain（select 必填），按 list 形态（id/order）注册会抛。
-    probe: { spec: (key) => ctx.slots.spec(key) },
-    register: () => ctx.slots.register({
-      name: CHAT_ENTRY_SLOT,
-      id: CHAT_ENTRY_ID,
-      order: CHAT_ENTRY_ORDER,
-      locale: CHAT_NS,
-      inject: chatEntryInjected,
-    }, RollbackTurnEntry),
-  }))
+  ctx.slots.inject(CHAT_NODE_SLOT, () => holdChatEntryMount())
+  ctx.slots.inject(CHAT_ENTRY_SLOT, () => holdChatEntryMount())
 }

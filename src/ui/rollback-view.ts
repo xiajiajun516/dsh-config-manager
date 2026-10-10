@@ -102,8 +102,14 @@ const MODE_KEYS: Record<RollbackMode, string> = {
  * 宿主若新增码而字典没跟上，界面显示「未识别的错误码」而不是把机器码拼上屏。
  *
  * 与宿主引擎 `src/core/rollback-point.ts` 的 `RollbackCode` 联合**逐条对应**（core 不能进
- * client bundle，所以只能在这里镜像一份；t3 已按 T1 的最终码表补齐 31 条）。顶层 code 与
- * segments[].reasonCode / warnings 共用同一枚举，所以一份白名单同时服务三处渲染。
+ * client bundle，所以只能在这里镜像一份；t3 已按 T1 的最终码表补齐 31 条，t10 补
+ * `no-recorded-files` ⇒ 32 条）。顶层 code 与 segments[].reasonCode / warnings 共用同一枚举，
+ * 所以一份白名单同时服务三处渲染。
+ *
+ * ⚠️ **这份镜像与引擎码表的等价性有守卫**：`rollback-view.test.ts` 的「码表镜像 != 引擎码表即红」
+ * 用例从 `src/core/rollback-point.ts` 源码级读出 `RollbackCode` union，双向断言集合相等
+ * （引擎新增码忘了补这里、或这里多写了引擎没有的码，都会立刻变红 —— 本次 t10 的
+ * `no-recorded-files` 就是因为缺这条对照而静默漂移过一轮）。
  */
 export const ROLLBACK_CODES: readonly string[] = [
   'ok',
@@ -128,6 +134,9 @@ export const ROLLBACK_CODES: readonly string[] = [
   'restore-failed',
   'verify-failed',
   'nothing-to-restore',
+  // T10：该态**没有记录任何文件**（工作区段 files=0）—— 与「记录了但全部已一致」严格分开，
+  // 只出现在 segments[].reasonCode（不是顶层 code）；界面据此说两句不同的话（t11）。
+  'no-recorded-files',
   // 救援点（S5 guard）
   'guard-failed',
   // 会话（fork 子会话；原会话日志只读）
@@ -319,6 +328,36 @@ export interface RollbackDetailResult {
 /** 计数或清单：宿主回传数字就取数字，回传清单就取长度（两者都是「有多少项」）。 */
 export type RollbackCount = number | readonly string[]
 
+/**
+ * 预览里「回退会改动的一个文件」的动作。
+ *
+ * 与引擎（`src/core/rollback-point.ts` 的 `RollbackPreviewFileStatus`）**逐字同形**：
+ *  · `overwrite` = 覆盖已有文件；`create` = 当前不存在（回退会重新创建）；
+ *  · `delete` **当前永远不会出现**：回退只覆盖记录在案的路径、绝不删除任何文件（引擎 R-28），
+ *    保留该取值只为契约形状向前兼容 —— 界面不得为它编文案。
+ */
+export type RollbackPreviewFileStatus = 'overwrite' | 'create' | 'delete'
+
+/**
+ * E1：逐文件的行级统计（简洁版预览弹窗 `preview.workspace.files` 的元素形状）。
+ *
+ * **只列真的会被改动的文件** —— 已与快照一致的条目一个都不列（「353 项里 0 项不同」⇒ 空数组）。
+ * `added` / `removed` 可能是 `null`（单文件超上限 / 单张预览累计超限 / Myers 步数超限 /
+ * 非文本 / 对象仓读不出），此时 `truncated` 为 true：界面说「行数未统计」，
+ * **绝不写成 0**（0 是一个会被证伪的具体数字，而「不知道」不是）。
+ */
+export interface RollbackPreviewFile {
+  /** 绝对路径（界面只做展示）。 */
+  path: string
+  status: RollbackPreviewFileStatus
+  /** 回退会让该文件**新增**的行数；null = 本次不给数字（见 truncated）。 */
+  added: number | null
+  /** 回退会从该文件**删除**的行数；null = 同上。 */
+  removed: number | null
+  /** true = 本次没有可信行数（added/removed 均为 null）。**宁可说「不知道」，也绝不谎报行数。** */
+  truncated: boolean
+}
+
 export interface RollbackWorkspacePreview {
   /** 将被写回（覆盖）的条目数 */
   overwrite?: RollbackCount
@@ -333,6 +372,14 @@ export interface RollbackWorkspacePreview {
   leftoversTruncated?: boolean
   /** 记录在案的分块（绝对路径；界面只做展示，不做判定） */
   chunks?: string[]
+  /**
+   * E1：逐文件的行级统计 —— **只含会被改动的文件**（内容已一致的条目一个都不列）。
+   *
+   * 可选（`?`）是**刻意的向后兼容**：老响应 / 老宿主不认识这个字段，缺省必须回落
+   * 「没有这条信息」，而不是被当成「空数组＝全部一致」或抛错 —— 界面据「字段是否存在」
+   * 决定是否显示文件列表，绝不把「缺字段」与「确知为空」混成同一件事。
+   */
+  files?: RollbackPreviewFile[]
   /** 捕获时被跳过的条目总数（skipped + excludedDirs；逐条列表的上限截断不影响本计数） */
   skippedCount?: RollbackCount
   /** 捕获是否被上限截断（超单文件上限 / 字节预算 / 文件数预算任一命中即为 true） */
@@ -758,6 +805,119 @@ export function rollbackPreviewWarnings(preview: RollbackPreviewResult | null): 
 /** 点级指引（preview.guidance）→ 展示行（同上，面板级渲染一次）。 */
 export function rollbackPreviewGuidance(preview: RollbackPreviewResult | null): RollbackGuidanceRowView[] {
   return rollbackGuidanceRows(preview?.guidance)
+}
+
+/* ------------------------------------------------------------ T15：预览态「无事可做」的四态分派 */
+
+/**
+ * 预览态那句「工作区怎样怎样」的**四态**判别（T15）。
+ *
+ * 背景（用户截图抱怨的那一屏就是**预览态**）：点「回退」之前，三种**完全不同**的事实
+ * 被同一句「工作区与该回退点一致，无需恢复」概括 —— 其中两种是不实陈述：
+ *  · 该点压根没记录任何文件（工作区段 files=0）；
+ *  · 工作区态没有可用记录（available=false）；
+ *  · 而真正「一致」时，若**会话仍会回退**（fork 子会话），说「无需恢复」也是假尾句。
+ *
+ * 判据**只来自 preview 的字段**（available / overwrite / different / missing / reasonCode /
+ * session.restorable）与宿主给的 canRestore，**禁止解析 detail**（技术细节不是接口）。
+ * 优先级（与验收逐字一致）：① 工作区态不可用 → ② available 且 overwrite===0 → ③a 工作区一致但
+ * 会话仍可回退 → ③b 工作区一致且无事可做。另有前置的一条**不属于四态**：工作区**真会写文件**
+ * （different>0 / missing>0）时不上屏任何「一致/无需恢复」句（由文件列表说话）——
+ * 这也是「假尾句禁令」在函数层面的落点：`changesSomething === true` 时，
+ * 要么 `key === null`，要么该键的文案**不含**「无需恢复」。
+ */
+export type RollbackPreviewNoteKind =
+  /** 工作区会写文件（有变更）⇒ 没有「一致」句可说，由文件列表说话。 */
+  | 'workspace-changes'
+  /** ① 工作区态没有可用记录（available=false）。 */
+  | 'workspace-unavailable'
+  /** ② 该点没记录任何文件（available=true 且 overwrite===0）。 */
+  | 'no-recorded-files'
+  /** ③a 工作区与该点一致，但会话仍会回退（fork 子会话）。 */
+  | 'workspace-consistent-session'
+  /** ③b 工作区与该点一致，且无事可做（会话也不可回退）。 */
+  | 'workspace-consistent-noop'
+
+/** 预览态那句文案的判定结果（界面只负责把它翻译上屏，不在界面里重写判据）。 */
+export interface RollbackPreviewNote {
+  kind: RollbackPreviewNoteKind
+  /** 上屏文案键；**null = 本情形没有该类句子**（工作区有变更 ⇒ 由文件列表说话）。 */
+  key: string | null
+  /** 需要插进 `{reason}` 的**字典键**（只有 ① 用；未知/缺失一律 `rollback.code.unknown`）。 */
+  reasonKey: string | null
+  /** 点「回退」是否**真会改动什么**（工作区会写文件 or 会话会 fork）—— 假尾句禁令的判据。 */
+  changesSomething: boolean
+  /** 会话仍会回退（= 会 fork 出新子会话）。 */
+  sessionForks: boolean
+}
+
+/** ① 的原因键来源：workspace.reasonCode 优先 → 段摘要里的 workspace 段 → 未知（绝不编原因）。 */
+function previewNoteReasonKey(
+  workspace: RollbackWorkspacePreview | null | undefined,
+  segments: readonly { state?: string; reasonCode?: string | null }[] | undefined,
+): string {
+  const direct = workspace?.reasonCode
+  if (typeof direct === 'string' && direct !== '') return rollbackCodeKey(direct)
+  const segment = segments?.find((item) => item.state === 'workspace')
+  const code = segment?.reasonCode
+  if (typeof code === 'string' && code !== '') return rollbackCodeKey(code)
+  return ROLLBACK_CODE_UNKNOWN_KEY
+}
+
+/**
+ * 预览态文案判定（**一处实现**：聊天对话框调用它；将来设置页若要复用同一口径也走这里）。
+ *
+ * @param input.workspace preview.workspace（缺失按「不可用」处理：没有记录信息 ⇒ 不能说「一致」）
+ * @param input.session   preview.session（只有 `restorable === true` 才算「会话仍会回退」）
+ * @param input.segments  段摘要（`preview.point.segments`；只用于 ① 的原因键回落，读 reasonCode 字段）
+ * @param input.canRestore 宿主/判定层的回退门（缺省按 true；传 false 时不得声称「会话仍会回退」）
+ */
+export function rollbackPreviewNote(input: {
+  workspace?: RollbackWorkspacePreview | null
+  session?: RollbackSessionPreview | null
+  segments?: readonly { state?: string; reasonCode?: string | null }[] | null
+  canRestore?: boolean
+}): RollbackPreviewNote {
+  const workspace = input.workspace ?? null
+  const session = input.session ?? null
+  const overwrite = countOf(workspace?.overwrite)
+  const different = countOf(workspace?.different)
+  const missing = countOf(workspace?.missing)
+  // 「会话仍会回退」两个条件都要：该段可回退 + 该点整体可回退（受保护点/两态不全时按钮本来就点不了，
+  // 这时说「会话仍会回退到该点之前」同样是假话）
+  const sessionForks = input.canRestore !== false && session?.restorable === true
+
+  // ① 工作区态没有可用记录
+  if (workspace?.available !== true) {
+    const reasonKey = previewNoteReasonKey(workspace, input.segments ?? undefined)
+    return {
+      kind: 'workspace-unavailable',
+      key: sessionForks ? 'rollback.preview.files.unavailableSession' : 'rollback.preview.files.unavailable',
+      reasonKey,
+      changesSomething: sessionForks,
+      sessionForks,
+    }
+  }
+  // ② 该点没记录任何文件
+  if (overwrite === 0) {
+    return {
+      kind: 'no-recorded-files',
+      key: sessionForks ? 'rollback.preview.files.noFilesSession' : 'rollback.preview.result.noFiles',
+      reasonKey: null,
+      changesSomething: sessionForks,
+      sessionForks,
+    }
+  }
+  // 工作区真会写文件 ⇒ 没有「一致」句（由文件列表说话）；这也是假尾句禁令的前置保护
+  if (different > 0 || missing > 0) {
+    return { kind: 'workspace-changes', key: null, reasonKey: null, changesSomething: true, sessionForks }
+  }
+  // ③a 工作区一致，但会话仍会回退 ⇒ 只说工作区（**禁止**「无需恢复」：点下去真会 fork）
+  if (sessionForks) {
+    return { kind: 'workspace-consistent-session', key: 'rollback.preview.files.consistentSession', reasonKey: null, changesSomething: true, sessionForks: true }
+  }
+  // ③b 工作区一致且无事可做
+  return { kind: 'workspace-consistent-noop', key: 'rollback.preview.files.empty', reasonKey: null, changesSomething: false, sessionForks: false }
 }
 
 /**

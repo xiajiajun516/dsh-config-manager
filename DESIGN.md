@@ -1045,11 +1045,12 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   `renderMessageImages`（逐张一次调用，与宿主 `attachments.map` 同形），本仓库不自己实现图片渲染。
 - **错误边界是 class 组件**（`ChatEntryErrorBoundary`）：React 18 只有 class 能声明 `getDerivedStateFromError` / `componentDidCatch` —— 这是本仓「函数组件 + hooks，无 class」规范的
   **唯一显式例外**，**不得**照此扩大范围。降级 = **纯文本气泡**（`.chatFallbackBubble`，左侧一条警示线 + `data-chat-entry-fallback` 标记 + ASCII `console.warn`），语义是「用户消息绝不消失」。
-- **按钮语义 = ghost**（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
+- **入口 = 只有图标（icon-only，2026-10-10 用户第二条要求）**：复用 `.chatActionBtn` 24px 无边框图标位 + `RefreshIcon`，与时间戳 / 复制图标同一行；**按钮内不得出现可见文字标签**，文案只走 `aria-label` / `title`。语义 = ghost（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
 - **已确认的三条观感差距**（如实登记，不修）：① 引用 / 技能 chip 不显示（`referenceLabels` / `skillNames` 是 ui-primitives 的包私有投影，拿不到也不编造）；② 文件类型图标退化为**扩展名徽标**
   （`.chatFileExt` —— ui-primitives 的 `FileTypeIcon` / `fileExtension` 不在其导出表）；③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：气泡底色 `--cm-surface-2`（宿主 `--dsw-specific-bubble`，本仓库 token 层没有这一档）、
   圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
-- **形态开关**：两档偏好（`per-message` 缺省 / `turn`）经 `src/client/chat/chat-entry-pref.ts` 存 localStorage 键 `dcm.chat-entry-mode`，热切换；面板入口以 T2 交付为准。
+- **形态开关**：两档偏好（`per-message` 缺省 / `turn`）经 `src/client/chat/chat-entry-pref.ts` 存 localStorage 键 `dcm.chat-entry-mode`，热切换；面板入口以 T2 交付为准。**两档互斥（2026-10-10）**：`per-message` 档下回合尾入口（`conversation.chat.turnTail`）**一次都不注册**（`planChatEntryRegistrationForMode` 直接 skip）⇒ 同屏只有一颗 icon；`turn` 档才注册 turnTail，且不接管 `user` 渲染器。**不得**再写成「两档并存」（那正是用户截图里两颗入口的来源）。**装配级实现（t13 / t17）**：两个入口由**同一次偏好订阅**驱动（`src/client/chat/chat-entry-mount.ts` 的 `mountChatEntries()`：每次变化先全退、再按当前档注册恰好一个）⇒ 切档 trace 恒 `[1,1,1,1]`、事件级峰值 1、切档后与「该档冷启动（刷新）」逐字一致；**槽位声明顺序无关**由**有界补试**（最多 4 次、声明一到位即停）达成 —— **是异步的**：声明到位 + 一个排程 tick 后恰好 1 入口，**同步瞬间可为 0 是设计而非缺陷**。
+- **回退预览对话框 = 简洁版（2026-10-10 用户第三条要求）**：标题固定「回退预览」；正文只有**会被回退的文件**（路径 + 「+N 行」/「−M 行」；内容已一致的一项都不列，空数组显示「工作区与该回退点一致，无需恢复」；行数算不出来显示「行数未统计」而**不是 0**）；底部只有主按钮「回退」与「取消」。**没有**三选一 mode 单选、二次确认勾选、`allowPartial` 勾选、工作区 / 会话计数面板、救援点说明段、逐段结果详情面板、留点期 notice 面板 —— 这是**有意替换**（点「回退」即确认，对话框本身就是「预览 + 确认」两步）。视觉复用既有 `dialogMask` / `dialogCard` / `dialogWide` / `dialogBodyScroll` / `actionRow` 类，**不新增样式档位**；设置页 `RollbackCard` 的预览弹窗仍保留完整能力。
 - **升级风险**：宿主改用户消息渲染器 / 槽位契约 → 复刻老旧或错位。软失败：声明形态不是 `keyed` 就**跳过注册**（只丢这一个入口），回合号取不到就**如实禁用按钮**（每个禁用原因有自己的字典键）。
   风险与差距登记 = `docs/spec/known-gaps.md` G-39。
 
