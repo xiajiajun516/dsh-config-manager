@@ -8,29 +8,30 @@
  *    预览计数 / mode ↔ 段映射 / code 白名单 / outcome / 逐段结果 / fork 子会话行。
  *    本模块只在上面加「聊天入口特有」的两块：回合 ↔ 回滚点的匹配，以及子会话打开与降级。
  *
- * 四条纪律：
+ * 五条纪律：
  *  ① `src/client/**` 不得 import 任何 node 模块，也不得 import `src/core/**`
  *     （client bundle 铁律）；本文件只 import `src/ui/**`、`src/security/**` 的零依赖模块。
- *  ② **未二次确认绝不构造写请求**：`buildRewindOptions` 在 `confirmed !== true` 时返回 null，
+ *  ② **未确认绝不构造写请求**：`buildRewindOptions` 在 `confirmed !== true` 时返回 null，
  *     唯一的写出口 `requestRewind` 拿到 null 就直接返回 blocked —— 宿主侧的 409
  *     `confirmation-required` 只是兜底，客户端先拦。
  *  ③ 未知码 / 未知态一律回落 unknown 键（`rollbackCodeKey`），**绝不把机器码原文上屏**。
  *  ④ 子会话打开失败**如实降级**（`degraded` / `unavailable`），绝不假装已打开。
+ *  ⑤ **简洁预览对话框是「预览 + 确认」两步**（用户 2026-10-10 第三条要求：「弹窗里只有被回退的
+ *     文件 + 删/增行数」）：对话框里只有文件列表与两个按钮，**没有**二次确认勾选 —— 点「回退」
+ *     那一刻本身就是确认，`requestRewind` 收到 `confirmed: true` 才成形。这是对上一版
+ *     「勾选二次确认」的**有意替换**：确认门从「勾选框」挪到「对话框本身」（见 `RewindDraft`
+ *     与 `TOMBSTONE` 注释），宿主侧的 fail-closed 确认门（userConfirmed 恰好 true）一个字没动。
  */
 import { redact } from '../../security/redaction.ts'
+import { readChatEntryMode, type ChatEntryMode } from './chat-entry-pref.ts'
 import {
   ROLLBACK_CODE_UNKNOWN_KEY,
   rollbackChildSession,
   rollbackCodeKey,
   rollbackModeSegments,
   rollbackOutcome,
-  rollbackPointRows,
-  rollbackPreviewGuidance,
-  rollbackPreviewRows,
   rollbackPreviewVerdict,
-  rollbackPreviewWarnings,
   rollbackRewindCounts,
-  rollbackRewindRows,
   rollbackStateKey,
   type RollbackMode,
   type RollbackPointPort,
@@ -78,37 +79,162 @@ export function findPointForTurn(
   return candidates.find((point) => point.kind === 'auto') ?? candidates[0] ?? null
 }
 
-/* ------------------------------------------------------------ 三选一 mode */
+/* ------------------------------------------------------------ mode → 段集合 */
 
-/** 三选一（冻结顺序）：mode + 该 mode 的字典键（键在 recovery 字典里，单一所有）。 */
-export function modeOptions(): { mode: RollbackMode; key: string }[] {
-  return [
-    { mode: 'files+session', key: 'rollback.mode.filesAndSession' },
-    { mode: 'files', key: 'rollback.mode.filesOnly' },
-    { mode: 'session', key: 'rollback.mode.sessionOnly' },
-  ]
-}
-
-/** mode → 请求体段集合（复用 `src/ui/rollback-view.ts` 的唯一映射实现）。 */
+/**
+ * mode → 请求体段集合（复用 `src/ui/rollback-view.ts` 的唯一映射实现）。
+ *
+ * 聊天入口**不再提供**三选一：对话框固定 `files+session`（=「回到这条消息之前」）。
+ * 设置页的回滚卡仍走同一个 `rollbackModeSegments`（那是一份真相，不是两份）。
+ */
 export function segmentsForMode(mode: string | null | undefined): RollbackState[] {
   return rollbackModeSegments(mode)
 }
 
-/** 某个 mode 在本次预览下是否可达（段全部可回退）；不可达的选项在界面里 disabled。 */
-export function modeReachable(mode: string, available: readonly RollbackState[]): boolean {
-  const segments = segmentsForMode(mode)
-  return segments.length > 0 && segments.every((segment) => available.includes(segment))
+/* ------------------------------------------------------------ 回退预览：逐文件行级统计（E1 冻结形状） */
+
+/**
+ * 一张预览里「会被改动」的文件（E1 引擎 `preview.workspace.files` 的**逐条对齐**读法）。
+ *
+ * 形状（E1 冻结）：`{ path, status: 'overwrite'|'create'|'delete', added, removed, truncated }`
+ * ——**只列会被改动的文件**（内容已一致的一个都不列 ⇒ 工作区与该回退点一致时是**空数组**）。
+ * 三条不可越过的事实：
+ *  · `added` / `removed` 可能是 **null**：单文件超上限 / 非文本 / 对象仓读不出 ⇒ 界面说
+ *    「行数未统计」，**绝不写成 0**（0 是一个可被证伪的具体断言）；
+ *  · `status` 目前只会是 `overwrite` / `create`：回退只覆盖、**绝不删除**文件（引擎 R-28）；
+ *    `delete` 保留在取值集合里只为形状完整 —— 我们不解释它、也不为它编文案；
+ *  · 未知 status / 缺字段一律按「行数未知」处理，但**这一行仍然要上屏**（路径是已知事实）。
+ */
+export interface ChatPreviewFileRow {
+  /** 绝对路径（界面原样显示；`whitespace: pre-wrap` + `break-all` 承接长路径）。 */
+  path: string
+  /** 'overwrite' | 'create' | 引擎将来可能新增的取值（原样透传，不猜语义）。 */
+  status: string
+  /** 回退会新增的行数；null = 本次没有可信数字（见 truncated）。 */
+  added: number | null
+  /** 回退会删除的行数；null = 同上。 */
+  removed: number | null
+  /** true = 这一条本次没有可信行数（界面显示「行数未统计」，不是 0）。 */
+  truncated: boolean
 }
+
+/** `preview.workspace.files` 的取值域（类型未收录时的静态兜底）。 */
+const PREVIEW_FILE_STATUSES: readonly string[] = ['overwrite', 'create', 'delete']
+
+function previewCountOf(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * 读 `preview.workspace.files` —— **宽度接收 + 逐字段判定**（与 chat-entry-view 的节点读法同纪律）。
+ *
+ * 为什么不用静态类型：`src/ui/rollback-view.ts` 的 `RollbackWorkspacePreview` 目前没有收这个
+ * 字段（E1 在引擎侧先行落地），这里按结构读、逐字段判，缺什么降级什么；等类型补上之后
+ * 本函数仍是唯一读点，把手改回去只改这一处。
+ */
+export function readRollbackPreviewFiles(workspace: unknown): ChatPreviewFileRow[] {
+  const files = (workspace as { files?: unknown } | null | undefined)?.files
+  if (!Array.isArray(files)) return []
+  const rows: ChatPreviewFileRow[] = []
+  for (const item of files) {
+    if (typeof item !== 'object' || item === null) continue
+    const record = item as Record<string, unknown>
+    const path = record['path']
+    // 路径读不出 ⇒ 这一条对用户没有任何信息量，跳过（不编一条「未知文件」占位）
+    if (typeof path !== 'string' || path === '') continue
+    const status = record['status']
+    const added = previewCountOf(record['added'])
+    const removed = previewCountOf(record['removed'])
+    rows.push({
+      path,
+      status: typeof status === 'string' && status !== '' ? status : 'unknown',
+      added,
+      removed,
+      // 引擎给了 truncated=true 一律照收；两个数字缺一个也一样（界面口径与之一致：null ⇒ 未统计）
+      truncated: record['truncated'] === true || added === null || removed === null,
+    })
+  }
+  return rows
+}
+
+/** 预览里是否有**任何**可信行数（没有 ⇒ 一行小字说明「行数未统计」，不逐行重复同一句）。 */
+export function chatFileChangeAvailable(files: readonly ChatPreviewFileRow[]): boolean {
+  return files.some((file) => file.added !== null && file.removed !== null)
+}
+
+/**
+ * 状态白名单（只用于**断言**：引擎当前只会产出 overwrite / create；delete 保留在取值集合里）。
+ * 界面**不**按它分派文案 —— 用户要的是「有哪些文件、增删多少行」，不是变更类型分类。
+ */
+export function previewFileStatusKnown(status: string): boolean {
+  return PREVIEW_FILE_STATUSES.includes(status)
+}
+
+/* ------------------------------------------------------------ 回退结果一句话 + 失败原因 */
+
+/**
+ * 结果摘要 —— **一行**说清这次回退到底发生了什么（用户 2026-10-10 第三条要求：结果不再逐段铺开）。
+ *
+ * `nothing-to-restore` 的**唯一**落点：工作区与该回退点一致（引擎 E1 语义：outcome='restored'、
+ * restored=0、code='nothing-to-restore'，HTTP **200**）。它不是失败：说「无需恢复」，
+ * 绝不当成错误弹给用户。
+ */
+export function chatRewindSummary(result: RollbackRewindResult | null): { kind: 'noop' | 'plain'; key: string | null } {
+  if (result === null) return { kind: 'plain', key: null }
+  if (result.code === 'nothing-to-restore') return { kind: 'noop', key: 'rollback.preview.result.noop' }
+  return { kind: 'plain', key: null }
+}
+
+/**
+ * 失败原因行：**可读文案键 + code + detail**（用户要求「失败时仍如实显示 code 与 detail」）。
+ *
+ * 三件事各司其职：`key` 给人看（用户能读懂的句子）、`code` 给排障（机器码**同时**显示，
+ * 但不当成主文案）、`detail` 是宿主的逐条技术细节（渲染前过 redact）。
+ * 段级 code 与结果级 code **都收**（真实失败可能只说在某一级）——去重后逐条渲染，绝不静默吞掉。
+ */
+export function chatRewindFailure(result: RollbackRewindResult | null): { code: string | null; detail: string | null; keys: string[] } {
+  if (result === null) return { code: null, detail: null, keys: [] }
+  const keys: string[] = []
+  const code = typeof result.code === 'string' && result.code !== '' ? result.code : null
+  if (code !== null) keys.push(rollbackCodeKey(code))
+  for (const segment of result.segments ?? []) {
+    if (segment.status !== 'failed') continue
+    const segmentCode = typeof segment.reasonCode === 'string' && segment.reasonCode !== '' ? segment.reasonCode : null
+    if (segmentCode === null) continue
+    const key = rollbackCodeKey(segmentCode)
+    if (!keys.includes(key)) keys.push(key)
+  }
+  const detail = typeof result.detail === 'string' && result.detail !== '' ? redact(result.detail) : null
+  return { code, detail, keys }
+}
+
+/** `nothing-to-restore` 的字典键（对话框与测试共用一份字面量）。 */
+export const ROLLBACK_NOTHING_TO_RESTORE_KEY = 'rollback.preview.result.noop'
 
 /* ------------------------------------------------------------ 复核对话框草稿 */
 
-/** 复核对话框的交互状态（纯数据；组件只做 setState）。 */
+/**
+ * 复核对话框的交互状态（纯数据；组件只做 setState）。
+ *
+ * ⚠️ **确认语义已从「勾选框」换成「对话框本身」**（2026-10-10 用户第三条要求：简洁弹窗只有
+ * 文件列表 + 两个按钮）：`confirmed` 现在是「用户点了主按钮」的**运行期置位**，由对话框在
+ * `submit()` 里显式置 true（`confirmOnSubmit`），**不再有** UI 上的二次确认勾选。
+ * 边界与旧版一致的两点：① 默认值仍是 `false`（`defaultDraft` 绝不自动置 true）；
+ * ② 唯一的写出口 `buildRewindOptions` 仍然要求**恰好** `true`，缺省/假值一律不成形。
+ */
 export interface RewindDraft {
-  /** 二次确认勾选：**必须恰好 true** 才允许发写请求（宿主侧 fail-closed 同规）。 */
+  /** 用户确认（点主按钮那一刻置 true）。**必须恰好 true** 才允许发写请求（宿主侧 fail-closed 同规）。 */
   confirmed: boolean
-  /** 三选一：回退范围。 */
+  /**
+   * 回退范围：**恒为 `files+session`**（= 用户说的「回到这条消息之前」）。
+   * 不再有三选一 mode 单选 —— 固定带上会话段，工作区无变更时会话段照常回退（E1 语义）。
+   */
   mode: RollbackMode
-  /** 该点两态不全时的显式放行（对应 rollback.rewind.allowPartial）。 */
+  /**
+   * 两态不全时的显式放行（wire 字段 `allowPartial`）。**恒为 false**：对话框不再给这个勾选，
+   * 两态不全的点在界面上如实说不可回退（`canSubmitRewind` 因此为 false）。
+   * 保留字段只为请求体形状完整（`allowPartial` 是冻结 wire contract 的一部分）。
+   */
   allowPartial: boolean
   /**
    * 救援点策略：**恒为 require**（回退前必须留救援点，留不下就整体中止、零写入）。
@@ -117,25 +243,35 @@ export interface RewindDraft {
   preRewindGuard: 'require'
 }
 
-/** 按预览的可用段给出草稿默认值（mode 由 `rollbackPreviewVerdict` 推导）。 */
-export function defaultDraft(preview: RollbackPreviewResult | null): RewindDraft {
-  return {
-    confirmed: false,
-    mode: rollbackPreviewVerdict(preview).mode,
-    allowPartial: false,
-    preRewindGuard: 'require',
-  }
+/** 对话框固定的回退范围（= 「回到这条消息之前」：工作区文件 + 会话一起）。 */
+export const CHAT_REWIND_MODE: RollbackMode = 'files+session'
+
+/** 草稿默认值（每次返回**新对象**）：未确认、固定 files+session、不请求部分放行、救援点恒 require。 */
+export function defaultDraft(_preview: RollbackPreviewResult | null): RewindDraft {
+  return { confirmed: false, mode: CHAT_REWIND_MODE, allowPartial: false, preRewindGuard: 'require' }
 }
 
-/** 提交按钮是否可用：确认 + 至少一段 + （宿主允许回退，或在两态不全时显式放行）。 */
+/**
+ * 「用户点了主按钮」这一刻置位确认 —— 对话框唯一的确认入口（**没有**勾选框）。
+ * 未点之前 `confirmed` 恒 false，`buildRewindOptions` 恒 null（端口零调用）。
+ */
+export function confirmOnSubmit(draft: RewindDraft | null): RewindDraft | null {
+  return draft === null ? null : { ...draft, confirmed: true }
+}
+
+/**
+ * 主按钮是否可用：用户已确认（点按钮那一刻置位）+ 固定段集合非空 + **宿主允许回退**。
+ *
+ * 与旧版的口径差异（有意）：旧版在「两态不全」时允许勾选 `allowPartial` 后放行；简洁版没有
+ * 这个勾选，两态不全的点在界面上如实说不可回退（按钮禁用），**不假装能退**。
+ */
 export function canSubmitRewind(draft: RewindDraft | null, preview: RollbackPreviewResult | null): boolean {
   if (draft === null) return false
   if (draft.confirmed !== true) return false
   const segments = segmentsForMode(draft.mode)
   if (segments.length === 0) return false
-  const verdict = rollbackPreviewVerdict(preview)
-  if (verdict.canRestore) return true
-  return draft.allowPartial && verdict.segments.length > 0
+  // 点「回退」即 userConfirmed=true：确认门由对话框本身承担（预览 → 点按钮 两步）。
+  return rollbackPreviewVerdict(preview).canRestore
 }
 
 /**
@@ -196,13 +332,8 @@ export async function requestRewind(
 export {
   rollbackChildSession,
   rollbackOutcome,
-  rollbackPointRows,
-  rollbackPreviewGuidance,
-  rollbackPreviewRows,
   rollbackPreviewVerdict,
-  rollbackPreviewWarnings,
   rollbackRewindCounts,
-  rollbackRewindRows,
   rollbackStateKey,
 }
 
@@ -422,10 +553,31 @@ export interface ChatSlotProbe {
   spec: (key: typeof CHAT_ENTRY_SLOT) => unknown
 }
 
-/** 登记计划：register = 声明形态是 0.2 的 list 契约；skip 时给出可核验的原因。 */
+/**
+ * 登记计划：register = 声明形态是 0.2 的 list 契约；skip 时给出可核验的原因
+ * （`per-message-mode` = 偏好已让每条消息各有一颗 icon 入口，回合尾这次**故意不注册**）。
+ */
 export type ChatEntryPlan =
   | { kind: 'register' }
-  | { kind: 'skip'; reason: 'slot-undeclared' | 'slot-kind-mismatch'; declared: string | null }
+  | { kind: 'skip'; reason: 'per-message-mode' | 'slot-undeclared' | 'slot-kind-mismatch'; declared: string | null }
+
+/**
+ * 回合尾入口（turnTail list 位）的登记门：**偏好为「整回合」时才注册**。
+ *
+ * 为什么（用户 2026-10-10 第二条要求：「回退按钮只有一个 icon 而不是一个按钮」）：
+ * 「每条用户消息」档下，每条消息上已经有那颗 icon 入口；回合尾再追加一个，同一屏就会出现
+ * 两颗回退入口（旧行为——用户截图里那颗文字按钮就是它）。两档的分工必须是**互斥**的：
+ *  · per-message：只注册 conversation.chat.node/user（每条消息一颗 icon），turnTail **一次都不注册**；
+ *  · turn：完全不接管 user（宿主渲染器原样），回合尾那一颗才是入口。
+ * 与 `planChatNodeRegistration` 严格互补 —— 两档合起来恒好只有一颗入口。
+ */
+export function planChatEntryRegistrationForMode(
+  mode: ChatEntryMode,
+  probe?: ChatSlotProbe | undefined | null,
+): ChatEntryPlan {
+  if (mode !== 'turn') return { kind: 'skip', reason: 'per-message-mode', declared: null }
+  return planChatEntryRegistration(probe)
+}
 
 /**
  * 登记计划：**只在声明形态是 `list` 时注册**。
@@ -457,21 +609,33 @@ function warnChatEntry(message: string): void {
 }
 
 /**
- * 槽位登记整体（可测）：探测形态 → 注册；**任何跳过或异常都只丢这一个入口**，
- * 绝不影响本插件其余槽位与宿主启动（T9-F2 的失败软化）。
+ * 槽位登记整体（可测）：偏好门 → 形态探测 → 注册；**任何跳过或异常都只丢这一个入口**，
+ * 绝不影响本插件其余槽位与宿主启动（T9-F2 的失败软化 + T2 的单入口纪律）。
+ *
+ * 偏好门在**最前**：per-message 档下连探测都不做（结果注定是跳过），也让诊断只说一件事。
+ * 偏好读取器与 `registerChatNodeEntry` 同形（缺省读 localStorage，单测注入），所以同一份
+ * 偏好模块驱动两个入口的互斥关系，不存在第二处真相。
+ *
  * @returns disposer；跳过 / 失败时是 no-op。
  */
 export function registerChatEntry(options: {
   probe: ChatSlotProbe | undefined | null
   /** 真正的注册调用（组件与 inject 面由调用点给出，保持 register 的编译期校验）。 */
   register: () => () => void
+  /** 偏好读取器（缺省读 localStorage；单测注入）。 */
+  readMode?: () => ChatEntryMode
   /** 诊断回调（缺省 `console.warn`；单测注入以免污染输出）。 */
   warn?: (message: string) => void
 }): () => void {
   const warn = options.warn ?? warnChatEntry
-  const plan = planChatEntryRegistration(options.probe)
+  const mode = (options.readMode ?? readChatEntryMode)()
+  const plan = planChatEntryRegistrationForMode(mode, options.probe)
   if (plan.kind === 'skip') {
-    warn('[config-manager] chat rollback entry skipped: slot "' + CHAT_ENTRY_SLOT + '" declaration is ' + (plan.declared === null ? 'missing' : '"' + plan.declared + '"') + ' (expected "list")')
+    if (plan.reason === 'per-message-mode') {
+      warn('[config-manager] chat turn tail entry skipped: preference is "per-message" (every user message already carries the one icon entry; the host turn tail stays untouched)')
+    } else {
+      warn('[config-manager] chat rollback entry skipped: slot "' + CHAT_ENTRY_SLOT + '" declaration is ' + (plan.declared === null ? 'missing' : '"' + plan.declared + '"') + ' (expected "list")')
+    }
     return () => {}
   }
   try {

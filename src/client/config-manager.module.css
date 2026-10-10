@@ -5136,10 +5136,6 @@ button.profileRowMain:hover {
   font-size: var(--cm-fs-meta);
 }
 
-.chatEntryDisabledWrap {
-  display: inline-flex;
-}
-
 .chatEntryNotice {
   max-width: min(620px, 82%);
   color: var(--cm-text-3);
@@ -5171,4 +5167,46 @@ button.profileRowMain:hover {
 .chatActionBtn:hover {
   background: var(--cm-line-1);
   color: var(--cm-text-1);
+}
+
+/* 回退入口与复制入口共用上面这颗图标按钮（无文字标签、无边框）：
+   禁用态只降透明度 + not-allowed，**仍然占位**（判据未就绪时入口不消失）。 */
+.chatActionBtn:disabled {
+  color: var(--cm-text-3);
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* —— 简洁版回退预览：被回退文件列表（路径 + 新增/删除行数）—— */
+
+/* 一行 = 可折行的长路径 + 右侧不放大的 +N / −M（长路径在 Windows 上是常态，
+   所以路径允许任意位置断行，统计列 flex:none 永不被挤没）。 */
+.rollbackFileRow {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--cm-sp-2) var(--cm-sp-3);
+  padding: var(--cm-sp-2) 0;
+}
+
+.rollbackFilePath {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--cm-text-1);
+  font-size: var(--cm-fs-table);
+  overflow-wrap: anywhere;
+}
+
+.rollbackAdded {
+  flex: none;
+  color: var(--cm-ok);
+  font-size: var(--cm-fs-table);
+  font-variant-numeric: tabular-nums;
+}
+
+.rollbackRemoved {
+  flex: none;
+  color: var(--cm-error);
+  font-size: var(--cm-fs-table);
+  font-variant-numeric: tabular-nums;
 }

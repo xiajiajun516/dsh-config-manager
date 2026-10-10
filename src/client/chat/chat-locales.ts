@@ -18,7 +18,10 @@
  */
 
 export const zh = {
-  /** 回合尾按钮的可见文案（图标 ↺ 由组件渲染，文案不进图标） */
+  /**
+   * 回退入口的**无障碍文案**（2026-10-10 起屏幕上只有图标、没有文字标签；
+   * 这颗按钮的 aria-label/title 用它，「回退按钮只有一个 icon」不等于「按钮没有名字」）。
+   */
   'chat.entry.label': '回退',
   /** 该回合还没有回滚点（留点发生在回合结束时） */
   'chat.entry.noPoint': '这个回合还没有回滚点',
@@ -38,6 +41,12 @@ export const zh = {
   'chat.preview.reasonUnknown': '这个回滚点当前不可回退，但宿主没有给出原因（原因未知）',
   /** 回退请求在途 */
   'chat.rewind.running': '正在回退…',
+  /**
+   * 简洁版预览对话框的**主按钮**文案（用户 2026-10-10：底部只有主按钮「回退」与「取消」）。
+   * 与设置页回滚卡的 `rollback.rewind`（'回退到此处'）刻意分开：聊天入口的语境是
+   * 「回到这条消息之前」，按钮只写「回退」——同一句话在两张卡上不再被两个语境共用。
+   */
+  'chat.rewind.submit': '回退',
   /** 关闭对话框（Modal.Header 的 closeLabel 必须是已翻译文案） */
   'chat.close': '关闭',
   /* —— T1：每条用户消息一个入口（接管 conversation.chat.node 的 user key）—— */
@@ -80,6 +89,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.open.unavailable': 'This client exposes no usable session navigation entry (the installed DSH version does not provide one), so nothing was opened automatically: child session {id} exists, open it manually',
   'chat.preview.reasonUnknown': 'This rollback point cannot be restored right now, but the host gave no reason (cause unknown)',
   'chat.rewind.running': 'Rewinding\u2026',
+  'chat.rewind.submit': 'Rewind',
   'chat.close': 'Close',
   'chat.entry.copy': 'Copy this message',
   'chat.entry.copied': 'Copied',

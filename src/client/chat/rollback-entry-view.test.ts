@@ -22,26 +22,30 @@ import {
   CHAT_ENTRY_ID,
   CHAT_ENTRY_ORDER,
   CHAT_ENTRY_SLOT,
+  CHAT_REWIND_MODE,
+  ROLLBACK_NOTHING_TO_RESTORE_KEY,
   buildRewindOptions,
   buildSessionNavigator,
   canSubmitRewind,
+  chatFileChangeAvailable,
+  chatRewindFailure,
+  chatRewindSummary,
   childOpenHintKey,
   codeKeyOfError,
+  confirmOnSubmit,
   defaultDraft,
   entryVisibleForTurn,
   errorDetail,
   findPointForTurn,
-  modeOptions,
-  modeReachable,
   navigationSourcesOf,
   openChildSession,
   planChatEntryRegistration,
+  planChatEntryRegistrationForMode,
+  previewFileStatusKnown,
+  readRollbackPreviewFiles,
   registerChatEntry,
   requestRewind,
-  rollbackPointRows,
-  rollbackPreviewGuidance,
   rollbackPreviewVerdict,
-  rollbackPreviewWarnings,
   segmentsForMode,
   type ChatSlotProbe,
   type RewindDraft,
@@ -52,6 +56,10 @@ import { ROLLBACK_CODES, ROLLBACK_CODE_UNKNOWN_KEY, type RollbackPointPort, type
 import { en as recoveryEn, zh as recoveryZh } from '../recovery/recovery-locales.ts'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
+
+/** 当前草稿（确认由 confirmOnSubmit 在提交那一刻置位，与对话框一致）。 */
+const confirmedDraft = (patch: Partial<RewindDraft> = {}): RewindDraft =>
+  confirmOnSubmit({ ...defaultDraft(null), ...patch }) as RewindDraft
 
 /** 假端口：记录 restoreRollbackPoint 的调用次数与请求体（其余成员本次不用）。 */
 function fakePort(): { port: RollbackPointPort; calls: { id: string; options: unknown }[] } {
@@ -71,29 +79,29 @@ function fakePort(): { port: RollbackPointPort; calls: { id: string; options: un
   return { port, calls }
 }
 
-const confirmedDraft = (patch: Partial<RewindDraft> = {}): RewindDraft => ({ ...defaultDraft(null), confirmed: true, ...patch })
+/* ------------------------------------------------------------ ① mode 映射（固定 files+session） */
 
-/* ------------------------------------------------------------ ① mode 映射 */
-
-test('mode 映射：三选一 → 段集合（与冻结 wire contract 逐条对齐）', () => {
+test('mode 映射：段集合与 wire contract 逐条对齐（复用唯一实现）', () => {
   assert.deepEqual(segmentsForMode('files+session'), ['workspace', 'session'])
   assert.deepEqual(segmentsForMode('files'), ['workspace'])
   assert.deepEqual(segmentsForMode('session'), ['session'])
   assert.deepEqual(segmentsForMode('unknown-mode'), [], '未知 mode 不得被当成任一已知范围')
   assert.deepEqual(segmentsForMode(null), [])
-  // 键顺序与 wire 的三选一顺序一致（界面按此渲染），且键值都不重复
-  assert.deepEqual(modeOptions().map((o) => o.mode), ['files+session', 'files', 'session'])
-  assert.deepEqual(modeOptions().map((o) => o.key), ['rollback.mode.filesAndSession', 'rollback.mode.filesOnly', 'rollback.mode.sessionOnly'])
-  assert.equal(new Set(modeOptions().map((o) => o.key)).size, 3)
 })
 
-test('mode 可达性：段不全的 mode 在界面上标为不可达', () => {
-  assert.equal(modeReachable('files+session', ['workspace', 'session']), true)
-  assert.equal(modeReachable('files', ['workspace', 'session']), true)
-  assert.equal(modeReachable('session', ['workspace', 'session']), true)
-  assert.equal(modeReachable('files+session', ['workspace']), false, '只有工作区可回退时，「文件 + 会话」不可达')
-  assert.equal(modeReachable('session', ['workspace']), false)
-  assert.equal(modeReachable('files', []), false)
+test('聊天入口的 mode 是**固定** files+session（「回到这条消息之前」），没有三选一', () => {
+  assert.equal(CHAT_REWIND_MODE, 'files+session')
+  assert.equal(defaultDraft(null).mode, CHAT_REWIND_MODE)
+  // 预览里的可用段（哪怕只有会话可退）都不改变这个固定档位
+  const sessionOnly = {
+    ok: true, id: 'p', storage: { available: true }, canRestore: true,
+    workspace: { available: false, reasonCode: 'nothing-to-restore' },
+    session: { available: true, restorable: true },
+  } as never
+  assert.equal(defaultDraft(sessionOnly).mode, 'files+session', '固定档位与预览里的可用段无关')
+  assert.deepEqual(segmentsForMode(defaultDraft(sessionOnly).mode), ['workspace', 'session'])
+  // 请求体里段集合必须恒为两态全集
+  assert.deepEqual(buildRewindOptions({ ...defaultDraft(null), confirmed: true }), { userConfirmed: true, mode: 'files+session', preRewindGuard: 'require' })
 })
 
 /* ------------------------------------------------------------ ② 未二次确认绝不发写请求 */
@@ -118,17 +126,31 @@ test('未二次确认：非布尔 true（缺省 / 假值）同样 blocked', asyn
   assert.equal(calls.length, 0)
 })
 
-test('确认后：请求体逐字段成形（userConfirmed 恰好 true + mode + allowPartial + guard=require）', async () => {
+test('确认后：请求体逐字段成形（userConfirmed 恰好 true + 固定 mode + guard=require）', async () => {
   const { port, calls } = fakePort()
-  const draft = confirmedDraft({ mode: 'files', allowPartial: true })
+  const draft = confirmedDraft()
   assert.equal(canSubmitRewind(draft, null), false, '没有预览判定时提交按钮不可用（但已确认的请求体仍可成形）')
   const options = buildRewindOptions(draft)
-  assert.deepEqual(options, { userConfirmed: true, mode: 'files', allowPartial: true, preRewindGuard: 'require' })
+  assert.deepEqual(options, { userConfirmed: true, mode: 'files+session', preRewindGuard: 'require' })
   const attempt = await requestRewind(port, 'point-1', draft)
   assert.equal(attempt.kind, 'ok')
   assert.equal(calls.length, 1)
   assert.equal(calls[0]?.id, 'point-1')
-  assert.deepEqual(calls[0]?.options, { userConfirmed: true, mode: 'files', allowPartial: true, preRewindGuard: 'require' })
+  assert.deepEqual(calls[0]?.options, { userConfirmed: true, mode: 'files+session', preRewindGuard: 'require' })
+})
+
+test('点「回退」即确认：confirmOnSubmit 是**唯一**置位入口，且不就地改写传入的草稿', () => {
+  const base = defaultDraft(null)
+  assert.equal(base.confirmed, false, '默认草稿绝不自动确认')
+  const confirmed = confirmOnSubmit(base)
+  assert.equal(confirmed?.confirmed, true)
+  assert.equal(base.confirmed, false, '原对象不被改写（React 状态更新语义）')
+  assert.equal(confirmOnSubmit(null), null)
+  // 非布尔真值一律不成形（fail-closed 一个字没动）
+  for (const bogus of [undefined, 0, 1, 'true', null]) {
+    const draft = { ...defaultDraft(null), confirmed: bogus as unknown as boolean }
+    assert.equal(buildRewindOptions(draft), null, 'userConfirmed 必须恰好 true：' + String(bogus))
+  }
 })
 
 test('确认 + 未知 mode：仍不发请求（段集合为空 = 请求体不成形）', async () => {
@@ -414,6 +436,7 @@ test('登记失败软化：跳过 / 抛错都只丢这一个入口，绝不影�
   const noop = (): void => {}
   const disposer = registerChatEntry({
     probe: fakeProbe('list'),
+    readMode: () => 'turn',
     register: () => { registered += 1; return noop },
     warn: (m) => { warnings.push(m) },
   })
@@ -422,6 +445,7 @@ test('登记失败软化：跳过 / 抛错都只丢这一个入口，绝不影�
   assert.equal(warnings.length, 0, '正常注册不打警告')
   const skipped = registerChatEntry({
     probe: fakeProbe('chain'),
+    readMode: () => 'turn',
     register: () => { registered += 1; return noop },
     warn: (m) => { warnings.push(m) },
   })
@@ -431,12 +455,42 @@ test('登记失败软化：跳过 / 抛错都只丢这一个入口，绝不影�
   assert.ok(warnings.some((m) => m.includes('chain')), '警告要点名真实声明形态：' + JSON.stringify(warnings))
   const failed = registerChatEntry({
     probe: fakeProbe('list'),
+    readMode: () => 'turn',
     register: () => { throw new Error('slot registry refused') },
     warn: (m) => { warnings.push(m) },
   })
   assert.equal(typeof failed, 'function')
   failed()
   assert.ok(warnings.some((m) => m.includes('slot registry refused')), '注册失败必须留下诊断：' + JSON.stringify(warnings))
+})
+
+test('单入口纪律：per-message 档下回合尾**一次都不注册**（否则同屏两颗回退按钮）', () => {
+  // 计划层：两档互补 —— per-message ⇒ skip(per-message-mode)；turn ⇒ 照常按形态探测注册
+  assert.deepEqual(planChatEntryRegistrationForMode('per-message', fakeProbe('list')), { kind: 'skip', reason: 'per-message-mode', declared: null })
+  assert.deepEqual(planChatEntryRegistrationForMode('turn', fakeProbe('list')), { kind: 'register' })
+  assert.deepEqual(planChatEntryRegistrationForMode('turn', fakeProbe('chain')), { kind: 'skip', reason: 'slot-kind-mismatch', declared: 'chain' })
+  // 登记层：per-message 档下连探测都不做、register 零调用（用户 2026-10-10 第二条要求）
+  const warnings: string[] = []
+  let called = 0
+  const disposer = registerChatEntry({
+    probe: fakeProbe('list'),
+    readMode: () => 'per-message',
+    register: () => { called += 1; return () => {} },
+    warn: (m) => { warnings.push(m) },
+  })
+  assert.equal(called, 0, 'per-message 档下 turnTail 不得注册（每条消息已经有那一颗 icon 入口）')
+  assert.equal(typeof disposer, 'function')
+  assert.equal(disposer(), undefined)
+  assert.ok(warnings.some((m) => m.includes('per-message')), '诊断要点名真实原因：' + JSON.stringify(warnings))
+  // turn 档下照常注册（这颗就是唯一入口）
+  let turnRegistered = 0
+  registerChatEntry({
+    probe: fakeProbe('list'),
+    readMode: () => 'turn',
+    register: () => { turnRegistered += 1; return () => {} },
+    warn: (m) => { warnings.push(m) },
+  })
+  assert.equal(turnRegistered, 1)
 })
 
 test('服务惰取：navigationSourcesOf 只经 get()，异常/非对象一律按缺失处理', () => {
@@ -516,43 +570,116 @@ test('T9-F3：不可回退但没给原因键时，不得渲染成「没有可回
   assert.ok(zhHas(incompleteVerdict.reasonKey ?? ''), '该键必须在 recovery 字典里（聊天侧照直渲染）')
 })
 
-test('同尺子补齐（S4 / 队长追加验收）：对话框渲染 noticeKeys 与 previewWarnings/previewGuidance', () => {
+/**
+ * 2026-10-10 用户第三条「回退预览页面我不喜欢，我希望一个简洁的页面」——
+ * 源级钉住「**只**有文件列表 + 两个按钮」，同时钉住删掉的那些块**真的**不在渲染路径上
+ * （键值仍留在字典里给设置页回滚卡用，所以这里断言的是**对话框源码**不引用它们）。
+ */
+test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块一个都不在（源级）', () => {
   const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
-  // t19 的尺子：这三处必须在聊天入口命中（此前零命中）
-  assert.match(dialog, /noticeKeys/, 'S4 的「跳过 / 截断」必须上屏')
-  assert.match(dialog, /rollbackPreviewWarnings\(/, '点级告警（preview.warnings）必须渲染')
-  assert.match(dialog, /rollbackPreviewGuidance\(/, '点级指引（preview.guidance）必须渲染')
-  assert.match(dialog, /rollbackPointRows\(/, '留点期的 segment.noticeKeys 必须从台账行取（与面板同一份事实）')
-  // 文案走既有映射（不新增键）：未知码回落 unknown 由 src/ui 负责，聊天侧只照键渲染
-  const warns = (codes: string[]): { key: string; detail: string | null }[] => rollbackPreviewWarnings({ ok: true, id: 'p', storage: { available: true }, warnings: codes.map((code) => ({ code })) } as never)
-  assert.equal(warns(['rollback.warn.trackMissing'])[0]?.key, 'rollback.warn.trackMissing', '已知告警码照映射')
-  assert.equal(warns(['rollback.warn.brand-new'])[0]?.key, 'rollback.warn.unknown', '告警族未知码回落 rollback.warn.unknown')
-  assert.equal(warns(['brand-new'])[0]?.key, 'rollback.guidance.unknown', '无前缀未知码回落 guidance.unknown（与面板**同一份映射**）')
-  const rows = warns(['rollback.warn.trackMissing', 'rollback.warn.brand-new'])
-  for (const row of rows) assert.ok(zhHas(row.key) && enHas(row.key), '告警键必须在 recovery 字典 zh/en 里：' + row.key)
-  const guided = rollbackPreviewGuidance({ ok: true, id: 'p', storage: { available: true }, guidance: [{ code: 'probeDetail', detail: 'x' }] } as never)
-  assert.equal(guided[0]?.key, 'rollback.guidance.probeDetail')
-  // 留点期事实：跳过的超大文件 → 行级 noticeKeys 非空（S4「不整点丢弃、如实报告」）
-  const pointRows = rollbackPointRows({
-    points: [{ id: 'p', createdAt: 1, sessionId: 's1', turn: 1, segments: [{ state: 'workspace', ok: true, skippedCount: 2, truncated: true }] }],
-    storage: { available: true },
+  // 保留：文件列表与行数、空列表那一行、结果一行摘要、失败原因 code 行
+  assert.match(dialog, /rollback\.preview\.files\.title/, '必须有「将被回退的文件」小节')
+  assert.match(dialog, /rollback\.preview\.files\.empty/, '空列表必须显示「工作区与该回退点一致，无需恢复」')
+  assert.match(dialog, /readRollbackPreviewFiles\(/, '文件列表必须取自 E1 的 preview.workspace.files')
+  assert.match(dialog, /chatRewindSummary\(/, '结果必须走一行摘要')
+  assert.match(dialog, /chatRewindFailure\(/, '失败原因必须走同一个判定点')
+  assert.match(dialog, /rollback\.preview\.result\.code/, 'code 必须如实显示（不裸渲染机器码）')
+  assert.match(dialog, /chat\.rewind\.submit/, '主按钮文案必须是简洁版那一句')
+  // 删除：三选一 mode 单选 / 两态不全放行勾选 / 二次确认勾选 / 工作区·会话计数面板 /
+  //       救援点说明段 / 逐段结果详情面板（失败时只留一行摘要 + 原因）
+  for (const gone of [
+    /modeOptions/, /modeReachable/, /radioLabel/, /type="radio"/,
+    /Checkbox/, /rollback\.rewind\.allowPartial/, /rollback\.rewind\.confirm/, /rollback\.guard\.require/,
+    /rollbackPreviewRows\(/, /rollbackRewindRows\(/, /noticeKeys/, /rollbackPreviewGuidance\(/,
+    /rollback\.preview\.hint/, /rollback\.preview\.warningsTitle/,
+  ]) {
+    assert.doesNotMatch(dialog, gone, '已删除的块不得回到对话框：' + String(gone))
+  }
+  // 底部只有两个按钮：主按钮（回退）+ 取消/关闭
+  const buttons = [...dialog.matchAll(/<Button\b/g)].length
+  assert.equal(buttons, 3, '底部主按钮 + 取消 + 子会话「打开」按钮（有 fork 时才有）')
+})
+
+test('结果一行摘要：nothing-to-restore 是**成功**（不是失败），其余走既有 outcome 徽章', () => {
+  assert.equal(ROLLBACK_NOTHING_TO_RESTORE_KEY, 'rollback.preview.result.noop')
+  const noop = chatRewindSummary({ ok: true, outcome: 'restored', code: 'nothing-to-restore' } as never)
+  assert.deepEqual(noop, { kind: 'noop', key: ROLLBACK_NOTHING_TO_RESTORE_KEY })
+  assert.equal(chatRewindSummary({ ok: true, outcome: 'restored', code: 'ok' } as never).kind, 'plain')
+  assert.equal(chatRewindSummary({ ok: false, outcome: 'failed', code: 'restore-failed' } as never).kind, 'plain', '真失败走 outcome 徽章，不冒充 noop')
+  assert.deepEqual(chatRewindSummary(null), { kind: 'plain', key: null })
+  assert.ok(zhHas(ROLLBACK_NOTHING_TO_RESTORE_KEY) && enHas(ROLLBACK_NOTHING_TO_RESTORE_KEY), 'noop 文案键必须在 recovery 字典 zh/en 里')
+  assert.ok((recoveryZh as Record<string, string>)[ROLLBACK_NOTHING_TO_RESTORE_KEY]?.includes('无需恢复') === true, 'zh 逐字：工作区与该回退点一致，无需恢复')
+})
+
+test('失败原因：可读文案 + 真实 code + detail（段级失败同样收），detail 渲染前过 redact', () => {
+  const failed = chatRewindFailure({
+    ok: false, outcome: 'failed', code: 'restore-failed', detail: 'boom',
+    segments: [{ state: 'workspace', status: 'failed', reasonCode: 'nothing-to-restore' }],
   } as never)
-  assert.deepEqual(pointRows[0]?.segments[0]?.noticeKeys, ['rollback.row.notice.skipped', 'rollback.row.notice.truncated'])
-  assert.equal(pointRows[0]?.segments[0]?.skippedCount, 2, '{n} 插值取的就是这个计数')
-  for (const key of pointRows[0]?.segments[0]?.noticeKeys ?? []) assert.ok(zhHas(key) && enHas(key), 'noticeKeys 必须在 recovery 字典里：' + key)
+  assert.deepEqual(failed.keys, ['rollback.code.restore-failed', 'rollback.code.nothing-to-restore'], '结果级与段级 code 都要收，且都映射成可读键')
+  assert.equal(failed.code, 'restore-failed', 'code 如实回传（渲染时走 rollback.preview.result.code）')
+  assert.equal(failed.detail, 'boom')
+  const withSecret = chatRewindFailure({ ok: false, outcome: 'failed', code: 'restore-failed', detail: 'key sk-abcdefghijklmnopqrstuvwxyz' } as never)
+  assert.ok(withSecret.detail !== null && !withSecret.detail.includes('sk-abcdefghijklmnopqrstuvwxyz'), 'detail 必须已脱敏')
+  assert.equal(withSecret.code, 'restore-failed', 'code 不是秘密，原样显示（用户要求如实显示）')
+  assert.deepEqual(chatRewindFailure(null).keys, [])
+  // 未知 code 仍回落 unknown 键（绝不把机器码当主文案）
+  assert.deepEqual(chatRewindFailure({ ok: false, outcome: 'failed', code: 'brand-new' } as never).keys, ['rollback.code.unknown'])
 })
 
 test('告警不禁用回退（S4：允许部分覆盖 —— 有告警仍可提交）', () => {
   const preview = {
     ok: true, id: 'p', storage: { available: true }, canRestore: true,
     warnings: [{ code: 'rollback.warn.trackDegraded' }],
-    guidance: [{ code: 'probeDetail', detail: 'x' }],
     point: { id: 'p', createdAt: 1 },
     workspace: { available: true, overwrite: 1, different: 0, missing: 0, createdAfter: 0, skippedCount: 1, truncated: true },
   } as never
-  const draft = { ...defaultDraft(preview), confirmed: true }
+  const draft = confirmedDraft()
   assert.equal(canSubmitRewind(draft, preview), true, '有告警 / 有截断也必须能提交（规格允许部分覆盖）')
-  assert.equal(buildRewindOptions(draft)?.mode, 'files', 'mode 由预览可用段推导（本例只有工作区段），与告警无关')
+  assert.equal(buildRewindOptions(draft)?.mode, 'files+session', 'mode 恒为固定档位，与告警无关')
+})
+
+/* ------------------------------------------------------------ 简洁版预览：逐文件行级统计（E1） */
+
+test('预览文件读法：逐字段判定，只列会被改动的文件，null 行数不当 0（E1 形状）', () => {
+  // 空数组 = 工作区与该回退点一致（E1：只列会被改动的文件）
+  assert.deepEqual(readRollbackPreviewFiles({ files: [] }), [])
+  assert.deepEqual(readRollbackPreviewFiles({}), [])
+  assert.deepEqual(readRollbackPreviewFiles(null), [])
+  assert.deepEqual(readRollbackPreviewFiles({ files: 'nope' }), [])
+  // 正常两条：overwrite（有可信行数）+ create（新增 = 快照行数、删除 0）
+  const rows = readRollbackPreviewFiles({
+    files: [
+      { path: 'C:/p/a.ts', status: 'overwrite', added: 12, removed: 3, truncated: false },
+      { path: 'C:/p/b.ts', status: 'create', added: 7, removed: 0, truncated: false },
+    ],
+  })
+  assert.deepEqual(rows, [
+    { path: 'C:/p/a.ts', status: 'overwrite', added: 12, removed: 3, truncated: false },
+    { path: 'C:/p/b.ts', status: 'create', added: 7, removed: 0, truncated: false },
+  ])
+  assert.equal(chatFileChangeAvailable(rows), true)
+})
+
+test('预览文件读法：null / 缺字段 / 非数字一律「行数未统计」，行仍然上屏（绝不谎报 0）', () => {
+  const rows = readRollbackPreviewFiles({
+    files: [
+      { path: 'C:/p/big.bin', status: 'overwrite', added: null, removed: null, truncated: true },
+      { path: 'C:/p/half.ts', status: 'overwrite', added: 5, truncated: false },
+      { path: 'C:/p/weird.ts', status: 'overwrite', added: '5', removed: '2' },
+      { path: '', status: 'overwrite', added: 1, removed: 1 },
+      'not-an-object',
+    ],
+  })
+  assert.equal(rows.length, 3, '路径读不出的条目跳过，其余一律上屏')
+  assert.deepEqual(rows[0], { path: 'C:/p/big.bin', status: 'overwrite', added: null, removed: null, truncated: true })
+  assert.deepEqual(rows[1], { path: 'C:/p/half.ts', status: 'overwrite', added: 5, removed: null, truncated: true }, '缺一侧 ⇒ 整条「未统计」')
+  assert.deepEqual(rows[2], { path: 'C:/p/weird.ts', status: 'overwrite', added: null, removed: null, truncated: true }, '字符串数字不猜')
+  assert.equal(chatFileChangeAvailable(rows), false, '一条可信行数都没有 ⇒ 显示一句「行数未统计」说明')
+  // 未知 status 原样透传但不改变渲染（界面不按变更类型分派文案）
+  assert.equal(readRollbackPreviewFiles({ files: [{ path: 'x', status: 'rename' }] })[0]?.status, 'rename')
+  assert.equal(previewFileStatusKnown('overwrite') && previewFileStatusKnown('create') && previewFileStatusKnown('delete'), true)
+  assert.equal(previewFileStatusKnown('rename'), false, '白名单只用于断言：delete 保留在取值集合里（引擎当前永不产出）')
 })
 
 test('两态纪律（S2）：判定层不出现 config 第三态，也没有「同点」键', () => {

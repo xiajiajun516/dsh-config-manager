@@ -372,7 +372,9 @@ export const zh = {
   'rollback.warn.guardFailed': '回退前的救援点没留成（已记告警后继续）',
   'rollback.warn.unknown': '未识别的告警（技术细节见下方）',
   'rollback.preview': '预览回退',
-  'rollback.preview.title': '回退预览（只读，零写入）',
+  /* 2026-10-10 用户第三条：预览对话框改简洁版，标题就叫「回退预览」（不再带副标题）。
+     这个键只被两处预览界面使用（聊天入口的预览对话框 + 设置页回滚卡的预览弹窗），改的是同一句话。 */
+  'rollback.preview.title': '回退预览',
   'rollback.preview.hint': '以下为只读预览（零写入）。确认后才会执行回退。',
   'rollback.preview.loading': '正在生成预览…',
   'rollback.preview.empty': '该回滚点没有可回退的内容。',
@@ -389,6 +391,20 @@ export const zh = {
   'rollback.preview.notice.skipped': '{n} 项在留点时被跳过（未记录；不会被删除）',
   'rollback.preview.notice.truncated': '该点捕获被上限截断（超单文件上限 / 字节预算 / 文件数预算）',
   'rollback.preview.leftoversTitle': '该点未记录的文件（不会被删除）',
+  /* —— 简洁版预览：只列「会被回退的文件 + 新增/删除行数」（E1 的 preview.workspace.files）——
+   * 三条口径逐字对应引擎：① 只列**会被改动**的文件（内容已一致的一项都不列，空数组 ⇒ empty 那行）；
+   * ② added/removed 可能是 null（单文件超限 / 非文本 / 对象仓读不出）⇒ 说「行数未统计」，
+   * **绝不写 0**（0 是一个会被证伪的具体数字，而「不知道」不是）；③ 回退只覆盖、绝不删除文件，
+   * 所以这里没有「删除文件」这类文案。 */
+  'rollback.preview.files.title': '将被回退的文件：',
+  'rollback.preview.files.empty': '工作区与该回退点一致，无需恢复',
+  'rollback.preview.file.added': '+{n} 行',
+  'rollback.preview.file.removed': '−{n} 行',
+  'rollback.preview.file.unknown': '行数未统计',
+  'rollback.preview.file.unknownHint': '这些文件的行数没有统计出来（文件过大、不是文本或内容副本读不出来）—— 回退仍会照常覆盖它们。',
+  /* 结果一行摘要：nothing-to-restore 是**成功**（HTTP 200、恢复 0 项），不是失败 —— 说「无需恢复」 */
+  'rollback.preview.result.noop': '工作区与该回退点一致，无需恢复',
+  'rollback.preview.result.code': 'code：{code}',
   'rollback.preview.warningsTitle': '该点的告警',
   'rollback.preview.cursorBytes': '会话日志 {now} → {target} 字节',
   'rollback.group.label': '会话：{session}',
@@ -857,7 +873,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.warn.guardFailed': 'The pre-rewind rescue point failed (continued with a warning)',
   'rollback.warn.unknown': 'Unrecognized warning (technical detail below)',
   'rollback.preview': 'Preview rewind',
-  'rollback.preview.title': 'Rewind preview (read-only, zero writes)',
+  'rollback.preview.title': 'Rewind preview',
   'rollback.preview.hint': 'Read-only preview below (zero writes). The rewind only runs after you confirm.',
   'rollback.preview.loading': 'Generating preview…',
   'rollback.preview.empty': 'This rollback point has nothing to restore.',
@@ -874,6 +890,14 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.notice.skipped': '{n} item(s) were skipped at capture time (not recorded; never deleted)',
   'rollback.preview.notice.truncated': 'Capture was truncated by a limit (per-file / byte budget / file-count budget)',
   'rollback.preview.leftoversTitle': 'Files this point does not record (never deleted)',
+  'rollback.preview.files.title': 'Files that will be rewound:',
+  'rollback.preview.files.empty': 'The workspace already matches this rollback point, nothing to restore',
+  'rollback.preview.file.added': '+{n} lines',
+  'rollback.preview.file.removed': '\u2212{n} lines',
+  'rollback.preview.file.unknown': 'line counts not measured',
+  'rollback.preview.file.unknownHint': 'Line counts could not be measured for these files (too large, not text, or the content copy is unreadable) \u2014 the rewind will still overwrite them.',
+  'rollback.preview.result.noop': 'The workspace already matches this rollback point, nothing to restore',
+  'rollback.preview.result.code': 'code: {code}',
   'rollback.preview.warningsTitle': 'Warnings for this point',
   'rollback.preview.cursorBytes': 'Session log {now} → {target} bytes',
   'rollback.group.label': 'Session: {session}',

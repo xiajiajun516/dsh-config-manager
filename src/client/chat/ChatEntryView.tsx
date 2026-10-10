@@ -21,7 +21,6 @@ import { Component, Fragment, createElement, useCallback, useEffect, useMemo, us
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TranslateNS } from '../client-types.ts'
 import type { RollbackPointPort } from '../../ui/rollback-view.ts'
-import { Button } from '../common/ui.tsx'
 import { CopyStateIcon, RefreshIcon } from '../common/Icon.tsx'
 import { copyTextToClipboard } from '../common/clipboard.ts'
 import { RollbackReviewDialog } from './RollbackReviewDialog.tsx'
@@ -239,19 +238,20 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
           {/* 时间在动作行**最前**（宿主把 MessageIconActions 的 clock 设为 "start"，与它同构） */}
           {view.clock !== null && <span className={css.chatEntryTime}>{view.clock}</span>}
           <ChatEntryCopyAction text={bubble.text} t={t} />
-          {button.kind === 'enabled' ? (
-            <Button variant="ghost" size="sm" title={t('chat.entry.label')} onClick={openDialog}>
-              <RefreshIcon size={12} /> {t('chat.entry.label')}
-            </Button>
-          ) : (
-            // 禁用原因走原生 title（InfoHint 的 Portal 钉在插件设置页根节点，聊天区不存在）；
-            // 外层 span 承接 hover —— disabled 元素不派发 title 提示。
-            <span className={css.chatEntryDisabledWrap} title={reasonKey === null ? undefined : t(reasonKey as 'chat.entry.disabled.noTurn')}>
-              <Button variant="ghost" size="sm" disabled title={reasonKey === null ? undefined : t(reasonKey as 'chat.entry.disabled.noTurn')}>
-                <RefreshIcon size={12} /> {t('chat.entry.label')}
-              </Button>
-            </span>
-          )}
+          {/* 回退入口：**只有图标**（无文字标签、无边框按钮样式），与时间戳/复制图标同一行同观感 ——
+              2026-10-10 用户第二条要求「回退按钮只有一个 icon 而不是一个按钮」。可见文案退到
+              aria-label/title；禁用原因是原生 title 里的一句话（InfoHint 的 Portal 钉在插件设置页
+              根节点，聊天区不存在）。按钮始终留在原地（禁用而不是消失）：入口可见性不随判据漂移。 */}
+          <button
+            type="button"
+            className={css.chatActionBtn}
+            disabled={button.kind !== 'enabled'}
+            aria-label={t('chat.entry.label')}
+            title={reasonKey === null ? t('chat.entry.label') : t(reasonKey as 'chat.entry.disabled.noTurn')}
+            onClick={openDialog}
+          >
+            <RefreshIcon size={13} />
+          </button>
         </div>
       </div>
       {dialogTurn !== null && (

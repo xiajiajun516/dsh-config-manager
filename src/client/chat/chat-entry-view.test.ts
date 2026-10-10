@@ -16,6 +16,9 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync, readdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   buildChatEntryBubble,
@@ -51,7 +54,7 @@ import {
   subscribeChatEntryMode,
   writeChatEntryMode,
 } from './chat-entry-pref.ts'
-import { planChatEntryRegistration } from './rollback-entry-view.ts'
+import { planChatEntryRegistration, planChatEntryRegistrationForMode, registerChatEntry } from './rollback-entry-view.ts'
 import { en as chatEn, zh as chatZh } from './chat-locales.ts'
 import type { RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
 
@@ -204,6 +207,69 @@ test('steering is a DIFFERENT key: we never register it (host renderer unchanged
 
 test('turnTail fallback path is untouched: its registration plan still ships', () => {
   assert.deepEqual(planChatEntryRegistration({ spec: () => ({ kind: 'list' }) }), { kind: 'register' })
+})
+
+/* ------------------------------------------------------------ ① 单入口纪律（2026-10-10 用户第二条） */
+
+const HERE = fileURLToPath(new URL('.', import.meta.url))
+
+/** 读一个组件源码（*.tsx 不能在 node 下 type-strip 加载，故走源码级断言）。 */
+function sourceOf(file: string): string {
+  return readFileSync(join(HERE, file), 'utf8')
+}
+
+test('icon-only：两个入口都只画图标（无文字标签、无边框按钮、不 import Button）', () => {
+  for (const file of ['ChatEntryView.tsx', 'RollbackTurnEntry.tsx']) {
+    const src = sourceOf(file)
+    assert.doesNotMatch(src, /from '\.\.\/common\/ui\.tsx'/, file + '：入口不得再 import Button（icon 级入口不用按钮组件）')
+    assert.doesNotMatch(src, /<Button\b/, file + '：不得渲染 Button')
+    // 图标复用 common/Icon.tsx 的 lucide 图标
+    assert.match(src, /RefreshIcon/, file + '：必须复用 common/Icon.tsx 的回退图标')
+    // 与复制图标同一个观感/触达区（无边框、无文字）
+    assert.match(src, /className=\{css\.chatActionBtn\}/, file + '：icon 入口必须用与复制图标同一颗 .chatActionBtn')
+    assert.match(src, /aria-label=\{t\('chat\.entry\.label'\)\}|aria-label=\{rt\('rollback\.preview\.turns'/, file + '：可见文案退到 aria-label，无障碍仍可读')
+  }
+  // 每条用户消息那颗按钮上不得再出现文字标签
+  const entry = sourceOf('ChatEntryView.tsx')
+  assert.doesNotMatch(entry, /\{t\('chat\.entry\.label'\)\}\s*<\/button>/, '不得把文案当可见子节点渲染')
+  assert.doesNotMatch(entry, /title=\{t\('chat\.entry\.label'\)\}>\s*<RefreshIcon[^/]*\/>\s*[^<]/, '按钮里除图标外不得有文字')
+})
+
+test('单入口纪律：per-message 档下 turnTail 不注册，整回合档才注册（两档互斥）', () => {
+  const warnings: string[] = []
+  let registered = 0
+  registerChatEntry({
+    probe: { spec: () => ({ kind: 'list', scope: 'session' }) },
+    readMode: () => 'per-message',
+    register: () => { registered += 1; return () => {} },
+    warn: (message) => { warnings.push(message) },
+  })
+  assert.equal(registered, 0, '「每条用户消息」档：同屏不得出现两个回退入口')
+  assert.ok(warnings.some((line) => line.includes('per-message')))
+  registerChatEntry({
+    probe: { spec: () => ({ kind: 'list', scope: 'session' }) },
+    readMode: () => 'turn',
+    register: () => { registered += 1; return () => {} },
+    warn: (message) => { warnings.push(message) },
+  })
+  assert.equal(registered, 1, '「整回合」档：回合尾那一颗才是入口')
+  // 两档的登记面互补：per-message 注册 chat.node（keyed）、turn 注册 turnTail（list）
+  assert.deepEqual(planChatNodeRegistration('keyed', 'per-message'), { kind: 'register' })
+  assert.deepEqual(planChatEntryRegistrationForMode('per-message', { spec: () => ({ kind: 'list' }) }), { kind: 'skip', reason: 'per-message-mode', declared: null })
+})
+
+test('样式纪律：icon 入口与预览文件行只用既有 token/类，未引入第二套视觉体系', () => {
+  const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
+  // 新增的四个类都必须在唯一样式表里（组件里用了 css.* 却没定义就会渲染成 undefined）
+  const used = new Set<string>()
+  for (const file of readdirSync(HERE).filter((f) => f.endsWith('.tsx'))) {
+    const src = readFileSync(join(HERE, file), 'utf8')
+    for (const m of src.matchAll(/css\.([A-Za-z0-9_]+)/g)) used.add(m[1] as string)
+  }
+  for (const name of ['chatActionBtn', 'rollbackFileRow', 'rollbackFilePath', 'rollbackAdded', 'rollbackRemoved']) {
+    assert.ok(used.has(name), '本任务新增/复用的类必须真的被组件用到：' + name)
+    assert.ok(new RegExp('\\.' + name + '(?![A-Za-z0-9_-])').test(cssSheet), 'config-manager.module.css 缺类名：' + name)
+  }
 })
 
 /* ------------------------------------------------------------ ① 偏好读写 */
