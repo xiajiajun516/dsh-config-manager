@@ -19,6 +19,8 @@ import { SYNC_CHANNELS } from '../../utils/shared-constants.ts';
 // zh 源目录按**值**引入：本文件的渲染模型（UiT 字典不含 syncflow.* 键）需要为「回滚未完成」
 // 这类 sync 命名空间文案取词；组件可经 syncText 参数注入自己的翻译器（缺省 = zh 源）。
 import { en as syncEnCatalog, zh as syncZhCatalog, type SyncKey } from './sync-locales.ts';
+// 跳过原因码 → 字典键的唯一映射（与同步历史共用；绝不各自维护一份 switch）
+import { skipReasonKey } from './history-model.ts';
 import type { CloudConfigIssueCode } from '../../ui/sync-settings-view.ts';
 import type { S3CompatProvider } from '../../sync/sync-config.ts';
 import { currentUiLanguage, type UiT } from '../../ui/i18n.ts';
@@ -948,11 +950,18 @@ export function buildAdoptions(
 export type ApplyItemsViewKind = 'ok' | 'partial' | 'failed' | 'rolledBack' | 'rollbackIncomplete';
 
 /** sync 命名空间的取词器（缺省 = 该字典的 zh 源；组件可注入自己的 t 以本地化）。 */
-export type SyncTextFn = (key: SyncKey) => string
+export type SyncTextFn = (key: SyncKey, params?: Record<string, unknown>) => string
 // **活**取词器（不是 zh 快照）：sync 命名空间的 zh/en 目录都在手边，按当前语言取词 ——
 // 否则英文界面上「回滚未完成」这类只住在 sync 字典的文案会原样透出中文。
-const defaultSyncText: SyncTextFn = (key) =>
-  (currentUiLanguage() === 'zh' ? syncZhCatalog : syncEnCatalog)[key]
+const defaultSyncText: SyncTextFn = (key, params) => {
+  const raw = (currentUiLanguage() === 'zh' ? syncZhCatalog : syncEnCatalog)[key]
+  if (params === undefined) return raw
+  // 与字典的 {param} 口径一致（缺参原样保留，便于排查）
+  return raw.replace(/\{(\w+)\}/g, (m, name: string) => {
+    const value = params[name]
+    return value === undefined ? m : String(value)
+  })
+}
 
 export interface ApplyItemsView {
   kind: ApplyItemsViewKind;
@@ -1046,6 +1055,31 @@ export function formatIntervalDuration(ms: number, t: UiT): string {
   if (totalHours < 24) return t('sync.duration.hour', { n: totalHours });
   const totalDays = Math.ceil(totalHours / 24);
   return t('sync.duration.day', { n: totalDays });
+}
+
+/**
+ * 自动同步状态行的「本轮跳过原因」明细（issue #79）。
+ *
+ * 为什么单独成行而不是塞进状态徽章：跳过原因可能带数量（远端另有 N 个分区待确认），
+ * 徽章会挤成两行；且用户最需要的信息正是「为什么没同步」——改造前它只进 info 级日志
+ * （默认日志级别 warn），界面完全看不到。
+ *
+ * 未知码回退宿主原串（与同步历史同口径，不吞信息，也绝不渲染裸回调码当文案）。
+ */
+export function autosyncSkipDetail(
+  status: AutosyncStatusResponse,
+  syncText: SyncTextFn = defaultSyncText,
+): string | null {
+  const reason = status.lastRunSkipReason
+  if (reason === undefined || reason === '') return null
+  const key = skipReasonKey(reason)
+  // 未知码：给可读兜底，**绝不**把裸码渲染成文案（历史行保留原串以便排查，状态行只要可读）
+  const label = key === null ? syncText('history.autosyncReasonUnknown') : syncText(key)
+  // 冲突：补一句「远端另有 N 个分区待确认」（数量来自宿主的结构化字段，不是从文案里抠）
+  if (reason === 'conflict' && status.lastRunSkipCount !== undefined && status.lastRunSkipCount > 0) {
+    return syncText('autosync.skipReasonConflictCount', { reason: label, n: String(status.lastRunSkipCount) })
+  }
+  return label
 }
 
 /** 自动同步状态行的可读文案（未运行 / 上次状态 / 连续失败计数）。 */

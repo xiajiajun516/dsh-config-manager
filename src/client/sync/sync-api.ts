@@ -97,6 +97,30 @@ export interface SyncStatusResponse {
   autosync?: AutosyncStatusResponse;
   /** 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道） */
   autosyncByChannel?: Record<SyncTransportType, AutosyncStatusResponse>;
+  /**
+   * issue #79：git 工作副本与配置地址的关系（host 只读自检）。
+   *  - `{ facts }` = 自检成功（origin 是否已跟随 repoUrl）
+   *  - `{ error }` = 自检读不出来（git 不可用 / 工作副本异常）——**如实回传**，不伪装成「不存在」
+   */
+  workDir?: { facts: SyncWorkDirFacts } | { error: string };
+}
+
+/** git 工作副本自检事实（与宿主 GitWorkDirFacts 同形；无任何敏感值）。 */
+export interface SyncWorkDirFacts {
+  /** 工作副本路径 */
+  path: string;
+  /** `.git` 是否存在 */
+  exists: boolean;
+  /** 当前 origin（读不出 → null） */
+  origin: string | null;
+  /** 单独配置的 push URL（未单独配置 → null） */
+  pushUrl: string | null;
+  /** fetch / push 地址是否都已跟随 repoUrl */
+  match: boolean;
+  /** 未上行的本地提交数（仅 detail 自检时给出，否则 null） */
+  ahead: number | null;
+  /** 工作树是否有未提交改动（仅 detail 自检时给出，否则 null） */
+  dirty: boolean | null;
 }
 
 /** 同步密码的保存状态（只回布尔；密码值永不回传浏览器）。 */
@@ -432,6 +456,14 @@ export interface AutosyncStatusResponse {
   lastRunAt?: string;
   lastRunStatus?: AutosyncRunStatus;
   lastRunMessage?: string;
+  /**
+   * issue #79：本轮跳过的**结构化原因码**（界面按码取字典，绝不渲染裸枚举）。
+   * 取值与同步历史的 skipReason 同一套：conflict / mutation-locked / encrypted /
+   * unconfigured / upToDate / unchanged。
+   */
+  lastRunSkipReason?: string;
+  /** 跳过涉及的分区数（当前仅 conflict：远端另有 N 个分区待确认） */
+  lastRunSkipCount?: number;
   consecutiveFailures: number;
   /** 距上次自动同步已过 ms（host 计算，供 UI 倒计时/立即触发判断） */
   elapsedMs: number;
@@ -573,9 +605,21 @@ export class SyncApi {
     this.t = t
   }
 
-  /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数） */
+  /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数 / 工作副本自检） */
   async status(): Promise<SyncStatusResponse> {
     return getJson<SyncStatusResponse>(SYNC_API.status, this.t, SYNC_OPTS);
+  }
+
+  /**
+   * 重建 git 工作副本（issue #79 的自救入口）。
+   *
+   * - `relink`：只把 origin / push URL 重指向当前配置地址（非破坏性，不碰工作树与本地提交）；
+   * - `reclone`：删除工作副本后重新 clone（**丢弃未上行的本地提交**）→ 必须带 `confirm: true`。
+   *
+   * 写动作：host 侧过 mutation gate（SAFE MODE / 环境锁）。
+   */
+  async workdirReset(payload: { mode: 'relink' | 'reclone'; confirm?: boolean }): Promise<{ ok: boolean; mode: string; workDir: { facts: SyncWorkDirFacts } }> {
+    return postJson<{ ok: boolean; mode: string; workDir: { facts: SyncWorkDirFacts } }>(SYNC_API.workdirReset, payload, this.t, SYNC_OPTS);
   }
 
   /**

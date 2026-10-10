@@ -283,8 +283,10 @@ test('runOnce: webdav 未配置（webdav.url 缺）→ skipped(unconfigured)，�
   const result = await scheduler.runOnce('webdav');
   assert.equal(result.status, 'skipped');
   assert.equal(result.skipReason, 'unconfigured');
-  assert.equal(result.consecutiveFailures, 1, '未配置不计失败（保持 1）');
-  assert.equal(getConfig().consecutiveFailures, 1);
+  // issue #79：连续失败计数只统计「真的失败」——未配置属跳过，必须归零（此前保持 1，
+  // 面板于是长期显示「连续失败 N 次」，把用户引向网络排查）
+  assert.equal(result.consecutiveFailures, 0, '未配置不算失败 → 计数归零');
+  assert.equal(getConfig().consecutiveFailures, 0);
 });
 
 test('syncIsConfigured: git 看 git.repoUrl、webdav 看 webdav.url；null 未配置', () => {
@@ -306,19 +308,73 @@ test('runOnce: merge 抛错 → failed，连续失败计数 +1', async () => {
   assert.ok(getEntries().some((e) => e.status === 'failed'), '写入失败历史');
 });
 
-test('runOnce: 有冲突 → skipped(conflict)，不写本地，不计失败', async () => {
+test('issue #79：远端冲突只挡下行 —— 不写本地，但仍推送本机改动（partial，不谎报 success/failed）', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 1 };
+  const applyCalls: string[] = [];
+  const pushCalls: string[] = [];
   const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
     merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict']]),
+    applyMergePlan: async () => {
+      applyCalls.push('apply');
+      return { ok: true, applied: [] as never[], restoreId: 'r1', rolledBack: false, review: [], warnings: [] };
+    },
+    push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 'snap-up', sections: [] as never, warnings: [] }; },
   };
   const { scheduler, getConfig, getEntries } = makeScheduler({ cfg, engine, history: [] });
   const result = await scheduler.runOnce('git');
-  assert.equal(result.status, 'skipped');
+  assert.equal(result.status, 'partial', '上行成功 + 下行待确认 → partial');
   assert.equal(result.skipReason, 'conflict');
   assert.deepEqual(result.conflictedSections, ['settings']);
-  assert.equal(result.consecutiveFailures, 1, '冲突跳过不计失败');
-  assert.equal(getConfig().consecutiveFailures, 1);
-  assert.ok(getEntries().some((e) => e.skipReason === 'conflict'), '写入冲突跳过历史');
+  assert.equal(result.pushedSnapshotId, 'snap-up', '本机快照仍有上行出口（issue #79 主诉）');
+  assert.equal(applyCalls.length, 0, '冲突绝不写本机配置');
+  assert.equal(pushCalls.length, 1, '纯上行不被冲突连坐');
+  assert.equal(result.consecutiveFailures, 0, '冲突跳过不是失败 → 计数归零');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict', '跳过原因落到状态（界面按码取字典）');
+  assert.equal(getConfig().lastRunSkipCount, 1);
+  assert.ok(getEntries().some((e) => e.status === 'partial' && e.skipReason === 'conflict'), '写入 partial 历史');
+  assert.ok(getEntries().some((e) => e.pushedSnapshotId === 'snap-up'), '历史带上行快照 id');
+});
+
+test('issue #79：冲突且本机无改动（非 startup）→ skipped(conflict) 且不带 push', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const pushCalls: string[] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => false,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict']]),
+    push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 'x', sections: [] as never, warnings: [] }; },
+  };
+  const { scheduler, getConfig } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'skipped');
+  assert.equal(result.skipReason, 'conflict');
+  assert.equal(pushCalls.length, 0, '本地无改动不上传');
+  assert.equal(getConfig().lastRunMessage ?? '', '', '本轮跳过不得残留上一轮的错误文案');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict');
+});
+
+test('issue #79：本轮成功必须清掉上一轮的错误文案与跳过码（陈旧信息不再挂面板）', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 2,
+    lastRunMessage: 'git pull 失败: ssh: connect to host 192.168.10.x port 2222: Connection timed out',
+    lastRunSkipReason: 'mutation-locked',
+    lastRunSkipCount: 7,
+  };
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({ ok: true, snapshotId: 'snap-clean', sections: [] as never, warnings: [] }),
+  };
+  const { scheduler, getConfig } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'success');
+  const saved = getConfig();
+  assert.equal(saved.lastRunMessage, '', '成功即清空旧错误文案');
+  assert.equal(saved.lastRunSkipReason, undefined, '成功即清空旧跳过码');
+  assert.equal(saved.lastRunSkipCount, undefined);
+  assert.equal(saved.consecutiveFailures, 0, '成功归零连续失败');
 });
 
 test('runOnce: 无冲突且无变化 → success(pull,unchanged)，不上传（本地也无改动）', async () => {

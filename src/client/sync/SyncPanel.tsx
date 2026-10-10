@@ -88,6 +88,7 @@ import type { ExportPreviewResponse } from '../api.ts'
 import { SecurityOptionsCard } from './SecurityOptionsCard.tsx'
 import { DecryptPasswordCard } from './DecryptPasswordCard.tsx'
 import { AutosyncCard } from './AutosyncCard.tsx'
+import { WorkDirCard } from './WorkDirCard.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { SyncLogList } from './SyncLogList.tsx'
 import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
@@ -1282,6 +1283,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             onClearSavedPassword={() => { clearSavedDecryptPassword(channel) }}
           />
         )}
+        {/* issue #79：工作副本（git 专属；确认弹窗/宿主调用/回执全在 WorkDirCard.tsx） */}
+        {ready && channel === 'git' && <WorkDirCard t={t} api={api} workDir={state.statusInfo?.workDir} busy={busy} onChanged={() => { void loadStatus() }} />}
         {/* issue #59：远端快照列表不完整时的常驻告知（push 报成功但列表为空时，这里是唯一线索）。
             v3：跟着**它所属的通道**走（此前挂页面级 = 显示的是隐式当前通道的列表）。 */}
         {ready && <UnreadableSnapshotsBanner items={cs.unreadableSnapshots} t={t} />}

@@ -30,6 +30,41 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🆕 新增 · Added
 
+> **工作副本可见 + 可自救：origin 有没有跟上新地址一目了然，一键「重指向 / 重新克隆」**（issue #79）：改仓库地址后同步长期失败时，
+> App 内此前**没有任何自救路径** —— 只能手工 `git remote set-url`，或删掉 `<dataDir>/sync/work` 重来。
+> - `GET /sync/status` 新增只读 `workDir` 字段（只做 2 条本地只读 git 命令：`remote get-url` 与其 `--push` 变体）；
+>   通道卡在「仍指旧地址 / 读不出」时挂 warn 徽章，展开区的「工作副本」卡给出路径、origin 与状态。自检读不出来时回
+>   `{ error }` 而**不伪装成「工作副本不存在」**，且不阻断整个状态接口。
+> - `POST /sync/workdir/reset`（写动作，过 mutation gate）两种模式：`relink` 只把 origin / push URL 重指向当前地址（非破坏性）；
+>   `reclone` 删除工作副本后重新 clone（**丢弃未上行的本地提交** → 必须显式 `confirm: true`，界面走 danger 二次确认）。
+>   删除边界：目录非空且无 `.git` 一律拒绝 —— 绝不删来路不明的目录。
+> - **护栏**：`src/sync/git/git-transport.test.ts`（7 条：不一致→set-url（fetch + push）/ 一致→零写命令 / 无 origin→`remote add` /
+>   空串读取→不改写 / 主机密钥文案 / 真机「改地址后确实写到新远端」 / `rebuildWorkDir` relink + reclone + 非仓库拒绝）、
+>   `tests/route/sync-workdir-reset-route.test.ts`（4 条：facts 回传 / error 回传仍 200 / 两种模式 / 四类 400 且不调重建）、
+>   `src/ui/sync-settings-view.test.ts`（3 条入口判定）。
+
+> **Working copy is now visible and self-repairable** (issue #79): the read-only `workDir` facts on `GET /sync/status` (two local
+> read-only git commands) surface whether the working copy's origin follows the configured address; a warn badge appears when it does not,
+> and the expanded "Working copy" card shows path, origin and state. Unreadable self-inspection returns `{ error }` instead of pretending
+> the copy is absent, and never 500s the whole status route. `POST /sync/workdir/reset` (behind the mutation gate) offers `relink`
+> (re-point origin/push URL, non-destructive) and `reclone` (delete and clone again — discards unpushed local commits, so it requires
+> `confirm: true` and a danger confirmation in the UI). A non-empty directory without `.git` is refused. Guards: the git transport tests,
+> `tests/route/sync-workdir-reset-route.test.ts`, `src/ui/sync-settings-view.test.ts`.
+
+> **自动同步说清「为什么没同步」**（issue #79）：`lastRunMessage` 此前**从不渲染**，跳过原因只写 `host.log.info`（默认级别 warn）——
+> 真机现场连续 16 次 `skipped/mutation-locked` 期间，用户只能去翻 `sync-autosync.json` 猜。
+> - `AutosyncConfig` 与状态接口新增结构化 `lastRunSkipReason`（+ 冲突的 `lastRunSkipCount`）：传**码**不传文案
+>   （语言在渲染那一刻解析），未知码给字典兜底、**绝不渲染裸枚举**；自动同步卡新增「跳过原因」与「本轮消息」两行。
+> - 跳过原因 → 字典键的映射收敛为 `history-model.skipReasonKey`（历史行与状态行共用一份），并补齐 `upToDate` / `unchanged` /
+>   `unconfigured` 三个此前会裸透到界面的码。
+> - **护栏**：`src/client/sync/sync-view.test.ts`（3 条）、`src/client/sync/history-model.test.ts`（源码守卫 + 2 条映射）、`src/sync/autosync-scheduler.test.ts`。
+
+> **Auto sync now says *why* it did not sync** (issue #79): `lastRunMessage` was never rendered, and skip reasons went only to
+> `host.log.info` (the default level is warn) — during the reported 16 consecutive `skipped/mutation-locked` runs the user had to
+> dig through `sync-autosync.json`. A structured `lastRunSkipReason` (plus `lastRunSkipCount` for conflicts) now travels as a
+> **code**, localized at render time, with a dictionary fallback for unknown codes and no raw enums in the UI; the auto-sync card gained
+> "skip reason" and "last message" rows, and the reason→dictionary-key mapping is shared through `history-model.skipReasonKey`.
+
 > **MCP 服务器可以走同步通道了（可选分区，逐分区放行）**（issue #78）：v0.1.69 起同步通道（Git / WebDAV / 对象存储 / Gist）
 > **只处理 portable 分区**，而 `mcp` 注册为 `platformSpecific` —— 高级模式勾上它只会得到 `sync.skipNonPortable` 警告，
 > 快照里**从来没有这个分区**，换机后只能手写 `dsh-mcp-client` 行。
@@ -165,6 +200,45 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Guards**: `src/core/backup.test.ts`.
 
 ### 🐛 修复 · Fixed
+
+> **改了仓库地址后同步静默失效（issue #79 主诉）**：`src/sync/git/git-transport.ts` 的 `ensureRepo()` 见到已有 `.git` 就直接复用，
+> `repoUrl` 只在首次 clone 时被使用 —— 此后 pull / push 全走旧 `origin`，失败面却是旧地址的网络超时（很容易被误判成网络或凭据问题）。
+> 现在每次同步都核对 origin（含 `--push` 变体）并与配置地址对齐（**一致时一条写命令都不发**；读不出 origin 时先 `remote add`）。
+> 另外两类「与网络无关」的失败也有了专用可操作文案：SSH 主机密钥校验失败（给出 `ssh-keyscan` / `known_hosts` 做法，
+> **绝不自动信任任何主机**）与「远端与本地工作副本不是同一条历史」（指向重建工作副本）。
+
+> **Change the repository address and sync silently died** (issue #79): `ensureRepo()` reused an existing `.git` and `repoUrl` was only
+> used on the first clone, so pull/push kept using the stale `origin` while the failure looked like a network timeout. Every sync now
+> reconciles origin (including the `--push` URL) with the configured address — **zero write commands when they already match** — and adds
+> `origin` when it is missing. Two non-network failures also got actionable messages: SSH host-key verification (how to use
+> `ssh-keyscan`/`known_hosts`; **no host is ever trusted automatically**) and "the remote and the local working copy are not the same history".
+
+> **远端冲突不再连坐「把本机配置推上去」**（issue #79）：merge 计划含冲突时整轮 `skipped/conflict` 直接 return，
+> Phase C 的 push 永远到不了 —— 纯上行备份链路被一并封死。现在冲突只挡**下行**（绝不把冲突内容写进本地），
+> 仍按 `localDirty` 执行纯上行推送并记 `partial`（上行成功、下行待确认，带冲突分区清单）；本地无改动或启动变体仍是 `skipped/conflict`。
+> 护栏：`src/sync/autosync-scheduler.test.ts`（冲突 → partial + 仍 push + 不写本地）。
+
+> **Remote conflicts no longer block the upload-only path** (issue #79): any conflict made the whole run `skipped/conflict` and return
+> before the push phase, so "back up this machine" was blocked too. Conflicts now block only the **download** side (nothing is written
+> locally); the pure upload still runs when local config changed and is reported as `partial` with the conflicted sections.
+
+> **不再长期挂着几天前的旧错误与旧计数**（issue #79）：`writeFinalConfig` 只在失败时写 `lastRunMessage`，
+> 于是旧地址超时文案在连续跳过期间一直驻留；`consecutiveFailures` 又只在成功时归零。现在每轮都用本轮结果覆盖消息与跳过码
+> （**成功即清空**），连续失败计数**只在真失败时 +1，success / skipped / partial 一律归零**（跳过不是失败）。
+
+> **Stale errors and failure counts no longer linger** (issue #79): the message is now overwritten every run (cleared on success), and
+> `consecutiveFailures` increments only on real failures while success/skipped/partial reset it to zero.
+
+> **环境锁「没有锁文件」不再被报成 LOCKED**（issue #79）：ownership 文件缺失时 `inspectLockState()` 保守归为 LOCKED，
+> startup 映射的非 STALE/UNKNOWN 兜底也映射成 LOCKED → `/recovery/status` 会显示一个并不存在的锁（真机：用户自测 acquire/release
+> 都正常，面板却一直 LOCKED）。现在缺失态如实为新增分类 `FREE` 并透传 startup 映射；**acquire 侧不据此放行** ——
+> 它改为重试独占创建（有界 5 次），把「上一次占用刚释放」的竞态从「另一个任务正在运行」里摘出来。
+> 护栏：`src/utils/env-lock.test.ts`（63 条全绿，含 FREE 竞态与既有 stale 语义不变）。
+
+> **The environment lock no longer reports LOCKED when there is no lock file** (issue #79): a missing ownership file classified as
+> LOCKED (and the startup mapping did the same), so `/recovery/status` showed a lock that did not exist. A missing file is now the new
+> `FREE` state. Acquire does not treat it as permission to proceed — it retries exclusive creation (bounded), so a just-released lock
+> is no longer mistaken for "another task is running".
 
 > **备份/导出不再把「共享引用」误判成循环引用**（用户上报 2026-10-09，0.1.66 真机）：敏感扫描器判环用的是
 > **全局 visited**（"本次扫描见过的对象"），而 settings 分区的 `value` 与 `base` 在未被用户覆盖的嵌套分组上

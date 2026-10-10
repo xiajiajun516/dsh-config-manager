@@ -52,6 +52,17 @@ export interface AutosyncConfig {
   /** 最近一次自动同步执行状态 */
   lastRunStatus?: AutosyncRunStatus;
   lastRunMessage?: string;
+  /**
+   * 最近一次**跳过**的结构化原因码（issue #79）。
+   *
+   * 为什么是码而不是文案：语言在「取文案那一刻」解析（AGENTS.md i18n 铁律），状态行由界面
+   * 按码取自己的字典；存一句当时语言的中文，用户切到英文界面后会看到中英混排。
+   * 已知值见 `svc.autosyncSkip.*` 的字典键（'conflict'/'mutation-locked'/'upToDate'…），
+   * **未知码一律渲染兜底文案，绝不渲染裸枚举**。
+   */
+  lastRunSkipReason?: string;
+  /** 最近一次跳过涉及的分区数（当前仅 conflict：远端另有 N 个分区待确认） */
+  lastRunSkipCount?: number;
   /** 最近一次自动同步触发的同步历史条目 id */
   lastRunHistoryId?: string;
 }
@@ -85,6 +96,13 @@ function parseV1Channel(obj: Record<string, unknown>): AutosyncConfig {
     cfg.lastRunStatus = obj['lastRunStatus'];
   }
   if (typeof obj['lastRunMessage'] === 'string') cfg.lastRunMessage = obj['lastRunMessage'];
+  // issue #79：状态行的结构化跳过原因（旧文件没有这两个字段 → undefined，行为不变）
+  if (typeof obj['lastRunSkipReason'] === 'string' && obj['lastRunSkipReason'] !== '') {
+    cfg.lastRunSkipReason = obj['lastRunSkipReason'];
+  }
+  if (typeof obj['lastRunSkipCount'] === 'number' && Number.isFinite(obj['lastRunSkipCount']) && obj['lastRunSkipCount'] >= 0) {
+    cfg.lastRunSkipCount = obj['lastRunSkipCount'];
+  }
   if (typeof obj['lastRunHistoryId'] === 'string') cfg.lastRunHistoryId = obj['lastRunHistoryId'];
   return cfg;
 }
@@ -161,6 +179,9 @@ function toChannelPayload(cfg: AutosyncConfig): Record<string, unknown> {
   if (cfg.lastRunAt !== undefined && cfg.lastRunAt !== '') payload['lastRunAt'] = cfg.lastRunAt;
   if (cfg.lastRunStatus !== undefined) payload['lastRunStatus'] = cfg.lastRunStatus;
   if (cfg.lastRunMessage !== undefined && cfg.lastRunMessage !== '') payload['lastRunMessage'] = cfg.lastRunMessage;
+  // 空串/undefined 一律不写 → 本轮成功时，上一轮的跳过码/旧消息在文件里被真正清掉（issue #79）
+  if (cfg.lastRunSkipReason !== undefined && cfg.lastRunSkipReason !== '') payload['lastRunSkipReason'] = cfg.lastRunSkipReason;
+  if (cfg.lastRunSkipCount !== undefined) payload['lastRunSkipCount'] = cfg.lastRunSkipCount;
   if (cfg.lastRunHistoryId !== undefined && cfg.lastRunHistoryId !== '') payload['lastRunHistoryId'] = cfg.lastRunHistoryId;
   return payload;
 }

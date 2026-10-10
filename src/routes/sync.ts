@@ -126,6 +126,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     syncPasswordConfigured,
     syncSectionCatalog,
     syncSessions,
+    syncWorkDir,
     tmpDir,
     tryAppendHistory,
     withMutationGate,
@@ -163,6 +164,11 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           : undefined
         // 云端点配置视图（只回 secretStored 布尔；与当前通道无关，配置过即回填）
         const cloud = await cloudChannelViews(full, credentials)
+        // issue #79：git 工作副本是否已跟随 repoUrl（只读自检，2 条本地只读 git 命令）。
+        // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
+        const gitRepoUrl = full?.git?.repoUrl ?? ''
+        let workDir: Awaited<ReturnType<typeof syncWorkDir.inspect>> | null = null
+        if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl)
         writeJson(res, 200, {
           ok: true,
           configured: full !== null,
@@ -194,11 +200,44 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           autosync: await buildAutosyncStatus(syncDir, transport),
           // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
           autosyncByChannel: await buildAutosyncStatusByChannel(syncDir),
+          // 工作副本事实（仅 git 且配置了地址时返回；'facts' = 自检成功，'error' = 自检读不出来）
+          ...(workDir === null ? {} : { workDir }),
         })
       } catch (error) {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
       }
     }),
+    // ------------------------------------------------------ sync/workdir/reset
+    // issue #79：工作副本的自救入口（改造前 App 内完全没有 —— 改了仓库地址只能手工
+    // git remote set-url，或删掉 <dataDir>/sync/work 重来）。两种模式，破坏性清清楚楚：
+    //   relink  = 只把 origin / push URL 重指向当前配置地址（非破坏性：不碰工作树与本地提交）；
+    //   reclone = 删除工作副本目录后重新 clone（**丢弃未上行的本地提交**）→ 必须显式 confirm。
+    // 写动作 → 过 mutation gate（SAFE MODE / 环境锁）；删除边界见 GitTransport.rebuildWorkDir
+    // （目录非空且无 .git 一律拒绝，绝不删来路不明的目录）。
+    endpoint({ path: '/api/dsh-config-manager/sync/workdir/reset', methods: ['POST'] }, withMutationGate('sync-workdir-reset', async (req, res) => {
+      try {
+        const body = await requireJsonObject(req)
+        const mode = body['mode'] === undefined ? 'relink' : body['mode']
+        if (mode !== 'relink' && mode !== 'reclone') {
+          writeJson(res, 400, { error: msg('sync.workdirModeInvalid', { mode: JSON.stringify(body['mode']) }) })
+          return
+        }
+        if (mode === 'reclone' && body['confirm'] !== true) {
+          writeJson(res, 400, { error: msg('sync.workdirRecloneNeedsConfirm') })
+          return
+        }
+        const full = await readFullSyncConfig(syncDir)
+        const repoUrl = full?.git?.repoUrl ?? ''
+        if (repoUrl === '') {
+          writeJson(res, 400, { error: msg('sync.workdirNotConfigured') })
+          return
+        }
+        const rebuilt = await syncWorkDir.rebuild(repoUrl, mode)
+        writeJson(res, 200, { ok: true, mode, workDir: { facts: rebuilt } })
+      } catch (error) {
+        writeSyncRouteError(res, error)
+      }
+    })),
     // ------------------------------------------------------ sync/config
     // m-sync-config：保存同步通道配置（parseSyncBody 校验 + password/token 写 DSH credentials +
     // writeSyncConfig 落盘）。UI 表单自动保存 /「保存配置」按钮调用；响应为轻量状态视图

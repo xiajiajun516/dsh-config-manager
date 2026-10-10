@@ -6,6 +6,8 @@
  * + 自动同步 kind=autosync），投影需统一处理两源，并生成自动同步跳过冲突的可读明细。
  */
 import type { AutosyncHistoryEntry, SyncHistoryEntry } from './sync-api.ts'
+// 跳过原因码 → 字典键的映射键类型（**type-only**：不把 zh/en 目录按值带进本条 import）
+import type { SyncKey } from './sync-locales.ts'
 import type { TranslateNS } from '../client-types.ts'
 
 /** 同步命名空间翻译器（本文件的标签一律走它 —— 硬编码中文在英文界面下会原样透出）。 */
@@ -88,20 +90,36 @@ export function autosyncStatusLabel(status: AutosyncHistoryEntry['status'], t: S
  * mutation-locked / 未知 **七类全部**走 history.autosyncReason* 字典键 —— 此前后三类是
  * 硬编码中文（sync-locales.ts 当时不可写），英文界面下会原样透出。
  */
-export function describeSkipReason(reason: string | undefined, t: SyncTranslate): string {
+export function skipReasonKey(reason: string | undefined): SyncKey | null {
   switch (reason) {
-    case 'conflict': return t('history.autosyncReasonConflict');
-    case 'no-remote': return t('history.autosyncReasonNoRemote');
-    case 'not-configured': return t('history.autosyncReasonNotConfigured');
-    case 'network': return t('history.autosyncReasonNetwork');
-    case 'encrypted': return t('history.autosyncReasonEncrypted');
+    case 'conflict': return 'history.autosyncReasonConflict';
+    case 'no-remote': return 'history.autosyncReasonNoRemote';
+    case 'not-configured':
+    // issue #79：宿主同一语义两处命名（历史写 'unconfigured'，旧口径是 'not-configured'）→ 同一文案
+    case 'unconfigured': return 'history.autosyncReasonNotConfigured';
+    case 'network': return 'history.autosyncReasonNetwork';
+    case 'encrypted': return 'history.autosyncReasonEncrypted';
+    // issue #79：状态行新增两类（无变化 / 已是最新）——此前会落到 default 渲染裸码
+    case 'upToDate': return 'history.autosyncReasonUpToDate';
+    case 'unchanged': return 'history.autosyncReasonUnchanged';
     // issue #31：宿主侧的分类锁判定（LOCKED/STALE/UNKNOWN）统一以 'mutation-locked' 落历史，
     // 客户端拿不到细分 reason → 文案必须同时覆盖「活锁占用」与「残留锁需回收」两种可能，
     // 并给出可操作方向（否则界面只显示裸 token，用户无从判断要不要处理）。
-    case 'mutation-locked': return t('history.autosyncReasonMutationLocked');
-    // 未知原因：宿主回传的原串优先（不吞信息），缺串时给可读兜底
-    default: return reason ?? t('history.autosyncReasonUnknown');
+    case 'mutation-locked': return 'history.autosyncReasonMutationLocked';
+    // 未知原因：没有字典键（调用方决定回退策略）
+    default: return null;
   }
+}
+
+/**
+ * 跳过原因码 → 可读描述（历史行与自动同步状态行**共用同一份映射**）。
+ *
+ * 参数取「码 → 文案」的最小取词器（只要吃 SyncKey 即可），这样 UiT / 组件 t / 活目录
+ * 三种取词器都能直接传入，不必为了类型对齐再造一个包装。
+ */
+export function describeSkipReason(reason: string | undefined, t: (key: SyncKey) => string): string {
+  const key = skipReasonKey(reason);
+  return key === null ? (reason ?? t('history.autosyncReasonUnknown')) : t(key);
 }
 
 /** 把一条自动同步记录投影为展示行（摘要文本 + 可展开的被跳过冲突分区明细）。 */

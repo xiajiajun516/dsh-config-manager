@@ -18,14 +18,17 @@
  *  - readSyncConfig(该通道) → 按通道判定未配置（git 无 git.repoUrl / webdav 无 webdav.url）
  *    → 记 skipped(未配置) → return
  *  - Phase A: engine.merge() 三方合并 → 判定 needsReview（冲突/缺失依赖/Install/Error）
- *  - 冲突 → 跳过 + 写历史 skipped + conflictedSections[] → return
+ *  - 冲突 → 只挡**下行**：跳过 Phase B（绝不写本地）+ 记 conflictedSections[]，
+ *    但**继续**走到 Phase C 做纯上行导出（issue #79：远端冲突不该连坐「把本机配置推上去当备份」）
  *  - Phase B: 无冲突 → 按 risk.ts 的 classifyMergePlan 分流（audit-sync sync-F5）：
  *    低风险项自动应用；medium/high 项**不自动应用**并进 conflictedSections（待人工确认，绝不静默）
  *    → engine.applyMergePlan(autoApply) 写入本地
- *  - Phase C: 完整双向 → engine.push() 上传
- *  - 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures, lastRunHistoryId）
+ *  - Phase C: 完整双向 → engine.push() 上传（本轮有冲突且推送成功 → 状态 partial，不谎报 success）
+ *  - 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures,
+ *    lastRunHistoryId, lastRunMessage/跳过原因 —— 每轮覆盖上一轮，绝不残留旧错误）
  *
- * 连续失败计数：只对网络/传输/apply 真实失败计数；skipped（未配置/冲突跳过/无远端）不计。
+ * 连续失败计数（issue #79 起）：只有**真的失败**（网络/传输/apply）才 +1；success / skipped /
+ * partial 一律归零 —— 否则「2 次真失败 + 16 次跳过」会长期显示「连续失败 2 次」，把用户引向网络排查。
  * 连续失败 ≥ 3 → host.log.warn 通知 + 记 notifiedAt。
  */
 import crypto from 'node:crypto';
@@ -324,17 +327,19 @@ export class AutoSyncScheduler {
           } else if (lk.reason !== undefined) {
             this.host.log.info(`自动同步已跳过（${channel}）：${LOCK_BLOCK_MESSAGE[lk.reason]}`);
           }
+          // issue #79：被挡不是「失败」，连续失败计数归零 —— 真机现场「2 次真失败 + 16 次跳过」
+          // 长期把计数挂在 2 上，面板却说「连续失败」，误导用户去查网络。
           await this.appendHistory(channel, {
             direction: 'both',
             status: 'skipped',
             skipReason: 'mutation-locked',
             createdAt: nowIso,
-            failureCountAtRun: cfg.consecutiveFailures,
+            failureCountAtRun: 0,
           });
           finishRun();
           return {
             status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId,
-            consecutiveFailures: cfg.consecutiveFailures,
+            consecutiveFailures: 0,
           };
         }
         releaseLock = lk.release;
@@ -348,10 +353,10 @@ export class AutoSyncScheduler {
           status: 'skipped',
           skipReason: 'mutation-locked',
           createdAt: nowIso,
-          failureCountAtRun: cfg.consecutiveFailures,
+          failureCountAtRun: 0,
         });
         finishRun();
-        return { status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId, consecutiveFailures: cfg.consecutiveFailures };
+        return { status: 'skipped', direction: 'none', skipReason: 'mutation-locked', historyId, consecutiveFailures: 0 };
       }
     }
 
@@ -361,14 +366,14 @@ export class AutoSyncScheduler {
       if (!syncIsConfigured(syncCfg)) {
         const result: AutosyncRunResult = {
           status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
-          consecutiveFailures: cfg.consecutiveFailures,
+          consecutiveFailures: 0,
         };
         await this.appendHistory(channel, {
           direction: 'both',
           status: 'skipped',
           skipReason: 'unconfigured',
           createdAt: nowIso,
-          failureCountAtRun: cfg.consecutiveFailures,
+          failureCountAtRun: 0,
         });
         await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
@@ -391,11 +396,11 @@ export class AutoSyncScheduler {
       if (encryptedRemote) {
         const result: AutosyncRunResult = {
           status: 'skipped', direction: 'pull', skipReason: 'encrypted', historyId,
-          consecutiveFailures: cfg.consecutiveFailures,
+          consecutiveFailures: 0,
         };
         await this.appendHistory(channel, {
           direction: 'pull', status: 'skipped', skipReason: 'encrypted',
-          createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
+          createdAt: nowIso, failureCountAtRun: 0,
         });
         await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
@@ -412,11 +417,11 @@ export class AutoSyncScheduler {
       if (!remoteNew && !localDirty) {
         const result: AutosyncRunResult = {
           status: 'success', direction: 'none', skipReason: 'upToDate', historyId,
-          consecutiveFailures: cfg.consecutiveFailures,
+          consecutiveFailures: 0,
         };
         await this.appendHistory(channel, {
           direction: 'both', status: 'success', skipReason: 'upToDate',
-          createdAt: nowIso, failureCountAtRun: cfg.consecutiveFailures,
+          createdAt: nowIso, failureCountAtRun: 0,
         });
         await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
@@ -426,6 +431,12 @@ export class AutoSyncScheduler {
       // audit-sync sync-F5：被风险分级扣下、需人工确认的分区（medium/high）。在 Phase A 赋值、
       // Phase C 与收尾写历史都要用，故声明在两者之外。
       let deferredSections: SectionId[] = [];
+      /**
+       * 本轮远端冲突分区（issue #79）。非空 = **下行**被冲突挡下（绝不写本地），
+       * 但 **上行 push 与冲突无关** —— 不再像改造前那样整轮 return 连纯上行一起封死：
+       * 真机现场「推本机配置当备份」这条链路被远端冲突连续阻塞，用户却只看到 skipped/conflict。
+       */
+      let conflictedSections: SectionId[] = [];
 
       // Phase A: pull 合并（下载）—— 仅当远端有新快照才拉取（§3.2）。
       if (remoteNew) {
@@ -449,63 +460,53 @@ export class AutoSyncScheduler {
 
         // 判定 needsReview
         const reviewSections = mergePlan.sections.filter((s) => s.decision === 'conflict');
-        if (reviewSections.length > 0) {
-          const conflictedSections = reviewSections.map((s) => s.id);
-          const result: AutosyncRunResult = {
-            status: 'skipped', direction: 'pull', skipReason: 'conflict',
-            conflictedSections, historyId,
-            consecutiveFailures: cfg.consecutiveFailures,
-          };
-          await this.appendHistory(channel, {
-            direction: 'pull', status: 'skipped', skipReason: 'conflict',
-            conflictedSections, createdAt: nowIso,
-            failureCountAtRun: cfg.consecutiveFailures,
-          });
-          await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
-          return result;
-        }
+        conflictedSections = reviewSections.map((s) => s.id);
 
-        // 无冲突：按 risk.ts 的风险分级契约分流（audit-sync sync-F5）。
-        // 此前用 buildAutoApplyPlan 无条件应用全部非冲突分区 → medium/high 分区（plugins/mcp/
-        // workspaces 等）在无用户确认时被自动写进本地，与 classifyMergePlan 的既定口径
-        // （低风险自动应用；medium/high → 待审）分叉，「首次同步强制预览」在自动路径上也形同虚设。
-        // firstSync 恒 false：真正的首次同步没有祖先基线，merge 已把两侧差异判成 conflict → 走人工确认。
-        const apply = classifyMergePlan(mergePlan, { firstSync: false });
-        // 待审项（medium/high：决策明确但不该自动应用）必须可见 —— 进历史 conflictedSections，
-        // 绝不静默丢弃；真正的冲突已在上方整轮跳过（reviewSections）。
-        deferredSections = apply.review.map((s) => s.id);
-        if (apply.autoApply.length === 0) {
-          // 远端快照无物可应用（全部 skip / 无变化）→ 无远端合并产出；若本地有改动则仅走上传。
-          // 此处不立即返回，让 Phase C 依据 localDirty 决定是否上传本地改动。
-        } else {
-          // Phase B: 写入本地（applyMergePlan，无 review-queue 写）。P0-A：包 intent journal。
-          const rawApply = async (ctx?: JournalRunContext) => engine.applyMergePlan(
-            apply,
-            // 审计 P0-23（真实调用方提供绑定）：把 intent journal 的绑定面透传下去，使
-            // applyMergePlan 内部的整体回滚经 recordRollback 上报 → 终态 ROLLED_BACK 而非 COMMITTED。
-            // 无 phase3Recovery（无锁环境/测试）时不传绑定，行为与改造前逐字一致。
-            ctx !== undefined ? { snapshotBinding: ctx } : {},
-          );
-          const applyReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
-            ? (await this.phase3Recovery.runExternalIntent({
-                operationType: 'autosync-apply', lockCtx: this.lockCtxForJournal,
-                intent: { adapter: 'sync', ref: channel, kind: 'Apply' }, fn: rawApply,
-              })).result as import('./sync-engine.ts').ApplyReport
-            : await rawApply();
-          appliedSections = applyReport.applied as SectionId[];
-          if (!applyReport.ok) {
-            const error = applyReport.warnings.join('; ') || engineMsg('sync.autosyncApplyMergeFailed');
-            const result: AutosyncRunResult = {
-              status: 'failed', direction: 'pull', error, historyId,
-              consecutiveFailures: cfg.consecutiveFailures + 1,
-            };
-            await this.appendHistory(channel, {
-              direction: 'pull', status: 'failed', error, createdAt: nowIso,
-              failureCountAtRun: cfg.consecutiveFailures + 1,
-            });
-            await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
-            this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
-            return result;
+        // 冲突：跳过 Phase B（绝不把冲突内容写进本地），但**继续**走到 Phase C 做纯上行导出。
+        // 风险分级（audit-sync sync-F5）照旧只在无冲突时执行。
+        if (conflictedSections.length === 0) {
+          // 无冲突：按 risk.ts 的风险分级契约分流（audit-sync sync-F5）。
+          // 此前用 buildAutoApplyPlan 无条件应用全部非冲突分区 → medium/high 分区（plugins/mcp/
+          // workspaces 等）在无用户确认时被自动写进本地，与 classifyMergePlan 的既定口径
+          // （低风险自动应用；medium/high → 待审）分叉，「首次同步强制预览」在自动路径上也形同虚设。
+          // firstSync 恒 false：真正的首次同步没有祖先基线，merge 已把两侧差异判成 conflict → 走人工确认。
+          const apply = classifyMergePlan(mergePlan, { firstSync: false });
+          // 待审项（medium/high：决策明确但不该自动应用）必须可见 —— 进历史 conflictedSections，
+          // 绝不静默丢弃；真正的冲突已在上方记入 conflictedSections。
+          deferredSections = apply.review.map((s) => s.id);
+          if (apply.autoApply.length === 0) {
+            // 远端快照无物可应用（全部 skip / 无变化）→ 无远端合并产出；若本地有改动则仅走上传。
+            // 此处不立即返回，让 Phase C 依据 localDirty 决定是否上传本地改动。
+          } else {
+            // Phase B: 写入本地（applyMergePlan，无 review-queue 写）。P0-A：包 intent journal。
+            const rawApply = async (ctx?: JournalRunContext) => engine.applyMergePlan(
+              apply,
+              // 审计 P0-23（真实调用方提供绑定）：把 intent journal 的绑定面透传下去，使
+              // applyMergePlan 内部的整体回滚经 recordRollback 上报 → 终态 ROLLED_BACK 而非 COMMITTED。
+              // 无 phase3Recovery（无锁环境/测试）时不传绑定，行为与改造前逐字一致。
+              ctx !== undefined ? { snapshotBinding: ctx } : {},
+            );
+            const applyReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
+              ? (await this.phase3Recovery.runExternalIntent({
+                  operationType: 'autosync-apply', lockCtx: this.lockCtxForJournal,
+                  intent: { adapter: 'sync', ref: channel, kind: 'Apply' }, fn: rawApply,
+                })).result as import('./sync-engine.ts').ApplyReport
+              : await rawApply();
+            appliedSections = applyReport.applied as SectionId[];
+            if (!applyReport.ok) {
+              const error = applyReport.warnings.join('; ') || engineMsg('sync.autosyncApplyMergeFailed');
+              const result: AutosyncRunResult = {
+                status: 'failed', direction: 'pull', error, historyId,
+                consecutiveFailures: cfg.consecutiveFailures + 1,
+              };
+              await this.appendHistory(channel, {
+                direction: 'pull', status: 'failed', error, createdAt: nowIso,
+                failureCountAtRun: cfg.consecutiveFailures + 1,
+              });
+              await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
+              this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
+              return result;
+            }
           }
         }
       }
@@ -537,16 +538,24 @@ export class AutoSyncScheduler {
             this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
             return result;
           }
+          // issue #79：上行成功但下行被冲突挡下 → partial（绝不把「半个方向完成」报成 success，
+          // 也绝不因为它报成 failed：网络与凭据都是好的，只是远端有内容要用户确认）。
+          const partial = conflictedSections.length > 0;
           const result: AutosyncRunResult = {
-            status: 'success', direction: appliedSections.length ? 'both' : 'push',
+            status: partial ? 'partial' : 'success',
+            direction: appliedSections.length ? 'both' : 'push',
             appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
+            ...(partial ? { skipReason: 'conflict' as const } : {}),
             ...(deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
+            ...(partial ? { conflictedSections } : {}),
             consecutiveFailures: 0,
           };
           await this.appendHistory(channel, {
-            direction: appliedSections.length ? 'both' : 'push', status: 'success',
+            direction: appliedSections.length ? 'both' : 'push',
+            status: partial ? 'partial' : 'success',
             appliedSections, pushedSnapshotId: pushReport.snapshotId,
-            ...(deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
+            ...(partial ? { skipReason: 'conflict' as const, conflictedSections } : {}),
+            ...(!partial && deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
             createdAt: nowIso, failureCountAtRun: 0,
           });
           await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
@@ -567,6 +576,20 @@ export class AutoSyncScheduler {
           this.maybeNotify(cfg.consecutiveFailures + 1, historyId, nowIso, channel);
           return result;
         }
+      }
+
+      // 本轮下行被冲突挡下、且没有可上行内容（startup 变体 / 本地无改动）→ 如实 skipped/conflict。
+      if (conflictedSections.length > 0) {
+        const conflictResult: AutosyncRunResult = {
+          status: 'skipped', direction: 'pull', skipReason: 'conflict',
+          conflictedSections, historyId, consecutiveFailures: 0,
+        };
+        await this.appendHistory(channel, {
+          direction: 'pull', status: 'skipped', skipReason: 'conflict',
+          conflictedSections, createdAt: nowIso, failureCountAtRun: 0,
+        });
+        await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
+        return conflictResult;
       }
 
       // startup 变体 / 仅远端合并：只做 pull 合并（不上传），或远端无新生且本地无改动（已在上方 upToDate 短路上）。
@@ -610,7 +633,17 @@ export class AutoSyncScheduler {
     }
   }
 
-  /** 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures, lastRunHistoryId）。 */
+  /**
+   * 收尾：写该通道 autosync-config（lastRunAt / lastRunStatus / consecutiveFailures /
+   * lastRunHistoryId / 本轮消息与跳过原因）。
+   *
+   * issue #79：**每一轮都必须覆盖上一轮的 lastRunMessage 与 lastRunSkipReason**。
+   * 此前只在 `result.error !== undefined` 时写 lastRunMessage → 真机现场连续 16 次 skipped 期间，
+   * 面板一直挂着几天前「旧地址连接超时」，用户据此去查网络；跳过原因则只进了 info 级日志
+   * （默认日志级别 warn），所以「为什么没同步」在界面与日志里都看不见。
+   * 现在：失败写错误原文；跳过写**结构化原因码**（界面按码取字典，语言在渲染那刻解析）；
+   * 成功清空两者（空串/undefined 不进文件，见 autosync-config.toChannelPayload）。
+   */
   private async writeFinalConfig(
     base: AutosyncConfig,
     result: AutosyncRunResult,
@@ -618,13 +651,19 @@ export class AutoSyncScheduler {
     historyId: string,
     channel: SyncTransportType,
   ): Promise<void> {
+    const skipReason = result.status === 'failed' ? undefined : result.skipReason;
+    const skipCount = skipReason !== 'conflict' || result.conflictedSections === undefined
+      ? undefined
+      : result.conflictedSections.length;
     await this.writeConfig(channel, {
       ...base,
       lastRunAt: nowIso,
       lastRunStatus: result.status,
       consecutiveFailures: result.consecutiveFailures,
       lastRunHistoryId: historyId,
-      ...(result.error !== undefined ? { lastRunMessage: result.error } : {}),
+      lastRunMessage: result.error ?? '',
+      lastRunSkipReason: skipReason,
+      lastRunSkipCount: skipCount,
     });
   }
 

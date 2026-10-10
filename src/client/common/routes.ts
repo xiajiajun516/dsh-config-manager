@@ -96,6 +96,8 @@ export const SYNC_API = {
   selection: `${API_BASE}/sync/selection`,
   config: `${API_BASE}/sync/config`,
   uiPrefs: `${API_BASE}/sync/ui-prefs`,
+  /** issue #79：工作副本显式重建（relink 非破坏 / reclone 需 confirm；写动作过 mutation gate） */
+  workdirReset: `${API_BASE}/sync/workdir/reset`,
   rollback: `${API_BASE}/sync/rollback`,
 } as const;
 

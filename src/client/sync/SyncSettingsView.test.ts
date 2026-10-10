@@ -60,6 +60,8 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
     ['SecurityOptionsCard', 'SecurityOptionsCard.tsx'],
     ['DecryptPasswordCard', 'DecryptPasswordCard.tsx'],
     ['AutosyncCard', 'AutosyncCard.tsx'],
+    // issue #79：工作副本卡（含确认弹窗 + 宿主调用 + 回执）自成文件，主文件只装配 —— 行数棘轮因此不必上调
+    ['WorkDirCard', 'WorkDirCard.tsx'],
   ]
   for (const [name, file] of units) {
     // 主文件：必须 import 并渲染该单元

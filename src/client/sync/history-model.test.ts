@@ -14,7 +14,8 @@ import type { SyncHistoryEntry } from './sync-api.ts';
 import { en as syncEn, zh as syncZh } from './sync-locales.ts';
 import {
   autosyncBadgeKind, autosyncStatusLabel, describeSkipReason, directionLabel, formatDateTime,
-  formatDateTimeFull, midEllipsis, projectAutosyncEntry, projectSyncHistoryEntries, summarizeSyncHistory,
+  formatDateTimeFull, midEllipsis, projectAutosyncEntry, projectSyncHistoryEntries, skipReasonKey,
+  summarizeSyncHistory,
 } from './history-model.ts';
 import type { AutosyncHistoryEntry } from './sync-api.ts';
 
@@ -220,16 +221,45 @@ test('client-F1：en 界面下自动同步行的三个标签必须全是英文�
   assert.equal(row.status, 'Skipped');
 });
 
-test('client-F1 源码守卫：两个标签函数的函数体不得含中文字面量（文案只许来自字典）', () => {
+test('client-F1 源码守卫：标签函数体不得含中文字面量；跳过原因一律经 skipReasonKey 取字典键', () => {
   const src = fs.readFileSync(new URL('./history-model.ts', import.meta.url), 'utf8');
-  for (const fn of ['directionLabel', 'autosyncStatusLabel']) {
+  for (const fn of ['directionLabel', 'autosyncStatusLabel', 'describeSkipReason']) {
     const start = src.indexOf('export function ' + fn);
     assert.ok(start >= 0, fn + ' 必须存在（守卫需同步更新）');
     const end = src.indexOf('\n}', start);
     const body = src.slice(start, end < 0 ? src.length : end);
     assert.doesNotMatch(body, /[\u4e00-\u9fff]/, fn + ' 函数体内不得含中文字面量');
   }
+  // issue #79：映射抽到 skipReasonKey（历史行与自动同步状态行共用一份），守卫落点随之挪到它，
+  // 但硬约束不变：**文案只许来自字典**，且 describeSkipReason 不得再自带第二份 switch。
+  const mapStart = src.indexOf('export function skipReasonKey');
+  assert.ok(mapStart >= 0, 'skipReasonKey 必须存在（守卫需同步更新）');
+  const mapEnd = src.indexOf('\n}', mapStart);
+  const mapBody = src.slice(mapStart, mapEnd < 0 ? src.length : mapEnd);
   for (const key of ['history.autosyncReasonConflict', 'history.autosyncReasonNoRemote', 'history.autosyncReasonNotConfigured', 'history.autosyncReasonNetwork']) {
-    assert.ok(src.includes("t('" + key + "')"), 'describeSkipReason 必须走字典键 ' + key);
+    assert.ok(mapBody.includes("'" + key + "'"), 'skipReasonKey 必须映射字典键 ' + key);
   }
+  const reasonStart = src.indexOf('export function describeSkipReason');
+  const reasonEnd = src.indexOf('\n}', reasonStart);
+  const reasonBody = src.slice(reasonStart, reasonEnd < 0 ? src.length : reasonEnd);
+  assert.ok(reasonBody.includes('skipReasonKey('), 'describeSkipReason 必须经 skipReasonKey 取键');
+});
+
+/* ================================================================ issue #79 */
+
+test('issue #79：skipReasonKey —— 新旧码都映射到字典键，未知码返回 null（不猜）', () => {
+  assert.equal(skipReasonKey('conflict'), 'history.autosyncReasonConflict');
+  assert.equal(skipReasonKey('not-configured'), 'history.autosyncReasonNotConfigured');
+  // 宿主同一语义两处命名：历史写 'unconfigured'，两处必须同一文案
+  assert.equal(skipReasonKey('unconfigured'), 'history.autosyncReasonNotConfigured');
+  assert.equal(skipReasonKey('upToDate'), 'history.autosyncReasonUpToDate');
+  assert.equal(skipReasonKey('unchanged'), 'history.autosyncReasonUnchanged');
+  assert.equal(skipReasonKey('mutation-locked'), 'history.autosyncReasonMutationLocked');
+  assert.equal(skipReasonKey('future-code-from-newer-host'), null, '未知码不猜');
+  assert.equal(skipReasonKey(undefined), null);
+});
+
+test('issue #79：describeSkipReason 未知码保留宿主原串（不吞信息）', () => {
+  assert.equal(describeSkipReason('brand-new-reason', zhT), 'brand-new-reason');
+  assert.equal(describeSkipReason(undefined, zhT), syncZh['history.autosyncReasonUnknown']);
 });

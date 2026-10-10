@@ -11,8 +11,10 @@ import { Badge, Card } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import {
-  autosyncIntervalMs, autosyncStatusText, computeAutosyncCountdown, formatIntervalDuration,
+  autosyncIntervalMs, autosyncSkipDetail, autosyncStatusText, computeAutosyncCountdown, formatIntervalDuration,
 } from './sync-view.ts'
+// 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
+import { redact } from '../../security/redaction.ts'
 import type { AutosyncInterval } from './sync-api.ts'
 import type { ChannelSyncState } from './sync-view.ts'
 import { autosyncIntervalKey } from '../../ui/sync-settings-view.ts'
@@ -43,6 +45,12 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
   const autosyncCountdownMs = settings.autosync !== null && settings.autosync.elapsedMs >= 0
     ? computeAutosyncCountdown(settings.autosync.elapsedMs, autosyncIntervalMs(settings.autosync.interval))
+    : null
+  // issue #79：本轮为什么没同步 / 失败了什么，必须看得见 —— 此前只写进 info 级日志
+  // （默认日志级别 warn），界面恒无提示，用户只能去翻 sync-autosync.json。
+  const skipDetail = settings.autosync !== null ? autosyncSkipDetail(settings.autosync, t) : null
+  const lastMessage = settings.autosync?.lastRunMessage !== undefined && settings.autosync.lastRunMessage !== ''
+    ? redact(settings.autosync.lastRunMessage)
     : null
   return (
     <Card>
@@ -78,6 +86,22 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           </Badge>
         )}
       </div>
+      {(skipDetail !== null || lastMessage !== null) && (
+        <div className={css.factGrid} style={{ marginTop: 8 }}>
+          {skipDetail !== null && (
+            <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
+              <span className={css.factLabel}>{t('autosync.skipReasonLabel')}</span>
+              <span className={css.factValue}>{skipDetail}</span>
+            </div>
+          )}
+          {lastMessage !== null && (
+            <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
+              <span className={css.factLabel}>{t('autosync.lastMessage')}</span>
+              <span className={css.factValue}>{lastMessage}</span>
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   )
 }

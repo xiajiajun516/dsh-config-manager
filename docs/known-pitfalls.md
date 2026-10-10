@@ -545,6 +545,47 @@ d`。
 
 **未做（如实）**：`--profile` 有意放行 `web`（runWeb 真的把它当救急台目标档案用）；「可用页面」严格等于 8 项头部导航，因此 `/lock` / `/verify`（首页动作卡入口）不在该提示里；`runWeb` 的 `locksDir` 现恒为 `<root>/locks`（不再走 `resolveRecoverLocksDir` 的候选根探测，`recover-stale-lock` 命令未改）。
 
+
+## git 同步工作副本的 origin / 冲突连坐 / 环境锁误报（2026-10-10，issue #79）
+
+**真机现场（报告者提供；Windows / 桌面端 0.2.0-rc.2 / 插件 0.1.71）**：git 通道的 `repoUrl` 从局域网地址改成同一台 NAS 上同一仓库的另一个可达地址（走 Tailscale）后，
+同步再没成功过；设置页显示新地址、`credentialConfigured: true`，但自动同步报的是**旧地址** `Connection timed out`。手工
+`git --git-dir=work/.git remote set-url origin <新地址>` 后同一命令立刻 1 秒内成功（`ls-remote` + `push --dry-run` 都正常）。
+
+**根因（四条，均已复现/用测试钉住）**：
+
+1. **工作副本 origin 不跟随 `repoUrl`（主因）**：`src/sync/git/git-transport.ts` 的 `ensureRepo()` 见到 `<workDir>/.git` 就直接
+   `repoReady = true; return` —— `repoUrl` 只在首次 clone 时被使用，此后 `pullFromRemote()`（`git pull --ff-only`）与所有 push
+   全走 `origin`。于是「改仓库地址」对已存在的工作副本**完全无效**，失败现象却是旧地址的网络超时，极易被误判成网络/凭据问题。
+   `POST /sync/config`（`src/routes/sync.ts`）也只写配置、不碰 `<syncDir>/work`；路由与客户端 API 里没有 reclone / reset-workdir
+   入口 —— App 内无自救路径。
+2. **冲突连坐纯上行**：`src/sync/autosync-scheduler.ts` 在 merge 计划含 conflict 时整轮记 `skipped/conflict` 后直接 return，
+   Phase C 的 push 永远到不了 ⇒「把本机配置推上去当备份」这条链路被一并封死（真机：连续多次 `skipped/conflict`）。
+3. **陈旧错误与计数**：`writeFinalConfig` 只在 `result.error !== undefined` 时写 `lastRunMessage` ⇒ 连续跳过期间面板一直挂着
+   几天前的「旧地址连接超时」；`consecutiveFailures` 只在成功分支归零。而该轮跳过原因只写 `host.log.info`（默认日志级别 warn）
+   ⇒ 用户侧完全看不到「为什么没同步」。
+4. **环境锁误报**：`inspectLockState()` 在 ownership 文件缺失时返回 `LOCKED`（`mapLockStateForStartup` 的非 STALE/UNKNOWN 兜底
+   同样映射成 LOCKED）⇒ `GET /recovery/status` 会显示一个**并不存在的锁**（真机：用户自测 acquire/release 正常，面板却一直 LOCKED）。
+   注意：那 16 次 `skipped/mutation-locked` 的**单一根因未定论**（LOCKED / STALE / UNKNOWN / IO / PERM / SAFE MODE 在历史里被统一记成
+   同一类，只有 `stale` 写 warn），修可见性之后才能用真实日志复核 —— 本条只修「误报 LOCKED」这一条可证的部分。
+
+**改法与边界**：
+
+- `reconcileOrigin()`：`remote get-url origin` 读得出来且**非空**才比对（空串 = 读不到 ⇒ 不改写，不拿不确定的读取覆盖用户配置）；
+  无 origin ⇒ `remote add`（否则 `push -u origin` 永远失败）；push URL 单独配置过也一并跟随。一致时**一条写命令都不发**。
+- 与网络无关的两类失败给专用文案：SSH `Host key verification failed`（给 `ssh-keyscan` / `known_hosts` 做法，**绝不自动信任主机**）
+  与 `refusing to merge unrelated histories` / `not possible to fast-forward`（指向「改回原地址或重建工作副本」）。
+  全仓（含 git 历史）此前**没有任何** `known_hosts` / `StrictHostKeyChecking` / `GIT_SSH_COMMAND` 处理。
+- `inspectWorkDir()` 默认只做 **2 条本地只读命令**（`remote get-url` ×2）——它挂在每次打开面板都会跑的 `GET /sync/status` 上；
+  `rev-list` / `status --porcelain` 在大工作副本（会话 blob 上千文件）上明显更慢，放进 `detail: true`。
+- `rebuildWorkDir(mode)`：`relink` 非破坏；`reclone` 先判「有 `.git`」，目录非空且无 `.git` 一律抛既有 `workDirNotRepo`（绝不删来路不明的目录）。
+- 冲突解耦后状态语义：`partial` = 上行成功 + 下行待确认（带 `conflictedSections`）；本地无改动或 startup 变体仍是 `skipped/conflict`。
+- 锁的 `FREE` 只改**分类与报告**：acquire 侧改为「EEXIST 但 inspect 读不到」时重试独占创建（有界 5 次），把「上一次占用刚释放」的竞态
+  从「另一个任务正在运行」里摘出来；stale/unknown 的语义与显式回收一字未动。
+
+**复核**：`node --test src/sync/git/git-transport.test.ts tests/route/sync-workdir-reset-route.test.ts src/sync/autosync-scheduler.test.ts src/utils/env-lock.test.ts`
+（含真机 git 集成：clone A → 改指同一仓库的另一个地址 B → 断言快照落到 B、A 不再收到；relink/reclone/非仓库拒绝）。
+
 ## 英文界面零中文：守卫口径、白名单与残余（2026-10-08；与 AGENTS.md §i18n 同源）
 
 **根因（两个一次性语言绑定）**：① 客户端 `src/client/index.ts` 在插件加载时用 `makeUiT(ctx.locale.getLocale().active === 'en' ? 'en' : 'zh')` 把 `uiT` **快照**进闭包 —— 而 `ctx.locale.getLocale()` 的官方契约是「当前不可变快照」（不是活查询），DSH 官方 `ctx.locale.bind(ns)` 的 `t` 才是活函数（每次读 `snapshot.active`）⇒ 用户切到 English 后，所有走 `UiT` 的报告 / 错误 / 进度 / 导入向导 / 同步 / 市场文案**永远是加载时那门语言**；② 宿主 `this.msg = makeMsg(resolveAppLanguage(ctx))` 同样在装配期冻结，而 `src/routes/kit.ts` 的 `errorMessage` 会把 `error.message` 原样回浏览器 ⇒ 引擎里的中文**逐字出现在 ErrorBanner**。

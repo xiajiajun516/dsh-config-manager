@@ -10,7 +10,7 @@ import { ExpandChevron } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import type { SyncStatusResponse } from './sync-api.ts'
 import type { SyncChannel } from './sync-view.ts'
-import { formatSyncStatusTimestamp, formatSyncUrlPreview } from '../../ui/sync-settings-view.ts'
+import { formatSyncStatusTimestamp, formatSyncUrlPreview, workdirStateKey, workdirStateBadgeKind } from '../../ui/sync-settings-view.ts'
 import { needsGitToken, SYNC_CHANNEL_LABEL_KEY } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
@@ -38,6 +38,11 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
   contentId?: string
   onToggleExpanded?: () => void
 }) {
+  // issue #79：工作副本状态（git 专属）。只在**需要人管**的状态（仍指旧地址 / 读不出）挂徽章 ——
+  // 「尚未创建」是首次同步前的正常态，不值得占一个徽章位；完整事实在展开区的「工作副本」卡里。
+  const workdirKey = channel === 'git' ? workdirStateKey(statusInfo?.workDir) : null
+  const workdirKind = workdirStateBadgeKind(workdirKey)
+  const showWorkdirBadge = workdirKind === 'warn'
   /** 事实行里的「当前远端」预览：按通道取那个真正标识远端的字段（gist 用 id，没有 URL） */
   const previewRemote = channel === 'webdav'
     ? webdavUrl
@@ -72,6 +77,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         )}
         {channel === 'gist' && statusInfo?.gist?.secretStored === true && (
           <Badge kind="ok">{t('cloud.tokenSaved')}</Badge>
+        )}
+        {/* issue #79：改仓库地址后工作副本仍指旧地址（下一轮同步会自动重指向）—— 在卡上直接可见 */}
+        {showWorkdirBadge && workdirKey !== null && workdirKind !== null && (
+          <Badge kind={workdirKind}>{t(workdirKey)}</Badge>
         )}
       </div>
       {/* 状态事实行（Workbench：配置状态/上次同步/可同步分区——未配置时也要给硬事实） */}

@@ -225,7 +225,7 @@ test('upload 契约：写快照目录 + add + commit(add) + push，返回 comput
   const commits = joinedArgs(calls, 'commit');
   assert.equal(commits.length, 1);
   assert.match(commits[0]!, /-m sync: add snapshot snap-001/);
-  assert.equal(joinedArgs(calls, 'push').length, 1, 'upload 应 push');
+  assert.equal(joinedArgs(calls, 'push -u').length, 1, 'upload 应 push');
   // commit message 不含 token
   for (const c of commits) assert.ok(!c.includes(TEST_TOKEN));
 });
@@ -240,7 +240,7 @@ test('upload 幂等：工作树内容与 HEAD 一致 → 不 commit 不 push，�
   const meta = await transport.upload(sampleSnapshot());
   assert.equal(meta.id, 'snap-001');
   assert.equal(joinedArgs(calls, 'commit').length, 0, '无变更不得 commit');
-  assert.equal(joinedArgs(calls, 'push').length, 0, '无变更不得 push');
+  assert.equal(joinedArgs(calls, 'push -u').length, 0, '无变更不得 push');
 });
 
 test('upload 覆盖：同 id 再次上传 → commit message 为 update', async (t) => {
@@ -282,12 +282,12 @@ test('delete 契约：存在 → 删除目录 + add -A + commit(delete) + push�
   assert.ok(adds.some((a) => a.includes('snapshots/snap-001')), 'delete 应 stage 删除');
   assert.equal(joinedArgs(calls, 'commit').length, 1);
   assert.match(joinedArgs(calls, 'commit')[0]!, /-m sync: delete snapshot snap-001/);
-  assert.equal(joinedArgs(calls, 'push').length, 1);
+  assert.equal(joinedArgs(calls, 'push -u').length, 1);
   // 不存在 → 成功且不产生 git 写操作
   calls.length = 0;
   await transport.delete('never-existed');
   assert.equal(joinedArgs(calls, 'commit').length, 0);
-  assert.equal(joinedArgs(calls, 'push').length, 0);
+  assert.equal(joinedArgs(calls, 'push -u').length, 0);
 });
 
 test('错误消息 sanitize：git 失败 stderr 含 token → 抛出消息被替换为 [REDACTED]', async (t) => {
@@ -330,7 +330,7 @@ test('推送预检：http(s) 远端 + 空令牌 → 发起 git 之前给出可�
       return true;
     },
   );
-  assert.equal(joinedArgs(calls, 'push').length, 0, '空令牌必须在发起 push 之前拦下');
+  assert.equal(joinedArgs(calls, 'push -u').length, 0, '空令牌必须在发起 push 之前拦下');
   // 空令牌不得注入 credential helper —— `https://oauth2:@host` 会被远端回成
   // 「Invalid username or token」（指向令牌错误，而真实原因是「没配令牌」）
   for (const c of calls) {
@@ -435,7 +435,7 @@ test('upload 加密快照：写 snapshots-encrypted/<id>.json 密文单文件（
   const commits = joinedArgs(calls, 'commit');
   assert.equal(commits.length, 1);
   assert.match(commits[0]!, /-m sync: add snapshot snap-enc/);
-  assert.equal(joinedArgs(calls, 'push').length, 1);
+  assert.equal(joinedArgs(calls, 'push -u').length, 1);
 });
 
 test('upload 加密快照覆盖：同 id 明文→加密 切换时清掉旧散文件目录（双形态互斥）', async (t) => {
@@ -849,7 +849,7 @@ test('t24：写操作（upload）绝不重试——push 失败即使分类可重
     const joined = args.join(' ');
     if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
     if (joined.includes('diff') && joined.includes('--quiet')) return { stdout: '', stderr: '', code: 1 };
-    if (joined.includes('push')) return { stdout: '', stderr: 'remote: HTTP 503 Service Unavailable', code: 1 };
+    if (joined.includes('push -u')) return { stdout: '', stderr: 'remote: HTTP 503 Service Unavailable', code: 1 };
     return { stdout: '', stderr: '', code: 0 };
   };
   const transport = new GitTransport(makeOptions({
@@ -861,7 +861,7 @@ test('t24：写操作（upload）绝不重试——push 失败即使分类可重
     assert.equal(err.retryable, true);
     return true;
   });
-  assert.equal(joinedArgs(calls, 'push').length, 1, 'push 有远端副作用 → 即使 attempts=5 也只尝试一次');
+  assert.equal(joinedArgs(calls, 'push -u').length, 1, 'push 有远端副作用 → 即使 attempts=5 也只尝试一次');
 });
 test('t24：退避为指数递增并受 maxDelayMs 上限（baseDelayMs=100、max=150 → 100、150）', async (t) => {
   const dir = await makeGitWorkDir(t);
@@ -929,3 +929,165 @@ test('P1-4 集成：sessions 外置到 blobs/（引用文件替代目录）+ 同
   assert.ok((await fs.stat(blobAbs)).isFile(), '保护窗内的 blob 不删（并发安全阀）');
 });
 
+
+/* ---------------- issue #79：工作副本 origin 跟随 / 主机密钥 / 重建工作副本 ---------------- */
+
+/** 只读探针型 exec：remote get-url 返回指定值（其余命令默认成功） */
+function probeExec(calls: CallRecord[], origin: string | null, pushUrl?: string): GitExecFn {
+  return async (_cmd, args): Promise<GitExecResult> => {
+    calls.push({ cmd: 'git', args });
+    const isPushProbe = args.includes('--push') && args.includes('get-url');
+    if (args.includes('get-url')) {
+      if (origin === null) return { stdout: '', stderr: 'error: No such remote', code: 2 };
+      return { stdout: isPushProbe ? (pushUrl ?? origin) : origin, stderr: '', code: 0 };
+    }
+    if (args.includes('diff') && args.includes('--quiet')) return { stdout: '', stderr: '', code: 1 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+}
+
+test('issue #79：已有工作副本且 origin 与 repoUrl 不一致 → set-url（fetch + push 一并跟随）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const target = 'ssh://git@new.example:2222/owner/repo.git';
+  const transport = new GitTransport(makeOptions({
+    repoUrl: target,
+    workDir: dir,
+    exec: probeExec(calls, 'ssh://git@old.example:2222/owner/repo.git'),
+  }));
+  await transport.list();
+  assert.deepEqual(joinedArgs(calls, 'remote set-url'), [
+    `remote set-url origin ${target}`,
+    `remote set-url --push origin ${target}`,
+  ], 'fetch 与 push 地址都必须跟随（否则推送仍走旧地址）');
+});
+
+test('issue #79：origin 已一致 → 一条写命令都不发（幂等，只有只读探针）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const target = 'ssh://git@same.example:2222/owner/repo.git';
+  const transport = new GitTransport(makeOptions({ repoUrl: target, workDir: dir, exec: probeExec(calls, target) }));
+  await transport.list();
+  assert.equal(joinedArgs(calls, 'remote set-url').length, 0, '地址一致不得改写');
+  assert.equal(joinedArgs(calls, 'remote add').length, 0, '有 origin 不得重复 add');
+});
+
+test('issue #79：无 origin（读不出来）→ remote add origin，否则 push -u 永远失败', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const target = 'ssh://git@fresh.example:2222/owner/repo.git';
+  const transport = new GitTransport(makeOptions({ repoUrl: target, workDir: dir, exec: probeExec(calls, null) }));
+  await transport.list();
+  assert.deepEqual(joinedArgs(calls, 'remote add origin'), [`remote add origin ${target}`]);
+});
+
+test('issue #79：origin 读得出但为空串 → 视为读不到，不改写（不拿不确定的读取覆盖配置）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({
+    repoUrl: 'ssh://git@x.example:2222/o/r.git',
+    workDir: dir,
+    exec: probeExec(calls, '', ''),
+  }));
+  await transport.list();
+  assert.equal(joinedArgs(calls, 'remote set-url').length, 0);
+});
+
+test('issue #79：Host key verification failed → 可操作指纹指引（含 host，不自动信任）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const repoUrl = 'ssh://git@nas.local:2222/owner/repo.git';
+  const exec: GitExecFn = async (_cmd, args): Promise<GitExecResult> => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('remote get-url')) return { stdout: repoUrl, stderr: '', code: 0 };
+    if (joined.includes('pull')) {
+      return { stdout: '', stderr: 'Host key verification failed.\nfatal: Could not read from remote repository.', code: 128 };
+    }
+    return { stdout: 'sha', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ repoUrl, workDir: dir, exec }));
+  await assert.rejects(transport.list(), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError, '必须是传输层错误');
+    assert.match(err.message, /known_hosts/, '必须给可操作指引');
+    assert.match(err.message, /nas\.local:2222/, '必须带上出问题的主机');
+    assert.ok(!/Host key verification failed/.test(err.message), '不再原样透出 git 原文');
+    assert.equal(err.retryable, false, '重试不会自愈');
+    return true;
+  });
+});
+
+test('issue #79 集成：改 repoUrl 后同一工作副本走新远端（历史相同、地址不同的同一仓库）', async (t) => {
+  const bareA = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const creds = { getToken: async () => TEST_TOKEN };
+  const t1 = new GitTransport({ repoUrl: bareA, workDir, credentials: creds });
+  await t1.upload(sampleSnapshot()); // A 收到 snap-001
+
+  // 同一仓库的另一个可达地址（bare clone：历史相同、物理解耦，便于断言「真的写到了新地址」）
+  const bareB = path.join(await makeTempDir(t), 'remote2.git');
+  const cloned = await runRealGit(['clone', '--bare', bareA, bareB], workDir);
+  assert.equal(cloned.code, 0, `clone --bare 失败: ${cloned.stderr}`);
+
+  const t2 = new GitTransport({ repoUrl: bareB, workDir, credentials: creds });
+  await t2.upload(sampleSnapshot({ id: 'snap-002' }));
+
+  const logB = await runRealGit(['log', '--oneline', '--all'], bareB);
+  assert.match(logB.stdout, /snap-002/, '新地址必须收到快照');
+  const logA = await runRealGit(['log', '--oneline', '--all'], bareA);
+  assert.ok(!logA.stdout.includes('snap-002'), '旧地址不得再收到（否则仍在用旧 origin）');
+});
+
+test('issue #79 集成：换成另一条历史的仓库 → 明确文案 + 指向重建工作副本（不是原始 stderr）', async (t) => {
+  const bareA = await makeBareRepo(t);
+  const workA = await makeTempDir(t);
+  const creds = { getToken: async () => TEST_TOKEN };
+  await new GitTransport({ repoUrl: bareA, workDir: workA, credentials: creds }).upload(sampleSnapshot());
+
+  const bareC = await makeBareRepo(t);
+  const workC = await makeTempDir(t);
+  await new GitTransport({ repoUrl: bareC, workDir: workC, credentials: creds }).upload(sampleSnapshot({ id: 'other-001' }));
+
+  const t2 = new GitTransport({ repoUrl: bareC, workDir: workA, credentials: creds });
+  await assert.rejects(t2.list(), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /不是同一条历史/, '必须说清「换了仓库/历史被重写」');
+    assert.match(err.message, /重建工作副本/, '必须给出出口');
+    return true;
+  });
+});
+
+test('issue #79 集成：inspectWorkDir + rebuildWorkDir（relink 非破坏 / reclone 重建 / 非仓库拒绝）', async (t) => {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const creds = { getToken: async () => TEST_TOKEN };
+  await new GitTransport({ repoUrl: bare, workDir, credentials: creds }).upload(sampleSnapshot());
+
+  // 人为把 origin 改成旧地址（等价于「改 repoUrl 之前」的工作副本状态）
+  const stray = await runRealGit(['remote', 'set-url', 'origin', 'ssh://git@old.example:2222/owner/repo.git'], workDir);
+  assert.equal(stray.code, 0, `set-url 失败: ${stray.stderr}`);
+
+  const transport = new GitTransport({ repoUrl: bare, workDir, credentials: creds });
+  const before = await transport.inspectWorkDir();
+  assert.equal(before.exists, true, '.git 存在');
+  assert.equal(before.match, false, '地址不一致必须被自检发现');
+  assert.equal(before.origin, 'ssh://git@old.example:2222/owner/repo.git');
+
+  await transport.rebuildWorkDir('relink');
+  const after = await transport.inspectWorkDir({ detail: true });
+  assert.equal(after.match, true, 'relink 后 fetch/push 地址都跟随 repoUrl');
+  assert.equal(after.origin, bare);
+  assert.equal(after.ahead, 0, 'relink 不丢弃/不产生本地提交');
+  assert.equal(after.dirty, false, 'relink 不动工作树');
+
+  await transport.rebuildWorkDir('reclone');
+  assert.ok((await fs.stat(path.join(workDir, '.git'))).isDirectory(), 'reclone 后重新 clone 出 .git');
+  assert.ok(await fs.stat(path.join(workDir, 'snapshots', 'snap-001')), 'reclone 后远端快照回到工作副本');
+
+  // 非空且无 .git → 拒绝删除（绝不删来路不明的目录）
+  const strayDir = await makeTempDir(t);
+  await fs.writeFile(path.join(strayDir, 'stray.txt'), 'x');
+  const t3 = new GitTransport({ repoUrl: bare, workDir: strayDir, credentials: creds });
+  await assert.rejects(t3.rebuildWorkDir('reclone'), /不是 git 仓库/);
+  assert.ok(await fs.stat(path.join(strayDir, 'stray.txt')), '拒绝时文件必须原样保留');
+});

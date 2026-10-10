@@ -22,6 +22,8 @@ import {
   channelRemoteReady, cloudFieldIssues, cloudFormFromStatus, validateCloudApiBaseUrl, validateCloudBucket,
   validateCloudEndpoint, validateCloudForm, validateCloudPrefix, validateCloudRegion, validateGistForm,
   validateGistId, validateS3Form, DEFAULT_S3_PROVIDER, S3_PROVIDERS,
+  // issue #79：工作副本自检 → 状态 / 入口判定
+  workdirStateKey, workdirStateBadgeKind, needsWorkdirRelink, canRecloneWorkdir,
   type SaveQueueState, type SyncChannelSettings, type SyncFormSnapshot,
 } from './sync-settings-view.ts'
 
@@ -511,4 +513,38 @@ test('云端点：/sync/status 视图只回填非密字段（密钥永不映射�
   assert.equal(empty.s3Endpoint, '')
   assert.equal(Object.prototype.hasOwnProperty.call(empty, 's3Secret'), false, '回填里没有任何密钥字段')
   assert.equal(Object.prototype.hasOwnProperty.call(empty, 'gistToken'), false)
+})
+
+/* ---------------------------------------------------------------- issue #79 工作副本 */
+
+const workdirFacts = (over: Partial<{ exists: boolean; match: boolean }> = {}) => ({
+  facts: { exists: true, match: true, ...over },
+})
+
+test('issue #79：workdirStateKey —— 一致/不一致/未创建/读不出来四态，不把「读不出」说成「不存在」', () => {
+  assert.equal(workdirStateKey(undefined), null, '非 git 通道 / 无自检 → 无状态')
+  assert.equal(workdirStateKey(workdirFacts()), 'workdir.match')
+  assert.equal(workdirStateKey(workdirFacts({ match: false })), 'workdir.mismatch')
+  assert.equal(workdirStateKey(workdirFacts({ exists: false })), 'workdir.missing')
+  assert.equal(workdirStateKey({ error: 'git 不可用' }), 'workdir.unknown', '读不出来 ≠ 不存在')
+  assert.equal(workdirStateKey({ error: 'git 不可用' }), 'workdir.unknown')
+})
+
+test('issue #79：workdirStateBadgeKind —— 只有真的不一致才给警告色，未创建给 info', () => {
+  assert.equal(workdirStateBadgeKind('workdir.match'), 'ok')
+  assert.equal(workdirStateBadgeKind('workdir.mismatch'), 'warn')
+  assert.equal(workdirStateBadgeKind('workdir.unknown'), 'warn', '读不出给 warn（不给「正常」的绿）')
+  assert.equal(workdirStateBadgeKind('workdir.missing'), 'info')
+  assert.equal(workdirStateBadgeKind(null), null)
+})
+
+test('issue #79：入口判定 —— 只有地址不一致才给「重指向」；只有确实存在的工作副本才允许重新克隆', () => {
+  assert.equal(needsWorkdirRelink(workdirFacts({ match: false })), true)
+  assert.equal(needsWorkdirRelink(workdirFacts()), false, '已跟随 → 不给多余的按钮')
+  assert.equal(needsWorkdirRelink(undefined), false, '非 git 通道不得出现该入口')
+
+  assert.equal(canRecloneWorkdir(workdirFacts()), true)
+  assert.equal(canRecloneWorkdir(workdirFacts({ exists: false })), false, '目录都不存在 → 没有「重新克隆」可言')
+  assert.equal(canRecloneWorkdir({ error: '读取失败' }), false, '读不出来不得提供破坏性入口')
+  assert.equal(canRecloneWorkdir(undefined), false)
 })

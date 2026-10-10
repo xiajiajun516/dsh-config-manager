@@ -76,6 +76,9 @@ export interface JournalRunContext {
 export function mapLockStateForStartup(state: LockState): 'LOCKED' | 'STALE_LOCK_DETECTED' | 'UNKNOWN_STATE' | 'FREE' {
   if (state === 'STALE_LOCK_DETECTED') return 'STALE_LOCK_DETECTED';
   if (state === 'UNKNOWN_STATE') return 'UNKNOWN_STATE';
+  // issue #79：FREE（ownership 确实不存在）如实透传。此前它落到下面的兜底被映射成 LOCKED ——
+  // 与 inspectLockState 的 missing→LOCKED 一起，把「没有锁」的系统性误报成「有活跃锁」。
+  if (state === 'FREE') return 'FREE';
   return 'LOCKED'; // ACQUIRED / LOCKED / LOCK_IO_ERROR / PERMISSION_ERROR → 保守 LOCKED
 }
 

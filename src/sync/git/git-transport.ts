@@ -61,6 +61,24 @@ export type GitExecFn = (
   opts: { cwd?: string; timeoutMs?: number },
 ) => Promise<GitExecResult>;
 
+/** 工作副本自检事实（issue #79）：origin 是否已跟随配置地址、有无未上行的本地提交。 */
+export interface GitWorkDirFacts {
+  /** 工作副本路径（本地路径，可回显） */
+  path: string;
+  /** `.git` 是否存在（false = 尚未 clone，或该目录不是 git 仓库） */
+  exists: boolean;
+  /** 当前 origin（读不出 → null） */
+  origin: string | null;
+  /** 单独配置的 push URL（未单独配置 → null） */
+  pushUrl: string | null;
+  /** fetch / push 地址是否都已跟随 repoUrl（读不出 origin → false） */
+  match: boolean;
+  /** 领先全部远端跟踪引用的本地提交数（读不出 → null） */
+  ahead: number | null;
+  /** 工作树是否有未提交改动（读不出 → null） */
+  dirty: boolean | null;
+}
+
 /** 凭据提供者：token 只从这里读取，绝不在任何地方持久化 */
 export interface GitCredentialProvider {
   getToken(): Promise<string>;
@@ -116,6 +134,18 @@ const DEFAULT_AUTHOR: GitAuthor = { name: 'DSH Config Sync', email: 'sync@dsh.lo
 const DEFAULT_CREDENTIAL_USERNAME = 'oauth2';
 /** 快照 id 安全字符集：字母数字开头，仅 . _ -；防路径穿越与 commit message 注入 */
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/**
+ * SSH 主机密钥校验失败（issue #79）：git 只回一句 `Host key verification failed`，
+ * 用户拿不到任何可操作信息（要不要信任？怎么写 known_hosts？）。识别后换成可操作文案。
+ */
+const SSH_HOST_KEY_RE = /host key verification failed|remote host identification has changed|no matching host key/i;
+/**
+ * 工作副本与远端不是同一条历史（issue #79）：改成一个「另一个仓库」的地址后，
+ * `pull --ff-only` 会以 refusing to merge unrelated histories / Not possible to fast-forward 失败。
+ * 这类失败与网络无关，必须给「改回地址或重建工作副本」的出口，而不是只丢一句原始 stderr。
+ */
+const DIVERGED_HISTORY_RE = /refusing to merge unrelated histories|unrelated histories|not possible to fast-forward/i;
 
 const defaultExec: GitExecFn = async (cmd, args, opts) => {
   try {
@@ -387,6 +417,12 @@ export class GitTransport implements SyncTransport {
     const fsx = createSnapshotFs();
     await fsx.mkdir(this.o.workDir); // 不存在则创建
     if (await fsx.exists(path.join(this.o.workDir, '.git'))) {
+      // issue #79：已有工作副本时**也必须**让 origin 跟随 repoUrl。
+      // 此前这里直接 `repoReady = true; return`，repoUrl 只在首次 clone 时被使用 ——
+      // 于是「改仓库地址」对已存在的工作副本完全无效：pull/push 全走旧 origin，
+      // 而失败面表现为旧地址的网络超时（真机：局域网地址 → Tailscale 地址后同步长期失败），
+      // 用户会误判成网络/凭据问题。
+      await this.reconcileOrigin();
       this.repoReady = true;
       return;
     }
@@ -411,6 +447,120 @@ export class GitTransport implements SyncTransport {
   }
 
   /**
+   * 让工作副本的 origin 与配置的 repoUrl 保持一致（issue #79）。
+   *
+   * 幂等：地址已一致时**一条写命令都不发**（只读 get-url）。三条边界：
+   *  - 读不出 origin（无该 remote）→ `remote add origin`，否则 `push -u origin` 永远失败；
+   *  - 读得出但为空串 → 视为「读不到」，**不改写**（不拿不确定的读取结果去覆盖用户的仓库配置）；
+   *  - push URL 可被单独配置（`git remote set-url --push`）→ 不一致时一并跟随，否则推送仍走旧地址。
+   */
+  private async reconcileOrigin(): Promise<void> {
+    const current = await this.runGit(['remote', 'get-url', 'origin'], { allowNonZero: true });
+    const origin = current.code === 0 ? current.stdout.trim() : '';
+    if (current.code !== 0) {
+      await this.runGit(['remote', 'add', 'origin', this.o.repoUrl]);
+    } else if (origin !== '' && origin !== this.o.repoUrl) {
+      await this.runGit(['remote', 'set-url', 'origin', this.o.repoUrl]);
+    }
+    const push = await this.runGit(['remote', 'get-url', '--push', 'origin'], { allowNonZero: true });
+    const pushUrl = push.code === 0 ? push.stdout.trim() : '';
+    if (pushUrl !== '' && pushUrl !== this.o.repoUrl) {
+      await this.runGit(['remote', 'set-url', '--push', 'origin', this.o.repoUrl]);
+    }
+  }
+
+  /**
+   * ssh 远端的主机提示（issue #79 主机密钥错误文案用）；非 ssh 或解析不出 → 空串。
+   * 只回传 host[:port]（不含用户名与仓库路径），地址由调用方经 mask() 处理。
+   */
+  private sshHostHint(): string {
+    const url = this.o.repoUrl;
+    if (/^ssh:\/\//i.test(url)) {
+      try {
+        const u = new URL(url);
+        return u.port === '' ? u.hostname : `${u.hostname}:${u.port}`;
+      } catch {
+        return '';
+      }
+    }
+    // scp 形态：git@host:path（可带端口需用 ssh:// 形态，这里只取主机）
+    const scp = /^[^@/]+@([^:/]+)(?::(\d+))?:/.exec(url);
+    if (scp === null) return '';
+    const host = scp[1] ?? '';
+    const port = scp[2];
+    return port === undefined ? host : `${host}:${port}`;
+  }
+
+  /**
+   * 工作副本自检（issue #79，只读）：origin / push URL 是否已跟随 repoUrl。
+   *
+   * **默认只做 2 条本地只读命令**（get-url ×2，毫秒级）——它挂在 `GET /sync/status` 上，
+   * 每次打开面板都会跑；`rev-list`/`status` 在大工作副本（会话 blob 上千文件）上会明显变慢，
+   * 因此放进 `detail: true`（供「重建工作副本」前评估数据量等场景显式索取）。
+   */
+  async inspectWorkDir(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {
+    const fsx = createSnapshotFs();
+    if (!(await fsx.exists(path.join(this.o.workDir, '.git')))) {
+      return { path: this.o.workDir, exists: false, origin: null, pushUrl: null, match: false, ahead: null, dirty: null };
+    }
+    const originRes = await this.runGit(['remote', 'get-url', 'origin'], { allowNonZero: true });
+    const origin = originRes.code === 0 ? originRes.stdout.trim() : '';
+    const pushRes = await this.runGit(['remote', 'get-url', '--push', 'origin'], { allowNonZero: true });
+    const pushRaw = pushRes.code === 0 ? pushRes.stdout.trim() : '';
+    let ahead: number | null = null;
+    let dirty: boolean | null = null;
+    if (opts.detail === true) {
+      // 未上行的本地提交：HEAD 可达、但任何远端跟踪引用都不可达的提交数（无 upstream 也能算）
+      const aheadRes = await this.runGit(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { allowNonZero: true });
+      const parsed = aheadRes.code === 0 ? Number.parseInt(aheadRes.stdout.trim(), 10) : Number.NaN;
+      ahead = Number.isFinite(parsed) ? parsed : null;
+      const statusRes = await this.runGit(['status', '--porcelain'], { allowNonZero: true });
+      dirty = statusRes.code === 0 ? statusRes.stdout.trim() !== '' : null;
+    }
+    return {
+      path: this.o.workDir,
+      exists: true,
+      origin: origin === '' ? null : origin,
+      pushUrl: pushRaw === '' ? null : pushRaw,
+      // 读不出 origin（null）→ 不算 match（状态接口据此提示「工作副本地址未知」）
+      match: origin === this.o.repoUrl && (pushRaw === '' || pushRaw === this.o.repoUrl),
+      ahead,
+      dirty,
+    };
+  }
+
+  /**
+   * 重建工作副本（issue #79 的自救入口）：
+   *  - `relink`：只把 origin / push URL 重新指向 repoUrl（**非破坏性**：不碰工作树与本地提交）；
+   *  - `reclone`：删除工作副本目录后重新 clone（**丢弃未上行的本地提交**；调用方必须先让用户确认）。
+   *
+   * 安全边界：`reclone` 只在目录**确实是 git 工作副本**（有 .git）时才删；目录非空且无 .git
+   * 一律拒绝（与 ensureRepo 同一句 workDirNotRepo）—— 绝不删来路不明的目录。
+   */
+  async rebuildWorkDir(mode: 'relink' | 'reclone'): Promise<void> {
+    this.repoReady = false;
+    if (mode === 'relink') {
+      await this.ensureRepo(); // .git 存在 → reconcileOrigin
+      return;
+    }
+    const fsx = createSnapshotFs();
+    await fsx.mkdir(this.o.workDir);
+    if (!(await fsx.exists(path.join(this.o.workDir, '.git')))) {
+      const entries = await fsx.readdir(this.o.workDir);
+      if (entries.length > 0) {
+        throw new GitTransportError(
+          this.msg('sync.git.workDirNotRepo', { dir: this.o.workDir }),
+          { kind: 'protocol', retryable: false },
+        );
+      }
+      await this.ensureRepo(); // 空目录 → 直接 clone
+      return;
+    }
+    await fs.rm(this.o.workDir, { recursive: true, force: true });
+    await this.ensureRepo();
+  }
+
+  /**
    * pull --ff-only 同步远端；无本地提交（全新仓库）或无 upstream 时静默跳过。
    * opts.retryable=true（仅 list / download 等**幂等读**路径传）：瞬时网络故障走有限指数退避重试。
    * 写路径（upload / delete）不传 → 一次即止（push 有远端副作用，重试可能造成重复写入）。
@@ -422,9 +572,17 @@ export class GitTransport implements SyncTransport {
       const res = await this.runGit(['pull', '--ff-only'], { withCredential: true, allowNonZero: true });
       if (res.code === 0) return;
       if (/no tracking information/i.test(res.stderr)) return; // 无 upstream（初始状态）→ 跳过
+      const combined = res.stderr + ' ' + res.stdout;
+      // issue #79：这两类失败与网络无关，必须给「改回地址 / 重建工作副本」的出口
+      if (SSH_HOST_KEY_RE.test(combined)) {
+        throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
+      }
+      if (DIVERGED_HISTORY_RE.test(combined)) {
+        throw new GitTransportError(this.msg('sync.git.historyDiverged', { dir: this.o.workDir }), { kind: 'conflict', retryable: false });
+      }
       throw new GitTransportError(
         this.msg('sync.git.pullFailed', { err: this.mask(res.stderr, await this.readTokenOnce()) }),
-        classifyNetworkErrorText(res.stderr),
+        classifyNetworkErrorText(combined),
       );
     };
     if (opts.retryable === true) await withSyncRetry(attempt, this.o.retry);
@@ -461,8 +619,13 @@ export class GitTransport implements SyncTransport {
     try {
       const result = await this.o.exec(this.o.gitBin, [...extra, ...args], { cwd, timeoutMs: this.o.timeoutMs });
       if (result.code !== 0 && !opts.allowNonZero) {
+        const combined = result.stderr + ' ' + result.stdout;
         // 统一分类（超时 / 网络 / 鉴权 / 5xx…）：上层可据 kind / retryable 分流，不必解析 message
-        const classified = classifyNetworkErrorText(result.stderr + ' ' + result.stdout);
+        const classified = classifyNetworkErrorText(combined);
+        // issue #79：SSH 主机密钥校验失败 → 换成「怎么信任该主机」的可操作说明（绝不自动信任）
+        if (SSH_HOST_KEY_RE.test(combined)) {
+          throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
+        }
         // 推送 + 鉴权失败：git 原文只说「认证失败」——换成能照做的说明（令牌失效 / 无写权限 / 远端禁用了密码推送）
         const message = opts.requirePushToken === true && classified.kind === 'auth'
           ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
@@ -532,6 +695,17 @@ export class GitTransport implements SyncTransport {
       out = out.split(token).join('[REDACTED]').split(encodeURIComponent(token)).join('[REDACTED]');
     }
     return out;
+  }
+
+  /**
+   * SSH 主机密钥失败的**可操作**文案（issue #79）。有 host 提示时带上 host[:port]；
+   * 解析不出主机（异常地址）走无主机变体，绝不把解析失败的地址硬塞进文案。
+   */
+  private hostKeyMessage(): string {
+    const host = this.sshHostHint();
+    return host === ''
+      ? this.msg('sync.git.hostKeyUnverifiedNoHost')
+      : this.msg('sync.git.hostKeyUnverified', { host });
   }
 
   private blobsDir(): string {

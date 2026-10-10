@@ -7,14 +7,17 @@ import assert from 'node:assert/strict'
 
 import type { PullChange, SyncPullReport, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { SectionId } from '../../schema/types.ts'
-import type { GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
+import type { AutosyncStatusResponse, GithubPollResponse, SyncSectionInfo, SyncStatusResponse } from './sync-api.ts'
 import {
   autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons, computeSyncStatus,
   DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, formatDateTime, formatIntervalDuration, formatLastSync,
+  autosyncSkipDetail,
   githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
 } from './sync-view.ts'
+import type { SyncTextFn } from './sync-view.ts'
+import { en as syncEn, zh as syncZh } from './sync-locales.ts'
 import { zhUiT } from '../../ui/i18n.ts'
 
 /* ---------------------------------------------------------------- sessions 可选分区 */
@@ -506,3 +509,54 @@ test('sync-view: defaultChannelSyncState 每通道独立缺省值', () => {
   assert.equal(git.syncMode, 'advanced', '修改一个通道缺省不影响另一个')
   assert.deepEqual(git.syncSections, [], '另一个通道的勾选不受影响')
 })
+
+/* ---------------------------------------------------------------- issue #79 */
+
+/** 同步字典取词器（支持 {n} 插值；缺键回退键本身，与运行时同口径）。 */
+function mkSyncText(dict: Record<string, string>): SyncTextFn {
+  return ((key: string, params?: Record<string, unknown>): string => {
+    const raw = dict[key] ?? key
+    return params === undefined
+      ? raw
+      : raw.replace(/\{(\w+)\}/g, (m, k: string) => (k in params ? String(params[k]) : m))
+  }) as unknown as SyncTextFn
+}
+
+const syncZhText = mkSyncText(syncZh)
+const syncEnText = mkSyncText(syncEn)
+
+function autosyncStatus(overrides: Partial<AutosyncStatusResponse> = {}): AutosyncStatusResponse {
+  return { enabled: true, interval: '30m', consecutiveFailures: 0, elapsedMs: 0, ...overrides }
+}
+
+test('issue #79：autosyncSkipDetail —— 冲突带「另有 N 个分区待确认」，其余码只给原因', () => {
+  assert.equal(
+    autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: 'conflict', lastRunSkipCount: 3 }), syncZhText),
+    '冲突（远端另有 3 个分区待确认，可在同步页手动处理）',
+  )
+  assert.equal(autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: 'conflict' }), syncZhText), '冲突', '无计数时只给原因，不编数字')
+  assert.equal(
+    autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: 'upToDate' }), syncZhText),
+    syncZh['history.autosyncReasonUpToDate'],
+  )
+  assert.equal(
+    autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: 'unconfigured' }), syncZhText),
+    syncZh['history.autosyncReasonNotConfigured'],
+    '宿主两处命名同义 → 同一文案',
+  )
+})
+
+test('issue #79：autosyncSkipDetail —— 未跳过时无明细；未知码给兜底而**不渲染裸码**', () => {
+  assert.equal(autosyncSkipDetail(autosyncStatus(), syncZhText), null)
+  assert.equal(autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: '' }), syncZhText), null)
+  const unknown = autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: 'brand-new-code' }), syncZhText)
+  assert.equal(unknown, syncZh['history.autosyncReasonUnknown'])
+  assert.ok(!String(unknown).includes('brand-new-code'), '绝不把裸码当文案渲染')
+})
+
+test('issue #79：autosyncSkipDetail —— en 界面下不得出现中文（文案只许来自字典）', () => {
+  const en = autosyncSkipDetail(autosyncStatus({ lastRunSkipReason: 'conflict', lastRunSkipCount: 2 }), syncEnText)
+  assert.doesNotMatch(String(en), /[\u4e00-\u9fff]/, 'en 界面不得出现中文：' + String(en))
+  assert.match(String(en), /2/)
+})
+

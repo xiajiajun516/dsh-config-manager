@@ -54,6 +54,9 @@ export const DEFAULT_ACQUIRE_TIMEOUT_MS = 0
  *  「心跳过期 + pid 存活」永远停在 UNKNOWN_STATE，用户只能手工删锁文件（issue #36 实测）。
  *  心跳长过期说明写方早已停摆 → 允许**显式**回收判为残留锁；acquire 侧仍绝不自动摘锁。 */
 export const DEFAULT_LONG_EXPIRED_AFTER_MS = 30 * 60_000
+/** acquire 中「EEXIST 但 ownership 读不到」的竞态重试上限（issue #79）：文件在两次读取之间
+ *  被释放时重试 open('wx') 即可拿到锁，不在锁间隙里空等 acquireTimeoutMs。 */
+const MAX_FREE_RETRIES = 5
 
 // ---------- 类型 ----------
 
@@ -98,6 +101,15 @@ export interface EnvLockHandle {
 export type LockState =
   /** 成功获得所有权 */
   | 'ACQUIRED'
+  /**
+   * 无锁：ownership 文件确实不存在（issue #79）。
+   *
+   * 此前这一态被保守归入 LOCKED（「可能在创建中」），于是 recovery/status 会在**根本没有锁**时
+   * 回报 LOCKED —— 用户照着面板去找一个不存在的锁（真机反馈：自测 acquire/release 都正常，
+   * 面板却一直显示 LOCKED）。真正需要保守的是 **acquire**（见 acquire 的 FREE 重试分支），
+   * 而不是对用户的**报告**：「没看到锁」就如实说没有。
+   */
+  | 'FREE'
   /** 锁被活跃 owner 持有 */
   | 'LOCKED'
   /** 检测到确定 stale（heartbeat 超时 + 进程确证死亡 或 PID reuse）—— 只报告，不自动删除 */
@@ -627,6 +639,8 @@ export class EnvironmentLockManager {
     const selfOsIdentity = this.probe.canGetOsIdentity()
       ? await this.probe.probe(process.pid).then((p) => p.osProcessStartIdentity).catch(() => null)
       : null
+    /** 「EEXIST/EPERM 说文件在，inspect 却读不到」= 文件在两次读取之间被释放的竞态（issue #79） */
+    let freeRetries = 0
     for (;;) {
       // —— 先确保 locks 目录存在（mkdir 递归；EPERM 在下面归类为 PERMISSION_ERROR）——
       try {
@@ -650,6 +664,13 @@ export class EnvironmentLockManager {
         if (code === 'EEXIST') {
           // 已存在 → inspect owner
           const inspect = await this.inspectLockState()
+          // issue #79：EEXIST 与「ownership 读不到」同时出现 = 上一次占用的释放竞态。
+          // 此前直接判 LOCKED，一次无害的竞态就变成「另一个任务正在运行」并可能被记成
+          // mutation-locked（真机：连续 16 次跳过，用户侧看不出原因）。重试 open('wx') 即可。
+          if (inspect.state === 'FREE' && freeRetries < MAX_FREE_RETRIES) {
+            freeRetries += 1
+            continue
+          }
           if (inspect.state === 'LOCKED') {
             // 等 acquireTimeoutMs 后重试；超时则返回 LOCKED
             if (this.acquireTimeoutMs > 0 && this.now() - started < this.acquireTimeoutMs) {
@@ -669,6 +690,11 @@ export class EnvironmentLockManager {
           const exists = await this.statLockExists()
           if (exists === true) {
             const inspect = await this.inspectLockState()
+            // 同 EEXIST 分支：文件刚被释放的竞态 → 重试独占创建（不是「被占用」）
+            if (inspect.state === 'FREE' && freeRetries < MAX_FREE_RETRIES) {
+              freeRetries += 1
+              continue
+            }
             if (inspect.state === 'LOCKED' && this.acquireTimeoutMs > 0 && this.now() - started < this.acquireTimeoutMs) {
               await sleep(this.heartbeatIntervalMs / 2)
               continue
@@ -951,8 +977,10 @@ export class EnvironmentLockManager {
   async inspectLockState(): Promise<{ state: LockState; detail?: string; corruptOwnership?: boolean }> {
     const st = await this.readOwnershipState()
     if (st.kind === 'missing') {
-      // 无所有权文件：可能在创建中，或已被清除 → 保守按"非空闲"处理
-      return { state: 'LOCKED', detail: utilsMsg('utils.envLock.ownershipMissing') }
+      // 无所有权文件：可能在创建中、也已被清除 —— **报告**层如实说「没有锁」（issue #79）。
+      // acquire 侧不据此放行：它会重试 open('wx')（见 acquire 的 FREE 分支），
+      // 真正拿到所有权才继续，所以这里放宽不会让任何写动作绕过锁。
+      return { state: 'FREE', detail: utilsMsg('utils.envLock.ownershipMissing') }
     }
     if (st.kind === 'corrupt') {
       // 存在但空/损坏/ACL 不可读：崩溃窗口残留（open('wx') 后未写完 owner 即死），无有效 owner
@@ -1035,7 +1063,8 @@ export class EnvironmentLockManager {
     }
     const rec = st.kind === 'ok' ? st.rec : null
     if (st.kind === 'missing') {
-      return { ok: false, removed: false, state: 'LOCKED', detail: utilsMsg('utils.envLock.ownershipGone') }
+      // 竞态：inspect 之后锁被释放 → 本来就没有可回收对象，如实报 FREE（issue #79；此前报 LOCKED）
+      return { ok: false, removed: false, state: 'FREE', detail: utilsMsg('utils.envLock.ownershipGone') }
     }
     // 2. 原子 rename 捕获当前 inode
     const recoveringPath = path.join(this.locksDir, `${RECOVERING_PREFIX}${randomHex(8)}`)

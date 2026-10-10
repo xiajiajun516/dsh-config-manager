@@ -821,6 +821,55 @@ export function formatSyncStatusTimestamp(lastSyncAt: string | undefined, locale
 }
 
 /** 远端地址预览（列表/事实行用）：超长截断到 max 字符（不省略号，保持既有展示）。 */
+/* ---------------------------------------------------------------- 工作副本（issue #79） */
+
+/**
+ * 工作副本自检结果的状态字典键（issue #79）。
+ *
+ * 入参用**结构类型**（status.workDir 的形状），判定只有这一份实现：
+ *  - 自检读不出来（error）→ unknown（读不到 ≠ 不存在）
+ *  - 无 .git → missing（首次同步才会 clone）
+ *  - origin 已跟随 repoUrl → match；否则 mismatch（改地址后最需要看见的那一条）
+ */
+export function workdirStateKey(
+  workDir: { facts?: { exists: boolean; match: boolean }; error?: string } | undefined,
+): 'workdir.match' | 'workdir.mismatch' | 'workdir.missing' | 'workdir.unknown' | null {
+  if (workDir === undefined) return null
+  if (workDir.error !== undefined) return 'workdir.unknown'
+  const facts = workDir.facts
+  if (facts === undefined) return 'workdir.unknown'
+  if (!facts.exists) return 'workdir.missing'
+  return facts.match ? 'workdir.match' : 'workdir.mismatch'
+}
+
+/** 工作副本状态 → 徽章语义（ok = 已跟随；warn = 仍指旧地址 / 读不出；info = 尚未创建）。 */
+export function workdirStateBadgeKind(
+  state: ReturnType<typeof workdirStateKey>,
+): 'ok' | 'warn' | 'info' | null {
+  switch (state) {
+    case 'workdir.match': return 'ok'
+    case 'workdir.mismatch': return 'warn'
+    // 读不出 ≠ 不存在：不能给「正常」的绿色，也不该给「失败」的红色
+    case 'workdir.unknown': return 'warn'
+    case 'workdir.missing': return 'info'
+    default: return null
+  }
+}
+
+/** 是否需要给用户「重指向仓库地址」入口（只在自检成功、目录存在且地址不一致时）。 */
+export function needsWorkdirRelink(
+  workDir: { facts?: { exists: boolean; match: boolean }; error?: string } | undefined,
+): boolean {
+  return workdirStateKey(workDir) === 'workdir.mismatch'
+}
+
+/** 是否可以「重新克隆工作副本」（自检成功、目录存在且确实是 git 工作副本时才允许）。 */
+export function canRecloneWorkdir(
+  workDir: { facts?: { exists: boolean; match: boolean }; error?: string } | undefined,
+): boolean {
+  return workDir !== undefined && workDir.error === undefined && workDir.facts?.exists === true
+}
+
 export function formatSyncUrlPreview(url: string, max = 60): string {
   return url.slice(0, max)
 }
