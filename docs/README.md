@@ -9,11 +9,12 @@
 | `docs/spec/` | 对外契约（格式规格 / schema / 兼容矩阵 / 已知缺口） | 第三方实现者 |
 | `docs/seo/` | 搜索曝光与召回基线记录 | 维护者 |
 | `docs/handoff/` | 阶段交接 / Agent 交接文档（**历史归档，非当前状态**） | 接手者 |
-| `docs/known-pitfalls.md` | `AGENTS.md`「📌 常见坑」的**详细版存档**（事故叙事 / 证据 / 量化数据 / 复核脚本） | 维护者、接手者 |
+| `docs/lessons/` | **`AGENTS.md` 的经验/证据库**（真机事故 / 量化数据 / 复现与复核脚本；按域分文件，索引见 `docs/lessons/README.md`） | 维护者、接手者 |
+| `docs/known-pitfalls.md` | 2026-09/10 一次更早下移的**冻结存档**（不再追加；新证据进 `docs/lessons/`） | 维护者、接手者 |
 
 ## 约定
 
 - 改动导出/导入格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`（详见 `AGENTS.md`）。
 - `docs/handoff/` 中的文档写于当时的版本与工作区状态，结论可能已过时；当前状态以 `CHANGELOG.md` + `git log` 为准。
-- `AGENTS.md` 的「📌 常见坑」只写**铁律与硬约束**（受 workspace instruction 64 KB 预算限制）；详细叙事放 `docs/known-pitfalls.md`。新增坑**两处同步**，不要只写一处。
+- `AGENTS.md` **只写规则**（必须/绝不 + 判据 + 指针，硬上限 28 KiB，守卫 `node scripts/check-agents-budget.mjs`）；证据/叙事放 `docs/lessons/<域>.md`。新增坑**两处同步**：先写证据，再补一行规则 + 指针。
 - 新增文档请按上表归位；根目录新增 `.md` 需先确认它是否属于「对外文档」。

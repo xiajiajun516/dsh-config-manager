@@ -99,6 +99,11 @@ jobs:
         # 因此必须在 Build 之后单独跑一次，让护栏真正生效。
         run: node --test src/client/bundle-selfcontained.test.ts
 
+      - name: AGENTS.md budget guard
+        # AGENTS.md 每个会话都进模型上下文，且受 workspace instruction 64 KiB 预算限制：
+        # 超限时模型只能看到被截断的尾巴（历史事故）。规则留在 AGENTS.md，证据必须进 docs/lessons/。
+        run: node scripts/check-agents-budget.mjs
+
       - name: Package tarball (dry run)
         # 与发布流水线同构的打包校验：pack 失败说明 package.json "files" 白名单
         # 或 lib/ 产物已坏——在 PR 阶段暴露，而不是等到发版时才卡住。

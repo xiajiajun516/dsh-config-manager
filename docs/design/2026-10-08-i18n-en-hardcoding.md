@@ -958,3 +958,11 @@ if (process.argv[1] && process.argv[1].endsWith('i18n-scan.reference.mjs')) main
 - 有没有漏面？扫描集覆盖 `src/**` 全部非 CLI 非测试文件 + `locale/*.json`；124 个命中文件 100% 落在 6 个作用域内（实测无未归属）。
 - 有没有做不到的验收？A4 依赖既有 zh 文案逐字不变，这是本契约唯一对实现者的**语义**要求，其余都是机械规则。
 
+
+
+## 附录：AGENTS.md §i18n 原文（2026-10-10 下移，逐字）
+
+### i18n
+- i18n：**禁止硬编码用户可见字符串**；文案进字典，`src/ui/` 走 `UiT`（活翻译器 `liveUiT` / `makeLiveUiT`），React 壳走 `t()`（`ConfigManagerKey` 编译校验，zh 源 / en 镜像），宿主 / 引擎走 `engineMsg`（`src/core/engine-locale.ts`：活语言 + 各域目录经 `registerMessageCatalog` 并入）。**语言在「取文案那一刻」解析**，不得在装配期快照（`makeUiT(...)` / `makeMsg(...)` 出现在 `apply()` 里即缺陷）。
+- **新增用户可见文案必须进目录**：zh 逐字保留、en 补齐；既有键的 zh/en 指纹冻结在 `src/core/engine-locale.test.ts`（只许追加，改既有键即红）。**静态守卫**：全量 `node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 全仓零命中）；作用域自检 `$env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'; node --test tests/i18n-hardcoded-guard.test.ts`（只收窄文件列表，退出码 0 = 本作用域零命中）。扫描集 = `src/**`（−`src/cli/**` −`*.test.ts` −`fixtures/**`）+ `locale/*.json`；注释 / `log.*`·`console.*` 实参 / 目录 zh 区豁免；白名单 4 条 128 命中（已登记的非渲染匹配文本，**新增豁免只能走 captain** → `tests/helpers/i18n-scan.ts`）。
+- **7 套字典的对照表与「查不到 key 不等于缺陷」的排查姿势见 `DEVELOPERS.md`——那一段极易误判，漏读会产出 600+ 假阳性。**

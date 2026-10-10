@@ -40,6 +40,12 @@ src/
 
 **安全不变量**：Secret 默认不导出 / 导入前强制快照 / Dry Run 零写入 / 冲突不默认覆盖 / ZIP 视为不可信输入 / 日志全程脱敏。
 
+## 🔐 插件 API 的真实认证边界（W2，2026-09 实测）
+
+> 下移自 `AGENTS.md` §🏗️ 架构心智：这里是完整论证与证据；规则句仍留在 AGENTS.md。
+
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；证据见 known-pitfalls）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件 79 条路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 79 条路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
+
 ## 🚀 自动发布（npm + GitHub Release）
 
 **发版顺序**（顺序有意义：publish.yml 抽取的是**被打 tag 的那个提交**里的 CHANGELOG，所以 CHANGELOG 收口必须先提交再打 tag）：
@@ -366,3 +372,15 @@ node --input-type=module -e "for (const r of [['./src/client/locales.ts','zh','e
   封装层：`common/Icon.tsx` 的 `ExpandChevron` + `common/morph-icons.ts`（数据表）。
   护栏：`src/client/common/morph-icons.test.ts`（形变必须是纯 90° 旋转、无缩放 + 端点恰好落在两个图标上 + 两包版本相等）。
   使用边界与两条硬约定（`reducedMotion="user"` / `spring="smooth"`）见 `DESIGN.md §6`。
+
+## 🧭 路由围栏 / adapter / 同步心智（下移自 AGENTS.md §🏗️ 架构心智）
+
+> 规则句仍在 `AGENTS.md` §🏗️；这里是原文（含审核 finding id 与实现要点）。
+
+- **宿主路由只经 `src/routes/kit.ts` 的 `endpoint()` 声明**（W1，host-entry#F-02/F-03/F-05）：围栏（loopback + 同源）与方法白名单由 kit 在**注册点**统一包装（`registerRoutes()` 兜底断言「未经 kit 的路由直接抛错」），**禁止**再写逐路由的 `guard`/裸 `isLoopbackRequest` 样板；新增一条 API 只改一处（组文件里那一条 `endpoint({ path, methods }, handler)`）。路由源 = `src/index.ts`（被源码级窗口守卫钉住的 7 条）+ `src/routes/*.ts`（其余 72 条；合计 **79** 条，见 parity 快照）——**源码级守卫必须扫全部路由源**（见 `tests/route/route-fence.test.ts`、`route-parity.test.ts`、`route-channel-guard.test.ts`），只扫 index.ts 会静默失去覆盖。
+
+- **宿主路由只能经 `src/routes/kit.ts` 的 `registerRoutes()` 注册**（W1，约定级防线）：全仓唯一调用点是 `src/index.ts`（也是唯一 webServer 消费点），它逐条断言路由出自 `endpoint()`；**绕过它直接 `webServer.register(...)` 的旁路当前不存在，但未来新增第二个注册点会静默失去围栏覆盖**（route-fence 只覆盖现有注册路径）。新增注册路径时必须同时接上 `registerRoutes`，或补一条同等的结构守卫。
+
+- 13 adapter 见结构；`self`=插件自身配置（`$DSH_HOME/dsh-config-manager/` 下 `sync-*.json`/`market-config.json`/`ui-prefs.json` 白名单收，portable 默认包含；`dataDir` 在 `~/.dsh` 外不挂载）。
+
+- 同步：`SyncEngine`+`Git/WebDavTransport`+`AutoSyncScheduler`(事件驱动,远端新快照才拉/本地改动才推)+`sync-selection`；**autosync 与 sync-selection 按通道(git/webdav)独立**(schema v2，v1→git)，调度器双通道各自排期。
