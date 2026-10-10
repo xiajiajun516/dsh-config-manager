@@ -1,0 +1,912 @@
+/**
+ * rollback-point（**工作区 + 会话回滚**）的**展示模型**（框架无关纯函数，node 可测）。
+ *
+ * 数据来自宿主 /recovery/rollback-points 族的 6 条子路径（list / storage / <id> / <id>/preview /
+ * <id>/rewind / <id>/delete；第 3 条 <id> 单条详情同样进端口 —— 面板要能深链到某个点）。
+ * 宿主把它挂在既有 recovery **prefix 路由**内部按 path 分发，因此不新增注册路由条目。
+ *
+ * 三条纪律（与旧检查点展示模型同源，改名不改口径）：
+ *  ① **不 import src/core/rollback-point.ts（或任何 core 模块）** —— 那条链经 node:fs 依赖宿主运行时，
+ *     一旦进 client bundle，DSH loader 会报 missed the module table（AGENTS.md 的 client bundle 铁律）。
+ *     因此这里按「线协议结构子集」重新声明类型（字段只取展示所需，缺字段一律回落安全值）。
+ *  ② **本模块不产出任何用户可见文案**：只回传字典键（rollback.*），zh/en 在 recovery-locales.ts。
+ *  ③ **未知码 / 未知态 / 未知来源一律回落 unknown 键，绝不裸渲染机器码**；用户自由文本（note）与
+ *     宿主技术细节（detail / guidance.detail / 路径清单）一律先过 redact()（AGENTS.md UI 硬性规则 7）。
+ *
+ * 两态纪律（S2）：只有 `workspace` 与 `session`。第三态 `config` 与「同点判定」已随检查点一起删除：
+ * 任何非两态的 state 字符串都回落 rollback.state.unknown，本模块**不出现** config 态。
+ *
+ * 线协议形状（与 T1 宿主侧 src/core/rollback-point.ts 逐字段对齐，2026-10-10 双人确认）：
+ *  - points[] = { id, createdAt, sessionId, turn, kind, protected, incomplete, note, spreadMs, segments:[…] }，
+ *    segments **恒为 [workspace, session] 两项**；
+ *  - preview.workspace = { overwrite, different, missing, createdAfter(数), leftovers(路径清单,≤20), leftoversTruncated }，
+ *    preview.session = { from, to, turns, cursorNow, cursorTarget, restorable, active, reasonCode }
+ *    （from = 目标回合开始前最后一个事件的 seq，即 fork 的 inclusive 边界；turns = 回合号）；
+ *  - rewind.segments[] = { state, status, reasonCode?, detail[], restored, failed, leftovers[], leftoversTruncated, childSessionId?, guidance? }。
+ */
+import { redact } from '../security/redaction.ts'
+
+/* ------------------------------------------------------------ 两态 / 三选一 mode */
+
+/** 只保留两态（S2）：工作区 + 会话。 */
+export const ROLLBACK_STATES = ['workspace', 'session'] as const
+export type RollbackState = (typeof ROLLBACK_STATES)[number]
+
+/** 段名 → 是否为受支持的段（出现别的段一律按未知处理，绝不假设它是第三态）。 */
+export function isRollbackState(value: unknown): value is RollbackState {
+  return value === 'workspace' || value === 'session'
+}
+
+/**
+ * 回退范围三选一（冻结 wire contract 的 `mode`）：
+ *  - `files+session`：工作区文件 + 会话（新子会话）一起回退；
+ *  - `files`：只回退工作区文件；
+ *  - `session`：只回退会话（fork 子会话）。
+ */
+export const ROLLBACK_MODES = ['files+session', 'files', 'session'] as const
+export type RollbackMode = (typeof ROLLBACK_MODES)[number]
+
+export function isRollbackMode(value: unknown): value is RollbackMode {
+  return value === 'files+session' || value === 'files' || value === 'session'
+}
+
+/** mode → 段集合（workspace 段 = 工作区文件；session 段 = 会话）。 */
+export function rollbackModeSegments(mode: string | null | undefined): RollbackState[] {
+  if (mode === 'files') return ['workspace']
+  if (mode === 'session') return ['session']
+  if (mode === 'files+session') return ['workspace', 'session']
+  return []
+}
+
+/**
+ * 该 mode 在当前可回退段集合下**是否可选**（界面据此禁用注定失败的选项）。
+ *
+ * 例：某点没有稳定边界（session 段 restorable=false）时，`session` 与 `files+session` 都不可选 ——
+ * 绝不发一个宿主一定会拒绝的请求。
+ */
+export function rollbackModeAvailable(mode: string | null | undefined, availableSegments: readonly string[]): boolean {
+  const needed = rollbackModeSegments(mode)
+  return needed.length > 0 && needed.every((state) => availableSegments.includes(state))
+}
+
+/** 段集合 → mode（三选一；空集合回落 `files+session`，因为那正是自动点缺省该回退的两态）。 */
+export function rollbackModeFromSegments(segments: readonly string[]): RollbackMode {
+  const hasWorkspace = segments.includes('workspace')
+  const hasSession = segments.includes('session')
+  if (hasWorkspace && !hasSession) return 'files'
+  if (hasSession && !hasWorkspace) return 'session'
+  return 'files+session'
+}
+
+/* ------------------------------------------------------------ 字典键映射（绝不裸渲染） */
+
+export const ROLLBACK_STATE_UNKNOWN_KEY = 'rollback.state.unknown'
+export const ROLLBACK_MODE_UNKNOWN_KEY = 'rollback.mode.unknown'
+export const ROLLBACK_CODE_UNKNOWN_KEY = 'rollback.code.unknown'
+export const ROLLBACK_GUIDANCE_UNKNOWN_KEY = 'rollback.guidance.unknown'
+export const ROLLBACK_KIND_UNKNOWN_KEY = 'rollback.kind.unknown'
+
+const STATE_KEYS: Record<RollbackState, string> = {
+  workspace: 'rollback.state.workspace',
+  session: 'rollback.state.session',
+}
+
+const MODE_KEYS: Record<RollbackMode, string> = {
+  'files+session': 'rollback.mode.filesAndSession',
+  files: 'rollback.mode.filesOnly',
+  session: 'rollback.mode.sessionOnly',
+}
+
+/**
+ * code 白名单：**只有这些码进字典**，其余一律回落 unknown ——
+ * 宿主若新增码而字典没跟上，界面显示「未识别的错误码」而不是把机器码拼上屏。
+ *
+ * 与宿主引擎 `src/core/rollback-point.ts` 的 `RollbackCode` 联合**逐条对应**（core 不能进
+ * client bundle，所以只能在这里镜像一份；t3 已按 T1 的最终码表补齐 31 条）。顶层 code 与
+ * segments[].reasonCode / warnings 共用同一枚举，所以一份白名单同时服务三处渲染。
+ */
+export const ROLLBACK_CODES: readonly string[] = [
+  'ok',
+  'deleted',
+  // 冻结契约的 9 条
+  'confirmation-required',
+  'protected-point',
+  'record-not-found',
+  'record-incomplete',
+  'invalid-input',
+  'no-boundary',
+  'storage-unavailable',
+  'mutation-locked',
+  'method-not-allowed',
+  // 台账 / 存储
+  'ledger-unreadable',
+  'ledger-write-failed',
+  // 工作区写回（记录校验 / 对象仓 / 写后复验 / 无事可做）
+  'invalid-path',
+  'object-missing',
+  'object-hash-mismatch',
+  'restore-failed',
+  'verify-failed',
+  'nothing-to-restore',
+  // 救援点（S5 guard）
+  'guard-failed',
+  // 会话（fork 子会话；原会话日志只读）
+  'session-missing',
+  'session-out-of-root',
+  'session-too-large',
+  'session-active',
+  'session-fork-unavailable',
+  'fork-failed',
+  // 自动留点（工作区快照）
+  'capture-failed',
+  'capture-truncated',
+  'capture-degraded',
+  'no-chunks',
+  'chunk-not-absolute',
+  'chunk-not-found',
+]
+
+/**
+ * 已知指引码后缀（T1 引擎实际产出；白名单外回落 unknown）。
+ *
+ * 引擎回传的是**完整字典键**（rollback.guidance.workspaceRolledBack），旧检查点引擎回传的是
+ * **裸后缀**（workspacePartial）—— 映射两种形态都认，避免把已知指引误判成 unknown
+ * （那会让「工作区已回滚 / 已 fork 子会话」这类关键事实消失）。
+ */
+export const ROLLBACK_GUIDANCE_CODES: readonly string[] = [
+  'mountStorage', 'fixDataDir', 'readOnlyFallback', 'probeDetail',
+  'workspaceRolledBack', 'forkUnavailable', 'sessionForked',
+]
+
+/** 已知告警码后缀（warnings 走独立一族 rollback.warn.*；白名单外回落 rollback.warn.unknown）。 */
+export const ROLLBACK_WARN_CODES: readonly string[] = [
+  'ledgerUnreadable', 'trackMissing', 'trackDegraded', 'protected', 'guardFailed',
+]
+
+export const ROLLBACK_WARN_UNKNOWN_KEY = 'rollback.warn.unknown'
+
+/**
+ * 指引 / 告警码 → 字典键。三种形态都认：
+ *  - 完整键 `rollback.guidance.X` / `rollback.warn.X`（T1 引擎）；
+ *  - 裸后缀 `X`（旧检查点引擎）。
+ * 未知一律回落 unknown 键，**绝不裸渲染机器码**。
+ */
+function rollbackNoticeKey(code: unknown): string {
+  if (typeof code !== 'string' || code === '') return ROLLBACK_GUIDANCE_UNKNOWN_KEY
+  if (code.startsWith('rollback.warn.')) {
+    const bare = code.slice('rollback.warn.'.length)
+    return ROLLBACK_WARN_CODES.includes(bare) ? 'rollback.warn.' + bare : ROLLBACK_WARN_UNKNOWN_KEY
+  }
+  const bare = code.startsWith('rollback.guidance.') ? code.slice('rollback.guidance.'.length) : code
+  return ROLLBACK_GUIDANCE_CODES.includes(bare) ? 'rollback.guidance.' + bare : ROLLBACK_GUIDANCE_UNKNOWN_KEY
+}
+
+/** 段名 → 字典键（非两态回落 unknown，绝不裸渲染）。 */
+export function rollbackStateKey(state: string | null | undefined): string {
+  return isRollbackState(state) ? STATE_KEYS[state] : ROLLBACK_STATE_UNKNOWN_KEY
+}
+
+/** mode → 字典键（三选一；其它回落 unknown）。 */
+export function rollbackModeKey(mode: string | null | undefined): string {
+  return isRollbackMode(mode) ? MODE_KEYS[mode] : ROLLBACK_MODE_UNKNOWN_KEY
+}
+
+const GUARD_KEYS: Record<RollbackGuardPolicy, string> = {
+  require: 'rollback.guard.require',
+  warn: 'rollback.guard.warn',
+  off: 'rollback.guard.off',
+}
+
+/** 救援点策略（S5 guard）→ 字典键（未知回落 unknown）。 */
+export function rollbackGuardPolicyKey(policy: string | null | undefined): string {
+  return policy === 'require' || policy === 'warn' || policy === 'off' ? GUARD_KEYS[policy] : 'rollback.guard.unknown'
+}
+
+/** 机器码 → 字典键（白名单外回落 unknown）。 */
+export function rollbackCodeKey(code: string | null | undefined): string {
+  if (typeof code !== 'string' || code === '') return ROLLBACK_CODE_UNKNOWN_KEY
+  return ROLLBACK_CODES.includes(code) ? 'rollback.code.' + code : ROLLBACK_CODE_UNKNOWN_KEY
+}
+
+export interface RollbackGuidance { code: string; detail?: string }
+export interface RollbackGuidanceRowView { key: string; detail: string | null }
+
+/** 指引 / 告警：code → rollback.guidance.* / rollback.warn.*（三种形态都认），detail 过 redact。 */
+export function rollbackGuidanceRows(items: readonly RollbackGuidance[] | undefined): RollbackGuidanceRowView[] {
+  return (items ?? []).map((item) => ({
+    key: rollbackNoticeKey(item.code),
+    detail: item.detail !== undefined && item.detail !== '' ? redact(item.detail) : null,
+  }))
+}
+
+/* ------------------------------------------------------------ 留存口径（S6） */
+
+/**
+ * 每会话最多保留的**自动点**（超出只淘汰最旧的自动点 —— 引擎 selectPrune 的自动点桶）。
+ * 救援点（guard）不占这个额度、也不被它淘汰，但有自己的每会话上限（引擎 ROLLBACK_MAX_GUARDS_PER_SESSION）。
+ */
+export const ROLLBACK_MAX_POINTS_PER_SESSION = 20
+/** 全局最多保留的**自动点**（同上，只淘汰最旧的自动点）。 */
+export const ROLLBACK_MAX_POINTS_TOTAL = 50
+
+/**
+ * 预览不可回退时的原因键（按宿主真实形状分派；**绝不回落 rollback.code.unknown**）。
+ *
+ * 注意（t22 冻结口径）：救援点**可以**作为回退目标 —— 引擎 canRestore = !protected && !incomplete &&
+ * 至少一段可恢复（**不含** kind!=='guard'，见 src/core/rollback-point.ts:1531）。所以这个键**只在
+ * 宿主真的拒绝了一个看起来可恢复的救援点**（canRestore=false 且不是 protected/incomplete/无可用段）时使用，
+ * 不是「救援点一律不可回退」。
+ */
+export const ROLLBACK_PREVIEW_REASON_GUARD_KEY = 'rollback.preview.reason.guard'
+export const ROLLBACK_PREVIEW_REASON_INCOMPLETE_KEY = 'rollback.preview.reason.incomplete'
+export const ROLLBACK_PREVIEW_REASON_HOST_REFUSED_KEY = 'rollback.preview.reason.hostRefused'
+
+/* ------------------------------------------------------------ 线协议类型（结构子集） */
+
+export type RollbackPointKind = 'auto' | 'guard'
+export type RollbackOutcome = 'restored' | 'partial' | 'failed' | 'denied'
+export type RollbackSegmentStatus = 'restored' | 'skipped' | 'failed'
+export type RollbackGuardPolicy = 'require' | 'warn' | 'off'
+
+/** 单段摘要（恒为 workspace / session 两项；state 用 string 以便未知值也能被映射成 unknown 键）。 */
+export interface RollbackSegmentSummary {
+  state: string
+  ok?: boolean
+  degraded?: boolean
+  capturedAt?: number
+  reasonCode?: string | null
+  /** 该段捕获的条目数（工作区文件数 / 会话 0|1） */
+  entries?: number
+  bytes?: number
+  /** 会话段：游标（seq） */
+  cursorBytes?: number | null
+  /** 该段**可回退**（有内容副本 / 有可写回条目） */
+  restorable?: boolean
+  /** 留点时的**跳过条目总数**（工作区态：skipped + excludedDirs；会话态恒 0）—— S4「跳过并如实报告」 */
+  skippedCount?: number
+  /** 该段捕获是否被上限截断（工作区态 = 单文件上限 / 字节预算 / 文件数预算任一命中） */
+  truncated?: boolean
+}
+
+export interface RollbackPointSummary {
+  id: string
+  createdAt: number
+  /** 自动留点归属的会话（自动点必有；无会话的旧记录为 null） */
+  sessionId?: string | null
+  /** 会话单元 id（宿主回传的 <projectKey>/<sessionId>；用于分组表头） */
+  unitId?: string | null
+  /** 该点对应的回合号（1-based；无法判定为 null） */
+  turn?: number | null
+  /** fork 的 inclusive 边界 seq（null = 无前置边界） */
+  boundarySeq?: number | null
+  /** auto = 回合结束自动留点；guard = 回退前救援点 */
+  kind?: string
+  protected?: boolean
+  /** 两态缺一（缺省不允许回退） */
+  incomplete?: boolean
+  note?: string | null
+  /** 两态 capturedAt 的跨度（诚实事实，无同点判定） */
+  spreadMs?: number
+  segments?: RollbackSegmentSummary[]
+}
+
+export interface RollbackStorageStatus {
+  available: boolean
+  root?: string
+  detail?: string
+  guidance?: RollbackGuidance[]
+  requirements?: readonly string[]
+}
+
+export interface RollbackListResult {
+  ok?: boolean
+  points: RollbackPointSummary[]
+  storage: RollbackStorageStatus
+  error?: string
+  /** 全局留存上限（S6：50） */
+  maxRecords?: number
+  /** 每会话留存上限（S6：20） */
+  maxRecordsPerSession?: number
+}
+
+export interface RollbackDetailResult {
+  ok: boolean
+  id: string
+  point: RollbackPointSummary
+  storage: RollbackStorageStatus
+}
+
+/** 计数或清单：宿主回传数字就取数字，回传清单就取长度（两者都是「有多少项」）。 */
+export type RollbackCount = number | readonly string[]
+
+export interface RollbackWorkspacePreview {
+  /** 将被写回（覆盖）的条目数 */
+  overwrite?: RollbackCount
+  /** 与当前内容不同、确实会被改动 */
+  different?: RollbackCount
+  /** 记录里的文件当前已不存在（回退会重新创建） */
+  missing?: RollbackCount
+  /** 该点之后**新建**的内容：只报告，绝不删除（数字） */
+  createdAfter?: RollbackCount
+  /** 同上，但带路径清单（宿主上限 20 条） */
+  leftovers?: string[]
+  leftoversTruncated?: boolean
+  /** 记录在案的分块（绝对路径；界面只做展示，不做判定） */
+  chunks?: string[]
+  /** 捕获时被跳过的条目总数（skipped + excludedDirs；逐条列表的上限截断不影响本计数） */
+  skippedCount?: RollbackCount
+  /** 捕获是否被上限截断（超单文件上限 / 字节预算 / 文件数预算任一命中即为 true） */
+  truncated?: boolean
+  available?: boolean
+  reasonCode?: string | null
+  guidance?: RollbackGuidance[]
+}
+
+export interface RollbackSessionPreview {
+  /** 回退目标边界：目标回合开始前最后一个事件的 seq（fork 的 inclusive 边界；无边界为 null） */
+  from?: number | null
+  /** 该回合 turn/end 的 seq（无边界为 null） */
+  to?: number | null
+  /** 该点对应的回合号 */
+  turns?: number
+  /** 当前事件游标（seq） */
+  cursorSeq?: number | null
+  /** 当前日志字节数 */
+  cursorNowBytes?: number | null
+  /** 目标边界的字节数 */
+  cursorTargetBytes?: number | null
+  /** 该段是否可回退（无边界 / 副本缺失 → false） */
+  restorable?: boolean
+  /** 日志刚被写过（仅供参考：fork 只读，不会覆盖日志） */
+  active?: boolean
+  reasonCode?: string | null
+  available?: boolean
+  guidance?: RollbackGuidance[]
+}
+
+export interface RollbackPreviewResult {
+  ok: boolean
+  code?: string
+  detail?: string
+  id: string
+  storage: RollbackStorageStatus
+  workspace?: RollbackWorkspacePreview | null
+  session?: RollbackSessionPreview | null
+  /** 该点的两态摘要（宿主回传；缺失时界面用列表行里的同一份摘要） */
+  point?: RollbackPointSummary | null
+  /** 宿主给出的权威判定（本层在此基础上再要求「至少有一段可回退」） */
+  canRestore?: boolean
+  canRemove?: boolean
+  summary?: RollbackPointSummary
+  guidance?: RollbackGuidance[]
+  warnings?: RollbackGuidance[]
+}
+
+export interface RollbackSegmentResult {
+  state: string
+  status: string
+  reasonCode?: string
+  /** 逐条事实（技术细节，非用户可见文案） */
+  detail?: string[]
+  restored?: number
+  failed?: number
+  /** 该点**未记录**、本次**不删除**的内容（含留点时被跳过的既有文件；路径清单，宿主上限 20 条） */
+  leftovers?: string[]
+  leftoversTruncated?: boolean
+  /** 工作区段：实际写回的字节数（宿主回传才有） */
+  writtenBytes?: number
+  /** 兼容形态：宿主只回传计数时也算得出来 */
+  createdAfter?: RollbackCount
+  createdAfterTruncated?: boolean
+  /** 会话段：回退产生的 fork 子会话 id */
+  childSessionId?: string
+  guidance?: RollbackGuidance[]
+}
+
+export interface RollbackRewindResult {
+  ok: boolean
+  outcome: string
+  code: string
+  detail?: string
+  id?: string
+  segments?: RollbackSegmentResult[]
+  /** 因前段失败 / 未请求而未执行的段（只可能是两态） */
+  skippedSegments?: string[]
+  /** 会话回退结果：fork 出来的子会话 id（S3；原会话日志只读，绝不改写） */
+  childSessionId?: string
+  /** 回退前自动留的救援点 id（S5 guard） */
+  guardPointId?: string
+  storage?: RollbackStorageStatus
+  guidance?: RollbackGuidance[]
+  warnings?: RollbackGuidance[]
+}
+
+export interface RollbackRemoveResult { ok: boolean; code: string; detail?: string; id: string }
+
+/** 回退输入（冻结 wire contract 的 rewind body）。 */
+export interface RollbackRewindOptions {
+  /** fail-closed 确认门：必须**恰好** true（宿主缺省/假值一律 409 confirmation-required） */
+  userConfirmed: boolean
+  mode?: RollbackMode
+  segments?: readonly RollbackState[]
+  allowPartial?: boolean
+  preRewindGuard?: RollbackGuardPolicy
+}
+
+/** 端口：由 src/client/recovery/recovery-api.ts 实现（Partial 消费，缺失时界面如实说能力缺失）。 */
+export interface RollbackPointPort {
+  rollbackPoints(): Promise<RollbackListResult>
+  rollbackPointStorage(): Promise<RollbackStorageStatus>
+  rollbackPoint(id: string): Promise<RollbackDetailResult>
+  rollbackPointPreview(id: string): Promise<RollbackPreviewResult>
+  restoreRollbackPoint(id: string, opts: RollbackRewindOptions): Promise<RollbackRewindResult>
+  removeRollbackPoint(id: string, userConfirmed: boolean): Promise<RollbackRemoveResult>
+}
+
+/* ------------------------------------------------------------ 内部小工具 */
+
+function countOf(value: RollbackCount | undefined): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (Array.isArray(value)) return value.length
+  return 0
+}
+
+function numberOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/** 路径/事实清单：逐条脱敏（宿主技术细节不得明文上屏）。 */
+function redactLines(values: readonly string[] | undefined): string[] {
+  return (values ?? []).map((line) => redact(line))
+}
+
+/** 段可用性：显式 available/restorable 为 false 才算不可用（缺字段 = 宿主没给否定信号）。 */
+function segmentAvailable(segment: { available?: boolean; restorable?: boolean }): boolean {
+  return segment.available !== false && segment.restorable !== false
+}
+
+/* ------------------------------------------------------------ 列表 → 展示行 */
+
+export interface RollbackSegmentView {
+  state: string
+  labelKey: string
+  restorable: boolean
+  /** ok = 正常；warn = 捕获不完整（degraded）；error = 没捕到 / 失败 */
+  badgeKind: 'ok' | 'warn' | 'error'
+  entries: number
+  cursorBytes: number | null
+  reasonKey: string | null
+  /** 留点时被跳过的条目总数（S4：跳过必须可见，绝不静默） */
+  skippedCount: number
+  /** 该段捕获被上限截断 */
+  truncated: boolean
+  /** 该段要显示的告警键（有序；空数组 = 没有需要说的）—— 文案在字典里，本层只回键 */
+  noticeKeys: string[]
+}
+
+/** 段级 / 点级「跳过 · 截断」告警键（S4：宿主已如实回传，界面必须说出来）。 */
+export const ROLLBACK_NOTICE_SKIPPED_KEY = 'rollback.row.notice.skipped'
+export const ROLLBACK_NOTICE_TRUNCATED_KEY = 'rollback.row.notice.truncated'
+export const ROLLBACK_PREVIEW_NOTICE_SKIPPED_KEY = 'rollback.preview.notice.skipped'
+export const ROLLBACK_PREVIEW_NOTICE_TRUNCATED_KEY = 'rollback.preview.notice.truncated'
+
+/** 跳过 / 截断事实 → 告警键（顺序固定：先「跳过多少」，再「被截断」）。 */
+function noticeKeysOf(skippedCount: number, truncated: boolean, skippedKey: string, truncatedKey: string): string[] {
+  const keys: string[] = []
+  if (skippedCount > 0) keys.push(skippedKey)
+  if (truncated) keys.push(truncatedKey)
+  return keys
+}
+
+export interface RollbackPointRowView {
+  id: string
+  /** 来源：auto（回合结束自动留点）/ guard（回退前救援点）/ unknown */
+  kind: RollbackPointKind | 'unknown'
+  kindKey: string
+  createdAtMs: number
+  sessionId: string | null
+  /** 会话单元 id（宿主回传才有；分组表头显示用） */
+  unitId: string | null
+  /** 该点对应的回合号（null = 未知，界面渲染 rollback.turnUnknown） */
+  turn: number | null
+  protected: boolean
+  incomplete: boolean
+  badgeKind: 'ok' | 'warn' | 'error'
+  spreadMs: number
+  segments: RollbackSegmentView[]
+  /**
+   * 至少有一段可回退、未保护、且两态齐全 —— 界面据此决定「回退」按钮可用性。
+   * **救援点可以为 true**（t22：回退准入只拒 protected / incomplete；救援点正是「回到回退前」的唯一路径）。
+   */
+  rewindable: boolean
+  /**
+   * 可删：受保护点与**救援点**都不可删（宿主 remove 一律 protected-point）。
+   * 与 rewindable **互相独立**（引擎 canRemove / canRestore 两门，src/core/rollback-point.ts:1530-1531）。
+   */
+  removable: boolean
+  /** 用户自由文本：**渲染前已过 redact** */
+  note: string | null
+}
+
+function segmentView(segment: RollbackSegmentSummary): RollbackSegmentView {
+  const ok = segment.ok !== false
+  const degraded = segment.degraded === true
+  const badgeKind: 'ok' | 'warn' | 'error' = ok ? (degraded ? 'warn' : 'ok') : 'error'
+  const skippedCount = numberOrNull(segment.skippedCount) ?? 0
+  const truncated = segment.truncated === true
+  return {
+    state: segment.state,
+    labelKey: rollbackStateKey(segment.state),
+    restorable: segment.restorable === true,
+    badgeKind,
+    entries: numberOrNull(segment.entries) ?? 0,
+    cursorBytes: numberOrNull(segment.cursorBytes),
+    reasonKey: ok ? null : rollbackCodeKey(segment.reasonCode),
+    skippedCount,
+    truncated,
+    noticeKeys: noticeKeysOf(skippedCount, truncated, ROLLBACK_NOTICE_SKIPPED_KEY, ROLLBACK_NOTICE_TRUNCATED_KEY),
+  }
+}
+
+/** 列表 → 展示行（台账已按时间倒序；本函数只做映射与判定，不重排）。 */
+export function rollbackPointRows(list: RollbackListResult | null): RollbackPointRowView[] {
+  if (list === null) return []
+  const points = Array.isArray(list.points) ? list.points : []
+  return points.map((point) => {
+    const segments = (Array.isArray(point.segments) ? point.segments : []).map(segmentView)
+    const kind: RollbackPointKind | 'unknown' = point.kind === 'guard' ? 'guard' : point.kind === 'auto' ? 'auto' : 'unknown'
+    const kindKey = kind === 'guard' ? 'rollback.kind.guard' : kind === 'auto' ? 'rollback.kind.auto' : ROLLBACK_KIND_UNKNOWN_KEY
+    return {
+      id: point.id,
+      kind,
+      kindKey,
+      createdAtMs: point.createdAt,
+      sessionId: typeof point.sessionId === 'string' && point.sessionId !== '' ? point.sessionId : null,
+      unitId: typeof point.unitId === 'string' && point.unitId !== '' ? point.unitId : null,
+      turn: numberOrNull(point.turn),
+      protected: point.protected === true,
+      incomplete: point.incomplete === true,
+      badgeKind: point.incomplete === true ? 'warn' : 'ok',
+      spreadMs: numberOrNull(point.spreadMs) ?? 0,
+      segments,
+      rewindable: point.protected !== true && point.incomplete !== true && segments.some((segment) => segment.restorable),
+      // 宿主真值（引擎 preview/remove 同一判据）：protected 与 **guard** 一律不可删 ——
+      // 只看 protected 会把救援点的「删除」按钮点亮，点了必得 protected-point（按钮与文案自相矛盾）。
+      removable: point.protected !== true && kind !== 'guard',
+      note: point.note !== null && point.note !== undefined && point.note !== '' ? redact(point.note) : null,
+    }
+  })
+}
+
+/* ------------------------------------------------------------ 按会话分组（时间线） */
+
+export interface RollbackPointGroupView {
+  /** 会话 id（宿主未回传则为 null —— 界面渲染 rollback.group.unknownSession，绝不猜归属） */
+  sessionId: string | null
+  /** 会话单元 id（宿主回传才有） */
+  unitId: string | null
+  /** 组内最新时间（空组为 null；组间排序键） */
+  latestAtMs: number | null
+  rows: RollbackPointRowView[]
+}
+
+/**
+ * 台账 → **按会话分组**的时间线（组内保持台账顺序 = 时间倒序；组间按各组最新时间倒序）。
+ *
+ * 分组键 = sessionId；缺 sessionId 的记录归入「未知会话」组并排在最后 —— 绝不猜它属于哪个会话。
+ */
+export function rollbackPointGroups(list: RollbackListResult | null): RollbackPointGroupView[] {
+  const groups: RollbackPointGroupView[] = []
+  const index = new Map<string, number>()
+  for (const row of rollbackPointRows(list)) {
+    const key = row.sessionId ?? '\u0000unknown'
+    let at = index.get(key)
+    if (at === undefined) {
+      at = groups.length
+      index.set(key, at)
+      groups.push({ sessionId: row.sessionId, unitId: row.unitId, latestAtMs: null, rows: [] })
+    }
+    const group = groups[at] as RollbackPointGroupView
+    group.rows.push(row)
+    if (group.unitId === null && row.unitId !== null) group.unitId = row.unitId
+    if (group.latestAtMs === null || row.createdAtMs > group.latestAtMs) group.latestAtMs = row.createdAtMs
+  }
+  return groups.sort((a, b) => {
+    if (a.sessionId === null && b.sessionId !== null) return 1
+    if (b.sessionId === null && a.sessionId !== null) return -1
+    return (b.latestAtMs ?? 0) - (a.latestAtMs ?? 0)
+  })
+}
+
+/** 该回滚点记下了多少个工作区文件（时间线上的「文件数」）。 */
+export function rollbackRowFileCount(row: RollbackPointRowView): number {
+  let total = 0
+  for (const segment of row.segments) if (segment.state === 'workspace') total += segment.entries
+  return total
+}
+
+/** 该回滚点是否有会话游标（时间线上的「是否有会话游标」—— 没有就只回退工作区）。 */
+export function rollbackRowHasSessionCursor(row: RollbackPointRowView): boolean {
+  return row.segments.some((segment) => segment.state === 'session' && segment.cursorBytes !== null)
+}
+
+/* ------------------------------------------------------------ 预览 → 展示行 */
+
+export interface RollbackCountRowView { key: string; n: number }
+
+export interface RollbackPreviewRowView {
+  state: string
+  labelKey: string
+  available: boolean
+  /** 宿主给出的原因码键（null = 没给；不可用时至少回落到 unknown，绝不裸渲染） */
+  reasonKey: string | null
+  /** 有序计数文案：overwrite / different / missing / createdAfter（工作区段才有计数） */
+  counts: RollbackCountRowView[]
+  /** 该点**未记录**的内容清单（含留点时被跳过的既有文件；已脱敏；宿主上限 20 条） */
+  leftovers: string[]
+  leftoversTruncated: boolean
+  /** 留点时被跳过的条目总数（S4：跳过必须可见） */
+  skippedCount: number
+  /** 捕获被上限截断 */
+  truncated: boolean
+  /** 该行要显示的「跳过 · 截断」告警键（有序；空数组 = 没有要说的） */
+  noticeKeys: string[]
+  /**
+   * **点级**告警（宿主 preview.warnings；走 rollback.warn.* 映射、未知码回落 unknown）。
+   *
+   * 引擎不给「告警属于哪一段」的键（detail 是自由文本，解析它等于猜），所以点级告警**两行都带同一份**，
+   * 由界面在面板级渲染一次（rollbackPreviewWarnings()）—— 本层绝不猜归属。
+   */
+  warnings: RollbackGuidanceRowView[]
+  /** 会话段：边界游标 from → to（seq；缺失为 null） */
+  cursor: { from: number | null; to: number | null } | null
+  /** 会话段：日志字节数 now → target（宿主给得出才有；界面据此显示「会话 now→target」） */
+  cursorBytes: { now: number | null; target: number | null } | null
+  /** 会话段：该点对应的回合号（null = 未知，界面渲染 rollback.turnUnknown 口径） */
+  turns: number | null
+  /** 会话段：日志刚被写过（仅供参考：fork 只读，不会覆盖日志） */
+  active: boolean
+  guidance: RollbackGuidanceRowView[]
+}
+
+/**
+ * 预览 → 展示行（<id>/preview 的只读结果）。
+ *
+ * 计数口径逐条对应「界面能看到什么」：覆盖多少项、其中多少项内容不同、多少项当前已不存在
+ * （会被重新创建）、多少项是该点**未记录**的（**不会被删除** —— 引擎 scanLeftovers 只统计「不在记录里」
+ * 的文件，留点时被跳过的既有文件同样落在这里，所以不得声称「之后新建」）。
+ */
+export function rollbackPreviewRows(preview: RollbackPreviewResult | null): RollbackPreviewRowView[] {
+  if (preview === null) return []
+  const rows: RollbackPreviewRowView[] = []
+  const pointWarnings = rollbackGuidanceRows(preview.warnings)
+  const workspace = preview.workspace
+  if (workspace !== undefined && workspace !== null) {
+    const skippedCount = countOf(workspace.skippedCount)
+    const truncated = workspace.truncated === true
+    rows.push({
+      state: 'workspace',
+      labelKey: rollbackStateKey('workspace'),
+      available: segmentAvailable(workspace),
+      reasonKey: workspace.reasonCode !== undefined && workspace.reasonCode !== null && workspace.reasonCode !== ''
+        ? rollbackCodeKey(workspace.reasonCode)
+        : null,
+      counts: [
+        { key: 'rollback.preview.overwrite', n: countOf(workspace.overwrite) },
+        { key: 'rollback.preview.different', n: countOf(workspace.different) },
+        { key: 'rollback.preview.missing', n: countOf(workspace.missing) },
+        { key: 'rollback.preview.createdAfter', n: Math.max(countOf(workspace.createdAfter), countOf(workspace.leftovers)) },
+      ],
+      leftovers: redactLines(workspace.leftovers),
+      leftoversTruncated: workspace.leftoversTruncated === true,
+      skippedCount,
+      truncated,
+      noticeKeys: noticeKeysOf(skippedCount, truncated, ROLLBACK_PREVIEW_NOTICE_SKIPPED_KEY, ROLLBACK_PREVIEW_NOTICE_TRUNCATED_KEY),
+      warnings: pointWarnings,
+      cursor: null,
+      cursorBytes: null,
+      turns: null,
+      active: false,
+      guidance: rollbackGuidanceRows(workspace.guidance),
+    })
+  }
+  const session = preview.session
+  if (session !== undefined && session !== null) {
+    rows.push({
+      state: 'session',
+      labelKey: rollbackStateKey('session'),
+      available: segmentAvailable(session),
+      reasonKey: session.reasonCode !== undefined && session.reasonCode !== null && session.reasonCode !== ''
+        ? rollbackCodeKey(session.reasonCode)
+        : null,
+      counts: [],
+      leftovers: [],
+      leftoversTruncated: false,
+      skippedCount: 0,
+      truncated: false,
+      noticeKeys: [],
+      warnings: pointWarnings,
+      cursor: { from: numberOrNull(session.from), to: numberOrNull(session.to) },
+      cursorBytes: { now: numberOrNull(session.cursorNowBytes), target: numberOrNull(session.cursorTargetBytes) },
+      turns: numberOrNull(session.turns),
+      active: session.active === true,
+      guidance: rollbackGuidanceRows(session.guidance),
+    })
+  }
+  return rows
+}
+
+export interface RollbackPreviewVerdict {
+  /** 宿主允许回退 **且** 至少有一段可回退 */
+  canRestore: boolean
+  canRemove: boolean
+  /** canRestore=false 时的原因键（null = 可回退） */
+  reasonKey: string | null
+  /** 三选一 mode（按可用段推导，界面据此作为下拉默认值） */
+  mode: RollbackMode
+  /** 可回退的段（只可能是 workspace / session） */
+  segments: RollbackState[]
+  /** 该点两态不全（缺省不允许回退；界面据此要求显式勾「允许部分回退」） */
+  incomplete: boolean
+}
+
+/** 点级告警（preview.warnings）→ 展示行；界面在面板级渲染一次（点级告警不归属任何段，绝不猜）。 */
+export function rollbackPreviewWarnings(preview: RollbackPreviewResult | null): RollbackGuidanceRowView[] {
+  return rollbackGuidanceRows(preview?.warnings)
+}
+
+/** 点级指引（preview.guidance）→ 展示行（同上，面板级渲染一次）。 */
+export function rollbackPreviewGuidance(preview: RollbackPreviewResult | null): RollbackGuidanceRowView[] {
+  return rollbackGuidanceRows(preview?.guidance)
+}
+
+/**
+ * 预览里的「可回退 / 可删除」判定。
+ *
+ * **原因键按宿主真实形状分派**（引擎 preview 恒回 `code:'ok'`，靠 canRestore/canRemove 表达拒绝 ——
+ * 见 src/core/rollback-point.ts:1530-1531：`canRemove = !protected && kind!=='guard'`（删除门）与
+ * `canRestore = !protected && !incomplete && (workspaceRestorable || sessionRestorable)`（回退门）**互相独立**）：
+ *   ① 受保护点 → rollback.code.protected-point（引擎 remove/rewind 都拒）
+ *   ② 两态不全 → rollback.preview.reason.incomplete（引擎要 allowPartial 才放行）
+ *   ③ 一段都不可回退 → 段自己的 reasonCode；没有就 rollback.preview.none
+ *   ④ 宿主给了非 ok 的 code → 该 code 的键
+ *   ⑤ 兜底：救援点 → rollback.preview.reason.guard（宿主拒绝了本可回退的救援点）；其余 → rollback.preview.reason.hostRefused
+ *      —— **绝不回落 rollback.code.unknown**
+ * 救援点（guard）在 ①②③ 之外**是可回退的**（t22）：它只在宿主真的拒绝时落到 ⑤。
+ */
+export function rollbackPreviewVerdict(preview: RollbackPreviewResult | null): RollbackPreviewVerdict {
+  if (preview === null) {
+    return { canRestore: false, canRemove: false, reasonKey: ROLLBACK_CODE_UNKNOWN_KEY, mode: 'files+session', segments: [], incomplete: false }
+  }
+  const segments: RollbackState[] = []
+  if (preview.workspace !== undefined && preview.workspace !== null && segmentAvailable(preview.workspace)) segments.push('workspace')
+  if (preview.session !== undefined && preview.session !== null && segmentAvailable(preview.session)) segments.push('session')
+  const point = preview.point ?? preview.summary ?? null
+  const protectedPoint = point?.protected === true
+  const guardPoint = point?.kind === 'guard'
+  const incomplete = point?.incomplete === true
+  const canRestore = preview.canRestore === true && segments.length > 0
+  let reasonKey: string | null = null
+  if (!canRestore) {
+    const segmentReason = preview.session?.reasonCode ?? preview.workspace?.reasonCode
+    if (protectedPoint) reasonKey = 'rollback.code.protected-point'
+    else if (incomplete) reasonKey = ROLLBACK_PREVIEW_REASON_INCOMPLETE_KEY
+    else if (segments.length === 0) {
+      reasonKey = typeof segmentReason === 'string' && segmentReason !== '' ? rollbackCodeKey(segmentReason) : 'rollback.preview.none'
+    } else if (preview.code !== undefined && preview.code !== '' && preview.code !== 'ok') reasonKey = rollbackCodeKey(preview.code)
+    // 兜底：宿主拒绝了一个「看起来可恢复」的点。救援点在这里单独说清（它本来是可回退目标，t22）——
+    // 绝不把它写成「受保护」或「一律不可回退」。
+    else reasonKey = guardPoint ? ROLLBACK_PREVIEW_REASON_GUARD_KEY : ROLLBACK_PREVIEW_REASON_HOST_REFUSED_KEY
+  }
+  return {
+    canRestore,
+    canRemove: preview.canRemove === true,
+    reasonKey,
+    mode: rollbackModeFromSegments(segments),
+    segments,
+    incomplete,
+  }
+}
+
+/* ------------------------------------------------------------ 回退结果 → 展示行 */
+
+export interface RollbackRewindRowView {
+  state: string
+  labelKey: string
+  statusKey: string
+  badgeKind: 'ok' | 'warn' | 'error'
+  restored: number
+  failed: number
+  /** 该点**未记录**、**未删除**的内容数（引擎 scanLeftovers 语义，不是「之后新建」） */
+  leftoversCount: number
+  /** 同上，路径清单（已脱敏；宿主上限 20 条） */
+  leftovers: string[]
+  leftoversTruncated: boolean
+  /** 会话段：fork 出来的子会话 id（无则 null） */
+  childSessionId: string | null
+  /** 逐条事实：**渲染前已逐条过 redact** */
+  detail: string[]
+  guidance: RollbackGuidanceRowView[]
+}
+
+export function rollbackRewindRows(result: RollbackRewindResult | null): RollbackRewindRowView[] {
+  if (result === null) return []
+  const segments = Array.isArray(result.segments) ? result.segments : []
+  return segments.map((segment) => {
+    const status: RollbackSegmentStatus | 'unknown' =
+      segment.status === 'restored' ? 'restored' : segment.status === 'skipped' ? 'skipped' : segment.status === 'failed' ? 'failed' : 'unknown'
+    const statusKey = status === 'unknown' ? 'rollback.segment.unknown' : 'rollback.segment.' + status
+    const badgeKind: 'ok' | 'warn' | 'error' = status === 'restored' ? 'ok' : status === 'skipped' ? 'warn' : 'error'
+    const leftovers = redactLines(segment.leftovers)
+    const childSessionId = typeof segment.childSessionId === 'string' && segment.childSessionId !== '' ? segment.childSessionId : null
+    return {
+      state: segment.state,
+      labelKey: rollbackStateKey(segment.state),
+      statusKey,
+      badgeKind,
+      restored: numberOrNull(segment.restored) ?? 0,
+      failed: numberOrNull(segment.failed) ?? 0,
+      leftoversCount: Math.max(leftovers.length, countOf(segment.createdAfter)),
+      leftovers,
+      leftoversTruncated: segment.leftoversTruncated === true || segment.createdAfterTruncated === true,
+      childSessionId,
+      detail: redactLines(segment.detail),
+      guidance: rollbackGuidanceRows(segment.guidance),
+    }
+  })
+}
+
+/** 回退总体结论 → 字典键 + 徽章语义（未知回落 unknown，绝不裸渲染 outcome）。 */
+export function rollbackOutcome(outcome: string | null | undefined): { key: string; badgeKind: 'ok' | 'warn' | 'error' } {
+  if (outcome === 'restored') return { key: 'rollback.outcome.restored', badgeKind: 'ok' }
+  if (outcome === 'partial') return { key: 'rollback.outcome.partial', badgeKind: 'warn' }
+  if (outcome === 'failed' || outcome === 'denied') return { key: 'rollback.outcome.' + outcome, badgeKind: 'error' }
+  return { key: 'rollback.outcome.unknown', badgeKind: 'error' }
+}
+
+export interface RollbackRewindCounts {
+  restored: number
+  failed: number
+  leftovers: number
+}
+
+/** 回退结果汇总计数（界面一句话说清「恢复多少 / 失败多少 / 没删多少」）。 */
+export function rollbackRewindCounts(result: RollbackRewindResult | null): RollbackRewindCounts {
+  const rows = rollbackRewindRows(result)
+  let restored = 0
+  let failed = 0
+  let leftovers = 0
+  for (const row of rows) {
+    restored += row.restored
+    failed += row.failed
+    leftovers += row.leftoversCount
+  }
+  return { restored, failed, leftovers }
+}
+
+/**
+ * 会话回退的 fork 结果（S3）：原会话日志**只读**，回退产出的是一个新子会话。
+ * 返回 null = 本次没有会话回退（界面不渲染这一行，绝不编造子会话 id）。
+ */
+export function rollbackChildSession(result: RollbackRewindResult | null): { key: string; id: string } | null {
+  const direct = result?.childSessionId
+  if (typeof direct === 'string' && direct !== '') return { key: 'rollback.rewind.result.child', id: direct }
+  for (const segment of result?.segments ?? []) {
+    const id = segment.childSessionId
+    if (typeof id === 'string' && id !== '') return { key: 'rollback.rewind.result.child', id }
+  }
+  return null
+}
+
+/** 本次因前段失败 / 未请求而未执行的段（只可能是两态；未知段回落 unknown 键）。 */
+export function rollbackSkippedSegments(result: RollbackRewindResult | null): { state: string; key: string }[] {
+  const segments = Array.isArray(result?.skippedSegments) ? result!.skippedSegments! : []
+  return segments.map((state) => ({ state, key: rollbackStateKey(state) }))
+}
+
+/* ------------------------------------------------------------ 文案键常量（面板复用） */
+
+/** 删除成功文案键（delete 的 `code:'deleted'`）。 */
+export const ROLLBACK_DELETED_KEY = 'rollback.code.deleted'
+/** 「没有可回退的内容」文案键（预览判定为否时的兜底原因）。 */
+export const ROLLBACK_PREVIEW_NONE_KEY = 'rollback.preview.none'

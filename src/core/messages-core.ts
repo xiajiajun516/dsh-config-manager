@@ -32,11 +32,6 @@ export const zh = {
   // ---------- exporter ----------
   'core.exporter.fileSectionSecretsTruncated': '文件类分区 {section} 中检测到疑似凭据: （另有 {count} 个文件命中，详见报告）',
 
-  // ---------- checkpoint ----------
-  'core.checkpoint.sessionLogPathMissing': 'sessionLogPath 未提供',
-  'core.checkpoint.chunksEmpty': 'chunks 为空',
-  'core.checkpoint.segmentsEmpty': 'segments 为空',
-
   // ---------- local-plugin-host ----------
   'core.localPluginHost.packTimeout': '{stderr}\nnpm pack 超时（{timeoutMs}ms）已终止',
   'core.localPluginHost.tmpDirCreateFailed': '本地插件打包临时目录创建失败，已跳过本地插件打包: {reason}',
@@ -344,11 +339,6 @@ export const en: Record<keyof typeof zh, string> = {
 
   // ---------- exporter ----------
   'core.exporter.fileSectionSecretsTruncated': 'Suspected credentials detected in file section {section}: ({count} more files matched, see the report)',
-
-  // ---------- checkpoint ----------
-  'core.checkpoint.sessionLogPathMissing': 'sessionLogPath was not provided',
-  'core.checkpoint.chunksEmpty': 'chunks is empty',
-  'core.checkpoint.segmentsEmpty': 'segments is empty',
 
   // ---------- local-plugin-host ----------
   'core.localPluginHost.packTimeout': '{stderr}\nnpm pack timed out ({timeoutMs}ms); terminated',

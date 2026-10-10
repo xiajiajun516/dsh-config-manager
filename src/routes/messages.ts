@@ -54,8 +54,8 @@ export const zh = {
   'route.recoverySessionRepairRejected': '会话修复被拒绝：{reason}',
   'route.recoverySessionLayoutApplied': '会话布局归位（搬运/隔离 {count} 条）',
   'route.recoverySessionLayoutPartial': '会话布局归位未全部完成（成功 {applied}，失败 {failed}，跳过 {skipped}）',
-  'route.recoveryCheckpointCapture': '检查点捕获（三态同点）',
-  'route.recoveryCheckpointRollback': '检查点回滚（三态同点）：{outcome}',
+  'route.rollbackPointRewind': '回滚到回滚点：{outcome}',
+  'route.rollbackPointDelete': '删除回滚点 {id}',
   'route.recoveryOperationSummary': '恢复操作 {action}',
 } as const;
 
@@ -93,8 +93,8 @@ export const en: Record<keyof typeof zh, string> = {
   'route.recoverySessionRepairRejected': 'Session repair was rejected: {reason}',
   'route.recoverySessionLayoutApplied': 'Session layout relocation ({count} item(s) moved/quarantined)',
   'route.recoverySessionLayoutPartial': 'Session layout relocation did not fully complete ({applied} succeeded, {failed} failed, {skipped} skipped)',
-  'route.recoveryCheckpointCapture': 'Checkpoint capture (three-state same-point)',
-  'route.recoveryCheckpointRollback': 'Checkpoint rollback (three-state same-point): {outcome}',
+  'route.rollbackPointRewind': 'Rewind to rollback point: {outcome}',
+  'route.rollbackPointDelete': 'Deleted rollback point {id}',
   'route.recoveryOperationSummary': 'Recovery operation {action}',
 };
 

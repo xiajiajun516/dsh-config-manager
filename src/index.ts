@@ -77,6 +77,7 @@ import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg } from './core/messages.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
+import { RollbackAutoTracker, RollbackPointEngine, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
 import type { MsgFunc } from './core/messages.ts'
 import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, installSpecFor, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
@@ -842,6 +843,30 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
     this.root = join(homeDir, 'sessions')
     this.log = log ?? createLogger({ level: 'warn' })
     this.msgFunc = msg
+  }
+
+  /**
+   * 回退到稳定边界的**子会话**（S3：工作区 + 会话回滚）。
+   *
+   * 内部走 `ctx.get('sessions').fork(source, boundary, childId?)`（惰取服务，**绝不**属性访问
+   * `ctx.sessions` —— 未声明 inject 时属性访问会抛错并致宿主启动崩溃）。fork 是同步 API，
+   * 但本方法声明为 async 以便调用方（引擎的 fork seam）统一 await。
+   *
+   * 契约：**任何异常与任何形状不符都收成 `{ error }`**，调用方必须如实结构化降级
+   * （`session-fork-unavailable` / `fork-failed`），绝不静默假装成功。
+   */
+  async forkSession(sessionId: string, boundarySeq: number): Promise<{ childSessionId: string } | { error: string }> {
+    try {
+      const service = readService<{ fork?: (source: string, boundary?: number, childSessionId?: string) => unknown }>(this.ctx, 'sessions')
+      const fork = service?.fork
+      if (typeof fork !== 'function') return { error: 'sessions-service-unavailable' }
+      const child = fork.call(service, sessionId, boundarySeq)
+      const id = child !== null && typeof child === 'object' ? (child as { id?: unknown }).id : undefined
+      if (typeof id !== 'string' || id === '') return { error: 'fork-returned-no-id' }
+      return { childSessionId: id }
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   /**
@@ -4072,6 +4097,80 @@ export function apply(ctx: Context, config?: Config): void {
       profileRuntime.withdraw()
     }
   }, 'config-manager: profile runtime heartbeat')
+  // ------------------------------------------- S1：回合自动留点（宿主真接线）
+  //
+  // 订阅 `session/event`（@deepseek-ai/dsh-session 的 post-commit fire-and-forget feed），
+  // 每见到一个 `turn/end` 就为**当前会话**留一个回滚点 = 工作区快照（内容寻址入对象仓）
+  // + 会话游标（事件数 / fork 边界）。没有手动「拍点」入口 —— 留点完全由回合驱动。
+  //
+  // 纪律（AGENTS.md 铁律 + captain 要求）：**订阅与每个回调都 try/catch 包裹**，任何异常
+  // 只记 warn：改坏宿主启动 = blocker。事件回调用一条串行链喂给留点器，保证同一会话的
+  // turn/start 与 turn/end **按到达顺序**处理（留点本身是异步 IO）。
+  // fork 端口用**结构性窄化**读取：`SessionStoreFacade`（src/core/types.ts）不在本任务 scope 内，
+  // 不为了这一处调用去改公共接口；端口上确实有 forkSession（DshSessionStoreFacade 实现）才走
+  // 真 fork，否则如实结构化 `session-fork-unavailable`（绝不静默降级）。
+  const forkPort = host.sessions as unknown as {
+    forkSession?: (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string } | { error: string }>
+  }
+  const rollbackEngine = new RollbackPointEngine({
+    dataDir,
+    homeDir,
+    log: (line) => host.log.warn(line),
+    fork: async ({ sessionId, boundarySeq }) => {
+      const forkSession = forkPort.forkSession
+      if (typeof forkSession !== 'function') {
+        return { ok: false as const, code: 'session-fork-unavailable' as const, detail: 'facade has no forkSession' }
+      }
+      const result = await forkSession.call(forkPort, sessionId, boundarySeq)
+      return 'childSessionId' in result
+        ? { ok: true as const, childSessionId: result.childSessionId }
+        : { ok: false as const, code: 'fork-failed' as const, detail: result.error }
+    },
+  })
+  const rollbackTracker = new RollbackAutoTracker({ engine: rollbackEngine, log: (line) => host.log.warn(line) })
+  ctx.effect(() => {
+    let chain: Promise<unknown> = Promise.resolve()
+    // 「会话没有 cwd」这类**形状合法但信息不全**的情况只记一次日志（避免每回合刷屏）；
+    // 该点本身仍带 incomplete=true + workspace.reasonCode='no-chunks'，界面能如实展示。
+    const chunklessLogged = new Set<string>()
+    const listener = (session: unknown, event: unknown): void => {
+      try {
+        const bindingResult = rollbackSessionBindingOf(session)
+        if (!bindingResult.ok) {
+          // 形状不匹配**不静默**：给显式机器码，宿主日志留痕
+          host.log.warn('rollback auto point skipped: ' + bindingResult.code + ' ' + bindingResult.detail)
+          return
+        }
+        const binding = bindingResult.binding
+        if (bindingResult.chunkless !== null && !chunklessLogged.has(binding.sessionId)) {
+          chunklessLogged.add(binding.sessionId)
+          host.log.warn('rollback auto point: session ' + binding.sessionId + ' ' + bindingResult.chunkless + ' → 该点只留会话态（incomplete）')
+        }
+        const eventResult = rollbackTrackedEventOf(binding.sessionId, event)
+        if (!eventResult.ok) {
+          host.log.warn('rollback auto point skipped: ' + eventResult.code + ' ' + eventResult.detail)
+          return
+        }
+        rollbackTracker.registerSession(binding)
+        const tracked = eventResult.event
+        chain = chain.then(async () => { await rollbackTracker.noteEvent(tracked) }).catch((error: unknown) => {
+          host.log.warn('rollback auto point failed: ' + (error instanceof Error ? error.message : String(error)))
+        })
+      } catch (error) {
+        host.log.warn('rollback auto point listener failed: ' + (error instanceof Error ? error.message : String(error)))
+      }
+    }
+    let off: (() => boolean) | null = null
+    try {
+      off = ctx.on('session/event', listener)
+    } catch (error) {
+      host.log.warn('rollback auto point subscribe failed: ' + (error instanceof Error ? error.message : String(error)))
+    }
+    return () => {
+      try { off?.() } catch { /* 解绑失败不影响卸载 */ }
+      rollbackTracker.stop()
+    }
+  }, 'config-manager: rollback auto points')
   const webServer = readService<WebServer>(ctx, 'webServer')
   if (webServer === undefined) {
     host.log.warn('webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册（引擎能力仍可用）')

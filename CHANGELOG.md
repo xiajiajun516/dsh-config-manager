@@ -21,12 +21,13 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **本版主题**：把「读不到 ≠ 没有」与「不假装成功」两条口径推到 CLI、同步与检查点三处 —— 恢复预览不再漂移、部分回滚不再说成整体成功、
-> `dcm restore` 补上第三道写入门，并且把早已交付却**点不到**的三态检查点接进界面。
->
-> **Theme**: push the "unreadable ≠ absent" and "never pretend success" rules through the CLI, sync and checkpoints — restore previews can no
-> longer drift, a partial rollback is no longer reported as full success, `dcm restore` enforces the third write gate, and the long-delivered but
-> **unreachable** three-state checkpoint feature is now wired into the UI.
+> **本版主题**：把「读不到 ≠ 没有」与「不假装成功」两条口径推到 CLI、同步与回滚三处 —— 恢复预览不再漂移、部分回滚不再说成整体成功、`dcm restore` 补上第三道写入门；
+> 同时把早已交付却**点不到**的「检查点（三态同点）」整体改写为 **工作区 + 会话回滚**：按回合自动留点、聊天内「↺ 回退」入口、回退 = fork 子会话 + 只覆盖记录在案的工作区路径。
+
+> **Theme**: push the "unreadable ≠ absent" and "never pretend success" rules through the CLI, sync and rollback — restore previews can no longer drift,
+> a partial rollback is no longer reported as full success, `dcm restore` enforces the third write gate, and the long-delivered but **unreachable**
+> "checkpoints (three states at one point)" feature is rewritten as **workspace + session rollback**: a point per turn, a ↺ entry inside the chat,
+> and rewind = fork a child session while only the recorded workspace paths are overwritten.
 
 ### 🆕 新增 · Added
 
@@ -102,43 +103,45 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >   / auto-sync push carries mcp), `src/sync/sync-selection.test.ts` (whitelist derived from the registry; auto tier = `['mcp']`),
 >   `src/schema/registry.test.ts`.
 
-> **检查点接进界面：会话 / 工作区 / 插件配置「三态同点」现在拍得到、回滚得了**（**G-30 收口**）：宿主侧能力（引擎 + 7 条子路径 + 23 条测试）
-> 早已交付，但 `src/client/**` **零消费者** —— 这条能力对用户根本不存在（点不到）。现在**环境 → 维护与诊断**新增「检查点」卡，
-> ⌘K 同族新增一条「检查点（回到某个时刻）」命令直达同一落点。卡片能力：**拍点**（工作区路径分块逐行填，
-> 另给「用该会话的 cwd 填充」一键填入；从会话体检列表点名关联会话；可选备注；可选保护）、**台账列表**（三态徽章 + 同点跨度 +
-> 区分手动点与回滚前保护点）、**只读预览**（逐段 覆盖/其中不同/已不存在/检查点之后新建 计数 + 会话游标 now→target + 同点判定）、
-> **逐段勾选回滚**（默认只勾可回滚段；三态不全的记录必须显式勾「允许部分」）、**删除**（保护点与回滚前保护点禁用）。
-> 全部判定在 `src/ui/checkpoint-view.ts`（框架无关、7 条单测），组件只装配；回滚仍走宿主侧 **fail-closed 确认门** —— 界面必须显式点
-> danger 确认，缺省/假值一律零写入。
-> - **如实说明三条边界**：① 捕获表单**留空 = 只拍插件配置**，该点三态不全、缺省不可回滚（表单里就写明）；② 会话日志 >32 MiB 时只有游标
->   没有字节副本 → 该段不可回滚（按原因码说明，绝不假装能回）；③ 存储栈不可用时按结构化 guidance 说清「现在不能用」，台账列表仍可看。
-> - **范围**：本轮**只做 GUI**（CLI 入口另议）；**不新增任何宿主路由**（仍在 recovery prefix 内按 path 分发，78 条路由快照不变）；
->   第 7 条子路径（单条详情）没有消费者故不进端口（预览已带回 summary 与同点判定）。
-> - **护栏**：`src/ui/checkpoint-view.test.ts`（7 条：未知码回落 unknown / note 与技术细节渲染前脱敏 / 可回滚与可删除判定 /
->   默认只勾可回滚段 / 会话候选按活跃倒序且 cwd 缺失不猜 / 分块解析 trim+去重）、`src/client/common/client-route-parity.test.ts`（三条新路径
->   登记为 prefix 路由）、`src/ui/commands.test.ts`（命令表 ↔ 壳层分发双向一致）。
->
-> **Checkpoints are now wired into the UI: session / workspace / plugin-config "three states at one point" can be captured and rewound**
-> (**closes G-30**): the host side (engine + 7 sub-paths + 23 tests) shipped long ago, but `src/client/**` had **zero consumers** — the capability
-> did not exist for users. **Environment → Maintenance & diagnostics** now has a checkpoint card, and ⌘K gains a "Checkpoints (go back to a
-> moment)" command pointing at the same place: **capture** (workspace path chunks, one per line, plus a one-click "fill with this session's cwd";
-> pick a session from the session-health list; optional note; optional protection), a **ledger list** (three-state badges, same-point spread,
-> manual vs. pre-rewind protection points), a **read-only preview** (per-segment overwrite / differ / missing / created-after counts, session cursor
-> now→target, same-point verdict), **per-segment rewind** (only restorable segments are checked by default; an incomplete record requires explicitly
-> ticking "allow partial"), and **delete** (disabled for protected and pre-rewind points). All decisions live in `src/ui/checkpoint-view.ts`
-> (framework-free, 7 tests) — the component only assembles. Rewinding still goes through the host's **fail-closed confirmation gate**: the UI must
-> explicitly confirm via a danger dialog, and anything else writes zero bytes.
-> - **Three boundaries stated honestly**: ① leaving the capture form empty captures only the plugin config — that point is incomplete and cannot be
->   rewound by default (the form says so); ② session logs over 32 MiB keep only a cursor, so that segment cannot be rewound (the UI says why);
->   ③ when the storage stack is unavailable the card explains it via structured guidance while the ledger list stays readable.
-> - **Scope**: GUI only this round (CLI entry deferred); **no new host routes** (still dispatched inside the recovery prefix, the 78-route snapshot is
->   unchanged); the 7th sub-path (single-record detail) has no consumer, so it is not part of the port (the preview already returns the summary and the
->   same-point verdict).
-> - **Guards**: `src/ui/checkpoint-view.test.ts` (7 cases: unknown codes fall back to `unknown`, notes and technical details are redacted before render,
->   rewindable/removable decisions, default segment selection, session candidates sorted by activity with a never-guessed cwd, chunk parsing),
->   `src/client/common/client-route-parity.test.ts` (the three new paths are registered as prefix-routed) and `src/ui/commands.test.ts`
->   (command table ↔ shell dispatch, both directions).
->
+> **「检查点（三态同点）」整体改写为「工作区 + 会话回滚」，并接进界面与聊天**（**G-30 收口**）：旧三态引擎（`src/core/checkpoint.ts` + `samePointVerdictOf` 同点判定 + 7 条 `checkpoints/*` 子路径）在本批内删除，
+> 取而代之的是两态引擎 `src/core/rollback-point.ts`（**注意：`src/core/rollback.ts` 是既有的导入失败补偿引擎，与本功能无关，未动**）。留点改为**按回合自动**：宿主订阅 `session/event`，
+> 每见到一个 `turn/end` 就为当前会话留一个点 = 工作区快照（内容寻址入对象仓）+ 会话游标（事件数 / 字节长度 / fork 边界）；手动「拍点」表单与 `capture` 子路径随之删除。
+> - **界面**：**环境 → 维护与诊断** 的卡片改为 `RollbackCard` —— 按会话分组的时间线 + 只读预览（覆盖 / 其中不同 / 已不存在 / 该点之后新建「保留不动」四类计数，含回合号与会话边界）；
+>   三选一范围 `files+session` / `files` / `session`（不可用组合直接禁用，绝不发注定失败的请求）；两态不齐须显式勾「允许部分回退」；danger 二次确认；逐段结果含 fork 出的子会话 id 与救援点 id。⌘K 同族命令改名「回滚点（回到某个时刻）」。
+> - **聊天内「↺ 回退」**：新增槽位 `conversation.chat.turnTail` 上的入口（cell id `config-manager-rollback-entry`），点开即复核对话框，成功后自动打开 fork 出的子会话。**如实说明的降级**：入口是**整回合一个**、不是每条用户消息一个 ——
+>   宿主 `conversation.chat.node` 是 keyed 位且 `replaceRisk=shadows-shipped-ui`，要让按钮与原文同时出现就必须把宿主那条用户消息渲染器（含它自己的 CSS Modules）整段抄进本仓库；而本功能的留点单位本就是**回合**。运行中的回合还没有点，故入口主动隐藏。
+> - **版本边界（别写成「任意版本都能用」）**：子会话导航面在 0.2.x 是 `ctx.uiWorkspace.openSession(id)`（shipped ui-chat 自己的 fork 流程用的就是它）；没有导航面时**如实降级**为 `unavailable`（显示 childSessionId，绝不假装已打开）。槽位声明**探测后才注册**：只有声明确为 `list` 才注册 —— 0.1.5-rc.2 把同一 key 声明成 `chain`，按 list 形态注册会抛，因此**整条入口跳过**（`slot-kind-mismatch`）；跳过或注册异常只丢这一个入口，不影响本插件其余槽位与宿主启动。
+> - **会话回退 = fork，绝不改写日志**：在目标回合**之前的稳定边界**（该回合 `turn/start` 的 seq − 1）调 `ctx.sessions.fork(source, boundary, childId?)`，**原会话日志只读、逐字节不变**
+>   （与旧版「逐字节写回日志」相反，旧版的静止期门 / 分叉门 / 字节副本写回全部下线）；读不到前置边界时返回结构化 `no-boundary`，**不猜一个边界**。
+> - **工作区恢复的诚实边界**：只覆盖快照记录在案的路径，**绝不删除**未记录的文件与该点之后新建的文件（它们只进 leftovers 报告）；恢复前自动留救援点、恢复后逐文件核对 SHA-256，
+>   任一不符即**整体回滚**（`restored=0`，绝不把已写条数当成功）；确认门 fail-closed（`userConfirmed` 必须恰好 `true`，否则 409 `confirmation-required`）。
+> - **救援点（guard）的留存口径**：回退前自动留；**不占**自动点的每会话 20 / 全局 50 预算，也**不会被**它们淘汰；用户**不可手动删除**（`remove` → `protected-point`）。但它**不是无上限保留**：有**自己的每会话上限** `ROLLBACK_MAX_GUARDS_PER_SESSION = 20`，超出只淘汰**最旧的救援点**（否则反复回退会让它无界增长）。
+> - **范围与计数**：**不新增宿主注册路由**（仍挂在 recovery prefix 内按 path 分发，宿主注册路由条目仍 **79** 条）。**仍未做**：CLI 入口（`dcm rollback …`）。**未验证**：没有真实宿主进程内的端到端取证、没有浏览器点击取证 —— 见 `docs/spec/known-gaps.md` G-30。
+> - **护栏**：`src/core/rollback-point.test.ts`（**25** 条，含 t13 的捕获边界 R-21①–⑤）、`tests/route/recovery-rollback.test.ts`（5 条：全子路径可达 + 未确认 409 零写入 / 404·405·400 / 503 + guidance / 保护点 409 / SAFE MODE 423）、
+>   `src/ui/rollback-view.test.ts`（12 条，含源码级「不得再有 config 第三态」断言）、`src/client/chat/rollback-entry-view.test.ts`、`src/client/common/client-route-parity.test.ts`（6 条端点双向对账）。
+
+> **Rewritten as "workspace + session rollback": the "checkpoints (three states at one point)" feature is now wired into both the UI and the chat** (**closes G-30**): the old three-state engine
+> (`src/core/checkpoint.ts` + the `samePointVerdictOf` same-point verdict + the seven `checkpoints/*` sub-paths) is deleted in this batch and replaced by the two-state engine `src/core/rollback-point.ts`
+> (**note: `src/core/rollback.ts` is the pre-existing import-failure compensation engine — unrelated, untouched**). Points are now captured **automatically per turn**: the host subscribes to `session/event`
+> and records one point per `turn/end` = a workspace snapshot (content-addressed objects) + a session cursor (event count / byte length / fork boundary); the manual capture form and the `capture` sub-path are gone.
+> - **UI**: the card under **Environment → Maintenance & diagnostics** becomes `RollbackCard` — a per-session timeline plus a read-only preview (overwrite / differ / missing / created-after "left untouched" counts,
+>   with the turn number and session boundary); a three-way scope (`files+session` / `files` / `session`, unavailable combinations disabled so no request is sent that cannot succeed); an explicit "allow partial" tick
+>   when the record is incomplete; a danger confirmation; and per-segment results including the forked child session id and the rescue-point id. The ⌘K command is renamed to "Rollback point (go back to a moment)".
+> - **↺ rollback entry inside the chat**: a new contribution to the `conversation.chat.turnTail` slot (cell id `config-manager-rollback-entry`) opens a review dialog and, on success, opens the forked child session.
+>   **Degradation stated honestly**: the entry is **one per turn**, not one per user message — the host slot `conversation.chat.node` is keyed with `replaceRisk=shadows-shipped-ui`, so keeping the button next to the
+>   original message would mean copying the host user-message renderer (and its CSS Modules) into this repo; and the unit of capture here is the turn anyway. Turns still running have no point yet, so the entry hides itself.
+> - **Version boundary (never claim it works on every version)**: on 0.2.x the session navigator is `ctx.uiWorkspace.openSession(id)` (the same API shipped ui-chat uses in its own fork flow); with no navigator the entry **degrades honestly** to `unavailable` (it shows the childSessionId instead of pretending it opened). The slot is **probed before registering**: only a `list` declaration registers — 0.1.5-rc.2 declares the same key as `chain`, and registering it in list form would throw, so the whole entry is **skipped** (`slot-kind-mismatch`); a skip or a registration error only drops this one entry — the plugin's other slots and host start-up are unaffected.
+> - **Session rollback = fork, never a log rewrite**: `ctx.sessions.fork(source, boundary, childId?)` at the **stable boundary before the target turn** (that turn’s `turn/start` seq − 1); the **original session log is read-only and byte-identical**
+>   (the opposite of the old "write the log back byte by byte"; the old quiescence gate / fork gate / byte-copy write-back are all retired). When no earlier boundary can be read the result is a structured `no-boundary` — **no boundary is guessed**.
+> - **Workspace restore, stated honestly**: only paths recorded in the snapshot are overwritten; files that were never recorded and files created after the point are **never deleted** (they only appear in the leftovers report);
+>   a rescue point is taken before restoring, every file is re-read and SHA-256 checked afterwards, and any mismatch triggers a **full rollback** (`restored=0` — written files are never counted as success); the confirmation gate is fail-closed
+>   (`userConfirmed` must be exactly `true`, otherwise 409 `confirmation-required`).
+> - **Rescue (guard) points**: taken automatically before each rewind; they do **not** consume the per-session 20 / global 50 budget for automatic points and are **never evicted** by it; users **cannot delete** them (`remove` → `protected-point`). They are **not kept without bound**: they have **their own per-session cap**, `ROLLBACK_MAX_GUARDS_PER_SESSION = 20`, and exceeding it evicts only the **oldest rescue points** (otherwise repeated rewinds would grow them forever).
+> - **Scope and counts**: **no new host routes** (still dispatched by path inside the recovery prefix; the registered-route count stays **79**). **Still missing**: a CLI entry (`dcm rollback …`). **Not verified**: no end-to-end evidence from a
+>   real host process and no browser click-through — see `docs/spec/known-gaps.md` G-30.
+> - **Guards**: `src/core/rollback-point.test.ts` (25 cases, including t13’s capture-boundary R-21①–⑤), `tests/route/recovery-rollback.test.ts` (5 cases: all sub-paths reachable + unconfirmed 409 with zero writes / 404·405·400 / 503 + guidance / protected point 409 / SAFE MODE 423),
+>   `src/ui/rollback-view.test.ts` (12 cases, including a source-level assertion that the config third state no longer exists), `src/client/chat/rollback-entry-view.test.ts` and `src/client/common/client-route-parity.test.ts` (6 endpoints checked in both directions).
+
 ### 🔧 变更 · Changed
 
 > **恢复「预览 = 执行」不再漂移**（第二轮审查）：预览后磁盘若发生变化，执行时同一份快照可能多出
@@ -199,7 +202,26 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > why did pruning fail" visible for the first time.
 > - **Guards**: `src/core/backup.test.ts`.
 
+> **「检查点」→「工作区 + 会话回滚」的命名与数据口径整体改名（S7）**：引擎 `src/core/checkpoint.ts` → `src/core/rollback-point.ts`、判定层 `src/ui/checkpoint-view.ts` → `src/ui/rollback-view.ts`、
+> 卡片 `CheckpointCard.tsx` → `RollbackCard.tsx`、路由族 `/recovery/checkpoints/*` → `/recovery/rollback-points/*`、i18n 键 `checkpoint.*` → `rollback.*`（含 ⌘K 命令 id `checkpoint.open` → `rollback.open`）。
+> **旧数据既不读取也不删除**：`<dataDir>/checkpoints/` 目录不再被读取（升级后旧点不可见），本插件也不会去删它 —— 要保留历史请自行备份该目录。
+
+> **Renamed end to end from "checkpoints" to "workspace + session rollback" (S7)**: engine `src/core/checkpoint.ts` → `src/core/rollback-point.ts`, decision layer `src/ui/checkpoint-view.ts` → `src/ui/rollback-view.ts`,
+> card `CheckpointCard.tsx` → `RollbackCard.tsx`, route family `/recovery/checkpoints/*` → `/recovery/rollback-points/*`, i18n keys `checkpoint.*` → `rollback.*` (including the ⌘K command id `checkpoint.open` → `rollback.open`).
+> **Old data is neither read nor deleted**: `<dataDir>/checkpoints/` is no longer read (old points are invisible after upgrading) and this plugin never removes it — back up that directory yourself if you want the history.
+
 ### 🐛 修复 · Fixed
+
+> **回滚点台账不再被并发写踩坏、事件 / 会话窄化不再静默丢弃**（t7 复核 → 修复单 t14）：台账的**全部写入口**（自动留点的 `appendRecord`、`remove`、`rewind` 的救援点）现在都走同一个模块级串行链 `withLedgerWriteLock`（**进程内**读-改-写原子）。修掉的现象：两个引擎实例（宿主 tracker 与路由）交错 capture / remove / rewind 时会丢更新、甚至把已删除的点「复活」。
+> - **跨进程边界不可互替**：`withLedgerWriteLock` 只保证单进程内串行；跨进程（另一个 DSH 实例、离线 CLI）仍由路由层的 `runWithMutationLock` / 环境锁（`<dataDir>/locks/environment.lock`）负责 —— **env 锁管「谁能写」，本队列管「进程内多个写者别互相踩」，两者都必须在**。
+> - **窄化不再静默**：`rollbackTrackedEventOf` / `rollbackSessionBindingOf` 从宿主入口搬进 `src/core/rollback-point.ts` 并导出，形状不符给结构化 `invalid-input`（`event-not-object` / `event-seq-missing` / `event-type-missing` / `session-not-object` / `session-id-missing`，seq 必须有限数）并由宿主 `host.log.warn`；会话缺 cwd 或 cwd 非绝对 → `chunkless`（不留 chunks）且该点 `incomplete=true` + `workspace.reasonCode='no-chunks'`，界面可如实展示。
+> - **护栏**：`src/core/rollback-point.test.ts` R-22（两实例交错 20 轮：台账无重复 id / 删除成功的不复活 / 返回 ok 的点确实在台账里）、R-23 / R-23b / R-23c（事件与会话登记矩阵 + chunkless 集成）、R-24（guard 留存与上限）。
+
+> **The rollback ledger can no longer be corrupted by concurrent writes, and event/session narrowing no longer drops input silently** (t7 review → repair ticket t14): every ledger write path (the automatic `appendRecord`, `remove`, and the rewind rescue point) now goes through one module-level serial chain, `withLedgerWriteLock` (**in-process** read-modify-write atomicity). This fixes lost updates and even resurrected deleted points when two engine instances (the host tracker and a route) interleaved capture / remove / rewind.
+> - **The cross-process boundary is not interchangeable**: `withLedgerWriteLock` serialises writers inside one process only; across processes (another DSH instance, the offline CLI) the route layer's `runWithMutationLock` / environment lock (`<dataDir>/locks/environment.lock`) still applies — **the env lock decides who may write, this queue keeps writers inside a process from stepping on each other; both are required**.
+> - **Narrowing is no longer silent**: `rollbackTrackedEventOf` / `rollbackSessionBindingOf` moved out of the host entry into `src/core/rollback-point.ts` (now exported) and return a structured `invalid-input` (`event-not-object` / `event-seq-missing` / `event-type-missing` / `session-not-object` / `session-id-missing`; seq must be a finite number) while the host logs `host.log.warn`; a session with a missing or non-absolute cwd becomes `chunkless` (no chunks recorded) and its point is `incomplete=true` with `workspace.reasonCode='no-chunks'`, which the UI can show honestly.
+> - **Guards**: R-22 / R-23 / R-23b / R-23c / R-24 in `src/core/rollback-point.test.ts`.
+
 
 > **改了仓库地址后同步静默失效（issue #79 主诉）**：`src/sync/git/git-transport.ts` 的 `ensureRepo()` 见到已有 `.git` 就直接复用，
 > `repoUrl` 只在首次 clone 时被使用 —— 此后 pull / push 全走旧 `origin`，失败面却是旧地址的网络超时（很容易被误判成网络或凭据问题）。
@@ -473,6 +495,23 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > `dcm web --data-dir` derives all four directories from one root; the console's "available pages" hint is derived from the nav
 > table; the offline export records the real exporter version; and a new route-parity guard pins all of it.
 >
+
+> **工作区快照的捕获边界不再整份读进内存、也不再静默丢弃**（t5-F1/F2 → 修复单 t13）：旧实现让**首个**文件因 `read > 0` 短路绕过字节上限（可把任意大文件整份 `fs.readFile` 进内存），且预算耗尽时直接 `break`，被丢的文件**不进** `skipped`（只剩一个 `truncated` 标记）。
+> 现在：单文件上限 `maxFileBytes`（缺省 = 总量预算）**先 `stat` 判大小**，超限记 `too-large` 跳过；字节 / 文件数预算耗尽时其后**每一条**都进 `skipped`（`budget-bytes` / `budget-files`）；逐条列表另有上限（`maxSkippedEntries`，缺省 5000）但**只限记录条数** —— `skippedCount` 仍是真实总数，另置 `skippedTruncated`。`excludedDirs`（node_modules 等预期忽略）逐条记录、但**不计入** `skippedCount`、也不使点 degraded。
+> - **被跳过的条目与计数已经到达用户（t18 已落地，2026-10-10）**：段级与预览行各带 `noticeKeys`，界面渲染 `rollback.row.notice.skipped` / `.truncated`（warn 徽章）与 `rollback.preview.notice.*`（行内提示），`rollbackPreviewWarnings()` 把 `rollback.warn.trackDegraded`（detail = `workspace capture-truncated`）一并带出；时间线的「文件数」只算**已收录**文件（被截断时更小，不再假装全收了）。证据 = **真实引擎产出的截断点驱动视图层**（`.tmp/probe-t8-skip.ts`：`noticeKeys=[rollback.row.notice.skipped, rollback.row.notice.truncated]` / `skippedCount=1` / `truncated=true`，fail=0）。
+> - **护栏**：`src/core/rollback-point.test.ts` 的 R-21①–⑤（超限的首个文件 / 字节预算 / 文件数截断 / 标记与计数在列表·详情·预览三处如实回传 / 列表上限）。
+
+> **Workspace capture no longer reads an oversized file into memory, and no longer drops files silently** (t5-F1/F2 → repair ticket t13): previously the **first** file bypassed the byte cap through the `read > 0` short-circuit (any size could be read fully into memory) and exhausting the budget hit a plain `break`, so dropped files never entered `skipped` (only a `truncated` flag remained).
+> Now a per-file cap `maxFileBytes` (defaults to the total budget) is checked with `stat` **before** reading — anything larger is recorded as `too-large` and skipped; when the byte or file-count budget runs out, **every subsequent** file is recorded in `skipped` (`budget-bytes` / `budget-files`); the per-entry list has its own cap (`maxSkippedEntries`, default 5000) that limits **recorded entries only** — `skippedCount` stays the true total and `skippedTruncated` is set. `excludedDirs` (expected ignores such as node_modules) are recorded per entry but **not counted** in `skippedCount` and do not mark the point degraded.
+> - **Skipped entries and counts now reach the user (t18 landed, 2026-10-10)**: segments and preview rows carry `noticeKeys`, the UI renders `rollback.row.notice.skipped` / `.truncated` (warn badges) and `rollback.preview.notice.*` (inline hints), and `rollbackPreviewWarnings()` surfaces `rollback.warn.trackDegraded` (detail = `workspace capture-truncated`); the timeline file count only counts **recorded** files (smaller when truncated — it no longer pretends everything was captured). Evidence: a **real engine-produced truncated point driving the view layer** (`.tmp/probe-t8-skip.ts`, fail=0).
+> - **Guards**: R-21①–⑤ in `src/core/rollback-point.test.ts`.
+### 🗑️ 移除 · Removed
+
+> **三态检查点与手动拍点整体下线**：删除 config 第三态与 `samePointVerdictOf` 同点判定（`spreadMs` 只作为两态捕获时间的跨度事实回传，不再有「同点」结论）；删除手动「拍点」表单与
+> `POST /recovery/checkpoints/capture` 子路径（留点改为按回合自动）；删除 `src/core/checkpoint.ts`、`src/ui/checkpoint-view.ts`、`src/client/recovery/CheckpointCard.tsx` 及其测试。
+
+> **The three-state checkpoint and manual capture are gone**: the config third state and the `samePointVerdictOf` same-point verdict were removed (`spreadMs` is now only an honest fact about the two capture timestamps, with no verdict attached);
+> the manual capture form and the `POST /recovery/checkpoints/capture` sub-path were removed (capture is per turn now); `src/core/checkpoint.ts`, `src/ui/checkpoint-view.ts`, `src/client/recovery/CheckpointCard.tsx` and their tests were deleted.
 
 ## [0.1.71] - 2026-10-08
 

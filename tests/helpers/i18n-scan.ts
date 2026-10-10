@@ -224,6 +224,7 @@ export const KNOWN_CATALOG_FILES: readonly string[] = [
   'src/client/recovery/recovery-locales.ts', // recoveryZh/recoveryEn
   'src/client/sync/sync-locales.ts',         // syncZh/syncEn
   'src/migrations/messages-migrations.ts',   // zh/en 由 src/core/messages-core.ts 的 registerMessageCatalog 注册
+  'src/client/chat/chat-locales.ts',         // 聊天内「↺ 回退」入口的独立字典（captain 登记 2026-10-10）
 ] as const;
 
 /** 目录归属调用点（t16）：文件自身声明目录的三条既有通道。 */
@@ -566,7 +567,7 @@ export function checkAllowlist(
   return issues;
 }
 
-/** en 目录体检文件（A2；7 本字典 + locale/en.json）。 */
+/** en 目录体检文件（A2；8 本字典 + locale/en.json）。 */
 export const EN_CATALOG_FILES: readonly string[] = [
   'src/client/locales.ts',
   'src/ui/i18n.ts',
@@ -575,6 +576,7 @@ export const EN_CATALOG_FILES: readonly string[] = [
   'src/client/market/market-locales.ts',
   'src/client/recovery/recovery-locales.ts',
   'src/client/sync/sync-locales.ts',
+  'src/client/chat/chat-locales.ts',
   'locale/en.json',
 ];
 

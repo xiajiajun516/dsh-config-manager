@@ -16,6 +16,12 @@
  * POST /api/dsh-config-manager/recovery/lock/recover            → RecoveryLockRecoverResult
  * POST /api/dsh-config-manager/recovery/safe-mode/clear         → RecoverySafeModeClearResult
  * POST /api/dsh-config-manager/recovery/sessions/layout         → SessionLayoutPlanView | SessionLayoutApplyView
+ * GET  /api/dsh-config-manager/recovery/rollback-points              → RollbackListResult
+ * GET  /api/dsh-config-manager/recovery/rollback-points/storage      → RollbackStorageStatus
+ * GET  /api/dsh-config-manager/recovery/rollback-points/<id>         → RollbackDetailResult
+ * GET  /api/dsh-config-manager/recovery/rollback-points/<id>/preview → RollbackPreviewResult
+ * POST /api/dsh-config-manager/recovery/rollback-points/<id>/rewind  → RollbackRewindResult
+ * POST /api/dsh-config-manager/recovery/rollback-points/<id>/delete  → RollbackRemoveResult
  * ```
  *
  * 安全约束（§9.4 / §11）：
@@ -37,15 +43,15 @@ import type {
 } from '../../ui/session-inventory-view.ts';
 import type { SessionLayoutResponse } from '../../ui/session-layout-view.ts'
 import type {
-  CheckpointCaptureInput,
-  CheckpointCaptureResult,
-  CheckpointListResult,
-  CheckpointPreviewResult,
-  CheckpointRemoveResult,
-  CheckpointRewindResult,
-  CheckpointState,
-  CheckpointStorageStatus,
-} from '../../ui/checkpoint-view.ts';
+  RollbackDetailResult,
+  RollbackListResult,
+  RollbackPointPort,
+  RollbackPreviewResult,
+  RollbackRemoveResult,
+  RollbackRewindOptions,
+  RollbackRewindResult,
+  RollbackStorageStatus,
+} from '../../ui/rollback-view.ts';
 import { ConfigManagerApiError, getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { RECOVERY_API } from '../common/routes.ts';
@@ -62,17 +68,22 @@ const RECOVERY_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS, time
 const OPERATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
- * checkpoint 台账 id → 子路径（G-30）。
+ * rollback-point 台账 id → 子路径。
  *
  * 只接受 `[A-Za-z0-9._-]{1,128}`：id 是宿主生成的，这里**只做形态收窄**（与 operationId 的
- * UUID 校验同一条理由 —— 防路径穿越）；不合形态的 id 直接抛，绝不拼进 URL 让宿主去兜。
+ * UUID 校验同一条理由 —— 防路径穿越）；不合形态的 id 直接抛，**绝不回显原始 id**、绝不拼进 URL
+ * 让宿主去兜。路径由 `RECOVERY_API.rollbackPoints` **派生**（路由常量是唯一来源；源码级守卫
+ * `http-usage-guard` 也只允许 `common/routes.ts` 出现 `/api/dsh-config-manager…` 字面量）。
  */
-const CHECKPOINT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
-function checkpointPath(id: string, sub: string): string {
-  // 不合形态 = 编程错误（id 只可能来自宿主回传的列表），直接抛；**绝不回显原始 id**
-  if (!CHECKPOINT_ID_RE.test(id)) throw new Error('checkpoint id invalid')
-  return RECOVERY_API.checkpoints + '/' + id + '/' + sub
-};
+const ROLLBACK_POINT_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
+function rollbackPointUrl(id: string): string {
+  if (!ROLLBACK_POINT_ID_RE.test(id)) throw new Error('rollback point id invalid')
+  return RECOVERY_API.rollbackPoints + '/' + id
+}
+
+function rollbackPointPath(id: string, sub: string): string {
+  return rollbackPointUrl(id) + '/' + sub
+}
 
 /**
  * E2：`POST /recovery/sessions/layout`（布局归位 / 重复 id 隔离）。
@@ -90,8 +101,8 @@ function operationPath(operationId: string, action: string): string {
   return `${RECOVERY_API.base}/${operationId}/${action}`;
 }
 
-/** Recovery 浏览器半数据入口（实现 RecoveryPort 契约）。 */
-export class RecoveryApi implements RecoveryPort {
+/** Recovery 浏览器半数据入口（实现 RecoveryPort 契约 + rollback-points 族）。 */
+export class RecoveryApi implements RecoveryPort, RollbackPointPort {
   readonly t: UiT
   constructor(t: UiT) {
     this.t = t
@@ -129,62 +140,66 @@ export class RecoveryApi implements RecoveryPort {
     return postJson<SessionRepairResult>(RECOVERY_API.sessionsRepair, body, this.t, RECOVERY_OPTS)
   }
 
-  /* ------------------------------------------------- G-30 checkpoint（三态同点检查点） */
+  /* ------------------------------------------------- S7 rollback-points（工作区 + 会话回滚，两态） */
 
   /**
-   * GET /recovery/checkpoints（G-30）：台账列表 + 存储栈状态。
+   * GET /recovery/rollback-points：台账列表（按时间倒序）+ 存储栈状态 + 留存上限。
    *
    * 列表本身**只读**：SAFE MODE 下也能看（宿主侧只有 rewind / delete 被 423 拦下），
    * 因此界面必须能「看得见、但按钮说明为什么点不了」。
+   * 存储栈不可用时宿主回 **503 + 同体**（`storage.available=false` + guidance）；`getJson` 对非 2xx
+   * 抛 `ConfigManagerApiError`（`status`=503，`code` 取响应体 code），调用方按 status 区分「读不出来」
+   * 与「本来就没有」。
    */
-  async checkpoints(): Promise<CheckpointListResult> {
-    return getJson<CheckpointListResult>(RECOVERY_API.checkpoints, this.t, RECOVERY_OPTS)
+  async rollbackPoints(): Promise<RollbackListResult> {
+    return getJson<RollbackListResult>(RECOVERY_API.rollbackPoints, this.t, RECOVERY_OPTS)
   }
 
-  /** GET /recovery/checkpoints/storage（G-30）：存储栈探针（不可用时带结构化 guidance）。 */
-  async checkpointStorage(): Promise<CheckpointStorageStatus> {
-    return getJson<CheckpointStorageStatus>(RECOVERY_API.checkpointsStorage, this.t, RECOVERY_OPTS)
+  /** GET /recovery/rollback-points/storage：存储栈探针（不可用 → 503 + guidance，同上）。 */
+  async rollbackPointStorage(): Promise<RollbackStorageStatus> {
+    return getJson<RollbackStorageStatus>(RECOVERY_API.rollbackPointsStorage, this.t, RECOVERY_OPTS)
+  }
+
+  /** GET /recovery/rollback-points/<id>：单条详情（不存在 → 404 `record-not-found`）。 */
+  async rollbackPoint(id: string): Promise<RollbackDetailResult> {
+    return getJson<RollbackDetailResult>(rollbackPointUrl(id), this.t, RECOVERY_OPTS)
   }
 
   /**
-   * POST /recovery/checkpoints/capture（G-30）：拍一个检查点（写路径）。
+   * GET /recovery/rollback-points/<id>/preview：**只读预览（零写入）**。
    *
-   * chunks 是**显式绝对路径分块**（引擎只在这些分块内覆盖）；unitId 由宿主解析成会话根内的
-   * 真实日志（解析不出来一律 400，绝不猜）。note / protect 可选。
+   * 回传两态将覆盖多少项、其中多少项内容不同、多少项当前已不存在、多少项是该点**未记录**的
+   * （**只报告，绝不删除**），以及会话边界（from → to）与回合号；`canRestore` / `canRemove`
+   * 是宿主给出的权威判定，界面据此决定按钮可用性（展示判定见 `src/ui/rollback-view.ts`）。
    */
-  async captureCheckpoint(input: CheckpointCaptureInput): Promise<CheckpointCaptureResult> {
-    const body: Record<string, unknown> = {}
-    if (input.chunks !== undefined && input.chunks.length > 0) body['chunks'] = [...input.chunks]
-    if (input.unitId !== undefined && input.unitId !== '') body['unitId'] = input.unitId
-    if (input.note !== undefined && input.note !== '') body['note'] = input.note
-    if (input.protect === true) body['protect'] = true
-    return postJson<CheckpointCaptureResult>(RECOVERY_API.checkpointsCapture, body, this.t, RECOVERY_OPTS)
-  }
-
-  /** GET /recovery/checkpoints/<id>/preview（G-30）：只读预演（零写入；逐段 planned/changed/missing/leftovers）。 */
-  async previewCheckpoint(id: string): Promise<CheckpointPreviewResult> {
-    return getJson<CheckpointPreviewResult>(checkpointPath(id, 'preview'), this.t, RECOVERY_OPTS)
+  async rollbackPointPreview(id: string): Promise<RollbackPreviewResult> {
+    return getJson<RollbackPreviewResult>(rollbackPointPath(id, 'preview'), this.t, RECOVERY_OPTS)
   }
 
   /**
-   * POST /recovery/checkpoints/<id>/rewind（G-30）：单命令回滚。
+   * POST /recovery/rollback-points/<id>/rewind：回退（工作区文件覆盖 + 会话 fork 子会话）。
    *
-   * **确认门是 fail-closed**：`confirm` 必须恰好 true（宿主缺省/假值/字符串一律 409 denied + 零写入）。
-   * 本方法把 confirm 作为**显式参数**收，绝不自动置 true —— 由确认弹窗的 onClick 传进来。
+   * **确认门是 fail-closed**：`userConfirmed` 必须**恰好** true（宿主缺省 / 假值一律
+   * 409 `confirmation-required` + 零写入）。本方法绝不自动置 true —— 由确认弹窗的 onClick 传进来。
+   * 409（confirmation-required / protected-point / record-incomplete）与 423（mutation-locked）
+   * 都以 `ConfigManagerApiError` 抛出，`status` / `code` 保留，界面按 code 出文案（不靠状态码猜原因）。
+   * 会话回退 **不改写原会话日志**：结果里回传 `childSessionId`（新子会话），原会话只读。
    */
-  async rewindCheckpoint(
-    id: string,
-    opts: { confirm: boolean; segments?: readonly CheckpointState[]; allowPartial?: boolean },
-  ): Promise<CheckpointRewindResult> {
-    const body: Record<string, unknown> = { confirm: opts.confirm === true }
+  async restoreRollbackPoint(id: string, opts: RollbackRewindOptions): Promise<RollbackRewindResult> {
+    const body: Record<string, unknown> = { userConfirmed: opts.userConfirmed === true }
+    if (opts.mode !== undefined) body['mode'] = opts.mode
     if (opts.segments !== undefined && opts.segments.length > 0) body['segments'] = [...opts.segments]
     if (opts.allowPartial === true) body['allowPartial'] = true
-    return postJson<CheckpointRewindResult>(checkpointPath(id, 'rewind'), body, this.t, RECOVERY_OPTS)
+    if (opts.preRewindGuard !== undefined) body['preRewindGuard'] = opts.preRewindGuard
+    return postJson<RollbackRewindResult>(rollbackPointPath(id, 'rewind'), body, this.t, RECOVERY_OPTS)
   }
 
-  /** POST /recovery/checkpoints/<id>/delete（G-30）：删除（保护点 / guard 点由宿主拒绝）。 */
-  async removeCheckpoint(id: string): Promise<CheckpointRemoveResult> {
-    return postJson<CheckpointRemoveResult>(checkpointPath(id, 'delete'), {}, this.t, RECOVERY_OPTS)
+  /**
+   * POST /recovery/rollback-points/<id>/delete：删除一个回滚点（保护点由宿主拒绝）。
+   * body 必须 `userConfirmed: true`（未确认 → 409 `confirmation-required`）；本方法不自动置 true。
+   */
+  async removeRollbackPoint(id: string, userConfirmed: boolean): Promise<RollbackRemoveResult> {
+    return postJson<RollbackRemoveResult>(rollbackPointPath(id, 'delete'), { userConfirmed: userConfirmed === true }, this.t, RECOVERY_OPTS)
   }
 
   /** POST /recovery/sessions/rollback（T8）：按台账 repairId 回滚（客户端不传路径）。 */

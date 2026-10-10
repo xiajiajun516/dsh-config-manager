@@ -34,6 +34,7 @@ import {
   MARKET_API,
   MY_CONFIGS_API,
   RECOVERY_API,
+  ROLLBACK_POINT_ROUTES,
   SYNC_API,
 } from './routes.ts';
 
@@ -67,13 +68,42 @@ const PREFIX_ROUTED = new Set<string>([
   // （`segments[0] === 'sessions'` 下的 `repair` / `rollback` 子路径），不新增宿主注册路由条目。
   RECOVERY_API.sessionsRepair,
   RECOVERY_API.sessionsRollback,
-  // G-30：checkpoint（三态同点检查点）—— 由 recovery prefix 路由内部按 path 分发
-  // （`segments[0] === 'checkpoints'` 下的 storage / capture / <id>/{preview,rewind,delete}），
-  // 不新增宿主注册路由条目，因此 route-parity 的 78 条快照不变。
-  RECOVERY_API.checkpoints,
-  RECOVERY_API.checkpointsStorage,
-  RECOVERY_API.checkpointsCapture,
+  // S7：rollback-points（工作区 + 会话回滚，两态）—— 由 recovery prefix 路由内部按 path 分发
+  // （`segments[0] === 'rollback-points'` 下的 storage / <id>/{preview,rewind,delete}），
+  // 不新增宿主注册路由条目，因此 route-parity 的 79 条快照不变。
+  RECOVERY_API.rollbackPoints,
+  RECOVERY_API.rollbackPointsStorage,
 ]);
+
+/**
+ * rollback-points 族的**端点 ↔ RecoveryApi 方法**一一对账（S7 / T2）。
+ *
+ * `<id>` 是占位符（不是可直接请求的路径），所以这些子路径不进 `RECOVERY_API`（也就不进
+ * `clientPaths()` 的宿主字面量对账）；但「客户端声明了哪 6 条端点、实现了哪 6 个方法」必须
+ * 两边都齐 —— 少了 = 界面点了 404，多了 = 死代码或改错方向。
+ */
+const ROLLBACK_POINT_ENDPOINTS: readonly string[] = [
+  RECOVERY_API.rollbackPoints,
+  RECOVERY_API.rollbackPointsStorage,
+  `${RECOVERY_API.rollbackPoints}/<id>`,
+  `${RECOVERY_API.rollbackPoints}/<id>/preview`,
+  `${RECOVERY_API.rollbackPoints}/<id>/rewind`,
+  `${RECOVERY_API.rollbackPoints}/<id>/delete`,
+];
+
+/** 客户端 api 文件（对账对象；与 http-usage-guard 的收敛范围同源）。 */
+const RECOVERY_API_FILE = 'src/client/recovery/recovery-api.ts';
+
+function readClientSource(rel: string): string {
+  return fs.readFileSync(path.join(ROOT, rel), 'utf8');
+}
+
+/** 源码里声明的异步方法名（`async name(`）。 */
+function declaredAsyncMethods(source: string): string[] {
+  const out: string[] = [];
+  for (const match of source.matchAll(/^\s*async\s+([A-Za-z0-9_]+)\s*\(/gm)) out.push(match[1] as string);
+  return out;
+}
 
 const ROUTE_LITERAL = /'(\/api\/dsh-config-manager[^']*)'/g;
 
@@ -178,6 +208,47 @@ test('parity-03 prefix 路由（recovery）确有宿主前缀字面量覆盖', (
   for (const p of PREFIX_ROUTED) {
     assert.ok(prefixCovered(p, literals), `prefix 路由 ${p} 没有对应的宿主前缀字面量（宿主路由可能改名/迁移）`);
   }
+});
+
+test('parity-05 rollback-points 族：6 条端点与 RecoveryApi 方法一一对账（两个方向）', () => {
+  const entries = Object.values(ROLLBACK_POINT_ROUTES);
+  assert.equal(entries.length, 6, 'rollback-points 族必须恰好 6 条端点（冻结 wire contract）');
+  assert.deepEqual(
+    entries.map((entry) => entry.path).sort(),
+    [...ROLLBACK_POINT_ENDPOINTS].sort(),
+    '端点清单必须与冻结契约逐字一致（多一条=死代码，少一条=界面打不出去）',
+  );
+
+  // ① 每条端点都必须是 recovery prefix 下的子路径（\`<id>\` 占位符只能是 id 段，不能拼错层级）
+  const literals = hostRouteLiterals();
+  for (const entry of entries) {
+    assert.ok(
+      entry.path === RECOVERY_API.rollbackPoints
+        || entry.path === RECOVERY_API.rollbackPointsStorage
+        || entry.path.startsWith(RECOVERY_API.rollbackPoints + '/<id>'),
+      '端点 ' + entry.path + ' 不在 rollback-points 族下（拼错即 404）',
+    );
+    assert.ok(prefixCovered(entry.path, literals), '端点 ' + entry.path + ' 没有宿主 recovery 前缀字面量覆盖');
+  }
+
+  // ② 正向：每个方法都必须真的在 RecoveryApi 里实现（名字改了/删了就红）
+  const source = readClientSource(RECOVERY_API_FILE);
+  const declared = declaredAsyncMethods(source);
+  for (const entry of entries) {
+    assert.ok(
+      declared.includes(entry.method),
+      'RecoveryApi 里没有 ' + entry.method + '() —— 端点 ' + entry.path + ' 缺少实现',
+    );
+  }
+
+  // ③ 反向：rollback-points 族的方法不得游离在表外（死代码 / 改错名）
+  const tableMethods = new Set(entries.map((entry) => entry.method));
+  const familyMethods = declared.filter((name) => /^(rollbackPoint|restoreRollbackPoint|removeRollbackPoint)/.test(name));
+  assert.deepEqual(
+    [...familyMethods].sort(),
+    [...tableMethods].sort(),
+    'rollback-points 族方法与 \`ROLLBACK_POINT_ROUTES\` 必须一一对应（旧 checkpoint* 方法不在本族内）',
+  );
 });
 
 test('parity-04 未精确命中的客户端路由必须已在 PREFIX_ROUTED 显式登记', () => {

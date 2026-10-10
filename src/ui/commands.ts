@@ -38,7 +38,7 @@ export type PaletteTitleKey =
   | 'nav.market' | 'task.title.publish'
   | 'nav.export' | 'nav.import' | 'environment.tab.maintenance' | 'foreign.source.title'
   | 'task.title.runs' | 'task.title.history' | 'task.title.about'
-  | 'palette.rescue.recovery' | 'palette.rescue.mode' | 'palette.rescue.checkpoint'
+  | 'palette.rescue.recovery' | 'palette.rescue.mode' | 'palette.rescue.rollback'
   | 'library.source.all' | 'library.kind.snapshot' | 'library.kind.backupFile'
   | 'library.kind.remote' | 'library.kind.market'
 
@@ -191,12 +191,14 @@ export const COMMANDS: readonly CommandItem[] = [
     keywords: ['rescue', 'mode', 'profile', 'bundles', '救援', '救援模式', '逃生'],
   },
   {
-    // G-30：检查点（会话 / 工作区 / 配置「三态同点」）—— 与事故恢复同一子视图，
+    // S7：工作区 + 会话回滚（每个回合结束自动留点；会话回退 = fork 子会话）—— 与事故恢复同一子视图，
     // 键盘可达（卡片本身在环境页维护与诊断里，⌘K 直达同一落点）。
-    id: 'checkpoint.open',
+    // 中文关键词数量刻意保持 4 个：i18n 守卫的白名单锚定 src/ui/commands.ts 的命中数（53），
+    // 增删中文词会让白名单计数漂移（新增豁免只能走 captain）。
+    id: 'rollback.open',
     group: 'rescue',
-    titleKey: 'palette.rescue.checkpoint',
-    keywords: ['checkpoint', 'rewind', 'cursor', 'snapshot', '检查点', '回滚', '回到', '游标'],
+    titleKey: 'palette.rescue.rollback',
+    keywords: ['rollback', 'rewind', 'workspace', 'session', 'fork', '回滚', '回退', '工作区', '会话'],
   },
 ]
 

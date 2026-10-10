@@ -157,13 +157,29 @@ export const RECOVERY_API = {
   /** T8：按 repairId 回滚一次修复（同上）。 */
   sessionsRollback: `${API_BASE}/recovery/sessions/rollback`,
   /**
-   * G-30：checkpoint（会话 / 工作区 / 插件配置「三态同点」检查点）族 —— 同样挂在 recovery prefix
-   * 路由内部按 path 分发，**不新增注册路由条目**（78 条路由快照不变）。
-   * `<id>` 段由调用方拼接（宿主侧校验 id 形态，越界一律 400/404）。
+   * S7：`/recovery/checkpoints/*` → `/recovery/rollback-points/*`（**工作区 + 会话回滚**，两态；
+   * 旧的 checkpoints 常量已随旧检查点代码一起删除）。
+   * 挂在 recovery prefix 路由内部按 path 分发，**不新增注册路由条目**（宿主注册路由条目数仍为 79）。
+   * `<id>` 段由调用方拼接（宿主侧校验 id 形态，越界一律 404 `record-not-found`）。
    */
-  checkpoints: `${API_BASE}/recovery/checkpoints`,
-  checkpointsStorage: `${API_BASE}/recovery/checkpoints/storage`,
-  checkpointsCapture: `${API_BASE}/recovery/checkpoints/capture`,
+  rollbackPoints: `${API_BASE}/recovery/rollback-points`,
+  rollbackPointsStorage: `${API_BASE}/recovery/rollback-points/storage`,
+} as const;
+
+/**
+ * rollback-points 族的 6 条端点 ↔ RecoveryApi 方法名（**唯一来源**）。
+ *
+ * 为什么不并进 `RECOVERY_API`：`<id>` 是**占位符**，不是可直接请求的路径 —— 并进去会被
+ * `client-route-parity` 当成真实路由去与宿主字面量对账（假红/假绿各一半）。
+ * 这里显式登记，`client-route-parity` 逐条对账「路由 ↔ 方法」两个方向。
+ */
+export const ROLLBACK_POINT_ROUTES = {
+  list: { path: RECOVERY_API.rollbackPoints, method: 'rollbackPoints' },
+  storage: { path: RECOVERY_API.rollbackPointsStorage, method: 'rollbackPointStorage' },
+  detail: { path: `${RECOVERY_API.rollbackPoints}/<id>`, method: 'rollbackPoint' },
+  preview: { path: `${RECOVERY_API.rollbackPoints}/<id>/preview`, method: 'rollbackPointPreview' },
+  rewind: { path: `${RECOVERY_API.rollbackPoints}/<id>/rewind`, method: 'restoreRollbackPoint' },
+  delete: { path: `${RECOVERY_API.rollbackPoints}/<id>/delete`, method: 'removeRollbackPoint' },
 } as const;
 
 /** 迁移历史审计路由族（只读列表 + 导出）。 */

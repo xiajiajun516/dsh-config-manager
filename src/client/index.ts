@@ -34,6 +34,20 @@ import { en as recoveryEn, zh as recoveryZh, type RecoveryKey } from './recovery
 import { HistoryApi } from './history/history-api.ts'
 import { IncidentApi } from './recovery/incident-api.ts'
 import { en as historyEn, zh as historyZh, type HistoryKey } from './history/history-locales.ts'
+import { en as chatEn, zh as chatZh, type ChatKey } from './chat/chat-locales.ts'
+import { RollbackTurnEntry, type RollbackTurnEntryInjected } from './chat/RollbackTurnEntry.tsx'
+import {
+  buildSessionNavigator,
+  CHAT_ENTRY_ID,
+  CHAT_ENTRY_ORDER,
+  CHAT_ENTRY_SLOT,
+  navigationSourcesOf,
+  openChildSession,
+  registerChatEntry,
+  type ChildOpenState,
+} from './chat/rollback-entry-view.ts'
+// 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并）：注册 `conversation.chat.turnTail` 前必须加载。
+import type {} from './chat/chat-slots.ts'
 
 /** 本插件拥有的 locale namespace。 */
 const NS = 'config-manager'
@@ -45,6 +59,8 @@ const MARKET_NS = 'config-manager-market'
 const RECOVERY_NS = 'config-manager-recovery'
 /** Migration History 区块的独立 locale namespace（Phase 6）。 */
 const HISTORY_NS = 'config-manager-history'
+/** 聊天内「↺ 回退」入口的独立 locale namespace（T4；回退词汇仍复用 recovery 字典）。 */
+const CHAT_NS = 'config-manager-chat'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -58,6 +74,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'config-manager-recovery': RecoveryKey
     /** Migration History 区块文案（Phase 6）。 */
     'config-manager-history': HistoryKey
+    /** 聊天内「↺ 回退」入口文案（T4；只放聊天入口独有的话）。 */
+    'config-manager-chat': ChatKey
   }
 }
 
@@ -77,6 +95,7 @@ export type { SyncKey } from './sync/sync-locales.ts'
 export type { MarketKey } from './market/market-locales.ts'
 export type { RecoveryKey } from './recovery/recovery-locales.ts'
 export type { HistoryKey } from './history/history-locales.ts'
+export type { ChatKey } from './chat/chat-locales.ts'
 
 /**
  * 注册 Config Manager 设置页。
@@ -88,6 +107,7 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(MARKET_NS, { zh: marketZh, en: marketEn }), 'config-manager: market dictionaries')
   ctx.effect(() => ctx.locale.register(RECOVERY_NS, { zh: recoveryZh, en: recoveryEn }), 'config-manager: recovery dictionaries')
   ctx.effect(() => ctx.locale.register(HISTORY_NS, { zh: historyZh, en: historyEn }), 'config-manager: history dictionaries')
+  ctx.effect(() => ctx.locale.register(CHAT_NS, { zh: chatZh, en: chatEn }), 'config-manager: chat dictionaries')
 
   const t = ctx.locale.bind(NS)
   // 客户端展示层（报告/错误/进度/sync-view/market-view）翻译器：**每次取文案时**读当前 DSH locale。
@@ -122,4 +142,42 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: () => ({ api, syncApi, syncT, marketApi, marketT, myConfigsApi, recoveryApi, recoveryT, historyApi, historyT, incidentApi, uiT }),
   }, ConfigManagerSection))
+
+  /**
+   * 聊天内「↺ 回退」入口（T4）：ui-chat 的回合尾 list 位（`conversation.chat.turnTail`）。
+   *
+   * 选型 = 追加一个 list 条目（**新 id**，replaceRisk: none，不遮蔽任何 shipped UI）。
+   * 为什么不用「每条用户消息行内动作」（dsh-rewind 的 priority -1 接管 `conversation.chat.node` 的
+   * `user` key）：那是 keyed 位的遮蔽语义，要让按钮与原文同时出现就得把宿主的用户消息渲染器整段
+   * 复制过来（含它自己的 CSS Modules）—— 上游 UI 抄一份的维护债，且必然与既有观感分叉；而本功能的
+   * 留点单位本来就是回合（S1）。完整论证与后果见 `src/client/chat/chat-slots.ts` 头部注释。
+   *
+   * 注入面：端口（T2 的 RecoveryApi，组件绝不直接 fetch）+ 回退词汇翻译器（recovery 字典单点）
+   * + 子会话导航（**可选**：`ctx.sessions` 缺失时入口仍可回退，只是不能自动打开子会话并如实降级）。
+   */
+  // 会话导航面惰取（**不用** `ctx.<svc>` 属性访问：未在 inject 里声明的服务做属性访问会抛，见 AGENTS.md 的 DI 纪律）：
+  //   真机 0.2 = `ctx.uiWorkspace.openSession(childId)`（ui-chat 自己的 fork 流程同款，证据见 T20 output §F1）；
+  //   旧版兼容 = `ctx.sessions.open`（**存在才用** —— 0.2 的 sessions 面没有 open，绝不能包一个必然抛的包装）；
+  //   列表/刷新 = `ctx.sessions.list/refresh`（两种版本都有那一半）。
+  // 类型上必须过一层 unknown：宿主包与客户端包都往 cordis 的 Context 上合并过同名服务，
+  // `get()` 解析到的可能是宿主那份；NavigationSources 只按用到的成员收窄（缺失 = 少一份能力）。
+  // **取用时机 = 用户真的点「打开子会话」的那一刻**：服务可能比本插件晚挂载，装配期快照会把还没挂载的
+  // uiWorkspace 记成「本客户端没有导航入口」（假降级）。每次调用重读一次（只读 get，代价可忽略）。
+  const openChild = (childId: string): Promise<ChildOpenState> =>
+    openChildSession(buildSessionNavigator(navigationSourcesOf(ctx)), childId)
+  ctx.slots.inject(CHAT_ENTRY_SLOT, () => registerChatEntry({
+    // 声明形态探测（T9-F2）：0.1.x 把同一 key 声明成 chain（select 必填），按 list 形态（id/order）注册会抛。
+    probe: { spec: (key) => ctx.slots.spec(key) },
+    register: () => ctx.slots.register({
+      name: CHAT_ENTRY_SLOT,
+      id: CHAT_ENTRY_ID,
+      order: CHAT_ENTRY_ORDER,
+      locale: CHAT_NS,
+      inject: (sessionId: string): RollbackTurnEntryInjected => ({
+        port: recoveryApi,
+        rt: recoveryT,
+        openChildSession: openChild,
+      }),
+    }, RollbackTurnEntry),
+  }))
 }

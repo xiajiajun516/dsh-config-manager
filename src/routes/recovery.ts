@@ -5,8 +5,6 @@
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
-import { join } from 'node:path'
-
 import { endpoint, readJsonBody, writeJson } from './kit.ts'
 // t6：「英文界面零中文」——迁移历史 summary 一律由目录键产生；engineMsg 与宿主 makeRouteEnv 的
 // `msg` 同源（t2 起 this.msg = engineMsg），但它是**活翻译器**，不依赖 env 是否注入取词器。
@@ -14,36 +12,72 @@ import { engineMsg } from './messages.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { isValidOperationId } from '../core/journal.ts'
-import { CheckpointEngine, samePointVerdictOf } from '../core/checkpoint.ts'
-import type { CheckpointCaptureInput, CheckpointRewindInput } from '../core/checkpoint.ts'
+import { RollbackPointEngine } from '../core/rollback-point.ts'
+import type { RollbackForkSeam, RollbackRewindInput } from '../core/rollback-point.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { scanSessionHealth } from '../utils/session-health-scan.ts'
 import {
   applySessionRepair,
   listSessionRepairs,
   previewSessionRepair,
-  resolveSessionUnit,
   rollbackSessionRepair,
 } from '../utils/session-repair-service.ts'
 import { applySessionLayoutRepair, planSessionLayoutRepair } from '../utils/session-layout-repair-service.ts'
 import { sessionHealthNextSteps } from '../index.ts'
 
 /**
- * 检查点的机器可读结果 → HTTP 状态码。
+ * 回滚点的机器可读结果 → HTTP 状态码。
  * 界面按 body.code / body.outcome 出文案（**不靠状态码猜原因**）：这里只做粗分类，
  * 让调用方能用 HTTP 语义区分「要用户确认（409）/ 目标不存在（404）/ 存储栈不可用（503）/ 真失败（500）」。
+ *
+ * 完整 code → HTTP 表（t1 冻结，T3/I1 对账用）：
+ *   storage-unavailable                                  → 503
+ *   record-not-found                                     → 404
+ *   invalid-input                                        → 400
+ *   confirmation-required / protected-point / record-incomplete → 409（denied 也是 409）
+ *   mutation-locked                                      → 423
+ *   method-not-allowed                                   → 405
+ *   outcome=partial                                      → 200
+ *   outcome=failed / restore-failed / guard-failed / ledger-write-failed / nothing-to-restore → 500
+ *   其余（ok / deleted / 其它内部分级码出现在 segments[].reasonCode）→ 200
  */
-function checkpointHttpStatus(value: { ok?: boolean; code?: string; outcome?: string }): number {
+function rollbackHttpStatus(value: { ok?: boolean; code?: string; outcome?: string }): number {
   if (value.code === 'storage-unavailable') return 503
   if (value.code === 'record-not-found') return 404
   if (value.code === 'invalid-input') return 400
-  if (value.code === 'confirmation-required' || value.code === 'protected-checkpoint' || value.code === 'record-incomplete') return 409
-  if (value.code === 'invalid-path' || value.code === 'object-hash-mismatch' || value.code === 'object-missing') return 409
+  if (value.code === 'confirmation-required' || value.code === 'protected-point' || value.code === 'record-incomplete') return 409
+  if (value.code === 'mutation-locked') return 423
+  if (value.code === 'method-not-allowed') return 405
   if (value.outcome === 'denied') return 409
   if (value.outcome === 'partial') return 200
   if (value.outcome === 'failed') return 500
   if (value.code === 'restore-failed' || value.code === 'guard-failed' || value.code === 'ledger-write-failed' || value.code === 'nothing-to-restore') return 500
   return 200
+}
+
+/**
+ * 会话 fork seam（S3）：从宿主会话端口取 `forkSession`（DshSessionStoreFacade 里走
+ * `ctx.get('sessions').fork(source, boundary, childId?)`）。
+ *
+ * 结构性窄化读取：端口没这个方法 → undefined，会话段届时结构化 `session-fork-unavailable`
+ * （**绝不静默降级**：调用方能在响应里看见到底有没有真的 fork）。
+ */
+function forkSeamOf(sessions: unknown): RollbackForkSeam | undefined {
+  if (sessions === null || typeof sessions !== 'object') return undefined
+  const candidate = (sessions as { forkSession?: unknown }).forkSession
+  if (typeof candidate !== 'function') return undefined
+  const fork = candidate as (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string } | { error: string }>
+  return async ({ sessionId, boundarySeq }) => {
+    try {
+      const result = await fork.call(sessions, sessionId, boundarySeq)
+      const childId = result !== null && typeof result === 'object' ? (result as { childSessionId?: unknown }).childSessionId : undefined
+      if (typeof childId === 'string' && childId !== '') return { ok: true, childSessionId: childId }
+      const error = result !== null && typeof result === 'object' ? (result as { error?: unknown }).error : undefined
+      return { ok: false, code: 'fork-failed', detail: typeof error === 'string' ? error : 'fork-returned-no-id' }
+    } catch (err) {
+      return { ok: false, code: 'fork-failed', detail: err instanceof Error ? err.message : String(err) }
+    }
+  }
 }
 
 /** 预览回传的指纹（大小 + mtime）；形状不对一律 undefined（应用期就不会做 TOCTOU 判定）。 */
@@ -315,126 +349,81 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
         }
         return
       }
-      // ------------------------------------------------- C-1 Q4：checkpoint 三态同点
-      // 会话游标 + 工作区（显式路径分块）+ 本插件配置三态同点检查点与单命令回滚。
+      // ---------------------------------------- S1–S8：工作区 + 会话回滚点
+      // 回滚点 = 工作区快照 + 会话游标（宿主按回合自动留点）。**没有手动「拍点」表单**，
+      // 因此这里没有 capture 子路径 —— 留点由宿主订阅 session/event 后走引擎。
       // 挂在既有 recovery prefix 内（与「事故恢复」同一件事，且**不新增路由条目**：本族已是
       // prefix 路由，内部按 path 分发 —— 与 T4/T8 的 sessions 子路径同策略）。
-      // 写路径口径：capture / rewind / delete 过 withMutationLock；rewind/delete 另过 SAFE MODE
-      // （它们写工作区 / 会话日志 / 插件配置），capture 不过（它是救援点：SAFE MODE 下也要能用）。
+      // 写路径口径：rewind / delete 过 withMutationLock + SAFE MODE（它们写工作区 / fork 会话）；
+      // 只读路径（列表 / storage / 详情 / 预览）零写入。
       // 响应一律机器可读 code（界面映射字典键），本文件不产出用户可见文案。
-      if (segments[0] === 'checkpoints') {
-        const engine = new CheckpointEngine({
+      if (segments[0] === 'rollback-points') {
+        const forkSeam = forkSeamOf(host.sessions)
+        const engine = new RollbackPointEngine({
           dataDir,
           homeDir: sessionHealth.homeDir,
           log: (line) => host.log.warn(line),
+          ...(forkSeam !== undefined ? { fork: forkSeam } : {}),
         })
         const sub = segments.slice(1)
+        const methodNotAllowed = (): void => { writeJson(res, 405, { error: 'method not allowed', code: 'method-not-allowed' }) }
         const reply = (value: { ok?: boolean; code?: string; outcome?: string }): void => {
-          writeJson(res, checkpointHttpStatus(value), value)
+          writeJson(res, rollbackHttpStatus(value), value)
         }
         if (sub.length === 0) {
-          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          if (req.method !== 'GET') { methodNotAllowed(); return }
           const listed = await engine.list()
           writeJson(res, listed.storage.available ? 200 : 503, listed)
           return
         }
         // 存储栈状态（缺失时给结构化组合指引；**不崩**）
         if (sub.length === 1 && sub[0] === 'storage') {
-          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          if (req.method !== 'GET') { methodNotAllowed(); return }
           const status = await engine.storageStatus()
-          writeJson(res, status.available ? 200 : 503, status)
+          writeJson(res, status.available ? 200 : 503, { ok: status.available, ...status })
           return
         }
-        // 捕获三态同点（chunks = 显式路径分块；unitId 或 sessionLogPath 指定会话）
-        if (sub.length === 1 && sub[0] === 'capture') {
-          if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed' }); return }
-          try {
-            const body = await readJsonBody(req)
-            if (body === undefined) { writeJson(res, 400, { error: 'invalid JSON body' }); return }
-            const chunks = Array.isArray(body['chunks'])
-              ? body['chunks'].filter((item): item is string => typeof item === 'string')
-              : []
-            let sessionLogPath = typeof body['sessionLogPath'] === 'string' ? body['sessionLogPath'] : ''
-            let sessionId = typeof body['sessionId'] === 'string' ? body['sessionId'] : ''
-            const unitId = typeof body['unitId'] === 'string' ? body['unitId'] : ''
-            if (unitId !== '') {
-              // unitId（projectKey/会话目录）→ 会话根内的真实日志文件；解析不出来一律 400（绝不猜）
-              const target = await resolveSessionUnit(join(sessionHealth.homeDir, 'sessions'), unitId)
-              if (target === undefined) {
-                writeJson(res, 400, { ok: false, code: 'invalid-input', detail: 'unitId=' + unitId })
-                return
-              }
-              sessionLogPath = target.file
-              if (sessionId === '') sessionId = target.sessionId
-            }
-            const input: CheckpointCaptureInput = { chunks }
-            if (sessionLogPath !== '') input.sessionLogPath = sessionLogPath
-            if (sessionId !== '') input.sessionId = sessionId
-            if (typeof body['note'] === 'string' && body['note'] !== '') input.note = body['note']
-            if (body['protect'] === true) input.protect = true
-            const result = await runWithMutationLock(
-              host.mutationLock,
-              { op: 'checkpoint-capture' },
-              async () => await engine.capture(input),
-            )
-            if (result.ok) {
-              await tryAppendHistory({
-                kind: 'recovery',
-                result: 'success',
-                sections: [],
-                source: 'recovery',
-                summary: engineMsg('route.recoveryCheckpointCapture'),
-              })
-            }
-            reply(result)
-          } catch (error) {
-            if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=checkpoint-capture reason=' + error.reason)
-              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
-              return
-            }
-            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
-          }
-          return
-        }
-        // 单条详情（只读：含三态摘要与「同点」判定事实）
+        // 单条详情（只读：两态摘要 + 完整记录）
         if (sub.length === 1) {
-          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          if (req.method !== 'GET') { methodNotAllowed(); return }
           const id = sub[0] ?? ''
           const detail = await engine.read(id)
-          if (detail.record === undefined) {
-            writeJson(res, 404, { ok: false, code: 'record-not-found', id, storage: detail.storage })
+          // 存储栈不可用时读不出台账 → 503（绝不把它伪造成「记录不存在」的 404）
+          if (!detail.storage.available) {
+            writeJson(res, 503, { ok: false, code: 'storage-unavailable', id, detail: detail.storage.detail, storage: detail.storage })
             return
           }
-          const payload: Record<string, unknown> = {
-            ok: true,
-            id,
-            record: detail.record,
-            samePoint: samePointVerdictOf(detail.record),
-            storage: detail.storage,
+          if (detail.point === undefined) {
+            writeJson(res, 404, { ok: false, code: 'record-not-found', id })
+            return
           }
+          const payload: Record<string, unknown> = { ok: true, id, point: detail.point, storage: detail.storage }
           if (detail.error !== undefined) payload['error'] = detail.error
           writeJson(res, 200, payload)
           return
         }
-        // 只读预览：零写入（不过确认门、不拍保护点、不写任何字节）
+        // 只读预览：零写入（不过确认门、不留救援点、不写任何字节）
         if (sub.length === 2 && sub[1] === 'preview') {
-          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          if (req.method !== 'GET') { methodNotAllowed(); return }
           reply(await engine.preview(sub[0] ?? ''))
           return
         }
-        // 单命令回滚：fail-closed 确认门（userConfirmed 必须**恰好** true，引擎内再判一次）
+        // 回退：fail-closed 确认门（userConfirmed 必须**恰好** true，引擎内再判一次）。
+        // 准入口径（t22）：**没有**任何 kind 层面的额外门 —— 引擎只拒 protected / incomplete，
+        // 所以 `kind:'guard'` 的救援点 route 级同样可回退（与 preview().canRestore 同口径）；
+        // 「用户不可删 guard」只体现在 delete 分支（引擎回 protected-point）。
         if (sub.length === 2 && sub[1] === 'rewind') {
-          if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          if (req.method !== 'POST') { methodNotAllowed(); return }
           const id = sub[0] ?? ''
           try {
             const body = await readJsonBody(req)
-            if (body === undefined) { writeJson(res, 400, { error: 'invalid JSON body' }); return }
+            if (body === undefined) { writeJson(res, 400, { ok: false, code: 'invalid-input', error: 'invalid JSON body' }); return }
+            const rewindInput: RollbackRewindInput = { id, userConfirmed: body['userConfirmed'] === true }
+            const mode = body['mode']
+            if (mode === 'files+session' || mode === 'files' || mode === 'session') rewindInput.mode = mode
             const requested = Array.isArray(body['segments'])
-              ? body['segments'].filter((item): item is 'workspace' | 'session' | 'config' =>
-                item === 'workspace' || item === 'session' || item === 'config')
+              ? body['segments'].filter((item): item is 'workspace' | 'session' => item === 'workspace' || item === 'session')
               : undefined
-            const rewindInput: CheckpointRewindInput = { id, confirm: body['userConfirmed'] === true }
             if (requested !== undefined) rewindInput.segments = requested
             if (body['allowPartial'] === true) rewindInput.allowPartial = true
             if (body['preRewindGuard'] === 'off' || body['preRewindGuard'] === 'require' || body['preRewindGuard'] === 'warn') {
@@ -442,7 +431,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             }
             const result = await runWithMutationLock(
               host.mutationLock,
-              { op: 'checkpoint-rewind', target: id, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+              { op: 'rollback-rewind', target: id, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
               async () => await engine.rewind(rewindInput),
             )
             await tryAppendHistory({
@@ -450,7 +439,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
               result: result.outcome === 'restored' ? 'success' : result.outcome === 'partial' ? 'skipped' : 'failed',
               sections: [],
               source: 'recovery',
-              summary: engineMsg('route.recoveryCheckpointRollback', { outcome: String(result.outcome) }),
+              summary: engineMsg('route.rollbackPointRewind', { outcome: String(result.outcome) }),
               error: result.outcome === 'denied' || result.outcome === 'failed'
                 ? String(result.code) + (result.detail !== undefined ? ' ' + result.detail : '')
                 : undefined,
@@ -458,7 +447,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             reply(result)
           } catch (error) {
             if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=checkpoint-rewind reason=' + error.reason)
+              host.log.warn('mutation lock blocked: op=rollback-rewind reason=' + error.reason)
               writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
               return
             }
@@ -466,23 +455,32 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           }
           return
         }
-        // 删除一条检查点：保护点 / guard 点一律拒绝（「不删被保护点」，无 force 后门）
+        // 删除一个回滚点：保护点 / guard 点一律拒绝（「不删被保护点」，无 force 后门）
         if (sub.length === 2 && sub[1] === 'delete') {
-          if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed' }); return }
+          if (req.method !== 'POST') { methodNotAllowed(); return }
           const id = sub[0] ?? ''
           try {
             const body = await readJsonBody(req)
-            if (body === undefined) { writeJson(res, 400, { error: 'invalid JSON body' }); return }
+            if (body === undefined) { writeJson(res, 400, { ok: false, code: 'invalid-input', error: 'invalid JSON body' }); return }
             const confirmed = body['userConfirmed'] === true
             const result = await runWithMutationLock(
               host.mutationLock,
-              { op: 'checkpoint-delete', target: id, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+              { op: 'rollback-delete', target: id, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
               async () => (confirmed ? await engine.remove(id) : { ok: false, code: 'confirmation-required' as const, id }),
             )
+            if (result.ok) {
+              await tryAppendHistory({
+                kind: 'recovery',
+                result: 'success',
+                sections: [],
+                source: 'recovery',
+                summary: engineMsg('route.rollbackPointDelete', { id }),
+              })
+            }
             reply(result)
           } catch (error) {
             if (error instanceof EnvironmentLockUnavailableError) {
-              host.log.warn('mutation lock blocked: op=checkpoint-delete reason=' + error.reason)
+              host.log.warn('mutation lock blocked: op=rollback-delete reason=' + error.reason)
               writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
               return
             }

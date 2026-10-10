@@ -62,13 +62,14 @@
 | G-27 | 加密同步快照 >64 MiB 时远端列表恒为空、拉取报「快照损坏」、自动同步恒 `upToDate`，而 push 报成功（issue #59） | ✅ 已修复（读取侧改用自产载荷专用上限 + 读不出来的一律回传可见，见 §1） |
 | G-28 | WebDAV 密码输入框被无关状态更新自动清空（issue #60） | ✅ 已修复（`commit()` 经 `patchSyncPasswords` 把在途输入写回内存；持久化白名单不变，见 §1） |
 | G-29 | 会话在应用内**读不出来**：官方 `session.export` 通道（原样 ZIP，含子会话与附件）此前**从未接入** | ✅ 已修复（只读探测/流式代理路由 + 体检弹窗逐行下载入口；判据按 **500** 而非过时的 501，见 §1） |
-| G-30 | checkpoint（会话 / 工作区 / 配置三态同点检查点）：宿主能力已交付（引擎 + 7 条子路径），**界面已于 2026-10-08 接线** | ✅ **已接线可用**（GUI：环境 → 维护与诊断「检查点」卡 + ⌘K 命令；CLI 入口与「单条详情」子路径仍无消费者，见 §3） |
+| G-30 | 工作区 + 会话回滚（原「checkpoint 三态同点」在本批内被整体改写）：按回合自动留点 + 只覆盖记录在案路径的工作区恢复 + fork 子会话回退 | ✅ **已交付可用**（GUI：环境 → 维护与诊断「工作区与会话回滚」卡 + ⌘K 命令；聊天内「↺ 回退」入口。旧 `checkpoints/` 目录不再读取、CLI 入口仍未做、capture 侧「跳过了什么」**已可见（t18，2026-10-10）**，见 §3） |
 | G-31 | 云端点同步通道（S3 兼容系 ×5 / GitHub Gist）：**已接线可用**（通道枚举 / 路由 / UI / 引擎全路径） | ✅ 已交付（`SYNC_CHANNELS = ['git','webdav','s3','gist']`，声明处 = 零依赖 `src/utils/shared-constants.ts`；s3/oss/cos/minio/kodo/gist 六类端点可用。**未对真实云端点做端到端验证**（本批无真实凭据）；gist 刻意不外置 blob 见 **G-34**） |
 | G-32 | SQLite 只读探测的**写副作用**（WAL 库被就地打开会新建 `<db>-shm`/`<db>-wal`）与 `immutable=1` 在 `-wal` 非空时**静默丢数据** | ✅ 已处置（`sqlite.ts` 三态打开计划 direct / immutable / copy + 1 GiB 上限 + **绝不退回就地打开**；四条残余风险见 §3） |
 | G-33 | 备份不到外壳的 MCP 与技能：patch 只读 home 层、技能不落目录（issue #71） | ✅ 已修复（patch 行按层读取并写回原层、技能经 `ctx.skills` 服务收编、快照与回滚记录层，见 §1） |
 | G-34 | GitHub Gist 通道**刻意不外置 blob**（一次 GET 全量返回 / 单文件超限截断 / 文件数上限三条限制）→ 大分区（会话）不适合走 gist | ⚠️ **刻意设计的能力边界，不是缺陷**（gist 定位 = 配置类分区的低门槛远端）；**界面提示已补（2026-10-08）**：gist 表单常驻 `cloud.gistLargeSectionHint`，且「通道=gist 且勾选 sessions」时出 `mode.gistSessionsWarn` 风险横幅（判定纯函数 `gistSessionsRiskKey`，护栏 `sync-view-v2.test.ts`） |
 | G-35 | 同步通道对**远端 404 的可靠性假设**：blob GC 只按索引条目收集引用 → ① **索引可读但陈旧**（孤儿快照文件在索引外）、② **引用者文件这一读 404 而远端其实仍在**，两种形态都会把**仍在用的 blob** 回收 → **内容不可恢复** | ⚠️ **未修复（已核实残余，非原任务引入）**：t42 已堵住 `delete()` 侧的「索引 404 真缺失」；`upload()` 侧仍待 **t66/t67**（登记时 pending）；根治需通道侧补列举原语（WebDAV PROPFIND / S3 ListObjectsV2），见 §3 |
 | G-37 | 宿主整文件快照把「存在但读不出来」记成 `existed:false`（恢复时删掉用户真实文件）+ 保留清理在「recovery 引用集合读不出来」时按空集合继续删（可能删掉 SAFE MODE 唯一回滚点） | ✅ **已修复**（2026-10-08 UX 审查：`existed:true` + `unreadable:true` + 计划只跳过；引用扫描失败即放弃本轮 prune + `onWarn` 可见，见 §3） |
+| G-38 | 渲染点脱敏登记表（`src/client/common/plan-text-redaction.test.ts`）**覆盖不到「上游已脱敏」型渲染点**：RollbackCard 有 5 处宿主文本在 `src/ui/rollback-view.ts` 里已过 `redact()`，组件内没有 redact 调用 ⇒ 登记不出 redacted≠bare 的对照对 | ⚠️ **已知覆盖形态限制**（不是泄漏、也不是漏点）：强登只会得到 `redacted===bare` 的死断言 / 假绿；现有覆盖 = `src/ui/rollback-view.test.ts` 逐条断言。见 §4.2 |
 | G-36 | **值形状判定的大小写边界**：auth-scheme `bearer` 原为大小写敏感（`bearer` / `BEARER` 明文进包且 refs/skipped 皆空）；厂商前缀 `sk-` / `AKIA` / `ghp_` / `github_pat_` 的大小写变体（`SK-` / `akia` / `GHP_` …）**按决策不剥离** | ⚠️ **部分修复（t72）**：`bearer` 已按 RFC 7235 / 6750 大小写不敏感剥离（含过剥控制）；厂商前缀**刻意保持敏感**、登记为已知边界（见 §3 G-36） |
 
 ---
@@ -476,14 +477,19 @@
 | 为什么有意不修 | 删除会话是**不可回滚**的破坏性动作（DSH 无回收站、快照回滚不覆盖会话字节）。把它做成同步的自动副作用，会在「对端误删 / 对端只是没勾选」时静默毁掉本机数据。当前实现把它降级为**信息**（墓碑在拉取报告里可见），把删除留给用户显式动作。 |
 | 若将来要做 | 需要：① 适配器侧的会话删除能力（宿主 `sessionPersistence` 支持 + 审计）；② 新的计划项种类 + 逐项确认 UI（不得并入自动应用）；③ 与「导入前强制快照」的可回滚语义对齐（会话字节当前不可回滚）。 |
 
-### G-30 checkpoint（会话 / 工作区 / 配置三态同点检查点）：**已接线可用**（2026-10-08）
+### G-30 工作区 + 会话回滚（原「checkpoint 三态同点」在本批内整体改写：T1–T4 + t13）
 
 | 项 | 内容 |
 |---|---|
-| 背景 | C-1 Q4 交付了 checkpoint 引擎（`src/core/checkpoint.ts`：三态捕获 + 内容指纹 + `samePointVerdictOf` 同点判定 + fail-closed 确认门 + 对象仓 / 台账降级）与 recovery prefix 下的 **7 条子路径**：`GET /recovery/checkpoints`、`GET /recovery/checkpoints/storage`、`POST /recovery/checkpoints/capture`、`GET /recovery/checkpoints/<id>`、`GET /recovery/checkpoints/<id>/preview`、`POST /recovery/checkpoints/<id>/rewind`、`POST /recovery/checkpoints/<id>/delete`（挂在既有 prefix 路由内分发，**不新增 `endpoint()` 条目**，因此 76 条路由快照不变）。宿主侧语义完整：预览零写入、未确认回滚 → 409 `denied` 且**零字节写入**、保护点 / guard 点不可删、存储栈不可用 → 503 + 结构化 guidance、SAFE MODE 下回滚/删除 423 而只读列表/预览不受影响。 |
-| **当前状态** | ✅ **已接线可用（2026-10-08）**：环境 → 维护与诊断新增 `src/client/recovery/CheckpointCard.tsx`（紧跟会话体检卡：捕获表单的「关联会话」直接复用会话体检扫出来的 rows），⌘K 新增 `checkpoint.open`（与「事故恢复 / 救援模式」同族、同落点）。卡片覆盖 list / storage / capture / preview / rewind / delete 六条子路径：拍点（分块逐行填 + 「用该会话的 cwd 填充」+ 点名会话 + 可选备注 + 可选保护）、台账列表（三态徽章 / 同点跨度 / 手动点 vs 回滚前保护点）、只读预览（逐段 planned/changed/missing/leftovers + 会话游标 now→target + 同点判定）、逐段勾选回滚（默认只勾可回滚段；三态不全需显式勾「允许部分」）、删除（保护点与 guard 点禁用）。**判定全在 `src/ui/checkpoint-view.ts`**（框架无关、7 条单测），组件只装配。 |
-| 仍未做（如实登记） | ① **CLI 入口**（`dcm checkpoint list/capture/rewind`）本轮未做 —— 用户明确只授权 GUI；② **「单条详情」子路径（`GET /recovery/checkpoints/<id>`）仍无消费者**，故未进客户端端口（预览已带回 `summary` 与同点判定，界面不需要额外一次往返）；③ **工作区分块仍是「手填 + cwd 一键填充」**，没有工作区选择器（引擎只接受显式绝对路径，这是刻意的：分块即回滚边界，不做隐式推断）；④ 界面侧**无真机点击验证**（本会话无浏览器交互）—— 证据是 typecheck + 单测 + 路由/命令守卫，不是「点过了」。 |
-| 验证方式 | 引擎：`src/core/checkpoint.test.ts`（**18** 条：真实磁盘三态捕获、同点/跨度判定、保护点与 guard 点、分叉门、篡改记录、存储降级）；路由接口面：`tests/route/recovery-checkpoints.test.ts`（**5** 条，真 http server：七形态可达 / 409+denied+零写入 / 404/405/400 / 503+guidance / 保护点 / SAFE MODE）；**界面侧（2026-10-08 起有证据）**：`src/ui/checkpoint-view.test.ts`（**7** 条：未知码/未知态回落 unknown、note 与技术细节渲染前脱敏、可回滚与可删除判定、默认只勾可回滚段、会话候选按活跃倒序且 cwd 缺失不猜、分块解析 trim+去重）、`src/client/common/client-route-parity.test.ts`（三条新客户端路径登记为 prefix 路由，宿主路由快照仍 78 条）、`src/ui/commands.test.ts`（命令表 ↔ 壳层 `runCommand` 双向一致）。 |
+| 背景 | 旧实现是 checkpoint「会话 / 工作区 / 插件配置 三态同点」：引擎 `src/core/checkpoint.ts`（三态捕获 + 内容指纹 + `samePointVerdictOf` 同点判定 + fail-closed 确认门 + 对象仓 / 台账降级）+ recovery prefix 下的 7 条 `checkpoints/*` 子路径。产品决策把「同点」与 config 第三态整体取消：留点单位改成**回合**、会话回退改成**不改写原日志的 fork**、工作区恢复只覆盖记录在案的路径。 |
+| **当前状态** | ✅ **已交付可用（2026-10-10）**：引擎 `src/core/rollback-point.ts`（**`src/core/rollback.ts` 是既有的导入失败补偿引擎，与本功能无关，未动**）；宿主订阅 `session/event`，`turn/end` 时按回合留点（边界 = 该回合 `turn/start` 的 seq − 1）；轮询回退（≤5 s）也已实现，但拿不到回合边界 → 该点 `boundarySeq=null`、会话回退结构化 `no-boundary`。GUI：**环境 → 维护与诊断**「工作区与会话回滚」卡（`src/client/recovery/RollbackCard.tsx`：按会话分组时间线 + 只读预览 + 三选一范围 + 二次确认 + 逐段结果）、⌘K 命令 `rollback.open`；**聊天内「↺ 回退」**入口（槽位 `conversation.chat.turnTail`，cell id `config-manager-rollback-entry`）成功后自动打开 fork 出的子会话。 |
+| **NOT VERIFIED（不得读成已验证）** | ① 没有在**真实 DSH 进程**内订阅真实 `session/event` 并调真实 `ctx.sessions.fork` 的端到端取证（证据 = `src/index.ts` 装配源码 + 引擎单测 R-02/R-03/R-12/R-18）；② 回滚卡与聊天入口**没有浏览器点击取证**（本仓 React 无组件测试框架，只有 `src/ui/`、`src/client/chat/` 纯函数单测 + 静态守卫）；③ fork 边界只在 mock / fixture 上取样，未在真实会话日志上抽样。 |
+| t5-F1 / F2 的处置（修复单 t13，2026-10-10 **已完成**） | **F1 已修**：新增单文件上限 `maxFileBytes`（缺省 = 总量预算 `maxBytes`）并**先 `stat` 判大小**，超限记 `too-large` 跳过、**绝不整份读进内存**（旧实现让首个文件绕过上限的 `read > 0` 短路已删）；字节 / 文件数预算耗尽时其后**每一条**都进 `skipped`（`budget-bytes` / `budget-files`），不再 `break` 静默丢弃；`maxSkippedEntries`（缺省 5000）只限**记录条数**，`skippedCount` 仍是真实总数并置 `skippedTruncated`，`excludedDirs` 逐条记录但不计入计数、不使点 degraded。**F2 已补测**：R-21①–⑤（超限的首个文件 / 字节预算 / 文件数截断 / 标记与计数在列表·详情·预览三处如实回传 / 列表上限）。qa 独立复核：`node --test src/core/rollback-point.test.ts` → **25 / 25 pass**、exit 0；源码复核 `src/core/rollback-point.ts:1051,1063-1078` 与文件头 :19-23（旧注释那句模糊表述已重写）。 |
+| 救援点（guard）的留存口径（t7 复核 → t14 定稿） | **不占**自动点的每会话 20 / 全局 50 预算、**不被其淘汰**（`selectPrune`，`src/core/rollback-point.ts:1209-1240`），用户**不可删**（`remove` → `protected-point`，`:1839`）；但有**自己的每会话上限** `ROLLBACK_MAX_GUARDS_PER_SESSION = 20`（`:75`；文件头 S6 段 `:32` 与 `selectPrune` 注释 `:1206` 同步），超出只淘汰**最旧的 guard**、受 `maxGuardsPerSession` 可注入选项约束（`:494`/`:828`）；**可作为回退目标**（t22 把 `canRestore` 与 `canRemove` 解耦：guard 不可删、但正是「回到回退前那一刻」的唯一路径）。**不得**写成「无上限保留」，也不得写成「受保护的点永不淘汰」。 |
+| 台账写入的并发口径（t14，F-1） | 全部写入口（`appendRecord` / `remove` / `rewind` 的救援点）走同一个**模块级串行链** `withLedgerWriteLock`（`src/core/rollback-point.ts:746`，进程内 RMW 原子）；**读路径不进队列**（最多读到稍旧快照，不破坏台账）。跨进程仍归路由层 `runWithMutationLock` / 环境锁 —— **二者不可互替**：env 锁管「谁能写」，串行链管「进程内写者别互相踩」。护栏 R-22（两实例交错 20 轮）。 |
+| 聊天内「↺ 回退」入口的**版本边界**（t20，2026-10-10） | 子会话导航面：0.2.x = `ctx.uiWorkspace.openSession(id)`（shipped ui-chat 自己的 fork 流程同款）；0.1.x 的 `ctx.sessions` 面**没有** `open`（存在才用，绝不包一个必然抛的包装）；无导航面 → 结构化 `unavailable`（显示 childSessionId，**不假装已打开**，与「还没出现在列表里」分开）。槽位**探测后才注册**：只有声明确为 `list` 才注册；0.1.5-rc.2 声明成 `chain`（按 list 注册会抛）⇒ 整条入口 `skip`（`slot-kind-mismatch`），跳过 / 注册异常只丢这一个入口。**不得**写成「聊天内回退入口在任意版本可用」。 |
+| 仍未做（如实登记） | ① **CLI 入口**（`dcm rollback list/preview/rewind`）本轮未做 —— 用户只授权 GUI；② **旧 `<dataDir>/checkpoints/` 目录不再被读取**（新目录名 `rollback-points/`），本插件**也不去删它** —— 升级后旧点不可见，要保留历史请自行备份该目录；③ 聊天入口是**整回合一个**（不是每条用户消息一个）：宿主 `conversation.chat.node` 是 keyed 位且 `replaceRisk='shadows-shipped-ui'`，这条产品可见降级已如实写进 CHANGELOG；④ **capture 侧「跳过了什么」已到用户可见层（t18 已落地，2026-10-10）**：t13 的 `payload.skippedCount` / `.skippedTruncated`、`summary.segments[].skippedCount` / `.truncated`、`preview.workspace.skippedCount` / `.truncated` 经 t18 接进视图 —— `rollback-view.ts` 的段级 / 预览行 `noticeKeys`（`rollback.row.notice.skipped` / `.truncated`、`rollback.preview.notice.*`）+ `rollbackPreviewWarnings()`（带出 `rollback.warn.trackDegraded`，detail = `workspace capture-truncated`），`RollbackCard.tsx` 渲染为 warn 徽章与行内提示；时间线「文件数」只算已收录文件。证据（真机引擎产出的截断点驱动视图层）= `.tmp/probe-t8-skip.ts`，fail=0。 |
+| 验证方式 | 引擎 `src/core/rollback-point.test.ts`（**30** 条：含 t13 的 R-21①–⑤ 捕获边界与 t14 的 R-22 / R-23 / R-23b / R-23c / R-24）；路由 `tests/route/recovery-rollback.test.ts`（**5** 条，真 http server：全子路径可达 + 未确认 409 零写入 + 历史留痕 / 404·405·400 / 503 + guidance / 保护点 409 / SAFE MODE 423）；判定层 `src/ui/rollback-view.test.ts`（**12** 条，含源码级「不得再有 config 第三态」断言）；客户端 `src/client/chat/rollback-entry-view.test.ts`、`src/client/common/client-route-parity.test.ts`（6 条端点双向对账）；全量 `npm test` + `typecheck` + `typecheck:tests` + `build`（bundle 自包含）+ i18n 守卫 + `route-parity`（**79** 条不变）全绿（t5 原始证据；t13/t14 之后引擎单测另跑 30/30）。 |
 | 已知限制 | 见 §4.1（T14-F3 / T14-F4）。 |
 
 ### G-31 云端点同步通道（S3 兼容系 ×5 / GitHub Gist）：**已接线可用**
@@ -589,12 +595,22 @@
 - **`mcp` 分区的同步语义（issue #78，2026-10-09 起）**：`mcp` 是**可选分区**（`syncOptIn='auto'`），不勾就不进同步通道；勾选后手动与自动同步都带。三条已知边界：① 内容里 `command` / `args` / `cwd` 是**机器相关**的 —— 绝对路径或目标机缺 `npx` / `uvx` 运行时，配置照样写入，但服务器在目标机可能起不来（靠导入分析期告警，不是拒收）；② 拉取侧 `mcp` 是 `medium` 风险 → 落**差异确认（review）**，自动同步不静默写入；③ HTTP 型 server 的 `env` / `headers` 会随包走，未经 `includeSecrets` 时经 `SecretScanner` 脱敏（与普通备份同口径）。
 - **离线 CLI `backup` 收不到插件注册表里的技能**：GUI 导出经 `ctx.skills` 收编外壳技能（见 §1 G-33），而 CLI 有「绝不 import `@deepseek-ai/*`」的硬约束（`src/core/backup-plan.ts:6-10`），只能扫 `$DSH_HOME/skills` 目录；真机上该目录可能**根本不存在**，此时 CLI 备份的 `skills` 分区为空，并在报告里如实列为空分区（`分区无内容，未写入 / section empty, skipped: skills`）。这是**有意的能力边界**（不是静默丢失，也不是 G-33 的残留）：要完整的技能备份请在 DSH 健康时用 GUI 导出。
 
-### 4.1 checkpoint 的两条已知限制（T14-F3 / T14-F4）
+### 4.1 工作区 + 会话回滚的两条已知限制（T14-F3 / T14-F4 沿用）
 
 > 它们不是缺陷，而是**被有意保留的设计边界**；登记在这里是为了不让它们只活在验证报告里。
 
-- **T14-F3 — workspace 段的 `restored` 不按 chunk（分块）递减**：`CheckpointSegmentResult.restored` 的语义是「**成功写回的文件条数**」（`src/core/checkpoint.ts` 的 `restoreWorkspace` 逐文件 `restored += 1`），**没有分块级计数**：记录里的某一条分块整段不可用 / 被跳过时，这个数字不会为它单独扣减，`detail` 里也只给 `restored=` / `failed=` / `leftovers=` 三个聚合值与逐条 reasonCode，不按分块标注。因此界面上的 `restored=N` 只能读成「N 个文件写回成功」，**不能**读成「N 个分块都恢复了」；逐条是否失败仍可从 `failed` / `reasonCode` / `leftovers` 核验。
-- **T14-F4 — `capturedAt` 只保证 per-instance 单调**：三态的 `capturedAt` 取自引擎注入的时钟（`CheckpointEngineOptions.now`，缺省 `Date.now`），在**同一个实例内**非回退；它**不是**跨实例 / 跨机全局有序的时间戳（时钟回拨或两台机器时间不一致时不能据此排序检查点）。模块头已写明「**不假装原子**」（DSH 不提供跨态原子性）：`samePointVerdictOf` 只按 `spreadMs ≤ toleranceMs` + 三态可指纹判定 `samePoint`，不承诺三态真的落在同一瞬间。
+- **T14-F3 — workspace 段的 `restored` 不按 chunk（分块）递减**：`RollbackSegmentResult.restored` 的语义是「**成功写回的文件条数**」（`src/core/rollback-point.ts` 的工作区恢复逐文件累加），**没有分块级计数**：记录里的某一条分块整段不可用 / 被跳过时，这个数字不会为它单独扣减，`detail` 里也只给 `restored=` / `failed=` / `leftovers=` 三个聚合值与逐条 reasonCode，不按分块标注。因此界面上的 `restored=N` 只能读成「N 个文件写回成功」，**不能**读成「N 个分块都恢复了」；逐条是否失败仍可从 `failed` / `reasonCode` / `leftovers` 核验。
+- **T14-F4 — `capturedAt` 只保证 per-instance 单调**：两态的 `capturedAt` 取自引擎注入的时钟（`stamp()`），在**同一个实例内**非回退；它**不是**跨实例 / 跨机全局有序的时间戳（时钟回拨或两台机器时间不一致时不能据此排序回滚点）。模块头已写明「**不假装原子**」（DSH 不提供跨态原子性）；`spreadMs` 只是两态 `capturedAt` 的跨度事实 —— 旧版据此下的 `samePointVerdictOf` **同点结论已整体删除**，**不得**再写成「三态落在同一瞬间」。
+
+### 4.2 渲染点脱敏登记表覆盖不到「上游已脱敏」型渲染点（G-38，2026-10-10 captain 裁决）
+
+> 这不是泄漏，也不是漏点；是**登记表的覆盖形态限制**，必须留痕，**不得**写成「已覆盖」。
+
+- `src/client/recovery/RollbackCard.tsx` 有 **5 处宿主文本在 `src/ui/rollback-view.ts` 里就已经过 `redact()`**（脱敏后才成为展示字段）：① 段级逐条事实 `segment.detail`（`redactLines`）② 该点之后新建的路径清单 `leftovers`（同上）③ 备注 `note`（`redact(point.note)`）④ `guidance` / `warnings` 的 `detail`（`rollbackGuidanceRows` → `redact(item.detail)`）⑤ 存储 guidance 的 `detail`（同上）。
+- 组件内**没有** `redact(` 调用 ⇒ 在 `src/client/common/plan-text-redaction.test.ts` 里登记这几行只能得到 `redacted === bare`（同一段代码）：要么被「登记表可用性」用例判死，要么退化成死正则 —— 两者都是该表明确要防的假绿，故**未登记**。
+- **现有覆盖**：`src/ui/rollback-view.test.ts` 的逐条断言（note / `detail` / `guidance.detail` / 路径清单渲染前必过 `redact`）。
+- **将来若要更严**（两条路，都需先动组件面）：(a) 在这 5 个渲染点显式加 `redact(line)`；(b) 扩展登记表支持「上游脱敏」型条目并放宽 `src/ui` 文件的 import 路径断言（现规则只匹配 `../../security/redaction.ts`，`src/ui` 是 `../security/redaction.ts`；实测表内 19 个文件全部是 `src/client/**`，零 `src/ui` 文件）。
+- 已登记的替代覆盖：`rollback-card-error-text`（RollbackCard 的宿主 / 网络错误文本链路 `fail()` → `redactErrorText` → Banner；变异自证 = 去掉 `redact(` 包装后该条目必红）。登记表 36 → **37** 条。
 
 ---
 
@@ -614,6 +630,9 @@
 | `source.platform` 取值是否被严格校验为枚举 | 源码只校验 `typeof === 'string'`（规格 §11 已登记） |
 | `sessions` 分区（`includeSessions: true`）内未知字段的行为 | 结构上不可能承载未知字段，未单独跑一次实测（规格 §11 已登记） |
 | 离线 CLI `backup` 在真机（`$DSH_HOME/skills` 不存在、技能全在插件注册表）上的技能覆盖范围 | CLI 只扫 `$DSH_HOME/skills`（§4 已列该边界）；「注册表技能在 GUI 导出侧确实被收编」有单测与真机导出取证，但 CLI 侧的空分区行为只有源码级推理，**未跑真机 CLI 验收** |
+| 工作区 + 会话回滚的**真机端到端** | 未在真实 DSH 进程内订阅 `session/event` 并调真实 `ctx.sessions.fork`；证据 = `src/index.ts` 装配源码 + 引擎单测（R-02/R-03/R-12/R-18），不是「跑通了」 |
+| 回滚卡与聊天入口的**浏览器点击** | 本仓 React 无组件测试框架；验证止于 `src/ui/rollback-view.ts`、`src/client/chat/rollback-entry-view.ts` 的纯函数单测与静态守卫 |
+| capture 侧跳过清单的**可见性**（**已落地：t18，2026-10-10**） | t13 的三个字段经 `rollback-view.ts` 的 `noticeKeys` + `rollbackPreviewWarnings()` 到了视图层，`RollbackCard.tsx` 渲染 warn 徽章 / 行内提示；实证 = 真机引擎产出的截断点驱动视图（`.tmp/probe-t8-skip.ts`：`skippedCount=1` / `truncated=true` / `noticeKeys` 两条，fail=0）。**不再是空白**。 |
 
 ---
 

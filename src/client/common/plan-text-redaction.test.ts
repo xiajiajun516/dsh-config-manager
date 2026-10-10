@@ -316,6 +316,14 @@ const RENDER_POINTS: RenderPoint[] = [
     bare: /const redactErrorText = \(err: unknown\): string => err instanceof Error \? err\.message : String\(err\)/,
     why: '运行中心错误文本（2 处，同文件其它 3 处已脱敏）',
   },
+  /* ---------------- 「工作区 + 会话回滚」卡（t12：新组件登记） ---------------- */
+  {
+    id: 'rollback-card-error-text',
+    file: 'src/client/recovery/RollbackCard.tsx',
+    redacted: /const redactErrorText = \(err: unknown\): string => redact\(err instanceof Error \? err\.message : String\(err\)\)/,
+    bare: /const redactErrorText = \(err: unknown\): string => err instanceof Error \? err\.message : String\(err\)/,
+    why: '回滚卡（src/client/recovery/RollbackCard.tsx）的宿主/网络错误文本：预览 / 回退 / 删除三条失败路径统一经 fail() → redactErrorText → Banner（列表加载失败经 setError(redactErrorText(err))）。登记前该文件既不参与逐点断言、也不参与「裸 toast 错误文本」全文件扫描（countNakedToast）',
+  },
 ]
 
 /**

@@ -18,7 +18,7 @@
 ```
 src/cli/      离线 CLI（`dcm`）：snapshots/restore/reinstall/verify/backup/import/sessions/web；actions.ts=动作层 · help.ts=文案单一事实源 · web/=救急台
 src/index.ts  host 入口（apply() 装配 + 保留的 7 条路由）· src/routes/ kit.endpoint() 围栏 + 按域组文件（10 组）
-src/core/     引擎（exporter/importer/restore/rollback/run-registry/plugin-cli），与 DSH 解耦（ConfigAdapter/HostContext + 内存 mock）
+src/core/     引擎（exporter/importer/restore/rollback/rollback-point/run-registry/plugin-cli），与 DSH 解耦（ConfigAdapter/HostContext + 内存 mock）
 src/foreign/  外部 agent 配置 → bundle v1（30 来源；会话转码经 IR；凭据值绝不进包）
 src/schema/   类型/Manifest/版本 · src/security/ 安全内核 · src/migrations/ 迁移链
 src/adapters/ 13 适配器（settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/agentInstructions/workspaces/credentialsStatus/pluginFiles/self；includeSessions 时 +sessions）
@@ -214,6 +214,8 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **灾备快照线已收敛下线**：不再自建第二条恢复通道；`BOOT_CRITICAL_RELS`/`profileCriticalRels` 在 `core/boot-paths.ts`（**不得连带删 `boot-safety.ts`**）。
 - **救援模式与 `reconcileBundles` 的硬冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出时逐字节还原）；救援激活期间 `reconcileBundles` 一律停手。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly 会话 cookie，其余 403；读路径只读、写路径各自过 CLI 同源写入门；判定不许重写；**绝不等于「插件 API 无认证」**。
+- **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
+- **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的每会话上限**（`ROLLBACK_MAX_GUARDS_PER_SESSION`，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
 - **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补。

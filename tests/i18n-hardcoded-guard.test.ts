@@ -96,7 +96,7 @@ test('A5 白名单无过期条目 + 计数锚定（4 条 / 132 命中）+ reason
 
 /* ------------------------------------------------------------------ A2 */
 
-test('A2 en 目录值零 CJK（7 本字典 + locale/en.json，取生效作用域内的文件）', () => {
+test('A2 en 目录值零 CJK（8 本字典 + locale/en.json，取生效作用域内的文件）', () => {
   const files = EN_CATALOG_FILES.filter((f) => effectiveSet.has(f));
   const hits = files.flatMap((f) => scanFile(f));
   assert.equal(hits.length, 0, 'en 目录出现 CJK（en 值必须是纯英文）：\n' + hits.map(formatHit).join('\n'));
@@ -248,7 +248,7 @@ test('S10 fail-closed：未闭合字符串/块注释/正则/模板/括号/大括
   assert.equal(s5.hits.length, 1, 'fail-closed：大括号未闭合时 E3 不豁免');
 });
 
-test('S11 合法 zh 形状全部可归属（20 处，逐一声明归属方式）', () => {
+test('S11 合法 zh 形状全部可归属（21 处，逐一声明归属方式）', () => {
   const registered = [
     'src/adapters/messages.ts', 'src/core/messages-core.ts', 'src/foreign/messages.ts',
     'src/market/messages-market.ts', 'src/profiles/messages.ts', 'src/routes/messages.ts',
@@ -260,10 +260,11 @@ test('S11 合法 zh 形状全部可归属（20 处，逐一声明归属方式）
     'src/ui/i18n.ts', 'src/client/locales.ts', 'src/client/history/history-locales.ts',
     'src/client/market/market-locales.ts', 'src/client/recovery/recovery-locales.ts',
     'src/client/sync/sync-locales.ts', 'src/migrations/messages-migrations.ts',
+    'src/client/chat/chat-locales.ts',
   ]; // 通道②：KNOWN_CATALOG_FILES 显式清单
   const all = [...registered, ...base, ...factory, ...knownFiles];
-  assert.equal(all.length, 20, '合法 zh 形状共 20 处');
-  assert.equal(new Set(all).size, 20, '20 处不得重复');
+  assert.equal(all.length, 21, '合法 zh 形状共 21 处');
+  assert.equal(new Set(all).size, 21, '21 处不得重复');
   for (const f of all) {
     const src = readFileSync(join(REPO_ROOT, f), 'utf8');
     assert.equal(isCatalogOwnerFile(f, src), true, f + ' 必须可归属（register* 调用或 KNOWN_CATALOG_FILES）');
