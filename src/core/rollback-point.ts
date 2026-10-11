@@ -388,12 +388,16 @@ export interface RollbackForkInput {
   boundarySeq: number
 }
 export type RollbackForkOutcome =
-  | { ok: true; childSessionId: string }
+  /**
+   * 成功 fork。`warning` 非空 = 子会话**没能挂回原工作区**（宿主侧三档匹配全落空），
+   * 它会出现在侧栏「未分组」—— 回退本身仍然成功，但必须如实告诉用户（绝不假装已归位）。
+   */
+  | { ok: true; childSessionId: string; warning?: string }
   | { ok: false; code: RollbackCode; detail?: string }
 export type RollbackForkSeam = (input: RollbackForkInput) => Promise<RollbackForkOutcome>
 /** 宿主侧的 fork 载体（DshSessionStoreFacade 结构性实现；路由侧只做窄化读取） */
 export interface RollbackForkCarrier {
-  forkSession?: (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string } | { error: string }>
+  forkSession?: (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string; warning?: string } | { error: string }>
 }
 
 /** 预览里「回退会改动的一个文件」的动作。 */
@@ -2296,6 +2300,9 @@ export class RollbackPointEngine {
         segment.status = 'failed'
         return segment
       }
+      // 归位失败（宿主三档都没命中）**不静默**：会话确实回退了，但它会在侧栏落到
+      // 「未分组」——多一条指引如实说明，别让用户以为回退把对话"弄丢了"。
+      const notAttached = typeof outcome.warning === 'string' && outcome.warning !== ''
       return {
         state: 'session',
         status: 'restored',
@@ -2304,13 +2311,19 @@ export class RollbackPointEngine {
           'boundary=' + String(payload.boundarySeq),
           'child=' + outcome.childSessionId,
           'logUnchanged=true',
+          'workspaceAttached=' + (notAttached ? 'false' : 'true'),
         ],
         restored: 1,
         failed: 0,
         leftovers: [],
         leftoversTruncated: false,
         childSessionId: outcome.childSessionId,
-        guidance: [{ code: 'rollback.guidance.sessionForked', detail: outcome.childSessionId }],
+        guidance: notAttached
+          ? [
+            { code: 'rollback.guidance.sessionForked', detail: outcome.childSessionId },
+            { code: 'rollback.guidance.sessionNotAttached', detail: outcome.childSessionId },
+          ]
+          : [{ code: 'rollback.guidance.sessionForked', detail: outcome.childSessionId }],
       }
     } catch (error) {
       const segment = this.emptySegment('session', 'fork-failed', errorDetail(error))

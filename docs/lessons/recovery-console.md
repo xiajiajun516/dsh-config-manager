@@ -111,3 +111,14 @@
 - **回归测试**：`R-05c` —— 回合内写 `a.txt`（改）+ `in-turn.txt`（新建）→ 回退后 `a.txt` 必须回到 `A1`、`in-turn.txt` 必须消失。
   实测段结果：`{"state":"workspace","status":"restored","detail":["restored=1 verified=1 unchanged=1 leftovers=1 removed=1 createdSkipped=0"]}`。
 - **注意**：留点提前到回合开始后，「留点在收尾之后（≈7.8 s）」那条客户端有界重试的理由变了 —— 窗口逻辑保留（它对轮询/缺事件的情形仍然必要），但不再是唯一路径。
+
+## 回退子会话必须挂回原工作区：三档匹配 + 失败不静默（2026-10-12 用户反馈）
+
+- **症状**（用户 2026-10-12 反馈「有时候会把对话放到未分类工作区」）：回退本身成功（子会话已建、客户端已切过去），但新对话有时出现在侧栏**「未分组」**下，且界面**一个字都没说**。
+- **根因一：匹配只有一档**。上一版只认「工作区的 `sessionIds` 里含**原会话**」（= DSH `forkWorkspace` 的第一档）。对照 DSH 官方（`dsh-api-session-controller/lib/index.js` 的 `forkWorkspace`）可见还差一档：源会话 `origin==='subagent'` 时它沿 `sessionQuery.traceSession` 的**祖先**找工作区。
+  离线复核本机（`~/.dsh/storages/workspace.json` + 各会话 header 首帧）：全仓 1320 个会话目录里 52 个 `isSeeded=true`，其中除 2 个 depth=0（DSH 自己的分叉）**全部 depth=1 且 owner=NONE** —— 子代理会话本来就不直接属于工作区；同时存在**原会话自己就不属于任何工作区**的普通会话（如 `session-ea09e0f5` / `session-b93d39b9`，cwd 与既有工作区一致但不在任何 `sessionIds` 里）⇒ 这两种形状下唯一那档必然落空。
+- **根因二：warning 在边界被丢**。宿主 `DshSessionStoreFacade.forkSession` 早已返回 `warning: 'workspace-attach-failed'`，但 `RollbackForkOutcome` / `RollbackForkCarrier` 的类型与两条接线（`src/index.ts` 的引擎端口、`src/routes/recovery.ts` 的 `forkSeamOf`）都只读 `childSessionId` ⇒ 引擎没有指引、界面没有提示。
+- **改法**：`attachChildToParentWorkspace` 三档 —— ① 直接命中 → ② `parentSession` 血缘上溯（环保护 + `ANCESTOR_LOOKUP_MAX_DEPTH`=8）→ ③ **子会话 cwd 与工作区 `path` 一致**。第 ③ 档不是「硬塞」：DSH 的成员判据本身就是 「canonical cwd === workspace.path」，`attachSession` 落盘前会再复核 cwd 与 `stat`，对不上直接抛 ⇒ 只可能挂到合法工作区。任一档抛错**换下一档继续找**（`attachChildTo` 内部 catch），三档都拿不到才回报 warning。
+- **不静默**：warning 一路带到回退结果 → 段落 `guidance` 多一条 `rollback.guidance.sessionNotAttached`（zh/en），聊天弹窗（`chatRewindNotices`，过滤掉已由子会话行表达的 `sessionForked`、按 key+detail 去重）与设置页回滚卡都会如实渲染「会出现在侧栏「未分组」下；回退本身已生效」。
+- **护栏**：`src/index.facade.test.ts` 3 条（cwd 归位 / 第一档抛错后同目录兜底 / 子代理血缘）；`src/core/rollback-point.test.ts` R-12 两组断言（归位成功无多余指引 + `workspaceAttached=true`；带 warning 时回退仍 `restored` 且指引含未归位码 + `workspaceAttached=false`）；`src/client/chat/rollback-entry-view.test.ts` 的 `chatRewindNotices` 用例。
+- **未验证（如实）**：本机没有运行「带该修复的构建」的实例（`~\.dsh\profiles\desktop\node_modules\dsh-config-manager` 是 0.1.71 发布版，`/recovery/rollback-points` 在该实例上 404，即**不含**本插件回滚族）—— 真机端到端「回退后子会话出现在正确工作区」未复验，证据止于单元/引擎/客户端判定三层测试与离线数据复核。

@@ -44,6 +44,7 @@ import {
   chatFileChangeAvailable,
   chatRewindFailed,
   chatRewindFailure,
+  chatRewindNotices,
   chatRewindSummary,
   codeKeyOfError,
   confirmOnSubmit,
@@ -270,6 +271,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
       ? rt(rk(summary.key), { reason: rt(rk(summary.reasonKey)) })
       : rt(rk(summary.key))
   const failure = result === null ? { code: null, detail: null, keys: [] } : chatRewindFailure(result)
+  /** 结果里「与预期不同」的指引（没能挂回工作区等）；成功回退时为**空数组**，不占版面。 */
+  const notices = chatRewindNotices(result)
   const counts = rollbackRewindCounts(result)
   const outcome = result === null ? null : rollbackOutcome(result.outcome)
   // R1：enablement 用「这次提交可行」判据（不含 confirmed）；确认只由 submit() 里
@@ -413,6 +416,18 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                 )}
                 {childState === 'failed' && (
                   <div className={css.warnText}>{t('chat.open.failed', { id: childId ?? '' })}</div>
+                )}
+                {/* ⑥b 结果级 / 段级指引里「与预期不同」的事实（**没能挂回原工作区**等）。
+                    成功回退时为空 ⇒ 一个字都不多说；有则如实说 —— 绝不静默让用户以为
+                    「对话被回退弄丢了」（真机 2026-10-11/12 反馈：子会话落到侧栏「未分组」）。 */}
+                {notices.length > 0 && (
+                  <div className={css.rollbackBox}>
+                    {notices.map((notice) => (
+                      <div key={notice.key + (notice.detail ?? '')} className={css.warnText}>
+                        {rt(rk(notice.key))}{notice.detail !== null ? ' — ' + notice.detail : ''}
+                      </div>
+                    ))}
+                  </div>
                 )}
                 {/* A：原会话的归档结果 —— 成功一句话（列表里只剩这一条），失败如实说并在哪能看到它 */}
                 {archive !== null && archive.ok && (

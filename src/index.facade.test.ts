@@ -357,6 +357,62 @@ test('回退 fork：子会话必须挂回**原会话所属工作区**（否则�
   assert.deepEqual(attached, ['child-1'], '只挂命中 sessionIds 的那个工作区，且方法 receiver 必须是记录本体')
 })
 
+test('回退 fork：原会话自己就不在任何工作区时，按**子会话 cwd** 归到同目录工作区（用户 2026-10-12 反馈）', async () => {
+  const attached: string[] = []
+  const project = { path: 'D:/proj/a', sessionIds: ['someone-else'], async attachSession(this: unknown, id: string) { attached.push(id) } }
+  const otherDir = { path: 'D:/proj/b', sessionIds: [], async attachSession() { throw new Error('不同目录，attachSession 会自己拒绝') } }
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessions: {
+      fork: () => ({ id: 'child-cwd' }),
+      get: (id: string) => (id === 'child-cwd' ? { header: { id, cwd: 'D:/proj/a' } } : undefined),
+    },
+    workspaceRegistry: { list: () => [otherDir, project] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+
+  assert.deepEqual(
+    await facade.forkSession('parent-nowhere', 5),
+    { childSessionId: 'child-cwd' },
+    'cwd 与工作区 path 一致 ⇒ 归位成功，不该再报 warning',
+  )
+  assert.deepEqual(attached, ['child-cwd'], '只对 path 与子会话 cwd 相同的那一条调 attachSession')
+})
+
+test('回退 fork：直接命中的工作区写失败后，仍按同目录兜底归位（一次抛错不等于彻底放弃）', async () => {
+  const attached: string[] = []
+  const broken = { path: 'D:/proj/a', sessionIds: ['parent-1'], async attachSession() { throw new Error('域未就绪') } }
+  const sameDir = { path: 'D:/proj/a', sessionIds: [], async attachSession(this: unknown, id: string) { attached.push(id) } }
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessions: {
+      fork: () => ({ id: 'child-fallback' }),
+      get: (id: string) => (id === 'child-fallback' ? { header: { id, cwd: 'D:/proj/a' } } : undefined),
+    },
+    workspaceRegistry: { list: () => [broken, sameDir] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+
+  assert.deepEqual(await facade.forkSession('parent-1', 9), { childSessionId: 'child-fallback' })
+  assert.deepEqual(attached, ['child-fallback'], '第一档抛错必须换下一档继续找，而不是直接判失败')
+})
+
+test('回退 fork：子代理会话沿 parentSession 上溯祖先的工作区（DSH forkWorkspace 对 subagent 同款）', async () => {
+  const attached: string[] = []
+  const workspace = { path: 'D:/proj/a', sessionIds: ['main-1'], async attachSession(this: unknown, id: string) { attached.push(id) } }
+  const headers: Record<string, unknown> = {
+    'sub-1': { id: 'sub-1', parentSession: 'main-1' },
+    'main-1': { id: 'main-1' },
+    'child-lineage': { id: 'child-lineage', cwd: 'D:/nowhere' },
+  }
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessions: {
+      fork: () => ({ id: 'child-lineage' }),
+      get: (id: string) => (headers[id] === undefined ? undefined : { header: headers[id] }),
+    },
+    workspaceRegistry: { list: () => [workspace] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+
+  assert.deepEqual(await facade.forkSession('sub-1', 4), { childSessionId: 'child-lineage' })
+  assert.deepEqual(attached, ['child-lineage'], '血缘档命中（子会话 cwd 刻意对不上任何工作区，排除第三档）')
+})
+
 test('回退 fork：挂不上工作区**不影响回退本身**（结构化 warning，绝不抛、绝不假装已归位）', async () => {
   const noRegistry = new DshSessionStoreFacade(storeCtx({
     sessions: { fork: () => ({ id: 'child-2' }) },

@@ -222,6 +222,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **回退默认删除「该点未记录」的路径**（用户 2026-10-11 定案 A）：先读前像 → 删 → 任一失败整体回滚；`.git`/`node_modules`/插件数据区/分块外一律**拒删并如实报告**（`createdSkipped`），超上限（5000）整套拒绝，绝不删一半。证据 → `docs/lessons/recovery-console.md`
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。证据 → `docs/lessons/recovery-console.md`
 - **宿主服务的方法抽出来必须 bind 回服务对象**（真机 2026-10-11：`uiWorkspace.openSession` 丢 receiver ⇒ `this.lifetime` 为 undefined ⇒ 回退成功但子会话永远打不开）；三档降级判据不动，只补 receiver。证据 → `docs/lessons/recovery-console.md`。
+- **回退 fork 的子会话必须挂回原工作区（三档：直接命中 → `parentSession` 血缘 → 子会话 cwd 同目录）**；挂不上必须把 `workspace-attach-failed` 一路带到 `rollback.guidance.sessionNotAttached` 如实上屏，绝不静默（→ `docs/lessons/recovery-console.md`）。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
 - **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补。

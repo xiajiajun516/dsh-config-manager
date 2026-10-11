@@ -78,6 +78,7 @@ import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg } from './core/messages.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import { RollbackAutoTracker, RollbackPointEngine, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
+import type { RollbackForkCarrier } from './core/rollback-point.ts'
 import type { MsgFunc } from './core/messages.ts'
 import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, installSpecFor, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
@@ -818,6 +819,14 @@ const SESSION_STORE_PURPOSE_KEY: Record<SessionStorePurpose, string> = {
  */
 const PARENT_RELATIONS_CACHE_TTL_MS = 5_000
 
+/**
+ * `ancestorSessionIds` 的上溯深度上限。
+ *
+ * 取 8：DSH 的子代理树实际深度是个位数（`delegationDepth`），8 层足够覆盖「子代理的子代理」；
+ * 上限 + 环保护一道，保证异常数据（自指 / 环）不会把回退路径卡死。
+ */
+const ANCESTOR_LOOKUP_MAX_DEPTH = 8
+
 export class DshSessionStoreFacade implements SessionStoreFacade {
   private readonly ctx: Context
   /** DSH 缺省会话根（配置改过时只影响快路径命中率，慢路径仍正确） */
@@ -866,7 +875,8 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
       // 无感替换的第二半：把子会话挂回**原会话所属的工作区**。DSH 自己的 fork
       // （SessionCommandController.fork）在 fork 之后就是这一步 `workspace.attachSession(childId)`；
       // 我们走的是底层 SessionStore.fork（为了能指定边界），不补这一步子会话会在侧栏落到「未分组」
-      // （真机 2026-10-11 用户反馈）。挂不上**不影响回退本身**：结构化回报 warning，界面如实说明。
+      // （真机 2026-10-11/12 用户反馈）。三档匹配见 attachChildToParentWorkspace；挂不上**不影响
+      // 回退本身**：结构化回报 warning，界面如实说明（warning 由 fork port 一路带到回退结果）。
       const attached = await this.attachChildToParentWorkspace(sessionId, id)
       return attached ? { childSessionId: id } : { childSessionId: id, warning: 'workspace-attach-failed' }
     } catch (error) {
@@ -875,12 +885,20 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   }
 
   /**
-   * 把 fork 出来的子会话挂回原会话所属工作区（**只读匹配 + 一次官方写**）。
+   * 把 fork 出来的子会话挂回**原会话所属工作区**（只读匹配 + 官方写）。
    *
-   * 判据与 DSH 的 forkWorkspace 同口径：先找 `sessionIds` 里含原会话的那个工作区记录，
-   * 命中就对子会话调 `attachSession(childId)`（它会读子会话 header 的 cwd 校验路径一致再落盘）。
-   * 任何一步拿不到（服务未挂载 / 形状不符 / 写失败）一律返回 false —— **绝不抛**，
-   * 也绝不猜一个工作区硬塞（宁可不归位，也不把会话挂到别人的工作区里）。
+   * 三档判定，每一档都只相信 DSH 自己的成员语义（真正的成员判据是
+   * “子会话 header 的 canonical cwd === 工作区 path”，`attachSession` 落盘前会再复核一次）：
+   *  ① **直接命中**：某工作区的 `sessionIds` 含原会话 —— 与 DSH `forkWorkspace` 第一档同口径；
+   *  ② **血缘**：原会话是子代理会话时，它的**祖先**才在某个工作区里 —— DSH `forkWorkspace`
+   *     对 `origin === 'subagent'` 正是沿 `parentSession` 链上溯（有环保护 + 深度上限）；
+   *  ③ **同目录**：子会话 header 的 cwd 与某工作区的 `path` 一致 —— 这正是 DSH 的成员判据本身，
+   *     且 `attachSession` 会再验一次，所以**不是**「猜一个工作区硬塞」；它救的是
+   *     「原会话自己就不在任何工作区里（旧导入 / CLI 建的会话）」这种情形
+   *     —— 此时若不做第三档，回退出来的子会话必然继续待在「未分组」（真机 2026-10-11/12 用户反馈）。
+   *
+   * 任一档写失败（工作区目录已不存在 / cwd 对不上）**只换下一档继续找**；三档都拿不到才返回
+   * `false` 并让调用方如实回报 `workspace-attach-failed` —— **绝不猜、也绝不假装已归位**。
    */
   private async attachChildToParentWorkspace(parentId: string, childId: string): Promise<boolean> {
     try {
@@ -889,21 +907,107 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
       if (typeof list !== 'function') return false
       const records = list.call(registry)
       if (!Array.isArray(records)) return false
-      for (const raw of records) {
-        if (raw === null || typeof raw !== 'object') continue
-        const record = raw as { sessionIds?: unknown; attachSession?: unknown }
-        const sessionIds = record.sessionIds
-        const attach = record.attachSession
-        if (!Array.isArray(sessionIds) || !sessionIds.includes(parentId)) continue
-        if (typeof attach !== 'function') return false
-        await (attach as (this: unknown, id: string) => Promise<void>).call(record, childId)
-        return true
+      // ① 直接命中（DSH forkWorkspace 的第一档）
+      const direct = this.workspaceRecordWithMember(records, parentId)
+      if (direct !== undefined && await this.attachChildTo(direct, childId)) return true
+      // ② 血缘：子代理会话的祖先所属工作区（DSH forkWorkspace 对 subagent 的同款上溯）
+      for (const ancestorId of this.ancestorSessionIds(parentId)) {
+        const record = this.workspaceRecordWithMember(records, ancestorId)
+        if (record !== undefined && await this.attachChildTo(record, childId)) return true
+      }
+      // ③ 同目录：子会话 cwd 与工作区 path 一致（attachSession 复核不通过就不会写）
+      const cwd = this.liveSessionCwd(childId)
+      if (cwd !== undefined) {
+        for (const raw of records) {
+          if (raw === null || typeof raw !== 'object') continue
+          const record = raw as Record<string, unknown>
+          if (record['path'] !== cwd) continue
+          if (await this.attachChildTo(record, childId)) return true
+        }
       }
       return false
     } catch (error) {
       this.log.warn('rewind: workspace attach failed: ' + (error instanceof Error ? error.message : String(error)))
       return false
     }
+  }
+
+  /** 列举里第一个 `sessionIds` 含该会话的工作区记录（形状不符一律跳过，绝不猜）。 */
+  private workspaceRecordWithMember(records: readonly unknown[], sessionId: string): Record<string, unknown> | undefined {
+    for (const raw of records) {
+      if (raw === null || typeof raw !== 'object') continue
+      const record = raw as Record<string, unknown>
+      const sessionIds = record['sessionIds']
+      if (Array.isArray(sessionIds) && sessionIds.includes(sessionId)) return record
+    }
+    return undefined
+  }
+
+  /**
+   * 对一条工作区记录调官方 `attachSession(childId)`。
+   *
+   * `attach` 必须 `.call(record, ...)` 保留 receiver（实体方法内部用 `this.host` / `this.record`）。
+   * 抛错（cwd 对不上 / 目录不存在 / 域未就绪）只记一条 warn 并返回 false，由调用方换下一档。
+   */
+  private async attachChildTo(record: Record<string, unknown>, childId: string): Promise<boolean> {
+    const attach = record['attachSession']
+    if (typeof attach !== 'function') return false
+    try {
+      await (attach as (this: unknown, id: string) => Promise<void>).call(record, childId)
+      return true
+    } catch (error) {
+      this.log.warn('rewind: workspace attach rejected for ' + childId + ': ' + (error instanceof Error ? error.message : String(error)))
+      return false
+    }
+  }
+
+  /**
+   * 从**活的**会话存储沿 `parentSession` 上溯祖先 id（不含起点；有环保护与深度上限）。
+   *
+   * 读不到会话 / 读不到 header / 形状不符一律停在这一层返回已收集的祖先 —— 这是只读探测，
+   * 宁少不猜（DSH 官方用 `sessionQuery.traceSession`；这里只依赖 `sessions.get(id).header`）。
+   */
+  private ancestorSessionIds(sessionId: string): string[] {
+    const out: string[] = []
+    const seen = new Set<string>([sessionId])
+    let current = sessionId
+    for (let depth = 0; depth < ANCESTOR_LOOKUP_MAX_DEPTH; depth += 1) {
+      const header = this.liveSessionHeader(current)
+      const parent = header?.['parentSession']
+      if (typeof parent !== 'string' || parent === '' || seen.has(parent)) break
+      seen.add(parent)
+      out.push(parent)
+      current = parent
+    }
+    return out
+  }
+
+  /** 子会话 header 的 cwd（只读；读不到返回 undefined，绝不猜路径）。 */
+  private liveSessionCwd(sessionId: string): string | undefined {
+    const cwd = this.liveSessionHeader(sessionId)?.['cwd']
+    return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
+  }
+
+  /**
+   * 活会话 header（`ctx.get('sessions').get(id).header`）。
+   *
+   * 形状不符（服务未挂载 / 会话不活）返回 undefined —— 与 DSH 的 `readSessionHeader` 第一优先
+   * 同源（它也是先看活会话，再看落盘列举）；这里不做落盘回落，避免把「文件系统上的旧 header」
+   * 当成「这次 fork 的孩子」。
+   */
+  private liveSessionHeader(sessionId: string): Record<string, unknown> | undefined {
+    const service = readService<{ get?: (id: string) => unknown }>(this.ctx, 'sessions')
+    const get = service?.get
+    if (typeof get !== 'function') return undefined
+    let session: unknown
+    try {
+      session = get.call(service, sessionId)
+    } catch {
+      return undefined
+    }
+    if (session === null || typeof session !== 'object') return undefined
+    const header = (session as { header?: unknown }).header
+    return header !== null && typeof header === 'object' ? header as Record<string, unknown> : undefined
   }
 
   /**
@@ -4146,9 +4250,7 @@ export function apply(ctx: Context, config?: Config): void {
   // fork 端口用**结构性窄化**读取：`SessionStoreFacade`（src/core/types.ts）不在本任务 scope 内，
   // 不为了这一处调用去改公共接口；端口上确实有 forkSession（DshSessionStoreFacade 实现）才走
   // 真 fork，否则如实结构化 `session-fork-unavailable`（绝不静默降级）。
-  const forkPort = host.sessions as unknown as {
-    forkSession?: (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string } | { error: string }>
-  }
+  const forkPort = host.sessions as unknown as RollbackForkCarrier
   const rollbackEngine = new RollbackPointEngine({
     dataDir,
     homeDir,
@@ -4159,9 +4261,14 @@ export function apply(ctx: Context, config?: Config): void {
         return { ok: false as const, code: 'session-fork-unavailable' as const, detail: 'facade has no forkSession' }
       }
       const result = await forkSession.call(forkPort, sessionId, boundarySeq)
-      return 'childSessionId' in result
-        ? { ok: true as const, childSessionId: result.childSessionId }
-        : { ok: false as const, code: 'fork-failed' as const, detail: result.error }
+      if ('childSessionId' in result) {
+        // warning 一路带到回退结果（引擎落成 rollback.guidance.sessionNotAttached）：
+        // 归位失败**不静默** —— 会话确实回退了，但它会出现在侧栏「未分组」。
+        return result.warning !== undefined
+          ? { ok: true as const, childSessionId: result.childSessionId, warning: result.warning }
+          : { ok: true as const, childSessionId: result.childSessionId }
+      }
+      return { ok: false as const, code: 'fork-failed' as const, detail: result.error }
     },
   })
   const rollbackTracker = new RollbackAutoTracker({ engine: rollbackEngine, log: (line) => host.log.warn(line) })

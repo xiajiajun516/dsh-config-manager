@@ -34,6 +34,7 @@ import {
   chatFileChangeAvailable,
   chatRewindFailed,
   chatRewindFailure,
+  chatRewindNotices,
   chatRewindSummary,
   childOpenHintKey,
   codeKeyOfError,
@@ -1367,4 +1368,30 @@ test('槽位常量：注册点与断言共用同一份（list 位，追加新 id
   assert.equal(CHAT_ENTRY_SLOT, 'conversation.chat.turnTail')
   assert.equal(CHAT_ENTRY_ID, 'config-manager-rollback-entry')
   assert.ok(CHAT_ENTRY_ORDER > 0 && CHAT_ENTRY_ORDER < 20, '插在 shipped 条目（0 / 20）之间')
+})
+
+test('结果指引：只上屏「与预期不同」的事实 —— sessionForked 不重复，段级/结果级去重（真机 2026-10-12）', () => {
+  // 成功回退：只有「已 fork」一条 ⇒ 上屏列表必须为空（子会话行已表达过，别再说一遍）
+  assert.deepEqual(chatRewindNotices({
+    ok: true, outcome: 'restored', code: 'ok',
+    segments: [{ state: 'session', status: 'restored', guidance: [{ code: 'rollback.guidance.sessionForked', detail: 'child-1' }] }],
+  } as never), [])
+
+  // 归位失败：段级给「已 fork + 未归位」，结果级再给一条重复的 ⇒ 去重后只留未归位那条
+  const rows = chatRewindNotices({
+    ok: true, outcome: 'restored', code: 'ok',
+    guidance: [{ code: 'rollback.guidance.sessionNotAttached', detail: 'child-2' }],
+    segments: [{
+      state: 'session', status: 'restored',
+      guidance: [
+        { code: 'rollback.guidance.sessionForked', detail: 'child-2' },
+        { code: 'rollback.guidance.sessionNotAttached', detail: 'child-2' },
+      ],
+    }],
+  } as never)
+  assert.deepEqual(rows, [
+    { key: 'rollback.guidance.sessionNotAttached', detail: 'child-2' },
+  ], '同一事实（同 key + 同 detail）只留一行，且绝不裸渲染其它码')
+
+  assert.deepEqual(chatRewindNotices(null), [], '没有结果就没有指引行（绝不编造）')
 })

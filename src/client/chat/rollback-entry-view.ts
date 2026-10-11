@@ -33,6 +33,7 @@ import {
   ROLLBACK_CODE_UNKNOWN_KEY,
   rollbackChildSession,
   rollbackCodeKey,
+  rollbackGuidanceRows,
   rollbackModeSegments,
   rollbackOutcome,
   rollbackPreviewNote,
@@ -46,6 +47,7 @@ import {
   type RollbackPreviewFileStatus,
   type RollbackPreviewResult,
   type RollbackRewindOptions,
+  type RollbackGuidanceRowView,
   type RollbackRewindResult,
   type RollbackState,
 } from '../../ui/rollback-view.ts'
@@ -273,6 +275,29 @@ export function chatRewindFailure(result: RollbackRewindResult | null): { code: 
   }
   const detail = typeof result.detail === 'string' && result.detail !== '' ? redact(result.detail) : null
   return { code, detail, keys }
+}
+
+/**
+ * 回退结果里**值得单独上屏**的指引行（结果那一屏的「没那么顺」的事实）。
+ *
+ * `sessionForked` 不在此列 —— 它已经由「子会话 id + 打开按钮」那一行表达；这里只留
+ * 「没能挂回原工作区 / 宿主没有 fork 能力 / 工作区已整体回滚」这类**与预期不同**的事实，
+ * 否则成功回退会多出一句废话。段级与结果级都收，按 key+detail 去重（同一事实可能两级都在）。
+ */
+export function chatRewindNotices(result: RollbackRewindResult | null): RollbackGuidanceRowView[] {
+  if (result === null) return []
+  const rows = [
+    ...rollbackGuidanceRows(result.guidance),
+    ...(result.segments ?? []).flatMap((segment) => rollbackGuidanceRows(segment.guidance)),
+  ]
+  const seen = new Set<string>()
+  return rows.filter((row) => {
+    if (row.key === 'rollback.guidance.sessionForked') return false
+    const dedupe = row.key + '|' + (row.detail ?? '')
+    if (seen.has(dedupe)) return false
+    seen.add(dedupe)
+    return true
+  })
 }
 
 /** `nothing-to-restore` 的字典键（对话框与测试共用一份字面量）。 */

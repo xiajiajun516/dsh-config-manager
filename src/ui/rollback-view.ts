@@ -164,7 +164,7 @@ export const ROLLBACK_CODES: readonly string[] = [
  */
 export const ROLLBACK_GUIDANCE_CODES: readonly string[] = [
   'mountStorage', 'fixDataDir', 'readOnlyFallback', 'probeDetail',
-  'workspaceRolledBack', 'forkUnavailable', 'sessionForked',
+  'workspaceRolledBack', 'forkUnavailable', 'sessionForked', 'sessionNotAttached',
 ]
 
 /** 已知告警码后缀（warnings 走独立一族 rollback.warn.*；白名单外回落 rollback.warn.unknown）。 */

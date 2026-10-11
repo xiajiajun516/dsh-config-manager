@@ -698,6 +698,22 @@ test('R-12 会话回退 = 在稳定边界 fork 子会话；原会话日志只读
   const throwing = makeEngine(fx, { fork: async () => { throw new Error('boom') } })
   const thrown = await throwing.rewind({ id, userConfirmed: true, guardPolicy: 'off', mode: 'session' })
   assert.equal(thrown.segments.find((s) => s.state === 'session')?.reasonCode, 'fork-failed')
+
+  // 归位成功：只有「已 fork」一条指引，没有额外噪音（真机 2026-10-11/12）
+  const placedSegment = rewound.segments.find((s) => s.state === 'session')
+  assert.deepEqual((placedSegment?.guidance ?? []).map((g) => g.code), ['rollback.guidance.sessionForked'])
+  assert.ok((placedSegment?.detail ?? []).some((line) => line.includes('workspaceAttached=true')))
+
+  // fork 成功但**没能挂回工作区** → 回退仍算成功，但多一条指引如实说明（绝不静默）
+  const unplaced = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-9', warning: 'workspace-attach-failed' }) })
+  const unplacedResult = await unplaced.rewind({ id, userConfirmed: true, guardPolicy: 'off', mode: 'session' })
+  const unplacedSegment = unplacedResult.segments.find((s) => s.state === 'session')
+  assert.equal(unplacedSegment?.status, 'restored', '归位失败不影响回退本身的成功判定')
+  assert.deepEqual(
+    (unplacedSegment?.guidance ?? []).map((g) => g.code),
+    ['rollback.guidance.sessionForked', 'rollback.guidance.sessionNotAttached'],
+  )
+  assert.ok((unplacedSegment?.detail ?? []).some((line) => line.includes('workspaceAttached=false')))
 })
 
 /* =================================================== R-13 预览零写入 */
