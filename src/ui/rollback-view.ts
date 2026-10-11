@@ -775,6 +775,16 @@ export interface RollbackPreviewRowView {
  * 的文件，留点时被跳过的既有文件同样落在这里，所以不得声称「之后新建」）。
  */
 /**
+ * 文件行的**主标签** = 文件名（Cursor「Confirm Undo」式：一眼看是哪几个文件，而不是一屏绝对路径）。
+ * 完整路径由组件放进 `title`（悬停可见），**信息一个都不丢**。
+ */
+export function rollbackPreviewFileLabel(filePath: string): string {
+  const trimmed = filePath.replace(/[\\/]+$/, '')
+  const at = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  return at < 0 ? trimmed : trimmed.slice(at + 1)
+}
+
+/**
  * 差异无法逐行展示时的字典键（本层**只回键**，文案在字典里）。
  * 未知 / 缺失原因回落 null —— 调用方按「未知原因」出话，绝不回落成「没有差异」（那是另一件事）。
  */

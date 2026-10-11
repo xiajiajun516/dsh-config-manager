@@ -33,7 +33,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 > **回退预览改成「确认撤销」式弹窗，「查看」把单文件差异开进右侧栏**（用户 2026-10-12）：旧弹窗只有一个标题、一列绝对路径和两行行数，
 > 看不出「这次动作会做什么」，文件也点不开 —— 唯一出路是回退完再看。
-> - 弹窗换成 Cursor「Confirm Undo」式底盘：说明行 + 文件行（路径 + `+N −M`）+ **悬停 / 键盘 focus** 才显形的「查看」，
+> - 弹窗换成 Cursor「Confirm Undo」式底盘：说明行 + 文件行（**只显示文件名** + `+N −M`，完整路径进 title 悬停可见）+ **悬停 / 键盘 focus** 才显形的「查看」，
 > 底部仍是「回退 / 取消」两颗按钮；**不引入**无功能的勾选框 —— 我们的回退是整体语义，放一个取消不掉的勾选框只是装饰。
 > - 「查看」→ **DSH 右侧栏**新增本插件自己的标签页类型（kind `cm-rollback-diff`）：只读展示该文件「当前 → 回退后」的逐行对照；
 > 本客户端没有侧栏能力（旧版 / 服务缺失 / 打开抛错）时**如实降级**为弹窗内展示同一份差异，并说明为什么在这里看。
@@ -45,7 +45,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 > **The rewind preview is now a "Confirm Undo"-style dialog whose "View diff" opens the file's diff in the right sidebar** (user request, 2026-10-12):
 > the old dialog was a title plus a column of absolute paths and two line counters — it never said what the action would do, and files could not be opened at all.
-> - The dialog follows the Cursor "Confirm Undo" chassis: a summary line, file rows (path + `+N −M`) with a **hover / keyboard-focus** "View diff", and still exactly two buttons.
+> - The dialog follows the Cursor "Confirm Undo" chassis: a summary line, file rows (**file name only** + `+N −M`, full path in the title) with a **hover / keyboard-focus** "View diff", and still exactly two buttons.
 > No non-functional checkbox was added: our rewind is all-or-nothing, so a checkbox that cannot be unchecked would be decoration. The two-column diff table is now a
 > shared primitive (`common/DiffTable.tsx`) used by both the restore plan and this view, and it **redacts by default**.
 > - "View diff" opens a **right-sidebar tab type of our own** (kind `cm-rollback-diff`) showing the read-only line-by-line "current → after rewind" comparison;

@@ -31,6 +31,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { TranslateNS } from '../client-types.ts'
+import { rollbackPreviewFileLabel } from '../../ui/rollback-view.ts'
 import type {
   RollbackPointPort,
   RollbackPreviewResult,
@@ -373,7 +374,10 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                     <ul className={css.reasonList}>
                       {files.map((file) => (
                         <li key={file.path} className={css.rollbackFileRow}>
-                          <span className={`${css.rollbackFilePath} ${css.mono}`}>{file.path}</span>
+                          {/* 主标签 = **文件名**（Cursor 式；完整路径进 title，悬停仍可看全 —— 信息不丢） */}
+                          <span className={`${css.rollbackFilePath} ${css.mono}`} title={file.path}>
+                            {rollbackPreviewFileLabel(file.path)}
+                          </span>
                           <FileStat
                             added={file.added}
                             removed={file.removed}

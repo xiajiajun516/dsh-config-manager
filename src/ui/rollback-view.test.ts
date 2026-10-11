@@ -54,6 +54,7 @@ import {
   rollbackOutcome,
   rollbackPointRows,
   rollbackPreviewGuidance,
+  rollbackPreviewFileLabel,
   rollbackPreviewNote,
   rollbackPreviewRows,
   rollbackPreviewVerdict,
@@ -633,6 +634,14 @@ test('T18-F1：跳过 / 截断事实在行级与预览级都可见（宿主已�
   assert.equal(rollbackPreviewVerdict(preview).canRestore, true, '有告警不等于禁止回退（绝不因告警禁用恢复）')
   assert.deepEqual(rollbackPreviewWarnings(null), [])
   assert.deepEqual(rollbackPreviewGuidance(null), [])
+})
+
+test('文件行主标签 = 文件名（完整路径由 title 承载，信息不丢）', () => {
+  assert.equal(rollbackPreviewFileLabel('D:\\Projects\\personal\\dsh-settings-tidy\\hello-world.md'), 'hello-world.md')
+  assert.equal(rollbackPreviewFileLabel('/home/u/项目/说明 文档.md'), '说明 文档.md')
+  assert.equal(rollbackPreviewFileLabel('plain.md'), 'plain.md')
+  assert.equal(rollbackPreviewFileLabel('D:\\a\\b\\'), 'b')
+  assert.equal(rollbackPreviewFileLabel(''), '')
 })
 
 test('留存口径（S6）：每会话 20 / 全局 50 由本模块单点声明', () => {
