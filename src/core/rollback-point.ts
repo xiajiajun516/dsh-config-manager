@@ -2234,6 +2234,26 @@ export interface RollbackTrackedEvent {
   seq: number
   type: string
   data?: unknown
+  /**
+   * 事件的写入面（DSH 的顶层 `surfaceOp`；`'append'` = 用户新发的一条消息）。
+   *
+   * 为什么留点器需要它：**排队中的用户消息**（上一回合还在跑时发出的那条）会先落成
+   * `user/message(surfaceOp='append')` / `agent/inbox/spliced`，**再**出现下一个 `turn/start`。
+   * 若边界直接取 `startSeq - 1`，这些「还没被消费的输入」会被切进子会话 ——
+   * 真机表现就是「回退后的对话变成排队发送里的一条消息」（2026-10-11 用户反馈）。
+   */
+  surfaceOp?: string
+}
+
+/**
+ * 「还没被任何回合消费的输入」的判据（与 DSH 的 latestCompletedPrefixBoundary 同口径）：
+ *  · `user/message` 且 `surfaceOp === 'append'`（用户新发的一条）；
+ *  · `agent/inbox/spliced`（排队输入被并入）。
+ * 只在**没有未收尾回合**时才当成待消费输入（回合内的同类事件属于当前回合）。
+ */
+function isPendingInputEvent(event: RollbackTrackedEvent): boolean {
+  if (event.type === 'agent/inbox/spliced') return true
+  return event.type === 'user/message' && event.surfaceOp === 'append'
 }
 
 export interface RollbackTrackerOptions {
@@ -2283,6 +2303,8 @@ export function rollbackTrackedEventOf(sessionId: string, event: unknown): Rollb
   const out: RollbackTrackedEvent = { sessionId, seq, type }
   const data = (event as { data?: unknown }).data
   if (data !== undefined) out.data = data
+  const surfaceOp = (event as { surfaceOp?: unknown }).surfaceOp
+  if (typeof surfaceOp === 'string' && surfaceOp !== '') out.surfaceOp = surfaceOp
   return { ok: true, event: out }
 }
 
@@ -2334,7 +2356,12 @@ export class RollbackAutoTracker {
   private readonly log: ((line: string) => void) | undefined
   private readonly statSessionLog: ((logPath: string) => Promise<{ size: number; mtimeMs: number } | undefined>) | undefined
   private readonly bindings = new Map<string, RollbackSessionBinding>()
-  private readonly open = new Map<string, { turn: number | null; startSeq: number }>()
+  private readonly open = new Map<string, { turn: number | null; startSeq: number; boundarySeq: number | null }>()
+  /**
+   * 每个会话「尚未被回合消费的输入」的首个 seq（排队发送的用户消息 / inbox 拼接）。
+   * 见 {@link RollbackTrackedEvent.surfaceOp} 的说明与 {@link isPendingInputEvent}。
+   */
+  private readonly pendingInput = new Map<string, number>()
   private readonly lastBoundary = new Map<string, number>()
   private readonly seenTurns = new Map<string, Set<string>>()
   private readonly lastStat = new Map<string, { size: number; mtimeMs: number }>()
@@ -2364,6 +2391,7 @@ export class RollbackAutoTracker {
   unregisterSession(sessionId: string): void {
     this.bindings.delete(sessionId)
     this.open.delete(sessionId)
+    this.pendingInput.delete(sessionId)
     this.lastStat.delete(sessionId)
   }
 
@@ -2410,8 +2438,20 @@ export class RollbackAutoTracker {
       this.mechanism = 'event'
       const binding = this.bindings.get(event.sessionId)
       if (binding === undefined) return { captured: false, code: 'invalid-input', detail: 'unknown-session ' + event.sessionId }
+      // 未开回合时出现的「待消费输入」属于**下一个**回合：边界必须落在它之前，
+      // 否则排队发送的那条消息会被切进子会话（真机 = 回退后停在「排队发送」一条消息上）。
+      if (!this.open.has(event.sessionId) && !this.pendingInput.has(event.sessionId) && isPendingInputEvent(event)) {
+        this.pendingInput.set(event.sessionId, event.seq)
+      }
       if (event.type === 'turn/start') {
-        this.open.set(event.sessionId, { turn: turnOfData(event.data), startSeq: event.seq })
+        const inputSeq = this.pendingInput.get(event.sessionId)
+        const from = inputSeq ?? event.seq
+        this.open.set(event.sessionId, {
+          turn: turnOfData(event.data),
+          startSeq: event.seq,
+          boundarySeq: from > 0 ? from - 1 : null,
+        })
+        this.pendingInput.delete(event.sessionId)
         return { captured: false }
       }
       if (event.type !== 'turn/end') return { captured: false }
@@ -2419,7 +2459,7 @@ export class RollbackAutoTracker {
       const open = this.open.get(event.sessionId)
       this.open.delete(event.sessionId)
       const boundarySeq = open !== undefined
-        ? (open.startSeq > 0 ? open.startSeq - 1 : null)
+        ? open.boundarySeq
         : (this.lastBoundary.get(event.sessionId) ?? null)
       if (turn !== null) {
         const seen = this.seenTurns.get(event.sessionId)

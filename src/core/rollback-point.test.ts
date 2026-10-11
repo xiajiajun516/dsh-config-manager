@@ -196,6 +196,37 @@ test('R-01 两态捕获：workspace + session 都有载荷与指纹，且**没�
   assert.equal((await engine.read('rb-nope')).point, undefined)
 })
 
+/* ============================== R-02b 排队发送的输入不得被切进子会话（用户 2026-10-11 反馈） */
+
+test('R-02b 边界跳过「待消费输入」：上一回合结束后排队发的消息属于下一回合，边界落在它之前', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(3_000_000, 10) })
+  const tracker = new RollbackAutoTracker({ engine })
+  tracker.registerSession({
+    sessionId: 's-queue',
+    unitId: 'proj-key/s-queue',
+    logPath: fx.logFile,
+    chunks: [fx.workspaceDir],
+  })
+
+  // 回合 1：turn/start(0) … turn/end(5)
+  await tracker.noteEvent({ sessionId: 's-queue', seq: 0, type: 'turn/start', data: { turn: 1 } })
+  await tracker.noteEvent({ sessionId: 's-queue', seq: 5, type: 'turn/end', data: { turn: 1 } })
+  // 回合 1 还在跑时用户排队发了一条：先落 user/message(append,6) + inbox 拼接(7)，**再**开回合 2
+  assert.equal((await tracker.noteEvent({ sessionId: 's-queue', seq: 6, type: 'user/message', surfaceOp: 'append', data: {} })).captured, false)
+  await tracker.noteEvent({ sessionId: 's-queue', seq: 7, type: 'agent/inbox/spliced', data: {} })
+  await tracker.noteEvent({ sessionId: 's-queue', seq: 8, type: 'turn/start', data: { turn: 2 } })
+  await tracker.noteEvent({ sessionId: 's-queue', seq: 12, type: 'turn/end', data: { turn: 2 } })
+
+  const byTurn = new Map((await engine.list()).points.map((p) => [p.turn, p]))
+  assert.equal(
+    byTurn.get(2)?.boundarySeq,
+    5,
+    '边界必须是待消费输入的前一条（上一回合的 turn/end=5）；取 startSeq-1=7 会把排队那条消息切进子会话',
+  )
+})
+
 /* =================================================== R-02 按回合自动留点 */
 
 test('R-02 按回合自动留点：turn/end 才留点，边界 = turn/start 的 seq − 1，重复事件幂等', async (t) => {

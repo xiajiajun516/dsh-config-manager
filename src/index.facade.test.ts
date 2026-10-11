@@ -338,6 +338,45 @@ function silentLogger(): Logger {
   return createLogger({ level: 'error', sink: () => {} })
 }
 
+test('回退 fork：子会话必须挂回**原会话所属工作区**（否则侧栏落到「未分组」；用户 2026-10-11 反馈）', async () => {
+  const attached: string[] = []
+  const parentWorkspace = {
+    sessionIds: ['parent-1'],
+    async attachSession(this: unknown, id: string) { attached.push(id) },
+  }
+  const otherWorkspace = {
+    sessionIds: ['someone-else'],
+    async attachSession() { throw new Error('不许挂到别人的工作区') },
+  }
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessions: { fork: () => ({ id: 'child-1' }) },
+    workspaceRegistry: { list: () => [otherWorkspace, parentWorkspace] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+
+  assert.deepEqual(await facade.forkSession('parent-1', 7), { childSessionId: 'child-1' })
+  assert.deepEqual(attached, ['child-1'], '只挂命中 sessionIds 的那个工作区，且方法 receiver 必须是记录本体')
+})
+
+test('回退 fork：挂不上工作区**不影响回退本身**（结构化 warning，绝不抛、绝不假装已归位）', async () => {
+  const noRegistry = new DshSessionStoreFacade(storeCtx({
+    sessions: { fork: () => ({ id: 'child-2' }) },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  assert.deepEqual(
+    await noRegistry.forkSession('parent-1', 3),
+    { childSessionId: 'child-2', warning: 'workspace-attach-failed' },
+  )
+
+  const refusing = new DshSessionStoreFacade(storeCtx({
+    sessions: { fork: () => ({ id: 'child-3' }) },
+    workspaceRegistry: { list: () => [{ sessionIds: ['parent-1'], async attachSession() { throw new Error('workspace write failed') } }] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  assert.deepEqual(
+    await refusing.forkSession('parent-1', 3),
+    { childSessionId: 'child-3', warning: 'workspace-attach-failed' },
+    '工作区写失败只降级成 warning：回退（会话已 fork）不能被它判成失败',
+  )
+})
+
 test('F-1 sessionPersistenceShapeOf：按 API 形状探测（open=handle / readFrom|append=legacy）', () => {
   assert.equal(sessionPersistenceShapeOf({ open: () => {}, list: async () => [] }), 'handle')
   assert.equal(sessionPersistenceShapeOf({ readFrom: () => {}, list: async () => [] }), 'legacy')

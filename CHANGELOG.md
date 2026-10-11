@@ -254,6 +254,34 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > the same way (cannot read ≠ absent).
 > - **Guards**: `src/core/backup.test.ts`; `R-host-unreadable` in `tests/core/restore.test.ts`.
 
+> **回退三处真机缺陷**（用户 2026-10-11 截图反馈）：「回退」主按钮变成裸文字（黑字、无边框）、回退后的会话落到「未分组」、回退后的对话变成「排队发送」里的一条消息。
+> - **主按钮丢样式**：设计 token（`--cm-*`）此前只定义在 `.section` 上，而聊天的回退弹窗经 `Dialog.Portal` 渲染进 `body`
+>   —— 自定义属性继承不到那里，主按钮的 `background: var(--cm-accent-fill)` 解析失败 → 无底色、无边框、字色继承。
+>   token 整体提到 `:root`（settings 区与聊天槽位共用同一份值；`css-token-guard`/`css-scale-guard` 两条守卫照旧通过）。
+> - **落到「未分组」**：为指定边界我们走的是底层 `SessionStore.fork`，而 DSH 自己的 `SessionCommandController.fork`
+>   在 fork 之后还有一步 `workspace.attachSession(childId)`。补上这一步：只认 `sessionIds` 含原会话的那个工作区，
+>   拿不到/写失败一律结构化 `warning: workspace-attach-failed`（回退本身仍成功，**绝不假装已归位**，宿主日志留痕）。
+> - **变成「排队发送」一条消息**：上一回合还在跑时用户排队发的那条，会先落成 `user/message(surfaceOp='append')` /
+>   `agent/inbox/spliced`，**再**出现下一个 `turn/start`。边界取 `startSeq-1` 就把这段**尚未被消费的输入**切进了子会话。
+>   现在「未收尾回合期间出现的待消费输入」会把边界压到它之前（与 DSH 自己的 `latestCompletedPrefixBoundary` 同口径）。
+> - 测试：`src/core/rollback-point.test.ts` 的 R-02b（边界 = 上一回合的 turn/end）、`src/index.facade.test.ts` 两条（挂回工作区 / 挂不上只降级成 warning）。
+
+> **Three real-machine rewind defects** (reported 2026-10-11 with screenshots): the primary "Rewind" button rendered as bare text
+> (black, borderless), the rewound session fell into "Ungrouped", and the rewound conversation turned into an entry in the
+> "queued to send" strip.
+> - **Unstyled primary button**: design tokens (`--cm-*`) were declared only on `.section`, but the chat rewind dialog renders
+>   through `Dialog.Portal` into `body`, where custom properties do not inherit — `background: var(--cm-accent-fill)` failed to
+>   resolve (no fill, no border, inherited text colour). Tokens now live on `:root`, shared by the settings surface and the chat slot.
+> - **"Ungrouped"**: we fork through the low-level `SessionStore.fork` to pin an exact boundary, while DSH's own
+>   `SessionCommandController.fork` performs one more step, `workspace.attachSession(childId)`. That step is now replicated:
+>   only the workspace whose `sessionIds` contain the original session is used, and any failure degrades to a structured
+>   `warning: workspace-attach-failed` (the rewind itself still succeeds — never pretending the session was re-filed).
+> - **"Queued to send"**: a message the user queued while the previous turn was still running is logged first as
+>   `user/message(surfaceOp='append')` / `agent/inbox/spliced` and only then does the next `turn/start` appear; a
+>   `startSeq-1` boundary therefore cut that **unconsumed input** into the child session. Pending input seen outside any open
+>   turn now pushes the boundary before it, matching DSH's own `latestCompletedPrefixBoundary`.
+> - Tests: R-02b in `src/core/rollback-point.test.ts` and two cases in `src/index.facade.test.ts`.
+
 > **保留清理遇「引用集合读不出来」不再按空集合继续删**：prune 的 recovery 豁免此前是
 > `.catch(() => new Set())` —— journal 扫描一次瞬时失败（EACCES / IO 错）就会被当成「无人引用」，
 > 可能删掉 SAFE MODE 恢复唯一的回滚点。现在**读不到就放弃本轮清理**（宁可少删），并新增

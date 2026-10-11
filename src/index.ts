@@ -855,7 +855,7 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
    * 契约：**任何异常与任何形状不符都收成 `{ error }`**，调用方必须如实结构化降级
    * （`session-fork-unavailable` / `fork-failed`），绝不静默假装成功。
    */
-  async forkSession(sessionId: string, boundarySeq: number): Promise<{ childSessionId: string } | { error: string }> {
+  async forkSession(sessionId: string, boundarySeq: number): Promise<{ childSessionId: string; warning?: string } | { error: string }> {
     try {
       const service = readService<{ fork?: (source: string, boundary?: number, childSessionId?: string) => unknown }>(this.ctx, 'sessions')
       const fork = service?.fork
@@ -863,9 +863,46 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
       const child = fork.call(service, sessionId, boundarySeq)
       const id = child !== null && typeof child === 'object' ? (child as { id?: unknown }).id : undefined
       if (typeof id !== 'string' || id === '') return { error: 'fork-returned-no-id' }
-      return { childSessionId: id }
+      // 无感替换的第二半：把子会话挂回**原会话所属的工作区**。DSH 自己的 fork
+      // （SessionCommandController.fork）在 fork 之后就是这一步 `workspace.attachSession(childId)`；
+      // 我们走的是底层 SessionStore.fork（为了能指定边界），不补这一步子会话会在侧栏落到「未分组」
+      // （真机 2026-10-11 用户反馈）。挂不上**不影响回退本身**：结构化回报 warning，界面如实说明。
+      const attached = await this.attachChildToParentWorkspace(sessionId, id)
+      return attached ? { childSessionId: id } : { childSessionId: id, warning: 'workspace-attach-failed' }
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
+   * 把 fork 出来的子会话挂回原会话所属工作区（**只读匹配 + 一次官方写**）。
+   *
+   * 判据与 DSH 的 forkWorkspace 同口径：先找 `sessionIds` 里含原会话的那个工作区记录，
+   * 命中就对子会话调 `attachSession(childId)`（它会读子会话 header 的 cwd 校验路径一致再落盘）。
+   * 任何一步拿不到（服务未挂载 / 形状不符 / 写失败）一律返回 false —— **绝不抛**，
+   * 也绝不猜一个工作区硬塞（宁可不归位，也不把会话挂到别人的工作区里）。
+   */
+  private async attachChildToParentWorkspace(parentId: string, childId: string): Promise<boolean> {
+    try {
+      const registry = readService<{ list?: () => unknown }>(this.ctx, 'workspaceRegistry')
+      const list = registry?.list
+      if (typeof list !== 'function') return false
+      const records = list.call(registry)
+      if (!Array.isArray(records)) return false
+      for (const raw of records) {
+        if (raw === null || typeof raw !== 'object') continue
+        const record = raw as { sessionIds?: unknown; attachSession?: unknown }
+        const sessionIds = record.sessionIds
+        const attach = record.attachSession
+        if (!Array.isArray(sessionIds) || !sessionIds.includes(parentId)) continue
+        if (typeof attach !== 'function') return false
+        await (attach as (this: unknown, id: string) => Promise<void>).call(record, childId)
+        return true
+      }
+      return false
+    } catch (error) {
+      this.log.warn('rewind: workspace attach failed: ' + (error instanceof Error ? error.message : String(error)))
+      return false
     }
   }
 

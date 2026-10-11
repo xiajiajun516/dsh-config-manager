@@ -122,6 +122,7 @@ npm run bundle                   # 仅重建 client bundle
 
 ## 🎨 UI / DESIGN SYSTEM（最高优先级）
 > **`DESIGN.md` 是 UI/样式决策唯一权威**；涉及 UI/Layout/CSS/颜色/字体/间距/图标/动效/响应式前必读。
+- **设计 token 必须定义在 `:root`**（不是 `.section`）：聊天槽位的弹窗走 `Dialog.Portal` 渲染进 `body`，作用域内的 `--cm-*` 继承不到 ⇒ 主按钮变裸文字（真机 2026-10-11）→ `docs/lessons/recovery-console.md`。
 - **颜色三层单向依赖**：组件只写 `--cm-*`，`--dsw-*` 只允许出现在 `--cm-*` 定义行；禁止 hardcode；tint 用 `color-mix(in srgb, var(--cm-*) <pct>%, transparent)`（`css-token-guard.test.ts`）。
 - **样式只能进 `src/client/config-manager.module.css`**：禁止内联 `<style>`/第三方 css；类名用 CSS Modules（`css.xxx`）；**scale 有源级守卫**（字号/间距/圆角/行高/z-index，`css-scale-guard.test.ts`），新档位先改 DESIGN.md §3–§5。
 - **复用优先**：`common/ui.tsx` 原语 + `ErrorBanner/ProgressBar/ReportView` 等；已有组件能解决就禁止重建，新页面先搜库。

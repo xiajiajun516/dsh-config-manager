@@ -40,13 +40,19 @@
      通知层必须留在插件自己的层叠上下文内（宿主 overlay z-index 1000），
      故用绝对定位贴合本根节点，而非 Portal 到 body。 */
   position: relative;
-  /* 动效令牌（§15 Motion）：时长/缓动只在这里定义一次，各处引用变量 ——
-     此前 120/160/180ms 在文件里各写一遍，改一处就会漂移。 */
-  --cm-motion-fast: 120ms;
-  --cm-motion-base: 180ms;
-  --cm-motion-slow: 300ms;
-  --cm-motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --cm-motion-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  /* 动效令牌已提到 :root（见下方 §1 Tokens）：聊天槽位的弹窗走 Portal 到 body，
+     只有 :root 上的自定义属性才能继承到那里 —— 留在 .section 上会让聊天里的按钮丢样式。 */
+}
+/* ================================================================
+ * §1a 设计 token 的**宿主作用域**（:root）
+
+ * 为什么不在 .section 上：聊天的回退弹窗经 Dialog.Portal 渲染进 body，
+ * 自定义属性只在 .section 内可见 ⇒ 弹窗里的主按钮（background: var(--cm-accent-fill)、
+ * color: var(--dsw-alias-label-primary-foreground)）解析失败，真机表现为
+ * 「文字是黑的、没有边框」（用户 2026-10-11 截图）。放 :root 后 settings 区与聊天槽位共用同一份值。
+ * 值全部由 --dsw-* 派生；组件规则只消费 --cm-*（css-token-guard.test.ts / css-scale-guard.test.ts 钉住）。
+ * ================================================================ */
+:root {
   /* 磁盘占用卡的固定高度：
      取「标题 + 统计行 + 定位行 + 分区表 + 清理操作区」的高度。插件画布 564×720。
      **2026-10-03 由 300px 提到 420px**：真机反馈「列表高度太少，要滑很久」——
