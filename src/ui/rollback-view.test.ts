@@ -471,10 +471,11 @@ test('回退结果：结论徽章 / 段状态 / 计数 / 未执行段 / fork 子
   assert.equal(rows.length, 2)
   assert.equal(rows[0]?.statusKey, 'rollback.segment.restored')
   assert.equal(rows[0]?.badgeKind, 'ok')
-  assert.equal(rows[0]?.leftoversCount, 2, '该点未记录的内容只报告不删（引擎 scanLeftovers 语义）')
+  assert.equal(rows[0]?.leftoversCount, 2, '该点未记录的内容计数（引擎 scanLeftovers 语义）')
+  assert.equal(rows[0]?.removedCount, 0, '没开 removeCreated / 宿主没回 removed 时一律 0（不无中生有）')
   assert.deepEqual(rows[0]?.leftovers, ['a.txt', 'b.txt'])
   assert.equal(rows[1]?.childSessionId, 'child-9')
-  assert.deepEqual(rollbackRewindCounts(restored), { restored: 4, failed: 0, leftovers: 2 })
+  assert.deepEqual(rollbackRewindCounts(restored), { restored: 4, failed: 0, leftovers: 2, removed: 0 })
   assert.deepEqual(rollbackChildSession(restored), { key: 'rollback.rewind.result.child', id: 'child-9' })
   assert.deepEqual(rollbackSkippedSegments(restored), [])
 

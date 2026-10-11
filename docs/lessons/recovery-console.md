@@ -63,20 +63,32 @@
 - **护栏**：`src/client/chat/rollback-entry-view.test.ts` 两条真机形状用例（方法体真的读 `this.lifetime` / `this.manager`，旧夹具是纯字面量方法体所以抓不到）；变异校验：只撤 `.bind(record)`，前者立刻红（66 pass / 1 fail），加回 67/67。
 - **同域教训（构建口径，排查顺序相关）**：「入口看不到」要先核对 `lib/` 产物与当前分支是否同源 —— 本仓实测过一份从**另一条分支树**构建的 `lib/`（`lib/client.js` 里连 `conversation.chat.node` 都没有），任何 `link:` 到本仓库的实例都因此看不到回退入口，而源码与测试全绿。核对一行：`node -e "const s=require('fs').readFileSync('lib/client.js','utf8');console.log(s.split('conversation.chat.node').length-1)"`（0 = 产物不含入口）。
 
+## 会话日志「就地截断」在运行中的 DSH 里不可能生效（2026-10-11 定案）
 
-## 会话日志「就地截断」在运行中的 DSH 里不可能生效�?026-10-11 定案�?
-- **用户目标**：不�?fork，直接改当前这条对话（真·就地截断）�?- **做到了什�?*：字节级截断**跑通了，并�?DSH 自己�?codec 验过**�?  - 实现（当时落�?`src/utils/session-log-repair.ts`；方案定案后按「不留未接线的死代码」撤下，补丁停在 `.tmp/e2e/truncate-inplace.patch`）：
-    `planSessionLogTruncate(bytes, boundarySeq)` 保留 `seq <= boundarySeq` 的前缀�?*未触及帧逐字节复�?*；packed 跨度跨边�?/ 保留前缀自身不干净 / 保留行引用了被丢弃的 seq �?一�?refuse），
-    `truncateSessionLogFile()` 走修复链同一条安全序列（临时文件 + fsync �?时间戳备�?�?原子换入 �?写后 `sessionLogSelfCheck` �?不过就用备份还原）�?  - 真机数据（隔�?QA �?`.qa/home` �?25283 B �?v4 日志）：截到 `seq<=4` �?`keptRows=5 / droppedRows=16`�?5283 B �?569 B�?    官方 catalog 复验：截断前 `{verified:true,events:21,strong:true,equivalentToReadPath:true}`，截断后 `{verified:true,events:5,strong:true,equivalentToReadPath:true}`
-    �?**文件是合法的：DSH 的现役读盘路径此刻就能直接读�?*�?- **做不到什�?*�?*运行中的宿主不会重读�?*（同一实例，三步实测）�?  1. 打开该会�?�?侧栏切到「新会话」离开 �?外部把该会话日志截到 1 行（备份齐全）→ **重新打开：界面仍是老内�?*�?  2. 重复一次，这次**整页刷新 F5**�?*仍是老内�?*（客户端缓存连同 JS 全清，说明老内容是从宿主喂回来的）�?  3. 实验后日志已逐字节还原（25283 B），备份已清理�?- **根因（源码级，三处）**：① `dsh-session` �?SessionStore 只有 `create/fork/prepare/enter/detachEntered/announce/emitDisposed/flush/liveEntryFor/get/list/_forkBoundary` —�?**没有 truncate / removeEvents / drop**�?  �?`dsh-api-session-controller` �?dispose/detach 只挂在宿主持有的会话工厂上，**不对插件开�?*�?  �?`dsh-session-persistence-jsonl` 对活动会话持有独占写租约（`SessionWriteLease`：win32 句柄�?/ POSIX flock�? 累积 cursor �?绕过租约写文件，写方仍会按自己的 cursor 继续追加�?  对照插件（dsh-turn-rewind）README 亦自述："DSH Session logs are append-only, so "restart" creates a new Session instead of truncating the original."
-- **定案（A：无感替换）**：回退 = 官方 fork + 自动切到新会�?+ **把原会话收进「已归档�?*（官�?`workspaces.archiveSession`�? 标题�?fork 的日志前缀继承�?  归档失败**三态如�?*回报（无归档入口 / 原会话仍有进行中的工�?/ 其它失败）；顺序固定「先导航、后归档」（原会话仍挂当前视图时 DSH �?`WorkspaceActiveSessionError`，代码里有界重试一次）�?- **复核脚本（不依赖插件�?*：`node .tmp/e2e/probe-log.ts <日志>` 打印多帧结构与每帧行�?首尾 seq；`node .tmp/e2e/exp-inplace.ts <日志> <boundarySeq> [副本]` 截断后再跑官�?codec 复验
-  （锚�?= 全局安装�?`@deepseek-ai/dsh/package.json`）。两份都会调 `src/utils/zstd-frame.ts` �?`session-verify.ts` 的真实实现�?
-## 回退三处真机缺陷�?026-10-11 用户截图：裸文字按钮 / 落到未分�?/ 变成排队发送一条）
+- **用户目标**：不要 fork，直接改当前这条对话（真·就地截断）。
+- **做到了什么**：字节级截断**跑通了，并用 DSH 自己的 codec 验过**（实现当时落在 `src/utils/session-log-repair.ts`；定案后按「不留未接线的死代码」撤下，补丁停在 `.tmp/e2e/truncate-inplace.patch`）：
+  `planSessionLogTruncate(bytes, boundarySeq)` 保留 `seq <= boundarySeq` 的前缀（**未触及帧逐字节复用**；packed 跨度跨边界 / 前缀不干净 / 保留行引用被丢弃 seq ⇒ refuse），
+  `truncateSessionLogFile()` 走修复链同一条安全序列（临时文件 + fsync → 时间戳备份 → 原子换入 → 写后 `sessionLogSelfCheck` → 失败用备份还原）。
+  真机数据（隔离 QA 档 25283 B 的 v4 日志）：截到 `seq<=4` ⇒ `keptRows=5 / droppedRows=16`、25283 B → 569 B；官方 catalog 复验前后都 `{verified:true,strong:true,equivalentToReadPath:true}` ⇒ **文件合法、DSH 现役读盘路径能读它**。
+- **做不到什么**：**运行中的宿主不会重读它**（同一实例三步实测）：① 打开该会话 → 侧栏切「新会话」离开 → 外部把日志截到 1 行（备份齐全）→ 重新打开：**界面仍是老内容**；
+  ② 重复一次并**整页刷新 F5**：**仍是老内容**（客户端缓存连同 JS 全清 ⇒ 老内容是从宿主喂回来的）；③ 实验后日志已逐字节还原。
+- **根因（源码级）**：① `dsh-session` 的 SessionStore 只有 `create/fork/prepare/enter/detachEntered/announce/emitDisposed/flush/liveEntryFor/get/list/_forkBoundary`，**没有 truncate/removeEvents/drop**；
+  ② `dsh-api-session-controller` 的 dispose/detach 只挂在宿主持有的会话工厂上，**不对插件开放**；③ `dsh-session-persistence-jsonl` 对活动会话持有独占写租约 + 累积 cursor。
+  对照插件（dsh-turn-rewind）README 亦自述 "DSH Session logs are append-only…"。
+- **定案（无感替换）**：回退 = 官方 fork + 自动切到新会话 + **原会话收进「已归档」**（官方 `workspaces.archiveSession`）+ 标题随日志前缀继承；归档失败**三态如实**回报。
 
-- **�?弹窗里的主按钮变成裸文字（黑字、无边框�?*：`.section` 上定义的设计 token（`--cm-*`）在聊天槽位不可�?—�?  回退弹窗�?`Dialog.Portal` 渲染�?`body`，自定义属性只在声明元素及其子树继�?�?`background: var(--cm-accent-fill)`
-  解析失败（无底色），`color: var(--dsw-alias-label-primary-foreground)` 也拿不到 �?字色继承成黑色；同排�?ghost 按钮边框�?  `--dsw-alias-border-l2`（DSH 根上就有）所以照常显�?—�?「一个有一个没有」正是作用域问题的指纹�?  **改法**：token 整体搬到 `:root`（`css-token-guard`/`css-scale-guard` 不变�?1 条守卫照旧全绿）�?- **�?回退后的会话落到「未分组�?*：DSH 自己�?fork（宿�?`SessionCommandController.fork`）在拿到 childId 之后还有一�?  `workspace.attachSession(childId)`（源码位置：`dsh-api-session-controller/lib/index.js` �?34971，失败抛
-  `session/workspace-attach-failed`）；工作区记录来�?`ctx.workspaceRegistry.list()`，其 `sessionIds` �?*按会话路径过�?*的�?  我们为了钉住边界走的是底�?`SessionStore.fork`，没有这一�?�?侧栏落到「未分组」�?  **改法**：`DshSessionStoreFacade.forkSession` 里补 `attachChildToParentWorkspace`（只�?`sessionIds` 含原会话的那个记录，
-  方法必须 `.call(record, childId)` �?receiver；拿不到/写失败只降级�?`warning: workspace-attach-failed`）�?- **�?回退后的对话变成「排队发送」里的一条消�?*：用户在上一回合还在跑时排队发送的那条，日志顺序是
-  `�?turn/end �?user/message(surfaceOp='append') �?agent/inbox/spliced �?turn/start …`；留点边界取 `startSeq - 1` 时，
-  这条**还没被任何回合消费的输入**落在边界之内，于是被切进子会话，DSH 把它渲染成「排队发送」里的一条�?  DSH 自己�?`latestCompletedPrefixBoundary`（`dsh-api-session-controller/lib/index.js` �?27347）对同一种情形就�?  「遇�?`turn/start`/`user/message(append)`/`agent/inbox/spliced` 就停」⇒ 边界压在上一回合�?`turn/end`�?  **改法**：留点器记录「未收尾回合期间出现的待消费输入」的首个 seq，`turn/start` 时用它当边界来源�?  `RollbackTrackedEvent` 因此多带一�?`surfaceOp`（窄化时透传）。测�?R-02b�?- **④（未修，留待决策）「工作区的文件没有被成功回退�?*：现�?S4 口径**绝不删除**回退点之后新建的文件（只�?leftovers 报告），
-  且每个点�?*工作区�?= 该回合结束时**的状�?—�?用户点「回到这条消息之前」时，回合内新建�?`hello-world*.md` 既不�?  记录里（是新建）也不会被�?�?预览如实说「工作区与该回退点一致」。要让文件也退回去，只有两条路�?  (a) 删除「回退点之后新建」的路径�?*破坏�?*，需要显式确认）�?b) 把回退用的工作区基线改成「回合开始前」（= 上一个点的状态）�?  但它仍然不删新建文件 �?只能�?(a) 才符合用户预期�?
+## 回退四类真机缺陷与修法（2026-10-11 用户截图反馈）
+
+- **① 弹窗主按钮变裸文字（黑字、无边框）**：设计 token `--cm-*` 只定义在 `.section` 上，而回退弹窗走 `Dialog.Portal` 渲染进 `body` —— 自定义属性继承不到 ⇒
+  `background: var(--cm-accent-fill)` 解析失败（无底色）、`color: var(--dsw-alias-label-primary-foreground)` 也拿不到（字色继承成黑）；同排 ghost 按钮边框走 DSH 根上的
+  `--dsw-alias-border-l2` 所以照常显示 —— 「一个有框一个没有」正是作用域指纹。**改法**：token 整体搬到 `:root`（`css-token-guard`/`css-scale-guard` 11 条守卫照旧全绿）。
+- **② 回退后的会话落到「未分组」**：DSH 自己的 fork（宿主 `SessionCommandController.fork`，`dsh-api-session-controller/lib/index.js`≈34971）在拿到 childId 之后还有一步
+  `workspace.attachSession(childId)`；我们为钉边界走的是底层 `SessionStore.fork`，缺这一步。**改法**：`DshSessionStoreFacade.forkSession` 补 `attachChildToParentWorkspace`
+  （只认 `sessionIds` 含原会话的记录，方法 `.call(record, childId)` 保 receiver；拿不到/写失败降级成 `warning: workspace-attach-failed`）。
+- **③ 回退后的对话变成「排队发送」一条消息**：用户在上回合还在跑时排队发的消息，日志顺序是 `… turn/end → user/message(surfaceOp='append') → agent/inbox/spliced → turn/start …`；
+  边界取 `startSeq-1` 就把这段**尚未被消费的输入**切进子会话。**改法**：留点器记录「未收尾回合期间出现的待消费输入」的首个 seq，用它当边界来源
+  （与 DSH 自己的 `latestCompletedPrefixBoundary` 同口径）；`RollbackTrackedEvent` 因此多带 `surfaceOp`。测试 R-02b。
+- **④ 「工作区的文件没有被成功回退」→ 定案 A 并已实现（`removeCreated`，回退路由默认开启）**：回退时先算**全量**「该点未记录」清单（与 `scanLeftovers` 同一套 walk 口径），
+  顺序刻死「记录在案的路径先写并复核通过 → 才删新建的」，每条删除先读前像、任一失败整体回滚；超过 `ROLLBACK_MAX_CREATED_REMOVALS`（5000）整套拒绝，
+  **绝不删一半**。拒删判据（如实进 `createdSkipped`）：分块外 / 插件数据区 / 路径含 `.git`、`node_modules` / 非绝对路径 / 单文件超 `maxFileBytes`。
+  **注意**：这是**破坏性**动作、由用户显式定案；渲染成「不会被删除」的老文案已同步改成「回退会删除它们」。测试 R-05b（真删 + `.git` 拒删）、R-05（不给 `removeCreated` 时仍只报告不删）。

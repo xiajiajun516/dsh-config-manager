@@ -91,6 +91,12 @@ export const ROLLBACK_DEFAULT_SESSION_QUIESCENT_MS = 30_000
 /** 轮询回退的间隔上界（S1：会话日志 mtime ≤5 s 轮询） */
 export const ROLLBACK_DEFAULT_POLL_INTERVAL_MS = 5_000
 export const ROLLBACK_LEFTOVER_LIST_LIMIT = 20
+
+/**
+ * 「删除回退点之后新建的路径」的**整套上限**（用户 2026-10-11 定案 A）。
+ * 超过就整套拒绝（fail-closed），绝不删一半 —— 半套删除既没有可解释的状态，也无法整体回滚。
+ */
+export const ROLLBACK_MAX_CREATED_REMOVALS = 5000
 export const ROLLBACK_DETAIL_LIMIT = 50
 
 /**
@@ -505,9 +511,15 @@ export interface RollbackSegmentResult {
   detail: string[]
   restored: number
   failed: number
-  /** 回滚点之后**新建**的内容：只报告，绝不删除 */
+  /** 回滚点之后**新建**的内容：缺省只报告；开 `removeCreated` 时它们就是「已删除 / 想删但拒删」的候选 */
   leftovers: string[]
   leftoversTruncated: boolean
+  /** 本次真的**删除**的「回退点之后新建」路径数（用户 2026-10-11 定案 A） */
+  removed?: number
+  /** 已删除路径（有界清单，供界面逐条说明「删了什么」） */
+  removedPaths?: string[]
+  /** 按安全判据**拒删**的路径（越界 / 落在插件数据区 / .git / node_modules / 单文件过大）：如实报告 */
+  createdSkipped?: string[]
   writtenBytes?: number
   /** 会话段：fork 出来的子会话 id */
   childSessionId?: string
@@ -522,6 +534,13 @@ export interface RollbackRewindInput {
   segments?: readonly RollbackStateKind[]
   allowPartial?: boolean
   guardPolicy?: RollbackGuardPolicy
+  /**
+   * 是否**删除**「回退点之后新建」的路径（用户 2026-10-11 定案 A：回退要连文件一起退回去）。
+   *
+   * 缺省 false = 老口径（只报告 leftovers）。开启后：先读前像 → 删 → 任一失败就**整体回滚**
+   * （把已写回的文件还原、把已删的文件写回）。拒删判据见 createdRemovalRefusal。
+   */
+  removeCreated?: boolean
 }
 
 export interface RollbackRewindResult {
@@ -1930,7 +1949,7 @@ export class RollbackPointEngine {
         continue
       }
       const segment = state === 'workspace'
-        ? await this.restoreWorkspace(record.workspace)
+        ? await this.restoreWorkspace(record.workspace, { removeCreated: input.removeCreated === true })
         : await this.restoreSession(record.session)
       segments.push(segment)
       if (segment.childSessionId !== undefined) childSessionId = segment.childSessionId
@@ -1981,7 +2000,59 @@ export class RollbackPointEngine {
    * 阶段 1 只读校验（任何一条不合格 → 零写入整体失败）→ 阶段 2 记前像 + 写 →
    * 阶段 3 逐文件 hash 复核；失败 → **整体回滚到恢复前状态**。
    */
-  private async restoreWorkspace(track: RollbackTrack<RollbackWorkspacePayload>): Promise<RollbackSegmentResult> {
+  /**
+   * 列出「回退点之后**新建**」且**允许删除**的路径（用户 2026-10-11 定案 A）。
+   *
+   * 与 scanLeftovers 用**同一次遍历口径**（`listChunkFiles`：同一套 skip 规则），区别只有一个：
+   * 这里要的是**全量**清单（删除不能只删前 20 条），且逐条过 {@link createdRemovalRefusal} 安全判据。
+   */
+  private async planCreatedRemovals(
+    chunks: readonly string[],
+    captured: ReadonlySet<string>,
+    sink: ChunkWalkSink,
+  ): Promise<{ paths: string[]; skipped: string[]; truncated: boolean }> {
+    const limit = Math.max(this.maxFiles * 4, 2000)
+    const paths: string[] = []
+    const skipped: string[] = []
+    let truncated = false
+    for (const chunk of chunks) {
+      if (!path.isAbsolute(chunk)) continue
+      const listed = await this.listChunkFiles(path.resolve(chunk), sink, limit)
+      if (listed === null) continue
+      if (listed.truncated) truncated = true
+      for (const file of listed.files) {
+        if (captured.has(pathKey(file))) continue
+        // 拒删的也留在清单里（如实报告），但绝不进删除集合
+        if (this.createdRemovalRefusal(file, chunks) !== null) { skipped.push(file); continue }
+        paths.push(file)
+      }
+    }
+    return { paths, skipped, truncated }
+  }
+
+  /**
+   * 「这一条新建路径**不许删**」的判据（命中即拒删；每条都能被逐字解释，绝不靠启发式）。
+   *
+   * · 不在任何记录在案的分块内（chunk 之外不是我们的地盘）；
+   * · 落在插件自己的数据区（`this.root`）内 —— 那是回滚台账/对象仓本身；
+   * · 路径里出现 `.git` 或 `node_modules` 段（仓库元数据与依赖树：它们在回退点之后**天天在变**，
+   *   按「新建」判据删掉等于毁掉工作副本）；
+   * · 不是绝对路径。
+   */
+  private createdRemovalRefusal(file: string, chunks: readonly string[]): string | null {
+    if (!path.isAbsolute(file)) return 'not-absolute'
+    if (!chunks.some((chunk) => path.isAbsolute(chunk) && isInsidePath(file, chunk))) return 'outside-chunk'
+    if (isInsidePath(file, this.root)) return 'inside-data-dir'
+    const segments = path.resolve(file).split(path.sep)
+    if (segments.includes('.git')) return 'excluded-dir'
+    if (segments.includes('node_modules')) return 'excluded-dir'
+    return null
+  }
+
+  private async restoreWorkspace(
+    track: RollbackTrack<RollbackWorkspacePayload>,
+    options: { removeCreated?: boolean } = {},
+  ): Promise<RollbackSegmentResult> {
     const payload = track.payload
     if (!track.ok || payload === null) {
       return this.emptySegment('workspace', track.reasonCode ?? 'capture-failed', 'track-not-ok')
@@ -2017,6 +2088,19 @@ export class RollbackPointEngine {
     const captured = new Set(payload.files.map((f) => pathKey(f.path)))
     const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
     const leftovers = await this.scanLeftovers(payload.chunks, captured, sink)
+    // 用户 2026-10-11 定案 A：把「回退点之后新建」的路径也退回去（删除）。清单先算全，超上限整套拒绝。
+    const removal = options.removeCreated === true
+      ? await this.planCreatedRemovals(payload.chunks, captured, sink)
+      : { paths: [] as string[], skipped: [] as string[], truncated: false }
+    if (removal.paths.length > ROLLBACK_MAX_CREATED_REMOVALS) {
+      detail.push('created-removals=' + String(removal.paths.length) + ' limit=' + String(ROLLBACK_MAX_CREATED_REMOVALS) + ' zeroWrites=true')
+      return {
+        state: 'workspace', status: 'failed', reasonCode: 'invalid-input', detail,
+        restored: 0, failed: removal.paths.length,
+        leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
+        createdSkipped: removal.skipped,
+      }
+    }
     if (failed > 0) {
       // 零写入：一条不合格就不写任何一条
       detail.push('restored=0 failed=' + String(failed) + ' leftovers=' + String(leftovers.count) + ' zeroWrites=true')
@@ -2046,11 +2130,12 @@ export class RollbackPointEngine {
       }
       needed.push(item)
     }
-    if (needed.length === 0) {
-      // 记录在案的路径全都已与快照一致 ⇒ 该段成功、0 变更（不是失败、也不中止整体）
+    if (needed.length === 0 && removal.paths.length === 0) {
+      // 记录在案的路径全都已与快照一致、且没有要删的新建路径 ⇒ 该段成功、0 变更（不是失败、也不中止整体）
       const noop = this.noopSegment('workspace', 'nothing-to-restore', 'unchanged=' + String(unchanged) + ' nothingToDo=true')
       noop.leftovers = leftovers.leftovers
       noop.leftoversTruncated = leftovers.truncated
+      noop.createdSkipped = removal.skipped
       return noop
     }
     // 前像（内存）：失败时要能整体回到恢复前状态 —— 只覆盖**真会被写**的文件
@@ -2112,11 +2197,69 @@ export class RollbackPointEngine {
         guidance: [{ code: 'rollback.guidance.workspaceRolledBack', detail: rollbackFailed.length > 0 ? rollbackFailed.join(' ') : undefined }],
       }
     }
-    detail.push('restored=' + String(restored) + ' verified=' + String(needed.length) + ' unchanged=' + String(unchanged) + ' leftovers=' + String(leftovers.count))
+    // 阶段 4（用户 2026-10-11 定案 A）：删除「回退点之后新建」的路径。
+    // 顺序刻死：记录在案的路径**先写并复核通过**，再删新建的 —— 先删后写一旦写失败就回不去了。
+    // 删除同样可回滚：先读前像（内存）→ 删；任一失败就把已写的还原、把已删的写回。
+    const destroyed: { path: string; bytes: Uint8Array }[] = []
+    const removalFailures: string[] = []
+    let removed = 0
+    for (const target of removal.paths) {
+      try {
+        const bytes = await fs.readFile(target)
+        if (bytes.byteLength > this.maxFileBytes) {
+          pushDetail(detail, 'created-too-large ' + target)
+          removal.skipped.push(target)
+          continue
+        }
+        destroyed.push({ path: target, bytes })
+        await fs.rm(target, { force: true })
+        removed += 1
+      } catch (error) {
+        removalFailures.push(target + ' ' + errorDetail(error))
+      }
+    }
+    if (removalFailures.length > 0) {
+      const rollbackFailed: string[] = []
+      for (const item of pre) {
+        try {
+          if (item.existed && item.bytes !== null) await this.writeFile(item.path, item.bytes)
+          else await fs.rm(item.path, { force: true })
+        } catch (error) {
+          rollbackFailed.push(item.path + ' ' + errorDetail(error))
+        }
+      }
+      for (const item of destroyed) {
+        try {
+          await this.writeFile(item.path, item.bytes)
+        } catch (error) {
+          rollbackFailed.push(item.path + ' ' + errorDetail(error))
+        }
+      }
+      for (const line of removalFailures) pushDetail(detail, 'created-remove-failed ' + line)
+      for (const line of rollbackFailed) pushDetail(detail, 'rolled-back-failed ' + line)
+      detail.push(
+        'restored=0 removed=0 failed=' + String(removalFailures.length) +
+        ' rolledBack=' + String(pre.length + destroyed.length - rollbackFailed.length) +
+        ' unchanged=' + String(unchanged),
+      )
+      return {
+        state: 'workspace', status: 'failed', reasonCode: 'restore-failed', detail,
+        restored: 0, failed: removalFailures.length,
+        leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
+        removed: 0, removedPaths: [], createdSkipped: removal.skipped,
+        guidance: [{ code: 'rollback.guidance.workspaceRolledBack', detail: rollbackFailed.length > 0 ? rollbackFailed.join(' ') : undefined }],
+      }
+    }
+    const removedPaths = removal.paths.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT)
+    detail.push(
+      'restored=' + String(restored) + ' verified=' + String(needed.length) + ' unchanged=' + String(unchanged) +
+      ' leftovers=' + String(leftovers.count) + ' removed=' + String(removed) + ' createdSkipped=' + String(removal.skipped.length),
+    )
     return {
       state: 'workspace', status: 'restored', detail,
       restored, failed: 0,
       leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
+      removed, removedPaths, createdSkipped: removal.skipped,
       writtenBytes,
     }
   }

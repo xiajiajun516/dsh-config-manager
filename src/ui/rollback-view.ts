@@ -437,9 +437,15 @@ export interface RollbackSegmentResult {
   detail?: string[]
   restored?: number
   failed?: number
-  /** 该点**未记录**、本次**不删除**的内容（含留点时被跳过的既有文件；路径清单，宿主上限 20 条） */
+  /** 该点**未记录**的内容（含留点时被跳过的既有文件；路径清单，宿主上限 20 条）；开了 removeCreated 时其中可删的已被删除 */
   leftovers?: string[]
   leftoversTruncated?: boolean
+  /** 本次真的删掉的「回退点之后新建」路径数（用户 2026-10-11 定案 A） */
+  removed?: number
+  /** 已删除路径（有界清单） */
+  removedPaths?: string[]
+  /** 想删但按安全判据拒删的路径（越界 / 数据区 / .git / node_modules / 过大），如实报告 */
+  createdSkipped?: string[]
   /** 工作区段：实际写回的字节数（宿主回传才有） */
   writtenBytes?: number
   /** 兼容形态：宿主只回传计数时也算得出来 */
@@ -979,6 +985,8 @@ export interface RollbackRewindRowView {
   failed: number
   /** 该点**未记录**、**未删除**的内容数（引擎 scanLeftovers 语义，不是「之后新建」） */
   leftoversCount: number
+  /** 真的被删掉的「回退点之后新建」条数（段结果里的 removed） */
+  removedCount: number
   /** 同上，路径清单（已脱敏；宿主上限 20 条） */
   leftovers: string[]
   leftoversTruncated: boolean
@@ -1007,6 +1015,7 @@ export function rollbackRewindRows(result: RollbackRewindResult | null): Rollbac
       restored: numberOrNull(segment.restored) ?? 0,
       failed: numberOrNull(segment.failed) ?? 0,
       leftoversCount: Math.max(leftovers.length, countOf(segment.createdAfter)),
+      removedCount: countOf(segment.removed),
       leftovers,
       leftoversTruncated: segment.leftoversTruncated === true || segment.createdAfterTruncated === true,
       childSessionId,
@@ -1028,6 +1037,8 @@ export interface RollbackRewindCounts {
   restored: number
   failed: number
   leftovers: number
+  /** 本次真的删掉的「回退点之后新建」路径数（用户 2026-10-11 定案 A） */
+  removed: number
 }
 
 /** 回退结果汇总计数（界面一句话说清「恢复多少 / 失败多少 / 没删多少」）。 */
@@ -1036,12 +1047,14 @@ export function rollbackRewindCounts(result: RollbackRewindResult | null): Rollb
   let restored = 0
   let failed = 0
   let leftovers = 0
+  let removed = 0
   for (const row of rows) {
     restored += row.restored
     failed += row.failed
     leftovers += row.leftoversCount
+    removed += row.removedCount
   }
-  return { restored, failed, leftovers }
+  return { restored, failed, leftovers, removed }
 }
 
 /**

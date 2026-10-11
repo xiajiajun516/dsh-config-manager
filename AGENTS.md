@@ -218,6 +218,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
 - **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。证据 → `docs/lessons/recovery-console.md`。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的每会话上限**（`ROLLBACK_MAX_GUARDS_PER_SESSION`，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
+- **回退默认删除「该点未记录」的路径**（用户 2026-10-11 定案 A）：先读前像 → 删 → 任一失败整体回滚；`.git`/`node_modules`/插件数据区/分块外一律**拒删并如实报告**（`createdSkipped`），超上限（5000）整套拒绝，绝不删一半。证据 → `docs/lessons/recovery-console.md`
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。证据 → `docs/lessons/recovery-console.md`
 - **宿主服务的方法抽出来必须 bind 回服务对象**（真机 2026-10-11：`uiWorkspace.openSession` 丢 receiver ⇒ `this.lifetime` 为 undefined ⇒ 回退成功但子会话永远打不开）；三档降级判据不动，只补 receiver。证据 → `docs/lessons/recovery-console.md`。
 

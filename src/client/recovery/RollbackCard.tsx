@@ -442,7 +442,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             <div className={css.groupLabel}>{t('rollback.rewind.result.title')}</div>
             {outcome !== null && <Badge kind={outcome.badgeKind}>{t(dyn(outcome.key))}</Badge>}
             <div className={css.hint}>
-              {t('rollback.rewind.result.counts', { restored: rewindCounts.restored, failed: rewindCounts.failed, leftovers: rewindCounts.leftovers })}
+              {t('rollback.rewind.result.counts', { restored: rewindCounts.restored, removed: rewindCounts.removed, failed: rewindCounts.failed, leftovers: rewindCounts.leftovers })}
             </div>
             {childSession !== null && <div className={css.hint}>{t(dyn(childSession.key), { id: childSession.id })}</div>}
             {result.guardPointId !== undefined && <div className={css.hint}>{t('rollback.rewind.result.guard', { id: result.guardPointId })}</div>}
@@ -451,7 +451,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                 <div key={segment.state} className={css.actionRow} data-inline>
                   <Badge kind={segment.badgeKind}>{t(dyn(segment.labelKey))}</Badge>
                   <span className={css.hint}>{t(dyn(segment.statusKey))}</span>
-                  <span className={css.hint}>{t('rollback.rewind.result.counts', { restored: segment.restored, failed: segment.failed, leftovers: segment.leftoversCount })}</span>
+                  <span className={css.hint}>{t('rollback.rewind.result.counts', { restored: segment.restored, removed: segment.removedCount, failed: segment.failed, leftovers: segment.leftoversCount })}</span>
                   {segment.childSessionId !== null && <span className={css.hint}>{t('rollback.rewind.result.child', { id: segment.childSessionId })}</span>}
                   {segment.detail.map((line) => <span key={line} className={css.hint}>{line}</span>)}
                   {segment.guidance.map((row) => (

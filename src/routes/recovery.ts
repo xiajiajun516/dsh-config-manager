@@ -431,6 +431,9 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
               : undefined
             if (requested !== undefined) rewindInput.segments = requested
             if (body['allowPartial'] === true) rewindInput.allowPartial = true
+            // A（用户 2026-10-11 定案）：「回到某点之前」要连文件一起退回去 —— 默认把**回退点之后新建**的路径删掉；
+            // 调用方显式传 false 才保留老口径（只报告 leftovers，不删任何东西）。
+            rewindInput.removeCreated = body['removeCreated'] !== false
             if (body['preRewindGuard'] === 'off' || body['preRewindGuard'] === 'require' || body['preRewindGuard'] === 'warn') {
               rewindInput.guardPolicy = body['preRewindGuard']
             }

@@ -398,6 +398,35 @@ test('R-05 工作区恢复：只覆盖记录在案的路径，回滚点之后新
   assert.ok((ws?.detail ?? []).some((line) => line.includes('verified=2')))
 })
 
+test('R-05b 开 removeCreated：回退点之后新建的路径被真的删掉；.git 内的拒删', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  assert.notEqual(id, '')
+
+  // 点之后：改内容 + 新建一个可删的 + 在 .git 里塞一个（仓库元数据绝不能被「新建」判据删掉）
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2')
+  await fs.mkdir(path.join(fx.workspaceDir, '.git'), { recursive: true })
+  await fs.writeFile(path.join(fx.workspaceDir, '.git', 'index'), 'GIT-INDEX')
+  await fs.writeFile(path.join(fx.workspaceDir, 'new.txt'), 'NEW')
+
+  const rewound = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', removeCreated: true })
+  assert.equal(rewound.outcome, 'restored', JSON.stringify(rewound.segments))
+  assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A1')
+  await assert.rejects(
+    fs.readFile(path.join(fx.workspaceDir, 'new.txt')),
+    undefined,
+    '开了 removeCreated 就必须真的删掉「该点未记录」的新建路径',
+  )
+  assert.equal(await readText(path.join(fx.workspaceDir, '.git', 'index')), 'GIT-INDEX', '.git 内一律拒删')
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.removed, 1)
+  assert.deepEqual(ws?.removedPaths, [path.join(fx.workspaceDir, 'new.txt')])
+  assert.ok((ws?.detail ?? []).some((line) => line.includes('removed=1')), 'detail 必须带 removed=1')
+})
+
 /* =================================================== R-06 恢复前救援点 */
 
 test('R-06 恢复前自动留救援点（guard）：默认 warn 档必留，且 guard 点不可删', async (t) => {

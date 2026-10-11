@@ -282,6 +282,28 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >   turn now pushes the boundary before it, matching DSH's own `latestCompletedPrefixBoundary`.
 > - Tests: R-02b in `src/core/rollback-point.test.ts` and two cases in `src/index.facade.test.ts`.
 
+> **回退现在连文件一起退回去：默认删除「该点未记录」的路径**（用户 2026-10-11 定案 A）：此前引擎 S4 口径**绝不删除**回退点之后新建的文件（只进 leftovers 报告），
+> 于是「回到这条消息之前」只退对话、不退文件（真机截图：预览说「工作区与该回退点一致」，而那一回合新建的 `hello-world*.md` 都还在）。
+> - 新增 `removeCreated`（回退路由**默认开启**）：先算出**全量**待删清单（与 `scanLeftovers` 同一次遍历口径），再按「记录在案的路径先写并复核通过 → 才删新建的」的顺序执行；
+>   每条删除都**先读前像**，任一失败即整体回滚（把已写回的文件还原、把已删的写回）。超过 `ROLLBACK_MAX_CREATED_REMOVALS`（5000）**整套拒绝**，绝不删一半。
+> - **安全判据**（命中即拒删并如实进 `createdSkipped`）：不在记录在案的分块内 / 落在插件数据区 / 路径含 `.git` 或 `node_modules` / 非绝对路径 / 单文件超 `maxFileBytes`。
+> - 文案：预览里 `rollback.preview.createdAfter` 由「该点未记录（不会被删除）」改为「该点未记录（回退会删除它们）」，结果行新增「删除 {removed} 项」。
+> - 测试：`R-05b`（真删 + `.git` 内拒删 + `removed=1`）、`R-05` 仍守住「不给 `removeCreated` 时只报告不删」的老口径。
+
+> **Rewind now takes the files with it: paths "not recorded by the point" are deleted by default** (decided 2026-10-11, option A): the engine's S4 rule
+> deliberately **never deleted** files created after a point (it only reported them as leftovers), so "go back to before this message" rewound the
+> conversation but left the turn's files behind (real-machine screenshot: the preview said "workspace matches this point" while the `hello-world*.md`
+> files were all still there).
+> - New `removeCreated` flag (**on by default** in the rewind route): the full removal list is planned with the same walk as `scanLeftovers`; the order is
+>   fixed — recorded paths are written and re-verified **first**, only then are new paths deleted. Every deletion keeps an in-memory pre-image, and any
+>   failure rolls the whole segment back (restore what was written, rewrite what was deleted). More than `ROLLBACK_MAX_CREATED_REMOVALS` (5000) refuses the
+>   entire segment — never a half deletion.
+> - **Safety gates** (a hit refuses the deletion and reports it in `createdSkipped`): outside the recorded chunks, inside the plugin data dir, any path
+>   containing `.git` or `node_modules`, non-absolute paths, or a file above `maxFileBytes`.
+> - Copy: the preview key `rollback.preview.createdAfter` now reads "not recorded by this point (the rewind will delete them)" and the result line gained
+>   a "{removed} deleted" count.
+> - Tests: `R-05b` (real deletion + refusal inside `.git` + `removed=1`), while `R-05` still pins the old contract when `removeCreated` is absent.
+
 > **保留清理遇「引用集合读不出来」不再按空集合继续删**：prune 的 recovery 豁免此前是
 > `.catch(() => new Set())` —— journal 扫描一次瞬时失败（EACCES / IO 错）就会被当成「无人引用」，
 > 可能删掉 SAFE MODE 恢复唯一的回滚点。现在**读不到就放弃本轮清理**（宁可少删），并新增

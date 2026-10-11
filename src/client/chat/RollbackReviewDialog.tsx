@@ -345,7 +345,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                     : outcome !== null && <Badge kind={outcome.badgeKind}>{rt(rk(outcome.key))}</Badge>}
                   {summaryText === null && (
                     <span className={css.hint}>
-                      {rt('rollback.rewind.result.counts', { restored: counts.restored, failed: counts.failed, leftovers: counts.leftovers })}
+                      {rt('rollback.rewind.result.counts', { restored: counts.restored, removed: counts.removed, failed: counts.failed, leftovers: counts.leftovers })}
                     </span>
                   )}
                 </div>
