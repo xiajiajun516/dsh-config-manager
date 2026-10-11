@@ -92,3 +92,17 @@
   顺序刻死「记录在案的路径先写并复核通过 → 才删新建的」，每条删除先读前像、任一失败整体回滚；超过 `ROLLBACK_MAX_CREATED_REMOVALS`（5000）整套拒绝，
   **绝不删一半**。拒删判据（如实进 `createdSkipped`）：分块外 / 插件数据区 / 路径含 `.git`、`node_modules` / 非绝对路径 / 单文件超 `maxFileBytes`。
   **注意**：这是**破坏性**动作、由用户显式定案；渲染成「不会被删除」的老文案已同步改成「回退会删除它们」。测试 R-05b（真删 + `.git` 拒删）、R-05（不给 `removeCreated` 时仍只报告不删）。
+
+## 「工作区被修改的文件没被撤回」的真正根因：留点时机（2026-10-11 定性并修复）
+
+- **症状**（用户连续两轮反馈）：回退后对话退回去了，但**这一回合改过的文件内容没变**；预览那句是「工作区与该回退点一致」。
+- **诊断**：留点器在 `turn/end` 才 `capturePoint`，而那一刻的工作区已经是**这一回合改完之后**的样子 ⇒ 点的「工作区态」= 现状 ⇒ 回退时逐文件比对全部「已一致」，一条都不写；
+  被这一回合改过的文件当然也退不回去。`removeCreated`（删该点未记录的新建文件）只治了「新建」那一半，「改过」那一半必须靠**把点拍在回合之前**。
+- **参照实现**（用户点名要看的 Anionex/dsh-turn-rewind，其 README 自述 "Message-anchored project-file recovery" / Change Ledger）：
+  `create restore point ↓ agent/user/external tools modify the worktree ↓ preview exact path-level drift ↓ review a full or selective restore plan` —— 即**先把工作区拍在消息那一刻，再让 agent 去改**；
+  它也说明「never commits, stashes, resets, switches branches, edits the Git index」，普通目录快照默认排除 `.git`/`node_modules`（+ 可选 `.dsh-rewindignore`），与我们 `createdRemovalRefusal` 的拒删集合同构。
+- **修法**：`RollbackAutoTracker.noteEvent` 把留点从 `turn/end` 移到 **`turn/start`**（工作区 = 这条消息之前的状态，会话边界同口径）；`turn/end` 只 `lastBoundary.set(seq)`（轮询/无边界回退用）；
+  幂等判据（同回合只留一次）随之搬到 `turn/start`。旧口径下「先 turn/end 再补点」的测试（R-02、台账写失败、no-chunks）已同步翻面。
+- **回归测试**：`R-05c` —— 回合内写 `a.txt`（改）+ `in-turn.txt`（新建）→ 回退后 `a.txt` 必须回到 `A1`、`in-turn.txt` 必须消失。
+  实测段结果：`{"state":"workspace","status":"restored","detail":["restored=1 verified=1 unchanged=1 leftovers=1 removed=1 createdSkipped=0"]}`。
+- **注意**：留点提前到回合开始后，「留点在收尾之后（≈7.8 s）」那条客户端有界重试的理由变了 —— 窗口逻辑保留（它对轮询/缺事件的情形仍然必要），但不再是唯一路径。

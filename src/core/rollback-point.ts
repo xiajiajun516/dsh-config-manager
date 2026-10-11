@@ -2589,26 +2589,32 @@ export class RollbackAutoTracker {
       if (event.type === 'turn/start') {
         const inputSeq = this.pendingInput.get(event.sessionId)
         const from = inputSeq ?? event.seq
+        const turn = turnOfData(event.data)
         this.open.set(event.sessionId, {
-          turn: turnOfData(event.data),
+          turn,
           startSeq: event.seq,
           boundarySeq: from > 0 ? from - 1 : null,
         })
         this.pendingInput.delete(event.sessionId)
-        return { captured: false }
+        if (turn !== null) {
+          const seen = this.seenTurns.get(event.sessionId)
+          if (seen !== undefined && seen.has(String(turn))) return { captured: false, detail: 'already-captured turn=' + String(turn) }
+        }
+        // **留点发生在回合开始之前**（用户 2026-10-11 定案）：点的「工作区态」必须是**这条消息之前**的样子。
+        // 旧口径在 turn/end 才拍工作区 ⇒ 回退时只能把文件写回「这个回合结束后」的状态（真机症状：
+        // 预览说「工作区与该回退点一致」，而被这一回合改过的文件一个都没退回去）。
+        // 参照实现（dsh-turn-rewind / Change Ledger）也是「先把工作区拍在消息那一刻，再让 agent 去改」。
+        return await this.captureFor(binding, {
+          turn,
+          boundarySeq: from > 0 ? from - 1 : null,
+          endSeq: null,
+        })
       }
       if (event.type !== 'turn/end') return { captured: false }
-      const turn = turnOfData(event.data)
-      const open = this.open.get(event.sessionId)
+      // 回合结束只为「缺省边界」留个记号（轮询/无边界回退用它），不再拍点。
       this.open.delete(event.sessionId)
-      const boundarySeq = open !== undefined
-        ? open.boundarySeq
-        : (this.lastBoundary.get(event.sessionId) ?? null)
-      if (turn !== null) {
-        const seen = this.seenTurns.get(event.sessionId)
-        if (seen !== undefined && seen.has(String(turn))) return { captured: false, detail: 'already-captured turn=' + String(turn) }
-      }
-      return await this.captureFor(binding, { turn, boundarySeq, endSeq: event.seq })
+      this.lastBoundary.set(event.sessionId, event.seq)
+      return { captured: false }
     } catch (error) {
       this.warn('rollback tracker noteEvent failed: ' + errorDetail(error))
       return { captured: false, code: 'capture-failed', detail: errorDetail(error) }

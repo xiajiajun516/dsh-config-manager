@@ -243,15 +243,14 @@ test('R-02 按回合自动留点：turn/end 才留点，边界 = turn/start 的 
   assert.equal(tracker.mechanismKind, 'event')
 
   // 回合 1 从 seq 0 开始（首回合 → 无前置边界）；回合 2 从 seq 2 开始（边界 = 1）
-  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 0, type: 'turn/start', data: { turn: 1 } })).captured, false)
-  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 1, type: 'turn/end', data: { turn: 1 } })).captured, true)
-  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 2, type: 'turn/start', data: { turn: 2 } })).captured, false)
+  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 0, type: 'turn/start', data: { turn: 1 } })).captured, true)
+  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 1, type: 'turn/end', data: { turn: 1 } })).captured, false)
+  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 2, type: 'turn/start', data: { turn: 2 } })).captured, true)
   // 回合中间的事件不触发留点
   assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 3, type: 'user/message', data: {} })).captured, false)
-  const second = await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 2 } })
-  assert.equal(second.captured, true, second.detail ?? '')
-  // 幂等：同一回合的重复 turn/end 不再留点
-  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 2 } })).captured, false)
+  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 2 } })).captured, false, '回合结束不再拍点')
+  // 幂等：同一回合的重复 turn/start 不再留点
+  assert.equal((await tracker.noteEvent({ sessionId: 'session-1111', seq: 2, type: 'turn/start', data: { turn: 2 } })).captured, false)
 
   const list = await engine.list()
   assert.equal(list.points.length, 2, '两个回合 → 两个点（重复事件不重复留点）')
@@ -396,6 +395,38 @@ test('R-05 工作区恢复：只覆盖记录在案的路径，回滚点之后新
   assert.equal(ws?.restored, 2)
   assert.deepEqual(ws?.leftovers, [path.join(fx.workspaceDir, 'new.txt')])
   assert.ok((ws?.detail ?? []).some((line) => line.includes('verified=2')))
+})
+
+test('R-05c 留点在回合开始前：这一回合里被改过的文件，回退后必须回到「改之前」的内容', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(4_000_000, 10) })
+  const tracker = new RollbackAutoTracker({ engine })
+  tracker.registerSession({
+    sessionId: 's-pre',
+    unitId: 'proj-key/s-pre',
+    logPath: fx.logFile,
+    chunks: [fx.workspaceDir],
+  })
+
+  // 回合开始 → 留点（此刻的工作区）；随后 agent 在这一回合**改文件 + 加文件**
+  await tracker.noteEvent({ sessionId: 's-pre', seq: 0, type: 'turn/start', data: { turn: 1 } })
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A-CHANGED-IN-TURN')
+  await fs.writeFile(path.join(fx.workspaceDir, 'in-turn.txt'), 'NEW-IN-TURN')
+  await tracker.noteEvent({ sessionId: 's-pre', seq: 9, type: 'turn/end', data: { turn: 1 } })
+
+  const point = (await engine.list()).points.find((p) => p.turn === 1)
+  assert.notEqual(point?.id, undefined, '回合开始就该有点（旧口径在回合结束才拍 ⇒ 回退时文件已经是「改之后」的样子）')
+  const rewound = await engine.rewind({ id: point?.id ?? '', userConfirmed: true, guardPolicy: 'off', removeCreated: true })
+  // 首回合没有前置边界 ⇒ 会话段结构化 no-boundary（既有口径），所以只看工作区段
+  const wsSegment = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(wsSegment?.status, 'restored', JSON.stringify(rewound.segments))
+  assert.equal(
+    await readText(path.join(fx.workspaceDir, 'a.txt')),
+    'A1',
+    '回合内被改过的文件必须退回「这条消息之前」的内容（这正是「工作区与该回退点一致」那个 bug）',
+  )
+  await assert.rejects(fs.readFile(path.join(fx.workspaceDir, 'in-turn.txt')), { code: 'ENOENT' })
 })
 
 test('R-05b 开 removeCreated：回退点之后新建的路径被真的删掉；.git 内的拒删', async (t) => {
@@ -1220,8 +1251,8 @@ test('R-23c 集成：chunkless 会话留点 → 该点 incomplete=true 且 works
   if (!bindingResult.ok) return
   assert.equal(bindingResult.chunkless, 'cwd-not-absolute')
   tracker.registerSession(bindingResult.binding)
-  await tracker.noteEvent({ sessionId: 'session-1111', seq: 2, type: 'turn/start', data: { turn: 2 } })
-  const captured = await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 2 } })
+  const captured = await tracker.noteEvent({ sessionId: 'session-1111', seq: 2, type: 'turn/start', data: { turn: 2 } })
+  await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 2 } })
   assert.equal(captured.captured, true)
   const point = (await engine.list()).points[0]
   assert.equal(point?.incomplete, true, '会话态-only 的点必须显式 incomplete，不许静默降级')
@@ -1605,7 +1636,8 @@ test('R-32 T10：台账写失败时 tracker 不得报 captured=true（不能记�
     logPath: fx.logFile,
     chunks: [fx.workspaceDir],
   })
-  const first = await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 1 } })
+  const first = await tracker.noteEvent({ sessionId: 'session-1111', seq: 5, type: 'turn/start', data: { turn: 1 } })
+  await tracker.noteEvent({ sessionId: 'session-1111', seq: 6, type: 'turn/end', data: { turn: 1 } })
   assert.equal(first.captured, true, first.detail ?? '')
   assert.equal(typeof first.pointId, 'string')
 
@@ -1616,7 +1648,7 @@ test('R-32 T10：台账写失败时 tracker 不得报 captured=true（不能记�
       t.skip('本机 chmod 后 index.json 仍可写，无法构造台账写失败')
       return
     }
-    const second = await tracker.noteEvent({ sessionId: 'session-1111', seq: 12, type: 'turn/end', data: { turn: 2 } })
+    const second = await tracker.noteEvent({ sessionId: 'session-1111', seq: 11, type: 'turn/start', data: { turn: 2 } })
     assert.equal(second.captured, false, JSON.stringify(second))
     assert.equal(second.pointId, undefined, '写失败不得报 pointId')
     assert.equal(second.code, 'ledger-write-failed')

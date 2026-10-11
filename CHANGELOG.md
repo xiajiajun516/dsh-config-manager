@@ -302,7 +302,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >   containing `.git` or `node_modules`, non-absolute paths, or a file above `maxFileBytes`.
 > - Copy: the preview key `rollback.preview.createdAfter` now reads "not recorded by this point (the rewind will delete them)" and the result line gained
 >   a "{removed} deleted" count.
+> - **留点时机从「回合结束」改成「回合开始」**（真正让「被改过的文件」也能退回去的那一半）：旧口径在 `turn/end` 拍工作区，而那已经是**这一回合改完之后**的样子 ⇒ 回退时只能把文件写回它现在的样子，
+>   预览于是说「工作区与该回退点一致」，用户看到的就是「文件没被撤回」。现在 `turn/start` 立刻拍点（= 这条消息**之前**的状态），会话边界与工作区态从此同口径；
+>   `turn/end` 只更新「缺省边界」（轮询回退用）。参照实现（Anionex/dsh-turn-rewind 的 Change Ledger）也是「先把工作区拍在消息那一刻，再让 agent 去改」。
+> - Tests: `R-05c`（回合内被改的文件必须退回改之前的内容 + 新建的被删）、`R-05b`（真删 + `.git` 拒删），`R-05` 仍钉住「不给 `removeCreated` 就只报告不删」。
+
 > - Tests: `R-05b` (real deletion + refusal inside `.git` + `removed=1`), while `R-05` still pins the old contract when `removeCreated` is absent.
+>
+> **The capture moment moved from "turn end" to "turn start"** (the other half of making *modified* files revertible): the old rule snapshotted the workspace at `turn/end`,
+> which is already **after** that turn's edits — so a rewind could only write the files back to the state they were already in, the preview said "workspace matches this point",
+> and the user saw "the files were not restored". The point is now captured at `turn/start` (the state **before** that message), so the session boundary and the workspace state
+> finally share one meaning; `turn/end` only refreshes the default boundary (used by poll-based rewinds). The reference implementation (Anionex/dsh-turn-rewind, "Change Ledger")
+> snapshots at the message too — before the agent mutates anything.
+> - Tests: `R-05c` (a file edited inside the turn must come back to its pre-message content and the created one is removed) and `R-05b`; `R-05` still pins the no-`removeCreated` contract.
 
 > **保留清理遇「引用集合读不出来」不再按空集合继续删**：prune 的 recovery 豁免此前是
 > `.catch(() => new Set())` —— journal 扫描一次瞬时失败（EACCES / IO 错）就会被当成「无人引用」，
