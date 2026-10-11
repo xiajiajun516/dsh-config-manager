@@ -6,10 +6,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  SESSION_ATTENTION_SEVERITIES,
   SESSION_REPAIR_REASON_KEYS,
   SESSION_REPAIR_VERIFY_KEYS,
   SESSION_SEVERITY_KEYS,
+  SESSION_SEVERITY_SHORT_KEYS,
+  sessionIssueChips,
   sessionIssueRepairable,
+  sessionSeverityChips,
+  sessionSeverityShortKey,
   formatSessionBytes,
   sessionHealthEmpty,
   sessionHealthPhase,
@@ -296,6 +301,82 @@ test('M2-⑥：两个新原因 + 复验四键在 recovery 字典 zh / en 中逐�
   // 与 SESSION_REPAIR_REASON_KEYS 里登记的两个新原因逐字对应（不是手抄的另一份字符串）
   assert.equal(SESSION_REPAIR_REASON_KEYS['verify-failed'], 'sessions.repair.reason.verifyFailed');
   assert.equal(SESSION_REPAIR_REASON_KEYS['target-changed'], 'sessions.repair.reason.targetChanged');
+  for (const key of keys) {
+    const zhValue: string = recoveryZh[key as keyof typeof recoveryZh];
+    const enValue: string = recoveryEn[key as keyof typeof recoveryEn];
+    assert.equal(typeof zhValue, 'string', 'zh 缺键：' + key);
+    assert.equal(typeof enValue, 'string', 'en 缺键：' + key);
+    assert.ok(zhValue !== '' && enValue !== '', '文案不得为空：' + key);
+    assert.notEqual(zhValue, enValue, 'en 必须是镜像而不是复制：' + key);
+  }
+});
+
+/* ---------------------------------------------- 2026-10-12 弹窗 UI 重构：摘要 chips / 问题 chip */
+
+test('UI-1：需要处理的四档派生于 core 且不含 ok（顺序 = 由重到轻，绝不另抄一份）', () => {
+  assert.deepEqual(
+    [...SESSION_ATTENTION_SEVERITIES],
+    ['blocksStartup', 'unloadable', 'nextRequestFails', 'invisible'],
+    '四档顺序必须与 SESSION_HEALTH_SEVERITIES 一致（摘要 chips 与列表排序共用）',
+  );
+  assert.equal(SESSION_ATTENTION_SEVERITIES.includes('ok' as never), false, 'ok 不是「需要处理」的一档');
+});
+
+test('UI-1：摘要 chips 只留 count>0 的档，短标签 + 完整句键同源（0 值不渲染）', () => {
+  assert.deepEqual(sessionSeverityChips(null), []);
+  const summary = sessionHealthSummaryView(response([
+    row({ severity: 'blocksStartup', unitId: '--p--/a', sessionId: 'a', issues: [{ code: 'corrupt-frame', severity: 'blocksStartup' }] }),
+    row({ severity: 'invisible', unitId: '--p--/b', sessionId: 'b', issues: [{ code: 'unregistered-workspace', severity: 'invisible' }] }),
+    row({ severity: 'invisible', unitId: '--p--/c', sessionId: 'c', issues: [{ code: 'format-newer', severity: 'invisible' }] }),
+  ]));
+  const chips = sessionSeverityChips(summary);
+  assert.deepEqual(chips.map((c) => [c.severity, c.count]), [['blocksStartup', 1], ['invisible', 2]], '只留 >0 的档，且按由重到轻排列');
+  assert.equal(chips[0]?.badgeKind, 'error', '阻断启动 = error 语义');
+  assert.equal(chips[1]?.badgeKind, 'warn', '看不见 = warn 语义');
+  // 短标签与完整句必须是同一份映射（不是手抄的第二组字符串）
+  assert.equal(chips[0]?.shortKey, 'sessions.severityShort.blocksStartup');
+  assert.equal(chips[0]?.fullKey, SESSION_SEVERITY_KEYS.blocksStartup);
+  assert.equal(chips[1]?.fullKey, SESSION_SEVERITY_KEYS.invisible);
+  assert.equal(Object.keys(SESSION_SEVERITY_SHORT_KEYS).length, 4, '四档各有短标签（漏一档 typecheck 就该红）');
+});
+
+test('UI-1：列表行与摘要 chips 走同一个短标签出口（ok 档回落完整键，绝不渲染空徽章）', () => {
+  assert.equal(sessionSeverityShortKey('blocksStartup'), 'sessions.severityShort.blocksStartup');
+  assert.equal(sessionSeverityShortKey('ok'), SESSION_SEVERITY_KEYS.ok, 'ok 档没有短标签 → 回落完整键');
+  const [keep] = sessionHealthRows(response([row({ severity: 'ok', issues: [{ code: 'replay-duplicate-rows', severity: 'ok' }] })]));
+  assert.equal(keep?.severityShortKey, SESSION_SEVERITY_KEYS.ok, '「可修但被判 ok」的分叉行也必须拿得到徽章文案');
+  const [bad] = sessionHealthRows(response([row({ severity: 'unloadable', issues: [{ code: 'corrupt-frame', severity: 'unloadable' }] })]));
+  assert.equal(bad?.severityShortKey, 'sessions.severityShort.unloadable');
+  assert.equal(bad?.severityKey, 'sessions.severity.unloadable', '完整句仍在（进屏短、title 全）');
+});
+
+test('UI-2：问题 chip 截断 + 如实计数（被折叠的条数绝不静默丢掉）', () => {
+  assert.deepEqual(sessionIssueChips([]), { codes: [], hidden: 0 });
+  assert.deepEqual(sessionIssueChips(['a', 'b']), { codes: ['a', 'b'], hidden: 0 }, '不超上限时全都进屏');
+  const many = sessionIssueChips(['a', 'b', 'c', 'd']);
+  assert.deepEqual(many.codes, ['a', 'b'], '缺省最多 2 条（564px 画布下更多就折行）');
+  assert.equal(many.hidden, 2, '折叠条数必须如实回传（界面渲染「还有 N 条」）');
+  // 上限是显式参数，便于按行宽调整；非法值回落到缺省（不静默变成「全不显示」）
+  assert.deepEqual(sessionIssueChips(['a', 'b', 'c'], 3).codes, ['a', 'b', 'c']);
+  assert.deepEqual(sessionIssueChips(['a', 'b', 'c'], 0), { codes: [], hidden: 3 });
+  assert.equal(sessionIssueChips(['a', 'b', 'c'], -1).codes.length, 2, '非法上限回落缺省，不得渲染成空行');
+  assert.equal(sessionIssueChips(['a', 'b', 'c'], 1.5).codes.length, 2, '非整数上限同样回落缺省');
+});
+
+test('UI-3：本次重构新增的全部字典键在 recovery zh / en 中逐字存在（含短标签与指标标签）', () => {
+  const keys: string[] = [
+    ...Object.values(SESSION_SEVERITY_SHORT_KEYS),
+    'sessions.metric.total',
+    'sessions.metric.attention',
+    'sessions.metric.format',
+    'sessions.section.attention',
+    'sessions.section.attentionNone',
+    'sessions.issues.more',
+    'sessions.rescan',
+    'sessions.hidden.healthyShort',
+    'sessions.repair.availableShort',
+    'sessions.repair.noneShort',
+  ];
   for (const key of keys) {
     const zhValue: string = recoveryZh[key as keyof typeof recoveryZh];
     const enValue: string = recoveryEn[key as keyof typeof recoveryEn];

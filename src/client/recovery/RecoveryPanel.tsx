@@ -22,15 +22,17 @@ import type { RecoveryPort } from '../../ui/types.ts'
 import type { RollbackPointPort } from '../../ui/rollback-view.ts'
 import type { RecoveryPreview, RecoveryStatus, RecoveryVerifyResult } from '../../ui/types.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Empty, FoldToggle, IconButton, SectionTitle, Spinner, StatusDot } from '../common/ui.tsx'
 import { DiskUsageCard } from '../environment/maintenance/DiskUsageCard.tsx'
 import { RollbackCard } from './RollbackCard.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
+import { Icon } from '../common/Icon.tsx'
 import { toast } from '../common/toast-store.ts'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
+import { Collapse } from '../common/Motion.tsx'
 import {
   formatSessionBytes,
   sessionHealthEmpty,
@@ -38,6 +40,8 @@ import {
   sessionHealthRows,
   sessionHealthSummaryView,
   sessionHealthTruncated,
+  sessionIssueChips,
+  sessionSeverityChips,
   sessionRepairBatchEntry,
   sessionRepairCommands,
   sessionRepairEntries,
@@ -62,7 +66,7 @@ import {
   type SessionLayoutPlanView,
   type SessionLayoutPort,
 } from '../../ui/session-layout-view.ts'
-import { sessionIssuesText } from '../../ui/session-issue-labels.ts'
+import { sessionIssueKey, sessionIssuesText } from '../../ui/session-issue-labels.ts'
 import {
   sessionExportEntryState,
   sessionExportReasonText,
@@ -87,6 +91,13 @@ import css from '../config-manager.module.css'
  * 单列成一行：plan-text-redaction.test.ts 的「按渲染点」登记表需要一个唯一锚点。
  */
 const redactErrorText = (err: unknown): string => redact(err instanceof Error ? err.message : String(err))
+
+/**
+ * 维护与诊断「折叠卡」的折叠体 id（aria-controls 恒有值 —— Collapse 容器始终存在）。
+ * 一块一个常量：id 字面量散在 JSX 里最容易复制粘贴出重复 id，aria-controls 就指错了。
+ */
+const SESSIONS_BODY_ID = 'dcm-sessions-health-body'
+const RESCUE_BODY_ID = 'dcm-rescue-mode-body'
 
 /**
  * E2：布局归位端口 = `RecoveryPort` 的**可选**扩展（面板只用 `layoutRepairSessions`）。
@@ -270,6 +281,8 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
+  /** 折叠态：本块只是「一颗入口按钮 + 一行摘要」，缺省收起（维护页三块诊断里最矮的一块） */
+  const [bodyOpen, setBodyOpen] = useState(false)
   const [scanVersion, setScanVersion] = useState(0)
   const scan = (): void => { setScanVersion((v) => v + 1) }
   /**
@@ -313,7 +326,16 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
         {/* 徽章语义：扫描只读；修复是显式动作（预览 → 确认 → 自动备份 → 可回滚） */}
         <Badge kind="info">{t('sessions.readOnly')}</Badge>
         <InfoHint text={t('sessions.desc')} label={t('common.infoHint')} />
+        <span className={css.statusSpacer} />
+        <FoldToggle
+          open={bodyOpen}
+          controls={SESSIONS_BODY_ID}
+          onToggle={() => { setBodyOpen((v) => !v) }}
+          expandLabel={t('common.expand')}
+          collapseLabel={t('common.collapse')}
+        />
       </div>
+      <Collapse open={bodyOpen} id={SESSIONS_BODY_ID}>
       {/* T10：结果全部搬进独立弹窗 —— 卡片只留入口与一行摘要，绝不把上千行塞进设置页 */}
       <div className={css.hint}>
         {summary !== null && response !== null
@@ -348,6 +370,7 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
           api={diskApi}
         />
       )}
+      </Collapse>
     </Card>
   )
 }
@@ -467,57 +490,74 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
   const sectionState = sessionLayoutSectionState({ response, plan, applied })
   if (sectionState === 'hidden') return null
 
+  /**
+   * 本档是否**真的有可执行的动作**。
+   *
+   * 空档（empty）时三段机制散文（desc / runtimeNote / quarantineNote）整段不渲染 ——
+   * 旧实现把它们无条件铺满：本机没有这一档的用户要先读 6 行灰字，才能读到「没有候选」这一句。
+   * 机制说明（怎么归位 / 为什么会不一致）改走 ⓘ；安全口径（运行时写入门 / 隔离目录不删会话）
+   * **只在真有动作要执行时**常驻 —— DESIGN.md §7「说明性文案分层」。
+   */
+  const actionable = sectionState !== 'empty'
+
   return (
     <div className={css.card}>
-      <div className={css.groupLabel}>{t('sessions.layout.title')}</div>
-      <div className={css.hint}>{t('sessions.layout.desc')}</div>
-      {/* 口径：本入口跑在 DSH 运行时 —— 与离线 CLI 的「须先停 DSH」不同，必须让用户看见 */}
-      <div className={css.hint}>{t('sessions.layout.runtimeNote')}</div>
-      <div className={css.hint}>{t('sessions.layout.quarantineNote')}</div>
+      <div className={css.shSectionHead}>
+        <span className={css.groupLabel}>{t('sessions.layout.title')}</span>
+        <InfoHint text={t('sessions.layout.desc')} label={t('common.infoHint')} />
+      </div>
+      {/* 与离线 CLI 的差异（它要求先停 DSH）：真会写盘时才占据屏幕（安全告警类，必须可见） */}
+      {actionable && <Banner kind="warn">{t('sessions.layout.runtimeNote')}</Banner>}
       {sectionState === 'empty' && <div className={css.hint}>{t('sessions.layout.noCandidates')}</div>}
       {candidates.length > 0 && (
-        <div className={css.snapshotList + ' ' + css.reportScroll}>
+        <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
           {candidates.map((candidate) => (
-            <div key={candidate.unitId} className={css.snapshotRow}>
-              <span className={css.snapshotRowMain} title={candidate.unitId}>{candidate.sessionId}</span>
-              <span className={css.snapshotRowFacts}>
-                {sessionIssuesText(candidate.issueCodes, t)} · {candidate.projectKey}
-              </span>
+            <div key={candidate.unitId} className={css.shRow}>
+              <div className={css.shRowTop}>
+                <span className={`${css.shRowId} ${css.mono}`} title={candidate.unitId}>{candidate.sessionId}</span>
+              </div>
+              <div className={css.shRowMeta}>
+                <span>{sessionIssuesText(candidate.issueCodes, t)}</span>
+                <span className={css.shMetaDot} aria-hidden="true">·</span>
+                <span className={css.mono}>{candidate.projectKey}</span>
+              </div>
             </div>
           ))}
         </div>
       )}
       <div className={css.actionRow}>
-        <Button variant="ghost" loading={busy === 'preview'} disabled={busy !== null} onClick={preview}>
+        <Button variant={actionable ? 'primary' : 'ghost'} loading={busy === 'preview'} disabled={busy !== null} onClick={preview}>
           {busy === 'preview' ? t('sessions.layout.previewing') : t('sessions.layout.preview')}
         </Button>
       </div>
       {failure !== null && <Banner kind="error">{failure}</Banner>}
       {applied === null && plan !== null && (
-        <>
-          <div className={css.groupLabel}>{t('sessions.layout.planTitle')}</div>
+        <div className={css.shPanel}>
+          <div className={css.shPanelHead}>
+            <span className={css.shPanelTitle}>{t('sessions.layout.planTitle')}</span>
+          </div>
           {/* 计划只读：确认前零写入 */}
           <div className={css.hint}>{t('sessions.layout.planReadOnly')}</div>
-          {planReasonKey !== null && <Banner kind="warn">{t(planReasonKey)}</Banner>}
           <div className={css.hint}>
             {t('sessions.layout.summary', { move: String(plan.summary.move), quarantine: String(plan.summary.quarantine) })}
           </div>
+          {planReasonKey !== null && <Banner kind="warn">{t(planReasonKey)}</Banner>}
           {planRows.length === 0 && <div className={css.hint}>{t('sessions.layout.planEmpty')}</div>}
           {planRows.length > 0 && (
-            <div className={css.snapshotList + ' ' + css.reportScroll}>
+            <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
               {planRows.map((row) => (
-                <div key={row.unitId} className={css.snapshotRow}>
-              <span className={css.snapshotRowBadges}>
-                <Badge kind="info">{t(row.kindKey)}</Badge>
-                {row.kind === 'skip' && <Badge kind="warn">{t('sessions.layout.onlyReported')}</Badge>}
-              </span>
-              <span className={css.snapshotRowIssues} title={row.unitId}>{row.sessionId}</span>
-              <span className={css.snapshotRowFacts}>
-                {row.toProjectKey !== null ? row.fromProjectKey + ' → ' + row.toProjectKey : row.fromProjectKey}
-                {' · '}
-                {t(row.reasonKey)}
-              </span>
-            </div>
+                <div key={row.unitId} className={css.shRow}>
+                  <div className={css.shRowTop}>
+                    <Badge kind="info">{t(row.kindKey)}</Badge>
+                    {row.kind === 'skip' && <Badge kind="warn">{t('sessions.layout.onlyReported')}</Badge>}
+                    <span className={`${css.shRowId} ${css.mono}`} title={row.unitId}>{row.sessionId}</span>
+                  </div>
+                  <div className={css.shRowMeta}>
+                    <span>{row.toProjectKey !== null ? row.fromProjectKey + ' → ' + row.toProjectKey : row.fromProjectKey}</span>
+                    <span className={css.shMetaDot} aria-hidden="true">·</span>
+                    <span>{t(row.reasonKey)}</span>
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -529,6 +569,8 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
             <>
               <div className={css.groupLabel}>{t('sessions.layout.keepTitle')}</div>
               <div className={css.hint}>{t('sessions.layout.keepHint')}</div>
+              {/* 隔离目录口径（会搬走用户的会话文件 ⇒ 安全类，必须可见）：只在真要处理重复 id 时出现 */}
+              <div className={css.hint}>{t('sessions.layout.quarantineNote')}</div>
               {plan.needsKeep.map((sessionId) => (
                 <div key={sessionId} className={css.conflictChoices} role="radiogroup" aria-label={sessionId}>
                   {(keepState.candidates[sessionId] ?? []).map((unitId) => {
@@ -558,11 +600,13 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
               {busy === 'apply' ? t('sessions.layout.applying') : t('sessions.layout.apply')}
             </Button>
           </div>
-        </>
+        </div>
       )}
       {applied !== null && (
-        <>
-          <div className={css.groupLabel}>{t('sessions.layout.resultTitle')}</div>
+        <div className={css.shPanel}>
+          <div className={css.shPanelHead}>
+            <span className={css.shPanelTitle}>{t('sessions.layout.resultTitle')}</span>
+          </div>
           {/* 整体未执行（如 reindex-unavailable）**不是**成功：单独说明，且下面不会有任何成功条目 */}
           {appliedReasonKey !== null && <Banner kind="warn">{t(appliedReasonKey)}</Banner>}
           {appliedItems.length > 0 && (
@@ -576,19 +620,19 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
             </div>
           )}
           {appliedItems.length > 0 && (
-            <div className={css.snapshotList + ' ' + css.reportScroll}>
+            <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
               {appliedItems.map((item, index) => (
-                <div key={item.unitId + '#' + String(index)} className={css.snapshotRow}>
-              <span className={css.snapshotRowBadges}>
-                <Badge kind={item.badgeKind}>{t(item.statusKey)}</Badge>
-              </span>
-              <span className={css.snapshotRowIssues} title={item.unitId}>{item.sessionId}</span>
-              <span className={css.snapshotRowFacts}>
-                {item.reasonKey !== null ? t(item.reasonKey) : ''}
-                {item.movedUnitId !== null ? ' → ' + item.movedUnitId : ''}
-                {item.quarantineDir !== null ? ' → ' + item.quarantineDir : ''}
-              </span>
-            </div>
+                <div key={item.unitId + '#' + String(index)} className={css.shRow}>
+                  <div className={css.shRowTop}>
+                    <Badge kind={item.badgeKind}>{t(item.statusKey)}</Badge>
+                    <span className={`${css.shRowId} ${css.mono}`} title={item.unitId}>{item.sessionId}</span>
+                  </div>
+                  <div className={css.shRowMeta}>
+                    <span>{item.reasonKey !== null ? t(item.reasonKey) : ''}</span>
+                    <span>{item.movedUnitId !== null ? ' → ' + item.movedUnitId : ''}</span>
+                    <span>{item.quarantineDir !== null ? ' → ' + item.quarantineDir : ''}</span>
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -598,12 +642,11 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
               {t('sessions.layout.close')}
             </Button>
           </div>
-        </>
+        </div>
       )}
     </div>
   )
 }
-
 function SessionHealthDialog(props: SessionHealthDialogProps) {
   const { open, onClose, recoveryApi, t, clipboardT, response, loading, error, onScan, zipProbe, api } = props
   /**
@@ -632,6 +675,8 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
   const summary = sessionHealthSummaryView(response)
   const truncated = sessionHealthTruncated(response)
   const repairEntries = sessionRepairEntries(response)
+  /** 严重级 chips（只留 count>0 的档，短标签进屏 / 完整句进 title）—— 判定与顺序全在 ui 纯函数层 */
+  const severityChips = sessionSeverityChips(summary)
   /** 正在预览 / 应用 / 回滚的 unitId（进行中态住组件内；弹窗不跨页签） */
   const [busy, setBusy] = useState<string | null>(null)
   /**
@@ -812,24 +857,34 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
   return (
     <>
       <Modal open={open} onClose={onClose} title={t('sessions.title')} wide busy={busy !== null}>
-        <Modal.Header title={t('sessions.title')} onClose={onClose} closeLabel={t('common.close')} />
-        <Modal.Body scroll>
-          <div className={css.actionRow}>
-            <Button variant="ghost" loading={loading} disabled={loading} onClick={onScan}>
-              {loading ? t('sessions.scanning') : t('sessions.scan')}
-            </Button>
-          </div>
-
-          {/*
-            F-2：官方 session.export 通道的**可用性说明**（逐行入口见下方列表）。
-            ZIP 由 DSH 自己打包（含子会话与附件）；体检/修复动的是本机文件，两者不是一回事。
-            不可用时界面给出**可读原因**，绝不静默消失（消失会让用户以为插件根本没做这个功能）。
-          */}
-          {zipHint !== null && (
-            <Banner kind="warn">{zipHint}</Banner>
+        <Modal.Header
+          title={t('sessions.title')}
+          onClose={onClose}
+          closeLabel={t('common.close')}
+          trailing={(
+            <span className={css.shHeaderTrailing}>
+              {/* 机制说明（扫什么 / 四档严重级 / 哪些能在应用内修）—— 与入口卡片上那颗 ⓘ 同一条键 */}
+              <InfoHint text={t('sessions.desc')} label={t('common.infoHint')} />
+              {/* 主操作搬进标题行：旧实现是正文左上角孤零零一颗按钮（要先滚过摘要才找得到） */}
+              <Button
+                size="sm"
+                variant={response === null ? 'primary' : 'ghost'}
+                loading={loading}
+                disabled={loading}
+                onClick={onScan}
+              >
+                {loading ? t('sessions.scanning') : response === null ? t('sessions.scan') : t('sessions.rescan')}
+              </Button>
+            </span>
           )}
+        />
+        <Modal.Body scroll>
+          {zipHint !== null && <Banner kind="warn">{zipHint}</Banner>}
 
           {phase === 'error' && <Banner kind="error">{error ?? t('common.unknownError')}</Banner>}
+
+          {/* 首次扫描（还没有任何结果）：给出进行中反馈 —— 旧实现在这里只留一片空白 */}
+          {phase === 'loading' && response === null && <Spinner label={t('sessions.scanning')} />}
 
           {phase === 'ready' && response !== null && (
             <>
@@ -837,26 +892,55 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
               {response.sessionsDirExists && sessionHealthEmpty(response) && <Empty>{t('sessions.empty')}</Empty>}
               {summary !== null && summary.total > 0 && (
                 <>
-                  <div className={css.statRow}>
-                    <Badge kind={summary.needsAttention > 0 ? 'warn' : 'ok'}>
-                      {t('sessions.summary.total', { count: String(summary.total) })}
-                    </Badge>
-                    {summary.bySeverity.blocksStartup > 0 && (
-                      <Badge kind="error">{t('sessions.count.blocksStartup', { count: String(summary.bySeverity.blocksStartup) })}</Badge>
+                  {/* ① 概览：先把数字给出来（旧实现是一串同款徽章，看不出哪个数是重点） */}
+                  <div className={css.shSummary}>
+                    <div className={css.shMetrics}>
+                      <div className={css.shMetric}>
+                        <span className={css.shMetricValue}>{String(summary.total)}</span>
+                        <span className={css.shMetricLabel}>{t('sessions.metric.total')}</span>
+                      </div>
+                      <div className={css.shMetric} data-tone={summary.needsAttention > 0 ? 'warn' : 'ok'}>
+                        <span className={css.shMetricValue}>{String(summary.needsAttention)}</span>
+                        <span className={css.shMetricLabel}>{t('sessions.metric.attention')}</span>
+                      </div>
+                      {summary.targetFormatVersion !== null && (
+                        <div className={css.shMetric}>
+                          <span className={css.shMetricValue}>{'v' + String(summary.targetFormatVersion)}</span>
+                          <span className={css.shMetricLabel}>{t('sessions.metric.format')}</span>
+                        </div>
+                      )}
+                    </div>
+                    {severityChips.length > 0 && (
+                      <div className={css.shSeverities}>
+                        {severityChips.map((chip) => (
+                          <span key={chip.severity} className={css.shSeverity} data-severity={chip.severity} title={t(chip.fullKey)}>
+                            <StatusDot kind={chip.badgeKind} />
+                            <span>{t(chip.shortKey)}</span>
+                            <span className={css.shSeverityCount}>{String(chip.count)}</span>
+                          </span>
+                        ))}
+                      </div>
                     )}
-                    {summary.bySeverity.unloadable > 0 && (
-                      <Badge kind="error">{t('sessions.count.unloadable', { count: String(summary.bySeverity.unloadable) })}</Badge>
-                    )}
-                    {summary.bySeverity.nextRequestFails > 0 && (
-                      <Badge kind="warn">{t('sessions.count.nextRequestFails', { count: String(summary.bySeverity.nextRequestFails) })}</Badge>
-                    )}
-                    {summary.bySeverity.invisible > 0 && (
-                      <Badge kind="warn">{t('sessions.count.invisible', { count: String(summary.bySeverity.invisible) })}</Badge>
-                    )}
-                    {summary.targetFormatVersion !== null && (
-                      <Badge kind="info">{t('sessions.targetFormat', { version: String(summary.targetFormatVersion) })}</Badge>
-                    )}
+                    {/* 数据口径：这次统计覆盖了多少（未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目）。
+                        全部常驻可见 —— 「未验证 ≠ 没问题」「绝不静默少显示」是本面板的既定口径。 */}
+                    <div className={css.shNotes}>
+                      {summary.deepUnverified > 0 && (
+                        <div className={css.hint}>
+                          {t('sessions.unverified', { count: String(summary.deepUnverified), verified: String(summary.deepVerified) })}
+                        </div>
+                      )}
+                      {summary.hiddenHealthy > 0 && (
+                        <div className={css.hint} title={t('sessions.hidden.healthy', { count: String(summary.hiddenHealthy) })}>
+                          {t('sessions.hidden.healthyShort', { count: String(summary.hiddenHealthy) })}
+                        </div>
+                      )}
+                      {summary.untested > 0 && <div className={css.hint}>{t('sessions.untested', { count: String(summary.untested) })}</div>}
+                      {summary.unreadableEntries > 0 && (
+                        <div className={css.hint}>{t('sessions.unreadableEntries', { count: String(summary.unreadableEntries) })}</div>
+                      )}
+                    </div>
                   </div>
+
                   {/* E2：本档（blocksStartup 的 location-mismatch / duplicate-id）的**应用内写入口**。
                       只在有候选行或手上有计划/结果时渲染；判定与键映射全在 ui/session-layout-view.ts。 */}
                   <SessionLayoutSection
@@ -865,134 +949,156 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                     response={response}
                     onScan={onScan}
                   />
+
+                  {/* ② 需要处理的会话：列表与「一键修复全部」同屏，动作恒在区块头右侧 */}
+                  <div className={css.shSectionHead}>
+                    <span className={css.shSectionTitle}>{t('sessions.section.attention')}</span>
+                    <Badge kind={rows.length > 0 ? 'warn' : 'ok'}>{String(rows.length)}</Badge>
+                    {summary.repairable > 0 && (
+                      <>
+                        <span className={css.statusSpacer} />
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          loading={batchBusy}
+                          disabled={busy !== null || batchBusy}
+                          onClick={repairAll}
+                        >
+                          {t('sessions.repair.repairAll', { count: String(summary.repairable) })}
+                        </Button>
+                      </>
+                    )}
+                  </div>
                   <div className={css.hint}>
                     {summary.repairable > 0
-                      ? t('sessions.repair.available', { count: String(summary.repairable) })
-                      : t('sessions.repair.none')}
+                      ? t('sessions.repair.availableShort', { count: String(summary.repairable) })
+                      : t('sessions.repair.noneShort')}
+                    {' '}
+                    {/* 操作说明（怎么点、先看什么）属说明性文案 → 完整句进 ⓘ（DESIGN §7） */}
+                    <InfoHint
+                      text={summary.repairable > 0
+                        ? t('sessions.repair.available', { count: String(summary.repairable) })
+                        : t('sessions.repair.none')}
+                      label={t('common.infoHint')}
+                    />
                   </div>
-                  {/* 「只显示有问题的对话」隐藏了多少正常会话 —— 绝不静默少显示 */}
-                  {summary.hiddenHealthy > 0 && (
-                    <div className={css.hint}>{t('sessions.hidden.healthy', { count: String(summary.hiddenHealthy) })}</div>
-                  )}
-                  {summary.repairable > 0 && (
-                    <div className={css.actionRow}>
-                      <Button
-                        variant="primary"
-                        loading={batchBusy}
-                        disabled={busy !== null || batchBusy}
-                        onClick={repairAll}
-                      >
-                        {t('sessions.repair.repairAll', { count: String(summary.repairable) })}
-                      </Button>
-                    </div>
-                  )}
+
+                  {/* 一键修复的全部结果（逐条留痕 + 复验结论）：绝不只给一个计数 */}
                   {batch !== null && (
-                    <div className={css.snapshotRow}>
-                      <div className={css.snapshotRowText}>
-                        <span className={css.snapshotRowName}>
+                    <div className={css.shPanel}>
+                      <div className={css.shPanelHead}>
+                        <span className={css.shPanelTitle}>
                           {t('sessions.repair.allDone', { ok: String(batch.ok), failed: String(batch.failed) })}
                         </span>
-                        {/* 逐条留痕：修好了几条、剩下几条为什么没修成 —— 绝不只给一个计数 */}
+                      </div>
+                      <div className={css.snapshotList}>
                         {batch.results.map((item) => {
-                          // 一键修复的成功项同样要说出复验结论（三态判定在 ui 纯函数层，组件只查字典）
+                          // 一键修复的成功项同样要说出复验结论（三态判定在 ui 纯函数层，组件只查字典），
                           // 与单条修复路径同一个纯函数、同一套 locale 键（失败项也必须给出复验结论）
                           const verifyKey = sessionRepairVerifyKey(item.verify, item.rolledBack)
                           return (
-                            <div key={item.unitId} className={css.snapshotRowMeta}>
-                              <span className={css.snapshotRowBadges}>
+                            <div key={item.unitId} className={css.shRow}>
+                              <div className={css.shRowTop}>
                                 <Badge kind={item.ok ? 'ok' : 'warn'}>
                                   {item.ok ? t('sessions.repair.batch.ok') : t('sessions.repair.batch.failed')}
                                 </Badge>
-                              </span>
-                              <span className={css.snapshotRowIssues} title={item.unitId}>{item.sessionId}</span>
-                              <span className={css.snapshotRowFacts}>
-                                {item.ok
-                                  ? t('sessions.repair.batch.dropped', { rows: String(item.droppedRows ?? 0) })
-                                  : item.transportError !== undefined
-                                    ? t('sessions.repair.batch.transportError', { message: item.transportError })
-                                    : item.lossy === true
-                                      ? t('sessions.repair.reason.lossyRequired')
-                                      : t(sessionRepairReasonKey(item.reason))}
-                                {verifyKey !== null && <> · {t(verifyKey)}</>}
-                              </span>
+                                <span className={`${css.shRowId} ${css.mono}`} title={item.unitId}>{item.sessionId}</span>
+                              </div>
+                              <div className={css.shRowMeta}>
+                                <span>
+                                  {item.ok
+                                    ? t('sessions.repair.batch.dropped', { rows: String(item.droppedRows ?? 0) })
+                                    : item.transportError !== undefined
+                                      ? t('sessions.repair.batch.transportError', { message: item.transportError })
+                                      : item.lossy === true
+                                        ? t('sessions.repair.reason.lossyRequired')
+                                        : t(sessionRepairReasonKey(item.reason))}
+                                </span>
+                                {verifyKey !== null && (
+                                  <>
+                                    <span className={css.shMetaDot} aria-hidden="true">·</span>
+                                    <span className={css.mono}>{t(verifyKey)}</span>
+                                  </>
+                                )}
+                              </div>
                             </div>
                           )
                         })}
                       </div>
                     </div>
                   )}
-                  {summary.deepUnverified > 0 && (
-                    <div className={css.hint}>
-                      {t('sessions.unverified', { count: String(summary.deepUnverified), verified: String(summary.deepVerified) })}
-                    </div>
-                  )}
-                  {summary.untested > 0 && <div className={css.hint}>{t('sessions.untested', { count: String(summary.untested) })}</div>}
-                  {summary.unreadableEntries > 0 && (
-                    <div className={css.hint}>{t('sessions.unreadableEntries', { count: String(summary.unreadableEntries) })}</div>
-                  )}
-                  {/* 长列表限高内滚（DESIGN §8 硬性规则）：上千行不再撑满弹窗滚动容器 */}
-                  <div className={`${css.snapshotList} ${css.reportScroll}`}>
-                    {rows.map((row) => (
-                      <div key={row.unitId} className={css.snapshotRow}>
-                        <div className={css.snapshotRowText}>
-                          {/* 会话目录名独占一行（非敏感：只是一条本地会话的标识，不含内容）；
-                              其余字段各占固定位置，长名不再把徽章/问题挤到不可读 */}
-                          <span className={css.snapshotRowName} title={row.unitId}>{row.sessionId}</span>
-                          <div className={css.snapshotRowMeta}>
-                            <span className={css.snapshotRowBadges}>
-                              <Badge kind={row.badgeKind}>{t(row.severityKey)}</Badge>
-                              {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
-                            </span>
-                            {/* detail 走 title（补充事实，不撑破行宽）：悬停即可看到规模（如「3 row(s)」） */}
-                            <span
-                              className={css.snapshotRowIssues}
-                              title={row.issueDetailText ?? undefined}
-                            >{sessionIssuesText(row.issueCodes, t)}</span>
-                            <span className={css.snapshotRowFacts}>
-                              {[
-                                row.versionText,
-                                row.sizeText,
-                                row.mtimeMs !== null ? formatRecoveryTime(String(row.mtimeMs)) : null,
-                              ].filter((v): v is string => v !== null).join(' · ')}
-                            </span>
-                          </div>
-                        </div>
-                        {/* 可应用内修复的类别（与体检的 repairable 同源判定）；点开先 dry-run，绝不直接写 */}
-                        {row.repairable && (
-                          <div className={css.actionRow}>
-                            <Button
-                              variant="ghost"
-                              loading={busy === row.unitId}
-                              disabled={busy !== null && busy !== row.unitId}
-                              onClick={() => { startRepair(row.unitId) }}
-                            >
-                              {t('sessions.repair.action')}
-                            </Button>
-                          </div>
-                        )}
-                        {/* F-2：下载该会话的原始日志 ZIP（**只读**；由 DSH 自己打包，含子会话与附件）。
-                            不可用时**禁用并给出原因**（不静默消失）—— 三态判定在 session-export-view.ts。 */}
-                        <div className={css.actionRow}>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={!zipState.enabled || zipBusy !== null}
-                            loading={zipBusy === row.sessionId}
-                            title={zipHint ?? t('sessions.zip.hint')}
-                            onClick={() => { downloadZip(row.sessionId) }}
-                          >
-                            {t('sessions.zip.action')}
-                          </Button>
-                        </div>
+
+                  {/* ③ 需要处理的会话列表：两行式行卡 + 限高内滚（DESIGN §8 硬性规则） */}
+                  {rows.length === 0
+                    ? <div className={css.hint}>{t('sessions.section.attentionNone')}</div>
+                    : (
+                      <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
+                        {rows.map((row) => {
+                          /** 问题 chip：最多 2 条进屏、其余折叠（条数如实给出，全文进 title） */
+                          const issueChips = sessionIssueChips(row.issueCodes)
+                          const facts = [
+                            row.versionText,
+                            row.sizeText,
+                            row.mtimeMs !== null ? formatRecoveryTime(String(row.mtimeMs)) : null,
+                          ].filter((value): value is string => value !== null).join(' · ')
+                          return (
+                            <div key={row.unitId} className={css.shRow} data-severity={row.severity}>
+                              <div className={css.shRowTop}>
+                                {/* 徽章只放短标签（「阻断启动」），完整句（「会让 DSH 起不来」）进 title */}
+                                <Badge kind={row.badgeKind} title={t(row.severityKey)}>{t(row.severityShortKey)}</Badge>
+                                {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
+                                {/* 会话目录名独占行首最宽的位置（等宽 + 单行省略，全文进 title） */}
+                                <span className={`${css.shRowId} ${css.mono}`} title={row.unitId}>{row.sessionId}</span>
+                                <div className={css.shRowActions}>
+                                  {/* 可应用内修复的类别（与体检的 repairable 同源判定）；点开先 dry-run，绝不直接写 */}
+                                  {row.repairable && (
+                                    <Button
+                                      size="sm"
+                                      loading={busy === row.unitId}
+                                      disabled={busy !== null && busy !== row.unitId}
+                                      onClick={() => { startRepair(row.unitId) }}
+                                    >
+                                      {t('sessions.repair.action')}
+                                    </Button>
+                                  )}
+                                  {/* F-2：下载该会话的原始日志 ZIP（**只读**；由 DSH 自己打包，含子会话与附件）。
+                                      不可用时**禁用并给出原因**（不静默消失）—— 三态判定在 session-export-view.ts。 */}
+                                  <IconButton
+                                    icon={zipBusy === row.sessionId ? <Spinner /> : <Icon name="download" />}
+                                    label={t('sessions.zip.action')}
+                                    title={zipHint ?? t('sessions.zip.hint')}
+                                    disabled={!zipState.enabled || zipBusy !== null}
+                                    onClick={() => { downloadZip(row.sessionId) }}
+                                  />
+                                </div>
+                              </div>
+                              <div className={css.shRowMeta}>
+                                {issueChips.codes.map((code) => (
+                                  <span key={code} className={css.shIssue} title={row.issueDetailText ?? undefined}>
+                                    {t(sessionIssueKey(code))}
+                                  </span>
+                                ))}
+                                {issueChips.hidden > 0 && (
+                                  <span className={css.shIssue} title={sessionIssuesText(row.issueCodes, t)}>
+                                    {t('sessions.issues.more', { count: String(issueChips.hidden) })}
+                                  </span>
+                                )}
+                                {facts !== '' && <span className={css.shRowFacts}>{facts}</span>}
+                              </div>
+                            </div>
+                          )
+                        })}
                       </div>
-                    ))}
-                  </div>
+                    )}
                   {truncated > 0 && <div className={css.hint}>{t('sessions.truncated', { count: String(truncated) })}</div>}
+
                   {/* 修复计划（dry-run 结果）。ok=false 时显示**真实拒绝原因**，不给假成功 */}
                   {plan !== null && (
-                    <div className={css.snapshotRow}>
-                      <div className={css.snapshotRowMain}>
-                        {t('sessions.repair.plan.title', { session: plan.result.sessionId ?? plan.unitId })}
+                    <div className={css.shPanel}>
+                      <div className={css.shPanelHead}>
+                        <span className={css.shPanelTitle} title={plan.unitId}>
+                          {t('sessions.repair.plan.title', { session: plan.result.sessionId ?? plan.unitId })}
+                        </span>
                       </div>
                       {plan.result.ok ? (
                         <>
@@ -1003,14 +1109,16 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                               after: formatSessionBytes(plan.result.bytesAfter ?? 0),
                             })}
                           </div>
-                          {(plan.result.actions ?? []).map((action) => (
-                            <div key={action.code} className={css.hint}>
-                              <Badge kind={action.lossy ? 'warn' : 'ok'}>
-                                {action.lossy ? t('sessions.repair.actionLossy') : t('sessions.repair.actionLossless')}
-                              </Badge>
-                              {' '}{action.detail}
-                            </div>
-                          ))}
+                          <div className={css.shLines}>
+                            {(plan.result.actions ?? []).map((action) => (
+                              <div key={action.code} className={css.hint}>
+                                <Badge kind={action.lossy ? 'warn' : 'ok'}>
+                                  {action.lossy ? t('sessions.repair.actionLossy') : t('sessions.repair.actionLossless')}
+                                </Badge>
+                                {' '}{action.detail}
+                              </div>
+                            ))}
+                          </div>
                           <div className={css.hint}>{t('sessions.repair.plan.backup')}</div>
                           {plan.result.lossy === true && (
                             <div className={css.hint}>{t('sessions.repair.plan.lossy')}</div>
@@ -1040,9 +1148,11 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                   )}
                   {/* 应用成功后的结果（含真 codec 复验结论）：绝不把「写完了」说成「已可加载」 */}
                   {applied !== null && (
-                    <div className={css.snapshotRow}>
-                      <div className={css.snapshotRowMain}>
-                        <span title={applied.unitId}>{applied.result.sessionId ?? applied.unitId}</span>
+                    <div className={css.shPanel}>
+                      <div className={css.shPanelHead}>
+                        <span className={css.shPanelTitle} title={applied.unitId}>
+                          {applied.result.sessionId ?? applied.unitId}
+                        </span>
                       </div>
                       <div className={css.hint}>
                         {t('sessions.repair.applied', { rows: String(applied.result.droppedRows ?? 0) })}
@@ -1055,13 +1165,17 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                       </div>
                     </div>
                   )}
-                  {/* 应用内不动的问题类别：离线出路 */}
-                  <div className={css.groupLabel}>{t('sessions.repair.title')}</div>
+
+                  {/* 应用内不动的问题类别：离线出路（命令逐条可复制） */}
+                  <div className={css.shSectionHead}>
+                    <span className={css.shSectionTitle}>{t('sessions.repair.title')}</span>
+                  </div>
+                  {/* KEEP 类（安全 / 写盘建议）：容器非法 / header 不可读 / 格式超前这些必须常驻可见 */}
                   <div className={css.hint}>{t('sessions.repair.desc')}</div>
-                  <ul className={css.reportList}>
+                  <ul className={css.shCommands}>
                     {sessionRepairCommands().map((entry) => (
-                      <li key={entry.command}>
-                        <code>{entry.command}</code>
+                      <li key={entry.command} className={css.shCommand}>
+                        <code className={css.mono}>{entry.command}</code>
                         <CopyButton text={entry.command} label={t('sessions.repair.copy')} t={clipboardT} />
                       </li>
                     ))}
@@ -1071,25 +1185,35 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
               {/* 本机修复台账（可回滚）。回滚只认 repairId —— 界面拿不到也传不了路径 */}
               {repairEntries.length > 0 && (
                 <>
-                  <div className={css.groupLabel}>{t('sessions.repair.history.title')}</div>
+                  <div className={css.shSectionHead}>
+                    <span className={css.shSectionTitle}>{t('sessions.repair.history.title')}</span>
+                    <Badge kind="info">{String(repairEntries.length)}</Badge>
+                  </div>
                   <div className={css.snapshotList}>
                     {repairEntries.map((entry) => (
-                      <div key={entry.repairId} className={css.snapshotRow}>
-                        <div className={css.snapshotRowMain}>
-                          <span title={entry.unitId}>{entry.sessionId}</span>
+                      <div key={entry.repairId} className={css.shRow}>
+                        <div className={css.shRowTop}>
                           <Badge kind={entry.rolledBack ? 'info' : 'ok'}>
                             {entry.rolledBack ? t('sessions.repair.history.rolledBack') : t('sessions.repair.history.applied')}
                           </Badge>
-                          <span>{t('sessions.repair.history.dropped', { rows: String(entry.droppedRows) })}</span>
-                          <span>{entry.at !== null ? formatRecoveryTime(String(entry.at)) : ''}</span>
+                          <span className={`${css.shRowId} ${css.mono}`} title={entry.unitId}>{entry.sessionId}</span>
+                          {!entry.rolledBack && (
+                            <div className={css.shRowActions}>
+                              <Button size="sm" disabled={busy !== null} onClick={() => { setRollbackTarget(entry) }}>
+                                {t('sessions.repair.rollback')}
+                              </Button>
+                            </div>
+                          )}
                         </div>
-                        {!entry.rolledBack && (
-                          <div className={css.actionRow}>
-                            <Button variant="ghost" disabled={busy !== null} onClick={() => { setRollbackTarget(entry) }}>
-                              {t('sessions.repair.rollback')}
-                            </Button>
-                          </div>
-                        )}
+                        <div className={css.shRowMeta}>
+                          <span>{t('sessions.repair.history.dropped', { rows: String(entry.droppedRows) })}</span>
+                          {entry.at !== null && (
+                            <>
+                              <span className={css.shMetaDot} aria-hidden="true">·</span>
+                              <span className={css.mono}>{formatRecoveryTime(String(entry.at))}</span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1148,6 +1272,8 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
   const [crash, setCrash] = useState<CrashReport | null>(null)
   const [rescue, setRescue] = useState<RescueStatus | null>(null)
   const [rescueBusy, setRescueBusy] = useState(false)
+  /** 救援模式说明的折叠态（缺省收起：紧急功能不占常驻高度，主操作在标题行恒可达） */
+  const [rescueOpen, setRescueOpen] = useState(false)
   const [rescueConfirmOpen, setRescueConfirmOpen] = useState(false)
 
   /** 统一提交入口：更新 stateRef → 挂载时 setState → **总是**镜像进 runStore。 */
@@ -1365,10 +1491,17 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
     ? state.recovery.incidents.find((i) => i.operationId === state.selectedOperationId)
     : undefined
   const previewView = state.preview !== null ? toRecoveryPreviewView(state.preview) : null
+  /** 真有待处理事项（口径唯一来源 = 纯函数 recovery-view.ts 的 recoveryRequired）：决定副标题与空态 */
+  const needsAttention = view?.recoveryRequired === true
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('view.recovery')} subtitle={t('recovery.requiredHint')} />
+      {/* 副标题只在**真有待处理事项**时出现：本机健康时那句「检测到一次操作未正常完成…」是假警报
+          （此前无条件常驻）；空态解释由下方的 Empty 承担，§7 的 KEEP-5 不变。 */}
+      <SectionTitle
+        title={t('view.recovery')}
+        subtitle={needsAttention ? t('recovery.requiredHint') : undefined}
+      />
 
       {/* 事故处置：崩溃归因（上次启动没起来）+ 救援模式（先让 DSH 起得来）。
           灾备快照线（自动快照 / 撤销重做）已下线，恢复到某个历史点改由「备份文件」承担，
@@ -1387,67 +1520,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         </Banner>
       )}
 
-      {rescue !== null && (
-        <Card>
-          <div className={css.statRow}>
-            <strong>{t('recovery.rescue.title')}</strong>
-            <Badge kind={rescue.active ? 'warn' : 'ok'}>
-              {rescue.active ? t('recovery.rescue.activeBadge') : t('recovery.rescue.inactive')}
-            </Badge>
-            {rescue.stale && <Badge kind="warn">{t('recovery.rescue.stale')}</Badge>}
-          </div>
-          <div className={css.hint}>{t('recovery.rescue.desc')}</div>
-          {rescue.active && (
-            <div className={css.hint}>
-              {t(rescue.applied ? 'recovery.rescue.applied' : 'recovery.rescue.active', { time: formatRecoveryTime(rescue.enteredAt) })}
-            </div>
-          )}
-          {rescue.active && <div className={css.hint}>{t(rescueHintKey(rescue))}</div>}
-          <div className={css.actionRow}>
-            {rescue.active
-              ? <Button variant="danger" disabled={rescueBusy} loading={rescueBusy} onClick={exitRescue}>{t('recovery.rescue.exit')}</Button>
-              : <Button variant="danger" disabled={rescueBusy} onClick={() => { setRescueConfirmOpen(true) }}>{t('recovery.rescue.enter')}</Button>}
-          </div>
-        </Card>
-      )}
-
-      {/* t54：中断的档案复制残留（cross-F3）—— 独立形态 + 只给删除；删除走既有 POST /profiles/delete，
-          被 SAFE MODE 拦下（423 mutation-locked）时给原因与本页出口（safe-mode/clear）。 */}
-      {view !== null && view.incompleteCopies.length > 0 && (
-        <IncompleteCopiesSection
-          rows={view.incompleteCopies}
-          t={t}
-          diskApi={props.diskApi}
-          recoveryApi={props.recoveryApi}
-          onChanged={load}
-        />
-      )}
-
-      {/* t89：残留**枚举失败** —— 与上面「有残留」和「暂无残留」都不同形：显式告知「读不到 ≠ 没有」，
-          并给唯一的可行动作（重试 = 重拉 /recovery/status）。判定在 recovery-view.ts 的纯函数里，这里只装配。 */}
-      {view !== null && view.incompleteCopiesNotice === 'unreadable' && (
-        <Card>
-          <SectionTitle title={t('recovery.incomplete.unreadable.title')} />
-          <Banner kind="warn">{t('recovery.incomplete.unreadable.hint')}</Banner>
-          <div className={css.actionRow}>
-            <Button onClick={load}>{t('common.retry')}</Button>
-          </div>
-        </Card>
-      )}
-
-      {/* 磁盘占用与清理（m-disk-usage）：§9 固定的第 2 块。
-           三条硬边界一字不动（候选集只有可重建区 + 显式勾选的过期导出；snapshots/sync 永不在候选集；
-           界面数字由渲染行现算）—— 实现全在 DiskUsageCard 与 ui/disk-usage-view.ts 里。 */}
-      <DiskUsageCard api={props.diskApi} infoHintLabel={props.infoHintLabel ?? props.t('common.infoHint')} />
-
-      {/* T5：会话体检（只读）—— 与「我的对话去哪了」是同一件事，故与事故恢复同屏 */}
-      <SessionHealthCard recoveryApi={recoveryApi} t={t} copyT={props.copyT} diskApi={props.diskApi} />
-
-      {/* S7：工作区 + 会话回滚（每个回合结束自动留点）—— 紧跟在会话体检之后：
-          它要解决的正是同一件事（事故后把工作区与会话退回某个时刻），且时间线按会话分组，
-          与会话体检的分组口径一致；会话回退只 fork 子会话，原会话日志只读。 */}
-      <RollbackCard recoveryApi={recoveryApi} t={t} />
-
+      {/* —— 状态与待处理事项（先异常、后诊断）：三块诊断卡在下方，缺省只展开磁盘占用 —— */}
       {/* SAFE MODE / recovery-required 状态提示（正常态不渲染任何横幅——无事项即静默） */}
       {view?.recoveryRequired === true && (
         <Banner kind="error">{t('recovery.currentState.safeMode')}</Banner>
@@ -1476,7 +1549,9 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         </Card>
       )}
 
-      {state.status === 'ready' && (view?.incidents.length ?? 0) === 0 && view?.lock == null && view?.safeModeStuck !== true && (
+      {/* 空态：只在**确知没有事项**时出现（recoveryRequired 的口径见 recovery-view.ts）。
+          「枚举失败」是不知道、不是没有（t89）—— 那时由上面的告警条承担解释，不在这里说「暂无」。 */}
+      {state.status === 'ready' && view?.recoveryRequired !== true && view?.incompleteCopiesNotice !== 'unreadable' && (
         <Empty>{t('recovery.empty')}</Empty>
       )}
 
@@ -1671,6 +1746,78 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           )}
         </>
       )}
+
+      {rescue !== null && (
+        <Card>
+          <div className={css.statRow}>
+            <strong>{t('recovery.rescue.title')}</strong>
+            <Badge kind={rescue.active ? 'warn' : 'ok'}>
+              {rescue.active ? t('recovery.rescue.activeBadge') : t('recovery.rescue.inactive')}
+            </Badge>
+            {rescue.stale && <Badge kind="warn">{t('recovery.rescue.stale')}</Badge>}
+            <span className={css.statusSpacer} />
+            {/* 危险动作留在**标题行**：折叠只收起「这个功能做什么」的说明，主操作与状态徽章永远可达
+                （紧急功能不该藏在一次点击后面）；不可逆改写的完整说明在确认弹窗里逐条给出。 */}
+            {rescue.active
+              ? <Button variant="danger" disabled={rescueBusy} loading={rescueBusy} onClick={exitRescue}>{t('recovery.rescue.exit')}</Button>
+              : <Button variant="danger" disabled={rescueBusy} onClick={() => { setRescueConfirmOpen(true) }}>{t('recovery.rescue.enter')}</Button>}
+            <FoldToggle
+              open={rescueOpen}
+              controls={RESCUE_BODY_ID}
+              onToggle={() => { setRescueOpen((v) => !v) }}
+              expandLabel={t('common.expand')}
+              collapseLabel={t('common.collapse')}
+            />
+          </div>
+          <Collapse open={rescueOpen} id={RESCUE_BODY_ID}>
+          <div className={css.hint}>{t('recovery.rescue.desc')}</div>
+          {rescue.active && (
+            <div className={css.hint}>
+              {t(rescue.applied ? 'recovery.rescue.applied' : 'recovery.rescue.active', { time: formatRecoveryTime(rescue.enteredAt) })}
+            </div>
+          )}
+          {rescue.active && <div className={css.hint}>{t(rescueHintKey(rescue))}</div>}
+          </Collapse>
+        </Card>
+      )}
+
+      {/* t54：中断的档案复制残留（cross-F3）—— 独立形态 + 只给删除；删除走既有 POST /profiles/delete，
+          被 SAFE MODE 拦下（423 mutation-locked）时给原因与本页出口（safe-mode/clear）。 */}
+      {view !== null && view.incompleteCopies.length > 0 && (
+        <IncompleteCopiesSection
+          rows={view.incompleteCopies}
+          t={t}
+          diskApi={props.diskApi}
+          recoveryApi={props.recoveryApi}
+          onChanged={load}
+        />
+      )}
+
+      {/* t89：残留**枚举失败** —— 与上面「有残留」和「暂无残留」都不同形：显式告知「读不到 ≠ 没有」，
+          并给唯一的可行动作（重试 = 重拉 /recovery/status）。判定在 recovery-view.ts 的纯函数里，这里只装配。 */}
+      {view !== null && view.incompleteCopiesNotice === 'unreadable' && (
+        <Card>
+          <SectionTitle title={t('recovery.incomplete.unreadable.title')} />
+          <Banner kind="warn">{t('recovery.incomplete.unreadable.hint')}</Banner>
+          <div className={css.actionRow}>
+            <Button onClick={load}>{t('common.retry')}</Button>
+          </div>
+        </Card>
+      )}
+
+      {/* —— 诊断三块（缺省只展开磁盘占用；另两块缺省收起，摘要与开关留在标题行）——
+           磁盘占用与清理（m-disk-usage）：三条硬边界一字不动（候选集只有可重建区 + 显式勾选的过期导出；snapshots/sync 永不在候选集；
+           界面数字由渲染行现算）—— 实现全在 DiskUsageCard 与 ui/disk-usage-view.ts 里。 */}
+      <DiskUsageCard api={props.diskApi} infoHintLabel={props.infoHintLabel ?? props.t('common.infoHint')} />
+
+      {/* T5：会话体检（只读）—— 与「我的对话去哪了」是同一件事，故与事故恢复同屏（卡内缺省收起） */}
+      <SessionHealthCard recoveryApi={recoveryApi} t={t} copyT={props.copyT} diskApi={props.diskApi} />
+
+      {/* S7：工作区 + 会话回滚（每个回合结束自动留点）—— 紧跟在会话体检之后：
+          它要解决的正是同一件事（事故后把工作区与会话退回某个时刻），且时间线按会话分组，
+          与会话体检的分组口径一致；会话回退只 fork 子会话，原会话日志只读。
+           卡内缺省收起：这是维护页最长的一块（台账 + 预览），入口与摘要留在标题行。 */}
+      <RollbackCard recoveryApi={recoveryApi} t={t} />
 
       {/* 执行恢复二次确认（破坏性操作） */}
       <ConfirmDialog

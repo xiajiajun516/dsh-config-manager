@@ -495,6 +495,21 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   完整句仍在原键里 —— 旧实现把整句逐行重复，正是「一坨灰字」的根因。
   行内危险动作（删除回滚点）用 `IconButton danger`（禁用原因进 `title`），不再常驻一颗 danger 文本按钮。
   执行者：`src/client/recovery/recovery-panel-layout.test.ts`（禁止退回 `.actionRow[data-inline]`）。
+- **会话体检弹窗**（环境 → 维护与诊断 → 会话体检，2026-10-12 重排，同一条用户反馈「UI 太丑」）：
+  弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的说明 ⓘ + 主操作「开始体检 / 重新体检」）
+  → `.shSummary`（`.shMetrics` 数字 tiles：会话总数 / 需要处理 / 会话格式 → `.shSeverities` 严重级 chips
+  → `.shNotes` 数据口径：未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目）
+  → `.shSectionHead`（`.shSectionTitle` 13px 区块标题 + 计数 `Badge` + 右对齐主操作）
+  → `.snapshotList`+`.reportScroll`+`.shScroll`（限高内滚）内的 `.shRow`。
+  硬约定四条：① 行卡是**两行式**（`.shRowTop` = 严重级短标签 `Badge` + 等宽会话 id + 右对齐 `.shRowActions`；
+  `.shRowMeta` = 问题 chip（最多 2 条 + 「还有 N 条」，全文进 `title`）+ `.shRowFacts` 版本/体积/时间），
+  左侧 2px 语义色条按 `data-severity` 上色（`blocksStartup`/`unloadable` = `--cm-error`、
+  `nextRequestFails`/`invisible` = `--cm-warn`）；② **长句只进 `title`**，屏上只放短标签键
+  （`sessions.severityShort.*` / `sessions.issues.more` / `sessions.hidden.healthyShort`…），完整句仍在原键里；
+  ③ 摘要 chips 与行徽章走**同一个短标签出口**（`sessionSeverityShortKey` 纯函数）—— 两处各判一次必然术语漂移；
+  ④ 机制散文（布局归位的 3 段、应用内可修的完整说明、操作指引）进 ⓘ 或只在**真有动作可执行时**常驻，
+  安全口径（运行时写入门 / 隔离目录不删会话 / 禁用原因）**一个字都不删**，只换承载位置。
+  执行者：`src/client/recovery/session-dialog-mount.test.ts` 的 T15/T16。
 - **Stepper**：紧凑圆点 17px + 连接线，只读指示器。
 - **进度条**：`.progressTrack` 5px + 确定宽度过渡 / `.progressIndeterminate`。
 

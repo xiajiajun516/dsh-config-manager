@@ -2673,6 +2673,21 @@ body {
   margin-bottom: 0;
 }
 
+/* 折叠卡头（承载 SectionTitle 的形态）：标题块吃掉剩余宽度（长副标题在自身宽度内换行），
+   开关恒贴右。与 .headRow 的区别：这里必须 flex-start 对齐（标题 + 副标题是两行），
+   标题块自身的外边距归零 —— 行间距由本类统一给，否则折叠态会多出一段空白。 */
+.foldHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.foldHead .sectionTitleBlock {
+  flex: 1 1 auto;
+  margin-bottom: 0;
+}
+
 /* 作者行（关于页）：标签与作者名基线对齐 */
 .authorRow {
   display: flex;
@@ -5384,3 +5399,307 @@ button.profileRowMain:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ================================================================ §16 会话体检弹窗（2026-10-12 重构）
+
+   用户反馈「UI 太丑」的根因是**整屏同权重灰字**：摘要是四颗同款徽章 + 三条说明，
+   行是「徽章 + 会话 id + 问题 + 版本/体积 + 两颗文字按钮」同排的横向 flex，564px 画布下
+   换行位置随机；机制说明（布局归位 3 段、离线修复 1 段）常驻成 4~6 行散文，永远看得见、永远读不完。
+   本节与 §6「回滚点时间线」（2026-10-11 同一反馈、同一把尺子）共用四层结构：
+     ① .shSummary   数字摘要（tiles + 严重级 chips + 口径 notes）—— 屏上先给数字；
+     ② .shSectionHead 13px 区块标题 + 计数 + 右侧动作 —— 区块边界一眼可见；
+     ③ .shRow       两行式行卡：主行 = 语义徽章 + 等宽会话 id + 行尾动作（margin-left:auto）；
+                    meta 行 = 问题 chip + 版本/体积/时间；左侧 2px 语义色条按 data-severity 上色；
+     ④ .shPanel / .shCommands 计划、结果、离线命令各自的容器（不再混在正文流里）。
+   两条硬约定：**长句只进 title**（完整句一个字不少）、**机制说明进 ⓘ**（DESIGN §7 分层规则）。
+   执行者：src/client/recovery/session-dialog-mount.test.ts。 */
+
+/* 弹窗标题行右侧：ⓘ + 主操作（原先是正文里孤零零一颗按钮）。
+   margin-left:auto 让这一组贴右；同时必须把关闭按钮自己的 auto 收回 —— 两个 auto 会**平分**剩余空间，
+   否则「ⓘ + 主操作」会被推到弹窗中间（标题左 / 操作中 / 关闭右）。 */
+.shHeaderTrailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.shHeaderTrailing ~ .dialogClose {
+  margin-left: 0;
+}
+
+/* —— ① 概览 —— */
+.shSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  margin: 0 0 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.shMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 24px;
+}
+
+.shMetric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.shMetricValue {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.shMetricLabel {
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.shMetric[data-tone='warn'] .shMetricValue {
+  color: var(--cm-warn);
+}
+
+.shMetric[data-tone='ok'] .shMetricValue {
+  color: var(--cm-ok);
+}
+
+.shSeverities {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 严重级 chip = 色点 + 短标签 + 计数。完整句（「会让 DSH 起不来」）只在 title 里 ——
+   四档完整句并排必然折成两行灰字（旧实现正是踩在这里）。 */
+.shSeverity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-base);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.shSeverityCount {
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.shSeverity[data-severity='blocksStartup'],
+.shSeverity[data-severity='unloadable'] {
+  border-color: color-mix(in srgb, var(--cm-error) 45%, transparent);
+}
+
+.shSeverity[data-severity='nextRequestFails'],
+.shSeverity[data-severity='invisible'] {
+  border-color: color-mix(in srgb, var(--cm-warn) 45%, transparent);
+}
+
+/* 数据口径块（未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目 / 截断）：
+   与上面的数字用一条分隔线分开 —— 它们是「这次统计覆盖了多少」，不是待办。 */
+.shNotes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
+}
+
+/* —— ② 区块头 —— */
+.shSectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+
+.shSectionHead .groupLabel {
+  margin-bottom: 0;
+}
+
+.shSectionTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* —— ③ 行卡 —— */
+/* 会话列表的限高内滚容器：底 = 画布色（bg-base），行卡 = layer-2 ⇒ 行与容器不再同色糊成一片
+   （旧实现里 .snapshotList.reportScroll 与 .snapshotRow 都是 layer-2）。 */
+.snapshotList.shScroll {
+  padding: 8px;
+  background: var(--dsw-alias-bg-base);
+}
+
+.shRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-left-width: 2px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.shRow[data-severity='blocksStartup'],
+.shRow[data-severity='unloadable'] {
+  border-left-color: var(--cm-error);
+}
+
+.shRow[data-severity='nextRequestFails'],
+.shRow[data-severity='invisible'] {
+  border-left-color: var(--cm-warn);
+}
+
+.shRow[data-severity='ok'] {
+  border-left-color: var(--cm-ok);
+}
+
+.shRowTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* 会话目录名：等宽 + 单行省略（全文进 title）—— 它是列表主键，独占行首最宽的位置 */
+.shRowId {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 行尾动作：恒右对齐、不换行（margin-left:auto 而非 spacer —— flex-wrap 下 spacer 会被折行带走） */
+.shRowActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+.shRowMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 问题 chip（最多 2 条进屏，其余折叠成「还有 N 条」；全文进 title） */
+.shIssue {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--dsw-alias-label-tertiary) 12%, transparent);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.shRowFacts {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.shMetaDot {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* —— ④ 计划 / 结果 / 离线命令 —— */
+/* 面板内的连续说明行（如修复计划的逐条动作）：行距 4px，避免多行 hint 贴成一段 */
+.shLines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shPanel {
+  padding: 10px 12px;
+  margin: 0 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+}
+
+.shPanelHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.shPanelTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 离线命令清单：一条命令一行、行间发丝分隔（命令恒等宽，可复制） */
+.shCommands {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+  overflow: hidden;
+}
+
+.shCommand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 50%, transparent);
+}
+
+.shCommand:last-child {
+  border-bottom: none;
+}
+
+.shCommand code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+

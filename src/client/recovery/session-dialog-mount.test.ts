@@ -55,4 +55,42 @@ test('T15：会话体检的卡片与容器必须留白（真机反馈「挤在�
   // 行间距
   const list = /\.snapshotList \{[^}]*\}/.exec(css)?.[0] ?? '';
   assert.match(list, /gap: 10px/, '行间距必须加大');
+  // 2026-10-12 UI 重构：新的行卡与摘要卡同样不许贴边（旧类只覆盖了 .snapshotRow）
+  const shRow = /\.shRow \{[^}]*\}/.exec(css)?.[0] ?? '';
+  assert.match(shRow, /padding: 8px 10px/, '会话行卡（.shRow）必须自带内边距');
+  const shSummary = /\.shSummary \{[^}]*\}/.exec(css)?.[0] ?? '';
+  assert.match(shSummary, /padding: 12px 14px/, '摘要卡（.shSummary）必须自带内边距');
+});
+
+/**
+ * T16：会话体检弹窗的**结构**（2026-10-12 用户反馈「会话体检的 UI 太丑」后新增）。
+ *
+ * 旧形态的三处根因：① 摘要是四颗同款徽章，看不出哪个数重点；② 每行是「徽章 + 会话 id + 问题 +
+ * 版本/体积 + 两颗文字按钮」同排的横向 flex，564px 画布下换行位置随机；③ 机制说明（布局归位 3 段、
+ * 离线修复 1 段）常驻成 4~6 行散文。类型检查 / 纯函数单测 / bundle 护栏都抓不到「渲染结构」，
+ * 故与 T13 同规格用源码守卫钉住（改回字墙即红灯）。
+ */
+test('T16：会话体检弹窗 = 数字摘要 + 区块头 + 两行式行卡（禁止退回字墙）', () => {
+  const src = fs.readFileSync(PANEL, 'utf8');
+  for (const cls of [
+    'shSummary', 'shMetric', 'shSeverity', 'shSectionHead',
+    'shRow', 'shRowTop', 'shRowMeta', 'shRowActions', 'shPanel', 'shCommands',
+  ]) {
+    assert.ok(src.includes('css.' + cls), '弹窗必须用 .' + cls + '（摘要 / 区块头 / 两行式行卡 / 面板容器）');
+  }
+  // ① 主操作进标题行（旧实现是正文左上角孤零零一颗按钮，要先滚过摘要才找得到）
+  assert.ok(src.includes('<Modal.Header'), '弹窗标题行必须显式装配（主操作与 ⓘ 都挂在它上面）');
+  assert.ok(src.includes('css.shHeaderTrailing'), '标题行 trailing 必须有自己的容器类');
+  // ② 数据口径（未验证 / 被隐藏的正常会话 / 超上限 / 读不出条目）必须有专属容器，不散落成正文 .hint
+  assert.ok(src.includes('css.shNotes'), '数据口径必须有专属容器（.shNotes）');
+  // ③ ZIP 入口不再是文字按钮：图标按钮 + 已翻译的 aria-label，禁用原因走 title（不静默消失）
+  assert.equal(
+    /t\('sessions\.zip\.action'\)\}\s*<\/Button>/.test(src),
+    false,
+    '下载 ZIP 不得再是文字按钮（图标按钮 + aria-label + title）',
+  );
+  assert.ok(src.includes("label={t('sessions.zip.action')}"), 'ZIP 图标按钮必须带已翻译的无障碍名');
+  // ④ 长句只进 title：完整严重级句不得再进屏当徽章文案（短标签走 severityShortKey）
+  assert.ok(src.includes('row.severityShortKey'), '行徽章必须用短标签键（完整句进 title）');
+  assert.ok(src.includes('title={t(row.severityKey)}'), '完整严重级句必须仍在 title 里（事实一个字不少）');
 });

@@ -10,6 +10,7 @@
  * 「绝不猜」：缺字段一律不显示该列（不填 0、不写「未知」当结论）。
  */
 import type { SessionHealthSeverity } from '../core/session-health.ts'
+import { SESSION_HEALTH_SEVERITIES } from '../core/session-health.ts'
 import { redact } from '../security/redaction.ts'
 
 /** 路由返回的一行（与宿主 session-health 的 SessionHealthRow 同构；此处只取展示所需）。 */
@@ -192,6 +193,103 @@ export const SESSION_SEVERITY_KEYS = {
   ok: 'sessions.severity.ok',
 } as const
 
+/**
+ * 需要处理的四档（不含 ok），顺序 = 由重到轻（直接派生自 core 的 `SESSION_HEALTH_SEVERITIES`，
+ * 不在展示层另抄一份顺序）。
+ *
+ * 用途：摘要里的严重级 chips 与列表排序共用同一份顺序 —— 两处各写一遍必然分叉。
+ */
+export const SESSION_ATTENTION_SEVERITIES: readonly Exclude<SessionHealthSeverity, 'ok'>[] =
+  SESSION_HEALTH_SEVERITIES.filter(
+    (severity): severity is Exclude<SessionHealthSeverity, 'ok'> => severity !== 'ok',
+  )
+
+/**
+ * 严重级 → **短标签**键（摘要 chips 进屏的那一份）。
+ *
+ * 为什么另有一份短标签：完整句（`SESSION_SEVERITY_KEYS`，如「会让 DSH 起不来」）在 564px
+ * 画布上四档并排必然折行成两行同权重灰字（用户 2026-10-12 反馈「UI 太丑」）。
+ * 短标签进屏、完整句仍走 `title` —— 事实一个字不少。
+ * `satisfies` 让「新增一档而漏配短标签」在 typecheck 阶段就红灯。
+ */
+export const SESSION_SEVERITY_SHORT_KEYS = {
+  blocksStartup: 'sessions.severityShort.blocksStartup',
+  unloadable: 'sessions.severityShort.unloadable',
+  nextRequestFails: 'sessions.severityShort.nextRequestFails',
+  invisible: 'sessions.severityShort.invisible',
+} as const satisfies Record<Exclude<SessionHealthSeverity, 'ok'>, string>
+
+/** 四档「需要处理」的**短标签键**联合（`ok` 档没有短标签）。 */
+export type SessionSeverityShortKey = (typeof SESSION_SEVERITY_SHORT_KEYS)[Exclude<SessionHealthSeverity, 'ok'>]
+
+/**
+ * 进屏的徽章键联合：四档走短标签，`ok` 档回落完整键
+ * （它只会出现在「可修但被判 ok」的分叉行里，界面不得给它一个空徽章）。
+ */
+export type SessionSeverityBadgeKey = SessionSeverityShortKey | (typeof SESSION_SEVERITY_KEYS)['ok']
+
+/**
+ * 严重级 → **进屏的短标签键**（`ok` 档回落完整键）。
+ *
+ * 单一出口：摘要 chips 与列表行徽章都走它 —— 两处各判一次必然分叉（一处显示「阻断启动」、
+ * 另一处显示「会让 DSH 起不来」就是同屏术语漂移）。
+ */
+export function sessionSeverityShortKey(severity: SessionHealthSeverity): SessionSeverityBadgeKey {
+  return severity === 'ok' ? SESSION_SEVERITY_KEYS.ok : SESSION_SEVERITY_SHORT_KEYS[severity]
+}
+
+/** 摘要里的一个严重级 chip（组件只渲染这些字段）。 */
+export interface SessionSeverityChipView {
+  severity: Exclude<SessionHealthSeverity, 'ok'>
+  /** 短标签键（进屏） */
+  shortKey: (typeof SESSION_SEVERITY_SHORT_KEYS)[Exclude<SessionHealthSeverity, 'ok'>]
+  /** 完整句键（title）—— 与 SESSION_SEVERITY_KEYS 同源，绝不新写一句 */
+  fullKey: (typeof SESSION_SEVERITY_KEYS)[Exclude<SessionHealthSeverity, 'ok'>]
+  count: number
+  badgeKind: 'warn' | 'error'
+}
+
+/**
+ * 摘要 → 严重级 chips（只保留 count > 0 的档）。
+ *
+ * 「0 条」的档不渲染：0 值 chip 会被读成「有这一类但不多」，而摘要里真正要回答的是
+ * 「哪几档、各多少」。总数另有 tiles 承载，不缺这一条。
+ */
+export function sessionSeverityChips(summary: SessionHealthSummaryView | null): SessionSeverityChipView[] {
+  if (summary === null) return []
+  return SESSION_ATTENTION_SEVERITIES
+    .filter((severity) => summary.bySeverity[severity] > 0)
+    .map((severity) => ({
+      severity,
+      shortKey: SESSION_SEVERITY_SHORT_KEYS[severity],
+      fullKey: SESSION_SEVERITY_KEYS[severity],
+      count: summary.bySeverity[severity],
+      badgeKind: sessionSeverityBadgeKind(severity) === 'error' ? 'error' : 'warn',
+    }))
+}
+
+/** 一行的问题 chip 视图。 */
+export interface SessionIssueChipsView {
+  /** 进屏的问题码（最多 limit 条，顺序 = 由重到轻） */
+  codes: string[]
+  /** 被折叠的条数；0 = 全部在屏上（>0 时界面**必须**显式给出，绝不静默少显示） */
+  hidden: number
+}
+
+/** 缺省进屏的问题 chip 条数：564px 画布下超过 2 条就折行、把行卡拉成三行。 */
+export const SESSION_ISSUE_CHIP_LIMIT = 2
+
+/**
+ * 问题码 → chip 视图（截断 + 如实计数）。
+ *
+ * 为什么截断：一行可能有 4~6 条码，全量进屏会让行卡高度随问题数变化、列表节奏被打散；
+ * 折叠的条数由 `hidden` 如实回传，界面渲染「还有 N 条」并把全文放进 title。
+ */
+export function sessionIssueChips(codes: readonly string[], limit: number = SESSION_ISSUE_CHIP_LIMIT): SessionIssueChipsView {
+  const size = Number.isInteger(limit) && limit >= 0 ? limit : SESSION_ISSUE_CHIP_LIMIT
+  return { codes: codes.slice(0, size), hidden: Math.max(0, codes.length - size) }
+}
+
 /** 展示行（组件只渲染这些字段）。 */
 export interface SessionHealthDisplayRow {
   unitId: string
@@ -200,6 +298,8 @@ export interface SessionHealthDisplayRow {
   projectKey: string
   severity: SessionHealthSeverity
   severityKey: (typeof SESSION_SEVERITY_KEYS)[SessionHealthSeverity]
+  /** 进屏的短标签键（完整句仍走 severityKey + title）—— 长句徽章在 564px 画布上会把行卡拉宽换行 */
+  severityShortKey: SessionSeverityBadgeKey
   badgeKind: 'info' | 'ok' | 'warn' | 'error'
   /** 问题码列表（文案由界面映射；顺序 = 由重到轻） */
   issueCodes: string[]
@@ -253,6 +353,7 @@ export function sessionHealthRows(response: SessionHealthResponse | null): Sessi
     projectKey: row.projectKey,
     severity: row.severity,
     severityKey: SESSION_SEVERITY_KEYS[row.severity],
+    severityShortKey: sessionSeverityShortKey(row.severity),
     badgeKind: sessionSeverityBadgeKind(row.severity),
     issueCodes: row.issues.map((issue) => issue.code),
     issueDetailText: (() => {

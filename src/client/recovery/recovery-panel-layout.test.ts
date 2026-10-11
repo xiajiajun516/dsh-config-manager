@@ -37,9 +37,16 @@ test('布局守卫：小节用卡片容器 + groupLabel 标题 + snapshotList/re
     false,
     '小节标题不得用 .snapshotRowMain（flex:1 + nowrap ⇒ 标题被拉成一行、文字竖排）',
   );
+  // 2026-10-12 UI 重构：计划 / 结果从「卡内小节」变成**面板**（.shPanel + .shPanelTitle），
+  // 入口标题与 keep 仍在卡内走 .groupLabel。口径不变：标题必须用**专属标题类**，
+  // 绝不退回 .snapshotRowMain（flex:1 + nowrap ⇒ 标题被拉成一行、文字竖排）。
   assert.ok(
-    (body.match(/css\.groupLabel/g) ?? []).length >= 4,
-    '小节标题必须走 .groupLabel（至少 4 处：入口标题 / 计划 / keep / 结果）',
+    (body.match(/css\.groupLabel/g) ?? []).length >= 2,
+    '入口标题与 keep 选择必须走 .groupLabel（至少 2 处）',
+  );
+  assert.ok(
+    (body.match(/css\.shPanelTitle/g) ?? []).length >= 2,
+    '计划与结果的面板标题必须走 .shPanelTitle（至少 2 处）',
   );
   assert.ok(
     (body.match(/css\.snapshotList/g) ?? []).length >= 3,
