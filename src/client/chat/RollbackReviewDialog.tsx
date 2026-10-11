@@ -370,7 +370,6 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                   noteText !== null ? <div className={css.hint}>{noteText}</div> : null
                 ) : (
                   <>
-                    <div className={css.hint}>{rt('rollback.preview.files.title')}</div>
                     <ul className={css.reasonList}>
                       {files.map((file) => (
                         <li key={file.path} className={css.rollbackFileRow}>

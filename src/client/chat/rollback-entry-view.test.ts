@@ -686,7 +686,9 @@ test('T9-F3：不可回退但没给原因键时，不得渲染成「没有可回
 test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块一个都不在（源级）', () => {
   const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
   // 保留：文件列表与行数、空列表那一行、结果一行摘要、失败原因 code 行
-  assert.match(dialog, /rollback\.preview\.files\.title/, '必须有「将被回退的文件」小节')
+  // 2026-10-12（用户第二条要求）：这一行小节标题**去掉**了 —— 文件行自身（文件名 + 行数）已经说明一切，
+  // 弹窗要的是 Cursor「Confirm Undo」那种一眼看完的观感；字典键保留（本仓既有先例：删渲染不删键）。
+  assert.doesNotMatch(dialog, /rollback\.preview\.files\.title/, '「将被回退的文件」小节标题不得回到对话框')
   // 空列表那一行自 T15 起由 ui 层判定函数给出（四态：不可用 / 没记录文件 / 一致但会话回退 / 一致无事可做），
   // 所以这里钉的是**接线**（对话框调 rollbackPreviewNote 并把 noteText 上屏），键值本身钉在 ui 层与 T15 用例里。
   assert.match(dialog, /rollbackPreviewNote\(\{/, '空列表文案必须走 ui 层的四态判定（一处实现）')
