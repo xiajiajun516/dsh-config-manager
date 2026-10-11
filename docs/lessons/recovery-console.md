@@ -81,7 +81,12 @@
 
 - **① 弹窗主按钮变裸文字（黑字、无边框）**：设计 token `--cm-*` 只定义在 `.section` 上，而回退弹窗走 `Dialog.Portal` 渲染进 `body` —— 自定义属性继承不到 ⇒
   `background: var(--cm-accent-fill)` 解析失败（无底色）、`color: var(--dsw-alias-label-primary-foreground)` 也拿不到（字色继承成黑）；同排 ghost 按钮边框走 DSH 根上的
-  `--dsw-alias-border-l2` 所以照常显示 —— 「一个有框一个没有」正是作用域指纹。**改法**：token 整体搬到 `:root`（`css-token-guard`/`css-scale-guard` 11 条守卫照旧全绿）。
+  `--dsw-alias-border-l2` 所以照常显示 —— 「一个有框一个没有」正是作用域指纹。**第一次改法（不够）**：搬到 `:root` —— 用户回「背景还是不生效」。
+  **真因**：DSH 的设计 token 定义在 **`body`** 上（`dsh-client-ui-theme/lib/client.js`：`body{--dsw-static-…;--dsw-alias-button-info-fill:var(--dsw-static-deepseek-500);…}`），
+  而自定义属性是在**声明它的那个元素**上做 var() 替换：`html` 上没有 `--dsw-*` ⇒ 挂在 `:root` 的 `--cm-*` 链在 html 阶段就变成无效值，子元素继承到的仍是无效值。
+  **最终改法**：token 块挂 **`body`**（与 DSH 同层 ⇒ 替换成功；settings 区与聊天槽位（含 Portal 进 body 的弹窗）全能继承）。`css-token-guard`/`css-scale-guard` 11 条守卫全绿。
+  **同时踩到的第二个坑**：改完 CSS **忘了 `npm run build`** ⇒ 用户拿到的 `lib/client.js` 里主按钮仍是旧声明（`color: var(--dsw-alias-label-primary-foreground)`）。
+  验证口径：`node -e "…readFileSync('lib/client.js')…"` 查 `body{--cm-`、`--cm-accent-fill:var(--dsw-alias-button-info-fill)`、`background:var(--cm-accent-fill);color:var(--cm-text-on-accent)` 三个字符串。
 - **② 回退后的会话落到「未分组」**：DSH 自己的 fork（宿主 `SessionCommandController.fork`，`dsh-api-session-controller/lib/index.js`≈34971）在拿到 childId 之后还有一步
   `workspace.attachSession(childId)`；我们为钉边界走的是底层 `SessionStore.fork`，缺这一步。**改法**：`DshSessionStoreFacade.forkSession` 补 `attachChildToParentWorkspace`
   （只认 `sessionIds` 含原会话的记录，方法 `.call(record, childId)` 保 receiver；拿不到/写失败降级成 `warning: workspace-attach-failed`）。

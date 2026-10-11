@@ -44,15 +44,17 @@
      只有 :root 上的自定义属性才能继承到那里 —— 留在 .section 上会让聊天里的按钮丢样式。 */
 }
 /* ================================================================
- * §1a 设计 token 的**宿主作用域**（:root）
-
- * 为什么不在 .section 上：聊天的回退弹窗经 Dialog.Portal 渲染进 body，
- * 自定义属性只在 .section 内可见 ⇒ 弹窗里的主按钮（background: var(--cm-accent-fill)、
- * color: var(--dsw-alias-label-primary-foreground)）解析失败，真机表现为
- * 「文字是黑的、没有边框」（用户 2026-10-11 截图）。放 :root 后 settings 区与聊天槽位共用同一份值。
+ * §1a 设计 token 的**宿主作用域**（body，不是 :root）
+ *
+ * 两条真机证据叠起来才定到这一行（用户 2026-10-11 连续两轮反馈「背景不生效」）：
+ *  ① 挂 .section 上时，聊天的回退弹窗（Dialog.Portal → body）看不见 --cm-* ⇒ 主按钮无底色、字色继承成黑；
+ *  ② 改挂 :root（= html）后仍然不生效 —— 因为 **DSH 的设计 token 定义在 body 上**
+ *     （dsh-client-ui-theme/lib/client.js: `body{--dsw-static-…;--dsw-alias-button-info-fill:…}`）。
+ *     自定义属性在**声明它的那个元素**上做 var() 替换：html 上没有 --dsw-* ⇒ 我们的 --cm-* 链在 html 就失效，
+ *     子元素继承到的是一个无效值。挂到 **body** 后与 DSH 同层：替换成功，settings 区与聊天槽位（含 Portal）全都继承到。
  * 值全部由 --dsw-* 派生；组件规则只消费 --cm-*（css-token-guard.test.ts / css-scale-guard.test.ts 钉住）。
  * ================================================================ */
-:root {
+body {
   /* 磁盘占用卡的固定高度：
      取「标题 + 统计行 + 定位行 + 分区表 + 清理操作区」的高度。插件画布 564×720。
      **2026-10-03 由 300px 提到 420px**：真机反馈「列表高度太少，要滑很久」——
