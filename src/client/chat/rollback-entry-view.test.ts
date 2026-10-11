@@ -325,6 +325,31 @@ test('真机形状回归：uiWorkspace 在 + 子会话已在列表 → opened（
   assert.deepEqual(workspace.opened, ['c1'])
 })
 
+test('真机回归（2026-10-11）：uiWorkspace.openSession 依赖 this —— 抽方法时不 bind 就必然抛，子会话永远打不开', async () => {
+  const opened: string[] = []
+  // 复刻 uiWorkspace 的真形状：实现体是 `openSession(target) { this.replaceMain(target, this.lifetime.signal, 'reveal') }`
+  // ⇒ 只有 receiver 是服务对象本身时 this.lifetime 才存在。
+  const service = {
+    lifetime: { signal: 'sig' },
+    openSession(this: { lifetime: { signal: string } }, id: string) { opened.push(id + ':' + this.lifetime.signal) },
+  }
+  const navigator = buildSessionNavigator(navigationSourcesOf({ get: (key: string) => (key === 'uiWorkspace' ? service : undefined) }))
+  assert.equal(await openChildSession(navigator, 'c1'), 'opened', 'receiver 必须跟着方法一起走')
+  assert.deepEqual(opened, ['c1:sig'])
+})
+
+test('真机回归：sessions.refresh 同样依赖 this（丢 receiver 会让基线拉取静默失败）', async () => {
+  let calls = 0
+  const sessions = {
+    manager: { refreshList: async () => { calls += 1 } },
+    async refresh(this: { manager: { refreshList: () => Promise<void> } }) { await this.manager.refreshList() },
+    list: { getSnapshot: () => ({ byId: { c1: { id: 'c1' } } }) },
+  }
+  const navigator = buildSessionNavigator(navigationSourcesOf({ get: (key: string) => (key === 'sessions' ? sessions : undefined) }))
+  await navigator?.refresh?.()
+  assert.equal(calls, 1)
+})
+
 test('遗留形状容错：直接给 open 的旧形态导航面也能识别（但不许没有入口顶上假函数）', async () => {
   const opened: string[] = []
   const legacy: SessionNavigator = { open: (id: string) => { opened.push(id) }, listedIds: () => ['c1'] }

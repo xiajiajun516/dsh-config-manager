@@ -606,17 +606,27 @@ function asWorkspaceSource(value: unknown): WorkspaceNavigationSource | null {
   const record = asRecord(value)
   if (record === null) return null
   const openSession = record['openSession']
-  return typeof openSession === 'function' ? { openSession: openSession as (id: string) => void } : null
+  // **必须把 receiver 绑回宿主服务对象**（2026-10-11 真机实证）：
+  // uiWorkspace.openSession 的实现是 `this.replaceMain(target, this.lifetime.signal, "reveal")`，
+  // 把方法抄进一个新字面量对象后 receiver 变成那个字面量 ⇒ `this.lifetime` 为 undefined ⇒
+  // TypeError: Cannot read properties of undefined (reading 'signal')。回退本身成功、子会话也已创建，
+  // 但**永远打不开**（界面只能说「请手动打开它」）。bind 之后 `open.call(...)` 的 this 不再生效，
+  // 这正是我们要的：可见性判据留在调用点，receiver 只认方法自己那一份。
+  return typeof openSession === 'function'
+    ? { openSession: (openSession as (id: string) => void).bind(record) }
+    : null
 }
 
 function asSessionListSource(value: unknown): SessionListSource | null {
   const record = asRecord(value)
   if (record === null) return null
   const source: SessionListSource = {}
+  // 与 asWorkspaceSource 同一条纪律：抽出来的方法一律 bind 回原服务对象（refresh 的实现体读
+  // `this.manager.refreshList()`；丢 receiver 会让基线拉取**必然抛**，被 catch 吞成「刷新无效」）。
   const open = record['open']
-  if (typeof open === 'function') source.open = open as (id: string) => void
+  if (typeof open === 'function') source.open = (open as (id: string) => void).bind(record)
   const refresh = record['refresh']
-  if (typeof refresh === 'function') source.refresh = refresh as () => Promise<void>
+  if (typeof refresh === 'function') source.refresh = (refresh as () => Promise<void>).bind(record)
   const list = asRecord(record['list'])
   if (list !== null && typeof list['getSnapshot'] === 'function') {
     source.list = list as unknown as SessionListSource['list']
