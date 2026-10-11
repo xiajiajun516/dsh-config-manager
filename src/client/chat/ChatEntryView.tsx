@@ -24,6 +24,7 @@ import type { RollbackPointPort } from '../../ui/rollback-view.ts'
 import { CopyStateIcon, RefreshIcon } from '../common/Icon.tsx'
 import { copyTextToClipboard } from '../common/clipboard.ts'
 import { RollbackReviewDialog } from './RollbackReviewDialog.tsx'
+import type { RollbackDiffOpenResult } from './rollback-diff-tab.ts'
 import {
   buildChatEntrySafeRow,
   buildChatEntryView,
@@ -69,6 +70,11 @@ export interface ChatEntryViewInjected {
   archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
   /** 第一条消息之前没有可 fork 的边界：开一条全新会话（uiWorkspace.startSession 同一条路）。 */
   startFreshSession: () => Promise<{ ok: true } | { ok: false; code: string }>
+  /**
+   * 「查看」：把该文件的差异开进 DSH 右侧栏（装配点注入）。侧栏不可用时返回 no-sidebar，
+   * 由预览对话框如实降级为弹窗内展示 —— 绝不给一个点了没反应的入口。
+   */
+  openDiff: (pointId: string, filePath: string) => RollbackDiffOpenResult
 }
 
 /**
@@ -152,7 +158,7 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
  *  · 气泡底色：宿主直接用 `--dsw-specific-bubble`，本仓库 token 层没有这一档 ⇒ 用 `--cm-surface-2`
  *    （亮/暗主题下都是「比底更强的面」），不改 DESIGN 体系、不新增 token。
  */
-function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession }: ChatEntryBodyProps) {
+function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
   /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
@@ -297,6 +303,7 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
           openChildSession={openChildSession}
           archiveParentSession={archiveParentSession}
           startFreshSession={startFreshSession}
+          openDiff={openDiff}
           onClose={() => { setDialogTurn(null) }}
         />
       )}

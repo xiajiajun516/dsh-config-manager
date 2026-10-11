@@ -1761,16 +1761,21 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
             {rescue.active
               ? <Button variant="danger" disabled={rescueBusy} loading={rescueBusy} onClick={exitRescue}>{t('recovery.rescue.exit')}</Button>
               : <Button variant="danger" disabled={rescueBusy} onClick={() => { setRescueConfirmOpen(true) }}>{t('recovery.rescue.enter')}</Button>}
-            <FoldToggle
-              open={rescueOpen}
-              controls={RESCUE_BODY_ID}
-              onToggle={() => { setRescueOpen((v) => !v) }}
-              expandLabel={t('common.expand')}
-              collapseLabel={t('common.collapse')}
-            />
+            {/* 折叠开关只在**真有明细**（已开启 → 生效状态与提示）时渲染：空折叠体是纯噪音 */}
+            {rescue.active && (
+              <FoldToggle
+                open={rescueOpen}
+                controls={RESCUE_BODY_ID}
+                onToggle={() => { setRescueOpen((v) => !v) }}
+                expandLabel={t('common.expand')}
+                collapseLabel={t('common.collapse')}
+              />
+            )}
           </div>
-          <Collapse open={rescueOpen} id={RESCUE_BODY_ID}>
+          {/* 机制与安全说明**常驻可见**（DESIGN.md §7 KEEP-2：危险操作的说明不得只活在折叠体里）——
+              折叠体只收「已开启时的生效状态与提示」这类明细。 */}
           <div className={css.hint}>{t('recovery.rescue.desc')}</div>
+          <Collapse open={rescueOpen} id={RESCUE_BODY_ID}>
           {rescue.active && (
             <div className={css.hint}>
               {t(rescue.applied ? 'recovery.rescue.applied' : 'recovery.rescue.active', { time: formatRecoveryTime(rescue.enteredAt) })}

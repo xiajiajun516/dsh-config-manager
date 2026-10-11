@@ -5234,6 +5234,54 @@ button.profileRowMain:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* 「查看」= 文件行上悬停才出现的次级操作（Cursor「Confirm Undo」的 View Diff 位，用户 2026-10-12）。
+   为什么用 visibility 而不是 display:none：它仍在 tab 序里 —— 键盘 Tab 到该按钮时 :focus-visible
+   也会让它显形，所以这不是「只能用鼠标」的操作。 */
+.fileViewBtn {
+  flex: none;
+  visibility: hidden;
+  padding: var(--cm-sp-1) var(--cm-sp-3);
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-1);
+  background: transparent;
+  color: var(--cm-text-2);
+  font-size: var(--cm-fs-meta);
+  cursor: pointer;
+}
+
+.rollbackFileRow:hover .fileViewBtn,
+.fileViewBtn:focus-visible {
+  visibility: visible;
+}
+
+.fileViewBtn:hover {
+  color: var(--cm-text-1);
+  border-color: var(--cm-line-2);
+}
+
+.fileViewBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 说明行：一句话说清这次回退会做什么（Cursor 弹窗的说明行位）。 */
+.previewSummary {
+  margin: 0 0 var(--cm-sp-2);
+  color: var(--cm-text-2);
+  font-size: var(--cm-fs-table);
+}
+
+/* 「查看」的降级容器：本客户端没有右侧栏（或打开失败）时，把同一份差异画在弹窗里。 */
+.inlineDiffBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cm-sp-2);
+  margin-top: var(--cm-sp-2);
+  padding: var(--cm-sp-2);
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-2);
+}
+
 /* ================================================================ §17 Rollback points（工作区 + 会话回滚时间线）
 
    定位：环境 → 维护与诊断 → 「工作区 + 会话回滚」卡内的回滚点台账。

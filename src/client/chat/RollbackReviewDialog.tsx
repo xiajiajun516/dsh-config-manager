@@ -37,7 +37,10 @@ import type {
   RollbackRewindResult,
 } from '../../ui/rollback-view.ts'
 import { Badge, Banner, Button, Empty, Spinner } from '../common/ui.tsx'
+import { RollbackDiffPane, type RollbackDiffState } from '../recovery/RollbackDiffPane.tsx'
+import type { RollbackDiffOpenResult } from './rollback-diff-tab.ts'
 import { CloseIcon } from '../common/Icon.tsx'
+import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 import {
   canSubmitRewind,
@@ -87,6 +90,11 @@ export interface RollbackReviewDialogProps {
   archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
   /** 第一条消息之前没有可 fork 的边界：开一条全新会话（失败结构化返回，绝不抛）。 */
   startFreshSession: () => Promise<{ ok: true } | { ok: false; code: string }>
+  /**
+   * 「查看」：把该文件的差异开进 DSH 右侧栏（由装配点注入；侧栏不可用时返回 no-sidebar，
+   * 本组件据此**如实降级**为弹窗内展示，绝不假装打开过）。
+   */
+  openDiff: (pointId: string, filePath: string) => RollbackDiffOpenResult
   onClose: () => void
 }
 
@@ -122,7 +130,7 @@ function FileStat({ added, removed, unknown, rt }: {
 }
 
 /** 预览对话框主体（挂载即打开；关闭由父级卸载）。 */
-export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, archiveParentSession, startFreshSession, onClose }: RollbackReviewDialogProps) {
+export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, archiveParentSession, startFreshSession, openDiff, onClose }: RollbackReviewDialogProps) {
   const [state, setState] = useState<LoadState>('loading')
   const [loadKey, setLoadKey] = useState<string | null>(null)
   const [loadDetail, setLoadDetail] = useState<string | null>(null)
@@ -140,6 +148,12 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   const [archive, setArchive] = useState<ArchiveOutcome | null>(null)
   /** 第一条消息之前：新建空会话的结果（null = 这次没有走这条路径）。 */
   const [freshSession, setFreshSession] = useState<{ ok: true } | { ok: false; code: string } | null>(null)
+  /**
+   * 「查看」的**降级通道**（null = 这次把它开进了右侧栏）：
+   * 只有本客户端没有侧栏能力 / 打开动作抛错时才启动，并在弹窗内如实说清为什么在这里看。
+   */
+  const [inlineDiff, setInlineDiff] = useState<{ path: string; state: RollbackDiffState } | null>(null)
+  const [inlineNotice, setInlineNotice] = useState<string | null>(null)
   const alive = useRef(true)
   /**
    * 同一 tick 的**同步幂等锁**（t3 F4）：`busy` 是异步 setState，挡不住同一 tick 里的第二次派发
@@ -242,6 +256,37 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
     }
   })
 
+  /**
+   * 「查看」：把该文件的差异开到 DSH 右侧栏（**只读**，不做任何写操作）。
+   *
+   * 侧栏不可用 / 打开动作抛错时**绝不假装成功**：改用弹窗内展示同一份差异，
+   * 并把「为什么在这里看」如实说一句（`no-sidebar` 与「调用失败」两句不同的话）。
+   */
+  const view = (filePath: string): void => {
+    if (pointId === null) return
+    const opened = openDiff(pointId, filePath)
+    if (opened.ok) {
+      setInlineNotice(null)
+      setInlineDiff(null)
+      return
+    }
+    setInlineNotice(
+      opened.reason === 'no-sidebar'
+        ? t('chat.preview.viewInline')
+        : t('chat.preview.viewFailed', { detail: redact(opened.detail ?? '') }),
+    )
+    setInlineDiff({ path: filePath, state: { status: 'loading' } })
+    const read = port.rollbackPointFileDiff
+    if (typeof read !== 'function') {
+      setInlineDiff({ path: filePath, state: { status: 'error', message: null } })
+      return
+    }
+    read.call(port, pointId, filePath).then(
+      (diff) => { if (alive.current) setInlineDiff({ path: filePath, state: { status: 'ready', diff } }) },
+      (error: unknown) => { if (alive.current) setInlineDiff({ path: filePath, state: { status: 'error', message: errorDetail(error) } }) },
+    )
+  }
+
   const verdict = rollbackPreviewVerdict(preview)
   /**
    * 预览态那句「工作区怎样怎样」= **一处实现**（src/ui/rollback-view.ts 的 rollbackPreviewNote）：
@@ -314,6 +359,9 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
 
             {state === 'ready' && result === null && (
               <>
+                {/* 说明行：一句话说清这次动作会做什么（Cursor「Confirm Undo」风格的底盘） */}
+                <div className={css.previewSummary}>{t('chat.preview.summary')}</div>
+
                 {/* ① 被回退的文件（只列会被改动的；空列表 ⇒ 一行「无需恢复」） */}
                 {files.length === 0 ? (
                   // 预览态四态句：由 rollbackPreviewNote 决定（key=null 时本情形没有该类句子可说，
@@ -332,11 +380,31 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                             unknown={rt('rollback.preview.file.unknown')}
                             rt={rt}
                           />
+                          {/* 悬停才出现的「查看」：默认隐藏是为了不喧宾夺主，但**键盘 focus 也会显示**
+                              （CSS :focus-visible），所以它不是只能用鼠标的操作。 */}
+                          <button
+                            type="button"
+                            className={css.fileViewBtn}
+                            title={t('chat.preview.viewHint')}
+                            aria-label={t('chat.preview.viewHint')}
+                            disabled={busy || pointId === null}
+                            onClick={() => { view(file.path) }}
+                          >
+                            {t('chat.preview.view')}
+                          </button>
                         </li>
                       ))}
                     </ul>
                     {/* 一条都没统计出来时，说清为什么（宁说「不知道」，不谎报行数） */}
                     {!hasCounts && <div className={css.hint}>{rt('rollback.preview.file.unknownHint')}</div>}
+                    {/* 「查看」的降级通道：没有右侧栏（或打开失败）时在弹窗内展示同一份差异 */}
+                    {inlineDiff !== null && (
+                      <div className={css.inlineDiffBox}>
+                        {inlineNotice !== null && <div className={css.hint}>{inlineNotice}</div>}
+                        <div className={`${css.hint} ${css.mono}`}>{inlineDiff.path}</div>
+                        <RollbackDiffPane state={inlineDiff.state} rt={rt} />
+                      </div>
+                    )}
                   </>
                 )}
 

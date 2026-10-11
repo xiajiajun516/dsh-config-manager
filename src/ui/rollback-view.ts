@@ -25,6 +25,7 @@
  *  - rewind.segments[] = { state, status, reasonCode?, detail[], restored, failed, leftovers[], leftoversTruncated, childSessionId?, guidance? }。
  */
 import { redact } from '../security/redaction.ts'
+import type { DiffHunk } from '../utils/line-diff.ts'
 
 /* ------------------------------------------------------------ 两态 / 三选一 mode */
 
@@ -429,6 +430,43 @@ export interface RollbackPreviewResult {
   warnings?: RollbackGuidance[]
 }
 
+/** 单文件差异里一侧（与引擎 `RollbackFileDiffSide` 逐字同形：字段名/含义都一致）。 */
+export interface RollbackFileDiffSide {
+  exists: boolean
+  bytes: number
+  /** 行数；null = 未读取（二进制 / 超限 / 不可读） */
+  lines: number | null
+  binary: boolean
+  oversized: boolean
+  unreadable: boolean
+}
+
+/** 无法逐行对比的原因（有值时 hunks 恒为空数组 —— 「不知道」不是「没有差异」）。 */
+export type RollbackFileDiffReason = 'missing-blob' | 'binary' | 'too-large' | 'unreadable'
+
+/**
+ * 单文件前后对照（引擎 `fileDiff` 的镜像；只列一条记录）。
+ *
+ * 方向：`before` = **当前磁盘**，`after` = **回退点快照**（点下回退之后该文件的样子）——
+ * 与预览行数统计同一口径，界面左右双栏与之一致，别读反。
+ */
+export interface RollbackFileDiffResult {
+  ok: boolean
+  code?: string
+  detail?: string
+  id: string
+  path: string
+  status: RollbackPreviewFileStatus
+  before: RollbackFileDiffSide
+  after: RollbackFileDiffSide
+  hunks: DiffHunk[]
+  added: number
+  removed: number
+  identical: boolean
+  degraded: boolean
+  reason?: RollbackFileDiffReason
+}
+
 export interface RollbackSegmentResult {
   state: string
   status: string
@@ -492,6 +530,11 @@ export interface RollbackPointPort {
   rollbackPointStorage(): Promise<RollbackStorageStatus>
   rollbackPoint(id: string): Promise<RollbackDetailResult>
   rollbackPointPreview(id: string): Promise<RollbackPreviewResult>
+  /**
+   * 只读：该点里**一个记录在案文件**的前后逐行对照（预览弹窗按需拉取；未命中记录一律拒绝）。
+   * 可选实现：端口缺失该方法时，界面**不显示**「查看」（绝不给一个点了没反应的入口）。
+   */
+  rollbackPointFileDiff?(id: string, path: string): Promise<RollbackFileDiffResult>
   restoreRollbackPoint(id: string, opts: RollbackRewindOptions): Promise<RollbackRewindResult>
   removeRollbackPoint(id: string, userConfirmed: boolean): Promise<RollbackRemoveResult>
 }
@@ -729,6 +772,33 @@ export interface RollbackPreviewRowView {
  * （会被重新创建）、多少项是该点**未记录**的（**不会被删除** —— 引擎 scanLeftovers 只统计「不在记录里」
  * 的文件，留点时被跳过的既有文件同样落在这里，所以不得声称「之后新建」）。
  */
+/**
+ * 差异无法逐行展示时的字典键（本层**只回键**，文案在字典里）。
+ * 未知 / 缺失原因回落 null —— 调用方按「未知原因」出话，绝不回落成「没有差异」（那是另一件事）。
+ */
+export function rollbackFileDiffReasonKey(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case 'missing-blob': return 'rollback.diff.reason.missingBlob'
+    case 'binary': return 'rollback.diff.reason.binary'
+    case 'too-large': return 'rollback.diff.reason.tooLarge'
+    case 'unreadable': return 'rollback.diff.reason.unreadable'
+    default: return null
+  }
+}
+
+/** 可渲染的 hunks（缺字段 / 非数组一律当空 —— 渲染层绝不因宿主形态差异崩掉）。 */
+export function rollbackFileDiffHunks(result: RollbackFileDiffResult | null): DiffHunk[] {
+  const hunks = result?.hunks
+  return Array.isArray(hunks) ? hunks : []
+}
+
+/** 两侧是否都真的读到了文本（否则说不出「无差异」）。 */
+export function rollbackFileDiffComparable(result: RollbackFileDiffResult | null): boolean {
+  if (result === null || result.ok !== true) return false
+  if (result.reason !== undefined) return false
+  return result.before.binary !== true && result.after.binary !== true && result.before.oversized !== true && result.after.oversized !== true
+}
+
 export function rollbackPreviewRows(preview: RollbackPreviewResult | null): RollbackPreviewRowView[] {
   if (preview === null) return []
   const rows: RollbackPreviewRowView[] = []

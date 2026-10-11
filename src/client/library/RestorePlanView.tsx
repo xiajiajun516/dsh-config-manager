@@ -10,14 +10,14 @@
  * 与 src/ui/diff-view.ts（纯函数、node 单测）；本组件只负责渲染与展开交互。
  * 安全：宿主拼装的 description/detail 与文件正文一律先过 redact() 再渲染（DESIGN.md §7）。
  */
-import { Fragment, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { redact } from '../../security/redaction.ts'
 import type { RestorePlan } from '../../core/restore.ts'
 import type { ChangeStatSkipReason, RestoreChangeSummary, SnapshotFileDiff, SnapshotFileDiffReason } from '../../core/snapshot-diff.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { toRestorePlanView, withLoadedStatus, type RestorePlanRow } from '../../ui/restore-plan-view.ts'
-import { countSideRows, maxLineDigits, toSideBySide, type SideBySideRow } from '../../ui/diff-view.ts'
+import { DiffTable } from '../common/DiffTable.tsx'
 import { formatBytes } from '../../ui/report.ts'
 import { Badge, Banner, Spinner } from '../common/ui.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
@@ -30,11 +30,6 @@ type DiffState =
   | { status: 'ready'; diff: SnapshotFileDiff }
   | { status: 'error'; message: string }
 
-/**
- * 单文件最多渲染多少行对：diff 上限 6000 行，全量渲染会卡住弹窗。
- * 超出只显示前 N 行并给出「已截断」提示（数据仍完整，只是没画出来）。
- */
-const DIFF_ROW_CAP = 400
 
 export interface RestorePlanViewProps {
   api: ConfigManagerApi
@@ -107,20 +102,6 @@ function reasonLabel(t: TranslateNS<'config-manager'>, reason: SnapshotFileDiffR
   }
 }
 
-/** 单元格文本：文件正文属「宿主/磁盘原文」→ 展示前必过 redact()（安全闸门）。 */
-function cellText(text: string | undefined): string {
-  return text === undefined ? '' : redact(text)
-}
-
-/** 左侧单元格：成对修改 / 纯删除 → 红底；上下文 → 中性。 */
-function leftCellClass(kind: SideBySideRow['kind']): string {
-  return kind === 'change' || kind === 'del' ? `${css.diffCell} ${css.diffCellDel}` : css.diffCell ?? ''
-}
-
-/** 右侧单元格：成对修改 / 纯新增 → 绿底；上下文 → 中性。 */
-function rightCellClass(kind: SideBySideRow['kind']): string {
-  return kind === 'change' || kind === 'add' ? `${css.diffCell} ${css.diffCellAdd}` : css.diffCell ?? ''
-}
 
 function DiffPane({ state, t }: { state: DiffState; t: TranslateNS<'config-manager'> }) {
   if (state.status === 'loading') return <Spinner label={t('snapshots.plan.loadingDiff')} />
@@ -128,54 +109,16 @@ function DiffPane({ state, t }: { state: DiffState; t: TranslateNS<'config-manag
   const diff = state.diff
   if (diff.reason !== undefined) return <div className={css.hint}>{reasonLabel(t, diff.reason, diff)}</div>
   if (diff.identical) return <div className={css.hint}>{t('snapshots.plan.diffIdentical')}</div>
-  const groups = toSideBySide(diff.hunks)
-  const total = countSideRows(groups)
-  // 行号列宽 = 实际出现的最大行号位数（1–3/4/5/6+ 位四档 ch），内容列平分剩余空间
-  const digits = maxLineDigits(diff.hunks)
-  const noColClass = digits <= 3 ? css.diffNoColW3 : digits === 4 ? css.diffNoColW4 : digits === 5 ? css.diffNoColW5 : css.diffNoColW6
-  let rendered = 0
-  const capped = total > DIFF_ROW_CAP
   return (
     <div className={css.diffPane}>
       {diff.degraded && <div className={css.hint}>{t('snapshots.plan.diffDegraded')}</div>}
-      {capped && <div className={css.hint}>{t('snapshots.plan.diffTruncated', { shown: String(DIFF_ROW_CAP), total: String(total) })}</div>}
-      <div className={css.diffScroll}>
-        <table className={css.diffTable}>
-          <colgroup>
-            <col className={noColClass} />
-            <col />
-            <col className={noColClass} />
-            <col />
-          </colgroup>
-          <thead>
-            <tr>
-              <th className={css.diffNoHead} colSpan={2}>{t('snapshots.plan.beforeLabel')}</th>
-              <th className={css.diffNoHead} colSpan={2}>{t('snapshots.plan.afterLabel')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {groups.map((group) => {
-              const rows = capped ? group.rows.slice(0, Math.max(0, DIFF_ROW_CAP - rendered)) : group.rows
-              rendered += rows.length
-              return (
-                <Fragment key={group.header}>
-                  <tr className={css.diffHunkRow}>
-                    <td colSpan={4}>{group.header}</td>
-                  </tr>
-                  {rows.map((row, index) => (
-                    <tr key={`${group.header}-${String(index)}`}>
-                      <td className={css.diffNo}>{row.left?.oldNo ?? ''}</td>
-                      <td className={leftCellClass(row.kind)}>{cellText(row.left?.text)}</td>
-                      <td className={css.diffNo}>{row.right?.newNo ?? ''}</td>
-                      <td className={rightCellClass(row.kind)}>{cellText(row.right?.text)}</td>
-                    </tr>
-                  ))}
-                </Fragment>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+      <DiffTable
+        hunks={diff.hunks}
+        beforeLabel={t('snapshots.plan.beforeLabel')}
+        afterLabel={t('snapshots.plan.afterLabel')}
+        truncatedNotice={(shown, total) => t('snapshots.plan.diffTruncated', { shown: String(shown), total: String(total) })}
+        sanitize={redact}
+      />
     </div>
   )
 }

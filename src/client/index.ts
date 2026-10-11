@@ -51,6 +51,19 @@ import {
 } from './chat/rollback-entry-view.ts'
 import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
 import { mountChatEntries } from './chat/chat-entry-mount.ts'
+import { RollbackDiffTab } from './chat/RollbackDiffTab.tsx'
+import {
+  asSidebarRightFace,
+  asSidebarRightTabsFace,
+  declaredPaneTabKind,
+  openRollbackDiff,
+  rollbackDiffAddress,
+  rollbackDiffTabDefinition,
+  ROLLBACK_DIFF_SLOT,
+  ROLLBACK_DIFF_TAB_ID,
+  type RollbackDiffOpenResult,
+} from './chat/rollback-diff-tab.ts'
+import type {} from './chat/sidebar-slots.ts'
 // 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并）：
 // 注册 `conversation.chat.node`（user cell）与 `conversation.chat.turnTail` 前都必须加载。
 import type {} from './chat/chat-slots.ts'
@@ -173,8 +186,28 @@ export function apply(ctx: ClientContext): void {
    * 端口 = T2 的 RecoveryApi（组件绝不直接 fetch）；`rt` = recovery 字典（rollback.* 词汇单点）；
    * 子会话导航**可选**：`ctx.sessions` 缺失时入口仍可回退，只是不能自动打开子会话并如实降级。
    */
+  /**
+   * 惰取一个可选客户端服务（**绝不做属性访问**：未在 inject 里声明的服务属性访问会抛，见 AGENTS.md 的 DI 纪律）。
+   */
+  const readService = (key: string): unknown => {
+    try {
+      const get = (ctx as unknown as { get?: (k: string) => unknown }).get
+      return typeof get === 'function' ? get.call(ctx, key) : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 「查看」的打开动作：**每次调用重读服务**（服务可能比本插件晚挂载；装配期快照会把还没挂载的
+   * 侧栏记成「本客户端没有侧栏」——那是假降级，真机教训见 AGENTS.md 的惰取纪律）。
+   */
+  const openDiffFile = (pointId: string, filePath: string): RollbackDiffOpenResult =>
+    openRollbackDiff(asSidebarRightFace(readService('sidebarRight')), rollbackDiffAddress(pointId, filePath))
+
   const chatEntryInjected = (_sessionId: string): ChatEntryViewInjected & RollbackTurnEntryInjected => ({
     port: recoveryApi,
+    openDiff: openDiffFile,
     rt: recoveryT,
     openChildSession: openChild,
     archiveParentSession: archiveParent,
@@ -237,4 +270,47 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject(CHAT_NODE_SLOT, () => holdChatEntryMount())
   ctx.slots.inject(CHAT_ENTRY_SLOT, () => holdChatEntryMount())
+
+  /**
+   * ── 「查看」→ DSH 右侧栏「回滚差异」标签页（**只读**）──────────────────────────────
+   *
+   * 两件事彼此独立、各自可缺：
+   *  ① **类型注册**（`ctx.sidebarRightTabs.register`）—— 侧栏才知道谁能认领我们的资源地址；
+   *  ② **正文注册**（槽位 `sidebar.right.pane.tab` 的 keyed 位，key = 类型实现 id）。
+   * 任何一件拿不到（旧版没有侧栏服务 / 槽位形态不符 / 注册抛错）都只丢「侧栏查看」这一个能力：
+   * 预览对话框会据此**降级为弹窗内展示同一份差异**，并如实说明为什么（绝不假装打开过）。
+   */
+  let rollbackDiffTabRegistered = false
+  const registerRollbackDiffTabType = (): void => {
+    if (rollbackDiffTabRegistered) return
+    const tabs = asSidebarRightTabsFace(readService('sidebarRightTabs'))
+    if (tabs === undefined) return
+    rollbackDiffTabRegistered = true
+    ctx.effect(() => {
+      const dispose = tabs.register(rollbackDiffTabDefinition())
+      return typeof dispose === 'function' ? (dispose as () => void) : (): void => {}
+    }, 'config-manager: rollback diff tab type')
+  }
+  registerRollbackDiffTabType()
+  // 服务可能晚于本插件挂载：服务一到再试一次（自身做幂等，重复注册会抛，所以只认第一次成功）
+  const injectServices = (ctx as unknown as { inject?: (deps: string[], cb: () => void) => unknown }).inject
+  if (typeof injectServices === 'function') {
+    try {
+      injectServices.call(ctx, ['sidebarRightTabs'], () => { registerRollbackDiffTabType() })
+    } catch {
+      /* 该版本没有这个注入形态：只影响「服务晚挂载」这一种时序，装配期结果仍然有效 */
+    }
+  }
+
+  ctx.slots.inject(ROLLBACK_DIFF_SLOT, () => {
+    // 形态探测：只有 keyed 位才按 key 注册（0.1.x 没有这个槽位 ⇒ 不注册，只丢这一个能力）
+    const kind = declaredPaneTabKind({ spec: (name) => ctx.slots.spec(name as 'sidebar.right.pane.tab') })
+    if (kind !== 'keyed') return (): void => {}
+    return ctx.slots.register({
+      name: ROLLBACK_DIFF_SLOT,
+      key: ROLLBACK_DIFF_TAB_ID,
+      locale: RECOVERY_NS,
+      inject: () => ({ port: recoveryApi, rt: recoveryT }),
+    }, RollbackDiffTab)
+  })
 }

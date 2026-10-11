@@ -39,6 +39,14 @@ export const zh = {
   'chat.open.unavailable': '本客户端没有可用的会话导航入口（当前 DSH 版本不提供），所以没有自动打开：子会话 {id} 已创建，请手动打开它',
   /** 不可回退但宿主没给原因键时的兜底（T9-F3）：说「原因未知」，**不得**说成「没有可回退的内容」 */
   'chat.preview.reasonUnknown': '这个回滚点当前不可回退，但宿主没有给出原因（原因未知）',
+  /** 预览对话框的说明行（Cursor「Confirm Undo」风格的第二张截图：一句话说清这次动作会做什么） */
+  'chat.preview.summary': '这次回退会做以下改动：',
+  /** 文件行上悬停出现的「查看」（在看得到的前提下才出现：没有侧栏能力时换成下面那句） */
+  'chat.preview.view': '查看',
+  'chat.preview.viewHint': '在右侧栏查看这个文件的差异',
+  /** 没有右侧栏能力（旧 DSH / 侧栏服务缺失）→ 如实降级为弹窗内展示，不假装打开过 */
+  'chat.preview.viewInline': '本客户端没有右侧栏，差异改为在这里展示',
+  'chat.preview.viewFailed': '打开右侧栏失败：{detail}',
   /** 回退请求在途 */
   'chat.rewind.running': '正在回退…',
   /**
@@ -91,6 +99,11 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.open.failed': 'The session navigation call failed, so child session {id} was not opened automatically (the child session does exist): open it manually',
   'chat.open.unavailable': 'This client exposes no usable session navigation entry (the installed DSH version does not provide one), so nothing was opened automatically: child session {id} exists, open it manually',
   'chat.preview.reasonUnknown': 'This rollback point cannot be restored right now, but the host gave no reason (cause unknown)',
+  'chat.preview.summary': 'Confirming this undo will make the following changes:',
+  'chat.preview.view': 'View diff',
+  'chat.preview.viewHint': 'View this file\u2019s diff in the right sidebar',
+  'chat.preview.viewInline': 'This client has no right sidebar, so the diff is shown here instead',
+  'chat.preview.viewFailed': 'Could not open the right sidebar: {detail}',
   'chat.rewind.running': 'Rewinding\u2026',
   'chat.rewind.submit': 'Rewind',
   'chat.close': 'Close',

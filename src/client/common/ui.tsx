@@ -11,6 +11,7 @@
  *   - Segmented（页内子视图分段切换）
  */
 import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
+import { ExpandChevron } from './Icon.tsx'
 import css from '../config-manager.module.css'
 
 /* ---------------- Button ---------------- */
@@ -118,6 +119,44 @@ export function IconButton({ icon, label, onClick, disabled, active, danger, tit
       onClick={onClick}
     >
       {icon}
+    </button>
+  )
+}
+
+/* ---------------- FoldToggle ---------------- */
+
+export interface FoldToggleProps {
+  /** 展开态（同时决定 aria-expanded 与 chevron 朝向） */
+  open: boolean
+  /** 折叠体 id（aria-controls）。折叠体必须始终存在 —— 见 common/Motion.tsx 的 Collapse */
+  controls: string
+  onToggle: () => void
+  /** 可访问名（展开 / 收起两个方向各一份，调用方给已翻译文案） */
+  expandLabel: string
+  collapseLabel: string
+}
+
+/**
+ * 卡头行尾的折叠开关（图标按钮 + chevron 形变）。
+ *
+ * 形态与 ContentPicker 的分区行、同步页的通道卡**完全一致**：原生 button + aria-expanded +
+ * aria-controls，图标走 ExpandChevron 形变（折叠展开是它的合法用途，见 DESIGN.md §6）。
+ * 折叠体由调用方用 Collapse 包住 —— 本原语只管开关，不管内容。
+ */
+export function FoldToggle({ open, controls, onToggle, expandLabel, collapseLabel }: FoldToggleProps) {
+  const label = open ? collapseLabel : expandLabel
+  return (
+    <button
+      type="button"
+      className={css.iconBtn}
+      data-size="sm"
+      aria-expanded={open}
+      aria-controls={controls}
+      aria-label={label}
+      title={label}
+      onClick={onToggle}
+    >
+      <ExpandChevron open={open} size={14} />
     </button>
   )
 }

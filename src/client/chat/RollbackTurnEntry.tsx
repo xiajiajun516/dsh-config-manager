@@ -26,6 +26,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { RollbackPointPort } from '../../ui/rollback-view.ts'
 import { RefreshIcon } from '../common/Icon.tsx'
 import { RollbackReviewDialog } from './RollbackReviewDialog.tsx'
+import type { RollbackDiffOpenResult } from './rollback-diff-tab.ts'
 import { entryVisibleForTurn, type ArchiveOutcome, type ChildOpenState } from './rollback-entry-view.ts'
 // 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并），见该文件头部说明。
 import type {} from './chat-slots.ts'
@@ -43,6 +44,11 @@ export interface RollbackTurnEntryInjected {
   archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
   /** 第一条消息之前没有可 fork 的边界：开一条全新会话（uiWorkspace.startSession 同一条路）。 */
   startFreshSession: () => Promise<{ ok: true } | { ok: false; code: string }>
+  /**
+   * 「查看」：把该文件的差异开进 DSH 右侧栏（装配点注入）。侧栏不可用时返回 no-sidebar，
+   * 由预览对话框如实降级为弹窗内展示 —— 绝不给一个点了没反应的入口。
+   */
+  openDiff: (pointId: string, filePath: string) => RollbackDiffOpenResult
 }
 
 /** 完整 props：owner props（turn/seq/openFile）+ session 标准 props + 本插件字典 + inject 面。 */
@@ -52,7 +58,7 @@ export type RollbackTurnEntryProps = PropsRuntime<'conversation.chat.turnTail'> 
  * 一个回合尾的 icon 入口 + 它点开的预览对话框。
  * 只在**已收尾**的回合出现（`entryVisibleForTurn`）：正在跑的回合还没有回滚点。
  */
-export function RollbackTurnEntry({ turn, sessionId, t, port, rt, openChildSession, archiveParentSession, startFreshSession }: RollbackTurnEntryProps) {
+export function RollbackTurnEntry({ turn, sessionId, t, port, rt, openChildSession, archiveParentSession, startFreshSession, openDiff }: RollbackTurnEntryProps) {
   const [open, setOpen] = useState(false)
   if (!entryVisibleForTurn(turn)) return null
   return (
@@ -76,6 +82,7 @@ export function RollbackTurnEntry({ turn, sessionId, t, port, rt, openChildSessi
           openChildSession={openChildSession}
           archiveParentSession={archiveParentSession}
           startFreshSession={startFreshSession}
+          openDiff={openDiff}
           onClose={() => { setOpen(false) }}
         />
       )}

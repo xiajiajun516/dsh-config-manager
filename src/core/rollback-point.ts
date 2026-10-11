@@ -55,6 +55,7 @@ import { atomicWriteFile } from '../utils/atomic-write.ts'
 import { sha256Hex } from '../utils/hashing.ts'
 import { isRecord } from '../utils/guards.ts'
 import { EXCLUDED_DEP_DIR_NAMES } from '../utils/recursive-walk.ts'
+import { diffLines, type DiffHunk } from '../utils/line-diff.ts'
 import { projectKeyOf } from './session-select.ts'
 
 /* ------------------------------------------------------------------ 常量 */
@@ -115,6 +116,16 @@ export const ROLLBACK_PREVIEW_DIFF_MAX_FILE_BYTES = 1024 * 1024
 export const ROLLBACK_PREVIEW_DIFF_MAX_TOTAL_BYTES = 32 * 1024 * 1024
 export const ROLLBACK_PREVIEW_DIFF_MAX_WORK = 8_000_000
 export const ROLLBACK_PREVIEW_DIFF_TOTAL_WORK = 32_000_000
+/**
+ * 单文件前后对照（fileDiff）的展示上限：
+ *  · maxFileBytes 与预览行数统计**同一档**（同一份数据不该有两个口径）；
+ *  · context = 变更块外保留的上下文行数（3，与 git unified diff 一致）。
+ * 超限时的行为是**说「看不了」**（结构化 reason + 空 hunks），绝不截半截差异。
+ */
+export const ROLLBACK_FILE_DIFF_LIMITS = {
+  maxFileBytes: ROLLBACK_PREVIEW_DIFF_MAX_FILE_BYTES,
+  context: 3,
+} as const
 
 /** 恢复顺序（工作区在前；工作区失败即中止后面的会话段） */
 export const ROLLBACK_REWIND_ORDER = ['workspace', 'session'] as const
@@ -191,6 +202,8 @@ export type RollbackCode =
   | 'no-chunks'
   | 'chunk-not-absolute'
   | 'chunk-not-found'
+  /** 单文件差异：该路径**不在**这个回滚点的记录里（收窄：绝不把本端点做成任意路径读取器）。 */
+  | 'file-not-recorded'
 
 /** 结构化指引 / 告警：code 供界面映射字典键，detail 是技术标识（路径 / errno / 计数）。 */
 export interface RollbackGuidance {
@@ -426,6 +439,51 @@ export interface RollbackPreviewFile {
    * **宁可说「不知道」，也绝不谎报行数。**
    */
   truncated: boolean
+}
+
+/** 单文件差异里一侧（当前磁盘 / 回退点快照）的展示信息。 */
+export interface RollbackFileDiffSide {
+  /** 该侧当前存在吗（快照侧 false = 对象仓里那份读不出来，**不是**「空文件」） */
+  exists: boolean
+  bytes: number
+  /** 行数；null = 未读取（二进制 / 超限 / 不可读）—— 只有真读到文本才有数字 */
+  lines: number | null
+  binary: boolean
+  oversized: boolean
+  unreadable: boolean
+}
+
+/**
+ * 单文件差异**无法逐行对比**的原因。有值时 hunks 恒为空数组 ——
+ * 「不知道」与「没有差异」是两件事，界面必须分开说。
+ */
+export type RollbackFileDiffReason = 'missing-blob' | 'binary' | 'too-large' | 'unreadable'
+
+/**
+ * fileDiff 的返回：**一个记录在案的文件**的前后逐行对照。
+ *
+ * 方向（与预览行数统计同一口径，别读反）：before = **当前磁盘**，after = **回退点快照**
+ * —— 也就是「点下回退之后该文件会变成的样子」。界面左右双栏与之一致。
+ */
+export interface RollbackFileDiffResult {
+  ok: boolean
+  code: RollbackCode
+  detail?: string
+  id: string
+  /** 记录里的绝对路径（收窄后 = 请求路径逐字命中记录的那一条） */
+  path: string
+  status: RollbackPreviewFileStatus
+  before: RollbackFileDiffSide
+  after: RollbackFileDiffSide
+  hunks: DiffHunk[]
+  added: number
+  removed: number
+  identical: boolean
+  /** 规模超限 → 结果仍是完整替换，只是不是最小编辑脚本 */
+  degraded: boolean
+  /** 无法逐行对比的原因（有值时 hunks 为空） */
+  reason?: RollbackFileDiffReason
+  limits: typeof ROLLBACK_FILE_DIFF_LIMITS
 }
 
 export interface RollbackPreviewWorkspace {
@@ -1853,6 +1911,108 @@ export class RollbackPointEngine {
       workspace, session,
       canRestore, canRemove,
       storage, guidance: [], warnings,
+    }
+  }
+
+  /* ------------------------------------------------- 单文件前后对照（只读） */
+
+  /**
+   * 只读：单个回滚点里**一个记录在案的文件**的逐行前后对照（零写入、不拍 guard、不写字节）。
+   *
+   * 收窄（安全不变量）：路径必须**逐字命中**记录里的 workspace.files ——
+   * 绝不把这条端点做成「任意路径读取器」；未命中 ⇒ file-not-recorded，**一个字节都不读**。
+   * 二进制 / 单侧超限 / 对象仓读不出 / 当前读不出都返回结构化 reason（hunks 恒为空数组），
+   * 既不抛错，也不把「不知道」谎报成「没有差异」。
+   */
+  async fileDiff(id: string, filePath: string): Promise<RollbackFileDiffResult> {
+    const emptySide = (): RollbackFileDiffSide => ({
+      exists: false, bytes: 0, lines: null, binary: false, oversized: false, unreadable: false,
+    })
+    const base: RollbackFileDiffResult = {
+      ok: false, code: 'invalid-input', id, path: filePath, status: 'overwrite',
+      before: emptySide(), after: emptySide(),
+      hunks: [], added: 0, removed: 0, identical: false, degraded: false,
+      limits: ROLLBACK_FILE_DIFF_LIMITS,
+    }
+    const storage = await this.storageStatus()
+    if (!storage.available) return { ...base, code: 'storage-unavailable', detail: storage.detail }
+    if (filePath === '') return { ...base, detail: 'empty-path' }
+    const ledger = await this.readLedger()
+    const record = ledger.records.find((r) => r.id === id)
+    if (record === undefined) return { ...base, code: 'record-not-found' }
+    const payload = record.workspace.payload
+    if (!record.workspace.ok || payload === null) {
+      const detail = record.workspace.reasonDetail
+      return detail === null ? { ...base, code: 'capture-failed' } : { ...base, code: 'capture-failed', detail }
+    }
+    const key = pathKey(filePath)
+    const file = payload.files.find((entry) => pathKey(entry.path) === key)
+    if (file === undefined) return { ...base, code: 'file-not-recorded', detail: filePath }
+
+    // 快照一侧（回退后的样子）：超限**不读进内存**（与捕获期 / 预览行数统计同一口径）
+    const snapshotOversized = file.bytes > this.previewDiffMaxFileBytes
+    let snapshot: Uint8Array | null = null
+    if (!snapshotOversized) {
+      try {
+        snapshot = await this.readObject(file.object)
+      } catch {
+        snapshot = null
+      }
+    }
+    // 当前一侧（现在的样子）：**只有 ENOENT** 才算「不存在 ⇒ 回退会新建它」
+    let current: Uint8Array | null = null
+    let currentExists = false
+    let currentBytes = 0
+    let currentOversized = false
+    let currentUnreadable = false
+    try {
+      const stat = await fs.stat(file.path)
+      currentExists = true
+      currentBytes = stat.size
+      if (!stat.isFile()) currentUnreadable = true
+      else if (stat.size > this.previewDiffMaxFileBytes) currentOversized = true
+      else current = await fs.readFile(file.path)
+    } catch (error) {
+      if (classifyPreviewStatFailure(error) === 'missing') currentExists = false
+      else currentUnreadable = true
+    }
+
+    const before: RollbackFileDiffSide = {
+      exists: currentExists, bytes: currentBytes, lines: null,
+      binary: false, oversized: currentOversized, unreadable: currentUnreadable,
+    }
+    if (current !== null) {
+      before.binary = looksBinary(current)
+      before.lines = before.binary ? null : splitDiffLines(DIFF_TEXT_DECODER.decode(current)).length
+    }
+    const after: RollbackFileDiffSide = {
+      exists: snapshot !== null, bytes: snapshot?.byteLength ?? file.bytes, lines: null,
+      binary: false, oversized: snapshotOversized,
+      unreadable: snapshot === null && !snapshotOversized,
+    }
+    if (snapshot !== null) {
+      after.binary = looksBinary(snapshot)
+      after.lines = after.binary ? null : splitDiffLines(DIFF_TEXT_DECODER.decode(snapshot)).length
+    }
+    const view: RollbackFileDiffResult = {
+      ...base, ok: true, code: 'ok', path: file.path,
+      status: currentExists ? 'overwrite' : 'create', before, after,
+    }
+    // 结构性不可比对：逐条给出原因（有原因 ⇒ hunks 恒为空，绝不给半截差异）
+    if (snapshotOversized) return { ...view, reason: 'too-large' }
+    if (snapshot === null) return { ...view, reason: 'missing-blob' }
+    if (currentUnreadable) return { ...view, reason: 'unreadable' }
+    if (currentOversized) return { ...view, reason: 'too-large' }
+    if (before.binary || after.binary) return { ...view, reason: 'binary' }
+    const result = diffLines(
+      current === null ? '' : DIFF_TEXT_DECODER.decode(current),
+      DIFF_TEXT_DECODER.decode(snapshot),
+      { context: ROLLBACK_FILE_DIFF_LIMITS.context },
+    )
+    return {
+      ...view,
+      hunks: result.hunks, added: result.added, removed: result.removed,
+      identical: result.identical, degraded: result.degraded,
     }
   }
 

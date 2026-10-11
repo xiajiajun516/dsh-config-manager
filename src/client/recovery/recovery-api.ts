@@ -44,6 +44,7 @@ import type {
 import type { SessionLayoutResponse } from '../../ui/session-layout-view.ts'
 import type {
   RollbackDetailResult,
+  RollbackFileDiffResult,
   RollbackListResult,
   RollbackPointPort,
   RollbackPreviewResult,
@@ -174,6 +175,18 @@ export class RecoveryApi implements RecoveryPort, RollbackPointPort {
    */
   async rollbackPointPreview(id: string): Promise<RollbackPreviewResult> {
     return getJson<RollbackPreviewResult>(rollbackPointPath(id, 'preview'), this.t, RECOVERY_OPTS)
+  }
+
+  /**
+   * GET /recovery/rollback-points/<id>/file-diff?path=...：**单个记录在案文件**的前后逐行对照。
+   *
+   * 只读、零写入；路径以 query 传递（宿主内再收窄一次：未命中该点记录一律 `file-not-recorded`，
+   * 一个字节都不读）。非 2xx（存储栈 503 / 参数 400）由 getJson 抛 ConfigManagerApiError，
+   * 由调用方按 status + code 出文案。
+   */
+  async rollbackPointFileDiff(id: string, path: string): Promise<RollbackFileDiffResult> {
+    const query = '?path=' + encodeURIComponent(path)
+    return getJson<RollbackFileDiffResult>(rollbackPointPath(id, 'file-diff') + query, this.t, RECOVERY_OPTS)
   }
 
   /**

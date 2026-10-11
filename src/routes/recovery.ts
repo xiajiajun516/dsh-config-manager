@@ -413,6 +413,15 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           reply(await engine.preview(sub[0] ?? ''))
           return
         }
+        // 只读：单个**记录在案**文件的前后逐行对照（零写入）。
+        // 收窄：路径必须逐字命中该点的工作区记录（引擎内判，未命中一个字节都不读）；
+        // 它是「预览弹窗里点『查看』」的数据源，与 preview 同族、同 prefix，不新增围栏面。
+        if (sub.length === 2 && sub[1] === 'file-diff') {
+          if (req.method !== 'GET') { methodNotAllowed(); return }
+          const filePath = url.searchParams.get('path') ?? ''
+          reply(await engine.fileDiff(sub[0] ?? '', filePath))
+          return
+        }
         // 回退：fail-closed 确认门（userConfirmed 必须**恰好** true，引擎内再判一次）。
         // 准入口径（t22）：**没有**任何 kind 层面的额外门 —— 引擎只拒 protected / incomplete，
         // 所以 `kind:'guard'` 的救援点 route 级同样可回退（与 preview().canRestore 同口径）；

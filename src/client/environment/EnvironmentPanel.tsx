@@ -403,7 +403,12 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('environment.title')} subtitle={t('profiles.subtitle')} />
+      {/* 页级标题：副标题只在**档案列表**子视图下显示 —— 它讲的是 profile（档案 = 插件组合…），
+          在「维护与诊断」子视图里与内容无关（此前无条件渲染，维护页顶部因此挂着一句跑题的话）。 */}
+      <SectionTitle
+        title={t('environment.title')}
+        subtitle={subView === 'list' ? t('profiles.subtitle') : undefined}
+      />
 
       {/* 子视图切换：档案列表 ↔ 维护与诊断 */}
       <div className={css.actionRow}>
@@ -420,8 +425,9 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
       </div>
 
       {subView === 'maintenance' && (
-        /* 维护与诊断四块，顺序固定（§9）：事故处理 → 磁盘占用与清理 → 会话健康 → 救援模式。
-           这个顺序**就是 RecoveryPanel 现在的渲染顺序**，所以直接复用整个组件：
+        /* 维护与诊断 = 直接复用整个 RecoveryPanel（顺序在它内部，见该文件渲染段）：
+           状态与待处理事项（异常优先）→ 事故处置（崩溃 / 救援模式）→ 残留 → 诊断三块
+           （磁盘占用缺省展开，会话体检与「工作区 + 会话回滚」缺省收起）。
            拆成四张独立卡片就得把「确认 → 执行 → 验证」的状态机提到父级，反而更脆。 */
         <RecoveryPanel
           recoveryApi={recoveryApi}

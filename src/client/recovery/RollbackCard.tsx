@@ -59,13 +59,17 @@ import {
   writeChatEntryMode,
   type ChatEntryMode,
 } from '../chat/chat-entry-pref.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, FoldToggle, IconButton, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
+import { Collapse } from '../common/Motion.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import css from '../config-manager.module.css'
+
+/** 折叠体的 DOM id（aria-controls 恒有值：Collapse 容器始终存在） */
+const ROLLBACK_BODY_ID = 'dcm-rollback-body'
 
 export interface RollbackCardProps {
   /** recovery 端口（rollback-points 方法为 Partial：宿主旧版可能没有这一族）。 */
@@ -139,6 +143,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
    * 「这次切换没有生效」，绝不把界面留在「显示已切换但实际没切换」的假状态。
    */
   const [chatEntryMode, setChatEntryMode] = useState<ChatEntryMode>(() => readChatEntryMode())
+  /** 折叠态：本卡是维护页最长的一块（台账 + 预览），缺省收起 —— 标题行仍给出「这卡干什么」 */
+  const [bodyOpen, setBodyOpen] = useState(false)
   const [chatEntrySaveFailed, setChatEntrySaveFailed] = useState(false)
 
   const applyChatEntryMode = (next: string): void => {
@@ -249,7 +255,18 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   return (
     <>
       <Card>
-        <SectionTitle title={t('rollback.title')} subtitle={t('rollback.desc')} />
+        {/* 卡头：标题 + 副标题（常驻可见，§7 KEEP-7）在左，折叠开关贴右 —— 收起时也读得到「这卡是干什么的」 */}
+        <div className={css.foldHead}>
+          <SectionTitle title={t('rollback.title')} subtitle={t('rollback.desc')} />
+          <FoldToggle
+            open={bodyOpen}
+            controls={ROLLBACK_BODY_ID}
+            onToggle={() => { setBodyOpen((v) => !v) }}
+            expandLabel={t('common.expand')}
+            collapseLabel={t('common.collapse')}
+          />
+        </div>
+        <Collapse open={bodyOpen} id={ROLLBACK_BODY_ID}>
 
         {/* T2：聊天内回退入口形态开关。放在台账之前 = 与列表加载状态无关 ——
             它是「本插件接管 user 渲染器出问题时一键退回回合尾」的保险，读不出台账时也必须能用。 */}
@@ -386,6 +403,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               )}
           </>
         )}
+        </Collapse>
       </Card>
 
       {/* 预览 / 回退（同一弹窗：先只读预览 + 三选一范围，执行后就地显示逐段结果） */}
