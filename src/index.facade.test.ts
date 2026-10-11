@@ -338,6 +338,27 @@ function silentLogger(): Logger {
   return createLogger({ level: 'error', sink: () => {} })
 }
 
+test('回退 fork：必须走 DSH 自己的 sessionController.fork（子会话要落盘、要有 agent），绝不直接调底层 SessionStore.fork', async () => {
+  const calls: unknown[] = []
+  const storeFork = () => { throw new Error('绝不该走底层 SessionStore.fork：它造的会话不落盘、没有 agent') }
+  const facade = new DshSessionStoreFacade(storeCtx({
+    // 底层 store 故意放一个「一调就炸」的 fork：真走了它，这个用例必红
+    sessions: { fork: storeFork },
+    sessionController: { fork: async (request: unknown) => { calls.push(request); return { sessionId: 'child-native' } } },
+    workspaceRegistry: { list: () => [{ sessionIds: ['parent-1'], async attachSession() {} }] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+
+  assert.deepEqual(await facade.forkSession('parent-1', 42), { childSessionId: 'child-native' })
+  assert.deepEqual(calls, [{ sessionId: 'parent-1', atSeq: 42 }], 'atSeq 必须是目标回合前的 inclusive 边界，逐字透传')
+})
+
+test('回退 fork：宿主没有 sessionController 时结构化失败（**绝不**退回底层 store fork 造一个不能用、不落盘的会话）', async () => {
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessions: { fork: () => ({ id: 'session-1' }) },
+  }), 'C:/home/.dsh', zhMsg, silentLogger())
+  assert.deepEqual(await facade.forkSession('parent-1', 3), { error: 'session-controller-unavailable' })
+})
+
 test('回退 fork：子会话必须挂回**原会话所属工作区**（否则侧栏落到「未分组」；用户 2026-10-11 反馈）', async () => {
   const attached: string[] = []
   const parentWorkspace = {
@@ -349,7 +370,7 @@ test('回退 fork：子会话必须挂回**原会话所属工作区**（否则�
     async attachSession() { throw new Error('不许挂到别人的工作区') },
   }
   const facade = new DshSessionStoreFacade(storeCtx({
-    sessions: { fork: () => ({ id: 'child-1' }) },
+    sessionController: { fork: async () => ({ sessionId: 'child-1' }) },
     workspaceRegistry: { list: () => [otherWorkspace, parentWorkspace] },
   }), 'C:/home/.dsh', zhMsg, silentLogger())
 
@@ -362,10 +383,8 @@ test('回退 fork：原会话自己就不在任何工作区时，按**子会话 
   const project = { path: 'D:/proj/a', sessionIds: ['someone-else'], async attachSession(this: unknown, id: string) { attached.push(id) } }
   const otherDir = { path: 'D:/proj/b', sessionIds: [], async attachSession() { throw new Error('不同目录，attachSession 会自己拒绝') } }
   const facade = new DshSessionStoreFacade(storeCtx({
-    sessions: {
-      fork: () => ({ id: 'child-cwd' }),
-      get: (id: string) => (id === 'child-cwd' ? { header: { id, cwd: 'D:/proj/a' } } : undefined),
-    },
+    sessionController: { fork: async () => ({ sessionId: 'child-cwd' }) },
+    sessions: { get: (id: string) => (id === 'child-cwd' ? { header: { id, cwd: 'D:/proj/a' } } : undefined) },
     workspaceRegistry: { list: () => [otherDir, project] },
   }), 'C:/home/.dsh', zhMsg, silentLogger())
 
@@ -382,10 +401,8 @@ test('回退 fork：直接命中的工作区写失败后，仍按同目录兜底
   const broken = { path: 'D:/proj/a', sessionIds: ['parent-1'], async attachSession() { throw new Error('域未就绪') } }
   const sameDir = { path: 'D:/proj/a', sessionIds: [], async attachSession(this: unknown, id: string) { attached.push(id) } }
   const facade = new DshSessionStoreFacade(storeCtx({
-    sessions: {
-      fork: () => ({ id: 'child-fallback' }),
-      get: (id: string) => (id === 'child-fallback' ? { header: { id, cwd: 'D:/proj/a' } } : undefined),
-    },
+    sessionController: { fork: async () => ({ sessionId: 'child-fallback' }) },
+    sessions: { get: (id: string) => (id === 'child-fallback' ? { header: { id, cwd: 'D:/proj/a' } } : undefined) },
     workspaceRegistry: { list: () => [broken, sameDir] },
   }), 'C:/home/.dsh', zhMsg, silentLogger())
 
@@ -402,10 +419,8 @@ test('回退 fork：子代理会话沿 parentSession 上溯祖先的工作区（
     'child-lineage': { id: 'child-lineage', cwd: 'D:/nowhere' },
   }
   const facade = new DshSessionStoreFacade(storeCtx({
-    sessions: {
-      fork: () => ({ id: 'child-lineage' }),
-      get: (id: string) => (headers[id] === undefined ? undefined : { header: headers[id] }),
-    },
+    sessionController: { fork: async () => ({ sessionId: 'child-lineage' }) },
+    sessions: { get: (id: string) => (headers[id] === undefined ? undefined : { header: headers[id] }) },
     workspaceRegistry: { list: () => [workspace] },
   }), 'C:/home/.dsh', zhMsg, silentLogger())
 
@@ -415,7 +430,7 @@ test('回退 fork：子代理会话沿 parentSession 上溯祖先的工作区（
 
 test('回退 fork：挂不上工作区**不影响回退本身**（结构化 warning，绝不抛、绝不假装已归位）', async () => {
   const noRegistry = new DshSessionStoreFacade(storeCtx({
-    sessions: { fork: () => ({ id: 'child-2' }) },
+    sessionController: { fork: async () => ({ sessionId: 'child-2' }) },
   }), 'C:/home/.dsh', zhMsg, silentLogger())
   assert.deepEqual(
     await noRegistry.forkSession('parent-1', 3),
@@ -423,7 +438,7 @@ test('回退 fork：挂不上工作区**不影响回退本身**（结构化 warn
   )
 
   const refusing = new DshSessionStoreFacade(storeCtx({
-    sessions: { fork: () => ({ id: 'child-3' }) },
+    sessionController: { fork: async () => ({ sessionId: 'child-3' }) },
     workspaceRegistry: { list: () => [{ sessionIds: ['parent-1'], async attachSession() { throw new Error('workspace write failed') } }] },
   }), 'C:/home/.dsh', zhMsg, silentLogger())
   assert.deepEqual(

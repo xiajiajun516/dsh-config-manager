@@ -827,6 +827,17 @@ const PARENT_RELATIONS_CACHE_TTL_MS = 5_000
  */
 const ANCESTOR_LOOKUP_MAX_DEPTH = 8
 
+/**
+ * 宿主会话管理面（`SessionController`）的结构窄化 —— 本仓 core 不 import `@deepseek-ai/*`。
+ *
+ * `fork(request)` = DSH 自己的「从某条事件前缀分叉」命令（内部 `SessionCommandController.fork`）：
+ * 建 agent + 落盘 + 挂回原工作区一次到位，返回新子会话 id。**这是回退唯一可用的 fork 路径**
+ * （底层 `SessionStore.fork` 造的会话没有 agent、不落盘，见 forkSession 注释）。
+ */
+interface SessionForkController {
+  fork?: (request: { sessionId: string; atSeq: number }) => Promise<unknown>
+}
+
 export class DshSessionStoreFacade implements SessionStoreFacade {
   private readonly ctx: Context
   /** DSH 缺省会话根（配置改过时只影响快路径命中率，慢路径仍正确） */
@@ -857,26 +868,31 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   /**
    * 回退到稳定边界的**子会话**（S3：工作区 + 会话回滚）。
    *
-   * 内部走 `ctx.get('sessions').fork(source, boundary, childId?)`（惰取服务，**绝不**属性访问
-   * `ctx.sessions` —— 未声明 inject 时属性访问会抛错并致宿主启动崩溃）。fork 是同步 API，
-   * 但本方法声明为 async 以便调用方（引擎的 fork seam）统一 await。
+   * 走 **DSH 自己的 fork 路径**：`ctx.get('sessionController').fork({ sessionId, atSeq })`
+   * （宿主 `SessionController.fork` → `SessionCommandController.fork`；惰取服务，**绝不**属性访问
+   * `ctx.sessionController` —— 未声明 inject 时属性访问会抛错并致宿主启动崩溃）。
+   *
+   * 为什么**必须**走它、而不能直接调底层 `SessionStore.fork`（真机 2026-10-12 定案）：
+   *  · 官方路径用 `ctx.agents.create(...)` 建子会话 ⇒ 子会话有 agent、**会落盘**、id 是 uuid，
+   *    并顺手完成「挂回原会话工作区」；
+   *  · 底层 `SessionStore.fork` 只在内存 store 里造一条会话记录（id 还是进程内计数 `session-1`），
+   *    没有 agent、没有持久化 ⇒ 用户回退后想继续对话时，宿主 `resolve → resume →
+   *    sessionQuery.observeSession` 在磁盘上找不到它，界面直接报
+   *    `resume failed for session "session-1": SessionPersistenceNotFoundError`（用户截图 2026-10-12）。
    *
    * 契约：**任何异常与任何形状不符都收成 `{ error }`**，调用方必须如实结构化降级
-   * （`session-fork-unavailable` / `fork-failed`），绝不静默假装成功。
+   * （`fork-failed` 等），绝不静默假装成功。官方路径已做工作区归位；「子会话 cwd 与某工作区
+   * `path` 一致、但原会话不在任何工作区成员里」这一档仍由 {@link attachChildToParentWorkspace} 兜底。
    */
   async forkSession(sessionId: string, boundarySeq: number): Promise<{ childSessionId: string; warning?: string } | { error: string }> {
     try {
-      const service = readService<{ fork?: (source: string, boundary?: number, childSessionId?: string) => unknown }>(this.ctx, 'sessions')
-      const fork = service?.fork
-      if (typeof fork !== 'function') return { error: 'sessions-service-unavailable' }
-      const child = fork.call(service, sessionId, boundarySeq)
-      const id = child !== null && typeof child === 'object' ? (child as { id?: unknown }).id : undefined
+      const controller = readService<SessionForkController>(this.ctx, 'sessionController')
+      const fork = controller?.fork
+      if (typeof fork !== 'function') return { error: 'session-controller-unavailable' }
+      const child = await fork.call(controller, { sessionId, atSeq: boundarySeq })
+      const id = child !== null && typeof child === 'object' ? (child as { sessionId?: unknown }).sessionId : undefined
       if (typeof id !== 'string' || id === '') return { error: 'fork-returned-no-id' }
-      // 无感替换的第二半：把子会话挂回**原会话所属的工作区**。DSH 自己的 fork
-      // （SessionCommandController.fork）在 fork 之后就是这一步 `workspace.attachSession(childId)`；
-      // 我们走的是底层 SessionStore.fork（为了能指定边界），不补这一步子会话会在侧栏落到「未分组」
-      // （真机 2026-10-11/12 用户反馈）。三档匹配见 attachChildToParentWorkspace；挂不上**不影响
-      // 回退本身**：结构化回报 warning，界面如实说明（warning 由 fork port 一路带到回退结果）。
+      // 归位兜底（官方 fork 已挂过；这里只为「原会话本就不属于任何工作区」那一档补 cwd 同目录）。
       const attached = await this.attachChildToParentWorkspace(sessionId, id)
       return attached ? { childSessionId: id } : { childSessionId: id, warning: 'workspace-attach-failed' }
     } catch (error) {

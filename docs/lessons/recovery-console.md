@@ -122,3 +122,12 @@
 - **不静默**：warning 一路带到回退结果 → 段落 `guidance` 多一条 `rollback.guidance.sessionNotAttached`（zh/en），聊天弹窗（`chatRewindNotices`，过滤掉已由子会话行表达的 `sessionForked`、按 key+detail 去重）与设置页回滚卡都会如实渲染「会出现在侧栏「未分组」下；回退本身已生效」。
 - **护栏**：`src/index.facade.test.ts` 3 条（cwd 归位 / 第一档抛错后同目录兜底 / 子代理血缘）；`src/core/rollback-point.test.ts` R-12 两组断言（归位成功无多余指引 + `workspaceAttached=true`；带 warning 时回退仍 `restored` 且指引含未归位码 + `workspaceAttached=false`）；`src/client/chat/rollback-entry-view.test.ts` 的 `chatRewindNotices` 用例。
 - **未验证（如实）**：本机没有运行「带该修复的构建」的实例（`~\.dsh\profiles\desktop\node_modules\dsh-config-manager` 是 0.1.71 发布版，`/recovery/rollback-points` 在该实例上 404，即**不含**本插件回滚族）—— 真机端到端「回退后子会话出现在正确工作区」未复验，证据止于单元/引擎/客户端判定三层测试与离线数据复核。
+
+## 回退 fork 必须走官方 sessionController.fork：底层 SessionStore.fork 造出的会话不落盘、没有 agent（2026-10-12 用户截图）
+
+- **症状**（用户 2026-10-12 截图）：回退之后想继续对话，界面报 `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)`。
+- **根因**：`DshSessionStoreFacade.forkSession` 此前直接调底层 `ctx.get('sessions').fork(source, boundary)`（宿主 `dsh-session` 的 `SessionStore.fork`）。它只在**内存 store** 里造一条会话记录（`prepare()` 用进程内计数铸 id，第一个就是 `session-1`），**不经过 `ctx.agents.create`** ⇒ 没有 agent、没有持久化句柄。用户发下一条消息时，宿主 `SessionCommandController.resolve → resume → ctx.sessionQuery.observeSession` 去**磁盘**上找它 ⇒ `SessionPersistenceNotFoundError`。DSH 自己的 fork（`SessionCommandController.fork`）走的是 `ctx.agents.create({sessionId: uuid, seed, ...})`，顺带完成落盘与 `workspace.attachSession`。
+- **离线取证（本机 2026-10-12）**：`~/.dsh/sessions/**` 下 **0 个** `session-<数字>` 目录，而 `~/.dsh/storages/workspace.json` 的工作区成员里**确实有** `session-1`（= 我们的归位确实挂上了，但那个会话在磁盘上不存在）。同族证据：会话目录里 52 个 `isSeeded=true` 全部来自 `agents.create` 路径，且都带 `parentSession`。
+- **改法**：`forkSession` 改为惰取 `ctx.get('sessionController')` 并调 `fork({ sessionId, atSeq })`（`SessionController.fork` → `SessionCommandController.fork`；`Remote` 只是标记装饰器，进程内直调执行的就是原实现）。返回 `{ sessionId }` 作为子会话 id。宿主没有该服务时**结构化失败**（`session-controller-unavailable`），**不再退回**底层 store fork —— 宁可如实报「会话段未回退」，也不造一个不能继续对话的会话。归位三档保留为兜底（官方路径已挂过，幂等）。
+- **护栏**：`src/index.facade.test.ts` —— ①「必须走 sessionController.fork」用例里给底层 store 放一个**一调就炸**的 `fork`，真走底层必红，并断言 `{sessionId, atSeq}` 逐字透传；② 无 `sessionController` ⇒ `{ error: 'session-controller-unavailable' }`（不得产出子会话 id）；③ 三档归位的三条用例改为 mock `sessionController`。
+- **未验证（如实）**：真机「回退后能继续对话」未复验（本机运行实例装的是发布版 0.1.71，不含回滚族）；证据止于源码级取证（DSH 两处实现 + 本机磁盘/注册表数据）+ 单元测试。

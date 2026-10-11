@@ -365,7 +365,50 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > card `CheckpointCard.tsx` → `RollbackCard.tsx`, route family `/recovery/checkpoints/*` → `/recovery/rollback-points/*`, i18n keys `checkpoint.*` → `rollback.*` (including the ⌘K command id `checkpoint.open` → `rollback.open`).
 > **Old data is neither read nor deleted**: `<dataDir>/checkpoints/` is no longer read (old points are invisible after upgrading) and this plugin never removes it — back up that directory yourself if you want the history.
 
+> **「会话体检」弹窗重排：摘要给数字、每行两行式、机制散文进 ⓘ（用户 2026-10-12 反馈「UI 太丑」）**：
+> 旧形态整屏同权重灰字 —— 摘要是四颗同款徽章；每行是「徽章 + 会话 id + 问题 + 版本/体积 + 两颗文字按钮」同排的横向 flex；
+> 机制说明（布局归位 3 段 + 应用内可修 + 操作指引）常驻成 4~6 行散文，564px 画布下换行位置随机、读不完。
+> - **摘要**：三个数字（会话总数 / 需要处理 / 会话格式）+ 严重级 chips（**短标签**进屏、完整句仍进 `title`）
+>   + 数据口径块（未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目）—— 「未验证 ≠ 没问题」仍然常驻可见。
+> - **列表**：两行式行卡（主行 = 严重级短标签 + 等宽会话 id + 行尾动作；meta 行 = 问题 chip + 版本/体积/时间），
+>   左侧 2px 语义色条按严重级上色；问题超过 2 条折叠成「还有 N 条」并**如实给出被折叠的条数**；
+>   下载原始日志改图标按钮（禁用原因进 `title`，入口**不静默消失**）；主操作（开始体检 / 重新体检）搬进弹窗标题行。
+> - **诚实性口径不变**：机制散文进 ⓘ 或只在**真有动作可执行时**常驻（空档下不再铺 3 段灰字），
+>   安全口径（运行时写入门 / 隔离目录不删会话 / 禁用原因）**一个字都没删**，只换承载位置。
+> - **护栏**：`src/client/recovery/session-dialog-mount.test.ts` 的 T15/T16（结构 + 留白 + 短标签出口）、
+>   `src/client/recovery/recovery-panel-layout.test.ts`、`src/ui/session-inventory-view.test.ts`（chips / 截断计数 / 新字典键 zh+en 逐字存在）。
+
+> **Session health dialog rebuilt: numbers up front, two-line rows, mechanism prose moved into ⓘ** (user feedback "the UI is ugly", 2026-10-12):
+> the old layout was a wall of same-weight grey text — four identical badges as the summary, one horizontal flex per row
+> ("badge + session id + issues + version/size + two text buttons"), and 4–6 lines of always-visible mechanism prose.
+> - **Summary**: three metric tiles (sessions / need attention / session format) + severity chips (**short labels** on screen,
+>   the full sentence still in `title`) + a data-scope block (not deeply checked / hidden healthy sessions / over the scan limit /
+>   unreadable entries) — "unverified ≠ healthy" stays visible at all times.
+> - **List**: two-line row cards (top = short severity label + monospace session id + right-aligned actions; meta = issue chips +
+>   version/size/time) with a 2px semantic left border per severity; more than two issues collapse into "+N more" and the **collapsed
+>   count is reported**; the raw-log download became an icon button (disabled reason in `title`, the entry never silently disappears);
+>   the primary action (run check / run check again) moved into the dialog header row.
+> - **Honesty rules unchanged**: mechanism prose moved into ⓘ or is shown only when there is actually something to execute (an empty
+>   section no longer renders three paragraphs of grey text); every safety statement (runtime write gate / quarantine never deletes a
+>   session / disabled reasons) is kept word for word, only its container changed.
+> - **Guards**: T15/T16 in `src/client/recovery/session-dialog-mount.test.ts`, `src/client/recovery/recovery-panel-layout.test.ts`,
+>   `src/ui/session-inventory-view.test.ts` (chips / truncation count / the new dictionary keys present in zh and en).
+
 ### 🐛 修复 · Fixed
+
+> **回退后可以继续对话了：fork 改走 DSH 自己的 `sessionController.fork`（用户 2026-10-12 截图：`resume failed for session "session-1": SessionPersistenceNotFoundError`）**：
+> - **症状**：回退后想接着聊，界面直接报 `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)` —— 新对话根本发不出消息。
+> - **根因**：回退此前直接调底层 `ctx.get('sessions').fork(...)`（宿主 `SessionStore.fork`）。它只在**内存 store** 里造一条会话记录（id 还是进程内计数，第一个就是 `session-1`），**不经过 `ctx.agents.create`** ⇒ 没有 agent、没有落盘。用户发下一条消息时宿主 `resolve → resume → sessionQuery.observeSession` 去**磁盘**上找它 ⇒ `SessionPersistenceNotFoundError`。DSH 自己的 fork 走的是 `ctx.agents.create({sessionId: uuid, seed, …})`，落盘与工作区归位一次到位。
+> - **离线取证**：`~/.dsh/sessions/**` 下 **0 个** `session-<数字>` 目录，而 `~/.dsh/storages/workspace.json` 的工作区成员里**确实有** `session-1` —— 归位挂上了，但那个会话在磁盘上不存在。
+> - **改法**：`forkSession` 改为惰取 `ctx.get('sessionController')` 并调 `fork({ sessionId, atSeq })`（= `SessionCommandController.fork`：uuid id + `agents.create` + 工作区归位）。宿主没有该服务时**结构化失败**（`session-controller-unavailable`），**不再退回**底层 store fork —— 宁可如实报「会话段未回退」，也不造一个不能继续对话的会话。归位三档保留为兜底（官方路径已挂过，幂等）。
+> - **护栏**：`src/index.facade.test.ts` 新增 2 条 —— 「必须走 sessionController.fork」用例给底层 store 放一个**一调就炸**的 `fork`（真走底层必红）并断言 `{sessionId, atSeq}` 逐字透传；「无 sessionController」用例断言结构化失败、**不得**产出子会话 id。原有三档归位用例改为 mock `sessionController`。
+
+> **Rewinding a conversation no longer breaks it: the fork now goes through DSH's own `sessionController.fork`** (user screenshot, 2026-10-12: `resume failed for session "session-1": SessionPersistenceNotFoundError`):
+> - **Symptom**: after a rewind, trying to keep chatting failed outright with `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)`.
+> - **Root cause**: the rewind called the low-level `ctx.get('sessions').fork(...)` (host `SessionStore.fork`), which only mints an **in-memory** session record (its id comes from an in-process counter — the first one is `session-1`) and never goes through `ctx.agents.create`, so the child had **no agent and no persistence**. When the user sent the next message, the host's `resolve → resume → sessionQuery.observeSession` looked for it **on disk** and threw `SessionPersistenceNotFoundError`. DSH's own fork goes through `ctx.agents.create({sessionId: uuid, seed, …})`, which persists the child and files it into the workspace in one step.
+> - **Offline evidence**: there are **zero** `session-<number>` directories under `~/.dsh/sessions/**`, yet `~/.dsh/storages/workspace.json` **does** list `session-1` as a workspace member — the filing worked, the session itself never existed on disk.
+> - **Fix**: `forkSession` now lazily reads `ctx.get('sessionController')` and calls `fork({ sessionId, atSeq })` (= `SessionCommandController.fork`: uuid id + `agents.create` + workspace attach). When that service is absent it fails **structurally** (`session-controller-unavailable`) instead of falling back to the store-level fork — an honest "session segment was not rewound" beats a conversation that cannot be continued. The three placement tiers remain as an idempotent fallback.
+> - **Guards**: two new cases in `src/index.facade.test.ts` — the "must use sessionController.fork" case installs a **deliberately throwing** `fork` on the low-level store (any fallback turns it red) and asserts `{sessionId, atSeq}` is passed through verbatim; the "no sessionController" case asserts a structured failure that produces **no** child id. The three placement cases now mock `sessionController`.
 
 > **回退出来的子会话不再落到「未分组」：归位匹配补齐三档 + 归位失败不再静默**（用户 2026-10-12 反馈「有时候会把对话放到未分类工作区」）：
 > - **症状**：点「↺ 回退」→ 回退本身成功（子会话已建、界面已切过去），但新对话有时出现在侧栏**「未分组」**下，而不是原项目的工作区里；且界面**一个字都没说**，看起来像「回退把对话弄丢了」。
