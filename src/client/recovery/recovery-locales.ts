@@ -358,6 +358,7 @@ export const zh = {
      `nothing-to-restore`（记录了条目但全部已与快照一致）是**两件不同的事**，界面上必须说两句不同的话：
      前者「没有记录任何文件」，后者「工作区与该回退点一致」。只出现在 segments[].reasonCode。 */
   'rollback.code.no-recorded-files': '该回退点没有记录任何文件',
+  'rollback.code.file-not-recorded': '这个路径不在该回滚点的记录里',
   'rollback.code.guard-failed': '回退前的救援点没能留下，已中止（零写入）',
   'rollback.code.session-missing': '会话日志不存在',
   'rollback.code.session-out-of-root': '会话日志不在本机会话根内，已拒绝',
@@ -917,6 +918,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.code.verify-failed': 'Post-rewind per-file verification failed; everything was rolled back to the pre-rewind state',
   'rollback.code.nothing-to-restore': 'This rollback point has nothing to restore',
   'rollback.code.no-recorded-files': 'This rollback point recorded no files',
+  'rollback.code.file-not-recorded': 'This path is not recorded in the rollback point',
   'rollback.code.guard-failed': 'The pre-rewind rescue point could not be kept, so the rewind was aborted (zero writes)',
   'rollback.code.session-missing': 'Session log not found',
   'rollback.code.session-out-of-root': 'Session log is outside the local session root; refused',

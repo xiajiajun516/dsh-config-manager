@@ -763,6 +763,18 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 分层：分组/统计在 `src/ui/restore-plan-view.ts`、双栏对齐在 `src/ui/diff-view.ts`（纯函数 + node 单测）；
     行级 diff 内核 `src/utils/line-diff.ts`（零依赖 Myers，超预算降级为整块替换）；
     组件 `src/client/library/RestorePlanView.tsx` 只装配（v3 随产物库归位搬移）。
+  - **双栏表已抽成共享原语**（2026-10-12）：`src/client/common/DiffTable.tsx` —— 快照恢复计划与
+    「回退预览 → 查看」共用同一副骨架（`.diffTable` / `.diffScroll` / `.diffCell*` / `.diffHunkRow` /
+    `.diffNoColW*`），单元格文本**缺省即 redact**（`sanitize` 的缺省值就是 `redact`，调用方只能换成别的脱敏器）。
+- **回退预览弹窗（Cursor「Confirm Undo」式，2026-10-12 用户要求）**：底盘沿用 `.dialogCard` 宽版，
+  正文顺序固定 = 说明行（`.previewSummary`）→ 会被回退的文件列表（`.rollbackFileRow`）→ 可选的原因/告警；
+  底部**恰好两颗**按钮（回退 / 取消）。
+  - 文件行 = 等宽路径（`.rollbackFilePath`）+ `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）
+    + **悬停或键盘 focus 才显形的「查看」**（`.fileViewBtn`：用 `visibility` 而不是 `display:none` ——
+    它必须留在 tab 序里，否则这个操作只能用鼠标）。
+  - 「查看」把该文件的差异开进 **DSH 右侧栏**（本插件注册自己的 tab 类型 `cm-rollback-diff`）；
+    本客户端没有侧栏能力时降级为弹窗内展示（`.inlineDiffBox`）并说明为什么在这里看 —— 不出现空白面板、不假装打开过。
+  - **不引入**无功能的勾选框：回退是整体语义，放一个取消不掉的勾选框只是装饰（诚实性优先于形似）。
 - **冲突解决**（ConflictList）：选边卡片模式——每项一张卡（kindTag 适配器 + 等宽描述），
   两个并排 `.choiceCard` 选边（radio 语义，选中高亮），**可见文案取字典**
   `import.conflicts.keepCurrent` / `useImported`（zh「保留当前 / 使用备份」、en「Keep current / Use backup」）；

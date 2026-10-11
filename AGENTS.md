@@ -223,6 +223,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。证据 → `docs/lessons/recovery-console.md`
 - **宿主服务的方法抽出来必须 bind 回服务对象**（真机 2026-10-11：`uiWorkspace.openSession` 丢 receiver ⇒ `this.lifetime` 为 undefined ⇒ 回退成功但子会话永远打不开）；三档降级判据不动，只补 receiver。证据 → `docs/lessons/recovery-console.md`。
 - **回退 fork 必须走 DSH 自己的 `sessionController.fork`（uuid id + 落盘 + 归位），绝不直接 `SessionStore.fork`**（只在内存造会话 ⇒ 继续对话报 `SessionPersistenceNotFoundError`）；归位三档与失败如实上屏 → `docs/lessons/recovery-console.md`。
+- **「查看」进 DSH 右侧栏**：`sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、抽出方法必须 bind、补试幂等、形态不符即不注册，缺能力降级为弹窗内展示 → `docs/lessons/recovery-console.md`。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
 - **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补。

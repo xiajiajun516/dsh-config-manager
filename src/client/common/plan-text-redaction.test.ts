@@ -152,10 +152,12 @@ const RENDER_POINTS: RenderPoint[] = [
     why: '恢复计划行明细（宿主拼装）',
   },
   {
-    id: 'restore-plan-diff-cell',
-    file: 'src/client/library/RestorePlanView.tsx',
-    redacted: R("return text === undefined ? '' : redact(text)"),
-    bare: R("return text === undefined ? '' : text"),
+    // 2026-10-12：双栏差异表抽成共享原语（common/DiffTable.tsx，快照恢复计划与回滚点「查看」共用），
+    // 脱敏从「调用方自己记得包」升级为**缺省即脱敏**（sanitize 缺省 = redact），登记点随之搬家。
+    id: 'diff-table-cell',
+    file: 'src/client/common/DiffTable.tsx',
+    redacted: R('const cell = sanitize ?? ((text: string): string => redact(text))'),
+    bare: R('const cell = sanitize ?? ((text: string): string => text)'),
     why: '逐行对照单元格正文（磁盘/快照文件原文，可能含明文凭据）',
   },
   {

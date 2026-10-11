@@ -154,6 +154,8 @@ export const ROLLBACK_CODES: readonly string[] = [
   'no-chunks',
   'chunk-not-absolute',
   'chunk-not-found',
+  // 单文件差异（「查看」的数据源）：该路径**不在**这个回滚点的记录里
+  'file-not-recorded',
 ]
 
 /**

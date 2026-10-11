@@ -31,6 +31,29 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🆕 新增 · Added
 
+> **回退预览改成「确认撤销」式弹窗，「查看」把单文件差异开进右侧栏**（用户 2026-10-12）：旧弹窗只有一个标题、一列绝对路径和两行行数，
+> 看不出「这次动作会做什么」，文件也点不开 —— 唯一出路是回退完再看。
+> - 弹窗换成 Cursor「Confirm Undo」式底盘：说明行 + 文件行（路径 + `+N −M`）+ **悬停 / 键盘 focus** 才显形的「查看」，
+> 底部仍是「回退 / 取消」两颗按钮；**不引入**无功能的勾选框 —— 我们的回退是整体语义，放一个取消不掉的勾选框只是装饰。
+> - 「查看」→ **DSH 右侧栏**新增本插件自己的标签页类型（kind `cm-rollback-diff`）：只读展示该文件「当前 → 回退后」的逐行对照；
+> 本客户端没有侧栏能力（旧版 / 服务缺失 / 打开抛错）时**如实降级**为弹窗内展示同一份差异，并说明为什么在这里看。
+> - 新只读端点 `GET /recovery/rollback-points/<id>/file-diff?path=…`：只认**记录在案**的路径（未命中一律 `file-not-recorded`，一个字节都不读）；
+> 二进制 / 超限 / 读不出一律结构化 reason + 空 hunks（**绝不把「不知道」说成「没有差异」**）。
+> - 双栏差异表抽成共享原语 `common/DiffTable.tsx`（快照恢复计划与本次「查看」共用），并**缺省即脱敏**（sanitize 缺省 = redact）。
+> - **护栏**：`src/core/rollback-file-diff.test.ts`（6 条：方向 / create / 未记录 / 二进制 / 未知 id / 零写入）、
+> `src/client/chat/rollback-diff-tab.test.ts`（7 条：地址往返 / 坏地址 / 标题 / 类型定义 / 打开三档 / bind 回原对象 / 形态探测）。
+
+> **The rewind preview is now a "Confirm Undo"-style dialog whose "View diff" opens the file's diff in the right sidebar** (user request, 2026-10-12):
+> the old dialog was a title plus a column of absolute paths and two line counters — it never said what the action would do, and files could not be opened at all.
+> - The dialog follows the Cursor "Confirm Undo" chassis: a summary line, file rows (path + `+N −M`) with a **hover / keyboard-focus** "View diff", and still exactly two buttons.
+> No non-functional checkbox was added: our rewind is all-or-nothing, so a checkbox that cannot be unchecked would be decoration. The two-column diff table is now a
+> shared primitive (`common/DiffTable.tsx`) used by both the restore plan and this view, and it **redacts by default**.
+> - "View diff" opens a **right-sidebar tab type of our own** (kind `cm-rollback-diff`) showing the read-only line-by-line "current → after rewind" comparison;
+> when the client has no sidebar (older DSH, missing service, or a throwing call) it **honestly degrades** to the same diff inside the dialog and says why.
+> - New read-only endpoint `GET /recovery/rollback-points/<id>/file-diff?path=…`: only paths **recorded in the point** are accepted (anything else is `file-not-recorded`
+> and not a byte is read); binary / oversized / unreadable all return a structured reason with empty hunks — an unknown state is never reported as "no differences".
+> - Guards: `src/core/rollback-file-diff.test.ts` (6 cases) and `src/client/chat/rollback-diff-tab.test.ts` (7 cases).
+
 > **工作副本可见 + 可自救：origin 有没有跟上新地址一目了然，一键「重指向 / 重新克隆」**（issue #79）：改仓库地址后同步长期失败时，
 > App 内此前**没有任何自救路径** —— 只能手工 `git remote set-url`，或删掉 `<dataDir>/sync/work` 重来。
 > - `GET /sync/status` 新增只读 `workDir` 字段（只做 2 条本地只读 git 命令：`remote get-url` 与其 `--push` 变体）；

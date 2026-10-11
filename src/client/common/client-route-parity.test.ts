@@ -79,7 +79,7 @@ const PREFIX_ROUTED = new Set<string>([
  * rollback-points 族的**端点 ↔ RecoveryApi 方法**一一对账（S7 / T2）。
  *
  * `<id>` 是占位符（不是可直接请求的路径），所以这些子路径不进 `RECOVERY_API`（也就不进
- * `clientPaths()` 的宿主字面量对账）；但「客户端声明了哪 6 条端点、实现了哪 6 个方法」必须
+ * `clientPaths()` 的宿主字面量对账）；但「客户端声明了哪 7 条端点、实现了哪 7 个方法」必须
  * 两边都齐 —— 少了 = 界面点了 404，多了 = 死代码或改错方向。
  */
 const ROLLBACK_POINT_ENDPOINTS: readonly string[] = [
@@ -87,6 +87,7 @@ const ROLLBACK_POINT_ENDPOINTS: readonly string[] = [
   RECOVERY_API.rollbackPointsStorage,
   `${RECOVERY_API.rollbackPoints}/<id>`,
   `${RECOVERY_API.rollbackPoints}/<id>/preview`,
+  `${RECOVERY_API.rollbackPoints}/<id>/file-diff`,
   `${RECOVERY_API.rollbackPoints}/<id>/rewind`,
   `${RECOVERY_API.rollbackPoints}/<id>/delete`,
 ];
@@ -210,9 +211,9 @@ test('parity-03 prefix 路由（recovery）确有宿主前缀字面量覆盖', (
   }
 });
 
-test('parity-05 rollback-points 族：6 条端点与 RecoveryApi 方法一一对账（两个方向）', () => {
+test('parity-05 rollback-points 族：7 条端点与 RecoveryApi 方法一一对账（两个方向）', () => {
   const entries = Object.values(ROLLBACK_POINT_ROUTES);
-  assert.equal(entries.length, 6, 'rollback-points 族必须恰好 6 条端点（冻结 wire contract）');
+  assert.equal(entries.length, 7, 'rollback-points 族必须恰好 7 条端点（6 条冻结契约 + 只读 file-diff）');
   assert.deepEqual(
     entries.map((entry) => entry.path).sort(),
     [...ROLLBACK_POINT_ENDPOINTS].sort(),

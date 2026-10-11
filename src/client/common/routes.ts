@@ -167,7 +167,7 @@ export const RECOVERY_API = {
 } as const;
 
 /**
- * rollback-points 族的 6 条端点 ↔ RecoveryApi 方法名（**唯一来源**）。
+ * rollback-points 族的 7 条端点 ↔ RecoveryApi 方法名（**唯一来源**）。
  *
  * 为什么不并进 `RECOVERY_API`：`<id>` 是**占位符**，不是可直接请求的路径 —— 并进去会被
  * `client-route-parity` 当成真实路由去与宿主字面量对账（假红/假绿各一半）。
@@ -178,6 +178,8 @@ export const ROLLBACK_POINT_ROUTES = {
   storage: { path: RECOVERY_API.rollbackPointsStorage, method: 'rollbackPointStorage' },
   detail: { path: `${RECOVERY_API.rollbackPoints}/<id>`, method: 'rollbackPoint' },
   preview: { path: `${RECOVERY_API.rollbackPoints}/<id>/preview`, method: 'rollbackPointPreview' },
+  // 单文件前后对照（只读）：预览弹窗里「查看」的数据源（`?path=` 携带记录在案的绝对路径）
+  fileDiff: { path: `${RECOVERY_API.rollbackPoints}/<id>/file-diff`, method: 'rollbackPointFileDiff' },
   rewind: { path: `${RECOVERY_API.rollbackPoints}/<id>/rewind`, method: 'restoreRollbackPoint' },
   delete: { path: `${RECOVERY_API.rollbackPoints}/<id>/delete`, method: 'removeRollbackPoint' },
 } as const;

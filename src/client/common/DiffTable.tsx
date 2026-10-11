@@ -9,6 +9,7 @@
  * 安全：单元格文本是磁盘 / 宿主原文 ⇒ 展示前**必须**过调用方传进来的 sanitize（本该是 redact）。
  */
 import { Fragment } from 'react'
+import { redact } from '../../security/redaction.ts'
 import { countSideRows, maxLineDigits, toSideBySide, type SideBySideRow } from '../../ui/diff-view.ts'
 import type { DiffHunk } from '../../utils/line-diff.ts'
 import css from '../config-manager.module.css'
@@ -24,7 +25,7 @@ export interface DiffTableProps {
   afterLabel: string
   /** 被渲染上限截断时的说明文案（由调用方按自己的字典出话；缺省 = 不提示） */
   truncatedNotice?: (shown: number, total: number) => string
-  /** 单元格文本安全化（**应当**传 redact；缺省原样只为类型完整，不用于用户可见正文） */
+  /** 单元格文本安全化（**缺省就是 redact**：调用方只能换成别的脱敏器，换不成不脱敏） */
   sanitize?: (text: string) => string
   /** 渲染上限（缺省 DIFF_ROW_CAP） */
   rowCap?: number
@@ -42,7 +43,7 @@ function rightCellClass(kind: SideBySideRow['kind']): string {
 
 /** 左右双栏逐行对照（表头 + 块头 + 行号 + 单元格）。 */
 export function DiffTable({ hunks, beforeLabel, afterLabel, truncatedNotice, sanitize, rowCap = DIFF_ROW_CAP }: DiffTableProps) {
-  const cell = sanitize ?? ((text: string): string => text)
+  const cell = sanitize ?? ((text: string): string => redact(text))
   const groups = toSideBySide(hunks)
   const total = countSideRows(groups)
   // 行号列宽 = 实际出现的最大行号位数（1–3/4/5/6+ 位四档 ch），内容列平分剩余空间

@@ -131,3 +131,18 @@
 - **改法**：`forkSession` 改为惰取 `ctx.get('sessionController')` 并调 `fork({ sessionId, atSeq })`（`SessionController.fork` → `SessionCommandController.fork`；`Remote` 只是标记装饰器，进程内直调执行的就是原实现）。返回 `{ sessionId }` 作为子会话 id。宿主没有该服务时**结构化失败**（`session-controller-unavailable`），**不再退回**底层 store fork —— 宁可如实报「会话段未回退」，也不造一个不能继续对话的会话。归位三档保留为兜底（官方路径已挂过，幂等）。
 - **护栏**：`src/index.facade.test.ts` —— ①「必须走 sessionController.fork」用例里给底层 store 放一个**一调就炸**的 `fork`，真走底层必红，并断言 `{sessionId, atSeq}` 逐字透传；② 无 `sessionController` ⇒ `{ error: 'session-controller-unavailable' }`（不得产出子会话 id）；③ 三档归位的三条用例改为 mock `sessionController`。
 - **未验证（如实）**：真机「回退后能继续对话」未复验（本机运行实例装的是发布版 0.1.71，不含回滚族）；证据止于源码级取证（DSH 两处实现 + 本机磁盘/注册表数据）+ 单元测试。
+
+## 「查看」把单文件差异开进 DSH 右侧栏：tab 注册契约与三个坑（2026-10-12 源码核实）
+
+- **需求**：回退预览弹窗里点「查看」要看到该文件「当前 → 回退后」的逐行差异（Cursor 的 View Diff 位），并且要开在 DSH 的右侧栏里，而不是自己再造一个面板。
+- **DSH 侧栏契约**（真机 `app.asar` 内 `@deepseek-ai/dsh-client-ui-sidebar-right/lib/client.js`，0.2.0-rc.2）：
+  - 服务由该包 `provide` 两个面：`sidebarRight`（controller）与 `sidebarRightTabs`（类型注册表）；controller 有 `openResource(address, options)` / `openTab(kind, options)` / `openResourceIn` / `focus(tabId)`。
+  - 资源地址方案固定为 `dsh-resource://<type>/…`（`placeResource` 里 `address.startsWith(RESOURCE_SCHEME)`，否则抛）；地址由某个已注册类型的 `patterns` 认领。
+  - 类型定义形状：`{ id, kind, patterns, title(address), canOpen?(address), priority?, multiple?, guide? }`；**`id` 同时是正文注册用的 key**（自带文本预览的 id 就是它的包名 `@deepseek-ai/dsh-client-ui-sidebar-documentpreview`）。
+  - 正文：`ctx.slots.register({ name: 'sidebar.right.pane.tab', key: <id>, locale, inject }, Body)`（keyed / session 位）；body 由 seat 注入 `useTabInfo()`，`tab.contentId` = 打开时用的那个地址 ⇒「同一文件开两个标签各看各的」不需要全局变量。
+- **三个坑**：
+  1. `openResource` / `register` 都读 `this`（`this.require()` / `this.ids` / `this.kinds`）—— 抽出来的方法**必须 `.bind(record)`**，否则「打开」与「注册」必然抛（与 `uiWorkspace.openSession` 丢 receiver 是同一类事故）。
+  2. 服务可能比本插件晚挂载：类型注册要在装配期做一次，再用 `ctx.inject(['sidebarRightTabs'], cb)` 补一次；`register` 对重复 id **会抛**，所以补试必须幂等（自己记「已经成功过」）。
+  3. 正文位要先探形态（`ctx.slots.spec('sidebar.right.pane.tab')` 的 `kind === 'keyed'`）：0.1.x 没有这个槽位，硬注册会把 `slots.inject` 回调打挂。
+- **本插件落点**：地址 `dsh-resource://cm-rollback-diff/<pointId>/<encodeURIComponent(绝对路径)>`（id 与路径**都编码** ⇒ Windows 盘符/反斜杠不进地址正文）；类型与正文注册在 `src/client/index.ts`，纯逻辑 + 收窄在 `src/client/chat/rollback-diff-tab.ts`（bind 与形态探测都有单测）；拿不到侧栏能力时**降级为弹窗内展示**同一份差异并说明原因 —— 绝不假装打开过。
+- **未验证（如实）**：本机没有运行「带本次改动的构建」的实例（`~\.dsh\profiles\desktop` 装的是发布版 0.1.71，不含回滚族），所以「点查看 → 右侧栏真的出现标签页」**未经真机复核**；证据止于源码级契约核实 + 纯函数单测 + typecheck/全量测试/构建。
