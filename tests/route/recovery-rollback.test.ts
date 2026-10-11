@@ -269,10 +269,12 @@ test('R8-1 全部子路径可达：列表 / storage / 详情 / 预览 / 回退 /
     assert.equal(obj(rewound.json)['childSessionId'], 'child-' + SESSION_ID)
     assert.deepEqual(h.forkCalls, [{ sessionId: SESSION_ID, boundarySeq: 1 }], 'fork 边界必须来自回滚点')
     assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1')
-    // 覆盖恢复绝不删除：之后新建的文件仍在，并被如实报告
-    assert.equal(await readText(path.join(h.workspaceDir, 'later.txt')), 'LATER')
+    // 2026-10-11 定案 A：回退默认删除「该点未记录」的路径 —— later.txt 正是这种，必须真的被删掉；
+    // leftovers 仍然如实列出它（那是删除前的盘点口径，两者不矛盾）。
+    await assert.rejects(fs.readFile(path.join(h.workspaceDir, 'later.txt')), { code: 'ENOENT' })
     const wsSegmentRaw = arr(obj(rewound.json)['segments']).map(obj).find((s) => s['state'] === 'workspace')
     assert.deepEqual(wsSegmentRaw?.['leftovers'], [path.join(h.workspaceDir, 'later.txt')])
+    assert.equal(wsSegmentRaw?.['removed'], 1)
 
     // ⑧ POST delete（确认后删普通回滚点）
     const delNoConfirm = await server.call('/rollback-points/' + id + '/delete', { method: 'POST', body: {} })

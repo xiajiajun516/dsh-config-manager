@@ -417,7 +417,7 @@ test('R-05b 开 removeCreated：回退点之后新建的路径被真的删掉；
   assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A1')
   await assert.rejects(
     fs.readFile(path.join(fx.workspaceDir, 'new.txt')),
-    undefined,
+    { code: 'ENOENT' },
     '开了 removeCreated 就必须真的删掉「该点未记录」的新建路径',
   )
   assert.equal(await readText(path.join(fx.workspaceDir, '.git', 'index')), 'GIT-INDEX', '.git 内一律拒删')
