@@ -20,9 +20,6 @@ export const uiZh = {
   'commonNext': '下一步',
   'commonBack': '上一步',
   'commonDone': '完成',
-  // 折叠开关的可访问名（维护与诊断的折叠卡头）
-  'commonExpand': '展开',
-  'commonCollapse': '收起',
   // 导出
   'export.download': '下载备份文件',
   'export.running': '正在导出…',
@@ -587,8 +584,6 @@ export const uiEn: Record<UiTextKey, string> = {
   'commonNext': 'Next',
   'commonBack': 'Back',
   'commonDone': 'Done',
-  'commonExpand': 'Expand',
-  'commonCollapse': 'Collapse',
   'export.download': 'Download backup file',
   'export.running': 'Exporting…',
   'export.run': 'Start Export',

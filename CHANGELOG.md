@@ -417,17 +417,17 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Guards**: T15/T16 in `src/client/recovery/session-dialog-mount.test.ts`, `src/client/recovery/recovery-panel-layout.test.ts`,
 >   `src/ui/session-inventory-view.test.ts` (chips / truncation count / the new dictionary keys present in zh and en).
 
-> **「维护与诊断」页瘦身：先异常、后诊断，诊断三块缺省只展开磁盘占用**（2026-10-12 用户反馈「这个页面有点太杂乱」）：
+> **「维护与诊断」页瘦身：先异常、后诊断，两块诊断缺省收起**（2026-10-12 用户反馈「这个页面有点太杂乱」）：
 > 564×720 画布上平铺十类块，且顺序是「罕见危险操作在前、真正待处理的恢复事项在最下」—— 待处理事项 / 残留锁 / SAFE MODE 三块排在磁盘占用、会话体检、回滚之后，要滚 3–4 屏才看得到。
 > - **顺序**：状态与待处理事项（SAFE MODE 横幅 / 未解决事项列表 / 残留锁 / 空态）整体上移到崩溃归因之后；「进入救援模式」的危险动作收进卡头（危险说明仍**常驻** —— §7 KEEP-2，折叠体只收「已开启时的生效状态」明细，无明细时连开关都不渲染）。
-> - **折叠**：磁盘占用缺省展开（唯一带数字与清理动作的一块），会话体检与「工作区 + 会话回滚」缺省收起；标题行保留状态徽章、计数与主操作，收起时也读得懂。新增共享原语 `FoldToggle`（`common/ui.tsx`）与 `.foldHead`，形态与 ContentPicker / 同步通道卡一致（`aria-expanded` + `aria-controls`，折叠体始终挂载 —— 两端都有高度动画）。
+> - **折叠**：会话体检与「工作区 + 会话回滚」缺省收起，标题行保留状态徽章、计数与主操作（收起时也读得懂）；**磁盘占用卡不折叠** —— 它是固定高度 + 内滚视口卡，折叠既会留下一个固定高的空盒，也会把内滚容器从纵向 flex 高度链里摘出去（真机复现：内容溢出盖住后续卡片）。新增共享原语 `FoldToggle`（`common/ui.tsx`）与 `.foldHead`，形态与 ContentPicker / 同步通道卡一致（`aria-expanded` + `aria-controls`，折叠体始终挂载 —— 两端都有高度动画）。
 > - **文案诚实**：「检测到一次操作未正常完成…」此前是**无条件副标题**（本机健康时照样显示假警报），现在只在真有待处理事项（`recovery-view.ts` 的 `recoveryRequired`）时出现；空态改为**确知没有事项**才渲染（枚举失败 = 不知道，不算「没有」）。页级副标题也不再跑题：维护子视图不再渲染「管理 DSH 自带的 profile…」那句档案说明。
 > - **护栏**：`npm run typecheck` / `npm run build` 通过；`npm test` 中本改动相关守卫全绿（恢复面板布局 / 会话体检弹窗挂载 / ⓘ 台账 / css 类存在性 / 字典键集相等）；新增字典键 `commonExpand` / `commonCollapse`（UiT）与 `common.expand` / `common.collapse`（recovery）zh/en 双语进目录。
 
-> **"Maintenance & diagnostics" slimmed down: anomalies first, diagnostics second, only the disk card expanded by default** (user feedback, 2026-10-12):
+> **"Maintenance & diagnostics" slimmed down: anomalies first, diagnostics second, two diagnostic blocks collapsed by default** (user feedback, 2026-10-12):
 > ten blocks were stacked flat inside the 564×720 canvas, ordered so a rarely used dangerous action sat on top while the actually pending recovery items were 3–4 screens down.
 > - **Order**: state and pending items (SAFE MODE banner / unresolved incidents / stale lock / empty state) moved up right after crash attribution; the danger action "enter rescue mode" moved into the card header — its safety copy **stays visible** (§7 KEEP-2), and the fold only hides "what is in effect while rescue is on" (no chevron at all when there is no such detail).
-> - **Folds**: the disk usage card stays expanded (the only block with numbers and a cleanup action); session health and "workspace + session rollback" collapse by default, keeping status badges, counts and the primary action in the header row. New shared primitive `FoldToggle` (`common/ui.tsx`) plus `.foldHead`, same shape as ContentPicker / the sync channel card (`aria-expanded` + `aria-controls`, fold body always mounted so both directions animate).
+> - **Folds**: session health and "workspace + session rollback" collapse by default, keeping status badges, counts and the primary action in the header row. The **disk usage card is not collapsible** — it is a fixed-height card with an inner scroll viewport; folding it would leave a fixed-height empty box *and* pull the scroll container out of the vertical flex height chain (reproduced on a real machine: content spilled over the following cards). New shared primitive `FoldToggle` (`common/ui.tsx`) plus `.foldHead`, same shape as ContentPicker / the sync channel card (`aria-expanded` + `aria-controls`, fold body always mounted so both directions animate).
 > - **Honest copy**: the "an operation did not complete normally…" line was an **unconditional** subtitle (a false alarm on a healthy machine) and now appears only when `recoveryRequired` is true; the empty state renders only when "nothing to handle" is **known** (an unreadable enumeration is not "nothing"). The page subtitle no longer describes profiles while you are on the maintenance sub-view.
 > - **Guards**: `npm run typecheck` / `npm run build` pass; the guards covering this change are green (recovery panel layout / session health dialog mount / ⓘ ledger / css class existence / dictionary key parity); new dictionary keys `commonExpand` / `commonCollapse` (UiT) and `common.expand` / `common.collapse` (recovery) ship in zh and en.
 

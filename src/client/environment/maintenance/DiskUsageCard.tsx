@@ -23,17 +23,13 @@ import { formatBytes } from '../../../ui/report.ts'
 import { redact } from '../../../security/redaction.ts'
 import type { ConfigManagerApi } from '../../api.ts'
 import type { DiskUsageReport } from '../../../core/disk-usage.ts'
-import { Badge, Banner, Button, Card, Checkbox, FoldToggle, IconButton } from '../../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, IconButton } from '../../common/ui.tsx'
 import { SkeletonList } from '../../common/Skeleton.tsx'
-import { Collapse } from '../../common/Motion.tsx'
 import { InfoHint } from '../../common/InfoHint.tsx'
 import { ConfirmDialog } from '../../common/ConfirmDialog.tsx'
 import { RefreshIcon } from '../../common/Icon.tsx'
 import { toast } from '../../common/toast-store.ts'
 import css from '../../config-manager.module.css'
-
-/** 折叠体的 DOM id（aria-controls 恒有值：Collapse 容器始终存在） */
-const DISK_BODY_ID = 'dcm-disk-usage-body'
 
 export interface DiskUsageCardProps {
   api: ConfigManagerApi
@@ -55,8 +51,6 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
   const [busy, setBusy] = useState(false)
   const [includeExpired, setIncludeExpired] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
-  // 折叠态：磁盘占用是「诊断三块」里唯一带数字与清理动作的一块，缺省展开（另两块缺省收起）
-  const [bodyOpen, setBodyOpen] = useState(true)
   const mountedRef = useRef(true)
 
   useEffect(() => () => { mountedRef.current = false }, [])
@@ -139,17 +133,8 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
           disabled={status === 'loading' || busy}
           onClick={load}
         />
-        <FoldToggle
-          open={bodyOpen}
-          controls={DISK_BODY_ID}
-          onToggle={() => { setBodyOpen((v) => !v) }}
-          expandLabel={t('commonExpand')}
-          collapseLabel={t('commonCollapse')}
-        />
       </div>
 
-      {/* 折叠体：收起时数字摘要（标题行的总占用徽章）仍在标题行可见 */}
-      <Collapse open={bodyOpen} id={DISK_BODY_ID}>
       {status === 'loading' && <SkeletonList label={t('diskUsage.loading')} />}
 
       {status === 'error' && (
@@ -255,7 +240,6 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
           </div>
         </>
       )}
-      </Collapse>
 
       {/* 清理二次确认（勾了过期导出 → danger；那是用户的备份文件） */}
       <ConfirmDialog
