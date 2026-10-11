@@ -41,6 +41,8 @@ export interface RollbackTurnEntryInjected {
   openChildSession: (childId: string) => Promise<ChildOpenState>
   /** A（无感替换）：回退后把原会话收进「已归档」（失败结构化返回，绝不抛）。 */
   archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
+  /** 第一条消息之前没有可 fork 的边界：开一条全新会话（uiWorkspace.startSession 同一条路）。 */
+  startFreshSession: () => Promise<{ ok: true } | { ok: false; code: string }>
 }
 
 /** 完整 props：owner props（turn/seq/openFile）+ session 标准 props + 本插件字典 + inject 面。 */
@@ -50,7 +52,7 @@ export type RollbackTurnEntryProps = PropsRuntime<'conversation.chat.turnTail'> 
  * 一个回合尾的 icon 入口 + 它点开的预览对话框。
  * 只在**已收尾**的回合出现（`entryVisibleForTurn`）：正在跑的回合还没有回滚点。
  */
-export function RollbackTurnEntry({ turn, sessionId, t, port, rt, openChildSession, archiveParentSession }: RollbackTurnEntryProps) {
+export function RollbackTurnEntry({ turn, sessionId, t, port, rt, openChildSession, archiveParentSession, startFreshSession }: RollbackTurnEntryProps) {
   const [open, setOpen] = useState(false)
   if (!entryVisibleForTurn(turn)) return null
   return (
@@ -73,6 +75,7 @@ export function RollbackTurnEntry({ turn, sessionId, t, port, rt, openChildSessi
           t={t}
           openChildSession={openChildSession}
           archiveParentSession={archiveParentSession}
+          startFreshSession={startFreshSession}
           onClose={() => { setOpen(false) }}
         />
       )}

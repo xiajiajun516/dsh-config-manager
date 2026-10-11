@@ -615,7 +615,7 @@
 
 .primaryButton {
   background: var(--cm-accent-fill);
-  color: var(--dsw-alias-label-primary-foreground);
+  color: var(--cm-text-on-accent);
 }
 
 .primaryButton:hover:not(:disabled) {

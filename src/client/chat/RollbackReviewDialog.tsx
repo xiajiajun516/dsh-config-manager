@@ -84,6 +84,8 @@ export interface RollbackReviewDialogProps {
   openChildSession: (childId: string) => Promise<ChildOpenState>
   /** A（无感替换）：回退后把**原会话**收进「已归档」；失败一律结构化返回，由本组件如实呈现。 */
   archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
+  /** 第一条消息之前没有可 fork 的边界：开一条全新会话（失败结构化返回，绝不抛）。 */
+  startFreshSession: () => Promise<{ ok: true } | { ok: false; code: string }>
   onClose: () => void
 }
 
@@ -119,7 +121,7 @@ function FileStat({ added, removed, unknown, rt }: {
 }
 
 /** 预览对话框主体（挂载即打开；关闭由父级卸载）。 */
-export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, archiveParentSession, onClose }: RollbackReviewDialogProps) {
+export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, archiveParentSession, startFreshSession, onClose }: RollbackReviewDialogProps) {
   const [state, setState] = useState<LoadState>('loading')
   const [loadKey, setLoadKey] = useState<string | null>(null)
   const [loadDetail, setLoadDetail] = useState<string | null>(null)
@@ -135,6 +137,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   const [childState, setChildState] = useState<ChildOpenState | 'opening' | null>(null)
   /** A：原会话归档结果（null = 还没走到这一步）。 */
   const [archive, setArchive] = useState<ArchiveOutcome | null>(null)
+  /** 第一条消息之前：新建空会话的结果（null = 这次没有走这条路径）。 */
+  const [freshSession, setFreshSession] = useState<{ ok: true } | { ok: false; code: string } | null>(null)
   const alive = useRef(true)
   /**
    * 同一 tick 的**同步幂等锁**（t3 F4）：`busy` 是异步 setState，挡不住同一 tick 里的第二次派发
@@ -160,6 +164,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
     setChildId(null)
     setChildState(null)
     setArchive(null)
+    setFreshSession(null)
     setWriteKey(null)
     setWriteDetail(null)
     setPreview(null)
@@ -227,6 +232,12 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
         const archived = await archiveParentSession(sessionId)
         if (alive.current) setArchive(archived)
       }
+    } else if ((attempt.result.segments ?? []).some((s) => s.state === 'session' && s.reasonCode === 'no-boundary')) {
+      // **第一条用户消息之前没有上一个回合** ⇒ 没有可 fork 的边界（会话段结构化 no-boundary）。
+      // 参照实现（Anionex/dsh-turn-rewind）在这种情形建一条同目录**空会话**，而不是硬造空子会话；
+      // 我们走客户端同一条入口（uiWorkspace.startSession =「新会话」按钮那条路，id 由 DSH 自己铸）。
+      const fresh = await startFreshSession()
+      if (alive.current) setFreshSession(fresh)
     }
   })
 
@@ -409,6 +420,13 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                 )}
                 {archive !== null && !archive.ok && (
                   <div className={css.warnText}>{rt(archiveHintKey(archive) ?? 'rollback.rewind.archive.failed')}</div>
+                )}
+                {/* 第一条消息之前：会话段没有边界 ⇒ 已按参照实现开一条全新会话（失败如实说） */}
+                {freshSession !== null && freshSession.ok && (
+                  <div className={css.hint}>{rt('rollback.rewind.freshSession')}</div>
+                )}
+                {freshSession !== null && !freshSession.ok && (
+                  <div className={css.warnText}>{rt('rollback.rewind.freshSessionFailed')}</div>
                 )}
               </>
             )}

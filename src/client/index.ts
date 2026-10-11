@@ -45,6 +45,7 @@ import {
   CHAT_ENTRY_SLOT,
   navigationSourcesOf,
   openChildSession,
+  startFreshSession,
   type ArchiveOutcome,
   type ChildOpenState,
 } from './chat/rollback-entry-view.ts'
@@ -177,6 +178,7 @@ export function apply(ctx: ClientContext): void {
     rt: recoveryT,
     openChildSession: openChild,
     archiveParentSession: archiveParent,
+    startFreshSession: () => startFreshSession(navigationSourcesOf(ctx).workspace),
   })
 
   /**

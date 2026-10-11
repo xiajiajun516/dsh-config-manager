@@ -451,6 +451,9 @@ export const zh = {
   'rollback.rewind.result.child': '已回到该消息之前（当前对话：{id}）',
   // A（无感替换）：原会话被收进「已归档」——列表里只剩这一条对话
   'rollback.rewind.archive.done': '原会话已收进「已归档」（需要时可在那儿恢复）',
+  // 第一条用户消息之前没有上一个回合 ⇒ 没有可 fork 的边界：开一条全新会话（对齐参照实现）
+  'rollback.rewind.freshSession': '这是这条对话的第一条消息之前：已为你新建一条空会话（这条消息的文字可从上面那条气泡复制）',
+  'rollback.rewind.freshSessionFailed': '这是第一条消息之前、没有可回退的对话边界，而本客户端没能新建空会话 —— 请手动点「新会话」',
   'rollback.rewind.archive.unavailable': '本客户端没有可用的归档入口，所以原会话仍留在会话列表里（内容未被改写）',
   'rollback.rewind.archive.active': '原会话还有进行中的工作，暂时不能归档 —— 它仍留在会话列表里（内容未被改写）',
   'rollback.rewind.archive.failed': '原会话归档失败，它仍留在会话列表里（内容未被改写）',
@@ -956,6 +959,9 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.rewind.result.child': 'Rewound to before that message (current conversation: {id})',
   // A (seamless replace): the original session is filed under "Archived" — only one conversation stays in the list
   'rollback.rewind.archive.done': 'The original session is now archived (restore it from "Archived" whenever you need it)',
+  // Before the first user message there is no turn boundary to fork from: open a brand-new session
+  'rollback.rewind.freshSession': 'This is before the first message of the conversation, so a brand-new empty session was opened (copy that message from the bubble above to continue)',
+  'rollback.rewind.freshSessionFailed': 'There is no conversation boundary to rewind to before the first message, and this client could not open a new session — use "New session" manually',
   'rollback.rewind.archive.unavailable': 'This client exposes no archive entry, so the original session stays in the session list (its content was not rewritten)',
   'rollback.rewind.archive.active': 'The original session still has work in progress and cannot be archived yet — it stays in the session list (its content was not rewritten)',
   'rollback.rewind.archive.failed': 'Archiving the original session failed; it stays in the session list (its content was not rewritten)',

@@ -27,6 +27,7 @@ import {
   ROLLBACK_NO_RECORDED_FILES_CODE,
   archiveHintKey,
   archiveParentSession,
+  startFreshSession,
   buildRewindOptions,
   buildSessionNavigator,
   canSubmitRewind,
@@ -415,6 +416,26 @@ test('A 无感替换：归档原会话 —— 成功 / 缺入口 / 空 id / 有�
   assert.equal(refusals, 2)
   const boom = { archiveSession: async (): Promise<unknown> => { throw new Error('boom') } }
   assert.deepEqual(await archiveParentSession(boom, 's4', { delay: async () => {} }), { ok: false, code: 'archive-failed' })
+})
+
+test('A：第一条消息之前的回退 —— 开一条全新会话（缺入口/抛错都结构化，绝不抛）', async () => {
+  let calls = 0
+  assert.deepEqual(await startFreshSession({ startSession: async () => { calls += 1 } }), { ok: true })
+  assert.equal(calls, 1)
+  assert.deepEqual(await startFreshSession(undefined), { ok: false, code: 'start-session-unavailable' })
+  assert.deepEqual(await startFreshSession({}), { ok: false, code: 'start-session-unavailable' })
+  const boom = { startSession: async (): Promise<void> => { throw new Error('nope') } }
+  assert.deepEqual(await startFreshSession(boom), { ok: false, code: 'start-session-failed' })
+})
+
+test('A 真机回归：uiWorkspace.startSession 依赖 this —— 抽方法时同样必须 bind 回服务对象', async () => {
+  const service = {
+    started: 0,
+    async startSession(this: { started: number }): Promise<void> { this.started += 1 },
+  }
+  const sources = navigationSourcesOf({ get: (key: string) => (key === 'uiWorkspace' ? service : undefined) })
+  assert.deepEqual(await startFreshSession(sources.workspace), { ok: true })
+  assert.equal(service.started, 1)
 })
 
 test('A 真机回归：workspaces.archiveSession 依赖 this —— 抽方法时必须 bind 回服务对象', async () => {

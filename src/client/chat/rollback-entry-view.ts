@@ -511,6 +511,15 @@ export interface SessionListSource {
 /** 真机导航面：`ctx.uiWorkspace`（0.2 的 `openSession(id)`；ui-chat 自己的 fork 流程就用它）。 */
 export interface WorkspaceNavigationSource {
   openSession?: (id: string) => void
+  /**
+   * 「新建一条会话」——真机 = uiWorkspace.startSession（与「新会话」按钮同一条路：
+   * DSH 自己铸 UUID id、自己归到当前工作区）。
+   *
+   * 为什么需要它：**第一条用户消息之前没有上一个回合**，fork 不出任何边界（会话段结构化
+   * no-boundary）。参照实现（Anionex/dsh-turn-rewind）在这种情形用 Host `session.create`
+   * 建一个同目录空会话，而不是硬 fork 一个空子会话 —— 我们走客户端同一入口。
+   */
+  startSession?: () => Promise<unknown>
 }
 
 /**
@@ -614,6 +623,23 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : null
 }
 
+/**
+ * 开一条全新会话（首条消息之前的回退用）。**绝不抛**：没有入口 / 调用失败都结构化返回。
+ * 与 archiveParentSession 同一套纪律：抽出来的方法一律 bind 回服务对象（丢 receiver 会抛）。
+ */
+export async function startFreshSession(
+  source: WorkspaceNavigationSource | null | undefined,
+): Promise<{ ok: true } | { ok: false; code: string }> {
+  const start = source?.startSession
+  if (typeof start !== 'function') return { ok: false, code: 'start-session-unavailable' }
+  try {
+    await start()
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, code: error instanceof Error && error.name !== '' && error.name !== 'Error' ? error.name : 'start-session-failed' }
+  }
+}
+
 function asWorkspaceSource(value: unknown): WorkspaceNavigationSource | null {
   const record = asRecord(value)
   if (record === null) return null
@@ -624,9 +650,14 @@ function asWorkspaceSource(value: unknown): WorkspaceNavigationSource | null {
   // TypeError: Cannot read properties of undefined (reading 'signal')。回退本身成功、子会话也已创建，
   // 但**永远打不开**（界面只能说「请手动打开它」）。bind 之后 `open.call(...)` 的 this 不再生效，
   // 这正是我们要的：可见性判据留在调用点，receiver 只认方法自己那一份。
-  return typeof openSession === 'function'
-    ? { openSession: (openSession as (id: string) => void).bind(record) }
-    : null
+  const startSession = record['startSession']
+  const hasOpen = typeof openSession === 'function'
+  const hasStart = typeof startSession === 'function'
+  if (!hasOpen && !hasStart) return null
+  return {
+    ...hasOpen ? { openSession: (openSession as (id: string) => void).bind(record) } : {},
+    ...hasStart ? { startSession: (startSession as () => Promise<unknown>).bind(record) } : {},
+  }
 }
 
 /** 归档面的结构收窄；方法一律 bind 回服务对象（丢 receiver 会抛，见 asWorkspaceSource 的注释）。 */
