@@ -128,3 +128,42 @@ test('T2：回滚卡的聊天入口开关位置/原语/通道（panel 小节三�
     '写入必须走 writeChatEntryMode —— 只有它通知订阅者，T1 才会 dispose → register（否则要刷新才生效）',
   );
 });
+
+/* ---------------------------------------------- 回滚点时间线（2026-10-11 布局重构） */
+
+/**
+ * 源码级守卫：回滚点台账必须用**会话分组卡 + 两行式行卡**，不得退回通用 `.actionRow` 字墙。
+ *
+ * 为什么（用户 2026-10-11 反馈「工作区 + 对话回滚面板的 UI 太丑」）：旧实现每行都是
+ * `.actionRow[data-inline]`（通用横向操作行）—— 时间 / 回合 / 来源徽章 / 文件数 / 会话游标 / note /
+ * 两颗实体按钮**同权重**横排，564px 画布下换行位置随机，元信息与按钮混成一片 11px 灰字；
+ * 长句（「回退前救援点（可回退、不可删）」「无会话游标（只能回退工作区）」）逐行重复整句。
+ * 这类缺陷**类型检查、纯函数单测、bundle 护栏全都抓不到**（与本文件头上那条同源），只能靠源码守卫。
+ *
+ * 四条判据：
+ *  ① 结构类必须在位：分组卡 / 分组头 / 组标题 / 行列表 / 行卡 / 主行 / meta 行；
+ *  ② 行内不得再出现 `.actionRow[data-inline]`（旧字墙形态必须绝迹）；
+ *  ③ 长句必须有**短标签键**进屏（完整句仍进 title，事实一个字都不少）；
+ *  ④ 台账与预览两个长列表仍限高内滚。
+ */
+test('布局守卫：回滚点时间线 = 分组卡 + 两行式行卡（禁止退回 actionRow 字墙）', () => {
+  const src = readFileSync(ROLLBACK_CARD_PATH, 'utf8');
+  for (const cls of [
+    'rollbackGroup', 'rollbackGroupHead', 'rollbackGroupTitle',
+    'rollbackPoints', 'rollbackPoint', 'rollbackPointTop', 'rollbackPointMeta',
+  ]) {
+    assert.ok(src.includes('css.' + cls), '回滚卡必须用 .' + cls + '（会话分组卡 + 两行式行卡）');
+  }
+  assert.equal(
+    /css\.actionRow[^\n]*data-inline/.test(src),
+    false,
+    '行渲染不得退回 .actionRow[data-inline]（旧字墙形态：元信息与按钮同权重横排）',
+  );
+  for (const key of ['rollback.kind.guardShort', 'rollback.row.sessionShort', 'rollback.row.workspaceShort']) {
+    assert.ok(src.includes(key), '短标签键必须进屏（完整句进 title）：' + key);
+  }
+  assert.ok(
+    src.includes('css.planScroll') && src.includes('css.reportScroll'),
+    '台账与预览列表必须限高内滚（.planScroll / .reportScroll）',
+  );
+});

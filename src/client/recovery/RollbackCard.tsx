@@ -59,7 +59,9 @@ import {
   writeChatEntryMode,
   type ChatEntryMode,
 } from '../chat/chat-entry-pref.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
+import { Icon } from '../common/Icon.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -81,6 +83,16 @@ const redactErrorText = (err: unknown): string => redact(err instanceof Error ? 
 const CHAT_ENTRY_LABEL_KEYS: Record<ChatEntryMode, string> = {
   'per-message': 'rollback.chatEntry.perMessage',
   'turn': 'rollback.chatEntry.turn',
+}
+
+/**
+ * 行内告警徽章的**短标签 → 完整句**映射（2026-10-11 布局重构）：
+ * 徽章只放短标签（如「跳过 2 项」），完整句进 \`title\` —— 事实一个字都不少，但不再逐行重复整句。
+ * 未登记的键**回落完整句**（绝不因为缺映射就静默丢掉告警）。
+ */
+const NOTICE_SHORT_KEYS: Record<string, string> = {
+  'rollback.row.notice.skipped': 'rollback.row.notice.skippedShort',
+  'rollback.row.notice.truncated': 'rollback.row.notice.truncatedShort',
 }
 
 /** \`ConfigManagerApiError\` 的机器码（宿主在 409/423/404 上回传；缺失即 null）。 */
@@ -241,20 +253,23 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
 
         {/* T2：聊天内回退入口形态开关。放在台账之前 = 与列表加载状态无关 ——
             它是「本插件接管 user 渲染器出问题时一键退回回合尾」的保险，读不出台账时也必须能用。 */}
-        <div className={css.groupLabel}>{t('rollback.chatEntry.label')}</div>
-        <div className={css.actionRow}>
-          <Segmented
-            ariaLabel={t('rollback.chatEntry.label')}
-            active={chatEntryMode}
-            items={CHAT_ENTRY_MODES.map((entryMode) => ({
-              id: entryMode,
-              label: t(dyn(CHAT_ENTRY_LABEL_KEYS[entryMode])),
-            }))}
-            onChange={applyChatEntryMode}
-          />
+        {/* 聊天入口形态 = **设置块**：与下方台账区用一条分隔线分开（台账读不出来时它照样可用） */}
+        <div className={css.rollbackChatEntry}>
+          <div className={css.groupLabel}>{t('rollback.chatEntry.label')}</div>
+          <div className={css.actionRow}>
+            <Segmented
+              ariaLabel={t('rollback.chatEntry.label')}
+              active={chatEntryMode}
+              items={CHAT_ENTRY_MODES.map((entryMode) => ({
+                id: entryMode,
+                label: t(dyn(CHAT_ENTRY_LABEL_KEYS[entryMode])),
+              }))}
+              onChange={applyChatEntryMode}
+            />
+          </div>
+          <div className={css.hint}>{t('rollback.chatEntry.hint')}</div>
+          {chatEntrySaveFailed && <Banner kind="warn">{t('rollback.chatEntry.saveFailed')}</Banner>}
         </div>
-        <div className={css.hint}>{t('rollback.chatEntry.hint')}</div>
-        {chatEntrySaveFailed && <Banner kind="warn">{t('rollback.chatEntry.saveFailed')}</Banner>}
 
         {!hasApi && <Banner kind="warn">{t('rollback.apiMissing')}</Banner>}
 
@@ -280,12 +295,18 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         {status === 'ready' && (
           <>
             <div className={css.hint}>{t('rollback.autopoint.hint')}</div>
-            <div className={css.actionRow}>
-              <span className={css.hint}>
-                {t('rollback.retention.hint', { perSession: ROLLBACK_MAX_POINTS_PER_SESSION, total: ROLLBACK_MAX_POINTS_TOTAL })}
+            <div className={css.rollbackToolbar}>
+              <span className={css.rollbackSummary}>
+                {t('rollback.summary', { points: total, sessions: groups.length })}
               </span>
+              {/* 留存/淘汰口径属机制说明 → 收进 ⓘ（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
+                  20/50/救援点上限这些细节一个字不改，仍在同一条字典键里。 */}
+              <InfoHint
+                text={t('rollback.retention.hint', { perSession: ROLLBACK_MAX_POINTS_PER_SESSION, total: ROLLBACK_MAX_POINTS_TOTAL })}
+                label={t('common.infoHint')}
+              />
               <span className={css.statusSpacer} />
-              <Button disabled={busy} onClick={load}>{t('common.retry')}</Button>
+              <Button size="sm" disabled={busy} onClick={load}>{t('rollback.refresh')}</Button>
             </div>
 
             {actionError !== null && <Banner kind="error">{actionError}</Banner>}
@@ -293,36 +314,72 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             {total === 0
               ? <Empty>{t('rollback.list.empty')}</Empty>
               : (
-                <div className={css.snapshotList + ' ' + css.planScroll}>
+                <div className={css.planScroll + ' ' + css.rollbackScroll + ' ' + css.snapshotList}>
                   {groups.map((group) => (
-                    <div key={group.sessionId ?? '__unknown__'}>
-                      <div className={css.groupLabel}>
-                        {t('rollback.group.label', { session: group.sessionId ?? t('rollback.group.unknownSession') })}
-                        {group.unitId !== null ? ' · ' + group.unitId : ''}
+                    <div key={group.sessionId ?? '__unknown__'} className={css.rollbackGroup}>
+                      <div className={css.rollbackGroupHead}>
+                        <span className={css.rollbackGroupTitle + ' ' + css.mono}>
+                          {t('rollback.group.label', { session: group.sessionId ?? t('rollback.group.unknownSession') })}
+                        </span>
+                        <Badge kind="info">{t('rollback.group.count', { n: group.rows.length })}</Badge>
+                        {/* 工作区路径：右对齐单行省略，全文进 title（不把组头撑成多行） */}
+                        {group.unitId !== null && (
+                          <span className={css.rollbackGroupUnit} title={group.unitId}>{group.unitId}</span>
+                        )}
                       </div>
-                      {group.rows.map((row) => (
-                        <div key={row.id} className={css.actionRow} data-inline>
-                          <span className={css.hint}>{new Date(row.createdAtMs).toLocaleString()}</span>
-                          <span className={css.hint}>{row.turn === null ? t('rollback.turnUnknown') : t('rollback.turn', { n: row.turn })}</span>
-                          <Badge kind={row.kind === 'guard' ? 'info' : 'ok'}>{t(dyn(row.kindKey))}</Badge>
-                          <span className={css.hint}>{t('rollback.row.files', { n: rollbackRowFileCount(row) })}</span>
-                          <span className={css.hint}>
-                            {rollbackRowHasSessionCursor(row)
-                              ? t('rollback.row.sessionCursor')
-                              : t('rollback.row.noSessionCursor')}
-                          </span>
-                          {row.protected && <Badge kind="warn">{t('rollback.badge.protected')}</Badge>}
-                          {row.incomplete && <Badge kind="warn">{t('rollback.badge.incomplete')}</Badge>}
-                          {/* S4：留点时「有文件被跳过 / 被截断」必须看得见（宿主已如实回传，界面不得静默） */}
-                          {row.segments.flatMap((segment) => segment.noticeKeys.map((key) => (
-                            <Badge key={segment.state + key} kind="warn">{t(dyn(key), { n: segment.skippedCount })}</Badge>
-                          )))}
-                          {row.note !== null && <span className={css.hint} title={row.note}>{row.note}</span>}
-                          <span className={css.statusSpacer} />
-                          <Button disabled={busy} onClick={() => { openPreview(row) }}>{t('rollback.preview')}</Button>
-                          <Button variant="danger" disabled={busy || !row.removable} onClick={() => { setDeleteTarget(row) }}>{t('rollback.delete')}</Button>
-                        </div>
-                      ))}
+                      <div className={css.rollbackPoints}>
+                        {group.rows.map((row) => {
+                          const hasCursor = rollbackRowHasSessionCursor(row)
+                          return (
+                            <div key={row.id} className={css.rollbackPoint} data-kind={row.kind}>
+                              <div className={css.rollbackPointTop}>
+                                <span className={css.rollbackPointTurn}>
+                                  {row.turn === null ? t('rollback.turnUnknown') : t('rollback.turn', { n: row.turn })}
+                                </span>
+                                {/* 来源徽章只放短标签（「救援点」），完整语义（含「可回退、不可删」）进 title */}
+                                <Badge kind={row.kind === 'guard' ? 'info' : 'ok'} title={t(dyn(row.kindKey))}>
+                                  {row.kind === 'guard' ? t('rollback.kind.guardShort') : t(dyn(row.kindKey))}
+                                </Badge>
+                                {row.protected && <Badge kind="warn" title={t('rollback.badge.protected')}>{t('rollback.badge.protected')}</Badge>}
+                                {row.incomplete && <Badge kind="warn" title={t('rollback.badge.incomplete')}>{t('rollback.badge.incomplete')}</Badge>}
+                                {/* S4：留点时「有文件被跳过 / 被截断」必须看得见（宿主已如实回传，界面不得静默）。
+                                    徽章只放短标签，完整句进 title；未登记的键回落完整句（绝不静默丢告警）。 */}
+                                {row.segments.flatMap((segment) => segment.noticeKeys.map((key) => {
+                                  const full = t(dyn(key), { n: segment.skippedCount })
+                                  const shortKey = NOTICE_SHORT_KEYS[key]
+                                  const text = shortKey === undefined ? full : t(dyn(shortKey), { n: segment.skippedCount })
+                                  return <Badge key={segment.state + key} kind="warn" title={full}>{text}</Badge>
+                                }))}
+                                <div className={css.rollbackPointActions}>
+                                  <Button size="sm" disabled={busy} onClick={() => { openPreview(row) }}>{t('rollback.preview')}</Button>
+                                  {/* 删除是不可逆的表账操作：图标按钮 + danger（视觉隔离），禁用原因进 title */}
+                                  <IconButton
+                                    icon={<Icon name="delete" />}
+                                    label={t('rollback.delete')}
+                                    title={row.removable ? t('rollback.delete') : (row.protected ? t('rollback.badge.protected') : t('rollback.kind.guard'))}
+                                    disabled={busy || !row.removable}
+                                    danger
+                                    onClick={() => { setDeleteTarget(row) }}
+                                  />
+                                </div>
+                              </div>
+                              <div className={css.rollbackPointMeta}>
+                                <span className={css.mono}>{new Date(row.createdAtMs).toLocaleString()}</span>
+                                <span className={css.rollbackMetaDot} aria-hidden="true">·</span>
+                                <span>{t('rollback.row.files', { n: rollbackRowFileCount(row) })}</span>
+                                <span className={css.rollbackMetaDot} aria-hidden="true">·</span>
+                                {/* 短标签进屏、完整句进 title：「无会话游标（只能回退工作区）」不再逐行重复整句 */}
+                                <span title={hasCursor ? t('rollback.row.sessionCursor') : t('rollback.row.noSessionCursor')}>
+                                  {hasCursor ? t('rollback.row.sessionShort') : t('rollback.row.workspaceShort')}
+                                </span>
+                                {row.note !== null && (
+                                  <span className={css.rollbackPointNote} title={row.note}>{row.note}</span>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -339,52 +396,57 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         {result === null && preview !== null && (
           <>
             <div className={css.hint}>{t('rollback.preview.hint')}</div>
-            <div className={css.snapshotList + ' ' + css.reportScroll}>
-              {previewRows.map((row) => (
-                <div key={row.state} className={css.actionRow} data-inline>
-                  <Badge kind={row.available ? 'ok' : 'warn'}>{t(dyn(row.labelKey))}</Badge>
-                  {row.available ? (
-                    <>
-                      {row.counts.map((count) => (
-                        <span key={count.key} className={css.hint}>{t(dyn(count.key), { n: count.n })}</span>
-                      ))}
-                      {row.cursor !== null && (
-                        <span className={css.hint}>
-                          {t('rollback.preview.cursor', { from: row.cursor.from ?? '—', to: row.cursor.to ?? '—' })}
-                        </span>
+            <div className={css.reportScroll + ' ' + css.rollbackScroll}>
+              <div className={css.rollbackPoints}>
+                {previewRows.map((row) => (
+                  <div key={row.state} className={css.rollbackPoint} data-kind="unknown">
+                    <div className={css.rollbackPointTop}>
+                      <Badge kind={row.available ? 'ok' : 'warn'}>{t(dyn(row.labelKey))}</Badge>
+                      {row.available && row.active && <span className={css.hint}>{t('rollback.preview.active')}</span>}
+                      {!row.available && (
+                        <span className={css.hint}>{t(dyn(row.reasonKey ?? rollbackCodeKey(null)))}</span>
                       )}
-                      {row.cursorBytes !== null && (row.cursorBytes.now !== null || row.cursorBytes.target !== null) && (
-                        <span className={css.hint}>
-                          {t('rollback.preview.cursorBytes', { now: row.cursorBytes.now ?? '—', target: row.cursorBytes.target ?? '—' })}
-                        </span>
-                      )}
-                      {row.turns !== null && <span className={css.hint}>{t('rollback.preview.turns', { n: row.turns })}</span>}
-                      {row.active && <span className={css.hint}>{t('rollback.preview.active')}</span>}
-                      {/* S4：跳过 / 截断计数如实上屏（不因告警就禁用回退 —— 规格允许部分覆盖） */}
-                      {row.noticeKeys.map((key) => (
-                        <span key={key} className={css.hint}>{t(dyn(key), { n: row.skippedCount })}</span>
-                      ))}
-                      {row.guidance.map((guide) => (
-                        <span key={guide.key + (guide.detail ?? '')} className={css.hint}>
-                          {t(dyn(guide.key))}{guide.detail !== null ? ' — ' + guide.detail : ''}
-                        </span>
-                      ))}
-                    </>
-                  ) : (
-                    <span className={css.hint}>{t(dyn(row.reasonKey ?? rollbackCodeKey(null)))}</span>
-                  )}
-                </div>
-              ))}
+                    </div>
+                    {row.available && (
+                      <div className={css.rollbackPointMeta}>
+                        {row.counts.map((count) => (
+                          <span key={count.key}>{t(dyn(count.key), { n: count.n })}</span>
+                        ))}
+                        {row.cursor !== null && (
+                          <span>
+                            {t('rollback.preview.cursor', { from: row.cursor.from ?? '—', to: row.cursor.to ?? '—' })}
+                          </span>
+                        )}
+                        {row.cursorBytes !== null && (row.cursorBytes.now !== null || row.cursorBytes.target !== null) && (
+                          <span>
+                            {t('rollback.preview.cursorBytes', { now: row.cursorBytes.now ?? '—', target: row.cursorBytes.target ?? '—' })}
+                          </span>
+                        )}
+                        {row.turns !== null && <span>{t('rollback.preview.turns', { n: row.turns })}</span>}
+                        {/* S4：跳过 / 截断计数如实上屏（不因告警就禁用回退 —— 规格允许部分覆盖） */}
+                        {row.noticeKeys.map((key) => (
+                          <span key={key}>{t(dyn(key), { n: row.skippedCount })}</span>
+                        ))}
+                        {row.guidance.map((guide) => (
+                          <span key={guide.key + (guide.detail ?? '')}>
+                            {t(dyn(guide.key))}{guide.detail !== null ? ' — ' + guide.detail : ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
 
             {/* 点级告警（宿主 preview.warnings：trackMissing / trackDegraded / protected…）：此前只渲染 result.warnings，导致「留点被跳过 / 被截断」在预览里完全不可见。 */}
             {previewWarnings.length > 0 && (
-              <div className={css.actionRow} data-inline>
-                <span className={css.groupLabel}>{t('rollback.preview.warningsTitle')}</span>
+              <div className={css.rollbackWarnings}>
+                <div className={css.groupLabel}>{t('rollback.preview.warningsTitle')}</div>
                 {previewWarnings.map((warning) => (
-                  <span key={warning.key + (warning.detail ?? '')} className={css.hint}>
+                  <div key={warning.key + (warning.detail ?? '')} className={css.hint}>
                     {t(dyn(warning.key))}{warning.detail !== null ? ' — ' + warning.detail : ''}
-                  </span>
+                  </div>
                 ))}
               </div>
             )}
@@ -446,19 +508,25 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             </div>
             {childSession !== null && <div className={css.hint}>{t(dyn(childSession.key), { id: childSession.id })}</div>}
             {result.guardPointId !== undefined && <div className={css.hint}>{t('rollback.rewind.result.guard', { id: result.guardPointId })}</div>}
-            <div className={css.snapshotList + ' ' + css.reportScroll}>
-              {rewindRows.map((segment) => (
-                <div key={segment.state} className={css.actionRow} data-inline>
-                  <Badge kind={segment.badgeKind}>{t(dyn(segment.labelKey))}</Badge>
-                  <span className={css.hint}>{t(dyn(segment.statusKey))}</span>
-                  <span className={css.hint}>{t('rollback.rewind.result.counts', { restored: segment.restored, removed: segment.removedCount, failed: segment.failed, leftovers: segment.leftoversCount })}</span>
-                  {segment.childSessionId !== null && <span className={css.hint}>{t('rollback.rewind.result.child', { id: segment.childSessionId })}</span>}
-                  {segment.detail.map((line) => <span key={line} className={css.hint}>{line}</span>)}
-                  {segment.guidance.map((row) => (
-                    <span key={row.key + (row.detail ?? '')} className={css.hint}>{t(dyn(row.key))}{row.detail !== null ? ' — ' + row.detail : ''}</span>
-                  ))}
-                </div>
-              ))}
+            <div className={css.reportScroll + ' ' + css.rollbackScroll}>
+              <div className={css.rollbackPoints}>
+                {rewindRows.map((segment) => (
+                  <div key={segment.state} className={css.rollbackPoint} data-kind="unknown">
+                    <div className={css.rollbackPointTop}>
+                      <Badge kind={segment.badgeKind}>{t(dyn(segment.labelKey))}</Badge>
+                      <span className={css.hint}>{t(dyn(segment.statusKey))}</span>
+                    </div>
+                    <div className={css.rollbackPointMeta}>
+                      <span>{t('rollback.rewind.result.counts', { restored: segment.restored, removed: segment.removedCount, failed: segment.failed, leftovers: segment.leftoversCount })}</span>
+                      {segment.childSessionId !== null && <span>{t('rollback.rewind.result.child', { id: segment.childSessionId })}</span>}
+                      {segment.detail.map((line) => <span key={line}>{line}</span>)}
+                      {segment.guidance.map((row) => (
+                        <span key={row.key + (row.detail ?? '')}>{t(dyn(row.key))}{row.detail !== null ? ' — ' + row.detail : ''}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
             {skipped.length > 0 && (
               <div className={css.hint}>

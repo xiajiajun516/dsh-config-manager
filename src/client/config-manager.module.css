@@ -5218,3 +5218,169 @@ button.profileRowMain:hover {
   font-size: var(--cm-fs-table);
   font-variant-numeric: tabular-nums;
 }
+
+/* ================================================================ §17 Rollback points（工作区 + 会话回滚时间线）
+
+   定位：环境 → 维护与诊断 → 「工作区 + 会话回滚」卡内的回滚点台账。
+   为什么单独一组类（2026-10-11 用户反馈「回滚面板 UI 太丑」）：
+   · 旧行 = `.actionRow[data-inline]`（通用横向操作行）：时间 / 回合 / 来源徽章 / 文件数 / 游标 / note /
+     两颗实体按钮**同权重**挤在一条 flex-wrap 行里，564px 画布下换行位置随机，元信息与按钮混成一片 11px 灰字；
+   · 现在 = 会话分组卡（`.rollbackGroup`）+ **两行式**行卡（`.rollbackPoint`）：
+     主行 = 回合号 + 来源/告警徽章 + 右侧操作；meta 行 = 时间 / 文件数 / 会话游标。
+   · 长句一律**短标签进屏 + 完整句进 title**（完整文案仍在字典里，界面上不再逐行重复整句）；
+     行卡左侧 2px 语义色条区分来源（auto = ok 绿 / guard = info 蓝 / 未知 = 弱化文字色）。
+   · 行卡与分组卡都**不加** `role="button"`（行内已有按钮，DESIGN.md §6 通则）。 */
+
+/* 聊天内回退入口形态（设置块）：与下方台账区用一条分隔线分开 ——
+   台账读不出来时这块照样可用（T2 的位置判据不变）。 */
+.rollbackChatEntry {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 预览弹窗的「该点的告警」块：标题一行、每条告警各占一行（原先挤在一条 flex-wrap 行里） */
+.rollbackWarnings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.rollbackToolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+/* 数据摘要（「共 N 个回滚点 · M 个会话」）：机制说明进 ⓘ，屏上只留数字 */
+.rollbackSummary {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 限高内滚容器（与 .planScroll 叠加使用）的内边距：旧代码把分组直接贴在描边上 */
+.rollbackScroll {
+  padding: 8px;
+}
+
+/* 单个会话分组：一块 layer-2 卡片，组头一条分隔线 */
+.rollbackGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.rollbackGroupHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* 会话标题：等宽（配合 .mono）+ 可断行 —— 会话 id 在 Windows 上恒为长串 */
+.rollbackGroupTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* 工作区路径（会话单元）：右对齐、单行省略、全文进 title */
+.rollbackGroupUnit {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 11px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.rollbackPoints {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 回滚点行卡：两行结构 + 左侧来源色条 */
+.rollbackPoint {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-left-width: 2px;
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+}
+
+.rollbackPoint[data-kind='auto'] {
+  border-left-color: var(--cm-ok);
+}
+
+.rollbackPoint[data-kind='guard'] {
+  border-left-color: var(--cm-info);
+}
+
+.rollbackPoint[data-kind='unknown'] {
+  border-left-color: var(--cm-text-3);
+}
+
+.rollbackPointTop {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.rollbackPointTurn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 操作区：恒右对齐、不换行（`margin-left:auto` 而非 spacer：flex-wrap 下 spacer 会被折行带走） */
+.rollbackPointActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  margin-left: auto;
+}
+
+.rollbackPointMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.rollbackMetaDot {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 用户自由文本（已脱敏）：单行省略，全文进 title */
+.rollbackPointNote {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

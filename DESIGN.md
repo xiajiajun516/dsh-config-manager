@@ -484,6 +484,17 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     「这一项会不会写盘」；没有它，调用方只能在树旁边再铺一份逐项列表 —— 同一批条目渲染两遍正是
     「61 行挤爆弹窗」的根因。**缺省不传 = 导出页/导入页零变化**；文案与语义全部由调用方决定，
     组件不猜、也不为它推导任何勾选状态。
+- **回滚点时间线**（环境 → 维护与诊断，2026-10-11 重排，用户反馈「UI 太丑」）：
+  `.rollbackChatEntry`（聊天入口形态设置块，与台账用一条分隔线分开）→ `.rollbackToolbar`（`.rollbackSummary` 数字摘要 + 留存口径 ⓘ + 刷新）
+  → `.planScroll`+`.rollbackScroll`（限高内滚）内的 `.snapshotList` → `.rollbackGroup`（会话分组卡；组头 = `.rollbackGroupTitle` 等宽会话 id +
+  计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径）→ `.rollbackPoints` → `.rollbackPoint`。
+  硬约定两条：① 行卡是**两行式**（`.rollbackPointTop` = 回合号 + 来源/告警徽章 + 右对齐的 `.rollbackPointActions`；
+  `.rollbackPointMeta` = 时间 / 文件数 / 会话游标 / `.rollbackPointNote`），左侧 2px 语义色条按 `data-kind` 区分来源
+  （`auto` = `--cm-ok` / `guard` = `--cm-info` / `unknown` = `--cm-text-3`）；② **长句只进 `title`**，屏上只放短标签键
+  （`rollback.kind.guardShort` / `rollback.row.sessionShort` / `rollback.row.workspaceShort` / `rollback.row.notice.skippedShort`…），
+  完整句仍在原键里 —— 旧实现把整句逐行重复，正是「一坨灰字」的根因。
+  行内危险动作（删除回滚点）用 `IconButton danger`（禁用原因进 `title`），不再常驻一颗 danger 文本按钮。
+  执行者：`src/client/recovery/recovery-panel-layout.test.ts`（禁止退回 `.actionRow[data-inline]`）。
 - **Stepper**：紧凑圆点 17px + 连接线，只读指示器。
 - **进度条**：`.progressTrack` 5px + 确定宽度过渡 / `.progressIndeterminate`。
 

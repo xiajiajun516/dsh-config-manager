@@ -143,6 +143,33 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **「工作区 + 会话回滚」面板重排：从一坨灰字变成可扫读的时间线**（2026-10-11 用户反馈「UI 太丑」）：
+> 每个回滚点原先是一行 `.actionRow`（时间 / 回合 / 来源徽章 / 文件数 / 会话游标 / note /「预览回退」+「删除回滚点」两颗实体按钮**同权重**横排），
+> 564px 画布下换行位置随机；「回退前救援点（可回退、不可删）」「无会话游标（只能回退工作区）」这类整句**逐行重复**，真实数据被挤到屏幕外。
+> - 现在 = 会话分组卡（会话 id 等宽 + 「N 个回滚点」徽章 + 右对齐省略的工作区路径）+ **两行式**行卡：主行 = 回合号 + 来源/告警徽章 + 右侧操作，
+>   meta 行 = 时间 / 文件数 / 会话游标 / note；行卡左侧 2px 语义色条区分来源（自动点 = ok / 救援点 = info）。
+> - **长句只进 title**：屏上改用短标签（`救援点` / `会话可回退` / `仅工作区` / `跳过 N 项` / `已截断`），完整句留在 tooltip 与字典里（事实一字不少）。
+> - 工具栏改为「共 N 个回滚点 · M 个会话」+ ⓘ（留存/淘汰口径按 DESIGN.md §7 收进说明气泡）+ 刷新按钮；「删除回滚点」从常驻 danger 文本按钮
+>   收成行内图标按钮（危险语义与禁用原因保留），预览弹窗的段行、告警行与回退结果行同步改成同一套行卡语言。
+> - **护栏**：`src/client/recovery/recovery-panel-layout.test.ts` 新增源码守卫（分组卡 + 两行式行卡必须在位、**禁止退回 `.actionRow[data-inline]`**、
+>   短标签键必须在屏、长列表仍限高内滚）；`npm test` 全绿，并在隔离实例（`.qa/home`，profile `web`）上真机截图核对（`lib/client.js` 重建后刷新即生效）。
+
+> **The "workspace + session rollback" panel is now a scannable timeline instead of a wall of grey text** (reported 2026-10-11 as "the UI is ugly"):
+> every point used to be a single `.actionRow` line — time / turn / source badge / file count / session cursor / note / two solid buttons
+> ("Preview rewind" and "Delete rollback point") all at the same visual weight — wrapping at random inside the 564px canvas, while whole sentences
+> ("Pre-rewind rescue point (rewindable, not deletable)", "No session cursor (workspace only)") were repeated on every row and pushed the real data off screen.
+> - Now: a session group card (monospace session id + an "N points" badge + a right-aligned elided workspace path) wrapping **two-line** point cards —
+>   top line = turn number + source/warning badges + actions on the right; meta line = time / file count / session cursor / note. A 2px semantic left
+>   border marks the source (automatic = ok, rescue = info).
+> - **Long sentences live in `title`**: the screen shows short labels (`Rescue point` / `Session rewindable` / `Workspace only` / `N skipped` /
+>   `Truncated`), while the full wording stays in the tooltip and the dictionaries.
+> - The toolbar is now "N rollback points · M sessions" + an ⓘ (retention/pruning wording moved into the hint bubble per DESIGN.md §7) + a refresh button;
+>   "Delete rollback point" became an inline icon button (danger semantics and disabled reasons kept), and the preview dialog's segment rows, warning rows
+>   and rewind-result rows now use the same card language.
+> - **Guards**: a new source-level check in `src/client/recovery/recovery-panel-layout.test.ts` (grouped cards + two-line cards required,
+>   `.actionRow[data-inline]` forbidden, short-label keys on screen, long lists still capped and scrolling). `npm test` is green, and the layout was
+>   verified with a real screenshot on the isolated instance (`.qa/home`, profile `web`) after rebuilding `lib/client.js`.
+
 > **「回退」= 无感替换：回退后会话列表里只剩那条「退回去的对话」**（用户 2026-10-11 定案）：DSH 的会话日志 append-only，
 > 且**宿主内存里的活动会话不会重读磁盘**（实测：把日志截断成合法 v4 后「离开会话再打开」与**整页刷新**都仍是老内容），
 > 平台也没有 drop / reload 一个活动会话的 API —— 所以「直接改写当前这条对话」在运行中的 DSH 里**没有可用路径**。
