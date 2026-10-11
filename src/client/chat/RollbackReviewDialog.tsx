@@ -87,6 +87,16 @@ export interface RollbackReviewDialogProps {
   onClose: () => void
 }
 
+/**
+ * 回退后是否把原会话自动收进「已归档」。
+ *
+ * **默认 false**：归档当前会话会让 DSH 客户端换绑新会话，而它复用的 prepared id（`session-1` 这类
+ * 由 `SessionStore.prepare()` 铸的计数 id）在宿主里已不存在 ⇒ 真机报
+ * 「新建会话失败: gateway/internal: failed to create session "session-1": SessionPersistenceNotFoundError」。
+ * 这是「列表里少一条」的观感收益 vs 「回退后整页会话打不开」的风险，选择后者不换。
+ */
+const ARCHIVE_REWOUND_PARENT = false
+
 type LoadState = 'loading' | 'ready' | 'nopoint' | 'error'
 
 /**
@@ -207,10 +217,16 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
     if (child !== null) {
       setChildId(child.id)
       await tryOpenChild(child.id)
-      // A（无感替换）：先导航到「退回去的那条对话」，再把**原会话**收进「已归档」——
-      // 顺序不能反：原会话还挂在当前视图上时，DSH 会以 WorkspaceActiveSessionError 拒绝归档。
-      const archived = await archiveParentSession(sessionId)
-      if (alive.current) setArchive(archived)
+      // A（无感替换）里的「把原会话收进已归档」默认**关掉**（2026-10-11 真机定位）：
+      // 归档**当前**会话会让 DSH 客户端去换绑一个新会话，而它复用的 prepared id 是宿主
+      // `SessionStore.prepare()` 铸的 `session-<counter>`（第一个就是 `session-1`，见 dsh-session 的 prepare）；
+      // 那个 id 在宿主侧已不存在 ⇒ 用户看到「新建会话失败: … session \"session-1\" not found」，
+      // 回退后连不在回退里的那条对话都打不开了。归档只是列表观感的美化，不值得拿「回退后无法继续」去换。
+      // 保留实现与单测备查：真要开启，把 `ARCHIVE_REWOUND_PARENT` 置 true 并重跑本文件所在目录的测试。
+      if (ARCHIVE_REWOUND_PARENT) {
+        const archived = await archiveParentSession(sessionId)
+        if (alive.current) setArchive(archived)
+      }
     }
   })
 
