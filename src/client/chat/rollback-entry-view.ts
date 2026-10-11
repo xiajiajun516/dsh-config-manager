@@ -513,10 +513,22 @@ export interface WorkspaceNavigationSource {
   openSession?: (id: string) => void
 }
 
-/** 两个可选客户端服务的结构面（都惰取；缺谁少谁的能力）。 */
+/**
+ * 会话归档面（A：无感替换）—— 真机 = client `workspaces.archiveSession(id)`。
+ *
+ * 为什么需要它：DSH 的会话「回到某点之前」只能**新建**会话（官方 fork，日志 append-only）。
+ * 要让用户看到的是「这条对话退回去了」，就得把原会话收进「已归档」——否则列表里并排两条，
+ * 观感就是「分了叉」。归档是官方 API 且非破坏：用户可以在「已归档」里找回来。
+ */
+export interface SessionArchiveSource {
+  archiveSession?: (id: string) => Promise<unknown>
+}
+
+/** 三个可选客户端服务的结构面（都惰取；缺谁少谁的能力）。 */
 export interface NavigationSources {
   workspace?: WorkspaceNavigationSource | null
   sessions?: SessionListSource | null
+  workspaces?: SessionArchiveSource | null
 }
 
 /**
@@ -617,6 +629,16 @@ function asWorkspaceSource(value: unknown): WorkspaceNavigationSource | null {
     : null
 }
 
+/** 归档面的结构收窄；方法一律 bind 回服务对象（丢 receiver 会抛，见 asWorkspaceSource 的注释）。 */
+function asArchiveSource(value: unknown): SessionArchiveSource | null {
+  const record = asRecord(value)
+  if (record === null) return null
+  const archiveSession = record['archiveSession']
+  return typeof archiveSession === 'function'
+    ? { archiveSession: (archiveSession as (id: string) => Promise<unknown>).bind(record) }
+    : null
+}
+
 function asSessionListSource(value: unknown): SessionListSource | null {
   const record = asRecord(value)
   if (record === null) return null
@@ -654,6 +676,7 @@ export function navigationSourcesOf(ctx: unknown): NavigationSources {
   return {
     workspace: asWorkspaceSource(safeGet('uiWorkspace')),
     sessions: asSessionListSource(safeGet('sessions')),
+    workspaces: asArchiveSource(safeGet('workspaces')),
   }
 }
 
@@ -694,6 +717,69 @@ export function childOpenHintKey(state: ChildOpenState): string | null {
   if (state === 'failed') return 'chat.open.failed'
   if (state === 'unavailable') return 'chat.open.unavailable'
   return null
+}
+
+/* ------------------------------------------------------------ A（无感替换）：把原会话收进「已归档」 */
+
+/** 归档尝试的结果（**绝不抛**；`code` 是机器码，界面按 {@link archiveHintKey} 取文案，绝不裸渲染）。 */
+export type ArchiveOutcome = { ok: true } | { ok: false; code: string }
+
+/** 归档失败文案键（**闭集**：给 rt() 用，绝不放裸字符串）。 */
+export type ArchiveHintKey = 'rollback.rewind.archive.unavailable' | 'rollback.rewind.archive.active' | 'rollback.rewind.archive.failed'
+
+/** 失败码 → 字典键（成功无需提示，返回 null）。按**子串**判定，不猜具体 RPC 码字面量。 */
+export function archiveHintKey(outcome: ArchiveOutcome): ArchiveHintKey | null {
+  if (outcome.ok) return null
+  const code = outcome.code.toLowerCase()
+  if (code.includes('unavailable')) return 'rollback.rewind.archive.unavailable'
+  if (code.includes('active')) return 'rollback.rewind.archive.active'
+  return 'rollback.rewind.archive.failed'
+}
+
+/** 远程错误对象里的稳定码（RPC 层的 `error.code`）；读不出就 null。 */
+function remoteCode(value: unknown): string | null {
+  const record = value !== null && typeof value === 'object' ? value as Record<string, unknown> : null
+  const code = record?.['code']
+  return typeof code === 'string' && code !== '' ? code : null
+}
+
+/** 异常上的稳定码：优先 `error.code`，其次非泛型的 `error.name`。 */
+function errorCodeOf(error: unknown): string | null {
+  return remoteCode(error) ?? (error instanceof Error && error.name !== '' && error.name !== 'Error' ? error.name : null)
+}
+
+/**
+ * 归档一个会话（A 的最后一步：让列表里只剩「退回去的那条对话」）。**绝不抛**：
+ *  · 本客户端没有归档入口 → `archive-unavailable`；
+ *  · 宿主拒绝（会话还有活动中的工作 / 未知会话）→ 原样带回机器码（界面映射成文案）；
+ *  · 其它异常 → `archive-failed`。
+ *
+ * 有界重试**一次**：刚导航到新会话时，原会话的「活动」状态可能还没落定，DSH 会以
+ * WorkspaceActiveSessionError 拒绝归档（真机唯一观察到的失败面）；重试一次覆盖，绝不无限轮询。
+ * `delay` 可注入（测试不真等待）。
+ */
+export async function archiveParentSession(
+  source: SessionArchiveSource | null | undefined,
+  sessionId: string,
+  options: { delay?: (ms: number) => Promise<void> } = {},
+): Promise<ArchiveOutcome> {
+  const archive = source?.archiveSession
+  if (typeof archive !== 'function') return { ok: false, code: 'archive-unavailable' }
+  if (typeof sessionId !== 'string' || sessionId === '') return { ok: false, code: 'archive-no-session' }
+  const wait = options.delay ?? ((ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) }))
+  let last = 'archive-failed'
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const result: unknown = await archive(sessionId)
+      const record = result !== null && typeof result === 'object' ? result as Record<string, unknown> : null
+      if (record !== null && record['ok'] === false) last = remoteCode(record['error']) ?? 'archive-failed'
+      else return { ok: true }
+    } catch (error) {
+      last = errorCodeOf(error) ?? 'archive-failed'
+    }
+    if (attempt === 0) await wait(400)
+  }
+  return { ok: false, code: last }
 }
 
 /* ------------------------------------------------------------ 槽位登记（T9-F2：形态探测 + 失败软化） */

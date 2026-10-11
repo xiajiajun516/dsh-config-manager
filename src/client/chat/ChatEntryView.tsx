@@ -39,6 +39,7 @@ import {
   type ChatPointLookup,
 } from './chat-entry-view.ts'
 import { ChatPointWindowController, type ChatPointWindowState } from './chat-point-window.ts'
+import type { ArchiveOutcome } from './rollback-entry-view.ts'
 import type { ChildOpenState } from './rollback-entry-view.ts'
 // 槽位契约的类型镜像（SlotMap 的 conversation.chat.node entry），见该文件头部说明。
 import type {} from './chat-slots.ts'
@@ -64,6 +65,8 @@ export interface ChatEntryViewInjected {
   rt: TranslateNS<'config-manager-recovery'>
   /** 打开 fork 出来的子会话（降级态由对话框如实呈现）。 */
   openChildSession: (childId: string) => Promise<ChildOpenState>
+  /** A（无感替换）：回退后把原会话收进「已归档」；失败一律结构化返回，由对话框如实呈现。 */
+  archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
 }
 
 /**
@@ -147,7 +150,7 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
  *  · 气泡底色：宿主直接用 `--dsw-specific-bubble`，本仓库 token 层没有这一档 ⇒ 用 `--cm-surface-2`
  *    （亮/暗主题下都是「比底更强的面」），不改 DESIGN 体系、不新增 token。
  */
-function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession }: ChatEntryBodyProps) {
+function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
   /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
@@ -290,6 +293,7 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
           rt={rt}
           t={t}
           openChildSession={openChildSession}
+          archiveParentSession={archiveParentSession}
           onClose={() => { setDialogTurn(null) }}
         />
       )}

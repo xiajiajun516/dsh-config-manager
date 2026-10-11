@@ -38,12 +38,14 @@ import { en as chatEn, zh as chatZh, type ChatKey } from './chat/chat-locales.ts
 import { RollbackTurnEntry, type RollbackTurnEntryInjected } from './chat/RollbackTurnEntry.tsx'
 import { ChatEntryNodeView, type ChatEntryViewInjected } from './chat/ChatEntryView.tsx'
 import {
+  archiveParentSession,
   buildSessionNavigator,
   CHAT_ENTRY_ID,
   CHAT_ENTRY_ORDER,
   CHAT_ENTRY_SLOT,
   navigationSourcesOf,
   openChildSession,
+  type ArchiveOutcome,
   type ChildOpenState,
 } from './chat/rollback-entry-view.ts'
 import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
@@ -158,6 +160,13 @@ export function apply(ctx: ClientContext): void {
     openChildSession(buildSessionNavigator(navigationSourcesOf(ctx)), childId)
 
   /**
+   * A（无感替换）最后一步：把**原会话**收进「已归档」——列表里只剩「退回去的那条对话」。
+   * 与 openChild 同一条纪律：调用那一刻惰取服务（服务可能比本插件晚挂载），缺能力如实降级。
+   */
+  const archiveParent = (sessionId: string): Promise<ArchiveOutcome> =>
+    archiveParentSession(navigationSourcesOf(ctx).workspaces, sessionId)
+
+  /**
    * 两个聊天入口共用的**同一份注入面**（端口 + 回退词汇 + 子会话导航）。
    *
    * 端口 = T2 的 RecoveryApi（组件绝不直接 fetch）；`rt` = recovery 字典（rollback.* 词汇单点）；
@@ -167,6 +176,7 @@ export function apply(ctx: ClientContext): void {
     port: recoveryApi,
     rt: recoveryT,
     openChildSession: openChild,
+    archiveParentSession: archiveParent,
   })
 
   /**

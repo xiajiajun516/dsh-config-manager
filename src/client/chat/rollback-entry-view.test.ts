@@ -25,6 +25,8 @@ import {
   CHAT_REWIND_MODE,
   ROLLBACK_NOTHING_TO_RESTORE_KEY,
   ROLLBACK_NO_RECORDED_FILES_CODE,
+  archiveHintKey,
+  archiveParentSession,
   buildRewindOptions,
   buildSessionNavigator,
   canSubmitRewind,
@@ -386,6 +388,55 @@ test('子会话打开：refresh 后仍没有 / 没有 refresh / 刷新抛错 →
   assert.equal(await openChildSession(refreshThrows.navigator, 'child-3'), 'degraded', '刷新失败不改变判据口径')
 })
 
+test('A 无感替换：归档原会话 —— 成功 / 缺入口 / 空 id / 有界重试 / 持续失败 全部结构化，绝不抛', async () => {
+  const calls: string[] = []
+  const ok = { archiveSession: async (id: string): Promise<unknown> => { calls.push(id); return { ok: true, value: { archivedSessionIds: [id] } } } }
+  assert.deepEqual(await archiveParentSession(ok, 's1'), { ok: true })
+  assert.deepEqual(calls, ['s1'], '成功一次即可，不重试')
+
+  assert.deepEqual(await archiveParentSession(undefined, 's1'), { ok: false, code: 'archive-unavailable' })
+  assert.deepEqual(await archiveParentSession({}, 's1'), { ok: false, code: 'archive-unavailable' })
+  assert.deepEqual(await archiveParentSession(ok, ''), { ok: false, code: 'archive-no-session' })
+
+  // 真机唯一失败面：刚导航走时原会话还被判「活动中」→ 重试一次即成功
+  let attempts = 0
+  const flaky = { archiveSession: async (id: string): Promise<unknown> => {
+    attempts += 1
+    if (attempts === 1) throw Object.assign(new Error('session is active'), { code: 'session/active' })
+    return { ok: true, value: { archivedSessionIds: [id] } }
+  } }
+  assert.deepEqual(await archiveParentSession(flaky, 's2', { delay: async () => {} }), { ok: true })
+  assert.equal(attempts, 2, '有界重试恰好一次')
+
+  // RPC 形状的失败结果（ok:false + error.code）与持续异常都不能逃出去
+  let refusals = 0
+  const refused = { archiveSession: async (): Promise<unknown> => { refusals += 1; return { ok: false, error: { code: 'session/active' } } } }
+  assert.deepEqual(await archiveParentSession(refused, 's3', { delay: async () => {} }), { ok: false, code: 'session/active' })
+  assert.equal(refusals, 2)
+  const boom = { archiveSession: async (): Promise<unknown> => { throw new Error('boom') } }
+  assert.deepEqual(await archiveParentSession(boom, 's4', { delay: async () => {} }), { ok: false, code: 'archive-failed' })
+})
+
+test('A 真机回归：workspaces.archiveSession 依赖 this —— 抽方法时必须 bind 回服务对象', async () => {
+  const service = {
+    archived: [] as string[],
+    async archiveSession(this: { archived: string[] }, id: string): Promise<unknown> {
+      this.archived.push(id)
+      return { ok: true, value: { archivedSessionIds: [id] } }
+    },
+  }
+  const sources = navigationSourcesOf({ get: (key: string) => (key === 'workspaces' ? service : undefined) })
+  assert.deepEqual(await archiveParentSession(sources.workspaces, 'c1'), { ok: true })
+  assert.deepEqual(service.archived, ['c1'])
+})
+
+test('A：归档失败码 → 文案键（子串映射；成功不提示；界面绝不裸渲染机器码）', () => {
+  assert.equal(archiveHintKey({ ok: true }), null)
+  assert.equal(archiveHintKey({ ok: false, code: 'archive-unavailable' }), 'rollback.rewind.archive.unavailable')
+  assert.equal(archiveHintKey({ ok: false, code: 'session/active' }), 'rollback.rewind.archive.active')
+  assert.equal(archiveHintKey({ ok: false, code: 'boom' }), 'rollback.rewind.archive.failed')
+})
+
 test('子会话打开：列表读不出来（判据未知）→ 仍尝试导航，不把未知说成「还没有」', async () => {
   const { navigator, opened } = fakeNavigator({ listThrows: true })
   assert.equal(await openChildSession(navigator, 'child-6'), 'opened')
@@ -536,9 +587,10 @@ test('服务惰取：navigationSourcesOf 只经 get()，异常/非对象一律�
   assert.equal(typeof sources.sessions?.refresh, 'function')
   assert.equal(navigationSourcesOf(undefined).workspace, undefined)
   assert.equal(navigationSourcesOf({}).workspace, undefined)
-  assert.deepEqual(navigationSourcesOf({ get: () => { throw new Error('no such service') } }), { workspace: null, sessions: null })
+  assert.deepEqual(navigationSourcesOf({ get: () => { throw new Error('no such service') } }), { workspace: null, sessions: null, workspaces: null })
   assert.equal(navigationSourcesOf({ get: () => 42 }).workspace, null, '非对象服务按缺失处理')
   assert.equal(navigationSourcesOf({ get: () => ({}) }).sessions?.open, undefined, '没有 open 就不编一个')
+  assert.equal(navigationSourcesOf({ get: () => ({}) }).workspaces, null, '没有 archiveSession 就不编一个（A 的归档能力据此降级）')
 })
 
 /* ------------------------------------------------------------ 字典 / 纪律 / 铁律 */

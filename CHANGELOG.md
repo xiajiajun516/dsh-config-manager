@@ -143,6 +143,29 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **「回退」= 无感替换：回退后会话列表里只剩那条「退回去的对话」**（用户 2026-10-11 定案）：DSH 的会话日志 append-only，
+> 且**宿主内存里的活动会话不会重读磁盘**（实测：把日志截断成合法 v4 后「离开会话再打开」与**整页刷新**都仍是老内容），
+> 平台也没有 drop / reload 一个活动会话的 API —— 所以「直接改写当前这条对话」在运行中的 DSH 里**没有可用路径**。
+> 改为：官方 fork + 自动切到新会话 + 把**原会话收进「已归档」** + 标题随 fork 的日志前缀一并继承 ⇒ 用户看到的是一条对话退回去了，而不是列表里多出一条。
+> - 归档走官方 `workspaces.archiveSession`；失败**三态如实**回报（本客户端没有归档入口 / 原会话仍有进行中的工作 / 其它失败），每种各有自己的文案，
+>   **绝不假装已归档**。顺序固定「先导航、后归档」（原会话还挂在当前视图上时 DSH 会拒绝归档；代码里有界重试一次，不无限轮询）。
+> - 回退结果文案不再说「子会话 / 原会话未被改写」，改为「已回到该消息之前（当前对话：{id}）」+ 一行归档结果。
+> - 测试：`src/client/chat/rollback-entry-view.test.ts` 新增归档四态 + 有界重试 + receiver 绑定回归（抽方法必须 bind 回服务）+ 失败码→文案键映射。
+
+> **"Rewind" is now a seamless replace: the session list keeps only the conversation you rewound** (decided 2026-10-11):
+> DSH session logs are append-only and a **live session in the host never re-reads the file** (measured: after truncating the log to a valid v4
+> file, both "leave the conversation and reopen it" and a **full page reload** still showed the old content), and the platform exposes no API to
+> drop or reload a live session — so "rewrite this conversation in place" has **no usable path** in a running DSH. Instead: official fork +
+> auto-open the new session + **archive the original** + the title inherited through the forked log prefix, so the user sees the same conversation
+> rewound rather than an extra row in the list.
+> - Archiving uses the official `workspaces.archiveSession`; failures are reported honestly in three states (no archive entry in this client /
+>   the original still has work in progress / other failure), each with its own copy — **never pretending it was archived**. Order is fixed:
+>   navigate first, archive second (DSH refuses to archive a session still attached to the current view; one bounded retry, never a poll loop).
+> - The rewind result no longer says "child session / the original was not rewritten"; it reads "Rewound to before that message (current
+>   conversation: {id})" plus one archive-outcome line.
+> - Tests: `src/client/chat/rollback-entry-view.test.ts` adds the four archive states, the bounded retry, a receiver-binding regression
+>   (extracted methods must be bound back to the service) and the failure-code → copy-key mapping.
+
 > **聊天内回退入口的缺省形态改为「每条用户消息一个」**（2026-10-10）：此前入口只挂在回合尾（`conversation.chat.turnTail`），回退粒度只有「整回合」。现在缺省**接管宿主 `conversation.chat.node` 的 `user` 渲染器**（`priority -1` 遮蔽 shipped 的 `UserMessageNodeView`）——
 > 该 key **没有 children 表**，framework 不提供「往每条用户消息里追加 UI」的位子，要让按钮与原文同时出现**只能**接管并复刻那条气泡（宿主组件与其 CSS Modules 全是 ui-chat 私有、不可导入；图片仍走 owner 给的 `renderMessageImages`）。
 > - **两档互斥（2026-10-10 修正）**：偏好为「整回合」时回合尾入口是唯一入口；偏好为「每条消息」时回合尾入口**一次都不注册**（`planChatEntryRegistrationForMode` 在 per-message 档直接 skip）—— 同屏只有一颗 icon，点开的是**同一个**复核对话框（不新造通道）。旧版「两者并存」的写法已作废：那正是用户截图里同时出现宽按钮与「⟳ 回退」文字按钮的来源。

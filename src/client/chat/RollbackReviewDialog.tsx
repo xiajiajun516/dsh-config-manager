@@ -47,6 +47,7 @@ import {
   chatRewindSummary,
   codeKeyOfError,
   confirmOnSubmit,
+  archiveHintKey,
   createInFlightLock,
   defaultDraft,
   errorDetail,
@@ -59,6 +60,7 @@ import {
   rollbackPreviewVerdict,
   rollbackRewindCounts,
   submitButtonEnabled,
+  type ArchiveOutcome,
   type ChildOpenState,
   type RewindDraft,
 } from './rollback-entry-view.ts'
@@ -80,6 +82,8 @@ export interface RollbackReviewDialogProps {
   t: TranslateNS<'config-manager-chat'>
   /** 打开 fork 出来的子会话（降级态由本组件如实呈现）。 */
   openChildSession: (childId: string) => Promise<ChildOpenState>
+  /** A（无感替换）：回退后把**原会话**收进「已归档」；失败一律结构化返回，由本组件如实呈现。 */
+  archiveParentSession: (sessionId: string) => Promise<ArchiveOutcome>
   onClose: () => void
 }
 
@@ -105,7 +109,7 @@ function FileStat({ added, removed, unknown, rt }: {
 }
 
 /** 预览对话框主体（挂载即打开；关闭由父级卸载）。 */
-export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, onClose }: RollbackReviewDialogProps) {
+export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, archiveParentSession, onClose }: RollbackReviewDialogProps) {
   const [state, setState] = useState<LoadState>('loading')
   const [loadKey, setLoadKey] = useState<string | null>(null)
   const [loadDetail, setLoadDetail] = useState<string | null>(null)
@@ -119,6 +123,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   const [result, setResult] = useState<RollbackRewindResult | null>(null)
   const [childId, setChildId] = useState<string | null>(null)
   const [childState, setChildState] = useState<ChildOpenState | 'opening' | null>(null)
+  /** A：原会话归档结果（null = 还没走到这一步）。 */
+  const [archive, setArchive] = useState<ArchiveOutcome | null>(null)
   const alive = useRef(true)
   /**
    * 同一 tick 的**同步幂等锁**（t3 F4）：`busy` 是异步 setState，挡不住同一 tick 里的第二次派发
@@ -143,6 +149,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
     setResult(null)
     setChildId(null)
     setChildState(null)
+    setArchive(null)
     setWriteKey(null)
     setWriteDetail(null)
     setPreview(null)
@@ -200,6 +207,10 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
     if (child !== null) {
       setChildId(child.id)
       await tryOpenChild(child.id)
+      // A（无感替换）：先导航到「退回去的那条对话」，再把**原会话**收进「已归档」——
+      // 顺序不能反：原会话还挂在当前视图上时，DSH 会以 WorkspaceActiveSessionError 拒绝归档。
+      const archived = await archiveParentSession(sessionId)
+      if (alive.current) setArchive(archived)
     }
   })
 
@@ -375,6 +386,13 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                 )}
                 {childState === 'failed' && (
                   <div className={css.warnText}>{t('chat.open.failed', { id: childId ?? '' })}</div>
+                )}
+                {/* A：原会话的归档结果 —— 成功一句话（列表里只剩这一条），失败如实说并在哪能看到它 */}
+                {archive !== null && archive.ok && (
+                  <div className={css.hint} data-dcm-archived="">{rt('rollback.rewind.archive.done')}</div>
+                )}
+                {archive !== null && !archive.ok && (
+                  <div className={css.warnText}>{rt(archiveHintKey(archive) ?? 'rollback.rewind.archive.failed')}</div>
                 )}
               </>
             )}
