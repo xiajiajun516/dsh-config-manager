@@ -443,6 +443,20 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Fix**: `WorkDirCard` now owns an in-flight state `pending: 'relink' | 'reclone' | null`; it is set as soon as the request starts, both exits render the `Button` primitive's `loading` (automatic leading Spinner + `aria-busy`, label unchanged) and disable each other while one is running (no double submits), and a `finally` clears it — a failure never leaves the button spinning forever. `relink` is the same handler, so it is covered too.
 > - **Guard**: new source-level assertions in `src/client/sync/SyncSettingsView.test.ts` (discriminated in-flight state, per-mode `loading` on both buttons, mutual `disabled`, `finally` reset) — reverting any single one turns it red.
 
+> **配了代理反而列不出仓库：出站请求统一补 User-Agent**（issue #86，用户报告）：
+> - **症状**：进程环境里存在 `HTTP_PROXY` / `HTTPS_PROXY` 时，「Git 私有仓库 → 刷新列表」固定失败，提示只有 `GitHub API 错误（HTTP 403）`；**去掉这两个环境变量后同一个按钮立刻正常**（同一台机器、同一个 token）。
+> - **根因**：未配代理走 `globalThis.fetch`（undici 自动补 `user-agent`），配了代理走 `src/utils/proxy.ts` 的 `requestOnce()` —— node 原生 `http`/`https` **不补 UA**，请求一个 UA 都没有 ⇒ GitHub 前置层直接拒绝。于是同一份代码出现「不配代理能用、配了代理反而坏」这种反直觉现象。
+> - **改法**：`requestOnce()` 组装请求头时兜底 `user-agent: DSH-Config-Manager`（调用方显式传入时不覆盖，大小写不敏感），使「直连 / 经代理」两条通道的请求语义一致；`GitHubAuthRest.apiError()` 同时把**非 JSON 错误体**（GitHub 那句纯文本 403）压缩空白、截断 200 字符后带进提示（仍整体过 `redact()`）。
+> - **护栏**：`src/utils/proxy.test.ts` P13（缺省必补 / 显式传入不覆盖 / 直连与经代理一致）、`src/market/github-repos.test.ts`（纯文本 403 带出正文、超长体截断）。
+> - **本机验证（2026-10-12）**：起一个本地 CONNECT 代理后请求 `https://api.github.com/rate_limit` —— **不带 UA → HTTP 403**（GitHub 原文 "Request forbidden by administrative rules…"），**经 `requestOnce()` → HTTP 200**。
+
+> **Configuring a proxy used to break repo listing: outbound requests now always carry a User-Agent** (issue #86, user report):
+> - **Symptom**: with `HTTP_PROXY` / `HTTPS_PROXY` present in the process environment, "Git private repo → refresh list" failed every time with only `GitHub API error (HTTP 403)`; **removing those two variables made the same button work immediately** (same machine, same token).
+> - **Root cause**: the direct path uses `globalThis.fetch` (undici adds a `user-agent` automatically) while the proxied path uses `requestOnce()` in `src/utils/proxy.ts` — node's native `http`/`https`, which **does not add one**, so the request went out with no UA at all and GitHub's front layer rejected it.
+> - **Fix**: `requestOnce()` now falls back to `user-agent: DSH-Config-Manager` (never overriding a caller-supplied value, case-insensitive), so both channels behave the same; `GitHubAuthRest.apiError()` also collapses and truncates (200 chars) a **non-JSON error body** — GitHub's plain-text 403 — into the message (still passed through `redact()`).
+> - **Guards**: `src/utils/proxy.test.ts` P13 (default added / explicit value preserved / direct == proxied) and `src/market/github-repos.test.ts` (plain-text 403 surfaced, oversized body truncated).
+> - **Verified locally (2026-10-12)**: against a local CONNECT proxy, `https://api.github.com/rate_limit` returned **HTTP 403 without the UA** and **HTTP 200 through `requestOnce()`**.
+
 > **回退后可以继续对话了：fork 改走 DSH 自己的 `sessionController.fork`（用户 2026-10-12 截图：`resume failed for session "session-1": SessionPersistenceNotFoundError`）**：
 > - **症状**：回退后想接着聊，界面直接报 `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)` —— 新对话根本发不出消息。
 > - **根因**：回退此前直接调底层 `ctx.get('sessions').fork(...)`（宿主 `SessionStore.fork`）。它只在**内存 store** 里造一条会话记录（id 还是进程内计数，第一个就是 `session-1`），**不经过 `ctx.agents.create`** ⇒ 没有 agent、没有落盘。用户发下一条消息时宿主 `resolve → resume → sessionQuery.observeSession` 去**磁盘**上找它 ⇒ `SessionPersistenceNotFoundError`。DSH 自己的 fork 走的是 `ctx.agents.create({sessionId: uuid, seed, …})`，落盘与工作区归位一次到位。
