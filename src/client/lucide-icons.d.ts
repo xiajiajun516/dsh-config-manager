@@ -27,6 +27,7 @@ declare module 'lucide-react/dist/esm/icons/copy.mjs' { const i: LucideIconCompo
 declare module 'lucide-react/dist/esm/icons/database-backup.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/download.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/eye.mjs' { const i: LucideIconComponent; export default i }
+declare module 'lucide-react/dist/esm/icons/file.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/folder-input.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/hard-drive-download.mjs' { const i: LucideIconComponent; export default i }
 declare module 'lucide-react/dist/esm/icons/history.mjs' { const i: LucideIconComponent; export default i }

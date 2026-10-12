@@ -21,6 +21,7 @@
  * 该包因此不进 bundle：源码里只有 `require` 调用（bundle 白名单在 src/utils/bundle-scan.ts 登记）。
  */
 import type { ComponentType, ReactNode } from 'react'
+import { Icon } from '../common/Icon.tsx'
 
 /** 装配点注入的「外部图标来源」（dsh-better-sidebar 的 `fileIcon`）；返回 null = 它不认这一条。 */
 export type RollbackFileIconRenderer = (path: string) => ReactNode | null
@@ -59,17 +60,13 @@ function dshFileTypeIcon(): ComponentType<DshFileTypeIconProps> | null {
 }
 
 /**
- * 最后的兜底：一颗**极简、单色、跟随文字色**的文件图标（`currentColor`）。
+ * 最后的兜底：共享图标原语的通用「文件」图标（`common/Icon.tsx` 的 `name="file"`）。
  * 只有「没有 better-sidebar + 宿主模块表里没有 ui-primitives」两条同时成立时才会出现 ——
  * 那时宁可用一颗通用文件图标，也不空着、更不打挂这一行。
+ * 走共享原语而不是就地写 `<svg>`：DESIGN.md §「图标」把 `common/Icon.tsx` 定为唯一出口。
  */
 function fallbackFileGlyph(size: number): ReactNode {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
-      <path d="M4 1.5h5l3 3v10H4z" strokeLinejoin="round" />
-      <path d="M9 1.5v3h3" strokeLinejoin="round" />
-    </svg>
-  )
+  return <Icon name="file" size={size} />
 }
 
 export interface RollbackFileIconProps {

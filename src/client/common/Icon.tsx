@@ -29,6 +29,7 @@ import Copy from 'lucide-react/dist/esm/icons/copy.mjs'
 import DatabaseBackup from 'lucide-react/dist/esm/icons/database-backup.mjs'
 import Download from 'lucide-react/dist/esm/icons/download.mjs'
 import Eye from 'lucide-react/dist/esm/icons/eye.mjs'
+import File from 'lucide-react/dist/esm/icons/file.mjs'
 import FolderInput from 'lucide-react/dist/esm/icons/folder-input.mjs'
 import HardDriveDownload from 'lucide-react/dist/esm/icons/hard-drive-download.mjs'
 import History from 'lucide-react/dist/esm/icons/history.mjs'
@@ -66,6 +67,7 @@ const ICONS = {
   pencil: Pencil,
   close: X,
   delete: Trash2,
+  file: File,
   download: Download,
   inspect: Search,
   view: Eye,

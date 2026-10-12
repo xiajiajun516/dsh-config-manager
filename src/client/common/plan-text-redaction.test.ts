@@ -282,14 +282,6 @@ const RENDER_POINTS: RenderPoint[] = [
     bare: R('<Banner kind="error">{error}</Banner>'),
     why: 'release notes 拉取错误文本（GitHub 状态/网络响应）',
   },
-  /* ---------------- 会话体检：行首的对话标题（2026-10-12 新增渲染点） ---------------- */
-  {
-    id: 'session-health-row-title',
-    file: 'src/ui/session-inventory-view.ts',
-    redacted: R("title: typeof row.title === 'string' && row.title.trim() !== '' ? redact(row.title) : null,"),
-    bare: R("title: typeof row.title === 'string' && row.title.trim() !== '' ? row.title : null,"),
-    why: '会话标题是用户自由文本（第一句话里可能粘了密钥），行卡直接渲染 → 必须先脱敏',
-  },
   /* ---------------- toast 错误文本渲染点（client-F4：T11 修复登记） ---------------- */
   {
     id: 'toast-error-text-recovery',

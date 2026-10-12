@@ -445,5 +445,6 @@ test('行 → 展示行：标题已脱敏；缺 / 空白标题一律 null（不�
   // 标题 = 用户自由文本（可能把密钥粘进第一句话）→ 渲染前必须脱敏
   const secret = 'sk-A1b2C3d4E5f6G7h8I9j0K1l2';
   const [redactedRow] = sessionHealthRows(response([row({ severity: 'invisible', issues: [{ code: 'format-newer', severity: 'invisible' }], title: '排查 ' + secret + ' 报错' })]));
-  assert.ok(redactedRow?.title !== null && !redactedRow.title.includes(secret), '标题里的密钥形状必须在渲染前被脱敏');
+  const safeTitle = redactedRow?.title ?? null;
+  assert.ok(safeTitle !== null && !safeTitle.includes(secret), '标题里的密钥形状必须在渲染前被脱敏');
 });
