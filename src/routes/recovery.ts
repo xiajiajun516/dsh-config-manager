@@ -17,6 +17,8 @@ import type { RollbackForkSeam, RollbackRewindInput } from '../core/rollback-poi
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { scanSessionHealth } from '../utils/session-health-scan.ts'
 import { applySessionTitles } from '../core/session-meta.ts'
+import { applySessionLogTitles } from '../core/session-title.ts'
+import { join } from 'node:path'
 import {
   applySessionRepair,
   listSessionRepairs,
@@ -34,7 +36,9 @@ import { sessionHealthNextSteps } from '../index.ts'
  * 完整 code → HTTP 表（t1 冻结，T3/I1 对账用）：
  *   storage-unavailable                                  → 503
  *   record-not-found                                     → 404
- *   invalid-input                                        → 400
+ *   invalid-input / created-removals-limit               → 400
+ *     （created-removals-limit：待删的「该点未记录」路径超上限 ⇒ 整套拒绝、零写入；是**请求级**拒绝，
+ *      不是 500 —— 用户要看到的是「一条都没动」，而不是泛化的「回退失败」）
  *   confirmation-required / protected-point / record-incomplete → 409（denied 也是 409）
  *   mutation-locked                                      → 423
  *   method-not-allowed                                   → 405
@@ -50,6 +54,8 @@ function rollbackHttpStatus(value: { ok?: boolean; code?: string; outcome?: stri
   if (value.code === 'storage-unavailable') return 503
   if (value.code === 'record-not-found') return 404
   if (value.code === 'invalid-input') return 400
+  // 待删路径超上限 = 请求级拒绝（零写入），与 invalid-input 同档；界面按 code 出专门文案
+  if (value.code === 'created-removals-limit') return 400
   if (value.code === 'confirmation-required' || value.code === 'protected-point' || value.code === 'record-incomplete') return 409
   if (value.code === 'mutation-locked') return 423
   if (value.code === 'method-not-allowed') return 405
@@ -332,13 +338,17 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             knownSessionIds: await sessionHealth.knownSessionIds(),
           })
           const rows = unitFilter === undefined ? result.rows : result.rows.filter((row) => row.unitId === unitFilter)
+          const slicedRaw = limit !== undefined && Number.isFinite(limit) && limit >= 0 ? rows.slice(0, limit) : rows
           /**
            * 行上补「对话标题」：用户反馈列表只有 `session-<uuid>`，同屏十几条里认不出哪条是自己的对话。
-           * 只在**宿主侧**补 —— 标题来自 DSH 会话缓存（core/session-meta），扫描器保持「只读字节事实」。
-           * 读不到标题 → 不加该字段（界面回落显示目录名，绝不编造）。
+           * 只在**宿主侧**补 —— 标题来自 DSH 会话存储（core/session-meta：聚合缓存 + 逐会话投影），
+           * 扫描器保持「只读字节事实」。读不到标题 → 不加该字段（界面回落显示目录名，绝不编造）。
+           * **先切片再补**：逐会话投影是按需读的，只给要返回的这些行补（limit 之外的不读盘）。
            */
-          const titled = applySessionTitles(rows, await sessionHealth.sessionMeta())
-          const sliced = limit !== undefined && Number.isFinite(limit) && limit >= 0 ? titled.slice(0, limit) : titled
+          const sliced = applySessionTitles(
+            slicedRaw,
+            await sessionHealth.sessionMeta(slicedRaw.map((row) => row.sessionId)),
+          )
           writeJson(res, 200, {
             ok: true,
             // 本次**扫描**只读（修复是另一条写路由 POST /sessions/repair，需显式确认）
@@ -389,10 +399,20 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
            * 行上补「对话标题」：台账只记 `sessionId`（= 会话目录名），界面上 `session-<uuid>` 认不出
            * 是哪条对话（2026-10-12 用户要求「会话显示标题而不是 id」）。与 /recovery/sessions **同一份索引、
            * 同一套 `sessionIdKey` 归一化**（core/session-meta 的 applySessionTitles）—— 不另写查表规则。
-           * 只读、**绝不编造**：缓存里没有这条会话 / 没有标题就不加该字段，界面回落显示 id。
+           * 只读、**绝不编造**：没有这条会话 / 没有标题就不加该字段，界面回落显示 id。
            */
-          const points = applySessionTitles(listed.points, await sessionHealth.sessionMeta())
-          writeJson(res, listed.storage.available ? 200 : 503, { ...listed, points })
+          const points = applySessionTitles(
+            listed.points,
+            await sessionHealth.sessionMeta(listed.points.map((point) => point.sessionId ?? '')),
+          )
+          /**
+           * ② **聚合缓存与逐会话投影都没有这条会话**时（子代理会话 / 别的档案写的旧会话），再读一次
+           *    **会话日志**里的 `session/title` 事件 —— DSH 自己写进日志的名字，是「这条会话的名字」
+           *    的最后一份权威来源。只读日志**前缀 1 MiB**、按 `mtime+size` 缓存、一次请求有上界；
+           *    仍读不到就不加该字段（界面回落显示会话 id），**绝不从首条消息编造标题**。
+           */
+          const titled = await applySessionLogTitles(points, join(sessionHealth.homeDir, 'sessions'))
+          writeJson(res, listed.storage.available ? 200 : 503, { ...listed, points: titled })
           return
         }
         // 存储栈状态（缺失时给结构化组合指引；**不崩**）
