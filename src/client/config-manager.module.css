@@ -5281,6 +5281,10 @@ button.profileRowMain:hover {
 
 .rollbackFileDir {
   color: var(--cm-text-3);
+  /* 与基名（.rollbackFilePath:is(button)）**同一条过渡**：目录段此前没有 transition，
+     悬停时它瞬间跳色、基名却淡入 ⇒ 同一个按钮里两半的节奏不一样（2026-10-12 用户反馈）。
+     两处必须引用同一个动效令牌，改一处就一起变。 */
+  transition: color var(--cm-motion-fast) ease;
 }
 
 /* 统计块：+N 与 −M（或「删除」/「行数未统计」）作为一个整体 —— grid 第三列，
