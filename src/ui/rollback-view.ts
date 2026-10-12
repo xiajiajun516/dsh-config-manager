@@ -287,6 +287,11 @@ export interface RollbackPointSummary {
   sessionId?: string | null
   /** 会话单元 id（宿主回传的 <projectKey>/<sessionId>；用于分组表头） */
   unitId?: string | null
+  /**
+   * 对话标题：宿主从 DSH 会话缓存补的**只读装饰**（与 /recovery/sessions 同一份索引）。
+   * 读不到就**不带该字段** —— 界面回落显示 `sessionId`，绝不编造标题。
+   */
+  title?: string | null
   /** 该点对应的回合号（1-based；无法判定为 null） */
   turn?: number | null
   /** fork 的 inclusive 边界 seq（null = 无前置边界） */
@@ -605,6 +610,8 @@ export interface RollbackPointRowView {
   sessionId: string | null
   /** 会话单元 id（宿主回传才有；分组表头显示用） */
   unitId: string | null
+  /** 对话标题（宿主补的只读装饰，**渲染前已过 redact**；null = 缓存里没有，界面回落显示 sessionId） */
+  title: string | null
   /** 该点对应的回合号（null = 未知，界面渲染 rollback.turnUnknown） */
   turn: number | null
   protected: boolean
@@ -661,6 +668,7 @@ export function rollbackPointRows(list: RollbackListResult | null): RollbackPoin
       createdAtMs: point.createdAt,
       sessionId: typeof point.sessionId === 'string' && point.sessionId !== '' ? point.sessionId : null,
       unitId: typeof point.unitId === 'string' && point.unitId !== '' ? point.unitId : null,
+      title: typeof point.title === 'string' && point.title.trim() !== '' ? redact(point.title) : null,
       turn: numberOrNull(point.turn),
       protected: point.protected === true,
       incomplete: point.incomplete === true,
@@ -683,6 +691,8 @@ export interface RollbackPointGroupView {
   sessionId: string | null
   /** 会话单元 id（宿主回传才有） */
   unitId: string | null
+  /** 对话标题（组内任一记录带标题即取之；null = 无标题，界面回落显示 sessionId） */
+  title: string | null
   /** 组内最新时间（空组为 null；组间排序键） */
   latestAtMs: number | null
   rows: RollbackPointRowView[]
@@ -702,11 +712,12 @@ export function rollbackPointGroups(list: RollbackListResult | null): RollbackPo
     if (at === undefined) {
       at = groups.length
       index.set(key, at)
-      groups.push({ sessionId: row.sessionId, unitId: row.unitId, latestAtMs: null, rows: [] })
+      groups.push({ sessionId: row.sessionId, unitId: row.unitId, title: row.title, latestAtMs: null, rows: [] })
     }
     const group = groups[at] as RollbackPointGroupView
     group.rows.push(row)
     if (group.unitId === null && row.unitId !== null) group.unitId = row.unitId
+    if (group.title === null && row.title !== null) group.title = row.title
     if (group.latestAtMs === null || row.createdAtMs > group.latestAtMs) group.latestAtMs = row.createdAtMs
   }
   return groups.sort((a, b) => {

@@ -541,6 +541,26 @@ test('按会话分组的时间线：组内保序、组间按最新时间倒序�
   assert.deepEqual(rollbackPointGroups({ ok: true, points: [], storage: { available: true } }), [])
 })
 
+test('对话标题：宿主补的 title 透传（渲染前脱敏；没有标题回落 null，绝不编造）', () => {
+  const rows = rollbackPointRows(list([
+    point({ id: 'a1', sessionId: 'sess-A', title: '配置管理：回滚点' }),
+    point({ id: 'a2', sessionId: 'sess-A' }),
+    point({ id: 'b1', sessionId: 'sess-B', title: 'before refactor password=Hunter2Secret' }),
+  ]))
+  assert.equal(rows[0]?.title, '配置管理：回滚点', '宿主给的标题原样透传（界面优先显示它）')
+  assert.equal(rows[1]?.title, null, '缓存里没有标题 → null（界面回落显示 sessionId）')
+  assert.ok(rows[2]?.title !== null && rows[2]!.title!.includes('Hunter2Secret') === false, '标题进界面前必须过 redact')
+
+  const groups = rollbackPointGroups(list([
+    point({ id: 'a1', sessionId: 'sess-A', title: '配置管理：回滚点', createdAt: 100 }),
+    point({ id: 'a2', sessionId: 'sess-A', createdAt: 300 }),
+    point({ id: 'b1', sessionId: 'sess-B', createdAt: 500 }),
+  ]))
+  assert.equal(groups[0]?.sessionId, 'sess-B', '组序仍按各组最新时间倒序（新 → 旧）')
+  assert.equal(groups[0]?.title, null, '该会话没有标题 → null')
+  assert.equal(groups[1]?.title, '配置管理：回滚点', '组标题取组内任一记录的标题')
+})
+
 test('时间线行事实：文件数（工作区段条目数）与是否有会话游标', () => {
   const withCursor = rollbackPointRows(list([point()]))[0]
   assert.ok(withCursor !== undefined)

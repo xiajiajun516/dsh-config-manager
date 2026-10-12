@@ -201,6 +201,18 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **回滚点台账：弹窗高度锁死 + 会话显示标题**（2026-10-12 用户要求）：
+> - **高度锁死 340px**（`.rollbackLedger` 的 `height: 340px` + 左栏 `height: 100%` + 右栏 `.rollbackPointsScroll` 吃掉剩余高度并内滚）：此前高度随内容变化，切到只有一两个回滚点的对话时弹窗变矮、居中重排 —— 用户看到的就是「整个页面抖动」。现在分栏区高度恒定，弹窗不再重排。
+> - **会话显示对话标题**：台账只记 `sessionId`（会话目录名），屏上一排 `session-<uuid>` 认不出哪条是自己的对话。宿主在 `GET /recovery/rollback-points` 上补 `title`（与 `/recovery/sessions` **同一份** DSH 会话缓存索引、同一套 `sessionIdKey` 归一化；`applySessionTitles` 放宽到「会话 id 可缺」），左栏与右栏组头**优先显示标题**、拿不到才回落 id（`title` 属性里同时给出 id 与工作区路径，信息一个不丢）；标题进界面前过 `redact()`。
+> - **护栏**：`src/ui/rollback-view.test.ts` 新增标题透传/脱敏/回落用例；`src/client/recovery/recovery-panel-layout.test.ts` 的分栏用例补上「高度锁死 + 优先显示标题」两条断言。
+> - **未验证**：仍然没有浏览器点击取证。
+
+> **Rollback ledger: fixed dialog height + session titles** (user request, 2026-10-12):
+> - **Height is locked at 340px** (`.rollbackLedger` + left column `height:100%` + the right pane's `.rollbackPointsScroll` filling the rest and scrolling internally): the height used to follow the content, so switching to a conversation with one or two points shrank the dialog and re-centered it — which the user saw as "the whole page jitters". The split area is now a constant height, so the dialog never re-lays out.
+> - **Conversations show their title**: the ledger only records `sessionId` (the session directory name), so a column of `session-<uuid>` never told the user which conversation was which. The host now adds `title` on `GET /recovery/rollback-points` (the **same** DSH session-cache index and `sessionIdKey` normalization as `/recovery/sessions`; `applySessionTitles` was widened to allow a missing session id). The sidebar and the group head **prefer the title** and fall back to the id when there is none (the `title` attribute still carries the id and the workspace path, so nothing is lost), and titles pass through `redact()` before rendering.
+> - **Guards**: new title passthrough/redaction/fallback cases in `src/ui/rollback-view.test.ts`; the split-pane guard in `src/client/recovery/recovery-panel-layout.test.ts` gained "height locked" and "title preferred" assertions.
+> - **Not verified**: still no browser click-through.
+
 > **会话体检列表的行首改为显示「对话标题」，目录名退到第二行**（用户 2026-10-12 反馈）：列表此前只显示 `session-20d2722c-…` 这样的目录名，
 > 同屏十几条待处理会话里认不出哪条是自己的对话 —— 用户只能靠 uuid 回想。
 > - 标题取自 DSH 自己的会话缓存（`storages/session_projcache.json` 的 `rows.title.val`），走**导出选择器同一份** `core/session-meta.ts`

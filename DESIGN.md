@@ -508,10 +508,13 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   卡内 = `.rollbackToolbar`（`.rollbackSummary` 数字摘要「共 N 个回滚点 · M 个会话」+ 主操作「查看回滚点」）；
   **卡不再折叠**（摘要与入口常驻可见）。台账本体在 `Modal`（`rollback.dialog.title` = 「回滚点台账」，`{open && …}` 条件挂载）里：
   弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的留存口径 ⓘ + 刷新）→ `.rollbackToolbar`（同一份数字摘要）
-  → **左右分栏**（2026-10-12 用户要求「左边是侧边栏、右边是列表」）：`.rollbackLedger` = `.rollbackSessions`（左栏：**拥有回滚点的对话**，
-  `.rollbackSessionItem` 两行式 = 等宽 `.rollbackSessionId` + `.rollbackSessionMeta` 计数/最新时间；默认**新 → 旧**，顺序由 `rollbackPointGroups` 定死；
-  选中态 `data-active` = 主色描边 + layer-2 底）+ `.rollbackLedgerMain`（右栏：选中那条对话的 `.rollbackGroup` 组头 = `.rollbackGroupTitle` 等宽会话 id +
-  计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径 → `.planScroll`+`.rollbackScroll`+`.rollbackPoints` 限高内滚）→ `.rollbackPoint` 行卡。
+  → **左右分栏**（2026-10-12 用户要求「左边是侧边栏、右边是列表」）：`.rollbackLedger`（**高度锁死 340px** —— 切换对话不得让弹窗高度变化，
+  否则居中重排 = 整页抖动，用户同日第二条反馈）= `.rollbackSessions`（左栏：**拥有回滚点的对话**，
+  `.rollbackSessionItem` 两行式 = `.rollbackSessionId` **优先显示对话标题**（拿不到才回落等宽会话 id）+ `.rollbackSessionMeta` 计数/最新时间；
+  默认**新 → 旧**，顺序由 `rollbackPointGroups` 定死；选中态 `data-active` = 主色描边 + layer-2 底）+ `.rollbackLedgerMain`（右栏：选中那条对话的
+  `.rollbackGroup` 组头 = `.rollbackGroupTitle` **优先显示标题** + 计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径 →
+  `.rollbackPointsScroll`（`flex:1` + 自身内滚）内的 `.rollbackPoints`）→ `.rollbackPoint` 行卡。
+  标题来源 = 宿主侧 `applySessionTitles`（与 `/recovery/sessions` **同一份** DSH 会话缓存索引；读不到就不带该字段，界面回落显示 id —— 绝不编造）。
   硬约定两条：① 行卡是**两行式**（`.rollbackPointTop` = 回合号 + 来源/告警徽章 + 右对齐的 `.rollbackPointActions`；
   `.rollbackPointMeta` = 时间 / 文件数 / 会话游标 / `.rollbackPointNote`），左侧 2px 语义色条按 `data-kind` 区分来源
   （`auto` = `--cm-ok` / `guard` = `--cm-info` / `unknown` = `--cm-text-3`）；② **长句只进 `title`**，屏上只放短标签键

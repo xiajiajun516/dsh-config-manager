@@ -5380,10 +5380,14 @@ button.profileRowMain:hover {
   padding: 8px;
 }
 
-/* 单个会话分组：一块 layer-2 卡片，组头一条分隔线 */
+/* 单个会话分组：一块 layer-2 卡片，组头一条分隔线。
+   在台账弹窗右栏里它**吃掉整栏高度**（flex:1 + min-height:0），里面的列表再自己内滚 ——
+   这样组卡高度不随条目数变化，弹窗高度因此恒定。 */
 .rollbackGroup {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
   gap: 8px;
   padding: 8px 10px;
   border: 1px solid var(--dsw-alias-border-l1);
@@ -5490,19 +5494,22 @@ button.profileRowMain:hover {
 }
 
 /* 台账弹窗的左右分栏（2026-10-12 用户要求：左边选「拥有回滚点的对话」，右边看该对话自己的回滚点）。
-   左侧固定宽、自身内滚（选中的对话恒在视野内）；右侧吃掉剩余宽度，列表再限高内滚 —— 两侧都不撑长弹窗。 */
+   左侧固定宽、自身内滚（选中的对话恒在视野内）；右侧吃掉剩余宽度，列表再限高内滚 —— 两侧都不撑长弹窗。
+   **高度锁死 340px**（2026-10-12 用户第二条反馈）：切换对话 / 选中一条只有一两个点的会话时，
+   弹窗高度必须不变 —— 否则弹窗居中重排，视觉上就是「整个页面抖动」。 */
 .rollbackLedger {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 10px;
+  height: 340px;
 }
 
 .rollbackSessions {
   flex: 0 0 148px;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 320px;
   overflow: auto;
 }
 
@@ -5552,9 +5559,18 @@ button.profileRowMain:hover {
 .rollbackLedgerMain {
   flex: 1 1 auto;
   min-width: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* 右栏的点列表：吃掉组卡的剩余高度并自己内滚 —— 高度由 .rollbackLedger 锁死，与条目数无关 */
+.rollbackPointsScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
 }
 
 /* 用户自由文本（已脱敏）：单行省略，全文进 title */

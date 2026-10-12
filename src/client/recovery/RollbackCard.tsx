@@ -241,6 +241,14 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
    * （= 用户要的「从新对话到旧对话」）。
    */
   const activeGroup = groups.find((group) => groupKeyOf(group) === selectedSession) ?? groups[0] ?? null
+  /**
+   * 左栏条目的悬停全文：**标题 · 会话 id · 工作区路径**（三者有几个给几个，一个都不丢）。
+   * 屏上优先显示标题（2026-10-12 用户要求「会话显示标题而不是 id」），id 退到悬停提示里。
+   */
+  const sessionHoverText = (group: RollbackPointGroupView): string =>
+    [group.title, group.sessionId, group.unitId]
+      .filter((part): part is string => typeof part === 'string' && part !== '')
+      .join(' · ')
 
   return (
     <>
@@ -336,11 +344,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                               className={css.rollbackSessionItem}
                               data-active={current ? '' : undefined}
                               aria-current={current ? 'true' : undefined}
-                              title={group.unitId ?? group.sessionId ?? t('rollback.group.unknownSession')}
+                              title={sessionHoverText(group) || t('rollback.group.unknownSession')}
                               onClick={() => { setSelectedSession(key) }}
                             >
-                              <span className={css.rollbackSessionId + ' ' + css.mono}>
-                                {group.sessionId ?? t('rollback.group.unknownSession')}
+                              {/* 有标题显示标题（人话），没有才回落会话 id（等宽，认得出是 id） */}
+                              <span className={group.title === null ? css.rollbackSessionId + ' ' + css.mono : css.rollbackSessionId}>
+                                {group.title ?? group.sessionId ?? t('rollback.group.unknownSession')}
                               </span>
                               <span className={css.rollbackSessionMeta}>
                                 {t('rollback.group.count', { n: group.rows.length })}
@@ -363,8 +372,11 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                           : (
                             <div className={css.rollbackGroup}>
                               <div className={css.rollbackGroupHead}>
-                                <span className={css.rollbackGroupTitle + ' ' + css.mono}>
-                                  {t('rollback.group.label', { session: activeGroup.sessionId ?? t('rollback.group.unknownSession') })}
+                                <span
+                                  className={activeGroup.title === null ? css.rollbackGroupTitle + ' ' + css.mono : css.rollbackGroupTitle}
+                                  title={activeGroup.sessionId ?? undefined}
+                                >
+                                  {t('rollback.group.label', { session: activeGroup.title ?? activeGroup.sessionId ?? t('rollback.group.unknownSession') })}
                                 </span>
                                 <Badge kind="info">{t('rollback.group.count', { n: activeGroup.rows.length })}</Badge>
                                 {/* 工作区路径：右对齐单行省略，全文进 title（不把组头撑成多行） */}
@@ -372,7 +384,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                                   <span className={css.rollbackGroupUnit} title={activeGroup.unitId}>{activeGroup.unitId}</span>
                                 )}
                               </div>
-                              <div className={css.planScroll + ' ' + css.rollbackScroll + ' ' + css.rollbackPoints}>
+                              <div className={css.rollbackPointsScroll + ' ' + css.rollbackPoints}>
                                 {activeGroup.rows.map((row) => {
                                   const hasCursor = rollbackRowHasSessionCursor(row)
                                   return (

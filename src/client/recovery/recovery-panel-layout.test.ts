@@ -152,4 +152,14 @@ test('台账弹窗分栏 / 刷新不抖 / 预览留白（2026-10-12 用户要求
   assert.ok(src.includes('loading={refreshing}'), '刷新在途只体现在按钮上，不动正文');
   // ③ 预览弹窗正文留白（两个弹窗的正文都必须包在 Modal.Body 里）
   assert.ok((src.match(/<Modal.Body scroll>/g) ?? []).length >= 2, '台账与预览两个弹窗的正文都必须包在 Modal.Body 里');
+  // ④ 弹窗高度**锁死**（2026-10-12 用户第二条反馈：切换对话 / 选到点数很少的会话时不得变高变矮）
+  const cssSheet = readFileSync('src/client/config-manager.module.css', 'utf8');
+  const ledgerRule = /\.rollbackLedger \{[^}]*\}/.exec(cssSheet)?.[0] ?? '';
+  assert.match(ledgerRule, /height: 340px/, '分栏容器必须锁死高度（否则弹窗重排 = 整页抖动）');
+  const sessionsRule = /\.rollbackSessions \{[^}]*\}/.exec(cssSheet)?.[0] ?? '';
+  assert.match(sessionsRule, /height: 100%/, '左栏必须填满分栏高度（不得再用 max-height 随内容变化）');
+  assert.ok(src.includes('css.rollbackPointsScroll'), '右栏列表必须用 .rollbackPointsScroll 吃掉剩余高度并内滚');
+  // ⑤ 会话显示**标题**（拿不到标题才回落 id —— 绝不编造）
+  assert.ok(src.includes('group.title ?? group.sessionId'), '左栏必须优先显示对话标题，拿不到才回落会话 id');
+  assert.ok(src.includes('activeGroup.title ?? activeGroup.sessionId'), '右栏组头同样优先显示标题');
 });

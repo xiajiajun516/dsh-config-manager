@@ -385,7 +385,14 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
         if (sub.length === 0) {
           if (req.method !== 'GET') { methodNotAllowed(); return }
           const listed = await engine.list()
-          writeJson(res, listed.storage.available ? 200 : 503, listed)
+          /**
+           * 行上补「对话标题」：台账只记 `sessionId`（= 会话目录名），界面上 `session-<uuid>` 认不出
+           * 是哪条对话（2026-10-12 用户要求「会话显示标题而不是 id」）。与 /recovery/sessions **同一份索引、
+           * 同一套 `sessionIdKey` 归一化**（core/session-meta 的 applySessionTitles）—— 不另写查表规则。
+           * 只读、**绝不编造**：缓存里没有这条会话 / 没有标题就不加该字段，界面回落显示 id。
+           */
+          const points = applySessionTitles(listed.points, await sessionHealth.sessionMeta())
+          writeJson(res, listed.storage.available ? 200 : 503, { ...listed, points })
           return
         }
         // 存储栈状态（缺失时给结构化组合指引；**不崩**）

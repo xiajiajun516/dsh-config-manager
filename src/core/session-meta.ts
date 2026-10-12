@@ -244,11 +244,13 @@ export function applySessionParentLinks<T extends { id: string; parentSessionId?
  *
  * 只读、纯函数、**绝不编造**：缓存里没有这条会话 / 没有标题 → 原样返回（界面回落显示目录名）。
  */
-export function applySessionTitles<T extends { sessionId: string }>(
+export function applySessionTitles<T extends { sessionId?: string | null }>(
   rows: readonly T[],
   index: SessionMetaIndex,
 ): (T & { title?: string })[] {
   return rows.map((row) => {
+    // 会话 id 缺失 / 空串的记录**一个字段都不加**（回滚台账里有这类历史记录：绝不猜它属于哪条对话）
+    if (typeof row.sessionId !== 'string' || row.sessionId === '') return row;
     const title = index.bySessionId.get(sessionIdKey(row.sessionId))?.title;
     return title === undefined ? row : { ...row, title };
   });
