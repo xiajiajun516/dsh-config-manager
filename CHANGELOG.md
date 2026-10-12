@@ -627,6 +627,22 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Copy kept lean (two same-day rounds on user feedback)**: **every** explanatory line was removed from the rewind dialog — first "rewind scope = the N directories recorded at capture time", then "N further path(s) will not be deleted (refused by the safety rules)" and "(the list shows only the first entries…)" (user, 2026-10-12: "I don't need this description!!! remove all descriptions, I need the dialog to be clean"). What remains: one "this rewind will make the following changes" line, the checkbox, and the file rows (including "Delete" rows). To make that possible the deletion list became **complete**, so the **data itself** replaces the "the list may be incomplete" sentence. The rule now lives in `DESIGN.md §7` and `AGENTS.md`.
 > - **Guard**: **R-05d** in `src/core/rollback-point.test.ts` (6 turns, 3 middle turns each creating files, rewinding from the last turn straight back to turn 2: preview set = executed set entry by entry, refusals reported; mutation check: restoring the old preview semantics turns it red immediately).
 
+> **救援点（guard）新增全局上限 50：跨会话合计超限时也淘汰最旧的救援点**（2026-10-12 用户要求「增加一条救援点自动淘汰的规则」）：
+> - 症状 = 救援点无界增长：原有「每会话 20」只挡住单个会话，本机 1300+ 会话时跨会话不收敛，反复回退留下的救援点连同其内容对象一直留在磁盘上。
+> - 改法 = `selectPrune` 对 guard 做**两轮**裁剪：先每会话 `ROLLBACK_MAX_GUARDS_PER_SESSION`（20），再全局 `ROLLBACK_MAX_GUARDS`（50）；两轮都只淘汰**最旧的 guard**，可注入选项 `maxGuards`（缺省 50），`GET /recovery/rollback-points` 的列表结果新增 `maxGuards`。
+> - 口径不变的边界：guard 仍**不占**自动点的 20/50 预算、**不被**它们淘汰、**用户删不掉**（`remove` 仍回 `protected-point`）；guard 的全局 50 与自动点的全局 50 **互相独立**（两类各计预算，数值相同不是耦合）；自动点也不会被 guard 的淘汰牵连。
+> - 文案同步：ⓘ（`rollback.retention.hint`）与删除确认 / 删除拒绝两句都写上救援点的两道上限，四条数字全部来自常量（ⓘ 走占位符，后两句无参数渲染故写死并由用例逐字校验）。
+> - **护栏**：`src/core/rollback-point.test.ts` 的 **R-24** 新增两例（3 会话 × 22 个 guard ⇒ 每会话 20 / 全局 50 / 最旧 10 个被淘汰；`maxGuards=3` 注入生效且同台账的自动点不受牵连）；`src/client/recovery/recovery-locales.test.ts` T17 扩到四常量并新增「客户端常量 = 引擎常量」同源断言；`src/ui/rollback-view.test.ts` 补两条客户端常量。
+> - **未验证**：没有浏览器点击取证（ⓘ 与两句话只经字典守卫 + 渲染参数断言，未在真机 UI 上展开确认）。
+
+> **Rescue points (guards) gain a global cap of 50: the oldest rescue point is now also evicted across sessions** (user request, 2026-10-12: add an automatic eviction rule for rescue points):
+> - Symptom: guards grew without bound. The per-session cap of 20 only bounds a single session, so on this machine (1300+ sessions) the total never converged and rescue points plus their content objects stayed on disk.
+> - Fix: `selectPrune` now prunes guards in **two rounds** — per session `ROLLBACK_MAX_GUARDS_PER_SESSION` (20), then globally `ROLLBACK_MAX_GUARDS` (50); both rounds evict only the **oldest guards**, with an injectable `maxGuards` option (default 50) and a new `maxGuards` field on the `GET /recovery/rollback-points` list result.
+> - Unchanged boundaries: guards still **do not count against** the automatic points' 20/50 budgets, are **not evicted by them**, and are still **undeletable by users** (`remove` still returns `protected-point`); the guards' global 50 and the automatic points' global 50 are **independent** (each bucket keeps its own budget — the equal numbers are not a coupling); automatic points are never removed by guard eviction (R-24 also asserts the ledger's automatic point survives).
+> - Copy updated: the ⓘ (`rollback.retention.hint`) and both delete strings now state the guards' two limits; all four numbers come from constants (placeholders for the ⓘ, literal digits for the two non-parameterised strings, pinned by a test).
+> - **Guards**: two new cases in **R-24** (`src/core/rollback-point.test.ts`; 3 sessions × 22 guards ⇒ 20 per session / 50 global / the 10 oldest evicted; `maxGuards=3` honoured and the ledger's automatic point untouched), T17 extended to four constants with a new "client constants = engine constants" check (`src/client/recovery/recovery-locales.test.ts`), and two constants asserted in `src/ui/rollback-view.test.ts`.
+> - **Not verified**: no browser click-through (the ⓘ and the two strings are covered only by the dictionary guards and the rendering-parameter assertions).
+
 ### 🐛 修复 · Fixed
 
 > **导出选择器：默认未勾选的分区此前既不能展开、也不能逐项挑选**（用户 2026-10-12 反馈）：

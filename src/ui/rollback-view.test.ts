@@ -25,6 +25,8 @@ import {
   ROLLBACK_CODES,
   ROLLBACK_GUIDANCE_UNKNOWN_KEY,
   ROLLBACK_KIND_UNKNOWN_KEY,
+  ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION,
+  ROLLBACK_MAX_POINTS_GUARDS_TOTAL,
   ROLLBACK_MAX_POINTS_PER_SESSION,
   ROLLBACK_MAX_POINTS_TOTAL,
   ROLLBACK_MODES,
@@ -710,9 +712,11 @@ test('文件行主标签 = 文件名（完整路径由 title 承载，信息不�
   assert.equal(rollbackPreviewFileLabel(''), '')
 })
 
-test('留存口径（S6）：每会话 20 / 全局 50 由本模块单点声明', () => {
+test('留存口径（S6）：自动点每会话 20 / 全局 50、救援点每会话 20 / 全局 50 由本模块单点声明', () => {
   assert.equal(ROLLBACK_MAX_POINTS_PER_SESSION, 20)
   assert.equal(ROLLBACK_MAX_POINTS_TOTAL, 50)
+  assert.equal(ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION, 20)
+  assert.equal(ROLLBACK_MAX_POINTS_GUARDS_TOTAL, 50)
 })
 /* ------------------------------------------------------------ ⑧ E1：逐文件行级统计（workspace.files） */
 

@@ -237,11 +237,20 @@ export function rollbackGuidanceRows(items: readonly RollbackGuidance[] | undefi
 
 /**
  * 每会话最多保留的**自动点**（超出只淘汰最旧的自动点 —— 引擎 selectPrune 的自动点桶）。
- * 救援点（guard）不占这个额度、也不被它淘汰，但有自己的每会话上限（引擎 ROLLBACK_MAX_GUARDS_PER_SESSION）。
+ * 救援点（guard）不占这个额度、也不被它淘汰，但有自己的**两道**上限
+ * （每会话引擎 ROLLBACK_MAX_GUARDS_PER_SESSION / 全局 ROLLBACK_MAX_GUARDS）。
  */
 export const ROLLBACK_MAX_POINTS_PER_SESSION = 20
 /** 全局最多保留的**自动点**（同上，只淘汰最旧的自动点）。 */
 export const ROLLBACK_MAX_POINTS_TOTAL = 50
+/** 每会话最多保留的**救援点**（guard）：超出只淘汰最旧的救援点；数值 = 引擎 ROLLBACK_MAX_GUARDS_PER_SESSION。 */
+export const ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION = 20
+/**
+ * **全局**最多保留的**救援点**（guard）：与 ROLLBACK_MAX_POINTS_TOTAL **互相独立**
+ * （两类各计预算，谁也不吃谁额度；数值相同不是耦合），超出只淘汰最旧的救援点。
+ * 数值 = 引擎 ROLLBACK_MAX_GUARDS（两侧必须同步，T17 用例逐句钉住）。
+ */
+export const ROLLBACK_MAX_POINTS_GUARDS_TOTAL = 50
 
 /**
  * 预览不可回退时的原因键（按宿主真实形状分派；**绝不回落 rollback.code.unknown**）。
@@ -326,6 +335,8 @@ export interface RollbackListResult {
   maxRecords?: number
   /** 每会话留存上限（S6：20） */
   maxRecordsPerSession?: number
+  /** **全局**救援点留存上限（S6 第二道 guard 预算：50） */
+  maxGuards?: number
 }
 
 export interface RollbackDetailResult {
@@ -782,16 +793,22 @@ export interface RollbackPreviewRowView {
   /** 该点**未记录**的路径清单（含被拒删的；已脱敏；宿主上限 20 条）—— **不是**删除清单 */
   leftovers: string[]
   leftoversTruncated: boolean
-  /** **会被删除**的路径（已脱敏；宿主上限 20 条）—— 与执行阶段同一份规划（逐条一致） */
+  /**
+   * **会被删除**的路径（已脱敏）—— **全量**（引擎不再切 20 条），与执行阶段同一份规划 ⇒ 逐条一致。
+   * 界面直接把它渲染成「删除」行，**不需要**任何「清单可能不完整」的说明句。
+   */
   removals: string[]
-  /** 会被删除的**真实总数** */
+  /** 会被删除的条数（= {@link removals}.length） */
   removalsCount: number
   removalsTruncated: boolean
-  /** 按安全判据**拒删**的路径（已脱敏）与真实总数 */
+  /**
+   * 按安全判据**拒删**的路径与条数、以及「捕获不完整 ⇒ 一条都没删」的原因。
+   * **正文不渲染**（用户 2026-10-12：弹窗只要清单，不要说明句；文案克制 → DESIGN.md §7）——
+   * 字段保留是引擎事实的投影，将来若放进 ⓘ / 工具提示可直接用。
+   */
   createdSkipped: string[]
   createdSkippedCount: number
   createdSkippedTruncated: boolean
-  /** 非 null = 捕获不完整 ⇒ 一条都没删（安全拒删） */
   createdRefusedReason: string | null
   /** 留点时被跳过的条目总数（S4：跳过必须可见） */
   skippedCount: number
