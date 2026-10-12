@@ -5214,15 +5214,14 @@ button.profileRowMain:hover {
    为什么改成 grid（旧版是 flex，用户截图反馈「太丑」）：flex 下每行各自独立排版 ——
    文件名长短不一 ⇒ 统计列跟着左右乱跳、数字位数不一样 ⇒ 纵向扫读不成一列；文件名只画基名 ⇒
    `.git/index` / `.git/HEAD` 读不出「在哪」。现在三列固定：图标 | 路径（目录弱化+基名） | 统计（右对齐）。
-   清单再包一层 layer-2 卡片（`.rollbackFileList`）：散行贴在一起时读不出「这是一份清单」。
+   **无边框清单**（2026-10-12 用户要求「移除列表的边框」）：容器只留 layer-2 底 + 圆角、行与行之间**不画分隔线** ——
+   清单感由「整块底色 + 左侧 2px 语义色条」承担，不再靠一圈描边和一堆横线（那些线与对话框自身的边线叠在一起像表格）。
    文件名过长截断（完整路径在 title 里），统计列 grid 自动定宽 ⇒ 永不被挤没。 */
 .rollbackFileList {
   display: flex;
   flex-direction: column;
-  /* 与 .rollbackFileRow 的左右内边距对齐：卡片描边到行内容的呼吸区 */
+  /* 左右**不留**内边距：行自己带左内边距给语义色条，右侧统计直接顶到正文右缘（去掉边框后要对齐正文） */
   margin-top: var(--cm-sp-2);
-  padding: 0 var(--cm-sp-4);
-  border: 1px solid var(--cm-line-1);
   border-radius: var(--cm-r-2);
   background: var(--cm-surface-2);
 }
@@ -5233,14 +5232,8 @@ button.profileRowMain:hover {
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--cm-sp-3);
-  /* 左内边距留给语义色条（`::before`），正文不贴描边 */
+  /* 左内边距留给语义色条（`::before`），正文不贴块边缘 */
   padding: var(--cm-sp-3) 0 var(--cm-sp-3) var(--cm-sp-4);
-  /* 行间细分隔线：最后一行不画（卡片底边已经收口） */
-  border-bottom: 1px solid var(--cm-line-1);
-}
-
-.rollbackFileRow:last-child {
-  border-bottom: 0;
 }
 
 /* 语义色条（2px）：新增 = ok 绿 / 改动 = info 蓝 / 删除 = error 红；
