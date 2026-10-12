@@ -160,7 +160,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 | 新 Design Pattern/Shared Component/Token/主题/新页面 | `DESIGN.md` |
 | 新目录约定/架构Pattern/开发规范/脚本/CI | `AGENTS.md` |
 | 新增/修订常见坑（规则） | `AGENTS.md` §📌 常见坑 **和** `docs/lessons/<域>.md`（规则 + 证据两处同步） |
-| 新增/调整 CHANGELOG 体例或分组约定 | `CHANGELOG.md` 头部「条目落位」**和** `.dsh/skills/changelog-writing/SKILL.md`（两处同步） |
+| 新增/调整 CHANGELOG 体例或分组约定 | `CHANGELOG.md` 头部 + `changelog-writing` skill + 版本段模板（三处同步） |
 | **用户可见的功能 / 行为 / 修复**（含 UI 体验与文案诚实性） | **同轮**写进 `CHANGELOG.md` 的 `## [Unreleased]`（按 `changelog-writing` skill 落位并跑 §4 自检）—— 漏写实测过 |
 | 新增/修订经验或证据（真机事故/量化数据/复现脚本） | `docs/lessons/<域>.md`（**只写证据**；规则回 `AGENTS.md` 对应小节补一行 + 指针） |
 
