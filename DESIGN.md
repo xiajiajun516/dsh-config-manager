@@ -163,15 +163,20 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - 阴影（**2 档**）+ 焦点环（1 档）：`--cm-shadow-1`（浮层 Select/MoreMenu）、`--cm-shadow-2`（弹窗卡片）、
   `--cm-ring`（统一焦点/选中环）；**不得再写一次性阴影值**。
 - **执行者**：`css-scale-guard.test.ts` 同时钉住 border-radius / line-height / z-index（z-index 必须走 `--cm-z-*`，不得写字面量）。
-- 动效：**令牌统一** —— `.section` 上定义 `--cm-motion-fast/base/slow`（120/180/300ms；
-  slow 就是进度条的 300ms 推进）、
+- 动效：**令牌统一** —— `body` 上定义 `--cm-motion-fast/base/slow`（120/180/300ms；
+  slow 就是进度条的 300ms 推进；**2026-10-12 从 .section/:root 的旧位置修回 body** —— 那次 token 作用域
+  迁移把它们整段丢掉了，全仓只剩 `var(--cm-motion-*)` 的引用 ⇒ 每一条 animation/transition-duration 都
+  在 computed-value 阶段失效、全部动效静默退化成「瞬变」。定义回 body 与其余 `--cm-*` 同层，
+  Portal 到 body 的弹窗才继承得到）、
   `--cm-motion-ease-out`（`cubic-bezier(0.16,1,0.3,1)`，入场用）、`--cm-motion-ease-in-out`
   （循环动效用）；各处只引用变量，不再各写一遍毫秒值。现有动效清单：
   颜色过渡 120ms ease（含状态点 / 步骤条的状态色）、进度条 300ms、面板滑入与通知入场 180ms、
   状态点脉冲 1.2s、
   **页面入场 180ms**（`.pagePad` 的 `pageEnter`：opacity + 4px 上浮；React 侧以 `key={panel}`
   重建节点，换页时重放一次）、**弹窗入场/退场**（`.dialogMask` 淡入 120ms + `.dialogContentCenter`
-  0.97→1 微缩放 180ms；关闭走 `[data-state='closed']` 的 `maskOut`/`dialogOut` ——
+  **淡入 + 4px 上浮** 180ms；**入场不得用 scale** —— 卡片靠 `translate(-50%,-50%)` 自居中，scale 会改变
+  可见尺寸/位置（真机「先在偏下出现再闪到中心」）；退场仍是 0.98 微缩。关闭走 `[data-state='closed']` 的
+  `maskOut`/`dialogOut` ——
   Radix 的 Presence 会保持节点挂载并等 `animationend` 再卸载，所以退场只需写 CSS）、
   **折叠 180ms**（`.collapse`：`grid-template-rows` 0fr ⇄ 1fr，**展开与收起两端都有动画**；
   用法见 §6 的 `Collapse`）、**视图切换入场**（`.viewEnter`：`ViewSwitch` 的 key 重放）、
@@ -500,11 +505,13 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     「61 行挤爆弹窗」的根因。**缺省不传 = 导出页/导入页零变化**；文案与语义全部由调用方决定，
     组件不猜、也不为它推导任何勾选状态。
 - **回滚点时间线**（环境 → 维护与诊断 → 「工作区 + 会话回滚」卡上的「查看回滚点」，2026-10-11 重排、2026-10-12 台账整块搬进弹窗；用户反馈「UI 太丑」+「要能一眼看到有回滚点的对话」）：
-  卡内 = `.rollbackChatEntry`（聊天入口形态设置块）→ `.rollbackToolbar`（`.rollbackSummary` 数字摘要「共 N 个回滚点 · M 个会话」+ 主操作「查看回滚点」）；
+  卡内 = `.rollbackToolbar`（`.rollbackSummary` 数字摘要「共 N 个回滚点 · M 个会话」+ 主操作「查看回滚点」）；
   **卡不再折叠**（摘要与入口常驻可见）。台账本体在 `Modal`（`rollback.dialog.title` = 「回滚点台账」，`{open && …}` 条件挂载）里：
   弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的留存口径 ⓘ + 刷新）→ `.rollbackToolbar`（同一份数字摘要）
-  → `.planScroll`+`.rollbackScroll`（限高内滚）内的 `.snapshotList` → `.rollbackGroup`（会话分组卡 = 一条对话；组头 = `.rollbackGroupTitle` 等宽会话 id +
-  计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径）→ `.rollbackPoints` → `.rollbackPoint`。
+  → **左右分栏**（2026-10-12 用户要求「左边是侧边栏、右边是列表」）：`.rollbackLedger` = `.rollbackSessions`（左栏：**拥有回滚点的对话**，
+  `.rollbackSessionItem` 两行式 = 等宽 `.rollbackSessionId` + `.rollbackSessionMeta` 计数/最新时间；默认**新 → 旧**，顺序由 `rollbackPointGroups` 定死；
+  选中态 `data-active` = 主色描边 + layer-2 底）+ `.rollbackLedgerMain`（右栏：选中那条对话的 `.rollbackGroup` 组头 = `.rollbackGroupTitle` 等宽会话 id +
+  计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径 → `.planScroll`+`.rollbackScroll`+`.rollbackPoints` 限高内滚）→ `.rollbackPoint` 行卡。
   硬约定两条：① 行卡是**两行式**（`.rollbackPointTop` = 回合号 + 来源/告警徽章 + 右对齐的 `.rollbackPointActions`；
   `.rollbackPointMeta` = 时间 / 文件数 / 会话游标 / `.rollbackPointNote`），左侧 2px 语义色条按 `data-kind` 区分来源
   （`auto` = `--cm-ok` / `guard` = `--cm-info` / `unknown` = `--cm-text-3`）；② **长句只进 `title`**，屏上只放短标签键
@@ -512,6 +519,26 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   完整句仍在原键里 —— 旧实现把整句逐行重复，正是「一坨灰字」的根因。
   行内危险动作（删除回滚点）用 `IconButton danger`（禁用原因进 `title`），不再常驻一颗 danger 文本按钮。
   执行者：`src/client/recovery/recovery-panel-layout.test.ts`（禁止退回 `.actionRow[data-inline]`；并钉住「两块诊断卡退出折叠 + 回滚台账在条件挂载的弹窗内」）。
+- **聊天内「回退预览」弹窗**（每条用户消息气泡里的「↺ 回退」；2026-10-12 按 Cursor「Confirm Undo」对齐，用户七条要求）：
+  版式自上而下 = 说明行 `.previewSummary` → 选择框行 `.previewChoiceRow`（`Checkbox` 原语；
+  `chat.preview.revertFiles`「回退文件的更改」—— 勾 = `files+session`、取消 = `session`，工作区态没有可用记录时**禁用**）
+  → 文件清单 `.reasonList` → 底部 `.dialogFooter`（主按钮「回退」+「取消」，恒两颗）。
+  硬约定五条：
+  ① 文件行 = 文件类型图标 · 文件名 · **紧跟其后**的 ±行数 或「删除」 · ……弹性空隙…… · 「查看」：
+     统计块 `.rollbackFileStat` 不得被弹性空隙推到行尾（用户第 2 条），弹性空隙只留在「查看」之前；
+     文件名 `.rollbackFilePath` 是 `flex: 0 1 auto` + 单行省略号（完整路径进 `title`）；
+  ② **整文件删除写「删除」**（`.rollbackDeleted` / `rollback.preview.file.deleted`），**不写 `+0 −N`** ——
+     那是「把文件清空」的意思；数据源 = `preview.workspace.leftovers`（宿主 rewind 的 removeCreated 缺省为真），
+     清单被截断（或短于 createdAfter）时补一句「（清单已截断）」；
+  ③ 文件图标 `RollbackFileIcon`：装了 `dsh-better-sidebar` 用它的 `betterSidebar.fileIcon`，
+     否则惰取 DSH 自带的 `FileTypeIcon`（`@deepseek-ai/dsh-client-ui-primitives`，DSH 文件树同一颗），
+     两条都不通才用本地极简 SVG（`currentColor`）。**绝不在模块顶层 import 那个包**：老宿主没有模块表 seed 时
+     顶层 require 会让整个浏览器半加载失败；
+  ④ 「查看」`.fileViewBtn`：**无边框**、悬停高亮背景（`--cm-line-1`）、悬停或键盘聚焦才出现
+     （`visibility` 不进过渡，`opacity` + `translateX(4px)` 过渡 = 淡入右移）；**打开成功即关闭弹窗**，
+     侧栏不可用时降级为弹窗内展示同一份差异（两种原因两句话）；
+  ⑤ 选择框关掉时整份清单降透明度（`[data-off='true']`）—— 它这次**不会被执行**，不能画得像会发生。
+  执行者：`src/client/chat/rollback-entry-view.test.ts`（源级：恰好一颗选择框 / 统计块类 / 删除键 / 图标 / 打开成功关弹窗）。
 - **会话体检弹窗**（环境 → 维护与诊断 → 会话体检，2026-10-12 重排，同一条用户反馈「UI 太丑」）：
   弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的说明 ⓘ + 主操作「开始体检 / 重新体检」）
   → `.shSummary`（`.shMetrics` 数字 tiles：会话总数 / 需要处理 / 会话格式 → `.shSeverities` 严重级 chips
@@ -1115,7 +1142,8 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 - **已确认的三条观感差距**（如实登记，不修）：① 引用 / 技能 chip 不显示（`referenceLabels` / `skillNames` 是 ui-primitives 的包私有投影，拿不到也不编造）；② 文件类型图标退化为**扩展名徽标**
   （`.chatFileExt` —— ui-primitives 的 `FileTypeIcon` / `fileExtension` 不在其导出表）；③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：气泡底色 `--cm-surface-2`（宿主 `--dsw-specific-bubble`，本仓库 token 层没有这一档）、
   圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
-- **形态开关**：两档偏好（`per-message` 缺省 / `turn`）经 `src/client/chat/chat-entry-pref.ts` 存 localStorage 键 `dcm.chat-entry-mode`，热切换；面板入口以 T2 交付为准。**两档互斥（2026-10-10）**：`per-message` 档下回合尾入口（`conversation.chat.turnTail`）**一次都不注册**（`planChatEntryRegistrationForMode` 直接 skip）⇒ 同屏只有一颗 icon；`turn` 档才注册 turnTail，且不接管 `user` 渲染器。**不得**再写成「两档并存」（那正是用户截图里两颗入口的来源）。**装配级实现（t13 / t17）**：两个入口由**同一次偏好订阅**驱动（`src/client/chat/chat-entry-mount.ts` 的 `mountChatEntries()`：每次变化先全退、再按当前档注册恰好一个）⇒ 切档 trace 恒 `[1,1,1,1]`、事件级峰值 1、切档后与「该档冷启动（刷新）」逐字一致；**槽位声明顺序无关**由**有界补试**（最多 4 次、声明一到位即停）达成 —— **是异步的**：声明到位 + 一个排程 tick 后恰好 1 入口，**同步瞬间可为 0 是设计而非缺陷**。
+- **只有一种形态：每条用户消息一颗**（2026-10-12 用户要求）：**「整回合」档整体删除** —— 偏好模块 `chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts` 与回合尾入口组件 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）一并下线，设置页回滚卡上那颗两档开关（`.rollbackChatEntry` + `Segmented`）与 `rollback.chatEntry.*` 五个键同步删除。
+  装配点因此退回最简形态：`ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({ probe, register }))` —— 单入口没有「切档互斥」问题（T13）也不再需要为后到的槽位声明补试（T17 的有界补试随双入口一起消失）。
 - **回退预览对话框 = 简洁版（2026-10-10 用户第三条要求）**：标题固定「回退预览」；正文只有**会被回退的文件**（路径 + 「+N 行」/「−M 行」；内容已一致的一项都不列，空数组显示「工作区与该回退点一致，无需恢复」；行数算不出来显示「行数未统计」而**不是 0**）；底部只有主按钮「回退」与「取消」。**没有**三选一 mode 单选、二次确认勾选、`allowPartial` 勾选、工作区 / 会话计数面板、救援点说明段、逐段结果详情面板、留点期 notice 面板 —— 这是**有意替换**（点「回退」即确认，对话框本身就是「预览 + 确认」两步）。视觉复用既有 `dialogMask` / `dialogCard` / `dialogWide` / `dialogBodyScroll` / `actionRow` 类，**不新增样式档位**；设置页 `RollbackCard` 的预览弹窗仍保留完整能力。
 - **升级风险**：宿主改用户消息渲染器 / 槽位契约 → 复刻老旧或错位。软失败：声明形态不是 `keyed` 就**跳过注册**（只丢这一个入口），回合号取不到就**如实禁用按钮**（每个禁用原因有自己的字典键）。
   风险与差距登记 = `docs/spec/known-gaps.md` G-39。
@@ -1234,7 +1262,7 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
     `repoPicker.privateOnly`、`diskUsage.clean.hint`、`recovery.safeMode.detail`、`sessions.repair.desc`、
     `recovery.rescue.desc`、`sessions.layout.planReadOnly`、`recovery.incomplete.hint`、`snapshots.selectHint`、
     `foreign.lossy.hint`、`foreign.previewDryRun`、`myconfigs.upload.selectHint`、`myconfigs.upload.mode.shareHint`、
-    `rollback.chatEntry.hint`、`rollback.preview.hint`；`cloud.gistLargeSectionHint`（走常量而非字面量，
+    `rollback.preview.hint`；`cloud.gistLargeSectionHint`（走常量而非字面量，
     故不进 `MOVE_PINS`，但同样已进 ⓘ）；
   - **`rollback.autopoint.hint` 下线渲染点**：它与卡头 ⓘ 的 `rollback.desc` 同义（后者是超集），
     字典键保留、界面上不再重复一行；

@@ -2,8 +2,8 @@
  * T1 判定层测试：**每条用户消息一个回退入口**（node:test，零依赖）。
  *
  * 六条验收点逐条落地：
- *  ① 槽位接管：注册 { name:'conversation.chat.node', key:'user' } 且**仅在**偏好为「每条消息」时注册；
- *     偏好「整回合」→ 一次都不注册（宿主渲染器原样）；steering 是**另一个** key，本插件从不注册它；
+ *  ① 槽位接管：注册 { name:'conversation.chat.node', key:'user' }（2026-10-12：入口只剩「每条用户消息」一种形态，
+ *     旧的「整回合」档、偏好模块与回合尾入口已删除）；steering 是**另一个** key，本插件从不注册它；
  *  ② 气泡能力面：文本（保留换行/空白）/ 图片（载荷逐字转发给 owner 的 renderMessageImages）/
  *     文件卡（文件名 + 扩展名 + 体积）/ **rest 兜底**（未知块进 raw，绝不静默丢弃）；
  *  ③ 按钮启用/禁用矩阵：六种禁用原因各自的判据（含「回合未收尾」与「未命中」）；
@@ -55,44 +55,11 @@ import {
   retryChatPointUntilHit,
   type ChatPointWindowState,
 } from './chat-point-window.ts'
-import { declaredSlotKind, mountChatNodeEntry, registerChatNodeEntry } from './chat-node-registration.ts'
-import {
-  CHAT_ENTRY_MODE_DEFAULT,
-  CHAT_ENTRY_MODE_KEY,
-  isChatEntryMode,
-  readChatEntryMode,
-  subscribeChatEntryMode,
-  writeChatEntryMode,
-} from './chat-entry-pref.ts'
-import { planChatEntryRegistration, planChatEntryRegistrationForMode, registerChatEntry } from './rollback-entry-view.ts'
+import { declaredSlotKind, registerChatNodeEntry } from './chat-node-registration.ts'
 import { en as chatEn, zh as chatZh } from './chat-locales.ts'
 import type { RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
 
 /* ------------------------------------------------------------ 夹具 */
-
-interface MemStorage {
-  map: Map<string, string>
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-}
-
-function withStorage<T>(run: (storage: MemStorage) => T): T {
-  const holder = globalThis as { localStorage?: unknown }
-  const previous = holder.localStorage
-  const map = new Map<string, string>()
-  const storage: MemStorage = {
-    map,
-    getItem: (key) => map.get(key) ?? null,
-    setItem: (key, value) => { map.set(key, value) },
-  }
-  holder.localStorage = storage
-  try {
-    return run(storage)
-  } finally {
-    if (previous === undefined) delete holder.localStorage
-    else holder.localStorage = previous
-  }
-}
 
 /** 宿主节点夹具：location.kind='step' + turn.turn/status（与宿主 turnOf 的读法同源）。 */
 function nodeOf(options: { kind?: string; turn?: number; status?: string; content?: unknown } = {}): unknown {
@@ -137,26 +104,10 @@ test('slot constants: chat.node keyed slot, user key, priority -1 (shadowing ran
   assert.equal(CHAT_NODE_PRIORITY, -1)
 })
 
-test('pref gating: per-message (default) registers into the keyed cell; turn mode registers NOTHING', () => {
-  assert.deepEqual(planChatNodeRegistration('keyed', 'per-message'), { kind: 'register' })
-  assert.deepEqual(planChatNodeRegistration('keyed', 'turn'), { kind: 'skip', reason: 'turn-mode' })
+test('registration plan: a keyed declaration registers; anything else is skipped, never thrown', () => {
+  assert.deepEqual(planChatNodeRegistration('keyed'), { kind: 'register' })
   assert.deepEqual(planChatNodeRegistration(null), { kind: 'skip', reason: 'slot-kind-mismatch', declared: null })
-  assert.deepEqual(planChatNodeRegistration('list', 'per-message'), { kind: 'skip', reason: 'slot-kind-mismatch', declared: 'list' })
-})
-
-test('register shell: turn mode never calls register (host UserMessageNodeView stays untouched)', () => {
-  const warnings: string[] = []
-  let called = 0
-  const disposer = registerChatNodeEntry({
-    probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
-    readMode: () => 'turn',
-    register: () => { called += 1; return () => {} },
-    warn: (message) => { warnings.push(message) },
-  })
-  assert.equal(called, 0, 'pref = turn must not register at all')
-  assert.equal(warnings.length, 1)
-  assert.ok(warnings[0]?.includes('turn'), 'the warning names the preference reason')
-  disposer()
+  assert.deepEqual(planChatNodeRegistration('list'), { kind: 'skip', reason: 'slot-kind-mismatch', declared: 'list' })
 })
 
 test('register shell: keyed declaration registers exactly once; non-keyed declaration is skipped, not thrown', () => {
@@ -164,7 +115,6 @@ test('register shell: keyed declaration registers exactly once; non-keyed declar
   let called = 0
   registerChatNodeEntry({
     probe: { spec: (key) => (key === CHAT_NODE_SLOT ? { kind: 'keyed', scope: 'session' } : undefined) },
-    readMode: () => 'per-message',
     register: () => { called += 1; return () => {} },
     warn: (message) => { warn.push(message) },
   })
@@ -175,7 +125,6 @@ test('register shell: keyed declaration registers exactly once; non-keyed declar
   let second = 0
   registerChatNodeEntry({
     probe: { spec: () => ({ kind: 'chain', scope: 'session' }) },
-    readMode: () => 'per-message',
     register: () => { second += 1; return () => {} },
     warn: (message) => { warn.push(message) },
   })
@@ -191,7 +140,6 @@ test('register shell: a throwing register() is contained (never takes the plugin
   const warn: string[] = []
   const disposer = registerChatNodeEntry({
     probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
-    readMode: () => 'per-message',
     register: () => { throw new Error('register exploded') },
     warn: (message) => { warn.push(message) },
   })
@@ -204,7 +152,6 @@ test('steering is a DIFFERENT key: we never register it (host renderer unchanged
   const keys: string[] = []
   registerChatNodeEntry({
     probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
-    readMode: () => 'per-message',
     register: () => { keys.push(CHAT_NODE_USER_KEY); return () => {} },
     warn: () => {},
   })
@@ -215,12 +162,6 @@ test('steering is a DIFFERENT key: we never register it (host renderer unchanged
   assert.equal(chatNodeKind(nodeOf({ kind: 'user' })), 'user')
 })
 
-test('turnTail fallback path is untouched: its registration plan still ships', () => {
-  assert.deepEqual(planChatEntryRegistration({ spec: () => ({ kind: 'list' }) }), { kind: 'register' })
-})
-
-/* ------------------------------------------------------------ ① 单入口纪律（2026-10-10 用户第二条） */
-
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 
 /** 读一个组件源码（*.tsx 不能在 node 下 type-strip 加载，故走源码级断言）。 */
@@ -229,7 +170,7 @@ function sourceOf(file: string): string {
 }
 
 test('icon-only：两个入口都只画图标（无文字标签、无边框按钮、不 import Button）', () => {
-  for (const file of ['ChatEntryView.tsx', 'RollbackTurnEntry.tsx']) {
+  for (const file of ['ChatEntryView.tsx']) {
     const src = sourceOf(file)
     assert.doesNotMatch(src, /from '\.\.\/common\/ui\.tsx'/, file + '：入口不得再 import Button（icon 级入口不用按钮组件）')
     assert.doesNotMatch(src, /<Button\b/, file + '：不得渲染 Button')
@@ -245,29 +186,6 @@ test('icon-only：两个入口都只画图标（无文字标签、无边框按�
   assert.doesNotMatch(entry, /title=\{t\('chat\.entry\.label'\)\}>\s*<RefreshIcon[^/]*\/>\s*[^<]/, '按钮里除图标外不得有文字')
 })
 
-test('单入口纪律：per-message 档下 turnTail 不注册，整回合档才注册（两档互斥）', () => {
-  const warnings: string[] = []
-  let registered = 0
-  registerChatEntry({
-    probe: { spec: () => ({ kind: 'list', scope: 'session' }) },
-    readMode: () => 'per-message',
-    register: () => { registered += 1; return () => {} },
-    warn: (message) => { warnings.push(message) },
-  })
-  assert.equal(registered, 0, '「每条用户消息」档：同屏不得出现两个回退入口')
-  assert.ok(warnings.some((line) => line.includes('per-message')))
-  registerChatEntry({
-    probe: { spec: () => ({ kind: 'list', scope: 'session' }) },
-    readMode: () => 'turn',
-    register: () => { registered += 1; return () => {} },
-    warn: (message) => { warnings.push(message) },
-  })
-  assert.equal(registered, 1, '「整回合」档：回合尾那一颗才是入口')
-  // 两档的登记面互补：per-message 注册 chat.node（keyed）、turn 注册 turnTail（list）
-  assert.deepEqual(planChatNodeRegistration('keyed', 'per-message'), { kind: 'register' })
-  assert.deepEqual(planChatEntryRegistrationForMode('per-message', { spec: () => ({ kind: 'list' }) }), { kind: 'skip', reason: 'per-message-mode', declared: null })
-})
-
 test('样式纪律：icon 入口与预览文件行只用既有 token/类，未引入第二套视觉体系', () => {
   const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
   // 新增的四个类都必须在唯一样式表里（组件里用了 css.* 却没定义就会渲染成 undefined）
@@ -280,93 +198,6 @@ test('样式纪律：icon 入口与预览文件行只用既有 token/类，未�
     assert.ok(used.has(name), '本任务新增/复用的类必须真的被组件用到：' + name)
     assert.ok(new RegExp('\\.' + name + '(?![A-Za-z0-9_-])').test(cssSheet), 'config-manager.module.css 缺类名：' + name)
   }
-})
-
-/* ------------------------------------------------------------ ① 偏好读写 */
-
-test('pref: default is per-message, unknown values fall back to the default, round-trips', () => {
-  assert.equal(CHAT_ENTRY_MODE_DEFAULT, 'per-message')
-  assert.ok(isChatEntryMode('per-message') && isChatEntryMode('turn'))
-  assert.ok(!isChatEntryMode('per_user_message'))
-  withStorage((storage) => {
-    assert.equal(readChatEntryMode(), 'per-message', 'no key -> default')
-    storage.map.set(CHAT_ENTRY_MODE_KEY, 'garbage')
-    assert.equal(readChatEntryMode(), 'per-message', 'unknown stored value -> default (never half-open)')
-    assert.equal(writeChatEntryMode('turn'), true)
-    assert.equal(readChatEntryMode(), 'turn')
-    assert.equal(writeChatEntryMode('per-message'), true)
-    assert.equal(readChatEntryMode(), 'per-message')
-  })
-})
-
-test('pref: storage missing or throwing degrades to the default (feature stays on)', () => {
-  const holder = globalThis as { localStorage?: unknown }
-  const previous = holder.localStorage
-  try {
-    delete holder.localStorage
-    assert.equal(readChatEntryMode(), 'per-message')
-    assert.equal(writeChatEntryMode('turn'), false, 'no storage -> honest false, no throw')
-    holder.localStorage = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } }
-    assert.equal(readChatEntryMode(), 'per-message')
-    assert.equal(writeChatEntryMode('turn'), false)
-  } finally {
-    if (previous === undefined) delete holder.localStorage
-    else holder.localStorage = previous
-  }
-})
-
-test('pref subscription: listeners fire only on a real change, and writeChatEntryMode reports storage failures', () => {
-  withStorage(() => {
-    const seen: string[] = []
-    const off = subscribeChatEntryMode((mode) => { seen.push(mode) })
-    assert.equal(writeChatEntryMode('per-message'), true, 'storing the current value still succeeds')
-    assert.deepEqual(seen, [], 'no notification when the value did not change')
-    assert.equal(writeChatEntryMode('turn'), true)
-    assert.equal(writeChatEntryMode('per-message'), true)
-    assert.deepEqual(seen, ['turn', 'per-message'])
-    off()
-    assert.equal(writeChatEntryMode('turn'), true)
-    assert.deepEqual(seen, ['turn', 'per-message'], 'unsubscribed listeners stop receiving')
-  })
-})
-
-test('hot swap: switching the preference registers/unregisters immediately (no page reload needed)', () => {
-  const events: string[] = []
-  let listener: ((mode: 'per-message' | 'turn') => void) | null = null
-  let live = 0
-  let mode: 'per-message' | 'turn' = 'per-message'
-  const disposer = mountChatNodeEntry({
-    probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
-    register: () => {
-      live += 1
-      events.push('register')
-      return () => { live -= 1; events.push('dispose') }
-    },
-    // 与真实装配一致：登记时**重读**偏好（不是快照）
-    readMode: () => mode,
-    subscribe: (fn) => { listener = fn; return () => { listener = null } },
-    warn: () => {},
-  })
-  assert.deepEqual(events, ['register'], 'per-message at mount -> registered once')
-  assert.equal(live, 1)
-
-  // 外部把偏好切成「整回合」→ 必须退掉我们的接管（宿主渲染器回来）
-  const swap = listener as unknown as ((next: 'per-message' | 'turn') => void) | null
-  assert.ok(swap !== null)
-  mode = 'turn'
-  ;(swap as (next: 'per-message' | 'turn') => void)('turn')
-  assert.deepEqual(events, ['register', 'dispose'], 'turn mode -> our registration is disposed')
-  assert.equal(live, 0)
-
-  // 再切回来 → 重新登记（顺序必须是 dispose 之后才 register，否则同 cell 同 priority 会抛）
-  mode = 'per-message'
-  ;(swap as (next: 'per-message' | 'turn') => void)('per-message')
-  assert.deepEqual(events, ['register', 'dispose', 'register'])
-  assert.equal(live, 1)
-
-  disposer()
-  assert.deepEqual(events, ['register', 'dispose', 'register', 'dispose'])
-  assert.equal(listener, null, 'the preference subscription is released with the mount')
 })
 
 /* ------------------------------------------------------------ ⑤ 回合号只认可核实字段 */

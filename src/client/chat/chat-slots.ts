@@ -1,11 +1,11 @@
 /**
  * ui-chat 聊天槽位在本仓库的**类型镜像**（SlotMap / SessionStandardProps 声明合并）。
  *
- * 为什么需要这个文件：`conversation.chat.node` / `conversation.chat.turnTail` 与 session 标准 props
- * 的真实声明属于 `@deepseek-ai/dsh-client-ui-chat`（+ `dsh-client-ui-session`），而本仓库的依赖里
- * **没有**它们（package.json 的 @deepseek-ai 只有 cordis / client-runtime / client-locale /
- * ui-settings / ui-slots）。不镜像就类型不过：ui-slots 的 `SlotMap` 只是个空合并点，
- * `ctx.slots.register({ name })` 的 K 必须落在 SlotMap 里。
+ * 为什么需要这个文件：`conversation.chat.node` 与 session 标准 props 的真实声明属于
+ * `@deepseek-ai/dsh-client-ui-chat`（+ `dsh-client-ui-session`），而本仓库的依赖里**没有**它们
+ * （package.json 的 @deepseek-ai 只有 cordis / client-runtime / client-locale / ui-settings / ui-slots）。
+ * 不镜像就类型不过：ui-slots 的 `SlotMap` 只是个空合并点，`ctx.slots.register({ name })` 的 K 必须落在
+ * SlotMap 里。
  *
  * ## 镜像来源（**逐条核过真机 app.asar，不是猜的**）
  *
@@ -14,7 +14,7 @@
  * conversation.chat.turnTail / conversation.chat.assistant-actions / conversation.view /
  * conversation.composer.dock / conversation.approval.detail）。
  *
- * ### `conversation.chat.node`（本插件 T1 起**接管**其 `user` key）
+ * ### `conversation.chat.node`（本插件**接管**其 `user` key）
  *
  *   kind: 'keyed' · scope: 'session'
  *   ownerProps: { groupPart?, cwd, openFile, openSkill, inspectCall, forkAt, loadImage,
@@ -34,32 +34,23 @@
  * 由我们自己消费（宿主的 UserMessageNodeView 用同一份）。其余 key（`steering` 等）不在 `keyProps` 里
  * ⇒ 它们的 props 是普通 owner 面 —— 本插件**不注册**它们，宿主的渲染器原样工作。
  *
- * ### `conversation.chat.turnTail`（整回合一个入口的兜底路径）
+ * ### `conversation.chat.turnTail`（本插件**不再注册**）
  *
- *   kind: 'list' · scope: 'session'
- *   ownerProps: { turn: TurnLocation; seq: number; openFile: (path: string) => void }
- *   registerOptions: id(必填) / order(可选) / label(可选)
- *   replaceRisk: 'none'（list 位：新 id 只会**追加**一个条目，不遮蔽任何 shipped UI）
+ * 2026-10-12（用户要求「聊天内回退入口只有每条用户消息」）：回合尾那一颗入口连同它的「整回合」偏好档
+ * 一起删除 —— 本文件因此**不再镜像**该槽位（没有人再对它 `register`，也没有组件 props 需要推导）。
+ * 历史证据（0.1.5-rc.2 的 `chain` 形态 vs 0.2 的 `list` 形态）保留在
+ * `docs/lessons/recovery-console.md`，不再需要面向它的形态探测。
  *
  * ## 版本差异（T9-F2 的真机证据；登记处据此做形态探测）
  *
- * 同一个 turnTail key 在两个版本的契约**不是一个形态**（实测两份安装树）：
- *  · DSH 0.2.0-rc.2（本机 app.asar）：`kind: 'list'`，ownerProps `{turn, seq, openFile}`，
- *    registerOptions `id` 必填 + `order`，replaceRisk `none`；
- *  · DSH 0.1.5-rc.2（隔离实例 `~/.dsh/profiles/node_modules`）：
- *    `lib/types/client/contract/slots.d.ts:181-185` = `{ kind: 'chain'; scope: 'session'; owner: TurnTailOwnerProps }`
- *    —— chain 缺 `select` 会抛，按 list 形态（id/order）注册就会抛。
- *  本文件镜像的是 **0.2 的契约**（组件 props 推导全走 SlotMap）；面向 0.1.x 的兼容靠两处
- *  **形态探测 + 失败软化**：`rollback-entry-view.ts` 的 `planChatEntryRegistration`（turnTail）
- *  与 `chat-entry-view.ts` 的 `planChatNodeRegistration`（chat.node）——探测到非预期形态就**跳过注册**
- *  （只丢这一个入口，不拿本插件其余槽位与宿主启动去赌），并在 0.1.x 上如实地不提供聊天入口。
+ * `conversation.chat.node` 在旧版 ui-chat 上可能不是 keyed 形态；登记处（`chat-node-registration.ts`）
+ * 因此**先探测后注册**，形态不符就跳过（只丢这一个入口，不拿本插件其余槽位与宿主启动去赌）。
  *
  * 风险与出路：若将来本仓库安装了 ui-chat / ui-session 的类型，同一键若形状不同会以
  * **TS2717（重复声明类型不一致）**报错 —— 那是响亮失败而不是静默错用；届时删掉本文件里
  * 对应的那一条即可（组件 props 的推导全部走 SlotMap，无需改组件）。
  */
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
-import type { TurnLocation } from '@deepseek-ai/dsh-client-runtime/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   /**
@@ -110,24 +101,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
         cwd?: string
         /** 节点（宿主 `ChatNodeSeat` 把 routedNode 摊进 owner 的最后一个字段）。 */
         node?: unknown
-      }
-    }
-
-    /**
-     * 回合尾追加位（list / session）：在回合收尾正文之后、动作行之前渲染。
-     * 条目拿到的 owner props 与 ui-chat 的
-     * `renderSlot('conversation.chat.turnTail', { turn, seq, openFile })` 逐字对齐。
-     */
-    'conversation.chat.turnTail': {
-      kind: 'list'
-      scope: 'session'
-      owner: {
-        /** 该条回合尾所属的回合（`status === 'closed'` 才算收尾）。 */
-        turn: TurnLocation
-        /** 收尾节点的序号。 */
-        seq: number
-        /** 宿主提供的文件打开器（本插件不消费，保持契约完整）。 */
-        openFile: (path: string) => void
       }
     }
   }

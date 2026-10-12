@@ -16,10 +16,6 @@ import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { en, zh } from './recovery-locales.ts'
-// T2：面板开关的两档 / 缺省 / 存储键都取 **T1 交付的偏好模块**（唯一来源）—— 它一变，本用例与面板文案同时红。
-import { CHAT_ENTRY_MODES, CHAT_ENTRY_MODE_DEFAULT, CHAT_ENTRY_MODE_KEY, writeChatEntryMode } from '../chat/chat-entry-pref.ts'
-// 热切换的**真实**装配（T1 交付）：面板写入后必须走它 —— 本用例用真模块（不注入 readMode/subscribe）跑一遍。
-import { mountChatNodeEntry } from '../chat/chat-node-registration.ts'
 import {
   ROLLBACK_CODES,
   ROLLBACK_GUIDANCE_CODES,
@@ -142,10 +138,7 @@ const ROLLBACK_FIXED_KEYS: readonly string[] = [
   'rollback.delete.confirmMessage', 'rollback.delete.protected',
   'rollback.storage.unavailable',
   // 台账弹窗（2026-10-12：卡退出折叠，台账按会话分组进弹窗）
-  'rollback.dialog.title', 'rollback.dialog.open',
-  // T2：聊天内回退入口形态开关（回滚卡上的「一键退回回合尾」保险）
-  'rollback.chatEntry.label', 'rollback.chatEntry.hint', 'rollback.chatEntry.perMessage',
-  'rollback.chatEntry.turn', 'rollback.chatEntry.saveFailed',
+  'rollback.dialog.title', 'rollback.dialog.open', 'rollback.sessions.title',
 ]
 
 test('S7：rollback.* 键 zh/en 成对且非空（判定层会发出的键一个都不缺）', () => {
@@ -328,58 +321,6 @@ test('渲染文案不得含字面 markdown 标记 **（面板纯文本渲染）'
   assert.deepEqual(offenders, [], '这些键的文案含字面 **，面板纯文本渲染会原样显示星号：' + offenders.join(', '))
 })
 
-/**
- * T2：聊天内回退入口形态开关（回滚卡上的「一键退回回合尾」保险）文案守卫。
- *
- * 两侧诚实：面板上那两句话必须与 **T1 交付的偏好模块**（src/client/chat/chat-entry-pref.ts）
- * 逐条对得上 —— 两档语义、缺省档（每条用户消息）、以及「切换即时生效」（T1 的 mountChatNodeEntry
- * 订阅 subscribeChatEntryMode，值真变即 dispose → register）。这里直接 import 偏好模块：
- * 档位 / 缺省 / 存储键一变，本用例与面板文案一起红（不靠注释对齐）。
- */
-const CHAT_ENTRY_KEYS: readonly string[] = [
-  'rollback.chatEntry.label', 'rollback.chatEntry.hint', 'rollback.chatEntry.perMessage',
-  'rollback.chatEntry.turn', 'rollback.chatEntry.saveFailed',
-]
-
-test('T2：开关两档与偏好模块逐条对齐（档位 / 缺省 / zh 逐字 / en 镜像）', () => {
-  const zhDict: Record<string, string> = zh
-  const enDict: Record<string, string> = en
-  // ① 偏好模块的档位与缺省就是面板展示的两档（新增档位 / 改缺省即红）
-  assert.deepEqual([...CHAT_ENTRY_MODES], ['per-message', 'turn'], '偏好只有两档，顺序即面板展示顺序')
-  assert.equal(CHAT_ENTRY_MODE_DEFAULT, 'per-message', '缺省档 = 每条用户消息（面板缺省值必须一致）')
-  assert.equal(CHAT_ENTRY_MODE_KEY, 'dcm.chat-entry-mode', '偏好键名（只在这一处断言，组件不得出现它）')
-  // ② zh 逐字（用户看到的两个选项名就是这两句）
-  assert.equal(zhDict['rollback.chatEntry.perMessage'], '每条用户消息', 'zh 选项名必须逐字为「每条用户消息」')
-  assert.equal(zhDict['rollback.chatEntry.turn'], '整回合', 'zh 选项名必须逐字为「整回合」')
-  assert.notEqual(zhDict['rollback.chatEntry.perMessage'], zhDict['rollback.chatEntry.turn'], '两个选项名不得同形')
-  // ③ 键集齐备（zh/en 各 5 条，en 由 Record<keyof typeof zh> 编译期兜底 + 这里运行期再兜一层）
-  for (const [lang, dict] of [['zh', zhDict], ['en', enDict]] as ReadonlyArray<[string, Record<string, string>]>) {
-    for (const key of CHAT_ENTRY_KEYS) {
-      assert.equal(typeof dict[key], 'string', lang + ' 缺键：' + key)
-      assert.notEqual(dict[key]?.trim(), '', lang + ' 空文案：' + key)
-    }
-    const measured = Object.keys(dict).filter((key) => key.startsWith('rollback.chatEntry.')).sort()
-    assert.deepEqual(measured, [...CHAT_ENTRY_KEYS].sort(), lang + ' 的 rollback.chatEntry.* 键集必须与守卫清单逐项相等')
-  }
-})
-
-test('T2：开关说明必须写清两档行为 + 即时生效 + 偏好只在本浏览器（zh/en 两侧）', () => {
-  const zhHint: string = zh['rollback.chatEntry.hint']
-  const enHint: string = en['rollback.chatEntry.hint']
-  // zh：两档真实行为（接管气泡并内嵌按钮 / 完全不接管、入口退回回合尾）+ 即时生效 + 偏好范围
-  for (const token of ['每条用户消息', '接管', '气泡', '回退', '整回合', '回合尾', '立即生效', '无需重启', '无需刷新', '这台浏览器', '导出包']) {
-    assert.ok(zhHint.includes(token), 'zh 说明必须写清：' + token)
-  }
-  // en：镜像同义（逐项对应，不得漏项）
-  for (const token of ['per user message', 'takes over', 'bubble', 'rewind', 'whole turn', 'turn tail', 'immediately', 'no restart', 'no page refresh', 'this browser', 'exported backups']) {
-    assert.ok(enHint.toLowerCase().includes(token), 'en 说明必须写清：' + token)
-  }
-  // 写失败必须如实说「这次没生效」（不得把界面留在「显示已切换」的假状态）
-  assert.ok(zh['rollback.chatEntry.saveFailed'].includes('没有生效'), 'zh 写失败文案必须说「没有生效」')
-  assert.ok(zh['rollback.chatEntry.saveFailed'].includes('保持原样'), 'zh 写失败文案必须说形态保持原样')
-  assert.ok(en['rollback.chatEntry.saveFailed'].includes('did not take effect'), 'en 写失败文案必须说 did not take effect')
-})
-
 test('T2：不得出现「要重启 / 刷新才生效」这类与热切换矛盾的说法（任何键、任何语言）', () => {
   const contradicts: RegExp[] = [
     /重启后生效/, /重启才生效/, /重启后应用/, /刷新后生效/, /刷新页面后生效/,
@@ -390,45 +331,4 @@ test('T2：不得出现「要重启 / 刷新才生效」这类与热切换矛盾
     for (const re of contradicts) if (re.test(value)) offenders.push(key + ' :: ' + String(re))
   }
   assert.deepEqual(offenders, [], '切换是即时的（T1 订阅热切换），文案不得要求重启/刷新：' + offenders.join(', '))
-})
-
-/**
- * T2：面板写入路径**真的**触发热切换（行为级证据，不是「文案说它即时生效」）。
- *
- * 面板的切换动作就一句：`writeChatEntryMode(next)`。本用例用 T1 的**真实**模块
- * （chat-entry-pref 的真 write + 真 subscribe + 真 read，chat-node-registration 的真装配）
- * 跑一遍 —— 不注入 readMode/subscribe，只有浏览器存储换成内存 mock：
- *  ① 缺省（每条用户消息）→ 接管一次；
- *  ② 写入 'turn' → **立刻**退掉接管（宿主 UserMessageNodeView 回来），无需重启；
- *  ③ 写回 'per-message' → 立刻重新登记，且顺序是先退后登（同 cell 同 priority 再注册会抛）。
- */
-test('T2：面板切到「整回合」后立刻退掉接管（真模块走一遍：写入 → dispose → register）', () => {
-  const store = new Map<string, string>()
-  const holder = globalThis as { localStorage?: unknown }
-  const saved = holder.localStorage
-  holder.localStorage = {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => { store.set(key, value) },
-  }
-  try {
-    const events: string[] = []
-    const disposer = mountChatNodeEntry({
-      probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
-      register: () => { events.push('register'); return () => { events.push('dispose') } },
-      warn: () => {},
-    })
-    assert.deepEqual(events, ['register'], '缺省档（每条用户消息）→ 装配期接管一次（面板初值与它同源）')
-    // 面板 onchange 的确切调用（RollbackCard.applyChatEntryMode 的成功分支）
-    assert.equal(writeChatEntryMode('turn'), true, '写入成功')
-    assert.deepEqual(events, ['register', 'dispose'], '写入后立刻退掉接管：无需重启、无需刷新')
-    assert.equal(writeChatEntryMode('per-message'), true, '切回每条用户消息')
-    assert.deepEqual(events, ['register', 'dispose', 'register'], '立刻重新登记（先退后登，避免同 priority 冲突）')
-    assert.equal(writeChatEntryMode('per-message'), true, '重放同一个值时写入仍成功')
-    assert.equal(events.length, 3, '值没变 ⇒ 不发多余通知（面板重放同值不会重新登记）')
-    disposer()
-    assert.deepEqual(events, ['register', 'dispose', 'register', 'dispose'], '退订后不再有登记（不泄漏监听）')
-  } finally {
-    if (saved === undefined) delete holder.localStorage
-    else holder.localStorage = saved
-  }
 })

@@ -150,7 +150,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'about.subtitle', file: 'src/client/about/AboutPanel.tsx', kind: '背景' },
   { key: 'history.subtitle', file: 'src/client/history/HistoryPanel.tsx', kind: '机制' },
   { key: 'rollback.desc', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
-  { key: 'rollback.chatEntry.hint', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
   { key: 'rollback.preview.hint', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
   { key: 'import.select.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.consult.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
@@ -393,7 +392,7 @@ test('t6-1 MOVE：83 个说明键都已收进 ⓘ（逐字复用原键）且不�
   // 扫描范围自检：客户端源码至少覆盖 t6 涉及的面板目录
   const dirs = new Set(MOVE_PINS.map((p) => p.file.split('/').slice(0, 3).join('/')));
   assert.ok(dirs.size >= 8, 'MOVE 清单必须覆盖全部面板目录（实际 ' + String(dirs.size) + ' 个）');
-  assert.ok(MOVE_PINS.length === 83, 'MOVE 清单长度应为 83（实际 ' + String(MOVE_PINS.length) + '）');
+  assert.ok(MOVE_PINS.length === 82, 'MOVE 清单长度应为 82（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',

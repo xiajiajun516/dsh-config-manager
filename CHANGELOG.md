@@ -34,7 +34,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > **回退预览改成「确认撤销」式弹窗，「查看」把单文件差异开进右侧栏**（用户 2026-10-12）：旧弹窗只有一个标题、一列绝对路径和两行行数，
 > 看不出「这次动作会做什么」，文件也点不开 —— 唯一出路是回退完再看。
 > - 弹窗换成 Cursor「Confirm Undo」式底盘：说明行 + 文件行（**只显示文件名** + `+N −M`，完整路径进 title 悬停可见）+ **悬停 / 键盘 focus** 才显形的「查看」；「将被回退的文件：」小节标题已去掉，
-> 底部仍是「回退 / 取消」两颗按钮；**不引入**无功能的勾选框 —— 我们的回退是整体语义，放一个取消不掉的勾选框只是装饰。
+> 底部仍是「回退 / 取消」两颗按钮；**不引入**无功能的勾选框 —— 我们的回退是整体语义，放一个取消不掉的勾选框只是装饰。（**2026-10-12 用户第 1 条已推翻这一句**：顶部加回一颗**有语义**的选择框「回退文件的更改」，勾 = 文件 + 对话一起退、取消 = 只退对话；它不是二次确认，也不参与主按钮可点性 —— 见下方 Changed 段。）
 > - 「查看」→ **DSH 右侧栏**新增本插件自己的标签页类型（kind `cm-rollback-diff`）：只读展示该文件「当前 → 回退后」的逐行对照；
 > 本客户端没有侧栏能力（旧版 / 服务缺失 / 打开抛错）时**如实降级**为弹窗内展示同一份差异，并说明为什么在这里看。
 > - 新只读端点 `GET /recovery/rollback-points/<id>/file-diff?path=…`：只认**记录在案**的路径（未命中一律 `file-not-recorded`，一个字节都不读）；
@@ -164,7 +164,58 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Guards**: `src/core/rollback-point.test.ts` (25 cases, including t13’s capture-boundary R-21①–⑤), `tests/route/recovery-rollback.test.ts` (5 cases: all sub-paths reachable + unconfirmed 409 with zero writes / 404·405·400 / 503 + guidance / protected point 409 / SAFE MODE 423),
 >   `src/ui/rollback-view.test.ts` (12 cases, including a source-level assertion that the config third state no longer exists), `src/client/chat/rollback-entry-view.test.ts` and `src/client/common/client-route-parity.test.ts` (6 endpoints checked in both directions).
 
+> **聊天回退预览弹窗对齐 Cursor「Confirm Undo」：七处体验修正**（2026-10-12 用户要求）：
+> - **① 顶部选择框「回退文件的更改」**（`chat.preview.revertFiles`）：勾 = `files+session`（默认，文件与对话一起退）、取消 = `session`（只退对话，工作区一个字节都不动）；
+>   工作区态没有可用记录（`preview.workspace.available !== true`）时**禁用** —— 那时没有文件可退，开关点了也没有区别。它只置 `mode`（`setRevertFiles` 是该字段唯一置位入口），
+>   **不是**二次确认勾选：确认仍只由点主按钮那一刻置位，`buildRewindOptions` 仍要求恰好 `confirmed=true`（确认门一字未松）。**这条推翻了本轮早先「不引入勾选框」的口径** —— 那个勾选框当时确实没有语义，现在它有。
+> - **② `+N −M` 紧跟文件名**：旧版文件名是 `flex: 1 1 auto`，统计被推到行尾、中间一大段空白（用户截图里「+1 −0」飘在最右）。现在文件名 `flex: 0 1 auto`（过长单行省略，完整路径仍在 title），弹性空隙只留在「查看」之前。
+> - **③ 入场动画 + 「查看」的显形动画**：弹窗入场改为**淡入 + 4px 上浮**（**不加 scale** —— 卡片靠 `translate(-50%,-50%)` 自居中，scale 会改变可见尺寸，正是真机「先在偏下出现、再闪到中心」的根因）；
+>   「查看」从瞬时出现改为 `opacity` + `translateX(4px)` 过渡（`visibility` 本身不参与过渡，否则淡出被延迟拖住）。
+> - **④ 「查看」按钮无边框 + 悬停高亮背景**（`--cm-line-1`），与聊天入口 `.chatActionBtn:hover` 同一视觉语言；键盘 Tab（`:focus-visible`）同样会显形，它不是「只能用鼠标」的操作。
+> - **⑤ 点「查看」= 开进右侧栏后顺手关掉弹窗**：此前模态一直盖在新开的侧栏上，用户还得再点一次「取消」才看得到差异。**只有真的开成功才关**；侧栏不可用 / 调用失败仍降级为弹窗内展示同一份差异（两种原因两句话，绝不假装打开过）。
+> - **⑥ 整文件删除写「删除」**（`rollback.preview.file.deleted`）：该点**未记录**的新建内容（`preview.workspace.leftovers`；宿主 rewind 的 `removeCreated` **缺省为真**，见 `src/routes/recovery.ts:445`）此前根本不在弹窗里 —— 它以计数藏在设置页；
+>   现在逐条列出并写「删除」而不是 `+0 −N`（后者是「把文件清空」的意思，两件事）。清单被截断、或短于 `createdAfter`（宿主上限 20 条）时补一句「（清单已截断）」。
+>   引擎 `files[].status` 至今**永不产出** `delete`，所以界面按 `status === 'delete'` 渲染只是一条向前兼容分支，删除这件事**只**从 leftovers 读。
+>   **配套诚实修正**：`rollbackPreviewNote()` 把「会删掉未记录的新建文件」也算进「工作区真会改动」—— 否则这类点上会上一句不实的「工作区与该回退点一致，无需恢复」（假尾句禁令）。
+> - **⑦ 文件名前加文件类型图标**：装了 `dsh-better-sidebar` 就用它发布的 `betterSidebar.fileIcon(path, size)`（它自己的缺省档就是 DSH 的画法，用户的扩展图标也一起生效），否则用 DSH 自带的 `FileTypeIcon`（`@deepseek-ai/dsh-client-ui-primitives`，DSH 左侧文件树同一颗）；
+>   该包**惰取 + try/catch**（`RollbackFileIcon.tsx` 的 `dshFileTypeIcon()`），**绝不在模块顶层 import** —— 老宿主没有模块表 seed 时顶层 require 会让整个浏览器半加载失败；两条都不通才用本地极简 SVG。
+> - **护栏**：`src/client/chat/rollback-entry-view.test.ts`（源级：恰好一颗选择框 / 统计块类 / 删除键 / 图标 / 打开成功关弹窗；单测：`setRevertFiles` 两档与 wire 请求体逐字对齐、删除清单读法与两种「清单不完整」）、`src/ui/rollback-view.test.ts`（⓪ 分支：会删文件时不得上屏「无需恢复」）、`src/utils/bundle-scan.test.ts` + `src/client/bundle-selfcontained.test.ts`（白名单加 `@deepseek-ai/dsh-client-ui-primitives`，只允许那一条**带 try/catch 的帧内 require**）。
+> - **NOT VERIFIED**：真机浏览器的观感取证（入场动画手感、图标配色、悬停动画时序）—— 本仓无组件测试框架，故只做到「源码级 + 纯函数级」判定。
+
+> **The in-chat rewind preview dialog now follows Cursor's "Confirm Undo": seven UX fixes** (user request, 2026-10-12):
+> - **① A selection box at the top, "Revert file changes"** (`chat.preview.revertFiles`): checked = `files+session` (default, files and conversation together), unchecked = `session` (conversation only, the workspace is not touched at all);
+>   it is **disabled** when the workspace state has no usable record (`preview.workspace.available !== true`) — there is nothing to revert then, so a live switch would be a lie. It only sets `mode` (`setRevertFiles` is the single setter);
+>   it is **not** a second confirmation: confirmation is still set only at the moment the primary button is clicked, and `buildRewindOptions` still requires exactly `confirmed=true` (the confirmation gate is untouched). **This supersedes the earlier "no checkbox" stance of this round** — that box had no semantics back then; this one does.
+> - **② `+N −M` sits right next to the file name**: the name used to be `flex: 1 1 auto`, pushing the counts to the far right with a wide gap (the user's screenshot shows `+1 −0` floating at the edge). The name is now `flex: 0 1 auto` (single-line ellipsis, full path still in `title`) and the flexible gap lives only before "View".
+> - **③ Enter animation + the reveal animation of "View"**: the dialog now **fades in with a 4px rise** (**no scale** — the card self-centres via `translate(-50%,-50%)` and scale changes its visible size, which is exactly the "appears lower, then jumps to the centre" defect); "View" animates with `opacity` + `translateX(4px)` instead of appearing instantly (`visibility` itself is not transitioned, otherwise the fade-out waits on the delay).
+> - **④ The "View" button has no border and highlights its background on hover** (`--cm-line-1`), matching the chat entry's `.chatActionBtn:hover`; keyboard Tab (`:focus-visible`) reveals it too, so it is not mouse-only.
+> - **⑤ Clicking "View" opens the right sidebar and closes the dialog**: the modal used to stay on top of the freshly opened sidebar, forcing a second click on Cancel. **It closes only when the open really succeeded**; without a sidebar (or when the call fails) the same diff is shown inline with an honest sentence for each reason — never a pretend open.
+> - **⑥ Deleting a whole file now reads "Delete"** (`rollback.preview.file.deleted`): files the point does **not** record (that is `preview.workspace.leftovers`; the host's rewind has `removeCreated` **true by default**, see `src/routes/recovery.ts:445`) never appeared in this dialog at all — they were only counted in the settings page;
+>   they are now listed row by row and labelled "Delete" instead of `+0 −N` (the latter means "the file was emptied", a different fact). When the list is truncated, or shorter than `createdAfter` (host cap of 20), one "(list truncated)" line is added.
+>   The engine's `files[].status` still **never emits** `delete`, so the `status === 'delete'` branch is forward-compatibility only; deletions are read **only** from the leftovers.
+>   **Matching honesty fix**: `rollbackPreviewNote()` now also treats "will delete unrecorded new files" as "the workspace really changes" — otherwise such points got a false "the workspace already matches this rollback point, nothing to restore" (the false-trailing-sentence ban).
+> - **⑦ A file-type icon in front of every file name**: with `dsh-better-sidebar` installed we use its published `betterSidebar.fileIcon(path, size)` (its own default artwork *is* DSH's, and user-registered icons come with it), otherwise DSH's own `FileTypeIcon` (`@deepseek-ai/dsh-client-ui-primitives`, the very one DSH's file tree uses);
+>   that package is **loaded lazily inside try/catch** (`dshFileTypeIcon()` in `RollbackFileIcon.tsx`) and **never imported at module top level** — on an older host without the module-table seed a top-level require would fail the whole browser half; only when both paths fail do we draw a minimal local SVG.
+> - **Guards**: `src/client/chat/rollback-entry-view.test.ts` (source-level: exactly one selection box / the stat block class / the delete key / the icon / close-on-successful-open; unit: both `setRevertFiles` tiers matching the wire body, the deletion-list reader and both kinds of truncated list), `src/ui/rollback-view.test.ts` (the ⓪ branch: never say "nothing to restore" when files will be deleted), `src/utils/bundle-scan.test.ts` + `src/client/bundle-selfcontained.test.ts` (the whitelist gains `@deepseek-ai/dsh-client-ui-primitives`, allowing only that one guarded in-frame require).
+> - **NOT VERIFIED**: real-browser evidence of the look and feel (enter animation, icon colours, hover timing) — this repo has no component test framework, so the verdict stops at source-level plus pure-function level.
+
 ### 🔧 变更 · Changed
+
+> **聊天内回退入口只剩「每条用户消息」；回滚点台账改成左右分栏**（2026-10-12 用户要求）：
+> - **删掉「整回合」档**：偏好模块 `src/client/chat/chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts` 与回合尾入口组件 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）整体下线；设置页回滚卡上的两档开关（`Segmented`）与 `rollback.chatEntry.*` 五个键一并删除。装配退回单入口 `ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry(…))` —— 不再有「切档互斥」与「槽位声明顺序补试」两套复杂度。
+> - **台账弹窗 = 左栏选对话 / 右栏看该对话的回滚点**（`.rollbackLedger` / `.rollbackSessions` / `.rollbackSessionItem` / `.rollbackLedgerMain`）：左栏列出**拥有回滚点的对话**（等宽会话 id + 点数 + 最新时间），默认**从新对话到旧对话**（组间顺序由 `rollbackPointGroups` 按各组最新时间倒序定死）；选中的键在刷新后失效时自动回落到第一条，绝不显示空右栏。
+> - **修复「点刷新整个页面抖动」**：旧实现每次刷新都 `setStatus('loading')`，弹窗正文从整张台账塌成一行 Spinner（弹窗高度骤变、背后的卡片同时换形态）。现在刷新走 `load({ keep: true })` —— 保留旧内容，只在刷新按钮上显示在途；刷新失败也不清空已有台账，如实报错。
+> - **修复「回退预览弹窗文字与按钮贴边」**：该弹窗正文原先**没有**包在 `Modal.Body` 里（只有标题行有内边距），现在与台账弹窗一样包进 `Modal.Body scroll`。
+> - **护栏**：`src/client/recovery/recovery-panel-layout.test.ts` 新增「台账弹窗分栏 / 刷新不抖 / 预览留白」；`rollback.sessions.title` 进入 `recovery-locales.test.ts` 的固定键表；MOVE_PINS 由 83 降到 82（`rollback.chatEntry.hint` 随开关一起删除）。
+> - **未验证**：本轮仍只有 typecheck + 源码守卫 + 构建，**没有浏览器点击取证**。
+
+> **The chat rewind entry now only exists as "one per user message", and the rollback ledger becomes a two-pane dialog** (user request, 2026-10-12):
+> - **The "whole turn" tier is gone**: the preference module `src/client/chat/chat-entry-pref.ts` (including the `dcm.chat-entry-mode` localStorage key), the shared mount `chat-entry-mount.ts` and the turn-tail entry component `RollbackTurnEntry.tsx` (slot `conversation.chat.turnTail`) are all deleted, together with the two-tier switch on the settings-page rollback card (`Segmented`) and the five `rollback.chatEntry.*` keys. Assembly falls back to a single registration, `ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry(…))` — no more mode-exclusion logic and no more slot-declaration-order retries.
+> - **The ledger dialog is now a sidebar + list** (`.rollbackLedger` / `.rollbackSessions` / `.rollbackSessionItem` / `rollbackLedgerMain`): the left column lists the **conversations that own rollback points** (monospace session id + point count + latest time), **newest conversation first** (group order is fixed by `rollbackPointGroups`, newest group first); when a selected key disappears after a refresh the view falls back to the first entry instead of showing an empty right pane.
+> - **Fixed "clicking Refresh makes the whole page jitter"**: the old code called `setStatus('loading')` on every refresh, collapsing the dialog body from the full ledger to a single Spinner (dialog height jumped, and the card behind it changed shape too). Refresh now uses `load({ keep: true })` — the old content stays, only the refresh button shows progress; a failed refresh keeps the ledger and reports the error instead of blanking it.
+> - **Fixed "the rewind preview dialog's text and buttons touch the edges"**: its body was never wrapped in `Modal.Body` (only the header had padding). It is now wrapped in `Modal.Body scroll`, same as the ledger dialog.
+> - **Guards**: a new case in `src/client/recovery/recovery-panel-layout.test.ts`; `rollback.sessions.title` joins the fixed-key list in `recovery-locales.test.ts`; MOVE_PINS drops from 83 to 82 (`rollback.chatEntry.hint` was removed with the switch).
+> - **Not verified**: this round still only ran typecheck + source guards + build — there was **no browser click-through**.
 
 > **「从其它 agent 导入」的来源列表改为命中优先 + 名称排序**（2026-10-12 用户要求）：本机装了哪几个来源此前埋在注册表顺序里 ——
 > 未安装的 Cursor / Gemini CLI 可能排在已命中的来源前面，用户得逐条读「未检测到」才能找到真正能导的那几个。
@@ -507,6 +558,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+> **全插件的动效此前一律「瞬变」：五个 `--cm-motion-*` 令牌被整段丢掉**（2026-10-12 定位，随本轮弹窗动画一起修）：
+> - **症状**：弹窗入场/退场、页面入场、折叠展开、通知入场、颜色过渡……**没有一条在动**。用户侧看到的就是「弹窗啪一下出现」。
+> - **根因**：`animation: dialogIn var(--cm-motion-base) var(--cm-motion-ease-out)` 这类声明里的自定义属性**全仓只剩引用、没有任何定义**（token 作用域从 `.section`/`:root` 迁到 `body` 的那次改动把它们漏在了旧块里）—— 自定义属性替换失败会让整条声明在 computed-value 阶段失效，动效静默退化成瞬时，构建与类型检查都看不出。
+> - **改法**：在 `body` 的定义块里补回 `--cm-motion-fast/base/slow`（120 / 180 / 300ms）+ `--cm-motion-ease-out`（`cubic-bezier(0.16,1,0.3,1)`）+ `--cm-motion-ease-in-out`，并同步 `DESIGN.md` §4（原文写的「在 .section 上定义」也是过时位置）。
+> - **护栏**：`src/client/css-scale-guard.test.ts` 新增 `scale-07`：**凡引用了 `var(--cm-motion-*)` 就必须有同名定义**（含反向自检：注入一个未定义令牌必须变红）。
+> - **NOT VERIFIED**：真机浏览器逐条动效的录屏取证 —— 本轮只做到「令牌有定义 + 构建产物一致 + 章节动画声明合法」。
+
+> **Every animation in the plugin was silently instant: five `--cm-motion-*` tokens had been dropped** (located 2026-10-12, fixed together with this round's dialog animation):
+> - **Symptom**: dialog enter/exit, page enter, collapse/expand, toast enter, colour transitions — **none of them animated**. On screen the dialog simply appeared.
+> - **Root cause**: declarations like `animation: dialogIn var(--cm-motion-base) var(--cm-motion-ease-out)` referenced custom properties that had **no definition anywhere** (the token-scope move from `.section`/`:root` to `body` left them behind in the old block). A failed custom-property substitution makes the whole declaration invalid at computed-value time, so the motion silently degrades to instant — invisible to the build and to type checking.
+> - **Fix**: the missing tokens are defined again on `body` (`--cm-motion-fast/base/slow` = 120 / 180 / 300ms, `--cm-motion-ease-out` = `cubic-bezier(0.16,1,0.3,1)`, `--cm-motion-ease-in-out`), and `DESIGN.md` §4 is updated (it still said they live on `.section`).
+> - **Guard**: new `scale-07` in `src/client/css-scale-guard.test.ts`: **every referenced `var(--cm-motion-*)` must have a matching definition** (plus a reverse self-check: injecting an undefined token must go red).
+> - **NOT VERIFIED**: frame-by-frame browser evidence of each animation — this round only reaches "the tokens exist, the build matches, the declarations are legal".
 > **点「重新克隆工作副本」不再无声无息：按钮当场转加载态**（用户 2026-10-12 反馈「点击后没有任何反馈，无法知晓是否正在加载」）：
 > - **症状**：工作副本卡上点「重新克隆工作副本」→ 确认后**整卡没有任何变化**（按钮既不变形也不禁用），唯一信号是整件事**做完之后**才跳出的 toast；而 `reclone` 要删目录 + 重新 clone（真机可达数十秒），用户既不知道它在跑，也容易怀疑没点上而重复点击。
 > - **改法**：`WorkDirCard` 自持在途态 `pending: 'relink' | 'reclone' | null` —— 请求发出即置位，两颗按钮走 `Button` 原语的 `loading`（自动前置 Spinner + `aria-busy`，文案不变），在途时**互相禁用**（防重复点击），`finally` 收位（失败也不留一个永远转圈的按钮；`relink` 是同一条链路的出口，一并覆盖）。

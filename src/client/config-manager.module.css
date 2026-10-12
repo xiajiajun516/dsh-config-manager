@@ -102,6 +102,16 @@ body {
   /* 层级（6 档语义） */
   --cm-z-raise: 1; --cm-z-sticky: 2; --cm-z-task: 90; --cm-z-mask: 100;
   --cm-z-modal: 101; --cm-z-pop: 110; --cm-z-toast: 120;
+  /* 动效（3 档时长 + 2 条曲线；DESIGN.md §4「动效令牌统一」）
+     **2026-10-12 补齐**：这五个令牌在 token 作用域从 .section/:root 迁到 body 的那一次改动里被丢掉了
+     （全仓只剩 `var(--cm-motion-*)` 的引用、没有任何定义 ⇒ 每一条 `animation`/`transition-duration`
+     都在 computed-value 阶段失效：声明被丢掉、动效一律退化成「瞬变」——弹窗入场、页面入场、
+     折叠、通知全都静默不动）。定义回 body（与其余 --cm-* 同层，Portal 到 body 的弹窗才继承得到）。 */
+  --cm-motion-fast: 120ms;
+  --cm-motion-base: 180ms;
+  --cm-motion-slow: 300ms;
+  --cm-motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --cm-motion-ease-in-out: cubic-bezier(0.4, 0, 0.6, 1);
 }
 
 /* 交互过渡统一参数（hover/focus 颜色过渡；仅颜色属性，克制） */
@@ -2236,9 +2246,14 @@ body {
 }
 
 @keyframes dialogIn {
-  /* 只淡入：任何 transform 变化都会让卡片在动画期间改变可见尺寸与位置（见上条注释） */
-  from { opacity: 0; transform: translate(-50%, -50%); }
-  to { opacity: 1; transform: translate(-50%, -50%); }
+  /* 淡入 + 4px 上浮（用户 2026-10-12 第 3 条：优化弹窗入场）。
+     **仍然不加 scale**：卡片靠 translate(-50%,-50%) 自居中，scale 会在动画期间改变可见尺寸 ——
+     那是「先在偏下的位置出现，再闪到中心」的根因（见上条注释）。translateY 只挪起点 4px、
+     终点回到最终位置，第一帧与最后一帧都是同一个中心，不存在回跳。
+     另注：这条动画此前**根本没跑**过一次 —— `--cm-motion-base` 在 token 迁移时被丢掉，
+     整个 animation 短手在 computed-value 阶段失效（见 body 里的动效令牌注释）。 */
+  from { opacity: 0; transform: translate(-50%, -50%) translateY(4px); }
+  to { opacity: 1; transform: translate(-50%, -50%) translateY(0); }
 }
 
 /* 关闭退场：Radix Dialog 的 Presence 在 present=false 时**保持节点挂载**并等动画结束
@@ -2679,21 +2694,6 @@ body {
 }
 
 .headRow .groupLabel {
-  margin-bottom: 0;
-}
-
-/* 折叠卡头（承载 SectionTitle 的形态）：标题块吃掉剩余宽度（长副标题在自身宽度内换行），
-   开关恒贴右。与 .headRow 的区别：这里必须 flex-start 对齐（标题 + 副标题是两行），
-   标题块自身的外边距归零 —— 行间距由本类统一给，否则折叠态会多出一段空白。 */
-.foldHead {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 10px;
-}
-
-.foldHead .sectionTitleBlock {
-  flex: 1 1 auto;
   margin-bottom: 0;
 }
 
@@ -5209,24 +5209,42 @@ button.profileRowMain:hover {
   cursor: not-allowed;
 }
 
-/* —— 简洁版回退预览：被回退文件列表（路径 + 新增/删除行数）—— */
-
-/* 一行 = 可折行的长路径 + 右侧不放大的 +N / −M（长路径在 Windows 上是常态，
-   所以路径允许任意位置断行，统计列 flex:none 永不被挤没）。 */
+/* —— 简洁版回退预览：被回退文件列表（图标 + 文件名 + 紧跟其后的 ±行数 / 「删除」）——
+   版式对齐 Cursor「Confirm Undo」（用户 2026-10-12 第 2/6/7 条）：
+   图标 · 文件名 · **紧挨着**的统计 · ……弹性空隙…… · 「查看」（悬停才出现、最右）。
+   文件名过长截断（完整路径在 title 里），统计列 flex:none 永不被挤没。 */
 .rollbackFileRow {
   display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: var(--cm-sp-2) var(--cm-sp-3);
+  align-items: center;
+  gap: var(--cm-sp-3);
   padding: var(--cm-sp-2) 0;
 }
 
+/* 文件类型图标（第 7 条）：固定边框盒，颜色与画法全由组件决定（DSH 自带 FileTypeIcon 自带配色）。 */
+.rollbackFileIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* 文件名：**不抢**剩余空间（`0 1 auto`）—— 统计因此紧跟在它右侧，而不是被推到行尾（第 2 条）。
+   过长时单行省略号截断；完整路径仍在 title 里（信息不丢）。 */
 .rollbackFilePath {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   color: var(--cm-text-1);
   font-size: var(--cm-fs-table);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 统计块：+N 与 −M（或「删除」）作为一个整体紧跟文件名，内部 gap 固定。 */
+.rollbackFileStat {
+  flex: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--cm-sp-2);
 }
 
 .rollbackAdded {
@@ -5243,34 +5261,65 @@ button.profileRowMain:hover {
   font-variant-numeric: tabular-nums;
 }
 
+/* 整文件删除（第 6 条）：写「删除」，不写 `+0 −N`（那是「把文件清空」的意思，两件事）。 */
+.rollbackDeleted {
+  flex: none;
+  color: var(--cm-error);
+  font-size: var(--cm-fs-table);
+}
+
 /* 「查看」= 文件行上悬停才出现的次级操作（Cursor「Confirm Undo」的 View Diff 位，用户 2026-10-12）。
+   第 4 条：**没有边框**，悬停时**高亮背景**（与聊天入口的 .chatActionBtn:hover 同一语言）。
+   第 3 条：出现时淡入 + 轻微右移（`opacity`/`transform` 过渡；visibility 本身不参与过渡 ——
+   否则淡出会被 120ms 的延迟拖住，而这里要的是「立刻让位、淡入时优雅」）。
    为什么用 visibility 而不是 display:none：它仍在 tab 序里 —— 键盘 Tab 到该按钮时 :focus-visible
    也会让它显形，所以这不是「只能用鼠标」的操作。 */
 .fileViewBtn {
   flex: none;
+  margin-left: auto;
   visibility: hidden;
+  opacity: 0;
+  transform: translateX(4px);
   padding: var(--cm-sp-1) var(--cm-sp-3);
-  border: 1px solid var(--cm-line-1);
+  border: 0;
   border-radius: var(--cm-r-1);
   background: transparent;
-  color: var(--cm-text-2);
+  color: var(--cm-text-3);
   font-size: var(--cm-fs-meta);
   cursor: pointer;
+  transition:
+    opacity var(--cm-motion-fast) var(--cm-motion-ease-out),
+    transform var(--cm-motion-fast) var(--cm-motion-ease-out),
+    background-color var(--cm-motion-fast) ease,
+    color var(--cm-motion-fast) ease;
 }
 
 .rollbackFileRow:hover .fileViewBtn,
 .fileViewBtn:focus-visible {
   visibility: visible;
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .fileViewBtn:hover {
+  background: var(--cm-line-1);
   color: var(--cm-text-1);
-  border-color: var(--cm-line-2);
 }
 
 .fileViewBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 选择框关掉（只退对话）时，整份文件清单降透明度：它这次**不会被执行** ——
+   不把「不会发生的事」画得像会发生的事。 */
+.reasonList[data-off='true'] {
+  opacity: 0.45;
+}
+
+/* 「回退文件的更改」选择框行（第 1 条）：说明行下方、文件清单上方。 */
+.previewChoiceRow {
+  margin: 0 0 var(--cm-sp-2);
 }
 
 /* 说明行：一句话说清这次回退会做什么（Cursor 弹窗的说明行位）。 */
@@ -5302,14 +5351,6 @@ button.profileRowMain:hover {
    · 长句一律**短标签进屏 + 完整句进 title**（完整文案仍在字典里，界面上不再逐行重复整句）；
      行卡左侧 2px 语义色条区分来源（auto = ok 绿 / guard = info 蓝 / 未知 = 弱化文字色）。
    · 行卡与分组卡都**不加** `role="button"`（行内已有按钮，DESIGN.md §6 通则）。 */
-
-/* 聊天内回退入口形态（设置块）：与下方台账区用一条分隔线分开 ——
-   台账读不出来时这块照样可用（T2 的位置判据不变）。 */
-.rollbackChatEntry {
-  padding-bottom: 10px;
-  margin-bottom: 10px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1);
-}
 
 /* 预览弹窗的「该点的告警」块：标题一行、每条告警各占一行（原先挤在一条 flex-wrap 行里） */
 .rollbackWarnings {
@@ -5446,6 +5487,74 @@ button.profileRowMain:hover {
 .rollbackMetaDot {
   flex: none;
   color: var(--dsw-alias-label-tertiary);
+}
+
+/* 台账弹窗的左右分栏（2026-10-12 用户要求：左边选「拥有回滚点的对话」，右边看该对话自己的回滚点）。
+   左侧固定宽、自身内滚（选中的对话恒在视野内）；右侧吃掉剩余宽度，列表再限高内滚 —— 两侧都不撑长弹窗。 */
+.rollbackLedger {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.rollbackSessions {
+  flex: 0 0 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* 单条对话：两行式（等宽会话 id 省略 + 计数/最新时间）；选中态用主色描边 + layer-2 底，
+   与行卡的语义色条区分开（那是「来源」，这是「当前选中」）。 */
+.rollbackSessionItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-2);
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.rollbackSessionItem:hover {
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.rollbackSessionItem[data-active] {
+  border-color: var(--cm-accent);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+}
+
+.rollbackSessionId {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rollbackSessionMeta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 右侧栏：该对话的回滚点（自身不再内滚，交给里面的列表容器） */
+.rollbackLedgerMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* 用户自由文本（已脱敏）：单行省略，全文进 title */
@@ -5641,7 +5750,7 @@ button.profileRowMain:hover {
   flex-wrap: wrap;
 }
 
-/* 会话目录名：等宽 + 单行省略（全文进 title）—— 它是列表主键，独占行首最宽的位置 */
+/* 会话标题（宿主没给标题时回落目录名）：单行省略（全文进 title）—— 它是列表主键，独占行首最宽的位置 */
 .shRowId {
   flex: 1 1 auto;
   min-width: 0;

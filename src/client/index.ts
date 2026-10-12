@@ -13,6 +13,7 @@
  * 导出纪律（dsh-ssh packages/client 规则）：/client 面只携带 cordis 装载所需 +
  * 类型；所有值导出保持内部。
  */
+import type { ReactNode } from 'react'
 import type { ClientContext } from './client-types.ts'
 // Type-only：拉入 ctx.locale 的 Context 合并（dsh-client-locale）。
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -35,14 +36,10 @@ import { HistoryApi } from './history/history-api.ts'
 import { IncidentApi } from './recovery/incident-api.ts'
 import { en as historyEn, zh as historyZh, type HistoryKey } from './history/history-locales.ts'
 import { en as chatEn, zh as chatZh, type ChatKey } from './chat/chat-locales.ts'
-import { RollbackTurnEntry, type RollbackTurnEntryInjected } from './chat/RollbackTurnEntry.tsx'
 import { ChatEntryNodeView, type ChatEntryViewInjected } from './chat/ChatEntryView.tsx'
 import {
   archiveParentSession,
   buildSessionNavigator,
-  CHAT_ENTRY_ID,
-  CHAT_ENTRY_ORDER,
-  CHAT_ENTRY_SLOT,
   navigationSourcesOf,
   openChildSession,
   startFreshSession,
@@ -50,7 +47,7 @@ import {
   type ChildOpenState,
 } from './chat/rollback-entry-view.ts'
 import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
-import { mountChatEntries } from './chat/chat-entry-mount.ts'
+import { registerChatNodeEntry } from './chat/chat-node-registration.ts'
 import { RollbackDiffTab } from './chat/RollbackDiffTab.tsx'
 import {
   asSidebarRightFace,
@@ -65,7 +62,7 @@ import {
 } from './chat/rollback-diff-tab.ts'
 import type {} from './chat/sidebar-slots.ts'
 // 槽位契约的类型镜像（SlotMap / SessionStandardProps 声明合并）：
-// 注册 `conversation.chat.node`（user cell）与 `conversation.chat.turnTail` 前都必须加载。
+// 注册 `conversation.chat.node`（user cell）前必须加载。
 import type {} from './chat/chat-slots.ts'
 
 /** 本插件拥有的 locale namespace。 */
@@ -205,9 +202,33 @@ export function apply(ctx: ClientContext): void {
   const openDiffFile = (pointId: string, filePath: string): RollbackDiffOpenResult =>
     openRollbackDiff(asSidebarRightFace(readService('sidebarRight')), rollbackDiffAddress(pointId, filePath))
 
-  const chatEntryInjected = (_sessionId: string): ChatEntryViewInjected & RollbackTurnEntryInjected => ({
+  /**
+   * 文件类型图标（用户 2026-10-12 第 7 条）：**装了 dsh-better-sidebar 就用它的注册表**
+   * （它把文件图标当 cordis 服务 `betterSidebar` 发布，`fileIcon(path, size)`；它自己的缺省档就是
+   * DSH 的 FileTypeIcon 画法，所以用户的扩展图标也一起生效）。
+   *
+   * 与 `openDiffFile` 同一条惰取纪律：**每次渲染重读一次服务**（服务可能比本插件晚挂载），
+   * 形态不符（没有该服务 / 没有 `fileIcon` 方法）一律返回 null ⇒ 对话框回落 DSH 自带的 FileTypeIcon。
+   * **方法必须 bind 回服务对象**：抽出来的方法丢 receiver 会抛（uiWorkspace.openSession 真机事故，
+   * 见 AGENTS.md 的惰取/bind 纪律）。
+   */
+  const fileIconFor = (filePath: string): ReactNode | null => {
+    const service = readService('betterSidebar')
+    if (typeof service !== 'object' || service === null) return null
+    const icon = (service as { fileIcon?: unknown }).fileIcon
+    if (typeof icon !== 'function') return null
+    try {
+      const node = (icon as (path: string, size: number) => ReactNode).call(service, filePath, 14)
+      return node ?? null
+    } catch {
+      return null
+    }
+  }
+
+  const chatEntryInjected = (_sessionId: string): ChatEntryViewInjected => ({
     port: recoveryApi,
     openDiff: openDiffFile,
+    fileIcon: fileIconFor,
     rt: recoveryT,
     openChildSession: openChild,
     archiveParentSession: archiveParent,
@@ -215,61 +236,27 @@ export function apply(ctx: ClientContext): void {
   })
 
   /**
-   * **两个回退入口 = 一次同源挂载**（T13 修 F1：切档后两档必须仍然互斥）。
+   * 聊天内「↺ 回退」入口 = **每条用户消息气泡里的那一颗**（2026-10-12 用户要求：入口只有这一种形态，
+   * 旧的「整回合」档、偏好模块与回合尾入口 `conversation.chat.turnTail` 已整体删除）。
    *
-   * 分工（两档互斥，恒只有一颗入口）：
-   *  · 「每条用户消息」档（缺省）= 接管 `conversation.chat.node` 的 `user` key（priority -1 遮蔽宿主
-   *    UserMessageNodeView；该 key **没有 children 表**，所以只能接管、不能追加），每条用户消息一颗
-   *    icon；为什么只能接管、气泡为何要自复刻、-1 为何是唯一合法优先级 → `src/client/chat/chat-slots.ts`
-   *    头部注释；
-   *  · 「整回合」档 = ui-chat 的回合尾 list 位 `conversation.chat.turnTail`（**新 id** 追加一个条目，
-   *    replaceRisk: none，不遮蔽任何 shipped UI）。
-   * 两档打开的是**同一个**预览对话框（`RollbackReviewDialog`），只是触发点不同。
+   * 为什么只能**接管** `conversation.chat.node` 的 `user` key（而不是追加）：该 key **没有 children 表**
+   * （宿主只对 turn-tail 声明了子位），framework 没有「往用户消息里加 UI」的位子 —— priority -1 遮蔽
+   * 宿主 UserMessageNodeView 是唯一合法做法，那条气泡由我们自复刻。依据（含 -1 为何是唯一合法优先级）
+   * → `src/client/chat/chat-slots.ts` 头部注释。
    *
-   * 为什么不再「一个 inject 挂一个入口」（F1 的根因）：那样只有 chat.node 侧订阅偏好，turnTail 只在
-   * **装配期**读一次 ⇒ 切到「整回合」后活 cell=0（没有入口）、切回「每条消息」后活 cell=2（同屏两个
-   * 回退按钮）。现在两个 inject 回调都只是把**同一个挂载**的引用计数 +1（第一次出现时挂上、最后一个
-   * 消失时退掉），由 `mountChatEntries` 用**同一次偏好订阅**决定「这次该注册哪一个」：
-   * 切档 = 先退掉两个、再按新档注册恰好一个（顺序固定；同 cell 同 priority 重复注册会抛）。
-   * 形态探测/偏好门/异常软化仍在两侧各自实现里（0.1.x 的 chain 形态、keyed 形态不符、register 抛错
-   * 都只丢这一个入口，不打挂插件）。
+   * 形态探测 + 失败软化在 `registerChatNodeEntry`：0.1.x 的 ui-chat 契约不同（非 keyed）或注册抛错，
+   * 都只丢这一个入口，绝不打挂本插件其余槽位与宿主启动。
    */
-  let chatEntryMountRefs = 0
-  let disposeChatEntryMount = (): void => {}
-  const holdChatEntryMount = (): (() => void) => {
-    chatEntryMountRefs += 1
-    if (chatEntryMountRefs === 1) {
-      disposeChatEntryMount = mountChatEntries({
-        nodeProbe: { spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT) },
-        // 声明形态探测（T9-F2）：0.1.x 把同一 key 声明成 chain（select 必填），按 list 形态（id/order）注册会抛。
-        tailProbe: { spec: (key) => ctx.slots.spec(key) },
-        registerNode: () => ctx.slots.register({
-          name: CHAT_NODE_SLOT,
-          key: CHAT_NODE_USER_KEY,
-          priority: CHAT_NODE_PRIORITY,
-          locale: CHAT_NS,
-          inject: chatEntryInjected,
-        }, ChatEntryNodeView),
-        registerTurnTail: () => ctx.slots.register({
-          name: CHAT_ENTRY_SLOT,
-          id: CHAT_ENTRY_ID,
-          order: CHAT_ENTRY_ORDER,
-          locale: CHAT_NS,
-          inject: chatEntryInjected,
-        }, RollbackTurnEntry),
-      })
-    }
-    return () => {
-      chatEntryMountRefs -= 1
-      if (chatEntryMountRefs > 0) return
-      chatEntryMountRefs = 0
-      disposeChatEntryMount()
-      disposeChatEntryMount = (): void => {}
-    }
-  }
-
-  ctx.slots.inject(CHAT_NODE_SLOT, () => holdChatEntryMount())
-  ctx.slots.inject(CHAT_ENTRY_SLOT, () => holdChatEntryMount())
+  ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({
+    probe: { spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT) },
+    register: () => ctx.slots.register({
+      name: CHAT_NODE_SLOT,
+      key: CHAT_NODE_USER_KEY,
+      priority: CHAT_NODE_PRIORITY,
+      locale: CHAT_NS,
+      inject: chatEntryInjected,
+    }, ChatEntryNodeView),
+  }))
 
   /**
    * ── 「查看」→ DSH 右侧栏「回滚差异」标签页（**只读**）──────────────────────────────

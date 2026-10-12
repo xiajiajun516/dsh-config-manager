@@ -28,7 +28,6 @@
 import type { ReactNode } from 'react'
 import type { RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
 import { findPointForTurn } from './rollback-entry-view.ts'
-import { readChatEntryMode, type ChatEntryMode } from './chat-entry-pref.ts'
 
 /* ------------------------------------------------------------ 槽位常量 */
 
@@ -47,20 +46,18 @@ export const CHAT_NODE_USER_KEY = 'user'
 export const CHAT_NODE_PRIORITY = -1
 
 /**
- * 槽位登记计划：**只在 0.2 的 keyed 形态 + 偏好 = 每条消息时接管**。
+ * 槽位登记计划：**只在 0.2 的 keyed 形态时接管**（2026-10-12：入口只剩「每条用户消息」一种形态，
+ * 旧的「整回合」档与偏好门已随 chat-entry-pref / chat-entry-mount 一起删除）。
  *
- * 两种跳过都必须是**失败软化**（只丢这一个入口，不动本插件其余槽位、不动宿主启动）：
- *  · `turn`：用户选了「整回合」，我们完全不注册 —— 宿主 UserMessageNodeView 原样渲染；
+ * 跳过必须是**失败软化**（只丢这一个入口，不动本插件其余槽位、不动宿主启动）：
  *  · `slot-kind-mismatch`：0.1.x 的 ui-chat 把同一 key 声明成别的形态（对照 turnTail 的
  *    list/chain 双形态实测），按 keyed 参数（key/priority）注册会抛。
  */
 export type ChatNodeRegistrationPlan =
   | { kind: 'register' }
-  | { kind: 'skip'; reason: 'turn-mode' }
   | { kind: 'skip'; reason: 'slot-kind-mismatch'; declared: string | null }
 
-export function planChatNodeRegistration(declaredKind: string | null, mode: ChatEntryMode = readChatEntryMode()): ChatNodeRegistrationPlan {
-  if (mode !== 'per-message') return { kind: 'skip', reason: 'turn-mode' }
+export function planChatNodeRegistration(declaredKind: string | null): ChatNodeRegistrationPlan {
   if (declaredKind !== 'keyed') return { kind: 'skip', reason: 'slot-kind-mismatch', declared: declaredKind }
   return { kind: 'register' }
 }

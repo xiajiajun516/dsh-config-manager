@@ -28,7 +28,6 @@
  *     未确认禁用 ⇒ 主按钮永久禁用、整个回退功能不可用（真机截图实证）。确认门本身一字未松。
  */
 import { redact } from '../../security/redaction.ts'
-import { readChatEntryMode, type ChatEntryMode } from './chat-entry-pref.ts'
 import {
   ROLLBACK_CODE_UNKNOWN_KEY,
   rollbackChildSession,
@@ -52,24 +51,7 @@ import {
   type RollbackState,
 } from '../../ui/rollback-view.ts'
 
-/* ------------------------------------------------------------ 槽位常量（注册点与断言共用） */
-
-/** 槽位名（ui-chat 声明的回合尾 list 位；选型依据见 src/client/chat/chat-slots.ts 与本文件头注释）。 */
-export const CHAT_ENTRY_SLOT = 'conversation.chat.turnTail'
-/** 本插件在该槽位里的 cell id（新 id = 追加一个条目，不占用任何既有 cell）。 */
-export const CHAT_ENTRY_ID = 'config-manager-rollback-entry'
-/** 位置：排在 shipped 条目之间靠前一点（deliverables 缺省 0 / schedule 20）。 */
-export const CHAT_ENTRY_ORDER = 15
-
 /* ------------------------------------------------------------ 回合 ↔ 回滚点 */
-
-/**
- * 回合尾按钮是否出现在这个回合：**只有已收尾的回合**才有回滚点
- * （S1：留点发生在回合结束时；正在跑的回合还没有点，显示入口会撒谎）。
- */
-export function entryVisibleForTurn(turn: { status?: string } | null | undefined): boolean {
-  return turn?.status === 'closed'
-}
 
 /**
  * 该（会话 + 回合号）对应的回滚点。
@@ -167,6 +149,48 @@ export function readRollbackPreviewFiles(workspace: unknown): ChatPreviewFileRow
 /** 预览里是否有**任何**可信行数（没有 ⇒ 一行小字说明「行数未统计」，不逐行重复同一句）。 */
 export function chatFileChangeAvailable(files: readonly ChatPreviewFileRow[]): boolean {
   return files.some((file) => file.added !== null && file.removed !== null)
+}
+
+/* ------------------------------------------------------------ 预览：「该点未记录、回退会删掉」的文件 */
+
+/**
+ * `preview.workspace.leftovers` 的读法 —— 回退**会删掉**的文件（该回退点**未记录**的路径）。
+ *
+ * 为什么「删除」只能从这里读、**不得**从 `files[].added/removed` 反推：
+ *  · `preview.workspace.files` 只列**记录在案**的文件（回退只覆盖它们 / 重新创建它们），
+ *    引擎的 `files[].status` 至今**永不产出** `delete`（src/core/rollback-point.ts:428 的注释：
+ *    「保留该取值只为契约形状向前兼容」）；
+ *  · 真正会被删掉的是「该点之后新建 / 留点时被跳过的既有文件」= leftovers。宿主侧
+ *    `POST /recovery/rollback-points/:id/rewind` 的 `removeCreated` **缺省为真**
+ *    （src/routes/recovery.ts:445：`body['removeCreated'] !== false`），本插件的请求体从不带它
+ *    ⇒ 点「回退」时它们真的会被删。
+ * 故界面必须把这件事**说出来**（用户 2026-10-12 第 6 条：整文件删除写「删除」，不写「+0 -N」）。
+ *
+ * 上限与诚实：宿主清单最多 20 条（`ROLLBACK_LEFTOVER_LIST_LIMIT`），且 `createdAfter` 是**总数**
+ * —— 清单短于总数就是**不完整**，界面据 {@link chatFileRemovalTruncated} 如实说一句，绝不假装列全。
+ */
+export function readRollbackPreviewRemovals(workspace: unknown): string[] {
+  const leftovers = (workspace as { leftovers?: unknown } | null | undefined)?.leftovers
+  if (!Array.isArray(leftovers)) return []
+  const out: string[] = []
+  for (const item of leftovers) {
+    if (typeof item !== 'string' || item === '' || out.includes(item)) continue
+    out.push(item)
+  }
+  return out
+}
+
+/**
+ * 删除候选清单是否**不完整**（两种不完整都算）：
+ *  · 宿主明说截断（`leftoversTruncated === true`）；
+ *  · `createdAfter`（真实总数）大于清单条数 —— 宿主上限 20 条，超出的既不在清单里也没打截断标记。
+ */
+export function chatFileRemovalTruncated(workspace: unknown): boolean {
+  const record = workspace as { leftoversTruncated?: unknown; leftovers?: unknown; createdAfter?: unknown } | null | undefined
+  if (record?.leftoversTruncated === true) return true
+  const total = typeof record?.createdAfter === 'number' && Number.isFinite(record.createdAfter) ? record.createdAfter : null
+  const listed = Array.isArray(record?.leftovers) ? record.leftovers.length : 0
+  return total !== null && total > listed
 }
 
 /**
@@ -318,8 +342,10 @@ export interface RewindDraft {
   /** 用户确认（点主按钮那一刻置 true）。**必须恰好 true** 才允许发写请求（宿主侧 fail-closed 同规）。 */
   confirmed: boolean
   /**
-   * 回退范围：**恒为 `files+session`**（= 用户说的「回到这条消息之前」）。
-   * 不再有三选一 mode 单选 —— 固定带上会话段，工作区无变更时会话段照常回退（E1 语义）。
+   * 回退范围：由对话框顶部那颗「回退文件的更改」选择框决定（用户 2026-10-12 第 1 条）——
+   * 勾选 = `files+session`（默认，= 「回到这条消息之前」：文件与对话一起退），
+   * 取消 = `session`（只退对话，工作区一个字节都不动）。
+   * 仍然**没有**三选一 mode 单选：取值只有这两档，由 {@link setRevertFiles} 单点置位。
    */
   mode: RollbackMode
   /**
@@ -349,6 +375,30 @@ export function defaultDraft(_preview: RollbackPreviewResult | null): RewindDraf
  */
 export function confirmOnSubmit(draft: RewindDraft | null): RewindDraft | null {
   return draft === null ? null : { ...draft, confirmed: true }
+}
+
+/* ------------------------------------------------------------ 「回退文件的更改」选择框（第 1 条） */
+
+/**
+ * 这颗选择框**能不能**被点：只有工作区态**有可用记录**（`preview.workspace.available === true`）
+ * 才谈得上「回退文件的更改」。没有记录时开关点了也不会有任何区别 ⇒ 禁用，绝不给人一个假开关。
+ */
+export function canRevertFiles(preview: RollbackPreviewResult | null): boolean {
+  return preview?.workspace?.available === true
+}
+
+/** 草稿当前是否「连文件一起回退」（选择框的受控值；除 `session` 外都算开）。 */
+export function revertFilesOn(draft: RewindDraft | null): boolean {
+  return draft !== null && draft.mode !== 'session'
+}
+
+/**
+ * 选择框 → 草稿：**`mode` 的唯一置位入口**。
+ * 开 = `files+session`（文件与对话一起退）；关 = `session`（只退对话）。
+ * 不动 `confirmed`：确认仍只由**点主按钮那一刻**的 {@link confirmOnSubmit} 置位（确认门一字未松）。
+ */
+export function setRevertFiles(draft: RewindDraft | null, on: boolean): RewindDraft | null {
+  return draft === null ? null : { ...draft, mode: on ? CHAT_REWIND_MODE : 'session' }
 }
 
 /**
@@ -836,104 +886,4 @@ export async function archiveParentSession(
     if (attempt === 0) await wait(400)
   }
   return { ok: false, code: last }
-}
-
-/* ------------------------------------------------------------ 槽位登记（T9-F2：形态探测 + 失败软化） */
-
-/** 槽位声明形态探测面（`ctx.slots`）：只读 spec，宽类型读回 kind（0.2 = list / 0.1.x = chain）。 */
-export interface ChatSlotProbe {
-  spec: (key: typeof CHAT_ENTRY_SLOT) => unknown
-}
-
-/**
- * 登记计划：register = 声明形态是 0.2 的 list 契约；skip 时给出可核验的原因
- * （`per-message-mode` = 偏好已让每条消息各有一颗 icon 入口，回合尾这次**故意不注册**）。
- */
-export type ChatEntryPlan =
-  | { kind: 'register' }
-  | { kind: 'skip'; reason: 'per-message-mode' | 'slot-undeclared' | 'slot-kind-mismatch'; declared: string | null }
-
-/**
- * 回合尾入口（turnTail list 位）的登记门：**偏好为「整回合」时才注册**。
- *
- * 为什么（用户 2026-10-10 第二条要求：「回退按钮只有一个 icon 而不是一个按钮」）：
- * 「每条用户消息」档下，每条消息上已经有那颗 icon 入口；回合尾再追加一个，同一屏就会出现
- * 两颗回退入口（旧行为——用户截图里那颗文字按钮就是它）。两档的分工必须是**互斥**的：
- *  · per-message：只注册 conversation.chat.node/user（每条消息一颗 icon），turnTail **一次都不注册**；
- *  · turn：完全不接管 user（宿主渲染器原样），回合尾那一颗才是入口。
- * 与 `planChatNodeRegistration` 严格互补 —— 两档合起来恒好只有一颗入口。
- */
-export function planChatEntryRegistrationForMode(
-  mode: ChatEntryMode,
-  probe?: ChatSlotProbe | undefined | null,
-): ChatEntryPlan {
-  if (mode !== 'turn') return { kind: 'skip', reason: 'per-message-mode', declared: null }
-  return planChatEntryRegistration(probe)
-}
-
-/**
- * 登记计划：**只在声明形态是 `list` 时注册**。
- *
- * 为什么必须探测：0.1.5-rc.2 的 ui-chat 把同一 key 声明成 `chain`（`select` 必填；
- * 0.2 的 ui-slots 契约对 chain 缺 select 会抛）—— 按 list 形态（id/order）注册会抛，
- * 而抛在 `slots.inject` 回调里可能连带打掉入口与宿主启动。探测不到声明（理论不可达：
- * `slots.inject` 保证声明已在）也一律跳过，绝不硬注册。
- */
-export function planChatEntryRegistration(probe: ChatSlotProbe | undefined | null): ChatEntryPlan {
-  if (probe === undefined || probe === null || typeof probe.spec !== 'function') {
-    return { kind: 'skip', reason: 'slot-undeclared', declared: null }
-  }
-  let spec: unknown
-  try {
-    spec = probe.spec(CHAT_ENTRY_SLOT)
-  } catch {
-    return { kind: 'skip', reason: 'slot-undeclared', declared: null }
-  }
-  const record = typeof spec === 'object' && spec !== null ? spec as { kind?: unknown } : null
-  const declared = typeof record?.kind === 'string' ? record.kind : null
-  if (declared === 'list') return { kind: 'register' }
-  return { kind: 'skip', reason: declared === null ? 'slot-undeclared' : 'slot-kind-mismatch', declared }
-}
-
-/** 登记失败 / 跳过的诊断输出（ASCII，与界面文案无关；console.* 实参不触发 i18n 守卫）。 */
-function warnChatEntry(message: string): void {
-  console.warn(message)
-}
-
-/**
- * 槽位登记整体（可测）：偏好门 → 形态探测 → 注册；**任何跳过或异常都只丢这一个入口**，
- * 绝不影响本插件其余槽位与宿主启动（T9-F2 的失败软化 + T2 的单入口纪律）。
- *
- * 偏好门在**最前**：per-message 档下连探测都不做（结果注定是跳过），也让诊断只说一件事。
- * 偏好读取器与 `registerChatNodeEntry` 同形（缺省读 localStorage，单测注入），所以同一份
- * 偏好模块驱动两个入口的互斥关系，不存在第二处真相。
- *
- * @returns disposer；跳过 / 失败时是 no-op。
- */
-export function registerChatEntry(options: {
-  probe: ChatSlotProbe | undefined | null
-  /** 真正的注册调用（组件与 inject 面由调用点给出，保持 register 的编译期校验）。 */
-  register: () => () => void
-  /** 偏好读取器（缺省读 localStorage；单测注入）。 */
-  readMode?: () => ChatEntryMode
-  /** 诊断回调（缺省 `console.warn`；单测注入以免污染输出）。 */
-  warn?: (message: string) => void
-}): () => void {
-  const warn = options.warn ?? warnChatEntry
-  const mode = (options.readMode ?? readChatEntryMode)()
-  const plan = planChatEntryRegistrationForMode(mode, options.probe)
-  if (plan.kind === 'skip') {
-    if (plan.reason === 'per-message-mode') {
-      warn('[config-manager] chat turn tail entry skipped: preference is "per-message" (every user message already carries the one icon entry; the host turn tail stays untouched)')
-    } else {
-      warn('[config-manager] chat rollback entry skipped: slot "' + CHAT_ENTRY_SLOT + '" declaration is ' + (plan.declared === null ? 'missing' : '"' + plan.declared + '"') + ' (expected "list")')
-    }
-    return () => {}
-  }
-  try {
-    return options.register()
-  } catch (error) {
-    warn('[config-manager] chat rollback entry registration failed: ' + (error instanceof Error ? error.message : String(error)))
-    return () => {}
-  }
 }
