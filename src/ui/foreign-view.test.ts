@@ -158,6 +158,49 @@ test('foreign-view：整表模型 —— 六来源齐全、anyFound、冲突策�
   assert.equal(allMissing?.conflictPolicy, null, '宿主未回策略 → null（界面不渲染该行，绝不编造）');
 });
 
+test('foreign-view：整表顺序 —— 命中的整组在前，同组内按显示名升序；全未命中即纯名称序', () => {
+  // 顺序刻意打乱：宿主按注册表顺序回，界面必须自己排。
+  // 这条用例同时证明**排序键是显示名而不是 id** —— antigravity 的 id 排在最前，
+  // 显示名却是「Google Antigravity」，按 id 排会把它顶到 Cursor 前面。
+  const mixed: ForeignSourceStatusInput[] = [
+    src({ id: 'zed', found: false, paths: [] }),
+    src({ id: 'antigravity', found: true }),
+    src({ id: 'cursor', found: false, paths: [] }),
+    src({ id: 'trae', found: true }),
+  ]
+  const vm = foreignSourcesViewModel({ sources: mixed }, zh)
+  assert.ok(vm !== null)
+  assert.deepEqual(
+    vm.rows.map((r) => r.label),
+    ['Google Antigravity', 'Trae', 'Cursor', 'Zed'],
+    '命中组必须整体在前（组内按名称），未命中组在后（组内按名称）',
+  )
+  assert.deepEqual(
+    mixed.map((s) => s.id),
+    ['zed', 'antigravity', 'cursor', 'trae'],
+    '排序只动新数组：宿主回传的 sources 不得被就地重排',
+  )
+  assert.equal(vm.anyFound, true);
+
+  // 一个都没命中 → 退化成**纯名称序**（用户要的「默认按名称排序」）
+  const none = foreignSourcesViewModel({
+    sources: [
+      src({ id: 'zed', found: false, paths: [] }),
+      src({ id: 'antigravity', found: false, paths: [] }),
+      src({ id: 'cursor', found: false, paths: [] }),
+    ],
+  }, zh)
+  assert.deepEqual(
+    none?.rows.map((r) => r.label),
+    ['Cursor', 'Google Antigravity', 'Zed'],
+    '全未命中时就是按显示名排序（按 id 排会得到 Google Antigravity / Cursor / Zed）',
+  );
+
+  // 全都命中 → 同样只在「命中组」内部按名称排
+  const all = foreignSourcesViewModel({ sources: [src({ id: 'zed' }), src({ id: 'hermes' })] }, zh)
+  assert.deepEqual(all?.rows.map((r) => r.label), ['Hermes', 'Zed']);
+});
+
 test('foreign-view：shapes 与既有 UiT 对齐（en 也有全部新键，无回退）', () => {
   for (const code of ALL_CODES) {
     assert.notEqual(en(FOREIGN_SKIP_KEY[code]), zh(FOREIGN_SKIP_KEY[code]), code + ' 的 en 与 zh 不得同文');

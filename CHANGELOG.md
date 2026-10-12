@@ -166,6 +166,25 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **「从其它 agent 导入」的来源列表改为命中优先 + 名称排序**（2026-10-12 用户要求）：本机装了哪几个来源此前埋在注册表顺序里 ——
+> 未安装的 Cursor / Gemini CLI 可能排在已命中的来源前面，用户得逐条读「未检测到」才能找到真正能导的那几个。
+> - 顺序规则只有一份（`src/ui/foreign-view.ts` 的 `compareForeignSourceRows`）：**本机检测到的整组在前**，同组内按**显示名**升序
+>   （大小写不敏感、数字按数值）；一个都没命中时自然退化成**纯名称序**。
+> - 排序键取**显示名**而不是 id：列表上用户读到的就是 `Google Antigravity`，按 id 排会把它顶到 A 开头（`copilot` → 「GitHub Copilot CLI」同理）。
+> - 只排映射出来的新数组：宿主 `GET /foreign-sources` 的响应顺序一个元素都不动。
+> - **护栏**：`src/ui/foreign-view.test.ts` 新增一条（命中优先 / 组内名称序 / 全未命中即名称序 / 输入不被就地重排）。
+
+> **The "import from other agents" source list is now hit-first and sorted by name** (user request, 2026-10-12):
+> which agents are actually installed used to be buried in registry order, so an uninstalled Cursor / Gemini CLI could sit above the hit
+> and you had to read every "not detected" row to find the ones you can import.
+> - The rule lives in exactly one place (`compareForeignSourceRows` in `src/ui/foreign-view.ts`): **all detected sources come first**,
+>   each group sorted by **display name** (case-insensitive, numeric-aware); with no hits at all it degrades to a plain name sort.
+> - The sort key is the **display name**, not the id: users read `Google Antigravity` on screen, and an id sort would push it to the top under A
+>   (`copilot` → "GitHub Copilot CLI" likewise).
+> - Only the newly mapped array is sorted; the host's `GET /foreign-sources` response order is untouched.
+> - **Guard**: one new case in `src/ui/foreign-view.test.ts` (hit-first / name order within groups / plain name order when nothing is detected /
+>   the input array is never reordered in place).
+
 > **维护与诊断的两块诊断卡退出折叠，「工作区 + 会话回滚」的台账搬进弹窗**（2026-10-12 用户要求）：此前「会话体检」与「工作区 + 会话回滚」各带一颗折叠开关、缺省收起，
 > 摘要、主操作与整份台账一起藏在一次点击后面 —— 打开维护页看不到「这台机器有没有回滚点、有几条对话留了点」。
 > - 两块卡改为**常驻正文**：卡头只剩标题与 ⓘ（机制说明），状态徽章、数字摘要与主操作（「打开会话体检」/「查看回滚点」）一律留在屏上；`FoldToggle` 在这两处不再出现

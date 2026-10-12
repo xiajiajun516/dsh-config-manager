@@ -9,7 +9,8 @@
  *  ① 检测结果 → 可渲染的来源行（显示名 / 状态徽章语义 / 命中路径 / 未迁移码）；
  *  ② 摘要 → 计数徽章与分区清单；
  *  ③ **机器码 → 字典键**的唯一映射（界面据此渲染人话）；
- *  ④ **三类已知有损**的展示行（F-5：只让它们可见，不改任何引擎语义）。
+ *  ④ **三类已知有损**的展示行（F-5：只让它们可见，不改任何引擎语义）；
+ *  ⑤ **展示顺序**（命中优先 + 显示名升序 —— 用户 2026-10-12 要求的「默认按名称排序」）。
  *
  * 三条纪律（都有单测钉住）：
  *  ① **禁止渲染裸机器码**：每个 skip 码必须经 SKIP_KEY 映射到字典键；映射表是
@@ -259,18 +260,44 @@ export function foreignPathsText(row: ForeignSourceRow, t: UiT): string {
   return t('foreign.paths', { paths: row.paths.join(' · ') })
 }
 
+/* ------------------------------------------------------------------ 展示顺序 */
+
+/**
+ * 显示名排序器：大小写不敏感（`base`）、数字按数值（`Foo 2` 在 `Foo 10` 之前）。
+ * 词典序按**运行环境的默认语言**解析 —— 用户看到的就是他母语的字母/拼音序；
+ * 同名的两条保持宿主回传的相对顺序（`Array#sort` 稳定）。
+ */
+const ROW_LABEL_COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true })
+
+/**
+ * 两条来源行的展示顺序（**界面唯一权威**，两处判据只有这一份）：
+ *  ① **命中的在前**（`found` 降序）—— 装了却没排在最上面，用户得先读完一屏「未检测到」；
+ *  ② 同组内按**显示名**升序。
+ *
+ * 为什么按显示名而不是 id：列表上用户读到的是 label（`Google Antigravity`），
+ * 按 id 排会把它顶到 A 开头，与眼睛看到的字母序不符（`copilot` → 「GitHub Copilot CLI」同理）。
+ * 这条规则对「全未命中」自然退化为**纯名称序**，也就是用户要的「默认按名称排序」。
+ */
+function compareForeignSourceRows(a: ForeignSourceRow, b: ForeignSourceRow): number {
+  if (a.found !== b.found) return a.found ? -1 : 1
+  return ROW_LABEL_COLLATOR.compare(a.label, b.label)
+}
+
 /**
  * 响应 → 整表展示模型（组件只摆放）。
  *
  * `?projectDir=` 的项目级作用域如实透传（`projectScoped`）—— 界面把它显示出来，
  * 否则用户会以为「本机没装 Cursor」而实际上是「项目级配置没被扫」。
+ *
+ * 行顺序由 compareForeignSourceRows 决定（命中优先 + 显示名升序），**只排新数组**：
+ * 宿主回传的 `response.sources` 一个元素都不动。
  */
 export function foreignSourcesViewModel(
   response: ForeignSourcesResponse | null,
   t: UiT,
 ): ForeignSourcesViewModel | null {
   if (response === null) return null
-  const rows = response.sources.map((s) => foreignSourceRow(s, t))
+  const rows = response.sources.map((s) => foreignSourceRow(s, t)).sort(compareForeignSourceRows)
   return {
     rows,
     anyFound: rows.some((r) => r.found),
