@@ -1,4 +1,4 @@
-﻿/**
+/**
  * A1c 文案级守卫：`sessions.desc`（面板「会话体检」卡片的说明）必须与面板真实能力同口径。
  *
  * 钉住三件事（口径来自 captain 的逐句核证）：
@@ -120,7 +120,7 @@ const ROLLBACK_FIXED_KEYS: readonly string[] = [
   'rollback.preview', 'rollback.preview.title', 'rollback.preview.hint', 'rollback.preview.loading',
   'rollback.preview.empty', 'rollback.preview.none', 'rollback.preview.segments',
   'rollback.preview.overwrite', 'rollback.preview.different', 'rollback.preview.missing',
-  'rollback.preview.createdAfter', 'rollback.preview.createdAfterTruncated', 'rollback.preview.leftoversTitle',
+  'rollback.preview.createdAfter',
   'rollback.preview.cursor', 'rollback.preview.cursorBytes', 'rollback.preview.turns', 'rollback.preview.active',
   'rollback.preview.warningsTitle',
   'rollback.preview.reason.guard', 'rollback.preview.reason.incomplete', 'rollback.preview.reason.hostRefused',
@@ -206,7 +206,7 @@ test('S7：rollback.desc 与代码逐条对得上（自动留点 / 只覆盖记�
   // 逐键：描述删除行为的四个键必须**说清会删**（旧文案在这里说的是「不删除」）
   const zhDict: Record<string, string> = zh
   const enDict: Record<string, string> = en
-  for (const key of ['rollback.desc', 'rollback.rewind.confirm', 'rollback.preview.createdAfter', 'rollback.preview.leftoversTitle']) {
+  for (const key of ['rollback.desc', 'rollback.rewind.confirm', 'rollback.preview.createdAfter']) {
     const text = String(zhDict[key] ?? '') + String(enDict[key] ?? '')
     assert.equal(/不删除|不会被删除|never deleted|not delete/i.test(text), false, '删除行为说明不得再写成「不删除」：' + key)
     assert.ok(/删除|delet/i.test(text), '删除行为说明必须提到删除：' + key)
@@ -218,14 +218,18 @@ test('S7：rollback.desc 与代码逐条对得上（自动留点 / 只覆盖记�
  *
  * 引擎真值（src/core/rollback-point.ts，t14 冻结）：
  *  - ROLLBACK_MAX_RECORDS = 50（全局自动点）/ ROLLBACK_MAX_RECORDS_PER_SESSION = 20（每会话自动点）；
- *  - ROLLBACK_MAX_GUARDS_PER_SESSION = 20：guard 救援点**不占**自动点预算、**不受** 20/50 淘汰，
- *    但用户删不掉（remove 一律 protected-point），所以**有自己的**每会话上限，超出淘汰最旧的 guard；
+ *  - ROLLBACK_MAX_GUARDS_PER_SESSION = 20：guard 救援点**不占**自动点预算、**不受**自动点的 20/50 淘汰，
+ *    但用户删不掉（remove 一律 protected-point），所以**有自己的**两道上限：每会话 20 → 全局
+ *    ROLLBACK_MAX_GUARDS = 50（2026-10-12 追加，跨会话合计也要收敛），两道都只淘汰最旧的 guard；
  *  - selectPrune：protected 点只进不出（生产路径造不出来）；guard 可作为回退目标（rewind 只拒 protected）。
  *
  * 为什么用源码级读常量而不是 import core：client 侧测试不把宿主运行时（node:fs 链）拖进来；
  * 这条同时把「文案里的数字 = 引擎常量」钉死 —— 常量改了而文案没跟，本用例即红。
  */
 const ENGINE_PATH = fileURLToPath(new URL('../../../src/core/rollback-point.ts', import.meta.url))
+
+/** 客户端留存常量所在模块（文案参数由它传入 ⇒ 与引擎常量必须同源）。 */
+const UI_VIEW_PATH = fileURLToPath(new URL('../../../src/ui/rollback-view.ts', import.meta.url))
 
 /** 从引擎源码里读一个数值常量（改名 / 删除即红）。 */
 function engineNumberConstant(name: string): number {
@@ -235,27 +239,51 @@ function engineNumberConstant(name: string): number {
   return Number((found as RegExpExecArray)[1])
 }
 
-test('T17：留存/救援点文案与引擎三常量逐句对齐，旧的不实表述绝迹', () => {
+test('T17：留存/救援点文案与引擎四常量逐句对齐，旧的不实表述绝迹', () => {
   const maxRecords = engineNumberConstant('ROLLBACK_MAX_RECORDS')
   const perSession = engineNumberConstant('ROLLBACK_MAX_RECORDS_PER_SESSION')
-  const guards = engineNumberConstant('ROLLBACK_MAX_GUARDS_PER_SESSION')
+  const guardsPerSession = engineNumberConstant('ROLLBACK_MAX_GUARDS_PER_SESSION')
+  const guards = engineNumberConstant('ROLLBACK_MAX_GUARDS')
   assert.equal(maxRecords, 50, '引擎全局自动点上限应为 50')
   assert.equal(perSession, 20, '引擎每会话自动点上限应为 20')
-  assert.equal(guards, 20, '引擎每会话救援点上限应为 20')
+  assert.equal(guardsPerSession, 20, '引擎每会话救援点上限应为 20')
+  assert.equal(guards, 50, '引擎全局救援点上限应为 50')
+
+  // ⓪ 客户端四条常量（文案参数来源）必须与引擎同源 —— 只钉死「引擎有常量」不够，
+  //    组件传进字典的是客户端数字，两边漂移同样会让文案说假话。
+  const uiSrc = fs.readFileSync(UI_VIEW_PATH, 'utf8')
+  const uiNumber = (name: string): number => {
+    const found = new RegExp('export const ' + name + '\\s*=\\s*(\\d+)').exec(uiSrc)
+    assert.notEqual(found, null, 'src/ui/rollback-view.ts 里找不到常量 ' + name + '（改名即红）')
+    return Number((found as RegExpExecArray)[1])
+  }
+  assert.equal(uiNumber('ROLLBACK_MAX_POINTS_PER_SESSION'), perSession)
+  assert.equal(uiNumber('ROLLBACK_MAX_POINTS_TOTAL'), maxRecords)
+  assert.equal(uiNumber('ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION'), guardsPerSession)
+  assert.equal(uiNumber('ROLLBACK_MAX_POINTS_GUARDS_TOTAL'), guards)
 
   const zhHint: string = zh['rollback.retention.hint']
   const enHint: string = en['rollback.retention.hint']
-  // ① 救援点三条事实：不占 20/50 预算 / 用户删不掉 / 有自己的每会话上限（数字 = 引擎常量）
-  for (const token of ['救援点', '不占', '删不掉', String(guards), '淘汰最旧的救援点']) {
+  // ① 救援点四条事实：不占 20/50 预算 / 用户删不掉 / 有自己的每会话上限 / 有自己的全局上限
+  for (const token of ['救援点', '不占', '删不掉', '{guardsPerSession}', '{guards}', '淘汰最旧的救援点']) {
     assert.ok(zhHint.includes(token), 'zh 留存说明必须写清：' + token)
   }
-  for (const token of ['rescue point', 'do not count against', 'cannot delete', String(guards), 'oldest rescue point']) {
+  for (const token of ['rescue point', 'do not count against', 'cannot delete', '{guardsPerSession}', '{guards}', 'oldest rescue point']) {
     assert.ok(enHint.toLowerCase().includes(token.toLowerCase()), 'en 留存说明必须写清：' + token)
   }
-  // ② 占位符必须恰好是组件真正传入的两个（多一个会被原样渲染成 {xxx}）
+  // ② 占位符必须恰好是组件真正传入的四个（多一个会被原样渲染成 {xxx}）
   const placeholders = (text: string): string[] => [...text.matchAll(/\{(\w+)\}/g)].map((m) => String(m[1])).sort()
-  assert.deepEqual(placeholders(zhHint), ['perSession', 'total'], 'zh 留存说明的占位符必须恰好是 perSession/total')
-  assert.deepEqual(placeholders(enHint), ['perSession', 'total'], 'en 留存说明的占位符必须恰好是 perSession/total')
+  const expected = ['guards', 'guardsPerSession', 'perSession', 'total']
+  assert.deepEqual(placeholders(zhHint), expected, 'zh 留存说明的占位符必须恰好是四个')
+  assert.deepEqual(placeholders(enHint), expected, 'en 留存说明的占位符必须恰好是四个')
+
+  // ②b 删除确认 / 删除拒绝文案不带参数渲染 ⇒ 里面的数字必须逐字等于引擎常量
+  const deleteCopyKeys = ['rollback.delete.confirmMessage', 'rollback.delete.protected'] as const
+  for (const key of deleteCopyKeys) {
+    const text: string = zh[key]
+    assert.ok(text.includes(String(guardsPerSession)), 'zh ' + key + ' 必须写出每会话救援点上限 ' + String(guardsPerSession))
+    assert.ok(text.includes(String(guards)), 'zh ' + key + ' 必须写出全局救援点上限 ' + String(guards))
+  }
 
   // ③ 旧的不实表述绝迹（任何键、任何语言）
   const legacy: RegExp[] = [

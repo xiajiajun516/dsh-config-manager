@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Recovery 区块（config-manager-recovery）表面文案：zh 为源语言，en 镜像每个键。
  * 独立命名空间、独立文件：不触碰共享的 locales.ts（并行会话已改），零冲突。
  * 键集合经 `RecoveryKey` 类型在 client/index.ts 注册处做编译期校验。
@@ -326,7 +326,7 @@ export const zh = {
   'rollback.badge.incomplete': '两态不全',
   'rollback.badge.protected': '受保护（只进不出）',
   'rollback.apiMissing': '当前宿主没有回滚点能力（插件版本过旧）：界面不假装可用',
-  'rollback.retention.hint': '自动点：每会话最多 {perSession} 个、全局最多 {total} 个，超出只淘汰最旧的自动点。回退前的救援点不占这两个额度、也不被它们淘汰，但用户删不掉，所以另有每会话最多 20 个的上限（超出淘汰最旧的救援点）。',
+  'rollback.retention.hint': '自动点：每会话最多 {perSession} 个、全局最多 {total} 个，超出只淘汰最旧的自动点。回退前的救援点不占这两个额度、也不被它们淘汰，但用户删不掉，所以另有自己的两道上限：每会话最多 {guardsPerSession} 个、全局最多 {guards} 个（无论按哪道算，超出都淘汰最旧的救援点）。',
   'rollback.autopoint.hint': '回滚点由每个回合结束时自动留：工作区快照 + 会话游标（没有「手动拍点」入口）。',
   'rollback.state.workspace': '工作区',
   'rollback.state.session': '会话',
@@ -370,7 +370,12 @@ export const zh = {
   'rollback.code.session-missing': '会话日志不存在',
   'rollback.code.session-out-of-root': '会话日志不在本机会话根内，已拒绝',
   'rollback.code.session-too-large': '会话日志超过上限：只记下了游标（回退不依赖副本）',
-  'rollback.code.session-active': '会话日志刚被写过（仅供参考：回退只 fork 子会话，不改写原日志）',
+  // t7 定点修正（captain 授权；既有键措辞修正，不是新增键）：该码现在有两种用法 ——
+  // ① preview.session.reasonCode（仅供参考）；② 结果码：运行中的对话带文件段的回退被硬拒（工作区零改动）。
+  'rollback.code.session-active': '这条对话正在运行（会话日志刚被写过）：此时带文件段的回退会被拒绝、工作区一个字节都不动；只回溯消息不受影响（回退只 fork 子会话，不改写原日志）',
+  // t8（只追加，不动上面那条既有键）：对话**正在运行**时 —— 默认只回溯消息，带工作区段的回退在路由层被拒
+  'rollback.preview.sessionActive': '这条对话正在运行：本轮结束前只回溯消息（不改动工作区），避免与正在写盘的工具抢文件。等本轮结束后重新打开本弹窗，即可连文件一起回退。',
+  'rollback.sessionActive.denied': '这条对话正在运行：本次一个文件都没有改动。请等本轮结束，或改成「只回溯消息」再试。',
   'rollback.code.session-fork-unavailable': '当前宿主没有提供会话 fork 能力，因此不能回退会话',
   'rollback.code.fork-failed': 'fork 子会话失败，会话段未回退',
   'rollback.code.capture-failed': '该态留点失败',
@@ -394,6 +399,7 @@ export const zh = {
   'rollback.warn.trackDegraded': '有一态留得不完整（回退可能不完整）',
   'rollback.warn.protected': '该回滚点受保护（只进不出）：不可回退、不可删除',
   'rollback.warn.guardFailed': '回退前的救援点没留成（已记告警后继续）',
+  'rollback.warn.createdRefused': '本次不删除任何「留点后新建」的路径：捕获时的证明名单不完整（有整目录被忽略 / 路径索引缺失 / 目录读不出），无法证明哪些是新建的',
   'rollback.warn.unknown': '未识别的告警（技术细节见下方）',
   'rollback.preview': '预览回退',
   /* 2026-10-10 用户第三条：预览对话框改简洁版，标题就叫「回退预览」（不再带副标题）。
@@ -411,14 +417,9 @@ export const zh = {
   'rollback.preview.different': '其中 {n} 项内容不同',
   'rollback.preview.missing': '{n} 项当前已不存在（会被重新创建）',
   'rollback.preview.createdAfter': '{n} 项在留点时并不存在（留点之后新建；回退只会删除其中通过安全判据的）',
-  'rollback.preview.createdAfterTruncated': '（清单已截断）',
   'rollback.preview.removalsTitle': '回退会删除的文件',
-  'rollback.preview.removalsTruncated': '（清单只列前若干条 —— 实际会删除 {total} 项）',
-  'rollback.preview.createdSkipped': '另有 {n} 项不会删除（安全判据拒删）',
-  'rollback.preview.createdRefused': '该点捕获不完整，无法判断哪些是新建的 —— 本次一条都不删（候选 {n} 项）',
   'rollback.preview.notice.skipped': '{n} 项在留点时被跳过（未记录；已计入证明名单 ⇒ 不参与删除判据）',
   'rollback.preview.notice.truncated': '该点捕获被上限截断（超单文件上限 / 字节预算 / 文件数预算）；删除判据另看证明名单（路径索引）是否完整',
-  'rollback.preview.leftoversTitle': '该点未记录的文件（回退只删其中通过安全判据的）',
   /* —— 简洁版预览：只列「会被回退的文件 + 新增/删除行数」（E1 的 preview.workspace.files）——
    * 三条口径逐字对应引擎：① 只列**会被改动**的文件（内容已一致的一项都不列，空数组 ⇒ empty 那行）；
    * ② added/removed 可能是 null（单文件超限 / 非文本 / 对象仓读不出）⇒ 说「行数未统计」，
@@ -443,6 +444,7 @@ export const zh = {
   'rollback.preview.file.deleted': '删除',
   'rollback.preview.file.unknown': '行数未统计',
   'rollback.preview.file.unknownHint': '这些文件的行数没有统计出来（文件过大、不是文本或内容副本读不出来）—— 回退仍会照常覆盖它们。',
+  'rollback.diff.viewHint': '查看差异：{path}',
   'rollback.diff.loading': '正在读取差异…',
   'rollback.diff.before': '当前',
   'rollback.diff.after': '回退后',
@@ -518,8 +520,8 @@ export const zh = {
   'rollback.delete': '删除回滚点',
   'rollback.delete.done': '已删除回滚点',
   'rollback.delete.confirmTitle': '删除这个回滚点？',
-  'rollback.delete.confirmMessage': '只删除台账记录与内容副本，不会改动工作区与会话。受保护点与回退前救援点由引擎一律拒绝删除；救援点超出每会话上限时会自动淘汰最旧的。',
-  'rollback.delete.protected': '该回滚点不可删除：受保护点与救援点一律被引擎拒绝（救援点超出每会话上限时自动淘汰最旧的）',
+  'rollback.delete.confirmMessage': '只删除台账记录与内容副本，不会改动工作区与会话。受保护点与回退前救援点由引擎一律拒绝删除；救援点超出每会话上限 20 个或全局上限 50 个时会自动淘汰最旧的。',
+  'rollback.delete.protected': '该回滚点不可删除：受保护点与救援点一律被引擎拒绝（救援点超出每会话上限 20 个或全局上限 50 个时自动淘汰最旧的）',
   'rollback.storage.unavailable': '回滚点存储不可用（现状列表仍可查看）',
   // t54：中断的档案复制残留（cross-F3）—— 独立形态 + 只给删除
   'recovery.incomplete.title': '未完成的档案副本',
@@ -893,7 +895,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.badge.incomplete': 'One of two states missing',
   'rollback.badge.protected': 'Protected (kept forever)',
   'rollback.apiMissing': 'This host has no rollback-point support (plugin too old): the UI does not pretend otherwise',
-  'rollback.retention.hint': 'Automatic points: at most {perSession} per session and {total} in total; eviction only drops the oldest automatic points. Pre-rewind rescue points do not count against those two budgets, and those budgets do not evict them; but you cannot delete them, so they have their own per-session limit of 20 (the oldest rescue point is evicted beyond it).',
+  'rollback.retention.hint': 'Automatic points: at most {perSession} per session and {total} in total; eviction only drops the oldest automatic points. Pre-rewind rescue points do not count against those two budgets, and those budgets do not evict them; but you cannot delete them, so they have their own two limits: at most {guardsPerSession} per session and {guards} in total (whichever limit is passed, the oldest rescue point is evicted).',
   'rollback.autopoint.hint': 'Rollback points are kept automatically at the end of each turn: workspace snapshot plus session cursor (there is no manual capture entry).',
   'rollback.state.workspace': 'Workspace',
   'rollback.state.session': 'Session',
@@ -933,7 +935,12 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.code.session-missing': 'Session log not found',
   'rollback.code.session-out-of-root': 'Session log is outside the local session root; refused',
   'rollback.code.session-too-large': 'Session log exceeds the limit: only the cursor was recorded (the rewind does not depend on the copy)',
-  'rollback.code.session-active': 'The session log was written recently (informational only: the rewind forks a child session and does not rewrite the log)',
+  // t7 targeted wording fix (captain-authorized; existing key, not a new one): the code now has two uses —
+  // (1) preview.session.reasonCode (informational); (2) a *result* code: a files-including rewind is refused while the conversation runs.
+  'rollback.code.session-active': 'This conversation is running (its session log was written recently): a rewind that includes files is refused and the workspace stays untouched; rewinding the conversation only is unaffected (the rewind forks a child session and never rewrites the log)',
+  // t8 (append-only; the key above keeps its own wording): the conversation is running
+  'rollback.preview.sessionActive': 'This conversation is running: until the current turn finishes you can rewind the conversation only (no workspace changes), so nothing races with the tool that is writing files. Reopen this dialog after the turn to rewind files as well.',
+  'rollback.sessionActive.denied': 'This conversation is running: no files were changed. Wait for the current turn to finish, or rewind the conversation only.',
   'rollback.code.session-fork-unavailable': 'This host provides no session fork capability, so the session cannot be rolled back',
   'rollback.code.fork-failed': 'Forking the child session failed; the session segment was not rolled back',
   'rollback.code.capture-failed': 'Failed to capture this state',
@@ -957,6 +964,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.warn.trackDegraded': 'A state was captured incompletely (the rewind may be incomplete)',
   'rollback.warn.protected': 'This rollback point is protected (kept forever): no rewind, no delete',
   'rollback.warn.guardFailed': 'The pre-rewind rescue point failed (continued with a warning)',
+  'rollback.warn.createdRefused': 'Nothing created after this point was deleted: the capture-time proof list is incomplete (a whole directory was ignored / the path index is missing / a directory was unreadable), so newly created paths cannot be proven',
   'rollback.warn.unknown': 'Unrecognized warning (technical detail below)',
   'rollback.preview': 'Preview rewind',
   'rollback.preview.title': 'Rewind preview',
@@ -972,14 +980,9 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.different': '{n} of them differ in content',
   'rollback.preview.missing': '{n} item(s) no longer exist (they will be recreated)',
   'rollback.preview.createdAfter': '{n} item(s) did not exist at that point (created afterwards; the rewind deletes only those that pass the safety rules)',
-  'rollback.preview.createdAfterTruncated': '(list truncated)',
   'rollback.preview.removalsTitle': 'Files the rewind will delete',
-  'rollback.preview.removalsTruncated': '(the list shows only the first entries — {total} item(s) will actually be deleted)',
-  'rollback.preview.createdSkipped': '{n} further path(s) will not be deleted (refused by the safety rules)',
-  'rollback.preview.createdRefused': 'The capture of this point is incomplete, so it cannot be told which files are new — nothing was deleted this time ({n} candidate(s))',
   'rollback.preview.notice.skipped': '{n} item(s) were skipped at capture time (not recorded; they are in the proof list, so they are outside the deletion test)',
   'rollback.preview.notice.truncated': 'Capture was truncated by a limit (per-file / byte budget / file-count budget); whether anything is deleted also depends on whether the proof list (path index) is complete',
-  'rollback.preview.leftoversTitle': 'Files this point does not record (the rewind deletes only those that pass the safety rules)',
   'rollback.preview.files.title': 'Files that will be rewound:',
   'rollback.preview.files.empty': 'The workspace already matches this rollback point, nothing to restore',
   'rollback.preview.files.unavailable': 'The workspace state of this rollback point has no usable record (reason: {reason}), nothing to restore',
@@ -991,6 +994,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.file.deleted': 'Delete',
   'rollback.preview.file.unknown': 'line counts not measured',
   'rollback.preview.file.unknownHint': 'Line counts could not be measured for these files (too large, not text, or the content copy is unreadable) \u2014 the rewind will still overwrite them.',
+  'rollback.diff.viewHint': 'View diff: {path}',
   'rollback.diff.loading': 'Loading the diff\u2026',
   'rollback.diff.before': 'Current',
   'rollback.diff.after': 'After rewind',
@@ -1056,8 +1060,8 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.delete': 'Delete rollback point',
   'rollback.delete.done': 'Rollback point deleted',
   'rollback.delete.confirmTitle': 'Delete this rollback point?',
-  'rollback.delete.confirmMessage': 'This deletes only the ledger record and its content copies; the workspace and sessions are untouched. Protected points and pre-rewind rescue points are always refused by the engine; rescue points beyond their per-session limit are evicted automatically (oldest first).',
-  'rollback.delete.protected': 'This rollback point cannot be deleted: protected points and rescue points are always refused by the engine (rescue points beyond their per-session limit are evicted automatically, oldest first)',
+  'rollback.delete.confirmMessage': 'This deletes only the ledger record and its content copies; the workspace and sessions are untouched. Protected points and pre-rewind rescue points are always refused by the engine; rescue points beyond their per-session limit of 20 or their global limit of 50 are evicted automatically (oldest first).',
+  'rollback.delete.protected': 'This rollback point cannot be deleted: protected points and rescue points are always refused by the engine (rescue points beyond their per-session limit of 20 or their global limit of 50 are evicted automatically, oldest first)',
   'rollback.storage.unavailable': 'Rollback-point storage is unavailable (the current list remains viewable)',
   'recovery.incomplete.title': 'Unfinished profile copy',
   'recovery.incomplete.hint': 'These directories carry a "copy in progress" marker but no package.json: a half-finished copy left by an interrupted copy. They cannot be launched, only deleted (only marked directories are listed — hand-made directories never appear here).',
