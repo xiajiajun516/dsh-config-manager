@@ -7,6 +7,11 @@
  * 与 SectionComposition 的分工：那个是只读的「分区构成」网格（总览页「分区构成」卡 /
  * 导出页「本次将导出」数据块共用），这个是可交互的选择器。两者不是替代关系，禁止合并。
  *
+ * 惰性清单（2026-10-12 用户反馈）：条目的清单由调用方**逐分区惰性拉取**（导出页只预取已勾选分区）。
+ * 所以「未读」是一个必须被表达出来的状态 —— 未读分区照常渲染展开控件，展开时才经 onRequestUnits
+ * 触发读取，并且**不显示「已选 0/0」**（那会被读成「这条分区是空的」）。判定全部在
+ * src/ui/selection-model.ts（sectionExpandable / sectionCountState），本组件只装配。
+ *
  * 职责边界：本组件**只渲染与转发交互**，全部选择语义（稀疏排除集、原子组联动、
  * 三态判定、请求参数换算）都在 `src/ui/selection-model.ts` 里，node 可测。
  */
@@ -17,7 +22,8 @@ import type { TranslateNS } from '../client-types.ts'
 import {
   applySessionParentCoupling,
   applySessionWorkspaceCoupling,
-  filterSections, groupPickState, groupSelectedCount, groupUnits, tailWeightedEllipsis, pickerSummary, sectionPickState,
+  filterSections, groupPickState, groupSelectedCount, groupUnits, tailWeightedEllipsis, pickerSummary,
+  sectionCountState, sectionExpandable, sectionPickState,
   selectAll, selectedUnitCount, toggleSection, toggleUnit, toggleUnitGroup, unitChecked, visibleUnits,
   type Selection, type SelectionSection, type SelectionUnit, type SessionParentChange, type SessionWorkspaceCouplingFocus,
 } from '../../ui/selection-model.ts'
@@ -39,7 +45,10 @@ function unitsId(section: SectionId): string {
 }
 
 export interface ContentPickerProps {
-  /** 分区 + 可勾选单元（由 /export-preview 的 items 派生；units 为空 = 不可细分） */
+  /**
+   * 分区 + 可勾选单元（由 /export-preview 的 items 派生）。
+   * `units` 为空有两种事实：不可细分（整体开关）与**尚未读取**（`unitsUnread === true`，见 SelectionSection）。
+   */
   nodes: SelectionSection[]
   value: Selection
   onChange: (next: Selection) => void
@@ -54,6 +63,14 @@ export interface ContentPickerProps {
    * 并**不显示**会误导的「已选 0/0」—— 引擎对清单缺失的分区按整体导出处理（UI-07）。
    */
   failedSections?: SectionId[]
+  /**
+   * 请求读取某分区的清单（**惰性**；调用方自行去重与并发保护）。
+   *
+   * 触发时机 = 用户展开一个「尚未读取」的分区。为什么把入口挂在展开动作上：清单只对**已勾选分区**
+   * 预取，于是未勾选的分区此前既没有展开控件、也没有条目可选 —— 用户必须先勾上整个分区才能展开与
+   * 逐项挑选（2026-10-12 用户反馈）。改成展开即读之后，sessions 这类大分区依然不会被预读。
+   */
+  onRequestUnits?: (id: SectionId) => void
   /**
    * 正在读取清单（任意分区）。true 时在列表上加**遮罩 + 加载动画** ——
    * 勾选大分区（如 sessions）要读很久，没有反馈会被当成卡死。
@@ -87,7 +104,7 @@ export interface ContentPickerProps {
 
 export function ContentPicker({
   nodes, value, onChange, t, sectionLabel, loading = false, failedSections = [], mode = 'export',
-  busy = false, pendingSections = [], highRisk, unitBadge,
+  busy = false, pendingSections = [], highRisk, unitBadge, onRequestUnits,
 }: ContentPickerProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -164,6 +181,18 @@ export function ContentPicker({
             const open = expanded[node.section] === true
             const picked = selectedUnitCount(value, node)
             const total = node.units.length === 0 ? node.count : node.units.length
+            /** 展开控件：有清单可展开；**清单未读**同样可展开（展开即触发读取，见 onRequestUnits） */
+            const expandable = sectionExpandable(node)
+            /** 计数区状态（未读**不得**显示 0/0；判定在 ui 纯函数里） */
+            const countState = sectionCountState(node, {
+              pending: pendingSections.includes(node.section),
+              failed: failedSections.includes(node.section),
+            })
+            /** 展开 = 先按需读清单（仅在「未读且即将展开」时触发一次；收起不读） */
+            const onToggleExpand = (): void => {
+              if (!open && node.unitsUnread === true) onRequestUnits?.(node.section)
+              setExpanded({ ...expanded, [node.section]: !open })
+            }
             /** 本帧要渲染的单元（默认前 N 条；UI-15） */
             const units = visibleUnits(node.units, showAllUnits[node.section] === true)
             return (
@@ -172,7 +201,7 @@ export function ContentPicker({
                   {/* 级联树：展开控件在选择框**左边**（点它只展开本节点的子树，不展开别人的）。
                       用原生 button（共享 Button 原语不透传 aria-* 属性，UI-22）；图标走**形变层** ——
                        展开态切换本身携带信息，让「变了」可见（common/Icon.tsx 的 ExpandChevron）。 */}
-                  {node.units.length > 0 ? (
+                  {expandable ? (
                     <button
                       type="button"
                       className={css.iconBtn}
@@ -181,7 +210,7 @@ export function ContentPicker({
                       aria-controls={unitsId(node.section)}
                       aria-label={open ? t('picker.collapse') : t('picker.expand')}
                       title={open ? t('picker.collapse') : t('picker.expand')}
-                      onClick={() => { setExpanded({ ...expanded, [node.section]: !open }) }}
+                      onClick={onToggleExpand}
                     >
                       <ExpandChevron open={open} />
                     </button>
@@ -209,16 +238,20 @@ export function ContentPicker({
                         {/* 三态：读取中 / 读取失败 / 已选 n/m。
                             没读到清单（在途或失败）时**不要**显示 0/0 —— 那会被读成
                             「这一项没有内容」；失败态必须显式说明「将整体导出」（UI-07）。 */}
-                        {pendingSections.includes(node.section) ? (
+                        {countState === 'pending' ? (
                           <span className={css.pickerCount}>{t('picker.loadingSection')}</span>
-                        ) : failedSections.includes(node.section) ? (
+                        ) : countState === 'failed' ? (
                           /* 失败态用 warn 语义色（DESIGN.md「状态即语义」）：中性的 .pickerCount
                              会让「读取失败」读起来像一条普通说明，而不是需要用户注意的状态 */
                           <span className={`${css.pickerCount} ${css.warnText}`}>{t('picker.sectionLoadFailed')}</span>
-                        ) : (
+                        ) : countState === 'count' ? (
                           <span className={css.pickerCount}>
                             {t('picker.selectedOf', { selected: String(picked), total: String(total) })}
                           </span>
+                        ) : (
+                          /* 未读（惰性）：**不渲染 0/0** —— 「已选 0/0」会被读成「这条分区没有内容」，
+                             而事实是「还没去读」。数字等展开（= 触发读取）之后再给。 */
+                          null
                         )}
                         {node.sizeBytes > 0 && (
                           <span className={`${css.sectionSize} ${css.mono}`}>{formatBytes(node.sizeBytes)}</span>

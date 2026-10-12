@@ -154,6 +154,14 @@ export interface SessionHealthContext {
 export interface SessionHealthRow {
   unitId: string;
   sessionId: string;
+  /**
+   * 界面标题（**宿主侧补**，不是分类判定的一部分）。
+   *
+   * 来源 = DSH 会话缓存 `storages/session_projcache.json` 的 `rows.title.val`，由宿主在扫描后用
+   * `core/session-meta.ts` 的 `applySessionTitles` 统一补上（本模块零 IO，自己不读盘）。
+   * 读不到 = 缺省 → 界面回落显示会话目录名（绝不编造标题）。
+   */
+  title?: string;
   projectKey: string;
   severity: SessionHealthSeverity;
   issues: SessionHealthIssue[];

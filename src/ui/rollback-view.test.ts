@@ -224,6 +224,31 @@ test('T15 假尾句禁令（键层面）：changesSomething=true 时 key 必为 
   assert.equal(blocked.key, previewNoteKeys.consistentNoop)
 })
 
+test('⓪ 会删掉「该点未记录」的新建文件 ⇒ 不得上屏「一致 / 无需恢复」（2026-10-12 第 6 条）', () => {
+  // 真值：宿主 rewind 的 removeCreated **缺省为真**（src/routes/recovery.ts:445 —— body['removeCreated'] !== false），
+  // 所以这一类点上「工作区与该回退点一致，无需恢复」同样是假尾句：点下去真会删文件。
+  const byCount = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0, createdAfter: 3 }, session: { restorable: false } })
+  assert.equal(byCount.kind, 'workspace-changes', 'createdAfter>0 ⇒ 工作区真会变')
+  assert.equal(byCount.key, null, '不得说「一致」（key=null：让文件清单逐条说出来）')
+  assert.equal(byCount.changesSomething, true)
+
+  const byList = rollbackPreviewNote({ workspace: { available: true, overwrite: 2, different: 0, leftovers: ['a', 'b'] }, session: { restorable: true } })
+  assert.equal(byList.kind, 'workspace-changes', '只有清单（没有总数）同样要认出来')
+  assert.equal(byList.key, null)
+  assert.equal(byList.changesSomething, true)
+  assert.equal(byList.sessionForks, true, '会话段的事实不受影响（该字段是给「会话仍会回退」用的）')
+
+  // ⓪ 优先于 ②：一条记录都没有、但有会被删掉的新建内容 ⇒ 更不能说「无需恢复」
+  const noFilesButRemovals = rollbackPreviewNote({ workspace: { available: true, overwrite: 0, different: 0, createdAfter: 1 }, session: { restorable: false } })
+  assert.equal(noFilesButRemovals.kind, 'workspace-changes')
+  assert.equal(noFilesButRemovals.key, null)
+
+  // 反自检：两边都是 0 时**不得**误判成「会变」（否则 ③b 永远说不上话）
+  const clean = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0, createdAfter: 0, leftovers: [] }, session: { restorable: false } })
+  assert.equal(clean.kind, 'workspace-consistent-noop')
+  assert.equal(clean.key, previewNoteKeys.consistentNoop)
+})
+
 test('T15 ① 的原因键来源：workspace.reasonCode 优先 → 段摘要回落 → unknown（绝不编原因）', () => {
   assert.equal(rollbackPreviewNote({ workspace: { available: false, reasonCode: 'no-chunks' } }).reasonKey, 'rollback.code.no-chunks')
   assert.equal(rollbackPreviewNote({ workspace: { available: false }, segments: [{ state: 'workspace', reasonCode: 'chunk-not-found' }] }).reasonKey, 'rollback.code.chunk-not-found')

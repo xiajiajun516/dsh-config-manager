@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { makeContext, MemFs } from '../adapters/test-helpers.ts';
 import type { ExportUnit } from './types.ts';
-import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, clearSessionMetaCache, projectKeyOf, readSessionMeta, subagentParentMap } from './session-meta.ts';
+import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, applySessionTitles, clearSessionMetaCache, projectKeyOf, readSessionMeta, subagentParentMap } from './session-meta.ts';
 
 const HOME = 'C:\\Users\\alice';
 const UUID_A = '19495390-402b-463d-a4cc-882287c1f04e';
@@ -313,4 +313,27 @@ test('clearSessionMetaCache：清空后下一次调用重新读盘', async () =>
   await readSessionMeta(ctx);
   assert.equal(fs.reads.length, 4, '清空后必须重读（宿主可在存储重载信号上调用）');
   clearSessionMetaCache();
+});
+
+/**
+ * 体检行补标题（2026-10-12 用户反馈：会话体检列表只有 `session-<uuid>`，同屏十几条里认不出
+ * 哪条是自己的对话）。查表口径必须与导出选择器**逐字同一套**（裸键归一化）。
+ */
+test('applySessionTitles：体检行补对话标题（两种目录名形态都命中；没有标题绝不编造）', async () => {
+  const meta = await readSessionMeta(await seedStorages(HOME));
+  const rows = [
+    { unitId: `${PROJECT}/session-${UUID_A}`, sessionId: `session-${UUID_A}`, severity: 'invisible' },
+    { unitId: `${PROJECT}/${UUID_A}`, sessionId: UUID_A, severity: 'invisible' },
+    { unitId: `${OTHER_PROJECT}/${UUID_B}`, sessionId: UUID_B, severity: 'invisible' },
+  ];
+  const out = applySessionTitles(rows, meta);
+  assert.equal(out[0]?.title, '推送更新到 GitHub 并发布新版本', '带 session- 前缀的目录名同样要命中（查表前归一化）');
+  assert.equal(out[1]?.title, '推送更新到 GitHub 并发布新版本', '裸 uuid 形态同样命中');
+  assert.equal(out[2]?.title, undefined, '缓存里没有标题 → 不加字段（界面回落目录名，不编造）');
+  assert.deepEqual(out.map((r) => r.unitId), rows.map((r) => r.unitId), '只加展示字段，不动行上的任何既有字段');
+  assert.deepEqual(out.map((r) => r.severity), rows.map((r) => r.severity), '严重级等事实字段逐字不变');
+
+  // 读不到 DSH 缓存（空索引）→ 原样返回，绝不抛错（体检本身仍然可用）
+  const empty = { bySessionId: new Map(), workspaceTitleByProjectKey: new Map(), workspacePathByProjectKey: new Map() };
+  assert.deepEqual(applySessionTitles(rows, empty).map((r) => r.title), [undefined, undefined, undefined]);
 });

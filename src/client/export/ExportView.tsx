@@ -166,8 +166,10 @@ export function ExportView({ api, t }: ExportViewProps) {
     void fetchInventory(selection)
   }
 
-  /** 选择模型的分区：目录全量 + 已取到的单元清单（未取到的 units 为空 = 整体开关）。
-   *  portability / sensitive 来自分类目录 —— 选择器据此渲染「设备相关 / 敏感」徽章（UI-09）。 */
+  /** 选择模型的分区：目录全量 + 已取到的单元清单。
+   *  portability / sensitive 来自分类目录 —— 选择器据此渲染「设备相关 / 敏感」徽章（UI-09）。
+   *  `unitsUnread` 标记「这个分区的清单还没读过」：未勾选的分区因此也照常可展开，展开时才去读
+   *  （2026-10-12 用户反馈：此前必须先勾上整个分区，才能展开与逐项挑选条目）。 */
   const pickerNodes: SelectionSection[] = flow.categories.map((c) => {
     const got = inv[c.id]
     return {
@@ -175,6 +177,8 @@ export function ExportView({ api, t }: ExportViewProps) {
       count: got?.count ?? 0,
       sizeBytes: got?.sizeBytes ?? 0,
       units: got?.items ?? [],
+      // 没取到清单（含读取失败）→ 未读：展开即触发一次读取（失败分区也因此有了重试入口）
+      unitsUnread: got === undefined,
       portability: c.portability,
       sensitive: c.sensitive === true,
     }
@@ -491,6 +495,9 @@ export function ExportView({ api, t }: ExportViewProps) {
               busy={invLoading}
               pendingSections={invPending}
               failedSections={invFailed}
+              /* 未勾选的分区同样可展开：展开时按需读它的清单（惰性 —— 不预读 sessions 这类大分区）。
+                 会话分区还要顺带把工作区清单读出来（勾选联动的数据源在它身上，见 couplingInventorySections）。 */
+              onRequestUnits={(id) => { void fetchInventory(couplingInventorySections([id])) }}
             />
             {/* 与页面共用同一个恒定高度公告位（原因见页面处注释） */}
             <div className={css.noticeSlot}>{notice}</div>

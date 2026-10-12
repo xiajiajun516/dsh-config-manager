@@ -908,14 +908,16 @@ export function rollbackPreviewGuidance(preview: RollbackPreviewResult | null): 
  *
  * 判据**只来自 preview 的字段**（available / overwrite / different / missing / reasonCode /
  * session.restorable）与宿主给的 canRestore，**禁止解析 detail**（技术细节不是接口）。
- * 优先级（与验收逐字一致）：① 工作区态不可用 → ② available 且 overwrite===0 → ③a 工作区一致但
- * 会话仍可回退 → ③b 工作区一致且无事可做。另有前置的一条**不属于四态**：工作区**真会写文件**
- * （different>0 / missing>0）时不上屏任何「一致/无需恢复」句（由文件列表说话）——
+ * 优先级（与验收逐字一致）：① 工作区态不可用 → ⓪ 该点**未记录**的新建内容会被删除
+ * （`createdAfter` / `leftovers` > 0，宿主 removeCreated 缺省为真）→ ② available 且 overwrite===0
+ * → ③a 工作区一致但会话仍可回退 → ③b 工作区一致且无事可做。另有前置的一条**不属于四态**：
+ * 工作区**真会改动**（different>0 / missing>0 / 会删掉未记录的新建文件）时不上屏任何
+ * 「一致/无需恢复」句（由文件列表说话）——
  * 这也是「假尾句禁令」在函数层面的落点：`changesSomething === true` 时，
  * 要么 `key === null`，要么该键的文案**不含**「无需恢复」。
  */
 export type RollbackPreviewNoteKind =
-  /** 工作区会写文件（有变更）⇒ 没有「一致」句可说，由文件列表说话。 */
+  /** 工作区真会改动（写文件**或删掉该点未记录的新建文件**）⇒ 没有「一致」句可说，由文件列表说话。 */
   | 'workspace-changes'
   /** ① 工作区态没有可用记录（available=false）。 */
   | 'workspace-unavailable'
@@ -971,6 +973,15 @@ export function rollbackPreviewNote(input: {
   const overwrite = countOf(workspace?.overwrite)
   const different = countOf(workspace?.different)
   const missing = countOf(workspace?.missing)
+  /**
+   * 该点**未记录**的新建内容条数（回退会删掉它们）。
+   *
+   * 为什么它必须参与「这句话说得说不说得」：宿主 rewind 的 `removeCreated` **缺省为真**
+   * （src/routes/recovery.ts:445），所以「工作区与该点一致，无需恢复」在这种点上同样是**假尾句**
+   * —— 点下去真的会删文件（用户 2026-10-12 第 6 条）。取两处口径的较大值：`createdAfter` 是总数，
+   * `leftovers` 是清单（宿主上限 20 条），任一非零都说明工作区会变。
+   */
+  const removals = Math.max(countOf(workspace?.createdAfter), countOf(workspace?.leftovers))
   // 「会话仍会回退」两个条件都要：该段可回退 + 该点整体可回退（受保护点/两态不全时按钮本来就点不了，
   // 这时说「会话仍会回退到该点之前」同样是假话）
   const sessionForks = input.canRestore !== false && session?.restorable === true
@@ -985,6 +996,11 @@ export function rollbackPreviewNote(input: {
       changesSomething: sessionForks,
       sessionForks,
     }
+  }
+  // ⓪ 工作区态可用，但该点**未记录**的新建内容会被删掉 ⇒ 工作区真会变，
+  //    「一致 / 无需恢复」在这里也是假尾句（宁可不说话：删掉的文件由列表逐条说出来）。
+  if (removals > 0) {
+    return { kind: 'workspace-changes', key: null, reasonKey: null, changesSomething: true, sessionForks }
   }
   // ② 该点没记录任何文件
   if (overwrite === 0) {

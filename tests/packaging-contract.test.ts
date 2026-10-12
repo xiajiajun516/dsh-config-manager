@@ -1,7 +1,7 @@
 /**
  * P-1 / P-2 / P-3 打包契约回归护栏（L1）。
  *
- * 背景：`package.json` 的 `peerDependenciesMeta`（16 个 peer 全 `optional`）与 `files`
+ * 背景：`package.json` 的 `peerDependenciesMeta`（17 个 peer 全 `optional`）与 `files`
  * （含 `!lib/**` + `*.map` 排除项）此前**没有任何自动化测试覆盖**——全库无测试读这两个字段，
  * 回归时不会报警（例如把 UI 包误加回 runtime `dependencies`，或删掉 sourcemap 排除项）。
  * P-3 补上 DSH 兼容闸关心的 `peerDependencies` 范围（issue #53）。
@@ -149,8 +149,8 @@ test('P-3: 全部 @deepseek-ai/dsh* peer 都用显式上下界（不得回退到
     .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'));
   assert.equal(
     dshPeers.length,
-    14,
-    `DSH peer 应恒为 14 条，实际 ${dshPeers.length}: ${dshPeers.map(([n]) => n).join(', ')}`,
+    15,
+    `DSH peer 应恒为 15 条，实际 ${dshPeers.length}: ${dshPeers.map(([n]) => n).join(', ')}`,
   );
   for (const [name, range] of dshPeers) {
     assert.equal(

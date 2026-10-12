@@ -42,6 +42,7 @@ import {
 import { ChatPointWindowController, type ChatPointWindowState } from './chat-point-window.ts'
 import type { ArchiveOutcome } from './rollback-entry-view.ts'
 import type { ChildOpenState } from './rollback-entry-view.ts'
+import type { RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
 // 槽位契约的类型镜像（SlotMap 的 conversation.chat.node entry），见该文件头部说明。
 import type {} from './chat-slots.ts'
 import css from '../config-manager.module.css'
@@ -75,6 +76,11 @@ export interface ChatEntryViewInjected {
    * 由预览对话框如实降级为弹窗内展示 —— 绝不给一个点了没反应的入口。
    */
   openDiff: (pointId: string, filePath: string) => RollbackDiffOpenResult
+  /**
+   * 文件类型图标的外部来源（可选）：装了 dsh-better-sidebar 时用它的 `betterSidebar.fileIcon`，
+   * 否则对话框回落到 DSH 自带的 `FileTypeIcon`（第 7 条，详见 RollbackFileIcon.tsx）。
+   */
+  fileIcon?: RollbackFileIconRenderer
 }
 
 /**
@@ -158,7 +164,7 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
  *  · 气泡底色：宿主直接用 `--dsw-specific-bubble`，本仓库 token 层没有这一档 ⇒ 用 `--cm-surface-2`
  *    （亮/暗主题下都是「比底更强的面」），不改 DESIGN 体系、不新增 token。
  */
-function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff }: ChatEntryBodyProps) {
+function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
   /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
@@ -304,6 +310,7 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
           archiveParentSession={archiveParentSession}
           startFreshSession={startFreshSession}
           openDiff={openDiff}
+          renderFileIcon={fileIcon}
           onClose={() => { setDialogTurn(null) }}
         />
       )}

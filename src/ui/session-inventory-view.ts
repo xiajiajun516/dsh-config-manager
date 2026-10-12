@@ -3,7 +3,7 @@
  *
  * 数据来自只读路由 `GET /recovery/sessions`（宿主扫本机会话库 → core 分类器出结论）。
  * 本模块只做三件事，全部可单测：
- *  ① 行 → 可渲染的展示行（严重级徽章语义 / 版本 / 归属 / 大小 / 时间 / 可复制命令）；
+ *  ① 行 → 可渲染的展示行（严重级徽章语义 / **对话标题** / 版本 / 归属 / 大小 / 时间 / 可复制命令）；
  *  ② 摘要 → 一行可读的计数（**必须能说清「未检查」与「未验证」**）；
  *  ③ 空态 / 截断 / 只读提示的判定 —— 界面据此渲染，不在组件里写业务判断。
  *
@@ -17,6 +17,11 @@ import { redact } from '../security/redaction.ts'
 export interface SessionHealthRowView {
   unitId: string
   sessionId: string
+  /**
+   * 对话标题（宿主从 DSH 会话缓存补；**可能缺省** —— 缓存没覆盖这条会话时就没有）。
+   * 界面不得拿目录名伪装成标题，也不得编造：缺省 → 回落显示 sessionId。
+   */
+  title?: string
   projectKey: string
   severity: SessionHealthSeverity
   issues: { code: string; severity: SessionHealthSeverity; detail?: string }[]
@@ -295,6 +300,11 @@ export interface SessionHealthDisplayRow {
   unitId: string
   /** 会话目录名（列表主键） */
   sessionId: string
+  /**
+   * 对话标题（**已脱敏**）；null = 宿主没给标题 → 渲染层回落显示 sessionId。
+   * 用户要认的是「哪条是我的对话」，所以标题占行首最宽的位置；目录名退到 meta 行当可核对的主键。
+   */
+  title: string | null
   projectKey: string
   severity: SessionHealthSeverity
   severityKey: (typeof SESSION_SEVERITY_KEYS)[SessionHealthSeverity]
@@ -350,6 +360,8 @@ export function sessionHealthRows(response: SessionHealthResponse | null): Sessi
   const all = response.rows.map((row) => ({
     unitId: row.unitId,
     sessionId: row.sessionId,
+    // 展示文本一律先脱敏（标题是用户自由文本，可能含粘贴进来的密钥）；省略由 CSS 单行省略负责
+    title: typeof row.title === 'string' && row.title.trim() !== '' ? redact(row.title) : null,
     projectKey: row.projectKey,
     severity: row.severity,
     severityKey: SESSION_SEVERITY_KEYS[row.severity],

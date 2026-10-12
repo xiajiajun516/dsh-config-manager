@@ -69,6 +69,17 @@ export interface SelectionSection {
   sizeBytes: number
   units: SelectionUnit[]
   /**
+   * 清单**尚未读取**（调用方逐分区惰性拉取时的显式标记；缺省 = 已读过，或这条分区不可细分）。
+   *
+   * 为什么必须与「units 为空」分开：`units` 为空有两种完全相反的事实 ——
+   *  ①「读过了，这条分区没有可拆单元」（整体开关，如 ui / credentialsStatus）；
+   *  ②「还没去读」（导出页只预取已勾选分区）。
+   * 混为一谈的实测后果（2026-10-12 用户反馈）：未勾选的分区既**没有展开控件**、又没有条目可选，
+   * 用户必须先勾上整个分区才能展开与逐项挑选 —— 顺序被反过来了。
+   * 纯展示标记：不参与勾选/导出契约（sectionPickState / buildExportRequest 一律不看它）。
+   */
+  unitsUnread?: boolean
+  /**
    * 可移植性（来自分类目录 ExportCategory.portability）。UI-09：选择器据此给
    * 「设备相关」徽章，并在勾选到这类分区时就地警示 —— 「全选」不得静默把
    * sessions / pluginFiles / credentialsStatus 一起勾上而毫无提示。
@@ -290,6 +301,39 @@ export function selectedUnitCount(sel: Selection, node: SelectionSection): numbe
   if (node.units.length === 0) return node.count
   const excluded = new Set(sel.excluded)
   return node.units.reduce((n, u) => (excluded.has(u.id) ? n : n + 1), 0)
+}
+
+/**
+ * 分区行是否渲染**展开控件**。
+ *
+ * - `units` 非空 = 清单已在手上，当然可展开；
+ * - `unitsUnread === true` = 清单**尚未读取** —— 同样必须渲染展开控件：展开就是触发读取的入口。
+ *
+ * 此前只有「已勾选分区」会预取清单，于是未勾选分区连展开控件都没有（用户必须先勾整个分区才能
+ * 逐项挑选）；现在懒加载的入口挪到展开动作上，顺序才符合直觉。
+ */
+export function sectionExpandable(node: Pick<SelectionSection, 'units' | 'unitsUnread'>): boolean {
+  return node.units.length > 0 || node.unitsUnread === true
+}
+
+/** 分区行计数区的状态（组件只按它渲染）。 */
+export type SectionCountState = 'pending' | 'failed' | 'unread' | 'count'
+
+/**
+ * 计数区状态：读取中 > 读取失败 > 未读 > 正常计数。
+ *
+ * 「未读」必须自成一态：它此前共用「已选 0/0」的渲染，用户读到的是「这条分区是空的」，
+ * 而事实是「还没去读」（与 F-03 同一条口径：没读到清单的分区绝不显示 0 条目）。
+ * 读取中 / 读取失败优先，因为它们比「未读」更具体 —— 有结论时不说「不知道」。
+ */
+export function sectionCountState(
+  node: Pick<SelectionSection, 'unitsUnread'>,
+  state: { pending: boolean; failed: boolean },
+): SectionCountState {
+  if (state.pending) return 'pending'
+  if (state.failed) return 'failed'
+  if (node.unitsUnread === true) return 'unread'
+  return 'count'
 }
 
 /**

@@ -235,6 +235,26 @@ export function applySessionParentLinks<T extends { id: string; parentSessionId?
 }
 
 /**
+ * 给**会话体检行**补上「界面标题」（行上的 `sessionId` = 会话目录名，索引键是裸键 → 查表前必须归一化）。
+ *
+ * 为什么需要：体检列表此前只显示目录名（`session-20d2722c-…`），用户在同一屏十几条里认不出哪条是自己的
+ * 对话（2026-10-12 用户反馈截图实证）。标题的唯一可靠来源就是 DSH 自己的会话缓存
+ * （`storages/session_projcache.json` 的 `rows.title.val`）—— 与导出选择器**同一份索引、同一套
+ * `sessionIdKey` 归一化口径**，绝不另写一套查表规则。
+ *
+ * 只读、纯函数、**绝不编造**：缓存里没有这条会话 / 没有标题 → 原样返回（界面回落显示目录名）。
+ */
+export function applySessionTitles<T extends { sessionId: string }>(
+  rows: readonly T[],
+  index: SessionMetaIndex,
+): (T & { title?: string })[] {
+  return rows.map((row) => {
+    const title = index.bySessionId.get(sessionIdKey(row.sessionId))?.title;
+    return title === undefined ? row : { ...row, title };
+  });
+}
+
+/**
  * 给 sessions 分区的单元补上「界面标题 + 工作区分组」，并按「工作区 → 最近在前」排序。
  *
  * - `label`：会话标题（缓存里没有 → 退回会话目录名，绝不编造）；

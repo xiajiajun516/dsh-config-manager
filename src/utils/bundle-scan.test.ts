@@ -117,10 +117,10 @@ test('scanBundleRequires: 真实的外部 require 会被判违规', () => {
   assert.deepEqual(result.violations, ['lucide-react'])
 })
 
-test('scanBundleRequires: 白名单覆盖四个运行时依赖', () => {
+test('scanBundleRequires: 白名单覆盖五个运行时依赖（含 ui-primitives 的文件图标）', () => {
   assert.deepEqual(
     [...CLIENT_BUNDLE_RUNTIME_WHITELIST].sort(),
-    ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
+    ['@deepseek-ai/dsh-client-ui-primitives', 'react', 'react-dom', 'react-dom/client', 'react/jsx-runtime'],
   )
 })
 

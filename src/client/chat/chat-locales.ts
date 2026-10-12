@@ -41,6 +41,11 @@ export const zh = {
   'chat.preview.reasonUnknown': '这个回滚点当前不可回退，但宿主没有给出原因（原因未知）',
   /** 预览对话框的说明行（Cursor「Confirm Undo」风格的第二张截图：一句话说清这次动作会做什么） */
   'chat.preview.summary': '这次回退会做以下改动：',
+  /**
+   * 顶部选择框（用户 2026-10-12 第 1 条）：要不要**连文件一起**退回去。
+   * 勾 = 文件 + 对话一起退（默认）；取消 = 只退对话，工作区一个字节都不动。
+   */
+  'chat.preview.revertFiles': '回退文件的更改',
   /** 文件行上悬停出现的「查看」（在看得到的前提下才出现：没有侧栏能力时换成下面那句） */
   'chat.preview.view': '查看',
   'chat.preview.viewHint': '在右侧栏查看这个文件的差异',
@@ -100,6 +105,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.open.unavailable': 'This client exposes no usable session navigation entry (the installed DSH version does not provide one), so nothing was opened automatically: child session {id} exists, open it manually',
   'chat.preview.reasonUnknown': 'This rollback point cannot be restored right now, but the host gave no reason (cause unknown)',
   'chat.preview.summary': 'Confirming this undo will make the following changes:',
+  'chat.preview.revertFiles': 'Revert file changes',
   'chat.preview.view': 'View diff',
   'chat.preview.viewHint': 'View this file\u2019s diff in the right sidebar',
   'chat.preview.viewInline': 'This client has no right sidebar, so the diff is shown here instead',

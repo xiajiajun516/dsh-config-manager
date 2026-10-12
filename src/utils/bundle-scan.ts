@@ -25,12 +25,23 @@
  * 注释剥离与 require 抽取的边界情况。
  */
 
-/** bundle 允许 require 的运行时依赖白名单（由 DSH client runtime 提供）。 */
+/**
+ * bundle 允许 require 的运行时依赖白名单（由 DSH shell / client runtime 提供）。
+ *
+ * 为什么 `@deepseek-ai/dsh-client-ui-primitives` 也在这里（2026-10-12 加入）：
+ * DSH shell 把 UI 基础库作为 **static module seed** 预置在模块表里（`dsh-web-frontend` 的
+ * `staticModules`：react / react-dom / cordis / client-store / ui-slots / ui-primitives / dockkit），
+ * 插件 bundle 工厂拿到的 `require` 命中 seed 即可用 —— 第三方插件 dsh-better-sidebar 同样如此。
+ * 本插件只用它画**文件类型图标**（DSH 文件树同一颗 `FileTypeIcon`），且**不是顶层 require**：
+ * 调用点在 `src/client/chat/RollbackFileIcon.tsx` 的 `dshFileTypeIcon()` 里，外裹 try/catch ——
+ * 老宿主没有这条 seed 时回落本地极简图标，绝不会因「一颗图标」打挂整个浏览器半。
+ */
 export const CLIENT_BUNDLE_RUNTIME_WHITELIST: readonly string[] = [
   'react',
   'react-dom',
   'react-dom/client',
   'react/jsx-runtime',
+  '@deepseek-ai/dsh-client-ui-primitives',
 ]
 
 /**

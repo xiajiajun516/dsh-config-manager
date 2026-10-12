@@ -100,6 +100,7 @@
     "@deepseek-ai/dsh-client-locale": ">=0.1.0-rc.6 <0.3.0-0",
     "@deepseek-ai/dsh-client-runtime": ">=0.1.0-rc.6 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-settings": ">=0.1.0-rc.6 <0.3.0-0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.0-rc.6 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.1.0-rc.6 <0.3.0-0",
     "@deepseek-ai/dsh-credentials": ">=0.1.0-rc.6 <0.3.0-0",
     "@deepseek-ai/dsh-home-paths": ">=0.1.0-rc.6 <0.3.0-0",
@@ -126,6 +127,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-settings": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-primitives": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-slots": {
@@ -167,6 +171,7 @@
     "@deepseek-ai/dsh-client-connection": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-settings": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.2",
     "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6",

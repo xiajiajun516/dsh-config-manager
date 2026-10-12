@@ -15,7 +15,7 @@ import {
   groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter, isPlanItemExcluded, isUnitSelected,
   planWriteSections,
   tailWeightedEllipsis, pickerSummary,
-  sectionPickState, sectionsFromPlan, sectionsFromPreview, selectedUnitCount, selectAll,
+  sectionCountState, sectionExpandable, sectionPickState, sectionsFromPlan, sectionsFromPreview, selectedUnitCount, selectAll,
   selectionHasItems, toggleSection, toggleUnit, toggleUnitGroup, unitChecked, unitLabel,
   visibleUnits, UNIT_RENDER_LIMIT,
   type ImportSelectionState, type Selection, type SelectionSection,
@@ -804,3 +804,27 @@ test('无 parentSessionId（旧宿主 / 非 sessions 分区 / 导入页）→ �
   const other: SelectionSection[] = [{ section: 'skills', count: 1, sizeBytes: 0, units: [{ id: 'skills:s', label: 's', sizeBytes: 0 }] }]
   assert.deepEqual(applySessionParentCoupling({ sections: ['skills'], excluded: [] }, other), { sections: ['skills'], excluded: [] })
 })
+
+/**
+ * 惰性清单（2026-10-12 用户反馈）：清单只对**已勾选分区**预取，于是未勾选的分区此前既没有展开控件、
+ * 也没有条目可选 —— 用户必须先勾上整个分区，才能展开与逐项挑选。两条判定必须挡在 ui 层。
+ */
+test('惰性清单：未读分区仍渲染展开控件；计数区不得把「未读」渲染成「已选 0/0」', () => {
+  const unread: SelectionSection = { section: 'pluginFiles', count: 0, sizeBytes: 0, units: [], unitsUnread: true };
+  const readEmpty: SelectionSection = { section: 'ui', count: 3, sizeBytes: 100, units: [] };
+  const readUnits = node('skills', [{ id: 'skills:a' }]);
+
+  assert.equal(sectionExpandable(unread), true, '未读 → 必须可展开（展开就是触发读取的入口）');
+  assert.equal(sectionExpandable(readUnits), true, '有清单 → 可展开');
+  assert.equal(sectionExpandable(readEmpty), false, '读过且没有可拆单元 = 整体开关，不渲染展开控件');
+
+  assert.equal(sectionCountState(unread, { pending: false, failed: false }), 'unread');
+  assert.equal(sectionCountState(unread, { pending: true, failed: false }), 'pending', '有「读取中」结论时不说「未读」');
+  assert.equal(sectionCountState(unread, { pending: false, failed: true }), 'failed', '有「读取失败」结论时不说「未读」');
+  assert.equal(sectionCountState(readEmpty, { pending: false, failed: false }), 'count', '已读分区仍按 n/m 计数');
+
+  // 纯展示标记：勾选 / 导出契约一律不看它（未读时仍是整体开关）
+  const sel: Selection = { sections: ['pluginFiles'], excluded: [] };
+  assert.equal(sectionPickState(sel, unread), 'all');
+  assert.deepEqual(buildExportRequest(sel, [unread]), { only: ['pluginFiles'] });
+});

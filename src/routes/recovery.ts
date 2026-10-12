@@ -16,6 +16,7 @@ import { RollbackPointEngine } from '../core/rollback-point.ts'
 import type { RollbackForkSeam, RollbackRewindInput } from '../core/rollback-point.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { scanSessionHealth } from '../utils/session-health-scan.ts'
+import { applySessionTitles } from '../core/session-meta.ts'
 import {
   applySessionRepair,
   listSessionRepairs,
@@ -331,7 +332,13 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             knownSessionIds: await sessionHealth.knownSessionIds(),
           })
           const rows = unitFilter === undefined ? result.rows : result.rows.filter((row) => row.unitId === unitFilter)
-          const sliced = limit !== undefined && Number.isFinite(limit) && limit >= 0 ? rows.slice(0, limit) : rows
+          /**
+           * 行上补「对话标题」：用户反馈列表只有 `session-<uuid>`，同屏十几条里认不出哪条是自己的对话。
+           * 只在**宿主侧**补 —— 标题来自 DSH 会话缓存（core/session-meta），扫描器保持「只读字节事实」。
+           * 读不到标题 → 不加该字段（界面回落显示目录名，绝不编造）。
+           */
+          const titled = applySessionTitles(rows, await sessionHealth.sessionMeta())
+          const sliced = limit !== undefined && Number.isFinite(limit) && limit >= 0 ? titled.slice(0, limit) : titled
           writeJson(res, 200, {
             ok: true,
             // 本次**扫描**只读（修复是另一条写路由 POST /sessions/repair，需显式确认）

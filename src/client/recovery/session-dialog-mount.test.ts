@@ -94,3 +94,14 @@ test('T16：会话体检弹窗 = 数字摘要 + 区块头 + 两行式行卡（�
   assert.ok(src.includes('row.severityShortKey'), '行徽章必须用短标签键（完整句进 title）');
   assert.ok(src.includes('title={t(row.severityKey)}'), '完整严重级句必须仍在 title 里（事实一个字不少）');
 });
+
+/**
+ * T17：会话体检的行首必须显示**对话标题**（2026-10-12 用户反馈：列表只有 `session-20d2722c-…`，
+ * 同屏十几条里认不出哪条是自己的对话）。宿主没给标题时回落目录名，绝不编造。
+ */
+test('T17：会话行首 = 对话标题（缺省回落目录名），目录名退到 meta 行仍可见', () => {
+  const src = fs.readFileSync(PANEL, 'utf8');
+  assert.ok(src.includes('{row.title ?? row.sessionId}'), '行首主文本必须是标题（缺省回落 sessionId）');
+  assert.ok(src.includes('title={row.title ?? row.unitId}'), '全文进 title（标题已是脱敏后的文本）');
+  assert.ok(src.includes('title={row.unitId}>{row.sessionId}'), '目录名仍需常驻（修复 / 下载要核对的主键）');
+});

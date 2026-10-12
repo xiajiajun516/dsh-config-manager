@@ -1036,8 +1036,9 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                                 {/* 徽章只放短标签（「阻断启动」），完整句（「会让 DSH 起不来」）进 title */}
                                 <Badge kind={row.badgeKind} title={t(row.severityKey)}>{t(row.severityShortKey)}</Badge>
                                 {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
-                                {/* 会话目录名独占行首最宽的位置（等宽 + 单行省略，全文进 title） */}
-                                <span className={`${css.shRowId} ${css.mono}`} title={row.unitId}>{row.sessionId}</span>
+                                {/* 行首最宽的位置给**对话标题**：用户要认的是「哪条是我的对话」，不是 uuid。
+                                    宿主没给标题时回落目录名（绝不编造）；全文进 title，脱敏已在 ui 展示模型里做过。 */}
+                                <span className={css.shRowId} title={row.title ?? row.unitId}>{row.title ?? row.sessionId}</span>
                                 <div className={css.shRowActions}>
                                   {/* 可应用内修复的类别（与体检的 repairable 同源判定）；点开先 dry-run，绝不直接写 */}
                                   {row.repairable && (
@@ -1062,6 +1063,8 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                                 </div>
                               </div>
                               <div className={css.shRowMeta}>
+                                {/* 目录名常驻可见（等宽）：它是修复 / 下载要核对的主键，也是「没有标题」时的唯一标识 */}
+                                <span className={css.mono} title={row.unitId}>{row.sessionId}</span>
                                 {issueChips.codes.map((code) => (
                                   <span key={code} className={css.shIssue} title={row.issueDetailText ?? undefined}>
                                     {t(sessionIssueKey(code))}

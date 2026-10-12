@@ -112,6 +112,36 @@ test('scale-05 间距（padding/margin/gap）只用 9 档 + 显式豁免，且�
   }
 })
 
+/** 本表里出现的每一个 `var(--cm-motion-*)` 令牌名（引用侧）。 */
+function motionRefs(css: string): string[] {
+  return [...new Set([...css.matchAll(/var\((--cm-motion-[a-z-]+)\)/g)].map((m) => m[1] as string))].sort()
+}
+
+/** 定义侧（`--cm-motion-xxx: …;` 的声明）。 */
+function motionDefs(css: string): string[] {
+  return [...new Set([...css.matchAll(/^\s*(--cm-motion-[a-z-]+)\s*:/gm)].map((m) => m[1] as string))].sort()
+}
+
+/**
+ * scale-07：**动效令牌必须有定义**（2026-10-12 新增）。
+ *
+ * 真机证据：`--cm-motion-fast/base/slow/ease-out/ease-in-out` 在 token 作用域从 `.section`/`:root` 迁到 `body`
+ * 时被整段丢掉 —— 全仓只剩 `var(--cm-motion-*)` 的**引用**。自定义属性替换失败会让整条 `animation`/
+ * `transition-duration` 在 computed-value 阶段失效：弹窗入场、页面入场、折叠、通知**全部静默退化成瞬变**，
+ * 而 typecheck / build / 字号·间距·z-index 守卫全都看不出。这条把「引用必须有定义」变成红灯。
+ */
+test('scale-07 动效令牌必须有定义（引用侧的每个 var(--cm-motion-*) 都要能落地）', () => {
+  const refs = motionRefs(STRIPPED)
+  const defs = motionDefs(STRIPPED)
+  assert.ok(refs.length >= 5, '至少应引用 5 个动效令牌（fast/base/slow/ease-out/ease-in-out），实际：' + JSON.stringify(refs))
+  const missing = refs.filter((name) => !defs.includes(name))
+  assert.deepEqual(missing, [], '这些动效令牌只有引用、没有定义（animation/transition 会静默失效）：' + missing.join(', '))
+  // 反向自检：注入一条**未定义**的引用，本判据必须抓到（否则这条守卫只是「文本存在」式的假绿）
+  const mutated = STRIPPED.replace('animation: dialogIn', 'animation-duration: var(--cm-motion-nonexistent);\n  animation: dialogIn')
+  assert.notEqual(mutated, STRIPPED, '注入必须真的改到文本（锚点失效会让自检变成假绿）')
+  const caught = motionRefs(mutated).filter((name) => !motionDefs(mutated).includes(name))
+  assert.ok(caught.includes('--cm-motion-nonexistent'), '注入的未定义令牌必须被抓到：' + JSON.stringify(caught))
+})
 test('scale-06 反自检：注入越界值必须被抓到（防止守卫因解析失效而永远绿灯）', () => {
   const mutated = STRIPPED.replace('.section {', '.section {\n  font-size: 10.5px;\n  gap: 5px;\n  z-index: 9000;')
   const decls = declarations(mutated)
