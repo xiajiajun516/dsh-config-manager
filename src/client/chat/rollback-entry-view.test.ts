@@ -632,6 +632,22 @@ test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块�
   assert.equal(buttons, 3, '全弹窗 3 个按钮 = 底部 2 个 + 子会话「打开」（有 fork 时才有）')
 })
 
+/**
+ * 2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」（例：这些文件的行数没有统计出来…）——
+ * 源级钉住两处描述性文案**真的**不在渲染路径上；键值仍留在字典里（删渲染不删键，本仓既有先例）。
+ */
+test('描述清零：说明行与「行数未统计」说明段不再渲染，键值照旧保留（源级）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.doesNotMatch(dialog, /chat\.preview\.summary/, '「这次回退会做以下改动：」说明行不得回到对话框')
+  assert.doesNotMatch(dialog, /rollback\.preview\.file\.unknownHint/, '「这些文件的行数没有统计出来…」整段不得回到对话框')
+  assert.doesNotMatch(dialog, /chatFileChangeAvailable/, '没有任何可信行数时不再另加一句说明（该函数在对话框里已无用途）')
+  // 删渲染不删键：两键仍须 zh / en 成对存在（页面别处要拿还能拿）
+  assert.equal(typeof (chatZh as Record<string, string>)['chat.preview.summary'], 'string', '聊天字典 zh 必须保留 chat.preview.summary')
+  assert.equal(typeof (chatEn as Record<string, string>)['chat.preview.summary'], 'string', '聊天字典 en 必须保留 chat.preview.summary')
+  assert.equal(typeof (recoveryZh as Record<string, string>)['rollback.preview.file.unknownHint'], 'string', 'recovery 字典 zh 必须保留 unknownHint')
+  assert.equal(typeof (recoveryEn as Record<string, string>)['rollback.preview.file.unknownHint'], 'string', 'recovery 字典 en 必须保留 unknownHint')
+})
+
 test('结果一行摘要：nothing-to-restore 是**成功**（不是失败），其余走既有 outcome 徽章', () => {
   assert.equal(ROLLBACK_NOTHING_TO_RESTORE_KEY, 'rollback.preview.result.noop')
   const noop = chatRewindSummary({ ok: true, outcome: 'restored', code: 'nothing-to-restore' } as never)

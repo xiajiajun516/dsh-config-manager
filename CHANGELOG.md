@@ -164,7 +164,7 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Guards**: `src/core/rollback-point.test.ts` (25 cases, including t13’s capture-boundary R-21①–⑤), `tests/route/recovery-rollback.test.ts` (5 cases: all sub-paths reachable + unconfirmed 409 with zero writes / 404·405·400 / 503 + guidance / protected point 409 / SAFE MODE 423),
 >   `src/ui/rollback-view.test.ts` (12 cases, including a source-level assertion that the config third state no longer exists), `src/client/chat/rollback-entry-view.test.ts` and `src/client/common/client-route-parity.test.ts` (6 endpoints checked in both directions).
 
-> **聊天回退预览弹窗对齐 Cursor「Confirm Undo」：七处体验修正**（2026-10-12 用户要求）：
+> **聊天回退预览弹窗对齐 Cursor「Confirm Undo」：八处体验修正**（2026-10-12 用户要求）：
 > - **① 顶部选择框「回退文件的更改」**（`chat.preview.revertFiles`）：勾 = `files+session`（默认，文件与对话一起退）、取消 = `session`（只退对话，工作区一个字节都不动）；
 >   工作区态没有可用记录（`preview.workspace.available !== true`）时**禁用** —— 那时没有文件可退，开关点了也没有区别。它只置 `mode`（`setRevertFiles` 是该字段唯一置位入口），
 >   **不是**二次确认勾选：确认仍只由点主按钮那一刻置位，`buildRewindOptions` 仍要求恰好 `confirmed=true`（确认门一字未松）。**这条推翻了本轮早先「不引入勾选框」的口径** —— 那个勾选框当时确实没有语义，现在它有。
@@ -179,10 +179,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >   **配套诚实修正**：`rollbackPreviewNote()` 把「会删掉未记录的新建文件」也算进「工作区真会改动」—— 否则这类点上会上一句不实的「工作区与该回退点一致，无需恢复」（假尾句禁令）。
 > - **⑦ 文件名前加文件类型图标**：装了 `dsh-better-sidebar` 就用它发布的 `betterSidebar.fileIcon(path, size)`（它自己的缺省档就是 DSH 的画法，用户的扩展图标也一起生效），否则用 DSH 自带的 `FileTypeIcon`（`@deepseek-ai/dsh-client-ui-primitives`，DSH 左侧文件树同一颗）；
 >   该包**惰取 + try/catch**（`RollbackFileIcon.tsx` 的 `dshFileTypeIcon()`），**绝不在模块顶层 import** —— 老宿主没有模块表 seed 时顶层 require 会让整个浏览器半加载失败；两条都不通才用本地极简 SVG。
+> - **⑧ 描述性文案清零**（2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」）：说明行「这次回退会做以下改动：」（`chat.preview.summary`）与
+>   「这些文件的行数没有统计出来（文件过大、不是文本或内容副本读不出来）—— 回退仍会照常覆盖它们。」整段（`rollback.preview.file.unknownHint`）**都不再渲染** ——
+>   弹窗只留能改变决定的信息（DESIGN §7）：文件清单、顶部选择框、不可回退的原因、结果与失败原因。**逐文件那格的「行数未统计」保留**（它是该文件这一格的事实，不是一段说明）；
+>   两个键仍留在字典里（**删渲染不删键**，与本仓既往先例一致），设置页回滚卡不受影响。
+>   **护栏**：`src/client/chat/rollback-entry-view.test.ts` 新增源级断言（两处文案不得回到对话框 + 两键仍在 zh / en 字典里 + 对话框不再需要 `chatFileChangeAvailable`）。
 > - **护栏**：`src/client/chat/rollback-entry-view.test.ts`（源级：恰好一颗选择框 / 统计块类 / 删除键 / 图标 / 打开成功关弹窗；单测：`setRevertFiles` 两档与 wire 请求体逐字对齐、删除清单读法与两种「清单不完整」）、`src/ui/rollback-view.test.ts`（⓪ 分支：会删文件时不得上屏「无需恢复」）、`src/utils/bundle-scan.test.ts` + `src/client/bundle-selfcontained.test.ts`（白名单加 `@deepseek-ai/dsh-client-ui-primitives`，只允许那一条**带 try/catch 的帧内 require**）。
 > - **NOT VERIFIED**：真机浏览器的观感取证（入场动画手感、图标配色、悬停动画时序）—— 本仓无组件测试框架，故只做到「源码级 + 纯函数级」判定。
 
-> **The in-chat rewind preview dialog now follows Cursor's "Confirm Undo": seven UX fixes** (user request, 2026-10-12):
+> **The in-chat rewind preview dialog now follows Cursor's "Confirm Undo": eight UX fixes** (user request, 2026-10-12):
 > - **① A selection box at the top, "Revert file changes"** (`chat.preview.revertFiles`): checked = `files+session` (default, files and conversation together), unchecked = `session` (conversation only, the workspace is not touched at all);
 >   it is **disabled** when the workspace state has no usable record (`preview.workspace.available !== true`) — there is nothing to revert then, so a live switch would be a lie. It only sets `mode` (`setRevertFiles` is the single setter);
 >   it is **not** a second confirmation: confirmation is still set only at the moment the primary button is clicked, and `buildRewindOptions` still requires exactly `confirmed=true` (the confirmation gate is untouched). **This supersedes the earlier "no checkbox" stance of this round** — that box had no semantics back then; this one does.
@@ -196,6 +201,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >   **Matching honesty fix**: `rollbackPreviewNote()` now also treats "will delete unrecorded new files" as "the workspace really changes" — otherwise such points got a false "the workspace already matches this rollback point, nothing to restore" (the false-trailing-sentence ban).
 > - **⑦ A file-type icon in front of every file name**: with `dsh-better-sidebar` installed we use its published `betterSidebar.fileIcon(path, size)` (its own default artwork *is* DSH's, and user-registered icons come with it), otherwise DSH's own `FileTypeIcon` (`@deepseek-ai/dsh-client-ui-primitives`, the very one DSH's file tree uses);
 >   that package is **loaded lazily inside try/catch** (`dshFileTypeIcon()` in `RollbackFileIcon.tsx`) and **never imported at module top level** — on an older host without the module-table seed a top-level require would fail the whole browser half; only when both paths fail do we draw a minimal local SVG.
+> - **⑧ Descriptive copy removed entirely** (user request #8, 2026-10-12): the summary line "Confirming this undo will make the following changes:" (`chat.preview.summary`) and the whole
+>   "Line counts could not be measured for these files …" paragraph (`rollback.preview.file.unknownHint`) are **no longer rendered** — the dialog keeps only what can change a decision (DESIGN §7):
+>   the file list, the top selection box, the not-restorable reason, and the result / failure lines. **The per-file "line counts not measured" label stays** (it is that cell's fact, not a paragraph).
+>   Both keys remain in the dictionaries (**drop the render, keep the key**, as elsewhere in this repo) and the settings-page rollback card is unaffected.
+>   **Guards**: new source-level assertions in `src/client/chat/rollback-entry-view.test.ts` (neither text may come back + both keys still exist in zh / en + the dialog no longer needs `chatFileChangeAvailable`).
 > - **Guards**: `src/client/chat/rollback-entry-view.test.ts` (source-level: exactly one selection box / the stat block class / the delete key / the icon / close-on-successful-open; unit: both `setRevertFiles` tiers matching the wire body, the deletion-list reader and both kinds of truncated list), `src/ui/rollback-view.test.ts` (the ⓪ branch: never say "nothing to restore" when files will be deleted), `src/utils/bundle-scan.test.ts` + `src/client/bundle-selfcontained.test.ts` (the whitelist gains `@deepseek-ai/dsh-client-ui-primitives`, allowing only that one guarded in-frame require).
 > - **NOT VERIFIED**: real-browser evidence of the look and feel (enter animation, icon colours, hover timing) — this repo has no component test framework, so the verdict stops at source-level plus pure-function level.
 

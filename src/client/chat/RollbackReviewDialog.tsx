@@ -6,7 +6,7 @@
  *  ② 正文只有**会被回退的文件**（路径 + 新增行数 + 删除行数，取自 E1 的
  *     `preview.workspace.files`；内容已一致的文件一项都不列；空列表 ⇒ 一行
  *     「工作区与该回退点一致，无需恢复」）；行数可能是 `null`（E1：超限 / 非文本 / 读不出），
- *     那时显示「行数未统计」而**不是 0**；
+ *     那时该文件那格显示「行数未统计」而**不是 0**；
  *  ③ 底部只有主按钮「回退」与「取消」。
  * 唯一允许的额外一行：**不可回退的原因**（宿主拒绝了这次回退时，主按钮是禁用的，一行字说清
  * 「为什么点不了」；引擎恒会给出原因键，回落「原因未知」只是防御）。
@@ -15,6 +15,9 @@
  * 三选一 mode 单选、两态不全放行勾选、二次确认勾选、工作区/会话计数面板、救援点说明段、
  * 逐段结果详情面板、留点期 notice 面板。**结果改为一行摘要 + 失败原因文案**（失败时仍如实
  * 显示 code 与 detail，绝不裸渲染机器码）。
+ * **描述性文案清零（2026-10-12 用户第 8 条）**：说明行「这次回退会做以下改动：」与
+ * 「这些文件的行数没有统计出来…」整段一并删除 —— 弹窗只留能改变决定的信息（DESIGN §7）；
+ * 两个键仍留在字典里（删渲染不删键，与上面那批同一个先例）。
  *
  * 确认语义（对上一版的有意替换）：**点「回退」即视为 `userConfirmed=true`**。
  * 对话框本身就是「预览 + 确认」两步，所以不再需要勾选框；未点之前 `confirmed` 恒 false，
@@ -47,7 +50,6 @@ import css from '../config-manager.module.css'
 import {
   canRevertFiles,
   canSubmitRewind,
-  chatFileChangeAvailable,
   chatRewindFailed,
   chatRewindFailure,
   chatRewindNotices,
@@ -338,7 +340,6 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   /** 选择框（第 1 条）当前是否「连文件一起退」以及它能不能被点。 */
   const revertFiles = revertFilesOn(draft)
   const revertFilesEnabled = canRevertFiles(preview)
-  const hasCounts = chatFileChangeAvailable(files)
   const summary = chatRewindSummary(result)
   /** F2：只有**真失败**才渲染下面的「失败原因」盒（成功 / 无需恢复的结果不得弹失败信息）。 */
   const failed = chatRewindFailed(result)
@@ -392,9 +393,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
 
             {state === 'ready' && result === null && (
               <>
-                {/* 说明行：一句话说清这次动作会做什么（Cursor「Confirm Undo」风格的底盘） */}
-                <div className={css.previewSummary}>{t('chat.preview.summary')}</div>
-
+                {/* 2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」：说明行「这次回退会做以下改动：」
+                    整体删除 —— 它不改任何决定（DESIGN §7）。该键仍保留在字典里（删渲染不删键）。 */}
                 {/* 选择框（第 1 条，用户 2026-10-12）：要不要**连文件一起**退回去。
                     勾 = files+session（默认，= 「回到这条消息之前」的文件也退）；
                     取消 = session（只退对话，工作区一个字节都不动）。
@@ -471,8 +471,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                         </li>
                       ))}
                     </ul>
-                    {/* 一条都没统计出来时，说清为什么（宁说「不知道」，不谎报行数） */}
-                    {!hasCounts && <div className={css.hint}>{rt('rollback.preview.file.unknownHint')}</div>}
+                    {/* 2026-10-12 用户第 8 条：整段「行数没有统计出来…」说明删除 —— 逐文件那格的
+                        「行数未统计」已经说明一切。该键仍保留在字典里（删渲染不删键）。 */}
                     {/* 「查看」的降级通道：没有右侧栏（或打开失败）时在弹窗内展示同一份差异 */}
                     {inlineDiff !== null && (
                       <div className={css.inlineDiffBox}>

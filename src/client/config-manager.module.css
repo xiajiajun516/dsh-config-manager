@@ -5317,16 +5317,9 @@ button.profileRowMain:hover {
   opacity: 0.45;
 }
 
-/* 「回退文件的更改」选择框行（第 1 条）：说明行下方、文件清单上方。 */
+/* 「回退文件的更改」选择框行（第 1 条）：正文第一行、文件清单上方（说明行已于 2026-10-12 删除）。 */
 .previewChoiceRow {
   margin: 0 0 var(--cm-sp-2);
-}
-
-/* 说明行：一句话说清这次回退会做什么（Cursor 弹窗的说明行位）。 */
-.previewSummary {
-  margin: 0 0 var(--cm-sp-2);
-  color: var(--cm-text-2);
-  font-size: var(--cm-fs-table);
 }
 
 /* 「查看」的降级容器：本客户端没有右侧栏（或打开失败）时，把同一份差异画在弹窗里。 */
