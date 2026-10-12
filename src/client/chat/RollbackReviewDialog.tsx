@@ -352,18 +352,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
    *  ② 捕获不完整 ⇒ 一条都没删（安全拒删：绝不误删既有文件）；
    *  ③ 按安全判据拒删的条数（`.git` 等 —— 它们**不会**被删，与上面的删除清单分开说）。
    */
-  /**
-   * 回退的**范围** = 留点时记录在案的分块（目录）。这些目录**之外**的文件既不回退也不删除
-   * —— 跳过中间若干回合时这条尤其要说清（用户 2026-10-12：以为「回退工作区」= 整个工作区）。
-   */
-  const chunkDirs = Array.isArray(preview?.workspace?.chunks)
-    ? preview.workspace.chunks.filter((item) => typeof item === 'string' && item !== '')
-    : []
   const honestyHints = (
     <>
-      {chunkDirs.length > 0 && (
-        <div className={css.hint}>{rt(rk('rollback.preview.chunksHint'), { n: String(chunkDirs.length) })}</div>
-      )}
       {removalsTruncated && (removalsTotal ?? 0) > 0 && (
         <div className={css.hint}>{rt(rk('rollback.preview.removalsTruncated'), { total: String(removalsTotal ?? 0) })}</div>
       )}

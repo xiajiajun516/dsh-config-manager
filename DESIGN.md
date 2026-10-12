@@ -1076,6 +1076,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 
 ## 7. 文案与安全呈现
 
+- **文案克制（2026-10-12 用户要求）**：预览 / 弹窗 / 卡片只留**用户要判断或操作**的信息。
+  机制、范围、内部判据的解释（「留点时记录了 N 个目录」这类）**不铺陈** —— 要解释就进
+  `InfoHint`(ⓘ) 或文档；同一屏不重复同一件事。判据：**删掉这句后用户还能不能做出同样的决定**
+  —— 能，就删。
 - 全部用户可见文案走 i18n 字典（zh 源 / en 镜像；`ConfigManagerKey` 编译校验）。
   - **两套字典各管一段**：React 壳（`src/client/`）走 `t()`（`config-manager` namespace，
     `ConfigManagerKey`）；`src/ui/*` 与 `src/client/common/*` 的渲染器走 `UiT`

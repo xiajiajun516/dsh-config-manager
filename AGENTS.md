@@ -129,6 +129,7 @@ npm run bundle                   # 仅重建 client bundle
 - **默认不引入第二套视觉体系**。**图标 = `lucide-react`**（`common/Icon.tsx`）；**形变仅 `ExpandChevron`/`CopyStateIcon`**（`morphicons`，硬约定 `reducedMotion="user"`/`spring={MORPH_SPRING}`，**不得扩大范围**）。
 - 按钮语义：primary(主操作)/ghost(次)/danger(危险)，勿用 primary 做危险操作；徽章 `Badge kind="ok|info|warn|error"` 对应 Banner 四态；展示文本渲染前过 `redact()`。
 - **长列表/大报告必须限高内滚**（`planScroll` 等 5 个类），禁止撑长整页。
+- **界面文案克制**：预览/弹窗只留能改变决定的信息；机制与范围解释进 ⓘ 或文档。→ `DESIGN.md §7`
 - **页落位**：`home`/`library`/`sync`/`environment` 四页；**市场不是页面**（Task 承载）；**加页面/改 id 必须同改 `parsePersistedState` 映射与 `run-store.test.ts` 迁移用例**。
 - DESIGN.md 未覆盖时：搜库确认 → 能扩展先扩展 → token+color-mix → **写回 DESIGN.md** → 再使用；**除非明确要求 redesign，否则最小范围修改**、与既有页面观感不一致时以既有为准。第三方 UI 库须走 7 步准入（→ `DEVELOPERS.md` / `DESIGN.md §6`）。
 
@@ -219,7 +220,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。证据 → `docs/lessons/recovery-console.md`。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的每会话上限**（`ROLLBACK_MAX_GUARDS_PER_SESSION`，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
 - **回滚点的「工作区态」必须是「该回合开始前」**：留点在 `turn/start` 拍（`turn/end` 只更新缺省边界）；在回合结束拍会把文件固定成「改完之后」⇒ 回退看起来「工作区与该回退点一致」，用户说「文件没被撤回」。证据 → `docs/lessons/recovery-console.md`
-- **回退删除集只有一份规划**（`planCreatedRemovals`；预览 `removals`=执行 `removedPaths`）：`.git`/`node_modules`/数据区/分块外/超限拒删并进 `createdSkipped`；**捕获不完整（`truncated`/读不出）一条都不删**；超 5000 顶层码 `created-removals-limit`。证据 → `docs/lessons/recovery-console.md`
+- **回退删除集只有一份规划**（`planCreatedRemovals`；预览 `removals`=执行 `removedPaths`）、**捕获不完整一条都不删**、超 5000 顶层码 `created-removals-limit`。证据 → `docs/lessons/recovery-console.md`
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。证据 → `docs/lessons/recovery-console.md`
 - **宿主服务的方法抽出来必须 bind 回服务对象**（真机 2026-10-11：`uiWorkspace.openSession` 丢 receiver ⇒ `this.lifetime` 为 undefined ⇒ 回退成功但子会话永远打不开）；三档降级判据不动，只补 receiver。证据 → `docs/lessons/recovery-console.md`。
 - **回退 fork 必须走 DSH 自己的 `sessionController.fork`（uuid id + 落盘 + 归位），绝不直接 `SessionStore.fork`**（只在内存造会话 ⇒ 继续对话报 `SessionPersistenceNotFoundError`）；归位三档与失败如实上屏 → `docs/lessons/recovery-console.md`。

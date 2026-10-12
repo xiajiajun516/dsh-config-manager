@@ -525,10 +525,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                 （引擎 planCreatedRemovals）⇒ 逐条 = 实际会删的。旧实现这里渲染的是「未记录」清单，
                 标题还写着「不会被删除」—— 而宿主 rewind 的 removeCreated 缺省为真，点下去真的会删
                 （用户 2026-10-12 实测：预览与实际对不上）。拒删项与「捕获不完整 ⇒ 一条都不删」分开说。 */}
-            {/* 回退的**范围** = 留点时记录在案的分块（目录）：这些目录之外的文件既不回退也不删除 */}
-            {Array.isArray(preview?.workspace?.chunks) && preview.workspace.chunks.length > 0 && (
-              <div className={css.hint}>{t('rollback.preview.chunksHint', { n: String(preview.workspace.chunks.length) })}</div>
-            )}
             {(previewRows.some((row) => row.removals.length > 0) || previewRows.some((row) => row.createdSkippedCount > 0)) && (
               <div className={css.planScroll}>
                 <div className={css.groupLabel}>{t('rollback.preview.removalsTitle')}</div>
