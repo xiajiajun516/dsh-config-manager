@@ -855,6 +855,70 @@ export function rollbackPreviewFileLabel(filePath: string): string {
 }
 
 /**
+ * 文件行的**目录前缀**（弱化色那一段）+ 基名。
+ *
+ * 为什么必须有它（2026-10-12 用户截图实测）：只显示基名时 `.git/index` / `.git/HEAD` /
+ * `.git/COMMIT_EDITMSG` 在屏幕上就是三个孤零零的英文单词，用户第一眼读不出「这是什么、在哪」；
+ * 而完整路径又太长会把 ±行数推走。折中 = **目录弱化 + 基名主色 + 完整路径仍在 title**（信息不丢）。
+ *
+ * 语义（两边界都是刻意的）：
+ *  · 路径里没有分隔符（`AGENTS.md` 也在根目录）⇒ `dir === ''` —— 调用方**不画**那一段，
+ *    不会出现一颗孤零零的 `/`；
+ *  · 尾分隔符一律剥掉（`src/a/` ⇒ dir `src`、base `a`），与 rollbackPreviewFileLabel 同一口径；
+ *  · 只在**最后一个**分隔符处切（Windows 盘符 `C:\\a\\b` ⇒ dir `C:\\a`）。
+ */
+export interface RollbackPathParts {
+  /** 目录（含尾随分隔符）；根目录文件是空串 */
+  dir: string
+  /** 基名 */
+  base: string
+}
+
+export function splitRollbackPath(filePath: string): RollbackPathParts {
+  const trimmed = filePath.replace(/[\\/]+$/, '')
+  const at = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'))
+  if (at < 0) return { dir: '', base: trimmed }
+  return { dir: trimmed.slice(0, at + 1), base: trimmed.slice(at + 1) }
+}
+
+/**
+ * 预览**汇总**（弹窗顶部那一条）：这次回退到底动多少东西。
+ *
+ * 为什么这是这一屏最该先看的信息：用户点「↺ 回退」后来到弹窗，先要判断「规模」再逐行核文件；
+ * 没有汇总就得爬到第 8 行才知道「原来是 8 个文件」。所以它不是装饰，是**决策信息**
+ * （DESIGN §7：只留能改变决定的信息 —— 数字留，描述性句子不留）。
+ *
+ * 口径三条（逐条可证伪，界面不得超出这里说的）：
+ *  · `files` = **会被改动**的文件数（= 传进来的行数本身，不减去任何东西）；
+ *  · `added` / `removed` **只累加可信行数**：任一侧是 null（超限 / 非文本 / 读不出）的文件两列都不计，
+ *    否则「行数未统计」的文件会被当成 0 行 —— 那是一个会被证伪的具体断言（见 ChatPreviewFileRow 注释）；
+ *  · 删除集是另一条清单（`removals`，与执行阶段同一份规划），**单独计数**，不与上方混加。
+ */
+export interface RollbackPreviewScope {
+  files: number
+  /** 新增行数合计（只含两侧都可信的行） */
+  added: number
+  /** 删除行数合计（同上） */
+  removed: number
+  /** 整文件删除条数（引擎 removals，真的会删） */
+  removals: number
+}
+
+export function rollbackPreviewScope(
+  files: readonly { added: number | null; removed: number | null }[],
+  removals: readonly unknown[],
+): RollbackPreviewScope {
+  let added = 0
+  let removed = 0
+  for (const file of files) {
+    if (file.added === null || file.removed === null) continue
+    added += file.added
+    removed += file.removed
+  }
+  return { files: files.length, added, removed, removals: removals.length }
+}
+
+/**
  * 差异无法逐行展示时的字典键（本层**只回键**，文案在字典里）。
  * 未知 / 缺失原因回落 null —— 调用方按「未知原因」出话，绝不回落成「没有差异」（那是另一件事）。
  */

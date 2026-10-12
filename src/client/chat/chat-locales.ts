@@ -46,6 +46,21 @@ export const zh = {
    * 勾 = 文件 + 对话一起退（默认）；取消 = 只退对话，工作区一个字节都不动。
    */
   'chat.preview.revertFiles': '回退文件的更改',
+  /**
+   * 顶部**汇总**（2026-10-12 第二轮）：这一屏的第一决策信息 —— 用户先判规模，再逐行核文件。
+   * 三个数字的口径与「文件行」逐条一致（同一份 `rollbackPreviewScope`）：
+   *  `{n}` 个文件 = 会被改动的文件数；`+A`/`−D` **只累加两侧都可信的行数**
+   *  （任一侧读不出来的文件两列都不计 —— 被计成 0 就是一个会被证伪的断言）；
+   *  删除集是**另一条**清单（`{n} 项删除`），单独计数、不与上面混加。
+   * 注意：这不是「chat.preview.summary」那句话（那句描述性文案按 DESIGN §7 已下线，且被源级守卫钉住）；
+   * 这里是**数字**，数字留、句子走。
+   */
+  'chat.preview.scope.files': '{n} 个文件',
+  'chat.preview.scope.added': '+{n}',
+  'chat.preview.scope.removed': '−{n}',
+  'chat.preview.scope.deleted': '{n} 项删除',
+  /** 取消勾选（只退对话）时的汇总：数字与用户无关，改写一句「文件不动」；清单仍在下面、且不再变半透明 */
+  'chat.preview.scope.off': '只回退对话，文件不改动',
   /** 文件行上悬停出现的「查看」（在看得到的前提下才出现：没有侧栏能力时换成下面那句） */
   'chat.preview.view': '查看',
   'chat.preview.viewHint': '在右侧栏查看这个文件的差异',
@@ -106,6 +121,11 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.preview.reasonUnknown': 'This rollback point cannot be restored right now, but the host gave no reason (cause unknown)',
   'chat.preview.summary': 'Confirming this undo will make the following changes:',
   'chat.preview.revertFiles': 'Revert file changes',
+  'chat.preview.scope.files': '{n} files',
+  'chat.preview.scope.added': '+{n}',
+  'chat.preview.scope.removed': '\u2212{n}',
+  'chat.preview.scope.deleted': '{n} to delete',
+  'chat.preview.scope.off': 'Session only \u2014 files stay as they are',
   'chat.preview.view': 'View diff',
   'chat.preview.viewHint': 'View this file\u2019s diff in the right sidebar',
   'chat.preview.viewInline': 'This client has no right sidebar, so the diff is shown here instead',

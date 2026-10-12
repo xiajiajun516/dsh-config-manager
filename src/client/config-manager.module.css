@@ -5209,16 +5209,57 @@ button.profileRowMain:hover {
   cursor: not-allowed;
 }
 
-/* —— 简洁版回退预览：被回退文件列表（图标 + 文件名 + 紧跟其后的 ±行数 / 「删除」）——
-   版式对齐 Cursor「Confirm Undo」（用户 2026-10-12 第 2/6/7 条）：
-   图标 · 文件名 · **紧挨着**的统计 · ……弹性空隙…… · 「查看」（悬停才出现、最右）。
-   文件名过长截断（完整路径在 title 里），统计列 flex:none 永不被挤没。 */
-.rollbackFileRow {
+/* —— 简洁版回退预览：被回退文件列表（图标 + 目录/文件名 + 右对齐的 ±行数 / 「删除」）——
+   版式对齐 Cursor「Confirm Undo」（用户 2026-10-12 第 2/6/7 条），**2026-10-12 第二轮加列对齐**。
+   为什么改成 grid（旧版是 flex，用户截图反馈「太丑」）：flex 下每行各自独立排版 ——
+   文件名长短不一 ⇒ 统计列跟着左右乱跳、数字位数不一样 ⇒ 纵向扫读不成一列；文件名只画基名 ⇒
+   `.git/index` / `.git/HEAD` 读不出「在哪」。现在三列固定：图标 | 路径（目录弱化+基名） | 统计（右对齐）。
+   清单再包一层 layer-2 卡片（`.rollbackFileList`）：散行贴在一起时读不出「这是一份清单」。
+   文件名过长截断（完整路径在 title 里），统计列 grid 自动定宽 ⇒ 永不被挤没。 */
+.rollbackFileList {
   display: flex;
+  flex-direction: column;
+  /* 与 .rollbackFileRow 的左右内边距对齐：卡片描边到行内容的呼吸区 */
+  margin-top: var(--cm-sp-2);
+  padding: 0 var(--cm-sp-4);
+  border: 1px solid var(--cm-line-1);
+  border-radius: var(--cm-r-2);
+  background: var(--cm-surface-2);
+}
+
+.rollbackFileRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--cm-sp-3);
-  padding: var(--cm-sp-2) 0;
+  /* 左内边距留给语义色条（`::before`），正文不贴描边 */
+  padding: var(--cm-sp-3) 0 var(--cm-sp-3) var(--cm-sp-4);
+  /* 行间细分隔线：最后一行不画（卡片底边已经收口） */
+  border-bottom: 1px solid var(--cm-line-1);
 }
+
+.rollbackFileRow:last-child {
+  border-bottom: 0;
+}
+
+/* 语义色条（2px）：新增 = ok 绿 / 改动 = info 蓝 / 删除 = error 红；
+   数据形状读不出来时**不画**（宁可不画，也不按猜测上色）。 */
+.rollbackFileRow::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--cm-sp-2);
+  bottom: var(--cm-sp-2);
+  width: 2px;
+  /* 不用圆角：圆角只有 4/6/8 三档 + 药丸（scale-02 守卫），而 2px 宽的色条本就不需要 ——
+     与既有的 .chatFallbackBubble（border-left: 2px 直角）同一语言 */
+  background: var(--cm-info);
+}
+
+.rollbackFileRow[data-kind='create']::before { background: var(--cm-ok); }
+.rollbackFileRow[data-kind='delete']::before { background: var(--cm-error); }
+.rollbackFileRow:not([data-kind])::before { display: none; }
 
 /* 文件类型图标（第 7 条）：固定边框盒，颜色与画法全由组件决定（DSH 自带 FileTypeIcon 自带配色）。 */
 .rollbackFileIcon {
@@ -5227,10 +5268,9 @@ button.profileRowMain:hover {
   align-items: center;
 }
 
-/* 文件名：**不抢**剩余空间（`0 1 auto`）—— 统计因此紧跟在它右侧，而不是被推到行尾（第 2 条）。
-   过长时单行省略号截断；完整路径仍在 title 里（信息不丢）。 */
+/* 路径格 = 目录（弱化）+ 基名（主色），整格单行省略号截断；完整路径仍在 title 里（信息不丢）。
+   目录段**必须弱化**：它就是「这是什么、在哪」的那半句答案（第二轮新增，理由见上面的块注释）。 */
 .rollbackFilePath {
-  flex: 0 1 auto;
   min-width: 0;
   color: var(--cm-text-1);
   font-size: var(--cm-fs-table);
@@ -5239,11 +5279,17 @@ button.profileRowMain:hover {
   text-overflow: ellipsis;
 }
 
-/* 统计块：+N 与 −M（或「删除」）作为一个整体紧跟文件名，内部 gap 固定。 */
+.rollbackFileDir {
+  color: var(--cm-text-3);
+}
+
+/* 统计块：+N 与 −M（或「删除」/「行数未统计」）作为一个整体 —— grid 第三列，
+   `justify-self: end` 让三种取值的**右缘**对齐成一条竖线（数字位数不同也不跳）。 */
 .rollbackFileStat {
-  flex: none;
+  justify-self: end;
   display: inline-flex;
   align-items: baseline;
+  justify-content: flex-end;
   gap: var(--cm-sp-2);
 }
 
@@ -5311,15 +5357,42 @@ button.profileRowMain:hover {
   cursor: not-allowed;
 }
 
-/* 选择框关掉（只退对话）时，整份文件清单降透明度：它这次**不会被执行** ——
-   不把「不会发生的事」画得像会发生的事。 */
-.reasonList[data-off='true'] {
-  opacity: 0.45;
+/* 选择框一行：**左侧那颗选择框 + 右侧汇总**。
+   2026-10-12 第二轮：汇总紧挨着它管辖的那颗选择框（同一行），而不是另起一行飘在清单上方。 */
+.previewChoiceRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cm-sp-4);
+  margin: 0 0 var(--cm-sp-2);
 }
 
-/* 「回退文件的更改」选择框行（第 1 条）：正文第一行、文件清单上方（说明行已于 2026-10-12 删除）。 */
-.previewChoiceRow {
-  margin: 0 0 var(--cm-sp-2);
+/* 汇总（「N 个文件 · +A · −D · 删除 K」）：这一屏的**第一决策信息** —— 用户先判规模再逐行核文件。
+   取消勾选时整组数字降为弱化色（`[data-off]`）并改写一句话，**不再**把整份清单变半透明：
+   半透明的清单会被读成「弹窗坏了」（旧 `.reasonList[data-off]` 的问题）。 */
+.previewScope {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--cm-sp-3);
+  flex: none;
+  font-size: var(--cm-fs-meta);
+  color: var(--cm-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.previewScopeStats {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--cm-sp-3);
+}
+
+.previewScope[data-off='true'] .previewScopeStats {
+  color: var(--cm-text-3);
+  opacity: 0.75;
+}
+
+.previewScopeOff {
+  color: var(--cm-text-3);
 }
 
 /* 「查看」的降级容器：本客户端没有右侧栏（或打开失败）时，把同一份差异画在弹窗里。 */

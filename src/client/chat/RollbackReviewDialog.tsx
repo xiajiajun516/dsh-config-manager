@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { TranslateNS } from '../client-types.ts'
-import { rollbackPreviewFileLabel } from '../../ui/rollback-view.ts'
+import { rollbackPreviewFileLabel, rollbackPreviewScope, splitRollbackPath } from '../../ui/rollback-view.ts'
 import type {
   RollbackPointPort,
   RollbackPreviewResult,
@@ -68,6 +68,8 @@ import {
   rollbackOutcome,
   rollbackPreviewNote,
   rollbackPreviewVerdict,
+  previewFileStatusKnown,
+  rollbackPreviewFileKey,
   rollbackRewindCounts,
   revertFilesOn,
   setRevertFiles,
@@ -359,6 +361,11 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   // R2/F3：判据维度必须与 submit() 的执行体同宽（含「已有可写目标 pointId」与忙态）。
   const submitEnabled = submitButtonEnabled({ draft, preview, pointId, busy })
   const warnings = preview?.warnings ?? []
+  /**
+   * 顶部**汇总**（2026-10-12 第二轮）：一次回退动多少东西 —— 用户先判规模、再逐行核文件。
+   * 数字口径在 `rollbackPreviewScope`（| 文件数 · +A / −D · 将删除 K |，行数只累加可信的那部分）。
+   */
+  const scope = rollbackPreviewScope(files, removals)
 
   return (
     <Dialog.Root open onOpenChange={(next) => { if (!next && !busy) onClose() }}>
@@ -406,31 +413,64 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                     onChange={(next) => { setDraft((previous) => setRevertFiles(previous, next) ?? previous) }}
                     label={t('chat.preview.revertFiles')}
                   />
+                  {/* 汇总：**紧挨着那颗选择框**（同一行、右对齐）—— 它管的正是这份清单的规模。
+                      取消勾选时不显示数字，改写一句「文件不改动」：那时数字与用户无关，
+                      而清单仍在下面（保持满不透明度 —— 旧做法整块 opacity 会读成「弹窗坏了」）。 */}
+                  {files.length + removals.length > 0 && (
+                    <span className={css.previewScope} data-off={revertFiles ? undefined : 'true'}>
+                      {revertFiles ? (
+                        <>
+                          <span>{t('chat.preview.scope.files', { n: String(scope.files) })}</span>
+                          <span className={css.previewScopeStats}>
+                            <span className={css.rollbackAdded}>{rt(rk('rollback.preview.file.added'), { n: String(scope.added) })}</span>
+                            <span className={css.rollbackRemoved}>{rt(rk('rollback.preview.file.removed'), { n: String(scope.removed) })}</span>
+                            {scope.removals > 0 && (
+                              <span className={css.rollbackDeleted}>{rt(rk('rollback.preview.file.deleted'))} {String(scope.removals)}</span>
+                            )}
+                          </span>
+                        </>
+                      ) : (
+                        <span className={css.previewScopeOff}>{t('chat.preview.scope.off')}</span>
+                      )}
+                    </span>
+                  )}
                 </div>
 
                 {/* ① 会被改动的文件 + 会被**删除**的文件（第 6 条：删除写「删除」，不写 +0 −N）。
-                    两段都空 ⇒ 只剩四态句；选择框关掉时整份清单降透明度（那时它不会被执行）。 */}
+                    两段都空 ⇒ 只剩四态句。**取消勾选时清单不再降透明度**（2026-10-12 第二轮：
+                    半透明的整块清单会被读成「弹窗坏了」）—— 改成汇总行改写「文件不改动」+ 统计转弱化色，
+                    仍然不把「不会发生的事」画得像会发生的事；行序、图标、路径一律保持满可读。 */}
                 {files.length === 0 && removals.length === 0 ? (
                   // 预览态四态句：由 rollbackPreviewNote 决定（key=null 时本情形没有该类句子可说，
                   // 宁可不说话，也不上一句不实的「一致」）
                   noteText !== null ? <div className={css.hint}>{noteText}</div> : null
                 ) : (
                   <>
-                    <ul className={css.reasonList} data-off={revertFiles ? undefined : 'true'}>
-                      {files.map((file) => (
-                        <li key={file.path} className={css.rollbackFileRow}>
+                    <div className={css.rollbackFileList} role="list">
+                      {files.map((file, index) => {
+                        // 目录弱化 + 基名主色（2026-10-12 第二轮）：只画基名时 `.git/index` 读不出「在哪」。
+                        const { dir, base } = splitRollbackPath(file.path)
+                        return (
+                        <div
+                          key={rollbackPreviewFileKey(file.path, file.added, file.removed, index)}
+                          className={css.rollbackFileRow}
+                          role="listitem"
+                          data-kind={previewFileStatusKnown(file.status) ? file.status : undefined}
+                        >
                           {/* 第 7 条：文件名前面一颗**文件类型图标**（DSH 侧边栏同一颗 —— 装了
                               dsh-better-sidebar 就用它的注册表，见 RollbackFileIcon.tsx）。装饰性：
                               行内文件名就是它的可访问名，图标本身不进无障碍树。 */}
                           <span className={css.rollbackFileIcon} aria-hidden="true">
                             <RollbackFileIcon path={file.path} size={14} render={renderFileIcon} />
                           </span>
-                          {/* 主标签 = **文件名**（Cursor 式；完整路径进 title，悬停仍可看全 —— 信息不丢） */}
+                          {/* 主标签 = **目录（弱化）+ 文件名（主色）**；完整路径进 title，悬停仍可看全 —— 信息不丢。 */}
                           <span className={`${css.rollbackFilePath} ${css.mono}`} title={file.path}>
-                            {rollbackPreviewFileLabel(file.path)}
+                            {dir !== '' && <span className={css.rollbackFileDir}>{dir}</span>}
+                            {base}
                           </span>
                           {/* 第 2 条：`+N −M` **紧跟文件名**（中间不再被弹性空隙推到右边），
-                              弹性空隙只在「查看」之前 —— 与 Cursor 那一屏同一版式。 */}
+                              弹性空隙只在「查看」之前 —— 与 Cursor 那一屏同一版式。
+                              三个取值（行数 / 删除 / 未统计）都**右对齐**（列宽固定）：纵向扫读成一列。 */}
                           <span className={css.rollbackFileStat}>
                             <FileStat
                               status={file.status}
@@ -453,24 +493,33 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                           >
                             {t('chat.preview.view')}
                           </button>
-                        </li>
-                      ))}
-                      {removals.map((path) => (
-                        <li key={'remove:' + path} className={css.rollbackFileRow}>
+                        </div>
+                        )
+                      })}
+                      {removals.map((path, index) => (
+                        <div
+                          key={'remove:' + rollbackPreviewFileKey(path, null, null, index)}
+                          className={css.rollbackFileRow}
+                          role="listitem"
+                          data-kind="delete"
+                        >
                           <span className={css.rollbackFileIcon} aria-hidden="true">
                             <RollbackFileIcon path={path} size={14} render={renderFileIcon} />
                           </span>
                           <span className={`${css.rollbackFilePath} ${css.mono}`} title={path}>
-                            {rollbackPreviewFileLabel(path)}
+                            {splitRollbackPath(path).dir !== '' && (
+                              <span className={css.rollbackFileDir}>{splitRollbackPath(path).dir}</span>
+                            )}
+                            {splitRollbackPath(path).base || rollbackPreviewFileLabel(path)}
                           </span>
                           {/* 整文件删除：写「删除」而不是「+0 −N」（第 6 条）。这类路径**不在**该点的
                               记录里（引擎的 file-diff 也读不出它）⇒ 不给「查看」，不给假入口。 */}
                           <span className={css.rollbackFileStat}>
                             <span className={css.rollbackDeleted}>{rt(rk('rollback.preview.file.deleted'))}</span>
                           </span>
-                        </li>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                     {/* 2026-10-12 用户第 8 条：整段「行数没有统计出来…」说明删除 —— 逐文件那格的
                         「行数未统计」已经说明一切。该键仍保留在字典里（删渲染不删键）。 */}
                     {/* 「查看」的降级通道：没有右侧栏（或打开失败）时在弹窗内展示同一份差异 */}

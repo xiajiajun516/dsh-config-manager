@@ -58,6 +58,8 @@ import {
   rollbackPreviewGuidance,
   rollbackPreviewFileLabel,
   rollbackPreviewNote,
+  rollbackPreviewScope,
+  splitRollbackPath,
   rollbackPreviewRows,
   rollbackPreviewVerdict,
   rollbackPreviewWarnings,
@@ -710,6 +712,44 @@ test('文件行主标签 = 文件名（完整路径由 title 承载，信息不�
   assert.equal(rollbackPreviewFileLabel('plain.md'), 'plain.md')
   assert.equal(rollbackPreviewFileLabel('D:\\a\\b\\'), 'b')
   assert.equal(rollbackPreviewFileLabel(''), '')
+})
+
+/**
+ * 2026-10-12 第二轮（用户「弹窗太丑」的根因之一）：只画基名时 `.git/index` / `.git/HEAD` 读不出「在哪」。
+ * 切分必须与 `rollbackPreviewFileLabel` **同一口径**（尾分隔符剥掉、只切最后一个分隔符）。
+ */
+test('文件行路径切分 = 目录前缀 + 基名（与主标签同口径）', () => {
+  assert.deepEqual(splitRollbackPath('D:\\Projects\\x\\.git\\COMMIT_EDITMSG'), { dir: 'D:\\Projects\\x\\.git\\', base: 'COMMIT_EDITMSG' })
+  assert.deepEqual(splitRollbackPath('/home/u/项目/src/a.md'), { dir: '/home/u/项目/src/', base: 'a.md' })
+  // 尾分隔符先剥掉 ⇒ 'src/' 归到「根目录下的 src」（与 rollbackPreviewFileLabel('src/') === 'src' 同一口径，
+  // 该用例就在下一条测试里；界面因此永远不会画出一条没有基名的行）
+  assert.deepEqual(splitRollbackPath('src/'), { dir: '', base: 'src' })
+  // 根目录文件：dir 空串 ⇒ 界面不画目录那一段（绝不出现孤零零的 '/'）
+  assert.deepEqual(splitRollbackPath('AGENTS.md'), { dir: '', base: 'AGENTS.md' })
+  assert.deepEqual(splitRollbackPath(''), { dir: '', base: '' })
+  // 与 rollbackPreviewFileLabel 的一致性（同一段基名）
+  for (const p of ['D:\\a\\b\\c.md', '/x/y/z.md', 'plain.md']) {
+    assert.equal(splitRollbackPath(p).base, rollbackPreviewFileLabel(p), '基名必须与主标签逐字相同：' + p)
+  }
+})
+
+/**
+ * 汇总条口径（第二轮新增）：这一屏的第一决策信息 —— 用户先判规模再逐行核文件。
+ * 三条不可放宽：① 文件数 = 列表长度；② ±行数**只累加两侧都可信的行**（null 不得计成 0）；
+ * ③ 删除集是另一条清单，单独计数。
+ */
+test('预览汇总：文件数 = 清单长度、null 行数不计入合计、删除集单独计数', () => {
+  const scope = rollbackPreviewScope(
+    [
+      { added: 3, removed: 1 },
+      { added: null, removed: null },   // 「行数未统计」——绝不能被当成 0
+      { added: 0, removed: 4 },         // 确信的 0 是**可信**数据，照常计入
+    ],
+    ['a.txt', 'b/c.txt'],
+  )
+  assert.deepEqual(scope, { files: 3, added: 3, removed: 5, removals: 2 })
+  // 空清单：三个数字都是 0（不是 null —— 这是「确知为空」，与「读不出」是两件事）
+  assert.deepEqual(rollbackPreviewScope([], []), { files: 0, added: 0, removed: 0, removals: 0 })
 })
 
 test('留存口径（S6）：自动点每会话 20 / 全局 50、救援点每会话 20 / 全局 50 由本模块单点声明', () => {

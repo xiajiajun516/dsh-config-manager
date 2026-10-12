@@ -196,6 +196,18 @@ export function previewFileStatusKnown(status: string): boolean {
   return isPreviewFileStatus(status)
 }
 
+/**
+ * 文件行的 React key —— **路径 + 行数 + 视图序号**。
+ *
+ * 为什么不能只用 path（2026-10-12 第二轮）：同一屏里路径可以合法地重复 ——
+ * 一个文件既在「会被改动」清单里、又出现在删除清单里（引擎两条清单各自成立），
+ * 只用 path 会让 React 报 duplicate key 并可能错挂 DOM。序号把顺序也钉进 key，
+ * 于是列表重排时不会出现「行内容与位置错配」的观感。
+ */
+export function rollbackPreviewFileKey(path: string, added: number | null, removed: number | null, index: number): string {
+  return path + '|' + String(added) + '|' + String(removed) + '|' + String(index)
+}
+
 /* ------------------------------------------------------------ 回退结果一句话 + 失败原因 */
 
 /** T10 新增的内部码：该态**没有记录任何文件**（工作区段 files=0）；只出现在 segments[].reasonCode。 */

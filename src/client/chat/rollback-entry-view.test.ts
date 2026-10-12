@@ -648,6 +648,30 @@ test('描述清零：说明行与「行数未统计」说明段不再渲染，�
   assert.equal(typeof (recoveryEn as Record<string, string>)['rollback.preview.file.unknownHint'], 'string', 'recovery 字典 en 必须保留 unknownHint')
 })
 
+/**
+ * 2026-10-12 第二轮（用户「弹窗 UI 太丑」）：这一屏补三件事 ——
+ *  ① 汇总条（数字，不是描述句）；② 文件行三列对齐（grid）+ 目录弱化前缀；③ 取消勾选不再把整份清单变半透明。
+ * 这里钉**接线**（判据在 src/ui/rollback-view.ts 与 css-scale-guard 各自的单测里）；文案逐字钉在本文件
+ * 已有的「聊天字典：组件发出的 chat.* 键一个不缺」那条（emittedKeys 会扫到新键，zh/en 缺一即红）。
+ */
+test('第二轮版式：汇总条 + 三列对齐 + 目录前缀 + 取消勾选不再整块变暗（源级）', () => {
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  // ① 汇总：三个数字同一份口径（rollbackPreviewScope），且挂在被它管辖的选择框那一行
+  assert.match(dialog, /rollbackPreviewScope\(files, removals\)/, '汇总必须走 ui 层唯一实现（口径与文件行同源）')
+  assert.match(dialog, /t\('chat\.preview\.scope\.files', \{ n: String\(scope\.files\) \}\)/, '汇总里「几个文件」必须走字典')
+  assert.match(dialog, /chat\.preview\.scope\.off/, '取消勾选时必须改写那句话（而不是整块变暗）')
+  assert.match(dialog, /className=\{css\.previewScope\}/, '汇总必须是 .previewScope（选择框同行的右对齐块）')
+  // ② 三列对齐 + 容器（散行贴在一起时读不出「这是一份清单」）
+  assert.match(dialog, /className=\{css\.rollbackFileList\}/, '清单必须包进 .rollbackFileList 容器')
+  assert.equal([...dialog.matchAll(/role="listitem"/g)].length, 2, '两类行（改动 / 删除）都必须是 listitem')
+  assert.match(dialog, /splitRollbackPath\(file\.path\)/, '文件行必须切出目录前缀（只画基名时读不出「在哪」）')
+  assert.match(dialog, /className=\{css\.rollbackFileDir\}/, '目录段必须有独立的弱化类')
+  assert.match(dialog, /data-kind=\{previewFileStatusKnown\(file\.status\) \? file\.status : undefined\}/, '语义色条只在形状可判定时上色（读不出就不画）')
+  // ③ 取消勾选：唯一的 data-off 挂在汇总条上 —— 清单**不得**再有 [data-off] 整块降透明
+  assert.equal([...dialog.matchAll(/data-off/g)].length, 1, 'data-off 只允许出现在汇总条上一处（清单不再整块变暗）')
+  assert.doesNotMatch(dialog, /reasonList\[data-off/, '旧做法（清单降透明度）不得回来')
+})
+
 test('结果一行摘要：nothing-to-restore 是**成功**（不是失败），其余走既有 outcome 徽章', () => {
   assert.equal(ROLLBACK_NOTHING_TO_RESTORE_KEY, 'rollback.preview.result.noop')
   const noop = chatRewindSummary({ ok: true, outcome: 'restored', code: 'nothing-to-restore' } as never)

@@ -525,17 +525,21 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   完整句仍在原键里 —— 旧实现把整句逐行重复，正是「一坨灰字」的根因。
   行内危险动作（删除回滚点）用 `IconButton danger`（禁用原因进 `title`），不再常驻一颗 danger 文本按钮。
   执行者：`src/client/recovery/recovery-panel-layout.test.ts`（禁止退回 `.actionRow[data-inline]`；并钉住「两块诊断卡退出折叠 + 回滚台账在条件挂载的弹窗内」）。
-- **聊天内「回退预览」弹窗**（每条用户消息气泡里的「↺ 回退」；2026-10-12 按 Cursor「Confirm Undo」对齐，用户七条要求）：
-  版式自上而下 = 说明行 `.previewSummary` → 选择框行 `.previewChoiceRow`（`Checkbox` 原语；
-  `chat.preview.revertFiles`「回退文件的更改」—— 勾 = `files+session`、取消 = `session`，工作区态没有可用记录时**禁用**）
-  → 文件清单 `.reasonList` → 底部 `.dialogFooter`（主按钮「回退」+「取消」，恒两颗）。
-  硬约定五条：
-  ① 文件行 = 文件类型图标 · 文件名 · **紧跟其后**的 ±行数 或「删除」 · ……弹性空隙…… · 「查看」：
-     统计块 `.rollbackFileStat` 不得被弹性空隙推到行尾（用户第 2 条），弹性空隙只留在「查看」之前；
-     文件名 `.rollbackFilePath` 是 `flex: 0 1 auto` + 单行省略号（完整路径进 `title`）；
+- **聊天内「回退预览」弹窗**（每条用户消息气泡里的「↺ 回退」；2026-10-12 按 Cursor「Confirm Undo」对齐，用户七条要求；
+  同日第二轮按用户「弹窗太丑」反馈做了列对齐 + 汇总 + 目录前缀）：
+  版式自上而下 = **汇总选择行** `.previewChoiceRow`（左侧 `Checkbox` 原语 `chat.preview.revertFiles`「回退文件的更改」——
+  勾 = `files+session`、取消 = `session`，工作区态没有可用记录时**禁用**；该行**右对齐**跟一条汇总 `.previewScope`）
+  → 文件清单 `.rollbackFileList`（layer-2 卡）→ 底部 `.dialogFooter`（主按钮「回退」+「取消」，恒两颗）。
+  ⚠️ 说明行 `.previewSummary` 已于 2026-10-12 **删除渲染**（DESIGN §7：只留能改变决定的信息），类名一并下线；
+  源级守卫钉住「`chat.preview.summary` 不得回到对话框」。
+  硬约定六条：
+  ① 文件行 = 文件类型图标 · **目录（弱化 `.rollbackFileDir`）+ 基名（主色）** · **右对齐**的 ±行数 或「删除」：
+     行是 `display: grid` 三列（`auto minmax(0,1fr) auto`），统计列 `justify-self: end` ⇒
+     数字位数不同也不跳、纵向扫读成一列（第二轮修的就是「文件名长短不一把统计列挤得左右乱跳」）；
+     完整路径仍进 `title`（信息不丢）；
   ② **整文件删除写「删除」**（`.rollbackDeleted` / `rollback.preview.file.deleted`），**不写 `+0 −N`** ——
-     那是「把文件清空」的意思；数据源 = `preview.workspace.leftovers`（宿主 rewind 的 removeCreated 缺省为真），
-     清单被截断（或短于 createdAfter）时补一句「（清单已截断）」；
+     那是「把文件清空」的意思；数据源 = `preview.workspace.removals`（引擎 `planCreatedRemovals` 的产物，
+     与**执行阶段同一个函数** ⇒ 预览列出的 = 实际删的；`leftovers` 含永不删除的拒删项，**不得**拿它当删除清单）；
   ③ 文件图标 `RollbackFileIcon`：装了 `dsh-better-sidebar` 用它的 `betterSidebar.fileIcon`，
      否则惰取 DSH 自带的 `FileTypeIcon`（`@deepseek-ai/dsh-client-ui-primitives`，DSH 文件树同一颗），
      两条都不通才用本地极简 SVG（`currentColor`）。**绝不在模块顶层 import 那个包**：老宿主没有模块表 seed 时
@@ -543,8 +547,16 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   ④ 「查看」`.fileViewBtn`：**无边框**、悬停高亮背景（`--cm-line-1`）、悬停或键盘聚焦才出现
      （`visibility` 不进过渡，`opacity` + `translateX(4px)` 过渡 = 淡入右移）；**打开成功即关闭弹窗**，
      侧栏不可用时降级为弹窗内展示同一份差异（两种原因两句话）；
-  ⑤ 选择框关掉时整份清单降透明度（`[data-off='true']`）—— 它这次**不会被执行**，不能画得像会发生。
-  执行者：`src/client/chat/rollback-entry-view.test.ts`（源级：恰好一颗选择框 / 统计块类 / 删除键 / 图标 / 打开成功关弹窗）。
+  ⑤ 选择框关掉时**不再**把整份清单降透明度（旧 `.reasonList[data-off]` 已下线 —— 半透明清单会被读成
+     「弹窗坏了」）：改成汇总条 `.previewScope[data-off='true']` 降为弱化色 + 改写一句
+     `chat.preview.scope.off`「只回退对话，文件不改动」；清单本身保持满可读（行序/图标/路径不丢）。
+  ⑥ **汇总** `.previewScope` = `{n} 个文件 · +A · −D · {n} 项删除`（`chat.preview.scope.*`，等宽数字、右对齐）：
+     这一屏的**第一决策信息** —— 用户先判规模、再逐行核文件。三个数字与文件行**同一份口径**
+     （`src/ui/rollback-view.ts` 的 `rollbackPreviewScope`）：行数只累加两侧都可信的（null 不计成 0）、
+     删除集单独计数。语义色条 `.rollbackFileRow::before`（2px：create 绿 / overwrite 蓝 / delete 红）
+     只在 `data-kind` 可判定时上色。
+  执行者：`src/client/chat/rollback-entry-view.test.ts`（源级：恰好一颗选择框 / 统计块类 / 删除键 / 图标 / 打开成功关弹窗 /
+  第二轮版式六条）+ `src/ui/rollback-view.test.ts`（`splitRollbackPath`、`rollbackPreviewScope` 的逐条口径）。
 - **会话体检弹窗**（环境 → 维护与诊断 → 会话体检，2026-10-12 重排，同一条用户反馈「UI 太丑」）：
   弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的说明 ⓘ + 主操作「开始体检 / 重新体检」）
   → `.shSummary`（`.shMetrics` 数字 tiles：会话总数 / 需要处理 / 会话格式 → `.shSeverities` 严重级 chips
@@ -809,9 +821,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     「回退预览 → 查看」共用同一副骨架（`.diffTable` / `.diffScroll` / `.diffCell*` / `.diffHunkRow` /
     `.diffNoColW*`），单元格文本**缺省即 redact**（`sanitize` 的缺省值就是 `redact`，调用方只能换成别的脱敏器）。
 - **回退预览弹窗（Cursor「Confirm Undo」式，2026-10-12 用户要求）**：底盘沿用 `.dialogCard` 宽版，
-  正文顺序固定 = 说明行（`.previewSummary`）→ 会被回退的文件列表（`.rollbackFileRow`）→ 可选的原因/告警；
-  底部**恰好两颗**按钮（回退 / 取消）。
-  - 文件行 = 等宽路径（`.rollbackFilePath`）+ `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）
+  正文顺序固定 = 汇总选择行（`.previewChoiceRow` + `.previewScope`，见 §「聊天内回退预览弹窗」）→
+  会被回退的文件列表（`.rollbackFileList` 内的 `.rollbackFileRow`）→ 可选的原因/告警；
+  底部**恰好两颗**按钮（回退 / 取消）。说明行 `.previewSummary` **已下线**（删渲染）。
+  - 文件行 = 等宽路径（`.rollbackFilePath` = 弱化目录 `.rollbackFileDir` + 基名）+ `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）
     + **悬停或键盘 focus 才显形的「查看」**（`.fileViewBtn`：用 `visibility` 而不是 `display:none` ——
     它必须留在 tab 序里，否则这个操作只能用鼠标）。
   - 「查看」把该文件的差异开进 **DSH 右侧栏**（本插件注册自己的 tab 类型 `cm-rollback-diff`）；
