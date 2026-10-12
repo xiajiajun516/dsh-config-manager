@@ -448,3 +448,11 @@ test('行 → 展示行：标题已脱敏；缺 / 空白标题一律 null（不�
   const safeTitle = redactedRow?.title ?? null;
   assert.ok(safeTitle !== null && !safeTitle.includes(secret), '标题里的密钥形状必须在渲染前被脱敏');
 });
+test('体检展示模型：blank 事实必须进展示行（界面据此显示「新会话」而不是 uuid）', () => {
+  const [blankRow] = sessionHealthRows(response([row({ severity: 'invisible', issues: [{ code: 'format-newer', severity: 'invisible' }], blank: true })]));
+  assert.equal(blankRow?.blank, true);
+  assert.equal(blankRow?.title, null, '空白会话没有标题');
+  const [normalRow] = sessionHealthRows(response([row({ severity: 'invisible', issues: [{ code: 'format-newer', severity: 'invisible' }] })]));
+  assert.equal(normalRow?.blank, false, '缺字段一律不填假值');
+});
+

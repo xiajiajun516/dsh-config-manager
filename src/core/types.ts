@@ -140,6 +140,13 @@ export interface ExportUnit {
    * 包里 41 条）。非 sessions 分区 / 非子代理会话一律不设该字段（不猜）。
    */
   parentSessionId?: string;
+  /**
+   * 空白会话（**从未提问过**；只有 sessions 分区的单元可能有值）。
+   *
+   * 用途：DSH 自己给这类会话的标题就是本地化的「新会话」（`session.new`），没有标题可显示。
+   * 只下发**事实**，不下发文案 —— 界面按当前语言显示（与 DSH 同口径），绝不用 uuid 冒充标题。
+   */
+  blank?: boolean;
 }
 
 export interface ValidationResult {
@@ -660,6 +667,8 @@ export interface PlanItem {
   label?: string;
   /** 单元的**二级分组名**（可选，同 `/export-preview` 的 `ExportUnit.group` 语义；纯展示）。 */
   group?: string;
+  /** 空白会话（从未提问；同 `ExportUnit.blank`，只下发事实、文案由界面本地化）。 */
+  blank?: boolean;
   /** 本项对应的**工作区记录拥有的会话 id**（工作区计划项专用；issue #45 勾选联动）。 */
   sessionIds?: string[];
   /** 本工作区计划项 **path 的 cwd 目录键**（`projectKeyOf(path)`；issue #45 勾选联动第二判据）。 */

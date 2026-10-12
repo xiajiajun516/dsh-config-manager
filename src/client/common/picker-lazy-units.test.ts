@@ -27,6 +27,12 @@ test('选择器：未读分区照常渲染展开控件，展开时才按分区�
   assert.ok(PICKER.includes('sectionCountState(node, {'), '计数区状态必须走 ui 纯函数 sectionCountState（未读不渲染 0/0）');
 });
 
+test('选择器：空白会话（从未提问）显示本地化占位名，不拿 uuid 当标题', () => {
+  assert.ok(PICKER.includes("u.blank === true ? ("), '空白会话必须走占位名分支');
+  assert.ok(PICKER.includes("t('picker.blankSession')"), '占位名必须走字典（禁止硬编码用户可见字符串）');
+  assert.ok(PICKER.includes('title={safeLabel}'), '目录名仍进 title（悬停可核对是哪一条）');
+});
+
 test('导出页：未读到清单的分区标记 unitsUnread，展开动作接到按需读取', () => {
   assert.ok(EXPORT.includes('unitsUnread: got === undefined'), '未取到清单的分区必须标记为「未读」');
   assert.ok(

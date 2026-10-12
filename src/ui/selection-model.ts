@@ -59,6 +59,13 @@ export interface SelectionUnit {
    * 时联动整段失效 —— 界面勾了什么与包里装了什么就会不一致（真机事故：勾 2 条、包里 41 条）。
    */
   parentSessionId?: string
+  /**
+   * 空白会话（从未提问过；宿主下发的**事实**，只有 sessions 分区可能有值）。
+   *
+   * 用途：DSH 自己给这类会话的标题是本地化的「新会话」—— 界面据此显示同样的占位名，
+   * 而不是把 `session-<uuid>` 当标题（用户要求「始终用对话标题」）。文案由界面按当前语言解析。
+   */
+  blank?: boolean
 }
 
 /** 一个分区及其可勾选单元；units 为空 = 本分区不可细分（UI 只给整体开关）。 */
@@ -179,6 +186,7 @@ export function sectionsFromPreview(
       ...(u.sessionIds !== undefined ? { sessionIds: u.sessionIds } : {}),
       ...(u.projectKey !== undefined ? { projectKey: u.projectKey } : {}),
       ...(u.parentSessionId !== undefined ? { parentSessionId: u.parentSessionId } : {}),
+      ...(u.blank === true ? { blank: true } : {}),
     })),
   }))
 }
@@ -816,6 +824,7 @@ export function sectionsFromPlan(plan: ImportPlan): SelectionSection[] {
         ...(item.group !== undefined ? { group: item.group } : {}),
         ...(item.sessionIds !== undefined ? { sessionIds: item.sessionIds } : {}),
         ...(item.projectKey !== undefined ? { projectKey: item.projectKey } : {}),
+        ...(item.blank === true ? { blank: true } : {}),
         sizeBytes: 0,
       })
     }

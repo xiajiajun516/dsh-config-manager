@@ -17,6 +17,14 @@ import type { ExportUnit, HostContext, SessionParentRelation } from './types.ts'
 
 const SESSION_PROJCACHE = 'storages/session_projcache.json';
 const WORKSPACE_STORE = 'storages/workspace.json';
+/**
+ * **逐会话**投影存储目录（`storages/session_projcache/sessions/<会话目录名>.json`）。
+ *
+ * 与 `session_projcache.json` 的关系：那个是**会淘汰的近期聚合**（本机实测只覆盖 445/1347 条会话），
+ * 这个目录才是 DSH 为**每条会话**留下的投影（本机 1349 份，其中 1150 份带标题）。只读聚合缓存会让
+ * 其余会话在选择器 / 体检列表里退化成 uuid 目录名 —— 用户认不出哪条是哪条。
+ */
+const SESSION_PROJECTION_DIR = 'storages/session_projcache/sessions';
 
 // projectKeyOf 已下移到**零依赖**模块 `session-select.ts`（客户端勾选联动要按 cwd 目录键认领工作区，
 // 而本模块会用 Buffer 读 DSH 存储缓存，不能进浏览器 bundle）。这里 re-export，既有导入路径逐字不变。
@@ -78,9 +86,19 @@ function asRecord(value: unknown): Record<string, unknown> | null {
  */
 const metaCache = new Map<string, { key: string; index: SessionMetaIndex }>();
 
-/** 清空索引缓存（测试用；宿主在收到「DSH 存储已重载」信号时也可调用）。 */
+/**
+ * 逐会话投影文件的**进程内缓存**（键含 homeDir + 相对路径，失效判据 = 该文件 mtime）。
+ *
+ * 为什么需要：导出选择器一次要补上千条会话的标题，而同一批会话在一次交互里会被反复查询
+ * （打开选择器 → 勾选 → 会话↔工作区联动补跑）。每次重读 1300 个小文件会把「打开弹窗」拖成秒级。
+ * 与 `metaCache` 同一条纪律：**读不到 mtime 就不缓存**（宁可贵一点，也绝不拿陈旧标题骗用户）。
+ */
+const projectionCache = new Map<string, { key: string; facts: ProjectedSessionFacts | undefined }>();
+
+/** 清空索引与逐会话投影缓存（测试用；宿主在收到「DSH 存储已重载」信号时也可调用）。 */
 export function clearSessionMetaCache(): void {
   metaCache.clear();
+  projectionCache.clear();
 }
 
 /** 文件 mtime（毫秒；门面未实现 / 读不到 → null = 无法判定新鲜度，调用方不得缓存）。 */
@@ -154,6 +172,102 @@ async function loadSessionMeta(ctx: HostContext): Promise<SessionMetaIndex> {
   return index;
 }
 
+/** 逐会话投影文件里**展示所需**的事实（只取这两项；文件读不到 = undefined）。 */
+interface ProjectedSessionFacts {
+  /** 界面标题（`record.rows.title.val`） */
+  title?: string;
+  /** 空白会话（`record.rows.sessionListMetadata.val.blank`）—— DSH 自己也据此显示「新会话」 */
+  blank?: boolean;
+}
+
+/**
+ * 会话单元 id（`sessions:<项目键>/<目录名>`）或裸目录名 → **归一化裸键**（`sessionIdKey`）。
+ *
+ * 为什么要有：调用方手上是单元 id / 计划项 id（末段才是目录名），而索引与投影文件都按**裸键**存。
+ */
+export function sessionBareKeyOf(ref: string): string {
+  const slash = ref.lastIndexOf('/');
+  return sessionIdKey(slash >= 0 ? ref.slice(slash + 1) : ref);
+}
+
+/** 逐会话投影文件的候选名（DSH 实测两种目录名形态并存：`session-<uuid>.json` 与 `<uuid>.json`）。 */
+function projectionFileNames(bare: string): string[] {
+  return ['session-' + bare + '.json', bare + '.json'];
+}
+
+/**
+ * 读一条会话的**逐会话投影文件**（`storages/session_projcache/sessions/<会话目录名>.json`）。
+ *
+ * 形状与聚合缓存略有差异：文件里是 `{ version, record: { identity, rows } }`，聚合里是 `{ identity, rows }`
+ * —— 两种都认（`record` 缺省即顶层）。**只读、尽力而为、绝不抛错**：读不到 / 形状不认 → undefined。
+ */
+async function readProjectedSession(ctx: HostContext, bare: string): Promise<ProjectedSessionFacts | undefined> {
+  for (const name of projectionFileNames(bare)) {
+    const rel = SESSION_PROJECTION_DIR + '/' + name;
+    const cacheId = ctx.homeDir + '\u0000' + rel;
+    const mtime = await mtimeOf(ctx, rel);
+    if (mtime !== null) {
+      const hit = projectionCache.get(cacheId);
+      if (hit !== undefined && hit.key === String(mtime)) return hit.facts;
+    }
+    let facts: ProjectedSessionFacts | undefined;
+    const raw = asRecord(await readJsonSafe(ctx, rel));
+    if (raw !== null) {
+      const rec = asRecord(raw['record']) ?? raw;
+      const rows = asRecord(rec['rows']);
+      const title = asRecord(rows?.['title'])?.['val'];
+      const listMeta = asRecord(asRecord(rows?.['sessionListMetadata'])?.['val']);
+      const out: ProjectedSessionFacts = {};
+      if (typeof title === 'string' && title.trim() !== '') out.title = title.trim();
+      if (listMeta?.['blank'] === true) out.blank = true;
+      facts = out;
+    }
+    if (mtime === null) projectionCache.delete(cacheId);
+    else projectionCache.set(cacheId, { key: String(mtime), facts });
+    if (facts !== undefined) return facts;
+  }
+  return undefined;
+}
+
+/** 一次并发读多少份投影文件（小文件；32 路实测把 1300 条压到百毫秒级）。 */
+const PROJECTION_CONCURRENCY = 32;
+
+/**
+ * 「界面标题」的**全量**解析：聚合缓存优先，缺的按需读**逐会话投影文件**。
+ *
+ * 用户要求（2026-10-12）：「历史对话的文本**始终**用对话标题，而不是只取缓存里的标题」。
+ * 只读聚合缓存（`session_projcache.json`）时，本机 1347 条会话里有 902 条拿不到标题 → 界面退化成
+ * `session-<uuid>`，用户在同屏十几条里认不出哪条是自己的对话。
+ *
+ * 成本：只读「聚合缓存里没有标题」的那些（本机约 900 条小文件；实测全量顺序读 1349 份 = 361 ms），
+ * 32 路并发 + mtime 缓存 —— 同一批会话重复查询（打开选择器 / 勾选 / 联动补跑）不再重复读盘。
+ *
+ * 语义：**只增不改** —— 已缓存的标题与 blank 一律保留；实在读不到的会话原样返回（界面回落目录名）。
+ *
+ * @param refs 会话单元 id（`sessions:<项目键>/<目录名>`）或裸目录名，混着传也行
+ */
+export async function readSessionMetaWithTitles(ctx: HostContext, refs: readonly string[]): Promise<SessionMetaIndex> {
+  const index = await readSessionMeta(ctx);
+  const need = [...new Set(refs.map((ref) => sessionBareKeyOf(ref)).filter((bare) => bare !== ''))]
+    .filter((bare) => index.bySessionId.get(bare)?.title === undefined);
+  if (need.length === 0) return index;
+  const bySessionId = new Map(index.bySessionId);
+  for (let i = 0; i < need.length; i += PROJECTION_CONCURRENCY) {
+    const chunk = need.slice(i, i + PROJECTION_CONCURRENCY);
+    const found = await Promise.all(chunk.map(async (bare) => [bare, await readProjectedSession(ctx, bare)] as const));
+    for (const [bare, facts] of found) {
+      if (facts === undefined) continue;
+      const existing = bySessionId.get(bare) ?? {};
+      bySessionId.set(bare, {
+        ...existing,
+        ...(facts.title !== undefined ? { title: facts.title } : {}),
+        ...(facts.blank !== undefined ? { blank: facts.blank } : {}),
+      });
+    }
+  }
+  return { ...index, bySessionId };
+}
+
 /** 单元 id（`sessions:<项目键>/<会话目录名>`）→ 会话目录名；形状不符 → null。 */
 function sessionIdOfUnit(sectionId: string, unitId: string): { projectKey: string; sessionId: string } | null {
   const prefix = sectionId + ':';
@@ -176,7 +290,7 @@ function sessionIdOfUnit(sectionId: string, unitId: string): { projectKey: strin
  */
 export function applySessionMetaToPlanItems<
   T extends { id: string; unitId?: string; adapter: string; label?: string; group?: string },
->(items: readonly T[], index: SessionMetaIndex, sectionId = 'sessions'): T[] {
+>(items: readonly T[], index: SessionMetaIndex, sectionId = 'sessions'): (T & { blank?: boolean })[] {
   return items.map((item) => {
     if (item.adapter !== sectionId) return item;
     const parsed = sessionIdOfUnit(sectionId, item.unitId ?? item.id);
@@ -188,6 +302,8 @@ export function applySessionMetaToPlanItems<
     return {
       ...item,
       ...(meta?.title !== undefined ? { label: meta.title } : {}),
+      // 空白会话（从未提问）：DSH 自己显示「新会话」而不是 uuid；标记随计划项下发，由界面本地化
+      ...(meta?.blank === true ? { blank: true } : {}),
       group,
     };
   });
@@ -242,17 +358,24 @@ export function applySessionParentLinks<T extends { id: string; parentSessionId?
  * （`storages/session_projcache.json` 的 `rows.title.val`）—— 与导出选择器**同一份索引、同一套
  * `sessionIdKey` 归一化口径**，绝不另写一套查表规则。
  *
- * 只读、纯函数、**绝不编造**：缓存里没有这条会话 / 没有标题 → 原样返回（界面回落显示目录名）。
+ * 只读、纯函数、**绝不编造**：索引里没有这条会话 / 没有标题 → 原样返回（界面回落显示目录名）。
+ * 索引本身由 `readSessionMetaWithTitles()` 产出（聚合缓存 + **逐会话投影文件**兜底，见那里）。
  */
 export function applySessionTitles<T extends { sessionId?: string | null }>(
   rows: readonly T[],
   index: SessionMetaIndex,
-): (T & { title?: string })[] {
+): (T & { title?: string; blank?: boolean })[] {
   return rows.map((row) => {
     // 会话 id 缺失 / 空串的记录**一个字段都不加**（回滚台账里有这类历史记录：绝不猜它属于哪条对话）
     if (typeof row.sessionId !== 'string' || row.sessionId === '') return row;
-    const title = index.bySessionId.get(sessionIdKey(row.sessionId))?.title;
-    return title === undefined ? row : { ...row, title };
+    const meta = index.bySessionId.get(sessionIdKey(row.sessionId));
+    if (meta === undefined) return row;
+    return {
+      ...row,
+      ...(meta.title !== undefined ? { title: meta.title } : {}),
+      // 空白会话（从未提问）：没有标题，界面据此显示本地化的「新会话」（与 DSH 的 session.new 同口径）
+      ...(meta.blank === true ? { blank: true } : {}),
+    };
   });
 }
 
@@ -289,6 +412,8 @@ export function applySessionMeta(
       label: meta?.title ?? unit.label,
       ...(detail !== undefined ? { detail } : {}),
       group: workspaceTitle ?? parsed.projectKey,
+      // 空白会话（从未提问）：没有标题可显示，标记出来让界面显示本地化的「新会话」（与 DSH 同口径）
+      ...(meta?.blank === true ? { blank: true } : {}),
     };
   });
   // 排序：先按工作区（保持首次出现顺序），组内最近活跃的在前；无时间的排在组内末尾。

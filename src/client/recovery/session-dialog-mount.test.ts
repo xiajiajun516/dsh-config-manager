@@ -101,7 +101,12 @@ test('T16：会话体检弹窗 = 数字摘要 + 区块头 + 两行式行卡（�
  */
 test('T17：会话行首 = 对话标题（缺省回落目录名），目录名退到 meta 行仍可见', () => {
   const src = fs.readFileSync(PANEL, 'utf8');
-  assert.ok(src.includes('{row.title ?? row.sessionId}'), '行首主文本必须是标题（缺省回落 sessionId）');
+  assert.ok(
+    src.includes("row.title ?? (row.blank ? t('sessions.blank') : row.sessionId)"),
+    '行首主文本必须是标题（缺省：空白会话显示「新会话」，其余回落 sessionId）',
+  );
   assert.ok(src.includes('title={row.title ?? row.unitId}'), '全文进 title（标题已是脱敏后的文本）');
   assert.ok(src.includes('title={row.unitId}>{row.sessionId}'), '目录名仍需常驻（修复 / 下载要核对的主键）');
+  // 空白会话（从未提问）：DSH 自己显示「新会话」—— 不得拿 uuid 当标题
+  assert.ok(src.includes("row.blank ? t('sessions.blank')"), '空白会话必须显示本地化的「新会话」占位名');
 });

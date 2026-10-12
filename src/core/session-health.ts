@@ -168,6 +168,13 @@ export interface SessionHealthRow {
   version?: number;
   cwd?: string;
   origin?: string;
+  /**
+   * 空白会话（从未提问过；宿主侧从会话投影补的**事实**）。
+   *
+   * 用途：这类会话在 DSH 自己那里也没有标题（显示本地化的「新会话」）—— 界面据此显示同样的
+   * 占位名，而不是把 `session-<uuid>` 当标题。只下发事实，文案由界面按当前语言解析。
+   */
+  blank?: boolean;
   sizeBytes?: number;
   mtimeMs?: number;
 }

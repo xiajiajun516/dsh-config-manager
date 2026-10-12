@@ -22,6 +22,8 @@ export interface SessionHealthRowView {
    * 界面不得拿目录名伪装成标题，也不得编造：缺省 → 回落显示 sessionId。
    */
   title?: string
+  /** 空白会话（从未提问过；宿主下发的事实）—— 界面显示本地化的「新会话」，不用 uuid 冒充标题。 */
+  blank?: boolean
   projectKey: string
   severity: SessionHealthSeverity
   issues: { code: string; severity: SessionHealthSeverity; detail?: string }[]
@@ -305,6 +307,11 @@ export interface SessionHealthDisplayRow {
    * 用户要认的是「哪条是我的对话」，所以标题占行首最宽的位置；目录名退到 meta 行当可核对的主键。
    */
   title: string | null
+  /**
+   * 空白会话（从未提问过）：没有标题，也没有任何内容可认 —— 界面显示本地化的「新会话」
+   * （与 DSH 自己的 `session.new` 同口径），**绝不用 uuid 冒充标题**。
+   */
+  blank: boolean
   projectKey: string
   severity: SessionHealthSeverity
   severityKey: (typeof SESSION_SEVERITY_KEYS)[SessionHealthSeverity]
@@ -362,6 +369,7 @@ export function sessionHealthRows(response: SessionHealthResponse | null): Sessi
     sessionId: row.sessionId,
     // 展示文本一律先脱敏（标题是用户自由文本，可能含粘贴进来的密钥）；省略由 CSS 单行省略负责
     title: typeof row.title === 'string' && row.title.trim() !== '' ? redact(row.title) : null,
+    blank: row.blank === true,
     projectKey: row.projectKey,
     severity: row.severity,
     severityKey: SESSION_SEVERITY_KEYS[row.severity],

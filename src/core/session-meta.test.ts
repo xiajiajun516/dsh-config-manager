@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 
 import { makeContext, MemFs } from '../adapters/test-helpers.ts';
 import type { ExportUnit } from './types.ts';
-import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, applySessionTitles, clearSessionMetaCache, projectKeyOf, readSessionMeta, subagentParentMap } from './session-meta.ts';
+import { applySessionMeta, applySessionMetaToPlanItems, applySessionParentLinks, applySessionTitles, clearSessionMetaCache, projectKeyOf, readSessionMeta, readSessionMetaWithTitles, sessionBareKeyOf, subagentParentMap } from './session-meta.ts';
 
 const HOME = 'C:\\Users\\alice';
 const UUID_A = '19495390-402b-463d-a4cc-882287c1f04e';
@@ -337,3 +337,96 @@ test('applySessionTitles：体检行补对话标题（两种目录名形态都�
   const empty = { bySessionId: new Map(), workspaceTitleByProjectKey: new Map(), workspacePathByProjectKey: new Map() };
   assert.deepEqual(applySessionTitles(rows, empty).map((r) => r.title), [undefined, undefined, undefined]);
 });
+/* ---------------- 逐会话投影文件（全量标题来源）----------------
+ * 用户要求（2026-10-12）：「历史对话的文本**始终**用对话标题，而不是只取缓存里的标题」。
+ * 本机实测（2026-10-12，1347 个会话目录）：聚合缓存只覆盖 445 条，而逐会话投影文件覆盖**每一条**
+ * —— 1150 份带标题，其余 197 份是 blank=true 的空白会话（DSH 自己给它们显示「新会话」）。
+ */
+
+/** 写一份逐会话投影文件（真机形状：`{ version, record: { identity, rows } }`）。 */
+async function seedProjection(
+  ctx: ReturnType<typeof makeContext>,
+  fileName: string,
+  rows: Record<string, unknown>,
+): Promise<void> {
+  const body = { version: 7, record: { identity: { cwd: 'D:\\Projects' }, rows } };
+  // 文件名 = 会话目录名 + `.json`（真机形态）；调用方可以省掉后缀
+  const name = fileName.endsWith('.json') ? fileName : fileName + '.json';
+  await ctx.fs.writeFile('storages/session_projcache/sessions/' + name, Buffer.from(JSON.stringify(body), 'utf8'));
+}
+
+test('readSessionMetaWithTitles：聚合缓存缺标题时读逐会话投影文件补上（两种文件名形态都认）', async () => {
+  clearSessionMetaCache();
+  const ctx = await seedStorages(HOME); // 聚合里：A 有标题、B 没有
+  // B 的投影文件（真机：文件名 = 会话目录名，两种形态并存）
+  await seedProjection(ctx, 'session-' + UUID_B, {
+    title: { ver: 1, seq: 3, val: '投影里的标题' },
+    sessionListMetadata: { val: { blank: false } },
+  });
+  // 另一条只有裸 uuid 形态的投影文件
+  const bareId = 'ffffffff-0000-0000-0000-000000000000';
+  await seedProjection(ctx, bareId + '.json', { title: { ver: 1, seq: 2, val: '裸文件名形态的标题' } });
+
+  const index = await readSessionMetaWithTitles(ctx, ['sessions:' + PROJECT + '/session-' + UUID_A, 'sessions:' + PROJECT + '/' + UUID_B, bareId, 'nonexistent-id']);
+  assert.equal(index.bySessionId.get(UUID_A)?.title, '推送更新到 GitHub 并发布新版本', '聚合缓存里的标题原样保留（不被投影覆盖）');
+  assert.equal(index.bySessionId.get(UUID_B)?.title, '投影里的标题', '聚合缺标题 → 用逐会话投影补上');
+  assert.equal(index.bySessionId.get(bareId)?.title, '裸文件名形态的标题', '两种投影文件名形态都要认');
+  assert.equal(index.bySessionId.get('nonexistent-id')?.title, undefined, '两边都没有 → 不编造');
+
+  // 只读、纯：不改原索引对象
+  const plain = await readSessionMeta(ctx);
+  assert.equal(plain.bySessionId.get(UUID_B)?.title, undefined, 'readSessionMetaWithTitles 不得污染 readSessionMeta 的缓存索引');
+});
+
+test('readSessionMetaWithTitles：空白会话下发 blank 事实（没有标题可显示，界面显示「新会话」）', async () => {
+  clearSessionMetaCache();
+  const ctx = await seedStorages(HOME);
+  await seedProjection(ctx, UUID_B + '.json', { sessionListMetadata: { val: { blank: true, lastPromptAt: null } } });
+  const index = await readSessionMetaWithTitles(ctx, [UUID_B]);
+  assert.equal(index.bySessionId.get(UUID_B)?.blank, true, '空白事实必须下发（界面据此显示本地化的「新会话」）');
+  assert.equal(index.bySessionId.get(UUID_B)?.title, undefined, '空白会话没有标题 —— 绝不编造一个');
+});
+
+test('readSessionMetaWithTitles：只读「聚合里缺标题」的那些，且 mtime 未变时第二次不再读盘', async () => {
+  clearSessionMetaCache();
+  const { ctx, fs } = await seededCounting('C:\\Users\\proj-cache', 4000);
+  await seedProjection(ctx, 'session-' + UUID_B, { title: { ver: 1, seq: 2, val: '投影标题 B' } });
+  fs.setMtime('storages/session_projcache/sessions/session-' + UUID_B + '.json', 4100);
+  const first = await readSessionMetaWithTitles(ctx, [UUID_A, UUID_B]);
+  assert.equal(first.bySessionId.get(UUID_B)?.title, '投影标题 B');
+  const after = fs.reads.length;
+  const second = await readSessionMetaWithTitles(ctx, [UUID_A, UUID_B]);
+  assert.equal(second.bySessionId.get(UUID_B)?.title, '投影标题 B');
+  assert.equal(fs.reads.length, after, '同一批会话重复查询不得重复读盘（投影文件走 mtime 缓存）');
+  // A 在聚合里已有标题 → 不该去读它的投影文件
+  assert.equal(fs.reads.filter((rel) => rel.includes('session-' + UUID_A + '.json')).length, 0, '已有标题的会话不得多读一份文件');
+});
+
+test('sessionBareKeyOf：单元 id / 目录名两种入参都归一化到裸键', () => {
+  assert.equal(sessionBareKeyOf('sessions:' + PROJECT + '/session-' + UUID_A), UUID_A);
+  assert.equal(sessionBareKeyOf('session-' + UUID_A), UUID_A);
+  assert.equal(sessionBareKeyOf(UUID_A), UUID_A);
+});
+
+
+test('blank 事实：导出单元与体检行都透传（界面据此显示本地化「新会话」而不是 uuid）', async () => {
+  clearSessionMetaCache();
+  const ctx = await seedStorages(HOME);
+  await seedProjection(ctx, UUID_B + '.json', { sessionListMetadata: { val: { blank: true } } });
+  const index = await readSessionMetaWithTitles(ctx, [UUID_B]);
+
+  const units = applySessionMeta([unit(OTHER_PROJECT + '/' + UUID_B)], index);
+  assert.equal(units[0]?.blank, true, '空白会话的导出单元必须带 blank（ContentPicker 显示「新会话」）');
+  assert.equal(units[0]?.label, OTHER_PROJECT + '/' + UUID_B, '没有标题 → label 仍是目录名（界面按 blank 显示占位名）');
+
+  const rows = applySessionTitles([{ unitId: OTHER_PROJECT + '/' + UUID_B, sessionId: UUID_B }], index);
+  assert.equal(rows[0]?.blank, true, '体检行同样要带 blank');
+  assert.equal(rows[0]?.title, undefined, '空白会话没有标题');
+
+  const plan = applySessionMetaToPlanItems(
+    [{ id: 'sessions:' + OTHER_PROJECT + '/' + UUID_B, unitId: 'sessions:' + OTHER_PROJECT + '/' + UUID_B, adapter: 'sessions', kind: 'Create', description: 'x' }],
+    index,
+  );
+  assert.equal(plan[0]?.blank, true, '导入计划项同样要带 blank');
+});
+

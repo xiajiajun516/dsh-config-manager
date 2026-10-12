@@ -828,3 +828,11 @@ test('惰性清单：未读分区仍渲染展开控件；计数区不得把「�
   assert.equal(sectionPickState(sel, unread), 'all');
   assert.deepEqual(buildExportRequest(sel, [unread]), { only: ['pluginFiles'] });
 });
+test('选择模型：sectionsFromPreview 透传 blank 事实（ContentPicker 据此显示「新会话」）', () => {
+  const nodes = sectionsFromPreview([
+    { section: 'sessions', count: 1, sizeBytes: 10, items: [{ id: 'sessions:--p--/a', label: 'a', sizeBytes: 10, blank: true }] },
+    { section: 'skills', count: 1, sizeBytes: 10, items: [{ id: 'skills:x', label: 'x', sizeBytes: 10 }] },
+  ]);
+  assert.equal(nodes[0]?.units[0]?.blank, true);
+  assert.equal(nodes[1]?.units[0]?.blank, undefined, '非会话单元不得凭空带 blank');
+});

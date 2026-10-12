@@ -227,24 +227,34 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Guards**: new title passthrough/redaction/fallback cases in `src/ui/rollback-view.test.ts`; the split-pane guard in `src/client/recovery/recovery-panel-layout.test.ts` gained "height locked" and "title preferred" assertions.
 > - **Not verified**: still no browser click-through.
 
-> **会话体检列表的行首改为显示「对话标题」，目录名退到第二行**（用户 2026-10-12 反馈）：列表此前只显示 `session-20d2722c-…` 这样的目录名，
-> 同屏十几条待处理会话里认不出哪条是自己的对话 —— 用户只能靠 uuid 回想。
-> - 标题取自 DSH 自己的会话缓存（`storages/session_projcache.json` 的 `rows.title.val`），走**导出选择器同一份** `core/session-meta.ts`
->   索引与 `sessionIdKey` 归一化（两种目录名形态都能命中）；缓存没覆盖这条会话时**保持目录名**，绝不编造标题。
-> - 宿主在 `GET /recovery/sessions` 扫描后统一补 `title`（`applySessionTitles`）：体检扫描器自己仍是「只读字节事实」，不新增一次读盘。
-> - 目录名**仍常驻可见**（等宽、退到第二行）：它是修复 / 下载原始日志要核对的主键；标题是用户自由文本，渲染前过 `redact()`。
-> - **护栏**：`src/core/session-meta.test.ts`（两种目录名形态 / 无标题不编造 / 空索引不抛错）、`src/ui/session-inventory-view.test.ts`（标题映射 + 脱敏 + 缺省为 null）、
->   `src/client/recovery/session-dialog-mount.test.ts` 新增 T17（行首必须是标题、目录名仍可见）。
-> - **NOT VERIFIED**：真机浏览器里标题的实际观感（本轮只有 typecheck + 单测 + 构建产物）。
+> **会话标题改成「始终用对话标题」：来源从聚合缓存扩到逐会话投影，空白会话显示本地化「新会话」**（用户 2026-10-12 要求「始终用对话标题，而不是只取缓存里的标题」）：
+> - **症状**：导出 / 同步选择器、导入计划、会话体检列表、回滚点台账里，一部分会话只显示 `session-20d2722c-…` 这样的目录名 —— 同屏十几条里认不出哪条是自己的对话。
+> - **根因**：标题此前只有一个来源 —— DSH 的**聚合缓存** `storages/session_projcache.json`，而它是**会淘汰的近期子集**：真机实测只覆盖 **445 / 1347** 条会话，其余 902 条一律退化成 uuid 目录名。
+> - **改法**：新增 `readSessionMetaWithTitles()`（`src/core/session-meta.ts`）—— 聚合缓存优先，缺的按需读 **DSH 为每条会话留下的逐会话投影文件**
+>   `storages/session_projcache/sessions/<会话目录名>.json`（`record.rows.title.val`；两种目录名形态都认），32 路并发 + 按文件 mtime 缓存；
+>   **只增不改**、只读、绝不编造。所有标题消费点（`/export-preview`、`/plan`、`/recovery/sessions`、`/recovery/rollback-points`）统一走它。
+> - **空白会话**（`sessionListMetadata.blank === true`，从未提问过）：DSH 自己也没有标题 —— 宿主下发 `blank` **事实**，界面显示本地化的「新会话」
+>   （与 DSH 自己的 `session.new` 同口径），**不再拿 uuid 冒充标题**（新增 `picker.blankSession` / `sessions.blank` 两键，zh / en 齐全）。
+> - **真机实测**（2026-10-12，1347 个会话目录）：解析 **193 ms**（缓存命中 44 ms）→ 有标题 **1150**、空白会话 **197**、既无标题也非空白 **0**。
+>   用户截图里那条 `session-20d2722c-…` 正是空白会话（从未提问）→ 现在显示「新会话」。
+> - **护栏**：`src/core/session-meta.test.ts`（投影补标题 / 两种文件名形态 / blank 事实 / 只读缺标题的那些 / mtime 缓存 / 空索引不抛错）、
+>   `src/ui/session-inventory-view.test.ts` 与 `src/ui/selection-model.test.ts`（blank 透传）、`src/client/common/picker-lazy-units.test.ts` 与
+>   `src/client/recovery/session-dialog-mount.test.ts` T17（界面必须走字典占位名，不得渲染裸 uuid）。
+> - **NOT VERIFIED**：真机浏览器里的实际观感（本轮做到 typecheck + 单测 + 真机只读抽查）。
 
-> **Session health rows now lead with the conversation title, and the directory name moves to the second line** (user report, 2026-10-12):
-> rows previously showed only a directory name such as `session-20d2722c-…`, so with a screenful of sessions it was impossible to tell which one was which conversation.
-> - The title comes from DSH's own session cache (`storages/session_projcache.json` → `rows.title.val`) through the **same** `core/session-meta.ts` index and
->   `sessionIdKey` normalisation the export picker uses (both directory-name shapes resolve); when the cache does not cover a session the **directory name is kept** — no title is invented.
-> - The host adds `title` after scanning in `GET /recovery/sessions` (`applySessionTitles`): the scanner itself stays a byte-fact reader and reads nothing extra.
-> - The directory name **stays visible** (monospace, second line) because it is the key to check when repairing or downloading a raw log; the title is free user text and is `redact()`ed before rendering.
-> - Guards: `src/core/session-meta.test.ts`, `src/ui/session-inventory-view.test.ts`, and the new T17 case in `src/client/recovery/session-dialog-mount.test.ts`.
-> - **NOT VERIFIED**: the on-screen look of the title in a real browser (this round only ran typecheck + unit tests + the build).
+> **Session titles are now "always the conversation title": the source grows from the aggregate cache to the per-session projections, and blank sessions show a localized "New Session"** (user request, 2026-10-12):
+> - **Symptom**: in the export / sync picker, the import plan, the session health list and the rollback ledger, some sessions showed only a directory name such as `session-20d2722c-…`.
+> - **Root cause**: the only title source was DSH's **aggregate cache** `storages/session_projcache.json`, an **evicting recent subset** — measured on this machine it covered **445 / 1347** sessions, so the other 902 fell back to the uuid.
+> - **Fix**: new `readSessionMetaWithTitles()` in `src/core/session-meta.ts` — aggregate cache first, then, only for sessions still missing a title, the **per-session projection files** DSH keeps for every session
+>   (`storages/session_projcache/sessions/<dir>.json` → `record.rows.title.val`, both directory-name shapes), read with 32-way concurrency and cached by file mtime; additive, read-only, never invented.
+>   Every title consumer now goes through it (`/export-preview`, `/plan`, `/recovery/sessions`, `/recovery/rollback-points`).
+> - **Blank sessions** (`sessionListMetadata.blank === true`, never prompted): DSH itself has no title for them — the host ships the `blank` **fact** and the UI shows the localized
+>   "New Session" (the same wording as DSH's `session.new`) instead of a uuid (new keys `picker.blankSession` / `sessions.blank`, zh + en).
+> - **Measured** (2026-10-12, 1347 session dirs): 193 ms cold / 44 ms cached → 1150 with a title, 197 blank, 0 unexplained. The session in the user's screenshot
+>   (`session-20d2722c-…`) is one of the blank ones, so it now reads "New Session".
+> - **Guards**: `src/core/session-meta.test.ts`, `src/ui/session-inventory-view.test.ts`, `src/ui/selection-model.test.ts`, `src/client/common/picker-lazy-units.test.ts`,
+>   and T17 in `src/client/recovery/session-dialog-mount.test.ts`.
+> - **NOT VERIFIED**: the on-screen look in a real browser (this round reached typecheck + unit tests + a read-only real-machine probe).
 
 > **聊天内回退入口只剩「每条用户消息」；回滚点台账改成左右分栏**（2026-10-12 用户要求）：
 > - **删掉「整回合」档**：偏好模块 `src/client/chat/chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts` 与回合尾入口组件 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）整体下线；设置页回滚卡上的两档开关（`Segmented`）与 `rollback.chatEntry.*` 五个键一并删除。装配退回单入口 `ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry(…))` —— 不再有「切档互斥」与「槽位声明顺序补试」两套复杂度。

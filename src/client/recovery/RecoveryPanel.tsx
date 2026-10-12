@@ -1038,7 +1038,9 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                                 {row.subagent && <Badge kind="info">{t('sessions.subagent')}</Badge>}
                                 {/* 行首最宽的位置给**对话标题**：用户要认的是「哪条是我的对话」，不是 uuid。
                                     宿主没给标题时回落目录名（绝不编造）；全文进 title，脱敏已在 ui 展示模型里做过。 */}
-                                <span className={css.shRowId} title={row.title ?? row.unitId}>{row.title ?? row.sessionId}</span>
+                                <span className={css.shRowId} title={row.title ?? row.unitId}>
+                                  {row.title ?? (row.blank ? t('sessions.blank') : row.sessionId)}
+                                </span>
                                 <div className={css.shRowActions}>
                                   {/* 可应用内修复的类别（与体检的 repairable 同源判定）；点开先 dry-run，绝不直接写 */}
                                   {row.repairable && (

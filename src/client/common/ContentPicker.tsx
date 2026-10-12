@@ -290,8 +290,13 @@ export function ContentPicker({
                               onChange={(checked) => { commit(toggleUnit(value, nodes, u.id, checked), focusOf(node.section), { unitId: u.id, checked }) }}
                               label={
                                 <span className={css.categoryItem}>
-                                  {/* 中段省略（保留尾部时间戳等区分信息）+ title 全文（UI-16，DESIGN.md §9.5） */}
-                                  <span className={css.pickerUnitName} title={safeLabel}>{tailWeightedEllipsis(safeLabel, UNIT_NAME_MAX)}</span>
+                                  {/* 空白会话（从未提问过）：DSH 自己显示「新会话」—— 这里同样用本地化占位名，
+                                      目录名仍进 title（悬停可核对）。其余单元照旧中段省略 + title 全文（UI-16，DESIGN.md §9.5）。 */}
+                                  {u.blank === true ? (
+                                    <span className={css.pickerUnitName} title={safeLabel}>{t('picker.blankSession')}</span>
+                                  ) : (
+                                    <span className={css.pickerUnitName} title={safeLabel}>{tailWeightedEllipsis(safeLabel, UNIT_NAME_MAX)}</span>
+                                  )}
                                   {u.lockedWith !== undefined && (
                                     <span title={t('picker.lockedHint')}><Badge kind="warn">{t('picker.locked')}</Badge></span>
                                   )}
