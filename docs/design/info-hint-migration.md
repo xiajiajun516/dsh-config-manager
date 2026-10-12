@@ -5,8 +5,10 @@
 > 本文是这次迁移的**单一台账**：冻结规则、逐目录判定、deferred、渲染契约、护栏与复核命令。
 > 视觉规范落在 `DESIGN.md` §6（组件）与 §7「说明性文案分层」（规则）；本文只做台账与索引。
 
-**状态**：已完成（t1 原语 → t2–t5 面板收敛 → t6 聚合验证 → t7 评审 → t9 修复 → t10 复评 → t8 收口）。
-43 个 MOVE 键全部落地，已有源码级守卫机器化钉住（`src/client/common/info-hint-guard.test.ts`，8/8 pass）。
+**状态**：t1–t10 已完成（原语 → 面板收敛 → 聚合验证 → 评审 → 修复 → 复评 → 收口）；
+**2026-10-12 追加 t7 波次**（用户要求「把**所有**描述都收进 ⓘ，页面更简洁」）：
+在既有 42 个 MOVE 键之外，再把上一轮判为 KEEP 的**静态**安全/机制说明与**静态**页级/分区级副标题收进 ⓘ，
+**MOVE 合计 83 键**，守卫 `info-hint-guard.test.ts` 13/13 pass。规则边界见 `DESIGN.md` §7（t7 清单在「本次落地」段末）。
 
 ---
 
@@ -75,7 +77,11 @@
 
 ## 3. 逐目录台账
 
-### 3.1 MOVE（42 键，全量；机器化清单 = `info-hint-guard.test.ts` 的 `MOVE_PINS`）
+### 3.1 MOVE（**83 键**，全量；机器化清单 = `info-hint-guard.test.ts` 的 `MOVE_PINS`）
+
+> **t7 波次（2026-10-12，41 键）**：页级/分区级副标题 → `SectionTitle.info`；卡片/字段说明 → 标题行或字段标签行的 ⓘ
+> （`Field.info` 是本次新加的原语入口）。逐键清单与「同轮仍常驻」的有意例外见 `DESIGN.md` §7 t7 段。
+> 新增原语：`SectionTitle.info` / `Field.info`（都接受 `<InfoHint …/>` 节点）+ CSS `.sectionTitleRow`。
 
 > **后期变更（2026-10-04）**：用户要求移除产物库页首标题行，`snapshots.retentionHint` 的保留期说明**整体删除**
 > （不再有任何 ⓘ 承载）→ MOVE 台账 **43 → 42**。本表已按现值更新；§1 / §5 与验收表里的「43/43」是 t1–t5 当时的口径，
@@ -133,12 +139,13 @@
 
 ### 3.2 KEEP（常驻；渲染与文案逐字未动）
 
-完整规则见 §1 的 8 类。机器化钉子 = `info-hint-guard.test.ts` 的 `KEEP_PINS`（46 条，按类别）：
+完整规则见 §1 的 8 类（边界经 t7 修订：**动态**告警常驻，**静态**机制说明进 ⓘ）。机器化钉子 =
+`info-hint-guard.test.ts` 的 `KEEP_PINS`（**36 条**；t7 从原 46 条里移走 10 条静态安全说明转 MOVE）：
 
 | 类别 | 条数 | 代表键（全量见 `KEEP_PINS`） |
 |---|---|---|
 | ① 错误 / 失败原因 | 10 | `runs.loadFailed` · `picker.unitsUnavailable` · `export.fileNameInvalid` · `diskUsage.partial` · `about.update.noCommand` · `nextSteps.unresolved.hint` … |
-| ② 安全与不可逆告警 | 14 | `export.encryptHint` · `export.includeSecretsHint` · `mode.encryptHint` · `mode.includeSecretsHint` · `privateRepoHint` · `config.tokenHint` · `backupFiles.encryptedHint` · `diskUsage.clean.hint` · `review.rollbackHint` · `nextSteps.secrets.hint` · `import.secrets.hint` · `profiles.duplicate.includeModulesHint` · `recovery.safeMode.detail` · `sessions.repair.desc` / `recovery.rescue.desc` … |
+| ② 安全与不可逆告警（**动态**） | 5 | `privateRepoHint` · `backupFiles.encryptedHint` · `review.rollbackHint` · `nextSteps.secrets.hint` · `profiles.duplicate.includeModulesHint`（原 14 条中的 9 条静态说明已按 t7 转 MOVE：`config.tokenHint` / `mode.encryptHint` / `mode.includeSecretsHint` / `export.encryptHint` / `export.includeSecretsHint` / `diskUsage.clean.hint` / `import.secrets.hint` / `recovery.safeMode.detail` / `sessions.repair.desc` / `recovery.rescue.desc`） |
 | ③ 状态 / 等待 / 计数 | 5 | `mode.decryptPasswordSaved` · `syncflow.noSnapshots` · `history.corruptedCount` · `overview.sections.total` · `import.skipPending` |
 | ⑤ 空态解释 | 10 | `runs.empty` · `backupFiles.empty` · `export.compositionEmpty` · `profiles.running.none` · `review.changeEmpty` · `overview.empty.body` / `overview.activity.empty` · `history.empty` / `history.emptyHint` · `snapshots.plan.diffIdentical` |
 | ⑥ / ⑦ title= 与元数据 | 2 | `picker.highRiskHint`（行内 title） · `export.selectionWarnings`（设备相关告警） |
@@ -203,8 +210,8 @@
 
 | 护栏 | 位置 | 钉住什么 |
 |---|---|---|
-| t6-1 MOVE | `src/client/common/info-hint-guard.test.ts` | 42 个 MOVE 键（2026-10-04 起；原 43）各自仍有一处 `<InfoHint text={t('原键')} …/>`，且不再出现在可见说明行（`css.hint / modeHint / groupNote / noticeLine`） |
-| t6-2 KEEP | 同上 | 46 个 KEEP 针仍有可见渲染点（错误 / 安全 / 空态三类齐全） |
+| t6-1 MOVE | `src/client/common/info-hint-guard.test.ts` | **83** 个 MOVE 键（t1–t5 的 42 + t7 的 41）各自仍有一处 `<InfoHint text={t('原键')} …/>` 或 `SectionTitle.info` / `Field.info` 里的同名 ⓘ，且不再出现在可见说明行（`css.hint / modeHint / groupNote / noticeLine`） |
+| t6-2 KEEP | 同上 | **36** 个 KEEP 针仍有可见渲染点（错误 / 安全 / 空态三类齐全） |
 | t6-3 可访问名 | 同上 | 每一处 `<InfoHint>` 都显式给可访问名（`label={t('common.infoHint')}` / 白名单 prop / 主字典 `t={t}`），且必须自闭合 |
 | t6-4 字典口径 | 同上 | 四本带 ⓘ 的字典的 `common.infoHint` zh/en 逐字一致 |
 | t6-5 负向自检 | 同上 | 合成片段在「搬走但没进 ⓘ / 缺可访问名」时必须变红 |

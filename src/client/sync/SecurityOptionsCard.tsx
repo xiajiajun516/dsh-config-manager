@@ -7,6 +7,7 @@
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Card, Checkbox } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import type { ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
@@ -26,19 +27,27 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
   return (
     <Card>
       <span className={css.groupLabel}>{t('mode.security')}</span>
-      <Checkbox
-        checked={settings.encrypt}
-        onChange={onToggleEncrypt}
-        label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
-      />
-      <div className={css.hint}>{t('mode.encryptHint')}</div>
-      {settings.encrypt && settings.encryptPasswordSaved && (
-        <div className={css.hint}>{t('mode.passwordSavedHint')}</div>
-      )}
+      {/* 说明性文案一律进 ⓘ（2026-10-12 用户要求：卡里只留勾选项与控件）。
+          「加密方式 + 密码存哪 + 自动同步跳过加密快照」两句合成同一颗 ⓘ。 */}
+      <div className={css.controlRow}>
+        <Checkbox
+          checked={settings.encrypt}
+          onChange={onToggleEncrypt}
+          label={<span className={css.categoryName}>{t('mode.encrypt')}</span>}
+        />
+        <InfoHint
+          text={t('mode.encryptHint') + ' ' + t('mode.encryptAutosyncNotice')}
+          label={t('common.infoHint')}
+        />
+      </div>
       {settings.encrypt && (
         <div className={css.secretFields}>
           <label className={css.field}>
-            <span className={css.fieldLabel}>{t('mode.password')}</span>
+            <span className={css.fieldLabel}>
+              {t('mode.password')}
+              {' '}
+              {settings.encryptPasswordSaved && <InfoHint text={t('mode.passwordSavedHint')} label={t('common.infoHint')} />}
+            </span>
             <input
               type="password"
               className={css.input}
@@ -71,13 +80,14 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
           <span className={css.hint}>{t('mode.passwordClearNotice')}</span>
         </div>
       )}
-      <Checkbox
-        checked={settings.includeSecrets}
-        onChange={onToggleIncludeSecrets}
-        label={<span className={css.categoryName}>{t('mode.includeSecrets')}</span>}
-      />
-      <div className={css.hint}>{t('mode.includeSecretsHint')}</div>
-      <span className={css.hint}>{t('mode.encryptAutosyncNotice')}</span>
+      <div className={css.controlRow}>
+        <Checkbox
+          checked={settings.includeSecrets}
+          onChange={onToggleIncludeSecrets}
+          label={<span className={css.categoryName}>{t('mode.includeSecrets')}</span>}
+        />
+        <InfoHint text={t('mode.includeSecretsHint')} label={t('common.infoHint')} />
+      </div>
     </Card>
   )
 }

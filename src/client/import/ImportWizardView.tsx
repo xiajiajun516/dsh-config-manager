@@ -48,6 +48,7 @@ import { runStore } from '../run-store.ts'
 import {
   Badge, Banner, Button, Card, SectionTitle, Stepper,
 } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { ProgressBar } from '../common/ProgressBar.tsx'
 import type { RunProgress } from '../common/progress-view.ts'
@@ -265,7 +266,7 @@ function ContentSelectStage(props: {
   } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.picker.title')} subtitle={t('import.picker.hint')} />
+      <SectionTitle title={t('import.picker.title')} info={<InfoHint text={t('import.picker.hint')} label={t('common.infoHint')} />} />
       <div className={css.statRow}>
         <Badge kind={summary.willChange > 0 ? 'info' : 'ok'}>{t('import.preview.willChange', { count: String(summary.willChange) })}</Badge>
         {summary.unchanged > 0 && <Badge kind="ok">{t('import.preview.unchanged', { count: String(summary.unchanged) })}</Badge>}

@@ -1296,7 +1296,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   /* ------------------------------------------------ 渲染 */
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
+      <SectionTitle title={t('section.label')} info={<InfoHint text={t('section.description')} label={t('common.infoHint')} />} />
 
           {/* M-16：页面级加载失败就地提示（此前 loadError 只写不读，宿主不可达时整页显示
               「未配置」假象）。此处保留可就地重试的 ErrorBanner —— 它是**页面是否可用**

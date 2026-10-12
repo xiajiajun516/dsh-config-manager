@@ -24,6 +24,7 @@ import type { SyncApi } from '../sync/sync-api.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Banner, Button, Empty, Spinner } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -437,9 +438,9 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           closeLabel={t('common.close')}
           onClose={() => { setPlan(null) }}
           closeDisabled={running}
+          trailing={<InfoHint text={t('snapshots.selectHint')} label={t('common.infoHint')} />}
         />
         <Modal.Body scroll>
-          <div className={css.hint}>{t('snapshots.selectHint')}</div>
           {plan?.loading === true && <Spinner label={t('common.loading')} />}
           {plan?.error !== null && plan?.error !== undefined && <Banner kind="error">{plan.error}</Banner>}
           {plan?.plan != null && plan.plan.actions.length === 0 && <Empty>{t('snapshots.noActions')}</Empty>}

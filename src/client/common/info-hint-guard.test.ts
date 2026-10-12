@@ -89,7 +89,7 @@ interface KeepPin {
   needle?: string;
 }
 
-/** MOVE 判定清单（t1: 2 / t2: 16 / t3: 13 / t4: 9 / t5: 2 = 42 键；原 t3 = 14 / 合计 43）。 */
+/** MOVE 判定清单（t1: 2 / t2: 16 / t3: 13 / t4: 9 / t5: 2 = 42 键；t7（2026-10-12）= 41 键，合计 83）。 */
 const MOVE_PINS: readonly MovePin[] = [
   // t1：common/
   { key: 'runs.retentionHint', file: 'src/client/common/RunsCenter.tsx', kind: '机制' },
@@ -141,6 +141,50 @@ const MOVE_PINS: readonly MovePin[] = [
   // t5：recovery/
   { key: 'sessions.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
   { key: 'recovery.preview.hint', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
+  // t7（2026-10-12 用户要求「所有描述都收进 ⓘ」）：页级 / 分区级副标题 + 卡片 / 字段说明。
+  // 判定口径见 DESIGN.md §7（本次把原 KEEP-2 的**静态安全说明**与 KEEP-7 的**静态副标题**一并纳入 MOVE；
+  // 动态校验错误 / 状态 / 空态 / 禁用原因 / 确认弹窗内的危险操作说明仍常驻）。
+  { key: 'profiles.subtitle', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '机制' },
+  { key: 'section.description', file: 'src/client/sync/SyncPanel.tsx', kind: '机制' },
+  { key: 'section.description', file: 'src/client/market/MarketPanel.tsx', kind: '机制' },
+  { key: 'about.subtitle', file: 'src/client/about/AboutPanel.tsx', kind: '背景' },
+  { key: 'history.subtitle', file: 'src/client/history/HistoryPanel.tsx', kind: '机制' },
+  { key: 'rollback.desc', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
+  { key: 'rollback.chatEntry.hint', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
+  { key: 'rollback.preview.hint', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
+  { key: 'import.select.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'import.consult.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'import.decryptArchive.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'import.conflicts.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'import.paths.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'foreign.source.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'import.secrets.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
+  { key: 'import.picker.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '机制' },
+  { key: 'foreign.source.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
+  { key: 'foreign.lossy.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
+  { key: 'foreign.previewDryRun', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
+  { key: 'mode.encryptHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
+  { key: 'mode.encryptAutosyncNotice', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '边界' },
+  { key: 'mode.includeSecretsHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
+  { key: 'mode.passwordSavedHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '机制' },
+  { key: 'mode.decryptPasswordHint', file: 'src/client/sync/DecryptPasswordCard.tsx', kind: '机制' },
+  { key: 'export.encryptHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
+  { key: 'export.includeSecretsHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
+  { key: 'export.compositionHint', file: 'src/client/export/ExportView.tsx', kind: '机制' },
+  { key: 'snapshots.selectHint', file: 'src/client/library/LibraryActions.tsx', kind: '省事提示' },
+  { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '边界' },
+  { key: 'recovery.safeMode.detail', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
+  { key: 'sessions.repair.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
+  { key: 'recovery.rescue.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '机制' },
+  { key: 'sessions.layout.planReadOnly', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '边界' },
+  { key: 'recovery.incomplete.hint', file: 'src/client/recovery/IncompleteCopiesSection.tsx', kind: '机制' },
+  { key: 'repoPicker.privateOnly', file: 'src/client/sync/SyncRepositoryPicker.tsx', kind: '输入规则' },
+  { key: 'config.tokenHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
+  { key: 'webdav.passwordHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
+  { key: 'cloud.secretHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
+  { key: 'cloud.tokenHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '输入规则' },
+  { key: 'myconfigs.upload.selectHint', file: 'src/client/market/MyConfigsWizard.tsx', kind: '机制' },
+  { key: 'myconfigs.upload.mode.shareHint', file: 'src/client/market/MyConfigsWizard.tsx', kind: '背景' },
 ];
 
 /** KEEP 判定清单（错误 / 安全 / 空态三类各有代表；每类至少一处，见 t6-2 的覆盖断言）。 */
@@ -158,20 +202,10 @@ const KEEP_PINS: readonly KeepPin[] = [
   { key: 'runs.loadFailed', file: 'src/client/common/RunsCenter.tsx', kind: '错误' },
   // ②安全与不可逆
   { key: 'privateRepoHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '安全', needle: 'privateRepoHint(uiT)' },
-  { key: 'config.tokenHint', file: 'src/client/sync/ChannelConfigDialog.tsx', kind: '安全' },
-  { key: 'mode.encryptHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '安全' },
-  { key: 'mode.includeSecretsHint', file: 'src/client/sync/SecurityOptionsCard.tsx', kind: '安全' },
   { key: 'backupFiles.encryptedHint', file: 'src/client/library/ArtifactRow.tsx', kind: '安全' },
-  { key: 'export.encryptHint', file: 'src/client/export/ExportView.tsx', kind: '安全' },
-  { key: 'export.includeSecretsHint', file: 'src/client/export/ExportView.tsx', kind: '安全' },
-  { key: 'diskUsage.clean.hint', file: 'src/client/environment/maintenance/DiskUsageCard.tsx', kind: '安全' },
   { key: 'review.rollbackHint', file: 'src/client/market/MarketImportReview.tsx', kind: '安全' },
   { key: 'nextSteps.secrets.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '安全' },
-  { key: 'import.secrets.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '安全' },
   { key: 'profiles.duplicate.includeModulesHint', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '安全' },
-  { key: 'recovery.safeMode.detail', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '安全' },
-  { key: 'sessions.repair.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '安全' },
-  { key: 'recovery.rescue.desc', file: 'src/client/recovery/RecoveryPanel.tsx', kind: '安全' },
   // ⑤空态解释
   { key: 'history.emptyHint', file: 'src/client/sync/SyncLogList.tsx', kind: '空态' },
   { key: 'history.empty', file: 'src/client/history/HistoryPanel.tsx', kind: '空态' },
@@ -354,12 +388,12 @@ function parseInfoHintEntry(rel: string): { zh: string | undefined; en: string |
   return { zh: values[0], en: values[1], count: values.length };
 }
 
-test('t6-1 MOVE：42 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
+test('t6-1 MOVE：83 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
   const files = readClientSources();
   // 扫描范围自检：客户端源码至少覆盖 t6 涉及的面板目录
   const dirs = new Set(MOVE_PINS.map((p) => p.file.split('/').slice(0, 3).join('/')));
   assert.ok(dirs.size >= 8, 'MOVE 清单必须覆盖全部面板目录（实际 ' + String(dirs.size) + ' 个）');
-  assert.ok(MOVE_PINS.length === 42, 'MOVE 清单长度应为 42（实际 ' + String(MOVE_PINS.length) + '）');
+  assert.ok(MOVE_PINS.length === 83, 'MOVE 清单长度应为 83（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',

@@ -14,6 +14,7 @@ import { redact } from '../../security/redaction.ts'
 import { HistoryApi, type HistoryListResult, type HistoryExportFormat } from './history-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -91,7 +92,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   if (state.status === 'loading') {
     return (
       <div className={css.viewBody}>
-        <SectionTitle title={t('history.title')} subtitle={t('history.subtitle')} />
+        <SectionTitle title={t('history.title')} info={<InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />} />
         <SkeletonTable label={t('history.loading')} />
       </div>
     )
@@ -100,7 +101,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   if (state.status === 'error') {
     return (
       <div className={css.viewBody}>
-        <SectionTitle title={t('history.title')} subtitle={t('history.subtitle')} />
+        <SectionTitle title={t('history.title')} info={<InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />} />
         {/* F-02：t 必传 —— 否则英文界面下错误标题/建议动作恒中文 */}
         <ErrorBanner error={new Error(redact(state.error ?? ''))} onRetry={() => void load()} t={historyApi.t} />
       </div>
@@ -125,7 +126,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('history.title')} subtitle={t('history.subtitle')} />
+      <SectionTitle title={t('history.title')} info={<InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />} />
 
       {/* 统计徽章行 */}
       <div className={css.statRow}>

@@ -35,6 +35,7 @@ import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
 import { Button, Card, SectionTitle } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
@@ -764,7 +765,8 @@ export function MyConfigsView({
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('myconfigs.tab.myconfigs')} subtitle={t('myconfigs.login.hint')} />
+      {/* 标题只留标题：登录说明紧挨着就在下面的登录卡标题 ⓘ 上，同一屏不再出现两遍 */}
+      <SectionTitle title={t('myconfigs.tab.myconfigs')} />
       {renderLoginCard()}
       {/* 已登录才允许上传 / 查看列表 / 装回本地 */}
       {loginView.kind === 'logged-in' && (
@@ -772,12 +774,11 @@ export function MyConfigsView({
           {/* 一键上传入口：点按钮 → 免责（首次）→ 弹窗向导 */}
           <Card>
             <div className={css.headRow}>
-              <span className={css.groupLabel}>{t('myconfigs.upload.title')}</span>
+              <span className={css.groupLabel}>{t('myconfigs.upload.title')} <InfoHint text={t('myconfigs.upload.selectHint')} label={t('common.infoHint')} /></span>
               {/* 撑开剩余空间，「一键上传」按钮贴右 */}
               <span className={css.statusSpacer} />
               <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
             </div>
-            <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
           </Card>
           {renderList()}
           {/* 弹窗：上传/更新向导（uploadOpen）—— 装回本地已改为页面级向导（见上方提前 return） */}

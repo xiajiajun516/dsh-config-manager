@@ -171,7 +171,7 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
       </div>
       {createOpen && (
         <div className={css.field}>
-          <span className={css.groupLabel}>{t('repoPicker.createTitle')}</span>
+          <span className={css.groupLabel}>{t('repoPicker.createTitle')} <InfoHint text={t('repoPicker.privateOnly')} label={t('common.infoHint')} /></span>
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('repoPicker.name')}</span>
             <input
@@ -197,8 +197,6 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
               onChange={(e: ChangeEvent<HTMLInputElement>) => { setDescription(e.target.value) }}
             />
           </label>
-          {/* 安全说明常驻可见（不进 ⓘ）：新建的仓库恒为私有 */}
-          <span className={css.hint}>{t('repoPicker.privateOnly')}</span>
           {nameHint !== null && <span className={css.formError}>{nameHint}</span>}
           {createError !== null && <span className={css.formError}>{redact(createError)}</span>}
           <div className={css.actionRowTop}>

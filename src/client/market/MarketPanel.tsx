@@ -26,6 +26,7 @@ import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ItemResolution } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
 import { effectiveImportSelection, type Selection } from '../../ui/selection-model.ts'
@@ -470,7 +471,7 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       {/* 列表视图的表头与市场操作卡：进入条目向导页时整块让位（P2 起向导是**页面**，
           不再在列表之上叠弹窗） */}
       {!downloadOpen && (<>
-      <SectionTitle title={t('section.label')} subtitle={t('section.description')} />
+      <SectionTitle title={t('section.label')} info={<InfoHint text={t('section.description')} label={t('common.infoHint')} />} />
 
       {/* 内置市场操作卡：保留面板标题；移除 URL / 官方徽章 / 名称 / 条目数 / 状态行等文字展示 */}
       <Card>

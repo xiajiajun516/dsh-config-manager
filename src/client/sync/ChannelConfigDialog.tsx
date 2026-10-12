@@ -138,6 +138,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               {t('config.token')}
               {' '}
               {statusInfo?.credentialConfigured === true && <Badge kind="ok">{t('config.tokenSaved')}</Badge>}
+              <InfoHint text={t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })} label={t('common.infoHint')} />
             </span>
             <input
               type="password"
@@ -150,7 +151,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ token: e.target.value })
               }}
             />
-            <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
           </label>
 
           {/* GitHub OAuth 登录（device flow）：弹窗内仅 git 通道显示；已登录（token 有效）时整块隐藏 */}
@@ -193,9 +193,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                   {githubView.statusText}
                 </Badge>
               </div>
-              {githubView.phase === 'error' && (
-                <span className={css.hint}>{t('config.tokenHint', { ref: SYNC_CREDENTIAL_REF })}</span>
-              )}
             </>
           )}
         </>
@@ -258,6 +255,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               {t('webdav.password')}
               {' '}
               {statusInfo?.webdav?.passwordConfigured === true && <Badge kind="ok">{t('webdav.passwordSaved')}</Badge>}
+              <InfoHint text={t('webdav.passwordHint', { ref: SYNC_WEBDAV_CREDENTIAL_REF })} label={t('common.infoHint')} />
             </span>
             <input
               type="password"
@@ -270,7 +268,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
                 onFormChange({ webdavPassword: e.target.value })
               }}
             />
-            <span className={css.hint}>{t('webdav.passwordHint', { ref: SYNC_WEBDAV_CREDENTIAL_REF })}</span>
           </label>
         </>
       )}
@@ -360,6 +357,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               {t('cloud.secret')}
               {' '}
               {statusInfo?.s3?.secretStored === true && <Badge kind="ok">{t('cloud.secretSaved')}</Badge>}
+              <InfoHint text={t('cloud.secretHint', { ref: cloudSecretRef })} label={t('common.infoHint')} />
             </span>
             <input
               type="password"
@@ -370,7 +368,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ s3Secret: e.target.value }) }}
             />
-            <span className={css.hint}>{t('cloud.secretHint', { ref: cloudSecretRef })}</span>
           </label>
         </>
       )}
@@ -378,9 +375,9 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
       {/* gist 通道分支（GitHub Gist：走 REST，token 只写 DSH 凭据槽位） */}
       {channel === 'gist' && (
         <>
-          <span className={css.groupLabel}>{t('cloud.gistTitle')}</span>
-          {/* G-34：gist 刻意不外置 blob（一次 GET 全量 / 单文件超限截断 / 文件数上限）⇒ 大分区不适合走 gist */}
-          <span className={css.hint}>{t(GIST_LARGE_SECTION_HINT_KEY)}</span>
+          {/* G-34：gist 刻意不外置 blob（一次 GET 全量 / 单文件超限截断 / 文件数上限）⇒ 大分区不适合走 gist；
+              该说明属机制类，收进标题 ⓘ（2026-10-12 用户要求） */}
+          <span className={css.groupLabel}>{t('cloud.gistTitle')} <InfoHint text={t(GIST_LARGE_SECTION_HINT_KEY)} label={t('common.infoHint')} /></span>
           <label className={css.field}>
             <span className={css.fieldLabel}>{t('cloud.gistId')} <InfoHint text={t('cloud.gistIdHint')} label={t('common.infoHint')} /></span>
             <input
@@ -420,6 +417,7 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               {t('cloud.token')}
               {' '}
               {statusInfo?.gist?.secretStored === true && <Badge kind="ok">{t('cloud.tokenSaved')}</Badge>}
+              <InfoHint text={t('cloud.tokenHint', { ref: cloudSecretRef })} label={t('common.infoHint')} />
             </span>
             <input
               type="password"
@@ -430,7 +428,6 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
               disabled={busy}
               onChange={(e: ChangeEvent<HTMLInputElement>) => { onFormChange({ gistToken: e.target.value }) }}
             />
-            <span className={css.hint}>{t('cloud.tokenHint', { ref: cloudSecretRef })}</span>
           </label>
         </>
       )}

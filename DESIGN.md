@@ -499,9 +499,11 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     「这一项会不会写盘」；没有它，调用方只能在树旁边再铺一份逐项列表 —— 同一批条目渲染两遍正是
     「61 行挤爆弹窗」的根因。**缺省不传 = 导出页/导入页零变化**；文案与语义全部由调用方决定，
     组件不猜、也不为它推导任何勾选状态。
-- **回滚点时间线**（环境 → 维护与诊断，2026-10-11 重排，用户反馈「UI 太丑」）：
-  `.rollbackChatEntry`（聊天入口形态设置块，与台账用一条分隔线分开）→ `.rollbackToolbar`（`.rollbackSummary` 数字摘要 + 留存口径 ⓘ + 刷新）
-  → `.planScroll`+`.rollbackScroll`（限高内滚）内的 `.snapshotList` → `.rollbackGroup`（会话分组卡；组头 = `.rollbackGroupTitle` 等宽会话 id +
+- **回滚点时间线**（环境 → 维护与诊断 → 「工作区 + 会话回滚」卡上的「查看回滚点」，2026-10-11 重排、2026-10-12 台账整块搬进弹窗；用户反馈「UI 太丑」+「要能一眼看到有回滚点的对话」）：
+  卡内 = `.rollbackChatEntry`（聊天入口形态设置块）→ `.rollbackToolbar`（`.rollbackSummary` 数字摘要「共 N 个回滚点 · M 个会话」+ 主操作「查看回滚点」）；
+  **卡不再折叠**（摘要与入口常驻可见）。台账本体在 `Modal`（`rollback.dialog.title` = 「回滚点台账」，`{open && …}` 条件挂载）里：
+  弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的留存口径 ⓘ + 刷新）→ `.rollbackToolbar`（同一份数字摘要）
+  → `.planScroll`+`.rollbackScroll`（限高内滚）内的 `.snapshotList` → `.rollbackGroup`（会话分组卡 = 一条对话；组头 = `.rollbackGroupTitle` 等宽会话 id +
   计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径）→ `.rollbackPoints` → `.rollbackPoint`。
   硬约定两条：① 行卡是**两行式**（`.rollbackPointTop` = 回合号 + 来源/告警徽章 + 右对齐的 `.rollbackPointActions`；
   `.rollbackPointMeta` = 时间 / 文件数 / 会话游标 / `.rollbackPointNote`），左侧 2px 语义色条按 `data-kind` 区分来源
@@ -509,7 +511,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   （`rollback.kind.guardShort` / `rollback.row.sessionShort` / `rollback.row.workspaceShort` / `rollback.row.notice.skippedShort`…），
   完整句仍在原键里 —— 旧实现把整句逐行重复，正是「一坨灰字」的根因。
   行内危险动作（删除回滚点）用 `IconButton danger`（禁用原因进 `title`），不再常驻一颗 danger 文本按钮。
-  执行者：`src/client/recovery/recovery-panel-layout.test.ts`（禁止退回 `.actionRow[data-inline]`）。
+  执行者：`src/client/recovery/recovery-panel-layout.test.ts`（禁止退回 `.actionRow[data-inline]`；并钉住「两块诊断卡退出折叠 + 回滚台账在条件挂载的弹窗内」）。
 - **会话体检弹窗**（环境 → 维护与诊断 → 会话体检，2026-10-12 重排，同一条用户反馈「UI 太丑」）：
   弹窗标题行（`Modal.Header` 的 `trailing` = `.shHeaderTrailing` 内的说明 ⓘ + 主操作「开始体检 / 重新体检」）
   → `.shSummary`（`.shMetrics` 数字 tiles：会话总数 / 需要处理 / 会话格式 → `.shSeverities` 严重级 chips
@@ -729,8 +731,9 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   与「维护与诊断」。
   - **维护与诊断（2026-10-12 重排，用户反馈「太杂乱」）**：顺序 = 崩溃归因 → **状态与待处理事项**
     （SAFE MODE 横幅 / 未解决事项 / 残留锁 / 空态；异常一律在诊断之前）→ 事故处置（救援模式）→
-    复制残留 → **诊断三块**（会话体检与「工作区 + 会话回滚」用 `FoldToggle` 缺省收起；
-    **磁盘占用卡不参与折叠** —— 它是**固定高度 + 内滚视口**卡（`.diskUsageCard` 三值锁死高度、
+    复制残留 → **诊断三块**（会话体检与「工作区 + 会话回滚」**不折叠**（2026-10-12 用户要求）：卡上常驻标题 / 状态徽章 / 数字摘要 / 主操作，
+    台账与体检结果各自搬进弹窗（`{open && …}` 条件挂载）；救援模式那一块仍有 `FoldToggle`，且只在真有明细时才渲染开关。
+    **磁盘占用卡同样不参与折叠** —— 它是**固定高度 + 内滚视口**卡（`.diskUsageCard` 三值锁死高度、
     `.diskUsageScroll` 吃掉剩余高度）：折叠①会留下一个固定高的空盒，②会把内滚容器从纵向 flex 链里
     摘出去（`.collapse` 是 flex 项、自动最小尺寸 = 内容高度 ⇒ 撑破卡盒、内容溢出盖住后续卡片，
     2026-10-12 真机截图复现）。
@@ -1130,25 +1133,33 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
 - 输入规则类文案（如「仅允许字母数字、空格、- _ .」）—— 因为校验失败时错误文案本身会重申规则。
 
 **KEEP 常驻**（渲染与文案必须与改动前**逐字一致**，一处都不许动）：
-1. 校验错误 / 失败原因（`css.formError`、`ErrorBanner`、`ErrorList`、`ReportView` 的失败文本）；
-2. 安全与不可逆操作告警（加密、密钥、覆盖、删除、回滚、恢复、SAFE MODE）；
+1. **动态**校验错误 / 失败原因（`css.formError`、`ErrorBanner`、`ErrorList`、`ReportView` 的失败文本）；
+2. **动态**安全与不可逆操作告警 —— **当下就要拦住用户**的那些句子：锁定中 / SAFE MODE 生效中 / 恢复失败 /
+   「取消勾选会删除已保存的密码」/ 隔离与回滚的逐条后果（`sessions.layout.keepHint`、`quarantineNote`、`refreshHint`）。
+   **静态**机制说明（加密算法、密码存在哪、凭据写到哪个槽位、救援模式会改写哪几层、清理只动可重建区）
+   自 **2026-10-12** 起属 MOVE —— 见下方 t7 清单；
 3. 状态 / 进度 / 等待文本（运行中、已停止、等待 N 分钟、下载中）；
 4. 按钮与选项的禁用原因（`title=` 上的解释）；
 5. 空态解释（列表为空时说明「为什么什么都没有」的那一行）；
 6. 行内防截断的 `title=`（表格/列表/长路径上的全量提示，**不是**页面文案）；
-7. `SectionTitle` 的 `subtitle`（页级/分区级副标题）、`css.cellMeta` 元数据；
-8. `ConfirmDialog` / `Modal` 内的危险操作说明。
+7. `SectionTitle` 的 `subtitle` / `css.cellMeta`：**只允许承载动态或元数据**（当前条目名、计数、时间、
+   状态说明、必须看到的「下一步」指引）；**静态说明性副标题一律改走 `SectionTitle.info`**（ⓘ，2026-10-12）；
+8. `ConfirmDialog` / `Modal` 内的危险操作说明（点下去之前必须读到的规则与后果）。
 
 **用法与边界**：
-- ⓘ 只承载**可选的补充信息**：任何用户「必须看到才能安全决策」的文本都不得移入（那正是 KEEP 的 8 类）；
+- ⓘ 只承载**可选的补充信息**：任何用户「**当下**必须看到才能安全决策」的文本都不得移入（那正是 KEEP 的 8 类）
+  —— 判据是**动态还是静态**：会随状态出现/消失的（校验失败、锁定中、SAFE MODE 生效中、逐条回滚后果）常驻；
+  一句话说清的**静态**机制 / 安全 / 边界说明自 2026-10-12 起进 ⓘ（见下方 t7 清单）；
 - 输入规则类文案移入后，校验失败的错误文案**必须仍然重申规则**，否则规则变得不可见；
 - **摆放：ⓘ 必须与它说明的标题/操作/控件**同一行**（贴在右侧），不得单独成行**（2026-10-03 用户反馈：
-  同步页与通道配置 / 分区选择弹窗里出现「孤零零一个图标」的断行）。四种落地形态：
+  同步页与通道配置 / 分区选择弹窗里出现「孤零零一个图标」的断行）。五种落地形态：
   ① 放进承载标题/标签的元素内（`<span className={css.groupLabel}>标题 <InfoHint … /></span>`，
   见 AboutPanel / EnvironmentPanel）；② 放进该操作所在的 flex 行（`.actionRowTop` / `.actionRow`，
   如「选择同步分区」「完成」旁）；③ **弹窗级说明**放进 `Modal.Header` 的 `trailing`（渲在标题与
   `.dialogClose` 之间 —— 后者 `margin-left:auto`，所以 ⓘ 紧贴标题右侧）；④ **控件旁的说明**用
-  `.controlRow`（控件 + ⓘ 同一行，控件按自身宽度）。新增调用点按此摆放，下次迁移不再另起一套。
+  `.controlRow`（控件 + ⓘ 同一行，控件按自身宽度）；⑤ **页级 / 分区级副标题**用 `SectionTitle.info`、
+  **表单字段说明**用 `Field.info`（两者都接受一个 `<InfoHint>` 节点，渲在标题 / 字段标签同一行右侧；
+  标题行的行容器 = `.sectionTitleRow`，标题可换行、ⓘ 不收缩）。新增调用点按此摆放，下次迁移不再另起一套。
 - 触发按钮 18px、颜色取 `--dsw-alias-label-tertiary`，hover 必须给出可见 affordance
   （`--dsw-alias-interactive-bg-hover` 底 + `label-primary` 前景）；固定态用主色 tint；
 - 样式只进 `config-manager.module.css`（`.infoHint / .infoHintBtn / .infoHintBubble`），
@@ -1209,6 +1220,30 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
   `common/ui.tsx` 的 `Field.hint` / `SectionTitle.subtitle` 由调用方传入且大量命中 KEEP
   （如 `export.encryptHint` 是安全告警），**不整体自动迁移**。逐键台账与 deferred 见
   `docs/design/info-hint-migration.md`。
+- **t7（2026-10-12，用户要求「把**所有**描述都收进 ⓘ，页面更简洁」）：41 键** —— 把上一轮按
+  「安全 / 副标题」判为 KEEP 的**静态**文案一并收进 ⓘ（判据仍是上方 KEEP 的 8 类，变的是第 2 / 第 7 条的边界）：
+  - **页级 / 分区级副标题 → `SectionTitle.info`**：`profiles.subtitle`、`section.description`（同步页 + 市场页）、
+    `about.subtitle`、`history.subtitle`（3 个分支同一文案）、`rollback.desc`、`import.select.hint` /
+    `import.consult.hint` / `import.decryptArchive.hint` / `import.conflicts.hint` / `import.paths.hint` /
+    `import.picker.hint` / `import.secrets.hint` / `foreign.source.hint`（两处渲染点同改）；
+  - **卡片 / 字段说明 → 标题行或字段标签行的 ⓘ**（`span.groupLabel` / `span.fieldLabel` / `.controlRow` /
+    `Modal.Header.trailing` / `SectionTitle.info`，`Field.info` 是新加的原语入口）：
+    `mode.encryptHint` + `mode.encryptAutosyncNotice`（合成同一颗 ⓘ）、`mode.includeSecretsHint`、
+    `mode.passwordSavedHint`、`mode.decryptPasswordHint`、`export.encryptHint`、`export.includeSecretsHint`、
+    `export.compositionHint`、`config.tokenHint`、`webdav.passwordHint`、`cloud.secretHint`、`cloud.tokenHint`、
+    `repoPicker.privateOnly`、`diskUsage.clean.hint`、`recovery.safeMode.detail`、`sessions.repair.desc`、
+    `recovery.rescue.desc`、`sessions.layout.planReadOnly`、`recovery.incomplete.hint`、`snapshots.selectHint`、
+    `foreign.lossy.hint`、`foreign.previewDryRun`、`myconfigs.upload.selectHint`、`myconfigs.upload.mode.shareHint`、
+    `rollback.chatEntry.hint`、`rollback.preview.hint`；`cloud.gistLargeSectionHint`（走常量而非字面量，
+    故不进 `MOVE_PINS`，但同样已进 ⓘ）；
+  - **`rollback.autopoint.hint` 下线渲染点**：它与卡头 ⓘ 的 `rollback.desc` 同义（后者是超集），
+    字典键保留、界面上不再重复一行；
+  - **同轮仍常驻（有意为之，不是漏改）**：动态错误 / 状态 / 空态 / 禁用原因 `title=`；
+    `ConfirmDialog` 内的危险操作说明；`nextSteps.restart.hint` / `nextSteps.sessionsRestart.hint` /
+    `about.update.dialog.restart`（必须看到的「下一步」）；`foreign.conflict.policy`（导入前必读的冲突规则）；
+    `sessions.layout.keepHint` / `quarantineNote` / `refreshHint`（隔离与回滚的逐条后果）；
+    `mode.passwordClearNotice`（取消勾选会删除已保存的密码）；`recovery.crash.guidance`（处置指引）；
+    `diskUsage.location` 与计数类元数据；`myconfigs.upload.form.autoHint`（「以下字段由系统自动生成：」引导行）。
 
 ---
 

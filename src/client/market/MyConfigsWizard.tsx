@@ -72,13 +72,14 @@ export function MyConfigsWizard({
         closeLabel={t('common.close')}
         onClose={onClose}
         closeDisabled={wizard.running || wizard.validating}
-        trailing={wizard.mode === 'update' ? <Badge kind="info">{t('myconfigs.update.hint')}</Badge> : undefined}
+        trailing={wizard.mode === 'update'
+          ? <Badge kind="info">{t('myconfigs.update.hint')}</Badge>
+          : <InfoHint text={t('myconfigs.upload.selectHint')} label={t('common.infoHint')} />}
       />
       <Modal.Body scroll>
 
       {/* 步骤 1：选配置包 */}
       {wizard.step === 'select' && (<>
-        <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
         <input
           ref={fileInput}
           type="file"
@@ -100,7 +101,6 @@ export function MyConfigsWizard({
       {/* 步骤 2：本地校验（dry-run 零写入；选完 zip 自动执行，通过即自动进表单，
           本步骤仅短暂展示「校验中」；失败时展示错误 + 重新选择） */}
       {wizard.step === 'validate' && (<>
-        <span className={css.hint}>{t('myconfigs.upload.selectHint')}</span>
         {wizard.fileName !== null && (
           <div className={css.statRow}>
             <Badge kind="info">{t('myconfigs.upload.selected', { name: wizard.fileName })}</Badge>
@@ -163,7 +163,12 @@ export function MyConfigsWizard({
           <input className={css.input} value={wizard.form.categories} onChange={(e) => { onFormField('categories', e.target.value) }} />
         </Field>
         {/* F6 发布模式：迁移（全带）/ 分享（自动排除敏感分区 + 强制隐私拦截）—— 复用既有 conflictOptions/radioLabel 单选样式 */}
-        <Field label={t('myconfigs.upload.mode.title')}>
+        <Field
+          label={t('myconfigs.upload.mode.title')}
+          info={wizard.form.publishMode === 'share'
+            ? <InfoHint text={t('myconfigs.upload.mode.shareHint')} label={t('common.infoHint')} />
+            : undefined}
+        >
           <div className={css.conflictOptions}>
             {([
               ['migrate', t('myconfigs.upload.mode.migrate')],
@@ -181,9 +186,6 @@ export function MyConfigsWizard({
               </label>
             ))}
           </div>
-          {wizard.form.publishMode === 'share' && (
-            <span className={css.hint}>{t('myconfigs.upload.mode.shareHint')}</span>
-          )}
         </Field>
         {/* 系统自动字段（id/author/version/updatedAt 徽章，无需填写） */}
         <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>

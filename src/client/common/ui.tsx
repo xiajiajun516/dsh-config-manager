@@ -281,15 +281,20 @@ export function Spinner({ label }: SpinnerProps) {
 
 export interface FieldProps {
   label: string
+  /**
+   * 常驻说明：只留给**动态/元数据**文案（校验失败重申、当前值、计数）。纯说明性文案走 `info`。
+   */
   hint?: string
+  /** 说明性文案的 ⓘ（调用点传 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`），贴在字段标签右侧 */
+  info?: ReactNode
   children: ReactNode
 }
 
-/** 表单字段（标签 + 控件 + 说明） */
-export function Field({ label, hint, children }: FieldProps) {
+/** 表单字段（标签 + 控件 + 说明 / ⓘ） */
+export function Field({ label, hint, info, children }: FieldProps) {
   return (
     <label className={css.field}>
-      <span className={css.fieldLabel}>{label}</span>
+      <span className={css.fieldLabel}>{label}{info !== undefined ? <> {info}</> : null}</span>
       {children}
       {hint !== undefined && <span className={css.hint}>{hint}</span>}
     </label>
@@ -300,14 +305,27 @@ export function Field({ label, hint, children }: FieldProps) {
 
 export interface SectionTitleProps {
   title: string
+  /**
+   * 常驻副标题：只留给**动态/元数据**文案（当前项名、计数、状态说明、必须看到的下一步指引）。
+   * 纯说明性文案（机制 / 边界 / 背景 / 输入规则）一律走 `info`。
+   */
   subtitle?: string
+  /**
+   * 说明性文案的 ⓘ（调用点传 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`）。
+   * 渲在标题**同一行**右侧（DESIGN.md §7「摆放」形态①）；与它互斥的旧写法是把同一句话
+   * 常驻成 `subtitle` —— 那就把页面又撑长了一行。
+   */
+  info?: ReactNode
 }
 
-/** 区块标题（页面内二级标题 + 可选副标题） */
-export function SectionTitle({ title, subtitle }: SectionTitleProps) {
+/** 区块标题（页面内二级标题 + 可选副标题 / ⓘ 说明） */
+export function SectionTitle({ title, subtitle, info }: SectionTitleProps) {
   return (
     <div className={css.sectionTitleBlock}>
-      <h3 className={css.sectionTitle}>{title}</h3>
+      <div className={css.sectionTitleRow}>
+        <h3 className={css.sectionTitle}>{title}</h3>
+        {info}
+      </div>
       {subtitle !== undefined && <p className={css.sectionSubtitle}>{subtitle}</p>}
     </div>
   )

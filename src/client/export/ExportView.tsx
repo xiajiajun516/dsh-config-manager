@@ -396,15 +396,14 @@ export function ExportView({ api, t }: ExportViewProps) {
           onChange={setEncrypt}
           label={<span className={css.categoryName}>{t('export.encrypt')}</span>}
         />
+        <InfoHint text={t('export.encryptHint')} label={t('common.infoHint')} />
         <Checkbox
           checked={includeSecrets}
           onChange={setIncludeSecrets}
           label={<span className={css.categoryName}>{t('export.includeSecrets')}</span>}
         />
+        <InfoHint text={t('export.includeSecretsHint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
-      </div>
-      <div className={`${css.hint} ${css.groupHintRow}`}>
-        {encrypt ? t('export.encryptHint') : t('export.includeSecretsHint')}
       </div>
       {encrypt && (
         <div className={css.secretFields}>
@@ -531,8 +530,7 @@ export function ExportView({ api, t }: ExportViewProps) {
           「无内容可导出」本身就是一条需要用户看到的状态，而不是留白）。 */}
       <Card className={css.fillViewport}>
         <div className={css.groupHeader}>
-          <span className={css.groupLabel}>{t('export.compositionTitle')}</span>
-          <span className={css.groupNote}>{t('export.compositionHint')}</span>
+          <span className={css.groupLabel}>{t('export.compositionTitle')} <InfoHint text={t('export.compositionHint')} label={t('common.infoHint')} /></span>
           <span className={css.statusSpacer} />
           {compositionRows.length > 0 && (
             /* 有未读取分区时合计只报**下限**并显式标注（F-03）：宁可说「不少于」，也不虚报一个偏小的数 */

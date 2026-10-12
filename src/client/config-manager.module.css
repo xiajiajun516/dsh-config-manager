@@ -1680,6 +1680,15 @@ body {
   margin: 0 0 10px;
 }
 
+/* 区块标题 + ⓘ 同一行（DESIGN §7「摆放」形态①：ⓘ 必须与它说明的标题同一行，
+   不得单独成行）。标题可换行/收缩，ⓘ 自身不收缩；间隙与 .groupHeader/.controlRow 统一 8px。 */
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .sectionTitle {
   margin: 0;
   font-size: 13px;

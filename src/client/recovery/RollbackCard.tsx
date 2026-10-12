@@ -59,17 +59,13 @@ import {
   writeChatEntryMode,
   type ChatEntryMode,
 } from '../chat/chat-entry-pref.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, FoldToggle, IconButton, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
-import { Collapse } from '../common/Motion.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import css from '../config-manager.module.css'
-
-/** 折叠体的 DOM id（aria-controls 恒有值：Collapse 容器始终存在） */
-const ROLLBACK_BODY_ID = 'dcm-rollback-body'
 
 export interface RollbackCardProps {
   /** recovery 端口（rollback-points 方法为 Partial：宿主旧版可能没有这一族）。 */
@@ -143,8 +139,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
    * 「这次切换没有生效」，绝不把界面留在「显示已切换但实际没切换」的假状态。
    */
   const [chatEntryMode, setChatEntryMode] = useState<ChatEntryMode>(() => readChatEntryMode())
-  /** 折叠态：本卡是维护页最长的一块（台账 + 预览），缺省收起 —— 标题行仍给出「这卡干什么」 */
-  const [bodyOpen, setBodyOpen] = useState(false)
+  /** 台账弹窗的开关（2026-10-12：本卡退出折叠，台账整块进弹窗，且只在打开时挂载） */
+  const [open, setOpen] = useState(false)
   const [chatEntrySaveFailed, setChatEntrySaveFailed] = useState(false)
 
   const applyChatEntryMode = (next: string): void => {
@@ -255,24 +251,15 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   return (
     <>
       <Card>
-        {/* 卡头：标题 + 副标题（常驻可见，§7 KEEP-7）在左，折叠开关贴右 —— 收起时也读得到「这卡是干什么的」 */}
-        <div className={css.foldHead}>
-          <SectionTitle title={t('rollback.title')} subtitle={t('rollback.desc')} />
-          <FoldToggle
-            open={bodyOpen}
-            controls={ROLLBACK_BODY_ID}
-            onToggle={() => { setBodyOpen((v) => !v) }}
-            expandLabel={t('common.expand')}
-            collapseLabel={t('common.collapse')}
-          />
-        </div>
-        <Collapse open={bodyOpen} id={ROLLBACK_BODY_ID}>
+        {/* 卡头：标题 + ⓘ 说明（2026-10-12 用户要求说明性文案进 ⓘ：原来的常驻副标题正是被它替代的那一行）。
+            2026-10-12 同一轮用户要求：本卡**退出折叠** —— 摘要与入口常驻可见，台账整块搬进弹窗。 */}
+        <SectionTitle title={t('rollback.title')} info={<InfoHint text={t('rollback.desc')} label={t('common.infoHint')} />} />
 
-        {/* T2：聊天内回退入口形态开关。放在台账之前 = 与列表加载状态无关 ——
+        {/* T2：聊天内回退入口形态开关。放在台账入口之前 = 与列表加载状态无关 ——
             它是「本插件接管 user 渲染器出问题时一键退回回合尾」的保险，读不出台账时也必须能用。 */}
         {/* 聊天入口形态 = **设置块**：与下方台账区用一条分隔线分开（台账读不出来时它照样可用） */}
         <div className={css.rollbackChatEntry}>
-          <div className={css.groupLabel}>{t('rollback.chatEntry.label')}</div>
+          <div className={css.groupLabel}>{t('rollback.chatEntry.label')} <InfoHint text={t('rollback.chatEntry.hint')} label={t('common.infoHint')} /></div>
           <div className={css.actionRow}>
             <Segmented
               ariaLabel={t('rollback.chatEntry.label')}
@@ -284,7 +271,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               onChange={applyChatEntryMode}
             />
           </div>
-          <div className={css.hint}>{t('rollback.chatEntry.hint')}</div>
           {chatEntrySaveFailed && <Banner kind="warn">{t('rollback.chatEntry.saveFailed')}</Banner>}
         </div>
 
@@ -311,109 +297,144 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
 
         {status === 'ready' && (
           <>
-            <div className={css.hint}>{t('rollback.autopoint.hint')}</div>
             <div className={css.rollbackToolbar}>
               <span className={css.rollbackSummary}>
                 {t('rollback.summary', { points: total, sessions: groups.length })}
               </span>
-              {/* 留存/淘汰口径属机制说明 → 收进 ⓘ（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
-                  20/50/救援点上限这些细节一个字不改，仍在同一条字典键里。 */}
-              <InfoHint
-                text={t('rollback.retention.hint', { perSession: ROLLBACK_MAX_POINTS_PER_SESSION, total: ROLLBACK_MAX_POINTS_TOTAL })}
-                label={t('common.infoHint')}
-              />
               <span className={css.statusSpacer} />
-              <Button size="sm" disabled={busy} onClick={load}>{t('rollback.refresh')}</Button>
+              {/* 台账入口：按会话分组的时间线整块进弹窗（列表再长也不撑长这一页） */}
+              <Button size="sm" variant="primary" onClick={() => { setOpen(true) }}>
+                {t('rollback.dialog.open')}
+              </Button>
             </div>
+          </>
+        )}
+      </Card>
+
+      {/* 台账弹窗（按会话分组：每条对话一块；条目再多也只在弹窗内滚，卡片不再被撑长）。
+          与体检弹窗同一条挂载纪律：**只在打开时挂载** —— 关闭即卸载，卡片重渲染不再带着整屏内容走。 */}
+      {open && (
+        <Modal open onClose={() => { setOpen(false) }} title={t('rollback.dialog.title')} wide busy={busy}>
+          <Modal.Header
+            title={t('rollback.dialog.title')}
+            onClose={() => { setOpen(false) }}
+            closeLabel={t('common.close')}
+            trailing={(
+              <span className={css.shHeaderTrailing}>
+                {/* 留存/淘汰口径属机制说明 → 收进 ⓘ（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
+                    20/50/救援点上限这些细节一个字不改，仍在同一条字典键里。 */}
+                <InfoHint
+                  text={t('rollback.retention.hint', { perSession: ROLLBACK_MAX_POINTS_PER_SESSION, total: ROLLBACK_MAX_POINTS_TOTAL })}
+                  label={t('common.infoHint')}
+                />
+                <Button size="sm" variant="ghost" disabled={busy} onClick={load}>{t('rollback.refresh')}</Button>
+              </span>
+            )}
+          />
+          <Modal.Body scroll>
+            {status === 'loading' && <Spinner label={t('recovery.loading')} />}
+            {status === 'error' && (
+              <div className={css.actionRow}>
+                <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>
+                <Button onClick={load}>{t('common.retry')}</Button>
+              </div>
+            )}
 
             {actionError !== null && <Banner kind="error">{actionError}</Banner>}
 
-            {total === 0
-              ? <Empty>{t('rollback.list.empty')}</Empty>
-              : (
-                <div className={css.planScroll + ' ' + css.rollbackScroll + ' ' + css.snapshotList}>
-                  {groups.map((group) => (
-                    <div key={group.sessionId ?? '__unknown__'} className={css.rollbackGroup}>
-                      <div className={css.rollbackGroupHead}>
-                        <span className={css.rollbackGroupTitle + ' ' + css.mono}>
-                          {t('rollback.group.label', { session: group.sessionId ?? t('rollback.group.unknownSession') })}
-                        </span>
-                        <Badge kind="info">{t('rollback.group.count', { n: group.rows.length })}</Badge>
-                        {/* 工作区路径：右对齐单行省略，全文进 title（不把组头撑成多行） */}
-                        {group.unitId !== null && (
-                          <span className={css.rollbackGroupUnit} title={group.unitId}>{group.unitId}</span>
-                        )}
-                      </div>
-                      <div className={css.rollbackPoints}>
-                        {group.rows.map((row) => {
-                          const hasCursor = rollbackRowHasSessionCursor(row)
-                          return (
-                            <div key={row.id} className={css.rollbackPoint} data-kind={row.kind}>
-                              <div className={css.rollbackPointTop}>
-                                <span className={css.rollbackPointTurn}>
-                                  {row.turn === null ? t('rollback.turnUnknown') : t('rollback.turn', { n: row.turn })}
-                                </span>
-                                {/* 来源徽章只放短标签（「救援点」），完整语义（含「可回退、不可删」）进 title */}
-                                <Badge kind={row.kind === 'guard' ? 'info' : 'ok'} title={t(dyn(row.kindKey))}>
-                                  {row.kind === 'guard' ? t('rollback.kind.guardShort') : t(dyn(row.kindKey))}
-                                </Badge>
-                                {row.protected && <Badge kind="warn" title={t('rollback.badge.protected')}>{t('rollback.badge.protected')}</Badge>}
-                                {row.incomplete && <Badge kind="warn" title={t('rollback.badge.incomplete')}>{t('rollback.badge.incomplete')}</Badge>}
-                                {/* S4：留点时「有文件被跳过 / 被截断」必须看得见（宿主已如实回传，界面不得静默）。
-                                    徽章只放短标签，完整句进 title；未登记的键回落完整句（绝不静默丢告警）。 */}
-                                {row.segments.flatMap((segment) => segment.noticeKeys.map((key) => {
-                                  const full = t(dyn(key), { n: segment.skippedCount })
-                                  const shortKey = NOTICE_SHORT_KEYS[key]
-                                  const text = shortKey === undefined ? full : t(dyn(shortKey), { n: segment.skippedCount })
-                                  return <Badge key={segment.state + key} kind="warn" title={full}>{text}</Badge>
-                                }))}
-                                <div className={css.rollbackPointActions}>
-                                  <Button size="sm" disabled={busy} onClick={() => { openPreview(row) }}>{t('rollback.preview')}</Button>
-                                  {/* 删除是不可逆的表账操作：图标按钮 + danger（视觉隔离），禁用原因进 title */}
-                                  <IconButton
-                                    icon={<Icon name="delete" />}
-                                    label={t('rollback.delete')}
-                                    title={row.removable ? t('rollback.delete') : (row.protected ? t('rollback.badge.protected') : t('rollback.kind.guard'))}
-                                    disabled={busy || !row.removable}
-                                    danger
-                                    onClick={() => { setDeleteTarget(row) }}
-                                  />
+            {status === 'ready' && (
+              <>
+                {total === 0
+                  ? <Empty>{t('rollback.list.empty')}</Empty>
+                  : (
+                    <div className={css.planScroll + ' ' + css.rollbackScroll + ' ' + css.snapshotList}>
+                      {groups.map((group) => (
+                        <div key={group.sessionId ?? '__unknown__'} className={css.rollbackGroup}>
+                          <div className={css.rollbackGroupHead}>
+                            <span className={css.rollbackGroupTitle + ' ' + css.mono}>
+                              {t('rollback.group.label', { session: group.sessionId ?? t('rollback.group.unknownSession') })}
+                            </span>
+                            <Badge kind="info">{t('rollback.group.count', { n: group.rows.length })}</Badge>
+                            {/* 工作区路径：右对齐单行省略，全文进 title（不把组头撑成多行） */}
+                            {group.unitId !== null && (
+                              <span className={css.rollbackGroupUnit} title={group.unitId}>{group.unitId}</span>
+                            )}
+                          </div>
+                          <div className={css.rollbackPoints}>
+                            {group.rows.map((row) => {
+                              const hasCursor = rollbackRowHasSessionCursor(row)
+                              return (
+                                <div key={row.id} className={css.rollbackPoint} data-kind={row.kind}>
+                                  <div className={css.rollbackPointTop}>
+                                    <span className={css.rollbackPointTurn}>
+                                      {row.turn === null ? t('rollback.turnUnknown') : t('rollback.turn', { n: row.turn })}
+                                    </span>
+                                    {/* 来源徽章只放短标签（「救援点」），完整语义（含「可回退、不可删」）进 title */}
+                                    <Badge kind={row.kind === 'guard' ? 'info' : 'ok'} title={t(dyn(row.kindKey))}>
+                                      {row.kind === 'guard' ? t('rollback.kind.guardShort') : t(dyn(row.kindKey))}
+                                    </Badge>
+                                    {row.protected && <Badge kind="warn" title={t('rollback.badge.protected')}>{t('rollback.badge.protected')}</Badge>}
+                                    {row.incomplete && <Badge kind="warn" title={t('rollback.badge.incomplete')}>{t('rollback.badge.incomplete')}</Badge>}
+                                    {/* S4：留点时「有文件被跳过 / 被截断」必须看得见（宿主已如实回传，界面不得静默）。
+                                        徽章只放短标签，完整句进 title；未登记的键回落完整句（绝不静默丢告警）。 */}
+                                    {row.segments.flatMap((segment) => segment.noticeKeys.map((key) => {
+                                      const full = t(dyn(key), { n: segment.skippedCount })
+                                      const shortKey = NOTICE_SHORT_KEYS[key]
+                                      const text = shortKey === undefined ? full : t(dyn(shortKey), { n: segment.skippedCount })
+                                      return <Badge key={segment.state + key} kind="warn" title={full}>{text}</Badge>
+                                    }))}
+                                    <div className={css.rollbackPointActions}>
+                                      <Button size="sm" disabled={busy} onClick={() => { openPreview(row) }}>{t('rollback.preview')}</Button>
+                                      {/* 删除是不可逆的表账操作：图标按钮 + danger（视觉隔离），禁用原因进 title */}
+                                      <IconButton
+                                        icon={<Icon name="delete" />}
+                                        label={t('rollback.delete')}
+                                        title={row.removable ? t('rollback.delete') : (row.protected ? t('rollback.badge.protected') : t('rollback.kind.guard'))}
+                                        disabled={busy || !row.removable}
+                                        danger
+                                        onClick={() => { setDeleteTarget(row) }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className={css.rollbackPointMeta}>
+                                    <span className={css.mono}>{new Date(row.createdAtMs).toLocaleString()}</span>
+                                    <span className={css.rollbackMetaDot} aria-hidden="true">·</span>
+                                    <span>{t('rollback.row.files', { n: rollbackRowFileCount(row) })}</span>
+                                    <span className={css.rollbackMetaDot} aria-hidden="true">·</span>
+                                    {/* 短标签进屏、完整句进 title：「无会话游标（只能回退工作区）」不再逐行重复整句 */}
+                                    <span title={hasCursor ? t('rollback.row.sessionCursor') : t('rollback.row.noSessionCursor')}>
+                                      {hasCursor ? t('rollback.row.sessionShort') : t('rollback.row.workspaceShort')}
+                                    </span>
+                                    {row.note !== null && (
+                                      <span className={css.rollbackPointNote} title={row.note}>{row.note}</span>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                              <div className={css.rollbackPointMeta}>
-                                <span className={css.mono}>{new Date(row.createdAtMs).toLocaleString()}</span>
-                                <span className={css.rollbackMetaDot} aria-hidden="true">·</span>
-                                <span>{t('rollback.row.files', { n: rollbackRowFileCount(row) })}</span>
-                                <span className={css.rollbackMetaDot} aria-hidden="true">·</span>
-                                {/* 短标签进屏、完整句进 title：「无会话游标（只能回退工作区）」不再逐行重复整句 */}
-                                <span title={hasCursor ? t('rollback.row.sessionCursor') : t('rollback.row.noSessionCursor')}>
-                                  {hasCursor ? t('rollback.row.sessionShort') : t('rollback.row.workspaceShort')}
-                                </span>
-                                {row.note !== null && (
-                                  <span className={css.rollbackPointNote} title={row.note}>{row.note}</span>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              )}
-          </>
-        )}
-        </Collapse>
-      </Card>
+                  )}
+              </>
+            )}
+          </Modal.Body>
+        </Modal>
+      )}
 
       {/* 预览 / 回退（同一弹窗：先只读预览 + 三选一范围，执行后就地显示逐段结果） */}
       <Modal open={target !== null} onClose={closePreview} title={t('rollback.preview')} wide busy={busy}>
-        <Modal.Header title={t('rollback.preview.title')} onClose={closePreview} closeLabel={t('common.close')} />
+        <Modal.Header
+          title={t('rollback.preview.title')}
+          onClose={closePreview}
+          closeLabel={t('common.close')}
+          trailing={<InfoHint text={t('rollback.preview.hint')} label={t('common.infoHint')} />}
+        />
         {previewLoading && <Spinner label={t('rollback.preview.loading')} />}
 
         {result === null && preview !== null && (
           <>
-            <div className={css.hint}>{t('rollback.preview.hint')}</div>
             <div className={css.reportScroll + ' ' + css.rollbackScroll}>
               <div className={css.rollbackPoints}>
                 {previewRows.map((row) => (

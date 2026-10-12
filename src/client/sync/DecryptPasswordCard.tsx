@@ -7,6 +7,7 @@
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { Button, Card } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import type { ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
@@ -22,7 +23,7 @@ export function DecryptPasswordCard({ t, settings, onPatchSettings, onPersistDec
   return (
     <Card>
       <label className={css.field}>
-        <span className={css.fieldLabel}>{t('mode.decryptPassword')}</span>
+        <span className={css.fieldLabel}>{t('mode.decryptPassword')} <InfoHint text={t('mode.decryptPasswordHint')} label={t('common.infoHint')} /></span>
         <input
           type="password"
           className={css.input}
@@ -32,7 +33,6 @@ export function DecryptPasswordCard({ t, settings, onPatchSettings, onPersistDec
           onChange={(e: ChangeEvent<HTMLInputElement>) => { onPatchSettings({ decryptPassword: e.target.value }) }}
           onBlur={onPersistDecryptPassword}
         />
-        <span className={css.hint}>{t('mode.decryptPasswordHint')}</span>
       </label>
       {settings.decryptPasswordSaved && (
         <div className={css.actionRow}>

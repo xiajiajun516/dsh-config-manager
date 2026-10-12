@@ -166,6 +166,31 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **维护与诊断的两块诊断卡退出折叠，「工作区 + 会话回滚」的台账搬进弹窗**（2026-10-12 用户要求）：此前「会话体检」与「工作区 + 会话回滚」各带一颗折叠开关、缺省收起，
+> 摘要、主操作与整份台账一起藏在一次点击后面 —— 打开维护页看不到「这台机器有没有回滚点、有几条对话留了点」。
+> - 两块卡改为**常驻正文**：卡头只剩标题与 ⓘ（机制说明），状态徽章、数字摘要与主操作（「打开会话体检」/「查看回滚点」）一律留在屏上；`FoldToggle` 在这两处不再出现
+>   （救援模式那一块仍有折叠，且只在真有明细时渲染开关，判据不变）。
+> - 「工作区 + 会话回滚」的台账整块搬进**本页弹窗**（新键 `rollback.dialog.title` = 「回滚点台账」）：仍按会话分组（组头 = 会话 id + 该会话的回滚点数 + 工作区路径），
+>   条目再多也只在弹窗内限高内滚；留存 / 淘汰口径（每会话 20 / 全局 50 / 救援点每会话 20）与「刷新」搬进弹窗标题行 —— **主操作不再活在折叠体里**。
+> - 与体检弹窗同一条挂载纪律：`{open && …}`，关闭即卸载；卡片重渲染不再带着整屏台账一起走。
+> - **护栏**：`src/client/recovery/recovery-panel-layout.test.ts` 新增「两块诊断卡退出折叠」（卡内不得再出现 `FoldToggle` / `Collapse` / `aria-expanded`；
+>   台账必须在条件挂载的弹窗内），`recovery-locales.test.ts` 的固定键表补上新键。
+> - **未验证**：本轮只做了 typecheck + 源码守卫 + 构建，**没有浏览器点击取证**（回滚点列表的真实观感仍需真机看一眼）。
+
+> **Both diagnostics cards under Maintenance & diagnostics no longer fold, and the rollback ledger moves into a dialog** (user request, 2026-10-12):
+> the "Session checkup" and "Workspace + session rollback" cards each carried a fold toggle and started collapsed, so the summary, the primary action
+> and the whole ledger sat behind one extra click — opening the maintenance page never told you whether this machine has rollback points at all.
+> - Both cards are now **always-visible bodies**: the head keeps only the title and the ⓘ (mechanism text), while the status badge, the numeric summary
+>   and the primary action ("Open session checkup" / "View rollback points") stay on screen; `FoldToggle` is gone from these two (rescue mode keeps
+>   its fold, and still renders the switch only when there is detail to show).
+> - The rollback ledger moved into an **in-page dialog** (new key `rollback.dialog.title` = "Rollback point ledger"): still grouped per session
+>   (group head = session id + that session's point count + workspace path), and it scrolls inside the dialog instead of stretching the page. The
+>   retention policy (20 per session / 50 in total / 20 rescue points per session) and "Refresh" moved into the dialog's header row — no primary action
+>   lives inside a collapsed body anymore.
+> - Same mount discipline as the checkup dialog: `{open && …}`, unmounted on close, so card re-renders no longer carry the whole ledger along.
+> - **Guards**: a new case in `src/client/recovery/recovery-panel-layout.test.ts` (no `FoldToggle` / `Collapse` / `aria-expanded` inside either
+>   card; the ledger must sit inside the conditionally mounted dialog) plus the two new keys in `recovery-locales.test.ts`.
+> - **Not verified**: this round only ran typecheck + source guards + build — there was **no browser click-through**.
 > **说明性文案一律收进 ⓘ：页面只留标题、控件与数字**（2026-10-12 用户要求）：此前同步页 / 环境页 / 维护与诊断 / 加密与密钥导出这些地方
 > 仍有一句话常驻在标题下或卡片里（`profiles.subtitle`、`section.description`、`mode.encryptHint`…），一屏五六行灰字说明，真正要看的控件与数字被稀释。
 > - **页级 / 分区级副标题 → `SectionTitle.info`**：`common/ui.tsx` 新增 `info`（与 `subtitle` 并存：**静态说明走 ⓘ，动态 / 元数据才留在副标题**）——

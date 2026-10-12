@@ -403,12 +403,10 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
 
   return (
     <div className={css.viewBody}>
-      {/* 页级标题：副标题只在**档案列表**子视图下显示 —— 它讲的是 profile（档案 = 插件组合…），
-          在「维护与诊断」子视图里与内容无关（此前无条件渲染，维护页顶部因此挂着一句跑题的话）。 */}
-      <SectionTitle
-        title={t('environment.title')}
-        subtitle={subView === 'list' ? t('profiles.subtitle') : undefined}
-      />
+      {/* 页级标题：只留标题 ——「档案 = 插件组合（bundles）+ 依赖 + patch 层」这句现在挂在
+          「档案」分区标题的 ⓘ 上（2026-10-12 用户要求说明性文案一律进 ⓘ；此前页级与分区级
+          各渲染一次同一句话，同一屏出现两遍）。 */}
+      <SectionTitle title={t('environment.title')} />
 
       {/* 子视图切换：档案列表 ↔ 维护与诊断 */}
       <div className={css.actionRow}>
@@ -441,7 +439,7 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
 
       {subView === 'list' && (
       <>
-      <SectionTitle title={t('profiles.title')} subtitle={t('profiles.subtitle')} />
+      <SectionTitle title={t('profiles.title')} info={<InfoHint text={t('profiles.subtitle')} label={t('common.infoHint')} />} />
 
       {/* —— 运行状态：当前运行中的 profile + 本插件启动的实例（可打开 / 可停止） —— */}
       <Card className={css.card}>

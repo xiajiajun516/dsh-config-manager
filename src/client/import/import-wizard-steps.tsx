@@ -15,6 +15,7 @@ import type { UiT } from '../../ui/i18n.ts'
 import {
   Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner,
 } from '../common/ui.tsx'
+import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import {
@@ -55,7 +56,6 @@ export function SecretsForm({
   }
   return (
     <div className={css.secretsList}>
-      <div className={css.hint}>{t('import.secrets.hint')}</div>
       {missing.length === 0 && <Empty>{t('import.secrets.none')}</Empty>}
       {missing.map((s) => (
         <label key={s.ref} className={css.field}>
@@ -107,7 +107,7 @@ export function SelectStep(props: {
   const { fileInput, selectModel, uploading, error, onCancel, onPickFile, onReset, apiT, t, foreignEntry } = props
   return (
     <div className={`${css.viewBody} ${css.sparseFill}`}>
-      <SectionTitle title={t('import.select.title')} subtitle={t('import.select.hint')} />
+      <SectionTitle title={t('import.select.title')} info={<InfoHint text={t('import.select.hint')} label={t('common.infoHint')} />} />
       <input
         ref={fileInput}
         type="file"
@@ -143,8 +143,8 @@ export function SelectStep(props: {
         <>
           <div className={css.actionRow} style={{ marginBottom: 0 }}>
             <Button onClick={foreignEntry.onOpen}>{t('foreign.source.title')}</Button>
+            <InfoHint text={t('foreign.source.hint')} label={t('common.infoHint')} />
           </div>
-          <div className={css.hint}>{t('foreign.source.hint')}</div>
         </>
       )}
     </div>
@@ -182,7 +182,7 @@ export function ConsultStage(props: {
   const { consultLoading, consultReport, error, onNext, onReset, apiT, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.preview.title')} subtitle={t('import.consult.hint')} />
+      <SectionTitle title={t('import.preview.title')} info={<InfoHint text={t('import.consult.hint')} label={t('common.infoHint')} />} />
       {consultLoading && <Spinner label={apiT('consult.loading')} />}
       {consultReport !== null && <ConsultCard report={consultReport} t={apiT} />}
       {!consultLoading && consultReport === null && (
@@ -213,7 +213,7 @@ export function DecryptArchiveStep(props: {
   const { password, onPasswordChange, unlockError, unlocking, onUnlock, onReset, apiT, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.decryptArchive.title')} subtitle={t('import.decryptArchive.hint')} />
+      <SectionTitle title={t('import.decryptArchive.title')} info={<InfoHint text={t('import.decryptArchive.hint')} label={t('common.infoHint')} />} />
       <input
         type="password"
         className={css.input}
@@ -248,7 +248,7 @@ export function ConflictsStage(props: {
   const { collector, onChanged, onBack, onNext, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.conflicts.title')} subtitle={t('import.conflicts.hint')} />
+      <SectionTitle title={t('import.conflicts.title')} info={<InfoHint text={t('import.conflicts.hint')} label={t('common.infoHint')} />} />
       <ConflictList
         collector={collector}
         t={t}
@@ -276,7 +276,7 @@ export function PathMappingStage(props: {
   const { issues, mappings, onMappingsChange, onBack, onNext, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.paths.title')} subtitle={t('import.paths.hint')} />
+      <SectionTitle title={t('import.paths.title')} info={<InfoHint text={t('import.paths.hint')} label={t('common.infoHint')} />} />
       <PathMappingForm issues={issues} initial={mappings} t={t} onChange={onMappingsChange} />
       <div className={css.actionRow}>
         <Button variant="ghost" onClick={onBack}>{t('common.back')}</Button>
@@ -298,7 +298,7 @@ export function SecretsStage(props: {
   const { missing, value, onValueChange, onBack, onNext, t } = props
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('import.secrets.title')} />
+      <SectionTitle title={t('import.secrets.title')} info={<InfoHint text={t('import.secrets.hint')} label={t('common.infoHint')} />} />
       <SecretsForm
         missing={missing}
         value={value}

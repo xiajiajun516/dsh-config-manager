@@ -110,7 +110,7 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('about.title')} subtitle={t('about.subtitle')} />
+      <SectionTitle title={t('about.title')} info={<InfoHint text={t('about.subtitle')} label={t('common.infoHint')} />} />
 
       {/* 项目信息卡：插件名 + 官方 Badge；版本 / DSH / 平台（动态，经 status()） + 查看更新内容 */}
       <Card>

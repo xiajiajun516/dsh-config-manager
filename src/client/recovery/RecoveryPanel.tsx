@@ -95,8 +95,8 @@ const redactErrorText = (err: unknown): string => redact(err instanceof Error ? 
 /**
  * 维护与诊断「折叠卡」的折叠体 id（aria-controls 恒有值 —— Collapse 容器始终存在）。
  * 一块一个常量：id 字面量散在 JSX 里最容易复制粘贴出重复 id，aria-controls 就指错了。
+ * 2026-10-12：会话体检与回滚卡退出折叠，折叠只剩**救援模式**一块（且只在真有明细时渲染开关）。
  */
-const SESSIONS_BODY_ID = 'dcm-sessions-health-body'
 const RESCUE_BODY_ID = 'dcm-rescue-mode-body'
 
 /**
@@ -281,8 +281,6 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
-  /** 折叠态：本块只是「一颗入口按钮 + 一行摘要」，缺省收起（维护页三块诊断里最矮的一块） */
-  const [bodyOpen, setBodyOpen] = useState(false)
   const [scanVersion, setScanVersion] = useState(0)
   const scan = (): void => { setScanVersion((v) => v + 1) }
   /**
@@ -327,16 +325,9 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
         <Badge kind="info">{t('sessions.readOnly')}</Badge>
         <InfoHint text={t('sessions.desc')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
-        <FoldToggle
-          open={bodyOpen}
-          controls={SESSIONS_BODY_ID}
-          onToggle={() => { setBodyOpen((v) => !v) }}
-          expandLabel={t('common.expand')}
-          collapseLabel={t('common.collapse')}
-        />
       </div>
-      <Collapse open={bodyOpen} id={SESSIONS_BODY_ID}>
-      {/* T10：结果全部搬进独立弹窗 —— 卡片只留入口与一行摘要，绝不把上千行塞进设置页 */}
+      {/* T10：结果全部搬进独立弹窗 —— 卡片只留入口与一行摘要，绝不把上千行塞进设置页。
+          2026-10-12 用户要求：本卡**退出折叠**，入口与摘要常驻可见（不再有 chevron）。 */}
       <div className={css.hint}>
         {summary !== null && response !== null
           ? t('sessions.dialog.lastScan', {
@@ -370,7 +361,6 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
           api={diskApi}
         />
       )}
-      </Collapse>
     </Card>
   )
 }
@@ -535,9 +525,8 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
         <div className={css.shPanel}>
           <div className={css.shPanelHead}>
             <span className={css.shPanelTitle}>{t('sessions.layout.planTitle')}</span>
+            <InfoHint text={t('sessions.layout.planReadOnly')} label={t('common.infoHint')} />
           </div>
-          {/* 计划只读：确认前零写入 */}
-          <div className={css.hint}>{t('sessions.layout.planReadOnly')}</div>
           <div className={css.hint}>
             {t('sessions.layout.summary', { move: String(plan.summary.move), quarantine: String(plan.summary.quarantine) })}
           </div>
@@ -1168,10 +1157,8 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
 
                   {/* 应用内不动的问题类别：离线出路（命令逐条可复制） */}
                   <div className={css.shSectionHead}>
-                    <span className={css.shSectionTitle}>{t('sessions.repair.title')}</span>
+                    <span className={css.shSectionTitle}>{t('sessions.repair.title')} <InfoHint text={t('sessions.repair.desc')} label={t('common.infoHint')} /></span>
                   </div>
-                  {/* KEEP 类（安全 / 写盘建议）：容器非法 / header 不可读 / 格式超前这些必须常驻可见 */}
-                  <div className={css.hint}>{t('sessions.repair.desc')}</div>
                   <ul className={css.shCommands}>
                     {sessionRepairCommands().map((entry) => (
                       <li key={entry.command} className={css.shCommand}>
@@ -1539,8 +1526,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           必须给出**可执行**的解除入口，否则用户只能去磁盘上删 transactions/safe-mode。 */}
       {state.status === 'ready' && view?.safeModeStuck === true && (
         <Card className={css.card}>
-          <div className={css.groupLabel}>{t('recovery.safeMode.title')}</div>
-          <div className={css.hint}>{t('recovery.safeMode.detail')}</div>
+          <div className={css.groupLabel}>{t('recovery.safeMode.title')} <InfoHint text={t('recovery.safeMode.detail')} label={t('common.infoHint')} /></div>
           <div className={css.actionRow}>
             <Button variant="danger" disabled={safeModeBusy} loading={safeModeBusy} onClick={() => { setSafeModeConfirmOpen(true) }}>
               {safeModeBusy ? t('recovery.safeMode.busy') : t('recovery.safeMode.action')}
@@ -1751,6 +1737,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
         <Card>
           <div className={css.statRow}>
             <strong>{t('recovery.rescue.title')}</strong>
+            <InfoHint text={t('recovery.rescue.desc')} label={t('common.infoHint')} />
             <Badge kind={rescue.active ? 'warn' : 'ok'}>
               {rescue.active ? t('recovery.rescue.activeBadge') : t('recovery.rescue.inactive')}
             </Badge>
@@ -1772,9 +1759,8 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
               />
             )}
           </div>
-          {/* 机制与安全说明**常驻可见**（DESIGN.md §7 KEEP-2：危险操作的说明不得只活在折叠体里）——
-              折叠体只收「已开启时的生效状态与提示」这类明细。 */}
-          <div className={css.hint}>{t('recovery.rescue.desc')}</div>
+          {/* 机制与安全说明收进标题行的 ⓘ（2026-10-12 用户要求说明性文案一律进 ⓘ）：
+              危险动作按钮仍在标题行永远可达，折叠体只收「已开启时的生效状态与提示」这类明细。 */}
           <Collapse open={rescueOpen} id={RESCUE_BODY_ID}>
           {rescue.active && (
             <div className={css.hint}>

@@ -85,16 +85,17 @@ test('T2：回滚卡的聊天入口开关位置/原语/通道（panel 小节三�
   assert.ok(labelAt > cardAt && labelAt < cardEndAt, '开关必须渲染在回滚卡内（小节外层 = .card）');
   assert.ok(readyAt > 0 && labelAt < readyAt, '开关必须排在台账状态分支之前 —— 否则列表读不出来时这颗保险正好不可用');
 
-  // ② 复用既有原语（标题走 .groupLabel / 说明走 .hint / 切换走 common/ui.tsx 的 Segmented）
+  // ② 复用既有原语（标题走 .groupLabel + ⓘ 说明 / 切换走 common/ui.tsx 的 Segmented）
+  // 2026-10-12（t7）：说明性文案一律进 ⓘ —— 开关说明从常驻 .hint 行改为标题行的 InfoHint。
   assert.match(
     src,
-    /<div className=\{css\.groupLabel\}>\{t\('rollback\.chatEntry\.label'\)\}<\/div>/,
-    '开关标题必须走 .groupLabel（与面板其它小节同一把尺子）',
+    /<div className=\{css\.groupLabel\}>\{t\('rollback\.chatEntry\.label'\)\} <InfoHint text=\{t\('rollback\.chatEntry\.hint'\)\} label=\{t\('common\.infoHint'\)\} \/><\/div>/,
+    '开关标题必须走 .groupLabel，说明挂同一行的 ⓘ（与面板其它小节同一把尺子）',
   );
-  assert.match(
+  assert.doesNotMatch(
     src,
     /<div className=\{css\.hint\}>\{t\('rollback\.chatEntry\.hint'\)\}<\/div>/,
-    '开关说明必须走 .hint',
+    '开关说明不得再常驻成可见 .hint 行（必须进 ⓘ）',
   );
   assert.match(
     src,
@@ -173,4 +174,35 @@ test('布局守卫：回滚点时间线 = 分组卡 + 两行式行卡（禁止�
     src.includes('css.planScroll') && src.includes('css.reportScroll'),
     '台账与预览列表必须限高内滚（.planScroll / .reportScroll）',
   );
+});
+
+/* ------------------- 2026-10-12：两块诊断卡退出折叠 + 台账整块进弹窗 */
+
+/**
+ * 用户 2026-10-12 的两条要求（类型检查 / 纯函数单测 / bundle 护栏都抓不到渲染结构，故仍是源码守卫）：
+ *  ①「会话体检」与「工作区 + 会话回滚」**不再可展开/收回** —— 卡头不得再出现折叠开关或折叠容器，
+ *     摘要与主操作（体检入口 / 台账入口）常驻可见；
+ *  ② 回滚台账整块搬进**本页弹窗**（按会话分组），且与体检弹窗同一条挂载纪律：只在打开时挂载。
+ * 谁把折叠加回来、或把台账塞回卡内正文，这里直接红灯。
+ */
+test('两块诊断卡退出折叠：卡头无 FoldToggle/Collapse，回滚台账在条件挂载的弹窗内', () => {
+  const rollback = readFileSync(ROLLBACK_CARD_PATH, 'utf8');
+  const sessions = functionBody('SessionHealthCard');
+
+  for (const [name, src] of [['RollbackCard', rollback], ['SessionHealthCard', sessions]] as const) {
+    assert.equal(src.includes('<FoldToggle'), false, name + ' 不得再渲染折叠开关（用户要求退出折叠）');
+    assert.equal(src.includes('<Collapse'), false, name + ' 不得再用折叠容器（内容常驻可见）');
+    assert.equal(src.includes('aria-expanded'), false, name + ' 卡内不得再有展开/收回语义');
+  }
+
+  // 卡上只留「打开台账」这一颗入口按钮；台账本体在 {open && …} 条件挂载的弹窗里
+  assert.ok(rollback.includes("t('rollback.dialog.open')"), '卡上必须留一颗打开台账的按钮');
+  assert.match(
+    rollback,
+    /\{open && \(\s*<Modal open[\s\S]{0,400}title=\{t\('rollback\.dialog\.title'\)\}/,
+    '台账必须进弹窗，且只在打开时挂载（关闭即卸载）',
+  );
+  assert.ok(rollback.includes('<Modal.Body scroll>'), '台账列表必须在弹窗正文内（限高内滚，不撑长页面）');
+  // 体检入口同样常驻卡上（不再是「收起后要展开才看得到」）
+  assert.ok(sessions.includes("t('sessions.dialog.open')"), '体检入口必须常驻卡上');
 });

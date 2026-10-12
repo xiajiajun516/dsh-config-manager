@@ -201,8 +201,7 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
             </div>
           )}
 
-          <div className={css.groupLabel}>{t('diskUsage.clean.title')}</div>
-          <div className={css.hint}>{t('diskUsage.clean.hint')}</div>
+          <div className={css.groupLabel}>{t('diskUsage.clean.title')} <InfoHint text={t('diskUsage.clean.hint')} label={infoHintLabel} /></div>
 
           {tmpMarket !== undefined && (
             <div className={css.actionRow} data-inline>
