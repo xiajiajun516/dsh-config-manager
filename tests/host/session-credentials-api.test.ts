@@ -47,7 +47,11 @@ test('issue #39 F1：FileSystemFacade.mtimeMs 在真实文件系统上返回时�
 
 test('导入体验：宿主 /plan 真的给 sessions 计划项补了会话标题（接线不能丢）', () => {
   const block = routeBlock('path: API.plan,', 3000);
-  assert.match(block, /applySessionMetaToPlanItems\(plan\.items, await readSessionMeta\(host\)\)/, '计划项必须经会话元数据富化，否则导入页只能显示会话目录名');
+  assert.match(
+    block,
+    /applySessionMetaToPlanItems\(\s*plan\.items,\s*await readSessionMetaWithTitles\(host, plan\.items/,
+    '计划项必须经会话元数据富化（聚合缓存 + 逐会话投影），否则导入页只能显示会话目录名',
+  );
   assert.match(block, /catch \{/, '元数据读不到时不得让计划生成失败（退回目录名）');
 });
 test('issue #39 F1：宿主 /export 真的解析并下发 sessions: { limit }', () => {
