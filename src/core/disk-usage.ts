@@ -9,14 +9,42 @@
  *   ② 对「可回收」子区按各自保留期算出**已超期**的字节数与条目数（与 host 侧清理逻辑同口径，
  *      保留期由调用方注入 —— 本模块不读配置、不猜默认值）。
  *
- * 硬约束：**只读**。任何子路径缺失/不可读都不抛错，如实降级为该子区 0 字节；
- * 扫描期间出现的竞态删除（readdir/stat 失败）只终止那一支，不影响其余统计。
+ * 硬约束：**只读**。任何子路径缺失/不可读都不抛错，如实降级为该子区 0 字节、并把
+ * `unreadable` 置真（界面显示「未统计」而不是 0）；扫描期间出现的竞态删除（readdir/stat
+ * 失败）只终止那一支，不影响其余统计。
+ *
+ * 已补齐两块此前不可见的占用（都**只报告、绝不提供清理**）：
+ *  - 回滚点库 `dataDir/rollback-points`：并进 `DISK_USAGE_AREAS`，`policy: 'protected'`；
+ *  - 「遗留数据」`LEGACY_DATA_DIRS`（当前一条：旧检查点库 `dataDir/checkpoints`）：
+ *    插件**已不再读取**该目录，也**不代删**（删除不可逆，需用户单独授权）。
+ * 本模块与清理动作完全解耦：`IMMEDIATE_CLEAN_CATEGORIES` 只有可重建区，
+ * `POST /disk-usage/cleanup` 的候选白名单也只有 'tmp' | 'expired-exports'。
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { Dirent, Stats } from 'node:fs'
 
-/** 体检子区（顺序即界面展示顺序：先备份产物，再缓存/暂存） */
+/**
+ * 回滚点库目录名（`dataDir/rollback-points`）。
+ *
+ * 为什么不直接 import 引擎的 `ROLLBACK_POINTS_DIR_NAME`：本模块是**只读体检**，也是离线
+ * 救急台（`dcm web` 的磁盘页）的依赖 —— 不该把整个回滚引擎（crypto / zlib / atomic-write /
+ * 会话索引…）拉进它的运行时依赖图；引擎文件一旦有问题，救急台恰恰是最不该跟着挂的那个页面。
+ * 「单一事实源」在这里靠**源码级守卫**而不是 import：`disk-usage.test.ts` 直接读
+ * `src/core/rollback-point.ts` 的声明并与本常量逐字比对（改了那边、或改了这边，测试即红）
+ * —— 与 `tests/packaging-contract.test.ts` 的 V-1（源码级读 `PLUGIN_VERSION`，不 import 宿主入口）
+ * 同一种姿势。
+ */
+const ROLLBACK_POINTS_DIR = 'rollback-points'
+
+/**
+ * 只报告、**不提供清理**的子区（当前一条：回滚点库 = `dataDir/rollback-points`）。
+ * 它只是「口径清单」：报告/展示一律用完备的 `DISK_USAGE_AREAS`，清理候选另有白名单
+ * （`IMMEDIATE_CLEAN_CATEGORIES` / 清理入口 categories），两者不得混用。
+ */
+export const DISK_USAGE_EXTRA_AREAS = ['rollback-points'] as const
+
+/** 体检子区（顺序即报告/展示顺序：先备份产物，再缓存/暂存，末位为只读保护的附加区） */
 export const DISK_USAGE_AREAS = [
   'exports',
   'snapshots',
@@ -30,10 +58,19 @@ export const DISK_USAGE_AREAS = [
   'transactions',
   'locks',
   'vault',
+  ...DISK_USAGE_EXTRA_AREAS,
 ] as const
 
-/** 体检子区 id */
-export type DiskUsageArea = typeof DISK_USAGE_AREAS[number]
+/** 全部体检子区 id（= `DISK_USAGE_AREAS` 的元素类型） */
+export type DiskUsageScanArea = typeof DISK_USAGE_AREAS[number]
+
+/**
+ * 体检子区 id（**与 `DiskUsageScanArea` 同一集合**，13 键完备）。
+ *
+ * 2026-10-13 收口：文案登记（t6）落地后不再分叉 —— 按本类型写 `Record<DiskUsageArea, …>`
+ * 时漏掉任一子区（含 rollback-points）都会在编译期报错，而不是静默缺项。
+ */
+export type DiskUsageArea = DiskUsageScanArea
 
 /** 子区回收策略语义（决定界面文案，不由界面自行判断） */
 export type DiskUsagePolicy =
@@ -62,20 +99,75 @@ export interface DiskUsageAreaReport {
   expiredCount?: number
 }
 
+/**
+ * 已知的**遗留数据**目录（插件已不再读取、也绝不自动清理）。
+ *
+ * 为什么单列而不并进 `DISK_USAGE_AREAS`：它们不是「本插件的现役数据区」——不再被任何代码
+ * 读取、也不参与清理；报告只用**相对 dataDir 的路径**把它们指认清楚，
+ * 且结构必须能容纳未来更多条（数组，不是单条 object）。
+ */
+export interface LegacyDataDir {
+  /** 稳定 id（界面/接口引用） */
+  id: string
+  /** 相对 dataDir 的 POSIX 风格相对路径（如 `checkpoints`） */
+  relPath: string
+}
+
+/**
+ * 遗留数据目录清单（当前一条：旧检查点库）。
+ *
+ * `checkpoints/` 是回滚点库改名（`rollback-points/`）之前的旧目录：新代码**不再读取**它，
+ * 本插件也**不去删**它（删除是不可逆动作，需用户单独授权）。
+ */
+export const LEGACY_DATA_DIRS: readonly LegacyDataDir[] = [
+  { id: 'legacy-checkpoints', relPath: 'checkpoints' },
+]
+
+/** 单条遗留数据的体检结果（只报告；`policy` 恒为 protected） */
+export interface DiskUsageLegacyEntry {
+  /** 稳定 id（与 `LEGACY_DATA_DIRS` 逐条对应） */
+  id: string
+  /** 相对 dataDir 的路径（如 `checkpoints`） */
+  relPath: string
+  /** 绝对路径（界面「在哪儿」展示） */
+  path: string
+  /** 字节数（不存在/不可读 → 0，必须与 unreadable 一起看） */
+  sizeBytes: number
+  /** 文件数（不存在/不可读 → 0） */
+  fileCount: number
+  /** 读不到/不存在/被非目录占住 → true（界面必须显示「未统计」，绝不伪报 0 字节） */
+  unreadable: boolean
+  /** 恒为 `protected`：只报告，绝不提供自动清理 */
+  policy: 'protected'
+}
+
+/** 子区明细记录：`DISK_USAGE_AREAS` 的**每个**子区（含回滚点库等附加子区）逐键必填 ——
+ *  报告运行时恒为完整结构，索引访问不可能拿到 undefined（`noUncheckedIndexedAccess` 下也成立，
+ *  故只读消费者如离线救急台可直接 `report.areas[area]`，不需要缺失回退）。 */
+export type DiskUsageAreasReport = Record<DiskUsageScanArea, DiskUsageAreaReport>
+
 /** 体检报告（路径字段供界面「在哪儿」展示；均为本机绝对路径，无敏感内容） */
 export interface DiskUsageReport {
   /** dataDir（`$DSH_HOME/dsh-config-manager`） */
   dataDir: string
-  /** 全部子区合计字节数 */
+  /** 全部**子区**合计字节数（含回滚点库等附加子区；**不含**遗留数据 —— 见 legacy） */
   totalBytes: number
-  /** 全部子区合计文件数 */
+  /** 全部子区合计文件数（口径同 totalBytes） */
   totalFiles: number
   /** 可立即清理（regenerable）子区合计字节数 */
   reclaimableBytes: number
   /** 到达自动回收期的字节数（retained 子区） */
   expiredBytes: number
-  /** 各子区明细 */
-  areas: Record<DiskUsageArea, DiskUsageAreaReport>
+  /** 各子区明细（恒含 `DISK_USAGE_AREAS` 的全部子区，逐键必填） */
+  areas: DiskUsageAreasReport
+  /**
+   * 遗留数据明细（插件**已不再读取**、也**不代删**；只报告）。
+   * 结构可容纳多条（见 `LEGACY_DATA_DIRS`）；**不计入 totalBytes**（子区合计与遗留数据
+   * 分开列，界面才不会把「能解释来源的占用」和「遗留占用」混成一个数）。
+   * 类型上可选只是为了让既有报告字面量（测试/旧调用方）继续成立 —— 宿主
+   * `GET /disk-usage` 恒回传本字段（无遗留目录时为空数组）。
+   */
+  legacy?: readonly DiskUsageLegacyEntry[]
   /** 定时备份产物的保留口径（「保留最近 N 个」；界面用它解释为什么有的备份不会自动回收） */
   backupRetention: {
     keepLast: number
@@ -110,8 +202,10 @@ export type ImmediateCleanCategory = typeof IMMEDIATE_CLEAN_CATEGORIES[number]
 /** 缓存清理结果里与子区对应的键（老字段快照/临时/市场沿用原语义） */
 export type CleanupResultCategory = ImmediateCleanCategory | 'exports'
 
-/** 子区 → 物理目录（单一映射点；展示与统计都不再重复挑目录） */
-export function diskUsageDirOf(dirs: DiskUsageDirs, area: DiskUsageArea): string {
+/** 子区 → 物理目录（单一映射点；展示与统计都不再重复挑目录）。
+ *  回滚点库不在 `DiskUsageDirs` 里显式传：它的位置 = `dataDir` + `ROLLBACK_POINTS_DIR`
+ *  （与引擎常量逐字一致，有源码级守卫），宿主路由与离线 CLI 两条构造路径因此不可能漂移。 */
+export function diskUsageDirOf(dirs: DiskUsageDirs, area: DiskUsageScanArea): string {
   switch (area) {
     case 'exports': return dirs.exportsDir
     case 'snapshots': return dirs.snapshotsDir
@@ -125,6 +219,7 @@ export function diskUsageDirOf(dirs: DiskUsageDirs, area: DiskUsageArea): string
     case 'transactions': return dirs.transactionsDir
     case 'locks': return dirs.locksDir
     case 'vault': return dirs.vaultDir
+    case 'rollback-points': return path.join(dirs.dataDir, ROLLBACK_POINTS_DIR)
   }
 }
 
@@ -286,7 +381,7 @@ export async function scanDiskUsage(options: DiskUsageScanOptions): Promise<Disk
   const { dirs, policy } = options
 
   /** 子区 → 保留期与豁免（null = 不参与「已超期」判定） */
-  const retention: Record<DiskUsageArea, number | null> = {
+  const retention: Record<DiskUsageScanArea, number | null> = {
     exports: policy.exportsRetentionMs,
     snapshots: null,
     sync: null,
@@ -299,8 +394,10 @@ export async function scanDiskUsage(options: DiskUsageScanOptions): Promise<Disk
     transactions: null,
     locks: null,
     vault: null,
+    // 回滚点库没有「保留期」：只报告，绝不自动清理（工作区 + 会话两态的恢复入口）
+    'rollback-points': null,
   }
-  const policyOf: Record<DiskUsageArea, DiskUsagePolicy> = {
+  const policyOf: Record<DiskUsageScanArea, DiskUsagePolicy> = {
     exports: 'retained',
     snapshots: 'protected',
     sync: 'protected',
@@ -313,8 +410,10 @@ export async function scanDiskUsage(options: DiskUsageScanOptions): Promise<Disk
     transactions: 'protected',
     locks: 'protected',
     vault: 'protected',
+    // 与 snapshots/sync 同语义：用户数据/恢复入口 —— 只报告，绝不提供清理
+    'rollback-points': 'protected',
   }
-  const areas = {} as Record<DiskUsageArea, DiskUsageAreaReport>
+  const areas = {} as DiskUsageAreasReport
   let totalBytes = 0
   let totalFiles = 0
   let reclaimableBytes = 0
@@ -348,6 +447,26 @@ export async function scanDiskUsage(options: DiskUsageScanOptions): Promise<Disk
     if (entry.policy === 'regenerable') reclaimableBytes += walk.sizeBytes
   }
 
+  /**
+   * 遗留数据：与子区**同一套**遍历口径（只读、不跟随符号链接、读不到即 unreadable），
+   * 但**不计入 totalBytes**（与 areas 分列），且 policy 恒为 protected —— 本模块不提供
+   * 任何删除动作，也不把它们的路径交给清理入口。
+   */
+  const legacy: DiskUsageLegacyEntry[] = []
+  for (const item of LEGACY_DATA_DIRS) {
+    const dir = path.join(dirs.dataDir, item.relPath)
+    const walk = await walkDirectory(dir, null, nowMs)
+    legacy.push({
+      id: item.id,
+      relPath: item.relPath,
+      path: dir,
+      sizeBytes: walk.sizeBytes,
+      fileCount: walk.fileCount,
+      unreadable: walk.unreadable,
+      policy: 'protected',
+    })
+  }
+
   return {
     dataDir: dirs.dataDir,
     totalBytes,
@@ -355,6 +474,7 @@ export async function scanDiskUsage(options: DiskUsageScanOptions): Promise<Disk
     reclaimableBytes,
     expiredBytes,
     areas,
+    legacy,
     backupRetention: { keepLast: options.backupKeepLast ?? 10, latestBackupBytes: 0, latestBackupAt: null },
   }
 }

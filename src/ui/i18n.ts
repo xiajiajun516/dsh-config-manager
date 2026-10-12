@@ -403,6 +403,12 @@ export const uiZh = {
   'diskUsage.col.policy': '回收策略',
   'diskUsage.clean.reclaimableLabel': '可立即释放',
   'diskUsage.clean.includeExpired': '同时回收过期备份文件',
+  // 新磁盘体检项（t6）：附加子区（只报告不清理）+ 遗留数据分列
+  'diskUsage.area.rollbackPoints': '回滚点库',
+  'diskUsage.area.rollbackPointsDesc': '每回合自动留点的快照（工作区 + 会话两态）；只报告，不自动清理',
+  'diskUsage.legacy.title': '遗留数据',
+  'diskUsage.legacy.hint': '插件已不再读取这些目录，也不会自动删除它们；确认无用后可手动清理。它们不计入上方合计。',
+  'diskUsage.legacy.label': '遗留数据',
   // 产物库（UI v2 §6）：四源合并成一张混合平铺列表
   'library.kind.snapshot': '本机快照',
   'library.kind.backupFile': '备份文件',
@@ -949,6 +955,12 @@ export const uiEn: Record<UiTextKey, string> = {
   'diskUsage.col.policy': 'Cleanup policy',
   'diskUsage.clean.reclaimableLabel': 'Reclaimable now',
   'diskUsage.clean.includeExpired': 'Also reclaim expired backup files',
+  // New disk-usage rows (t6): report-only extra areas + legacy data listed separately
+  'diskUsage.area.rollbackPoints': 'Rollback points',
+  'diskUsage.area.rollbackPointsDesc': 'Automatic per-turn snapshots (workspace + session state); reported only, never auto-cleaned',
+  'diskUsage.legacy.title': 'Legacy data',
+  'diskUsage.legacy.hint': 'The plugin no longer reads these directories and never deletes them automatically; clear them by hand once you are sure they are unused. They are not part of the total above.',
+  'diskUsage.legacy.label': 'Legacy data',
   // Artifact library (UI v2 §6)
   'library.kind.snapshot': 'Local snapshot',
   'library.kind.backupFile': 'Backup file',

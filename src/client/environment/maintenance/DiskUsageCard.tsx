@@ -188,6 +188,28 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
             </table>
           </div>
 
+          {/*
+           * 遗留数据（core 只报告、**不计入**上面的合计）：必须单列一块。
+           * 混进主表会让用户以为那个合计里已经算过它们（core 刻意把两者分列）。
+           */}
+          {vm.legacy.length > 0 && (
+            <>
+              <div className={css.groupLabel}>{t('diskUsage.legacy.title')}</div>
+              <div className={css.hint}>{t('diskUsage.legacy.hint')}</div>
+              {vm.legacy.map((row) => (
+                <div className={css.actionRow} data-inline key={row.id}>
+                  <span>
+                    {row.label} <span className={css.mono}>{redact(row.relPath)}</span>
+                  </span>
+                  <span className={css.statusSpacer} />
+                  <span className={css.hint}>
+                    {row.unreadable ? t('diskUsage.unreadable') : row.size + ' · ' + row.files}
+                  </span>
+                  <span className={css.dim}>{t('diskUsage.policy.protected')}</span>
+                </div>
+              ))}
+            </>
+          )}
           {/* 保留期说明属「机制怎么工作」（MOVE 类）：收进 ⓘ，不常驻占一行 */}
           {exportRetentionDays !== null && (
             <div className={css.actionRow} data-inline>

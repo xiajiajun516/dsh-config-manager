@@ -8,13 +8,22 @@
  *  ① 读不到的子区**绝不显示 0 字节**，而是标 `unreadable`（未统计），否则用户会以为盘是空的；
  *  ② 只有 `policy === 'regenerable'` 的子区进「可立即清理」清单，且**不显示保留期**
  *     （它们本来就是随时可清，给一个「7 天后自动清理」的说明会误导）；
- *  ③ 定时备份（豁免前缀）不计入导出产物的「可回收」数字 —— 与宿主回收口径逐条一致。
+ *  ③ 定时备份（豁免前缀）不计入导出产物的「可回收」数字 —— 与宿主回收口径逐条一致；
+ *  ④ 遗留数据（core 的 `report.legacy`：插件已不再读取的旧目录）**单列**，既不计入合计、也不进任何清理候选；
+ *     标签走字典、相对路径只作「在哪儿」展示（**绝不**把 id / 路径当文案渲染）。
  */
-import type { DiskUsageArea, DiskUsageReport } from '../core/disk-usage.ts'
+import type { DiskUsageArea, DiskUsageReport, DiskUsageScanArea } from '../core/disk-usage.ts'
 import type { UiT } from './i18n.ts'
 
-/** 子区 → 字典键（标签 / 说明在字典里；本模块只挑键，不内嵌文案） */
-const AREA_KEYS: Record<DiskUsageArea, { label: UiKey; desc: UiKey }> = {
+/**
+ * 子区 → 字典键（标签 / 说明在字典里；本模块只挑键，不内嵌文案）。
+ *
+ * 键域 = `DiskUsageScanArea`（**含**只报告、不清理的附加子区，如 `rollback-points`）：
+ * core 的 `DiskUsageArea` 刻意把附加子区排除在外 —— 它描述的是「**展示层已登记文案**的清单」，
+ * 而登记文案正是本文件（`AREA_KEYS` 是穷尽 Record，少一个 id 就编译不过）。
+ * 因此这里用更宽的 `DiskUsageScanArea`：新增附加子区时，core 加统计、本文件加文案，两边都必须动。
+ */
+const AREA_KEYS: Record<DiskUsageScanArea, { label: UiKey; desc: UiKey }> = {
   exports: { label: 'diskUsage.area.exports', desc: 'diskUsage.area.exportsDesc' },
   snapshots: { label: 'diskUsage.area.snapshots', desc: 'diskUsage.area.snapshotsDesc' },
   sync: { label: 'diskUsage.area.sync', desc: 'diskUsage.area.syncDesc' },
@@ -27,6 +36,8 @@ const AREA_KEYS: Record<DiskUsageArea, { label: UiKey; desc: UiKey }> = {
   transactions: { label: 'diskUsage.area.transactions', desc: 'diskUsage.area.transactionsDesc' },
   locks: { label: 'diskUsage.area.locks', desc: 'diskUsage.area.locksDesc' },
   vault: { label: 'diskUsage.area.vault', desc: 'diskUsage.area.vaultDesc' },
+  // 只报告、**不提供清理**的附加子区（policy 恒 protected）：回滚点库
+  'rollback-points': { label: 'diskUsage.area.rollbackPoints', desc: 'diskUsage.area.rollbackPointsDesc' },
 }
 
 /** 字典键（`UiTextKey` 的窄别名，避免此处 import 整个 i18n 类型后与组件耦合） */
@@ -39,9 +50,9 @@ export interface DiskUsageViewDeps {
   formatBytes: (n: number) => string
 }
 
-/** 子区展示行 */
+/** 子区展示行（id 域含附加子区：`rollback-points` 等只报告区也要成行） */
 export interface DiskUsageRow {
-  id: DiskUsageArea
+  id: DiskUsageScanArea
   /** 子区名（已翻译） */
   label: string
   /** 一句话说明（已翻译） */
@@ -61,6 +72,28 @@ export interface DiskUsageRow {
   reclaimable: boolean
 }
 
+/**
+ * 遗留数据展示行（`report.legacy`）。
+ *
+ * 与 `DiskUsageRow` 分开：遗留目录**不计入**上方子区合计（core 刻意分列），且插件已不再读取它们 ——
+ * 界面必须能把「能解释来源的占用」与「遗留占用」分开说，不能让用户以为合计里已经算过。
+ */
+export interface DiskUsageLegacyRow {
+  /** core 的稳定 id（`LEGACY_DATA_DIRS`）——**只作 React key / 去重**，绝不直接当文案渲染 */
+  id: string
+  /** 相对 dataDir 的路径（如 `checkpoints`）：这是「在哪儿」，不是机器码文案 */
+  relPath: string
+  /** 已翻译的标签（走字典，不渲染 id） */
+  label: string
+  /** 体积文本（未统计时为空串） */
+  size: string
+  /** 文件数文本（未统计时为空串） */
+  files: string
+  /** 读不到/不存在/被非目录占住 → 界面显示「未统计」而不是 0 字节 */
+  unreadable: boolean
+  /** 恒为 `protected`：只报告，绝不提供自动清理 */
+  policy: 'protected'
+}
 /** 可立即清理的动作（供界面按 _可用性_ 决定按钮 disabled —— 组件不再自行判断） */
 export interface DiskUsageCleanAction {
   id: 'tmp-market' | 'expired-exports'
@@ -83,6 +116,11 @@ export interface DiskUsageViewModel {
     anyUnreadable: boolean
   }
   rows: DiskUsageRow[]
+  /**
+   * 遗留数据行（插件已不再读取、也不代删；**不计入** summary.total）。
+   * 恒为数组（无遗留目录时为空），组件不需要判空。
+   */
+  legacy: DiskUsageLegacyRow[]
   clean: {
     /** 可立即清理区当前合计 */
     reclaimable: string
@@ -121,7 +159,7 @@ export function diskUsageViewModel(report: DiskUsageReport | null, deps: DiskUsa
   let totalFiles = 0
   let reclaimableBytes = 0
   let expiredBytesTotal = 0
-  for (const area of Object.keys(AREA_KEYS) as DiskUsageArea[]) {
+  for (const area of Object.keys(AREA_KEYS) as DiskUsageScanArea[]) {
     const entry = report.areas[area]
     if (entry === undefined) continue
     const keys = AREA_KEYS[area]
@@ -149,6 +187,23 @@ export function diskUsageViewModel(report: DiskUsageReport | null, deps: DiskUsa
     })
   }
 
+  /**
+   * 遗留数据行：core 只报告（`policy` 恒 protected、**不计入**合计），界面如实分列。
+   * 标签走字典，**绝不**把 id / relPath 当标签渲染（relPath 只作「在哪儿」的路径展示）。
+   */
+  const legacyRows: DiskUsageLegacyRow[] = []
+  for (const entry of report.legacy ?? []) {
+    if (entry.unreadable) anyUnreadable = true
+    legacyRows.push({
+      id: entry.id,
+      relPath: entry.relPath,
+      label: t('diskUsage.legacy.label'),
+      size: entry.unreadable ? '' : formatBytes(entry.sizeBytes),
+      files: entry.unreadable ? '' : t('diskUsage.files', { count: String(entry.fileCount) }),
+      unreadable: entry.unreadable,
+      policy: 'protected',
+    })
+  }
   const actions: DiskUsageCleanAction[] = [
     {
       id: 'tmp-market',
@@ -174,6 +229,7 @@ export function diskUsageViewModel(report: DiskUsageReport | null, deps: DiskUsa
       anyUnreadable,
     },
     rows,
+    legacy: legacyRows,
     clean: {
       reclaimable: formatBytes(reclaimableBytes),
       expired: formatBytes(expiredBytesTotal),
