@@ -172,7 +172,9 @@ export function chatFileChangeAvailable(files: readonly ChatPreviewFileRow[]): b
  * 整文件删除写「删除」，不写「+0 -N」）。
  *
  * **不回落 `leftovers`**：那份清单语义不同（含拒删项），回落等于把刚修好的缺陷重新引回来。
- * 老宿主（没有 `removals` 字段）由 {@link chatFileRemovalTruncated} 如实标成「清单不完整」。
+ *
+ * **全量**：引擎给的就是完整删除集（不再切 20 条），界面直接把这份清单渲染成「删除」行 ——
+ * 于是「预览列出的 = 实际删的」逐条成立，不需要任何说明句（用户 2026-10-12：弹窗只要清单）。
  */
 export function readRollbackPreviewRemovals(workspace: unknown): string[] {
   const removals = (workspace as { removals?: unknown } | null | undefined)?.removals
@@ -185,45 +187,6 @@ export function readRollbackPreviewRemovals(workspace: unknown): string[] {
   return out
 }
 
-/** 会被删除的**真实总数**（null = 宿主没给）。老宿主（无 `removals`）回落「未记录总数」并据此标不完整。 */
-export function chatFileRemovalTotal(workspace: unknown): number | null {
-  const record = workspace as { removalsCount?: unknown; removals?: unknown; createdAfter?: unknown } | null | undefined
-  const total = typeof record?.removalsCount === 'number' && Number.isFinite(record.removalsCount) ? record.removalsCount : null
-  if (total !== null) return total
-  if (Array.isArray(record?.removals)) return record.removals.length
-  const legacy = typeof record?.createdAfter === 'number' && Number.isFinite(record.createdAfter) ? record.createdAfter : null
-  return legacy
-}
-
-/**
- * 删除清单是否**不完整**（三种不完整都算）：
- *  · 宿主明说截断（`removalsTruncated === true`）；
- *  · 真实总数大于清单条数 —— 逐条清单有 20 条上限，超出的既不在清单里也没打截断标记；
- *  · 宿主**没有** `removals` 字段却报了「未记录 > 0」⇒ 清单根本不可信（绝不假装「没有要删的」）。
- */
-export function chatFileRemovalTruncated(workspace: unknown): boolean {
-  const record = workspace as { removalsTruncated?: unknown; removals?: unknown; createdAfter?: unknown } | null | undefined
-  if (record?.removalsTruncated === true) return true
-  const listed = Array.isArray(record?.removals) ? record.removals.length : 0
-  const total = chatFileRemovalTotal(workspace)
-  if (total !== null && total > listed) return true
-  return !Array.isArray(record?.removals) && total !== null && total > 0
-}
-
-/** 按安全判据**拒删**的路径与总数（`.git` / 数据区 / 越界 / 过大 / 捕获不完整时的全部候选）。 */
-export function readRollbackPreviewCreatedSkipped(workspace: unknown): { paths: string[]; count: number; reason: string | null } {
-  const record = workspace as { createdSkipped?: unknown; createdSkippedCount?: unknown; createdRefusedReason?: unknown } | null | undefined
-  const paths: string[] = []
-  if (Array.isArray(record?.createdSkipped)) {
-    for (const item of record.createdSkipped) {
-      if (typeof item !== 'string' || item === '' || paths.includes(item)) continue
-      paths.push(item)
-    }
-  }
-  const declared = typeof record?.createdSkippedCount === 'number' && Number.isFinite(record.createdSkippedCount) ? record.createdSkippedCount : 0
-  const reason = typeof record?.createdRefusedReason === 'string' && record.createdRefusedReason !== '' ? record.createdRefusedReason : null
-  return { paths, count: Math.max(declared, paths.length), reason }
-}
 
 /**
  * 状态白名单（只用于**断言**：引擎当前只会产出 overwrite / create；delete 保留在取值集合里）。

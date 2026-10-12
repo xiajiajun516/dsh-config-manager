@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 工作区 + 会话回滚点引擎单测（t1）。
  *
  * 纪律（与本仓既有 core 测试同款）：**真实临时目录**（os.tmpdir + fs.mkdtemp）+ 真实读写，
@@ -30,6 +30,7 @@ import path from 'node:path'
 
 import {
   ROLLBACK_LEFTOVER_LIST_LIMIT,
+  ROLLBACK_MAX_GUARDS,
   ROLLBACK_MAX_GUARDS_PER_SESSION,
   ROLLBACK_MAX_RECORDS,
   ROLLBACK_MAX_RECORDS_PER_SESSION,
@@ -188,6 +189,7 @@ test('R-01 两态捕获：workspace + session 都有载荷与指纹，且**没�
   assert.equal(list.points.length, 1)
   assert.equal(list.maxRecords, ROLLBACK_MAX_RECORDS)
   assert.equal(list.maxRecordsPerSession, ROLLBACK_MAX_RECORDS_PER_SESSION)
+  assert.equal(list.maxGuards, ROLLBACK_MAX_GUARDS)
   // 库目录名 = rollback-points
   assert.equal(path.basename(engine.storeDir), ROLLBACK_POINTS_DIR_NAME)
 
@@ -443,6 +445,11 @@ test('R-05c 留点在回合开始前：这一回合里被改过的文件，回�
  *
  * 实测（修复前，同一场景）：预览列 20 条 = 3 条 `.git/*`（永不删除）+ 17 条会删；实际删 25 条
  * ⇒ 8 条「会删的」根本没被列出，用户看到的就是「预览只列几个，实际删一大堆」。
+ *
+ * 现状（2026-10-12 同日收敛后）：删除集只有一份规划（`planCreatedRemovals`），且清单**全量**
+ * （不再切 20 条；超 `ROLLBACK_MAX_CREATED_REMOVALS` 时执行端整套拒绝 ⇒ 预览如实给空集）。
+ * 界面直接把这份清单渲染成「删除」行，**不需要**任何「清单可能不完整」的说明句
+ * （用户同日要求弹窗只要清单；文案克制 → DESIGN.md §7）。
  */
 test('R-05d 非相邻回退：预览的「会被删除路径集合」必须与实际删除集合逐条一致（拒删项如实）', async (t) => {
   const fx = await makeFixture()
@@ -520,10 +527,14 @@ test('R-05d 非相邻回退：预览的「会被删除路径集合」必须与�
   assert.equal(previewWs.removals.some((file) => file.split(path.sep).includes('.git')), false, '预览的删除清单里绝不能混进永不删除的 .git 路径')
   assert.equal(previewWs.createdSkippedCount, 3, '预览必须同样列出 3 条拒删项')
 
-  // ④ 逐条清单上限仍然存在，但**总数与截断必须如实**
-  assert.equal(previewWs.removals.length, ROLLBACK_LEFTOVER_LIST_LIMIT)
-  assert.equal(previewWs.removalsTruncated, true, '25 条 > 20 条上限 ⇒ 必须明说清单不完整')
-  assert.ok(previewWs.createdAfter > ROLLBACK_LEFTOVER_LIST_LIMIT, '非相邻才暴露的判据：候选数越过逐条清单上限（' + String(previewWs.createdAfter) + ' > ' + String(ROLLBACK_LEFTOVER_LIST_LIMIT) + '）')
+  // ④ 清单**全量**（不再切 20 条）：界面直接把这份清单渲染成「删除」行，不需要任何说明句
+  assert.equal(previewWs.removals.length, 25, '25 条会删的必须**全部**列出来（旧实现只列前 20 条，用户看到的正是「预览只列几个」）')
+  assert.equal(previewWs.removalsTruncated, false, '清单完整 ⇒ 不完整标记必须为 false')
+  // 「相邻不暴露、非相邻才暴露」的那一行判据：候选数越过**旧的**逐条清单上限（20）时旧实现的两个口径才分叉
+  assert.ok(
+    previewWs.createdAfter > ROLLBACK_LEFTOVER_LIST_LIMIT,
+    '非相邻才暴露的判据：候选数越过旧清单上限（' + String(previewWs.createdAfter) + ' > ' + String(ROLLBACK_LEFTOVER_LIST_LIMIT) + '）',
+  )
 })
 
 test('R-05b 开 removeCreated：回退点之后新建的路径被真的删掉；.git 内的拒删', async (t) => {
@@ -1377,10 +1388,11 @@ test('R-23c 集成：chunkless 会话留点 → 该点 incomplete=true 且 works
 
 /* ============================ R-24 guard 留存例外（t14-F3：不许无界增长） */
 
-test('R-24 guard 留存：不被自动点的 20/50 淘汰，但受自身上限约束（超出淘汰最旧 guard）', async (t) => {
+test('R-24 guard 留存：不被自动点的 20/50 淘汰，但受自身两道上限约束（每会话 20 → 全局 50，超出淘汰最旧 guard）', async (t) => {
   const fx = await makeFixture()
   t.after(fx.cleanup)
   assert.equal(ROLLBACK_MAX_GUARDS_PER_SESSION, 20)
+  assert.equal(ROLLBACK_MAX_GUARDS, 50, '引擎全局救援点上限应为 50')
 
   // ① guard 不占自动点预算：maxRecords=1 / maxRecordsPerSession=1 时 3 个自动点只留最新 1 个，3 个 guard 全留
   const engine = makeEngine(fx, { maxRecords: 1, maxRecordsPerSession: 1, now: steppingClock(9_000_000, 10) })
@@ -1412,7 +1424,51 @@ test('R-24 guard 留存：不被自动点的 20/50 淘汰，但受自身上限�
   for (let i = 0; i < 5; i += 1) assert.equal(kept.includes(ids[i] ?? ''), false, '最旧的 guard 被淘汰')
   assert.equal(kept.includes(ids[24] ?? ''), true, '最新的 guard 保留')
 
-  // ③ 用户仍然删不掉 guard（自动淘汰 ≠ 用户删除）
+  // ③ 全局上限（缺省 50，跨会话合计）：独立 dataDir（不与上面共享台账）；3 会话 × 22 个
+  //    → 每会话只留最近 20（共 60）→ 全局再留最近 50 ⇒ 淘汰最旧的 10 个
+  const fxG = await makeFixture()
+  t.after(fxG.cleanup)
+  const global = makeEngine(fxG, { now: steppingClock(11_000_000, 10) })
+  assert.equal((await global.list()).maxGuards, ROLLBACK_MAX_GUARDS, 'list 必须回传全局 guard 上限')
+  const s0: string[] = []
+  const s1: string[] = []
+  const s2: string[] = []
+  for (let s = 0; s < 3; s += 1) {
+    const bucket = s === 0 ? s0 : s === 1 ? s1 : s2
+    for (let i = 0; i < 22; i += 1) {
+      const g = await global.capturePoint({ kind: 'guard', sessionId: 's-global-' + String(s), sessionLogPath: fxG.logFile, chunks: [fxG.workspaceDir], boundarySeq: 1, turnSeq: i })
+      bucket.push(g.point?.id ?? '')
+    }
+  }
+  const globalKept = (await ledgerOf(global)).records.map((r) => r.id)
+  const keptS0 = s0.filter((id) => globalKept.includes(id))
+  const keptS1 = s1.filter((id) => globalKept.includes(id))
+  const keptS2 = s2.filter((id) => globalKept.includes(id))
+  assert.equal(keptS0.length + keptS1.length + keptS2.length, 50, '全局 guard 上限 = 50（跨会话合计，不许无界增长）')
+  assert.equal(keptS1.length, 20, '各会话自己的 20 上限不变')
+  assert.equal(keptS2.length, 20, '各会话自己的 20 上限不变')
+  assert.equal(keptS0.length, 10, '全局超限时继续淘汰最旧的 guard（本轮全落在最早的会话）')
+  for (let i = 0; i < 12; i += 1) assert.equal(globalKept.includes(s0[i] ?? ''), false, '最旧的 guard 被淘汰（含每会话 20 已挡下的那批）')
+  assert.equal(globalKept.includes(s0[12] ?? ''), true, '跨过全局线的最新 guard 保留')
+  assert.equal(globalKept.includes(s2[21] ?? ''), true, '最新会话的最新 guard 保留')
+
+  // ④ 全局上限可注入（独立台账，不牵连上面用例的 guard）：maxGuards=3 → 4 个 guard 只留最新 3 个
+  const fxT = await makeFixture()
+  t.after(fxT.cleanup)
+  const tight = makeEngine(fxT, { maxGuards: 3, now: steppingClock(12_000_000, 10) })
+  const tightAuto = await capturePoint(tight, fxT, { sessionId: 's-tight' })
+  const tightIds: string[] = []
+  for (let i = 0; i < 4; i += 1) {
+    const g = await tight.capturePoint({ kind: 'guard', sessionId: 's-tight', sessionLogPath: fxT.logFile, chunks: [fxT.workspaceDir], boundarySeq: 1, turnSeq: i })
+    tightIds.push(g.point?.id ?? '')
+  }
+  const tightLedger = await ledgerOf(tight)
+  const tightGuards = tightLedger.records.filter((r) => r.kind === 'guard')
+  assert.equal(tightGuards.length, 3, '全局 guard 上限 = 注入的 3')
+  assert.deepEqual(tightGuards.map((r) => r.id).sort(), [tightIds[1], tightIds[2], tightIds[3]].sort(), '只留最新的 3 个 guard')
+  assert.equal(tightLedger.records.some((r) => r.id === (tightAuto.point?.id ?? '')), true, '自动点不被 guard 的淘汰牵连')
+
+  // ⑤ 用户仍然删不掉 guard（自动淘汰 ≠ 用户删除）
   const removed = await capped.remove(ids[24] ?? '')
   assert.equal(removed.ok, false)
   assert.equal(removed.code, 'protected-point')

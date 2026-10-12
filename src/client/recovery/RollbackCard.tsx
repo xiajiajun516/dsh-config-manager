@@ -19,6 +19,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { RecoveryPort } from '../../ui/types.ts'
 import type { TranslateNS } from '../client-types.ts'
 import {
+  ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION,
+  ROLLBACK_MAX_POINTS_GUARDS_TOTAL,
   ROLLBACK_MAX_POINTS_PER_SESSION,
   ROLLBACK_MAX_POINTS_TOTAL,
   ROLLBACK_MODES,
@@ -307,7 +309,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                 {/* 留存/淘汰口径属机制说明 → 收进 ⓘ（DESIGN.md §7「说明性文案分层」）：屏上只留数字摘要，
                     20/50/救援点上限这些细节一个字不改，仍在同一条字典键里。 */}
                 <InfoHint
-                  text={t('rollback.retention.hint', { perSession: ROLLBACK_MAX_POINTS_PER_SESSION, total: ROLLBACK_MAX_POINTS_TOTAL })}
+                  text={t('rollback.retention.hint', {
+                    perSession: ROLLBACK_MAX_POINTS_PER_SESSION,
+                    total: ROLLBACK_MAX_POINTS_TOTAL,
+                    guardsPerSession: ROLLBACK_MAX_POINTS_GUARDS_PER_SESSION,
+                    guards: ROLLBACK_MAX_POINTS_GUARDS_TOTAL,
+                  })}
                   label={t('common.infoHint')}
                 />
                 <Button size="sm" variant="ghost" disabled={busy || refreshing} loading={refreshing} onClick={() => { load({ keep: true }) }}>{t('rollback.refresh')}</Button>
@@ -522,25 +529,14 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             ))}
 
             {/* 回退**会删除**的文件（该点未记录 **且**通过安全判据）：与执行阶段**同一份规划**
-                （引擎 planCreatedRemovals）⇒ 逐条 = 实际会删的。旧实现这里渲染的是「未记录」清单，
-                标题还写着「不会被删除」—— 而宿主 rewind 的 removeCreated 缺省为真，点下去真的会删
-                （用户 2026-10-12 实测：预览与实际对不上）。拒删项与「捕获不完整 ⇒ 一条都不删」分开说。 */}
-            {(previewRows.some((row) => row.removals.length > 0) || previewRows.some((row) => row.createdSkippedCount > 0)) && (
+                （引擎 planCreatedRemovals）⇒ 逐条 = 实际会删的，清单**全量**（不再有 20 条上限）。
+                用户 2026-10-12：不要任何说明句，只要这份清单（文案克制 → DESIGN.md §7）。 */}
+            {previewRows.some((row) => row.removals.length > 0) && (
               <div className={css.planScroll}>
                 <div className={css.groupLabel}>{t('rollback.preview.removalsTitle')}</div>
                 {previewRows.map((row) => row.removals.map((line) => (
                   <div key={row.state + line} className={css.hint}>{line}</div>
                 )))}
-                {previewRows.some((row) => row.removalsTruncated) && (
-                  <div className={css.hint}>
-                    {t('rollback.preview.removalsTruncated', { total: String(previewRows.reduce((sum, row) => sum + row.removalsCount, 0)) })}
-                  </div>
-                )}
-                {previewRows.map((row) => (row.createdRefusedReason !== null
-                  ? <div key={row.state + ':refused'} className={css.hint}>{t('rollback.preview.createdRefused', { n: String(row.createdSkippedCount) })}</div>
-                  : row.createdSkippedCount > 0
-                    ? <div key={row.state + ':skipped'} className={css.hint}>{t('rollback.preview.createdSkipped', { n: String(row.createdSkippedCount) })}</div>
-                    : null))}
               </div>
             )}
 

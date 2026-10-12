@@ -35,11 +35,13 @@
  *   **准入判定只有一份口径（t22）**：回退只拒 `protected`（不可回退）与 `incomplete`（需显式
  *   `allowPartial`）；`kind:'guard'` 的救援点**可以**作为回退目标 —— 它是「回到回退前那一刻」的
  *   唯一路径。`canRestore`（能否回退）与 `canRemove`（能否删除，排除 guard）**互相独立**。
- * - **S6 留存（t14 冻结口径）**：自动点每会话最多 `maxRecordsPerSession`（缺省 20）、全局最多
- *   `maxRecords`（缺省 50），**只删最旧的自动点**。`kind:'guard'` 的救援点（回退前自动留）
- *   **不占**自动点预算、**不受** 20/50 淘汰，也**不被用户删除**（`remove` 一律 `protected-point`）
- *   —— 因此它有**自己的**上限 `maxGuardsPerSession`（`ROLLBACK_MAX_GUARDS_PER_SESSION`，缺省 20，
- *   每会话只保留最近 N 个、超出淘汰最旧的 guard），否则反复回退会无界增长。
+ * - **S6 留存（t14 冻结 + 2026-10-12 追加 guard 全局上限）**：自动点每会话最多
+ *   `maxRecordsPerSession`（缺省 20）、全局最多 `maxRecords`（缺省 50），**只删最旧的自动点**。
+ *   `kind:'guard'` 的救援点（回退前自动留）**不占**自动点预算、**不受** 20/50 淘汰，也**不被用户
+ *   删除**（`remove` 一律 `protected-point`）—— 因此它有**自己的两道**上限：每会话
+ *   `maxGuardsPerSession`（`ROLLBACK_MAX_GUARDS_PER_SESSION`，缺省 20）→ 全局 `maxGuards`
+ *   （`ROLLBACK_MAX_GUARDS`，缺省 50）；两轮都只淘汰最旧的 guard，否则「反复回退 + 多会话」
+ *   会让台账无界增长。guard 的全局 50 与自动点的全局 50 **互相独立**（谁也不吃谁的额度）。
  *   `protected:true` 的点仍「只进不出」（生产路径造不出来：capture 端点已下线、tracker 不设 protect）。
  *
  * ## 机器可读、零用户可见文案
@@ -83,6 +85,16 @@ export const ROLLBACK_MAX_RECORDS_PER_SESSION = 20
  * capture 端点已下线、tracker 从不设 protect）仍保持「只进不出」。
  */
 export const ROLLBACK_MAX_GUARDS_PER_SESSION = 20
+/**
+ * **全局** guard 点上限（S6 的第二道 guard 预算，用户 2026-10-12 追加）。
+ *
+ * 每会话 20 只挡住单个会话：本机 1300+ 会话时，跨会话的 guard 仍会无界增长（台账 + 对象仓
+ * 都留在磁盘上）。所以全局再设一道 —— 全部会话的 guard 合计最多 50，超出只淘汰**最旧的 guard**。
+ *
+ * 与自动点的全局 `ROLLBACK_MAX_RECORDS`（50）**互相独立**：两类各自计预算，谁也不吃谁的额度
+ * （数值相同纯属巧合，不构成耦合 —— 改一个不必改另一个）。
+ */
+export const ROLLBACK_MAX_GUARDS = 50
 export const ROLLBACK_DEFAULT_MAX_FILES = 2000
 export const ROLLBACK_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 /** 单文件上限（缺省 = 总量预算）：超限文件**先 stat 判大小后跳过**，绝不整份读进内存 */
@@ -520,17 +532,17 @@ export interface RollbackPreviewWorkspace {
   leftovers: string[]
   leftoversTruncated: boolean
   /**
-   * **会被删除**的路径（= 该点未记录 **且**通过安全判据）。逐条清单有界，
-   * 真实总数见 {@link removalsCount}。
+   * **会被删除**的路径（= 该点未记录 **且**通过安全判据）—— **全量**（不切上限）：
+   * 界面直接把这份清单渲染成「删除」行，所以它逐条等于实际会删的。
    *
    * 与 rewind 执行阶段**共用同一个函数**（`planCreatedRemovals`）⇒ 「预览说会删的」与
    * 「实际删的」逐条一致（旧实现两处各算一次：预览用未过滤的 leftovers、执行用过滤后的
    * 全量清单，于是预览里混进永不删除的 .git 路径、又会漏掉第 21 条之后的会删路径）。
    */
   removals: string[]
-  /** 会被删除的**真实总数**（不受逐条清单上限影响） */
+  /** 会被删除的条数（= {@link removals}.length；两者同源，恒相等） */
   removalsCount: number
-  /** 逐条清单不完整（条数超上限，或遍历被文件数上限截断） */
+  /** 遍历被文件数上限截断 ⇒ 清单可能不完整（实践中蕴含捕获也截断 ⇒ 删除已整体拒绝、清单为空） */
   removalsTruncated: boolean
   /**
    * 按安全判据**拒删**的路径（逐条清单有界，总数见 {@link createdSkippedCount}）：
@@ -601,6 +613,8 @@ export interface RollbackListResult {
   points: RollbackPointSummary[]
   maxRecords: number
   maxRecordsPerSession: number
+  /** **全局** guard 救援点上限（S6 第二道 guard 预算，见 ROLLBACK_MAX_GUARDS） */
+  maxGuards: number
   error?: string
 }
 
@@ -627,7 +641,10 @@ export interface RollbackSegmentResult {
   leftoversTruncated: boolean
   /** 本次真的**删除**的「该点未记录」路径数（用户 2026-10-11 定案 A） */
   removed?: number
-  /** 已删除路径（有界清单，供界面逐条说明「删了什么」；与预览的 `workspace.removals` 同源同序） */
+  /**
+   * 已删除路径（**全量**；与预览的 `workspace.removals` 同源同序 —— 两份清单逐条相等，
+   * 界面因此可以把「预览说会删的」当成「实际删的」）。
+   */
   removedPaths?: string[]
   /**
    * 按安全判据**拒删**的路径（越界 / 落在插件数据区 / `.git` / `node_modules` / 单文件过大；
@@ -703,6 +720,8 @@ export interface RollbackEngineOptions {
   maxRecordsPerSession?: number
   /** 每会话 guard 点上限（缺省 20，见 ROLLBACK_MAX_GUARDS_PER_SESSION） */
   maxGuardsPerSession?: number
+  /** **全局** guard 点上限（缺省 50，见 ROLLBACK_MAX_GUARDS；与自动点的 maxRecords 无关） */
+  maxGuards?: number
   guardPolicy?: RollbackGuardPolicy
   /** 存储栈探针（缺省 = 真实磁盘探测）；注入失败探针可测「缺失时仍可挂载」 */
   storage?: RollbackStorageProbe
@@ -1151,6 +1170,7 @@ export class RollbackPointEngine {
   private readonly maxRecords: number
   private readonly maxRecordsPerSession: number
   private readonly maxGuardsPerSession: number
+  private readonly maxGuards: number
   private readonly guardPolicy: RollbackGuardPolicy
   private readonly probe: RollbackStorageProbe | undefined
   private readonly forkSeam: RollbackForkSeam | undefined
@@ -1181,6 +1201,7 @@ export class RollbackPointEngine {
     this.maxRecords = options.maxRecords ?? ROLLBACK_MAX_RECORDS
     this.maxRecordsPerSession = options.maxRecordsPerSession ?? ROLLBACK_MAX_RECORDS_PER_SESSION
     this.maxGuardsPerSession = options.maxGuardsPerSession ?? ROLLBACK_MAX_GUARDS_PER_SESSION
+    this.maxGuards = options.maxGuards ?? ROLLBACK_MAX_GUARDS
     this.guardPolicy = options.guardPolicy ?? 'warn'
     this.probe = options.storage
     this.forkSeam = options.fork
@@ -1557,12 +1578,12 @@ export class RollbackPointEngine {
   }
 
   /**
-   * S6 淘汰（t14 冻结口径）：三类点各按各的预算裁，**只删最旧的**。
+   * S6 淘汰（t14 冻结 + 2026-10-12 guard 全局上限）：三类点各按各的预算裁，**只删最旧的**。
    *
    * | 类别 | 预算 | 说明 |
    * |---|---|---|
    * | auto 自动点 | 每会话 `maxRecordsPerSession`（20）→ 全局 `maxRecords`（50） | 两次裁剪都只删最旧 |
-   * | guard 救援点 | 每会话 `maxGuardsPerSession`（`ROLLBACK_MAX_GUARDS_PER_SESSION`，20） | **不占**自动点预算、**不受** 20/50 影响；用户删不掉 ⇒ 必须有自己的上限 |
+   * | guard 救援点 | 每会话 `maxGuardsPerSession`（20）→ 全局 `maxGuards`（`ROLLBACK_MAX_GUARDS`，50） | **不占**自动点预算、**不受**自动点的 20/50 影响；用户删不掉 ⇒ 必须有自己的两道预算（单会话挡住不够，跨会话也要收敛） |
    * | protected 点 | 无上限（只进不出） | 生产路径**造不出来**（capture 端点已下线、tracker 从不设 protect），只有测试能造 |
    */
   private selectPrune(records: readonly RollbackPointRecord[]): { kept: RollbackPointRecord[]; removed: string[] } {
@@ -1577,16 +1598,19 @@ export class RollbackPointEngine {
     // 最新在前（下面三类裁剪共用同一排序口径）
     const newestFirst = (a: RollbackPointRecord, b: RollbackPointRecord): number =>
       a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0
-    // guard：每会话各自保留最近 maxGuardsPerSession 个
+    // guard：先每会话各自保留最近 maxGuardsPerSession 个，再全局保留最近 maxGuards 个
+    // （guards 已按 newestFirst 排序，withinGuardSession 保持同序 ⇒ 两轮裁掉的都是「最旧的」）
     guards.sort(newestFirst)
     const guardsPerSession = new Map<string, number>()
+    const withinGuardSession: RollbackPointRecord[] = []
     for (const record of guards) {
       const key = record.sessionId ?? ''
       const used = guardsPerSession.get(key) ?? 0
       if (used >= this.maxGuardsPerSession) continue
       guardsPerSession.set(key, used + 1)
-      kept.push(record)
+      withinGuardSession.push(record)
     }
+    kept.push(...withinGuardSession.slice(0, Math.max(0, this.maxGuards)))
     // 自动点：先每会话上限，再全局上限
     prunable.sort(newestFirst)
     const perSession = new Map<string, number>()
@@ -1712,6 +1736,7 @@ export class RollbackPointEngine {
       points,
       maxRecords: this.maxRecords,
       maxRecordsPerSession: this.maxRecordsPerSession,
+      maxGuards: this.maxGuards,
     }
     if (ledger.error !== undefined) out.error = ledger.error
     return out
@@ -1989,11 +2014,15 @@ export class RollbackPointEngine {
       workspace.files = changedFiles
       workspace.leftovers = plan.all.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT)
       workspace.leftoversTruncated = plan.truncated
-      workspace.removals = plan.paths.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT)
-      workspace.removalsCount = plan.paths.length
-      // 清单短于真实总数也算「不完整」—— 旧实现只报「遍历截断」，于是第 21 条之后会删的路径
-      // 既不列出、也没打截断标记（用户看到的正是「预览只列几个，实际删一大堆」）
-      workspace.removalsTruncated = plan.truncated || plan.paths.length > ROLLBACK_LEFTOVER_LIST_LIMIT
+      // **全量**清单（不再切 20 条）：预览列出的就是会删的 —— 逐条与执行阶段同一份规划。
+      // 超 ROLLBACK_MAX_CREATED_REMOVALS 时执行端**整套拒绝**（一条都不删）⇒ 这里如实给空集，
+      // 「预览说会删的 = 实际删的」这条不变式在任何输入下都成立（那时回退以 created-removals-limit 失败）。
+      const overRemovalLimit = plan.paths.length > ROLLBACK_MAX_CREATED_REMOVALS
+      workspace.removals = overRemovalLimit ? [] : plan.paths
+      workspace.removalsCount = workspace.removals.length
+      // 遍历被截断（该分块还有没列出的路径）时清单才可能不完整；实践中它蕴含捕获也被截断
+      // （⇒ 删除已整体拒绝、paths 为空），故这里只作事实回传。
+      workspace.removalsTruncated = !overRemovalLimit && plan.truncated
       workspace.createdSkipped = plan.skipped.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT)
       workspace.createdSkippedCount = plan.skipped.length
       workspace.createdSkippedTruncated = plan.truncated || plan.skipped.length > ROLLBACK_LEFTOVER_LIST_LIMIT
@@ -2485,6 +2514,9 @@ export class RollbackPointEngine {
     // 删除同样可回滚：先读前像（内存）→ 删；任一失败就把已写的还原、把已删的写回。
     const destroyed: { path: string; bytes: Uint8Array }[] = []
     const removalFailures: string[] = []
+    // 逐条记录**真的删掉**的路径（全量，不再切 20 条）：它与预览的 workspace.removals 同源同序，
+    // 界面把两份清单当作同一件事（「预览说会删的 = 实际删的」）。
+    const removedPaths: string[] = []
     let removed = 0
     for (const target of removal.paths) {
       try {
@@ -2497,6 +2529,7 @@ export class RollbackPointEngine {
         destroyed.push({ path: target, bytes })
         await fs.rm(target, { force: true })
         removed += 1
+        removedPaths.push(target)
       } catch (error) {
         removalFailures.push(target + ' ' + errorDetail(error))
       }
@@ -2535,7 +2568,6 @@ export class RollbackPointEngine {
         guidance: [{ code: 'rollback.guidance.workspaceRolledBack', detail: rollbackFailed.length > 0 ? rollbackFailed.join(' ') : undefined }],
       }
     }
-    const removedPaths = removal.paths.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT)
     detail.push(
       'restored=' + String(restored) + ' verified=' + String(needed.length) + ' unchanged=' + String(unchanged) +
       ' leftovers=' + String(leftovers.count) + ' removed=' + String(removed) + ' createdSkipped=' + String(removal.skipped.length),
@@ -2622,7 +2654,8 @@ export class RollbackPointEngine {
 
   /**
    * 删除一个回滚点。保护点与 guard 点**一律拒绝**（「不删被保护点」，用户删不掉 guard；
-   * guard 的增长靠 `maxGuardsPerSession` 自动淘汰，见 ROLLBACK_MAX_GUARDS_PER_SESSION），
+   * guard 的增长靠两道自动淘汰收敛 —— 每会话 `maxGuardsPerSession`（20）与全局 `maxGuards`（50），
+   * 见 ROLLBACK_MAX_GUARDS_PER_SESSION / ROLLBACK_MAX_GUARDS），
    * 没有 force 后门。成功后回收无人引用的对象（best-effort）。
    *
    * 整段「读 → 判 → 写 → 回收」都在 {@link withLedgerWriteLock} 队列里：否则并发的自动留点
