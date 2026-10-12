@@ -141,6 +141,8 @@ const ROLLBACK_FIXED_KEYS: readonly string[] = [
   'rollback.delete', 'rollback.delete.done', 'rollback.delete.confirmTitle',
   'rollback.delete.confirmMessage', 'rollback.delete.protected',
   'rollback.storage.unavailable',
+  // 台账弹窗（2026-10-12：卡退出折叠，台账按会话分组进弹窗）
+  'rollback.dialog.title', 'rollback.dialog.open',
   // T2：聊天内回退入口形态开关（回滚卡上的「一键退回回合尾」保险）
   'rollback.chatEntry.label', 'rollback.chatEntry.hint', 'rollback.chatEntry.perMessage',
   'rollback.chatEntry.turn', 'rollback.chatEntry.saveFailed',

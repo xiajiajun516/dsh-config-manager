@@ -311,6 +311,9 @@ export const zh = {
   /* 2026-10-11 布局重构：工具栏只放数字摘要 + 刷新按钮；留存/淘汰口径仍在 rollback.retention.hint（改由 ⓘ 承载）。 */
   'rollback.summary': '共 {points} 个回滚点 · {sessions} 个会话',
   'rollback.refresh': '刷新',
+  // 台账弹窗（2026-10-12：卡不再折叠，台账整块搬进按会话分组的弹窗）
+  'rollback.dialog.title': '回滚点台账',
+  'rollback.dialog.open': '查看回滚点',
   'rollback.col.time': '时间',
   'rollback.col.session': '会话',
   'rollback.col.turn': '回合',
@@ -875,6 +878,9 @@ export const en: Record<keyof typeof zh, string> = {
      retention/pruning wording stays in rollback.retention.hint (now carried by the ⓘ). */
   'rollback.summary': '{points} rollback points · {sessions} sessions',
   'rollback.refresh': 'Refresh',
+  // Rollback-point ledger dialog (2026-10-12: the card no longer folds; the ledger lives in this dialog, grouped by session)
+  'rollback.dialog.title': 'Rollback point ledger',
+  'rollback.dialog.open': 'View rollback points',
   'rollback.col.time': 'Time',
   'rollback.col.session': 'Session',
   'rollback.col.turn': 'Turn',
