@@ -22,6 +22,7 @@ import path from 'node:path'
 import { recoveryRoutes } from '../../src/routes/recovery.ts'
 import { routeSpecOf, type WebRoute } from '../../src/routes/kit.ts'
 import { RollbackPointEngine } from '../../src/core/rollback-point.ts'
+import { emptySessionMeta } from '../../src/core/session-meta.ts'
 
 const BASE = '/api/dsh-config-manager/recovery'
 const PROJECT_KEY = '--p--'
@@ -120,6 +121,9 @@ function envFor(h: Harness): never {
       targetFormatVersion: () => 4,
       workspaceKeys: async () => new Set<string>(),
       knownSessionIds: async () => new Set<string>(),
+      // T4+：体检行补「对话标题」（路由经它与导出选择器共用同一份会话元数据索引）；
+      // 这里给空索引 = 读不到 DSH 缓存时的形态（不许在路由层编造标题）。
+      sessionMeta: async () => emptySessionMeta(),
     },
     tryAppendHistory: async (raw: HistoryEntry) => { h.history.push(raw); return undefined },
     recoveryOrchestrator: {},

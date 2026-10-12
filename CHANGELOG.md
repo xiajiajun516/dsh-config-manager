@@ -201,6 +201,25 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **会话体检列表的行首改为显示「对话标题」，目录名退到第二行**（用户 2026-10-12 反馈）：列表此前只显示 `session-20d2722c-…` 这样的目录名，
+> 同屏十几条待处理会话里认不出哪条是自己的对话 —— 用户只能靠 uuid 回想。
+> - 标题取自 DSH 自己的会话缓存（`storages/session_projcache.json` 的 `rows.title.val`），走**导出选择器同一份** `core/session-meta.ts`
+>   索引与 `sessionIdKey` 归一化（两种目录名形态都能命中）；缓存没覆盖这条会话时**保持目录名**，绝不编造标题。
+> - 宿主在 `GET /recovery/sessions` 扫描后统一补 `title`（`applySessionTitles`）：体检扫描器自己仍是「只读字节事实」，不新增一次读盘。
+> - 目录名**仍常驻可见**（等宽、退到第二行）：它是修复 / 下载原始日志要核对的主键；标题是用户自由文本，渲染前过 `redact()`。
+> - **护栏**：`src/core/session-meta.test.ts`（两种目录名形态 / 无标题不编造 / 空索引不抛错）、`src/ui/session-inventory-view.test.ts`（标题映射 + 脱敏 + 缺省为 null）、
+>   `src/client/recovery/session-dialog-mount.test.ts` 新增 T17（行首必须是标题、目录名仍可见）。
+> - **NOT VERIFIED**：真机浏览器里标题的实际观感（本轮只有 typecheck + 单测 + 构建产物）。
+
+> **Session health rows now lead with the conversation title, and the directory name moves to the second line** (user report, 2026-10-12):
+> rows previously showed only a directory name such as `session-20d2722c-…`, so with a screenful of sessions it was impossible to tell which one was which conversation.
+> - The title comes from DSH's own session cache (`storages/session_projcache.json` → `rows.title.val`) through the **same** `core/session-meta.ts` index and
+>   `sessionIdKey` normalisation the export picker uses (both directory-name shapes resolve); when the cache does not cover a session the **directory name is kept** — no title is invented.
+> - The host adds `title` after scanning in `GET /recovery/sessions` (`applySessionTitles`): the scanner itself stays a byte-fact reader and reads nothing extra.
+> - The directory name **stays visible** (monospace, second line) because it is the key to check when repairing or downloading a raw log; the title is free user text and is `redact()`ed before rendering.
+> - Guards: `src/core/session-meta.test.ts`, `src/ui/session-inventory-view.test.ts`, and the new T17 case in `src/client/recovery/session-dialog-mount.test.ts`.
+> - **NOT VERIFIED**: the on-screen look of the title in a real browser (this round only ran typecheck + unit tests + the build).
+
 > **聊天内回退入口只剩「每条用户消息」；回滚点台账改成左右分栏**（2026-10-12 用户要求）：
 > - **删掉「整回合」档**：偏好模块 `src/client/chat/chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts` 与回合尾入口组件 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）整体下线；设置页回滚卡上的两档开关（`Segmented`）与 `rollback.chatEntry.*` 五个键一并删除。装配退回单入口 `ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry(…))` —— 不再有「切档互斥」与「槽位声明顺序补试」两套复杂度。
 > - **台账弹窗 = 左栏选对话 / 右栏看该对话的回滚点**（`.rollbackLedger` / `.rollbackSessions` / `.rollbackSessionItem` / `.rollbackLedgerMain`）：左栏列出**拥有回滚点的对话**（等宽会话 id + 点数 + 最新时间），默认**从新对话到旧对话**（组间顺序由 `rollbackPointGroups` 按各组最新时间倒序定死）；选中的键在刷新后失效时自动回落到第一条，绝不显示空右栏。
@@ -557,6 +576,29 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Guards**: `npm run typecheck` / `npm run build` pass; the guards covering this change are green (recovery panel layout / session health dialog mount / ⓘ ledger / css class existence / dictionary key parity); new dictionary keys `commonExpand` / `commonCollapse` (UiT) and `common.expand` / `common.collapse` (recovery) ship in zh and en.
 
 ### 🐛 修复 · Fixed
+
+> **导出选择器：默认未勾选的分区此前既不能展开、也不能逐项挑选**（用户 2026-10-12 反馈）：
+> - **症状**：打开「选择要导出的内容」，插件文件 / 凭据状态 / 历史会话这些**默认未勾选**的分区没有展开箭头、也没有条目可选；
+>   必须先勾上整个分区（顺带触发一次清单读取），才能展开与逐项勾选 —— 顺序被反过来了。
+> - **根因**：条目清单是**逐分区惰性**拉的，且只预取「当前已勾选分区」（为了避免一打开弹窗就全量读 sessions 这类大分区）；未勾选分区的 `units` 因此为空，
+>   而组件把「清单为空」一律当成「这条分区不可细分」—— 于是既不渲染展开控件，又把计数渲染成「已选 0/0」。
+> - **改法**：新增显式标记 `unitsUnread`（`SelectionSection`）与两条 ui 纯函数 `sectionExpandable` / `sectionCountState`：未读分区**照常**渲染展开控件，
+>   **展开时才**去读那一条分区的清单（sessions 依旧不会被预读）；未读时**不显示 0/0**（那会被读成「这条分区是空的」）；读取失败的分区也因此多了一个「点展开即重试」的入口。
+>   展开 sessions 时顺带读工作区清单（勾选联动的数据源在它身上）。
+> - **护栏**：`src/ui/selection-model.test.ts`（展开判定 / 计数四态优先级 / 未读不参与勾选导出契约）、
+>   `src/client/common/picker-lazy-units.test.ts`（源码守卫：组件确实用了这两条纯函数，调用点确实接了 `unitsUnread` / `onRequestUnits`）。
+> - **NOT VERIFIED**：真机浏览器里点展开的实测（本轮只有 typecheck + 单测 + 构建产物）。
+
+> **Export picker: sections that are not selected could neither be expanded nor picked item by item** (user report, 2026-10-12):
+> - **Symptom**: in "Choose what to export", the sections that are **unchecked by default** (plugin files / credential status / past conversations) had no expand control and no
+>   selectable items; you had to select the whole section first (which also triggered the manifest read) before you could expand it and pick items — the order was reversed.
+> - **Root cause**: manifests are fetched **lazily per section** and only for the sections currently selected (so that opening the dialog does not read a huge section like sessions);
+>   an unchecked section therefore had an empty `units` array, and the component treated "empty manifest" as "this section cannot be subdivided" — rendering no expand control and showing "0/0 selected".
+> - **Fix**: the explicit `unitsUnread` flag (`SelectionSection`) plus two pure functions (`sectionExpandable` / `sectionCountState`): unread sections **do** render the expand control and the
+>   manifest is read only **when you expand** (sessions is still never preloaded), unread sections no longer show "0/0" (which reads as "this section is empty"), and a section whose read failed now has
+>   an "expand to retry" entry. Expanding sessions also loads the workspace manifest, since that is the data source for the selection coupling.
+> - Guards: `src/ui/selection-model.test.ts` and `src/client/common/picker-lazy-units.test.ts` (source guard).
+> - **NOT VERIFIED**: an actual expand click in a real browser (this round only ran typecheck + unit tests + the build).
 
 > **全插件的动效此前一律「瞬变」：五个 `--cm-motion-*` 令牌被整段丢掉**（2026-10-12 定位，随本轮弹窗动画一起修）：
 > - **症状**：弹窗入场/退场、页面入场、折叠展开、通知入场、颜色过渡……**没有一条在动**。用户侧看到的就是「弹窗啪一下出现」。

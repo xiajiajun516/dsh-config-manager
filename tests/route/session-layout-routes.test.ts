@@ -14,7 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { recoveryRoutes } from '../../src/routes/recovery.ts';
 import { routeSpecOf, type WebRoute } from '../../src/routes/kit.ts';
-import { projectKeyOf } from '../../src/core/session-meta.ts';
+import { emptySessionMeta, projectKeyOf } from '../../src/core/session-meta.ts';
 import { readLogFileCwd } from '../../src/utils/session-log.ts';
 import { encodeZstdFrame, zstdAvailable } from '../../src/utils/zstd-frame.ts';
 
@@ -118,6 +118,9 @@ function envFor(h: Harness): never {
       targetFormatVersion: () => 4,
       workspaceKeys: async () => new Set<string>(),
       knownSessionIds: async () => new Set<string>(),
+      // T4+：体检行补「对话标题」（路由经它与导出选择器共用同一份会话元数据索引）；
+      // 这里给空索引 = 读不到 DSH 缓存时的形态（不许在路由层编造标题）。
+      sessionMeta: async () => emptySessionMeta(),
     },
     tryAppendHistory: async () => undefined,
     recoveryOrchestrator: {},
