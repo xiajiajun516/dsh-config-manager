@@ -579,6 +579,18 @@
 | 开关与生效（**T2 已交付**） | 面板入口 = 「工作区与会话回滚」卡（`RollbackCard`）上的两档开关（`per-message` 缺省 / `turn`），写入只走 `writeChatEntryMode`（值真变才通知；storage 写失败则回读真实值 + 显示「这次切换没有生效」，**界面不停留在假状态**）。**同一页面内即时生效；跨标签页不即时**（无 `storage` 事件监听，见上一行）。**绕过 `writeChatEntryMode` 直接改 localStorage 只有下次加载生效**；偏好为 `turn` 时**一次都不注册**（宿主渲染器原样工作）。 |
 | 验证方式 | `src/client/chat/chat-entry-view.test.ts`（**31** 条：槽位常量与 priority -1 / pref 缺省·非法值·storage 缺失 / 热切换 / 登记三道门与抛错被吞 / steering 不接管 / 回合号与相位判定 / 按钮状态机六种禁用原因各自可证 / 回滚点列表每会话只读一次 / **附件有序投影与 compact 旗标** / 文件卡与体积 8 档 / **24h 补零时钟** / **会话线格式与引用摘要** / rest 兜底不丢块 / 错误边界降级 / zh+en 键集一致）。复核侧另有：t4 的 SlotCore 真机副本探针 `.tmp/r1-probe/slotcore.mjs` **10/10**（本文件由 qa 复跑复现）、t4 的 node 探针 `.tmp/r1-probe/probe.bundle.cjs` 与真浏览器 DOM 探针（t5 复核：**pass、0 findings、DOM 端到端 32/32**）。**NOT VERIFIED**：没有在**真实 DSH 聊天流**里的渲染与点击取证（本仓 React 无组件测试框架；探针是自建 harness）—— 见 §5。 |
 
+### G-39 增量（2026-10-12：整回合档整体删除 + 台账弹窗左右分栏）
+
+> 来源 = 用户 2026-10-12 要求（「聊天内回退入口只有每条用户消息」+「台账弹窗左边是侧边栏、右边是列表」）。不是新缺口，而是 G-39 / G-30 的**行为变更登记**。
+
+| 项 | 内容 |
+|---|---|
+| ① 「整回合」档整体删除 | 偏好模块 `src/client/chat/chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts`、回合尾入口 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）与设置页回滚卡上的两档开关（含 `rollback.chatEntry.*` 五个键）**一并删除**；装配退回单入口 `registerChatNodeEntry`。上表「形态偏好」「开关与生效（T2）」「两档互斥（t13）」「顺序硬化（t17）」四条随之失效，保留为历史记录。 |
+| ② 台账弹窗 = 左右分栏 | 左栏 = **拥有回滚点的对话**（等宽会话 id + 点数 + 最新时间，默认**新 → 旧**，组间顺序由 `rollbackPointGroups` 按各组最新时间倒序定死）；右栏 = 选中那条对话的回滚点（组头 + 限高内滚列表）。选中的键在刷新后失效时回落第一条，绝不显示空右栏。 |
+| ③ 两处修复 | ①「刷新」改为**保留旧内容**（旧实现每次都把弹窗清成 loading，弹窗高度骤变 ⇒ 用户反馈「整个页面抖动」）；②回退预览弹窗正文原先**没有** `Modal.Body`（只有标题行有内边距）⇒ 文字与按钮贴边，现已包进 `Modal.Body scroll`。 |
+| 验证（可复现） | `npm run typecheck` / `npm run typecheck:tests` 全绿；`src/client/recovery/*` + `src/client/chat/*` + CSS/info-hint 守卫 **132 / 132 pass**；全量 `npm test` **4315 / 4320 pass**（2 skipped）—— 3 条失败全部落在 `tests/route/session-repair-routes.test.ts`（宿主路由），由**并行会话的在途改动**造成，与本次改动无关。 |
+| **NOT VERIFIED（不得读成已验证）** | 仍然**没有真机浏览器点击取证**：分栏观感、刷新是否真的不抖、预览弹窗内边距都只有源码/产物级证据。 |
+
 ### G-30 / G-39 增量（2026-10-10 回退体验三修：500 语义 / icon-only 互斥 / 简洁预览 / 二次确认被替换）
 
 > 来源 = 用户三条原话（2026-10-10）：①「回滚失败并提示错误500」；②「我希望回退按钮只有一个icon而不是一个按钮」；③「回退预览页面我不喜欢我希望一个简洁的页面. 页面标题是回退预览, 弹窗里面的内容只有被回退的文件并给出删除/新增了多少行」。
