@@ -63,7 +63,8 @@ export const zh = {
   'chat.preview.scope.off': '只回退对话，文件不改动',
   /** 文件行上悬停出现的「查看」（在看得到的前提下才出现：没有侧栏能力时换成下面那句） */
   'chat.preview.view': '查看',
-  'chat.preview.viewHint': '在右侧栏查看这个文件的差异',
+  /** 「查看」= 名字本身：无障碍名必须带**这个文件**的全路径（列表里同名按钮一屏好几个） */
+  'chat.preview.viewHint': '查看差异：{path}',
   /** 没有右侧栏能力（旧 DSH / 侧栏服务缺失）→ 如实降级为弹窗内展示，不假装打开过 */
   'chat.preview.viewInline': '本客户端没有右侧栏，差异改为在这里展示',
   'chat.preview.viewFailed': '打开右侧栏失败：{detail}',
@@ -127,7 +128,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.preview.scope.deleted': '{n} to delete',
   'chat.preview.scope.off': 'Session only \u2014 files stay as they are',
   'chat.preview.view': 'View diff',
-  'chat.preview.viewHint': 'View this file\u2019s diff in the right sidebar',
+  'chat.preview.viewHint': 'View diff: {path}',
   'chat.preview.viewInline': 'This client has no right sidebar, so the diff is shown here instead',
   'chat.preview.viewFailed': 'Could not open the right sidebar: {detail}',
   'chat.rewind.running': 'Rewinding\u2026',

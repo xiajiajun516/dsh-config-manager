@@ -70,8 +70,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Maintenance page reordered**: exceptions first, diagnostics second, diagnostic cards no longer start collapsed, and the rollback ledger opens in a dialog.
 - **回退 = 无感替换**：回退后会话列表里只留下那条「退回去的对话」，不会再并列出一条旧分支。
   **Rewind is a silent swap**: afterwards the conversation list shows only the rewound conversation, with no stale branch beside it.
-- **回退预览一眼看清**：弹窗顶部直接写明这次要改几个文件、增删多少行、删掉几个；文件行按列对齐、显示所在目录，取消勾选时也还能读清清单。
-  **Rewind preview at a glance**: the dialog states up front how many files change, how many lines are added or removed and how many are deleted; rows line up in columns with their directory, and the list stays readable when the checkbox is off.
+- **回退预览一眼看清**：弹窗顶部直接写明这次要改几个文件、增删多少行、删掉几个；文件行按列对齐、显示所在目录，**点文件名就能看这个文件的差异**，取消勾选时也还能读清清单。
+  **Rewind preview at a glance**: the dialog states up front how many files change, how many lines are added or removed and how many are deleted; rows line up in columns with their directory and **clicking a file name opens its diff**, and the list stays readable when the checkbox is off.
 - **一批界面体验修复**（会话体检、同步、市场、首页、产物库、确认弹窗）：只改呈现与状态反馈，不改工作流。
   **A batch of UI polish** (session checkup, sync, market, home, library, confirm dialogs): presentation and feedback only, no workflow changes.
 

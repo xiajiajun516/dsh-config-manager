@@ -625,6 +625,14 @@ test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块�
   assert.match(dialog, /readRollbackPreviewRemovals\(/, '删除行必须取自引擎的删除集 removals（与执行阶段同一份规划）')
   assert.match(dialog, /RollbackFileIcon/, '文件名前面必须有文件类型图标（第 7 条）')
   assert.match(dialog, /render=\{renderFileIcon\}/, '图标的外部来源（dsh-better-sidebar）必须接进来')
+  // 2026-10-12 用户要求：**移除尾部「查看」按钮，改点文件名直接跳转**（本轮）
+  assert.equal([...dialog.matchAll(/css\.fileViewBtn/g)].length, 0, '尾部那颗独立「查看」按钮必须整体消失')
+  assert.match(dialog, /className=\{`\$\{css\.rollbackFilePath\} \$\{css\.mono\}`\}/, '路径格子必须仍带 .rollbackFilePath + mono')
+  const pathBtn = dialog.match(/<button[\s\S]{0,300}?className=\{`\$\{css\.rollbackFilePath\}[\s\S]{0,700}?<\/button>/)
+  assert.ok(pathBtn !== null, '路径那一格本身必须是 <button>（点文件名即跳转）')
+  assert.match(pathBtn[0]!, /onClick=\{\(\) => \{ view\(file\.path\) \}\}/, '点文件名必须走同一个 view()（唯一打开入口）')
+  assert.match(pathBtn[0]!, /disabled=\{busy \|\| pointId === null\}/, '忙态 / 无可写目标时必须禁用（与原来那颗按钮同判据）')
+  assert.match(pathBtn[0]!, /aria-label=\{t\('chat\.preview\.viewHint', \{ path: file\.path \}\)\}/, '无障碍名必须带这个文件的全路径（列表里同名按钮一屏好几个）')
   // 底部只有两个按钮：主按钮（回退）+ 取消/关闭（T13 非回归项：底部**恰好 2 个**）
   const footer = dialog.slice(dialog.indexOf('css.dialogFooter'))
   assert.equal([...footer.matchAll(/<Button\b/g)].length, 2, '弹窗底部必须恰好 2 个按钮（回退 + 取消/关闭）')

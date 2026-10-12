@@ -5314,47 +5314,33 @@ button.profileRowMain:hover {
   font-size: var(--cm-fs-table);
 }
 
-/* 「查看」= 文件行上悬停才出现的次级操作（Cursor「Confirm Undo」的 View Diff 位，用户 2026-10-12）。
-   第 4 条：**没有边框**，悬停时**高亮背景**（与聊天入口的 .chatActionBtn:hover 同一语言）。
-   第 3 条：出现时淡入 + 轻微右移（`opacity`/`transform` 过渡；visibility 本身不参与过渡 ——
-   否则淡出会被 120ms 的延迟拖住，而这里要的是「立刻让位、淡入时优雅」）。
-   为什么用 visibility 而不是 display:none：它仍在 tab 序里 —— 键盘 Tab 到该按钮时 :focus-visible
-   也会让它显形，所以这不是「只能用鼠标」的操作。 */
-.fileViewBtn {
-  flex: none;
-  margin-left: auto;
-  visibility: hidden;
-  opacity: 0;
-  transform: translateX(4px);
-  padding: var(--cm-sp-1) var(--cm-sp-3);
+/* 「查看」= **路径那一格本身**（2026-10-12 用户要求：移除尾部独立按钮，点文件名直接跳转）。
+   为什么按钮不是整行：整行做热区会把右侧 `+N −M` 也变成可点区域，鼠标停在统计上像是要点它；
+   这里只有名字/目录可点。
+   无障碍：它是真 `<button>`（留在 tab 序里、Enter/Space 可触发），去掉了默认边框与内边距，
+   只在悬停/聚焦时把文字换成强调色 —— 一眼看出这行能点，又不喧宾夺主。 */
+.rollbackFilePath:is(button) {
+  padding: 0;
   border: 0;
-  border-radius: var(--cm-r-1);
   background: transparent;
-  color: var(--cm-text-3);
-  font-size: var(--cm-fs-meta);
-  cursor: pointer;
-  transition:
-    opacity var(--cm-motion-fast) var(--cm-motion-ease-out),
-    transform var(--cm-motion-fast) var(--cm-motion-ease-out),
-    background-color var(--cm-motion-fast) ease,
-    color var(--cm-motion-fast) ease;
-}
-
-.rollbackFileRow:hover .fileViewBtn,
-.fileViewBtn:focus-visible {
-  visibility: visible;
-  opacity: 1;
-  transform: translateX(0);
-}
-
-.fileViewBtn:hover {
-  background: var(--cm-line-1);
+  font: inherit;
+  font-size: var(--cm-fs-table);
   color: var(--cm-text-1);
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--cm-motion-fast) ease;
 }
 
-.fileViewBtn:disabled {
-  opacity: 0.5;
+.rollbackFilePath:is(button):hover:not(:disabled),
+.rollbackFilePath:is(button):focus-visible {
+  color: var(--cm-accent);
+}
+
+.rollbackFilePath:is(button):disabled {
+  color: var(--cm-text-1);
   cursor: not-allowed;
+  /* 忙态 / 还没有可写目标：仍然是「这行的名字」，只是暂时点不了 */
+  opacity: 0.7;
 }
 
 /* 选择框一行：**左侧那颗选择框 + 右侧汇总**。

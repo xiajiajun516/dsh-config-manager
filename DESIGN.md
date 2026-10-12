@@ -544,9 +544,11 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
      否则惰取 DSH 自带的 `FileTypeIcon`（`@deepseek-ai/dsh-client-ui-primitives`，DSH 文件树同一颗），
      两条都不通才用本地极简 SVG（`currentColor`）。**绝不在模块顶层 import 那个包**：老宿主没有模块表 seed 时
      顶层 require 会让整个浏览器半加载失败；
-  ④ 「查看」`.fileViewBtn`：**无边框**、悬停高亮背景（`--cm-line-1`）、悬停或键盘聚焦才出现
-     （`visibility` 不进过渡，`opacity` + `translateX(4px)` 过渡 = 淡入右移）；**打开成功即关闭弹窗**，
-     侧栏不可用时降级为弹窗内展示同一份差异（两种原因两句话）；
+  ④ 「查看」= **路径那一格本身**（2026-10-12 用户要求：移除尾部独立按钮，**点文件名直接跳转**）。
+     它是真 `<button>`（留在 tab 序、Enter/Space 可触发），无边框无内边距，悬停/聚焦把文字换成 `--cm-accent`；
+     **热区只覆盖名字与目录，不覆盖右侧 `+N −M`**（整行做热区会让鼠标停在统计上像是要点它）。
+     删除行的文件名**不是**按钮（引擎的 file-diff 读不出该路径 ⇒ 不给假入口）；
+     **打开成功即关闭弹窗**，侧栏不可用时降级为弹窗内展示同一份差异（两种原因两句话）；
   ⑤ 选择框关掉时**不再**把整份清单降透明度（旧 `.reasonList[data-off]` 已下线 —— 半透明清单会被读成
      「弹窗坏了」）：改成汇总条 `.previewScope[data-off='true']` 降为弱化色 + 改写一句
      `chat.preview.scope.off`「只回退对话，文件不改动」；清单本身保持满可读（行序/图标/路径不丢）。
@@ -824,9 +826,8 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   正文顺序固定 = 汇总选择行（`.previewChoiceRow` + `.previewScope`，见 §「聊天内回退预览弹窗」）→
   会被回退的文件列表（`.rollbackFileList` 内的 `.rollbackFileRow`）→ 可选的原因/告警；
   底部**恰好两颗**按钮（回退 / 取消）。说明行 `.previewSummary` **已下线**（删渲染）。
-  - 文件行 = 等宽路径（`.rollbackFilePath` = 弱化目录 `.rollbackFileDir` + 基名）+ `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）
-    + **悬停或键盘 focus 才显形的「查看」**（`.fileViewBtn`：用 `visibility` 而不是 `display:none` ——
-    它必须留在 tab 序里，否则这个操作只能用鼠标）。
+  - 文件行 = **可点的等宽路径**（`.rollbackFilePath` 是 `<button>`，内部 = 弱化目录 `.rollbackFileDir` + 基名）
+    + `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）；**点文件名即打开该文件差异**（无独立「查看」按钮）。
   - 「查看」把该文件的差异开进 **DSH 右侧栏**（本插件注册自己的 tab 类型 `cm-rollback-diff`）；
     本客户端没有侧栏能力时降级为弹窗内展示（`.inlineDiffBox`）并说明为什么在这里看 —— 不出现空白面板、不假装打开过。
   - **不引入**无功能的勾选框：回退是整体语义，放一个取消不掉的勾选框只是装饰（诚实性优先于形似）。

@@ -463,14 +463,24 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                           <span className={css.rollbackFileIcon} aria-hidden="true">
                             <RollbackFileIcon path={file.path} size={14} render={renderFileIcon} />
                           </span>
-                          {/* 主标签 = **目录（弱化）+ 文件名（主色）**；完整路径进 title，悬停仍可看全 —— 信息不丢。 */}
-                          <span className={`${css.rollbackFilePath} ${css.mono}`} title={file.path}>
+                          {/* 主标签 = **目录（弱化）+ 文件名（主色）**，且**它本身就是那颗「查看」按钮**
+                              （2026-10-12 用户要求：移除尾部独立按钮，点文件名直接跳转）。
+                              为什么按钮是**路径那一格**而不是整行：整行做按钮会把右侧统计也变成热区，
+                              鼠标落在「+1 −1」上像是要点它；这里只有名字/目录可点，统计永远点不到。
+                              完整路径仍在 title（悬停看全 + 无障碍名带上下文）；行内名字就是它的可访问名。 */}
+                          <button
+                            type="button"
+                            className={`${css.rollbackFilePath} ${css.mono}`}
+                            title={file.path}
+                            aria-label={t('chat.preview.viewHint', { path: file.path })}
+                            disabled={busy || pointId === null}
+                            onClick={() => { view(file.path) }}
+                          >
                             {dir !== '' && <span className={css.rollbackFileDir}>{dir}</span>}
                             {base}
-                          </span>
-                          {/* 第 2 条：`+N −M` **紧跟文件名**（中间不再被弹性空隙推到右边），
-                              弹性空隙只在「查看」之前 —— 与 Cursor 那一屏同一版式。
-                              三个取值（行数 / 删除 / 未统计）都**右对齐**（列宽固定）：纵向扫读成一列。 */}
+                          </button>
+                          {/* 第 2 条：`+N −M` 与文件名**同一行**（统计列右对齐、列宽固定）：
+                              三个取值（行数 / 删除 / 未统计）的右缘对齐成一条竖线，纵向扫读成一列。 */}
                           <span className={css.rollbackFileStat}>
                             <FileStat
                               status={file.status}
@@ -481,18 +491,6 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                               rt={rt}
                             />
                           </span>
-                          {/* 悬停才出现的「查看」：默认隐藏是为了不喧宾夺主，但**键盘 focus 也会显示**
-                              （CSS :focus-visible），所以它不是只能用鼠标的操作。 */}
-                          <button
-                            type="button"
-                            className={css.fileViewBtn}
-                            title={t('chat.preview.viewHint')}
-                            aria-label={t('chat.preview.viewHint')}
-                            disabled={busy || pointId === null}
-                            onClick={() => { view(file.path) }}
-                          >
-                            {t('chat.preview.view')}
-                          </button>
                         </div>
                         )
                       })}
@@ -506,14 +504,15 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                           <span className={css.rollbackFileIcon} aria-hidden="true">
                             <RollbackFileIcon path={path} size={14} render={renderFileIcon} />
                           </span>
+                          {/* 删除行**不是按钮**（纯文本）：这类路径不在该点的记录里，引擎的 file-diff 读不出它 ⇒
+                              点了也不会有差异。用户要求「点文件名跳转」只对**能跳**的行成立 —— 不给假入口。 */}
                           <span className={`${css.rollbackFilePath} ${css.mono}`} title={path}>
                             {splitRollbackPath(path).dir !== '' && (
                               <span className={css.rollbackFileDir}>{splitRollbackPath(path).dir}</span>
                             )}
                             {splitRollbackPath(path).base || rollbackPreviewFileLabel(path)}
                           </span>
-                          {/* 整文件删除：写「删除」而不是「+0 −N」（第 6 条）。这类路径**不在**该点的
-                              记录里（引擎的 file-diff 也读不出它）⇒ 不给「查看」，不给假入口。 */}
+                          {/* 整文件删除：写「删除」而不是「+0 −N」（第 6 条）。 */}
                           <span className={css.rollbackFileStat}>
                             <span className={css.rollbackDeleted}>{rt(rk('rollback.preview.file.deleted'))}</span>
                           </span>
