@@ -5336,6 +5336,15 @@ button.profileRowMain:hover {
   color: var(--cm-accent);
 }
 
+/* 目录段在**悬停/聚焦**时也跟着变强调色（2026-10-12 用户反馈：只有基名变蓝、目录不变，
+   看起来像「只有一半能点」）。整格都是同一个按钮 ⇒ 整格一起变色，
+   但**静止态仍保持弱化**（这是「目录一眼可辨」的那半句答案，见上面的块注释）；
+   :disabled 时不变色（忙态 / 还没有可写目标 —— 那时整行都点不了，不该给可点的暗示）。 */
+.rollbackFilePath:is(button):hover:not(:disabled) .rollbackFileDir,
+.rollbackFilePath:is(button):focus-visible .rollbackFileDir {
+  color: var(--cm-accent);
+}
+
 .rollbackFilePath:is(button):disabled {
   color: var(--cm-text-1);
   cursor: not-allowed;
