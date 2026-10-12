@@ -91,6 +91,55 @@ export interface ReconcileOutcome {
   unresolved: string[];
 }
 
+/**
+ * **唯一**被放行的 operationType（issue #87）：定时备份。
+ *
+ * 为什么只放行它：它整条链路**不可能改用户配置** —— backup-scheduler 的 `doExport` 只做三件事：
+ * 往 `<dataDir>/exports/` 写一个归档 zip、写插件自身的调度状态文件、按保留策略删旧 auto 归档
+ * （src/sync/backup-scheduler.ts）。因此「崩溃前到底跑没跑到」这个不可判定问题，对**用户配置是否半成品**
+ * 完全无关紧要 —— 那才是 SAFE MODE 要防的东西。
+ *
+ * **其它 operationType 一律不得套用**：`autosync-apply` / `import-apply` 之类会真的改用户配置，
+ * 它们「已开始但未登记 step」永远不可证明，必须留在原保守路径（NEEDS_ATTENTION + SAFE MODE）。
+ */
+const ARTIFACT_ONLY_OPERATION_TYPES: ReadonlySet<string> = new Set<string>(['backup-schedule'])
+
+/** 可自证「不可能掩盖半成品配置改动」的残留类型（issue #87）。 */
+export type SelfProvableResidualClass = 'artifact-only' | 'no-steps'
+
+/**
+ * 判定崩溃残留是否**可自证**「没发生」（issue #87）；不可自证 → null，走原保守路径。
+ *
+ * 只回答一个问题：这次残留有没有可能掩盖「半成品用户配置改动」？只放行 artifact-only 通道的两类形状 ——
+ *  - `no-steps`：一个 step 都没登记。该通道（core/phase3-host.ts runExternalIntent）在调用 `fn` **之前**
+ *    就把 external step 落进 journal，没有 step ⇒ `fn` 从未开始 ⇒ 连归档都没产出；
+ *  - `artifact-only`：有 step 且全是 external backup（形状与 runExternalIntent 写的 ext step 逐字一致）。
+ *
+ * 形状门缺一不可：state ∈ {APPLYING, NEEDS_ATTENTION}、无 snapshotId、`commit.at` 为空、
+ * rollback 未尝试且无已补偿条目、recovery 未尝试、所有 step 都是 `planned` 且 `appliedAt` 为空。
+ * ownership / environmentFingerprint 绑定校验由调用方在**更早**的信任门完成，这里不重复也不放松。
+ */
+function selfProvableResidual(j: OperationJournal): { cls: SelfProvableResidualClass; reason: string } | null {
+  if (!ARTIFACT_ONLY_OPERATION_TYPES.has(j.operationType)) return null
+  if (j.state !== 'APPLYING' && j.state !== 'NEEDS_ATTENTION') return null
+  if (j.snapshotId !== null && j.snapshotId !== '') return null
+  if (j.commit.at !== null) return null
+  if (j.rollback.attemptedAt !== null) return null
+  if (Object.keys(j.rollback.entryDone ?? {}).length > 0) return null
+  if (j.recovery.attemptedAt !== null) return null
+  const steps = Object.values(j.steps)
+  if (steps.some((s) => s.status !== 'planned' || s.appliedAt !== null)) return null
+
+  if (steps.length === 0) {
+    if (j.plannedSteps.length > 0) return null // 悬空 plannedSteps：损坏/篡改 → 保守
+    return { cls: 'no-steps', reason: engineMsg('core.reconcile.selfProvenNoSteps') }
+  }
+  if (steps.every((s) => s.external === true && s.adapter === 'backup')) {
+    return { cls: 'artifact-only', reason: engineMsg('core.reconcile.selfProvenArtifactOnly') }
+  }
+  return null
+}
+
 // ---------- Reconcile ----------
 
 /**
@@ -160,6 +209,22 @@ async function reconcileOne(
     const reason = engineMsg('core.reconcile.envMismatch');
     await store.writeSafeMode(true).catch(() => undefined);
     return { decision: { operationId, kind: 'env-mismatch', reason, snapshotId: j.snapshotId }, safeMode: true, unresolved: true };
+  }
+
+  // issue #87：自证「没发生」的残留自动放行（APPLYING/NEEDS_ATTENTION → RECOVERED，history = noop）。
+  // 位置刻意放在 live-owner / ownership-binding / env-fingerprint 三道信任门**之后**、terminal 与步态判定
+  // **之前**：只有已通过全部绑定校验、且形状证明副作用不可能已开始的残留才会走到这里；其余一律落回原保守路径。
+  const residual = selfProvableResidual(j)
+  if (residual !== null) {
+    const reason = residual.reason
+    await store.update(operationId, (cur) => {
+      let next = transitionJournalState(cur, 'RECOVERED')
+      next = { ...next, recovery: { ...next.recovery, attemptedAt: new Date().toISOString(), outcome: 'RECOVERED', reason, attempts: next.recovery.attempts + 1 } }
+      return next
+    })
+    await store.moveToCompleted(operationId).catch(() => undefined)
+    await store.appendRecoveryHistory('noop', { operationId, at: new Date().toISOString(), reason }).catch(() => undefined)
+    return { decision: { operationId, kind: 'noop', reason, snapshotId: j.snapshotId }, safeMode: false, unresolved: false }
   }
 
   // terminal 遗留 active → 规整到 completed（无实质 recovery）

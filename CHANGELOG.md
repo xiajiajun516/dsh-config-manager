@@ -166,6 +166,36 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **说明性文案一律收进 ⓘ：页面只留标题、控件与数字**（2026-10-12 用户要求）：此前同步页 / 环境页 / 维护与诊断 / 加密与密钥导出这些地方
+> 仍有一句话常驻在标题下或卡片里（`profiles.subtitle`、`section.description`、`mode.encryptHint`…），一屏五六行灰字说明，真正要看的控件与数字被稀释。
+> - **页级 / 分区级副标题 → `SectionTitle.info`**：`common/ui.tsx` 新增 `info`（与 `subtitle` 并存：**静态说明走 ⓘ，动态 / 元数据才留在副标题**）——
+>   环境页、同步页、市场页、关于页、迁移历史页、回滚卡、导入向导 6 步全部改挂 ⓘ；环境页页头与「档案」分区**重复渲染同一句话**的一处同时消除。
+> - **表单字段说明 → `Field.info`**（同口径新入口）；卡片说明按既有四种摆放（`.groupLabel` / `.fieldLabel` / `.controlRow` / `Modal.Header.trailing`）挂 ⓘ，
+>   覆盖加密与密钥导出、解密密码、导出安全选项、通道凭据槽位、新建仓库私有说明、磁盘清理边界、SAFE MODE、数据模式（救援）、离线修复、
+>   回滚预览与聊天入口、复制残留、导入冲突 / 有损说明、市场上传与分享模式、`snapshots.selectHint` 等 **41 键**。
+> - **静态安全说明进 ⓘ，动态告警仍常驻**（新边界）：加密算法、密码存在哪、凭据写到哪个槽位、救援改写哪几层、清理只动可重建区 → ⓘ；
+>   校验错误 / 运行状态 / 空态 / 禁用原因 / 确认弹窗内的危险说明 / 必须看到的「下一步」指引（`nextSteps.*`、更新后需重启）→ 保持常驻可见。
+> - `rollback.autopoint.hint` **下线渲染点**（与卡头 ⓘ 的 `rollback.desc` 同义、后者是超集），字典键保留。
+> - **护栏**：`src/client/common/info-hint-guard.test.ts` 的 `MOVE_PINS` 由 42 扩到 **83** 键（t6-1 全量扫描 + 可访问名 + 字典口径，13/13 pass）；
+>   `recovery-panel-layout.test.ts` / `import-wizard-split.test.ts` 的源码级断言同轮更新。规则与逐键清单见 `DESIGN.md` §7 与 `docs/design/info-hint-migration.md`。
+
+> **All explanatory prose moved into the ⓘ tooltip: pages now show only titles, controls and numbers** (user request, 2026-10-12):
+> pages such as Sync, Environment, Maintenance & Diagnostics and the "Encryption & secrets" card still kept a sentence parked under their headings or inside cards.
+> - **Page / section subtitles → `SectionTitle.info`** (new prop on the shared primitive; `subtitle` remains for **dynamic / metadata** text only) across
+>   Environment, Sync, Market, About, Migration History, the rollback card and all six import-wizard steps; the Environment page no longer renders the same
+>   sentence twice (page header + "Profiles" section).
+> - **Field descriptions → `Field.info`**; card-level prose follows the four existing placements (`.groupLabel` / `.fieldLabel` / `.controlRow` / `Modal.Header.trailing`),
+>   covering encryption & secret export, decrypt password, export security options, channel credential slots, private-repo note, disk-clean boundaries,
+>   SAFE MODE, rescue ("data mode"), offline repair, rollback preview / chat entry, leftover copies, import conflicts & lossy notes, market upload & share mode,
+>   `snapshots.selectHint` — **41 keys** in total.
+> - **Static security explanations go into ⓘ; dynamic warnings stay visible**: encryption algorithm, where the password lives, which credential slot is written,
+>   how many layers rescue rewrites, what cleanup may delete → ⓘ; validation errors, run state, empty states, disabled reasons, dangerous-step text inside
+>   confirm dialogs and must-see "next step" guidance stay on screen.
+> - `rollback.autopoint.hint` lost its render point (identical to, but a subset of, the card-head `rollback.desc` ⓘ); the dictionary key is kept.
+> - **Guards**: `MOVE_PINS` in `src/client/common/info-hint-guard.test.ts` grew from 42 to **83** keys (13/13 pass); the source-level assertions in
+>   `recovery-panel-layout.test.ts` and `import-wizard-split.test.ts` were updated in the same turn. Rules and the per-key ledger: `DESIGN.md` §7 and
+>   `docs/design/info-hint-migration.md`.
+
 > **「工作区 + 会话回滚」面板重排：从一坨灰字变成可扫读的时间线**（2026-10-11 用户反馈「UI 太丑」）：
 > 每个回滚点原先是一行 `.actionRow`（时间 / 回合 / 来源徽章 / 文件数 / 会话游标 / note /「预览回退」+「删除回滚点」两颗实体按钮**同权重**横排），
 > 564px 画布下换行位置随机；「回退前救援点（可回退、不可删）」「无会话游标（只能回退工作区）」这类整句**逐行重复**，真实数据被挤到屏幕外。
@@ -456,6 +486,22 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 > - **Fix**: `requestOnce()` now falls back to `user-agent: DSH-Config-Manager` (never overriding a caller-supplied value, case-insensitive), so both channels behave the same; `GitHubAuthRest.apiError()` also collapses and truncates (200 chars) a **non-JSON error body** — GitHub's plain-text 403 — into the message (still passed through `redact()`).
 > - **Guards**: `src/utils/proxy.test.ts` P13 (default added / explicit value preserved / direct == proxied) and `src/market/github-repos.test.ts` (plain-text 403 surfaced, oversized body truncated).
 > - **Verified locally (2026-10-12)**: against a local CONNECT proxy, `https://api.github.com/rate_limit` returned **HTTP 403 without the UA** and **HTTP 200 through `requestOnce()`**.
+
+> **崩溃残留不再永久占用 SAFE MODE：只放行「能自证没写过用户配置」的那一类**（issue #87，用户报告）：
+> - **症状**：宿主被**强制结束**（不是 Ctrl+C / 正常退出）后，下次启动常驻「配置修改已被保护」横幅 —— 记录 `snapshotId` 为 `null` ⇒ 「执行恢复」永远是灰的、「确认」400、「重试」被 needs-attention 拒绝，用户唯一出路是语义为「放弃」的那颗按钮；**每次崩溃都重现**。
+> - **根因**：`probeExternal` 的生产实现恒返回 `'unknown'` ⇒ 每个 external step 必落「不可证明」；`runExternalIntent` 写的 external step 又恒为 `status:'planned'` + 无指纹、成功路径只推 journal 从不回写 step ⇒ 即使它其实跑完了也无从判定；崩溃 catch 再无条件置 durable SAFE MODE。三者叠加：一次「备份刚开始就被杀」= 一个 `snapshotId:null` + 一个 planned external step + 一个 durable 标记。
+> - **改法（只放行可自证的形状，不放宽「不可证明」的边界）**：`reconcile` 新增「可自证残留」门，位置在 live-owner / ownership-binding / environment-fingerprint 三道信任门**之后**、terminal 与步态判定**之前**，且**只对 `backup-schedule` 生效** —— 该路径（`backup-scheduler` 的 `doExport`）只往 `<dataDir>/exports/` 写归档、写插件自身调度状态、按保留策略删旧归档，**从不改用户配置**，所以「它到底跑没跑到」对「配置是不是半成品」无关紧要（那才是 SAFE MODE 要防的）。形状门缺一不可：state ∈ {APPLYING, NEEDS_ATTENTION}、无 `snapshotId`、`commit.at` 为空、rollback 未尝试且无已补偿条目、recovery 未尝试、全部 step 都是 `planned` 且 `appliedAt` 为空。命中后 APPLYING/NEEDS_ATTENTION → RECOVERED → completed，并记 `recovery-history: noop`。
+> - **启动判据复位**：分类结论才是本轮权威 —— `NORMAL` + 环境锁 `FREE`（没有别的实例在跑）+ durable 标记确为 `blocked` 时，内存标志与 durable 标记**一起**复位（此前 `safeModeActive = safeModeActive || …` 只会置真：界面说「无待处理事项」而写操作仍被 423 挡着，且下次启动复发）。判据抽成纯函数 `resolveStartupSafeMode`；`LOCKED`（别人持锁）/ 残留锁 / `unknown` 标记一律不动。
+> - **不做什么（口径）**：`autosync-apply` / `import-apply` 这类**会真的改用户配置**的通道一律保持原保守路径；`probeExternal` 只在 journal 里确实有指纹时才做真实只读探测，无指纹仍是 `unknown`；零步骤的 `sync-push` 老残留仍判 opaque NEEDS_ATTENTION（它在当时那条通道上不可自证）。
+> - **护栏**：`src/core/reconcile.test.ts`（两类放行 + 六类对照都必须保持保守）、`src/core/startup-barrier.test.ts`（判据矩阵 7 条）、`src/core/phase3-p2b-fingerprint.test.ts`（probeExternal 六种形状）。
+
+> **A crash residue can no longer hold SAFE MODE forever: only the shapes that can prove they never wrote user config are released** (issue #87, user report):
+> - **Symptom**: after the host is **force-killed** (not Ctrl+C / a graceful exit), the next start keeps the "configuration changes are protected" banner — the record has `snapshotId: null`, so "Run recovery" stays greyed out, "Confirm" returns 400 and "Retry" is rejected as needs-attention; the only way out is the button whose meaning is "give up". It **reappears after every crash**.
+> - **Root cause**: production `probeExternal` is a constant returning `'unknown'`, so every external step lands in the unprovable branch; `runExternalIntent` writes the external step as `status:'planned'` with no fingerprints and the success path only advances the journal (never the step), so a step that actually finished is still unprovable; and the crash catch sets durable SAFE MODE unconditionally.
+> - **Fix (release only self-provable shapes; the "unprovable" boundary is not relaxed)**: a new "self-provable residue" gate in `reconcile`, placed **after** the live-owner / ownership-binding / environment-fingerprint trust gates and **before** the terminal and step-state analysis, and **limited to `backup-schedule`** — that path (`doExport` in `backup-scheduler`) only writes an archive into `<dataDir>/exports/`, writes the plugin's own scheduler state, and prunes old auto archives; it **never touches user config**, so whether it ran is irrelevant to "is my configuration half-applied". The shape gate is all-or-nothing: state in {APPLYING, NEEDS_ATTENTION}, no `snapshotId`, `commit.at` null, rollback neither attempted nor partially compensated, recovery not attempted, every step `planned` with `appliedAt` null. On a hit: APPLYING/NEEDS_ATTENTION → RECOVERED → completed, with `recovery-history: noop`.
+> - **Startup verdict reset**: the classification is authoritative for this boot — when it is `NORMAL`, the environment lock is `FREE` (no other instance running) and the durable marker really was `blocked`, both the in-memory flag and the durable marker are cleared together (previously `safeModeActive = safeModeActive || …` could only ever set it true, leaving writes blocked by 423 while the UI said there was nothing to do). The criterion is a pure function, `resolveStartupSafeMode`; `LOCKED`, a stale lock, and an `unknown` marker are all left untouched.
+> - **What is deliberately not done**: channels that really do mutate user config (`autosync-apply`, `import-apply`) keep the original conservative path; `probeExternal` only probes for real when the journal actually recorded fingerprints (otherwise `unknown`); a zero-step legacy `sync-push` residue is still opaque NEEDS_ATTENTION.
+> - **Guards**: `src/core/reconcile.test.ts` (two released classes plus six conservative controls), `src/core/startup-barrier.test.ts` (7-case criterion matrix), `src/core/phase3-p2b-fingerprint.test.ts` (six probeExternal shapes).
 
 > **回退后可以继续对话了：fork 改走 DSH 自己的 `sessionController.fork`（用户 2026-10-12 截图：`resume failed for session "session-1": SessionPersistenceNotFoundError`）**：
 > - **症状**：回退后想接着聊，界面直接报 `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)` —— 新对话根本发不出消息。

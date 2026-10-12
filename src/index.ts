@@ -104,7 +104,7 @@ import { activeProxySummary } from './utils/proxy.ts'
 import { listRecursiveFollowingLinks } from './utils/recursive-walk.ts'
 import { Phase3Recovery, TransactionRecoveryRequiredError, mapLockStateForStartup } from './core/phase3-host.ts'
 import type { JournalRunContext } from './core/phase3-host.ts'
-import { classifyStartup, FAIL_CLOSED_STARTUP } from './core/startup-barrier.ts'
+import { classifyStartup, FAIL_CLOSED_STARTUP, resolveStartupSafeMode } from './core/startup-barrier.ts'
 import type { MutationLockPort } from './utils/env-lock.ts'
 import type { RecursiveListing } from './utils/recursive-walk.ts'
 import { GitTransport } from './sync/git/git-transport.ts'
@@ -4070,7 +4070,19 @@ export function apply(ctx: Context, config?: Config): void {
       })
       const { state } = await startupState.classify()
       startupStateResolved = true
-      phase3Recovery.safeModeActive = phase3Recovery.safeModeActive || ['RECOVERY_REQUIRED', 'NEEDS_ATTENTION', 'UNKNOWN_STATE'].includes(state.kind)
+      // issue #87：分类结论才是本轮权威。NORMAL 且没有活锁者 ⇒ 上一轮留下的 durable SAFE MODE 是**陈旧标记**
+      // （没有任何未决 journal 能解释它），必须连内存标志一起复位：只复位内存会让本会话写操作继续被 423 挡着
+      // （界面却说「无待处理事项」），只复位标记又会在下一次 probe 时重新置起（标记跨重启生效）。
+      const safeModeVerdict = resolveStartupSafeMode({
+        kind: state.kind,
+        lockState: mapLockStateForStartup(lockInsp.state),
+        currentlyBlocked: phase3Recovery.safeModeActive,
+      })
+      phase3Recovery.safeModeActive = safeModeVerdict.blocked
+      if (safeModeVerdict.clearStaleMarker) {
+        await phase3Recovery.clearSafeMode().catch(() => undefined)
+        host.log.info('Phase 3 启动分类 NORMAL：上一轮遗留的 SAFE MODE 标记已复位（无未决事务、无活锁者）')
+      }
       shouldStartSchedulers = (state.kind === 'NORMAL')
       if (state.kind === 'RECOVERY_REQUIRED' || state.kind === 'NEEDS_ATTENTION') {
         host.log.warn(`Phase 3 ${state.kind}：上次 destructive operation 崩溃残留，需显式恢复；destructive 调度器未启动（read-only host 存活）`)

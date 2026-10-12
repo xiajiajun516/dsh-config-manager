@@ -68,6 +68,28 @@ test('verifyStepFingerprint：本地文件 step 真实磁盘指纹判定', async
   assert.equal(await hooks.verifyStepFingerprint({ adapter: 'plugins', ref: 'plugin:@x', kind: 'Install', external: true, beforeFp: null, afterFp: null, status: 'planned', appliedAt: null }), 'unable');
 });
 
+test('issue #87 probeExternal：有指纹时做真实只读探测；证不出来一律 unknown（默认保守语义不变）', async (t) => {
+  const dir = tmp(t);
+  const recovery = await makeRecovery(dir);
+  const target = path.join(dir, 'artifact.bin');
+  const fpA = sha256Hex(Buffer.from('A'));
+  const fpB = sha256Hex(Buffer.from('B'));
+  const step = (beforeFp: string | null, afterFp: string | null, ref = target): import('./journal.ts').JournalStep => ({
+    adapter: 'plugins', ref, kind: 'Install', external: true, beforeFp, afterFp, status: 'planned', appliedAt: null,
+  });
+  const hooks = recovery.recoveryHooks;
+
+  fssync.writeFileSync(target, 'A');
+  assert.equal(await hooks.probeExternal(step(fpA, fpB)), 'not-installed', '磁盘仍等于 beforeFp → 可自证未装');
+  fssync.writeFileSync(target, 'B');
+  assert.equal(await hooks.probeExternal(step(fpA, fpB)), 'installed', '磁盘等于 afterFp → 已装');
+  fssync.writeFileSync(target, 'C');
+  assert.equal(await hooks.probeExternal(step(fpA, fpB)), 'unknown', '与两个指纹都不符 → unknown（绝不猜）');
+  assert.equal(await hooks.probeExternal(step(null, null)), 'unknown', '无指纹（runExternalIntent 的真实形态）→ unknown');
+  assert.equal(await hooks.probeExternal(step(fpA, fpB, '')), 'unknown', 'ref 为空 → unknown');
+  assert.equal(await hooks.probeExternal(step(fpA, fpB, path.join(dir, 'missing.bin'))), 'unknown', '读失败 → unknown');
+});
+
 // ---------- 2. recordStep 持久化 ----------
 
 test('runJournaled journalCtx.recordStep：文件/外部 step 落 journal', async (t) => {

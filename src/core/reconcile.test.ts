@@ -452,3 +452,120 @@ test('t37：Phase3Recovery.refreshSafeMode 消费三态（unknown → isBlocked 
   assert.equal(recovery.lastSafeModeState, 'clear', '标记已清除 → 刷新后仍为 clear');
 });
 
+// ---------- issue #87：可自证的崩溃残留自动放行 ----------
+
+function backupOp(id: string, state: OperationJournal['state'] = 'APPLYING'): OperationJournal {
+  const j = createJournalEntry('backup-schedule', { operationId: id, ownerInstanceId: 'o1', lockId: 'l1', packageVersion: '0.1.71', environmentFingerprint: FP }, '2026-01-01T00:00:00.000Z');
+  j.state = state;
+  return j;
+}
+function backupExtStep(status: JournalStep['status'] = 'planned'): JournalStep {
+  return { adapter: 'backup', ref: 'exports', kind: 'Backup', external: true, beforeFp: null, afterFp: null, status, appliedAt: null };
+}
+const unknownProbe: Partial<ReconcileProbeHooks> = { probeExternal: async () => 'unknown' };
+
+test('issue #87：定时备份残留（planned external backup step + 无快照）→ noop 自动放行，不再永久占 SAFE MODE', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d1';
+  const j = backupOp(id);
+  j.plannedSteps = ['ext'];
+  j.steps = { ext: backupExtStep() };
+  await store.create(j);
+  // 生产形态：external step 无指纹 ⇒ probe 恒 unknown（修复前正是这一条把它顶成 needs-attention）
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'noop');
+  assert.equal(out.safeModeRequired, false);
+  assert.equal(await store.readSafeMode(), false, '不得写 durable SAFE MODE');
+  assert.equal((await store.load(id))?.state, 'RECOVERED');
+  assert.deepEqual(await store.scanActive(), [], '必须规整出 active');
+});
+
+test('issue #87：定时备份残留（一个 step 都没登记）→ noop（该通道先落 step 再调 fn，无 step ⇒ fn 未开始）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d2';
+  await store.create(backupOp(id));
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'noop');
+  assert.equal(out.safeModeRequired, false);
+});
+
+test('issue #87 对照：同样 external 形状但 operationType 会改用户配置（import-apply）→ 仍 NEEDS_ATTENTION', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d3';
+  const j = op(id, 'APPLYING');
+  j.plannedSteps = ['ext'];
+  j.steps = { ext: backupExtStep() };
+  await store.create(j);
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention', '只放行 artifact-only 通道，绝不按形状普放');
+  assert.equal(out.safeModeRequired, true);
+});
+
+test('issue #87 对照：定时备份但 step 已 applied/非 planned → 保持保守', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d4';
+  const j = backupOp(id);
+  j.plannedSteps = ['ext'];
+  j.steps = { ext: { ...backupExtStep('done'), appliedAt: '2026-01-01T00:00:01.000Z' } };
+  await store.create(j);
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention');
+  assert.equal(out.safeModeRequired, true);
+});
+
+test('issue #87 对照：定时备份但 step 不是 backup 适配器（可能装插件）→ 保持保守', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d5';
+  const j = backupOp(id);
+  j.plannedSteps = ['p1'];
+  j.steps = { p1: extStep('planned') };
+  await store.create(j);
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention');
+  assert.equal(out.safeModeRequired, true);
+});
+
+test('issue #87 对照：定时备份但已有 snapshotId（可回滚）→ 走原 rollback 路径，不判 noop', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d6';
+  const j = backupOp(id);
+  j.snapshotId = '00000000-0000-4000-8000-0000000000aa';
+  j.plannedSteps = ['ext'];
+  j.steps = { ext: backupExtStep() };
+  await store.create(j);
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention');
+  assert.equal(out.safeModeRequired, true);
+});
+
+test('issue #87 对照：ownership binding 不匹配 → 早于自证门的信任门先拦（不越权接管）', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d7';
+  const j = backupOp(id);
+  j.plannedSteps = ['ext'];
+  j.steps = { ext: backupExtStep() };
+  await store.create(j);
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, { ...env, expectedOwnershipInstanceId: 'someone-else' });
+  assert.equal(out.decisions[0]!.kind, 'needs-attention');
+  assert.match(out.decisions[0]!.reason, /binding|ownerInstanceId/i);
+});
+
+test('issue #87 对照：零步骤的 sync-push（非 artifact-only 通道）→ 保持 opaque NEEDS_ATTENTION', async (t) => {
+  const dir = tmp(t);
+  const store = mkStore(dir);
+  const id = '00000000-0000-4000-8000-0000000000d8';
+  const j = createJournalEntry('sync-push', { operationId: id, ownerInstanceId: 'o1', lockId: 'l1', packageVersion: '0.1.71', environmentFingerprint: FP }, '2026-01-01T00:00:00.000Z');
+  j.state = 'APPLYING';
+  await store.create(j);
+  const out = await reconcileActive(store, { ...hooks(), ...unknownProbe }, env);
+  assert.equal(out.decisions[0]!.kind, 'needs-attention');
+  assert.equal(out.safeModeRequired, true);
+});
+

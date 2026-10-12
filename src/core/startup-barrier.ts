@@ -58,6 +58,33 @@ export function classifyStartup(opts: {
   };
 }
 
+/**
+ * 启动分类结束后如何处置 SAFE MODE（issue #87，单一判据，便于单测；宿主 apply() 只消费结论）。
+ *
+ * 为什么需要它：`probeSafeModeSync()` 读的是**上一轮**留下的 durable 标记，而分类结论才是本轮权威。
+ * 分类判 `NORMAL` ⇒ 没有任何未决 journal 能解释那个标记 ⇒ 它是陈旧标记，必须**同时**复位内存标志与
+ * durable 标记 —— 只复位内存会让本会话的写操作继续被 423 挡着（界面却说「无待处理事项」），只复位标记
+ * 又会在下一次 probe 时重新置起（标记跨重启生效）。
+ *
+ * 为什么要求 `lockState === 'FREE'`：`LOCKED` 且无未决 journal 时分类同样返回 NORMAL，但那只说明
+ * **另一个存活实例**正在持有环境锁 —— 此刻清标记等于替别人解除保护。**只有确认没有活锁者才清。**
+ *
+ * 为什么要求 `currentlyBlocked`（即 probe 读到 durable 标记确实是 'blocked'）：标记为 `'unknown'`
+ * （存在但读不出/布局不可信）时不在这里清 —— 那属于无法判定，既不假装已解除，也不假装没看见；
+ * 它本会话不阻断的语义由 `probeSafeModeSync` 的既有约定承担。
+ */
+export function resolveStartupSafeMode(input: {
+  kind: StartupRecoveryState['kind']
+  lockState: 'LOCKED' | 'STALE_LOCK_DETECTED' | 'UNKNOWN_STATE' | 'FREE'
+  /** 本轮 probe 之前的内存标志（probeSafeModeSync 的结论） */
+  currentlyBlocked: boolean
+}): { blocked: boolean; clearStaleMarker: boolean } {
+  const staleMarker = input.kind === 'NORMAL' && input.lockState === 'FREE' && input.currentlyBlocked
+  if (staleMarker) return { blocked: false, clearStaleMarker: true }
+  const forceBlocked = input.kind === 'RECOVERY_REQUIRED' || input.kind === 'NEEDS_ATTENTION' || input.kind === 'UNKNOWN_STATE'
+  return { blocked: input.currentlyBlocked || forceBlocked, clearStaleMarker: false }
+}
+
 export interface StartupSchedulers {
   start(): void;
 }

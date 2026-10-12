@@ -213,7 +213,19 @@ export class Phase3Recovery {
         if (step.beforeFp !== null && fp === step.beforeFp) return 'before-match';
         return 'none';
       },
-      probeExternal: async () => 'unknown',
+      // issue #87：external step 的**真实只读探测**（仅在 journal 里确实记录了指纹时才可能得出结论）。
+      // 语义仍是「证不出来就说 unknown」：ref 为空 / 无指纹 / 读失败 / 与两个指纹都不符 → unknown。
+      // 注意：runExternalIntent 目前写入的 external step 恒无指纹（beforeFp/afterFp 皆 null），
+      // 对它们本探测必然返回 unknown —— 那是刻意的，放行判断在 reconcile 的「可自证残留」门（独立判据）。
+      probeExternal: async (step) => {
+        if (step.ref === '' || step.beforeFp === null || step.afterFp === null) return 'unknown'
+        let data: Buffer
+        try { data = await fs.readFile(step.ref) } catch { return 'unknown' }
+        const fp = sha256Hex(data)
+        if (fp === step.afterFp) return 'installed'
+        if (fp === step.beforeFp) return 'not-installed'
+        return 'unknown'
+      },
       snapshotExists: async (snapshotId, binding) => {
         if (snapshotExists === undefined) return false; // 未注入 → 保守 false
         return snapshotExists(snapshotId, binding);

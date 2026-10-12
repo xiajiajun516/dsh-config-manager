@@ -146,3 +146,17 @@
   3. 正文位要先探形态（`ctx.slots.spec('sidebar.right.pane.tab')` 的 `kind === 'keyed'`）：0.1.x 没有这个槽位，硬注册会把 `slots.inject` 回调打挂。
 - **本插件落点**：地址 `dsh-resource://cm-rollback-diff/<pointId>/<encodeURIComponent(绝对路径)>`（id 与路径**都编码** ⇒ Windows 盘符/反斜杠不进地址正文）；类型与正文注册在 `src/client/index.ts`，纯逻辑 + 收窄在 `src/client/chat/rollback-diff-tab.ts`（bind 与形态探测都有单测）；拿不到侧栏能力时**降级为弹窗内展示**同一份差异并说明原因 —— 绝不假装打开过。
 - **未验证（如实）**：本机没有运行「带本次改动的构建」的实例（`~\.dsh\profiles\desktop` 装的是发布版 0.1.71，不含回滚族），所以「点查看 → 右侧栏真的出现标签页」**未经真机复核**；证据止于源码级契约核实 + 纯函数单测 + typecheck/全量测试/构建。
+## 「崩溃前根本没写过」的残留永久占 SAFE MODE（2026-10-12，issue #87 源码核实）
+
+- **触发**：宿主被**强制结束**（TerminateProcess 级，非 Ctrl+C / 非优雅退出）后，下次启动常驻 SAFE MODE。真机残留 4 条（用户侧 `transactions/quarantine/`）全部 `snapshotId: null` ⇒「执行恢复」永远灰着，唯一出路是语义为「放弃」的那颗按钮。
+- **三段根因（源码逐条核实）**：
+  1. `src/core/phase3-host.ts` 的 `probeExternal: async () => 'unknown'` 是常量 ⇒ `reconcile` 里每个 external step 必落「不可证明」；`ReconcileProbeHooks` 接口本身完备（5 种取值），只是宿主侧没实现。
+  2. 同一文件 `runExternalIntent` 写 external step 时固定 `status:'planned'` / `beforeFp: null` / `afterFp: null` / `appliedAt: null`，成功路径只把 journal 推到 `COMMITTED`，**从不回写 step** ⇒ 即使它跑完了也无从判定。
+  3. `runExternalIntent` 的 catch 无条件 `writeSafeMode(true)`；与上面两条叠加 ⇒ 一次「备份刚开始就被杀」= `snapshotId:null` + planned external step + durable 标记。
+- **第四段（容易漏）**：`src/index.ts` 的启动分类处置是 `safeModeActive = safeModeActive || kind ∈ {RECOVERY_REQUIRED, NEEDS_ATTENTION, UNKNOWN_STATE}` —— **只会置真**。分类判 NORMAL、durable 标记仍在时，本会话写操作继续被 423 挡着（界面却说「无待处理事项」），且下次启动复发。
+- **修法（只放行可自证的形状）**：`reconcile` 的新自证门**只对 `backup-schedule`** 生效（`doExport` 只写 `exports/` 归档与插件调度状态，从不改用户配置）；形状门 = state ∈ {APPLYING, NEEDS_ATTENTION} + 无 snapshotId + `commit.at` 空 + rollback 未尝试且无 entryDone + recovery 未尝试 + 全部 step `planned`/`appliedAt` 空；位置在 live-owner / ownership-binding / env-fingerprint 三道信任门**之后**。
+- **刻意不做**：`autosync-apply` / `import-apply` 这类**会改用户配置**的通道永远保守；`probeExternal` 只在 journal 真有指纹时才做真实只读探测（无指纹仍 `unknown`）；零步骤的 `sync-push` 老残留仍判 opaque NEEDS_ATTENTION —— 当前 `runExternalIntent` 先落 step 再调 `fn`，但 `runJournaled` 的非 deferred 分支是先转 APPLYING 再调 `fn`，**零 step 不等于零副作用**，不能按形状普放。
+- **启动复位判据**：`resolveStartupSafeMode`（`src/core/startup-barrier.ts`）：`NORMAL` + 环境锁 `FREE` + 标记确为 `blocked` → 内存标志与 durable 标记一起清；`LOCKED`（别人持锁）/ 残留锁 / `unknown` 标记一律不动。
+- **测试**：`src/core/reconcile.test.ts`（2 放行 + 6 对照）、`src/core/startup-barrier.test.ts`（7 条判据矩阵）、`src/core/phase3-p2b-fingerprint.test.ts`（probeExternal 6 种形状）。
+- **未验证（如实）**：issue 报告者用真实数据目录副本跑过 11 例判定矩阵；本次修复**未**回放真实 quarantine 残留（本机无真实样本），证据止于源码核实 + 单测矩阵 + typecheck / 全量测试。
+

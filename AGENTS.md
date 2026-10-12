@@ -57,7 +57,7 @@ tests/        node --test 集成测试 · docs/（design/spec/seo/handoff/lesson
 - **同步通道的加密/解密密码是唯一例外**：不勾选即删除、不留空；只存 DSH credentials 专用槽位（`DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD_<GIT|WEBDAV>` 等），值绝不写入 `sync-*.json`/响应/日志/浏览器；请求体优先于已存、删除优先于写入。
 - 同步凭据走 DSH credentials 槽位引用（`SYNC_CREDENTIAL_REF` 等），`passwordConfigured` 仅布尔标记。
 - **备份形态判定只有一份实现**：`src/security/container-kind.ts`（只读前 4 字节，读不到回落 `'zip'`）；未解锁容器一律 400 `encrypted-container`；`src/client/**` 只能 import 零依赖的 `utils/shared-constants.ts` 拿码。
-- **SAFE MODE**：落盘即跨重启生效；解除判据只有 `resolveSafeMode` 一份（扫描失败 fail-closed）；`GET /recovery/status` 回传 `safeMode.blocked/clearable`；解除端点不过 mutation gate，但有未解决 incident 必拒。
+- **SAFE MODE**：落盘即跨重启生效；解除判据只有 `resolveSafeMode` 一份（扫描失败 fail-closed）；启动侧陈旧标记复位 = `resolveStartupSafeMode`；`GET /recovery/status` 回传 `safeMode.blocked/clearable`；解除端点不过 mutation gate，但有未解决 incident 必拒。
 - **敏感值形状判定是全仓单一来源**（`matchSecretValuePattern`）：`bearer` 大小写不敏感，厂商前缀（`sk-`/`AKIA`/`ghp_`）保持大小写敏感 —— **别顺手加 `i`**（G-36）。
 - **sessionStorage 白名单**：`run-store.ts` `toPersistedState()` 解构剔除 `password/passwordConfirm/secretInputs/decryptPassword/decryptRefs/archiveUnlocked/conflictCollector`；新敏感字段不显式放行即不落盘。
 
@@ -224,6 +224,7 @@ UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应�
 - **宿主服务的方法抽出来必须 bind 回服务对象**（真机 2026-10-11：`uiWorkspace.openSession` 丢 receiver ⇒ `this.lifetime` 为 undefined ⇒ 回退成功但子会话永远打不开）；三档降级判据不动，只补 receiver。证据 → `docs/lessons/recovery-console.md`。
 - **回退 fork 必须走 DSH 自己的 `sessionController.fork`（uuid id + 落盘 + 归位），绝不直接 `SessionStore.fork`**（只在内存造会话 ⇒ 继续对话报 `SessionPersistenceNotFoundError`）；归位三档与失败如实上屏 → `docs/lessons/recovery-console.md`。
 - **「查看」进 DSH 右侧栏**：`sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、抽出方法必须 bind、补试幂等、形态不符即不注册，缺能力降级为弹窗内展示 → `docs/lessons/recovery-console.md`。
+- **崩溃残留只放行可自证形状**：自证门仅 `backup-schedule` → `docs/lessons/recovery-console.md`。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
 - **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补。
