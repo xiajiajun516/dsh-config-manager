@@ -201,6 +201,20 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+> **会话标题的第三层兜底：缓存与逐会话投影都没有时，直接读会话日志里的名字**（2026-10-12 用户要求「缓存里没有这条会话就自动读取这条会话的名字」）：
+> - 新增 `src/core/session-title.ts`：从会话日志的 **`session/title` 事件**（DSH 自己写进日志的标题事件，`data = { title, messageSeqs, source }`）里取这条会话的名字 —— 聚合缓存（`session_projcache.json`）与逐会话投影都查不到时（子代理会话 / 别的档案写的旧会话）的最后一份权威来源，**不从首条消息编造**。
+> - 有界且诚实：只读日志**前缀 1 MiB**（标题通常在开头几回合内生成；窗口外的读不到就回落显示会话 id）、同一个会话出现多条标题事件时取**最后一条**（用户改名压过自动标题）、按 `mtime + size` 缓存（日志增长后自动重读）、一次请求最多为 24 个会话做兜底、`unitId` 形状不符 / 越界一律不拼路径。
+> - 接线：`GET /recovery/rollback-points` 在 `applySessionTitles` 之后追加 `applySessionLogTitles`（只补仍缺标题的行）。
+> - **护栏**：`src/core/session-title.test.ts`（5 条：标题事件 / 多条取最后 / 空标题与形状不符回落 null / 目录缺失与越界 unitId / mtime+size 缓存失效 + 读盘上界）。
+> - **未验证**：没有浏览器点击取证。
+
+> **A third fallback for session titles: when neither the cache nor the per-session projection has the session, read the name straight from its log** (user request, 2026-10-12):
+> - New `src/core/session-title.ts`: it takes the conversation's name from the **`session/title` event** in the session log (DSH's own title event, `data = { title, messageSeqs, source }`) — the last authoritative source when both the aggregate cache (`session_projcache.json`) and the per-session projection miss the session (subagent sessions, older sessions written by another profile). It never invents a title from the first message.
+> - Bounded and honest: only the log's **first 1 MiB** is read (titles are normally written within the first few turns; anything beyond that window falls back to the session id), the **last** title event wins (a user rename beats the automatic title), results are cached by `mtime + size` (a growing log is re-read), at most 24 sessions are resolved per request, and a malformed or escaping `unitId` is never turned into a path.
+> - Wiring: `GET /recovery/rollback-points` runs `applySessionLogTitles` after `applySessionTitles` (it only fills rows that still have no title).
+> - **Guards**: `src/core/session-title.test.ts` (5 cases).
+> - **Not verified**: no browser click-through.
+
 > **回滚点台账：弹窗高度锁死 + 会话显示标题**（2026-10-12 用户要求）：
 > - **高度锁死 340px**（`.rollbackLedger` 的 `height: 340px` + 左栏 `height: 100%` + 右栏 `.rollbackPointsScroll` 吃掉剩余高度并内滚）：此前高度随内容变化，切到只有一两个回滚点的对话时弹窗变矮、居中重排 —— 用户看到的就是「整个页面抖动」。现在分栏区高度恒定，弹窗不再重排。
 > - **会话显示对话标题**：台账只记 `sessionId`（会话目录名），屏上一排 `session-<uuid>` 认不出哪条是自己的对话。宿主在 `GET /recovery/rollback-points` 上补 `title`（与 `/recovery/sessions` **同一份** DSH 会话缓存索引、同一套 `sessionIdKey` 归一化；`applySessionTitles` 放宽到「会话 id 可缺」），左栏与右栏组头**优先显示标题**、拿不到才回落 id（`title` 属性里同时给出 id 与工作区路径，信息一个不丢）；标题进界面前过 `redact()`。

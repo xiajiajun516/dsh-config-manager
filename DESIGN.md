@@ -514,7 +514,10 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   默认**新 → 旧**，顺序由 `rollbackPointGroups` 定死；选中态 `data-active` = 主色描边 + layer-2 底）+ `.rollbackLedgerMain`（右栏：选中那条对话的
   `.rollbackGroup` 组头 = `.rollbackGroupTitle` **优先显示标题** + 计数 `Badge` + `.rollbackGroupUnit` 右对齐省略的工作区路径 →
   `.rollbackPointsScroll`（`flex:1` + 自身内滚）内的 `.rollbackPoints`）→ `.rollbackPoint` 行卡。
-  标题来源 = 宿主侧 `applySessionTitles`（与 `/recovery/sessions` **同一份** DSH 会话缓存索引；读不到就不带该字段，界面回落显示 id —— 绝不编造）。
+  标题来源 = 宿主侧 `applySessionTitles`（与 `/recovery/sessions` **同一份**索引），三层依次兜底、**只增不改**：
+  ① 聚合缓存 `storages/session_projcache.json` → ② **逐会话投影** `storages/session_projcache/sessions/<名>.json`（按需读、mtime 缓存）
+  → ③ **会话日志的 `session/title` 事件**（`core/session-title.ts`：只读日志前缀 1 MiB、按 mtime+size 缓存、一次请求最多补 24 个会话）。
+  三层都读不到就不带该字段，界面回落显示会话 id —— **绝不从首条消息编造标题**。
   硬约定两条：① 行卡是**两行式**（`.rollbackPointTop` = 回合号 + 来源/告警徽章 + 右对齐的 `.rollbackPointActions`；
   `.rollbackPointMeta` = 时间 / 文件数 / 会话游标 / `.rollbackPointNote`），左侧 2px 语义色条按 `data-kind` 区分来源
   （`auto` = `--cm-ok` / `guard` = `--cm-info` / `unknown` = `--cm-text-3`）；② **长句只进 `title`**，屏上只放短标签键
