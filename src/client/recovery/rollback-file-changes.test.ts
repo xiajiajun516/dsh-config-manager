@@ -69,4 +69,5 @@ test('两处调用同一份渲染：聊天预览 + 设置页回滚卡预览（�
   assert.match(card, /view=\{fileView\}/, '查看通道必须显式接上（宿主没能力时不给假入口）')
   assert.match(card, /RollbackDiffPane state=\{inlineDiff\.state\}/, '设置页没有右侧栏：差异必须在弹窗内画出来')
   assert.match(card, /css\.planScroll/, '几百个文件的清单必须限高内滚')
+  assert.doesNotMatch(card, /rollbackPreviewRows\(/, '预览弹窗不再画工作区/会话计数面板（与聊天预览同一屏）')
 })

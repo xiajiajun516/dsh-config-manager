@@ -33,7 +33,6 @@ import {
   rollbackOutcome,
   rollbackPointGroups,
   rollbackPreviewGuidance,
-  rollbackPreviewRows,
   rollbackPreviewScope,
   rollbackPreviewVerdict,
   rollbackPreviewWarnings,
@@ -247,7 +246,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const storage = list?.storage ?? null
   const storageGuidance = rollbackGuidanceRows(storage?.guidance)
   const verdict = rollbackPreviewVerdict(preview)
-  const previewRows = rollbackPreviewRows(preview)
   // 点级告警 / 指引：引擎不给「属于哪一段」的键，故在面板级渲染一次（绝不猜归属）
   const previewWarnings = rollbackPreviewWarnings(preview)
   const previewGuidance = rollbackPreviewGuidance(preview)
@@ -501,49 +499,10 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
 
         {result === null && preview !== null && (
           <>
-            <div className={css.reportScroll + ' ' + css.rollbackScroll}>
-              <div className={css.rollbackPoints}>
-                {previewRows.map((row) => (
-                  <div key={row.state} className={css.rollbackPoint} data-kind="unknown">
-                    <div className={css.rollbackPointTop}>
-                      <Badge kind={row.available ? 'ok' : 'warn'}>{t(dyn(row.labelKey))}</Badge>
-                      {row.available && row.active && <span className={css.hint}>{t('rollback.preview.active')}</span>}
-                      {!row.available && (
-                        <span className={css.hint}>{t(dyn(row.reasonKey ?? rollbackCodeKey(null)))}</span>
-                      )}
-                    </div>
-                    {row.available && (
-                      <div className={css.rollbackPointMeta}>
-                        {row.counts.map((count) => (
-                          <span key={count.key}>{t(dyn(count.key), { n: count.n })}</span>
-                        ))}
-                        {row.cursor !== null && (
-                          <span>
-                            {t('rollback.preview.cursor', { from: row.cursor.from ?? '—', to: row.cursor.to ?? '—' })}
-                          </span>
-                        )}
-                        {row.cursorBytes !== null && (row.cursorBytes.now !== null || row.cursorBytes.target !== null) && (
-                          <span>
-                            {t('rollback.preview.cursorBytes', { now: row.cursorBytes.now ?? '—', target: row.cursorBytes.target ?? '—' })}
-                          </span>
-                        )}
-                        {row.turns !== null && <span>{t('rollback.preview.turns', { n: row.turns })}</span>}
-                        {/* S4：跳过 / 截断计数如实上屏（不因告警就禁用回退 —— 规格允许部分覆盖） */}
-                        {row.noticeKeys.map((key) => (
-                          <span key={key}>{t(dyn(key), { n: row.skippedCount })}</span>
-                        ))}
-                        {row.guidance.map((guide) => (
-                          <span key={guide.key + (guide.detail ?? '')}>
-                            {t(dyn(guide.key))}{guide.detail !== null ? ' — ' + guide.detail : ''}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
+            {/* 2026-10-13 用户要求「移除这个面板」：**工作区 / 会话计数面板整体删除** —— 与聊天里的
+                回退预览同一屏（那边同样没有计数面板）。逐行清单 + 顶部汇总（N 个文件 · +A · −D · 删除 K）
+                已经说清「这次回退会动什么」；计数散文会把决策信息埋掉（DESIGN.md §7 文案克制）。
+                键值仍留在字典里（删渲染不删键，本仓既有先例）；真出事时的告警 / 指引照旧渲染（见下）。 */}
             {/* 点级告警（宿主 preview.warnings：trackMissing / trackDegraded / protected…）：此前只渲染 result.warnings，导致「留点被跳过 / 被截断」在预览里完全不可见。 */}
             {previewWarnings.length > 0 && (
               <div className={css.rollbackWarnings}>
