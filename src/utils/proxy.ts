@@ -41,6 +41,15 @@ const PROXY_OFF_VALUES = new Set(['off', 'none', '0', 'false', 'disable', 'disab
 /** 隧道建立与单次请求的默认上限（避免代理不可达时无限挂起）。 */
 const DEFAULT_CONNECT_TIMEOUT_MS = 30_000
 
+/**
+ * 默认 User-Agent（issue #86）。
+ *
+ * node 原生 `http`/`https` **不会**像 undici 那样自动补 UA，而本模块正是「配了代理」时唯一
+ * 的出站通道 —— 于是同一份代码出现「不配代理能用、配了代理反而 403」（GitHub 前置层直接拒绝
+ * 无 UA 请求）。统一兜底使两条通道的请求语义一致；调用方显式传入时绝不覆盖。
+ */
+const DEFAULT_USER_AGENT = 'DSH-Config-Manager'
+
 /** 视为可跟随的重定向状态码（与 WebDAV 通道同一套语义） */
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 
@@ -301,9 +310,13 @@ export async function requestOnce(options: RawRequestOptions): Promise<RawRespon
   const payload = options.body === undefined
     ? undefined
     : Buffer.isBuffer(options.body) ? options.body : Buffer.from(options.body, 'utf8')
+  // 调用方显式传入的 User-Agent（大小写不敏感）优先；缺省补默认 UA（见 DEFAULT_USER_AGENT）。
+  const callerHeaders = options.headers ?? {}
+  const hasUserAgent = Object.keys(callerHeaders).some((key) => key.toLowerCase() === 'user-agent')
   const headers: Record<string, string> = {
     ...(payload !== undefined ? { 'content-length': String(payload.length) } : {}),
-    ...(options.headers ?? {}),
+    ...(hasUserAgent ? {} : { 'user-agent': DEFAULT_USER_AGENT }),
+    ...callerHeaders,
   }
 
   /** url 非 null → 以 URL 形态发起（node 自行解析 host/port/path/TLS）；否则按显式 options 发起。 */

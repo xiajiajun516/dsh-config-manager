@@ -34,18 +34,26 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
 }) {
   /** 重新克隆的二次确认（破坏性：丢弃未上行的本地提交） */
   const [recloneOpen, setRecloneOpen] = useState(false)
+  /** 本次发起的出口（relink / reclone）：请求在途时卡片按钮就地转加载态。
+   *  为什么必须有：reclone 要删目录 + 重新 clone（真机可达数十秒），此前点了只有 toast 在**结束**时才响，
+   *  用户无从判断是否正在执行，容易重复点击或以为没反应。 */
+  const [pending, setPending] = useState<'relink' | 'reclone' | null>(null)
   const stateKey = workdirStateKey(workDir)
   const badgeKind = workdirStateBadgeKind(stateKey)
   const facts = workDir !== undefined && 'facts' in workDir ? workDir.facts : null
 
   const reset = async (mode: 'relink' | 'reclone'): Promise<void> => {
     setRecloneOpen(false)
+    setPending(mode)
     try {
       await api.workdirReset(mode === 'reclone' ? { mode, confirm: true } : { mode })
       toast.ok(t(mode === 'relink' ? 'toast.workdirRelinked' : 'toast.workdirRecloned'))
       onChanged()
     } catch (err) {
       toast.error(t('toast.workdirResetFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
+    } finally {
+      // 无论成功/失败都要收掉加载态，否则按钮会永远转圈（状态重拉由 onChanged 负责）
+      setPending(null)
     }
   }
 
@@ -79,12 +87,12 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
       )}
       <div className={css.actionRowTop}>
         {needsWorkdirRelink(workDir) && (
-          <Button disabled={busy} onClick={() => { void reset('relink') }}>
+          <Button disabled={busy || pending !== null} loading={pending === 'relink'} onClick={() => { void reset('relink') }}>
             {t('workdir.relink')}
           </Button>
         )}
         {canRecloneWorkdir(workDir) && (
-          <Button variant="danger" disabled={busy} onClick={() => { setRecloneOpen(true) }}>
+          <Button variant="danger" disabled={busy || pending !== null} loading={pending === 'reclone'} onClick={() => { setRecloneOpen(true) }}>
             {t('workdir.reclone')}
           </Button>
         )}

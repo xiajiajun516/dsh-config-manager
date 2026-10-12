@@ -217,6 +217,20 @@ function classifyErrorCode(status: number, rateLimited: boolean): string {
   return `http_${status}`;
 }
 
+/** 非 JSON 错误体带进提示时的截断上限（避免把整页 HTML 灌进 UI） */
+const MAX_ERROR_BODY_CHARS = 200;
+
+/**
+ * 非 JSON 错误体 → 单行提示文本（GitHub 前置层拒绝无 User-Agent 的请求时就是**纯文本** 403，
+ * 只给状态码等于把唯一线索丢掉；issue #86）。压缩空白 + 截断，调用方仍会整体过 redact()。
+ */
+function plainErrorText(bodyText: string): string {
+  const collapsed = bodyText.replace(/\s+/g, ' ').trim();
+  return collapsed.length > MAX_ERROR_BODY_CHARS
+    ? `${collapsed.slice(0, MAX_ERROR_BODY_CHARS)}…`
+    : collapsed;
+}
+
 async function safeResponseText(response: Response): Promise<string> {
   try {
     return await response.text();
@@ -606,7 +620,8 @@ export class GitHubAuthRest {
           if (typeof m === 'string' && m !== '') ghMessage = m;
         }
       } catch {
-        // 非 JSON 错误体：只保留状态码
+        // 非 JSON 错误体：GitHub 的「缺 User-Agent」403 就是纯文本，正文比状态码可定位得多
+        ghMessage = plainErrorText(bodyText);
       }
     }
     const rateLimited = response.headers.get('x-ratelimit-remaining') === '0';

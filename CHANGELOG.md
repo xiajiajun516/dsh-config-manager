@@ -433,6 +433,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+> **点「重新克隆工作副本」不再无声无息：按钮当场转加载态**（用户 2026-10-12 反馈「点击后没有任何反馈，无法知晓是否正在加载」）：
+> - **症状**：工作副本卡上点「重新克隆工作副本」→ 确认后**整卡没有任何变化**（按钮既不变形也不禁用），唯一信号是整件事**做完之后**才跳出的 toast；而 `reclone` 要删目录 + 重新 clone（真机可达数十秒），用户既不知道它在跑，也容易怀疑没点上而重复点击。
+> - **改法**：`WorkDirCard` 自持在途态 `pending: 'relink' | 'reclone' | null` —— 请求发出即置位，两颗按钮走 `Button` 原语的 `loading`（自动前置 Spinner + `aria-busy`，文案不变），在途时**互相禁用**（防重复点击），`finally` 收位（失败也不留一个永远转圈的按钮；`relink` 是同一条链路的出口，一并覆盖）。
+> - **护栏**：`src/client/sync/SyncSettingsView.test.ts` 新增源码守卫（在途态判别式 / 两颗按钮按模式分派 `loading` / `disabled` 互斥 / `finally` 收位）—— 任一条回退即变红。
+
+> **"Clone the working copy again" is no longer silent: the button shows its loading state right away** (user report, 2026-10-12: clicking it gives no feedback at all, so I cannot tell whether it is loading):
+> - **Symptom**: on the working-copy card, 「重新克隆工作副本」 → confirm left the card **completely unchanged** (the button neither animated nor disabled); the only signal was a toast that appeared *after* the whole thing finished. A reclone deletes the directory and clones again (tens of seconds on a real machine), so the user could not tell it was running — and could easily click again, doubting the first click landed.
+> - **Fix**: `WorkDirCard` now owns an in-flight state `pending: 'relink' | 'reclone' | null`; it is set as soon as the request starts, both exits render the `Button` primitive's `loading` (automatic leading Spinner + `aria-busy`, label unchanged) and disable each other while one is running (no double submits), and a `finally` clears it — a failure never leaves the button spinning forever. `relink` is the same handler, so it is covered too.
+> - **Guard**: new source-level assertions in `src/client/sync/SyncSettingsView.test.ts` (discriminated in-flight state, per-mode `loading` on both buttons, mutual `disabled`, `finally` reset) — reverting any single one turns it red.
+
 > **回退后可以继续对话了：fork 改走 DSH 自己的 `sessionController.fork`（用户 2026-10-12 截图：`resume failed for session "session-1": SessionPersistenceNotFoundError`）**：
 > - **症状**：回退后想接着聊，界面直接报 `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)` —— 新对话根本发不出消息。
 > - **根因**：回退此前直接调底层 `ctx.get('sessions').fork(...)`（宿主 `SessionStore.fork`）。它只在**内存 store** 里造一条会话记录（id 还是进程内计数，第一个就是 `session-1`），**不经过 `ctx.agents.create`** ⇒ 没有 agent、没有落盘。用户发下一条消息时宿主 `resolve → resume → sessionQuery.observeSession` 去**磁盘**上找它 ⇒ `SessionPersistenceNotFoundError`。DSH 自己的 fork 走的是 `ctx.agents.create({sessionId: uuid, seed, …})`，落盘与工作区归位一次到位。

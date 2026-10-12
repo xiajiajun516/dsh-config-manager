@@ -8,6 +8,7 @@
  *  - **真实回环服务器**：http 目标经代理走 absolute-form；https 目标走 CONNECT 隧道
  *    （校验 CONNECT 行、Proxy-Authorization、以及隧道内 TLS ClientHello 的 SNI）；
  *  - **子进程 + NODE_EXTRA_CA_CERTS** 的完整 https 端到端（自签 CA，openssl 生成；无 openssl 则跳过）；
+ *  - **User-Agent 兜底**（issue #86）：node 原生 http/https 不补 UA，缺省必补、显式传入不覆盖（两条通道一致）；
  *  - `NO_PROXY` 直连旁路；未配置代理时 `defaultFetcher` 原样返回全局 fetch（行为零变化）；
  *  - fetch 语义：跟随重定向、跨源剥离 authorization、303 降级 GET 丢 body、跳数上限。
  *
@@ -241,6 +242,30 @@ test('P7 NO_PROXY 命中 → 完全绕过代理（直连源站）', async (t) =>
   assert.equal(res.status, 200);
   assert.equal(prx.hits.length, 0, 'NO_PROXY 命中时代理不得收到任何请求');
   assert.equal(origin.seen.length, 1);
+});
+
+test('P13 请求头兜底 User-Agent（issue #86）：缺省必补、显式传入不覆盖、直连与经代理一致', async (t) => {
+  const prx = await startProxy();
+  const origin = await startOrigin();
+  t.after(async () => { await prx.close(); await origin.close(); });
+  const viaProxy: ProxyEnv = { httpsProxy: null, httpProxy: prx.url, noProxy: null };
+
+  // 1) 经代理：缺省 → 补默认 UA（GitHub 前置层就是靠它放行无 token 的请求）
+  await requestOnce({ url: `${origin.url}/ua-default`, env: viaProxy });
+  assert.equal(prx.hits[0]?.headers['user-agent'], 'DSH-Config-Manager', '经代理时缺省必须补 User-Agent');
+  assert.equal(origin.seen[0]?.headers['user-agent'], 'DSH-Config-Manager', 'UA 必须原样到达源站');
+
+  // 2) 经代理：调用方显式传入（大小写混写）→ 绝不覆盖
+  await requestOnce({
+    url: `${origin.url}/ua-explicit`,
+    headers: { 'User-Agent': 'custom-agent/1.0' },
+    env: viaProxy,
+  });
+  assert.equal(origin.seen[1]?.headers['user-agent'], 'custom-agent/1.0', '显式 UA 不得被默认值覆盖');
+
+  // 3) 直连（无代理）：同一份请求语义 —— 不再出现「配了代理反而坏」这种反直觉差异
+  await requestOnce({ url: `${origin.url}/ua-direct`, env: NO_PROXY_ENV });
+  assert.equal(origin.seen[2]?.headers['user-agent'], 'DSH-Config-Manager', '直连同样必须有 UA');
 });
 
 /**

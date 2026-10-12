@@ -111,6 +111,20 @@ test('t42: 通道卡必须是渲染函数（内联组件 = 每次渲染新类型
   assert.match(viewSource, /\{renderChannelCard\('webdav'\)\}/, 'webdav 通道卡必须经渲染函数调用')
 })
 
+test('工作副本「重建」按钮必须在请求在途时转加载态（用户报告：点了没有任何反馈）', () => {
+  // 真机用户报告：点「重新克隆工作副本」后整卡没有任何变化，只有结束时才跳出 toast —— reclone 要删目录 +
+  // 重新 clone（可达数十秒），期间用户无从判断是否在执行。守卫钉住三条：在途态由本卡自持、两个出口都转
+  // 加载态并互相禁用、失败也必须收掉加载态；任一条回退即变红。
+  const src = readSource(fileURLToPath(new URL('./WorkDirCard.tsx', import.meta.url)))
+  assert.match(src, /const \[pending, setPending\] = useState<'relink' \| 'reclone' \| null>\(null\)/, '在途态必须是本卡自持的 relink/reclone 判别式状态')
+  assert.match(src, /loading=\{pending === 'reclone'\}/, '重新克隆按钮必须在自身请求在途时显示加载态')
+  assert.match(src, /loading=\{pending === 'relink'\}/, '重指向按钮同理')
+  assert.match(src, /disabled=\{busy \|\| pending !== null\}/, '在途时必须同时禁用两个出口（防重复点击）')
+  const start = src.indexOf('const reset = async')
+  const body = src.slice(start, start + 900)
+  assert.match(body, /finally \{[\s\S]*setPending\(null\)/, '失败也必须收掉加载态（否则按钮会永远转圈）')
+})
+
 test('t42: 断开 git 通道必须同步复位内存登录态（令牌槽位被删 = 已登出，否则登录入口恒隐藏）', () => {
   // 真机用户报告：点「断开配置」删掉的是 SYNC_CREDENTIAL_REF —— 与 GitHub 登录**同一个槽位**，
   // 但 githubSignedIn 当时不复位，登录块恒隐藏，用户以为要重启 profile 才能重新登录。

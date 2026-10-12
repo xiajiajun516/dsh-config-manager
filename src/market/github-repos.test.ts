@@ -343,6 +343,29 @@ test('github-repos: listRepos 401 → GitHubApiError/unauthorized（token 失效
   });
 });
 
+test('github-repos: 纯文本 403 → 错误消息带出正文（issue #86：缺 UA 的提示不再被丢成只剩状态码）', async () => {
+  const plain = 'Request forbidden by administrative rules. Please make sure your request has a User-Agent header (https://docs.github.com/).\n\n';
+  const { rest } = installRest(() => new Response(plain, {
+    status: 403,
+    headers: { 'x-ratelimit-remaining': '4990' },
+  }));
+  const err = await rest.listRepos().then(() => null, (e: unknown) => e as GitHubApiError);
+  assert.ok(err instanceof GitHubApiError);
+  assert.equal(err.status, 403);
+  assert.equal(err.code, 'forbidden');
+  assert.match(err.message, /HTTP 403/, '状态码仍要在');
+  assert.match(err.message, /User-Agent header/, '纯文本正文必须带出（否则用户无从定位）');
+  assert.ok(!err.message.includes('\n'), '提示必须是单行');
+});
+
+test('github-repos: 超长纯文本错误体被截断（不把整页 HTML 灌进界面）', async () => {
+  const { rest } = installRest(() => new Response('x'.repeat(5000), { status: 403 }));
+  const err = await rest.listRepos().then(() => null, (e: unknown) => e as GitHubApiError);
+  assert.ok(err instanceof GitHubApiError);
+  assert.ok(err.message.length < 400, `错误消息必须被截断，实际 ${err.message.length} 字符`);
+  assert.match(err.message, /…$/u);
+});
+
 /* ---------------------------------------------------------------- ensureFork */
 
 test('github-repos: ensureFork 直查用户同名仓库命中已 fork（fork:true + parent 匹配）→ 复用，零创建', async () => {
