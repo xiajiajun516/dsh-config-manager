@@ -170,7 +170,8 @@ export class RecoveryApi implements RecoveryPort, RollbackPointPort {
    * GET /recovery/rollback-points/<id>/preview：**只读预览（零写入）**。
    *
    * 回传两态将覆盖多少项、其中多少项内容不同、多少项当前已不存在、多少项是该点**未记录**的
-   * （**只报告，绝不删除**），以及会话边界（from → to）与回合号；`canRestore` / `canRemove`
+   * （`removals` = 会被删除的、`createdSkipped` = 按安全判据拒删的；两者都只是**读回来的清单**，
+ * 本方法零写入），以及会话边界（from → to）与回合号；`canRestore` / `canRemove`
    * 是宿主给出的权威判定，界面据此决定按钮可用性（展示判定见 `src/ui/rollback-view.ts`）。
    */
   async rollbackPointPreview(id: string): Promise<RollbackPreviewResult> {

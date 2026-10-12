@@ -121,6 +121,8 @@ export const ROLLBACK_CODES: readonly string[] = [
   'record-not-found',
   'record-incomplete',
   'invalid-input',
+  // 待删的「该点未记录」路径超上限 ⇒ 整套拒绝、零写入（绝不删一半；顶层 code，不是泛化的 invalid-input）
+  'created-removals-limit',
   'no-boundary',
   'storage-unavailable',
   'mutation-locked',
@@ -341,7 +343,9 @@ export type RollbackCount = number | readonly string[]
  *
  * 与引擎（`src/core/rollback-point.ts` 的 `RollbackPreviewFileStatus`）**逐字同形**：
  *  · `overwrite` = 覆盖已有文件；`create` = 当前不存在（回退会重新创建）；
- *  · `delete` **当前永远不会出现**：回退只覆盖记录在案的路径、绝不删除任何文件（引擎 R-28），
+ *  · `delete` **不由 `files[]` 产出**：整文件删除走**另一条**清单
+ *    （`RollbackWorkspacePreview.removals` = 会删的，`createdSkipped` = 拒删的）——
+ *    那些路径不在该点的记录里，所以既不进这份逐文件统计、也读不出前后对照。
  *    保留该取值只为契约形状向前兼容 —— 界面不得为它编文案。
  */
 export type RollbackPreviewFileStatus = 'overwrite' | 'create' | 'delete'
@@ -373,11 +377,30 @@ export interface RollbackWorkspacePreview {
   different?: RollbackCount
   /** 记录里的文件当前已不存在（回退会重新创建） */
   missing?: RollbackCount
-  /** 该点之后**新建**的内容：只报告，绝不删除（数字） */
+  /**
+   * 该点**未记录**的条目总数。**不是**「之后新建」，也**不是**「会被删除」——
+   * 会被删的是 {@link removals} / {@link removalsCount}。
+   */
   createdAfter?: RollbackCount
-  /** 同上，但带路径清单（宿主上限 20 条） */
+  /** 该点**未记录**的路径清单（含被拒删的；宿主上限 20 条）—— **不是**删除清单 */
   leftovers?: string[]
   leftoversTruncated?: boolean
+  /** **会被删除**的路径（= 未记录 + 过了安全判据；宿主上限 20 条） */
+  removals?: string[]
+  /** 会被删除的**真实总数**（不受清单上限影响） */
+  removalsCount?: RollbackCount
+  /** 删除逐条清单不完整（条数超上限 / 遍历被截断） */
+  removalsTruncated?: boolean
+  /** 按安全判据**拒删**的路径（.git / node_modules / 数据区 / 越界 / 过大 / 捕获不完整时的全部候选） */
+  createdSkipped?: string[]
+  /** 拒删路径的**真实总数** */
+  createdSkippedCount?: RollbackCount
+  createdSkippedTruncated?: boolean
+  /**
+   * 非 null = 该点捕获**不完整** ⇒ **一条都没删**（安全拒删：绝不误删既有文件）。
+   * 界面必须如实说，绝不把它渲染成「无事可做 / 已一致」。
+   */
+  createdRefusedReason?: string | null
   /** 记录在案的分块（绝对路径；界面只做展示，不做判定） */
   chunks?: string[]
   /**
@@ -482,15 +505,20 @@ export interface RollbackSegmentResult {
   detail?: string[]
   restored?: number
   failed?: number
-  /** 该点**未记录**的内容（含留点时被跳过的既有文件；路径清单，宿主上限 20 条）；开了 removeCreated 时其中可删的已被删除 */
+  /** 该点**未记录**的路径（含被拒删的；宿主上限 20 条）。**不是**删除清单 —— 那一份是 removedPaths */
   leftovers?: string[]
   leftoversTruncated?: boolean
-  /** 本次真的删掉的「回退点之后新建」路径数（用户 2026-10-11 定案 A） */
+  /** 本次真的删掉的「该点未记录」路径数（用户 2026-10-11 定案 A） */
   removed?: number
-  /** 已删除路径（有界清单） */
+  /** 已删除路径（有界清单；与预览的 workspace.removals 同源同序） */
   removedPaths?: string[]
-  /** 想删但按安全判据拒删的路径（越界 / 数据区 / .git / node_modules / 过大），如实报告 */
+  /** 想删但按安全判据拒删的路径（越界 / 数据区 / .git / node_modules / 过大 / 捕获不完整），如实报告 */
   createdSkipped?: string[]
+  /** 拒删路径的**真实总数**（不受清单上限影响） */
+  createdSkippedCount?: RollbackCount
+  createdSkippedTruncated?: boolean
+  /** 非 null = 该点捕获**不完整** ⇒ 一条都没删（安全拒删） */
+  createdRefusedReason?: string | null
   /** 工作区段：实际写回的字节数（宿主回传才有） */
   writtenBytes?: number
   /** 兼容形态：宿主只回传计数时也算得出来 */
@@ -751,9 +779,20 @@ export interface RollbackPreviewRowView {
   reasonKey: string | null
   /** 有序计数文案：overwrite / different / missing / createdAfter（工作区段才有计数） */
   counts: RollbackCountRowView[]
-  /** 该点**未记录**的内容清单（含留点时被跳过的既有文件；已脱敏；宿主上限 20 条） */
+  /** 该点**未记录**的路径清单（含被拒删的；已脱敏；宿主上限 20 条）—— **不是**删除清单 */
   leftovers: string[]
   leftoversTruncated: boolean
+  /** **会被删除**的路径（已脱敏；宿主上限 20 条）—— 与执行阶段同一份规划（逐条一致） */
+  removals: string[]
+  /** 会被删除的**真实总数** */
+  removalsCount: number
+  removalsTruncated: boolean
+  /** 按安全判据**拒删**的路径（已脱敏）与真实总数 */
+  createdSkipped: string[]
+  createdSkippedCount: number
+  createdSkippedTruncated: boolean
+  /** 非 null = 捕获不完整 ⇒ 一条都没删（安全拒删） */
+  createdRefusedReason: string | null
   /** 留点时被跳过的条目总数（S4：跳过必须可见） */
   skippedCount: number
   /** 捕获被上限截断 */
@@ -782,8 +821,11 @@ export interface RollbackPreviewRowView {
  * 预览 → 展示行（<id>/preview 的只读结果）。
  *
  * 计数口径逐条对应「界面能看到什么」：覆盖多少项、其中多少项内容不同、多少项当前已不存在
- * （会被重新创建）、多少项是该点**未记录**的（**不会被删除** —— 引擎 scanLeftovers 只统计「不在记录里」
- * 的文件，留点时被跳过的既有文件同样落在这里，所以不得声称「之后新建」）。
+ * （会被重新创建）、多少项是该点**未记录**的（引擎只统计「不在记录里」的文件，留点时被跳过的
+ * 既有文件同样落在这里，所以不得声称「之后新建」）。
+ *
+ * 「未记录」与「会被删除」是**两件事**：会被删的只有过了安全判据的那一份
+ * （`workspace.removals` / `removalsCount`），未记录清单里混着永不删除的 `.git` 等拒删项。
  */
 /**
  * 文件行的**主标签** = 文件名（Cursor「Confirm Undo」式：一眼看是哪几个文件，而不是一屏绝对路径）。
@@ -845,6 +887,13 @@ export function rollbackPreviewRows(preview: RollbackPreviewResult | null): Roll
       ],
       leftovers: redactLines(workspace.leftovers),
       leftoversTruncated: workspace.leftoversTruncated === true,
+      removals: redactLines(workspace.removals),
+      removalsCount: Math.max(countOf(workspace.removalsCount), Array.isArray(workspace.removals) ? workspace.removals.length : 0),
+      removalsTruncated: workspace.removalsTruncated === true,
+      createdSkipped: redactLines(workspace.createdSkipped),
+      createdSkippedCount: Math.max(countOf(workspace.createdSkippedCount), Array.isArray(workspace.createdSkipped) ? workspace.createdSkipped.length : 0),
+      createdSkippedTruncated: workspace.createdSkippedTruncated === true,
+      createdRefusedReason: typeof workspace.createdRefusedReason === 'string' && workspace.createdRefusedReason !== '' ? workspace.createdRefusedReason : null,
       skippedCount,
       truncated,
       noticeKeys: noticeKeysOf(skippedCount, truncated, ROLLBACK_PREVIEW_NOTICE_SKIPPED_KEY, ROLLBACK_PREVIEW_NOTICE_TRUNCATED_KEY),
@@ -868,6 +917,13 @@ export function rollbackPreviewRows(preview: RollbackPreviewResult | null): Roll
       counts: [],
       leftovers: [],
       leftoversTruncated: false,
+      removals: [],
+      removalsCount: 0,
+      removalsTruncated: false,
+      createdSkipped: [],
+      createdSkippedCount: 0,
+      createdSkippedTruncated: false,
+      createdRefusedReason: null,
       skippedCount: 0,
       truncated: false,
       noticeKeys: [],
@@ -920,7 +976,7 @@ export function rollbackPreviewGuidance(preview: RollbackPreviewResult | null): 
  * 判据**只来自 preview 的字段**（available / overwrite / different / missing / reasonCode /
  * session.restorable）与宿主给的 canRestore，**禁止解析 detail**（技术细节不是接口）。
  * 优先级（与验收逐字一致）：① 工作区态不可用 → ⓪ 该点**未记录**的新建内容会被删除
- * （`createdAfter` / `leftovers` > 0，宿主 removeCreated 缺省为真）→ ② available 且 overwrite===0
+ * （`removalsCount` > 0 = 真会删，宿主 removeCreated 缺省为真）→ ② available 且 overwrite===0
  * → ③a 工作区一致但会话仍可回退 → ③b 工作区一致且无事可做。另有前置的一条**不属于四态**：
  * 工作区**真会改动**（different>0 / missing>0 / 会删掉未记录的新建文件）时不上屏任何
  * 「一致/无需恢复」句（由文件列表说话）——
@@ -985,14 +1041,20 @@ export function rollbackPreviewNote(input: {
   const different = countOf(workspace?.different)
   const missing = countOf(workspace?.missing)
   /**
-   * 该点**未记录**的新建内容条数（回退会删掉它们）。
+   * **会被删除**的条数（= 该点未记录 **且**过了安全判据的那些）。
    *
    * 为什么它必须参与「这句话说得说不说得」：宿主 rewind 的 `removeCreated` **缺省为真**
-   * （src/routes/recovery.ts:445），所以「工作区与该点一致，无需恢复」在这种点上同样是**假尾句**
-   * —— 点下去真的会删文件（用户 2026-10-12 第 6 条）。取两处口径的较大值：`createdAfter` 是总数，
-   * `leftovers` 是清单（宿主上限 20 条），任一非零都说明工作区会变。
+   * （src/routes/recovery.ts:459），所以「工作区与该点一致，无需恢复」在会删文件的点上同样是**假尾句**
+   * —— 点下去真的会删文件（用户 2026-10-12 第 6 条）。
+   *
+   * 判据**只能**取 `removalsCount` / `removals`（引擎 `planCreatedRemovals` 的同一份规划）：
+   * 拿「未记录总数」（`createdAfter` / `leftovers`）当删除数会**双向出错** —— 它把永不删除的
+   * `.git` 路径也算进去，又把捕获不完整时「一条都不删」的情形说成「工作区会变」。
    */
-  const removals = Math.max(countOf(workspace?.createdAfter), countOf(workspace?.leftovers))
+  const removals = Math.max(
+    countOf(workspace?.removalsCount),
+    Array.isArray(workspace?.removals) ? workspace.removals.length : 0,
+  )
   // 「会话仍会回退」两个条件都要：该段可回退 + 该点整体可回退（受保护点/两态不全时按钮本来就点不了，
   // 这时说「会话仍会回退到该点之前」同样是假话）
   const sessionForks = input.canRestore !== false && session?.restorable === true

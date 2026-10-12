@@ -160,3 +160,28 @@
 - **测试**：`src/core/reconcile.test.ts`（2 放行 + 6 对照）、`src/core/startup-barrier.test.ts`（7 条判据矩阵）、`src/core/phase3-p2b-fingerprint.test.ts`（probeExternal 6 种形状）。
 - **未验证（如实）**：issue 报告者用真实数据目录副本跑过 11 例判定矩阵；本次修复**未**回放真实 quarantine 残留（本机无真实样本），证据止于源码核实 + 单测矩阵 + typecheck / 全量测试。
 
+## 非相邻回退：预览的删除集与执行的删除集曾经是两份口径（2026-10-12 用户实测）
+
+- **症状**（用户原话）：同一对话里**跳过中间若干回合、直接回退到更早的回合**时，① 工作区文件没按预期撤回（该恢复的没回来），或**删过头**（不该删的被删）；② 实际改动与**预览清单对不上**（预览只列了几个文件，实际改动 / 删除远超预览）。相邻回退（只退一轮）基本看不出来。
+- **根因一（预览 ≠ 执行，文件:行）**：删除候选被**两处各算一次** ——
+  预览走 `scanLeftovers`（当时 `src/core/rollback-point.ts:1669`，只按「不在 `captured` 里 + 在 chunks 内」，**不过滤拒删项**，且只取前 `ROLLBACK_LEFTOVER_LIST_LIMIT`(20) 条）；
+  执行走 `planCreatedRemovals` + `createdRemovalRefusal`（当时 `:2173`/`:2206`，**全量 + 过安全判据**）。
+  两者都叫「leftovers」，但一个只是「未记录」、另一个才是「会删」。
+- **为什么随跳过的回合数放大**（这就是「相邻不暴露、非相邻才暴露」的那一行判据）：候选数 = 该点未记录的路径数，它随**跳过的回合数**线性增长。只要候选数越过 20 条上限、或前 20 条里混进拒删项，两个集合就分叉。
+  本机实测（探针 `.tmp/probe-nonadjacent.ts`，6 个回合 / 中间 3 个回合各新建 8 个文件 + 各在 `.git` 里塞 1 条 / 从第 6 回合直退第 2 回合）：
+  `PREVIEW leftovers.length=20, leftoversTruncated=false, createdAfter=28`；前 20 条 = **3 条 `.git/*`（永不删除）** + 17 条会删；`REWIND removed=25 createdSkipped=3`（`detail=["restored=0 verified=0 unchanged=2 leftovers=28 removed=25 createdSkipped=3"]`）
+  ⇒ **8 条「真的会删」的路径根本没被列出**，用户看到的就是「预览只列几个，实际删一大堆」。
+- **根因二（删过头 = 删掉回退点之前就存在的文件，不可恢复）**：`captured` 来自 `payload.files`，而捕获受预算约束 —— `payload.truncated`（`maxFiles` / `maxBytes` / `maxFileBytes` 任一命中，`src/core/rollback-point.ts:1374/1378/1400/1405`）或 `unreadableFiles` 非空时，**既有文件**根本没进记录。它们当然「不在 `captured` 里」⇒ 被判成「回退点之后新建」⇒ 删掉，而对象仓里**没有它们的副本**，删了就回不来。
+  本机实测（`.tmp/probe-h2h3h4.ts` H3 段，`maxFiles=3` + 6 个既有文件）：修复前 `removed=5`，其中 `pre-5.txt` **在回退点之前就已存在**，回退后 `仍在 = false`。
+- **修法（不重写架构、不动 schema 版本）**：
+  ① 把「未记录路径的规划」收敛成**一个函数** `planCreatedRemovals(payload, captured, sink)`（返回 `{all, paths, skipped, truncated, refused}`），预览与执行**共用**；`preview.workspace.removals` 与 `segments[].removedPaths` 因此逐条同源同序（旧 `scanLeftovers` 已删）。
+  ② 单文件上限判据（先 `stat`）搬进这份规划 —— 预览与执行不再各判一次；读不出大小且非 ENOENT 一律拒删（「不知道多大」≠「可以删」）。
+  ③ **捕获不完整的点一条都不删**（`refused='capture-incomplete'`）：`payload.truncated || payload.unreadableFiles.length > 0` 时，「未记录」不能证明「新建」，宁可少删。
+  ④ 逐条清单仍保留 20 条上限，但**总数与截断如实**：新增 `removalsCount` / `removalsTruncated` / `createdSkippedCount` / `createdSkippedTruncated` / `createdRefusedReason`；界面把「会删的 / 拒删的 / 一条都不删」分成三句说。
+  ⑤ 超上限的顶层码从泛化的 `invalid-input` 改成 `created-removals-limit`（HTTP 400、零写入）；文案说清「因为待删路径超过上限，一条都没动」。实测 `removalsCount=5001`：`outcome=failed`、段 `reasonCode=created-removals-limit`、`detail=["created-removals=5001 limit=5000 zeroWrites=true"]`，记录在案的 `a.txt` **一个字节都没被写**（仍是 `A-CHANGED`）。
+- **H2（chunks 之外）如实结论**：中间回合在**分块之外**新建 / 改动的文件，回退时**既不恢复也不删除** —— 这是**有意设计**（领土 = 留点时记录在案的 chunks）。实测：`chunks=[<ws>]`，`outside/outside.txt` 回退后仍在、`ws/inside.txt` 被删。此前界面**没有**说清这个范围（`preview.workspace.chunks` 已回传但无人渲染），本轮补一句 `rollback.preview.chunksHint`（聊天预览 + 设置页回滚卡）。
+- **假注释（H5，已修）**：`RollbackPreviewFileStatus` 的 `delete` 与 `RollbackPreviewWorkspace.createdAfter` 都写着「绝不删除 / 永远不会出现」—— 与实现（`removeCreated` 缺省为真）相反，会直接误导后续排查；连同 `rollback.desc` / `rollback.rewind.confirm` / `rollback.preview.leftoversTitle` 的「不删除未记录文件」一起改正（旧守卫 `recovery-locales.test.ts` 曾把这条不实表述钉死，本轮翻面 + 加反向断言）。
+- **H6（台账链路）**：设置页 / 台账弹窗那条 `RollbackCard` 链路此前**列了**路径，但用的是「未记录」清单 + 标题「（不会被删除）」，而它的 rewind 请求**不带** `removeCreated` ⇒ 路由缺省为真 ⇒ 真的会删。现已改为渲染 `removals`（与执行同源）+ 拒删条数 + 范围说明。
+- **护栏**：`src/core/rollback-point.test.ts` 的 **R-05d**（6 回合 / 中间 3 回合各新建文件 / 从最后一回合直退第 2 回合；断言 ①中间回合新建路径被删且 `createdSkipped` 如实 ②目标点记录在案的路径写回且 `restored=1 verified=1` ③预览删除集 = 实际删除集逐条一致 ④拒删项出现在报告里且不在删除清单里）。
+  **变异校验**：把预览的 `removals` 换回旧口径（`plan.all`）后 R-05d 立刻变红，失败信息正是上面那份「3 条 `.git` + 漏 8 条」的对照。
+- **未验证（如实）**：本机没有运行「带本次改动的构建」的实例（`~/.dsh/profiles/desktop/node_modules/dsh-config-manager` 是发布版，不含回滚族）⇒ **真机浏览器点击端到端未复验**；证据止于引擎/客户端判定两层测试 + 两个探针的真实磁盘数据 + typecheck / 全量测试 / 构建。

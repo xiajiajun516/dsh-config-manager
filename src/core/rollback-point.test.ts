@@ -29,6 +29,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  ROLLBACK_LEFTOVER_LIST_LIMIT,
   ROLLBACK_MAX_GUARDS_PER_SESSION,
   ROLLBACK_MAX_RECORDS,
   ROLLBACK_MAX_RECORDS_PER_SESSION,
@@ -427,6 +428,102 @@ test('R-05c 留点在回合开始前：这一回合里被改过的文件，回�
     '回合内被改过的文件必须退回「这条消息之前」的内容（这正是「工作区与该回退点一致」那个 bug）',
   )
   await assert.rejects(fs.readFile(path.join(fx.workspaceDir, 'in-turn.txt')), { code: 'ENOENT' })
+})
+
+/**
+ * R-05d（用户 2026-10-12 实测的「跳过中间若干回合」）：同一对话 **6 个回合**，中间 3 个回合各新建
+ * 文件，从最后一个回合**直接**退回第 2 个回合。
+ *
+ * 为什么相邻回退暴露不出来、非相邻才暴露 —— 判据是**这一行**：
+ * 删除候选 = 「该点未记录」的路径，它随**跳过的回合数**线性增长；只要候选数越过逐条清单上限
+ * （`ROLLBACK_LEFTOVER_LIST_LIMIT` = 20）或前 20 条里混进**拒删项**，旧实现的两个删除口径就分叉：
+ * 预览列的是「未记录」的前 20 条（含**永不删除**的 `.git` 路径、且漏掉第 21 条之后**真的会删**的路径），
+ * 执行删的是「全量 + 过安全判据」的那一份。相邻只退一轮 ⇒ 候选只有这一回合新建的几条，
+ * 上限与拒删项都还挤得下 ⇒ 两个集合碰巧相等。
+ *
+ * 实测（修复前，同一场景）：预览列 20 条 = 3 条 `.git/*`（永不删除）+ 17 条会删；实际删 25 条
+ * ⇒ 8 条「会删的」根本没被列出，用户看到的就是「预览只列几个，实际删一大堆」。
+ */
+test('R-05d 非相邻回退：预览的「会被删除路径集合」必须与实际删除集合逐条一致（拒删项如实）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const tracker = new RollbackAutoTracker({ engine })
+  tracker.registerSession({
+    sessionId: 's-6', unitId: 'proj-key/s-6', logPath: fx.logFile, chunks: [fx.workspaceDir],
+  })
+  const event = async (seq: number, type: string, turn: number): Promise<void> => {
+    await tracker.noteEvent({ sessionId: 's-6', seq, type, data: { turn } })
+  }
+
+  // 回合 1：改 a.txt（工作区基线）
+  await event(0, 'turn/start', 1)
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A-turn1')
+  await event(1, 'turn/end', 1)
+
+  // 回合 2：**回退目标**（它的工作区态 = 这一回合开始之前）
+  await event(2, 'turn/start', 2)
+  await event(3, 'turn/end', 2)
+
+  // 中间 3 个回合（3/4/5）：每回合新建 8 个文件 + 在 .git 里塞一条（拒删项）
+  const created: string[] = []
+  for (const turn of [3, 4, 5]) {
+    await event(turn * 2, 'turn/start', turn)
+    for (let i = 0; i < 8; i += 1) {
+      const file = path.join(fx.workspaceDir, 'mid-turn' + String(turn) + '-' + String(i) + '.txt')
+      await fs.writeFile(file, 'T' + String(turn) + '-' + String(i))
+      created.push(file)
+    }
+    await fs.mkdir(path.join(fx.workspaceDir, '.git'), { recursive: true })
+    await fs.writeFile(path.join(fx.workspaceDir, '.git', 'mid' + String(turn)), 'GIT')
+    await event(turn * 2 + 1, 'turn/end', turn)
+  }
+  // 回合 6：最后一个回合再新建一条，并**改掉**目标点记录在案的 a.txt（强制真写回 + 复核）
+  await event(12, 'turn/start', 6)
+  await fs.writeFile(path.join(fx.workspaceDir, 'mid-turn6.txt'), 'T6')
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A-later')
+  created.push(path.join(fx.workspaceDir, 'mid-turn6.txt'))
+  await event(13, 'turn/end', 6)
+
+  const target = (await engine.list()).points.find((p) => p.turn === 2)
+  assert.notEqual(target?.id, undefined, '第 2 回合必须有点（留点在 turn/start）')
+  const id = target?.id ?? ''
+
+  const preview = await engine.preview(id)
+  const rewound = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', removeCreated: true })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.status, 'restored', JSON.stringify(rewound.segments))
+
+  // ① 中间回合新建的路径**全部**被删（25 条），拒删的 .git 路径如实进 createdSkipped
+  assert.equal(created.length, 25)
+  for (const file of created) {
+    await assert.rejects(fs.readFile(file), { code: 'ENOENT' }, '中间回合新建的路径必须被删：' + file)
+  }
+  assert.equal(ws?.removed, 25, 'removed 必须等于真实删除数（detail=' + JSON.stringify(ws?.detail) + '）')
+  const refused = ws?.createdSkipped ?? []
+  assert.equal(refused.length, 3, '3 条 .git 路径必须如实进 createdSkipped')
+  for (const file of refused) {
+    assert.ok(file.split(path.sep).includes('.git'), '拒删的必须只可能是 .git 段内的：' + file)
+    assert.equal(await readText(file), 'GIT', '.git 内的文件绝不能被删')
+  }
+  assert.equal(ws?.createdSkippedCount, 3)
+  assert.equal(ws?.createdRefusedReason, undefined, '捕获完整 ⇒ 不是「捕获不完整」拒删')
+
+  // ② 目标点记录在案的路径写回并通过 SHA-256 复核
+  assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A-turn1', 'a.txt 必须回到第 2 回合开始前的内容')
+  assert.ok((ws?.detail ?? []).some((line) => line.includes('restored=1') && line.includes('verified=1')), 'detail 必须带 restored/verified：' + JSON.stringify(ws?.detail))
+
+  // ③ **核心断言**：预览的「会被删除路径集合」与实际删除集合逐条一致（旧实现此处必红）
+  const previewWs = preview.workspace
+  assert.deepEqual(previewWs.removals, ws?.removedPaths, '预览说会删的 = 实际删的（逐条、同序）')
+  assert.equal(previewWs.removalsCount, ws?.removed, '预览的删除总数 = 实际删除数')
+  assert.equal(previewWs.removals.some((file) => file.split(path.sep).includes('.git')), false, '预览的删除清单里绝不能混进永不删除的 .git 路径')
+  assert.equal(previewWs.createdSkippedCount, 3, '预览必须同样列出 3 条拒删项')
+
+  // ④ 逐条清单上限仍然存在，但**总数与截断必须如实**
+  assert.equal(previewWs.removals.length, ROLLBACK_LEFTOVER_LIST_LIMIT)
+  assert.equal(previewWs.removalsTruncated, true, '25 条 > 20 条上限 ⇒ 必须明说清单不完整')
+  assert.ok(previewWs.createdAfter > ROLLBACK_LEFTOVER_LIST_LIMIT, '非相邻才暴露的判据：候选数越过逐条清单上限（' + String(previewWs.createdAfter) + ' > ' + String(ROLLBACK_LEFTOVER_LIST_LIMIT) + '）')
 })
 
 test('R-05b 开 removeCreated：回退点之后新建的路径被真的删掉；.git 内的拒删', async (t) => {

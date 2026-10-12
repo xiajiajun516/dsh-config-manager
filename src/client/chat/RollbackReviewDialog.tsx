@@ -48,6 +48,7 @@ import {
   canRevertFiles,
   canSubmitRewind,
   chatFileChangeAvailable,
+  chatFileRemovalTotal,
   chatFileRemovalTruncated,
   chatRewindFailed,
   chatRewindFailure,
@@ -60,6 +61,7 @@ import {
   defaultDraft,
   errorDetail,
   findPointForTurn,
+  readRollbackPreviewCreatedSkipped,
   readRollbackPreviewFiles,
   readRollbackPreviewRemovals,
   requestRewind,
@@ -331,12 +333,48 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
       : rt(rk(note.key), { reason: rt(rk(note.reasonKey)) })
   const files = readRollbackPreviewFiles(preview?.workspace)
   /**
-   * 会被**删掉**的文件（第 6 条）：该点未记录的 leftovers —— 宿主 rewind 的 `removeCreated` 缺省为真，
-   * 所以点「回退」真的会删它们（读法与诚实边界见 `readRollbackPreviewRemovals` 的注释）。
+   * 会被**删掉**的文件（第 6 条）：`preview.workspace.removals` —— 引擎 `planCreatedRemovals` 的产物，
+   * 与执行阶段**同一个函数**（所以逐条 = 实际删的）。宿主 rewind 的 `removeCreated` 缺省为真，
+   * 点「回退」真的会删它们（读法与诚实边界见 `readRollbackPreviewRemovals` 的注释）。
    */
   const removals = readRollbackPreviewRemovals(preview?.workspace)
-  /** 删除清单**不完整**（宿主上限 20 条 / 明说截断）⇒ 如实说一句，不假装列全。 */
+  /** 会被删除的**真实总数**（清单只有 20 条上限；总数才是真实值）。 */
+  const removalsTotal = chatFileRemovalTotal(preview?.workspace)
+  /** 删除清单**不完整**（条数上限 / 明说截断 / 老宿主没给清单）⇒ 如实说一句，不假装列全。 */
   const removalsTruncated = chatFileRemovalTruncated(preview?.workspace)
+  /** 按安全判据拒删的（`.git` 等）：**不会**被删，必须与删除清单分开说。 */
+  const refused = readRollbackPreviewCreatedSkipped(preview?.workspace)
+  /** 捕获不完整 ⇒ 一条都没删（安全拒删）；非 null 时不得渲染成「无事可做」。 */
+  const refusedReason = refused.reason
+  /**
+   * 与「文件清单」无关、但**必须始终说出口**的三件事（清单为空时也不能被吞掉）：
+   *  ① 删除清单不完整（逐条 20 条上限 / 宿主明说截断）⇒ 报**真实总数**，不假装列全；
+   *  ② 捕获不完整 ⇒ 一条都没删（安全拒删：绝不误删既有文件）；
+   *  ③ 按安全判据拒删的条数（`.git` 等 —— 它们**不会**被删，与上面的删除清单分开说）。
+   */
+  /**
+   * 回退的**范围** = 留点时记录在案的分块（目录）。这些目录**之外**的文件既不回退也不删除
+   * —— 跳过中间若干回合时这条尤其要说清（用户 2026-10-12：以为「回退工作区」= 整个工作区）。
+   */
+  const chunkDirs = Array.isArray(preview?.workspace?.chunks)
+    ? preview.workspace.chunks.filter((item) => typeof item === 'string' && item !== '')
+    : []
+  const honestyHints = (
+    <>
+      {chunkDirs.length > 0 && (
+        <div className={css.hint}>{rt(rk('rollback.preview.chunksHint'), { n: String(chunkDirs.length) })}</div>
+      )}
+      {removalsTruncated && (removalsTotal ?? 0) > 0 && (
+        <div className={css.hint}>{rt(rk('rollback.preview.removalsTruncated'), { total: String(removalsTotal ?? 0) })}</div>
+      )}
+      {refusedReason !== null && (
+        <div className={css.hint}>{rt(rk('rollback.preview.createdRefused'), { n: String(refused.count) })}</div>
+      )}
+      {refused.count > 0 && refusedReason === null && (
+        <div className={css.hint}>{rt(rk('rollback.preview.createdSkipped'), { n: String(refused.count) })}</div>
+      )}
+    </>
+  )
   /** 选择框（第 1 条）当前是否「连文件一起退」以及它能不能被点。 */
   const revertFiles = revertFilesOn(draft)
   const revertFilesEnabled = canRevertFiles(preview)
@@ -415,7 +453,10 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                 {files.length === 0 && removals.length === 0 ? (
                   // 预览态四态句：由 rollbackPreviewNote 决定（key=null 时本情形没有该类句子可说，
                   // 宁可不说话，也不上一句不实的「一致」）
-                  noteText !== null ? <div className={css.hint}>{noteText}</div> : null
+                  <>
+                    {noteText !== null ? <div className={css.hint}>{noteText}</div> : null}
+                    {honestyHints}
+                  </>
                 ) : (
                   <>
                     <ul className={css.reasonList} data-off={revertFiles ? undefined : 'true'}>
@@ -473,10 +514,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                         </li>
                       ))}
                     </ul>
-                    {/* 删除清单不完整时如实说一句（宿主上限 20 条 / 明说截断） */}
-                    {removals.length > 0 && removalsTruncated && (
-                      <div className={css.hint}>{rt(rk('rollback.preview.createdAfterTruncated'))}</div>
-                    )}
+                    {/* 删除清单不完整 / 捕获不完整 / 拒删条数：始终如实说，清单为空也不吞 */}
+                    {honestyHints}
                     {/* 一条都没统计出来时，说清为什么（宁说「不知道」，不谎报行数） */}
                     {!hasCounts && <div className={css.hint}>{rt('rollback.preview.file.unknownHint')}</div>}
                     {/* 「查看」的降级通道：没有右侧栏（或打开失败）时在弹窗内展示同一份差异 */}

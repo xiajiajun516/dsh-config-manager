@@ -183,14 +183,33 @@ test('S7：两态纪律 —— 无第三态键、无同点判定键、无手动�
   assert.deepEqual(missing, [], '枚举对应文案键缺失：' + missing.join(', '))
 })
 
-test('S7：rollback.desc 与代码逐条对得上（自动留点 / 只覆盖记录路径 / 不删新建 / fork 子会话 / 原会话只读）', () => {
+test('S7：rollback.desc 与代码逐条对得上（自动留点 / 只覆盖记录路径 / 删除有安全判据 / fork 子会话 / 原会话只读）', () => {
   const zhText: string = zh['rollback.desc']
   const enText: string = en['rollback.desc']
-  for (const token of ['回合', '自动', '工作区', '会话游标', '只覆盖', '绝不删除', '新建', 'fork', '只读', '改写']) {
+  // 2026-10-12 翻面：宿主 rewind 的 removeCreated **缺省为真**（src/routes/recovery.ts:459），
+  // 所以「绝不删除未记录的文件」是**不实**的（旧断言曾把它钉死）。现在的真值是：
+  // 覆盖记录在案的路径 + 删除未记录且通过安全判据的路径（.git 等拒删；捕获不完整时一条都不删）。
+  for (const token of ['回合', '自动', '工作区', '会话游标', '只覆盖', '删除', '安全判据', 'fork', '只读', '改写']) {
     assert.ok(zhText.includes(token), 'zh 说明必须写清：' + token)
   }
-  for (const token of ['turn', 'automatic', 'workspace', 'session cursor', 'only overwrites', 'never deleted', 'fork', 'read-only', 'rewritten']) {
+  for (const token of ['turn', 'automatic', 'workspace', 'session cursor', 'only overwrites', 'delet', 'safety rules', 'fork', 'read-only', 'rewritten']) {
     assert.ok(enText.toLowerCase().includes(token.toLowerCase()), 'en 说明必须写清：' + token)
+  }
+  // 反向：旧的不实表述必须绝迹（任何键、任何语言）—— 用户 2026-10-12 实测「预览与实际对不上」
+  // 全局：不得再出现「绝不删除未记录 / 绝不删除任何文件」这类**删除保证**（宿主缺省会删）
+  const stale: RegExp[] = [/绝不删除未记录/, /不删除未记录/, /绝不删除任何文件/, /never deleted/i]
+  const hits: string[] = []
+  for (const [key, value] of [...Object.entries(zh), ...Object.entries(en)]) {
+    for (const re of stale) if (re.test(value)) hits.push(key + ' :: ' + String(re))
+  }
+  assert.deepEqual(hits, [], '「不会删除未记录文件」这类不实表述必须绝迹：' + hits.join(', '))
+  // 逐键：描述删除行为的四个键必须**说清会删**（旧文案在这里说的是「不删除」）
+  const zhDict: Record<string, string> = zh
+  const enDict: Record<string, string> = en
+  for (const key of ['rollback.desc', 'rollback.rewind.confirm', 'rollback.preview.createdAfter', 'rollback.preview.leftoversTitle']) {
+    const text = String(zhDict[key] ?? '') + String(enDict[key] ?? '')
+    assert.equal(/不删除|不会被删除|never deleted|not delete/i.test(text), false, '删除行为说明不得再写成「不删除」：' + key)
+    assert.ok(/删除|delet/i.test(text), '删除行为说明必须提到删除：' + key)
   }
 })
 

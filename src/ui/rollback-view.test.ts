@@ -224,29 +224,38 @@ test('T15 假尾句禁令（键层面）：changesSomething=true 时 key 必为 
   assert.equal(blocked.key, previewNoteKeys.consistentNoop)
 })
 
-test('⓪ 会删掉「该点未记录」的新建文件 ⇒ 不得上屏「一致 / 无需恢复」（2026-10-12 第 6 条）', () => {
-  // 真值：宿主 rewind 的 removeCreated **缺省为真**（src/routes/recovery.ts:445 —— body['removeCreated'] !== false），
+test('⓪ 会删掉「该点未记录且可证」的路径 ⇒ 不得上屏「一致 / 无需恢复」（2026-10-12 第 6 条 + 删除集收敛）', () => {
+  // 真值：宿主 rewind 的 removeCreated **缺省为真**（src/routes/recovery.ts:459 —— body['removeCreated'] !== false），
   // 所以这一类点上「工作区与该回退点一致，无需恢复」同样是假尾句：点下去真会删文件。
-  const byCount = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0, createdAfter: 3 }, session: { restorable: false } })
-  assert.equal(byCount.kind, 'workspace-changes', 'createdAfter>0 ⇒ 工作区真会变')
+  const byCount = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0, removalsCount: 3 }, session: { restorable: false } })
+  assert.equal(byCount.kind, 'workspace-changes', 'removalsCount>0 ⇒ 工作区真会变')
   assert.equal(byCount.key, null, '不得说「一致」（key=null：让文件清单逐条说出来）')
   assert.equal(byCount.changesSomething, true)
 
-  const byList = rollbackPreviewNote({ workspace: { available: true, overwrite: 2, different: 0, leftovers: ['a', 'b'] }, session: { restorable: true } })
+  const byList = rollbackPreviewNote({ workspace: { available: true, overwrite: 2, different: 0, removals: ['a', 'b'] }, session: { restorable: true } })
   assert.equal(byList.kind, 'workspace-changes', '只有清单（没有总数）同样要认出来')
   assert.equal(byList.key, null)
   assert.equal(byList.changesSomething, true)
   assert.equal(byList.sessionForks, true, '会话段的事实不受影响（该字段是给「会话仍会回退」用的）')
 
-  // ⓪ 优先于 ②：一条记录都没有、但有会被删掉的新建内容 ⇒ 更不能说「无需恢复」
-  const noFilesButRemovals = rollbackPreviewNote({ workspace: { available: true, overwrite: 0, different: 0, createdAfter: 1 }, session: { restorable: false } })
+  // ⓪ 优先于 ②：一条记录都没有、但有会被删掉的路径 ⇒ 更不能说「无需恢复」
+  const noFilesButRemovals = rollbackPreviewNote({ workspace: { available: true, overwrite: 0, different: 0, removalsCount: 1 }, session: { restorable: false } })
   assert.equal(noFilesButRemovals.kind, 'workspace-changes')
   assert.equal(noFilesButRemovals.key, null)
 
-  // 反自检：两边都是 0 时**不得**误判成「会变」（否则 ③b 永远说不上话）
-  const clean = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0, createdAfter: 0, leftovers: [] }, session: { restorable: false } })
+  // 反自检①：两边都是 0 时**不得**误判成「会变」（否则 ③b 永远说不上话）
+  const clean = rollbackPreviewNote({ workspace: { available: true, overwrite: 5, different: 0, missing: 0, removalsCount: 0, removals: [] }, session: { restorable: false } })
   assert.equal(clean.kind, 'workspace-consistent-noop')
   assert.equal(clean.key, previewNoteKeys.consistentNoop)
+
+  // 反自检②：**「未记录」不等于「会删」**（用户 2026-10-12 的假尾句正是这一类）——
+  // 拒删项一堆（.git / 越界 / 过大）而 removalsCount=0 时，不得说「工作区会变」。
+  const onlyRefused = rollbackPreviewNote({
+    workspace: { available: true, overwrite: 5, different: 0, missing: 0, createdAfter: 40, leftovers: ['a'], createdSkippedCount: 40, removalsCount: 0, removals: [] },
+    session: { restorable: false },
+  })
+  assert.equal(onlyRefused.kind, 'workspace-consistent-noop', '一条都不会删 ⇒ 不得拿「未记录总数」当删除数')
+  assert.equal(onlyRefused.changesSomething, false)
 })
 
 test('T15 ① 的原因键来源：workspace.reasonCode 优先 → 段摘要回落 → unknown（绝不编原因）', () => {
@@ -410,7 +419,12 @@ test('mode 三选一映射（files+session / files / session）+ 未知回落', 
 test('预览计数文案：工作区四类计数 + 会话边界/回合号', () => {
   const preview: RollbackPreviewResult = {
     ok: true, id: 'rp-1', storage: { available: true }, canRestore: true, canRemove: true,
-    workspace: { overwrite: 5, different: 2, missing: 1, createdAfter: 3, leftovers: ['a', 'b', 'c'], leftoversTruncated: false },
+    workspace: {
+      overwrite: 5, different: 2, missing: 1, createdAfter: 3, leftovers: ['a', 'b', 'c'], leftoversTruncated: false,
+      removals: ['del-1', 'del-2'], removalsCount: 25, removalsTruncated: true,
+      createdSkipped: ['C:/ws/.git/index'], createdSkippedCount: 3, createdSkippedTruncated: false,
+      createdRefusedReason: null,
+    },
     session: { from: 9000, to: 4096, turns: 3, restorable: true, active: false },
   }
   const rows = rollbackPreviewRows(preview)
@@ -424,6 +438,13 @@ test('预览计数文案：工作区四类计数 + 会话边界/回合号', () =
     { key: 'rollback.preview.createdAfter', n: 3 },
   ])
   assert.deepEqual(rows[0]?.leftovers, ['a', 'b', 'c'])
+  // 删除清单与「未记录清单」**分开**：removals = 会删的（与执行阶段同一份规划），拒删项另算
+  assert.deepEqual(rows[0]?.removals, ['del-1', 'del-2'])
+  assert.equal(rows[0]?.removalsCount, 25)
+  assert.equal(rows[0]?.removalsTruncated, true)
+  assert.deepEqual(rows[0]?.createdSkipped, ['C:/ws/.git/index'])
+  assert.equal(rows[0]?.createdSkippedCount, 3)
+  assert.equal(rows[0]?.createdRefusedReason, null)
   assert.equal(rows[1]?.state, 'session')
   assert.deepEqual(rows[1]?.cursor, { from: 9000, to: 4096 })
   assert.equal(rows[1]?.turns, 3)
@@ -497,7 +518,7 @@ test('回退结果：结论徽章 / 段状态 / 计数 / 未执行段 / fork 子
   assert.equal(rows.length, 2)
   assert.equal(rows[0]?.statusKey, 'rollback.segment.restored')
   assert.equal(rows[0]?.badgeKind, 'ok')
-  assert.equal(rows[0]?.leftoversCount, 2, '该点未记录的内容计数（引擎 scanLeftovers 语义）')
+  assert.equal(rows[0]?.leftoversCount, 2, '该点未记录的路径计数（引擎 planCreatedRemovals 的 all 语义）')
   assert.equal(rows[0]?.removedCount, 0, '没开 removeCreated / 宿主没回 removed 时一律 0（不无中生有）')
   assert.deepEqual(rows[0]?.leftovers, ['a.txt', 'b.txt'])
   assert.equal(rows[1]?.childSessionId, 'child-9')

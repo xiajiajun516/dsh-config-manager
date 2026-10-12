@@ -220,6 +220,8 @@ export const zh = {
   'sessions.severity.ok': '正常',
   'sessions.severity.unloadable': '会话不可加载',
   'sessions.subagent': '子代理',
+  // 空白会话（从未提问）：DSH 自己的标题就是这个占位名（session.new），不用 uuid 冒充标题
+  'sessions.blank': '新会话',
   'sessions.truncated': '列表已截断：还有 {count} 条未显示（重新体检或按需缩小范围）。',
   'sessions.repair.title': '怎么修',
   'sessions.repair.desc': '容器非法 / header 不可读 / 格式超前这类应用内不动的问题，先在终端预览再落盘；需要写入时建议先关闭 DSH。',
@@ -306,7 +308,7 @@ export const zh = {
   'sessions.repair.verify.rollbackFailed': '危险态：复验失败后自动回滚没有成功，目标当前仍是修复后的字节，需要人工处理。',
   'sessions.repair.rejectedNext': '原文件没有被改动。可以再点一次「开始体检」看最新状态；如果原因与「文件被改过/正在被写入」有关，等这条会话安静下来再试。',
   'rollback.title': '工作区 + 会话回滚',
-  'rollback.desc': '每个回合结束自动留一个回滚点：工作区快照 + 会话游标，不需要手动拍点。回退只覆盖该点记录在案的工作区路径，绝不删除未记录的文件与该点之后新建的文件；会话回退在目标回合之前的稳定边界 fork 一个新子会话，原会话日志只读、绝不被改写。',
+  'rollback.desc': '每个回合结束自动留一个回滚点：工作区快照 + 会话游标，不需要手动拍点。回退只覆盖该点记录在案的工作区路径，并删除该点未记录且通过安全判据的路径（.git / node_modules / 插件数据区 / 超出单文件上限一律拒删；该点捕获不完整时一条都不删）；会话回退在目标回合之前的稳定边界 fork 一个新子会话，原会话日志只读、绝不被改写。',
   'rollback.list.empty': '还没有回滚点',
   /* 2026-10-11 布局重构：工具栏只放数字摘要 + 刷新按钮；留存/淘汰口径仍在 rollback.retention.hint（改由 ⓘ 承载）。 */
   'rollback.summary': '共 {points} 个回滚点 · {sessions} 个会话',
@@ -347,6 +349,7 @@ export const zh = {
   'rollback.code.record-not-found': '找不到该回滚点',
   'rollback.code.record-incomplete': '该回滚点两态不全，缺省不允许回退',
   'rollback.code.invalid-input': '请求参数不合法',
+  'rollback.code.created-removals-limit': '待删除的「该点未记录」路径超过上限：为免只删一半，本次回退整体拒绝、一条都没动（工作区与会话都未被改动）',
   'rollback.code.no-boundary': '该回合之前没有可用的稳定边界（会话回退不可用）',
   'rollback.code.storage-unavailable': '回滚点存储不可用',
   'rollback.code.mutation-locked': '有另一个写操作正在进行（或已进安全模式）：稍后重试',
@@ -408,16 +411,22 @@ export const zh = {
   'rollback.preview.overwrite': '覆盖 {n} 项',
   'rollback.preview.different': '其中 {n} 项内容不同',
   'rollback.preview.missing': '{n} 项当前已不存在（会被重新创建）',
-  'rollback.preview.createdAfter': '{n} 项是该点未记录的（回退会删除它们）',
+  'rollback.preview.createdAfter': '{n} 项是该点未记录的（回退只会删除其中通过安全判据的）',
   'rollback.preview.createdAfterTruncated': '（清单已截断）',
+  'rollback.preview.removalsTitle': '回退会删除的文件（该点未记录且通过安全判据）',
+  'rollback.preview.chunksHint': '回退范围 = 留点时记录的 {n} 个目录；这些目录之外的文件既不回退也不删除',
+  'rollback.preview.removalsTruncated': '（清单只列前若干条 —— 实际会删除 {total} 项）',
+  'rollback.preview.createdSkipped': '另有 {n} 项按安全判据拒删（.git / node_modules / 插件数据区 / 超出单文件上限 —— 回退不会删除它们）',
+  'rollback.preview.createdRefused': '该点的捕获不完整（超出上限 / 有读不出的文件），无法证明哪些是回退点之后新建的 —— 为免误删既有文件，本次一条都不删（候选 {n} 项）',
   'rollback.preview.notice.skipped': '{n} 项在留点时被跳过（未记录；不会被删除）',
   'rollback.preview.notice.truncated': '该点捕获被上限截断（超单文件上限 / 字节预算 / 文件数预算）',
-  'rollback.preview.leftoversTitle': '该点未记录的文件（不会被删除）',
+  'rollback.preview.leftoversTitle': '该点未记录的文件（回退只删其中通过安全判据的）',
   /* —— 简洁版预览：只列「会被回退的文件 + 新增/删除行数」（E1 的 preview.workspace.files）——
    * 三条口径逐字对应引擎：① 只列**会被改动**的文件（内容已一致的一项都不列，空数组 ⇒ empty 那行）；
    * ② added/removed 可能是 null（单文件超限 / 非文本 / 对象仓读不出）⇒ 说「行数未统计」，
-   * **绝不写 0**（0 是一个会被证伪的具体数字，而「不知道」不是）；③ 回退只覆盖、绝不删除文件，
-   * 所以这里没有「删除文件」这类文案。 */
+   * **绝不写 0**（0 是一个会被证伪的具体数字，而「不知道」不是）；③ 本清单只覆盖**记录在案**的
+   * 文件 —— 整文件删除走**另一条**清单（`rollback.preview.removalsTitle` / `createdSkipped`），
+   * 删除清单由引擎与执行阶段**共用同一个函数**算出（预览说会删的 = 实际删的）。 */
   'rollback.preview.files.title': '将被回退的文件：',
   'rollback.preview.files.empty': '工作区与该回退点一致，无需恢复',
   /* —— T15：**预览态**（点「回退」之前那一屏）的四态文案 ——
@@ -480,7 +489,7 @@ export const zh = {
   'rollback.preview.turns': '回退到第 {n} 回合之前',
   'rollback.preview.active': '该会话日志刚被写过（仅供参考：回退只 fork 子会话，不改写原日志）',
   'rollback.rewind': '回退到此处',
-  'rollback.rewind.confirm': '我确认：按所选范围回退。工作区只覆盖该点记录在案的路径（不删除未记录与该点之后新建的文件）；会话在目标回合之前的稳定边界 fork 新子会话，原会话日志不改写。',
+  'rollback.rewind.confirm': '我确认：按所选范围回退。工作区会写回该点记录在案的路径，并删除该点未记录且通过安全判据的路径（.git / node_modules / 插件数据区 / 超出单文件上限一律拒删；该点捕获不完整时一条都不删）；会话在目标回合之前的稳定边界 fork 新子会话，原会话日志不改写。',
   'rollback.rewind.allowPartial': '允许部分回退（该回滚点两态不全）',
   'rollback.guard.require': '回退前必须留救援点（留不下就整体中止，零写入）',
   'rollback.guard.warn': '回退前留救援点（留不下记告警后继续）',
@@ -780,6 +789,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sessions.severity.ok': 'Healthy',
   'sessions.severity.unloadable': 'Session cannot load',
   'sessions.subagent': 'Subagent',
+  'sessions.blank': 'New Session',
   'sessions.truncated': 'List truncated: {count} more not shown (run the check again or narrow the scope).',
   'sessions.repair.title': 'How to repair',
   'sessions.repair.desc': 'For classes the in-app path does not touch (invalid containers / unreadable headers / future formats ...), preview in a terminal first; close DSH before writing.',
@@ -866,7 +876,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sessions.repair.verify.rollbackFailed': 'Dangerous state: after the re-check failed, the automatic rollback did NOT succeed; the target still holds the repaired bytes and needs manual handling.',
   'sessions.repair.rejectedNext': 'The original file was not modified. Run the health check again for the latest state; if the reason mentions a changed file or active writing, retry once that session is quiet.',
   'rollback.title': 'Workspace + session rollback',
-  'rollback.desc': 'A rollback point is kept automatically at the end of every turn: a workspace snapshot plus the session cursor -- there is no manual capture form. A rewind only overwrites the workspace paths that point recorded; files not recorded and files created after the point are never deleted. Session rollback forks a new child session at the stable boundary before the target turn, and the original session log stays read-only and is never rewritten.',
+  'rollback.desc': 'A rollback point is kept automatically at the end of every turn: a workspace snapshot plus the session cursor -- there is no manual capture form. A rewind only overwrites the workspace paths that point recorded, and deletes the paths it did not record that pass the safety rules (.git / node_modules / the plugin data directory / oversized files are always refused; nothing is deleted when that point’s capture is incomplete). Session rollback forks a new child session at the stable boundary before the target turn, and the original session log stays read-only and is never rewritten.',
   'rollback.list.empty': 'No rollback points yet',
   /* 2026-10-11 layout refactor: the toolbar keeps only the numeric summary + refresh;
      retention/pruning wording stays in rollback.retention.hint (now carried by the ⓘ). */
@@ -907,6 +917,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.code.record-not-found': 'Rollback point not found',
   'rollback.code.record-incomplete': 'This point is missing one of its two states, so a rewind is refused by default',
   'rollback.code.invalid-input': 'Invalid request parameters',
+  'rollback.code.created-removals-limit': 'The number of paths to delete that this point does not record exceeds the limit: to avoid deleting only half of them, the whole rewind was refused and nothing was touched (neither workspace nor session)',
   'rollback.code.no-boundary': 'No usable stable boundary before that turn (session rollback unavailable)',
   'rollback.code.storage-unavailable': 'Rollback-point storage is unavailable',
   'rollback.code.mutation-locked': 'Another write operation is running (or safe mode is on): retry later',
@@ -963,11 +974,16 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.overwrite': 'Overwrite {n} item(s)',
   'rollback.preview.different': '{n} of them differ in content',
   'rollback.preview.missing': '{n} item(s) no longer exist (they will be recreated)',
-  'rollback.preview.createdAfter': '{n} item(s) are not recorded by this point (the rewind will delete them)',
+  'rollback.preview.createdAfter': '{n} item(s) are not recorded by this point (the rewind deletes only those that pass the safety rules)',
   'rollback.preview.createdAfterTruncated': '(list truncated)',
-  'rollback.preview.notice.skipped': '{n} item(s) were skipped at capture time (not recorded; never deleted)',
+  'rollback.preview.removalsTitle': 'Files the rewind will delete (not recorded by this point and passing the safety rules)',
+  'rollback.preview.chunksHint': 'Rewind scope = the {n} directory(ies) recorded at capture time; files outside them are neither rewound nor deleted',
+  'rollback.preview.removalsTruncated': '(the list shows only the first entries — {total} item(s) will actually be deleted)',
+  'rollback.preview.createdSkipped': '{n} further path(s) are refused by the safety rules (.git / node_modules / the plugin data directory / oversized files — the rewind will not delete them)',
+  'rollback.preview.createdRefused': 'The capture of this point is incomplete (a limit was hit or some files were unreadable), so there is no way to prove which files were created after the point — to avoid deleting pre-existing files, nothing was deleted this time ({n} candidate(s))',
+  'rollback.preview.notice.skipped': '{n} item(s) were skipped at capture time (not recorded; the rewind will not delete them)',
   'rollback.preview.notice.truncated': 'Capture was truncated by a limit (per-file / byte budget / file-count budget)',
-  'rollback.preview.leftoversTitle': 'Files this point does not record (never deleted)',
+  'rollback.preview.leftoversTitle': 'Files this point does not record (the rewind deletes only those that pass the safety rules)',
   'rollback.preview.files.title': 'Files that will be rewound:',
   'rollback.preview.files.empty': 'The workspace already matches this rollback point, nothing to restore',
   'rollback.preview.files.unavailable': 'The workspace state of this rollback point has no usable record (reason: {reason}), nothing to restore',
@@ -1013,7 +1029,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.turns': 'Roll back to before turn {n}',
   'rollback.preview.active': 'This session log was written recently (informational only: the rewind forks a child session and does not rewrite the log)',
   'rollback.rewind': 'Rewind to here',
-  'rollback.rewind.confirm': 'I confirm: rewind with the selected scope. The workspace is only overwritten for the paths this point recorded (files not recorded and files created after the point are never deleted); the session is forked into a new child session at the stable boundary before the target turn, and the original session log is not rewritten.',
+  'rollback.rewind.confirm': 'I confirm: rewind with the selected scope. The workspace writes back the paths this point recorded and deletes the paths it did not record that pass the safety rules (.git / node_modules / the plugin data directory / oversized files are always refused; nothing is deleted when this point’s capture is incomplete); the session is forked into a new child session at the stable boundary before the target turn, and the original session log is not rewritten.',
   'rollback.rewind.allowPartial': 'Allow a partial rewind (this point is missing one of its two states)',
   'rollback.guard.require': 'A rescue point is mandatory before the rewind (if it cannot be kept, everything is aborted with zero writes)',
   'rollback.guard.warn': 'Keep a rescue point before the rewind (if it cannot be kept, warn and continue)',

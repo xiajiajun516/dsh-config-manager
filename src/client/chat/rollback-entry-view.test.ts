@@ -32,6 +32,7 @@ import {
   chatRewindFailed,
   chatRewindFailure,
   canRevertFiles,
+  chatFileRemovalTotal,
   chatFileRemovalTruncated,
   chatRewindNotices,
   chatRewindSummary,
@@ -45,6 +46,7 @@ import {
   navigationSourcesOf,
   openChildSession,
   previewFileStatusKnown,
+  readRollbackPreviewCreatedSkipped,
   readRollbackPreviewFiles,
   readRollbackPreviewRemovals,
   requestRewind,
@@ -623,7 +625,7 @@ test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块�
   assert.match(dialog, /setRevertFiles\(previous, next\)/, '选择框只置 mode（唯一的 mode 置位入口）')
   assert.match(dialog, /className=\{css\.rollbackFileStat\}/, '±行数必须包在**紧跟文件名**的统计块里（第 2 条）')
   assert.match(dialog, /rollback\.preview\.file\.deleted/, '整文件删除必须写「删除」而不是 +0 −N（第 6 条）')
-  assert.match(dialog, /readRollbackPreviewRemovals\(/, '删除行必须取自「该点未记录」的 leftovers')
+  assert.match(dialog, /readRollbackPreviewRemovals\(/, '删除行必须取自引擎的删除集 removals（与执行阶段同一份规划）')
   assert.match(dialog, /RollbackFileIcon/, '文件名前面必须有文件类型图标（第 7 条）')
   assert.match(dialog, /render=\{renderFileIcon\}/, '图标的外部来源（dsh-better-sidebar）必须接进来')
   // 底部只有两个按钮：主按钮（回退）+ 取消/关闭（T13 非回归项：底部**恰好 2 个**）
@@ -1336,20 +1338,42 @@ test('第 1 条：选择框 → mode 只有两档，且与 wire 请求体逐字�
   assert.equal(setRevertFiles(null, true), null, '没有草稿就不造一个')
 })
 
-test('第 6 条：删除清单读法（leftovers）+ 两种「清单不完整」都要认出来', () => {
-  assert.deepEqual(readRollbackPreviewRemovals({ leftovers: ['C:/p/a.md', 'C:/p/b.md'] }), ['C:/p/a.md', 'C:/p/b.md'])
-  assert.deepEqual(readRollbackPreviewRemovals({ leftovers: ['C:/p/a.md', 'C:/p/a.md', '', 42, null] }), ['C:/p/a.md'], '去重 + 只认非空字符串')
+test('第 6 条：删除清单读法（removals，不是 leftovers）+ 三种「清单不完整」都要认出来', () => {
+  assert.deepEqual(readRollbackPreviewRemovals({ removals: ['C:/p/a.md', 'C:/p/b.md'] }), ['C:/p/a.md', 'C:/p/b.md'])
+  assert.deepEqual(readRollbackPreviewRemovals({ removals: ['C:/p/a.md', 'C:/p/a.md', '', 42, null] }), ['C:/p/a.md'], '去重 + 只认非空字符串')
   assert.deepEqual(readRollbackPreviewRemovals({}), [])
   assert.deepEqual(readRollbackPreviewRemovals(null), [])
-  assert.deepEqual(readRollbackPreviewRemovals({ leftovers: 'nope' }), [])
+  assert.deepEqual(readRollbackPreviewRemovals({ removals: 'nope' }), [])
+  // **不回落 leftovers**：那份清单含永不删除的拒删项（.git 等）—— 回落等于把
+  // 「预览说会删的 ≠ 实际删的」重新引回来（用户 2026-10-12 实测的缺陷）
+  assert.deepEqual(readRollbackPreviewRemovals({ leftovers: ['C:/p/a.md'] }), [], 'leftovers 不是删除清单')
+
+  assert.equal(chatFileRemovalTotal({ removalsCount: 25 }), 25)
+  assert.equal(chatFileRemovalTotal({ removals: ['a'] }), 1)
+  assert.equal(chatFileRemovalTotal({ createdAfter: 30 }), 30, '老宿主：回落「未记录总数」并据此标不完整')
+  assert.equal(chatFileRemovalTotal({}), null)
 
   // 不完整①：宿主明说截断
-  assert.equal(chatFileRemovalTruncated({ leftovers: ['a'], leftoversTruncated: true }), true)
-  // 不完整②：createdAfter（真实总数）大于清单条数 —— 宿主上限 20 条，超出的既不在清单里也没打标记
-  assert.equal(chatFileRemovalTruncated({ leftovers: ['a', 'b'], createdAfter: 30 }), true)
-  // 完整：总数与清单一致 / 没有总数可比且宿主没打截断
-  assert.equal(chatFileRemovalTruncated({ leftovers: ['a', 'b'], createdAfter: 2 }), false)
-  assert.equal(chatFileRemovalTruncated({ leftovers: ['a'] }), false, '没有总数可比 ⇒ 不无中生有一句「不完整」')
+  assert.equal(chatFileRemovalTruncated({ removals: ['a'], removalsTruncated: true }), true)
+  // 不完整②：真实总数大于清单条数 —— 逐条 20 条上限，超出的既不在清单里也没打标记
+  assert.equal(chatFileRemovalTruncated({ removals: ['a', 'b'], removalsCount: 30 }), true)
+  // 不完整③：老宿主没给 removals 字段却报了「未记录 > 0」⇒ 清单不可信（绝不假装「没有要删的」）
+  assert.equal(chatFileRemovalTruncated({ createdAfter: 2 }), true)
+  // 完整：总数与清单一致 / 空清单 / 什么都没有
+  assert.equal(chatFileRemovalTruncated({ removals: ['a', 'b'], removalsCount: 2 }), false)
+  assert.equal(chatFileRemovalTruncated({ removals: [] }), false)
+  assert.equal(chatFileRemovalTruncated({}), false)
+
+  // 拒删项读法（.git 等：**不会**被删，与删除清单分开说）；捕获不完整时整批候选都进这里
+  assert.deepEqual(
+    readRollbackPreviewCreatedSkipped({ createdSkipped: ['C:/p/.git/index'], createdSkippedCount: 3 }),
+    { paths: ['C:/p/.git/index'], count: 3, reason: null },
+  )
+  assert.deepEqual(
+    readRollbackPreviewCreatedSkipped({ createdRefusedReason: 'capture-incomplete', createdSkippedCount: 12 }),
+    { paths: [], count: 12, reason: 'capture-incomplete' },
+  )
+  assert.deepEqual(readRollbackPreviewCreatedSkipped(null), { paths: [], count: 0, reason: null })
 })
 
 test('第 5 条（源级）：「查看」开进右侧栏成功后必须顺手关掉弹窗；降级通道不得被删', () => {

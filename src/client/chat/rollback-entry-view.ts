@@ -93,7 +93,8 @@ export function segmentsForMode(mode: string | null | undefined): RollbackState[
  *  · **只列会被改动的文件**（内容已一致的一个都不列 ⇒ 工作区与该回退点一致时是**空数组**）；
  *  · `added` / `removed` 可能是 **null**：单文件超上限 / 累计超限 / 步骤超限 / 非文本 / 对象仓读不出
  *    ⇒ 界面说「行数未统计」，**绝不写成 0**（0 是一个可被证伪的具体断言）；
- *  · `status` 目前只会是 `overwrite` / `create`：回退只覆盖、**绝不删除**文件（引擎 R-28）；
+ *  · `status` 目前只会是 `overwrite` / `create`：整文件删除走**另一条**清单
+ *    （`preview.workspace.removals` / `createdSkipped`），不进这份逐文件行级统计；
  *    `delete` 保留在取值集合里只为形状完整 —— 我们不解释它、也不为它编文案。
  */
 export type ChatPreviewFileRow = Omit<RollbackPreviewFile, 'status'> & { status: RollbackPreviewFileStatus | 'unknown' }
@@ -154,43 +155,74 @@ export function chatFileChangeAvailable(files: readonly ChatPreviewFileRow[]): b
 /* ------------------------------------------------------------ 预览：「该点未记录、回退会删掉」的文件 */
 
 /**
- * `preview.workspace.leftovers` 的读法 —— 回退**会删掉**的文件（该回退点**未记录**的路径）。
+ * `preview.workspace.removals` 的读法 —— 回退**会删掉**的文件（该点**未记录**、且过了安全判据的路径）。
  *
- * 为什么「删除」只能从这里读、**不得**从 `files[].added/removed` 反推：
+ * 为什么「删除」只能从这里读、**不得**从 `files[].added/removed` 或 `leftovers` 反推：
  *  · `preview.workspace.files` 只列**记录在案**的文件（回退只覆盖它们 / 重新创建它们），
- *    引擎的 `files[].status` 至今**永不产出** `delete`（src/core/rollback-point.ts:428 的注释：
- *    「保留该取值只为契约形状向前兼容」）；
- *  · 真正会被删掉的是「该点之后新建 / 留点时被跳过的既有文件」= leftovers。宿主侧
- *    `POST /recovery/rollback-points/:id/rewind` 的 `removeCreated` **缺省为真**
- *    （src/routes/recovery.ts:445：`body['removeCreated'] !== false`），本插件的请求体从不带它
- *    ⇒ 点「回退」时它们真的会被删。
- * 故界面必须把这件事**说出来**（用户 2026-10-12 第 6 条：整文件删除写「删除」，不写「+0 -N」）。
+ *    引擎的 `files[].status` 不产出 `delete`（整文件删除走**另一条**清单）；
+ *  · `leftovers` 是「该点未记录」的**全部**路径 —— 里面混着**永不删除**的拒删项
+ *    （`.git`/`node_modules` 段、插件数据区、越界、单文件超上限），且旧宿主只按前 20 条列。
+ *    拿它当删除清单**正是**用户 2026-10-12 报的「预览与实际对不上」：预览里混进不会删的、
+ *    又会漏掉第 21 条之后真的会删的。
+ *  · 真正会被删的是引擎 `planCreatedRemovals` 的产物 —— 预览与执行**共用同一个函数**，
+ *    所以这里读到的逐条与 `segments[].removedPaths` 一致。
+ * 宿主侧 `POST /recovery/rollback-points/:id/rewind` 的 `removeCreated` **缺省为真**
+ * （src/routes/recovery.ts:459：`body['removeCreated'] !== false`），本插件的请求体从不带它
+ * ⇒ 点「回退」时它们真的会被删。故界面必须把这件事**说出来**（用户 2026-10-12 第 6 条：
+ * 整文件删除写「删除」，不写「+0 -N」）。
  *
- * 上限与诚实：宿主清单最多 20 条（`ROLLBACK_LEFTOVER_LIST_LIMIT`），且 `createdAfter` 是**总数**
- * —— 清单短于总数就是**不完整**，界面据 {@link chatFileRemovalTruncated} 如实说一句，绝不假装列全。
+ * **不回落 `leftovers`**：那份清单语义不同（含拒删项），回落等于把刚修好的缺陷重新引回来。
+ * 老宿主（没有 `removals` 字段）由 {@link chatFileRemovalTruncated} 如实标成「清单不完整」。
  */
 export function readRollbackPreviewRemovals(workspace: unknown): string[] {
-  const leftovers = (workspace as { leftovers?: unknown } | null | undefined)?.leftovers
-  if (!Array.isArray(leftovers)) return []
+  const removals = (workspace as { removals?: unknown } | null | undefined)?.removals
+  if (!Array.isArray(removals)) return []
   const out: string[] = []
-  for (const item of leftovers) {
+  for (const item of removals) {
     if (typeof item !== 'string' || item === '' || out.includes(item)) continue
     out.push(item)
   }
   return out
 }
 
+/** 会被删除的**真实总数**（null = 宿主没给）。老宿主（无 `removals`）回落「未记录总数」并据此标不完整。 */
+export function chatFileRemovalTotal(workspace: unknown): number | null {
+  const record = workspace as { removalsCount?: unknown; removals?: unknown; createdAfter?: unknown } | null | undefined
+  const total = typeof record?.removalsCount === 'number' && Number.isFinite(record.removalsCount) ? record.removalsCount : null
+  if (total !== null) return total
+  if (Array.isArray(record?.removals)) return record.removals.length
+  const legacy = typeof record?.createdAfter === 'number' && Number.isFinite(record.createdAfter) ? record.createdAfter : null
+  return legacy
+}
+
 /**
- * 删除候选清单是否**不完整**（两种不完整都算）：
- *  · 宿主明说截断（`leftoversTruncated === true`）；
- *  · `createdAfter`（真实总数）大于清单条数 —— 宿主上限 20 条，超出的既不在清单里也没打截断标记。
+ * 删除清单是否**不完整**（三种不完整都算）：
+ *  · 宿主明说截断（`removalsTruncated === true`）；
+ *  · 真实总数大于清单条数 —— 逐条清单有 20 条上限，超出的既不在清单里也没打截断标记；
+ *  · 宿主**没有** `removals` 字段却报了「未记录 > 0」⇒ 清单根本不可信（绝不假装「没有要删的」）。
  */
 export function chatFileRemovalTruncated(workspace: unknown): boolean {
-  const record = workspace as { leftoversTruncated?: unknown; leftovers?: unknown; createdAfter?: unknown } | null | undefined
-  if (record?.leftoversTruncated === true) return true
-  const total = typeof record?.createdAfter === 'number' && Number.isFinite(record.createdAfter) ? record.createdAfter : null
-  const listed = Array.isArray(record?.leftovers) ? record.leftovers.length : 0
-  return total !== null && total > listed
+  const record = workspace as { removalsTruncated?: unknown; removals?: unknown; createdAfter?: unknown } | null | undefined
+  if (record?.removalsTruncated === true) return true
+  const listed = Array.isArray(record?.removals) ? record.removals.length : 0
+  const total = chatFileRemovalTotal(workspace)
+  if (total !== null && total > listed) return true
+  return !Array.isArray(record?.removals) && total !== null && total > 0
+}
+
+/** 按安全判据**拒删**的路径与总数（`.git` / 数据区 / 越界 / 过大 / 捕获不完整时的全部候选）。 */
+export function readRollbackPreviewCreatedSkipped(workspace: unknown): { paths: string[]; count: number; reason: string | null } {
+  const record = workspace as { createdSkipped?: unknown; createdSkippedCount?: unknown; createdRefusedReason?: unknown } | null | undefined
+  const paths: string[] = []
+  if (Array.isArray(record?.createdSkipped)) {
+    for (const item of record.createdSkipped) {
+      if (typeof item !== 'string' || item === '' || paths.includes(item)) continue
+      paths.push(item)
+    }
+  }
+  const declared = typeof record?.createdSkippedCount === 'number' && Number.isFinite(record.createdSkippedCount) ? record.createdSkippedCount : 0
+  const reason = typeof record?.createdRefusedReason === 'string' && record.createdRefusedReason !== '' ? record.createdRefusedReason : null
+  return { paths, count: Math.max(declared, paths.length), reason }
 }
 
 /**
