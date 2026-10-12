@@ -163,3 +163,20 @@ test('台账弹窗分栏 / 刷新不抖 / 预览留白（2026-10-12 用户要求
   assert.ok(src.includes('group.title ?? group.sessionId'), '左栏必须优先显示对话标题，拿不到才回落会话 id');
   assert.ok(src.includes('activeGroup.title ?? activeGroup.sessionId'), '右栏组头同样优先显示标题');
 });
+
+/* ------------------- 2026-10-12：会话体检卡删掉「预扫描说明」文案 */
+
+/**
+ * 用户 2026-10-12 要求删掉卡上那行描述（「打开后扫描本机存量会话：哪些读不出来……（扫描只读）。」）——
+ * 卡上只留真正的信息：扫描摘要与主操作。类型检查/模型单测都抓不到「文案又被加回来」，
+ * 故仍用源码守卫钉住：卡内不得再渲染该键，字典（zh/en）里也不得再有它。
+ */
+test('会话体检卡不再渲染预扫描说明文案（用户 2026-10-12 要求）', () => {
+  const sessions = functionBody('SessionHealthCard');
+  assert.equal(sessions.includes('sessions.dialog.hint'), false, '预扫描说明文案不得再回到卡上');
+  // 摘要行必须保留，且只在真有扫描结果时渲染（首屏不得留空行）
+  assert.ok(sessions.includes("t('sessions.dialog.lastScan'"), '扫描摘要必须保留');
+  assert.match(sessions, /summary !== null && response !== null &&/, '摘要只在有结果时渲染');
+  const locales = readFileSync('src/client/recovery/recovery-locales.ts', 'utf8');
+  assert.equal(locales.includes("'sessions.dialog.hint'"), false, '字典里不得留下已删文案（zh 与 en 都要删）');
+});

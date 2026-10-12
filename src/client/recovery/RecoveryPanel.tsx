@@ -328,15 +328,16 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
       </div>
       {/* T10：结果全部搬进独立弹窗 —— 卡片只留入口与一行摘要，绝不把上千行塞进设置页。
           2026-10-12 用户要求：本卡**退出折叠**，入口与摘要常驻可见（不再有 chevron）。 */}
-      <div className={css.hint}>
-        {summary !== null && response !== null
-          ? t('sessions.dialog.lastScan', {
-              total: String(summary.total),
-              issues: String(summary.needsAttention),
-              repairs: String(repairEntries.length),
-            })
-          : t('sessions.dialog.hint')}
-      </div>
+      {/* 2026-10-12 用户要求：预扫描说明文案已删（点按钮即扫，屏上只留真正的摘要）。 */}
+      {summary !== null && response !== null && (
+        <div className={css.hint}>
+          {t('sessions.dialog.lastScan', {
+            total: String(summary.total),
+            issues: String(summary.needsAttention),
+            repairs: String(repairEntries.length),
+          })}
+        </div>
+      )}
       <div className={css.actionRow}>
         <Button variant="ghost" loading={loading} onClick={() => { setOpen(true) }}>
           {loading ? t('sessions.scanning') : t('sessions.dialog.open')}

@@ -1129,6 +1129,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🗑️ 移除 · Removed
 
+> **环境 → 维护与诊断的「会话体检」卡不再写那行预扫描说明**（用户 2026-10-12）：没扫过时卡上原本渲染
+> 「打开后扫描本机存量会话：哪些读不出来、哪些能应用内修复，都在弹窗里处理（扫描只读）。」—— 点按钮即在弹窗里看结果，
+> 这行只是把机制又复述一遍。现在卡上只留标题 / 状态徽章 / ⓘ 与主操作，以及**真的有扫描结果之后**的数字摘要（首屏不留空行）；
+> 字典键 `sessions.dialog.hint`（zh + en）一并删除，源码守卫见 `recovery-panel-layout.test.ts`。
+
+> **The "session health check" card no longer prints a pre-scan description line** (user request, 2026-10-12): before the first scan the card
+> rendered "打开后扫描本机存量会话……" — the dialog itself shows the results, so the line only repeated the mechanism. The card now shows
+> title / status badge / ⓘ and the main action, plus the numeric summary **only once a scan result exists** (no empty line on first paint);
+> the `sessions.dialog.hint` key was removed from both zh and en, with a source guard in `recovery-panel-layout.test.ts`.
+
 > **三态检查点与手动拍点整体下线**：删除 config 第三态与 `samePointVerdictOf` 同点判定（`spreadMs` 只作为两态捕获时间的跨度事实回传，不再有「同点」结论）；删除手动「拍点」表单与
 > `POST /recovery/checkpoints/capture` 子路径（留点改为按回合自动）；删除 `src/core/checkpoint.ts`、`src/ui/checkpoint-view.ts`、`src/client/recovery/CheckpointCard.tsx` 及其测试。
 
