@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 工作区 + 会话回滚点引擎单测（t1）。
  *
  * 纪律（与本仓既有 core 测试同款）：**真实临时目录**（os.tmpdir + fs.mkdtemp）+ 真实读写，
@@ -564,6 +564,118 @@ test('R-05b 开 removeCreated：回退点之后新建的路径被真的删掉；
   assert.equal(ws?.removed, 1)
   assert.deepEqual(ws?.removedPaths, [path.join(fx.workspaceDir, 'new.txt')])
   assert.ok((ws?.detail ?? []).some((line) => line.includes('removed=1')), 'detail 必须带 removed=1')
+})
+
+/**
+ * R-05e（用户 2026-10-12 真机第二例：工作区文件数超 `maxFiles` 时，**中间回合新建的文件一条都删不掉**）。
+ *
+ * 判据是**这一行**：删除候选的「证明」曾经只有 `payload.files` 一份，而捕获侧的跳过清单有**记录上限**
+ * （`maxSkippedEntries`，缺省 5000）。工作区文件数 > maxFiles 时每个点都 `truncated=true`；一旦超出
+ * 的条目多到名单被截断（`skippedTruncated=true`），旧判据（`payload.truncated || unreadableFiles`）
+ * 整体放弃删除 ⇒ 用户点某条更早消息的「↺ 回退」时，**中间回合新建的文件全部留在工作区**。
+ * 本仓库实测：工作区 88 138 个文件（`.tmp/` + `outputs/` + `.git`）⇒ 每个自动点都被截断。
+ *
+ * 修法（方向 A+B）：捕获侧把**走过**的全部路径写进**路径索引对象**（gzip、内容寻址）⇒
+ * 「留点时刻存在哪些路径」永远可证；删除候选 = 当前存在、在 chunks 内、且**不在**
+ * files ∪ skipped ∪ unreadableFiles ∪ excludedDirs ∪ 路径索引 任何一份名单里。
+ * 索引缺失 / 读不出（老台账 / 对象丢失）⇒ 仍 fail-closed 一条都不删并如实报告（见 R-05f）。
+ */
+test('R-05e 预算截断的点：中间回合新建的路径必须被删；被预算挡下的既有文件一条都不删', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 9 个既有文件 + maxFiles=4 + maxSkippedEntries=2 ⇒ 跳过名单被截断（这正是本用例的输入）
+  const names = Array.from({ length: 9 }, (_, i) => 'old-' + String(i + 1) + '.txt')
+  const dir = await makeSizeDir(fx, 'cap-index', Object.fromEntries(names.map((n) => [n, 3])))
+  const engine = makeEngine(fx, { maxFiles: 4, maxSkippedEntries: 2 })
+  const tracker = new RollbackAutoTracker({ engine })
+  tracker.registerSession({
+    sessionId: 's-e', unitId: 'proj-key/s-e', logPath: fx.logFile, chunks: [dir],
+  })
+
+  // 回合 1：留点（工作区 = 这 9 个既有文件）
+  await tracker.noteEvent({ sessionId: 's-e', seq: 0, type: 'turn/start', data: { turn: 1 } })
+  const point = (await engine.list()).points.find((p) => p.turn === 1)
+  assert.notEqual(point?.id, undefined, '回合开始就该有点')
+  // list() 给的是摘要（没有 payload）—— 证明名单只能从详情里读
+  const payload = (await engine.read(point?.id ?? '')).point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(payload.skippedTruncated, true, '前提：跳过名单被记录上限截断')
+  const recorded = new Set(payload.files.map((f) => f.path))
+  const listedSkip = new Set(payload.skipped.map((s) => s.path))
+  const oldFiles = names.map((n) => path.join(dir, n))
+  // 前提：存在「既没被记录、也没进逐条跳过名单」的既有文件 —— 旧判据只能全盘放弃删除
+  const unprovable = oldFiles.filter((f) => !recorded.has(f) && !listedSkip.has(f))
+  assert.ok(unprovable.length > 0, '前提：存在无法逐条证明的既有文件')
+
+  // 回合 2 / 3（中间回合）：新建 a、b，并改掉一个在预算外的既有文件 C
+  const createdA = path.join(dir, 'created-a.txt')
+  const createdB = path.join(dir, 'created-b.txt')
+  const modified = unprovable[0] ?? ''
+  await fs.writeFile(createdA, 'A')
+  await fs.writeFile(createdB, 'B')
+  await fs.writeFile(modified, 'CHANGED-IN-LATER-TURN')
+  await tracker.noteEvent({ sessionId: 's-e', seq: 4, type: 'turn/end', data: { turn: 3 } })
+
+  // 从最后回合**直接**退回第 1 回合那个点
+  const rewound = await engine.rewind({
+    id: point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true,
+  })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.status, 'restored', JSON.stringify(rewound.segments))
+
+  // ① **本次要修的**：中间回合新建的路径必须被删（修复前这里恒为 0 —— truncated ⇒ 一条都不删）
+  await assert.rejects(fs.readFile(createdA), { code: 'ENOENT' }, '中间回合新建的 a 必须被删')
+  await assert.rejects(fs.readFile(createdB), { code: 'ENOENT' }, '中间回合新建的 b 必须被删')
+  assert.equal(ws?.removed, 2, 'removed 必须等于真实删除数（detail=' + JSON.stringify(ws?.detail) + '）')
+  assert.deepEqual([...(ws?.removedPaths ?? [])].sort(), [createdA, createdB].sort())
+  // 删了 2 个文件就不是「0 变更」—— 顶层不许再说 nothing-to-restore（假尾句）
+  assert.equal(rewound.code, 'ok', JSON.stringify({ outcome: rewound.outcome, code: rewound.code, segments: rewound.segments }))
+
+  // ② 护栏（上一轮口径，不得回归）：**留点时就存在**的文件一条都不许删 —— 含被预算挡下、既没进
+  //    files 也没进 skipped 的那一个；没被记录的既有文件既不能删、也不能凭空还原内容
+  for (const file of oldFiles) await fs.access(file)
+  assert.equal(await readText(modified), 'CHANGED-IN-LATER-TURN', '没被记录的既有文件既不能删、也不能凭空还原')
+
+  // ③ 报告如实：这次不是「无法证明」拒删，detail 带真实删除数
+  assert.equal(ws?.createdRefusedReason, undefined, JSON.stringify(ws))
+  assert.ok((ws?.detail ?? []).some((line) => line.includes('removed=2')), JSON.stringify(ws?.detail))
+  assert.equal(ws?.createdSkippedCount, 0, '9 个既有文件都进了证明名单 ⇒ 不该出现在拒删里')
+})
+
+/**
+ * R-05f（同一判据的另一侧）：**证明名单不完整时一条都不删，并如实回传原因**。
+ * 索引对象丢失（老台账 / 对象仓损坏）等价于「无法证明」⇒ 绝不按「未记录」猜「新建」。
+ */
+test('R-05f 路径索引读不出（老台账 / 对象丢失）⇒ 仍 fail-closed：一条都不删 + 如实报告原因', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const names = Array.from({ length: 9 }, (_, i) => 'old-' + String(i + 1) + '.txt')
+  const dir = await makeSizeDir(fx, 'cap-index-missing', Object.fromEntries(names.map((n) => [n, 3])))
+  const engine = makeEngine(fx, { maxFiles: 4, maxSkippedEntries: 2 })
+  const tracker = new RollbackAutoTracker({ engine })
+  tracker.registerSession({
+    sessionId: 's-f', unitId: 'proj-key/s-f', logPath: fx.logFile, chunks: [dir],
+  })
+  await tracker.noteEvent({ sessionId: 's-f', seq: 0, type: 'turn/start', data: { turn: 1 } })
+  const point = (await engine.list()).points.find((p) => p.turn === 1)
+  const indexObject = (await engine.read(point?.id ?? '')).point?.workspace.payload?.pathIndex?.object ?? ''
+  assert.notEqual(indexObject, '', '前提：被截断的点必须带路径索引对象')
+  // 把索引对象从对象仓里拿走 —— 等价于老台账（没有这个字段）或对象仓丢了这一份
+  await fs.rm(path.join(engine.storeDir, 'objects', indexObject), { force: true })
+
+  const created = path.join(dir, 'created.txt')
+  await fs.writeFile(created, 'NEW')
+  const rewound = await engine.rewind({
+    id: point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true,
+  })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.status, 'restored', JSON.stringify(rewound.segments))
+  // 0 变更的段走 noop 口径（removed 缺省不给数字）—— 两种都算「一条都没删」
+  assert.equal(ws?.removed ?? 0, 0, '证明不了就一条都不删（绝不按「未记录」猜「新建」）')
+  assert.equal(await readText(created), 'NEW')
+  assert.equal(ws?.createdRefusedReason, 'capture-incomplete', '拒删原因必须如实回传')
+  assert.ok((ws?.createdSkippedCount ?? 0) > 0, '候选必须如实进拒删清单')
+  for (const file of names.map((n) => path.join(dir, n))) await fs.access(file)
 })
 
 /* =================================================== R-06 恢复前救援点 */

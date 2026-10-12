@@ -15,10 +15,14 @@
  * - **S4 工作区恢复 = 只覆盖记录在案的路径 + 只删「未记录且可证」的路径**：写回前先做**只读校验**
  *   （路径必须落在记录里的分块内 + 对象仓内容 SHA-256 必须与记录一致），任何一条不合格 →
  *   **零写入**整体失败。
- *   删除（用户 2026-10-11 定案 A）只作用于「该点**未记录**」且过了安全判据的路径
+ *   删除（用户 2026-10-11 定案 A + 2026-10-12 修法 A+B）只作用于**能证明「留点时刻不存在」**的路径：
+ *   候选 = 当前存在、在分块内、且**不在**证明名单里（证明名单 = `files` ∪ `skipped` ∪
+ *   `unreadableFiles` ∪ `excludedDirs` ∪ **路径索引** `pathIndex` —— 捕获时走查过的全部路径，
+ *   gzip 对象；逐条跳过名单被记录上限截断时它就是那份完整名单）。候选再过安全判据才删
  *   （`.git`/`node_modules` 段、插件数据区、分块外、非绝对路径、单文件超上限一律**拒删**并如实进
- *   `createdSkipped`）；**该点捕获不完整时（预算截断 / 有读不出的文件）一条都不删** ——
- *   那时「未记录」不能证明「新建」，删了就是不可恢复地毁掉既有文件。
+ *   `createdSkipped`）；**证明名单不完整时一条都不删**（只有两类情形：跳过名单被截断时路径索引缺失/读不出
+ *   —— 老台账、对象丢失、gzip 坏；或有读不出的目录）。**「预算截断」本身不再拒删** —— 旧口径拿它当「捕获不完整」整体放弃，
+ *   于是大工作区（本仓实测 88 138 个文件）里每个点都不删，中间回合新建的文件全部留在工作区。
  *   预览与执行**共用同一份规划**（`planCreatedRemovals`）⇒ 预览说会删的 = 实际删的。
  *   **捕获边界口径（t13 冻结）**：单文件上限 `maxFileBytes`（缺省 = 总量预算 `maxBytes`）**先 stat 判大小**，
  *   超限就跳过、绝不整份读进内存；文件数预算（maxFiles）与字节预算（maxBytes）耗尽时其后**每一条**都进
@@ -56,6 +60,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { gunzipSync, gzipSync } from 'node:zlib'
 
 import { atomicWriteFile } from '../utils/atomic-write.ts'
 import { sha256Hex } from '../utils/hashing.ts'
@@ -255,6 +260,22 @@ export interface RollbackSkippedEntry {
   reason: string
 }
 
+/**
+ * 「留点时刻**走过**哪些路径」的完整证明名单（内容寻址的 gzip 对象：每行一个绝对路径，UTF-8）。
+ *
+ * 它存在的唯一理由 = **方向 B**：`maxSkippedEntries`（逐条跳过名单的记录上限，缺省 5000）一旦截断，
+ * `files ∪ skipped` 就不再是完整名单 —— 没有它，「未记录」就无法与「留点时就存在」区分，
+ * 于是只能整点放弃删除（那正是「中间回合新建的文件一个都没被删」的机制）。
+ */
+export interface RollbackPathIndex {
+  /** 对象仓键（内容寻址到 gzip 后的字节） */
+  object: string
+  /** 名单条数（= 走查过的文件数） */
+  count: number
+  /** gzip 后的字节数（诊断 / 日志用） */
+  bytes: number
+}
+
 export interface RollbackWorkspacePayload {
   /** 显式路径分块：恢复只在这些分块内覆盖 */
   chunks: string[]
@@ -278,6 +299,15 @@ export interface RollbackWorkspacePayload {
   /** 命中文件数 / 字节上限（内容未全部进来，已如实留痕） */
   truncated: boolean
   bytes: number
+  /**
+   * 捕获时走查过的**全部**文件路径（gzip 对象）。只在 `skippedTruncated === true`（逐条跳过名单被
+   * 记录上限截断）时才有值：
+   *  · 有值 ⇒ 删除候选可以证明「当前存在但不在任何名单里」= 留点之后新建的；
+   *  · null 且 `skippedTruncated` ⇒ **证明不了** ⇒ 回退一条都不删（fail-closed，如实报告）；
+   *  · null 且未截断 ⇒ 不需要它（`files ∪ skipped` 已经是完整名单）。
+   * 老台账（本字段诞生前写下的点）一律没有它 —— 与「索引丢失」同一条 fail-closed 路径。
+   */
+  pathIndex?: RollbackPathIndex | null
 }
 
 export interface RollbackSessionPayload {
@@ -526,7 +556,9 @@ export interface RollbackPreviewWorkspace {
   /** E1：逐文件行级统计；**只含会被改动的文件**（内容已一致的一个都不列） */
   files: RollbackPreviewFile[]
   /**
-   * 该点**未记录**的路径（含被拒删的；逐条清单上限 `ROLLBACK_LEFTOVER_LIST_LIMIT`）。
+   * **能证明「留点之后新建」**的路径（含被拒删的；逐条清单上限 `ROLLBACK_LEFTOVER_LIST_LIMIT`）。
+   * 判据 = 当前存在、在分块内、且不在证明名单（`files` ∪ `skipped` ∪ `unreadableFiles` ∪
+   * `excludedDirs` ∪ 路径索引）里 —— 留点时被预算挡下的既有文件同样在名单里，**不算**新建。
    * **不是删除清单**：删除清单是 {@link removals}（逐条过了同一套安全判据）。
    */
   leftovers: string[]
@@ -547,14 +579,15 @@ export interface RollbackPreviewWorkspace {
   /**
    * 按安全判据**拒删**的路径（逐条清单有界，总数见 {@link createdSkippedCount}）：
    * `.git`/`node_modules` 段、插件数据区、分块外、非绝对路径、单文件超上限，
-   * 以及捕获不完整时**全部候选**（见 {@link createdRefusedReason}）。
+   * 以及**证明名单不完整**时全部候选（见 {@link createdRefusedReason}）。
    */
   createdSkipped: string[]
   createdSkippedCount: number
   createdSkippedTruncated: boolean
   /**
-   * 非 null = 该点的捕获**不完整**（预算截断 / 有读不出的文件）⇒「未记录」不能证明「新建」，
-   * 故**一条都不删**（安全拒删：宁可少删，绝不误删既有文件）。
+   * 非 null = **证明名单不完整** ⇒「未记录」不能证明「新建」，故**一条都不删**。
+   * 只有两种成因：跳过名单被记录上限截断而路径索引缺失/读不出、有读不出的目录
+   * （**不是**「预算截断」—— 那正是 2026-10-12 修掉的那一条假判据）。
    */
   createdRefusedReason: 'capture-incomplete' | null
   chunks: string[]
@@ -634,7 +667,7 @@ export interface RollbackSegmentResult {
   restored: number
   failed: number
   /**
-   * 该点**未记录**的路径（逐条清单有界；含被拒删的）。缺省只报告；
+   * 能证明「留点之后新建」的路径（逐条清单有界；含被拒删的）。缺省只报告；
    * 开 `removeCreated` 时其中通过安全判据的会被删 —— 那一份是 `removedPaths`，**不是**本字段。
    */
   leftovers: string[]
@@ -648,7 +681,7 @@ export interface RollbackSegmentResult {
   removedPaths?: string[]
   /**
    * 按安全判据**拒删**的路径（越界 / 落在插件数据区 / `.git` / `node_modules` / 单文件过大；
-   * 捕获不完整时是**全部候选**）。逐条清单有界，总数见 `createdSkippedCount`。
+   * 证明名单不完整时是**全部候选**）。逐条清单有界，总数见 `createdSkippedCount`。
    */
   createdSkipped?: string[]
   /** 拒删路径的**真实总数**（不受逐条清单上限影响） */
@@ -1120,11 +1153,11 @@ interface ChunkWalkSink {
 }
 
 /**
- * 一次「该点未记录路径」的**完整规划**：预览与执行共用同一份（单一事实源）。
+ * 一次「证明为留点之后新建的路径」的**完整规划**：预览与执行共用同一份（单一事实源）。
  * 逐条清单**不截断**（删除不能只删前 20 条）—— 展示层的上限只在渲染时切。
  */
 interface CreatedRemovalPlan {
-  /** 该点**未记录**的全部路径（遍历顺序、全量；含被拒删的） */
+  /** **证明为留点之后新建**的全部路径（遍历顺序、全量；含被拒删的） */
   all: string[]
   /** 其中**会被删除**的（全量；安全判据 + 单文件上限都过了） */
   paths: string[]
@@ -1296,6 +1329,20 @@ export class RollbackPointEngine {
     return await fs.readFile(target)
   }
 
+  /**
+   * 读回路径索引并校验完整性（内容寻址 ⇒ 字节一变就对不上，绝不用坏名单下删除判断）。
+   * 任何异常（对象丢失 / gzip 坏 / 哈希不符）都抛给调用方 —— 调用方据此 fail-closed。
+   */
+  private async readPathIndex(index: RollbackPathIndex): Promise<string[]> {
+    const raw = await this.readObject(index.object)
+    if (sha256Hex(raw) !== index.object) throw new Error('rollback path index hash mismatch')
+    const text = gunzipSync(raw).toString('utf8')
+    if (text === '') return []
+    const paths = text.split('\n')
+    if (paths.length !== index.count) throw new Error('rollback path index count mismatch: ' + String(paths.length) + ' != ' + String(index.count))
+    return paths
+  }
+
   /* ------------------------------------------------------------ 捕获：态 */
 
   private emptyTrack<TPayload = never>(
@@ -1383,6 +1430,11 @@ export class RollbackPointEngine {
     chunk: string,
     sink: ChunkWalkSink,
     limit: number,
+    /**
+     * 捕获期专用：把**走查过**的每条文件路径都记进来（含超出 limit、因而没进 `out` 的那些）——
+     * 路径索引（{@link RollbackPathIndex}）的来源。回退期的走查不传它（那份名单只由记录决定）。
+     */
+    collect?: string[],
   ): Promise<{ files: string[]; truncated: boolean } | null> {
     let stat
     try {
@@ -1436,6 +1488,7 @@ export class RollbackPointEngine {
           this.recordSkip(sink, 'skipped', { path: full, reason: 'not-a-file' })
           continue
         }
+        collect?.push(full)
         if (out.length >= limit) {
           // 文件数预算用尽：**逐条留痕**（不静默截断），但不再收进 files；继续遍历把后面每条也记上
           truncated = true
@@ -1466,11 +1519,13 @@ export class RollbackPointEngine {
     }
     let read = 0
     let sawChunk = false
+    // 走查过的**全部**文件路径（含被预算 / 单文件上限挡下的）—— 路径索引的来源（方向 B）
+    const walked: string[] = []
     for (const chunk of chunks) {
       if (!path.isAbsolute(chunk)) return this.emptyTrack('workspace', capturedAt, 'chunk-not-absolute', chunk)
       const resolved = path.resolve(chunk)
       // 文件数预算还剩多少就收多少；+1 只用于让遍历器发现「还有溢出」——溢出条目逐条记 skipped
-      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1)
+      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1, walked)
       if (listed === null) continue
       sawChunk = true
       if (listed.truncated) payload.truncated = true
@@ -1528,6 +1583,21 @@ export class RollbackPointEngine {
     }
     if (!sawChunk && payload.files.length === 0) {
       return this.emptyTrack('workspace', capturedAt, 'chunk-not-found', chunks.join(' '))
+    }
+    // **方向 B**：逐条跳过名单被记录上限截断（skippedTruncated）时，把走查过的全部路径另存成
+    // 路径索引对象 —— 「未记录」与「留点时就存在」只有在名单完整时才可区分。
+    // 只有这一种情形需要它：未截断时 files ∪ skipped 本身就是完整名单（零额外成本）。
+    // 写失败绝不改判留点成败：skippedTruncated 仍为 true ⇒ 回退侧 fail-closed 一条都不删（R-05f）。
+    if (payload.skippedTruncated) {
+      try {
+        const paths = [...new Set(walked)].sort()
+        const gz = gzipSync(Buffer.from(paths.join('\n'), 'utf8'))
+        const object = sha256Hex(gz)
+        await this.writeObjectWithHash(gz, object)
+        payload.pathIndex = { object, count: paths.length, bytes: gz.byteLength }
+      } catch (error) {
+        this.warn('rollback path index failed: ' + errorDetail(error))
+      }
     }
     // 留痕列表也排序：跨分块 / 依赖 readdir 顺序时输出仍确定（测试与对账都能逐条比）
     payload.skipped.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
@@ -1632,6 +1702,8 @@ export class RollbackPointEngine {
     const referenced = new Set<string>()
     for (const record of records) {
       for (const file of record.workspace.payload?.files ?? []) referenced.add(file.object)
+      const pathIndex = record.workspace.payload?.pathIndex
+      if (pathIndex !== null && pathIndex !== undefined) referenced.add(pathIndex.object)
       const sessionObject = record.session.payload?.object
       if (sessionObject !== null && sessionObject !== undefined) referenced.add(sessionObject)
     }
@@ -1773,7 +1845,7 @@ export class RollbackPointEngine {
   }
 
   /**
-   * 该点**未记录路径**的完整规划 —— 预览（`preview`）与执行（`restoreWorkspace`）**共用这一份**。
+   * 「证明为留点之后新建」的完整规划 —— 预览（`preview`）与执行（`restoreWorkspace`）**共用这一份**。
    *
    * 为什么必须只有一份：旧实现两处各算一次删除口径 —— 预览用只按「未记录 + 在 chunks 内」
    * 过滤、且只取前 `ROLLBACK_LEFTOVER_LIST_LIMIT` 条、**不过滤拒删项**的清单；执行用
@@ -1782,18 +1854,45 @@ export class RollbackPointEngine {
    * 预览列 20 条 = 3 条 .git（不会删）+ 17 条会删；实际删 25 条 ⇒ 8 条会删的没被列出）。
    *
    * 三条判据都在这里一次算清（预览与执行逐条同源）：
-   *  ① 路径判据 {@link createdRemovalRefusal}（分块外 / 数据区 / `.git` / `node_modules` / 非绝对路径）；
-   *  ② 单文件上限（先 `stat` 判大小；读不出大小且非 ENOENT 一律拒删 ——「不知道多大」≠「可以删」）；
-   *  ③ 捕获完整性：`payload.truncated`（预算/大小截断）或 `unreadableFiles` 非空 ⇒ 记录的集合
-   *     **不能证明**「谁是新来的」（留点时被挡下的既有文件同样是「未记录」）⇒ **一条都不删**。
+   *  ① **证明**（方向 A+B）：候选 = 当前存在、在分块内、且不在证明名单里的路径 —— 证明名单 =
+   *     `files` ∪ `skipped` ∪ `unreadableFiles` ∪ `excludedDirs` ∪ **路径索引**（`payload.pathIndex`，
+   *     捕获时走查过的全部路径）。证明名单**不完整时一条都不删**（只有两种情形：名单被记录上限截断
+   *     而索引缺失/读不出、有读不出的目录 —— 目录内容在留点时刻未知，索引也补不上）。
+   *     **「预算截断」本身不再拒删**：预算挡下的既有文件都在 `skipped` 或路径索引里 ⇒ 它们照样不是候选；
+   *     旧口径拿它整体放弃删除，于是大工作区里中间回合新建的文件一条都删不掉（用户 2026-10-12 真机）。
+   *  ② 路径判据 {@link createdRemovalRefusal}（分块外 / 数据区 / `.git` / `node_modules` / 非绝对路径）；
+   *  ③ 单文件上限（先 `stat` 判大小；读不出大小且非 ENOENT 一律拒删 ——「不知道多大」≠「可以删」）。
    */
   private async planCreatedRemovals(
     payload: RollbackWorkspacePayload,
-    captured: ReadonlySet<string>,
     sink: ChunkWalkSink,
   ): Promise<CreatedRemovalPlan> {
+    // 证明名单：捕获时**存在过**的路径（能证明的都在这里）
+    const proof = new Set<string>()
+    for (const file of payload.files) proof.add(pathKey(file.path))
+    for (const entry of payload.skipped) proof.add(pathKey(entry.path))
+    for (const entry of payload.unreadableFiles) proof.add(pathKey(entry.path))
+    for (const entry of payload.excludedDirs) proof.add(pathKey(entry.path))
+    let refused: CreatedRemovalPlan['refused'] = null
+    if (payload.skippedTruncated) {
+      // 逐条跳过名单被记录上限截断 ⇒ 必须有路径索引，否则「未记录」≠「留点之后新建」
+      const index = payload.pathIndex ?? null
+      if (index === null) refused = 'capture-incomplete'
+      else {
+        try {
+          for (const item of await this.readPathIndex(index)) proof.add(pathKey(item))
+        } catch (error) {
+          this.warn('rollback path index unreadable: ' + errorDetail(error))
+          refused = 'capture-incomplete'
+        }
+      }
+    }
+    // 读不出的目录：目录内容在留点时刻**未知**（路径索引只含走查过的路径）⇒ 同样证明不了
+    if (refused === null && payload.unreadableDirs.length > 0) refused = 'capture-incomplete'
     const chunks = payload.chunks
-    const limit = Math.max(this.maxFiles * 4, 2000)
+    // 走查上限 = 全树：候选的**准入**由证明名单负责，条数上限不再是安全阀
+    //（旧上限 maxFiles*4 会在巨型工作区里静默漏掉真正的新建文件 —— 那是「删一半」，不是 fail-closed）
+    const limit = Number.MAX_SAFE_INTEGER
     const candidates: string[] = []
     let truncated = false
     for (const chunk of chunks) {
@@ -1802,7 +1901,7 @@ export class RollbackPointEngine {
       if (listed === null) continue
       if (listed.truncated) truncated = true
       for (const file of listed.files) {
-        if (captured.has(pathKey(file))) continue
+        if (proof.has(pathKey(file))) continue
         candidates.push(file)
       }
     }
@@ -1825,8 +1924,6 @@ export class RollbackPointEngine {
       if (!stat.isFile() || stat.size > this.maxFileBytes) { skipped.push(file); continue }
       paths.push(file)
     }
-    const refused: CreatedRemovalPlan['refused'] =
-      payload.truncated || payload.unreadableFiles.length > 0 ? 'capture-incomplete' : null
     return {
       all,
       paths: refused === null ? paths : [],
@@ -1947,7 +2044,6 @@ export class RollbackPointEngine {
     } else {
       workspace.chunks = [...wsPayload.chunks]
       workspace.available = true
-      const captured = new Set(wsPayload.files.map((f) => pathKey(f.path)))
       let different = 0
       let missing = 0
       // E1：逐文件行级统计 —— **只列会被改动的文件**（内容已一致的一个都不列）
@@ -2006,7 +2102,7 @@ export class RollbackPointEngine {
       }
       const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
       // 删除集与执行阶段**同一份**（planCreatedRemovals）：预览说会删的，就是真的会删的
-      const plan = await this.planCreatedRemovals(wsPayload, captured, sink)
+      const plan = await this.planCreatedRemovals(wsPayload, sink)
       workspace.overwrite = wsPayload.files.length
       workspace.different = different
       workspace.missing = missing
@@ -2296,8 +2392,12 @@ export class RollbackPointEngine {
      * 只有**所有**被请求的段都无事可做，整体才是「成功、0 变更」= outcome 'restored' +
      * code 'nothing-to-restore'；只要有一段真的动了东西或真的失败，就按原口径判（partial / failed）。
      */
+    // 「0 变更」必须真的是 0 变更：**删了文件的段不算无事可做**（restored=0 只表示没写回记录在案的
+    // 路径；truncated 的点回退时常常「一条都不用写、但删掉了几个新建文件」—— 那种情形说
+    // 「没有可恢复的内容」就是假尾句。真机端到端实测：removed=2 而 code 曾为 nothing-to-restore）
     const allNoop = segments.length > 0
-      && segments.every((s) => s.status === 'skipped' || (s.status === 'restored' && s.restored === 0))
+      && segments.every((s) => s.status === 'skipped'
+        || (s.status === 'restored' && s.restored === 0 && (s.removed ?? 0) === 0))
     let outcome: RollbackOutcome
     let code: RollbackCode
     if (workspaceFailed) {
@@ -2384,11 +2484,10 @@ export class RollbackPointEngine {
         pushDetail(detail, 'object-missing ' + file.path + ' ' + errorDetail(error))
       }
     }
-    const captured = new Set(payload.files.map((f) => pathKey(f.path)))
     const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
     // 删除集与**预览**共用同一份规划（planCreatedRemovals）⇒「预览说会删的」= 「实际删的」。
     // 清单先算全，超上限整套拒绝（绝不删一半）。
-    const plan = await this.planCreatedRemovals(payload, captured, sink)
+    const plan = await this.planCreatedRemovals(payload, sink)
     const leftovers = {
       leftovers: plan.all.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT),
       truncated: plan.truncated,

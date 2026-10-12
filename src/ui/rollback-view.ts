@@ -802,7 +802,7 @@ export interface RollbackPreviewRowView {
   removalsCount: number
   removalsTruncated: boolean
   /**
-   * 按安全判据**拒删**的路径与条数、以及「捕获不完整 ⇒ 一条都没删」的原因。
+   * 按安全判据**拒删**的路径与条数、以及「**证明名单不完整** ⇒ 一条都没删」的原因。
    * **正文不渲染**（用户 2026-10-12：弹窗只要清单，不要说明句；文案克制 → DESIGN.md §7）——
    * 字段保留是引擎事实的投影，将来若放进 ⓘ / 工具提示可直接用。
    */
@@ -1066,7 +1066,7 @@ export function rollbackPreviewNote(input: {
    *
    * 判据**只能**取 `removalsCount` / `removals`（引擎 `planCreatedRemovals` 的同一份规划）：
    * 拿「未记录总数」（`createdAfter` / `leftovers`）当删除数会**双向出错** —— 它把永不删除的
-   * `.git` 路径也算进去，又把捕获不完整时「一条都不删」的情形说成「工作区会变」。
+   * `.git` 路径也算进去，又把证明名单不完整时「一条都不删」的情形说成「工作区会变」。
    */
   const removals = Math.max(
     countOf(workspace?.removalsCount),

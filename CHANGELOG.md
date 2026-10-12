@@ -645,6 +645,29 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+> **回退到更早回合时「中间回合新建的文件」不再原样留下：删除判据从「不在记录里」改成「能证明留点时不存在」**（用户 2026-10-12 真机第二例）：
+> - **症状**：同一会话里点更早那条用户消息的「↺ 回退」，只有**选中那一回合**涉及的文件被改回去，**中间那些回合产生的改动留在工作区**（最明显的是中间回合新建的文件，一个都没被删）。
+> - **根因**：删除候选的「证明」此前只有 `payload.files` 一份，而「留点时它还不存在」这件事**一旦留点被上限截断就没法证明** ⇒ 引擎整体放弃删除（`createdRefusedReason='capture-incomplete'`）。
+>   工作区文件数 > `maxFiles`(2000) 时每个自动点都 `truncated`；再大一点（跳过条目 > `maxSkippedEntries`(5000)）连逐条跳过名单都被截断 ⇒ **删除集恒为空**。本仓库实测 88 138 个文件（`.tmp/` + `outputs/` + `.git`）⇒ 每个点都命中这条路径。
+> - **改法（方向 A+B）**：捕获侧把**走查过的全部路径**写进内容寻址的 gzip **路径索引对象**（只在跳过名单被截断时写；本仓库实测 88 207 条 / 758 KB，不写进台账、随点回收）；
+>   删除候选 = 当前存在、在分块内、且**不在** `files` ∪ `skipped` ∪ `unreadableFiles` ∪ `excludedDirs` ∪ **路径索引** 任何一份名单里的路径。
+>   索引缺失 / 读不出（老台账、对象仓丢失）或**有读不出的目录**（内容未知）⇒ 仍然 **fail-closed：一条都不删**并如实回传原因；**「预算截断」本身不再拒删**（被预算挡下的既有文件都在名单里）。
+>   预览与执行仍共用同一份 `planCreatedRemovals`（「预览说会删的 = 实际删的」未变），超 `ROLLBACK_MAX_CREATED_REMOVALS` 仍整套拒绝。
+> - **护栏**：`src/core/rollback-point.test.ts` 新增 **R-05e**（预算截断的点：中间回合新建的 a/b 必须被删、`removed=2`；**被预算挡下、既没进 `files` 也没进 `skipped` 的既有文件一条都不删**，改过的内容也不许被凭空还原）与 **R-05f**（索引读不出 ⇒ `removed=0` + `createdRefusedReason='capture-incomplete'`）；R-05 / R-05b / R-05c / R-05d 全部保持通过。
+> - **顺带修掉一条假尾句**：段的 `restored=0` 只表示「没写回记录在案的路径」——删了文件时顶层仍会把整次回退说成 `nothing-to-restore`（真机端到端实测 `removed=2` 曾配 `code=nothing-to-restore`）；现在要 `restored===0 && removed===0` 才算无事可做。
+> - **文案同步（两侧诚实）**：`rollback.preview.createdAfter` / `rollback.rewind.result.counts` 不再写「该点未记录」（那是旧判据，会把当时确实存在的既有文件也算进去），改说「留点时并不存在（之后新建）」；`rollback.desc` / `rollback.rewind.confirm` / `rollback.code.created-removals-limit` 与行级「跳过」提示同步改成新判据（面板是纯文本渲染 ⇒ 字典里不得出现字面 `**`）。
+> - **实测**：真机端到端证据（工作区 88 138 文件：`truncated=true` / `skippedTruncated=true` / 路径索引 88 207 条；合成 7 500 文件工作区走生产默认上限回退：`removed=2` 且既有文件零损失）见 `docs/lessons/recovery-console.md`「删除集的可证性」一节。
+> - **未做**：CLI（`dcm rollback`）入口仍未提供 —— 本次只修引擎判据与文案。
+
+> **Rewinding to an earlier turn no longer leaves the middle turns' new files behind: the deletion test changed from "not recorded" to "provably absent at that point"** (user report, 2026-10-12):
+> - **Symptom**: clicking ↺ on an earlier user message in the same conversation only reverted the files of **that** turn; files created by the turns in between stayed in the workspace (and none of them were deleted).
+> - **Root cause**: the only "proof" behind a deletion candidate used to be `payload.files`, so as soon as the capture was clipped by a limit, "it did not exist at that point" became unprovable and the engine gave up deleting entirely (`createdRefusedReason='capture-incomplete'`). A workspace above `maxFiles` (2000) is truncated for **every** point, and above `maxFiles + maxSkippedEntries` the per-entry skip list is clipped too — so the deletion set was permanently empty (this repo measures 88,138 files).
+> - **Fix (A+B)**: the capture now writes every **walked** path into a content-addressed gzip **path index** object (only when the skip list was clipped; 88,207 paths / 758 KB for this repo, never inside the ledger, collected with the point). A deletion candidate must now be currently present, inside the chunks, and **absent from** `files` ∪ `skipped` ∪ `unreadableFiles` ∪ `excludedDirs` ∪ the path index. A missing/unreadable index (old ledgers, lost objects) or an unreadable directory still means **fail-closed: nothing is deleted**, with the reason reported verbatim; **"capture truncated" alone no longer refuses deletion**.
+> - **Guards**: new **R-05e** / **R-05f** in `src/core/rollback-point.test.ts` (R-05e: created files deleted, budget-skipped pre-existing files never deleted, untouched-but-unrecorded files neither deleted nor restored; R-05f: missing index ⇒ zero deletions + honest reason); R-05 / R-05b / R-05c / R-05d keep passing (preview = execution, refusal list truthful).
+> - **Bonus false尾句 fix**: a segment's `restored=0` only means "no recorded path needed writing back" — the top level still reported the whole rewind as `nothing-to-restore` while files were deleted (end-to-end: `removed=2` alongside `code=nothing-to-restore`); it now takes `restored===0 && removed===0` to count as a no-op.
+> - **Copy follows the new criterion**: `rollback.preview.createdAfter` / `rollback.rewind.result.counts` no longer say "not recorded by this point" (the old test — it also counted pre-existing files), but "did not exist at that point (created afterwards)"; `rollback.desc` / `rollback.rewind.confirm` / `rollback.code.created-removals-limit` and the per-row "skipped" notices were updated too (the panel renders plain text, so dictionary values must not contain literal `**`).
+> - **Measured**: see the "deletion-set provability" section of `docs/lessons/recovery-console.md` (real repo capture + a 7,500-file synthetic workspace rewind under the production defaults).
+
 > **导出选择器：默认未勾选的分区此前既不能展开、也不能逐项挑选**（用户 2026-10-12 反馈）：
 > - **症状**：打开「选择要导出的内容」，插件文件 / 凭据状态 / 历史会话这些**默认未勾选**的分区没有展开箭头、也没有条目可选；
 >   必须先勾上整个分区（顺带触发一次清单读取），才能展开与逐项勾选 —— 顺序被反过来了。

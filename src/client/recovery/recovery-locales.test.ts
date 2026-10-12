@@ -1,4 +1,4 @@
-/**
+﻿/**
  * A1c 文案级守卫：`sessions.desc`（面板「会话体检」卡片的说明）必须与面板真实能力同口径。
  *
  * 钉住三件事（口径来自 captain 的逐句核证）：
@@ -296,25 +296,31 @@ test('T17：留存/救援点文案与引擎三常量逐句对齐，旧的不实�
   }
   assert.deepEqual(staleHits, [], '旧口径（救援点不可回退）必须绝迹：' + staleHits.join(', '))
 })
-test('T18-F1④：createdAfter / leftovers 文案不得声称「之后新建」（引擎语义 = 该点未记录）', () => {
-  // 引擎依据：src/core/rollback-point.ts 的 scanLeftovers 只统计「不在记录里」的文件（`if (captured.has(...)) continue`），
-  // 因此留点时**被跳过的既有文件**同样落进 createdAfter / leftovers —— 「之后新建」是不实表述。
-  // 只钉「描述那个计数」的三个键：rollback.desc / rollback.rewind.confirm 里的「不删除该点之后新建的文件」
-  // 是**删除保证**（S4：绝不删除未记录文件），成立且可证，故不在此列。
-  const countKeys = ['rollback.preview.createdAfter', 'rollback.preview.leftoversTitle', 'rollback.rewind.result.counts'] as const
-  const legacy: RegExp[] = [/之后新建/, /created after (this|the) point/i, /new entries/i, /未删除的新建内容/]
+test('T18-F1④：createdAfter / result.counts 必须说「留点时并不存在（之后新建）」（2026-10-12 翻面）', () => {
+  // **2026-10-12 翻面**：删除候选的判据从「不在记录里」改成「**能证明**留点时不存在」（方向 A+B：
+  // files ∪ skipped ∪ unreadableFiles ∪ excludedDirs ∪ 路径索引；见 src/core/rollback-point.ts 的
+  // planCreatedRemovals 与 docs/lessons/recovery-console.md「删除集的可证性」）。
+  // 于是 createdAfter / leftovers 现在是**证明为留点之后新建**的路径 —— 旧文案「该点未记录」反而
+  // 会把「留点时就被预算挡下、当时确实存在」的既有文件也算进去，那才是不实表述。
+  // `rollback.preview.leftoversTitle` 曾在这里一起被钉；它随「文案克制」下线（清单只渲染「会删的」
+  // 那一份，不再单独展示「未记录」清单）⇒ 键与断言一并删除，不留死键（DESIGN.md §7）。
+  const countKeys = ['rollback.preview.createdAfter', 'rollback.rewind.result.counts'] as const
+  const stale: RegExp[] = [/该点未记录/, /未记录内容/, /not recorded/i]
   const offenders: string[] = []
   for (const key of countKeys) {
-    for (const re of legacy) {
+    for (const re of stale) {
       if (re.test(zh[key])) offenders.push('zh:' + key + ' :: ' + String(re))
       if (re.test(en[key])) offenders.push('en:' + key + ' :: ' + String(re))
     }
   }
-  assert.deepEqual(offenders, [], '计数类文案不得声称「之后新建」（被跳过的既有文件也会进这个计数）：' + offenders.join(', '))
-  assert.ok(zh['rollback.preview.createdAfter'].includes('未记录'), 'zh createdAfter 必须说「该点未记录」')
-  assert.ok(zh['rollback.preview.leftoversTitle'].includes('未记录'), 'zh leftoversTitle 必须说「该点未记录」')
-  assert.ok(en['rollback.preview.createdAfter'].toLowerCase().includes('not recorded'), 'en createdAfter 必须说 not recorded')
-  assert.ok(en['rollback.preview.leftoversTitle'].toLowerCase().includes('does not record'), 'en leftoversTitle 必须说 does not record')
+  assert.deepEqual(offenders, [], '计数类文案不得再写「未记录」（那是旧判据：既有文件也会落进那个计数）：' + offenders.join(', '))
+  assert.ok(zh['rollback.preview.createdAfter'].includes('留点时并不存在'), 'zh createdAfter 必须说「留点时并不存在」')
+  assert.ok(
+    en['rollback.preview.createdAfter'].toLowerCase().includes('did not exist at that point'),
+    'en createdAfter 必须说 did not exist at that point',
+  )
+  assert.ok(zh['rollback.rewind.result.counts'].includes('之后新建'), 'zh 结果计数必须说清 leftovers 的口径')
+  assert.ok(en['rollback.rewind.result.counts'].includes('created afterwards'), 'en 结果计数必须说清 leftovers 的口径')
 })
 
 test('T18-F1：跳过 / 截断 / 点级告警的文案键齐备且 zh/en 成对', () => {

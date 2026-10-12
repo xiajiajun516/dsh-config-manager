@@ -177,6 +177,7 @@
   ① 把「未记录路径的规划」收敛成**一个函数** `planCreatedRemovals(payload, captured, sink)`（返回 `{all, paths, skipped, truncated, refused}`），预览与执行**共用**；`preview.workspace.removals` 与 `segments[].removedPaths` 因此逐条同源同序（旧 `scanLeftovers` 已删）。
   ② 单文件上限判据（先 `stat`）搬进这份规划 —— 预览与执行不再各判一次；读不出大小且非 ENOENT 一律拒删（「不知道多大」≠「可以删」）。
   ③ **捕获不完整的点一条都不删**（`refused='capture-incomplete'`）：`payload.truncated || payload.unreadableFiles.length > 0` 时，「未记录」不能证明「新建」，宁可少删。
+  **【2026-10-12 同日后续已推翻这一条】**：`payload.truncated` 在大工作区里恒为真 ⇒ 删除集恒为空（用户第二例的根因）。判据已改为**证明名单**（见本节末尾「删除集的可证性」），「预算截断」本身不再拒删；仍 fail-closed 的只有「证明名单不完整」三种情形。
   ④ 逐条清单仍保留 20 条上限，但**总数与截断如实**：新增 `removalsCount` / `removalsTruncated` / `createdSkippedCount` / `createdSkippedTruncated` / `createdRefusedReason`；界面把「会删的 / 拒删的 / 一条都不删」分成三句说。
   ⑤ 超上限的顶层码从泛化的 `invalid-input` 改成 `created-removals-limit`（HTTP 400、零写入）；文案说清「因为待删路径超过上限，一条都没动」。实测 `removalsCount=5001`：`outcome=failed`、段 `reasonCode=created-removals-limit`、`detail=["created-removals=5001 limit=5000 zeroWrites=true"]`，记录在案的 `a.txt` **一个字节都没被写**（仍是 `A-CHANGED`）。
 - **H2（chunks 之外）如实结论**：中间回合在**分块之外**新建 / 改动的文件，回退时**既不恢复也不删除** —— 这是**有意设计**（领土 = 留点时记录在案的 chunks）。实测：`chunks=[<ws>]`，`outside/outside.txt` 回退后仍在、`ws/inside.txt` 被删。此前界面**没有**说清这个范围（`preview.workspace.chunks` 已回传但无人渲染）。**2026-10-12 同日后续（两轮）**：先补了一句 `rollback.preview.chunksHint`（「回退范围 = 留点时记录的 N 个目录…」），用户看到截图后要求删掉 ——「不需要这些没用的描述，我需要页面的整洁」；随后**弹窗里所有说明句**都被要求删掉（第二轮原话：「另有 37 项不会删除（安全判据拒删）这种描述我不需要!!!移除所有描述，我需要弹窗的简洁」）⇒ `chunksHint` / `removalsTruncated` / `createdSkipped` / `createdRefused` 四个键与两处渲染**已整体删除**（聊天预览 + 设置页回滚卡），弹窗只剩「这次回退会做以下改动」+ 选择框 + 文件行。
@@ -187,3 +188,23 @@
 - **护栏**：`src/core/rollback-point.test.ts` 的 **R-05d**（6 回合 / 中间 3 回合各新建文件 / 从最后一回合直退第 2 回合；断言 ①中间回合新建路径被删且 `createdSkipped` 如实 ②目标点记录在案的路径写回且 `restored=1 verified=1` ③预览删除集 = 实际删除集逐条一致 ④拒删项出现在报告里且不在删除清单里）。
   **变异校验**：把预览的 `removals` 换回旧口径（`plan.all`）后 R-05d 立刻变红，失败信息正是上面那份「3 条 `.git` + 漏 8 条」的对照。
 - **未验证（如实）**：本机没有运行「带本次改动的构建」的实例（`~/.dsh/profiles/desktop/node_modules/dsh-config-manager` 是发布版，不含回滚族）⇒ **真机浏览器点击端到端未复验**；证据止于引擎/客户端判定两层测试 + 两个探针的真实磁盘数据 + typecheck / 全量测试 / 构建。
+## 删除集的可证性：留点被预算截断时，「中间回合新建的文件」为什么一条都删不掉（2026-10-12 定性并修复）
+
+- **症状**（用户原话，第二例）：同一会话里点更早那条用户消息的「↺ 回退」，**只有选中那一回合涉及的文件被改回去**，中间那些回合产生的改动留在工作区里（最明显的是中间回合**新建**的文件，一个都没被删）。
+- **根因（文件:行）**：删除候选的「证明」只有一份 `payload.files`，而「留点时它还不存在」这件事**一旦留点被上限截断就无法证明** —— `planCreatedRemovals` 当时把 `payload.truncated || payload.unreadableFiles.length > 0` 当作「捕获不完整」⇒ `refused='capture-incomplete'` ⇒ `paths=[]`（一条都不删）。`payload.truncated` 在工作区文件数 > `maxFiles`(2000) 时**必然为真**，于是大工作区里**每个点都拒删**。
+- **为什么「相邻回退不暴露、跳过回合才暴露」**：候选数 = 该点未记录的路径数，随跳过的回合数线性增长；但只要工作区越过 2000 文件，这个判据就已经把删除整体关掉了 —— 相邻回退在**小工作区**里看不出问题（记录完整、候选也少），一旦工作区够大（本仓库 `.tmp/` + `outputs/` + `.git`）就与跳过的回合数无关地全灭。
+- **真机取证（本机 `~/.dsh/dsh-config-manager/rollback-points/index.json`，4.15 MB / 23 条记录，最新 2026-10-12 00:40 本地）**：**所有**点的 `truncated=false`、`skippedCount=0`、`skippedTruncated=false`、`files=353..397`、`chunks=["D:\\Projects\\personal\\dsh-settings-tidy"]` ⇒ 那份台账**证伪**了「每个点都截断」（那个工作区只有 ~400 文件）。台账里能看到的具体事实：`hello-world*.md` 8 个文件在 auto 点（`rb-mv4ebzw8`，397 条）里**有记录**，112 秒后的 guard 点（`rb-mv4eeerb`，389 条）没有 —— 它们是**用户/agent 自己**先删掉的（同名 git 检查点 `before-delete-hello-files` 在场），不是回退删的。回退结果**没有落任何历史记录**（`grep rollbackPointRewind` 全数据目录 0 命中）⇒ 那一轮真机 `removed` 计数**无法从磁盘复原**（NOT VERIFIED）。
+- **可复现的真机规模证据（本仓库 = 用户报障的工作区，`node .tmp/probe-r05-real.mjs`，生产默认上限）**：
+  - A 段（真实仓库树，88 138 个文件，capture+preview **只读**）：`files=2000, truncated=true, skippedCount=86218, skippedRecorded=5000, skippedTruncated=true, reasons={budget-files:4999, link:1}, pathIndex={count:88207, bytes:758280}, reasonDetail="files=2000 skipped=86218(list-capped) ..."`；
+    新建一个探针文件后 preview：`removalsCount=1`、`removals=["…\\.tmp\\r05-repo-mid.md"]`、`createdRefusedReason=null`（`createdAfter=1752` 是同一秒里引擎自己写进数据区的对象 + 临时文件，它们全部被 `inside-data-dir` 拒删、不进删除集）。
+  - B 段（合成 7 500 文件真实工作区，> maxFiles+maxSkippedEntries）：capture `files=2000, skippedCount=5500, skippedTruncated=true, pathIndex={count:7500, bytes:19707}`；中间回合新建 2 个文件 + 改 1 个**既没进 files 也没进 skipped 的既有文件**；rewind 结果 `removed=2`、`removedPaths=[created-a.txt, created-b.txt]`、`createdSkippedCount=0`、`detail=["restored=0 verified=0 unchanged=2000 leftovers=2 removed=2 createdSkipped=0"]`；复核：两个新建文件消失、被改的那个**仍在且内容未变**（`CHANGED-IN-LATER-TURN`）、既有文件 `7500/7500` 全部存活。
+- **修法（方向 A+B，不动 `ROLLBACK_SCHEMA_VERSION`、不动路由计数）**：
+  ① 捕获侧把**走查过的全部路径**写进**内容寻址的 gzip 路径索引对象** `payload.pathIndex={object,count,bytes}`（**只在 `skippedTruncated` 时写** ⇒ 小工作区零额外成本；本仓库 88 207 条 / 758 KB，不进台账、由 `gcObjects` 随点回收）。
+  ② 判据改成**证明**：候选 = 当前存在、在分块内、且**不在** `files` ∪ `skipped` ∪ `unreadableFiles` ∪ `excludedDirs` ∪ 路径索引 里 —— 留点时被预算挡下的既有文件都在名单里（`skipped` 或索引），**不再**被当成新建。
+  ③ **证明不了就一条都不删**（三条 fail-closed 门）：`skippedTruncated` 且索引缺失（老台账）/ 索引读不出（对象丢失 / gzip 坏 / count 对不上）/ `unreadableDirs` 非空（目录内容在留点时刻未知，索引也补不上）。
+  ④ 走查上限从 `maxFiles*4` 改成全树：旧上限会在巨型工作区静默漏掉真正的新建文件（那是「删一半」，安全该由**证明**负责，不是由条数上限负责）。
+  ⑤ 顺带修掉一个**假尾句**：段的 `restored=0` 只表示「没写回记录在案的路径」，删了文件时顶层 `allNoop` 仍会把整次回退说成 `nothing-to-restore` ⇒ 现在 `restored===0 && (removed??0)===0` 才算无事可做（真机端到端复现：`removed=2` 曾配 `code=nothing-to-restore`）。
+- **护栏**：`src/core/rollback-point.test.ts` **R-05e**（`maxFiles=4, maxSkippedEntries=2` 的截断点：中间回合新建的 a/b 被删、`removed=2`、顶层 `code='ok'`；**被预算挡下、既没进 files 也没进 skipped 的既有文件一条都不删**，改过的内容也不许被凭空还原）与 **R-05f**（把索引对象从对象仓删掉 ⇒ `removed=0` + `createdRefusedReason='capture-incomplete'` + 候选全部进拒删清单）；R-05 / R-05b / R-05c / R-05d / R-26 / R-27 保持通过（预览=执行、`.git` 拒删、0 变更语义未回归）。
+- **老台账兼容**：索引字段诞生前写下的点没有 `pathIndex` ⇒ 与「索引丢失」同一条 fail-closed 路径（只报告、不删），**不迁移、不改 schema 版本**。
+- **未验证（如实）**：真机浏览器里点「↺ 回退」的端到端点击取证（本机运行实例的插件构建与源码不同源：desktop 档案装的是发布版 0.1.71，不含回滚族）—— 证据止于引擎端到端（真实文件系统 + 真实台账/对象仓 + 生产默认上限）、两个探针的真实磁盘数据、typecheck / 全量测试 / 构建。
+
