@@ -34,6 +34,7 @@ import {
   rollbackPointGroups,
   rollbackPreviewGuidance,
   rollbackPreviewRows,
+  rollbackPreviewScope,
   rollbackPreviewVerdict,
   rollbackPreviewWarnings,
   rollbackRewindCounts,
@@ -58,6 +59,9 @@ import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
+import { readRollbackPreviewFiles, readRollbackPreviewRemovals } from '../chat/rollback-entry-view.ts'
+import { RollbackDiffPane, type RollbackDiffState } from './RollbackDiffPane.tsx'
+import { RollbackFileChanges, type RollbackFileViewEntry } from './RollbackFileChanges.tsx'
 import css from '../config-manager.module.css'
 
 export interface RollbackCardProps {
@@ -109,6 +113,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [result, setResult] = useState<RollbackRewindResult | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<RollbackPointRowView | null>(null)
+  /** 逐个文件的「当前 → 回退后」差异（就地展示：设置页没有 DSH 右侧栏，那是聊天区的容器）。 */
+  const [inlineDiff, setInlineDiff] = useState<{ path: string; state: RollbackDiffState } | null>(null)
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
 
@@ -160,6 +166,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const openPreview = (row: RollbackPointRowView): void => {
     if (recoveryApi.rollbackPointPreview === undefined) return
     setTarget(row); setPreview(null); setResult(null); setAllowPartial(false); setActionError(null)
+    setInlineDiff(null)
     setPreviewLoading(true)
     recoveryApi.rollbackPointPreview(row.id).then(
       (res) => {
@@ -175,7 +182,23 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   }
 
   const closePreview = (): void => {
-    setTarget(null); setPreview(null); setResult(null); setActionError(null)
+    setTarget(null); setPreview(null); setResult(null); setActionError(null); setInlineDiff(null)
+  }
+
+  /**
+   * 逐行「查看差异」：把该文件的「当前 → 回退后」就地画在预览弹窗里（与聊天对话框的降级通道
+   * **同一个** RollbackDiffPane 渲染）。读法判据只有一条：宿主真的给了 file-diff 能力、且这条记录
+   * 真有 id —— 否则入口根本不出现（不给假入口、不假装打开过）。
+   */
+  const viewDiff = (filePath: string): void => {
+    const read = recoveryApi.rollbackPointFileDiff
+    const id = target?.id
+    if (typeof read !== 'function' || id === undefined) return
+    setInlineDiff({ path: filePath, state: { status: 'loading' } })
+    read.call(recoveryApi, id, filePath).then(
+      (diff) => { if (mounted.current) setInlineDiff({ path: filePath, state: { status: 'ready', diff } }) },
+      (err: unknown) => { if (mounted.current) setInlineDiff({ path: filePath, state: { status: 'error', message: redactErrorText(err) } }) },
+    )
   }
 
   const rewind = (): void => {
@@ -228,6 +251,16 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   // 点级告警 / 指引：引擎不给「属于哪一段」的键，故在面板级渲染一次（绝不猜归属）
   const previewWarnings = rollbackPreviewWarnings(preview)
   const previewGuidance = rollbackPreviewGuidance(preview)
+  /** 会被**改动** / 会被**删除**的文件：与聊天里的回退预览同一对读法（引擎 preview.workspace 的同一份数据）。 */
+  const previewFiles = readRollbackPreviewFiles(preview?.workspace)
+  const previewRemovals = readRollbackPreviewRemovals(preview?.workspace)
+  /** 三个数字的口径与「文件行」同源（rollbackPreviewScope：行数只累加两侧都可信的那部分）。 */
+  const previewScope = rollbackPreviewScope(previewFiles, previewRemovals)
+  /** 逐行「查看差异」入口：宿主给不了 file-diff、或还没拿到预览时**不给**（那时路径只是文字）。 */
+  const fileView: RollbackFileViewEntry | undefined =
+    typeof recoveryApi.rollbackPointFileDiff === 'function' && preview !== null
+      ? { hint: (path: string) => t('rollback.diff.viewHint', { path }), disabled: busy, onView: viewDiff }
+      : undefined
   const rewindRows = rollbackRewindRows(result)
   const rewindCounts = rollbackRewindCounts(result)
   const outcome = result === null ? null : rollbackOutcome(result.outcome)
@@ -528,16 +561,38 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               </div>
             ))}
 
-            {/* 回退**会删除**的文件（该点未记录 **且**通过安全判据）：与执行阶段**同一份规划**
-                （引擎 planCreatedRemovals）⇒ 逐条 = 实际会删的，清单**全量**（不再有 20 条上限）。
-                用户 2026-10-12：不要任何说明句，只要这份清单（文案克制 → DESIGN.md §7）。 */}
-            {previewRows.some((row) => row.removals.length > 0) && (
-              <div className={css.planScroll}>
-                <div className={css.groupLabel}>{t('rollback.preview.removalsTitle')}</div>
-                {previewRows.map((row) => row.removals.map((line) => (
-                  <div key={row.state + line} className={css.hint}>{line}</div>
-                )))}
-              </div>
+            {/* 会被**改动**的文件（引擎 preview.workspace.files）+ 会被**删除**的文件（引擎的删除集，
+                与执行阶段同一份规划 planCreatedRemovals ⇒ 逐条 = 实际会删的，清单全量）。
+                与聊天里的回退预览**共用一份渲染**（RollbackFileChanges）：图标 | 目录弱化 + 基名 |
+                右对齐的 ±行数（整文件删除写「删除」、行数不可信写「行数未统计」）。
+                清单限高内滚（.planScroll）：几百个文件也不把弹窗撑长。 */}
+            {previewFiles.length + previewRemovals.length > 0 && (
+              <>
+                <div className={css.previewChoiceRow}>
+                  <span className={css.groupLabel}>{t('rollback.preview.files.title')}</span>
+                  <span className={css.previewScope}>
+                    <span>{t('rollback.row.files', { n: previewScope.files })}</span>
+                    <span className={css.previewScopeStats}>
+                      <span className={css.rollbackAdded}>{t('rollback.preview.file.added', { n: String(previewScope.added) })}</span>
+                      <span className={css.rollbackRemoved}>{t('rollback.preview.file.removed', { n: String(previewScope.removed) })}</span>
+                      {previewScope.removals > 0 && (
+                        <span className={css.rollbackDeleted}>{t('rollback.preview.file.deleted')} {String(previewScope.removals)}</span>
+                      )}
+                    </span>
+                  </span>
+                </div>
+                <div className={css.planScroll}>
+                  <RollbackFileChanges files={previewFiles} removals={previewRemovals} rt={t} view={fileView} />
+                </div>
+                {/* 「查看差异」的就地展示：放在清单**外面**（列表自己有内滚，放里面会滚出视野）。
+                    弹窗内只有这一条通道（设置页没有 DSH 右侧栏），渲染与聊天侧降级通道同一个面板。 */}
+                {inlineDiff !== null && (
+                  <div className={css.inlineDiffBox}>
+                    <div className={`${css.hint} ${css.mono}`}>{inlineDiff.path}</div>
+                    <RollbackDiffPane state={inlineDiff.state} rt={t} />
+                  </div>
+                )}
+              </>
             )}
 
             {/* 三选一：范围（不可用的组合直接禁用，绝不发一个注定失败的请求） */}

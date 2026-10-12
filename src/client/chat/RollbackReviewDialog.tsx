@@ -34,15 +34,16 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { TranslateNS } from '../client-types.ts'
-import { rollbackPreviewFileLabel, rollbackPreviewScope, splitRollbackPath } from '../../ui/rollback-view.ts'
+import { rollbackPreviewScope } from '../../ui/rollback-view.ts'
 import type {
   RollbackPointPort,
   RollbackPreviewResult,
   RollbackRewindResult,
 } from '../../ui/rollback-view.ts'
 import { Badge, Banner, Button, Checkbox, Empty, Spinner } from '../common/ui.tsx'
-import { RollbackFileIcon, type RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
+import type { RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
 import { RollbackDiffPane, type RollbackDiffState } from '../recovery/RollbackDiffPane.tsx'
+import { RollbackFileChanges } from '../recovery/RollbackFileChanges.tsx'
 import type { RollbackDiffOpenResult } from './rollback-diff-tab.ts'
 import { CloseIcon } from '../common/Icon.tsx'
 import { redact } from '../../security/redaction.ts'
@@ -68,8 +69,6 @@ import {
   rollbackOutcome,
   rollbackPreviewNote,
   rollbackPreviewVerdict,
-  previewFileStatusKnown,
-  rollbackPreviewFileKey,
   rollbackRewindCounts,
   revertFilesOn,
   setRevertFiles,
@@ -125,33 +124,11 @@ const ARCHIVE_REWOUND_PARENT = false
 
 type LoadState = 'loading' | 'ready' | 'nopoint' | 'error'
 
-/**
- * 一行文件统计：`+N` / `−M`；任一侧是 null ⇒ 「行数未统计」整句替换（绝不打 0）。
- * 两侧都可信时**两个数字都给**（新增与删除是两件事，用户两个都要看）。
- *
- * 例外（第 6 条，用户 2026-10-12）：**整文件删除写「删除」**，不写 `+0 −N`。
- * 判据只看引擎给的 `status === 'delete'`（取值域在 src/ui/rollback-view.ts，契约里已有；
- * 引擎当前不产出它，但契约一变界面就已经是对的），**绝不**从 `added === 0` 反推删除 ——
- * 一个文件被清空成 0 行同样是 `+0 −N`，那是另一件事。
- */
-function FileStat({ status, added, removed, unknown, deleted, rt }: {
-  status: string
-  added: number | null
-  removed: number | null
-  unknown: string
-  /** 「删除」这一句（调用点传已翻译文本，本组件不碰字典）。 */
-  deleted: string
-  rt: TranslateNS<'config-manager-recovery'>
-}) {
-  if (status === 'delete') return <span className={css.rollbackDeleted}>{deleted}</span>
-  if (added === null || removed === null) return <span className={css.hint}>{unknown}</span>
-  return (
-    <>
-      <span className={css.rollbackAdded}>{rt(rk('rollback.preview.file.added'), { n: String(added) })}</span>
-      <span className={css.rollbackRemoved}>{rt(rk('rollback.preview.file.removed'), { n: String(removed) })}</span>
-    </>
-  )
-}
+/* 一行文件统计（`+N` / `−M` / 「删除」/「行数未统计」）与整个文件清单都搬进了共享组件
+ * `src/client/recovery/RollbackFileChanges.tsx` —— 设置页回滚卡的预览弹窗要用**同一份渲染**
+ * （2026-10-12 用户要求「环境页的回退预览也要一眼看清被改动的文件」）。对话框这边只负责：
+ * 读行数据（readRollbackPreviewFiles / readRollbackPreviewRemovals）、算汇总口径
+ * （rollbackPreviewScope）与给出逐行「查看差异」通道。 */
 
 /** 预览对话框主体（挂载即打开；关闭由父级卸载）。 */
 export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSession, archiveParentSession, startFreshSession, openDiff, renderFileIcon, onClose }: RollbackReviewDialogProps) {
@@ -446,79 +423,18 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                   noteText !== null ? <div className={css.hint}>{noteText}</div> : null
                 ) : (
                   <>
-                    <div className={css.rollbackFileList} role="list">
-                      {files.map((file, index) => {
-                        // 目录弱化 + 基名主色（2026-10-12 第二轮）：只画基名时 `.git/index` 读不出「在哪」。
-                        const { dir, base } = splitRollbackPath(file.path)
-                        return (
-                        <div
-                          key={rollbackPreviewFileKey(file.path, file.added, file.removed, index)}
-                          className={css.rollbackFileRow}
-                          role="listitem"
-                          data-kind={previewFileStatusKnown(file.status) ? file.status : undefined}
-                        >
-                          {/* 第 7 条：文件名前面一颗**文件类型图标**（DSH 侧边栏同一颗 —— 装了
-                              dsh-better-sidebar 就用它的注册表，见 RollbackFileIcon.tsx）。装饰性：
-                              行内文件名就是它的可访问名，图标本身不进无障碍树。 */}
-                          <span className={css.rollbackFileIcon} aria-hidden="true">
-                            <RollbackFileIcon path={file.path} size={14} render={renderFileIcon} />
-                          </span>
-                          {/* 主标签 = **目录（弱化）+ 文件名（主色）**，且**它本身就是那颗「查看」按钮**
-                              （2026-10-12 用户要求：移除尾部独立按钮，点文件名直接跳转）。
-                              为什么按钮是**路径那一格**而不是整行：整行做按钮会把右侧统计也变成热区，
-                              鼠标落在「+1 −1」上像是要点它；这里只有名字/目录可点，统计永远点不到。
-                              完整路径仍在 title（悬停看全 + 无障碍名带上下文）；行内名字就是它的可访问名。 */}
-                          <button
-                            type="button"
-                            className={`${css.rollbackFilePath} ${css.mono}`}
-                            title={file.path}
-                            aria-label={t('chat.preview.viewHint', { path: file.path })}
-                            disabled={busy || pointId === null}
-                            onClick={() => { view(file.path) }}
-                          >
-                            {dir !== '' && <span className={css.rollbackFileDir}>{dir}</span>}
-                            {base}
-                          </button>
-                          {/* 第 2 条：`+N −M` 与文件名**同一行**（统计列右对齐、列宽固定）：
-                              三个取值（行数 / 删除 / 未统计）的右缘对齐成一条竖线，纵向扫读成一列。 */}
-                          <span className={css.rollbackFileStat}>
-                            <FileStat
-                              status={file.status}
-                              added={file.added}
-                              removed={file.removed}
-                              unknown={rt('rollback.preview.file.unknown')}
-                              deleted={rt(rk('rollback.preview.file.deleted'))}
-                              rt={rt}
-                            />
-                          </span>
-                        </div>
-                        )
-                      })}
-                      {removals.map((path, index) => (
-                        <div
-                          key={'remove:' + rollbackPreviewFileKey(path, null, null, index)}
-                          className={css.rollbackFileRow}
-                          role="listitem"
-                          data-kind="delete"
-                        >
-                          <span className={css.rollbackFileIcon} aria-hidden="true">
-                            <RollbackFileIcon path={path} size={14} render={renderFileIcon} />
-                          </span>
-                          {/* 删除行**不是按钮**（纯文本）：这类路径不在该点的记录里，引擎的 file-diff 读不出它 ⇒
-                              点了也不会有差异。用户要求「点文件名跳转」只对**能跳**的行成立 —— 不给假入口。 */}
-                          <span className={`${css.rollbackFilePath} ${css.mono}`} title={path}>
-                            {splitRollbackPath(path).dir !== '' && (
-                              <span className={css.rollbackFileDir}>{splitRollbackPath(path).dir}</span>
-                            )}
-                            {splitRollbackPath(path).base || rollbackPreviewFileLabel(path)}
-                          </span>
-                          {/* 整文件删除：写「删除」而不是「+0 −N」（第 6 条）。 */}
-                          <span className={css.rollbackFileStat}>
-                            <span className={css.rollbackDeleted}>{rt(rk('rollback.preview.file.deleted'))}</span>
-                          </span>
-                        </div>
-                      ))}
-                    </div>
+                    <RollbackFileChanges
+                      files={files}
+                      removals={removals}
+                      rt={rt}
+                      renderFileIcon={renderFileIcon}
+                      view={{
+                        // 「查看差异：{path}」由字典给（chat 侧文案）；行内名字/目录就是那颗按钮。
+                        hint: (path: string) => t('chat.preview.viewHint', { path }),
+                        disabled: busy || pointId === null,
+                        onView: view,
+                      }}
+                    />
                     {/* 2026-10-12 用户第 8 条：整段「行数没有统计出来…」说明删除 —— 逐文件那格的
                         「行数未统计」已经说明一切。该键仍保留在字典里（删渲染不删键）。 */}
                     {/* 「查看」的降级通道：没有右侧栏（或打开失败）时在弹窗内展示同一份差异 */}

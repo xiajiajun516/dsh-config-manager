@@ -620,19 +620,13 @@ test('简洁版：对话框只渲染文件列表 + 两个按钮，被删的块�
   assert.equal([...dialog.matchAll(/<Checkbox\b/g)].length, 1, '顶部必须**恰好一颗**选择框（回退文件的更改）')
   assert.match(dialog, /t\('chat\.preview\.revertFiles'\)/, '选择框文案必须走字典（不得硬编码）')
   assert.match(dialog, /setRevertFiles\(previous, next\)/, '选择框只置 mode（唯一的 mode 置位入口）')
-  assert.match(dialog, /className=\{css\.rollbackFileStat\}/, '±行数必须包在**紧跟文件名**的统计块里（第 2 条）')
-  assert.match(dialog, /rollback\.preview\.file\.deleted/, '整文件删除必须写「删除」而不是 +0 −N（第 6 条）')
+  // 2026-10-12：清单的**渲染**搬进了共享组件 src/client/recovery/RollbackFileChanges.tsx（聊天预览与
+  // 设置页回滚卡的预览共用同一份）。结构 / 诚实边界 / 点文件名跳转的源码守卫随之落到那里
+  // （src/client/recovery/rollback-file-changes.test.ts）；这里只留「对话框把数据与查看通道交下去」。
+  assert.match(dialog, /<RollbackFileChanges/, '清单必须走共享组件（两处预览同一份渲染）')
+  assert.match(dialog, /renderFileIcon=\{renderFileIcon\}/, '外部图标来源必须交给共享组件')
+  assert.match(dialog, /onView: view,/, '点文件名必须走同一个 view()（唯一打开入口）')
   assert.match(dialog, /readRollbackPreviewRemovals\(/, '删除行必须取自引擎的删除集 removals（与执行阶段同一份规划）')
-  assert.match(dialog, /RollbackFileIcon/, '文件名前面必须有文件类型图标（第 7 条）')
-  assert.match(dialog, /render=\{renderFileIcon\}/, '图标的外部来源（dsh-better-sidebar）必须接进来')
-  // 2026-10-12 用户要求：**移除尾部「查看」按钮，改点文件名直接跳转**（本轮）
-  assert.equal([...dialog.matchAll(/css\.fileViewBtn/g)].length, 0, '尾部那颗独立「查看」按钮必须整体消失')
-  assert.match(dialog, /className=\{`\$\{css\.rollbackFilePath\} \$\{css\.mono\}`\}/, '路径格子必须仍带 .rollbackFilePath + mono')
-  const pathBtn = dialog.match(/<button[\s\S]{0,300}?className=\{`\$\{css\.rollbackFilePath\}[\s\S]{0,700}?<\/button>/)
-  assert.ok(pathBtn !== null, '路径那一格本身必须是 <button>（点文件名即跳转）')
-  assert.match(pathBtn[0]!, /onClick=\{\(\) => \{ view\(file\.path\) \}\}/, '点文件名必须走同一个 view()（唯一打开入口）')
-  assert.match(pathBtn[0]!, /disabled=\{busy \|\| pointId === null\}/, '忙态 / 无可写目标时必须禁用（与原来那颗按钮同判据）')
-  assert.match(pathBtn[0]!, /aria-label=\{t\('chat\.preview\.viewHint', \{ path: file\.path \}\)\}/, '无障碍名必须带这个文件的全路径（列表里同名按钮一屏好几个）')
   // 底部只有两个按钮：主按钮（回退）+ 取消/关闭（T13 非回归项：底部**恰好 2 个**）
   const footer = dialog.slice(dialog.indexOf('css.dialogFooter'))
   assert.equal([...footer.matchAll(/<Button\b/g)].length, 2, '弹窗底部必须恰好 2 个按钮（回退 + 取消/关闭）')
@@ -669,12 +663,9 @@ test('第二轮版式：汇总条 + 三列对齐 + 目录前缀 + 取消勾选�
   assert.match(dialog, /t\('chat\.preview\.scope\.files', \{ n: String\(scope\.files\) \}\)/, '汇总里「几个文件」必须走字典')
   assert.match(dialog, /chat\.preview\.scope\.off/, '取消勾选时必须改写那句话（而不是整块变暗）')
   assert.match(dialog, /className=\{css\.previewScope\}/, '汇总必须是 .previewScope（选择框同行的右对齐块）')
-  // ② 三列对齐 + 容器（散行贴在一起时读不出「这是一份清单」）
-  assert.match(dialog, /className=\{css\.rollbackFileList\}/, '清单必须包进 .rollbackFileList 容器')
-  assert.equal([...dialog.matchAll(/role="listitem"/g)].length, 2, '两类行（改动 / 删除）都必须是 listitem')
-  assert.match(dialog, /splitRollbackPath\(file\.path\)/, '文件行必须切出目录前缀（只画基名时读不出「在哪」）')
-  assert.match(dialog, /className=\{css\.rollbackFileDir\}/, '目录段必须有独立的弱化类')
-  assert.match(dialog, /data-kind=\{previewFileStatusKnown\(file\.status\) \? file\.status : undefined\}/, '语义色条只在形状可判定时上色（读不出就不画）')
+  // ② 三列对齐 + 容器（散行贴在一起时读不出「这是一份清单」）：结构在共享组件里，断言也落在
+  // 共享组件那份守卫上（src/client/recovery/rollback-file-changes.test.ts）。
+  assert.match(dialog, /<RollbackFileChanges/, '清单容器 / 行结构必须来自共享组件')
   // ③ 取消勾选：唯一的 data-off 挂在汇总条上 —— 清单**不得**再有 [data-off] 整块降透明
   assert.equal([...dialog.matchAll(/data-off/g)].length, 1, 'data-off 只允许出现在汇总条上一处（清单不再整块变暗）')
   assert.doesNotMatch(dialog, /reasonList\[data-off/, '旧做法（清单降透明度）不得回来')

@@ -41,8 +41,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Rewind your conversation**: every user message carries a "rewind to here" action; it opens a new branch conversation and leaves the original untouched.
 - **连文件一起退回**：回退时可以勾选把工作区文件一并撤回到那一刻；默认只退对话、不动文件。
   **Rewind files too**: a checkbox in the rewind dialog also restores the workspace files to that moment; by default only the conversation is rewound.
-- **回退预览**：动手前先告诉你有几个文件、增删多少行，列清会被改动的文件，并可逐个查看「现在 → 回退后」的差异。
-  **Rewind preview**: before anything happens you see the scale (files, added/removed lines), the affected file list, and a per-file diff of "now → after rewind".
+- **回退预览**：动手前先告诉你有几个文件、增删多少行，列清会被改动的文件，并可逐个查看「现在 → 回退后」的差异 —— 聊天气泡里与设置页的回滚面板都是这一屏。
+  **Rewind preview**: before anything happens you see the scale (files, added/removed lines), the affected file list, and a per-file diff of "now → after rewind" — the same screen in chat and in the settings rollback panel.
 - **回滚点台账**：按对话分组列出所有可回退的时刻，左右分栏查看，对话显示真实标题。
   **Rollback ledger**: every rewindable moment, grouped by conversation with real titles, in a conversation list plus its points.
 - **自动救援点**：每次回退前自动留一个保护点，退错了还能再退回来；点数超限时淘汰最旧的。

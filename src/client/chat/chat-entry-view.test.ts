@@ -194,6 +194,10 @@ test('样式纪律：icon 入口与预览文件行只用既有 token/类，未�
     const src = readFileSync(join(HERE, file), 'utf8')
     for (const m of src.matchAll(/css\.([A-Za-z0-9_]+)/g)) used.add(m[1] as string)
   }
+  // 2026-10-12：预览文件行搬进了共享组件（src/client/recovery/RollbackFileChanges.tsx）——
+  // 设置页回滚卡的预览弹窗要用同一份渲染，所以这几个类现在由那个文件用；扫描面跟着扩到那里。
+  const sharedFile = readFileSync(join(HERE, '..', 'recovery', 'RollbackFileChanges.tsx'), 'utf8')
+  for (const m of sharedFile.matchAll(/css\.([A-Za-z0-9_]+)/g)) used.add(m[1] as string)
   for (const name of ['chatActionBtn', 'rollbackFileRow', 'rollbackFilePath', 'rollbackAdded', 'rollbackRemoved']) {
     assert.ok(used.has(name), '本任务新增/复用的类必须真的被组件用到：' + name)
     assert.ok(new RegExp('\\.' + name + '(?![A-Za-z0-9_-])').test(cssSheet), 'config-manager.module.css 缺类名：' + name)
