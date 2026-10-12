@@ -296,7 +296,10 @@ export function chatRewindFailure(result: RollbackRewindResult | null): { code: 
   if (result === null) return { code: null, detail: null, keys: [] }
   const keys: string[] = []
   const code = typeof result.code === 'string' && result.code !== '' ? result.code : null
-  if (code !== null) keys.push(rollbackCodeKey(code))
+  // t8：`session-active` 作为**结果码**时是「这次带文件段的回退被拒、工作区零改动」——
+  // 既有键 `rollback.code.session-active` 描述的是预览里的 reasonCode（仅供参考口径），
+  // 所以这里用本轮的专门键（R4：既有键只许追加、不动）。
+  if (code !== null) keys.push(code === 'session-active' ? CHAT_SESSION_ACTIVE_DENIED_KEY : rollbackCodeKey(code))
   for (const segment of result.segments ?? []) {
     if (segment.status !== 'failed') continue
     const segmentCode = typeof segment.reasonCode === 'string' && segment.reasonCode !== '' ? segment.reasonCode : null
@@ -371,9 +374,45 @@ export interface RewindDraft {
 /** 对话框固定的回退范围（= 「回到这条消息之前」：工作区文件 + 会话一起）。 */
 export const CHAT_REWIND_MODE: RollbackMode = 'files+session'
 
-/** 草稿默认值（每次返回**新对象**）：未确认、固定 files+session、不请求部分放行、救援点恒 require。 */
-export function defaultDraft(_preview: RollbackPreviewResult | null): RewindDraft {
-  return { confirmed: false, mode: CHAT_REWIND_MODE, allowPartial: false, preRewindGuard: 'require' }
+/**
+ * t8：对话**正在运行**时，预览弹窗里那句说明的字典键（recovery 字典；只追加、不动既有键）。
+ * 文案口径：这条对话正在运行 ⇒ 本轮结束前只回溯消息（不动工作区），避免与正在写盘的工具抢文件。
+ */
+export const CHAT_SESSION_ACTIVE_NOTE_KEY = 'rollback.preview.sessionActive'
+
+/**
+ * t8：带工作区段的回退被**拒**（HTTP 409 + code `session-active`）时，结果屏那句话的字典键。
+ *
+ * 为什么不复用既有的 `rollback.code.session-active`：那个键的文案是「仅供参考：回退只 fork 子会话，
+ * 不改写原日志」—— 它描述的是**预览里的 reasonCode**（会话日志刚被写过），
+ * 与「这次带文件段的回退被拒、工作区一个字节都没动」是两件事（R4：既有键只许追加，不动）。
+ */
+export const CHAT_SESSION_ACTIVE_DENIED_KEY = 'rollback.sessionActive.denied'
+
+/**
+ * t8：这条对话此刻**正在运行**吗（引擎 preview 已算好的 `session.active`：会话日志 mtime 落在静默窗内）。
+ *
+ * 判据只有这一处（客户端不自己看 mtime）：它决定默认档位、文件开关的可用性，以及
+ * 「带工作区段的提交是否可行」。路由层对同一信号有独立的一道硬拒（409 `session-active`）。
+ */
+export function isSessionActive(preview: RollbackPreviewResult | null): boolean {
+  return preview?.session?.active === true
+}
+
+/**
+ * 草稿默认值（每次返回**新对象**）：未确认、不请求部分放行、救援点恒 require。
+ *
+ * 回退范围（t8）：对话**正在运行**时默认 = `session`（**只回溯消息**，工作区一个字节都不动）——
+ * 运行中的工具可能正在写盘，默认把文件一起退回去等于和它抢文件；用户要连文件一起退，
+ * 得等本轮结束（那时 preview 的 `session.active` 已为 false，重开弹窗即回到 `files+session`）。
+ */
+export function defaultDraft(preview: RollbackPreviewResult | null): RewindDraft {
+  return {
+    confirmed: false,
+    mode: isSessionActive(preview) ? 'session' : CHAT_REWIND_MODE,
+    allowPartial: false,
+    preRewindGuard: 'require',
+  }
 }
 
 /**
@@ -387,11 +426,15 @@ export function confirmOnSubmit(draft: RewindDraft | null): RewindDraft | null {
 /* ------------------------------------------------------------ 「回退文件的更改」选择框（第 1 条） */
 
 /**
- * 这颗选择框**能不能**被点：只有工作区态**有可用记录**（`preview.workspace.available === true`）
- * 才谈得上「回退文件的更改」。没有记录时开关点了也不会有任何区别 ⇒ 禁用，绝不给人一个假开关。
+ * 这颗选择框**能不能**被点，两条判据缺一不可：
+ *  · 工作区态**有可用记录**（`preview.workspace.available === true`）—— 没有记录时开关点了也没有
+ *    任何区别；
+ *  · **对话不在运行中**（t8）—— 运行中带文件段的回退在路由层就被硬拒（409 `session-active`），
+ *    所以这里禁用而不是「点得动但必然失败」：按钮可用性不该承诺一件做不到的事（与 F3 同一条纪律）。
+ * 只回溯消息（`mode=session`）不受这条限制。
  */
 export function canRevertFiles(preview: RollbackPreviewResult | null): boolean {
-  return preview?.workspace?.available === true
+  return preview?.workspace?.available === true && !isSessionActive(preview)
 }
 
 /** 草稿当前是否「连文件一起回退」（选择框的受控值；除 `session` 外都算开）。 */
@@ -418,6 +461,8 @@ function rewindViable(draft: RewindDraft | null, preview: RollbackPreviewResult 
   if (draft === null) return false
   const segments = segmentsForMode(draft.mode)
   if (segments.length === 0) return false
+  // t8：对话正在运行时，**带工作区段**的提交不可行（路由层同样硬拒 409）—— 判据与默认档、开关可用性同源。
+  if (isSessionActive(preview) && segments.includes('workspace')) return false
   return rollbackPreviewVerdict(preview).canRestore
 }
 

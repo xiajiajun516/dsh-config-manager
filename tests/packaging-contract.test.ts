@@ -1,7 +1,7 @@
 /**
  * P-1 / P-2 / P-3 打包契约回归护栏（L1）。
  *
- * 背景：`package.json` 的 `peerDependenciesMeta`（17 个 peer 全 `optional`）与 `files`
+ * 背景：`package.json` 的 `peerDependenciesMeta`（18 个 peer 全 `optional`）与 `files`
  * （含 `!lib/**` + `*.map` 排除项）此前**没有任何自动化测试覆盖**——全库无测试读这两个字段，
  * 回归时不会报警（例如把 UI 包误加回 runtime `dependencies`，或删掉 sourcemap 排除项）。
  * P-3 补上 DSH 兼容闸关心的 `peerDependencies` 范围（issue #53）。
@@ -144,13 +144,23 @@ test('exports["./schema"] 指向 lib/schema/index.{js,d.ts}（而非纯类型产
  */
 const DSH_PEER_RANGE = '>=0.1.0-rc.6 <0.3.0-0';
 
+/**
+ * DSH peer 条数期望值（**恒定**，不是下界）。
+ *
+ * 2026-10-12（captain 授权）：15 → 16 —— 宿主斜杠命令 /rollback 需要
+ * `@deepseek-ai/dsh-commands` 的注册契约，故把它加进 peerDependencies（optional: true，
+ * 未组合该服务的部署照常启动）。判据不变：条数恒定 + 每条都是显式上下界；
+ * 放宽成 `>= 15` 会让「悄悄多加一条 peer」失去守卫。
+ */
+const DSH_PEER_COUNT = 16;
+
 test('P-3: 全部 @deepseek-ai/dsh* peer 都用显式上下界（不得回退到带预发布版的 caret）', () => {
   const dshPeers = Object.entries(pkg.peerDependencies ?? {})
     .filter(([name]) => name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-'));
   assert.equal(
     dshPeers.length,
-    15,
-    `DSH peer 应恒为 15 条，实际 ${dshPeers.length}: ${dshPeers.map(([n]) => n).join(', ')}`,
+    DSH_PEER_COUNT,
+    `DSH peer 应恒为 ${DSH_PEER_COUNT} 条，实际 ${dshPeers.length}: ${dshPeers.map(([n]) => n).join(', ')}`,
   );
   for (const [name, range] of dshPeers) {
     assert.equal(

@@ -36,7 +36,7 @@ import {
 } from './page.ts'
 import type { LockReport, RescuePaths, RescueStatus, RestorePlanView } from '../actions.ts'
 import type { SessionHealthScanResult } from '../../utils/session-health-scan.ts'
-import { DISK_USAGE_AREAS, type DiskUsageArea, type DiskUsageAreaReport, type DiskUsageReport } from '../../core/disk-usage.ts'
+import { DISK_USAGE_AREAS, type DiskUsageReport } from '../../core/disk-usage.ts'
 import type { SnapshotMeta } from '../../core/restore.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
 
@@ -1002,7 +1002,7 @@ test('C1d 各页正文无字面 ** 且无空泛「本页不提供」（枚举 = 
     fileCount: 0,
     policy: 'regenerable' as const,
     unreadable: false,
-  }])) as Record<DiskUsageArea, DiskUsageAreaReport>
+  }])) as DiskUsageReport['areas']
   const diskReport: DiskUsageReport = {
     dataDir: paths.dataDir,
     totalBytes: 0,

@@ -27,6 +27,8 @@ import {
   startFreshSession,
   buildRewindOptions,
   buildSessionNavigator,
+  CHAT_SESSION_ACTIVE_DENIED_KEY,
+  CHAT_SESSION_ACTIVE_NOTE_KEY,
   canSubmitRewind,
   chatFileChangeAvailable,
   chatRewindFailed,
@@ -41,6 +43,7 @@ import {
   defaultDraft,
   errorDetail,
   findPointForTurn,
+  isSessionActive,
   navigationSourcesOf,
   openChildSession,
   previewFileStatusKnown,
@@ -1186,6 +1189,70 @@ test('T15 ① 的 {reason} 插的是**翻译后的文本**（不是键名、不�
   assert.ok(sentence !== null && !sentence.includes('chunk-not-found'), '不得把机器码插进去')
   assert.ok(sentence !== null && !sentence.includes('{reason}'), '占位符必须被替换')
   assert.ok(sentence !== null && !sentence.includes('rollback.code.'), '不得把字典键名插进去')
+})
+
+/* ------------------------------------------------------------ t8 运行中的对话：默认只回溯消息 */
+
+/** 运行中的对话（引擎 preview 的 `session.active = true`）：工作区与会话都可回退。 */
+const activePreview = (): RollbackPreviewResult => ({
+  ok: true, id: 'p', storage: { available: true }, canRestore: true,
+  workspace: { available: true, overwrite: 2, different: 1, missing: 0 },
+  session: { available: true, restorable: true, active: true },
+} as RollbackPreviewResult)
+
+test('t8 运行中：默认档 = **只回溯消息**（session），请求体里只有会话段', () => {
+  const preview = activePreview()
+  assert.equal(isSessionActive(preview), true)
+  const draft = defaultDraft(preview)
+  assert.equal(draft.mode, 'session', '运行中的对话默认不连文件一起退（避免与写盘的工具抢文件）')
+  assert.deepEqual(segmentsForMode(draft.mode), ['session'])
+  // 请求体必须逐字成形（mode=session ⇒ 路由只会 fork 会话，不碰工作区）
+  assert.deepEqual(
+    buildRewindOptions({ ...draft, confirmed: true }),
+    { userConfirmed: true, mode: 'session', preRewindGuard: 'require' },
+  )
+  // 非运行态**一字不变**：默认仍是 files+session（既有用例的判据不动）
+  assert.equal(defaultDraft(filesPreview()).mode, CHAT_REWIND_MODE)
+  assert.equal(isSessionActive(filesPreview()), false, '缺 active 字段 = 不是运行中（绝不猜）')
+  assert.equal(isSessionActive(null), false)
+})
+
+test('t8 运行中：文件档被**禁用**（canRevertFiles=false），硬造 files+session 草稿也不可提交、端口零调用', async () => {
+  const preview = activePreview()
+  assert.equal(canRevertFiles(preview), false, '运行中禁用「回退文件的更改」（点得动但必然被路由 409 拒绝 = 假承诺）')
+  const forced = confirmedDraft({ mode: 'files+session' })
+  assert.equal(rewindSubmittable(forced, preview), false)
+  assert.equal(canSubmitRewind(forced, preview), false)
+  assert.equal(submitButtonEnabled({ draft: forced, preview, pointId: 'p', busy: false }), false, '主按钮必须禁用')
+  // 只回溯消息仍可提交（运行中唯一的可用档）
+  const sessionOnly = confirmedDraft({ mode: 'session' })
+  assert.equal(canSubmitRewind(sessionOnly, preview), true)
+  assert.equal(submitButtonEnabled({ draft: sessionOnly, preview, pointId: 'p', busy: false }), true)
+  // 非运行态：文件档照旧可用（不放宽也不收紧既有口径）
+  const idle = filesPreview()
+  assert.equal(canRevertFiles(idle), true)
+  assert.equal(canSubmitRewind(confirmedDraft({ mode: 'files+session' }), idle), true)
+})
+
+test('t8 文案：预览说明键与拒绝文案键都在 zh/en 字典里，且 session-active 结果码映射到**专门键**', () => {
+  const zhDict = recoveryZh as Record<string, string>
+  const enDict = recoveryEn as Record<string, string>
+  for (const key of [CHAT_SESSION_ACTIVE_NOTE_KEY, CHAT_SESSION_ACTIVE_DENIED_KEY]) {
+    assert.ok(typeof zhDict[key] === 'string' && zhDict[key] !== '', 'zh 字典缺键：' + key)
+    assert.ok(typeof enDict[key] === 'string' && enDict[key] !== '', 'en 字典缺键：' + key)
+  }
+  // 弹窗里那句说明：键由常量给出、组件用 rt(rk(...)) 渲染（源码级断言，防「键写了但没渲染」）
+  const dialog = readFileSync(join(HERE, 'RollbackReviewDialog.tsx'), 'utf8')
+  assert.match(dialog, /CHAT_SESSION_ACTIVE_NOTE_KEY/, '弹窗必须渲染运行中说明')
+  assert.match(dialog, /isSessionActive\(preview\)/, '弹窗必须按 preview 的 session.active 判定')
+  // 结果码 'session-active' ⇒ 专门键（不落既有的「仅供参考」键）
+  const failure = chatRewindFailure({
+    ok: false, outcome: 'denied', code: 'session-active', id: 'p', detail: 'x',
+    segments: [], skippedSegments: [], storage: { available: true }, guidance: [], warnings: [],
+  } as RollbackRewindResult)
+  assert.deepEqual(failure.keys, [CHAT_SESSION_ACTIVE_DENIED_KEY])
+  assert.notEqual(failure.keys[0], 'rollback.code.session-active', '不得复用「仅供参考」口径的既有键')
+  assert.equal(chatRewindFailed({ outcome: 'denied', code: 'session-active' } as RollbackRewindResult), true, '被拒要进失败原因盒')
 })
 
 test('T15 对话框接线（源级）：预览态句走 rollbackPreviewNote 一处实现 + 原因键插翻译文本', () => {

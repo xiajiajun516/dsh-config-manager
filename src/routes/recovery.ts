@@ -13,7 +13,8 @@ import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { isValidOperationId } from '../core/journal.ts'
 import { RollbackPointEngine } from '../core/rollback-point.ts'
-import type { RollbackForkSeam, RollbackRewindInput } from '../core/rollback-point.ts'
+import type { RollbackForkSeam, RollbackPreviewResult, RollbackRewindInput, RollbackRewindResult } from '../core/rollback-point.ts'
+import { reconcileForkSessions, type ForkReconcileChild, type ForkReconcileOutcome } from '../core/fork-reconcile.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { scanSessionHealth } from '../utils/session-health-scan.ts'
 import { applySessionTitles } from '../core/session-meta.ts'
@@ -40,6 +41,9 @@ import { sessionHealthNextSteps } from '../index.ts'
  *     （created-removals-limit：待删的「该点未记录」路径超上限 ⇒ 整套拒绝、零写入；是**请求级**拒绝，
  *      不是 500 —— 用户要看到的是「一条都没动」，而不是泛化的「回退失败」）
  *   confirmation-required / protected-point / record-incomplete → 409（denied 也是 409）
+ *   session-active                                       → 409
+ *     （t8：对话**正在运行**时，任何**带工作区段**的回退一律在路由层与执行层两处被拒、零写入 ——
+ *      避免与运行中的工具写盘抢文件。只回溯消息（mode=session）不受影响，照常 fork。）
  *   mutation-locked                                      → 423
  *   method-not-allowed                                   → 405
  *   outcome=partial                                      → 200
@@ -57,6 +61,8 @@ function rollbackHttpStatus(value: { ok?: boolean; code?: string; outcome?: stri
   // 待删路径超上限 = 请求级拒绝（零写入），与 invalid-input 同档；界面按 code 出专门文案
   if (value.code === 'created-removals-limit') return 400
   if (value.code === 'confirmation-required' || value.code === 'protected-point' || value.code === 'record-incomplete') return 409
+  // t8：运行中对话 + 带工作区段 = 请求级拒绝（与确认门同档的 409，界面按 code 出专门文案）
+  if (value.code === 'session-active') return 409
   if (value.code === 'mutation-locked') return 423
   if (value.code === 'method-not-allowed') return 405
   if (value.outcome === 'denied') return 409
@@ -65,6 +71,141 @@ function rollbackHttpStatus(value: { ok?: boolean; code?: string; outcome?: stri
   // E1：nothing-to-restore **不在**这一行 —— 「没有可恢复的内容」是成功、0 变更，走 200（见上表）
   if (value.code === 'restore-failed' || value.code === 'guard-failed' || value.code === 'ledger-write-failed') return 500
   return 200
+}
+
+/* ------------------------------------------------- t8：运行中对话的写入门 */
+
+/** t8 的机器码（与引擎 `RollbackCode` 里既有的 `session-active` 同一个码；界面按码出字典文案）。 */
+const SESSION_ACTIVE_CODE = 'session-active'
+
+/** t8 的 detail（英文机器细节，与其它路由 detail 同档；用户可见文案一律由界面字典给）。 */
+const SESSION_ACTIVE_DETAIL = 'conversation is running: wait for the current turn to finish, or rewind session only'
+
+/**
+ * 这次回退请求是否**要动工作区**（t8）：显式 `segments` 优先（与引擎 `rewind` 的优先级逐条一致），
+ * 否则看 `mode` —— **缺省也是要动的**（`statesForMode(undefined) = ['workspace','session']`）。
+ * 所以「UI 默认档」与「显式 mode=files+session / mode=files」都会被这条判据挡住。
+ */
+function rewindTouchesWorkspace(input: { mode?: string; segments?: readonly string[] }): boolean {
+  if (Array.isArray(input.segments)) return input.segments.includes('workspace')
+  return input.mode !== 'session'
+}
+
+/**
+ * t8 的硬拒**什么时候该生效**（判定链里的位置，t8 实现说明的选项 ②）。
+ *
+ * 既有护栏**优先**：确认门没开（`userConfirmed !== true`）、该点本来就不可回退
+ * （`preview.ok !== true || preview.canRestore !== true`：protected / record-incomplete /
+ * 记录不存在 / 存储不可用）、或 SAFE MODE 正拦着（由锁门给 423）时，**把结论让给引擎自己的
+ * 结构化拒绝** —— 那些情形下说「对话正在运行」是误导：用户等多久都退不了。
+ * 只有「这次本来能退、只是因为它正在运行而不能动工作区」时，才用 `session-active`。
+ *
+ * 两道门（R1 预检 / R2 锁内二道保险）共用这一份判据，绝不各写一套。
+ */
+function sessionActiveGateApplies(
+  preview: RollbackPreviewResult,
+  userConfirmed: boolean,
+  safeModeBlocked: boolean,
+): boolean {
+  if (safeModeBlocked) return false
+  if (!userConfirmed) return false
+  return preview.ok === true && preview.canRestore === true
+}
+
+/**
+ * 运行中对话的拒绝结果（t8）：**形状与引擎的 rewind 结果同构**，两处（路由预检 / 锁内二道保险）
+ * 共用一份，界面照常走「结果 → 文案」那条链。`segments` 恒为空 = 一段都没动（零写入）。
+ *
+ * 判据来源只有一个：**preview 已算出的 `session.active`**（引擎按会话日志 mtime 静默窗算）——
+ * 路由**绝不自己 stat 会话日志**（那会变成第二份判据，两处迟早漂移）。
+ */
+function sessionActiveDenied(id: string, preview: RollbackPreviewResult): RollbackRewindResult {
+  return {
+    ok: false,
+    outcome: 'denied',
+    code: SESSION_ACTIVE_CODE,
+    id,
+    detail: SESSION_ACTIVE_DETAIL,
+    segments: [],
+    skippedSegments: [],
+    storage: preview.storage,
+    guidance: [],
+    warnings: [],
+  }
+}
+
+/* ------------------------------------------------- t17：历史 fork 归位（显式触发的一次性动作） */
+
+/**
+ * t17：本机**有父会话的子会话**清单（只读）。宿主用 `sessions.parentRelations()`（DSH 存储列举，
+ * 解析成本在 DSH 侧已付 —— 路由不自己读盘，与 sessionHealth 同一条纪律）。
+ *
+ * 拿不到这个方法 / 形状不符 ⇒ **抛错**：绝不用空表冒充「本机没有子会话」——
+ * 那会让「归位 0 条」看起来像「本来就没有」，正是本仓反复踩过的「未知当成确知为空」。
+ *
+ * `subagent` 标记一并带过去（`SessionParentRelation.subagent` = `header.origin === 'subagent'`）：
+ * **默认口径会归位全部有父会话的子会话（含 subagent）** —— 这是 captain 2026-10-13 定下的口径：
+ * 归位对 subagent 是幂等的（写后逐条复核）、由用户显式触发、逐条回执可审计，而 subagent 在侧栏
+ * 本就嵌套在父对话下，归位不改变用户可见结构。`origin='subagent'` **不得**被当成「回退 fork」的
+ * 筛选器：真机 58 条 fork 里 50 条自己就带这个标记（core 的 `skipSubagentSessions` 因此默认关）。
+ * 调用方据此可预期写量（真机实测：887 条候选 → 877 次归位）。
+ */
+async function readChildSessions(host: { sessions?: unknown }): Promise<readonly ForkReconcileChild[]> {
+  const sessions = host.sessions
+  const relations = (sessions as { parentRelations?: unknown } | null | undefined)?.parentRelations
+  if (typeof relations !== 'function') throw new Error('session-store-has-no-parentRelations')
+  const listed = await (relations as (this: unknown) => Promise<unknown>).call(sessions)
+  if (!(listed instanceof Map)) throw new Error('parentRelations-returned-non-map')
+  const out: ForkReconcileChild[] = []
+  for (const [child, relation] of listed as Map<unknown, unknown>) {
+    if (typeof child !== 'string' || child === '') continue
+    if (relation === null || typeof relation !== 'object') continue
+    const record = relation as { parent?: unknown; subagent?: unknown }
+    if (typeof record.parent !== 'string' || record.parent === '') continue
+    out.push(record.subagent === true
+      ? { sessionId: child, parentSessionId: record.parent, subagent: true }
+      : { sessionId: child, parentSessionId: record.parent })
+  }
+  return out
+}
+
+/** 宿主归位结果 → core 的三态（形状不符一律不猜：`ok:true` 才可能算成功）。 */
+function mapHostAttachOutcome(value: unknown): ForkReconcileOutcome {
+  if (value === null || typeof value !== 'object') {
+    return { ok: false, reason: 'unexpected-error', detail: 'attach-outcome-not-an-object' }
+  }
+  const record = value as { ok?: unknown; reason?: unknown; workspaceId?: unknown; detail?: unknown }
+  if (record.ok === true) {
+    // 'already-attached' = 官方 fork 早就归位了 ⇒ 只复核、**不重复写**（core 把它记成 already）
+    const status = record.reason === 'already-attached' ? ('already' as const) : ('attached' as const)
+    return typeof record.workspaceId === 'string' && record.workspaceId !== ''
+      ? { ok: true, status, workspaceId: record.workspaceId }
+      : { ok: true, status }
+  }
+  const reason = typeof record.reason === 'string' && record.reason !== '' ? record.reason : 'unexpected-error'
+  const detail = typeof record.detail === 'string' && record.detail !== '' ? record.detail : undefined
+  return detail === undefined ? { ok: false, reason } : { ok: false, reason, detail }
+}
+
+/**
+ * t17：**一条**子会话的归位动作 —— 复用 t10 已落地的那一份实现
+ * （`DshSessionStoreFacade.attachChildToParentWorkspace`：成员 / 血缘 / cwd 同目录三档
+ * + 写后 `list()` 复核，失败带具体理由码）。
+ *
+ * 为什么按**结构窄化**取用它而不是在 `src/index.ts` 新开一个公开 seam：index.ts 不在本任务 scope，
+ * 而这里要的正是同一份判据 —— 另写第二套 attach 迟早与第一套漂移（本仓的既有教训）。
+ * 形状不符（老外壳 / 方法被改名）⇒ 逐条 `refused('reconcile-seam-missing')`，**绝不假装已归位**；
+ * 后续若把该方法提升为公开 seam，本函数只需改这一处读取。
+ */
+async function reconcileChildViaHost(host: { sessions?: unknown }, child: ForkReconcileChild): Promise<ForkReconcileOutcome> {
+  const sessions = host.sessions
+  const attach = (sessions as { attachChildToParentWorkspace?: unknown } | null | undefined)?.attachChildToParentWorkspace
+  if (typeof attach !== 'function') {
+    return { ok: false, reason: 'reconcile-seam-missing', detail: 'host-session-store-has-no-attachChildToParentWorkspace' }
+  }
+  const outcome = await (attach as (this: unknown, parentId: string, childId: string) => Promise<unknown>)
+    .call(sessions, child.parentSessionId, child.sessionId)
+  return mapHostAttachOutcome(outcome)
 }
 
 /**
@@ -480,10 +621,42 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             if (body['preRewindGuard'] === 'off' || body['preRewindGuard'] === 'require' || body['preRewindGuard'] === 'warn') {
               rewindInput.guardPolicy = body['preRewindGuard']
             }
+            /**
+             * R1（t8）：**预检**（零写入、进锁之前）—— 对话正在运行且这次要动工作区 ⇒ 直接 409。
+             *
+             * 判据只有一个来源：`engine.preview()` 已算出的 `session.active`（引擎按会话日志 mtime
+             * 的静默窗算）；路由**绝不自己 stat 会话日志**（两份判据迟早漂移）。
+             * 挡住的面：UI 默认档（不带 mode ⇒ files+session）、显式 `mode=files+session` / `files`、
+             * 显式 `segments:['workspace',…]`，以及任何直接打 HTTP API 的调用。
+             */
+            const workspaceRequested = rewindTouchesWorkspace(rewindInput)
+            const safeModeBlocked = host.safeModeIsBlocked?.() ?? false
+            if (workspaceRequested) {
+              const preview = await engine.preview(id)
+              if (preview.session.active === true && sessionActiveGateApplies(preview, rewindInput.userConfirmed === true, safeModeBlocked)) {
+                writeJson(res, 409, sessionActiveDenied(id, preview))
+                return
+              }
+            }
             const result = await runWithMutationLock(
               host.mutationLock,
               { op: 'rollback-rewind', target: id, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
-              async () => await engine.rewind(rewindInput),
+              async () => {
+                /**
+                 * R2（t8）：**执行前的二道保险**（锁内、写任何字节之前）。
+                 *
+                 * `preview()` 每次都会重新 stat 会话日志的 mtime ⇒ 预检与执行之间「对话又跑起来了」
+                 * （TOCTOU）也会在这里被挡住，判据与 R1 逐字相同。只回溯消息（`mode=session`）不受影响：
+                 * 它不碰工作区，与运行中的工具写盘没有竞争面。
+                 */
+                if (workspaceRequested) {
+                  const fresh = await engine.preview(id)
+                  if (fresh.session.active === true && sessionActiveGateApplies(fresh, rewindInput.userConfirmed === true, safeModeBlocked)) {
+                    return sessionActiveDenied(id, fresh)
+                  }
+                }
+                return await engine.rewind(rewindInput)
+              },
             )
             await tryAppendHistory({
               kind: 'recovery',
@@ -540,6 +713,49 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           return
         }
         writeJson(res, 404, { error: 'not found' })
+        return
+      }
+      /**
+       * t17：历史 fork 归位（POST /recovery/fork-reconcile）—— **用户显式触发的一次性动作**，
+       * 不是后台自动跑（归位是**写**：改工作区成员；而且只影响侧栏分组观感）。
+       *
+       * 语义（逐条对应验收）：① 只读盘点「有 `parentSession` 的子会话」；② 逐条交给 t10 的同一份
+       * 归位实现（cwd 解析不到 ⇒ 它自己回 `no-workspace-for-cwd`，**绝不猜**）；③ 写后复核
+       * （同一份实现里的 `list()` 复核）—— 复核不通过一律 refused；④ 逐条回执 + 理由分布；
+       * ⑤ **绝不动会话日志字节、绝不删任何东西**（core 只编排，IO 全在 seam 里）。
+       *
+       * 路由数不变：仍挂在 recovery prefix 这一条 endpoint 下（不新增注册条目）。
+       */
+      if (segments[0] === 'fork-reconcile') {
+        if (segments.length !== 1) { writeJson(res, 404, { error: 'not found' }); return }
+        if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed' }); return }
+        try {
+          const result = await runWithMutationLock(
+            host.mutationLock,
+            { op: 'fork-reconcile', isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+            async () => await reconcileForkSessions({
+              childSessions: async () => await readChildSessions(host),
+              reconcileOne: async (child) => await reconcileChildViaHost(host, child),
+              log: (line) => host.log.warn(line),
+            }),
+          )
+          await tryAppendHistory({
+            kind: 'recovery',
+            result: result.ok ? 'success' : 'failed',
+            sections: [],
+            source: 'recovery',
+            summary: engineMsg('route.recoveryOperationSummary', { action: 'fork-reconcile' }),
+          })
+          // 盘点就读不出来（读不到父子关系）⇒ 503：**不是**「本机没有子会话」（core 用 error 区分）
+          writeJson(res, result.ok ? 200 : 503, result)
+        } catch (error) {
+          if (error instanceof EnvironmentLockUnavailableError) {
+            host.log.warn(`mutation lock blocked: op=fork-reconcile reason=${error.reason}`)
+            writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+            return
+          }
+          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        }
         return
       }
       // issue #31：残留锁的显式回收路由（POST /recovery/lock/recover）。

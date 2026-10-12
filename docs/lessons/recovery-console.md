@@ -208,3 +208,72 @@
 - **老台账兼容**：索引字段诞生前写下的点没有 `pathIndex` ⇒ 与「索引丢失」同一条 fail-closed 路径（只报告、不删），**不迁移、不改 schema 版本**。
 - **未验证（如实）**：真机浏览器里点「↺ 回退」的端到端点击取证（本机运行实例的插件构建与源码不同源：desktop 档案装的是发布版 0.1.71，不含回滚族）—— 证据止于引擎端到端（真实文件系统 + 真实台账/对象仓 + 生产默认上限）、两个探针的真实磁盘数据、typecheck / 全量测试 / 构建。
 
+## 运行中的对话不得动工作区段：两处硬拒 + 判据只读引擎信号（2026-10-13）
+
+**规则**：`preview.session.active === true`（会话日志 mtime 落在引擎静默窗内，缺省 30 s）且这次回退**要动工作区**
+（显式 `segments` 优先，否则 `mode !== 'session'`，**缺省 files+session 也算**）⇒ 409 `session-active`、`segments` 恒空（零写入）。
+两处都判：路由预检（进锁前）+ 锁内写任何字节之前（TOCTOU）。`mode=session`（只回溯消息）不受影响。
+
+**为什么两处**：预检挡住 UI 默认档与直接打 HTTP 的调用；锁内的第二道挡「预检与执行之间对话又跑起来了」。
+**判据只有一份**：路由读 `engine.preview()` 已算出的 `session.active`，**绝不自己 stat 会话日志**（源码级断言：路由源码不含 `logPath`/没有 `fs.stat`）。
+
+**判定链位置（2026-10-13 定案）**：既有护栏**优先** —— 未确认（`confirmation-required`）、该点本就不可回退
+（`preview.ok !== true || canRestore !== true` ⇒ `protected-point` / `record-incomplete` / `record-not-found` /
+`storage-unavailable`）、SAFE MODE（423）时，把结论让给引擎自己的结构化码；只有「本来能退、只因正在运行而不能动工作区」
+才回 `session-active`。否则用户会白等一轮，等到最后拿到 `protected-point`。
+
+**UI 选择**：运行中**禁用**「回退文件的更改」而不是加二次确认 —— 路由已硬拒，给一个「点得动但必然 409」的开关
+等于假承诺（与 F3 同一条纪律）；默认档改成 `session`（只回溯消息），弹窗加一句说明。
+
+**连带影响（踩过）**：新不变量会让「会话日志 mtime 是刚才写的」的既有路由用例集体变成 409 ——
+`tests/route/recovery-rollback.test.ts` 的 R8-1/4/5/6/7/8 统一报 `409 session-active`（期望 `confirmation-required` /
+`protected-point` / 423）。修法：夹具把日志 mtime 拨到静默窗外（那些用例本就该代表「对话不在运行」，它们测的是别的守卫），
+并新增一条「运行中带文件段 ⇒ 409 零写入 + session-only 照常 fork」的对照用例。
+
+## 回退的忽略规则、路径身份缓存与容量缺省（2026-10-13）
+
+**规则**：`.dsh-rollback-ignore`（分块根，gitignore 常用子集：`#` 注释、`!` 反向取消、尾 `/` 只匹配目录、
+`*`/`?` 不跨段、`**` 跨段）。两条硬边界**不得放宽**：① 内置运行时依赖目录（`node_modules`）不可被反向取消；
+② **整个目录被忽略 ⇒ 证明名单不完整 ⇒ 该点的删除集整体拒绝（fail-closed）**；被忽略的**文件**仍逐条进 `skipped`，名单照样完整。
+
+**计数口径**：`skippedCount` **不含** `excludedDirs`（内置依赖目录，另有列表）与 `ignoredDirs`（用户忽略的目录，
+总数见 `ignoredDirCount`，恒增计数器）；`recordSkip` 只对 `skipped` 桶 +1。三者的逐条列表都受 `maxSkippedEntries` 约束
+（否则台账 payload 随忽略目录数无界增长），但计数绝不跟着缩水。
+
+**路径身份缓存**：路径身份 = `BigInt dev:ino:size:mtimeNs:ctimeNs:mode`，落盘 `rollback-points/path-cache.json`，
+**随台账引用 gc**（不被任何点引用的条目会被清掉）；命中即复用 sha256，不重读不重算。缺省容量由 2000 文件 / 64 MiB
+放宽到 **20000 文件 / 512 MiB**（同一处改，避免「上限太紧导致留点降级」的误报）。
+
+**未验证（如实）**：未采集大仓库的实测性能数字（只有「命中即不重算」的确定性用例与语义断言）。
+
+## 磁盘体检只报告：回滚点库与遗留检查点（2026-10-13）
+
+**规则**：磁盘体检新增 `rollback-points` 子区（`dataDir/rollback-points`）与「遗留数据」区块
+（当前一条 = 升级前的 `checkpoints/`），两者 `policy = 'protected'`、**只报告、永不进清理候选**
+（`IMMEDIATE_CLEAN_CATEGORIES` 与清理入口的 `categories` 白名单一字未动，有源码级 + HTTP 双层断言）。
+遗留区块**不计入 `totalBytes`**（与子区分列，避免把「不算可清理的东西」混进合计口径）；说明文案走字典键
+（core 不内嵌用户可见文案）；读不到 ⇒ `unreadable = true` 且 `sizeBytes = 0`（「不存在」与「被非目录占住」两态都测）。
+
+**真机数据（2026-10-12，只读）**：回滚点库 **7,124,295 B / 385 文件**；遗留 `checkpoints/` **59,705,801 B / 1757 文件**
+（后者是前者的 8 倍 —— 这正是「用户看不见的占用」里最大的一块）。
+
+## 历史 fork 归位：`origin='subagent'` 不是 fork 筛选器（2026-10-13）
+
+**规则**：归位对象 = 「有 `parentSession` 的子会话」，**默认全部处理（含 subagent）**；`origin='subagent'` **不得**
+当成「回退 fork」的筛选器。理由是真机分布：887 条有父会话的子会话里 `isSeeded` 的 fork 有 **58** 条，而这 58 条里
+**50 条自己就带 `origin='subagent'`**（DSH 的 fork 用 `agents.create` 造，标记就是 subagent）⇒ 按 origin 窄化会把
+50/58 个目标跳掉。窄化只作为**显式开关**存在（默认关），跳过条数如实回传（不静默）。
+
+**判据只有一份**：逐条归位复用 t10 已落地的 `DshSessionStoreFacade.attachChildToParentWorkspace`（成员 / 血缘 /
+cwd 同目录三档 + 写后 `list()` 复核）；路由按结构窄化取用（index.ts 不在任务 scope），形状不符 ⇒ 逐条
+`refused('reconcile-seam-missing')`，**绝不假装已归位**。core 只编排（不 import node:*、不碰文件系统、不碰会话日志字节）。
+
+**真机数据（2026-10-13，只读盘点 + 真代码路径 + 影子注册表）**：8 工作区 / 1370 会话头 / 887 有父会话的子会话；
+盘点时生效成员 10 条，其中**回退 fork 只有 3 条**。归位：attached **877** / already **10** / refused **0**；
+**回退 fork 58 条：attached 55 / already 3 / refused 0**。零写入复核：`workspace.json` sha256 不变 +
+1381 个会话日志的 `(path,size,mtime)` 清单不变 —— 写全部落在真实账的**内存深拷贝**上（归位是用户显式触发的一次性动作，
+取证脚本不写用户数据）。
+
+**踩过**：`POST /recovery/fork-reconcile` 分支最初放在 `lock` 分支**之后**，把 `runWithMutationLock` 带进了
+「lock 分支不得经 acquire」那条源码守卫的窗口（`source.slice(lockBranch, idParse)` 里不得出现锁调用）⇒ 全量测试红。
+分支必须排在 `lock` 之前（或该守卫窗口之外）。

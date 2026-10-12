@@ -128,6 +128,32 @@ test('self: 预览只列白名单 —— 快照/同步工作副本等内部数�
   );
 });
 
+test('self: 磁盘体检新统计的目录（rollback-points / 遗留 checkpoints）不进本分区载荷', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  const syncConfig = Buffer.from('{"transport":"git"}', 'utf8');
+  await src.fs.writeFile('dsh-config-manager/sync/sync-config.json', syncConfig);
+  // 磁盘体检会统计这两块占用（回滚点库 + 旧检查点库）——但它们是**数据**，不是 self 分区的配置
+  await src.fs.writeFile('dsh-config-manager/rollback-points/index.json', Buffer.from('x'.repeat(4096), 'utf8'));
+  await src.fs.writeFile('dsh-config-manager/rollback-points/objects/rb-1/session.v4.jsonl.zstd', Buffer.from('x'.repeat(4096), 'utf8'));
+  await src.fs.writeFile('dsh-config-manager/checkpoints/cp-1/files/a.bin', Buffer.from('x'.repeat(4096), 'utf8'));
+  await src.fs.writeFile('dsh-config-manager/checkpoints/index.json', Buffer.from('{}', 'utf8'));
+
+  const adapter = new SelfAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const previewed = await adapter.preview(src, { includeSecrets: false });
+  const rels = exported.data.files.map((f) => f.relativePath);
+
+  assert.deepEqual(rels, ['sync/sync-config.json'], '白名单外一律不收（新增统计目录不得混进载荷）');
+  assert.equal(new Set(rels).size, rels.length, '不得出现重复条目');
+  assert.equal(exported.counts.files, 1);
+  assert.deepEqual(
+    previewed.items.map((u) => u.id),
+    ['self:sync/sync-config.json'],
+    '预览与导出同口径（只列白名单）',
+  );
+  assert.equal(previewed.sizeBytes, syncConfig.byteLength, '体积只算白名单文件');
+});
+
 test('self: 宿主未实现 statSize（旧版门面）时，白名单判定仍只收配置、不误列内部数据', async () => {
   const src = makeContext('win32', 'C:\\Users\\alice');
   await src.fs.writeFile('dsh-config-manager/sync/sync-config.json', Buffer.from('{}', 'utf8'));

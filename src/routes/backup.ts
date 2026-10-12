@@ -28,7 +28,14 @@ import { validateBackupScheduleDraft } from '../ui/backup-schedule.ts'
 import { join as joinPath } from 'node:path'
 
 
-/** 磁盘体检子区 → 物理目录（`$DSH_HOME/dsh-config-manager` 下的固定布局，单一映射点） */
+/**
+ * 磁盘体检子区 → 物理目录（`$DSH_HOME/dsh-config-manager` 下的固定布局，单一映射点）。
+ *
+ * 注意这里**没有** `rollback-points`：回滚点库与遗留 `checkpoints/` 的位置由 core 按
+ * `dataDir + ROLLBACK_POINTS_DIR`（与引擎常量逐字一致，有源码级守卫）与 `LEGACY_DATA_DIRS`
+ * 推导（见 `src/core/disk-usage.ts` 的 `diskUsageDirOf`）——宿主路由与离线 CLI 因此不可能
+ * 各写一份目录名而漂移。
+ */
 function diskUsageDirsOf(env: RoutesEnv): DiskUsageDirs {
   const { dataDir, syncDir, marketDir, tmpDir, snapshotsDir, exportsDir } = env
   return {
@@ -154,6 +161,12 @@ export function backupRoutes(env: RoutesEnv): WebRoute[] {
     // ------------------------------------------------------- disk-usage（只读体检）
     // 界面「磁盘占用」卡的数据源：按子区回传字节数/文件数 + 各保留期的「已到期」量。
     // 零写入、零敏感（只有本机目录布局与体积）；子区读不到时如实标 unreadable（绝不显示 0 诱导）。
+    //
+    // 响应恒含两块**此前不可见**的占用（都是 protected，只报告、绝不进清理候选）：
+    //  ① report.areas['rollback-points']   回滚点库（dataDir/rollback-points，工作区+会话两态的恢复入口）；
+    //  ② report.legacy[]                   遗留数据（结构可容纳多条；当前一条 legacy-checkpoints =
+    //                                      旧 checkpoints/ 目录，插件已不再读取、也不代删）。
+    // 已超期/可回收字段只对 retained / regenerable 子区有值，这两块恒为空/undefined。
     endpoint({ path: '/api/dsh-config-manager/disk-usage', methods: ['GET'] }, async (_req, res) => {
       try {
         writeJson(res, 200, { ok: true, report: await diskUsageReportOf(env) })
@@ -164,7 +177,10 @@ export function backupRoutes(env: RoutesEnv): WebRoute[] {
     // ------------------------------------------------- disk-usage/cleanup（手动清理）
     // 缺省只清可重建的缓存/暂存（tmp + 市场缓存 + 市场工作副本，忽略保留期整块清）；
     // categories 可加入 'expired-exports'（只删已超保留期的导出产物，豁免定时备份）。
-    // **snapshots / sync 永不在候选集内**（用户数据与安全网）。走 mutation gate：同一时刻只允许一个写操作。
+    // **snapshots / sync 永不在候选集内**（用户数据与安全网）；**回滚点库
+    // （report.areas['rollback-points']）与遗留数据（report.legacy[]）同样永不进候选** ——
+    // 上面的 categories 白名单就是逐条判据（源级守卫见 src/core/disk-usage.test.ts）。
+    // 走 mutation gate：同一时刻只允许一个写操作。
     endpoint({ path: '/api/dsh-config-manager/disk-usage/cleanup', methods: ['POST'] }, withMutationGate('disk-usage-cleanup', async (req, res) => {
       try {
         const body = await readJsonBody(req)

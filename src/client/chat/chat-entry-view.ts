@@ -605,14 +605,100 @@ export const CHAT_ENTRY_WARN_PREFIX = '[config-manager] chat user node renderer 
 /** 缓存 TTL：同一会话里的所有按钮共用一次列表读取；跨分钟自然过期（列表变化由宿主写，非热点）。 */
 export const CHAT_POINT_CACHE_MS = 30_000
 
+/**
+ * 宿主列表载荷里本模块真正用到的三件事（**宽度接收**：多出的字段逐字段判定，读不到就按「没带」处理）。
+ *
+ * 为什么要宽度接收 `inheritLinks`：它是 t9 新增的**继承链**（fork 子会话 id → 父会话 id），
+ * 由引擎 `list()` 回传；`src/ui/rollback-view.ts` 的 `RollbackListResult` 类型不在 t9 scope，
+ * 所以这里不 import 一个还不存在的字段，而是像读宿主 node 形状那样**逐字段判定**：
+ * 没带（旧宿主）⇒ 行为与今天逐字一致，绝不猜。
+ */
+interface ChatPointListFacts {
+  points: readonly RollbackPointSummary[]
+  /** fork 子会话 id → 父会话 id；undefined = 载荷没带这张表（旧宿主） */
+  links: Record<string, string> | undefined
+  /** 链是否完整；undefined = 未声明（按「完整」处理） */
+  linksComplete: boolean | undefined
+}
+
 interface ChatPointListCacheEntry {
   at: number
-  points: readonly RollbackPointSummary[]
+  facts: ChatPointListFacts
+}
+
+/**
+ * 继承链上溯的**深度上限**（与宿主侧 `ANCESTOR_LOOKUP_MAX_DEPTH` 同口径取 8：DSH 的子代理/分叉树
+ * 实际深度是个位数）。只上溯 + 环保护 + 上限三道一起，保证异常数据（自指 / 环 / 超深链）
+ * 既不挂起、也不误命中。
+ */
+export const CHAT_POINT_ANCESTOR_MAX_DEPTH = 8
+
+/** 载荷 → 本模块用到的三件事（形状不符一律降级为「没带」，绝不抛）。 */
+function readChatPointListFacts(raw: unknown): ChatPointListFacts {
+  const record = typeof raw === 'object' && raw !== null ? raw as Record<string, unknown> : null
+  const rawPoints = record?.['points']
+  const points = Array.isArray(rawPoints) ? rawPoints as readonly RollbackPointSummary[] : []
+  const rawLinks = record?.['inheritLinks']
+  let links: Record<string, string> | undefined
+  if (typeof rawLinks === 'object' && rawLinks !== null && !Array.isArray(rawLinks)) {
+    const out: Record<string, string> = {}
+    for (const [child, parent] of Object.entries(rawLinks as Record<string, unknown>)) {
+      if (child !== '' && typeof parent === 'string' && parent !== '') out[child] = parent
+    }
+    links = out
+  }
+  const rawComplete = record?.['inheritLinksComplete']
+  return { points, links, linksComplete: typeof rawComplete === 'boolean' ? rawComplete : undefined }
+}
+
+/**
+ * 本会话/本回合未命中时，沿 `parentSession` 链**只上溯**找祖先的同回合点（t9）。
+ *
+ * 语义（与引擎侧逐条对齐）：
+ *  · 只对「历史被继承」的 fork 子会话建链（引擎只登记这种），子代理会话不在链里
+ *    —— 它们的回合号是**自己的**，按同回合上溯会误命中；
+ *  · 命中即返回**祖先自己的点**（`sessionId` 是祖先）：回退动作仍在原会话上做 fork，
+ *    与今天的语义逐字相同（`boundarySeq` 也来自祖先点）；
+ *  · 环 / 超深链 / 链被截断 ⇒ `proven:false`（判据**未知**），调用点据此报 `resolved:false`
+ *    —— 不得把「看不完」说成「确知没有」。
+ */
+function findPointThroughAncestors(
+  facts: ChatPointListFacts,
+  sessionId: string,
+  turn: number,
+): { point: RollbackPointSummary | null; proven: boolean } {
+  const links = facts.links
+  // 旧宿主（载荷没有继承链）：与今天逐字一致 —— 未命中就是确知没有
+  if (links === undefined) return { point: null, proven: true }
+  const seen = new Set<string>([sessionId])
+  let current = sessionId
+  for (let depth = 1; depth <= CHAT_POINT_ANCESTOR_MAX_DEPTH; depth += 1) {
+    const parent = links[current]
+    // 走到链顶：只有「链完整」时才算证明了「确实没有」（截断的链可能缺环）
+    if (parent === undefined) return { point: null, proven: facts.linksComplete !== false }
+    // 自指 / 环：数据不可信 ⇒ 判据未知（绝不挂起）
+    if (seen.has(parent)) return { point: null, proven: false }
+    seen.add(parent)
+    const hit = findPointForTurn(facts.points, parent, turn)
+    if (hit !== null) return { point: hit, proven: true }
+    current = parent
+  }
+  // 超过深度上限：看不完 ⇒ 不可证明（不误命中、也不挂起）
+  return { point: null, proven: false }
+}
+
+/** 载荷 → 一次查询结论（自己的点优先；未命中才上溯）。 */
+function lookupPointInFacts(facts: ChatPointListFacts, sessionId: string, turn: number): ChatPointLookup {
+  const own = findPointForTurn(facts.points, sessionId, turn)
+  if (own !== null) return { point: own, resolved: true }
+  const ancestor = findPointThroughAncestors(facts, sessionId, turn)
+  if (ancestor.point !== null) return { point: ancestor.point, resolved: true }
+  return { point: null, resolved: ancestor.proven }
 }
 
 /** **按会话**缓存整份列表（不是按回合）：一条长对话里 N 条用户消息只发 1 次请求。 */
 const pointListCache = new Map<string, ChatPointListCacheEntry>()
-const pointListInflight = new Map<string, Promise<readonly RollbackPointSummary[] | null>>()
+const pointListInflight = new Map<string, Promise<ChatPointListFacts | null>>()
 
 /** 清空缓存（单测用；生产代码不调用）。 */
 export function resetChatPointCache(): void {
@@ -647,16 +733,17 @@ export async function lookupPointForTurn(options: {
   const ttl = options.cacheMs ?? CHAT_POINT_CACHE_MS
   const cached = options.force === true ? undefined : pointListCache.get(options.sessionId)
   if (cached !== undefined && now - cached.at < ttl) {
-    return { point: findPointForTurn(cached.points, options.sessionId, options.turn), resolved: true }
+    return lookupPointInFacts(cached.facts, options.sessionId, options.turn)
   }
   let inflight = pointListInflight.get(options.sessionId)
   if (inflight === undefined) {
-    inflight = (async (): Promise<readonly RollbackPointSummary[] | null> => {
+    inflight = (async (): Promise<ChatPointListFacts | null> => {
       try {
         const list = await options.port.rollbackPoints()
-        const points: readonly RollbackPointSummary[] = Array.isArray(list.points) ? list.points : []
-        pointListCache.set(options.sessionId, { at: Date.now(), points })
-        return points
+        // 宽度接收：points 之外的继承链字段由 readChatPointListFacts 逐字段判定（读不到 = 没带）
+        const facts = readChatPointListFacts(list as unknown)
+        pointListCache.set(options.sessionId, { at: Date.now(), facts })
+        return facts
       } catch {
         return null
       } finally {
@@ -665,7 +752,7 @@ export async function lookupPointForTurn(options: {
     })()
     pointListInflight.set(options.sessionId, inflight)
   }
-  const points = await inflight
-  if (points === null) return { point: null, resolved: false }
-  return { point: findPointForTurn(points, options.sessionId, options.turn), resolved: true }
+  const facts = await inflight
+  if (facts === null) return { point: null, resolved: false }
+  return lookupPointInFacts(facts, options.sessionId, options.turn)
 }

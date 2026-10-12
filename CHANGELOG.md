@@ -53,6 +53,14 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Working copy self-repair**: the sync page shows which repository the working copy points at, with one-click "re-point" and "re-clone" when the address changed.
 - **自动同步说清原因**：不再静默跳过，页面上直接写明这一轮为什么没同步。（issue #79）
   **Auto sync explains itself**: instead of silently skipping, the card states why the last run did not sync.
+- **磁盘占用看清回滚点库与旧检查点**：磁盘体检分别列出回滚点库与升级前遗留的旧检查点数据各占多少、多少文件（只报告、绝不清理）。
+  **Rollback data in the disk report**: the disk checkup now lists the rollback-point store and the pre-upgrade checkpoint data separately, with their size and file count (report only — never cleaned up).
+- **聊天里直接 `/rollback`**：输入 `/rollback` 列出本对话可回退的时刻；带上某个时刻的编号再输一次，就回退到那一刻，不必离开聊天。
+  **`/rollback` in the chat**: type `/rollback` to list the rewindable moments of this conversation, then run it again with one of those ids to rewind — no need to leave the chat.
+- **回退可以跳过你指定的目录**：在项目里放一个 `.dsh-rollback-ignore`（写法与 .gitignore 常用子集一致）就能让留点与回退跳过匹配的目录与文件；内置依赖目录不可被取消。整个目录被跳过时，「该点之后新建的文件」的删除会整体拒绝（宁可不动）。
+  **Skip directories you choose**: a `.dsh-rollback-ignore` file in the project (the usual .gitignore subset) makes capture and rewind skip matching directories and files; the built-in dependency directory cannot be re-included. When a whole directory is skipped, deleting files created after that point is refused outright rather than done partially.
+- **历史分支对话可以一次性归位**：早期回退留下、仍停在「未分组」的分支对话，可以通过一次显式操作按目录收回其所属工作区，并逐条给出结果（会处理全部有父对话的分支，含子代理对话）。
+  **Re-home old branch conversations**: branch conversations left ungrouped by earlier rewinds can be re-homed into the workspace their directory belongs to with one explicit action and a per-item result (every conversation with a parent is processed, subagent conversations included).
 
 ### 🔧 变更 · Changed
 
@@ -74,6 +82,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Rewind preview at a glance**: the dialog states up front how many files change, how many lines are added or removed and how many are deleted; rows line up in columns with their directory and **clicking a file name opens its diff**, and the list stays readable when the checkbox is off.
 - **一批界面体验修复**（会话体检、同步、市场、首页、产物库、确认弹窗）：只改呈现与状态反馈，不改工作流。
   **A batch of UI polish** (session checkup, sync, market, home, library, confirm dialogs): presentation and feedback only, no workflow changes.
+- **回退留点更快、上限更大**：没变过的文件不再每次重算指纹，大仓库里留点明显更快；单个回滚点的默认上限从 2000 个文件 / 64 MiB 放宽到 20000 个文件 / 512 MiB。
+  **Faster capture, larger limits**: unchanged files are no longer re-hashed on every capture, so big projects capture noticeably faster; the default per-point limits grew from 2,000 files / 64 MiB to 20,000 files / 512 MiB.
+- **对话正在运行时默认只回溯消息**：回退弹窗会写明这条对话正在运行，默认只退对话、不动文件；要连文件一起退，等这一轮结束后重新打开弹窗即可。
+  **While a conversation is running, only the conversation is rewound by default**: the rewind dialog says so, and rewinding files waits until the current turn finishes — reopen the dialog then.
 
 ### 🐛 修复 · Fixed
 
@@ -119,6 +131,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **User messages now match DSH natively**: time format, attachment order, size wording and session-reference summaries all line up.
 - **一批 CLI 与离线救急台修复**：会话体检、回滚点预览与只读检查的输出与退出码对齐。
   **A batch of CLI and offline recovery-console fixes**: session checkup, rewind preview and read-only checks agree on output and exit codes.
+- **回退出来的对话也能一键回退**：之前回退开出的分支对话里，消息旁的回退入口一直是灰的；现在会沿原对话找到对应那一刻，正常回退。
+  **Rewound conversations can be rewound again**: the rewind entry in a branch conversation used to stay greyed out; it now finds the matching moment in the original conversation.
+- **子对话没能归位时不再误报回退失败**：回退本身已经成功、只是分组没跟上时，会如实说明，不再报「回退失败」。
+  **A failed re-home no longer looks like a failed rewind**: when the rewind itself succeeded but the grouping did not, it says so instead of reporting a failure.
+- **忽略目录很多时不再拖垮回滚点台账**：逐条留痕有上限、计数仍如实，也因此不会误判成「可以安全删除」。
+  **Many ignored directories no longer bloat the ledger**: per-item records are capped while counts stay exact, so the "safe to delete" judgement cannot be fooled.
 
 ## [0.1.71] - 2026-10-08
 

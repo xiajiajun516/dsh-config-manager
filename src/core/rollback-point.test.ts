@@ -29,6 +29,9 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  ROLLBACK_ANCESTOR_MAX_DEPTH,
+  ROLLBACK_DEFAULT_MAX_BYTES,
+  ROLLBACK_DEFAULT_MAX_FILES,
   ROLLBACK_LEFTOVER_LIST_LIMIT,
   ROLLBACK_MAX_GUARDS,
   ROLLBACK_MAX_GUARDS_PER_SESSION,
@@ -51,6 +54,7 @@ import {
 import { projectKeyOf } from './session-select.ts'
 import { atomicWriteFile } from '../utils/atomic-write.ts'
 import { sha256Hex } from '../utils/hashing.ts'
+import { encodeZstdFrame } from '../utils/zstd-frame.ts'
 
 /* --------------------------------------------------------------- fixture */
 
@@ -368,6 +372,150 @@ test('R-04 留存：每会话 20、全局 50，淘汰只删最旧的非保护点
   assert.equal(kept3.size, 3)
   assert.equal(kept3.has(ids3[0] ?? ''), false)
   assert.equal(kept3.has(ids3[4] ?? ''), true)
+})
+
+/* ============================================ t9 fork 子会话的继承链与代际隔离 */
+
+test('t9 活会话登记：header 的 parentSession / isSeeded 带进 binding（读不到就不带字段，绝不猜）', () => {
+  const seeded = rollbackSessionBindingOf({ id: 'c1', header: { cwd: 'D:/ws', parentSession: 'p1', isSeeded: true } })
+  assert.equal(seeded.ok, true)
+  if (seeded.ok) {
+    assert.equal(seeded.binding.parentSessionId, 'p1', '磁盘 header 名 parentSession')
+    assert.equal(seeded.binding.forked, true)
+  }
+  const projected = rollbackSessionBindingOf({ id: 'c2', header: { cwd: 'D:/ws', parentSessionId: 'p2', seedLength: 12 } })
+  if (projected.ok) {
+    assert.equal(projected.binding.parentSessionId, 'p2', 'RPC 投影名 parentSessionId 也认')
+    assert.equal(projected.binding.forked, true, 'seedLength 也是「播种而来」的证据')
+  }
+  const subagent = rollbackSessionBindingOf({ id: 'c3', header: { cwd: 'D:/ws', parentSession: 'p3', origin: 'subagent', isSeeded: false } })
+  if (subagent.ok) {
+    assert.equal(subagent.binding.parentSessionId, 'p3')
+    assert.equal(subagent.binding.forked, undefined, '子代理会话不进继承链（它的回合号是自己的）')
+  }
+  const plain = rollbackSessionBindingOf({ id: 'c4', header: { cwd: 'D:/ws' } })
+  if (plain.ok) {
+    assert.equal(plain.binding.parentSessionId, undefined)
+    assert.equal(plain.binding.forked, undefined)
+  }
+})
+
+test('t9 祖先链：只上溯 + 环保护 + 深度上限（自指 / 环 / 超深链都不挂起、不误命中）', async () => {
+  const fx = await makeFixture()
+  try {
+    const engine = makeEngine(fx)
+    engine.noteSessionBinding({ sessionId: 'a', parentSessionId: 'a', forked: true })
+    assert.deepEqual(engine.ancestorIdsOf('a'), [], '自指不产生祖先')
+    engine.noteSessionBinding({ sessionId: 'b', parentSessionId: 'c', forked: true })
+    engine.noteSessionBinding({ sessionId: 'c', parentSessionId: 'b', forked: true })
+    assert.deepEqual(engine.ancestorIdsOf('b'), ['c'], '环里走一步就停（不挂起、也不重复）')
+    // 非 fork 关系（子代理 / 只是声明了父）不进链
+    engine.noteSessionBinding({ sessionId: 'x', parentSessionId: 'y', forked: false })
+    engine.noteSessionBinding({ sessionId: 'z', parentSessionId: 'y' })
+    assert.deepEqual(engine.ancestorIdsOf('x'), [])
+    assert.deepEqual(engine.ancestorIdsOf('z'), [])
+    // 超深链：s0 → s1 → … → s20
+    for (let i = 0; i < 20; i += 1) {
+      engine.noteSessionBinding({ sessionId: 's' + String(i), parentSessionId: 's' + String(i + 1), forked: true })
+    }
+    const chain = engine.ancestorIdsOf('s0')
+    assert.equal(chain.length, ROLLBACK_ANCESTOR_MAX_DEPTH, '深度上限内的祖先才算数')
+    assert.equal(chain[0], 's1')
+    assert.equal(chain.includes('s9'), false, '超过上限的祖先不得出现在链里（不误命中）')
+  } finally {
+    await fx.cleanup()
+  }
+})
+
+test('t9 ancestorPointForTurn：祖先有**同回合**点才命中；没有就 null（不猜最近的一个）', async () => {
+  const fx = await makeFixture()
+  try {
+    const engine = makeEngine(fx)
+    await capturePoint(engine, fx, {}) // session-1111 / turn 2
+    engine.noteSessionBinding({ sessionId: 'child-2222', parentSessionId: 'session-1111', forked: true })
+    const hit = await engine.ancestorPointForTurn('child-2222', 2)
+    assert.equal(hit?.sessionId, 'session-1111')
+    assert.equal(hit?.turn, 2)
+    assert.equal(await engine.ancestorPointForTurn('child-2222', 7), null, '祖先没有这一回合的点 ⇒ null')
+    assert.equal(await engine.ancestorPointForTurn('session-1111', 2), null, '自己的点不算祖先点')
+  } finally {
+    await fx.cleanup()
+  }
+})
+
+test('t9 留点器代际隔离：继承回合不补点（无幽灵点），本会话自己的新回合必须留下自己的点', async () => {
+  const fx = await makeFixture()
+  try {
+    const engine = makeEngine(fx)
+    const tracker = new RollbackAutoTracker({ engine })
+    // 父会话 p1：回合 1、2 各留一个点
+    tracker.registerSession({ sessionId: 'p1', chunks: [fx.workspaceDir], unitId: 'proj-key/p1' })
+    await tracker.noteEvent({ sessionId: 'p1', seq: 0, type: 'turn/start', data: { turn: 1 } })
+    await tracker.noteEvent({ sessionId: 'p1', seq: 3, type: 'turn/end', data: { turn: 1 } })
+    await tracker.noteEvent({ sessionId: 'p1', seq: 4, type: 'turn/start', data: { turn: 2 } })
+    await tracker.noteEvent({ sessionId: 'p1', seq: 8, type: 'turn/end', data: { turn: 2 } })
+
+    // fork 子会话 c1：历史从 p1 播种而来，replay 的回合号与父逐字相同
+    tracker.registerSession({ sessionId: 'c1', chunks: [fx.workspaceDir], unitId: 'proj-key/c1', parentSessionId: 'p1', forked: true })
+    const replay1 = await tracker.noteEvent({ sessionId: 'c1', seq: 0, type: 'turn/start', data: { turn: 1 } })
+    assert.equal(replay1.captured, false, '继承回合不得补点（补了就是把「现在」的工作区态贴到那一回合上 = 幽灵点）')
+    assert.match(String(replay1.detail), /inherited-turn/)
+    const replay2 = await tracker.noteEvent({ sessionId: 'c1', seq: 4, type: 'turn/start', data: { turn: 2 } })
+    assert.equal(replay2.captured, false)
+    assert.match(String(replay2.detail), /inherited-turn/)
+
+    // c1 自己的新回合（父没有回合 3）⇒ 必须留下 c1 自己的点
+    const own = await tracker.noteEvent({ sessionId: 'c1', seq: 9, type: 'turn/start', data: { turn: 3 } })
+    assert.equal(own.captured, true, '子会话跑到的新回合必须留下本会话自己的点（不得被跨代际去重跳过）')
+
+    const ledger = await ledgerOf(engine)
+    const c1Own = ledger.records.filter((r) => r.sessionId === 'c1')
+    assert.equal(c1Own.length, 1, '台账里 c1 只有自己的那一个点')
+    assert.equal(c1Own[0]?.turnSeq, 3)
+    assert.equal(ledger.records.some((r) => r.sessionId === 'c1' && (r.turnSeq === 1 || r.turnSeq === 2)), false, '继承回合绝不在台账里留幽灵点')
+    assert.equal(ledger.records.filter((r) => r.sessionId === 'p1').length, 2, '父会话的点不受影响')
+  } finally {
+    await fx.cleanup()
+  }
+})
+
+test('t9 继承链与继承视图：磁盘上的 fork 子会话被认出来（inheritLinks + 祖先点的继承视图，台账零写入）', async () => {
+  const fx = await makeFixture()
+  try {
+    const engine = makeEngine(fx)
+    const parent = await capturePoint(engine, fx, {}) // session-1111 / turn 2 / unitId proj-key/session-1111
+    assert.equal(parent.ok, true)
+    const parentPointId = parent.ok && parent.point !== undefined ? parent.point.id : ''
+    // 磁盘上造 fork 子会话（header: parentSession + isSeeded）与子代理子会话（origin=subagent）
+    const forkedDir = path.join(fx.sessionsDir, 'proj-key', 'child-2222')
+    await fs.mkdir(forkedDir, { recursive: true })
+    await fs.writeFile(path.join(forkedDir, 'session.jsonl.zstd'), encodeZstdFrame(Buffer.from(
+      JSON.stringify({ type: 'session', version: 4, id: 'child-2222', cwd: fx.workspaceDir, parentSession: 'session-1111', isSeeded: true }) + '\n',
+    )))
+    const subagentDir = path.join(fx.sessionsDir, 'proj-key', 'sub-3333')
+    await fs.mkdir(subagentDir, { recursive: true })
+    await fs.writeFile(path.join(subagentDir, 'session.jsonl.zstd'), encodeZstdFrame(Buffer.from(
+      JSON.stringify({ type: 'session', version: 4, id: 'sub-3333', cwd: fx.workspaceDir, parentSession: 'session-1111', origin: 'subagent', isSeeded: false }) + '\n',
+    )))
+
+    const list = await engine.list()
+    assert.equal(list.inheritLinks?.['child-2222'], 'session-1111', 'fork 子会话必须进继承链')
+    assert.equal(list.inheritLinks?.['sub-3333'], undefined, '子代理子会话不进继承链（回合号是它自己的）')
+    assert.equal(list.inheritLinksComplete, true)
+
+    const view = list.points.find((p) => p.sessionId === 'child-2222' && p.turn === 2)
+    assert.ok(view !== undefined, 'fork 子会话必须拿到祖先同回合点的继承视图')
+    assert.equal(view.id, parentPointId, '继承视图与祖先点同 id ⇒ preview/rewind/remove 作用在原点')
+    assert.equal(view.inheritedFrom, parentPointId)
+    assert.equal(view.inheritedSessionId, 'session-1111')
+    assert.equal(view.unitId, 'proj-key/child-2222', '视图归到子会话的单元（同项目键）')
+    assert.equal(list.inheritedViewTruncated, undefined, '未超上限就不标记')
+
+    const ledger = await ledgerOf(engine)
+    assert.equal(ledger.records.some((r) => r.sessionId === 'child-2222'), false, '继承视图绝不写进台账（零幽灵点）')
+  } finally {
+    await fx.cleanup()
+  }
 })
 
 /* =================================================== R-05 只覆盖不删除 */
@@ -2033,4 +2181,381 @@ test('R-34 T10：工作区段「没记录文件」与「记录但全部一致」
     noFilesSegment?.reasonCode,
     '两条路径必须是不同的码（界面据此说两句不同的话，不靠 detail 分派）',
   )
+})
+
+/* ============ t2：路径身份缓存 / 忽略规则 / 容量上限（回退引擎性能与安全） ============ */
+
+/**
+ * 注入「工作区内容读取」计数器：每次真读都记一条，并（可选）记录并发驻留量。
+ * 只在真读那一刻记录 —— 缓存命中时本函数根本不会被调用，这正是「零重读」的判据。
+ */
+function countingReader(): {
+  seam: (file: string) => Promise<Uint8Array>
+  reads: string[]
+  reset: () => void
+  peakLive: number
+  peakSingle: number
+} {
+  const reads: string[] = []
+  const state = { live: 0, peakLive: 0, peakSingle: 0 }
+  return {
+    reads,
+    get peakLive() { return state.peakLive },
+    get peakSingle() { return state.peakSingle },
+    reset() { reads.length = 0; state.peakLive = 0; state.peakSingle = 0 },
+    seam: async (file: string) => {
+      const bytes = await fs.readFile(file)
+      reads.push(file)
+      state.live += bytes.byteLength
+      state.peakLive = Math.max(state.peakLive, state.live)
+      state.peakSingle = Math.max(state.peakSingle, bytes.byteLength)
+      state.live -= bytes.byteLength
+      return bytes
+    },
+  }
+}
+
+async function cacheFileOf(engine: RollbackPointEngine): Promise<{ version: number; entries: Record<string, { path: string; sha256: string; bytes: number }> }> {
+  return JSON.parse(await readText(path.join(engine.storeDir, 'path-cache.json'))) as { version: number; entries: Record<string, { path: string; sha256: string; bytes: number }> }
+}
+
+test('T2-A 路径身份缓存：身份未变 ⇒ 第二次留点零重读；只改一个文件 ⇒ 只有该文件重读', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const reader = countingReader()
+
+  // ① 首次留点：两个文件都必须真读（还没有任何缓存）
+  const engine1 = makeEngine(fx, { readFile: reader.seam })
+  const first = await capturePoint(engine1, fx)
+  assert.equal(first.ok, true, first.detail ?? first.code)
+  assert.deepEqual(
+    [...reader.reads].sort(),
+    [path.join(fx.workspaceDir, 'a.txt'), path.join(fx.workspaceDir, 'src', 'b.txt')].sort(),
+    '首次留点必须真读两个文件（缓存为空）',
+  )
+  const firstFiles = first.point?.workspace.payload?.files ?? []
+  assert.equal(firstFiles.length, 2)
+
+  // 缓存必须落盘（只读不写的缓存等于没有）
+  const cache1 = await cacheFileOf(engine1)
+  assert.equal(cache1.version, 1)
+  assert.equal(Object.keys(cache1.entries).length, 2, '两条身份都要进缓存')
+  for (const entry of Object.values(cache1.entries)) {
+    assert.match(entry.sha256, /^[0-9a-f]{64}$/)
+    assert.ok(entry.bytes > 0)
+    assert.ok(entry.path.startsWith(fx.workspaceDir))
+  }
+
+  // ② 换一个**新引擎实例**（只能从盘上读缓存）再留一次点：身份未变 ⇒ 0 次读
+  const engine2 = makeEngine(fx, { readFile: reader.seam })
+  reader.reset()
+  const second = await capturePoint(engine2, fx, { sessionId: 's-cache-2' })
+  assert.equal(second.ok, true, second.detail ?? second.code)
+  assert.equal(reader.reads.length, 0, '身份未变的文件必须零重读（缓存命中）：' + JSON.stringify(reader.reads))
+  // 复用的 sha256 / 字节数与首次逐条一致（不是重算出来的，是缓存里的）
+  const secondFiles = second.point?.workspace.payload?.files ?? []
+  assert.deepEqual(
+    secondFiles.map((f) => [f.path, f.bytes, f.sha256]).sort(),
+    firstFiles.map((f) => [f.path, f.bytes, f.sha256]).sort(),
+    '缓存命中的条目必须与首次逐条一致（复用 sha256，不重算）',
+  )
+
+  // ③ 只改一个文件 ⇒ 只有它重读（另一个仍然命中）
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2-CHANGED')
+  const engine3 = makeEngine(fx, { readFile: reader.seam })
+  reader.reset()
+  const third = await capturePoint(engine3, fx, { sessionId: 's-cache-3' })
+  assert.equal(third.ok, true, third.detail ?? third.code)
+  assert.deepEqual(reader.reads, [path.join(fx.workspaceDir, 'a.txt')], '只有被改的那个文件重读')
+  const aFile = (third.point?.workspace.payload?.files ?? []).find((f) => f.path.endsWith('a.txt'))
+  assert.equal(aFile?.sha256, sha256Hex('A2-CHANGED'), '重读后 sha256 必须更新（缓存绝不返回旧哈希）')
+
+  // ④ 缓存是纯优化：形状不符（版本不是 1）必须整体丢弃并回落全量读
+  await fs.writeFile(path.join(engine3.storeDir, 'path-cache.json'), JSON.stringify({ version: 2, entries: {} }))
+  const engine4 = makeEngine(fx, { readFile: reader.seam })
+  reader.reset()
+  const fourth = await capturePoint(engine4, fx, { sessionId: 's-cache-4' })
+  assert.equal(fourth.ok, true)
+  assert.equal(reader.reads.length, 2, '坏缓存必须整体丢弃 ⇒ 两个文件都真读')
+})
+
+test('T2-B 缓存命中与未命中两条路径下，删除候选判定（预览 removals / createdSkipped）逐条相同', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const reader = countingReader()
+  const engine = makeEngine(fx, { readFile: reader.seam })
+  // 留点时：既有文件若干（含 .git 拒删项）
+  await fs.mkdir(path.join(fx.workspaceDir, '.git'), { recursive: true })
+  await fs.writeFile(path.join(fx.workspaceDir, '.git', 'index'), 'GIT')
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  assert.notEqual(id, '')
+
+  // 点之后：新建两条可删的 + 一条 .git 内的拒删项
+  const created = [
+    path.join(fx.workspaceDir, 'new-1.txt'),
+    path.join(fx.workspaceDir, 'new-2.txt'),
+  ]
+  await fs.writeFile(created[0] ?? '', 'N1')
+  await fs.writeFile(created[1] ?? '', 'N2')
+  await fs.writeFile(path.join(fx.workspaceDir, '.git', 'mid'), 'GIT2')
+
+  // ① 命中路径：缓存可用
+  const hit = await engine.preview(id)
+  assert.equal(hit.ok, true)
+  assert.deepEqual(hit.workspace.removals, created, '两条新建路径都必须被列为会删')
+  assert.equal(hit.workspace.createdSkippedCount, 1, '.git 内的拒删项如实计入')
+
+  // ② 未命中路径：删掉缓存文件 + 用新实例（只能全量真读）
+  await fs.rm(path.join(engine.storeDir, 'path-cache.json'), { force: true })
+  const miss = makeEngine(fx, { readFile: reader.seam })
+  const missed = await miss.preview(id)
+  assert.equal(missed.ok, true)
+  assert.deepEqual(missed.workspace.removals, hit.workspace.removals, '命中 / 未命中两条路径的删除清单必须逐条相同')
+  assert.deepEqual(missed.workspace.createdSkipped, hit.workspace.createdSkipped, '拒删清单也必须逐条相同')
+  assert.equal(missed.workspace.createdAfter, hit.workspace.createdAfter)
+
+  // ③ 执行端同样一致：真的删掉的就是预览列的那两条
+  const rewound = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.deepEqual(ws?.removedPaths, hit.workspace.removals, '预览说会删的 = 实际删的')
+  for (const file of created) await assert.rejects(fs.readFile(file), { code: 'ENOENT' })
+})
+
+test('T2-C 忽略规则：整个目录被忽略 ⇒ 证明名单不完整 ⇒ 删除整体拒绝（fail-closed，预览如实说明）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-ignore-dir', { 'keep.txt': 3, 'note.md': 3 })
+  const buildDir = path.join(dir, 'build')
+  await fs.mkdir(buildDir, { recursive: true })
+  await fs.writeFile(path.join(buildDir, 'artifact.bin'), 'BIN')
+  // 分块根的忽略规则：整个 build/ 目录被忽略
+  await fs.writeFile(path.join(dir, '.dsh-rollback-ignore'), 'build/' + '\n')
+
+  const engine = makeEngine(fx)
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-ig' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  // 被忽略目录如实留痕，并且**没有**被走查（其下文件不进 files / skipped）
+  assert.equal(payload.ignoreIncomplete, true, '整目录被忽略 ⇒ 标记证明名单不完整')
+  assert.equal(payload.ignoredDirCount, 1)
+  assert.deepEqual((payload.ignoredDirs ?? []).map((e) => e.path), [buildDir])
+  assert.equal(payload.files.some((f) => f.path.startsWith(buildDir)), false, '被忽略目录整棵不进快照')
+
+  // 点之后：新建一条根级文件 + 一条 build 内的文件
+  const createdRoot = path.join(dir, 'created-root.txt')
+  const createdInBuild = path.join(buildDir, 'created-in-build.txt')
+  await fs.writeFile(createdRoot, 'NEW')
+  await fs.writeFile(createdInBuild, 'NEW-IN-BUILD')
+
+  // 预览如实说明：删除被整体拒绝、原因 = 忽略目录
+  const preview = await engine.preview(captured.point?.id ?? '')
+  assert.equal(preview.workspace.createdRefusedReason, 'capture-incomplete')
+  assert.deepEqual(preview.workspace.removals, [], '证明名单不完整 ⇒ 预览的删除清单必须是空的')
+  const warn = preview.warnings.find((w) => w.code === 'rollback.warn.createdRefused')
+  assert.equal(warn?.detail, 'ignore-dirs', '成因必须如实回传（忽略目录）')
+
+  // 执行：一条都不删
+  const rewound = await engine.rewind({
+    id: captured.point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true,
+  })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.createdRefusedReason, 'capture-incomplete')
+  assert.equal(ws?.removed ?? 0, 0, '证明名单不完整 ⇒ 一条都不删')
+  assert.equal(await readText(createdRoot), 'NEW')
+  assert.equal(await readText(createdInBuild), 'NEW-IN-BUILD')
+  assert.ok((ws?.createdSkippedCount ?? 0) > 0, '候选必须如实进拒删清单')
+})
+
+test('T2-D 忽略规则：文件级忽略仍保持证明名单完整 ⇒ 删除照常；内置 node_modules 规则不可反向取消', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-ignore-file', { 'keep.txt': 3 })
+  await fs.writeFile(path.join(dir, 'old.log'), 'OLD')
+  // 文件级忽略 + 一条试图反向取消内置 node_modules 的规则
+  await fs.writeFile(path.join(dir, '.dsh-rollback-ignore'), '*.log' + '\n' + '!node_modules' + '\n')
+  const nm = path.join(dir, 'node_modules', 'dep')
+  await fs.mkdir(nm, { recursive: true })
+  await fs.writeFile(path.join(nm, 'index.js'), 'DEP')
+
+  const engine = makeEngine(fx)
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-igf' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(payload.ignoreIncomplete ?? false, false, '文件级忽略不使证明名单不完整')
+  // 文件级忽略逐条进 skipped（沿用 skipped 语义），于是它仍在证明名单里
+  assert.ok(payload.skipped.some((e) => e.path.endsWith('old.log') && e.reason === 'ignored'), JSON.stringify(payload.skipped))
+  // 内置规则不可反向取消：node_modules 仍然整棵忽略（走 excludedDirs）
+  assert.ok(payload.excludedDirs.some((e) => e.path === path.join(dir, 'node_modules')), 'node_modules 必须仍被内置规则整棵忽略')
+  assert.equal(payload.files.some((f) => f.path.startsWith(path.join(dir, 'node_modules'))), false)
+
+  // 点之后：新建 .txt（可删）+ 新建 .log（被忽略 ⇒ 不进候选 ⇒ 不删）
+  const createdTxt = path.join(dir, 'created.txt')
+  const createdLog = path.join(dir, 'created.log')
+  await fs.writeFile(createdTxt, 'NEW')
+  await fs.writeFile(createdLog, 'NEW-LOG')
+  const preview = await engine.preview(captured.point?.id ?? '')
+  assert.equal(preview.workspace.createdRefusedReason, null, '证明名单完整 ⇒ 不拒删')
+  assert.deepEqual(preview.workspace.removals, [createdTxt], '只有非忽略的新建路径进删除清单')
+
+  const rewound = await engine.rewind({
+    id: captured.point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true,
+  })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.removed, 1)
+  await assert.rejects(fs.readFile(createdTxt), { code: 'ENOENT' })
+  assert.equal(await readText(createdLog), 'NEW-LOG', '被忽略的路径不进候选 ⇒ 绝不删它')
+})
+
+test('T2-E 内存硬约束：同时驻留的文件内容 ≤ maxFileBytes（绝不把整仓一次读进内存）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 10 个小文件 + 1 个超单文件上限的大文件；上限 64 字节
+  const sizes: Record<string, number> = {}
+  for (let i = 0; i < 10; i += 1) sizes['small-' + String(i) + '.txt'] = 32
+  sizes['huge.txt'] = 4096
+  const dir = await makeSizeDir(fx, 'cap-mem', sizes)
+  const reader = countingReader()
+  const engine = makeEngine(fx, { maxFileBytes: 64, maxBytes: 1024 * 1024, readFile: reader.seam })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-mem' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  // 超限文件必须先 stat 判大小后跳过 —— 计数器里绝不能出现它（「先 stat 再决定读不读」）
+  assert.equal(reader.reads.includes(path.join(dir, 'huge.txt')), false, '超限文件绝不整份读进内存')
+  assert.ok(payload.skipped.some((e) => e.path.endsWith('huge.txt') && e.reason === 'too-large'))
+  assert.equal(payload.files.length, 10)
+  // 同时驻留：单份 ≤ maxFileBytes，且从不并发驻留两份（走查是逐条串行的）
+  assert.ok(reader.peakSingle <= 64, '单份驻留 = ' + String(reader.peakSingle) + ' > maxFileBytes=64')
+  assert.ok(
+    reader.peakLive <= 64,
+    '同时驻留内容 = ' + String(reader.peakLive) + ' 字节，必须 ≤ maxFileBytes(64) + 常量(0)',
+  )
+})
+
+test('T2-F 容量缺省：maxFiles 20000 / maxBytes 512 MiB，且超单文件上限继续跳过并逐条留痕', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  assert.equal(ROLLBACK_DEFAULT_MAX_FILES, 20000)
+  assert.equal(ROLLBACK_DEFAULT_MAX_BYTES, 512 * 1024 * 1024)
+
+  // 行为面：2100 个文件（超过**旧**缺省 2000）在缺省引擎下必须全部收进快照、且不截断
+  const dir = await makeSizeDir(fx, 'cap-default', {})
+  const names = Array.from({ length: 2100 }, (_, i) => 'f-' + String(i).padStart(5, '0') + '.txt')
+  for (const name of names) await fs.writeFile(path.join(dir, name), 'y')
+  const engine = makeEngine(fx)
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-cap' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(payload.files.length, 2100, '缺省 20000 ⇒ 2100 个文件全部入快照（旧缺省 2000 会截断）')
+  assert.equal(payload.truncated, false)
+  // 超单文件上限的条目仍逐条留痕（行为不变）
+  const big = path.join(dir, 'big.bin')
+  await fs.writeFile(big, 'z'.repeat(200))
+  const engine2 = makeEngine(fx, { maxFileBytes: 64 })
+  const captured2 = await engine2.capturePoint({ chunks: [dir], sessionId: 's-cap-2' })
+  const payload2 = captured2.point?.workspace.payload
+  assert.ok(payload2 !== null && payload2 !== undefined)
+  assert.ok(payload2.skipped.some((e) => e.path === big && e.reason === 'too-large'), '超单文件上限必须逐条留痕')
+  assert.equal(payload2.files.some((f) => f.path === big), false)
+})
+
+/**
+ * t12 回归（F-1）：文件级忽略命中的路径也必须进 walked（路径索引来源）。
+ * 否则 skipped 被记录上限截断后，「留点时已存在但被忽略」的文件会被当成新建删掉。
+ * 复现：maxSkippedEntries=2 + 10 个被忽略的既有 *.log + 捕获后删掉规则文件。
+ */
+test('t12 文件级忽略 + 记录上限：既有文件绝不因忽略规则变更被当成新建删掉', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-ignore-trunc', { 'keep.txt': 1 })
+  const oldLogs: string[] = []
+  for (let i = 0; i < 10; i += 1) {
+    const p = path.join(dir, 'old-' + String(i) + '.log')
+    await fs.writeFile(p, 'LOG' + String(i))
+    oldLogs.push(p)
+  }
+  const rules = path.join(dir, '.dsh-rollback-ignore')
+  await fs.writeFile(rules, '*.log\n')
+  const engine = makeEngine(fx, { maxSkippedEntries: 2 })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-ig-trunc' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(payload.skippedTruncated, true, '10 个被忽略文件打满 2 条记录上限 ⇒ 名单被截断')
+  // 关键：路径索引必须覆盖被忽略的既有文件（F-1 修复点）
+  assert.ok((payload.pathIndex?.count ?? 0) >= 12, '路径索引必须含 10 个被忽略文件 + 规则文件 + keep.txt，实际 ' + String(payload.pathIndex?.count))
+  // 用户随后不再忽略 *.log（删规则）——这 10 个文件在留点时刻确实存在
+  await fs.rm(rules, { force: true })
+  const created = path.join(dir, 'brand-new.txt')
+  await fs.writeFile(created, 'NEW')
+  const rewound = await engine.rewind({ id: captured.point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  const deletedOld = (ws?.removedPaths ?? []).filter((f) => f.endsWith('.log'))
+  assert.deepEqual(deletedOld, [], '留点时已存在的 .log 一条都不许删（实际删了 ' + String(deletedOld.length) + ' 条）')
+  for (const p of oldLogs) assert.equal(await readText(p) !== '', true, '既有 .log 必须原样保留：' + p)
+  assert.ok((ws?.removedPaths ?? []).includes(created), '留点后新建的 brand-new.txt 仍必须被删（不过度拒绝）')
+})
+
+/**
+ * t14 回归（F-6）：两个桶受记录上限截断时，**计数必须取恒增计数器**（绝不等于被截断的列表长度）；
+ * 且 maxSkippedEntries=0 时 ignoreIncomplete 仍必须为 true —— 否则删除集的 fail-closed 会静默失效。
+ */
+test('t14 忽略目录计数取恒增计数器：列表可截断、计数与 ignoreIncomplete 仍如实', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-ignore-count', { 'keep.txt': 1 })
+  const buildDirs = ['build-a', 'build-b', 'build-c']
+  for (const name of buildDirs) {
+    const full = path.join(dir, name)
+    await fs.mkdir(full, { recursive: true })
+    await fs.writeFile(path.join(full, 'artifact.bin'), 'BIN')
+  }
+  await fs.writeFile(path.join(dir, '.dsh-rollback-ignore'), buildDirs.map((n) => n + '/').join('\n') + '\n')
+
+  // ① 记录上限 1：逐条列表被截断，计数与 ignoreIncomplete 仍如实
+  const engine = makeEngine(fx, { maxSkippedEntries: 1 })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-f6' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(payload.ignoredDirs.length, 1, '逐条列表受记录上限约束（只留 1 条）')
+  assert.equal(payload.ignoredDirCount, 3, '计数必须是真实总数（恒增计数器），不是被截断的列表长度')
+  assert.equal(payload.ignoreIncomplete, true, '有目录被忽略 ⇒ 证明名单不完整 ⇒ 删除整体拒绝')
+
+  // ② 记录上限 0：列表为空但 ignoreIncomplete 绝不静默变 false（fail-closed）
+  const engine0 = makeEngine(fx, { maxSkippedEntries: 0 })
+  const captured0 = await engine0.capturePoint({ chunks: [dir], sessionId: 's-f6b' })
+  const payload0 = captured0.point?.workspace.payload
+  assert.ok(payload0 !== null && payload0 !== undefined)
+  assert.equal(payload0.ignoredDirs.length, 0, '上限 0 ⇒ 一条列表都不留')
+  assert.equal(payload0.ignoredDirCount, 3, '计数仍必须是 3')
+  assert.equal(payload0.ignoreIncomplete, true, 'maxSkippedEntries=0 时 fail-closed 不得静默失效')
+  // ③ 删除仍整体拒绝（不看列表长度）
+  await fs.rm(path.join(dir, '.dsh-rollback-ignore'), { force: true })
+  await fs.writeFile(path.join(dir, 'brand-new.txt'), 'NEW')
+  const preview = await engine0.preview(captured0.point?.id ?? '')
+  assert.equal(preview.workspace.createdRefusedReason, 'capture-incomplete', '上限 0 也必须拒删')
+  assert.deepEqual(preview.workspace.removals, [], '拒删 ⇒ 删除清单为空')
+})
+
+test('T2-G 路径身份缓存随 gc 回收：删除回滚点后，缓存里不再留它的条目', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const first = await capturePoint(engine, fx, { sessionId: 's-gc-1' })
+  const cacheAfterFirst = await cacheFileOf(engine)
+  assert.equal(Object.keys(cacheAfterFirst.entries).length, 2)
+
+  // 第二个点（换会话，避免被每会话 20 条上限裁掉）
+  const second = await capturePoint(engine, fx, { sessionId: 's-gc-2' })
+  assert.equal(Object.keys((await cacheFileOf(engine)).entries).length, 2, '同一批路径的身份键复用同两条')
+
+  // 删掉第一个点：它引用的路径不再被台账引用 ⇒ 缓存条目随之回收
+  const removed = await engine.remove(first.point?.id ?? '')
+  assert.equal(removed.ok, true)
+  const cacheAfterRemove = await cacheFileOf(engine)
+  assert.equal(Object.keys(cacheAfterRemove.entries).length, 2, '第二个点仍引用同一批路径 ⇒ 条目保留')
+  assert.equal((await engine.list()).points.some((pt) => pt.id === second.point?.id), true)
+
+  // 删掉最后一个点：台账里没有任何引用 ⇒ 缓存清空（不无界增长）
+  assert.equal((await engine.remove(second.point?.id ?? '')).ok, true)
+  assert.equal(Object.keys((await cacheFileOf(engine)).entries).length, 0, '没有引用者 ⇒ 缓存条目必须被回收')
 })

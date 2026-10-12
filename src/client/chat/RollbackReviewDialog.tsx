@@ -49,6 +49,7 @@ import { CloseIcon } from '../common/Icon.tsx'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
 import {
+  CHAT_SESSION_ACTIVE_NOTE_KEY,
   canRevertFiles,
   canSubmitRewind,
   chatRewindFailed,
@@ -62,6 +63,7 @@ import {
   defaultDraft,
   errorDetail,
   findPointForTurn,
+  isSessionActive,
   readRollbackPreviewFiles,
   readRollbackPreviewRemovals,
   requestRewind,
@@ -319,6 +321,12 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   /** 选择框（第 1 条）当前是否「连文件一起退」以及它能不能被点。 */
   const revertFiles = revertFilesOn(draft)
   const revertFilesEnabled = canRevertFiles(preview)
+  /**
+   * t8：这条对话此刻正在运行（引擎 preview 的 `session.active`）。运行中时：
+   *  · 默认档 = 只回溯消息（`defaultDraft`）；· 文件开关禁用（`canRevertFiles`）；
+   *  · 带工作区段的提交不可行（`canSubmitRewind`）—— 路由层对同一信号还有一道硬拒（409）。
+   */
+  const sessionActive = isSessionActive(preview)
   const summary = chatRewindSummary(result)
   /** F2：只有**真失败**才渲染下面的「失败原因」盒（成功 / 无需恢复的结果不得弹失败信息）。 */
   const failed = chatRewindFailed(result)
@@ -412,6 +420,12 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                     </span>
                   )}
                 </div>
+
+                {/* t8：对话正在运行 ⇒ 一句明确说明（默认档已改成「只回溯消息」、文件开关被禁用，
+                    这句解释的正是「为什么这次不能连文件一起退」）。只留能改变决定的信息（DESIGN §7）。 */}
+                {sessionActive && (
+                  <div className={css.hint} data-cm-session-active="">{rt(rk(CHAT_SESSION_ACTIVE_NOTE_KEY))}</div>
+                )}
 
                 {/* ① 会被改动的文件 + 会被**删除**的文件（第 6 条：删除写「删除」，不写 +0 −N）。
                     两段都空 ⇒ 只剩四态句。**取消勾选时清单不再降透明度**（2026-10-12 第二轮：

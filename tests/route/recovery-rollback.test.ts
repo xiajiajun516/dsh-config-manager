@@ -62,6 +62,12 @@ async function makeHarness(): Promise<Harness> {
   await fs.mkdir(logDir, { recursive: true })
   await fs.writeFile(path.join(workspaceDir, 'x.txt'), 'X1')
   await fs.writeFile(logFile, 'LOGBYTES')
+  // t8 起：「对话正在运行」（会话日志 mtime 落在引擎静默窗内，缺省 30 s）会让**带工作区段**的回退
+  // 在路由层被硬拒（409 session-active，零写入）。本文件测的是**其它**守卫（确认门 / 保护点 /
+  // SAFE MODE / 救援点 / 存储降级），所以夹具统一代表「对话不在运行」—— 把日志 mtime 拨到静默窗外。
+  // 运行中的口径由本文件末尾的 R8-9 与 src/routes/recovery.test.ts 的 t8 用例覆盖。
+  const aged = new Date(Date.now() - 120_000)
+  await fs.utimes(logFile, aged, aged)
   return {
     root, homeDir, dataDir, workspaceDir, logFile,
     history: [], safeMode: { blocked: false }, forkCalls: [],
@@ -682,6 +688,63 @@ test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入�
     }
     // 只读期间零写入：记录还在
     assert.equal(arr(obj((await server.call('/rollback-points')).json)['points']).length, 1, '被拒的删除不得动台账')
+  } finally {
+    await server.close()
+    await h.cleanup()
+  }
+})
+
+/* ============================================================ R8-9 t8 运行中的对话 */
+
+/**
+ * t8：这条对话**正在运行**（会话日志 mtime 落在引擎静默窗内）时，**带工作区段**的回退在路由层被硬拒
+ * （409 `session-active`、零写入）—— 运行中的工具可能正在写盘，不能和它抢文件；
+ * 而「只回溯消息」（`mode=session`）不碰工作区，照常 fork。
+ *
+ * 上面 R8-1/4/5/6/7/8 的夹具把日志 mtime 拨到静默窗**外**（代表「对话不在运行」）——
+ * 它们测的是别的守卫，不该被这条新口径染色；运行中的口径由本用例与
+ * `src/routes/recovery.test.ts` 的 t8 用例共同覆盖。
+ */
+test('R8-9 t8：运行中带文件段 ⇒ 409 session-active 且零写入；只回溯消息照常 fork', async () => {
+  const h = await makeHarness()
+  const server = await startServer(h)
+  try {
+    const id = await makePoint(h)
+    // 把日志 mtime 拨回「刚刚被写过」= 引擎判「这条对话正在运行」（静默窗缺省 30 s）
+    const now = new Date()
+    await fs.utimes(h.logFile, now, now)
+    const ledgerPath = path.join(h.dataDir, 'rollback-points', 'index.json')
+    const ledgerBefore = arr(obj(JSON.parse(await readText(ledgerPath)) as unknown)['records']).length
+
+    // ① 显式 mode=files+session ⇒ 409 + 机器码 + 一段都没动
+    const blocked = await server.call('/rollback-points/' + id + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, mode: 'files+session' },
+    })
+    assert.equal(blocked.status, 409, JSON.stringify(blocked.json).slice(0, 400))
+    assert.equal(obj(blocked.json)['code'], 'session-active')
+    assert.equal(obj(blocked.json)['outcome'], 'denied')
+    assert.deepEqual(segmentsOf(blocked.json), [], '一段都没动（segments 恒空）')
+    assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1', '工作区逐字节未变')
+    assert.equal(h.forkCalls.length, 0, '没有 fork（整次请求零写入）')
+    assert.equal(arr(obj(JSON.parse(await readText(ledgerPath)) as unknown)['records']).length, ledgerBefore, '台账不变（连救援点都没留）')
+
+    // ② 缺省档（不带 mode ⇒ 引擎缺省 files+session）同样被挡 —— UI 默认档不能例外
+    const byDefault = await server.call('/rollback-points/' + id + '/rewind', { method: 'POST', body: { userConfirmed: true } })
+    assert.equal(byDefault.status, 409, JSON.stringify(byDefault.json).slice(0, 300))
+    assert.equal(obj(byDefault.json)['code'], 'session-active')
+    assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1')
+
+    // ③ 只回溯消息（mode=session）⇒ 照常 200 + 真 fork（运行中不受影响）
+    const sessionOnly = await server.call('/rollback-points/' + id + '/rewind', {
+      method: 'POST',
+      body: { userConfirmed: true, mode: 'session' },
+    })
+    assert.equal(sessionOnly.status, 200, JSON.stringify(sessionOnly.json).slice(0, 400))
+    assert.equal(obj(sessionOnly.json)['outcome'], 'restored')
+    assert.equal(h.forkCalls.length, 1, '会话段照常 fork')
+    assert.equal(h.forkCalls[0]?.sessionId, SESSION_ID)
+    assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1', '只回溯消息不动工作区')
   } finally {
     await server.close()
     await h.cleanup()

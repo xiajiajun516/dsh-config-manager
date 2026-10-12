@@ -78,7 +78,10 @@ import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg } from './core/messages.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import { RollbackAutoTracker, RollbackPointEngine, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
-import type { RollbackForkCarrier } from './core/rollback-point.ts'
+import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-point.ts'
+// t3：宿主斜杠命令 /rollback（与 HTTP 路由同一道写入门；命令服务惰取，未组合时安静跳过）。
+import { agentSessionFactsOf, registerRollbackCommand } from './core/command-rollback.ts'
+import type { CommandServiceLike, RollbackCommandHost } from './core/command-rollback.ts'
 import type { MsgFunc } from './core/messages.ts'
 import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, installSpecFor, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
@@ -839,6 +842,130 @@ interface SessionForkController {
   fork?: (request: { sessionId: string; atSeq: number }) => Promise<unknown>
 }
 
+/** `ctx.get('workspaceRegistry')` 的结构窄化（本仓 core 不 import @deepseek-ai/*）。 */
+interface WorkspaceRegistryLike {
+  list?: () => unknown
+  /** DSH 的「按规范目录路径解析工作区」：目录不存在时在 realpath 阶段拒绝；目录存在但无人认领返回 undefined。 */
+  resolveByPath?: (path: string) => Promise<unknown>
+}
+
+/** 归位成功的两种情形（都经 `list()` 复核过）。 */
+export type WorkspaceAttachSuccessReason =
+  /** 官方 fork 已经归位（能按成员/血缘解析到工作区）——本兜底只补复核，不重复写。 */
+  | 'already-attached'
+  /** 本兜底真的写成功且复核通过。 */
+  | 'attached'
+
+/**
+ * 归位失败的具体理由（机器码）。
+ *
+ * 为什么必须区分而不是一个笼统的 `false`：真机现场「回退后子会话进未分组」长期不可见，
+ * 根因之一就是 attach 失败被吞成布尔（无日志、无理由）。每一档都能单独定位：
+ *  · registry-unavailable / registry-list-unavailable / registry-list-failed —— 服务缺失或形状不符；
+ *  · attach-session-missing —— 工作区记录上**没有** `attachSession`（形状不符，未发起任何写）；
+ *  · attach-rejected —— `attachSession` 真的抛错（目录不存在 / cwd 对不上 / 域未就绪）；
+ *  · directory-missing —— `resolveByPath` 在 realpath 阶段拒绝，或回落档 realpath 失败（目录不存在）；
+ *  · no-workspace-for-cwd —— 目录存在但不属于任何已注册工作区；
+ *  · cwd-unavailable —— 读不到子会话 cwd（绝不猜路径）；
+ *  · verify-failed —— 写调用没抛错，但 `list()` 复核不含该子会话（最终判据不通过，**不许报成功**）；
+ *  · unexpected-error —— 其它未预期异常。
+ */
+export type WorkspaceAttachFailureReason =
+  | 'registry-unavailable'
+  | 'registry-list-unavailable'
+  | 'registry-list-failed'
+  | 'attach-session-missing'
+  | 'attach-rejected'
+  | 'directory-missing'
+  | 'no-workspace-for-cwd'
+  | 'cwd-unavailable'
+  | 'verify-failed'
+  | 'unexpected-error'
+
+/** 归位失败（`detail` 是技术细节：errno / 路径 / 形状码，供日志与排查，不是用户文案）。 */
+export interface WorkspaceAttachFailure {
+  ok: false
+  reason: WorkspaceAttachFailureReason
+  detail?: string
+}
+
+/** 一次 `attachSession` 尝试（只表达「写调用是否成功」，最终判据在 {@link DshSessionStoreFacade} 的复核里）。 */
+type AttachAttempt = { ok: true } | { ok: false; reason: 'attach-session-missing' | 'attach-rejected'; detail?: string }
+
+/** 一次工作区归位的结果（成功/失败都带**具体**理由）。 */
+export type WorkspaceAttachOutcome =
+  | { ok: true; reason: WorkspaceAttachSuccessReason; workspaceId?: string }
+  | WorkspaceAttachFailure
+
+/** 归位失败时给调用方的 warning 串（稳定前缀 + 具体理由码）。 */
+export const WORKSPACE_ATTACH_FAILED_PREFIX = 'workspace-attach-failed'
+
+/**
+ * DSH 官方 fork 在「子会话已创建、但 `workspace.attachSession` 失败」时抛的错误码。
+ *
+ * 依据 DSH 源码：`dsh-api-session-controller/lib/index.js` L829-836 抛
+ * `new RemoteError('session/workspace-attach-failed', …, { sessionId: childId, workspaceId })`。
+ */
+export const WORKSPACE_ATTACH_FAILED_ERROR_CODE = 'session/workspace-attach-failed'
+
+/**
+ * 从官方 fork 的 `session/workspace-attach-failed` 错误里取回**已经创建好的子会话 id**。
+ *
+ * 字段名**不是猜的** —— DSH 自己的客户端就是这么取的（同款姿势）：
+ * `dsh-api-session-controller/lib/client.js` L3013-3015 的 `workspaceAttachSessionId(error)`：
+ *   `error.code === 'session/workspace-attach-failed' ? error.details.sessionId : undefined`
+ * 错误类是 `dsh-typert-protocol/lib/index.js` L11-28 的 `RemoteError`（`code` + `details`；
+ * DSH 明文规定「判别只按 code，never by instanceof」，故这里也只按 `code`，不 import 那门包）。
+ *
+ * 形状不符（不是对象 / code 不是这个 / 没有 details.sessionId / 空串）一律 undefined ——
+ * 调用方据此**保持现状**报 fork-failed，绝不假装成功、也绝不猜别的字段名。
+ */
+export function workspaceAttachFailureChildId(error: unknown): string | undefined {
+  if (error === null || typeof error !== 'object') return undefined
+  const code = (error as { code?: unknown }).code
+  if (code !== WORKSPACE_ATTACH_FAILED_ERROR_CODE) return undefined
+  const details = (error as { details?: unknown }).details
+  if (details === null || typeof details !== 'object') return undefined
+  const sessionId = (details as { sessionId?: unknown }).sessionId
+  return typeof sessionId === 'string' && sessionId !== '' ? sessionId : undefined
+}
+
+/**
+ * 归位失败 → warning 串；成功 → undefined。
+ *
+ * 为什么是「前缀:理由码」而不是新字段：`RollbackForkSeam`（core/types.ts，本任务 scope 外）的返回
+ * 形状只有 `{ childSessionId, warning? }`，warning 是**唯一**能把具体理由带到调用方的通道；
+ * core 只判「非空」并落成 `rollback.guidance.sessionNotAttached`（界面如实上屏），
+ * 前缀保持稳定以便既有 grep / 诊断脚本继续命中。
+ */
+export function workspaceAttachWarningOf(outcome: WorkspaceAttachOutcome): string | undefined {
+  return outcome.ok ? undefined : WORKSPACE_ATTACH_FAILED_PREFIX + ':' + outcome.reason
+}
+
+/**
+ * 目录同一性比较用的折叠（**只在 `resolveByPath` 拿不到时的回落档**使用）。
+ *
+ * 分隔符统一为 `/`；win32 大小写不敏感（Windows 路径大小写等价）。
+ * 注意：本函数只比较**两侧都经 realpath 规范化**过的路径 —— 绝不拿「原样 cwd」与「规范 path」直接比，
+ * 那正是真机 2026-10-12 的根因（工作区 path 经 `realpathNormalize`、会话头 cwd 是原样字符串）。
+ */
+export function foldWorkspacePath(value: string): string {
+  const unified = value.replace(/\\/g, '/')
+  return process.platform === 'win32' ? unified.toLowerCase() : unified
+}
+
+/** 工作区记录的稳定 id（形状不符 → undefined；只作诊断/日志，不参与判定）。 */
+function workspaceRecordIdOf(record: Record<string, unknown>): string | undefined {
+  const id = record['id']
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
+
+/** 该记录是否把某会话算作成员（`sessionIds` 非数组 = 形状不符，不算成员）。 */
+function recordHasMember(record: Record<string, unknown>, sessionId: string): boolean {
+  const sessionIds = record['sessionIds']
+  return Array.isArray(sessionIds) && sessionIds.includes(sessionId)
+}
+
 export class DshSessionStoreFacade implements SessionStoreFacade {
   private readonly ctx: Context
   /** DSH 缺省会话根（配置改过时只影响快路径命中率，慢路径仍正确） */
@@ -858,12 +985,20 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   private readonly log: Logger
   /** 文案翻译器（F-1 的形状异常诊断走字典，禁止硬编码用户可见字符串） */
   private readonly msgFunc: MsgFunc
+  /**
+   * 目录规范化（t10）：工作区归位第 ③ 档的**回落**比较用。
+   *
+   * 缺省 = `node:fs/promises` 的 `realpath`（与 DSH 的 `realpathNormalize` 同一套系统调用）；
+   * 可注入是为了让「大小写/短名/分隔符不同」这条判定能被**确定性**单测覆盖（不依赖真实盘符/短名）。
+   */
+  private readonly realpath: (path: string) => Promise<string>
 
-  constructor(ctx: Context, homeDir: string, msg: MsgFunc = zhMsg, log?: Logger) {
+  constructor(ctx: Context, homeDir: string, msg: MsgFunc = zhMsg, log?: Logger, realpath?: (path: string) => Promise<string>) {
     this.ctx = ctx
     this.root = join(homeDir, 'sessions')
     this.log = log ?? createLogger({ level: 'warn' })
     this.msgFunc = msg
+    this.realpath = realpath ?? (async (value: string): Promise<string> => await fs.realpath(value))
   }
 
   /**
@@ -874,18 +1009,30 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
    * `ctx.sessionController` —— 未声明 inject 时属性访问会抛错并致宿主启动崩溃）。
    *
    * 为什么**必须**走它、而不能直接调底层 `SessionStore.fork`（真机 2026-10-12 定案）：
-   *  · 官方路径用 `ctx.agents.create(...)` 建子会话 ⇒ 子会话有 agent、**会落盘**、id 是 uuid，
-   *    并顺手完成「挂回原会话工作区」；
+   *  · 官方路径用 `ctx.agents.create(...)` 建子会话 ⇒ 子会话有 agent、**会落盘**、id 是 uuid；
+   *    它**会尝试**挂回工作区，但只按「成员/血缘」两档解析（见 `attachChildToParentWorkspace` 的
+   *    事实锁定）——解析不到就**不归位**；
    *  · 底层 `SessionStore.fork` 只在内存 store 里造一条会话记录（id 还是进程内计数 `session-1`），
    *    没有 agent、没有持久化 ⇒ 用户回退后想继续对话时，宿主 `resolve → resume →
    *    sessionQuery.observeSession` 在磁盘上找不到它，界面直接报
    *    `resume failed for session "session-1": SessionPersistenceNotFoundError`（用户截图 2026-10-12）。
    *
    * 契约：**任何异常与任何形状不符都收成 `{ error }`**，调用方必须如实结构化降级
-   * （`fork-failed` 等），绝不静默假装成功。官方路径已做工作区归位；「子会话 cwd 与某工作区
-   * `path` 一致、但原会话不在任何工作区成员里」这一档仍由 {@link attachChildToParentWorkspace} 兜底。
+   * （`fork-failed` 等），绝不静默假装成功。
+   *
+   * **唯一的例外（t16）：官方 fork 的 attach 失败不算 fork 失败。** 那时 `SessionCommandController.fork`
+   * 已经建好子会话（uuid + 落盘），只是 `workspace.attachSession` 抛了错 —— 它把整件事报成
+   * `session/workspace-attach-failed`（细节带 childId）。旧实现把它整体收成 `{ error }` ⇒ 引擎报
+   * fork-failed ⇒ 用户看到「回退失败」，而磁盘上却多出一条「未分组」的子会话。现在：
+   * 从错误里**按 DSH 客户端同款字段**取回 childId（见 workspaceAttachFailureChildId），
+   * 取到 ⇒ 不再报失败，改由 attachChildToParentWorkspace 兜底归位；取不到 ⇒ 保持现状报失败。
+   *
+   * 工作区归位：官方能解析到工作区时它已经写过（本方法只复核）；解析不到（官方缺同目录档）才由
+   * attachChildToParentWorkspace 兜底写。**归位失败一定带具体理由**：日志留痕 + warning 串
+   * 形如 `workspace-attach-failed:<reason>`（core 落成 `rollback.guidance.sessionNotAttached` 如实上屏）。
    */
   async forkSession(sessionId: string, boundarySeq: number): Promise<{ childSessionId: string; warning?: string } | { error: string }> {
+    let childId: string | undefined
     try {
       const controller = readService<SessionForkController>(this.ctx, 'sessionController')
       const fork = controller?.fork
@@ -893,60 +1040,139 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
       const child = await fork.call(controller, { sessionId, atSeq: boundarySeq })
       const id = child !== null && typeof child === 'object' ? (child as { sessionId?: unknown }).sessionId : undefined
       if (typeof id !== 'string' || id === '') return { error: 'fork-returned-no-id' }
-      // 归位兜底（官方 fork 已挂过；这里只为「原会话本就不属于任何工作区」那一档补 cwd 同目录）。
-      const attached = await this.attachChildToParentWorkspace(sessionId, id)
-      return attached ? { childSessionId: id } : { childSessionId: id, warning: 'workspace-attach-failed' }
+      childId = id
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) }
+      // t16：官方 fork 在 attach 失败时抛 session/workspace-attach-failed —— 子会话**已经建好**，
+      // 只是没归位。把它整体报成 fork-failed 会让用户以为回退失败，而盘上多出一条「未分组」的子会话。
+      // 字段名按 DSH 自己的客户端同款姿势取（见 workspaceAttachFailureChildId 的注释），**不猜**。
+      const recovered = workspaceAttachFailureChildId(error)
+      if (recovered === undefined) return { error: errorMessage(error) }
+      this.log.warn(
+        'rewind: fork reported ' + WORKSPACE_ATTACH_FAILED_ERROR_CODE + '; keeping child session ' + recovered
+        + ' (the session was created, only the workspace attach failed)',
+      )
+      childId = recovered
     }
+    // 工作区归位：官方已归位 → 只复核；官方没归位（或 attach 抛错被上面救回）→ 本兜底写；写后一律复核。
+    const outcome = await this.attachChildToParentWorkspace(sessionId, childId)
+    if (outcome.ok) {
+      this.log.info(
+        'rewind: child session filed into workspace: ' + childId + ' (' + outcome.reason + (outcome.workspaceId !== undefined ? ' ' + outcome.workspaceId : '') + ')',
+      )
+      return { childSessionId: childId }
+    }
+    // 归位失败**带具体理由**（绝不静默）：日志留痕 + warning 串交给调用方如实上屏。
+    this.log.warn(
+      'rewind: child session not filed into any workspace: ' + childId + ' reason=' + outcome.reason
+      + (outcome.detail !== undefined ? ' detail=' + outcome.detail : ''),
+    )
+    const warning = workspaceAttachWarningOf(outcome)
+    return warning === undefined ? { childSessionId: childId } : { childSessionId: childId, warning }
   }
 
   /**
-   * 把 fork 出来的子会话挂回**原会话所属工作区**（只读匹配 + 官方写）。
+   * 把 fork 出来的子会话挂回**原会话所属工作区**（只读匹配 + 官方写 + 复核）。
    *
    * 三档判定，每一档都只相信 DSH 自己的成员语义（真正的成员判据是
    * “子会话 header 的 canonical cwd === 工作区 path”，`attachSession` 落盘前会再复核一次）：
    *  ① **直接命中**：某工作区的 `sessionIds` 含原会话 —— 与 DSH `forkWorkspace` 第一档同口径；
    *  ② **血缘**：原会话是子代理会话时，它的**祖先**才在某个工作区里 —— DSH `forkWorkspace`
    *     对 `origin === 'subagent'` 正是沿 `parentSession` 链上溯（有环保护 + 深度上限）；
-   *  ③ **同目录**：子会话 header 的 cwd 与某工作区的 `path` 一致 —— 这正是 DSH 的成员判据本身，
-   *     且 `attachSession` 会再验一次，所以**不是**「猜一个工作区硬塞」；它救的是
-   *     「原会话自己就不在任何工作区里（旧导入 / CLI 建的会话）」这种情形
-   *     —— 此时若不做第三档，回退出来的子会话必然继续待在「未分组」（真机 2026-10-11/12 用户反馈）。
+   *  ③ **同目录**：子会话 header 的 cwd 与某工作区的 `path` 指向**同一个目录** —— 这正是 DSH 的成员判据本身。
+   *     目录同一性**由 DSH 判定**：优先 `workspaceRegistry.resolveByPath(cwd)`（异步、按注册表同一套
+   *     realpath 规范化、目录不存在直接在 realpath 阶段拒绝）；拿不到该方法才回落「双端 realpath +
+   *     win32 大小写折叠」。**绝不**用未归一化的裸字符串比较 —— 真机 2026-10-12 的根因正是它：
+   *     工作区 path 经 `realpathNormalize`、会话头 cwd 是原样字符串，Windows 上大小写 / 短名 / 分隔符任一
+   *     不同即判不相等 ⇒ 三档全落空 ⇒ 子会话永久停在「未分组」，且失败被吞成布尔、一直不可见。
    *
-   * 任一档写失败（工作区目录已不存在 / cwd 对不上）**只换下一档继续找**；三档都拿不到才返回
-   * `false` 并让调用方如实回报 `workspace-attach-failed` —— **绝不猜、也绝不假装已归位**。
+   * **官方 fork 是否已自带归位（要求 D 的事实锁定，依据 DSH 源码）**：
+   *  · `dsh-api-session-controller/lib/index.js` 的 `SessionCommandController.fork` 会先调
+   *    `forkWorkspace(source.header)`（L802）再 `workspace.attachSession(childId)`（L829-836），
+   *    attach 失败时抛 `session/workspace-attach-failed`（错误细节带 childId）；
+   *  · 但 `forkWorkspace`（L1036-1045）**只有两档**：`sessionIds` 直接命中、`origin==='subagent'` 时沿
+   *    祖先上溯 —— **没有同目录档**；两档都落空就返回 undefined ⇒ 官方**不归位**（本机现场：
+   *    父会话不属于那 8 个工作区中的任何一个，于是每次回退都留下「未分组」的子会话）。
+   *  结论：官方能解析到工作区时**它已经写了**，本兜底只补最后一道复核（`already-attached`）；
+   *  官方解析不到（缺同目录档）才由本兜底的 ③ 档写 —— **不重复写、也不两处都写**。
+   *
+   * 任一档写失败（工作区目录已不存在 / cwd 对不上 / 形状不符）**只换下一档继续找**；三档都拿不到才返回带
+   * **具体理由**的失败（调用方经 warning 通道如实上屏 + 日志留痕）—— **绝不猜、也绝不假装已归位**。
    */
-  private async attachChildToParentWorkspace(parentId: string, childId: string): Promise<boolean> {
+  private async attachChildToParentWorkspace(parentId: string, childId: string): Promise<WorkspaceAttachOutcome> {
     try {
-      const registry = readService<{ list?: () => unknown }>(this.ctx, 'workspaceRegistry')
-      const list = registry?.list
-      if (typeof list !== 'function') return false
-      const records = list.call(registry)
-      if (!Array.isArray(records)) return false
+      const registry = readService<WorkspaceRegistryLike>(this.ctx, 'workspaceRegistry')
+      if (registry === undefined) return { ok: false, reason: 'registry-unavailable' }
+      const listed = this.registryRecordsOf(registry)
+      if (!listed.ok) return listed.failure
+      const records = listed.records
+
+      // 要求 D：官方 fork 已归位（能按成员/血缘解析到工作区）⇒ 这里**只补最后一道复核**，绝不重复写。
+      const already = this.workspaceRecordWithMember(records, childId)
+      if (already !== undefined) {
+        const workspaceId = workspaceRecordIdOf(already)
+        return workspaceId === undefined ? { ok: true, reason: 'already-attached' } : { ok: true, reason: 'already-attached', workspaceId }
+      }
+
+      /** 找到工作区但写失败的第一条理由（比「没找到工作区」更可操作，优先回报）。 */
+      let attachFailure: WorkspaceAttachFailure | undefined
+      /** ③ 档「找不到同目录工作区 / 目录不存在 / 读不到 cwd」的理由。 */
+      let cwdFailure: WorkspaceAttachFailure | undefined
+
       // ① 直接命中（DSH forkWorkspace 的第一档）
       const direct = this.workspaceRecordWithMember(records, parentId)
-      if (direct !== undefined && await this.attachChildTo(direct, childId)) return true
+      if (direct !== undefined) {
+        const attempt = await this.attachChildTo(direct, childId)
+        if (attempt.ok) return await this.verifyChildAttached(registry, childId)
+        attachFailure = attempt
+      }
       // ② 血缘：子代理会话的祖先所属工作区（DSH forkWorkspace 对 subagent 的同款上溯）
       for (const ancestorId of this.ancestorSessionIds(parentId)) {
         const record = this.workspaceRecordWithMember(records, ancestorId)
-        if (record !== undefined && await this.attachChildTo(record, childId)) return true
+        if (record === undefined) continue
+        const attempt = await this.attachChildTo(record, childId)
+        if (attempt.ok) return await this.verifyChildAttached(registry, childId)
+        attachFailure ??= attempt
       }
-      // ③ 同目录：子会话 cwd 与工作区 path 一致（attachSession 复核不通过就不会写）
+      // ③ 同目录：cwd 与某工作区 path 指向同一目录（目录同一性由 DSH 判定，见方法注释）
       const cwd = this.liveSessionCwd(childId)
-      if (cwd !== undefined) {
-        for (const raw of records) {
-          if (raw === null || typeof raw !== 'object') continue
-          const record = raw as Record<string, unknown>
-          if (record['path'] !== cwd) continue
-          if (await this.attachChildTo(record, childId)) return true
+      if (cwd === undefined) {
+        cwdFailure = { ok: false, reason: 'cwd-unavailable' }
+      } else {
+        const resolution = await this.resolveWorkspaceByCwd(registry, records, cwd)
+        if (resolution.records !== undefined && resolution.records.length > 0) {
+          for (const record of resolution.records) {
+            const attempt = await this.attachChildTo(record, childId)
+            if (attempt.ok) return await this.verifyChildAttached(registry, childId)
+            attachFailure ??= attempt
+          }
+        } else {
+          cwdFailure = resolution.failure
         }
       }
-      return false
+      return attachFailure ?? cwdFailure ?? { ok: false, reason: 'no-workspace-for-cwd' }
     } catch (error) {
-      this.log.warn('rewind: workspace attach failed: ' + (error instanceof Error ? error.message : String(error)))
-      return false
+      const detail = errorMessage(error)
+      this.log.warn('rewind: workspace attach failed: ' + detail)
+      return { ok: false, reason: 'unexpected-error', detail }
     }
+  }
+
+  /**
+   * 读一次注册表列举：形状不符（没有 list / 返回非数组）与抛错**分开**报，绝不吞成一个 false。
+   */
+  private registryRecordsOf(
+    registry: WorkspaceRegistryLike,
+  ): { ok: true; records: readonly unknown[] } | { ok: false; failure: WorkspaceAttachFailure } {
+    const list = registry.list
+    if (typeof list !== 'function') return { ok: false, failure: { ok: false, reason: 'registry-list-unavailable', detail: 'list-not-a-function' } }
+    let raw: unknown
+    try {
+      raw = list.call(registry)
+    } catch (error) {
+      return { ok: false, failure: { ok: false, reason: 'registry-list-failed', detail: errorMessage(error) } }
+    }
+    if (!Array.isArray(raw)) return { ok: false, failure: { ok: false, reason: 'registry-list-unavailable', detail: 'list-not-array' } }
+    return { ok: true, records: raw }
   }
 
   /** 列举里第一个 `sessionIds` 含该会话的工作区记录（形状不符一律跳过，绝不猜）。 */
@@ -954,28 +1180,129 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
     for (const raw of records) {
       if (raw === null || typeof raw !== 'object') continue
       const record = raw as Record<string, unknown>
-      const sessionIds = record['sessionIds']
-      if (Array.isArray(sessionIds) && sessionIds.includes(sessionId)) return record
+      if (recordHasMember(record, sessionId)) return record
     }
     return undefined
   }
 
   /**
-   * 对一条工作区记录调官方 `attachSession(childId)`。
+   * 对一条工作区记录调官方 `attachSession(childId)`，并返回**具体理由**（绝不静默返回 false）。
    *
    * `attach` 必须 `.call(record, ...)` 保留 receiver（实体方法内部用 `this.host` / `this.record`）。
-   * 抛错（cwd 对不上 / 目录不存在 / 域未就绪）只记一条 warn 并返回 false，由调用方换下一档。
+   * 两种失败**分开**：记录上根本没有 `attachSession`（形状不符，未发起任何写）vs 真的抛错（写被拒）。
    */
-  private async attachChildTo(record: Record<string, unknown>, childId: string): Promise<boolean> {
+  private async attachChildTo(record: Record<string, unknown>, childId: string): Promise<AttachAttempt> {
     const attach = record['attachSession']
-    if (typeof attach !== 'function') return false
+    if (typeof attach !== 'function') {
+      const detail = 'workspace-record-has-no-attachSession'
+      this.log.warn('rewind: workspace attach skipped for ' + childId + ': ' + detail)
+      return { ok: false, reason: 'attach-session-missing', detail }
+    }
     try {
       await (attach as (this: unknown, id: string) => Promise<void>).call(record, childId)
-      return true
+      return { ok: true }
     } catch (error) {
-      this.log.warn('rewind: workspace attach rejected for ' + childId + ': ' + (error instanceof Error ? error.message : String(error)))
-      return false
+      const detail = errorMessage(error)
+      this.log.warn('rewind: workspace attach rejected for ' + childId + ': ' + detail)
+      return { ok: false, reason: 'attach-rejected', detail }
     }
+  }
+
+  /**
+   * ③ 档：cwd 指向的**已注册工作区**记录（目录同一性由 DSH 判定，绝不裸字符串比较）。
+   *
+   * 优先 DSH 自己的 `resolveByPath(cwd)`：
+   *  · 它按注册表同一套 realpath 规范化（Windows 大小写 / 短名 / 分隔符差异都能对上）；
+   *  · **目录不存在时它在 realpath 阶段拒绝** —— 那正是「目录不存在」的判定，如实转成 `directory-missing`；
+   *  · 目录存在但不属于任何工作区 → 返回 undefined（`no-workspace-for-cwd`）；
+   *  · 返回的工作区实体自带 `attachSession`，直接用它（就是 DSH 判定的那一个目录，不需要再按字符串回查）。
+   * 拿不到该方法（老宿主 / 形状不符）才回落 {@link resolveWorkspaceByCwdFallback}。
+   */
+  private async resolveWorkspaceByCwd(
+    registry: WorkspaceRegistryLike,
+    records: readonly unknown[],
+    cwd: string,
+  ): Promise<{ records: readonly Record<string, unknown>[]; failure?: undefined } | { records?: undefined; failure: WorkspaceAttachFailure }> {
+    const resolveByPath = registry.resolveByPath
+    if (typeof resolveByPath !== 'function') return await this.resolveWorkspaceByCwdFallback(records, cwd)
+    let resolved: unknown
+    try {
+      resolved = await resolveByPath.call(registry, cwd)
+    } catch (error) {
+      const detail = errorMessage(error)
+      this.log.warn('rewind: resolveByPath rejected for ' + cwd + ': ' + detail)
+      return { failure: { ok: false, reason: 'directory-missing', detail } }
+    }
+    if (resolved === undefined || resolved === null) return { failure: { ok: false, reason: 'no-workspace-for-cwd', detail: cwd } }
+    if (typeof resolved !== 'object') {
+      return { failure: { ok: false, reason: 'registry-list-unavailable', detail: 'resolveByPath-returned-non-object' } }
+    }
+    const entity = resolved as Record<string, unknown>
+    if (typeof entity['attachSession'] !== 'function') {
+      return { failure: { ok: false, reason: 'attach-session-missing', detail: 'resolveByPath-result-has-no-attachSession' } }
+    }
+    return { records: [entity] }
+  }
+
+  /**
+   * ③ 档回落（`resolveByPath` 不可用）：**双端** realpath + win32 大小写折叠比较。
+   *
+   * 两侧都必须 realpath 过才比：cwd 侧失败 = 目录不存在（`directory-missing`）；工作区侧失败 =
+   * 该工作区目录已不在（**跳过它**，不猜「像同一个」）。
+   */
+  private async resolveWorkspaceByCwdFallback(
+    records: readonly unknown[],
+    cwd: string,
+  ): Promise<{ records: readonly Record<string, unknown>[]; failure?: undefined } | { records?: undefined; failure: WorkspaceAttachFailure }> {
+    let cwdCanonical: string
+    try {
+      cwdCanonical = await this.realpath(cwd)
+    } catch (error) {
+      const detail = errorMessage(error)
+      this.log.warn('rewind: realpath failed for ' + cwd + ': ' + detail)
+      return { failure: { ok: false, reason: 'directory-missing', detail } }
+    }
+    const folded = foldWorkspacePath(cwdCanonical)
+    const matches: Record<string, unknown>[] = []
+    for (const raw of records) {
+      if (raw === null || typeof raw !== 'object') continue
+      const record = raw as Record<string, unknown>
+      const path = record['path']
+      if (typeof path !== 'string' || path === '') continue
+      let candidate: string
+      try {
+        candidate = await this.realpath(path)
+      } catch {
+        continue
+      }
+      if (foldWorkspacePath(candidate) === folded) matches.push(record)
+    }
+    // 同一目录理论上只有一条记录（DSH 的 createCanonical 保证）；仍逐条返回，让调用方对失败的那条换下一条试。
+    return matches.length === 0 ? { failure: { ok: false, reason: 'no-workspace-for-cwd', detail: cwd } } : { records: matches }
+  }
+
+  /**
+   * 归位后的**复核**（要求 C）：`list()` 里该工作区的 `sessionIds` 是否真的包含子会话。
+   *
+   * 为什么必须复核：`sessionIds` 由 DSH 按 `sessionPath(id) === record.path` 过滤（dsh-workspace
+   * 实体 getter），是「这个会话到底归没归位」的**最终判据**；attach 返回成功只代表那次写调用没抛错。
+   * 复核不通过一律按失败处理并给出理由 —— **不许报成功**。
+   */
+  private async verifyChildAttached(registry: WorkspaceRegistryLike, childId: string): Promise<WorkspaceAttachOutcome> {
+    const listed = this.registryRecordsOf(registry)
+    if (!listed.ok) {
+      const detail = listed.failure.reason + (listed.failure.detail !== undefined ? ':' + listed.failure.detail : '')
+      this.log.warn('rewind: workspace attach verify could not list workspaces for ' + childId + ': ' + detail)
+      return { ok: false, reason: 'verify-failed', detail }
+    }
+    const record = this.workspaceRecordWithMember(listed.records, childId)
+    if (record === undefined) {
+      const detail = 'child-not-in-any-workspace-sessionIds'
+      this.log.warn('rewind: workspace attach verify failed for ' + childId + ': ' + detail)
+      return { ok: false, reason: 'verify-failed', detail }
+    }
+    const workspaceId = workspaceRecordIdOf(record)
+    return workspaceId === undefined ? { ok: true, reason: 'attached' } : { ok: true, reason: 'attached', workspaceId }
   }
 
   /**
@@ -4359,6 +4686,66 @@ export function apply(ctx: Context, config?: Config): void {
       rollbackTracker.stop()
     }
   }, 'config-manager: rollback auto points')
+  // ------------------------------------------- 宿主斜杠命令 /rollback（t3）
+  //
+  // 与 HTTP 路由 /recovery/rollback-points/<id>/rewind **同源的那道写入门**：
+  //   runWithMutationLock（= SAFE MODE 门 + 跨进程/跨 kind 环境锁）→ 引擎 preview（零写入）→ 引擎 rewind。
+  // 顺序与路由**逐条一致**（预检在锁内、一切拒绝都发生在写入之前）；引擎回 confirmation-required /
+  // protected-point / record-incomplete 时命令只回可读错误结果，**绝不绕过**（preview 已把
+  // protected / incomplete 提前拦下，这里再挡一次 API 误用）。
+  //
+  // 命令服务**惰取**（调用期 ctx.get('commands')，绝不属性访问、绝不进 inject）+ 注册失败只 warn：
+  // 未组合 commands 的部署照常启动。注册点在 webServer 早退**之前** —— 没有 web 端的部署一样能用 /rollback。
+  const commandHost: RollbackCommandHost = {
+    // 会话事实只服务于「列出本会话的点」：回退的写入面由回退点自己的记录决定，不在这里临时指定。
+    agentSession: agentSessionFactsOf,
+    // 只读列表：引擎的 RollbackListResult 天然满足命令层的子集形状（storage/points/error）。
+    list: (sessionId) => rollbackEngine.list(),
+    rewind: async ({ id }) => {
+      // 与路由同一 op 名（审计/锁归属可对照）；target = 目标点 id。
+      // ⚠️ 这道门必须与 HTTP 路由同源：runWithMutationLock(host.mutationLock, {op:'rollback-rewind'}, …)。
+      // 绕过它 = 绕过 SAFE MODE 与环境锁（本文件的 route-fence/parity 守卫之外没有第二道兜底）。
+      return await runWithMutationLock(
+        host.mutationLock,
+        { op: 'rollback-rewind', target: id, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+        async () => {
+          // ① 预检（零写入）：先拦住 protected / incomplete / 存储缺失，再动任何字节。
+          const preview = await rollbackEngine.preview(id)
+          if (!preview.ok || !preview.canRestore) {
+            return {
+              ok: false,
+              outcome: 'denied',
+              code: preview.code,
+              id,
+              ...(preview.detail !== undefined ? { detail: preview.detail } : {}),
+              segments: [],
+              skippedSegments: [],
+              storage: preview.storage,
+              guidance: preview.guidance,
+              warnings: preview.warnings,
+            } satisfies RollbackRewindResult
+          }
+          // ② 真执行：userConfirmed **恒 true** —— 用户敲下 /rollback <id> 就是那次确认
+          //    （命令入口没有第二个确认按钮；其余门全量生效）。
+          return await rollbackEngine.rewind({
+            id,
+            userConfirmed: true,
+            removeCreated: true,
+          })
+        },
+      )
+    },
+  }
+  try {
+    const disposeRollbackCommand = registerRollbackCommand({
+      readCommands: () => readService<CommandServiceLike>(ctx, 'commands'),
+      deps: { host: commandHost, mutationLock: host.mutationLock, isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+      log: host.log,
+    })
+    ctx.effect(() => () => disposeRollbackCommand(), 'config-manager: /rollback command')
+  } catch (error) {
+    host.log.warn('register /rollback failed: ' + (error instanceof Error ? error.message : String(error)))
+  }
   const webServer = readService<WebServer>(ctx, 'webServer')
   if (webServer === undefined) {
     host.log.warn('webServer 服务不可用：跳过 /api/dsh-config-manager 路由注册（引擎能力仍可用）')

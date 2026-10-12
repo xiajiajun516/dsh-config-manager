@@ -57,7 +57,7 @@ import {
 } from './chat-point-window.ts'
 import { declaredSlotKind, registerChatNodeEntry } from './chat-node-registration.ts'
 import { en as chatEn, zh as chatZh } from './chat-locales.ts'
-import type { RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
+import type { RollbackListResult, RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
 
 /* ------------------------------------------------------------ 夹具 */
 
@@ -333,6 +333,124 @@ test('point lookup: concurrent reads dedupe into one request; a failed read stay
   const failed = await lookupPointForTurn({ port: boom, sessionId: 's1', turn: 3 })
   assert.deepEqual(failed, { point: null, resolved: false }, 'a failed read is "unknown", never a proven absence')
   resetChatPointCache()
+})
+
+/* ---------------------------------------- ⑦ fork 子会话：继承回合沿父链解析（t9） */
+
+/**
+ * 带**继承链**的宿主列表载荷。
+ *
+ * 引擎 `list()` 回传 `inheritLinks`（fork 子会话 id → 父会话 id）；`src/ui/rollback-view.ts` 的
+ * `RollbackListResult` 类型**尚未登记**该字段（不在 t9 scope）⇒ 客户端按宽度接收读取，
+ * 这里也按同一姿势构造夹具（多出的字段经断言挂上去，运行时形状与宿主逐字相同）。
+ */
+function forkPort(options: {
+  points?: readonly RollbackPointSummary[]
+  inheritLinks?: Record<string, string>
+  /** 继承链是否完整（false = 扫描被预算截断 ⇒ 未命中不得当成「确知没有」） */
+  inheritLinksComplete?: boolean
+} = {}): RollbackPointPort {
+  const notUsed = async (): Promise<never> => { throw new Error('this port method must not be called in this test') }
+  const list = {
+    points: options.points ?? PARENT_POINTS,
+    storage: { available: true },
+    ...(options.inheritLinks !== undefined ? { inheritLinks: options.inheritLinks } : {}),
+    ...(options.inheritLinksComplete !== undefined ? { inheritLinksComplete: options.inheritLinksComplete } : {}),
+  } as unknown as RollbackListResult
+  return {
+    rollbackPoints: async () => list,
+    rollbackPointStorage: notUsed as RollbackPointPort['rollbackPointStorage'],
+    rollbackPoint: notUsed as RollbackPointPort['rollbackPoint'],
+    rollbackPointPreview: notUsed as RollbackPointPort['rollbackPointPreview'],
+    restoreRollbackPoint: notUsed as RollbackPointPort['restoreRollbackPoint'],
+    removeRollbackPoint: notUsed as RollbackPointPort['removeRollbackPoint'],
+  }
+}
+
+/** 父会话 p1 的回滚点（回合 1..3）—— 子会话自身一个点都没有。 */
+const PARENT_POINTS: RollbackPointSummary[] = [
+  { id: 'p-p1-t1', createdAt: 1, sessionId: 'p1', turn: 1, kind: 'auto' },
+  { id: 'p-p1-t2', createdAt: 2, sessionId: 'p1', turn: 2, kind: 'auto' },
+  { id: 'p-p1-t3', createdAt: 3, sessionId: 'p1', turn: 3, kind: 'auto' },
+]
+
+test('t9 复现：fork 子会话 replay 父会话回合、自身 0 点 ⇒ 沿父链拿到可用回退目标（修复前为 null）', async () => {
+  resetChatPointCache()
+  const port = forkPort({ inheritLinks: { c1: 'p1' } })
+  const hit = await lookupPointForTurn({ port, sessionId: 'c1', turn: 2 })
+  assert.equal(hit.resolved, true)
+  assert.equal(hit.point?.id, 'p-p1-t2', '本会话/本回合未命中 ⇒ 沿 parentSession 上溯到父会话同回合的点')
+  assert.equal(hit.point?.sessionId, 'p1', '目标仍是原会话（父）的点 —— 回退动作在原会话上做 fork，语义与今天一致')
+  assert.equal(hit.point?.turn, 2)
+  // 没有祖先点的回合仍然如实说「没有」（绝不猜最近的一个）
+  assert.equal((await lookupPointForTurn({ port, sessionId: 'c1', turn: 9 })).point, null)
+  // 父会话自己：命中自己的点（不走祖先路径）
+  assert.equal((await lookupPointForTurn({ port, sessionId: 'p1', turn: 3 })).point?.id, 'p-p1-t3')
+})
+
+test('t9 优先级：子会话自己有同回合的点 ⇒ 用自己那个，绝不越级拿祖先的', async () => {
+  resetChatPointCache()
+  const own: RollbackPointSummary[] = [
+    ...PARENT_POINTS,
+    { id: 'p-c1-t2', createdAt: 9, sessionId: 'c1', turn: 2, kind: 'auto' },
+  ]
+  const port = forkPort({ points: own, inheritLinks: { c1: 'p1' } })
+  assert.equal((await lookupPointForTurn({ port, sessionId: 'c1', turn: 2 })).point?.id, 'p-c1-t2')
+})
+
+test('t9 多代上溯：子 → 子 → 祖（同回合点在最上面）也能拿到；只上溯不横跳', async () => {
+  resetChatPointCache()
+  const port = forkPort({ inheritLinks: { c2: 'c1', c1: 'p1' } })
+  assert.equal((await lookupPointForTurn({ port, sessionId: 'c2', turn: 1 })).point?.id, 'p-p1-t1')
+  // 链外的会话（别的分支）不得被误命中
+  assert.equal((await lookupPointForTurn({ port, sessionId: 'other', turn: 1 })).point, null)
+})
+
+test('t9 环保护：自指与互相指都不挂起、不误命中（链不可信 ⇒ 判据未知，不得说「确知没有」）', async () => {
+  resetChatPointCache()
+  const self = forkPort({ inheritLinks: { a: 'a' } })
+  const selfHit = await lookupPointForTurn({ port: self, sessionId: 'a', turn: 1 })
+  assert.equal(selfHit.point, null)
+  assert.equal(selfHit.resolved, false, '自指链不可信 ⇒ resolved:false（未知），不是「确知没有」')
+
+  resetChatPointCache()
+  const ring = forkPort({ inheritLinks: { a: 'b', b: 'a' } })
+  const ringHit = await lookupPointForTurn({ port: ring, sessionId: 'a', turn: 1 })
+  assert.equal(ringHit.point, null)
+  assert.equal(ringHit.resolved, false)
+})
+
+test('t9 深度上限：超深链不挂起；上限内的祖先点命中，超出的不误命中', async () => {
+  resetChatPointCache()
+  // s0 → s1 → … → s12（12 跳）；点只挂在 s12 上
+  const links: Record<string, string> = {}
+  for (let i = 0; i < 12; i += 1) links['s' + String(i)] = 's' + String(i + 1)
+  const deepPoints: RollbackPointSummary[] = [{ id: 'p-s12-t1', createdAt: 1, sessionId: 's12', turn: 1, kind: 'auto' }]
+  const deep = forkPort({ points: deepPoints, inheritLinks: links })
+  const beyond = await lookupPointForTurn({ port: deep, sessionId: 's0', turn: 1 })
+  assert.equal(beyond.point, null, '超过深度上限的祖先不得被当成命中')
+  assert.equal(beyond.resolved, false, '看不完的链 ⇒ 判据未知')
+
+  resetChatPointCache()
+  const nearPoints: RollbackPointSummary[] = [{ id: 'p-s3-t1', createdAt: 1, sessionId: 's3', turn: 1, kind: 'auto' }]
+  const near = forkPort({ points: nearPoints, inheritLinks: links })
+  assert.equal((await lookupPointForTurn({ port: near, sessionId: 's0', turn: 1 })).point?.id, 'p-s3-t1', '上限内的祖先点必须命中')
+})
+
+test('t9 旧宿主（载荷里没有继承链）⇒ 逐字保持今天的口径，不新增任何「未知」', async () => {
+  resetChatPointCache()
+  const port = forkPort({}) // 没有 inheritLinks 字段
+  const miss = await lookupPointForTurn({ port, sessionId: 'c1', turn: 2 })
+  assert.equal(miss.point, null)
+  assert.equal(miss.resolved, true, '没有继承链 = 与今天完全一致：读到列表且未命中 ⇒ 确知没有')
+})
+
+test('t9 继承链被截断（inheritLinksComplete=false）⇒ 未命中只能报「未知」，不得报「确知没有」', async () => {
+  resetChatPointCache()
+  const port = forkPort({ inheritLinks: { c1: 'p1' }, inheritLinksComplete: false })
+  const miss = await lookupPointForTurn({ port, sessionId: 'c1', turn: 9 })
+  assert.equal(miss.point, null)
+  assert.equal(miss.resolved, false, '扫描被截断 ⇒ 链可能缺环，absence 不可证明')
 })
 
 /* ------------------------------------------------------------ ⑥b 收尾竞态：有界重试 + 空结果不锁死（R1） */

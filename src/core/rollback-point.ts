@@ -53,9 +53,13 @@
  * 由界面层按字典键映射。code → HTTP 的映射在路由层 `rollbackHttpStatus`。
  *
  * ## 会话日志是不透明字节流
- * 本模块不解析会话日志格式（不读首帧、不做 generation 归位）：会话态只记录
- * sessionId / 事件游标 / 字节数 / 内容指纹，**且只在容量允许时**把字节副本放进对象仓
- * （仅为审计证据；回退不依赖它）。
+ * 本模块不解析会话日志格式（不做 generation 归位）：会话态只记录 sessionId / 事件游标 / 字节数 /
+ * 内容指纹，**且只在容量允许时**把字节副本放进对象仓（仅为审计证据；回退不依赖它）。
+ *
+ * **唯一的例外（t9）**：为了把「fork 子会话的继承回合」解析到祖先点上，需要知道
+ * **谁是从谁播种来的** —— 这只能读会话日志的**第一帧头**（只读、有界 64 KiB、带 mtime+size 缓存，
+ * 见 {@link readSessionForkHeader}）。它**不参与任何捕获**（点的字节仍是不透明流），
+ * 也只登记「历史被继承」的 fork 子会话（子代理会话的回合号是它自己的，按回合上溯会误命中）。
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -68,6 +72,9 @@ import { isRecord } from '../utils/guards.ts'
 import { EXCLUDED_DEP_DIR_NAMES } from '../utils/recursive-walk.ts'
 import { diffLines, type DiffHunk } from '../utils/line-diff.ts'
 import { projectKeyOf } from './session-select.ts'
+import { ignoreRelativePath, ignoreRuleMatches, loadIgnoreRules, type IgnoreRules } from './rollback-ignore-rules.ts'
+import { isSessionLogName } from '../utils/session-log.ts'
+import { decodeZstdFrame, scanZstdFrames, zstdAvailable, ZSTD_MAGIC } from '../utils/zstd-frame.ts'
 
 /* ------------------------------------------------------------------ 常量 */
 
@@ -100,10 +107,55 @@ export const ROLLBACK_MAX_GUARDS_PER_SESSION = 20
  * （数值相同纯属巧合，不构成耦合 —— 改一个不必改另一个）。
  */
 export const ROLLBACK_MAX_GUARDS = 50
-export const ROLLBACK_DEFAULT_MAX_FILES = 2000
-export const ROLLBACK_DEFAULT_MAX_BYTES = 64 * 1024 * 1024
+
+/**
+ * fork **继承链**扫描时最多读多少个会话日志头（有界）。
+ *
+ * 为什么有上限：一次扫描的代价必须可预测；超限时如实把链标成**不完整**
+ * （客户端据此把「未命中」报成**未知**而不是「确知没有」，绝不把看不完说成没有）。
+ */
+export const ROLLBACK_FORK_LINKS_MAX_READS = 500
+
+/**
+ * 继承链扫描结果的缓存 TTL（毫秒）。
+ *
+ * 为什么要有 TTL：`list()` 是只读热路径（聊天里每条消息一颗按钮、回滚卡刷新都走它），
+ * 每次重扫会话目录会把只读路径变成 IO 热点。15 s 是「刚 fork 出来的子会话最多 15 s 内被认出来」
+ * 与「热路径几乎不重扫」之间的折中；活会话登记（{@link RollbackPointEngine.noteSessionBinding}）
+ * 让**本次运行**里刚 fork 的子会话立刻可用，不依赖这个 TTL。
+ */
+export const ROLLBACK_FORK_LINKS_TTL_MS = 15_000
+
+/**
+ * 会话父链上溯的**深度上限**（与宿主侧 `ANCESTOR_LOOKUP_MAX_DEPTH` 同口径取 8：
+ * DSH 的分叉 / 子代理树实际深度是个位数）。上限 + 环保护一道，异常数据不会把路径卡死。
+ */
+export const ROLLBACK_ANCESTOR_MAX_DEPTH = 8
+
+/**
+ * `list()` 里为 fork 子会话补的**继承视图**条目上限（有界；超出如实标记
+ * {@link RollbackListResult.inheritedViewTruncated}）。
+ */
+export const ROLLBACK_INHERITED_VIEW_MAX = 100
+
+/**
+ * 继承判据用的台账快照 TTL（毫秒）。
+ *
+ * 为什么需要：留点器每个 `turn/start` 都要问一次「祖先有没有这个回合的点」，而台账是整份读
+ * （真机 4.7 MB）—— 每回合都读会把写热路径拖慢。2 s 足够短（父会话的点通常早就写完了，
+ * 而且留点器还会先用**本进程见过的祖先回合**这一档判据），也足够省。
+ */
+export const ROLLBACK_INHERITED_LEDGER_TTL_MS = 2_000
+export const ROLLBACK_DEFAULT_MAX_FILES = 20000
+export const ROLLBACK_DEFAULT_MAX_BYTES = 512 * 1024 * 1024
 /** 单文件上限（缺省 = 总量预算）：超限文件**先 stat 判大小后跳过**，绝不整份读进内存 */
 export const ROLLBACK_DEFAULT_MAX_FILE_BYTES = 64 * 1024 * 1024
+/**
+ * 用户可在分块根放的忽略规则文件名（语法同 .gitignore 的常用子集；见 rollback-ignore-rules.ts）。
+ * 被忽略的**文件**照旧进 skipped（证明名单仍完整）；被忽略的**整个目录**不进走查，
+ * 因此证明名单不完整 ⇒ 该点的删除集整体拒绝（fail-closed）。
+ */
+export const ROLLBACK_IGNORE_FILE_NAME = '.dsh-rollback-ignore'
 /** skipped / excludedDirs 列表的**记录条数**上限：超出只计数 + 置 skippedTruncated（计数仍如实回传） */
 export const ROLLBACK_SKIPPED_LIST_LIMIT = 5000
 /** 会话日志超过此大小则只记游标 + 弱指纹（字节副本不进对象仓） */
@@ -160,6 +212,22 @@ export const ROLLBACK_STORAGE_REQUIREMENTS: readonly string[] = [
 
 const MAX_WALK_DEPTH = 64
 const OBJECT_KEY_RE = /^[0-9a-f]{64}$/
+
+/**
+ * 路径身份缓存的落盘格式版本（dataDir/rollback-points/path-cache.json）。
+ * 键 = dev:ino:size:mtimeNs:ctimeNs:mode（全 BigInt 字符串化）⇒ 身份未变即认为内容未变，
+ * 于是不必重读、重算 sha256。缓存是**纯优化**：读失败 / 形状不符一律丢弃并回落全量读，
+ * 且**绝不**参与任何删除 / 覆盖判定（那些判据只认本次走查与台账）。
+ */
+export const ROLLBACK_PATH_CACHE_VERSION = 1
+export const ROLLBACK_PATH_CACHE_NAME = 'path-cache.json'
+
+/** 一条路径身份缓存记录（键 = 身份键，值是内容寻址的 sha256 + 字节数） */
+interface RollbackPathCacheEntry {
+  path: string
+  sha256: string
+  bytes: number
+}
 
 /* ------------------------------------------------------------------ 类型 */
 
@@ -254,7 +322,7 @@ export interface RollbackSkippedEntry {
   path: string
   /**
    * link（符号链接/junction，不跟随）/ missing / not-a-file / self-store /
-   * dep-dir（运行时依赖目录，整棵忽略）/ too-large（超单文件上限）/
+   * dep-dir（运行时依赖目录，整棵忽略）/ ignored（用户忽略规则命中）/ too-large（超单文件上限）/
    * budget-bytes（加它会超总量预算）/ budget-files（文件数预算用尽）
    */
   reason: string
@@ -296,6 +364,18 @@ export interface RollbackWorkspacePayload {
   skippedCount: number
   /** `skipped` 逐条列表到达记录上限（skippedCount 仍然如实） */
   skippedTruncated: boolean
+  /**
+   * 用户忽略规则整棵跳过的**目录**（与 excludedDirs 分开：内置 node_modules 是预期内的忽略，
+   * 用户忽略的目录则意味着「其下有什么我们不知道」⇒ 见 ignoreIncomplete）。
+   */
+  ignoredDirs: RollbackSkippedEntry[]
+  /** ignoredDirs 的**总数**（逐条列表可截断，计数仍如实） */
+  ignoredDirCount: number
+  /**
+   * true = 有整个目录被用户忽略 ⇒ 走查证明名单**不完整** ⇒ 删除集整体拒绝（fail-closed）。
+   * 文件级忽略**不**置它：被忽略的文件既进 skipped、也进 walked（路径索引来源）⇒ 名单照样完整。
+   */
+  ignoreIncomplete?: boolean
   /** 命中文件数 / 字节上限（内容未全部进来，已如实留痕） */
   truncated: boolean
   bytes: number
@@ -407,6 +487,14 @@ export interface RollbackPointSummary {
   spreadMs: number
   /** 恒为 [workspace, session] 两项 */
   segments: RollbackSegmentSummary[]
+  /**
+   * **继承视图**标记（t9）：该条目属于 fork 子会话，但状态/边界都来自这个祖先点 id。
+   * 同一个 `id` ⇒ `preview` / `rewind` / `remove` 全部作用在**原点**上，
+   * 回退仍在原会话上做 fork（语义与今天逐字相同）；台账里**没有**这条记录（零幽灵点）。
+   */
+  inheritedFrom?: string
+  /** 继承视图里「状态真正的归属会话」（= 祖先会话 id；与 `inheritedFrom` 成对出现） */
+  inheritedSessionId?: string | null
 }
 
 export interface RollbackStorageStatus {
@@ -593,7 +681,14 @@ export interface RollbackPreviewWorkspace {
   chunks: string[]
   available: boolean
   reasonCode: RollbackCode | null
-  /** 捕获时被跳过的条目总数（skipped + excludedDirs；上限截断只影响逐条列表，不影响本计数） */
+  /**
+   * `skipped` 桶的跳过事件**总数**（含超出记录上限只计数的那部分）。
+   *
+   * **不含** `excludedDirs`（内置运行时依赖目录等**预期内的忽略**：逐条记在 `excludedDirs` 里，
+   * 另有自己的列表、不使该点降级）与 `ignoredDirs`（用户忽略规则整棵跳过的目录，总数见
+   * `ignoredDirCount`）。与引擎内部的 `ChunkWalkSink.skippedCount` 同一口径 ——
+   * `recordSkip` 只对 `skipped` 桶 +1。上限截断只影响逐条列表，不影响本计数。
+   */
   skippedCount: number
   /** 捕获是否被上限截断（超单文件上限 / 字节预算 / 文件数预算任一命中即为 true） */
   truncated: boolean
@@ -648,6 +743,17 @@ export interface RollbackListResult {
   maxRecordsPerSession: number
   /** **全局** guard 救援点上限（S6 第二道 guard 预算，见 ROLLBACK_MAX_GUARDS） */
   maxGuards: number
+  /**
+   * **继承链**（fork 子会话 id → 父会话 id；只登记「历史被继承」的 fork 子会话，t9）。
+   *
+   * 客户端据此在「本会话/本回合未命中」时沿链只上溯找祖先的同回合点（环保护 + 深度上限在客户端）。
+   * 缺省 = 本次没算出来（未知，不是「没有」）—— 客户端此时保持今天的口径，绝不猜。
+   */
+  inheritLinks?: Record<string, string>
+  /** 继承链是否**完整**（false = 扫描被预算截断 ⇒ 未命中不得当成「确知没有」） */
+  inheritLinksComplete?: boolean
+  /** 继承视图条目是否被上限截断（`points` 里补的继承条目） */
+  inheritedViewTruncated?: boolean
   error?: string
 }
 
@@ -762,6 +868,11 @@ export interface RollbackEngineOptions {
   fork?: RollbackForkSeam
   /** 写回 seam（缺省 = atomicWriteFile + symlink:'reject'）；测试可注入以验证「校验失败整体回滚」 */
   writeFile?: (target: string, bytes: Uint8Array) => Promise<void>
+  /**
+   * 读文件 seam（缺省 = node:fs/promises readFile）：只用于**捕获期读内容**这一步。
+   * 测试用它计数「真的读了几次」，从而钉住路径身份缓存命中时**零重读**。
+   */
+  readFile?: (target: string) => Promise<Uint8Array>
   /** E1：预览行级统计的规模上限（缺省见 ROLLBACK_PREVIEW_DIFF_*）；注入小值即可确定性地覆盖 truncated 分支 */
   previewDiffMaxFileBytes?: number
   previewDiffMaxTotalBytes?: number
@@ -930,7 +1041,9 @@ function storageGuidance(root: string, detail: string): RollbackGuidance[] {
 async function defaultStorageProbe(root: string): Promise<{ ok: true } | { ok: false; detail: string }> {
   try {
     await fs.mkdir(root, { recursive: true })
-    const probe = path.join(root, '.dshcm-probe-' + String(process.pid) + '-' + Date.now().toString(36))
+    // **F-3（t12 修复）**：probe 名必须逐次唯一 —— 同进程同毫秒的并发留点曾因文件名碰撞
+    // 互相 rm/读失败，被判成 storage-unavailable(EPERM)（真机 4 路并发稳定失败 1 条）。
+    const probe = path.join(root, '.dshcm-probe-' + String(process.pid) + '-' + Date.now().toString(36) + '-' + crypto.randomBytes(6).toString('hex'))
     await atomicWriteFile(probe, 'ok')
     await fs.readFile(probe, 'utf8')
     await fs.rm(probe, { force: true })
@@ -1145,6 +1258,10 @@ function withLedgerWriteLock<T>(ledgerPath: string, task: () => Promise<T>): Pro
 interface ChunkWalkSink {
   skipped: RollbackSkippedEntry[]
   excludedDirs: RollbackSkippedEntry[]
+  /** 用户忽略规则整棵跳过的目录（见 RollbackWorkspacePayload.ignoredDirs；逐条列表受记录上限截断） */
+  ignoredDirs: RollbackSkippedEntry[]
+  /** 被忽略目录的**真实总数**（恒增计数器；F-6：列表可截断、计数绝不跟着缩水） */
+  ignoredDirCount: number
   unreadableDirs: string[]
   /** 跳过事件**总数**（含超出记录上限只计数的那部分） */
   skippedCount: number
@@ -1170,6 +1287,8 @@ interface CreatedRemovalPlan {
    * 此时 `paths` 恒为空数组。
    */
   refused: 'capture-incomplete' | null
+  /** 拒删成因的如实说明（点级告警；没有可解释成因时为空） */
+  warnings: RollbackGuidance[]
 }
 
 interface RewindDraft {
@@ -1208,6 +1327,9 @@ export class RollbackPointEngine {
   private readonly probe: RollbackStorageProbe | undefined
   private readonly forkSeam: RollbackForkSeam | undefined
   private readonly writeSeam: ((target: string, bytes: Uint8Array) => Promise<void>) | undefined
+  private readonly readSeam: ((target: string) => Promise<Uint8Array>) | undefined
+  /** 路径身份缓存（首次用到时惰读；纯优化，任何异常都只回落全量读） */
+  private pathCache: Map<string, RollbackPathCacheEntry> | null = null
   private readonly previewDiffMaxFileBytes: number
   private readonly previewDiffMaxTotalBytes: number
   private readonly previewDiffMaxWork: number
@@ -1215,6 +1337,19 @@ export class RollbackPointEngine {
   private readonly log: ((line: string) => void) | undefined
 
   private lastStamp = 0
+
+  /**
+   * fork **继承链**（子会话 → 父会话，t9）。两个来源：
+   *  ① 活会话登记（{@link noteSessionBinding}，本次运行里刚 fork 的立刻可用）；
+   *  ② 台账所在项目键下的会话日志头扫描（{@link refreshForkLinks}，覆盖「已存在的坏子会话」）。
+   */
+  private readonly forkLinks = new Map<string, string>()
+  private forkLinksAt = 0
+  private forkLinksComplete = true
+  /** 会话日志头缓存（mtime + size 失效；只服务 fork 链扫描） */
+  private readonly forkHeaderCache = new Map<string, { mtimeMs: number; size: number; header: SessionForkHeader | null }>()
+  /** 继承判据用的台账快照（TTL 缓存；避免每个 turn/start 都读整份台账） */
+  private ledgerSnapshotCache: { at: number; records: RollbackPointRecord[] } | null = null
 
   constructor(options: RollbackEngineOptions) {
     this.dataDir = path.resolve(options.dataDir)
@@ -1239,6 +1374,7 @@ export class RollbackPointEngine {
     this.probe = options.storage
     this.forkSeam = options.fork
     this.writeSeam = options.writeFile
+    this.readSeam = options.readFile
     this.previewDiffMaxFileBytes = options.previewDiffMaxFileBytes ?? ROLLBACK_PREVIEW_DIFF_MAX_FILE_BYTES
     this.previewDiffMaxTotalBytes = options.previewDiffMaxTotalBytes ?? ROLLBACK_PREVIEW_DIFF_MAX_TOTAL_BYTES
     this.previewDiffMaxWork = options.previewDiffMaxWork ?? ROLLBACK_PREVIEW_DIFF_MAX_WORK
@@ -1271,9 +1407,18 @@ export class RollbackPointEngine {
    * **记录条数**，不影响 skippedCount —— 绝不静默丢弃）；`excluded` 桶（预期内的忽略目录，如
    * node_modules）逐条记录、**不计入 skippedCount**，因此不会把点判成 degraded。
    */
-  private recordSkip(sink: ChunkWalkSink, bucket: 'skipped' | 'excluded', entry: RollbackSkippedEntry): void {
+  private recordSkip(sink: ChunkWalkSink, bucket: 'skipped' | 'excluded' | 'ignored', entry: RollbackSkippedEntry): void {
+    // **F-4（t12 修复）**：这两个桶也受 maxSkippedEntries 的**逐条记录**上限约束（超限只丢列表、
+    // 计数仍如实），否则台账 payload 会随忽略目录数无界增长。
     if (bucket === 'excluded') {
-      sink.excludedDirs.push(entry)
+      if (sink.excludedDirs.length < this.maxSkippedEntries) sink.excludedDirs.push(entry)
+      return
+    }
+    if (bucket === 'ignored') {
+      // **F-6（t14 修复）**：计数走恒增计数器 —— 逐条列表可截断，计数绝不跟着缩水
+      // （否则 ignoredDirCount 会被当成「真值」，maxSkippedEntries=0 时还会让 ignoreIncomplete 静默失效）
+      sink.ignoredDirCount += 1
+      if (sink.ignoredDirs.length < this.maxSkippedEntries) sink.ignoredDirs.push(entry)
       return
     }
     sink.skippedCount += 1
@@ -1320,6 +1465,19 @@ export class RollbackPointEngine {
     } catch { /* 不存在才写（内容寻址天然去重） */ }
     await atomicWriteFile(target, bytes)
     return sha
+  }
+
+  /** 对象仓里是否真有这个 blob（缓存命中时校验；任何异常一律按「没有」处理） */
+  private async objectExists(sha: string): Promise<boolean> {
+    if (!OBJECT_KEY_RE.test(sha)) return false
+    const target = path.join(this.objectsDir, sha)
+    if (!isInsidePath(target, this.objectsDir)) return false
+    try {
+      await fs.access(target)
+      return true
+    } catch {
+      return false
+    }
   }
 
   private async readObject(sha: string): Promise<Uint8Array> {
@@ -1435,6 +1593,7 @@ export class RollbackPointEngine {
      * 路径索引（{@link RollbackPathIndex}）的来源。回退期的走查不传它（那份名单只由记录决定）。
      */
     collect?: string[],
+    ignore?: IgnoreRules,
   ): Promise<{ files: string[]; truncated: boolean } | null> {
     let stat
     try {
@@ -1477,8 +1636,13 @@ export class RollbackPointEngine {
         }
         if (entry.isDirectory()) {
           if (EXCLUDED_DEP_DIR_NAMES.includes(entry.name)) {
-            // 忽略规则（S4「沿用现有 IGNORE 规则」）：整棵不进快照，但留痕（不静默）
+            // 内置忽略规则（S4「沿用现有 IGNORE 规则」）：整棵不进快照，但留痕（不静默）
             this.recordSkip(sink, 'excluded', { path: full, reason: 'dep-dir' })
+            continue
+          }
+          if (ignore !== undefined && this.ignoredByRules(ignore, full, true)) {
+            // 用户忽略规则命中**整个目录**：不进走查 ⇒ 证明名单不完整（调用方置 ignoreIncomplete）
+            this.recordSkip(sink, 'ignored', { path: full, reason: 'ignored' })
             continue
           }
           stack.push({ dir: full, depth: item.depth + 1 })
@@ -1488,7 +1652,15 @@ export class RollbackPointEngine {
           this.recordSkip(sink, 'skipped', { path: full, reason: 'not-a-file' })
           continue
         }
+        // **F-1（t12 修复）**：走查记录必须在「忽略 / 预算」判定**之前**——被忽略的文件也要进
+        // walked（= 路径索引的来源）。否则 skipped 被记录上限截断后，「留点时已存在但被忽略」
+        // 的文件既不在 files、也不在 skipped、更不在 pathIndex ⇒ 被当成「留点后新建」删掉。
         collect?.push(full)
+        if (ignore !== undefined && this.ignoredByRules(ignore, full, false)) {
+          // 文件级忽略：逐条进 skipped（名单完整时删除照常；被记录上限截断时由 pathIndex 兜底）
+          this.recordSkip(sink, 'skipped', { path: full, reason: 'ignored' })
+          continue
+        }
         if (out.length >= limit) {
           // 文件数预算用尽：**逐条留痕**（不静默截断），但不再收进 files；继续遍历把后面每条也记上
           truncated = true
@@ -1514,6 +1686,9 @@ export class RollbackPointEngine {
       unreadableFiles: [],
       skippedCount: 0,
       skippedTruncated: false,
+      ignoredDirCount: 0,
+      ignoredDirs: [],
+      ignoreIncomplete: false,
       truncated: false,
       bytes: 0,
     }
@@ -1525,7 +1700,7 @@ export class RollbackPointEngine {
       if (!path.isAbsolute(chunk)) return this.emptyTrack('workspace', capturedAt, 'chunk-not-absolute', chunk)
       const resolved = path.resolve(chunk)
       // 文件数预算还剩多少就收多少；+1 只用于让遍历器发现「还有溢出」——溢出条目逐条记 skipped
-      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1, walked)
+      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1, walked, await loadIgnoreRules(resolved))
       if (listed === null) continue
       sawChunk = true
       if (listed.truncated) payload.truncated = true
@@ -1564,7 +1739,30 @@ export class RollbackPointEngine {
           continue
         }
         try {
-          const data = await fs.readFile(file)
+          // 路径身份缓存：身份（dev:ino:size:mtimeNs:ctimeNs:mode）未变 ⇒ 复用已存 sha256，**不重读**
+          const identity = await this.pathIdentityOf(file)
+          const candidate = identity === null ? null : await this.lookupCachedFile(identity, file)
+          // **F-2（t12 修复）**：缓存命中也要确认对象仓里真有那个 blob —— 对象被外部清掉后
+          // 若直接复用 sha256，新点会「零对象却 canRestore=true」，预览骗人（执行才响亮失败）。
+          // 对象不在 ⇒ 当作未命中：真读 + 重写对象（缓存因此自愈）。
+          const cached = candidate === null || !(await this.objectExists(candidate.sha256)) ? null : candidate
+          const data = cached === null ? await this.readFileBytes(file) : null
+          const size = cached === null ? (data?.byteLength ?? 0) : cached.bytes
+          if (cached === null && data !== null && data.byteLength !== size) {
+            payload.truncated = true
+            this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-bytes' })
+            continue
+          }
+          if (cached !== null) {
+            payload.files.push({ path: file, chunk: resolved, bytes: cached.bytes, sha256: cached.sha256, mtimeMs: stat.mtimeMs, object: cached.sha256 })
+            payload.bytes += cached.bytes
+            read += 1
+            continue
+          }
+          if (data === null) {
+            payload.unreadableFiles.push({ path: file, reason: 'read-failed' })
+            continue
+          }
           // stat 与 read 之间文件可能变化：真读到的字节数仍必须服从总量预算（不猜、不静默）
           if (payload.bytes + data.byteLength > this.maxBytes) {
             payload.truncated = true
@@ -1573,6 +1771,7 @@ export class RollbackPointEngine {
           }
           const sha = sha256Hex(data)
           await this.writeObjectWithHash(data, sha)
+          if (identity !== null) this.rememberCachedFile(identity, file, sha, data.byteLength)
           payload.files.push({ path: file, chunk: resolved, bytes: data.byteLength, sha256: sha, mtimeMs: stat.mtimeMs, object: sha })
           payload.bytes += data.byteLength
           read += 1
@@ -1599,9 +1798,16 @@ export class RollbackPointEngine {
         this.warn('rollback path index failed: ' + errorDetail(error))
       }
     }
+    // 用户忽略的整目录 ⇒ 证明名单不完整（删除集整体拒绝；见 planCreatedRemovals）。
+    // F-6：计数取捕获期的**恒增计数器**（列表可被记录上限截断），因此 maxSkippedEntries=0 时
+    // ignoreIncomplete 仍然为 true —— fail-closed 不会因「列表为空」而静默失效。
+    payload.ignoreIncomplete = payload.ignoredDirCount > 0
+    // 路径身份缓存落盘（best-effort：写不进去只意味着下次全量读，绝不影响留点成败）
+    await this.persistPathCache()
     // 留痕列表也排序：跨分块 / 依赖 readdir 顺序时输出仍确定（测试与对账都能逐条比）
     payload.skipped.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     payload.excludedDirs.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    payload.ignoredDirs.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     const canonical = [...payload.files]
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
       .map((f) => [f.path, f.bytes, f.sha256])
@@ -1620,6 +1826,136 @@ export class RollbackPointEngine {
         : null,
       payload,
     }
+  }
+
+  /* ---------------------------------------------------------- 忽略规则 / 路径身份缓存 */
+
+  /** 用户忽略规则是否命中该路径（只认「相对分块根」的斜杠路径） */
+  private ignoredByRules(rules: IgnoreRules, target: string, isDir: boolean): boolean {
+    const rel = ignoreRelativePath(rules.root, target)
+    return rel === null ? false : ignoreRuleMatches(rules, rel, isDir)
+  }
+
+  /** 读文件（可注入 seam；只用于捕获期读内容这一步） */
+  private async readFileBytes(target: string): Promise<Uint8Array> {
+    return this.readSeam === undefined ? await fs.readFile(target) : await this.readSeam(target)
+  }
+
+  /**
+   * 路径身份键：dev:ino:size:mtimeNs:ctimeNs:mode（全 BigInt 字符串化）。
+   *
+   * 为什么必须 BigInt：ino / mtimeNs / ctimeNs 在 64 位 inode 文件系统上会超出 Number 的
+   * 安全整数范围，用 Number 会静默丢精度（把两次不同的写当成同一个身份）。
+   * 用毫秒换算同样不行：会把「同一毫秒内的两次写」当成同一个身份。
+   * 读不到身份（文件消失 / 权限 / 平台不支持 bigint stat）→ null ⇒ 回落全量真读。
+   */
+  private async pathIdentityOf(target: string): Promise<string | null> {
+    try {
+      const stat = await fs.stat(target, { bigint: true })
+      if (!stat.isFile()) return null
+      return [
+        String(stat.dev),
+        String(stat.ino),
+        String(stat.size),
+        String(stat.mtimeNs),
+        String(stat.ctimeNs),
+        String(stat.mode & 0o777n),
+      ].join(':')
+    } catch {
+      return null
+    }
+  }
+
+  private pathCachePath(): string {
+    return path.join(this.root, ROLLBACK_PATH_CACHE_NAME)
+  }
+
+  /**
+   * 惰读缓存（每个引擎实例一次）。任何形状不符 / 读失败都当作空缓存 —— 缓存是纯优化，
+   * 绝不因为缓存坏掉而拒绝留点或改变任何判定。
+   */
+  private async loadPathCache(): Promise<Map<string, RollbackPathCacheEntry>> {
+    if (this.pathCache !== null) return this.pathCache
+    const map = new Map<string, RollbackPathCacheEntry>()
+    this.pathCache = map
+    try {
+      const raw = await fs.readFile(this.pathCachePath(), 'utf8')
+      const parsed: unknown = JSON.parse(raw)
+      if (!isRecord(parsed)) return map
+      if (parsed['version'] !== ROLLBACK_PATH_CACHE_VERSION) return map
+      const entries = parsed['entries']
+      if (!isRecord(entries)) return map
+      for (const [identity, value] of Object.entries(entries)) {
+        if (!isRecord(value)) continue
+        const p = value['path']
+        const sha = value['sha256']
+        const bytes = value['bytes']
+        if (typeof p !== 'string' || typeof sha !== 'string' || !OBJECT_KEY_RE.test(sha)) continue
+        if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) continue
+        map.set(identity, { path: p, sha256: sha, bytes })
+      }
+    } catch { /* 空缓存 / 坏缓存都只意味着全量真读 */ }
+    return map
+  }
+
+  /** 缓存命中：身份键存在、且路径逐字相同（身份被复用也绝不认）。 */
+  private async lookupCachedFile(identity: string, target: string): Promise<{ sha256: string; bytes: number } | null> {
+    const cache = await this.loadPathCache()
+    const hit = cache.get(identity)
+    if (hit === undefined || hit.path !== target) return null
+    return { sha256: hit.sha256, bytes: hit.bytes }
+  }
+
+  private async rememberCachedFile(identity: string, target: string, sha256: string, bytes: number): Promise<void> {
+    const cache = await this.loadPathCache()
+    cache.set(identity, { path: target, sha256, bytes })
+  }
+
+  /** 缓存落盘（best-effort：写失败只意味着下次全量读，绝不影响留点成败） */
+  private async persistPathCache(): Promise<void> {
+    if (this.pathCache === null) return
+    try {
+      await fs.mkdir(this.root, { recursive: true })
+      const entries: Record<string, RollbackPathCacheEntry> = {}
+      for (const [identity, entry] of this.pathCache) entries[identity] = entry
+      await atomicWriteFile(this.pathCachePath(), JSON.stringify({ version: ROLLBACK_PATH_CACHE_VERSION, entries }, null, 2))
+    } catch (error) {
+      this.warn('rollback path cache persist failed: ' + errorDetail(error))
+    }
+  }
+
+  /**
+   * 缓存随引用回收：台账里没有任何回滚点引用的路径，其条目一律清掉（不无界增长）。
+   * 注意判据是**路径**（缓存条目自带 path 字段），而不是内容哈希。
+   */
+  private async gcPathCache(referencedPaths: ReadonlySet<string>): Promise<void> {
+    const cache = this.pathCache
+    if (cache === null) return
+    let dropped = false
+    for (const [identity, entry] of [...cache]) {
+      if (referencedPaths.has(pathKey(entry.path))) continue
+      cache.delete(identity)
+      dropped = true
+    }
+    if (dropped) await this.persistPathCache()
+  }
+
+  /** 拒删成因的如实说明（没有可解释成因时返回空数组，绝不编理由） */
+  private createdRefusalWarnings(payload: RollbackWorkspacePayload): RollbackGuidance[] {
+    const out: RollbackGuidance[] = []
+    if (payload.ignoreIncomplete === true) {
+      out.push({ code: 'rollback.warn.createdRefused', detail: 'ignore-dirs' })
+      return out
+    }
+    if (payload.skippedTruncated && (payload.pathIndex === null || payload.pathIndex === undefined)) {
+      out.push({ code: 'rollback.warn.createdRefused', detail: 'path-index-missing' })
+      return out
+    }
+    if (payload.unreadableDirs.length > 0) {
+      out.push({ code: 'rollback.warn.createdRefused', detail: 'unreadable-dirs' })
+      return out
+    }
+    return out
   }
 
   /* -------------------------------------------------------------- 台账 */
@@ -1700,8 +2036,12 @@ export class RollbackPointEngine {
 
   private async gcObjects(records: readonly RollbackPointRecord[]): Promise<void> {
     const referenced = new Set<string>()
+    const referencedPaths = new Set<string>()
     for (const record of records) {
-      for (const file of record.workspace.payload?.files ?? []) referenced.add(file.object)
+      for (const file of record.workspace.payload?.files ?? []) {
+        referenced.add(file.object)
+        referencedPaths.add(pathKey(file.path))
+      }
       const pathIndex = record.workspace.payload?.pathIndex
       if (pathIndex !== null && pathIndex !== undefined) referenced.add(pathIndex.object)
       const sessionObject = record.session.payload?.object
@@ -1721,6 +2061,8 @@ export class RollbackPointEngine {
         this.warn('rollback gc failed: ' + name + ' ' + errorDetail(error))
       }
     }
+    // 路径身份缓存随引用回收：没有任何回滚点引用的路径不留条目（不无界增长）
+    await this.gcPathCache(referencedPaths)
   }
 
   /**
@@ -1794,22 +2136,195 @@ export class RollbackPointEngine {
     return { ok: true, code: 'ok', point: record, guidance: [], storage }
   }
 
+  /* ------------------------------------------------- fork 继承链（t9） */
+
+  /**
+   * 活会话登记时喂进来的 fork 关系（宿主每见一个会话对象调一次；非 fork 子会话不记）。
+   *
+   * 为什么需要：磁盘扫描只覆盖**台账里有点的项目键**，而「本次运行里刚 fork 出来的子会话」
+   * 必须立刻可用（否则用户刚回退完、打开子会话还是灰的）。
+   */
+  noteSessionBinding(binding: RollbackSessionBinding): void {
+    const parent = binding.parentSessionId
+    if (binding.forked !== true || typeof parent !== 'string' || parent === '') return
+    if (parent === binding.sessionId) return
+    this.forkLinks.set(binding.sessionId, parent)
+  }
+
+  /** 沿继承链**只上溯**（环保护 + 深度上限）；返回祖先 id 列表（不含起点）。 */
+  ancestorIdsOf(sessionId: string): string[] {
+    const out: string[] = []
+    const seen = new Set<string>([sessionId])
+    let current = sessionId
+    for (let depth = 0; depth < ROLLBACK_ANCESTOR_MAX_DEPTH; depth += 1) {
+      const parent = this.forkLinks.get(current)
+      if (parent === undefined || seen.has(parent)) break
+      seen.add(parent)
+      out.push(parent)
+      current = parent
+    }
+    return out
+  }
+
+  /** 台账快照（TTL；继承判据用 —— 只读、失败按空台账处理，绝不因此拒绝留点）。 */
+  private async ledgerSnapshot(): Promise<RollbackPointRecord[]> {
+    const now = this.stamp()
+    if (this.ledgerSnapshotCache !== null && now - this.ledgerSnapshotCache.at < ROLLBACK_INHERITED_LEDGER_TTL_MS) {
+      return this.ledgerSnapshotCache.records
+    }
+    const ledger = await this.readLedger()
+    this.ledgerSnapshotCache = { at: now, records: ledger.records }
+    return ledger.records
+  }
+
+  /**
+   * 本会话/本回合**没有自己的点**时，沿继承链找祖先的同回合点（t9 的判据层）。
+   *
+   * 只上溯、带环保护与深度上限；返回 null = 链上没有（祖先没有点 / 不是继承子会话）——
+   * 调用方（留点器）据此区分「继承回合」与「本会话自己的新回合」。
+   */
+  async ancestorPointForTurn(sessionId: string, turn: number): Promise<RollbackPointSummary | null> {
+    if (!Number.isFinite(turn)) return null
+    const ancestors = this.ancestorIdsOf(sessionId)
+    if (ancestors.length === 0) return null
+    const records = await this.ledgerSnapshot()
+    for (const ancestor of ancestors) {
+      const hit = records.find((r) => r.sessionId === ancestor && r.turnSeq === turn)
+      if (hit !== undefined) return summarizeRollbackPoint(hit)
+    }
+    return null
+  }
+
+  /** 读会话日志头（带 mtime + size 缓存；失败缓存 null，不反复打盘）。 */
+  private async readForkHeaderCached(logPath: string): Promise<SessionForkHeader | null> {
+    let info: Awaited<ReturnType<typeof fs.stat>> | null = null
+    try { info = await fs.stat(logPath) } catch { info = null }
+    if (info === null) return null
+    const cached = this.forkHeaderCache.get(logPath)
+    if (cached !== undefined && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.header
+    const header = await readSessionForkHeader(logPath)
+    this.forkHeaderCache.set(logPath, { mtimeMs: info.mtimeMs, size: info.size, header })
+    return header
+  }
+
+  /**
+   * 补齐继承链：扫「台账里有点的项目键」下的会话目录，登记 fork 子会话 → 父会话。
+   *
+   * 为什么只扫这些项目键：继承点解析只对「**祖先有回滚点**」的子会话有意义（祖先没有点 ⇒ 解析不出
+   * 任何东西），而 fork 子会话与父会话在**同一个项目键**下（fork 不改 cwd）⇒ 覆盖这点就够了。
+   * 台账空 ⇒ 直接返回（零扫描，热路径零代价）；结果按 {@link ROLLBACK_FORK_LINKS_TTL_MS} 缓存。
+   */
+  private async refreshForkLinks(records: readonly RollbackPointRecord[]): Promise<void> {
+    const now = this.stamp()
+    if (this.forkLinksAt !== 0 && now - this.forkLinksAt < ROLLBACK_FORK_LINKS_TTL_MS) return
+    this.forkLinksAt = now
+    const projectKeys = new Set<string>()
+    for (const record of records) {
+      const key = unitProjectKeyOf(record.unitId)
+      if (key !== null) projectKeys.add(key)
+    }
+    if (projectKeys.size === 0) {
+      this.forkLinksComplete = true
+      return
+    }
+    let reads = 0
+    let complete = true
+    for (const projectKey of projectKeys) {
+      if (!complete) break
+      const dir = path.join(this.sessionsRoot, projectKey)
+      // 只用到 name / isDirectory（Dirent 的结构子集；不引 node:fs 的 Dirent 泛型，免得 Buffer 变体打架）
+      let entries: Array<{ name: string; isDirectory(): boolean }>
+      try {
+        entries = await fs.readdir(dir, { withFileTypes: true })
+      } catch {
+        continue // 项目目录不在了（会话被清理）：跳过，不影响其余项目
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        if (reads >= ROLLBACK_FORK_LINKS_MAX_READS) { complete = false; break }
+        const sessionDir = path.join(dir, entry.name)
+        let names: string[]
+        try { names = await fs.readdir(sessionDir) } catch { continue }
+        const logs = names.filter((name) => isSessionLogName(name)).sort()
+        const picked = logs[logs.length - 1]
+        if (picked === undefined) continue
+        reads += 1
+        const header = await this.readForkHeaderCached(path.join(sessionDir, picked))
+        if (header === null || header.parentSessionId === null || !header.forked) continue
+        if (header.parentSessionId === header.id) continue
+        this.forkLinks.set(header.id, header.parentSessionId)
+      }
+    }
+    this.forkLinksComplete = complete
+  }
+
+  /**
+   * `list()` 里为 fork 子会话补的**继承视图**条目（t9）。
+   *
+   * 为什么必须补：**不属于本任务 scope 的匹配器**（`RollbackReviewDialog` 的 `findPointForTurn`）
+   * 只认「`sessionId` + `turn` 同时相等」—— 不补的话，入口按钮亮了、点开对话框却说「没有回滚点」。
+   * 条目语义（**不是幽灵点**）：
+   *  · 与祖先点**同一个 id**：preview / rewind / remove 全部作用在原点 ⇒ 回退仍在原会话上做 fork
+   *    （`boundarySeq` 也来自原点），与今天的语义逐字相同；
+   *  · 台账**不写任何记录**（只在只读列表里成景），状态全部来自祖先的真实捕获；
+   *  · `inheritedFrom` / `inheritedSessionId` 如实标出它的来处。
+   * 有界（{@link ROLLBACK_INHERITED_VIEW_MAX}），超出如实标记。
+   */
+  private inheritedViews(records: readonly RollbackPointRecord[]): { entries: RollbackPointSummary[]; truncated: boolean } {
+    const entries: RollbackPointSummary[] = []
+    let truncated = false
+    const ownTurnsOf = (sessionId: string): Set<number> => {
+      const out = new Set<number>()
+      for (const record of records) {
+        if (record.sessionId === sessionId && record.turnSeq !== null) out.add(record.turnSeq)
+      }
+      return out
+    }
+    for (const child of this.forkLinks.keys()) {
+      const chain = this.ancestorIdsOf(child)
+      if (chain.length === 0) continue
+      const own = ownTurnsOf(child)
+      for (const ancestor of chain) {
+        for (const record of records) {
+          if (record.sessionId !== ancestor || record.turnSeq === null) continue
+          if (own.has(record.turnSeq)) continue // 本会话自己有这一回合的点 ⇒ 用自己那个
+          if (entries.length >= ROLLBACK_INHERITED_VIEW_MAX) { truncated = true; break }
+          entries.push({
+            ...summarizeRollbackPoint(record),
+            sessionId: child,
+            unitId: childUnitIdOf(record.unitId, child),
+            inheritedFrom: record.id,
+            inheritedSessionId: record.sessionId,
+          })
+        }
+        if (truncated) break
+      }
+      if (truncated) break
+    }
+    return { entries, truncated }
+  }
+
   /* -------------------------------------------------------------- 列 / 读 */
 
   async list(): Promise<RollbackListResult> {
     const storage = await this.storageStatus()
     const ledger = await this.readLedger()
+    await this.refreshForkLinks(ledger.records)
     const points = [...ledger.records]
       .sort((a, b) => (a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0))
       .map(summarizeRollbackPoint)
+    const inherited = this.inheritedViews(ledger.records)
     const out: RollbackListResult = {
       ok: storage.available,
       storage,
-      points,
+      points: inherited.entries.length === 0 ? points : [...points, ...inherited.entries],
       maxRecords: this.maxRecords,
       maxRecordsPerSession: this.maxRecordsPerSession,
       maxGuards: this.maxGuards,
+      inheritLinks: Object.fromEntries(this.forkLinks),
+      inheritLinksComplete: this.forkLinksComplete,
     }
+    if (inherited.truncated) out.inheritedViewTruncated = true
     if (ledger.error !== undefined) out.error = ledger.error
     return out
   }
@@ -1873,6 +2388,7 @@ export class RollbackPointEngine {
     for (const entry of payload.skipped) proof.add(pathKey(entry.path))
     for (const entry of payload.unreadableFiles) proof.add(pathKey(entry.path))
     for (const entry of payload.excludedDirs) proof.add(pathKey(entry.path))
+    for (const entry of payload.ignoredDirs ?? []) proof.add(pathKey(entry.path))
     let refused: CreatedRemovalPlan['refused'] = null
     if (payload.skippedTruncated) {
       // 逐条跳过名单被记录上限截断 ⇒ 必须有路径索引，否则「未记录」≠「留点之后新建」
@@ -1889,6 +2405,8 @@ export class RollbackPointEngine {
     }
     // 读不出的目录：目录内容在留点时刻**未知**（路径索引只含走查过的路径）⇒ 同样证明不了
     if (refused === null && payload.unreadableDirs.length > 0) refused = 'capture-incomplete'
+    // 用户忽略的整目录 ⇒ 其下内容在留点时刻未知 ⇒ 证明名单不完整（fail-closed）
+    if (refused === null && payload.ignoreIncomplete === true) refused = 'capture-incomplete'
     const chunks = payload.chunks
     // 走查上限 = 全树：候选的**准入**由证明名单负责，条数上限不再是安全阀
     //（旧上限 maxFiles*4 会在巨型工作区里静默漏掉真正的新建文件 —— 那是「删一半」，不是 fail-closed）
@@ -1897,7 +2415,7 @@ export class RollbackPointEngine {
     let truncated = false
     for (const chunk of chunks) {
       if (!path.isAbsolute(chunk)) continue
-      const listed = await this.listChunkFiles(path.resolve(chunk), sink, limit)
+      const listed = await this.listChunkFiles(path.resolve(chunk), sink, limit, undefined, await loadIgnoreRules(path.resolve(chunk)))
       if (listed === null) continue
       if (listed.truncated) truncated = true
       for (const file of listed.files) {
@@ -1905,6 +2423,7 @@ export class RollbackPointEngine {
         candidates.push(file)
       }
     }
+    const refusalWarnings = this.createdRefusalWarnings(payload)
     const all: string[] = []
     const paths: string[] = []
     const skipped: string[] = []
@@ -1930,6 +2449,7 @@ export class RollbackPointEngine {
       skipped: refused === null ? skipped : [...skipped, ...paths],
       truncated,
       refused,
+      warnings: refusalWarnings,
     }
   }
 
@@ -2100,7 +2620,7 @@ export class RollbackPointEngine {
           ...(await this.previewFileCounts(file, current, 'overwrite', diffBudget)),
         })
       }
-      const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
+      const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], ignoredDirs: [], ignoredDirCount: 0, unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
       // 删除集与执行阶段**同一份**（planCreatedRemovals）：预览说会删的，就是真的会删的
       const plan = await this.planCreatedRemovals(wsPayload, sink)
       workspace.overwrite = wsPayload.files.length
@@ -2123,6 +2643,7 @@ export class RollbackPointEngine {
       workspace.createdSkippedCount = plan.skipped.length
       workspace.createdSkippedTruncated = plan.truncated || plan.skipped.length > ROLLBACK_LEFTOVER_LIST_LIMIT
       workspace.createdRefusedReason = plan.refused
+      for (const warning of plan.warnings) warnings.push(warning)
       // 捕获期的跳过计数与截断标记如实回传（列表被记录上限截断时 skippedCount 仍是真实总数）
       workspace.skippedCount = wsPayload.skippedCount
       workspace.truncated = wsPayload.truncated
@@ -2484,7 +3005,7 @@ export class RollbackPointEngine {
         pushDetail(detail, 'object-missing ' + file.path + ' ' + errorDetail(error))
       }
     }
-    const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
+    const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], ignoredDirs: [], ignoredDirCount: 0, unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
     // 删除集与**预览**共用同一份规划（planCreatedRemovals）⇒「预览说会删的」= 「实际删的」。
     // 清单先算全，超上限整套拒绝（绝不删一半）。
     const plan = await this.planCreatedRemovals(payload, sink)
@@ -2801,6 +3322,16 @@ export interface RollbackSessionBinding {
   logPath?: string | null
   /** 工作区快照分块（通常 = 会话 cwd）；缺省 = 只留会话态（该点 incomplete） */
   chunks?: readonly string[]
+  /**
+   * 父会话 id（t9）：活会话头里有 `parentSession` / `parentSessionId` 就带出来。
+   * 它**不改变任何留点行为**（点仍只属于本会话），只服务于「这条 replay 出来的回合是不是继承的」判据。
+   */
+  parentSessionId?: string | null
+  /**
+   * 该会话的历史是不是**从父会话播种**来的（`isSeeded` / `seedLength`，t9）。
+   * 只有 true 的父子关系才进继承链 —— 子代理会话的回合号是它自己的，按同回合上溯会误命中。
+   */
+  forked?: boolean
 }
 
 export interface RollbackTrackedEvent {
@@ -2903,11 +3434,93 @@ export function rollbackSessionBindingOf(session: unknown): RollbackBindingNarro
     return { ok: false, code: 'invalid-input', detail: 'session-id-missing' }
   }
   const header = (session as { header?: unknown }).header
-  const cwd = header !== null && typeof header === 'object' ? (header as { cwd?: unknown }).cwd : undefined
-  if (typeof cwd !== 'string' || cwd === '') return { ok: true, binding: { sessionId: id }, chunkless: 'cwd-missing' }
-  if (!path.isAbsolute(cwd)) return { ok: true, binding: { sessionId: id }, chunkless: 'cwd-not-absolute' }
-  const binding: RollbackSessionBinding = { sessionId: id, chunks: [cwd], unitId: projectKeyOf(cwd) + '/' + id }
+  const headerRecord = header !== null && typeof header === 'object' ? header as Record<string, unknown> : null
+  const cwd = headerRecord?.['cwd']
+  // t9：父链与「是否播种而来」只从**活会话头**读；读不到就不带字段（＝不是继承子会话），绝不猜
+  const fork: { parentSessionId?: string; forked?: boolean } = {}
+  if (headerRecord !== null) {
+    for (const key of ['parentSession', 'parentSessionId'] as const) {
+      const value = headerRecord[key]
+      if (typeof value === 'string' && value !== '') { fork.parentSessionId = value; break }
+    }
+    if (headerRecord['isSeeded'] === true || typeof headerRecord['seedLength'] === 'number') fork.forked = true
+  }
+  if (typeof cwd !== 'string' || cwd === '') return { ok: true, binding: { sessionId: id, ...fork }, chunkless: 'cwd-missing' }
+  if (!path.isAbsolute(cwd)) return { ok: true, binding: { sessionId: id, ...fork }, chunkless: 'cwd-not-absolute' }
+  const binding: RollbackSessionBinding = { sessionId: id, chunks: [cwd], unitId: projectKeyOf(cwd) + '/' + id, ...fork }
   return { ok: true, binding, chunkless: null }
+}
+
+/* ------------------------------------------------------- fork 继承链（t9） */
+
+/** 会话日志头的 fork 视图（只读；读不到 = 不建链） */
+interface SessionForkHeader {
+  id: string
+  parentSessionId: string | null
+  /** true = 历史是从父会话**播种**来的（isSeeded / seedLength）—— 只有这种才允许按回合上溯 */
+  forked: boolean
+}
+
+/** 只读日志头这么多字节（头在第一帧里；1 MiB 是标题兜底的上限，这里更省） */
+const FORK_HEADER_SCAN_BYTES = 64 * 1024
+
+/**
+ * 读一个会话日志头的 fork 视图（只读、有界、失败一律 null）。
+ *
+ * 字段口径与 `utils/session-log.ts` 的 `readLogHeaderFromBytes` **同源**（父对话 id 在磁盘 header 里
+ * 叫 `parentSession`、DSH 的 RPC 投影才叫 `parentSessionId`，两种写法都认）；那边不暴露 fork 标记
+ * （`isSeeded` / `seedLength`），而这条标记是安全的要害：**只有 fork 子会话才允许按回合上溯**。
+ */
+async function readSessionForkHeader(logPath: string): Promise<SessionForkHeader | null> {
+  if (!zstdAvailable()) return null
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null
+  try {
+    handle = await fs.open(logPath, 'r')
+    const buffer = Buffer.allocUnsafe(FORK_HEADER_SCAN_BYTES)
+    const { bytesRead } = await handle.read(buffer, 0, FORK_HEADER_SCAN_BYTES, 0)
+    const bytes = buffer.subarray(0, bytesRead)
+    if (bytes.length < 4 || bytes.readUInt32LE(0) !== ZSTD_MAGIC) return null
+    const first = scanZstdFrames(bytes, 1).frames[0]
+    if (first === undefined) return null
+    const line = decodeZstdFrame(bytes.subarray(first.start, first.end)).toString('utf8').split('\n')[0] ?? ''
+    if (line === '') return null
+    const parsed: unknown = JSON.parse(line)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const rec = parsed as Record<string, unknown>
+    const id = rec['id']
+    if (typeof id !== 'string' || id === '') return null
+    let parent: string | null = null
+    for (const key of ['parentSession', 'parentSessionId'] as const) {
+      const value = rec[key]
+      if (typeof value === 'string' && value !== '') { parent = value; break }
+    }
+    const forked = rec['isSeeded'] === true
+      || (typeof rec['seedLength'] === 'number' && Number.isFinite(rec['seedLength']))
+    return { id, parentSessionId: parent, forked }
+  } catch {
+    return null
+  } finally {
+    try { await handle?.close() } catch { /* 关不掉不影响结论 */ }
+  }
+}
+
+/**
+ * `unitId`（`<projectKey>/<sessionId>`）→ 项目键段；形状不符 / 可疑段一律 null（绝不拼可疑路径）。
+ * 与 `core/session-title.ts` 的 `unitSegments` 同一条判据（越界 / 分隔符 / 盘符一律拒绝）。
+ */
+function unitProjectKeyOf(unitId: string | null | undefined): string | null {
+  if (typeof unitId !== 'string' || unitId === '') return null
+  const parts = unitId.split('/').filter((part) => part !== '')
+  const first = parts[0]
+  if (parts.length < 2 || first === undefined || first === '') return null
+  if (first === '.' || first === '..' || first.includes('\\') || first.includes(':') || first.includes('/')) return null
+  return first
+}
+
+/** 同项目键下的子会话 unitId（`<projectKey>/<childId>`）；项目键拿不到就 null。 */
+function childUnitIdOf(ancestorUnitId: string | null, childSessionId: string): string | null {
+  const projectKey = unitProjectKeyOf(ancestorUnitId)
+  return projectKey === null ? null : projectKey + '/' + childSessionId
 }
 
 /**
@@ -2960,6 +3573,8 @@ export class RollbackAutoTracker {
 
   registerSession(binding: RollbackSessionBinding): void {
     this.bindings.set(binding.sessionId, binding)
+    // t9：fork 关系立刻喂给引擎的继承链 —— 本次运行里刚 fork 出来的子会话不必等磁盘扫描的 TTL
+    this.engine.noteSessionBinding(binding)
   }
 
   unregisterSession(sessionId: string): void {
@@ -3030,6 +3645,11 @@ export class RollbackAutoTracker {
         if (turn !== null) {
           const seen = this.seenTurns.get(event.sessionId)
           if (seen !== undefined && seen.has(String(turn))) return { captured: false, detail: 'already-captured turn=' + String(turn) }
+          // t9：**继承回合**不补点（见 inheritedTurnOf 的语义说明）
+          const inheritedFrom = await this.inheritedTurnOf(binding, turn)
+          if (inheritedFrom !== null) {
+            return { captured: false, detail: 'inherited-turn from=' + inheritedFrom + ' turn=' + String(turn) }
+          }
         }
         // **留点发生在回合开始之前**（用户 2026-10-11 定案）：点的「工作区态」必须是**这条消息之前**的样子。
         // 旧口径在 turn/end 才拍工作区 ⇒ 回退时只能把文件写回「这个回合结束后」的状态（真机症状：
@@ -3050,6 +3670,30 @@ export class RollbackAutoTracker {
       this.warn('rollback tracker noteEvent failed: ' + errorDetail(error))
       return { captured: false, code: 'capture-failed', detail: errorDetail(error) }
     }
+  }
+
+  /**
+   * 该回合是不是**继承**来的（t9）。
+   *
+   * 判据（两档，先便宜后准）：
+   *  ① 本进程里已经见过**祖先**这一回合的点（父会话通常同时在跑，这一档零 IO）；
+   *  ② 台账快照里祖先有同回合点（{@link RollbackPointEngine.ancestorPointForTurn}，只上溯 + 环保护 + 深度上限）。
+   *
+   * 语义（为什么继承回合**不补点**）：
+   *  · fork 子会话 replay 出来的历史回合，其「该回合之前的工作区态」属于**父会话**那一时刻；
+   *    在这里补一个点 = 把**现在**的工作区态贴到那个回合上 ⇒ **幽灵点**（回退会把文件写回错误状态）；
+   *  · 继承回合的可回退性由**祖先点**提供：客户端沿继承链解析（`lookupPointForTurn`）、
+   *    `list()` 里另有继承视图条目供其它匹配器使用 —— 所以「继承回合不补点」不会让子会话永久无点；
+   *  · 本会话**自己的新回合**（祖先没有同回合点）照常留点 ⇒ 子会话从此有自己的点。
+   */
+  private async inheritedTurnOf(binding: RollbackSessionBinding, turn: number): Promise<string | null> {
+    const parent = binding.parentSessionId
+    if (binding.forked !== true || typeof parent !== 'string' || parent === '') return null
+    for (const ancestor of [parent, ...this.engine.ancestorIdsOf(binding.sessionId)]) {
+      if (this.seenTurns.get(ancestor)?.has(String(turn)) === true) return ancestor
+    }
+    const hit = await this.engine.ancestorPointForTurn(binding.sessionId, turn)
+    return hit === null ? null : (hit.sessionId ?? parent)
   }
 
   private async defaultStat(logPath: string): Promise<{ size: number; mtimeMs: number } | undefined> {

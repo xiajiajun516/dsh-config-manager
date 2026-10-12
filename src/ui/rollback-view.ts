@@ -175,6 +175,8 @@ export const ROLLBACK_GUIDANCE_CODES: readonly string[] = [
 /** 已知告警码后缀（warnings 走独立一族 rollback.warn.*；白名单外回落 rollback.warn.unknown）。 */
 export const ROLLBACK_WARN_CODES: readonly string[] = [
   'ledgerUnreadable', 'trackMissing', 'trackDegraded', 'protected', 'guardFailed',
+  // t2：删除集被整体拒绝的**成因**（忽略目录 / 路径索引缺失 / 目录读不出）—— 必须能说清为什么没删
+  'createdRefused',
 ]
 
 export const ROLLBACK_WARN_UNKNOWN_KEY = 'rollback.warn.unknown'

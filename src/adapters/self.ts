@@ -8,7 +8,13 @@
  *   - market/market-config.json 配置市场配置
  *
  * 排除项：sync/sync-history.json（执行记录，属数据非配置）、market/cache/（缓存）、
- * snapshots/（快照）、tmp/ exports/（临时/导出产物）——只备份「配置」，不备份数据。
+ * snapshots/（快照）、tmp/ exports/（临时/导出产物）、rollback-points/（回滚点库——磁盘体检
+ * 会统计它，但它是**数据**不是配置）、checkpoints/（遗留旧检查点库，已不再读取，也不删）
+ * ——只备份「配置」，不备份数据。
+ *
+ * 与磁盘体检（`src/core/disk-usage.ts`）的关系：那边新增统计 `rollback-points` / 遗留
+ * `checkpoints` **不改变本分区的载荷**——本清单是白名单（`SELF_CONFIG_FILES`），
+ * 被统计的目录一律不在其中，既不重复也不遗漏（守卫见 `self.test.ts`）。
  *
  * 实现：继承 FileCollectionAdapter 复用 analyzeImport/applyItem/validate（幂等 hash 比对、
  * 快照/回滚路径一致）；**清单来自覆写的 listRelPaths()（白名单），export() 与 preview() 都经
