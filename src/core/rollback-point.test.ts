@@ -1973,14 +1973,47 @@ test('R-29 E1：空文件边界 + 超限保护（status 照给，added/removed �
 
 /* ==================== T10：安全链（幽灵 guardPointId）与 stat 失败语义 ==================== */
 
-/** 只读台账探针：真写一次（空追加）判断本机 chmod 是否真的挡住了写（挡不住就跳过，不伪造结论）。 */
-async function ledgerWritable(file: string): Promise<boolean> {
+/**
+ * 台账写失败的注入与探测（2026-10-13 CI 实测修订）。
+ *
+ * 为什么不能只 `chmod(index.json, 0o444)`：台账走的是**原子写**（同目录 tmp → rename，见
+ * `utils/atomic-write.ts`）。POSIX 上 rename 覆盖只读文件是**允许**的（只要目录可写），所以
+ * 「文件只读」在 Linux 挡不住写 —— CI（ubuntu）上 R-30/R-32 正是因为注入没生效而红；Windows
+ * 的只读属性会挡住 rename，所以本机（Windows）一直是绿的。
+ *
+ * 注入 = **目录 + 文件两层只读**（POSIX 靠目录挡住 tmp 创建，Windows 靠文件只读挡住 rename）；
+ * 读路径不受影响（目录仍是 r-x）。探测 = 用同形态（tmp + rename 覆盖同目录只读哨兵）真写一次，
+ * 挡不住就由调用方 `t.skip`，绝不伪造结论。
+ */
+async function blockLedgerWrite(file: string): Promise<boolean> {
+  const dir = path.dirname(file)
+  const sentinel = path.join(dir, `.write-probe.${process.pid}`)
+  const tmp = `${sentinel}.tmp`
+  let blocked = false
   try {
-    await fs.appendFile(file, '')
-    return true
-  } catch {
-    return false
+    await fs.writeFile(sentinel, '')
+    await fs.chmod(sentinel, 0o444)
+    await fs.chmod(dir, 0o555)
+    try {
+      await fs.writeFile(tmp, '')
+      await fs.rename(tmp, sentinel)
+    } catch {
+      blocked = true
+    }
+  } finally {
+    await fs.chmod(dir, 0o755)
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    await fs.chmod(sentinel, 0o666).catch(() => {})
+    await fs.rm(sentinel, { force: true }).catch(() => {})
   }
+  return blocked
+}
+
+/** 施加 / 解除注入：目录 + 文件两层只读（撤销时**先恢复目录权限**，否则 POSIX 上删不掉内容）。 */
+async function setLedgerReadOnly(file: string, readOnly: boolean): Promise<void> {
+  const dir = path.dirname(file)
+  await fs.chmod(dir, readOnly ? 0o555 : 0o755)
+  await fs.chmod(file, readOnly ? 0o444 : 0o666)
 }
 
 test('R-30 T10：台账写失败 ⇒ 没有幽灵 guardPointId（require 档整体中止、零写入、不 fork）', async (t) => {
@@ -1994,12 +2027,12 @@ test('R-30 T10：台账写失败 ⇒ 没有幽灵 guardPointId（require 档整�
 
   const ledgerPath = path.join(engine.storeDir, 'index.json')
   const before = await readText(ledgerPath)
-  await fs.chmod(ledgerPath, 0o444)
+  if (!(await blockLedgerWrite(ledgerPath))) {
+    t.skip('本机无法构造台账写失败（只读目录 + 只读文件都挡不住原子写的 rename）')
+    return
+  }
+  await setLedgerReadOnly(ledgerPath, true)
   try {
-    if (await ledgerWritable(ledgerPath)) {
-      t.skip('本机 chmod 后 index.json 仍可写，无法构造台账写失败')
-      return
-    }
     // 前置事实：写台账失败时 capturePoint **不再**回传内存 record
     // （旧实现回传它，消费方拿 point.id 当「留点成功」⇒ 幽灵 id）
     const blocked = await capturePoint(engine, fx)
@@ -2023,7 +2056,7 @@ test('R-30 T10：台账写失败 ⇒ 没有幽灵 guardPointId（require 档整�
     assert.ok(warned.warnings.some((w) => w.code === 'rollback.warn.guardFailed'), JSON.stringify(warned.warnings))
     assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A1', 'warn 档照常回退工作区')
   } finally {
-    await fs.chmod(ledgerPath, 0o666)
+    await setLedgerReadOnly(ledgerPath, false)
   }
   assert.equal(await readText(ledgerPath), before, '整个过程台账一个字节都没被写')
 })
@@ -2071,19 +2104,19 @@ test('R-32 T10：台账写失败时 tracker 不得报 captured=true（不能记�
   assert.equal(typeof first.pointId, 'string')
 
   const ledgerPath = path.join(engine.storeDir, 'index.json')
-  await fs.chmod(ledgerPath, 0o444)
+  if (!(await blockLedgerWrite(ledgerPath))) {
+    t.skip('本机无法构造台账写失败（只读目录 + 只读文件都挡不住原子写的 rename）')
+    return
+  }
+  await setLedgerReadOnly(ledgerPath, true)
   try {
-    if (await ledgerWritable(ledgerPath)) {
-      t.skip('本机 chmod 后 index.json 仍可写，无法构造台账写失败')
-      return
-    }
     const second = await tracker.noteEvent({ sessionId: 'session-1111', seq: 11, type: 'turn/start', data: { turn: 2 } })
     assert.equal(second.captured, false, JSON.stringify(second))
     assert.equal(second.pointId, undefined, '写失败不得报 pointId')
     assert.equal(second.code, 'ledger-write-failed')
     assert.equal((await ledgerOf(engine)).records.length, 1, '台账里绝不能出现第二个点')
   } finally {
-    await fs.chmod(ledgerPath, 0o666)
+    await setLedgerReadOnly(ledgerPath, false)
   }
 })
 

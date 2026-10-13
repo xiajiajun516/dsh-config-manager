@@ -622,14 +622,47 @@ test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restor
 
 /* ========== R8-8 T10：台账只读 ⇒ 没有幽灵 guardPointId；ledger-write-failed 真可达 ========== */
 
-/** 只读台账探针（同引擎单测）：挡不住写就跳过，绝不伪造结论。 */
-async function ledgerWritable(file: string): Promise<boolean> {
+/**
+ * 台账写失败的注入与探测（2026-10-13 CI 实测修订）。
+ *
+ * 为什么不能只 `chmod(index.json, 0o444)`：台账走的是**原子写**（同目录 tmp → rename，见
+ * `utils/atomic-write.ts`）。POSIX 上 rename 覆盖只读文件是**允许**的（只要目录可写），所以
+ * 「文件只读」在 Linux 挡不住写 —— CI（ubuntu）上 R8-8 正是因为注入没生效而红；Windows
+ * 的只读属性会挡住 rename，所以本机（Windows）一直是绿的。
+ *
+ * 注入 = **目录 + 文件两层只读**（POSIX 靠目录挡住 tmp 创建，Windows 靠文件只读挡住 rename）；
+ * 读路径不受影响（目录仍是 r-x）。探测 = 用同形态（tmp + rename 覆盖同目录只读哨兵）真写一次，
+ * 挡不住就由调用方 `t.skip`，绝不伪造结论。
+ */
+async function blockLedgerWrite(file: string): Promise<boolean> {
+  const dir = path.dirname(file)
+  const sentinel = path.join(dir, `.write-probe.${process.pid}`)
+  const tmp = `${sentinel}.tmp`
+  let blocked = false
   try {
-    await fs.appendFile(file, '')
-    return true
-  } catch {
-    return false
+    await fs.writeFile(sentinel, '')
+    await fs.chmod(sentinel, 0o444)
+    await fs.chmod(dir, 0o555)
+    try {
+      await fs.writeFile(tmp, '')
+      await fs.rename(tmp, sentinel)
+    } catch {
+      blocked = true
+    }
+  } finally {
+    await fs.chmod(dir, 0o755)
+    await fs.rm(tmp, { force: true }).catch(() => {})
+    await fs.chmod(sentinel, 0o666).catch(() => {})
+    await fs.rm(sentinel, { force: true }).catch(() => {})
   }
+  return blocked
+}
+
+/** 施加 / 解除注入：目录 + 文件两层只读（撤销时**先恢复目录权限**，否则 POSIX 上删不掉内容）。 */
+async function setLedgerReadOnly(file: string, readOnly: boolean): Promise<void> {
+  const dir = path.dirname(file)
+  await fs.chmod(dir, readOnly ? 0o555 : 0o755)
+  await fs.chmod(file, readOnly ? 0o444 : 0o666)
 }
 
 test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入、无幽灵 guardPointId）；delete 500 ledger-write-failed', async (t) => {
@@ -640,11 +673,11 @@ test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入�
     const id = await makePoint(h)
     await fs.writeFile(path.join(h.workspaceDir, 'x.txt'), 'X-BROKEN')
 
-    await fs.chmod(ledgerPath, 0o444)
-    if (await ledgerWritable(ledgerPath)) {
-      t.skip('本机 chmod 后台账仍可写，无法构造台账写失败')
+    if (!(await blockLedgerWrite(ledgerPath))) {
+      t.skip('本机无法构造台账写失败（只读目录 + 只读文件都挡不住原子写的 rename）')
       return
     }
+    await setLedgerReadOnly(ledgerPath, true)
     try {
       // ① require 档：留不下救援点 = S5 硬门 ⇒ 整体中止（旧版这里是 200 + 一个查不到的 guardPointId）
       const required = await server.call('/rollback-points/' + id + '/rewind', {
@@ -684,7 +717,7 @@ test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入�
       assert.equal(obj(del.json)['code'], 'ledger-write-failed', 'delete 路径必须让这个码真的可达')
       assert.equal(obj(del.json)['ok'], false)
     } finally {
-      await fs.chmod(ledgerPath, 0o666)
+      await setLedgerReadOnly(ledgerPath, false)
     }
     // 只读期间零写入：记录还在
     assert.equal(arr(obj((await server.call('/rollback-points')).json)['points']).length, 1, '被拒的删除不得动台账')
