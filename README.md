@@ -73,6 +73,10 @@ Browse the built-in official market for ready-made configurations (model provide
 
 Your setup — and your chat history — already live in another AI coding agent on this machine? Pick the source and DSH Config Manager **translates it into a standard bundle** (MCP servers, skills, global instructions, conversations and the workspaces they belong to) and hands it to the same review-first import flow: preview → per-item conflict decisions → automatic snapshot → apply → rollback. 30 sources are recognized and 29 of them can migrate **chat history** too. Secret **values** are never read — only the key names, so the import plan can ask you to re-enter them.
 
+### Go back to a moment in a conversation (rewind)
+
+Mid-conversation realisation — "that message sent us down the wrong path, I want to start again from there"? Every user message carries **↺ rewind to here**: it opens a **new branch conversation** from that moment and leaves the **original intact (archived, never rewritten)**; if you want, the **workspace files** are reverted along with it — you see the per-file diff and line counts before anything happens. Rollback points are captured automatically per turn, so there is no manual snapshot to take.
+
 ---
 
 ## 🆚 How it differs from the other DSH backup / sync plugins
@@ -102,6 +106,7 @@ Several DSH plugins live in this space and they solve different problems — pic
 | 🔒 | **Secret safety** | API Keys are not exported by default — non-encrypted imports ask you to re-enter; encrypted backups restore them with the password |
 | ↩️ | **Automatic rollback** | Failed import restores everything automatically |
 | 📸 | **Snapshot restore** | In the Library, hit "Restore" on a pre-import snapshot: review the line-by-line restore plan, then whole-file restore + uninstall added plugins (CLI & GUI) |
+| ↺ | **Rewind a conversation** | Every user message carries "rewind to here": a new branch conversation takes over while the original is archived intact; tick the checkbox to revert workspace files too, with a per-file diff before you confirm (this is **not** the same as "Snapshot restore") |
 | 🔄 | **Remote Sync** | Push/pull portable config via **Git private repo / WebDAV / S3-compatible object storage / GitHub Gist** — each channel is configured on its own (secrets do not sync by default; encrypted snapshots can optionally carry encrypted credentials) |
 | ⏰ | **Scheduled backups** | Full backup on a fixed cadence (6h / 12h / 24h / 7d, or a custom weekly time) — set-and-forget, secrets never included |
 | 🛒 | **Config Marketplace** | Browse & one-click install community configs — supply-chain warnings + per-item content selection (change summary + in-place high-risk flags); entry: Library footer "Browse market / Publish to market", or ⌘K |
@@ -148,6 +153,16 @@ Select ZIP → validate file → check integrity → check schema → compatibil
     → confirm import → auto-backup current config → apply → validate → done
                       │
                       └─ failed midway? → automatically restored (rollback, can be switched off on the confirm page)
+```
+
+### Rewind (go back to a moment in a conversation)
+
+One **rollback point** is captured automatically **per turn** (its workspace state is the one from *before* that turn), so you can always go back to that moment:
+
+```
+Click "↺ rewind" on a user message → preview which files change and how many lines
+    → confirm → a new branch conversation continues from that moment, the original is archived
+    → rewound too far? the "rescue point" captured before the rewind can undo it
 ```
 
 ---
@@ -393,6 +408,26 @@ launched with `dsh --profile <name>`. **Environment → Profiles** reads and wri
 > Instances started by this plugin are recorded in `<dataDir>/launches.json` (pid/port/log), which is why they can be
 > stopped; third-party plugins must be installed into that profile separately (`dsh plugin --profile <name> add <pkg>`).
 > The view lives at Settings → "Backup & Migration" → **Environment → Profiles**.
+
+### ↺ Rewind (go back to a moment)
+
+Every **user message** in the chat carries a "↺ rewind to here" — no trip to Settings, and nothing to export first:
+
+| Action | What it does |
+|---|---|
+| Back to that moment | Continue from before that message: the plugin opens a **new branch conversation** to take over while the **original is archived intact** (its content is never rewritten; the conversation list shows only the rewound one) |
+| Conversation only / files too | By default only the conversation is rewound; tick "revert workspace files too" to touch the disk, and you get a **per-file diff** with line counts first |
+| Rewind preview | States up front how many files change, how many lines are added or removed and how many are deleted; **clicking a file name shows its "now → after rewind" diff** (the same screen appears in the settings rollback panel and in the chat bubble) |
+| Automatic rescue points | A protective point is captured before every rewind so a wrong rewind can be undone; 20 per conversation / 50 globally, oldest dropped first |
+| Rollback ledger | Environment → Maintenance & Diagnostics → "View rollback points" opens the **rollback ledger** dialog: every rewindable moment grouped by conversation with real titles, removable one by one |
+
+**Capture is automatic**: one point (workspace + conversation) is recorded per turn — its workspace state is the one from *before* that turn — and there is no manual "take a snapshot" step. Points live under `$DSH_HOME/dsh-config-manager/rollback-points/`; pre-upgrade three-state checkpoint data stays on disk, is no longer read, and is never deleted by the plugin.
+
+**Skip directories you choose**: drop a `.dsh-rollback-ignore` file in the project (the usual `.gitignore` subset) and capture plus rewind skip the matching directories and files (the built-in dependency directory cannot be re-included). When a whole directory is skipped, deleting files created after that point is **refused outright** rather than done partially.
+
+**Two honest boundaries**: ① while a conversation is **running**, only the conversation is rewound by default, never the files (the plugin will not race a running tool for the disk) — reopen the dialog after the turn finishes to revert files too; ② when a point's capture is incomplete the plugin **never guesses** — only files it can prove did not exist at capture time are deleted, otherwise nothing is deleted and it says so.
+
+**Straight from the chat**: type `/rollback` to list this conversation's rewindable moments, then run it again with one of those ids to rewind without leaving the chat.
 
 ### 📸 Snapshot restore (undo an import)
 
@@ -693,6 +728,7 @@ Yes. The import wizard asks for the export-time encryption password and verifies
 6. **Snapshot restore is offline and honest**: entries the offline engine can't restore (settings namespaces / patch lines when the snapshot has no whole-file backup, workspace records stored in DSH storages) are reported as skipped with a pointer to online rollback; credential **values** are never auto-written (manual re-entry hint only); old snapshots without a plugin baseline only get a hint to remove added plugins manually
 7. **Foreign-agent import has two known blanks**: **Copilot has no chat-history import** (its session format could not be verified on this machine, so only its configuration is imported), and Cursor's per-project history is located through Cursor's own folder-slug scheme, which may not resolve for every project. Conversations already imported with an older build should be deleted and re-imported first (a second import of the same id is reported as a **skipped** `session-id-conflict`, not merged)
 8. **Local source plugins (`link:` / `file:`) are packed into the backup**: the export runs `npm pack` on plugins you are developing locally and stores the tarball in the backup; the import unpacks it under `$DSH_HOME/dsh-config-manager/local-plugins/` and installs it as `file:`. Three consequences: ① backup size grows with those plugins (a single plugin over 100 MB is skipped with a warning — publish it to a registry / git first); ② plugin **source code** enters the backup (this does not conflict with "no secrets in backups" — secrets stay excluded, what travels is code); ③ packing needs a working `npm` on this machine; without it the plugin falls back to the previous behaviour (the original spec is kept, and a new machine still needs a manual install)
+9. **A rewind only reaches as far as its rollback point**: it only handles the files recorded at capture time plus files created after that point; the default per-point limit is **20,000 files / 512 MiB** (an over-limit point is marked incomplete and reported as such — never faked). While a conversation is **running**, only the conversation is rewound by default, not the files; crash leftovers that already moved into the quarantine no longer take part in the next startup's classification and need an explicit restore or a manual move-back
 
 ## 💬 Feedback
 
