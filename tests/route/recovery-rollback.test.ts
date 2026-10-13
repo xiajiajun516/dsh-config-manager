@@ -19,6 +19,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { atomicWriteFile } from '../../src/utils/atomic-write.ts'
 import { recoveryRoutes } from '../../src/routes/recovery.ts'
 import { routeSpecOf, type WebRoute } from '../../src/routes/kit.ts'
 import { RollbackPointEngine } from '../../src/core/rollback-point.ts'
@@ -623,46 +624,55 @@ test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restor
 /* ========== R8-8 T10：台账只读 ⇒ 没有幽灵 guardPointId；ledger-write-failed 真可达 ========== */
 
 /**
- * 台账写失败的注入与探测（2026-10-13 CI 实测修订）。
+ * T10 台账写失败的注入（跨平台）—— 返回「还原」回调；返回 `null` 表示本机造不出来，调用方 skip。
  *
- * 为什么不能只 `chmod(index.json, 0o444)`：台账走的是**原子写**（同目录 tmp → rename，见
- * `utils/atomic-write.ts`）。POSIX 上 rename 覆盖只读文件是**允许**的（只要目录可写），所以
- * 「文件只读」在 Linux 挡不住写 —— CI（ubuntu）上 R8-8 正是因为注入没生效而红；Windows
- * 的只读属性会挡住 rename，所以本机（Windows）一直是绿的。
+ * 为什么不能只 `chmod(index.json, 0o444)`（2026-10-13 CI ubuntu 首跑实测 R-30/R-32/R8-8 三红）：台账走
+ * **原子写**（同目录 tmp → rename，见 `utils/atomic-write.ts`），而 POSIX 上 rename 覆盖只读文件是
+ * **允许**的（只要目录可写）⇒「文件只读」在 Linux 挡不住写，断言实际测的是「台账写成功了」；
+ * Windows 的只读属性会挡住 rename，所以本机（Windows）一直绿。也不能改成把目录设只读：
+ * `capturePoint` 的第一道门是存储探针（写 `<root>/.dshcm-probe-*`），目录只读会先变成
+ * `storage-unavailable`，那测的就不是台账写失败了。
  *
- * 注入 = **目录 + 文件两层只读**（POSIX 靠目录挡住 tmp 创建，Windows 靠文件只读挡住 rename）；
- * 读路径不受影响（目录仍是 r-x）。探测 = 用同形态（tmp + rename 覆盖同目录只读哨兵）真写一次，
- * 挡不住就由调用方 `t.skip`，绝不伪造结论。
+ * 现在：把台账**指向只读目录里的真实文件**（index.json 换成 symlink）。原子写按 `follow` 策略
+ * realpath 到真实文件、tmp 落进只读目录 ⇒ 写必然失败；读路径（readFile 跟随 symlink）不受影响。
+ * 探测 = 用**生产写入器**按台账同形态真写一次（内容就是原内容）：写得进去就还原并返回 `null`
+ * （调用方 skip），绝不伪造结论。
  */
-async function blockLedgerWrite(file: string): Promise<boolean> {
+async function blockLedgerWrite(file: string): Promise<(() => Promise<void>) | null> {
   const dir = path.dirname(file)
-  const sentinel = path.join(dir, `.write-probe.${process.pid}`)
-  const tmp = `${sentinel}.tmp`
-  let blocked = false
+  const readOnlyDir = path.join(dir, 'ledger-readonly')
+  const readOnlyFile = path.join(readOnlyDir, 'index.json')
+  let original: string
   try {
-    await fs.writeFile(sentinel, '')
-    await fs.chmod(sentinel, 0o444)
-    await fs.chmod(dir, 0o555)
-    try {
-      await fs.writeFile(tmp, '')
-      await fs.rename(tmp, sentinel)
-    } catch {
-      blocked = true
-    }
-  } finally {
-    await fs.chmod(dir, 0o755)
-    await fs.rm(tmp, { force: true }).catch(() => {})
-    await fs.chmod(sentinel, 0o666).catch(() => {})
-    await fs.rm(sentinel, { force: true }).catch(() => {})
+    original = await fs.readFile(file, 'utf8')
+  } catch {
+    return null
   }
-  return blocked
-}
-
-/** 施加 / 解除注入：目录 + 文件两层只读（撤销时**先恢复目录权限**，否则 POSIX 上删不掉内容）。 */
-async function setLedgerReadOnly(file: string, readOnly: boolean): Promise<void> {
-  const dir = path.dirname(file)
-  await fs.chmod(dir, readOnly ? 0o555 : 0o755)
-  await fs.chmod(file, readOnly ? 0o444 : 0o666)
+  const restore = async (): Promise<void> => {
+    await fs.chmod(readOnlyDir, 0o755).catch(() => {})
+    await fs.chmod(readOnlyFile, 0o666).catch(() => {})
+    await fs.rm(file, { force: true }).catch(() => {})
+    await fs.writeFile(file, original).catch(() => {})
+    await fs.rm(readOnlyDir, { recursive: true, force: true }).catch(() => {})
+  }
+  try {
+    await fs.mkdir(readOnlyDir, { recursive: true })
+    await fs.writeFile(readOnlyFile, original)
+    await fs.rm(file, { force: true })
+    await fs.symlink(readOnlyFile, file, 'file')
+    await fs.chmod(readOnlyFile, 0o444)
+    await fs.chmod(readOnlyDir, 0o555)
+  } catch {
+    await restore()
+    return null
+  }
+  try {
+    await atomicWriteFile(file, original)
+    await restore()
+    return null
+  } catch {
+    return restore
+  }
 }
 
 test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入、无幽灵 guardPointId）；delete 500 ledger-write-failed', async (t) => {
@@ -673,11 +683,11 @@ test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入�
     const id = await makePoint(h)
     await fs.writeFile(path.join(h.workspaceDir, 'x.txt'), 'X-BROKEN')
 
-    if (!(await blockLedgerWrite(ledgerPath))) {
-      t.skip('本机无法构造台账写失败（只读目录 + 只读文件都挡不住原子写的 rename）')
+    const unblock = await blockLedgerWrite(ledgerPath)
+    if (unblock === null) {
+      t.skip('本机无法构造台账写失败（symlink 不可用，或只读目录挡不住原子写的 rename）')
       return
     }
-    await setLedgerReadOnly(ledgerPath, true)
     try {
       // ① require 档：留不下救援点 = S5 硬门 ⇒ 整体中止（旧版这里是 200 + 一个查不到的 guardPointId）
       const required = await server.call('/rollback-points/' + id + '/rewind', {
@@ -717,7 +727,7 @@ test('R8-8 T10：台账只读 ⇒ rewind(require) 500 guard-failed（零写入�
       assert.equal(obj(del.json)['code'], 'ledger-write-failed', 'delete 路径必须让这个码真的可达')
       assert.equal(obj(del.json)['ok'], false)
     } finally {
-      await setLedgerReadOnly(ledgerPath, false)
+      await unblock()
     }
     // 只读期间零写入：记录还在
     assert.equal(arr(obj((await server.call('/rollback-points')).json)['points']).length, 1, '被拒的删除不得动台账')
