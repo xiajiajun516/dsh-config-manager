@@ -28,6 +28,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+> **{{本版主题}}**：{{一句话中文主题}}
+>
+> **Theme**: {{one-line English theme}}
+
+## [0.1.72] - 2026-10-13
+
 > **本版主题**：**对话回退上线** —— 聊天里每条用户消息旁都能一键回到那一刻，原对话完整保留、可以接着聊，工作区文件也可以一起退回去。
 > 同步通道补上「为什么没同步 / 怎么自救」，另有二十余处真机反馈修复。
 >

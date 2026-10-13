@@ -1,6 +1,6 @@
 {
   "name": "dsh-config-manager",
-  "version": "0.1.45",
+  "version": "0.1.72",
   "description": "DSH (DeepSeek Harness) config backup / export / import / migration / sync and config market plugin.",
   "author": { "name": "xiajiajun516" },
   "homepage": "https://github.com/xiajiajun516/dsh-config-manager",
