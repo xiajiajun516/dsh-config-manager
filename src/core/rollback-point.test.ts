@@ -70,7 +70,10 @@ interface Fixture {
 }
 
 async function makeFixture(): Promise<Fixture> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-rollback-point-'))
+  // issue #69 口径（与 tests/route/recovery-rollback.test.ts 同款）：os.tmpdir() 在 Windows / macOS 上
+  // 可能给**未规范化**的拼写（Windows 的 8.3 短名 RUNNER~1 / macOS 的 /var → /private/var 软链），
+  // 而引擎内部一律 realpath ⇒ 断言会变成比「同一个目录的两种写法」（CI 的 windows/macos 必红，本机不复现）。
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cm-rollback-point-')))
   const homeDir = path.join(root, 'home')
   const dataDir = path.join(homeDir, 'dsh-config-manager')
   const sessionsDir = path.join(homeDir, 'sessions')
