@@ -698,12 +698,13 @@ test('R-05d 非相邻回退：预览的「会被删除路径集合」必须与�
   }
   assert.equal(ws?.removed, 25, 'removed 必须等于真实删除数（detail=' + JSON.stringify(ws?.detail) + '）')
   const refused = ws?.createdSkipped ?? []
-  assert.equal(refused.length, 3, '3 条 .git 路径必须如实进 createdSkipped')
-  for (const file of refused) {
-    assert.ok(file.split(path.sep).includes('.git'), '拒删的必须只可能是 .git 段内的：' + file)
-    assert.equal(await readText(file), 'GIT', '.git 内的文件绝不能被删')
+  // 2026-10-14 起 `.git` 在**捕获与回退两侧**都不进走查 ⇒ 它连候选都不是，不再是「候选后被拒删」。
+  // 断言的是更强的事实：.git 子树**一个字节都没被动过**（拒删判据仍在，只是更早的一道门就挡住了）。
+  assert.equal(refused.length, 0, '.git 子树不进候选（比「候选后拒删」更早一道门）')
+  for (const turn of [3, 4, 5]) {
+    assert.equal(await readText(path.join(fx.workspaceDir, '.git', 'mid' + String(turn))), 'GIT', '.git 内的文件绝不能被删')
   }
-  assert.equal(ws?.createdSkippedCount, 3)
+  assert.equal(ws?.createdSkippedCount, 0)
   assert.equal(ws?.createdRefusedReason, undefined, '捕获完整 ⇒ 不是「捕获不完整」拒删')
 
   // ② 目标点记录在案的路径写回并通过 SHA-256 复核
@@ -715,7 +716,7 @@ test('R-05d 非相邻回退：预览的「会被删除路径集合」必须与�
   assert.deepEqual(previewWs.removals, ws?.removedPaths, '预览说会删的 = 实际删的（逐条、同序）')
   assert.equal(previewWs.removalsCount, ws?.removed, '预览的删除总数 = 实际删除数')
   assert.equal(previewWs.removals.some((file) => file.split(path.sep).includes('.git')), false, '预览的删除清单里绝不能混进永不删除的 .git 路径')
-  assert.equal(previewWs.createdSkippedCount, 3, '预览必须同样列出 3 条拒删项')
+  assert.equal(previewWs.createdSkippedCount, 0, '预览与执行同口径：.git 不进候选（所以没有拒删项）')
 
   // ④ 清单**全量**（不再切 20 条）：界面直接把这份清单渲染成「删除」行，不需要任何说明句
   assert.equal(previewWs.removals.length, 25, '25 条会删的必须**全部**列出来（旧实现只列前 20 条，用户看到的正是「预览只列几个」）')
@@ -2384,7 +2385,8 @@ test('T2-B 缓存命中与未命中两条路径下，删除候选判定（预览
   const hit = await engine.preview(id)
   assert.equal(hit.ok, true)
   assert.deepEqual(hit.workspace.removals, created, '两条新建路径都必须被列为会删')
-  assert.equal(hit.workspace.createdSkippedCount, 1, '.git 内的拒删项如实计入')
+  // `.git` 从两侧走查排除 ⇒ 它不进候选（口径与执行侧、与 R-05d 一致）
+  assert.equal(hit.workspace.createdSkippedCount, 0, '.git 不进候选 ⇒ 无拒删项')
 
   // ② 未命中路径：删掉缓存文件 + 用新实例（只能全量真读）
   await fs.rm(path.join(engine.storeDir, 'path-cache.json'), { force: true })
@@ -2767,6 +2769,27 @@ test('R-36 走查被中断的点：删除集整体拒绝（未走查的子树不
   assert.equal(await readText(created), 'NEW', '证明名单不完整 ⇒ 一条都不删（绝不误删未走查子树里的文件）')
 })
 
+
+test('R-42 .git 不进捕获面：整棵进 excludedDirs 留痕，且不进 files', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  await fs.mkdir(path.join(fx.workspaceDir, '.git'), { recursive: true })
+  await fs.writeFile(path.join(fx.workspaceDir, '.git', 'index'), 'GIT')
+  const engine = makeEngine(fx)
+  const captured = await capturePoint(engine, fx)
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload)
+  assert.equal(
+    (payload?.files ?? []).some((f) => f.path.split(path.sep).includes('.git')),
+    false,
+    '.git 下的文件不得进快照（回退写回 .git 会让 git 状态错乱，且 .git 会挤掉 maxBytes 预算）',
+  )
+  assert.ok(
+    (payload?.excludedDirs ?? []).some((e) => e.path.endsWith('.git') && e.reason === 'git-dir'),
+    '.git 必须如实进 excludedDirs（留痕，不静默）',
+  )
+  assert.equal(payload?.files.length, 2, '工作区里的两个正常文件照常进快照')
+})
 
 test('R-37 清单损坏时**从 records/ 重建**：旧点不丢（而不是拿空清单覆盖掉它们）', async (t) => {
   const fx = await makeFixture()

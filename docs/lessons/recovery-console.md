@@ -365,4 +365,20 @@ checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对
 护栏：`src/core/rollback-point.test.ts` 的 R-30..R-35（子代理判定 / 时间预算 / 取消信号 / overBudget /
 前像落盘与零写入失败 / 残留清理）。
 
+## 第三轮：4 条取舍按「推荐组合」落地（2026-10-14）
+
+护栏已扩到 R-30..R-43（新增：走查中断 fail-closed R-36 / 台账重建 R-37 / `.GIT` 保护 R-40 / 回退期走查预算 R-41 / `.git` 不进捕获面 R-42）。
+
+**① 跨进程乐观并发（推荐 B）**：`dataDir` 由 `$DSH_HOME` 决定、**不随 profile 分家**，而本插件的实例锁（instanceId + heartbeat + ownership）本就按多实例设计 ⇒「另一个 DSH 实例写同一份清单」是设计内场景，而 `withLedgerWriteLock` 只串行本进程。落地：`RollbackLedger.manifestStamp()`（mtime+size）+ `appendRecord` 拆成「最多三次尝试」的 `appendRecordOnce`：读清单前后各取一次戳，被改过就不写、重读重试；三次都变 ⇒ **放弃本次留点并 warn**（宁可少一条点，也不覆盖别人的清单）。**诚实边界**：检测与写入之间仍有极小窗口，无跨进程锁时无法彻底消除 —— 这里保证的是「不静默覆盖 + 尽量合并」，不是原子性。
+
+**② `.git` 不进捕获面（推荐 A）**：此前只有删除侧拒 `.git`、捕获侧照样记录并会在回退时写回 ⇒ 跑过 `git commit` 的回合回退后 `git log` 可能少一次提交；且 `.git` 常达数百 MB，会挤掉 `maxBytes`（512 MiB）里的源码文件。落地：`listChunkFiles` 里 `.git` 与 `node_modules` 同档整棵排除（折大小写比较，Windows 的 `.GIT` 同一条），进 `excludedDirs` 留痕并因此进证明名单（不会被当成「留点后新建」）。**连带更新**：R-05d / T2-B 原先钉的是「`.git` 进候选后被拒删」，现在断言更强的事实 —— `.git` 子树**一个字节都没被动过**（`createdSkippedCount` 从 1/3 变 0）。
+
+**③ `/rollback` 文案说实话（推荐 A）**：A 无感替换（打开子会话 + 归档原会话）只在**客户端**，命令在 host 侧没有切换会话的能力 ⇒ 文案追加「当前对话不会切换：新会话在左侧栏（未分组时排在末尾）」。**成本比预期低**：`engine-locale.test.ts` 的冻结指纹只覆盖 372 个**基线键**，`command.rollback.*` 是后加的、不在基线里，改值不会红（也不必改指纹）。
+
+**④ ui-prefs 三个写端点统一门（推荐 A）**：`updateUiPrefs` 虽是 read→merge→write，但两个端点**并发**时仍会互相覆盖字段（典型：刚打开的 `rollbackEnabled` 被另一个端点的旧快照抹掉 ⇒ 重启后功能自己关掉）。落地：`sync.ts` 的 `sync/ui-prefs` 与 `prefs.ts` 的 `star-prompt` / `release-notes-prompt` 都过 `runWithMutationLock`（`prefs.ts` 抽了 `writePrefsOrBlocked`，被 SAFE MODE / 环境锁挡住时回 423、零写入）。
+
+**同批落地的其余项**：预览改用 `lstat`（符号链接一律按不可写报，与写入侧 `symlink:'reject'` 同口径）；继承视图按 `pickedTurns` 去重（多代链同一回合只取最近祖先）；开关三态（`prefsEnabled: boolean | null`，未读到不显示成「关」）；偏好与本进程状态分歧如实上屏；`ChatPointWindowController.dispose()` 清掉默认排程器的定时器；宿主 fork 返回形状加固（`in` 对 null 会抛 TypeError ⇒ 先判对象）。
+
+**仍未落地（下一批，附正确修法）**：C3「结果屏不渲染被跳过的段」与 C4「复选框已勾选且禁用」是**同一根因**的两个面，而 C4 与既有设计冲突（`rollback-entry-view.test.ts:111` 明确钉「档位与预览里的可用段无关」）⇒ 正确修法是在**提交路径**按 `workspace.available` 收窄 `mode`（给 `buildRewindOptions` 补 preview 参数并同步调用点），而不是改 `defaultDraft`（本轮的尝试已回退）；C7 聊天入口 30 s 缓存需要跨模块失效通道；C5 需要 client http 层识别 409 的机器码；H5 命令服务惰取需要换用 `injectServices` 式的就绪回调。
+
 

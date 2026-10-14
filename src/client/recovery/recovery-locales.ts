@@ -329,6 +329,8 @@ export const zh = {
   /* —— issue #88 / #89：总开关（缺省关闭）+ 台账占用与清理 —— */
   'rollback.switch.label': '启用回合自动留点',
   'rollback.switch.hint': '关闭后不再订阅会话事件、不再写台账，聊天里的「↺ 回退」入口一并收起；已有回滚点仍可查看、回退与清理。',
+  'rollback.switch.unknown': '正在读取开关状态（还没读到之前不显示成「已关闭」）。',
+  'rollback.switch.diverged': '磁盘上的偏好是「开启」，但本进程没有启用留点（通常是被另一个 DSH 实例改过）。重新打开一次开关即可让本进程生效。',
   'rollback.ledger.summary': '台账 {records} 个点 · {size}',
   'rollback.ledger.budget': '字节预算 {budget}，已按预算淘汰 {evicted} 个最旧自动点',
   'rollback.ledger.overBudget': '台账已到 {size}，超过 {budget} 的字节预算，但已经没有可自动淘汰的点了（通常是单个回滚点本身大于预算）—— 再增长请手动清理。',
@@ -912,6 +914,8 @@ export const en: Record<keyof typeof zh, string> = {
   /* —— issues #88 / #89: master switch (off by default) + ledger footprint and cleanup —— */
   'rollback.switch.label': 'Enable automatic per-turn rollback points',
   'rollback.switch.hint': 'When off, the plugin no longer subscribes to session events or writes the ledger, and the rewind entry is removed from chat. Existing points can still be viewed, rewound and cleaned up.',
+  'rollback.switch.unknown': 'Reading the switch state (it is not shown as "off" until it has been read).',
+  'rollback.switch.diverged': 'The stored preference says "on", but this process has rollback points disabled (usually because another DSH instance changed it). Toggle the switch once to apply it here.',
   'rollback.ledger.summary': 'Ledger: {records} points · {size}',
   'rollback.ledger.budget': 'Byte budget {budget}; {evicted} oldest automatic point(s) already evicted by the budget',
   'rollback.ledger.overBudget': 'The ledger is at {size}, over the {budget} byte budget, and no automatic point is left to evict (usually a single point is larger than the budget) — clean up manually to shrink it.',

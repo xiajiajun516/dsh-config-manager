@@ -7,7 +7,9 @@
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
+import type { ServerResponse } from 'node:http'
 import { endpoint, requireJsonObject, writeJson } from './kit.ts'
+import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { PLUGIN_VERSION, STAR_PROMPT_REPO_URL } from '../index.ts'
@@ -16,10 +18,35 @@ import { UpdateChecker, wantsForcedUpdateCheck } from '../core/update-check.ts'
 
 export function prefsRoutes(env: RoutesEnv): WebRoute[] {
   const {
+    host,
     syncDir,
     selfUpdate,
     withMutationGate,
   } = env
+  /**
+   * 偏好写必须与其它写路径**同门**（④A）：ui-prefs.json 由 star-prompt / release-notes-prompt /
+   * 回滚开关三个端点共写。`updateUiPrefs` 虽是 read→merge→write，但两个端点**并发**时仍会互相覆盖
+   * 字段（典型：刚打开的 rollbackEnabled 被另一个端点的旧快照抹掉 ⇒ 重启后功能自己关掉，fail-closed）。
+   * 被 SAFE MODE / 环境锁挡住时直接回 423 并返回 null（调用方 return，零写入）。
+   */
+  const writePrefsOrBlocked = async (
+    res: ServerResponse,
+    patch: Parameters<typeof updateUiPrefs>[1],
+  ): Promise<Awaited<ReturnType<typeof updateUiPrefs>> | null> => {
+    try {
+      return await runWithMutationLock(
+        host.mutationLock,
+        { op: 'ui-prefs', target: 'star/release-notes', isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+        async () => await updateUiPrefs(syncDir, patch),
+      )
+    } catch (error) {
+      if (error instanceof EnvironmentLockUnavailableError) {
+        writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+        return null
+      }
+      throw error
+    }
+  }
   // 版本更新检查器：每进程一个（进程内缓存 10 分钟；用户点「重新检查」走 ?force=1）。
   // 网络失败/超时/响应畸形一律结构化回传（ok:false + 原因），绝不「失败当最新」。
   const updateChecker = new UpdateChecker(PLUGIN_VERSION)
@@ -58,7 +85,8 @@ export function prefsRoutes(env: RoutesEnv): WebRoute[] {
         if (body['clicked'] === true) {
           patch['starPromptClicked'] = true
         }
-        const next = await updateUiPrefs(syncDir, patch)
+        const next = await writePrefsOrBlocked(res, patch)
+        if (next === null) return
         writeJson(res, 200, {
           ok: true,
           firstSeenAt: next.starPromptFirstSeenAt,
@@ -98,7 +126,8 @@ export function prefsRoutes(env: RoutesEnv): WebRoute[] {
         if (body['dismissed'] === true) {
           patch['releaseNotesDismissed'] = true
         }
-        const next = await updateUiPrefs(syncDir, patch)
+        const next = await writePrefsOrBlocked(res, patch)
+        if (next === null) return
         writeJson(res, 200, {
           ok: true,
           lastSeenVersion: next.releaseNotesLastSeenVersion,

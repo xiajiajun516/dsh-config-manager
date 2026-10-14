@@ -1898,9 +1898,15 @@ export class RollbackPointEngine {
           continue
         }
         if (entry.isDirectory()) {
-          if (EXCLUDED_DEP_DIR_NAMES.includes(entry.name)) {
+          // `.git` 与运行时依赖目录**同档**：整棵不进快照。两条理由 ——
+          //  ① 回退写回 .git（index/refs/logs）会让 git 状态错乱（提交看似消失、可能留 index.lock），
+          //     而删除侧本来就把 .git 当拒删目录 ⇒ 排除它才让两侧口径一致；
+          //  ② .git 常常几百 MB，会**挤掉 maxBytes 预算里的源码文件**。
+          // 大小写折半比较：Windows 上 .GIT/.Git 是同一个目录。
+          const dirName = win32Fold(entry.name)
+          if (EXCLUDED_DEP_DIR_NAMES.includes(entry.name) || dirName === '.git') {
             // 内置忽略规则（S4「沿用现有 IGNORE 规则」）：整棵不进快照，但留痕（不静默）
-            this.recordSkip(sink, 'excluded', { path: full, reason: 'dep-dir' })
+            this.recordSkip(sink, 'excluded', { path: full, reason: dirName === '.git' ? 'git-dir' : 'dep-dir' })
             continue
           }
           if (ignore !== undefined && this.ignoredByRules(ignore, full, true)) {
@@ -2428,8 +2434,32 @@ export class RollbackPointEngine {
    * 把记录写进台账（**留点侧唯一写入口**）：整段「读全文 → 合并 → S6 淘汰 → 原子写 → 回收对象」
    * 都在 {@link withLedgerWriteLock} 的进程内串行队列里 —— 绝不与 tracker / 路由的另一次写交错。
    */
+  /**
+   * 写一条记录（**最多三次尝试**）—— 跨进程乐观并发（①B）。
+   *
+   * dataDir 由 `$DSH_HOME` 决定、**不随 profile 分家**（与本插件自带的实例锁同一套多实例假设），
+   * 所以「另一个 DSH 实例正在写同一份清单」是设计内的场景，而 `withLedgerWriteLock` 只串行本进程。
+   * 策略：读清单前后各取一次**代际戳**，被改过就重读重试；三次都变 ⇒ **放弃本次留点并 warn**，
+   * 绝不拿自己的快照覆盖别人的清单（宁可少一条点，也不丢别人的点）。
+   * 诚实的边界：检测与写入之间仍有极小窗口，无跨进程锁时无法彻底消除 —— 这里保证的是
+   * 「不静默覆盖 + 尽量合并」，不是原子性。
+   */
   private async appendRecord(record: RollbackPointRecord): Promise<{ ok: boolean; detail?: string }> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await this.appendRecordOnce(record)
+      if (result.conflict !== true) {
+        return result.detail !== undefined ? { ok: result.ok, detail: result.detail } : { ok: result.ok }
+      }
+    }
+    this.warn('rollback ledger busy: another instance kept changing the manifest (auto point skipped)')
+    return { ok: false, detail: 'ledger-busy: manifest changed by another instance' }
+  }
+
+  /** `appendRecord` 的单次尝试；`conflict: true` = 这期间清单被别的实例改过，调用方应当重试。 */
+  private async appendRecordOnce(record: RollbackPointRecord): Promise<{ ok: boolean; detail?: string; conflict?: boolean }> {
     return await withLedgerWriteLock(this.ledgerPath, async () => {
+      // 读之前先取一次代际戳（不参与锁：它天生是跨进程的探针）
+      const stampBefore = await this.ledger.manifestStamp()
       let manifest = await this.readManifest()
       if (this.initError !== undefined) {
         // 台账还有 v2 没迁完（或迁移失败）：**拒写**，绝不覆盖原文件（下次启动重试）
@@ -2453,6 +2483,12 @@ export class RollbackPointEngine {
       // 刚写入的这一条不参与本轮字节淘汰（否则 capturePoint 会回一个台账里查不到的幽灵点）
       const kept = await this.applyByteBudget(merged, pruned.kept, extraBytes, prepared.entry.id)
       kept.sort((a, b) => (a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0))
+      // 写之前复核：这份清单在这期间有没有被别的实例改过？改过就**不写**，交给调用方重读重试。
+      // 读不出代际戳（任一时刻为 null）⇒ 不参与判定、照常写 —— 绝不因为一个可选探针失败就拒绝留点。
+      const stampAfter = await this.ledger.manifestStamp()
+      if (stampBefore !== null && stampAfter !== null && stampBefore !== stampAfter) {
+        return { ok: false, conflict: true, detail: 'manifest changed by another instance' }
+      }
       try {
         await fs.mkdir(this.root, { recursive: true })
         await this.ledger.writePrepared(prepared)
@@ -2677,11 +2713,17 @@ export class RollbackPointEngine {
       const chain = this.ancestorIdsOf(child)
       if (chain.length === 0) continue
       const own = ownTurnsOf(child)
+      // 多代链（A→B→D）里同一个回合可能同时存在于多个祖先：**只取最近的那个**。
+      // 没有这份集合时，D 会拿到两条 (sessionId=D, turn=N) 却指向**不同状态**的记录，
+      // 客户端取第一条时结果随祖先顺序漂移。chain 由近到远 ⇒ 先到先得。
+      const pickedTurns = new Set<number>()
       for (const ancestor of chain) {
         for (const entry of manifest) {
           if (entry.sessionId !== ancestor || entry.turnSeq === null) continue
           if (own.has(entry.turnSeq)) continue // 本会话自己有这一回合的点 ⇒ 用自己那个
+          if (pickedTurns.has(entry.turnSeq)) continue // 更近的祖先已经提供过这一回合
           if (entries.length >= ROLLBACK_INHERITED_VIEW_MAX) { truncated = true; break }
+          pickedTurns.add(entry.turnSeq)
           entries.push({
             // 段摘要来自清单里**写入时算好**的那份（口径仍是 summarizeRollbackPoint）
             ...entrySummaryOf(entry),
@@ -3002,8 +3044,12 @@ export class RollbackPointEngine {
       for (const file of wsPayload.files) {
         let outcome: PreviewStatOutcome
         try {
-          const stat = await fs.stat(file.path)
-          outcome = { kind: 'ok', size: stat.size, regular: stat.isFile() }
+          // **lstat，不是 stat**：写入侧用 `symlink:'reject'`（lstat 是链接即抛），预览若跟随链接就会
+          // 说「会创建 / 会覆盖」，执行却整段失败 —— 两侧必须是同一个口径。链接一律按「不可写」报。
+          const stat = await fs.lstat(file.path)
+          outcome = stat.isSymbolicLink()
+            ? { kind: 'unavailable' }
+            : { kind: 'ok', size: stat.size, regular: stat.isFile() }
         } catch (error) {
           outcome = classifyPreviewStatFailure(error) === 'missing' ? { kind: 'missing' } : { kind: 'unavailable' }
         }

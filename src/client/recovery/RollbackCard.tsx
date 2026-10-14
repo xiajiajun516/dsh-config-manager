@@ -338,7 +338,17 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const groups = rollbackPointGroups(list)
   const storage = list?.storage ?? null
   /** 开关当前值（issue #88）：只认宿主回传的布尔；缺字段（老宿主）显示为关闭，但那种宿主也不画开关 */
-  const prefsEnabled = storage?.rollbackEnabled === true
+  /**
+   * 开关当前值。**三态**：`null` = 台账还没读到（loading / 读失败）—— 那时**不能**显示成「关」：
+   * 磁盘偏好可能是开（每回合仍在留点、占盘），显示成关会让用户点一下把 true 再写一遍（静默 no-op），
+   * 并误以为功能本来就是关的。判据与聊天入口**同源**（rollbackEntryVisible）。
+   */
+  const prefsEnabled: boolean | null = storage === null ? null : rollbackEntryVisible(storage)
+  /**
+   * 偏好与**本进程实际状态**不一致（H7）：另一个实例改过 ui-prefs.json 时，本进程 gate=false
+   * （真不订阅、不留点）而磁盘偏好仍是 true。这里如实说出分歧，别让界面替磁盘打包票。
+   */
+  const prefsDiverged = storage !== null && storage.rollbackActive === false && rollbackEntryVisible(storage)
   /** 台账占用（issue #89）；老宿主没有这个字段 ⇒ 这一行整个不渲染 */
   const ledger = storage?.ledger
   const storageGuidance = rollbackGuidanceRows(storage?.guidance)
@@ -394,14 +404,21 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         {hasPrefsApi && (
           <div className={css.actionRowTop}>
             <Checkbox
-              checked={prefsEnabled}
-              disabled={prefsBusy || busy}
+              // 三态：`null`（还没读到）显示为未勾选且**禁用** —— 绝不替磁盘猜一个值
+              checked={prefsEnabled === true}
+              disabled={prefsBusy || busy || prefsEnabled === null}
               onChange={togglePrefs}
               label={t('rollback.switch.label')}
             />
             <InfoHint text={t('rollback.switch.hint')} label={t('common.infoHint')} />
           </div>
         )}
+        {/* 还没读到偏好：说「正在读」而不是画成「关」（三处判据同一份：磁盘 / 本进程 / 未知） */}
+        {hasPrefsApi && prefsEnabled === null && (
+          <div className={css.hint}>{t('rollback.switch.unknown')}</div>
+        )}
+        {/* H7：偏好与本进程实际状态分歧（另一个实例写过 ui-prefs.json）—— 如实说，不替磁盘打包票 */}
+        {prefsDiverged && <div className={css.hint}>{t('rollback.switch.diverged')}</div>}
 
         {/* 存储栈不可用：如实说「现在不能用」，并给出可行动的指引（列表仍可看） */}
         {storage !== null && !storage.available && (

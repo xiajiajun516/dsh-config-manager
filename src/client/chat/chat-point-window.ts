@@ -119,11 +119,16 @@ export class ChatPointWindowController {
   private current: ChatPointWindowState = { lookup: null, open: false }
   private started = false
   private cancelled = false
+  /** 默认排程器留下的待触发定时器（≤12 s）；dispose 清掉，避免悬空 timer 与晚到的回调 */
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(options: ChatPointWindowOptions) {
     // 参数属性（`constructor(private readonly x)`）会产出运行期语法，erasableSyntaxOnly 下不允许 —— 显式赋值
     this.options = options
-    this.schedule = options.retry ?? ((fn: () => void, delayMs: number) => { setTimeout(fn, delayMs) })
+    // 默认排程器把句柄留下来，dispose 时清掉（注入的 retry 由调用方自理）
+    this.schedule = options.retry ?? ((fn: () => void, delayMs: number) => {
+      this.pendingTimer = setTimeout(() => { this.pendingTimer = null; fn() }, delayMs)
+    })
   }
 
   /** 当前状态（与最后一次 onState 回调同形）。 */
@@ -141,6 +146,11 @@ export class ChatPointWindowController {
    */
   dispose(): void {
     this.cancelled = true
+    // 取消后**不再需要任何晚到的回调**：默认排程器的定时器一并清掉（注入的 retry 由调用方负责）
+    if (this.pendingTimer !== null) {
+      clearTimeout(this.pendingTimer)
+      this.pendingTimer = null
+    }
     this.current = { lookup: this.current.lookup, open: false }
   }
 

@@ -6,6 +6,7 @@
  */
 
 import { endpoint, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
+import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { FileSnapshotStore } from '../core/index.ts'
@@ -320,9 +321,22 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       const body = await requireJsonObject(req)
       try {
         const channel: UiPrefsChannel | undefined = parseSyncChannel(body['lastSyncChannel'])
-        await updateUiPrefs(syncDir, { ...(channel !== undefined ? { lastSyncChannel: channel } : {}) })
+        // ④A：与回滚开关端点**同一道写入门**。ui-prefs.json 由三个端点共写，`updateUiPrefs` 虽是
+        // read→merge→write，但两个不同端点并发时仍会互相覆盖字段（例如把刚打开的 rollbackEnabled 抹掉，
+        // 重启后功能自己关掉）。同类写串行是既有架构口径。
+        await runWithMutationLock(
+          host.mutationLock,
+          { op: 'ui-prefs', target: 'lastSyncChannel', isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+          async () => {
+            await updateUiPrefs(syncDir, { ...(channel !== undefined ? { lastSyncChannel: channel } : {}) })
+          },
+        )
         writeJson(res, 200, { ok: true, lastSyncChannel: channel })
       } catch (error) {
+        if (error instanceof EnvironmentLockUnavailableError) {
+          writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+          return
+        }
         writeSyncRouteError(res, error)
       }
     }),

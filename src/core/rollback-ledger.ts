@@ -697,6 +697,20 @@ export class RollbackLedger {
     return path.join(this.payloadsDir, hash + '.json')
   }
 
+  /**
+   * 清单文件的**代际戳**（mtimeMs + 字节数）。跨进程乐观并发用：留点侧在读清单前后各取一次，
+   * 不一致说明另一个实例写过 ⇒ 重读重试，绝不拿自己的快照覆盖别人的清单。
+   * 读不到返回 null = **不参与判定**（可选探针失败绝不阻塞留点）。
+   */
+  async manifestStamp(): Promise<string | null> {
+    try {
+      const info = await fs.stat(this.manifestPath)
+      return String(info.mtimeMs) + ':' + String(info.size)
+    } catch {
+      return null
+    }
+  }
+
   /** 这份载荷是否已经落过盘（内容寻址 ⇒ 已存在就是同一份，可零写入；也是「本次新增字节」的判据） */
   async hasPayload(hash: string): Promise<boolean> {
     const target = this.payloadPath(hash)
