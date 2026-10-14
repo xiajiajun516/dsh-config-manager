@@ -4353,6 +4353,31 @@ body {
   color: var(--cm-error);
 }
 
+/* 差异表的「文件头」（编辑器式）：路径 + +A / −R —— 只在调用方没在别处写过路径时渲染。
+   限宽省略：路径比栏宽，右侧统计必须恒在视野内（flex 收缩只发生在路径那一侧）。 */
+.diffFileHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  font-size: 11px;
+}
+
+.diffFilePath {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.diffFileStat {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
 .diffPane {
   /* 双栏表自带行号列，左侧不再留额外缩进（原先 6px 缩进 + 行号列显得左边空一块） */
   margin: 2px 0 8px;
@@ -4395,6 +4420,13 @@ body {
   font-size: 11px;
 }
 
+/* 两栏之间的竖分割线：块头（colSpan=2 的两格）与正文（第 3 格 = 右栏行号）都要有 ——
+   只在表头画线时，正文两栏看起来连成一片。 */
+.diffTable tbody td:nth-child(3),
+.diffHunkRow td + td {
+  border-left: 1px solid var(--dsw-alias-border-l1);
+}
+
 .diffNo {
   padding: 0 4px;
   color: var(--dsw-alias-label-tertiary);
@@ -4402,6 +4434,20 @@ body {
   text-align: right;
   vertical-align: top;
   user-select: none;
+}
+
+/* 行号栏按语义着色（删侧红 / 增侧绿），色条 = 该栏左缘的 3px 内阴影：
+   左栏落在整表左缘、右栏落在两栏分界处 —— 与被着色的行一一对应（上下文行不上色）。 */
+.diffNoDel {
+  background: color-mix(in srgb, var(--cm-error) 12%, transparent);
+  color: var(--cm-error);
+  box-shadow: inset 3px 0 0 var(--cm-error);
+}
+
+.diffNoAdd {
+  background: color-mix(in srgb, var(--cm-ok) 12%, transparent);
+  color: var(--cm-ok);
+  box-shadow: inset 3px 0 0 var(--cm-ok);
 }
 
 .diffCell {

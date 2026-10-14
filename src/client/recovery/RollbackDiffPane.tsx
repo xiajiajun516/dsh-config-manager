@@ -27,9 +27,14 @@ export type RollbackDiffState =
 export interface RollbackDiffPaneProps {
   state: RollbackDiffState
   rt: TranslateNS<'config-manager-recovery'>
+  /**
+   * 文件头（可选）= 该文件路径：给了就在差异上方画一行「路径 + +A/−R」（编辑器式）。
+   * 调用方**已在别处写过这份路径**（聊天预览/设置页的就地展示原本各画一行）时**不要传** —— 同一路径不画两遍。
+   */
+  title?: string
 }
 
-export function RollbackDiffPane({ state, rt }: RollbackDiffPaneProps) {
+export function RollbackDiffPane({ state, rt, title }: RollbackDiffPaneProps) {
   if (state.status === 'loading') return <Spinner label={rt('rollback.diff.loading')} />
   if (state.status === 'error') return <Banner kind="error">{state.message === null ? rt('rollback.diff.failed') : redact(state.message)}</Banner>
   const diff = state.diff
@@ -48,6 +53,7 @@ export function RollbackDiffPane({ state, rt }: RollbackDiffPaneProps) {
       {diff.degraded && <div className={css.hint}>{rt('rollback.diff.degraded')}</div>}
       <DiffTable
         hunks={diff.hunks}
+        title={title}
         beforeLabel={rt('rollback.diff.before')}
         afterLabel={rt('rollback.diff.after')}
         truncatedNotice={(shown, total) => rt('rollback.diff.truncated', { shown: String(shown), total: String(total) })}

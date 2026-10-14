@@ -58,6 +58,8 @@ import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
+// C7：删除 / 清理后要让聊天入口的列表缓存失效（否则 30 s 内按钮仍按旧列表判「可点」）
+import { resetChatPointCache } from '../chat/chat-entry-view.ts'
 import { readRollbackPreviewFiles, readRollbackPreviewRemovals } from '../chat/rollback-entry-view.ts'
 import { formatSessionBytes } from '../../ui/session-inventory-view.ts'
 import { rollbackEntryVisible } from '../../ui/rollback-view.ts'
@@ -282,7 +284,14 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
       (res) => {
         if (!mounted.current) return
         setBusy(false)
-        if (res.ok) { toast.ok(t('rollback.delete.done')); load(); return }
+        if (res.ok) {
+          toast.ok(t('rollback.delete.done'))
+          // C7：删掉的点可能正是聊天入口缓存里那条 → 清掉，否则 30 s 内入口仍按旧列表判「可点」，
+          // 点开对话框直读端口才说「这个回合还没有回滚点」（按钮承诺了做不到的事）。
+          resetChatPointCache()
+          load()
+          return
+        }
         setActionError(t(dyn(rollbackCodeKey(res.code))))
       },
       (err: unknown) => { if (mounted.current) { setBusy(false); fail(err) } },
@@ -329,6 +338,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         setCleanupNote(removed === 0
           ? t('rollback.cleanup.none')
           : t('rollback.cleanup.done', { records: removed, size: formatSessionBytes(res.bytes ?? 0) }))
+        // C7：清理同样会让聊天入口的缓存失真（同删除路径的理由）
+        if (removed > 0) resetChatPointCache()
         load({ keep: true })
       },
       (err: unknown) => { if (mounted.current) { setCleanupBusy(false); setCleanupOpen(false); fail(err) } },
@@ -709,8 +720,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                     弹窗内只有这一条通道（设置页没有 DSH 右侧栏），渲染与聊天侧降级通道同一个面板。 */}
                 {inlineDiff !== null && (
                   <div className={css.inlineDiffBox}>
-                    <div className={`${css.hint} ${css.mono}`}>{inlineDiff.path}</div>
-                    <RollbackDiffPane state={inlineDiff.state} rt={t} />
+                    {/* 路径由差异表的文件头承载（.diffFileHead）：这里不再画第二遍 */}
+                    <RollbackDiffPane state={inlineDiff.state} rt={t} title={inlineDiff.path} />
                   </div>
                 )}
               </>

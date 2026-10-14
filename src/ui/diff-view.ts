@@ -89,3 +89,25 @@ export function maxLineDigits(hunks: readonly DiffHunk[]): number {
 export function countSideRows(groups: readonly SideBySideHunk[]): number {
   return groups.reduce((sum, group) => sum + group.rows.length, 0);
 }
+
+/** 增删行数（编辑器式文件头的 `+A` / `−R` 用；上下文行不计）。 */
+export interface DiffLineCounts {
+  added: number
+  removed: number
+}
+
+/**
+ * 一侧的行数统计：**只数 unidiff 语义的增删行**（与 git 的 `+A −R` 同口径）。
+ * 成对修改在 unidiff 里本来就是「一删一增」，所以这里不需要按行对再折算。
+ */
+export function diffLineCounts(hunks: readonly DiffHunk[]): DiffLineCounts {
+  let added = 0
+  let removed = 0
+  for (const hunk of hunks) {
+    for (const line of hunk.lines) {
+      if (line.kind === 'add') added += 1
+      else if (line.kind === 'del') removed += 1
+    }
+  }
+  return { added, removed }
+}

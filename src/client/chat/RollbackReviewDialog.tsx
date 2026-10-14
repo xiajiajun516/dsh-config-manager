@@ -34,7 +34,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as Dialog from '@radix-ui/react-dialog'
 import type { TranslateNS } from '../client-types.ts'
-import { rollbackPreviewScope } from '../../ui/rollback-view.ts'
+import { rollbackPreviewScope, rollbackSkippedSegments } from '../../ui/rollback-view.ts'
 import type {
   RollbackPointPort,
   RollbackPreviewResult,
@@ -322,6 +322,12 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
   const revertFiles = revertFilesOn(draft)
   const revertFilesEnabled = canRevertFiles(preview)
   /**
+   * 被跳过的段（C3）：工作区段不可用时引擎会跳过它、结果为 partial —— 同一份事实在设置页会
+   * 渲染（RollbackCard 的 `rollback.rewind.result.skipped`），聊天侧此前只说「部分恢复 / 恢复 0 项」，
+   * 没人告诉用户**文件一个都没退、以及为什么**。判据与设置页同源（rollbackSkippedSegments）。
+   */
+  const skippedSegments = rollbackSkippedSegments(result)
+  /**
    * t8：这条对话此刻正在运行（引擎 preview 的 `session.active`）。运行中时：
    *  · 默认档 = 只回溯消息（`defaultDraft`）；· 文件开关禁用（`canRevertFiles`）；
    *  · 带工作区段的提交不可行（`canSubmitRewind`）—— 路由层对同一信号还有一道硬拒（409）。
@@ -393,7 +399,9 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                     工作区态没有可用记录时**禁用**（那时没有文件可退，开关点了也没有区别）。 */}
                 <div className={css.previewChoiceRow}>
                   <Checkbox
-                    checked={revertFiles}
+                    // 工作区段不可用时显示为**未勾选**（C4）：勾着却禁用会让人以为「文件会退、只是改不了」，
+                    // 而实际提交的 workspace 段会被引擎跳过 —— 勾选态必须与真的会发生的事一致。
+                    checked={revertFiles && revertFilesEnabled}
                     disabled={busy || !revertFilesEnabled}
                     onChange={(next) => { setDraft((previous) => setRevertFiles(previous, next) ?? previous) }}
                     label={t('chat.preview.revertFiles')}
@@ -455,8 +463,8 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                     {inlineDiff !== null && (
                       <div className={css.inlineDiffBox}>
                         {inlineNotice !== null && <div className={css.hint}>{inlineNotice}</div>}
-                        <div className={`${css.hint} ${css.mono}`}>{inlineDiff.path}</div>
-                        <RollbackDiffPane state={inlineDiff.state} rt={rt} />
+                        {/* 路径由差异表的文件头承载（.diffFileHead）：这里不再画第二遍 */}
+                        <RollbackDiffPane state={inlineDiff.state} rt={rt} title={inlineDiff.path} />
                       </div>
                     )}
                   </>
@@ -513,6 +521,14 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                       <div className={`${css.hint} ${css.mono}`}>{rt('rollback.preview.result.code', { code: failure.code })}</div>
                     )}
                     {failure.detail !== null && <div className={css.hint}>{failure.detail}</div>}
+                  </div>
+                )}
+
+                {/* ⑤b 被跳过的段（C3）：**部分恢复时最该说的一句** —— 哪一段没做。
+                    键与设置页共用（同一条事实只有一处文案）。 */}
+                {skippedSegments.length > 0 && (
+                  <div className={css.hint}>
+                    {rt('rollback.rewind.result.skipped', { list: skippedSegments.map((row) => rt(rk(row.key))).join(' / ') })}
                   </div>
                 )}
 

@@ -57,5 +57,6 @@ export function RollbackDiffTab({ port, rt, useTabInfo }: RollbackDiffTabProps) 
     return () => { alive = false }
   }, [port, contentId])
   if (target === null) return <Empty>{rt('rollback.diff.failed')}</Empty>
-  return <RollbackDiffPane state={state} rt={rt} />
+  // 侧栏标签页的空间里没有别处写路径（标签标题会被截断），文件头由差异表自己画
+  return <RollbackDiffPane state={state} rt={rt} title={target.path} />
 }

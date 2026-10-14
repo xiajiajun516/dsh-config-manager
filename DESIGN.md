@@ -801,10 +801,13 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 文件行（`.restorePlanRow`）：状态标签（复用 `.kindTag` 四态）+ 等宽路径
     （`.restorePlanPath`，单行中段/尾部省略）+ 行数（`.restorePlanStat`）+ 展开箭头；
     不可展开的行（插件/提示/跳过）用 `.restorePlanRowStatic`（保留可读性，不置灰）。
-  - 展开后为**左右双栏对照**（`.diffTable`：行号 + 内容 ×2，`table-layout: fixed`；表头两栏之间
-    用 `.diffNoHead + .diffNoHead` 的左边框画竖线）：左=当前磁盘内容、右=快照内容；
-    成对修改 = 左 `.diffCellDel` 红底 + 右 `.diffCellAdd` 绿底，单侧增/删只着色一侧；
-    块头 `@@ -a,b +c,d @@` 用 `.diffHunkRow`。
+  - 展开后为**左右双栏对照**（`.diffTable`：行号 + 内容 ×2，`table-layout: fixed`）：左=当前磁盘内容、
+    右=快照内容；成对修改 = 左 `.diffCellDel` 红底 + 右 `.diffCellAdd` 绿底，单侧增/删只着色一侧；
+    **行号栏同样按语义着色**（`.diffNoDel` / `.diffNoAdd`：红/绿行号 + 12% 底色），并用
+    `box-shadow: inset 3px 0 0` 在**该栏左缘**画 3px 实心色条（左栏 = 整表左缘、右栏 = 两栏分界处）；
+    块头 `@@ -a,b +c,d @@` 用 `.diffHunkRow`，**两栏各一格、同一段文本**（编辑器式单文件 diff 的观感）；
+    两栏之间的竖线由 `.diffTable tbody td:nth-child(3)` + `.diffHunkRow td + td` 的左边框画（表头仍是
+    `.diffNoHead + .diffNoHead`）——只画表头会让正文两栏看起来连成一片。
     **上限**：单文件最多渲染 400 行对（超出显示「已截断」提示）；容器复用 `.diffScroll`（限高内滚）。
   - **行号列宽 = 实际最宽行号的位数**（`maxLineDigits` → `.diffNoColW3/4/5/6` 四档 ch，`<colgroup>` 固定）：
     fixed 布局下四列平分会让两条行号列吃掉一半宽度、代码列被挤到反复折行；行号列必须只占自身需要的宽度，
@@ -827,6 +830,9 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - **双栏表已抽成共享原语**（2026-10-12）：`src/client/common/DiffTable.tsx` —— 快照恢复计划与
     「回退预览 → 查看」共用同一副骨架（`.diffTable` / `.diffScroll` / `.diffCell*` / `.diffHunkRow` /
     `.diffNoColW*`），单元格文本**缺省即 redact**（`sanitize` 的缺省值就是 `redact`，调用方只能换成别的脱敏器）。
+    **2026-10-14 起多一个可选文件头** `title`（`.diffFileHead` = 路径 + `+A`/`−R`，行数由 `diffLineCounts` 现算）：
+    只在调用方**没在别处写过路径**时传 —— 回滚侧栏标签页与聊天/设置页的就地差异块传 path（它们原先各画一行
+    `.hint.mono` 路径，已由该文件头顶掉）；恢复计划行自己那格已写路径，**不传**（同一路径不画两遍）。
 - **回退预览弹窗（Cursor「Confirm Undo」式，2026-10-12 用户要求）**：底盘沿用 `.dialogCard` 宽版，
   正文顺序固定 = 汇总选择行（`.previewChoiceRow` + `.previewScope`，见 §「聊天内回退预览弹窗」）→
   会被回退的文件列表（`.rollbackFileList` 内的 `.rollbackFileRow`）→ 可选的原因/告警；

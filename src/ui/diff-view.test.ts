@@ -5,7 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { diffLines } from '../utils/line-diff.ts';
-import { countSideRows, hunkHeader, maxLineDigits, toSideBySide } from './diff-view.ts';
+import { countSideRows, diffLineCounts, hunkHeader, maxLineDigits, toSideBySide } from './diff-view.ts';
 
 test('V-01 成对修改：3 删 1 增 → 1 个 change 行对 + 2 个 del 行对（左有右空）', () => {
   const r = diffLines('a\nX1\nX2\nX3\nb', 'a\nY1\nb', { context: 1 });
@@ -54,6 +54,14 @@ test('V-06 行对总数 = 上下文 + 成对/单侧行', () => {
   const r = diffLines('1\n2\n3\n4\n5', '1\n2\nX\n4\n5', { context: 1 });
   const groups = toSideBySide(r.hunks);
   assert.equal(countSideRows(groups), 3, 'context 1 + 1 + context 1');
+});
+
+test('V-08 diffLineCounts：只数增删行（上下文不计），口径与 git 的 +A −R 一致', () => {
+  const r = diffLines('a\nX1\nX2\nX3\nb', 'a\nY1\nb', { context: 1 });
+  assert.deepEqual(diffLineCounts(r.hunks), { added: 1, removed: 3 });
+  assert.deepEqual(diffLineCounts([]), { added: 0, removed: 0 }, '无差异 → 两个 0');
+  const only = diffLines('a\nb', 'a\nNEW\nb');
+  assert.deepEqual(diffLineCounts(only.hunks), { added: 1, removed: 0 }, '纯新增不计删除');
 });
 
 test('V-07 maxLineDigits：按实际出现的最大行号取位数（列宽档位依据）', () => {
