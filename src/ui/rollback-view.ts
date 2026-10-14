@@ -320,12 +320,48 @@ export interface RollbackPointSummary {
   segments?: RollbackSegmentSummary[]
 }
 
+/**
+ * 台账占用（issue #89 P2：可观测）。
+ * `bytes` = records/ + payloads/ 的实际字节数；`budgetBytes` = 触发淘汰的字节预算；
+ * `evicted` = 本进程内被预算淘汰的自动点累计数。缺省（老宿主没这个字段）= 界面不渲染这一行。
+ */
+export interface RollbackLedgerStatus {
+  records: number
+  bytes: number
+  budgetBytes: number
+  evicted: number
+}
+
 export interface RollbackStorageStatus {
   available: boolean
   root?: string
   detail?: string
   guidance?: RollbackGuidance[]
   requirements?: readonly string[]
+  /** 磁盘偏好：回合自动留点开关（缺省 / false = 关闭） */
+  rollbackEnabled?: boolean
+  /** 本进程此刻是否真的在留点（关闭后订阅已解绑）。与 rollbackEnabled 正常一致 */
+  rollbackActive?: boolean
+  /** 台账占用（老宿主没有这个字段） */
+  ledger?: RollbackLedgerStatus
+}
+
+/** 开关读 / 写的结果（POST 成功才会改进程 gate）。 */
+export interface RollbackPrefsResult {
+  ok: boolean
+  rollbackEnabled: boolean
+  rollbackActive?: boolean
+}
+
+/** 台账清理结果（只删自动点；guard 与 protected 保留）。 */
+export interface RollbackPurgeResult {
+  ok: boolean
+  code?: string
+  detail?: string
+  removedRecords?: number
+  removedPayloads?: number
+  removedObjects?: number
+  bytes?: number
 }
 
 export interface RollbackListResult {
@@ -585,6 +621,29 @@ export interface RollbackPointPort {
   rollbackPointFileDiff?(id: string, path: string): Promise<RollbackFileDiffResult>
   restoreRollbackPoint(id: string, opts: RollbackRewindOptions): Promise<RollbackRewindResult>
   removeRollbackPoint(id: string, userConfirmed: boolean): Promise<RollbackRemoveResult>
+  /**
+   * 回合自动留点开关（issue #88：它跟配置备份/同步是两件事，必须能关）。
+   * 可选实现：端口缺失时界面**不渲染**开关（绝不给一个点了没反应的入口）。
+   */
+  rollbackPrefs?(): Promise<RollbackPrefsResult>
+  setRollbackEnabled?(enabled: boolean): Promise<RollbackPrefsResult>
+  /**
+   * 清理台账（issue #89 P1/P2：把已经涨上去的占用收回来）。
+   * **只删自动点**；`includeGuards` 为 true 时连 guard 也删，protected 永不删。
+   */
+  purgeRollbackPoints?(opts: { includeGuards: boolean }): Promise<RollbackPurgeResult>
+}
+
+/**
+ * 聊天内「↺ 回退」入口是否可见（issue #88：关闭后**收起**入口，不是置灰）。
+ *
+ * 判据只有一条：**宿主回传的开关**。老宿主（storage 响应里没有 `rollbackEnabled` 字段）按
+ * 「未提供 = 功能默认开」处理 —— 那一版的语义就是默认启用，此时把入口藏起来会让用户
+ * 「有点但没有入口」。形状不符（不是布尔）同样按「未提供」处理，绝不因为一个坏字段藏掉入口。
+ */
+export function rollbackEntryVisible(storage: RollbackStorageStatus | null | undefined): boolean {
+  if (storage === undefined || storage === null) return false
+  return storage.rollbackEnabled !== false
 }
 
 /* ------------------------------------------------------------ 内部小工具 */

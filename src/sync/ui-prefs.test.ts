@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  defaultUiPrefs, readUiPrefs, writeUiPrefs, updateUiPrefs,
+  defaultUiPrefs, readUiPrefs, writeUiPrefs, updateUiPrefs, readRollbackEnabledSync,
   UI_PREFS_FILE, UI_PREFS_SCHEMA_VERSION,
 } from './ui-prefs.ts';
 
@@ -173,4 +173,47 @@ test('更新内容弹窗状态：写入字段 → 读回一致 + 原始文件校
     assert.equal(raw.releaseNotesDismissed, true);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+/**
+ * issue #88 / #89：回合自动留点开关（`rollbackEnabled`）。
+ *
+ * 钉住四条判据：① 缺省 = 关闭（fail-closed）；②「开」才落字段、「关」即字段消失；
+ * ③ 任何非法输入（非布尔 / 坏 JSON / 不支持 schema）一律回关闭 —— 绝不猜用户想开；
+ * ④ 本地与同步两个读法一致（宿主启动期必须能同步读到同一个判据）。
+ */
+test('issue #88：rollbackEnabled 往返 + 缺省与非法值一律关闭（fail-closed）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-ui-prefs-rollback-'));
+  const file = path.join(dir, UI_PREFS_FILE);
+  try {
+    // ① 文件不存在 → 关闭
+    assert.equal(readRollbackEnabledSync(dir), false, '文件不存在 = 关闭');
+    assert.equal((await readUiPrefs(dir)).rollbackEnabled, undefined);
+
+    // ② 开 → 落字段 true；两个读法都认
+    await writeUiPrefs(dir, { schemaVersion: 1, rollbackEnabled: true });
+    assert.equal((await readUiPrefs(dir)).rollbackEnabled, true);
+    assert.equal(readRollbackEnabledSync(dir), true);
+    assert.equal(JSON.parse(await fs.readFile(file, 'utf8')).rollbackEnabled, true);
+
+    // ③ 关 → 字段消失（缺省即关），同步读法回 false
+    await writeUiPrefs(dir, { schemaVersion: 1, rollbackEnabled: false });
+    assert.equal('rollbackEnabled' in JSON.parse(await fs.readFile(file, 'utf8')), false, '关闭 = 字段消失');
+    assert.equal(readRollbackEnabledSync(dir), false);
+
+    // ④ 非法输入一律回关闭
+    for (const raw of ['{"schemaVersion":1,"rollbackEnabled":"yes"}', '{not-json', '{"schemaVersion":99,"rollbackEnabled":true}']) {
+      await fs.writeFile(file, raw, 'utf8');
+      assert.equal(readRollbackEnabledSync(dir), false, '非法输入必须回关闭：' + raw);
+      assert.equal((await readUiPrefs(dir)).rollbackEnabled, undefined, '非法输入必须回关闭：' + raw);
+    }
+
+    // ⑤ updateUiPrefs 局部合并：改开关不得冲掉其它字段（多端点共写同一文件）
+    await writeUiPrefs(dir, { schemaVersion: 1, lastSyncChannel: 'git' });
+    await updateUiPrefs(dir, { rollbackEnabled: true });
+    const merged = await readUiPrefs(dir);
+    assert.equal(merged.lastSyncChannel, 'git', '局部更新不得冲掉其它字段');
+    assert.equal(merged.rollbackEnabled, true);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 

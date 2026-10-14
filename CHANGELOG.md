@@ -32,8 +32,26 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🆕 新增 · Added
+
+- **回滚点可以关掉了**：回合自动留点默认不再开启；在「环境 → 维护与诊断」里可以随时打开或关闭，关掉后聊天里的「↺ 回退」入口一并收起。（issue #88）
+  **Rollback points can be turned off**: automatic per-turn points are off by default; turn them on or off under Environment → Maintenance & diagnostics, and the rewind entry disappears from chat while they are off.
+- **台账占用看得见、也清得掉**：回滚面板显示当前台账的点数与体积，并可一键只删自动点（救援点默认保留，要一并删需显式勾选）。（issue #89）
+  **Ledger footprint is visible and reclaimable**: the rollback panel shows how many points the ledger holds and how large it is, and can delete automatic points in one click (rescue points are kept unless you explicitly include them).
+
+### 🔧 变更 · Changed
+
+- **回滚点默认不启用**：它跟配置备份、同步是两件事，此前却随插件默认运行；升级后要显式打开才会继续留点。（issue #88）
+  **Rollback points are off by default**: they are unrelated to config backup and sync yet used to run automatically; after upgrading you must enable them explicitly for points to be kept again.
+- **回滚点库不再越用越大**：每次留点只写这一条记录，未变化的工作区清单按内容去重，超出体积预算时自动淘汰最旧的自动点 —— 单次留点的开销不再随历史总量增长。（issue #89）
+  **The rollback store no longer grows without bound**: each point writes only its own record, unchanged workspace listings are deduplicated, and the oldest automatic points are evicted past the size budget, so one point no longer costs more as history accumulates.
+
 ### 🐛 修复 · Fixed
 
+- **修回滚点把 DSH 拖到内存溢出退出**：台账曾经每回合整份读改写，涨到几百 MB 后宿主反复因内存不足而退出；现在一条一写、并有体积上限。（issue #89）
+  **Fixed DSH exiting out of memory because of rollback points**: the ledger used to be read and rewritten in full every turn and could grow to hundreds of MB until the host ran out of memory; records are now written one at a time under a size budget.
+- **清掉崩溃残留的回滚点临时文件**：非正常退出留下的临时文件会在下次启动时清理。（issue #89）
+  **Crash leftovers are cleaned up**: temporary rollback files left behind by an unclean exit are removed on the next start.
 - **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）
   **Sync diff no longer asks about credentials that already match**: keys identical to the snapshot are marked as skipped, so only the ones that actually change need confirmation; the credential badge is renamed from "missing secret" to "credential migration".
 

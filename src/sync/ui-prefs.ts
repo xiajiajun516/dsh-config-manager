@@ -21,6 +21,7 @@
  *   避免「sync/ui-prefs 写 lastSyncChannel」与「star-prompt 写弹窗状态」互相覆盖。
  */
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
@@ -60,6 +61,18 @@ export interface UiPrefs {
    * 「用户主动改配置」或「非本插件客户端」时起作用。
    */
   sessionFormatDisposition?: SessionFormatDisposition;
+  /**
+   * 回合自动留点（回滚点）总开关。**缺省 / 任何非 true 值 = 关闭**（issue #88 / #89：
+   * 该功能与「配置备份 / 同步」是两件事，却随 bundle 默认启用且没有关闭入口；
+   * 默认启用时账本每回合整份读改写，真机上把宿主拖到 V8 heap OOM）。
+   *
+   * 关闭语义（宿主侧 gate，见 src/core/rollback-gate.ts）：
+   *  · 不订阅 `session/event`（不是「订阅了什么都不做」）；
+   *  · 不留点、不写台账；
+   *  · 聊天内的「↺ 回退」入口收起（不是置灰）。
+   * 台账 / 回退路由本身仍可用：已有回滚点仍能查看、回退、删除、清理 —— 关的是「自动留点」。
+   */
+  rollbackEnabled?: boolean;
 }
 
 /** 缺省配置（首次无文件 / 损坏 / 不支持 schema 时回退） */
@@ -118,7 +131,32 @@ export async function readUiPrefs(dir: string): Promise<UiPrefs> {
   if (disposition === 'abort' || disposition === 'skip' || disposition === 'guide') {
     prefs.sessionFormatDisposition = disposition;
   }
+  // 开关只认字面 true：false / 缺省 / 形状不符一律 = 关闭（fail-closed，绝不猜用户想开）
+  if (obj['rollbackEnabled'] === true) {
+    prefs.rollbackEnabled = true;
+  }
   return prefs;
+}
+
+/**
+ * 同步读取「回滚点开关」（启动期专用）。
+ *
+ * 为什么必须有同步版本：宿主 `apply()` 是同步函数（`src/index.ts`），而开关必须在
+ * **注册订阅之前**就定下来 —— 否则「关闭」只等于「订阅了什么都不做」，与 issue 要求的
+ * 「关闭后不再订阅 `session/event`」不符。读一个几百字节的小文件，启动期一次，代价可忽略。
+ *
+ * 任何异常（不存在 / 损坏 / 形状不符）一律回 false = 关闭。
+ */
+export function readRollbackEnabledSync(dir: string): boolean {
+  try {
+    const raw = fsSync.readFileSync(path.join(dir, UI_PREFS_FILE), 'utf8');
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    const obj = parsed as Record<string, unknown>;
+    return obj['schemaVersion'] === UI_PREFS_SCHEMA_VERSION && obj['rollbackEnabled'] === true;
+  } catch {
+    return false;
+  }
 }
 
 /** 写入 UI 偏好（原子写：临时文件 + rename；自动创建目录）。 */
@@ -133,6 +171,7 @@ export async function writeUiPrefs(dir: string, prefs: UiPrefs): Promise<void> {
     ...(prefs.releaseNotesLastSeenVersion !== undefined ? { releaseNotesLastSeenVersion: prefs.releaseNotesLastSeenVersion } : {}),
     ...(prefs.releaseNotesDismissed === true ? { releaseNotesDismissed: true } : {}),
     ...(prefs.sessionFormatDisposition !== undefined ? { sessionFormatDisposition: prefs.sessionFormatDisposition } : {}),
+    ...(prefs.rollbackEnabled === true ? { rollbackEnabled: true } : {}),
   };
   const target = path.join(dir, UI_PREFS_FILE);
   const data = stringifyJsonSafe(payload, { space: 2 });

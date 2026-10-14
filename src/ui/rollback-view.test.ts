@@ -53,6 +53,7 @@ import {
   rollbackRowHasSessionCursor,
   rollbackModeKey,
   rollbackModeSegments,
+  rollbackEntryVisible,
   rollbackOutcome,
   rollbackPointRows,
   rollbackPreviewGuidance,
@@ -816,4 +817,20 @@ test('E1 类型与引擎逐字同形（源码级）：五字段 + 三种 status 
   assert.match(chat, /Omit<RollbackPreviewFile, 'status'>/, '聊天侧的预览文件行类型必须复用 UI 的唯一形状（只补运行时兜底态）')
   assert.match(chat, /type RollbackPreviewFile\b/, '复用必须来自 src/ui 的类型导入（不是又抄一份字段表）')
 })
+
+/**
+ * issue #88：聊天内「↺ 回退」入口的可见性判据。三条口径缺一不可：
+ *  ① **明确 false = 收起**（用户把这个功能关了，入口本身就不该存在）；
+ *  ② **明确 true = 显示**；
+ *  ③ **字段缺失 = 按「默认开」** —— 老宿主的语义就是默认启用，此时藏掉入口会让用户
+ *     「有点但没有入口」（那比多画一颗按钮更糟）。
+ */
+test('issue #88：rollbackEntryVisible —— false 收起 / true 显示 / 缺字段按默认开', () => {
+  assert.equal(rollbackEntryVisible({ available: true, rollbackEnabled: false }), false, '明确关闭必须收起')
+  assert.equal(rollbackEntryVisible({ available: true, rollbackEnabled: true }), true)
+  assert.equal(rollbackEntryVisible({ available: true }), true, '老宿主没有该字段 = 那一版默认开')
+  assert.equal(rollbackEntryVisible(null), false, '还没读到状态时不画入口（缺省关闭）')
+  assert.equal(rollbackEntryVisible(undefined), false)
+})
+
 

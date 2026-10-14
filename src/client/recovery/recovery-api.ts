@@ -51,6 +51,8 @@ import type {
   RollbackRemoveResult,
   RollbackRewindOptions,
   RollbackRewindResult,
+  RollbackPrefsResult,
+  RollbackPurgeResult,
   RollbackStorageStatus,
 } from '../../ui/rollback-view.ts';
 import { ConfigManagerApiError, getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
@@ -214,6 +216,32 @@ export class RecoveryApi implements RecoveryPort, RollbackPointPort {
    */
   async removeRollbackPoint(id: string, userConfirmed: boolean): Promise<RollbackRemoveResult> {
     return postJson<RollbackRemoveResult>(rollbackPointPath(id, 'delete'), { userConfirmed: userConfirmed === true }, this.t, RECOVERY_OPTS)
+  }
+
+  /**
+   * GET /recovery/rollback-points/prefs（issue #88）：读开关。
+   * `rollbackEnabled` = 磁盘偏好（用户意图，随 self 分区进备份）；
+   * `rollbackActive` = 本进程此刻是否真的在留点（关闭后订阅已解绑）。两者正常一致。
+   */
+  async rollbackPrefs(): Promise<RollbackPrefsResult> {
+    return getJson<RollbackPrefsResult>(RECOVERY_API.rollbackPointsPrefs, this.t, RECOVERY_OPTS)
+  }
+
+  /**
+   * POST /recovery/rollback-points/prefs（issue #88）：写开关。
+   * 宿主写盘成功后才切进程 gate —— 写失败却把功能打开，等于「界面说开着、实际不留点」。
+   */
+  async setRollbackEnabled(enabled: boolean): Promise<RollbackPrefsResult> {
+    return postJson<RollbackPrefsResult>(RECOVERY_API.rollbackPointsPrefs, { rollbackEnabled: enabled === true }, this.t, RECOVERY_OPTS)
+  }
+
+  /**
+   * POST /recovery/rollback-points/cleanup（issue #89）：清理台账占用。
+   * **只删自动点**；`includeGuards` 为 true 时连救援点也删（protected 永不删）。
+   * 返回逐类删除计数与释放字节，界面照实说「删了多少 / 还剩多少」。
+   */
+  async purgeRollbackPoints(opts: { includeGuards: boolean }): Promise<RollbackPurgeResult> {
+    return postJson<RollbackPurgeResult>(RECOVERY_API.rollbackPointsCleanup, { userConfirmed: true, includeGuards: opts.includeGuards === true }, this.t, RECOVERY_OPTS)
   }
 
   /** POST /recovery/sessions/rollback（T8）：按台账 repairId 回滚（客户端不传路径）。 */

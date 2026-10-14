@@ -50,6 +50,8 @@ import {
   type RollbackEngineOptions,
   type RollbackForkInput,
   type RollbackPointRecord,
+  type RollbackTrack,
+  type RollbackWorkspacePayload,
 } from './rollback-point.ts'
 import { projectKeyOf } from './session-select.ts'
 import { atomicWriteFile } from '../utils/atomic-write.ts'
@@ -130,6 +132,43 @@ function steppingClock(start: number, step: number): () => number {
 
 async function ledgerOf(engine: RollbackPointEngine): Promise<{ records: RollbackPointRecord[] }> {
   return JSON.parse(await readText(path.join(engine.storeDir, 'index.json'))) as { records: RollbackPointRecord[] }
+}
+
+/** v3 记录文件（records/<id>.json）里工作区载荷只剩一个内容寻址哈希引用 */
+interface StoredRecordFile {
+  workspace: Omit<RollbackTrack<RollbackWorkspacePayload>, 'payload'> & { payload: string | null }
+}
+
+/**
+ * v3 台账的**完整记录**读写助手（只给「记录被篡改」这类白盒用例用）。
+ *
+ * 为什么必须成对改写：v3 起完整记录在 records/<id>.json，工作区大数组在**内容寻址**的
+ * payloads/<sha256>.json（清单 index.json 里只剩元数据）。篡改必须同时改载荷与记录里的哈希引用，
+ * 否则读路径会先按「哈希不符」如实失败，就测不到下游那条判据了。
+ */
+async function readFullRecord(engine: RollbackPointEngine, id: string): Promise<RollbackPointRecord> {
+  const file = path.join(engine.storeDir, 'records', id + '.json')
+  const stored = JSON.parse(await readText(file)) as StoredRecordFile & Omit<RollbackPointRecord, 'workspace'>
+  const hash = stored.workspace.payload
+  const payload = hash === null
+    ? null
+    : JSON.parse(await readText(path.join(engine.storeDir, 'payloads', hash + '.json'))) as RollbackWorkspacePayload
+  return { ...stored, workspace: { ...stored.workspace, payload } }
+}
+
+async function writeFullRecord(engine: RollbackPointEngine, record: RollbackPointRecord): Promise<void> {
+  const file = path.join(engine.storeDir, 'records', record.id + '.json')
+  const stored = JSON.parse(await readText(file)) as Record<string, unknown>
+  const payload = record.workspace.payload
+  let hash: string | null = null
+  if (payload !== null) {
+    const text = JSON.stringify(payload)
+    hash = sha256Hex(text)
+    await fs.writeFile(path.join(engine.storeDir, 'payloads', hash + '.json'), text)
+  }
+  const workspaceRaw = stored['workspace'] as Record<string, unknown>
+  workspaceRaw['payload'] = hash
+  await fs.writeFile(file, JSON.stringify(stored))
 }
 
 /* =================================================== R-01 两态捕获 / 无 config */
@@ -992,19 +1031,17 @@ test('R-11 记录被篡改不能变成写原语：路径越界 / 指纹不符一
   const captured = await capturePoint(engine, fx)
   const record = captured.point
   assert.ok(record !== undefined)
-  const ledgerPath = path.join(engine.storeDir, 'index.json')
 
   const outside = path.join(fx.root, 'outside.txt')
   await fs.writeFile(outside, 'SAFE')
   await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2')
 
-  // 篡改 1：把记录里的路径改成分块之外的文件
-  const tampered = await ledgerOf(engine) as unknown as { records: RollbackPointRecord[] }
-  const wsFiles = tampered.records[0]?.workspace.payload?.files ?? []
-  const hit = wsFiles.find((f) => f.path.endsWith('a.txt'))
+  // 篡改 1：把记录里的路径改成分块之外的文件（同时改载荷与其哈希引用，见 writeFullRecord）
+  const tampered = await readFullRecord(engine, record.id)
+  const hit = (tampered.workspace.payload?.files ?? []).find((f) => f.path.endsWith('a.txt'))
   assert.ok(hit !== undefined)
   hit.path = outside
-  await fs.writeFile(ledgerPath, JSON.stringify(tampered, null, 2))
+  await writeFullRecord(engine, tampered)
   const rewound1 = await engine.rewind({ id: record.id, userConfirmed: true, guardPolicy: 'off' })
   assert.equal(rewound1.outcome, 'failed')
   assert.ok((rewound1.segments[0]?.detail ?? []).some((line) => line.startsWith('invalid-path')))
@@ -1012,12 +1049,12 @@ test('R-11 记录被篡改不能变成写原语：路径越界 / 指纹不符一
   assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A2', '一条不合格 → 零写入')
 
   // 篡改 2：路径合法但声明的内容指纹不符
-  const tampered2 = await ledgerOf(engine) as unknown as { records: RollbackPointRecord[] }
-  const hit2 = (tampered2.records[0]?.workspace.payload?.files ?? []).find((f) => f.sha256 === sha256Hex('A1'))
+  const tampered2 = await readFullRecord(engine, record.id)
+  const hit2 = (tampered2.workspace.payload?.files ?? []).find((f) => f.sha256 === sha256Hex('A1'))
   assert.ok(hit2 !== undefined)
   hit2.path = path.join(fx.workspaceDir, 'a.txt')   // 路径合法（分块内），只有指纹不符
   hit2.sha256 = sha256Hex('NOT-THE-CAPTURED-CONTENT')
-  await fs.writeFile(ledgerPath, JSON.stringify(tampered2, null, 2))
+  await writeFullRecord(engine, tampered2)
   const rewound2 = await engine.rewind({ id: record.id, userConfirmed: true, guardPolicy: 'off' })
   assert.equal(rewound2.outcome, 'failed')
   assert.ok((rewound2.segments[0]?.detail ?? []).some((line) => line.includes('object-hash-mismatch')))
@@ -2153,15 +2190,13 @@ test('R-33 T10：preview 的 stat 失败语义 —— 只有 ENOENT 才算「当
   const engine = makeEngine(fx)
   const captured = await capturePoint(engine, fx)
   const id = captured.point?.id ?? ''
-  const ledgerPath = path.join(engine.storeDir, 'index.json')
-  interface TamperableRecord { id: string; workspace: { payload: { files: { path: string }[] } | null } }
-  const ledger = JSON.parse(await readText(ledgerPath)) as { records: TamperableRecord[] }
-  const record = ledger.records.find((r) => r.id === id)
-  assert.ok(record !== undefined && record.workspace.payload !== null)
-  const victim = record.workspace.payload?.files.find((f) => f.path.endsWith('a.txt'))
+  // v3：完整记录在 records/<id>.json + 内容寻址载荷；篡改必须成对改写（见 writeFullRecord）
+  const tampered = await readFullRecord(engine, id)
+  assert.ok(tampered.workspace.payload !== null)
+  const victim = tampered.workspace.payload.files.find((f) => f.path.endsWith('a.txt'))
   assert.ok(victim !== undefined)
   victim.path = path.join(fx.workspaceDir, 'a' + String.fromCharCode(0) + '.txt')
-  await fs.writeFile(ledgerPath, JSON.stringify(ledger))
+  await writeFullRecord(engine, tampered)
 
   const preview = await engine.preview(id)
   assert.equal(preview.workspace.missing, 0, '非 ENOENT 的 stat 失败**不是**「当前不存在」')

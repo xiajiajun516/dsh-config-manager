@@ -75,14 +75,31 @@ import { projectKeyOf } from './session-select.ts'
 import { ignoreRelativePath, ignoreRuleMatches, loadIgnoreRules, type IgnoreRules } from './rollback-ignore-rules.ts'
 import { isSessionLogName } from '../utils/session-log.ts'
 import { decodeZstdFrame, scanZstdFrames, zstdAvailable, ZSTD_MAGIC } from '../utils/zstd-frame.ts'
+import {
+  cleanupOrphanTempFiles,
+  entrySummaryOf,
+  ROLLBACK_DEFAULT_LEDGER_BYTES,
+  RollbackLedger,
+  type RollbackLedgerManifestEntry,
+  type RollbackLedgerMigration,
+} from './rollback-ledger.ts'
 
 /* ------------------------------------------------------------------ 常量 */
 
 export const ROLLBACK_SCHEMA_VERSION = 2
 /** 回滚点库目录名（dataDir/rollback-points）——路由族 /recovery/rollback-points/* 同源 */
 export const ROLLBACK_POINTS_DIR_NAME = 'rollback-points'
+/**
+ * 台账**清单**文件名（v3，issue #89）：它只是一份小清单（元数据 + 段摘要），
+ * 完整记录在 records/<id>.json、工作区载荷在 payloads/<sha256>.json —— 清单里绝不含大数组。
+ */
 export const ROLLBACK_LEDGER_NAME = 'index.json'
 export const ROLLBACK_OBJECTS_DIR_NAME = 'objects'
+/**
+ * 台账字节预算（records/ + payloads/）的缺省值，可由 RollbackEngineOptions.ledgerBytesBudget 覆盖。
+ * 为什么需要它：ROLLBACK_MAX_RECORDS（50）只限**条数**；本机实测 50 条 = 473 MB 直接把宿主撑爆。
+ */
+export { ROLLBACK_DEFAULT_LEDGER_BYTES }
 /** 全局自动点上限（S6）；protected / guard 点不占预算、只进不出 */
 export const ROLLBACK_MAX_RECORDS = 50
 /** 每会话自动点上限（S6） */
@@ -497,12 +514,29 @@ export interface RollbackPointSummary {
   inheritedSessionId?: string | null
 }
 
+/**
+ * 台账（records/ + payloads/）的可观测快照。
+ * 路由层转发给界面时必须**照抄字段名与形状**（issue #89 的交付契约）。
+ */
+export interface RollbackLedgerStatus {
+  /** 清单里的记录条数 */
+  records: number
+  /** records/ + payloads/ 当前总字节 */
+  bytes: number
+  /** 生效的字节预算（缺省 ROLLBACK_DEFAULT_LEDGER_BYTES） */
+  budgetBytes: number
+  /** 本进程内被**预算**淘汰的自动点累计数（条数淘汰不计入） */
+  evicted: number
+}
+
 export interface RollbackStorageStatus {
   available: boolean
   root: string
   detail?: string
   guidance: RollbackGuidance[]
   requirements: readonly string[]
+  /** 新增，可选（不破坏既有构造点）；存储栈不可用时缺省 */
+  ledger?: RollbackLedgerStatus
 }
 
 /** 捕获一个回滚点的输入（宿主/测试构造；无 HTTP capture 端点） */
@@ -861,6 +895,11 @@ export interface RollbackEngineOptions {
   maxGuardsPerSession?: number
   /** **全局** guard 点上限（缺省 50，见 ROLLBACK_MAX_GUARDS；与自动点的 maxRecords 无关） */
   maxGuards?: number
+  /**
+   * 台账字节预算（records/ + payloads/ 的总字节，缺省 ROLLBACK_DEFAULT_LEDGER_BYTES）。
+   * 超预算时**只淘汰最旧的 auto 点**（guard / protected 不淘汰，沿用 selectPrune 的类别口径）。
+   */
+  ledgerBytesBudget?: number
   guardPolicy?: RollbackGuardPolicy
   /** 存储栈探针（缺省 = 真实磁盘探测）；注入失败探针可测「缺失时仍可挂载」 */
   storage?: RollbackStorageProbe
@@ -873,6 +912,12 @@ export interface RollbackEngineOptions {
    * 测试用它计数「真的读了几次」，从而钉住路径身份缓存命中时**零重读**。
    */
   readFile?: (target: string) => Promise<Uint8Array>
+  /**
+   * 台账读盘观测 seam（缺省不观测）：每次「读一条记录文件 / 一份载荷文件」前回调一次。
+   * 与 readFile seam 同一用途 —— 测试用它**确定性地**计数「一次留点到底读了几份记录」，
+   * 而不是靠无法复现的堆采样（issue #89 的内存护栏）。
+   */
+  ledgerReadFile?: (file: string) => void
   /** E1：预览行级统计的规模上限（缺省见 ROLLBACK_PREVIEW_DIFF_*）；注入小值即可确定性地覆盖 truncated 分支 */
   previewDiffMaxFileBytes?: number
   previewDiffMaxTotalBytes?: number
@@ -1348,8 +1393,19 @@ export class RollbackPointEngine {
   private forkLinksComplete = true
   /** 会话日志头缓存（mtime + size 失效；只服务 fork 链扫描） */
   private readonly forkHeaderCache = new Map<string, { mtimeMs: number; size: number; header: SessionForkHeader | null }>()
-  /** 继承判据用的台账快照（TTL 缓存；避免每个 turn/start 都读整份台账） */
-  private ledgerSnapshotCache: { at: number; records: RollbackPointRecord[] } | null = null
+  /** 继承判据用的台账快照（TTL 缓存；只缓存**清单条目**，绝不缓存完整记录） */
+  private ledgerSnapshotCache: { at: number; entries: RollbackLedgerManifestEntry[] } | null = null
+  /** 台账存储层（v3：清单 + 单条记录 + 内容寻址载荷；issue #89） */
+  private readonly ledger: RollbackLedger
+  private readonly ledgerBytesBudget: number
+  /**
+   * 启动期一次性初始化（流式迁移 v2 -> v3 + 孤儿 tmp 清理）的惰性单飞。
+   * 为什么惰取而不是构造时同步跑：构造发生在每个请求路径上，同步扫盘/迁移会把请求卡死；
+   * 而「每回合都扫一遍」正是要避免的浪费 —— 所以只跑一次并记住结果。
+   */
+  private initPromise: Promise<void> | null = null
+  /** 启动期初始化失败的如实记录（读路径必须报出来，绝不假装台账是空的） */
+  private initError: string | undefined
 
   constructor(options: RollbackEngineOptions) {
     this.dataDir = path.resolve(options.dataDir)
@@ -1380,6 +1436,17 @@ export class RollbackPointEngine {
     this.previewDiffMaxWork = options.previewDiffMaxWork ?? ROLLBACK_PREVIEW_DIFF_MAX_WORK
     this.previewDiffTotalWork = options.previewDiffTotalWork ?? ROLLBACK_PREVIEW_DIFF_TOTAL_WORK
     this.log = options.log
+    this.ledgerBytesBudget = options.ledgerBytesBudget ?? ROLLBACK_DEFAULT_LEDGER_BYTES
+    this.ledger = new RollbackLedger({
+      root: this.root,
+      bytesBudget: this.ledgerBytesBudget,
+      // 摘要与记录校验的单一事实源都在本模块：注入而不是反向 import，避免运行期循环依赖
+      summarize: summarizeRollbackPoint,
+      isLedgerRecord: isRollbackPointRecord,
+      now: () => this.stamp(),
+      log: (line) => this.warn(line),
+      onFileRead: options.ledgerReadFile,
+    })
   }
 
   /** 回滚点库根目录（只读侦察用；写路径全部经本类的门） */
@@ -1436,8 +1503,48 @@ export class RollbackPointEngine {
 
   /* ---------------------------------------------------------- 存储栈探针 */
 
+  /**
+   * 启动期一次性初始化（惰性单飞）：先**流式**迁移 v2 单文件 -> v3，再清理崩溃残留的原子写 tmp。
+   *
+   * 为什么惰取而不是在构造里同步跑：引擎在每个请求路径上都会被新建（路由层不缓存引擎），
+   * 构造里同步扫盘/迁移会把请求卡死；而「每回合扫一遍」又是纯浪费 —— 所以只跑一次并记住结果。
+   * 迁移失败**不抛**：如实记进 initError，由读路径报出来，并**拒写**（绝不覆盖还没迁完的 v2 文件）。
+   */
+  private async ensureReady(): Promise<void> {
+    if (this.initPromise === null) this.initPromise = this.runInit()
+    await this.initPromise
+  }
+
+  private async runInit(): Promise<void> {
+    let migration: RollbackLedgerMigration
+    try {
+      migration = await this.ledger.migrateIfNeeded()
+    } catch (error) {
+      this.initError = 'ledger unreadable: ' + errorDetail(error)
+      return
+    }
+    if (migration.error !== undefined) {
+      this.initError = migration.error
+      this.warn('rollback ledger migration failed: ' + migration.error)
+      return
+    }
+    if (migration.migrated) {
+      this.warn('rollback ledger migrated: records=' + String(migration.records) + ' skipped=' + String(migration.skipped))
+    }
+    // 迁移**之后**再清残留：连本次迁移自己的 tmp 一并收掉（只放行可自证形状的崩溃残留）
+    try {
+      const cleaned = await cleanupOrphanTempFiles(this.root)
+      if (cleaned.removed > 0) {
+        this.warn('rollback temp cleanup: removed=' + String(cleaned.removed) + ' bytes=' + String(cleaned.bytes) + ' skipped=' + String(cleaned.skipped))
+      }
+    } catch (error) {
+      this.warn('rollback temp cleanup failed: ' + errorDetail(error))
+    }
+  }
+
   async storageStatus(): Promise<RollbackStorageStatus> {
     const base = { root: this.root, requirements: ROLLBACK_STORAGE_REQUIREMENTS }
+    await this.ensureReady()
     let result: { ok: true } | { ok: false; detail: string }
     if (this.probe !== undefined) {
       try {
@@ -1448,8 +1555,35 @@ export class RollbackPointEngine {
     } else {
       result = await defaultStorageProbe(this.root)
     }
-    if (result.ok) return { ...base, available: true, guidance: [] }
-    return { ...base, available: false, detail: result.detail, guidance: storageGuidance(this.root, result.detail) }
+    if (!result.ok) {
+      return { ...base, available: false, detail: result.detail, guidance: storageGuidance(this.root, result.detail) }
+    }
+    const out: RollbackStorageStatus = { ...base, available: true, guidance: [] }
+    const ledger = await this.ledgerStatus()
+    if (ledger !== undefined) out.ledger = ledger
+    if (this.initError !== undefined) {
+      // 磁盘本身没问题，但台账读不出来（迁移失败 / 迁到一半被别人占着）：如实上屏，不谎报可用
+      out.detail = this.initError
+      out.guidance = storageGuidance(this.root, this.initError)
+    }
+    return out
+  }
+
+  /** 台账可观测快照（清单条数 + 磁盘字节 + 预算 + 本进程淘汰计数） */
+  private async ledgerStatus(): Promise<RollbackLedgerStatus | undefined> {
+    try {
+      const manifest = await this.ledger.readManifest()
+      const stats = await this.ledger.stats()
+      return {
+        records: manifest.entries.length,
+        bytes: stats.bytes,
+        budgetBytes: this.ledgerBytesBudget,
+        evicted: this.ledger.evictedCount,
+      }
+    } catch (error) {
+      this.warn('rollback ledger status failed: ' + errorDetail(error))
+      return undefined
+    }
   }
 
   /* -------------------------------------------------------------- 对象仓 */
@@ -1960,27 +2094,27 @@ export class RollbackPointEngine {
 
   /* -------------------------------------------------------------- 台账 */
 
-  private async readLedger(): Promise<{ records: RollbackPointRecord[]; error?: string }> {
-    let raw: string
-    try {
-      raw = await fs.readFile(this.ledgerPath, 'utf8')
-    } catch (error) {
-      // 不存在 = 首次使用（不是错误）；其它读失败如实回报
-      const code = (error as { code?: unknown }).code
-      if (code === 'ENOENT') return { records: [] }
-      return { records: [], error: errorDetail(error) }
-    }
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!isRecord(parsed)) return { records: [], error: 'ledger shape invalid' }
-      const list = parsed['records']
-      if (!Array.isArray(list)) return { records: [], error: 'ledger.records invalid' }
-      const records = list.filter(isRollbackPointRecord)
-      const skipped = list.length - records.length
-      return skipped > 0 ? { records, error: 'ledger dropped ' + String(skipped) + ' invalid record(s)' } : { records }
-    } catch (error) {
-      return { records: [], error: 'ledger unreadable: ' + errorDetail(error) }
-    }
+  /**
+   * 读台账**清单**（只读元数据 + 段摘要；代价与工作区文件数**无关**）。
+   *
+   * 与 v2 的差别只在实现：v2 每回合把整份 index.json 读进内存并 parse（473 MB 那条路），
+   * v3 读的是一份小清单。**外部语义一个字没变**：返回 entries + 同一套 error 文案。
+   * 启动期初始化失败时如实回报（不读 v2 文件、不假装台账为空）。
+   */
+  private async readManifest(): Promise<{ entries: RollbackLedgerManifestEntry[]; error?: string }> {
+    await this.ensureReady()
+    if (this.initError !== undefined) return { entries: [], error: this.initError }
+    return await this.ledger.readManifest()
+  }
+
+  /**
+   * 读**完整**记录（引用解析对调用方透明）。失败一律如实回报，**绝不返回半个记录**：
+   * 载荷缺失 / 哈希不符 / 形状不符 ⇒ error（调用方走 record-incomplete 路径）。
+   */
+  private async readFullRecord(id: string): Promise<{ record?: RollbackPointRecord; error?: string }> {
+    await this.ensureReady()
+    if (this.initError !== undefined) return { error: this.initError }
+    return await this.ledger.readRecord(id)
   }
 
   /**
@@ -1992,77 +2126,136 @@ export class RollbackPointEngine {
    * | guard 救援点 | 每会话 `maxGuardsPerSession`（20）→ 全局 `maxGuards`（`ROLLBACK_MAX_GUARDS`，50） | **不占**自动点预算、**不受**自动点的 20/50 影响；用户删不掉 ⇒ 必须有自己的两道预算（单会话挡住不够，跨会话也要收敛） |
    * | protected 点 | 无上限（只进不出） | 生产路径**造不出来**（capture 端点已下线、tracker 从不设 protect），只有测试能造 |
    */
-  private selectPrune(records: readonly RollbackPointRecord[]): { kept: RollbackPointRecord[]; removed: string[] } {
-    const kept: RollbackPointRecord[] = []
-    const guards: RollbackPointRecord[] = []
-    const prunable: RollbackPointRecord[] = []
-    for (const record of records) {
-      if (record.protected) kept.push(record)
-      else if (record.kind === 'guard') guards.push(record)
-      else prunable.push(record)
+  /**
+   * 条数淘汰（口径与 v2 逐字相同，只是从「记录」换成「清单条目」）：三类点各按各的预算裁，**只删最旧的**。
+   *
+   * | 类别 | 预算 | 说明 |
+   * |---|---|---|
+   * | auto 自动点 | 每会话 maxRecordsPerSession（20）→ 全局 maxRecords（50） | 两次裁剪都只删最旧 |
+   * | guard 救援点 | 每会话 maxGuardsPerSession（20）→ 全局 maxGuards（ROLLBACK_MAX_GUARDS，50） | **不占**自动点预算、**不受**自动点的 20/50 影响；用户删不掉 ⇒ 必须有自己的两道预算（单会话挡住不够，跨会话也要收敛） |
+   * | protected 点 | 无上限（只进不出） | 生产路径**造不出来**（capture 端点已下线、tracker 从不设 protect），只有测试能造 |
+   */
+  private selectPruneEntries(entries: readonly RollbackLedgerManifestEntry[]): { kept: RollbackLedgerManifestEntry[]; removed: string[] } {
+    const kept: RollbackLedgerManifestEntry[] = []
+    const guards: RollbackLedgerManifestEntry[] = []
+    const prunable: RollbackLedgerManifestEntry[] = []
+    for (const entry of entries) {
+      if (entry.protected) kept.push(entry)
+      else if (entry.kind === 'guard') guards.push(entry)
+      else prunable.push(entry)
     }
     // 最新在前（下面三类裁剪共用同一排序口径）
-    const newestFirst = (a: RollbackPointRecord, b: RollbackPointRecord): number =>
+    const newestFirst = (a: RollbackLedgerManifestEntry, b: RollbackLedgerManifestEntry): number =>
       a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0
     // guard：先每会话各自保留最近 maxGuardsPerSession 个，再全局保留最近 maxGuards 个
     // （guards 已按 newestFirst 排序，withinGuardSession 保持同序 ⇒ 两轮裁掉的都是「最旧的」）
     guards.sort(newestFirst)
     const guardsPerSession = new Map<string, number>()
-    const withinGuardSession: RollbackPointRecord[] = []
-    for (const record of guards) {
-      const key = record.sessionId ?? ''
+    const withinGuardSession: RollbackLedgerManifestEntry[] = []
+    for (const entry of guards) {
+      const key = entry.sessionId ?? ''
       const used = guardsPerSession.get(key) ?? 0
       if (used >= this.maxGuardsPerSession) continue
       guardsPerSession.set(key, used + 1)
-      withinGuardSession.push(record)
+      withinGuardSession.push(entry)
     }
     kept.push(...withinGuardSession.slice(0, Math.max(0, this.maxGuards)))
     // 自动点：先每会话上限，再全局上限
     prunable.sort(newestFirst)
     const perSession = new Map<string, number>()
-    const withinSession: RollbackPointRecord[] = []
-    for (const record of prunable) {
-      const key = record.sessionId ?? ''
+    const withinSession: RollbackLedgerManifestEntry[] = []
+    for (const entry of prunable) {
+      const key = entry.sessionId ?? ''
       const used = perSession.get(key) ?? 0
       if (used >= this.maxRecordsPerSession) continue
       perSession.set(key, used + 1)
-      withinSession.push(record)
+      withinSession.push(entry)
     }
     kept.push(...withinSession.slice(0, Math.max(0, this.maxRecords)))
     const keptIds = new Set(kept.map((r) => r.id))
-    const removed = records.filter((r) => !keptIds.has(r.id)).map((r) => r.id)
+    const removed = entries.filter((r) => !keptIds.has(r.id)).map((r) => r.id)
     return { kept, removed }
   }
 
-  private async gcObjects(records: readonly RollbackPointRecord[]): Promise<void> {
-    const referenced = new Set<string>()
-    const referencedPaths = new Set<string>()
-    for (const record of records) {
-      for (const file of record.workspace.payload?.files ?? []) {
-        referenced.add(file.object)
-        referencedPaths.add(pathKey(file.path))
-      }
-      const pathIndex = record.workspace.payload?.pathIndex
-      if (pathIndex !== null && pathIndex !== undefined) referenced.add(pathIndex.object)
-      const sessionObject = record.session.payload?.object
-      if (sessionObject !== null && sessionObject !== undefined) referenced.add(sessionObject)
+  /**
+   * 字节预算淘汰（issue #89 的**根因修复**）：条数没超、字节超了照样会 OOM。
+   *
+   * 判据与条数淘汰共用同一类别口径：**只淘汰最旧的 auto 点**（guard / protected 永不淘汰）。
+   * 释放量按「记录文件字节 + 载荷**最后一个引用**消失时的载荷字节」估算（引用计数靠清单，不读载荷）。
+   * 返回淘汰后的清单（调用方负责落盘与删文件）。
+   */
+  private async applyByteBudget(
+    all: readonly RollbackLedgerManifestEntry[],
+    keptInput: readonly RollbackLedgerManifestEntry[],
+    extraBytes: number,
+    protectedNewId: string | null,
+  ): Promise<RollbackLedgerManifestEntry[]> {
+    const kept = [...keptInput]
+    // 基线口径（**精确**，不用估算）：当前磁盘字节 - 本次已定要删的条目所占字节 + 本次新增字节。
+    // 「已定要删」= 条数淘汰掉的（它们的文件马上会被删），所以不能拿 stats.bytes 当基线。
+    const keptIds = new Set(kept.map((entry) => entry.id))
+    const keptPayloads = new Set<string>()
+    for (const entry of kept) {
+      if (entry.workspace.payload !== null) keptPayloads.add(entry.workspace.payload)
     }
-    let names: string[]
-    try {
-      names = await fs.readdir(this.objectsDir)
-    } catch {
+    let freed = 0
+    const freedPayloads = new Set<string>()
+    for (const entry of all) {
+      if (keptIds.has(entry.id)) continue
+      freed += entry.recordBytes
+      const hash = entry.workspace.payload
+      if (hash !== null && !keptPayloads.has(hash) && !freedPayloads.has(hash)) {
+        freedPayloads.add(hash)
+        freed += entry.workspace.payloadBytes
+      }
+    }
+    const stats = await this.ledger.stats()
+    let bytes = stats.bytes - freed + extraBytes
+    if (bytes <= this.ledgerBytesBudget) return kept
+    const refs = new Map<string, number>()
+    for (const entry of kept) {
+      const hash = entry.workspace.payload
+      if (hash !== null) refs.set(hash, (refs.get(hash) ?? 0) + 1)
+    }
+    const candidates = kept
+      .filter((entry) => !entry.protected && entry.kind === 'auto' && entry.id !== protectedNewId)
+      .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+    const victims = new Set<string>()
+    for (const entry of candidates) {
+      if (bytes <= this.ledgerBytesBudget) break
+      victims.add(entry.id)
+      const index = kept.findIndex((item) => item.id === entry.id)
+      if (index >= 0) kept.splice(index, 1)
+      bytes -= entry.recordBytes
+      const hash = entry.workspace.payload
+      if (hash !== null) {
+        const left = (refs.get(hash) ?? 1) - 1
+        refs.set(hash, left)
+        if (left <= 0) bytes -= entry.workspace.payloadBytes
+      }
+    }
+    if (victims.size === 0) return kept
+    this.ledger.markEvicted(victims.size)
+    this.warn('rollback ledger over budget: evicted=' + String(victims.size) + ' bytes=' + String(bytes) + ' budget=' + String(this.ledgerBytesBudget))
+    return kept
+  }
+
+  /**
+   * 对象仓回收（**重写版**，issue #89）：账本字节数不再进内存。
+   *
+   * 旧实现要从「内存里所有记录的全部 files 数组」累计引用 ⇒ 回收一次 = 把整份台账读进内存。
+   * 现在：扫**清单** -> 逐个读引用到的**载荷文件**（一次只驻留一份）-> 累计 referenced 对象键 -> 扫 objects/。
+   * 峰值内存 ∝ 单份载荷 + 对象键集合，**不 ∝ 台账总字节**。
+   * 任何一份被引用的载荷读不出来 ⇒ 整体放弃回收（fail-closed：读不到的载荷里有什么对象谁也不知道）。
+   */
+  private async gcObjects(entries: readonly RollbackLedgerManifestEntry[]): Promise<void> {
+    const result = await this.ledger.collectObjects(entries)
+    if (result.aborted !== null) {
+      this.warn('rollback gc skipped: ' + result.aborted)
       return
     }
-    for (const name of names) {
-      if (!OBJECT_KEY_RE.test(name) || referenced.has(name)) continue
-      try {
-        await fs.rm(path.join(this.objectsDir, name), { force: true })
-      } catch (error) {
-        this.warn('rollback gc failed: ' + name + ' ' + errorDetail(error))
-      }
-    }
     // 路径身份缓存随引用回收：没有任何回滚点引用的路径不留条目（不无界增长）
-    await this.gcPathCache(referencedPaths)
+    await this.gcPathCache(new Set([...result.referencedPaths].map(pathKey)))
   }
 
   /**
@@ -2071,17 +2264,42 @@ export class RollbackPointEngine {
    */
   private async appendRecord(record: RollbackPointRecord): Promise<{ ok: boolean; detail?: string }> {
     return await withLedgerWriteLock(this.ledgerPath, async () => {
-      const ledger = await this.readLedger()
-      const merged = [record, ...ledger.records.filter((r) => r.id !== record.id)]
-      const { kept } = this.selectPrune(merged)
+      const manifest = await this.readManifest()
+      if (this.initError !== undefined) {
+        // 台账还有 v2 没迁完（或迁移失败）：**拒写**，绝不覆盖原文件（下次启动重试）
+        return { ok: false, detail: this.initError }
+      }
+      const prepared = this.ledger.prepareRecord(record)
+      const merged = [prepared.entry, ...manifest.entries.filter((r) => r.id !== record.id)]
+      const pruned = this.selectPruneEntries(merged)
+      // 本次新增字节：记录文件 + **首次落盘**的载荷（同一工作区态已存在 ⇒ 零额外字节）
+      const payloadIsNew = prepared.payloadHash !== null && !(await this.ledger.hasPayload(prepared.payloadHash))
+      const extraBytes = prepared.entry.recordBytes + (payloadIsNew ? prepared.entry.workspace.payloadBytes : 0)
+      // 刚写入的这一条不参与本轮字节淘汰（否则 capturePoint 会回一个台账里查不到的幽灵点）
+      const kept = await this.applyByteBudget(merged, pruned.kept, extraBytes, prepared.entry.id)
       kept.sort((a, b) => (a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0))
       try {
         await fs.mkdir(this.root, { recursive: true })
-        await atomicWriteFile(this.ledgerPath, JSON.stringify({ schemaVersion: ROLLBACK_SCHEMA_VERSION, records: kept }, null, 2))
+        await this.ledger.writePrepared(prepared)
       } catch (error) {
         return { ok: false, detail: errorDetail(error) }
       }
-      await this.gcObjects(kept)
+      try {
+        await this.ledger.writeManifest(kept)
+      } catch (error) {
+        // 清单没写成 ⇒ 这一条**不算落进台账**：撤掉刚落的记录文件与无人引用的载荷（不留半截）
+        await this.ledger.deleteRecords([prepared.entry.id])
+        await this.ledger.prunePayloads(manifest.entries)
+        return { ok: false, detail: errorDetail(error) }
+      }
+      const keptIds = new Set(kept.map((entry) => entry.id))
+      const dropped = merged.filter((entry) => !keptIds.has(entry.id)).map((entry) => entry.id)
+      await this.ledger.deleteRecords(dropped)
+      await this.ledger.prunePayloads(kept)
+      // **只在真的淘汰了记录时**才扫对象仓：对象回收需要逐份读被引用的载荷（代价 ∝ 载荷总量），
+      // 而没有淘汰时不可能产生无人引用的对象 —— 每回合都扫一遍等于把「读全账本」搬进了留点热路径
+      // （issue #89 正是要消灭这条路）。删除点 / 预算淘汰 / 清理入口都会走到这里。
+      if (dropped.length > 0) await this.gcObjects(kept)
       return { ok: true }
     })
   }
@@ -2167,14 +2385,14 @@ export class RollbackPointEngine {
   }
 
   /** 台账快照（TTL；继承判据用 —— 只读、失败按空台账处理，绝不因此拒绝留点）。 */
-  private async ledgerSnapshot(): Promise<RollbackPointRecord[]> {
+  private async ledgerSnapshot(): Promise<RollbackLedgerManifestEntry[]> {
     const now = this.stamp()
     if (this.ledgerSnapshotCache !== null && now - this.ledgerSnapshotCache.at < ROLLBACK_INHERITED_LEDGER_TTL_MS) {
-      return this.ledgerSnapshotCache.records
+      return this.ledgerSnapshotCache.entries
     }
-    const ledger = await this.readLedger()
-    this.ledgerSnapshotCache = { at: now, records: ledger.records }
-    return ledger.records
+    const ledger = await this.readManifest()
+    this.ledgerSnapshotCache = { at: now, entries: ledger.entries }
+    return ledger.entries
   }
 
   /**
@@ -2190,7 +2408,7 @@ export class RollbackPointEngine {
     const records = await this.ledgerSnapshot()
     for (const ancestor of ancestors) {
       const hit = records.find((r) => r.sessionId === ancestor && r.turnSeq === turn)
-      if (hit !== undefined) return summarizeRollbackPoint(hit)
+      if (hit !== undefined) return entrySummaryOf(hit)
     }
     return null
   }
@@ -2214,13 +2432,13 @@ export class RollbackPointEngine {
    * 任何东西），而 fork 子会话与父会话在**同一个项目键**下（fork 不改 cwd）⇒ 覆盖这点就够了。
    * 台账空 ⇒ 直接返回（零扫描，热路径零代价）；结果按 {@link ROLLBACK_FORK_LINKS_TTL_MS} 缓存。
    */
-  private async refreshForkLinks(records: readonly RollbackPointRecord[]): Promise<void> {
+  private async refreshForkLinks(entries: readonly RollbackLedgerManifestEntry[]): Promise<void> {
     const now = this.stamp()
     if (this.forkLinksAt !== 0 && now - this.forkLinksAt < ROLLBACK_FORK_LINKS_TTL_MS) return
     this.forkLinksAt = now
     const projectKeys = new Set<string>()
-    for (const record of records) {
-      const key = unitProjectKeyOf(record.unitId)
+    for (const entry of entries) {
+      const key = unitProjectKeyOf(entry.unitId)
       if (key !== null) projectKeys.add(key)
     }
     if (projectKeys.size === 0) {
@@ -2270,13 +2488,13 @@ export class RollbackPointEngine {
    *  · `inheritedFrom` / `inheritedSessionId` 如实标出它的来处。
    * 有界（{@link ROLLBACK_INHERITED_VIEW_MAX}），超出如实标记。
    */
-  private inheritedViews(records: readonly RollbackPointRecord[]): { entries: RollbackPointSummary[]; truncated: boolean } {
+  private inheritedViews(manifest: readonly RollbackLedgerManifestEntry[]): { entries: RollbackPointSummary[]; truncated: boolean } {
     const entries: RollbackPointSummary[] = []
     let truncated = false
     const ownTurnsOf = (sessionId: string): Set<number> => {
       const out = new Set<number>()
-      for (const record of records) {
-        if (record.sessionId === sessionId && record.turnSeq !== null) out.add(record.turnSeq)
+      for (const entry of manifest) {
+        if (entry.sessionId === sessionId && entry.turnSeq !== null) out.add(entry.turnSeq)
       }
       return out
     }
@@ -2285,16 +2503,17 @@ export class RollbackPointEngine {
       if (chain.length === 0) continue
       const own = ownTurnsOf(child)
       for (const ancestor of chain) {
-        for (const record of records) {
-          if (record.sessionId !== ancestor || record.turnSeq === null) continue
-          if (own.has(record.turnSeq)) continue // 本会话自己有这一回合的点 ⇒ 用自己那个
+        for (const entry of manifest) {
+          if (entry.sessionId !== ancestor || entry.turnSeq === null) continue
+          if (own.has(entry.turnSeq)) continue // 本会话自己有这一回合的点 ⇒ 用自己那个
           if (entries.length >= ROLLBACK_INHERITED_VIEW_MAX) { truncated = true; break }
           entries.push({
-            ...summarizeRollbackPoint(record),
+            // 段摘要来自清单里**写入时算好**的那份（口径仍是 summarizeRollbackPoint）
+            ...entrySummaryOf(entry),
             sessionId: child,
-            unitId: childUnitIdOf(record.unitId, child),
-            inheritedFrom: record.id,
-            inheritedSessionId: record.sessionId,
+            unitId: childUnitIdOf(entry.unitId, child),
+            inheritedFrom: entry.id,
+            inheritedSessionId: entry.sessionId,
           })
         }
         if (truncated) break
@@ -2308,12 +2527,13 @@ export class RollbackPointEngine {
 
   async list(): Promise<RollbackListResult> {
     const storage = await this.storageStatus()
-    const ledger = await this.readLedger()
-    await this.refreshForkLinks(ledger.records)
-    const points = [...ledger.records]
+    const ledger = await this.readManifest()
+    await this.refreshForkLinks(ledger.entries)
+    // v3：列表**只读清单**（元数据 + 写入时算好的段摘要）—— 一个记录文件都不读（issue #89 的内存护栏）
+    const points = [...ledger.entries]
       .sort((a, b) => (a.createdAt > b.createdAt ? -1 : a.createdAt < b.createdAt ? 1 : 0))
-      .map(summarizeRollbackPoint)
-    const inherited = this.inheritedViews(ledger.records)
+      .map(entrySummaryOf)
+    const inherited = this.inheritedViews(ledger.entries)
     const out: RollbackListResult = {
       ok: storage.available,
       storage,
@@ -2331,14 +2551,24 @@ export class RollbackPointEngine {
 
   async read(id: string): Promise<{ point?: RollbackPointRecord; records: RollbackPointRecord[]; error?: string; storage: RollbackStorageStatus }> {
     const storage = await this.storageStatus()
-    const ledger = await this.readLedger()
-    const point = ledger.records.find((r) => r.id === id)
+    const ledger = await this.readManifest()
+    const entry = ledger.entries.find((r) => r.id === id)
+    // v3：records 只回传命中的那一条 —— 调用方只用 point；逐条读全部记录文件是不可接受的代价
     const out: { point?: RollbackPointRecord; records: RollbackPointRecord[]; error?: string; storage: RollbackStorageStatus } = {
-      records: ledger.records,
+      records: [],
       storage,
     }
-    if (point !== undefined) out.point = point
-    if (ledger.error !== undefined) out.error = ledger.error
+    let error = ledger.error
+    if (entry !== undefined) {
+      const resolved = await this.readFullRecord(entry.id)
+      if (resolved.record !== undefined) {
+        out.point = resolved.record
+        out.records = [resolved.record]
+      } else if (resolved.error !== undefined) {
+        error = error === undefined ? resolved.error : error + '; ' + resolved.error
+      }
+    }
+    if (error !== undefined) out.error = error
     return out
   }
 
@@ -2528,7 +2758,7 @@ export class RollbackPointEngine {
   /** 只读预览：零写入（不过确认门、不拍 guard、不写任何字节）。 */
   async preview(id: string): Promise<RollbackPreviewResult> {
     const storage = await this.storageStatus()
-    const ledger = await this.readLedger()
+    const ledger = await this.readManifest()
     const warnings: RollbackGuidance[] = []
     if (ledger.error !== undefined) warnings.push({ code: 'rollback.warn.ledgerUnreadable', detail: ledger.error })
     const workspace: RollbackPreviewWorkspace = {
@@ -2551,8 +2781,17 @@ export class RollbackPointEngine {
     if (!storage.available) {
       return { ...base, code: 'storage-unavailable', detail: storage.detail, guidance: storage.guidance }
     }
-    const record = ledger.records.find((r) => r.id === id)
-    if (record === undefined) return { ...base, code: 'record-not-found' }
+    const entry = ledger.entries.find((r) => r.id === id)
+    if (entry === undefined) return { ...base, code: 'record-not-found' }
+    const resolved = await this.readFullRecord(entry.id)
+    if (resolved.record === undefined) {
+      // 引用解析失败（载荷文件缺失 / 哈希不符 / 形状不符）：**如实失败** —— 绝不拿半个记录去预览
+      // （半个记录会让「可回退」看起来成立，然后回退真的写错文件）
+      const detail = resolved.error ?? 'record-incomplete'
+      warnings.push({ code: 'rollback.warn.ledgerUnreadable', detail })
+      return { ...base, code: 'record-incomplete', detail }
+    }
+    const record = resolved.record
     for (const guidance of this.trackWarnings(record)) warnings.push(guidance)
 
     // 工作区态
@@ -2719,9 +2958,15 @@ export class RollbackPointEngine {
     const storage = await this.storageStatus()
     if (!storage.available) return { ...base, code: 'storage-unavailable', detail: storage.detail }
     if (filePath === '') return { ...base, detail: 'empty-path' }
-    const ledger = await this.readLedger()
-    const record = ledger.records.find((r) => r.id === id)
-    if (record === undefined) return { ...base, code: 'record-not-found' }
+    const ledger = await this.readManifest()
+    const entry = ledger.entries.find((r) => r.id === id)
+    if (entry === undefined) return { ...base, code: 'record-not-found' }
+    const resolved = await this.readFullRecord(entry.id)
+    if (resolved.record === undefined) {
+      // 引用解析失败：**如实失败**（RollbackFileDiffResult 没有 warnings 槽位，用 detail 说清楚）
+      return { ...base, code: 'record-incomplete', detail: resolved.error ?? 'record-incomplete' }
+    }
+    const record = resolved.record
     const payload = record.workspace.payload
     if (!record.workspace.ok || payload === null) {
       const detail = record.workspace.reasonDetail
@@ -2828,12 +3073,20 @@ export class RollbackPointEngine {
     if (!storage.available) {
       return this.result({ outcome: 'failed', code: 'storage-unavailable', detail: storage.detail, id: input.id, storage, guidance: storage.guidance })
     }
-    const ledger = await this.readLedger()
+    const ledger = await this.readManifest()
     if (ledger.error !== undefined) warnings.push({ code: 'rollback.warn.ledgerUnreadable', detail: ledger.error })
-    const record = ledger.records.find((r) => r.id === input.id)
-    if (record === undefined) {
+    const entry = ledger.entries.find((r) => r.id === input.id)
+    if (entry === undefined) {
       return this.result({ outcome: 'failed', code: 'record-not-found', id: input.id, storage, warnings })
     }
+    const resolved = await this.readFullRecord(entry.id)
+    if (resolved.record === undefined) {
+      // 记录读不完整（载荷缺失 / 哈希不符 / 形状不符）：**零写入**失败，绝不拿半个记录去回退
+      const detail = resolved.error ?? 'record-incomplete'
+      warnings.push({ code: 'rollback.warn.ledgerUnreadable', detail })
+      return this.result({ outcome: 'failed', code: 'record-incomplete', detail, id: input.id, storage, warnings })
+    }
+    const record = resolved.record
     // 门 1（fail-closed 确认门）：必须恰好 true
     if (input.userConfirmed !== true) {
       return this.result({ outcome: 'denied', code: 'confirmation-required', detail: 'userConfirmed!==true', id: input.id, storage, warnings })
@@ -3285,21 +3538,86 @@ export class RollbackPointEngine {
     const storage = await this.storageStatus()
     if (!storage.available) return { ok: false, code: 'storage-unavailable', detail: storage.detail, id }
     return await withLedgerWriteLock<RollbackRemoveResult>(this.ledgerPath, async () => {
-      const ledger = await this.readLedger()
-      const record = ledger.records.find((r) => r.id === id)
-      if (record === undefined) return { ok: false, code: 'record-not-found', id }
-      if (record.protected || record.kind === 'guard') {
-        return { ok: false, code: 'protected-point', detail: record.kind, id }
+      const ledger = await this.readManifest()
+      if (this.initError !== undefined) {
+        return { ok: false, code: 'ledger-write-failed', detail: this.initError, id }
       }
-      const kept = ledger.records.filter((r) => r.id !== id)
+      // 删除只看**清单元数据**（protected / kind 都在清单里）—— 一个记录文件都不读、一个载荷都不读
+      const entry = ledger.entries.find((r) => r.id === id)
+      if (entry === undefined) return { ok: false, code: 'record-not-found', id }
+      if (entry.protected || entry.kind === 'guard') {
+        return { ok: false, code: 'protected-point', detail: entry.kind, id }
+      }
+      const kept = ledger.entries.filter((r) => r.id !== id)
       try {
-        await atomicWriteFile(this.ledgerPath, JSON.stringify({ schemaVersion: ROLLBACK_SCHEMA_VERSION, records: kept }, null, 2))
+        await this.ledger.writeManifest(kept)
       } catch (error) {
         return { ok: false, code: 'ledger-write-failed', detail: errorDetail(error), id }
       }
+      await this.ledger.deleteRecords([id])
+      await this.ledger.prunePayloads(kept)
       await this.gcObjects(kept)
       return { ok: true, code: 'deleted', id }
     })
+  }
+
+  /**
+   * 磁盘清理入口（引擎侧）：删**全部**自动点（includeGuards=true 时连 guard 也删），
+   * protected 点**永不删**（生产路径造不出来，只有测试能造）。随后回收无人引用的载荷与对象。
+   *
+   * 零写入拒绝路径照旧：存储不可用 / 清单读不出来（形状不符、迁移失败、迁移中）⇒ **抛带 code 的错误**，
+   * 一个字节都不动、也绝不静默返回全 0（「什么都没删」与「读不出来所以没删」是两件事）。
+   * 返回的 bytes = 本次真正删掉的字节（记录文件 + 载荷文件 + 对象文件）。
+   */
+  async purgeLedger(options: { includeGuards?: boolean } = {}): Promise<{
+    removedRecords: number
+    removedPayloads: number
+    removedObjects: number
+    bytes: number
+  }> {
+    const storage = await this.storageStatus()
+    if (!storage.available) {
+      throw new RollbackLedgerRefusedError('storage-unavailable', storage.detail ?? 'rollback storage unavailable')
+    }
+    return await withLedgerWriteLock(this.ledgerPath, async () => {
+      const ledger = await this.readManifest()
+      if (this.initError !== undefined) throw new RollbackLedgerRefusedError('ledger-unreadable', this.initError)
+      if (ledger.error !== undefined) throw new RollbackLedgerRefusedError('ledger-unreadable', ledger.error)
+      const includeGuards = options.includeGuards === true
+      const victims = ledger.entries.filter((entry) => !entry.protected && (includeGuards || entry.kind === 'auto'))
+      if (victims.length === 0) return { removedRecords: 0, removedPayloads: 0, removedObjects: 0, bytes: 0 }
+      const victimIds = new Set(victims.map((entry) => entry.id))
+      const kept = ledger.entries.filter((entry) => !victimIds.has(entry.id))
+      // 先落清单、再删文件：崩在中途也只会留下「清单已删、文件还在」的垃圾，不会留下指向空文件的清单
+      await this.ledger.writeManifest(kept)
+      const records = await this.ledger.deleteRecords([...victimIds])
+      const payloads = await this.ledger.prunePayloads(kept)
+      const objects = await this.ledger.collectObjects(kept)
+      if (objects.aborted === null) {
+        await this.gcPathCache(new Set([...objects.referencedPaths].map(pathKey)))
+      } else {
+        this.warn('rollback purge: object gc skipped: ' + objects.aborted)
+      }
+      return {
+        removedRecords: records.removed,
+        removedPayloads: payloads.removed,
+        removedObjects: objects.removed,
+        bytes: records.bytes + payloads.bytes + objects.bytes,
+      }
+    })
+  }
+}
+
+/**
+ * 台账清理的**显式拒绝**（形状不符 / 存储不可用）：带机器可读 code，绝不静默返回全 0。
+ * 路由层按 code 映射 HTTP（与既有 RollbackCode 冻结集同源）。
+ */
+export class RollbackLedgerRefusedError extends Error {
+  readonly code: RollbackCode
+  constructor(code: RollbackCode, detail: string) {
+    super(detail)
+    this.name = 'RollbackLedgerRefusedError'
+    this.code = code
   }
 }
 

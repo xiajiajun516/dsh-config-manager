@@ -24,6 +24,8 @@ import { recoveryRoutes } from '../../src/routes/recovery.ts'
 import { routeSpecOf, type WebRoute } from '../../src/routes/kit.ts'
 import { RollbackPointEngine } from '../../src/core/rollback-point.ts'
 import { emptySessionMeta } from '../../src/core/session-meta.ts'
+import { isRollbackEnabled, resetRollbackGateForTest } from '../../src/core/rollback-gate.ts'
+import { sha256Hex } from '../../src/utils/hashing.ts'
 
 const BASE = '/api/dsh-config-manager/recovery'
 const PROJECT_KEY = '--p--'
@@ -483,8 +485,10 @@ test('R8-6 救援点：preview canRestore=true/canRemove=false，POST rewind →
     const newGuardId = obj(rewound.json)['guardPointId']
     assert.equal(typeof newGuardId, 'string')
     assert.notEqual(newGuardId, id)
-    const ledger = JSON.parse(await readText(path.join(h.dataDir, 'rollback-points', 'index.json'))) as { records: { id: string }[] }
-    assert.ok(ledger.records.some((r) => r.id === newGuardId), JSON.stringify(ledger.records.map((r) => r.id)))
+    // v3（issue #89）：index.json 是**小清单**（落盘字段仍是 `records`，但每条只剩元数据 + 载荷引用），
+    // 完整记录在 records/<id>.json、工作区大数组在 payloads/<sha256>.json。
+    const manifest = JSON.parse(await readText(path.join(h.dataDir, 'rollback-points', 'index.json'))) as { records: { id: string }[] }
+    assert.ok(manifest.records.some((r) => r.id === newGuardId), JSON.stringify(manifest.records.map((r) => r.id)))
 
     // ⑤ 用户依旧删不掉救援点（删除门与回退门互相独立）
     const del = await server.call('/rollback-points/' + id + '/delete', { method: 'POST', body: { userConfirmed: true } })
@@ -597,17 +601,26 @@ test('R8-7 E1：无事可做 → 200（outcome=restored + code=nothing-to-restor
     )
     assert.equal(await readText(path.join(h.workspaceDir, 'x.txt')), 'X1', '无事可做也绝不改写内容')
 
-    // ⑥ 真失败仍 500：台账被篡改成不可能满足的指纹 → 零写入 + restore-failed
-    const ledgerPath = path.join(h.dataDir, 'rollback-points', 'index.json')
-    interface TamperableRecord {
-      id: string
-      workspace: { payload: { files: { path: string; sha256: string }[] } | null }
-    }
-    const ledger = JSON.parse(await readText(ledgerPath)) as { records: TamperableRecord[] }
-    const target = ledger.records.find((r) => r.id === id2)
-    assert.ok(target !== undefined && target.workspace.payload !== null)
-    for (const file of target.workspace.payload?.files ?? []) file.sha256 = '0'.repeat(64)
-    await fs.writeFile(ledgerPath, JSON.stringify(ledger))
+    // ⑥ 真失败仍 500：把该点的**工作区载荷**篡改成不可能满足的指纹 → 零写入 + restore-failed
+    //
+    // v3（issue #89）起完整记录在 records/<id>.json，工作区大数组在**内容寻址**的
+    // payloads/<sha256>.json（清单 index.json 里只剩元数据）。所以篡改必须**成对**：
+    // 改载荷里的 sha256 + 把记录里的载荷哈希引用改到新文件的哈希 —— 否则读路径会先按
+    // 「哈希不符」如实失败，就测不到下游那条判据了（与 core 的 R-xx 白盒用例同一手法）。
+    const storeDir = path.join(h.dataDir, 'rollback-points')
+    const recordFile = path.join(storeDir, 'records', id2 + '.json')
+    const storedRecord = JSON.parse(await readText(recordFile)) as { workspace: { payload: string | null } }
+    const payloadHash = storedRecord.workspace.payload
+    assert.equal(typeof payloadHash, 'string', '该点必须有内容寻址载荷')
+    const payloadFile = path.join(storeDir, 'payloads', String(payloadHash) + '.json')
+    interface TamperablePayload { files: { path: string; sha256: string }[] }
+    const payload = JSON.parse(await readText(payloadFile)) as TamperablePayload
+    for (const file of payload.files) file.sha256 = '0'.repeat(64)
+    const tamperedText = JSON.stringify(payload)
+    const tamperedHash = sha256Hex(tamperedText)
+    await fs.writeFile(path.join(storeDir, 'payloads', tamperedHash + '.json'), tamperedText)
+    storedRecord.workspace.payload = tamperedHash
+    await fs.writeFile(recordFile, JSON.stringify(storedRecord))
     const tampered = await server.call('/rollback-points/' + id2 + '/rewind', {
       method: 'POST',
       body: { userConfirmed: true, preRewindGuard: 'off', mode: 'files' },
@@ -793,3 +806,133 @@ test('R8-9 t8：运行中带文件段 ⇒ 409 session-active 且零写入；只�
     await h.cleanup()
   }
 })
+
+/* ========================================= R8-11 issue #88：留点总开关路由面 */
+
+/**
+ * 开关是「用户能不能让这个功能停下来」的唯一入口，四条判据都要落在**字节**上：
+ *  ① 缺省 = 关闭（磁盘与进程 gate 都是 false）；
+ *  ② POST true：写盘 + 切进程 gate（写盘成功才切，见路由实现）；
+ *  ③ 非法体（非布尔）→ 400 且**什么都不改**；方法白名单 → 405；
+ *  ④ 列表与 storage 两条只读响应都带上开关（界面读一个响应就能画开关 + 决定聊天入口是否收起）；
+ *  ⑤ SAFE MODE 拦着时 → 423，且绝不落盘（它改的是「宿主会不会每回合写盘」的行为语义）。
+ */
+test('R8-11 issue #88：prefs 开关 —— 缺省关闭 / 开启落盘并切 gate / 非法体 400 / SAFE MODE 423 零写入', async () => {
+  resetRollbackGateForTest()
+  const h = await makeHarness()
+  const server = await startServer(h)
+  const prefsFile = path.join(h.dataDir, 'sync', 'ui-prefs.json')
+  try {
+    // ① 缺省：没有文件、没有订阅
+    const before = await server.call('/rollback-points/prefs')
+    assert.equal(before.status, 200, JSON.stringify(before.json))
+    assert.equal(obj(before.json)['rollbackEnabled'], false, '缺省必须是关闭（fail-closed）')
+    assert.equal(obj(before.json)['rollbackActive'], false)
+    assert.equal(isRollbackEnabled(), false)
+    assert.equal(await exists(prefsFile), false, '只读探测不得写任何文件')
+
+    // ② 开：落盘 + 进程 gate
+    const on = await server.call('/rollback-points/prefs', { method: 'POST', body: { rollbackEnabled: true } })
+    assert.equal(on.status, 200, JSON.stringify(on.json))
+    assert.equal(obj(on.json)['rollbackEnabled'], true)
+    assert.equal(obj(on.json)['rollbackActive'], true)
+    assert.equal(isRollbackEnabled(), true, '写盘成功后进程 gate 必须跟着开')
+    assert.equal(JSON.parse(await readText(prefsFile))['rollbackEnabled'], true)
+
+    // ④ 两条只读响应都带开关
+    const storage = await server.call('/rollback-points/storage')
+    assert.equal(obj(storage.json)['rollbackEnabled'], true, 'storage 响应必须带开关')
+    assert.equal(obj(storage.json)['rollbackActive'], true)
+    const list = await server.call('/rollback-points')
+    assert.equal(obj(obj(list.json)['storage'])['rollbackEnabled'], true, '列表响应的 storage 也要带开关')
+
+    // ③ 非法体：非布尔 → 400，且状态一个字节都不动
+    const bad = await server.call('/rollback-points/prefs', { method: 'POST', body: { rollbackEnabled: 'yes' } })
+    assert.equal(bad.status, 400)
+    assert.equal(isRollbackEnabled(), true, '非法请求不得改进程 gate')
+    assert.equal(JSON.parse(await readText(prefsFile))['rollbackEnabled'], true, '非法请求不得改磁盘')
+
+    // ③ 方法白名单：PUT → 405
+    const put = await server.call('/rollback-points/prefs', { method: 'PUT', body: { rollbackEnabled: true } })
+    assert.equal(put.status, 405)
+
+    // ⑤ SAFE MODE 拦着 → 423，零写入（磁盘保持 true）
+    h.safeMode.blocked = true
+    const blocked = await server.call('/rollback-points/prefs', { method: 'POST', body: { rollbackEnabled: false } })
+    assert.equal(blocked.status, 423, JSON.stringify(blocked.json))
+    assert.equal(obj(blocked.json)['code'], 'mutation-locked')
+    assert.equal(isRollbackEnabled(), true, '被门挡住不得改 gate')
+    assert.equal(JSON.parse(await readText(prefsFile))['rollbackEnabled'], true, '被门挡住不得落盘')
+    h.safeMode.blocked = false
+
+    // 关：字段消失（缺省即关），gate 跟着关
+    const off = await server.call('/rollback-points/prefs', { method: 'POST', body: { rollbackEnabled: false } })
+    assert.equal(off.status, 200)
+    assert.equal(isRollbackEnabled(), false)
+    assert.equal(JSON.parse(await readText(prefsFile))['rollbackEnabled'], undefined, '关闭 = 字段消失（缺省即关）')
+  } finally {
+    await server.close()
+    await h.cleanup()
+    resetRollbackGateForTest()
+  }
+})
+
+/* ==================================== R8-12 issue #89：台账清理（cleanup） */
+
+/**
+ * 清理入口是「把已经涨上去的占用收回来」的唯一显式通道，判据四条：
+ *  ① 未确认 → 409 且零写入（与单条 delete 同一条 fail-closed 确认门）；
+ *  ② 确认后**默认只删自动点**，救援点保留；
+ *  ③ `includeGuards: true` 才连救援点一起删；
+ *  ④ 回传的删除计数与真实台账一致（界面按它出文案，不许我们自己推算）。
+ */
+test('R8-12 issue #89：cleanup —— 未确认 409 零写入 / 默认只删自动点 / includeGuards 才删救援点', async () => {
+  const h = await makeHarness()
+  const server = await startServer(h)
+  try {
+    const autoA = await makePoint(h, { turnSeq: 1 })
+    const autoB = await makePoint(h, { turnSeq: 2 })
+    const guardId = await makePoint(h, { kind: 'guard', turnSeq: 3 })
+    const ids = async (): Promise<string[]> =>
+      arr(obj((await server.call('/rollback-points')).json)['points']).map((p) => String(obj(p)['id'])).sort()
+    assert.deepEqual(await ids(), [autoA, autoB, guardId].sort(), '三个点都在台账里')
+
+    // ① 未确认 → 409，零写入（点一个都不许少）
+    const denied = await server.call('/rollback-points/cleanup', { method: 'POST', body: {} })
+    assert.equal(denied.status, 409, JSON.stringify(denied.json))
+    assert.equal(obj(denied.json)['code'], 'confirmation-required')
+    assert.deepEqual(await ids(), [autoA, autoB, guardId].sort(), '未确认 = 零写入')
+
+    // ② 确认（默认 includeGuards=false）→ 只删自动点
+    const done = await server.call('/rollback-points/cleanup', { method: 'POST', body: { userConfirmed: true } })
+    assert.equal(done.status, 200, JSON.stringify(done.json).slice(0, 300))
+    assert.equal(obj(done.json)['removedRecords'], 2, '两条自动点被删')
+    assert.deepEqual(await ids(), [guardId], '救援点必须保留')
+
+    // ③ includeGuards: true → 连救援点一起删
+    const withGuards = await server.call('/rollback-points/cleanup', { method: 'POST', body: { userConfirmed: true, includeGuards: true } })
+    assert.equal(withGuards.status, 200, JSON.stringify(withGuards.json).slice(0, 300))
+    assert.equal(obj(withGuards.json)['removedRecords'], 1)
+    assert.deepEqual(await ids(), [], '救援点也被删')
+
+    // ④ 空台账再清一次 = 0（幂等，不是失败）
+    const again = await server.call('/rollback-points/cleanup', { method: 'POST', body: { userConfirmed: true } })
+    assert.equal(again.status, 200)
+    assert.equal(obj(again.json)['removedRecords'], 0)
+
+    // 方法白名单
+    const put = await server.call('/rollback-points/cleanup', { method: 'PUT', body: { userConfirmed: true } })
+    assert.equal(put.status, 405)
+
+    // ⑤ 台账读不出来时**如实拒绝**（带机器码，不回落成泛化 500、更不假装「删了 0 个」）
+    await fs.writeFile(path.join(h.dataDir, 'rollback-points', 'index.json'), '{ broken-manifest', 'utf8')
+    const refused = await server.call('/rollback-points/cleanup', { method: 'POST', body: { userConfirmed: true } })
+    assert.equal(refused.status, 500, JSON.stringify(refused.json).slice(0, 200))
+    assert.equal(obj(refused.json)['code'], 'ledger-unreadable', '拒绝必须带机器码')
+  } finally {
+    await server.close()
+    await h.cleanup()
+  }
+})
+
+

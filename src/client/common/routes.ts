@@ -164,6 +164,16 @@ export const RECOVERY_API = {
    */
   rollbackPoints: `${API_BASE}/recovery/rollback-points`,
   rollbackPointsStorage: `${API_BASE}/recovery/rollback-points/storage`,
+  /**
+   * issue #88 / #89：回合自动留点的总开关（GET 读 / POST 写；同样由 recovery prefix 路由内部
+   * 按 path 分发，不新增注册路由条目）。存在 dataDir/sync/ui-prefs.json，与 /sync/ui-prefs 同一份。
+   */
+  rollbackPointsPrefs: `${API_BASE}/recovery/rollback-points/prefs`,
+  /**
+   * issue #89：台账清理（POST，过 mutation gate）—— 只删自动点，guard 与 protected 保留。
+   * 用来把「已经涨上去的占用」收回来（改写入原语不会让现有字节自动变小）。
+   */
+  rollbackPointsCleanup: `${API_BASE}/recovery/rollback-points/cleanup`,
 } as const;
 
 /**

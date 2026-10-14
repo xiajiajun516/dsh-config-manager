@@ -59,6 +59,9 @@ import { Modal } from '../common/Modal.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { readRollbackPreviewFiles, readRollbackPreviewRemovals } from '../chat/rollback-entry-view.ts'
+import { formatSessionBytes } from '../../ui/session-inventory-view.ts'
+import { rollbackEntryVisible } from '../../ui/rollback-view.ts'
+import { setRollbackEntryEnabled } from './rollback-enabled.ts'
 import { RollbackDiffPane, type RollbackDiffState } from './RollbackDiffPane.tsx'
 import { RollbackFileChanges, type RollbackFileViewEntry } from './RollbackFileChanges.tsx'
 import css from '../config-manager.module.css'
@@ -98,6 +101,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
     && recoveryApi.rollbackPointPreview !== undefined
     && recoveryApi.restoreRollbackPoint !== undefined
     && recoveryApi.removeRollbackPoint !== undefined
+  /**
+   * issue #88：开关（读 + 写）两条都在才画开关；缺任一条**不画**（绝不给一个点了没反应的入口）。
+   * issue #89：清理入口同理 —— 端口缺失就不显示（老宿主没有这条能力）。
+   */
+  const hasPrefsApi = typeof recoveryApi.rollbackPrefs === 'function' && typeof recoveryApi.setRollbackEnabled === 'function'
+  const hasPurgeApi = typeof recoveryApi.purgeRollbackPoints === 'function'
 
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
@@ -127,6 +136,13 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const [selectedSession, setSelectedSession] = useState<string | null>(null)
   /** 「刷新」在途：**保留旧内容**，只把刷新按钮置为在途（见 load 的 keep 语义） */
   const [refreshing, setRefreshing] = useState(false)
+  /** 开关（issue #88）在途：置灰防重复点击，但不改开关的显示值（值只在宿主确认后变） */
+  const [prefsBusy, setPrefsBusy] = useState(false)
+  /** 清理台账（issue #89）：确认弹窗 / 勾选 / 结果文案 */
+  const [cleanupOpen, setCleanupOpen] = useState(false)
+  const [cleanupGuards, setCleanupGuards] = useState(false)
+  const [cleanupBusy, setCleanupBusy] = useState(false)
+  const [cleanupNote, setCleanupNote] = useState<string | null>(null)
 
   const fail = (err: unknown): void => {
     if (!mounted.current) return
@@ -149,7 +165,15 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
     else setStatus('loading')
     setError(null)
     recoveryApi.rollbackPoints().then(
-      (res) => { if (mounted.current) { setList(res); setStatus('ready'); setRefreshing(false) } },
+      (res) => {
+        if (!mounted.current) return
+        setList(res)
+        setStatus('ready')
+        setRefreshing(false)
+        // issue #88：列表响应带回开关（storage.rollbackEnabled）。入口是**遮蔽宿主渲染器**注册的
+        // （无常），只有这条信号能让聊天区那颗按钮跟着开 / 关。老宿主没有该字段 ⇒ 判据回落「默认开」。
+        setRollbackEntryEnabled(rollbackEntryVisible(res.storage))
+      },
       (err: unknown) => {
         if (!mounted.current) return
         setRefreshing(false)
@@ -242,8 +266,58 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
     )
   }
 
+  /**
+   * 开关（issue #88）：**写盘成功才改显示值** —— 写失败却把界面翻过去，等于「界面说开着、实际不留点」。
+   * 显示值仍以宿主回传的磁盘真值为准（不是把我们传下去的那个值当真）。
+   */
+  const togglePrefs = (next: boolean): void => {
+    if (typeof recoveryApi.setRollbackEnabled !== 'function') return
+    setPrefsBusy(true)
+    setActionError(null)
+    recoveryApi.setRollbackEnabled(next).then(
+      (res) => {
+        if (!mounted.current) return
+        setPrefsBusy(false)
+        setList((prev) => (prev === null ? prev : {
+          ...prev,
+          storage: { ...prev.storage, rollbackEnabled: res.rollbackEnabled, rollbackActive: res.rollbackActive },
+        }))
+        setRollbackEntryEnabled(res.rollbackEnabled === true)
+      },
+      (err: unknown) => { if (mounted.current) { setPrefsBusy(false); fail(err) } },
+    )
+  }
+
+  /**
+   * 清理台账（issue #89）：删自动点（可选连救援点），然后**重新拉一次**列表 ——
+   * 界面上的条数与占用必须来自真实读数，绝不用「删了多少」自己减（推算迟早漂移）。
+   * 删了 0 个 = 「没有可删的」，不是失败：三态如实分派。
+   */
+  const purge = (): void => {
+    if (typeof recoveryApi.purgeRollbackPoints !== 'function') return
+    setCleanupBusy(true)
+    setActionError(null)
+    recoveryApi.purgeRollbackPoints({ includeGuards: cleanupGuards }).then(
+      (res) => {
+        if (!mounted.current) return
+        setCleanupBusy(false)
+        setCleanupOpen(false)
+        const removed = res.removedRecords ?? 0
+        setCleanupNote(removed === 0
+          ? t('rollback.cleanup.none')
+          : t('rollback.cleanup.done', { records: removed, size: formatSessionBytes(res.bytes ?? 0) }))
+        load({ keep: true })
+      },
+      (err: unknown) => { if (mounted.current) { setCleanupBusy(false); setCleanupOpen(false); fail(err) } },
+    )
+  }
+
   const groups = rollbackPointGroups(list)
   const storage = list?.storage ?? null
+  /** 开关当前值（issue #88）：只认宿主回传的布尔；缺字段（老宿主）显示为关闭，但那种宿主也不画开关 */
+  const prefsEnabled = storage?.rollbackEnabled === true
+  /** 台账占用（issue #89）；老宿主没有这个字段 ⇒ 这一行整个不渲染 */
+  const ledger = storage?.ledger
   const storageGuidance = rollbackGuidanceRows(storage?.guidance)
   const verdict = rollbackPreviewVerdict(preview)
   // 点级告警 / 指引：引擎不给「属于哪一段」的键，故在面板级渲染一次（绝不猜归属）
@@ -292,6 +366,20 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
 
         {!hasApi && <Banner kind="warn">{t('rollback.apiMissing')}</Banner>}
 
+        {/* issue #88：总开关。它**必须常驻可见** —— 关掉之后，用户还得有地方能把它打开。
+            关闭语义 = 不订阅会话事件、不写台账、聊天入口收起（文案逐条对应代码，不含糊）。 */}
+        {hasPrefsApi && (
+          <div className={css.actionRowTop}>
+            <Checkbox
+              checked={prefsEnabled}
+              disabled={prefsBusy || busy}
+              onChange={togglePrefs}
+              label={t('rollback.switch.label')}
+            />
+            <InfoHint text={t('rollback.switch.hint')} label={t('common.infoHint')} />
+          </div>
+        )}
+
         {/* 存储栈不可用：如实说「现在不能用」，并给出可行动的指引（列表仍可看） */}
         {storage !== null && !storage.available && (
           <>
@@ -318,11 +406,36 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                 {t('rollback.summary', { points: total, sessions: groups.length })}
               </span>
               <span className={css.statusSpacer} />
+              {/* issue #89 P2：台账占用（记录数 · 字节）。老宿主没有这个字段 ⇒ 这一行不渲染。 */}
+              {ledger !== undefined && (
+                <span className={css.rollbackSummary}>
+                  {t('rollback.ledger.summary', {
+                    records: ledger.records,
+                    size: formatSessionBytes(ledger.bytes),
+                  })}
+                </span>
+              )}
+              {/* issue #89：清理入口（只删自动点；救援点由弹窗里的勾选决定） */}
+              {hasPurgeApi && (
+                <Button size="sm" variant="ghost" disabled={busy || cleanupBusy} onClick={() => { setCleanupOpen(true); setCleanupGuards(false) }}>
+                  {t('rollback.cleanup')}
+                </Button>
+              )}
               {/* 台账入口：按会话分组的时间线整块进弹窗（列表再长也不撑长这一页） */}
               <Button size="sm" variant="primary" onClick={() => { setOpen(true) }}>
                 {t('rollback.dialog.open')}
               </Button>
             </div>
+            {/* 预算真的淘汰过东西时才说（没发生过就不占屏）：字节预算与已淘汰数都来自宿主读数 */}
+            {ledger !== undefined && ledger.evicted > 0 && (
+              <div className={css.hint}>
+                {t('rollback.ledger.budget', {
+                  budget: formatSessionBytes(ledger.budgetBytes),
+                  evicted: ledger.evicted,
+                })}
+              </div>
+            )}
+            {cleanupNote !== null && <div className={css.hint}>{cleanupNote}</div>}
           </>
         )}
       </Card>
@@ -647,6 +760,27 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         onConfirm={rewind}
         onCancel={() => { setConfirmOpen(false) }}
       />
+
+      {/* 清理确认（issue #89）：删的是台账与内容副本，**不动工作区 / 会话**。
+          默认只删自动点；救援点要靠勾选显式同意（它们的语义是「回退前的安全网」）。 */}
+      <ConfirmDialog
+        open={cleanupOpen}
+        title={t('rollback.cleanup.confirmTitle')}
+        message={t('rollback.cleanup.confirmMessage')}
+        confirmLabel={t('rollback.cleanup')}
+        cancelLabel={t('common.cancel')}
+        danger
+        busy={cleanupBusy}
+        onConfirm={purge}
+        onCancel={() => { setCleanupOpen(false) }}
+      >
+        <Checkbox
+          checked={cleanupGuards}
+          disabled={cleanupBusy}
+          onChange={setCleanupGuards}
+          label={t('rollback.cleanup.includeGuards')}
+        />
+      </ConfirmDialog>
 
       {/* 删除确认（只删台账与内容副本，不动工作区 / 会话） */}
       <ConfirmDialog

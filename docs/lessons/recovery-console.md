@@ -277,3 +277,41 @@ cwd 同目录三档 + 写后 `list()` 复核）；路由按结构窄化取用（
 **踩过**：`POST /recovery/fork-reconcile` 分支最初放在 `lock` 分支**之后**，把 `runWithMutationLock` 带进了
 「lock 分支不得经 acquire」那条源码守卫的窗口（`source.slice(lockBranch, idParse)` 里不得出现锁调用）⇒ 全量测试红。
 分支必须排在 `lock` 之前（或该守卫窗口之外）。
+
+---
+
+## issue #88 / #89：回滚点占用失控与总开关（2026-10-14）
+
+**用户侧证据（issue #89，两个人两台机）**：Windows 桌面机 `rollback-points/index.json` = **473,285,138 B**
+（50 条记录、950,862 条文件条目、去重后 57,396 条路径），4 份 host 崩溃日志同一句
+`FATAL ERROR: ... JavaScript heap out of memory`，退出码 134；崩溃残留 `.dshcm.*.tmp` 累计 **430,682,982 B**。
+Linux（web profile）同版本：index.json = **311,521,007 B**（50 条，单条均值 ≈6 MiB），`objects/` ≈1.1 GiB，
+残留 tmp 180,914,249 B；高 CPU 相位（主线程 87%）采样 45 s / 31,147 样本，
+`rollback-point.js` 家族自耗时 **≈23%**（`readLedger` 5.13%、`gcObjects` 2.27%、`pathKey` 1.00%），
+而同机低相位采样里这几个函数**一次都不出现**。移除插件后该文件占比 0.00%。
+
+**机制（0.1.72 源码核对）**：`appendRecord` 在写锁内 `readFile` 整份 → `JSON.parse` → 合并 →
+`JSON.stringify(..., null, 2)` → `atomicWriteFile`；`ROLLBACK_MAX_RECORDS = 50` **只限条数、不限字节**，
+所以 50 条也能到几百 MiB；触发点是 `turn/start`（工作区态必须是该回合开始**之前**，这条口径不能动）；
+一份账本被所有工作区共用（`ledgerPath` 只由 `dataDir` 决定）。
+
+**本机对照**：修前 `index.json` = 8,220,317 B / 44 条（同一数据结构在较小工作区里的规模）。
+
+**改法（已落地）**：v3 台账 = 小清单 `index.json`（只剩元数据 + 载荷哈希引用）+ `records/<id>.json`（单条完整记录）
++ `payloads/<sha256>.json`（内容寻址的工作区载荷，未变化的工作区**只落一份**）；写一条 = 写一个记录文件 + 一个载荷
+（哈希相同则复用）+ 重写小清单；对象回收改为「扫清单 → 逐个读引用到的载荷 → 删无引用对象」，
+**峰值内存 ∝ 单份载荷 + 对象键集合，不再 ∝ 账本总字节**；旧 v2 单文件用**流式**切分迁移
+（`createReadStream` + 逐字符状态机逐个切出 records 元素；451 MiB 的文件整份 `readFile`+parse 必然再次 OOM），
+迁移失败保持原文件不动、下次启动重试；新增 `ROLLBACK_DEFAULT_LEDGER_BYTES = 256 MiB` 字节预算，
+超预算只淘汰最旧的 auto 点（guard / protected 不淘汰）；启动期清理**形状可自证**的孤儿 `.dshcm.*.tmp`。
+
+**总开关（issue #88）**：缺省**关闭**（`ui-prefs.json` 的 `rollbackEnabled`，只认字面 `true`，fail-closed）。
+关闭 = **真的解绑** `session/event` 订阅（不是「订阅了回调里 return」）；开关可在不重载插件的前提下活切换
+（写偏好的一方通知进程内 gate → attach/detach）。聊天内入口**收起**而非置灰：入口是遮蔽
+`conversation.chat.node` 的 user key 注册的（无常），可见性由客户端信号驱动；老宿主（响应里没有该字段）
+按「默认开」处理 —— 那一版语义就是默认启用，藏掉入口等于「有点但没有入口」。
+
+**没做（别误读成已完成）**：**增量基线**（记录存「相对上一份的差分」）没做 —— 现在只做到**未变化时零额外字节**，
+工作区真的变了仍会写一份完整载荷（由字节预算兜住）。「本回合确有文件改动才留点」也没做成：留点必须在
+`turn/start` 拍（见上），改成回合结束拍会把工作区态固定成「改完之后」，正好是这条坑里被禁掉的做法。
+

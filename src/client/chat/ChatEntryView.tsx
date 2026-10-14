@@ -22,6 +22,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import type { TranslateNS } from '../client-types.ts'
 import type { RollbackPointPort } from '../../ui/rollback-view.ts'
 import { CopyStateIcon, RefreshIcon } from '../common/Icon.tsx'
+import { isRollbackEntryEnabled, subscribeRollbackEntryEnabled } from '../recovery/rollback-enabled.ts'
 import { copyTextToClipboard } from '../common/clipboard.ts'
 import { RollbackReviewDialog } from './RollbackReviewDialog.tsx'
 import type { RollbackDiffOpenResult } from './rollback-diff-tab.ts'
@@ -164,6 +165,18 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
  *  · 气泡底色：宿主直接用 `--dsw-specific-bubble`，本仓库 token 层没有这一档 ⇒ 用 `--cm-surface-2`
  *    （亮/暗主题下都是「比底更强的面」），不改 DESIGN 体系、不新增 token。
  */
+/**
+ * 订阅入口可见性信号（issue #88）。
+ *
+ * 为什么要在组件里订阅而不是把开关当 prop 往下传：入口是**遮蔽宿主渲染器**注册的（无常），
+ * 开关变化时没有任何父级会重渲染它 —— DNS 状态只能靠这条信号推。订阅开销 = 一个 Set 里的回调。
+ */
+function useRollbackEntryEnabled(): boolean {
+  const [value, setValue] = useState(() => isRollbackEntryEnabled())
+  useEffect(() => subscribeRollbackEntryEnabled(() => { setValue(isRollbackEntryEnabled()) }), [])
+  return value
+}
+
 function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
@@ -201,7 +214,9 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
    * 只在「回合已收尾」时才读 —— 收尾未知/未结束的回合注定没有点，不浪费这次请求（按钮此时已如实禁用）。
    * 「用户再次触发」= 重新挂载（切档 / 重进会话）或会话/回合变化 ⇒ 新实例；不需要刷新页面。
    */
-  const canLookup = turn !== null && phase === 'closed' && sessionId !== ''
+  // issue #88：功能关闭时连**查询都不发**（不只是不画按钮）—— 入口收起 = 这一整个入口链路停摆。
+  const entryEnabled = useRollbackEntryEnabled()
+  const canLookup = entryEnabled && turn !== null && phase === 'closed' && sessionId !== ''
   useEffect(() => {
     if (!canLookup || turn === null) return undefined
     const controller = new ChatPointWindowController({
@@ -284,6 +299,10 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
               2026-10-10 用户第二条要求「回退按钮只有一个 icon 而不是一个按钮」。可见文案退到
               aria-label/title；禁用原因是原生 title 里的一句话（InfoHint 的 Portal 钉在插件设置页
               根节点，聊天区不存在）。按钮始终留在原地（禁用而不是消失）：入口可见性不随判据漂移。 */}
+          {/* 开关**关闭时整颗收起**（issue #88 明确要求「入口收起」，不是置灰）。
+              与上面那条「入口可见性不随判据漂移」不冲突：那说的是**暂时读不到点**这类判据，
+              而这里是「用户把这个功能关了」——此时入口本身就不该存在。 */}
+          {entryEnabled && (
           <button
             type="button"
             className={css.chatActionBtn}
@@ -297,6 +316,7 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
           >
             <RefreshIcon size={13} />
           </button>
+          )}
         </div>
       </div>
       {dialogTurn !== null && (

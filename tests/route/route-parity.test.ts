@@ -293,7 +293,14 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
   // AGENTS.md 写「合计 73 条 / 保留的 8 条」漂了一整轮也没人发现（t82 的 S2-1）—— 而这段散文
   // 正是「少一条即静默少一道围栏」这条安全不变量的**对外叙述**，同样必须与真实声明数同源。
   // 只做文本级断言（不引入新依赖）：数字写错 → 文件名 + 标签 + 应有值一起报出来。
-  const agentsText = fs.readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+  /**
+   * routes-F5b（2026-10-14 补）：**两个文件都要扫**。
+   *
+   * AGENTS.md 已按新体例瘦身成「只留硬规则 + 一行指针」，目录结构 / 常用命令这类清单下移到
+   * `docs/lessons/repo-overview.md` —— 只扫 AGENTS.md 会把「散文被搬到下移文件」误判成
+   * 「计数声明消失」（假红），而这段散文正是「少一条即静默少一道围栏」的对外叙述。
+   */
+  const claimsFiles: readonly string[] = ['AGENTS.md', 'docs/lessons/repo-overview.md'];
   const agentsClaimsSpec: ReadonlyArray<readonly [RegExp, string, number]> = [
     [/保留的 (\d+) 条/g, 'src/index.ts 保留条数', indexCount],
     [/钉住的 (\d+) 条/g, 'src/index.ts 保留条数（窗口守卫）', indexCount],
@@ -302,13 +309,16 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
     [/本插件 (\d+) 条路由/g, '插件路由总数', actual],
     [/全部 (\d+) 条路由/g, '插件路由总数（影响面）', actual],
   ];
-  for (const [re, label, expected] of agentsClaimsSpec) {
-    collect('AGENTS.md', agentsText, re, label, expected);
+  for (const rel of claimsFiles) {
+    const text = fs.readFileSync(path.join(root, rel), 'utf8');
+    for (const [re, label, expected] of agentsClaimsSpec) {
+      collect(rel, text, re, label, expected);
+    }
   }
-  const agentsClaims = claims.filter((c) => c.file === 'AGENTS.md');
+  const agentsClaims = claims.filter((c) => claimsFiles.includes(c.file));
   assert.ok(
     agentsClaims.length >= agentsClaimsSpec.length,
-    'AGENTS.md 里至少要扫到 ' + String(agentsClaimsSpec.length) + ' 处路由计数声明（扫不到即假绿），实际 ' + String(agentsClaims.length),
+    claimsFiles.join(' + ') + ' 里至少要扫到 ' + String(agentsClaimsSpec.length) + ' 处路由计数声明（扫不到即假绿），实际 ' + String(agentsClaims.length),
   );
 
   assert.ok(claims.length >= 4, '至少要扫到 4 处计数声明（扫不到即假绿），实际 ' + String(claims.length));

@@ -73,6 +73,12 @@ const PREFIX_ROUTED = new Set<string>([
   // 不新增宿主注册路由条目，因此 route-parity 的 79 条快照不变。
   RECOVERY_API.rollbackPoints,
   RECOVERY_API.rollbackPointsStorage,
+  // issue #88 / #89：留点开关（prefs）与台账清理（cleanup）—— 同样挂在 rollback-points 这一段
+  // 之下、由 recovery prefix 路由内部按 path 分发，因此不新增宿主注册路由条目。
+  // 它们**不进** `ROLLBACK_POINT_ROUTES`：那张表是 t1 冻结的 7 条 wire contract 快照
+  //（6 条冻结 + 只读 file-diff），这里两条是后加的行为开关，不参与冻结集。
+  RECOVERY_API.rollbackPointsPrefs,
+  RECOVERY_API.rollbackPointsCleanup,
 ]);
 
 /**

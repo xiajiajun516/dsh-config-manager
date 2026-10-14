@@ -78,6 +78,7 @@ import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg } from './core/messages.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import { RollbackAutoTracker, RollbackPointEngine, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
+import { isRollbackEnabled, onRollbackEnabledChange, setRollbackEnabled } from './core/rollback-gate.ts'
 import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-point.ts'
 // t3：宿主斜杠命令 /rollback（与 HTTP 路由同一道写入门；命令服务惰取，未组合时安静跳过）。
 import { agentSessionFactsOf, registerRollbackCommand } from './core/command-rollback.ts'
@@ -122,6 +123,7 @@ import { SyncSessionStore } from './sync/sync-session.ts'
 import { AutoSyncScheduler } from './sync/autosync-scheduler.ts'
 import { BackupScheduler } from './sync/backup-scheduler.ts'
 import { readBackupSchedule } from './sync/backup-schedule-config.ts'
+import { readRollbackEnabledSync } from './sync/ui-prefs.ts'
 import { AUTO_BACKUP_PREFIX, isValidExportFileName, resolveNonCollidingExportName, writeBackupNote } from './sync/backup-files.ts'
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './sync/retention-policy.ts'
 import type { RetentionPolicy } from './sync/retention-policy.ts'
@@ -4299,6 +4301,14 @@ export function apply(ctx: Context, config?: Config): void {
   const tmpDir = join(dataDir, 'tmp')
   const snapshotsDir = join(dataDir, 'snapshots')
   const syncDir = join(dataDir, 'sync')
+  /**
+   * issue #88 / #89：回合自动留点（回滚点）**缺省关闭**。
+   *
+   * 同步读一次偏好（几百字节），因为「关闭」必须在**注册 `session/event` 订阅之前**就定下来 ——
+   * 晚一步注册就等于「订阅了什么都做」（见 src/core/rollback-gate.ts 的三条设计）。
+   * 关闭后本进程不再留点、不再写台账；台账与回退路由本身仍可用（已有回滚点仍能查看 / 回退 / 清理）。
+   */
+  setRollbackEnabled(readRollbackEnabledSync(syncDir))
   const marketDir = join(dataDir, 'market')
   // Phase 6：迁移历史审计目录（统一历史引擎；加入 RESERVED_INTERNAL_PREFIXES 防 F23 投毒链）
   const historyDir = join(dataDir, MIGRATION_HISTORY_DIR)
@@ -4649,6 +4659,9 @@ export function apply(ctx: Context, config?: Config): void {
     // 该点本身仍带 incomplete=true + workspace.reasonCode='no-chunks'，界面能如实展示。
     const chunklessLogged = new Set<string>()
     const listener = (session: unknown, event: unknown): void => {
+      // issue #88/#89 第一道门：关闭时回调什么都不做。正常路径下关闭时压根没有订阅
+      //（detach 已解绑），这里是「解绑与已派发事件之间」的竞态兜底。
+      if (!isRollbackEnabled()) return
       try {
         const bindingResult = rollbackSessionBindingOf(session)
         if (!bindingResult.ok) {
@@ -4676,13 +4689,32 @@ export function apply(ctx: Context, config?: Config): void {
       }
     }
     let off: (() => boolean) | null = null
-    try {
-      off = ctx.on('session/event', listener)
-    } catch (error) {
-      host.log.warn('rollback auto point subscribe failed: ' + (error instanceof Error ? error.message : String(error)))
+    /**
+     * 订阅 / 解绑成对：开关关闭时**真的解绑**（不是「订阅了什么都不做」—— issue #88 明确要求
+     * 「关闭后不再订阅 session/event」）。attach 幂等；订阅抛错只丢这一个入口，不打断宿主启动。
+     */
+    const attach = (): void => {
+      if (off !== null) return
+      try {
+        off = ctx.on('session/event', listener)
+      } catch (error) {
+        off = null
+        host.log.warn('rollback auto point subscribe failed: ' + (error instanceof Error ? error.message : String(error)))
+      }
     }
+    const detach = (): void => {
+      const current = off
+      off = null
+      if (current === null) return
+      try { current() } catch { /* 解绑失败不影响卸载 */ }
+    }
+    if (isRollbackEnabled()) attach()
+    // 活切换：写偏好的一方改开关，这里即时 attach / detach。事件回调**不读文件** ——
+    // 每回合读一次磁盘正是本 issue 要消灭的开销形态。
+    const unlisten = onRollbackEnabledChange((on) => { if (on) attach(); else detach() })
     return () => {
-      try { off?.() } catch { /* 解绑失败不影响卸载 */ }
+      unlisten()
+      detach()
       rollbackTracker.stop()
     }
   }, 'config-manager: rollback auto points')

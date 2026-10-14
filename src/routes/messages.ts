@@ -56,6 +56,7 @@ export const zh = {
   'route.recoverySessionLayoutPartial': '会话布局归位未全部完成（成功 {applied}，失败 {failed}，跳过 {skipped}）',
   'route.rollbackPointRewind': '回滚到回滚点：{outcome}',
   'route.rollbackPointDelete': '删除回滚点 {id}',
+  'route.rollbackPointCleanup': '清理回滚点台账：删除 {records} 个点',
   'route.recoveryOperationSummary': '恢复操作 {action}',
 } as const;
 
@@ -95,6 +96,7 @@ export const en: Record<keyof typeof zh, string> = {
   'route.recoverySessionLayoutPartial': 'Session layout relocation did not fully complete ({applied} succeeded, {failed} failed, {skipped} skipped)',
   'route.rollbackPointRewind': 'Rewind to rollback point: {outcome}',
   'route.rollbackPointDelete': 'Deleted rollback point {id}',
+  'route.rollbackPointCleanup': 'Cleaned up rollback-point ledger: {records} point(s) deleted',
   'route.recoveryOperationSummary': 'Recovery operation {action}',
 };
 

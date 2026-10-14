@@ -12,7 +12,9 @@ import { engineMsg } from './messages.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import { isValidOperationId } from '../core/journal.ts'
-import { RollbackPointEngine } from '../core/rollback-point.ts'
+import { RollbackLedgerRefusedError, RollbackPointEngine } from '../core/rollback-point.ts'
+import { isRollbackEnabled, setRollbackEnabled } from '../core/rollback-gate.ts'
+import { readRollbackEnabledSync, updateUiPrefs } from '../sync/ui-prefs.ts'
 import type { RollbackForkSeam, RollbackPreviewResult, RollbackRewindInput, RollbackRewindResult } from '../core/rollback-point.ts'
 import { reconcileForkSessions, type ForkReconcileChild, type ForkReconcileOutcome } from '../core/fork-reconcile.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
@@ -528,6 +530,9 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
           log: (line) => host.log.warn(line),
           ...(forkSeam !== undefined ? { fork: forkSeam } : {}),
         })
+        // 插件偏好文件与 /sync/ui-prefs 同一份（dataDir/sync/ui-prefs.json）；回滚点开关存在那里，
+        // 所以这里派生同一个目录，绝不另立第二个偏好文件。
+        const syncDir = join(dataDir, 'sync')
         const sub = segments.slice(1)
         const methodNotAllowed = (): void => { writeJson(res, 405, { error: 'method not allowed', code: 'method-not-allowed' }) }
         const reply = (value: { ok?: boolean; code?: string; outcome?: string }): void => {
@@ -553,14 +558,117 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
            *    仍读不到就不加该字段（界面回落显示会话 id），**绝不从首条消息编造标题**。
            */
           const titled = await applySessionLogTitles(points, join(sessionHealth.homeDir, 'sessions'))
-          writeJson(res, listed.storage.available ? 200 : 503, { ...listed, points: titled })
+          // 列表响应里的 storage 也带上开关与台账占用：界面**只读这一个响应**就能画开关、
+          // 画占用、并决定聊天入口是否收起（少一次请求，也少一处口径分叉）。
+          const storageWithPrefs = {
+            ...listed.storage,
+            rollbackEnabled: readRollbackEnabledSync(syncDir),
+            rollbackActive: isRollbackEnabled(),
+          }
+          writeJson(res, listed.storage.available ? 200 : 503, { ...listed, storage: storageWithPrefs, points: titled })
           return
         }
         // 存储栈状态（缺失时给结构化组合指引；**不崩**）
+        // issue #89 P2：随状态一并回传**台账占用**（记录数 / 字节 / 预算 / 已淘汰数，见 engine.storageStatus 的 ledger）
+        // 与开关（rollbackEnabled = 磁盘偏好；rollbackActive = 本进程当前是否真的在留点）。
         if (sub.length === 1 && sub[0] === 'storage') {
           if (req.method !== 'GET') { methodNotAllowed(); return }
           const status = await engine.storageStatus()
-          writeJson(res, status.available ? 200 : 503, { ok: status.available, ...status })
+          writeJson(res, status.available ? 200 : 503, {
+            ok: status.available,
+            rollbackEnabled: readRollbackEnabledSync(syncDir),
+            rollbackActive: isRollbackEnabled(),
+            ...status,
+          })
+          return
+        }
+        // 回合自动留点的总开关（issue #88 / #89）。
+        //
+        // 为什么要读写两个语义：磁盘偏好（rollbackEnabled）是**用户意图**、随 self 分区进备份；
+        // 进程 gate（rollbackActive）是**此刻真正生效**的东西（关闭后订阅已解绑）。两者正常一致，
+        // 只在「另一进程改了文件」这类边界上短暂分叉 —— 分歧就如实分开报，不合并成一个布尔。
+        //
+        // 写路径过 mutation gate：它改的是「宿主会不会每回合写盘」的行为语义，与 rewind / delete 同级
+        //（都在同一把锁里，拒绝一律发生在写任何字节之前）。
+        if (sub.length === 1 && sub[0] === 'prefs') {
+          if (req.method === 'GET') {
+            writeJson(res, 200, { ok: true, rollbackEnabled: readRollbackEnabledSync(syncDir), rollbackActive: isRollbackEnabled() })
+            return
+          }
+          if (req.method !== 'POST') { methodNotAllowed(); return }
+          try {
+            const body = await readJsonBody(req)
+            if (body === undefined) { writeJson(res, 400, { ok: false, code: 'invalid-input', error: 'invalid JSON body' }); return }
+            const wanted = body['rollbackEnabled']
+            if (typeof wanted !== 'boolean') {
+              writeJson(res, 400, { ok: false, code: 'invalid-input', error: 'rollbackEnabled must be a boolean' })
+              return
+            }
+            await runWithMutationLock(
+              host.mutationLock,
+              { op: 'rollback-prefs', target: 'rollbackEnabled', isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+              async () => {
+                await updateUiPrefs(syncDir, { rollbackEnabled: wanted })
+                // 写盘成功才切进程 gate：写失败却把功能打开，等于「界面说开着、实际不留点」
+                setRollbackEnabled(wanted)
+              },
+            )
+            writeJson(res, 200, { ok: true, rollbackEnabled: wanted, rollbackActive: isRollbackEnabled() })
+          } catch (error) {
+            if (error instanceof EnvironmentLockUnavailableError) {
+              host.log.warn('mutation lock blocked: op=rollback-prefs reason=' + error.reason)
+              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+              return
+            }
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          }
+          return
+        }
+        // 台账清理（issue #89 P1/P2）：把「已经涨上去的占用」收回来。
+        //
+        // 为什么单独一条子路径而不是并进「磁盘占用清理」：那条清理的候选集被四条不变量钉死
+        // （只有可重建区 + 显式勾选的过期导出；snapshots/sync 永不进候选）。回滚点是**数据**不是
+        // 可重建区，用户没显式勾选就不能被任何「一键清理」顺走 —— 所以它是自己这条显式入口，
+        // 且默认只删自动点（救援点要显式勾选）。语义与单条 delete 一致，只是作用域是整个台账。
+        if (sub.length === 1 && sub[0] === 'cleanup') {
+          if (req.method !== 'POST') { methodNotAllowed(); return }
+          try {
+            const body = await readJsonBody(req)
+            if (body === undefined) { writeJson(res, 400, { ok: false, code: 'invalid-input', error: 'invalid JSON body' }); return }
+            // 与单条 delete 同一条 fail-closed 确认门：必须**恰好** true，缺省不放行
+            if (body['userConfirmed'] !== true) {
+              writeJson(res, 409, { ok: false, code: 'confirmation-required' })
+              return
+            }
+            const includeGuards = body['includeGuards'] === true
+            const result = await runWithMutationLock(
+              host.mutationLock,
+              { op: 'rollback-cleanup', target: includeGuards ? 'auto+guard' : 'auto', isBlocked: () => host.safeModeIsBlocked?.() ?? false },
+              async () => await engine.purgeLedger({ includeGuards }),
+            )
+            await tryAppendHistory({
+              kind: 'recovery',
+              result: 'success',
+              sections: [],
+              source: 'recovery',
+              summary: engineMsg('route.rollbackPointCleanup', { records: String(result.removedRecords) }),
+            })
+            writeJson(res, 200, { ok: true, ...result })
+          } catch (error) {
+            if (error instanceof EnvironmentLockUnavailableError) {
+              host.log.warn('mutation lock blocked: op=rollback-cleanup reason=' + error.reason)
+              writeJson(res, 423, { error: error.message, code: 'mutation-locked' })
+              return
+            }
+            // 引擎侧的**显式拒绝**带机器码（存储不可用 / 台账读不出）：按码映射 HTTP，
+            // 不回落成泛化 500 —— 界面要能说清「是存储栈缺了」还是「台账真读不出来」。
+            if (error instanceof RollbackLedgerRefusedError) {
+              host.log.warn('rollback cleanup refused: ' + error.code + ' ' + error.message)
+              writeJson(res, error.code === 'storage-unavailable' ? 503 : 500, { ok: false, code: error.code, detail: error.message })
+              return
+            }
+            writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          }
           return
         }
         // 单条详情（只读：两态摘要 + 完整记录）

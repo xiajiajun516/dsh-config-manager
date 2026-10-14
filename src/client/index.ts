@@ -48,6 +48,8 @@ import {
 } from './chat/rollback-entry-view.ts'
 import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
 import { registerChatNodeEntry } from './chat/chat-node-registration.ts'
+import { setRollbackEntryEnabled } from './recovery/rollback-enabled.ts'
+import { rollbackEntryVisible } from '../ui/rollback-view.ts'
 import { RollbackDiffTab } from './chat/RollbackDiffTab.tsx'
 import {
   asSidebarRightFace,
@@ -145,6 +147,24 @@ export function apply(ctx: ClientContext): void {
   const historyApi = new HistoryApi(uiT)
   // 事故恢复（崩溃归因 / 救援模式）：沿用主字典的错误文案，不新增 locale namespace。
   const incidentApi = new IncidentApi(uiT)
+
+  /**
+   * issue #88：回合自动留点（回滚点）开关 → 聊天入口可见性。
+   *
+   * **必须在这里拉，不能等用户打开「环境 → 维护与诊断」**：入口是遮蔽 `conversation.chat.node`
+   * 的 user key 注册的（无常），而绝大多数用户一辈子不会点进那个面板 —— 等那时再拉，
+   * 功能开着却没有入口。这里挂载即拉一次（只读、无副作用），失败**不改信号**（保持缺省关闭），
+   * 并留一条 warn 级日志便于排障。
+   *
+   * 判据读的是 storage 响应（`rollbackEntryVisible`：老宿主没有该字段 ⇒ 按「默认开」，与那一版语义一致）。
+   */
+  void recoveryApi.rollbackPointStorage?.().then(
+    (status) => { setRollbackEntryEnabled(rollbackEntryVisible(status)) },
+    (err: unknown) => {
+      // 只记日志、不打扰用户：这是纯可见性探测，读失败不该在设置页弹错误
+      ctx.logger?.warn?.('rollback entry visibility probe failed: ' + (err instanceof Error ? err.message : String(err)))
+    },
+  )
 
   // 单一 settings.section：备份与迁移页（UI v3：4 个一级页面 home/library/sync/environment + Task 流程面板）。
   // 远程同步、配置市场与关于页不注册独立设置页 —— 并入主 section 的 inject 面
