@@ -10,7 +10,7 @@
 
 
 ## 🗂️ 结构与分层
-> 目录树（各目录职责）→ `docs/lessons/repo-overview.md`；下列为硬规则。
+> 目录树（各目录职责）→ `docs/lessons/repo-overview.md`；`src/index.ts` 保留的 7 条路由、`src/routes/` 10 组；下列为硬规则。
 1. 业务逻辑放 `src/ui/`，React 壳只装配；页面落位/共享原语/状态中枢清单 → `DEVELOPERS.md`。
 2. 新增一条 API = 在所属组文件加一条 `endpoint({ path, methods }, handler)`；路由注册**只经** `src/routes/kit.ts`。
 3. `src/client/**` **不得 import node 模块**；跨端共享只能进零依赖模块；`src/profiles/dsh-profile-io.ts` 绝不能被浏览器半 import。
