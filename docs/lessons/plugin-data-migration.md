@@ -49,6 +49,21 @@
 手抄一份区域表必然漂移，故选择**显式不适用**：`OFFLINE_EXCLUDED_SECTIONS` + 用户显式 `--sections pluginData` 时给「改用 GUI」的可执行提示，
 并由 `src/core/backup-plan.test.ts` 的「注册表所有分区都必须显式归类」守卫钉住。
 
+### 3.5 **路径根**：本分区的根是系统主目录，不是 `$DSH_HOME`（真机 0/0 的直接原因）
+
+首版把两个分区的 ref 当成了「`$DSH_HOME` 相对路径」，于是 `~/.dsh-wallpaper-engine`、`~/.mnemon` 全被解析成
+`~/.dsh/.dsh-wallpaper-engine`、`~/.dsh/.mnemon`（不存在）—— 用户在导出选择器里看到两行恒为 **已选 0/0**。
+更关键的是**门面**：`DshFileSystemFacade` 被限制在 `$DSH_HOME` 内（`isSameOrChild`，越界抛 `host.fsPathEscape`），
+所以仅把路径写对也不够 —— 真正的读写必须换到**以系统主目录为根**的第二扇门面。
+
+修法（本次落地）：`HostContext` 增加 `osHomeDir` 与 `homeFs`；`core/backup.ts` 的
+`OS_HOME_FILE_SECTIONS` / `fsForSection()` 让**路径解析**（`resolveFileTarget`）与**每一处 I/O**
+（引擎快照、回滚写回、导入指纹）都按分区换根；adapter 把这些分区的收集/写入整份走 `homeFs`。
+缺 `homeFs`（旧宿主）时**不读不写并报码**，绝不退回 `$DSH_HOME`。
+
+单位置验收：`tests/e2e/plugin-data-migration.test.ts` 用真机形态的 `$DSH_HOME = <系统 home>/.dsh` 跑通，
+并断言 `$DSH_HOME` 下**不会**出现同名目录（修复前读错根的落点）。
+
 ## 4. 端到端证据（真实磁盘，两个全新 home/profile）
 
 `tests/e2e/plugin-data-migration.test.ts`：用磁盘门面起两个临时 home（`mkdtemp`），走完整管道
@@ -63,6 +78,11 @@
 
 - 离线 CLI 备份不收集这两个分区（见 3.4）。
 - 工作区内的插件数据（如 `<workspace>/.mnemon`）不迁移：属于用户工程目录，误伤面大。
+- **离线 CLI 的 `restore` 与恢复后校验只覆盖 `$DSH_HOME` 内的文件**：这两个分区的条目会被如实标成
+  「跳过 / 不可复核」（`restore.fileSkipEscape` / `core.verifyRecovery.filePathEscaped`），不会被写错位置。
+  GUI 的导入回滚走 `core/rollback.ts`，已按分区换根，覆盖得到。
+- **导入中途崩溃后的 reconcile**：journal 里的 `ref` 对这两个分区是系统主目录下的绝对路径，而 reconcile 的
+  复核读取目前仍只认 `$DSH_HOME` → 这类未结算条目会保守判为 needs-attention（安全方向，不谎报成功）。
 - 插件面板里改过「缓存 / 上传位置」（写进插件自己的 `config.json`，不是环境变量）时，本分区只看到默认位置 ——
   不读插件私有配置就无法判定，选择如实不做（env 覆盖则报码跳过，不猜）。
 - 单分区字节闸门仍是 256 MiB（与导入侧上传上限同量级）：更大的资产单元会被**整块**剔除并写进导出告警。

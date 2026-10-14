@@ -19,6 +19,19 @@ import type { FilesSection } from '../schema/types.ts';
 const HOME = 'C:\\Users\\alice';
 const bytes = (s: string): Uint8Array => Buffer.from(s, 'utf8');
 
+/**
+ * 测试用的宿主上下文：**把系统 home 与 $DSH_HOME 指向同一个内存根**。
+ *
+ * 真机上两者不同（$DSH_HOME = ~/.dsh），而这两个分区的根是**系统 home** —— 单测里合并成一个根
+ * 只是让夹具短；两者不同的真机形态由 tests/e2e/plugin-data-migration.test.ts 覆盖。
+ */
+function ctxFor(home: string, profile = 'web') {
+  const ctx = makeContext('win32', home, profile);
+  ctx.osHomeDir = home;
+  ctx.homeFs = ctx.fs;
+  return ctx;
+}
+
 /** 真机形态的假数据：wallpaper-engine 的配置 + 缓存 + 上传的壁纸；mnemon 的运行时与数据库 */
 async function seedHome(ctx: ReturnType<typeof makeContext>): Promise<void> {
   await ctx.fs.writeFile('.dsh-wallpaper-engine/config.json', bytes('{"wallpaper":"a"}'));
@@ -29,7 +42,7 @@ async function seedHome(ctx: ReturnType<typeof makeContext>): Promise<void> {
 }
 
 test('收录口径：配置分区只带配置，资产分区只带大资产，缓存永不出现', async () => {
-  const ctx = makeContext('win32', HOME, 'web');
+  const ctx = ctxFor(HOME);
   await seedHome(ctx);
 
   const config = new PluginDataAdapter('pluginData', { env: {} });
@@ -54,7 +67,7 @@ test('收录口径：配置分区只带配置，资产分区只带大资产，�
 });
 
 test('单元 = 区域：单元 id 就是区域路径，且预览与导出的体积同口径', async () => {
-  const ctx = makeContext('win32', HOME, 'web');
+  const ctx = ctxFor(HOME);
   await seedHome(ctx);
   const adapter = new PluginDataAdapter('pluginData', { env: {} });
 
@@ -76,7 +89,7 @@ test('单元 = 区域：单元 id 就是区域路径，且预览与导出的体�
 });
 
 test('环境变量覆盖：报码跳过、不猜位置；设成与默认相同不算覆盖', async () => {
-  const ctx = makeContext('win32', HOME, 'web');
+  const ctx = ctxFor(HOME);
   await seedHome(ctx);
 
   const moved = new PluginDataAdapter('pluginData', { env: { DSH_WE_DATA_DIR: 'D:\\wallpapers' } });
@@ -98,7 +111,7 @@ test('环境变量覆盖：报码跳过、不猜位置；设成与默认相同�
 });
 
 test('导入白名单：包外路径一律 Error，applyItem 也拒绝；包内路径正常写回', async () => {
-  const src = makeContext('win32', HOME, 'web');
+  const src = ctxFor(HOME);
   await seedHome(src);
   const adapter = new PluginDataAdapter('pluginData', { env: {} });
   const out = await adapter.export(src, { includeSecrets: false });
@@ -112,7 +125,7 @@ test('导入白名单：包外路径一律 Error，applyItem 也拒绝；包内�
     ],
   };
 
-  const dst = makeContext('linux', '/home/bob', 'web');
+  const dst = ctxFor('/home/bob');
   const sections = new Map<string, unknown>([['pluginData', evil]]);
   const items = await adapter.analyzeImport(evil, makeImportContext(dst, sections));
 
@@ -138,7 +151,7 @@ test('导入白名单：包外路径一律 Error，applyItem 也拒绝；包内�
 });
 
 test('自述声明（dsh.dataDirs）：已安装插件的区域可导出、可导入；未声明的插件目录仍被拒', async () => {
-  const ctx = makeContext('win32', HOME, 'web');
+  const ctx = ctxFor(HOME);
   await ctx.fs.writeFile('profiles/web/package.json', bytes(JSON.stringify({ dependencies: { 'dsh-fake': '^1.0.0' } })));
   await ctx.fs.writeFile(
     'profiles/web/node_modules/dsh-fake/package.json',
@@ -152,7 +165,7 @@ test('自述声明（dsh.dataDirs）：已安装插件的区域可导出、可�
   assert.deepEqual(adapter.listUnits(out).map((u) => u.id), ['pluginData:.fake-plugin']);
 
   // 目标机也装了同一个插件 → 声明可解析 → 允许写
-  const dst = makeContext('linux', '/home/bob', 'web');
+  const dst = ctxFor('/home/bob');
   await dst.fs.writeFile('profiles/web/package.json', bytes(JSON.stringify({ dependencies: { 'dsh-fake': '^1.0.0' } })));
   await dst.fs.writeFile(
     'profiles/web/node_modules/dsh-fake/package.json',
@@ -163,21 +176,44 @@ test('自述声明（dsh.dataDirs）：已安装插件的区域可导出、可�
   assert.deepEqual(items.map((i) => i.kind), ['Create']);
 
   // 换一台机器（没装该插件、也没声明）→ 同一份包必须被拒，绝不静默写到未知位置
-  const fresh = makeContext('linux', '/home/carol', 'web');
+  const fresh = ctxFor('/home/carol');
   const freshItems = await adapter.analyzeImport(out.data, makeImportContext(fresh, sections));
   assert.deepEqual(freshItems.map((i) => i.kind), ['Error']);
 });
 
 test('空形态：一个区域都不存在时不报错、不加噪音文件（只有 dirEmpty 告警）', async () => {
-  const ctx = makeContext('win32', HOME, 'web');
+  const ctx = ctxFor(HOME);
   const adapter = new PluginDataAdapter('pluginData', { env: {} });
   const out = await adapter.export(ctx, { includeSecrets: false });
   assert.deepEqual(out.data.files, []);
   assert.equal(out.counts.files, 0);
 });
 
-test('注入假来源：来源表可替换（测试与未来扩展都走同一条路）', async () => {
+test('旧宿主（没有系统 home 门面）：不收集也不导入，并如实报码 —— 绝不退回 $DSH_HOME 读错位置', async () => {
+  // 注意：这里**故意**用未接线的上下文（homeFs 缺省 undefined）
   const ctx = makeContext('win32', HOME, 'web');
+  await ctx.fs.writeFile('.dsh-wallpaper-engine/config.json', bytes('{"a":1}'));
+  const adapter = new PluginDataAdapter('pluginData', { env: {} });
+
+  const out = await adapter.export(ctx, { includeSecrets: false });
+  assert.deepEqual(out.data.files, [], '缺门面时不得在 $DSH_HOME 下按同名相对路径去读');
+  assert.ok(out.warnings.some((w) => w.includes('系统主目录')), '必须如实说明为什么什么都没收集');
+
+  const sections = new Map<string, unknown>([['pluginData', {
+    version: 1,
+    files: [{ relativePath: '.dsh-wallpaper-engine/config.json', data: bytes('{"a":1}'), contentHash: sha256Hex(bytes('{"a":1}')) }],
+  }]]);
+  const target = makeContext('linux', '/home/bob', 'web');
+  const items = await adapter.analyzeImport(
+    { version: 1, files: [{ relativePath: '.dsh-wallpaper-engine/config.json', data: bytes('{"a":1}'), contentHash: sha256Hex(bytes('{"a":1}')) }] },
+    makeImportContext(target, sections),
+  );
+  assert.deepEqual(items.map((i) => i.kind), ['Error']);
+  assert.equal(await target.fs.exists('.dsh-wallpaper-engine/config.json'), false);
+});
+
+test('注入假来源：来源表可替换（测试与未来扩展都走同一条路）', async () => {
+  const ctx = ctxFor(HOME);
   await ctx.fs.writeFile('.my-plugin/a.json', bytes('{}'));
   const fake: PluginDataSource[] = [{
     id: 'fake', packages: ['x'], evidence: 'fixture',

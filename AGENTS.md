@@ -197,6 +197,7 @@
 - **插件数据分区的收录面只有两个来源**：内置来源表（`src/core/plugin-data-registry.ts`）+ **本机已安装插件**自述的 `dsh.dataDirs`；**包内声明的路径绝不构成写入授权**。
 - **`cache` 区域与 `excludeRel` 命中的内容永不收录**；`excludeRel` 是**区域相对**路径（写成 home 相对 = 排除永不命中）。
 - **区域被环境变量覆盖（取值 ≠ 默认位置）即报码跳过**：绝不按默认位置读、也不猜它指向哪里。
+- **这两个分区的根是系统主目录（`HostContext.osHomeDir` / `homeFs`），不是 `$DSH_HOME`**：路径解析经 `resolveFileTarget` 的分区换根、I/O 一律 `fsForSection()`；缺 `homeFs` 必须显式报码，**绝不退回 `ctx.fs`**（那会把 `~/.mnemon/x` 写成 `$DSH_HOME/.mnemon/x`）。
 - **离线 CLI 不收集 `pluginData` / `pluginAssets`**（`OFFLINE_EXCLUDED_SECTIONS`）；显式 `--sections` 请求时提示改用 GUI，不静默少收。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`

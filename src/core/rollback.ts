@@ -7,7 +7,7 @@
  *    如实标记 failed + manualHint（人工补录）；
  *  - settings 回滚仍走 expectedRevision 乐观锁，避免覆盖导入后用户的新修改。
  */
-import { resolveFileTarget } from './backup.ts';
+import { fsForSection, resolveFileTarget } from './backup.ts';
 import { isPatchLayerRel, USER_PATCH_FILE } from './patch-layers.ts';
 import { msgOf } from './messages.ts';
 import type {
@@ -88,13 +88,15 @@ async function compensateOne(
     }
     case 'file': {
       try {
+        // 门面按分区选（pluginData / pluginAssets 在系统 home 根；见 backup.ts 的 fsForSection）
+        const fsFacade = fsForSection(ctx, entry.adapter);
         const abs = resolveFileTarget(ctx, entry.adapter, entry.ref);
         if (entry.existed && entry.copiedTo && store) {
           const data = await store.readBlob(entry.snapshotId ?? '', entry.copiedTo);
-          await ctx.fs.writeFile(abs, data);
+          await fsFacade.writeFile(abs, data);
         } else if (!entry.existed) {
           // 原文件不存在 → 删除导入写入的文件
-          if (await ctx.fs.exists(abs)) await ctx.fs.remove(abs);
+          if (await fsFacade.exists(abs)) await fsFacade.remove(abs);
         }
         return null;
       } catch (err) {

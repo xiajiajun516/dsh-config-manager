@@ -42,6 +42,7 @@
  */
 import type { HostContext } from '../core/types.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
+import { sectionMeta } from '../schema/section-registry.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
 
 /** self 分区白名单文件（相对 baseDir，即 $DSH_HOME/dsh-config-manager/）。 */
@@ -109,7 +110,7 @@ function canonicalizeWithoutRunState(raw: Uint8Array): Uint8Array | null {
 
 export class SelfAdapter extends FileCollectionAdapter {
   readonly id = 'self' as const;
-  readonly displayName = 'Plugin Self Config';
+  readonly displayName = sectionMeta('self').displayName;
   readonly defaultIncluded = true;
   readonly portability = 'portable' as const;
   /** 插件自身配置目录（相对 homeDir；宿主按 dataDir 解析注入，缺省 dsh-config-manager） */

@@ -7,6 +7,7 @@
  */
 import { engineMsg } from './messages-core.ts';
 import fs from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { parseJsonSafe } from '../utils/json.ts';
@@ -17,7 +18,7 @@ import { SECTION_IDS, isFileSection } from '../schema/config.ts';
 import { isPatchLayerRel, PROFILE_PATCH_FILENAME, USER_PATCH_FILE } from './patch-layers.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
-  ConfigAdapter, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
+  ConfigAdapter, FileSystemFacade, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
   SnapshotEntry, SnapshotManifest, SnapshotStatus, SnapshotStore, SnapshotTarget,
 } from './types.ts';
 
@@ -169,8 +170,43 @@ function profileDirOf(ctx: HostContext): string {
   return path.join(ctx.homeDir, 'profiles', profile);
 }
 
+/**
+ * 以**系统 home 为根**的文件类分区（ref 是系统 home 相对路径）。
+ *
+ * 为什么单独一组：`FileSystemFacade` 被限制在 $DSH_HOME 内，而第三方插件的数据常在 $DSH_HOME 之外
+ * （`~/.dsh-wallpaper-engine/`、`~/.mnemon/` …）。这两个分区的路径解析与 I/O 门面都换根，
+ * 其余分区一字不动 —— 单根不变量只在**这两个分区**上被显式放宽，且仍然只允许白名单区域。
+ */
+export const OS_HOME_FILE_SECTIONS: ReadonlySet<SectionId> = new Set<SectionId>(['pluginData', 'pluginAssets']);
+
+/** 该分区文件目标的根（`dsh` = $DSH_HOME；`osHome` = 系统 home） */
+export function sectionFileRoot(adapter: SectionId): 'dsh' | 'osHome' {
+  return OS_HOME_FILE_SECTIONS.has(adapter) ? 'osHome' : 'dsh';
+}
+
+/** 系统 home：宿主显式给就用它，否则进程 `homedir()`（`~` 的定义，不是猜） */
+export function osHomeDirOf(ctx: HostContext): string {
+  return ctx.osHomeDir !== undefined && ctx.osHomeDir !== '' ? ctx.osHomeDir : homedir();
+}
+
+/**
+ * 该分区文件 I/O 应使用的门面。
+ *
+ * `osHome` 分区必须用 `homeFs`：缺了它**显式抛错**，绝不退回 `ctx.fs` —— 那会把
+ * `~/.mnemon/x.db` 写成 `$DSH_HOME/.mnemon/x.db`（看起来成功、实际写错位置）。
+ */
+export function fsForSection(ctx: HostContext, adapter: SectionId): FileSystemFacade {
+  if (sectionFileRoot(adapter) === 'dsh') return ctx.fs;
+  if (ctx.homeFs === undefined) throw new Error(engineMsg('core.backup.osHomeUnavailable', { section: adapter }));
+  return ctx.homeFs;
+}
+
 /** 解析文件类目标的绝对路径（引擎通用快照与回滚共用） */
 export function resolveFileTarget(ctx: HostContext, adapter: SectionId, ref: string): string {
+  // 系统 home 根的分区：整体换根（plugins 的两个 profile 特例与它们互不相干）
+  if (sectionFileRoot(adapter) === 'osHome') {
+    return path.join(osHomeDirOf(ctx), FILE_BASES[adapter] ?? '', ref);
+  }
   // plugins 分区的 pnpm-workspace.yaml：位于 profiles/<profile>/ 下（非 FILE_BASES 静态基准）
   if (adapter === 'plugins' && ref === 'pnpm-workspace.yaml') {
     return path.join(profileDirOf(ctx), 'pnpm-workspace.yaml');
@@ -195,6 +231,8 @@ export function resolveFileTarget(ctx: HostContext, adapter: SectionId, ref: str
  * 指纹恒为 null，crash 后 reconcile 无法证明该项是否已应用（保守但可避免的精度损失）。
  */
 export function resolveFileTargetRel(adapter: SectionId, ref: string, profile?: string): string {
+  // 系统 home 根的分区：ref 本身就是「根相对路径」，原样归一即可
+  if (sectionFileRoot(adapter) === 'osHome') return normalizePath(ref);
   if (adapter === 'plugins') {
     const profileDir = `profiles/${profile !== undefined && profile !== '' ? profile : 'web'}`;
     if (ref === 'pnpm-workspace.yaml') return normalizePath(`${profileDir}/pnpm-workspace.yaml`);
@@ -309,11 +347,13 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     case 'pluginAssets':
     case 'sessions':
     case 'self': {
+      // 门面按分区选：pluginData / pluginAssets 在系统 home 根（见 fsForSection 的说明）
+      const fsFacade = fsForSection(ctx, target.adapter);
       const abs = resolveFileTarget(ctx, target.adapter, target.ref);
-      if (!(await ctx.fs.exists(abs))) {
+      if (!(await fsFacade.exists(abs))) {
         return { kind: 'file', adapter: target.adapter, ref: target.ref, before: null, existed: false };
       }
-      const data = await ctx.fs.readFile(abs);
+      const data = await fsFacade.readFile(abs);
       // 文件字节不放进 SnapshotEntry（契约纯净），由 createSnapshot 收集进 blobs Map 统一落盘
       return {
         kind: 'file',
@@ -421,7 +461,7 @@ export async function createSnapshot(opts: CreateSnapshotOptions): Promise<Snaps
       if (entry.kind === 'file' && entry.copiedTo && entry.existed) {
         const abs = resolveFileTarget(ctx, adapterId, target.ref);
         // 与改动前**完全相同的读调用**，只是延后到被消费时执行（路径语义与异常传播不变）
-        lazyBlobSources.push({ blobPath: entry.copiedTo, read: () => ctx.fs.readFile(abs) });
+        lazyBlobSources.push({ blobPath: entry.copiedTo, read: () => fsForSection(ctx, adapterId).readFile(abs) });
       }
       entries.push(entry);
     }

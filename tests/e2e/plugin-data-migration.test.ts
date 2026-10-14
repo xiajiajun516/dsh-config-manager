@@ -119,9 +119,21 @@ async function existsAbs(p: string): Promise<boolean> {
   }
 }
 
-function diskCtx(home: string): MockHostContext {
-  const ctx = makeContext(PLATFORM, home, 'web');
-  ctx.fs = new DiskFs(home) as unknown as MockHostContext['fs'];
+/**
+ * 真机形态的宿主上下文：**$DSH_HOME = <系统 home>/.dsh**，两者是不同的根。
+ *
+ * `fs` 是 $DSH_HOME 的门面（读 profiles/<p>/package.json 等自述声明用它），
+ * `homeFs` 是**系统 home** 的门面（第三方插件数据的真实位置用它）——
+ * 这条区分正是本次修复的核心：拿 $DSH_HOME 去读 `~/.mnemon` 会读到不存在的路径。
+ */
+function diskCtx(osHome: string): MockHostContext {
+  const dshHome = path.join(osHome, '.dsh');
+  const ctx = makeContext(PLATFORM, dshHome, 'web');
+  ctx.osHomeDir = osHome;
+  // 两个门面都换成磁盘实现：fs 根 = $DSH_HOME（读 profiles/<p>/package.json 等自述声明），
+  // homeFs 根 = 系统 home（读写第三方插件数据）
+  ctx.fs = new DiskFs(dshHome) as unknown as MockHostContext['fs'];
+  ctx.homeFs = new DiskFs(osHome) as unknown as MockHostContext['fs'];
   return ctx;
 }
 
@@ -229,6 +241,9 @@ test('E2E 3：目标机既有文件判 Conflict —— 冲突不默认覆盖', a
     await fsp.mkdir(path.dirname(target), { recursive: true });
     await fsp.writeFile(target, '{"wallpaper":"local-choice"}', 'utf8');
 
+    // 反向哨兵：$DSH_HOME 下**不得**出现同名目录（那正是修复前「读错根」的落点）
+    assert.equal(await existsAbs(path.join(homeB, '.dsh', '.dsh-wallpaper-engine')), false);
+
     const dst = diskCtx(homeB);
     const importer = importerFor(dst);
     const plan = await importer.createImportPlan(zip, { strategy: 'merge', resolutions: {}, pathMappings: [] });
@@ -270,10 +285,11 @@ test('E2E 4：伪造条目被白名单挡住 —— 计划里 Error、执行期�
 
 test('E2E 5：已安装插件自述声明 —— 目标机装了才放行（新 home 未装则拒绝）', async () => {
   await withHomes(async (homeA, homeB, root) => {
+    // 自述声明在 **$DSH_HOME** 下（profiles/<profile>/node_modules）——读它用的是 fs 门面，不是 homeFs
     const writeManifest = async (home: string): Promise<void> => {
-      const dir = path.join(home, 'profiles', 'web', 'node_modules', 'dsh-fake');
+      const dir = path.join(home, '.dsh', 'profiles', 'web', 'node_modules', 'dsh-fake');
       await fsp.mkdir(dir, { recursive: true });
-      await fsp.writeFile(path.join(home, 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { 'dsh-fake': '^1.0.0' } }), 'utf8');
+      await fsp.writeFile(path.join(home, '.dsh', 'profiles', 'web', 'package.json'), JSON.stringify({ dependencies: { 'dsh-fake': '^1.0.0' } }), 'utf8');
       await fsp.writeFile(
         path.join(dir, 'package.json'),
         JSON.stringify({ name: 'dsh-fake', dsh: { dataDirs: [{ path: '.fake-plugin', role: 'config' }] } }),

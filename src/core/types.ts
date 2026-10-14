@@ -526,6 +526,25 @@ export interface HostContext {
   patchFile: PatchFileFacade;
   fs: FileSystemFacade;
   /**
+   * **系统 home 的绝对路径**（宿主解析；缺省 = 进程 `homedir()`）。
+   *
+   * 为什么需要：一部分第三方插件把数据放在 **$DSH_HOME 之外**（`~/.dsh-wallpaper-engine/`、
+   * `~/.mnemon/`、`~/.fastctx/` …），而 `fs` 被**限制在 $DSH_HOME 内**（越界即抛
+   * `host.fsPathEscape`）。`pluginData` / `pluginAssets` 两个分区的 ref 因此以**系统 home 为根**
+   * （见 `core/backup.ts` 的 `OS_HOME_FILE_SECTIONS`）。
+   *
+   * 判定纪律：**路径计算**用 `ctx.osHomeDir ?? homedir()`（`~` 的定义就是它，不是猜）；
+   * **真正的读写**必须经 `homeFs`，缺了它一律显式失败 —— 绝不退回 $DSH_HOME 写错位置。
+   */
+  osHomeDir?: string;
+  /**
+   * 以**系统 home 为根**的文件门面（与 `fs` 同一套方法、同样越界即抛；缺省 undefined）。
+   *
+   * 只允许 `pluginData` / `pluginAssets` 使用；其余分区一律走 `fs`（$DSH_HOME 内）。
+   * 缺省 = 宿主未提供（旧宿主）→ 这两个分区**不收集也不写入**，由 adapter 如实报码。
+   */
+  homeFs?: FileSystemFacade;
+  /**
    * 会话存储端口（issue #45 会话归位；宿主注入对应 `ctx.sessionPersistence`）。
    *
    * 可选：缺省时归位功能整体不可用（依赖它的调用点必须报「宿主未提供会话存储」而不是静默成功）。

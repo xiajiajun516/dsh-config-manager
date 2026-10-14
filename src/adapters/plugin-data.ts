@@ -36,10 +36,12 @@ import {
   parseDeclaredDataDirs,
 } from '../core/plugin-data-registry.ts';
 import type { PluginDataArea, PluginDataSource, PluginDataSection } from '../core/plugin-data-registry.ts';
+import { osHomeDirOf } from '../core/backup.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
 import type { FilesSection } from '../schema/types.ts';
 import type {
-  ApplyResult, ExportOptions, ExportSection, HostContext, ImportContext, PlanItem, SectionPreview,
+  ApplyResult, ExportOptions, ExportSection, FileSystemFacade, HostContext, ImportContext, PlanItem,
+  SectionPreview,
 } from '../core/types.ts';
 
 /** 区域条目（来源 + 区域），编译期与运行期唯一的区域表示 */
@@ -165,7 +167,8 @@ export class PluginDataAdapter extends FileCollectionAdapter {
       const raw = this.env[name];
       if (raw === undefined || raw.trim() === '') continue;
       const normalized = raw.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-      const home = ctx.homeDir.replace(/\\/g, '/').replace(/\/+$/, '');
+      // 默认位置以**系统 home** 为根（本分区的根；见 core/backup.ts 的 OS_HOME_FILE_SECTIONS）
+      const home = osHomeDirOf(ctx).replace(/\\/g, '/').replace(/\/+$/, '');
       const expanded = normalized.startsWith('~/') ? home + normalized.slice(1) : normalized;
       const defaultAbs = home + '/' + area.relPath;
       if (expanded !== defaultAbs) return name;
@@ -181,16 +184,16 @@ export class PluginDataAdapter extends FileCollectionAdapter {
    * 结果同样是「没有内容」，不会把缺失误报成文件，也不会把目录误读成空内容而静默丢数据。
    * 门面未实现 statSize（旧宿主）时退回读一次内容：读得出来就是文件。
    */
-  private async isRegularFile(ctx: HostContext, rel: string): Promise<boolean> {
-    if (ctx.fs.statSize !== undefined) {
+  private async isRegularFile(fsFacade: FileSystemFacade, rel: string): Promise<boolean> {
+    if (fsFacade.statSize !== undefined) {
       try {
-        return (await ctx.fs.statSize(rel)) !== null;
+        return (await fsFacade.statSize(rel)) !== null;
       } catch {
         return false;
       }
     }
     try {
-      await ctx.fs.readFile(rel);
+      await fsFacade.readFile(rel);
       return true;
     } catch {
       return false;
@@ -208,6 +211,14 @@ export class PluginDataAdapter extends FileCollectionAdapter {
    * 4000+ 文件 / 数百 MB），既慢又会把无关目录当成该分区的「可勾选单元」。
    */
   protected override async listRelPaths(ctx: HostContext): Promise<RecursiveListing> {
+    // 本分区的根是**系统 home**（~/.dsh-wallpaper-engine、~/.mnemon …），不是 $DSH_HOME ——
+    // 内容 I/O 一律走 homeFs；宿主没提供就什么都不收集，并如实报码（绝不退回 $DSH_HOME 去读错位置）。
+    const homeFs = ctx.homeFs;
+    if (homeFs === undefined) {
+      this.active = [];
+      this.pendingWarnings = [engineMsg('adapter.pluginDataNoOsHome')];
+      return PluginDataAdapter.emptyListing();
+    }
     const entries = await this.allowedEntries(ctx);
     this.active = entries;
     const warnings: string[] = [];
@@ -220,13 +231,13 @@ export class PluginDataAdapter extends FileCollectionAdapter {
         warnings.push(engineMsg('adapter.pluginDataEnvOverridden', { path: rel, env }));
         continue;
       }
-      if (await this.isRegularFile(ctx, rel)) {
+      if (await this.isRegularFile(homeFs, rel)) {
         paths.push(rel);
         continue;
       }
       let sub: RecursiveListing;
       try {
-        sub = await listFilesDetailed(ctx.fs, rel);
+        sub = await listFilesDetailed(homeFs, rel);
       } catch {
         // 目录不存在 / 读不到 → 视为无内容（存在的空目录与缺失在这里同义：都没有文件可带）
         continue;
@@ -258,6 +269,20 @@ export class PluginDataAdapter extends FileCollectionAdapter {
     return hit === null ? normalizePath(relativePath) : hit.area.relPath;
   }
 
+  /**
+   * 读一个成员文件：**换根到系统 home 门面**（基类的其余逻辑 —— 体积、哈希、字节闸门 —— 一字不动）。
+   *
+   * 能走到这里说明 listRelPaths 产出过条目（缺门面时它不产出任何路径），因此缺门面即**抛错**，
+   * 不再造一个「空文件」出来（那会把缺通道伪装成空内容）。
+   */
+  protected override async readMember(
+    ctx: HostContext, rel: string, mode: 'content' | 'size', statTimes?: Map<string, number>,
+  ): Promise<{ data: Uint8Array; sizeBytes: number; contentHash: string }> {
+    const homeFs = ctx.homeFs;
+    if (homeFs === undefined) throw new Error(engineMsg('adapter.pluginDataNoOsHome'));
+    return super.readMember({ ...ctx, fs: homeFs }, rel, mode, statTimes);
+  }
+
   override async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<FilesSection>> {
     this.pendingWarnings = [];
     const out = await super.export(ctx, options);
@@ -280,8 +305,14 @@ export class PluginDataAdapter extends FileCollectionAdapter {
    * 的 excludeRel 排除。不满足 → Error（计划里可见、执行期不写），绝不「尽力而为」地写出去。
    */
   override async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {
-    const entries = await this.allowedEntries(ctx.target);
-    const items = await super.analyzeImport(data, ctx);
+    // 宿主没有系统 home 门面（旧宿主）→ 白名单为空 + 目标读也换不了根：**全部拒绝**并说明原因。
+    // 绝不退回 $DSH_HOME 的 ctx.fs 去比对/写入（那会落到错误位置）。
+    const homeFs = ctx.target.homeFs;
+    const entries = homeFs === undefined ? [] : await this.allowedEntries(ctx.target);
+    const items = await super.analyzeImport(
+      data,
+      homeFs === undefined ? ctx : { ...ctx, target: { ...ctx.target, fs: homeFs } },
+    );
     return items.map((item) => {
       const ref = item.target?.ref;
       if (ref === undefined) return item;
@@ -292,7 +323,10 @@ export class PluginDataAdapter extends FileCollectionAdapter {
         ...(item.unitId !== undefined ? { unitId: item.unitId } : {}),
         kind: 'Error',
         adapter: this.id,
-        description: engineMsg('adapter.pluginDataPathNotAllowed', { path: ref }),
+        description: engineMsg(
+          homeFs === undefined ? 'adapter.pluginDataNoOsHome' : 'adapter.pluginDataPathNotAllowed',
+          { path: ref },
+        ),
         severity: 'error',
       };
     });
@@ -300,6 +334,10 @@ export class PluginDataAdapter extends FileCollectionAdapter {
 
   /** 应用前再查一遍白名单（纵深防御：plan 可能来自消费者手工构造/缓存反序列化） */
   override async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    const homeFs = ctx.target.homeFs;
+    if (homeFs === undefined) {
+      return { ok: false, message: engineMsg('adapter.pluginDataNoOsHome') };
+    }
     const ref = item.target?.ref;
     if (ref !== undefined) {
       const rel = normalizeHomeRel(ref);
@@ -308,6 +346,6 @@ export class PluginDataAdapter extends FileCollectionAdapter {
         return { ok: false, message: engineMsg('adapter.pluginDataPathNotAllowed', { path: ref }) };
       }
     }
-    return super.applyItem(item, ctx);
+    return super.applyItem(item, { ...ctx, target: { ...ctx.target, fs: homeFs } });
   }
 }

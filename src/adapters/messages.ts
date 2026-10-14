@@ -34,6 +34,7 @@ export const zh = {
   // ---------- pluginData / pluginAssets（第三方插件数据迁移） ----------
   'adapter.pluginDataEnvOverridden': '{path} 的位置被环境变量 {env} 覆盖，本次已跳过（不猜它指向哪里）',
   'adapter.pluginDataPathNotAllowed': '路径不在第三方插件数据的允许范围内，已拒绝写入: {path}',
+  'adapter.pluginDataNoOsHome': '第三方插件的数据在系统主目录下，但当前宿主没有提供该目录的文件通道（旧版本宿主）：本次不读取也不导入 / third-party plugin data lives under the system home directory, but this host offers no file channel for it (older host): nothing is read or imported this time',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -51,6 +52,7 @@ export const en: Record<keyof typeof zh, string> = {
   'adapter.uiLocalStorageGeneric': 'Browser-side UI state cannot be migrated through the host API',
   'adapter.pluginDataEnvOverridden': "the location of {path} is overridden by the {env} environment variable; skipped this time (the new location is never guessed)",
   'adapter.pluginDataPathNotAllowed': 'the path is outside the range allowed for third-party plugin data and was refused: {path}',
+  'adapter.pluginDataNoOsHome': 'third-party plugin data lives under the system home directory, but this host offers no file channel for it (older host): nothing is read or imported this time',
 };
 
 registerMessageCatalog({ id: 'adapters-domain', zh, en });

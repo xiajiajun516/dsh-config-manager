@@ -496,8 +496,8 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 | 13 | `secrets` | 二进制 | `security/secrets.enc` | 见 §4 | 由 blob 内 `version` 字节承载（当前 `1`） | 恒 false | — |
 | 14 | `sessions` | 文件 | `sessions/` | 递归真实文件 | 1（内存） | **false** | deviceSpecific |
 | 15 | `self` | 文件 | `self/` | 白名单配置文件 | 1（内存） | true | portable |
-| 16 | `pluginData` | 文件 | `plugin-data/` | 递归真实文件（第三方插件的数据目录；区域见 §3.3.1） | 1（内存） | **false** | deviceSpecific |
-| 17 | `pluginAssets` | 文件 | `plugin-assets/` | 递归真实文件（第三方插件的大体积资产） | 1（内存） | **false** | deviceSpecific |
+| 16 | `pluginData` | 文件 | `plugin-data/` | 递归真实文件（**系统主目录**下第三方插件的数据目录；区域见 §3.3.1） | 1（内存） | **false** | deviceSpecific |
+| 17 | `pluginAssets` | 文件 | `plugin-assets/` | 递归真实文件（**系统主目录**下第三方插件的大体积文件） | 1（内存） | **false** | deviceSpecific |
 
 > **计数说明（必须读，否则会数错）**：`SectionId` 共 **17** 个（`src/schema/types.ts:18-22`）。其中：
 > - `secrets` **没有 adapter**、没有 JSON 载荷、不参与 adapter 循环，其产物由 exporter 直接写（`src/core/exporter.ts`）。
@@ -552,7 +552,7 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 | `agentInstructions` | `baseDir === ''` → `relativePath` = homeDir 相对路径**原样**（本实现恒为 `AGENTS.md`） | `src/adapters/agent-instructions.ts:30-35`、`src/adapters/file-collection.ts` |
 | `pluginFiles` | `relativePath` = **相对 `~/.dsh` 根的完整路径**（白名单文件如 `dsh-ssh.json`，或 `collectDir` 下的递归路径） | `src/adapters/plugin-files.ts:42-67` |
 | `self` | `relativePath` = **相对 baseDir（`dsh-config-manager`）的路径**，来自固定白名单（`sync/sync-config.json` 等），**不递归** | `src/adapters/self.ts:32-42`、`src/adapters/self.ts:59-77` |
-| `pluginData` / `pluginAssets` | `baseDir === ''` → `relativePath` = **完整的 homeDir 相对路径**（如 `.dsh-wallpaper-engine/config.json`、`.mnemon/data/x.db`）；区域与排除项来自 `src/core/plugin-data-registry.ts` 的来源注册表（内置来源 + 已安装插件的 `dsh.dataDirs` 自述声明） | `src/adapters/plugin-data.ts`、`src/core/plugin-data-registry.ts`、`docs/spec/plugin-data-declaration.md` |
+| `pluginData` / `pluginAssets` | `baseDir === ''` → `relativePath` = **完整的系统主目录（`~`）相对路径**（如 `.dsh-wallpaper-engine/config.json`、`.mnemon/data/x.db`）—— 注意根是**系统主目录**而不是 `$DSH_HOME`（这两个分区是全仓唯一换根的分区，见 `core/backup.ts` 的 `fsForSection`）；区域与排除项来自 `src/core/plugin-data-registry.ts` 的来源注册表（内置来源 + 已安装插件的 `dsh.dataDirs` 自述声明） | `src/adapters/plugin-data.ts`、`src/core/plugin-data-registry.ts`、`src/core/backup.ts`、`docs/spec/plugin-data-declaration.md` |
 | 归档条目名（全部分区统一） | `name = SECTION_FILE_PREFIXES[sectionId] + relativePath` —— **纯字符串拼接，无归一化、无 `path.join`、无去重** | `src/core/exporter.ts` |
 | CLI 离线备份路径 | 同一公式，但**先过 `isPathSafe(zipName)`**，不安全则跳过该条目并计入 `excludedCount`（写侧唯一做条目名校验的地方） | `src/core/backup-plan.ts` 的 `collectBackupEntries`（`isPathSafe` 闸） |
 

@@ -265,6 +265,20 @@ export class MockHostContext implements HostContext {
   sessions?: HostContext['sessions'];
   /** 可选（issue #71）：技能服务端口；测试按需注入（缺省 = 退回纯目录扫描）。 */
   skills?: HostContext['skills'];
+  /**
+   * 可选（第三方插件数据）：系统 home 与它的文件门面。缺省 undefined = **旧宿主形态**
+   * （pluginData / pluginAssets 不收集也不写入，如实报码）；需要它们的测试自行注入，
+   * 或用 withOsHome() 把系统 home 指向本夹具自己的根。
+   */
+  osHomeDir?: string;
+  homeFs?: HostContext['homeFs'];
+
+  /** 测试助手：把「系统 home」指向本上下文的根（两分区在本夹具里即可直接用） */
+  withOsHome(): this {
+    this.osHomeDir = this.homeDir;
+    this.homeFs = this.fs;
+    return this;
+  }
   constructor(platform: string, homeDir: string, profile?: string) {
     this.platform = platform;
     this.homeDir = homeDir;

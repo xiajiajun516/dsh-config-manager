@@ -117,16 +117,23 @@ test('离线分区清单：注册表所有分区都必须显式归类（可收�
 
 /* ------------------------------------------------------------ FILE_BASES */
 
-test('resolveFileTarget：文件类分区都有明确基准目录（除 home 根分区外不得落 homeDir 根）', () => {
-  // 文件本来就在 $DSH_HOME 根的分区：AGENTS.md / 插件自有文件白名单 / 第三方插件数据
-  // （pluginData 与 pluginAssets 的 ref 是**完整的 home 相对路径**，如 .dsh-wallpaper-engine/config.json）
-  const HOME_ROOT_SECTIONS: readonly SectionId[] = [
-    'agentInstructions', 'pluginFiles', 'pluginData', 'pluginAssets',
-  ];
-  const ctx = { homeDir: path.join('C:', 'home', '.dsh'), profile: 'web' } as unknown as HostContext;
+test('resolveFileTarget：文件类分区都有明确根（$DSH_HOME 内，或系统 home 根的那两个分区）', () => {
+  // 文件本来就在 $DSH_HOME 根的分区：AGENTS.md / 插件自有文件白名单
+  const HOME_ROOT_SECTIONS: readonly SectionId[] = ['agentInstructions', 'pluginFiles'];
+  // **系统 home 为根**的分区（第三方插件数据）：$DSH_HOME 之外的第二个根，见 backup.ts 的 fsForSection
+  const OS_HOME_SECTIONS: readonly SectionId[] = ['pluginData', 'pluginAssets'];
+  const ctx = {
+    homeDir: path.join('C:', 'home', '.dsh'),
+    osHomeDir: path.join('C:', 'home'),
+    profile: 'web',
+  } as unknown as HostContext;
   const atHomeRoot = path.join(ctx.homeDir, 'probe.txt');
   for (const id of SECTION_IDS.filter((s) => isFileSection(s))) {
     const target = resolveFileTarget(ctx, id, 'probe.txt');
+    if (OS_HOME_SECTIONS.includes(id)) {
+      assert.equal(target, path.join(ctx.osHomeDir as string, 'probe.txt'), `${id} 的根必须是系统 home`);
+      continue;
+    }
     assert.ok(target.startsWith(ctx.homeDir), `${id} 的目标必须在 homeDir 下: ${target}`);
     if (HOME_ROOT_SECTIONS.includes(id)) {
       assert.equal(target, atHomeRoot, `${id} 是 home 根分区`);

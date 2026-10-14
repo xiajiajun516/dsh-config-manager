@@ -152,7 +152,7 @@ const SECTION_SPECS: Partial<Record<SectionId, SectionCollectSpec>> = {
     baseDir: '',
     files: ['dsh-ssh.json', 'pet.json'],
     dirs: ['plugin-config'],
-    label: 'Plugin Files',
+    label: "Other Plugins' Loose Files",
     get risk() { return engineMsg('core.backupPlan.pluginFilesRisk') },
   },
   // adapters/self.ts（baseDir='dsh-config-manager'，SELF_CONFIG_FILES 白名单）
@@ -167,7 +167,7 @@ const SECTION_SPECS: Partial<Record<SectionId, SectionCollectSpec>> = {
       'dsh-config-manager/market/market-config.json',
       'dsh-config-manager/exports/.backup-notes.json',
     ],
-    label: 'Plugin Self Config',
+    label: "This Plugin's Own Config",
   },
 };
 

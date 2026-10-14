@@ -26,7 +26,7 @@ import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
 import { loadTombstones, isTombstoned } from '../schema/tombstones.ts';
 import type { Tombstone, TombstoneKind } from '../schema/tombstones.ts';
 import { DEFAULT_SENSITIVE_RELS, restoreVaultFiles } from '../security/vault.ts';
-import { createSnapshot, planItemWritesTarget, resolveFileTarget, resolveFileTargetRel } from './backup.ts';
+import { createSnapshot, fsForSection, planItemWritesTarget, resolveFileTarget, resolveFileTargetRel } from './backup.ts';
 import { isCredentialConfigured } from './credential-status.ts';
 import { rollback } from './rollback.ts';
 import { compatibilityReasons, computeCompatibility } from './validator.ts';
@@ -37,7 +37,7 @@ import {
   ImportNotConfirmedError, ImportUserSkippedError, type ApplyResult, type ConfigAdapter,
   type ExecutedItem, type HostContext, type ImportAnalysis, type ImportContext,
   type ImportDecisions, type ImportPlan, type ImportResult, type PathIssue,
-  type PathMapping, type PlanItem, type SessionFormatProbeResult, type SkippedTombstone,
+  type FileSystemFacade, type PathMapping, type PlanItem, type SessionFormatProbeResult, type SkippedTombstone,
   type Snapshot, type SnapshotStore, type TransactionSnapshotContext,
 } from './types.ts';
 
@@ -953,7 +953,7 @@ export class Analyzer {
         let beforeFp: string | null = null;
         if (Analyzer.fileRelFor(item, importCtx.target.profile) !== null) {
           rel = Analyzer.fileRelFor(item, importCtx.target.profile) as string;
-          beforeFp = await this.fileFp(importCtx, rel);
+          beforeFp = await this.fileFp(importCtx, item);
         }
         beforeFpByItem.set(item.id, beforeFp);
         await sb.recordStep({
@@ -1055,7 +1055,7 @@ export class Analyzer {
           const rel = Analyzer.fileRelFor(item, importCtx.target.profile);
           let afterFp: string | null = null;
           if (rel !== null && outcome.executed.status === 'ok') {
-            afterFp = await this.fileFp(importCtx, rel);
+            afterFp = await this.fileFp(importCtx, item);
           }
           await sb.recordStep({
             id: item.id,
@@ -1382,7 +1382,7 @@ export class Analyzer {
     return planItemWritesTarget(item);
   }
 
-  /** 文件类且可指纹 → 返回 home-relative 目标路径（posix）；否则 null（不可指纹外部项）。
+  /** 文件类且可指纹 → 返回「根相对路径」（journal 的 ref 身份）；否则 null（不可指纹外部项）。
    *  profile 必须传入：plugins 分区的 pnpm-workspace.yaml / patch 文件位于
    *  `profiles/<profile>/` 下，缺了它算出的相对路径不存在 → 指纹恒 null（issue #35）。 */
   private static fileRelFor(item: PlanItem, profile?: string): string | null {
@@ -1392,11 +1392,33 @@ export class Analyzer {
     return resolveFileTargetRel(item.adapter, ref, profile);
   }
 
-  /** 读目标文件算 sha256（home-relative；经 HostContext.fs 使测试 mock 可注入）。失败返回 null。 */
-  private async fileFp(ctx: ImportContext, rel: string): Promise<string | null> {
+  /**
+   * 文件类且可指纹 → 返回「该分区自己的门面 + 绝对路径」。
+   *
+   * 为什么不能只拿 home-relative 路径去读：`pluginData` / `pluginAssets` 的根是**系统 home**
+   * （见 `core/backup.ts` 的 `fsForSection`），用 `ctx.fs` 读会落到 $DSH_HOME 下的错误位置
+   * 或被越界守卫拦下 —— 指纹会静默变成「读不到」，reconcile 因此永远判不出是否已应用。
+   * 宿主未提供该门面 / 路径不可解析 → null（保守：不可证明）。
+   */
+  private static fileTargetFor(
+    ctx: ImportContext, item: PlanItem,
+  ): { fs: FileSystemFacade; abs: string } | null {
+    if (!isFileSection(item.adapter)) return null;
+    const ref = item.target?.ref;
+    if (ref === undefined || ref === '') return null;
     try {
-      const data = await ctx.target.fs.readFile(rel);
-      return sha256Hex(data);
+      return { fs: fsForSection(ctx.target, item.adapter), abs: resolveFileTarget(ctx.target, item.adapter, ref) };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 读目标文件算 sha256（经该分区自己的门面，测试 mock 可注入）。失败返回 null。 */
+  private async fileFp(ctx: ImportContext, item: PlanItem): Promise<string | null> {
+    const target = Analyzer.fileTargetFor(ctx, item);
+    if (target === null) return null;
+    try {
+      return sha256Hex(await target.fs.readFile(target.abs));
     } catch {
       return null;
     }
