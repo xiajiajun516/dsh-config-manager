@@ -413,7 +413,7 @@ export const zh = {
   'rollback.warn.trackDegraded': '有一态留得不完整（回退可能不完整）',
   'rollback.warn.protected': '该回滚点受保护（只进不出）：不可回退、不可删除',
   'rollback.warn.guardFailed': '回退前的救援点没留成（已记告警后继续）',
-  'rollback.warn.createdRefused': '本次不删除任何「留点后新建」的路径：捕获时的证明名单不完整（有整目录被忽略 / 路径索引缺失 / 目录读不出），无法证明哪些是新建的',
+  'rollback.warn.createdRefused': '本次不删除任何「留点后新建」的路径：捕获时的证明名单不完整（有整目录被忽略 / 路径索引缺失 / 目录读不出 / 留点被时间预算中断），无法证明哪些是新建的',
   'rollback.warn.unknown': '未识别的告警（技术细节见下方）',
   'rollback.preview': '预览回退',
   /* 2026-10-10 用户第三条：预览对话框改简洁版，标题就叫「回退预览」（不再带副标题）。
@@ -992,7 +992,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.warn.trackDegraded': 'A state was captured incompletely (the rewind may be incomplete)',
   'rollback.warn.protected': 'This rollback point is protected (kept forever): no rewind, no delete',
   'rollback.warn.guardFailed': 'The pre-rewind rescue point failed (continued with a warning)',
-  'rollback.warn.createdRefused': 'Nothing created after this point was deleted: the capture-time proof list is incomplete (a whole directory was ignored / the path index is missing / a directory was unreadable), so newly created paths cannot be proven',
+  'rollback.warn.createdRefused': 'Nothing created after this point was deleted: the capture-time proof list is incomplete (a whole directory was ignored / the path index is missing / a directory was unreadable / the capture was cut short by its time budget), so newly created paths cannot be proven',
   'rollback.warn.unknown': 'Unrecognized warning (technical detail below)',
   'rollback.preview': 'Preview rewind',
   'rollback.preview.title': 'Rewind preview',

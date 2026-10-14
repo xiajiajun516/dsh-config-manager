@@ -412,6 +412,16 @@ export interface RollbackWorkspacePayload {
    * 文件级忽略**不**置它：被忽略的文件既进 skipped、也进 walked（路径索引来源）⇒ 名单照样完整。
    */
   ignoreIncomplete?: boolean
+  /**
+   * true = 走查被**时间预算 / 取消信号**中断 ⇒ 剩余子树**一条都没进任何名单**
+   * （不在 files / skipped / walked 里）⇒ 证明名单**不完整** ⇒ 删除集整体拒绝（fail-closed）。
+   *
+   * 与 `truncated` 的**关键区别**：`truncated` 的三种成因（文件数 / 总字节 / 单文件超限）都是
+   * 「继续遍历 + 逐条留痕」，名单依然完整，所以**不**拒删；只有「整棵子树根本没被走查」才必须拒删
+   * —— 否则那些文件会被判成「留点后才新建」而被删掉（数据丢失）。
+   * 老台账（本字段诞生前写下的点）一律没有它：按「名单完整」处理（与旧行为一致）。
+   */
+  walkIncomplete?: boolean
   /** 命中文件数 / 字节上限（内容未全部进来，已如实留痕） */
   truncated: boolean
   bytes: number
@@ -1960,6 +1970,8 @@ export class RollbackPointEngine {
     for (const chunk of chunks) {
       if (outOfBudget()) {
         // 分块之间就超预算：不再开新分块，并如实留痕（该分块的条目一条都没被走查）
+        // walkIncomplete 是**安全判据**（删除集 fail-closed），漏了它会删掉未走查子树里的文件
+        payload.walkIncomplete = true
         payload.truncated = true
         this.recordSkip(payload, 'skipped', { path: chunk, reason: 'budget-time' })
         break
@@ -1973,6 +1985,8 @@ export class RollbackPointEngine {
       if (listed.truncated) payload.truncated = true
       for (const file of listed.files) {
         if (outOfBudget()) {
+          // 同上：中断 = 剩余路径从未进任何名单 ⇒ 必须让删除集 fail-closed
+          payload.walkIncomplete = true
           payload.truncated = true
           this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-time' })
           break
@@ -2219,6 +2233,10 @@ export class RollbackPointEngine {
     const out: RollbackGuidance[] = []
     if (payload.ignoreIncomplete === true) {
       out.push({ code: 'rollback.warn.createdRefused', detail: 'ignore-dirs' })
+      return out
+    }
+    if (payload.walkIncomplete === true) {
+      out.push({ code: 'rollback.warn.createdRefused', detail: 'walk-incomplete' })
       return out
     }
     if (payload.skippedTruncated && (payload.pathIndex === null || payload.pathIndex === undefined)) {
@@ -2785,6 +2803,9 @@ export class RollbackPointEngine {
     if (refused === null && payload.unreadableDirs.length > 0) refused = 'capture-incomplete'
     // 用户忽略的整目录 ⇒ 其下内容在留点时刻未知 ⇒ 证明名单不完整（fail-closed）
     if (refused === null && payload.ignoreIncomplete === true) refused = 'capture-incomplete'
+    // 走查被时间预算 / 取消信号中断 ⇒ 剩余子树**一条都没进任何名单** ⇒ 同样证明不了
+    // （这是 `truncated` 之外的第四种「名单不完整」：其余三种截断都会逐条留痕）
+    if (refused === null && payload.walkIncomplete === true) refused = 'capture-incomplete'
     const chunks = payload.chunks
     // 走查上限 = 全树：候选的**准入**由证明名单负责，条数上限不再是安全阀
     //（旧上限 maxFiles*4 会在巨型工作区里静默漏掉真正的新建文件 —— 那是「删一半」，不是 fail-closed）

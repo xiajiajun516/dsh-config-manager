@@ -331,6 +331,13 @@ Linux（web profile）同版本：index.json = **311,521,007 B**（50 条，单�
 **连带修正**：`truncated` 为真时不得判 `chunk-not-found` —— 否则「分块确实存在、只是没跑完」会被报成
 「工作区配错了」。截止用 `stamp()`（单调）比较：系统时钟回拨不会让预算永不触发。
 
+**安全判据（必须成对改，2026-10-14 自查发现）**：中断会让剩余子树**一条都没进任何名单**
+（不在 files / skipped / walked）⇒ 新增 `walkIncomplete` 标志并接成删除集的**第四道** fail-closed 判据
+（`refused = 'capture-incomplete'`）。漏掉它，超时点回退时会把「留点时刻存在、只是没来得及走查」的文件
+当成「留点后新建」**删掉**（`/rollback <id>` 命令固定 `removeCreated: true`，这条路真实可达）。
+这也正是 `walkIncomplete` 必须与 `truncated` **分开**的原因：后者的三种成因（文件数 / 总字节 / 单文件超限）
+都是「继续遍历 + 逐条留痕」，名单完整、**不**拒删。护栏：R-31（超时置标志）+ R-36（标志 ⇒ 一条都不删）。
+
 **② 子代理会话不参与自动留点**（对标 dsh-rewind #26 的 `isSubagentSession`）：
 `rollbackSessionBindingOf` 此前只读 `id` / `header.cwd` / `parentSession`，**不读 `origin`** ⇒ 每个子代理会话
 都会留点；而它与父会话同工作区、回合号是自己的，实际效果只是挤占用户自己会话的预算。

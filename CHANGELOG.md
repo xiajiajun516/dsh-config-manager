@@ -56,8 +56,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Fixed DSH exiting out of memory because of rollback points**: the ledger used to be read and rewritten in full every turn and could grow to hundreds of MB until the host ran out of memory; records are now written one at a time under a size budget.
 - **清掉崩溃残留的回滚点临时文件**：非正常退出留下的临时文件会在下次启动时清理。（issue #89）
   **Crash leftovers are cleaned up**: temporary rollback files left behind by an unclean exit are removed on the next start.
-- **修大工作区留点可能长时间跑不完**：留点现在有 30 秒的时间预算，超时就留下已经扫到的部分、并如实标注是部分结果，不再无限跑下去。
-  **Fixed automatic points that could keep running on a large workspace**: capturing now has a 30-second time budget, keeps whatever it already scanned and marks it clearly as partial instead of running on.
+- **修大工作区留点可能长时间跑不完**：留点现在有 30 秒的时间预算，超时就留下已经扫到的部分并如实标注为部分结果；这种部分点回退时**不会删除任何文件**（无法证明哪些是留点之后新建的），不再无限跑下去。
+  **Fixed automatic points that could keep running on a large workspace**: capturing now has a 30-second time budget and keeps whatever it already scanned, clearly marked as partial; rewinding to such a point never deletes files (it cannot prove which ones appeared later), instead of running on.
 - **修大工作区回退时的内存峰值**：为保证回退可撤销而保存的旧文件内容改为先暂存在磁盘上，内存占用不再随「这次要改多少文件」增长，回退结束即清理。
   **Fixed the memory peak when rewinding a large workspace**: the previous file contents kept for an undoable rewind are now staged on disk, so memory no longer grows with how much the rewind changes, and the staging is cleaned up when it finishes.
 - **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）

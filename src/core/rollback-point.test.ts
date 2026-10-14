@@ -2667,6 +2667,7 @@ test('R-31 采集时间预算：超预算留**部分点**并如实标 truncated�
     (track?.payload?.skipped ?? []).some((s) => s.reason === 'budget-time'),
     '超时必须逐条留痕 budget-time（不是静默截断）',
   )
+  assert.equal(track?.payload?.walkIncomplete, true, '走查中断必须标记 ⇒ 删除集随之 fail-closed')
 })
 
 test('R-32 取消信号：已中止 ⇒ 在文件边界停下（部分点 + budget-time 留痕，绝不整份跑完）', async (t) => {
@@ -2739,5 +2740,30 @@ test('R-35 崩溃残留的回退前像目录：死 pid 整目录清掉、活 pid
   assert.ok(result.bytes >= 64)
   await assert.rejects(fs.access(dead), '死 pid 的残留目录必须被清掉')
   await fs.access(live)
+})
+
+test('R-36 走查被中断的点：删除集整体拒绝（未走查的子树不得被当成「留点后新建」删掉）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  // 白盒：造出 R-31 现场的那个状态（时间预算中断 ⇒ 剩余子树一条都没进任何名单）
+  const record = await readFullRecord(engine, id)
+  assert.notEqual(record.workspace.payload, null)
+  if (record.workspace.payload !== null) record.workspace.payload.walkIncomplete = true
+  await writeFullRecord(engine, record)
+
+  // 留点之后新建的文件：它在留点时刻**是否存在**已无从证明
+  const created = path.join(fx.workspaceDir, 'created-after.txt')
+  await fs.writeFile(created, 'NEW')
+
+  const preview = await engine.preview(id)
+  assert.equal(preview.workspace.createdRefusedReason, 'capture-incomplete', '预览必须拒绝删除并说明原因')
+  assert.deepEqual(preview.workspace.removals, [], '预览不得列出任何待删路径')
+
+  const rewind = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', removeCreated: true })
+  assert.equal(rewind.ok, true)
+  assert.equal(await readText(created), 'NEW', '证明名单不完整 ⇒ 一条都不删（绝不误删未走查子树里的文件）')
 })
 
