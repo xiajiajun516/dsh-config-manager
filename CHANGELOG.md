@@ -60,6 +60,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Fixed automatic points that could keep running on a large workspace**: capturing now has a 30-second time budget and keeps whatever it already scanned, clearly marked as partial; rewinding to such a point never deletes files (it cannot prove which ones appeared later), instead of running on.
 - **修大工作区回退时的内存峰值**：为保证回退可撤销而保存的旧文件内容改为先暂存在磁盘上，内存占用不再随「这次要改多少文件」增长，回退结束即清理。
   **Fixed the memory peak when rewinding a large workspace**: the previous file contents kept for an undoable rewind are now staged on disk, so memory no longer grows with how much the rewind changes, and the staging is cleaned up when it finishes.
+- **修回滚点可能整批消失**：台账偶尔读不出来时，下一次自动留点曾会把台账重写成只剩新点、并删掉旧点的内容副本；现在这种情形直接拒绝写入并如实报错，旧点一个都不动。
+  **Fixed rollback points disappearing in bulk**: when the ledger briefly could not be read, the next automatic point used to rewrite it down to just that new point and delete the old content copies; it now refuses to write and reports the error, leaving old points untouched.
+- **修回退预览可能配错目标**：先预览 A、在途中改看 B 时，弹窗曾可能列着 A 的文件却按 B 执行；现在只认最后一次预览的结果。
+  **Fixed a rewind preview that could pair the wrong target**: previewing A and then switching to B mid-flight could list A's files while rewinding B; only the latest preview's result is used now.
+- **修回退在「读不出来」时误删文件**：某个文件读不出来（被占用 / 无权限）曾会被当成「本来就不存在」，一旦后续出错整体回滚就会把它删掉；现在这种情形直接停手，一个字节都不写。
+  **Fixed rewinds deleting files they could not read**: a file that could not be read (locked or permission-denied) used to count as "did not exist", so a later failure would delete it during rollback; the rewind now stops before writing anything.
+- **回退与预览不再枚举整个工作区**：走查同样受时间预算约束，超时只让「会被删的路径」变少（安全方向），并如实标注结果不完整。
+  **Rewind and preview no longer walk the whole workspace**: the walk is bounded by the same time budget; hitting it only deletes less (the safe direction) and marks the result as incomplete.
+- **.GIT 等大小写写法同样受保护**：Windows 上不再可能把 .GIT 子树当成「留点后新建」删掉。
+  **Case variants such as .GIT are protected too**: on Windows, a .GIT subtree can no longer be treated as newly created and deleted.
 - **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）
   **Sync diff no longer asks about credentials that already match**: keys identical to the snapshot are marked as skipped, so only the ones that actually change need confirmation; the credential badge is renamed from "missing secret" to "credential migration".
 

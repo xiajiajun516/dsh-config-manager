@@ -104,7 +104,7 @@ function rewindTouchesWorkspace(input: { mode?: string; segments?: readonly stri
  *
  * 两道门（R1 预检 / R2 锁内二道保险）共用这一份判据，绝不各写一套。
  */
-function sessionActiveGateApplies(
+export function sessionActiveGateApplies(
   preview: RollbackPreviewResult,
   userConfirmed: boolean,
   safeModeBlocked: boolean,
@@ -121,7 +121,7 @@ function sessionActiveGateApplies(
  * 判据来源只有一个：**preview 已算出的 `session.active`**（引擎按会话日志 mtime 静默窗算）——
  * 路由**绝不自己 stat 会话日志**（那会变成第二份判据，两处迟早漂移）。
  */
-function sessionActiveDenied(id: string, preview: RollbackPreviewResult): RollbackRewindResult {
+export function sessionActiveDenied(id: string, preview: RollbackPreviewResult): RollbackRewindResult {
   return {
     ok: false,
     outcome: 'denied',
@@ -221,12 +221,19 @@ function forkSeamOf(sessions: unknown): RollbackForkSeam | undefined {
   if (sessions === null || typeof sessions !== 'object') return undefined
   const candidate = (sessions as { forkSession?: unknown }).forkSession
   if (typeof candidate !== 'function') return undefined
-  const fork = candidate as (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string } | { error: string }>
+  const fork = candidate as (sessionId: string, boundarySeq: number) => Promise<{ childSessionId: string; warning?: string } | { error: string }>
   return async ({ sessionId, boundarySeq }) => {
     try {
       const result = await fork.call(sessions, sessionId, boundarySeq)
       const childId = result !== null && typeof result === 'object' ? (result as { childSessionId?: unknown }).childSessionId : undefined
-      if (typeof childId === 'string' && childId !== '') return { ok: true, childSessionId: childId }
+      if (typeof childId === 'string' && childId !== '') {
+        // 归位失败（宿主三档都没命中）必须一路带到结果里：丢掉它就会出现「HTTP 入口说已归位、
+        // /rollback 命令说没归位」的矛盾（子会话实际停在侧栏「未分组」）。
+        const warning = (result as { warning?: unknown }).warning
+        return typeof warning === 'string' && warning !== ''
+          ? { ok: true, childSessionId: childId, warning }
+          : { ok: true, childSessionId: childId }
+      }
       const error = result !== null && typeof result === 'object' ? (result as { error?: unknown }).error : undefined
       return { ok: false, code: 'fork-failed', detail: typeof error === 'string' ? error : 'fork-returned-no-id' }
     } catch (err) {

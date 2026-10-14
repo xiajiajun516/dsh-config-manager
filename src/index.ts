@@ -166,6 +166,8 @@ import { parseZip } from './utils/zip.ts'
 import { isSameOrChild } from './utils/paths.ts'
 import { isRecord } from './utils/guards.ts'
 import { createLogger, parseLogLevel, type Logger } from './utils/logger.ts'
+// 与 HTTP 路径**同一份**「运行中对话」判据（命令入口绝不能各写一套）
+import { sessionActiveDenied, sessionActiveGateApplies } from './routes/recovery.ts'
 
 /* ---------------------------------------------------------------- identity */
 
@@ -4768,6 +4770,12 @@ export function apply(ctx: Context, config?: Config): void {
               guidance: preview.guidance,
               warnings: preview.warnings,
             } satisfies RollbackRewindResult
+          }
+          // ①b 与 HTTP 路径**同一道**「运行中对话」门：命令由会话循环派发、日志刚被 append，
+          //     `session.active` 通常为真；缺这道门就会出现「HTTP 会 409 拒绝的『运行中改工作区』
+          //     被命令入口放行」—— 写回的文件随即被运行中的步骤覆盖（撕裂态）。
+          if (preview.session.active === true && sessionActiveGateApplies(preview, true, host.safeModeIsBlocked?.() ?? false)) {
+            return sessionActiveDenied(id, preview)
           }
           // ② 真执行：userConfirmed **恒 true** —— 用户敲下 /rollback <id> 就是那次确认
           //    （命令入口没有第二个确认按钮；其余门全量生效）。

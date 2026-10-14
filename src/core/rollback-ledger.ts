@@ -1142,6 +1142,34 @@ export class RollbackLedger {
    *  · 若在步骤 2 与 3 之间崩溃（没有 index.json、有 index.v2.backup.json），下次启动走
    *    rebuildManifest() 从 records/ 重建清单 —— 清单自证：每条 id 必须在 records/ 找得到。
    */
+  /**
+   * 清单**读不出来**时从 `records/` 重建，并返回重建后重新读到的清单。
+   *
+   * 为什么公开：留点侧（`appendRecord`）在 `readManifest` 报错时**必须**走这里 —— 旧点的最终真相
+   * 在记录文件里，而拿一个空 entries 直接覆盖清单会把旧点整批抹掉、紧接着 `prunePayloads` 还会删掉
+   * 它们的载荷（永久不可恢复）。重建后仍读不出来才由调用方拒写（fail-closed）。
+   */
+  async recoverManifest(): Promise<{ entries: RollbackLedgerManifestEntry[]; error?: string }> {
+    const ids = await this.listRecordIds().catch(() => [] as string[])
+    if (ids.length === 0) {
+      // `records/` 里一条记录都没有 ⇒ 台账**本来就是空的**（或目录还没建）：
+      // 落一份空清单让留点继续 —— 这不是「覆盖」，因为没有东西可丢。
+      // （rebuildManifest 在这种情形会刻意什么都不做，于是清单仍读不出来、留点被永久卡死。）
+      try {
+        await this.writeManifest([])
+      } catch (error) {
+        return { entries: [], error: 'ledger manifest reset failed: ' + errorDetail(error) }
+      }
+      return { entries: [] }
+    }
+    try {
+      await this.rebuildManifest()
+    } catch (error) {
+      return { entries: [], error: 'ledger unreadable: rebuild failed (' + errorDetail(error) + ')' }
+    }
+    return await this.readManifest()
+  }
+
   async migrateIfNeeded(): Promise<RollbackLedgerMigration> {
     const sniff = await this.sniffSchemaVersion()
     if (!sniff.present) return await this.rebuildManifest()

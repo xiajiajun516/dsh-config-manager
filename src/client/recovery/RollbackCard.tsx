@@ -124,7 +124,13 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   /** 逐个文件的「当前 → 回退后」差异（就地展示：设置页没有 DSH 右侧栏，那是聊天区的容器）。 */
   const [inlineDiff, setInlineDiff] = useState<{ path: string; state: RollbackDiffState } | null>(null)
   const mounted = useRef(true)
-  useEffect(() => () => { mounted.current = false }, [])
+  useEffect(() => {
+    // StrictMode / 开发构建会 `effect → cleanup → effect` 双调用：cleanup 把标记置 false 之后
+    // **必须由 setup 还原**，否则整张卡片在双调用后永久早退（Spinner 不停、台账永不出现、
+    // 错误被吞、开关点了没反应）。
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
 
   /** 台账弹窗的开关（2026-10-12：本卡退出折叠，台账整块进弹窗，且只在打开时挂载） */
   const [open, setOpen] = useState(false)
@@ -186,25 +192,42 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   // 挂载即拉一次台账（只读）。
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * 预览请求序号：只有「仍是最新一次请求」的响应才允许写状态。
+   * 没有它就会出现「弹窗列的是 A 的文件、提交时用的却是 B 的 target」—— 关闭弹窗只清 target，
+   * 在途的 A 响应后到照样 setPreview / setMode，而 rewind() 用 target.id 发请求、用 A 的 canRestore
+   * 决定按钮可用性（removeCreated 缺省开启 ⇒ 会按一份不相关的清单真删 B 之后新建的文件）。
+   */
+  const previewSeq = useRef(0)
+
   const openPreview = (row: RollbackPointRowView): void => {
     if (recoveryApi.rollbackPointPreview === undefined) return
+    const seq = previewSeq.current + 1
+    previewSeq.current = seq
     setTarget(row); setPreview(null); setResult(null); setAllowPartial(false); setActionError(null)
     setInlineDiff(null)
     setPreviewLoading(true)
     recoveryApi.rollbackPointPreview(row.id).then(
       (res) => {
-        if (!mounted.current) return
+        if (!mounted.current || previewSeq.current !== seq) return
         setPreviewLoading(false)
         setPreview(res)
         // 默认 mode = 按可用段推导（判定在 ui 层，这里只取结果）
         setMode(rollbackPreviewVerdict(res).mode)
         if (!res.ok) setActionError(t(dyn(rollbackCodeKey(res.code))))
       },
-      (err: unknown) => { if (mounted.current) { setPreviewLoading(false); fail(err) } },
+      (err: unknown) => {
+        if (!mounted.current || previewSeq.current !== seq) return
+        setPreviewLoading(false)
+        fail(err)
+      },
     )
   }
 
   const closePreview = (): void => {
+    // 作废在途响应：否则「关掉 A 再开 B」时 A 的清单会盖到 B 的目标上；顺带清掉在途态
+    previewSeq.current += 1
+    setPreviewLoading(false)
     setTarget(null); setPreview(null); setResult(null); setActionError(null); setInlineDiff(null)
   }
 

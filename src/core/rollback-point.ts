@@ -2430,10 +2430,19 @@ export class RollbackPointEngine {
    */
   private async appendRecord(record: RollbackPointRecord): Promise<{ ok: boolean; detail?: string }> {
     return await withLedgerWriteLock(this.ledgerPath, async () => {
-      const manifest = await this.readManifest()
+      let manifest = await this.readManifest()
       if (this.initError !== undefined) {
         // 台账还有 v2 没迁完（或迁移失败）：**拒写**，绝不覆盖原文件（下次启动重试）
         return { ok: false, detail: this.initError }
+      }
+      if (manifest.error !== undefined) {
+        // 清单**读不出来**：先**从 records/ 重建**（旧点的最终真相在记录文件里），
+        // 而不是拿一个空 entries 覆盖 —— 后者会把旧点整批从清单抹掉，紧接着 prunePayloads
+        // 还会删掉它们的载荷 ⇒ 永久不可恢复。重建后**仍**读不出来才拒写（fail-closed）。
+        manifest = await this.ledger.recoverManifest()
+        if (manifest.error !== undefined) {
+          return { ok: false, detail: 'ledger unreadable: ' + manifest.error }
+        }
       }
       const prepared = this.ledger.prepareRecord(record)
       const merged = [prepared.entry, ...manifest.entries.filter((r) => r.id !== record.id)]
@@ -2810,14 +2819,21 @@ export class RollbackPointEngine {
     // 走查上限 = 全树：候选的**准入**由证明名单负责，条数上限不再是安全阀
     //（旧上限 maxFiles*4 会在巨型工作区里静默漏掉真正的新建文件 —— 那是「删一半」，不是 fail-closed）
     const limit = Number.MAX_SAFE_INTEGER
+    // **时间预算**：回退期的走查同样不能无限跑（分块 = 会话 cwd，家目录 / 大仓库会走很久，
+    // 而捕获侧早就有 30 s 预算 —— 只修一侧等于把 OOM 形态从留点搬到了回退）。
+    // 中断只会让候选**变少**（安全方向），但必须如实置 truncated（绝不静默漏删、也不谎报完整）。
+    const deadline = this.stamp() + this.captureBudgetMs
+    const outOfBudget = (): boolean => this.stamp() >= deadline
     const candidates: string[] = []
     let truncated = false
     for (const chunk of chunks) {
       if (!path.isAbsolute(chunk)) continue
-      const listed = await this.listChunkFiles(path.resolve(chunk), sink, limit, undefined, await loadIgnoreRules(path.resolve(chunk)))
+      if (outOfBudget()) { truncated = true; break }
+      const listed = await this.listChunkFiles(path.resolve(chunk), sink, limit, undefined, await loadIgnoreRules(path.resolve(chunk)), outOfBudget)
       if (listed === null) continue
       if (listed.truncated) truncated = true
       for (const file of listed.files) {
+        if (outOfBudget()) { truncated = true; break }
         if (proof.has(pathKey(file))) continue
         candidates.push(file)
       }
@@ -3385,7 +3401,9 @@ export class RollbackPointEngine {
     if (!path.isAbsolute(file)) return 'not-absolute'
     if (!chunks.some((chunk) => path.isAbsolute(chunk) && isInsidePath(file, chunk))) return 'outside-chunk'
     if (isInsidePath(file, this.root)) return 'inside-data-dir'
-    const segments = path.resolve(file).split(path.sep)
+    // Windows 文件系统**不分大小写**：`.GIT` / `.Git` / `NODE_MODULES` 是同一个目录，必须折大小写后
+    // 再比 —— 不折会让它们的子树失去保护（本文件其它路径判据都走 win32Fold，这里此前漏了）。
+    const segments = win32Fold(path.resolve(file)).split(/[\\/]+/)
     if (segments.includes('.git')) return 'excluded-dir'
     if (segments.includes('node_modules')) return 'excluded-dir'
     return null
@@ -3508,12 +3526,37 @@ export class RollbackPointEngine {
     const preCount = needed.length
     for (const item of needed) {
       let bytes: Uint8Array | null = null
+      let unreadable: string | null = null
       try {
         bytes = await fs.readFile(item.file.path)
-      } catch {
-        bytes = null
+      } catch (error) {
+        // **只认 ENOENT = 当时确实不存在**。其它 errno（EACCES / EMFILE / EBUSY…）是
+        // 「读不出来」而不是「没有」—— 折成 null 会让回滚阶段把这个**存在**的文件删掉
+        // （UndoStager.stage(null) 的语义正是「回滚时删掉它」）。
+        if ((error as { code?: unknown }).code !== 'ENOENT') unreadable = errorDetail(error)
       }
-      await stager.stage(item.file.path, bytes)
+      if (unreadable !== null) {
+        await stager.dispose()
+        pushDetail(detail, 'preimage-unreadable ' + item.file.path + ' ' + unreadable + ' zeroWrites=true')
+        return {
+          state: 'workspace', status: 'failed', reasonCode: 'restore-failed', detail,
+          restored: 0, failed: needed.length + removal.paths.length,
+          leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
+        }
+      }
+      try {
+        await stager.stage(item.file.path, bytes)
+      } catch (error) {
+        // 暂存写不下去（ENOSPC / EACCES）：**零写入失败** —— 绝不带着不完整的前像开工，
+        // 也绝不让异常穿出引擎（那会被路由兜成没有机器码的裸 500，且暂存目录无人清理）。
+        await stager.dispose()
+        pushDetail(detail, 'preimage-stage-failed ' + item.file.path + ' ' + errorDetail(error) + ' zeroWrites=true')
+        return {
+          state: 'workspace', status: 'failed', reasonCode: 'restore-failed', detail,
+          restored: 0, failed: needed.length + removal.paths.length,
+          leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
+        }
+      }
     }
     let restored = 0
     let writtenBytes = 0

@@ -2767,3 +2767,59 @@ test('R-36 走查被中断的点：删除集整体拒绝（未走查的子树不
   assert.equal(await readText(created), 'NEW', '证明名单不完整 ⇒ 一条都不删（绝不误删未走查子树里的文件）')
 })
 
+
+test('R-37 清单损坏时**从 records/ 重建**：旧点不丢（而不是拿空清单覆盖掉它们）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const first = await capturePoint(engine, fx)
+  assert.equal(first.ok, true)
+  const firstId = first.point?.id ?? ''
+  const manifestPath = path.join(engine.storeDir, 'index.json')
+  // 把清单弄成**读不出来**：readManifest 返回 { entries: [], error }
+  await fs.writeFile(manifestPath, '{"schemaVersion": 3, "records": "not-an-array"}')
+  const second = await capturePoint(engine, fx, { sessionId: 's-other' })
+  assert.equal(second.ok, true, '清单损坏不该阻塞留点（R-16 的既有口径）')
+  const after = await engine.list()
+  assert.equal(after.error, undefined)
+  assert.equal(after.points.length, 2, '旧点必须从 records/ 重建回来，绝不能被空清单覆盖丢掉')
+  assert.ok(after.points.some((pt) => pt.id === firstId), '而且就是原来那一条（同 id）')
+})
+
+test('R-40 拒删判据折大小写：.GIT 子树同样受保护（Windows 文件系统不区分大小写）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  const dir = path.join(fx.workspaceDir, '.GIT')
+  await fs.mkdir(dir, { recursive: true })
+  const inner = path.join(dir, 'x.txt')
+  await fs.writeFile(inner, 'PROTECTED')
+  const rewind = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', removeCreated: true })
+  assert.equal(rewind.ok, true)
+  assert.equal(await readText(inner), 'PROTECTED', '.GIT 子树不得被当成「留点后新建」删除')
+})
+
+test('R-41 回退期走查也有时间预算：中断只让候选变少（安全方向）并如实标 truncated', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  const created = path.join(fx.workspaceDir, 'created-after.txt')
+  await fs.writeFile(created, 'NEW')
+  // 同一个台账、另一套预算：回退阶段第一个判定点就超时（步进时钟 + 1ms 预算，确定性）
+  const fast = makeEngine(fx, {
+    captureBudgetMs: 1,
+    now: steppingClock(5_000_000, 1),
+    fork: async () => ({ ok: true, childSessionId: 'child-1' }),
+  })
+  const rewind = await fast.rewind({ id, userConfirmed: true, guardPolicy: 'off', removeCreated: true })
+  assert.equal(rewind.ok, true, '走查中断不是失败')
+  assert.equal(await readText(created), 'NEW', '中断时宁可少删（绝不因为没走完就当成「可以删」）')
+  const ws = rewind.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.createdSkippedTruncated, true, '中断必须如实标 truncated，不谎报「已完整走查」')
+})
+
+
