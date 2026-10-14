@@ -76,6 +76,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Rewind and preview no longer walk the whole workspace**: the walk is bounded by the same time budget; hitting it only deletes less (the safe direction) and marks the result as incomplete.
 - **.GIT 等大小写写法同样受保护**：Windows 上不再可能把 .GIT 子树当成「留点后新建」删掉。
   **Case variants such as .GIT are protected too**: on Windows, a .GIT subtree can no longer be treated as newly created and deleted.
+- **回退不再改写 .git**：仓库元数据不再进快照，回退不会再把索引与分支引用写回旧状态（此前跑过提交的回合回退后可能看起来少了一次提交）；顺带也让几百 MB 的 .git 不再挤占快照预算。
+  **Rewinds no longer touch .git**: repository metadata is not captured anymore, so a rewind cannot write the index and refs back to an older state (a commit made during the round could appear to vanish); it also stops hundreds of MB of .git data from crowding out the snapshot budget.
+- **两个 DSH 实例同时开着时不再互相覆盖回滚点台账**：留点写台账前会先看清单有没有被另一个实例改过，改过就重读合并；连续冲突就放弃这一条并如实记日志（宁可少一条点，也不丢别人的点）。
+  **Two DSH instances no longer overwrite each other's rollback ledger**: before writing, it checks whether another instance changed the ledger, re-reads and merges, and if it keeps changing it gives up that one point and says so in the log (a missing point beats a lost ledger).
+- **界面不再把没读到的开关状态显示成「已关闭」**：偏好还没读回来时开关显示未勾选且禁用，读回来后才显示真实值；若磁盘偏好与当前进程不一致，会直说分歧而不是替磁盘打包票。
+  **The UI no longer shows an unread switch state as "off"**: until the stored preference is read the switch stays unchecked and disabled, and if it disagrees with this process the UI says so instead of vouching for the disk.
+- **回退预览不再把符号链接谎报成「会被创建 / 覆盖」**：链接一律按不可写如实呈现（写入侧本来就会拒绝它），两边口径一致。
+  **The rewind preview no longer reports symlinks as "will be created / overwritten"**: links are shown as not writable, matching what the write path actually does.
+- **多代回退链不再给出重复条目**：同一个回合只取最近一层祖先的点，条目不会再指向两个不同状态。
+  **Multi-generation rewind chains no longer list duplicates**: a turn resolves to the nearest ancestor's point only, so entries no longer point at two different states.
 - **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）
   **Sync diff no longer asks about credentials that already match**: keys identical to the snapshot are marked as skipped, so only the ones that actually change need confirmation; the credential badge is renamed from "missing secret" to "credential migration".
 
