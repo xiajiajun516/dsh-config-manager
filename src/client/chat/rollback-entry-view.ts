@@ -299,6 +299,11 @@ export function chatRewindFailure(result: RollbackRewindResult | null): { code: 
   // t8：`session-active` 作为**结果码**时是「这次带文件段的回退被拒、工作区零改动」——
   // 既有键 `rollback.code.session-active` 描述的是预览里的 reasonCode（仅供参考口径），
   // 所以这里用本轮的专门键（R4：既有键只许追加、不动）。
+  //
+  // **当前这条分支是防御性的**（2026-10-14 核实）：路由把「运行中回退」以 **409** 返回，而
+  // `readJson` 已把响应体里的 code 透传进 `ConfigManagerApiError.code` ⇒ 那条路径走的是
+  // `requestRewind` 的 error 分支（键 = `rollback.code.session-active`，文案同样可操作）。
+  // 保留的是「结果码直接为 session-active」的口径（2xx 结果或将来别的入口），别删。
   if (code !== null) keys.push(code === 'session-active' ? CHAT_SESSION_ACTIVE_DENIED_KEY : rollbackCodeKey(code))
   for (const segment of result.segments ?? []) {
     if (segment.status !== 'failed') continue

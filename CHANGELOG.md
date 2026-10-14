@@ -55,6 +55,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The ledger now says so when it exceeds its size budget**: once there is nothing left to evict automatically (for example when a single point is larger than the budget), the panel states it plainly instead of looking healthy.
 - **离线命令行备份不覆盖第三方插件数据**：用命令行备份并显式点名这两个分区时，会明确提示改用图形界面的导出/导入，而不是静默不收。
   **Offline command-line backups do not cover third-party plugin data**: asking the CLI backup for these two sections now tells you to use the GUI export/import instead of silently leaving them out.
+- **差异视图改成了编辑器式双栏**（回退预览与快照恢复计划共用）：两栏各自带增删配色（红/绿行号 + 行侧色条），上方一行给出文件路径与 `+N/−M`，块头也分栏显示，改了哪几行一眼就能看出来。
+  **Diff views now look like an editor's split view** (shared by the rewind preview and the snapshot restore plan): each pane is colored line by line (red/green line numbers with an edge bar), a header line shows the file path with `+N/−M`, and the hunk header appears per pane, so the changed lines stand out at a glance.
 
 ### 🐛 修复 · Fixed
 
@@ -86,6 +88,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The rewind preview no longer reports symlinks as "will be created / overwritten"**: links are shown as not writable, matching what the write path actually does.
 - **多代回退链不再给出重复条目**：同一个回合只取最近一层祖先的点，条目不会再指向两个不同状态。
   **Multi-generation rewind chains no longer list duplicates**: a turn resolves to the nearest ancestor's point only, so entries no longer point at two different states.
+- **「部分恢复」不再是个没头没尾的结论**：文件段没有执行时，结果屏会明说「未执行的段」是哪个；「回退文件的更改」开关在该段没有可用记录时显示为**未勾选**（不再勾着却点不动，让人以为文件会退）。
+  **"Partially restored" is no longer a dead end**: when the file segment is not executed the result screen names the segment that was skipped, and the "revert file changes" switch shows as unchecked when that segment has no usable record (instead of looking checked while being unusable).
+- **删掉回滚点后，聊天里的「↺ 回退」立刻跟上**：此前 30 秒内那颗按钮仍可能显示可点，点开却说「这个回合还没有回滚点」。
+  **Deleting a rollback point is reflected in chat right away**: for up to 30 seconds the rewind button could still look clickable and then say the turn has no rollback point.
 - **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）
   **Sync diff no longer asks about credentials that already match**: keys identical to the snapshot are marked as skipped, so only the ones that actually change need confirmation; the credential badge is renamed from "missing secret" to "credential migration".
 

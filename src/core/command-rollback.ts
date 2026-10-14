@@ -10,8 +10,12 @@
  *   **绝不绕过**（命令入口没有「确认按钮」，用户敲下 id 就是那次确认；其余门照旧全量生效）。
  *
  * 纪律（与 src/core/model-tools.ts 的 registerModelTools 同口径）：
- *  · 命令服务**惰取**：一律 ctx.get('commands') 调用期读取，绝不属性访问 ctx.commands、
- *    绝不放进 inject —— 未组合该服务的部署必须照常启动（命令是可选能力，不是硬依赖）；
+ *  · 命令服务**惰取**：一律 ctx.get('commands')，绝不属性访问 ctx.commands、绝不放进 inject ——
+ *    未组合该服务的部署必须照常启动（命令是可选能力，不是硬依赖）；
+ *    **读的时机是装配期一次**（见 registerRollbackCommand）：Cordis 的 ctx.get 在 apply 期只能拿到
+ *    **已 apply** 的服务，所以 `commands` 行晚于本插件时 `/rollback` 不会注册（只 warn 一行、无重试入口）。
+ *    DSH 内置插件与本插件的实际 apply 顺序**未坐实**（asar 不可直接读、本机 profile 无相关行）；
+ *    要彻底消除这个窗口需要 `ctx.inject(['commands'])` 式的「服务就绪再注册」回调 —— 未做，如实记在这里。
  *  · 注册失败只 warn：命令挂不上不得影响其它装配（宿主启动 = blocker）；
  *  · 用户可见文案一律走宿主字典 engineMsg（key: command.rollback.*），**取文案那一刻**解析语言；
  *  · 本模块不 import @deepseek-ai/dsh-commands 的运行时值（只做结构化窄化），core 保持与 DSH 解耦。

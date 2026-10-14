@@ -381,4 +381,14 @@ checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对
 
 **仍未落地（下一批，附正确修法）**：C3「结果屏不渲染被跳过的段」与 C4「复选框已勾选且禁用」是**同一根因**的两个面，而 C4 与既有设计冲突（`rollback-entry-view.test.ts:111` 明确钉「档位与预览里的可用段无关」）⇒ 正确修法是在**提交路径**按 `workspace.available` 收窄 `mode`（给 `buildRewindOptions` 补 preview 参数并同步调用点），而不是改 `defaultDraft`（本轮的尝试已回退）；C7 聊天入口 30 s 缓存需要跨模块失效通道；C5 需要 client http 层识别 409 的机器码；H5 命令服务惰取需要换用 `injectServices` 式的就绪回调。
 
+## 第四轮：C3/C4/C7 落地 + 两条「二手结论被推翻」的核实（2026-10-14）
+
+**C3 + C4（同一根因的两个面）**：工作区段不可用时（捕获无 cwd / 分块不存在 / 只记了会话态），聊天侧此前表现为「复选框勾着且禁用」+ 结果屏只说「部分恢复 / 恢复 0 项」。落地两处**纯渲染**改动（不动 mode 语义）：复选框 `checked = revertFiles && revertFilesEnabled`；结果屏在失败块之后新增「未执行的段」一行（复用设置页同一个键 `rollback.rewind.result.skipped`，判据同源 `rollbackSkippedSegments`）。**为什么不动 mode**：`rollback-entry-view.test.ts:111` 明确钉住「档位与预览里的可用段无关」（聊天侧刻意只做一种形态），改 `defaultDraft` 会破坏该设计；正确做法是在**提交路径**收窄 mode，成本更高，留给下一轮。
+
+**C7**：`RollbackCard` 的删除成功与清理成功（`removed > 0`）后调用 `resetChatPointCache()` —— 此前 30 s 内聊天入口仍按旧列表判「可点」。`chat-entry-view` 不 import recovery 模块，无循环依赖（已 grep 确认）。
+
+**C5 的二手结论被推翻**（重要教训）：审计报告称「409 走泛化错误、专门文案永不出现、界面显示裸 HTTP 409」。核实源码后不成立 —— `readJson`（`common/http.ts`）**早已**把响应体里的 `code` 透传进 `ConfigManagerApiError.code`，而 `requestRewind` 的 catch 用 `codeKeyOfError` 读它 ⇒ 409 时界面显示的是 `rollback.code.session-active`（文案可操作：等本轮结束 / 只回溯消息）。真实缺陷只是 `chatRewindFailure` 里那个 `session-active` 分支**永不命中**（该码只经 409 从 HTTP 层来）⇒ 按「防御性分支」保留并如实注明，未改行为。**教训：审计报告的行号级结论也必须回源码复核，尤其是「某条路径永远走不到」这类判断。**
+
+**H5 的调查结论（不改代码）**：Cordis 的 `ctx.get` 在 apply 期只能拿到**已 apply** 的服务，而 `registerRollbackCommand` 在装配期读一次并缓存 ⇒ `commands` 行晚于本插件时 `/rollback` 不注册（只 warn）。**本机无法坐实** DSH 内置插件与本插件的 apply 顺序（`app.asar` 不可直接读，本机 profile 的 `cordis.patch.yml` 里没有 commands 行）。处置：**修正注释**（原文声称「调用期惰取」与实现不符 —— 这是本轮实际修掉的东西），保留 warn，不引入 `ctx.inject(['commands'])`（改装配时机的风险大于该缺口）。
+
 
