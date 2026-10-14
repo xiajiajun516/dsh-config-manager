@@ -1,33 +1,16 @@
 # AGENTS.md — 规则书
 
-> **只放规则**：必须/绝不 + 判据 + 指针，一行一条。真机证据/量化数据/事故经过/复现脚本 → `docs/lessons/`（索引 = `docs/lessons/README.md`）；机制与命令细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
-> **预算**：硬上限 28 KiB（workspace instruction 总预算 64 KiB）；>26 KiB 时守卫先告警。单行 ≤ 400 B（>400 B 通常是「把证据写回来了」）。守卫 `node scripts/check-agents-budget.mjs`。
+> **只收硬规则**（必须/绝不 + 判据 + 指针，一行一条）：**非硬规则内容 —— 说明、清单、流程、示例、证据、历史沿革 —— 一律进 `docs/lessons/<域>.md`，本文件只留一行指针**（索引 = `docs/lessons/README.md`）；机制细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
+> **预算**：硬上限 28 KiB（workspace instruction 总预算 64 KiB）；>26 KiB 先告警；单行 ≤ 400 B。守卫 `node scripts/check-agents-budget.mjs`（超限时模型只能看到被截断的尾巴）。
 > **新增一条坑**：先在 `docs/lessons/<域>.md` 写透证据 → 再回本文件补一行规则 + 指针；**不要把证据写回本文件**。
+> **下移存档**：概览 / 目录结构 / 常用命令 / 本机环境注意 / UI 自查清单 → `docs/lessons/repo-overview.md`。
 
 ## 🌐 语言
 与用户交流一律中文；代码注释/commit/文档以中文为主，技术术语可保留英文。
 
 
-## 📦 概览
-- 用途：DSH 配置的备份/导出/导入/迁移/远程同步/配置市场，双面 Cordis 插件。
-- 技术栈：TS 5.9（strict + `verbatimModuleSyntax` + `noUncheckedIndexedAccess`）、Node≥22、React 18 + CSS Modules、`node:test` 零依赖、tsdown + lightningcss。
-- 样式：唯一 CSS Modules 表 `src/client/config-manager.module.css`；颜色/字体/阴影走 DSH `--dsw-*`；默认不引入第二套视觉体系（→ `DESIGN.md §6`）。
-
-
 ## 🗂️ 结构与分层
-```
-src/cli/      离线 CLI（`dcm`）：snapshots/restore/reinstall/verify/backup/import/sessions/web；actions.ts=动作层 · help.ts=文案单一事实源 · web/=救急台
-src/index.ts  host 入口（apply() 装配 + 保留的 7 条路由）· src/routes/ kit.endpoint() 围栏 + 按域组文件（10 组）
-src/core/     引擎（exporter/importer/restore/rollback/rollback-point/run-registry/plugin-cli），与 DSH 解耦（ConfigAdapter/HostContext + 内存 mock）
-src/foreign/  外部 agent 配置 → bundle v1（30 来源；会话转码经 IR；凭据值绝不进包）
-src/schema/   类型/Manifest/版本 · src/security/ 安全内核 · src/migrations/ 迁移链
-src/adapters/ 13 适配器（settings/ui/providers/plugins/mcp/prompts/skills/agentPresets/agentInstructions/workspaces/credentialsStatus/pluginFiles/self；includeSessions 时 +sessions）
-src/sync/     SyncEngine + Git/WebDavTransport + AutoSyncScheduler + sync-selection · src/market/ 市场读写
-src/profiles/ 档案（shared 零依赖 / manager / launcher / runtime 心跳 / process-control / io【宿主专用，走 node:fs】）
-src/utils/    paths/zip/hashing/json/logger/atomic-write/env-lock/recursive-walk/guards/git-quote
-src/ui/       框架无关 UI 逻辑（纯函数，node 可测） ← 业务逻辑必须在此 · src/client/ React 壳 ← 只做装配
-tests/        node --test 集成测试 · docs/（design/spec/seo/handoff/lessons）· .dsh/skills/
-```
+> 目录树（各目录职责）→ `docs/lessons/repo-overview.md`；下列为硬规则。
 1. 业务逻辑放 `src/ui/`，React 壳只装配；页面落位/共享原语/状态中枢清单 → `DEVELOPERS.md`。
 2. 新增一条 API = 在所属组文件加一条 `endpoint({ path, methods }, handler)`；路由注册**只经** `src/routes/kit.ts`。
 3. `src/client/**` **不得 import node 模块**；跨端共享只能进零依赖模块；`src/profiles/dsh-profile-io.ts` 绝不能被浏览器半 import。
@@ -107,18 +90,9 @@ tests/        node --test 集成测试 · docs/（design/spec/seo/handoff/lesson
 - `src/ui/` 纯函数与 `src/core/` 引擎必须有单测；React 无组件框架，逻辑提炼到 `src/ui/` 保证可测。
 - 新功能必带测试，加密/同步/安全类尤其（样板：`src/security/security.test.ts`、`src/sync/sync-engine.test.ts`）。
 
-## 🧪 命令
-```bash
-npm install --legacy-peer-deps   # 必须带：部分 DSH 核心只在 peerDependencies
-npm run typecheck                # tsc --noEmit（根 config，只覆盖 src/**）
-npm run typecheck:tests          # tsc -p tsconfig.tests.json（把 tests/** 一起纳入；CI 已接）
-npm run build                    # tsc(host lib/) + tsdown(client lib/client.js)
-npm test                         # node --test src/**/*.test.ts tests/**/*.test.ts
-npm run smoke                    # 仅 core 冒烟
-npm run bundle                   # 仅重建 client bundle
-```
-- 无 lint/format 脚本，只以 typecheck 兜底（历史 `eslint-disable` 是遗留）。
-- CSS Modules 由 tsdown+lightningcss 编译为内联注入，单文件 `lib/client.js` 自带样式；**新增样式只能在 `config-manager.module.css`**。
+## ⚙️ 命令与验证
+- **改完必须按序验证**：`npm run typecheck` → `npm test` →（动 client/样式）`npm run build` →（大改动）`npm run smoke`；`npm run build` 前把 `TEMP`/`TMP` 指向工作区内 `.tmp/buildtmp`，`npm test` 用系统 TEMP。
+- **没有 lint/format 脚本**（typecheck 是唯一兜底）；命令全表、本机环境注意与 UI 自查清单 → `docs/lessons/repo-overview.md`。
 
 ## 🎨 UI / DESIGN SYSTEM（最高优先级）
 > **`DESIGN.md` 是 UI/样式决策唯一权威**；涉及 UI/Layout/CSS/颜色/字体/间距/图标/动效/响应式前必读。
@@ -142,16 +116,6 @@ npm run bundle                   # 仅重建 client bundle
 - 不为小功能随意加 UI/CSS/Icon/Animation/Utility 库；**也不引入已准入库的同类替代品**（图标/形变/弹窗）。
 - 加依赖前确认现有方案无合适选择；新增后同步更新 `package.json`+`package-lock.json`（两处 + 根对象）。
 
-## ✅ Verification
-```bash
-npm run typecheck   # 所有改动
-npm test            # 动逻辑/纯函数/引擎/适配器
-npm run build       # 动 client/样式
-npm run smoke       # 大改动
-```
-
-> **本机环境注意**：`npm run build` 需先把 `TEMP`/`TMP` 指向工作区内（`.tmp/buildtmp`）否则 dts 阶段 `Access is denied` 致 build=1；`npm test` 必须用系统 TEMP（`foreign/qoder.test.ts` 用 `os.tmpdir()`）。
-UI 自查：DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应式、Hover/Focus/Disabled/Loading/Empty/Error 齐全、Dark Mode 无 hardcode、未建重复组件、新样式进 css+DESIGN.md、新文案进 locale(zh/en)、敏感字段未落 storage/日志/回显。
 
 
 ## 📚 文档同步
