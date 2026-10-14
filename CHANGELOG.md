@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.73] - 2026-10-15
+
+> **本版主题**：**回滚点不再拖垮宿主** —— 回合自动留点改为默认关闭，台账改成一条一写并带体积上限（此前能涨到几百 MiB，把宿主反复拖到内存溢出退出），关掉开关后聊天里的回退入口一并收起；同时第三方插件的数据也能一起迁移了。
+>
+> **Theme**: **Rollback points no longer drag the host down** — automatic per-turn points are now off by default and the ledger writes one record at a time under a size budget (it used to reach hundreds of MB and repeatedly crashed the host out of memory), with the chat rewind entry disappearing while the switch is off; third-party plugins' data can now be migrated too.
+
 ### 🆕 新增 · Added
 
 - **回滚点可以关掉了**：回合自动留点默认不再开启；在「环境 → 维护与诊断」里可以随时打开或关闭，关掉后聊天里的「↺ 回退」入口一并收起。（issue #88）
