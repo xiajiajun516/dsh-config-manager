@@ -818,7 +818,8 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     吃满可用高度（`min(80vh, 800px)`，与市场审阅步内区同一上限），**弹窗内**
     （`.dialogCard .diffPane .diffScroll`）回落到列表那条 380px —— 卡片本身只有 600/620px 高，
     撑大会让正文溢出卡片边框。
-  - **行号列宽 = 实际最宽行号的位数**（`maxLineDigits` → `.diffNoColW3/4/5/6` 四档 ch，`<colgroup>` 固定）：
+  - **行号列宽 = 实际最宽行号的位数 + 18px 呼吸**（`maxLineDigits` → `.diffNoColW3/4/5/6` 四档 `calc(Nch + 18px)`，
+    `<colgroup>` 固定；那 18px 落在色条与数字之间 —— 行号右对齐，不加时数字贴着 3px 语义色条）：
     fixed 布局下四列平分会让两条行号列吃掉一半宽度、代码列被挤到反复折行；行号列必须只占自身需要的宽度，
     剩余空间由两条代码列平分（`.diffPane` 左外边距归零，别在行号列左侧再留缩进）。
   - **行数统计一律分色**：`+N` 用 `.diffStatAdd`（绿）、`−M` 用 `.diffStatDel`（红）——单条

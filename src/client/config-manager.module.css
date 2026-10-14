@@ -4438,11 +4438,13 @@ body {
 }
 
 /* 行号列宽档位（ch = 等宽字符宽）：只占「实际最宽行号」需要的宽度，
-   剩余空间全部给两侧代码列 —— 固定 4 等分会让行号吃掉一半宽度。 */
-.diffNoColW3 { width: 3ch; }
-.diffNoColW4 { width: 4ch; }
-.diffNoColW5 { width: 5ch; }
-.diffNoColW6 { width: 6ch; }
+   剩余空间全部给两侧代码列 —— 固定 4 等分会让行号吃掉一半宽度。
+   每档另加 18px 呼吸：行号**右对齐**，所以多出来的宽度全落在「左缘那条 3px 语义色条」与数字之间 ——
+   2026-10-14 用户实测：不加时两者只隔 9px，数字像贴在色条上（参考图里这段约 38px）。 */
+.diffNoColW3 { width: calc(3ch + 18px); }
+.diffNoColW4 { width: calc(4ch + 18px); }
+.diffNoColW5 { width: calc(5ch + 18px); }
+.diffNoColW6 { width: calc(6ch + 18px); }
 
 .diffNoHead {
   padding: 2px 6px;
