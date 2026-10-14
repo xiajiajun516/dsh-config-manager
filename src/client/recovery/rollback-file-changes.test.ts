@@ -76,24 +76,26 @@ test('两处调用同一份渲染：聊天预览 + 设置页回滚卡预览（�
   assert.doesNotMatch(card, /rollbackPreviewRows\(/, '预览弹窗不再画工作区/会话计数面板（与聊天预览同一屏）')
 })
 
-test('差异表文件头：路径前面一颗文件类型图标（源级）', () => {
+test('差异表文件头：只画路径文字，不画文件类型图标（源级，2026-10-14 用户第 2 次改口径）', () => {
   const table = readFileSync(TABLE, 'utf8')
-  assert.match(table, /icon\?: ReactNode/, '共享原语只收调用方给的图标节点（文件类型画法不进 common 层）')
-  assert.match(table, /className=\{css\.diffFileIcon\}/, '文件头必须给图标一个独立格子')
-  assert.match(table, /icon !== undefined && <span/, '没给图标时不留空位（对齐不靠死格子撑）')
+  assert.doesNotMatch(table, /diffFileIcon/, '文件头不再有图标格子')
+  assert.doesNotMatch(table, /icon\?: ReactNode/, '共享原语不再收图标节点（那颗链整个撤掉）')
+  assert.match(table, /className=\{css\.diffFilePath \+ ' ' \+ css\.mono\}/, '路径文字仍是文件头的唯一内容')
   const pane = readFileSync(PANE, 'utf8')
-  assert.match(pane, /<RollbackFileIcon path=\{title\} size=\{14\} render=\{renderFileIcon\} \/>/, '文件头的图标必须走共享文件类型图标（与 DSH 侧栏同一画法）')
-  assert.match(pane, /title === undefined \? undefined :/, '没有路径就没有图标（文件名文字就是它的可访问名）')
-  assert.match(pane, /renderFileIcon\?: RollbackFileIconRenderer/, '外部图标来源（dsh-better-sidebar）必须是可注入的，缺省回落')
+  assert.doesNotMatch(pane, /RollbackFileIcon/, '差异面板不再引文件类型图标')
+  assert.doesNotMatch(pane, /renderFileIcon/, '差异面板不再收外部图标来源')
 })
 
 test('侧栏标签页吃满宿主高度：不再自带一道 vh/px 上限（源级）', () => {
   const tab = readFileSync(TAB, 'utf8')
-  assert.match(tab, /title=\{target\.path\} renderFileIcon=\{fileIcon\} fill \/>/, '侧栏标签页：撑满那一屏 + 接上外部图标来源')
+  assert.match(tab, /title=\{target\.path\} fill \/>/, '侧栏标签页：撑满那一屏')
   const dialog = readFileSync(DIALOG, 'utf8')
-  assert.match(dialog, /<RollbackDiffPane state=\{inlineDiff\.state\} rt=\{rt\} title=\{inlineDiff\.path\} renderFileIcon=\{renderFileIcon\} \/>/, '弹窗内的降级通道同样接上图标来源')
+  assert.match(dialog, /<RollbackDiffPane state=\{inlineDiff\.state\} rt=\{rt\} title=\{inlineDiff\.path\} \/>/, '弹窗内的降级通道照旧画差异')
   assert.doesNotMatch(dialog, /RollbackDiffPane[^>]*\bfill\b/, '弹窗内的就地差异不给 fill（宿主面板高度不是它那一屏）')
   const css = readFileSync(CSS, 'utf8')
   assert.match(css, /\.diffPaneFill \{[\s\S]{0,120}?height: 100%/, 'fill 档必须 height:100% 才谈得上「= 侧栏大小」')
-  assert.match(css, /\.diffPaneFill \.diffScroll \{[\s\S]{0,160}?min-height: 0/, 'flex 链必须允许收缩，否则内容顶破父容器（min-height:auto 陷阱）')
+  assert.match(css, /\.diffPaneFill \.diffScroll \{[\s\S]{0,200}?min-height: 0/, 'flex 链必须允许收缩，否则内容顶破父容器（min-height:auto 陷阱）')
+  assert.match(css, /\.diffPaneFill \{[\s\S]{0,400}?margin: 0/, '撑满档必须归零外边距：否则 100% 之外多出 10px，宿主面板自己冒一条滚动条')
+  // 行盒 = 12×1.5 + 上下 1px ⇒ 20px/行：845px 宽的侧栏里 24 行折成 35 个视觉行，22px 差一行就溢出
+  assert.match(css, /\.diffCell \{[\s\S]{0,80}?padding: 1px 6px/, '差异单元格上下内边距必须是 1px（20px 行高才装得进侧栏那一屏）')
 })

@@ -464,7 +464,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
                       <div className={css.inlineDiffBox}>
                         {inlineNotice !== null && <div className={css.hint}>{inlineNotice}</div>}
                         {/* 路径由差异表的文件头承载（.diffFileHead）：这里不再画第二遍 */}
-                        <RollbackDiffPane state={inlineDiff.state} rt={rt} title={inlineDiff.path} renderFileIcon={renderFileIcon} />
+                        <RollbackDiffPane state={inlineDiff.state} rt={rt} title={inlineDiff.path} />
                       </div>
                     )}
                   </>

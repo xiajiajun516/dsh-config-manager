@@ -4368,13 +4368,6 @@ body {
   line-height: 1.5;
 }
 
-/* 文件类型图标（DSH 侧栏同一画法）：不收缩、与文件名同一条基线；装饰性，名字由路径文字承担 */
-.diffFileIcon {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-}
-
 .diffFilePath {
   flex: 1 1 auto;
   min-width: 0;
@@ -4402,6 +4395,10 @@ body {
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* 撑满时**必须归零外边距**：.diffPane 那 2px + 8px 会落在 100% 之外，总量超出父容器
+     ⇒ 宿主面板自己冒出一条滚动条（2026-10-14 真机截图实测：我们的滚动条在 x 836-840，
+     宿主那条在 x 842-844 且贯穿整窗）。 */
+  margin: 0;
 }
 
 .diffPaneFill .diffScroll {
@@ -4431,8 +4428,9 @@ body {
   border-collapse: collapse;
   table-layout: fixed;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  /* 编辑器式行节奏（2026-10-14 用户要求按参考图对齐）：12px × 1.5 + 单元格上下 2px 内边距
-     ⇒ 每行 22px。11px 字号配允许的两档行高（1.25/1.5）最多只有 20.5px，凑不到参考图的 22px。 */
+  /* 编辑器式行节奏（2026-10-14 用户要求按参考图对齐）：12px × 1.5 + 单元格上下 1px 内边距
+     ⇒ 每行 20px（参考图是 22px；845px 宽的侧栏里 24 行会折成 35 个视觉行，22px 差一行就溢出
+     ⇒ 用户第二次实测「还是有滚动条」，故收到 20px 换掉那条滚动条）。 */
   font-size: 12px;
   line-height: 1.5;
 }
@@ -4476,7 +4474,9 @@ body {
 }
 
 .diffNo {
-  padding: 2px 4px;
+  /* 上下 1px（不是 2px）：行盒 12×1.5 = 18px ⇒ 每行 20px —— 24 行文件在 845px 宽的侧栏里
+     会折成 35 个视觉行，20px 才装得进宿主给的那一屏（22px 时差一行 ⇒ 我们的滚动条又回来了）。 */
+  padding: 1px 4px;
   color: var(--dsw-alias-label-tertiary);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -4499,7 +4499,7 @@ body {
 }
 
 .diffCell {
-  padding: 2px 6px;
+  padding: 1px 6px;
   color: var(--dsw-alias-label-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;

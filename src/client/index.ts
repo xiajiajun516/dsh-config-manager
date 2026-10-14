@@ -317,7 +317,7 @@ export function apply(ctx: ClientContext): void {
       name: ROLLBACK_DIFF_SLOT,
       key: ROLLBACK_DIFF_TAB_ID,
       locale: RECOVERY_NS,
-      inject: () => ({ port: recoveryApi, rt: recoveryT, fileIcon: fileIconFor }),
+      inject: () => ({ port: recoveryApi, rt: recoveryT }),
     }, RollbackDiffTab)
   })
 }
