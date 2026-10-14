@@ -41,6 +41,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import { promisify } from 'node:util'
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -2010,6 +2011,10 @@ export class ConfigManagerHostContext implements HostContext {
   readonly workspace: WorkspaceFacade
   readonly patchFile: PatchFileFacade
   readonly fs: FileSystemFacade
+  /** 系统 home（第三方插件数据分区 pluginData / pluginAssets 的根；见 HostContext 的说明） */
+  readonly osHomeDir: string
+  /** 以系统 home 为根的文件门面（同样越界即抛；只有上面两个分区能用） */
+  readonly homeFs: FileSystemFacade
   /** 会话存储端口（issue #45 会话归位；对 ctx.sessionPersistence 的薄适配） */
   readonly sessions: SessionStoreFacade
   /**
@@ -2087,6 +2092,10 @@ export class ConfigManagerHostContext implements HostContext {
     this.plugins = new DshPluginsFacade(homeDir, profile, this.patchFile, undefined, this.msg)
     this.workspace = new DshWorkspaceFacade(ctx, this.msg)
     this.fs = new DshFileSystemFacade(homeDir, this.msg)
+    // 系统 home：一部分第三方插件把数据放在 $DSH_HOME 之外（~/.dsh-wallpaper-engine、~/.mnemon …），
+    // 那两个分区必须换根读写；门面本身与 $DSH_HOME 门面同一实现、同样被限制在它自己的根内。
+    this.osHomeDir = homedir()
+    this.homeFs = new DshFileSystemFacade(this.osHomeDir, this.msg)
     this.sessions = new DshSessionStoreFacade(ctx, homeDir, this.msg, this.log)
     // F-2：Cordis 的 fetch 服务（DSH 自己在用它转发 /api）。缺省回落进程全局 fetch（Node ≥18 恒有）。
     const fetchService = readService<unknown>(ctx, 'fetch')
@@ -4645,7 +4654,9 @@ export function apply(ctx: Context, config?: Config): void {
         return { ok: false as const, code: 'session-fork-unavailable' as const, detail: 'facade has no forkSession' }
       }
       const result = await forkSession.call(forkPort, sessionId, boundarySeq)
-      if ('childSessionId' in result) {
+      // 形状加固：`in` 对 null / 原始值会抛 TypeError —— 端口漂移时应当是**结构化失败**，
+      // 而不是一个没人接的异常（宿主版本换形状时这条最先生效）。
+      if (result !== null && typeof result === 'object' && 'childSessionId' in result) {
         // warning 一路带到回退结果（引擎落成 rollback.guidance.sessionNotAttached）：
         // 归位失败**不静默** —— 会话确实回退了，但它会出现在侧栏「未分组」。
         return result.warning !== undefined
