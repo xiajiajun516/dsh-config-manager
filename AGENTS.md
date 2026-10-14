@@ -45,7 +45,7 @@ tests/        node --test 集成测试 · docs/（design/spec/seo/handoff/lesson
 ## 🔐 安全不变量（硬约束，不得破坏）
 > 证据与实现明细：`docs/lessons/security-and-credentials.md`、`docs/lessons/sync-channel.md`、`docs/spec/sync-channel-v1.md`。
 - **凭据值与密码绝不回读/落盘/落日志/回传浏览器**：`includeSecrets` 缺省 false；导出密钥 = 独立密文凭据载荷（不进 `sections`）。
-- **凭据计划项判据「值的有无」优先于「本机状态」**：有值一律 `MissingSecret` 并写回（不因本机已配置而跳过）；无值才按 `isCredentialConfigured` 跳过；`createImportPlan` 必须收到 `decryptedCredentials`。
+- **凭据计划项：值的有无优先于本机状态**：有值一律 `MissingSecret` 并写回（不因本机已配置而跳过）；无值才按 `isCredentialConfigured` 跳过；同步侧值相同→`Skip`；`createImportPlan` 必须收到 `decryptedCredentials`。
 - **一键同步差异确认的批量按钮覆盖「全部确认项」、只排除 Error**（`sync-view.isBulkDecidable`）。
 - **磁盘占用清理四条不得放宽**：候选只有可重建区 + 显式勾选的过期导出；`snapshots`/`sync` 永不进候选；`categories` 是分区白名单；界面数字由渲染行现算；ENOENT 不计 errors。
 - **同步分区放行是「逐分区」而不是布尔**：`syncSectionCatalog` 由注册表派生；放行只看引擎构造期 `optInSections`；自动同步与 model-tools 只传 `'auto'` 档（sessions 绝不悄悄上下行）。

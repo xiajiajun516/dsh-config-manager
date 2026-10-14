@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）
+  **Sync diff no longer asks about credentials that already match**: keys identical to the snapshot are marked as skipped, so only the ones that actually change need confirmation; the credential badge is renamed from "missing secret" to "credential migration".
+
 ## [0.1.72] - 2026-10-13
 
 > **本版主题**：**对话回退上线** —— 聊天里每条用户消息旁都能一键回到那一刻，原对话完整保留、可以接着聊，工作区文件也可以一起退回去。

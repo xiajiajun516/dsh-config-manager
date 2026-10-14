@@ -553,25 +553,47 @@ export class SyncEngine {
   }
 
   /**
-   * 把「随加密快照迁移的凭据」补进导入计划：每个解密出的 ref 生成一条 MissingSecret 项。
+   * 把「随加密快照迁移的凭据」补进导入计划：**需要写回**的 ref 生成 MissingSecret 项，
+   * 本机值已与快照逐字节相同的 ref 生成 Skip（info）——写回是 no-op，不该再让用户确认。
    * 执行阶段由 credentials adapter 经 ImportContext.decryptedCredentials（仅内存）
    * 调用 credentials.set(ref, value) 写回本机 —— 与手动补录走同一条已验证路径。
    *
-   * 判定与导入路径同规则（**值的有无优先于本机状态**）：
-   *  - 本函数只处理**有值**的 ref → 一律生成 MissingSecret（确认后写回）。
-   *    **不因本机已配置而跳过**：快照显式带了值（用户勾了「导出密钥」），跳过就等于
-   *    「密钥没同步过来」；要逐项放过用确认列表的批量按钮（sync-view 的 isBulkDecidable）。
+   * 判定与导入路径同规则（**值的有无优先于本机状态**），并多做一步「值是否已经相同」：
+   *  - 有值 + 本机不同 / 本机没有 → MissingSecret（确认后写回）。**不因本机已配置而跳过**：
+   *    快照显式带了值（用户勾了「导出密钥」），跳过就等于「密钥没同步过来」；
+   *    要逐项放过用确认列表的批量按钮（sync-view 的 isBulkDecidable）。
+   *  - 有值 + 本机逐字节相同 → Skip（info）。这是对上一轮「有值一律 MissingSecret」的**收窄**
+   *    （真机反馈：本机 refs 一条不缺，列表却全标「缺密钥」+ 黄色警告）：只有真的会改动本机的
+   *    ref 才需要人工确认。
+   *  - 本机凭据文件读不到 → 无法比较 → 保守按 MissingSecret 处理，绝不静默跳过。
    *  - 「只有 ref 名、没有值」的情形由 createImportPlan → buildCredentialPlanItems 处理
    *    （那里才做本机已配置 → Skip 的判定）。
-   *  - 同 id 已是 **Skip**（上面那条规则在「无值」时先判成了 Skip）→ **升级**为 MissingSecret：
-   *    否则有值也会被 Skip 挡住，值永远不会写回。
+   *  - 同 id 已是 **Skip**（上面那条规则在「无值」时先判成了 Skip）→ 值不同时**升级**为
+   *    MissingSecret：否则有值也会被 Skip 挡住，值永远不会写回；值相同时保持 Skip。
    */
-  private appendCredentialPlanItems(plan: ImportPlan, credentials: Map<string, string> | undefined): void {
+  private async appendCredentialPlanItems(plan: ImportPlan, credentials: Map<string, string> | undefined): Promise<void> {
     if (credentials === undefined || credentials.size === 0) return;
+    const local = await this.readLocalCredentials();
     const byId = new Map(plan.items.map((i) => [i.id, i] as const));
-    for (const ref of credentials.keys()) {
+    for (const [ref, value] of credentials) {
       const id = `secret:${ref}`;
       const prev = byId.get(id);
+      if (local?.get(ref) === value) {
+        const description = this.msg('sync.credentialsItemSame', { ref });
+        if (prev === undefined) {
+          const same: PlanItem = {
+            id, kind: 'Skip', adapter: 'credentialsStatus', description,
+            severity: 'info', target: { adapter: 'credentialsStatus', ref },
+          };
+          plan.items.push(same);
+          byId.set(id, same);
+        } else if (prev.kind === 'Skip' || prev.kind === 'MissingSecret') {
+          prev.kind = 'Skip';
+          prev.severity = 'info';
+          prev.description = description;
+        }
+        continue;
+      }
       if (prev !== undefined) {
         if (prev.kind !== 'Skip') continue; // 已有可执行项 → 不重复
         prev.kind = 'MissingSecret';
@@ -594,6 +616,24 @@ export class SyncEngine {
     plan.missingSecrets = plan.items
       .filter((i) => i.kind === 'MissingSecret')
       .map((i) => ({ ref: i.id.replace(/^secret:/, ''), required: true }));
+  }
+
+  /**
+   * 读本机 `$DSH_HOME/.credentials.yaml` → `Map<ref, value>`，**只用于**「值是否已经相同」比对。
+   * 与 push 侧 buildCredentialsPayload 读同一个文件、同一解析口径（credentialsMapFromYaml）；
+   * 不新增任何能力，也不回读凭据值到 UI。
+   * 读不到 / 解析失败 → undefined = **无法比较**：调用方必须按「未知」保守处理（照旧要求确认），
+   * 绝不因为读失败就静默跳过写回。
+   * 安全：值只在进程内存里比较 —— 不落盘、不进日志/报告/响应体。
+   */
+  private async readLocalCredentials(): Promise<Map<string, string> | undefined> {
+    try {
+      const file = path.join(this.ctx.homeDir, '.credentials.yaml');
+      const raw = Buffer.from(await this.ctx.fs.readFile(file)).toString('utf8');
+      return credentialsMapFromYaml(raw);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -944,7 +984,7 @@ export class SyncEngine {
         pathMappings: opts.pathMappings ?? [],
       });
       // 凭据迁移项（ref 名进计划/报告，值绝不进）
-      this.appendCredentialPlanItems(plan, credentials);
+      await this.appendCredentialPlanItems(plan, credentials);
       const changes: PullChange[] = plan.items.map((i) => ({
         id: i.id,
         adapter: i.adapter,
@@ -1116,7 +1156,7 @@ export class SyncEngine {
       // issue #45：自动重定基 + 用户映射（与 pull 同口径；一键同步的 apply-items 复用本 plan）
       pathMappings: opts.pathMappings ?? [],
     });
-    this.appendCredentialPlanItems(plan, credentials);
+    await this.appendCredentialPlanItems(plan, credentials);
     return {
       ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, credentials,
       message: tombstoned.length === 0

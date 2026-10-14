@@ -197,7 +197,7 @@ test('sync-view: summarizePullChanges 空数组 → total 0 且不需决策', ()
 test('sync-view: kindLabel / severityLabel 覆盖关键类型', () => {
   assert.equal(kindLabel('Conflict', zhUiT), '冲突')
   assert.equal(kindLabel('Install', zhUiT), '安装')
-  assert.equal(kindLabel('MissingSecret', zhUiT), '缺密钥')
+  assert.equal(kindLabel('MissingSecret', zhUiT), '凭据迁移')
   assert.equal(severityLabel('error', zhUiT), '错误')
   assert.equal(severityLabel('warning', zhUiT), '警告')
   assert.equal(severityLabel('info', zhUiT), '信息')

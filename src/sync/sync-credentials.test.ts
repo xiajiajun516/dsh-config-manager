@@ -409,3 +409,122 @@ test('散文件布局不承载凭据载荷（issue #38 防御：绝不静默丢�
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+/* ---------------- issue #38 补充：本机值已与快照一致 → 不再列为待写入 ---------------- */
+
+/** 目标机 + 本机已有 `.credentials.yaml`（「值是否已经相同」比对的唯一数据源，与 push 侧同文件） */
+async function makeTargetWithLocalCredentials(yaml: string): Promise<Ctx> {
+  const ctx = makeTarget();
+  await ctx.fs.writeFile('.credentials.yaml', Buffer.from(yaml, 'utf8'));
+  return ctx;
+}
+
+/** 与源机同一份凭据快照（加密 + 导出密钥） */
+async function pushCredentialSnapshot(transport: MemSyncTransport, tmp: string, id: string): Promise<void> {
+  const srcCtx = makeContext('win32', 'C:\\Users\\alice');
+  await makeSource(srcCtx);
+  await makeEngine(srcCtx, transport, tmp).push({ snapshotId: id, encrypt: true, password: PASSWORD, includeSecrets: true });
+}
+
+test('本机值与快照逐字节相同 → Skip(info)，不进待确认/补录清单（真机：本机一条不缺却全标「缺密钥」）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-same-'));
+  try {
+    const transport = new MemSyncTransport();
+    await pushCredentialSnapshot(transport, tmp, 'cred-remote');
+
+    const dstCtx = await makeTargetWithLocalCredentials(CRED_YAML);
+    const engine = makeEngine(dstCtx, transport, tmp);
+
+    const pull = await engine.pull({ password: PASSWORD });
+    assert.deepEqual(
+      pull.changes.filter((c) => c.id.startsWith('secret:')).map((c) => [c.id, c.kind, c.severity]),
+      [['secret:DEEPSEEK_API_KEY', 'Skip', 'info'], ['secret:GITHUB_TOKEN', 'Skip', 'info']],
+      '值一致 → Skip(info)：写回是 no-op，不该要求人工确认',
+    );
+    assert.equal(pull.needsReview, false, '无任何待决策项');
+    assert.ok(!JSON.stringify(pull).includes('sk-real-cred-0001'), '报告不得含凭据值');
+
+    const preview = await engine.preview({ password: PASSWORD });
+    assert.deepEqual(preview.plan!.missingSecrets, [], '值一致不得计入 missingSecrets');
+    const item = preview.plan!.items.find((i) => i.id === 'secret:DEEPSEEK_API_KEY');
+    assert.equal(item?.kind, 'Skip');
+    assert.equal(item?.severity, 'info');
+    assert.ok(!JSON.stringify(preview.plan).includes('sk-real-cred-0001'), '计划不得含凭据值');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('本机值不同 / 本机缺该 ref → 一律 MissingSecret 并写回（「导出密钥」语义不放宽）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-diff-'));
+  try {
+    const transport = new MemSyncTransport();
+    await pushCredentialSnapshot(transport, tmp, 'cred-remote');
+
+    // 本机只有 GITHUB_TOKEN 且是旧值；DEEPSEEK_API_KEY 本机没有
+    const dstCtx = await makeTargetWithLocalCredentials('GITHUB_TOKEN: ghp_local_old\n');
+    const engine = makeEngine(dstCtx, transport, tmp);
+
+    const preview = await engine.preview({ password: PASSWORD });
+    assert.deepEqual(
+      preview.plan!.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind, i.severity]),
+      [['secret:DEEPSEEK_API_KEY', 'MissingSecret', 'warning'], ['secret:GITHUB_TOKEN', 'MissingSecret', 'warning']],
+      '值不同或本机没有 → 仍须人工确认后写回',
+    );
+    assert.deepEqual(
+      preview.plan!.missingSecrets.map((s) => s.ref),
+      ['DEEPSEEK_API_KEY', 'GITHUB_TOKEN'],
+      'missingSecrets 与 items 同源',
+    );
+
+    const plan = {
+      ...preview.plan!,
+      items: preview.plan!.items.filter((i) => i.id.startsWith('secret:')),
+    };
+    const report = await engine.applyItems(preview.zipPath, plan, { credentials: preview.credentials });
+    assert.deepEqual(report.failed, []);
+    assert.equal(dstCtx.credentials.values.get('GITHUB_TOKEN'), 'ghp_realcred0002', '值不同 → 写回快照里的值');
+    assert.equal(dstCtx.credentials.values.get('DEEPSEEK_API_KEY'), 'sk-real-cred-0001');
+    assert.ok(!JSON.stringify(report).includes('sk-real-cred-0001'), '执行报告不得含凭据值');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('本机凭据文件读不到 → 无法比较：保守按待确认处理，绝不静默跳过', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-nolocal-'));
+  try {
+    const transport = new MemSyncTransport();
+    await pushCredentialSnapshot(transport, tmp, 'cred-remote');
+
+    const dstCtx = makeTarget(); // 本机没有 .credentials.yaml
+    const preview = await makeEngine(dstCtx, transport, tmp).preview({ password: PASSWORD });
+    assert.deepEqual(
+      preview.plan!.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [['secret:DEEPSEEK_API_KEY', 'MissingSecret'], ['secret:GITHUB_TOKEN', 'MissingSecret']],
+      '读不到 = 未知 → 照旧要求确认（跳过就等于密钥没同步过来）',
+    );
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('本机凭据文件是 DSH v1 布局（refs: 块）→ 同样识别「值已一致」', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cred-v1-'));
+  try {
+    const transport = new MemSyncTransport();
+    await pushCredentialSnapshot(transport, tmp, 'cred-remote');
+
+    const localV1 = 'version: 1\nrefs:\n  DEEPSEEK_API_KEY: sk-real-cred-0001\n  GITHUB_TOKEN: ghp_realcred0002\n';
+    const dstCtx = await makeTargetWithLocalCredentials(localV1);
+    const preview = await makeEngine(dstCtx, transport, tmp).preview({ password: PASSWORD });
+    assert.deepEqual(
+      preview.plan!.items.filter((i) => i.id.startsWith('secret:')).map((i) => [i.id, i.kind]),
+      [['secret:DEEPSEEK_API_KEY', 'Skip'], ['secret:GITHUB_TOKEN', 'Skip']],
+      'v1 refs 块与扁平布局读出的值相同 → 一律 Skip',
+    );
+    assert.deepEqual(preview.plan!.missingSecrets, []);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
