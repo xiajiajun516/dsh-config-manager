@@ -808,6 +808,11 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     块头 `@@ -a,b +c,d @@` 用 `.diffHunkRow`，**两栏各一格、同一段文本**（编辑器式单文件 diff 的观感）；
     两栏之间的竖线由 `.diffTable tbody td:nth-child(3)` + `.diffHunkRow td + td` 的左边框画（表头仍是
     `.diffNoHead + .diffNoHead`）——只画表头会让正文两栏看起来连成一片。
+    **行节奏（2026-10-14 用户参考图）**：`font-size: 12px` + `line-height: 1.5` + 单元格上下 `2px` 内边距
+    ⇒ 每行 **22px**；11px 字号配允许的两档行高（1.25 / 1.5）最多 20.5px，凑不到参考图的行高。
+    块头与正文同档字号（`.diffHunkRow td` 不再单独写 11px），文件头 `.diffFileHead` 同 12px；
+    列头 `.diffNoHead` 仍是 11px 的小字幕。正文仍 `pre-wrap` 折行（参考图是横向滚动不折行 ——
+    `table-layout: fixed` 下改成不折行会让两栏互相挤压，不采用）。
     **上限**：单文件最多渲染 400 行对（超出显示「已截断」提示）；容器复用 `.diffScroll`（限高内滚）。
   - **行号列宽 = 实际最宽行号的位数**（`maxLineDigits` → `.diffNoColW3/4/5/6` 四档 ch，`<colgroup>` 固定）：
     fixed 布局下四列平分会让两条行号列吃掉一半宽度、代码列被挤到反复折行；行号列必须只占自身需要的宽度，

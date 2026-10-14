@@ -4361,7 +4361,9 @@ body {
   gap: 8px;
   padding: 2px 6px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
-  font-size: 11px;
+  /* 与差异正文同一档字号：文件头是这半张表的标题，不应比正文小一号 */
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .diffFilePath {
@@ -4388,7 +4390,10 @@ body {
   border-collapse: collapse;
   table-layout: fixed;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
+  /* 编辑器式行节奏（2026-10-14 用户要求按参考图对齐）：12px × 1.5 + 单元格上下 2px 内边距
+     ⇒ 每行 22px。11px 字号配允许的两档行高（1.25/1.5）最多只有 20.5px，凑不到参考图的 22px。 */
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 /* 行号列宽档位（ch = 等宽字符宽）：只占「实际最宽行号」需要的宽度，
@@ -4404,6 +4409,7 @@ body {
   border-right: 1px solid var(--dsw-alias-border-l1);
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
+  line-height: 1.5;
   font-weight: 600;
   text-align: left;
 }
@@ -4414,10 +4420,9 @@ body {
 }
 
 .diffHunkRow td {
-  padding: 1px 6px;
+  padding: 2px 6px;
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-tertiary);
-  font-size: 11px;
 }
 
 /* 两栏之间的竖分割线：块头（colSpan=2 的两格）与正文（第 3 格 = 右栏行号）都要有 ——
@@ -4428,7 +4433,7 @@ body {
 }
 
 .diffNo {
-  padding: 0 4px;
+  padding: 2px 4px;
   color: var(--dsw-alias-label-tertiary);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -4451,7 +4456,7 @@ body {
 }
 
 .diffCell {
-  padding: 0 6px;
+  padding: 2px 6px;
   color: var(--dsw-alias-label-secondary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
