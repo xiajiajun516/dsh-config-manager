@@ -4385,6 +4385,20 @@ body {
   margin: 2px 0 8px;
 }
 
+/* 差异正文的高度：**吃满可用高度**，不再套列表那条 380px 限高
+   （2026-10-14 用户实测：22px 行高下一屏只看到 10 行 —— 380px 是给「清单」定的量级，
+   差异视图是这一屏的主内容，尺寸本该随窗口走）。上限 800px 与市场审阅步内区同一档，
+   防止超长内容把宿主面板撑长；内容比上限高时仍由自己内滚。 */
+.diffPane .diffScroll {
+  max-height: min(80vh, 800px);
+}
+
+/* 弹窗里回落到列表量级：.dialogCard / .dialogWide 的 max-height 只有 600 / 620px，
+   撑到 80vh 会溢出卡片（正文逃出卡片边框），弹窗这一档保持原样。 */
+.dialogCard .diffPane .diffScroll {
+  max-height: 380px;
+}
+
 .diffTable {
   width: 100%;
   border-collapse: collapse;

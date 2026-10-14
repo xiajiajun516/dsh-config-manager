@@ -813,7 +813,11 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     块头与正文同档字号（`.diffHunkRow td` 不再单独写 11px），文件头 `.diffFileHead` 同 12px；
     列头 `.diffNoHead` 仍是 11px 的小字幕。正文仍 `pre-wrap` 折行（参考图是横向滚动不折行 ——
     `table-layout: fixed` 下改成不折行会让两栏互相挤压，不采用）。
-    **上限**：单文件最多渲染 400 行对（超出显示「已截断」提示）；容器复用 `.diffScroll`（限高内滚）。
+    **上限**：单文件最多渲染 400 行对（超出显示「已截断」提示）；容器复用 `.diffScroll`，
+    但**高度按上下文分两档**（2026-10-14 用户实测「22px 行高下一屏只剩 10 行」）：`.diffPane .diffScroll`
+    吃满可用高度（`min(80vh, 800px)`，与市场审阅步内区同一上限），**弹窗内**
+    （`.dialogCard .diffPane .diffScroll`）回落到列表那条 380px —— 卡片本身只有 600/620px 高，
+    撑大会让正文溢出卡片边框。
   - **行号列宽 = 实际最宽行号的位数**（`maxLineDigits` → `.diffNoColW3/4/5/6` 四档 ch，`<colgroup>` 固定）：
     fixed 布局下四列平分会让两条行号列吃掉一半宽度、代码列被挤到反复折行；行号列必须只占自身需要的宽度，
     剩余空间由两条代码列平分（`.diffPane` 左外边距归零，别在行号列左侧再留缩进）。
