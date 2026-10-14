@@ -81,10 +81,12 @@ class DiskFs implements FileSystemFacade {
 
   async listRecursive(dir: string): Promise<string[]> {
     const out: string[] = [];
+    type Direntish = { name: string; isDirectory(): boolean; isFile(): boolean };
     const walk = async (d: string): Promise<void> => {
-      let entries: Awaited<ReturnType<typeof fsp.readdir>>;
+      let entries: Direntish[];
       try {
-        entries = await fsp.readdir(d, { withFileTypes: true });
+        // readdir 的 withFileTypes 重载在测试 tsconfig 下解析到 Buffer 变体，这里显式收窄成形状接口
+        entries = (await fsp.readdir(d, { withFileTypes: true })) as unknown as Direntish[];
       } catch {
         return;
       }
