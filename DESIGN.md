@@ -843,7 +843,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     `.diffNoColW*`），单元格文本**缺省即 redact**（`sanitize` 的缺省值就是 `redact`，调用方只能换成别的脱敏器）。
     **2026-10-14 起多一个可选文件头** `title`（`.diffFileHead` = 路径 + `+A`/`−R`，行数由 `diffLineCounts` 现算；
     **只画路径文字，不画文件类型图标** —— 曾经接过 `RollbackFileIcon`，同日用户改口径「文件路径前面不需要 icon」，
-    整条链已撤掉，别再加回去）：
+    整条链已撤掉；那颗图标改去画**芯片**（见 §「查看」的芯片段），别再加回文件头）：
     只在调用方**没在别处写过路径**时传 —— 回滚侧栏标签页与聊天/设置页的就地差异块传 path（它们原先各画一行
     `.hint.mono` 路径，已由该文件头顶掉）；恢复计划行自己那格已写路径，**不传**（同一路径不画两遍）。
 - **回退预览弹窗（Cursor「Confirm Undo」式，2026-10-12 用户要求）**：底盘沿用 `.dialogCard` 宽版，
@@ -854,6 +854,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     + `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）；**点文件名即打开该文件差异**（无独立「查看」按钮）。
   - 「查看」把该文件的差异开进 **DSH 右侧栏**（本插件注册自己的 tab 类型 `cm-rollback-diff`）；
     本客户端没有侧栏能力时降级为弹窗内展示（`.inlineDiffBox`）并说明为什么在这里看 —— 不出现空白面板、不假装打开过。
+    **芯片（标签条上那颗标签）由我们自己画**：`sidebar.right.pane.tab.title`（keyed，key 同正文位）
+    = `RollbackDiffTabTitle` → 「文件类型图标 + 文件名」（`.rollbackTabIcon`，与 better-sidebar 的 `.chipIcon`
+    同档：inline-flex + 右 6px）。为什么必须自己画：**宿主的 tab 类型定义没有 icon 字段**（芯片只由 title
+    文字画出来，dsh-better-sidebar 的 tab-adapter 注释写明）；形态探测不过 ⇒ 不注册，芯片退回宿主画的标题文字。
     侧栏正文**撑满宿主给的那一屏**（`RollbackDiffPane` 的 `fill` 档 / `.diffPaneFill`：`height: 100%` +
     表格 `flex: 1 1 auto`，flex 链每环 `min-height: 0`，且 **`margin: 0`** —— `.diffPane` 那 2px+8px 落在
     100% 之外会让宿主面板自己冒一条滚动条，真机截图实测「我们的滚动条在容器内、宿主那条贯穿整窗」）：

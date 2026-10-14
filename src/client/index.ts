@@ -50,7 +50,7 @@ import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/c
 import { registerChatNodeEntry } from './chat/chat-node-registration.ts'
 import { setRollbackEntryEnabled } from './recovery/rollback-enabled.ts'
 import { rollbackEntryVisible } from '../ui/rollback-view.ts'
-import { RollbackDiffTab } from './chat/RollbackDiffTab.tsx'
+import { RollbackDiffTab, RollbackDiffTabTitle } from './chat/RollbackDiffTab.tsx'
 import {
   asSidebarRightFace,
   asSidebarRightTabsFace,
@@ -60,6 +60,7 @@ import {
   rollbackDiffTabDefinition,
   ROLLBACK_DIFF_SLOT,
   ROLLBACK_DIFF_TAB_ID,
+  ROLLBACK_DIFF_TITLE_SLOT,
   type RollbackDiffOpenResult,
 } from './chat/rollback-diff-tab.ts'
 import type {} from './chat/sidebar-slots.ts'
@@ -320,4 +321,29 @@ export function apply(ctx: ClientContext): void {
       inject: () => ({ port: recoveryApi, rt: recoveryT }),
     }, RollbackDiffTab)
   })
+
+  /**
+   * 芯片（标签条上的那颗标签）的内容位。
+   *
+   * 为什么单独注册：宿主的 tab 类型定义**没有 icon 字段**（芯片只由 title 文字画出来），
+   * 「文件名前面那颗文件类型图标」只能由这个位子自己画；用户 2026-10-14 明确要求芯片上有图标。
+   * 与正文位同一套纪律：形态探测不过 / 宿主没有这个位子 ⇒ 不注册（芯片退回宿主画的标题文字），
+   * 只丢这一颗图标，不打挂插件其余槽位。
+   */
+  try {
+    ctx.slots.inject(ROLLBACK_DIFF_TITLE_SLOT, () => {
+      const kind = declaredPaneTabKind(
+        { spec: (name) => ctx.slots.spec(name as 'sidebar.right.pane.tab.title') },
+        ROLLBACK_DIFF_TITLE_SLOT,
+      )
+      if (kind !== 'keyed') return (): void => {}
+      return ctx.slots.register({
+        name: ROLLBACK_DIFF_TITLE_SLOT,
+        key: ROLLBACK_DIFF_TAB_ID,
+        inject: () => ({ fileIcon: fileIconFor }),
+      }, RollbackDiffTabTitle)
+    })
+  } catch {
+    /* 这台宿主的 slots 认不出芯片位（旧版 / 改名）：只丢这一颗图标，绝不连累其余槽位与插件装配 */
+  }
 }

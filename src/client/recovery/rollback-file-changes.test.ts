@@ -21,6 +21,7 @@ const PANE = join(HERE, 'RollbackDiffPane.tsx')
 const TABLE = join(HERE, '../common/DiffTable.tsx')
 const TAB = join(HERE, '../chat/RollbackDiffTab.tsx')
 const CSS = join(HERE, '../config-manager.module.css')
+const PROXY = join(HERE, '../index.ts')
 
 test('清单结构：容器 + 两类行 + 图标 + 目录弱化 + 右对齐统计（源级）', () => {
   const src = readFileSync(CHANGES, 'utf8')
@@ -98,4 +99,16 @@ test('侧栏标签页吃满宿主高度：不再自带一道 vh/px 上限（源�
   assert.match(css, /\.diffPaneFill \{[\s\S]{0,400}?margin: 0/, '撑满档必须归零外边距：否则 100% 之外多出 10px，宿主面板自己冒一条滚动条')
   // 行盒 = 12×1.5 + 上下 1px ⇒ 20px/行：845px 宽的侧栏里 24 行折成 35 个视觉行，22px 差一行就溢出
   assert.match(css, /\.diffCell \{[\s\S]{0,80}?padding: 1px 6px/, '差异单元格上下内边距必须是 1px（20px 行高才装得进侧栏那一屏）')
+})
+test('标签页芯片：[文件类型图标][文件名]，只经 title 位注册（源级）', () => {
+  const tab = readFileSync(TAB, 'utf8')
+  assert.match(tab, /export function RollbackDiffTabTitle/, '芯片必须是独立组件（正文位与芯片位两份注册）')
+  assert.match(tab, /className=\{css\.rollbackTabIcon\} aria-hidden="true"/, "芯片图标必须有独立格子且是装饰性的（可访问名由文件名文字承担）")
+  assert.match(tab, /<RollbackFileIcon path=\{target\.path\} size=\{14\} render=\{fileIcon\} \/>/, '芯片图标走共享的文件类型图标（与 DSH 侧栏同一画法）')
+  assert.match(tab, /if \(target === null\) return/, '地址读不出来时退回宿主给的标题文字（不空着、也不自己编名字）')
+  const index = readFileSync(PROXY, 'utf8')
+  assert.match(index, /ROLLBACK_DIFF_TITLE_SLOT/, '装配点必须注册芯片位（宿主的 tab 定义没有 icon 字段）')
+  assert.match(index, /name: ROLLBACK_DIFF_TITLE_SLOT,[\s\S]{0,80}?key: ROLLBACK_DIFF_TAB_ID/, '芯片位必须按正文同一个实现 id 注册（同一个 tab 才认领得到）')
+  const css = readFileSync(CSS, 'utf8')
+  assert.match(css, /\.rollbackTabIcon \{[\s\S]{0,160}?margin-right: 6px/, '芯片图标与文件名之间要有间距（与 better-sidebar 的 chipIcon 同档）')
 })

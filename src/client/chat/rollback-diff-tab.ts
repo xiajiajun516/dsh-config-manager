@@ -21,6 +21,14 @@
 
 /** DSH 右侧栏的 tab 正文位（keyed）。 */
 export const ROLLBACK_DIFF_SLOT = 'sidebar.right.pane.tab'
+/**
+ * DSH 右侧栏的 tab **芯片**位（keyed，key 同正文位）。
+ *
+ * 为什么需要它：宿主的 tab 类型定义**没有 icon 字段**（芯片只由 title 文字画出来，见 dsh-better-sidebar
+ * 的 tab-adapter 注释），所以「文件名前面那颗文件类型图标」只能由这个位子自己画。
+ * 不注册 / 宿主没有这个位子：芯片退回宿主自己画的标题文字（只少一颗图标，不打挂任何东西）。
+ */
+export const ROLLBACK_DIFF_TITLE_SLOT = 'sidebar.right.pane.tab.title'
 /** 本插件 tab 类型的实现 id（正文注册的 key，也是 layout 记录里的身份）。 */
 export const ROLLBACK_DIFF_TAB_ID = 'config-manager.rollback-diff'
 /** 本插件 tab 类型的 kind（地址认领与 openResource 都用它）。 */
@@ -149,13 +157,15 @@ export interface RollbackDiffSlotProbe {
 }
 
 /**
- * 探测正文位的声明形态：只有 `keyed` 才能按 key 注册（0.1.x 没有这个槽位 ⇒ null）。
+ * 探测某个位的声明形态：只有 `keyed` 才能按 key 注册（0.1.x 没有这个槽位 ⇒ null）。
  * 形态不符时**不注册**（只丢这一个能力，不拿插件其余槽位与宿主启动去赌）。
+ * @param probe - 槽位声明探测面（`ctx.slots.spec` 的收窄）。
+ * @param slot - 要探测的位名（缺省 = tab 正文位；芯片位传 `ROLLBACK_DIFF_TITLE_SLOT`）。
  */
-export function declaredPaneTabKind(probe: RollbackDiffSlotProbe | null | undefined): string | null {
+export function declaredPaneTabKind(probe: RollbackDiffSlotProbe | null | undefined, slot: string = ROLLBACK_DIFF_SLOT): string | null {
   if (probe === null || probe === undefined || typeof probe.spec !== 'function') return null
   try {
-    const spec = probe.spec(ROLLBACK_DIFF_SLOT)
+    const spec = probe.spec(slot)
     const record = typeof spec === 'object' && spec !== null ? spec as { kind?: unknown } : null
     return typeof record?.kind === 'string' ? record.kind : null
   } catch {

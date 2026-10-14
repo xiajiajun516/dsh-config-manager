@@ -4355,6 +4355,15 @@ body {
 
 /* 差异表的「文件头」（编辑器式）：路径 + +A / −R —— 只在调用方没在别处写过路径时渲染。
    限宽省略：路径比栏宽，右侧统计必须恒在视野内（flex 收缩只发生在路径那一侧）。 */
+/* 右侧栏标签页**芯片**里的文件类型图标：[图标][文件名] —— 与 DSH 自己的文件标签同一观感
+   （间距与 dsh-better-sidebar 的 .chipIcon 对齐：inline-flex + 右侧 6px）。 */
+.rollbackTabIcon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-right: 6px;
+}
+
 .diffFileHead {
   display: flex;
   align-items: center;
