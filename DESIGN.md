@@ -839,7 +839,9 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - **双栏表已抽成共享原语**（2026-10-12）：`src/client/common/DiffTable.tsx` —— 快照恢复计划与
     「回退预览 → 查看」共用同一副骨架（`.diffTable` / `.diffScroll` / `.diffCell*` / `.diffHunkRow` /
     `.diffNoColW*`），单元格文本**缺省即 redact**（`sanitize` 的缺省值就是 `redact`，调用方只能换成别的脱敏器）。
-    **2026-10-14 起多一个可选文件头** `title`（`.diffFileHead` = 路径 + `+A`/`−R`，行数由 `diffLineCounts` 现算）：
+    **2026-10-14 起多一个可选文件头** `title`（`.diffFileHead` = 图标 + 路径 + `+A`/`−R`，行数由 `diffLineCounts` 现算；
+    图标由调用方以 `icon` 节点传入 —— 共享原语**不认识**文件类型画法，那颗链（better-sidebar 服务 +
+    DSH `FileTypeIcon` 惰取）留在 `chat/RollbackFileIcon.tsx`）：
     只在调用方**没在别处写过路径**时传 —— 回滚侧栏标签页与聊天/设置页的就地差异块传 path（它们原先各画一行
     `.hint.mono` 路径，已由该文件头顶掉）；恢复计划行自己那格已写路径，**不传**（同一路径不画两遍）。
 - **回退预览弹窗（Cursor「Confirm Undo」式，2026-10-12 用户要求）**：底盘沿用 `.dialogCard` 宽版，
@@ -850,6 +852,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     + `+N`（`.rollbackAdded` 绿）/ `−M`（`.rollbackRemoved` 红）；**点文件名即打开该文件差异**（无独立「查看」按钮）。
   - 「查看」把该文件的差异开进 **DSH 右侧栏**（本插件注册自己的 tab 类型 `cm-rollback-diff`）；
     本客户端没有侧栏能力时降级为弹窗内展示（`.inlineDiffBox`）并说明为什么在这里看 —— 不出现空白面板、不假装打开过。
+    侧栏正文**撑满宿主给的那一屏**（`RollbackDiffPane` 的 `fill` 档 / `.diffPaneFill`：`height: 100%` + 表格
+    `flex: 1 1 auto`，flex 链每环 `min-height: 0`）：那一屏只有这张表，滚动只发生在表格里，
+    不再自己留一道 vh/px 上限（2026-10-14 用户要求「容器的大小 === 侧边栏的大小」）；
+    弹窗内的就地差异**不给 fill**（卡片高度不是它那一屏）。
   - **不引入**无功能的勾选框：回退是整体语义，放一个取消不掉的勾选框只是装饰（诚实性优先于形似）。
 - **冲突解决**（ConflictList）：选边卡片模式——每项一张卡（kindTag 适配器 + 等宽描述），
   两个并排 `.choiceCard` 选边（radio 语义，选中高亮），**可见文案取字典**

@@ -55,8 +55,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **The ledger now says so when it exceeds its size budget**: once there is nothing left to evict automatically (for example when a single point is larger than the budget), the panel states it plainly instead of looking healthy.
 - **离线命令行备份不覆盖第三方插件数据**：用命令行备份并显式点名这两个分区时，会明确提示改用图形界面的导出/导入，而不是静默不收。
   **Offline command-line backups do not cover third-party plugin data**: asking the CLI backup for these two sections now tells you to use the GUI export/import instead of silently leaving them out.
-- **差异视图改成了编辑器式双栏**（回退预览与快照恢复计划共用）：两栏各自带增删配色（红/绿行号 + 行侧色条），上方一行给出文件路径与 `+N/−M`，块头也分栏显示，改了哪几行一眼就能看出来；字号与行距放宽了，每行更高、不再挤成一团，且差异区**吃满窗口高度**（此前一屏只显示十来行）。
-  **Diff views now look like an editor's split view** (shared by the rewind preview and the snapshot restore plan): each pane is colored line by line (red/green line numbers with an edge bar), a header line shows the file path with `+N/−M`, and the hunk header appears per pane; the type is larger and the lines are more generously spaced, and the diff area now uses the full window height instead of showing only a dozen lines at a time.
+- **差异视图改成了编辑器式双栏**（回退预览与快照恢复计划共用）：两栏各自带增删配色（红/绿行号 + 行侧色条），上方一行给出文件类型图标、文件路径与 `+N/−M`，块头也分栏显示，改了哪几行一眼就能看出来；字号与行距放宽了，每行更高、不再挤成一团，侧栏里的差异区**与侧栏等高**（不再自己留一道滚动条、也不再只显示十来行）。
+  **Diff views now look like an editor's split view** (shared by the rewind preview and the snapshot restore plan): each pane is colored line by line (red/green line numbers with an edge bar), a header line shows the file path with `+N/−M`, and the hunk header appears per pane; the type is larger and the lines are more generously spaced, and in the sidebar the diff area is as tall as the sidebar itself — no scrollbar of its own, and no longer stuck at a dozen lines.
 
 ### 🐛 修复 · Fixed
 

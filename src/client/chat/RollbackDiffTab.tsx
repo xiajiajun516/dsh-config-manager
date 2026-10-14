@@ -12,12 +12,15 @@ import type { TranslateNS } from '../client-types.ts'
 import type { RollbackFileDiffResult, RollbackPointPort } from '../../ui/rollback-view.ts'
 import { Empty } from '../common/ui.tsx'
 import { parseRollbackDiffAddress } from './rollback-diff-tab.ts'
+import type { RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
 import { RollbackDiffPane, type RollbackDiffState } from '../recovery/RollbackDiffPane.tsx'
 
 /** 装配点注入面（端口的读差异方法 + recovery 字典）。 */
 export interface RollbackDiffTabInjected {
   port: RollbackPointPort
   rt: TranslateNS<'config-manager-recovery'>
+  /** 文件图标的外部来源（装了 dsh-better-sidebar 时由装配点注入）；缺省 = 回落 DSH 自带的画法。 */
+  fileIcon?: RollbackFileIconRenderer
 }
 
 /** 完整 props：注入面 + 侧栏 seat 提供的 tab 信息钩子（可能不存在）。 */
@@ -35,7 +38,7 @@ function readContentId(useTabInfo: RollbackDiffTabProps['useTabInfo']): unknown 
   }
 }
 
-export function RollbackDiffTab({ port, rt, useTabInfo }: RollbackDiffTabProps) {
+export function RollbackDiffTab({ port, rt, fileIcon, useTabInfo }: RollbackDiffTabProps) {
   const contentId = readContentId(useTabInfo)
   const target = parseRollbackDiffAddress(contentId)
   const [state, setState] = useState<RollbackDiffState>({ status: 'loading' })
@@ -57,6 +60,7 @@ export function RollbackDiffTab({ port, rt, useTabInfo }: RollbackDiffTabProps) 
     return () => { alive = false }
   }, [port, contentId])
   if (target === null) return <Empty>{rt('rollback.diff.failed')}</Empty>
-  // 侧栏标签页的空间里没有别处写路径（标签标题会被截断），文件头由差异表自己画
-  return <RollbackDiffPane state={state} rt={rt} title={target.path} />
+  // 侧栏标签页的空间里没有别处写路径（标签标题会被截断），文件头由差异表自己画；
+  // fill：正文是这一屏的唯一内容 ⇒ 撑满宿主高度（用户 2026-10-14：不要自己再留一道滚动条）
+  return <RollbackDiffPane state={state} rt={rt} title={target.path} renderFileIcon={fileIcon} fill />
 }

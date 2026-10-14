@@ -13,6 +13,7 @@ import { rollbackFileDiffComparable, rollbackFileDiffReasonKey } from '../../ui/
 import { redact } from '../../security/redaction.ts'
 import { Banner, Spinner } from '../common/ui.tsx'
 import { DiffTable } from '../common/DiffTable.tsx'
+import { RollbackFileIcon, type RollbackFileIconRenderer } from '../chat/RollbackFileIcon.tsx'
 import css from '../config-manager.module.css'
 
 type RKey = Parameters<TranslateNS<'config-manager-recovery'>>[0]
@@ -32,9 +33,19 @@ export interface RollbackDiffPaneProps {
    * 调用方**已在别处写过这份路径**（聊天预览/设置页的就地展示原本各画一行）时**不要传** —— 同一路径不画两遍。
    */
   title?: string
+  /**
+   * 文件图标的外部来源（装了 dsh-better-sidebar 时由装配点注入）：文件头路径前面那颗图标
+   * 「DSH 侧栏怎么画就怎么画」；不给 / 拿不到一律回落 DSH 自带的 FileTypeIcon（见 RollbackFileIcon.tsx）。
+   */
+  renderFileIcon?: RollbackFileIconRenderer
+  /**
+   * 撑满宿主给的高度（**只有侧栏标签页该给**）：正文是那一屏的唯一内容时，
+   * 表格自己吃掉剩余高度、滚动只发生在表格里；弹窗 / 计划列表里的就地差异不给（那些容器有别的约束）。
+   */
+  fill?: boolean
 }
 
-export function RollbackDiffPane({ state, rt, title }: RollbackDiffPaneProps) {
+export function RollbackDiffPane({ state, rt, title, renderFileIcon, fill }: RollbackDiffPaneProps) {
   if (state.status === 'loading') return <Spinner label={rt('rollback.diff.loading')} />
   if (state.status === 'error') return <Banner kind="error">{state.message === null ? rt('rollback.diff.failed') : redact(state.message)}</Banner>
   const diff = state.diff
@@ -49,11 +60,12 @@ export function RollbackDiffPane({ state, rt, title }: RollbackDiffPaneProps) {
   }
   if (diff.identical) return <div className={css.hint}>{rt('rollback.diff.identical')}</div>
   return (
-    <div className={css.diffPane}>
+    <div className={fill === true ? css.diffPane + ' ' + css.diffPaneFill : css.diffPane}>
       {diff.degraded && <div className={css.hint}>{rt('rollback.diff.degraded')}</div>}
       <DiffTable
         hunks={diff.hunks}
         title={title}
+        icon={title === undefined ? undefined : <RollbackFileIcon path={title} size={14} render={renderFileIcon} />}
         beforeLabel={rt('rollback.diff.before')}
         afterLabel={rt('rollback.diff.after')}
         truncatedNotice={(shown, total) => rt('rollback.diff.truncated', { shown: String(shown), total: String(total) })}

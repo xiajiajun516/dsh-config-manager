@@ -4358,12 +4358,21 @@ body {
 .diffFileHead {
   display: flex;
   align-items: center;
+  /* 定高容器里（.diffPaneFill）只让表格那一条长大：文件头永远保持自己的高度 */
+  flex: none;
   gap: 8px;
   padding: 2px 6px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
   /* 与差异正文同一档字号：文件头是这半张表的标题，不应比正文小一号 */
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* 文件类型图标（DSH 侧栏同一画法）：不收缩、与文件名同一条基线；装饰性，名字由路径文字承担 */
+.diffFileIcon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
 }
 
 .diffFilePath {
@@ -4383,6 +4392,24 @@ body {
 .diffPane {
   /* 双栏表自带行号列，左侧不再留额外缩进（原先 6px 缩进 + 行号列显得左边空一块） */
   margin: 2px 0 8px;
+}
+
+/* 侧栏标签页（.diffPaneFill）：宿主给正文定了高 ⇒ 面板**整块就是那一屏**，
+   表格吃掉剩余高度、滚动只发生在表格里（用户 2026-10-14：「容器的大小 === 侧边栏的大小」）。
+   flex 链上每一环都要 min-height: 0，否则 flex 项的自动最小尺寸（= 内容）会顶破父容器。 */
+.diffPaneFill {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.diffPaneFill .diffScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 兜底：宿主没给定高时 height:100% 会退化成内容高度，那时至少别超过视口
+     （100vh 减标签条与面板内边距 ≈ 90px，与 .dialogCard 的 vh 口径同一风格）。定高宿主下这条不生效。 */
+  max-height: calc(100vh - 90px);
 }
 
 /* 差异正文的高度：**吃满可用高度**，不再套列表那条 380px 限高

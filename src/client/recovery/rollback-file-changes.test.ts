@@ -17,6 +17,10 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const CHANGES = join(HERE, 'RollbackFileChanges.tsx')
 const CARD = join(HERE, 'RollbackCard.tsx')
 const DIALOG = join(HERE, '../chat/RollbackReviewDialog.tsx')
+const PANE = join(HERE, 'RollbackDiffPane.tsx')
+const TABLE = join(HERE, '../common/DiffTable.tsx')
+const TAB = join(HERE, '../chat/RollbackDiffTab.tsx')
+const CSS = join(HERE, '../config-manager.module.css')
 
 test('清单结构：容器 + 两类行 + 图标 + 目录弱化 + 右对齐统计（源级）', () => {
   const src = readFileSync(CHANGES, 'utf8')
@@ -70,4 +74,26 @@ test('两处调用同一份渲染：聊天预览 + 设置页回滚卡预览（�
   assert.match(card, /RollbackDiffPane state=\{inlineDiff\.state\}/, '设置页没有右侧栏：差异必须在弹窗内画出来')
   assert.match(card, /css\.planScroll/, '几百个文件的清单必须限高内滚')
   assert.doesNotMatch(card, /rollbackPreviewRows\(/, '预览弹窗不再画工作区/会话计数面板（与聊天预览同一屏）')
+})
+
+test('差异表文件头：路径前面一颗文件类型图标（源级）', () => {
+  const table = readFileSync(TABLE, 'utf8')
+  assert.match(table, /icon\?: ReactNode/, '共享原语只收调用方给的图标节点（文件类型画法不进 common 层）')
+  assert.match(table, /className=\{css\.diffFileIcon\}/, '文件头必须给图标一个独立格子')
+  assert.match(table, /icon !== undefined && <span/, '没给图标时不留空位（对齐不靠死格子撑）')
+  const pane = readFileSync(PANE, 'utf8')
+  assert.match(pane, /<RollbackFileIcon path=\{title\} size=\{14\} render=\{renderFileIcon\} \/>/, '文件头的图标必须走共享文件类型图标（与 DSH 侧栏同一画法）')
+  assert.match(pane, /title === undefined \? undefined :/, '没有路径就没有图标（文件名文字就是它的可访问名）')
+  assert.match(pane, /renderFileIcon\?: RollbackFileIconRenderer/, '外部图标来源（dsh-better-sidebar）必须是可注入的，缺省回落')
+})
+
+test('侧栏标签页吃满宿主高度：不再自带一道 vh/px 上限（源级）', () => {
+  const tab = readFileSync(TAB, 'utf8')
+  assert.match(tab, /title=\{target\.path\} renderFileIcon=\{fileIcon\} fill \/>/, '侧栏标签页：撑满那一屏 + 接上外部图标来源')
+  const dialog = readFileSync(DIALOG, 'utf8')
+  assert.match(dialog, /<RollbackDiffPane state=\{inlineDiff\.state\} rt=\{rt\} title=\{inlineDiff\.path\} renderFileIcon=\{renderFileIcon\} \/>/, '弹窗内的降级通道同样接上图标来源')
+  assert.doesNotMatch(dialog, /RollbackDiffPane[^>]*\bfill\b/, '弹窗内的就地差异不给 fill（宿主面板高度不是它那一屏）')
+  const css = readFileSync(CSS, 'utf8')
+  assert.match(css, /\.diffPaneFill \{[\s\S]{0,120}?height: 100%/, 'fill 档必须 height:100% 才谈得上「= 侧栏大小」')
+  assert.match(css, /\.diffPaneFill \.diffScroll \{[\s\S]{0,160}?min-height: 0/, 'flex 链必须允许收缩，否则内容顶破父容器（min-height:auto 陷阱）')
 })

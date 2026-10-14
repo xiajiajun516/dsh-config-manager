@@ -16,7 +16,7 @@
  * 分工：行对对齐 / 块头 / 行号列宽 / 行数统计全来自 `src/ui/diff-view.ts`（纯函数、node 单测）；本组件只画。
  * 安全：单元格文本是磁盘 / 宿主原文 ⇒ 展示前**必须**过调用方传进来的 sanitize（本该是 redact）。
  */
-import { Fragment } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { redact } from '../../security/redaction.ts'
 import { countSideRows, diffLineCounts, maxLineDigits, toSideBySide, type SideBySideRow } from '../../ui/diff-view.ts'
 import type { DiffHunk } from '../../utils/line-diff.ts'
@@ -36,6 +36,11 @@ export interface DiffTableProps {
    * 调用方**已在别处写过这份路径**（恢复计划行、聊天预览的路径行）时**不要传** —— 同一路径不画两遍。
    */
   title?: string
+  /**
+   * 文件头图标（可选，**只在给了 title 时才有位置**）：文件类型画法由调用方决定 ——
+   * 共享原语不认识「文件图标」这套规则（它要 npm 包 + 服务惰取），也不该把那条链拖进来。
+   */
+  icon?: ReactNode
   /** 被渲染上限截断时的说明文案（由调用方按自己的字典出话；缺省 = 不提示） */
   truncatedNotice?: (shown: number, total: number) => string
   /** 单元格文本安全化（**缺省就是 redact**：调用方只能换成别的脱敏器，换不成不脱敏） */
@@ -65,7 +70,7 @@ function rightNoClass(kind: SideBySideRow['kind']): string {
 }
 
 /** 左右双栏逐行对照（文件头 + 表头 + 块头 + 行号 + 单元格）。 */
-export function DiffTable({ hunks, beforeLabel, afterLabel, title, truncatedNotice, sanitize, rowCap = DIFF_ROW_CAP }: DiffTableProps) {
+export function DiffTable({ hunks, beforeLabel, afterLabel, title, icon, truncatedNotice, sanitize, rowCap = DIFF_ROW_CAP }: DiffTableProps) {
   const cell = sanitize ?? ((text: string): string => redact(text))
   const groups = toSideBySide(hunks)
   const total = countSideRows(groups)
@@ -80,6 +85,7 @@ export function DiffTable({ hunks, beforeLabel, afterLabel, title, truncatedNoti
     <>
       {title !== undefined && (
         <div className={css.diffFileHead}>
+          {icon !== undefined && <span className={css.diffFileIcon} aria-hidden="true">{icon}</span>}
           <span className={css.diffFilePath + ' ' + css.mono} title={title}>{title}</span>
           <span className={css.diffFileStat}>
             <span className={css.diffStatAdd}>+{counts.added}</span>
