@@ -4621,9 +4621,10 @@ export function apply(ctx: Context, config?: Config): void {
   }, 'config-manager: profile runtime heartbeat')
   // ------------------------------------------- S1：回合自动留点（宿主真接线）
   //
-  // 订阅 `session/event`（@deepseek-ai/dsh-session 的 post-commit fire-and-forget feed），
-  // 每见到一个 `turn/end` 就为**当前会话**留一个回滚点 = 工作区快照（内容寻址入对象仓）
-  // + 会话游标（事件数 / fork 边界）。没有手动「拍点」入口 —— 留点完全由回合驱动。
+  // 订阅 `session/event`（@deepseek-ai/dsh-session 的 post-commit fire-and-forget feed）。
+  // **留点在 `turn/start` 拍**（点的「工作区态」必须是该回合开始**之前**的样子 —— 这条口径不能动，
+  // 见 rollback-point.ts RollbackAutoTracker.noteEvent）；`turn/end` 只更新「缺省边界」，不再拍点。
+  // 没有手动「拍点」入口 —— 留点完全由回合驱动。
   //
   // 纪律（AGENTS.md 铁律 + captain 要求）：**订阅与每个回调都 try/catch 包裹**，任何异常
   // 只记 warn：改坏宿主启动 = blocker。事件回调用一条串行链喂给留点器，保证同一会话的
@@ -4658,6 +4659,8 @@ export function apply(ctx: Context, config?: Config): void {
     // 「会话没有 cwd」这类**形状合法但信息不全**的情况只记一次日志（避免每回合刷屏）；
     // 该点本身仍带 incomplete=true + workspace.reasonCode='no-chunks'，界面能如实展示。
     const chunklessLogged = new Set<string>()
+    /** 子代理会话只 warn 一次（见下面 'subagent-session' 分支） */
+    const inertSessionsLogged = new Set<string>()
     const listener = (session: unknown, event: unknown): void => {
       // issue #88/#89 第一道门：关闭时回调什么都不做。正常路径下关闭时压根没有订阅
       //（detach 已解绑），这里是「解绑与已派发事件之间」的竞态兜底。
@@ -4665,6 +4668,15 @@ export function apply(ctx: Context, config?: Config): void {
       try {
         const bindingResult = rollbackSessionBindingOf(session)
         if (!bindingResult.ok) {
+          if (bindingResult.code === 'subagent-session') {
+            // 子代理会话按设计不留点：**每个会话只记一次**（否则每个事件刷一行 warn），
+            // 但仍然留痕 —— 不让「这个会话为什么没有点」变成无解释的沉默。
+            if (!inertSessionsLogged.has(bindingResult.detail)) {
+              inertSessionsLogged.add(bindingResult.detail)
+              host.log.warn('rollback auto point skipped: ' + bindingResult.code + ' ' + bindingResult.detail)
+            }
+            return
+          }
           // 形状不匹配**不静默**：给显式机器码，宿主日志留痕
           host.log.warn('rollback auto point skipped: ' + bindingResult.code + ' ' + bindingResult.detail)
           return

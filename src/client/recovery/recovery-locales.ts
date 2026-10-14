@@ -331,6 +331,7 @@ export const zh = {
   'rollback.switch.hint': '关闭后不再订阅会话事件、不再写台账，聊天里的「↺ 回退」入口一并收起；已有回滚点仍可查看、回退与清理。',
   'rollback.ledger.summary': '台账 {records} 个点 · {size}',
   'rollback.ledger.budget': '字节预算 {budget}，已按预算淘汰 {evicted} 个最旧自动点',
+  'rollback.ledger.overBudget': '台账已到 {size}，超过 {budget} 的字节预算，但已经没有可自动淘汰的点了（通常是单个回滚点本身大于预算）—— 再增长请手动清理。',
   'rollback.cleanup': '清理台账',
   'rollback.cleanup.confirmTitle': '清理回滚点台账',
   'rollback.cleanup.confirmMessage': '删除全部自动回滚点（救援点与受保护点按下面的勾选处置），并回收它们的内容副本。工作区文件与会话日志不会被改动。',
@@ -385,6 +386,7 @@ export const zh = {
   // t7 定点修正（captain 授权；既有键措辞修正，不是新增键）：该码现在有两种用法 ——
   // ① preview.session.reasonCode（仅供参考）；② 结果码：运行中的对话带文件段的回退被硬拒（工作区零改动）。
   'rollback.code.session-active': '这条对话正在运行（会话日志刚被写过）：此时带文件段的回退会被拒绝、工作区一个字节都不动；只回溯消息不受影响（回退只 fork 子会话，不改写原日志）',
+  'rollback.code.subagent-session': '这是子代理会话（origin=subagent），插件不为它自动留回滚点：它的工作区与父对话相同，留点只会挤占你自己对话的台账空间。',
   // t8（只追加，不动上面那条既有键）：对话**正在运行**时 —— 默认只回溯消息，带工作区段的回退在路由层被拒
   'rollback.preview.sessionActive': '这条对话正在运行：本轮结束前只回溯消息（不改动工作区），避免与正在写盘的工具抢文件。等本轮结束后重新打开本弹窗，即可连文件一起回退。',
   'rollback.sessionActive.denied': '这条对话正在运行：本次一个文件都没有改动。请等本轮结束，或改成「只回溯消息」再试。',
@@ -912,6 +914,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.switch.hint': 'When off, the plugin no longer subscribes to session events or writes the ledger, and the rewind entry is removed from chat. Existing points can still be viewed, rewound and cleaned up.',
   'rollback.ledger.summary': 'Ledger: {records} points · {size}',
   'rollback.ledger.budget': 'Byte budget {budget}; {evicted} oldest automatic point(s) already evicted by the budget',
+  'rollback.ledger.overBudget': 'The ledger is at {size}, over the {budget} byte budget, and no automatic point is left to evict (usually a single point is larger than the budget) — clean up manually to shrink it.',
   'rollback.cleanup': 'Clean up ledger',
   'rollback.cleanup.confirmTitle': 'Clean up the rollback-point ledger',
   'rollback.cleanup.confirmMessage': 'Delete every automatic rollback point (rescue and protected points follow the checkbox below) and reclaim their content copies. Workspace files and session logs are not touched.',
@@ -962,6 +965,7 @@ export const en: Record<keyof typeof zh, string> = {
   // t7 targeted wording fix (captain-authorized; existing key, not a new one): the code now has two uses —
   // (1) preview.session.reasonCode (informational); (2) a *result* code: a files-including rewind is refused while the conversation runs.
   'rollback.code.session-active': 'This conversation is running (its session log was written recently): a rewind that includes files is refused and the workspace stays untouched; rewinding the conversation only is unaffected (the rewind forks a child session and never rewrites the log)',
+  'rollback.code.subagent-session': 'This is a subagent session (origin=subagent), so no automatic rollback point is kept for it: it shares the workspace with its parent, and points here would only crowd out the ledger space of your own conversation.',
   // t8 (append-only; the key above keeps its own wording): the conversation is running
   'rollback.preview.sessionActive': 'This conversation is running: until the current turn finishes you can rewind the conversation only (no workspace changes), so nothing races with the tool that is writing files. Reopen this dialog after the turn to rewind files as well.',
   'rollback.sessionActive.denied': 'This conversation is running: no files were changed. Wait for the current turn to finish, or rewind the conversation only.',

@@ -58,6 +58,11 @@ export const ROLLBACK_LEDGER_SCHEMA_VERSION = 3
 export const ROLLBACK_RECORDS_DIR_NAME = 'records'
 /** 内容寻址载荷目录名 */
 export const ROLLBACK_PAYLOADS_DIR_NAME = 'payloads'
+/**
+ * 回退前像暂存目录名（`<root>/undo/<pid>-<ts36>-<8hex>/`）。
+ * 名字以 pid 开头是**清理判据的一部分**（见 cleanupOrphanTempFiles）；改命名必须同步改 `UNDO_DIR_RE`。
+ */
+export const ROLLBACK_UNDO_DIR_NAME = 'undo'
 /** v2 单文件迁移成功后的保留名（改名，不是删除） */
 export const ROLLBACK_LEDGER_BACKUP_NAME = 'index.v2.backup.json'
 /**
@@ -89,6 +94,8 @@ export const LEDGER_RECORD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
  * **先读实现再写判据** —— 判不出来就一个都不删（宁可留垃圾也不删用户数据）。
  */
 const TEMP_FILE_RE = /^\.dshcm\.(.+)\.(\d+)\.([0-9a-f]{16})\.tmp$/
+/** 前像暂存目录名：`<pid>-<ts36>-<8hex>`（pid 必须在最前，清理判据要读它） */
+const UNDO_DIR_RE = /^(\d+)-[0-9a-z]+-[0-9a-f]{8}$/
 
 /* --------------------------------------------------------------- 类型 */
 
@@ -358,6 +365,27 @@ export interface RollbackTempCleanupResult {
   skipped: number
 }
 
+/** 统计一棵目录树的字节数（只用于清理统计；读不到按 0 计，绝不因为统计失败而不删） */
+async function dirBytes(dir: string): Promise<number> {
+  let total = 0
+  let entries
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    try {
+      if (entry.isDirectory()) total += await dirBytes(full)
+      else total += (await fs.stat(full)).size
+    } catch {
+      /* 读不到就不计 */
+    }
+  }
+  return total
+}
+
 function isProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try {
@@ -418,6 +446,29 @@ export async function cleanupOrphanTempFiles(root: string): Promise<RollbackTemp
       out.removed += 1
       out.bytes += bytes
     }
+  }
+  // 回退前像暂存目录（<root>/undo/<pid>-<ts>-<hex>/）：**进程已死的残留整目录删除**。
+  // 判据与 tmp 文件同源：pid 必须不是本进程、且已不存在；判不准一律不碰（skipped）。
+  try {
+    const undoRoot = path.join(root, ROLLBACK_UNDO_DIR_NAME)
+    const names = await fs.readdir(undoRoot)
+    for (const name of names) {
+      const m = UNDO_DIR_RE.exec(name)
+      if (m === null) { out.skipped += 1; continue }
+      const pid = Number(m[1])
+      if (pid === process.pid || isProcessAlive(pid)) { out.skipped += 1; continue }
+      const target = path.join(undoRoot, name)
+      try {
+        const bytes = await dirBytes(target)
+        await fs.rm(target, { recursive: true, force: true })
+        out.removed += 1
+        out.bytes += bytes
+      } catch {
+        out.skipped += 1
+      }
+    }
+  } catch {
+    /* undo 目录不存在（正常状态） */
   }
   return out
 }

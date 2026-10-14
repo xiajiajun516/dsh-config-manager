@@ -147,6 +147,8 @@ export const ROLLBACK_CODES: readonly string[] = [
   'session-out-of-root',
   'session-too-large',
   'session-active',
+  // 子代理会话（origin=subagent）：**不自动留点** —— 出现即代表该会话被有意跳过（宿主日志留痕）
+  'subagent-session',
   'session-fork-unavailable',
   'fork-failed',
   // 自动留点（工作区快照）
@@ -330,6 +332,11 @@ export interface RollbackLedgerStatus {
   bytes: number
   budgetBytes: number
   evicted: number
+  /**
+   * 已超预算且**无处可淘汰**（典型：单条点本身就大于预算）。
+   * 老宿主没有这个字段 ⇒ `undefined` 与 `false` 同义，绝不因为读不到就报警。
+   */
+  overBudget?: boolean
 }
 
 export interface RollbackStorageStatus {

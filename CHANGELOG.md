@@ -45,6 +45,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Rollback points are off by default**: they are unrelated to config backup and sync yet used to run automatically; after upgrading you must enable them explicitly for points to be kept again.
 - **回滚点库不再越用越大**：每次留点只写这一条记录，未变化的工作区清单按内容去重，超出体积预算时自动淘汰最旧的自动点 —— 单次留点的开销不再随历史总量增长。（issue #89）
   **The rollback store no longer grows without bound**: each point writes only its own record, unchanged workspace listings are deduplicated, and the oldest automatic points are evicted past the size budget, so one point no longer costs more as history accumulates.
+- **子代理会话不再产生回滚点**：它们的回合与工作区跟父对话相同，在那边留点只会挤占你自己对话的台账空间；你自己的对话照常留点。
+  **Subagent sessions no longer produce rollback points**: they share their turns and workspace with the parent conversation, so points there only crowded out the ledger space of your own conversations; your own conversations are unaffected.
+- **台账超出体积预算时会如实提示**：当可自动淘汰的点已经耗尽（例如单个点本身就比预算大），面板会直说「已超预算、请手动清理」，不再显示成一切正常。
+  **The ledger now says so when it exceeds its size budget**: once there is nothing left to evict automatically (for example when a single point is larger than the budget), the panel states it plainly instead of looking healthy.
 
 ### 🐛 修复 · Fixed
 
@@ -52,6 +56,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Fixed DSH exiting out of memory because of rollback points**: the ledger used to be read and rewritten in full every turn and could grow to hundreds of MB until the host ran out of memory; records are now written one at a time under a size budget.
 - **清掉崩溃残留的回滚点临时文件**：非正常退出留下的临时文件会在下次启动时清理。（issue #89）
   **Crash leftovers are cleaned up**: temporary rollback files left behind by an unclean exit are removed on the next start.
+- **修大工作区留点可能长时间跑不完**：留点现在有 30 秒的时间预算，超时就留下已经扫到的部分、并如实标注是部分结果，不再无限跑下去。
+  **Fixed automatic points that could keep running on a large workspace**: capturing now has a 30-second time budget, keeps whatever it already scanned and marks it clearly as partial instead of running on.
+- **修大工作区回退时的内存峰值**：为保证回退可撤销而保存的旧文件内容改为先暂存在磁盘上，内存占用不再随「这次要改多少文件」增长，回退结束即清理。
+  **Fixed the memory peak when rewinding a large workspace**: the previous file contents kept for an undoable rewind are now staged on disk, so memory no longer grows with how much the rewind changes, and the staging is cleaned up when it finishes.
 - **同步差异不再把「本机已一致」的凭据列为待写入**：本机已有且与快照完全相同的密钥直接标成「跳过」，只有真的会改动本机的才需要你确认；凭据项的标签也从「缺密钥」改为「凭据迁移」。（issue #38）
   **Sync diff no longer asks about credentials that already match**: keys identical to the snapshot are marked as skipped, so only the ones that actually change need confirmation; the credential badge is renamed from "missing secret" to "credential migration".
 

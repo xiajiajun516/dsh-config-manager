@@ -79,6 +79,7 @@ import {
   cleanupOrphanTempFiles,
   entrySummaryOf,
   ROLLBACK_DEFAULT_LEDGER_BYTES,
+  ROLLBACK_UNDO_DIR_NAME,
   RollbackLedger,
   type RollbackLedgerManifestEntry,
   type RollbackLedgerMigration,
@@ -182,6 +183,17 @@ export const ROLLBACK_DEFAULT_SESSION_QUIESCENT_MS = 30_000
 /** 轮询回退的间隔上界（S1：会话日志 mtime ≤5 s 轮询） */
 export const ROLLBACK_DEFAULT_POLL_INTERVAL_MS = 5_000
 export const ROLLBACK_LEFTOVER_LIST_LIMIT = 20
+
+/**
+ * 工作区捕获的**挂钟时间预算**（缺省 30 s）。
+ *
+ * 为什么需要（对标 dsh-turn-rewind 的 `deadline.ts`、dsh-checkpoint-rewind 至今未合并的 PR #25）：
+ * 捕获路径此前只有「文件数 / 总字节 / 单文件字节」三个**规模**上限，没有**时间**上限 ——
+ * 一个「文件数很多但总量不大」的工作区能让 walk + stat + sha256 跑很久。
+ * 超预算**不是失败**：已收条目照常成点（ok=true），未走查的部分按 `budget-time` 逐条留痕、
+ * `truncated` 置真 ⇒ 删除集自动 fail-closed（证明名单不完整就一条都不删）。
+ */
+export const ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS = 30_000
 
 /**
  * 「删除回退点之后新建的路径」的**整套上限**（用户 2026-10-11 定案 A）。
@@ -306,6 +318,13 @@ export type RollbackCode =
   | 'session-out-of-root'
   | 'session-too-large'
   | 'session-active'
+  /**
+   * 子代理会话（`header.origin === 'subagent'`）：**不自动留点**。
+   * 它的工作区与父会话相同、回合号是自己的，留点既与父会话重复又只挤占预算；
+   * 用户在侧栏看到的是嵌套在父对话下的子代理，不需要单独回退。
+   * 读不到 `origin`（老宿主）时**不加判定** —— 绝不因为读不到就少留点。
+   */
+  | 'subagent-session'
   | 'session-fork-unavailable'
   | 'fork-failed'
   | 'capture-failed'
@@ -527,6 +546,11 @@ export interface RollbackLedgerStatus {
   budgetBytes: number
   /** 本进程内被**预算**淘汰的自动点累计数（条数淘汰不计入） */
   evicted: number
+  /**
+   * 当前磁盘字节**已超**预算、且已无处可淘汰（典型：单条点本身就大于预算）。
+   * 界面据此说「台账已超预算、无法再自动回收」，绝不静默成「一切正常」。
+   */
+  overBudget: boolean
 }
 
 export interface RollbackStorageStatus {
@@ -557,6 +581,11 @@ export interface RollbackPointInput {
   chunks?: readonly string[]
   note?: string | null
   protect?: boolean
+  /**
+   * 调用方的取消信号（插件卸载 / 会话销毁）：已中止时捕获在**下一个文件边界**停下，
+   * 已收条目照常成点（部分点 + truncated）。缺省不传 = 只受时间预算约束。
+   */
+  signal?: AbortSignal
 }
 
 export interface RollbackCaptureResult {
@@ -900,6 +929,11 @@ export interface RollbackEngineOptions {
    * 超预算时**只淘汰最旧的 auto 点**（guard / protected 不淘汰，沿用 selectPrune 的类别口径）。
    */
   ledgerBytesBudget?: number
+  /**
+   * 工作区捕获的挂钟时间预算（毫秒，缺省 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS）。
+   * 超时留**部分点**，不拒绝留点；见该常量的说明。
+   */
+  captureBudgetMs?: number
   guardPolicy?: RollbackGuardPolicy
   /** 存储栈探针（缺省 = 真实磁盘探测）；注入失败探针可测「缺失时仍可挂载」 */
   storage?: RollbackStorageProbe
@@ -1350,6 +1384,63 @@ interface RewindDraft {
   warnings?: RollbackGuidance[]
 }
 
+/**
+ * 回退前像暂存器：**字节落盘、索引随栈**。
+ *
+ * 为什么不是内存数组（旧实现）：大工作区整体回退时前像峰值 = 待写总字节（可达数百 MB），
+ * 与 issue #89 的 OOM 同族。落盘后内存只随**文件条数**增长。
+ *
+ * 生命周期：`stage()` 逐条写前像 → 成功则 `dispose()`；中途失败则 `rollback()` 写回再 `dispose()`。
+ * 目录名带 pid，崩溃残留由 rollback-ledger 的 `cleanupOrphanTempFiles` 在下次启动回收。
+ */
+class UndoStager {
+  private readonly entries: { path: string; file: string | null }[] = []
+  private readonly dir: string
+  private seq = 0
+
+  constructor(dir: string) {
+    this.dir = dir
+  }
+
+  /** 记一条前像：`bytes === null` = 该路径当时**不存在**（回滚时删掉它）。 */
+  async stage(target: string, bytes: Uint8Array | null): Promise<void> {
+    if (bytes === null) {
+      this.entries.push({ path: target, file: null })
+      return
+    }
+    const file = path.join(this.dir, String(this.seq) + '.bin')
+    this.seq += 1
+    await fs.writeFile(file, bytes)
+    this.entries.push({ path: target, file })
+  }
+
+  /**
+   * 逐条写回（**逆序**：同一路径被 stage 两次时，最后一次 stage 记的是最早状态，必须最后写）。
+   * 返回失败清单 —— 回滚失败绝不静默。
+   */
+  async rollback(writer: (target: string, bytes: Uint8Array) => Promise<void>): Promise<string[]> {
+    const failed: string[] = []
+    for (const entry of [...this.entries].reverse()) {
+      try {
+        if (entry.file === null) await fs.rm(entry.path, { force: true })
+        else await writer(entry.path, await fs.readFile(entry.file))
+      } catch (error) {
+        failed.push(entry.path + ' ' + errorDetail(error))
+      }
+    }
+    return failed
+  }
+
+  /** 前像目录用完即清（best-effort：清理失败不该把回退报成失败）。 */
+  async dispose(): Promise<void> {
+    try {
+      await fs.rm(this.dir, { recursive: true, force: true })
+    } catch {
+      /* best-effort */
+    }
+  }
+}
+
 export class RollbackPointEngine {
   private readonly dataDir: string
   private readonly homeDir: string
@@ -1398,6 +1489,8 @@ export class RollbackPointEngine {
   /** 台账存储层（v3：清单 + 单条记录 + 内容寻址载荷；issue #89） */
   private readonly ledger: RollbackLedger
   private readonly ledgerBytesBudget: number
+  /** 工作区捕获的挂钟时间预算（毫秒；见 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS） */
+  private readonly captureBudgetMs: number
   /**
    * 启动期一次性初始化（流式迁移 v2 -> v3 + 孤儿 tmp 清理）的惰性单飞。
    * 为什么惰取而不是构造时同步跑：构造发生在每个请求路径上，同步扫盘/迁移会把请求卡死；
@@ -1437,6 +1530,7 @@ export class RollbackPointEngine {
     this.previewDiffTotalWork = options.previewDiffTotalWork ?? ROLLBACK_PREVIEW_DIFF_TOTAL_WORK
     this.log = options.log
     this.ledgerBytesBudget = options.ledgerBytesBudget ?? ROLLBACK_DEFAULT_LEDGER_BYTES
+    this.captureBudgetMs = options.captureBudgetMs ?? ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS
     this.ledger = new RollbackLedger({
       root: this.root,
       bytesBudget: this.ledgerBytesBudget,
@@ -1491,6 +1585,22 @@ export class RollbackPointEngine {
     sink.skippedCount += 1
     if (sink.skipped.length < this.maxSkippedEntries) sink.skipped.push(entry)
     else sink.skippedTruncated = true
+  }
+
+  /**
+   * 打开一次回退的前像暂存目录（`<root>/undo/<pid>-<ts36>-<8hex>/`）。
+   * 返回 null = 建不出来（权限 / 磁盘满）⇒ 调用方必须**零写入失败**。
+   */
+  private async openUndoStager(): Promise<UndoStager | null> {
+    const name = String(process.pid) + '-' + this.stamp().toString(36) + '-' + crypto.randomBytes(4).toString('hex')
+    const dir = path.join(this.root, ROLLBACK_UNDO_DIR_NAME, name)
+    try {
+      await fs.mkdir(dir, { recursive: true })
+    } catch (error) {
+      this.warn('rollback undo staging unavailable: ' + errorDetail(error))
+      return null
+    }
+    return new UndoStager(dir)
   }
 
   private async writeFile(target: string, bytes: Uint8Array): Promise<void> {
@@ -1579,6 +1689,9 @@ export class RollbackPointEngine {
         bytes: stats.bytes,
         budgetBytes: this.ledgerBytesBudget,
         evicted: this.ledger.evictedCount,
+        // 每次 append 都会尽力淘汰到预算内 ⇒「bytes > budget」本身就等于「淘汰到极限了」
+        // （单条点大于预算时恒为 true）。这里不额外读盘，只用已有 stats。
+        overBudget: stats.bytes > this.ledgerBytesBudget,
       }
     } catch (error) {
       this.warn('rollback ledger status failed: ' + errorDetail(error))
@@ -1728,6 +1841,11 @@ export class RollbackPointEngine {
      */
     collect?: string[],
     ignore?: IgnoreRules,
+    /**
+     * 停止判据（捕获期传时间/取消预算；回退期的走查不传）—— 返回 true 立即停止遍历，
+     * 已走查的部分照常返回并置 truncated（证明名单因此不完整 ⇒ 删除集 fail-closed）。
+     */
+    shouldStop?: () => boolean,
   ): Promise<{ files: string[]; truncated: boolean } | null> {
     let stat
     try {
@@ -1749,6 +1867,7 @@ export class RollbackPointEngine {
     let truncated = false
     const stack: { dir: string; depth: number }[] = [{ dir: chunk, depth: 0 }]
     while (stack.length > 0) {
+      if (shouldStop?.() === true) { truncated = true; break }
       const item = stack.pop()
       if (item === undefined) break
       if (item.depth >= MAX_WALK_DEPTH) {
@@ -1808,9 +1927,17 @@ export class RollbackPointEngine {
     return { files: out, truncated }
   }
 
-  private async captureWorkspace(chunks: readonly string[]): Promise<RollbackTrack<RollbackWorkspacePayload>> {
+  private async captureWorkspace(
+    chunks: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<RollbackTrack<RollbackWorkspacePayload>> {
     const capturedAt = this.stamp()
     if (chunks.length === 0) return this.emptyTrack('workspace', capturedAt, 'no-chunks', 'chunks empty')
+    // 时间预算（见 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS）：用 stamp()（单调）比较，
+    // 系统时钟回拨也不会让预算永不触发。超时置 payload.truncated ⇒ 结尾的 reasonCode
+    // 自动落成 capture-truncated，UI 走既有的 degraded 提示路径（零新增文案）。
+    const deadline = capturedAt + this.captureBudgetMs
+    const outOfBudget = (): boolean => signal?.aborted === true || this.stamp() >= deadline
     const payload: RollbackWorkspacePayload = {
       chunks: [...chunks],
       files: [],
@@ -1831,14 +1958,25 @@ export class RollbackPointEngine {
     // 走查过的**全部**文件路径（含被预算 / 单文件上限挡下的）—— 路径索引的来源（方向 B）
     const walked: string[] = []
     for (const chunk of chunks) {
+      if (outOfBudget()) {
+        // 分块之间就超预算：不再开新分块，并如实留痕（该分块的条目一条都没被走查）
+        payload.truncated = true
+        this.recordSkip(payload, 'skipped', { path: chunk, reason: 'budget-time' })
+        break
+      }
       if (!path.isAbsolute(chunk)) return this.emptyTrack('workspace', capturedAt, 'chunk-not-absolute', chunk)
       const resolved = path.resolve(chunk)
       // 文件数预算还剩多少就收多少；+1 只用于让遍历器发现「还有溢出」——溢出条目逐条记 skipped
-      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1, walked, await loadIgnoreRules(resolved))
+      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1, walked, await loadIgnoreRules(resolved), outOfBudget)
       if (listed === null) continue
       sawChunk = true
       if (listed.truncated) payload.truncated = true
       for (const file of listed.files) {
+        if (outOfBudget()) {
+          payload.truncated = true
+          this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-time' })
+          break
+        }
         if (read >= this.maxFiles) {
           // 文件数预算耗尽：其后每一条都如实留痕（不再 break 静默丢弃）
           payload.truncated = true
@@ -1914,7 +2052,9 @@ export class RollbackPointEngine {
         }
       }
     }
-    if (!sawChunk && payload.files.length === 0) {
+    // `truncated` 为真时**不能**判 chunk-not-found：那是「分块确实存在、只是没来得及走查完」
+    // （时间预算 / 取消信号）—— 报成「找不到分块」会让用户以为工作区配错了。
+    if (!sawChunk && payload.files.length === 0 && !payload.truncated) {
       return this.emptyTrack('workspace', capturedAt, 'chunk-not-found', chunks.join(' '))
     }
     // **方向 B**：逐条跳过名单被记录上限截断（skippedTruncated）时，把走查过的全部路径另存成
@@ -2234,7 +2374,15 @@ export class RollbackPointEngine {
         if (left <= 0) bytes -= entry.workspace.payloadBytes
       }
     }
-    if (victims.size === 0) return kept
+    if (victims.size === 0) {
+      // 一条都淘汰不了却仍然超预算（典型：单条点自身的体积就大于预算）—— **如实留痕**。
+      // 不写这一条，「预算生效」就是假象（竞品 dsh-checkpoint-rewind #35 正是「软配额 bound
+      // 不住单条」的口子）；界面侧由 RollbackLedgerStatus.overBudget 如实上屏。
+      if (bytes > this.ledgerBytesBudget) {
+        this.warn('rollback ledger over budget: nothing prunable bytes=' + String(bytes) + ' budget=' + String(this.ledgerBytesBudget))
+      }
+      return kept
+    }
     this.ledger.markEvicted(victims.size)
     this.warn('rollback ledger over budget: evicted=' + String(victims.size) + ' bytes=' + String(bytes) + ' budget=' + String(this.ledgerBytesBudget))
     return kept
@@ -2326,7 +2474,7 @@ export class RollbackPointEngine {
       boundarySeq: typeof input.boundarySeq === 'number' && Number.isFinite(input.boundarySeq) ? input.boundarySeq : null,
       boundaryEndSeq: typeof input.boundaryEndSeq === 'number' && Number.isFinite(input.boundaryEndSeq) ? input.boundaryEndSeq : null,
     })
-    const workspace = await this.captureWorkspace(chunks)
+    const workspace = await this.captureWorkspace(chunks, input.signal)
     const spreadMs = Math.abs(session.capturedAt - workspace.capturedAt)
     const record: RollbackPointRecord = {
       schemaVersion: ROLLBACK_SCHEMA_VERSION,
@@ -3323,8 +3471,20 @@ export class RollbackPointEngine {
       if (removal.refused !== null) noop.createdRefusedReason = removal.refused
       return noop
     }
-    // 前像（内存）：失败时要能整体回到恢复前状态 —— 只覆盖**真会被写**的文件
-    const pre: { path: string; existed: boolean; bytes: Uint8Array | null }[] = []
+    // 前像（**字节落盘、索引随栈**）：失败时要能整体回到恢复前状态 —— 只覆盖**真会被写**的文件。
+    // 字节之所以不留在内存：大工作区整体回退时前像峰值 = 待写总字节（可达数百 MB），
+    // 与 issue #89 的 OOM 同族；落盘后内存只随**文件条数**增长。
+    // 暂存目录建不出来 ⇒ **零写入失败**（fail-closed）：回退没有安全网就不该开始。
+    const stager = await this.openUndoStager()
+    if (stager === null) {
+      pushDetail(detail, 'undo-staging-unavailable root=' + this.root + ' zeroWrites=true')
+      return {
+        state: 'workspace', status: 'failed', reasonCode: 'restore-failed', detail,
+        restored: 0, failed: needed.length + removal.paths.length,
+        leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
+      }
+    }
+    const preCount = needed.length
     for (const item of needed) {
       let bytes: Uint8Array | null = null
       try {
@@ -3332,7 +3492,7 @@ export class RollbackPointEngine {
       } catch {
         bytes = null
       }
-      pre.push({ path: item.file.path, existed: bytes !== null, bytes })
+      await stager.stage(item.file.path, bytes)
     }
     let restored = 0
     let writtenBytes = 0
@@ -3359,18 +3519,11 @@ export class RollbackPointEngine {
       }
     }
     if (failed > 0 || mismatched.length > 0) {
-      const rollbackFailed: string[] = []
-      for (const item of pre) {
-        try {
-          if (item.existed && item.bytes !== null) await this.writeFile(item.path, item.bytes)
-          else await fs.rm(item.path, { force: true })
-        } catch (error) {
-          rollbackFailed.push(item.path + ' ' + errorDetail(error))
-        }
-      }
+      const rollbackFailed = await stager.rollback((target, bytes) => this.writeFile(target, bytes))
+      await stager.dispose()
       for (const target of mismatched) pushDetail(detail, 'verify-mismatch ' + target)
       for (const line of rollbackFailed) pushDetail(detail, 'rolled-back-failed ' + line)
-      detail.push('restored=0 failed=' + String(failed + mismatched.length) + ' rolledBack=' + String(pre.length - rollbackFailed.length) + ' unchanged=' + String(unchanged))
+      detail.push('restored=0 failed=' + String(failed + mismatched.length) + ' rolledBack=' + String(preCount - rollbackFailed.length) + ' unchanged=' + String(unchanged))
       return {
         state: 'workspace', status: 'failed',
         reasonCode: mismatched.length > 0 ? 'verify-failed' : 'restore-failed',
@@ -3385,7 +3538,8 @@ export class RollbackPointEngine {
     // 阶段 4（用户 2026-10-11 定案 A）：删除「回退点之后新建」的路径。
     // 顺序刻死：记录在案的路径**先写并复核通过**，再删新建的 —— 先删后写一旦写失败就回不去了。
     // 删除同样可回滚：先读前像（内存）→ 删；任一失败就把已写的还原、把已删的写回。
-    const destroyed: { path: string; bytes: Uint8Array }[] = []
+    // 待删文件的前像同样落盘（stage(path, bytes) 的语义就是「回滚时把它写回」）
+    let destroyedCount = 0
     const removalFailures: string[] = []
     // 逐条记录**真的删掉**的路径（全量，不再切 20 条）：它与预览的 workspace.removals 同源同序，
     // 界面把两份清单当作同一件事（「预览说会删的 = 实际删的」）。
@@ -3399,7 +3553,8 @@ export class RollbackPointEngine {
           removal.skipped.push(target)
           continue
         }
-        destroyed.push({ path: target, bytes })
+        await stager.stage(target, bytes)
+        destroyedCount += 1
         await fs.rm(target, { force: true })
         removed += 1
         removedPaths.push(target)
@@ -3408,27 +3563,13 @@ export class RollbackPointEngine {
       }
     }
     if (removalFailures.length > 0) {
-      const rollbackFailed: string[] = []
-      for (const item of pre) {
-        try {
-          if (item.existed && item.bytes !== null) await this.writeFile(item.path, item.bytes)
-          else await fs.rm(item.path, { force: true })
-        } catch (error) {
-          rollbackFailed.push(item.path + ' ' + errorDetail(error))
-        }
-      }
-      for (const item of destroyed) {
-        try {
-          await this.writeFile(item.path, item.bytes)
-        } catch (error) {
-          rollbackFailed.push(item.path + ' ' + errorDetail(error))
-        }
-      }
+      const rollbackFailed = await stager.rollback((target, bytes) => this.writeFile(target, bytes))
+      await stager.dispose()
       for (const line of removalFailures) pushDetail(detail, 'created-remove-failed ' + line)
       for (const line of rollbackFailed) pushDetail(detail, 'rolled-back-failed ' + line)
       detail.push(
         'restored=0 removed=0 failed=' + String(removalFailures.length) +
-        ' rolledBack=' + String(pre.length + destroyed.length - rollbackFailed.length) +
+        ' rolledBack=' + String(preCount + destroyedCount - rollbackFailed.length) +
         ' unchanged=' + String(unchanged),
       )
       return {
@@ -3456,6 +3597,8 @@ export class RollbackPointEngine {
     }
     // 捕获不完整 ⇒ 一条都没删：如实回报原因（界面据此说「因为捕获不完整，一条都没动」）
     if (removal.refused !== null) segment.createdRefusedReason = removal.refused
+    // 前像字节用完即清（成功路径）：留在磁盘上只会变成无人认领的残留
+    await stager.dispose()
     return segment
   }
 
@@ -3753,6 +3896,12 @@ export function rollbackSessionBindingOf(session: unknown): RollbackBindingNarro
   }
   const header = (session as { header?: unknown }).header
   const headerRecord = header !== null && typeof header === 'object' ? header as Record<string, unknown> : null
+  // 子代理会话**不自动留点**（见 RollbackCode 的 'subagent-session'）：它的工作区与父会话相同、
+  // 回合号是自己的，留点只挤占用户自己会话的预算。**只在字段逐字等于 'subagent' 时判定** ——
+  // 读不到 origin（老宿主 / 形状不符）就不判，绝不因为读不到而少留点。
+  if (headerRecord?.['origin'] === 'subagent') {
+    return { ok: false, code: 'subagent-session', detail: 'origin=subagent session=' + id }
+  }
   const cwd = headerRecord?.['cwd']
   // t9：父链与「是否播种而来」只从**活会话头**读；读不到就不带字段（＝不是继承子会话），绝不猜
   const fork: { parentSessionId?: string; forked?: boolean } = {}
@@ -3872,6 +4021,8 @@ export class RollbackAutoTracker {
   private readonly lastStat = new Map<string, { size: number; mtimeMs: number }>()
   private timer: ReturnType<typeof setInterval> | null = null
   private mechanism: 'event' | 'poll' = 'event'
+  /** 在途捕获的取消信号（stop() 时 abort；重新 start() 时换一个新的） */
+  private captureAbort = new AbortController()
 
   constructor(options: RollbackTrackerOptions) {
     this.engine = options.engine
@@ -3921,6 +4072,8 @@ export class RollbackAutoTracker {
       boundaryEndSeq: info.endSeq,
       chunks: binding.chunks ?? [],
       note: this.mechanism === 'poll' ? 'auto:poll' : 'auto:turn',
+      // 卸载 / 停止 ⇒ 立刻中断在途捕获（下一个文件边界停下；已收条目照常成点）
+      signal: this.captureAbort.signal,
     })
     // T10：写台账失败（ok=false）绝不算留点成功 —— 否则 tracker 会记住一个台账里不存在的 pointId，
     // 后续 rewind/详情都查不到它。（capturePoint 失败时也不再回传 point，这条判据是第二道保险。）
@@ -4052,6 +4205,8 @@ export class RollbackAutoTracker {
   /** 起轮询定时器（≤5 s）。已起则幂等返回。 */
   start(): void {
     if (this.timer !== null) return
+    // 上一轮 stop() 已经把信号 abort 掉：重新 start 必须换一个新的，否则捕获一动就停。
+    if (this.captureAbort.signal.aborted) this.captureAbort = new AbortController()
     this.mechanism = 'poll'
     this.timer = setInterval(() => {
       void this.pollOnce().catch((error) => { this.warn('rollback tracker poll failed: ' + errorDetail(error)) })
@@ -4061,6 +4216,8 @@ export class RollbackAutoTracker {
   }
 
   stop(): void {
+    // 中断在途捕获：卸载之后不该再有任何一次「读工作区 + 写对象仓」跑完。
+    this.captureAbort.abort()
     if (this.timer === null) return
     clearInterval(this.timer)
     this.timer = null

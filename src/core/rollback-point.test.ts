@@ -2639,3 +2639,105 @@ test('T2-G 路径身份缓存随 gc 回收：删除回滚点后，缓存里不�
   assert.equal((await engine.remove(second.point?.id ?? '')).ok, true)
   assert.equal(Object.keys((await cacheFileOf(engine)).entries).length, 0, '没有引用者 ⇒ 缓存条目必须被回收')
 })
+
+/* ========================== R-30..R-35（2026-10-14 三款竞品对照后的修复） */
+
+test('R-30 子代理会话不参与自动留点：origin=subagent 给显式机器码；读不到 origin 照常', () => {
+  const sub = rollbackSessionBindingOf({ id: 'session-9', header: { cwd: '/ws', origin: 'subagent' } })
+  assert.equal(sub.ok, false)
+  assert.equal(sub.ok === false ? sub.code : 'ok', 'subagent-session')
+  // 老宿主 / 形状不符：**不加判定** —— 绝不因为读不到 origin 就少留点
+  assert.equal(rollbackSessionBindingOf({ id: 'session-9', header: { cwd: '/ws' } }).ok, true)
+  // origin 存在但不是 subagent（父会话 / 用户会话）：照常
+  assert.equal(rollbackSessionBindingOf({ id: 'session-9', header: { cwd: '/ws', origin: 'user' } }).ok, true)
+})
+
+test('R-31 采集时间预算：超预算留**部分点**并如实标 truncated（不是失败、不静默）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 时钟每次读 +1ms、预算 1ms ⇒ 第一个判定点就超时（确定性的，不依赖真机速度）
+  const engine = makeEngine(fx, { captureBudgetMs: 1, now: steppingClock(1_000, 1) })
+  const captured = await capturePoint(engine, fx)
+  assert.equal(captured.ok, true, '超预算不是失败：已收条目照常成点')
+  const track = captured.point?.workspace
+  assert.equal(track?.degraded, true)
+  assert.equal(track?.reasonCode, 'capture-truncated')
+  assert.equal(track?.payload?.truncated, true)
+  assert.ok(
+    (track?.payload?.skipped ?? []).some((s) => s.reason === 'budget-time'),
+    '超时必须逐条留痕 budget-time（不是静默截断）',
+  )
+})
+
+test('R-32 取消信号：已中止 ⇒ 在文件边界停下（部分点 + budget-time 留痕，绝不整份跑完）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const controller = new AbortController()
+  controller.abort()
+  const captured = await capturePoint(engine, fx, { signal: controller.signal })
+  assert.equal(captured.ok, true, '取消 = 部分点，不是失败')
+  const track = captured.point?.workspace
+  assert.equal(track?.payload?.truncated, true)
+  assert.ok((track?.payload?.skipped ?? []).some((s) => s.reason === 'budget-time'))
+})
+
+test('R-33 预算兜不住单条点：如实标 overBudget（记录仍保留，绝不悄悄丢用户刚留的点）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 预算 1 字节：任何一条记录都超，且候选里没有可淘汰的旧点
+  const engine = makeEngine(fx, { ledgerBytesBudget: 1 })
+  assert.equal((await capturePoint(engine, fx)).ok, true)
+  const status = await engine.storageStatus()
+  assert.equal(status.ledger?.records, 1, '超预算不删刚留的点')
+  assert.equal(status.ledger?.overBudget, true, '预算兜不住时必须如实上报，不能显示成「一切正常」')
+})
+
+test('R-34 回退前像落盘：成功后 undo 目录零残留', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2')
+  const rewind = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off' })
+  assert.equal(rewind.ok, true)
+  assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A1', '前像落盘不影响「写回原内容」')
+  const undoRoot = path.join(engine.storeDir, 'undo')
+  assert.deepEqual(await fs.readdir(undoRoot).catch(() => []), [], '前像目录用完即清（不留无人认领的字节）')
+})
+
+test('R-34b 前像暂存建不出来 ⇒ 零写入失败（回退没有安全网就不该开始）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id ?? ''
+  await fs.writeFile(path.join(fx.workspaceDir, 'a.txt'), 'A2')
+  // 用一个**文件**占住 undo 路径 ⇒ mkdir 必然失败（ENOTDIR/EEXIST）
+  await fs.writeFile(path.join(engine.storeDir, 'undo'), 'block')
+  const rewind = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off' })
+  assert.equal(rewind.ok, false)
+  assert.equal(rewind.outcome, 'failed')
+  assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A2', '零写入：文件保持回退前的内容')
+})
+
+test('R-35 崩溃残留的回退前像目录：死 pid 整目录清掉、活 pid 一律不碰', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  await engine.storageStatus()
+  const undoRoot = path.join(engine.storeDir, 'undo')
+  const dead = path.join(undoRoot, '999999-abc-01234567')
+  const live = path.join(undoRoot, String(process.pid) + '-abc-01234567')
+  await fs.mkdir(dead, { recursive: true })
+  await fs.writeFile(path.join(dead, '0.bin'), 'x'.repeat(64))
+  await fs.mkdir(live, { recursive: true })
+  const { cleanupOrphanTempFiles } = await import('./rollback-ledger.ts')
+  const result = await cleanupOrphanTempFiles(engine.storeDir)
+  assert.equal(result.removed, 1)
+  assert.ok(result.bytes >= 64)
+  await assert.rejects(fs.access(dead), '死 pid 的残留目录必须被清掉')
+  await fs.access(live)
+})
+

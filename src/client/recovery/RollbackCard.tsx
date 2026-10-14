@@ -435,6 +435,15 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                 })}
               </div>
             )}
+            {/* 预算**兜不住**时如实说（典型：单条点本身就大于预算）—— 静默会让「预算生效」变成假象 */}
+            {ledger !== undefined && ledger.overBudget === true && (
+              <div className={css.hint}>
+                {t('rollback.ledger.overBudget', {
+                  size: formatSessionBytes(ledger.bytes),
+                  budget: formatSessionBytes(ledger.budgetBytes),
+                })}
+              </div>
+            )}
             {cleanupNote !== null && <div className={css.hint}>{cleanupNote}</div>}
           </>
         )}

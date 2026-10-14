@@ -315,3 +315,47 @@ Linux（web profile）同版本：index.json = **311,521,007 B**（50 条，单�
 工作区真的变了仍会写一份完整载荷（由字节预算兜住）。「本回合确有文件改动才留点」也没做成：留点必须在
 `turn/start` 拍（见上），改成回合结束拍会把工作区态固定成「改完之后」，正好是这条坑里被禁掉的做法。
 
+## 竞品对照后的五项修复：采集预算 / 子代理判定 / 前像落盘 / 预算兜底 / 注释（2026-10-14）
+
+**来源**：对标 `PerryLink/dsh-checkpoint-rewind`、`SiriLee/dsh-rewind`、`Anionex/dsh-turn-rewind`
+三款插件的全部 issue/PR 与源码后，逐条比对本插件回滚实现（26 条对照表见 `.tmp/rewind-competitor-audit.md`）。
+结论：竞品最惨的四类 bug（就地改写会话日志、采集阻塞工具调用、台账整份读改写、二进制写坏）在本插件
+**结构上不成立**；据此落地五项改动。
+
+**① 采集时间预算与取消信号**（对标 turn-rewind 的 `deadline.ts`、checkpoint-rewind 至今**未合并**的 PR #25）：
+捕获此前只有 maxFiles / maxBytes / maxFileBytes 三个**规模**上限，没有**时间**上限 —— 「文件数很多但总量不大」
+的工作区能让 walk + stat + sha256 跑很久。新增 `ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS = 30_000`（引擎选项
+`captureBudgetMs`）与 `RollbackPointInput.signal`（tracker 在 `stop()` 时 abort、重新 `start()` 时换新 controller）。
+超时 / 取消**不是失败**：已收条目照常成点，未走查部分按 `budget-time` 逐条进 skipped 且 `truncated` 置真
+⇒ 结尾 reasonCode 自动落成 `capture-truncated`、删除集自动 fail-closed（证明名单不完整就一条都不删）。
+**连带修正**：`truncated` 为真时不得判 `chunk-not-found` —— 否则「分块确实存在、只是没跑完」会被报成
+「工作区配错了」。截止用 `stamp()`（单调）比较：系统时钟回拨不会让预算永不触发。
+
+**② 子代理会话不参与自动留点**（对标 dsh-rewind #26 的 `isSubagentSession`）：
+`rollbackSessionBindingOf` 此前只读 `id` / `header.cwd` / `parentSession`，**不读 `origin`** ⇒ 每个子代理会话
+都会留点；而它与父会话同工作区、回合号是自己的，实际效果只是挤占用户自己会话的预算。
+**判据只在 `header.origin === 'subagent'` 逐字命中时生效**，读不到（老宿主 / 形状不符）**不加判定** ——
+绝不因为读不到就少留点；宿主日志每个会话只 warn 一次。注意 `src/routes/recovery.ts` 里
+「`origin='subagent'` 不得当 fork 筛选器」是**归位**口径，与留点口径不是一回事，两处并不冲突。
+
+**③ 回退前像字节落盘**（自研发现：回退路径的内存峰值与 #89 同族）：
+旧实现把「待写文件的旧内容」与「待删文件的内容」全放内存数组，峰值 ∝ 待写总字节（可达数百 MB）。
+新增 `UndoStager`（`<root>/undo/<pid>-<ts36>-<8hex>/`，**字节落盘、索引随栈**），成功与失败路径都 `dispose()`；
+**暂存目录建不出来 = 零写入失败**（fail-closed：回退没有安全网就不该开始）。崩溃残留由
+`cleanupOrphanTempFiles` 按与 tmp 文件同一套 pid 判据（不是本进程 + 进程已不存在）整目录回收。
+
+**④ 预算兜不住单条点时如实上报**（对标 checkpoint-rewind #35「软配额 bound 不住单条」）：
+`applyByteBudget` 在「一条都淘汰不了却仍超预算」时只 warn、界面无从得知。新增
+`RollbackLedgerStatus.overBudget`（`bytes > budget` 就等于「已淘汰到极限」）+ 面板一行如实提示；
+**记录仍然保留** —— 绝不因为超预算把用户刚留的点丢掉。
+
+**⑤ 注释修正**：`src/index.ts` 的订阅注释此前写「每见到一个 `turn/end` 就留点」，与实现
+（`turn/start` 拍、`turn/end` 只记缺省边界）相反，属过时注释，已按实现改写。
+
+**明确没做 / 已核实不需要做**：dsh-rewind #51（compact 后目标不可回退）在本插件**不成立** —— 本插件 fork
+用的是**日志事件 seq 切片**（`atSeq`），不按 surface 消息索引，被 compact 遮蔽的回合仍可从日志前缀分叉；
+checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对象仓，不产 git 对象）。
+护栏：`src/core/rollback-point.test.ts` 的 R-30..R-35（子代理判定 / 时间预算 / 取消信号 / overBudget /
+前像落盘与零写入失败 / 残留清理）。
+
+

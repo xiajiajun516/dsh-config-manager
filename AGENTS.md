@@ -181,6 +181,7 @@
 - **救援模式与 `reconcileBundles` 的硬冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出时逐字节还原）；救援激活期间 `reconcileBundles` 一律停手。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly 会话 cookie，其余 403；读路径只读、写路径各自过 CLI 同源写入门；判定不许重写；**绝不等于「插件 API 无认证」**。
 - **回滚点台账 = 一条一写 + 内容寻址载荷 + 字节预算**（整份读改写会随历史把宿主拖到 OOM）；**自动留点缺省关闭**，关闭即**解绑** `session/event` 订阅；活切换经进程内 gate（→ `docs/lessons/recovery-console.md`）。
+- **回滚点采集必须有时间预算与取消**（超时留部分点 + `budget-time` 留痕，删除集随之 fail-closed）；**子代理会话（`origin==='subagent'`）绝不自动留点**；**回退前像落盘**（暂存建不出 = 零写入失败）。→ `docs/lessons/recovery-console.md`
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
 - **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的两道上限**（每会话 20 → 全局 50，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
