@@ -129,9 +129,9 @@ DSH 生态里这个方向有几个插件，它们解决的问题并不相同—�
 |:---:|:---:|
 | ![首页](assets/screenshot-overview-zh.png) | ![产物库](assets/screenshot-backups-zh.png) |
 
-| 同步（四条通道卡） | 环境 · 档案 |
+| 同步（四条通道卡） | 环境 · 维护与诊断 |
 |:---:|:---:|
-| ![同步](assets/screenshot-sync-zh.png) | ![环境 · 档案](assets/screenshot-profiles-zh.png) |
+| ![同步](assets/screenshot-sync-zh.png) | ![环境 · 维护与诊断](assets/screenshot-profiles-zh.png) |
 
 ---
 

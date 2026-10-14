@@ -128,9 +128,9 @@ Several DSH plugins live in this space and they solve different problems — pic
 |:---:|:---:|
 | ![Home](assets/screenshot-overview-en.png) | ![Library](assets/screenshot-backups-en.png) |
 
-| Sync (four channel cards) | Environment · Profiles |
+| Sync (four channel cards) | Environment · Maintenance & Diagnostics |
 |:---:|:---:|
-| ![Sync](assets/screenshot-sync-en.png) | ![Environment · Profiles](assets/screenshot-profiles-en.png) |
+| ![Sync](assets/screenshot-sync-en.png) | ![Environment · Maintenance & Diagnostics](assets/screenshot-profiles-en.png) |
 
 ---
 

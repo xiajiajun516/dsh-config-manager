@@ -19,7 +19,7 @@
 | `screenshot-overview-en.png` / `screenshot-overview-zh.png` | **首页**（Home：状态条 + 立即备份 / 导出 / 导入 / 远程同步 + 最近活动） |
 | `screenshot-backups-en.png` / `screenshot-backups-zh.png` | **产物库**（Artifact library：源筛选 + 扁平列表 + 底栏「手动导出 / 从文件导入 / 逛市场 / 发布到市场」） |
 | `screenshot-sync-en.png` / `screenshot-sync-zh.png` | **同步**（Sync：Git / WebDAV / 对象存储 / Gist 四条通道卡） |
-| `screenshot-profiles-en.png` / `screenshot-profiles-zh.png` | **环境 · 档案**（Environment → Profiles：运行状态 + 全部档案） |
+| `screenshot-profiles-en.png` / `screenshot-profiles-zh.png` | **环境 · 维护与诊断**（Environment → Maintenance & Diagnostics：磁盘占用 / 工作区 + 会话回滚（回滚点 + 「查看回滚点」）/ 救援模式 / 会话体检） |
 
 > **文件名沿用 v1 时代的槽位名**（`overview` / `backups` / `sync` / `profiles`），与现在的页面名一一对应关系见上表 —— 这样换图不会动 `screenshots.json` 里的 URL。
 > 命名规则：`screenshot-<槽位>-<语言>.png`；`-en` 供仓库根 `README.md` 引用，`-zh` 供 `README.zh-CN.md` 引用，4 个槽位共 8 张。**改名**（而非换图）必须同步 `screenshots.json`，并向 `awesome-dsh-plugin` 提交更新，否则列表页的图片链接会 404。
