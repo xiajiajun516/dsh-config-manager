@@ -2809,7 +2809,12 @@ test('R-37 清单损坏时**从 records/ 重建**：旧点不丢（而不是拿�
   assert.ok(after.points.some((pt) => pt.id === firstId), '而且就是原来那一条（同 id）')
 })
 
-test('R-40 拒删判据折大小写：.GIT 子树同样受保护（Windows 文件系统不区分大小写）', async (t) => {
+// 折大小写只在 Windows 生效（win32Fold）：Linux 上 `.GIT` 与 `.git` 是两个不同目录，
+// 本用例断言的是「不区分大小写的文件系统」下的保护行为，故非 Windows 一律跳过。
+test(
+  'R-40 拒删判据折大小写：.GIT 子树同样受保护（Windows 文件系统不区分大小写）',
+  { skip: process.platform === 'win32' ? false : '折大小写只在 Windows 生效（win32Fold）；Linux 上 .GIT 与 .git 是不同目录' },
+  async (t) => {
   const fx = await makeFixture()
   t.after(fx.cleanup)
   const engine = makeEngine(fx, { fork: async () => ({ ok: true, childSessionId: 'child-1' }) })
