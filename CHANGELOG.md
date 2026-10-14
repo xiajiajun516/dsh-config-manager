@@ -38,6 +38,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Rollback points can be turned off**: automatic per-turn points are off by default; turn them on or off under Environment → Maintenance & diagnostics, and the rewind entry disappears from chat while they are off.
 - **台账占用看得见、也清得掉**：回滚面板显示当前台账的点数与体积，并可一键只删自动点（救援点默认保留，要一并删需显式勾选）。（issue #89）
   **Ledger footprint is visible and reclaimable**: the rollback panel shows how many points the ledger holds and how large it is, and can delete automatic points in one click (rescue points are kept unless you explicitly include them).
+- **其他插件的数据也能一起迁移了**：wallpaper-engine、mnemon 等第三方插件的配置与数据现在在导出/导入里各成一个可勾选的分区——配置与小状态在「第三方插件数据」，上传的壁纸、本地数据库等大体积内容在「第三方插件资产」，都默认不勾选；可再生成的缓存永不进包，改过位置的目录会明说「被环境变量覆盖、本次已跳过」而不是照默认位置读。
+  **Other plugins' data can now be migrated too**: the config and data of third-party plugins such as wallpaper-engine and mnemon now appear as their own opt-in sections in export/import — config and small state under "Plugin Data", large content such as uploaded wallpapers and local databases under "Plugin Assets"; both are off by default, regenerable caches never go in, and a relocated directory says it was skipped because an environment variable overrides it instead of reading the default location.
+- **插件可以自己声明数据目录**：插件在自己的 package.json 里声明 dsh.dataDirs 后，配置管理器会自动识别（同样默认不勾选）；声明写错或不认识时整条忽略，不会影响其它插件。
+  **Plugins can declare their own data directories**: once a plugin declares dsh.dataDirs in its package.json the config manager picks it up automatically (also off by default); a malformed or unknown declaration is ignored entirely and never affects other plugins.
 
 ### 🔧 变更 · Changed
 
@@ -49,6 +53,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Subagent sessions no longer produce rollback points**: they share their turns and workspace with the parent conversation, so points there only crowded out the ledger space of your own conversations; your own conversations are unaffected.
 - **台账超出体积预算时会如实提示**：当可自动淘汰的点已经耗尽（例如单个点本身就比预算大），面板会直说「已超预算、请手动清理」，不再显示成一切正常。
   **The ledger now says so when it exceeds its size budget**: once there is nothing left to evict automatically (for example when a single point is larger than the budget), the panel states it plainly instead of looking healthy.
+- **离线命令行备份不覆盖第三方插件数据**：用命令行备份并显式点名这两个分区时，会明确提示改用图形界面的导出/导入，而不是静默不收。
+  **Offline command-line backups do not cover third-party plugin data**: asking the CLI backup for these two sections now tells you to use the GUI export/import instead of silently leaving them out.
 
 ### 🐛 修复 · Fixed
 

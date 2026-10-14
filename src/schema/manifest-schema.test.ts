@@ -281,7 +281,7 @@ test('K-04 x-* 扩展键仅作为根级文档说明存在，且分区 id 表与 
   assert.ok(xKeys.includes('x-semantic-constraints'), '应显式记录 JSON Schema 无法表达的语义约束');
   assert.deepEqual(
     SCHEMA['x-section-ids'], [...SECTION_IDS],
-    'schema 记录的 15 个分区 id 必须与 SECTION_IDS 完全一致（防止分区增删后文档漂移）',
+    'schema 记录的分区 id 必须与 SECTION_IDS 完全一致（防止分区增删后文档漂移）',
   );
   assert.equal(SCHEMA['x-format-version'], 'Bundle Format v1');
   assert.equal(SCHEMA['x-schema-version-constant'], CURRENT_SCHEMA_VERSION);
@@ -322,10 +322,10 @@ test('S-01 真实 buildManifest 产物满足 schema 声明的全部必需字段�
   assert.deepEqual(errorPaths(m), [], '且必须零 validateManifest error');
 });
 
-test('S-02 sections 恒含全部 15 个已知分区 id（规格 §2.5），值均为布尔', () => {
+test('S-02 sections 恒含全部已知分区 id（规格 §2.5），值均为布尔', () => {
   const m = baselineManifest();
   const keys = Object.keys(m.sections).sort();
-  assert.equal(SECTION_IDS.length, 15, 'SectionId 共 15 个（含无 adapter 的 secrets）');
+  assert.equal(SECTION_IDS.length, 17, 'SectionId 共 17 个（含无 adapter 的 secrets）');
   assert.deepEqual(keys, [...SECTION_IDS].sort(), 'sections 键集合必须等于 SECTION_IDS');
   for (const key of keys) {
     assert.equal(typeof m.sections[key as (typeof SECTION_IDS)[number]], 'boolean', `sections.${key} 必须是布尔`);
@@ -333,7 +333,7 @@ test('S-02 sections 恒含全部 15 个已知分区 id（规格 §2.5），值�
   assert.deepEqual(validateAgainstSchema(SCHEMA, m), [], '全量 sections 必须满足 schema');
 });
 
-test('S-03 全部 15 个分区置 true 的 manifest 仍满足 schema（sections 是开放布尔映射）', () => {
+test('S-03 全部分区置 true 的 manifest 仍满足 schema（sections 是开放布尔映射）', () => {
   const all = sectionsAllFalse();
   for (const id of SECTION_IDS) all[id] = true;
   const m = buildManifest({

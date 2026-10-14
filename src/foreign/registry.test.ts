@@ -207,7 +207,7 @@ test('契约：外来源单元 id → foreign:<source>:<section>:<unit>，且不
 test('契约：外来源前缀与 SectionId 无重叠（按构造互斥，不是靠约定）', () => {
   assert.equal(FOREIGN_UNIT_ID_PREFIX, 'foreign');
   assert.ok(!DSH_UNIT_ID_NAMESPACES.includes(FOREIGN_UNIT_ID_PREFIX));
-  // 15 个 SectionId 逐个都不能等于 foreign——用真实 DSH 形态反证
+  // 每个 SectionId 都不能等于 foreign——用真实 DSH 形态反证
   for (const { ns } of DSH_UNIT_IDS) {
     assert.notEqual(ns, FOREIGN_UNIT_ID_PREFIX, ns);
   }

@@ -31,6 +31,9 @@ export const zh = {
   'adapter.uiLocalStorageTaskBoard': '任务看板数据存于浏览器 localStorage，Host 侧无访问通道，需在目标机器重新配置',
   'adapter.uiLocalStoragePanel': '面板宽度/折叠状态存于浏览器 localStorage，Host 侧无访问通道，需在目标机器重新配置',
   'adapter.uiLocalStorageGeneric': '浏览器端 UI 状态无法经 Host API 迁移',
+  // ---------- pluginData / pluginAssets（第三方插件数据迁移） ----------
+  'adapter.pluginDataEnvOverridden': '{path} 的位置被环境变量 {env} 覆盖，本次已跳过（不猜它指向哪里）',
+  'adapter.pluginDataPathNotAllowed': '路径不在第三方插件数据的允许范围内，已拒绝写入: {path}',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -46,6 +49,8 @@ export const en: Record<keyof typeof zh, string> = {
   'adapter.uiLocalStorageTaskBoard': 'Task-board data lives in the browser localStorage and the host has no access path; reconfigure it on the target machine',
   'adapter.uiLocalStoragePanel': 'Panel width/collapsed state lives in the browser localStorage and the host has no access path; reconfigure it on the target machine',
   'adapter.uiLocalStorageGeneric': 'Browser-side UI state cannot be migrated through the host API',
+  'adapter.pluginDataEnvOverridden': "the location of {path} is overridden by the {env} environment variable; skipped this time (the new location is never guessed)",
+  'adapter.pluginDataPathNotAllowed': 'the path is outside the range allowed for third-party plugin data and was refused: {path}',
 };
 
 registerMessageCatalog({ id: 'adapters-domain', zh, en });

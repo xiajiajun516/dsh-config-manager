@@ -289,6 +289,7 @@ export function makeManifest(platform = 'win32'): Manifest {
       settings: false, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
       skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
       credentialsStatus: false, secrets: false, sessions: false, self: false,
+      pluginData: false, pluginAssets: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },
   };

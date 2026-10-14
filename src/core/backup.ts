@@ -139,6 +139,10 @@ const FILE_BASES: Partial<Record<SectionId, string>> = {
   agentPresets: '.agent-presets',
   agentInstructions: '', // homeDir 根（~/.dsh/AGENTS.md）
   pluginFiles: '',
+  // 第三方插件数据：baseDir '' = home 根，ref 是**完整的 home 相对路径**
+  // （.dsh-wallpaper-engine/config.json / .mnemon/data/x.db）
+  pluginData: '',
+  pluginAssets: '',
   sessions: 'sessions',
   self: 'dsh-config-manager',
 };
@@ -301,6 +305,8 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     case 'agentPresets':
     case 'agentInstructions':
     case 'pluginFiles':
+    case 'pluginData':
+    case 'pluginAssets':
     case 'sessions':
     case 'self': {
       const abs = resolveFileTarget(ctx, target.adapter, target.ref);

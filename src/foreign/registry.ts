@@ -336,7 +336,7 @@ export function isForeignUnitId(id: string): boolean {
 }
 
 /**
- * DSH 既有单元 id 的命名空间：分区 id（15 个 SectionId）或 plugin/patch/workspace；
+ * DSH 既有单元 id 的命名空间：分区 id（17 个 SectionId）或 plugin/patch/workspace；
  * 外来源形态（首段 = foreign）与无法识别的前缀一律 **null**。
  *
  * 两个方向都不误判是这条契约的核心（§8.3）：`foreign` 不在 SectionId 词表里、也不等于

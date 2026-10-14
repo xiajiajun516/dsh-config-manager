@@ -70,6 +70,7 @@ test('manifestSummaryFrom: 从导出 Manifest 提取摘要（只含启用分区�
       settings: true, ui: true, providers: true, plugins: false, mcp: false,
       prompts: false, skills: true, agentPresets: false, agentInstructions: false, workspaces: false,
       pluginFiles: false, credentialsStatus: false, secrets: false, sessions: false, self: false,
+      pluginData: false, pluginAssets: false,
     },
     security: { containsSecrets: true, encrypted: false, encryption: null },
   };

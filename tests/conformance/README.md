@@ -116,7 +116,7 @@ import { rebuildBundle } from './tests/conformance/corpus.ts';
 | # | 断言 | 本仓库实测 |
 |---|---|---|
 | 1 | `manifest.schemaVersion === 1`、`security.encrypted === false`、`security.encryption === null` | ✅ |
-| 2 | `manifest.sections` 覆盖**全部** 15 个分区 id；未导出的显式为 `false` | ✅ |
+| 2 | `manifest.sections` 覆盖**全部** 17 个分区 id；未导出的显式为 `false` | ✅ |
 | 3 | `checksums` 的键集合 == ZIP 内除 `manifest.json`/`integrity/checksums.json` 外的条目集合 | ✅ |
 | 4 | 每个数据条目的 SHA-256 == checksums 表中的值 | ✅ |
 | 5 | 校验方向：`checksums` 表里的每个键必须在 ZIP 中存在且哈希一致；**ZIP 中多出的条目不参与校验**，但必须**显式告警**（未登记 ⇒ 未被校验） | ✅（`CORPUS-02` + `INT-01` 钉住） |

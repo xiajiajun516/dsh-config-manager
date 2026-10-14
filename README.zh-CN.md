@@ -435,7 +435,7 @@ allowBuilds:
 |---|---|
 | 整文件还原 | settings.yaml / settings.json / cordis.patch.yml 的 blob 写回 `$DSH_HOME`；快照时不存在、导入后新增的文件会被移除 |
 | 插件卸载 | 导入期间新增的插件经官方 `dsh plugin remove` 卸载（与基线对比；旧快照无基线时只给提示） |
-| 文件补偿 | skills / agentPresets / agentInstructions / pluginFiles / sessions 的 blob 写回原路径 |
+| 文件补偿 | skills / agentPresets / agentInstructions / pluginFiles / pluginData / pluginAssets / sessions 的 blob 写回原路径 |
 | 凭据 | DSH 不回读凭据值——只提示人工重新填写 |
 
 **GUI**：产物库 → 源筛选切到**「本机快照」**→ 行内 ⋯ → **「恢复」**→ 先看恢复计划（dry-run，零写入；git 风格的逐行对照）→ 确认执行。行内还有「查看与对比 / 迁移前咨询 / 置顶 / 删除」等能力，按该行是什么产物给。
@@ -574,7 +574,7 @@ dsh-config-manager backup --out D:/rescue/config.zip      # 指定输出（绝�
 dsh-config-manager backup --sections skills,self          # 收窄范围
 ```
 
-`--sections` 可选值为 `skills,agentPresets,agentInstructions,self,pluginFiles`。其中 `pluginFiles` 与 GUI 侧一致属**默认关闭**：它原样复制第三方插件自有文件，而 `dsh-ssh.json` 里是明文主机密码——确认过内容之后再选它。
+`--sections` 可选值为 `skills,agentPresets,agentInstructions,self,pluginFiles`（第三方插件数据 `pluginData` / `pluginAssets` **不在**离线命令行备份范围内，显式点名会提示改用图形界面的导出/导入）。其中 `pluginFiles` 与 GUI 侧一致属**默认关闭**：它原样复制第三方插件自有文件，而 `dsh-ssh.json` 里是明文主机密码——确认过内容之后再选它。
 
 
 **典型救急流程**（DSH 起不来时）：① `dsh-config-manager reinstall` 先把启动器重装回来（必要时顺带清理），② 若 DSH 报会话日志错误（`corrupt session log` / `duplicate JSONL session id`），先跑 `dsh-config-manager sessions repair --fix` 把日志目录离线归位，③ `dsh web` 重新启动 DSH，④ 从仓库装回插件，⑤ 从远程仓库拉取快照（或执行 `dsh-config-manager restore`）把配置恢复回来。整个流程中 CLI 全程可用，与 DSH 是否健康无关。

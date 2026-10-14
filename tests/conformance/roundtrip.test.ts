@@ -168,12 +168,13 @@ test('RT-01 明文 v1 多分区往返：Exporter → ZIP → Importer → 目标
     for (const id of FIXTURE_SECTIONS) {
       assert.equal(manifest.sections[id], true, `manifest.sections.${id} 必须为 true`);
     }
-    // manifest.sections 必须覆盖全部 15 个分区 id，未导出者显式为 false（不得缺键）
+    // manifest.sections 必须覆盖全部 17 个分区 id，未导出者显式为 false（不得缺键）
     const ALL_SECTIONS: SectionId[] = [
       'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'skills', 'agentPresets',
       'agentInstructions', 'workspaces', 'pluginFiles', 'credentialsStatus', 'secrets', 'sessions', 'self',
+      'pluginData', 'pluginAssets',
     ];
-    assert.deepEqual(Object.keys(manifest.sections).sort(), [...ALL_SECTIONS].sort(), 'manifest.sections 必须覆盖全部 15 个分区 id');
+    assert.deepEqual(Object.keys(manifest.sections).sort(), [...ALL_SECTIONS].sort(), 'manifest.sections 必须覆盖全部分区 id');
     for (const id of ALL_SECTIONS) {
       if (FIXTURE_SECTIONS.includes(id)) continue;
       assert.equal(manifest.sections[id], false, `未导出的分区 ${id} 必须显式为 false`);
@@ -1143,8 +1144,8 @@ test('FC-05 分区载荷 relativePath 必须非空（规格 §3.3.1 写侧硬约
   const fileSections = adapters.filter((a) => isFileSection(a.id)).map((a) => a.id).sort();
   assert.deepEqual(
     fileSections,
-    ['agentInstructions', 'agentPresets', 'pluginFiles', 'self', 'sessions', 'skills'],
-    '规格 §3.3.1 写侧硬约束表列的是这 6 个文件类分区；集合漂移必须回来同步规格与本断言',
+    ['agentInstructions', 'agentPresets', 'pluginAssets', 'pluginData', 'pluginFiles', 'self', 'sessions', 'skills'],
+    '规格 §3.3.1 写侧硬约束表列的是这 8 个文件类分区；集合漂移必须回来同步规格与本断言',
   );
 
   const body = Buffer.from(SKILL_BODY, 'utf8');

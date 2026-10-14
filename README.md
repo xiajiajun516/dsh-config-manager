@@ -437,7 +437,7 @@ Every import creates a **safety snapshot** first. If something feels off afterwa
 |---|---|
 | Whole-file restore | settings.yaml / settings.json / cordis.patch.yml blobs are written back to `$DSH_HOME`; files that didn't exist at snapshot time but appeared after import are removed |
 | Plugin uninstall | Plugins added during import are removed via the official `dsh plugin remove` (baseline comparison; old snapshots without a baseline only get a hint) |
-| File compensation | skills / agentPresets / agentInstructions / pluginFiles / sessions blobs are written back to their original paths |
+| File compensation | skills / agentPresets / agentInstructions / pluginFiles / pluginData / pluginAssets / sessions blobs are written back to their original paths |
 | Credentials | DSH never reads credential values back — you get a manual re-entry hint instead |
 
 **GUI**: Library → switch the source filter to **"Local snapshots"** → the row's ⋯ menu → **"Restore"** → review the plan (dry-run, zero writes; a git-style line-by-line comparison) → confirm. The same menu offers "Inspect & compare / Migration consult / Pin / Delete", depending on what that row is.
@@ -576,7 +576,7 @@ dsh-config-manager backup --out D:/rescue/config.zip      # explicit destination
 dsh-config-manager backup --sections skills,self          # narrow the scope
 ```
 
-`--sections` accepts `skills,agentPresets,agentInstructions,self,pluginFiles`. `pluginFiles` is **opt-in** (as in the GUI): it copies third-party plugin files verbatim, and `dsh-ssh.json` holds plaintext host passwords — select it only when you have looked at what is in there.
+`--sections` accepts `skills,agentPresets,agentInstructions,self,pluginFiles` (third-party plugin data — `pluginData` / `pluginAssets` — is **not** available to the offline CLI backup; naming it explicitly points you to the GUI export/import). `pluginFiles` is **opt-in** (as in the GUI): it copies third-party plugin files verbatim, and `dsh-ssh.json` holds plaintext host passwords — select it only when you have looked at what is in there.
 
 **A typical rescue flow** when DSH won't start: ① `dsh-config-manager reinstall` to bring the launcher back (plus any clean-up), ② if DSH reports a session-log error (`corrupt session log` / `duplicate JSONL session id`), run `dsh-config-manager sessions repair --fix` — it repairs the log layout offline, ③ `dsh web` to start DSH again, ④ re-add the plugin from the registry, and ⑤ pull a snapshot from the remote repo (or run `dsh-config-manager restore`) to bring your config back. The CLI works at every step regardless of DSH's health.
 

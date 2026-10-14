@@ -21,6 +21,7 @@ export function makeManifest(): Manifest {
       settings: true, ui: false, providers: false, plugins: false, mcp: false, prompts: false,
       skills: false, agentPresets: false, agentInstructions: false, workspaces: false, pluginFiles: false,
       credentialsStatus: false, secrets: false, sessions: false, self: false,
+      pluginData: false, pluginAssets: false,
     },
     security: { containsSecrets: false, encrypted: false, encryption: null },
   };
@@ -106,7 +107,7 @@ export function makePlan(overrides: Partial<ImportPlan> = {}): ImportPlan {
     estimatedActions: {
       settings: 2, ui: 0, providers: 0, plugins: 1, mcp: 1, prompts: 1,
       skills: 0, agentPresets: 0, agentInstructions: 0, workspaces: 0, pluginFiles: 0,
-      credentialsStatus: 0, secrets: 0, sessions: 0, self: 0,
+      credentialsStatus: 0, secrets: 0, sessions: 0, self: 0, pluginData: 0, pluginAssets: 0,
     },
     ...overrides,
   };

@@ -16,7 +16,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import {
-  DEFAULT_BACKUP_SECTIONS, OFFLINE_BACKUP_SECTIONS, OFFLINE_UNAVAILABLE_SECTIONS, OPT_IN_BACKUP_SECTIONS,
+  DEFAULT_BACKUP_SECTIONS, OFFLINE_BACKUP_SECTIONS, OFFLINE_EXCLUDED_SECTIONS, OFFLINE_UNAVAILABLE_SECTIONS,
+  OPT_IN_BACKUP_SECTIONS,
   buildSectionFlags,
 } from './backup-plan.ts';
 import { APPLY_ORDER } from './analyzer.ts';
@@ -105,16 +106,23 @@ test('离线分区清单：注册表所有分区都必须显式归类（可收�
   // 「明确不参与离线」：sessions 体量巨大且属用户数据（GUI 侧单独 opt-in）、secrets 无分区载荷
   // （凭据值走独立加密容器）。二者都不在 CLI 离线备份的目标集合内 —— 但必须**显式**列出，
   // 否则新增分区会被静默漏收/漏报。
-  const NOT_OFFLINE_APPLICABLE: readonly SectionId[] = ['sessions', 'secrets'];
+  // pluginData / pluginAssets 也在此列（第三方插件数据的收集依赖 adapter 的来源注册表；
+  // 见 backup-plan.ts 的 OFFLINE_EXCLUDED_SECTIONS —— 直接引用产品常量，避免测试与实现各抄一份）
+  const NOT_OFFLINE_APPLICABLE: readonly SectionId[] = [
+    'sessions', 'secrets', ...OFFLINE_EXCLUDED_SECTIONS,
+  ];
   const classified = new Set<string>([...OFFLINE_BACKUP_SECTIONS, ...OFFLINE_UNAVAILABLE_SECTIONS, ...NOT_OFFLINE_APPLICABLE]);
   assert.deepEqual([...classified].sort(), [...SECTION_IDS].sort(), '新增分区必须在 backup-plan 里显式归类');
 });
 
 /* ------------------------------------------------------------ FILE_BASES */
 
-test('resolveFileTarget：文件类分区都有明确基准目录（除两个 home 根分区外不得落 homeDir 根）', () => {
-  // 只有这两个分区的文件**本来就在** $DSH_HOME 根（AGENTS.md / 插件自有文件白名单）
-  const HOME_ROOT_SECTIONS: readonly SectionId[] = ['agentInstructions', 'pluginFiles'];
+test('resolveFileTarget：文件类分区都有明确基准目录（除 home 根分区外不得落 homeDir 根）', () => {
+  // 文件本来就在 $DSH_HOME 根的分区：AGENTS.md / 插件自有文件白名单 / 第三方插件数据
+  // （pluginData 与 pluginAssets 的 ref 是**完整的 home 相对路径**，如 .dsh-wallpaper-engine/config.json）
+  const HOME_ROOT_SECTIONS: readonly SectionId[] = [
+    'agentInstructions', 'pluginFiles', 'pluginData', 'pluginAssets',
+  ];
   const ctx = { homeDir: path.join('C:', 'home', '.dsh'), profile: 'web' } as unknown as HostContext;
   const atHomeRoot = path.join(ctx.homeDir, 'probe.txt');
   for (const id of SECTION_IDS.filter((s) => isFileSection(s))) {

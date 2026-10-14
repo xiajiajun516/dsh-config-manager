@@ -105,6 +105,8 @@ const CATEGORY_DESCRIPTION_KEY: Record<Exclude<SectionId, 'secrets'>, UiTextKey>
   ui: 'export.category.ui',
   credentialsStatus: 'export.category.credentialsStatus',
   sessions: 'export.category.sessions',
+  pluginData: 'export.category.pluginData',
+  pluginAssets: 'export.category.pluginAssets',
 };
 
 /** 需在 UI 标注安全提示、但绝不显示值的分区（凭据状态只有 configured 标记） */

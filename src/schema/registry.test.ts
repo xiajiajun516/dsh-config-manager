@@ -47,6 +47,9 @@ const HISTORICAL_SECTION_IDS: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts',
   'skills', 'agentPresets', 'agentInstructions', 'workspaces', 'pluginFiles',
   'credentialsStatus', 'secrets', 'sessions', 'self',
+  // 2026-10-14 追加：第三方插件数据（pluginData 配置类 / pluginAssets 大资产类）——
+  // 历史字面量到此为止的部分逐字未改，新分区只允许**追加**在末尾。
+  'pluginData', 'pluginAssets',
 ];
 const HISTORICAL_JSON_PATHS: ReadonlyArray<readonly [SectionId, string]> = [
   ['settings', 'config/settings.json'],
@@ -65,16 +68,18 @@ const HISTORICAL_FILE_PREFIXES: ReadonlyArray<readonly [SectionId, string]> = [
   ['pluginFiles', 'plugin-files/'],
   ['sessions', 'sessions/'],
   ['self', 'self/'],
+  ['pluginData', 'plugin-data/'],
+  ['pluginAssets', 'plugin-assets/'],
 ];
 
 /* ---------------- 行为等价（顺序 + 内容） ---------------- */
 
 test('registry: SECTION_IDS 与历史数组逐项一致（顺序 = applyOrder 升序）', () => {
   assert.deepEqual([...SECTION_IDS], [...HISTORICAL_SECTION_IDS]);
-  assert.equal(SECTION_IDS.length, 15);
+  assert.equal(SECTION_IDS.length, 17);
   const orders = SECTION_IDS.map((id) => SECTION_REGISTRY[id].applyOrder);
   assert.deepEqual(orders, [...orders].sort((a, b) => a - b), 'applyOrder 必须与 SECTION_IDS 顺序一致');
-  assert.deepEqual(orders, Array.from({ length: 15 }, (_, i) => i + 1), 'applyOrder 连续且从 1 起');
+  assert.deepEqual(orders, Array.from({ length: 17 }, (_, i) => i + 1), 'applyOrder 连续且从 1 起');
 });
 
 test('registry: SECTION_JSON_PATHS / SECTION_FILE_PREFIXES 与历史字面量逐项一致（含键顺序）', () => {
@@ -219,6 +224,8 @@ const HISTORICAL_RISK_TIERS: Readonly<Record<string, SectionRiskTier>> = {
   skills: 'low', agentPresets: 'low', agentInstructions: 'low',
   pluginFiles: 'high', sessions: 'high', self: 'low',
   credentialsStatus: 'high', secrets: 'high',
+  // 第三方插件数据：内容是任意文件（可能含凭据），且换机后位置可能不存在 → high
+  pluginData: 'high', pluginAssets: 'high',
 };
 
 test('registry: 每个分区都声明 riskTier，且与改造前的分级逐项一致（行为等价）', () => {

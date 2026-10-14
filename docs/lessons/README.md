@@ -15,6 +15,7 @@
 | `sync-channel.md` | 同步分区逐分区放行 / 会话管理五条语义 | §🔐 安全不变量、`docs/spec/sync-channel-v1.md` |
 | `recovery-console.md` | CLI 与救急台同门 / 灾备下线 / 救援模式与 reconcileBundles / 离线救急台 token 边界 | §📌「恢复 / 救急台 / 救援模式」 |
 | `packaging-and-bundle.md` | bundle 是 cjs / 自包含护栏 / issue #57–#60 / MemFs | §📌「打包与 client bundle」、§🏗️ |
+| `plugin-data-migration.md` | 第三方插件数据目录的位置取证与收录口径 / 区域相对排除 / 声明缓存按 home 键 / 目录形态判定 / 离线 CLI 为何不收集 | §📌「第三方插件数据」 |
 | `repo-overview.md` | **非规则参考**（2026-10-14 下移）：用途与技术栈 / 目录结构 / 常用命令 / 本机环境注意 / UI 自查清单 | AGENTS.md 顶部「下移存档」、§⚙️ 命令与验证 |
 
 ## 约定

@@ -25,7 +25,7 @@
 |---|---|
 | 导出 ZIP 的顶层布局与文件命名 | `src/core/exporter.ts` |
 | `manifest.json` 的字段契约 | `src/schema/manifest.ts:27-44`、`src/schema/manifest.ts:65-123` |
-| 13 个分区的落盘形态与 section version | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`payload.zipPath` / `payload.filePrefix`）、`src/schema/section-registry.ts` 的 `SECTION_DATA_VERSION` |
+| 17 个分区的落盘形态与 section version | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`payload.zipPath` / `payload.filePrefix`）、`src/schema/section-registry.ts` 的 `SECTION_DATA_VERSION` |
 | `integrity/checksums.json` 的格式与校验语义 | `src/utils/hashing.ts:18-52`、`src/core/analyzer.ts:160-205` |
 | `security/secrets.enc` 的二进制布局与加密参数 | `src/security/encryption.ts:43-110` |
 | 整体加密容器 `DCA1` 的字节布局 | `src/security/encryption.ts:35-41`、`src/security/encryption.ts:203-232` |
@@ -83,6 +83,8 @@ bundle 是一个普通 ZIP。**顶层是扁平条目，不写显式目录条目*
 | `plugin-files/**` | 真实文件（递归） | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`pluginFiles` 条目） |
 | `sessions/**` | 真实文件（递归） | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`sessions` 条目） |
 | `self/**` | 真实文件 | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`self` 条目） |
+| `plugin-data/**` | 真实文件（递归） | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`pluginData` 条目） |
+| `plugin-assets/**` | 真实文件（递归） | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`pluginAssets` 条目） |
 
 真实产物的条目集合示例（来自 §0.2 的运行结果，未加密、默认分区）：
 
@@ -348,7 +350,7 @@ crc32(空) = 0
 win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | haiku | netbsd | other
 ```
 
-### 2.5 `sections` 的键集合（15 个，恒全量出现）
+### 2.5 `sections` 的键集合（17 个，恒全量出现）
 
 > **分区清单的唯一权威是 `SECTION_REGISTRY`（机器可读）**：`src/schema/section-registry.ts` 的
 > `SECTION_REGISTRY: Record<SectionId, SectionMeta>` 逐分区声明 id / 载荷形态 / 可移植性 / 同步可选 /
@@ -360,9 +362,9 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 
 `buildSectionFlags` 先为**全部已知分区**置 `false`，再把实际导出的置 `true`（`src/core/exporter.ts`）。所以：
 
-- `sections` 恒包含全部 **15 个键**（= `SECTION_IDS`；`SECTION_IDS.length === 15` 由 `tests/schema/manifest-schema.test.ts` 的 S-02 断言），缺一不可：`settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, secrets, sessions, self`。
-- 这 15 个键要按**两种性质**分开读，否则极易误读为「只写 14 个键」（判据在注册表的 `payload.kind` 上）：
-  - **14 个真实数据分区 id**：上表里的 `settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, sessions, self`——即注册表中 `payload.kind !== 'none'` 的全部条目，每个都对应一个 adapter / ZIP 目录，可被置 `true` 或 `false`；
+- `sections` 恒包含全部 **17 个键**（= `SECTION_IDS`；`SECTION_IDS.length === 17` 由 `tests/schema/manifest-schema.test.ts` 的 S-02 断言），缺一不可：`settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, secrets, sessions, self, pluginData, pluginAssets`。
+- 这 17 个键要按**两种性质**分开读，否则极易误读为「只写 16 个键」（判据在注册表的 `payload.kind` 上）：
+  - **16 个真实数据分区 id**：上表里的 `settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, sessions, self, pluginData, pluginAssets`——即注册表中 `payload.kind !== 'none'` 的全部条目，每个都对应一个 adapter / ZIP 目录，可被置 `true` 或 `false`；
   - **1 个状态位 `secrets`**：注册表里**唯一** `payload.kind === 'none'` 的条目——**不是数据分区**，全仓库没有它的 adapter（见 §3.2），因此它在 `sections` 里**恒为 `false`**（`src/core/exporter.ts`）。它出现在表里只为「键集合恒全量」这一条不变量，**不代表 bundle 含凭据**——是否含凭据由 `security.containsSecrets` / `security.encrypted` 承载（见 §4）。
 - **所以第三方 exporter 应当写满 15 个键**（14 个数据分区 + `secrets: false`）：本实现自己的导出端**永远**写满。需要留意校验强度——`validateManifest` 对 `sections` 只检查「值必须是布尔」与「键是否已知（未知键仅 warning）」（`src/schema/manifest.ts:97-104`），**并不强制 15 个键齐全**；但缺键会让接收端把该分区当作「未声明」，因此不建议依赖这种宽松。**取证**：§0.2 运行产物中 `manifest.sections` 的键集合与 `SECTION_IDS`（派生自 `SECTION_REGISTRY`，**15 项**，其中 `secrets` 亦在列）逐项一致。
 - **未知分区键可以存在**（仅 warning），但本实现的导出端**永不会**产生它们。
@@ -425,7 +427,9 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
     "credentialsStatus": true,
     "secrets": false,
     "sessions": false,
-    "self": true
+    "self": true,
+    "pluginData": false,
+    "pluginAssets": false
   },
   "security": {
     "containsSecrets": false,
@@ -456,7 +460,7 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 
 ---
 
-## 3. 13 个分区（+ `secrets`）的语义
+## 3. 16 个数据分区（+ `secrets`）的语义
 
 ### 3.1 两类分区的落盘形态差异（**本规格最容易被误读的一点**）
 
@@ -492,12 +496,14 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 | 13 | `secrets` | 二进制 | `security/secrets.enc` | 见 §4 | 由 blob 内 `version` 字节承载（当前 `1`） | 恒 false | — |
 | 14 | `sessions` | 文件 | `sessions/` | 递归真实文件 | 1（内存） | **false** | deviceSpecific |
 | 15 | `self` | 文件 | `self/` | 白名单配置文件 | 1（内存） | true | portable |
+| 16 | `pluginData` | 文件 | `plugin-data/` | 递归真实文件（第三方插件的数据目录；区域见 §3.3.1） | 1（内存） | **false** | deviceSpecific |
+| 17 | `pluginAssets` | 文件 | `plugin-assets/` | 递归真实文件（第三方插件的大体积资产） | 1（内存） | **false** | deviceSpecific |
 
-> **计数说明（必须读，否则会数错）**：`SectionId` 共 **15** 个（`src/schema/types.ts:18-21`）。其中：
+> **计数说明（必须读，否则会数错）**：`SectionId` 共 **17** 个（`src/schema/types.ts:18-22`）。其中：
 > - `secrets` **没有 adapter**、没有 JSON 载荷、不参与 adapter 循环，其产物由 exporter 直接写（`src/core/exporter.ts`）。
 > - `sessions` 的 adapter 仅在 `includeSessions: true` 时挂载（`src/adapters/index.ts:72`）。
 >
-> 因此仓库文档里「13 adapter」指的是：`createAdapters()` 在 `includeSessions` 缺省（false）+ `selfDir !== ''` 时的实际挂载数 = settings / ui / providers / plugins / mcp / prompts / skills / agentPresets / agentInstructions / workspaces / credentialsStatus / pluginFiles / self = **13**（`src/adapters/index.ts:54-71`）。`sessions` 与 `secrets` 都不在这 13 之内，但都在 §2.5 的 `sections` 键集合里。
+> 因此仓库文档里「15 adapter」指的是：`createAdapters()` 在 `includeSessions` 缺省（false）+ `selfDir !== ''` 时的实际挂载数 = settings / ui / providers / plugins / mcp / prompts / skills / agentPresets / agentInstructions / workspaces / credentialsStatus / pluginFiles / self / pluginData / pluginAssets = **15**（`src/adapters/index.ts`）。`sessions` 与 `secrets` 都不在这 15 之内，但都在 §2.5 的 `sections` 键集合里（`pluginData` 与 `pluginAssets` 是同一个 adapter 类的两个实例）。
 
 取证（表内各列）：`src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（`payload.zipPath` / `payload.filePrefix`，即路径与前缀）、`src/adapters/index.ts:52-74`（挂载）、各 adapter 的 `defaultIncluded`/`portability` 字段（`src/adapters/*.ts`，例如 `src/adapters/plugins.ts`、`src/adapters/mcp.ts`、`src/adapters/credentials.ts`、`src/adapters/workspaces.ts`）。
 
@@ -522,7 +528,7 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 | `prompts` | `prompts` 必须是数组 | `src/schema/config.ts` 的 `validateSectionData`（`array` 分支） |
 | `workspaces` | `workspaces` 必须是数组 | `src/schema/config.ts` 的 `validateSectionData`（`array` 分支） |
 | `credentialsStatus` | `credentials` 必须是数组 | `src/schema/config.ts` 的 `validateSectionData`（`array` 分支） |
-| 文件类 6 个 | `files` 必须是数组；**每条记录的 `relativePath` 必须是非空字符串**（adapter `validate()` 逐条判，取证见 §3.3.1 B 之后的「写侧硬约束」） | `src/schema/config.ts` 的 `validateSectionData`（`files` 分支）+ `src/adapters/file-collection.ts:409-410` / `src/adapters/plugin-files.ts:178-179`（error 码 `adapter.validate.fileRelativePath`） |
+| 文件类 8 个 | `files` 必须是数组；**每条记录的 `relativePath` 必须是非空字符串**（adapter `validate()` 逐条判，取证见 §3.3.1 B 之后的「写侧硬约束」） | `src/schema/config.ts` 的 `validateSectionData`（`files` 分支）+ `src/adapters/file-collection.ts:409-410` / `src/adapters/plugin-files.ts:178-179`（error 码 `adapter.validate.fileRelativePath`） |
 
 **所有分区**（除文件类在 ZIP 内无 JSON 的情形）都要求 `version === 1`（`src/schema/versions.ts` 的 `sectionDataVersionIssue`（`version === 1` 判定））。但**校验强度按「低于 / 等于 / 高于 1」三档不同**，这一点极易误读：
 
@@ -546,6 +552,7 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 | `agentInstructions` | `baseDir === ''` → `relativePath` = homeDir 相对路径**原样**（本实现恒为 `AGENTS.md`） | `src/adapters/agent-instructions.ts:30-35`、`src/adapters/file-collection.ts` |
 | `pluginFiles` | `relativePath` = **相对 `~/.dsh` 根的完整路径**（白名单文件如 `dsh-ssh.json`，或 `collectDir` 下的递归路径） | `src/adapters/plugin-files.ts:42-67` |
 | `self` | `relativePath` = **相对 baseDir（`dsh-config-manager`）的路径**，来自固定白名单（`sync/sync-config.json` 等），**不递归** | `src/adapters/self.ts:32-42`、`src/adapters/self.ts:59-77` |
+| `pluginData` / `pluginAssets` | `baseDir === ''` → `relativePath` = **完整的 homeDir 相对路径**（如 `.dsh-wallpaper-engine/config.json`、`.mnemon/data/x.db`）；区域与排除项来自 `src/core/plugin-data-registry.ts` 的来源注册表（内置来源 + 已安装插件的 `dsh.dataDirs` 自述声明） | `src/adapters/plugin-data.ts`、`src/core/plugin-data-registry.ts`、`docs/spec/plugin-data-declaration.md` |
 | 归档条目名（全部分区统一） | `name = SECTION_FILE_PREFIXES[sectionId] + relativePath` —— **纯字符串拼接，无归一化、无 `path.join`、无去重** | `src/core/exporter.ts` |
 | CLI 离线备份路径 | 同一公式，但**先过 `isPathSafe(zipName)`**，不安全则跳过该条目并计入 `excludedCount`（写侧唯一做条目名校验的地方） | `src/core/backup-plan.ts` 的 `collectBackupEntries`（`isPathSafe` 闸） |
 
@@ -581,7 +588,7 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 >
 > | 载体 | 判据（实现） | 不满足的后果 |
 > |---|---|---|
-> | 分区载荷 `FilesSection.files[].relativePath`（6 个文件类分区：`skills` / `agentPresets` / `agentInstructions` / `pluginFiles` / `sessions` / `self`） | 各 adapter 的 `validate()` 逐条判「对象且 `relativePath` 是非空字符串」，否则记 error **`adapter.validate.fileRelativePath`**（文案：`文件记录必须含非空 relativePath`）——`src/adapters/file-collection.ts:409-410`（基类，5 个子类共用）、`src/adapters/plugin-files.ts:178-179`（`pluginFiles` 自己那份） | 该分区被从计划中**剔除**并记一条 error（`src/core/analyzer.ts` 的 `analyzeBundle`，见 §3.3 第二道校验），**不是静默跳过** |
+> | 分区载荷 `FilesSection.files[].relativePath`（8 个文件类分区：`skills` / `agentPresets` / `agentInstructions` / `pluginFiles` / `sessions` / `self` / `pluginData` / `pluginAssets`） | 各 adapter 的 `validate()` 逐条判「对象且 `relativePath` 是非空字符串」，否则记 error **`adapter.validate.fileRelativePath`**（文案：`文件记录必须含非空 relativePath`）——`src/adapters/file-collection.ts:409-410`（基类，5 个子类共用）、`src/adapters/plugin-files.ts:178-179`（`pluginFiles` 自己那份） | 该分区被从计划中**剔除**并记一条 error（`src/core/analyzer.ts` 的 `analyzeBundle`，见 §3.3 第二道校验），**不是静默跳过** |
 > | `plugins` 分区 `patchFiles[].relativePath` | `validateSectionData` 的 `array` 分支在 `validatePatchFiles` 闸下直接判：`typeof rel !== 'string' \|\| rel === '' \|\| !isPathSafe(rel)` → error（`src/schema/config.ts:122-125`；规则本体 `src/utils/paths.ts:33-42`） | 第一道校验失败 → **抛错中断整个导入**（`src/core/analyzer.ts` 的 `extractSections`） |
 > | 归档条目名 `prefix + relativePath` | 写侧 `zipToBuffer` 的 `isPathSafe` 闸（`src/utils/zip.ts:244`）、CLI 备份的同一闸（`src/core/backup-plan.ts:277`，不安全则跳过该条目并计入 `excludedCount`）；读侧 `parseZip` 条目名闸（`src/utils/zip.ts:502`） | 读侧抛 `ZipSafetyError` → **整个 bundle 被拒**（§3.3.1 C 的 L1） |
 >
@@ -1126,7 +1133,7 @@ unsupportedSections= ["keybindings"]                                        ← 
 | `workspaces` | ✅ **是**（条目级未知字段原样落到目标记录） | `applyItem` 直接把 `data.workspaces.find(...)` 的**整个记录对象**交给 `ctx.target.workspace.writeRecord(rec)`，无字段过滤 | `src/adapters/workspaces.ts:67-77` |
 | `credentialsStatus` | ❌ 否（**该分区根本不写条目字段**） | `analyzeImport` 恒返回 `[]`；`applyItem` 只做 `credentials.set(ref, value)`，`value` 来自 `secretInputs` / `decryptedCredentials`，**从不读分区载荷里的条目字段** | `src/adapters/credentials.ts:105-118`、`src/core/analyzer.ts` 的 `executeImportPlan`（凭据写入路径；`ensureMissingSecrets` 只读 `ref` 与 `configured`） |
 | `plugins.patch[].raw` | ✅ **是**（原样写回） | `applyPatchChanges(resolveWriteLayer(pl.file, ctx.target.profile), [{ lineId: ref, raw: pl.raw, action }])`，不做字段过滤 | `src/adapters/plugins.ts:661-664` |
-| 文件类 6 个（`skills` / `agentPresets` / `agentInstructions` / `pluginFiles` / `sessions` / `self`） | ⛔ **不适用**（无 JSON 载荷可注入） | ZIP 内没有这些分区的 JSON 文件；导入侧按前缀扫描真实条目**就地重建** `{version:1, files}`，任何「注入到 JSON 里的未知字段」根本没有承载位置 | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（各文件类条目的 `payload.filePrefix`）、`src/core/analyzer.ts` 的 `extractSections`（文件类分区就地重建 `{version: 1, files}`）、`src/core/exporter.ts` |
+| 文件类 8 个（`skills` / `agentPresets` / `agentInstructions` / `pluginFiles` / `sessions` / `self` / `pluginData` / `pluginAssets`） | ⛔ **不适用**（无 JSON 载荷可注入） | ZIP 内没有这些分区的 JSON 文件；导入侧按前缀扫描真实条目**就地重建** `{version:1, files}`，任何「注入到 JSON 里的未知字段」根本没有承载位置 | `src/schema/section-registry.ts` 的 `SECTION_REGISTRY`（各文件类条目的 `payload.filePrefix`）、`src/core/analyzer.ts` 的 `extractSections`（文件类分区就地重建 `{version: 1, files}`）、`src/core/exporter.ts` |
 
 **§7.3 实测命令与输出（S-3，可复现）**
 

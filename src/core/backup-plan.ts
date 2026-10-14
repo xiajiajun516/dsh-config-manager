@@ -70,6 +70,17 @@ export const OFFLINE_BACKUP_SECTIONS: readonly SectionId[] = [
 ] as const;
 
 /**
+ * 离线 CLI **明确不收集**的分区（第三方插件数据）。
+ *
+ * 为什么不做：它的收集目标不是静态路径，而是「本机内置来源注册表 + 已安装插件自述声明」推导出来的
+ * 区域（见 `core/plugin-data-registry.ts`），还要尊重环境变量覆盖判定 —— 这套判定住在 adapter 里
+ * （走 HostContext 门面），而 CLI 的硬约束是**绝不 import DSH 门面**（peer 缺失也要能跑）。
+ * 在这里手抄一份区域表会立刻与注册表漂移（正是本文件开头反复说的那类缺陷），所以选择**显式不适用**：
+ * 用户显式 `--sections pluginData` 时给一条可执行的提示（改用 GUI 导出/导入），而不是静默不收。
+ */
+export const OFFLINE_EXCLUDED_SECTIONS: readonly SectionId[] = ['pluginData', 'pluginAssets'] as const;
+
+/**
  * 离线**无法**收集的分区（需要 DSH Service 门面读值/权威脱敏）。仅用于报告与参数校验，
  * 绝不写进归档：这些分区的权威形态是 GUI 导出（经 DSH `describe({redactSecrets:true})`
  * 逐字段脱敏 + 可选加密），离线启发式脱敏做不到同等强度。
@@ -81,7 +92,10 @@ export const OFFLINE_UNAVAILABLE_SECTIONS: readonly SectionId[] = [
 // 加载期自检（注册表派生，t30）：三个离线清单里的 id 必须都是**已注册分区**。
 // 「离线可收集性」是注册表未建模的另一条轴（要脱离 DSH 读盘收集），故这三份清单仍是显式声明；
 // 但拼错 id / 分区改名过去会让该分区「静默永不收集、永不报告」，现在模块加载即失败。
-for (const id of [...DEFAULT_BACKUP_SECTIONS, ...OPT_IN_BACKUP_SECTIONS, ...OFFLINE_UNAVAILABLE_SECTIONS]) {
+for (const id of [
+  ...DEFAULT_BACKUP_SECTIONS, ...OPT_IN_BACKUP_SECTIONS, ...OFFLINE_UNAVAILABLE_SECTIONS,
+  ...OFFLINE_EXCLUDED_SECTIONS,
+]) {
   requireSectionMeta(id);
 }
 
@@ -249,6 +263,11 @@ export function parseSectionsArg(raw: string): { ok: true; sections: SectionId[]
   const parts = raw.split(/[,\uFF0C\s]+/).filter((p) => p !== '');
   if (parts.length === 0) {
     return { ok: false, error: engineMsg('core.backupPlan.sectionsMissingValue') };
+  }
+  // 显式请求「不支持离线」的分区 → 单独一条可执行提示（不得当成「不存在的分区」）
+  const notOffline = parts.filter((p) => (OFFLINE_EXCLUDED_SECTIONS as readonly string[]).includes(p));
+  if (notOffline.length > 0) {
+    return { ok: false, error: engineMsg('core.backupPlan.sectionNotOffline', { section: notOffline.join(', ') }) };
   }
   const unknown = parts.filter((p) => !(OFFLINE_BACKUP_SECTIONS as readonly string[]).includes(p));
   if (unknown.length > 0) {

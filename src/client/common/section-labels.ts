@@ -34,6 +34,8 @@ export const SECTION_LABEL_KEY: Record<SectionId, ConfigManagerKey> = {
   secrets: 'section.secrets',
   sessions: 'section.sessions',
   self: 'section.self',
+  pluginData: 'section.pluginData',
+  pluginAssets: 'section.pluginAssets',
 }
 
 /** 单个分区的显示名（缺键回退到裸 id，避免渲染出 undefined）。 */

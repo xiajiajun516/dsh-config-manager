@@ -51,7 +51,7 @@
 - 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 72 条**；合计 **79** 条，见 parity 快照）；源码级守卫必须扫**全部**路由源。
 - **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 79 条路由永不进入该认证路由。
 - 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 79 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
-- 新功能优先加 `src/core/`，适配器/UI 薄壳；13 adapter 与 `self` 分区口径 → `DEVELOPERS.md` 架构节。
+- 新功能优先加 `src/core/`，适配器/UI 薄壳；15 adapter 与 `self` 分区口径 → `DEVELOPERS.md` 架构节。
 - 同步：`SyncEngine`+`Git/WebDavTransport`+`AutoSyncScheduler`（事件驱动）；**autosync 与 sync-selection 按通道独立**（schema v2）。
 - **import 一律带 `.ts` 后缀**（Deno-style）。
 - 设计决策看 `docs/design/`；**对外契约看 `docs/spec/`**，改格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`。
@@ -192,6 +192,12 @@
 - **回退 fork 必须走 DSH 自己的 `sessionController.fork`（uuid id + 落盘 + 归位），绝不直接 `SessionStore.fork`**（只在内存造会话 ⇒ 继续对话报 `SessionPersistenceNotFoundError`）；归位三档与失败如实上屏 → `docs/lessons/recovery-console.md`。
 - **「查看」进 DSH 右侧栏**：`sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、抽出方法必须 bind、补试幂等、形态不符即不注册，缺能力降级为弹窗内展示 → `docs/lessons/recovery-console.md`。
 - **崩溃残留只放行可自证形状**：自证门仅 `backup-schedule` → `docs/lessons/recovery-console.md`。
+
+**第三方插件数据** → `docs/lessons/plugin-data-migration.md`
+- **插件数据分区的收录面只有两个来源**：内置来源表（`src/core/plugin-data-registry.ts`）+ **本机已安装插件**自述的 `dsh.dataDirs`；**包内声明的路径绝不构成写入授权**。
+- **`cache` 区域与 `excludeRel` 命中的内容永不收录**；`excludeRel` 是**区域相对**路径（写成 home 相对 = 排除永不命中）。
+- **区域被环境变量覆盖（取值 ≠ 默认位置）即报码跳过**：绝不按默认位置读、也不猜它指向哪里。
+- **离线 CLI 不收集 `pluginData` / `pluginAssets`**（`OFFLINE_EXCLUDED_SECTIONS`）；显式 `--sections` 请求时提示改用 GUI，不静默少收。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
 - **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补。

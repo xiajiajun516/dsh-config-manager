@@ -12,7 +12,7 @@
   "x-section-ids": [
     "settings", "ui", "providers", "plugins", "mcp", "prompts",
     "skills", "agentPresets", "agentInstructions", "workspaces", "pluginFiles",
-    "credentialsStatus", "secrets", "sessions", "self"
+    "credentialsStatus", "secrets", "sessions", "self", "pluginData", "pluginAssets"
   ],
   "x-section-ids-source": "分区 id 集合**以注册表为准**：唯一权威是 src/schema/section-registry.ts 的 SECTION_REGISTRY（机器可读，SECTION_IDS 是它按 applyOrder 派生的视图）。上面的 x-section-ids 只是本仓库导出端恒写形态的人读副本；分区增删时先改注册表，再由 src/schema/manifest-schema.test.ts 的 K-04 断言本副本与 SECTION_IDS 逐项一致（不一致即红灯）。",
   "x-expected-encryption-info": {
@@ -66,7 +66,7 @@
       "type": "string"
     },
     "sections": {
-      "description": "分区开关表：键为分区 id，值为布尔。实现要求每个已出现的值必须是布尔（非布尔 → error），但允许出现未知分区键（仅 warning，测试 M-04），故此处不约束键集合。本实现的导出端恒写全部 15 个已知分区 id（x-section-ids）；导出端永不产生未知键（规格 §2.5）。",
+      "description": "分区开关表：键为分区 id，值为布尔。实现要求每个已出现的值必须是布尔（非布尔 → error），但允许出现未知分区键（仅 warning，测试 M-04），故此处不约束键集合。本实现的导出端恒写全部 17 个已知分区 id（x-section-ids）；导出端永不产生未知键（规格 §2.5）。",
       "type": "object",
       "additionalProperties": { "type": "boolean" }
     },

@@ -22,6 +22,7 @@ import { CredentialsAdapter, type CredentialRefsProvider } from './credentials.t
 import { PluginFilesAdapter } from './plugin-files.ts';
 import { SessionsAdapter } from './sessions.ts';
 import { SelfAdapter } from './self.ts';
+import { PluginDataAdapter } from './plugin-data.ts';
 
 export interface AdapterRegistryOptions {
   /** settings namespace 清单（宿主从 settings.yaml 顶层 key 解析注入；缺省 [] → settings/ui/credentials 为空） */
@@ -64,6 +65,9 @@ export function createAdapters(options: AdapterRegistryOptions = {}): ConfigAdap
     new WorkspacesAdapter(),
     new CredentialsAdapter({ namespaces, refs: options.credentialsRefs }),
     new PluginFilesAdapter(options.pluginFiles, options.pluginFilesDir),
+    // 第三方插件数据（两个分区：配置类 / 大资产类；均 defaultIncluded=false，用户显式勾选）
+    new PluginDataAdapter('pluginData'),
+    new PluginDataAdapter('pluginAssets'),
   ];
   // self 分区：插件自身配置（同步/市场/偏好），portable 默认包含；'' = 不挂载
   if (options.selfDir !== '') {
@@ -91,6 +95,7 @@ export { CredentialsAdapter, defaultCredentialRefs } from './credentials.ts';
 export { PluginFilesAdapter, DEFAULT_PLUGIN_FILE_WHITELIST } from './plugin-files.ts';
 export { SessionsAdapter } from './sessions.ts';
 export { SelfAdapter, SELF_CONFIG_FILES } from './self.ts';
+export { PluginDataAdapter, type PluginDataAdapterOptions, type PluginDataEntry } from './plugin-data.ts';
 export { FileCollectionAdapter } from './file-collection.ts';
 /* JSON 分区共享校验骨架（本导出是其接入点）。收敛轨迹：
  *  · t31 抽出骨架，settings / ui / providers / plugins / mcp / prompts / credentials /

@@ -27,6 +27,7 @@ const ALL_SECTIONS: readonly SectionId[] = [
   'settings', 'ui', 'providers', 'plugins', 'mcp', 'prompts', 'skills',
   'agentPresets', 'agentInstructions', 'workspaces', 'pluginFiles',
   'credentialsStatus', 'secrets', 'sessions', 'self',
+  'pluginData', 'pluginAssets',
 ]
 
 test('UI-08 分区显示名：每个 SectionId 都有 zh/en 文案，且不复用同一个键', () => {

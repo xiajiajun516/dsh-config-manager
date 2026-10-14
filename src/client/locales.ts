@@ -24,6 +24,8 @@ export const zh = {
   'section.secrets': '密钥',
   'section.sessions': '历史会话',
   'section.self': '插件自身配置',
+  'section.pluginData': '第三方插件数据',
+  'section.pluginAssets': '第三方插件大资产',
   // 视图切换
   'view.about': '关于',
   // 关于页「一键复制环境信息」片段（提 issue 用）：zh 保留双语标题（维护者可读），en 纯英文
@@ -964,6 +966,8 @@ export const en: Record<keyof typeof zh, string> = {
   'section.secrets': 'Secrets',
   'section.sessions': 'Sessions',
   'section.self': 'Plugin Self Config',
+  'section.pluginData': 'Plugin Data',
+  'section.pluginAssets': 'Plugin Assets',
   'view.about': 'About',
   'about.snippet.environment': '### Environment',
   'about.releaseNotes.rateLimited': 'GitHub API rate limit exceeded — please try again later, or view the release notes directly on GitHub.',

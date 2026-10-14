@@ -169,7 +169,7 @@ export interface SectionMeta {
   readonly configSnapshot: boolean;
 }
 
-/** 分区载荷版本：当前 15 个分区统一为 1（唯一字面量；分区可独立升级时只改对应条目的引用） */
+/** 分区载荷版本：当前 17 个分区统一为 1（唯一字面量；分区可独立升级时只改对应条目的引用） */
 export const SECTION_DATA_VERSION = 1 as const;
 
 /**
@@ -387,6 +387,35 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
     syncOptIn: 'off',
     defaultIncluded: true,
     configSnapshot: true,
+  },
+  pluginData: {
+    id: 'pluginData',
+    displayName: 'Plugin Data',
+    group: 'extensions',
+    payload: { kind: 'files', filePrefix: 'plugin-data/' },
+    dataVersion: SECTION_DATA_VERSION,
+    applyOrder: 16,
+    riskTier: 'high',
+    // 第三方插件的数据目录不在 DSH 的三个核心存储里：路径是「机器的 home 布局」而非配置内容，
+    // 换机后可能整个目录不存在（未安装该插件）→ deviceSpecific + 不参与自动同步。
+    portability: 'deviceSpecific',
+    syncOptIn: 'off',
+    defaultIncluded: false,
+    // 体量由用户数据主导（可能几百 MB），与 sessions 同理不进「配置状态」采集口径
+    configSnapshot: false,
+  },
+  pluginAssets: {
+    id: 'pluginAssets',
+    displayName: 'Plugin Assets',
+    group: 'extensions',
+    payload: { kind: 'files', filePrefix: 'plugin-assets/' },
+    dataVersion: SECTION_DATA_VERSION,
+    applyOrder: 17,
+    riskTier: 'high',
+    portability: 'deviceSpecific',
+    syncOptIn: 'off',
+    defaultIncluded: false,
+    configSnapshot: false,
   },
 };
 
