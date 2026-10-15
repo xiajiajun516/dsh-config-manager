@@ -2228,8 +2228,14 @@ export class RollbackPointEngine {
     } else if (this.stamp() - capturedAt < this.captureBudgetMs / 4) {
       this.captureBudgetMs = Math.max(this.captureBudgetMinMs, Math.floor(this.captureBudgetMs / 2))
     }
+    // 「降级（留得不完整）」只由**真的缺内容**触发：
+    //  ① truncated —— 文件数 / 总字节 / 单文件上限 / 时间预算挡下的内容；
+    //  ② unreadableDirs / unreadableFiles —— 读不出来或捕获竞态（内容不可信）。
+    // **不再用 skippedCount**：那里的条目大多是**设计内**的跳过（符号链接不跟随、文件级忽略、
+    // 自身数据区、读之前就消失），既不缺内容也无法回退 —— 旧口径让「工作区里有任何一个符号链接」
+    // 的仓库每个点都挂「回退可能不完整」，真出问题时反而被噪声淹没（真机 2026-10-15：10 个 link
+    // 跳过 ⇒ 每个点 degraded=true）。条目与计数仍逐条留痕（skippedCount / skipped 列表不变）。
     const degraded = payload.truncated
-      || payload.skippedCount > 0
       || payload.unreadableDirs.length > 0
       || payload.unreadableFiles.length > 0
     return {

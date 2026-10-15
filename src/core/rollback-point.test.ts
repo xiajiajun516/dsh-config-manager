@@ -1378,7 +1378,10 @@ test('R-19 分块不可用 / 非绝对路径 / 会话越界：该态结构化失
   const linked = await capturePoint(engine, fx)
   const track = linked.point?.workspace
   assert.equal(track?.ok, true)
-  assert.equal(track?.degraded, true)
+  // 链接是**设计内**跳过（不跟随、也不该回退它）⇒ 逐条留痕但不算「留得不完整」（R-50 口径）：
+  // 否则任何含符号链接的仓库每个点都挂「回退可能不完整」，真出问题时被噪声淹没
+  assert.equal(track?.degraded, false)
+  assert.equal(track?.reasonCode, null)
   assert.ok((track?.payload?.skipped ?? []).some((s) => s.reason === 'link' && s.path === junction))
   assert.equal((track?.payload?.files ?? []).some((f) => isInsidePath(f.path, junction)), false)
 })
@@ -2977,6 +2980,35 @@ test('R-49 记录与读预算解耦：已知内容不占读槽位 ⇒ 大仓库�
   assert.equal(p3?.files.length, 12, '全部已知 ⇒ 记录必须是全量（这是「任何大小都收敛」的判据）')
   assert.equal(p3?.truncated, false, '没有新内容要读 ⇒ 不该再标截断')
   assert.deepEqual(p3?.files.map((f) => path.basename(f.path)), names, '记录顺序仍按路径有序')
+})
+
+test('R-50 降级口径：设计内跳过（符号链接 / 文件级忽略）不构成「留得不完整」；缺内容才算', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 分块根：一个正常文件 + 一个被文件级忽略规则跳过的文件（等价于「符号链接被跳过」那类设计内跳过）
+  const dir = await makeSizeDir(fx, 'cap-degraded', { 'keep.txt': 3 })
+  await fs.writeFile(path.join(dir, 'old.log'), 'OLD')
+  await fs.writeFile(path.join(dir, '.dsh-rollback-ignore'), '*.log' + '\n')
+  const engine = makeEngine(fx)
+  const first = await engine.capturePoint({ chunks: [dir], sessionId: 's-degraded' })
+  const p1 = first.point?.workspace.payload
+  assert.ok(p1 !== null && p1 !== undefined)
+  assert.ok(p1.skippedCount > 0, '文件级忽略必须逐条留痕：' + JSON.stringify(p1.skipped))
+  assert.equal(p1.skipped.some((e) => e.reason === 'ignored'), true)
+  assert.equal(p1.truncated, false)
+  assert.equal(first.point?.workspace.degraded, false, '设计内跳过 ⇒ 不得报「留得不完整」')
+  assert.equal(first.point?.workspace.reasonCode, null)
+  const seg = (await engine.list()).points[0]?.segments.find((s) => s.state === 'workspace')
+  assert.equal(seg?.degraded, false, '列表摘要同样不得降级')
+  assert.equal(seg?.reasonCode, null)
+
+  // 对照：真的缺内容（超单文件上限被跳过）⇒ 必须降级且如实给码
+  const dir2 = await makeSizeDir(fx, 'cap-degraded-real', { 'big.bin': 200 })
+  const engine2 = makeEngine(fx, { maxFileBytes: 64 })
+  const second = await engine2.capturePoint({ chunks: [dir2], sessionId: 's-degraded2' })
+  assert.equal(second.point?.workspace.degraded, true)
+  assert.equal(second.point?.workspace.reasonCode, 'capture-truncated')
+  assert.ok(second.point?.workspace.payload?.skipped.some((e) => e.reason === 'too-large'))
 })
 
 test('R-32 取消信号：已中止 ⇒ 在文件边界停下（部分点 + budget-time 留痕，绝不整份跑完）', async (t) => {
