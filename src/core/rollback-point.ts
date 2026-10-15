@@ -214,9 +214,21 @@ export const ROLLBACK_MAX_CAPTURE_BUDGET_MS = 120_000
  * 为什么必须并发：真机实测（34k 文件 / 512 MiB）一次全量捕获 175 s，其中 **148 s 花在
  * 31,702 次对象写**（一次 4.7 ms：temp + fsync + rename），而走查本身只要 0.66 s。
  * 对象写入是纯 I/O，串行做等于把预算全花在等待上 ⇒ 覆盖永远只有一小半。
- * 并发上限与单文件字节闸门共同限流（在飞内容上界 = maxFileBytes）。
+ * 并发上限与**在飞字节闸门**共同限流（在飞内容上界 = `captureInFlightBytes`）。
  */
 export const ROLLBACK_DEFAULT_CAPTURE_CONCURRENCY = 16
+/**
+ * 捕获期**读入内存、尚未落对象仓**的内容字节上限（真正的内存闸门）。
+ *
+ * 为什么必须独立于 `maxFileBytes`（0.1.74 真机闪退事故，2026-10-16）：
+ *  `maxFileBytes` 的缺省是**总量预算** `maxBytes`（512 MiB）。并发捕获把闸门接到它上面，
+ *  于是「同时在飞的内容」可以到 ~512 MiB —— 串行实现的上界是「一份文件」，并发实现的
+ *  上界是「闸门限额」，两者差着两三个数量级。真机表现：发出消息后 1–2 s（= `turn/start`
+ *  开始留点）DSH Desktop 宿主被系统终止 ⇒ 桌面闪退（无 JS 栈、插件零错误、
+ *  退出码是「被外部终止」形状）。这里取一个小常量当闸门；要放宽只能显式传
+ *  `captureInFlightBytes`，且被 `maxBytes` 夹住。
+ */
+export const ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES = 32 * 1024 * 1024
 /** 对象写遇到这些码视为「瞬时占用」，有界退避重试（判据同 atomic-write 的 isRetryableLockCode） */
 const OBJECT_WRITE_RETRY_CODES = ['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY']
 /** 捕获阶段①的 stat 批大小：判定仍严格按顺序，只是 stat 并发取（真机 34k 次 stat 从 5 s → <1 s） */
@@ -1033,6 +1045,12 @@ export interface RollbackEngineOptions {
   rewindBudgetMs?: number
   /** 捕获期读 + 写并发上限（缺省 ROLLBACK_DEFAULT_CAPTURE_CONCURRENCY，1..64） */
   captureConcurrency?: number
+  /**
+   * 捕获期**在飞内容字节**上限（缺省 ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES = 32 MiB，
+   * 有效范围 1..maxBytes）。与 `maxFileBytes`（单文件「要不要读」的判据）是两件事：
+   * **这个才是并发的内存闸门**。
+   */
+  captureInFlightBytes?: number
   guardPolicy?: RollbackGuardPolicy
   /** 存储栈探针（缺省 = 真实磁盘探测）；注入失败探针可测「缺失时仍可挂载」 */
   storage?: RollbackStorageProbe
@@ -1644,7 +1662,8 @@ class UndoStager {
  * 单文件字节闸门：保证「同时在飞（已读入、尚未落仓）的内容字节」≤ limit。
  *
  * 与 captureConcurrency 一起构成捕获期的内存上界：并发只放大**同时**驻留的量，而它被
- * maxFileBytes 钉死（串行实现的等价约束是「一次一份」，同样是 ≤ maxFileBytes）。
+ * `captureInFlightBytes` 钉死（缺省 32 MiB）。**不能**用 maxFileBytes 当限额 —— 它缺省 =
+ * 总量预算 512 MiB，「一份文件」与「整个点的预算」不是同一个量级（0.1.74 闪退根因）。
  */
 /**
  * 路径身份键：dev:ino:size:mtimeNs:ctimeNs:mode（全 BigInt 字符串化）。必须 BigInt：ino / mtimeNs /
@@ -1703,6 +1722,7 @@ export class RollbackPointEngine {
   private readonly maxFiles: number
   private readonly maxBytes: number
   private readonly maxFileBytes: number
+  private readonly captureInFlightBytes: number
   private readonly maxSkippedEntries: number
   private readonly sessionMaxBytes: number
   private readonly sessionQuiescentMs: number
@@ -1791,6 +1811,10 @@ export class RollbackPointEngine {
     this.maxBytes = options.maxBytes ?? ROLLBACK_DEFAULT_MAX_BYTES
     // 单文件上限缺省 = 总量预算（一个文件不可能比整个点的预算更大）
     this.maxFileBytes = options.maxFileBytes ?? this.maxBytes
+    // **内存闸门与单文件上限分开**：拿 maxFileBytes 当闸门 = 允许把整个点的预算同时驻留
+    // （0.1.74 真机闪退的根因），见 ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES。
+    const inFlight = options.captureInFlightBytes ?? ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES
+    this.captureInFlightBytes = Math.max(1, Math.min(this.maxBytes, Math.floor(inFlight)))
     this.maxSkippedEntries = options.maxSkippedEntries ?? ROLLBACK_SKIPPED_LIST_LIMIT
     this.sessionMaxBytes = options.sessionMaxBytes ?? ROLLBACK_DEFAULT_SESSION_MAX_BYTES
     this.sessionQuiescentMs = options.sessionQuiescentMs ?? ROLLBACK_DEFAULT_SESSION_QUIESCENT_MS
@@ -2415,8 +2439,9 @@ export class RollbackPointEngine {
    *     stat 按**有序批**并发取（判定仍严格按顺序），并用「一次 readdir 的对象名单快照」代替
    *     每个文件一次 fs.access —— 这两处是稳态成本的大头（真机实测各占 ~5 s / ~3.7 s）。
    *  ② **并发读 + 哈希 + 落对象仓**：这是捕获耗时的**唯一大头**（真机 148 s / 31,702 个对象，
-   *     96% 的时间），用 captureConcurrency 个 worker 并发跑；并用单文件字节闸门保证
-   *     「同时在飞的内容字节 ≤ maxFileBytes」（与旧串行实现同量级的内存上界）。
+   *     96% 的时间），用 captureConcurrency 个 worker 并发跑；并用**在飞字节闸门**保证
+   *     「同时在飞的内容字节 ≤ captureInFlightBytes」。**不是** maxFileBytes —— 它缺省 =
+   *     总量预算（512 MiB），拿它当闸门等于允许把整个点的预算同时驻留（0.1.74 闪退根因）。
    *
    * 返回本分块**真正入点**的文件数（调用方据此推进 maxFiles 预算）。
    * 没判到 / 没读完的条目一律逐条进 skipped(budget-time)，绝不静默丢弃。
@@ -2513,7 +2538,7 @@ export class RollbackPointEngine {
     if (plans.length > 0) {
       // ② 并发读 + 落对象仓。outOfBudget 一命中就**不再开新条目**（在飞的照常收尾），
       //    未开工的条目在循环外逐条记 budget-time —— 与串行版「中断处逐条留痕」同一诚实口径。
-      const gate = new ByteGate(this.maxFileBytes)
+      const gate = new ByteGate(this.captureInFlightBytes)
       const done: boolean[] = new Array<boolean>(plans.length).fill(false)
       let planCursor = 0
       let stopped = false

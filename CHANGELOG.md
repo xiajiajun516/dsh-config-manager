@@ -32,6 +32,17 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.75] - 2026-10-16
+
+> **本版主题**：**修掉「发出消息后桌面闪退」** —— 回合开始时的自动留点把「整点的文件内容预算」当成了「同时在读的上限」，在大工作区里可以同时把几百 MB 内容留在内存，于是发出消息后一两秒 DSH Desktop 会被系统直接终止。
+>
+> **Theme**: **Fixes the desktop crash right after sending a message** — the automatic rollback point taken when a turn starts treated the whole capture budget as the limit for content read at once, so on a large workspace several hundred megabytes could be resident simultaneously and DSH Desktop was killed by the system one or two seconds after sending.
+
+### 🐛 修复 · Fixed
+
+- **大工作区里发出消息不再让桌面闪退**：回合开始时的自动留点此前会把大量文件内容同时留在内存（大仓库下可达数百 MB），表现就是发出消息后一两秒桌面直接退出、没有任何报错。现在「同时在读的内容」有独立的小上限，留点的速度、覆盖范围与回退体验都不变。
+  **Sending a message on a large workspace no longer crashes the desktop**: the automatic rollback point taken when a turn starts used to hold a large amount of file content in memory at once (hundreds of megabytes on a big repository), which made the desktop quit with no error one or two seconds after sending. Content read at the same time now has its own small limit, while capture speed, coverage and rewinds stay as they were.
+
 ## [0.1.74] - 2026-10-16
 
 > **本版主题**：**回滚点与回退全面提速** —— 大工作区的留点不再「30 秒只扫到一小半」，第二个点起就记全 3.4 万条；回退预览改走文件身份快路径（实测 14.2 秒 → 2~3 秒级），回滚点清单改成每个点只存相对上一点的增量（稳态 12 MB → 11 KB）。同一轮里，差异预览不再只画前 400 行并跟随侧边栏高度，个别目录没扫到不再让「留点后新建的文件」整批不删，推送前的只读预览也不再偷偷把本地插件打包一遍（issue #91）。

@@ -564,3 +564,79 @@ checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对
 
 **守卫**：`src/client/recovery/rollback-file-changes.test.ts` 新增源级断言 —— fill 档限高必须排在列表量级之后、
 fill 档不得再出现 `min(80vh, 800px)`、撑满档五个出口都经 `shell(...)`。
+
+## 差异预览的两条「假信号」：400 行渲染上限 + 400 编辑距离预算（2026-10-15 用户反馈 + 真机数据实测）
+
+**症状**：聊天「↺ 回退 → 查看」的差异里同时出现两行提示 ——
+「只画了前 400 行（共 4187 行），数据本身是完整的」与「差异规模较大，已按整块替换展示（仍是完整结果，只是不是最小的编辑脚本）」。
+用户问：「为什么最多只能加载 400 行？我需要能完整的加载」。
+
+**两条根因（互不相干）**：
+1. **渲染上限** `DIFF_ROW_CAP = 400`（`common/DiffTable.tsx`）：数据本身完整，只是画了前 400 行对。
+   宿主侧早就有单文件体积门（回滚预览 `maxFileBytes = 1 MiB`、恢复计划 `maxSideBytes`），到渲染层的数据就是「要画的全部」；
+   渲染层再砍一刀只会让同一份数据少半截，而用户没有任何办法看到剩下的。
+2. **算法预算** `DEFAULT_MAX_D = 400`（`utils/line-diff.ts`）：几千行文件里改几十处就可能超过 D=400 ⇒ 退化成
+   「整块替换」（全删 + 全增）。提示文案本身没错，但它在**普通大文件**上频繁触发 ⇒ 用户读到的是一条假信号。
+
+**取证（真实数据，不是合成样例）**：从台账 `~/.dsh/dsh-config-manager/rollback-points/`（payloads/ 里 `files[].object` → 
+`objects/<sha256>`）取出同一文件 `src/core/rollback-point.ts` 的 6 个历史版本，直接跑 `diffLines`：
+
+| 版本对（行数） | maxD | degraded | +A/−R | 耗时 | RSS 增量 |
+|---|---|---|---|---|---|
+| 4983 × 4341 | ≤1600 | false | +153/−795 | 14 ms | ~3 MB |
+| 4983 × 4774 | 2000 | false | +2/−211 | 7 ms | ~3 MB |
+| 4983 × 4361 | 2000 | false | +136/−758 | 24 ms | ~5 MB |
+| 4983 × 2492（近乎重写） | 2000 | **true** | +2467/−4958 | 32 ms | +3 MB |
+| 同上 | 3000 | true | +2467/−4958 | 55 ms | +74 MB |
+| 同上 | **4000** | false | **+255/−2746** | 70 ms | +98 MB |
+| 同上 | 8000 | false | +255/−2746 | 115 ms | +175 MB |
+
+⇒ 真实数据的 D 多在 2000 以内；连「近乎整份重写」的那一对也只落在 **3000~4000**。
+**内存是 O(D²)·4B**（回溯逐轮留 V 快照；Int32Array 的底层 buffer 计入 **RSS/external 而非 heapUsed** —— 
+只看 `process.memoryUsage().heapUsed` 会误判成「只涨了几 MB」）。所以预算按「RSS ≤ 百 MB 量级」定：
+缺省 2000、回滚单文件按需查看 4000；再往上不该加预算，要换线性空间 Myers（分治求 middle snake）。
+
+**改法**：删掉渲染上限（连同 `truncatedNotice` 管道与 `rollback.diff.truncated` / `snapshots.plan.diffTruncated` 两条字典键）；
+`DEFAULT_MAX_D` 400→2000、`DEFAULT_MAX_LINES` 6000→20000；`ROLLBACK_FILE_DIFF_LIMITS` 增 `maxD: 4000` 并在调用点传入。
+**保留** `rollback.diff.degraded` / `snapshots.plan.diffDegraded`：那是算法保真度的事实陈述（且现在只在真·整份重写时出现），
+把它一起删掉才是撒谎。
+
+**守卫**：`src/utils/line-diff.test.ts` D-14（同一份输入：旧口径 400 必降级、缺省口径必须给出最小脚本且可回放重建）；
+`src/client/recovery/rollback-file-changes.test.ts` 新增源级断言（渲染层不得再出现 rowCap/truncatedNotice、两个调用点都不传截断文案、
+字典里不得再有截断话术、degraded 提示必须保留）。
+
+## 留点捕获的「在飞内容」闸门接错对象 ⇒ DSH Desktop 发消息后 1–2 s 闪退（2026-10-16 真机事故，0.1.74）
+
+**症状**（用户原话）：「发消息后 1–2 秒就会闪退」「正在等回复时闪退」。桌面没有任何报错、插件零错误日志。
+
+**取证**：`%APPDATA%\@deepseek-ai\dsh-desktop\logs\crash-*-host.log` 里
+`dsh desktop host exited with 4294930435`（同日两次），`phase: running`，host stderr 只有 `DEP0180`、
+Electron 的 asar 报错、crashpad `not connected`。对照 09-30 / 10-01 / 10-03 / 10-06 / 10-07 的同类记录
+（退出码 1073807364 / 3758096392）—— **全是「被外部终止」形状，没有 JS 栈**。
+（host stderr 里那两行 asar 报错指向 `.tmp/m2/asar/fake-resources/app.asar` = 仓库里的 64 B 测试残留：
+用同一颗 Electron 二进制以 node 模式读它 5 种方式（readFileSync / utf8 / bigint / open+read / stream）
+**全部是可捕获错误、退出码 0** ⇒ 与闪退无关，属子进程 stderr 噪音，别被它带偏。）
+
+**根因**：`turn/start`（= 发出消息后 0~1 s）拍留点 → `captureWorkspace` 的并发读阶段
+`new ByteGate(this.maxFileBytes)`，而 `maxFileBytes` 的缺省是 `maxBytes`（**512 MiB**）——
+`ROLLBACK_DEFAULT_MAX_FILE_BYTES`（64 MiB）那个常量当时根本没接上。于是「同时在飞的内容」上界 = 整点预算，
+16 个 worker 可以把几百 MB 文件内容同时驻留（Buffer / sha256 / 对象写副本另计）；大工作区
+（本仓 630 MB / 25k 文件，`.tmp` 366 MB 已被忽略）在 1~2 s 内就把闸门填满 ⇒ 宿主被系统杀掉。
+
+**量化**（真机级对照 `.tmp/repro-inflight.mjs`，16 × 8 MiB 工作区，readFile seam 记录在飞字节 + RSS 峰值）：
+
+| 配置 | 在飞峰值 | RSS 峰值 | 耗时 |
+|---|---|---|---|
+| 0.1.74（闸门 = maxFileBytes = 512 MiB） | **128.0 MiB**（该工作区全量） | 194 MiB | 200 ms |
+| 修复后（闸门 = captureInFlightBytes = 32 MiB） | **32.0 MiB** | 139 MiB | 308 ms |
+
+工作区越大差距越大：旧闸门允许一路上到 512 MiB。
+
+**改法**：新增 `ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES = 32 MiB` 与选项 `captureInFlightBytes`
+（被 `maxBytes` 夹住），`ByteGate` 改接它；`maxFileBytes` 保持原语义（单文件「要不要读」的判据，t13 冻结）。
+
+**教训**：串行实现的内存上界是「一份文件」，并发实现的上界是「闸门限额」——**两者不是同一个量级**，
+不能拿同一个常量同时当「单文件判据」和「并发闸门」。
+
+**守卫**：`src/core/rollback-point.test.ts` R-45b（`maxFileBytes` 远大于闸门时，在飞字节仍必须 ≤ `captureInFlightBytes`；
+缺省闸门必须 < 总量预算 / 8）+ R-45 改判据 + T2-E 显式注入 `captureInFlightBytes`。

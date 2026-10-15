@@ -30,6 +30,7 @@ import path from 'node:path'
 
 import {
   ROLLBACK_ANCESTOR_MAX_DEPTH,
+  ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES,
   ROLLBACK_DEFAULT_MAX_BYTES,
   ROLLBACK_DEFAULT_MAX_FILES,
   ROLLBACK_LEFTOVER_LIST_LIMIT,
@@ -2527,7 +2528,7 @@ test('T2-E 内存硬约束：同时驻留的文件内容 ≤ maxFileBytes（绝�
   sizes['huge.txt'] = 4096
   const dir = await makeSizeDir(fx, 'cap-mem', sizes)
   const reader = countingReader()
-  const engine = makeEngine(fx, { maxFileBytes: 64, maxBytes: 1024 * 1024, readFile: reader.seam })
+  const engine = makeEngine(fx, { maxFileBytes: 64, captureInFlightBytes: 64, maxBytes: 1024 * 1024, readFile: reader.seam })
   const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-mem' })
   const payload = captured.point?.workspace.payload
   assert.ok(payload !== null && payload !== undefined)
@@ -2535,11 +2536,12 @@ test('T2-E 内存硬约束：同时驻留的文件内容 ≤ maxFileBytes（绝�
   assert.equal(reader.reads.includes(path.join(dir, 'huge.txt')), false, '超限文件绝不整份读进内存')
   assert.ok(payload.skipped.some((e) => e.path.endsWith('huge.txt') && e.reason === 'too-large'))
   assert.equal(payload.files.length, 10)
-  // 同时驻留：单份 ≤ maxFileBytes，且从不并发驻留两份（走查是逐条串行的）
+  // 两个上限是两件事：maxFileBytes = 单文件「要不要读」的判据；captureInFlightBytes = 并发内存闸门。
+  // 2026-10-16 之前闸门错接到 maxFileBytes（缺省 = 总量预算 512 MiB）⇒ 桌面闪退。
   assert.ok(reader.peakSingle <= 64, '单份驻留 = ' + String(reader.peakSingle) + ' > maxFileBytes=64')
   assert.ok(
     reader.peakLive <= 64,
-    '同时驻留内容 = ' + String(reader.peakLive) + ' 字节，必须 ≤ maxFileBytes(64) + 常量(0)',
+    '同时驻留内容 = ' + String(reader.peakLive) + ' 字节，必须 ≤ captureInFlightBytes(64)',
   )
 })
 
@@ -2852,7 +2854,7 @@ test('R-44 走查被打断：只拒「没走查到的那棵子树」（分子树
   assert.ok((ws?.createdSkippedCount ?? 0) > 0, '候选必须如实进拒删清单')
 })
 
-test('R-45 捕获并发：读 + 写并发跑（真机大头），但在飞内容字节 ≤ maxFileBytes', async (t) => {
+test('R-45 捕获并发：读 + 写并发跑（真机大头），但在飞内容字节 ≤ captureInFlightBytes', async (t) => {
   const fx = await makeFixture()
   t.after(fx.cleanup)
   const sizes: Record<string, number> = {}
@@ -2863,7 +2865,9 @@ test('R-45 捕获并发：读 + 写并发跑（真机大头），但在飞内容
   let inFlight = 0
   let maxInFlight = 0
   const engine = makeEngine(fx, {
-    maxFileBytes: 256, // 闸门：同时最多 4 份 64 B 的内容在飞
+    // 闸门 = captureInFlightBytes（并发内存上界），与 maxFileBytes（单文件判据）分开：
+    // 同时最多 4 份 64 B 的内容在飞。
+    captureInFlightBytes: 256,
     readFile: async (file: string) => {
       inFlight += 1
       maxInFlight = Math.max(maxInFlight, inFlight)
@@ -2880,7 +2884,39 @@ test('R-45 捕获并发：读 + 写并发跑（真机大头），但在飞内容
   const payload = captured.point?.workspace.payload
   assert.equal(payload?.files.length, 24, JSON.stringify(payload?.skipped))
   assert.ok(maxInFlight > 1, '必须真的并发（否则 34k 文件永远扫不完）：实测 ' + String(maxInFlight))
-  assert.ok(peak <= 256, '在飞内容字节必须 ≤ maxFileBytes，实测 ' + String(peak))
+  assert.ok(peak <= 256, '在飞内容字节必须 ≤ captureInFlightBytes，实测 ' + String(peak))
+})
+
+test('R-45b 缺省闸门：maxFileBytes 缺省 = 总量预算，绝不能当成在飞内容上限（0.1.74 闪退根因）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const sizes: Record<string, number> = {}
+  for (let i = 0; i < 24; i += 1) sizes['g-' + String(i).padStart(2, '0') + '.txt'] = 64
+  const dir = await makeSizeDir(fx, 'cap-inflight-default', sizes)
+  let live = 0
+  let peak = 0
+  // maxFileBytes 给一个**远大于闸门**的值：旧实现（闸门 = maxFileBytes）会放行 24×64 = 1536 B 在飞。
+  const engine = makeEngine(fx, {
+    maxFileBytes: 4096,
+    captureInFlightBytes: 128,
+    readFile: async (file: string) => {
+      const bytes = await fs.readFile(file)
+      live += bytes.byteLength
+      peak = Math.max(peak, live)
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      live -= bytes.byteLength
+      return bytes
+    },
+  })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-inflight' })
+  assert.equal(captured.point?.workspace.payload?.files.length, 24)
+  assert.ok(peak <= 128, '在飞内容必须被 captureInFlightBytes 钉死（不是 maxFileBytes），实测 ' + String(peak))
+  // 缺省闸门本身必须远小于总量预算 —— 它才是并发的内存上界
+  assert.equal(ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES, 32 * 1024 * 1024)
+  assert.ok(
+    ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES < ROLLBACK_DEFAULT_MAX_BYTES / 8,
+    '缺省在飞闸门必须比总量预算小一个数量级以上',
+  )
 })
 
 test('R-46 缺口优先：预算被限死时覆盖率随回合**单调收敛**到 100%', async (t) => {
