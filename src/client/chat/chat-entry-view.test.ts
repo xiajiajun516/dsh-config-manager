@@ -226,6 +226,17 @@ test('气泡底色跟随宿主的 --dsw-specific-bubble（不得再用 --cm-surf
   assert.match(scope, /--cm-chat-bubble:\s*var\(--dsw-specific-bubble/, '.chatEntryScope 必须就地重声明 --cm-chat-bubble')
 })
 
+/** 文件卡描边同轮对齐（2026-10-15）：宿主 = `.5px solid --dsw-alias-border-l2`，我们此前用更淡的 border-l1。 */
+test('文件卡描边与宿主同档：.5px + --cm-line-2（不是更淡的 --cm-line-1）', () => {
+  const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
+  // 注释里会出现 token 名（解释为什么改），负向断言必须先剥注释 —— 与 css-token-guard.test.ts 同法
+  const card = cssSheet.replace(/\/\*[\s\S]*?\*\//g, '').match(/\.chatFileCard\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.match(card, /border:\s*0\.5px solid var\(--cm-line-2\)/, '文件卡描边必须与宿主一致：.5px + --cm-line-2')
+  assert.doesNotMatch(card, /--cm-line-1/, '文件卡描边不得再退回更淡的 --cm-line-1')
+  const scope = cssSheet.match(/\.chatEntryScope\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.match(scope, /--cm-line-2:\s*var\(--dsw-alias-border-l2\)/, '.chatEntryScope 必须就地重声明 --cm-line-2')
+})
+
 /* ------------------------------------------------------------ ⑤ 回合号只认可核实字段 */
 
 test('turn number: only node.location.kind turn|step counts (same read as the host turnTail)', () => {

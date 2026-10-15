@@ -38,8 +38,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Push preview no longer packs local plugins behind your back**: with locally sourced (`link:` / `file:`) plugins in your config, the pre-push preview no longer runs packing — a very large local plugin can no longer hang the preview and block other actions while it runs; when a section's changes cannot be determined, the preview says why instead of guessing.
 - **推送预览里的「有变化」不再清一色全有**：此前它对每个分区都显示「有变化」；现在与上次同步的基线真实比对，没动过的分区如实显示「无变化」。（issue #91）
   **"Changed" in the push preview is no longer always everything**: it used to mark every section as changed; it now really compares against the last synced baseline, so untouched sections show as unchanged.
-- **浅色主题下的用户消息气泡又看得见了**：此前它在浅色主题里与页面底色相同、看起来像没有气泡；现在气泡底色跟随 DSH 自己的气泡色，深色主题不受影响。
-  **User message bubbles are visible again on the light theme**: they used to share the page background colour and looked like they had no bubble at all; the bubble now follows DSH's own bubble colour, and the dark theme is unaffected.
+- **浅色主题下的用户消息气泡又看得见了**：此前它在浅色主题里与页面底色相同、看起来像没有气泡；现在气泡底色跟随 DSH 自己的气泡色，消息里文件卡的描边也一并调回 DSH 的深浅（比原来清楚一档），深色主题不受影响。
+  **User message bubbles are visible again on the light theme**: they used to share the page background colour and looked like they had no bubble at all; the bubble now follows DSH's own bubble colour and a message's file-card outline is back to DSH's own border strength, with the dark theme unaffected.
 
 ## [0.1.73] - 2026-10-15
 

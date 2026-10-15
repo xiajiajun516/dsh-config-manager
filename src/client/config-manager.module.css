@@ -5142,6 +5142,7 @@ button.profileRowMain:hover {
      跟随宿主的 --dsw-specific-bubble；定义见 §1 body 的 --cm-chat-bubble。 */
   --cm-chat-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));
   --cm-line-1: var(--dsw-alias-border-l1);
+  --cm-line-2: var(--dsw-alias-border-l2);
   --cm-fs-meta: 11px;
   --cm-fs-base: 12.5px;
   --cm-sp-2: 4px;
@@ -5219,7 +5220,9 @@ button.profileRowMain:hover {
   gap: var(--cm-sp-3);
   max-width: 100%;
   padding: var(--cm-sp-2) var(--cm-sp-4);
-  border: 1px solid var(--cm-line-1);
+  /* 2026-10-15 与宿主对齐：宿主文件卡 = .5px solid --dsw-alias-border-l2（浅色 #0000001a ≈ 10% 黑），
+     我们此前用 --cm-line-1（= border-l1 = #0000000a ≈ 4% 黑）—— 卡片描边比宿主淡一档。 */
+  border: 0.5px solid var(--cm-line-2);
   border-radius: var(--cm-r-2);
   background: var(--cm-surface-2);
   font-size: var(--cm-fs-meta);
