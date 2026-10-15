@@ -47,6 +47,7 @@ import type {
   RollbackSegmentSummary,
   RollbackSessionPayload,
   RollbackStateKind,
+  RollbackWorkspaceFile,
   RollbackWorkspacePayload,
 } from './rollback-point.ts'
 
@@ -133,6 +134,12 @@ export interface RollbackLedgerManifestEntry {
     payload: string | null
     /** 载荷文件字节数（**同一哈希只算一次**，预算与统计用） */
     payloadBytes: number
+    /**
+     * 这份点**解析所需的全部载荷哈希**（自身在前、基准依次在后）。
+     * 增量载荷依赖基准 ⇒ 回收（prunePayloads）必须按链保活，否则链一断这个点就读不出来了。
+     * 老清单没有该字段 ⇒ 视为 `[payload]`（老载荷都是全量、无依赖）。
+     */
+    payloadChain?: string[]
   }
   session: RollbackLedgerTrackHeader & {
     /** 会话字节副本的对象仓键；null = 没有副本（回收对象时用，不必读记录文件） */
@@ -562,6 +569,7 @@ export function normalizeManifestEntry(value: unknown): RollbackLedgerManifestEn
   if (sessionObject !== null && (typeof sessionObject !== 'string' || !OBJECT_KEY_RE.test(sessionObject))) return null
   const rawRecordBytes = value['recordBytes']
   const rawPayloadBytes = isRecord(workspaceRaw) ? workspaceRaw['payloadBytes'] : 0
+  const rawPayloadChain = isRecord(workspaceRaw) ? workspaceRaw['payloadChain'] : null
   return {
     id,
     kind,
@@ -579,6 +587,10 @@ export function normalizeManifestEntry(value: unknown): RollbackLedgerManifestEn
       ...workspace,
       payload: typeof wsPayload === 'string' ? wsPayload : null,
       payloadBytes: typeof rawPayloadBytes === 'number' && Number.isFinite(rawPayloadBytes) && rawPayloadBytes >= 0 ? rawPayloadBytes : 0,
+    // 只保留形状合法的哈希；读不回来的链由解析器如实失败（绝不猜）
+    ...(Array.isArray(rawPayloadChain)
+      ? { payloadChain: rawPayloadChain.filter((h) => typeof h === 'string' && OBJECT_KEY_RE.test(h)) }
+      : {}),
     },
     session: { ...session, object: typeof sessionObject === 'string' ? sessionObject : null },
     segments: [first, second],
@@ -599,6 +611,22 @@ function normalizeWorkspacePayload(value: unknown): RollbackWorkspacePayload | n
   if (typeof value['skippedTruncated'] !== 'boolean') return null
   if (typeof value['truncated'] !== 'boolean') return null
   return value as unknown as RollbackWorkspacePayload
+}
+
+/**
+ * **存盘**形状校验：完整清单（`files` 是数组）或增量视图（`delta` 是对象、`files` 故意留 null）。
+ * 与 {@link normalizeWorkspacePayload}（消费侧，要求物化后的完整形状）分开：增量载荷**绝不会**被当成完整清单读出去。
+ */
+function normalizeStoredPayload(value: unknown): RollbackWorkspacePayload | null {
+  const base = normalizeWorkspacePayload(value)
+  if (base !== null) return base
+  if (!isRecord(value)) return null
+  const delta = value['delta']
+  if (!isRecord(delta)) return null
+  if (typeof delta['base'] !== 'string') return null
+  if (!Array.isArray(delta['added']) || !Array.isArray(delta['removed'])) return null
+  const clone = { ...value, files: [] }
+  return normalizeWorkspacePayload(clone)
 }
 
 function normalizeSessionPayload(value: unknown): RollbackSessionPayload | null {
@@ -805,7 +833,10 @@ export class RollbackLedger {
   /* -------------------------------------------------------- 单条记录 */
 
   /** 把完整记录拆成「清单条目 + 记录文件内容 + 载荷文件内容」（**不做 IO**，纯函数） */
-  prepareRecord(record: RollbackPointRecord): RollbackLedgerPrepared {
+  prepareRecord(
+    record: RollbackPointRecord,
+    reuse?: { hash: string; bytes: number; chain?: string[] },
+  ): RollbackLedgerPrepared {
     const summary = this.summarize(record)
     const workspaceTrack = record.workspace
     const sessionTrack = record.session
@@ -813,7 +844,11 @@ export class RollbackLedger {
     let payloadJson: string | null = null
     let payloadHash: string | null = null
     let payloadBytes = 0
-    if (payload !== null) {
+    if (payload !== null && reuse !== undefined) {
+      // **复用**：这份工作区态与基准点逐条相同 ⇒ 直接引用它已经落盘的载荷（零额外字节，链不增长）
+      payloadHash = reuse.hash
+      payloadBytes = reuse.bytes
+    } else if (payload !== null) {
       payloadJson = JSON.stringify(payload)
       payloadHash = sha256Hex(payloadJson)
       payloadBytes = byteLength(payloadJson)
@@ -835,6 +870,14 @@ export class RollbackLedger {
       workspace: { ...trackHeader(workspaceTrack), payload: payloadHash },
       session: { ...trackHeader(sessionTrack), payload: sessionTrack.payload },
     })
+    // 增量视图 ⇒ 清单条目带上「解析所需的全部载荷哈希」（自身 + 基准链），回收按链保活
+    const payloadChain = payloadHash === null
+      ? undefined
+      : reuse !== undefined
+        ? (reuse.chain !== undefined && reuse.chain.length > 0 ? [...reuse.chain] : [payloadHash])
+        : payload?.delta === undefined
+          ? [payloadHash]
+          : [payloadHash, ...payload.delta.baseChain]
     const entry: RollbackLedgerManifestEntry = {
       id: record.id,
       kind: record.kind,
@@ -848,7 +891,7 @@ export class RollbackLedger {
       turnSeq: record.turnSeq,
       boundarySeq: record.boundarySeq,
       recordBytes: byteLength(recordJson),
-      workspace: { ...trackHeader(workspaceTrack), payload: payloadHash, payloadBytes },
+      workspace: { ...trackHeader(workspaceTrack), payload: payloadHash, payloadBytes, ...(payloadChain === undefined ? {} : { payloadChain }) },
       session: { ...trackHeader(sessionTrack), object: sessionTrack.payload?.object ?? null },
       segments: summary.segments,
     }
@@ -875,7 +918,12 @@ export class RollbackLedger {
   }
 
   /** 读校验过的载荷（哈希不符 / 形状不符 -> error，绝不返回半个） */
-  private async readVerifiedPayload(hash: string): Promise<{ payload?: RollbackWorkspacePayload; error?: string }> {
+  /**
+   * **原始**读取一份载荷（形状校验 + 内容寻址自证）。
+   * `files` 可能只是「相对基准的增量子集」（`payload.delta` 非空）—— **只给解析器用**，
+   * 消费者一律走 {@link resolvePayload} 拿物化后的完整清单。
+   */
+  private async readStoredPayload(hash: string): Promise<{ payload?: RollbackWorkspacePayload; error?: string }> {
     const target = this.payloadPath(hash)
     if (target === null) return { error: 'record-incomplete: payload ref invalid' }
     let raw: string
@@ -892,9 +940,58 @@ export class RollbackLedger {
     } catch (error) {
       return { error: 'record-incomplete: payload unreadable (' + errorDetail(error) + ')' }
     }
-    const payload = normalizeWorkspacePayload(parsed)
+    const payload = normalizeStoredPayload(parsed)
     if (payload === null) return { error: 'record-incomplete: payload shape invalid' }
     return { payload }
+  }
+
+
+  /**
+   * 解析一份载荷：增量视图**物化**成完整 `files`（含 `object` 字段补回），全量视图原样返回。
+   *
+   * 任何一环不成立（基准缺失 / 哈希不符 / 形状不符 / 链成环）⇒ **如实失败**：绝不返回半个清单 ——
+   * 半份清单会让「留点后新建」的判据把绝大多数文件当成新建的，回退就会删掉它们。
+   */
+  async resolvePayload(hash: string): Promise<{ payload?: RollbackWorkspacePayload; error?: string }> {
+    // **不缓存**：载荷被删/被改必须立刻看得见（缓存会把「存储已经坏了」蒙过去），
+    // 也守住「一次只驻留一份载荷」的内存护栏（issue #89 的 OOM 现场）。
+    return this.materializePayload(hash, new Set([hash]))
+  }
+
+  private async materializePayload(
+    hash: string,
+    seen: Set<string>,
+  ): Promise<{ payload?: RollbackWorkspacePayload; error?: string }> {
+    const stored = await this.readStoredPayload(hash)
+    if (stored.payload === undefined) return { error: stored.error ?? 'record-incomplete: payload unreadable' }
+    const payload = stored.payload
+    const delta = payload.delta
+    if (delta === undefined) return { payload: withObjectRefs(payload) }
+    if (typeof delta.base !== 'string' || !OBJECT_KEY_RE.test(delta.base)) {
+      return { error: 'record-incomplete: delta base ref invalid' }
+    }
+    if (seen.has(delta.base)) return { error: 'record-incomplete: delta chain cycle' }
+    const next = new Set(seen)
+    next.add(delta.base)
+    const base = await this.materializePayload(delta.base, next)
+    if (base.payload === undefined) {
+      return { error: 'record-incomplete: delta base unresolved (' + String(base.error ?? '') + ')' }
+    }
+    const removed = new Set<string>()
+    for (const p of Array.isArray(delta.removed) ? delta.removed : []) if (typeof p === 'string') removed.add(p)
+    const added = withObjectRefs({ ...payload, files: delta.added ?? [], delta: undefined }).files
+    const addedPaths = new Set<string>()
+    for (const file of added) if (typeof file?.path === 'string') addedPaths.add(file.path)
+    const files: RollbackWorkspaceFile[] = []
+    for (const file of base.payload.files) {
+      if (typeof file?.path !== 'string') continue
+      if (removed.has(file.path) || addedPaths.has(file.path)) continue
+      files.push(file)
+    }
+    for (const file of added) files.push(file)
+    // 与全量捕获同序（`payload.files.sort` 用的就是这个比较器）
+    files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+    return { payload: { ...payload, files, delta: undefined } }
   }
 
   /** 读一条**完整**记录（引用解析对调用方透明）；任何一步不成立就如实失败 */
@@ -923,7 +1020,7 @@ export class RollbackLedger {
       if (typeof payloadRef !== 'string' || !OBJECT_KEY_RE.test(payloadRef)) {
         return { error: 'record-incomplete: payload ref invalid' }
       }
-      const resolved = await this.readVerifiedPayload(payloadRef)
+      const resolved = await this.resolvePayload(payloadRef)
       if (resolved.payload === undefined) return { error: resolved.error ?? 'record-incomplete: payload unreadable' }
       payload = resolved.payload
     }
@@ -985,6 +1082,12 @@ export class RollbackLedger {
   async prunePayloads(entries: readonly RollbackLedgerManifestEntry[]): Promise<{ removed: number; bytes: number }> {
     const referenced = new Set<string>()
     for (const entry of entries) {
+      // 增量载荷依赖基准 ⇒ **按链保活**（否则淘汰/删点会把基准删掉，那个点就永远读不回来了）
+      const chain = entry.workspace.payloadChain
+      if (Array.isArray(chain) && chain.length > 0) {
+        for (const hash of chain) referenced.add(hash)
+        continue
+      }
       if (entry.workspace.payload !== null) referenced.add(entry.workspace.payload)
     }
     let names: string[]
@@ -1037,7 +1140,7 @@ export class RollbackLedger {
     for (const entry of entries) {
       const hash = entry.workspace.payload
       if (hash !== null) {
-        const resolved = await this.readVerifiedPayload(hash)
+        const resolved = await this.resolvePayload(hash)
         if (resolved.payload === undefined) {
           return { removed: 0, bytes: 0, referencedPaths, aborted: resolved.error ?? 'payload unreadable' }
         }
@@ -1303,6 +1406,19 @@ function trackHeader(track: {
     reasonCode: track.reasonCode,
     reasonDetail: track.reasonDetail,
   }
+}
+
+/**
+ * 补回**落盘时省掉的** `object` 字段：内容寻址的名字就是内容哈希 ⇒ `object ≡ sha256`。
+ * 缺 `sha256` 的畸形条目保持原样（消费侧的防御判据照旧生效）。
+ */
+function withObjectRefs(payload: RollbackWorkspacePayload): RollbackWorkspacePayload {
+  for (const file of payload.files) {
+    if (file === null || typeof file !== 'object') continue
+    if (typeof file.object === 'string') continue
+    if (typeof file.sha256 === 'string') file.object = file.sha256
+  }
+  return payload
 }
 
 function errorDetail(error: unknown): string {

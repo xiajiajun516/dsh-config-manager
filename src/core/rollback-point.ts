@@ -83,9 +83,17 @@ import {
   RollbackLedger,
   type RollbackLedgerManifestEntry,
   type RollbackLedgerMigration,
+  type RollbackLedgerPrepared,
 } from './rollback-ledger.ts'
 
 /* ------------------------------------------------------------------ 常量 */
+
+/** 增量链的最大长度：到顶就落一个**全量锚点**（重建最多读 1 份全量 + 几份小增量） */
+const ROLLBACK_DELTA_CHAIN_LIMIT = 8
+/** path → 基准摘要键（sha256/bytes/chunk 拼成，只用于判「这条与基准逐条相同」） */
+type RollbackDeltaDigest = { hash: string; chain: string[]; chunks: string[]; entries: Map<string, string> }
+/** 增量视图只有在小于全量的这个比例时才采用（否则直接全量，简单可靠） */
+const ROLLBACK_DELTA_MAX_RATIO = 0.6
 
 export const ROLLBACK_SCHEMA_VERSION = 2
 /** 回滚点库目录名（dataDir/rollback-points）——路由族 /recovery/rollback-points/* 同源 */
@@ -418,7 +426,28 @@ export interface RollbackPathIndex {
 export interface RollbackWorkspacePayload {
   /** 显式路径分块：恢复只在这些分块内覆盖 */
   chunks: string[]
+  /**
+   * 记录在案的**文件条目数**。**必须自带**（不能再用 `files.length`）：增量视图下 `files` 只是
+   * 「相对基准新增/改写的子集」，而摘要（界面上的条数 / 可恢复判定）要的是全量条数。
+   */
+  fileCount?: number
   files: RollbackWorkspaceFile[]
+  /**
+   * **存盘专用**：这份载荷是「相对某个基准载荷的增量」（见 rollback-ledger 的 resolvePayload）。
+   * 只在写盘那一刻存在 —— 任何读路径（readRecord / 预览 / 回退 / 对象回收）拿到的都是**物化后**
+   * 的完整 `files`（`delta` 已被抹掉）。**绝不把带 delta 的对象交给消费者**：它看起来像一份
+   * 「只有这几条记录」的完整清单，拿去规划删除会删掉其它全部文件。
+   */
+  delta?: {
+    /** 基准载荷的内容寻址哈希（必须在 prune/回收时一并保活） */
+    base: string
+    /** 基准自己的依赖链（深→浅，含基准），保活用 */
+    baseChain: string[]
+    /** 相对基准**不再存在**的路径（逐字，与捕获产出的绝对路径同形） */
+    removed: string[]
+    /** 相对基准**新增 / 改写**的条目（`files` 在增量视图下为 null） */
+    added?: RollbackWorkspaceFile[]
+  }
   skipped: RollbackSkippedEntry[]
   /**
    * 整棵跳过的「运行时依赖目录」（忽略规则 = 全仓唯一来源 EXCLUDED_DEP_DIR_NAMES，当前 node_modules）。
@@ -1041,6 +1070,87 @@ function pathKey(value: string): string {
   return win32Fold(path.resolve(value))
 }
 
+/** 两个分块列表是否逐个相同（增量基准必须作用于同一批分块） */
+function sameChunks(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false
+  return true
+}
+
+/**
+ * **存盘视图**：条目里的 `object` 恒等于 `sha256`（内容寻址的名字就是内容哈希）⇒ 落盘时不写这个字段，
+ * 读取时按 `sha256` 补回（见 ledger 的 `withObjectRefs`）。每条约省 1/5 字节。
+ */
+function compactPayloadForStorage(payload: RollbackWorkspacePayload): RollbackWorkspacePayload {
+  const strip = (list: RollbackWorkspaceFile[] | null | undefined): RollbackWorkspaceFile[] | null | undefined => {
+    if (!Array.isArray(list)) return list
+    return list.map((file) => {
+      const copy: Record<string, unknown> = { ...file }
+      delete copy['object']
+      return copy as unknown as RollbackWorkspaceFile
+    })
+  }
+  const delta = payload.delta
+  return {
+    ...payload,
+    files: strip(payload.files) as RollbackWorkspaceFile[],
+    ...(delta === undefined
+      ? {}
+      : { delta: { ...delta, ...(delta.added === undefined ? {} : { added: strip(delta.added) as RollbackWorkspaceFile[] }) } }),
+  }
+}
+
+/**
+ * 构造「相对基准的增量视图」；不划算（≥ 全量 × {@link ROLLBACK_DELTA_MAX_RATIO}）时返回 null。
+ *
+ * 条目**逐字比较**：路径、sha、字节数、mtimeMs、所属分块任一不同 ⇒ 进 `added`；基准里不再存在的路径进 `removed`。
+ * 重建 = 基准 − removed，再用 added 覆盖/追加，最后按路径排序（与全量捕获同序）。
+ */
+/** 基准摘要键：内容 + 字节数 + 所属分块（`mtimeMs` 不参与 —— 只被触摸、内容没变的文件不必进增量） */
+function digestKeyOf(file: RollbackWorkspaceFile): string {
+  return String(file.sha256) + ':' + String(file.bytes) + ':' + String(file.chunk)
+}
+
+/** 相对**内存基准摘要**的条目差异（新增/改写 / 不再存在）；路径逐字比较，不读任何文件 */
+function payloadDiffAgainstDigest(
+  payload: RollbackWorkspacePayload,
+  baseEntries: ReadonlyMap<string, string>,
+): { added: RollbackWorkspaceFile[]; removed: string[] } {
+  const added: RollbackWorkspaceFile[] = []
+  const nextPaths = new Set<string>()
+  for (const file of payload.files) {
+    nextPaths.add(file.path)
+    const prev = baseEntries.get(file.path)
+    if (prev === undefined || prev !== digestKeyOf(file)) added.push(file)
+  }
+  const removed: string[] = []
+  for (const path of baseEntries.keys()) if (!nextPaths.has(path)) removed.push(path)
+  return { added, removed }
+}
+
+
+/**
+ * 构造「相对基准的增量视图」；不划算（≥ 全量 × {@link ROLLBACK_DELTA_MAX_RATIO}）时返回 null。
+ * 重建 = 基准 − removed，再用 added 覆盖/追加，最后按路径排序（与全量捕获同序）。
+ */
+function buildPayloadDelta(
+  payload: RollbackWorkspacePayload,
+  baseHash: string,
+  baseChain: readonly string[],
+  diff: { added: RollbackWorkspaceFile[]; removed: string[] },
+): RollbackWorkspacePayload | null {
+  if (baseHash === '') return null
+  const delta: RollbackWorkspacePayload = {
+    ...payload,
+    // **故意不是数组**：不认识 `delta` 的旧读取器会在形状校验这一步**拒绝这个点**（fail-closed），
+    // 而不是把「增量那几条」当成完整清单去规划删除 —— 那会把留点时存在的文件全判成新建、全部删掉。
+    files: null as unknown as RollbackWorkspaceFile[],
+    delta: { base: baseHash, baseChain: [...baseChain], removed: diff.removed, added: diff.added },
+  }
+  if (JSON.stringify(delta).length >= JSON.stringify(payload).length * ROLLBACK_DELTA_MAX_RATIO) return null
+  return delta
+}
+
 function errorDetail(error: unknown): string {
   if (error instanceof Error) {
     const code = (error as { code?: unknown }).code
@@ -1275,6 +1385,16 @@ export function resolveTurnBoundary(
   return { ok: true, boundarySeq: boundary.boundarySeq, endSeq: boundary.endSeq }
 }
 
+/**
+ * 记录在案的文件条目数：优先用载荷自带的 `fileCount`（增量视图下 `files` 可能只是子集），
+ * 老载荷没有该字段才回落到 `files.length`。
+ */
+export function workspaceFileCount(payload: RollbackWorkspacePayload | null): number {
+  if (payload === null) return 0
+  if (typeof payload.fileCount === 'number' && Number.isFinite(payload.fileCount)) return payload.fileCount
+  return payload.files.length
+}
+
 export function summarizeRollbackPoint(record: RollbackPointRecord): RollbackPointSummary {
   const workspace = record.workspace.payload
   const session = record.session.payload
@@ -1314,7 +1434,16 @@ export function summarizeRollbackPoint(record: RollbackPointRecord): RollbackPoi
     note: record.note,
     spreadMs: record.spreadMs,
     segments: [
-      segment('workspace', record.workspace, workspace?.files.length ?? 0, workspace?.bytes ?? 0, null, (workspace?.files.length ?? 0) > 0, workspace?.skippedCount ?? 0, workspace?.truncated ?? false),
+      segment(
+        'workspace',
+        record.workspace,
+        workspaceFileCount(workspace),
+        workspace?.bytes ?? 0,
+        null,
+        workspaceFileCount(workspace) > 0,
+        workspace?.skippedCount ?? 0,
+        workspace?.truncated ?? false,
+      ),
       segment(
         'session',
         record.session,
@@ -1597,6 +1726,15 @@ export class RollbackPointEngine {
   private forkLinksAt = 0
   private forkLinksComplete = true
   /** 会话日志头缓存（mtime + size 失效；只服务 fork 链扫描） */
+  /**
+   * **本进程**最近一次成功留点的工作区摘要（清单增量化的基准）。
+   *
+   * 为什么是内存而不是读盘：一次留点只准读清单（L-08 / issue #89）—— 读上一份 12 MB 载荷去算差异
+   * 正是那条被消灭的路。内存量 ≈ 每文件一个 `sha:bytes:chunk` 串（3.4 万文件约几 MB），
+   * 与已有的身份缓存（`pathCache`）同量级；进程重启后第一次留点落全量锚点，随后继续链。
+   */
+  private deltaBase: RollbackDeltaDigest | null = null
+
   private readonly forkHeaderCache = new Map<string, { mtimeMs: number; size: number; header: SessionForkHeader | null }>()
   /** 继承判据用的台账快照（TTL 缓存；只缓存**清单条目**，绝不缓存完整记录） */
   private ledgerSnapshotCache: { at: number; entries: RollbackLedgerManifestEntry[] } | null = null
@@ -2225,6 +2363,7 @@ export class RollbackPointEngine {
     const canonical = [...payload.files]
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
       .map((f) => [f.path, f.bytes, f.sha256])
+    payload.fileCount = payload.files.length
     const fingerprint = sha256Hex(JSON.stringify({ chunks: [...payload.chunks].sort(), files: canonical }))
     // 自适应预算（见 ROLLBACK_MIN/MAX_CAPTURE_BUDGET_MS）：被截断 ⇒ 下次翻倍（上限）；
     // 用得很少 ⇒ 下次减半（下限）。大仓库第一次撞上限后自动拿到更大预算，小仓库自动回落，
@@ -2815,6 +2954,71 @@ export class RollbackPointEngine {
    * 诚实的边界：检测与写入之间仍有极小窗口，无跨进程锁时无法彻底消除 —— 这里保证的是
    * 「不静默覆盖 + 尽量合并」，不是原子性。
    */
+  /**
+   * 把工作区载荷改写成**增量视图**（相对最近一个同分块的点）——清单增量化，省的是磁盘，不是语义。
+   *
+   * 判据与安全边界（逐条）：
+   *  · 基准 = 清单里最近一个 `workspace.payload` 非空、**分块完全相同**的点（只试最近几个，代价有界）；
+   *  · 增量 = 「相对基准新增 / 改写的条目」+「基准里不再存在的路径」，条目**逐字比较**（同形绝对路径）；
+   *  · 只有增量明显更小（< 全量的 60%）才用；否则原样全量落盘；
+   *  · 读路径由 ledger 物化（`resolvePayload`）⇒ 预览 / 回退 / 回收看到的永远是完整清单；
+   *  · 基准读不出来 / 分块对不上 / 任何异常 ⇒ 原样全量（绝不因为省字节而让点不可用）；
+   *  · 基准载荷的保活由 ledger 的 `payloadChain` 负责（淘汰时不会把基准删掉）。
+   */
+  private async storagePlanFor(
+    record: RollbackPointRecord,
+    entries: readonly RollbackLedgerManifestEntry[],
+  ): Promise<{ record: RollbackPointRecord; reuse: { hash: string; bytes: number; chain: string[] } | null }> {
+    const full = { record, reuse: null }
+    const payload = record.workspace.payload
+    if (payload === null || record.workspace.ok !== true || payload.files.length === 0) return full
+    if (payload.delta !== undefined) return full
+    // 基准 = **本进程上一次成功留点**的内存摘要（绝不读别人的载荷/记录文件：L-08 / issue #89）。
+    // 没有摘要（进程刚起 / 分块变了）⇒ 这一次落**全量锚点**，随后由摘要继续链下去。
+    const base = this.deltaBase
+    if (base !== null && sameChunks(base.chunks, payload.chunks)) {
+      const diff = payloadDiffAgainstDigest(payload, base.entries)
+      if (diff.added.length === 0 && diff.removed.length === 0) {
+        // 工作区与该点**逐条相同** ⇒ 直接复用它的载荷文件（零额外字节、链不增长）
+        const entry = entries.find((candidate) => candidate.workspace.payload === base.hash)
+        if (entry !== undefined && (await this.ledger.hasPayload(base.hash))) {
+          return { record, reuse: { hash: base.hash, bytes: entry.workspace.payloadBytes, chain: [...base.chain] } }
+        }
+      } else if (base.chain.length < ROLLBACK_DELTA_CHAIN_LIMIT) {
+        const delta = buildPayloadDelta(payload, base.hash, base.chain, diff)
+        if (delta !== null) {
+          return {
+            record: { ...record, workspace: { ...record.workspace, payload: compactPayloadForStorage(delta) } },
+            reuse: null,
+          }
+        }
+      }
+    }
+    // 没有可用基准 / 分块不同 / 增量不划算 ⇒ 全量落盘（仍省掉冗余的 object 字段）
+    return {
+      record: { ...record, workspace: { ...record.workspace, payload: compactPayloadForStorage(payload) } },
+      reuse: null,
+    }
+  }
+
+  /** 记下这份点作为下一次留点的增量基准（内存摘要，见 {@link deltaBase}） */
+  private rememberDeltaBase(record: RollbackPointRecord, prepared: RollbackLedgerPrepared): void {
+    const payload = record.workspace.payload
+    const hash = prepared.payloadHash
+    if (payload === null || hash === null) {
+      this.deltaBase = null
+      return
+    }
+    const entries = new Map<string, string>()
+    for (const file of payload.files) entries.set(file.path, digestKeyOf(file))
+    this.deltaBase = {
+      hash,
+      chain: prepared.entry.workspace.payloadChain ?? [hash],
+      chunks: [...payload.chunks],
+      entries,
+    }
+  }
+
   private async appendRecord(record: RollbackPointRecord): Promise<{ ok: boolean; detail?: string }> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await this.appendRecordOnce(record)
@@ -2845,7 +3049,10 @@ export class RollbackPointEngine {
           return { ok: false, detail: 'ledger unreadable: ' + manifest.error }
         }
       }
-      const prepared = this.ledger.prepareRecord(record)
+      // 清单增量化：能省就把这份载荷改写成「相对最近一个同分块载荷的增量」（读路径由 ledger 物化回来）。
+      // 失败 / 不划算 / 没有可用基准一律**原样返回** —— 增量只影响磁盘占用，绝不参与正确性判断。
+      const storage = await this.storagePlanFor(record, manifest.entries)
+      const prepared = this.ledger.prepareRecord(storage.record, storage.reuse ?? undefined)
       const merged = [prepared.entry, ...manifest.entries.filter((r) => r.id !== record.id)]
       const pruned = this.selectPruneEntries(merged)
       // 本次新增字节：记录文件 + **首次落盘**的载荷（同一工作区态已存在 ⇒ 零额外字节）
@@ -2874,6 +3081,8 @@ export class RollbackPointEngine {
         await this.ledger.prunePayloads(manifest.entries)
         return { ok: false, detail: errorDetail(error) }
       }
+      // 记下「这次留点」作为下一次的增量基准（只在真正写成功后；失败不更新 ⇒ 链只跨成功落盘的点）
+      this.rememberDeltaBase(record, prepared)
       const keptIds = new Set(kept.map((entry) => entry.id))
       const dropped = merged.filter((entry) => !keptIds.has(entry.id)).map((entry) => entry.id)
       await this.ledger.deleteRecords(dropped)

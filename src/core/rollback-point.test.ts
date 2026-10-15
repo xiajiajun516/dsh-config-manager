@@ -1050,6 +1050,8 @@ test('R-11 记录被篡改不能变成写原语：路径越界 / 指纹不符一
   assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A2', '一条不合格 → 零写入')
 
   // 篡改 2：路径合法但声明的内容指纹不符
+  // 注：载荷**不再存** `object`（object ≡ sha256，落盘时省掉、读取时按 sha256 补回）⇒ 改 sha256
+  // 等于同时改掉对象名 ⇒ 那个对象根本不存在 ⇒ 如实报 `object-missing`（仍是 fail-closed、零写入）。
   const tampered2 = await readFullRecord(engine, record.id)
   const hit2 = (tampered2.workspace.payload?.files ?? []).find((f) => f.sha256 === sha256Hex('A1'))
   assert.ok(hit2 !== undefined)
@@ -1058,7 +1060,25 @@ test('R-11 记录被篡改不能变成写原语：路径越界 / 指纹不符一
   await writeFullRecord(engine, tampered2)
   const rewound2 = await engine.rewind({ id: record.id, userConfirmed: true, guardPolicy: 'off' })
   assert.equal(rewound2.outcome, 'failed')
-  assert.ok((rewound2.segments[0]?.detail ?? []).some((line) => line.includes('object-hash-mismatch')))
+  assert.ok((rewound2.segments[0]?.detail ?? []).some((line) => line.includes('object-missing')),
+    '改 sha256 ⇒ 对象名随之改 ⇒ 读不到：' + JSON.stringify(rewound2.segments[0]?.detail))
+  assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A2')
+
+  // 篡改 2b：指纹合法、但把**对象键**指向另一份真实存在的内容 ⇒ 该走 object-hash-mismatch
+  const tampered3 = await readFullRecord(engine, record.id)
+  const files3 = tampered3.workspace.payload?.files ?? []
+  const aTxt = path.join(fx.workspaceDir, 'a.txt')
+  const hit3 = files3.find((f) => f.path === aTxt)
+  assert.ok(hit3 !== undefined)
+  hit3.sha256 = sha256Hex('A1')   // 指纹还原成**真的**（上一轮篡改改过它）
+  const otherObject = files3.find((f) => f.path !== aTxt && f.sha256 !== hit3.sha256)?.sha256
+  assert.ok(otherObject !== undefined)
+  hit3.object = otherObject   // 对象存在、但它的内容哈希 ≠ 记录里的 sha256
+  await writeFullRecord(engine, tampered3)
+  const rewound3 = await engine.rewind({ id: record.id, userConfirmed: true, guardPolicy: 'off' })
+  assert.equal(rewound3.outcome, 'failed')
+  assert.ok((rewound3.segments[0]?.detail ?? []).some((line) => line.includes('object-hash-mismatch')),
+    '对象键被换 ⇒ 内容哈希对不上：' + JSON.stringify(rewound3.segments[0]?.detail))
   assert.equal(await readText(path.join(fx.workspaceDir, 'a.txt')), 'A2')
 })
 
@@ -3057,6 +3077,107 @@ test('R-52 回退快路径：已一致的条目不读对象、不写盘；用不
   const ws2 = second.segments.find((s) => s.state === 'workspace')
   assert.equal(second.outcome, 'restored', '用不到的对象坏掉仍应成功：' + JSON.stringify(ws2?.detail))
   assert.equal(ws2?.reasonCode, 'nothing-to-restore')
+})
+
+test('R-53 清单增量化：第二点只落「相对第一点的增量」，读回来是同一份完整清单', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = path.join(fx.workspaceDir, 'cap-delta')
+  await fs.mkdir(dir, { recursive: true })
+  for (let i = 0; i < 40; i += 1) {
+    await fs.writeFile(path.join(dir, 'f' + String(i).padStart(2, '0') + '.txt'), 'V' + String(i))
+  }
+  const engine = makeEngine(fx)
+  const first = await engine.capturePoint({ chunks: [dir], sessionId: 's-delta' })
+  const firstFull = first.point?.workspace.payload
+  assert.ok(firstFull !== null && firstFull !== undefined)
+  assert.equal(firstFull.fileCount, 40)
+  const manifest = JSON.parse(await fs.readFile(path.join(engine.storeDir, 'index.json'), 'utf8')) as {
+    records: { id: string; workspace: { payload: string | null; payloadChain?: string[] } }[]
+  }
+  void manifest
+  // 每次现读清单（第二点会再写一次清单）
+  const hashOf = async (id: string): Promise<string> => {
+    const fresh = JSON.parse(await fs.readFile(path.join(engine.storeDir, 'index.json'), 'utf8')) as {
+      records: { id: string; workspace: { payload: string | null; payloadChain?: string[] } }[]
+    }
+    return fresh.records.find((r) => r.id === id)?.workspace.payload ?? ''
+  }
+  const payloadPath = (hash: string): string => path.join(engine.storeDir, 'payloads', hash + '.json')
+  const firstHash = await hashOf(first.point?.id ?? '')
+  const firstBytes = (await fs.stat(payloadPath(firstHash))).size
+  t.diagnostic('首点载荷 ' + String(firstBytes) + ' 字节')
+  // 第二点：改 1 个文件 + 新增 1 个 ⇒ 增量应远小于全量
+  await fs.writeFile(path.join(dir, 'f00.txt'), 'CHANGED')
+  await fs.writeFile(path.join(dir, 'new.txt'), 'NEW')
+  const second = await engine.capturePoint({ chunks: [dir], sessionId: 's-delta' })
+  const secondFull = second.point?.workspace.payload
+  assert.ok(secondFull !== null && secondFull !== undefined)
+  assert.equal(secondFull.fileCount, 41, '摘要里的条数必须是全量条数，不是增量条数')
+  const payloadsDir = path.join(engine.storeDir, 'payloads')
+  const names = await fs.readdir(payloadsDir)
+  assert.equal(names.length, 2, '首点全量 + 第二点增量（内容不同 ⇒ 两份载荷）')
+  const secondHash = await hashOf(second.point?.id ?? '')
+  assert.notEqual(secondHash, firstHash)
+  const secondBytes = (await fs.stat(payloadPath(secondHash))).size
+  const secondStored = JSON.parse(await fs.readFile(payloadPath(secondHash), 'utf8')) as { delta?: { base?: string } }
+  assert.equal(secondStored.delta?.base, firstHash, '第二点必须是相对首点的增量视图（而不是又一份全量）')
+  assert.ok(secondBytes < firstBytes / 2, '增量载荷必须明显更小：' + String(secondBytes) + ' vs ' + String(firstBytes))
+  // 读回来必须与「全量捕获」逐条一致（路径序 / sha / bytes / 对象键）
+  const back = await engine.read(second.point?.id ?? '')
+  const rebuilt = back.point?.workspace.payload
+  assert.ok(rebuilt !== null && rebuilt !== undefined)
+  assert.equal(rebuilt.delta, undefined, '读回来必须是物化后的完整清单')
+  const sorted = [...(secondFull.files ?? [])].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+  assert.deepEqual(
+    rebuilt.files.map((f) => [f.path, f.sha256, f.bytes, f.object]),
+    sorted.map((f) => [f.path, f.sha256, f.bytes, f.object]),
+    '增量重建的清单必须与全量逐条一致（含补回的 object）',
+  )
+  assert.equal(rebuilt.pathIndex?.object ?? null, secondFull.pathIndex?.object ?? null)
+  // 预览与全量点同一口径：内容一致 ⇒ 零改动
+  const preview = await engine.preview(second.point?.id ?? '')
+  assert.equal(preview.workspace.different, 0)
+  assert.equal(preview.workspace.overwrite, 41, '全量条数（不是增量条数）')
+})
+
+test('R-54 增量链：基准载荷缺失 ⇒ 该点如实失败（绝不返回半份清单）；prune 不删被链引用的载荷', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = path.join(fx.workspaceDir, 'cap-delta-chain')
+  await fs.mkdir(dir, { recursive: true })
+  for (let i = 0; i < 20; i += 1) await fs.writeFile(path.join(dir, 'g' + String(i) + '.txt'), 'C' + String(i))
+  const engine = makeEngine(fx)
+  const a = await engine.capturePoint({ chunks: [dir], sessionId: 's-chain' })
+  await fs.writeFile(path.join(dir, 'g0.txt'), 'CHANGED')
+  const b = await engine.capturePoint({ chunks: [dir], sessionId: 's-chain' })
+  assert.ok(a.point !== undefined && b.point !== undefined)
+  // 第二点必须是增量（载荷哈希 ≠ 第一点；且它的载荷里有 delta 标记）
+  const payloadsDir = path.join(engine.storeDir, 'payloads')
+  const names = await fs.readdir(payloadsDir)
+  assert.equal(names.length, 2)
+  const manifest = JSON.parse(await fs.readFile(path.join(engine.storeDir, 'index.json'), 'utf8')) as {
+    records: { id: string; workspace: { payload: string | null; payloadChain?: string[] } }[]
+  }
+  const entryOf = (id: string) => manifest.records.find((r) => r.id === id)
+  const payloadPath = (hash: string): string => path.join(payloadsDir, hash + '.json')
+  const bHash = entryOf(b.point.id)?.workspace.payload ?? ''
+  assert.ok(Array.isArray(entryOf(b.point.id)?.workspace.payloadChain), '清单条目必须带上解析所需的链')
+  const bFile = JSON.parse(await fs.readFile(payloadPath(bHash), 'utf8')) as {
+    files?: unknown
+    delta?: { base?: string; added?: unknown; removed?: unknown }
+  }
+  assert.ok(bFile.delta !== undefined && bFile.delta.base !== undefined, '第二点必须落成增量视图')
+  const delta0 = bFile.delta as { base: string; added?: unknown }
+  // 增量视图**故意**让 files 不是数组：不认识 delta 的旧读取器会因形状不符拒绝这个点（fail-closed），
+  // 而不是把「增量那几条」当完整清单去规划删除
+  assert.equal(bFile.files, null, '增量视图的 files 必须为 null')
+  assert.ok(Array.isArray(delta0.added))
+  // 删掉基准载荷：**读第二点必须如实失败**（半份清单会被拿去规划删除，等于删掉其它全部文件）
+  await fs.rm(payloadPath(delta0.base))
+  const broken = await engine.read(b.point.id)
+  assert.equal(broken.point, undefined)
+  assert.ok((broken.error ?? '').includes('record-incomplete'), '如实失败：' + String(broken.error))
 })
 
 test('R-32 取消信号：已中止 ⇒ 在文件边界停下（部分点 + budget-time 留痕，绝不整份跑完）', async (t) => {
