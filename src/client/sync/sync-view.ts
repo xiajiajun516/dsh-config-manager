@@ -614,6 +614,12 @@ export interface PushPreviewView {
   credentialsHint: string;
   /** 只读提示（预览不写远端） */
   previewHint: string;
+  /**
+   * 引擎随预览回传的告警（分区导出失败、本地源插件未打包导致该分区无法与基线比对等）；
+   * 为空串 = 无告警（不占版面）。ok 预览也需要显示它：否则「某分区导出失败已跳过」只存在于
+   * 响应体里，用户看到的分区数会静静变少。
+   */
+  hint: string;
   headline: string;
   error: string | null;
 }
@@ -624,7 +630,8 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPr
   if (!preview.ok) {
     return {
       ok: false, rows: [], changedCount: 0, remoteSnapshotCount: preview.remoteSnapshotCount,
-      encryptedHint: '', credentialsHint: '', previewHint: '', headline: '', error: preview.message ?? t('sync.pushFailed'),
+      encryptedHint: '', credentialsHint: '', previewHint: '', hint: '', headline: '',
+      error: preview.message ?? t('sync.pushFailed'),
     };
   }
   const rows = preview.sections.map((s) => ({ section: s.section, count: s.count, changed: s.changed }));
@@ -637,6 +644,7 @@ export function pushPreviewView(preview: SyncPushPreview | null, t: UiT): PushPr
     encryptedHint: preview.encrypted ? t('sync.pushPreviewEncrypted') : '',
     credentialsHint: preview.credentialsIncluded ? t('sync.pushPreviewCredentials') : '',
     previewHint: t('sync.pushPreviewHint'),
+    hint: preview.message ?? '',
     headline: t('sync.pushPreviewHeadline', {
       total: String(preview.sections.length),
       changed: String(changedCount),

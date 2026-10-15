@@ -85,6 +85,8 @@ export const zh = {
   'sync.backupHistoryDone': '{trigger}完成：{zip}',
   'sync.backupHistorySkipped': '{trigger}跳过：{reason}',
   'sync.backupHistoryFailed': '{trigger}失败',
+  // ---------- 推送前只读预览（issue #91） ----------
+  'sync.pushPreviewUnpackedLocalSources': '本地源插件（link:/file:）需打包才能精确比对变更，分区 {sections} 本次按「有变化」展示',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -145,6 +147,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.backupHistoryDone': '{trigger} finished: {zip}',
   'sync.backupHistorySkipped': '{trigger} skipped: {reason}',
   'sync.backupHistoryFailed': '{trigger} failed',
+  'sync.pushPreviewUnpackedLocalSources': 'Local-source plugins (link:/file:) must be packed to compare changes exactly; section(s) {sections} are shown as changed',
 };
 
 registerMessageCatalog({ id: 'sync-domain', zh, en });

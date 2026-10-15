@@ -62,6 +62,9 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
     ['AutosyncCard', 'AutosyncCard.tsx'],
     // issue #79：工作副本卡（含确认弹窗 + 宿主调用 + 回执）自成文件，主文件只装配 —— 行数棘轮因此不必上调
     ['WorkDirCard', 'WorkDirCard.tsx'],
+    // issue #91：推送预览卡（五条并列提示带：只读 / 首次基线 / 加密 / 含凭据 / 引擎告警）自成文件，
+    // 主文件只装配 —— 同样以「抽出去」而不是「抬上限」满足棘轮
+    ['PushPreviewCard', 'PushPreviewCard.tsx'],
   ]
   for (const [name, file] of units) {
     // 主文件：必须 import 并渲染该单元

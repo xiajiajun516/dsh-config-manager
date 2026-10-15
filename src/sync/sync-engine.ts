@@ -23,6 +23,8 @@ import path from 'node:path';
 import { createAdapters } from '../adapters/index.ts';
 import { defaultSecretScanner } from '../core/exporter.ts';
 import { Importer } from '../core/importer.ts';
+// issue #91：只读预览与基线 hash 的口径判定（本地源插件在预览里不会被 npm pack）
+import { isLocalPluginSpec } from '../core/local-plugin-pack.ts';
 import type {
   ConfigAdapter, ExportSection, GlobalConflictStrategy, HostContext,
   ImportAnalysis, ImportPlan, ImportResult, PathMapping, PlanItem, PlanItemKind, RollbackReport, SecretScanner,
@@ -339,6 +341,24 @@ const FORBIDDEN_SECTIONS: readonly SectionId[] = ['credentialsStatus', 'secrets'
  * 保留导出是为了让既有调用方/测试仍能引用「缺省保留份数」这一事实，不再作为唯一判据。
  */
 export const MAX_REMOTE_SNAPSHOTS = DEFAULT_RETENTION_POLICY.keepLast;
+
+/**
+ * issue #91：走只读 `preview()` 拿到的产物，能否直接与该分区**基线 hash**（push 时按 export() 产物记录）比对。
+ *
+ * 为什么需要这个判定：`plugins` 适配器的 `preview()` 走 `collect(…, pack=false)` —— 刻意**不做**
+ * 本地源（`link:` / `file:`）插件的 `npm pack`。于是当 profile 里存在本地源插件时，预览产物既没有
+ * `localTarballs`、插件 spec 也保持原样（export() 会改写成 `file:<tarball>`），与基线**不同口径**：
+ * 此时既不能断言「无变化」（本地插件源码改了体积/内容，预览看不见），也不该为了比对去打包
+ * （那正是本 issue 的缺陷本身）。
+ *
+ * 返回 true = 该分区本趟**不可比** ⇒ 调用方只能保守报「有变化」并如实说明原因。
+ * 其余分区的 preview() 产物与 export() 逐字节相同（文件类分区不走 preview()，见 previewPush）。
+ */
+function previewCaliberDiffersFromExport(sectionId: SectionId, data: SectionData): boolean {
+  if (sectionId !== 'plugins') return false;
+  const plugins = (data as { plugins?: { spec?: string }[] }).plugins;
+  return Array.isArray(plugins) && plugins.some((p) => isLocalPluginSpec(p?.spec));
+}
 
 export class SyncEngine {
   private readonly ctx: HostContext;
@@ -794,14 +814,29 @@ export class SyncEngine {
     const targets = this.pushTargets(opts.sections, warnings);
     const plainSections: Partial<Record<SectionId, SectionData>> = {};
     const counts: Partial<Record<SectionId, number>> = {};
+    /** issue #91：本趟只读预览省掉了本地源打包 ⇒ 与基线不可比的分区（不可断言「无变化」） */
+    const unpackedSections = new Set<SectionId>();
     for (const adapter of targets) {
+      const exportOptions = {
+        includeSecrets,
+        // 与 push 同口径：显式勾选清单 > 「最新 N 个」上限
+        ...this.sessionExportOptions(adapter.id, opts.sessions),
+      };
       let section: ExportSection;
       try {
-        section = await adapter.export(this.ctx, {
-          includeSecrets,
-          // 与 push 同口径：显式勾选清单 > 「最新 N 个」上限
-          ...this.sessionExportOptions(adapter.id, opts.sessions),
-        });
+        // issue #91：**非文件类**分区优先走 adapter.preview()。只读预览必须零进程副作用，而
+        // plugins 的 export() 会对每个 `link:`/`file:` 插件真的跑一次 `npm pack`
+        // （真机 2 GB 本地源插件 = 297 s；这段时间全局写锁被该请求占满 ⇒ 界面上所有写操作静默 423）。
+        // 为什么文件类分区**不能**走 preview()：其预览产物是「无内容」形态（条目 data 为空、
+        // contentHash 为空串），既不能与基线 hash 比对，也不能进 assertNoForbiddenSections
+        // —— 那会让预览谎报「每个文件分区都变了」。
+        const summary = !isFileSection(adapter.id) && adapter.preview !== undefined
+          ? await adapter.preview(this.ctx, exportOptions)
+          : undefined;
+        section = summary?.section ?? await adapter.export(this.ctx, exportOptions);
+        if (summary !== undefined && previewCaliberDiffersFromExport(adapter.id, section.data as SectionData)) {
+          unpackedSections.add(adapter.id);
+        }
       } catch (err) {
         warnings.push(this.msg('sync.sectionFailed', { adapter: adapter.id, reason: err instanceof Error ? err.message : String(err) }));
         continue;
@@ -822,14 +857,27 @@ export class SyncEngine {
     if (!encrypted) {
       try {
         const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-        baselineHashes = state.sections as Record<string, string>;
+        // 基线条目是 SyncSectionState（{hash, updatedAt}），**不是**裸 hash 字符串。
+        // 这里曾把整个对象 as Record<string,string> 直接比对 ⇒ 对象 !== 字符串 恒真
+        // ⇒ 预览对**每一个**分区都报「有变化」，「N 个有变化」这句永远是「全都有变化」。
+        for (const [sid, rec] of Object.entries(state.sections)) {
+          if (rec !== undefined && typeof rec.hash === 'string') baselineHashes[sid] = rec.hash;
+        }
       } catch {
         baselineHashes = {};
       }
     }
+    if (unpackedSections.size > 0) {
+      // 如实说明：本次预览没有为本地源插件执行 npm pack，故这些分区的基线比对不可得
+      warnings.push(this.msg('sync.pushPreviewUnpackedLocalSources', { sections: [...unpackedSections].join(', ') }));
+    }
     const sections: SyncPushPreviewSection[] = Object.keys(plainSections).map((sid) => {
       const id = sid as SectionId;
-      const changed = encrypted || baselineHashes[id] === undefined || baselineHashes[id] !== hashSection(plainSections[id] as SectionData);
+      const changed = encrypted
+        // issue #91：只读预览省掉了本地源打包 ⇒ 产物与基线不同口径，**绝不**据此断言「无变化」
+        || unpackedSections.has(id)
+        || baselineHashes[id] === undefined
+        || baselineHashes[id] !== hashSection(plainSections[id] as SectionData);
       return { section: id, count: counts[id] ?? 0, changed };
     });
 

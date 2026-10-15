@@ -43,7 +43,6 @@ import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts'
-import type { UiT } from '../../ui/i18n.ts'
 import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -61,7 +60,7 @@ import type {
 } from './sync-api.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
-  githubPollMessage, isClientChannel, kindLabel, pullReportView, pushPreviewView, pushReportView, readStoredChannel,
+  githubPollMessage, isClientChannel, kindLabel, pullReportView, pushReportView, readStoredChannel,
   gistSessionsRiskKey,
   initialSyncSections, normalizeSessionsLimit, severityLabel, syncSectionOptions, writeStoredChannel,
 } from './sync-view.ts'
@@ -92,6 +91,7 @@ import { WorkDirCard } from './WorkDirCard.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { SyncLogList } from './SyncLogList.tsx'
 import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
+import { PushPreviewCard } from './PushPreviewCard.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
 
@@ -1544,40 +1544,5 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   )
 }
 
-/** P0-②：push 预览内容（绑 src/ui/i18n.ts 的 UiT 文案；纯展示，无敏感字段）。 */
-function PushPreviewCard({ preview, t, uiT, sectionName }: {
-  preview: SyncPushPreview | null
-  t: TranslateNS<'config-manager-sync'>
-  uiT: UiT
-  sectionName: (id: SectionId) => string
-}) {
-  const view = pushPreviewView(preview, uiT)
-  if (view === null) return null
-  if (view.error !== null) return <Banner kind="error">{view.error}</Banner>
-  return (
-    <div>
-      <Banner kind="info">{view.headline}</Banner>
-      {view.previewHint !== '' && <div className={css.hint}>{view.previewHint}</div>}
-      {view.remoteSnapshotCount === 0 && (
-        <Banner kind="warn">{t('syncflow.pushFirstBaseline')}</Banner>
-      )}
-      {view.encryptedHint !== '' && <Banner kind="warn">{view.encryptedHint}</Banner>}
-      {view.credentialsHint !== '' && <Banner kind="warn">{view.credentialsHint}</Banner>}
-      <Card className={css.card}>
-        <div className={css.groupLabel}>{t('syncflow.pushPreviewSections')}</div>
-        <div className={css.planScroll}>
-          <ul className={css.reportList}>
-            {view.rows.map((row) => (
-              <li key={row.section}>
-                <span className={css.kindTag}>{row.changed ? t('syncflow.pushChanged') : t('syncflow.pushUnchanged')}</span>
-                {' '}{sectionName(row.section)} · {row.count}
-              </li>
-            ))}
-          </ul>
-        </div>
-      </Card>
-    </div>
-  )
-}
 
 

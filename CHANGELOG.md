@@ -32,6 +32,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **推送前的只读预览不再偷偷打包本地插件**：配置里有本地来源（`link:` / `file:`）的插件时，点「推送」后的预览不再执行打包 —— 体积很大的本地插件不会再把预览卡住，也不会连带把这段时间里其它写操作一起挡住；预览若无法判定某个分区是否有变化，会直接说明原因。（issue #91）
+  **Push preview no longer packs local plugins behind your back**: with locally sourced (`link:` / `file:`) plugins in your config, the pre-push preview no longer runs packing — a very large local plugin can no longer hang the preview and block other actions while it runs; when a section's changes cannot be determined, the preview says why instead of guessing.
+- **推送预览里的「有变化」不再清一色全有**：此前它对每个分区都显示「有变化」；现在与上次同步的基线真实比对，没动过的分区如实显示「无变化」。（issue #91）
+  **"Changed" in the push preview is no longer always everything**: it used to mark every section as changed; it now really compares against the last synced baseline, so untouched sections show as unchanged.
+- **「工作区」分区到底带走了什么，现在写得清楚**：导出/导入选择器里，「工作区」下面直接标注「路径 / 标题 / 会话归属（不含目录内文件）」—— 它迁移的是工作区登记表，不会把工作目录里的资料一起打包。（issue #90）
+  **What the "Workspaces" section actually carries is now spelled out**: the export/import picker labels it as path / title / owning sessions (no files inside those directories) — it migrates the workspace registry, not the contents of your working directories.
+
 ## [0.1.73] - 2026-10-15
 
 > **本版主题**：**回滚点不再拖垮宿主** —— 回合自动留点改为默认关闭，台账改成一条一写并带体积上限（此前能涨到几百 MiB，把宿主反复拖到内存溢出退出），关掉开关后聊天里的回退入口一并收起；同时第三方插件的数据也能一起迁移了。

@@ -75,3 +75,17 @@ test('pushPreviewView: 含凭据推送 → 显式提示「本次含真实凭据�
 test('pushPreviewView: null 预览 → null（无弹窗内容）', () => {
   assert.equal(pushPreviewView(null, t), null);
 });
+
+test('pushPreviewView: 引擎告警（分区导出失败已跳过 / 本地源插件未打包 ⇒ 不做「无变化」断言）如实上屏（issue #91）', () => {
+  const withHint = pushPreviewView(okPreview({ message: 'plugins 与基线不可比' }), t);
+  assert.ok(withHint !== null && withHint.ok);
+  assert.equal(withHint.hint, 'plugins 与基线不可比');
+
+  const noHint = pushPreviewView(okPreview(), t);
+  assert.ok(noHint !== null);
+  assert.equal(noHint.hint, '', '无告警时不占版面');
+
+  const failed = pushPreviewView({ ok: false, sections: [], remoteSnapshotCount: 0, encrypted: false, credentialsIncluded: false, message: 'boom' }, t);
+  assert.ok(failed !== null && !failed.ok);
+  assert.equal(failed.hint, '', '错误分支只用 error，不重复显示同一句');
+});
