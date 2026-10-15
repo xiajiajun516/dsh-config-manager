@@ -820,7 +820,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
     块头与正文同档字号（`.diffHunkRow td` 不再单独写 11px），文件头 `.diffFileHead` 同 12px；
     列头 `.diffNoHead` 仍是 11px 的小字幕。正文仍 `pre-wrap` 折行（参考图是横向滚动不折行 ——
     `table-layout: fixed` 下改成不折行会让两栏互相挤压，不采用）。
-    **上限**：单文件最多渲染 400 行对（超出显示「已截断」提示）；容器复用 `.diffScroll`，
+    **不再截断渲染**（2026-10-15 用户：「为什么最多只能加载 400 行？我需要能完整的加载」）：宿主给多少行就画多少行 ——
+    到渲染层的数据已被宿主侧的单文件字节上限收窄（回滚预览 1 MiB / 恢复计划 `maxSideBytes`），
+    渲染层再砍一刀只会让同一份数据少半截、而用户无从看到剩下的（原先「最多 400 行对」的上限与
+    「只画了前 N 行」话术连同字典键一起删除）。容器复用 `.diffScroll`，
     但**高度按上下文分两档**（2026-10-14 用户实测「22px 行高下一屏只剩 10 行」）：`.diffPane .diffScroll`
     吃满可用高度（`min(80vh, 800px)`，与市场审阅步内区同一上限），**弹窗内**
     （`.dialogCard .diffPane .diffScroll`）回落到列表那条 380px —— 卡片本身只有 600/620px 高，
@@ -842,7 +845,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   - 数据来源：宿主 `POST /restore`（dryRun）附带 `changeSummary`（轻量统计，带读取上限），
     单文件 hunks 由 `POST /snapshots/file-diff` 在点开时懒加载 —— 会话类快照几百个文件也不拖死弹窗。
   - 分层：分组/统计在 `src/ui/restore-plan-view.ts`、双栏对齐在 `src/ui/diff-view.ts`（纯函数 + node 单测）；
-    行级 diff 内核 `src/utils/line-diff.ts`（零依赖 Myers，超预算降级为整块替换）；
+    行级 diff 内核 `src/utils/line-diff.ts`（零依赖 Myers，**超预算才**降级为整块替换）；
+    **保真度预算**：编辑距离上限缺省 2000、回滚单文件按需查看 4000（400 那条老口径会让几千行文件的普通改动
+    一律变成「整块替换」＝用户看到的假信号）；预算的时间与内存实测（≤115 ms / RSS ≤+175 MB）与取证见
+    `docs/lessons/recovery-console.md`，再往上要换线性空间算法而不是继续加预算；
     组件 `src/client/library/RestorePlanView.tsx` 只装配（v3 随产物库归位搬移）。
   - **双栏表已抽成共享原语**（2026-10-12）：`src/client/common/DiffTable.tsx` —— 快照恢复计划与
     「回退预览 → 查看」共用同一副骨架（`.diffTable` / `.diffScroll` / `.diffCell*` / `.diffHunkRow` /

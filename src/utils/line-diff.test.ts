@@ -150,6 +150,18 @@ test('D-12 重复行不误判（LCS 而非逐行对齐）', () => {
   assert.ok(r.added + r.removed <= 2, '相同行的移动不应产生大量伪变更');
 });
 
+test('D-14 缺省预算够到「大文件改多处」：旧口径 400 会降级，缺省 2000 给最小脚本（2026-10-15）', () => {
+  const before = Array.from({ length: 1200 }, (_, i) => `line ${i}`).join('\n');
+  const after = Array.from({ length: 1200 }, (_, i) => (i % 3 === 0 ? `changed ${i}` : `line ${i}`)).join('\n');
+  const old = diffLines(before, after, { maxD: 400 });
+  assert.equal(old.degraded, true, '旧口径（400）在这份输入上会退化成整块替换 —— 那正是用户看到的提示');
+  const now = diffLines(before, after);
+  assert.equal(now.degraded, false, '缺省预算必须能求出最小编辑脚本');
+  assert.equal(now.added, 400);
+  assert.equal(now.removed, 400);
+  assert.equal(apply(before, now), norm(after), '非降级路径同样要能回放重建新侧');
+});
+
 test('D-13 looksBinary：NUL 字节判定；纯文本与空串为 false', () => {
   assert.equal(looksBinary('plain text\nwith lines'), false);
   assert.equal(looksBinary(''), false);

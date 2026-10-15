@@ -116,7 +116,6 @@ function DiffPane({ state, t }: { state: DiffState; t: TranslateNS<'config-manag
         hunks={diff.hunks}
         beforeLabel={t('snapshots.plan.beforeLabel')}
         afterLabel={t('snapshots.plan.afterLabel')}
-        truncatedNotice={(shown, total) => t('snapshots.plan.diffTruncated', { shown: String(shown), total: String(total) })}
         sanitize={redact}
       />
     </div>

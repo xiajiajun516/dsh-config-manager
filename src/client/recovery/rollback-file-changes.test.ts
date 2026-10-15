@@ -21,6 +21,9 @@ const PANE = join(HERE, 'RollbackDiffPane.tsx')
 const TABLE = join(HERE, '../common/DiffTable.tsx')
 const TAB = join(HERE, '../chat/RollbackDiffTab.tsx')
 const CSS = join(HERE, '../config-manager.module.css')
+const PLAN = join(HERE, '../library/RestorePlanView.tsx')
+const RECOVERY_LOCALES = join(HERE, 'recovery-locales.ts')
+const CLIENT_LOCALES = join(HERE, '../locales.ts')
 const PROXY = join(HERE, '../index.ts')
 
 test('清单结构：容器 + 两类行 + 图标 + 目录弱化 + 右对齐统计（源级）', () => {
@@ -75,6 +78,20 @@ test('两处调用同一份渲染：聊天预览 + 设置页回滚卡预览（�
   assert.match(card, /RollbackDiffPane state=\{inlineDiff\.state\}/, '设置页没有右侧栏：差异必须在弹窗内画出来')
   assert.match(card, /css\.planScroll/, '几百个文件的清单必须限高内滚')
   assert.doesNotMatch(card, /rollbackPreviewRows\(/, '预览弹窗不再画工作区/会话计数面板（与聊天预览同一屏）')
+})
+
+test('差异表全量渲染：渲染层不再有行数上限，也不再有「只画了前 N 行」话术（源级，2026-10-15）', () => {
+  const table = readFileSync(TABLE, 'utf8')
+  assert.doesNotMatch(table, /DIFF_ROW_CAP|rowCap|truncatedNotice/, '渲染层不得再留行数上限（用户 2026-10-15：我需要能完整的加载）')
+  assert.match(table, /group\.rows\.map\(/, '每个块的行必须全部画出来')
+  const pane = readFileSync(PANE, 'utf8')
+  assert.doesNotMatch(pane, /truncatedNotice/, '回滚预览不再传截断文案')
+  assert.match(pane, /rollback\.diff\.degraded/, '「整块替换」提示保留：那是算法保真度的事实，不是渲染截断')
+  const plan = readFileSync(PLAN, 'utf8')
+  assert.doesNotMatch(plan, /truncatedNotice/, '恢复计划不再传截断文案')
+  for (const file of [RECOVERY_LOCALES, CLIENT_LOCALES]) {
+    assert.doesNotMatch(readFileSync(file, 'utf8'), /diffTruncated|diff\.truncated/, '截断话术必须删除：没有上限就不该留这句话')
+  }
 })
 
 test('差异表文件头：只画路径文字，不画文件类型图标（源级，2026-10-14 用户第 2 次改口径）', () => {

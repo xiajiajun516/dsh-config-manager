@@ -69,7 +69,6 @@ export function RollbackDiffPane({ state, rt, title, fill }: RollbackDiffPanePro
         title={title}
         beforeLabel={rt('rollback.diff.before')}
         afterLabel={rt('rollback.diff.after')}
-        truncatedNotice={(shown, total) => rt('rollback.diff.truncated', { shown: String(shown), total: String(total) })}
         sanitize={redact}
       />
     </div>

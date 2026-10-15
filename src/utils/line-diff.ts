@@ -11,6 +11,12 @@
  * （maxLines / maxD）时**降级为整块替换**（全删 + 全增），保证任何输入都有确定
  * 耗时的输出 —— 大文件不会卡死宿主。
  *
+ * 预算怎么定（2026-10-15 真机实测，本仓 rollback-point.ts 的一对版本）：
+ *  · 时间是 (N+M)·D 量级：D=4000、两侧合计 ~7500 行时 ≈ 70 ms（D=8000 ≈ 115 ms）；
+ *  · 内存是 O(D²)·4B（回溯要逐轮留 V 快照）：D=2000 时 RSS +~30 MB、D=4000 +~100 MB、D=8000 +~175 MB。
+ *  ⇒ 缺省取 2000（覆盖「大文件只改了几处」这一大类）；单文件按需查看的调用方可以往上调，
+ *    到 4000 仍是一次点击可接受的开销；再大就该换线性空间算法，而不是继续加预算。
+ *
  * 行为约定：
  *  - 行尾 \r\n 归一为 \n；文本末尾的换行不产生"空行"（行数 = 换行符语义）。
  *  - 仅空白差异同样是差异（不做 ignoreWhitespace）。
@@ -53,13 +59,13 @@ export interface DiffOptions {
   context?: number;
   /** 参与 Myers 的变更区行数上限（两侧合计；超出 → 降级整块替换） */
   maxLines?: number;
-  /** Myers 最大编辑距离 D（超出 → 降级整块替换） */
+  /** Myers 最大编辑距离 D（超出 → 降级整块替换）；越大越接近最小编辑脚本，内存随 D² 增长（见文件头） */
   maxD?: number;
 }
 
 const DEFAULT_CONTEXT = 3;
-const DEFAULT_MAX_LINES = 6000;
-const DEFAULT_MAX_D = 400;
+const DEFAULT_MAX_LINES = 20000;
+const DEFAULT_MAX_D = 2000;
 
 /** 文本 → 行数组（CRLF 归一、尾换行不产生空行）。 */
 export function splitLines(text: string): string[] {

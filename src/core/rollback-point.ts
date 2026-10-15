@@ -270,6 +270,14 @@ export const ROLLBACK_PREVIEW_DIFF_TOTAL_WORK = 32_000_000
 export const ROLLBACK_FILE_DIFF_LIMITS = {
   maxFileBytes: ROLLBACK_PREVIEW_DIFF_MAX_FILE_BYTES,
   context: 3,
+  /**
+   * Myers 编辑距离上限（2026-10-15 用户：不该动辄出现「已按整块替换展示」）。
+   * 实测（本仓 rollback-point.ts 的 4983 行 × 2492 行版本对）：D 在 3000~4000 就能拿到
+   * 最小编辑脚本 —— 耗时 ≤70 ms；代价是回溯的 V 快照 O(D²)，RSS 峰值 +~100 MB。
+   * 缺省那档 400 会让几千行里的普通改动一律退化成「整块替换」，那正是用户看到的那条提示；
+   * 单文件是**按需点开**的一屏，这点内存换「真差异」划算。再大就换算法，不加预算。
+   */
+  maxD: 4000,
 } as const
 
 /** 恢复顺序（工作区在前；工作区失败即中止后面的会话段） */
@@ -3895,7 +3903,7 @@ export class RollbackPointEngine {
     const result = diffLines(
       current === null ? '' : DIFF_TEXT_DECODER.decode(current),
       DIFF_TEXT_DECODER.decode(snapshot),
-      { context: ROLLBACK_FILE_DIFF_LIMITS.context },
+      { context: ROLLBACK_FILE_DIFF_LIMITS.context, maxD: ROLLBACK_FILE_DIFF_LIMITS.maxD },
     )
     return {
       ...view,
