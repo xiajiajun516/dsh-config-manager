@@ -34,6 +34,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **点开「回退」快多了**：预览与回退此前会把记录在案的每个文件都真读一遍再比哈希（3 万+ 文件的工作区点上十几秒）；现在先看文件身份（大小 / 修改时间 / inode）有没有变，没变的直接跳过，只读真正变过的那几条。实测 3.4 万文件的点：预览从 14.2 秒降到 2~3 秒级，回退也省掉同一轮全量读取。
+  **Opening a rewind is much faster**: the preview and the rewind used to read and hash every recorded file (ten-plus seconds on a 30k-file workspace); they now check each file's identity (size / mtime / inode) and skip the untouched ones, reading only what actually changed. Measured on a 34k-file point: the preview went from 14.2 s to the 2–3 s range, and a rewind saves the same full read.
+- **不再因为「跳过了几个符号链接」就报警**：留点里被设计跳过的东西（符号链接不跟随、文件级忽略等）此前会让每个点都显示「有一态留得不完整（回退可能不完整）」；现在只有真的缺内容（被上限截断、读不出、捕获期间被改写）才提示，跳过的条目照旧逐条留痕。
+  **No more "incomplete capture" warning just because a few symlinks were skipped**: entries skipped by design (symlinks are not followed, file-level ignores) used to make every point report an incomplete state; the warning now appears only when content is genuinely missing (cut off by a limit, unreadable, or rewritten while capturing), while skipped entries are still recorded one by one.
+- **回退超时的提示不再断言「没做完」**：客户端超时只代表客户端不再等，服务端可能已经完成；提示改成「过程可能仍在后台进行，请先刷新预览确认」。
+  **The rewind timeout message no longer claims the work failed**: a client timeout only means the client stopped waiting, and the server may have finished; the message now says the process may still be running in the background and to refresh the preview first.
 - **大仓库的留点不再只扫一小半**：捕获改成并发读写后，本机 34k 文件 / 580 MiB 的工作区从「30 秒只够扫 1/5」变成第一个点约 11 秒记下 2 万条、**第二个点起约 4–11 秒记下全部 3.4 万条且不再标注截断**（已知内容不再重复读取、也不占每回合的读取额度）；没扫完的回合也不再重复扫同一批，而是接着补上次缺口；预算还会自己升降（被截断就放宽、扫得快就收紧）。
   **Big repositories are no longer only half captured**: capture now reads and writes concurrently, so a 34k-file / 580 MiB workspace that used to fit only a fifth of itself into a 30-second budget is now captured in one pass (~19 s the first time, ~4 s per turn afterwards); when a pass does not finish, it picks up where it left off instead of rescanning the same prefix, so coverage climbs to 100% over turns, and the budget itself adapts (wider when truncated, tighter when fast).
 - **忽略一个目录不再等于关掉全部删除**：被忽略、读不出、以及没来得及扫到的子树现在只影响它们自己，范围之外的「留点后新建」路径照常被删。
@@ -44,8 +50,14 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Push preview no longer packs local plugins behind your back**: with locally sourced (`link:` / `file:`) plugins in your config, the pre-push preview no longer runs packing — a very large local plugin can no longer hang the preview and block other actions while it runs; when a section's changes cannot be determined, the preview says why instead of guessing.
 - **推送预览里的「有变化」不再清一色全有**：此前它对每个分区都显示「有变化」；现在与上次同步的基线真实比对，没动过的分区如实显示「无变化」。（issue #91）
   **"Changed" in the push preview is no longer always everything**: it used to mark every section as changed; it now really compares against the last synced baseline, so untouched sections show as unchanged.
-- **浅色主题下的用户消息气泡又看得见了**：此前它在浅色主题里与页面底色相同、看起来像没有气泡；现在气泡底色跟随 DSH 自己的气泡色，消息里文件卡的描边也一并调回 DSH 的深浅（比原来清楚一档），深色主题不受影响。
+- **浅色主题下的用户消息气泡又看得见了**：此前它在浅色主题里与页面底色相同、看起来像没有气泡；现在气泡底色跟随 DSH 自己的气泡色（万一这个主题色缺失，也会回落到一档看得见的中性底色，而不是变透明），消息里文件卡的描边也一并调回 DSH 的深浅（比原来清楚一档），深色主题不受影响。
   **User message bubbles are visible again on the light theme**: they used to share the page background colour and looked like they had no bubble at all; the bubble now follows DSH's own bubble colour and a message's file-card outline is back to DSH's own border strength, with the dark theme unaffected.
+- **自己消息里的引用 / 技能标记与文件图标现在和 DSH 同款**：接管用户消息气泡后这两处此前是简化版（技能名一个都不显示、文件只有扩展名文字徽标）；现在改用 DSH 自己的画法 —— 引用会话与技能名显示成可点开的标记，文件显示按类型着色的图标；DSH 版本较老、拿不到这些画法时，仍回落到原来的简化版（不会空白，也不会假装画过）。
+  **Reference / skill chips and file icons in your own messages now match DSH**: after we took over the user-message bubble these two stayed simplified (skill names were not shown at all, files only got an extension badge); they now use DSH's own rendering — session references and skill names become clickable chips and files get their type-coloured icon — falling back to the simplified version on older DSH builds where those pieces are unavailable.
+
+- **回退的文件预览现在跟着侧边栏的高度走**：此前差异区最多只长到窗口高度的八成（大屏上等于一个固定的 ~800px 上限），侧边栏比它高时底下就留一段空白；现在它随侧边栏一起变高变矮，只有宿主没给高度时才回落到一条视口上限；同一屏里的「加载中 / 一致 / 看不了 / 读失败」也改成占满整块，状态切换时高度不再跳动。
+
+  **The rewind file preview now follows the sidebar's height**: the diff area used to stop at 80% of the window height (a fixed `~800px` cap on large screens), leaving blank space whenever the sidebar was taller; it now grows and shrinks with the sidebar, falling back to a viewport cap only when the host gives no height, and the "loading / identical / cannot compare / read failed" states fill the same block so the height no longer jumps between states.
 
 - **大工作区里「留点后新建的文件」不再一律不删**：一次留点没扫完整个工作区时，回退预览此前会直接放弃整批删除并提示「证明名单不完整」；现在只要目录确实都走查过，留点之后新建的文件照常被删掉，只有真正没走查到的目录才保持原样（预览仍会说明原因）。
   **Files created after a point are no longer always kept in large workspaces**: when a point could not scan the whole workspace, the rewind preview used to give up on the whole deletion batch and warn that its proof list was incomplete; as long as the directories were in fact walked, files created after the point are removed again, and only directories that were genuinely never walked are left alone (the preview still says why).
@@ -69,6 +81,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **回滚点的「清单」改成增量，磁盘占用大幅下降**：每个点不再重复存一遍「3 万多个文件的完整清单」，只存相对上一点的改动（改了几条就存几条）；实测稳定状态下每点从约 12 MB 降到约 11 KB，全量锚点也小了约五分之一。回退预览、回退本身、清理缓存看到的仍然是完整清单，**任何一个点仍然可以单独回退**（不依赖其它点还在不在）。
+  **Rollback-point manifests are now incremental, cutting disk usage sharply**: each point no longer stores a full listing of every 30k+ file; it stores only what changed since the previous point (a handful of entries on a quiet turn). Measured: about 12 MB per point down to about 11 KB in steady state, with full anchors about a fifth smaller. Previews, rewinds and cache cleanup still see the complete file listing, and **every point remains independently restorable**.
 - **回滚点默认不启用**：它跟配置备份、同步是两件事，此前却随插件默认运行；升级后要显式打开才会继续留点。（issue #88）
   **Rollback points are off by default**: they are unrelated to config backup and sync yet used to run automatically; after upgrading you must enable them explicitly for points to be kept again.
 - **回滚点库不再越用越大**：每次留点只写这一条记录，未变化的工作区清单按内容去重，超出体积预算时自动淘汰最旧的自动点 —— 单次留点的开销不再随历史总量增长。（issue #89）

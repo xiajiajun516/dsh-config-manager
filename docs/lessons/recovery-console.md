@@ -57,9 +57,20 @@
 
 - **症状**：对话回退相关改动上线后，**浅色主题**下聊天里的用户消息**没有气泡**（文字直接浮在页面底色上）；深色主题正常。
 - **根因（令牌取错层，不是「观感近似」）**：我们接管 `conversation.chat.node` / `user` 后自复刻那条气泡，底色写的是 `--cm-surface-2`（= `--dsw-alias-bg-layer-2`）。宿主真机令牌链（`dsh-client-ui-theme/lib/client.js` 的 `design-platform.css` 内联块）：`body{--dsw-alias-bg-layer-2:var(--dsw-static-neutral-bluish-00)}` + `body{--dsw-static-neutral-bluish-00:#fff}` ⇒ 浅色 = `#fff`；页面底 `--dsw-alias-bg-base` = 同一个 `neutral-bluish-00` = `#fff`（**无色差**）；宿主自己的气泡底 = `--dsw-specific-bubble` = `--dsw-static-deepseek-50` = **`#edf3fe`**。深色下 `--dsw-alias-bg-layer-2` 与 `--dsw-specific-bubble` **恰好同值**（`--dsw-static-neutral-bluish-850`）⇒ **只在浅色暴露**。这条差距当时被登记成「附加观感差异（已追认，不修）」—— 定性错了：不是差一点点，是**不可见**。
-- **改法**：新增语义色 `--cm-chat-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));`（§1 的 `body` 与 `.chatEntryScope` 各声明一次），`.chatBubble` 只消费它。**不硬编码 `#edf3fe`**（宿主主题可换，跟随 token 才能自动同步）；**兜底不可省**（宿主删档时无兜底的 `var()` 会让整条声明失效 → 退回 `transparent`，那才是真的消失）。
+- **改法**：新增语义色 `--cm-chat-bubble`（§1 的 `body` 与 `.chatEntryScope` 各声明一次），`.chatBubble` 只消费它。**不硬编码 `#edf3fe`**（宿主主题可换，跟随 token 才能自动同步）；**兜底不可省、且必须是可见色**：无兜底的 `var()` 在宿主删档时会让整条声明失效 → 退回 `transparent`；兜成 `--dsw-alias-bg-layer-2` 也没用（浅色下它**同样**是 `#fff`，气泡照样消失）—— 现为 `color-mix(in srgb, var(--cm-text-1) 12%, transparent)`（两个主题都可见；对照 XSJUSTC/dsh-rewind 的 `rgba(127,127,127,.14)`）。
 - **可复用判据**：复刻宿主外观时，凡「我们的近似 token 与宿主 token 在**某一个主题**下取值相同」的巧合，都要在**两个主题下各算一遍**再判定差距是否可接受 —— 本缺陷正是被「深色恰好同值」掩盖成「只是浅一点的差异」。定案前先做一张「浅色宿主值 vs 浅色我们值」的对比表。
 - **护栏**：`src/client/chat/chat-entry-view.test.ts` 的源码级用例（宿主 token + 兜底 + `.chatEntryScope` 重声明 + `.chatBubble` 不裸写 `--dsw-*`）；产物核对 = `npm run build` 后 `lib/client.js` 含该 token 声明。登记见 `docs/spec/known-gaps.md` G-39 增量（五）。
+
+## 其他回退插件怎么解决「每条用户消息一个入口」，以及我们抄了什么（2026-10-15）
+
+- **问题**：本插件要「每条用户消息一颗 ↺」，而宿主 `conversation.chat.node` 的 user key 是 keyed 遮蔽位且**没有 children 表** ⇒ 只能接管。接管有两个代价：① 自绘气泡（颜色 / 图标 / 正文都得自己复刻）；② user cell **单占**（与别的接管者不能共存）。
+- **对照（三家源码克隆到 `.tmp/ext/` 逐字读；第四家 clone 失败）**：
+  - `Anionex/dsh-turn-rewind`：**不接管**。portals 组件挂在 `conversation.session.header.actions`（list 槽位、id 唯一），再 `createPortal` 进宿主自己的动作行 —— 锚点 `[data-chat-flow-kind="user"][data-chat-anchor-key]` → `[class*="actions"]`，用 `MutationObserver(document.body, {childList,subtree})` + 微任务合并刷新；`[data-time-hover-root="true"]` 只作老客户端兜底。**本机实测（0.2.0-rc.2）**：`data-chat-anchor-key` 5 处、`data-chat-flow-kind` 19 处、动作行类名 `xD_KDq_actions` 命中 `[class*="actions"]`，`data-time-hover-root` 已消失 ⇒ 这条路在本机可用。代价 = 依赖宿主 DOM 结构与类名后缀，宿主改版即断（它的 CHANGELOG 有适配 0.1.2-alpha 客户端的记录）。
+  - `XSJUSTC/dsh-rewind`：**与我们同构** —— `slots.register({ name:'conversation.chat.node', key:'user', priority:-1 })`，**并且也接管 `steering`**；每个注册各自 `tryRegister` try/catch，注释逐字「Keyed slots throw on a duplicate same-key/same-priority registration (e.g. a client HMR rebuild racing its own teardown)」。气泡底 `var(--dsw-specific-bubble, rgba(127,127,127,.14))` —— **宿主 token + 可见兜底，没有我们那个白底白背景 bug**（反向验证了 2026-10-15 的修法方向）。
+  - `Arbeiter-bit/dsh-reedit`：**同样接管**（注释：「the shipped renderer keeps its action row internal and exposes no hook」），但正文用**运行时** `require('@deepseek-ai/dsh-client-ui-primitives').projectUserText` 渲染（拿不到退纯文本），并用 `props.openFile` / `props.openSkill` 让 chip 可点开。
+  - `DDDonzy/dsh-history-rewind`：仓库 404（搜索命中、clone 失败）⇒ **无证据，不猜**。
+- **可复用结论**：① 框架层**不存在**「两个插件共占同一 keyed cell」的机制（同 key + 同 priority 再注册抛错，**最低 priority 渲染**）⇒ 要么一起抢（靠 try/catch 不打挂自己 + 跟宿主 token 保颜色），要么改走 DOM Portal；② 「ui-primitives 包私有、不可导入」**只对构建期 import 成立** —— 运行期插件工厂的 `require` 能命中 shell 的 static module seed（本仓 `RollbackFileIcon` 自 2026-10-12 就在用，只是气泡没用）⇒ 这才是 G-39 差距①②一直没关的真正原因。
+- **本轮落地**：`src/client/common/host-primitives.ts`（帧内惰取门，RollbackFileIcon 改为复用它）+ 正文走宿主 `projectUserText` + 文件卡走宿主 `FileTypeIcon` + user cell **让位探测**（`ctx.slots.entriesOfSlot`）+ 气泡兜底色改**可见** `color-mix`。登记 = `docs/spec/known-gaps.md` 增量（六）、规则 = `DESIGN.md` 聊天入口节。
 
 ## 回退成功但子会话打不开：抽方法丢 receiver（2026-10-11 真机）
 
@@ -460,6 +471,33 @@ checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对
    而**回退只认该点自己记录在案的路径** ⇒ 早先的点永远缺尾部文件。现在解耦：**缓存已知（身份未变 + 对象在仓）的条目一律进记录、不占读预算**，
    `maxFiles` / `maxBytes` 只约束「这一回合新读进来的内容」。因此第二个点起记录就是全量（R-49 钉死）。
 
+
+**清单增量化（2026-10-15 深夜，用户问「工作区记录全部是不是磁盘开销太大」→ 选定「清单增量化」）**：
+- **账单（本机实测 705.9 MB）**：`objects` 511.7 MB / 25,631 份（内容寻址，633,542 条引用 ⇒ 去重 **24.7×**；朴素「每点一份全量」× 31 点 = 17.6 GiB）、
+  `payloads` **179.3 MB / 25 份**（每点一份路径清单，平均 7.7 MB、最大 12.1 MB）、path-cache 6.8 MB、index+records 0.2 MB。
+  结论：**贵的是每点的清单，不是内容** —— 内容已经去重，再改「只记改动」也省不掉那 512 MB（要能回退到任一历史点就得留着那份内容）。
+- **修法**：每点只存「相对**上一份**载荷的增量」（新增/改写条目 + 被删路径），基准由清单条目的 `payloadChain` 保活；
+  读路径由 ledger 的 `resolvePayload` **物化**成完整清单 —— 预览/回退/回收看到的永远是完整 `files`。
+  同时落盘时省掉 `object`（`object ≡ sha256`，读时按 sha 补回）⇒ 全量锚点也小约 1/5。
+- **三条硬边界（都有测试钉住）**：
+  ① **一次留点只读清单**（L-08 / issue #89 那条被消灭的路）⇒ 基准必须来自**本进程内存摘要**（`deltaBase`），绝不读上一份载荷；进程重启后第一次留点落全量锚点，随后继续链。
+  ② **链长上限 `ROLLBACK_DELTA_CHAIN_LIMIT` = 8**：到顶落一个新锚点 ⇒ 物化最多读 1 份全量 + 几份小增量（重建代价有界）。
+  ③ **基准读不出来 ⇒ 该点如实失败**（`record-incomplete`），**绝不返回半份清单** —— 半份清单会被「留点后新建」判据当成绝大多数文件是新建的，回退就会删掉它们（R-54 钉住）。
+  另：工作区与基准**逐条相同**时直接**复用**基准载荷哈希 ⇒ 零额外字节（L-02 的既有不变量不破）。
+- **实测（真机 34,774 条的工作区，每次捕获后读回校验）**：首点全量 **9.56 MB**（旧口径约 12.1 MB，省掉 object）；
+  第二点（其间有大量改写）**1.21 MB**；稳定后第三点 **11.1 KB**、第四点 **11.1 KB 且复用同一份载荷（零写入）**；四点合计 **10.8 MB vs 旧口径约 48.4 MB**。
+  摊薄后每点清单 ≈ 9.6 MB ÷ 8 + 增量（几 KB~几十 KB）⇒ 台账里那 179 MB 的清单预计降到 **20~30 MB** 量级。
+  读回校验：物化后条数与捕获一致（30,629 / 34,774）、`object` 字段全部补回、预览 `overwrite` = 全量条数。
+- **仍未做**：对象仓打包（25,631 个小文件）；遗留 `checkpoints/` 56.9 MB（v3 已不读、需手工清）。
+
+**预览 / 回退的「把整个工作区读两遍」（2026-10-15 晚，用户报「点回退加载太慢」）**：
+- **症状与实测**：对 34,477 条记录的点调 `preview` —— 真机 **14.2 s**，其中约 13 s 全在「逐条 `fs.readFile` 当前内容 + 算 SHA-256」；`previewFileCounts`（行级 diff）只有 34 ms、`planCreatedRemovals` 1.1 s。回退执行同理：阶段 1 先把**每个**对象读出来校验（34k 对象 / 609 MiB），阶段 2 再读一遍当前内容判「是否已一致」——整个工作区读两遍。
+- **修法：身份快路径（预览与执行共用同一条判据）** `unchangedByIdentity`：路径身份（dev:ino:size:mtimeNs:ctimeNs:mode）命中**身份缓存**、且缓存里的 sha/bytes 与记录一致 ⇒ 内容就是留点那一刻那份 ⇒ **不读盘、不算哈希**；预览直接跳过，回退连对象都不读（它本来就不会被写）。身份含 mtimeNs/ctimeNs/ino，改内容必动它们（Windows 上 user 代码改不了 ctime）；**记录指纹被篡改时该判据必然不成立**（缓存 sha 是真算出来的）⇒ 仍走真读+哈希，护栏不退化。
+  同时把预览的逐条判定（bigint `lstat`）并发化（16 路）：34k 条 lstat 从 ~4.4 s（串行）降到 ~1.5 s；行级 diff 仍在**顺序**阶段跑，列表顺序与共享预算保持完全确定。
+- **实测（同一台账、同一台机）**：① 身份被上一轮回退**改写过**的点（34,477 条）：14.2 s → **7.4 s**（其中 14,526 条仍必须真读 —— 身份变了就不能信任缓存）；② **稳态**点（留点后没被批量改写，20,002 条）：**2.08 s**，只读了 239 条 ⇒ 34k 规模约 2.5~3 s。
+- **有意的语义变化**：阶段 1 的对象校验只对**真要写**的条目做 —— 一个「反正用不到」的对象坏掉不再中止整次回退；该文件确实变了、真要用它时照样 `object-missing` / `object-hash-mismatch` 硬失败（R-52 钉住）。
+- **仍未做**：走查（`listChunkFiles` 3,948 次 readdir ≈ 0.6~1.4 s）仍是第二大项；对象仓打包（多 blob 一文件）也仍未做。
+
 **覆盖率收敛（「任何大小都能用」的关键）**：走查顺序改为「**身份缓存里没有的路径排前面**」。身份
 （dev:ino:size:mtimeNs:ctimeNs:mode）未变 ⇒ 后一回合补到的内容**就等于**前一点时刻的内容，所以「跨回合补缺口」
 是**安全**的（不是补一份不准的前像）；稳态成本只与「这回合变化的文件数」成正比。R-46 用「每回合只放行 3 次读」
@@ -476,8 +514,53 @@ checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对
 **捕获竞态**：读完再 stat 一次身份；变了 ⇒ 不进前像（避免把最新内容当旧内容写回），只进 `unreadableFiles`
 —— 它本身是证明名单成员，因此绝不被当成「新建」删掉。
 
+
+**真机验收回执后的两条口径修正（2026-10-15 晚，独立验收会话的真机报告）**：
+- **降级口径收窄**：26 个真机点里，覆盖完整的那些（files=34,477、truncated=false）仍被标 capture-degraded，
+  唯一成因是 skippedCount=10，而那 10 条全是**设计内**跳过（符号链接 / fixture 的 outside-link）。degraded 改为只看
+  「真的缺内容」：`truncated || unreadableDirs || unreadableFiles`。**为什么能去掉 skippedCount**：文件数 / 总字节 / 单文件上限 /
+  时间预算挡下的每一条都同时置 `truncated`（且逐条留痕），读不出与捕获竞态进 `unreadableFiles`；剩下的 reason
+  （`link` / `not-a-file` / `ignored` / `self-store` / `missing`）都是「不跟随 / 不收录」的设计内跳过，
+  既缺不了内容也不该回退它们。护栏 R-50（文件级忽略 ⇒ 不降级但必须逐条留痕；对照超单文件上限 ⇒ 降级 +
+  `capture-truncated`），R-19 末段同步改为「链接跳过 ⇒ 不降级」；文案 `rollback.code.capture-degraded` 不再提「链接」。
+- **回退的 60 s 超时是验收脚本自己的**：客户端 recovery 族早就是 `LONG_REQUEST_TIMEOUT_MS`（5 分钟，与宿主
+  `ROUTE_TIMEOUT_MS` 对齐），E2E 里的 60 s 来自 PowerShell/curl 的默认值；服务端在客户端超时后完成属正常。
+  仍补了一处诚实性：`error.recoveryTimeout` 文案从「恢复过程未完成，请重试」改为「过程可能仍在后台进行，
+  请先刷新预览确认」——**客户端超时不等于服务端没做完**。
+
 **仍未做（如实登记）**：① 对象仓打包（多 blob 一个文件）以继续压冷启；② `UV_THREADPOOL_SIZE`
 （进程级、插件内设置不可靠）；③ 「哪些目录没有前像」的逐范围 UI（当前只有计数 + 逐条拒删清单）。
 
+## 回退文件预览的侧栏高度：同特异性 CSS 的顺序决胜（2026-10-15 用户反馈 + headless 实测）
 
+**症状**：聊天里「↺ 回退 → 查看」开进 DSH 右侧栏的差异标签页，高度不跟侧栏走 —— 差异区停在一个固定高度，
+侧栏更高时底部留白（用户原话：「不能自适应侧边栏的高度」，期望「回退文件预览高度 === 侧边栏的高度」）。
 
+**根因**：`.diffPaneFill .diffScroll`（fill 档，写给侧栏标签页的限高）与 `.diffPane .diffScroll`（列表量级的
+`min(80vh, 800px)`）**特异性都是 (0,2,0)**，而后者写在文件后面 ⇒ **顺序决胜**，fill 档的 `max-height` 被盖掉；
+于是无论侧栏多高，滚动内容最多长到 min(80vh, 800px)。注意**面板根元素本身没坏**：`.diffPaneFill{height:100%}`
+在宿主定高链上仍然撑满（headless 实测 pane = tabBody = 800px），坏的是它**里面那一条**（表格区）。
+
+**宿主高度链（源码核实，`D:/Apps/DSH/resources/app.asar` 0.2.0-rc.2）**：
+`@deepseek-ai/dsh-client-ui-sidebar-right/lib/client.js` → `.panel{position:absolute;top:0;bottom:0;display:flex;flex-direction:column}`
+→ `.panelBody{flex:auto;min-height:0;display:flex}` →（dockkit DockLayout）→ `TabSlot` 渲染的
+`div.tabBody{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}`（带 `data-sidebar-right-tab`），
+我们的组件就是它的直接子节点（`renderSlot` 不额外包一层 DOM）。宿主自带的侧栏面板（如 `ui-sidebar-files` 的 `.root`）
+写的是 `height:100% + flex:auto + min-height:0`（**没照抄 flex:auto，因为实测这条不改变结果**：tabBody 定高时
+`height:100%` 已经够，定高链断掉时 flex:auto 也撑不起来）。
+
+**修法**：把 `.diffPaneFill .diffScroll` 那条**移到 `.diffPane .diffScroll` 与 `.dialogCard .diffPane .diffScroll`
+之后**（保持 (0,2,0) 靠顺序赢；`.dialogCard` 那条 (0,3,0) 仍只作用于弹窗，fill 档不进弹窗），只留
+`max-height: calc(100vh - 90px)` 作为「宿主没给高度」的视口兜底；同时 `RollbackDiffPane` 的撑满档改成
+**五种出口（加载 / 读失败 / 结构化拒绝 / 看不了 / 一致 / 有差异）都套同一个整块容器** —— 只让「有差异」撑满时，
+其余状态会缩成一行、一屏高度来回跳。
+
+**验证（headless Edge，直接跑仓库真实 CSS 的两种顺序）**：`msedge --headless=new --dump-dom`，宿主链复刻成
+`.panel/.panelBody/.dockPane/.tabBody`，侧栏 800px、视口 908px：
+- 修前顺序：`tabBody=800 pane=800 scroll=726`（726 = 80vh，底部空 74px）；
+- 修后顺序：`tabBody=800 pane=800 scroll=778`（778 = 800 − 文件头，刚好那一屏）。
+生成脚本 `/tmp` 级的探针页面留在 `.tmp/sidebar-height-probe.html`、`.tmp/gen2.cjs`（临时目录，不进仓库）。
+**真机侧栏未复测**（桌面 app 装的是 npm 上的 0.1.73，本地 lib 产物要重新安装才会被宿主加载）—— 如实登记。
+
+**守卫**：`src/client/recovery/rollback-file-changes.test.ts` 新增源级断言 —— fill 档限高必须排在列表量级之后、
+fill 档不得再出现 `min(80vh, 800px)`、撑满档五个出口都经 `shell(...)`。
