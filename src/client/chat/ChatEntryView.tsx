@@ -30,6 +30,7 @@ import {
   buildChatEntrySafeRow,
   buildChatEntryView,
   chatEntryButtonState,
+  projectChatEntryTextWithHost,
   chatEntryTurnPhase,
   planChatEntryAttachments,
   lookupPointForTurn,
@@ -41,6 +42,7 @@ import {
   type ChatPointLookup,
 } from './chat-entry-view.ts'
 import { ChatPointWindowController, type ChatPointWindowState } from './chat-point-window.ts'
+import { hostFileTypeIcon, hostUserTextProjector } from '../common/host-primitives.ts'
 import type { ArchiveOutcome } from './rollback-entry-view.ts'
 import type { ChildOpenState } from './rollback-entry-view.ts'
 import type { RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
@@ -93,11 +95,21 @@ export interface ChatEntryViewInjected {
  */
 export type ChatEntryViewProps = PropsRuntime<'conversation.chat.node', 'user'> & PropsLocale<'config-manager-chat'> & ChatEntryViewInjected
 
-/** 文件卡：文件名 + 扩展名徽标 + 体积（扩展名徽标 = 类型图标的诚实兜底，见能力对照表）。 */
+/**
+ * 文件卡：类型图标 + 文件名 + 体积。
+ *
+ * 类型图标**优先用宿主自己的** `FileTypeIcon`（ui-primitives，帧内惰取 —— 见 common/host-primitives.ts）；
+ * 拿不到（老宿主）才回落我们自己的**扩展名徽标**（口径与宿主 fileExtension 一致，见 fileExtensionOf）。
+ * 2026-10-15：此前一律走徽标，是因为「ui-primitives 包私有不可导入」只对**构建期 import** 成立 ——
+ * 运行期 require 是生态通行做法（dsh-reedit / dsh-better-sidebar / 本仓 RollbackFileIcon 都这么做）。
+ */
 function FileCard({ file, size }: { file: ChatEntryFile; size: string | null }) {
+  const DshIcon = hostFileTypeIcon()
   return (
     <span className={css.chatFileCard} title={file.name !== '' ? file.name : undefined}>
-      {file.ext !== null && <span className={css.chatFileExt}>{file.ext}</span>}
+      {DshIcon !== null && file.name !== ''
+        ? <DshIcon path={file.name} size={14} />
+        : file.ext !== null && <span className={css.chatFileExt}>{file.ext}</span>}
       <span className={css.chatFileName}>{file.name !== '' ? file.name : '?'}</span>
       {size !== null && <span className={css.chatFileMeta}>{size}</span>}
     </span>
@@ -145,6 +157,9 @@ function ChatEntryCopyAction({ text, t }: { text: string; t: TranslateNS<'config
 interface ChatEntryBodyProps extends ChatEntryViewInjected {
   node: unknown
   sessionId: string
+  /** 宿主的文件 / 技能打开器（给宿主正文投影的 chip 用；形态不符时投影自己会当没有）。 */
+  openFile?: unknown
+  openSkill?: unknown
   /** 宿主图片渲染位（SlotMap 的 keyProps 把返回值声明成 unknown ⇒ 用它当 `MessageImagesRenderer` 必须过一层窄化）。 */
   renderMessageImages?: unknown
   t: TranslateNS<'config-manager-chat'>
@@ -159,11 +174,12 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
  *    （`projectChatEntryText`），且 `data.referenceLabels` 非空时渲染**宿主的引用汇总行**
  *    （见下方 `css.chatEntryReference` + `t('chat.entry.referenceSummary')` 那段，文案与宿主
  *    `引用会话 · {labels}` 逐字同义）。**仍有的差距**只有 chip 的**外观与可点开**（已追认）。
- *  · **技能（skillNames）**：**仍不渲染** —— 宿主交给 ui-primitives 的 `projectUserText` 在正文内部
- *    把它渲染成 chip（包私有、不可导入）⇒ 我们不为技能产出任何界面元素（不编造内容）。
- *  · 文件类型图标：宿主用 ui-primitives 的 FileTypeIcon（包私有）⇒ 我们用**扩展名徽标**兜底；
- *  · 气泡底色：宿主直接用 `--dsw-specific-bubble`，本仓库 token 层没有这一档 ⇒ 用 `--cm-surface-2`
- *    （亮/暗主题下都是「比底更强的面」），不改 DESIGN 体系、不新增 token。
+ *  · **技能（skillNames）与引用 chip**：2026-10-15 起正文**优先交给宿主自己的** `projectUserText`
+ *    （ui-primitives 帧内惰取，见 common/host-primitives.ts）——技能与引用渲染成 chip，`openFile` /
+ *    `openSkill` 可用时还能点开；拿不到原语（老宿主）就回落我们的纯文本投影，**不编造内容、不留空白**。
+ *  · 文件类型图标：同样优先宿主的 `FileTypeIcon`，拿不到才回落到**扩展名徽标**兜底；
+ *  · 气泡底色：`--cm-chat-bubble`（= 宿主 `--dsw-specific-bubble`，2026-10-15 之前误用 `--cm-surface-2`
+ *    ⇒ 浅色主题下与页面同色、气泡看不见；详见 DESIGN.md §15b 与 css 里那两条定义行的注释）。
  */
 /**
  * 订阅入口可见性信号（issue #88）。
@@ -177,7 +193,7 @@ function useRollbackEntryEnabled(): boolean {
   return value
 }
 
-function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
+function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
   /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
@@ -254,6 +270,17 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
         : null)
     : <FileCard key={'file:' + String(item.index)} file={item.file} size={item.size} />)
   const hasAttachments = attachmentNodes.some((node) => node !== null)
+  /**
+   * 正文：**优先宿主自己的** `projectUserText`（会话引用 / 技能渲染成 chip，给了打开器就能点开），
+   * 拿不到就回落我们自己的纯文本投影（`bubble.text`，线格式也已换成 label）。
+   * 四条回落判据在纯层（`projectChatEntryTextWithHost`）；投影器**帧内惰取**（老宿主没有原语包 → null）。
+   */
+  const hostText = projectChatEntryTextWithHost(hostUserTextProjector(), bubble.rawText, {
+    sessionLabels: view.referenceLabels,
+    skillNames: view.skillNames,
+    openFile,
+    openSkill,
+  })
   const reasonKey = button.kind === 'disabled' ? button.key : null
 
   return (
@@ -267,7 +294,9 @@ function ChatEntryBody({ node, sessionId, renderMessageImages, t, rt, port, open
           )}
           {bubble.showBubble && (
             <div className={css.chatBubble}>
-              {bubble.text !== '' && <span className={css.chatBubbleText}>{bubble.text}</span>}
+              {bubble.text !== '' && (
+                <span className={css.chatBubbleText}>{hostText === null ? bubble.text : hostText}</span>
+              )}
               {bubble.raw.map((block) => (
                 <RawBlock
                   key={'raw-' + block.id}

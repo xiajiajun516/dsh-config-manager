@@ -46,19 +46,62 @@ export const CHAT_NODE_USER_KEY = 'user'
 export const CHAT_NODE_PRIORITY = -1
 
 /**
+ * 同一个 cell（key=user）当前**会被渲染的那一条**（= priority 最小的那一条）。
+ *
+ * 为什么要读它（2026-10-15，跨插件冲突排查的落地）：`conversation.chat.node` 是 keyed 遮蔽位，
+ * 「最低的渲染」——别的插件若也用 key=user 且 priority 比我们更低（≤ -2），它会赢而我们**静默失效**
+ * （框架不报错）。所以我们在注册**之前**读一次占用：赢家比我们更低就让位并告警，不去抢。
+ */
+export interface ChatNodeOccupant {
+  /** 该条的 priority（宿主缺省 0）。 */
+  priority: number
+  /** 诊断用标识（宿主用 fiber 名盖的戳）；读不到回 null，**绝不猜**。 */
+  registrant: string | null
+}
+
+/** 从 `entriesOfSlot('conversation.chat.node')` 的返回值里读 user cell 的赢家（形状不符一律 null）。 */
+export function chatNodeUserOccupant(entries: unknown): ChatNodeOccupant | null {
+  if (!Array.isArray(entries)) return null
+  let winner: ChatNodeOccupant | null = null
+  for (const entry of entries) {
+    const record = asRecord(entry)
+    const options = asRecord(record?.['options'])
+    if (options === null || options['key'] !== CHAT_NODE_USER_KEY) continue
+    const raw = options['priority']
+    const priority = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
+    const label = record?.['registrant'] ?? options['registrant']
+    const registrant = typeof label === 'string' && label !== '' ? label : null
+    if (winner === null || priority < winner.priority) winner = { priority, registrant }
+  }
+  return winner
+}
+
+/**
  * 槽位登记计划：**只在 0.2 的 keyed 形态时接管**（2026-10-12：入口只剩「每条用户消息」一种形态，
  * 旧的「整回合」档与偏好门已随 chat-entry-pref / chat-entry-mount 一起删除）。
  *
  * 跳过必须是**失败软化**（只丢这一个入口，不动本插件其余槽位、不动宿主启动）：
  *  · `slot-kind-mismatch`：0.1.x 的 ui-chat 把同一 key 声明成别的形态（对照 turnTail 的
- *    list/chain 双形态实测），按 keyed 参数（key/priority）注册会抛。
+ *    list/chain 双形态实测），按 keyed 参数（key/priority）注册会抛；
+ *  · `shadowed`（2026-10-15）：user cell 已被**更低优先级**的条目占住 —— 我们注册也永远轮不到渲染
+ *    （「最低的渲染」），不如让位并如实告警（不静默、也不去抢别人的格子）。
+ *
+ * 注意 `occupant.priority === CHAT_NODE_PRIORITY` **不算遮蔽**：同一 cell 同 priority 只可能有一条
+ * （再注册会抛，由登记处的 try/catch 兜住），所以那时该试的是注册而不是让位。
  */
 export type ChatNodeRegistrationPlan =
   | { kind: 'register' }
   | { kind: 'skip'; reason: 'slot-kind-mismatch'; declared: string | null }
+  | { kind: 'skip'; reason: 'shadowed'; declared: string | null; occupant: ChatNodeOccupant }
 
-export function planChatNodeRegistration(declaredKind: string | null): ChatNodeRegistrationPlan {
+export function planChatNodeRegistration(
+  declaredKind: string | null,
+  occupant: ChatNodeOccupant | null = null,
+): ChatNodeRegistrationPlan {
   if (declaredKind !== 'keyed') return { kind: 'skip', reason: 'slot-kind-mismatch', declared: declaredKind }
+  if (occupant !== null && occupant.priority < CHAT_NODE_PRIORITY) {
+    return { kind: 'skip', reason: 'shadowed', declared: declaredKind, occupant }
+  }
   return { kind: 'register' }
 }
 
@@ -151,6 +194,11 @@ export type ChatEntryAttachment =
 export interface ChatEntryBubbleView {
   /** 文本块拼接结果（宿主 `texts.join('')`，逐字保留换行与空白；会话引用的线格式已投影成 label）。 */
   text: string
+  /**
+   * **未投影**的文本拼接（会话线格式原样保留）—— 只给宿主 `projectUserText` 用：
+   * 它自己认 `@[label](dsh-session:…)` 并把引用/技能渲染成 chip；我们自己的 `text` 是它的兜底。
+   */
+  rawText: string
   /** **有序附件列表**：渲染层必须按这个顺序输出（宿主不区分「先图片后文件」）。 */
   attachments: ChatEntryAttachment[]
   /** 图片附件（= `attachments` 里的 image 项，顺序一致；用于计数与「无渲染位」提示）。 */
@@ -244,17 +292,73 @@ export function formatChatEntryClock(time: number | null): string | null {
 export const CHAT_SESSION_WIRE_RE = /@\[([^\]\n]+)\]\(dsh-session:[^)\s]+\)/gu
 
 /**
- * 正文的**最小文本投影**：把会话引用线格式换成它的人类可读 label。
+ * 正文的**最小文本投影**（宿主投影不可用时的兜底）：把会话引用线格式换成它的人类可读 label。
  *
- * 宿主做的是「换成 chip 节点」（`projectUserText`，还会把裸 `@name` 也装饰成 chip、把引用汇总成
- * 一行 referenceSummary）；我们**不做 chip**（ui-primitives 包私有、不可导入，见 G-39 已追认差距），
- * 但**绝不把线格式原样打给用户看** —— 那是机器的编码，正常人读不了（t4 复核 D5，medium）。
+ * 2026-10-15 起：气泡正文**优先走宿主自己的** `projectUserText`（见 `projectChatEntryTextWithHost`
+ * —— 它能把会话引用与技能渲染成 chip，并在给了打开器时可点开）；本函数是**兜底与纯文本路径**
+ * （复制按钮、错误边界降级、老宿主没有原语包时）的唯一实现：任何情况下都**不把线格式原样打给用户看**
+ * （那是机器的编码，正常人读不了 —— t4 复核 D5，medium）。
  * 与宿主一致的边界：只认 `dsh-session:` 的括号形式；`g` flag 下逐处替换，正则自身 lastIndex 置零。
  */
 export function projectChatEntryText(text: string): string {
   if (text.indexOf('@[') < 0) return text
   CHAT_SESSION_WIRE_RE.lastIndex = 0
   return text.replace(CHAT_SESSION_WIRE_RE, '$1')
+}
+
+/**
+ * 宿主 `projectUserText` 的**可注入面**（宽类型：本仓库不引用 ui-primitives 的类型，也不 import 它）。
+ * 返回值是不透明 ReactNode（chip 节点等）；缺省 null = 这台宿主没有该能力。
+ */
+export type ChatEntryTextProjector = (
+  text: string,
+  sessionLabels: readonly string[],
+  slashNames: readonly string[],
+  slashKind: string,
+  references?: { openFile?: unknown; openSkill?: unknown },
+) => ReactNode
+
+/** 宿主投影的入参（全部来自节点 data 与 owner props；缺省即空）。 */
+export interface ChatEntryHostTextOptions {
+  /** `data.referenceLabels`（引用会话的 label 列表）。 */
+  sessionLabels?: readonly string[]
+  /** `data.skillNames`（宿主把它们渲染成 chip —— 我们此前一个元素都不产出）。 */
+  skillNames?: readonly string[]
+  /** 宿主给的文件 / 技能打开器（给了才能点开 chip；没有就只显示 chip 外观）。 */
+  openFile?: unknown
+  openSkill?: unknown
+}
+
+/**
+ * 用**宿主自己**的 `projectUserText` 投影正文（2026-10-15：按生态既有做法补齐 G-39 差距①）。
+ *
+ * 实证（为什么这条现在成立）：ui-primitives 由 DSH shell 的模块表作为 static module seed 预置，
+ * 插件 bundle 的 `require` 能命中 —— 第三方插件 dsh-reedit 就是这么拿 `projectUserText` 的，
+ * 本仓的 `RollbackFileIcon` 也早就这样拿 `FileTypeIcon`。**只能帧内惰取**（顶层 import 在老宿主
+ * 会打挂整个浏览器半加载），入口在 `common/host-primitives.ts`。
+ *
+ * 四条判据缺一不可（本函数**绝不抛**，任一条不满足就回 null ⇒ 调用方回落 `projectChatEntryText`）：
+ *  ① 有投影器（老宿主没有原语包 → null）；② 原文非空；
+ *  ③ 投影不抛错；④ 投影返回**非空节点**（null/undefined/false = 宿主拒绝了这段文本）。
+ *
+ * 为什么投影要当参数传进来：纯层与单测都不认识模块表 —— 抽成参数后，上面四条判据能逐条覆盖。
+ */
+export function projectChatEntryTextWithHost(
+  projector: ChatEntryTextProjector | null | undefined,
+  rawText: string,
+  options: ChatEntryHostTextOptions = {},
+): ReactNode | null {
+  if (typeof projector !== 'function') return null
+  if (rawText === '') return null
+  try {
+    const node = projector(rawText, options.sessionLabels ?? [], options.skillNames ?? [], 'skill', {
+      openFile: options.openFile,
+      openSkill: options.openSkill,
+    })
+    return node === null || node === undefined || node === false ? null : node
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -310,12 +414,13 @@ export function fileSizeTextOf(bytes: number | null): string | null {
 export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
   if (typeof content === 'string') {
     const text = projectChatEntryText(content)
-    return { text, attachments: [], images: [], files: [], raw: [], showBubble: text !== '' }
+    return { text, rawText: content, attachments: [], images: [], files: [], raw: [], showBubble: text !== '' }
   }
   if (!Array.isArray(content)) {
-    return { text: '', attachments: [], images: [], files: [], raw: content === null || content === undefined ? [] : [{ id: '0', payload: content }], showBubble: content !== null && content !== undefined }
+    return { text: '', rawText: '', attachments: [], images: [], files: [], raw: content === null || content === undefined ? [] : [{ id: '0', payload: content }], showBubble: content !== null && content !== undefined }
   }
   const texts: string[] = []
+  const rawTexts: string[] = []
   const attachments: ChatEntryAttachment[] = []
   const raw: ChatEntryRawBlock[] = []
   content.forEach((block, index) => {
@@ -323,6 +428,8 @@ export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
     const type = record?.['type']
     if (type === 'text' && typeof record?.['text'] === 'string') {
       // 宿主把这条文本交给 projectUserText（会话引用渲染成 chip）；我们做**最小文本投影**：线格式 → label
+      // （rawTexts 同时留一份未投影原文，宿主投影可用时优先用它 —— 见 ChatEntryBubbleView.rawText）
+      rawTexts.push(record['text'] as string)
       texts.push(projectChatEntryText(record['text'] as string))
       return
     }
@@ -347,10 +454,11 @@ export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
     raw.push({ id: String(index), payload: block })
   })
   const text = texts.join('')
+  const rawText = rawTexts.join('')
   // images / files 是 attachments 的**派生视图**（不独立积累，避免两处真相与顺序漂移）
   const images = attachments.flatMap((item) => (item.kind === 'image' ? [item.image] : []))
   const files = attachments.flatMap((item) => (item.kind === 'file' ? [item.file] : []))
-  return { text, attachments, images, files, raw, showBubble: text !== '' || raw.length > 0 }
+  return { text, rawText, attachments, images, files, raw, showBubble: text !== '' || raw.length > 0 }
 }
 
 /** 渲染计划的一项：图片带 owner 载荷，文件带名称/扩展名/体积文本。 */
@@ -517,7 +625,10 @@ export interface ChatEntryView {
   bubble: ChatEntryBubbleView
   /** 动作行的时间文本（null = 节点没给可用的时间戳）。 */
   clock: string | null
-  /** 宿主 data 的另外两个字段（我们**不**接线到 ui-primitives，渲染层如实记成差距）。 */
+  /**
+   * 宿主 data 的另外两个字段：`referenceLabels` 进引用汇总行；两者都作为 `projectUserText`
+   * 的入参传给**宿主的**正文投影（2026-10-15 起 —— 此前它们只是「如实记下的差距」）。
+   */
   referenceLabels: string[]
   skillNames: string[]
 }
@@ -599,6 +710,12 @@ export function rawBlockText(payload: unknown): string {
 
 /** 错误边界的 ASCII 诊断前缀（console.* 实参不触发 i18n 守卫；界面文案一律在字典里）。 */
 export const CHAT_ENTRY_WARN_PREFIX = '[config-manager] chat user node renderer degraded to plain text: '
+
+/**
+ * 让位告警的 ASCII 前缀（诊断用，绝不当作界面文案）—— 见 `planChatNodeRegistration` 的 `shadowed`：
+ * 别的插件用更低优先级占住了 key=user 时，我们**不注册**（注册也永远轮不到渲染），只留这条日志。
+ */
+export const CHAT_NODE_YIELD_WARN_PREFIX = '[config-manager] chat user node entry yielded: another renderer owns key "user" at a lower priority: '
 
 /* ------------------------------------------------------------ 回滚点惰取（按会话缓存 + 在途去重） */
 

@@ -106,7 +106,7 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 | 页面 / 卡片表面、hover 底 | `--cm-surface-1/2`、`--cm-surface-hover` | `--dsw-alias-bg-layer-1/2`、`--dsw-alias-interactive-bg-hover` |
 | 描边 L1 / L2 | `--cm-line-1/2` | `--dsw-alias-border-l1/l2` |
 | 输入框背景 | `--cm-input-bg` | `--dsw-specific-input-major` |
-| 聊天流用户消息气泡底 | `--cm-chat-bubble` | `--dsw-specific-bubble`（缺档回落 `--dsw-alias-bg-layer-2`） |
+| 聊天流用户消息气泡底 | `--cm-chat-bubble` | `--dsw-specific-bubble`（缺档回落 `color-mix(in srgb, var(--cm-text-1) 12%, transparent)` —— **兜底必须是可见色**，bg-layer-2 在浅色 = #fff 等于没兜底） |
 | 主色（focus / 选中 / 进度） | `--cm-accent` | `--dsw-alias-state-business-primary` |
 | 主按钮填充 / hover | `--cm-accent-fill` / `--cm-accent-hover` | `--dsw-alias-button-info-fill/hover` |
 | 四态 ok / info / warn / error | `--cm-ok` `--cm-info` `--cm-warn` `--cm-error` | `--dsw-alias-state-{success,info,warn,error}-primary` |
@@ -1197,12 +1197,19 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 - **错误边界是 class 组件**（`ChatEntryErrorBoundary`）：React 18 只有 class 能声明 `getDerivedStateFromError` / `componentDidCatch` —— 这是本仓「函数组件 + hooks，无 class」规范的
   **唯一显式例外**，**不得**照此扩大范围。降级 = **纯文本气泡**（`.chatFallbackBubble`，左侧一条警示线 + `data-chat-entry-fallback` 标记 + ASCII `console.warn`），语义是「用户消息绝不消失」。
 - **入口 = 只有图标（icon-only，2026-10-10 用户第二条要求）**：复用 `.chatActionBtn` 24px 无边框图标位 + `RefreshIcon`，与时间戳 / 复制图标同一行；**按钮内不得出现可见文字标签**，文案只走 `aria-label` / `title`。语义 = ghost（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
-- **已确认的三条观感差距**（如实登记，不修）：① 引用 / 技能 chip 不显示（`referenceLabels` / `skillNames` 是 ui-primitives 的包私有投影，拿不到也不编造）；② 文件类型图标退化为**扩展名徽标**
-  （`.chatFileExt` —— ui-primitives 的 `FileTypeIcon` / `fileExtension` 不在其导出表）；③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+- **差距 ①② 已于 2026-10-15 收回**（生态既有做法：宿主模块表可以 `require` 到 ui-primitives，见下方那一条）：① 引用 / 技能 chip —— 正文交给宿主自己的 `projectUserText`（`openFile` / `openSkill` 在时可点开）；② 文件类型图标 —— 用宿主 `FileTypeIcon`，拿不到才回落 `.chatFileExt` 扩展名徽标。
+  **仍未做**：③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
 - **气泡底色不再算近似档（2026-10-15，用户报「浅色主题下气泡看不见」）**：宿主的用户气泡底是 `--dsw-specific-bubble`，本仓库 token 层此前没有这一档，于是借用了 `--cm-surface-2`（= `--dsw-alias-bg-layer-2`）
   —— **浅色主题下它 = `#fff`，而页面底 `--dsw-alias-bg-base` 也是 `#fff`** ⇒ 气泡与页面同色、用户消息看起来「没有气泡」（深色下两者恰好同为 bluish-850，所以只在浅色暴露）。
   现在新增 `--cm-chat-bubble`（§3 表）指向宿主那一档，带 `--dsw-alias-bg-layer-2` 兜底：宿主换主题/换档时自动跟随，宿主删档时不至于变透明。
   **同轮把文件卡描边也对齐到宿主那一档**：`.5px` + `--cm-line-2`（= `--dsw-alias-border-l2`，浅色 ≈10% 黑；此前用 `--cm-line-1` = ≈4% 黑，比宿主淡一档），`.chatEntryScope` 据此补声明 `--cm-line-2`。
+- **宿主原语复用（2026-10-15；全仓唯一入口 `src/client/common/host-primitives.ts`）**：正文与文件图标**优先用宿主自己的** `projectUserText` / `FileTypeIcon`（ui-primitives），
+  这样会话引用 / 技能 chip 与文件类型图标天然与 DSH 同款（G-39 差距①②据此收回）。**只能是帧内惰取 + try/catch + 回落**：该包由 DSH shell 的模块表作为 static module seed 预置（较新宿主才有），
+  顶层 `import` 会被打包器改写成模块体顶层的 `require` —— 老宿主一抛就是**整个浏览器半加载失败**（设置页一起没）。取证：生态里 dsh-reedit / dsh-better-sidebar / dsh-agent-teams / dsh-mnemon 都这么做；
+  本仓 `RollbackFileIcon` 自 2026-10-12 起也这么做。回落链：正文 → 我们自己的 `projectChatEntryText` 纯文本投影；图标 → `.chatFileExt` 扩展名徽标 → 本地极简 SVG。白名单登记 = `src/utils/bundle-scan.ts`。
+- **key=user 是单占位：别人先占就让位（2026-10-15）**：`conversation.chat.node` 是 keyed 遮蔽位，语义是「**最低的 priority 渲染**」，而该 key **没有 children 表**
+  ⇒ 两个插件**不可能**同时渲染同一条用户消息（框架层不支持）。因此登记前先读 `ctx.slots.entriesOfSlot` 的赢家：若它比我们（-1）更低，**让位并打一条 ASCII 告警**（不抢格、不静默 —— 静默失效是框架默认行为）；
+  同优先级冲突仍由登记处的 `try/catch` 兜住（宿主会抛错并点名占用者）。老宿主没有 `entriesOfSlot` 时不做探测，行为与之前一致。
 - **只有一种形态：每条用户消息一颗**（2026-10-12 用户要求）：**「整回合」档整体删除** —— 偏好模块 `chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts` 与回合尾入口组件 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）一并下线，设置页回滚卡上那颗两档开关（`.rollbackChatEntry` + `Segmented`）与 `rollback.chatEntry.*` 五个键同步删除。
   装配点因此退回最简形态：`ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({ probe, register }))` —— 单入口没有「切档互斥」问题（T13）也不再需要为后到的槽位声明补试（T17 的有界补试随双入口一起消失）。
 - **回退预览对话框 = 简洁版（2026-10-10 用户第三条要求）**：标题固定「回退预览」；正文只有**会被回退的文件**（路径 + 「+N 行」/「−M 行」；内容已一致的一项都不列，空数组显示「工作区与该回退点一致，无需恢复」；行数算不出来显示「行数未统计」而**不是 0**）；底部只有主按钮「回退」与「取消」。**没有**三选一 mode 单选、二次确认勾选、`allowPartial` 勾选、工作区 / 会话计数面板、救援点说明段、逐段结果详情面板、留点期 notice 面板 —— 这是**有意替换**（点「回退」即确认，对话框本身就是「预览 + 确认」两步）。视觉复用既有 `dialogMask` / `dialogCard` / `dialogWide` / `dialogBodyScroll` / `actionRow` 类，**不新增样式档位**；设置页 `RollbackCard` 的预览弹窗仍保留完整能力。**描述性文案清零（2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」）**：说明行「这次回退会做以下改动：」与「这些文件的行数没有统计出来…」整段都不再渲染 —— 弹窗只留能改变决定的信息（§7）；`.previewSummary` 样式随之删除，逐文件那格的「行数未统计」保留。

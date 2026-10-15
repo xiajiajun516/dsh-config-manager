@@ -269,7 +269,13 @@ export function apply(ctx: ClientContext): void {
    * 都只丢这一个入口，绝不打挂本插件其余槽位与宿主启动。
    */
   ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({
-    probe: { spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT) },
+    // 探测面两条都是只读：spec（形态）+ entriesOfSlot（user cell 当前赢家；老宿主可能没有该方法）。
+    // 必须写成**成员调用**（obj.method?.()）：把方法抽出来单独调会丢 receiver —— 宿主实现里那句
+    // this._core.entriesOfSlot(...) 会直接抛（同类真机事故：uiWorkspace.openSession 丢 receiver，见 AGENTS.md）。
+    probe: {
+      spec: (key) => ctx.slots.spec(key as typeof CHAT_NODE_SLOT),
+      entriesOfSlot: (key) => (ctx.slots as unknown as { entriesOfSlot?: (slotKey: string) => unknown }).entriesOfSlot?.(key),
+    },
     register: () => ctx.slots.register({
       name: CHAT_NODE_SLOT,
       key: CHAT_NODE_USER_KEY,

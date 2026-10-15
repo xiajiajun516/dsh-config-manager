@@ -32,9 +32,11 @@
  * DSH shell 把 UI 基础库作为 **static module seed** 预置在模块表里（`dsh-web-frontend` 的
  * `staticModules`：react / react-dom / cordis / client-store / ui-slots / ui-primitives / dockkit），
  * 插件 bundle 工厂拿到的 `require` 命中 seed 即可用 —— 第三方插件 dsh-better-sidebar 同样如此。
- * 本插件只用它画**文件类型图标**（DSH 文件树同一颗 `FileTypeIcon`），且**不是顶层 require**：
- * 调用点在 `src/client/chat/RollbackFileIcon.tsx` 的 `dshFileTypeIcon()` 里，外裹 try/catch ——
- * 老宿主没有这条 seed 时回落本地极简图标，绝不会因「一颗图标」打挂整个浏览器半。
+ * 本插件用它做两件事：**文件类型图标**（DSH 文件树同一颗 `FileTypeIcon`）与**用户正文投影**
+ * （`projectUserText` —— 会话引用/技能渲染成 chip，G-39 差距①②，2026-10-15）。
+ * **都不是顶层 require**：唯一入口是 `src/client/common/host-primitives.ts` 的帧内惰取门
+ * （三态缓存 + try/catch，每个进程只试一次）—— 老宿主没有这条 seed 时回落本地实现
+ * （极简图标 / 纯文本投影 / 可见的底色兜底），绝不会因一颗图标或一段正文打挂整个浏览器半。
  */
 export const CLIENT_BUNDLE_RUNTIME_WHITELIST: readonly string[] = [
   'react',

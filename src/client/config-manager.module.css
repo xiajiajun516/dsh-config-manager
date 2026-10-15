@@ -80,8 +80,11 @@ body {
      （浅色 = --dsw-static-deepseek-50 = #edf3fe；深色 = --dsw-static-neutral-bluish-850）。
      此前我们复刻时借用了 --cm-surface-2（= --dsw-alias-bg-layer-2），浅色下它 = #fff，
      而页面底色 --dsw-alias-bg-base 也是 #fff ⇒ 气泡与页面同色、看起来「没有气泡」；
-     深色下两者恰好同值（bluish-850）所以只在浅色暴露。兜底保留 bg-layer-2（宿主删档时不至于变透明）。 */
-  --cm-chat-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));
+     深色下两者恰好同值（bluish-850）所以只在浅色暴露。
+     兜底**不能**再用 bg-layer-2（浅色下它也是 #fff ⇒ 气泡照样消失，等于没兜底）：改成一档
+     中性 scrim（label 色的 12% tint，两个主题下都看得见）—— 做法抄 dsh-turn-rewind 生态里的
+     同款兜底 `var(--dsw-specific-bubble, rgba(127,127,127,.14))`，只是按本仓规则走 color-mix + token。 */
+  --cm-chat-bubble: var(--dsw-specific-bubble, color-mix(in srgb, var(--cm-text-1) 12%, transparent));
   --cm-accent: var(--dsw-alias-state-business-primary);
   --cm-accent-fill: var(--dsw-alias-button-info-fill);
   --cm-accent-hover: var(--dsw-alias-button-info-hover);
@@ -5139,8 +5142,9 @@ button.profileRowMain:hover {
   --cm-text-3: var(--dsw-alias-label-tertiary);
   --cm-surface-2: var(--dsw-alias-bg-layer-2);
   /* 气泡底色**不**走 --cm-surface-2（浅色下 = #fff = 页面底色 ⇒ 气泡消失），
-     跟随宿主的 --dsw-specific-bubble；定义见 §1 body 的 --cm-chat-bubble。 */
-  --cm-chat-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));
+     跟随宿主的 --dsw-specific-bubble；兜底是可见的中性 scrim（不是 bg-layer-2）。
+     取值与理由见 §1 body 的同名定义行。 */
+  --cm-chat-bubble: var(--dsw-specific-bubble, color-mix(in srgb, var(--cm-text-1) 12%, transparent));
   --cm-line-1: var(--dsw-alias-border-l1);
   --cm-line-2: var(--dsw-alias-border-l2);
   --cm-fs-meta: 11px;

@@ -42,6 +42,9 @@ import {
   planChatEntryAttachments,
   planChatNodeRegistration,
   projectChatEntryText,
+  projectChatEntryTextWithHost,
+  chatNodeUserOccupant,
+  CHAT_NODE_YIELD_WARN_PREFIX,
   resetChatPointCache,
   shouldRetryChatPoint,
   CHAT_POINT_LOOKUP_WINDOW_MS,
@@ -55,7 +58,7 @@ import {
   retryChatPointUntilHit,
   type ChatPointWindowState,
 } from './chat-point-window.ts'
-import { declaredSlotKind, registerChatNodeEntry } from './chat-node-registration.ts'
+import { chatNodeOccupantOf, declaredSlotKind, registerChatNodeEntry } from './chat-node-registration.ts'
 import { en as chatEn, zh as chatZh } from './chat-locales.ts'
 import type { RollbackListResult, RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
 
@@ -110,6 +113,52 @@ test('registration plan: a keyed declaration registers; anything else is skipped
   assert.deepEqual(planChatNodeRegistration('list'), { kind: 'skip', reason: 'slot-kind-mismatch', declared: 'list' })
 })
 
+/**
+ * 让位判据（2026-10-15，跨插件冲突）：keyed cell「最低的渲染」——别人 priority 更低时我们必定轮不到渲染，
+ * 所以**先读占用再决定注册**：更低 → 让位并告警（不抢格、不静默）；相同（只可能是残留的自己）→ 照常注册
+ * （真撞上由 try/catch 兜住）；宿主那条 priority 0 → 我们 -1 本来就要遮蔽它，当然注册。
+ */
+test('registration plan: yields when another renderer already owns the user cell at a LOWER priority', () => {
+  const host = { priority: 0, registrant: null }
+  const oursOwn = { priority: -1, registrant: 'dsh-config-manager' }
+  const theirs = { priority: -2, registrant: '@someone/other-rewind' }
+  assert.deepEqual(planChatNodeRegistration('keyed', host), { kind: 'register' })
+  assert.deepEqual(planChatNodeRegistration('keyed', oursOwn), { kind: 'register' })
+  assert.deepEqual(planChatNodeRegistration('keyed', theirs), {
+    kind: 'skip',
+    reason: 'shadowed',
+    declared: 'keyed',
+    occupant: theirs,
+  })
+  // 形态不符的判据优先于占用（按 keyed 参数注册本来就会抛）
+  assert.equal(planChatNodeRegistration('list', theirs).kind, 'skip')
+})
+
+test('occupant reader: reads the winning entry per cell from entriesOfSlot shape; anything else is null', () => {
+  const entry = (key: string, priority?: number, registrant?: string) => ({
+    options: { key, ...(priority === undefined ? {} : { priority }) },
+    ...(registrant === undefined ? {} : { registrant }),
+  })
+  assert.equal(chatNodeUserOccupant(null), null)
+  assert.equal(chatNodeUserOccupant({}), null)
+  assert.equal(chatNodeUserOccupant([]), null)
+  assert.deepEqual(chatNodeUserOccupant([entry('agent-teams', -5)]), null, 'other keys are not our cell')
+  // 缺省 priority = 0（宿主缺省），registrant 读不到如实回 null（绝不猜）
+  assert.deepEqual(chatNodeUserOccupant([entry('user')]), { priority: 0, registrant: null })
+  // 多条同 key：取最低的那条（= 会被渲染的那条）
+  assert.deepEqual(
+    chatNodeUserOccupant([entry('user', 0, 'host'), entry('user', -2, 'other')]),
+    { priority: -2, registrant: 'other' },
+  )
+  // 非数值 priority 当成缺省 0；空 registrant 归 null
+  assert.deepEqual(chatNodeUserOccupant([entry('user', Number.NaN, '')]), { priority: 0, registrant: null })
+  // registrant 也可能挂在 options 上（宿主两个位置都读过）
+  assert.deepEqual(chatNodeUserOccupant([{ options: { key: 'user', priority: -3, registrant: 'x' } }]), {
+    priority: -3,
+    registrant: 'x',
+  })
+})
+
 test('register shell: keyed declaration registers exactly once; non-keyed declaration is skipped, not thrown', () => {
   const warn: string[] = []
   let called = 0
@@ -134,6 +183,31 @@ test('register shell: keyed declaration registers exactly once; non-keyed declar
   // 探测面本身读不到 / 抛错 → 一样只跳过这一个入口
   assert.equal(declaredSlotKind(undefined), null)
   assert.equal(declaredSlotKind({ spec: () => { throw new Error('boom') } }), null)
+})
+
+test('register shell: yields (does NOT register) when a lower-priority renderer owns the user cell', () => {
+  const warn: string[] = []
+  let called = 0
+  const disposer = registerChatNodeEntry({
+    probe: {
+      spec: () => ({ kind: 'keyed', scope: 'session' }),
+      entriesOfSlot: () => [{ options: { key: 'user', priority: -2 }, registrant: '@someone/other-rewind' }],
+    },
+    register: () => { called += 1; return () => {} },
+    warn: (message) => { warn.push(message) },
+  })
+  assert.equal(called, 0, 'we must not fight for a cell another renderer already owns at a lower priority')
+  assert.equal(typeof disposer, 'function')
+  assert.ok(warn.some((line) => line.startsWith(CHAT_NODE_YIELD_WARN_PREFIX)), 'the yield must be logged, never silent')
+  assert.ok(warn.some((line) => line.includes('-2') && line.includes('@someone/other-rewind')))
+})
+
+test('occupant probe: missing entriesOfSlot / a throwing probe / a foreign shape all mean “nobody occupies it”', () => {
+  assert.equal(chatNodeOccupantOf(undefined), null)
+  assert.equal(chatNodeOccupantOf({ spec: () => ({ kind: 'keyed' }) }), null, 'old hosts expose no entriesOfSlot')
+  assert.equal(chatNodeOccupantOf({ spec: () => {}, entriesOfSlot: () => { throw new Error('boom') } }), null)
+  assert.equal(chatNodeOccupantOf({ spec: () => {}, entriesOfSlot: () => ({ not: 'an array' }) }), null)
+  assert.deepEqual(chatNodeOccupantOf({ spec: () => {}, entriesOfSlot: () => [{ options: { key: 'user', priority: 0 } }] }), { priority: 0, registrant: null })
 })
 
 test('register shell: a throwing register() is contained (never takes the plugin down)', () => {
@@ -214,9 +288,15 @@ test('样式纪律：icon 入口与预览文件行只用既有 token/类，未�
  */
 test('气泡底色跟随宿主的 --dsw-specific-bubble（不得再用 --cm-surface-2 近似）', () => {
   const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
-  // ① 定义行：宿主 token + 兜底（无兜底的 var() 在宿主删档时会整条失效 → transparent）
-  const defs = cssSheet.match(/--cm-chat-bubble:\s*var\(--dsw-specific-bubble,\s*var\(--dsw-alias-bg-layer-2\)\)/g) ?? []
-  assert.ok(defs.length >= 2, '--cm-chat-bubble 必须在 §1 body 与 .chatEntryScope 各定义一次，实际 ' + String(defs.length) + ' 处')
+  // ① 定义行：宿主 token + **可见**兜底（无兜底的 var() 在宿主删档时会整条失效 → transparent；
+  //    兜成 bg-layer-2 也没用 —— 浅色下它同样是 #fff，气泡照样消失）
+  const defs = cssSheet.match(/--cm-chat-bubble:\s*var\(--dsw-specific-bubble,\s*color-mix\(in srgb, var\(--cm-text-1\) 12%, transparent\)\)/g) ?? []
+  assert.ok(defs.length >= 2, '--cm-chat-bubble 必须在 §1 body 与 .chatEntryScope 各定义一次（且兜底是可见色），实际 ' + String(defs.length) + ' 处')
+  assert.equal(
+    (cssSheet.match(/--cm-chat-bubble:[^;]*--dsw-alias-bg-layer-2/g) ?? []).length,
+    0,
+    '兜底不得用 --dsw-alias-bg-layer-2（浅色下 = #fff ⇒ 等于没兜底）',
+  )
   // ② 消费点：.chatBubble 只写 --cm-*（三层单向依赖），且不得再回到 --cm-surface-2
   const bubble = cssSheet.match(/\.chatBubble\s*\{[^}]*\}/)?.[0] ?? ''
   assert.match(bubble, /background:\s*var\(--cm-chat-bubble\)/, '.chatBubble 的底色必须消费 --cm-chat-bubble')
@@ -235,6 +315,56 @@ test('文件卡描边与宿主同档：.5px + --cm-line-2（不是更淡的 --cm
   assert.doesNotMatch(card, /--cm-line-1/, '文件卡描边不得再退回更淡的 --cm-line-1')
   const scope = cssSheet.match(/\.chatEntryScope\s*\{[^}]*\}/)?.[0] ?? ''
   assert.match(scope, /--cm-line-2:\s*var\(--dsw-alias-border-l2\)/, '.chatEntryScope 必须就地重声明 --cm-line-2')
+})
+
+/**
+ * 宿主正文投影（2026-10-15）：气泡正文优先交给宿主自己的 projectUserText（会话引用/技能 → chip）。
+ * 四条回落判据必须逐条可证 —— 任一条不成立都回落我们自己的纯文本投影（绝不空白、绝不抛）。
+ */
+test('host text projection: four fallback criteria, and every argument goes through verbatim', () => {
+  const calls: unknown[][] = []
+  // 返回值用字符串（合法的 ReactNode）—— 纯层只要求「非空节点」，chip 的真实形状由宿主决定
+  const projector = (text: string, labels: readonly string[], skills: readonly string[], kind: string, references?: { openFile?: unknown; openSkill?: unknown }): string => {
+    calls.push([text, labels, skills, kind, references])
+    return '[chip]'
+  }
+  const options = { sessionLabels: ['会话甲'], skillNames: ['i-have-adhd'], openFile: 'of', openSkill: 'os' }
+  assert.deepEqual(projectChatEntryTextWithHost(projector, 'raw', options), '[chip]')
+  assert.deepEqual(calls[0], ['raw', ['会话甲'], ['i-have-adhd'], 'skill', { openFile: 'of', openSkill: 'os' }])
+  // ① 没有投影器（老宿主模块表里没有 ui-primitives）
+  assert.equal(projectChatEntryTextWithHost(null, 'raw', options), null)
+  assert.equal(projectChatEntryTextWithHost(undefined, 'raw', options), null)
+  // ② 原文为空
+  assert.equal(projectChatEntryTextWithHost(projector, '', options), null)
+  // ③ 投影自己抛错
+  assert.equal(projectChatEntryTextWithHost(() => { throw new Error('boom') }, 'raw', options), null)
+  // ④ 投影拒绝了这段文本（null / undefined / false）
+  assert.equal(projectChatEntryTextWithHost(() => null, 'raw', options), null)
+  assert.equal(projectChatEntryTextWithHost(() => undefined, 'raw', options), null)
+  assert.equal(projectChatEntryTextWithHost(() => false, 'raw', options), null)
+  // 缺省选项也要把完整参数交给投影器（空数组 + 空打开器），绝不缺参
+  calls.length = 0
+  assert.deepEqual(projectChatEntryTextWithHost(projector, 'x'), '[chip]')
+  assert.deepEqual(calls[0], ['x', [], [], 'skill', { openFile: undefined, openSkill: undefined }])
+})
+
+test('bubble keeps the UNprojected text for the host projector and the projected text as the fallback', () => {
+  const view = buildChatEntryBubble([{ type: 'text', text: '看这条 @[会话甲](dsh-session:s9) 引用' }])
+  assert.equal(view.text, '看这条 会话甲 引用')
+  assert.equal(view.rawText, '看这条 @[会话甲](dsh-session:s9) 引用')
+  // 多个文本块：两边都按 content 顺序拼接（非文本块不参与拼接）
+  const multi = buildChatEntryBubble([
+    { type: 'text', text: 'A' },
+    { type: 'image', attachment: { id: 'i' } },
+    { type: 'text', text: 'B' },
+  ])
+  assert.equal(multi.text, 'AB')
+  assert.equal(multi.rawText, 'AB')
+  // 怪形状：字符串 content 两边都有值；空 content 两边都是空串（不编造）
+  assert.deepEqual([buildChatEntryBubble('hi').text, buildChatEntryBubble('hi').rawText], ['hi', 'hi'])
+  const empty = buildChatEntryBubble(null)
+  assert.equal(empty.text, '')
+  assert.equal(empty.rawText, '')
 })
 
 /* ------------------------------------------------------------ ⑤ 回合号只认可核实字段 */

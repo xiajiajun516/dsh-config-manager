@@ -203,7 +203,7 @@
 - **离线 CLI 不收集 `pluginData` / `pluginAssets`**（`OFFLINE_EXCLUDED_SECTIONS`）；显式 `--sections` 请求时提示改用 GUI，不静默少收。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
-- **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补。
+- **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补；**宿主模块表里的包（如 ui-primitives）只能帧内惰取 + try/catch + 回落**（`src/client/common/host-primitives.ts`）——顶层 import 会打挂整个浏览器半。
 - **issue #57–#60 四条**：`file:` spec 打包前 `stat` 判形态；同步快照 JSON 读写同口径（512 MiB）；`runStore.patch()` 后必须 `patchSyncPasswords()` 写回内存；git 源安装需 `scripts.prepare` + pnpm 11 `allowBuilds`。
 - **MemFs 测试**：内存 fs key 与宿主 path 解耦（win32 home 注入 cwd）。
 

@@ -9,11 +9,23 @@
  * （`chat-entry-pref` / `chat-entry-mount`）与回合尾入口（`conversation.chat.turnTail`）一并删除 ——
  * 入口恒为每条用户消息气泡里的那一颗，于是这里不再有偏好门，也不再需要「切档时重新评估」的订阅。
  */
-import { CHAT_NODE_SLOT, planChatNodeRegistration } from './chat-entry-view.ts'
+import {
+  CHAT_NODE_SLOT,
+  CHAT_NODE_YIELD_WARN_PREFIX,
+  chatNodeUserOccupant,
+  planChatNodeRegistration,
+  type ChatNodeOccupant,
+} from './chat-entry-view.ts'
 
-/** 槽位声明形态探测面（`ctx.slots`）：只读 spec，宽类型读回 kind。 */
+/** 槽位探测面（`ctx.slots`）：读声明的 kind，以及该 cell 当前会被渲染的那一条。 */
 export interface ChatNodeSlotProbe {
+  /** 只读 spec（宽类型读回 kind）。 */
   spec: (key: string) => unknown
+  /**
+   * 每个 cell 当前会被渲染的那一条（SlotRegistry.entriesOfSlot）。
+   * **可选**：老宿主没有这个方法（那时不做占用探测，照常注册）。
+   */
+  entriesOfSlot?: (key: string) => unknown
 }
 
 /** 诊断（ASCII，与界面文案无关；console.* 实参不触发 i18n 守卫）。 */
@@ -33,12 +45,24 @@ export function declaredSlotKind(probe: ChatNodeSlotProbe | undefined | null): s
   }
 }
 
+/** user cell 的当前赢家（没有探测面 / 形状不符 / 探测抛错都回 null —— 探测失败不当成「有人占」）。 */
+export function chatNodeOccupantOf(probe: ChatNodeSlotProbe | undefined | null): ChatNodeOccupant | null {
+  if (probe === undefined || probe === null || typeof probe.entriesOfSlot !== 'function') return null
+  try {
+    return chatNodeUserOccupant(probe.entriesOfSlot(CHAT_NODE_SLOT))
+  } catch {
+    return null
+  }
+}
+
 /**
  * 登记「接管 conversation.chat.node / user」的渲染器。
  *
- * 两道门（顺序即优先级）：
+ * 三道门（顺序即优先级）：
  *  ① 声明形态不是 `keyed`（0.1.x 的 ui-chat 契约不同）→ 跳过（按 keyed 参数注册会抛）；
- *  ② 注册本身抛错 → 吞掉并告警（只丢这一个入口）。
+ *  ② **user cell 已被更低优先级占住**（别的插件也在接管用户消息，2026-10-15）→ 让位并如实告警：
+ *     注册也永远轮不到渲染（keyed cell「最低的渲染」），不抢别人的格子、也不静默；
+ *  ③ 注册本身抛错 → 吞掉并告警（只丢这一个入口）。
  *
  * @returns disposer；跳过 / 失败时是 no-op。
  */
@@ -51,8 +75,18 @@ export function registerChatNodeEntry(options: {
 }): () => void {
   const warn = options.warn ?? warnChatNode
   const declared = declaredSlotKind(options.probe)
-  if (planChatNodeRegistration(declared).kind === 'skip') {
-    warn('[config-manager] chat user node entry skipped: slot declaration is ' + (declared === null ? 'missing' : '"' + declared + '"') + ' (expected "keyed")')
+  const plan = planChatNodeRegistration(declared, chatNodeOccupantOf(options.probe))
+  if (plan.kind === 'skip') {
+    if (plan.reason === 'shadowed') {
+      warn(
+        CHAT_NODE_YIELD_WARN_PREFIX +
+          'priority ' + String(plan.occupant.priority) +
+          (plan.occupant.registrant === null ? '' : ' (registered by ' + plan.occupant.registrant + ')') +
+          ' — entry not registered',
+      )
+    } else {
+      warn('[config-manager] chat user node entry skipped: slot declaration is ' + (declared === null ? 'missing' : '"' + declared + '"') + ' (expected "keyed")')
+    }
     return () => {}
   }
   try {
