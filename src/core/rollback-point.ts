@@ -194,6 +194,41 @@ export const ROLLBACK_LEFTOVER_LIST_LIMIT = 20
  * `truncated` 置真 ⇒ 删除集自动 fail-closed（证明名单不完整就一条都不删）。
  */
 export const ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS = 30_000
+/**
+ * 自适应预算区间（见 RollbackEngineOptions.captureBudgetMs）：上一次留点被截断 ⇒ 下次 ×2，
+ * 上一次只用掉不到 1/4 ⇒ 下次 ÷2。区间外不再调整（避免无限拉长 / 缩到不可用）。
+ */
+export const ROLLBACK_MIN_CAPTURE_BUDGET_MS = 10_000
+export const ROLLBACK_MAX_CAPTURE_BUDGET_MS = 120_000
+/**
+ * 捕获期「读内容 + 写对象仓」的并发上限。
+ *
+ * 为什么必须并发：真机实测（34k 文件 / 512 MiB）一次全量捕获 175 s，其中 **148 s 花在
+ * 31,702 次对象写**（一次 4.7 ms：temp + fsync + rename），而走查本身只要 0.66 s。
+ * 对象写入是纯 I/O，串行做等于把预算全花在等待上 ⇒ 覆盖永远只有一小半。
+ * 并发上限与单文件字节闸门共同限流（在飞内容上界 = maxFileBytes）。
+ */
+export const ROLLBACK_DEFAULT_CAPTURE_CONCURRENCY = 16
+/** 对象写遇到这些码视为「瞬时占用」，有界退避重试（判据同 atomic-write 的 isRetryableLockCode） */
+const OBJECT_WRITE_RETRY_CODES = ['EPERM', 'EBUSY', 'EACCES', 'ENOTEMPTY']
+/** 捕获阶段①的 stat 批大小：判定仍严格按顺序，只是 stat 并发取（真机 34k 次 stat 从 5 s → <1 s） */
+export const ROLLBACK_CAPTURE_STAT_BATCH = 128
+/**
+ * 捕获期**候选名单**上限（不是入点上限）：必须显著大于 maxFiles，否则「缺口优先」排序作用不到
+ * 那些排在遍历顺序尾部、上一回合没覆盖到的文件（它们连候选都进不了 ⇒ 覆盖率永远不收敛）。
+ * 走查本来就会把每条路径记进 walked（路径索引的来源），这里多留的只是候选数组本身。
+ */
+export const ROLLBACK_CAPTURE_LIST_LIMIT = 200_000
+/** 捕获阶段①的 stat 结果（一次 bigint stat 拿到大小 / mtime / 身份；失败时带原始 detail） */
+interface RollbackFileStat {
+  isFile: boolean
+  size: number
+  mtimeMs: number
+  identity: string | null
+  error?: string
+}
+/** 走查中断时逐条记下的「没进去的子树」上限；超出即放弃精确范围，退回全局 fail-closed */
+export const ROLLBACK_UNWALKED_DIRS_LIMIT = 200
 
 /**
  * 「删除回退点之后新建的路径」的**整套上限**（用户 2026-10-11 定案 A）。
@@ -422,6 +457,12 @@ export interface RollbackWorkspacePayload {
    * 老台账（本字段诞生前写下的点）一律没有它：按「名单完整」处理（与旧行为一致）。
    */
   walkIncomplete?: boolean
+  /**
+   * 走查被中断时**栈里还没进去的子树**（精确到目录）。有它 ⇒ 拒删只覆盖这些子树
+   * （分子树 fail-closed），而不是把整个工作区的删除全关掉；缺它（老台账 / 栈太深被截断）
+   * ⇒ 退回全局拒删。与 walkIncomplete 一起看：后者是「安全判据」，本字段是「精确范围」。
+   */
+  unwalkedDirs?: string[]
   /** 命中文件数 / 字节上限（内容未全部进来，已如实留痕） */
   truncated: boolean
   bytes: number
@@ -942,8 +983,19 @@ export interface RollbackEngineOptions {
   /**
    * 工作区捕获的挂钟时间预算（毫秒，缺省 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS）。
    * 超时留**部分点**，不拒绝留点；见该常量的说明。
+   *
+   * 运行期**自适应**：被截断 ⇒ 下次翻倍；用得很少 ⇒ 下次减半（区间见
+   * ROLLBACK_MIN/MAX_CAPTURE_BUDGET_MS）。回退期走查的预算见 rewindBudgetMs。
    */
   captureBudgetMs?: number
+  /** 自适应区间下界（缺省 ROLLBACK_MIN_CAPTURE_BUDGET_MS；测试可注入更小值） */
+  captureBudgetMinMs?: number
+  /** 自适应区间上界（缺省 ROLLBACK_MAX_CAPTURE_BUDGET_MS；测试可注入更小值） */
+  captureBudgetMaxMs?: number
+  /** 回退期走查的时间预算（缺省 = captureBudgetMs 初值；**不参与自适应**） */
+  rewindBudgetMs?: number
+  /** 捕获期读 + 写并发上限（缺省 ROLLBACK_DEFAULT_CAPTURE_CONCURRENCY，1..64） */
+  captureConcurrency?: number
   guardPolicy?: RollbackGuardPolicy
   /** 存储栈探针（缺省 = 真实磁盘探测）；注入失败探针可测「缺失时仍可挂载」 */
   storage?: RollbackStorageProbe
@@ -1451,6 +1503,52 @@ class UndoStager {
   }
 }
 
+/**
+ * 单文件字节闸门：保证「同时在飞（已读入、尚未落仓）的内容字节」≤ limit。
+ *
+ * 与 captureConcurrency 一起构成捕获期的内存上界：并发只放大**同时**驻留的量，而它被
+ * maxFileBytes 钉死（串行实现的等价约束是「一次一份」，同样是 ≤ maxFileBytes）。
+ */
+/**
+ * 路径身份键：dev:ino:size:mtimeNs:ctimeNs:mode（全 BigInt 字符串化）。必须 BigInt：ino / mtimeNs /
+ * ctimeNs 在 64 位 inode 文件系统上超出 Number 安全整数范围，用 Number 会静默丢精度（把两次不同的
+ * 写当成同一个身份）。单一来源：fileStatOf 与 pathIdentityOf 都用它。
+ */
+function fileIdentityOf(stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint; mode: bigint }): string {
+  return [
+    String(stat.dev),
+    String(stat.ino),
+    String(stat.size),
+    String(stat.mtimeNs),
+    String(stat.ctimeNs),
+    String(stat.mode & 0o777n),
+  ].join(':')
+}
+
+class ByteGate {
+  private used = 0
+  private readonly waiters: (() => void)[] = []
+  private readonly limit: number
+
+  constructor(limit: number) {
+    this.limit = limit
+  }
+
+  async acquire(bytes: number): Promise<void> {
+    const need = Math.max(0, Math.min(bytes, this.limit))
+    while (this.used + need > this.limit && this.used > 0) {
+      await new Promise<void>((resolve) => { this.waiters.push(resolve) })
+    }
+    this.used += need
+  }
+
+  release(bytes: number): void {
+    this.used = Math.max(0, this.used - Math.max(0, Math.min(bytes, this.limit)))
+    const next = this.waiters.shift()
+    if (next !== undefined) next()
+  }
+}
+
 export class RollbackPointEngine {
   private readonly dataDir: string
   private readonly homeDir: string
@@ -1499,8 +1597,27 @@ export class RollbackPointEngine {
   /** 台账存储层（v3：清单 + 单条记录 + 内容寻址载荷；issue #89） */
   private readonly ledger: RollbackLedger
   private readonly ledgerBytesBudget: number
-  /** 工作区捕获的挂钟时间预算（毫秒；见 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS） */
-  private readonly captureBudgetMs: number
+  /**
+   * 工作区捕获的挂钟时间预算（毫秒；见 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS）。**可变**：
+   * 每次留点后按「是否被截断 / 用掉多少」自适应（见 ROLLBACK_MIN/MAX_CAPTURE_BUDGET_MS）。
+   */
+  private captureBudgetMs: number
+  /** 自适应区间下界 / 上界（构造期定死，运行期只调 captureBudgetMs） */
+  private readonly captureBudgetMinMs: number
+  private readonly captureBudgetMaxMs: number
+  /** 回退期走查的时间预算（与捕获预算分开：自适应不该顺手拉长回退期的走查） */
+  private readonly rewindBudgetMs: number
+  /** 捕获期读 + 写并发上限 */
+  private readonly captureConcurrency: number
+  /** 对象仓目录已确认存在（省掉每个对象一次 mkdir） */
+  private objectsDirReady = false
+  /**
+   * 本回合对象名单快照（一次 readdir 顶掉「每个候选一次 fs.access」；真机 34k 次 access ≈ 3.7 s）。
+   * null = 读不到名单（首次还没建目录/异常）⇒ 回落逐条 objectExists。
+   * 只保证「写进去的立刻可见」：捕获期间被**并发删除**的对象可能仍被判为存在 —— 那一路由
+   * 读取侧（readObject + 哈希校验）响亮失败，不会静默给出错误的 before 内容。
+   */
+  private captureObjectNames: Set<string> | null = null
   /**
    * 启动期一次性初始化（流式迁移 v2 -> v3 + 孤儿 tmp 清理）的惰性单飞。
    * 为什么惰取而不是构造时同步跑：构造发生在每个请求路径上，同步扫盘/迁移会把请求卡死；
@@ -1541,6 +1658,10 @@ export class RollbackPointEngine {
     this.log = options.log
     this.ledgerBytesBudget = options.ledgerBytesBudget ?? ROLLBACK_DEFAULT_LEDGER_BYTES
     this.captureBudgetMs = options.captureBudgetMs ?? ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS
+    this.captureBudgetMinMs = options.captureBudgetMinMs ?? ROLLBACK_MIN_CAPTURE_BUDGET_MS
+    this.captureBudgetMaxMs = options.captureBudgetMaxMs ?? ROLLBACK_MAX_CAPTURE_BUDGET_MS
+    this.rewindBudgetMs = options.rewindBudgetMs ?? this.captureBudgetMs
+    this.captureConcurrency = Math.max(1, Math.min(64, Math.floor(options.captureConcurrency ?? ROLLBACK_DEFAULT_CAPTURE_CONCURRENCY)))
     this.ledger = new RollbackLedger({
       root: this.root,
       bytesBudget: this.ledgerBytesBudget,
@@ -1711,17 +1832,47 @@ export class RollbackPointEngine {
 
   /* -------------------------------------------------------------- 对象仓 */
 
+  /** 对象仓目录只 mkdir 一次（每个对象各 mkdir 一次是纯白花的 syscall） */
+  private async ensureObjectsDir(): Promise<void> {
+    if (this.objectsDirReady) return
+    await fs.mkdir(this.objectsDir, { recursive: true })
+    this.objectsDirReady = true
+  }
+
+  /**
+   * 写内容寻址对象（对象文件名 = 内容 SHA-256）。
+   *
+   * **为什么这里不用 atomicWriteFile**：那是给「可写配置文件」用的强原子写（同目录 tmp → fsync →
+   * rename），真机实测一次约 4.7 ms —— 34k 文件的工作区一次全量捕获 148 s 全花在它上面（走查本身
+   * 只要 0.66 s）。对象仓的正确性要求不同：文件名即内容哈希 ⇒
+   *   · 用 'wx' **独占创建最终名**本身已是原子的（不覆盖已有对象；并发同写只有一方成功）；
+   *   · 半截 / 被篡改的内容在读取侧必然过不了哈希校验（readObject + sha256Hex）⇒ 按「读不出」
+   *     处理并 fail-closed，绝不会冒充有效前像；
+   *   · 不做 fsync：回滚点是尽力而为的本地快照，不为掉电持久性付出每文件一次 fsync 的代价。
+   */
   private async writeObjectWithHash(bytes: Uint8Array, sha: string): Promise<string> {
     if (!OBJECT_KEY_RE.test(sha)) throw new Error('rollback object key invalid')
     const target = path.join(this.objectsDir, sha)
     if (!isInsidePath(target, this.objectsDir)) throw new Error('rollback object path escapes store')
-    await fs.mkdir(this.objectsDir, { recursive: true })
-    try {
-      await fs.access(target)
-      return sha
-    } catch { /* 不存在才写（内容寻址天然去重） */ }
-    await atomicWriteFile(target, bytes)
-    return sha
+    await this.ensureObjectsDir()
+    let delay = 10
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await fs.writeFile(target, bytes, { flag: 'wx' })
+        this.captureObjectNames?.add(sha)
+        return sha
+      } catch (error) {
+        const code = (error as { code?: unknown }).code
+        if (code === 'EEXIST') return sha // 已有同内容对象（去重 / 并发竞写）
+        // 杀软 / 句柄瞬时占用：有界退避重试（与 atomic-write 的判据同族）
+        if (OBJECT_WRITE_RETRY_CODES.includes(code as string) && attempt < 3) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delay))
+          delay *= 2
+          continue
+        }
+        throw error
+      }
+    }
   }
 
   /** 对象仓里是否真有这个 blob（缓存命中时校验；任何异常一律按「没有」处理） */
@@ -1861,7 +2012,7 @@ export class RollbackPointEngine {
      * 回退期不传它，故 walkAborted 恒 false）。
      */
     shouldStop?: () => boolean,
-  ): Promise<{ files: string[]; truncated: boolean; walkAborted: boolean } | null> {
+  ): Promise<{ files: string[]; truncated: boolean; walkAborted: boolean; unwalkedDirs: string[] } | null> {
     let stat
     try {
       stat = await fs.lstat(chunk)
@@ -1873,7 +2024,7 @@ export class RollbackPointEngine {
       this.recordSkip(sink, 'skipped', { path: chunk, reason: 'link' })
       return null
     }
-    if (stat.isFile()) return { files: [chunk], truncated: false, walkAborted: false }
+    if (stat.isFile()) return { files: [chunk], truncated: false, walkAborted: false, unwalkedDirs: [] }
     if (!stat.isDirectory()) {
       this.recordSkip(sink, 'skipped', { path: chunk, reason: 'not-a-file' })
       return null
@@ -1882,9 +2033,16 @@ export class RollbackPointEngine {
     let truncated = false
     // 走查**被预算 / 取消打断**：栈里还压着没进去的子树 —— 那些路径一条都没进任何名单
     let walkAborted = false
+    // 中断时把**还没进去的子树**如实带出去 ⇒ 调用方可以只对这几棵子树 fail-closed（精确范围）
+    let unwalkedDirs: string[] = []
     const stack: { dir: string; depth: number }[] = [{ dir: chunk, depth: 0 }]
     while (stack.length > 0) {
-      if (shouldStop?.() === true) { truncated = true; walkAborted = true; break }
+      if (shouldStop?.() === true) {
+        truncated = true
+        walkAborted = true
+        unwalkedDirs = stack.length > ROLLBACK_UNWALKED_DIRS_LIMIT ? [] : stack.map((item) => item.dir)
+        break
+      }
       const item = stack.pop()
       if (item === undefined) break
       if (item.depth >= MAX_WALK_DEPTH) {
@@ -1947,7 +2105,7 @@ export class RollbackPointEngine {
       }
     }
     out.sort()
-    return { files: out, truncated, walkAborted }
+    return { files: out, truncated, walkAborted, unwalkedDirs }
   }
 
   private async captureWorkspace(
@@ -1961,6 +2119,8 @@ export class RollbackPointEngine {
     // 自动落成 capture-truncated，UI 走既有的 degraded 提示路径（零新增文案）。
     const deadline = capturedAt + this.captureBudgetMs
     const outOfBudget = (): boolean => signal?.aborted === true || this.stamp() >= deadline
+    // 对象名单快照按回合重建（一次 readdir 换掉每个候选一次 fs.access）
+    this.captureObjectNames = null
     const payload: RollbackWorkspacePayload = {
       chunks: [...chunks],
       files: [],
@@ -1980,108 +2140,41 @@ export class RollbackPointEngine {
     let sawChunk = false
     // 走查过的**全部**文件路径（含被预算 / 单文件上限挡下的）—— 路径索引的来源（方向 B）
     const walked: string[] = []
+    // 走查中断时**没进去的子树**（精确到目录）—— 供删除集做分子树 fail-closed
+    const unwalked: string[] = []
     for (const chunk of chunks) {
       if (outOfBudget()) {
         // 分块之间就超预算：不再开新分块，并如实留痕（该分块的条目一条都没被走查）
-        // walkIncomplete 是**安全判据**（删除集 fail-closed），漏了它会删掉未走查子树里的文件
+        // walkIncomplete 是**安全判据**（删除集 fail-closed）；这里能精确给出「没进去的是哪个分块」
+        // ⇒ 删除只拒这棵子树，不再把整个工作区的新建文件一起放弃。
         payload.walkIncomplete = true
         payload.truncated = true
+        unwalked.push(chunk)
         this.recordSkip(payload, 'skipped', { path: chunk, reason: 'budget-time' })
         break
       }
       if (!path.isAbsolute(chunk)) return this.emptyTrack('workspace', capturedAt, 'chunk-not-absolute', chunk)
       const resolved = path.resolve(chunk)
       // 文件数预算还剩多少就收多少；+1 只用于让遍历器发现「还有溢出」——溢出条目逐条记 skipped
-      const listed = await this.listChunkFiles(resolved, payload, Math.max(0, this.maxFiles - read) + 1, walked, await loadIgnoreRules(resolved), outOfBudget)
+      // 候选名单上限取 ROLLBACK_CAPTURE_LIST_LIMIT（而不是 maxFiles）：入点上限由阶段①的 slots
+      // 把关，这里若提前截断，缺口优先排序就够不到尾部文件 ⇒ 覆盖率不收敛
+      const listed = await this.listChunkFiles(resolved, payload, ROLLBACK_CAPTURE_LIST_LIMIT, walked, await loadIgnoreRules(resolved), outOfBudget)
       if (listed === null) continue
       sawChunk = true
       if (listed.truncated) payload.truncated = true
       // 走查本身被打断 ⇒ 栈里还有没进去的子树（那些路径从未进任何名单）⇒ fail-closed。
       // **区别于**下面「走查已结束、只是读到一半超时」：后者的路径全在 walked 里，
       // 由文件末尾的覆盖自检补进证明名单（补不齐才拒删），不该整体拒删。
-      if (listed.walkAborted) payload.walkIncomplete = true
-      for (const file of listed.files) {
-        if (outOfBudget()) {
-          // 本分块剩余文件没被读，但它们**已经过走查**（在 walked 里）⇒ 证明名单由覆盖自检补齐
-          payload.truncated = true
-          this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-time' })
-          break
-        }
-        if (read >= this.maxFiles) {
-          // 文件数预算耗尽：其后每一条都如实留痕（不再 break 静默丢弃）
-          payload.truncated = true
-          this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-files' })
-          continue
-        }
-        if (isInsidePath(file, this.root)) {
-          this.recordSkip(payload, 'skipped', { path: file, reason: 'self-store' })
-          continue
-        }
-        // **先 stat 判大小、再决定读不读**：单文件超限或加上它会超总量 → 跳过并如实留痕
-        // （旧实现的 `read > 0` 短路让**首个**文件完全不设上限，会被整份读进内存 —— t5-F1）
-        let stat
-        try {
-          stat = await fs.stat(file)
-        } catch (error) {
-          payload.unreadableFiles.push({ path: file, reason: errorDetail(error) })
-          continue
-        }
-        if (!stat.isFile()) {
-          this.recordSkip(payload, 'skipped', { path: file, reason: 'not-a-file' })
-          continue
-        }
-        if (stat.size > this.maxFileBytes) {
-          payload.truncated = true
-          this.recordSkip(payload, 'skipped', { path: file, reason: 'too-large' })
-          continue
-        }
-        if (payload.bytes + stat.size > this.maxBytes) {
-          payload.truncated = true
-          this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-bytes' })
-          continue
-        }
-        try {
-          // 路径身份缓存：身份（dev:ino:size:mtimeNs:ctimeNs:mode）未变 ⇒ 复用已存 sha256，**不重读**
-          const identity = await this.pathIdentityOf(file)
-          const candidate = identity === null ? null : await this.lookupCachedFile(identity, file)
-          // **F-2（t12 修复）**：缓存命中也要确认对象仓里真有那个 blob —— 对象被外部清掉后
-          // 若直接复用 sha256，新点会「零对象却 canRestore=true」，预览骗人（执行才响亮失败）。
-          // 对象不在 ⇒ 当作未命中：真读 + 重写对象（缓存因此自愈）。
-          const cached = candidate === null || !(await this.objectExists(candidate.sha256)) ? null : candidate
-          const data = cached === null ? await this.readFileBytes(file) : null
-          const size = cached === null ? (data?.byteLength ?? 0) : cached.bytes
-          if (cached === null && data !== null && data.byteLength !== size) {
-            payload.truncated = true
-            this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-bytes' })
-            continue
-          }
-          if (cached !== null) {
-            payload.files.push({ path: file, chunk: resolved, bytes: cached.bytes, sha256: cached.sha256, mtimeMs: stat.mtimeMs, object: cached.sha256 })
-            payload.bytes += cached.bytes
-            read += 1
-            continue
-          }
-          if (data === null) {
-            payload.unreadableFiles.push({ path: file, reason: 'read-failed' })
-            continue
-          }
-          // stat 与 read 之间文件可能变化：真读到的字节数仍必须服从总量预算（不猜、不静默）
-          if (payload.bytes + data.byteLength > this.maxBytes) {
-            payload.truncated = true
-            this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-bytes' })
-            continue
-          }
-          const sha = sha256Hex(data)
-          await this.writeObjectWithHash(data, sha)
-          if (identity !== null) this.rememberCachedFile(identity, file, sha, data.byteLength)
-          payload.files.push({ path: file, chunk: resolved, bytes: data.byteLength, sha256: sha, mtimeMs: stat.mtimeMs, object: sha })
-          payload.bytes += data.byteLength
-          read += 1
-        } catch (error) {
-          payload.unreadableFiles.push({ path: file, reason: errorDetail(error) })
-        }
+      if (listed.walkAborted) {
+        payload.walkIncomplete = true
+        for (const dir of listed.unwalkedDirs) unwalked.push(dir)
       }
+      read += await this.captureChunkCandidates(resolved, listed.files, Math.max(0, this.maxFiles - read), payload, outOfBudget)
     }
+    // 精确的「没进去的子树」：有 ⇒ 删除集只在这些子树里 fail-closed；没有（老台账 / 栈被截断）
+    // ⇒ 退回全局拒删（见 planCreatedRemovals）
+    if (unwalked.length > 0) payload.unwalkedDirs = [...new Set(unwalked)].sort()
+
     // `truncated` 为真时**不能**判 chunk-not-found：那是「分块确实存在、只是没来得及走查完」
     // （时间预算 / 取消信号）—— 报成「找不到分块」会让用户以为工作区配错了。
     if (!sawChunk && payload.files.length === 0 && !payload.truncated) {
@@ -2117,6 +2210,8 @@ export class RollbackPointEngine {
     payload.ignoreIncomplete = payload.ignoredDirCount > 0
     // 路径身份缓存落盘（best-effort：写不进去只意味着下次全量读，绝不影响留点成败）
     await this.persistPathCache()
+    // 落点列表排序：并发读让入点顺序不定，契约必须是「按路径有序」（预览 / 对账 / 指纹都靠它）
+    payload.files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     // 留痕列表也排序：跨分块 / 依赖 readdir 顺序时输出仍确定（测试与对账都能逐条比）
     payload.skipped.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
     payload.excludedDirs.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
@@ -2125,6 +2220,14 @@ export class RollbackPointEngine {
       .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
       .map((f) => [f.path, f.bytes, f.sha256])
     const fingerprint = sha256Hex(JSON.stringify({ chunks: [...payload.chunks].sort(), files: canonical }))
+    // 自适应预算（见 ROLLBACK_MIN/MAX_CAPTURE_BUDGET_MS）：被截断 ⇒ 下次翻倍（上限）；
+    // 用得很少 ⇒ 下次减半（下限）。大仓库第一次撞上限后自动拿到更大预算，小仓库自动回落，
+    // 不会每回合白等。回退期的走查预算（rewindBudgetMs）**不参与**这套调整。
+    if (payload.truncated || payload.walkIncomplete === true) {
+      this.captureBudgetMs = Math.min(this.captureBudgetMaxMs, this.captureBudgetMs * 2)
+    } else if (this.stamp() - capturedAt < this.captureBudgetMs / 4) {
+      this.captureBudgetMs = Math.max(this.captureBudgetMinMs, Math.floor(this.captureBudgetMs / 2))
+    }
     const degraded = payload.truncated
       || payload.skippedCount > 0
       || payload.unreadableDirs.length > 0
@@ -2144,6 +2247,201 @@ export class RollbackPointEngine {
   /* ---------------------------------------------------------- 忽略规则 / 路径身份缓存 */
 
   /** 用户忽略规则是否命中该路径（只认「相对分块根」的斜杠路径） */
+  /**
+   * 处理一个分块的候选文件（**两阶段**）。
+   *
+   *  ① **顺序判定**（与旧的串行实现逐条一致，保证预算 / 计数 / 字节上限完全确定）：
+   *     文件数上限、时间预算、自身数据区、stat、单文件上限、总量上限、身份缓存 + 对象存在性
+   *     → 得出「当场入点（缓存命中）」还是「要真读」，该跳过的**当场**按原有 reason 逐条留痕。
+   *     stat 按**有序批**并发取（判定仍严格按顺序），并用「一次 readdir 的对象名单快照」代替
+   *     每个文件一次 fs.access —— 这两处是稳态成本的大头（真机实测各占 ~5 s / ~3.7 s）。
+   *  ② **并发读 + 哈希 + 落对象仓**：这是捕获耗时的**唯一大头**（真机 148 s / 31,702 个对象，
+   *     96% 的时间），用 captureConcurrency 个 worker 并发跑；并用单文件字节闸门保证
+   *     「同时在飞的内容字节 ≤ maxFileBytes」（与旧串行实现同量级的内存上界）。
+   *
+   * 返回本分块**真正入点**的文件数（调用方据此推进 maxFiles 预算）。
+   * 没判到 / 没读完的条目一律逐条进 skipped(budget-time)，绝不静默丢弃。
+   */
+  private async captureChunkCandidates(
+    chunk: string,
+    candidates: readonly string[],
+    slots: number,
+    payload: RollbackWorkspacePayload,
+    outOfBudget: () => boolean,
+  ): Promise<number> {
+    // 缺口优先：身份缓存里还没有的路径排前面 ⇒ 每个点都在补上次没覆盖的部分（见 orderByCoverage）
+    const ordered = await this.orderByCoverage(candidates)
+    const decided = new Array<boolean>(ordered.length).fill(false)
+    interface ReadPlan { path: string; size: number; mtimeMs: number; identity: string | null }
+    const plans: ReadPlan[] = []
+    let captured = 0
+    let newReads = 0
+    // 字节预算必须在**准入那一刻**按 stat.size 预留：真正入点发生在并发的第二阶段，
+    // 若拿 payload.bytes 当判据，同一个分块里后面的文件会全部误判成「还有额度」
+    let accounted = payload.bytes
+    // 对象名单快照：一次 readdir 顶掉「每个候选一次 fs.access」（读不到则回落逐条判断）
+    const names = await this.objectNamesSnapshot()
+
+    let cursor = 0
+    while (cursor < ordered.length) {
+      if (outOfBudget()) break // 剩余条目由收尾循环逐条记 budget-time（不预取 stat）
+      const window = ordered.slice(cursor, cursor + ROLLBACK_CAPTURE_STAT_BATCH)
+      const stats = await Promise.all(window.map((file) => this.fileStatOf(file)))
+      let broke = false
+      for (let offset = 0; offset < window.length; offset += 1) {
+        const file = window[offset] ?? ''
+        const info: RollbackFileStat = stats[offset] ?? { isFile: false, size: 0, mtimeMs: 0, identity: null, error: 'stat-missing' }
+        const index = cursor + offset
+        if (outOfBudget()) { broke = true; break }
+        decided[index] = true
+        if (isInsidePath(file, this.root)) {
+          this.recordSkip(payload, 'skipped', { path: file, reason: 'self-store' })
+          continue
+        }
+        // **先 stat 判大小、再决定读不读**：单文件超限或加上它会超总量 → 跳过并如实留痕
+        // （旧实现的 read > 0 短路让**首个**文件完全不设上限，会被整份读进内存 —— t5-F1）
+        if (info.error !== undefined) {
+          payload.unreadableFiles.push({ path: file, reason: info.error })
+          continue
+        }
+        if (!info.isFile) {
+          this.recordSkip(payload, 'skipped', { path: file, reason: 'not-a-file' })
+          continue
+        }
+        if (info.size > this.maxFileBytes) {
+          payload.truncated = true
+          this.recordSkip(payload, 'skipped', { path: file, reason: 'too-large' })
+          continue
+        }
+        // 路径身份缓存：身份（dev:ino:size:mtimeNs:ctimeNs:mode）未变 ⇒ 复用已存 sha256，**不重读**
+        const candidate = info.identity === null ? null : await this.lookupCachedFile(info.identity, file)
+        // **F-2（t12 修复）**：缓存命中也要确认对象仓里真有那个 blob —— 对象被外部清掉后
+        // 若直接复用 sha256，新点会「零对象却 canRestore=true」，预览骗人（执行才响亮失败）。
+        // 对象不在 ⇒ 当作未命中：真读 + 重写对象（缓存因此自愈）。
+        const objectPresent = candidate === null
+          ? false
+          : names !== null ? names.has(candidate.sha256) : await this.objectExists(candidate.sha256)
+        if (candidate !== null && objectPresent) {
+          // 身份未变 ⇒ 内容必然与缓存一致：零 I/O 直接入点（稳态成本与仓库大小无关的来源）。
+          // **不占读预算**：maxFiles / maxBytes 约束的是「这回合新读进来的内容」，不是「记录多少条」
+          // —— 否则大仓库每个点都只能记下前 N 条，滚回某点时会漏掉其余文件（覆盖率永远不收敛）。
+          payload.files.push({
+            path: file, chunk, bytes: candidate.bytes, sha256: candidate.sha256, mtimeMs: info.mtimeMs, object: candidate.sha256,
+          })
+          payload.bytes += candidate.bytes
+          captured += 1
+          continue
+        }
+        // 只有**要真读的新内容**才受每回合的规模预算约束（判定仍严格按顺序 ⇒ 结果确定）
+        if (newReads >= slots) {
+          payload.truncated = true
+          this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-files' })
+          continue
+        }
+        if (accounted + info.size > this.maxBytes) {
+          payload.truncated = true
+          this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-bytes' })
+          continue
+        }
+        accounted += info.size
+        newReads += 1
+        plans.push({ path: file, size: info.size, mtimeMs: info.mtimeMs, identity: info.identity })
+      }
+      cursor += window.length
+      if (broke) break
+    }
+
+    if (plans.length > 0) {
+      // ② 并发读 + 落对象仓。outOfBudget 一命中就**不再开新条目**（在飞的照常收尾），
+      //    未开工的条目在循环外逐条记 budget-time —— 与串行版「中断处逐条留痕」同一诚实口径。
+      const gate = new ByteGate(this.maxFileBytes)
+      const done: boolean[] = new Array<boolean>(plans.length).fill(false)
+      let planCursor = 0
+      let stopped = false
+      const workers = Array.from({ length: Math.min(this.captureConcurrency, plans.length) }, async () => {
+        for (;;) {
+          if (stopped) return
+          const index = planCursor
+          planCursor += 1
+          if (index >= plans.length) return
+          const item = plans[index] as ReadPlan
+          if (outOfBudget()) { stopped = true; return }
+          await gate.acquire(item.size)
+          try {
+            if (outOfBudget()) { stopped = true; return }
+            const data = await this.readFileBytes(item.path)
+            if (data.byteLength !== item.size) {
+              // stat 与 read 之间文件变了（旧口径：budget-bytes）—— 绝不按旧字节数记账
+              payload.truncated = true
+              this.recordSkip(payload, 'skipped', { path: item.path, reason: 'budget-bytes' })
+              done[index] = true
+              continue
+            }
+            // **捕获竞态**：读之前拿到的身份若在读完时已变，说明这次读到的内容未必是「留点时刻」
+            // 的内容（回合与留点并发）⇒ 不当作前像，只如实进 unreadableFiles（它本身是**证明名单**
+            // 的一员：证明「留点时存在」，因此绝不会被当成新建删掉）。
+            const after = item.identity === null ? null : await this.pathIdentityOf(item.path)
+            if (item.identity !== null && after !== item.identity) {
+              payload.unreadableFiles.push({ path: item.path, reason: 'changed-during-read' })
+              done[index] = true
+              continue
+            }
+            const sha = sha256Hex(data)
+            await this.writeObjectWithHash(data, sha)
+            if (item.identity !== null) this.rememberCachedFile(item.identity, item.path, sha, data.byteLength)
+            payload.files.push({
+              path: item.path, chunk, bytes: data.byteLength, sha256: sha, mtimeMs: item.mtimeMs, object: sha,
+            })
+            payload.bytes += data.byteLength
+            captured += 1
+            done[index] = true
+          } catch (error) {
+            payload.unreadableFiles.push({ path: item.path, reason: errorDetail(error) })
+            done[index] = true
+          } finally {
+            gate.release(item.size)
+          }
+        }
+      })
+      await Promise.all(workers)
+      for (let index = 0; index < plans.length; index += 1) {
+        if (done[index] === true) continue
+        payload.truncated = true
+        this.recordSkip(payload, 'skipped', { path: (plans[index] as ReadPlan).path, reason: 'budget-time' })
+      }
+    }
+
+    // 阶段 ① 里没判定到的（时间预算打断）同样逐条留痕 —— 覆盖自检因此仍认为名单完整
+    for (let index = 0; index < ordered.length; index += 1) {
+      if (decided[index] === true) continue
+      payload.truncated = true
+      this.recordSkip(payload, 'skipped', { path: ordered[index] ?? '', reason: 'budget-time' })
+    }
+    // 返回值 = 本分块消耗掉的**读槽位**（缓存命中不占槽位；调用方据此推进 maxFiles）
+    return newReads
+  }
+
+  /**
+   * 缺口优先排序：身份缓存里**没有**的路径排前面。
+   *
+   * 为什么：预算固定时按目录顺序走查，同一个「已覆盖且便宜」的前缀每回合都会吃掉全部预算，
+   * 尾部永远进不来（真机：34k 文件每次只覆盖 1/5，且五次都是同一批 outputs/ 前缀）。
+   * 未覆盖的排前面 ⇒ 每个点都在补上一次的缺口，覆盖率随回合**单调收敛**到 100%。
+   * 组内保持走查顺序（稳定），因此同一输入下的结果仍然确定。
+   */
+  private async orderByCoverage(candidates: readonly string[]): Promise<string[]> {
+    if (candidates.length <= 1) return [...candidates]
+    const cache = await this.loadPathCache()
+    if (cache.size === 0) return [...candidates]
+    const covered = new Set<string>()
+    for (const entry of cache.values()) covered.add(pathKey(entry.path))
+    if (covered.size === 0) return [...candidates]
+    const cold: string[] = []
+    const hot: string[] = []
+    for (const file of candidates) (covered.has(pathKey(file)) ? hot : cold).push(file)
+    return cold.length === 0 ? hot : [...cold, ...hot]
+  }
+
   private ignoredByRules(rules: IgnoreRules, target: string, isDir: boolean): boolean {
     const rel = ignoreRelativePath(rules.root, target)
     return rel === null ? false : ignoreRuleMatches(rules, rel, isDir)
@@ -2162,18 +2460,41 @@ export class RollbackPointEngine {
    * 用毫秒换算同样不行：会把「同一毫秒内的两次写」当成同一个身份。
    * 读不到身份（文件消失 / 权限 / 平台不支持 bigint stat）→ null ⇒ 回落全量真读。
    */
+  /**
+   * 一次 bigint stat 拿到阶段①需要的**全部**东西（是否文件 / 大小 / mtime / 身份）。
+   * 旧实现「fs.stat + pathIdentityOf」每文件 stat 两次，真机 34k 文件白花约 5 s。
+   */
+  private async fileStatOf(target: string): Promise<RollbackFileStat> {
+    try {
+      const stat = await fs.stat(target, { bigint: true })
+      const isFile = stat.isFile()
+      return {
+        isFile,
+        size: Number(stat.size),
+        mtimeMs: Number(stat.mtimeMs),
+        identity: isFile ? fileIdentityOf(stat) : null,
+      }
+    } catch (error) {
+      return { isFile: false, size: 0, mtimeMs: 0, identity: null, error: errorDetail(error) }
+    }
+  }
+
+  /** 对象名单快照（每个捕获回合一次 readdir）；读不到则返回 null ⇒ 调用方回落逐条判断 */
+  private async objectNamesSnapshot(): Promise<Set<string> | null> {
+    if (this.captureObjectNames !== null) return this.captureObjectNames
+    try {
+      this.captureObjectNames = new Set(await fs.readdir(this.objectsDir))
+    } catch {
+      this.captureObjectNames = null
+    }
+    return this.captureObjectNames
+  }
+
   private async pathIdentityOf(target: string): Promise<string | null> {
     try {
       const stat = await fs.stat(target, { bigint: true })
       if (!stat.isFile()) return null
-      return [
-        String(stat.dev),
-        String(stat.ino),
-        String(stat.size),
-        String(stat.mtimeNs),
-        String(stat.ctimeNs),
-        String(stat.mode & 0o777n),
-      ].join(':')
+      return fileIdentityOf(stat)
     } catch {
       return null
     }
@@ -2870,13 +3191,27 @@ export class RollbackPointEngine {
       // 逐条跳过名单被记录上限截断、又没有索引 ⇒ 「未记录」≠「留点之后新建」，证明不了
       refused = 'capture-incomplete'
     }
-    // 读不出的目录：目录内容在留点时刻**未知**（路径索引只含走查过的路径）⇒ 同样证明不了
-    if (refused === null && payload.unreadableDirs.length > 0) refused = 'capture-incomplete'
-    // 用户忽略的整目录 ⇒ 其下内容在留点时刻未知 ⇒ 证明名单不完整（fail-closed）
-    if (refused === null && payload.ignoreIncomplete === true) refused = 'capture-incomplete'
-    // 走查被时间预算 / 取消信号中断 ⇒ 剩余子树**一条都没进任何名单** ⇒ 同样证明不了
-    // （这是 `truncated` 之外的第四种「名单不完整」：其余三种截断都会逐条留痕）
-    if (refused === null && payload.walkIncomplete === true) refused = 'capture-incomplete'
+    // —— 分子树拒删范围 ——
+    // 忽略目录 / 读不出的目录 / 走查没进去的子树：这三类的共同点是「其下内容在留点时刻未知」，
+    // 但它们**各自只影响自己那棵子树**。旧口径一律全局拒删，代价是「忽略一个 outputs/ 就让整个
+    // 工作区的新建文件一条都不删」；现在只拒这几棵子树，范围之外由证明名单照常判。
+    // 走查中断且拿不到精确子树列表（老台账 / 栈被截断）时才退回全局。
+    // 范围**说得清**才敢分子树拒删：忽略目录的逐条列表可能被记录上限截断（ignoredDirCount 是恒增
+    // 计数），走查中断也可能拿不到子树列表（老台账 / 栈太深）。任一「说不清」⇒ 退回全局拒删。
+    const ignoredKnown = (payload.ignoredDirs ?? []).length >= (payload.ignoredDirCount ?? 0)
+    const unwalkedKnown = (payload.unwalkedDirs ?? []).length > 0 || payload.walkIncomplete !== true
+    const scopesKnown = ignoredKnown && unwalkedKnown
+    const refusalScopes: string[] = scopesKnown
+      ? [
+        ...(payload.ignoredDirs ?? []).map((entry) => entry.path),
+        ...payload.unreadableDirs,
+        ...(payload.unwalkedDirs ?? []),
+      ]
+      : []
+    if (refused === null && !scopesKnown) {
+      // 证明名单不完整、且**说不出**不完整的确切范围 ⇒ 整个工作区一条都不删（安全方向）
+      refused = 'capture-incomplete'
+    }
     const chunks = payload.chunks
     // 走查上限 = 全树：候选的**准入**由证明名单负责，条数上限不再是安全阀
     //（旧上限 maxFiles*4 会在巨型工作区里静默漏掉真正的新建文件 —— 那是「删一半」，不是 fail-closed）
@@ -2884,7 +3219,7 @@ export class RollbackPointEngine {
     // **时间预算**：回退期的走查同样不能无限跑（分块 = 会话 cwd，家目录 / 大仓库会走很久，
     // 而捕获侧早就有 30 s 预算 —— 只修一侧等于把 OOM 形态从留点搬到了回退）。
     // 中断只会让候选**变少**（安全方向），但必须如实置 truncated（绝不静默漏删、也不谎报完整）。
-    const deadline = this.stamp() + this.captureBudgetMs
+    const deadline = this.stamp() + this.rewindBudgetMs
     const outOfBudget = (): boolean => this.stamp() >= deadline
     const candidates: string[] = []
     let truncated = false
@@ -2900,13 +3235,20 @@ export class RollbackPointEngine {
         candidates.push(file)
       }
     }
-    const refusalWarnings = this.createdRefusalWarnings(payload)
+    // 警告只在**全局拒绝**时给：分子树拒绝由 createdSkipped 逐条说明（那句「本次不删除任何
+    // 『留点后新建』的路径」在分子树拒绝下是假话 —— 文案诚实要求按真实范围分派）。
+    const refusalWarnings = refused === null ? [] : this.createdRefusalWarnings(payload)
     const all: string[] = []
     const paths: string[] = []
     const skipped: string[] = []
     for (const file of candidates) {
       all.push(file)
       // 拒删的也留在「未记录」清单里（如实报告），但绝不进删除集合
+      // 分子树拒删（忽略目录 / 读不出的目录 / 没走查到的子树）：只拒这几棵子树里的候选
+      if (refusalScopes.length > 0 && refusalScopes.some((dir) => isInsidePath(file, dir))) {
+        skipped.push(file)
+        continue
+      }
       if (this.createdRemovalRefusal(file, chunks) !== null) { skipped.push(file); continue }
       let stat
       try {

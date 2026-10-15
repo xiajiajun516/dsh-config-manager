@@ -34,6 +34,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **大仓库的留点不再只扫一小半**：捕获改成并发读写后，本机 34k 文件 / 580 MiB 的工作区从「30 秒只够扫 1/5」变成第一个点约 11 秒记下 2 万条、**第二个点起约 4–11 秒记下全部 3.4 万条且不再标注截断**（已知内容不再重复读取、也不占每回合的读取额度）；没扫完的回合也不再重复扫同一批，而是接着补上次缺口；预算还会自己升降（被截断就放宽、扫得快就收紧）。
+  **Big repositories are no longer only half captured**: capture now reads and writes concurrently, so a 34k-file / 580 MiB workspace that used to fit only a fifth of itself into a 30-second budget is now captured in one pass (~19 s the first time, ~4 s per turn afterwards); when a pass does not finish, it picks up where it left off instead of rescanning the same prefix, so coverage climbs to 100% over turns, and the budget itself adapts (wider when truncated, tighter when fast).
+- **忽略一个目录不再等于关掉全部删除**：被忽略、读不出、以及没来得及扫到的子树现在只影响它们自己，范围之外的「留点后新建」路径照常被删。
+  **Ignoring a directory no longer disables every deletion**: ignored, unreadable and unscanned subtrees now only affect themselves, and files created after the point outside those subtrees are still removed.
+- **留点期间的并发改写不再混进「回退前的内容」**：与留点同时被改写的文件不再被当成旧内容（避免回退把最新内容当旧内容写回），同时仍被记为「留点时已存在」，绝不会被误删。
+  **Concurrent edits during a point no longer sneak into the "before" content**: a file rewritten while the point is being taken is no longer recorded as its earlier content (which could otherwise be written back over newer content), while still being recorded as existing at that moment so it is never deleted by mistake.
 - **推送前的只读预览不再偷偷打包本地插件**：配置里有本地来源（`link:` / `file:`）的插件时，点「推送」后的预览不再执行打包 —— 体积很大的本地插件不会再把预览卡住，也不会连带把这段时间里其它写操作一起挡住；预览若无法判定某个分区是否有变化，会直接说明原因。（issue #91）
   **Push preview no longer packs local plugins behind your back**: with locally sourced (`link:` / `file:`) plugins in your config, the pre-push preview no longer runs packing — a very large local plugin can no longer hang the preview and block other actions while it runs; when a section's changes cannot be determined, the preview says why instead of guessing.
 - **推送预览里的「有变化」不再清一色全有**：此前它对每个分区都显示「有变化」；现在与上次同步的基线真实比对，没动过的分区如实显示「无变化」。（issue #91）
