@@ -204,6 +204,28 @@ test('样式纪律：icon 入口与预览文件行只用既有 token/类，未�
   }
 })
 
+/**
+ * 底色必须跟随宿主（2026-10-15 用户反馈「浅色主题下用户消息气泡看不见」）。
+ *
+ * 背景：接管 user 渲染器后我们自复刻那条气泡，底色曾写 --cm-surface-2（= --dsw-alias-bg-layer-2）——
+ * 浅色主题下它 = #fff，而页面底 --dsw-alias-bg-base 也是 #fff ⇒ 与页面同色（对比度 0）；
+ * 宿主真机用的是 --dsw-specific-bubble（浅色 = --dsw-static-deepseek-50 = #edf3fe）。
+ * 深色下两者恰好同值，所以这条差距当时被误判成「可接受的近似档」。
+ */
+test('气泡底色跟随宿主的 --dsw-specific-bubble（不得再用 --cm-surface-2 近似）', () => {
+  const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
+  // ① 定义行：宿主 token + 兜底（无兜底的 var() 在宿主删档时会整条失效 → transparent）
+  const defs = cssSheet.match(/--cm-chat-bubble:\s*var\(--dsw-specific-bubble,\s*var\(--dsw-alias-bg-layer-2\)\)/g) ?? []
+  assert.ok(defs.length >= 2, '--cm-chat-bubble 必须在 §1 body 与 .chatEntryScope 各定义一次，实际 ' + String(defs.length) + ' 处')
+  // ② 消费点：.chatBubble 只写 --cm-*（三层单向依赖），且不得再回到 --cm-surface-2
+  const bubble = cssSheet.match(/\.chatBubble\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.match(bubble, /background:\s*var\(--cm-chat-bubble\)/, '.chatBubble 的底色必须消费 --cm-chat-bubble')
+  assert.doesNotMatch(bubble, /--cm-surface-2|--dsw-/, '.chatBubble 不得再用 --cm-surface-2 近似、也不得裸写 --dsw-*')
+  // ③ 作用域重声明：聊天流不在插件设置页子树内
+  const scope = cssSheet.match(/\.chatEntryScope\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.match(scope, /--cm-chat-bubble:\s*var\(--dsw-specific-bubble/, '.chatEntryScope 必须就地重声明 --cm-chat-bubble')
+})
+
 /* ------------------------------------------------------------ ⑤ 回合号只认可核实字段 */
 
 test('turn number: only node.location.kind turn|step counts (same read as the host turnTail)', () => {

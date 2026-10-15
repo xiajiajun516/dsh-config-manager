@@ -106,6 +106,7 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 | 页面 / 卡片表面、hover 底 | `--cm-surface-1/2`、`--cm-surface-hover` | `--dsw-alias-bg-layer-1/2`、`--dsw-alias-interactive-bg-hover` |
 | 描边 L1 / L2 | `--cm-line-1/2` | `--dsw-alias-border-l1/l2` |
 | 输入框背景 | `--cm-input-bg` | `--dsw-specific-input-major` |
+| 聊天流用户消息气泡底 | `--cm-chat-bubble` | `--dsw-specific-bubble`（缺档回落 `--dsw-alias-bg-layer-2`） |
 | 主色（focus / 选中 / 进度） | `--cm-accent` | `--dsw-alias-state-business-primary` |
 | 主按钮填充 / hover | `--cm-accent-fill` / `--cm-accent-hover` | `--dsw-alias-button-info-fill/hover` |
 | 四态 ok / info / warn / error | `--cm-ok` `--cm-info` `--cm-warn` `--cm-error` | `--dsw-alias-state-{success,info,warn,error}-primary` |
@@ -1187,8 +1188,8 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 
 ### 聊天内入口：接管 `conversation.chat.node` / user（2026-10-10）
 
-**定位**：本插件在 ui-chat 聊天流里渲染的那条**用户消息气泡 + 「回退」按钮**。它渲染在会话消息流里、不在插件设置页子树内，所以 §1 定义在 `.section` 上的 `--cm-*` **不会继承** —— `.chatEntryScope` 就地重声明
-用到的那一小撮（`--cm-text-1/3`、`--cm-surface-2`、`--cm-line-1`、`--cm-fs-*`、`--cm-sp-*`、`--cm-r-*`），**不新增任何 token 档位**（新档位必须先改 §3–§5）。类清单 = `config-manager.module.css` §15b。
+**定位**：本插件在 ui-chat 聊天流里渲染的那条**用户消息气泡 + 「回退」按钮**。它渲染在会话消息流里、不在插件设置页子树内（§1 的 token 挂在 `body` 上本就会继承；`.chatEntryScope` 再就地声明一次，是为了不依赖宿主把聊天流渲染在哪个根下）——
+重声明的那一小撮（`--cm-text-1/3`、`--cm-surface-2`、`--cm-chat-bubble`、`--cm-line-1`、`--cm-fs-*`、`--cm-sp-*`、`--cm-r-*`），**不新增任何 scale 档位**（字号/间距/圆角新档位必须先改 §3–§5；`--cm-chat-bubble` 是 §3 的语义色，不是 scale 档）。类清单 = `config-manager.module.css` §15b。
 
 - **接管是唯一路径**：宿主 `conversation.chat.node` 的 `user` key 是 keyed 遮蔽位且**没有 children 表**，framework 没有「往每条用户消息里追加 UI」的位子；我们以 `priority -1` 遮蔽宿主的 `UserMessageNodeView`
   （同一 cell 的同一 priority 再注册会抛，故 -1 是与宿主并存的唯一合法值），并**复刻**那条气泡的外观（宿主组件与其 CSS Modules 是 ui-chat 私有的，不可导入）。图片**必须**走 owner 给的
@@ -1197,8 +1198,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   **唯一显式例外**，**不得**照此扩大范围。降级 = **纯文本气泡**（`.chatFallbackBubble`，左侧一条警示线 + `data-chat-entry-fallback` 标记 + ASCII `console.warn`），语义是「用户消息绝不消失」。
 - **入口 = 只有图标（icon-only，2026-10-10 用户第二条要求）**：复用 `.chatActionBtn` 24px 无边框图标位 + `RefreshIcon`，与时间戳 / 复制图标同一行；**按钮内不得出现可见文字标签**，文案只走 `aria-label` / `title`。语义 = ghost（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
 - **已确认的三条观感差距**（如实登记，不修）：① 引用 / 技能 chip 不显示（`referenceLabels` / `skillNames` 是 ui-primitives 的包私有投影，拿不到也不编造）；② 文件类型图标退化为**扩展名徽标**
-  （`.chatFileExt` —— ui-primitives 的 `FileTypeIcon` / `fileExtension` 不在其导出表）；③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：气泡底色 `--cm-surface-2`（宿主 `--dsw-specific-bubble`，本仓库 token 层没有这一档）、
-  圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+  （`.chatFileExt` —— ui-primitives 的 `FileTypeIcon` / `fileExtension` 不在其导出表）；③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+- **气泡底色不再算近似档（2026-10-15，用户报「浅色主题下气泡看不见」）**：宿主的用户气泡底是 `--dsw-specific-bubble`，本仓库 token 层此前没有这一档，于是借用了 `--cm-surface-2`（= `--dsw-alias-bg-layer-2`）
+  —— **浅色主题下它 = `#fff`，而页面底 `--dsw-alias-bg-base` 也是 `#fff`** ⇒ 气泡与页面同色、用户消息看起来「没有气泡」（深色下两者恰好同为 bluish-850，所以只在浅色暴露）。
+  现在新增 `--cm-chat-bubble`（§3 表）指向宿主那一档，带 `--dsw-alias-bg-layer-2` 兜底：宿主换主题/换档时自动跟随，宿主删档时不至于变透明。
 - **只有一种形态：每条用户消息一颗**（2026-10-12 用户要求）：**「整回合」档整体删除** —— 偏好模块 `chat-entry-pref.ts`（含 localStorage 键 `dcm.chat-entry-mode`）、同源挂载 `chat-entry-mount.ts` 与回合尾入口组件 `RollbackTurnEntry.tsx`（槽位 `conversation.chat.turnTail`）一并下线，设置页回滚卡上那颗两档开关（`.rollbackChatEntry` + `Segmented`）与 `rollback.chatEntry.*` 五个键同步删除。
   装配点因此退回最简形态：`ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({ probe, register }))` —— 单入口没有「切档互斥」问题（T13）也不再需要为后到的槽位声明补试（T17 的有界补试随双入口一起消失）。
 - **回退预览对话框 = 简洁版（2026-10-10 用户第三条要求）**：标题固定「回退预览」；正文只有**会被回退的文件**（路径 + 「+N 行」/「−M 行」；内容已一致的一项都不列，空数组显示「工作区与该回退点一致，无需恢复」；行数算不出来显示「行数未统计」而**不是 0**）；底部只有主按钮「回退」与「取消」。**没有**三选一 mode 单选、二次确认勾选、`allowPartial` 勾选、工作区 / 会话计数面板、救援点说明段、逐段结果详情面板、留点期 notice 面板 —— 这是**有意替换**（点「回退」即确认，对话框本身就是「预览 + 确认」两步）。视觉复用既有 `dialogMask` / `dialogCard` / `dialogWide` / `dialogBodyScroll` / `actionRow` 类，**不新增样式档位**；设置页 `RollbackCard` 的预览弹窗仍保留完整能力。**描述性文案清零（2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」）**：说明行「这次回退会做以下改动：」与「这些文件的行数没有统计出来…」整段都不再渲染 —— 弹窗只留能改变决定的信息（§7）；`.previewSummary` 样式随之删除，逐文件那格的「行数未统计」保留。

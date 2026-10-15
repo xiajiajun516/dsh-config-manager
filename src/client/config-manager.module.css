@@ -75,6 +75,13 @@ body {
   --cm-line-1: var(--dsw-alias-border-l1);
   --cm-line-2: var(--dsw-alias-border-l2);
   --cm-input-bg: var(--dsw-specific-input-major);
+  /* 聊天流「用户消息气泡」的底色（2026-10-15 修「浅色主题下气泡看不见」）：
+     **必须跟随宿主自己的那一档** —— 宿主同一条气泡写的就是 --dsw-specific-bubble
+     （浅色 = --dsw-static-deepseek-50 = #edf3fe；深色 = --dsw-static-neutral-bluish-850）。
+     此前我们复刻时借用了 --cm-surface-2（= --dsw-alias-bg-layer-2），浅色下它 = #fff，
+     而页面底色 --dsw-alias-bg-base 也是 #fff ⇒ 气泡与页面同色、看起来「没有气泡」；
+     深色下两者恰好同值（bluish-850）所以只在浅色暴露。兜底保留 bg-layer-2（宿主删档时不至于变透明）。 */
+  --cm-chat-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));
   --cm-accent: var(--dsw-alias-state-business-primary);
   --cm-accent-fill: var(--dsw-alias-button-info-fill);
   --cm-accent-hover: var(--dsw-alias-button-info-hover);
@@ -5118,8 +5125,9 @@ button.profileRowMain:hover {
    它渲染在**插件设置页子树之外**（聊天流里，不是 .section 的 DOM 子树），因此 §1 定义在 .section
    上的 --cm-* token 在这里**不会继承** —— .chatEntryScope 把用到的那一小撮就地重声明一次。
    ⚠️ 这里**不新增 token 档位**（字号/间距/圆角全部复用 §1 已冻结的档位）：
-   宿主用户气泡用的是 --dsw-radius-xl / --dsw-specific-bubble / 14px，本仓库 token 层没有这三档，
-   所以观感差异是**已知且如实登记**的（圆角小一点、底色走 --cm-surface-2、字号 12.5px），
+   宿主用户气泡用的是 --dsw-radius-xl / --dsw-specific-bubble / 14px，本仓库 token 层没有这三档
+   （**底色是唯一必须跟随宿主的**：2026-10-15 修「浅色下气泡看不见」—— 见 --cm-chat-bubble 的定义行），
+   剩余差异是**已知且如实登记**的（圆角 8px < 宿主 14px、字号 12.5px < 宿主 14px），
    如需逐像素一致必须先改 DESIGN.md §3–§5 —— 本任务明确不做。
 
    类名与审查口径：
@@ -5130,6 +5138,9 @@ button.profileRowMain:hover {
   --cm-text-1: var(--dsw-alias-label-primary);
   --cm-text-3: var(--dsw-alias-label-tertiary);
   --cm-surface-2: var(--dsw-alias-bg-layer-2);
+  /* 气泡底色**不**走 --cm-surface-2（浅色下 = #fff = 页面底色 ⇒ 气泡消失），
+     跟随宿主的 --dsw-specific-bubble；定义见 §1 body 的 --cm-chat-bubble。 */
+  --cm-chat-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));
   --cm-line-1: var(--dsw-alias-border-l1);
   --cm-fs-meta: 11px;
   --cm-fs-base: 12.5px;
@@ -5174,7 +5185,7 @@ button.profileRowMain:hover {
   max-width: 100%;
   padding: var(--cm-sp-5) var(--cm-sp-8);
   border-radius: var(--cm-r-3);
-  background: var(--cm-surface-2);
+  background: var(--cm-chat-bubble);
   color: var(--cm-text-1);
   white-space: pre-wrap;
   word-break: break-word;
