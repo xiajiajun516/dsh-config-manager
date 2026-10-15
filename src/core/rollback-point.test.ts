@@ -3011,6 +3011,54 @@ test('R-50 降级口径：设计内跳过（符号链接 / 文件级忽略）不
   assert.ok(second.point?.workspace.payload?.skipped.some((e) => e.reason === 'too-large'))
 })
 
+test('R-51 预览快路径：身份命中时不再真读工作区文件（大仓库预览的 13 s 就在这一步）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-preview', { 'a.txt': 5, 'b.txt': 5, 'c.txt': 5 })
+  const reader = countingReader()
+  const engine = makeEngine(fx, { readFile: reader.seam })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-preview' })
+  const id = captured.point?.id ?? ''
+  reader.reset()
+  const first = await engine.preview(id)
+  assert.equal(first.workspace.different, 0, '三条全都一致')
+  assert.equal(reader.reads.length, 0, '身份命中 ⇒ 预览一次都不读内容：' + JSON.stringify(reader.reads))
+  // 改一条：**只有它**需要被真读（其余仍走快路径）
+  await fs.writeFile(path.join(dir, 'b.txt'), 'ZZZZZ')
+  reader.reset()
+  const second = await engine.preview(id)
+  assert.equal(second.workspace.different, 1)
+  assert.deepEqual(reader.reads, [path.join(dir, 'b.txt')], '只真读被改的那一条：' + JSON.stringify(reader.reads))
+})
+
+test('R-52 回退快路径：已一致的条目不读对象、不写盘；用不到的对象坏掉不再中止整次回退', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-rewind-fast', { 'k1.txt': 5, 'k2.txt': 5 })
+  const reader = countingReader()
+  const engine = makeEngine(fx, {
+    readFile: reader.seam,
+    writeFile: async () => { throw new Error('不该写任何文件') },
+  })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-rewind-fast' })
+  const id = captured.point?.id ?? ''
+  reader.reset()
+  const rewound = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(rewound.outcome, 'restored', JSON.stringify(ws))
+  assert.equal(ws?.reasonCode, 'nothing-to-restore', '全部已一致 ⇒ 0 变更')
+  assert.equal(reader.reads.length, 0, '身份命中 ⇒ 阶段 2/3 一次都不读：' + JSON.stringify(reader.reads))
+
+  // 新语义：**用不到的对象**坏掉不该中止整次回退（真要用它时仍会 object-missing 硬失败）
+  const payload = (await engine.read(id)).point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  await fs.rm(path.join(engine.storeDir, 'objects', payload.files[0]?.object ?? ''))
+  const second = await engine.rewind({ id, userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true })
+  const ws2 = second.segments.find((s) => s.state === 'workspace')
+  assert.equal(second.outcome, 'restored', '用不到的对象坏掉仍应成功：' + JSON.stringify(ws2?.detail))
+  assert.equal(ws2?.reasonCode, 'nothing-to-restore')
+})
+
 test('R-32 取消信号：已中止 ⇒ 在文件边界停下（部分点 + budget-time 留痕，绝不整份跑完）', async (t) => {
   const fx = await makeFixture()
   t.after(fx.cleanup)

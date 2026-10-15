@@ -1525,6 +1525,12 @@ function fileIdentityOf(stat: { dev: bigint; ino: bigint; size: bigint; mtimeNs:
   ].join(':')
 }
 
+/** 预览的逐条判定（阶段 A 并发产出；阶段 B 按记录顺序装配，语义与旧串行实现逐条一致） */
+type PreviewScanResult =
+  | { kind: 'ok'; size: number; regular: boolean; unchanged: boolean }
+  | { kind: 'missing' }
+  | { kind: 'unavailable' }
+
 class ByteGate {
   private used = 0
   private readonly waiters: (() => void)[] = []
@@ -2539,6 +2545,25 @@ export class RollbackPointEngine {
   }
 
   /** 缓存命中：身份键存在、且路径逐字相同（身份被复用也绝不认）。 */
+  /**
+   * 「这条记录的当前内容**仍然是它**吗」的身份快路径 —— **预览与执行共用同一条判据**
+   * （否则「预览说会改的 = 实际会改的」这条不变式会被打破）。
+   *
+   * 判据：路径身份（dev:ino:size:mtimeNs:ctimeNs:mode）命中**身份缓存**，且缓存里的 sha/bytes 与记录一致。
+   * 身份未变 ⇒ 内容未变：缓存里的 sha 就是**这份内容**在留点那一次真读出来的哈希（身份含 size/mtimeNs/
+   * ctimeNs/ino/dev/mode，改内容必动 mtime/ctime，Windows 上 user 代码改不了 ctime）。
+   * 任何一环拿不到（读不到身份 / 缓存没有该身份 / sha 或 bytes 不同）⇒ false，调用方回落「真读 + 哈希」。
+   *
+   * 为什么必须有它：大仓库一次预览/回退要判 3 万+ 条目，逐个真读等于把整个工作区读两遍
+   * （真机 34k 文件 / 609 MiB：预览 14.2 s 里 13 s 全在这，回退 60 s+ 同理）。**记录的指纹被篡改**
+   * 时本判据必然不成立（缓存的 sha 是真算出来的）⇒ 仍走真读 + 哈希的旧路径，护栏不退化。
+   */
+  private async unchangedByIdentity(file: RollbackWorkspaceFile, identity: string | null): Promise<boolean> {
+    if (identity === null) return false
+    const cached = await this.lookupCachedFile(identity, file.path)
+    return cached !== null && cached.sha256 === file.sha256 && cached.bytes === file.bytes
+  }
+
   private async lookupCachedFile(identity: string, target: string): Promise<{ sha256: string; bytes: number } | null> {
     const cache = await this.loadPathCache()
     const hit = cache.get(identity)
@@ -3137,6 +3162,26 @@ export class RollbackPointEngine {
 
   /* -------------------------------------------------------------- 预览 */
 
+  /**
+   * 预览的**单条只读判定**（阶段 A，可并发跑）：一次 bigint lstat + 身份快路径。
+   * `unchanged = true` 表示「已证明与记录一致」（身份命中身份缓存且 sha/bytes 相同）⇒ 调用方直接跳过。
+   */
+  private async previewScan(file: RollbackWorkspaceFile): Promise<PreviewScanResult> {
+    try {
+      // **lstat，不是 stat**：写入侧用 `symlink:'reject'`（lstat 是链接即抛），预览若跟随链接就会
+      // 说「会创建 / 会覆盖」，执行却整段失败 —— 两侧必须是同一个口径。链接一律按「不可写」报。
+      const stat = await fs.lstat(file.path, { bigint: true })
+      if (stat.isSymbolicLink()) return { kind: 'unavailable' }
+      const size = Number(stat.size)
+      const regular = stat.isFile()
+      const unchanged = regular && size === file.bytes
+        && (await this.unchangedByIdentity(file, regular ? fileIdentityOf(stat) : null))
+      return { kind: 'ok', size, regular, unchanged }
+    } catch (error) {
+      return classifyPreviewStatFailure(error) === 'missing' ? { kind: 'missing' } : { kind: 'unavailable' }
+    }
+  }
+
   private trackWarnings(record: RollbackPointRecord): RollbackGuidance[] {
     const out: RollbackGuidance[] = []
     for (const track of [record.workspace, record.session]) {
@@ -3405,22 +3450,28 @@ export class RollbackPointEngine {
       // 单张预览共享的比对预算（字节 + 步数）；只有真的会被改动的条目才消耗它
       const diffBudget = { bytes: 0, work: 0 }
       // T10：stat 的三种结局分开表达 —— 「不存在（ENOENT）」与「存在性未知（其它 errno）」绝不混为一谈
-      type PreviewStatOutcome =
-        | { kind: 'ok'; size: number; regular: boolean }
-        | { kind: 'missing' }
-        | { kind: 'unavailable' }
-      for (const file of wsPayload.files) {
-        let outcome: PreviewStatOutcome
-        try {
-          // **lstat，不是 stat**：写入侧用 `symlink:'reject'`（lstat 是链接即抛），预览若跟随链接就会
-          // 说「会创建 / 会覆盖」，执行却整段失败 —— 两侧必须是同一个口径。链接一律按「不可写」报。
-          const stat = await fs.lstat(file.path)
-          outcome = stat.isSymbolicLink()
-            ? { kind: 'unavailable' }
-            : { kind: 'ok', size: stat.size, regular: stat.isFile() }
-        } catch (error) {
-          outcome = classifyPreviewStatFailure(error) === 'missing' ? { kind: 'missing' } : { kind: 'unavailable' }
-        }
+      const previewFiles = wsPayload.files
+      // 阶段 A（**并发**）：逐条一次 bigint lstat + 身份快路径。大仓库这里是预览的大头：
+      // 真机 34k 条实测 —— 串行 lstat ≈ 6 s、串行真读 ≈ 13 s；并发后降到亚秒级 + 只读真正变了的那几条。
+      const scans = new Array<PreviewScanResult>(previewFiles.length)
+      let scanCursor = 0
+      const scanWorkers = Array.from(
+        { length: Math.min(this.captureConcurrency, Math.max(1, previewFiles.length)) },
+        async () => {
+          for (;;) {
+            const index = scanCursor
+            scanCursor += 1
+            if (index >= previewFiles.length) return
+            scans[index] = await this.previewScan(previewFiles[index] as RollbackWorkspaceFile)
+          }
+        },
+      )
+      await Promise.all(scanWorkers)
+      // 阶段 B（**顺序**）：只对「变了 / 没了 / 不可写」的条目按记录顺序装配 —— 列表顺序与行级 diff 的
+      // 共享预算因此仍**完全确定**（与并发前逐条一致，测试可逐字对账）。
+      for (let index = 0; index < previewFiles.length; index += 1) {
+        const file = previewFiles[index] as RollbackWorkspaceFile
+        const outcome: PreviewScanResult = scans[index] ?? { kind: 'unavailable' }
         if (outcome.kind === 'missing') {
           // **只有 ENOENT** 才算「当前确实不存在」⇒ 回退会重新创建它
           missing += 1
@@ -3438,6 +3489,8 @@ export class RollbackPointEngine {
           changedFiles.push({ path: file.path, status: 'overwrite', ...previewCountsUnavailable() })
           continue
         }
+        // 身份快路径已证明「与记录一致」⇒ 一个字段都不改（内容一致的文件不列进列表）
+        if (outcome.unchanged) continue
         const { size, regular } = outcome
         const sizeMatches = regular && size === file.bytes
         const withinCaps = file.bytes <= this.previewDiffMaxFileBytes && size <= this.previewDiffMaxFileBytes
@@ -3446,7 +3499,7 @@ export class RollbackPointEngine {
         // ② 大小不一致时也得读一次才能给行级统计（超限的大文件不白读）。
         if (regular && (sizeMatches || withinCaps)) {
           try {
-            current = await fs.readFile(file.path)
+            current = await this.readFileBytes(file.path)
           } catch {
             current = null
           }
@@ -3838,12 +3891,25 @@ export class RollbackPointEngine {
     const detail: string[] = []
     const writable: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
     let failed = 0
+    // 「已与记录一致」的条目数（身份快路径证明）—— 后面「0 变更」的文案与统计要用
+    let unchanged = 0
     for (const file of payload.files) {
       // 门：记录里的路径必须落在记录里的分块内（记录不可成为写原语）
       const inChunk = payload.chunks.some((chunk) => path.isAbsolute(chunk) && isInsidePath(file.path, chunk))
       if (!path.isAbsolute(file.path) || !inChunk || isInsidePath(file.path, this.root)) {
         failed += 1
         pushDetail(detail, 'invalid-path ' + file.path)
+        continue
+      }
+      // **身份快路径**：身份（dev:ino:size:mtimeNs:ctimeNs:mode）命中身份缓存、且缓存的 sha/bytes 与记录
+      // 一致 ⇒ 这个文件当前就是留点时刻的内容，**它根本不会被写** ⇒ 连对象都不必读。
+      // 大仓库实测：旧口径下阶段 1 会把 34k 个对象（609 MiB）全读一遍 + 哈希一遍（回退 60 s+ 全在这）。
+      // 语义变化（有意、且更准）：阶段 1 的对象校验只对**真要写**的条目做 —— 一个用不到的对象坏掉，
+      // 不该中止整次回退；真要用它时（该文件确实变了）照样会 `object-missing` / `object-hash-mismatch` 硬失败。
+      const info = await this.fileStatOf(file.path)
+      if (info.error === undefined && info.isFile && info.size === file.bytes
+        && (await this.unchangedByIdentity(file, info.identity))) {
+        unchanged += 1
         continue
       }
       try {
@@ -3896,7 +3962,6 @@ export class RollbackPointEngine {
     // E1：内容已与快照一致的条目**不再写** —— 「0 变更」就要是真的 0 次写入
     // （否则工作区已与该点一致时也会重写全部文件，白耗 I/O 并抖动 mtime）。
     const needed: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
-    let unchanged = 0
     for (const item of writable) {
       let identical = false
       try {
@@ -3942,7 +4007,7 @@ export class RollbackPointEngine {
       let bytes: Uint8Array | null = null
       let unreadable: string | null = null
       try {
-        bytes = await fs.readFile(item.file.path)
+        bytes = await this.readFileBytes(item.file.path)
       } catch (error) {
         // **只认 ENOENT = 当时确实不存在**。其它 errno（EACCES / EMFILE / EBUSY…）是
         // 「读不出来」而不是「没有」—— 折成 null 会让回滚阶段把这个**存在**的文件删掉
@@ -3989,7 +4054,7 @@ export class RollbackPointEngine {
     if (failed === 0) {
       for (const item of needed) {
         try {
-          const current = await fs.readFile(item.file.path)
+          const current = await this.readFileBytes(item.file.path)
           if (sha256Hex(current) !== item.file.sha256) mismatched.push(item.file.path)
         } catch {
           mismatched.push(item.file.path)
