@@ -260,12 +260,6 @@ export function ContentPicker({
                     }
                   />
                 </div>
-                {/* issue #90：工作区分区只带**登记表**（路径/标题/会话归属），不搬目录内文件。
-                    条目行里每条工作区都带着自己的路径（看起来像「要备份这个目录」），而体积只有
-                    1.6 KB 这类小数字 —— 不给一句说明，用户会以为资料没被备份（真机反馈）。 */}
-                {node.section === 'workspaces' && (
-                  <span className={css.hint}>{t('picker.workspacesRecordsOnly')}</span>
-                )}
                 {/* 展开/收起两端都有高度动画（common/Motion.tsx 的 Collapse）；
                     容器**始终存在**，所以 aria-controls 恒有值。 */}
                 <Collapse open={open} id={unitsId(node.section)}>
