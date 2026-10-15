@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.74] - 2026-10-16
+
+> **本版主题**：**回滚点与回退全面提速** —— 大工作区的留点不再「30 秒只扫到一小半」，第二个点起就记全 3.4 万条；回退预览改走文件身份快路径（实测 14.2 秒 → 2~3 秒级），回滚点清单改成每个点只存相对上一点的增量（稳态 12 MB → 11 KB）。同一轮里，差异预览不再只画前 400 行并跟随侧边栏高度，个别目录没扫到不再让「留点后新建的文件」整批不删，推送前的只读预览也不再偷偷把本地插件打包一遍（issue #91）。
+>
+> **Theme**: **Rollback points and rewinds are much faster across the board** — capturing a large workspace no longer fits only a fraction of itself into one pass (34k files, fully recorded from the second point on), the rewind preview takes a file-identity fast path (measured 14.2 s → the 2–3 s range), and the point ledger now stores per-point deltas (steady state 12 MB → 11 KB). In the same release the file diff no longer stops at the first 400 rows and follows the sidebar height, files created after a point are no longer all kept just because one subtree was not walked, and the pre-push preview no longer packs local plugins behind your back (issue #91).
+
 ### 🐛 修复 · Fixed
 
 - **点开「回退」快多了**：预览与回退此前会把记录在案的每个文件都真读一遍再比哈希（3 万+ 文件的工作区点上十几秒）；现在先看文件身份（大小 / 修改时间 / inode）有没有变，没变的直接跳过，只读真正变过的那几条。实测 3.4 万文件的点：预览从 14.2 秒降到 2~3 秒级，回退也省掉同一轮全量读取。
@@ -54,6 +60,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **User message bubbles are visible again on the light theme**: they used to share the page background colour and looked like they had no bubble at all; the bubble now follows DSH's own bubble colour and a message's file-card outline is back to DSH's own border strength, with the dark theme unaffected.
 - **自己消息里的引用 / 技能标记与文件图标现在和 DSH 同款**：接管用户消息气泡后这两处此前是简化版（技能名一个都不显示、文件只有扩展名文字徽标）；现在改用 DSH 自己的画法 —— 引用会话与技能名显示成可点开的标记，文件显示按类型着色的图标；DSH 版本较老、拿不到这些画法时，仍回落到原来的简化版（不会空白，也不会假装画过）。
   **Reference / skill chips and file icons in your own messages now match DSH**: after we took over the user-message bubble these two stayed simplified (skill names were not shown at all, files only got an extension badge); they now use DSH's own rendering — session references and skill names become clickable chips and files get their type-coloured icon — falling back to the simplified version on older DSH builds where those pieces are unavailable.
+
+- **回退的文件差异现在把整份文件都画出来**：此前最多只画前 400 行、并提示「只画了前 400 行（共 4187 行）」，剩下的内容在界面上看不到；现在宿主给多少行就画多少行（真正的上限仍是单文件体积那道门，不再是 400 行）。差异保真度也一并提高：几千行文件里的普通改动此前会被判成「差异规模较大，已按整块替换展示」，现在只有整份文件几乎重写时才会退化 —— 一条常被误读为报错的提示，变回真正罕见的事实说明。
+
+  **The rollback file diff now draws the whole file**: it used to stop after the first 400 rows and say "only the first 400 of 4187 rows are drawn", hiding the rest; it now draws every row the host provides (the per-file size limit stays as the real bound, the 400-row cap is gone). Diff fidelity improved with it: ordinary changes in a several-thousand-line file used to be reported as a whole-block replacement, which now happens only when the file is almost entirely rewritten — a note that read like an error becomes a rare, factual remark.
 
 - **回退的文件预览现在跟着侧边栏的高度走**：此前差异区最多只长到窗口高度的八成（大屏上等于一个固定的 ~800px 上限），侧边栏比它高时底下就留一段空白；现在它随侧边栏一起变高变矮，只有宿主没给高度时才回落到一条视口上限；同一屏里的「加载中 / 一致 / 看不了 / 读失败」也改成占满整块，状态切换时高度不再跳动。
 
