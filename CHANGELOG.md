@@ -41,6 +41,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **浅色主题下的用户消息气泡又看得见了**：此前它在浅色主题里与页面底色相同、看起来像没有气泡；现在气泡底色跟随 DSH 自己的气泡色，消息里文件卡的描边也一并调回 DSH 的深浅（比原来清楚一档），深色主题不受影响。
   **User message bubbles are visible again on the light theme**: they used to share the page background colour and looked like they had no bubble at all; the bubble now follows DSH's own bubble colour and a message's file-card outline is back to DSH's own border strength, with the dark theme unaffected.
 
+- **大工作区里「留点后新建的文件」不再一律不删**：一次留点没扫完整个工作区时，回退预览此前会直接放弃整批删除并提示「证明名单不完整」；现在只要目录确实都走查过，留点之后新建的文件照常被删掉，只有真正没走查到的目录才保持原样（预览仍会说明原因）。
+  **Files created after a point are no longer always kept in large workspaces**: when a point could not scan the whole workspace, the rewind preview used to give up on the whole deletion batch and warn that its proof list was incomplete; as long as the directories were in fact walked, files created after the point are removed again, and only directories that were genuinely never walked are left alone (the preview still says why).
+
 ## [0.1.73] - 2026-10-15
 
 > **本版主题**：**回滚点不再拖垮宿主** —— 回合自动留点改为默认关闭，台账改成一条一写并带体积上限（此前能涨到几百 MiB，把宿主反复拖到内存溢出退出），关掉开关后聊天里的回退入口一并收起；同时第三方插件的数据也能一起迁移了。

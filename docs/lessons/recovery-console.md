@@ -335,7 +335,8 @@ Linux（web profile）同版本：index.json = **311,521,007 B**（50 条，单�
 的工作区能让 walk + stat + sha256 跑很久。新增 `ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS = 30_000`（引擎选项
 `captureBudgetMs`）与 `RollbackPointInput.signal`（tracker 在 `stop()` 时 abort、重新 `start()` 时换新 controller）。
 超时 / 取消**不是失败**：已收条目照常成点，未走查部分按 `budget-time` 逐条进 skipped 且 `truncated` 置真
-⇒ 结尾 reasonCode 自动落成 `capture-truncated`、删除集自动 fail-closed（证明名单不完整就一条都不删）。
+⇒ 结尾 reasonCode 自动落成 `capture-truncated`。**删除集是否 fail-closed 取决于中断发生在哪一段**
+（原稿写「自动 fail-closed」过宽，2026-10-15 修正：只有走查本身被打断才拒删；见文末「采集预算落在走查之后的误报」）。
 **连带修正**：`truncated` 为真时不得判 `chunk-not-found` —— 否则「分块确实存在、只是没跑完」会被报成
 「工作区配错了」。截止用 `stamp()`（单调）比较：系统时钟回拨不会让预算永不触发。
 
@@ -398,5 +399,36 @@ checkpoint-rewind #24（未引用 git 对象被 gc）同样不适用（自管对
 **C5 的二手结论被推翻**（重要教训）：审计报告称「409 走泛化错误、专门文案永不出现、界面显示裸 HTTP 409」。核实源码后不成立 —— `readJson`（`common/http.ts`）**早已**把响应体里的 `code` 透传进 `ConfigManagerApiError.code`，而 `requestRewind` 的 catch 用 `codeKeyOfError` 读它 ⇒ 409 时界面显示的是 `rollback.code.session-active`（文案可操作：等本轮结束 / 只回溯消息）。真实缺陷只是 `chatRewindFailure` 里那个 `session-active` 分支**永不命中**（该码只经 409 从 HTTP 层来）⇒ 按「防御性分支」保留并如实注明，未改行为。**教训：审计报告的行号级结论也必须回源码复核，尤其是「某条路径永远走不到」这类判断。**
 
 **H5 的调查结论（不改代码）**：Cordis 的 `ctx.get` 在 apply 期只能拿到**已 apply** 的服务，而 `registerRollbackCommand` 在装配期读一次并缓存 ⇒ `commands` 行晚于本插件时 `/rollback` 不注册（只 warn）。**本机无法坐实** DSH 内置插件与本插件的 apply 顺序（`app.asar` 不可直接读，本机 profile 的 `cordis.patch.yml` 里没有 commands 行）。处置：**修正注释**（原文声称「调用期惰取」与实现不符 —— 这是本轮实际修掉的东西），保留 warn，不引入 `ctx.inject(['commands'])`（改装配时机的风险大于该缺口）。
+
+## 采集预算落在「走查之后」的误报：`walkIncomplete` 语义修正（2026-10-15）
+
+**真机现象**（用户截图）：回退预览同时给两条警告 —— 段级 `capture-truncated`（「有一态留得不完整（回退可能不完整）」）
+与 `createdRefused` 成因 `walk-incomplete`（「本次不删除任何『留点后新建』的路径」）。
+
+**实测取证**（本机 `~/.dsh/dsh-config-manager/rollback-points/`，工作区分块 = `D:\Projects\personal\dsh-config-manager`）：
+- 最近 5 个自动点**全部**耗时 30.1–30.2 s（判据 = 载荷文件 mtime − 点创建时刻），即每个点都撞满
+  `ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS`（30 s）；最新点 `files=19297`（`maxFiles` 上限 20000）、
+  `skippedCount=14360(list-capped)`（逐条名单上限 5000）、`bytes≈228 MB`（总量预算 512 MiB 未触）。
+- 该点写在载荷里的路径索引 `count=34350`；**独立数一遍**该工作区真实文件数 = 34352、符号链接 = 10
+  ⇒ 34350 + 9 条 `link` 留痕与真实树完全吻合 ⇒ **走查其实走完了**（`walkIncomplete` 是被误置的）。
+- 走查量的 94% 来自三个目录：`outputs/` 21379、`.tmp/` 8983、`.qa/` 1842（都不是 `node_modules`/`.git` —— 两者整棵排除，
+  另有 52 个 dep-dir + 7 个 git-dir 进 `excludedDirs`）；`listChunkFiles` 是 LIFO 栈，**收进快照的 19297 条里
+  19052 条来自 `outputs/`**，`.tmp/`、`.qa/` 一条都没进（额度被先走到的目录吃光）。
+
+**根因**：`captureWorkspace` 在读文件循环里撞预算时**无条件**置 `walkIncomplete` —— 而该断点可能发生在
+`listChunkFiles` **正常返回之后**。`walkIncomplete` 的语义应是「栈里还有没进去的子树」（那些路径一条都没进任何名单），
+与「走查走完了、只是没读完」是两件事：后者的路径**全在 `walked` 里**，本来可以进证明名单。
+
+**修法**（两处判据必须成对改，缺第二处就是把老文件当新建删）：
+1. `listChunkFiles` 增回传 `walkAborted`（只在 `shouldStop` 早退时置真）；`captureWorkspace` 只据此置 `walkIncomplete`，
+   读文件循环的 break 不再置它；
+2. 路径索引的写入条件从「`skippedTruncated`」推广为**覆盖自检**（`walked` 里有路径既不在 `files`、也不在
+   `skipped`/`unreadableFiles`）—— 否则读文件阶段被打断时，走查过却没进名单的路径既没索引也没标记，会被当成
+   「留点后新建」删掉；索引写失败则退回 `walkIncomplete`（安全方向）。`planCreatedRemovals` 相应改为
+   「索引存在即并入证明名单」（原先只在 `skippedTruncated` 时读它，会漏读索引）。`truncated` 语义不变（照旧如实标截断）。
+
+**护栏**（`src/core/rollback-point.test.ts`）：R-43（预算落在走查之后 ⇒ 不置 `walkIncomplete`、写路径索引、
+新建文件照常被删、没读到的老文件绝不被删）、R-44（走查被打断 ⇒ 仍报 `walk-incomplete`、全局一条都不删，
+且不写一份「看起来完整」的索引）；R-31 / R-36 / R-41 原样通过（超时 / 标志 ⇒ 拒删 / 回退期预算）。
 
 

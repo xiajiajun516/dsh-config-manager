@@ -2672,6 +2672,153 @@ test('R-31 采集时间预算：超预算留**部分点**并如实标 truncated�
   assert.equal(track?.payload?.walkIncomplete, true, '走查中断必须标记 ⇒ 删除集随之 fail-closed')
 })
 
+/**
+ * 测试专用的时序注入：把「预算**何时**越界」钉成确定性的（不靠真机速度）。
+ *
+ * `now` 恒定返回同一个基线时刻，直到 state 被置位才推过 deadline：
+ *  · `walkDone` 由 {@link timeOutAfterWalk} 在 listChunkFiles 返回后置位 ⇒ 越界发生在**读文件阶段**；
+ *  · `armed` 由 {@link timeOutAtStop} 在第 N 次停止判据内置位 ⇒ 越界发生在**走查之中**。
+ */
+function makeArmedClock(budgetMs: number): {
+  now: () => number
+  state: { armed: boolean; walkDone: boolean; postWalkStamps: number }
+} {
+  const base = 1_000_000
+  const state = { armed: false, walkDone: false, postWalkStamps: 0 }
+  const now = (): number => {
+    if (state.armed) return base + budgetMs + 60_000
+    if (state.walkDone) {
+      state.postWalkStamps += 1
+      // 走查结束后的**第 2 次**判定才越界 ⇒ 第一个文件照常入点（证明中断发生在读文件阶段）
+      if (state.postWalkStamps > 1) return base + budgetMs + 60_000
+    }
+    return base
+  }
+  return { now, state }
+}
+
+/** 包一层私有的 listChunkFiles：在**走查返回之后**让时钟越界。 */
+function timeOutAfterWalk(engine: RollbackPointEngine, state: { walkDone: boolean }): void {
+  const self = engine as unknown as { listChunkFiles: (...args: unknown[]) => Promise<unknown> }
+  const original = self.listChunkFiles.bind(engine)
+  self.listChunkFiles = async (...args: unknown[]) => {
+    try {
+      return await original(...args)
+    } finally {
+      state.walkDone = true
+    }
+  }
+}
+
+/** 包一层私有的 listChunkFiles：把第 `at` 次停止判据变成「越界」（栈里还剩没进去的子树）。 */
+function timeOutAtStop(engine: RollbackPointEngine, state: { armed: boolean }, at: number): void {
+  const self = engine as unknown as { listChunkFiles: (...args: unknown[]) => Promise<unknown> }
+  const original = self.listChunkFiles.bind(engine)
+  // 计数跨分块累计（每个分块各调一次 listChunkFiles，停止判据是按次判定的）
+  let calls = 0
+  self.listChunkFiles = async (...args: unknown[]) => {
+    const stop = args[5]
+    if (typeof stop === 'function') {
+      const stopFn = stop as () => boolean
+      args[5] = () => {
+        calls += 1
+        if (calls >= at) state.armed = true
+        return stopFn()
+      }
+    }
+    return await original(...args)
+  }
+}
+
+test('R-43 预算落在**走查之后**：不误报 walk-incomplete，证明名单由路径索引补全（删除照常）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-after-walk', { 'k1.txt': 3, 'k2.txt': 3, 'k3.txt': 3 })
+  const clock = makeArmedClock(50)
+  const engine = makeEngine(fx, { captureBudgetMs: 50, now: clock.now })
+  timeOutAfterWalk(engine, clock.state)
+
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-after-walk' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  // 读文件阶段被打断 ⇒ 截断仍如实标注（诚实不降级）
+  assert.equal(payload.truncated, true, '读到一半停下必须如实标截断')
+  assert.equal(captured.point?.workspace.reasonCode, 'capture-truncated')
+  assert.deepEqual(payload.files.map((f) => path.basename(f.path)), ['k1.txt'], JSON.stringify(payload.files))
+  assert.equal(payload.skipped.find((s) => s.reason === 'budget-time')?.path, path.join(dir, 'k2.txt'))
+  // 核心：走查已走完 ⇒ **不得**标记「走查不完整」（旧实现在这里误报，删除集整片失效）
+  assert.equal(payload.walkIncomplete ?? false, false, '走查已完成 ⇒ 不许标记 walkIncomplete（误报回归）')
+  // 走查过、却一条都没进名单的 k3.txt 必须由路径索引补进证明名单
+  assert.equal(payload.pathIndex?.count, 3, '覆盖自检不完整 ⇒ 路径索引必须写出，实际 ' + String(payload.pathIndex?.count))
+
+  // 点之后新建一条：证明名单完整 ⇒ 预览与执行都照常删
+  const created = path.join(dir, 'created-after.txt')
+  await fs.writeFile(created, 'NEW')
+  const preview = await engine.preview(captured.point?.id ?? '')
+  assert.equal(preview.workspace.createdRefusedReason, null, '证明名单完整 ⇒ 不拒删')
+  assert.deepEqual(preview.workspace.removals, [created])
+  assert.equal(preview.warnings.some((w) => w.code === 'rollback.warn.createdRefused'), false, JSON.stringify(preview.warnings))
+
+  const rewound = await engine.rewind({
+    id: captured.point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true,
+  })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.removed, 1, '证明名单完整 ⇒ 新建文件照常删')
+  await assert.rejects(fs.readFile(created), { code: 'ENOENT' })
+  assert.equal(await readText(path.join(dir, 'k3.txt')), 'xxx', '没读到的老文件绝不能被当成「新建」删掉')
+})
+
+test('R-44 走查本身被预算打断：栈里还有没进去的子树 ⇒ 仍然 fail-closed（一条都不删）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 分块 1 整棵走完（其中的文件照常入点）；分块 2 的走查在弹出 sub/ **之前**被预算打断 ⇒ sub/ 从未进门
+  const dir1 = await makeSizeDir(fx, 'cap-walk-ok', { 'n1.txt': 3 })
+  const dir2 = await makeSizeDir(fx, 'cap-walk-abort', { 'm1.txt': 3 })
+  const sub = path.join(dir2, 'sub')
+  await fs.mkdir(sub, { recursive: true })
+  await fs.writeFile(path.join(sub, 'm2.txt'), 'OLD-IN-SUB')
+  const clock = makeArmedClock(50)
+  const engine = makeEngine(fx, { captureBudgetMs: 50, now: clock.now })
+  // 停止判据调用序：dir1 排空(#1) → dir2 弹出(#2，仍在预算内) → dir2/sub 弹出(#3，越界 ⇒ sub/ 从未进门)
+  timeOutAtStop(engine, clock.state, 3)
+
+  const captured = await engine.capturePoint({ chunks: [dir1, dir2], sessionId: 's-walk-abort' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(payload.truncated, true)
+  assert.equal(payload.walkIncomplete, true, '子树从未进门 ⇒ 安全判据必须生效')
+  assert.deepEqual(payload.files.map((f) => path.basename(f.path)), ['n1.txt'], '打断前读完的分块照常入点')
+  assert.equal(payload.files.some((f) => f.path.startsWith(sub)), false, 'sub/ 从未被走查')
+  // 覆盖自检只认走查过的路径：sub/ 的路径无从得知 ⇒ 不该误写一份「看起来完整」的索引
+  assert.equal(payload.pathIndex ?? null, null, '不得把未走查的子树伪装成已覆盖')
+  assert.ok(payload.skipped.some((s) => s.path.endsWith('m1.txt') && s.reason === 'budget-time'), JSON.stringify(payload.skipped))
+
+  const createdElsewhere = path.join(dir1, 'created-in-walked-chunk.txt')
+  const createdRoot = path.join(dir2, 'created-root.txt')
+  const createdInSub = path.join(sub, 'created-in-sub.txt')
+  await fs.writeFile(createdElsewhere, 'NEW')
+  await fs.writeFile(createdRoot, 'NEW')
+  await fs.writeFile(createdInSub, 'NEW-IN-SUB')
+  const preview = await engine.preview(captured.point?.id ?? '')
+  assert.equal(preview.workspace.createdRefusedReason, 'capture-incomplete')
+  assert.deepEqual(preview.workspace.removals, [], '证明名单不完整 ⇒ 预览的删除清单必须是空的')
+  const warn = preview.warnings.find((w) => w.code === 'rollback.warn.createdRefused')
+  assert.equal(warn?.detail, 'walk-incomplete', '成因必须如实回传（走查被中断）')
+
+  const rewound = await engine.rewind({
+    id: captured.point?.id ?? '', userConfirmed: true, guardPolicy: 'off', mode: 'files', removeCreated: true,
+  })
+  const ws = rewound.segments.find((s) => s.state === 'workspace')
+  assert.equal(ws?.createdRefusedReason, 'capture-incomplete')
+  assert.equal(ws?.removed ?? 0, 0, '证明名单不完整 ⇒ 一条都不删（连已走查子树里的新建也不删）')
+  assert.equal(await readText(createdElsewhere), 'NEW')
+  assert.equal(await readText(createdRoot), 'NEW')
+  assert.equal(await readText(createdInSub), 'NEW-IN-SUB')
+  assert.equal(await readText(path.join(sub, 'm2.txt')), 'OLD-IN-SUB', '从未走查的文件绝不能被删')
+  assert.equal(await readText(path.join(dir1, 'n1.txt')), 'xxx')
+  assert.ok((ws?.createdSkippedCount ?? 0) > 0, '候选必须如实进拒删清单')
+})
+
 test('R-32 取消信号：已中止 ⇒ 在文件边界停下（部分点 + budget-time 留痕，绝不整份跑完）', async (t) => {
   const fx = await makeFixture()
   t.after(fx.cleanup)

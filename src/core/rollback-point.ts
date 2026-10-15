@@ -1840,6 +1840,10 @@ export class RollbackPointEngine {
   /**
    * 列出一个显式分块内的候选文件（不跟随符号链接 / junction；跳过与读不到都留痕）。
    * 返回 null = 该分块本身不可用（不存在 / 是链接 / 非常规文件），细节已写进 sink。
+   *
+   * `truncated` 与 `walkAborted` 是**两件事**：前者只说「本次列表不完整」（文件数上限 / 提交上限），
+   * 后者说「走查被预算或取消打断，栈里还有没进去的子树」—— 只有后者才意味着那些路径
+   * **一条都没进任何名单**，调用方必须据此让删除集 fail-closed。
    */
   private async listChunkFiles(
     chunk: string,
@@ -1853,10 +1857,11 @@ export class RollbackPointEngine {
     ignore?: IgnoreRules,
     /**
      * 停止判据（捕获期传时间/取消预算；回退期的走查不传）—— 返回 true 立即停止遍历，
-     * 已走查的部分照常返回并置 truncated（证明名单因此不完整 ⇒ 删除集 fail-closed）。
+     * 已走查的部分照常返回并置 truncated + walkAborted（栈里剩余的子树从未进门 ⇒ 由调用方据此 fail-closed；
+     * 回退期不传它，故 walkAborted 恒 false）。
      */
     shouldStop?: () => boolean,
-  ): Promise<{ files: string[]; truncated: boolean } | null> {
+  ): Promise<{ files: string[]; truncated: boolean; walkAborted: boolean } | null> {
     let stat
     try {
       stat = await fs.lstat(chunk)
@@ -1868,16 +1873,18 @@ export class RollbackPointEngine {
       this.recordSkip(sink, 'skipped', { path: chunk, reason: 'link' })
       return null
     }
-    if (stat.isFile()) return { files: [chunk], truncated: false }
+    if (stat.isFile()) return { files: [chunk], truncated: false, walkAborted: false }
     if (!stat.isDirectory()) {
       this.recordSkip(sink, 'skipped', { path: chunk, reason: 'not-a-file' })
       return null
     }
     const out: string[] = []
     let truncated = false
+    // 走查**被预算 / 取消打断**：栈里还压着没进去的子树 —— 那些路径一条都没进任何名单
+    let walkAborted = false
     const stack: { dir: string; depth: number }[] = [{ dir: chunk, depth: 0 }]
     while (stack.length > 0) {
-      if (shouldStop?.() === true) { truncated = true; break }
+      if (shouldStop?.() === true) { truncated = true; walkAborted = true; break }
       const item = stack.pop()
       if (item === undefined) break
       if (item.depth >= MAX_WALK_DEPTH) {
@@ -1940,7 +1947,7 @@ export class RollbackPointEngine {
       }
     }
     out.sort()
-    return { files: out, truncated }
+    return { files: out, truncated, walkAborted }
   }
 
   private async captureWorkspace(
@@ -1989,10 +1996,13 @@ export class RollbackPointEngine {
       if (listed === null) continue
       sawChunk = true
       if (listed.truncated) payload.truncated = true
+      // 走查本身被打断 ⇒ 栈里还有没进去的子树（那些路径从未进任何名单）⇒ fail-closed。
+      // **区别于**下面「走查已结束、只是读到一半超时」：后者的路径全在 walked 里，
+      // 由文件末尾的覆盖自检补进证明名单（补不齐才拒删），不该整体拒删。
+      if (listed.walkAborted) payload.walkIncomplete = true
       for (const file of listed.files) {
         if (outOfBudget()) {
-          // 同上：中断 = 剩余路径从未进任何名单 ⇒ 必须让删除集 fail-closed
-          payload.walkIncomplete = true
+          // 本分块剩余文件没被读，但它们**已经过走查**（在 walked 里）⇒ 证明名单由覆盖自检补齐
           payload.truncated = true
           this.recordSkip(payload, 'skipped', { path: file, reason: 'budget-time' })
           break
@@ -2077,11 +2087,18 @@ export class RollbackPointEngine {
     if (!sawChunk && payload.files.length === 0 && !payload.truncated) {
       return this.emptyTrack('workspace', capturedAt, 'chunk-not-found', chunks.join(' '))
     }
-    // **方向 B**：逐条跳过名单被记录上限截断（skippedTruncated）时，把走查过的全部路径另存成
-    // 路径索引对象 —— 「未记录」与「留点时就存在」只有在名单完整时才可区分。
-    // 只有这一种情形需要它：未截断时 files ∪ skipped 本身就是完整名单（零额外成本）。
-    // 写失败绝不改判留点成败：skippedTruncated 仍为 true ⇒ 回退侧 fail-closed 一条都不删（R-05f）。
-    if (payload.skippedTruncated) {
+    // **方向 B**：把走查过的全部路径另存成路径索引对象 —— 「未记录」与「留点时就存在」只有在
+    // 证明名单完整时才可区分。触发条件是**覆盖自检**（不是「跳过名单被截断」这一种特例）：
+    //  · 逐条跳过名单被记录上限截断（skippedTruncated）；或
+    //  · 读到一半被时间预算 / 取消打断 —— 本分块剩余文件进了 walked、却一条都没进任何名单。
+    // 覆盖完整时不必写（未截断时 files ∪ skipped 本身就是完整名单，零额外成本）。
+    // 写失败 ⇒ 证明名单补不齐 ⇒ 必须整体拒删（安全方向；R-05f）。
+    const proven = new Set<string>()
+    for (const file of payload.files) proven.add(pathKey(file.path))
+    for (const entry of payload.skipped) proven.add(pathKey(entry.path))
+    for (const entry of payload.unreadableFiles) proven.add(pathKey(entry.path))
+    const uncovered = walked.some((item) => !proven.has(pathKey(item)))
+    if (uncovered) {
       try {
         const paths = [...new Set(walked)].sort()
         const gz = gzipSync(Buffer.from(paths.join('\n'), 'utf8'))
@@ -2090,6 +2107,8 @@ export class RollbackPointEngine {
         payload.pathIndex = { object, count: paths.length, bytes: gz.byteLength }
       } catch (error) {
         this.warn('rollback path index failed: ' + errorDetail(error))
+        // 走查过、却没进名单的路径无法被证明 ⇒ 删除集整体拒绝（绝不「删一半」）
+        payload.walkIncomplete = true
       }
     }
     // 用户忽略的整目录 ⇒ 证明名单不完整（删除集整体拒绝；见 planCreatedRemovals）。
@@ -2837,18 +2856,19 @@ export class RollbackPointEngine {
     for (const entry of payload.excludedDirs) proof.add(pathKey(entry.path))
     for (const entry of payload.ignoredDirs ?? []) proof.add(pathKey(entry.path))
     let refused: CreatedRemovalPlan['refused'] = null
-    if (payload.skippedTruncated) {
-      // 逐条跳过名单被记录上限截断 ⇒ 必须有路径索引，否则「未记录」≠「留点之后新建」
-      const index = payload.pathIndex ?? null
-      if (index === null) refused = 'capture-incomplete'
-      else {
-        try {
-          for (const item of await this.readPathIndex(index)) proof.add(pathKey(item))
-        } catch (error) {
-          this.warn('rollback path index unreadable: ' + errorDetail(error))
-          refused = 'capture-incomplete'
-        }
+    // 路径索引**存在即并入**证明名单：写入条件已从「跳过名单被截断」推广为「覆盖自检不完整」
+    // （读到一半被预算打断也会写索引）—— 这里只看 skippedTruncated 会漏读索引 ⇒ 把老文件当新建删掉。
+    const index = payload.pathIndex ?? null
+    if (index !== null) {
+      try {
+        for (const item of await this.readPathIndex(index)) proof.add(pathKey(item))
+      } catch (error) {
+        this.warn('rollback path index unreadable: ' + errorDetail(error))
+        refused = 'capture-incomplete'
       }
+    } else if (payload.skippedTruncated) {
+      // 逐条跳过名单被记录上限截断、又没有索引 ⇒ 「未记录」≠「留点之后新建」，证明不了
+      refused = 'capture-incomplete'
     }
     // 读不出的目录：目录内容在留点时刻**未知**（路径索引只含走查过的路径）⇒ 同样证明不了
     if (refused === null && payload.unreadableDirs.length > 0) refused = 'capture-incomplete'
