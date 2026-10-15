@@ -7,6 +7,7 @@
  *  · `identical` ⇒ 才说「一致」。
  * 安全：单元格正文是磁盘原文 ⇒ 展示前必过 redact()（由 DiffTable 的 sanitize 承接）。
  */
+import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { RollbackFileDiffResult } from '../../ui/rollback-view.ts'
 import { rollbackFileDiffComparable, rollbackFileDiffReasonKey } from '../../ui/rollback-view.ts'
@@ -40,19 +41,26 @@ export interface RollbackDiffPaneProps {
 }
 
 export function RollbackDiffPane({ state, rt, title, fill }: RollbackDiffPaneProps) {
-  if (state.status === 'loading') return <Spinner label={rt('rollback.diff.loading')} />
-  if (state.status === 'error') return <Banner kind="error">{state.message === null ? rt('rollback.diff.failed') : redact(state.message)}</Banner>
+  /**
+   * 撑满档（只给侧栏标签页）下**每一个状态都套同一个整块容器**：只让「就绪且有差异」撑满时，
+   * 加载 / 一致 / 看不了 / 读失败会突然缩成一行 —— 那同样是「预览高度不跟侧栏走」，
+   * 而且一屏高度在四种状态间来回跳。非撑满（弹窗内的降级通道）保持原样：不留白、不加外边距。
+   */
+  const shell = (body: ReactNode): ReactNode =>
+    fill === true ? <div className={css.diffPane + ' ' + css.diffPaneFill}>{body}</div> : body
+  if (state.status === 'loading') return shell(<Spinner label={rt('rollback.diff.loading')} />)
+  if (state.status === 'error') return shell(<Banner kind="error">{state.message === null ? rt('rollback.diff.failed') : redact(state.message)}</Banner>)
   const diff = state.diff
   if (diff.ok !== true) {
     // 宿主结构化拒绝（未命中记录 / 存储栈不可用 …）：给可读文案 + 真实 code（不裸渲染机器码，但也不藏）
     const code = diff.code === undefined || diff.code === '' ? '' : ' — ' + diff.code
-    return <Banner kind="error">{rt('rollback.diff.failed') + code}</Banner>
+    return shell(<Banner kind="error">{rt('rollback.diff.failed') + code}</Banner>)
   }
   if (!rollbackFileDiffComparable(diff)) {
     const key = rollbackFileDiffReasonKey(diff.reason)
-    return <div className={css.hint}>{key === null ? rt('rollback.diff.reason.unknown') : rt(rk(key))}</div>
+    return shell(<div className={css.hint}>{key === null ? rt('rollback.diff.reason.unknown') : rt(rk(key))}</div>)
   }
-  if (diff.identical) return <div className={css.hint}>{rt('rollback.diff.identical')}</div>
+  if (diff.identical) return shell(<div className={css.hint}>{rt('rollback.diff.identical')}</div>)
   return (
     <div className={fill === true ? css.diffPane + ' ' + css.diffPaneFill : css.diffPane}>
       {diff.degraded && <div className={css.hint}>{rt('rollback.diff.degraded')}</div>}

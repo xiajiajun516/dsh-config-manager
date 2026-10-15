@@ -4420,14 +4420,6 @@ body {
   margin: 0;
 }
 
-.diffPaneFill .diffScroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  /* 兜底：宿主没给定高时 height:100% 会退化成内容高度，那时至少别超过视口
-     （100vh 减标签条与面板内边距 ≈ 90px，与 .dialogCard 的 vh 口径同一风格）。定高宿主下这条不生效。 */
-  max-height: calc(100vh - 90px);
-}
-
 /* 差异正文的高度：**吃满可用高度**，不再套列表那条 380px 限高
    （2026-10-14 用户实测：22px 行高下一屏只看到 10 行 —— 380px 是给「清单」定的量级，
    差异视图是这一屏的主内容，尺寸本该随窗口走）。上限 800px 与市场审阅步内区同一档，
@@ -4440,6 +4432,17 @@ body {
    撑到 80vh 会溢出卡片（正文逃出卡片边框），弹窗这一档保持原样。 */
 .dialogCard .diffPane .diffScroll {
   max-height: 380px;
+}
+
+/* 侧栏标签页（fill）的正文高度：**必须排在 .diffPane .diffScroll 之后** —— 两者特异性都是 (0,2,0)，
+   顺序决定胜负；写在前面时那条 min(80vh, 800px) 会把这里的 max-height 盖掉，
+   侧栏比 800px / 80vh 高时差异区就停在那儿、不跟侧栏走（2026-10-15 用户：预览高度不随侧栏）。
+   这里只留「宿主没给高度」的视口兜底：宿主定高时 flex:1 自己吃满，max-height 不参与（100vh 减标签条
+   与面板内边距 ≈ 90px，与 .dialogCard 的 vh 口径同一风格）。 */
+.diffPaneFill .diffScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: calc(100vh - 90px);
 }
 
 .diffTable {

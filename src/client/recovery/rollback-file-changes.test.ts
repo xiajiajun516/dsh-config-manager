@@ -96,10 +96,29 @@ test('侧栏标签页吃满宿主高度：不再自带一道 vh/px 上限（源�
   const css = readFileSync(CSS, 'utf8')
   assert.match(css, /\.diffPaneFill \{[\s\S]{0,120}?height: 100%/, 'fill 档必须 height:100% 才谈得上「= 侧栏大小」')
   assert.match(css, /\.diffPaneFill \.diffScroll \{[\s\S]{0,200}?min-height: 0/, 'flex 链必须允许收缩，否则内容顶破父容器（min-height:auto 陷阱）')
-  assert.match(css, /\.diffPaneFill \{[\s\S]{0,400}?margin: 0/, '撑满档必须归零外边距：否则 100% 之外多出 10px，宿主面板自己冒一条滚动条')
+  // 撑满档整块取出来判定（块里现在还要容下 flex:auto 的依据注释，按字符窗口量距离会被注释挤爆）
+  const fillBlock = css.slice(css.indexOf('.diffPaneFill {'), css.indexOf('.diffPaneFill .diffScroll'))
+  assert.match(fillBlock, /\bmargin: 0/, '撑满档必须归零外边距：否则 100% 之外多出 10px，宿主面板自己冒一条滚动条')
   // 行盒 = 12×1.5 + 上下 1px ⇒ 20px/行：845px 宽的侧栏里 24 行折成 35 个视觉行，22px 差一行就溢出
   assert.match(css, /\.diffCell \{[\s\S]{0,80}?padding: 1px 6px/, '差异单元格上下内边距必须是 1px（20px 行高才装得进侧栏那一屏）')
 })
+test('侧栏标签页吃满宿主高度：整块高度跟侧栏走（源级，2026-10-15）', () => {
+  const css = readFileSync(CSS, 'utf8')
+  // ① 正文限高必须排在「列表量级」那条**之后**：两条特异性同为 (0,2,0)，顺序决定胜负；
+  //    写在前面时 min(80vh, 800px) 会盖掉它 —— 侧栏比它高时差异区就停在那儿，
+  //    正是用户 2026-10-15 报的「预览高度不跟侧栏走」。
+  const listCap = css.indexOf('.diffPane .diffScroll')
+  const fillCap = css.indexOf('.diffPaneFill .diffScroll')
+  assert.ok(listCap >= 0 && fillCap >= 0, '两条限高规则都必须存在')
+  assert.ok(fillCap > listCap, 'fill 档的限高必须排在 .diffPane .diffScroll 之后（顺序决定胜负）')
+  assert.doesNotMatch(css.slice(fillCap, fillCap + 400), /min\(80vh, 800px\)/, 'fill 档不得再吃列表量级的 min(80vh, 800px) 上限')
+  // ② 撑满档下**每个出口**都要套同一个整块容器：只让「就绪且有差异」撑满时，
+  //    加载 / 一致 / 看不了 / 读失败会缩成一行，一屏高度来回跳（同样是「高度不跟侧栏走」）。
+  const pane = readFileSync(PANE, 'utf8')
+  assert.equal([...pane.matchAll(/return shell\(/g)].length, 5, '加载 / 读失败 / 结构化拒绝 / 看不了 / 一致 五个出口都要经同一个撑满容器')
+  assert.match(pane, /fill === true \? <div className=\{css\.diffPane \+ ' ' \+ css\.diffPaneFill\}>/, '撑满容器必须是 .diffPane + .diffPaneFill 那一对类名')
+})
+
 test('标签页芯片：[文件类型图标][文件名]，只经 title 位注册（源级）', () => {
   const tab = readFileSync(TAB, 'utf8')
   assert.match(tab, /export function RollbackDiffTabTitle/, '芯片必须是独立组件（正文位与芯片位两份注册）')
