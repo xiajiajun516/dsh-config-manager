@@ -61,6 +61,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **大工作区里「留点后新建的文件」不再一律不删**：一次留点没扫完整个工作区时，回退预览此前会直接放弃整批删除并提示「证明名单不完整」；现在只要目录确实都走查过，留点之后新建的文件照常被删掉，只有真正没走查到的目录才保持原样（预览仍会说明原因）。
   **Files created after a point are no longer always kept in large workspaces**: when a point could not scan the whole workspace, the rewind preview used to give up on the whole deletion batch and warn that its proof list was incomplete; as long as the directories were in fact walked, files created after the point are removed again, and only directories that were genuinely never walked are left alone (the preview still says why).
+- **点「清理」不再像没反应**：确认后弹窗立刻关闭，卡片上的那颗按钮随即进入「正在清理…」并转圈，清完之后的数字与提示照旧；期间刷新与清理按钮一律禁用，卡片也不会掉回加载骨架。
+  **Clicking "Clean" no longer looks like nothing happened**: the dialog closes at once, the card's button switches to "Cleaning…" with a spinner, and the same numbers and toasts still report the outcome; while it runs, refresh and clean stay disabled and the card never falls back to a loading skeleton.
 
 ## [0.1.73] - 2026-10-15
 

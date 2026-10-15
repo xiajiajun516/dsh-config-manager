@@ -53,7 +53,16 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
   const [confirmOpen, setConfirmOpen] = useState(false)
   const mountedRef = useRef(true)
 
-  useEffect(() => () => { mountedRef.current = false }, [])
+  /**
+   * 挂载标记：只在**卸载**时置 false，并在每次挂载时显式写回 true。
+   * 必须写回：React 18 StrictMode 会走 `effect → cleanup → effect` 双调用，只挂 cleanup 的话
+   * 第二次挂载后标记永远是 false ⇒ 清理请求的 resolve/reject 被整段吞掉，
+   * 表现就是「点了清理，弹窗不关、按钮一直在转」。
+   */
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   const load = (): void => {
     setStatus('loading')
@@ -88,9 +97,19 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
   const reclaimTargets = (tmpMarket?.bytes ?? 0) + (includeExpired ? expiredExports?.bytes ?? 0 : 0)
   const nothingToReclaim = reclaimTargets === 0
 
+  /**
+   * 清理：**点确认的那一刻就关掉弹窗**，进度交给卡片上的「立即清理」按钮承载
+   * （loading 图标 + 文案「正在清理…」，见下方按钮）。
+   *
+   * 为什么不把 busy 留在弹窗里转圈：清理可能耗时数秒，而弹窗正好盖住卡片 ——
+   * 用户既看不到按钮进入 loading，也看不到释放量从有变没，观感就是「点了没反应」。
+   * 关窗**不等于操作可取消**：`busy` 期间刷新与清理按钮一律禁用、不会重复提交；
+   * 失败走 toast（卡片保持 ready，不重载列表、不掉回骨架）。
+   */
   const runCleanup = (): void => {
     if (busy) return
     setBusy(true)
+    setConfirmOpen(false)
     // categories 是**分区白名单**：没勾过期导出就一个导出文件都不碰（硬边界 ②）
     const categories: Array<'tmp' | 'expired-exports'> = ['tmp']
     if (includeExpired) categories.push('expired-exports')
@@ -98,7 +117,6 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
       (result) => {
         if (!mountedRef.current) return
         setBusy(false)
-        setConfirmOpen(false)
         setReport(result.report)
         if (includeExpired) onBackupsChanged?.()
         // e2e-F3：呈现判定在 ui/disk-usage-view.ts（「目录不存在」不是失败）；组件只按 kind 挑 toast
@@ -115,7 +133,6 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
       (err) => {
         if (!mountedRef.current) return
         setBusy(false)
-        setConfirmOpen(false)
         toast.error(redact(err instanceof Error ? err.message : String(err)))
       },
     )
