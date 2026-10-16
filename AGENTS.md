@@ -183,7 +183,7 @@
 - **回滚点台账 = 一条一写 + 内容寻址载荷 + 字节预算**（整份读改写会随历史把宿主拖到 OOM）；**自动留点缺省关闭**，关闭即**解绑** `session/event` 订阅；活切换经进程内 gate（→ `docs/lessons/recovery-console.md`）。
 - **回滚点采集必须有时间预算与取消**（超时留部分点 + `budget-time` 留痕；**只有走查本身被打断才 fail-closed 删除集**）；**子代理会话（`origin==='subagent'`）绝不自动留点**；**回退前像落盘**（暂存建不出 = 零写入失败）。→ `docs/lessons/recovery-console.md`
 - **捕获必须并发 + 自适应 + 缺口优先**：读/写并发、对象仓写入**不走 temp+fsync+rename**、预算 10–120 s 自适应、缺口优先 + **条目与读预算解耦** ⇒ 覆盖率随回合收敛到 100%。→ `docs/lessons/recovery-console.md`
-- **捕获的「在飞内容」闸门只接 `captureInFlightBytes`**（缺省 32 MiB，被 `maxBytes` 夹住）；接 `maxFileBytes`（缺省 = 总量预算 512 MiB）⇒ 整点预算同时驻留，真机发消息后 1–2 s 桌面闪退。→ `docs/lessons/recovery-console.md`
+- **捕获绝不碰含 `.asar` 段的路径**（宿主当容器解析 ⇒ 畸形夹具带走整个宿主 = 桌面闪退），在飞内容闸门只接 `captureInFlightBytes`（缺省 32 MiB；接 `maxFileBytes` = 允许整点预算同时驻留）。→ `docs/lessons/recovery-console.md`
 - **拒删按分子树、不按全局**：忽略目录 / 读不出的目录 / 没走查到的子树（`unwalkedDirs`）只让**它们自己**不删；只有范围说不清（列表被记录上限截断 / 老台账）才全局 fail-closed。→ `docs/lessons/recovery-console.md`
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
 - **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。

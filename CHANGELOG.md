@@ -28,9 +28,14 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **{{本版主题}}**：{{一句话中文主题}}
+> **本版主题**：**修掉「工作区里有 `.asar` 文件就会闪退」** —— 留点扫描会读工作区里的文件，而名字以 `.asar` 结尾的路径在桌面端会被当成安装包容器解析；只要它是损坏的（测试夹具、被打断的打包残留），整个宿主进程会被原生层带走。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: **Fixes the crash when the workspace contains `.asar` files** — taking a rollback point reads the workspace, and a path ending in `.asar` is treated as an archive container by the desktop runtime; when such a file is broken (a test fixture, a leftover from an interrupted pack) the native layer takes the whole host process down.
+
+### 🐛 修复 · Fixed
+
+- **工作区里有 `.asar` 文件时不再让桌面闪退**：留点扫描会读取工作区里的文件，而名字以 `.asar` 结尾的路径在桌面端会被当成安装包容器解析 —— 只要它是损坏的，整个宿主进程会被带走，桌面直接退出且没有任何报错（日志里只有一行容器解析失败）。现在这类路径一律不读，只如实记进「跳过」清单（照旧不会被当成新建文件删掉）。
+  **A workspace containing `.asar` files no longer crashes the desktop**: taking a rollback point reads the files in your workspace, and paths ending in `.asar` are treated as archive containers by the desktop runtime — if such a file is broken the host process is taken down and the desktop quits with no error at all (the log shows only one failed container parse). Those paths are now never read; they are recorded in the skipped list instead (and still never mistaken for files created later).
 
 ## [0.1.75] - 2026-10-16
 

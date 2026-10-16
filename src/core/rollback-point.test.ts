@@ -2919,6 +2919,37 @@ test('R-45b 缺省闸门：maxFileBytes 缺省 = 总量预算，绝不能当成�
   )
 })
 
+test('T2-H .asar 路径绝不交给 fs：宿主里那是原生容器解析，畸形夹具能带走整个宿主', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const dir = await makeSizeDir(fx, 'cap-asar', {})
+  await fs.writeFile(path.join(dir, 'normal.txt'), 'N')
+  await fs.writeFile(path.join(dir, 'broken.asar'), Buffer.alloc(64, 0xff))
+  await fs.mkdir(path.join(dir, 'bundle.asar'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'bundle.asar', 'inner.txt'), 'I')
+  const reads: string[] = []
+  const engine = makeEngine(fx, {
+    readFile: async (file: string) => {
+      reads.push(file)
+      return await fs.readFile(file)
+    },
+  })
+  const captured = await engine.capturePoint({ chunks: [dir], sessionId: 's-asar' })
+  const payload = captured.point?.workspace.payload
+  assert.ok(payload !== null && payload !== undefined)
+  assert.equal(reads.some((f) => f.endsWith('.asar')), false, '任何 .asar 路径都不得被读')
+  assert.equal(reads.some((f) => f.includes('.asar' + path.sep)), false, '含 .asar 段的路径一律不碰')
+  assert.ok(
+    payload.skipped.some((e) => e.path.endsWith('broken.asar') && e.reason === 'asar-container'),
+    '畸形 .asar 必须留痕为 asar-container: ' + JSON.stringify(payload.skipped.map((e) => [e.path, e.reason])),
+  )
+  assert.ok(
+    payload.skipped.some((e) => e.path.endsWith('bundle.asar') && e.reason === 'asar-container'),
+    '名字含 .asar 段的目录同样不碰',
+  )
+  assert.ok(payload.files.some((f) => f.path.endsWith('normal.txt')), '普通文件照常入点')
+})
+
 test('R-46 缺口优先：预算被限死时覆盖率随回合**单调收敛**到 100%', async (t) => {
   const fx = await makeFixture()
   t.after(fx.cleanup)

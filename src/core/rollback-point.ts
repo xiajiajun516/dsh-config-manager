@@ -422,7 +422,8 @@ export interface RollbackSkippedEntry {
   /**
    * link（符号链接/junction，不跟随）/ missing / not-a-file / self-store /
    * dep-dir（运行时依赖目录，整棵忽略）/ ignored（用户忽略规则命中）/ too-large（超单文件上限）/
-   * budget-bytes（加它会超总量预算）/ budget-files（文件数预算用尽）
+   * budget-bytes（加它会超总量预算）/ budget-files（文件数预算用尽）/
+   * asar-container（含 `.asar` 段的路径：宿主会把它当容器解析、畸形夹具能带走宿主，因此绝不碰）
    */
   reason: string
 }
@@ -1082,6 +1083,24 @@ export interface RollbackEngineOptions {
 
 function win32Fold(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value
+}
+
+/**
+ * 路径里是否存在以 `.asar` 结尾的段（**捕获 / 走查期一律不碰这类路径**）。
+ *
+ * 为什么（真机事故，0.1.76）：Electron 宿主对任何含 `.asar` 段的路径**启用了 asar 虚拟化** ——
+ * 即使那只是个普通文件，`fs.stat`/`readdir`/`read` 也会被接管去当容器解析。工作区里只要躺着一枚
+ * **畸形** `.asar`（测试夹具、被打断的打包残留），宿主进程就会被原生层带走：crashpad
+ * `not connected`、退出码 4294930435 ⇒ DSH Desktop 闪退（无 JS 栈、插件零错误）。
+ * 实测（本仓真机捕获、同一份输入）：`.tmp` 下 19 枚 `.asar` 夹具在场 → Electron 进程死；
+ * 全部改名后 → 同一趟捕获 9 s 跑完、退出码 0。
+ * `.asar.unpacked` 是**真目录**（段名不以 `.asar` 结尾）⇒ 不拦。
+ */
+export function hasAsarSegment(target: string): boolean {
+  for (const segment of target.split(/[\\/]+/)) {
+    if (segment.length > '.asar'.length && win32Fold(segment).endsWith('.asar')) return true
+  }
+  return false
 }
 
 /** child 是否等于 parent 或位于其下（win32 折叠大小写；段边界判定） */
@@ -2189,6 +2208,11 @@ export class RollbackPointEngine {
      */
     shouldStop?: () => boolean,
   ): Promise<{ files: string[]; truncated: boolean; walkAborted: boolean; unwalkedDirs: string[] } | null> {
+    // 分块根本身就是 `.asar` 段 ⇒ 一次 fs 调用都不发（见 hasAsarSegment）
+    if (hasAsarSegment(chunk)) {
+      this.recordSkip(sink, 'skipped', { path: chunk, reason: 'asar-container' })
+      return null
+    }
     let stat
     try {
       stat = await fs.lstat(chunk)
@@ -2234,6 +2258,13 @@ export class RollbackPointEngine {
       }
       for (const entry of entries) {
         const full = path.join(item.dir, entry.name)
+        // **绝不把含 `.asar` 段的路径交给 fs**（见 hasAsarSegment：宿主里这一步是原生解析，
+        // 畸形夹具会让整个宿主进程消失）。留痕进 skipped —— 它是**证明名单**的一员，
+        // 因此该路径绝不会被当成「留点后新建」删掉。
+        if (hasAsarSegment(full)) {
+          this.recordSkip(sink, 'skipped', { path: full, reason: 'asar-container' })
+          continue
+        }
         if (entry.isSymbolicLink()) {
           this.recordSkip(sink, 'skipped', { path: full, reason: 'link' })
           continue
