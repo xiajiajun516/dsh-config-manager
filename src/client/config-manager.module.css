@@ -2036,6 +2036,13 @@ body {
   margin-top: 8px;
 }
 
+/* 复选框行之后紧跟的操作行：补 10px 上间距（区块间距档）。
+   与上一条同因：.checkboxRow 没有下外边距、.actionRow 只有下外边距 → 两者相邻时按钮紧贴勾选框
+   （用户实测 2026-10-17：导入向导最后一步「失败时整体回滚」与「上一步 / 确认导入」挤在一起）。 */
+.checkboxRow + .actionRow {
+  margin-top: 10px;
+}
+
 .kvKey {
   flex: none;
   width: 88px;

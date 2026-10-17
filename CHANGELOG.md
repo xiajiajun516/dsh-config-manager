@@ -53,6 +53,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **导入向导最后一步的按钮不再贴着勾选框**：确认页里「上一步 / 确认导入」与上方「失败时整体回滚」之间补上了与其它区块一致的间距，勾选框和按钮不再挤在一起。
+  **The import wizard's final buttons no longer touch the checkbox**: on the confirm step, "Back / Import" now keeps the same block spacing as everywhere else from the "Roll back everything on failure" checkbox above it, instead of the two being crammed together.
+
 - **「信息态」的蓝色此前基本没生效**：任务面板的底色、状态点与行首色条引用了一个 DSH 里**并不存在**的颜色变量，浏览器只能把它们当成「没有颜色」，于是这几处一直是透明/继承色；现在接回 DSH 的蓝色主色，信息态该有的底色与色条都回来了。
   **The "info" blue barely showed up before**: the task panel fill, the status dot and the leading color bar referenced a color variable DSH does not actually define, so the browser treated them as "no color" and those spots stayed transparent/inherited; they now use DSH's own blue, so the info fill and bar are back.
 - **用户消息气泡的字号重新跟随「内容字号」**：设置 → 外观 → 内容字号调大后，你发出的消息此前仍固定在小字号（调到 21px 时助手正文明显变大、自己的话只有一半大），而且换行位置也和原生气泡不一样；现在气泡的字号、行距与换行宽度都跟随同一个设置。（issue #93）
