@@ -386,6 +386,7 @@ export function ContentPicker({
               />
             </div>
             <Collapse open={open} id={bodyId}>
+              <div className={css.pickerChildren}>
               {entry.leaves.map((leaf) => {
                 const kindText = leafKindText(leaf.kind)
                 const leafName = leaf.kind === 'plugin' ? kindText : kindText + ' · ' + redact(leaf.label)
@@ -422,6 +423,7 @@ export function ContentPicker({
                   </div>
                 )
               })}
+              </div>
             </Collapse>
           </div>
         )
@@ -485,6 +487,7 @@ export function ContentPicker({
               />
             </div>
             <Collapse open={open} id={bodyId}>
+              <div className={css.pickerChildren}>
               {units.shown.map((u) => renderUnitRow(node, u, true))}
               {units.hidden > 0 && (
                 <div className={css.pickerMore}>
@@ -498,6 +501,7 @@ export function ContentPicker({
                   </button>
                 </div>
               )}
+              </div>
             </Collapse>
           </div>
         )
@@ -553,7 +557,7 @@ export function ContentPicker({
           />
         </div>
         <Collapse open={rootOpen} id="picker-plugin-root">
-          {body}
+          <div className={css.pickerChildren}>{body}</div>
         </Collapse>
       </div>
       {bucketsBody}
@@ -697,6 +701,7 @@ export function ContentPicker({
                   {/* 展开/收起两端都有高度动画（common/Motion.tsx 的 Collapse）；
                       容器**始终存在**，所以 aria-controls 恒有值。 */}
                   <Collapse open={open} id={unitsId(node.section)}>
+                      <div className={css.pickerChildren}>
                       {/* 二级分组（sessions 按工作区聚合）：没有 group 的单元仍走平铺，
                           与改造前的渲染完全一致（skills / pluginFiles 等分区零变化）。
                           级联树语义：展开分区只列出分组，点某个分组的 chevron 才展开那一棵子树
@@ -745,7 +750,7 @@ export function ContentPicker({
                               ? group.units.map((u) => renderUnitRow(node, u, true))
                               : (
                                 <Collapse open={groupOpen} id={groupBodyId}>
-                                  <div className={css.pickerSubgroupChildren}>
+                                  <div className={css.pickerChildren}>
                                     {group.units.map((u) => renderUnitRow(node, u, true))}
                                   </div>
                                 </Collapse>
@@ -766,6 +771,7 @@ export function ContentPicker({
                           </button>
                         </div>
                       )}
+                      </div>
                   </Collapse>
                   </div>
                 )}

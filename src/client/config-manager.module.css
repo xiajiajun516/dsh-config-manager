@@ -3510,20 +3510,21 @@ body {
   white-space: nowrap;
 }
 
-/* 子单元行：**必须有可见的连接**，只靠缩进会被读成同级（用户 2026-10-17 实测反馈：
-   「未归属到插件的配置」下面的 pet.json 看起来跟它平级）。
-   做法 = 竖线 + 明确的层级差：竖线画在父行 chevron 的中线下（margin-left 8px），
-   padding-left 14px 保证同级/子级一眼可分（间距档位见 DESIGN.md §4：这里只用 8 / 14 / 16）。 */
-.pickerUnitNested {
+/* 子树容器：**每一层子树都自带竖线 + 缩进**（逐层累加）。
+   为什么必须是「容器」而不是给叶子行加缩进（2026-10-17 用户实测两轮）：
+   只给叶子行加时，中间层（「插件」→ 某个插件 → 它的数据目录）没有竖线也没有缩进 ——
+   只要有中间层，层级就又看不出来了。容器在每个 Collapse 内部，层级因此自动逐层累加。
+   几何：margin-left 8px 让竖线落在父行 chevron 的中线下，padding-left 14px 给出层级差
+   （父行勾选框 22px → 子层 45px）；间距只用 8 / 14 两档（DESIGN.md §4 的节奏档）。 */
+.pickerChildren {
   margin-left: 8px;
   padding-left: 14px;
   border-left: 1px solid var(--dsw-alias-border-l1);
-  gap: 4px;
 }
 
-/* 二级分组（工作区）的子树整体再右移一格：让竖线落在分组行 chevron 的中线下 */
-.pickerSubgroupChildren {
-  margin-left: 16px;
+/* 子单元行：左缘由 .pickerChildren 提供，这里只保留勾选框前的等宽占位与行内间距 */
+.pickerUnitNested {
+  gap: 4px;
 }
 
 /* 「显示全部（共 N 条）」行（UI-15）：单元列表折叠后的渐进披露入口，与单元行同缩进 */

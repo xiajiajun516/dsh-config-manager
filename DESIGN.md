@@ -519,14 +519,16 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     ③ 「注册表说它在哪儿」与「磁盘上真有」分开渲染：分区清单没读到 = `未读取`（不可勾，展开时才读），
     读到却没有该单元 = `无内容`（不可勾）—— 绝不产生幽灵勾选（引擎只带走清单里真实存在的单元）；
     ④ 树节点标签是宿主直出文本（包名 / home 相对路径），渲染前同样过 `redact()`，文案按 `kind` 映射字典键。
-  - **树的层级必须「看得出来」（2026-10-17，用户实测反馈）**：只靠缩进不够 ——「未归属到插件的配置」
-  下面的 `pet.json` 会被读成同级。定案几何：**子单元行画竖线 + 外移 8px + 内缩 14px**
-  （`.pickerUnitNested` = `margin-left: 8px; padding-left: 14px; border-left: 1px solid
-  var(--dsw-alias-border-l1)`）：竖线落在父行 chevron 的中线下，父行勾选框在 22px、子行在 45px，
-  层级差 23px；二级分组（工作区）的子树再整体外移 16px（`.pickerSubgroupChildren`），让竖线同样
-  落在分组行 chevron 下面。**分区下的单元行也走这套子行样式** —— 原先用 `.pickerUnit` 的 16px 内缩、
-  比父级勾选框（22px）还靠左，正是「看起来平级」的根因之一。间距只用 8 / 14 / 16 三档
-  （`css-scale-guard` 只放行 §4 的节奏档）。
+  - **树的层级必须「看得出来」（2026-10-17，两轮用户实测）**：只靠缩进不够 ——「未归属到插件的配置」
+  下面的 `pet.json` 会被读成同级；而**只给叶子行加缩进也不够** —— 中间层（「插件」→ 某个插件 →
+  它的数据目录）会没有竖线也没有缩进，只要有中间层层级就又看不出来。
+  定案 = **容器式逐层缩进**：每个 `<Collapse>` 的内容外面包一层 `.pickerChildren`
+  （`margin-left: 8px; padding-left: 14px; border-left: 1px solid var(--dsw-alias-border-l1)`），
+  层级因此**逐层累加**：父行勾选框 22px → 子层 45px → 孙层 68px，每层都有自己的竖线，
+  竖线落在父行 chevron 的中线下。`.pickerUnitNested` 只保留 `gap: 4px`（左缘由容器给），
+  **分区下的单元行也走这套子行样式** —— 原先用 `.pickerUnit` 的 16px 内缩、比父级勾选框（22px）
+  还靠左，正是「看起来平级」的根因之一。间距只用 8 / 14 两档（`css-scale-guard` 只放行 §4 的节奏档）。
+  **新增任何一层嵌套，必须把该层的 Collapse 内容包进 `.pickerChildren`**，否则那一层会「断开」。
 - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
     保留尾部时间戳/版本等区分信息，见 §9 anti-pattern 5）+ `min-width:0 / max-width:280px /
     text-overflow: ellipsis` 兜底 —— 长路径/长会话标题不得撑宽列表产生横向滚动条。
