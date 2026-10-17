@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.78] - 2026-10-17
+
+> **本版主题**：**同步或恢复配置后，DSH 自带的插件层不再被装成错版本的 npm 包 —— 不会再出现「DSH 升级之后新建会话报错」**
+>
+> **Theme**: **After a sync or restore, layers provided by DSH itself are no longer installed as the wrong npm version — no more "new sessions fail after a DSH upgrade"**
+
 ### 🐛 修复 · Fixed
 
 - **同步或恢复配置后，DSH 自带的插件层不再被装成错版本的 npm 包**：新版 DSH 里那些「只出现在插件层清单、由 DSH 自己提供」的实验性层（例如实验性会话搜索），导入时不再按 npm 的「最新版」重新下载一份塞进你的档案 —— 现在只是把这一层重新声明启用，不会再出现「DSH 已经升级、装回来的却是旧版本」而**新建会话报错**的情况；目标机档案清单缺失或读不出来时如实提示，绝不凭空重建一份。（issue #95）
