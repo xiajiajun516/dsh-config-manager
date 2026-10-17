@@ -1207,13 +1207,17 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 重声明的那一小撮（`--cm-text-1/3`、`--cm-surface-2`、`--cm-chat-bubble`、`--cm-line-1`、`--cm-fs-*`、`--cm-sp-*`、`--cm-r-*`），**不新增任何 scale 档位**（字号/间距/圆角新档位必须先改 §3–§5；`--cm-chat-bubble` 是 §3 的语义色，不是 scale 档）。类清单 = `config-manager.module.css` §15b。
 
 - **接管是唯一路径**：宿主 `conversation.chat.node` 的 `user` key 是 keyed 遮蔽位且**没有 children 表**，framework 没有「往每条用户消息里追加 UI」的位子；我们以 `priority -1` 遮蔽宿主的 `UserMessageNodeView`
-  （同一 cell 的同一 priority 再注册会抛，故 -1 是与宿主并存的唯一合法值），并**复刻**那条气泡的外观（宿主组件与其 CSS Modules 是 ui-chat 私有的，不可导入）。图片**必须**走 owner 给的
-  `renderMessageImages`（逐张一次调用，与宿主 `attachments.map` 同形），本仓库不自己实现图片渲染。
+  （同一 cell 的同一 priority 再注册会抛，故 -1 是与宿主并存的唯一合法值）。
+- **正文两条路径（2026-10-18，issue #92 / #93）**：ui-chat ≥ 0.2.1 起把用户消息正文收进可复用工厂 `conversation.chat.user.content`（图片由它内部的 `conversation.chat.user.images` 位渲染，owner 面的 `renderMessageImages` 随之消失）。
+  新宿主上正文**整段委托**这条工厂（框架标准 kit 的 `renderFactorySlot`，入参 = 宿主 `contentParts` 的 `{ text, attachments, extraBlocks, referenceLabels }` + `facts`/`loadImage`/`interactive`），
+  外观、内容字号、引用与技能 chip、图片加载全部跟宿主原生消息一致，我们只保留动作行（时间 / 复制 / 回退）；自绘气泡作为 `options.fallback`，老宿主（≤ 0.2.0，工厂不存在）由 outlet 自动回落。
+  判据在 `planChatEntryContentMode`（纯层可测）：工厂 + 加载器（纯文本消息不要求加载器）⇒ 委托；否则自绘，图片走 `renderMessageImages`；两者都没有 ⇒ 自绘 + 如实提示「图片无法显示」（本仓库**不自己实现图片渲染**）。
+  委托态**不套** `.chatEntryStack`（它的 620px 限宽会让宿主 `.userStack` 的百分比 max-width 提前收敛），正文直接挂在 `.chatEntryRow` 下。
 - **错误边界是 class 组件**（`ChatEntryErrorBoundary`）：React 18 只有 class 能声明 `getDerivedStateFromError` / `componentDidCatch` —— 这是本仓「函数组件 + hooks，无 class」规范的
   **唯一显式例外**，**不得**照此扩大范围。降级 = **纯文本气泡**（`.chatFallbackBubble`，左侧一条警示线 + `data-chat-entry-fallback` 标记 + ASCII `console.warn`），语义是「用户消息绝不消失」。
 - **入口 = 只有图标（icon-only，2026-10-10 用户第二条要求）**：复用 `.chatActionBtn` 24px 无边框图标位 + `RefreshIcon`，与时间戳 / 复制图标同一行；**按钮内不得出现可见文字标签**，文案只走 `aria-label` / `title`。语义 = ghost（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
 - **差距 ①② 已于 2026-10-15 收回**（生态既有做法：宿主模块表可以 `require` 到 ui-primitives，见下方那一条）：① 引用 / 技能 chip —— 正文交给宿主自己的 `projectUserText`（`openFile` / `openSkill` 在时可点开）；② 文件类型图标 —— 用宿主 `FileTypeIcon`，拿不到才回落 `.chatFileExt` 扩展名徽标。
-  **仍未做**：③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+  **仍未做**：③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档（**只对自绘气泡成立**；0.2.1+ 委托态由宿主渲染）：圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px，见 #93）。委托态下气泡外观随宿主，这两条不再适用（自绘态要逐像素一致仍需先扩 §3–§5，本任务明确不做）。
 - **气泡底色不再算近似档（2026-10-15，用户报「浅色主题下气泡看不见」）**：宿主的用户气泡底是 `--dsw-specific-bubble`，本仓库 token 层此前没有这一档，于是借用了 `--cm-surface-2`（= `--dsw-alias-bg-layer-2`）
   —— **浅色主题下它 = `#fff`，而页面底 `--dsw-alias-bg-base` 也是 `#fff`** ⇒ 气泡与页面同色、用户消息看起来「没有气泡」（深色下两者恰好同为 bluish-850，所以只在浅色暴露）。
   现在新增 `--cm-chat-bubble`（§3 表）指向宿主那一档，带 `--dsw-alias-bg-layer-2` 兜底：宿主换主题/换档时自动跟随，宿主删档时不至于变透明。
@@ -1229,6 +1233,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   装配点因此退回最简形态：`ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({ probe, register }))` —— 单入口没有「切档互斥」问题（T13）也不再需要为后到的槽位声明补试（T17 的有界补试随双入口一起消失）。
 - **回退预览对话框 = 简洁版（2026-10-10 用户第三条要求）**：标题固定「回退预览」；正文只有**会被回退的文件**（路径 + 「+N 行」/「−M 行」；内容已一致的一项都不列，空数组显示「工作区与该回退点一致，无需恢复」；行数算不出来显示「行数未统计」而**不是 0**）；底部只有主按钮「回退」与「取消」。**没有**三选一 mode 单选、二次确认勾选、`allowPartial` 勾选、工作区 / 会话计数面板、救援点说明段、逐段结果详情面板、留点期 notice 面板 —— 这是**有意替换**（点「回退」即确认，对话框本身就是「预览 + 确认」两步）。视觉复用既有 `dialogMask` / `dialogCard` / `dialogWide` / `dialogBodyScroll` / `actionRow` 类，**不新增样式档位**；设置页 `RollbackCard` 的预览弹窗仍保留完整能力。**描述性文案清零（2026-10-12 用户第 8 条「移除回退弹窗中的所有描述」）**：说明行「这次回退会做以下改动：」与「这些文件的行数没有统计出来…」整段都不再渲染 —— 弹窗只留能改变决定的信息（§7）；`.previewSummary` 样式随之删除，逐文件那格的「行数未统计」保留。
 - **升级风险**：宿主改用户消息渲染器 / 槽位契约 → 复刻老旧或错位。软失败：声明形态不是 `keyed` 就**跳过注册**（只丢这一个入口），回合号取不到就**如实禁用按钮**（每个禁用原因有自己的字典键）。
+  正文契约的漂移（0.2.1 的工厂 / 图片位改名）由 `planChatEntryContentMode` 在**渲染期**按 props 形态判定（注册期拿不到 props，无法证伪），两侧都有路径：工厂在就委托，不在就自绘；只有「既无工厂又无图片位」那一种宿主会看到如实提示。
   风险与差距登记 = `docs/spec/known-gaps.md` G-39。
 
 ### 说明性文案分层（InfoHint，2026-10）

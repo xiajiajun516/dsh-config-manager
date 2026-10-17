@@ -668,3 +668,46 @@ Electron 的 asar 报错、crashpad `not connected`。对照 09-30 / 10-01 / 10-
 
 **教训**：① **宿主 fs 的 `.asar` 虚拟化按「路径段」生效，与文件真假无关** —— 不能拿「读文件本身是安全的」当理由；
 ② **归因必须 A/B**：第一次只做了源码阅读 + 单调用实测就下结论，错过了一整个「改个名就能证伪」的机会。
+
+## 用户消息正文改由宿主工厂渲染：0.2.1 的契约漂移与「委托 + fallback」两条路径（2026-10-18，issue #92 / #93）
+
+**症状**：DSH Desktop 升级到 0.2.1-rc.2 后，自己发出的消息里图片全部变成一句「宿主没有提供图片渲染位，这条消息里的图片无法显示」；
+同一轮还暴露出 #93（气泡字号写死 12.5px，改「内容字号」无效）。助手消息不受影响，数据没丢（附件仍在会话记录里）。
+
+**根因 = 宿主契约漂移，不是本插件渲染 bug**：0.1.76 按当时（≤0.2.0）的 owner 面复刻宿主气泡，图片走 owner 给的
+`renderMessageImages`（= `renderSlot('conversation.message.images', { ...owner, loadImage })` 的绑定）。0.2.1 的
+ui-chat 把这件事换了两处：
+
+| 面 | ≤ 0.2.0（本插件 0.1.76 对齐的那一版） | 0.2.1-rc.2 |
+|---|---|---|
+| owner props | 有 `renderMessageImages`，无 `loadImage` | **无 `renderMessageImages`**，新增 `loadImage` |
+| 用户消息图片位 | `conversation.message.images` | `conversation.chat.user.images`（由 ui-attachment 注册） |
+| 用户消息正文 | 宿主 `UserMessageNodeView` 内部拼装 | 可复用工厂 `conversation.chat.user.content`（ui-chat `UserContent`，`scope:'session'` + 子位 `conversation.chat.user.images`） |
+| 工厂调用点 | 无 | `renderFactorySlot('conversation.chat.user.content', { content, loadImage, facts, interactive })`，`content` = 宿主 `contentParts` 的 `{ text, attachments: [{type:'image', image:{attachment}} | {type:'file', file:附件}], extraBlocks, referenceLabels }`、`facts` = `{ sessionLabels, skillNames }` |
+
+全量扫 app.asar（18,309 文件）：`renderMessageImages` **0 命中**、`conversation.message.images` **0 命中** ⇒ 旧接口在新宿主上
+确实已经不存在；`loadImage` 与两个新槽位名都在。框架侧另有一条关键事实：`standardKit` 给**每个** entry 都塞
+`renderFactorySlot`（`boundRenderFactorySlot(entry)`），而 `FactoryOutlet` 在**工厂未注册**时渲染 `options.fallback`
+—— 这就是老宿主上的退路。
+
+**改法（两条路径，渲染期判定）**：
+
+- `host`：有工厂（`typeof renderFactorySlot === 'function'`）且能加载图片（`imageCount === 0 || typeof loadImage === 'function'`）
+  ⇒ 正文（文本 / 引用与技能 chip / 图片 / 文件卡 / 附加块）整段委托宿主工厂，本插件只保留动作行；自绘气泡作为 `options.fallback`。
+- `self`：老宿主（无工厂）⇒ 自绘气泡，图片走 `renderMessageImages`（0.1.76 的行为逐字保留）。
+- `notice`：既无工厂、又无图片渲染位且消息里有图 ⇒ 自绘气泡 + 如实提示（本仓库**不自己实现图片渲染**）。
+
+判据落在纯层 `planChatEntryContentMode`（`chat-entry-view.ts`），组件只做装配。为什么不在**注册期**加门
+（「既无 renderMessageImages 也无 renderFactorySlot 就不接管」）：注册期拿不到 props，无法证伪，且会让入口在
+未知宿主上整体消失；渲染期判定两侧都有路径，只有「既没有工厂、也没有图片渲染位」的宿主（且消息带图）会看到提示。
+
+**委托态的一个细节**：正文**不套** `.chatEntryStack`。那个类 `max-width: min(620px, 82%)`，宿主 `.userStack` 自己的
+`max-width: min(calc(var(--dsh-chat-content-width,748px) * .702), 82%)` 是**百分比**——套进去会对着 620px 提前收敛，
+气泡比原生窄一截。委托态直接挂在 `.chatEntryRow`（与宿主 `.userRow` 同构：`flex-direction: column; align-items: flex-end`）下。
+
+**验证**：`chat-entry-view.test.ts` 新增五条（`contentParts` 同构与边界、`referenceLabels` 双投递、三态矩阵、
+委托点源码断言）；`npm run typecheck` / `npm test` / `npm run build` 全绿。#93 随委托一并消失（宿主 `.bubble`
+自带 `font-size: var(--dsh-content-font-size,14px)`）。
+
+**残余**：≤0.2.0 宿主仍是自绘气泡 ⇒ #93 的字号差距在老宿主上依旧存在（已登记其性质是「自绘路径的近似档」）；
+工厂属于宿主私有实现，未来若再改入参形状，`planChatEntryHostContent` 是唯一需要跟着改的地方。

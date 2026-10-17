@@ -17,10 +17,23 @@
  * ### `conversation.chat.node`（本插件**接管**其 `user` key）
  *
  *   kind: 'keyed' · scope: 'session'
- *   ownerProps: { groupPart?, cwd, openFile, openSkill, inspectCall, forkAt, loadImage,
- *                 renderMessageImages, fileMentions, turnProcess, node }
+ *   ownerProps（ui-chat 0.2.1 起）: { groupPart?, cwd, openFile, openSkill, inspectCall, forkAt,
+ *                 loadImage, fileMentions, turnProcess, node }
+ *   ownerProps（≤ 0.2.0，本插件最初对齐的那一版）: 同上但带 `renderMessageImages`、无 `loadImage`
  *   registerOptions: key(必填) / priority(可选，= cell 遮蔽秩，升序、最低者渲染)
  *   replaceRisk: **有**（这是 keyed 遮蔽位：priority -1 会顶掉 shipped 的 UserMessageNodeView）
+ *
+ * ### 两个版本的正文契约（决定了 ChatEntryView.tsx 的两条渲染路径）
+ *
+ *  · **0.2.1 起**：owner 不再给 `renderMessageImages`（那是 `conversation.message.images` 的绑定），
+ *    图片改由 ui-attachment 注册的 `conversation.chat.user.images` 位渲染；正文则通过框架标准 kit
+ *    给每个 entry 的 `renderFactorySlot` 交给宿主自己的 `conversation.chat.user.content` 工厂
+ *    （ui-chat `UserContent`，声明 `scope:'session'` + 子位 `conversation.chat.user.images`）。
+ *    ⇒ 本插件**委托**这条工厂，只保留动作行（时间 / 复制 / 回退）；`options.fallback` 给老宿主用。
+ *  · **≤ 0.2.0**：该工厂不存在（`renderFactorySlot` 的 outlet 回落到 `options.fallback`），
+ *    由本插件的自绘气泡承担正文，图片走 owner 的 `renderMessageImages`。
+ *  · 有工厂但没有 `loadImage` 且消息里有图：回到自绘气泡（图片仍走 `renderMessageImages`）。
+ *  · 既没有工厂、也没有图片渲染位、消息里还有图：自绘气泡 + 如实提示（判据见 `planChatEntryContentMode`）。
  *
  * 关键事实（决定了本功能只能走这条路，见 T1 output 的证据段）：
  *  · 宿主对 `{ name:'conversation.chat.node', key:'user' }` **没有声明 children 表**
@@ -51,6 +64,7 @@
  * 对应的那一条即可（组件 props 的推导全部走 SlotMap，无需改组件）。
  */
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+import type { ChatEntryHostContentInput } from './chat-entry-view.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   /**
@@ -69,7 +83,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      *
      * 本插件只注册 `user`（priority -1）来把「回退」按钮做进每条用户消息；steering 是**另一个**
      * key，一律保持宿主渲染器。注意 owner props 与宿主 `ChatNodeSeat` 的 `routedOwner`
-     * **逐字对齐**（含 `node`），因为接管之后那条气泡的渲染责任全在我们身上。
+     * **逐字对齐**（含 `node`），因为接管之后那条气泡的渲染责任在我们身上（正文可再委托回宿主，
+     * 见 `/ 两个版本的正文契约` 一节）。
      */
     'conversation.chat.node': {
       kind: 'keyed'
@@ -84,10 +99,16 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
            */
           node: unknown
           /**
-           * 图片渲染位（宿主 `conversation.message.images` 的 renderSlot 绑定）——
-           * **必须**用它渲染图片（ui-chat 的私有实现不可导入）。
+           * 图片加载器（ui-chat ≥ 0.2.1 的 owner 面；图片槽位与正文工厂都用它取图）。
+           * 老宿主没有这个字段 —— 组件按 `typeof loadImage === 'function'` 判形态。
            */
-          renderMessageImages: (owner: unknown) => unknown
+          loadImage?: (entry: unknown) => unknown
+          /**
+           * 图片渲染位（≤ 0.2.0 宿主 `conversation.message.images` 的 renderSlot 绑定）。
+           * **0.2.1 起宿主已删除**：图片改由正文工厂内部的 `conversation.chat.user.images` 位渲染，
+           * 所以这里必须是可选的，组件的自绘路径按 `typeof renderMessageImages === 'function'` 判形态。
+           */
+          renderMessageImages?: (owner: unknown) => unknown
           /** 宿主提供的文件打开器（本插件不消费，保持契约完整）。 */
           openFile: (path: string) => void
           /** 宿主提供的 skill 打开器（同上）。 */
@@ -102,6 +123,19 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
         /** 节点（宿主 `ChatNodeSeat` 把 routedNode 摊进 owner 的最后一个字段）。 */
         node?: unknown
       }
+    }
+  }
+
+  /**
+   * 可复用正文工厂（ui-chat ≥ 0.2.1 的 `conversation.chat.user.content`）。
+   *
+   * 调用点（`ChatEntryView.tsx`）只关心**入参**与 `options.fallback`；`children` 与 `locale`
+   * 是宿主的注册面，调用侧不需要，故不镜像（`FactoryChildrenOf` 对缺省值解析成空表，不影响调用）。
+   */
+  interface SlotFactoryMap {
+    'conversation.chat.user.content': {
+      scope: 'session'
+      props: ChatEntryHostContentInput
     }
   }
 }

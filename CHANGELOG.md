@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **自己消息里的图片重新显示，气泡外观与字号跟随 DSH 设置**：DSH 0.2.1 起把用户消息的正文与图片改由它自己的渲染管线负责，本插件仍按旧接口自绘气泡 —— 于是自己发出的消息里图片被替换成一句「无法显示」的提示，气泡字号也不再跟随「内容字号」设置。现在新版 DSH 上正文与图片交回 DSH 渲染，图片正常显示，外观、字号、引用与技能标签都与原生消息一致；旧版 DSH 上一切照旧。（issue #92 #93）
+  **Images in your own messages show up again, and the bubble follows the DSH reading settings**: Since DSH 0.2.1 the host renders the body and images of user messages through its own pipeline, while the plugin still drew the bubble against the old interface — images in your own messages were replaced by a "cannot display" notice, and the bubble no longer followed the "content font size" setting. On new DSH versions the body and images are rendered by DSH again, so images show up and the look, font size, reference and skill labels match a native message; older DSH versions keep working exactly as before. (issue #92 #93)
+
 ## [0.1.76] - 2026-10-16
 
 > **本版主题**：**修掉「工作区里有 `.asar` 文件就会闪退」** —— 留点扫描会读工作区里的文件，而名字以 `.asar` 结尾的路径在桌面端会被当成安装包容器解析；只要它是损坏的（测试夹具、被打断的打包残留），整个宿主进程会被原生层带走。

@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 
 import {
   buildChatEntryBubble,
+  buildChatEntryHostContentParts,
   buildChatEntrySafeRow,
   buildChatEntryView,
   chatEntryButtonState,
@@ -40,6 +41,8 @@ import {
   lookupPointForTurn,
   plainTextOf,
   planChatEntryAttachments,
+  planChatEntryContentMode,
+  planChatEntryHostContent,
   planChatNodeRegistration,
   projectChatEntryText,
   projectChatEntryTextWithHost,
@@ -365,6 +368,94 @@ test('bubble keeps the UNprojected text for the host projector and the projected
   const empty = buildChatEntryBubble(null)
   assert.equal(empty.text, '')
   assert.equal(empty.rawText, '')
+})
+
+/* ------------------------------------------------------------ ④ 宿主正文工厂（ui-chat ≥ 0.2.1） */
+
+/**
+ * 0.2.1 起宿主把「用户消息正文」收进可复用工厂 `conversation.chat.user.content`（ui-chat `UserContent`），
+ * 图片改由它内部的 `conversation.chat.user.images` 位渲染；owner 面的 `renderMessageImages` 随之消失。
+ * 本插件的自绘气泡因此只在老宿主上承担正文 —— 下面四条钉住「交给宿主的形状」与「何时才交」。
+ */
+test('host content parts: text/image/file/rest split matches the host contentParts, verbatim', () => {
+  const fileAttachment = { name: 'a.pdf', bytes: 12 }
+  const parts = buildChatEntryHostContentParts([
+    { type: 'text', text: 'A' },
+    { type: 'image', attachment: { id: 'img-1' } },
+    { type: 'text', text: 'B' },
+    { type: 'file', attachment: fileAttachment },
+    { type: 'tool-call', id: 'x' },
+  ])
+  assert.equal(parts.text, 'AB')
+  // 附件按 content 原始顺序（图片与文件共用一条序列）；文件保留**原始** attachment（名称/体积由宿主自己算）
+  assert.deepEqual(parts.attachments, [
+    { type: 'image', image: { attachment: { id: 'img-1' } } },
+    { type: 'file', file: fileAttachment },
+  ])
+  assert.deepEqual(parts.rest, [{ type: 'tool-call', id: 'x' }])
+})
+
+test('host content parts: boundary cases never throw and never silently drop a block', () => {
+  // 判据与宿主逐条相同：text 不是字符串、image/file 缺 attachment 都进 rest
+  const odd = buildChatEntryHostContentParts([{ type: 'text', text: 1 }, { type: 'image' }, { type: 'file' }])
+  assert.deepEqual(odd.attachments, [])
+  assert.equal(odd.rest.length, 3)
+  // 非数组：字符串当整段文本；null/undefined 是空；单个块（宿主会崩的怪形状）按块判定后进对应桶
+  assert.deepEqual(buildChatEntryHostContentParts('hi'), { text: 'hi', attachments: [], rest: [] })
+  assert.deepEqual(buildChatEntryHostContentParts(null), { text: '', attachments: [], rest: [] })
+  assert.equal(buildChatEntryHostContentParts({ type: 'text', text: 'solo' }).text, 'solo')
+  assert.deepEqual(buildChatEntryHostContentParts({ foo: 1 }).rest, [{ foo: 1 }])
+})
+
+test('host content plan: referenceLabels go to BOTH content and facts; skillNames only to facts; absent stays absent', () => {
+  const plan = planChatEntryHostContent({
+    kind: 'user',
+    data: {
+      content: [{ type: 'text', text: '看 @[会话甲](dsh-session:s9)' }, { type: 'image', attachment: { id: 'i' } }],
+      referenceLabels: ['会话甲'],
+      skillNames: ['i-have-adhd'],
+    },
+  })
+  // 文本**不投影**（宿主自己认线格式并渲染成 chip）；引用标签既进 content（汇总行）也进 facts（chip）
+  assert.deepEqual(plan.content, {
+    text: '看 @[会话甲](dsh-session:s9)',
+    attachments: [{ type: 'image', image: { attachment: { id: 'i' } } }],
+    extraBlocks: [],
+    referenceLabels: ['会话甲'],
+  })
+  assert.deepEqual(plan.facts, { sessionLabels: ['会话甲'], skillNames: ['i-have-adhd'] })
+  // 两个字段都不存在：不补空数组（宿主只在有值时传；「没有」与「空」不同）
+  const bare = planChatEntryHostContent({ data: { content: [{ type: 'text', text: 'x' }] } })
+  assert.equal(Object.hasOwn(bare.content, 'referenceLabels'), false)
+  assert.deepEqual(bare.facts, {})
+  // 怪节点 / 非数组 content：不抛，文本照拿
+  assert.equal(planChatEntryHostContent(null).content.text, '')
+  assert.equal(planChatEntryHostContent({ data: { content: 'raw' } }).content.text, 'raw')
+})
+
+test('content renderer: delegate only when the host factory exists and images can still load', () => {
+  const mode = planChatEntryContentMode
+  // 新宿主（工厂 + 加载器）：有无图片都委托
+  assert.equal(mode({ hasHostFactory: true, hasLoadImage: true, hasImageRenderer: false, imageCount: 2 }), 'host')
+  assert.equal(mode({ hasHostFactory: true, hasLoadImage: true, hasImageRenderer: false, imageCount: 0 }), 'host')
+  // 只有工厂、没有加载器：纯文本仍可委托（工厂不需要它）；有图就退回自绘路径，绝不让图片永远转圈
+  assert.equal(mode({ hasHostFactory: true, hasLoadImage: false, hasImageRenderer: false, imageCount: 0 }), 'host')
+  assert.equal(mode({ hasHostFactory: true, hasLoadImage: false, hasImageRenderer: true, imageCount: 1 }), 'self')
+  // 老宿主（无工厂）：自绘；有图且连渲染位都没有 ⇒ 如实提示（不自己画图）
+  assert.equal(mode({ hasHostFactory: false, hasLoadImage: false, hasImageRenderer: true, imageCount: 1 }), 'self')
+  assert.equal(mode({ hasHostFactory: false, hasLoadImage: false, hasImageRenderer: false, imageCount: 1 }), 'notice')
+  // 老宿主、无图片：不需要图片位，也不提示
+  assert.equal(mode({ hasHostFactory: false, hasLoadImage: false, hasImageRenderer: false, imageCount: 0 }), 'self')
+})
+
+test('delegation contract: the view hands the host factory the user.content payload and keeps the self bubble as fallback', () => {
+  const src = sourceOf('ChatEntryView.tsx')
+  // 委托点 = 宿主工厂名 + `options.fallback`（老宿主 / 工厂缺席时 outlet 原样回落）
+  assert.match(src, /renderFactorySlot\(\s*'conversation\.chat\.user\.content'/)
+  assert.match(src, /fallback: selfContent/)
+  // 判据只在纯层：组件不自己拼「有没有渲染位」的条件
+  assert.match(src, /planChatEntryContentMode\(/)
+  assert.doesNotMatch(src, /typeof renderMessageImages === 'function'\s*&&[^\n]*images\.length/, '自绘图片提示必须走 contentMode === notice')
 })
 
 /* ------------------------------------------------------------ ⑤ 回合号只认可核实字段 */

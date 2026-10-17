@@ -481,6 +481,135 @@ export function planChatEntryAttachments(view: ChatEntryBubbleView): ChatEntryAt
     : { kind: 'file', index, file: attachment.file, size: fileSizeTextOf(attachment.file.bytes) })
 }
 
+/* ------------------------------------------------------------ 宿主正文工厂（ui-chat ≥ 0.2.1） */
+
+/**
+ * 宿主 `contentParts`（ui-chat MessageItem）的**逐字同构**：文本拼接、图片/文件按 content 原始
+ * 顺序进 attachments、其余块进 rest。
+ *
+ * 与 `buildChatEntryBubble` 的分工：气泡视图模型是我们**自绘**用的（文件卡要 name/ext/bytes、
+ * 图片要逐张转发）；这里产出的附件必须是**宿主自己的形状**（`{ type:'file', file: 原始 attachment }`，
+ * 名称与体积由宿主自己算）—— 它只交给宿主 `conversation.chat.user.content` 工厂。
+ */
+export interface ChatEntryHostContentParts {
+  /** 所有 text 块的拼接（**未投影**：宿主自己认 `@[label](dsh-session:…)` 线格式，渲染成 chip）。 */
+  text: string
+  /** 有序附件（图片与文件共用一条序列，各占一个位置）。 */
+  attachments: ChatEntryHostAttachment[]
+  /** 宿主会交给 JsonBlock 的未知块（必须原样上屏，不得静默丢弃）。 */
+  rest: unknown[]
+}
+
+/** 宿主附件（`contentParts` 吐出的两项形状）。 */
+export type ChatEntryHostAttachment =
+  | { type: 'image'; image: { attachment: unknown } }
+  | { type: 'file'; file: unknown }
+
+/**
+ * content → 宿主形状的四类切分（不抛：宿主假设 content 是数组，怪形状按安全值处理）。
+ * 判据与宿主 `contentParts` 逐条相同：`type==='text' && typeof text==='string'`、
+ * `type==='image' && attachment!==undefined`、`type==='file' && attachment!==undefined`，其余进 rest。
+ */
+export function buildChatEntryHostContentParts(content: unknown): ChatEntryHostContentParts {
+  if (typeof content === 'string') return { text: content, attachments: [], rest: [] }
+  const blocks: readonly unknown[] = Array.isArray(content) ? content : content === null || content === undefined ? [] : [content]
+  const texts: string[] = []
+  const attachments: ChatEntryHostAttachment[] = []
+  const rest: unknown[] = []
+  for (const block of blocks) {
+    const record = asRecord(block)
+    const type = record?.['type']
+    if (type === 'text' && typeof record?.['text'] === 'string') {
+      texts.push(record['text'] as string)
+      continue
+    }
+    if (type === 'image' && record?.['attachment'] !== undefined) {
+      attachments.push({ type: 'image', image: { attachment: record['attachment'] } })
+      continue
+    }
+    if (type === 'file' && record?.['attachment'] !== undefined) {
+      attachments.push({ type: 'file', file: record['attachment'] })
+      continue
+    }
+    rest.push(block)
+  }
+  return { text: texts.join(''), attachments, rest }
+}
+
+/** 宿主 `conversation.chat.user.content` 工厂的入参（ui-chat `UserStyleBubble` 的 `prepared` + `facts` 同形）。 */
+export interface ChatEntryHostContentInput {
+  content: {
+    text: string
+    attachments: ChatEntryHostAttachment[]
+    extraBlocks: unknown[]
+    referenceLabels?: string[]
+  }
+  /**
+   * 正文投影的事实（宿主 `conversation.user.text` 工厂读 `sessionLabels` / `skillNames`）：
+   * 会话引用与技能因此渲染成**宿主的** chip（`interactive` 为真时可点开）。
+   */
+  facts: {
+    sessionLabels?: string[]
+    skillNames?: string[]
+  }
+  /** 宿主授权的图片加载器（工厂内部的图片位用它取图；没有它就不把正文交出去，见 `planChatEntryContentMode`）。 */
+  loadImage?: unknown
+  /** 宿主对持久的 user 节点固定传 true（chip 可点开）。 */
+  interactive?: boolean
+}
+
+/**
+ * 节点 → 宿主正文工厂的入参（纯函数，不抛）。
+ *
+ * 逐字对齐宿主 `UserMessageNodeView`：`referenceLabels` **既**进 content（引用汇总行）
+ * **也**进 facts（`projectUserText` 的会话引用 chip）；`skillNames` 只进 facts。
+ * 两个字段读不到时**不补空数组** —— 宿主只在拿到值时才传，语义上「没有」与「空」不同。
+ */
+export function planChatEntryHostContent(node: unknown): ChatEntryHostContentInput {
+  const data = readChatEntryNodeData(node)
+  const parts = buildChatEntryHostContentParts(data.content)
+  const content: ChatEntryHostContentInput['content'] = {
+    text: parts.text,
+    attachments: parts.attachments,
+    extraBlocks: parts.rest,
+  }
+  const facts: ChatEntryHostContentInput['facts'] = {}
+  if (data.referenceLabels !== null) {
+    content.referenceLabels = data.referenceLabels
+    facts.sessionLabels = data.referenceLabels
+  }
+  if (data.skillNames !== null) facts.skillNames = data.skillNames
+  return { content, facts }
+}
+
+/**
+ * 正文由谁渲染（三态，纯判定）：
+ *  · `host`   —— 宿主提供 `conversation.chat.user.content` 工厂（ui-chat ≥ 0.2.1）：正文与图片
+ *               **整段**交给宿主，我们只留下动作行（时间 / 复制 / 回退）。这是 0.2.1 起唯一能让
+ *               用户消息里的图片显示、且气泡跟随宿主「内容字号」等设置的路；
+ *  · `self`   —— 老宿主（≤ 0.2.0）：该工厂不存在，仍自绘气泡；图片走 owner 的 `renderMessageImages`；
+ *  · `notice` —— 老宿主且**连图片渲染位也没有**：自绘气泡 + 如实说「图片无法显示」（绝不自己画图）。
+ *
+ * 为什么 `host` 还要求 `hasLoadImage`：工厂内部的图片位要 `loadImage` 才取得到图；只给工厂却拿不到
+ * 加载器时，交出去只会变成「图片永远转圈」—— 那种情况退回自绘路径更诚实。
+ */
+export type ChatEntryContentMode = 'host' | 'self' | 'notice'
+
+export function planChatEntryContentMode(options: {
+  /** 宿主是否给了 factory 渲染位（`typeof renderFactorySlot === 'function'`）。 */
+  hasHostFactory: boolean
+  /** 宿主是否给了图片加载器（`typeof loadImage === 'function'`）。 */
+  hasLoadImage: boolean
+  /** 老宿主的图片渲染位是否可用（`typeof renderMessageImages === 'function'`）。 */
+  hasImageRenderer: boolean
+  /** 这条消息里被识别出的图片张数。 */
+  imageCount: number
+}): ChatEntryContentMode {
+  if (options.hasHostFactory && (options.imageCount === 0 || options.hasLoadImage)) return 'host'
+  if (options.imageCount > 0 && !options.hasImageRenderer) return 'notice'
+  return 'self'
+}
+
 /* ------------------------------------------------------------ 按钮状态机 */
 
 /** 一条用户消息上那颗「回退」按钮的状态。 */

@@ -3,9 +3,16 @@
  *
  * 为什么必须接管（而不是追加）：该 key 没有 children 表（宿主只对 turn-tail 声明了子位），
  * framework 没有「往用户消息里加 UI」的位子；唯一合法做法是 priority -1 遮蔽宿主的
- * `UserMessageNodeView`，然后在自己的渲染里把那条气泡**复刻**一遍（宿主组件 / CSS Modules
- * 全是 ui-chat 私有、不可导入 —— 外观靠本仓库 CSS 逼近，图片**必须**走 owner 给的
- * `renderMessageImages`）。
+ * `UserMessageNodeView`。
+ *
+ * 接管之后正文有**两条路径**（判据在 `planChatEntryContentMode`）：
+ *  · **委托宿主工厂**（ui-chat ≥ 0.2.1）：用框架标准 kit 给每个 entry 的 `renderFactorySlot` 把正文
+ *    （文本 / 引用与技能 chip / 图片 / 文件卡 / 附加块）整段交回宿主自己的
+ *    `conversation.chat.user.content` 工厂 —— 外观、内容字号、图片加载都与宿主原生消息一致，
+ *    我们只保留动作行（时间 / 复制 / 回退）；老宿主没有这条工厂时 outlet 自动回落到
+ *    `options.fallback`，也就是下面那条自绘气泡。
+ *  · **自绘气泡**（≤ 0.2.0，或新宿主没给 `loadImage`）：宿主组件与它的 CSS Modules 全是 ui-chat
+ *    私有、不可导入，外观靠本仓库 CSS 逼近，图片**必须**走 owner 给的 `renderMessageImages`。
  *
  * 三件硬约束（本文件是它们的落点）：
  *  ① **用户消息绝不消失**：整个子树包在 `ChatEntryErrorBoundary` 里，抛错就降级成
@@ -18,7 +25,7 @@
  * 组件的全部判定在 `chat-entry-view.ts`（node 可测）：本文件只做装配、订阅与渲染。
  */
 import { Component, Fragment, createElement, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime, RenderFactorySlot } from '@deepseek-ai/dsh-client-ui-slots'
 import type { TranslateNS } from '../client-types.ts'
 import type { RollbackPointPort } from '../../ui/rollback-view.ts'
 import { CopyStateIcon, RefreshIcon } from '../common/Icon.tsx'
@@ -30,6 +37,8 @@ import {
   buildChatEntrySafeRow,
   buildChatEntryView,
   chatEntryButtonState,
+  planChatEntryContentMode,
+  planChatEntryHostContent,
   projectChatEntryTextWithHost,
   chatEntryTurnPhase,
   planChatEntryAttachments,
@@ -87,13 +96,18 @@ export interface ChatEntryViewInjected {
 }
 
 /**
- * 完整 props：owner/keyProps 面（`PropsRuntime` 从 SlotMap 推导出 node / renderMessageImages 等）
- * + session 标准 props + 本插件字典（`t`）+ inject 面。
+ * 完整 props：owner/keyProps 面（`PropsRuntime` 从 SlotMap 推导出 node / loadImage / renderMessageImages
+ * 等）+ session 标准 props + 本插件字典（`t`）+ inject 面 + 正文工厂渲染位。
+ *
+ * `renderFactorySlot` 是框架标准 kit 给**每个** entry 的席位（不在 `PropsRuntime` 里），老宿主可能没有：
+ * 所以这里声明成可选，运行时按 `typeof … === 'function'` 判形态（见 `planChatEntryContentMode`）。
  *
  * 注意 `props.node` 的静态类型是 `unknown`（镜像里刻意不写死宿主节点形状）；真正读它的地方全在
  * `chat-entry-view.ts` 的宽度接收纯函数里。
  */
-export type ChatEntryViewProps = PropsRuntime<'conversation.chat.node', 'user'> & PropsLocale<'config-manager-chat'> & ChatEntryViewInjected
+export type ChatEntryViewProps = PropsRuntime<'conversation.chat.node', 'user'> & PropsLocale<'config-manager-chat'> & ChatEntryViewInjected & {
+  renderFactorySlot?: RenderFactorySlot
+}
 
 /**
  * 文件卡：类型图标 + 文件名 + 体积。
@@ -160,8 +174,12 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
   /** 宿主的文件 / 技能打开器（给宿主正文投影的 chip 用；形态不符时投影自己会当没有）。 */
   openFile?: unknown
   openSkill?: unknown
-  /** 宿主图片渲染位（SlotMap 的 keyProps 把返回值声明成 unknown ⇒ 用它当 `MessageImagesRenderer` 必须过一层窄化）。 */
+  /** 老宿主的图片渲染位（SlotMap 的 keyProps 把返回值声明成 unknown ⇒ 用它当 `MessageImagesRenderer` 必须过一层窄化）。 */
   renderMessageImages?: unknown
+  /** 宿主的图片加载器（0.2.1 起；委托正文工厂时逐字转发给它内部的图片位）。 */
+  loadImage?: unknown
+  /** 宿主的正文工厂渲染位（0.2.1 起；缺席时走自绘气泡）。 */
+  renderFactorySlot?: RenderFactorySlot
   t: TranslateNS<'config-manager-chat'>
 }
 
@@ -193,8 +211,10 @@ function useRollbackEntryEnabled(): boolean {
   return value
 }
 
-function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
+function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImages, loadImage, renderFactorySlot, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
+  /** 委托宿主正文工厂的入参（与 `view` 同源，节点换了才重算）。 */
+  const hostContent = useMemo(() => planChatEntryHostContent(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
   /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
   const [windowOpen, setWindowOpen] = useState(false)
@@ -255,11 +275,24 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
 
   const bubble: ChatEntryBubbleView = view.bubble
   /**
-   * 附件按**content 原始顺序**输出（宿主 `attachments.map` 同构）：图片走 owner 的
-   * `renderMessageImages`（每张一次调用），文件走文件卡 —— 两类**共用同一条序列**，
-   * 绝不重排成「先图片后文件」（t4 复核 D2）。
+   * 正文由谁画（三态判据在 `planChatEntryContentMode`）：
+   *  · `host`   —— 宿主给了 `conversation.chat.user.content` 工厂：整段正文交回宿主（图片、字号、
+   *                引用/技能 chip 都跟宿主原生消息一致），我们只保留下面的动作行；
+   *  · `self`   —— 老宿主：自绘气泡，图片走 owner 的 `renderMessageImages`；
+   *  · `notice` —— 老宿主且没有图片渲染位：自绘气泡 + 如实提示（绝不自己画图）。
    */
   const canRenderImages = typeof renderMessageImages === 'function'
+  const contentMode = planChatEntryContentMode({
+    hasHostFactory: typeof renderFactorySlot === 'function',
+    hasLoadImage: typeof loadImage === 'function',
+    hasImageRenderer: canRenderImages,
+    imageCount: bubble.images.length,
+  })
+  /**
+   * 附件按**content 原始顺序**输出（宿主 `attachments.map` 同构）：图片每张一次
+   * `renderMessageImages` 调用，文件走文件卡 —— 两类**共用同一条序列**，
+   * 绝不重排成「先图片后文件」（t4 复核 D2）。
+   */
   const attachmentNodes = planChatEntryAttachments(bubble).map((item) => item.kind === 'image'
     ? (canRenderImages
         ? (
@@ -282,44 +315,57 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
     openSkill,
   })
   const reasonKey = button.kind === 'disabled' ? button.key : null
+  /**
+   * 自绘正文（老宿主用；同时是宿主工厂的 `options.fallback` —— 宿主没有这条工厂时 outlet
+   * 原样回落到它，所以「宿主升级 / 降级」两侧都不会少画东西）。
+   */
+  const selfContent = (
+    <Fragment>
+      {hasAttachments && (
+        <div className={css.chatAttachmentRow} data-message-attachments="">
+          {attachmentNodes}
+        </div>
+      )}
+      {bubble.showBubble && (
+        <div className={css.chatBubble}>
+          {bubble.text !== '' && (
+            <span className={css.chatBubbleText}>{hostText === null ? bubble.text : hostText}</span>
+          )}
+          {bubble.raw.map((block) => (
+            <RawBlock
+              key={'raw-' + block.id}
+              payload={block.payload}
+              label={t('chat.entry.extraBlock')}
+              truncatedLabel={(total) => t('chat.entry.truncated', { total })}
+            />
+          ))}
+        </div>
+      )}
+      {contentMode === 'notice' && (
+        <div className={css.chatEntryNotice}>{t('chat.entry.noImageRenderer')}</div>
+      )}
+      {/* 引用会话汇总行：宿主在气泡下方渲染 referenceSummary（`引用会话 · {labels}`）。
+          我们复刻这一行（文案在 chat 字典里，**不依赖 ui-primitives**）；`data-ref-chip` 供探针定位。 */}
+      {view.referenceLabels.length > 0 && (
+        <div className={css.chatEntryReference} data-ref-chip="">
+          {t('chat.entry.referenceSummary', {
+            labels: view.referenceLabels.join(t('chat.entry.referenceSeparator')),
+          })}
+        </div>
+      )}
+    </Fragment>
+  )
 
   return (
     <div className={css.chatEntryScope}>
       <div className={css.chatEntryRow}>
-        <div className={css.chatEntryStack}>
-          {hasAttachments && (
-            <div className={css.chatAttachmentRow} data-message-attachments="">
-              {attachmentNodes}
-            </div>
-          )}
-          {bubble.showBubble && (
-            <div className={css.chatBubble}>
-              {bubble.text !== '' && (
-                <span className={css.chatBubbleText}>{hostText === null ? bubble.text : hostText}</span>
-              )}
-              {bubble.raw.map((block) => (
-                <RawBlock
-                  key={'raw-' + block.id}
-                  payload={block.payload}
-                  label={t('chat.entry.extraBlock')}
-                  truncatedLabel={(total) => t('chat.entry.truncated', { total })}
-                />
-              ))}
-            </div>
-          )}
-          {!canRenderImages && bubble.images.length > 0 && (
-            <div className={css.chatEntryNotice}>{t('chat.entry.noImageRenderer')}</div>
-          )}
-          {/* 引用会话汇总行：宿主在气泡下方渲染 referenceSummary（`引用会话 · {labels}`）。
-              我们复刻这一行（文案在 chat 字典里，**不依赖 ui-primitives**）；`data-ref-chip` 供探针定位。 */}
-          {view.referenceLabels.length > 0 && (
-            <div className={css.chatEntryReference} data-ref-chip="">
-              {t('chat.entry.referenceSummary', {
-                labels: view.referenceLabels.join(t('chat.entry.referenceSeparator')),
-              })}
-            </div>
-          )}
-        </div>
+        {contentMode === 'host' && renderFactorySlot !== undefined
+          ? renderFactorySlot(
+            'conversation.chat.user.content',
+            { ...hostContent, loadImage, interactive: true },
+            { fallback: selfContent },
+          )
+          : <div className={css.chatEntryStack}>{selfContent}</div>}
         <div className={css.chatEntryActions}>
           {/* 时间在动作行**最前**（宿主把 MessageIconActions 的 clock 设为 "start"，与它同构） */}
           {view.clock !== null && <span className={css.chatEntryTime}>{view.clock}</span>}
