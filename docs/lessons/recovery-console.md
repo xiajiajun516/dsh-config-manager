@@ -164,6 +164,15 @@
 - **护栏**：`src/index.facade.test.ts` 3 条（cwd 归位 / 第一档抛错后同目录兜底 / 子代理血缘）；`src/core/rollback-point.test.ts` R-12 两组断言（归位成功无多余指引 + `workspaceAttached=true`；带 warning 时回退仍 `restored` 且指引含未归位码 + `workspaceAttached=false`）；`src/client/chat/rollback-entry-view.test.ts` 的 `chatRewindNotices` 用例。
 - **未验证（如实）**：本机没有运行「带该修复的构建」的实例（`~\.dsh\profiles\desktop\node_modules\dsh-config-manager` 是 0.1.71 发布版，`/recovery/rollback-points` 在该实例上 404，即**不含**本插件回滚族）—— 真机端到端「回退后子会话出现在正确工作区」未复验，证据止于单元/引擎/客户端判定三层测试与离线数据复核。
 
+## 归位失败的唯一真机原因是「cwd 只有活会话一个来源」（2026-10-17 真机取证）
+
+- **症状**（用户 2026-10-17 反馈）: 用「↺ 回退」回退对话后，新对话有时出现在侧栏**「未分组」**下。
+- **现场（本机 2026-10-17 全量扫描）**: `~/.dsh/sessions` 下 1452 条会话里，「有 `parentSession` 且 `isSeeded`」的回退 fork 共 **255** 条，其中不在任何工作区 `sessionIds` 里的 **241** 条 —— 而这 241 条的 `header.cwd` **全部**能对应上一个**已注册工作区**的 `path`（折叠比较），也就是第 ③ 档「同目录」本该把它们全部收回。回退台账 `rollback-points/index.json` 里能找到同刻的 `kind=guard` 救援点（比子会话创建早 355 ms），可确认这些子会话确实由本插件回退产生（不是 DSH 原生分叉）。
+- **根因**: 第 ③ 档的 cwd 只读**活会话** `ctx.get(sessions).get(id).header.cwd`，拿不到就直接 `cwd-unavailable` —— 而 DSH 自己的读法（`dsh-workspace` 的 `readSessionHeader`，`lib/index.js:911`）有**磁盘回落**（`sessionPersistence.list()` 的 header 缓存，同上 `listStoredHeaders()`）。
+- **真机取证（同源实现，直接跑）**: 对已有历史会话调 `POST /api/dsh-config-manager/recovery/fork-reconcile`（t17 复用的正是 t10 那份三档实现）—— `scanned 918 / candidates 918 / attached 619 / already 14 / refused 285`，且 285 条拒绝理由**全部是 `cwd-unavailable`**（285/285）。同一批数据同时**排除**了另外两支：DSH 的 `attachSession` 与我们的 `list()` 复核在真机上都工作正常（619 次写入全部复核通过），所以「挂不上」不是 attach 被拒、也不是复核假红。
+- **改法（本仓已落地）**: ① cwd 多源候选 —— 子会话（活 header → 落盘 `sessionPersistence.list()` header）+ 父会话（DSH 的 fork 逐字继承父 cwd：`dsh-api-session-controller` 的 `SessionCommandController.fork` 写 `meta.cwd = source.header.cwd`；同处 `agents.create` 的 meta 里就带着它）；② 归位失败自动**重试一次**（fork 刚落地时索引/持久化可能未就绪，属时序性失败；三档判定与 `attachSession` 幂等，重试零副作用）；③ 失败时把 `{at,parentId,childId,reason,detail}` 追加到 `<插件数据根>/logs/rewind-workspace-attach.jsonl`（桌面版拿不到宿主 stdout，旧实现只留界面一句 warning）。
+- **护栏**: `src/index.facade.test.ts` 新增 3 条 —— 活会话读不到但落盘 header 有 cwd ⇒ 仍归位；子会话 header 无 cwd 但父会话有 ⇒ 仍归位；两条都拿不到 ⇒ 如实返回 `workspace-attach-failed:cwd-unavailable` 且诊断文件落一行可查记录。
+- **仍未验证（如实）**: 修复后的**真机端到端**（需重启 DSH 载入新构建后再跑一次 `POST /recovery/fork-reconcile`，那 285 条应被收回去）；证据目前止于真机现场数据 + 单元测试。
 ## 回退 fork 必须走官方 sessionController.fork：底层 SessionStore.fork 造出的会话不落盘、没有 agent（2026-10-12 用户截图）
 
 - **症状**（用户 2026-10-12 截图）：回退之后想继续对话，界面报 `resume failed for session "session-1": SessionPersistenceNotFoundError: session "session-1" not found (gateway/internal)`。

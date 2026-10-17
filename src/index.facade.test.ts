@@ -427,6 +427,66 @@ test('回退 fork：原会话自己就不在任何工作区时，按**子会话 
   )
   assert.deepEqual(membersOf(project), ['someone-else', 'child-cwd'], '只对同目录的那一条调 attachSession')
   assert.deepEqual(membersOf(otherDir), [], '不同目录的工作区一个字节都不许写')
+
+test('回退 fork（2026-10-17 真机）：子会话还没进活会话服务 ⇒ 按**落盘 header** 的 cwd 归位（与 DSH 自己的 readSessionHeader 同源回落）', async () => {
+  const project = workspaceFixture({ id: 'ws-a', path: 'D:/proj/a', sessionIds: [] })
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessionController: { fork: async () => ({ sessionId: 'child-stored' }) },
+    // 活会话服务里**没有**这个子会话（fork 刚返回、索引还没就绪）——修复前这里直接 cwd-unavailable
+    sessions: { get: () => undefined },
+    sessionPersistence: { list: async () => [{ header: { id: 'child-stored', cwd: 'D:/proj/a' } }] },
+    workspaceRegistry: { list: () => [project] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+
+  assert.deepEqual(
+    await facade.forkSession('parent-nowhere', 5),
+    { childSessionId: 'child-stored' },
+    '落盘 header 读得到 cwd ⇒ 必须归位（修复前报 workspace-attach-failed:cwd-unavailable ⇒ 侧栏「未分组」）',
+  )
+  assert.deepEqual(membersOf(project), ['child-stored'])
+})
+
+test('回退 fork（2026-10-17 真机）：子会话 header 读不出 cwd ⇒ 用**父会话 cwd** 归位（DSH 的 fork 逐字继承父 header.cwd）', async () => {
+  const project = workspaceFixture({ id: 'ws-a', path: 'D:/proj/a', sessionIds: [] })
+  const facade = new DshSessionStoreFacade(storeCtx({
+    sessionController: { fork: async () => ({ sessionId: 'child-nocwd' }) },
+    sessions: {
+      get: (id: string) => {
+        if (id === 'child-nocwd') return { header: { id } }
+        if (id === 'parent-1') return { header: { id, cwd: 'D:/proj/a' } }
+        return undefined
+      },
+    },
+    workspaceRegistry: { list: () => [project] },
+  }), 'C:/home/.dsh', zhMsg, silentLogger(), async (p) => canonicalPath(p))
+
+  assert.deepEqual(await facade.forkSession('parent-1', 5), { childSessionId: 'child-nocwd' })
+  assert.deepEqual(membersOf(project), ['child-nocwd'], '父 cwd 与工作区同目录 ⇒ 必须归位（同源事实，不是猜测）')
+})
+
+test('回退 fork：两条 cwd 来源都拿不到 ⇒ 如实失败，并把**具体理由**落一行可查的归位诊断（桌面版拿不到宿主 stdout）', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'dcm-attach-diag-'))
+  try {
+    const project = workspaceFixture({ id: 'ws-a', path: 'D:/proj/a', sessionIds: [] })
+    const facade = new DshSessionStoreFacade(storeCtx({
+      sessionController: { fork: async () => ({ sessionId: 'child-lost' }) },
+      sessions: { get: () => undefined },
+      workspaceRegistry: { list: () => [project] },
+    }), home, zhMsg, silentLogger(), async (p) => canonicalPath(p))
+
+    assert.deepEqual(await facade.forkSession('parent-nowhere', 5), {
+      childSessionId: 'child-lost',
+      warning: 'workspace-attach-failed:cwd-unavailable',
+    })
+    const log = readFileSync(join(home, 'dsh-config-manager', 'logs', 'rewind-workspace-attach.jsonl'), 'utf8')
+    assert.match(log, /"childId":"child-lost"/)
+    assert.match(log, /"reason":"cwd-unavailable"/)
+    assert.match(log, /child\(/, 'detail 必须带子会话那一侧的读取细节，光有理由码不够排查')
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
 })
 
 test('t10 ③ 档（修复前必红）：cwd 与工作区 path 仅大小写/分隔符/短名不同 —— 由 DSH 的 resolveByPath 判同一目录后仍归位', async () => {

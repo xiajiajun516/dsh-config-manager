@@ -809,12 +809,13 @@ type ListedSessions =
   | { ok: false; reason: 'unavailable' | 'shape-unknown'; detail: string }
 
 /** 列举会话存储的用途（内部枚举；渲染时必须经字典键映射 —— **绝不把裸枚举塞进文案**）。 */
-type SessionStorePurpose = 'reindexSessionHeader' | 'parentRelations'
+type SessionStorePurpose = 'reindexSessionHeader' | 'parentRelations' | 'rewindWorkspaceAttach'
 
 /** 用途 → 字典键（本仓纪律：文案只做「原因 → 字典键」映射，禁止渲染裸枚举）。 */
 const SESSION_STORE_PURPOSE_KEY: Record<SessionStorePurpose, string> = {
   reindexSessionHeader: 'host.sessionStorePurposeReindex',
   parentRelations: 'host.sessionStorePurposeParentRelations',
+  rewindWorkspaceAttach: 'host.sessionStorePurposeRewindAttach',
 }
 
 /**
@@ -899,6 +900,16 @@ export interface WorkspaceAttachFailure {
 /** 一次 `attachSession` 尝试（只表达「写调用是否成功」，最终判据在 {@link DshSessionStoreFacade} 的复核里）。 */
 type AttachAttempt = { ok: true } | { ok: false; reason: 'attach-session-missing' | 'attach-rejected'; detail?: string }
 
+/**
+ * 会话 cwd 的读取结果（**多源**：活会话 → 宿主会话存储列举）。
+ *
+ * `source` 只用于诊断与日志（live = `ctx.get('sessions').get(id).header`；stored = `sessionPersistence.list()`），
+ * 调用方**不得**据此改变归位判据 —— 两个来源读的都是 DSH 自己写下的同一个 header.cwd。
+ */
+type SessionCwdLookup =
+  | { ok: true; cwd: string; source: 'live' | 'stored' }
+  | { ok: false; detail: string }
+
 /** 一次工作区归位的结果（成功/失败都带**具体**理由）。 */
 export type WorkspaceAttachOutcome =
   | { ok: true; reason: WorkspaceAttachSuccessReason; workspaceId?: string }
@@ -906,6 +917,20 @@ export type WorkspaceAttachOutcome =
 
 /** 归位失败时给调用方的 warning 串（稳定前缀 + 具体理由码）。 */
 export const WORKSPACE_ATTACH_FAILED_PREFIX = 'workspace-attach-failed'
+
+/**
+ * 归位失败后的重试次数与间隔（毫秒）。
+ *
+ * 为什么需要（真机 2026-10-17/10-12）：fork 返回时子会话刚由 `agents.create` 建好，
+ * DSH 侧的会话索引 / 持久化列举可能还没就绪 —— 与「目录根本不存在」这类终结性失败不同，
+ * 这是**时序性**失败。归位本身幂等（`attachSession` 自查成员名单、`mutate` 空操作即不改写），
+ * 因此重试零副作用；不重试则子会话永久停在侧栏「未分组」。
+ */
+const WORKSPACE_ATTACH_ATTEMPTS = 2
+const WORKSPACE_ATTACH_RETRY_DELAY_MS = 200
+
+/** 归位诊断文件的相对路径（相对插件数据根；只在**失败**时追加一行 JSON）。 */
+const WORKSPACE_ATTACH_DIAGNOSTIC_REL = 'logs/rewind-workspace-attach.jsonl'
 
 /**
  * DSH 官方 fork 在「子会话已创建、但 `workspace.attachSession` 失败」时抛的错误码。
@@ -978,6 +1003,11 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   /** DSH 缺省会话根（配置改过时只影响快路径命中率，慢路径仍正确） */
   private readonly root: string
   /**
+   * 插件数据根（`<DSH_HOME>/dsh-config-manager`）—— **只**用于归位失败的诊断落盘。
+   * 权威状态仍在 DSH（工作区注册表 / 会话存储），这里绝不旁路写任何 DSH 数据。
+   */
+  private readonly dataDir: string
+  /**
    * 父子关系的短 TTL 缓存（见 `PARENT_RELATIONS_CACHE_TTL_MS`；同 key 并发合并成一次列举）。
    * F-1 后**只缓存成功结果**：列举失败/形状识别失败会让 `parentRelations()` 抛错，
    * 而 ttl-cache 的语义是「失败不缓存」→ 下一次调用立刻重试（行为见 utils/ttl-cache.ts）。
@@ -1003,6 +1033,7 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
   constructor(ctx: Context, homeDir: string, msg: MsgFunc = zhMsg, log?: Logger, realpath?: (path: string) => Promise<string>) {
     this.ctx = ctx
     this.root = join(homeDir, 'sessions')
+    this.dataDir = join(homeDir, 'dsh-config-manager')
     this.log = log ?? createLogger({ level: 'warn' })
     this.msgFunc = msg
     this.realpath = realpath ?? (async (value: string): Promise<string> => await fs.realpath(value))
@@ -1061,7 +1092,15 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
       childId = recovered
     }
     // 工作区归位：官方已归位 → 只复核；官方没归位（或 attach 抛错被上面救回）→ 本兜底写；写后一律复核。
-    const outcome = await this.attachChildToParentWorkspace(sessionId, childId)
+    //
+    // 失败要重试（真机 2026-10-17）：fork 返回时子会话刚建好，DSH 侧的索引/持久化列举可能还没就绪，
+    // 属**时序性**失败；三档判定与 attach 本身幂等，重试零副作用。不重试的代价是子会话永久停在
+    // 侧栏「未分组」（用户 2026-10-11 起的反馈）。
+    let outcome = await this.attachChildToParentWorkspace(sessionId, childId)
+    for (let attempt = 1; attempt < WORKSPACE_ATTACH_ATTEMPTS && !outcome.ok; attempt += 1) {
+      await new Promise<void>((resolve) => { setTimeout(resolve, WORKSPACE_ATTACH_RETRY_DELAY_MS) })
+      outcome = await this.attachChildToParentWorkspace(sessionId, childId)
+    }
     if (outcome.ok) {
       this.log.info(
         'rewind: child session filed into workspace: ' + childId + ' (' + outcome.reason + (outcome.workspaceId !== undefined ? ' ' + outcome.workspaceId : '') + ')',
@@ -1069,10 +1108,9 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
       return { childSessionId: childId }
     }
     // 归位失败**带具体理由**（绝不静默）：日志留痕 + warning 串交给调用方如实上屏。
-    this.log.warn(
-      'rewind: child session not filed into any workspace: ' + childId + ' reason=' + outcome.reason
-      + (outcome.detail !== undefined ? ' detail=' + outcome.detail : ''),
-    )
+    //
+    // 桌面版 DSH 拿不到宿主 stdout ⇒ 只有理由码还不够排查「为什么进未分组」，故再落一行诊断。
+    await this.recordAttachDiagnostic({ parentId: sessionId, childId, outcome })
     const warning = workspaceAttachWarningOf(outcome)
     return warning === undefined ? { childSessionId: childId } : { childSessionId: childId, warning }
   }
@@ -1141,11 +1179,25 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
         attachFailure ??= attempt
       }
       // ③ 同目录：cwd 与某工作区 path 指向同一目录（目录同一性由 DSH 判定，见方法注释）
-      const cwd = this.liveSessionCwd(childId)
-      if (cwd === undefined) {
-        cwdFailure = { ok: false, reason: 'cwd-unavailable' }
-      } else {
-        const resolution = await this.resolveWorkspaceByCwd(registry, records, cwd)
+      //
+      // cwd 取**多源候选**（真机 2026-10-17）：旧实现只看子会话的活 header，拿不到就直接
+      // `cwd-unavailable` ⇒ 三档全落空 ⇒ 子会话停在「未分组」。两条候选都来自 DSH 自己写下的 header，
+      // 不是猜测：① 子会话（活 / 落盘 header）；② 父会话 —— DSH 的 fork 逐字继承父 cwd
+      // （`SessionCommandController.fork`：`meta.cwd = source.header.cwd`，见 dsh-api-session-controller）。
+      const candidates: { cwd: string; source: string }[] = []
+      const missing: string[] = []
+      const childLookup = await this.sessionCwdOf(childId)
+      if (childLookup.ok) candidates.push({ cwd: childLookup.cwd, source: 'child:' + childLookup.source })
+      else missing.push('child(' + childLookup.detail + ')')
+      const parentLookup = await this.sessionCwdOf(parentId)
+      if (parentLookup.ok) {
+        // 与已入列候选同目录时不重复（同目录再 attach 一次只是白跑一次 list()）
+        if (!candidates.some((c) => foldWorkspacePath(c.cwd) === foldWorkspacePath(parentLookup.cwd))) {
+          candidates.push({ cwd: parentLookup.cwd, source: 'parent:' + parentLookup.source })
+        }
+      } else missing.push('parent(' + parentLookup.detail + ')')
+      for (const candidate of candidates) {
+        const resolution = await this.resolveWorkspaceByCwd(registry, records, candidate.cwd)
         if (resolution.records !== undefined && resolution.records.length > 0) {
           for (const record of resolution.records) {
             const attempt = await this.attachChildTo(record, childId)
@@ -1153,9 +1205,14 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
             attachFailure ??= attempt
           }
         } else {
-          cwdFailure = resolution.failure
+          // 目录不存在 / 不属于任何工作区：按候选来源标注，便于诊断区分「读到的是谁」
+          const failure = resolution.failure
+          if (failure !== undefined) {
+            cwdFailure ??= { ok: false, reason: failure.reason, detail: candidate.source + ':' + (failure.detail ?? '') }
+          }
         }
       }
+      if (candidates.length === 0) cwdFailure = { ok: false, reason: 'cwd-unavailable', detail: missing.join(';') }
       return attachFailure ?? cwdFailure ?? { ok: false, reason: 'no-workspace-for-cwd' }
     } catch (error) {
       const detail = errorMessage(error)
@@ -1333,10 +1390,52 @@ export class DshSessionStoreFacade implements SessionStoreFacade {
     return out
   }
 
-  /** 子会话 header 的 cwd（只读；读不到返回 undefined，绝不猜路径）。 */
-  private liveSessionCwd(sessionId: string): string | undefined {
-    const cwd = this.liveSessionHeader(sessionId)?.['cwd']
-    return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
+  /**
+   * 会话 cwd 的**多源**读取（活会话 → 宿主会话存储列举）。
+   *
+   * 为什么不能只读活会话（真机 2026-10-17 根因之一）：旧实现只看 `ctx.get('sessions').get(id)`，
+   * 拿不到就整体放弃归位 ⇒ fork 出来的子会话停在侧栏「未分组」。而 DSH 自己的读法有**磁盘回落**
+   * （`dsh-workspace` 的 `readSessionHeader`：活会话 → `sessionPersistence.list()` 的 header 缓存），
+   * 本方法与该回落同源，绝不猜路径、绝不拿父会话目录以外的任何东西凑数。
+   *
+   * 失败时返回**具体细节**（哪个来源、为什么），由调用方拼进诊断；绝不静默成 undefined。
+   */
+  private async sessionCwdOf(sessionId: string): Promise<SessionCwdLookup> {
+    const live = this.liveSessionHeader(sessionId)?.['cwd']
+    if (typeof live === 'string' && live !== '') return { ok: true, cwd: live, source: 'live' }
+    const store = readService<SessionListService>(this.ctx, 'sessionPersistence')
+    if (store === undefined) return { ok: false, detail: 'no-live-cwd;session-persistence-unavailable' }
+    const listed = await this.listSessionElements(store, 'rewindWorkspaceAttach')
+    if (!listed.ok) return { ok: false, detail: 'no-live-cwd;' + listed.reason }
+    const view = listed.items.find((item) => item.id === sessionId)
+    if (view === undefined) return { ok: false, detail: 'no-live-cwd;not-in-stored-sessions' }
+    const raw = isRecord(view.raw) ? view.raw['cwd'] : undefined
+    if (typeof raw === 'string' && raw !== '') return { ok: true, cwd: raw, source: 'stored' }
+    return { ok: false, detail: 'no-live-cwd;stored-header-has-no-cwd' }
+  }
+
+  /**
+   * 归位失败的**诊断落盘**（一行 JSON，追加写）。
+   *
+   * 为什么需要：桌面版 DSH 的宿主 stdout 不落盘 ⇒ 用户界面上只有「未挂回原工作区」这句，
+   * 具体理由（registry 拿不到 / attach 被拒 / cwd 读不到 / 复核不过）谁都看不到，
+   * 「为什么会进未分组」于是长期不可排查。这里只记 id、理由码与路径来源，**不含任何凭据**。
+   * 落盘失败绝不升级成回退失败（诊断是旁路，不是回退的一部分）。
+   */
+  private async recordAttachDiagnostic(entry: { parentId: string; childId: string; outcome: WorkspaceAttachFailure }): Promise<void> {
+    try {
+      const target = join(this.dataDir, WORKSPACE_ATTACH_DIAGNOSTIC_REL)
+      await fs.mkdir(dirname(target), { recursive: true })
+      await fs.appendFile(target, JSON.stringify({
+        at: new Date().toISOString(),
+        parentId: entry.parentId,
+        childId: entry.childId,
+        reason: entry.outcome.reason,
+        ...(entry.outcome.detail !== undefined ? { detail: entry.outcome.detail } : {}),
+      }) + '\n')
+    } catch {
+      // 诊断写不进去（只读盘 / 权限 / 配额）：静默 —— 回退本身的结论不受影响。
+    }
   }
 
   /**
