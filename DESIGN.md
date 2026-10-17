@@ -129,7 +129,7 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 | base | **12.5px** | 正文 / 按钮 / 输入 / 标签（基准） |
 | title | **13px** | 页面与区块标题 |
 
-行高 **2 档**：**1.25**（标题）/ **1.5**（正文）。
+行高 **2 档**：**1.25**（标题）/ **1.5**（正文）。**唯一例外** = 聊天流用户气泡的 `.chatEntryScope`（`--cm-lh-base`）：那一处不是我们自己的排版，而是**复刻宿主气泡**，用宿主同一条活公式 `calc(22px + var(--dsh-content-font-delta,0px))`（字号那一处同理镜像 `var(--dsh-content-font-size,14px)`）—— 写死 1.5 会在「内容字号」调大后与助手正文脱节（2026-10-17 issue #93）。
 v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5px（28 处）逐条归类为
 「次级文本 → 11、内容/名称/值（表内数字、单元名、恢复计划路径…）→ 12」（见 v3 文档 §12.8）。
 **执行者**：`css-scale-guard.test.ts`（font-size 越界即红灯）。
@@ -519,7 +519,15 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     ③ 「注册表说它在哪儿」与「磁盘上真有」分开渲染：分区清单没读到 = `未读取`（不可勾，展开时才读），
     读到却没有该单元 = `无内容`（不可勾）—— 绝不产生幽灵勾选（引擎只带走清单里真实存在的单元）；
     ④ 树节点标签是宿主直出文本（包名 / home 相对路径），渲染前同样过 `redact()`，文案按 `kind` 映射字典键。
-  - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
+  - **树的层级必须「看得出来」（2026-10-17，用户实测反馈）**：只靠缩进不够 ——「未归属到插件的配置」
+  下面的 `pet.json` 会被读成同级。定案几何：**子单元行画竖线 + 外移 8px + 内缩 14px**
+  （`.pickerUnitNested` = `margin-left: 8px; padding-left: 14px; border-left: 1px solid
+  var(--dsw-alias-border-l1)`）：竖线落在父行 chevron 的中线下，父行勾选框在 22px、子行在 45px，
+  层级差 23px；二级分组（工作区）的子树再整体外移 16px（`.pickerSubgroupChildren`），让竖线同样
+  落在分组行 chevron 下面。**分区下的单元行也走这套子行样式** —— 原先用 `.pickerUnit` 的 16px 内缩、
+  比父级勾选框（22px）还靠左，正是「看起来平级」的根因之一。间距只用 8 / 14 / 16 三档
+  （`css-scale-guard` 只放行 §4 的节奏档）。
+- **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
     保留尾部时间戳/版本等区分信息，见 §9 anti-pattern 5）+ `min-width:0 / max-width:280px /
     text-overflow: ellipsis` 兜底 —— 长路径/长会话标题不得撑宽列表产生横向滚动条。
     `.pickerUnitName` 的完整值进 `title`（值是脱敏后的）；`.pickerUnitDetail`（副标题）**只做 CSS 省略、不进 `title`**
@@ -1243,7 +1251,7 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
 ### 聊天内入口：接管 `conversation.chat.node` / user（2026-10-10）
 
 **定位**：本插件在 ui-chat 聊天流里渲染的那条**用户消息气泡 + 「回退」按钮**。它渲染在会话消息流里、不在插件设置页子树内（§1 的 token 挂在 `body` 上本就会继承；`.chatEntryScope` 再就地声明一次，是为了不依赖宿主把聊天流渲染在哪个根下）——
-重声明的那一小撮（`--cm-text-1/3`、`--cm-surface-2`、`--cm-chat-bubble`、`--cm-line-1`、`--cm-fs-*`、`--cm-sp-*`、`--cm-r-*`），**不新增任何 scale 档位**（字号/间距/圆角新档位必须先改 §3–§5；`--cm-chat-bubble` 是 §3 的语义色，不是 scale 档）。类清单 = `config-manager.module.css` §15b。
+重声明的那一小撮（`--cm-text-1/3`、`--cm-surface-2`、`--cm-chat-bubble`、`--cm-line-1`、`--cm-fs-*`、`--cm-lh-base`、`--cm-sp-*`、`--cm-r-*`），**不新增任何 scale 档位**（间距/圆角新档位必须先改 §3–§5；`--cm-chat-bubble` 是 §3 的语义色，不是 scale 档）。其中**字号 / 行高 / 限宽是「宿主活值的镜像」，不是我们的档位**（2026-10-17 issue #93）：`--cm-fs-base` = `var(--dsh-content-font-size,14px)`、`--cm-lh-base` = `calc(22px + var(--dsh-content-font-delta,0px))`、气泡列 `max-width` = `min(calc(var(--dsh-chat-content-width,748px) * .702), 82%)` —— 三条与宿主 `.bubble` / `.userStack` 逐字同式。类清单 = `config-manager.module.css` §15b。
 
 - **接管是唯一路径**：宿主 `conversation.chat.node` 的 `user` key 是 keyed 遮蔽位且**没有 children 表**，framework 没有「往每条用户消息里追加 UI」的位子；我们以 `priority -1` 遮蔽宿主的 `UserMessageNodeView`
   （同一 cell 的同一 priority 再注册会抛，故 -1 是与宿主并存的唯一合法值），并**复刻**那条气泡的外观（宿主组件与其 CSS Modules 是 ui-chat 私有的，不可导入）。图片**必须**走 owner 给的
@@ -1252,7 +1260,10 @@ flex-direction:column }` 让内部 input 拉满。市场筛选用 `.marketFilter
   **唯一显式例外**，**不得**照此扩大范围。降级 = **纯文本气泡**（`.chatFallbackBubble`，左侧一条警示线 + `data-chat-entry-fallback` 标记 + ASCII `console.warn`），语义是「用户消息绝不消失」。
 - **入口 = 只有图标（icon-only，2026-10-10 用户第二条要求）**：复用 `.chatActionBtn` 24px 无边框图标位 + `RefreshIcon`，与时间戳 / 复制图标同一行；**按钮内不得出现可见文字标签**，文案只走 `aria-label` / `title`。语义 = ghost（回退不是删除，不用 danger）；禁用原因走原生 `title`（`InfoHint` 的 Portal 钉在插件设置页根节点，聊天区不存在）。
 - **差距 ①② 已于 2026-10-15 收回**（生态既有做法：宿主模块表可以 `require` 到 ui-primitives，见下方那一条）：① 引用 / 技能 chip —— 正文交给宿主自己的 `projectUserText`（`openFile` / `openSkill` 在时可点开）；② 文件类型图标 —— 用宿主 `FileTypeIcon`，拿不到才回落 `.chatFileExt` 扩展名徽标。
-  **仍未做**：③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：圆角 `--cm-r-3`=8px（宿主 14px）、正文 12.5px（宿主 14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+  **仍未做**：③ 时间只显示**时刻**、不做「今天 / 昨天」。另有近似档：圆角 `--cm-r-3`=8px（宿主 `--dsw-radius-xl`=14px）。**要逐像素一致必须先扩 §3–§5，本任务明确不做**。
+- **字号 / 行高 / 限宽跟随宿主的「内容字号」而不是我们的字号档（2026-10-17 修 issue #93，收回上一版登记的「正文 12.5px 近似档」）**：宿主 `.bubble` = `font-size: var(--dsh-content-font-size,14px)` + `line-height: calc(22px + var(--dsh-content-font-delta,0px))`，`.userStack` = `max-width: min(calc(var(--dsh-chat-content-width,748px) * .702), 82%)`（三处取值都是**从本机 `app.asar` 抽出的宿主产物**，见 `docs/spec/known-gaps.md` G-39 增量（七））。
+  我们此前写死 `--cm-fs-base: 12.5px` + `line-height: 1.5` + `min(620px, 82%)` —— 那不是「近似」，而是**用户设置完全失效**：DSH 的「内容字号」（10–22）对用户自己发出的消息没有任何作用（真机 21px 下助手正文字形高 19px / 气泡 11px，比例 0.58），且换行位置与宿主不一致。
+  `--cm-fs-meta`（时间戳 / 动作标签 / 文件卡）**保持 11px 档不动**；§1 `body` 的面板基准 `--cm-fs-base: 12.5px` 也**不动**（只改 `.chatEntryScope` 这一处，否则全站字号地震）。护栏 = `src/client/chat/chat-entry-view.test.ts` 的「气泡字号/行高/限宽跟随宿主内容字号」。
 - **气泡底色不再算近似档（2026-10-15，用户报「浅色主题下气泡看不见」）**：宿主的用户气泡底是 `--dsw-specific-bubble`，本仓库 token 层此前没有这一档，于是借用了 `--cm-surface-2`（= `--dsw-alias-bg-layer-2`）
   —— **浅色主题下它 = `#fff`，而页面底 `--dsw-alias-bg-base` 也是 `#fff`** ⇒ 气泡与页面同色、用户消息看起来「没有气泡」（深色下两者恰好同为 bluish-850，所以只在浅色暴露）。
   现在新增 `--cm-chat-bubble`（§3 表）指向宿主那一档，带 `--dsw-alias-bg-layer-2` 兜底：宿主换主题/换档时自动跟随，宿主删档时不至于变透明。

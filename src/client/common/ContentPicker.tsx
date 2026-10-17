@@ -742,10 +742,12 @@ export function ContentPicker({
                               </div>
                             )}
                             {group.label === null
-                              ? group.units.map((u) => renderUnitRow(node, u, false))
+                              ? group.units.map((u) => renderUnitRow(node, u, true))
                               : (
                                 <Collapse open={groupOpen} id={groupBodyId}>
-                                  {group.units.map((u) => renderUnitRow(node, u, true))}
+                                  <div className={css.pickerSubgroupChildren}>
+                                    {group.units.map((u) => renderUnitRow(node, u, true))}
+                                  </div>
                                 </Collapse>
                               )}
                           </div>

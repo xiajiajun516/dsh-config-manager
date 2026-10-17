@@ -3510,10 +3510,20 @@ body {
   white-space: nowrap;
 }
 
-/* 分组内的单元：与分组行同一左缘（分组行的 chevron 位置由等宽占位顶掉） */
+/* 子单元行：**必须有可见的连接**，只靠缩进会被读成同级（用户 2026-10-17 实测反馈：
+   「未归属到插件的配置」下面的 pet.json 看起来跟它平级）。
+   做法 = 竖线 + 明确的层级差：竖线画在父行 chevron 的中线下（margin-left 8px），
+   padding-left 14px 保证同级/子级一眼可分（间距档位见 DESIGN.md §4：这里只用 8 / 14 / 16）。 */
 .pickerUnitNested {
-  padding-left: 18px;
+  margin-left: 8px;
+  padding-left: 14px;
+  border-left: 1px solid var(--dsw-alias-border-l1);
   gap: 4px;
+}
+
+/* 二级分组（工作区）的子树整体再右移一格：让竖线落在分组行 chevron 的中线下 */
+.pickerSubgroupChildren {
+  margin-left: 16px;
 }
 
 /* 「显示全部（共 N 条）」行（UI-15）：单元列表折叠后的渐进披露入口，与单元行同缩进 */
@@ -5152,10 +5162,14 @@ button.profileRowMain:hover {
    定位：本插件**接管** ui-chat 的 conversation.chat.node / user 渲染器后，自己渲染的用户消息气泡。
    它渲染在**插件设置页子树之外**（聊天流里，不是 .section 的 DOM 子树），因此 §1 定义在 .section
    上的 --cm-* token 在这里**不会继承** —— .chatEntryScope 把用到的那一小撮就地重声明一次。
-   ⚠️ 这里**不新增 token 档位**（字号/间距/圆角全部复用 §1 已冻结的档位）：
-   宿主用户气泡用的是 --dsw-radius-xl / --dsw-specific-bubble / 14px，本仓库 token 层没有这三档
-   （**底色是唯一必须跟随宿主的**：2026-10-15 修「浅色下气泡看不见」—— 见 --cm-chat-bubble 的定义行），
-   剩余差异是**已知且如实登记**的（圆角 8px < 宿主 14px、字号 12.5px < 宿主 14px），
+   ⚠️ 这里**不新增 scale 档位**（间距/圆角全部复用 §1 已冻结的档位；字号/行高/限宽是**跟随宿主的活值**，
+   见下面 --cm-fs-base / --cm-lh-base 的定义行 —— 那不是新档位，是宿主同一个变量的镜像）。
+   **必须跟随宿主的四档**（逐条都在 §15b 的规则里注明理由）：
+   · 底色 --dsw-specific-bubble（2026-10-15 修「浅色下气泡看不见」）；
+   · 字号 --dsh-content-font-size（2026-10-17 修 issue #93「用户气泡字号写死 12.5px，不跟随内容字号」）；
+   · 行高 calc(22px + --dsh-content-font-delta)（同上，宿主 .bubble 同一条公式）；
+   · 限宽 calc(--dsh-chat-content-width * .702)（同上，宿主 .userStack 同一条公式）。
+   剩余差异是**已知且如实登记**的（圆角 8px < 宿主 14px），
    如需逐像素一致必须先改 DESIGN.md §3–§5 —— 本任务明确不做。
 
    类名与审查口径：
@@ -5173,7 +5187,19 @@ button.profileRowMain:hover {
   --cm-line-1: var(--dsw-alias-border-l1);
   --cm-line-2: var(--dsw-alias-border-l2);
   --cm-fs-meta: 11px;
-  --cm-fs-base: 12.5px;
+  /* 正文基准**跟随宿主「内容字号」**（2026-10-17 修 issue #93）。宿主同一条气泡写的就是
+     var(--dsh-content-font-size,14px)（ui-chat 的 .bubble），而 --dsh-content-font-size 由
+     ui-layout 的 ThemePresenter 写在 **body** 上 ⇒ 聊天流里直接继承得到，这里消费即可。
+     此前写死 12.5px（= §1 的面板基准），后果是 DSH 的「内容字号」设置**在用户自己的消息上完全失效**：
+     真机（内容字号 21 / 深浅色无关）同一张截图量字形高 —— 助手正文 19px、我们的气泡 11px，比例 0.58。
+     兜底 14px = 宿主缺档时的同一取值（**不能**兜回 12.5px：那是面板档，会让这里重新脱钩）。
+     ⚠️ 只有这**一处**改：§1 body 的 --cm-fs-base 仍是 12.5px（插件面板基准），一动就全站字号地震。
+     --cm-fs-meta 也不动（时间戳 / 动作标签 / 文件卡仍是 11px 档，pinned by 本文件 §15b 的其余规则）。 */
+  --cm-fs-base: var(--dsh-content-font-size, 14px);
+  /* 行高也跟随宿主**同一条公式**（宿主 .bubble = calc(22px + var(--dsh-content-font-delta,0px))）。
+     只改字号不够：21px 下 line-height:1.5 = 31.5px，宿主是 29px（22 + delta 7）⇒ 气泡比助手正文松 2.5px/行。
+     --dsh-content-font-delta 同样由宿主定义在 body 上（= 内容字号 - 14px，缺档时 0px ⇒ 退化成 22px）。 */
+  --cm-lh-base: calc(22px + var(--dsh-content-font-delta, 0px));
   --cm-sp-2: 4px;
   --cm-sp-3: 6px;
   --cm-sp-4: 8px;
@@ -5186,7 +5212,7 @@ button.profileRowMain:hover {
   min-width: 0;
   color: var(--cm-text-1);
   font-size: var(--cm-fs-base);
-  line-height: 1.5;
+  line-height: var(--cm-lh-base);
 }
 
 /* 用户消息行：右对齐（与宿主 .userRow 同构） */
@@ -5197,14 +5223,17 @@ button.profileRowMain:hover {
   gap: var(--cm-sp-3);
 }
 
-/* 气泡列：限宽（宿主是 min(画布宽 * .702, 82%)；我们是固定近似，见文件头注释） */
+/* 气泡列：限宽 —— 与宿主 .userStack 同一条公式（2026-10-17 修 issue #93）。
+   旧值是固定近似 min(620px, 82%)：字号调大后 620px 会明显早于宿主换行（宿主同宽度下按
+   --dsh-chat-content-width * .702 算，默认 748 * .702 ≈ 525px）。兜底 748px = 宿主缺档时的同一取值。
+   ⚠️ 变量定义在 ui-conversation 的聊天 body（.body / .embeddedBody）上，本节点恒在它之下。 */
 .chatEntryStack {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
   gap: var(--cm-sp-4);
   min-width: 0;
-  max-width: min(620px, 82%);
+  max-width: min(calc(var(--dsh-chat-content-width, 748px) * .702), 82%);
 }
 
 /* 用户气泡：pre-wrap 保留换行与空白（禁用! 会改文案语义），长词强制断行 */
@@ -5315,7 +5344,8 @@ button.profileRowMain:hover {
 }
 
 .chatEntryNotice {
-  max-width: min(620px, 82%);
+  /* 与 .chatEntryStack 同一口径（见上面那条注释） */
+  max-width: min(calc(var(--dsh-chat-content-width, 748px) * .702), 82%);
   color: var(--cm-text-3);
   font-size: var(--cm-fs-meta);
 }
