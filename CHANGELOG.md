@@ -41,6 +41,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **整个插件界面改用 DSH 自己的设计取值**：按钮、输入框与下拉、复选框、徽章与横幅、卡片、数据表、分段切换、顶部页签、弹窗、下拉菜单、通知与说明气泡的圆角、描边粗细（控件与分隔线改为 DSH 同款的 0.5px 发丝线）、悬停/按下/禁用反馈、阴影与浮层底色，全部改从 DSH 正式发布的主题变量取，不再使用插件自造的近似色与自定档位；文字档位也随之接到 DSH 自己的字号档。另一处细节：键盘焦点环与 DSH 原生控件行为一致 —— **鼠标点击不再画出焦点框**，只有键盘操作时才显示。视觉改动全部是取值来源与规格层面，导入导出、备份恢复、同步等功能的操作流程与数据格式没有任何变化。
+  **The whole plugin UI now draws from DSH's own design values**: buttons, inputs and dropdowns, checkboxes, badges and banners, cards, tables, segmented switchers, top tabs, dialogs, menus, toasts and hint bubbles now take their corner radii, stroke weights (controls and dividers moved to DSH's 0.5px hairline), hover/pressed/disabled feedback, shadows and surface colors from DSH's published theme variables instead of the plugin's own approximations and hand-made steps, and the type scale now maps onto DSH's own font steps. One behavioral detail follows the native controls too: **a mouse click no longer paints a focus ring** - only keyboard navigation does. All of it is source-and-spec level: workflows and data formats for import/export, backup/restore and sync are unchanged.
+- **成功 / 信息 / 警告 / 错误四种状态徽章现在真的分色**：此前四态徽章长得完全一样（统一的灰色描边），因为对应的配色类名从来没有被样式表定义过；现在按 DSH 原生标签的调色板着色（绿 / 蓝 / 琥珀 / 红的同色淡底 + 同色文字），一眼能看出哪条是成功、哪条是警告。
+  **Success / info / warning / error badges finally carry their color**: the four states used to look identical (one neutral outline) because the matching style names were never defined in the stylesheet; they now use DSH's own tag palette (green / blue / amber / red tinted fills with matching text), so success and warning rows are distinguishable at a glance.
 - **关掉「回合自动留点」后，聊天里的用户消息完全交回 DSH 自己渲染**：以前关掉只是收起那颗「↺ 回退」按钮，气泡本身仍由插件代画（外层间距、时间与操作按钮都是插件的）；现在关闭后插件不再接管这条消息，气泡、时间与操作按钮都与原版一致，重新打开开关时入口立刻回来（不必重载插件）。
   **With "auto rollback points" off, your chat messages hand back to DSH's own rendering**: turning the switch off used to only hide the "↺ rewind" button while the plugin still drew the bubble (its spacing, timestamp and action row were ours); now the plugin stops taking over the message entirely, so bubble, timestamp and actions match the native rendering, and flipping the switch back on brings the entry back immediately (no plugin reload).
 
@@ -49,6 +53,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **「信息态」的蓝色此前基本没生效**：任务面板的底色、状态点与行首色条引用了一个 DSH 里**并不存在**的颜色变量，浏览器只能把它们当成「没有颜色」，于是这几处一直是透明/继承色；现在接回 DSH 的蓝色主色，信息态该有的底色与色条都回来了。
+  **The "info" blue barely showed up before**: the task panel fill, the status dot and the leading color bar referenced a color variable DSH does not actually define, so the browser treated them as "no color" and those spots stayed transparent/inherited; they now use DSH's own blue, so the info fill and bar are back.
 - **用户消息气泡的字号重新跟随「内容字号」**：设置 → 外观 → 内容字号调大后，你发出的消息此前仍固定在小字号（调到 21px 时助手正文明显变大、自己的话只有一半大），而且换行位置也和原生气泡不一样；现在气泡的字号、行距与换行宽度都跟随同一个设置。（issue #93）
   **Your own message bubbles follow the content font size again**: after enlarging Settings → Appearance → content font size, messages you sent stayed at a small fixed size (at 21px the assistant text got visibly larger while your own words were about half the height) and wrapped differently from the native bubble; the bubble now takes the same size, line height and wrap width, following the same setting. (issue #93)
 - **DSH 0.2.1 起用户消息里的图片不再消失**：此前升级 DSH 后，聊天里每条自己发的消息只要有图片，就只剩一行「图片无法显示」的灰字（助手消息、附件卡片都正常）；现在这类消息的正文、图片、文件卡与引用整体交回 DSH 自己的渲染，外观与原生气泡一致，「↺ 回退」按钮照旧。（issue #92）
