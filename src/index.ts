@@ -39,6 +39,7 @@ import { randomBytes } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import fs from 'node:fs/promises'
+import path from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
@@ -78,7 +79,8 @@ import { RunRegistry, type RunState } from './core/run-registry.ts'
 import { registerModelTools } from './core/model-tools.ts'
 import { msgOf, zhMsg } from './core/messages.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
-import { RollbackAutoTracker, RollbackPointEngine, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
+import { RollbackAutoTracker, RollbackPointEngine, ROLLBACK_POINTS_DIR_NAME, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
+import { ROLLBACK_ATTRIBUTION_FILE_NAME, RollbackWriteAttribution } from './core/rollback-attribution.ts'
 import { isRollbackEnabled, onRollbackEnabledChange, setRollbackEnabled } from './core/rollback-gate.ts'
 import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-point.ts'
 // t3：宿主斜杠命令 /rollback（与 HTTP 路由同一道写入门；命令服务惰取，未组合时安静跳过）。
@@ -4644,10 +4646,19 @@ export function apply(ctx: Context, config?: Config): void {
   // 不为了这一处调用去改公共接口；端口上确实有 forkSession（DshSessionStoreFacade 实现）才走
   // 真 fork，否则如实结构化 `session-fork-unavailable`（绝不静默降级）。
   const forkPort = host.sessions as unknown as RollbackForkCarrier
+  // 写入归属台账（2026-10-17 定案 B）：只记「哪个会话的哪次**写类**工具调用写了哪个路径」。
+  // 惰性读盘 + best-effort 落盘：读不到 / 写不进只让归属退化成「未判定」——
+  // 既不影响留点与回退，也绝不会把「不知道」当成「别的会话写的」（见 rollback-attribution.ts）。
+  const rollbackAttribution = new RollbackWriteAttribution({
+    file: path.join(dataDir, ROLLBACK_POINTS_DIR_NAME, ROLLBACK_ATTRIBUTION_FILE_NAME),
+    warn: (line) => host.log.warn(line),
+  })
+  void rollbackAttribution.load()
   const rollbackEngine = new RollbackPointEngine({
     dataDir,
     homeDir,
     log: (line) => host.log.warn(line),
+    attribution: rollbackAttribution,
     fork: async ({ sessionId, boundarySeq }) => {
       const forkSession = forkPort.forkSession
       if (typeof forkSession !== 'function') {
@@ -4666,7 +4677,11 @@ export function apply(ctx: Context, config?: Config): void {
       return { ok: false as const, code: 'fork-failed' as const, detail: result.error }
     },
   })
-  const rollbackTracker = new RollbackAutoTracker({ engine: rollbackEngine, log: (line) => host.log.warn(line) })
+  const rollbackTracker = new RollbackAutoTracker({
+    engine: rollbackEngine,
+    log: (line) => host.log.warn(line),
+    attribution: rollbackAttribution,
+  })
   ctx.effect(() => {
     let chain: Promise<unknown> = Promise.resolve()
     // 「会话没有 cwd」这类**形状合法但信息不全**的情况只记一次日志（避免每回合刷屏）；

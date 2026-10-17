@@ -424,6 +424,16 @@ export interface RollbackPreviewFile {
   removed: number | null
   /** true = 本次没有可信行数（added/removed 均为 null）。**宁可说「不知道」，也绝不谎报行数。** */
   truncated: boolean
+  /**
+   * true = 该文件在留点**之后**是**别的会话**写的（写入归属台账证明；见 core/rollback-attribution.ts）。
+   * 界面据此默认不勾选它（用户仍可勾上）。缺字段 / false = **没有归属证据**，
+   * 而不是「本会话写的」——「未判定」与「确知是本会话」必须分开。
+   */
+  foreign?: boolean
+  /** 那些「别的会话」的会话 id（仅当 foreign 为 true） */
+  foreignSessionId?: string
+  /** 那次写入的时间（毫秒；仅当 foreign 为 true） */
+  foreignAt?: number
 }
 
 export interface RollbackWorkspacePreview {

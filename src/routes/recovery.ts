@@ -733,6 +733,17 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
             // A（用户 2026-10-11 定案）：「回到某点之前」要连文件一起退回去 —— 默认把**回退点之后新建**的路径删掉；
             // 调用方显式传 false 才保留老口径（只报告 leftovers，不删任何东西）。
             rewindInput.removeCreated = body['removeCreated'] !== false
+            // 路径级选择性恢复（2026-10-17 定案 A）：缺省 = 全量口径（一字不变）。
+            // 给了数组就只恢复这些路径；**空数组**视为无效输入（400）—— 「一个都没勾」应当由
+            // 界面拦住，而不是让引擎把整次回退悄悄变成 noop。
+            if (body['onlyPaths'] !== undefined) {
+              const raw = body['onlyPaths']
+              if (!Array.isArray(raw) || raw.length === 0 || raw.some((item) => typeof item !== 'string' || item === '')) {
+                writeJson(res, 400, { ok: false, code: 'invalid-input', error: 'onlyPaths must be a non-empty array of non-empty strings' })
+                return
+              }
+              rewindInput.onlyPaths = raw as string[]
+            }
             if (body['preRewindGuard'] === 'off' || body['preRewindGuard'] === 'require' || body['preRewindGuard'] === 'warn') {
               rewindInput.guardPolicy = body['preRewindGuard']
             }

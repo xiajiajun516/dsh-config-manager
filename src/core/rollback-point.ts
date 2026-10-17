@@ -73,6 +73,7 @@ import { EXCLUDED_DEP_DIR_NAMES } from '../utils/recursive-walk.ts'
 import { diffLines, type DiffHunk } from '../utils/line-diff.ts'
 import { projectKeyOf } from './session-select.ts'
 import { ignoreRelativePath, ignoreRuleMatches, loadIgnoreRules, type IgnoreRules } from './rollback-ignore-rules.ts'
+import type { RollbackWriteAttributionPort, RollbackWriteFact, RollbackWriteRecorder } from './rollback-attribution.ts'
 import { isSessionLogName } from '../utils/session-log.ts'
 import { decodeZstdFrame, scanZstdFrames, zstdAvailable, ZSTD_MAGIC } from '../utils/zstd-frame.ts'
 import {
@@ -746,6 +747,16 @@ export interface RollbackPreviewFile {
    * **宁可说「不知道」，也绝不谎报行数。**
    */
   truncated: boolean
+  /**
+   * true = 该文件在留点**之后**是**别的会话**写的（写入归属台账证明；见 core/rollback-attribution.ts）。
+   * 界面据此默认不勾选它（用户仍可勾上）。缺字段 / false = **没有归属证据**，
+   * 而不是「本会话写的」——「未判定」与「确知是本会话」必须分开。
+   */
+  foreign?: boolean
+  /** 那些「别的会话」的会话 id（仅当 foreign 为 true） */
+  foreignSessionId?: string
+  /** 那次写入的时间（毫秒；仅当 foreign 为 true） */
+  foreignAt?: number
 }
 
 /** 单文件差异里一侧（当前磁盘 / 回退点快照）的展示信息。 */
@@ -964,6 +975,16 @@ export interface RollbackSegmentResult {
    */
   createdRefusedReason?: 'capture-incomplete'
   writtenBytes?: number
+  /**
+   * 因路径选择（onlyPaths）而未恢复 / 未删除的条目数。
+   * 与 createdSkipped（安全拒删）**分开**：这里的原因是用户自己没勾它，不是安全判据挡下。
+   */
+  selectionSkipped?: number
+  /**
+   * 因**归属隔离**（2026-10-17 定案 B）而跳过的记录条目数：该文件在留点之后是**别的会话**写的。
+   * 只在**没有显式点名**（`onlyPaths` 缺省）时生效；显式点名 = 用户明确要它，归属不再拦。
+   */
+  foreignSkipped?: number
   /** 会话段：fork 出来的子会话 id */
   childSessionId?: string
   guidance?: RollbackGuidance[]
@@ -984,6 +1005,16 @@ export interface RollbackRewindInput {
    * （把已写回的文件还原、把已删的文件写回）。拒删判据见 createdRemovalRefusal。
    */
   removeCreated?: boolean
+  /**
+   * **路径级选择性恢复**（2026-10-17 用户定案 A）：只恢复 / 只删除这些路径。
+   *
+   * 缺省（undefined）= 既有全量口径，行为一字不变。给了值就：
+   *  · 记录在案的文件里**不在**清单中的：不写（计入 selectionSkipped）；
+   *  · 「留点后新建」的候选里**不在**清单中的：不删（同样计入）。
+   * 清单里出现**既未记录、也不在删除候选**里的路径 ⇒ **fail-closed 拒绝、零写入**（invalid-input）：
+   * 绝不把「用户打错一个路径」变成「静默少恢复几个文件」。
+   */
+  onlyPaths?: readonly string[]
 }
 
 export interface RollbackRewindResult {
@@ -1008,6 +1039,11 @@ export type RollbackStorageProbe = () => Promise<{ ok: true } | { ok: false; det
 export interface RollbackEngineOptions {
   /** 插件数据目录（= $DSH_HOME/dsh-config-manager）；回滚点库在 dataDir/rollback-points */
   dataDir: string
+  /**
+   * 写入归属台账（2026-10-17 用户定案 B）。缺省 = 没有归属信息 ⇒ 预览不标 foreign，
+   * 回退行为与旧版**逐字一致**（未判定绝不当作「别的会话写的」）。
+   */
+  attribution?: RollbackWriteAttributionPort
   /** DSH home（会话根 = homeDir/sessions） */
   homeDir: string
   now?: () => number
@@ -1787,6 +1823,8 @@ export class RollbackPointEngine {
   private ledgerSnapshotCache: { at: number; entries: RollbackLedgerManifestEntry[] } | null = null
   /** 台账存储层（v3：清单 + 单条记录 + 内容寻址载荷；issue #89） */
   private readonly ledger: RollbackLedger
+  /** 写入归属（2026-10-17 定案 B）。undefined = 没有归属信息 ⇒ 预览不标 foreign */
+  private readonly attribution: RollbackWriteAttributionPort | undefined
   private readonly ledgerBytesBudget: number
   /**
    * 工作区捕获的挂钟时间预算（毫秒；见 ROLLBACK_DEFAULT_CAPTURE_BUDGET_MS）。**可变**：
@@ -1843,6 +1881,7 @@ export class RollbackPointEngine {
     this.maxGuards = options.maxGuards ?? ROLLBACK_MAX_GUARDS
     this.guardPolicy = options.guardPolicy ?? 'warn'
     this.probe = options.storage
+    this.attribution = options.attribution
     this.forkSeam = options.fork
     this.writeSeam = options.writeFile
     this.readSeam = options.readFile
@@ -3720,6 +3759,16 @@ export class RollbackPointEngine {
       let missing = 0
       // E1：逐文件行级统计 —— **只列会被改动的文件**（内容已一致的一个都不列）
       const changedFiles: RollbackPreviewFile[] = []
+      // 写入归属（2026-10-17 定案 B）：只有**确知**最后写入者是别的会话、且写入发生在留点**之后**时，
+      // 才敢标 foreign。缺归属 / 归属就是本会话 / 写入早于留点 ⇒ 一律不标
+      // （未判定 ≠ 别的会话写的；宁可少标一次，也不误判一次）。
+      const foreignWriterOf = (target: string): RollbackWriteFact | undefined => {
+        const writer = this.attribution?.writerOf(target)
+        if (writer === undefined) return undefined
+        if (writer.sessionId === record.sessionId) return undefined
+        if (writer.at <= wsTrack.capturedAt) return undefined
+        return writer
+      }
       // 单张预览共享的比对预算（字节 + 步数）；只有真的会被改动的条目才消耗它
       const diffBudget = { bytes: 0, work: 0 }
       // T10：stat 的三种结局分开表达 —— 「不存在（ENOENT）」与「存在性未知（其它 errno）」绝不混为一谈
@@ -3759,7 +3808,12 @@ export class RollbackPointEngine {
           // 计入 different 的理由：回退一定会尝试写它（restoreWorkspace 里「已一致」判定失败即视为需要写），
           // 这样 overwrite = 已一致 + different + missing 的算术仍然成立。
           different += 1
-          changedFiles.push({ path: file.path, status: 'overwrite', ...previewCountsUnavailable() })
+          const foreignMissing = foreignWriterOf(file.path)
+          changedFiles.push({
+            path: file.path, status: 'overwrite',
+            ...(foreignMissing === undefined ? {} : { foreign: true, foreignSessionId: foreignMissing.sessionId, foreignAt: foreignMissing.at }),
+            ...previewCountsUnavailable(),
+          })
           continue
         }
         // 身份快路径已证明「与记录一致」⇒ 一个字段都不改（内容一致的文件不列进列表）
@@ -3779,8 +3833,10 @@ export class RollbackPointEngine {
         }
         if (sizeMatches && current !== null && sha256Hex(current) === file.sha256) continue
         different += 1
+        const foreignWriter = foreignWriterOf(file.path)
         changedFiles.push({
           path: file.path, status: 'overwrite',
+          ...(foreignWriter === undefined ? {} : { foreign: true, foreignSessionId: foreignWriter.sessionId, foreignAt: foreignWriter.at }),
           ...(await this.previewFileCounts(file, current, 'overwrite', diffBudget)),
         })
       }
@@ -4073,7 +4129,10 @@ export class RollbackPointEngine {
         continue
       }
       const segment = state === 'workspace'
-        ? await this.restoreWorkspace(record.workspace, { removeCreated: input.removeCreated === true })
+        // 路径级选择（2026-10-17 定案 A）只在显式给出时透传 —— 缺省口径一字不变
+        ? await this.restoreWorkspace(record.workspace, input.onlyPaths === undefined
+          ? { removeCreated: input.removeCreated === true, sessionId: record.sessionId ?? '' }
+          : { removeCreated: input.removeCreated === true, onlyPaths: input.onlyPaths, sessionId: record.sessionId ?? '' })
         : await this.restoreSession(record.session)
       segments.push(segment)
       if (segment.childSessionId !== undefined) childSessionId = segment.childSessionId
@@ -4151,7 +4210,7 @@ export class RollbackPointEngine {
 
   private async restoreWorkspace(
     track: RollbackTrack<RollbackWorkspacePayload>,
-    options: { removeCreated?: boolean } = {},
+    options: { removeCreated?: boolean; onlyPaths?: readonly string[]; sessionId?: string } = {},
   ): Promise<RollbackSegmentResult> {
     const payload = track.payload
     if (!track.ok || payload === null) {
@@ -4162,11 +4221,58 @@ export class RollbackPointEngine {
     // （界面据此说「该点没记录文件」而不是「工作区已与该点一致」）。
     if (payload.files.length === 0) return this.noopSegment('workspace', 'no-recorded-files', 'files=0 nothingToDo=true')
     const detail: string[] = []
+    // 路径级选择性恢复（2026-10-17 定案 A）：null = 全量（旧口径，行为一字不变）。
+    const selection = options.onlyPaths === undefined ? null : new Set(options.onlyPaths.map((target) => pathKey(target)))
+    /** 因用户没勾选而跳过的记录条目数（只作事实回传，不参与任何安全判据） */
+    let selectionSkipped = 0
+    /**
+     * 归属隔离（2026-10-17 定案 B）：**没有显式点名**时，把「留点之后被别的会话写过」的记录条目
+     * 自动跳过（上层据此如实报告）。只有 attribution 在、且这次回退知道自己属于哪个会话时才可能生效；
+     * 缺任何一样 ⇒ 退化成旧口径（照常恢复）—— **未判定绝不当作别的会话写的**。
+     */
+    let foreignSkipped = 0
+    const isolationSessionId = typeof options.sessionId === 'string' && options.sessionId !== '' ? options.sessionId : null
+    const foreignSkipEnabled = selection === null && this.attribution !== undefined && isolationSessionId !== null
+    const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], ignoredDirs: [], ignoredDirCount: 0, unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
+    // 删除集与**预览**共用同一份规划（planCreatedRemovals）⇒「预览说会删的」= 「实际删的」。
+    // 为什么提到文件循环**之前**：选择模式要拿它当「合法路径」的第二来源（新建候选也允许被点名），
+    // 而校验必须在**任何写入之前**完成。它是只读走查，提前算不会写任何东西。
+    const plan = await this.planCreatedRemovals(payload, sink)
+    if (selection !== null) {
+      const legal = new Set<string>()
+      for (const file of payload.files) legal.add(pathKey(file.path))
+      for (const target of plan.all) legal.add(pathKey(target))
+      const unknown = [...selection].filter((key) => !legal.has(key))
+      if (unknown.length > 0) {
+        // 点名了一个「既未记录、也不在删除候选」里的路径 ⇒ fail-closed：零写入失败，
+        // 绝不把「用户打错一个路径」变成「静默少恢复几个文件」。
+        pushDetail(detail, 'selection-unknown-path ' + unknown[0] + ' unknown=' + String(unknown.length) + ' zeroWrites=true')
+        return {
+          state: 'workspace', status: 'failed', reasonCode: 'invalid-input', detail,
+          restored: 0, failed: unknown.length,
+          leftovers: plan.all.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT), leftoversTruncated: plan.truncated,
+        }
+      }
+    }
     const writable: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
     let failed = 0
     // 「已与记录一致」的条目数（身份快路径证明）—— 后面「0 变更」的文案与统计要用
     let unchanged = 0
     for (const file of payload.files) {
+      // 路径级选择：没被点名的记录条目**不写**（用户自己的选择，不是安全判据）
+      if (selection !== null && !selection.has(pathKey(file.path))) {
+        selectionSkipped += 1
+        continue
+      }
+      // 归属隔离（B）：没显式点名时，**别的会话在留点之后写的**文件自动跳过 ——
+      // 这正是「B 对话不该回退掉 A 对话的改动」那条诉求的自动版。只有确知时才跳。
+      if (foreignSkipEnabled) {
+        const writer = this.attribution?.writerOf(file.path)
+        if (writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > track.capturedAt) {
+          foreignSkipped += 1
+          continue
+        }
+      }
       // 门：记录里的路径必须落在记录里的分块内（记录不可成为写原语）
       const inChunk = payload.chunks.some((chunk) => path.isAbsolute(chunk) && isInsidePath(file.path, chunk))
       if (!path.isAbsolute(file.path) || !inChunk || isInsidePath(file.path, this.root)) {
@@ -4198,10 +4304,13 @@ export class RollbackPointEngine {
         pushDetail(detail, 'object-missing ' + file.path + ' ' + errorDetail(error))
       }
     }
-    const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], ignoredDirs: [], ignoredDirCount: 0, unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
-    // 删除集与**预览**共用同一份规划（planCreatedRemovals）⇒「预览说会删的」= 「实际删的」。
-    // 清单先算全，超上限整套拒绝（绝不删一半）。
-    const plan = await this.planCreatedRemovals(payload, sink)
+
+    if (selectionSkipped > 0) {
+      pushDetail(detail, 'selection-skipped=' + String(selectionSkipped) + ' selection=' + String(selection?.size ?? 0))
+    }
+    if (foreignSkipped > 0) {
+      pushDetail(detail, 'foreign-skipped=' + String(foreignSkipped) + ' (留点后被其它会话改写的记录条目，回退不动它们)')
+    }
     const leftovers = {
       leftovers: plan.all.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT),
       truncated: plan.truncated,
@@ -4260,6 +4369,8 @@ export class RollbackPointEngine {
       noop.createdSkippedCount = removal.skipped.length
       noop.createdSkippedTruncated = removal.truncated || removal.skipped.length > ROLLBACK_LEFTOVER_LIST_LIMIT
       if (removal.refused !== null) noop.createdRefusedReason = removal.refused
+      if (selectionSkipped > 0) noop.selectionSkipped = selectionSkipped
+      if (foreignSkipped > 0) noop.foreignSkipped = foreignSkipped
       return noop
     }
     // 前像（**字节落盘、索引随栈**）：失败时要能整体回到恢复前状态 —— 只覆盖**真会被写**的文件。
@@ -4411,6 +4522,8 @@ export class RollbackPointEngine {
       createdSkippedTruncated: removal.truncated || removal.skipped.length > ROLLBACK_LEFTOVER_LIST_LIMIT,
       writtenBytes,
     }
+    if (selectionSkipped > 0) segment.selectionSkipped = selectionSkipped
+    if (foreignSkipped > 0) segment.foreignSkipped = foreignSkipped
     // 捕获不完整 ⇒ 一条都没删：如实回报原因（界面据此说「因为捕获不完整，一条都没动」）
     if (removal.refused !== null) segment.createdRefusedReason = removal.refused
     // 前像字节用完即清（成功路径）：留在磁盘上只会变成无人认领的残留
@@ -4646,6 +4759,11 @@ export interface RollbackTrackerOptions {
   log?: (line: string) => void
   /** 会话日志 stat 探针（轮询回退用） */
   statSessionLog?: (logPath: string) => Promise<{ size: number; mtimeMs: number } | undefined>
+  /**
+   * 写入归属采集器（2026-10-17 定案 B）。缺省 = 不采集 ⇒ 预览永远没有 foreign 标记，
+   * 回退行为与旧版**逐字一致**。
+   */
+  attribution?: RollbackWriteRecorder
 }
 
 export interface RollbackTrackerResult {
@@ -4825,6 +4943,7 @@ export class RollbackAutoTracker {
   private readonly pollIntervalMs: number
   private readonly log: ((line: string) => void) | undefined
   private readonly statSessionLog: ((logPath: string) => Promise<{ size: number; mtimeMs: number } | undefined>) | undefined
+  private readonly attribution: RollbackWriteRecorder | undefined
   private readonly bindings = new Map<string, RollbackSessionBinding>()
   private readonly open = new Map<string, { turn: number | null; startSeq: number; boundarySeq: number | null }>()
   /**
@@ -4849,6 +4968,7 @@ export class RollbackAutoTracker {
     )
     this.log = options.log
     this.statSessionLog = options.statSessionLog
+    this.attribution = options.attribution
   }
 
   /** 实际采用的留点机制（output / 诊断用） */
@@ -4947,6 +5067,12 @@ export class RollbackAutoTracker {
           boundarySeq: from > 0 ? from - 1 : null,
           endSeq: null,
         })
+      }
+      if (event.type === 'tool/call') {
+        // 写入归属（2026-10-17 定案 B）：**只记，不改任何留点行为**，也不 await 落盘
+        // （落盘由 attribution 自己 debounce；tool/call 洪峰不该在这里等 I/O）。
+        this.attribution?.noteToolCall(event.sessionId, event.data)
+        return { captured: false }
       }
       if (event.type !== 'turn/end') return { captured: false }
       // 回合结束只为「缺省边界」留个记号（轮询/无边界回退用它），不再拍点。
