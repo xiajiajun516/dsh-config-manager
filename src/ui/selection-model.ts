@@ -1049,11 +1049,10 @@ export interface PluginTree {
   /** 插件清单是否已读到；未读到时 entries 为空（界面提示先读取插件分区） */
   pluginsLoaded: boolean
   entries: PluginTreeEntry[]
-  /** 桶：插件的补丁行 / pluginFiles / 未被任何插件认领的 pluginData / pluginAssets */
+  /** 桶：无归属的分区单元（插件的补丁行 / pnpm-workspace.yaml；pluginFiles 整块） */
   buckets: PluginTreeBucket[]
 }
 
-/** 插件单元 id 前缀（与 adapters/units.ts 的 `plugin:<包名>` 同一命名空间） */
 /**
  * 合并进「按插件看」那棵树的分区（导出选择器里「插件与扩展」组的成员）。
  *
@@ -1068,6 +1067,7 @@ export function isPluginTreeSection(section: SectionId): boolean {
   return PLUGIN_TREE_SECTIONS.includes(section)
 }
 
+/** 插件单元 id 前缀（与 adapters/units.ts 的 `plugin:<包名>` 同一命名空间） */
 const PLUGIN_UNIT_PREFIX = 'plugin:'
 
 /** 把一条区域引用投影成叶子（按该分区清单是否到货决定 present / unread / absent）。 */
@@ -1096,8 +1096,6 @@ export function pluginTree(nodes: readonly SelectionSection[]): PluginTree {
   for (const n of nodes) bySection.set(n.section, n)
   const pluginsNode = bySection.get('plugins')
   const entries: PluginTreeEntry[] = []
-  /** 已被某个插件声明的区域单元 id（用于把剩下的归进「遗留数据」桶） */
-  const claimed = new Set<string>()
   const extras: SelectionUnit[] = []
   for (const unit of pluginsNode?.units ?? []) {
     if (!unit.id.startsWith(PLUGIN_UNIT_PREFIX)) {
@@ -1112,11 +1110,7 @@ export function pluginTree(nodes: readonly SelectionSection[]): PluginTree {
       sizeBytes: unit.sizeBytes,
       state: 'present',
     }
-    const areas = (unit.relatedAreas ?? []).map((ref) => {
-      const leaf = areaLeaf(bySection.get(ref.section), ref)
-      claimed.add(leaf.unitId)
-      return leaf
-    })
+    const areas = (unit.relatedAreas ?? []).map((ref) => areaLeaf(bySection.get(ref.section), ref))
     entries.push({ name, main, areas, leaves: [main, ...areas] })
   }
   const buckets: PluginTreeBucket[] = []
@@ -1124,13 +1118,18 @@ export function pluginTree(nodes: readonly SelectionSection[]): PluginTree {
   if (pluginExtras !== undefined) {
     buckets.push({ section: 'plugins', loaded: pluginExtras.unitsUnread !== true, units: extras })
   }
-  for (const id of ['pluginFiles', 'pluginData', 'pluginAssets'] as const) {
+  /**
+   * 只留一个桶：pluginFiles。
+   *
+   * 它没有任何包名信息（白名单文件 + `plugin-config/<任意目录名>/`），按目录名猜包名 = 猜错就在树里
+   * 勾错东西 ⇒ 整块归「未归属」。**pluginData / pluginAssets 里没被插件声明认领的单元不再单列
+   * 「遗留数据」桶**（用户 2026-10-17 明确要求：不需要看到这些）—— 它们仍会随该分区整体勾选导出，
+   * 只是不在插件树里单开一行。
+   */
+  for (const id of ['pluginFiles'] as const) {
     const node = bySection.get(id)
     if (node === undefined) continue
-    // pluginFiles 没有任何包名信息（白名单文件 + plugin-config/ 目录）→ 整块归「未归属」；
-    // pluginData / pluginAssets 里没被插件声明认领的单元 = 未安装插件的遗留数据
-    const units = id === 'pluginFiles' ? node.units : node.units.filter((u) => !claimed.has(u.id))
-    buckets.push({ section: id, loaded: node.unitsUnread !== true, units })
+    buckets.push({ section: id, loaded: node.unitsUnread !== true, units: node.units })
   }
   return { pluginsLoaded: pluginsNode !== undefined && pluginsNode.unitsUnread !== true, entries, buckets }
 }
@@ -1181,6 +1180,62 @@ export function togglePluginEntry(
 ): Selection {
   let out = sel
   for (const leaf of pluginEntryLeaves(entry)) out = toggleUnit(out, nodes, leaf.unitId, checked)
+  return out
+}
+
+/** 树上所有**真实可勾选**的叶子（各插件名下存在单元的合计；不含未归属 / 遗留数据桶）。 */
+export function pluginTreeLeaves(tree: PluginTree): PluginTreeLeaf[] {
+  return tree.entries.flatMap((e) => pluginEntryLeaves(e))
+}
+
+export function pluginTreeLeafCount(tree: PluginTree): number {
+  return pluginTreeLeaves(tree).length
+}
+
+export function pluginTreeSelectedCount(sel: Selection, tree: PluginTree): number {
+  return pluginTreeLeaves(tree).reduce((n, l) => n + (unitChecked(sel, l.section, l.unitId) ? 1 : 0), 0)
+}
+
+/**
+ * 「插件」一级区块（把全部插件收在一个可折叠区块里）的三态。
+ *
+ * 只算**插件名下真实存在的叶子**：未归属 / 遗留数据是「无法归属的东西」，不参与这个勾选框 ——
+ * 否则「全选所有插件」会顺手把没人认领的散落配置一起带上。
+ */
+export function pluginTreePickState(sel: Selection, tree: PluginTree): SectionPickState {
+  const leaves = pluginTreeLeaves(tree)
+  if (leaves.length === 0) return 'none'
+  const picked = pluginTreeSelectedCount(sel, tree)
+  if (picked === 0) return 'none'
+  return picked === leaves.length ? 'all' : 'partial'
+}
+
+/** 一级区块勾选：把所有插件名下存在的单元一起勾 / 取消（逐个走 toggleUnit；含未归属桶吗？不含）。 */
+export function togglePluginTree(
+  sel: Selection,
+  nodes: SelectionSection[],
+  tree: PluginTree,
+  checked: boolean,
+): Selection {
+  let out = sel
+  for (const leaf of pluginTreeLeaves(tree)) out = toggleUnit(out, nodes, leaf.unitId, checked)
+  return out
+}
+
+/**
+ * 展开「插件」一级区块前还需要读取哪些分区的清单（惰性）。
+ *
+ * **插件清单自己没读到也要报**（否则一级区块展开后只有一句「先读取插件分区」却没有入口）。
+ */
+export function pluginTreeUnreadSections(tree: PluginTree): SectionId[] {
+  const out: SectionId[] = tree.pluginsLoaded ? [] : ['plugins']
+  for (const entry of tree.entries) {
+    for (const s of pluginEntryUnreadSections(entry)) if (!out.includes(s)) out.push(s)
+  }
+  // pluginFiles（未归属桶）没读到也要报：它的读取入口挂在「展开这一行」上
+  for (const bucket of tree.buckets) {
+    if (!bucket.loaded && !out.includes(bucket.section)) out.push(bucket.section)
+  }
   return out
 }
 

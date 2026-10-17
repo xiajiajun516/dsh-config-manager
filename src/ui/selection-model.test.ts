@@ -15,7 +15,8 @@ import {
   filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
   isPlanItemExcluded, isPluginTreeSection, isUnitSelected, PLUGIN_TREE_SECTIONS,
   pluginEntryLeaves, pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
-  togglePluginEntry,
+  pluginTreeLeafCount, pluginTreePickState, pluginTreeSelectedCount, pluginTreeUnreadSections,
+  togglePluginEntry, togglePluginTree,
   planWriteSections,
   tailWeightedEllipsis, pickerSummary,
   sectionCountState, sectionExpandable, sectionPickState, sectionsFromPlan, sectionsFromPreview, selectedUnitCount, selectAll,
@@ -916,13 +917,15 @@ test('按插件看：注册表说有、磁盘上没有 = absent；分区没读 =
   assert.deepEqual(pluginEntryUnreadSections(alpha), ['pluginAssets'])
 })
 
-test('按插件看不猜归属：pluginFiles 进未归属桶、未被认领的数据单元进遗留桶、补丁行进分区桶', () => {
+test('按插件看不猜归属：只有 pluginFiles（无包名信息）与补丁行进桶；遗留数据不单列（用户要求不看）', () => {
   const tree = pluginTree(treeNodes())
   const bySection = new Map(tree.buckets.map((b) => [b.section, b]))
+  assert.deepEqual([...bySection.keys()].sort(), ['pluginFiles', 'plugins'],
+    '桶只有两个：pluginFiles 与「插件分区的其他条目」')
   assert.deepEqual(bySection.get('pluginFiles')?.units.map((u) => u.id), ['pluginFiles:dsh-ssh.json'])
-  assert.deepEqual(bySection.get('pluginData')?.units.map((u) => u.id), ['pluginData:.gone/state'])
   assert.deepEqual(bySection.get('plugins')?.units.map((u) => u.id), ['plugins:pnpm-workspace'])
-  assert.equal(bySection.get('pluginAssets')?.loaded, false, '未读分区在桶里也要如实标未读')
+  assert.equal(bySection.get('pluginData'), undefined, '未被认领的数据单元不再单列「遗留数据」桶')
+  assert.equal(bySection.get('pluginAssets'), undefined)
 })
 
 test('按插件看：插件节点三态与一键勾选（逐个走 toggleUnit，不静默全选整个分区）', () => {
@@ -944,6 +947,56 @@ test('按插件看：插件节点三态与一键勾选（逐个走 toggleUnit，
   assert.deepEqual(sel.sections, ['plugins'], '数据区域被取消后，pluginData 随之移出勾选')
   assert.equal(sel.excluded.includes('plugin:alpha'), true)
   assert.equal(sel.excluded.includes('pluginData:.alpha/runtime'), true)
+})
+
+test('「插件」一级区块：三态只算插件名下存在的叶子，未归属桶不参与', () => {
+  const nodes = treeNodes()
+  const tree = pluginTree(nodes)
+  let sel = defaultSelection(TREE_SECTIONS)
+  // 叶子 = alpha 的清单条目 + 它的数据区域 + beta 的清单条目（未归属的 .gone/state 与 pluginFiles 不计）
+  assert.equal(pluginTreeLeafCount(tree), 3)
+  assert.equal(pluginTreeSelectedCount(sel, tree), 2, '两个插件的清单条目默认已勾：alpha + beta')
+  assert.equal(pluginTreePickState(sel, tree), 'partial')
+  sel = togglePluginTree(sel, nodes, tree, true)
+  assert.equal(pluginTreePickState(sel, tree), 'all')
+  assert.deepEqual(buildExportRequest(sel, nodes), {
+    only: ['plugins', 'pluginData'],
+    includeItems: { pluginData: ['pluginData:.alpha/runtime'] },
+  })
+  // 未归属 / 遗留数据没有任何文档说过要一起带上：它们的单元不得因一级区块被勾选
+  assert.equal(sel.excluded.includes('pluginData:.gone/state'), true)
+  assert.equal(sel.sections.includes('pluginFiles'), false)
+})
+
+test('「插件」一级区块：取消勾选后所有插件单元都不再导出（桶里的补丁行不受影响）', () => {
+  const nodes = treeNodes()
+  const tree = pluginTree(nodes)
+  const sel = togglePluginTree(defaultSelection(TREE_SECTIONS), nodes, tree, false)
+  assert.equal(pluginTreePickState(sel, tree), 'none')
+  // 插件分区仍被勾着 —— 因为 **桶里** 的 pnpm-workspace.yaml / 补丁行不属于任何插件，
+  // 一级区块的勾选框不碰它们（「全选所有插件」不该顺手动没人认领的东西）
+  assert.deepEqual(sel.sections, ['plugins'])
+  assert.equal(sel.excluded.includes('plugin:alpha'), true)
+  assert.equal(sel.excluded.includes('plugin:beta'), true)
+  assert.equal(sel.excluded.includes('plugins:pnpm-workspace'), false)
+})
+
+test('「插件」一级区块展开前要读的分区：插件清单自己没读到也要报（否则展开后没有读取入口）', () => {
+  const nodes = treeNodes()
+  // alpha 声明了一个大文件区域（该分区清单还没读）
+  nodes[0]!.units[0] = {
+    ...nodes[0]!.units[0]!,
+    relatedAreas: [
+      { section: 'pluginData', relPath: '.alpha/runtime', role: 'config' },
+      { section: 'pluginAssets', relPath: '.alpha/uploads', role: 'assets' },
+    ],
+  }
+  assert.deepEqual(pluginTreeUnreadSections(pluginTree(nodes)), ['pluginAssets'])
+  const unreadPlugins: SelectionSection[] = [
+    { section: 'plugins', count: 0, sizeBytes: 0, units: [], unitsUnread: true },
+    { section: 'pluginData', count: 0, sizeBytes: 0, units: [], unitsUnread: true },
+  ]
+  assert.deepEqual(pluginTreeUnreadSections(pluginTree(unreadPlugins)), ['plugins'])
 })
 
 test('按插件看：搜索命中插件名保留它全部叶子；只命中叶子时保留该叶子', () => {

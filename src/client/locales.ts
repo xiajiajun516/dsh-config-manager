@@ -181,6 +181,7 @@ export const zh = {
   'picker.showAll': '显示全部（共 {count} 条）',
   'picker.summaryImport': '将导入 {sections} 个分区 · {units} 个条目',
   // —— 「插件与扩展」组内嵌的插件树（插件 → 清单条目 / 数据目录 / 大文件）——
+  'picker.pluginRoot': '插件',
   'picker.pluginLeafPlugin': '插件清单条目',
   'picker.pluginLeafConfig': '数据目录（配置）',
   'picker.pluginLeafAssets': '大文件（壁纸 / 数据库）',
@@ -189,10 +190,8 @@ export const zh = {
   'picker.pluginViewEmpty': '插件清单还没读到，先读取「插件」分区。',
   'picker.bucketPlugins': '插件分区的其他条目（补丁行 / pnpm-workspace.yaml）',
   'picker.bucketLooseFiles': '未归属到插件的配置（~/.dsh 根）',
-  'picker.bucketOrphanData': '未安装插件的遗留数据',
   'picker.bucketHint': '这些条目没有可证明的插件归属，不猜；展开可逐条勾选。',
-  'picker.loadSection': '读取该分区',
-  'picker.groupHint.extensions': '这一组里的插件分区合并成一棵按插件分组的树：插件名下面是它的清单条目、数据目录与大文件。只显示能证明的归属（内置来源表 + 插件自述 dsh.dataDirs）——「插件散落配置」没有包名信息，因此留在「未归属」里；带「设备相关」的分区默认不勾选，跨设备导入时可能不适用。',
+  'picker.groupHint.extensions': '这一组里的插件分区合并成一棵按插件分组的树：默认只显示一个「插件」区块，展开它才列出各个插件，插件名下面是它的清单条目、数据目录与大文件。只显示能证明的归属（内置来源表 + 插件自述 dsh.dataDirs）——「插件散落配置」没有包名信息，因此留在「未归属」里；带「设备相关」的分区默认不勾选，跨设备导入时可能不适用。',
   // 导出目录的分组标题（与 ui/types.ts 的 EXPORT_GROUPS 一一对应，顺序由它决定）
   'group.general': '通用',
   'group.ai': 'AI',
@@ -1135,6 +1134,7 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.showAll': 'Show all ({count})',
   'picker.summaryImport': 'Will import {sections} section(s) · {units} item(s)',
   // —— Plugin tree embedded in the Extensions group (plugin → list entry / data dirs / large files) ——
+  'picker.pluginRoot': 'Plugins',
   'picker.pluginLeafPlugin': 'Plugin list entry',
   'picker.pluginLeafConfig': 'Data dir (config)',
   'picker.pluginLeafAssets': 'Large files (wallpapers / databases)',
@@ -1143,10 +1143,8 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.pluginViewEmpty': 'The plugin list has not been read yet — read the "Plugins" section first.',
   'picker.bucketPlugins': 'Other entries of the plugins section (patch lines / pnpm-workspace.yaml)',
   'picker.bucketLooseFiles': 'Config not attributable to a plugin (~/.dsh root)',
-  'picker.bucketOrphanData': 'Leftover data of uninstalled plugins',
   'picker.bucketHint': 'These entries have no provable plugin ownership — we never guess; expand to tick them one by one.',
-  'picker.loadSection': 'Read this section',
-  'picker.groupHint.extensions': 'The plugin sections in this group are merged into one tree grouped by plugin: under each plugin name you find its list entry, data dirs and large files. Only provable ownership is shown (built-in source table + plugins that declare dsh.dataDirs) \u2014 \u2018Plugin config files\u2019 carries no package name and therefore stays under "unowned"; device-specific sections are unchecked by default and may not apply on another machine.',
+  'picker.groupHint.extensions': 'The plugin sections in this group are merged into one tree grouped by plugin: by default you only see a single \u201cPlugins\u201d block \u2014 expand it to list the plugins, each with its list entry, data dirs and large files. Only provable ownership is shown (built-in source table + plugins that declare dsh.dataDirs) \u2014 \u2018Plugin config files\u2019 carries no package name and therefore stays under "unowned"; device-specific sections are unchecked by default and may not apply on another machine.',
   // Export catalog group titles (mirror of ui/types.ts EXPORT_GROUPS; it decides the order)
   'group.general': 'General',
   'group.ai': 'AI',

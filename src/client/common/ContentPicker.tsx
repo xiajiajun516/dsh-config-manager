@@ -26,8 +26,10 @@ import {
   pickerSummary,
   pluginEntryLeaves,
   pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
+  pluginTreeLeafCount, pluginTreePickState, pluginTreeSelectedCount, pluginTreeUnreadSections,
   sectionCountState, sectionExpandable, sectionPickState,
-  selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, toggleSection, toggleUnit, toggleUnitGroup,
+  selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, togglePluginTree, toggleSection,
+  toggleUnit, toggleUnitGroup,
   unitChecked, visibleUnits,
   type PluginLeafKind, type Selection, type SelectionSection, type SelectionUnit, type SessionParentChange,
   type SessionWorkspaceCouplingFocus,
@@ -44,6 +46,12 @@ import css from '../config-manager.module.css'
 
 /** 单元名显示长度上限（配合 .pickerUnitName 的 CSS 省略做兜底；UI-16） */
 const UNIT_NAME_MAX = 44
+
+/**
+ * 「插件」一级区块在展开态表里的键（与插件包名、`bucket:<分区>` 共用 `expandedPlugins` 这张表）。
+ * 默认折叠 —— 用户要求「所有插件收在一个叫插件的区块里，展开后才出现」。
+ */
+const PLUGIN_ROOT_KEY = 'plugin-root'
 
 /**
  * 分组标题的字典键（与 `ui/types.ts` 的 EXPORT_GROUPS 一一对应）。
@@ -207,10 +215,15 @@ export function ContentPicker({
     kind === 'plugin' ? t('picker.pluginLeafPlugin')
       : kind === 'config' ? t('picker.pluginLeafConfig') : t('picker.pluginLeafAssets')
   )
-  /** 桶的标题文案（无法归属到具体插件的整块分区 —— 不猜归属的结果必须显式说出来）。 */
+  /**
+   * 桶的标题文案（无法归属到具体插件的整块分区 —— 不猜归属的结果必须显式说出来）。
+   *
+   * 只有两个桶：插件分区里的补丁行 / pnpm-workspace.yaml，以及 pluginFiles。两者都**不是插件**，
+   * 因此不放进「插件」一级区块里。缺省回落分区显示名（新增桶时不会渲染出裸 key）。
+   */
   const bucketLabel = (section: SectionId): string => (
     section === 'plugins' ? t('picker.bucketPlugins')
-      : section === 'pluginFiles' ? t('picker.bucketLooseFiles') : t('picker.bucketOrphanData')
+      : section === 'pluginFiles' ? t('picker.bucketLooseFiles') : label(section)
   )
 
   /**
@@ -269,8 +282,23 @@ export function ContentPicker({
    *
    * 纯展示：叶子仍是原来的单元 id，勾选仍走 toggleUnit / toggleSection（语义一字不改）。
    */
-  const renderPluginTree = (): ReactNode => (
-    <>
+  const renderPluginTree = (): ReactNode => {
+    /**
+     * 「插件」一级区块（用户要求：所有插件先收在一个可折叠的区块里，展开才列出插件）。
+     *
+     * 默认**折叠**；**搜索时自动展开** —— 否则搜索结果会藏在折叠节点里，看起来像「没有匹配」。
+     * 它的勾选框 = 所有插件名下**存在的**单元（逐个走 toggleUnit），与「未归属 / 遗留数据」桶无关：
+     * 那两个桶是「无法归属的东西」，不该被「全选所有插件」顺手带上。
+     */
+    const rootKey = PLUGIN_ROOT_KEY
+    const rootOpen = expandedPlugins[rootKey] === true || query.trim() !== ''
+    const rootState = pluginTreePickState(value, tree)
+    const rootPicked = pluginTreeSelectedCount(value, tree)
+    const rootTotal = pluginTreeLeafCount(tree)
+    const rootSize = tree.entries.reduce((n, e) => n + e.leaves.reduce((m, l) => m + l.sizeBytes, 0), 0)
+    const rootUnread = pluginTreeUnreadSections(tree)
+    const body = (
+      <>
         {!tree.pluginsLoaded && <span className={css.hint}>{t('picker.pluginViewEmpty')}</span>}
       {tree.pluginsLoaded
         && tree.entries.length === 0
@@ -327,7 +355,8 @@ export function ContentPicker({
                 const kindText = leafKindText(leaf.kind)
                 const leafName = leaf.kind === 'plugin' ? kindText : kindText + ' · ' + redact(leaf.label)
                 if (leaf.state !== 'present') {
-                  // 不可勾的两态：还没读（给读取入口）/ 读了但没有内容（如实说明，绝不产生幽灵勾选）
+                  // 不可勾的两态：还没读 / 读了但没有内容（如实说明，绝不产生幽灵勾选）。
+                  // **不给按钮**：展开插件（或一级区块）就是读取入口 —— 与其它分区行的惰性语义一致。
                   return (
                     <div key={leaf.unitId} className={css.pickerUnit + ' ' + css.pickerUnitNested}>
                       <span className={css.pickerChevronSpacer} aria-hidden="true" />
@@ -336,16 +365,7 @@ export function ContentPicker({
                         <span className={css.pickerCount}>
                           {leaf.state === 'unread' ? t('picker.pluginAreaUnread') : t('picker.pluginAreaAbsent')}
                         </span>
-                        {leaf.state === 'unread' && (
-                          <button
-                            type="button"
-                            className={css.ghostButton}
-                            data-size="sm"
-                            onClick={() => { onRequestUnits?.(leaf.section) }}
-                          >
-                            {t('picker.loadSection')}
-                          </button>
-                        )}
+
                       </span>
                     </div>
                   )
@@ -371,6 +391,10 @@ export function ContentPicker({
           </div>
         )
       })}
+      </>
+    )
+    const bucketsBody = (
+      <>
       {tree.buckets.map((bucket) => {
         const node = nodes.find((n) => n.section === bucket.section)
         if (node === undefined) return null
@@ -381,7 +405,7 @@ export function ContentPicker({
         return (
           <div key={key} className={css.pickerGroup}>
             <div className={css.pickerTreeRow}>
-              {bucket.units.length > 0 ? (
+              {bucket.units.length > 0 || !bucket.loaded ? (
                 <button
                   type="button"
                   className={css.iconBtn}
@@ -390,7 +414,11 @@ export function ContentPicker({
                   aria-controls={bodyId}
                   aria-label={open ? t('picker.collapse') : t('picker.expand')}
                   title={open ? t('picker.collapse') : t('picker.expand')}
-                  onClick={() => { setExpandedPlugins({ ...expandedPlugins, [key]: !open }) }}
+                  onClick={() => {
+                    // 展开即读（与其他分区行同一套惰性语义）—— 不再给「读取该分区」按钮
+                    if (!open && !bucket.loaded) onRequestUnits?.(bucket.section)
+                    setExpandedPlugins({ ...expandedPlugins, [key]: !open })
+                  }}
                 >
                   <ExpandChevron open={open} />
                 </button>
@@ -407,16 +435,7 @@ export function ContentPicker({
                     })}
                   </span>
                 )}
-                {!bucket.loaded && (
-                  <button
-                    type="button"
-                    className={css.ghostButton}
-                    data-size="sm"
-                    onClick={() => { onRequestUnits?.(bucket.section) }}
-                  >
-                    {t('picker.loadSection')}
-                  </button>
-                )}
+                {/* 未读时不给「读取该分区」按钮：展开这一行就是读取入口（与其他分区行同一套惰性语义） */}
                 {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
               </span>
             </div>
@@ -438,8 +457,52 @@ export function ContentPicker({
           </div>
         )
       })}
-    </>
-  )
+      </>
+    )
+    return (
+      <>
+      <div className={css.pickerGroup}>
+        <div className={css.pickerTreeRow}>
+          <button
+            type="button"
+            className={css.iconBtn}
+            data-size="sm"
+            aria-expanded={rootOpen}
+            aria-controls="picker-plugin-root"
+            aria-label={rootOpen ? t('picker.collapse') : t('picker.expand')}
+            title={rootOpen ? t('picker.collapse') : t('picker.expand')}
+            onClick={() => {
+              // 展开才去读：清单是惰性的，插件树同样不预读 pluginData / pluginAssets
+              if (!rootOpen) for (const s of rootUnread) onRequestUnits?.(s)
+              setExpandedPlugins({ ...expandedPlugins, [rootKey]: !rootOpen })
+            }}
+          >
+            <ExpandChevron open={rootOpen} />
+          </button>
+          <Checkbox
+            checked={rootState === 'all'}
+            onChange={(checked) => { commit(togglePluginTree(value, nodes, tree, checked)) }}
+            label={
+              <span className={css.categoryItem}>
+                <span className={css.categoryName}>{t('picker.pluginRoot')}</span>
+                {rootState === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
+                <span className={css.pickerCount}>
+                  {t('picker.selectedOf', { selected: String(rootPicked), total: String(rootTotal) })}
+                </span>
+                {rootSize > 0 && <span className={css.sectionSize + ' ' + css.mono}>{formatBytes(rootSize)}</span>}
+                {rootUnread.length > 0 && <span className={css.pickerCount}>{t('picker.pluginAreaUnread')}</span>}
+              </span>
+            }
+          />
+        </div>
+        <Collapse open={rootOpen} id="picker-plugin-root">
+          {body}
+        </Collapse>
+      </div>
+      {bucketsBody}
+      </>
+    )
+  }
 
   return (
     <div className={css.pickerRoot}>
