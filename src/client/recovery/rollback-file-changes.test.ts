@@ -132,7 +132,7 @@ test('侧栏标签页吃满宿主高度：整块高度跟侧栏走（源级，20
   // ② 撑满档下**每个出口**都要套同一个整块容器：只让「就绪且有差异」撑满时，
   //    加载 / 一致 / 看不了 / 读失败会缩成一行，一屏高度来回跳（同样是「高度不跟侧栏走」）。
   const pane = readFileSync(PANE, 'utf8')
-  assert.equal([...pane.matchAll(/return shell\(/g)].length, 5, '加载 / 读失败 / 结构化拒绝 / 看不了 / 一致 五个出口都要经同一个撑满容器')
+  assert.equal([...pane.matchAll(/return shell\(/g)].length, 6, '加载 / 读失败 / 结构化拒绝 / 看不了 / 不会改动 / 一致 六个出口都要经同一个撑满容器')
   assert.match(pane, /fill === true \? <div className=\{css\.diffPane \+ ' ' \+ css\.diffPaneFill\}>/, '撑满容器必须是 .diffPane + .diffPaneFill 那一对类名')
 })
 

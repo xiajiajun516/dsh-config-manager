@@ -467,6 +467,8 @@ export const zh = {
   /** 整文件删除（用户 2026-10-12 第 6 条）：写「删除」而不是 `+0 −N` —— 那是两件事。 */
   'rollback.preview.file.deleted': '删除',
   'rollback.preview.file.skipped': '不会改动（与其它对话的改动冲突，或无法安全合并）',
+  'rollback.diff.merged': '下面是合并后的结果：撤销本对话的改动、保留其它对话的改动',
+  'rollback.diff.skipped': '这次回退不会改动它（与其它对话的改动冲突，或无法安全合并）',
   'rollback.preview.file.unknown': '行数未统计',
   'rollback.preview.file.unknownHint': '这些文件的行数没有统计出来（文件过大、不是文本或内容副本读不出来）—— 回退仍会照常覆盖它们。',
   'rollback.diff.viewHint': '查看差异：{path}',
@@ -1041,6 +1043,8 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.file.removed': '\u2212{n}',
   'rollback.preview.file.deleted': 'Delete',
   'rollback.preview.file.skipped': 'Left unchanged (conflicts with another conversation, or cannot be merged safely)',
+  'rollback.diff.merged': 'Below is the merged result: the change from this conversation is reverted and the change from the other conversation is kept',
+  'rollback.diff.skipped': 'This rewind will not change it (it conflicts with another conversation, or cannot be merged safely)',
   'rollback.preview.file.unknown': 'line counts not measured',
   'rollback.preview.file.unknownHint': 'Line counts could not be measured for these files (too large, not text, or the content copy is unreadable) \u2014 the rewind will still overwrite them.',
   'rollback.diff.viewHint': 'View diff: {path}',

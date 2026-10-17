@@ -809,6 +809,15 @@ export interface RollbackFileDiffResult {
   degraded: boolean
   /** 无法逐行对比的原因（有值时 hunks 为空） */
   reason?: RollbackFileDiffReason
+  /** true = 「回退后」一侧显示的是**三方合并**的结果，而不是记录里的原文 */
+  merged?: boolean
+  /**
+   * true = 这次回退**不会改动**它（与其它对话的改动冲突 / 无法安全合并）—— 此时 after 与 before 相同。
+   * 界面必须把「不会改动」与「0 行变化」分开说。
+   */
+  mergeSkipped?: boolean
+  /** 不改动的机器原因（界面映射成字典键，绝不裸渲染） */
+  mergeReason?: string
   limits: typeof ROLLBACK_FILE_DIFF_LIMITS
 }
 
@@ -4063,6 +4072,36 @@ export class RollbackPointEngine {
       else currentUnreadable = true
     }
 
+    // **合并判定与执行同口径**（2026-10-17 修）：「回退后」一侧必须显示这次**真正会写进去**的内容。
+    // 以前它恒定显示记录里的原文（= 整文件覆盖的样子），于是预览列表写着「+0 −2」，点开「查看差异」
+    // 却还是「−1,4 +1,1」—— 同一件事两个说法（真机 2026-10-17 用户当场发现）。
+    let mergedAfter: Uint8Array | null = null
+    /** true 只表示「after 侧真的是合并算出来的」——「不会改动」时 after 也是现状，但不算合并 */
+    let mergedFlag = false
+    let mergeSkippedReason: string | null = null
+    const isolationSessionId = typeof record.sessionId === 'string' && record.sessionId !== '' ? record.sessionId : null
+    if (current !== null && snapshot !== null && isolationSessionId !== null) {
+      const baseText = await this.baseVersionFor(file.path, record.workspace.capturedAt, isolationSessionId)
+      const writer = this.attribution?.writerOf(file.path)
+      const foreignEvidence = writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > record.workspace.capturedAt
+      if (baseText !== null || foreignEvidence) {
+        const outcome = await this.mergeForeignRecord(file, baseText, foreignEvidence)
+        if (outcome.kind === 'write') {
+          mergedAfter = outcome.bytes
+          mergedFlag = true
+        }
+        // 合并结论 = 保持现状 ⇒ 「回退后」就是当前内容（该文件根本不会被写）
+        else if (outcome.kind === 'unchanged') mergedAfter = current
+        else if (outcome.kind === 'blocked') {
+          // 冲突 / 无法安全合并 ⇒ 这次**不会写**它：「回退后」就是现状（两侧相同），
+          // 界面据此说「不会改动」，绝不显示成「会被覆盖成记录原文」。
+          mergeSkippedReason = outcome.reason
+          mergedAfter = current
+        }
+      }
+    }
+    /** 回退后一侧的字节：合并结果优先，其次才是记录里的原文 */
+    const afterBytes: Uint8Array | null = mergedAfter ?? snapshot
     const before: RollbackFileDiffSide = {
       exists: currentExists, bytes: currentBytes, lines: null,
       binary: false, oversized: currentOversized, unreadable: currentUnreadable,
@@ -4072,17 +4111,19 @@ export class RollbackPointEngine {
       before.lines = before.binary ? null : splitDiffLines(DIFF_TEXT_DECODER.decode(current)).length
     }
     const after: RollbackFileDiffSide = {
-      exists: snapshot !== null, bytes: snapshot?.byteLength ?? file.bytes, lines: null,
+      exists: afterBytes !== null, bytes: afterBytes?.byteLength ?? file.bytes, lines: null,
       binary: false, oversized: snapshotOversized,
-      unreadable: snapshot === null && !snapshotOversized,
+      unreadable: afterBytes === null && !snapshotOversized,
     }
-    if (snapshot !== null) {
-      after.binary = looksBinary(snapshot)
-      after.lines = after.binary ? null : splitDiffLines(DIFF_TEXT_DECODER.decode(snapshot)).length
+    if (afterBytes !== null) {
+      after.binary = looksBinary(afterBytes)
+      after.lines = after.binary ? null : splitDiffLines(DIFF_TEXT_DECODER.decode(afterBytes)).length
     }
     const view: RollbackFileDiffResult = {
       ...base, ok: true, code: 'ok', path: file.path,
       status: currentExists ? 'overwrite' : 'create', before, after,
+      ...(mergedFlag ? { merged: true } : {}),
+      ...(mergeSkippedReason === null ? {} : { mergeSkipped: true, mergeReason: mergeSkippedReason }),
     }
     // 结构性不可比对：逐条给出原因（有原因 ⇒ hunks 恒为空，绝不给半截差异）
     if (snapshotOversized) return { ...view, reason: 'too-large' }
@@ -4092,7 +4133,7 @@ export class RollbackPointEngine {
     if (before.binary || after.binary) return { ...view, reason: 'binary' }
     const result = diffLines(
       current === null ? '' : DIFF_TEXT_DECODER.decode(current),
-      DIFF_TEXT_DECODER.decode(snapshot),
+      afterBytes === null ? '' : DIFF_TEXT_DECODER.decode(afterBytes),
       { context: ROLLBACK_FILE_DIFF_LIMITS.context, maxD: ROLLBACK_FILE_DIFF_LIMITS.maxD },
     )
     return {
@@ -4303,7 +4344,7 @@ export class RollbackPointEngine {
   ): Promise<
     | { kind: 'write'; bytes: Uint8Array; sha256: string; expectedCurrent: string }
     | { kind: 'unchanged' }
-    | { kind: 'blocked'; reason: 'conflict' | 'no-base' | 'binary' | 'degraded' | 'theirs-missing' | 'theirs-unreadable' | 'ours-unreadable' }
+    | { kind: 'blocked'; reason: 'conflict' | 'no-base' | 'ambiguous' | 'binary' | 'degraded' | 'theirs-missing' | 'theirs-unreadable' | 'ours-unreadable' }
     /** 没有可用祖先、也没有「别人写过」的旁证 ⇒ 退回旧口径（整文件覆盖回目标版本） */
     | { kind: 'fallback' }
   > {
@@ -4338,7 +4379,17 @@ export class RollbackPointEngine {
     if (!result.ok) {
       return { kind: 'blocked', reason: result.reason === 'conflict' ? 'conflict' : result.reason === 'degraded' ? 'degraded' : 'binary' }
     }
-    if (result.text === theirsText) return { kind: 'unchanged' }
+    // 调用方只在「当前内容 ≠ 记录内容」时才会走到这里 ⇒ `ours === theirs` 只可能是内容恰好相同
+    if (oursText === theirsText) return { kind: 'unchanged' }
+    if (result.text === theirsText) {
+      // **合并结论 = 保持现状**：这次回退对工作区什么也做不了 —— 但 ours 与 theirs 明明不同
+      //（否则上面那条就返回了）。真机 2026-10-17 的形状：base 取到了目标点**之后**的另一份快照
+      //（里面已经含有「要撤销的那部分改动」），于是「应用对方的改动到 ours」恰好又变回现状。
+      // 绝不能把它当成「无需改动」静默跳过 —— 那会让「回退」整个失效、界面上还看不到任何痕迹
+      //（预览报 0 个文件、执行返回 nothing-to-restore）。这里按**无法安全撤销**如实处理：
+      // 一个字节都不写，让用户看到并自己决定。
+      return { kind: 'blocked', reason: 'ambiguous' }
+    }
     const bytes = Buffer.from(result.text, 'utf8')
     return { kind: 'write', bytes, sha256: sha256Hex(bytes), expectedCurrent: sha256Hex(theirsBytes) }
   }

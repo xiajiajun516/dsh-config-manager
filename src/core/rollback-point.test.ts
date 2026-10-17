@@ -3770,3 +3770,71 @@ test('C-12 预览标注「不会改动」：冲突文件的差异不给数字（
   assert.equal(row?.removed, null)
   assert.equal(typeof row?.mergeReason, 'string')
 })
+
+test('D-1 单文件差异与执行同口径：「回退后」一侧是合并结果，不是记录原文', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'A-line\nline2\nline3\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  await fs.writeFile(file, 'A-line\nline2\nline3\nline4\nB-line\n')
+  const diff = await engine.fileDiff(idA, file)
+  assert.equal(diff.ok, true)
+  assert.equal(diff.merged, true, '「回退后」必须标成合并结果')
+  assert.equal(diff.mergeSkipped, undefined)
+  assert.equal(diff.added, 1, '只涉及 A 那一行')
+  assert.equal(diff.removed, 1)
+  assert.equal(diff.after.lines, 5, '合并结果仍是 5 行（B 那一行还在）')
+})
+
+test('D-2 冲突时单文件差异说「不会改动」：两侧相同、不给假的覆盖差异', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'line1\nline2\nA-same\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  await fs.writeFile(file, 'line1\nline2\nB-same\nline4\nline5\n')
+  const diff = await engine.fileDiff(idA, file)
+  assert.equal(diff.mergeSkipped, true, '冲突 ⇒ 必须说「不会改动」')
+  assert.equal(diff.merged, undefined)
+  assert.equal(diff.identical, true, '「回退后」= 现状 ⇒ 两侧一致（不是「覆盖成记录原文」）')
+  assert.equal(typeof diff.mergeReason, 'string')
+})
+
+test('E-1 合并结论若等于现状 ⇒ 报「无法安全撤销」，绝不静默当成「无需改动」', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  // V0（目标点）→ A 改动 → B 改动 → 之后又出现「两改动都在」的更晚快照（别的会话）
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'A-line\nline2\nline3\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  await fs.writeFile(file, 'A-line\nline2\nline3\nline4\nB-line\n')
+  // 目标点之后、别的会话的一份**更晚**快照，其内容把两个改动都包含进去（真机里的 base 来源）
+  await capturePoint(engine, fx, { sessionId: 'session-C' })
+  // 现在磁盘上只剩 B 的改动（模拟「A 已被回退」之后的状态）
+  const theirs = 'line1\nline2\nline3\nline4\nB-line\n'
+  await fs.writeFile(file, theirs)
+  const preview = await engine.preview(idA)
+  const row = (preview.workspace?.files ?? []).find((item) => item.path === file)
+  assert.equal(row?.skipped, true, '必须如实标「不会改动」，而不是显示成 0 个文件')
+  assert.equal(row?.mergeReason, 'ambiguous')
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), theirs, '无法安全撤销 ⇒ 一个字节都不写')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.unavailableCount, 1)
+})

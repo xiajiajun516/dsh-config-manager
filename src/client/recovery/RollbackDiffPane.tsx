@@ -60,9 +60,14 @@ export function RollbackDiffPane({ state, rt, title, fill }: RollbackDiffPanePro
     const key = rollbackFileDiffReasonKey(diff.reason)
     return shell(<div className={css.hint}>{key === null ? rt('rollback.diff.reason.unknown') : rt(rk(key))}</div>)
   }
+  // 「不会改动」与「一致」是两件事：前者说明**这次回退有意不动它**（冲突 / 无法安全合并），
+  // 后者只是「两侧碰巧一样」。有原因时先说原因，别让用户以为「碰巧一样」。
+  if (diff.mergeSkipped === true) return shell(<div className={css.hint}>{rt(rk('rollback.diff.skipped'))}</div>)
   if (diff.identical) return shell(<div className={css.hint}>{rt('rollback.diff.identical')}</div>)
   return (
     <div className={fill === true ? css.diffPane + ' ' + css.diffPaneFill : css.diffPane}>
+      {/* 「回退后」这一侧到底是什么，必须说清（引擎的 merged 标记证明它）：合并结果不是记录里的原文 */}
+      {diff.merged === true && <div className={css.hint}>{rt(rk('rollback.diff.merged'))}</div>}
       {diff.degraded && <div className={css.hint}>{rt('rollback.diff.degraded')}</div>}
       <DiffTable
         hunks={diff.hunks}

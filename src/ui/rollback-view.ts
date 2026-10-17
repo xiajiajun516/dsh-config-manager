@@ -568,6 +568,12 @@ export interface RollbackFileDiffResult {
   identical: boolean
   degraded: boolean
   reason?: RollbackFileDiffReason
+  /** true = 「回退后」一侧显示的是三方合并的结果（不是记录里的原文） */
+  merged?: boolean
+  /** true = 这次回退不会改动它（冲突 / 无法安全合并）——此时两侧相同 */
+  mergeSkipped?: boolean
+  /** 不改动的机器原因（界面映射成字典键） */
+  mergeReason?: string
 }
 
 export interface RollbackSegmentResult {
