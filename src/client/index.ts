@@ -47,8 +47,8 @@ import {
   type ChildOpenState,
 } from './chat/rollback-entry-view.ts'
 import { CHAT_NODE_PRIORITY, CHAT_NODE_SLOT, CHAT_NODE_USER_KEY } from './chat/chat-entry-view.ts'
-import { registerChatNodeEntry } from './chat/chat-node-registration.ts'
-import { setRollbackEntryEnabled } from './recovery/rollback-enabled.ts'
+import { registerChatNodeEntryWhenEnabled } from './chat/chat-node-registration.ts'
+import { isRollbackEntryEnabled, setRollbackEntryEnabled, subscribeRollbackEntryEnabled } from './recovery/rollback-enabled.ts'
 import { rollbackEntryVisible } from '../ui/rollback-view.ts'
 import { RollbackDiffTab, RollbackDiffTabTitle } from './chat/RollbackDiffTab.tsx'
 import {
@@ -158,6 +158,10 @@ export function apply(ctx: ClientContext): void {
    * 并留一条 warn 级日志便于排障。
    *
    * 判据读的是 storage 响应（`rollbackEntryVisible`：老宿主没有该字段 ⇒ 按「默认开」，与那一版语义一致）。
+   *
+   * 2026-10-17 起这条信号还决定**要不要接管用户消息气泡**（不再只是按钮可见性）：信号为假时
+   * `registerChatNodeEntryWhenEnabled` 一次都不登记，那条 cell 由宿主 `UserMessageNodeView` 原生渲染
+   * —— 与「关掉功能后连查询都不发」同一条口径：关掉 = 整条入口链路不存在。
    */
   void recoveryApi.rollbackPointStorage?.().then(
     (status) => { setRollbackEntryEnabled(rollbackEntryVisible(status)) },
@@ -265,10 +269,14 @@ export function apply(ctx: ClientContext): void {
    * 宿主 UserMessageNodeView 是唯一合法做法，那条气泡由我们自复刻。依据（含 -1 为何是唯一合法优先级）
    * → `src/client/chat/chat-slots.ts` 头部注释。
    *
+   * **开关关着就完全不接管**（2026-10-17 用户要求）：登记由 `registerChatNodeEntryWhenEnabled` 驱动 ——
+   * 关掉回合自动留点后让出 user cell，那条消息回到宿主原生气泡（旧实现是「登记常驻、只收起按钮」，
+   * 气泡仍由我们代画，用户看到的就是「关掉了还在接管」）。开关重新打开时登记当场补上，不需要重载插件。
+   *
    * 形态探测 + 失败软化在 `registerChatNodeEntry`：0.1.x 的 ui-chat 契约不同（非 keyed）或注册抛错，
    * 都只丢这一个入口，绝不打挂本插件其余槽位与宿主启动。
    */
-  ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntry({
+  ctx.slots.inject(CHAT_NODE_SLOT, () => registerChatNodeEntryWhenEnabled({
     // 探测面两条都是只读：spec（形态）+ entriesOfSlot（user cell 当前赢家；老宿主可能没有该方法）。
     // 必须写成**成员调用**（obj.method?.()）：把方法抽出来单独调会丢 receiver —— 宿主实现里那句
     // this._core.entriesOfSlot(...) 会直接抛（同类真机事故：uiWorkspace.openSession 丢 receiver，见 AGENTS.md）。
@@ -283,6 +291,10 @@ export function apply(ctx: ClientContext): void {
       locale: CHAT_NS,
       inject: chatEntryInjected,
     }, ChatEntryNodeView),
+    // 信号 = `rollbackEnabled` 的进程内投影（挂载时读一次；设置页改开关时再写一次）。
+    // 订阅先建后读：登记只发生在真正需要它的那一刻，关掉即撤销（见 chat-node-registration.ts）。
+    isEnabled: isRollbackEntryEnabled,
+    subscribe: subscribeRollbackEntryEnabled,
   }))
 
   /**

@@ -342,6 +342,13 @@ Linux（web profile）同版本：index.json = **311,521,007 B**（50 条，单�
 `conversation.chat.node` 的 user key 注册的（无常），可见性由客户端信号驱动；老宿主（响应里没有该字段）
 按「默认开」处理 —— 那一版语义就是默认启用，藏掉入口等于「有点但没有入口」。
 
+**2026-10-17 追加（用户要求）**：关闭时不只是「收起按钮」，而是**根本不接管**那条用户消息 ——
+`registerChatNodeEntryWhenEnabled` 只在信号为真时登记，关掉即撤销（`entriesOfSlot` 回到宿主的
+`UserMessageNodeView`，priority 0），打开时当场补登记。原实现（登记常驻 + 组件内 `entryEnabled` 隐藏按钮）
+在关闭后仍替宿主画气泡（外层壳与动作行都是我们的），用户看到的就是「关掉了还在接管」。组件里那两道
+`entryEnabled` 门因此降级为**兜底**（信号翻转与组件卸载之间那一帧），不再是唯一机制；
+纯逻辑闸门 = `src/client/chat/chat-node-registration.ts` 的 `registerChatNodeEntryWhenEnabled`。
+
 **没做（别误读成已完成）**：**增量基线**（记录存「相对上一份的差分」）没做 —— 现在只做到**未变化时零额外字节**，
 工作区真的变了仍会写一份完整载荷（由字节预算兜住）。「本回合确有文件改动才留点」也没做成：留点必须在
 `turn/start` 拍（见上），改成回合结束拍会把工作区态固定成「改完之后」，正好是这条坑里被禁掉的做法。

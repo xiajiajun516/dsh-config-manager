@@ -191,10 +191,10 @@
 - **回滚点的「工作区态」必须是「该回合开始前」**：留点在 `turn/start` 拍（`turn/end` 只更新缺省边界）；在回合结束拍会把文件固定成「改完之后」⇒ 回退看起来「工作区与该回退点一致」，用户说「文件没被撤回」。证据 → `docs/lessons/recovery-console.md`
 - **回退删除集只有一份规划**（`planCreatedRemovals`；预览 = 执行）、**判据 = 能证明「留点时不存在」**（只有证明名单不完整才不删，`truncated` 不算）。证据 → `docs/lessons/recovery-console.md`
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。
-- **宿主服务的方法抽出来必须 bind 回服务对象**（真机 2026-10-11：`uiWorkspace.openSession` 丢 receiver ⇒ `this.lifetime` 为 undefined ⇒ 回退成功但子会话永远打不开）；三档降级判据不动，只补 receiver。
+- **宿主服务的方法抽出来必须 bind 回服务对象**；三档降级判据不动，只补 receiver。
 - **回退 fork 必须走 DSH 自己的 `sessionController.fork`（uuid id + 落盘 + 归位），绝不直接 `SessionStore.fork`**（只在内存造会话 ⇒ 继续对话报 `SessionPersistenceNotFoundError`）；归位三档与失败如实上屏 → `docs/lessons/recovery-console.md`。
 - **「查看」进 DSH 右侧栏**：`sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、抽出方法必须 bind、补试幂等、形态不符即不注册，缺能力降级为弹窗内展示 → `docs/lessons/recovery-console.md`。
-- **接管聊天用户消息后正文不得自绘**：必须 `renderFactorySlot('conversation.chat.user.content', …)` 委托宿主 + 自绘气泡当 `options.fallback`（判据 = 那条 factory 注册与否）。→ `docs/lessons/recovery-console.md`
+- **接管聊天用户消息后正文不得自绘**：必须 `renderFactorySlot('conversation.chat.user.content', …)` 委托宿主 + 自绘气泡当 `options.fallback`（判据 = 那条 factory 注册与否）。**回滚点开关关闭时不得再接管 user cell**：登记随开关出现 / 撤销，关掉即让位给宿主原生气泡。→ `docs/lessons/recovery-console.md`
 - **崩溃残留只放行可自证形状**：自证门仅 `backup-schedule` → `docs/lessons/recovery-console.md`。
 
 **第三方插件数据** → `docs/lessons/plugin-data-migration.md`

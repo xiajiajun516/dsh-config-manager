@@ -39,6 +39,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **回退不再误伤别的对话改过的文件**：同一个项目里开着多个对话时，在一个对话里回退会把「撤销这个对话的改动」与「保留其它对话后来的改动」**合并**到一起，而不是拿旧快照整文件覆盖；**即使认不出对方是谁也一样会合并**，不会因为没记录到对方就悄悄覆盖；两边改到同一处时保持原样并明确提示（绝不擅自选边），其它对话新建的文件也不会被删掉。**回退预览里看到的就是合并后的结果**（别的对话那几行不会再被标成「会被删掉」）。结果里如实给出合并 / 冲突 / 无法安全撤销 / 回退途中又被改过的条数；想额外恢复哪些文件，还可以在回退预览里逐条勾选（设置页「维护与诊断」的回滚卡）。
   **Rewinding no longer discards changes made by other conversations**: when several conversations share one project, rewinding in one of them now merges "undo this conversation's change" with "keep what the other conversations changed afterwards" instead of overwriting the whole file with an old snapshot, and it keeps merging even when the other side cannot be identified from the recorded ownership; when both sides changed the same place the file is left as it is and reported (never silently picking a side), and files created by the other side are no longer deleted. The preview shows the merged result (lines from the other conversation are no longer marked as about to be deleted). The result honestly lists how many files were merged, conflicted, could not be reverted safely, or changed again while the rewind ran; you can also tick individual files in the rewind preview (the rollback card under Settings → Maintenance & diagnostics).
 
+### 🔧 变更 · Changed
+
+- **关掉「回合自动留点」后，聊天里的用户消息完全交回 DSH 自己渲染**：以前关掉只是收起那颗「↺ 回退」按钮，气泡本身仍由插件代画（外层间距、时间与操作按钮都是插件的）；现在关闭后插件不再接管这条消息，气泡、时间与操作按钮都与原版一致，重新打开开关时入口立刻回来（不必重载插件）。
+  **With "auto rollback points" off, your chat messages hand back to DSH's own rendering**: turning the switch off used to only hide the "↺ rewind" button while the plugin still drew the bubble (its spacing, timestamp and action row were ours); now the plugin stops taking over the message entirely, so bubble, timestamp and actions match the native rendering, and flipping the switch back on brings the entry back immediately (no plugin reload).
+
 ### 🐛 修复 · Fixed
 
 - **DSH 0.2.1 起用户消息里的图片不再消失**：此前升级 DSH 后，聊天里每条自己发的消息只要有图片，就只剩一行「图片无法显示」的灰字（助手消息、附件卡片都正常）；现在这类消息的正文、图片、文件卡与引用整体交回 DSH 自己的渲染，外观与原生气泡一致，「↺ 回退」按钮照旧。（issue #92）

@@ -58,7 +58,12 @@ import {
   retryChatPointUntilHit,
   type ChatPointWindowState,
 } from './chat-point-window.ts'
-import { chatNodeOccupantOf, declaredSlotKind, registerChatNodeEntry } from './chat-node-registration.ts'
+import {
+  chatNodeOccupantOf,
+  declaredSlotKind,
+  registerChatNodeEntry,
+  registerChatNodeEntryWhenEnabled,
+} from './chat-node-registration.ts'
 import { en as chatEn, zh as chatZh } from './chat-locales.ts'
 import type { RollbackListResult, RollbackPointPort, RollbackPointSummary } from '../../ui/rollback-view.ts'
 
@@ -236,6 +241,95 @@ test('steering is a DIFFERENT key: we never register it (host renderer unchanged
   assert.equal(chatNodeKind(nodeOf({ kind: 'user' })), 'user')
 })
 
+
+test('gate: 关闭时一次都不注册；打开即登记；关掉立刻撤销；再打开再登记', () => {
+  let enabled = false
+  const listeners = new Set<() => void>()
+  const disposed: number[] = []
+  let registrations = 0
+  let live = 0
+  const teardown = registerChatNodeEntryWhenEnabled({
+    probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
+    register: () => {
+      registrations += 1
+      live += 1
+      const id = registrations
+      return () => { disposed.push(id); live -= 1 }
+    },
+    isEnabled: () => enabled,
+    subscribe: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    warn: () => {},
+  })
+  const flip = (value: boolean): void => {
+    enabled = value
+    for (const listener of [...listeners]) listener()
+  }
+
+  assert.equal(registrations, 0, '缺省关闭：绝不接管 user cell（气泡留给宿主原生渲染）')
+  assert.equal(listeners.size, 1, '无论开关如何都要订阅，否则功能打开时补不上登记')
+
+  flip(true)
+  assert.equal(registrations, 1)
+  assert.equal(live, 1)
+  flip(true)
+  assert.equal(registrations, 1, '重复通知必须幂等（同一时间只能有一条登记）')
+
+  flip(false)
+  assert.equal(live, 0, '关闭 = 撤销登记 ⇒ cell 回到宿主 priority 0')
+  assert.deepEqual(disposed, [1])
+
+  flip(true)
+  assert.equal(registrations, 2, '重新打开必须当场补登记（不重载插件）')
+  assert.equal(live, 1)
+
+  teardown()
+  assert.equal(live, 0, '装配卸载必须撤销登记，不留悬挂注册')
+  assert.equal(listeners.size, 0, '装配卸载必须解绑订阅')
+  assert.deepEqual(disposed, [1, 2])
+})
+
+test('gate: 一直关闭时卸载是安全的（没有登记可撤）', () => {
+  let unsubscribed = 0
+  const teardown = registerChatNodeEntryWhenEnabled({
+    probe: { spec: () => ({ kind: 'keyed', scope: 'session' }) },
+    register: () => { throw new Error('must not register while disabled') },
+    isEnabled: () => false,
+    subscribe: () => () => { unsubscribed += 1 },
+    warn: () => {},
+  })
+  teardown()
+  assert.equal(unsubscribed, 1)
+})
+
+test('gate: 让位时登记返回的 no-op 也照样能撤销，且不重复探测', () => {
+  const warns: string[] = []
+  let enabled = true
+  let registrations = 0
+  const teardown = registerChatNodeEntryWhenEnabled({
+    probe: {
+      spec: () => ({ kind: 'keyed', scope: 'session' }),
+      entriesOfSlot: () => [{ options: { key: 'user', priority: -2 }, registrant: '@someone/other-rewind' }],
+    },
+    register: () => { registrations += 1; return () => {} },
+    isEnabled: () => enabled,
+    subscribe: () => () => {},
+    warn: (message) => { warns.push(message) },
+  })
+  assert.equal(registrations, 0, '别的插件以更低优先级占着 user cell：让位')
+  assert.ok(warns.some((line) => line.startsWith(CHAT_NODE_YIELD_WARN_PREFIX)))
+  enabled = false
+  teardown()
+  assert.equal(registrations, 0)
+})
+
+test('装配点：user cell 的登记走开关闸门（不是无条件遮蔽宿主渲染器）', () => {
+  const src = readFileSync(join(HERE, '..', 'index.ts'), 'utf8')
+  assert.match(src, /ctx\.slots\.inject\(CHAT_NODE_SLOT, \(\) => registerChatNodeEntryWhenEnabled\(\{/)
+  assert.match(src, /isEnabled: isRollbackEntryEnabled/)
+  assert.match(src, /subscribe: subscribeRollbackEntryEnabled/)
+  assert.doesNotMatch(src, /ctx\.slots\.inject\(CHAT_NODE_SLOT, \(\) => registerChatNodeEntry\(/)
+})
+
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 
 /** 读一个组件源码（*.tsx 不能在 node 下 type-strip 加载，故走源码级断言）。 */
@@ -315,6 +409,45 @@ test('文件卡描边与宿主同档：.5px + --cm-line-2（不是更淡的 --cm
   assert.doesNotMatch(card, /--cm-line-1/, '文件卡描边不得再退回更淡的 --cm-line-1')
   const scope = cssSheet.match(/\.chatEntryScope\s*\{[^}]*\}/)?.[0] ?? ''
   assert.match(scope, /--cm-line-2:\s*var\(--dsw-alias-border-l2\)/, '.chatEntryScope 必须就地重声明 --cm-line-2')
+})
+
+/**
+ * 字号 / 行高 / 限宽必须跟随宿主的「内容字号」（2026-10-17 修 issue #93）。
+ *
+ * 背景：接管 user 渲染器后我们把气泡正文基准写死 `--cm-fs-base: 12.5px`（= §1 的面板基准），
+ * 而宿主的 `.bubble` 写的是 `var(--dsh-content-font-size,14px)` —— 于是 DSH 的「内容字号」
+ * （10–22）**在用户自己的消息上完全失效**：真机内容字号 21 时助手正文字形高 19px、
+ * 气泡 11px（同一张截图，比例 0.58）。宿主口径（本机 app.asar 抽出）：
+ *   · `--dsh-content-font-size` 由 ui-layout 的 ThemePresenter 写在 **body** 上；
+ *   · `--dsh-content-font-delta` = 内容字号 − 14px，由 ui-theme 定义在 body；
+ *   · `--dsh-chat-content-width` 定义在 ui-conversation 的聊天 body（.body / .embeddedBody）。
+ */
+test('气泡字号/行高/限宽跟随宿主内容字号（不得再写死 12.5px 与固定 620px）', () => {
+  const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
+  // 注释里会引用这些取值（解释为什么改），负向断言必须先剥注释 —— 与 css-token-guard.test.ts 同法
+  const noComment = cssSheet.replace(/\/\*[\s\S]*?\*\//g, '')
+  const scope = noComment.match(/\.chatEntryScope\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.notEqual(scope, '', '必须能定位 .chatEntryScope 规则块（扫描失效时本用例不得静默通过）')
+  // ① 正文基准 = 宿主的活值 + 兜底 14px（宿主同一条气泡的兜底；不许兜回 12.5px —— 那是面板档）
+  assert.match(scope, /--cm-fs-base:\s*var\(--dsh-content-font-size,\s*14px\)/, '.chatEntryScope 的 --cm-fs-base 必须跟随 --dsh-content-font-size（兜底 14px）')
+  assert.doesNotMatch(scope, /--cm-fs-base:\s*12\.5px/, '不得再把气泡正文写死 12.5px')
+  // ② 行高 = 宿主同一条公式（只改字号会让 21px 下比正文松 2.5px/行）
+  assert.match(scope, /--cm-lh-base:\s*calc\(22px \+ var\(--dsh-content-font-delta,\s*0px\)\)/, '行高必须用宿主同一条公式')
+  assert.match(scope, /font-size:\s*var\(--cm-fs-base\)/, '作用域字号必须消费 --cm-fs-base')
+  assert.match(scope, /line-height:\s*var\(--cm-lh-base\)/, '作用域行高必须消费 --cm-lh-base')
+  // ③ 只改聊天这一处：§1 body 的面板基准仍是 12.5px（动它会全站字号地震）
+  const bodyBlock = noComment.match(/body\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
+  assert.match(bodyBlock, /--cm-fs-base:\s*12\.5px/, '§1 body 的面板基准必须保持 12.5px')
+  // ④ 限宽 = 宿主 .userStack 同一条公式；--cm-fs-meta 保持 11px 档（时间戳/动作标签不跟着放大）
+  assert.doesNotMatch(noComment, /min\(620px,\s*82%\)/, '气泡限宽不得再用固定 620px 近似')
+  const stack = noComment.match(/\.chatEntryStack\s*\{[^}]*\}/)?.[0] ?? ''
+  const notice = noComment.match(/\.chatEntryNotice\s*\{[^}]*\}/)?.[0] ?? ''
+  const WIDTH_FORMULA = /max-width:\s*min\(calc\(var\(--dsh-chat-content-width,\s*748px\) \* \.702\),\s*82%\)/
+  for (const [name, block] of [['.chatEntryStack', stack], ['.chatEntryNotice', notice]] as [string, string][]) {
+    assert.notEqual(block, '', '必须能定位 ' + name + ' 规则块（扫描失效时本用例不得静默通过）')
+    assert.match(block, WIDTH_FORMULA, name + ' 限宽必须与宿主同一条公式')
+  }
+  assert.match(scope, /--cm-fs-meta:\s*11px/, '--cm-fs-meta 保持 11px 档（时间戳/动作标签不跟着放大）')
 })
 
 /**
