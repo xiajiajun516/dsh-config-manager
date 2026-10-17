@@ -15,7 +15,7 @@
  * 职责边界：本组件**只渲染与转发交互**，全部选择语义（稀疏排除集、原子组联动、
  * 三态判定、请求参数换算）都在 `src/ui/selection-model.ts` 里，node 可测。
  */
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import type { SectionId } from '../../schema/types.ts'
 import type { TranslateNS } from '../client-types.ts'
@@ -24,10 +24,9 @@ import {
   applySessionWorkspaceCoupling,
   filterPluginTree, filterSections, groupPickState, groupSelectedCount, groupUnits, isPluginTreeSection,
   pickerSummary,
-  pluginEntryLeaves,
-  pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
-  pluginTreeLeafCount, pluginTreePickState, pluginTreeSelectedCount, pluginTreeUnreadSections,
-  sectionCountState, sectionExpandable, sectionPickState,
+  pluginEntryPickState, pluginEntrySelectedCount, pluginEntryTotalCount, pluginEntryUnreadSections, pluginTree,
+  pluginTreePickState, pluginTreeSelectedCount, pluginTreeTotalCount, pluginTreeUnreadSections,
+  applyPluginPendingChecks, sameSelection, sectionCountState, sectionExpandable, sectionPickState,
   selectAll, selectedUnitCount, tailWeightedEllipsis, togglePluginEntry, togglePluginTree, toggleSection,
   toggleUnit, toggleUnitGroup,
   unitChecked, visibleUnits,
@@ -158,6 +157,14 @@ export function ContentPicker({
    * 默认全部折叠 —— 展开插件节点时才去读它涉及的 pluginData / pluginAssets 清单（惰性，见渲染处）。
    */
   const [expandedPlugins, setExpandedPlugins] = useState<Record<string, boolean>>({})
+  /**
+   * 待补勾队列（键 = 「插件」一级区块或某个插件名）。
+   *
+   * 为什么需要它：分区清单是**惰性**读取的 —— 勾一级区块/插件时，它名下还有区域没读到（unread），
+   * 那些单元此刻勾不上。若就此结束，用户会以为「全带上了」，实际包里少了数据目录/大文件。
+   * 所以：先勾已知的 + 触发读取 + 入队；清单到货后（nodes 变化）自动补齐并出队。
+   */
+  const [pendingChecks, setPendingChecks] = useState<{ key: string; kind: 'root' | 'entry' }[]>([])
   const visible = useMemo(() => filterSections(nodes, query), [nodes, query])
   /** 「按插件看」的树：同一份 nodes 的第二个投影（纯函数在 src/ui/selection-model.ts） */
   /** 「按插件看」的完整树（无搜索过滤；纯函数在 src/ui/selection-model.ts） */
@@ -209,6 +216,21 @@ export function ContentPicker({
   const focusOf = (section: SectionId): SessionWorkspaceCouplingFocus => (
     section === 'sessions' ? 'sessions' : section === 'workspaces' ? 'workspaces' : 'both'
   )
+
+  /**
+   * 待补勾：清单到货后把「勾一级区块/插件时还没读到」的单元补齐（见 pendingChecks 的注释）。
+   *
+   * 收敛判据是「该节点名下已无 unread 叶子」；只要还在读就一直排队，到齐后补一次并出队。
+   * 幂等：补齐结果与当前选择等价时不写库（sameSelection），避免自激渲染。
+   */
+  useEffect(() => {
+    if (pendingChecks.length === 0) return
+    const { selection, remaining } = applyPluginPendingChecks(value, nodes, tree, pendingChecks)
+    setPendingChecks(remaining)
+    if (!sameSelection(selection, value)) commit(selection)
+    // tree/nodes 变化即代表清单到货；value 变化来自本次补齐本身（此时队列已空，直接返回）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingChecks, tree, nodes, value])
 
   /** 叶子的种类文案（模型不出文案；i18n 铁律）。 */
   const leafKindText = (kind: PluginLeafKind): string => (
@@ -294,7 +316,7 @@ export function ContentPicker({
     const rootOpen = expandedPlugins[rootKey] === true || query.trim() !== ''
     const rootState = pluginTreePickState(value, tree)
     const rootPicked = pluginTreeSelectedCount(value, tree)
-    const rootTotal = pluginTreeLeafCount(tree)
+    const rootTotal = pluginTreeTotalCount(tree)
     const rootSize = tree.entries.reduce((n, e) => n + e.leaves.reduce((m, l) => m + l.sizeBytes, 0), 0)
     const rootUnread = pluginTreeUnreadSections(tree)
     const body = (
@@ -308,7 +330,8 @@ export function ContentPicker({
         const open = expandedPlugins[entry.name] === true
         const state = pluginEntryPickState(value, entry)
         const picked = pluginEntrySelectedCount(value, entry)
-        const total = pluginEntryLeaves(entry).length
+        // 分母用「已知」叶子（含未读取的区域）：否则折叠/展开会给出两个数字（2026-10-17 用户实测）
+        const total = pluginEntryTotalCount(entry)
         const unread = pluginEntryUnreadSections(entry)
         const entrySize = entry.leaves.reduce((n, l) => n + l.sizeBytes, 0)
         const bodyId = 'picker-plugin-' + entry.name
@@ -333,7 +356,19 @@ export function ContentPicker({
               </button>
               <Checkbox
                 checked={state === 'all'}
-                onChange={(checked) => { commit(togglePluginEntry(value, nodes, entry, checked)) }}
+                onChange={(checked) => {
+                  if (!checked) {
+                    // 取消：撤掉队列里本插件的补勾请求（否则到货后又把它勾回来）
+                    setPendingChecks((prev) => prev.filter((p) => p.key !== entry.name))
+                    commit(togglePluginEntry(value, nodes, entry, false))
+                    return
+                  }
+                  for (const s of unread) onRequestUnits?.(s)
+                  if (unread.length > 0) {
+                    setPendingChecks((prev) => (prev.some((p) => p.key === entry.name) ? prev : [...prev, { key: entry.name, kind: 'entry' }]))
+                  }
+                  commit(togglePluginEntry(value, nodes, entry, true))
+                }}
                 label={
                   <span className={css.categoryItem}>
                     {/* 包名是宿主直出文本 → 显示前过 redact（与单元行同一纪律） */}
@@ -425,19 +460,29 @@ export function ContentPicker({
               ) : (
                 <span className={css.pickerChevronSpacer} aria-hidden="true" />
               )}
-              <span className={css.categoryItem}>
-                <span className={css.pickerUnitName}>{bucketLabel(bucket.section)}</span>
-                {bucket.loaded && (
-                  <span className={css.pickerCount}>
-                    {t('picker.selectedOf', {
-                      selected: String(selectedUnitCount(value, node)),
-                      total: String(node.units.length === 0 ? node.count : node.units.length),
-                    })}
+              {/* 桶也是**整个分区**：勾选框与普通分区行同一套三态语义（toggleSection），
+                  这样「整块带走/整块不带」不需要先展开逐条勾。 */}
+              <Checkbox
+                checked={sectionPickState(value, node) === 'all'}
+                onChange={(checked) => { commit(toggleSection(value, node, checked), focusOf(node.section)) }}
+                label={
+                  <span className={css.categoryItem}>
+                    <span className={css.pickerUnitName}>{bucketLabel(bucket.section)}</span>
+                    {sectionPickState(value, node) === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
+                    {node.portability === 'deviceSpecific' && <Badge kind="warn">{t('picker.deviceSpecific')}</Badge>}
+                    {bucket.loaded && (
+                      <span className={css.pickerCount}>
+                        {t('picker.selectedOf', {
+                          selected: String(selectedUnitCount(value, node)),
+                          total: String(node.units.length === 0 ? node.count : node.units.length),
+                        })}
+                      </span>
+                    )}
+                    {/* 未读时不给「读取该分区」按钮：展开这一行就是读取入口（与其他分区行同一套惰性语义） */}
+                    {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
                   </span>
-                )}
-                {/* 未读时不给「读取该分区」按钮：展开这一行就是读取入口（与其他分区行同一套惰性语义） */}
-                {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
-              </span>
+                }
+              />
             </div>
             <Collapse open={open} id={bodyId}>
               {units.shown.map((u) => renderUnitRow(node, u, true))}
@@ -481,7 +526,19 @@ export function ContentPicker({
           </button>
           <Checkbox
             checked={rootState === 'all'}
-            onChange={(checked) => { commit(togglePluginTree(value, nodes, tree, checked)) }}
+            onChange={(checked) => {
+              if (!checked) {
+                // 取消：把队列里属于本节点的请求一并撤掉，免得到货后又把它勾回来
+                setPendingChecks((prev) => prev.filter((p) => p.kind !== 'root'))
+                commit(togglePluginTree(value, nodes, tree, false))
+                return
+              }
+              for (const s of rootUnread) onRequestUnits?.(s)
+              if (!tree.pluginsLoaded || tree.entries.some((e) => pluginEntryUnreadSections(e).length > 0)) {
+                setPendingChecks((prev) => (prev.some((p) => p.kind === 'root') ? prev : [...prev, { key: rootKey, kind: 'root' }]))
+              }
+              commit(togglePluginTree(value, nodes, tree, true))
+            }}
             label={
               <span className={css.categoryItem}>
                 <span className={css.categoryName}>{t('picker.pluginRoot')}</span>

@@ -10,12 +10,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  buildExportRequest, buildSelectedPlan, defaultSelection,
+  applyPluginPendingChecks, buildExportRequest, buildSelectedPlan, defaultSelection,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
   filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
   isPlanItemExcluded, isPluginTreeSection, isUnitSelected, PLUGIN_TREE_SECTIONS,
   pluginEntryLeaves, pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
-  pluginTreeLeafCount, pluginTreePickState, pluginTreeSelectedCount, pluginTreeUnreadSections,
+  pluginEntryTotalCount, pluginTreeLeafCount, pluginTreePickState, pluginTreeSelectedCount, pluginTreeTotalCount,
+  pluginTreeUnreadSections,
   togglePluginEntry, togglePluginTree,
   planWriteSections,
   tailWeightedEllipsis, pickerSummary,
@@ -979,6 +980,56 @@ test('「插件」一级区块：取消勾选后所有插件单元都不再导�
   assert.equal(sel.excluded.includes('plugin:alpha'), true)
   assert.equal(sel.excluded.includes('plugin:beta'), true)
   assert.equal(sel.excluded.includes('plugins:pnpm-workspace'), false)
+})
+
+test('计数不随清单到货跳动：「已选 n/m」的分母用「已知」叶子（含未读取的区域）', () => {
+  const nodes = treeNodes()
+  nodes[0]!.units[0] = {
+    ...nodes[0]!.units[0]!,
+    relatedAreas: [
+      { section: 'pluginData', relPath: '.alpha/runtime', role: 'config' },
+      { section: 'pluginAssets', relPath: '.alpha/uploads', role: 'assets' },
+    ],
+  }
+  const before = pluginTree(nodes)
+  const alphaBefore = before.entries.find((e) => e.name === 'alpha')!
+  assert.equal(pluginEntryTotalCount(alphaBefore), 3, '清单条目 + 已读到区域 + 未读取区域')
+  assert.equal(pluginTreeTotalCount(before), 4, 'alpha 3 项 + beta 1 项')
+  // 模拟清单到货：同一个声明区域从 unread 变成 present —— 分母必须**不变**
+  nodes[2] = {
+    section: 'pluginAssets', count: 1, sizeBytes: 9,
+    units: [{ id: 'pluginAssets:.alpha/uploads', label: '.alpha/uploads', sizeBytes: 9 }],
+  }
+  const after = pluginTree(nodes)
+  const alphaAfter = after.entries.find((e) => e.name === 'alpha')!
+  assert.equal(pluginEntryTotalCount(alphaAfter), 3)
+  assert.equal(pluginTreeTotalCount(after), 4)
+  assert.deepEqual(alphaAfter.leaves.map((l) => l.state), ['present', 'present', 'present'])
+})
+
+test('待补勾：清单没到齐时留在队列（绝不假装已勾），到货后补齐并出队', () => {
+  const nodes = treeNodes()
+  nodes[0]!.units[0] = {
+    ...nodes[0]!.units[0]!,
+    relatedAreas: [
+      { section: 'pluginData', relPath: '.alpha/runtime', role: 'config' },
+      { section: 'pluginAssets', relPath: '.alpha/uploads', role: 'assets' },
+    ],
+  }
+  const pending = [{ key: 'alpha', kind: 'entry' as const }]
+  const waiting = applyPluginPendingChecks(defaultSelection(TREE_SECTIONS), nodes, pluginTree(nodes), pending)
+  assert.deepEqual(waiting.remaining, pending, '大文件分区还没读 → 继续等')
+  // 到货
+  nodes[2] = {
+    section: 'pluginAssets', count: 1, sizeBytes: 9,
+    units: [{ id: 'pluginAssets:.alpha/uploads', label: '.alpha/uploads', sizeBytes: 9 }],
+  }
+  const tree2 = pluginTree(nodes)
+  const done = applyPluginPendingChecks(defaultSelection(TREE_SECTIONS), nodes, tree2, pending)
+  assert.deepEqual(done.remaining, [])
+  const alpha = tree2.entries.find((e) => e.name === 'alpha')!
+  assert.equal(pluginEntrySelectedCount(done.selection, alpha), 3, '补齐后 = 该插件名下全部叶子')
+  assert.equal(pluginEntryPickState(done.selection, alpha), 'all')
 })
 
 test('「插件」一级区块展开前要读的分区：插件清单自己没读到也要报（否则展开后没有读取入口）', () => {

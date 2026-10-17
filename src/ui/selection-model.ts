@@ -1153,17 +1153,37 @@ export function pluginEntryLeaves(entry: PluginTreeEntry): PluginTreeLeaf[] {
   return entry.leaves.filter((l) => l.state === 'present')
 }
 
+/**
+ * 该插件名下**已知**的叶子（存在 + 还没读到清单的区域声明）。
+ *
+ * 计数与三态用它，**不用 pluginEntryLeaves（只含 present）**：否则「已选 n/m」会随清单到货跳动 ——
+ * 折叠时显示 1/1、展开（触发了读取）后变成 1/3，用户看到的是「数字自己变了」（2026-10-17 实测反馈）。
+ * absent（注册表说有、盘上确实没有）不计入：它永远不可勾，算进去只会让分母虚高。
+ */
+export function pluginEntryKnownLeaves(entry: PluginTreeEntry): PluginTreeLeaf[] {
+  return entry.leaves.filter((l) => l.state !== 'absent')
+}
+
+export function pluginEntryTotalCount(entry: PluginTreeEntry): number {
+  return pluginEntryKnownLeaves(entry).length
+}
+
 export function pluginEntrySelectedCount(sel: Selection, entry: PluginTreeEntry): number {
   return pluginEntryLeaves(entry).reduce((n, l) => n + (unitChecked(sel, l.section, l.unitId) ? 1 : 0), 0)
 }
 
-/** 插件节点三态（与分区/分组同一套口径：只看真实存在的叶子）。 */
+/**
+ * 插件节点三态（与分区/分组同一套口径，但分母用**已知**叶子）。
+ *
+ * 还有区域没读到（unread）时最多只能是 `partial`：那些单元此刻勾不上，
+ * 报「全选」会让用户以为已经全带上（真正补齐见 ContentPicker 的待补勾队列）。
+ */
 export function pluginEntryPickState(sel: Selection, entry: PluginTreeEntry): SectionPickState {
-  const leaves = pluginEntryLeaves(entry)
-  if (leaves.length === 0) return 'none'
+  const known = pluginEntryKnownLeaves(entry)
+  if (known.length === 0) return 'none'
   const picked = pluginEntrySelectedCount(sel, entry)
   if (picked === 0) return 'none'
-  return picked === leaves.length ? 'all' : 'partial'
+  return picked === known.length ? 'all' : 'partial'
 }
 
 /**
@@ -1192,6 +1212,15 @@ export function pluginTreeLeafCount(tree: PluginTree): number {
   return pluginTreeLeaves(tree).length
 }
 
+/** 树上**已知**的叶子（存在 + 未读取；不含 absent）—— 一级区块的计数与三态用它，口径同插件节点。 */
+export function pluginTreeKnownLeaves(tree: PluginTree): PluginTreeLeaf[] {
+  return tree.entries.flatMap((e) => pluginEntryKnownLeaves(e))
+}
+
+export function pluginTreeTotalCount(tree: PluginTree): number {
+  return pluginTreeKnownLeaves(tree).length
+}
+
 export function pluginTreeSelectedCount(sel: Selection, tree: PluginTree): number {
   return pluginTreeLeaves(tree).reduce((n, l) => n + (unitChecked(sel, l.section, l.unitId) ? 1 : 0), 0)
 }
@@ -1203,11 +1232,11 @@ export function pluginTreeSelectedCount(sel: Selection, tree: PluginTree): numbe
  * 否则「全选所有插件」会顺手把没人认领的散落配置一起带上。
  */
 export function pluginTreePickState(sel: Selection, tree: PluginTree): SectionPickState {
-  const leaves = pluginTreeLeaves(tree)
-  if (leaves.length === 0) return 'none'
+  const known = pluginTreeKnownLeaves(tree)
+  if (known.length === 0) return 'none'
   const picked = pluginTreeSelectedCount(sel, tree)
   if (picked === 0) return 'none'
-  return picked === leaves.length ? 'all' : 'partial'
+  return picked === known.length ? 'all' : 'partial'
 }
 
 /** 一级区块勾选：把所有插件名下存在的单元一起勾 / 取消（逐个走 toggleUnit；含未归属桶吗？不含）。 */
@@ -1237,6 +1266,50 @@ export function pluginTreeUnreadSections(tree: PluginTree): SectionId[] {
     if (!bucket.loaded && !out.includes(bucket.section)) out.push(bucket.section)
   }
   return out
+}
+
+/** 一条待补勾请求（键 = 「插件」一级区块，或某个插件名）。 */
+export interface PluginPendingCheck {
+  key: string
+  kind: 'root' | 'entry'
+}
+
+/**
+ * 待补勾的出队判定（纯函数，node 可测）。
+ *
+ * 背景：清单是**惰性**读取的 —— 用户勾「插件」一级区块或某个插件时，它名下可能还有区域没读到
+ * （unread），那些单元此刻勾不上。若就此结束，用户会以为「全带上了」，实际包里少了数据目录/大文件。
+ * 调用方在点击时先勾已知的、把没到齐的键入队；清单到货（nodes 变化）后再调本函数补齐。
+ *
+ * 判据 = 该节点名下**已无 unread 叶子**（`pluginEntryUnreadSections` / `pluginsLoaded`）：
+ * 到齐 → 出队并补齐；没到齐 → 留在队列里继续等（绝不猜成「已勾」）。
+ */
+export function applyPluginPendingChecks(
+  sel: Selection,
+  nodes: SelectionSection[],
+  tree: PluginTree,
+  pending: readonly PluginPendingCheck[],
+): { selection: Selection; remaining: PluginPendingCheck[] } {
+  const remaining: PluginPendingCheck[] = []
+  let out = sel
+  for (const p of pending) {
+    if (p.kind === 'root') {
+      if (!tree.pluginsLoaded || tree.entries.some((e) => pluginEntryUnreadSections(e).length > 0)) {
+        remaining.push(p)
+        continue
+      }
+      out = togglePluginTree(out, nodes, tree, true)
+      continue
+    }
+    const entry = tree.entries.find((e) => e.name === p.key)
+    if (entry === undefined) continue
+    if (pluginEntryUnreadSections(entry).length > 0) {
+      remaining.push(p)
+      continue
+    }
+    out = togglePluginEntry(out, nodes, entry, true)
+  }
+  return { selection: out, remaining }
 }
 
 /** 勾上该插件前还需要读取哪些分区的清单（展开/点击时触发惰性读取）。 */
