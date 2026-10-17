@@ -33,8 +33,8 @@ import type { RecursiveListing } from '../utils/recursive-walk.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import {
   BUILTIN_PLUGIN_DATA_SOURCES, areaOfPath, areasForSection, isExcludedRel, normalizeHomeRel,
-  parseDeclaredDataDirs,
 } from '../core/plugin-data-registry.ts';
+import { declaredProfileName, scanDeclaredDataSources } from './plugin-data-declared.ts';
 import type { PluginDataArea, PluginDataSource, PluginDataSection } from '../core/plugin-data-registry.ts';
 import { osHomeDirOf } from '../core/backup.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
@@ -49,9 +49,6 @@ export type PluginDataEntry = { source: PluginDataSource; area: PluginDataArea }
 
 /** 声明来源缓存的 TTL（毫秒）：一次导出/导入/执行里会多次解析，逐次读 15+ 个 package.json 是净开销 */
 const DECLARED_TTL_MS = 5_000;
-
-/** 单次解析里最多读取多少个已安装插件的 manifest（防御性上限：profile 依赖数量异常时不无限读） */
-const MAX_DECLARED_PACKAGES = 300;
 
 export interface PluginDataAdapterOptions {
   /** 内置来源（缺省 = BUILTIN_PLUGIN_DATA_SOURCES；测试注入假来源） */
@@ -111,18 +108,15 @@ export class PluginDataAdapter extends FileCollectionAdapter {
   }
 
   /**
-   * 已安装插件的自述声明（dsh.dataDirs）。
+   * 已安装插件的自述声明（dsh.dataDirs）—— 本方法只做**缓存**，扫描实现见 plugin-data-declared.ts。
    *
-   * 为什么读 profile 的 node_modules 而不是全局目录：DSH 的插件装在 \`profiles/<profile>/node_modules\`
-   * 下（pnpm 隔离布局），且同一个包在不同 profile 可以是不同版本 —— 声明必须取**本 profile 实际装的**那份。
-   *
-   * 读不到（未安装 / 无声明 / 形状非法）一律跳过：本机制是**附加**信息，绝不因为一个包读不出来
-   * 就影响内置来源或整次导出。
+   * 为什么缓存必须带 ctx 键（homeDir + profile）：DSH 的插件装在 \`profiles/<profile>/node_modules\`
+   * 下（pnpm 隔离布局），而「这台机器装了某插件」不代表另一台装了 —— 缓存若按实例共享，
+   * 导入到「没装该插件」的目标机时会拿源机的声明去放行写入，白名单就变成「谁先导入谁说了算」。
    */
   private async declaredSources(ctx: HostContext): Promise<PluginDataSource[]> {
     const now = Date.now();
-    const profile = ctx.profile !== undefined && ctx.profile !== '' ? ctx.profile : 'web';
-    const memoKey = ctx.homeDir + '|' + profile;
+    const memoKey = ctx.homeDir + '|' + declaredProfileName(ctx.profile);
     if (
       this.declaredMemo !== undefined
       && this.declaredMemo.key === memoKey
@@ -130,27 +124,7 @@ export class PluginDataAdapter extends FileCollectionAdapter {
     ) {
       return this.declaredMemo.sources;
     }
-    const base = 'profiles/' + profile;
-    const out: PluginDataSource[] = [];
-    let deps: string[] = [];
-    try {
-      const raw = await ctx.fs.readFile(base + '/package.json');
-      const parsed: unknown = JSON.parse(new TextDecoder().decode(raw));
-      const dep = (parsed as { dependencies?: unknown } | null)?.dependencies;
-      if (dep !== null && typeof dep === 'object') deps = Object.keys(dep).slice(0, MAX_DECLARED_PACKAGES);
-    } catch {
-      deps = [];
-    }
-    for (const name of deps) {
-      try {
-        const raw = await ctx.fs.readFile(base + '/node_modules/' + name + '/package.json');
-        const manifest: unknown = JSON.parse(new TextDecoder().decode(raw));
-        const source = parseDeclaredDataDirs(name, manifest);
-        if (source !== null) out.push(source);
-      } catch {
-        // 未安装 / 无 manifest → 无声明，跳过
-      }
-    }
+    const out = await scanDeclaredDataSources(ctx);
     this.declaredMemo = { key: memoKey, at: now, sources: out };
     return out;
   }

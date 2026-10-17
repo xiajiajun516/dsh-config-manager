@@ -147,6 +147,32 @@ test('plugins：按包名过滤，cordis 补丁行独立成单元', async () => 
   assert.deepEqual(filtered.data.patch, [], '未勾选的补丁行不得被带出');
 });
 
+test('plugins：「按插件看」的树骨架 —— 单元带上它声明的数据区域（内置来源表，缓存永不进树）', async () => {
+  const ctx = makeContext('win32', HOME);
+  // 内置来源表：dsh-mnemon → runtime(config) + data/documents(assets)；
+  // dsh-plugin-wallpaper-engine → 数据目录(config) + uploads(assets) + cache(**不属于任何分区**)
+  ctx.plugins.installed.set('dsh-mnemon', { name: 'dsh-mnemon', version: '1.0.0', enabled: true });
+  ctx.plugins.installed.set('dsh-plugin-wallpaper-engine', {
+    name: 'dsh-plugin-wallpaper-engine', version: '1.0.0', enabled: true,
+  });
+  ctx.plugins.installed.set('pkg-a', { name: 'pkg-a', version: '1.0.0', enabled: true });
+  const adapter = new PluginsAdapter();
+
+  const previewed = await adapter.preview(ctx, { includeSecrets: false });
+  assert.deepEqual(previewed.items.find((u) => u.id === 'plugin:dsh-mnemon')?.relatedAreas, [
+    { section: 'pluginData', relPath: '.mnemon/runtime', role: 'config' },
+    { section: 'pluginAssets', relPath: '.mnemon/data', role: 'assets' },
+    { section: 'pluginAssets', relPath: '.mnemon/documents', role: 'assets' },
+  ]);
+  const we = previewed.items.find((u) => u.id === 'plugin:dsh-plugin-wallpaper-engine')?.relatedAreas ?? [];
+  assert.deepEqual(we.map((r) => r.relPath), ['.dsh-wallpaper-engine', '.dsh-wallpaper-engine/uploads'],
+    'cache 区域可再生产物、不属于任何分区，绝不进树');
+  // 没有声明的插件不得凭空带上区域（不猜）
+  assert.equal(previewed.items.find((u) => u.id === 'plugin:pkg-a')?.relatedAreas, undefined);
+  // 预览与导出两条路径的单元清单必须逐项相同（本文件既有纪律）
+  assert.deepEqual(previewed.items, adapter.listUnits(previewed.section));
+});
+
 test('plugins：pnpm-workspace.yaml ↔ patch 文件是原子组（lockedWith 双向声明）', () => {
   const adapter = new PluginsAdapter();
   const section: ExportSection<PluginsSection> = {

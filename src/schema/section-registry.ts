@@ -227,7 +227,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
   },
   plugins: {
     id: 'plugins',
-    displayName: 'Plugins',
+    displayName: 'Plugin list',
     group: 'extensions',
     payload: {
       kind: 'array', zipPath: 'plugins/plugins.json', key: 'plugins',
@@ -324,7 +324,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
   },
   pluginFiles: {
     id: 'pluginFiles',
-    displayName: "Other Plugins' Loose Files",
+    displayName: 'Plugin config files',
     group: 'extensions',
     payload: { kind: 'files', filePrefix: 'plugin-files/' },
     dataVersion: SECTION_DATA_VERSION,
@@ -377,7 +377,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
   },
   self: {
     id: 'self',
-    displayName: "This Plugin's Own Config",
+    displayName: 'Config Manager settings',
     group: 'extensions',
     payload: { kind: 'files', filePrefix: 'self/' },
     dataVersion: SECTION_DATA_VERSION,
@@ -390,7 +390,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
   },
   pluginData: {
     id: 'pluginData',
-    displayName: "Other Plugins' Data",
+    displayName: 'Plugin data dirs',
     group: 'extensions',
     payload: { kind: 'files', filePrefix: 'plugin-data/' },
     dataVersion: SECTION_DATA_VERSION,
@@ -406,7 +406,7 @@ export const SECTION_REGISTRY: Record<SectionId, SectionMeta> = {
   },
   pluginAssets: {
     id: 'pluginAssets',
-    displayName: "Other Plugins' Large Files",
+    displayName: 'Plugin large files',
     group: 'extensions',
     payload: { kind: 'files', filePrefix: 'plugin-assets/' },
     dataVersion: SECTION_DATA_VERSION,

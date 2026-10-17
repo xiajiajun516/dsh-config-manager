@@ -12,7 +12,10 @@ import assert from 'node:assert/strict'
 import {
   buildExportRequest, buildSelectedPlan, defaultSelection,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
-  groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter, isPlanItemExcluded, isUnitSelected,
+  filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
+  isPlanItemExcluded, isUnitSelected,
+  pluginEntryLeaves, pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
+  togglePluginEntry,
   planWriteSections,
   tailWeightedEllipsis, pickerSummary,
   sectionCountState, sectionExpandable, sectionPickState, sectionsFromPlan, sectionsFromPreview, selectedUnitCount, selectAll,
@@ -835,4 +838,128 @@ test('选择模型：sectionsFromPreview 透传 blank 事实（ContentPicker 据
   ]);
   assert.equal(nodes[0]?.units[0]?.blank, true);
   assert.equal(nodes[1]?.units[0]?.blank, undefined, '非会话单元不得凭空带 blank');
+});
+
+/* ----------------------------------------------------------------------------------
+   「按插件看」：树模型 / 三态 / 一键勾选（用户需求：勾一个插件 = 带走它四处的东西）
+   ---------------------------------------------------------------------------------- */
+
+function treeNodes(): SelectionSection[] {
+  return [
+    {
+      section: 'plugins', count: 2, sizeBytes: 120, group: 'extensions',
+      units: [
+        {
+          id: 'plugin:alpha', label: 'alpha', detail: '1.0.0', sizeBytes: 10,
+          relatedAreas: [{ section: 'pluginData', relPath: '.alpha/runtime', role: 'config' }],
+        },
+        { id: 'plugin:beta', label: 'beta', sizeBytes: 10 },
+        { id: 'plugins:pnpm-workspace', label: 'pnpm-workspace.yaml', sizeBytes: 5 },
+      ],
+    },
+    {
+      section: 'pluginData', count: 2, sizeBytes: 30,
+
+      units: [
+        { id: 'pluginData:.alpha/runtime', label: '.alpha/runtime', sizeBytes: 20 },
+        { id: 'pluginData:.gone/state', label: '.gone/state', sizeBytes: 10 },
+      ],
+    },
+    // 大文件分区还没读：区域叶子只能是 unread（不可勾），绝不当成「没有内容」
+    { section: 'pluginAssets', count: 0, sizeBytes: 0, units: [], unitsUnread: true },
+    {
+      section: 'pluginFiles', count: 1, sizeBytes: 4,
+      units: [{ id: 'pluginFiles:dsh-ssh.json', label: 'dsh-ssh.json', sizeBytes: 4 }],
+    },
+  ]
+}
+
+const TREE_SECTIONS: SectionId[] = ['plugins']
+
+test('按插件看：插件清单条目与它声明的数据区域收在同一个节点下（未读分区不可勾）', () => {
+  const tree = pluginTree(treeNodes())
+  assert.equal(tree.pluginsLoaded, true)
+  const alpha = tree.entries.find((e) => e.name === 'alpha')
+  assert.ok(alpha !== undefined)
+  assert.deepEqual(alpha!.leaves.map((l) => l.state), ['present', 'present'])
+  assert.deepEqual(alpha!.leaves.map((l) => l.unitId), ['plugin:alpha', 'pluginData:.alpha/runtime'])
+  // beta 没有任何声明 → 只有清单条目，绝不凭空造出数据区域
+  const beta = tree.entries.find((e) => e.name === 'beta')
+  assert.deepEqual(beta!.areas, [])
+  // 声明了 pluginAssets 的区域？alpha 只声明了 config 区域，故不存在 assets 叶子
+  assert.equal(alpha!.leaves.some((l) => l.section === 'pluginAssets'), false)
+})
+
+test('按插件看：注册表说有、磁盘上没有 = absent；分区没读 = unread（两者都不可勾）', () => {
+  const nodes = treeNodes()
+  // 让 alpha 声明一个大文件区域（该分区还没读）
+  nodes[0]!.units[0] = {
+    ...nodes[0]!.units[0]!,
+    relatedAreas: [
+      { section: 'pluginData', relPath: '.alpha/runtime', role: 'config' },
+      { section: 'pluginAssets', relPath: '.alpha/uploads', role: 'assets' },
+      { section: 'pluginData', relPath: '.alpha/nonexistent', role: 'config' },
+    ],
+  }
+  const tree = pluginTree(nodes)
+  const alpha = tree.entries.find((e) => e.name === 'alpha')!
+  // 顺序 = 清单条目在前，随后按宿主声明顺序：[runtime(已读)、uploads(未读)、nonexistent(已读但没内容)]
+  assert.deepEqual(alpha.leaves.map((l) => l.state), ['present', 'present', 'unread', 'absent'])
+  assert.deepEqual(pluginEntryLeaves(alpha).map((l) => l.unitId), ['plugin:alpha', 'pluginData:.alpha/runtime'])
+  assert.deepEqual(pluginEntryUnreadSections(alpha), ['pluginAssets'])
+})
+
+test('按插件看不猜归属：pluginFiles 进未归属桶、未被认领的数据单元进遗留桶、补丁行进分区桶', () => {
+  const tree = pluginTree(treeNodes())
+  const bySection = new Map(tree.buckets.map((b) => [b.section, b]))
+  assert.deepEqual(bySection.get('pluginFiles')?.units.map((u) => u.id), ['pluginFiles:dsh-ssh.json'])
+  assert.deepEqual(bySection.get('pluginData')?.units.map((u) => u.id), ['pluginData:.gone/state'])
+  assert.deepEqual(bySection.get('plugins')?.units.map((u) => u.id), ['plugins:pnpm-workspace'])
+  assert.equal(bySection.get('pluginAssets')?.loaded, false, '未读分区在桶里也要如实标未读')
+})
+
+test('按插件看：插件节点三态与一键勾选（逐个走 toggleUnit，不静默全选整个分区）', () => {
+  const nodes = treeNodes()
+  const alpha = pluginTree(nodes).entries.find((e) => e.name === 'alpha')!
+  let sel = defaultSelection(TREE_SECTIONS)
+  // 只有清单条目被勾上 → 部分选中（数据区域属于未勾选的分区）
+  assert.equal(pluginEntrySelectedCount(sel, alpha), 1)
+  assert.equal(pluginEntryPickState(sel, alpha), 'partial')
+  sel = togglePluginEntry(sel, nodes, alpha, true)
+  assert.deepEqual(sel.sections, ['plugins', 'pluginData'])
+  // 只勾该插件的区域：同分区里未被认领的遗留数据（.gone/state）不得被一起带上
+  assert.deepEqual(buildExportRequest(sel, nodes), {
+    only: ['plugins', 'pluginData'],
+    includeItems: { pluginData: ['pluginData:.alpha/runtime'] },
+  })
+  // 反向：取消该插件 → 它的清单条目与数据区域一起取消，其余插件不动
+  sel = togglePluginEntry(sel, nodes, alpha, false)
+  assert.deepEqual(sel.sections, ['plugins'], '数据区域被取消后，pluginData 随之移出勾选')
+  assert.equal(sel.excluded.includes('plugin:alpha'), true)
+  assert.equal(sel.excluded.includes('pluginData:.alpha/runtime'), true)
+})
+
+test('按插件看：搜索命中插件名保留它全部叶子；只命中叶子时保留该叶子', () => {
+  const tree = pluginTree(treeNodes())
+  const byName = filterPluginTree(tree, 'ALPHA')
+  assert.deepEqual(byName.entries.map((e) => e.name), ['alpha'])
+  assert.equal(byName.entries[0]?.leaves.length, 2, '插件名命中时保留全部叶子')
+  const byLeaf = filterPluginTree(tree, 'dsh-ssh')
+  assert.deepEqual(byLeaf.entries.map((e) => e.name), [])
+  assert.deepEqual(byLeaf.buckets.map((b) => b.section), ['pluginFiles'])
+})
+
+test('选择模型：sectionsFromPreview 透传 group 与 relatedAreas（按插件看的两个输入）', () => {
+  const nodes = sectionsFromPreview([
+    {
+      section: 'plugins', count: 1, sizeBytes: 10,
+      items: [{
+        id: 'plugin:alpha', label: 'alpha', sizeBytes: 10,
+        relatedAreas: [{ section: 'pluginData', relPath: '.alpha/runtime', role: 'config' }],
+      }],
+    },
+    { section: 'skills', count: 1, sizeBytes: 10, items: [{ id: 'skills:x', label: 'x', sizeBytes: 10 }] },
+  ])
+  assert.deepEqual(nodes[0]?.units[0]?.relatedAreas, [{ section: 'pluginData', relPath: '.alpha/runtime', role: 'config' }])
+  assert.equal(nodes[1]?.units[0]?.relatedAreas, undefined, '没有声明的单元不得凭空带 relatedAreas')
 });

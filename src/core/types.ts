@@ -147,6 +147,25 @@ export interface ExportUnit {
    * 只下发**事实**，不下发文案 —— 界面按当前语言显示（与 DSH 同口径），绝不用 uuid 冒充标题。
    */
   blank?: boolean;
+  /**
+   * 该插件**声明的第三方数据区域**（只有 \`plugin:<包名>\` 单元可能有值；导出选择器「按插件看」用）。
+   *
+   * 用途：选择器要在**不读任何数据目录**的前提下画出「插件 → 数据目录 / 大文件」的树骨架 ——
+   * 区域清单来自来源注册表（内置来源表 + 插件自述 dsh.dataDirs），是静态知识，零额外 I/O；
+   * 体积与「实际有没有内容」等该分区的清单到货后再填。
+   *
+   * 语义：**纯展示**，不参与勾选/导出契约（契约只认 id）。这里是「注册表说它应该在哪儿」，
+   * **不是**「磁盘上确实有」—— 界面必须把两者分开渲染（unread / 无内容 / 已读到）。
+   */
+  relatedAreas?: readonly PluginAreaRef[];
+}
+
+/** 插件数据区域引用（pluginData / pluginAssets；只读展示用，不参与勾选契约）。 */
+export interface PluginAreaRef {
+  section: 'pluginData' | 'pluginAssets';
+  /** home 相对 POSIX 路径 —— 就是该分区单元的 id 后缀（\`pluginData:.mnemon/runtime\` 的末段） */
+  relPath: string;
+  role: 'config' | 'assets';
 }
 
 export interface ValidationResult {

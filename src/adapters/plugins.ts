@@ -28,8 +28,11 @@ import { parsePnpmPatchedDependencies, sanitizePnpmWorkspacePatches } from './pn
 import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection, PnpmPatchFile } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
-  ImportContext, PlanItem, SectionPreview, ValidationResult,
+  ImportContext, PlanItem, PluginAreaRef, SectionPreview, ValidationResult,
 } from '../core/types.ts';
+import { BUILTIN_PLUGIN_DATA_SOURCES, areasForSection } from '../core/plugin-data-registry.ts';
+import type { PluginDataSource } from '../core/plugin-data-registry.ts';
+import { declaredProfileName, scanDeclaredDataSources } from './plugin-data-declared.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
 
@@ -157,6 +160,68 @@ function entriesOfRaw(raw: unknown): { config?: unknown }[] {
 const previewTarballBytes = new WeakMap<object, Map<string, number>>();
 
 /**
+ * 「插件包名 → 它声明的数据区域」映射（只有 \`plugin:<包名>\` 单元用；导出选择器「按插件看」的树骨架）。
+ *
+ * 为什么挂 WeakMap 而不是给 PluginsSection 加字段：这是**展示用旁路信息** —— 既不是备份格式的
+ * 一部分（schema 校验与市场防线都不该看见它），也与「导出真的带什么」无关；挂在载荷对象上随对象
+ * 一起回收，载荷本身逐字节不变（与 previewTarballBytes 同一套理由）。
+ */
+const relatedAreasByData = new WeakMap<object, Map<string, PluginAreaRef[]>>();
+
+/** 内置来源 + 自述声明的扫描缓存（TTL 内的同一 home/profile 只扫一次；/export-preview 一趟会问两次） */
+const declaredSourcesMemo: { key: string; at: number; sources: readonly PluginDataSource[] } =
+  { key: '', at: 0, sources: [] };
+const DECLARED_MEMO_TTL_MS = 5_000;
+
+/**
+ * 本机可归属的插件数据来源 = 内置来源表 + 已安装插件自述声明。
+ *
+ * 缓存键必须带 homeDir + profile：同一台机器换 profile 就是另一批已安装插件，拿旧声明画树
+ * 会让用户看到不属于当前 profile 的数据区域。
+ */
+async function pluginDataSources(ctx: HostContext): Promise<readonly PluginDataSource[]> {
+  const key = ctx.homeDir + '|' + declaredProfileName(ctx.profile);
+  const now = Date.now();
+  if (declaredSourcesMemo.key === key && now - declaredSourcesMemo.at < DECLARED_MEMO_TTL_MS) {
+    return declaredSourcesMemo.sources;
+  }
+  const sources = [...BUILTIN_PLUGIN_DATA_SOURCES, ...await scanDeclaredDataSources(ctx)];
+  declaredSourcesMemo.key = key;
+  declaredSourcesMemo.at = now;
+  declaredSourcesMemo.sources = sources;
+  return sources;
+}
+
+/**
+ * 包名 → 该插件的数据区域引用。
+ *
+ * 口径与 pluginData / pluginAssets 的收集面**同源**（同一个 areasForSection）：role=config 进
+ * pluginData、role=assets 进 pluginAssets；role=cache 的区域不属于任何分区，因此**绝不进树**
+ * （缓存是可再生产物，列出来只会诱导用户把它带走）。
+ *
+ * 只产出「注册表说它应该在哪儿」，不代表磁盘上真有 —— 界面必须把两者分开渲染。
+ */
+async function relatedAreasOf(ctx: HostContext): Promise<Map<string, PluginAreaRef[]>> {
+  const sources = await pluginDataSources(ctx);
+  const map = new Map<string, PluginAreaRef[]>();
+  for (const source of sources) {
+    const refs: PluginAreaRef[] = [];
+    for (const section of ['pluginData', 'pluginAssets'] as const) {
+      for (const entry of areasForSection([source], section)) {
+        refs.push({ section, relPath: entry.area.relPath, role: entry.area.role === 'assets' ? 'assets' : 'config' });
+      }
+    }
+    if (refs.length === 0) continue;
+    for (const pkg of source.packages) {
+      const cur = map.get(pkg);
+      if (cur === undefined) map.set(pkg, [...refs]);
+      else cur.push(...refs);
+    }
+  }
+  return map;
+}
+
+/**
  * 零 spawn 推导本地源插件的体积（预览专用）。
  *
  * 两条路径，都是**只读度量**、都不 spawn 打包进程：
@@ -208,7 +273,11 @@ async function measureLocalSources(plugins: PluginEntry[], ctx: HostContext): Pr
  * `tarballBytes` = 预览路径登记到的本地源体积（见 measureLocalSources，0 = 体积未知但仍随包携带）；
  * 缺省时体积与文件数完全按导出产物里的 base64 计算 —— 与改造前逐字一致。
  */
-function unitsOf(data: PluginsSection, tarballBytes?: Map<string, number>): ExportUnit[] {
+function unitsOf(
+  data: PluginsSection,
+  tarballBytes?: Map<string, number>,
+  related?: Map<string, PluginAreaRef[]>,
+): ExportUnit[] {
   const wsId = 'plugins:pnpm-workspace';
   const patchFileIds = (data.patchFiles ?? []).map((pf) => `plugins:patch:${normalizePath(pf.relativePath)}`);
   const group = [wsId, ...patchFileIds];
@@ -216,6 +285,7 @@ function unitsOf(data: PluginsSection, tarballBytes?: Map<string, number>): Expo
   for (const pl of data.plugins) {
     const tarball = tarballOf(data, pl.name);
     const measured = tarballBytes?.get(pl.name);
+    const areas = related?.get(pl.name);
     units.push({
       id: `plugin:${pl.name}`,
       label: pl.name,
@@ -223,6 +293,8 @@ function unitsOf(data: PluginsSection, tarballBytes?: Map<string, number>): Expo
       // base64 长度 → 原始字节数（仅用于展示体积，不求精确）；预览路径没有字节，用 stat 量到的源体积
       sizeBytes: tarball !== undefined ? Math.floor((tarball.base64.length * 3) / 4) : measured ?? 0,
       ...(tarball !== undefined || measured !== undefined ? { fileCount: 1 } : {}),
+      // 「按插件看」的树骨架：该插件声明的数据区域（零数据目录 I/O）
+      ...(areas !== undefined && areas.length > 0 ? { relatedAreas: areas } : {}),
     });
   }
   for (const line of data.patch) {
@@ -291,7 +363,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       section: collected,
       // 与 src/index.ts 对 JSON 分区现算体积的口径一致（utf8 字节数）
       sizeBytes: new TextEncoder().encode(stringifyJsonSafe(data)).length,
-      items: unitsOf(data, tarballBytes),
+      items: unitsOf(data, tarballBytes, relatedAreasByData.get(data)),
     };
   }
 
@@ -432,16 +504,28 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       const alive = new Set(keptPlugins.map((pl) => pl.name));
       keptTarballs = localTarballs?.filter((t) => alive.has(t.packageName));
     }
+    const data: PluginsSection = {
+      version: 1,
+      plugins: keptPlugins,
+      patch: keptPatch,
+      pnpmWorkspace: keptWorkspace,
+      ...(keptTarballs !== undefined ? { localTarballs: keptTarballs } : {}),
+      ...(keptPatchFiles !== undefined ? { patchFiles: keptPatchFiles } : {}),
+    };
+    /**
+     * 「按插件看」的树骨架（导出选择器）：登记每个插件声明的数据区域。
+     * 只登记「至少有一个区域」的插件 —— 其余插件单元保持无该字段，界面据此不显示空壳节点。
+     * 归属信息是**附加**信息：扫描失败不得影响导出/预览本身（与 pluginData 同一纪律）。
+     */
+    try {
+      const related = await relatedAreasOf(ctx);
+      if (related.size > 0) relatedAreasByData.set(data, related);
+    } catch {
+      // 读不到声明就不登记（界面按「没有已知关联」渲染，绝不猜）
+    }
     return {
       sectionId: 'plugins',
-      data: {
-        version: 1,
-        plugins: keptPlugins,
-        patch: keptPatch,
-        pnpmWorkspace: keptWorkspace,
-        ...(keptTarballs !== undefined ? { localTarballs: keptTarballs } : {}),
-        ...(keptPatchFiles !== undefined ? { patchFiles: keptPatchFiles } : {}),
-      },
+      data,
       counts: {
         plugins: keptPlugins.length,
         patchLines: keptPatch.length,
@@ -461,8 +545,9 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
    * 由选择模型保证勾选/取消同步。
    */
   listUnits(section: ExportSection<PluginsSection>): ExportUnit[] {
-    // 预览产物没有 tarball 字节，体积来自 measureLocalSources 挂上的统计（导出产物走 base64 分支）
-    return unitsOf(section.data, previewTarballBytes.get(section.data));
+    // 预览产物没有 tarball 字节，体积来自 measureLocalSources 挂上的统计（导出产物走 base64 分支）；
+    // 「按插件看」的数据区域骨架同样由 collect() 登记在载荷对象上（两条路径逐字一致，units.test 钉住）
+    return unitsOf(section.data, previewTarballBytes.get(section.data), relatedAreasByData.get(section.data));
   }
 
   /**

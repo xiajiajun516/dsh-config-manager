@@ -480,6 +480,24 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     pluginFiles / self 等分区的渲染零变化）；③ 点一个分组 = **只勾这一组** —— 稀疏表示下
     `toggleUnitGroup` 必须在分区未勾选时把其余单元**显式排除**，否则「勾一个工作区」会静默变成
     「该分区全选」（`src/ui/selection-model.test.ts` 有专门回归）。
+  - **分区组标题（2026-10）**：`.pickerGroupTitle` = 只在**分组变化处**插一行的组标题
+    （`.pickerGroupTitleName` 11px/600/secondary、字距 0.02em、非首组带 1px 分隔线），与
+    `CommandPalette` 的分组标题同一口径：**它不是选项**（更小更淡、不可选中，用 `span` 而不是
+    `Checkbox`），否则会被读成「灰掉的选项」。标题顺序 = 调用方给的节点顺序（宿主目录已按
+    `EXPORT_GROUPS` 排好，UI **不重排**；`SelectionSection.group` 缺省 = 不渲染标题，
+    导入向导 / 市场通道零变化）。
+  - **「按分区看 / 按插件看」视图切换（2026-10）**：`.pickerViewRow` + 共享 `Segmented`
+    （只有导出页传 `onViewChange` —— 导入向导与市场的节点来自包内计划，没有插件数据区域的关联，
+    给出开关只会得到一棵空树）。**两个视图共用同一份 `Selection`**：叶子仍是原来的单元 id，
+    勾选仍走 `toggleUnit` / `unitChecked`，切视图不改动任何勾选；纯展示模型
+    `pluginTree` / `filterPluginTree` / `pluginEntryPickState` / `togglePluginEntry` 住在
+    `src/ui/selection-model.ts`（node 可测）。**按插件看的四条语义**：
+    ① 插件节点 = `plugin:<包名>` 单元 + 它**声明的**数据区域（宿主下发的 `relatedAreas`，
+    静态知识、零数据目录 I/O）；② **不猜归属** —— pluginFiles（白名单文件 + `plugin-config/`）
+    没有任何包名信息，整块进「未归属」桶，未被任何插件认领的数据单元进「遗留数据」桶；
+    ③ 「注册表说它在哪儿」与「磁盘上真有」分开渲染：分区清单没读到 = `未读取`（不可勾，展开时才读），
+    读到却没有该单元 = `无内容`（不可勾）—— 绝不产生幽灵勾选（引擎只带走清单里真实存在的单元）；
+    ④ 树节点标签是宿主直出文本（包名 / home 相对路径），渲染前同样过 `redact()`，文案按 `kind` 映射字典键。
   - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
     保留尾部时间戳/版本等区分信息，见 §9 anti-pattern 5）+ `min-width:0 / max-width:280px /
     text-overflow: ellipsis` 兜底 —— 长路径/长会话标题不得撑宽列表产生横向滚动条。

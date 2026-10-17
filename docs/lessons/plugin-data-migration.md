@@ -86,3 +86,26 @@
 - 插件面板里改过「缓存 / 上传位置」（写进插件自己的 `config.json`，不是环境变量）时，本分区只看到默认位置 ——
   不读插件私有配置就无法判定，选择如实不做（env 覆盖则报码跳过，不猜）。
 - 单分区字节闸门仍是 256 MiB（与导入侧上传上限同量级）：更大的资产单元会被**整块**剔除并写进导出告警。
+
+## 6. 「按插件看」的归属键（2026-10，导出选择器第二视图）
+
+**唯一可证明的关联键是 npm 包名**：`plugins` 的单元 id 是 `plugin:<包名>`，而来源注册表每条
+`PluginDataSource` 都带 `packages: readonly string[]` —— 两者一拼就是「这个插件还有哪些数据区域」。
+
+- **插件数据目录 / 大文件可以归到具体插件**：`pluginData` / `pluginAssets` 由**同一批来源**按
+  `role`（config / assets）分流，因此同一来源可能在两个分区各有一个区域（wallpaper-engine：
+  `.dsh-wallpaper-engine` 进 pluginData、`.dsh-wallpaper-engine/uploads` 进 pluginAssets）。
+  `role === 'cache'` 的区域不属于任何分区，**绝不进树**（可再生产物，列出来只会诱导用户带走）。
+- **pluginFiles 归不了**：它的单元是「相对 `~/.dsh` 根的路径」——白名单文件名（`dsh-ssh.json` /
+  `pet.json`）加 `plugin-config/<任意目录名>/…`，**没有任何包名字段**；目录名也不保证等于包名
+  （测试夹具用的是 `foo` / `bar` / `pluginA`）。按目录名猜 = 猜错就在树里勾错东西 ⇒ 只能整块进
+  「未归属到插件的配置（`~/.dsh` 根）」桶。
+- **「注册表说有」≠「磁盘上真有」**：树骨架来自静态注册表（零数据目录 I/O），所以叶子必须分三态渲染 ——
+  `present`（分区清单里确有该单元，可勾）/ `unread`（该分区清单还没读，展开时才拉）/ `absent`
+  （已读但没有这个 id，明确标「无内容」）。若把 `absent` 也画成可勾，用户勾了却导不出任何东西
+  （引擎只带走清单里真实存在的单元，`buildExportRequest` 从 `node.units` 反向生成白名单）。
+- **一键勾选仍走 `toggleUnit` 逐个勾**：分区此前未勾选时「勾一个单元 = 只勾这一个」的既有语义因此自动
+  生效 —— 勾一个插件不会静默把整个 `pluginData` 分区（含未安装插件的遗留数据）一起带上。
+
+证据：`src/adapters/units.test.ts`（leaf 区域清单含 cache 剔除、无声明插件不得凭空带区域、
+预览与 `listUnits` 逐项相同）、`src/ui/selection-model.test.ts`（三态、未归属桶、一键勾选只带该插件的区域）。

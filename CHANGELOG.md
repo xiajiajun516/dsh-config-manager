@@ -34,6 +34,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🆕 新增 · Added
 
+- **导出插件时可以「按插件看」了**：同一个插件的清单条目、数据目录与大文件现在收在一个节点下，点一次就把它散在几处的文件一起带上；分区列表也补上了分组标题（通用 / AI / 插件与扩展 …），并把几个容易混淆的分区改成一眼能读懂的名字（插件清单 / 插件散落配置 / 插件数据目录 / 插件大文件 / 配置管理器设置）。归属只写能证明的关系：插件散落配置没有任何包名信息，所以留在「未归属」栏里，不会被硬塞给某个插件；注册表提到但本机其实没有的区域会明确标「无内容」，而不是给一个勾了却导不出东西的选项。
+  **Plugin export now offers a "by plugin" view**: a plugin's list entry, data dirs and large files sit under one node, so one click takes everything that belongs to it; section lists gained group titles (General / AI / Extensions …) and the easily confused plugin sections were renamed (plugin list / plugin config files / plugin data dirs / plugin large files / Config Manager settings). Ownership is only shown when it can be proven — loose config files carry no package name and stay in an "unowned" bucket instead of being assigned to a plugin, and areas the registry knows about but this machine does not have are marked "no content" rather than offered as a tick that exports nothing.
 - **回退不再误伤别的对话改过的文件**：同一个项目里开着多个对话时，在一个对话里回退不会再顺手撤销别处（包括已经结束的对话）改过的文件 —— 这类文件会被跳过，结果里如实给出条数；想把它们也退回去，就在回退预览里逐条勾选要恢复的文件（设置页「维护与诊断」的回滚卡）。
   **Rewinding no longer touches files changed by other conversations**: when several conversations share one project, rewinding in one of them no longer reverts files written elsewhere (including in conversations that have already ended) — those files are skipped and the count is reported honestly; to include them anyway, tick the files you want restored in the rewind preview (the rollback card under Settings → Maintenance & diagnostics).
 

@@ -15,7 +15,8 @@
  * 单元 id 由宿主侧 ConfigAdapter.listUnits() 产出，与导入侧 PlanItem.id 同一命名空间。
  */
 import type { SectionId } from '../schema/types.ts'
-import type { ImportPlan, PlanItem, PlanItemKind, Portability } from '../core/types.ts'
+import type { ImportPlan, PlanItem, PlanItemKind, PluginAreaRef, Portability } from '../core/types.ts'
+import type { ExportGroup } from './types.ts'
 // 运行时依赖：会话 id 归一化（零依赖纯函数，客户端 bundle 可安全内联）
 import { projectKeyOf, sessionIdKey } from '../core/session-select.ts'
 
@@ -66,6 +67,14 @@ export interface SelectionUnit {
    * 而不是把 `session-<uuid>` 当标题（用户要求「始终用对话标题」）。文案由界面按当前语言解析。
    */
   blank?: boolean
+  /**
+   * 该插件**声明的**第三方数据区域（宿主下发；只有 `plugin:<包名>` 单元可能有值）。
+   *
+   * 用途：「按插件看」视图的树骨架 —— 静态知识（内置来源表 + 插件自述 dsh.dataDirs），
+   * **零数据目录 I/O**；体积与「磁盘上到底有没有」等该分区清单到货后再填。
+   * 纯展示字段，不参与勾选/导出契约（契约只认 id）。缺省 = 该插件没有已知关联（不猜）。
+   */
+  relatedAreas?: readonly PluginAreaRef[]
 }
 
 /** 一个分区及其可勾选单元；units 为空 = 本分区不可细分（UI 只给整体开关）。 */
@@ -95,6 +104,14 @@ export interface SelectionSection {
   portability?: Portability
   /** 涉及秘密状态（如 credentialsStatus）：安全提示用，绝不显示值。 */
   sensitive?: boolean
+  /**
+   * 分区所属的**导出分组**（`ui/types.ts` 的 EXPORT_GROUPS）。
+   *
+   * 用途：选择器在分组切换处插入标题行（General / 插件与扩展 / …）。渲染顺序**由调用方给的顺序
+   * 决定**（宿主目录本来已按分组排好，UI 不重排）。缺省 = 不渲染分组标题 ——
+   * 导入向导与市场通道的节点没有这个概念，行为逐像素不变。
+   */
+  group?: ExportGroup
 }
 
 /** 唯一的导出选择状态。 */
@@ -187,6 +204,8 @@ export function sectionsFromPreview(
       ...(u.projectKey !== undefined ? { projectKey: u.projectKey } : {}),
       ...(u.parentSessionId !== undefined ? { parentSessionId: u.parentSessionId } : {}),
       ...(u.blank === true ? { blank: true } : {}),
+      // 「按插件看」的树骨架（宿主下发的静态区域清单；缺省 = 该插件没有已知关联）
+      ...(u.relatedAreas !== undefined && u.relatedAreas.length > 0 ? { relatedAreas: u.relatedAreas } : {}),
     })),
   }))
 }
@@ -972,4 +991,191 @@ export function effectiveImportPlan(
    差异只剩「从 market/download 的 plan 派生节点」与「逐项摘要」两个纯展示关切 ——
    它们住在 src/ui/market-import.ts，不在这里再长第二套选择逻辑。
    ---------------------------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------------------------
+   「按插件看」第二视图（纯展示模型，node 可测）
+   ----------------------------------------------------------------------------------
+   为什么要它：插件相关的东西在导出目录里是**四处分身** —— plugins 里是「装了哪些」，
+   pluginFiles / pluginData / pluginAssets 里是它散落在别处的文件与数据。按分区平铺时，
+   「勾这个插件到底会带走什么」只能靠用户自己在两三个分区之间对照，容易漏带、也容易多带。
+
+   四条不变量：
+   ① **只做视图**：叶子仍然是原来的单元 id，勾选仍走 toggleUnit / unitChecked —— 分区勾选语义一字不改；
+   ② **不猜归属**：只有宿主下发了 `relatedAreas`（内置来源表 + 插件自述 dsh.dataDirs）且包名对得上
+      才进插件节点；pluginFiles 的单元没有任何包名信息 → 一律进「未归属」桶（绝不按目录名/文件名猜）；
+   ③ **「注册表说有」与「磁盘上真有」分开渲染**：区域清单是静态知识，该分区清单没读到时叶子是
+      `unread`（不可勾，展开时才读）；读到但该 id 不在清单里是 `absent`（不可勾，明确标「无内容」）——
+      否则会出现「勾了却没导出」的幽灵勾选（引擎只带走清单里真实存在的单元）；
+   ④ **模型不出文案**：`label` 一律是宿主直出文本（包名 / home 相对路径），界面按 kind 取 i18n 文案。
+   ---------------------------------------------------------------------------------- */
+
+/** 树上一个叶子的种类：插件清单条目 / 配置类数据区域 / 大文件区域 */
+export type PluginLeafKind = 'plugin' | 'config' | 'assets'
+
+export interface PluginTreeLeaf {
+  kind: PluginLeafKind
+  section: SectionId
+  /** 单元 id（present 时可勾；unread / absent 时只是占位，不可勾） */
+  unitId: string
+  /** 宿主直出文本：插件包名 / 区域 home 相对路径 */
+  label: string
+  /** 单元副标题（版本等；只有已读到清单时才有） */
+  detail?: string
+  sizeBytes: number
+  /** present=清单里确有该单元（可勾）；unread=该分区清单还没读；absent=已读但没有这个单元 */
+  state: 'present' | 'unread' | 'absent'
+}
+
+export interface PluginTreeEntry {
+  /** 插件包名（= plugins 单元 id 的 `plugin:` 后缀） */
+  name: string
+  /** 插件清单条目（该分区还没读到清单时为 undefined） */
+  main?: PluginTreeLeaf
+  /** 该插件声明的数据区域（宿主静态表；可能为空数组） */
+  areas: PluginTreeLeaf[]
+  /** main + areas（渲染顺序：清单条目在前，区域按宿主声明顺序） */
+  leaves: PluginTreeLeaf[]
+}
+
+/** 「无法归属到具体插件」的桶：整块来自某个分区（不猜归属）。 */
+export interface PluginTreeBucket {
+  section: SectionId
+  /** 该分区的清单是否已读到（false = 还没读 / 读取失败，界面给「读取该分区」入口） */
+  loaded: boolean
+  units: SelectionUnit[]
+}
+
+export interface PluginTree {
+  /** 插件清单是否已读到；未读到时 entries 为空（界面提示先读取插件分区） */
+  pluginsLoaded: boolean
+  entries: PluginTreeEntry[]
+  /** 桶：插件的补丁行 / pluginFiles / 未被任何插件认领的 pluginData / pluginAssets */
+  buckets: PluginTreeBucket[]
+}
+
+/** 插件单元 id 前缀（与 adapters/units.ts 的 `plugin:<包名>` 同一命名空间） */
+const PLUGIN_UNIT_PREFIX = 'plugin:'
+
+/** 把一条区域引用投影成叶子（按该分区清单是否到货决定 present / unread / absent）。 */
+function areaLeaf(node: SelectionSection | undefined, ref: PluginAreaRef): PluginTreeLeaf {
+  const unitId = ref.section + ':' + ref.relPath
+  const kind: PluginLeafKind = ref.role === 'assets' ? 'assets' : 'config'
+  const unit = node?.units.find((u) => u.id === unitId)
+  if (unit === undefined) {
+    // 分区清单没读到 → unread（展开时才去读）；读到了却没有这个单元 → absent（注册表说有、盘上没有）
+    return {
+      kind, section: ref.section, unitId, label: ref.relPath, sizeBytes: 0,
+      state: node === undefined || node.unitsUnread === true ? 'unread' : 'absent',
+    }
+  }
+  return {
+    kind, section: ref.section, unitId, label: ref.relPath,
+    ...(unit.detail !== undefined ? { detail: unit.detail } : {}),
+    sizeBytes: unit.sizeBytes,
+    state: 'present',
+  }
+}
+
+/** 把选择器分区模型投影成「按插件看」的树（纯函数）。 */
+export function pluginTree(nodes: readonly SelectionSection[]): PluginTree {
+  const bySection = new Map<SectionId, SelectionSection>()
+  for (const n of nodes) bySection.set(n.section, n)
+  const pluginsNode = bySection.get('plugins')
+  const entries: PluginTreeEntry[] = []
+  /** 已被某个插件声明的区域单元 id（用于把剩下的归进「遗留数据」桶） */
+  const claimed = new Set<string>()
+  const extras: SelectionUnit[] = []
+  for (const unit of pluginsNode?.units ?? []) {
+    if (!unit.id.startsWith(PLUGIN_UNIT_PREFIX)) {
+      // 补丁行 / pnpm-workspace.yaml：与插件无归属关系，进桶（在插件视图里也必须可见可选）
+      extras.push(unit)
+      continue
+    }
+    const name = unit.id.slice(PLUGIN_UNIT_PREFIX.length)
+    const main: PluginTreeLeaf = {
+      kind: 'plugin', section: 'plugins', unitId: unit.id, label: unit.label,
+      ...(unit.detail !== undefined ? { detail: unit.detail } : {}),
+      sizeBytes: unit.sizeBytes,
+      state: 'present',
+    }
+    const areas = (unit.relatedAreas ?? []).map((ref) => {
+      const leaf = areaLeaf(bySection.get(ref.section), ref)
+      claimed.add(leaf.unitId)
+      return leaf
+    })
+    entries.push({ name, main, areas, leaves: [main, ...areas] })
+  }
+  const buckets: PluginTreeBucket[] = []
+  const pluginExtras = bySection.get('plugins')
+  if (pluginExtras !== undefined) {
+    buckets.push({ section: 'plugins', loaded: pluginExtras.unitsUnread !== true, units: extras })
+  }
+  for (const id of ['pluginFiles', 'pluginData', 'pluginAssets'] as const) {
+    const node = bySection.get(id)
+    if (node === undefined) continue
+    // pluginFiles 没有任何包名信息（白名单文件 + plugin-config/ 目录）→ 整块归「未归属」；
+    // pluginData / pluginAssets 里没被插件声明认领的单元 = 未安装插件的遗留数据
+    const units = id === 'pluginFiles' ? node.units : node.units.filter((u) => !claimed.has(u.id))
+    buckets.push({ section: id, loaded: node.unitsUnread !== true, units })
+  }
+  return { pluginsLoaded: pluginsNode !== undefined && pluginsNode.unitsUnread !== true, entries, buckets }
+}
+
+/** 树上的搜索过滤：插件名命中 → 保留它全部叶子；否则只保留标签命中的叶子；桶按单元标签过滤。 */
+export function filterPluginTree(tree: PluginTree, query: string): PluginTree {
+  const q = query.trim().toLowerCase()
+  if (q === '') return tree
+  const hit = (text: string): boolean => text.toLowerCase().includes(q)
+  const entries = tree.entries
+    .map((e) => (hit(e.name) ? e : { ...e, leaves: e.leaves.filter((l) => hit(l.label) || hit(l.detail ?? '')) }))
+    .filter((e) => hit(e.name) || e.leaves.length > 0)
+  const buckets = tree.buckets
+    .map((b) => ({ ...b, units: b.units.filter((u) => hit(u.label) || hit(u.detail ?? '')) }))
+    .filter((b) => b.units.length > 0)
+  return { ...tree, entries, buckets }
+}
+
+/** 该插件节点下**真实可勾选**的叶子（unread / absent 不参与勾选）。 */
+export function pluginEntryLeaves(entry: PluginTreeEntry): PluginTreeLeaf[] {
+  return entry.leaves.filter((l) => l.state === 'present')
+}
+
+export function pluginEntrySelectedCount(sel: Selection, entry: PluginTreeEntry): number {
+  return pluginEntryLeaves(entry).reduce((n, l) => n + (unitChecked(sel, l.section, l.unitId) ? 1 : 0), 0)
+}
+
+/** 插件节点三态（与分区/分组同一套口径：只看真实存在的叶子）。 */
+export function pluginEntryPickState(sel: Selection, entry: PluginTreeEntry): SectionPickState {
+  const leaves = pluginEntryLeaves(entry)
+  if (leaves.length === 0) return 'none'
+  const picked = pluginEntrySelectedCount(sel, entry)
+  if (picked === 0) return 'none'
+  return picked === leaves.length ? 'all' : 'partial'
+}
+
+/**
+ * 插件节点级勾选：把它名下**存在的**单元一起勾 / 取消。
+ *
+ * 逐个走 toggleUnit：分区未勾时「勾一个单元 = 只勾这一个」的既有语义因此自动生效，
+ * 不会因为一键操作就把整个 pluginData / pluginAssets 分区静默全选。
+ */
+export function togglePluginEntry(
+  sel: Selection,
+  nodes: SelectionSection[],
+  entry: PluginTreeEntry,
+  checked: boolean,
+): Selection {
+  let out = sel
+  for (const leaf of pluginEntryLeaves(entry)) out = toggleUnit(out, nodes, leaf.unitId, checked)
+  return out
+}
+
+/** 勾上该插件前还需要读取哪些分区的清单（展开/点击时触发惰性读取）。 */
+export function pluginEntryUnreadSections(entry: PluginTreeEntry): SectionId[] {
+  const out: SectionId[] = []
+  for (const leaf of entry.leaves) {
+    if (leaf.state === 'unread' && !out.includes(leaf.section)) out.push(leaf.section)
+  }
+  return out
+}
 

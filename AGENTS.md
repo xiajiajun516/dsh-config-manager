@@ -198,11 +198,12 @@
 - **崩溃残留只放行可自证形状**：自证门仅 `backup-schedule` → `docs/lessons/recovery-console.md`。
 
 **第三方插件数据** → `docs/lessons/plugin-data-migration.md`
-- **插件数据分区的收录面只有两个来源**：内置来源表（`src/core/plugin-data-registry.ts`）+ **本机已安装插件**自述的 `dsh.dataDirs`；**包内声明的路径绝不构成写入授权**。
-- **`cache` 区域与 `excludeRel` 命中的内容永不收录**；`excludeRel` 是**区域相对**路径（写成 home 相对 = 排除永不命中）。
-- **区域被环境变量覆盖（取值 ≠ 默认位置）即报码跳过**：绝不按默认位置读、也不猜它指向哪里。
-- **这两个分区的根是系统主目录（`HostContext.osHomeDir` / `homeFs`），不是 `$DSH_HOME`**：路径解析经 `resolveFileTarget` 的分区换根、I/O 一律 `fsForSection()`；缺 `homeFs` 必须显式报码，**绝不退回 `ctx.fs`**（那会把 `~/.mnemon/x` 写成 `$DSH_HOME/.mnemon/x`）。
+- **插件数据分区的收录面只有两个来源**：内置来源表 + **已安装插件**自述的 `dsh.dataDirs`；**包内声明的路径绝不构成写入授权**。
+- **`cache` 区域与 `excludeRel` 命中的内容永不收录**；`excludeRel` 是**区域相对**路径。
+- **区域被环境变量覆盖（取值 ≠ 默认位置）即报码跳过**：绝不按默认位置读、也不猜。
+- **这两个分区的根是系统主目录（`HostContext.osHomeDir` / `homeFs`），不是 `$DSH_HOME`**：I/O 一律 `fsForSection()`；缺 `homeFs` 必须显式报码，**绝不退回 `ctx.fs`**（→ `docs/lessons/plugin-data-migration.md`）。
 - **离线 CLI 不收集 `pluginData` / `pluginAssets`**（`OFFLINE_EXCLUDED_SECTIONS`）；显式 `--sections` 请求时提示改用 GUI，不静默少收。
+- **「按插件看」归属键只有 npm 包名**：`pluginFiles` 无包名信息 ⇒ 不猜归属；注册表有而清单无的单元一律**不可勾**。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
 - **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补；**宿主模块表里的包（如 ui-primitives）只能帧内惰取 + try/catch + 回落**（`src/client/common/host-primitives.ts`）——顶层 import 会打挂整个浏览器半。
