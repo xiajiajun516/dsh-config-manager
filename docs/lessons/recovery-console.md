@@ -873,6 +873,14 @@ JSON 起于 `buf.indexOf('{"files"}')`、文件数据基址 = `8 + headerSize`�
 DESIGN.md §15b 旧注与 G-39 增量（五）③ 写的「宿主 14px」**是错的** —— 因此气泡圆角差距是 8px vs **20px**，
 不是 8 vs 14。修法不是抄数字，而是 `--cm-r-chat: var(--dsw-radius-xl, 20px)`（宿主换档自动跟随）。
 
+**动作行图标也换成宿主的（2026-10-17 第二问「复制 icon 和 icon 动画也使用 DSH 原生的」）**：
+ui-chat 的复制按钮 = `<Tooltip label><button class=action>{copied ? IconCheckOutlineRegular : IconCopyOutlineRegular}</button></Tooltip>`，
+三颗图标都从 ui-primitives 取（`lib/index.js` 里 `…OutlineRegular` = Artwork + `strokeWidth: 1`，16×16 viewBox、size 缺省 16、
+`currentColor`；整包共 328 个 `Icon*` 名字，我们只闭集取三颗）。**宿主没有形变动画** —— `.action svg` 只声明宽高，
+复制成功就是换图；所以我们把 morphicons 的 `CopyStateIcon` 降级成「拿不到宿主图标时的回落」，宿主路径只换图。
+闸门 = `common/host-primitives.ts` 的 `hostIcon()`（与 `hostFileTypeIcon` / `hostUserTextProjector` 同一条惰取纪律：
+ESM 单测里没有 `require` ⇒ 恒回 null，因此**单测只能验回落路径**，真机路径证据是 app.asar 抽出的源码）。
+
 **遗留（如实登记，未做）**：① 时间只显示时刻，不做宿主那种「今天 / 昨天」自动切换（要宿主 `clock.*` 词典）；
 ② rest 块仍是我们的 `<details>`（宿主是 JsonBlock）；③ 无宿主同款 tooltip；④ 崩溃降级只保留正文。
 

@@ -700,6 +700,17 @@
 | ⑥ 验证方式（可复现） | 源码护栏 = `src/client/chat/chat-entry-view.test.ts` 新增「气泡与动作行逐值对齐宿主：圆角 xl(20px) / 内边距 10·16 / 动作行 28+delta / 文件卡 240·64」（逐条断言镜像 token 的宿主兜底值、气泡不得再用 `display:flex`、动作行 gap/height/margin、时刻字号与右侧留白、文件卡 240×64、`:has(~ …)` 显现规则必须存在）；`css-scale-guard` / `css-token-guard` 保持绿（新值全部走 `var(--cm-*)` 或宿主变量，不新增 scale 档）。宿主取值复现脚本 = 解析 `D:/Apps/DSH/resources/app.asar` 头（`u32@0=4`、`u32@4=headerSize`、JSON 起于 `indexOf('{"files"}')`、数据基址 `8+headerSize`）后抽 `dsh/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js` 与 `…/dsh-client-ui-theme/lib/client.js`。 |
 | **NOT VERIFIED（不得读成已验证）** | ① **没有真机像素/计算样式取证**：本仓 React 无组件测试框架，浏览器也没开 CDP —— 证据止于「与宿主产物逐字同式」+ 源级护栏；② 显现语义依赖宿主把 `data-chat-flow-kind` 放在本节点的祖先上（宿主自己的 `.actions` 规则用同一属性，故结构一致）；若某宿主版本去掉该属性，规则不命中 ⇒ 退化为「动作行常显」（不会消失）；③ `:has()` 需要 Chromium 105+（DSH 桌面 0.2.0-rc.2 / Chrome 155 满足），更老的宿主上同样退化为常显。 |
 
+### G-39 增量（九）（2026-10-17：动作行图标改用宿主 `ui-primitives` 的原生图标集）
+
+> 来源 = 用户 2026-10-17 要求「复制 icon 和 icon 动画也使用 DSH 原生的」。不是新缺口，是增量（八）里「图标 15px+delta」只对齐了**尺寸**、没对齐**字形**的收尾。
+
+| 项 | 内容 |
+|---|---|
+| ① 宿主口径（本机 `app.asar` 抽出） | ui-chat 的 `MessageIconActions` 复制按钮 = `<Tooltip label={copied ? t('copied') : t('copy')}><button class=action>{copied ? <IconCheckOutlineRegular/> : <IconCopyOutlineRegular/>}</button></Tooltip>`；三颗图标都来自 `@deepseek-ai/dsh-client-ui-primitives`（`lib/index.js` 里 `…OutlineRegular` = `(props) => jsx(Artwork, {...props, strokeWidth: 1})`，Artwork 是 16×16 `viewBox` 的 `svg`、`size` 缺省 16、颜色 `currentColor`）。**宿主没有形变动画**：`.action svg` 只有宽高，复制成功就是**换图**。回退在宿主里没有对应按钮，取同一个图标集的 `IconRefreshOutlineRegular`（同一描边/视觉重量）。 |
+| ② 修法 | `common/host-primitives.ts` 新增 `hostIcon(name)`（**唯一出口**，闭集 `DshIconName` = 上述三颗）；`ChatEntryView.tsx` 的 `ChatEntryCopyAction` 走 `copied ? HostCheck : HostCopy`，回退按钮走 `HostRefresh`，两者都**保留回落**（`CopyStateIcon` / `RefreshIcon`）。宿主图标路径**不播形变动画**（与宿主一致），回落路径保留形变。 |
+| ③ 验证方式（可复现） | 源码护栏 = `src/client/chat/chat-entry-view.test.ts`「动作行图标走宿主原生（复制 → 对勾 → 回退），拿不到宿主图标时必须回落本仓库图标」（三个名字必须按 `hostIcon('…')` 取、两条回落分支必须在、复制反馈必须是换图、组件里不得裸 `require` 宿主包、闸门闭集必须逐字列这三颗）。`hostIcon` 在 node 测试里恒回 null（ESM 下没有 `require`）⇒ **只验回落路径**；真机路径证据 = app.asar 抽出的组件源码。 |
+| **NOT VERIFIED（不得读成已验证）** | ① 没有真机像素取证（同上，本仓 React 无组件测试框架、浏览器未开 CDP）；② 宿主 `Tooltip` 仍未接（我们继续用原生 `title`）—— 这一条仍留在 G-39 上表；③ 图标**尺寸**由 `.chatActionBtn svg` 的 `calc(15px + delta)` 接管（宿主同式），若宿主换默认 size 我们仍以 CSS 为准。 |
+
 ### G-24 剩余未做项（M1 复核，2026-10-06）
 
 > 本轮（M1）落地清单与口径见 §1 的「M1 落地」「M1 口径」两行。以下是**仍未做**的部分，逐条登记：

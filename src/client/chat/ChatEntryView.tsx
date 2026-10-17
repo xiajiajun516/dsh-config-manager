@@ -49,7 +49,7 @@ import {
   type ChatPointLookup,
 } from './chat-entry-view.ts'
 import { ChatPointWindowController, type ChatPointWindowState } from './chat-point-window.ts'
-import { hostFileTypeIcon, hostUserTextProjector } from '../common/host-primitives.ts'
+import { hostFileTypeIcon, hostIcon, hostUserTextProjector } from '../common/host-primitives.ts'
 import type { ArchiveOutcome } from './rollback-entry-view.ts'
 import type { ChildOpenState } from './rollback-entry-view.ts'
 import type { RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
@@ -174,6 +174,14 @@ function ChatEntryCopyAction({ text, t }: { text: string; t: TranslateNS<'config
     if (copied) return
     void copyTextToClipboard(text).then((ok) => { if (ok) setCopied(true) })
   }, [copied, text])
+  /**
+   * 图标 = **DSH 原生那两颗**（2026-10-17 用户要求「复制 icon 与动画都用 DSH 原生的」）：
+   * 宿主 MessageIconActions 的复制反馈就是 `IconCopyOutlineRegular → IconCheckOutlineRegular` 的
+   * **瞬时切换**（宿主 `.action svg` 没有任何 transition/animation —— 它的「动画」就是这一次换图）。
+   * 本仓库的 `CopyStateIcon`（morphicons 形变）只在**拿不到宿主图标的老宿主**上兜底。
+   */
+  const HostCopyIcon = hostIcon('IconCopyOutlineRegular')
+  const HostCheckIcon = hostIcon('IconCheckOutlineRegular')
   return (
     <button
       type="button"
@@ -181,8 +189,11 @@ function ChatEntryCopyAction({ text, t }: { text: string; t: TranslateNS<'config
       aria-label={copied ? t('chat.entry.copied') : t('chat.entry.copy')}
       title={copied ? t('chat.entry.copied') : t('chat.entry.copy')}
       onClick={onCopy}
+      data-copy-state={copied ? 'copied' : 'idle'}
     >
-      <CopyStateIcon done={copied} size={15} />
+      {HostCopyIcon !== null && HostCheckIcon !== null
+        ? (copied ? <HostCheckIcon size={15} /> : <HostCopyIcon size={15} />)
+        : <CopyStateIcon done={copied} size={15} />}
     </button>
   )
 }
@@ -295,6 +306,8 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
   }, [button])
 
   const bubble: ChatEntryBubbleView = view.bubble
+  /** 回退图标同样走宿主（`IconRefreshOutlineRegular`）：与复制图标同一套字形/描边；拿不到回落 RefreshIcon。 */
+  const HostRefreshIcon = hostIcon('IconRefreshOutlineRegular')
   /**
    * 附件按**content 原始顺序**输出（宿主 `attachments.map` 同构）：图片走 owner 的
    * `renderMessageImages`（每张一次调用），文件走文件卡 —— 两类**共用同一条序列**，
@@ -431,7 +444,7 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
             data-chat-entry-window-open={windowOpen ? '' : undefined}
             data-chat-entry-window-closed={windowOpen ? undefined : ''}
           >
-            <RefreshIcon size={15} />
+            {HostRefreshIcon === null ? <RefreshIcon size={15} /> : <HostRefreshIcon size={15} />}
           </button>
           )}
         </div>

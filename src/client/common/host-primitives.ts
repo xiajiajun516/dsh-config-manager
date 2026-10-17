@@ -50,11 +50,35 @@ export interface DshTagProps {
   children?: ReactNode
 }
 
+/**
+ * 宿主图标组件的入参面（只声明我们传的字段）：
+ * ui-primitives 的图标都是 `(props) => svg` 的普通组件，`size` 缺省 16、`strokeWidth` 由
+ * Artwork 决定（`…OutlineRegular` = 1px 描边），颜色走 `currentColor`。
+ */
+export interface DshIconProps {
+  /** 边长（px；宿主缺省 16）。 */
+  size?: number
+  /** 追加类名（宿主组件自己的类名照旧生效）。 */
+  className?: string
+  /** 描边宽度（我们一般不动，留给宿主 Artwork 的档位）。 */
+  strokeWidth?: number
+}
+
+/**
+ * 我们真的用到的宿主图标 —— **闭集**：名字逐字对齐 ui-primitives 的导出，
+ * 只列这三个（复制 / 已复制 / 回退），别把整张 328 个图标的表搬进来。
+ */
+export type DshIconName = 'IconCopyOutlineRegular' | 'IconCheckOutlineRegular' | 'IconRefreshOutlineRegular'
+
 /** 宿主原语包里我们消费的那几个导出（其余一律不碰）。 */
 interface HostPrimitivesFace {
   FileTypeIcon?: unknown
   projectUserText?: unknown
   Tag?: unknown
+  /** 图标（闭集，见 {@link DshIconName}）。 */
+  IconCopyOutlineRegular?: unknown
+  IconCheckOutlineRegular?: unknown
+  IconRefreshOutlineRegular?: unknown
 }
 
 let cached: HostPrimitivesFace | null | undefined
@@ -88,6 +112,20 @@ export function hostFileTypeIcon(): ComponentType<DshFileTypeIconProps> | null {
 export function hostTag(): ComponentType<DshTagProps> | null {
   const tag = hostPrimitives()?.Tag
   if (typeof tag === 'function' || typeof tag === 'object') return tag as ComponentType<DshTagProps>
+  return null
+}
+
+/**
+ * DSH 自带的图标组件（按导出名取；拿不到回 null ⇒ 调用方回落本仓库的图标）。
+ *
+ * 为什么按名字取而不是顶层 import：与 FileTypeIcon / projectUserText 同一条纪律（老宿主没有
+ * 这份模块表，顶层 import 会把整个浏览器半打挂）；**为什么要用宿主图标**（2026-10-17 用户要求）：
+ * 复制按钮在 DSH 里是 `IconCopyOutlineRegular → IconCheckOutlineRegular` 的**瞬时切换**（无形变动画），
+ * 回退用 `IconRefreshOutlineRegular` —— 与动作行同框时字形、描边、视觉重量才与原生一致。
+ */
+export function hostIcon(name: DshIconName): ComponentType<DshIconProps> | null {
+  const icon = hostPrimitives()?.[name]
+  if (typeof icon === 'function' || typeof icon === 'object') return icon as ComponentType<DshIconProps>
   return null
 }
 

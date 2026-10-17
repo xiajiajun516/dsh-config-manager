@@ -451,6 +451,28 @@ test('气泡字号/行高/限宽跟随宿主内容字号（不得再写死 12.5p
 })
 
 /**
+ * 2026-10-17（用户要求「复制 icon 和 icon 动画也使用 DSH 原生的」）：动作行图标必须走宿主
+ * ui-primitives 的原生图标集，且**必须保留回落**（老宿主没有那份模块表 ⇒ hostIcon() 回 null）。
+ * 宿主口径（app.asar 抽出，ui-primitives/lib/index.js）：`IconCopyOutlineRegular` / `IconCheckOutlineRegular`
+ * / `IconRefreshOutlineRegular`，都是普通 `(props) => svg` 组件（size 缺省 16、Regular 档 1px 描边、
+ * 颜色 currentColor）；宿主的复制反馈是**直接换图**（`.action svg` 没有任何 transition/animation）。
+ */
+test('动作行图标走宿主原生（复制 → 对勾 → 回退），拿不到宿主图标时必须回落本仓库图标', () => {
+  const entry = sourceOf('ChatEntryView.tsx')
+  for (const name of ['IconCopyOutlineRegular', 'IconCheckOutlineRegular', 'IconRefreshOutlineRegular']) {
+    assert.match(entry, new RegExp("hostIcon\\('" + name + "'\\)"), '动作行图标必须按名字取宿主的 ' + name)
+  }
+  assert.match(entry, /<CopyStateIcon done=\{copied\} size=\{15\} \/>/, '拿不到宿主图标时必须回落 morphicons 的 CopyStateIcon（不能变成空白按钮）')
+  assert.match(entry, /<RefreshIcon size=\{15\} \/>/, '拿不到宿主图标时必须回落本仓库的 RefreshIcon')
+  assert.match(entry, /copied \? <HostCheckIcon size=\{15\} \/> : <HostCopyIcon size=\{15\} \/>/, '复制反馈必须是宿主的**换图**（不是形变动画）')
+  // 闸门只有一处：宿主图标必须经 common/host-primitives.ts 的 hostIcon（不许在组件里裸 require）
+  assert.doesNotMatch(entry, /require\(['"]@deepseek-ai/, '组件里不得裸 require 宿主包（唯一出口 = host-primitives.ts）')
+  const gate = readFileSync(join(HERE, '..', 'common', 'host-primitives.ts'), 'utf8')
+  assert.match(gate, /export function hostIcon\(name: DshIconName\)/, 'hostIcon 必须按闭集名字取图标')
+  assert.match(gate, /type DshIconName = 'IconCopyOutlineRegular' \| 'IconCheckOutlineRegular' \| 'IconRefreshOutlineRegular'/, '闭集必须逐字列这三颗，不搬整张图标表')
+})
+
+/**
  * 2026-10-17（用户要求「与 DSH 原生气泡完全一致」）：§15b 的几何/字号必须与宿主
  * MessageItem + MessageIconActions 的**同一条取值**逐字同式（宿主产物抽出的取值清单见
  * docs/spec/known-gaps.md 的「G-39 增量（八）」）。这张用例是那条口径的源级护栏：
