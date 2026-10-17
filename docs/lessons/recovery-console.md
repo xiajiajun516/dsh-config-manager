@@ -680,3 +680,34 @@ Electron 的 asar 报错、crashpad `not connected`。对照 09-30 / 10-01 / 10-
 
 **教训**：① **宿主 fs 的 `.asar` 虚拟化按「路径段」生效，与文件真假无关** —— 不能拿「读文件本身是安全的」当理由；
 ② **归因必须 A/B**：第一次只做了源码阅读 + 单调用实测就下结论，错过了一整个「改个名就能证伪」的机会。
+
+## 回退的会话隔离：写入归属台账 + 路径级选择性恢复（2026-10-17）
+
+**问题（用户实测反馈）**：工作区里对话 A 改了文件，**已经结束的**对话 B 回退时把 A 的改动一起撤销了。
+根因不是缺陷而是粒度：回滚点的「工作区态」是**整棵树**的捕获（`chunks = [会话 cwd]`），回退也按整棵树执行 ——
+与「谁改的」无关。同一工作区实测：3 个对话 5 个点，`chunks` 全部逐字相同；单点记录 7,269 ~ 38,138 条文件。
+
+**为什么做不到「按会话自动分文件」**：捕获只存内容（path + sha256），没有任何「哪个会话写的」字段；
+唯一可替代的信号「两点之间的内容差异」会把窗口内**别的**对话的改动一起算进来（半隔离，仍会误伤），
+而 tool-call 参数归属对 bash / 脚本 / 外部编辑器写的路径拿不到 —— 拿不准的归属用在破坏性写操作上比不隔离更危险。
+
+**修法（互相配合的三条）**：
+1. **写入归属台账**（`src/core/rollback-attribution.ts`）：`session/event` 的 `tool/call` 事件带
+   `callId`/`name`/`arguments`（JSON 字符串）⇒ 对**写类工具白名单**（write / edit / ops_replace…）
+   抽出 `file_path`/`path`，记「路径 → {sessionId, tool, callId, at, turn}」。落盘
+   `dataDir/rollback-points/attribution.json`（debounce 1 s、原子写、条目上限 20,000 淘汰最旧、读写失败只 warn）。
+   **未判定绝不当作「别的会话写的」**：读工具（read/grep）里的 path 不入表（否则回退会误跳过文件）。
+2. **回退时自动跳过**（未显式点名时）：`writer.sessionId !== record.sessionId && writer.at > track.capturedAt`
+   ⇒ 该记录条目不写，计入 `foreignSkipped` 并进 detail；**显式 `onlyPaths` 压过归属隔离**（用户明确要它）。
+3. **路径级选择性恢复**（`onlyPaths`）：面板预览逐文件勾选（默认只勾非 foreign 的行）；点名一个
+   「既未记录、也不在删除候选」的路径 ⇒ `invalid-input` **零写入**；全选 ⇒ 不传字段（走既有全量口径）。
+
+**判据 / 不变量**：foreign 只在**确知**时才标（有归属 + 不是本会话 + 时间晚于留点）；三条都是「少做」的安全方向；
+顶层 `code` 仍是既有口径（工作区段失败 = `restore-failed`），具体原因在**段**的 `reasonCode`/`detail` 里逐字可查。
+
+**测试**：`src/core/rollback-attribution.test.ts`（9 条：白名单 / 解析 / 去重 / 落盘回读 / 淘汰 / 落盘失败只 warn）、
+`rollback-point.test.ts` 的 A-1 / A-2 / B-1 / B-2 / B-3（选择、fail-closed、隔离、未判定、点名压过）、
+`rollback-view.test.ts` 的选择模型（默认勾选 / 全选不传 / 空选拦住）。全量 `npm test` = 4555 项、0 失败。
+
+**AGENTS.md 未加行（如实）**：`node scripts/check-agents-budget.mjs` 报 28650 B / 硬上限 28672 B（余 22 B），
+本轮规则只落在本文件；要进 AGENTS.md 需先腾出约 150 B。
