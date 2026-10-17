@@ -3518,3 +3518,160 @@ test('B-3 显式点名压过归属隔离：用户明确要它，归属不再拦'
   assert.equal(await readText(a), 'A1', '显式点名 = 用户要它，归属隔离不再生效')
   assert.equal(result.segments.find((s) => s.state === 'workspace')?.foreignSkipped, undefined)
 })
+
+/* ------------------------------------------------------------------ 跨对话三方合并（2026-10-17） */
+
+const V0_TEXT = 'line1\nline2\nline3\nline4\nline5\n'
+
+test('C-1 A、B 改同一文件的不同区域 ⇒ 撤销 A、保留 B（按最终内容断言）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  // 引擎时钟每次 +1ms ⇒ 三个时刻严格递增（同毫秒会让「目标点之后最早的点」找不到）
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  // A 改第 1 行 ⇒ V1
+  const v1 = 'A-changed\nline2\nline3\nline4\nline5\n'
+  await fs.writeFile(file, v1)
+  // B 的回合开始 ⇒ 它的点内容 = V1（三方合并的 base）
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  // B 改第 5 行 ⇒ V2
+  await fs.writeFile(file, 'A-changed\nline2\nline3\nline4\nB-changed\n')
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c1', arguments: JSON.stringify({ file_path: file }) })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), 'line1\nline2\nline3\nline4\nB-changed\n', 'A 的第 1 行被撤销、B 的第 5 行被保留')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.mergedCount, 1)
+  assert.equal(segment?.conflictCount, undefined)
+})
+
+test('C-2 A、B 改同一行 ⇒ 报冲突、文件保持 B 的版本（绝不自动选边）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'line1\nline2\nA-same\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  const v2 = 'line1\nline2\nB-same\nline4\nline5\n'
+  await fs.writeFile(file, v2)
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c2', arguments: JSON.stringify({ file_path: file }) })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), v2, '冲突时一个字节都不写')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.conflictCount, 1)
+  assert.deepEqual(segment?.conflictPaths, [file])
+})
+
+test('C-3 B 在留点后删除了文件 ⇒ 不重建（theirs-missing，如实报告）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'A-changed\nline2\nline3\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  await fs.rm(file)
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c3', arguments: JSON.stringify({ file_path: file }) })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  await assert.rejects(fs.stat(file), '别人删掉的文件不得被这次回退悄悄重建')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.unavailableCount, 1)
+  assert.equal(segment?.mergedCount, undefined)
+})
+
+test('C-4 删除集保护：留点后由别的会话新建/写入的路径不被删', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  const created = path.join(fx.workspaceDir, 'other.txt')
+  await fs.writeFile(created, 'by B')
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c4', arguments: JSON.stringify({ file_path: created }) })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files', removeCreated: true })
+  assert.equal(await readText(created), 'by B', '别的会话新建的文件不得被删')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal((segment?.createdSkipped ?? []).includes(created), true)
+})
+
+test('C-5 合并之后、写入之前文件又被改过 ⇒ 放弃写入（并发保护）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'A-changed\nline2\nline3\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  await fs.writeFile(file, 'A-changed\nline2\nline3\nline4\nB-changed\n')
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c5', arguments: JSON.stringify({ file_path: file }) })
+  // 在「前像暂存」这一步模拟外部再改一次（它紧跟在合并与 needed 判定之后、真正写入之前）
+  const self = engine as unknown as { openUndoStager: () => Promise<unknown> }
+  const original = self.openUndoStager.bind(engine)
+  self.openUndoStager = async () => {
+    await fs.writeFile(file, 'EXTERNAL-TOUCH\n')
+    return await original()
+  }
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), 'EXTERNAL-TOUCH\n', '比我们更新的内容绝不被覆盖')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.concurrentCount, 1)
+})
+
+test('C-6 没有中间版本 ⇒ 不写、如实报告（no-base）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  const later = 'line1\nline2\nline3\nline4\nSOMEONE-ELSE\n'
+  await fs.writeFile(file, later)
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c6', arguments: JSON.stringify({ file_path: file }) })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), later, '拿不到共同祖先就不动它')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.unavailableCount, 1)
+})
+
+test('C-7 对方没改过（theirs==base）⇒ 照常恢复本会话的目标版本', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr, now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  const v1 = 'A-changed\nline2\nline3\nline4\nline5\n'
+  await fs.writeFile(file, v1)
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  // 归属表明「别的会话碰过它」，但内容其实没变（= base）⇒ 合并结果 = ours ⇒ 照常回退
+  attr.noteToolCall('session-B', { name: 'write', callId: 'c7', arguments: JSON.stringify({ file_path: file }) })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), V0_TEXT, '对方没动过 ⇒ 回到目标版本')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.mergedCount, 1)
+})

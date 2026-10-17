@@ -74,6 +74,7 @@ import { diffLines, type DiffHunk } from '../utils/line-diff.ts'
 import { projectKeyOf } from './session-select.ts'
 import { ignoreRelativePath, ignoreRuleMatches, loadIgnoreRules, type IgnoreRules } from './rollback-ignore-rules.ts'
 import type { RollbackWriteAttributionPort, RollbackWriteFact, RollbackWriteRecorder } from './rollback-attribution.ts'
+import { mergeThreeWay } from './rollback-merge.ts'
 import { isSessionLogName } from '../utils/session-log.ts'
 import { decodeZstdFrame, scanZstdFrames, zstdAvailable, ZSTD_MAGIC } from '../utils/zstd-frame.ts'
 import {
@@ -985,6 +986,18 @@ export interface RollbackSegmentResult {
    * 只在**没有显式点名**（`onlyPaths` 缺省）时生效；显式点名 = 用户明确要它，归属不再拦。
    */
   foreignSkipped?: number
+  /** 三方合并成功、写回「撤销本会话 + 保留对方改动」的条目数（有界清单同给） */
+  mergedCount?: number
+  mergedPaths?: string[]
+  /** 冲突：两侧改到同一处 ⇒ **未写**，交给用户处理 */
+  conflictCount?: number
+  conflictPaths?: string[]
+  /** 无法安全撤销（无中间版本 / 二进制 / 差异被降级 / 对方改成了不存在）⇒ **未写** */
+  unavailableCount?: number
+  unavailablePaths?: string[]
+  /** 写入前发现又被改过（并发）⇒ **未写** */
+  concurrentCount?: number
+  concurrentPaths?: string[]
   /** 会话段：fork 出来的子会话 id */
   childSessionId?: string
   guidance?: RollbackGuidance[]
@@ -4208,6 +4221,85 @@ export class RollbackPointEngine {
     return null
   }
 
+  /**
+   * 把一条「留点之后被**别的会话**写过」的记录做成三方合并结果（2026-10-17 跨对话安全回退）。
+   *
+   * 三方：`ours` = 记录里的内容（回退目标）、`base` = 目标点之后**最早**那份中间版本、
+   * `theirs` = 当前磁盘。结果是「撤销本会话那次改动 + 保留对方后来的改动」。
+   *
+   * 返回：`write`（合并干净且确实要写，带目标哈希 + 期望的当前哈希）、
+   * `unchanged`（合并结果就是当前内容 —— 对方没动这一处，本来就不需要写）、
+   * `blocked`（不能安全处理：冲突 / 没有中间版本 / 二进制 / 差异被降级 / 对方改成了不存在 / 读不出）。
+   */
+  private async mergeForeignRecord(
+    file: RollbackWorkspaceFile,
+    afterAt: number,
+  ): Promise<
+    | { kind: 'write'; bytes: Uint8Array; sha256: string; expectedCurrent: string }
+    | { kind: 'unchanged' }
+    | { kind: 'blocked'; reason: 'conflict' | 'no-base' | 'binary' | 'degraded' | 'theirs-missing' | 'theirs-unreadable' | 'ours-unreadable' }
+  > {
+    let oursBytes: Uint8Array
+    try {
+      oursBytes = await this.readObject(file.object)
+      if (sha256Hex(oursBytes) !== file.sha256) return { kind: 'blocked', reason: 'ours-unreadable' }
+    } catch {
+      return { kind: 'blocked', reason: 'ours-unreadable' }
+    }
+    let theirsBytes: Uint8Array
+    try {
+      theirsBytes = await fs.readFile(file.path)
+    } catch (error) {
+      return { kind: 'blocked', reason: (error as { code?: unknown }).code === 'ENOENT' ? 'theirs-missing' : 'theirs-unreadable' }
+    }
+    const baseText = await this.baseVersionFor(file.path, afterAt)
+    if (baseText === null) return { kind: 'blocked', reason: 'no-base' }
+    // 二进制：任何一侧含 NUL 就绝不按文本合并（三方合并算法只对文本有定义）
+    if (oursBytes.includes(0) || theirsBytes.includes(0) || baseText.includes('\u0000')) return { kind: 'blocked', reason: 'binary' }
+    const theirsText = Buffer.from(theirsBytes).toString('utf8')
+    const result = mergeThreeWay(Buffer.from(oursBytes).toString('utf8'), baseText, theirsText)
+    if (!result.ok) {
+      return { kind: 'blocked', reason: result.reason === 'conflict' ? 'conflict' : result.reason === 'degraded' ? 'degraded' : 'binary' }
+    }
+    if (result.text === theirsText) return { kind: 'unchanged' }
+    const bytes = Buffer.from(result.text, 'utf8')
+    return { kind: 'write', bytes, sha256: sha256Hex(bytes), expectedCurrent: sha256Hex(theirsBytes) }
+  }
+
+  /**
+   * 三方合并的 **base**：目标点之后**最早**那份仍含该路径的中间版本（共同祖先）。
+   *
+   * 为什么这么取：回滚点的「工作区态」是回合开始前拍的 ⇒ 别的会话那个回合的点，
+   * 正好是「本会话改动之后、对方改动之前」的版本 —— 标准三方合并的共同祖先。
+   * 取**最早**而不是最近是刻意选安全方向：宁可少撤销，也绝不把对方更晚的改动算进 ours 侧。
+   *
+   * 排除三类：目标点自己（`createdAt > afterAt`）、**救援点 guard**（它在执行回退那一刻拍，
+   * 内容 ≈ 当前磁盘，拿它当 base 会让合并结果直接等于 ours = 整文件覆盖，正是本机制要消灭的形态）、
+   * 以及内容读不出来的点（继续往后找 —— 找不到 ⇒ 调用方按「无法安全撤销」处理，绝不用近似值代替）。
+   */
+  private async baseVersionFor(target: string, afterAt: number): Promise<string | null> {
+    const ledger = await this.readManifest()
+    const key = pathKey(target)
+    const candidates = ledger.entries
+      .filter((entry) => entry.createdAt > afterAt && entry.kind !== 'guard')
+      .sort((left, right) => (left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : 0))
+    for (const entry of candidates) {
+      const resolved = await this.readFullRecord(entry.id)
+      const payload = resolved.record?.workspace.payload
+      if (payload === null || payload === undefined) continue
+      const hit = payload.files.find((item) => pathKey(item.path) === key)
+      if (hit === undefined) continue
+      try {
+        const bytes = await this.readObject(hit.object)
+        if (sha256Hex(bytes) !== hit.sha256) continue
+        return Buffer.from(bytes).toString('utf8')
+      } catch {
+        continue
+      }
+    }
+    return null
+  }
+
   private async restoreWorkspace(
     track: RollbackTrack<RollbackWorkspacePayload>,
     options: { removeCreated?: boolean; onlyPaths?: readonly string[]; sessionId?: string } = {},
@@ -4254,10 +4346,28 @@ export class RollbackPointEngine {
         }
       }
     }
-    const writable: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
+    /**
+     * 待写条目。`sha256` / `expectedCurrent` **只被三方合并路径**使用：
+     *  · `sha256` = 这次真正要写进去的内容哈希（普通路径恒等于记录里的 `file.sha256`）；
+     *  · `expectedCurrent` = 合并时读到的「当前磁盘」哈希 —— 写入前必须仍是它，否则说明
+     *    文件在预览/合并之后又被改过 ⇒ **放弃写入**（并发保护：绝不覆盖比我们更新的内容）。
+     */
+    const writable: { file: RollbackWorkspaceFile; bytes: Uint8Array; sha256?: string; expectedCurrent?: string }[] = []
     let failed = 0
     // 「已与记录一致」的条目数（身份快路径证明）—— 后面「0 变更」的文案与统计要用
     let unchanged = 0
+    /** 三方合并成功、写回「撤销本会话 + 保留对方改动」结果的条目数 */
+    let mergedCount = 0
+    /** 冲突：两侧改到同一处 ⇒ 绝不自动选边，交给用户 */
+    let conflictCount = 0
+    /** 无法安全撤销：没有中间版本 / 二进制 / 差异被降级 / 对方把它改成了不存在 */
+    let unavailableCount = 0
+    /** 写入前发现文件又被改过（并发）⇒ 放弃写入 */
+    let concurrentCount = 0
+    const mergedPaths: string[] = []
+    const conflictPaths: string[] = []
+    const unavailablePaths: string[] = []
+    const concurrentPaths: string[] = []
     for (const file of payload.files) {
       // 路径级选择：没被点名的记录条目**不写**（用户自己的选择，不是安全判据）
       if (selection !== null && !selection.has(pathKey(file.path))) {
@@ -4269,7 +4379,30 @@ export class RollbackPointEngine {
       if (foreignSkipEnabled) {
         const writer = this.attribution?.writerOf(file.path)
         if (writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > track.capturedAt) {
+          // 归属隔离的**合并版**（2026-10-17 跨对话安全回退）：不整文件覆盖，而是三方合并 ——
+          // 撤销本会话那次改动、保留对方后来的改动。合并不了 ⇒ 一条都不写，如实报告。
+          const outcome = await this.mergeForeignRecord(file, track.capturedAt)
+          if (outcome.kind === 'write') {
+            writable.push({
+              file, bytes: outcome.bytes, sha256: outcome.sha256, expectedCurrent: outcome.expectedCurrent,
+            })
+            mergedCount += 1
+            if (mergedPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) mergedPaths.push(file.path)
+            continue
+          }
+          if (outcome.kind === 'unchanged') {
+            unchanged += 1
+            continue
+          }
           foreignSkipped += 1
+          if (outcome.reason === 'conflict') {
+            conflictCount += 1
+            if (conflictPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) conflictPaths.push(file.path)
+          } else {
+            unavailableCount += 1
+            if (unavailablePaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) unavailablePaths.push(file.path)
+          }
+          pushDetail(detail, 'foreign-' + outcome.reason + ' ' + file.path + ' zeroWrites=true')
           continue
         }
       }
@@ -4309,8 +4442,12 @@ export class RollbackPointEngine {
       pushDetail(detail, 'selection-skipped=' + String(selectionSkipped) + ' selection=' + String(selection?.size ?? 0))
     }
     if (foreignSkipped > 0) {
-      pushDetail(detail, 'foreign-skipped=' + String(foreignSkipped) + ' (records written by other sessions after this point; left untouched)')
+      pushDetail(detail, 'foreign-skipped=' + String(foreignSkipped) + ' (records written by other sessions after this point; not overwritten)')
     }
+    if (mergedCount > 0) pushDetail(detail, 'foreign-merged=' + String(mergedCount) + ' (reverted this session, kept the other side)')
+    if (conflictCount > 0) pushDetail(detail, 'foreign-conflict=' + String(conflictCount) + ' (both sides changed the same place; needs a human)')
+    if (unavailableCount > 0) pushDetail(detail, 'foreign-unavailable=' + String(unavailableCount) + ' (no safe way to revert; left untouched)')
+    if (concurrentCount > 0) pushDetail(detail, 'concurrent-change=' + String(concurrentCount) + ' (changed again after the merge; left untouched)')
     const leftovers = {
       leftovers: plan.all.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT),
       truncated: plan.truncated,
@@ -4318,9 +4455,30 @@ export class RollbackPointEngine {
     }
     // 用户 2026-10-11 定案 A：把「回退点之后新建」的路径也退回去（删除）。
     // removeCreated !== true ⇒ 只报告（paths 清空）；判据仍是同一份 plan。
-    const removal = options.removeCreated === true
+    // 归属保护同样作用于**删除集**（2026-10-17 跨对话安全回退）：某路径若在留点之后被**别的会话**
+    // 写过，删它同样是在销毁别人的工作 ⇒ 拒删（进 createdSkipped；预览与执行共用同一份规划，
+    // 所以界面看到的「不会删」与执行端的「真的没删」仍然一致）。
+    const removalPlan = options.removeCreated === true
       ? { paths: plan.paths, skipped: plan.skipped, truncated: plan.truncated, refused: plan.refused }
       : { paths: [] as string[], skipped: [] as string[], truncated: false, refused: null as CreatedRemovalPlan['refused'] }
+    const protectedRemovals: string[] = []
+    if (foreignSkipEnabled && removalPlan.paths.length > 0) {
+      const keep: string[] = []
+      for (const target of removalPlan.paths) {
+        const writer = this.attribution?.writerOf(target)
+        if (writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > track.capturedAt) {
+          protectedRemovals.push(target)
+          removalPlan.skipped.push(target)
+          continue
+        }
+        keep.push(target)
+      }
+      removalPlan.paths = keep
+    }
+    const removal = removalPlan
+    if (protectedRemovals.length > 0) {
+      pushDetail(detail, 'foreign-removal-protected=' + String(protectedRemovals.length) + ' (written by other sessions; not deleted)')
+    }
     if (removal.paths.length > ROLLBACK_MAX_CREATED_REMOVALS) {
       detail.push('created-removals=' + String(removal.paths.length) + ' limit=' + String(ROLLBACK_MAX_CREATED_REMOVALS) + ' zeroWrites=true')
       return {
@@ -4343,13 +4501,30 @@ export class RollbackPointEngine {
     }
     // E1：内容已与快照一致的条目**不再写** —— 「0 变更」就要是真的 0 次写入
     // （否则工作区已与该点一致时也会重写全部文件，白耗 I/O 并抖动 mtime）。
-    const needed: { file: RollbackWorkspaceFile; bytes: Uint8Array }[] = []
+    const needed: { file: RollbackWorkspaceFile; bytes: Uint8Array; sha256?: string; expectedCurrent?: string }[] = []
     for (const item of writable) {
+      const targetSha = item.sha256 ?? item.file.sha256
+      // 合并路径的**并发闸门**：写入前必须确认磁盘上仍是合并时读到的那一份
+      if (item.expectedCurrent !== undefined) {
+        let current: string | null = null
+        try {
+          current = sha256Hex(await fs.readFile(item.file.path))
+        } catch {
+          current = null
+        }
+        if (current !== item.expectedCurrent) {
+          concurrentCount += 1
+          if (concurrentPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) concurrentPaths.push(item.file.path)
+          pushDetail(detail, 'concurrent-change ' + item.file.path + ' zeroWrites=true')
+          continue
+        }
+      }
       let identical = false
       try {
         const stat = await fs.stat(item.file.path)
-        if (stat.isFile() && stat.size === item.file.bytes) {
-          identical = sha256Hex(await fs.readFile(item.file.path)) === item.file.sha256
+        // 长度比的是**这次要写进去的那份内容**（合并路径下它与记录里的原文长度不一定相同）
+        if (stat.isFile() && stat.size === item.bytes.byteLength) {
+          identical = sha256Hex(await fs.readFile(item.file.path)) === targetSha
         }
       } catch {
         identical = false
@@ -4371,6 +4546,10 @@ export class RollbackPointEngine {
       if (removal.refused !== null) noop.createdRefusedReason = removal.refused
       if (selectionSkipped > 0) noop.selectionSkipped = selectionSkipped
       if (foreignSkipped > 0) noop.foreignSkipped = foreignSkipped
+      if (mergedCount > 0) { noop.mergedCount = mergedCount; noop.mergedPaths = mergedPaths }
+      if (conflictCount > 0) { noop.conflictCount = conflictCount; noop.conflictPaths = conflictPaths }
+      if (unavailableCount > 0) { noop.unavailableCount = unavailableCount; noop.unavailablePaths = unavailablePaths }
+      if (concurrentCount > 0) { noop.concurrentCount = concurrentCount; noop.concurrentPaths = concurrentPaths }
       return noop
     }
     // 前像（**字节落盘、索引随栈**）：失败时要能整体回到恢复前状态 —— 只覆盖**真会被写**的文件。
@@ -4385,6 +4564,30 @@ export class RollbackPointEngine {
         restored: 0, failed: needed.length + removal.paths.length,
         leftovers: leftovers.leftovers, leftoversTruncated: leftovers.truncated,
       }
+    }
+    // **最终并发校验**（紧邻写入之前）：合并/预览之后文件可能又被改过。前一刻的 needed 判定与
+    // 真正写入之间还隔着前像暂存，所以这里再确认一次；不符的条目直接摘掉 ——
+    // 绝不覆盖比我们更新的内容。
+    if (needed.some((item) => item.expectedCurrent !== undefined)) {
+      const keep: typeof needed = []
+      for (const item of needed) {
+        if (item.expectedCurrent === undefined) { keep.push(item); continue }
+        let current: string | null = null
+        try {
+          current = sha256Hex(await fs.readFile(item.file.path))
+        } catch {
+          current = null
+        }
+        if (current !== item.expectedCurrent) {
+          concurrentCount += 1
+          if (concurrentPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) concurrentPaths.push(item.file.path)
+          pushDetail(detail, 'concurrent-change ' + item.file.path + ' zeroWrites=true')
+          continue
+        }
+        keep.push(item)
+      }
+      needed.length = 0
+      needed.push(...keep)
     }
     const preCount = needed.length
     for (const item of needed) {
@@ -4439,7 +4642,8 @@ export class RollbackPointEngine {
       for (const item of needed) {
         try {
           const current = await this.readFileBytes(item.file.path)
-          if (sha256Hex(current) !== item.file.sha256) mismatched.push(item.file.path)
+          // 合并路径写入的不是记录里的原文，而是合并结果 ⇒ 复核必须比**这次真正写进去的那份**
+          if (sha256Hex(current) !== (item.sha256 ?? item.file.sha256)) mismatched.push(item.file.path)
         } catch {
           mismatched.push(item.file.path)
         }
@@ -4524,6 +4728,10 @@ export class RollbackPointEngine {
     }
     if (selectionSkipped > 0) segment.selectionSkipped = selectionSkipped
     if (foreignSkipped > 0) segment.foreignSkipped = foreignSkipped
+    if (mergedCount > 0) { segment.mergedCount = mergedCount; segment.mergedPaths = mergedPaths }
+    if (conflictCount > 0) { segment.conflictCount = conflictCount; segment.conflictPaths = conflictPaths }
+    if (unavailableCount > 0) { segment.unavailableCount = unavailableCount; segment.unavailablePaths = unavailablePaths }
+    if (concurrentCount > 0) { segment.concurrentCount = concurrentCount; segment.concurrentPaths = concurrentPaths }
     // 捕获不完整 ⇒ 一条都没删：如实回报原因（界面据此说「因为捕获不完整，一条都没动」）
     if (removal.refused !== null) segment.createdRefusedReason = removal.refused
     // 前像字节用完即清（成功路径）：留在磁盘上只会变成无人认领的残留

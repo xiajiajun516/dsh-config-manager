@@ -591,6 +591,18 @@ export interface RollbackSegmentResult {
   foreignSkipped?: number
   /** 因路径选择（A）跳过的记录条目数（宿主回传才有） */
   selectionSkipped?: number
+  /** 三方合并成功、写回「撤销本会话 + 保留对方改动」的条目数（宿主回传才有） */
+  mergedCount?: number
+  mergedPaths?: string[]
+  /** 冲突：两侧改到同一处 ⇒ 未写（宿主回传才有） */
+  conflictCount?: number
+  conflictPaths?: string[]
+  /** 无法安全撤销 ⇒ 未写（宿主回传才有） */
+  unavailableCount?: number
+  unavailablePaths?: string[]
+  /** 写入前发现又被改过（并发）⇒ 未写（宿主回传才有） */
+  concurrentCount?: number
+  concurrentPaths?: string[]
   /** 兼容形态：宿主只回传计数时也算得出来 */
   createdAfter?: RollbackCount
   createdAfterTruncated?: boolean
@@ -1413,6 +1425,15 @@ export interface RollbackRewindRowView {
   foreignSkipped: number
   /** 路径选择（A）跳过的文件数（用户自己没勾） */
   selectionSkipped: number
+  /** 三方合并成功、写回「撤销本会话 + 保留对方改动」的文件数 */
+  mergedCount: number
+  /** 冲突（两侧改到同一处）未写的文件数 + 有界清单 */
+  conflictCount: number
+  conflictPaths: string[]
+  /** 无法安全撤销（无中间版本 / 二进制 / 降级 / 对方删了它）未写的文件数 */
+  unavailableCount: number
+  /** 写入前发现又被改过（并发）未写的文件数 */
+  concurrentCount: number
 }
 
 export function rollbackRewindRows(result: RollbackRewindResult | null): RollbackRewindRowView[] {
@@ -1441,6 +1462,11 @@ export function rollbackRewindRows(result: RollbackRewindResult | null): Rollbac
       guidance: rollbackGuidanceRows(segment.guidance),
       foreignSkipped: numberOrNull(segment.foreignSkipped) ?? 0,
       selectionSkipped: numberOrNull(segment.selectionSkipped) ?? 0,
+      mergedCount: numberOrNull(segment.mergedCount) ?? 0,
+      conflictCount: numberOrNull(segment.conflictCount) ?? 0,
+      conflictPaths: redactLines(segment.conflictPaths),
+      unavailableCount: numberOrNull(segment.unavailableCount) ?? 0,
+      concurrentCount: numberOrNull(segment.concurrentCount) ?? 0,
     }
   })
 }

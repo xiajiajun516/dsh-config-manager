@@ -819,6 +819,20 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                       {segment.selectionSkipped > 0 && (
                         <span>{t('rollback.result.selectionSkipped', { n: segment.selectionSkipped })}</span>
                       )}
+                      {/* 三方合并的四态（2026-10-17）：合并成功 / 冲突 / 无法安全撤销 / 并发变化 —— 一条都不能省 */}
+                      {segment.mergedCount > 0 && (
+                        <span>{t('rollback.result.merged', { n: segment.mergedCount })}</span>
+                      )}
+                      {segment.conflictCount > 0 && (
+                        <span>{t('rollback.result.conflict', { n: segment.conflictCount })}</span>
+                      )}
+                      {segment.unavailableCount > 0 && (
+                        <span>{t('rollback.result.unavailable', { n: segment.unavailableCount })}</span>
+                      )}
+                      {segment.concurrentCount > 0 && (
+                        <span>{t('rollback.result.concurrent', { n: segment.concurrentCount })}</span>
+                      )}
+                      {segment.conflictPaths.map((line) => <span key={'conflict:' + line}>{line}</span>)}
                       {segment.detail.map((line) => <span key={line}>{line}</span>)}
                       {segment.guidance.map((row) => (
                         <span key={row.key + (row.detail ?? '')}>{t(dyn(row.key))}{row.detail !== null ? ' — ' + row.detail : ''}</span>
