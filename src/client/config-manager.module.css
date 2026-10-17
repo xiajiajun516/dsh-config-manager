@@ -5478,16 +5478,26 @@ button.profileRowMain:hover {
   word-break: break-all;
 }
 
-/* 动作行：时间 + 复制 + 回退（宿主把 MessageIconActions 与气泡并排在同一行） */
+/* 动作行：宿主 MessageIconActions = .actions（height 28px+delta / gap 8px）+ MessageItem 的
+   .actions（margin-top:4px / margin-left:-6px，用负外边距把图标行与气泡右缘对齐）。
+   ⚠️ 这块**不能**用 --cm-r-* / --cm-sp-* 的近似档：宿主写的是 calc(28px + --dsh-content-font-delta)，
+   内容字号放大时图标行跟着长高，写死 28px 会在 21px 字号下比宿主矮 7px。 */
 .chatEntryActions {
   display: flex;
   align-items: center;
-  gap: var(--cm-sp-2);
+  gap: var(--cm-sp-4);
+  height: var(--cm-chat-action);
+  margin-top: var(--cm-sp-2);
+  margin-left: calc(-1 * var(--cm-sp-3));
 }
 
+/* 时刻：宿主 .timeStart（tertiary / 13px 次级字号 / 行高 24+delta / 右侧 12px 让位给图标） */
 .chatEntryTime {
   color: var(--cm-text-3);
-  font-size: var(--cm-fs-meta);
+  font-size: var(--cm-fs-second);
+  line-height: var(--cm-lh-second);
+  white-space: nowrap;
+  padding-right: var(--cm-sp-6);
 }
 
 .chatEntryNotice {
@@ -5501,27 +5511,51 @@ button.profileRowMain:hover {
    我们只复刻这一行的**文本**；chip 外观与可点开能力仍是已登记差距（G-39）。 */
 .chatEntryReference {
   color: var(--cm-text-3);
-  font-size: var(--cm-fs-meta);
+  font-size: var(--cm-fs-second);
+  line-height: var(--cm-lh-ref);
 }
 
-/* 复制动作按钮：26px 触达区，与 IconButton 观感同源（图标走 currentColor） */
+/* 图标动作按钮：与宿主 .action 逐值同式 —— 28px+delta 触达区、padding 6px、radius-sm、
+   图标 15px+delta（宿主 `.action svg` 同一条公式）、hover 底色走宿主的 interactive-bg-hover。 */
 .chatActionBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
+  width: var(--cm-chat-action);
+  height: var(--cm-chat-action);
+  padding: var(--cm-sp-3);
   border: 0;
-  border-radius: var(--cm-r-2);
+  border-radius: var(--cm-r-act);
   background: transparent;
   color: var(--cm-text-3);
   cursor: pointer;
 }
 
+.chatActionBtn svg {
+  width: var(--cm-chat-glyph);
+  height: var(--cm-chat-glyph);
+}
+
 .chatActionBtn:hover {
-  background: var(--cm-line-1);
-  color: var(--cm-text-1);
+  background: var(--cm-chat-hover-bg);
+  color: var(--cm-text-2);
+}
+
+/* 动作行的显现语义（宿主 MessageIconActions 同一条规则）：
+   在支持 hover 的设备上，**后面还有用户/steering 消息**的那几条默认把动作行藏起来（opacity 0），
+   指针进入或键盘焦点落到这一行时显现；最后一条用户消息的动作行则常亮。
+   用宿主自己的 `data-chat-flow-kind` 祖先属性表达「后面还有一条」——本节点就渲染在那个行的内部，
+   所以这条选择器与宿主对自家 .actions 用的是同一套结构（绝不自己数 DOM 节点）。 */
+@media (hover: hover) {
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])) .chatEntryActions {
+    opacity: 0;
+    transition: opacity var(--cm-motion-fast);
+  }
+
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])):hover .chatEntryActions,
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])):focus-within .chatEntryActions {
+    opacity: 1;
+  }
 }
 
 /* 回退入口与复制入口共用上面这颗图标按钮（无文字标签、无边框）：

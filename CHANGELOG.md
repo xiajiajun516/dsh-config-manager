@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.77] - 2026-10-17
+
+> **本版主题**：**整个插件界面改用 DSH 自己的设计取值 —— 你发出的消息气泡与 DSH 原版逐项一致；回退不再误伤别的对话改过的文件；导出的插件区变成一棵按插件分组的树**
+>
+> **Theme**: **The whole plugin UI now draws from DSH's own design values - your own message bubbles match DSH's native bubble item by item, rewinds no longer discard what other conversations changed, and the export picker groups plugins into a tree**
+
 ### 🆕 新增 · Added
 
 - **导出的插件区现在是一棵按插件分组的树**：全部插件先收在一个「插件」区块里（默认折叠，展开才列出各个插件），同一个插件的清单条目、数据目录与大文件都挂在它的名字下面，点一次就把它散在几处的文件一起带上；分区内容默认按需读取（展开即读，不再需要点「读取该分区」），也没有「未安装插件的遗留数据」这一类多余的行；「已选 n/m」不再随展开跳动，勾选「插件」或某个插件时会等内容读取完后自动把它名下的数据一并带上（不会少带数据目录），下面的「其他条目 / 未归属配置」两行也补上了整块勾选框；层级也一眼能看出来了 —— 每一层子项旁边都有竖线并逐层缩进（不只是最里面那一层），不再看起来和父项平级；分区列表也补上了分组标题（通用 / AI / 插件与扩展 …），并把几个容易混淆的分区改成一眼能读懂的名字（插件清单 / 插件散落配置 / 插件数据目录 / 插件大文件 / 配置管理器设置）。归属只写能证明的关系：插件散落配置没有任何包名信息，所以留在「未归属」栏里，不会被硬塞给某个插件；注册表提到但本机其实没有的区域会明确标「无内容」，而不是给一个勾了却导不出东西的选项。
@@ -47,7 +53,6 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Success / info / warning / error badges finally carry their color**: the four states used to look identical (one neutral outline) because the matching style names were never defined in the stylesheet; they now use DSH's own tag palette (green / blue / amber / red tinted fills with matching text), so success and warning rows are distinguishable at a glance.
 - **关掉「回合自动留点」后，聊天里的用户消息完全交回 DSH 自己渲染**：以前关掉只是收起那颗「↺ 回退」按钮，气泡本身仍由插件代画（外层间距、时间与操作按钮都是插件的）；现在关闭后插件不再接管这条消息，气泡、时间与操作按钮都与原版一致，重新打开开关时入口立刻回来（不必重载插件）。
   **With "auto rollback points" off, your chat messages hand back to DSH's own rendering**: turning the switch off used to only hide the "↺ rewind" button while the plugin still drew the bubble (its spacing, timestamp and action row were ours); now the plugin stops taking over the message entirely, so bubble, timestamp and actions match the native rendering, and flipping the switch back on brings the entry back immediately (no plugin reload).
-
 - **开着「回合自动留点」时，你发出的消息气泡现在与 DSH 原版逐项一致**：圆角、内边距、附件与气泡的间距、时间戳的字号与位置、复制／回退那一行图标的大小与悬停底色、文件卡（240×64 的卡片样式：类型图标 + 文件名 + 扩展名与大小）、引用会话那一行，全部按 DSH 自己的取值来画；**复制与回退用的也是 DSH 原生的那几颗图标**（复制成功时和原版一样直接换成对勾，不再播放插件自己的形变动画）；「后面还有消息的那几条」也照原版只在鼠标移上去或键盘聚焦时才显示这行图标，最后一条常显 —— 差别只剩那颗多出来的「↺ 回退」按钮。
   **With "auto rollback points" on, the messages you send now match DSH's own bubble item by item**: corner radius, padding, spacing between attachments and bubble, the timestamp's size and position, the size and hover background of the copy/rewind icon row, the 240×64 file card (type icon + name + extension and size) and the "conversation reference" line all follow DSH's own values; the copy and rewind buttons now use DSH's own icon set too (a successful copy swaps to the check mark exactly like the native bubble, instead of playing the plugin's morph animation); like the native bubble, that icon row is revealed on hover or keyboard focus for messages that have a later message and stays visible on the last one — the only difference left is the extra "↺ rewind" button.
 
@@ -62,6 +67,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Your own message bubbles follow the content font size again**: after enlarging Settings → Appearance → content font size, messages you sent stayed at a small fixed size (at 21px the assistant text got visibly larger while your own words were about half the height) and wrapped differently from the native bubble; the bubble now takes the same size, line height and wrap width, following the same setting. (issue #93)
 - **DSH 0.2.1 起用户消息里的图片不再消失**：此前升级 DSH 后，聊天里每条自己发的消息只要有图片，就只剩一行「图片无法显示」的灰字（助手消息、附件卡片都正常）；现在这类消息的正文、图片、文件卡与引用整体交回 DSH 自己的渲染，外观与原生气泡一致，「↺ 回退」按钮照旧。（issue #92）
   **User-message images no longer disappear on DSH 0.2.1**: after upgrading DSH, any message you sent that carried an image showed only a grey "image cannot be displayed" line (assistant messages and file cards were fine); such messages now hand their text, images, file cards and references back to DSH's own rendering, matching the native bubble pixel for pixel, while the rewind button stays where it was. (issue #92)
+- **回退对话更少掉进「未分组」**：回退出的新会话会更可靠地挂回原工作区 —— 宿主一时读不到子会话的工作目录时，改用它从父对话继承的目录来判断，并自动重试一次；确实挂不上时，具体原因会写进本机的诊断日志，而不是只留界面上一句话、事后查不出为什么。
+  **A rewound conversation is much less likely to land in "Ungrouped"**: the session a rewind creates now files back into its original workspace far more reliably - when the host cannot read the child session's directory it falls back to the directory inherited from the parent conversation and retries, and a real failure is written to a local diagnostic log instead of leaving only a one-line UI hint with no way to find out why.
+
 
 ## [0.1.76] - 2026-10-16
 
