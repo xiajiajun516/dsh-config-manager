@@ -233,10 +233,26 @@ export class RollbackWriteAttribution implements RollbackWriteAttributionPort, R
   /** 立刻落盘（原子：同目录临时文件 + rename；失败只 warn，绝不上抛） */
   async flush(): Promise<void> {
     if (this.writing !== null) return this.writing
-    const payload: AttributionFileV1 = { version: 1, entries: Object.fromEntries(this.entries) }
     this.writing = (async () => {
       try {
         await fs.mkdir(path.dirname(this.file), { recursive: true })
+        const entriesSnapshot: Record<string, RollbackWriteFact> = Object.fromEntries(this.entries)
+        // **写前合并**（2026-10-17 修）：本进程内存里只有自己见过的写入，而同一个工作区可能同时被
+        // 另一个 DSH 进程写归属 —— 各自「整体覆盖」会把对方的记录抹掉。真机实测：归属里缺了对方
+        // 那次编辑，导致回退时识别不到「别人改过这个文件」，进而把对方的改动静默覆盖掉。
+        // 同键取 `at` 较新者：时间戳是这里唯一可信的先后判据。
+        try {
+          const existing = JSON.parse(await fs.readFile(this.file, 'utf8')) as { version?: unknown; entries?: unknown }
+          if (existing.version === 1 && existing.entries !== null && typeof existing.entries === 'object' && !Array.isArray(existing.entries)) {
+            for (const [key, value] of Object.entries(existing.entries as Record<string, unknown>)) {
+              const fact = readFact(value)
+              if (fact === null) continue
+              const mine = entriesSnapshot[key]
+              if (mine === undefined || fact.at > mine.at) entriesSnapshot[key] = fact
+            }
+          }
+        } catch { /* 读不到就当没有别人的记录：只写自己这份（绝不因为读失败而放弃落盘） */ }
+        const payload: AttributionFileV1 = { version: 1, entries: entriesSnapshot }
         const tmp = this.file + '.tmp'
         await fs.writeFile(tmp, JSON.stringify(payload), 'utf8')
         await fs.rename(tmp, this.file)

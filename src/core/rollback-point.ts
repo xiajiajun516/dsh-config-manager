@@ -4233,11 +4233,14 @@ export class RollbackPointEngine {
    */
   private async mergeForeignRecord(
     file: RollbackWorkspaceFile,
-    afterAt: number,
+    baseText: string | null,
+    foreignEvidence: boolean,
   ): Promise<
     | { kind: 'write'; bytes: Uint8Array; sha256: string; expectedCurrent: string }
     | { kind: 'unchanged' }
     | { kind: 'blocked'; reason: 'conflict' | 'no-base' | 'binary' | 'degraded' | 'theirs-missing' | 'theirs-unreadable' | 'ours-unreadable' }
+    /** 没有可用祖先、也没有「别人写过」的旁证 ⇒ 退回旧口径（整文件覆盖回目标版本） */
+    | { kind: 'fallback' }
   > {
     let oursBytes: Uint8Array
     try {
@@ -4252,12 +4255,21 @@ export class RollbackPointEngine {
     } catch (error) {
       return { kind: 'blocked', reason: (error as { code?: unknown }).code === 'ENOENT' ? 'theirs-missing' : 'theirs-unreadable' }
     }
-    const baseText = await this.baseVersionFor(file.path, afterAt)
-    if (baseText === null) return { kind: 'blocked', reason: 'no-base' }
+    const oursText = Buffer.from(oursBytes).toString('utf8')
+    // **base 必须真的携带「本会话改动之后」的信息**：若它与 ours（回退目标）逐字相同，说明它
+    // 提供不了任何「本会话改了什么」的知识 —— 拿它当共同祖先会让合并结论变成「保持当前」，
+    // 于是「回退到该点」成了「什么都不做」（真机 R-25 就是这个形态被抓出来的：guard 之后
+    // 那个点的内容与目标点相同）。
+    if (baseText === null || baseText === oursText) {
+      // 有「别人写过」的旁证却没有可用祖先 ⇒ 无法安全撤销，宁可不动它并如实报告；
+      // 两样都没有 ⇒ 退回旧口径（整文件覆盖回目标版本）—— 那正是「纯本会话回退」的常见形态。
+      if (foreignEvidence) return { kind: 'blocked', reason: 'no-base' }
+      return { kind: 'fallback' }
+    }
     // 二进制：任何一侧含 NUL 就绝不按文本合并（三方合并算法只对文本有定义）
     if (oursBytes.includes(0) || theirsBytes.includes(0) || baseText.includes('\u0000')) return { kind: 'blocked', reason: 'binary' }
     const theirsText = Buffer.from(theirsBytes).toString('utf8')
-    const result = mergeThreeWay(Buffer.from(oursBytes).toString('utf8'), baseText, theirsText)
+    const result = mergeThreeWay(oursText, baseText, theirsText)
     if (!result.ok) {
       return { kind: 'blocked', reason: result.reason === 'conflict' ? 'conflict' : result.reason === 'degraded' ? 'degraded' : 'binary' }
     }
@@ -4273,15 +4285,20 @@ export class RollbackPointEngine {
    * 正好是「本会话改动之后、对方改动之前」的版本 —— 标准三方合并的共同祖先。
    * 取**最早**而不是最近是刻意选安全方向：宁可少撤销，也绝不把对方更晚的改动算进 ours 侧。
    *
-   * 排除三类：目标点自己（`createdAt > afterAt`）、**救援点 guard**（它在执行回退那一刻拍，
+   * 排除四类：目标点自己（`createdAt > afterAt`）、**救援点 guard**（它在执行回退那一刻拍，
    * 内容 ≈ 当前磁盘，拿它当 base 会让合并结果直接等于 ours = 整文件覆盖，正是本机制要消灭的形态）、
-   * 以及内容读不出来的点（继续往后找 —— 找不到 ⇒ 调用方按「无法安全撤销」处理，绝不用近似值代替）。
+   * **本会话的点**（见上）、以及内容读不出来的点（继续往后找 —— 找不到 ⇒ 调用方按「无法安全撤销」
+   * 处理，绝不用近似值代替）。
    */
-  private async baseVersionFor(target: string, afterAt: number): Promise<string | null> {
+  private async baseVersionFor(target: string, afterAt: number, excludeSessionId: string | null): Promise<string | null> {
     const ledger = await this.readManifest()
     const key = pathKey(target)
     const candidates = ledger.entries
-      .filter((entry) => entry.createdAt > afterAt && entry.kind !== 'guard')
+      .filter((entry) => entry.createdAt > afterAt
+        && entry.kind !== 'guard'
+        // 只认**别的会话**的点：本会话后续回合的点当作 base，会把「本会话后续改动」也一并保留下来，
+        // 那与「回退到该点之前」的直觉冲突；而别人的点正好是「本会话改动之后、对方改动之前」的版本。
+        && (excludeSessionId === null || entry.sessionId !== excludeSessionId))
       .sort((left, right) => (left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : 0))
     for (const entry of candidates) {
       const resolved = await this.readFullRecord(entry.id)
@@ -4298,6 +4315,53 @@ export class RollbackPointEngine {
       }
     }
     return null
+  }
+
+  /**
+   * **别的会话的回合点里记录过的路径集合** —— 删除集保护的第二种证据（不依赖归属台账）。
+   *
+   * 为什么需要第二证据：归属可能整条缺失（工具不在白名单 / 另一个 DSH 进程把 attribution.json
+   * 整体覆盖写 / 采集时机错过），而「别人的点里出现过这个路径」是**点台账本身**记录的事实 ——
+   * 它足以证明「这条路径在留点之后被别的会话所在的回合捕获过」，因此删它就是销毁别人的工作。
+   *
+   * 有界：只扫目标点之后**最早**的 `limit` 个别的会话的点（按时间升序），且只读路径不读内容。
+   * 扫不完不影响安全方向（少保护也会被归属那条兜一部分），但绝不因此声称「已扫全」。
+   */
+  private async foreignRecordedPaths(afterAt: number, excludeSessionId: string | null, limit = 10): Promise<Set<string>> {
+    const out = new Set<string>()
+    const ledger = await this.readManifest()
+    const candidates = ledger.entries
+      .filter((entry) => entry.createdAt > afterAt
+        && entry.kind !== 'guard'
+        && (excludeSessionId === null || entry.sessionId !== excludeSessionId))
+      .sort((left, right) => (left.createdAt < right.createdAt ? -1 : left.createdAt > right.createdAt ? 1 : 0))
+      .slice(0, Math.max(1, limit))
+    for (const entry of candidates) {
+      const resolved = await this.readFullRecord(entry.id)
+      const payload = resolved.record?.workspace.payload as
+        | (RollbackWorkspacePayload & { delta?: { added?: unknown; removed?: unknown } })
+        | null
+        | undefined
+      if (payload === null || payload === undefined) continue
+      const files = (payload as { files?: unknown }).files
+      if (Array.isArray(files)) {
+        for (const item of files) {
+          const target = (item as { path?: unknown }).path
+          if (typeof target === 'string' && target !== '') out.add(pathKey(target))
+        }
+        continue
+      }
+      const delta = payload.delta
+      if (delta === null || delta === undefined) continue
+      for (const bucket of [delta.added, delta.removed]) {
+        if (!Array.isArray(bucket)) continue
+        for (const item of bucket) {
+          const target = typeof item === 'string' ? item : (item as { path?: unknown } | null)?.path
+          if (typeof target === 'string' && target !== '') out.add(pathKey(target))
+        }
+      }
+    }
+    return out
   }
 
   private async restoreWorkspace(
@@ -4324,7 +4388,18 @@ export class RollbackPointEngine {
      */
     let foreignSkipped = 0
     const isolationSessionId = typeof options.sessionId === 'string' && options.sessionId !== '' ? options.sessionId : null
-    const foreignSkipEnabled = selection === null && this.attribution !== undefined && isolationSessionId !== null
+    /**
+     * **合并保护**（2026-10-17 修）：触发条件**不看归属**，只看「有没有共同祖先可用」。
+     *
+     * 为什么必须这样：归属台账是**旁证**而不是判据 —— 对方的写入可能因为工具不在白名单、
+     * 或另一个 DSH 进程把 attribution.json 整体覆盖写而**没被记到**。真机 2026-10-17：
+     * 两个对话各给 README 加了一行描述，回退其中一个之后**两行都没了**，根因正是
+     * 「归属里只有本会话那次编辑」⇒ 不认为有第三方 ⇒ 退回整文件覆盖。
+     * 只要目标点之后**存在别的会话的回合点**，那它就是共同祖先 ⇒ 必须走三方合并。
+     */
+    const mergeGuardEnabled = selection === null && isolationSessionId !== null
+    /** 同一路径的 base 只查一次（合并判定在「确认需要写」之后，命中数很少） */
+    const baseCache = new Map<string, string | null>()
     const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], ignoredDirs: [], ignoredDirCount: 0, unreadableDirs: [], skippedCount: 0, skippedTruncated: false }
     // 删除集与**预览**共用同一份规划（planCreatedRemovals）⇒「预览说会删的」= 「实际删的」。
     // 为什么提到文件循环**之前**：选择模式要拿它当「合法路径」的第二来源（新建候选也允许被点名），
@@ -4374,38 +4449,6 @@ export class RollbackPointEngine {
         selectionSkipped += 1
         continue
       }
-      // 归属隔离（B）：没显式点名时，**别的会话在留点之后写的**文件自动跳过 ——
-      // 这正是「B 对话不该回退掉 A 对话的改动」那条诉求的自动版。只有确知时才跳。
-      if (foreignSkipEnabled) {
-        const writer = this.attribution?.writerOf(file.path)
-        if (writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > track.capturedAt) {
-          // 归属隔离的**合并版**（2026-10-17 跨对话安全回退）：不整文件覆盖，而是三方合并 ——
-          // 撤销本会话那次改动、保留对方后来的改动。合并不了 ⇒ 一条都不写，如实报告。
-          const outcome = await this.mergeForeignRecord(file, track.capturedAt)
-          if (outcome.kind === 'write') {
-            writable.push({
-              file, bytes: outcome.bytes, sha256: outcome.sha256, expectedCurrent: outcome.expectedCurrent,
-            })
-            mergedCount += 1
-            if (mergedPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) mergedPaths.push(file.path)
-            continue
-          }
-          if (outcome.kind === 'unchanged') {
-            unchanged += 1
-            continue
-          }
-          foreignSkipped += 1
-          if (outcome.reason === 'conflict') {
-            conflictCount += 1
-            if (conflictPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) conflictPaths.push(file.path)
-          } else {
-            unavailableCount += 1
-            if (unavailablePaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) unavailablePaths.push(file.path)
-          }
-          pushDetail(detail, 'foreign-' + outcome.reason + ' ' + file.path + ' zeroWrites=true')
-          continue
-        }
-      }
       // 门：记录里的路径必须落在记录里的分块内（记录不可成为写原语）
       const inChunk = payload.chunks.some((chunk) => path.isAbsolute(chunk) && isInsidePath(file.path, chunk))
       if (!path.isAbsolute(file.path) || !inChunk || isInsidePath(file.path, this.root)) {
@@ -4430,6 +4473,49 @@ export class RollbackPointEngine {
           failed += 1
           pushDetail(detail, 'object-hash-mismatch ' + file.path)
           continue
+        }
+        // **合并保护**（2026-10-17 修）：到这里才确认「这个文件确实需要写」，也才值得去查共同祖先。
+        // 触发不吃归属：只要目标点之后存在**别的会话**的回合点（那它就是共同祖先），就走三方合并。
+        if (mergeGuardEnabled) {
+          let base: string | null
+          const cached = baseCache.get(pathKey(file.path))
+          if (cached === undefined) {
+            base = await this.baseVersionFor(file.path, track.capturedAt, isolationSessionId)
+            baseCache.set(pathKey(file.path), base)
+          } else {
+            base = cached
+          }
+          const foreignWriter = this.attribution?.writerOf(file.path)
+          const foreignEvidence = foreignWriter !== undefined
+            && foreignWriter.sessionId !== isolationSessionId
+            && foreignWriter.at > track.capturedAt
+          if (base !== null || foreignEvidence) {
+            const outcome = await this.mergeForeignRecord(file, base, foreignEvidence)
+            if (outcome.kind === 'fallback') {
+              // 没有可用祖先、也没有别人的旁证 ⇒ 落到下面的旧口径（整文件覆盖回目标版本）
+            } else {
+            if (outcome.kind === 'write') {
+              writable.push({ file, bytes: outcome.bytes, sha256: outcome.sha256, expectedCurrent: outcome.expectedCurrent })
+              mergedCount += 1
+              if (mergedPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) mergedPaths.push(file.path)
+              continue
+            }
+            if (outcome.kind === 'unchanged') {
+              unchanged += 1
+              continue
+            }
+            foreignSkipped += 1
+            if (outcome.reason === 'conflict') {
+              conflictCount += 1
+              if (conflictPaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) conflictPaths.push(file.path)
+            } else {
+              unavailableCount += 1
+              if (unavailablePaths.length < ROLLBACK_LEFTOVER_LIST_LIMIT) unavailablePaths.push(file.path)
+            }
+            pushDetail(detail, 'foreign-' + outcome.reason + ' ' + file.path + ' zeroWrites=true')
+            continue
+            }
+          }
         }
         writable.push({ file, bytes })
       } catch (error) {
@@ -4462,11 +4548,15 @@ export class RollbackPointEngine {
       ? { paths: plan.paths, skipped: plan.skipped, truncated: plan.truncated, refused: plan.refused }
       : { paths: [] as string[], skipped: [] as string[], truncated: false, refused: null as CreatedRemovalPlan['refused'] }
     const protectedRemovals: string[] = []
-    if (foreignSkipEnabled && removalPlan.paths.length > 0) {
+    if (mergeGuardEnabled && removalPlan.paths.length > 0) {
+      // 两类证据（任一成立就保护）：① 归属表明别的会话写过它；② **别的会话的回合点里记录过该路径**。
+      // 后者不依赖归属（归属可能因工具白名单 / 跨进程整体覆盖 / 采集时机而缺失，见 mergeGuardEnabled 的说明）。
+      const foreignPaths = await this.foreignRecordedPaths(track.capturedAt, isolationSessionId)
       const keep: string[] = []
       for (const target of removalPlan.paths) {
         const writer = this.attribution?.writerOf(target)
-        if (writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > track.capturedAt) {
+        const byWriter = writer !== undefined && writer.sessionId !== isolationSessionId && writer.at > track.capturedAt
+        if (byWriter || foreignPaths.has(pathKey(target))) {
           protectedRemovals.push(target)
           removalPlan.skipped.push(target)
           continue

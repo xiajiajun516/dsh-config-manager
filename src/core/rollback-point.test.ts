@@ -3675,3 +3675,57 @@ test('C-7 对方没改过（theirs==base）⇒ 照常恢复本会话的目标版
   const segment = result.segments.find((s) => s.state === 'workspace')
   assert.equal(segment?.mergedCount, 1)
 })
+
+test('C-8 **无归属也要合并**：归属缺失不得退回整文件覆盖（真机 2026-10-17 回归）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  // 刻意**不传 attribution**：归属可能因为工具白名单 / 跨进程整体覆盖 / 采集时机而整条缺失
+  const engine = makeEngine(fx, { now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'A-line\nline2\nline3\nline4\nline5\n')
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  await fs.writeFile(file, 'A-line\nline2\nline3\nline4\nB-line\n')
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), 'line1\nline2\nline3\nline4\nB-line\n',
+    '没有归属证据时也必须三方合并：撤销 A、保留 B，绝不整文件覆盖')
+  assert.equal(result.segments[0]?.mergedCount, 1)
+  assert.equal(result.segments[0]?.conflictCount, undefined)
+})
+
+test('C-9 只有本会话的点 ⇒ 保持旧语义（整文件覆盖回目标版本）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(1_000_000, 1) })
+  const file = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(file, V0_TEXT)
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  await fs.writeFile(file, 'A1\nline2\nline3\nline4\nline5\n')
+  // 同一个会话的第二个回合点：它**不是**别人的共同祖先，不得拿来当 base
+  await capturePoint(engine, fx, { sessionId: 'session-A' })
+  await fs.writeFile(file, 'A1\nline2\nline3\nline4\nA2\n')
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(file), V0_TEXT, '纯本会话回退仍是整文件回到目标版本')
+  assert.equal(result.segments[0]?.mergedCount, undefined)
+})
+
+test('C-10 删除保护不依赖归属：别的会话点里记录过的路径不删', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx, { now: steppingClock(1_000_000, 1) })
+  const pa = await capturePoint(engine, fx, { sessionId: 'session-A' })
+  const idA = pa.point?.id
+  assert.ok(idA !== undefined)
+  const created = path.join(fx.workspaceDir, 'other.txt')
+  await fs.writeFile(created, 'by B')
+  // B 的回合点记到了这个文件（= 它确实在留点之后被别人的回合捕获过）
+  await capturePoint(engine, fx, { sessionId: 'session-B' })
+  const result = await engine.rewind({ id: idA, userConfirmed: true, mode: 'files', removeCreated: true })
+  assert.equal(await readText(created), 'by B', '别人碰过的文件不得被删（不依赖归属台账）')
+  assert.equal((result.segments[0]?.createdSkipped ?? []).includes(created), true)
+})
