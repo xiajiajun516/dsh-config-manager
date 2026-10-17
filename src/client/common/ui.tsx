@@ -12,6 +12,8 @@
  */
 import type { ChangeEvent, CSSProperties, ReactNode } from 'react'
 import { ExpandChevron } from './Icon.tsx'
+import { badgeTone, type BadgeKind } from '../../ui/badge-tone.ts'
+import { hostTag } from './host-primitives.ts'
 import css from '../config-manager.module.css'
 
 /* ---------------- Button ---------------- */
@@ -185,7 +187,7 @@ export function StatusDot({ kind = 'idle', pulse }: StatusDotProps) {
 
 /* ---------------- Badge ---------------- */
 
-export type BadgeKind = 'info' | 'ok' | 'warn' | 'error'
+export type { BadgeKind }
 
 export interface BadgeProps {
   kind?: BadgeKind
@@ -194,9 +196,21 @@ export interface BadgeProps {
   title?: string
 }
 
-/** 状态徽章（info=业务色 / ok=成功 / warn=警告 / error=错误）。 */
+/**
+ * 状态徽章（info=业务色 / ok=成功 / warn=警告 / error=错误）。
+ *
+ * **优先复用宿主的 `Tag`**（DSH 原生只读标签，与设置页/插件清单里那枚同源）：四态映射到
+ * 原生调色板的 success / info / warning / danger（映射表在 `src/ui/badge-tone.ts`，可单测）。
+ * 拿不到原生包（老宿主）时回落本仓库的 `.badge[data-kind]` —— 两条路径的语义由**同一张表**给出。
+ * 原生 Tag 没有 title 入参：需要悬停提示时套一层 inline-flex 的 wrapper，不改变布局。
+ */
 export function Badge({ kind = 'info', children, title }: BadgeProps) {
-  return <span className={`${css.badge} ${css[`badge${kind[0]!.toUpperCase()}${kind.slice(1)}`] ?? ''}`} title={title}>{children}</span>
+  const DshTag = hostTag()
+  if (DshTag !== null) {
+    const tag = <DshTag tone={badgeTone(kind)}>{children}</DshTag>
+    return title === undefined ? tag : <span className={css.badgeHost} title={title}>{tag}</span>
+  }
+  return <span className={css.badge} data-kind={kind} title={title}>{children}</span>
 }
 
 /* ---------------- Banner ---------------- */

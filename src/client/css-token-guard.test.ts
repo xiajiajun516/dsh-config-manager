@@ -24,7 +24,8 @@ function stripComments(css: string): string {
 const GUARDED_DSW = [
   '--dsw-alias-state-business-primary',
   '--dsw-alias-state-success-primary',
-  '--dsw-alias-state-info-primary',
+  // 2026-10-17（对齐原生）：DSH 主题**没有** --dsw-alias-state-info-primary（旧条目指了个不存在的 token，
+  // 导致 --cm-info 的整条 var() 链无效、三处消费点静默退化）。--cm-info 现按同义别名接 --cm-accent。
   '--dsw-alias-state-warn-primary',
   '--dsw-alias-state-error-primary',
   '--dsw-alias-button-info-fill',
@@ -55,10 +56,15 @@ test('token-01 四态/主色 token 只能出现在 --cm-* 定义行里', () => {
   assert.deepEqual(violations, [], '这些行必须改为消费 --cm-*（或把新 token 加进 §1 TOKENS）：\n' + violations.join('\n'))
 })
 
-test('token-02 每个受约束的 --dsw-* 语义 token 恰好定义一次（不得重复定义/漂移）', () => {
+test('token-02 每个受约束的 --dsw-* 语义 token 仍被定义且只出现在定义行（不漂移、不失效）', () => {
   for (const tok of GUARDED_DSW) {
-    const n = (STRIPPED.match(new RegExp(tok.replace(/[-]/g, '\\-'), 'g')) ?? []).length
-    assert.equal(n, 1, tok + ' 应恰好出现 1 次（在 --cm-* 定义行），实际 ' + String(n))
+    // 判定口径（2026-10-17 对齐原生时放宽「恰好一次」）：既要 ≥1 次
+    // —— token 被悄悄删掉会让整条 --cm-* 链解析成无效值（--cm-info 曾经就是这样），
+    // 也要每次都在定义行（裸用由 token-01 报错）。允许两个语义名指向同一个原生 token。
+    const lines = STRIPPED.split(String.fromCharCode(10)).filter((line) => line.includes(tok))
+    assert.ok(lines.length >= 1, tok + ' 在本文件里已不存在（删掉它时忘了同步本表？）')
+    const offDef = lines.filter((line) => !DEF_LINE.test(line))
+    assert.deepEqual(offDef, [], tok + ' 出现在非定义行：' + JSON.stringify(offDef))
   }
 })
 

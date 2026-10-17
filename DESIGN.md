@@ -108,9 +108,31 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 | 输入框背景 | `--cm-input-bg` | `--dsw-specific-input-major` |
 | 聊天流用户消息气泡底 | `--cm-chat-bubble` | `--dsw-specific-bubble`（缺档回落 `color-mix(in srgb, var(--cm-text-1) 12%, transparent)` —— **兜底必须是可见色**，bg-layer-2 在浅色 = #fff 等于没兜底） |
 | 主色（focus / 选中 / 进度） | `--cm-accent` | `--dsw-alias-state-business-primary` |
-| 主按钮填充 / hover | `--cm-accent-fill` / `--cm-accent-hover` | `--dsw-alias-button-info-fill/hover` |
-| 四态 ok / info / warn / error | `--cm-ok` `--cm-info` `--cm-warn` `--cm-error` | `--dsw-alias-state-{success,info,warn,error}-primary` |
+| 主按钮填充 / hover | `--cm-accent-fill` / `--cm-accent-hover` | `--dsw-alias-button-info-fill/hover`（保留原语义别名） |
+| 四态 ok / info / warn / error | `--cm-ok` `--cm-info` `--cm-warn` `--cm-error` | `--dsw-alias-state-{success,warn,error}-primary`；**info = `--cm-accent` 同义别名**（DSH **没有** `--dsw-alias-state-info-primary`，见下） |
+| 原生主按钮填充 / hover | `--cm-primary-fill` / `--cm-primary-hover` | `--dsw-alias-button-primary-fill/hover`（= 原生 `.button.primary`） |
+| 交互态 hover / active / 危险 hover | `--cm-hover` `--cm-active` `--cm-hover-danger` | `--dsw-alias-interactive-bg-hover/active/-hover-danger` |
+| 幽灵选中态（页签 / 分段 / 下拉选中） | `--cm-ghost-active-fill` / `--cm-ghost-active-border` | `--dsw-alias-button-ghost-active-fill/border`（= 原生 Pill 的 active） |
+| 弹层/菜单表面 + 背板模糊 | `--cm-menu-surface` / `--cm-menu-backdrop` | `--dsw-menu-surface-fill` / `--dsw-menu-backdrop-filter` |
+| 菜单图标色 | `--cm-menu-icon` | `--dsw-alias-menu-icon` |
+| Tooltip 气泡（ⓘ）底 / 前景 | `--cm-tooltip-bg` / `--cm-tooltip-fg` | `--dsw-alias-tooltip-bg` / `--dsw-static-neutral-bluish-00` |
+| 通知（Toast）底 / 前景 | `--cm-toast-bg` / `--cm-toast-fg` | `--dsw-alias-toast-bg` / `--dsw-alias-toast-label`（原生 toast 两个主题下都是深色） |
+| 深色 toast 上的警示文字 | `--cm-warn-label` | `--dsw-alias-state-warn-label` |
+| 弹窗遮罩 / 背板模糊 | `--cm-mask` / `--cm-mask-blur` | `--dsw-alias-bg-mask-1` / `--dsw-mask-blur` |
+| 骨架底色 | `--cm-skeleton` | `--dsw-alias-bg-skeleton` |
+| 中性/空转状态点、品牌色（复选框） | `--cm-idle` / `--cm-brand` | `--dsw-alias-state-idle-primary` / `--dsw-alias-brand-primary` |
 | 正文字体 | `--dsw-font-family`（基础层直用）；等宽栈 `ui-monospace, SFMono-Regular, Menlo, Consolas, monospace` | — |
+
+**2026-10-17 对齐原生**：上表新增的这些 token 全部取自 `dsh-client-ui-theme` **实际发布**的名字
+（逐条比对本机 app.asar 的 411 个 `--dsw-*` 定义，脚本核对；插件引用的 59 个 token 里除宿主运行时自带的
+`--dsh-content-font-*` / `--dsh-chat-content-width` 外全部命中）。三条硬约束继续成立：
+① 组件规则只写 `--cm-*`；② 状态色 / 按钮填充只允许出现在 §1 定义行；③ **每个 `var(--dsw-*)` 都带兜底值** ——
+老宿主缺 token 时退化为可读的近似色，而不是整条声明失效。
+
+**修正（同轮发现）**：`--cm-info` 此前指向 `--dsw-alias-state-info-primary` —— **DSH 里没有这个 token**
+（状态色只有 business / success / warn / error / idle）。自定义属性「无效于计算值」会让三个消费点
+（任务面板底色、状态点、行首色条）静默退化成透明/继承色。现按同义别名接到 `--cm-accent`
+（原生 Tag 的 info tone 用的也是 business 主色）。
 
 - tint 一律 `color-mix(in srgb, var(--cm-*) <pct>%, transparent)`；**零硬编码色值**（扫描器已在 `ui-audit` 验证：命中全在注释）。
 - 语义映射：成功=ok、业务信息=info、警告=warn、错误/危险=error。
@@ -122,12 +144,23 @@ v3 删掉了页面级那张绑定「隐式当前通道」的分区卡（它此�
 
 ## 4. Typography（**4 档**，唯一允许的 scale）
 
-| 档 | 字号 | 用途 |
-|---|---|---|
-| meta | **11px** | 徽章 / hint / 元数据 / 等宽值 / 日志 / 骨架 caption |
-| table | **12px** | 数据表 / 密集列表 / 行内名称与值 |
-| base | **12.5px** | 正文 / 按钮 / 输入 / 标签（基准） |
-| title | **13px** | 页面与区块标题 |
+**档位身份取自 DSH 原生字体 token**（2026-10-17 对齐原生）：不再由我们自定 px，而是逐档映射到
+`dsh-client-ui-theme` 发布的那套字体 token —— 原生调档时这三档跟着动。
+
+| 档 | 字号 | 原生来源 | 用途 |
+|---|---|---|---|
+| meta | **11px** | `--dsw-font-xxxs-11-font-size` | 徽章 / hint / 元数据 / 等宽值 / 日志 / 骨架 caption |
+| table | **12px** | `--dsw-font-xxs-12-font-size` | 数据表 / 密集列表 / 行内名称与值 |
+| base | **12.5px** | **无原生对应档（唯一刻意的偏离）** | 正文 / 按钮 / 输入 / 标签（基准） |
+| title | **13px** | `--dsw-font-xs-13-font-size` | 页面与区块标题 |
+
+- **base 为什么不是原生档**：原生最小正文档是 13px（`--dsw-font-xs-13`，即我们的 title 档），
+  而插件画布只有 564×720、要装下高密度表格与清单，正文取「比原生最小正文再密半档」。
+  它也**不跟随**宿主的「内容字号」轴（`--dsh-content-font-size`，默认 14px）——那条轴属于宿主正文档位，
+  跟着放大只会撑破画布；**镜像宿主气泡的 `.chatEntryScope` 例外**（见下条）。
+  改这一档 = 全站字号地震；例外逐条登记在 `css-scale-guard.test.ts` 的 `FONT_TOKEN_EXCEPTIONS`。
+- 同理：`font-size` 一律消费 `var(--cm-fs-*)`（全表已无裸字面量），守卫同时断言每个 `--cm-fs-*`
+  **必须**取自 `--dsw-font-*`（例外表之外一律红灯）。
 
 行高 **2 档**：**1.25**（标题）/ **1.5**（正文）。**唯一例外** = 聊天流用户气泡的 `.chatEntryScope`（`--cm-lh-base`）：那一处不是我们自己的排版，而是**复刻宿主气泡**，用宿主同一条活公式 `calc(22px + var(--dsh-content-font-delta,0px))`（字号那一处同理镜像 `var(--dsh-content-font-size,14px)`）—— 写死 1.5 会在「内容字号」调大后与助手正文脱节（2026-10-17 issue #93）。
 v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5px（28 处）逐条归类为
@@ -156,13 +189,30 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   内容一长，最后一排按钮就被压到底部状态栏上（用户实测）。伪元素是真实盒子，必然计入溢出。
 - 嵌套容器里的小节标题（卡片、面板小节）自带 `margin-bottom: 10px`（`.sectionTitleBlock`）；
   页面主体内该外边距被上面的归零规则接管。
-- 圆角（**4 档**）：小标签 4px、控件（按钮/输入/选择）6px、卡片与分段条 8px、药丸 999px（徽章/进度条）；
-  另有 `0` 与 `50%`（圆形）两个结构性豁免。激活态 = 主色 16% 淡底 + 45% 主色内描边（`.navStrip` / `.statusBar` 同款语言）。
+- 圆角（**5 档**，2026-10-17 改由**原生 control-radius scale** 派生，按角色挑档）：
+  `--cm-r-1` = 原生 `radius-xs` 4px（小标记）、`--cm-r-2` = `radius-sm` 8px（紧凑控件 = 原生 `.button.sm`）、
+  `--cm-r-3` = `radius-md` 12px（行 / 卡片 / 输入 = 原生菜单项与设置页输入框）、
+  `--cm-r-surface` = `radius-lg` 16px（菜单 / 弹窗 / 通知等浮层表面 = 原生 MenuSurface）、`--cm-r-pill` 999px；
+  另有 `0` 与 `50%`（圆形）两个结构性豁免。`border-radius` 一律写 `var(--cm-r-*)`（守卫断言）。
+  **激活态统一用原生 Pill 的配方**：`--cm-ghost-active-fill` 底 + `--cm-ghost-active-border` 内描边
+  （`.navStrip` 页签、页内分段、下拉选中项、图标按钮同款语言）。
+- **描边粗细分两档（原生惯例）**：**控件与行分隔线 0.5px**（原生 `.button.outline` / 输入框 / Tag / 菜单分隔线 /
+  设置页字段分隔线全是 0.5px 发丝线），**卡片与表格外框 1px**。控件描边色改用原生的 `border-l3`（按钮）/
+  `border-l4`（输入框），而不是自己挑的 `border-l2`。
+- **浮层边缘由 elevation 承担**：菜单 / 弹窗 / 通知 / 提示气泡不再自带 1px 边框，改
+  `box-shadow: var(--cm-shadow-1|2)` —— 原生 elevation token 内已含 `0 0 0 .5px` 的发丝描边，
+  跟着主题走（`--dsw-elevation-stroke-color`）。
 - 控件高度（**3 档** `--cm-h-sm/md/lg` = 24 / 28 / 32）：按钮 28px（sm 24）、输入/选择 28px、
   表格行 ~32px、活动行 28px、顶部页签条 32px（条内页签 24px）、状态条 32px、状态栏 28px、图标按钮 26px。
 - 层级（**6 档语义** `--cm-z-*`）：raise 1 / sticky 2 / task 90 / mask 100 / modal 101 / pop 110 / toast 120。
-- 阴影（**2 档**）+ 焦点环（1 档）：`--cm-shadow-1`（浮层 Select/MoreMenu）、`--cm-shadow-2`（弹窗卡片）、
-  `--cm-ring`（统一焦点/选中环）；**不得再写一次性阴影值**。
+- 阴影（**2 档**，取自原生 elevation）：`--cm-shadow-1` = `--dsw-elevation-soft`（浮层 Select/MoreMenu、
+  分段控件选中片、Tooltip）、`--cm-shadow-2` = `--dsw-elevation-prominent`（弹窗卡片、菜单、通知）；
+  **不得再写一次性阴影值**。
+- **焦点环（1 档）改为宿主全局规则的同一枚 token**：`--cm-focus-width` / `--cm-focus-color` =
+  `--dsw-focus-ring-width` / `--dsw-focus-ring-color`（兜底主色）。宿主在**指针输入模态**下把
+  `--dsw-focus-ring-color` 置为 transparent（`html[data-input-modality=pointer] body :focus-visible`），
+  于是**鼠标点击不画环、键盘导航才画** —— 与原生控件完全一致（此前插件自己写死 2px 主色环，
+  鼠标点一下也亮，比宿主所有控件都"吵"）。老宿主没有该 token 时回落主色环，可访问性不丢。
 - **执行者**：`css-scale-guard.test.ts` 同时钉住 border-radius / line-height / z-index（z-index 必须走 `--cm-z-*`，不得写字面量）。
 - 动效：**令牌统一** —— `body` 上定义 `--cm-motion-fast/base/slow`（120/180/300ms；
   slow 就是进度条的 300ms 推进；**2026-10-12 从 .section/:root 的旧位置修回 body** —— 那次 token 作用域
@@ -196,6 +246,38 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 
 ## 6. Components（config-manager.module.css 类）
 
+### 与 DSH 原生组件的对齐（2026-10-17）
+
+**复用优先的三层策略**（判据 = 稳定接口 + 回落可用）：
+
+| 层 | 做法 | 现状 |
+|---|---|---|
+| ① **直接用原生组件** | 帧内惰取 `@deepseek-ai/dsh-client-ui-primitives`（`common/host-primitives.ts` 是**唯一出口**：三态缓存 + try/catch，老宿主回落本地实现） | **徽章 `Badge` → 原生 `Tag`**（tone 映射在 `src/ui/badge-tone.ts`，可单测）；另有 `FileTypeIcon`、`projectUserText` |
+| ② **规格对齐（CSS 层）** | 原生组件 API 与本插件语义不匹配时（如 `Button` 没有 danger/loading/href、`Select` 需要自绘键盘与 ARIA、Modal 走 Radix 且 Portal 必须回收插件根容器），**不硬换组件**，而是把视觉规格逐值抄成原生取值 | 按钮 / 输入 / 下拉 / 复选 / 状态点 / 分段 / 卡片 / 表格 / 弹窗 / 通知 / 提示（下表） |
+| ③ **自研** | 原生没有对应物（高密度数据表、内容选择树、恢复计划视图、步骤条、任务中心） | 保持不变 |
+
+**逐组件规格（取自 `dsh-client-ui-primitives/lib/*.module.css` 实测值）**：
+
+| 组件 | 原生取值（抄进本插件的部分） |
+|---|---|
+| Button | `.button.sm` = 28px 高 / `radius-sm` / `padding: 0 10px` / 12px 字 / 0.5px 透明边框；ghost 描边 `border-l3`、hover `interactive-bg-hover`、active `interactive-bg-active`；disabled `opacity: .4`；danger hover = `interactive-bg-hover-danger` |
+| IconButton | 原生关闭钮 = **28×28** / `radius-sm` / 透明底 / hover `interactive-bg-hover`（小尺寸 18px 档保持不变：级联树的展开 chevron） |
+| Input / Select 触发器 | 32px 高（本插件沿用紧凑 28px 档）/ `0.5px` `border-l4` / `radius-sm`；**聚焦只换描边色**（不再叠 box-shadow 环）；placeholder `label-dimmed`；disabled 用 `label-tertiary`（原生不用 opacity） |
+| 复选 / 单选 | **16×16**（原 14）/ `accent-color: --cm-brand`（原生 `brand-primary`）/ 焦点环走原生配方 |
+| Tag 语义（徽章 / 横幅） | 同色 **10%** tint 作底（warning 用 **12%**）+ 同色文字；药丸圆角（`corner-shape: round` 由宿主全局 `*` 规则提供） |
+| 状态点 | 原生 `StateDot` 几何：**10px 槽位**里 `::after` 画 60% 实心核、色走 `currentColor`；idle 用 `state-idle-primary` |
+| 分段控件 | 轨道 = `interactive-bg-hover`（无边框）+ 2px 内距；选中片 = `bg-layer-1` + `--cm-shadow-1`（原生指示片用 soft elevation） |
+| 菜单 / 下拉弹层 | `--cm-menu-surface` + `--cm-menu-backdrop`；`radius-lg`；`border: 0`（边缘由 elevation-prominent 提供）；行 `radius-md`、hover `--cm-hover`、disabled `.4`、分隔线 `0.5px border-l2` |
+| 弹窗 | 遮罩 `--cm-mask` + `--cm-mask-blur`；卡片 `bg-layer-2` + `--cm-shadow-2` + `radius-lg`（原生模态是 `radius-panel` 28px —— 那是**顶层**模态的档，本插件的弹窗嵌在设置面板里，取 MenuSurface 的 16px）；标题 500 字重；底部 `0.5px border-l2` 分隔线 |
+| 通知（Toast） | 原生 toast 表面：`--cm-toast-bg` / `--cm-toast-fg`（**两个主题下都是深色**）、`radius-lg`、`--cm-shadow-2`、`padding: 12px 16px`、14px 字、仅用图标表达状态色（不再给整条加状态描边）、warn 文字用 `--cm-warn-label` |
+| Tooltip（ⓘ 气泡） | 原生 Tooltip 表面：`--cm-tooltip-bg` / `--cm-tooltip-fg`（深色气泡、两主题一致）、`radius-sm`、`--cm-shadow-1`；12px 字与 8/10 内边距**刻意保留**（这里装的是多行机制说明，不是一行短提示） |
+| 数据表 | 行分隔线 `0.5px border-l2`（含全站 9 处行分隔线），表头 11px `label-tertiary` |
+| 骨架 | `--cm-skeleton`（原生 skeleton 底色） |
+
+**徽章四态修复**：`ui.tsx` 原先拼的 `badgeOk/badgeInfo` 等类名在 CSS Modules 表里**从未存在**，
+四态徽章长得一模一样；现在 ① 走原生 Tag 调色板（success/info/warning/danger），② 回落路径也补上了
+`.badge[data-kind]` 的同口径 tint —— 两条路径语义来自同一张映射表。
+
 ### Primitives（common/ui.tsx）
 - `Button`（primary/ghost/danger × sm/md；`href` 外链同款外观）。**`loading=true` 时由原语自动前置
   `Spinner`**（同时自动 `disabled` + `aria-busy`）—— 调用方只给普通文案；既然图标由原语给，
@@ -205,7 +287,8 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   `{busy ? <Spinner label={…}/> : 文案}` 写法仍有图标，可读性略差、不必为它单独改一波。
 - `IconButton`（`.iconBtn`；`active`/`danger` 修饰；必须 `aria-label`）
 - `StatusDot`（idle/ok/info/warn/error + `pulse`）
-- `Badge`（info=中性描边 / ok / warn / error）
+- `Badge`（info / ok / warn / error → **原生 `Tag` 的 info / success / warning / danger tone**；
+  原生包不可用时回落同口径的 `.badge[data-kind]`）
 - `Banner`（四态；操作按钮一律**内嵌右侧**）
 - `Segmented`（页内子视图切换；受控）
 - `Card` / `Field` / `SectionTitle` / `Empty` / `Checkbox` / `Stepper`

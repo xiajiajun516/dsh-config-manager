@@ -10,6 +10,10 @@
  *    所以：只在**真要画 / 真要投影的那一刻**取，拿不到就回落本地实现。
  *
  * 该包因此不进 bundle：源码里只有 `require` 调用，白名单登记在 `src/utils/bundle-scan.ts`。
+ *
+ * 当前消费面（三样，全部「拿不到就回落本地实现」）：
+ *  ① `FileTypeIcon` —— 文件类型图标；② `projectUserText` —— 用户正文投影；
+ *  ③ `Tag` —— 只读状态标签（2026-10-17 对齐原生：四态徽章直接吃原生调色板）。
  * 三态缓存：undefined = 还没试过；null = 试过了，这台宿主没有；对象 = 拿到了。
  */
 import type { ComponentType, ReactNode } from 'react'
@@ -36,10 +40,21 @@ export type DshUserTextProjector = (
   references?: { openFile?: unknown; openSkill?: unknown },
 ) => ReactNode
 
-/** 宿主原语包里我们消费的那两个导出（其余一律不碰）。 */
+/**
+ * 宿主 `Tag` 的入参面（只声明我们传的字段）：tone 选调色板，children 是已翻译文案。
+ * 与 ui-primitives 的 Tag.d.ts 逐字同形；className 也透传（我们一般不用）。
+ */
+export interface DshTagProps {
+  tone?: 'outline' | 'solid' | 'neutral' | 'quiet' | 'success' | 'info' | 'warning' | 'danger'
+  className?: string
+  children?: ReactNode
+}
+
+/** 宿主原语包里我们消费的那几个导出（其余一律不碰）。 */
 interface HostPrimitivesFace {
   FileTypeIcon?: unknown
   projectUserText?: unknown
+  Tag?: unknown
 }
 
 let cached: HostPrimitivesFace | null | undefined
@@ -63,6 +78,16 @@ function hostPrimitives(): HostPrimitivesFace | null {
 export function hostFileTypeIcon(): ComponentType<DshFileTypeIconProps> | null {
   const icon = hostPrimitives()?.FileTypeIcon
   if (typeof icon === 'function' || typeof icon === 'object') return icon as ComponentType<DshFileTypeIconProps>
+  return null
+}
+
+/**
+ * DSH 自带的只读标签（徽章）：与宿主同一颗组件、同一套调色板，拿不到回 null
+ * （调用方回落本仓库的 `.badge[data-kind]` 样式）。
+ */
+export function hostTag(): ComponentType<DshTagProps> | null {
+  const tag = hostPrimitives()?.Tag
+  if (typeof tag === 'function' || typeof tag === 'object') return tag as ComponentType<DshTagProps>
   return null
 }
 

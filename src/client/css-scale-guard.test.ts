@@ -48,6 +48,21 @@ function declarations(css: string): { prop: string; value: string; line: number 
 }
 
 const STRIPPED = stripComments(CSS)
+
+/**
+ * **全局 token 块**（文件里第一个 `body { … }`）。
+ *
+ * 为什么 scale 档位只看这里：`--cm-fs-*` / `--cm-r-*` 是全局 scale，定义在 body 上；
+ * 而文件里还存在**局部作用域**的同名重定义（如 §16 聊天卡「镜像宿主活值」块把
+ * `--cm-r-2/3` 钉成宿主的 6/8px）——那是宿主逐值镜像，不是我们的 scale 档位，
+ * 不参与本守卫的原生派生断言（否则会把镜像当成越界）。
+ */
+const GLOBAL_TOKENS = (() => {
+  const at = STRIPPED.indexOf('body {')
+  if (at < 0) return ''
+  const end = STRIPPED.indexOf('}', at)
+  return end < 0 ? STRIPPED.slice(at) : STRIPPED.slice(at, end)
+})()
 const DECLS = declarations(STRIPPED)
 
 function collect(prop: string, pick: (value: string) => string[]): Map<string, number[]> {
@@ -63,17 +78,40 @@ function collect(prop: string, pick: (value: string) => string[]): Map<string, n
   return seen
 }
 
-test('scale-01 字号只有 4 档（11 / 12 / 12.5 / 13px），且不得出现 var(--cm-fs-*) 之外的写法', () => {
+/**
+ * 2026-10-17（对齐 DSH 原生）：字号不再允许散落字面量，**一律走 `--cm-fs-*`**，
+ * 而每个 `--cm-fs-*` 都必须**取自 DSH 原生字体 token**（`--dsw-font-*` 的某一档）——
+ * 档位身份从此由原生 scale 定义，将来原生调档本插件跟着动。
+ *
+ * 例外必须登记（`FONT_TOKEN_EXCEPTIONS`，逐条写理由）：**当前只有面板密集基准档**，
+ * 它是全站正文的锚点、改了等于全站字号地震（chat-entry-view.test.ts ③ 也钉着它）。
+ */
+const FONT_TOKEN_EXCEPTIONS: Readonly<Record<string, string>> = {
+  '--cm-fs-base': '面板密集基准 12.5px：原生最小正文档是 13px，而插件画布 564×720 需要更密半档；改它 = 全站字号地震',
+}
+
+test('scale-01 字号只走 --cm-fs-*，且 token 必须取自原生字体 token', () => {
   const seen = collect('font-size', (v) => (/^[\d.]+px$/.test(v) ? [v] : v.startsWith('var(--cm-fs-') ? [] : [v]))
   const bad = [...seen.entries()].filter(([v]) => !ALLOWED_FONT_SIZE.has(v))
   assert.deepEqual(bad, [], 'font-size 越界值（新档位必须先改本文档与 DESIGN.md §4）：' + JSON.stringify(bad))
-  assert.ok(seen.size >= 3, '字号档位数量异常，疑似扫描失效')
+  const defs = [...GLOBAL_TOKENS.matchAll(/^\s*(--cm-fs-[a-z-]+)\s*:\s*([^;]+);/gm)]
+  assert.ok(defs.length >= 4, '字号档位数量异常，疑似扫描失效：' + JSON.stringify(defs.map((m) => m[1])))
+  const notNative = defs.filter((m) => !/^var\(--dsw-font-/.test((m[2] ?? '').trim()) && FONT_TOKEN_EXCEPTIONS[m[1] ?? ''] === undefined)
+  assert.deepEqual(notNative.map((m) => m[1]), [], '这些字号 token 没有取自 DSH 原生字体 token（--dsw-font-*），也不在例外表里')
+  // 反向自检：例外表只许登记真实存在的 token，防止表里堆死条目
+  for (const name of Object.keys(FONT_TOKEN_EXCEPTIONS)) {
+    assert.ok(defs.some((m) => m[1] === name), '例外表里的 ' + name + ' 在 §1 已经不存在（死条目应当删除）')
+  }
 })
 
-test('scale-02 圆角只有 4 档（4 / 6 / 8px + 药丸 999），另有 0 与 50% 两个结构性豁免', () => {
+test('scale-02 圆角只走 --cm-r-*（+ 药丸/50%/0 豁免），且 token 必须派生自原生 radius scale', () => {
   const seen = collect('border-radius', (v) => [v])
   const bad = [...seen.entries()].filter(([v]) => !ALLOWED_RADIUS.has(v) && !v.startsWith('var(--cm-r-'))
   assert.deepEqual(bad, [], 'border-radius 越界值：' + JSON.stringify(bad))
+  const defs = [...GLOBAL_TOKENS.matchAll(/^\s*(--cm-r-[a-z0-9-]+)\s*:\s*([^;]+);/gm)]
+  assert.ok(defs.length >= 4, '圆角档位数量异常：' + JSON.stringify(defs.map((m) => m[1])))
+  const notNative = defs.filter((m) => m[1] !== '--cm-r-pill' && !/^var\(--dsw-radius-/.test((m[2] ?? '').trim()))
+  assert.deepEqual(notNative.map((m) => m[1]), [], '这些圆角 token 没有派生自原生 --dsw-radius-* scale')
 })
 
 test('scale-03 行高只有 2 档（1.25 标题 / 1.5 正文）', () => {
