@@ -587,6 +587,10 @@ export interface RollbackSegmentResult {
   createdRefusedReason?: string | null
   /** 工作区段：实际写回的字节数（宿主回传才有） */
   writtenBytes?: number
+  /** 因归属隔离（B）跳过的记录条目数：该文件在留点后被**别的会话**写过（宿主回传才有） */
+  foreignSkipped?: number
+  /** 因路径选择（A）跳过的记录条目数（宿主回传才有） */
+  selectionSkipped?: number
   /** 兼容形态：宿主只回传计数时也算得出来 */
   createdAfter?: RollbackCount
   createdAfterTruncated?: boolean
@@ -623,6 +627,13 @@ export interface RollbackRewindOptions {
   segments?: readonly RollbackState[]
   allowPartial?: boolean
   preRewindGuard?: RollbackGuardPolicy
+  /**
+   * 路径级选择性恢复（2026-10-17 定案 A）：只恢复这些路径。
+   *
+   * 缺省 = 全量口径（一字不变）。**空数组是无效输入**（宿主 400）—— 「一个都没勾」由界面拦住，
+   * 绝不让它变成「整次回退静默 noop」。
+   */
+  onlyPaths?: readonly string[]
 }
 
 /** 端口：由 src/client/recovery/recovery-api.ts 实现（Partial 消费，缺失时界面如实说能力缺失）。 */
@@ -997,6 +1008,76 @@ export function rollbackPreviewScope(
 }
 
 /**
+ * 预览里「能被单独勾选」的一行 —— `workspace.files` 的逐条映射（**只含会被改动的文件**）。
+ *
+ * 为什么要有这一层（2026-10-17 定案 A+B）：A 要求用户能**逐文件**决定这次动哪些；
+ * B（写入归属）给出「哪几个文件在留点之后是别的会话写的」，用来决定**默认**勾不勾。
+ * 两件事都收敛在这里、只在这一处（框架无关、node 可测），组件只负责渲染与点击。
+ */
+export interface RollbackSelectionRow {
+  path: string
+  /** 目录前缀 + 基名（与文件行同口径；展示用） */
+  parts: RollbackPathParts
+  /** true = 该文件在留点**之后**是别的会话写的（引擎 foreign 标记；缺字段 = 没有归属证据） */
+  foreign: boolean
+  /** 那些会话的 id（仅 foreign 时给得出） */
+  foreignSessionId?: string
+}
+
+/** 从预览推出可勾选行（只读；绝不改任何判定） */
+export function rollbackSelectionRows(preview: RollbackPreviewResult | null): RollbackSelectionRow[] {
+  const files = preview?.workspace?.files
+  if (!Array.isArray(files)) return []
+  const out: RollbackSelectionRow[] = []
+  for (const file of files) {
+    if (file === null || typeof file !== 'object') continue
+    const path = typeof file.path === 'string' ? file.path : ''
+    if (path === '') continue
+    const row: RollbackSelectionRow = { path, parts: splitRollbackPath(path), foreign: file.foreign === true }
+    if (row.foreign && typeof file.foreignSessionId === 'string' && file.foreignSessionId !== '') {
+      row.foreignSessionId = file.foreignSessionId
+    }
+    out.push(row)
+  }
+  return out
+}
+
+/**
+ * 默认勾选 = **非 foreign** 的行（B 的自动隔离口径）。用户可在弹窗里逐个改回去。
+ *
+ * 为什么要在这里定而不在组件里：同一条默认值要在面板与聊天两个入口一致，
+ * 且「默认排除别的会话的改动」是产品决定，必须可测。
+ */
+export function rollbackDefaultSelection(rows: readonly RollbackSelectionRow[]): string[] {
+  return rows.filter((row) => !row.foreign).map((row) => row.path)
+}
+
+/**
+ * 勾选集 → `onlyPaths`：
+ *  · **全选**（含空清单）⇒ `null`（不传字段 = 走既有全量口径，老宿主也照样工作）；
+ *  · 真的少勾 ⇒ 把选中的清单原样传给宿主（空数组由调用方拦：宿主侧它是 400）。
+ */
+export function rollbackOnlyPaths(
+  rows: readonly RollbackSelectionRow[],
+  selected: readonly string[],
+): string[] | null {
+  if (rows.length === 0) return null
+  const chosen = new Set(selected)
+  const picked = rows.filter((row) => chosen.has(row.path)).map((row) => row.path)
+  return picked.length === rows.length ? null : picked
+}
+
+/** 该不该拦住提交：清单非空、却一个都没勾（宿主会把空数组当 400） */
+export function rollbackSelectionBlocksSubmit(
+  rows: readonly RollbackSelectionRow[],
+  selected: readonly string[],
+): boolean {
+  if (rows.length === 0) return false
+  const chosen = new Set(selected)
+  return !rows.some((row) => chosen.has(row.path))
+}
+
+/**
  * 差异无法逐行展示时的字典键（本层**只回键**，文案在字典里）。
  * 未知 / 缺失原因回落 null —— 调用方按「未知原因」出话，绝不回落成「没有差异」（那是另一件事）。
  */
@@ -1325,6 +1406,13 @@ export interface RollbackRewindRowView {
   /** 逐条事实：**渲染前已逐条过 redact** */
   detail: string[]
   guidance: RollbackGuidanceRowView[]
+  /**
+   * 归属隔离（B）跳过的文件数：这些文件在留点之后是**别的会话**写的，回退没动它们。
+   * 0 = 没有（或宿主没回传）—— 界面只在 > 0 时说这句话（绝不编造 0 的成就）。
+   */
+  foreignSkipped: number
+  /** 路径选择（A）跳过的文件数（用户自己没勾） */
+  selectionSkipped: number
 }
 
 export function rollbackRewindRows(result: RollbackRewindResult | null): RollbackRewindRowView[] {
@@ -1351,6 +1439,8 @@ export function rollbackRewindRows(result: RollbackRewindResult | null): Rollbac
       childSessionId,
       detail: redactLines(segment.detail),
       guidance: rollbackGuidanceRows(segment.guidance),
+      foreignSkipped: numberOrNull(segment.foreignSkipped) ?? 0,
+      selectionSkipped: numberOrNull(segment.selectionSkipped) ?? 0,
     }
   })
 }

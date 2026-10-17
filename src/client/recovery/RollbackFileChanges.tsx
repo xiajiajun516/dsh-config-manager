@@ -50,6 +50,25 @@ export interface RollbackFileChangesProps {
   view?: RollbackFileViewEntry
   /** 文件类型图标的外部来源（装了 dsh-better-sidebar 时由装配点注入）。 */
   renderFileIcon?: RollbackFileIconRenderer
+  /**
+   * 路径级勾选（2026-10-17 定案 A）：**给了**才在每行前面画复选框。
+   * 没给的表面（聊天预览）渲染与旧版**逐字一致** —— 这是刻意的向后兼容，不是遗漏。
+   */
+  selection?: RollbackFileSelection
+}
+
+/** 逐文件勾选的渲染参数（判定全在 src/ui/rollback-view.ts，这里只画） */
+export interface RollbackFileSelection {
+  /** 已勾选的路径 */
+  selected: readonly string[]
+  /** 其它对话在留点之后写过的路径（行上标一句；默认不勾） */
+  foreign: readonly string[]
+  /** 「其它对话改过」那一句（调用点传已翻译文本） */
+  foreignLabel: string
+  /** 勾选框的无障碍名 / 悬停提示（调用点把路径插好的整句） */
+  toggleLabel: (path: string) => string
+  disabled: boolean
+  onToggle: (path: string) => void
 }
 
 /**
@@ -80,7 +99,10 @@ function FileStat({ status, added, removed, unknown, deleted, rt }: {
 }
 
 /** 文件清单（改动行 + 删除行）。两处调用共用这一份渲染。 */
-export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon }: RollbackFileChangesProps) {
+export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon, selection }: RollbackFileChangesProps) {
+  // 勾选与归属都用集合查（清单可达几百条，逐条 includes 是 O(n²)）
+  const selectedSet = selection === undefined ? null : new Set(selection.selected)
+  const foreignSet = selection === undefined ? null : new Set(selection.foreign)
   return (
     <div className={css.rollbackFileList} role="list">
       {files.map((file, index) => {
@@ -99,6 +121,18 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon 
             role="listitem"
             data-kind={previewFileStatusKnown(file.status) ? file.status : undefined}
           >
+            {/* 路径级勾选（A）：只有调用点给了 selection 才画。用原生 input 而不是 Checkbox 原语 ——
+                原语是「复选框**行**」（label 会渲染成可见文本），而这里的可访问名就是文件名本身。 */}
+            {selection !== undefined && selectedSet !== null && (
+              <input
+                type="checkbox"
+                checked={selectedSet.has(file.path)}
+                disabled={selection.disabled}
+                title={selection.toggleLabel(file.path)}
+                aria-label={selection.toggleLabel(file.path)}
+                onChange={() => { selection.onToggle(file.path) }}
+              />
+            )}
             {/* 文件类型图标（DSH 文件树同一颗）。装饰性：行内文件名就是它的可访问名。 */}
             <span className={css.rollbackFileIcon} aria-hidden="true">
               <RollbackFileIcon path={file.path} size={14} render={renderFileIcon} />
@@ -120,6 +154,10 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon 
               >
                 {label}
               </button>
+            )}
+            {/* 归属提示（B）：这一行在留点之后是**别的对话**写的 —— 默认没勾它，勾上就会覆盖对方的改动。 */}
+            {selection !== undefined && foreignSet !== null && foreignSet.has(file.path) && (
+              <span className={css.hint} data-foreign="true">{selection.foreignLabel}</span>
             )}
             {/* ±行数紧跟文件名（统计列右对齐、列宽固定）：三种取值的右缘对齐成一条竖线。 */}
             <span className={css.rollbackFileStat}>

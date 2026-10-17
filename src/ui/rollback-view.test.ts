@@ -834,3 +834,30 @@ test('issue #88：rollbackEntryVisible —— false 收起 / true 显示 / 缺�
 })
 
 
+
+/* ------------------------------------------------------------------ A+B：逐文件选择的界面模型 */
+
+test('A/B 选择模型：默认排除别的对话改过的文件；全选时不传 onlyPaths', async () => {
+  const { rollbackSelectionRows, rollbackDefaultSelection, rollbackOnlyPaths, rollbackSelectionBlocksSubmit } = await import('./rollback-view.ts')
+  const preview = {
+    ok: true, id: 'rp-1', storage: { available: true },
+    workspace: {
+      files: [
+        { path: 'C:/ws/a.txt', status: 'overwrite', added: 1, removed: 1, truncated: false },
+        { path: 'C:/ws/b.txt', status: 'overwrite', added: null, removed: null, truncated: true, foreign: true, foreignSessionId: 'session-x' },
+      ],
+    },
+  } as unknown as import('./rollback-view.ts').RollbackPreviewResult
+  const rows = rollbackSelectionRows(preview)
+  assert.equal(rows.length, 2)
+  assert.equal(rows[1]?.foreign, true)
+  assert.equal(rows[1]?.foreignSessionId, 'session-x')
+  const fallback = rollbackDefaultSelection(rows)
+  assert.deepEqual(fallback, ['C:/ws/a.txt'], '默认只勾非 foreign 的文件')
+  assert.deepEqual(rollbackOnlyPaths(rows, fallback), ['C:/ws/a.txt'])
+  assert.equal(rollbackOnlyPaths(rows, rows.map((row) => row.path)), null, '全选 ⇒ null（不传字段，走既有全量口径）')
+  assert.equal(rollbackSelectionBlocksSubmit(rows, []), true, '一个都没勾必须拦住（宿主侧空数组是 400）')
+  assert.equal(rollbackSelectionBlocksSubmit(rows, fallback), false)
+  assert.deepEqual(rollbackSelectionRows(null), [])
+  assert.deepEqual(rollbackSelectionRows({ workspace: { files: 'nope' } } as unknown as import('./rollback-view.ts').RollbackPreviewResult), [])
+})

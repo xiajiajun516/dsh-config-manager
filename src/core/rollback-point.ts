@@ -4309,7 +4309,7 @@ export class RollbackPointEngine {
       pushDetail(detail, 'selection-skipped=' + String(selectionSkipped) + ' selection=' + String(selection?.size ?? 0))
     }
     if (foreignSkipped > 0) {
-      pushDetail(detail, 'foreign-skipped=' + String(foreignSkipped) + ' (留点后被其它会话改写的记录条目，回退不动它们)')
+      pushDetail(detail, 'foreign-skipped=' + String(foreignSkipped) + ' (records written by other sessions after this point; left untouched)')
     }
     const leftovers = {
       leftovers: plan.all.slice(0, ROLLBACK_LEFTOVER_LIST_LIMIT),

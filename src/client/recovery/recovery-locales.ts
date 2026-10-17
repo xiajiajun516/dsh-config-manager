@@ -443,6 +443,10 @@ export const zh = {
    * 文件 —— 整文件删除走**另一条**清单（`rollback.preview.removalsTitle` / `createdSkipped`），
    * 删除清单由引擎与执行阶段**共用同一个函数**算出（预览说会删的 = 实际删的）。 */
   'rollback.preview.files.title': '将被回退的文件：',
+  'rollback.preview.select.foreign': '其它对话改过',
+  'rollback.preview.select.toggle': '「{path}」：勾上则这次回退恢复它',
+  'rollback.result.foreignSkipped': '{n} 个文件在留点后被其它对话改过，这次没有回退它们',
+  'rollback.result.selectionSkipped': '{n} 个文件按你的勾选跳过了',
   'rollback.preview.files.empty': '工作区与该回退点一致，无需恢复',
   /* —— T15：**预览态**（点「回退」之前那一屏）的四态文案 ——
    * 判据只来自 preview 字段（available / overwrite / different / missing / reasonCode /
@@ -1015,6 +1019,10 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.preview.notice.skipped': '{n} item(s) were skipped at capture time (not recorded; they are in the proof list, so they are outside the deletion test)',
   'rollback.preview.notice.truncated': 'Capture was truncated by a limit (per-file / byte budget / file-count budget); whether anything is deleted also depends on whether the proof list (path index) is complete',
   'rollback.preview.files.title': 'Files that will be rewound:',
+  'rollback.preview.select.foreign': 'Changed by another conversation',
+  'rollback.preview.select.toggle': '"{path}": check to restore it in this rewind',
+  'rollback.result.foreignSkipped': '{n} file(s) were changed by another conversation after this point; this rewind left them untouched',
+  'rollback.result.selectionSkipped': '{n} file(s) skipped by your selection',
   'rollback.preview.files.empty': 'The workspace already matches this rollback point, nothing to restore',
   'rollback.preview.files.unavailable': 'The workspace state of this rollback point has no usable record (reason: {reason}), nothing to restore',
   'rollback.preview.files.unavailableSession': 'The workspace state of this rollback point has no usable record (reason: {reason}); the session will still be rewound to before this point',

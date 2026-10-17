@@ -28,6 +28,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
+import { RollbackWriteAttribution } from './rollback-attribution.ts'
+
 import {
   ROLLBACK_ANCESTOR_MAX_DEPTH,
   ROLLBACK_DEFAULT_CAPTURE_INFLIGHT_BYTES,
@@ -3426,3 +3428,93 @@ test('R-41 回退期走查也有时间预算：中断只让候选变少（安全
 })
 
 
+
+/* ------------------------------------------------------------------ A+B（2026-10-17）：路径级选择性恢复 + 写入归属隔离 */
+
+test('A-1 路径级选择性恢复：只恢复点名的文件，其余原样保留并如实计数', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id
+  assert.ok(id !== undefined)
+  const a = path.join(fx.workspaceDir, 'a.txt')
+  const b = path.join(fx.workspaceDir, 'src', 'b.txt')
+  await fs.writeFile(a, 'A2')
+  await fs.writeFile(b, 'B2')
+  const result = await engine.rewind({ id, userConfirmed: true, mode: 'files', onlyPaths: [a] })
+  assert.equal(result.outcome, 'restored')
+  assert.equal(await readText(a), 'A1', '点名的文件被恢复')
+  assert.equal(await readText(b), 'B2', '没点名的文件一个字节都不动')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.selectionSkipped, 1, '跳过的条目数必须如实回传')
+})
+
+test('A-2 点名一个「既未记录、也不在删除候选」的路径 ⇒ fail-closed 零写入', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const engine = makeEngine(fx)
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id
+  assert.ok(id !== undefined)
+  const a = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(a, 'A2')
+  const result = await engine.rewind({ id, userConfirmed: true, mode: 'files', onlyPaths: [path.join(fx.workspaceDir, 'nope.txt'), a] })
+  assert.equal(result.outcome, 'failed')
+  // 顶层 code 是既有口径（工作区段失败恒 restore-failed）—— 具体原因逐字在段里，可查
+  assert.equal(result.segments[0]?.reasonCode, 'invalid-input')
+  assert.equal(result.segments[0]?.detail.some((line) => line.includes('selection-unknown-path')), true)
+  assert.equal(result.segments[0]?.restored, 0)
+  assert.equal(await readText(a), 'A2', '拒绝时零写入（连点名的那条也不写）')
+})
+
+test('B-1 归属隔离：留点后被**别的会话**写过的文件，回退不动它（并如实计数）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id
+  assert.ok(id !== undefined)
+  const a = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(a, 'A2')
+  attr.noteToolCall('session-OTHER', { name: 'write', callId: 'c1', arguments: JSON.stringify({ file_path: a }) })
+  const result = await engine.rewind({ id, userConfirmed: true, mode: 'files' })
+  assert.equal(result.outcome, 'restored')
+  assert.equal(await readText(a), 'A2', '别的会话的改动不被这次回退撤销')
+  const segment = result.segments.find((s) => s.state === 'workspace')
+  assert.equal(segment?.foreignSkipped, 1)
+})
+
+test('B-2 归属是**本会话** / 未判定 ⇒ 照常恢复（未判定绝不当作别的会话写的）', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id
+  assert.ok(id !== undefined)
+  const a = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(a, 'A2')
+  // 本会话写的 ⇒ 归属有、但不是「别的会话」⇒ 照常恢复
+  attr.noteToolCall('session-1111', { name: 'write', callId: 'c2', arguments: JSON.stringify({ file_path: a }) })
+  const result = await engine.rewind({ id, userConfirmed: true, mode: 'files' })
+  assert.equal(await readText(a), 'A1')
+  assert.equal(result.segments.find((s) => s.state === 'workspace')?.foreignSkipped, undefined)
+})
+
+test('B-3 显式点名压过归属隔离：用户明确要它，归属不再拦', async (t) => {
+  const fx = await makeFixture()
+  t.after(fx.cleanup)
+  const attr = new RollbackWriteAttribution({ file: path.join(fx.dataDir, 'rollback-points', 'attribution.json'), flushDelayMs: 0 })
+  const engine = makeEngine(fx, { attribution: attr })
+  const captured = await capturePoint(engine, fx)
+  const id = captured.point?.id
+  assert.ok(id !== undefined)
+  const a = path.join(fx.workspaceDir, 'a.txt')
+  await fs.writeFile(a, 'A2')
+  attr.noteToolCall('session-OTHER', { name: 'write', callId: 'c3', arguments: JSON.stringify({ file_path: a }) })
+  const result = await engine.rewind({ id, userConfirmed: true, mode: 'files', onlyPaths: [a] })
+  assert.equal(await readText(a), 'A1', '显式点名 = 用户要它，归属隔离不再生效')
+  assert.equal(result.segments.find((s) => s.state === 'workspace')?.foreignSkipped, undefined)
+})

@@ -34,8 +34,12 @@ import {
   rollbackPointGroups,
   rollbackPreviewGuidance,
   rollbackPreviewScope,
+  rollbackDefaultSelection,
+  rollbackOnlyPaths,
   rollbackPreviewVerdict,
   rollbackPreviewWarnings,
+  rollbackSelectionBlocksSubmit,
+  rollbackSelectionRows,
   rollbackRewindCounts,
   rollbackRewindRows,
   rollbackRowFileCount,
@@ -142,6 +146,11 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
    * （= 最新那条对话，见下方 activeGroup 的推导）。
    */
   const [selectedSession, setSelectedSession] = useState<string | null>(null)
+  /**
+   * 路径级勾选（2026-10-17 定案 A）：这次回退要恢复哪些文件。
+   * 初值在**每次打开预览**时按引擎的归属标记重置（别的对话改过的默认不勾，见 rollbackSelectionRows）。
+   */
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   /** 「刷新」在途：**保留旧内容**，只把刷新按钮置为在途（见 load 的 keep 语义） */
   const [refreshing, setRefreshing] = useState(false)
   /** 开关（issue #88）在途：置灰防重复点击，但不改开关的显示值（值只在宿主确认后变） */
@@ -214,6 +223,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
         if (!mounted.current || previewSeq.current !== seq) return
         setPreviewLoading(false)
         setPreview(res)
+        // 默认勾选 = 非 foreign 的行（= B 的自动隔离口径），用户在清单里可以逐条改回去
+        setSelectedPaths(rollbackDefaultSelection(rollbackSelectionRows(res)))
         // 默认 mode = 按可用段推导（判定在 ui 层，这里只取结果）
         setMode(rollbackPreviewVerdict(res).mode)
         if (!res.ok) setActionError(t(dyn(rollbackCodeKey(res.code))))
@@ -260,6 +271,8 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
       mode,
       segments: rollbackModeSegments(mode),
       allowPartial,
+      // 全选（或清单为空）⇒ onlyPaths 为 null ⇒ 不传字段，走既有全量口径
+      ...(onlyPaths === null ? {} : { onlyPaths }),
     }).then(
       (res) => {
         if (!mounted.current) return
@@ -369,6 +382,11 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
   const previewGuidance = rollbackPreviewGuidance(preview)
   /** 会被**改动** / 会被**删除**的文件：与聊天里的回退预览同一对读法（引擎 preview.workspace 的同一份数据）。 */
   const previewFiles = readRollbackPreviewFiles(preview?.workspace)
+  /** 可勾选行 / 勾选结果（判定全在 src/ui/rollback-view.ts） */
+  const selectionRows = rollbackSelectionRows(preview)
+  const selectionBlocked = rollbackSelectionBlocksSubmit(selectionRows, selectedPaths)
+  const selectionForeign = selectionRows.filter((row) => row.foreign).map((row) => row.path)
+  const onlyPaths = rollbackOnlyPaths(selectionRows, selectedPaths)
   const previewRemovals = readRollbackPreviewRemovals(preview?.workspace)
   /** 三个数字的口径与「文件行」同源（rollbackPreviewScope：行数只累加两侧都可信的那部分）。 */
   const previewScope = rollbackPreviewScope(previewFiles, previewRemovals)
@@ -714,7 +732,22 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                   </span>
                 </div>
                 <div className={css.planScroll}>
-                  <RollbackFileChanges files={previewFiles} removals={previewRemovals} rt={t} view={fileView} />
+                  <RollbackFileChanges
+                    files={previewFiles}
+                    removals={previewRemovals}
+                    rt={t}
+                    view={fileView}
+                    selection={{
+                      selected: selectedPaths,
+                      foreign: selectionForeign,
+                      foreignLabel: t('rollback.preview.select.foreign'),
+                      toggleLabel: (path: string) => t('rollback.preview.select.toggle', { path }),
+                      disabled: busy,
+                      onToggle: (path: string) => {
+                        setSelectedPaths((prev) => (prev.includes(path) ? prev.filter((item) => item !== path) : [...prev, path]))
+                      },
+                    }}
+                  />
                 </div>
                 {/* 「查看差异」的就地展示：放在清单**外面**（列表自己有内滚，放里面会滚出视野）。
                     弹窗内只有这一条通道（设置页没有 DSH 右侧栏），渲染与聊天侧降级通道同一个面板。 */}
@@ -752,7 +785,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             )}
 
             <div className={css.actionRow}>
-              <Button variant="danger" disabled={busy || !canRewind} loading={busy} onClick={() => { setConfirmOpen(true) }}>{t('rollback.rewind')}</Button>
+              <Button variant="danger" disabled={busy || !canRewind || selectionBlocked} loading={busy} onClick={() => { setConfirmOpen(true) }}>{t('rollback.rewind')}</Button>
               <span className={css.statusSpacer} />
               <Button disabled={busy} onClick={closePreview}>{t('common.cancel')}</Button>
             </div>
@@ -779,6 +812,13 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                     <div className={css.rollbackPointMeta}>
                       <span>{t('rollback.rewind.result.counts', { restored: segment.restored, removed: segment.removedCount, failed: segment.failed, leftovers: segment.leftoversCount })}</span>
                       {segment.childSessionId !== null && <span>{t('rollback.rewind.result.child', { id: segment.childSessionId })}</span>}
+                      {/* 归属隔离与路径选择的**如实**回传：跳过了就要说，不能只报「恢复 N 项」 */}
+                      {segment.foreignSkipped > 0 && (
+                        <span>{t('rollback.result.foreignSkipped', { n: segment.foreignSkipped })}</span>
+                      )}
+                      {segment.selectionSkipped > 0 && (
+                        <span>{t('rollback.result.selectionSkipped', { n: segment.selectionSkipped })}</span>
+                      )}
                       {segment.detail.map((line) => <span key={line}>{line}</span>)}
                       {segment.guidance.map((row) => (
                         <span key={row.key + (row.detail ?? '')}>{t(dyn(row.key))}{row.detail !== null ? ' — ' + row.detail : ''}</span>
