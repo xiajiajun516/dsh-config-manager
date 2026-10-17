@@ -3599,11 +3599,12 @@ body {
    为什么必须是「容器」而不是给叶子行加缩进（2026-10-17 用户实测两轮）：
    只给叶子行加时，中间层（「插件」→ 某个插件 → 它的数据目录）没有竖线也没有缩进 ——
    只要有中间层，层级就又看不出来了。容器在每个 Collapse 内部，层级因此自动逐层累加。
-   几何：margin-left 8px 让竖线落在父行 chevron 的中线下，padding-left 14px 给出层级差
-   （父行勾选框 22px → 子层 45px）；间距只用 8 / 14 两档（DESIGN.md §4 的节奏档）。 */
+   几何（2026-10-17 第二轮按用户反馈收紧）：margin-left 8px 让竖线落在父行 chevron 的中线下，
+   padding-left **4px** —— 每层只推进 13px（父行勾选框 22px → 子层 35px → 孙层 48px）。
+   第一版用 14px（每层 23px）被用户判为「子项离父项太远」：层级感由**竖线**承担，不靠大间距。 */
 .pickerChildren {
   margin-left: 8px;
-  padding-left: 14px;
+  padding-left: 4px;
   border-left: 1px solid var(--dsw-alias-border-l1);
 }
 

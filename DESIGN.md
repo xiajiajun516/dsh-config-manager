@@ -606,11 +606,13 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   下面的 `pet.json` 会被读成同级；而**只给叶子行加缩进也不够** —— 中间层（「插件」→ 某个插件 →
   它的数据目录）会没有竖线也没有缩进，只要有中间层层级就又看不出来。
   定案 = **容器式逐层缩进**：每个 `<Collapse>` 的内容外面包一层 `.pickerChildren`
-  （`margin-left: 8px; padding-left: 14px; border-left: 1px solid var(--dsw-alias-border-l1)`），
-  层级因此**逐层累加**：父行勾选框 22px → 子层 45px → 孙层 68px，每层都有自己的竖线，
-  竖线落在父行 chevron 的中线下。`.pickerUnitNested` 只保留 `gap: 4px`（左缘由容器给），
+  （`margin-left: 8px; padding-left: 4px; border-left: 1px solid var(--dsw-alias-border-l1)`），
+  层级因此**逐层累加**：父行勾选框 22px → 子层 35px → 孙层 48px（**每层只推进 13px**），
+  每层都有自己的竖线，竖线落在父行 chevron 的中线下。`.pickerUnitNested` 只保留 `gap: 4px`（左缘由容器给），
   **分区下的单元行也走这套子行样式** —— 原先用 `.pickerUnit` 的 16px 内缩、比父级勾选框（22px）
-  还靠左，正是「看起来平级」的根因之一。间距只用 8 / 14 两档（`css-scale-guard` 只放行 §4 的节奏档）。
+  还靠左，正是「看起来平级」的根因之一。
+  **间距的第二轮定案（同日）**：第一版 padding-left 14px（每层 23px）被用户判为「子项离父项太远」——
+  层级感由**竖线**承担，**不靠大间距**；间距只用 8 / 4 两档（`css-scale-guard` 只放行 §4 的节奏档）。
   **新增任何一层嵌套，必须把该层的 Collapse 内容包进 `.pickerChildren`**，否则那一层会「断开」。
 - **单元行排版（UI-16）**：`.pickerUnitName` = 中段省略 + `title` 全文（`tailWeightedEllipsis(label, 44)`，
     保留尾部时间戳/版本等区分信息，见 §9 anti-pattern 5）+ `min-width:0 / max-width:280px /
