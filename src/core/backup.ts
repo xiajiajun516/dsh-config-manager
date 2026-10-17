@@ -164,6 +164,16 @@ for (const id of SECTION_IDS) {
  */
 export const PLUGIN_PATCH_REF_PREFIX = 'patchFile:'
 
+/**
+ * plugins 分区中「profile 的 package.json」这一文件目标的 ref（issue #95）。
+ *
+ * 声明 host 自带的 bundle 层（`dsh.profile.bundles`）就是写这个文件，因此它必须与
+ * `pnpm-workspace.yaml` 同级：进导入前快照 → 回滚能整文件还原，否则一次导入留下的声明
+ * 撤不掉（照抄 \`patchFile:\` 的做法，用一个符号 ref 而不是真实文件名——ref 空间里还有
+ * 任意 patch 行 id，靠形状判断会撞车）。
+ */
+export const PLUGIN_PROFILE_MANIFEST_REF = 'profileManifest'
+
 /** profile 目录绝对路径（plugins 分区内文件类目标的基准） */
 function profileDirOf(ctx: HostContext): string {
   const profile = ctx.profile !== undefined && ctx.profile !== '' ? ctx.profile : 'web';
@@ -216,6 +226,10 @@ export function resolveFileTarget(ctx: HostContext, adapter: SectionId, ref: str
   if (adapter === 'plugins' && ref.startsWith(PLUGIN_PATCH_REF_PREFIX)) {
     return path.join(profileDirOf(ctx), ref.slice(PLUGIN_PATCH_REF_PREFIX.length));
   }
+  // issue #95：声明 host 自带 bundle 层 = 写 profile 的 package.json（快照/回滚必须覆盖它）
+  if (adapter === 'plugins' && ref === PLUGIN_PROFILE_MANIFEST_REF) {
+    return path.join(profileDirOf(ctx), 'package.json');
+  }
   const base = FILE_BASES[adapter] ?? '';
   return path.join(ctx.homeDir, base, ref);
 }
@@ -236,6 +250,7 @@ export function resolveFileTargetRel(adapter: SectionId, ref: string, profile?: 
   if (adapter === 'plugins') {
     const profileDir = `profiles/${profile !== undefined && profile !== '' ? profile : 'web'}`;
     if (ref === 'pnpm-workspace.yaml') return normalizePath(`${profileDir}/pnpm-workspace.yaml`);
+    if (ref === PLUGIN_PROFILE_MANIFEST_REF) return normalizePath(`${profileDir}/package.json`);
     if (ref.startsWith(PLUGIN_PATCH_REF_PREFIX)) {
       return normalizePath(`${profileDir}/${ref.slice(PLUGIN_PATCH_REF_PREFIX.length)}`);
     }
@@ -316,7 +331,7 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
     case 'plugins':
     case 'prompts': {
       // plugins 分区的 pnpm-workspace.yaml / patch 文件 → 整文件快照（file 类，回滚可整文件还原）
-      if (target.adapter === 'plugins' && (target.ref === 'pnpm-workspace.yaml' || target.ref.startsWith(PLUGIN_PATCH_REF_PREFIX))) {
+      if (target.adapter === 'plugins' && (target.ref === 'pnpm-workspace.yaml' || target.ref === PLUGIN_PROFILE_MANIFEST_REF || target.ref.startsWith(PLUGIN_PATCH_REF_PREFIX))) {
         const abs = resolveFileTarget(ctx, target.adapter, target.ref);
         if (!(await ctx.fs.exists(abs))) {
           return { kind: 'file', adapter: target.adapter, ref: target.ref, before: null, existed: false };

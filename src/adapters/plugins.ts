@@ -13,7 +13,7 @@
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { sha256Hex } from '../utils/hashing.ts';
-import { installSpecFor, resolveProcessProfileName } from '../core/plugin-cli.ts';
+import { installSpecFor, isBundlesOnlyEntry, mergeBundleDeclaration, resolveProcessProfileName } from '../core/plugin-cli.ts';
 import { classifyPluginSpec, LOCAL_PLUGIN_DIR, resolveLocalPluginPath } from '../core/local-plugin-pack.ts';
 import type { PackLocalPluginsResult } from '../core/local-plugin-pack.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
@@ -22,7 +22,7 @@ import { engineMsg } from './messages.ts';
 import { stringifyJsonSafe } from '../utils/json.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { isENOENT } from '../utils/guards.ts';
-import { PLUGIN_PATCH_REF_PREFIX } from '../core/backup.ts';
+import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
 import { parsePnpmPatchedDependencies, sanitizePnpmWorkspacePatches } from './pnpm-workspace.ts';
 import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection, PnpmPatchFile } from '../schema/types.ts';
@@ -321,6 +321,17 @@ function unitsOf(
   return units;
 }
 
+/**
+ * 目标机 profile 的 `dsh.profile.bundles` 视图（issue #95）。
+ *
+ * 三态**必须分开**：`absent`（没有 package.json）、`unreadable`（读失败 / JSON 坏 / 形状不符）、
+ * `ok`。把后两者当成「没有」会直接去写一份清单，抹掉 profile 的其它字段。
+ */
+type TargetBundleView =
+  | { state: 'ok'; names: Set<string>; text: string }
+  | { state: 'absent' }
+  | { state: 'unreadable'; reason: string };
+
 export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
   readonly id = 'plugins' as const;
   // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
@@ -389,6 +400,9 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           isBundle: p.isBundle ?? false,
           inBundles: p.inBundles ?? [],
           enabled: p.enabled,
+          // issue #95：只在 dsh.profile.bundles 里声明的层（源机无依赖声明）必须带上这个标记，
+          // 导入端据此走「只声明」而不是 npm 安装。缺省不写，普通依赖的字节与改造前逐字一致。
+          ...(p.bundlesOnly === true ? { bundlesOnly: true } : {}),
         });
       }
     } catch (err) {
@@ -577,6 +591,81 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     return set;
   }
 
+  /**
+   * 读目标机 profile 的 `dsh.profile.bundles`（issue #95）。
+   *
+   * 相对路径与写入目标同源（`profiles/<profile>/package.json`），走 `ctx.target.fs` 而不是
+   * 宿主私有通道：与 pnpm-workspace.yaml / patch 文件同一条 I/O 纪律（受限、可被 MemFs 测试）。
+   */
+  private async targetBundles(ctx: ImportContext): Promise<TargetBundleView> {
+    const rel = `${PNPM_PROFILE_DIR(ctx.target.profile)}/package.json`;
+    try {
+      if (!(await ctx.target.fs.exists(rel))) return { state: 'absent' };
+      const text = new TextDecoder().decode(await ctx.target.fs.readFile(rel));
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        return { state: 'unreadable', reason: ctx.msg('adapter.pluginHostBundleBadJson') };
+      }
+      const bundles = (parsed as { dsh?: { profile?: { bundles?: unknown } } } | null)?.dsh?.profile?.bundles;
+      if (!Array.isArray(bundles) || bundles.some((entry) => typeof entry !== 'string')) {
+        return { state: 'unreadable', reason: ctx.msg('adapter.pluginHostBundleBadShape') };
+      }
+      return { state: 'ok', names: new Set(bundles as string[]), text };
+    } catch (err) {
+      return { state: 'unreadable', reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * 把 host 自带的层声明进目标机 profile 的 `dsh.profile.bundles`（issue #95）。
+   *
+   * 为什么**不走安装通道**：这类层的包由 DSH 从自己的安装位置解析；按裸包名 `dsh plugin add`
+   * 会把 npm `dist-tags.latest` 的副本装进 profile，与 host 的版本线脱节 —— 真机故障：
+   * host 0.2.1-rc.2 + 包 0.2.1-alpha.2 的隔离组契约对不上 → `session-controller` 一直 pending
+   * → 新建会话 service-unavailable。声明不了时只报非致命 warning（§34.17），不拖垮其余配置。
+   */
+  private async declareHostBundle(name: string, ctx: ImportContext): Promise<ApplyResult> {
+    const msg = ctx.msg;
+    const rel = `${PNPM_PROFILE_DIR(ctx.target.profile)}/package.json`;
+    const view = await this.targetBundles(ctx);
+    if (view.state === 'absent') {
+      return { ok: false, warning: true, message: msg('adapter.pluginHostBundleNoManifest', { name }) };
+    }
+    if (view.state === 'unreadable') {
+      return {
+        ok: false,
+        warning: true,
+        message: msg('adapter.pluginHostBundleManifestUnreadable', { name, reason: view.reason }),
+      };
+    }
+    if (view.names.has(name)) {
+      return { ok: true, needsRestart: false, message: msg('adapter.pluginHostBundleSame', { name }) };
+    }
+    const merged = mergeBundleDeclaration(view.text, name);
+    if (merged === null) {
+      return {
+        ok: false,
+        warning: true,
+        message: msg('adapter.pluginHostBundleManifestUnreadable', {
+          name,
+          reason: msg('adapter.pluginHostBundleBadShape'),
+        }),
+      };
+    }
+    try {
+      await ctx.target.fs.writeFile(rel, new TextEncoder().encode(merged.text));
+    } catch (err) {
+      return {
+        ok: false,
+        warning: true,
+        message: msg('adapter.pluginHostBundleWriteFailed', { name, reason: err instanceof Error ? err.message : String(err) }),
+      };
+    }
+    return { ok: true, needsRestart: true, message: msg('adapter.pluginHostBundleDeclared', { name }) };
+  }
+
   async analyzeImport(data: PluginsSection, ctx: ImportContext): Promise<PlanItem[]> {
     const msg = ctx.msg;
     const items: PlanItem[] = [];
@@ -667,8 +756,42 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
 
     // 插件：包名唯一键；同版本 Skip / 未装 Install / 版本不同 Conflict
     const targetInstalled = await ctx.target.plugins.listInstalled();
+    // issue #95：只在 dsh.profile.bundles 里声明的层（源机没有依赖声明）**不装 npm 包** ——
+    // 它的名字只声明进目标机的 bundles，由 DSH 从自己的安装位置解析。只在真出现这类条目时才读
+    // 目标清单（其余场景零额外 I/O，行为与改造前逐字一致）。
+    const bundleView = data.plugins.some((p) => isBundlesOnlyEntry(p)) ? await this.targetBundles(ctx) : null;
     for (const p of data.plugins) {
       const id = `plugin:${p.name}`;
+      if (isBundlesOnlyEntry(p)) {
+        if (bundleView !== null && bundleView.state === 'ok' && bundleView.names.has(p.name)) {
+          items.push({
+            id, kind: 'Skip', adapter: 'plugins',
+            description: msg('adapter.pluginHostBundleSame', { name: p.name }),
+            detail: msg('adapter.pluginHostBundleDetail'),
+            severity: 'info',
+          });
+        } else if (bundleView !== null && bundleView.state === 'ok') {
+          items.push({
+            id, kind: 'Create', adapter: 'plugins',
+            description: msg('adapter.pluginHostBundleDeclare', { name: p.name }),
+            detail: msg('adapter.pluginHostBundleDetail'),
+            severity: 'info',
+            target: { adapter: 'plugins', ref: PLUGIN_PROFILE_MANIFEST_REF },
+          });
+        } else {
+          // 清单缺 / 读不到 / 形态不符：**不猜也不重建**，如实告警（非致命，其余分区照常导入）
+          items.push({
+            id,
+            kind: 'Warning',
+            adapter: 'plugins',
+            description: bundleView === null || bundleView.state === 'absent'
+              ? msg('adapter.pluginHostBundleNoManifest', { name: p.name })
+              : msg('adapter.pluginHostBundleManifestUnreadable', { name: p.name, reason: bundleView.reason }),
+            severity: 'warning',
+          });
+        }
+        continue;
+      }
       const tp = targetInstalled.find((t) => t.name === p.name);
       // T1：该插件在备份内自带 tarball（本地源 link:/file:）→ 目标机无需原始路径即可安装。
       const hasTarball = tarballOf(data, p.name) !== undefined;
@@ -802,10 +925,16 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     // 拖垮已成功导入的其余配置——与 workspaces 的「目标不可达 → warning」同款语义。
     if (item.id.startsWith('plugin:')) {
       const name = item.id.replace(/^plugin:/, '');
+      const data = ctx.sections.get('plugins') as PluginsSection | undefined;
+      // issue #95：host 自带的层（源机只在 dsh.profile.bundles 声明、没有依赖声明）走「只声明」，
+      // 绝不进 npm 安装通道（按裸包名装 = 把 dist-tag latest 的副本塞进 profile）。
+      const entry = data?.plugins.find((p) => p.name === name);
+      if (entry !== undefined && isBundlesOnlyEntry(entry)) {
+        return await this.declareHostBundle(name, ctx);
+      }
       try {
         // 非 registry 来源（github:/file: 等）按来源 spec 安装，registry 包按裸包名装 npm 最新版
-        const data = ctx.sections.get('plugins') as PluginsSection | undefined;
-        let spec = data?.plugins.find((p) => p.name === name)?.spec;
+        let spec = entry?.spec;
 
         // T1：备份内自带 tarball → 解包到 homeDir 内的本地插件缓存目录，把 spec 重写为绝对路径。
         // 这是「换机后本地插件不再丢失」的关键：原始绝对路径在目标机不存在，解包出的 tgz 一定存在。
@@ -880,6 +1009,11 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           const name = (p as { name?: unknown }).name;
           if (typeof name !== 'string' || name === '') {
             issues.push({ path: `plugins[${i}].name`, message: msg('adapter.validate.requiredField', { subject: 'plugins[].name' }), severity: 'error' });
+          }
+          // issue #95：`bundlesOnly` 决定走不走 npm 安装通道，写错类型必须拦下（缺省合法）
+          const bundlesOnly = (p as { bundlesOnly?: unknown }).bundlesOnly;
+          if (bundlesOnly !== undefined && typeof bundlesOnly !== 'boolean') {
+            issues.push({ path: `plugins[${i}].bundlesOnly`, message: msg('adapter.validate.boolean', { subject: 'plugins[].bundlesOnly' }), severity: 'error' });
           }
         }
       }

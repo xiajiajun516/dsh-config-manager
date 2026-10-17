@@ -13,8 +13,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  listInstalledPlugins, readInstalled, readInstalledVersion, reconcileBundles,
-  resolveProfileDir,
+  isBundlesOnlyEntry, listInstalledPlugins, mergeBundleDeclaration, readInstalled, readInstalledVersion,
+  reconcileBundles, resolveProfileDir,
 } from './plugin-cli.ts';
 import { enterRescueMode } from './boot-rescue.ts';
 import type { PluginInfo } from './types.ts';
@@ -146,7 +146,9 @@ test('issue #28: 仅由 dsh.profile.bundles 声明的层必须出现在已装清
     assert.equal(bundleOnly?.version, '0.3.1', '版本取 node_modules 落盘版本');
     assert.equal(bundleOnly?.isBundle, true);
     assert.deepEqual(bundleOnly?.inBundles, ['@linxin666/dsh-web-ui-all']);
-    assert.equal(bundleOnly?.spec, undefined, '无依赖声明 → 无 spec（导入按裸包名装最新版）');
+    assert.equal(bundleOnly?.spec, undefined, '无依赖声明 → 无 spec');
+    // issue #95：本机**有**落盘副本的手工层不是「host 自带层」，标记不得出现（保持安装通道行为）
+    assert.equal(bundleOnly?.bundlesOnly, undefined, '本机有副本 → 不标记 bundlesOnly');
     // 从未落盘的 bundles 条目：仍列出（它确实是启动时会挂载的层），版本空串不抛
     assert.equal(list.find((p) => p.name === 'stale-pkg')?.version, '');
     // in-box bundle 依然不出现（无论来自 dependencies 还是 bundles）
@@ -233,4 +235,64 @@ test('reconcileBundles：救援模式下必须停手（不得把收窄掉的用�
   } finally {
     cleanup();
   }
+});
+
+test('issue #95: 只在 bundles 里声明、且本机没有落盘副本的层必须标记 bundlesOnly', () => {
+  const { homeDir, profileDir, cleanup } = makeTempProfile(
+    { 'pkg-a': '1.0.0' },
+    ['@deepseek-ai/dsh-experimental-session-search', '@linxin666/dsh-web-ui-all'],
+  );
+  try {
+    writeInstalledPkg(profileDir, 'pkg-a', '1.0.0');
+    writeInstalledPkg(profileDir, '@linxin666/dsh-web-ui-all', '0.3.1', 'patch.yml');
+
+    const list = listInstalledPlugins(homeDir, 'web');
+    const hostLayer = list.find((p) => p.name === '@deepseek-ai/dsh-experimental-session-search');
+    assert.equal(hostLayer?.version, '', '本 profile 没装它 → 版本空串');
+    assert.equal(hostLayer?.bundlesOnly, true, '无依赖 + 无落盘副本 ⇒ 只能由 DSH 自己提供');
+    assert.equal(list.find((p) => p.name === '@linxin666/dsh-web-ui-all')?.bundlesOnly, undefined, '有落盘副本 → 保持旧行为');
+    assert.equal(list.find((p) => p.name === 'pkg-a')?.bundlesOnly, undefined, '普通依赖不得带标记');
+  } finally {
+    cleanup();
+  }
+});
+
+test('issue #95: isBundlesOnlyEntry —— 显式字段优先，旧备份按形状推断', () => {
+  assert.equal(isBundlesOnlyEntry({ bundlesOnly: true, spec: '^1.0.0', version: '1.0.0' }), true, '显式字段优先');
+  assert.equal(isBundlesOnlyEntry({ bundlesOnly: false, version: '' }), false, '显式 false 不得被形状覆盖');
+  assert.equal(isBundlesOnlyEntry({ version: '' }), true, '旧备份：无 spec 且无已装版本');
+  assert.equal(isBundlesOnlyEntry({ spec: '^1.0.0', version: '' }), false, '有依赖声明 → 普通依赖（哪怕本机没装全）');
+  assert.equal(isBundlesOnlyEntry({ version: '0.3.1' }), false, '本机有落盘副本 → 手工层');
+});
+
+test('issue #95: mergeBundleDeclaration 只追加一个名字；形状不符一律拒绝', () => {
+  const base = `${JSON.stringify({ name: 'dsh-profile-web', dependencies: { a: '1.0.0' }, dsh: { profile: { bundles: ['x'] } } }, null, 2)}\n`;
+  const merged = mergeBundleDeclaration(base, 'y');
+  assert.equal(merged?.changed, true);
+  const parsed = JSON.parse(merged!.text) as {
+    dependencies: Record<string, string>;
+    dsh: { profile: { bundles: string[] } };
+  };
+  assert.deepEqual(parsed.dsh.profile.bundles, ['x', 'y'], '名字追加在尾部');
+  assert.deepEqual(parsed.dependencies, { a: '1.0.0' }, '其余字段逐字保留');
+  assert.equal(mergeBundleDeclaration(merged!.text, 'y')?.changed, false, '幂等：重复声明不空写');
+
+  assert.equal(mergeBundleDeclaration('{', 'y'), null, 'JSON 坏 → null（绝不重建清单）');
+  assert.equal(mergeBundleDeclaration('[]', 'y'), null, '顶层非对象 → null');
+  assert.equal(mergeBundleDeclaration(JSON.stringify({ name: 'p' }), 'y'), null, '缺 dsh.profile → null');
+  assert.equal(
+    mergeBundleDeclaration(JSON.stringify({ dsh: { profile: { bundles: 'x' } } }), 'y'),
+    null,
+    'bundles 非数组 → null',
+  );
+  assert.equal(
+    mergeBundleDeclaration(JSON.stringify({ dsh: { profile: { bundles: ['x', 1] } } }), 'y'),
+    null,
+    'bundles 含非字符串 → null',
+  );
+  assert.equal(
+    mergeBundleDeclaration(JSON.stringify({ dsh: { profile: {} } }), 'y'),
+    null,
+    'bundles 字段缺省 → null（非空 bundles 会替换默认插件栈，绝不凭空造）',
+  );
 });

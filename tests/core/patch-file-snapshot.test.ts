@@ -11,7 +11,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createSnapshot, resolveFileTarget, resolveFileTargetRel, PLUGIN_PATCH_REF_PREFIX } from '../../src/core/backup.ts';
+import {
+  createSnapshot, resolveFileTarget, resolveFileTargetRel,
+  PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF,
+} from '../../src/core/backup.ts';
 import { rollback } from '../../src/core/rollback.ts';
 import { makeContext, MemSnapshotStore } from '../../src/adapters/test-helpers.ts';
 import { SECTION_IDS } from '../../src/schema/config.ts';
@@ -180,4 +183,66 @@ test('issue #35：目标机原本没有该 patch 文件 → 快照 existed=false
   assert.equal(entry?.before, null);
   const report = await rollback({ ctx, snapshot, store, adapters: [] });
   assert.equal(report.full, true, JSON.stringify(report));
+});
+
+/**
+ * issue #95：声明 host 自带的 bundle 层 = 写 profile 的 package.json，因此它必须与 patch 文件
+ * 同级进导入前快照 —— 否则「导入追加了一层声明 → 回滚」撤不掉，回滚报告却仍然全绿。
+ */
+test('issue #95：profile package.json 进导入前快照，回滚还原被改动的清单', async () => {
+  const ctx = makeContext('win32', HOME, 'web');
+  const rel = 'profiles/web/package.json';
+  const original = `${JSON.stringify({
+    name: 'dsh-profile-web',
+    private: true,
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
+  }, null, 2)}\n`;
+  await ctx.fs.writeFile(rel, Buffer.from(original, 'utf8'));
+
+  const plan: ImportPlan = {
+    items: [{
+      id: 'plugin:@deepseek-ai/dsh-experimental-session-search',
+      kind: 'Create',
+      adapter: 'plugins',
+      description: 'declare host-provided bundle layer',
+      severity: 'info',
+      target: { adapter: 'plugins', ref: PLUGIN_PROFILE_MANIFEST_REF },
+    }],
+    globalStrategy: 'merge',
+    pathMappings: [],
+    missingSecrets: [],
+    needsRestart: false,
+    estimatedActions: emptyEstimatedActions(),
+  };
+  const store = new MemSnapshotStore();
+  const snapshot = await createSnapshot({ ctx, plan, sourceZip: 'C:\\tmp\\x.zip', store, adapters: [] });
+  const entry = snapshot.entries.find((e) => e.ref === PLUGIN_PROFILE_MANIFEST_REF);
+  assert.ok(entry !== undefined, `快照必须登记 profile 清单条目: ${JSON.stringify(snapshot.entries)}`);
+  assert.equal(entry.adapter, 'plugins');
+  assert.equal(entry.kind, 'file', '必须是整文件条目（清单是整体重写的）');
+  assert.equal(entry.existed, true, '目标机已有清单 → existed=true，回滚才能恢复原字节');
+  assert.ok(entry.copiedTo !== undefined && entry.copiedTo !== '', '必须真的把原字节拷进 blobs');
+
+  // 模拟导入追加声明（DSH 侧写回格式：JSON.stringify(..., 2) + 尾换行）
+  const changed = JSON.parse(original) as { dsh: { profile: { bundles: string[] } } };
+  changed.dsh.profile.bundles.push('@deepseek-ai/dsh-experimental-session-search');
+  await ctx.fs.writeFile(rel, Buffer.from(`${JSON.stringify(changed, null, 2)}\n`, 'utf8'));
+
+  const report = await rollback({ ctx, snapshot, store, adapters: [] });
+  assert.equal(report.full, true, `回滚必须完整: ${JSON.stringify(report)}`);
+  assert.equal(
+    new TextDecoder().decode(await ctx.fs.readFile(rel)),
+    original,
+    '回滚必须把清单逐字还原',
+  );
+});
+
+test('issue #95：profile 清单 ref 的解析口径（绝对路径 / home 相对路径同源）', () => {
+  const ctx = makeContext('win32', HOME, 'web');
+  assert.match(
+    resolveFileTarget(ctx, 'plugins', PLUGIN_PROFILE_MANIFEST_REF),
+    /profiles[\\/]web[\\/]package\.json$/,
+  );
+  assert.equal(resolveFileTargetRel('plugins', PLUGIN_PROFILE_MANIFEST_REF, 'web'), 'profiles/web/package.json');
+  assert.equal(resolveFileTargetRel('plugins', PLUGIN_PROFILE_MANIFEST_REF), 'profiles/web/package.json', '缺省 profile → web');
 });

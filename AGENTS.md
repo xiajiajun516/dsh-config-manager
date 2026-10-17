@@ -153,6 +153,7 @@
 - **宿主整文件快照「存在但读不出来」绝不写 `existed:false`**（只跳过，绝不产生 `hostFileRemove`）。
 - **文件类分区收集一律走 `utils/recursive-walk.ts`**；内核整棵跳过 `node_modules`，跳过项必须进告警。
 - **`pnpmWorkspace` 与 `plugins.patchFiles` 必须同进同出**。
+- **`bundles` 里无依赖的层只声明、不装 npm**。
 - **会话日志的字节改写只允许在宿主侧**；改写 header 必须连目录一起归位，搬不动就回滚；索引刷新用 `reindexSessionHeader`。
 - **文件集合分区永不参与导入期前缀映射**；会话只改写首帧 cwd；**导出会话必须连带所属工作区**。
 - **会话可见性必须由「包内实际带走的会话」驱动**；每个 id 先试声明形态，再试另一种命名形态。

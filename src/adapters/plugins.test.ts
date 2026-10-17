@@ -6,6 +6,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PluginsAdapter } from './plugins.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
+import { PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
+import type { PluginsSection } from '../schema/types.ts';
 import type { PlanItem } from '../core/types.ts';
 
 test('issue #35：patch 文件随分区迁移；目标缺失的 patchedDependencies 声明导入时剔除', async () => {
@@ -566,4 +568,164 @@ test('t81 / t23 口径：patch 文件存在性探测读失败（非 ENOENT）必
     items.some((i) => i.id === 'plugins:pnpm-workspace-dropped' && i.kind === 'Warning'),
     'ENOENT 仍应视为「不存在」（保留既有剔除语义与可见告警）',
   );
+});
+
+/**
+ * issue #95：`@deepseek-ai/*` 的实验层在 DSH 里只写进 dsh.profile.bundles（包由 DSH 自己的
+ * 安装位置解析，profile 的 dependencies / node_modules 里都没有它）。导入端把它当 registry 包去
+ * `dsh plugin add`，会把 npm `dist-tags.latest` 的副本装进 profile —— 真机故障：
+ * host 0.2.1-rc.2 + 包 0.2.1-alpha.2 的隔离组契约对不上 → `session-controller` 一直 pending
+ * → 新建会话报 service-unavailable。
+ * 正确行为：只把名字声明进目标机的 dsh.profile.bundles，绝不走安装通道。
+ */
+test('issue #95：host 自带的 bundle 层只声明 bundles，不装 npm 包', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice', 'web');
+  src.plugins.installed.set('@deepseek-ai/dsh-experimental-session-search', {
+    name: '@deepseek-ai/dsh-experimental-session-search',
+    version: '',
+    enabled: true,
+    isBundle: true,
+    inBundles: ['@deepseek-ai/dsh-experimental-session-search'],
+    bundlesOnly: true,
+  });
+  src.plugins.installed.set('dshmarket', { name: 'dshmarket', version: '1.0.3', enabled: true, spec: '^1.0.3' });
+
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const layerName = '@deepseek-ai/dsh-experimental-session-search';
+  assert.equal(
+    exported.data.plugins.find((p) => p.name === layerName)?.bundlesOnly,
+    true,
+    '导出必须带上 bundlesOnly 标记',
+  );
+  assert.equal(
+    exported.data.plugins.find((p) => p.name === 'dshmarket')?.bundlesOnly,
+    undefined,
+    '普通依赖不得带该标记（旧备份字节形态不变）',
+  );
+
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const pkgRel = 'profiles/web/package.json';
+  await dst.fs.writeFile(pkgRel, new TextEncoder().encode(`${JSON.stringify({
+    name: 'dsh-profile-web',
+    private: true,
+    dependencies: {},
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
+  }, null, 2)}\n`));
+  const sections = new Map([['plugins', exported.data]]);
+
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const item = items.find((i) => i.id === `plugin:${layerName}`);
+  assert.equal(item?.kind, 'Create', '缺声明 → Create（绝不是 Install）');
+  assert.deepEqual(
+    item?.target,
+    { adapter: 'plugins', ref: PLUGIN_PROFILE_MANIFEST_REF },
+    '写入目标必须进导入前快照（回滚能撤掉这次声明）',
+  );
+  assert.equal(items.find((i) => i.id === 'plugin:dshmarket')?.kind, 'Install', '普通依赖照旧走安装通道');
+
+  const r = await adapter.applyItem(item!, makeImportContext(dst, sections));
+  assert.equal(r.ok, true);
+  const written = JSON.parse(new TextDecoder().decode(dst.fs.files.get('/home/bob/profiles/web/package.json')!)) as {
+    dependencies: Record<string, string>;
+    dsh: { profile: { bundles: string[] } };
+  };
+  assert.deepEqual(
+    written.dsh.profile.bundles,
+    ['@deepseek-ai/dsh-base', layerName],
+    '只追加一层，原声明保序',
+  );
+  assert.deepEqual(written.dependencies, {}, '不得凭空写依赖行');
+  assert.equal(dst.plugins.installed.has(layerName), false, '绝不调用 npm 安装通道');
+
+  // 幂等：再分析一次 → Skip（不重复写、不重复报 Create）
+  const again = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  assert.equal(again.find((i) => i.id === item!.id)?.kind, 'Skip');
+});
+
+test('issue #95：旧备份（没有 bundlesOnly 字段）按形状识别，绝不误伤普通依赖', async () => {
+  const adapter = new PluginsAdapter();
+  const layerName = '@deepseek-ai/dsh-experimental-auto-review';
+  const data: PluginsSection = {
+    version: 1,
+    plugins: [
+      { name: layerName, version: '', isBundle: true, inBundles: [layerName], enabled: true },
+      { name: 'broken-dep', version: '', spec: '^2.0.0', isBundle: false, inBundles: [], enabled: true },
+    ],
+    patch: [],
+  };
+  const dst = makeContext('linux', '/home/bob', 'web');
+  await dst.fs.writeFile(
+    'profiles/web/package.json',
+    new TextEncoder().encode(`${JSON.stringify({ name: 'dsh-profile-web', dsh: { profile: { bundles: [] } } }, null, 2)}\n`),
+  );
+  const sections = new Map([['plugins', data]]);
+  const items = await adapter.analyzeImport(data, makeImportContext(dst, sections));
+  assert.equal(
+    items.find((i) => i.id === `plugin:${layerName}`)?.kind,
+    'Create',
+    '无 spec 且无已装版本 = host 自带层 → 只声明',
+  );
+  assert.equal(
+    items.find((i) => i.id === 'plugin:broken-dep')?.kind,
+    'Install',
+    '有依赖声明 → 照旧安装（哪怕本机没装全，也绝不静默跳过）',
+  );
+
+  // 应用后：名字进了 bundles，且没有为该层调用安装通道
+  const r = await adapter.applyItem(
+    items.find((i) => i.id === `plugin:${layerName}`)!,
+    makeImportContext(dst, sections),
+  );
+  assert.equal(r.ok, true);
+  assert.equal(dst.plugins.installed.has(layerName), false);
+  const written = JSON.parse(new TextDecoder().decode(dst.fs.files.get('/home/bob/profiles/web/package.json')!)) as {
+    dsh: { profile: { bundles: string[] } };
+  };
+  assert.deepEqual(written.dsh.profile.bundles, [layerName]);
+});
+
+test('issue #95：目标清单缺失 / JSON 坏 / 形态不符 → 只告警，绝不重建清单', async () => {
+  const adapter = new PluginsAdapter();
+  const data: PluginsSection = {
+    version: 1,
+    plugins: [{ name: 'host-layer', version: '', isBundle: true, inBundles: ['host-layer'], enabled: true, bundlesOnly: true }],
+    patch: [],
+  };
+  // ① 目标机没有 package.json
+  const a = makeContext('linux', '/home/a', 'web');
+  const sectionsA = new Map([['plugins', data]]);
+  const itemsA = await adapter.analyzeImport(data, makeImportContext(a, sectionsA));
+  assert.equal(itemsA[0]?.kind, 'Warning', '没有清单 → 告警（不是 Install，也不是静默跳过）');
+  assert.match(itemsA[0]?.description ?? '', /package\.json/);
+  const applyA = await adapter.applyItem(itemsA[0]!, makeImportContext(a, sectionsA));
+  assert.equal(applyA.ok, false);
+  assert.equal(applyA.warning, true, '声明不了只记非致命 warning（§34.17）');
+  assert.equal(await a.fs.exists('profiles/web/package.json'), false, '绝不凭空造一份清单');
+
+  // ② JSON 坏：原文必须逐字不动
+  const b = makeContext('linux', '/home/b', 'web');
+  await b.fs.writeFile('profiles/web/package.json', new TextEncoder().encode('{'));
+  const sectionsB = new Map([['plugins', data]]);
+  const itemsB = await adapter.analyzeImport(data, makeImportContext(b, sectionsB));
+  assert.equal(itemsB[0]?.kind, 'Warning');
+  assert.match(itemsB[0]?.description ?? '', /JSON|形态/);
+  const applyB = await adapter.applyItem(itemsB[0]!, makeImportContext(b, sectionsB));
+  assert.equal(applyB.ok, false);
+  assert.equal(
+    new TextDecoder().decode(b.fs.files.get('/home/b/profiles/web/package.json')!),
+    '{',
+    '坏清单绝不被覆写',
+  );
+
+  // ③ dsh.profile.bundles 不是字符串数组
+  const c = makeContext('linux', '/home/c', 'web');
+  await c.fs.writeFile(
+    'profiles/web/package.json',
+    new TextEncoder().encode(JSON.stringify({ dsh: { profile: { bundles: 'x' } } })),
+  );
+  const sectionsC = new Map([['plugins', data]]);
+  const itemsC = await adapter.analyzeImport(data, makeImportContext(c, sectionsC));
+  assert.equal(itemsC[0]?.kind, 'Warning');
+  assert.match(itemsC[0]?.description ?? '', /形态/);
 });

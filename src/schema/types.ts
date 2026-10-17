@@ -113,6 +113,20 @@ export interface PluginEntry {
    * 否则按裸包名走 npm 最新版（官方机制）。
    */
   spec?: string;
+  /**
+   * 该层只在 profile 的 `dsh.profile.bundles` 里声明、`dependencies` 里没有它，且该 profile 的
+   * `node_modules` 里也**没有**它的落盘副本（issue #95，导出侧写入）。
+   *
+   * 语义：这不是一个「装在本 profile 里的包」，而是由 DSH 从**自己的安装位置**解析的层
+   * （与 `boot-safety.ts` / `RESCUE_KEEP_BUNDLE_PREFIXES` 同口径）。导入端对这类条目
+   * **只把名字声明进目标机的 `dsh.profile.bundles`，绝不走 npm 安装通道**——按裸包名安装会让
+   * 目标机拿到 `dist-tags.latest` 的副本（2026-10 真机：host 0.2.1-rc.2 + 包 0.2.1-alpha.2
+   * → session-controller 一直 pending → 新建会话 service-unavailable）。
+   *
+   * 缺省（旧备份没有该字段）= 由 `spec` / `version` 形状推断，见
+   * `src/core/plugin-cli.ts` 的 `isBundlesOnlyEntry`。
+   */
+  bundlesOnly?: boolean;
   isBundle: boolean;
   inBundles: string[];
   enabled: boolean;

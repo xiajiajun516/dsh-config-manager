@@ -1806,9 +1806,11 @@ function applyTombstoneFilter(
 /** PlanItem → 墓碑键（{kind,id}）映射；非「将写入」的条目（Skip 等）与配置类项返回 null 不过滤 */
 function tombstoneKeyForItem(item: PlanItem): { kind: TombstoneKind; id: string } | null {
   // 插件本体（plugin:<pkg>）：Install / Update / Conflict 均视为「将写入该插件」→ 命中墓碑剔除；
+  // issue #95 的 Create = 「把 host 自带的层声明进 dsh.profile.bundles」，同样是写入该插件，
+  // 必须一起被墓碑剔除（用户删过的插件不得被一份旧备份重新声明回来）。
   // patch: 行与 plugins:pnpm-workspace 是配置类项，不按插件墓碑过滤（分区级墓碑可覆盖）。
   if (item.adapter === 'plugins' && item.id.startsWith('plugin:')) {
-    if (item.kind !== 'Install' && item.kind !== 'Update' && item.kind !== 'Conflict') return null;
+    if (item.kind !== 'Install' && item.kind !== 'Update' && item.kind !== 'Conflict' && item.kind !== 'Create') return null;
     return { kind: 'plugin', id: item.id.slice('plugin:'.length) };
   }
   // 文件类分区条目（id = <分区>:<相对路径>）：skills → skill 墓碑；其余文件类（agentPresets/

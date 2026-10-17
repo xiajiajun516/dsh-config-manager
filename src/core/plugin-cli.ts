@@ -340,17 +340,70 @@ export function listInstalledPlugins(homeDir: string, profile: string): PluginIn
   for (const name of Array.isArray(declaredBundles) ? declaredBundles : []) {
     if (INBOX_BUNDLES.has(name)) continue
     if (Object.prototype.hasOwnProperty.call(installed, name)) continue // 已在依赖清单里
+    const installedVersion = readInstalledVersion(dir, name) ?? ''
     out.push({
       name,
-      version: readInstalledVersion(dir, name) ?? '',
+      version: installedVersion,
       enabled: true,
       isBundle: true,
       // 直接声明的层自己就是 profile 层
       inBundles: [name],
-      // 无依赖声明 → 无 spec：导入时按裸包名安装（与 registry 依赖同语义）
+      // issue #95：无依赖声明 + **本 profile 也没有它的落盘副本** ⇒ 这个包只可能由 DSH 从自己的
+      // 安装位置解析。导入端只能把它声明进目标机的 bundles，绝不按裸包名走 npm（那会把
+      // dist-tag latest 的副本装进 profile，与 host 版本线脱节）。
+      // 本地**有**落盘副本的手工层不在此列：那种层得靠安装通道才能在目标机上存在，保持旧行为。
+      ...(installedVersion === '' ? { bundlesOnly: true } : {}),
     })
   }
   return out
+}
+
+/**
+ * 「只在 `dsh.profile.bundles` 里声明、`dependencies` 里没有该包」的条目判定（issue #95）。
+ *
+ * 为什么要一个共享判据：导出端的显式字段（`bundlesOnly`）只存在于新备份；旧备份只能按形状
+ * 推断——**有依赖 spec 的绝不是**（那是普通依赖，哪怕本机没装全）；**没有 spec 且读不到已装版本**
+ * 的才是（本 profile 里没有任何东西提供它，DSH 只能从自己的安装位置解析，issue #95）。
+ */
+export function isBundlesOnlyEntry(entry: { bundlesOnly?: unknown; spec?: unknown; version?: unknown }): boolean {
+  if (entry.bundlesOnly === true) return true
+  if (entry.bundlesOnly !== undefined) return false
+  const spec = typeof entry.spec === 'string' ? entry.spec : ''
+  const version = typeof entry.version === 'string' ? entry.version : ''
+  return spec === '' && version === ''
+}
+
+/**
+ * 把 `name` 声明进 profile package.json 的 `dsh.profile.bundles`（issue #95）。
+ *
+ * 只做「追加一个名字」：其余字段逐字保留，重复声明返回 `changed: false`（幂等，不空写文件）。
+ * 形状不可认（JSON 坏 / `dsh.profile` 非对象 / `bundles` 非字符串数组）→ 返回 null：
+ * 调用方必须**如实报告**并放弃这次声明，绝不重建一份清单出来（那会抹掉 profile 的其它字段）。
+ *
+ * `bundles` 字段**缺省也拒绝**：DSH 的语义是「bundles 非空即替换默认插件栈」，凭空造一个只含
+ * 一个名字的数组 = 悄悄改掉目标机的装配语义（应当由 DSH 自己写这个字段）。
+ */
+export function mergeBundleDeclaration(pkgText: string, name: string): { text: string; changed: boolean } | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(pkgText)
+  } catch {
+    return null
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+  const pkg = parsed as Record<string, unknown>
+  const dsh = pkg.dsh
+  if (dsh === null || typeof dsh !== 'object' || Array.isArray(dsh)) return null
+  const profile = (dsh as Record<string, unknown>).profile
+  if (profile === null || typeof profile !== 'object' || Array.isArray(profile)) return null
+  const raw = (profile as Record<string, unknown>).bundles
+  if (raw === undefined) return null
+  if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== 'string')) return null
+  const bundles = raw as string[]
+  if (bundles.includes(name)) return { text: pkgText, changed: false }
+  bundles.push(name)
+  ;(profile as Record<string, unknown>).bundles = bundles
+  return { text: `${JSON.stringify(pkg, null, 2)}\n`, changed: true }
 }
 
 /* --------------------------------------------------------------- CLI 通道 */

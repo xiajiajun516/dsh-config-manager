@@ -234,6 +234,16 @@ export interface PluginInfo {
   inBundles?: string[];
   /** 声明依赖 spec（profile package.json dependencies 原样）；文件视图来自 readInstalled */
   spec?: string;
+  /**
+   * 只在 `dsh.profile.bundles` 里声明、`dependencies` 里没有该包，且本 profile 的
+   * `node_modules` 里也没有它的落盘副本（issue #95）。
+   *
+   * DSH 对这类层从**自己的安装位置**解析（`boot-safety.ts` 的「@deepseek-ai/* 由 DSH 从它自己的
+   * 安装位置解析」与 `RESCUE_KEEP_BUNDLE_PREFIXES` 同一口径），因此导入端**不得**把它当
+   * registry 依赖去 `dsh plugin add`：那会把 npm dist-tag `latest` 的副本装进目标 profile，
+   * 与 host 的版本线脱节（issue #95 的真机故障）。只能把名字声明进目标机的 bundles。
+   */
+  bundlesOnly?: boolean;
 }
 
 export interface PluginsFacade {
