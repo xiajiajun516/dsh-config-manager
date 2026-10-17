@@ -451,6 +451,57 @@ test('气泡字号/行高/限宽跟随宿主内容字号（不得再写死 12.5p
 })
 
 /**
+ * 2026-10-17（用户要求「与 DSH 原生气泡完全一致」）：§15b 的几何/字号必须与宿主
+ * MessageItem + MessageIconActions 的**同一条取值**逐字同式（宿主产物抽出的取值清单见
+ * docs/spec/known-gaps.md 的「G-39 增量（八）」）。这张用例是那条口径的源级护栏：
+ * 谁把圆角/内边距/动作行/文件卡改回「近似档」，这里立刻红。
+ */
+test('气泡与动作行逐值对齐宿主：圆角 xl(20px) / 内边距 10·16 / 动作行 28+delta / 文件卡 240·64', () => {
+  const cssSheet = readFileSync(join(HERE, '..', 'config-manager.module.css'), 'utf8')
+  // 注释里会引用这些取值（解释为什么改），负向断言必须先剥注释 —— 与 css-token-guard 同法
+  const noComment = cssSheet.replace(/\/\*[\s\S]*?\*\//g, '')
+  const scope = noComment.match(/\.chatEntryScope\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.notEqual(scope, '', '必须能定位 .chatEntryScope 规则块（扫描失效时本用例不得静默通过）')
+  // ① 镜像 token：宿主 radius xl=20（气泡/文件卡）、sm=8（动作按钮）、动作行与图标跟着 delta 长
+  assert.match(scope, /--cm-r-chat:\s*var\(--dsw-radius-xl,\s*20px\)/, '气泡/文件卡圆角必须镜像宿主 --dsw-radius-xl（20px）')
+  assert.match(scope, /--cm-r-act:\s*var\(--dsw-radius-sm,\s*8px\)/, '动作按钮圆角必须镜像宿主 --dsw-radius-sm（8px）')
+  assert.match(scope, /--cm-chat-action:\s*calc\(28px \+ var\(--dsh-content-font-delta,\s*0px\)\)/, '动作行高度/触达区必须与宿主同式（28px + delta）')
+  assert.match(scope, /--cm-chat-glyph:\s*calc\(15px \+ var\(--dsh-content-font-delta,\s*0px\)\)/, '动作图标必须与宿主同式（15px + delta）')
+
+  // ② 气泡：宿主 .bubble 是**块**（尺寸 100% / 内边距 10px 16px / 圆角 xl）
+  const bubble = noComment.match(/\.chatBubble\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.notEqual(bubble, '', '必须能定位 .chatBubble 规则块')
+  assert.match(bubble, /max-width:\s*100%/)
+  assert.match(bubble, /padding:\s*var\(--cm-sp-5\) var\(--cm-sp-8\)/, '内边距必须等于宿主的 10px 16px')
+  assert.match(bubble, /border-radius:\s*var\(--cm-r-chat\)/, '.chatBubble 必须消费 --cm-r-chat')
+  assert.doesNotMatch(bubble, /display:\s*flex/, '宿主 .bubble 是块级：不得再用 flex 列（技能/引用 chip 会被挤成独立一行）')
+
+  // ③ 动作行：宿主 MessageIconActions（gap 8 / 高 28+delta）+ MessageItem 的 4px / -6px 外边距
+  const actions = noComment.match(/\.chatEntryActions\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.notEqual(actions, '', '必须能定位 .chatEntryActions 规则块')
+  assert.match(actions, /gap:\s*var\(--cm-sp-4\)/, '动作行 gap 必须等于宿主的 8px')
+  assert.match(actions, /height:\s*var\(--cm-chat-action\)/, '动作行高度必须跟随宿主的 28px + delta')
+  assert.match(actions, /margin-top:\s*var\(--cm-sp-2\)/, '动作行上方必须留宿主的 4px')
+  assert.match(actions, /margin-left:\s*calc\(-1 \* var\(--cm-sp-3\)\)/, '动作行必须用宿主同一条负外边距（-6px）对齐气泡右缘')
+
+  // ④ 时刻与文件卡
+  const time = noComment.match(/\.chatEntryTime\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.notEqual(time, '', '必须能定位 .chatEntryTime 规则块')
+  assert.match(time, /font-size:\s*var\(--cm-fs-second\)/, '时刻必须用宿主的次级字号镜像（13px 档）')
+  assert.match(time, /padding-right:\s*var\(--cm-sp-6\)/, '时刻右侧必须留宿主的 12px')
+  const card = noComment.match(/\.chatFileCard\s*\{[^}]*\}/)?.[0] ?? ''
+  assert.notEqual(card, '', '必须能定位 .chatFileCard 规则块')
+  assert.match(card, /width:\s*240px/, '文件卡宽度必须等于宿主的 240px')
+  assert.match(card, /min-height:\s*64px/, '文件卡最小高度必须等于宿主的 64px')
+  assert.match(card, /gap:\s*var\(--cm-sp-5\)/, '文件卡内图标与文字间距必须等于宿主的 10px')
+  assert.match(card, /border-radius:\s*var\(--cm-r-chat\)/, '文件卡圆角必须与气泡同一档（宿主 xl）')
+
+  // ⑤ 动作行的显现语义：宿主靠 data-chat-flow-kind + :has(~ …) 表达「后面还有用户消息就藏起来」
+  assert.match(noComment, /data-chat-flow-kind='user'/, '显现语义必须复用宿主自己的 data-chat-flow-kind 属性')
+  assert.match(noComment, /:has\(~ :is\(\[data-chat-flow-kind='user'\]/, '必须与宿主同一条「后面还有用户/steering 消息 ⇒ 动作行默认隐藏」的规则')
+})
+
+/**
  * 宿主正文投影（2026-10-15）：气泡正文优先交给宿主自己的 projectUserText（会话引用/技能 → chip）。
  * 四条回落判据必须逐条可证 —— 任一条不成立都回落我们自己的纯文本投影（绝不空白、绝不抛）。
  */

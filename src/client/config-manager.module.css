@@ -5170,8 +5170,11 @@ button.profileRowMain:hover {
    · 字号 --dsh-content-font-size（2026-10-17 修 issue #93「用户气泡字号写死 12.5px，不跟随内容字号」）；
    · 行高 calc(22px + --dsh-content-font-delta)（同上，宿主 .bubble 同一条公式）；
    · 限宽 calc(--dsh-chat-content-width * .702)（同上，宿主 .userStack 同一条公式）。
-   剩余差异是**已知且如实登记**的（圆角 8px < 宿主 14px），
-   如需逐像素一致必须先改 DESIGN.md §3–§5 —— 本任务明确不做。
+   **2026-10-17（用户要求「与 DSH 原生气泡完全一致」）**：不再留「近似档」—— 圆角/内边距/间距/
+   动作行几何/文件卡/引用行全部改成宿主 MessageItem + MessageIconActions 的同一条取值（见
+   .chatEntryScope 里那组镜像 token 的注释）。已登记的上一版近似档（圆角 8px、动作行 24px、
+   时间 11px、附件行 gap 4px）**全部收回**；仍未做的是**时间文案**（宿主按「今天/昨天」自动切换，
+   我们只显示 HH:mm）与 rest 块的 JsonBlock 外观。
 
    类名与审查口径：
    · .chatBubble 负责「用户消息绝不消失」的**可见文本**承载（white-space: pre-wrap 保留换行/空白）；
@@ -5201,6 +5204,25 @@ button.profileRowMain:hover {
      只改字号不够：21px 下 line-height:1.5 = 31.5px，宿主是 29px（22 + delta 7）⇒ 气泡比助手正文松 2.5px/行。
      --dsh-content-font-delta 同样由宿主定义在 body 上（= 内容字号 - 14px，缺档时 0px ⇒ 退化成 22px）。 */
   --cm-lh-base: calc(22px + var(--dsh-content-font-delta, 0px));
+  /* —— 2026-10-17：与宿主的 MessageItem / MessageIconActions **逐值对齐**（用户要求「完全一致」）。
+     取值全部从本机 app.asar 的 ui-chat 产物抽出（MessageItem：.userRow/.userStack/.bubble/
+     .attachmentRow/.fileCard/.fileIcon/.fileContent/.fileName/.fileMeta/.referenceSummary；
+     MessageIconActions：.actions/.timeStart/.action）。与上一条同一条纪律：**这些是「宿主活值的镜像」，
+     不是我们的新 scale 档位**；凡 `--dsw-*` 只出现在本定义块里（三层单向依赖）。
+     宿主 radius 档（ui-theme 抽出）：xs 4 / sm 8 / md 12 / lg 16 / **xl 20** —— 气泡与文件卡用的是 xl。 */
+  --cm-text-2: var(--dsw-alias-label-secondary);
+  --cm-r-chat: var(--dsw-radius-xl, 20px);
+  --cm-r-act: var(--dsw-radius-sm, 8px);
+  --cm-chat-card-bg: var(--dsw-specific-input-major, transparent);
+  --cm-chat-hover-bg: var(--dsw-alias-interactive-bg-hover, var(--cm-line-1));
+  --cm-fs-second: var(--dsh-content-font-size-secondary, 13px);
+  --cm-lh-second: calc(24px + var(--dsh-content-font-delta, 0px));
+  --cm-lh-ref: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
+  --cm-fs-card: 14px;
+  --cm-lh-card: 22px;
+  --cm-lh-meta: 15px;
+  --cm-chat-action: calc(28px + var(--dsh-content-font-delta, 0px));
+  --cm-chat-glyph: calc(15px + var(--dsh-content-font-delta, 0px));
   --cm-sp-2: 4px;
   --cm-sp-3: 6px;
   --cm-sp-4: 8px;
@@ -5237,14 +5259,15 @@ button.profileRowMain:hover {
   max-width: min(calc(var(--dsh-chat-content-width, 748px) * .702), 82%);
 }
 
-/* 用户气泡：pre-wrap 保留换行与空白（禁用! 会改文案语义），长词强制断行 */
+/* 用户气泡：与宿主 .bubble **逐值同式**（background / border-radius / max-width / padding /
+   white-space / word-break；字号与行高由 .chatEntryScope 的同名镜像给出）。
+   2026-10-17（用户要求「完全一致」）：① 圆角改成宿主那一档 `--dsw-radius-xl`（= 20px，不是此前登记的
+   8px 近似档）；② **去掉此前的 `display:flex; flex-direction:column; gap:6px`** —— 宿主那条气泡是**块**，
+   正文与技能/引用 chip 在同一行内流；flex 列会把每个 chip 挤成独立一行（消息一带技能就明显变形）。 */
 .chatBubble {
-  display: flex;
-  flex-direction: column;
-  gap: var(--cm-sp-3);
   max-width: 100%;
   padding: var(--cm-sp-5) var(--cm-sp-8);
-  border-radius: var(--cm-r-3);
+  border-radius: var(--cm-r-chat);
   background: var(--cm-chat-bubble);
   color: var(--cm-text-1);
   white-space: pre-wrap;
@@ -5261,35 +5284,57 @@ button.profileRowMain:hover {
   border-left: 2px solid var(--cm-text-1);
 }
 
-/* 附件行（图片 + 文件卡）：宿主是 .attachmentRow，横向排列、允许换行 */
+/* 附件行：宿主 .attachmentRow = flex-wrap:wrap + justify-content:flex-end + gap:8px + max-width:100% */
 .chatAttachmentRow {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
   justify-content: flex-end;
-  gap: var(--cm-sp-2);
+  gap: var(--cm-sp-4);
+  max-width: 100%;
+}
+
+/* 文件卡：与宿主 .fileCard **逐值同式**（2026-10-17「完全一致」）——
+   宿主 = flex:0 0 240px + width:240px + min-height:64px + padding:8px 12px + gap:10px +
+   radius `--dsw-radius-xl`(20px) + border .5px `--dsw-alias-border-l2` + 底 `--dsw-specific-input-major`；
+   内部 = 28px 类型图标 + 右列（文件名 14px/500/22px、元信息 12px/15px）。
+   类型图标**优先宿主的 FileTypeIcon**（帧内惰取）；拿不到才回落 .chatFileExt 扩展名徽标。 */
+.chatFileCard {
+  display: inline-flex;
+  flex: 0 0 240px;
+  align-items: center;
+  gap: var(--cm-sp-5);
+  box-sizing: border-box;
+  width: 240px;
+  min-height: 64px;
+  padding: var(--cm-sp-4) var(--cm-sp-6);
+  border: 0.5px solid var(--cm-line-2);
+  border-radius: var(--cm-r-chat);
+  background: var(--cm-chat-card-bg);
+}
+
+/* 宿主 .fileIcon：图标固定 28px（我们的 FileTypeIcon 由组件传 size=28） */
+.chatFileIcon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+}
+
+/* 宿主 .fileContent：右列（文件名 + 元信息） */
+.chatFileContent {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   min-width: 0;
 }
 
-/* 文件卡：扩展名徽标 + 文件名 + 体积（宿主用 ui-primitives 的 FileTypeIcon，本仓库拿不到，
-   用扩展名徽标做**类型图标兜底** —— 不新增图标、不新增依赖） */
-.chatFileCard {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--cm-sp-3);
-  max-width: 100%;
-  padding: var(--cm-sp-2) var(--cm-sp-4);
-  /* 2026-10-15 与宿主对齐：宿主文件卡 = .5px solid --dsw-alias-border-l2（浅色 #0000001a ≈ 10% 黑），
-     我们此前用 --cm-line-1（= border-l1 = #0000000a ≈ 4% 黑）—— 卡片描边比宿主淡一档。 */
-  border: 0.5px solid var(--cm-line-2);
-  border-radius: var(--cm-r-2);
-  background: var(--cm-surface-2);
-  font-size: var(--cm-fs-meta);
-}
-
+/* 类型图标兜底（宿主 FileTypeIcon 拿不到时）：占住同一个 28px 槽位，不改变卡片尺寸 */
 .chatFileExt {
+  display: inline-flex;
   flex: none;
-  padding: 0 var(--cm-sp-2);
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
   border-radius: var(--cm-r-2);
   background: var(--cm-line-1);
   color: var(--cm-text-1);
@@ -5297,17 +5342,25 @@ button.profileRowMain:hover {
   letter-spacing: 0.02em;
 }
 
+/* 宿主 .fileName：primary / 14px / 500 / 行高 22px（宿主写死字面量，这里镜像同一个值） */
 .chatFileName {
-  min-width: 0;
   overflow: hidden;
+  color: var(--cm-text-1);
+  font-size: var(--cm-fs-card);
+  font-weight: 500;
+  line-height: var(--cm-lh-card);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 宿主 .fileMeta：tertiary / 12px / 行高 15px */
 .chatFileMeta {
-  flex: none;
+  overflow: hidden;
   color: var(--cm-text-3);
-  font-size: var(--cm-fs-meta);
+  font-size: 12px;
+  line-height: var(--cm-lh-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 未知 / rest 块：宿主是 JsonBlock，这里用原生 details + 预格式化 JSON */

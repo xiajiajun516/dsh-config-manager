@@ -129,13 +129,22 @@ export type ChatEntryViewProps = PropsRuntime<'conversation.chat.node', 'user'> 
  */
 function FileCard({ file, size }: { file: ChatEntryFile; size: string | null }) {
   const DshIcon = hostFileTypeIcon()
+  /**
+   * 元信息 = 宿主 `.fileMeta` 的**同一组合**：大写的扩展名（≤8 字符）+ 体积文本，空格连接。
+   * 宿主那行是「EXT SIZE」一行的次级小字（不是我们此前那个「文件名旁边挂一个体积」的排法）。
+   */
+  const meta = [file.ext === null ? '' : file.ext.toUpperCase().slice(0, 8), size ?? '']
+    .filter((part) => part !== '')
+    .join(' ')
   return (
     <span className={css.chatFileCard} title={file.name !== '' ? file.name : undefined}>
       {DshIcon !== null && file.name !== ''
-        ? <DshIcon path={file.name} size={14} />
+        ? <DshIcon path={file.name} size={28} className={css.chatFileIcon} />
         : file.ext !== null && <span className={css.chatFileExt}>{file.ext}</span>}
-      <span className={css.chatFileName}>{file.name !== '' ? file.name : '?'}</span>
-      {size !== null && <span className={css.chatFileMeta}>{size}</span>}
+      <span className={css.chatFileContent}>
+        <span className={css.chatFileName}>{file.name !== '' ? file.name : '?'}</span>
+        {meta !== '' && <span className={css.chatFileMeta}>{meta}</span>}
+      </span>
     </span>
   )
 }
@@ -173,7 +182,7 @@ function ChatEntryCopyAction({ text, t }: { text: string; t: TranslateNS<'config
       title={copied ? t('chat.entry.copied') : t('chat.entry.copy')}
       onClick={onCopy}
     >
-      <CopyStateIcon done={copied} size={13} />
+      <CopyStateIcon done={copied} size={15} />
     </button>
   )
 }
@@ -422,7 +431,7 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
             data-chat-entry-window-open={windowOpen ? '' : undefined}
             data-chat-entry-window-closed={windowOpen ? undefined : ''}
           >
-            <RefreshIcon size={13} />
+            <RefreshIcon size={15} />
           </button>
           )}
         </div>

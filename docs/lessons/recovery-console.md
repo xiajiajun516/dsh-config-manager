@@ -826,3 +826,53 @@ Electron 的 asar 报错、crashpad `not connected`。对照 09-30 / 10-01 / 10-
   想要后者生效，读者可在改动之后再发一条消息（那会留下「改动后」的点），三方合并立刻就能算出最小撤销。→ 报告里已说明。
 - 教训：**「合并结论 = 现状」必须与「真的不需要改动」区分**；前者是「我们不知道该怎么退」，后者是「已经一致」。
   把前者当后者 = 静默失效，比报错更糟。
+
+---
+
+## 用户消息气泡与宿主**逐值对齐**（2026-10-17，用户要求「完全一致」）
+
+**来源**：用户 2026-10-17 明确要求「本插件绘制的消息气泡与 DSH 原生气泡完全一致」。上一版把三处差距登记为
+「近似档、本任务不做」（见 DESIGN.md §15b 旧注与 `docs/spec/known-gaps.md` G-39 增量（五）③），本轮全部收回。
+
+**取证方法（可复现，零依赖）**：DSH 桌面把实现整套放在 `D:/Apps/DSH/resources/app.asar` 里（系统提示里的
+`app.asar/dsh/` 是**虚拟路径**，rg/glob 读不到）。asar 头 = `u32@0 = 4`、`u32@4 = headerSize`、
+JSON 起于 `buf.indexOf('{"files"}')`、文件数据基址 = `8 + headerSize`（**注意 JSON 不在 `8` 处起**，
+从 8 开始还有 8 字节 pickle 包装 —— 直接 `JSON.parse(buf.slice(8, 8+headerSize))` 会报
+`Unexpected non-whitespace character after JSON`）。抽出两个产物：
+`dsh/node_modules/@deepseek-ai/dsh-client-ui-chat/lib/client.js`（MessageItem / MessageIconActions 的 CSS Modules
+内联字符串 + 组件 JSX）与 `…/dsh-client-ui-theme/lib/client.js`（`--dsw-radius-*` 等 token 真值）。
+
+**宿主真值（逐字，2026-10-17 抽出；DSH 桌面运行时 0.2.0-rc.2）**：
+- `.userRow{flex-direction:column;align-items:flex-end;gap:6px;display:flex}`
+- `.userStack{min-width:0;max-width:min(calc(var(--dsh-chat-content-width,748px) * .702), 82%);flex-direction:column;align-items:flex-end;gap:8px;display:flex}`
+- `.bubble{background:var(--dsw-specific-bubble);border-radius:var(--dsw-radius-xl);max-width:100%;font-size:var(--dsh-content-font-size,14px);line-height:calc(22px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;padding:10px 16px}`
+  —— **是块级**（没有 `display:flex`）：我们此前自绘的 `display:flex;flex-direction:column;gap:6px` 会把
+  正文里由宿主 `projectUserText` 渲染的**技能 / 引用 chip** 逐个挤成独立一行（一带技能就明显变形）。
+- `.attachmentRow{flex-wrap:wrap;justify-content:flex-end;gap:8px;max-width:100%;display:flex}`
+- `.fileCard{…;border-radius:var(--dsw-radius-xl);background:var(--dsw-specific-input-major,transparent);flex:0 0 240px;width:240px;min-height:64px;padding:8px 12px;gap:10px;border:.5px solid var(--dsw-alias-border-l2)}` +
+  `.fileIcon{width:28px;height:28px}` + `.fileContent{flex-direction:column;flex:1;min-width:0;display:flex}` +
+  `.fileName{font-size:14px;font-weight:500;line-height:22px}` + `.fileMeta{font-size:12px;line-height:15px}`
+  —— 元信息是「扩展名大写（≤8 字符）+ 体积」一行，**不是**我们此前「徽标 + 名字 + 体积」的横排小 chip。
+- `.referenceSummary{color:var(--dsw-alias-label-tertiary);font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(18px + var(--dsh-content-font-delta-secondary,0px))}`
+- MessageIconActions：`.actions{height:calc(28px + var(--dsh-content-font-delta,0px));align-items:center;gap:8px;display:flex}`、
+  `.timeStart{font-size:var(--dsh-content-font-size-secondary,13px);line-height:calc(24px + var(--dsh-content-font-delta,0px));color:var(--dsw-alias-label-tertiary);white-space:nowrap;padding-right:12px}`、
+  `.action{width/height:calc(28px + var(--dsh-content-font-delta,0px));border-radius:var(--dsw-radius-sm);padding:6px;display:inline-flex}` +
+  `.action svg{width/height:calc(15px + var(--dsh-content-font-delta,0px))}` + `:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}`；
+  用户消息那一行还额外套 MessageItem 的 `.actions{margin-top:4px;margin-left:-6px}`（负外边距把图标行与气泡右缘对齐）。
+- **显现语义**：`@media (hover:hover)` 下，`[data-actions-reveal=hover] .actions` 与
+  `:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering]):has(~:is([data-chat-flow-kind=user],[data-chat-flow-kind=steering])) .actions`
+  默认 `opacity:0;transition:opacity 80ms`，`:hover`/`:focus-within` 才 `opacity:1` ⇒
+  **「后面还有用户/steering 消息」的那几条默认收起、最后一条常亮**。我们照抄这条规则（用宿主自己的
+  `data-chat-flow-kind` 祖先属性，不自己数 DOM 节点）；退路是规则不命中 ⇒ 动作行常显（不会消失）。
+- **宿主用户消息没有分支按钮**：`UserMessageNodeView` 给 `MessageIconActions` 只传 `text/time/clock:'start'/className`，
+  **不传 `onBranch`**（`extraActions` 只接 `conversation.chat.assistant-actions`，用户消息没有 actions 子位）——
+  这也是「入口只能靠 priority -1 接管 user cell」的又一条旁证。
+
+**radius 档真值（修正旧注释的错值）**：`@deepseek-ai/dsh-client-ui-theme/lib/client.js` 里
+`--dsw-radius-xs:4px / sm:8px / md:12px / lg:16px / **xl:20px**`（全 asar 只有这一处定义 `--dsw-radius-xl`）。
+DESIGN.md §15b 旧注与 G-39 增量（五）③ 写的「宿主 14px」**是错的** —— 因此气泡圆角差距是 8px vs **20px**，
+不是 8 vs 14。修法不是抄数字，而是 `--cm-r-chat: var(--dsw-radius-xl, 20px)`（宿主换档自动跟随）。
+
+**遗留（如实登记，未做）**：① 时间只显示时刻，不做宿主那种「今天 / 昨天」自动切换（要宿主 `clock.*` 词典）；
+② rest 块仍是我们的 `<details>`（宿主是 JsonBlock）；③ 无宿主同款 tooltip；④ 崩溃降级只保留正文。
+
