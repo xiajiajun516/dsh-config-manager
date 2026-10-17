@@ -113,3 +113,21 @@ test('M-11 依赖风险提示：被撤销的行里的标识符仍在结果中被
   assert.equal(r.ok, true, r.reason)
   assert.ok(r.risks.includes('helperThing'), '必须提示这个可能仍被引用的标识符：' + JSON.stringify(r.risks))
 })
+
+test('M-12 一侧删除一块、另一侧正好在该块之后追加 ⇒ 不算冲突（真机 2026-10-17 形状）', () => {
+  const base = '# T\n\nA-line\n'
+  const ours = '# T\n'
+  const theirs = '# T\n\nA-line\nB-line'
+  const r = mergeThreeWay(ours, base, theirs)
+  assert.equal(r.ok, true, r.reason)
+  assert.equal(r.text, '# T\nB-line', '撤销 A 那一行、保留 B 追加的那一行')
+})
+
+test('M-13 插入点落在被删区间**内部** ⇒ 仍然是冲突', () => {
+  const base = 'a\nMID1\nMID2\nc\n'
+  const ours = 'a\nc\n'
+  const theirs = 'a\nMID1\nB\nMID2\nc\n'
+  const r = mergeThreeWay(ours, base, theirs)
+  assert.equal(r.ok, false)
+  assert.equal(r.reason, 'conflict')
+})

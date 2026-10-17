@@ -758,6 +758,13 @@ export interface RollbackPreviewFile {
   foreignSessionId?: string
   /** 那次写入的时间（毫秒；仅当 foreign 为 true） */
   foreignAt?: number
+  /**
+   * true = 这次回退**不会改动它**：要么与其它对话的改动冲突、要么无法安全合并（缺共同祖先 / 二进制 /
+   * 差异被降级 / 对方删了它）。行级统计一律为 null —— 「不改动」不是「0 行变化」。
+   */
+  skipped?: boolean
+  /** 不改动的机器原因（界面映射成字典键，绝不裸渲染） */
+  mergeReason?: string
 }
 
 /** 单文件差异里一侧（当前磁盘 / 回退点快照）的展示信息。 */
@@ -3720,6 +3727,36 @@ export class RollbackPointEngine {
     return { added: counts.added, removed: counts.removed, truncated: false }
   }
 
+  /**
+   * **合并结果**的逐文件行级统计（与 `previewFileCounts` 同一套预算与降级判据）。
+   *
+   * 为什么单独一份：合并后要写进去的内容既不是记录里的原文（ours），也不是磁盘现状（theirs）——
+   * 预览若照旧拿 ours 算差异，就会把「其实会被保留的对方改动」显示成「会被删掉」。
+   */
+  private async previewMergeCounts(
+    targetBytes: Uint8Array,
+    current: Uint8Array,
+    budget: { bytes: number; work: number },
+  ): Promise<{ added: number | null; removed: number | null; truncated: boolean }> {
+    if (targetBytes.byteLength > this.previewDiffMaxFileBytes || current.byteLength > this.previewDiffMaxFileBytes) {
+      return previewCountsUnavailable()
+    }
+    if (budget.bytes + targetBytes.byteLength + current.byteLength > this.previewDiffMaxTotalBytes) {
+      return previewCountsUnavailable()
+    }
+    budget.bytes += targetBytes.byteLength + current.byteLength
+    if (looksBinary(targetBytes) || looksBinary(current)) return previewCountsUnavailable()
+    const counts = lineDiffCounts(
+      splitDiffLines(DIFF_TEXT_DECODER.decode(current)),
+      splitDiffLines(DIFF_TEXT_DECODER.decode(targetBytes)),
+      this.previewDiffMaxWork,
+      this.previewDiffTotalWork,
+      budget,
+    )
+    if (counts === null) return previewCountsUnavailable()
+    return { added: counts.added, removed: counts.removed, truncated: false }
+  }
+
   /** 只读预览：零写入（不过确认门、不拍 guard、不写任何字节）。 */
   async preview(id: string): Promise<RollbackPreviewResult> {
     const storage = await this.storageStatus()
@@ -3784,6 +3821,9 @@ export class RollbackPointEngine {
       }
       // 单张预览共享的比对预算（字节 + 步数）；只有真的会被改动的条目才消耗它
       const diffBudget = { bytes: 0, work: 0 }
+      /** 合并判定的会话身份与 base 缓存（与执行端同一判据：拿目标点的会话当「本会话」） */
+      const previewIsolationSessionId = typeof record.sessionId === 'string' && record.sessionId !== '' ? record.sessionId : null
+      const previewBaseCache = new Map<string, string | null>()
       // T10：stat 的三种结局分开表达 —— 「不存在（ENOENT）」与「存在性未知（其它 errno）」绝不混为一谈
       const previewFiles = wsPayload.files
       // 阶段 A（**并发**）：逐条一次 bigint lstat + 身份快路径。大仓库这里是预览的大头：
@@ -3845,12 +3885,37 @@ export class RollbackPointEngine {
           }
         }
         if (sizeMatches && current !== null && sha256Hex(current) === file.sha256) continue
+        // **合并判定与执行同口径**（2026-10-17 修）：预览必须说清「这次到底会写成什么」。
+        // 之前预览只按「覆盖回记录版本」算差异，而执行端会先做三方合并 ⇒ 预览把对方后来的行
+        // 也算成「会被删掉」，用户据此以为会丢别人的改动（真机：两行描述都显示要删，实际只删 A 那行）。
+        const decision = await (async (): Promise<{ mode: 'overwrite' | 'merged' | 'skip' | 'unchanged'; bytes?: Uint8Array; reason?: string }> => {
+          if (current === null || previewIsolationSessionId === null) return { mode: 'overwrite' }
+          let baseText = previewBaseCache.get(pathKey(file.path))
+          if (baseText === undefined) {
+            baseText = await this.baseVersionFor(file.path, wsTrack.capturedAt, previewIsolationSessionId)
+            previewBaseCache.set(pathKey(file.path), baseText)
+          }
+          const writer = this.attribution?.writerOf(file.path)
+          const foreignEvidence = writer !== undefined && writer.sessionId !== previewIsolationSessionId && writer.at > wsTrack.capturedAt
+          if (baseText === null && !foreignEvidence) return { mode: 'overwrite' }
+          const outcome = await this.mergeForeignRecord(file, baseText, foreignEvidence)
+          if (outcome.kind === 'write') return { mode: 'merged', bytes: outcome.bytes }
+          if (outcome.kind === 'unchanged') return { mode: 'unchanged' }
+          if (outcome.kind === 'blocked') return { mode: 'skip', reason: outcome.reason }
+          return { mode: 'overwrite' }
+        })()
+        // 合并结论是「保持现状」⇒ 它不会被改动，不该出现在「会被改动」的清单里
+        if (decision.mode === 'unchanged') continue
         different += 1
         const foreignWriter = foreignWriterOf(file.path)
         changedFiles.push({
           path: file.path, status: 'overwrite',
           ...(foreignWriter === undefined ? {} : { foreign: true, foreignSessionId: foreignWriter.sessionId, foreignAt: foreignWriter.at }),
-          ...(await this.previewFileCounts(file, current, 'overwrite', diffBudget)),
+          ...(decision.mode === 'skip'
+            ? { skipped: true, mergeReason: decision.reason, ...previewCountsUnavailable() }
+            : decision.mode === 'merged' && decision.bytes !== undefined && current !== null
+              ? await this.previewMergeCounts(decision.bytes, current, diffBudget)
+              : await this.previewFileCounts(file, current, 'overwrite', diffBudget)),
         })
       }
       const sink: ChunkWalkSink = { skipped: [], excludedDirs: [], ignoredDirs: [], ignoredDirCount: 0, unreadableDirs: [], skippedCount: 0, skippedTruncated: false }

@@ -434,6 +434,13 @@ export interface RollbackPreviewFile {
   foreignSessionId?: string
   /** 那次写入的时间（毫秒；仅当 foreign 为 true） */
   foreignAt?: number
+  /**
+   * true = 这次回退**不会改动它**（与其它对话的改动冲突 / 无法安全合并）。行级统计为 null ——
+   * 「不改动」不是「0 行变化」，界面必须分开说。
+   */
+  skipped?: boolean
+  /** 不改动的机器原因（界面映射成字典键，绝不裸渲染） */
+  mergeReason?: string
 }
 
 export interface RollbackWorkspacePreview {

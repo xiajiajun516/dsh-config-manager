@@ -79,15 +79,20 @@ export interface RollbackFileSelection {
  * （取值域在 src/ui/rollback-view.ts，契约里已有），**绝不**从 `added === 0` 反推删除 ——
  * 一个文件被清空成 0 行同样是 `+0 −N`，那是另一件事。
  */
-function FileStat({ status, added, removed, unknown, deleted, rt }: {
+function FileStat({ status, added, removed, unknown, deleted, skipped, rt }: {
   status: string
   added: number | null
   removed: number | null
   unknown: string
   /** 「删除」这一句（调用点传已翻译文本，本组件不碰字典键）。 */
   deleted: string
+  /** true = 这次回退**不会改动**它（冲突 / 无法安全合并）——与「0 行变化」是两件事 */
+  skipped?: boolean
   rt: TranslateNS<'config-manager-recovery'>
 }) {
+  // 「不会改动」必须说在前面：行级统计对它是 null，落到下面的「行数未统计」会把用户引向
+  // 「它还是会被写、只是没算出行数」的错误理解。
+  if (skipped === true) return <span className={css.hint}>{rt(rk('rollback.preview.file.skipped'))}</span>
   if (status === 'delete') return <span className={css.rollbackDeleted}>{deleted}</span>
   if (added === null || removed === null) return <span className={css.hint}>{unknown}</span>
   return (
@@ -167,6 +172,7 @@ export function RollbackFileChanges({ files, removals, rt, view, renderFileIcon,
                 removed={file.removed}
                 unknown={rt('rollback.preview.file.unknown')}
                 deleted={rt(rk('rollback.preview.file.deleted'))}
+                skipped={file.skipped === true}
                 rt={rt}
               />
             </span>

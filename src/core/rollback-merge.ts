@@ -102,8 +102,12 @@ function touches(a: ChangeBlock, b: ChangeBlock): boolean {
   const aPoint = a.start === a.end
   const bPoint = b.start === b.end
   if (aPoint && bPoint) return a.start === b.start
-  if (aPoint) return a.start >= b.start && a.start <= b.end
-  if (bPoint) return b.start >= a.start && b.start <= a.end
+  // **纯插入点落在区间端点不算冲突**：「删掉 `[s,e)`」与「在 e 处插入」可以共存（先删、再在删除后
+  // 的位置插入）。真机 2026-10-17 的「撤销 A 的描述 + 保留 B 的描述」正是这种形状：A 删掉了尾部
+  // 一行，B 又在其后追加了一行 —— 旧判据把它们当冲突，于是回退变成「什么都不做」。
+  // 只有落在区间**内部**（严格介于 s 与 e 之间）的插入才是真正说不清的冲突。
+  if (aPoint) return a.start > b.start && a.start < b.end
+  if (bPoint) return b.start > a.start && b.start < a.end
   return a.start < b.end && b.start < a.end
 }
 
