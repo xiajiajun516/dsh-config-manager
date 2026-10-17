@@ -22,7 +22,8 @@ import type { TranslateNS } from '../client-types.ts'
 import {
   applySessionParentCoupling,
   applySessionWorkspaceCoupling,
-  filterPluginTree, filterSections, groupPickState, groupSelectedCount, groupUnits, pickerSummary,
+  filterPluginTree, filterSections, groupPickState, groupSelectedCount, groupUnits, isPluginTreeSection,
+  pickerSummary,
   pluginEntryLeaves,
   pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
   sectionCountState, sectionExpandable, sectionPickState,
@@ -34,7 +35,7 @@ import {
 import type { ExportGroup } from '../../ui/types.ts'
 import { formatBytes } from '../../ui/report.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Button, Checkbox, Segmented, Spinner } from './ui.tsx'
+import { Badge, Button, Checkbox, Spinner } from './ui.tsx'
 import { InfoHint } from './InfoHint.tsx'
 import { Skeleton } from './Skeleton.tsx'
 import { Collapse } from './Motion.tsx'
@@ -123,26 +124,11 @@ export interface ContentPickerProps {
    * 导入侧的计划项不带体积，因此不显示大小 —— 不要为了统一而编一个假数字。
    */
   mode?: 'export' | 'import'
-  /**
-   * 视图：section = 按分区平铺（缺省，导入向导 / 市场通道的行为逐像素不变）；
-   * plugin = 「按插件看」（插件 → 清单条目 / 数据目录 / 大文件）。
-   *
-   * 为什么是**视图**而不是第二套选择模型：叶子仍然是原来的单元 id，勾选仍走 toggleUnit /
-   * unitChecked —— 只是换一种方式把同一批单元摆给用户看（同一份 Selection，两个投影）。
-   */
-  view?: 'section' | 'plugin'
-  /**
-   * 视图切换入口（缺省 = 不渲染切换控件，调用方也就无法进入 plugin 视图）。
-   *
-   * 只给导出页传：导入向导与市场通道的节点来自**包内计划**，没有 relatedAreas 这套关联，
-   * 强行提供插件视图只会得到一棵空树。
-   */
-  onViewChange?: (view: 'section' | 'plugin') => void
 }
 
 export function ContentPicker({
   nodes, value, onChange, t, sectionLabel, loading = false, failedSections = [], mode = 'export',
-  busy = false, pendingSections = [], highRisk, unitBadge, onRequestUnits, view = 'section', onViewChange,
+  busy = false, pendingSections = [], highRisk, unitBadge, onRequestUnits,
 }: ContentPickerProps) {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -166,7 +152,26 @@ export function ContentPicker({
   const [expandedPlugins, setExpandedPlugins] = useState<Record<string, boolean>>({})
   const visible = useMemo(() => filterSections(nodes, query), [nodes, query])
   /** 「按插件看」的树：同一份 nodes 的第二个投影（纯函数在 src/ui/selection-model.ts） */
-  const tree = useMemo(() => filterPluginTree(pluginTree(nodes), query), [nodes, query])
+  /** 「按插件看」的完整树（无搜索过滤；纯函数在 src/ui/selection-model.ts） */
+  const fullTree = useMemo(() => pluginTree(nodes), [nodes])
+  const filteredTree = useMemo(() => filterPluginTree(fullTree, query), [fullTree, query])
+  /**
+   * 搜索把树过滤空时**回落到完整树**：分区名命中（如搜「插件数据目录」）应当仍能看到这一组，
+   * 否则用户会在组标题下面看到一句「没有匹配」，而组里的分区明明就在那里。
+   */
+  const tree = filteredTree.entries.length === 0 && filteredTree.buckets.every((b) => b.units.length === 0)
+    ? fullTree
+    : filteredTree
+  /**
+   * 「插件与扩展」组里的四个插件分区（plugins / pluginFiles / pluginData / pluginAssets）合并成
+   * **一棵按插件分组的树**，只在其中**第一个出现**的分区处渲染一次 —— 其余成员就地跳过。
+   *
+   * 为什么用「第一个成员」而不是新造一个假节点：顺序由调用方给的节点顺序决定（宿主目录已按
+   * EXPORT_GROUPS 排好），树落在它本来该在的位置，不引入第二个排序来源。
+   * `self`（配置管理器设置）**不在**这四项里，仍按普通分区行渲染。
+   */
+  const treeSectionIds = visible.filter((n) => isPluginTreeSection(n.section)).map((n) => n.section)
+  const firstTreeSection = treeSectionIds[0]
   const summary = pickerSummary(value, nodes)
   /**
    * 未读到清单的分区数（在途 + 失败，去重；G-02）：> 0 时 footer 合计必须标注
@@ -253,6 +258,189 @@ export function ContentPicker({
     )
   }
 
+  /**
+   * 「插件与扩展」组里的四个插件分区合并渲染成的**一棵按插件分组的树**（用户要求：
+   * 不再用「按分区 / 按插件」视图切换 —— 树就是这一组的渲染方式）。
+   *
+   * 只显示**能证明**的归属（宿主下发的 relatedAreas = 内置来源表 + 插件自述 dsh.dataDirs）；
+   * pluginFiles 没有任何包名信息，因此整块进「未归属」桶 —— 不猜，也不假装它属于某个插件。
+   * 「注册表说它应该在哪儿」与「磁盘上确实有」分开渲染：unread 不可勾（展开时才去读），
+   * absent 明确标「无内容」—— 否则会出现「勾了却没导出」的幽灵勾选（引擎只带走清单里真实存在的单元）。
+   *
+   * 纯展示：叶子仍是原来的单元 id，勾选仍走 toggleUnit / toggleSection（语义一字不改）。
+   */
+  const renderPluginTree = (): ReactNode => (
+    <>
+        {!tree.pluginsLoaded && <span className={css.hint}>{t('picker.pluginViewEmpty')}</span>}
+      {tree.pluginsLoaded
+        && tree.entries.length === 0
+        && tree.buckets.every((b) => b.units.length === 0)
+        && <span className={css.hint}>{t('picker.empty')}</span>}
+      {tree.entries.map((entry) => {
+        const open = expandedPlugins[entry.name] === true
+        const state = pluginEntryPickState(value, entry)
+        const picked = pluginEntrySelectedCount(value, entry)
+        const total = pluginEntryLeaves(entry).length
+        const unread = pluginEntryUnreadSections(entry)
+        const entrySize = entry.leaves.reduce((n, l) => n + l.sizeBytes, 0)
+        const bodyId = 'picker-plugin-' + entry.name
+        return (
+          <div key={entry.name} className={css.pickerGroup}>
+            <div className={css.pickerTreeRow}>
+              <button
+                type="button"
+                className={css.iconBtn}
+                data-size="sm"
+                aria-expanded={open}
+                aria-controls={bodyId}
+                aria-label={open ? t('picker.collapse') : t('picker.expand')}
+                title={open ? t('picker.collapse') : t('picker.expand')}
+                onClick={() => {
+                  // 展开才去读：清单是惰性的，插件树同样不预读 pluginData / pluginAssets
+                  if (!open) for (const s of unread) onRequestUnits?.(s)
+                  setExpandedPlugins({ ...expandedPlugins, [entry.name]: !open })
+                }}
+              >
+                <ExpandChevron open={open} />
+              </button>
+              <Checkbox
+                checked={state === 'all'}
+                onChange={(checked) => { commit(togglePluginEntry(value, nodes, entry, checked)) }}
+                label={
+                  <span className={css.categoryItem}>
+                    {/* 包名是宿主直出文本 → 显示前过 redact（与单元行同一纪律） */}
+                    <span className={css.pickerUnitName} title={redact(entry.name)}>
+                      {tailWeightedEllipsis(redact(entry.name), UNIT_NAME_MAX)}
+                    </span>
+                    {state === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
+                    <span className={css.pickerCount}>
+                      {t('picker.selectedOf', { selected: String(picked), total: String(total) })}
+                    </span>
+                    {entrySize > 0 && <span className={css.sectionSize + ' ' + css.mono}>{formatBytes(entrySize)}</span>}
+                    {unread.length > 0 && <span className={css.pickerCount}>{t('picker.pluginAreaUnread')}</span>}
+                  </span>
+                }
+              />
+            </div>
+            <Collapse open={open} id={bodyId}>
+              {entry.leaves.map((leaf) => {
+                const kindText = leafKindText(leaf.kind)
+                const leafName = leaf.kind === 'plugin' ? kindText : kindText + ' · ' + redact(leaf.label)
+                if (leaf.state !== 'present') {
+                  // 不可勾的两态：还没读（给读取入口）/ 读了但没有内容（如实说明，绝不产生幽灵勾选）
+                  return (
+                    <div key={leaf.unitId} className={css.pickerUnit + ' ' + css.pickerUnitNested}>
+                      <span className={css.pickerChevronSpacer} aria-hidden="true" />
+                      <span className={css.categoryItem}>
+                        <span className={css.pickerUnitName} title={redact(leaf.label)}>{leafName}</span>
+                        <span className={css.pickerCount}>
+                          {leaf.state === 'unread' ? t('picker.pluginAreaUnread') : t('picker.pluginAreaAbsent')}
+                        </span>
+                        {leaf.state === 'unread' && (
+                          <button
+                            type="button"
+                            className={css.ghostButton}
+                            data-size="sm"
+                            onClick={() => { onRequestUnits?.(leaf.section) }}
+                          >
+                            {t('picker.loadSection')}
+                          </button>
+                        )}
+                      </span>
+                    </div>
+                  )
+                }
+                return (
+                  <div key={leaf.unitId} className={css.pickerUnit + ' ' + css.pickerUnitNested}>
+                    <span className={css.pickerChevronSpacer} aria-hidden="true" />
+                    <Checkbox
+                      checked={unitChecked(value, leaf.section, leaf.unitId)}
+                      onChange={(checked) => { commit(toggleUnit(value, nodes, leaf.unitId, checked)) }}
+                      label={
+                        <span className={css.categoryItem}>
+                          <span className={css.pickerUnitName} title={redact(leaf.label)}>{leafName}</span>
+                          {leaf.detail !== undefined && <span className={css.pickerUnitDetail}>{redact(leaf.detail)}</span>}
+                          {leaf.sizeBytes > 0 && <span className={css.sectionSize + ' ' + css.mono}>{formatBytes(leaf.sizeBytes)}</span>}
+                        </span>
+                      }
+                    />
+                  </div>
+                )
+              })}
+            </Collapse>
+          </div>
+        )
+      })}
+      {tree.buckets.map((bucket) => {
+        const node = nodes.find((n) => n.section === bucket.section)
+        if (node === undefined) return null
+        const key = 'bucket:' + bucket.section
+        const open = expandedPlugins[key] === true
+        const units = visibleUnits(bucket.units, showAllUnits[key] === true)
+        const bodyId = 'picker-bucket-' + bucket.section
+        return (
+          <div key={key} className={css.pickerGroup}>
+            <div className={css.pickerTreeRow}>
+              {bucket.units.length > 0 ? (
+                <button
+                  type="button"
+                  className={css.iconBtn}
+                  data-size="sm"
+                  aria-expanded={open}
+                  aria-controls={bodyId}
+                  aria-label={open ? t('picker.collapse') : t('picker.expand')}
+                  title={open ? t('picker.collapse') : t('picker.expand')}
+                  onClick={() => { setExpandedPlugins({ ...expandedPlugins, [key]: !open }) }}
+                >
+                  <ExpandChevron open={open} />
+                </button>
+              ) : (
+                <span className={css.pickerChevronSpacer} aria-hidden="true" />
+              )}
+              <span className={css.categoryItem}>
+                <span className={css.pickerUnitName}>{bucketLabel(bucket.section)}</span>
+                {bucket.loaded && (
+                  <span className={css.pickerCount}>
+                    {t('picker.selectedOf', {
+                      selected: String(selectedUnitCount(value, node)),
+                      total: String(node.units.length === 0 ? node.count : node.units.length),
+                    })}
+                  </span>
+                )}
+                {!bucket.loaded && (
+                  <button
+                    type="button"
+                    className={css.ghostButton}
+                    data-size="sm"
+                    onClick={() => { onRequestUnits?.(bucket.section) }}
+                  >
+                    {t('picker.loadSection')}
+                  </button>
+                )}
+                {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
+              </span>
+            </div>
+            <Collapse open={open} id={bodyId}>
+              {units.shown.map((u) => renderUnitRow(node, u, true))}
+              {units.hidden > 0 && (
+                <div className={css.pickerMore}>
+                  <button
+                    type="button"
+                    className={css.ghostButton}
+                    data-size="sm"
+                    onClick={() => { setShowAllUnits({ ...showAllUnits, [key]: true }) }}
+                  >
+                    {t('picker.showAll', { count: String(bucket.units.length) })}
+                  </button>
+                </div>
+              )}
+            </Collapse>
+          </div>
+        )
+      })}
+    </>
+  )
+
   return (
     <div className={css.pickerRoot}>
       <div className={css.pickerToolbar}>
@@ -270,32 +458,12 @@ export function ContentPicker({
         {hasLinkedPairs && <InfoHint text={t('picker.sessionWorkspaceLinked')} t={t} />}
       </div>
 
-      {/* 视图切换（只有导出页传 onViewChange）：按分区 / 按插件。
-          缺省不渲染 —— 导入向导与市场通道的节点没有 relatedAreas 这套关联，强行给出插件视图只会是一棵空树。 */}
-      {onViewChange !== undefined && (
-        <div className={css.pickerViewRow}>
-          <Segmented
-            items={[
-              { id: 'section', label: t('picker.viewSection') },
-              { id: 'plugin', label: t('picker.viewPlugin') },
-            ]}
-            active={view}
-            onChange={(id) => { onViewChange(id === 'plugin' ? 'plugin' : 'section') }}
-            ariaLabel={t('picker.title')}
-          />
-          {view === 'plugin' && <InfoHint text={t('picker.pluginTreeHint')} t={t} />}
-        </div>
-      )}
-
       {loading && <Skeleton count={3} label={t('picker.loading')} />}
       {failedSections.length > 0 && <span className={css.hint}>{t('picker.unitsUnavailable')}</span>}
 
-      {/* 空态：按分区看走原有的「没有匹配」；按插件看有自己的空态（插件清单还没读到时不能报「没有内容」） */}
-      {!loading && view === 'section' && visible.length === 0 && (
-        <span className={css.hint}>{t('picker.empty')}</span>
-      )}
+      {!loading && visible.length === 0 && <span className={css.hint}>{t('picker.empty')}</span>}
 
-      {view === 'section' && visible.length > 0 && (
+      {visible.length > 0 && (
         <div className={css.pickerList}>
           {visible.map((node, nodeIndex) => {
             /**
@@ -308,6 +476,13 @@ export function ContentPicker({
               && (nodeIndex === 0 || visible[nodeIndex - 1]?.group !== node.group)
               ? node.group
               : undefined
+            /**
+             * 「插件与扩展」组里的四个插件分区（plugins / pluginFiles / pluginData / pluginAssets）
+             * 合并成一棵按插件分组的树：只在其中**第一个出现**的分区处渲染一次（见 renderPluginTree），
+             * 其余成员就地跳过 —— 顺序仍由调用方给的节点顺序决定，不引入第二个排序来源。
+             * `self`（配置管理器设置）不在那四项里，照旧按普通分区行渲染。
+             */
+            if (isPluginTreeSection(node.section) && node.section !== firstTreeSection) return null
             const state = sectionPickState(value, node)
             const open = expanded[node.section] === true
             const picked = selectedUnitCount(value, node)
@@ -334,320 +509,145 @@ export function ContentPicker({
                     {groupTitle === 'extensions' && <InfoHint text={t('picker.groupHint.extensions')} t={t} />}
                   </div>
                 )}
-                <div className={css.pickerGroup}>
-                <div className={css.pickerTreeRow}>
-                  {/* 级联树：展开控件在选择框**左边**（点它只展开本节点的子树，不展开别人的）。
-                      用原生 button（共享 Button 原语不透传 aria-* 属性，UI-22）；图标走**形变层** ——
-                       展开态切换本身携带信息，让「变了」可见（common/Icon.tsx 的 ExpandChevron）。 */}
-                  {expandable ? (
-                    <button
-                      type="button"
-                      className={css.iconBtn}
-                      data-size="sm"
-                      aria-expanded={open}
-                      aria-controls={unitsId(node.section)}
-                      aria-label={open ? t('picker.collapse') : t('picker.expand')}
-                      title={open ? t('picker.collapse') : t('picker.expand')}
-                      onClick={onToggleExpand}
-                    >
-                      <ExpandChevron open={open} />
-                    </button>
-                  ) : (
-                    <span className={css.pickerChevronSpacer} aria-hidden="true" />
-                  )}
-                  <Checkbox
-                    checked={state === 'all'}
-                    onChange={(checked) => { commit(toggleSection(value, node, checked), focusOf(node.section)) }}
-                    label={
-                      <span className={css.categoryItem}>
-                        <span className={css.categoryName}>{label(node.section)}</span>
-                        {state === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
-                        {highRisk?.(node.section) === true && (
-                          <span title={t('picker.highRiskHint')}>
-                            <Badge kind="warn">{t('picker.highRisk')}</Badge>
-                          </span>
-                        )}
-                        {/* 设备相关 / 敏感分区（UI-09）：数据来自调用方的选择模型，
-                            「全选」不再静默把 sessions / credentialsStatus 一起勾上 */}
-                        {node.portability === 'deviceSpecific' && (
-                          <Badge kind="warn">{t('picker.deviceSpecific')}</Badge>
-                        )}
-                        {node.sensitive === true && <Badge kind="warn">{t('picker.sensitive')}</Badge>}
-                        {/* 三态：读取中 / 读取失败 / 已选 n/m。
-                            没读到清单（在途或失败）时**不要**显示 0/0 —— 那会被读成
-                            「这一项没有内容」；失败态必须显式说明「将整体导出」（UI-07）。 */}
-                        {countState === 'pending' ? (
-                          <span className={css.pickerCount}>{t('picker.loadingSection')}</span>
-                        ) : countState === 'failed' ? (
-                          /* 失败态用 warn 语义色（DESIGN.md「状态即语义」）：中性的 .pickerCount
-                             会让「读取失败」读起来像一条普通说明，而不是需要用户注意的状态 */
-                          <span className={`${css.pickerCount} ${css.warnText}`}>{t('picker.sectionLoadFailed')}</span>
-                        ) : countState === 'count' ? (
-                          <span className={css.pickerCount}>
-                            {t('picker.selectedOf', { selected: String(picked), total: String(total) })}
-                          </span>
-                        ) : (
-                          /* 未读（惰性）：**不渲染 0/0** —— 「已选 0/0」会被读成「这条分区没有内容」，
-                             而事实是「还没去读」。数字等展开（= 触发读取）之后再给。 */
-                          null
-                        )}
-                        {node.sizeBytes > 0 && (
-                          <span className={`${css.sectionSize} ${css.mono}`}>{formatBytes(node.sizeBytes)}</span>
-                        )}
-                      </span>
-                    }
-                  />
-                </div>
-                {/* 展开/收起两端都有高度动画（common/Motion.tsx 的 Collapse）；
-                    容器**始终存在**，所以 aria-controls 恒有值。 */}
-                <Collapse open={open} id={unitsId(node.section)}>
-                    {/* 二级分组（sessions 按工作区聚合）：没有 group 的单元仍走平铺，
-                        与改造前的渲染完全一致（skills / pluginFiles 等分区零变化）。
-                        级联树语义：展开分区只列出分组，点某个分组的 chevron 才展开那一棵子树
-                        （默认全部折叠，不会一次铺开全部会话）。 */}
-                    {groupUnits(units.shown).map((group, gi) => {
-                      // 分组三态与计数都必须带上所属分区 —— 分区整体没勾时，它下面的分组/单元一律显示未勾选
-                      const groupState = groupPickState(value, group, node.section)
-                      const groupPicked = groupSelectedCount(value, group, node.section)
-                      const groupKey = node.section + ':' + (group.label ?? '__flat')
-                      const groupOpen = group.label === null || expandedGroups[groupKey] === true
-                      const groupBodyId = 'picker-units-' + node.section + '-g' + String(gi)
-                      return (
-                        <div key={groupKey}>
-                          {group.label !== null && (
-                            <div className={css.pickerTreeRow + ' ' + css.pickerSubgroup}>
-                              {/* 级联树：只展开这一棵子树（与分区行同一套 chevron 原语与 aria 约定） */}
-                              <button
-                                type="button"
-                                className={css.iconBtn}
-                                data-size="sm"
-                                aria-expanded={groupOpen}
-                                aria-controls={groupBodyId}
-                                aria-label={groupOpen ? t('picker.collapse') : t('picker.expand')}
-                                title={groupOpen ? t('picker.collapse') : t('picker.expand')}
-                                onClick={() => { setExpandedGroups({ ...expandedGroups, [groupKey]: !groupOpen }) }}
-                              >
-                                <ExpandChevron open={groupOpen} />
-                              </button>
-                              <Checkbox
-                                checked={groupState === 'all'}
-                                onChange={(checked) => { commit(toggleUnitGroup(value, node, group, checked), focusOf(node.section)) }}
-                                label={
-                                  <span className={css.categoryItem}>
-                                    {/* 分组名是宿主直出字符串（工作区标题）→ 渲染前过 redact */}
-                                    <span className={css.pickerSubgroupName} title={redact(group.label)}>{redact(group.label)}</span>
-                                    {groupState === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
-                                    <span className={css.pickerCount}>
-                                      {t('picker.selectedOf', { selected: String(groupPicked), total: String(group.units.length) })}
-                                    </span>
-                                  </span>
-                                }
-                              />
-                            </div>
+                {node.section === firstTreeSection ? renderPluginTree() : (
+                  <div className={css.pickerGroup}>
+                  <div className={css.pickerTreeRow}>
+                    {/* 级联树：展开控件在选择框**左边**（点它只展开本节点的子树，不展开别人的）。
+                        用原生 button（共享 Button 原语不透传 aria-* 属性，UI-22）；图标走**形变层** ——
+                         展开态切换本身携带信息，让「变了」可见（common/Icon.tsx 的 ExpandChevron）。 */}
+                    {expandable ? (
+                      <button
+                        type="button"
+                        className={css.iconBtn}
+                        data-size="sm"
+                        aria-expanded={open}
+                        aria-controls={unitsId(node.section)}
+                        aria-label={open ? t('picker.collapse') : t('picker.expand')}
+                        title={open ? t('picker.collapse') : t('picker.expand')}
+                        onClick={onToggleExpand}
+                      >
+                        <ExpandChevron open={open} />
+                      </button>
+                    ) : (
+                      <span className={css.pickerChevronSpacer} aria-hidden="true" />
+                    )}
+                    <Checkbox
+                      checked={state === 'all'}
+                      onChange={(checked) => { commit(toggleSection(value, node, checked), focusOf(node.section)) }}
+                      label={
+                        <span className={css.categoryItem}>
+                          <span className={css.categoryName}>{label(node.section)}</span>
+                          {state === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
+                          {highRisk?.(node.section) === true && (
+                            <span title={t('picker.highRiskHint')}>
+                              <Badge kind="warn">{t('picker.highRisk')}</Badge>
+                            </span>
                           )}
-                          {group.label === null
-                            ? group.units.map((u) => renderUnitRow(node, u, false))
-                            : (
-                              <Collapse open={groupOpen} id={groupBodyId}>
-                                {group.units.map((u) => renderUnitRow(node, u, true))}
-                              </Collapse>
-                            )}
-                        </div>
-                      )
-                    })}
-                    {/* 渐进披露（UI-15）：默认前 N 条 + 「显示全部（共 M 条）」，纯前端方案 */}
-                    {units.hidden > 0 && (
-                      <div className={css.pickerMore}>
-                        <button
-                          type="button"
-                          className={css.ghostButton}
-                          data-size="sm"
-                          onClick={() => { setShowAllUnits({ ...showAllUnits, [node.section]: true }) }}
-                        >
-                          {t('picker.showAll', { count: String(node.units.length) })}
-                        </button>
-                      </div>
-                    )}
-                </Collapse>
-                </div>
-              </Fragment>
-            )
-          })}
-        </div>
-      )}
-
-      {/* 「按插件看」：同一个插件的清单条目 / 数据目录 / 大文件收在一个节点下。
-          只显示**能证明**的归属（宿主下发的 relatedAreas = 内置来源表 + 插件自述 dsh.dataDirs）；
-          pluginFiles 没有任何包名信息，因此整块进「未归属」桶 —— 不猜，也不假装它属于某个插件。
-          「注册表说它应该在哪儿」与「磁盘上确实有」分开渲染：unread 不可勾（展开时才去读），
-          absent 明确标「无内容」—— 否则会出现「勾了却没导出」的幽灵勾选（引擎只带走清单里真实存在的单元）。 */}
-      {view === 'plugin' && (
-        <div className={css.pickerList}>
-          {!tree.pluginsLoaded && <span className={css.hint}>{t('picker.pluginViewEmpty')}</span>}
-          {tree.pluginsLoaded
-            && tree.entries.length === 0
-            && tree.buckets.every((b) => b.units.length === 0)
-            && <span className={css.hint}>{t('picker.empty')}</span>}
-          {tree.entries.map((entry) => {
-            const open = expandedPlugins[entry.name] === true
-            const state = pluginEntryPickState(value, entry)
-            const picked = pluginEntrySelectedCount(value, entry)
-            const total = pluginEntryLeaves(entry).length
-            const unread = pluginEntryUnreadSections(entry)
-            const entrySize = entry.leaves.reduce((n, l) => n + l.sizeBytes, 0)
-            const bodyId = 'picker-plugin-' + entry.name
-            return (
-              <div key={entry.name} className={css.pickerGroup}>
-                <div className={css.pickerTreeRow}>
-                  <button
-                    type="button"
-                    className={css.iconBtn}
-                    data-size="sm"
-                    aria-expanded={open}
-                    aria-controls={bodyId}
-                    aria-label={open ? t('picker.collapse') : t('picker.expand')}
-                    title={open ? t('picker.collapse') : t('picker.expand')}
-                    onClick={() => {
-                      // 展开才去读：清单是惰性的，插件视图同样不预读 pluginData / pluginAssets
-                      if (!open) for (const s of unread) onRequestUnits?.(s)
-                      setExpandedPlugins({ ...expandedPlugins, [entry.name]: !open })
-                    }}
-                  >
-                    <ExpandChevron open={open} />
-                  </button>
-                  <Checkbox
-                    checked={state === 'all'}
-                    onChange={(checked) => { commit(togglePluginEntry(value, nodes, entry, checked)) }}
-                    label={
-                      <span className={css.categoryItem}>
-                        {/* 包名是宿主直出文本 → 显示前过 redact（与单元行同一纪律） */}
-                        <span className={css.pickerUnitName} title={redact(entry.name)}>
-                          {tailWeightedEllipsis(redact(entry.name), UNIT_NAME_MAX)}
-                        </span>
-                        {state === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
-                        <span className={css.pickerCount}>
-                          {t('picker.selectedOf', { selected: String(picked), total: String(total) })}
-                        </span>
-                        {entrySize > 0 && <span className={css.sectionSize + ' ' + css.mono}>{formatBytes(entrySize)}</span>}
-                        {unread.length > 0 && <span className={css.pickerCount}>{t('picker.pluginAreaUnread')}</span>}
-                      </span>
-                    }
-                  />
-                </div>
-                <Collapse open={open} id={bodyId}>
-                  {entry.leaves.map((leaf) => {
-                    const kindText = leafKindText(leaf.kind)
-                    const leafName = leaf.kind === 'plugin' ? kindText : kindText + ' · ' + redact(leaf.label)
-                    if (leaf.state !== 'present') {
-                      // 不可勾的两态：还没读（给读取入口）/ 读了但没有内容（如实说明，绝不产生幽灵勾选）
-                      return (
-                        <div key={leaf.unitId} className={css.pickerUnit + ' ' + css.pickerUnitNested}>
-                          <span className={css.pickerChevronSpacer} aria-hidden="true" />
-                          <span className={css.categoryItem}>
-                            <span className={css.pickerUnitName} title={redact(leaf.label)}>{leafName}</span>
+                          {/* 设备相关 / 敏感分区（UI-09）：数据来自调用方的选择模型，
+                              「全选」不再静默把 sessions / credentialsStatus 一起勾上 */}
+                          {node.portability === 'deviceSpecific' && (
+                            <Badge kind="warn">{t('picker.deviceSpecific')}</Badge>
+                          )}
+                          {node.sensitive === true && <Badge kind="warn">{t('picker.sensitive')}</Badge>}
+                          {/* 三态：读取中 / 读取失败 / 已选 n/m。
+                              没读到清单（在途或失败）时**不要**显示 0/0 —— 那会被读成
+                              「这一项没有内容」；失败态必须显式说明「将整体导出」（UI-07）。 */}
+                          {countState === 'pending' ? (
+                            <span className={css.pickerCount}>{t('picker.loadingSection')}</span>
+                          ) : countState === 'failed' ? (
+                            /* 失败态用 warn 语义色（DESIGN.md「状态即语义」）：中性的 .pickerCount
+                               会让「读取失败」读起来像一条普通说明，而不是需要用户注意的状态 */
+                            <span className={`${css.pickerCount} ${css.warnText}`}>{t('picker.sectionLoadFailed')}</span>
+                          ) : countState === 'count' ? (
                             <span className={css.pickerCount}>
-                              {leaf.state === 'unread' ? t('picker.pluginAreaUnread') : t('picker.pluginAreaAbsent')}
+                              {t('picker.selectedOf', { selected: String(picked), total: String(total) })}
                             </span>
-                            {leaf.state === 'unread' && (
-                              <button
-                                type="button"
-                                className={css.ghostButton}
-                                data-size="sm"
-                                onClick={() => { onRequestUnits?.(leaf.section) }}
-                              >
-                                {t('picker.loadSection')}
-                              </button>
-                            )}
-                          </span>
-                        </div>
-                      )
-                    }
-                    return (
-                      <div key={leaf.unitId} className={css.pickerUnit + ' ' + css.pickerUnitNested}>
-                        <span className={css.pickerChevronSpacer} aria-hidden="true" />
-                        <Checkbox
-                          checked={unitChecked(value, leaf.section, leaf.unitId)}
-                          onChange={(checked) => { commit(toggleUnit(value, nodes, leaf.unitId, checked)) }}
-                          label={
-                            <span className={css.categoryItem}>
-                              <span className={css.pickerUnitName} title={redact(leaf.label)}>{leafName}</span>
-                              {leaf.detail !== undefined && <span className={css.pickerUnitDetail}>{redact(leaf.detail)}</span>}
-                              {leaf.sizeBytes > 0 && <span className={css.sectionSize + ' ' + css.mono}>{formatBytes(leaf.sizeBytes)}</span>}
-                            </span>
-                          }
-                        />
-                      </div>
-                    )
-                  })}
-                </Collapse>
-              </div>
-            )
-          })}
-          {tree.buckets.map((bucket) => {
-            const node = nodes.find((n) => n.section === bucket.section)
-            if (node === undefined) return null
-            const key = 'bucket:' + bucket.section
-            const open = expandedPlugins[key] === true
-            const units = visibleUnits(bucket.units, showAllUnits[key] === true)
-            const bodyId = 'picker-bucket-' + bucket.section
-            return (
-              <div key={key} className={css.pickerGroup}>
-                <div className={css.pickerTreeRow}>
-                  {bucket.units.length > 0 ? (
-                    <button
-                      type="button"
-                      className={css.iconBtn}
-                      data-size="sm"
-                      aria-expanded={open}
-                      aria-controls={bodyId}
-                      aria-label={open ? t('picker.collapse') : t('picker.expand')}
-                      title={open ? t('picker.collapse') : t('picker.expand')}
-                      onClick={() => { setExpandedPlugins({ ...expandedPlugins, [key]: !open }) }}
-                    >
-                      <ExpandChevron open={open} />
-                    </button>
-                  ) : (
-                    <span className={css.pickerChevronSpacer} aria-hidden="true" />
-                  )}
-                  <span className={css.categoryItem}>
-                    <span className={css.pickerUnitName}>{bucketLabel(bucket.section)}</span>
-                    {bucket.loaded && (
-                      <span className={css.pickerCount}>
-                        {t('picker.selectedOf', {
-                          selected: String(selectedUnitCount(value, node)),
-                          total: String(node.units.length === 0 ? node.count : node.units.length),
-                        })}
-                      </span>
-                    )}
-                    {!bucket.loaded && (
-                      <button
-                        type="button"
-                        className={css.ghostButton}
-                        data-size="sm"
-                        onClick={() => { onRequestUnits?.(bucket.section) }}
-                      >
-                        {t('picker.loadSection')}
-                      </button>
-                    )}
-                    {bucket.loaded && <InfoHint text={t('picker.bucketHint')} t={t} />}
-                  </span>
-                </div>
-                <Collapse open={open} id={bodyId}>
-                  {units.shown.map((u) => renderUnitRow(node, u, true))}
-                  {units.hidden > 0 && (
-                    <div className={css.pickerMore}>
-                      <button
-                        type="button"
-                        className={css.ghostButton}
-                        data-size="sm"
-                        onClick={() => { setShowAllUnits({ ...showAllUnits, [key]: true }) }}
-                      >
-                        {t('picker.showAll', { count: String(bucket.units.length) })}
-                      </button>
+                          ) : (
+                            /* 未读（惰性）：**不渲染 0/0** —— 「已选 0/0」会被读成「这条分区没有内容」，
+                               而事实是「还没去读」。数字等展开（= 触发读取）之后再给。 */
+                            null
+                          )}
+                          {node.sizeBytes > 0 && (
+                            <span className={`${css.sectionSize} ${css.mono}`}>{formatBytes(node.sizeBytes)}</span>
+                          )}
+                        </span>
+                      }
+                    />
                     </div>
-                  )}
-                </Collapse>
-              </div>
+                  {/* 展开/收起两端都有高度动画（common/Motion.tsx 的 Collapse）；
+                      容器**始终存在**，所以 aria-controls 恒有值。 */}
+                  <Collapse open={open} id={unitsId(node.section)}>
+                      {/* 二级分组（sessions 按工作区聚合）：没有 group 的单元仍走平铺，
+                          与改造前的渲染完全一致（skills / pluginFiles 等分区零变化）。
+                          级联树语义：展开分区只列出分组，点某个分组的 chevron 才展开那一棵子树
+                          （默认全部折叠，不会一次铺开全部会话）。 */}
+                      {groupUnits(units.shown).map((group, gi) => {
+                        // 分组三态与计数都必须带上所属分区 —— 分区整体没勾时，它下面的分组/单元一律显示未勾选
+                        const groupState = groupPickState(value, group, node.section)
+                        const groupPicked = groupSelectedCount(value, group, node.section)
+                        const groupKey = node.section + ':' + (group.label ?? '__flat')
+                        const groupOpen = group.label === null || expandedGroups[groupKey] === true
+                        const groupBodyId = 'picker-units-' + node.section + '-g' + String(gi)
+                        return (
+                          <div key={groupKey}>
+                            {group.label !== null && (
+                              <div className={css.pickerTreeRow + ' ' + css.pickerSubgroup}>
+                                {/* 级联树：只展开这一棵子树（与分区行同一套 chevron 原语与 aria 约定） */}
+                                <button
+                                  type="button"
+                                  className={css.iconBtn}
+                                  data-size="sm"
+                                  aria-expanded={groupOpen}
+                                  aria-controls={groupBodyId}
+                                  aria-label={groupOpen ? t('picker.collapse') : t('picker.expand')}
+                                  title={groupOpen ? t('picker.collapse') : t('picker.expand')}
+                                  onClick={() => { setExpandedGroups({ ...expandedGroups, [groupKey]: !groupOpen }) }}
+                                >
+                                  <ExpandChevron open={groupOpen} />
+                                </button>
+                                <Checkbox
+                                  checked={groupState === 'all'}
+                                  onChange={(checked) => { commit(toggleUnitGroup(value, node, group, checked), focusOf(node.section)) }}
+                                  label={
+                                    <span className={css.categoryItem}>
+                                      {/* 分组名是宿主直出字符串（工作区标题）→ 渲染前过 redact */}
+                                      <span className={css.pickerSubgroupName} title={redact(group.label)}>{redact(group.label)}</span>
+                                      {groupState === 'partial' && <Badge kind="info">{t('picker.partial')}</Badge>}
+                                      <span className={css.pickerCount}>
+                                        {t('picker.selectedOf', { selected: String(groupPicked), total: String(group.units.length) })}
+                                      </span>
+                                    </span>
+                                  }
+                                />
+                              </div>
+                            )}
+                            {group.label === null
+                              ? group.units.map((u) => renderUnitRow(node, u, false))
+                              : (
+                                <Collapse open={groupOpen} id={groupBodyId}>
+                                  {group.units.map((u) => renderUnitRow(node, u, true))}
+                                </Collapse>
+                              )}
+                          </div>
+                        )
+                      })}
+                      {/* 渐进披露（UI-15）：默认前 N 条 + 「显示全部（共 M 条）」，纯前端方案 */}
+                      {units.hidden > 0 && (
+                        <div className={css.pickerMore}>
+                          <button
+                            type="button"
+                            className={css.ghostButton}
+                            data-size="sm"
+                            onClick={() => { setShowAllUnits({ ...showAllUnits, [node.section]: true }) }}
+                          >
+                            {t('picker.showAll', { count: String(node.units.length) })}
+                          </button>
+                        </div>
+                      )}
+                  </Collapse>
+                  </div>
+                )}
+              </Fragment>
             )
           })}
         </div>

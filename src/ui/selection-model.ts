@@ -1054,6 +1054,20 @@ export interface PluginTree {
 }
 
 /** 插件单元 id 前缀（与 adapters/units.ts 的 `plugin:<包名>` 同一命名空间） */
+/**
+ * 合并进「按插件看」那棵树的分区（导出选择器里「插件与扩展」组的成员）。
+ *
+ * 这四项的归属键只有 npm 包名（plugin:<包名> ↔ 来源注册表的 packages）；self（配置管理器设置）
+ * **不在**这里 —— 它不是插件，仍按普通分区行渲染。清单顺序仍由调用方给的节点顺序决定
+ * （宿主目录已按 EXPORT_GROUPS 排好，树只在第一个成员处渲染一次）。
+ */
+export const PLUGIN_TREE_SECTIONS: readonly SectionId[] = ['plugins', 'pluginFiles', 'pluginData', 'pluginAssets']
+
+/** 该分区是否合并进「按插件看」的树（见 PLUGIN_TREE_SECTIONS）。 */
+export function isPluginTreeSection(section: SectionId): boolean {
+  return PLUGIN_TREE_SECTIONS.includes(section)
+}
+
 const PLUGIN_UNIT_PREFIX = 'plugin:'
 
 /** 把一条区域引用投影成叶子（按该分区清单是否到货决定 present / unread / absent）。 */

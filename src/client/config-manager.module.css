@@ -3473,19 +3473,6 @@ body {
   height: 18px;
 }
 
-/* 「按插件看 / 按分区看」视图切换行（只有导出页渲染；DESIGN.md §「内容选择器」） */
-.pickerViewRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.pickerViewRow .segGroup {
-  /* 分段控件缺省带 10px 下边距（页内子视图）；放进工具区时由本行统一控制间距 */
-  margin: 0;
-}
-
 /* 分区组标题（General / 插件与扩展 / …）：**不是选项** —— 字号更小、颜色更淡、不可选中，
    非首组起一条分隔线（DESIGN.md §CommandPalette 同款口径：否则会被读成「灰掉的选项」）。 */
 .pickerGroupTitle {

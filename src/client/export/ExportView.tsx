@@ -94,13 +94,6 @@ export function ExportView({ api, t }: ExportViewProps) {
   const downloadingRef = useRef(false)
   /** Phase 1：内容选择器（分区 → 最小可拆单元）开关 */
   const [pickerOpen, setPickerOpen] = useState(false)
-  /**
-   * 选择器视图：按分区（缺省）/ 按插件（同一份勾选状态的第二个投影）。
-   *
-   * 只影响展示 —— 勾选仍由 selection-model 的唯一模型决定，切换视图不会改动任何勾选。
-   * 瞬态 UI 状态（与 pickerOpen 同类），不进 run-store：切页/刷新后回到按分区看。
-   */
-  const [pickerView, setPickerView] = useState<'section' | 'plugin'>('section')
   /** 已取到的分区条目清单（按分区惰性缓存：打开选择器时不把 sessions 全量读一遍） */
   const [inv, setInv] = useState<Record<string, ExportPreviewResponse['sections'][number]>>({})
   /**
@@ -507,10 +500,6 @@ export function ExportView({ api, t }: ExportViewProps) {
               /* 未勾选的分区同样可展开：展开时按需读它的清单（惰性 —— 不预读 sessions 这类大分区）。
                  会话分区还要顺带把工作区清单读出来（勾选联动的数据源在它身上，见 couplingInventorySections）。 */
               onRequestUnits={(id) => { void fetchInventory(couplingInventorySections([id])) }}
-              /* 「按插件看」：同一份勾选状态的第二个投影 —— 叶子仍是原单元 id，勾选语义一字不改。
-                 只有导出页给这个开关（导入向导 / 市场通道的节点来自包内计划，没有 relatedAreas） */
-              view={pickerView}
-              onViewChange={setPickerView}
             />
             {/* 与页面共用同一个恒定高度公告位（原因见页面处注释） */}
             <div className={css.noticeSlot}>{notice}</div>

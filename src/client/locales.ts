@@ -180,10 +180,7 @@ export const zh = {
   'picker.sensitive': '敏感',
   'picker.showAll': '显示全部（共 {count} 条）',
   'picker.summaryImport': '将导入 {sections} 个分区 · {units} 个条目',
-  // —— 「按插件看」第二视图（插件 → 清单条目 / 数据目录 / 大文件）——
-  'picker.viewSection': '按分区',
-  'picker.viewPlugin': '按插件',
-  'picker.pluginTreeHint': '同一个插件的清单条目、数据目录与大文件收在一个节点下。只显示能证明的归属（内置来源表 + 插件自述 dsh.dataDirs）；「插件散落配置」没有包名信息，留在下面的未归属桶里。',
+  // —— 「插件与扩展」组内嵌的插件树（插件 → 清单条目 / 数据目录 / 大文件）——
   'picker.pluginLeafPlugin': '插件清单条目',
   'picker.pluginLeafConfig': '数据目录（配置）',
   'picker.pluginLeafAssets': '大文件（壁纸 / 数据库）',
@@ -195,7 +192,7 @@ export const zh = {
   'picker.bucketOrphanData': '未安装插件的遗留数据',
   'picker.bucketHint': '这些条目没有可证明的插件归属，不猜；展开可逐条勾选。',
   'picker.loadSection': '读取该分区',
-  'picker.groupHint.extensions': '插件清单是「装了哪些插件」，其余三类是插件散落在别处的配置与数据；带「设备相关」的分区默认不勾选，跨设备导入时可能不适用。',
+  'picker.groupHint.extensions': '这一组里的插件分区合并成一棵按插件分组的树：插件名下面是它的清单条目、数据目录与大文件。只显示能证明的归属（内置来源表 + 插件自述 dsh.dataDirs）——「插件散落配置」没有包名信息，因此留在「未归属」里；带「设备相关」的分区默认不勾选，跨设备导入时可能不适用。',
   // 导出目录的分组标题（与 ui/types.ts 的 EXPORT_GROUPS 一一对应，顺序由它决定）
   'group.general': '通用',
   'group.ai': 'AI',
@@ -1137,10 +1134,7 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.sensitive': 'Sensitive',
   'picker.showAll': 'Show all ({count})',
   'picker.summaryImport': 'Will import {sections} section(s) · {units} item(s)',
-  // —— "By plugin" view (plugin → list entry / data dir / large files) ——
-  'picker.viewSection': 'By section',
-  'picker.viewPlugin': 'By plugin',
-  'picker.pluginTreeHint': "A plugin's list entry, data dirs and large files are grouped under one node. Only provable ownership is shown (built-in source table + plugins that declare dsh.dataDirs); \u2018Plugin config files\u2019 carries no package name, so it stays in the unowned bucket below.",
+  // —— Plugin tree embedded in the Extensions group (plugin → list entry / data dirs / large files) ——
   'picker.pluginLeafPlugin': 'Plugin list entry',
   'picker.pluginLeafConfig': 'Data dir (config)',
   'picker.pluginLeafAssets': 'Large files (wallpapers / databases)',
@@ -1152,7 +1146,7 @@ export const en: Record<keyof typeof zh, string> = {
   'picker.bucketOrphanData': 'Leftover data of uninstalled plugins',
   'picker.bucketHint': 'These entries have no provable plugin ownership — we never guess; expand to tick them one by one.',
   'picker.loadSection': 'Read this section',
-  'picker.groupHint.extensions': 'The plugin list is "what is installed"; the other three are config and data those plugins leave elsewhere. Sections marked device-specific are unchecked by default and may not apply on another machine.',
+  'picker.groupHint.extensions': 'The plugin sections in this group are merged into one tree grouped by plugin: under each plugin name you find its list entry, data dirs and large files. Only provable ownership is shown (built-in source table + plugins that declare dsh.dataDirs) \u2014 \u2018Plugin config files\u2019 carries no package name and therefore stays under "unowned"; device-specific sections are unchecked by default and may not apply on another machine.',
   // Export catalog group titles (mirror of ui/types.ts EXPORT_GROUPS; it decides the order)
   'group.general': 'General',
   'group.ai': 'AI',

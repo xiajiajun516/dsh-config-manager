@@ -486,12 +486,17 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     `Checkbox`），否则会被读成「灰掉的选项」。标题顺序 = 调用方给的节点顺序（宿主目录已按
     `EXPORT_GROUPS` 排好，UI **不重排**；`SelectionSection.group` 缺省 = 不渲染标题，
     导入向导 / 市场通道零变化）。
-  - **「按分区看 / 按插件看」视图切换（2026-10）**：`.pickerViewRow` + 共享 `Segmented`
-    （只有导出页传 `onViewChange` —— 导入向导与市场的节点来自包内计划，没有插件数据区域的关联，
-    给出开关只会得到一棵空树）。**两个视图共用同一份 `Selection`**：叶子仍是原来的单元 id，
-    勾选仍走 `toggleUnit` / `unitChecked`，切视图不改动任何勾选；纯展示模型
-    `pluginTree` / `filterPluginTree` / `pluginEntryPickState` / `togglePluginEntry` 住在
-    `src/ui/selection-model.ts`（node 可测）。**按插件看的四条语义**：
+  - **「插件与扩展」组内嵌的插件树（2026-10；同日按用户反馈从「视图切换 tab」改为内嵌）**：
+    这一组里的四个插件分区（plugins / pluginFiles / pluginData / pluginAssets）合并成**一棵按插件
+    分组的树**，只在其中**第一个出现**的分区处渲染一次（其余成员就地跳过）—— 顺序仍由调用方给的
+    节点顺序决定，不引入第二个排序来源；`self`（配置管理器设置）**不在**那四项里，照旧按普通分区行
+    渲染。**没有视图切换控件**（用户明确要求移除「按分区 / 按插件」的 tab）：树就是这一组的渲染方式，
+    不引入第二个视图状态。搜索把树过滤空时**回落完整树** —— 分区名命中（如搜「插件数据目录」）应当
+    仍能看到这一组，否则组标题下面会出现一句自相矛盾的「没有匹配」。
+    树仍是**纯展示**：叶子是原来的单元 id，勾选仍走 `toggleUnit` / `toggleSection`；
+    `PLUGIN_TREE_SECTIONS` / `isPluginTreeSection` / `pluginTree` / `filterPluginTree` /
+    `pluginEntryPickState` / `togglePluginEntry` 住在 `src/ui/selection-model.ts`（node 可测）。
+    **四条语义**：
     ① 插件节点 = `plugin:<包名>` 单元 + 它**声明的**数据区域（宿主下发的 `relatedAreas`，
     静态知识、零数据目录 I/O）；② **不猜归属** —— pluginFiles（白名单文件 + `plugin-config/`）
     没有任何包名信息，整块进「未归属」桶，未被任何插件认领的数据单元进「遗留数据」桶；

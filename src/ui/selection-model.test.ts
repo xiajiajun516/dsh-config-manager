@@ -13,7 +13,7 @@ import {
   buildExportRequest, buildSelectedPlan, defaultSelection,
   defaultSelectionFromPlan, effectiveImportPlan, effectiveImportSelection, filterSections,
   filterPluginTree, groupPickState, groupSelectedCount, groupUnits, HIGH_RISK_ADAPTERS, isHighRiskAdapter,
-  isPlanItemExcluded, isUnitSelected,
+  isPlanItemExcluded, isPluginTreeSection, isUnitSelected, PLUGIN_TREE_SECTIONS,
   pluginEntryLeaves, pluginEntryPickState, pluginEntrySelectedCount, pluginEntryUnreadSections, pluginTree,
   togglePluginEntry,
   planWriteSections,
@@ -875,6 +875,13 @@ function treeNodes(): SelectionSection[] {
 }
 
 const TREE_SECTIONS: SectionId[] = ['plugins']
+
+test('合并进插件树的分区只有那四项（配置管理器设置不是插件，仍按普通分区行渲染）', () => {
+  assert.deepEqual([...PLUGIN_TREE_SECTIONS].sort(), ['pluginAssets', 'pluginData', 'pluginFiles', 'plugins'])
+  for (const id of PLUGIN_TREE_SECTIONS) assert.equal(isPluginTreeSection(id), true)
+  assert.equal(isPluginTreeSection('self'), false, '配置管理器设置不得被吸收进树')
+  assert.equal(isPluginTreeSection('sessions'), false)
+})
 
 test('按插件看：插件清单条目与它声明的数据区域收在同一个节点下（未读分区不可勾）', () => {
   const tree = pluginTree(treeNodes())
