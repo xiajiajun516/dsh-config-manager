@@ -1,5 +1,7 @@
 # 🎒 DSH Config Manager
 
+[![HOL Guard](https://img.shields.io/endpoint?url=https%3A%2F%2Fhol.org%2Fapi%2Fregistry%2Fbadges%2Fplugin%3Fslug%3Dxiajiajun516%252Fdsh-config-manager%26metric%3Dtrust)](https://hol.org/registry/plugins/xiajiajun516%2Fdsh-config-manager)
+
 [![npm version](https://img.shields.io/npm/v/dsh-config-manager?label=npm)](https://www.npmjs.com/package/dsh-config-manager)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-config-manager?label=downloads%2Fmonth)](https://www.npmjs.com/package/dsh-config-manager)
 [![GitHub stars](https://img.shields.io/github/stars/xiajiajun516/dsh-config-manager?label=stars)](https://github.com/xiajiajun516/dsh-config-manager/stargazers)
