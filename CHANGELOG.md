@@ -32,6 +32,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🆕 新增 · Added
+
+- **回退不再误伤别的对话改过的文件**：同一个项目里开着多个对话时，在一个对话里回退不会再顺手撤销别处（包括已经结束的对话）改过的文件 —— 这类文件会被跳过，结果里如实给出条数；想把它们也退回去，就在回退预览里逐条勾选要恢复的文件（设置页「维护与诊断」的回滚卡）。
+  **Rewinding no longer touches files changed by other conversations**: when several conversations share one project, rewinding in one of them no longer reverts files written elsewhere (including in conversations that have already ended) — those files are skipped and the count is reported honestly; to include them anyway, tick the files you want restored in the rewind preview (the rollback card under Settings → Maintenance & diagnostics).
+
+### 🐛 修复 · Fixed
+
+- **DSH 0.2.1 起用户消息里的图片不再消失**：此前升级 DSH 后，聊天里每条自己发的消息只要有图片，就只剩一行「图片无法显示」的灰字（助手消息、附件卡片都正常）；现在这类消息的正文、图片、文件卡与引用整体交回 DSH 自己的渲染，外观与原生气泡一致，「↺ 回退」按钮照旧。（issue #92）
+  **User-message images no longer disappear on DSH 0.2.1**: after upgrading DSH, any message you sent that carried an image showed only a grey "image cannot be displayed" line (assistant messages and file cards were fine); such messages now hand their text, images, file cards and references back to DSH's own rendering, matching the native bubble pixel for pixel, while the rewind button stays where it was. (issue #92)
+
 ## [0.1.76] - 2026-10-16
 
 > **本版主题**：**修掉「工作区里有 `.asar` 文件就会闪退」** —— 留点扫描会读工作区里的文件，而名字以 `.asar` 结尾的路径在桌面端会被当成安装包容器解析；只要它是损坏的（测试夹具、被打断的打包残留），整个宿主进程会被原生层带走。

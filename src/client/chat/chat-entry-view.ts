@@ -191,6 +191,56 @@ export type ChatEntryAttachment =
   | { kind: 'image'; image: ChatEntryImage }
   | { kind: 'file'; file: ChatEntryFile }
 
+/* ------------------------------------------------------------ 宿主 content factory（0.2.1+ 委托路径） */
+
+/**
+ * 宿主 `conversation.chat.user.content`（Factory 位）的名字。
+ *
+ * 0.2.1-alpha.3 起用户气泡的正文/附件/引用**整体换轨**到这条 factory：图片位
+ * `conversation.chat.user.images` 是它的 children（single/session），旧的 `conversation.message.images`
+ * 与节点 props 上的 `renderMessageImages` 同时删除（本机解包 0.2.1-rc.2 实测：后者 0 次出现）。
+ * 因此「接管 user 之后自己复刻气泡」这条路在 0.2.1 上拿不到图片位（issue #92）——正确做法是把正文
+ * **委托回宿主自己的 content factory**，图片由 ui-attachment 在该 factory 的渲染上下文里 renderSlot。
+ *
+ * 老宿主（≤0.2.0）没有这条 factory：`FactoryOutlet` 在定义缺失时回落调用方给的 `options.fallback`
+ * ⇒ 渲染层把**自绘气泡**当 fallback 传进去，0.1.x/0.2.0 的路径逐字不变（一个版本双栈兼容）。
+ */
+export const CHAT_USER_CONTENT_FACTORY = 'conversation.chat.user.content'
+
+/**
+ * 宿主 content factory 的附件项（逐字保留宿主 content 里的原始 attachment 载荷）。
+ *
+ * 形状逐字取自宿主 `contentParts`：`{ type:'image', image:{ attachment } }` /
+ * `{ type:'file', file: block.attachment }` —— `file` 那一支是我们的 ChatEntryFile **拼不回来**的
+ * `FileAttachmentRef`，所以必须原样留一份。
+ */
+export type HostUserContentAttachment =
+  | { type: 'image'; image: { attachment: unknown } }
+  | { type: 'file'; file: unknown }
+
+/** 传给宿主 content factory 的正文载荷（= 宿主 UserStyleBubble 的 `prepared`）。 */
+export interface HostUserContentData {
+  /** 拼接后的**原文**（未投影；宿主 content factory 内部自己投影会话引用/技能 chip）。 */
+  text: string
+  attachments: HostUserContentAttachment[]
+  /** 未知 / rest 块（宿主交给 JsonBlock，**必须**原样带过去）。 */
+  extraBlocks: unknown[]
+  /** 仅当节点 data 真的带了该字段时出现（宿主用「字段是否存在」区分「没带」与「空」）。 */
+  referenceLabels?: string[]
+}
+
+/** 传给宿主 content factory 的文本投影事实（= 宿主 UserStyleBubble 的 `facts`）。 */
+export interface HostUserContentFacts {
+  sessionLabels?: string[]
+  skillNames?: string[]
+}
+
+/** 一次 `renderFactorySlot(CHAT_USER_CONTENT_FACTORY, …)` 的入参（`loadImage`/`interactive` 由渲染层补）。 */
+export interface HostUserContentInput {
+  content: HostUserContentData
+  facts: HostUserContentFacts
+}
+
 export interface ChatEntryBubbleView {
   /** 文本块拼接结果（宿主 `texts.join('')`，逐字保留换行与空白；会话引用的线格式已投影成 label）。 */
   text: string
@@ -201,6 +251,12 @@ export interface ChatEntryBubbleView {
   rawText: string
   /** **有序附件列表**：渲染层必须按这个顺序输出（宿主不区分「先图片后文件」）。 */
   attachments: ChatEntryAttachment[]
+  /**
+   * **宿主形状**的有序附件列表（0.2.1+ 委托路径专用）：与 `attachments` 同一趟走查、同一顺序，
+   * 但保留宿主 content 里的**原始 attachment 载荷**（我们的 ChatEntryFile 只留了三个展示字段，
+   * 拼不回宿主 `FileAttachmentRef`）。逐字对齐宿主 `contentParts` 的 `attachments.push`。
+   */
+  hostAttachments: HostUserContentAttachment[]
   /** 图片附件（= `attachments` 里的 image 项，顺序一致；用于计数与「无渲染位」提示）。 */
   images: ChatEntryImage[]
   /** 文件附件（= `attachments` 里的 file 项，顺序一致）。 */
@@ -414,14 +470,15 @@ export function fileSizeTextOf(bytes: number | null): string | null {
 export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
   if (typeof content === 'string') {
     const text = projectChatEntryText(content)
-    return { text, rawText: content, attachments: [], images: [], files: [], raw: [], showBubble: text !== '' }
+    return { text, rawText: content, attachments: [], hostAttachments: [], images: [], files: [], raw: [], showBubble: text !== '' }
   }
   if (!Array.isArray(content)) {
-    return { text: '', rawText: '', attachments: [], images: [], files: [], raw: content === null || content === undefined ? [] : [{ id: '0', payload: content }], showBubble: content !== null && content !== undefined }
+    return { text: '', rawText: '', attachments: [], hostAttachments: [], images: [], files: [], raw: content === null || content === undefined ? [] : [{ id: '0', payload: content }], showBubble: content !== null && content !== undefined }
   }
   const texts: string[] = []
   const rawTexts: string[] = []
   const attachments: ChatEntryAttachment[] = []
+  const hostAttachments: HostUserContentAttachment[] = []
   const raw: ChatEntryRawBlock[] = []
   content.forEach((block, index) => {
     const record = asRecord(block)
@@ -435,6 +492,8 @@ export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
     }
     if (type === 'image' && record?.['attachment'] !== undefined) {
       attachments.push({ kind: 'image', image: { attachment: record['attachment'] } })
+      // 同一趟走查里并出宿主形状的那一份（同一顺序、原始载荷）—— 见 HostUserContentAttachment
+      hostAttachments.push({ type: 'image', image: { attachment: record['attachment'] } })
       return
     }
     if (type === 'file' && record?.['attachment'] !== undefined) {
@@ -449,6 +508,7 @@ export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
           bytes: typeof bytes === 'number' && Number.isFinite(bytes) ? bytes : null,
         },
       })
+      hostAttachments.push({ type: 'file', file: record['attachment'] })
       return
     }
     raw.push({ id: String(index), payload: block })
@@ -458,7 +518,34 @@ export function buildChatEntryBubble(content: unknown): ChatEntryBubbleView {
   // images / files 是 attachments 的**派生视图**（不独立积累，避免两处真相与顺序漂移）
   const images = attachments.flatMap((item) => (item.kind === 'image' ? [item.image] : []))
   const files = attachments.flatMap((item) => (item.kind === 'file' ? [item.file] : []))
-  return { text, rawText, attachments, images, files, raw, showBubble: text !== '' || raw.length > 0 }
+  return { text, rawText, attachments, hostAttachments, images, files, raw, showBubble: text !== '' || raw.length > 0 }
+}
+
+/**
+ * 节点 data + 气泡视图 → 宿主 content factory 的入参（0.2.1+ 委托路径的**唯一**组装点）。
+ *
+ * 逐字对齐宿主 `UserStyleBubble` 的 `prepared` / `facts` 两段 useMemo：
+ *  · `content.text` = 未投影的文本拼接（宿主 factory 自己把它交给 `conversation.user.text` 投影成 chip）；
+ *  · `content.attachments` = 宿主形状的有序附件（同一趟走查产出）；
+ *  · `content.extraBlocks` = rest 块原样；
+ *  · `referenceLabels` / `sessionLabels` / `skillNames` **只在节点真的带了该字段时出现** ——
+ *    宿主用「字段是否存在」区分「没带」与「空数组」，我们传 `[]` 会改变它的分支。
+ *
+ * 本函数不抛（读不到就按「没带」处理），与 buildChatEntryBubble 同一条纪律。
+ */
+export function buildHostUserContentInput(data: ChatEntryNodeDataView, bubble: ChatEntryBubbleView): HostUserContentInput {
+  const content: HostUserContentData = {
+    text: bubble.rawText,
+    attachments: bubble.hostAttachments,
+    extraBlocks: bubble.raw.map((block) => block.payload),
+  }
+  const facts: HostUserContentFacts = {}
+  if (data.referenceLabels !== null) {
+    content.referenceLabels = data.referenceLabels
+    facts.sessionLabels = data.referenceLabels
+  }
+  if (data.skillNames !== null) facts.skillNames = data.skillNames
+  return { content, facts }
 }
 
 /** 渲染计划的一项：图片带 owner 载荷，文件带名称/扩展名/体积文本。 */
@@ -631,19 +718,26 @@ export interface ChatEntryView {
    */
   referenceLabels: string[]
   skillNames: string[]
+  /**
+   * 宿主 content factory 的入参（0.2.1+ 委托路径）。**始终**算好：新宿主用它委托，老宿主把它
+   * 闲置（那条 factory 不存在 ⇒ 渲染层走自绘气泡 fallback），两条路径都不需要再读一次节点。
+   */
+  hostContent: HostUserContentInput
 }
 
 /** 节点 → 整视图模型（读不到一律回安全值；本函数不抛）。 */
 export function buildChatEntryView(node: unknown): ChatEntryView {
   const data = readChatEntryNodeData(node)
   const turn = chatNodeTurn(node)
+  const bubble = buildChatEntryBubble(data.content)
   return {
     turnNumber: turn?.turn ?? null,
     turnStatus: turn?.status ?? null,
-    bubble: buildChatEntryBubble(data.content),
+    bubble,
     clock: formatChatEntryClock(data.time),
     referenceLabels: data.referenceLabels ?? [],
     skillNames: data.skillNames ?? [],
+    hostContent: buildHostUserContentInput(data, bubble),
   }
 }
 

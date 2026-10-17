@@ -9,18 +9,24 @@
  *
  * ## 镜像来源（**逐条核过真机 app.asar，不是猜的**）
  *
- * 槽位声明 = `packages/client/ui-chat/src/client/contract/slots.ts`（整包只声明 8 个槽位：
- * conversation.chat.node / conversation.message.images / conversation.chat.commandview /
- * conversation.chat.turnTail / conversation.chat.assistant-actions / conversation.view /
- * conversation.composer.dock / conversation.approval.detail）。
+ * 槽位声明 = `packages/client/ui-chat/src/client/contract/slots.ts`。
  *
  * ### `conversation.chat.node`（本插件**接管**其 `user` key）
  *
  *   kind: 'keyed' · scope: 'session'
- *   ownerProps: { groupPart?, cwd, openFile, openSkill, inspectCall, forkAt, loadImage,
- *                 renderMessageImages, fileMentions, turnProcess, node }
  *   registerOptions: key(必填) / priority(可选，= cell 遮蔽秩，升序、最低者渲染)
  *   replaceRisk: **有**（这是 keyed 遮蔽位：priority -1 会顶掉 shipped 的 UserMessageNodeView）
+ *
+ * ownerProps **在 0.2.1-alpha.3 换过一代**（本机解包 `@deepseek-ai/dsh-client-ui-chat` 的
+ * `lib/client.js` + `lib/types/.../slots.d.ts` 实测，2026-10-17，issue #92）：
+ *
+ *   ≤0.2.0 ：{ groupPart?, cwd, openFile, openSkill, inspectCall, forkAt, loadImage,
+ *              renderMessageImages, fileMentions, turnProcess, node }
+ *   ≥0.2.1 ：{ groupPart?, cwd, openFile, inspectCall, forkAt, loadImage, fileMentions, node }
+ *              —— **删掉 `renderMessageImages` 与 `openSkill`**；图片位不再由 ui-chat 直接声明，
+ *              而是 `conversation.chat.user.content` factory 的 children
+ *              （`conversation.chat.user.images`, single/session）⇒ 想拿到图片**必须**委托那条 factory
+ *              （实现与判据见 `ChatEntryView.tsx` / `CHAT_USER_CONTENT_FACTORY`）。
  *
  * 关键事实（决定了本功能只能走这条路，见 T1 output 的证据段）：
  *  · 宿主对 `{ name:'conversation.chat.node', key:'user' }` **没有声明 children 表**
@@ -84,14 +90,26 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
            */
           node: unknown
           /**
-           * 图片渲染位（宿主 `conversation.message.images` 的 renderSlot 绑定）——
-           * **必须**用它渲染图片（ui-chat 的私有实现不可导入）。
+           * 图片渲染位（**≤0.2.0** 宿主：`conversation.message.images` 的 renderSlot 绑定）——
+           * 必须用它渲染图片（ui-chat 的私有实现不可导入）。
+           *
+           * **0.2.1-alpha.3 起宿主整行删掉了它**（issue #92：新契约改由
+           * `conversation.chat.user.content` factory 的 `conversation.chat.user.images` 子位承载）
+           * ⇒ 镜像里跟着改成**可选**：渲染层据「它在不在」决定走旧的自绘图片位，还是委托 content factory。
            */
-          renderMessageImages: (owner: unknown) => unknown
+          renderMessageImages?: (owner: unknown) => unknown
+          /**
+           * 宿主授权过的图片加载器（0.2.1 起节点渲染器 props 上的稳定席位；转发给 content factory）。
+           * 老宿主上拿不到它（那时 loadImage 被封在 renderMessageImages 的闭包里）。
+           */
+          loadImage?: unknown
           /** 宿主提供的文件打开器（本插件不消费，保持契约完整）。 */
-          openFile: (path: string) => void
-          /** 宿主提供的 skill 打开器（同上）。 */
-          openSkill: (name: string) => void
+          openFile?: (path: string) => void
+          /**
+           * 宿主提供的 skill 打开器（同上）。0.2.1 起该席位从 ChatNodeOwnerProps 消失
+           * （与 renderMessageImages 同一批）⇒ 同样改成可选。
+           */
+          openSkill?: (name: string) => void
         }
       }
       owner: {

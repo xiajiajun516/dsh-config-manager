@@ -3,9 +3,15 @@
  *
  * 为什么必须接管（而不是追加）：该 key 没有 children 表（宿主只对 turn-tail 声明了子位），
  * framework 没有「往用户消息里加 UI」的位子；唯一合法做法是 priority -1 遮蔽宿主的
- * `UserMessageNodeView`，然后在自己的渲染里把那条气泡**复刻**一遍（宿主组件 / CSS Modules
- * 全是 ui-chat 私有、不可导入 —— 外观靠本仓库 CSS 逼近，图片**必须**走 owner 给的
- * `renderMessageImages`）。
+ * `UserMessageNodeView`，然后在自己的渲染里产出那条气泡。
+ *
+ * 正文**谁来画**在 0.2.1-alpha.3 换过一代（issue #92）：宿主把图片位搬进
+ * `conversation.chat.user.content` factory 的 children，并删掉了节点 props 上的 `renderMessageImages`。
+ * 因此现在的口径是 **优先委托宿主的 content factory**（`renderFactorySlot(CHAT_USER_CONTENT_FACTORY, …)`），
+ * 只有在宿主**没有**注册那条 factory 时（≤0.2.0）才回落到自绘气泡 —— 自绘气泡同时是那次调用的
+ * `options.fallback`，所以三格（老宿主 / 新宿主 / 宿主中途撤掉 factory）都有确定行为，
+ * 不会出现空白气泡。自绘那一格图片只能走 owner 的 `renderMessageImages`（宿主的 CSS Modules 与组件
+ * 全是 ui-chat 私有、不可导入，外观靠本仓库 CSS 逼近）。
  *
  * 三件硬约束（本文件是它们的落点）：
  *  ① **用户消息绝不消失**：整个子树包在 `ChatEntryErrorBoundary` 里，抛错就降级成
@@ -36,6 +42,7 @@ import {
   lookupPointForTurn,
   rawBlockText,
   CHAT_ENTRY_WARN_PREFIX,
+  CHAT_USER_CONTENT_FACTORY,
   type ChatEntryBubbleView,
   type ChatEntryFallbackRow,
   type ChatEntryFile,
@@ -61,6 +68,23 @@ const NEWLINE = String.fromCharCode(10)
  * 返回值当作不透明 ReactNode 渲染 —— 绝不自己实现图片渲染。
  */
 export type MessageImagesRenderer = (owner: unknown) => ReactNode
+
+/**
+ * 宿主 content factory 渲染位（0.2.1-alpha.3 起节点渲染器 props 上的 `renderFactorySlot`，
+ * 由 ui-slots 的 `PropsRenderFactories` 挂在**每一个**渲染组件上）。
+ *
+ * 为什么签名这么宽：真实类型是 `RenderFactorySlot`（按 SlotFactoryMap 泛型收窄），本仓库没有
+ * ui-chat 的类型；我们只承诺「按名字原样转发入参 + 收 `options.fallback`」，返回值当不透明 ReactNode。
+ *
+ * 注意它**在新旧宿主上都存在**（ui-renderer 的 standardKit 无条件发放）：所以「走不走委托」不能只判
+ * 它是不是函数 —— 真正的判据是宿主到底注册没注册那条 factory，由 `FactoryOutlet` 在定义缺失时
+ * 回落我们给的 fallback 来裁决（见 ChatEntryBody）。
+ */
+export type HostContentFactoryRenderer = (
+  name: string,
+  props: unknown,
+  options?: { fallback?: ReactNode },
+) => ReactNode
 
 /** 本条目经 inject 面拿到的业务能力（与回合尾入口同一个 inject 形状）。 */
 export interface ChatEntryViewInjected {
@@ -162,6 +186,10 @@ interface ChatEntryBodyProps extends ChatEntryViewInjected {
   openSkill?: unknown
   /** 宿主图片渲染位（SlotMap 的 keyProps 把返回值声明成 unknown ⇒ 用它当 `MessageImagesRenderer` 必须过一层窄化）。 */
   renderMessageImages?: unknown
+  /** 宿主授权过的图片加载器（0.2.1+ 节点渲染器 props；原样转发给 content factory）。 */
+  loadImage?: unknown
+  /** 宿主 content factory 渲染位（0.2.1+；老宿主拿不到 ⇒ 直接走自绘气泡。见 HostContentFactoryRenderer）。 */
+  renderFactorySlot?: unknown
   t: TranslateNS<'config-manager-chat'>
 }
 
@@ -193,7 +221,7 @@ function useRollbackEntryEnabled(): boolean {
   return value
 }
 
-function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImages, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
+function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImages, loadImage, renderFactorySlot, t, rt, port, openChildSession, archiveParentSession, startFreshSession, openDiff, fileIcon }: ChatEntryBodyProps) {
   const view = useMemo(() => buildChatEntryView(node), [node])
   const [lookup, setLookup] = useState<ChatPointLookup | null>(null)
   /** 有界重试窗口是否还开着（**状态诚实**的唯一开关，R1）—— 由状态机的 `onState` 驱动。 */
@@ -258,6 +286,10 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
    * 附件按**content 原始顺序**输出（宿主 `attachments.map` 同构）：图片走 owner 的
    * `renderMessageImages`（每张一次调用），文件走文件卡 —— 两类**共用同一条序列**，
    * 绝不重排成「先图片后文件」（t4 复核 D2）。
+   *
+   * 这条自绘路径**只在宿主没有 content factory 时**才会上屏（见下面的 `content`）：
+   * 0.2.1 起 `renderMessageImages` 已不存在，此时图片位置如实显示提示文本 —— 但那一格
+   * 正常情况下走的是宿主自己的 factory，根本到不了这里。
    */
   const canRenderImages = typeof renderMessageImages === 'function'
   const attachmentNodes = planChatEntryAttachments(bubble).map((item) => item.kind === 'image'
@@ -283,43 +315,85 @@ function ChatEntryBody({ node, sessionId, openFile, openSkill, renderMessageImag
   })
   const reasonKey = button.kind === 'disabled' ? button.key : null
 
+  /**
+   * **自绘气泡**（= 0.2.1 之前那条路径，style 与宿主 .userStack/.bubble 逐条对齐见本文件头注释）。
+   *
+   * 两个身份：① 老宿主（≤0.2.0）没有 `conversation.chat.user.content` 这条 factory，正文由它承担；
+   * ② 新宿主上它是那次 factory 调用的 **fallback** —— 定义缺失（或宿主中途撤掉）时由
+   * `FactoryOutlet` 回落，用户消息因此**永远不会**变成空白。
+   *
+   * 图片：这条路径只能走 owner 的 `renderMessageImages`（0.2.1 起已不存在）⇒ 那一格如实显示提示文本，
+   * 而不是静默消失；新宿主正常情况下根本不会渲染到这里（走的是宿主自己的 content factory）。
+   */
+  const ownContent = (
+    <div className={css.chatEntryStack}>
+      {hasAttachments && (
+        <div className={css.chatAttachmentRow} data-message-attachments="">
+          {attachmentNodes}
+        </div>
+      )}
+      {bubble.showBubble && (
+        <div className={css.chatBubble}>
+          {bubble.text !== '' && (
+            <span className={css.chatBubbleText}>{hostText === null ? bubble.text : hostText}</span>
+          )}
+          {bubble.raw.map((block) => (
+            <RawBlock
+              key={'raw-' + block.id}
+              payload={block.payload}
+              label={t('chat.entry.extraBlock')}
+              truncatedLabel={(total) => t('chat.entry.truncated', { total })}
+            />
+          ))}
+        </div>
+      )}
+      {!canRenderImages && bubble.images.length > 0 && (
+        <div className={css.chatEntryNotice}>{t('chat.entry.noImageRenderer')}</div>
+      )}
+      {/* 引用会话汇总行：宿主在气泡下方渲染 referenceSummary（`引用会话 · {labels}`）。
+          我们复刻这一行（文案在 chat 字典里，**不依赖 ui-primitives**）；`data-ref-chip` 供探针定位。 */}
+      {view.referenceLabels.length > 0 && (
+        <div className={css.chatEntryReference} data-ref-chip="">
+          {t('chat.entry.referenceSummary', {
+            labels: view.referenceLabels.join(t('chat.entry.referenceSeparator')),
+          })}
+        </div>
+      )}
+    </div>
+  )
+
+  /**
+   * 正文 / 附件 / 引用（issue #92）：**优先委托宿主自己的 content factory**。
+   *
+   * 为什么不能再自绘：0.2.1-alpha.3 起宿主把图片位搬进 `conversation.chat.user.content` 的 children
+   * （`conversation.chat.user.images`），并在节点 props 上删掉了 `renderMessageImages` —— 自己复刻气泡
+   * 就必然拿不到图片位。委托之后，图片由 ui-attachment 在该 factory 的渲染上下文里 renderSlot，
+   * 正文/文件卡/引用/未知块也全部回到宿主实现 ⇒ 与宿主原生气泡**同构**，且以后宿主再改图片实现也不用跟。
+   *
+   * 入参逐字对齐宿主 `UserStyleBubble`（`content` / `loadImage` / `facts` / `interactive: true`），
+   * 组装全在纯层 `buildHostUserContentInput`。**判据不是 `typeof renderFactorySlot === 'function'`** ——
+   * 该席位在新旧宿主上都存在（ui-renderer 的 standardKit 无条件发放），真正的裁决点是这条 factory
+   * 注册没注册：`FactoryOutlet` 在读不到定义时渲染我们给的 `fallback`（= 上面的自绘气泡）——
+   * 于是「老宿主 ≤0.2.0」「新宿主 ≥0.2.1」「宿主中途撤掉 factory」三格都有确定行为，不必开两条发布线。
+   * 调用本身不吃任何副作用，返回不透明 ReactNode（React 元素），空定义时是 fallback 的元素包装。
+   */
+  const content = typeof renderFactorySlot === 'function'
+    ? (renderFactorySlot as HostContentFactoryRenderer)(
+      CHAT_USER_CONTENT_FACTORY,
+      {
+        content: view.hostContent.content,
+        loadImage,
+        facts: view.hostContent.facts,
+        interactive: true,
+      },
+      { fallback: ownContent },
+    )
+    : ownContent
+
   return (
     <div className={css.chatEntryScope}>
       <div className={css.chatEntryRow}>
-        <div className={css.chatEntryStack}>
-          {hasAttachments && (
-            <div className={css.chatAttachmentRow} data-message-attachments="">
-              {attachmentNodes}
-            </div>
-          )}
-          {bubble.showBubble && (
-            <div className={css.chatBubble}>
-              {bubble.text !== '' && (
-                <span className={css.chatBubbleText}>{hostText === null ? bubble.text : hostText}</span>
-              )}
-              {bubble.raw.map((block) => (
-                <RawBlock
-                  key={'raw-' + block.id}
-                  payload={block.payload}
-                  label={t('chat.entry.extraBlock')}
-                  truncatedLabel={(total) => t('chat.entry.truncated', { total })}
-                />
-              ))}
-            </div>
-          )}
-          {!canRenderImages && bubble.images.length > 0 && (
-            <div className={css.chatEntryNotice}>{t('chat.entry.noImageRenderer')}</div>
-          )}
-          {/* 引用会话汇总行：宿主在气泡下方渲染 referenceSummary（`引用会话 · {labels}`）。
-              我们复刻这一行（文案在 chat 字典里，**不依赖 ui-primitives**）；`data-ref-chip` 供探针定位。 */}
-          {view.referenceLabels.length > 0 && (
-            <div className={css.chatEntryReference} data-ref-chip="">
-              {t('chat.entry.referenceSummary', {
-                labels: view.referenceLabels.join(t('chat.entry.referenceSeparator')),
-              })}
-            </div>
-          )}
-        </div>
+        {content}
         <div className={css.chatEntryActions}>
           {/* 时间在动作行**最前**（宿主把 MessageIconActions 的 clock 设为 "start"，与它同构） */}
           {view.clock !== null && <span className={css.chatEntryTime}>{view.clock}</span>}

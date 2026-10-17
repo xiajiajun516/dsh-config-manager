@@ -1161,6 +1161,76 @@ test('attachments: one ordered list in content order + compact counts ALL attach
   assert.deepEqual(mixed.images.map((image) => image.attachment), [{ id: 'i1' }, { id: 'i2' }])
 })
 
+test('issue #92：hostAttachments 保留宿主原始载荷、顺序与 content 一致（我们的 ChatEntryFile 拼不回来）', () => {
+  const image = { id: 'i1', width: 10 }
+  const fileRef = { id: 'f1', name: 'a.txt', bytes: 3, mimeType: 'text/plain' }
+  const view = buildChatEntryBubble([
+    { type: 'file', attachment: fileRef },
+    { type: 'image', attachment: image },
+    { type: 'file', attachment: { name: 'b.txt', bytes: 4 } },
+  ])
+  // 宿主 contentParts 的形状逐字：image 包一层 { attachment }，file 是原始 FileAttachmentRef
+  assert.deepEqual(view.hostAttachments, [
+    { type: 'file', file: fileRef },
+    { type: 'image', image: { attachment: image } },
+    { type: 'file', file: { name: 'b.txt', bytes: 4 } },
+  ])
+  assert.equal(view.hostAttachments.length, view.attachments.length, '两份列表同趟走查、同序（不得只算一半）')
+  // 没有 attachment 的块照旧只进 rest：两份列表都不许凭空多一项
+  assert.deepEqual(view.hostAttachments.filter((item) => item.type === 'image').length, 1)
+  const hostile = buildChatEntryBubble([{ type: 'image' }, { type: 'file' }])
+  assert.equal(hostile.hostAttachments.length, 0)
+  assert.equal(hostile.raw.length, 2)
+  // 非数组 / 字符串 content 的安全值里也必须带着这个字段（渲染层会直接读它）
+  assert.deepEqual(buildChatEntryBubble('hi').hostAttachments, [])
+  assert.deepEqual(buildChatEntryBubble(undefined).hostAttachments, [])
+})
+
+test('issue #92：content factory 入参 = 宿主 UserStyleBubble 的 prepared/facts（原文 + rest + 字段存在性）', () => {
+  const content = [
+    { type: 'text', text: 'see @[S](dsh-session:1)' },
+    { type: 'image', attachment: { id: 'i1' } },
+    { type: 'mystery', payload: { deep: 1 } },
+  ]
+  const bare = buildChatEntryView({ kind: 'user', location: { kind: 'step', turn: { turn: 1, status: 'closed' } }, data: { content } })
+  // text 必须是**未投影**的原文（chip 由宿主 factory 内部投影），attachments/extraBlocks 逐字带过去
+  assert.equal(bare.hostContent.content.text, 'see @[S](dsh-session:1)')
+  assert.deepEqual(bare.hostContent.content.attachments, [{ type: 'image', image: { attachment: { id: 'i1' } } }])
+  assert.deepEqual(bare.hostContent.content.extraBlocks, [{ type: 'mystery', payload: { deep: 1 } }])
+  // 宿主用「字段是否存在」区分「没带」与「空」⇒ 没带时两个对象里都不许出现这三个键
+  assert.equal('referenceLabels' in bare.hostContent.content, false)
+  assert.equal('sessionLabels' in bare.hostContent.facts, false)
+  assert.equal('skillNames' in bare.hostContent.facts, false)
+
+  const withData = buildChatEntryView({
+    kind: 'user',
+    location: { kind: 'step', turn: { turn: 1, status: 'closed' } },
+    data: { content: [{ type: 'text', text: 'q' }], referenceLabels: ['s-a', 7], skillNames: ['changelog-writing'] },
+  })
+  assert.deepEqual(withData.hostContent.content.referenceLabels, ['s-a'], '非字符串项照旧被剔除')
+  assert.deepEqual(withData.hostContent.facts.sessionLabels, ['s-a'])
+  assert.deepEqual(withData.hostContent.facts.skillNames, ['changelog-writing'])
+  // 空数组是**真的带了空**（与「没带」不同）
+  const emptyLabels = buildChatEntryView({
+    kind: 'user',
+    location: { kind: 'step', turn: { turn: 1, status: 'closed' } },
+    data: { content: [{ type: 'text', text: 'q' }], referenceLabels: [], skillNames: [] },
+  })
+  assert.deepEqual(emptyLabels.hostContent.content.referenceLabels, [])
+  assert.deepEqual(emptyLabels.hostContent.facts.sessionLabels, [])
+})
+
+test('issue #92：组件把正文委托给宿主 content factory，并把自绘气泡当 fallback（双栈，不在注册期赌形态）', () => {
+  const src = sourceOf('ChatEntryView.tsx')
+  assert.match(src, /CHAT_USER_CONTENT_FACTORY/, '必须按名字委托宿主的 content factory')
+  assert.match(src, /typeof renderFactorySlot === 'function'/, '委托前必须探测该席位是否存在（老宿主没有）')
+  assert.match(src, /fallback:\s*ownContent/, '自绘气泡必须是那次调用的 fallback（factory 缺失时不许出空白气泡）')
+  assert.match(src, /interactive:\s*true/, '宿主对用户消息传 interactive: true，必须同构')
+  assert.match(src, /loadImage,/, '宿主授权过的图片加载器必须原样转发')
+  // 反向：图片**不许**再由我们自己 renderMessageImages 一途承载（0.2.1 起该 props 已不存在）
+  assert.match(src, /const content = typeof renderFactorySlot/, '正文/附件渲染的唯一出口是这一处三元')
+})
+
 test('bubble file cards: file name + extension + size; a missing byte count stays unknown (no fake 0 B)', () => {
   const view = buildChatEntryBubble([
     { type: 'file', attachment: { name: 'C:/tmp/report.final.PDF', bytes: 1536 } },
