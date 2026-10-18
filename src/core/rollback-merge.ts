@@ -22,9 +22,10 @@
  *     给出**启发式**风险提示（`risks`）—— 它不构成「删除不安全」的证明，也绝不因此声称合并正确。
  */
 import { diffLines, looksBinary } from '../utils/line-diff.ts'
+import { isUtf8RoundTrippable, probeTextForm, type TextEol, type TextShape } from './text-fidelity.ts'
 
 /** 合并结论（`ok:false` 时调用方必须**零写入**） */
-export type ThreeWayMergeReason = 'clean' | 'conflict' | 'degraded' | 'binary'
+export type ThreeWayMergeReason = 'clean' | 'conflict' | 'degraded' | 'binary' | 'non-utf8'
 
 export interface ThreeWayMergeResult {
   /** true = 结果可直接写入；false = 必须放弃写入并如实报告 */
@@ -38,6 +39,15 @@ export interface ThreeWayMergeResult {
   revertedLines: number
   /** 依赖风险提示（启发式；空数组 = 未发现明显风险，**不代表安全**） */
   risks: string[]
+  /**
+   * 输出的**字节形态**（判据 3/5）：落盘必须用 encodeTextBytes(result.text, result.shape) ——
+   * result.text 里**不含** BOM，BOM 由 shape.bom 承载。
+   */
+  shape: TextShape
+  /** 输入里出现过**不止一种行尾风格**（单个文件内混合 / 各侧风格不同）⇒ 输出的行尾已被统一，不谎称「原样」 */
+  eolMixed: boolean
+  /** 输出的行尾**不再逐字节等于输入**（含「显式 shape 与输入风格不同」）⇒ 行尾被改写，绝不静默 */
+  eolRewritten: boolean
 }
 
 /** 一处变更块：base 的 `[start, end)` 行被替换成 `lines`（空区间 = 纯插入） */
@@ -131,32 +141,81 @@ function riskTokens(lines: readonly string[]): string[] {
   return [...seen]
 }
 
+/** 合并输入必须是「UTF-8 往返安全 + 行尾可无损表示」的文本（否则绝不合并、绝不写回） */
+function isMergableInput(text: string): boolean {
+  return isUtf8RoundTrippable(text) && probeTextForm(text).loneCr === 0
+}
+
+/** 剥掉**一个**前导 U+FEFF（BOM 由 shape.bom 承载，正文里不该再残留它） */
+function stripBomPrefix(text: string): string {
+  return text.startsWith('\uFEFF') ? text.slice(1) : text
+}
+
 /**
  * 三方合并（纯函数、无 I/O）。
+ *
+ * **文本保真（2026-10-18 缺陷：旧实现用 join('\n') 收尾 ⇒ 把整份 CRLF 文件转成 LF）**：
+ *  · 形态（EOL / BOM）显式给了 options.shape 就按它；没给就从 **theirs 探测**（磁盘上真实的那一侧），
+ *    绝不擅自把 CRLF 改成 LF。落在未变更区域的行取自 base，且只含**行内容**（不含行尾），输出统一按
+ *    shape.eol 收尾 —— 输入行尾若与输出不一致，用 eolMixed / eolRewritten 如实标注，不假装「原样」。
+ *  · 输入按契约是**已解码文本**（BOM 已由 decodeTextBytes 剥离）；残留的前导 U+FEFF 会被剥掉并记进
+ *    shape.bom，免得调用方 encode 时写出双 BOM。落盘必须用 encodeTextBytes(result.text, result.shape)。
+ *  · 输入若含孤立代理项或孤立 CR（TextShape 表达不了的形态）⇒ reason='non-utf8'，**零写入**。
  *
  * 语义：结果是 `ours` 上再应用 `(theirs - base)` —— 撤销「我们从 base 改到 ours 的那部分」，
  * 同时保留「别人从 base 改到 theirs 的那部分」。
  */
-export function mergeThreeWay(ours: string, base: string, theirs: string): ThreeWayMergeResult {
+export function mergeThreeWay(
+  ours: string,
+  base: string,
+  theirs: string,
+  options?: { shape?: TextShape },
+): ThreeWayMergeResult {
+  // 形态：显式优先；未显式给出时从 theirs 探测（主导 EOL + BOM 前缀）。
+  const oursForm = probeTextForm(ours)
+  const baseForm = probeTextForm(base)
+  const theirsForm = probeTextForm(theirs)
+  const hadBom = oursForm.bom || baseForm.bom || theirsForm.bom
+  const eol: TextEol = options?.shape?.eol ?? theirsForm.eol
+  // 显式形态优先；但输入侧确实带过 BOM 时绝不静默丢弃（丢 BOM 属内容改动）
+  const shape: TextShape = { eol, bom: options?.shape ? options.shape.bom || hadBom : hadBom }
+  const styles = new Set<TextEol>()
+  for (const form of [oursForm, baseForm, theirsForm]) {
+    for (const style of form.eols) styles.add(style)
+  }
+  /** 输入里出现过不止一种行尾风格 */
+  const eolMixed = styles.size > 1
+  /** 输出的行尾不再逐字节等于输入（已被统一） */
+  const eolRewritten = eolMixed || (styles.size === 1 && !styles.has(eol))
+  // ok:false 时 text 一律是**调用方给的 theirs 原文**（绝不落入半截合并结果）
   const empty = (reason: ThreeWayMergeReason, conflicts = 0, risks: string[] = []): ThreeWayMergeResult => ({
-    ok: false, text: theirs, reason, conflicts, revertedLines: 0, risks,
+    ok: false, text: theirs, reason, conflicts, revertedLines: 0, risks, shape, eolMixed, eolRewritten,
   })
   // 没有基线就退化成「谁的改动都不认识」—— 调用方负责在无 base 时根本不调用本函数
   if (looksBinary(base) || looksBinary(ours) || looksBinary(theirs)) return empty('binary')
-  if (ours === base) {
+  // 非法 / 无法无损表示的文本：孤立代理项（encode 时会被替换成 U+FFFD）、孤立 CR（行尾表示不了）
+  if (![ours, base, theirs].every(isMergableInput)) return empty('non-utf8')
+  // 前导 U+FEFF 归 shape.bom 管；正文里剥掉它，免得它被当成「行内容」混进 diff
+  const oursText = stripBomPrefix(ours)
+  const baseText = stripBomPrefix(base)
+  const theirsText = stripBomPrefix(theirs)
+  const clean = (text: string): ThreeWayMergeResult => ({
+    ok: true, text, reason: 'clean', conflicts: 0, revertedLines: 0, risks: [], shape, eolMixed, eolRewritten,
+  })
+  if (oursText === baseText) {
     // 本会话没改过 ⇒ 结论就是「保持别人现在的内容」（不是失败）
-    return { ok: true, text: theirs, reason: 'clean', conflicts: 0, revertedLines: 0, risks: [] }
+    return clean(theirsText)
   }
-  if (theirs === base) {
+  if (theirsText === baseText) {
     // 别人没改过 ⇒ 直接回到 ours
-    return { ok: true, text: ours, reason: 'clean', conflicts: 0, revertedLines: 0, risks: [] }
+    return clean(oursText)
   }
-  if (ours === theirs) {
+  if (oursText === theirsText) {
     // 双方最终内容一致 ⇒ 谁都不用动
-    return { ok: true, text: theirs, reason: 'clean', conflicts: 0, revertedLines: 0, risks: [] }
+    return clean(theirsText)
   }
-  const oursBlocks = changeBlocks(base, ours)
-  const theirsBlocks = changeBlocks(base, theirs)
+  const oursBlocks = changeBlocks(baseText, oursText)
+  const theirsBlocks = changeBlocks(baseText, theirsText)
   if (oursBlocks === null || theirsBlocks === null) return empty('degraded')
 
   // 冲突扫描：任一 ours 块与任一 theirs 块触碰且内容不同 ⇒ 冲突
@@ -170,7 +229,7 @@ export function mergeThreeWay(ours: string, base: string, theirs: string): Three
   }
   if (conflicts > 0) return empty('conflict', conflicts)
 
-  const baseLines = splitLinesOf(base)
+  const baseLines = splitLinesOf(baseText)
   const merged: string[] = []
   const reverted: string[] = []
   let cursor = 0
@@ -194,13 +253,18 @@ export function mergeThreeWay(ours: string, base: string, theirs: string): Three
     cursor = Math.max(cursor, block.end)
   }
   for (let i = cursor; i < baseLines.length; i += 1) merged.push(baseLines[i] as string)
+  // 行尾统一按 shape.eol 收尾（混合 / 被改写的行尾已由 eolMixed / eolRewritten 如实标注）；
   // 尾换行以**当前磁盘**（theirs）为准：我们是在它的基础上撤销本会话的改动，不擅改它原本的收尾形态
-  const text = merged.join('\n') + (merged.length > 0 && theirs.endsWith('\n') ? '\n' : '')
+  const tail = merged.length > 0 && theirsText.endsWith('\n') ? eol : ''
+  const text = merged.join(eol) + tail
 
   // 依赖风险（启发式）：被撤销的行里出现过、且合并结果里仍能读到的标识符
   const tokens = riskTokens(reverted)
   const risks = tokens.filter((token) => new RegExp('\\b' + token + '\\b').test(text)).slice(0, 8)
-  return { ok: true, text, reason: 'clean', conflicts: 0, revertedLines: reverted.length, risks }
+  return {
+    ok: true, text, reason: 'clean', conflicts: 0, revertedLines: reverted.length, risks,
+    shape, eolMixed, eolRewritten,
+  }
 }
 
 /** 与 `splitLines` 同口径的本地折行（避免为了一个函数再引一层依赖） */

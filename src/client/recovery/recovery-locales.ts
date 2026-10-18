@@ -450,6 +450,7 @@ export const zh = {
   'rollback.result.conflict': '{n} 个文件两侧改到同一处，已保持原样 —— 需要你手工处理',
   'rollback.result.unavailable': '{n} 个文件无法安全撤销（缺少中间版本 / 二进制 / 差异过大），已保持原样',
   'rollback.result.concurrent': '{n} 个文件在回退过程中又被改过，已保持原样',
+  'rollback.result.unclaimed': '{n} 个文件无法判定属于哪个对话（改动时没有任何对话在运行），已保持原样',
   'rollback.result.selectionSkipped': '{n} 个文件按你的勾选跳过了',
   'rollback.preview.files.empty': '工作区与该回退点一致，无需恢复',
   /* —— T15：**预览态**（点「回退」之前那一屏）的四态文案 ——
@@ -1033,6 +1034,7 @@ export const en: Record<keyof typeof zh, string> = {
   'rollback.result.conflict': '{n} file(s) were changed on both sides in the same place and were left as they are — they need your decision',
   'rollback.result.unavailable': '{n} file(s) could not be reverted safely (no common ancestor / binary / diff too large) and were left as they are',
   'rollback.result.concurrent': '{n} file(s) changed again while this rewind was running and were left as they are',
+  'rollback.result.unclaimed': '{n} file(s) could not be attributed to any conversation (nothing was running when they changed) and were left as they are',
   'rollback.result.selectionSkipped': '{n} file(s) skipped by your selection',
   'rollback.preview.files.empty': 'The workspace already matches this rollback point, nothing to restore',
   'rollback.preview.files.unavailable': 'The workspace state of this rollback point has no usable record (reason: {reason}), nothing to restore',

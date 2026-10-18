@@ -613,6 +613,12 @@ export interface RollbackSegmentResult {
   /** 无法安全撤销 ⇒ 未写（宿主回传才有） */
   unavailableCount?: number
   unavailablePaths?: string[]
+  /**
+   * **落点无人认领**（时间窗证据表明那一刻没有任何会话活跃：手改 / 外部工具 / 另一个进程）
+   * ⇒ 未写（宿主回传才有）。与 unavailableCount 分开：成因不同，用户要做的事也不同。
+   */
+  externalCount?: number
+  externalPaths?: string[]
   /** 写入前发现又被改过（并发）⇒ 未写（宿主回传才有） */
   concurrentCount?: number
   concurrentPaths?: string[]
@@ -1447,6 +1453,12 @@ export interface RollbackRewindRowView {
   unavailableCount: number
   /** 写入前发现又被改过（并发）未写的文件数 */
   concurrentCount: number
+  /**
+   * **落点无人认领**未写的文件数 + 有界清单（2026-10-18）：时间窗表明改这条路径的那一刻
+   * 没有任何会话活跃 ⇒ 手改 / 外部工具 / 另一个 DSH 进程。0 = 没有（或宿主没回传）。
+   */
+  unclaimedCount: number
+  unclaimedPaths: string[]
 }
 
 export function rollbackRewindRows(result: RollbackRewindResult | null): RollbackRewindRowView[] {
@@ -1480,6 +1492,8 @@ export function rollbackRewindRows(result: RollbackRewindResult | null): Rollbac
       conflictPaths: redactLines(segment.conflictPaths),
       unavailableCount: numberOrNull(segment.unavailableCount) ?? 0,
       concurrentCount: numberOrNull(segment.concurrentCount) ?? 0,
+      unclaimedCount: numberOrNull(segment.externalCount) ?? 0,
+      unclaimedPaths: redactLines(segment.externalPaths),
     }
   })
 }

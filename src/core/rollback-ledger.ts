@@ -39,6 +39,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { atomicWriteFile } from '../utils/atomic-write.ts'
 import { isRecord } from '../utils/guards.ts'
 import { sha256Hex } from '../utils/hashing.ts'
+import { UNDO_DONE_FILE_NAME, UNDO_JOURNAL_FILE_NAME } from './rollback-undo-journal.ts'
 import type {
   RollbackCode,
   RollbackPointKind,
@@ -413,6 +414,27 @@ function isProcessAlive(pid: number): boolean {
  *  3. 该 pid 进程已不存在（崩溃残留）—— 仍然活着的进程可能正在写，绝不抢。
  * 只扫根目录与它的一级子目录（records/ payloads/ objects/），不递归。
  */
+/**
+ * 这个 undo 目录是不是「**回退写到一半就没了**」的现场（有 journal 索引、但没有 done 标记）。
+ *
+ * 判据必须与 journal 模块**同一份常量**（import 而不是抄字面量）：名字改了这里要跟着改，否则
+ * 要么把现场当垃圾删掉（灾难），要么永远不清残留（垃圾堆积）。
+ */
+async function hasUnfinishedJournal(dir: string): Promise<boolean> {
+  try {
+    await fs.access(path.join(dir, UNDO_DONE_FILE_NAME))
+    return false
+  } catch {
+    /* 没有 done：再看有没有 journal 索引 */
+  }
+  try {
+    await fs.access(path.join(dir, UNDO_JOURNAL_FILE_NAME))
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function cleanupOrphanTempFiles(root: string): Promise<RollbackTempCleanupResult> {
   const out: RollbackTempCleanupResult = { removed: 0, bytes: 0, skipped: 0 }
   let dirs: string[]
@@ -465,6 +487,16 @@ export async function cleanupOrphanTempFiles(root: string): Promise<RollbackTemp
       const pid = Number(m[1])
       if (pid === process.pid || isProcessAlive(pid)) { out.skipped += 1; continue }
       const target = path.join(undoRoot, name)
+      // **例外（2026-10-18）**：有 journal 却没有 done ⇒ 这不是垃圾，是「回退写到一半进程就没了」
+      // 的现场。必须留住：既能被 findInterruptedUndos 认出来，也能按 after 镜像安全重放
+      //（把工作区退回回退前）。删掉它 = 让半回退的工作区变成无人知晓的残留。
+      try {
+        if (await hasUnfinishedJournal(target)) { out.skipped += 1; continue }
+      } catch {
+        // 判据自己读不出来 ⇒ **不碰**（宁可留垃圾，也不删可能还能救命的现场）
+        out.skipped += 1
+        continue
+      }
       try {
         const bytes = await dirBytes(target)
         await fs.rm(target, { recursive: true, force: true })

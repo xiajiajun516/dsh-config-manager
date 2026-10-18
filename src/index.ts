@@ -81,6 +81,7 @@ import { msgOf, zhMsg } from './core/messages.ts'
 import { engineMsg, getEngineLocale, setEngineLanguageSource, setEngineLocale } from './core/engine-locale.ts'
 import { RollbackAutoTracker, RollbackPointEngine, ROLLBACK_POINTS_DIR_NAME, rollbackSessionBindingOf, rollbackTrackedEventOf } from './core/rollback-point.ts'
 import { ROLLBACK_ATTRIBUTION_FILE_NAME, RollbackWriteAttribution } from './core/rollback-attribution.ts'
+import { ROLLBACK_ACTIVITY_FILE_NAME, RollbackSessionActivity } from './core/rollback-activity.ts'
 import { isRollbackEnabled, onRollbackEnabledChange, setRollbackEnabled } from './core/rollback-gate.ts'
 import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-point.ts'
 // t3：宿主斜杠命令 /rollback（与 HTTP 路由同一道写入门；命令服务惰取，未组合时安静跳过）。
@@ -4753,11 +4754,21 @@ export function apply(ctx: Context, config?: Config): void {
     warn: (line) => host.log.warn(line),
   })
   void rollbackAttribution.load()
+  // 会话活跃时间窗（2026-10-18）：**每个 session/event 都记一次**活跃 —— 与工具参数无关，
+  // 因此 bash / 脚本 / 外部编辑器写出的路径也能按「文件 mtime 落在谁的活跃窗口内」判定归属；
+  // 落在**谁都不活跃**的时刻 = 手改 / 外部工具 ⇒ 回退零写入并如实报 unclaimed（绝不静默覆盖）。
+  // 同样是 best-effort：读写失败只 warn，退化成「没有时间证据」（回退行为与加它之前逐字一致）。
+  const rollbackActivity = new RollbackSessionActivity({
+    file: path.join(dataDir, ROLLBACK_POINTS_DIR_NAME, ROLLBACK_ACTIVITY_FILE_NAME),
+    warn: (line) => host.log.warn(line),
+  })
+  void rollbackActivity.load()
   const rollbackEngine = new RollbackPointEngine({
     dataDir,
     homeDir,
     log: (line) => host.log.warn(line),
     attribution: rollbackAttribution,
+    activity: rollbackActivity,
     fork: async ({ sessionId, boundarySeq }) => {
       const forkSession = forkPort.forkSession
       if (typeof forkSession !== 'function') {
@@ -4780,6 +4791,7 @@ export function apply(ctx: Context, config?: Config): void {
     engine: rollbackEngine,
     log: (line) => host.log.warn(line),
     attribution: rollbackAttribution,
+    activity: rollbackActivity,
   })
   ctx.effect(() => {
     let chain: Promise<unknown> = Promise.resolve()
@@ -4855,6 +4867,9 @@ export function apply(ctx: Context, config?: Config): void {
       unlisten()
       detach()
       rollbackTracker.stop()
+      // 卸载时把**未落盘**的活跃窗口刷下去（debounce 里可能还有几条）：丢了它，
+      // 下次启动就少一段「谁在什么时候活跃」的证据 —— 归属会因此退回「未判定」。
+      void rollbackActivity.dispose()
     }
   }, 'config-manager: rollback auto points')
   // ------------------------------------------- 宿主斜杠命令 /rollback（t3）

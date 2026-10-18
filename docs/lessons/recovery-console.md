@@ -883,4 +883,81 @@ ESM 单测里没有 `require` ⇒ 恒回 null，因此**单测只能验回落路
 
 **遗留（如实登记，未做）**：① 时间只显示时刻，不做宿主那种「今天 / 昨天」自动切换（要宿主 `clock.*` 词典）；
 ② rest 块仍是我们的 `<details>`（宿主是 JsonBlock）；③ 无宿主同款 tooltip；④ 崩溃降级只保留正文。
+---
+
+## 跨对话回退的三处真缺陷与修法（2026-10-18，对标 Claude Code checkpointing / OpenCode snapshots）
+
+**取证方式（可复现）**：`.tmp/ab-experiment.ts`（已删）直接驱动 `RollbackPointEngine`，打印回退后的**最终字节**。
+三个工作区形状各自独立：A 加一段 / B 再加一段（经典）、A 与 B 改同一函数、CRLF 文件、Latin-1 文件、会话外手改。
+
+**真机/实验证实的缺陷（改前实测值）**：
+
+| 形状 | 改前实测 | 为什么错 |
+|---|---|---|
+| A 加 `function A`、B 再加 `function B`；回退 A | ✅ `original + B` | 上一轮的三方合并是对的（`foreign-merged=1`） |
+| A 与 B 改**同一函数** | ✅ 零写入、B 的版本原样 | 冲突判据正确；但结果报成 `nothing-to-restore`（见 X-3） |
+| CRLF 文件（B 在 A 之后追加一行） | ❌ `line1\nline2\nlineB\n`（**CRLF 全丢了**） | `mergeThreeWay` 内部按 `\n` 归一化后 `join('\n')` ⇒ 整份改写成 LF |
+| Latin-1（`caf\xE9`）文件，B 追加一行 | ❌ `caf\xEF\xBF\xBD`（**内容真的被写坏**） | `Buffer.toString('utf8')` 把 0xE9 换成 U+FFFD 再 encode 写回 |
+| 会话之外手工 append 一行（无归属、无中间点） | ❌ 整文件覆盖回记录版本，`restored=1`，**手改被静默抹掉** | `base=null && !foreignEvidence` ⇒ `fallback`（旧口径整文件覆盖） |
+
+**改法（四块，互相独立）**：
+
+1. **字节保真**（`src/core/text-fidelity.ts` + `rollback-merge.ts` + `rollback-point.ts` 的 `mergeForeignRecord`）：
+   `decodeTextBytes` 走 fatal UTF-8 解码 + **逐字节往返自证**；三方只要有一侧不能无损往返，整个合并就退到
+   **latin1 视图** —— latin1 是字节的双射，「字符串相等」= 「字节相等」，行级 diff 因此等价于**按字节**做，
+   非法字节逐字保留。落盘按 `result.shape`（主导行尾 + BOM）还原；`encodeTextBytes` 只补 BOM、**不改行尾**。
+2. **归属证据从「参数」扩到「时间窗」**（`src/core/rollback-activity.ts` + tracker）：归属台账只从 `tool/call`
+   的参数里抽 `file_path`，bash / 脚本 / 外部编辑器写的路径**拿不到** —— 这正是 2026-10-17 真机「B 加了描述、
+   回退 A 把 B 那行也抹掉」的根因之一。现在 tracker 对**每个** session/event 记一次活跃窗口，
+   回退时按「文件 mtime 落在谁的窗口内」判定：命中本会话 ⇒ 照旧撤销；命中别的会话 ⇒ 合并或拒绝；
+   **有覆盖却谁都不活跃** ⇒ `unclaimed`，零写入并逐条列出（手改 / 外部工具 / 另一个进程）。
+   `hasDataFor` 是「有没有覆盖」的自证：**没有覆盖一律 `unknown`**（不拦），绝不凭空多拦。
+3. **没有祖先 ≠ 可以整文件覆盖**（`mergeForeignRecord` 的决策重写）：
+   · `base===ours`（本会话相对 base 没改动）**且无证据** ⇒ `unclaimed`（X-1：B 改的 b.txt 不再被覆盖回 B0）；
+   · 别的会话回合点里**没有**这条路径（`absentAtForeignPoint`，且该点未被截断）⇒ 当前内容是那个点之后才出现的
+   ⇒ 拒绝覆盖（X-7：A 删文件、B 重建，B 的内容保住）；
+   · `theirs` 缺失（ENOENT）时，判据只有两条：有祖先 ⇒ `theirs-missing` 不复活（B 删掉的别救回来）；
+     归属/时间窗表明是别人写的 ⇒ 同样不复活；**其余照旧重建**（改名、单会话删除的正常回退不受影响）。
+     ⚠️ 这里**不能**用 `absentAtForeignPoint`：本会话自己改名 / 删除时，文件在别人的回合点里本来就不存在
+     （T6-3 的形状），拿它当「别人删的」会让改名回退直接失效 —— 第一版就是这么写错的，被 T6-3 抓住。
+   · **救援点（guard）作为回退目标时一律关掉隔离与合并**（R-25 冻结口径）：它的语义是「回到回退前那一刻」的
+     **精确恢复**，让它走三方合并会变成「什么都不做」（guard 内容 ≈ 当前磁盘）。
+4. **连续回退可用**：`baseVersionFor` 分两档 —— 先找**别的会话的回合点**（正统共同祖先），
+   找不到再允许**救援点**当 base，且只在「救援点内容 ≠ 当前磁盘」时才算数（否则拿它当祖先会把对方已经
+   改进去的内容当成基线 ⇒ 合并结论 = ours ⇒ 整文件覆盖）。X-10 的「先退 A 再退 B」由此得到
+   共同起点 `l1..l5`，而不是「A 复活 + B5 丢失」。
+
+**崩溃/中断的事务性（2026-10-18 新增）**：`UndoStager` 此前把前像写成 `0.bin/1.bin…`，**没有索引、没有完成标记**；
+进程崩在写入中途后，`cleanupOrphanTempFiles` 会按「pid 已死」把整个 undo 目录**删掉** ⇒ 工作区留在半回退状态，
+无人知晓也无法恢复（任务明确禁止「留下未记录的部分修改」）。现在：
+- `src/core/rollback-undo-journal.ts`：`journal.jsonl`（路径 + 前像 bin + **after 镜像** + seq + at），先落 bin 再 append + fsync，
+  全部写完才 `finish()` 落 `done`；
+- `cleanupOrphanTempFiles` 新增例外：**有 journal 却没有 done ⇒ 不删**（那还能救命）；判据与 journal 模块共用常量；
+- 引擎 `interruptedRollbacks()` / `recoverInterruptedRollback(dir)`：只读列出中断现场；重放时**只有当前内容仍等于
+  after 镜像**的条目才写回 —— 崩溃之后发生的任何人工 / 外部 / 别的会话的改动一律跳过并逐条回报，且**没全成功就不清现场**。
+- 测试 `src/core/rollback-interrupted.test.ts` I-1/I-2/I-3（真实目录：清理不得删现场、落 done 后可清、只自证成立才写回）。
+
+**竞品对标（口径：【文】官方文档 /【码】源码 /【推】推断）**：
+- **Claude Code**【文】：每轮 prompt 前建 checkpoint；恢复三档（code / conversation / both）；**bash 改的文件、子代理编辑、
+  外部与并发会话编辑、符号链接与硬链接路径都不（能）恢复**，并显式告警 `Restored the code, but skipped N files`；
+  每会话留最近 100 个 checkpoint，快照随 retention sweep 默认约 30 天清理。闭源，**没有任何官方证据**表明它用 git/shadow repo。
+- **OpenCode v2**【文+码】：独立 gitdir（`<data>/snapshot/<projectID>/<hash(worktree)>`）+ `alternates` 复用源仓对象 +
+  `write-tree` 得**内容寻址** tree id 作快照；assistant message 持久化 `snapshot.start/end/files`；
+  `/undo` 是**暂存式**（先 capture 当前态作 original，再恢复 + prompt 回填），`/redo` 用 original 撤销暂存；
+  restore 只动映射内的路径、树中缺失即删除；**从不 prune**，已知 `~/.local/share/opencode/snapshot` 可涨到 566.7 MB（issue #36093 仍 open）。
+- **同一文件被多个对话先后修改**：【无】任何一方有跨会话冲突检测 / 三方合并 / 锁定 —— Claude 只说「除非命中同一批文件，
+  否则并发编辑不被捕获」，OpenCode 的快照库按 project/worktree 共享、restore 不校验来源。本仓的
+  「归属台账 + 活跃时间窗 + 三方合并 + 无法判定即零写入」在这一维度上确实领先，**但它只在文本层面正确**：
+  依赖关系只给启发式提示（被撤销行里的标识符仍出现在结果中），不构成语义安全的证明。
+
+**测试**：`src/core/rollback-cross-session.test.ts`（22 条：T1-1/X-1/T2-1/X-3/T4-1/X-5/T6-1..3/T7-1..2/X-7/X-8/T8-2/T9-1/
+X-10/T10-2/T11-1..2/X-12a..c，全部按**最终文件内容/字节**断言）、`rollback-merge.test.ts`（M-1..M-24）、
+`text-fidelity.test.ts`（F-01..F-18）、`rollback-activity.test.ts`（A-1..A-10）、`rollback-undo-journal.test.ts`（J-01..J-12）、
+`rollback-interrupted.test.ts`（I-1..I-3）。
+
+**已知限制（如实）**：① 依赖关系只做启发式提示；② 「同一插入点两侧各插一行」判冲突、不猜顺序（X-5 已按 [SAFE] 改写并写明理由）；
+③ 无任何证据（未接时间窗 / 老数据）时仍按旧口径整文件覆盖 —— 判据只允许「少做」，不允许凭空多拦；
+④ 中断回退的**恢复入口目前只有引擎 API**，尚未接路由 / 界面（后续）；
+⑤ 连续回退的第二刀依赖第一次回退留下的**救援点**（生产缺省会留；显式 `guardPolicy:'off'` 时没有）。
+
 

@@ -829,6 +829,10 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
                       {segment.unavailableCount > 0 && (
                         <span>{t('rollback.result.unavailable', { n: segment.unavailableCount })}</span>
                       )}
+                      {segment.unclaimedCount > 0 && (
+                        <span>{t('rollback.result.unclaimed', { n: segment.unclaimedCount })}</span>
+                      )}
+                      {segment.unclaimedPaths.map((line) => <span key={'unclaimed:' + line}>{line}</span>)}
                       {segment.concurrentCount > 0 && (
                         <span>{t('rollback.result.concurrent', { n: segment.concurrentCount })}</span>
                       )}
