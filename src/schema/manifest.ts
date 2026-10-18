@@ -4,7 +4,7 @@
  */
 import { parseJsonSafe } from '../utils/json.ts';
 import { CURRENT_SCHEMA_VERSION } from './versions.ts';
-import type { Manifest, Platform, SectionId } from './types.ts';
+import type { Manifest, ManifestForeignOrigin, Platform, SectionId } from './types.ts';
 import { SECTION_IDS } from './config.ts';
 import { schemaMsg } from './messages.ts';
 
@@ -24,6 +24,11 @@ export interface BuildManifestInput {
   exportedAt?: string; // 测试可注入固定时间
   /** 导出机的 DSH home（可选；见 Manifest.sourceHome，用于跨机基础路径重定基） */
   sourceHome?: string;
+  /**
+   * 外部来源包的溯源块（可选；见 Manifest.foreign）。
+   * **只有显式传入时才写入** —— 缺省不产生该键，DSH 自产备份与旧包逐字不变。
+   */
+  foreign?: ManifestForeignOrigin;
 }
 
 /** 构造 manifest（schemaVersion 恒为当前版本，集中于此） */
@@ -38,6 +43,7 @@ export function buildManifest(input: BuildManifestInput): Manifest {
     },
     exportedAt: input.exportedAt ?? new Date().toISOString(),
     ...(input.sourceHome !== undefined && input.sourceHome !== '' ? { sourceHome: input.sourceHome } : {}),
+    ...(input.foreign !== undefined ? { foreign: input.foreign } : {}),
     sections: input.sections,
     security: {
       containsSecrets: input.containsSecrets,
@@ -64,6 +70,53 @@ export function parseManifest(raw: string): Manifest {
 }
 
 export interface ManifestIssue { path: string; message: string; severity: 'error' | 'warning'; }
+
+/**
+ * `manifest.foreign`（外部来源溯源块）的**宽容校验**。
+ *
+ * 铁律：本字段**绝不允许**成为拒绝一个包的理由 —— 旧包没有它、新包可能带畸形值，
+ * 两者都必须能继续导入。因此这里只产出 `warning`，且**只落一条**汇总（路径恒为 `foreign`），
+ * 出错字段名以机器码形式列在文案参数里（不逐字段刷屏、不新增用户可见文案）。
+ */
+function validateForeignOrigin(value: unknown): ManifestIssue[] {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return [{
+      path: 'foreign',
+      message: schemaMsg('schema.sectionDataInvalid', { section: 'manifest.foreign', issues: 'not-an-object' }),
+      severity: 'warning',
+    }];
+  }
+  const f = value as Record<string, unknown>;
+  const bad: string[] = [];
+  if (typeof f['agent'] !== 'string') bad.push('agent');
+  if (f['locations'] !== undefined && !isStringArray(f['locations'])) bad.push('locations');
+  if (f['sourceVersion'] !== undefined && typeof f['sourceVersion'] !== 'string') bad.push('sourceVersion');
+  if (f['projects'] !== undefined && !isStringArray(f['projects'])) bad.push('projects');
+  if (f['credentialRefs'] !== undefined && !isStringArray(f['credentialRefs'])) bad.push('credentialRefs');
+  if (f['skipped'] !== undefined && !isSkippedAggregates(f['skipped'])) bad.push('skipped');
+  if (f['plugins'] !== undefined && !isPluginSummaries(f['plugins'])) bad.push('plugins');
+  if (bad.length === 0) return [];
+  return [{
+    path: 'foreign',
+    message: schemaMsg('schema.sectionDataInvalid', { section: 'manifest.foreign', issues: bad.join(',') }),
+    severity: 'warning',
+  }];
+}
+
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+function isSkippedAggregates(value: unknown): boolean {
+  return Array.isArray(value) && value.every((v) => v !== null && typeof v === 'object'
+    && typeof (v as Record<string, unknown>)['code'] === 'string'
+    && typeof (v as Record<string, unknown>)['count'] === 'number');
+}
+
+function isPluginSummaries(value: unknown): boolean {
+  return Array.isArray(value) && value.every((v) => v !== null && typeof v === 'object'
+    && typeof (v as Record<string, unknown>)['name'] === 'string');
+}
 
 /** 结构校验：字段类型 / sections 键集合 / security 形状 */
 export function validateManifest(m: unknown): ManifestIssue[] {
@@ -123,6 +176,9 @@ export function validateManifest(m: unknown): ManifestIssue[] {
       issues.push({ path: 'security.encryption', message: schemaMsg('schema.encryptionMustBeObjectOrNull'), severity: 'error' });
     }
   }
+
+  // foreign 是**外部来源包**的溯源块：缺省 = 旧包（合法）；形状/字段类型不对 = 仅 warning（绝不拒绝）。
+  if (obj['foreign'] !== undefined) issues.push(...validateForeignOrigin(obj['foreign']));
 
   return issues;
 }

@@ -480,11 +480,34 @@ export function builtinForeignSources(): readonly ForeignSource[] {
           { rel: '.claude/skills', dir: true },
           { rel: '.claude/commands', dir: true },
           { rel: '.claude/projects', dir: true },
+          // 2026-10-18 补齐：插件目录 / 子代理定义 / 规则目录（本机实测存在 .claude/plugins 与 .claude/hooks）
+          { rel: '.claude/plugins', dir: true },
+          { rel: '.claude/agents', dir: true },
+          { rel: '.claude/rules', dir: true },
         ]);
-        return { found: probed.paths.length > 0, paths: probed.paths, skipped: probed.skipped };
+        const paths: string[] = [...probed.paths];
+        const skipped: ForeignSkip[] = [...probed.skipped];
+        // CLAUDE_CONFIG_DIR 整体替换配置目录（文档取证：code.claude.com/docs/en/settings）。
+        // **不改既有 home 相对标签**（那会动 UI 文案与既有断言），只在覆盖生效时**追加**一组
+        // 带前缀的标签；真正的读取与 source-location-overridden 报码由读盘层负责。
+        const override = ctx.env['CLAUDE_CONFIG_DIR'];
+        if (override !== undefined && override.trim() !== '') {
+          const alt = await probeTree(override, [
+            { rel: 'settings.json' },
+            { rel: 'CLAUDE.md' },
+            { rel: 'skills', dir: true },
+          ], 'CLAUDE_CONFIG_DIR/');
+          paths.push(...alt.paths);
+          skipped.push(...alt.skipped);
+        }
+        return { found: paths.length > 0, paths, skipped };
       },
       async build(ctx) {
-        const read = await readClaudeCode({ homeDir: ctx.homeDir, ...(ctx.limits !== undefined ? { limits: ctx.limits } : {}) });
+        const read = await readClaudeCode({
+          homeDir: ctx.homeDir,
+          env: ctx.env,
+          ...(ctx.limits !== undefined ? { limits: ctx.limits } : {}),
+        });
         // 会话转码版本必须由宿主解析后传入（绝不猜）；缺省 = 一条都不转并整批报码
         if (ctx.targetSessionFormatVersion !== undefined) {
           read.input.targetSessionFormatVersion = ctx.targetSessionFormatVersion;

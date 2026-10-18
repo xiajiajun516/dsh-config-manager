@@ -3,6 +3,10 @@
 > 状态：**v1 转换层已落地并自测通过**（2026-10-04），含**会话转码**（§3.1，产物已用 DSH 自己的 codec 验过）。
 > 范围仅 Claude Code；CLI/UI 接线未做（见 §6）。
 > 起点：用户诉求「让插件支持从其他 agent 导入数据」，明确指 Claude Code / Cursor / Codex 这类第三方工具。
+>
+> **2026-10-18 增量**：[Claude Code 迁移能力加固 v1.1](2026-10-18-claude-code-migration-v1.1.md)（项目级 / 插件级来源、如实诊断码、Bundle 溯源）。
+> 该文同时**订正本文三处已被代码证伪的声称**：§3 把 `plugins` 归入「不做也不报」（现改为扫描并逐条报码）、
+> §3.1.5 声称 isSidechain 子代理会被计报（此前代码里零命中，正文被静默混入）、CLAUDE_CONFIG_DIR 覆盖（此前文档声称支持、代码不读 env）。
 
 ## 1. 结论：做转换层，不做新 adapter
 
@@ -53,7 +57,12 @@
 | `~/.claude/settings.json` → `hooks` | —（只报告） | DSH 无对等结构，计入 `unsupported-hooks` |
 | `~/.claude/commands/*.md` | —（只报告） | 斜杠命令与 DSH prompts 不是同一语义，计入 `unsupported-commands` |
 | `~/.claude/projects/**/*.jsonl` | `sessions` + `workspaces` | **转码**（不是搬运）：见 §3.1 |
-| `~/.claude.json` → `projects`（元数据）/`history`、`~/.claude/{plugins,cache,backups,history.jsonl}` | — | 机器状态 + 与源机路径强绑定，**不做也不报**（避免噪声） |
+| `~/.claude.json` → `projects`（元数据）/`history`、`~/.claude/{cache,backups,history.jsonl}` | — | 机器状态 + 与源机路径强绑定，**不做也不报**（避免噪声） |
+| `~/.claude.json` → `projects[<路径>].mcpServers`、`<项目>/.mcp.json` | `mcp` | **v1.1 起迁移**（项目级 MCP 的权威落点；同名先到先得并报 `mcp-server-id-conflict`） |
+| `~/.claude/{plugins,plugins/known_marketplaces.json}`、`settings.json.enabledPlugins` | `skills`/`mcp` + 报告 | **v1.1 起**：插件自带的 skills 与 `.mcp.json` 迁移；**插件本体与运行时 API 逐条报码**（绝不复制代码，绝不执行 hook） |
+| `<项目>/.claude/{settings.json,settings.local.json}`、`~/.claude/settings.json` 的 `permissions` 与其余顶层键 | —（只报告） | **v1.1 起**：`unsupported-permissions` / `unsupported-settings-keys`（只记键名与条数，**值一律不读**） |
+| `<项目>/.claude/agents/*.md`、`~/.claude/agents/*.md` | —（只报告） | **v1.1 起**：`unsupported-agents` —— DSH 的 subagent 是运行时 provider 注册制，**无文件级对等结构** |
+| `<项目>/.claude/rules/*.md`（带 frontmatter） | —（只报告） | **v1.1 起**：`unsupported-rules`；无 frontmatter 的纯正文并入全局指令（`instructions-merged`） |
 
 ### 3.1 会话转码（v1 已实现）
 

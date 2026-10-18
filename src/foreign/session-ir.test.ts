@@ -187,3 +187,68 @@ test('标题行：非 user 来源且整场没有人类 user/message → 不产�
   assert.equal(rows.some((r) => r.type === 'session/title'), false);
   assert.ok(rows.length > 0, '助手消息本身仍要产出（标题只是装饰）');
 });
+/* ---------------- 未闭合的工具调用（DSH 的 interrupted-turn 修复，形状前提） ---------------- */
+
+/**
+ * 形状护栏（2026-10-18，task-4）：**tool/call 没有 tool/result 时不得伪造任何结算行**。
+ *
+ * 为什么必须钉住：DSH 自己的修复逻辑（interrupted-turn）只认两样东西 —— ① assistant/message
+ * 的 message.content 里有 tool-call 块（它据此知道「这个调用被广告过」）、② 这段流里
+ * **没有**对应的 tool/result。若为了「看起来完整」补一条空 result，DSH 会认为调用已结算，
+ * 中断状态反而丢失；若 content 里没有 tool-call 块，DSH 连「这里有未决调用」都看不到
+ * （deriveEventMessage 对空 content 返回 null）。
+ *
+ * 本用例刻意**只断言形状**（不引入 DSH 在场依赖）：产物必须保持可读、seq 连续、后续事件照常。
+ */
+test('未闭合工具调用：不伪造 result、callId 非空、后续事件与 seq 仍合法（中断由 DSH 修复）', () => {
+  const s = stats();
+  const rows = synthesizeDshRows(
+    {
+      id: 's2',
+      cwd: 'D:/proj',
+      createdAt: NOW,
+      records: 3,
+      messages: [
+        irMessage(irFallbackMessageId(0), 'user', [irTextBlock('开始')], { time: NOW }),
+        // 只有工具调用、没有正文：content 仍必须携带 tool-call 块（否则整条助手消息会消失）
+        irMessage(irFallbackMessageId(1), 'assistant', [irToolCallBlock('c9', 'terminal', { command: 'sleep 100' })], {
+          time: NOW + 1,
+          source: { model: 'claude-sonnet-4' },
+        }),
+        // 中断之后用户继续说话：后续事件不得因为未闭合调用而错乱
+        irMessage(irFallbackMessageId(2), 'user', [irTextBlock('中断后我打字')], { time: NOW + 2 }),
+      ],
+    },
+    { title: 't', titleSource: { kind: 'fallback' }, emptyBlocks: [], provider: 'claude-code', reasoningEffort: 'medium', maxTokens: 8192 },
+    s,
+    NOW + 3,
+  );
+
+  assert.deepEqual(
+    rows.map((r) => r.type),
+    [
+      'user/message', 'session/title', 'turn/start', 'request/header', 'step/start',
+      'assistant/message', 'tool/call', 'step/end', 'turn/end', 'user/message',
+    ],
+    '未闭合调用不改变事件序列形状：只在 step 里留下一条 tool/call，随后照常收尾并继续下一轮',
+  );
+
+  const calls = rows.filter((r) => r.type === 'tool/call');
+  assert.equal(calls.length, 1);
+  const callId = (calls[0]?.data as { callId: string }).callId;
+  assert.ok(typeof callId === 'string' && callId !== '', 'callId 必须非空（空 callId 会被 DSH 前台拒读）');
+  assert.equal(rows.some((r) => r.type === 'tool/result'), false, '绝不伪造空 result：伪造等于替 DSH 结掉这笔中断');
+  assert.equal(s.toolResults, 0, 'toolResults 计数保持 0（没有结果就是没有）');
+  assert.equal(s.toolCalls, 1);
+
+  // DSH interrupted-turn 修复的**唯一依据**：content 里的 tool-call 块必须与事件逐字同 id
+  const assistant = rows.find((r) => r.type === 'assistant/message');
+  const content = (assistant?.data as { message: { content: { type: string; id?: string }[] } }).message.content;
+  assert.deepEqual(content.map((b) => b.type), ['tool-call'], '没有正文的助手消息也必须携带 tool-call 块');
+  assert.equal(content[0]?.id, callId, 'content 块 id 与 tool/call 的 callId 必须逐字相同');
+
+  // 日志本身仍合法：seq 从 0 连续递增，中断之后的用户消息照常产出
+  assert.deepEqual(rows.map((r) => r.seq), rows.map((_, i) => i), 'seq 必须仍连续递增');
+  assert.equal(rows.filter((r) => r.type === 'user/message').length, 2, '中断之后的消息不得被吞掉');
+  assert.equal(rows[rows.length - 1]?.type, 'user/message');
+});

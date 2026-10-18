@@ -26,6 +26,19 @@
  *  本文件**刻意不出现在 file-budget 的 import 白名单里**：它 import 了 `node:fs` 的**类型**用于
  *  构造只读句柄的回调（`ClaudeReadHandle`，追加能力通道），这是**零运行期 I/O** 的类型依赖。
  *  守卫按运行时性质放行（见 file-budget.test.ts 的白名单说明）。
+ *
+ * 会话保真修复（2026-10-18，task-4；四条都在**本文件内**收口，共享合成器 session-ir.ts 一字未改）：
+ *  ① **幂等时间**：墙钟回落只有一个确定性来源（`resolveWallClock`：显式 `options.now` → 记录自身
+ *     最早时间戳 → `input.createdAtMs`），只有全都缺失才回落 `Date.now()` 并在
+ *     `info.counts.timestampsFallback` **如实记账**。旧实现 parse 与 synthesize 各调一次
+ *     `Date.now()` ⇒ 同一来源两次转码字节必然不同 ⇒ DSH 侧「同内容 → Skip」永不成立。
+ *  ② **isSidechain**：真实 Claude 子代理记录（`type=user|assistant` + `isSidechain:true`）**一律
+ *     不进 IR**，整类计报 `isSidechain`（旧实现零命中 → 子代理正文静默混进父对话）。
+ *  ③ **sessionId 不一致**：`input.recordSessionId` 存在且 ≠ `input.id` → 非致命发现
+ *     `session-id-mismatch`（会话 id 仍以文件名 stem 为准，见 `TranscodeResult.findings`）。
+ *  ④ **推理块**（Claude Code 的 `thinking` / `redacted_thinking`）：共享 IR 没有 reasoning
+ *     承载位（docs/spec/known-gaps.md F-01）→ 计报 `thinking`，**绝不伪装成正文**；非 Claude 原生的
+ *     `{type:'reasoning',text:…}` 刻意保持既有口径（理由与切换方式见 `REASONING_BLOCK_TYPES`）。
  */
 import type { Stats } from 'node:fs';
 
@@ -54,8 +67,11 @@ import type {
   IrMessage,
   IrParseStats,
   IrSession,
+  IrTimeMs,
   SynthesisStats,
 } from './session-ir.ts';
+// types.ts 只被**类型**引用（lead 冻结的输入形态 + 契约码），不做任何值导入
+import type { ClaudeSessionInput, ForeignSkip } from './types.ts';
 
 export type { DshSessionHeader, DshSessionRow } from './session-ir.ts';
 
@@ -78,12 +94,14 @@ const CLAUDE_PROVIDER = 'claude-code';
 const CLAUDE_REASONING_EFFORT = 'medium';
 const CLAUDE_MAX_TOKENS = 8192;
 
-export interface ClaudeSessionFile {
-  /** 文件名（不含 .jsonl）——同时作为 DSH 侧的会话 id（DSH 要求目录名与 header.id 逐字相同） */
-  id: string;
-  /** 文件原文 */
-  text: string;
-}
+/**
+ * 待转码的 Claude 会话文件。
+ *
+ * **等价于 `types.ts` 的 `ClaudeSessionInput`**（2026-10-18 起不再重复声明）：读盘层额外给的
+ * `recordSessionId`（≠ 文件名 stem 时报 session-id-mismatch）与 `createdAtMs`（确定性 createdAt
+ * 回落值，见 `resolveWallClock`）因此天然可达本层，而 `{ id, text }` 的老调用方一字不用改。
+ */
+export type ClaudeSessionFile = ClaudeSessionInput;
 
 /**
  * **只读**的文件读取面（additive，2026-10）：**内部**用它支持「大文件只读头尾」的追加通道。
@@ -109,8 +127,20 @@ export interface ClaudeSessionInfo {
   assistantMessages: number;
   toolCalls: number;
   toolResults: number;
-  /** 未迁移的记录类型 → 条数（sidechain / attachment / queue-operation / system …） */
+  /**
+   * 未迁移的记录类型 / 内容块 → 条数（attachment / queue-operation / system / isSidechain /
+   * thinking / unparsable …）。**每个键在下游都会被翻成 `unsupported-session-record` 的 detail**
+   * （kernel.collectSessionSections），所以这里只放「这条内容本版不迁移」这一件事。
+   */
   ignored: Record<string, number>;
+  /**
+   * 结算类记账（**刻意不进 `ignored`**：那里的键会被翻成 `unsupported-session-record`，语义不符）。
+   *
+   * 目前只有 `timestampsFallback`（0/1）：记录里与 `input.createdAtMs` **都没有**可用时间戳 ⇒
+   * 本次转码只能回落墙钟 `Date.now()`，**同一来源两次转码的字节可能不同**（DSH 侧「同内容 → Skip」
+   * 因此不成立、重复导入会判 Conflict）。这是必须如实报出来的不确定性，不是错误。
+   */
+  counts: Record<string, number>;
 }
 
 export interface TranscodedSession {
@@ -125,7 +155,12 @@ export interface TranscodedSession {
 export interface TranscodeOptions {
   /** 目标机 DSH 的 SESSION_FORMAT_VERSION（必填） */
   formatVersion: number;
-  /** 时间兜底（记录里没有可解析时间时用） */
+  /**
+   * 墙钟回落的**最高优先级**注入点（测试 / 调用方显式给定）。
+   *
+   * 缺省时按 `resolveWallClock` 的回落链取：记录自身最早时间戳 → `input.createdAtMs` →
+   * `Date.now()`（最后一级会在返回值里记 `timestampsFallback`）。非法值（非安全整数）视同没给。
+   */
   now?: number;
 }
 
@@ -142,13 +177,29 @@ export interface TranscodeSkip {
 export interface TranscodeResult {
   session?: TranscodedSession;
   skip?: TranscodeSkip;
+  /**
+   * **非致命**发现（会话照样产出）：目前只有 `session-id-mismatch`（记录里的 sessionId 与文件名
+   * stem 不一致）。会话 id 仍以文件名 stem 为准，只有「不一致」这件事必须可见。
+   *
+   * 为什么放在结果上而不是 `info.ignored`：`ignored` 的键在下游一律被翻成
+   * `unsupported-session-record`（码固定），而本条要用契约里冻结的 `session-id-mismatch`。
+   * **调用方负责原样带出**（`skipped.push(...result.findings)`）—— 现有
+   * `kernel.collectSessionSections` 尚未读本字段（不在本次改动范围）。空数组 = 没有发现。
+   */
+  findings: ForeignSkip[];
 }
 
 /* ---------------- ① 解析：Claude 记录 → IR ---------------- */
 
 /** Claude 记录里可识别的块（原始形态） */
 interface ParsedBlock {
-  readonly kind: 'text' | 'call' | 'result' | 'other';
+  /**
+   * `thinking` = 推理块（Claude Code 的 `thinking` / `redacted_thinking`）：共享 IR 的 `IrBlock`
+   * **没有 reasoning 承载位**（docs/spec/known-gaps.md F-01），所以它既不进 IR 也不伪装成正文，
+   * 只**逐条计数**（ignored['thinking']）。判定口径与「`reasoning` 为何不在此列」见
+   * `REASONING_BLOCK_TYPES` 的注释。
+   */
+  readonly kind: 'text' | 'call' | 'result' | 'thinking' | 'other';
   readonly text: string;
   readonly id: string;
   readonly name: string;
@@ -161,12 +212,39 @@ function usageField(usage: unknown, key: string): unknown {
   return typeof usage === 'object' && usage !== null ? (usage as Record<string, unknown>)[key] : undefined;
 }
 
+/**
+ * 推理块的类型名 = Claude Code **自己**写的两种：`thinking` 与 `redacted_thinking`。
+ *
+ * 为什么必须按类型名判定：`thinking` 块的正文在 **`thinking` 键**里（没有 `text` 字段），旧实现
+ * 沿「对象带 text 才算文本」的兜底把它变成一个**空文本块** —— 内容静默丢失，且那个空块还会多插入
+ * 一个换行。本仓其余 20+ 来源一律「推理不伪装成正文、只计数」（read-crush / read-opencode /
+ * read-qwen / read-pi / read-openclaw …），这里对齐同一口径；共享 IR 无 reasoning 承载位这件事
+ * 记在 docs/spec/known-gaps.md 的 F-01。
+ *
+ * **为什么不把 `{type:'reasoning', text:'…'}` 一并纳入**（如实记明，别当成漏掉）：
+ *  ① Claude Code 不写这种块（它是别的导出器的归一命名，各来源自己的解析器已各自计报）；
+ *  ② 共享 IR 的文本兜底分支（**对象带 `text` 就当文本块**）是**被逐字节回归钉住的既有行为**
+ *     （见 `blocksOf` 的注释），而这个块恰好命中它 —— 一并丢掉会让
+ *     `claude-sessions-bytes.test.ts` 的 `timestamps-numeric-and-unparsable` 一案从 728 字节
+ *     变成 722 字节（正文少一段 'r'）。那是**用户可见**的正文变化，按本轮的硬约束（既有语料
+ *     逐字一致）不由「修推理块静默丢弃」顺手引入。
+ *  ③ 要一并计报，改这一个数组即可，并同步更新该案基线（现行行为已被
+ *     `claude-sessions.test.ts` 的「reasoning 形状」用例显式钉住）。
+ */
+const REASONING_BLOCK_TYPES: readonly string[] = ['thinking', 'redacted_thinking'];
+
+/** 推理块的占位（字段一律空：它不进 IR，只需被识别出来计数） */
+function reasoningBlock(): ParsedBlock {
+  return { kind: 'thinking', text: '', id: '', name: '', input: undefined, isError: false };
+}
+
 function blockOf(raw: unknown): ParsedBlock {
   const rec = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : undefined;
   if (rec === undefined) {
     return { kind: 'other', text: '', id: '', name: '', input: undefined, isError: false };
   }
   const rawType = irStr(rec['type']) ?? '';
+  if (REASONING_BLOCK_TYPES.includes(rawType)) return reasoningBlock();
   const id = irStr(rec['id']) ?? '';
   const name = irStr(rec['name']);
   const isText = rawType === 'text' || typeof rec['text'] === 'string';
@@ -287,6 +365,43 @@ interface ParsedClaudeSession {
   readonly cwd: string | undefined;
   readonly unparsable: number;
   readonly title: string;
+  /** `isSidechain === true` 的**记录条数**（子代理记录：不进 IR，由转码入口整类计报） */
+  readonly sidechain: number;
+  /** 内容块里的推理块条数（IR 无承载位：不进 IR，由转码入口整类计报） */
+  readonly thinking: number;
+  /** 本次解析**唯一**算出的墙钟回落值；转码入口必须复用它，绝不再调一次 Date.now() */
+  readonly now: number;
+  /** `now` 是否来自墙钟回落（记录与 `input.createdAtMs` 都没有可用时间戳） */
+  readonly wallClockFallback: boolean;
+}
+
+/**
+ * 墙钟回落的**唯一**来源（缺陷 1 的修复）。
+ *
+ * 为什么必须只有一处：会话产物的字节里带 createdAt / 各行各列的时间；只要有一次 `Date.now()`
+ * 参与，同一来源两次转码的字节就必然不同 ⇒ DSH 侧「同内容 → Skip」永不成立、重复导入恒判
+ * Conflict。旧实现 parse 与 synthesize **各调一次** `Date.now()`（返回值还可能是两个不同的毫秒）。
+ *
+ * 回落链（前三级都是确定性的：同一输入 → 同一产物）：
+ *  ① `options.now`（调用方/测试显式给定；**保持最高优先级**，既有字节回归靠它稳定）；
+ *  ② 记录自身的最早可解析时间戳（会话文件里最权威的确定性来源）；
+ *  ③ `input.createdAtMs`（读盘层给的回落值：最早可解析记录时间，没有就给文件 mtime）；
+ *  ④ 都没有 → `Date.now()`，并**如实记账**（`timestampsFallback`）。
+ *
+ * 非法值（非安全整数 / 非有限数）一律当「没给」：DSH 对时间字段要求安全整数，宁可继续回落也
+ * 不写出一条会被拒读的行。
+ */
+function resolveWallClock(
+  file: ClaudeSessionFile,
+  options: TranscodeOptions,
+  earliest: IrTimeMs | undefined,
+): { readonly now: number; readonly fallback: boolean } {
+  const explicit = irSafeTime(options.now);
+  if (explicit !== undefined) return { now: explicit, fallback: false };
+  if (earliest !== undefined) return { now: earliest, fallback: false };
+  const given = irSafeTime(file.createdAtMs);
+  if (given !== undefined) return { now: given, fallback: false };
+  return { now: Date.now(), fallback: true };
 }
 
 /**
@@ -301,35 +416,47 @@ function parseClaudeSessionText(file: ClaudeSessionFile, options: TranscodeOptio
 
   let cwd: string | undefined;
   let createdAt: number | undefined;
+  let sidechain = 0;
   for (const r of records) {
+    // 子代理记录（真实 Claude 的子代理对话就是 type=user/assistant + isSidechain:true）：
+    // 它们**不是父对话的回合**，混进来会静默改写父对话正文（设计文档 2026-10-04-foreign-import-v1.md:89
+    // 「不迁移 isSidechain 的子代理会话」，而旧实现连计数都没有）。
+    // 它们仍参与 cwd / 最早时间：子代理与父对话同属一份日志文件，cwd 与时间线是**文件级**事实。
+    if (r['isSidechain'] === true) sidechain++;
     if (cwd === undefined) cwd = irStr(r['cwd']);
     createdAt = irEarlier(createdAt, irSafeTime(r['timestamp']));
   }
+  // 墙钟回落**只在这里解析一次**，转码入口复用 `now`（同一输入一次调用内不可能出现两个 Date.now()）
+  const wall = resolveWallClock(file, options, createdAt);
 
   const messages: IrMessage[] = [];
   let messageIndex = 0;
+  let thinking = 0;
   let firstUserText = '';
   for (const rec of records) {
     const type = typeOf(rec);
     if (type !== 'user' && type !== 'assistant') continue;
+    if (rec['isSidechain'] === true) continue;
     const blocks = blocksOf(rec['message']);
-    const message = irMessageOf(rec, blocks, messageIndex);
+    // 推理块：先逐条计数，再**整块丢掉**（既不进 IR，也不留空文本块 —— 空块还会污染正文的换行串联）
+    thinking += blocks.filter((b) => b.kind === 'thinking').length;
+    const carried = blocks.filter((b) => b.kind !== 'thinking');
+    const message = irMessageOf(rec, carried, messageIndex);
     if (message === undefined) continue;
     messages.push(message);
     // 消息 id 的兜底序 = 「第几条已知消息」（重构前的序号语义，逐字节回归钉住）
     messageIndex++;
     if (type === 'user' && firstUserText === '') {
-      const text = irTextOfBlocks(blocks.map(irBlockOf));
+      const text = irTextOfBlocks(carried.map(irBlockOf));
       if (text.trim() !== '') firstUserText = text;
     }
   }
 
-  const now = options.now ?? Date.now();
   return {
     session: {
       id: file.id,
       cwd: cwd ?? '',
-      createdAt: createdAt ?? now,
+      createdAt: createdAt ?? wall.now,
       records: records.length,
       messages,
     },
@@ -337,6 +464,10 @@ function parseClaudeSessionText(file: ClaudeSessionFile, options: TranscodeOptio
     cwd,
     unparsable: stats.unparsable,
     title: titleOf(records, firstUserText),
+    sidechain,
+    thinking,
+    now: wall.now,
+    wallClockFallback: wall.fallback,
   };
 }
 
@@ -359,21 +490,33 @@ export function dshSessionLogName(version: number): string {
 }
 
 export function transcodeClaudeSession(file: ClaudeSessionFile, options: TranscodeOptions): TranscodeResult {
-  if (!SUPPORTED_DSH_SESSION_FORMAT_VERSIONS.includes(options.formatVersion)) {
-    return { skip: { code: 'session-format-unsupported', detail: String(options.formatVersion) } };
+  /**
+   * 非致命发现（会话照样产出）：记录里的 sessionId 与文件名 stem 不一致时**如实报码**，
+   * 但会话 id 仍以文件名 stem 为准（DSH 按「目录名 / 文件名」定位会话）。读盘层没给
+   * `recordSessionId`（老调用方）就什么都不报 —— 不猜。
+   */
+  const findings: ForeignSkip[] = [];
+  const recordSessionId = irStr(file.recordSessionId);
+  if (recordSessionId !== undefined && recordSessionId !== file.id) {
+    findings.push({ code: 'session-id-mismatch', origin: file.id });
   }
-  if (!isSafeIrId(file.id)) return { skip: { code: 'session-unsafe-id', detail: file.id } };
+
+  if (!SUPPORTED_DSH_SESSION_FORMAT_VERSIONS.includes(options.formatVersion)) {
+    return { skip: { code: 'session-format-unsupported', detail: String(options.formatVersion) }, findings };
+  }
+  if (!isSafeIrId(file.id)) return { skip: { code: 'session-unsafe-id', detail: file.id }, findings };
 
   const parsed = parseClaudeSessionText(file, options);
-  if (parsed.records.length === 0) return { skip: { code: 'session-empty' } };
-  if (parsed.cwd === undefined) return { skip: { code: 'session-missing-cwd', detail: file.id } };
+  if (parsed.records.length === 0) return { skip: { code: 'session-empty' }, findings };
+  if (parsed.cwd === undefined) return { skip: { code: 'session-missing-cwd', detail: file.id }, findings };
   // 有内容但一行都解析不出来：如实区分「空文件」与「解析不了」（诊断更准，不新增码 —— 两者
   // 在下游都是「这条会话没有产出」，区别只在忽略计数里可见）
   if (parsed.session.messages.length === 0 && parsed.unparsable > 0) {
-    return { skip: { code: 'session-unparsable', detail: file.id } };
+    return { skip: { code: 'session-unparsable', detail: file.id }, findings };
   }
 
-  const now = options.now ?? Date.now();
+  // 时间兜底**只有一处**（parseClaudeSessionText 里解析过一次）：这里绝不再调 Date.now()
+  const now = parsed.now;
   const stats: SynthesisStats = {
     ignored: {},
     userMessages: 0,
@@ -382,10 +525,16 @@ export function transcodeClaudeSession(file: ClaudeSessionFile, options: Transco
     toolResults: 0,
   };
   if (parsed.unparsable > 0) irBump(stats.ignored, 'unparsable', parsed.unparsable);
+  // 推理块：共享 IR 没有承载位 → 计报，绝不伪装成正文（与其余 20+ 来源同口径）
+  if (parsed.thinking > 0) irBump(stats.ignored, 'thinking', parsed.thinking);
+  // 子代理记录：不进 IR → 整类计报（detail 固定为 isSidechain）
+  if (parsed.sidechain > 0) irBump(stats.ignored, 'isSidechain', parsed.sidechain);
 
-  // 未迁移的记录类型**逐类计数**（sidechain / attachment / queue-operation / system …）——
-  // IR 只承载 user/assistant 消息，所以这里按原始记录把其余类型补进忽略计数
+  // 未迁移的记录类型**逐类计数**（attachment / queue-operation / system …）——
+  // IR 只承载 user/assistant 消息，所以这里按原始记录把其余类型补进忽略计数。
+  // isSidechain 记录已整类记账（上一步），不在这里重复计数。
   for (const rec of parsed.records) {
+    if (rec['isSidechain'] === true) continue;
     const type = typeOf(rec);
     if (type === 'user' || type === 'assistant') continue;
     irBump(stats.ignored, type);
@@ -400,7 +549,7 @@ export function transcodeClaudeSession(file: ClaudeSessionFile, options: Transco
     maxTokens: CLAUDE_MAX_TOKENS,
   }, stats, now);
 
-  if (rows.length === 0) return { skip: { code: 'session-empty' } };
+  if (rows.length === 0) return { skip: { code: 'session-empty' }, findings };
 
   const header: DshSessionHeader = {
     type: 'session',
@@ -412,6 +561,11 @@ export function transcodeClaudeSession(file: ClaudeSessionFile, options: Transco
     delegationDepth: 0,
   };
   const data = encodeDshSessionLog(header, rows);
+  // 结算类记账（与 ignored 分开放：ignored 的键会被下游翻成 unsupported-session-record 码）。
+  // 0 也写出来：调用方一眼能看出「这次转码是否确定性」，不需要靠键的有无去猜。
+  const counts: Record<string, number> = {
+    timestampsFallback: parsed.wallClockFallback ? 1 : 0,
+  };
   return {
     session: {
       id: file.id,
@@ -425,8 +579,10 @@ export function transcodeClaudeSession(file: ClaudeSessionFile, options: Transco
         toolCalls: stats.toolCalls,
         toolResults: stats.toolResults,
         ignored: stats.ignored,
+        counts,
       },
     },
+    findings,
   };
 }
 

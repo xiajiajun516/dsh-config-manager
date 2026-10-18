@@ -534,6 +534,17 @@ export const uiZh = {
   'foreign.skip.legacy-rules-file': '旧式规则文件：DSH 无对等结构，只报告',
   'foreign.skip.instructions-merged': '多份指令源被合并为一个全局指令文件',
   'foreign.skip.instructions-override-selected': '命中更高优先级的指令文件（override），按它导入',
+  // ---------- 2026-10-18：Claude Code 项目级配置 / 插件 / 权限 / 设置键的如实诊断（8 个新码）----------
+  // 纪律：每条都要能被代码逐条证明 —— 只说「什么没搬、为什么、本项是否可补」，
+  // 绝不写「已支持 / 完全兼容」这类无法被代码证明的话。
+  'foreign.skip.unsupported-permissions': '权限规则（allow/ask/deny）未迁移：DSH 没有权限规则文件的对等结构，这些规则不在本包内，导入后不会生效',
+  'foreign.skip.unsupported-settings-keys': 'settings.json 里其余未迁移的顶层键：只记录键名与条数，键值一律不读取，也不会写进本包',
+  'foreign.skip.unsupported-agents': '.claude/agents/*.md 子代理定义未迁移：DSH 的子代理是运行时 provider 注册制，没有文件级对等结构',
+  'foreign.skip.unsupported-rules': '.claude/rules/*.md（带 frontmatter 作用域）未迁移：并入全局指令会丢掉作用域，故只报告不合并',
+  'foreign.skip.unsupported-plugins': 'Claude Code 插件本体未迁移：插件的 hooks / 命令靠 Claude 运行时执行，DSH 无法加载，插件代码一律不复制；插件自带的 skills 与 .mcp.json 里的 MCP 定义另行迁移',
+  'foreign.skip.session-id-mismatch': '会话记录里的 sessionId 与文件名不一致：DSH 按目录名/文件名定位会话，本次以文件名为准，记录里的 id 未采用',
+  'foreign.skip.mcp-server-id-conflict': '同名 MCP server 在多处出现（全局 / 项目级 / 插件）：先到先得，其余同名项只报告未迁移',
+  'foreign.skip.project-scan-truncated': '项目较多：项目级扫描只覆盖了上限内的项目，其余项目本次未读取，其配置不在本包内',
   // 三类已知有损（F-5）的**逐条文案**：由 src/ui/foreign-view.ts 的 foreignLossyRows 渲染，
   // 卡片标题 / 说明 / 适用性徽章属客户端外壳 chrome，键在 src/client/locales.ts。
   'foreign.lossy.file-section-secrets.title': '文件类分区的明文不做剥离',
@@ -1085,6 +1096,15 @@ export const uiEn: Record<UiTextKey, string> = {
   'foreign.skip.legacy-rules-file': 'Legacy rules file: DSH has no equivalent, reported only',
   'foreign.skip.instructions-merged': 'Several instruction sources were merged into one global instruction file',
   'foreign.skip.instructions-override-selected': 'A higher-priority instruction file (override) was found and is the one imported',
+  // 2026-10-18: honest diagnostics for Claude Code project-level config / plugins / permissions / settings keys (8 new codes)
+  'foreign.skip.unsupported-permissions': 'Permission rules (allow/ask/deny) were not migrated: DSH has no equivalent permission-rule file, so they are not in this bundle and will not take effect after import',
+  'foreign.skip.unsupported-settings-keys': 'Other unmigrated top-level keys in settings.json: only key names and counts are recorded; values are never read and never enter this bundle',
+  'foreign.skip.unsupported-agents': 'Subagent definitions in .claude/agents/*.md were not migrated: DSH subagents are registered at runtime by providers and have no file-level equivalent',
+  'foreign.skip.unsupported-rules': '.claude/rules/*.md files (with frontmatter scoping) were not migrated: merging them into the global instructions would drop their scope, so they are reported only',
+  'foreign.skip.unsupported-plugins': 'Claude Code plugin bodies were not migrated: their hooks and commands run inside the Claude runtime and cannot be loaded by DSH, and plugin code is never copied; skills and MCP definitions inside a plugin .mcp.json are migrated separately',
+  'foreign.skip.session-id-mismatch': 'The sessionId inside the session record does not match the file name: DSH locates sessions by directory and file name, so the file name wins and the recorded id is not used',
+  'foreign.skip.mcp-server-id-conflict': 'The same MCP server name appears in several places (global / project / plugin): the first one wins, and the other duplicates are reported but not migrated',
+  'foreign.skip.project-scan-truncated': 'Many projects were found: the project-level scan only covered the projects within the limit; the remaining projects were not read and their configuration is not in this bundle',
   // Per-item text for the three known lossy behaviours (F-5), rendered by
   // src/ui/foreign-view.ts; the card chrome keys live in src/client/locales.ts.
   'foreign.lossy.file-section-secrets.title': 'Plaintext in file-based sections is never stripped',

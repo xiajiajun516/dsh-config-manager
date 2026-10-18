@@ -329,8 +329,11 @@ crc32(空) = 0
 | `security.containsSecrets` | `boolean` | 必需 | bundle 是否携带真实凭据明文 | 必须是布尔 | `src/schema/manifest.ts` |
 | `security.encrypted` | `boolean` | 必需 | 是否需要密码才能导入 | 必须是布尔 | `src/schema/manifest.ts` |
 | `security.encryption` | `EncryptionInfo \| null` | 必需（可为 `null`） | 加密参数元数据，见 §4 | 必须是对象或 `null` | `src/schema/manifest.ts` |
+| `foreign` | `ManifestForeignOrigin?` | 可选 | **外部来源迁移的溯源块**（仅由外部来源转换层写入；普通备份没有这个键）。含 `agent` / `locations` / `sourceVersion` / `projects` / `plugins[]` / `skipped[]` / `credentialRefs[]` —— **只放标识与计数，绝不放值**（凭据只有引用名；`skipped` 只有 `{code,count}`） | **绝不 error**：缺失=合法；非对象或内部字段类型不对=仅 **warning**，因此不阻止解析、不拒绝包 | `src/schema/types.ts`（ManifestForeignOrigin）、`src/schema/manifest.ts`（validateForeignOrigin）、`src/foreign/bundle.ts`（source→agent 映射） |
 
 > **`sourceHome` 的语义**：DSH 的基础路径（`$DSH_HOME`）在不同设备上可能不同（`/opt/.../.dsh` vs Windows 盘符形态），而备份里的路径是绝对路径 —— 即使目标机把目录建出来，路径语义仍然错。因此导出时把基础路径随包带走，导入时若不同就**自动重定基**（只对位于导出机 home 之下、且落在段边界的路径生效；相对路径与不相关的绝对路径一律不动）。基础路径是机器身份、本机可精确得知，故比让用户手填自由前缀映射更安全可控；用户映射仍排在其后依次生效，可覆盖本规则。**schema 不声明该字段**：实现对它只做宽容读取（不校验类型），按本节 2.3 的约束强度原则（schema 不得比实现更严），不声明即为正确形态。
+
+> **`foreign` 的语义与「为何不进 schema 的 `properties`」**：它记录**来源溯源**（哪个外部 agent、实际读到哪些位置、扫过哪些项目根、带哪些插件元数据、哪几类内容被跳过、哪些凭据需要在目标机补录），**不参与任何写盘决策** —— 导入侧读它只为展示与事后审计。实现对它**只做 warning 级校验**（缺失合法；非对象或内部字段类型错仅告警、绝不拒绝包），按 §2.3 的约束强度原则，schema 一旦声明 `type: object` 就会在「`foreign` 是字符串」这类畸形输入上与实现**单侧漂移**（schema 拒收、实现接受），故**刻意不声明**（与 `sourceHome` 同款处置）。另外：导入**不回写** manifest，因此该块只存在于包内，不会被目标机沿用或传播。测试固定：`src/schema/manifest-schema.test.ts` 的 `F-01..F-04`（旧包合法 / 传入才写 / 合法通关 / 11 种畸形仅 warning 且 `parseManifest` 不抛）、`src/foreign/bundle-origin.test.ts` 的 `O-01..O-06`（映射逐字一致 / 无 origin 不写该键 / 两包 checksums 逐条相同 / 既有 Importer 可消费 / 假凭据不进 manifest 与 checksums / 真实转换层产物落盘）。
 
 ### 2.3 未知字段的处理（manifest 层）
 

@@ -165,7 +165,24 @@ export type ForeignSkipCode =
    * 该来源**没有自动根**（竞品 `defaultRoots.chatgpt = null`）—— 必须由用户显式给出导出文件
    * 路径；本机自动探测永远不会命中，如实报码而不是假装「未安装」。
    */
-  | 'source-needs-explicit-path';
+  | 'source-needs-explicit-path'
+  /* ---- 2026-10-18：Claude Code 插件 / 项目级配置 / 权限 / 设置键的如实诊断（纯 additive） ---- */
+  /** settings.json 的 permissions（allow/ask/deny）：DSH 无权限规则文件对等结构，只报告条数 */
+  | 'unsupported-permissions'
+  /** settings.json 里其余未迁移的顶层键（只记键名与条数，**值一律不读**） */
+  | 'unsupported-settings-keys'
+  /** .claude/agents/*.md 子代理定义：DSH 的 subagent 是运行时 provider 注册制，无文件级对等结构 */
+  | 'unsupported-agents'
+  /** .claude/rules/*.md 带 frontmatter 作用域：合并进全局指令会丢作用域，故只报告 */
+  | 'unsupported-rules'
+  /** Claude Code 插件本体（插件 API / hooks / commands 的执行面）：DSH 无法加载，**绝不复制其代码** */
+  | 'unsupported-plugins'
+  /** 会话记录里的 sessionId 与文件名 stem 不一致（DSH 以目录/文件名定位会话，故以文件名为准并如实报码） */
+  | 'session-id-mismatch'
+  /** 同名 MCP server 在多处出现（全局 / 项目级 / 插件）：先到先得，其余只报告 */
+  | 'mcp-server-id-conflict'
+  /** 项目级扫描触顶（maxProjects）：**不静默**，如实报码 */
+  | 'project-scan-truncated';
 
 /**
  * 冲突语义（**契约冻结**，§8.4）：同 id 会话恒「不覆盖、跳过并报码」。
@@ -201,7 +218,7 @@ export interface ClaudeCodeInput {
   skills?: ClaudeSkillInput[];
   /** ~/.claude/CLAUDE.md 原文（全局指令） */
   memory?: string;
-  /** ~/.claude/commands/* 的普通文件数（本期只报不搬） */
+  /** ~/.claude/commands/** 的普通文件数（**递归**；只报不搬） */
   commandCount?: number;
   /** ~/.claude/projects/<项目>/<uuid>.jsonl 的原文（转码在翻译层做） */
   sessions?: ClaudeSessionInput[];
@@ -210,6 +227,94 @@ export interface ClaudeCodeInput {
    * 缺省 = 不转码任何会话并逐条报 session-format-version-unknown，绝不猜版本。
    */
   targetSessionFormatVersion?: number;
+  /**
+   * 实际使用的 Claude 配置目录绝对路径（CLAUDE_CONFIG_DIR 覆盖时为该值，否则 <home>/.claude）。
+   * **只进溯源元数据**，不进任何分区载荷。
+   */
+  configDir?: string;
+  /** 位置被 CLAUDE_CONFIG_DIR 覆盖（命中即报 source-location-overridden） */
+  configDirOverridden?: boolean;
+  /** 来源侧版本标记（~/.claude.json 的 lastVersionBase 等；拿不到即省略） */
+  sourceVersion?: string;
+  /** 项目级配置的已读形态（项目根来自 ~/.claude.json 的 projects 键；**不猜路径**） */
+  projects?: ClaudeProjectInput[];
+  /** 用户级 Claude Code 插件的已读形态（只读元数据与组件，**绝不执行插件代码**） */
+  plugins?: ClaudePluginInput[];
+  /** 已登记的市场（name + 来源仓库；URL 的 userinfo 已剥离） */
+  marketplaces?: { name: string; repo?: string }[];
+}
+
+/**
+ * 一个 Claude Code **项目级**配置目录的已读形态（纯数据；翻译层不做任何 fs 访问）。
+ *
+ * 位置口径（实测取证 2026-10-18，本机 ~/.claude.json 的 projects 键）：项目根来自
+ * `~/.claude.json` 的 `projects` 键（绝对路径，Claude Code 自己写的权威清单）——
+ * **不按目录名猜项目路径**（猜 = 把会话归到不存在的目录）。
+ */
+export interface ClaudeProjectInput {
+  /** 项目根绝对路径（**仅进溯源元数据与报码，不进任何分区载荷**） */
+  root: string;
+  /** `<root>/.claude` 是否存在（false = 该项目没有 Claude 配置，读盘层不产出任何 finding） */
+  hasClaudeDir?: boolean;
+  /** `<root>/.claude/settings.json`（已解析） */
+  settings?: unknown;
+  /** `<root>/.claude/settings.local.json`（已解析；值一律不读，只做诊断） */
+  settingsLocal?: unknown;
+  /** `<root>/CLAUDE.md` 原文（项目级指令） */
+  memory?: string;
+  /** `<root>/CLAUDE.local.md` 原文（本地覆盖指令） */
+  memoryLocal?: string;
+  /** `<root>/.claude/rules/*.md`：文件名 + 原文（带 frontmatter 的按 unsupported-rules 只报告） */
+  rules?: { name: string; text: string }[];
+  /** `<root>/.mcp.json`（已解析；Claude Code 的项目级 MCP 载体） */
+  mcpJson?: unknown;
+  /** `~/.claude.json` → `projects[<root>].mcpServers`（已解析） */
+  projectMcp?: unknown;
+  /** `<root>/.claude/skills/*` 的单元 */
+  skills?: ClaudeSkillInput[];
+  /** `<root>/.claude/commands/**` 的普通文件数（**递归**；只报不搬） */
+  commandCount?: number;
+  /** `<root>/.claude/agents/*.md`：名字 + 文件名（只报告，无文件级对等结构） */
+  agents?: { name: string; file: string }[];
+  /** 读盘层发现的问题（读不到 / 超限 / 非法）——由翻译层原样带出 */
+  readFindings?: ForeignSkip[];
+}
+
+/**
+ * 一个 Claude Code **插件**的已读形态（纯数据）。
+ *
+ * 三条结构性保证：
+ *  ① **只读元数据与组件，绝不执行插件代码**（Claude 插件的 hooks/commands 是 JS 执行面）；
+ *  ② 安装位置/来源只进**溯源元数据**（bundle 的 foreign 块），不由本层写进任何分区；
+ *  ③ 能无损复用的组件只有 skills 与 .mcp.json 里的 MCP 定义（凭据先剥离），其余一律报码。
+ */
+export interface ClaudePluginInput {
+  /** 插件名（plugin.json 的 name；缺失时回落目录名） */
+  name: string;
+  /** 插件版本（plugin.json 的 version；缺失即省略） */
+  version?: string;
+  /** 来源市场名（known_marketplaces.json / marketplace.json 的键） */
+  marketplace?: string;
+  /** 来源仓库（owner/repo 或 URL；**已剥离 userinfo，绝不含凭据**） */
+  repo?: string;
+  /** 来源 ref / sha（若有） */
+  ref?: string;
+  /** 安装位置（相对 ~/.claude/plugins 的 POSIX 相对路径；进溯源用） */
+  installRel?: string;
+  /** 实际存在的组件种类（skills / commands / agents / hooks / mcp），供诊断文案用 */
+  components: string[];
+  /** 插件自带的 skills（name = 压平后的技能名） */
+  skills?: ClaudeSkillInput[];
+  /** 插件自带 `.mcp.json`（已解析） */
+  mcpJson?: unknown;
+  /** 插件自带 commands 的文件数（**递归**；只报不搬） */
+  commandCount?: number;
+  /** 插件自带 agents 的文件名（只报告） */
+  agents?: string[];
+  /** 插件自带 hooks 的文件数（只报告；绝不只是不执行） */
+  hookFiles?: number;
+  /** 读盘层发现的问题 */
+  readFindings?: ForeignSkip[];
 }
 
 /** 一个待转码的 Claude Code 会话文件 */
@@ -217,6 +322,19 @@ export interface ClaudeSessionInput {
   /** 文件名（不含 .jsonl）；同时作为 DSH 侧会话 id */
   id: string;
   text: string;
+  /**
+   * 记录里首个出现的 sessionId。与 id（文件名 stem）不一致时由翻译层报 session-id-mismatch：
+   * DSH 以「目录名/文件名」定位会话，故仍以文件名为准，但**不静默**。
+   */
+  recordSessionId?: string;
+  /**
+   * 确定性 createdAt 回落值（毫秒）：读盘层给「最早可解析记录时间」，没有时间戳时给文件 mtime。
+   *
+   * 为什么必须由读盘层给：DSH 侧「同内容 → Skip」的判定是**逐字节**的，而会话产物里带着
+   * createdAt/updatedAt；若回落用 Date.now()，同一来源转码两次字节必然不同 ⇒ 重复导入恒判
+   * Conflict 而不是 Skip（实测缺陷）。由文件自身 mtime 回落即可让转码**幂等**。
+   */
+  createdAtMs?: number;
 }
 
 /* ---------------- Hermes（~/.hermes，Windows 为 %LOCALAPPDATA%\Hermes） ---------------- */
@@ -309,4 +427,46 @@ export interface ForeignImportResult {
    */
   credentialRefs: string[];
   counts: Record<string, number>;
+  /**
+   * 溯源块（进 bundle 的 manifest.foreign；缺省 = 不写 —— 旧行为逐字不变）。
+   * 由**翻译层**装配（只有它同时看得到位置、项目根与插件清单）。
+   */
+  origin?: ForeignOrigin;
+}
+
+/**
+ * 外部来源的**溯源块**（进 bundle 的 manifest.foreign，见 src/schema/types.ts）。
+ *
+ * 为什么必须有：标准 bundle v1 的 manifest 原本没有任何「这包从哪来」的字段，落盘后
+ * 包与 DSH 自产备份**逐字同构**（实测缺陷）—— 事后无法复核来源、兼容性评分也因
+ * source.dshVersion 被填成目标机版本而被构造性拉满。
+ *
+ * 三条纪律：
+ *  ① **只放标识与计数，绝不放值**（凭据引用只有名字；错误只有机器码）；
+ *  ② 绝对路径只允许出现在 projects[] 与 installPath 这类「用户自己机器的来源位置」上，
+ *     且**不得**写进任何分区载荷；
+ *  ③ 缺字段即「不知道」，绝不填默认值假装知道。
+ */
+export interface ForeignOrigin {
+  /** 来源 agent id（ForeignSourceId 的运行期字面量） */
+  source: string;
+  /** 实际读取的位置（相对 home 的 POSIX 路径；不含任何值） */
+  locations: string[];
+  /** 来源侧版本标记（如 Claude Code `~/.claude.json` 的 lastVersionBase；读不到即省略） */
+  sourceVersion?: string;
+  /** 被扫描的项目根绝对路径（仅溯源，供用户核对） */
+  projects?: string[];
+  /** 插件清单（名称 / 版本 / 市场 / 来源仓库 / ref / 组件种类；**不含凭据**） */
+  plugins?: {
+    name: string;
+    version?: string;
+    marketplace?: string;
+    repo?: string;
+    ref?: string;
+    components?: string[];
+  }[];
+  /** 跳过与诊断汇总（机器码 + 条数，**不含任何值**） */
+  skipped?: { code: string; count: number }[];
+  /** 需要用户在目标机补录的凭据引用名（只有名字） */
+  credentialRefs?: string[];
 }

@@ -119,12 +119,15 @@ export const FOREIGN_TRUTH_TABLES: readonly ForeignTruthTableEntry[] = [
     defaults: all3(
       '<home>/.claude', '<home>/.claude.json', '<home>/.claude/settings.json',
       '<home>/.claude/CLAUDE.md', '<home>/.claude/skills', '<home>/.claude/commands', '<home>/.claude/projects',
+      // 2026-10-18 实测补齐：插件注册表（known_marketplaces.json）/ 子代理定义 / 规则目录
+      '<home>/.claude/plugins', '<home>/.claude/plugins/known_marketplaces.json',
+      '<home>/.claude/agents', '<home>/.claude/rules',
     ),
-    envKeys: [],
+    envKeys: [{ key: 'CLAUDE_CONFIG_DIR', mode: 'replace', note: '整体替换配置目录（命中即报 source-location-overridden）' }],
     autoRoots: true,
     evidence: 'measured',
-    refs: 'chat-import §3.1 claude 行（projects + Claude-3p 第二根）；本仓本机实测（~/.claude、~/.claude.json 存在）',
-    dynamic: '会话在 ~/.claude/projects/<slug>/<uuid>.jsonl（v1 已实现会话转码）',
+    refs: 'chat-import §3.1 claude 行（projects + Claude-3p 第二根）；本仓本机实测（~/.claude、~/.claude.json 存在）；2026-10-18 本机实测 plugins/known_marketplaces.json 与 marketplaces/<市场>/.claude-plugin/{marketplace,plugin}.json 结构',
+    dynamic: '会话在 ~/.claude/projects/<slug>/<uuid>.jsonl（v1 已实现会话转码）；项目级配置根来自 ~/.claude.json 的 projects 键（**只取真实存在的目录，绝不猜路径**）；插件启用清单来自 settings.json 的 enabledPlugins（本机缺省为空 = 没有启用的插件，不报码）',
   },
   {
     id: 'hermes',

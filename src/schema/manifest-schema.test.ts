@@ -13,7 +13,8 @@
  *      发布出去的那份文件；schema 一旦用上未支持的关键字，K-03 会立刻红灯。
  *
  * 覆盖：K-* schema 自身健全性 / S-* 真实 buildManifest 产物契约 / R-* 拒绝路径与
- * validateManifest 逐条一致 / C-* 已知兼容语义（未知分区只 warning）与已记录的语义落差。
+ * validateManifest 逐条一致 / C-* 已知兼容语义（未知分区只 warning）与已记录的语义落差 /
+ * F-* manifest.foreign（外部来源溯源块）的宽容契约（旧包缺省合法、形状不对只 warning）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +26,7 @@ import {
 } from './manifest.ts';
 import { SECTION_IDS } from './config.ts';
 import { CURRENT_SCHEMA_VERSION } from './versions.ts';
-import type { Manifest } from './types.ts';
+import type { Manifest, ManifestForeignOrigin } from './types.ts';
 
 /* ============================================================================
  * (a) 最小 JSON Schema 校验器 —— 只覆盖本 schema 使用的关键字集合
@@ -516,4 +517,88 @@ test('C-07 schemaVersion 的「是否受支持」不属结构校验：schemaVers
   assert.deepEqual(validateAgainstSchema(SCHEMA, m), [], '结构校验不判定版本支持性');
   assert.deepEqual(errorPaths(m), [], '实现同样只在版本协商阶段拒绝（规格 §6.2）');
   assert.doesNotThrow(() => parseManifest(JSON.stringify(m)), 'parseManifest 不做版本协商');
+});
+
+/* ============================================================================
+ * F-*：manifest.foreign（外部来源溯源块，2026-10-18 新增）
+ *
+ * 契约：**只允许加严为 warning，绝不拒绝**。
+ *  - 旧包没有该字段 ⇒ 合法（向后兼容是本次改动的第一约束）；
+ *  - 形状/内部字段类型不对 ⇒ 仅 warning，且 parseManifest 不得抛错（否则畸形元数据会
+ *    把一个**内容完全可导入**的包整体挡在门外 —— 元数据永远不该有这种权力）。
+ * ==========================================================================*/
+
+/** 一个字段齐备的合法溯源块（夹具里只有标识与计数，无任何配置值） */
+function validForeign(): Record<string, unknown> {
+  return {
+    agent: 'claude-code',
+    locations: ['.claude.json', '.claude/CLAUDE.md'],
+    sourceVersion: '1.2.3',
+    projects: ['D:/proj/app'],
+    plugins: [
+      { name: 'demo-plugin', version: '1.0.0', marketplace: 'demo-mkt', repo: 'owner/repo', ref: 'main', components: ['skills'] },
+    ],
+    skipped: [{ code: 'unsupported-hooks', count: 2 }],
+    credentialRefs: ['mcp:svc:GITHUB_TOKEN'],
+  };
+}
+
+test('F-01 旧包（无 foreign 键）仍合法：buildManifest 缺省不写该键、零 issue', () => {
+  const m = baselineManifest();
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(m, 'foreign'), false,
+    '未传 foreign 时该键不得出现（DSH 自产备份逐字不变）',
+  );
+  assert.deepEqual(validateManifest(m), [], '无 foreign 的旧 manifest 必须零 issue');
+  assert.deepEqual(validateAgainstSchema(SCHEMA, m), [], 'schema 也不得因此拒绝');
+  assert.doesNotThrow(() => parseManifest(serializeManifest(m)), '旧包解析照旧');
+});
+
+test('F-02 传了 foreign 才写入：原样进 manifest，serialize → parse 往返保留', () => {
+  const foreign = validForeign() as unknown as ManifestForeignOrigin;
+  const m = buildManifest({
+    exporterVersion: '0.1.59',
+    dshVersion: '0.1.0-rc.6',
+    platform: 'win32',
+    arch: 'x64',
+    sections: sectionsAllFalse() as unknown as Manifest['sections'],
+    containsSecrets: false,
+    encrypted: false,
+    encryption: null,
+    exportedAt: '2026-08-14T12:00:00.000Z',
+    foreign,
+  });
+  assert.deepEqual(m.foreign, validForeign(), 'buildManifest 必须原样写入（不裁剪、不补默认值）');
+  assert.deepEqual(validateManifest(m), [], '合法 foreign 不得产生任何 issue');
+  const reparsed = parseManifest(serializeManifest(m));
+  assert.deepEqual(reparsed.foreign, validForeign(), '往返后溯源块逐字保留');
+});
+
+test('F-03 foreign 合法 → 通过（零 error 零 warning），且 schema 不得拒绝该顶层字段', () => {
+  const m = mutate({ foreign: validForeign() });
+  assert.deepEqual(errorPaths(m), [], '合法 foreign 不得有 error');
+  assert.deepEqual(validateManifest(m), [], '合法 foreign 不得有 warning');
+  assert.deepEqual(schemaPaths(m), [], 'schema 对未声明的顶层字段保持开放（不得因此拒绝）');
+});
+
+test('F-04 foreign 存在但形状/字段类型不对 → 只 warning、绝不 error、parseManifest 不抛错', () => {
+  const cases: [string, unknown][] = [
+    ['不是对象（字符串）', 'claude-code'],
+    ['null', null],
+    ['数组', []],
+    ['缺 agent', { locations: ['.claude.json'] }],
+    ['agent 类型错', { agent: 42 }],
+    ['locations 元素非字符串', { agent: 'x', locations: ['.a', 7] }],
+    ['sourceVersion 类型错', { agent: 'x', sourceVersion: 1 }],
+    ['projects 不是数组', { agent: 'x', projects: 'D:/proj' }],
+    ['credentialRefs 元素非字符串', { agent: 'x', credentialRefs: [{ ref: 'a' }] }],
+    ['skipped 缺 count', { agent: 'x', skipped: [{ code: 'unsupported-hooks' }] }],
+    ['plugins 元素缺 name', { agent: 'x', plugins: [{ version: '1.0.0' }] }],
+  ];
+  for (const [name, value] of cases) {
+    const m = mutate({ foreign: value });
+    assert.deepEqual(errorPaths(m), [], `[${name}] foreign 绝不允许产生 error`);
+    assert.deepEqual(warningPaths(m), ['foreign'], `[${name}] 必须恰好一条 foreign warning（不逐字段刷屏）`);
+    assert.doesNotThrow(() => parseManifest(JSON.stringify(m)), `[${name}] 畸形容器不得阻断解析`);
+  }
 });

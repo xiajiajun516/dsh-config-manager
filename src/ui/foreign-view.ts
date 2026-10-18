@@ -137,6 +137,16 @@ export const FOREIGN_SKIP_KEY: Record<ForeignSkipCode, UiTextKey> = {
   // 档 B（t6）新增两条：把「推导出的 cwd」与「没有自动根」也变成可见事实，绝不静默
   'session-cwd-derived': 'foreign.skip.session-cwd-derived',
   'source-needs-explicit-path': 'foreign.skip.source-needs-explicit-path',
+  // 2026-10-18（8 个新冻结码）：Claude Code 项目级 / 插件 / 权限 / 设置键诊断 + 会话 id 不一致 +
+  // MCP 同名 + 项目扫描触顶 —— 仍用全量 Record 兜住：新增码而没配文案 = 编译失败。
+  'unsupported-permissions': 'foreign.skip.unsupported-permissions',
+  'unsupported-settings-keys': 'foreign.skip.unsupported-settings-keys',
+  'unsupported-agents': 'foreign.skip.unsupported-agents',
+  'unsupported-rules': 'foreign.skip.unsupported-rules',
+  'unsupported-plugins': 'foreign.skip.unsupported-plugins',
+  'session-id-mismatch': 'foreign.skip.session-id-mismatch',
+  'mcp-server-id-conflict': 'foreign.skip.mcp-server-id-conflict',
+  'project-scan-truncated': 'foreign.skip.project-scan-truncated',
 }
 
 /**

@@ -62,6 +62,40 @@ test('foreign-view：冻结码逐个有字典键，且键在字典里真实存�
   }
 });
 
+/**
+ * 本轮（2026-10-18）新增的 8 个冻结码 —— **显式列出**（不从 Object.keys 派生）：
+ * 全量映射测试只保证「键存在」，本用例额外钉住这几条的 zh/en **都是真文案**（非空、不等于键名、
+ * 且中英不同文）。某一条被删或退回键名时，这里会单独变红，而不是被其它码的表绿掩盖。
+ */
+const NEW_CODES_2026_10_18: readonly ForeignSkipCode[] = [
+  'unsupported-permissions',
+  'unsupported-settings-keys',
+  'unsupported-agents',
+  'unsupported-rules',
+  'unsupported-plugins',
+  'session-id-mismatch',
+  'mcp-server-id-conflict',
+  'project-scan-truncated',
+];
+
+test('foreign-view：8 个新码在中英两套字典里都有非空文案（缺一即裸机器码）', () => {
+  assert.equal(NEW_CODES_2026_10_18.length, 8, '本用例只覆盖本轮那 8 个码（数量变了就必须同步改这里）');
+  for (const code of NEW_CODES_2026_10_18) {
+    const key = FOREIGN_SKIP_KEY[code];
+    assert.equal(key, 'foreign.skip.' + code, code + ' 的键形必须是 foreign.skip.<code>');
+    assert.ok(
+      Object.prototype.hasOwnProperty.call(uiZh, key),
+      code + ' 的字典键 ' + key + ' 在 uiZh 里不存在 —— 界面会显示裸机器码',
+    );
+    for (const [lang, t] of [['zh', zh], ['en', en]] as const) {
+      const text = t(key);
+      assert.ok(text.trim().length > 0, code + ' 的 ' + lang + ' 文案为空');
+      assert.notEqual(text, key, code + ' 的 ' + lang + ' 文案缺失（回退成了键名）');
+    }
+    assert.notEqual(zh(key), en(key), code + ' 的 zh/en 不得同文');
+  }
+});
+
 test('foreign-view：foreignSkipKey 的未知码回退为可搜索的稳定标识（绝不 undefined）', () => {
   const line = foreignSkipLine({ code: 'brand-new-code-from-third-party' as ForeignSkipCode }, zh);
   assert.equal(line.code, 'brand-new-code-from-third-party');

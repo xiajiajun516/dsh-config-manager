@@ -17,7 +17,8 @@
  *  ② **不做导入**：本路由只产包，**绝不**触碰 $DSH_HOME 下的配置。导入仍由既有
  *     /analyze → /plan → /execute 完成（导入前快照、冲突判定、dry-run 全部自动生效）；
  *  ③ **凭据值绝不进响应**：只回 skipped 机器码 + 凭据**引用名**（值在转换层就已被剥离，
- *     见 src/foreign/types.ts 的不变量①）；
+ *     见 src/foreign/types.ts 的不变量①）；溯源块（origin：来源标识 / 位置 / 项目根 / 插件元数据 /
+ *     跳过聚合 / 凭据引用名）同样**只含标识与计数**，绝无任何配置值；
  *  ④ **空结果不静默成功**：一个分区都产不出来 → 400 + 稳定码（与 CLI 的退出码 1 同口径），
  *     否则用户会拿到一个自检通过却什么都没有的包。
  *
@@ -217,6 +218,12 @@ export function foreignRoutes(env: RoutesEnv): WebRoute[] {
         skipped: result.skipped,
         // 凭据只给**引用名**（形如 mcp:gitnexus:GITHUB_TOKEN）：导入后由用户在 DSH 里补录
         credentialRefs: result.credentialRefs,
+        /**
+         * 溯源块（**additive**）：来源标识 / 读取位置 / 项目根 / 插件元数据 / 跳过聚合 /
+         * 凭据引用名 —— 界面据此让用户核对「这包从哪来」（同一位也写进 manifest.foreign）。
+         * 翻译层没给 origin 时该键**不出现**（JSON.stringify 丢弃 undefined）⇒ 旧响应逐字不变。
+         */
+        origin: result.origin,
         /** 检测到的本机位置（相对 home），供界面显示「从哪儿读的」 */
         detectedPaths: detection.paths,
         conflictPolicy: FOREIGN_CONFLICT_POLICY,

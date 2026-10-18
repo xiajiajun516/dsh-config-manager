@@ -247,7 +247,10 @@ test('C 来源形状：共享模块清单是封闭集合（新模块必须显式
     /* t6 新增：本域追加消息目录（零 source 形状；中文只在这里，装配期抛错的文案经 engineMsg 取）。 */
     'messages.ts',
     /* 档 B 新增的 5 个共享地基（零 source 形状，但也不是来源模块）： */
-    'platform-paths.ts', 'registry.ts', 'session-ir.ts', 'session-read.ts', 'session-source.ts',
+    'platform-paths.ts',
+    /* 2026-10-18 新增：Claude Code 插件/市场读盘层（名字不含来源 id，故不是来源形状模块；
+       它是 claude-code 专属读盘子模块，由 read-claude-code.ts 动态 import）。清单按字母序比较。 */
+    'read-claude-plugins.ts', 'registry.ts', 'session-ir.ts', 'session-read.ts', 'session-source.ts',
     'source-modules.ts', 'sqlite.ts', 'truth-table.ts', 'types.ts',
   ];
   assert.deepEqual(

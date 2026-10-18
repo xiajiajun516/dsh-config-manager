@@ -521,7 +521,9 @@ export interface I18nAllowlistEntry {
 export const I18N_ALLOWLIST: readonly I18nAllowlistEntry[] = [
   {
     file: 'src/foreign/truth-table.ts',
-    expectedHits: 61,
+    // 2026-10-18：claude-code 条目补 refs 说明（新增 1 处中文取证文本）→ 61 → 62。
+    // 该计数只随「该文件里的中文取证文本」变化；不是新增豁免条目（条目数仍为 4）。
+    expectedHits: 62,
     reason: 'refs/dynamic 是取证文本数据（FOREIGN_TRUTH_TABLES 字段），供 truth-table.test.ts 与各来源单测逐平台比对，从不渲染：非测试导入方全在 src/foreign/**，src/ui/foreign-view.ts 只消费 source.paths（界面文案走 ui/i18n.ts 的 foreign.paths/foreign.pathsNone）',
   },
   {
@@ -541,8 +543,8 @@ export const I18N_ALLOWLIST: readonly I18nAllowlistEntry[] = [
   },
 ] as const;
 
-/** 白名单总命中数（A5 锚定：t1 初始 73 + t12 授权增量 55 + 2026-10-08 checkpoint 命令 4）。 */
-export const ALLOWLIST_TOTAL_HITS = 132;
+/** 白名单总命中数（A5 锚定：t1 初始 73 + t12 授权增量 55 + 2026-10-08 checkpoint 命令 4 + 2026-10-18 truth-table 取证文本 1）。 */
+export const ALLOWLIST_TOTAL_HITS = 133;
 /** 白名单条目数（A5 锚定「迁移期不得新增豁免」：t1 初始 2 + t12 授权的 2）。 */
 export const ALLOWLIST_ENTRY_COUNT = 4;
 

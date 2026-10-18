@@ -32,6 +32,42 @@ export interface EncryptionInfo {
   version: number;
 }
 
+/**
+ * **外部来源包**的溯源块（manifest.foreign，2026-10-18 新增，纯 additive）。
+ *
+ * 为什么需要它：外部来源（Claude Code / Hermes / …）合成的包是**标准 bundle v1**，
+ * 落盘后与 DSH 自产备份**逐字同构** —— 事后无法复核「这包从哪来」。本块把来源标识、
+ * 读取位置、项目根、插件元数据与跳过聚合写进 manifest，供用户与界面核对。
+ *
+ * 三条纪律（与 src/foreign/types.ts 的 ForeignOrigin 同口径）：
+ *  ① **只放标识与计数，绝不放值**（凭据只有引用名，诊断只有机器码，无一字配置内容）；
+ *  ② 向后兼容：旧包没有该字段 ⇒ 缺省即合法；本字段的存在**绝不能**让旧/新包被拒；
+ *  ③ 缺字段即「不知道」，绝不填默认值假装知道。
+ */
+export interface ManifestForeignOrigin {
+  /** 来源 agent id（稳定机器标识，如 claude-code / hermes；不随文案变化） */
+  agent: string;
+  /** 实际读取的位置（相对 home 的 POSIX 路径；不含任何值） */
+  locations?: string[];
+  /** 来源侧版本标记（读不到即省略） */
+  sourceVersion?: string;
+  /** 被扫描的项目根绝对路径（仅溯源，供用户核对；绝不进任何分区载荷） */
+  projects?: string[];
+  /** 插件清单（名称 / 版本 / 市场 / 来源仓库 / ref / 组件种类；**不含凭据**） */
+  plugins?: {
+    name: string;
+    version?: string;
+    marketplace?: string;
+    repo?: string;
+    ref?: string;
+    components?: string[];
+  }[];
+  /** 跳过与诊断汇总（机器码 + 条数，**不含任何值**） */
+  skipped?: { code: string; count: number }[];
+  /** 需要用户在目标机补录的凭据引用名（只有名字，**没有任何值**） */
+  credentialRefs?: string[];
+}
+
 /** 每个导出 ZIP 根部的 manifest.json */
 export interface Manifest {
   schemaVersion: number;
@@ -48,6 +84,12 @@ export interface Manifest {
    * 宽容读取：非字符串/缺失一律按「未知」处理（不重定基，不报错）。
    */
   sourceHome?: string;
+  /**
+   * **外部来源包的溯源块**（见 ManifestForeignOrigin）；DSH 自产备份没有该字段。
+   *
+   * 宽容读取：缺省 = 旧包（合法）；存在但形状/字段类型不对 = 仅 warning（绝不因此拒绝导入）。
+   */
+  foreign?: ManifestForeignOrigin;
   sections: Record<SectionId, boolean>;
   security: {
     containsSecrets: boolean;
