@@ -24,7 +24,9 @@ import { isPathSafe, normalizePath } from '../utils/paths.ts';
 import { isENOENT } from '../utils/guards.ts';
 import { PLUGIN_PATCH_REF_PREFIX, PLUGIN_PROFILE_MANIFEST_REF } from '../core/backup.ts';
 import { readEffectivePatchLines, resolveWriteLayer, USER_PATCH_FILE } from '../core/patch-layers.ts';
-import { parsePnpmPatchedDependencies, sanitizePnpmWorkspacePatches } from './pnpm-workspace.ts';
+import {
+  parsePnpmPatchedDependencies, restorePnpmMachinePaths, sanitizePnpmWorkspacePatches, stripPnpmMachinePaths,
+} from './pnpm-workspace.ts';
 import type { LocalPluginTarball, PatchLine, PluginEntry, PluginsSection, PnpmPatchFile } from '../schema/types.ts';
 import type {
   ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
@@ -116,6 +118,21 @@ export const PNPM_PROFILE_DIR = (profile: string | undefined): string =>
 /** pnpm-workspace.yaml 相对 $DSH_HOME 的路径（plugins 分区内按「插件安装配置」管理）。 */
 export const PNPM_WORKSPACE_REL = (profile: string | undefined): string =>
   `${PNPM_PROFILE_DIR(profile)}/pnpm-workspace.yaml`;
+
+/**
+ * pnpm 配置可移植净化的可见文案（导出告警 / 导入计划项 detail / 写入结果三处**同一句**，
+ * 不另造通道）：来源机的机器路径键被剥离、本机原有的机器路径键被保留，都必须说出来。
+ */
+function machinePathNotes(msg: MsgFunc, stripped: string[], restored: string[]): string[] {
+  const notes: string[] = [];
+  if (stripped.length > 0) {
+    notes.push(msg('adapter.pwMachinePathStripped', { count: String(stripped.length), keys: stripped.join(', ') }));
+  }
+  if (restored.length > 0) {
+    notes.push(msg('adapter.pwMachinePathKept', { count: String(restored.length), keys: restored.join(', ') }));
+  }
+  return notes;
+}
 
 /** 单个 patch 文件随备份迁移的体积上限（issue #35；patch 是纯文本，超过说明放错了东西）。 */
 export const MAX_PATCH_FILE_BYTES = 2 * 1024 * 1024;
@@ -422,7 +439,16 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
     try {
       const rel = PNPM_WORKSPACE_REL(ctx.profile);
       if (await ctx.fs.exists(rel)) {
-        pnpmWorkspace = new TextDecoder().decode(await ctx.fs.readFile(rel));
+        const raw = new TextDecoder().decode(await ctx.fs.readFile(rel));
+        // 可移植性净化（收集侧）：storeDir / cacheDir … 的值是本机绝对路径，跟着快照跑到
+        // 别的机器上必然指向不存在的目录 → 只带「可移植」的那部分（逐行删除，其余逐字不变）。
+        const strip = stripPnpmMachinePaths(raw);
+        pnpmWorkspace = strip.text;
+        if (strip.stripped.length > 0) {
+          warnings.push(msgOf(ctx)('adapter.pwMachinePathStripped', {
+            count: String(strip.stripped.length), keys: strip.stripped.join(', '),
+          }));
+        }
       }
     } catch (err) {
       warnings.push(msgOf(ctx)('adapter.pnpmReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
@@ -708,7 +734,10 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       // issue #35：目标机满足不了的 patchedDependencies 声明必须剔除——否则写进去之后，
       // 目标机 pnpm 会因为「patch 文件读不到」拒绝**一切** add（含本次要装的插件）。
       const available = await this.patchAvailability(data, ctx);
-      const clean = sanitizePnpmWorkspacePatches(data.pnpmWorkspace, (rel) => available.has(rel));
+      // 可移植性净化（写回侧·纵深防御）：老版本备份 / 第三方工具产出的载荷里可能仍带着
+      // 来源机的机器路径键（本版本收集侧已剥离，正常路径这里就是 no-op）。
+      const stripped = stripPnpmMachinePaths(data.pnpmWorkspace);
+      const clean = sanitizePnpmWorkspacePatches(stripped.text, (rel) => available.has(rel));
       const droppedNames = clean.dropped.map((d) => d.name).join(', ');
       let current: string | null = null;
       try {
@@ -719,15 +748,27 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
       } catch {
         current = null;
       }
-      if (current !== clean.text) {
+      // 写回侧：不搬运来源机的机器路径，也不清掉**本机**自己的设置 → 接回目标机原有的那几行。
+      const merged = restorePnpmMachinePaths(clean.text, current);
+      // 「只差机器路径行」= 目标机现文本剥掉它自己的机器路径行后与将要写入的内容逐字一致。
+      // 此时写回只会把本机那几行挪到末尾（YAML 映射顺序无语义），没有意义 → 不生成计划项：
+      // 零写入、本机设置原地不动，也不给用户造一条无意义的 Update 噪音。
+      const onlyMachinePaths = current !== null && stripPnpmMachinePaths(current).text === clean.text;
+      // 剥完机器路径键后**没有可移植内容**（来源机的配置只剩机器路径）→ 不产出空文件项：
+      // 「无内容形态不得交给 importer」与 collect() 的口径一致。
+      if (merged.text !== '' && !onlyMachinePaths && current !== merged.text) {
+        const details = machinePathNotes(msg, stripped.stripped, merged.restored);
+        if (clean.dropped.length > 0) {
+          // 既有口径不变：剔除声明的那句话排在最前
+          details.unshift(msg('adapter.pwPatchesDroppedDetail', { count: String(clean.dropped.length), names: droppedNames }));
+        }
         items.push({
           id: 'plugins:pnpm-workspace',
           kind: current === null ? 'Create' : 'Update',
           adapter: 'plugins',
           description: current === null ? msg('adapter.pwCreate') : msg('adapter.pwUpdate'),
-          ...(clean.dropped.length > 0
-            ? { detail: msg('adapter.pwPatchesDroppedDetail', { count: String(clean.dropped.length), names: droppedNames }) }
-            : {}),
+          // detail 非空 ⇒ isToolchainChangeItem ⇒ 进确认列表（可见、可取消）——净化绝不静默
+          ...(details.length > 0 ? { detail: details.join(msg('adapter.listSeparator')) } : {}),
           severity: 'info',
           target: { adapter: 'plugins', ref: 'pnpm-workspace.yaml' },
         });
@@ -896,9 +937,31 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
           if (!isENOENT(err)) throw err;
         }
       }
-      const clean = sanitizePnpmWorkspacePatches(text, (rel) => available.has(rel));
+      // 可移植性净化（写回侧）：先剥掉载荷里的机器路径键（纵深防御），再把目标机**原有的**
+      // 那几行接回去 —— 既不搬运来源机的路径，也不清掉本机自己的 store / 缓存位置。
+      const stripped = stripPnpmMachinePaths(text);
+      const clean = sanitizePnpmWorkspacePatches(stripped.text, (rel) => available.has(rel));
+      const wsRel = PNPM_WORKSPACE_REL(ctx.target.profile);
+      let local: string | null = null;
       try {
-        await ctx.target.fs.writeFile(PNPM_WORKSPACE_REL(ctx.target.profile), new TextEncoder().encode(clean.text));
+        local = (await ctx.target.fs.exists(wsRel))
+          ? new TextDecoder().decode(await ctx.target.fs.readFile(wsRel))
+          : null;
+      } catch (err) {
+        // 「存在但读不到」必须显式失败（只有 ENOENT 才算本来就没有）：读不到就无法保证本机的
+        // 路径设置不被清掉 —— 宁可不写，也不静默丢掉本机的 store / 缓存位置。
+        if (!isENOENT(err)) {
+          return {
+            ok: false,
+            warning: true,
+            message: msg('adapter.pwLocalReadFailed', { reason: err instanceof Error ? err.message : String(err) }),
+          };
+        }
+        local = null;
+      }
+      const merged = restorePnpmMachinePaths(clean.text, local);
+      try {
+        await ctx.target.fs.writeFile(wsRel, new TextEncoder().encode(merged.text));
         const notes: string[] = [msg('adapter.pwWritten')];
         if (clean.dropped.length > 0) {
           notes.push(msg('adapter.pwWrittenPatchesDropped', {
@@ -906,6 +969,7 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
             names: clean.dropped.map((d) => d.name).join(', '),
           }));
         }
+        notes.push(...machinePathNotes(msg, stripped.stripped, merged.restored));
         return { ok: true, needsRestart: true, message: notes.join(msg('adapter.listSeparator')) };
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);

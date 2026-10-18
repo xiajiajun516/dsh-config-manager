@@ -827,6 +827,8 @@ export const zh = {
   'library.kind.snapshot': '本机快照',
   'library.kind.backupFile': '备份文件',
   'library.kind.remote': '远端快照',
+  // cloud-sync 借鉴项 ⑥：快照的推送方设备（仅当快照 manifest 带 deviceName 时才渲染；旧快照不显示占位）
+  'library.remoteDevice': '由 {device} 推送',
   'library.kind.market': '市场配置',
   'library.title': '产物库',
   'library.refresh': '刷新',
@@ -1769,6 +1771,7 @@ export const en: Record<keyof typeof zh, string> = {
   'library.kind.snapshot': 'Local snapshot',
   'library.kind.backupFile': 'Backup file',
   'library.kind.remote': 'Remote snapshot',
+  'library.remoteDevice': 'Pushed by {device}',
   'library.kind.market': 'Market config',
   'library.title': 'Artifact library',
   'library.refresh': 'Refresh',

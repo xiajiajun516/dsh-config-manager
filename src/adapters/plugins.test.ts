@@ -729,3 +729,141 @@ test('issue #95：目标清单缺失 / JSON 坏 / 形态不符 → 只告警，�
   assert.equal(itemsC[0]?.kind, 'Warning');
   assert.match(itemsC[0]?.description ?? '', /形态/);
 });
+
+/* ---------------- ④ 可移植性净化：机器相关 pnpm 路径不随快照搬家 ---------------- */
+
+const MACHINE_WS = [
+  'storeDir: D:/pnpm-store',
+  'cacheDir: D:/pnpm-cache',
+  'nodeLinker: hoisted',
+  'allowBuilds:',
+  '  ssh2: true',
+  '',
+].join('\n');
+/** 剥离机器路径键之后应当逐字剩下的内容 */
+const PORTABLE_WS = ['nodeLinker: hoisted', 'allowBuilds:', '  ssh2: true', ''].join('\n');
+
+test('④ 可移植性：导出剥离机器相关 pnpm 路径键（其余逐字不变），且剥离可见', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice', 'web');
+  await src.fs.writeFile('profiles/web/pnpm-workspace.yaml', new TextEncoder().encode(MACHINE_WS));
+  const adapter = new PluginsAdapter();
+  const out = await adapter.export(src, { includeSecrets: false });
+  assert.equal(out.data.pnpmWorkspace, PORTABLE_WS, '机器路径键整行剥离，其余内容逐字不变');
+  assert.ok(
+    out.warnings.some((w) => w.includes('storeDir') && w.includes('cacheDir')),
+    `剥离必须走既有告警通道（不静默改写）: ${out.warnings.join(' | ')}`,
+  );
+
+  // 目标机全新（没有本机设置可保留）→ Create，且回填的文本里没有导出机路径
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const sections = new Map([['plugins', out.data]]);
+  const items = await adapter.analyzeImport(out.data, makeImportContext(dst, sections));
+  const wsItem = items.find((i) => i.id === 'plugins:pnpm-workspace');
+  assert.equal(wsItem?.kind, 'Create');
+  const applied = await adapter.applyItem(wsItem!, makeImportContext(dst, sections));
+  assert.equal(applied.ok, true);
+  const written = new TextDecoder().decode(dst.fs.files.get('/home/bob/profiles/web/pnpm-workspace.yaml')!);
+  assert.equal(written, PORTABLE_WS);
+  assert.equal(written.includes('D:/pnpm-store'), false, '回填不得写入导出机路径');
+});
+
+test('④ 可移植性：老载荷仍带导出机路径 → 写回侧再剥一次；本机自己的设置保留、导出机路径不落地', async () => {
+  // 老版本备份（收集侧还没有净化）里带着来源机的路径键
+  const data: PluginsSection = {
+    version: 1,
+    plugins: [],
+    patch: [],
+    pnpmWorkspace: 'storeDir: /home/alice/pnpm-store\ncacheDir: /home/alice/.cache/pnpm\nnodeLinker: hoisted\n',
+  };
+  const adapter = new PluginsAdapter();
+  const dst = makeContext('linux', '/home/bob', 'web');
+  await dst.fs.writeFile(
+    'profiles/web/pnpm-workspace.yaml',
+    new TextEncoder().encode('storeDir: /home/bob/pnpm-store\nnodeLinker: isolated\n'),
+  );
+  const sections = new Map([['plugins', data]]);
+  const items = await adapter.analyzeImport(data, makeImportContext(dst, sections));
+  const wsItem = items.find((i) => i.id === 'plugins:pnpm-workspace');
+  assert.equal(wsItem?.kind, 'Update');
+  assert.ok(wsItem?.detail?.includes('已剥离'), `剥离必须走既有可见通道（detail）: ${wsItem?.detail}`);
+  assert.ok(wsItem?.detail?.includes('storeDir'), '保留本机设置也要说清');
+  const applied = await adapter.applyItem(wsItem!, makeImportContext(dst, sections));
+  assert.equal(applied.ok, true);
+  const written = new TextDecoder().decode(dst.fs.files.get('/home/bob/profiles/web/pnpm-workspace.yaml')!);
+  assert.equal(written, 'nodeLinker: hoisted\nstoreDir: /home/bob/pnpm-store\n');
+  assert.equal(written.includes('/home/alice'), false, '导出机的机器路径绝不落地');
+  assert.equal(written.includes('cacheDir'), false, '导出机独有的键不得带到本机');
+  assert.ok(applied.message?.includes('storeDir'), `写入结果也要说出来: ${applied.message}`);
+});
+
+test('④ 可移植性：只差机器路径行（本机设置接回后与现文本同义）→ 不生成计划项、零写入', async () => {
+  const dst = makeContext('linux', '/home/bob', 'web');
+  await dst.fs.writeFile(
+    'profiles/web/pnpm-workspace.yaml',
+    new TextEncoder().encode('nodeLinker: hoisted\nstoreDir: /home/bob/pnpm-store\n'),
+  );
+  const data: PluginsSection = {
+    version: 1,
+    plugins: [],
+    patch: [],
+    pnpmWorkspace: 'storeDir: /home/alice/pnpm-store\nnodeLinker: hoisted\n',
+  };
+  const adapter = new PluginsAdapter();
+  const items = await adapter.analyzeImport(data, makeImportContext(dst, new Map([['plugins', data]])));
+  assert.equal(
+    items.some((i) => i.id === 'plugins:pnpm-workspace'),
+    false,
+    '语义一致 ⇒ 不打扰用户、也不产生无意义的改写',
+  );
+});
+
+test('④ 可移植性：载荷剥完只剩空内容（来源机配置全是机器路径）→ 不产出空文件项', async () => {
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const data: PluginsSection = { version: 1, plugins: [], patch: [], pnpmWorkspace: 'storeDir: /home/alice/pnpm-store\n' };
+  const adapter = new PluginsAdapter();
+  const items = await adapter.analyzeImport(data, makeImportContext(dst, new Map([['plugins', data]])));
+  assert.equal(items.some((i) => i.id === 'plugins:pnpm-workspace'), false, '没有可移植内容 ⇒ 不写空文件');
+  assert.equal(await dst.fs.exists('profiles/web/pnpm-workspace.yaml'), false, '零写入');
+});
+
+test('④ 可移植性：CRLF 的 pnpm-workspace.yaml 剥离后仍是 CRLF（无 EOL 漂移）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice', 'web');
+  await src.fs.writeFile(
+    'profiles/web/pnpm-workspace.yaml',
+    new TextEncoder().encode('storeDir: D:/pnpm-store\r\nnodeLinker: hoisted\r\n'),
+  );
+  const out = await new PluginsAdapter().export(src, { includeSecrets: false });
+  assert.equal(out.data.pnpmWorkspace, 'nodeLinker: hoisted\r\n');
+});
+
+test('④ 可移植性：本机 pnpm-workspace.yaml 存在但读不出来 → 显式失败且零写入（不静默丢本机设置）', async () => {
+  const dst = makeContext('linux', '/home/bob', 'web');
+  const local = 'storeDir: /home/bob/pnpm-store\n';
+  await dst.fs.writeFile('profiles/web/pnpm-workspace.yaml', new TextEncoder().encode(local));
+  const data: PluginsSection = { version: 1, plugins: [], patch: [], pnpmWorkspace: 'nodeLinker: hoisted\n' };
+  const adapter = new PluginsAdapter();
+  const ctx = makeImportContext(dst, new Map([['plugins', data]]));
+  ctx.target.fs.exists = async () => true;
+  ctx.target.fs.readFile = async () => {
+    const e = new Error('EACCES: permission denied') as Error & { code?: string };
+    e.code = 'EACCES';
+    throw e;
+  };
+  const item: PlanItem = {
+    id: 'plugins:pnpm-workspace',
+    kind: 'Update',
+    adapter: 'plugins',
+    description: 'x',
+    severity: 'info',
+    target: { adapter: 'plugins', ref: 'pnpm-workspace.yaml' },
+  };
+  const applied = await adapter.applyItem(item, ctx);
+  assert.equal(applied.ok, false);
+  assert.equal(applied.warning, true);
+  assert.ok(applied.message?.includes('EACCES'), `失败原因要如实回报: ${applied.message}`);
+  assert.equal(
+    new TextDecoder().decode(dst.fs.files.get('/home/bob/profiles/web/pnpm-workspace.yaml')!),
+    local,
+    '读不到就不写：本机文件逐字不动',
+  );
+});

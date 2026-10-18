@@ -87,6 +87,15 @@ export const zh = {
   'sync.backupHistoryFailed': '{trigger}失败',
   // ---------- 推送前只读预览（issue #91） ----------
   'sync.pushPreviewUnpackedLocalSources': '本地源插件（link:/file:）需打包才能精确比对变更，分区 {sections} 本次按「有变化」展示',
+  // ---------- cloud-sync 借鉴项 ①②③：条件写 / 探针 / 首连自建目录 ----------
+  'sync.probeUnsupported': '当前同步通道不支持连通性自检',
+  'sync.webdav.concurrentWrite': '远端索引已被其它设备更新（HTTP 412）：本次写入已中止，请重新同步后再试',
+  'sync.webdav.probeOk': '连接正常（远端 {count} 份快照）',
+  'sync.webdav.probeUnreachable': 'WebDAV 目录不可访问（HTTP {status}）：{url}',
+  'sync.webdav.collectionCreated': '已自动创建远端目录：{path}',
+  'sync.webdav.collectionCreateFailed': '创建远端目录失败（HTTP {status}）：{path}',
+  // ---------- cloud-sync 借鉴项 ⑥：设备身份 ----------
+  'sync.deviceNameFallback': '未命名设备',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -148,6 +157,13 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.backupHistorySkipped': '{trigger} skipped: {reason}',
   'sync.backupHistoryFailed': '{trigger} failed',
   'sync.pushPreviewUnpackedLocalSources': 'Local-source plugins (link:/file:) must be packed to compare changes exactly; section(s) {sections} are shown as changed',
+  'sync.probeUnsupported': 'This sync channel does not support a connectivity self-check',
+  'sync.webdav.concurrentWrite': 'The remote index was updated by another device (HTTP 412): this write was aborted, please sync again',
+  'sync.webdav.probeOk': 'Connection OK ({count} remote snapshots)',
+  'sync.webdav.probeUnreachable': 'The WebDAV directory is unreachable (HTTP {status}): {url}',
+  'sync.webdav.collectionCreated': 'Created the remote directory automatically: {path}',
+  'sync.webdav.collectionCreateFailed': 'Failed to create the remote directory (HTTP {status}): {path}',
+  'sync.deviceNameFallback': 'Unnamed device',
 };
 
 registerMessageCatalog({ id: 'sync-domain', zh, en });

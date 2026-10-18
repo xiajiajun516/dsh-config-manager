@@ -21,6 +21,7 @@ import type { SyncApi, SyncSnapshotLite } from '../sync/sync-api.ts'
 import type { MarketApi } from '../market/market-api.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
+import { deviceLabelsById } from '../sync/remote-device-view.ts'
 import { runStore, type LibraryStoreSlice } from '../run-store.ts'
 import { Badge, Button, Card, Empty, Spinner } from '../common/ui.tsx'
 import { redact } from '../../security/redaction.ts'
@@ -139,6 +140,19 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
     () => filterArtifacts(rows, { kind: lib.sourceFilter, text: lib.query, sort: lib.sort }),
     [rows, lib.sourceFilter, lib.query, lib.sort],
   )
+
+  /**
+   * cloud-sync 借鉴项 ⑥：远端快照 id → 「由 <设备名> 推送」文案。
+   * **只有**快照 manifest 真的带 deviceName 的行才进表：旧快照没有该字段，界面就不显示设备行
+   * （绝不渲染空串占位，也绝不把 undefined 变成文案）。
+   */
+  const deviceLabelOf = useMemo(
+    () => deviceLabelsById(
+      remote.status === 'ready' ? remote.items : [],
+      (device) => t('library.remoteDevice', { device }),
+    ),
+    [remote, t],
+  )
   const counts = countByKind(rows)
   const failedSources = [snapshots, files, remote, market].filter((s) => s.status === 'error').length
 
@@ -246,6 +260,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
                 runStore.patch({ library: { expandedKey: lib.expandedKey === row.key ? null : row.key } })
               }}
               onAction={onAction}
+              deviceLabel={row.kind === 'remote-snapshot' ? deviceLabelOf.get(row.ref.remoteId ?? '') : undefined}
             />
           ))}
         </ul>

@@ -33,7 +33,7 @@ import {
   sectionsEqual, SyncTransportError, withSyncRetry,
 } from '../transport.ts';
 import type {
-  SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
+  SyncProbeResult, SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
 } from '../transport.ts';
 import { gistMsg } from './messages.ts';
 import { composeMsg } from '../s3/messages.ts';
@@ -54,6 +54,15 @@ const ERR_BODY_MAX = 500;
 const MAX_REDIRECTS = 3;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const REDACTED = '[REDACTED]';
+
+/**
+ * 条件写头（cloud-sync 借鉴项 ①）：拿到**强** ETag 才发 If-Match。
+ * GitHub 对 gist 返回弱 ETag（W/"…"），HTTP 禁止用它做 If-Match（GitHub 会回 400）——
+ * 这里已经由 readGist 过滤掉弱 ETag，无 ETag 即返回空对象 = 退化为无条件 PATCH（既有行为不变）。
+ */
+function conditionalPatchHeaders(etag: string | undefined): Record<string, string> {
+  return etag === undefined ? {} : { 'if-match': etag };
+}
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
 export interface GistRequestOptions {
@@ -229,7 +238,7 @@ export class GistTransport implements SyncTransport {
     this.assertSafeId(snapshot.id);
     const token = await this.tokenOnce();
     const meta = computeSnapshotMeta(snapshot);
-    const files = await this.readGistFiles(token);
+    const { files, etag } = await this.readGist(token);
     const idxRaw = await this.readFileText(files, this.indexFileName, token);
     const idxBefore = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
     const existing = idxBefore.find((m) => m.id === snapshot.id);
@@ -245,7 +254,8 @@ export class GistTransport implements SyncTransport {
         [this.indexFileName]: { content: JSON.stringify(merged) },
       },
     });
-    const res = await this.send('PATCH', this.gistUrl(), token, { body });
+    const res = await this.send('PATCH', this.gistUrl(), token, { body, headers: conditionalPatchHeaders(etag) });
+    if (res.status === 412) throw this.concurrentWrite(res.status);
     if (!res.ok) {
       throw new GistTransportError(
         await this.failText('PATCH', this.gistUrl(), res, token),
@@ -284,7 +294,7 @@ export class GistTransport implements SyncTransport {
   async delete(id: string): Promise<void> {
     this.assertSafeId(id);
     const token = await this.tokenOnce();
-    const files = await this.readGistFiles(token);
+    const { files, etag } = await this.readGist(token);
     const idxRaw = await this.readFileText(files, this.indexFileName, token);
     const idx = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
     const fileName = this.snapshotFileName(id);
@@ -297,7 +307,8 @@ export class GistTransport implements SyncTransport {
         [this.indexFileName]: { content: JSON.stringify(remaining) },
       },
     });
-    const res = await this.send('PATCH', this.gistUrl(), token, { body });
+    const res = await this.send('PATCH', this.gistUrl(), token, { body, headers: conditionalPatchHeaders(etag) });
+    if (res.status === 412) throw this.concurrentWrite(res.status);
     if (!res.ok) {
       throw new GistTransportError(
         await this.failText('PATCH', this.gistUrl(), res, token),
@@ -307,6 +318,45 @@ export class GistTransport implements SyncTransport {
   }
 
   /* ---------------- 内部实现 ---------------- */
+
+  /** 条件写失败（HTTP 412）：远端 gist 在本次读取之后被别人改过 —— 中止写入让用户重跑。 */
+  private concurrentWrite(status: number): GistTransportError {
+    return new GistTransportError(
+      this.o.msg('sync.gist.concurrentWrite', { status: String(status) }),
+      { kind: 'conflict', retryable: false, status },
+    );
+  }
+
+  /**
+   * 连通性探针（cloud-sync 借鉴项 ②③）：令牌有效性（GET /user）→ gist 可读 → 快照数 →
+   * 归属提示（gist 里已有不属于本前缀的文件时给出 warning 级 hint，绝不自动删别人的文件）。
+   * 只读：不打任何 PATCH。
+   */
+  async probe(): Promise<SyncProbeResult> {
+    const token = await this.tokenOnce();
+    const userUrl = this.o.apiBaseUrl + '/user';
+    const me = await this.send('GET', userUrl, token);
+    if (me.status === 401 || me.status === 403) {
+      const body = await this.safeText(me);
+      throw new GistTransportError(await this.failText('GET', userUrl, me, token, body), this.classify(me.status, body));
+    }
+    if (!me.ok) {
+      const body = await this.safeText(me);
+      throw new GistTransportError(await this.failText('GET', userUrl, me, token, body), this.classify(me.status, body));
+    }
+    const { files } = await this.readGist(token);
+    const idxRaw = await this.readFileText(files, this.indexFileName, token);
+    const count = idxRaw === null ? 0 : this.parseIndex(idxRaw, this.gistUrl(), token).length;
+    const prefix = this.o.filePrefix + '-';
+    const foreign = Object.keys(files).filter((name) => !name.startsWith(prefix)).length;
+    return {
+      message: this.o.msg('sync.gist.probeOk', { count: String(count) }),
+      snapshotCount: count,
+      ...(foreign > 0
+        ? { hint: this.o.msg('sync.gist.probeForeignContent', { count: String(foreign), prefix: this.o.filePrefix }) }
+        : {}),
+    };
+  }
 
   private assertSafeId(id: string): void {
     if (typeof id !== 'string' || !SAFE_ID_RE.test(id) || RESERVED_IDS.has(id)) {
@@ -336,7 +386,7 @@ export class GistTransport implements SyncTransport {
     method: string,
     url: string,
     token: string,
-    opts: { body?: string; raw?: boolean } = {},
+    opts: { body?: string; raw?: boolean; headers?: Record<string, string> } = {},
   ): Promise<GistResponse> {
     const headers: Record<string, string> = opts.raw === true
       ? { accept: 'application/vnd.github.raw', 'User-Agent': 'DSH-Config-Manager (Gist Client)' }
@@ -345,6 +395,8 @@ export class GistTransport implements SyncTransport {
         'content-type': 'application/json',
         'X-GitHub-Api-Version': GITHUB_API_VERSION,
         ...(token !== '' ? { authorization: 'Bearer ' + token } : {}),
+        // 条件写的 if-match 从这里注入（cloud-sync 借鉴项 ①）
+        ...(opts.headers ?? {}),
       };
     try {
       return await this.o.request(method, url, {
@@ -371,6 +423,15 @@ export class GistTransport implements SyncTransport {
 
   /** 读 gist（含全部文件条目）；404 → 明确「gist 不存在或无权访问」 */
   private async readGistFiles(token: string): Promise<Record<string, GistFileEntry>> {
+    return (await this.readGist(token)).files;
+  }
+
+  /**
+   * 读 gist 全量文件 + 响应 ETag（ETag 供**条件写**用，cloud-sync 借鉴项 ①）。
+   * GitHub 对 gist 返回的是**弱 ETag**（W/"…"）—— HTTP 禁止用它做 If-Match（GitHub 会回 400），
+   * 因此弱 ETag 一律不采用（返回 undefined = 退化为无条件写），由 conditionalPatchHeaders 统一判定。
+   */
+  private async readGist(token: string): Promise<{ files: Record<string, GistFileEntry>; etag?: string }> {
     const url = this.gistUrl();
     const res = await this.send('GET', url, token);
     if (res.status === 404) {
@@ -399,7 +460,12 @@ export class GistTransport implements SyncTransport {
         { kind: 'protocol', retryable: false },
       );
     }
-    return files as Record<string, GistFileEntry>;
+    const rawEtag = res.headers?.['etag'];
+    const etag = typeof rawEtag === 'string' && rawEtag !== '' && !rawEtag.startsWith('W/') ? rawEtag : undefined;
+    return {
+      files: files as Record<string, GistFileEntry>,
+      ...(etag !== undefined ? { etag } : {}),
+    };
   }
 
   /**

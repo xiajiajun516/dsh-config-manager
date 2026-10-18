@@ -41,7 +41,7 @@ import {
 } from '../transport.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import type {
-  SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
+  SyncProbeResult, SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
 } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 
@@ -70,6 +70,40 @@ const BLOBS_INDEX_FILE = 'blobs-index.json';
 /** 内容哈希形状（sha256 hex）：blob 路径只接受它，杜绝路径穿越 */
 const BLOB_HASH_RE = /^[a-f0-9]{64}$/;
 const REDACTED = '[REDACTED]';
+/**
+ * 幂等 MKCOL 的「已存在 / 已建好」状态码（cloud-sync 借鉴项 ③）。
+ * 405 = 资源已存在（WebDAV 规范下的常见回法）；301/302/303 = 反向代理把 MKCOL 重定向到规范 URL；
+ * 409 = 目标已存在（坚果云等网盘对已存在目录回 409，见 cloud-sync 的兼容注释）。
+ */
+const MKCOL_OK_STATUSES = new Set([200, 201, 204, 301, 302, 303, 405, 409]);
+/**
+ * 直连目标集合时可判为「已建好 / 已存在」的状态码（**不含 409**）。
+ *
+ * 为什么把 409 排除：RFC 4918 §9.3.1 规定「父目录不存在」的正确回法就是 **409 Conflict**，
+ * 而部分网盘（坚果云等）对「目标已存在」也回 409 —— 首连直连时两种语义无法区分，
+ * 一律当「已存在」会让「上级目录没建」这条真实故障被吞掉（紧接着的 PUT 才会失败）。
+ * 因此 409 必须先走 ensureAncestors 补齐父目录再重试；只有**重试后**仍 409 才按「已存在」接受。
+ */
+const MKCOL_EXISTS_STATUSES = new Set([200, 201, 204, 301, 302, 303, 405]);
+
+/**
+ * 条件写头（cloud-sync 借鉴项 ①）：拿到 ETag 就要求「远端仍是我读到的那一版」（If-Match）；
+ * 索引**本来就不存在**（首次推送且远端确无内容）时用 If-None-Match: * 防两个设备同时首推；
+ * 其余情形（服务端不返回 ETag）返回空对象 ⇒ 退化为无条件写，绝不因为加了头把同步判成失败。
+ */
+function conditionalHeaders(etag: string | undefined, indexMissing: boolean): Record<string, string> {
+  if (etag !== undefined) return { 'If-Match': etag };
+  return indexMissing ? { 'If-None-Match': '*' } : {};
+}
+
+/** URL 路径段编码：已百分号编码的段原样保留（先 decode 成功才 re-encode），失败则直接编码。 */
+function encodeSegmentSafe(segment: string): string {
+  try {
+    return encodeURIComponent(decodeURIComponent(segment));
+  } catch {
+    return encodeURIComponent(segment);
+  }
+}
 /** 自动跟随的重定向状态码（RFC 7231/9110） */
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 /** 重定向最大跳数（RFC 7231 建议 ≤5；防 302 循环拖死请求） */
@@ -341,7 +375,7 @@ export class WebDavTransport implements SyncTransport {
     // → 必须照常上传，绝不跳过。
     const meta = computeSnapshotMeta(snapshot);
     // audit-sync sync-N1 覆盖面补全（t66，来自 t22 的 C7）：upload 也是写路径，**不接受 404 = 空集合**。
-    const { entries: idxBefore, missing: indexMissing } = await this.readIndexDetailed(pwd);
+    const { entries: idxBefore, missing: indexMissing, etag: idxEtag } = await this.readIndexDetailed(pwd);
     if (indexMissing && await this.remoteHasPriorContent(pwd)) {
       // 索引 404 只是**缺信息**（不是「远端没有快照」）：远端已有历史内容时，按空索引做读改写会把
       // 权威 index.json PUT 成只有本条目 → 其余快照从列表整体消失，随后 delete + GC 会回收**仍被
@@ -376,7 +410,11 @@ export class WebDavTransport implements SyncTransport {
     const merged = idxBefore.filter((m) => m.id !== snapshot.id);
     merged.push(meta);
     merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-    const putIdx = await this.send('PUT', idxUrl, pwd, { body: JSON.stringify(merged) });
+    const putIdx = await this.send('PUT', idxUrl, pwd, {
+      body: JSON.stringify(merged),
+      headers: conditionalHeaders(idxEtag, indexMissing),
+    });
+    if (putIdx.status === 412) throw this.concurrentWrite(idxUrl, putIdx.status);
     if (!putIdx.ok) {
       throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
     }
@@ -422,7 +460,7 @@ export class WebDavTransport implements SyncTransport {
     // 是**缺信息**而非事实，沿用空索引继续会把 index.json 覆盖成 []（其余快照从列表整体消失）并让
     // gcBlobStore 以空引用集回收，删掉仍被现存快照文件引用的会话 blob（不可恢复）。
     // 与 F1 同口径：宁可显式失败，也不制造不可恢复的远端状态。list() 仍保留「404 = 空集合」语义。
-    const { entries: idx, missing: indexMissing } = await this.readIndexDetailed(pwd);
+    const { entries: idx, missing: indexMissing, etag: idxEtag } = await this.readIndexDetailed(pwd);
     // delete 快照文件：404 = 不存在，视为成功
     const url = this.snapshotUrl(id);
     const res = await this.send('DELETE', url, pwd);
@@ -438,7 +476,11 @@ export class WebDavTransport implements SyncTransport {
     if (remaining.length === idx.length && res.status === 404) {
       return; // 文件与 index 都不存在 → 静默成功，无写回
     }
-    const putIdx = await this.send('PUT', idxUrl, pwd, { body: JSON.stringify(remaining) });
+    const putIdx = await this.send('PUT', idxUrl, pwd, {
+      body: JSON.stringify(remaining),
+      headers: conditionalHeaders(idxEtag, false),
+    });
+    if (putIdx.status === 412) throw this.concurrentWrite(idxUrl, putIdx.status);
     if (!putIdx.ok) {
       throw new WebDavTransportError(await this.failText('PUT', idxUrl, putIdx, pwd), classifyHttpStatus(putIdx.status));
     }
@@ -706,13 +748,85 @@ export class WebDavTransport implements SyncTransport {
     }
   }
 
-  /** 幂等创建 snapshots 集合：MKCOL；已存在（405/2xx/3xx）视为成功。 */
-  private async ensureCollection(pwd: string): Promise<void> {
+  /** 幂等创建 snapshots 集合：MKCOL；已存在（2xx/3xx/405/409）视为成功。
+   *
+   * cloud-sync 借鉴项 ③（首连自建）：目标目录的**上级**不存在时（新账号，或用户填了一个还没建的
+   * 目录），按 WebDAV 规范 MKCOL 缺父目录回 409 —— 此前用户必须先去网盘里手工建好目录，否则
+   * 首次同步必然失败。现在：直连 409 时逐级补齐 baseUrl 路径上的每一层，再重试一次。
+   * 返回**本次真正新建**的层级 URL（已存在的层级不进结果，探针据此如实回报，普通上传忽略返回值）。 */
+  private async ensureCollection(pwd: string): Promise<string[]> {
     const url = this.snapshotsColUrl();
-    const res = await this.send('MKCOL', url, pwd);
-    const okStatuses = new Set([200, 201, 204, 301, 302, 303, 405]);
-    if (okStatuses.has(res.status)) return;
-    throw new WebDavTransportError(await this.failText('MKCOL', url, res, pwd), classifyHttpStatus(res.status));
+    const first = await this.send('MKCOL', url, pwd);
+    // 首连只认「确定已存在 / 已建好」的状态；**409 不算**（二义：缺父目录 or 已存在）
+    if (MKCOL_EXISTS_STATUSES.has(first.status)) return [];
+    if (first.status !== 409) {
+      // 401/403/5xx/… 不是「目录缺失」，绝不吞掉：如实报错
+      throw new WebDavTransportError(await this.failText('MKCOL', url, first, pwd), classifyHttpStatus(first.status));
+    }
+    // 409：先逐级补齐 baseUrl 每一层（幂等；已存在的层回 405/3xx/409 都按已存在继续），再重试目标集合。
+    const created = await this.ensureAncestors(pwd);
+    const retry = await this.send('MKCOL', url, pwd);
+    // 重试真建出目标集合（201/200/204）也要如实回报 —— 否则界面会**低报**本次实际创建的目录
+    // （用户可见文案「已在远端自动创建目录」，少报一条等于说错）。
+    if (retry.status === 200 || retry.status === 201 || retry.status === 204) created.push(url);
+    // 上级已确保存在：重试仍是 409 ⇒ 按「已存在」接受（部分网盘行为）；真正的权限/路径错误由随后的 PUT 显式报出。
+    if (MKCOL_OK_STATUSES.has(retry.status)) return created;
+    throw new WebDavTransportError(await this.failText('MKCOL', url, retry, pwd), classifyHttpStatus(retry.status));
+  }
+
+  /** 逐级 MKCOL 补齐 baseUrl 的每一层目录（只有缺父目录时才会走到这里）。 */
+  private async ensureAncestors(pwd: string): Promise<string[]> {
+    const base = new URL(this.o.baseUrl);
+    const segments = base.pathname.split('/').filter((seg) => seg !== '');
+    const created: string[] = [];
+    for (let depth = 1; depth <= segments.length; depth += 1) {
+      const path = segments.slice(0, depth).map((seg) => encodeSegmentSafe(seg)).join('/');
+      const url = `${base.origin}/${path}/`;
+      const res = await this.send('MKCOL', url, pwd);
+      // 201/200/204 = 这次真的建出来了；405/409/3xx = 早就存在 → 不写进结果（不谎报「已创建」）
+      if (res.status === 200 || res.status === 201 || res.status === 204) created.push(url);
+      else if (MKCOL_OK_STATUSES.has(res.status)) continue;
+      else {
+        throw new WebDavTransportError(
+          this.o.msg('sync.webdav.collectionCreateFailed', { path: url, status: String(res.status) }),
+          classifyHttpStatus(res.status),
+        );
+      }
+    }
+    return created;
+  }
+
+  /** 条件写失败（HTTP 412）：远端在本次读取之后被别人改过 —— 中止写入，让用户重跑（cloud-sync 借鉴项 ①）。 */
+  private concurrentWrite(url: string, status: number): WebDavTransportError {
+    return new WebDavTransportError(
+      this.o.msg('sync.webdav.concurrentWrite', { status: String(status), url }),
+      { kind: 'conflict', retryable: false, status },
+    );
+  }
+
+  /**
+   * 连通性探针（cloud-sync 借鉴项 ②）：补齐目标目录 → 证明这真的是一个可读的 WebDAV 集合
+   * → 读一次索引回报快照数。只读；唯一写副作用是幂等 MKCOL 补目录（那正是它要修的故障）。
+   */
+  async probe(): Promise<SyncProbeResult> {
+    const pwd = await this.passwordOnce();
+    const created = await this.ensureCollection(pwd);
+    const url = this.snapshotsColUrl();
+    const res = await this.send('PROPFIND', url, pwd, { headers: { Depth: '0' } });
+    // 2xx（含 207 Multi-Status）= 真的是 WebDAV 集合；405/501 = 服务端不支持 PROPFIND → 退回「读索引」当证据。
+    if (!res.ok && res.status !== 405 && res.status !== 501) {
+      throw new WebDavTransportError(
+        this.o.msg('sync.webdav.probeUnreachable', { status: String(res.status), url }),
+        classifyHttpStatus(res.status),
+      );
+    }
+    const { entries, missing } = await this.readIndexDetailed(pwd);
+    const count = missing ? 0 : entries.length;
+    return {
+      message: this.o.msg('sync.webdav.probeOk', { count: String(count) }),
+      snapshotCount: count,
+      ...(created.length > 0 ? { createdCollections: created } : {}),
+    };
   }
 
   /**
@@ -730,14 +844,21 @@ export class WebDavTransport implements SyncTransport {
    * 写路径（**upload / delete**）必须用本方法：`missing` 时既不写回索引、也不触发 GC
    * （upload 另加「远端已有内容 ⇒ 显式中止」的判据，见 upload() 注释）。
    */
-  private async readIndexDetailed(pwd: string): Promise<{ entries: SyncSnapshotMeta[]; missing: boolean }> {
+  private async readIndexDetailed(pwd: string): Promise<{ entries: SyncSnapshotMeta[]; missing: boolean; etag?: string }> {
     const url = this.indexUrl();
     const res = await this.send('GET', url, pwd);
     if (res.status === 404) return { entries: [], missing: true };
     if (!res.ok) {
       throw new WebDavTransportError(await this.failText('GET', url, res, pwd), classifyHttpStatus(res.status));
     }
-    return { entries: this.parseIndex(await res.text(), url, pwd), missing: false };
+    // ETag 是写路径**条件写**的前置条件（cloud-sync 借鉴项 ①）：服务端给了就记下来，没给就退化成无条件写
+    // （绝不因为「服务端不返回 ETag」把同步判成失败）。
+    const etag = res.headers?.['etag'];
+    return {
+      entries: this.parseIndex(await res.text(), url, pwd),
+      missing: false,
+      ...(typeof etag === 'string' && etag !== '' ? { etag } : {}),
+    };
   }
 
   private parseIndex(raw: string, url: string, pwd: string): SyncSnapshotMeta[] {
@@ -789,13 +910,15 @@ export class WebDavTransport implements SyncTransport {
     method: string,
     url: string,
     pwd: string,
-    opts: { body?: string } = {},
+    opts: { body?: string; headers?: Record<string, string> } = {},
   ): Promise<WebDavResponse> {
     const auth = 'Basic ' + Buffer.from(`${this.o.username}:${pwd}`, 'utf8').toString('base64');
     const headers: Record<string, string> = {
       Authorization: auth,
       'Content-Type': 'application/json',
       'User-Agent': 'DSH-Config-Manager/0.1.55 (WebDAV Client)',
+      // 条件写头（If-Match / If-None-Match）与探针的 Depth 头从这里注入（cloud-sync 借鉴项 ①②）
+      ...(opts.headers ?? {}),
     };
     if (opts.body !== undefined) headers['Content-Length'] = String(Buffer.byteLength(opts.body, 'utf8'));
     try {

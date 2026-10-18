@@ -35,6 +35,15 @@ export interface ManifestSummary {
    * 使旧快照无法复活已删除的对话。缺省 = 旧快照（无墓碑信息，行为与改造前一致）。
    */
   deletedSessions?: string[];
+  /**
+   * 产生该快照的**设备身份**（同步历史展示「哪台机器推的」）。
+   *
+   * deviceId 是本机首次同步时生成并持久化在 `sync-state.json` 的随机 id（稳定标识，
+   * 换主机名也不变）；deviceName 是人类可读名（缺省取主机名）。
+   * 缺省 undefined = 旧快照 / 未记录（不猜，行为与改造前一致）。
+   */
+  deviceId?: string;
+  deviceName?: string;
 }
 
 /** 快照元信息：list() 条目 / upload() 返回值 */
@@ -87,6 +96,30 @@ export interface SyncSnapshot {
  * 远端快照传输通道契约。
  * 实现约定：同 id 重复 upload 视为覆盖（幂等友好）；download 对不存在的 id 必须抛错。
  */
+/**
+ * 连通性探针结果（issue：落地 cloud-sync 借鉴项 ②）。
+ *
+ * 探针是**只读、零副作用**的自检：验证凭据、目标容器可达、以及（webdav）目标目录
+ * 是否存在。失败**必须抛 SyncTransportError**（带 kind/status），由调用方按统一错误面
+ * 渲染 —— 本类型只描述成功时的自述信息。
+ */
+export interface SyncProbeResult {
+  /** 人类可读的一句话结论（已本地化；可直接展示） */
+  message: string;
+  /** 可执行的下一步提示（如「region 应为 cn-hangzhou」）；无则省略 */
+  hint?: string;
+  /** 探测到的远端快照数量（读得到索引时给出；读不到则省略，绝不猜 0） */
+  snapshotCount?: number;
+  /** 本次探测顺带创建的目标目录层级（webdav 首连自建；无则为空数组） */
+  createdCollections?: string[];
+}
+
+/** 写出/删除路径的**条件写**失败（HTTP 412 Precondition Failed，或 S3 兼容端点的 409）：
+ *  远端在我读取之后被别人改过 —— 必须中止本次写入让用户重试，绝不静默覆盖。 */
+export function isPreconditionFailedStatus(status: number): boolean {
+  return status === 412;
+}
+
 export interface SyncTransport {
   readonly type: string;
   /** 列出远端已有快照（按 createdAt 升序） */
@@ -97,6 +130,13 @@ export interface SyncTransport {
   download(id: string): Promise<SyncSnapshot>;
   /** 删除远端快照（不存在视为成功） */
   delete(id: string): Promise<void>;
+  /**
+   * 连通性探针（只读自检；可选实现 —— git 通道按 fast-forward 语义自证，不实现即视为不支持）。
+   *
+   * 约定：**不写任何快照数据**（webdav 允许幂等 MKCOL 补齐目标目录，这是唯一被允许的写副作用，
+   * 因为「远端目录不存在」正是它要修的故障）；凭据/权限/容器问题一律抛 SyncTransportError。
+   */
+  probe?(): Promise<SyncProbeResult>;
 }
 
 /* ---------------- 统一错误面 / 重试 / 超时（两条通道共用，t24） ---------------- */

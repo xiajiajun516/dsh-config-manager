@@ -100,7 +100,11 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   // 1580 → 1585（t3：英文界面零中文）。增量是**装配接线**：分区选择弹窗新增 uiT 注入
   //   （分区描述 / 分组说明改为字典键后，弹窗内需要 ui 字典翻译器才能解析；判定逻辑在 ui 层）。
   //   同一轮把 11 处 toast 的「全角冒号 + 详情」拼接改为 t('common.labelSeparator')，行数不变。
-  assert.ok(viewLines <= 1585, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
+  // 1585 → 1595（cloud-sync 借鉴项 ②⑤⑥ + 远程合并裁决入口）：新增的四个组件都已各自成文件
+  //   （SyncProbeRow / PluginInventoryCard / MergePreviewEntry + 产物库那侧的 deviceLabel），
+  //   主文件只多出 import、两处挂载点与一处「快照标签追加设备名」的拼接 —— 没有可再下沉的纯逻辑
+  //   （测试连接/清单的判定与渲染规则都在 ui 层，见 probe-view.ts / plugin-inventory-view.ts）。
+  assert.ok(viewLines <= 1595, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
 })
 
 test('t42: 通道卡必须是渲染函数（内联组件 = 每次渲染新类型 → 子树重挂、Select 展开态清零）', () => {

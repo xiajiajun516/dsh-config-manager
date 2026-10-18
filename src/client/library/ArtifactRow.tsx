@@ -43,10 +43,16 @@ export interface ArtifactRowViewProps {
   onAction: (capability: ArtifactCapability, row: ArtifactRow) => void
   /** 该行有动作在跑：禁用行内按钮（防重复提交） */
   busy?: boolean
+  /**
+   * cloud-sync 借鉴项 ⑥：该行远端快照的**推送方设备**文案（如「由 <设备名> 推送」）。
+   * 只有快照 manifest 真的带 deviceName 时才由调用方给出 —— 缺省 undefined 表示**不渲染**
+   * （旧快照没有该字段，绝不显示空串或占位）。
+   */
+  deviceLabel?: string | undefined
 }
 
 export function ArtifactRowView({
-  row, t, uiT, formatTime, expanded, onToggle, onAction, busy = false,
+  row, t, uiT, formatTime, expanded, onToggle, onAction, busy = false, deviceLabel,
 }: ArtifactRowViewProps) {
   const detailId = useId()
   const primary = row.capabilities[0]
@@ -77,7 +83,11 @@ export function ArtifactRowView({
           </div>
           {/* 元数据是**自由序列**而不是表格列：某一段没有（如快照没有体积）就整段不出现，
               绝不补一个「—」占位 —— 这里没有对齐问题，占位只会变成噪音（§3 第三条） */}
-          {row.meta.length > 0 && <div className={css.artifactMeta}>{row.meta.join(' · ')}</div>}
+          {(row.meta.length > 0 || deviceLabel !== undefined) && (
+            <div className={css.artifactMeta}>
+              {[...row.meta, ...(deviceLabel === undefined ? [] : [deviceLabel])].join(' · ')}
+            </div>
+          )}
         </div>
         {row.badges.length > 0 && (
           <div className={css.artifactBadges}>

@@ -39,6 +39,13 @@ export const s3Zh = {
   'sync.s3.providerNoteKodo': '七牛 Kodo S3 兼容（region 必填，如 cn-east-1；endpoint 可覆盖）',
   'sync.s3.unknownSignatureDialect': '未知签名方言: {id}',
   'sync.s3.blobHashInvalid': '内容哈希形状非法，拒绝写入 blob 仓: {hash}',
+  // ---- cloud-sync 借鉴项 ①②：条件写并发保护 + 连通性探针 ----
+  'sync.s3.concurrentWrite': '远端索引已被其它设备更新（HTTP {status}）：本次写入已中止，请重新同步后再试',
+  'sync.s3.probeOk': '连接正常（远端 {count} 份快照）',
+  'sync.s3.probeRegionRedirect': '端点把请求重定向到区域 {region}：请把 region 改成该值后重试',
+  'sync.s3.probeRedirectNoRegion': '端点返回了重定向（HTTP {status}）但没有给出区域：请核对 endpoint 与 region',
+  'sync.s3.probeBucketMissing': '桶不存在或无权访问（HTTP 404）：请核对 bucket 名与 endpoint',
+  'sync.s3.probeAccessDenied': '访问被拒绝（HTTP 403）：请核对 AccessKey、密钥与桶权限',
 } as const;
 
 export const s3En: Record<keyof typeof s3Zh, string> = {
@@ -67,6 +74,12 @@ export const s3En: Record<keyof typeof s3Zh, string> = {
   'sync.s3.providerNoteKodo': 'Qiniu Kodo S3-compatible (region required, e.g. cn-east-1; endpoint can be overridden)',
   'sync.s3.unknownSignatureDialect': 'Unknown signature dialect: {id}',
   'sync.s3.blobHashInvalid': 'Malformed content hash; refusing to write to the blob store: {hash}',
+  'sync.s3.concurrentWrite': 'The remote index was updated by another device (HTTP {status}): this write was aborted, please sync again',
+  'sync.s3.probeOk': 'Connection OK ({count} remote snapshots)',
+  'sync.s3.probeRegionRedirect': 'The endpoint redirects to region {region}: set region to that value and retry',
+  'sync.s3.probeRedirectNoRegion': 'The endpoint returned a redirect (HTTP {status}) without a region: check endpoint and region',
+  'sync.s3.probeBucketMissing': 'Bucket not found or not accessible (HTTP 404): check the bucket name and endpoint',
+  'sync.s3.probeAccessDenied': 'Access denied (HTTP 403): check the AccessKey, secret, and bucket permissions',
 };
 
 /** 插值：{param} → 形参值；缺参原样保留（与 core/messages.ts 同口径）。 */

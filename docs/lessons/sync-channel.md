@@ -15,3 +15,35 @@
   ③ **逐会话点名**：`sync-selection.json` 的 `sessionsInclude`（非空时**优先于** `sessionsLimit`；空 = 回到「最新 N 个」）。引擎用 `sessionExportOptions` 保证「显式勾选 > 数量上限」——adapter 里 `restrictUnits` 先于 `includeItems` 执行，两者叠加是**交集**（会退化成「最新 N 个里我勾中的那几个」），所以 include 非空时**不施加数量限制**。UI 复用导出侧的 `ContentPicker`（`SyncSectionPickerDialog` 内切换视图，**不嵌套第二个 Modal**），清单来自 `/export-preview`（`SyncApi.exportPreview`），勾选模型在 `ui/sync-settings-view.ts`（`initialSessionPicks`/`sessionPickerSelection`/`pickedSessionIds`）——组件里不得再实现「sessions 显式放行」判定（t42 守卫会红；判定走 `needsSessionInventory`）。
   ④ **内容寻址 blob 仓**（`src/sync/blob-store.ts`）：`sessions` 在**通道侧**外置为 `blobs/<sha256>` + 引用形态（散文件 `<section>.blobs.json` / WebDAV 载荷 `blobRefs`），**只有 transport 传了 BlobSink 才启用**（引擎/导出/导入看到的仍是普通 FilesSection）。命中已有哈希 = 零传输。**读回缺 blob 必须硬失败**（绝不降级为空分区）；**加密快照永不外置**；`sectionHashes` 一律按明文分区算（拉取侧不解仓也能比较变更）。GC：保护窗 10 分钟 + 「任一引用文件读不出来就放弃本轮」。这两条线**不做协议协商**（旧版读新版会把 sessions 当缺失分区）→ 登记为 `known-gaps.md` **G-19**。
   ⑤ **会话删除墓碑**（`src/sync/session-tombstones.ts`）：push 时「`sync-state.sessionUnits`（上次实际带走）− `adapter.listAllUnitIds(ctx)`（本机现存全量）」= 本次新删，累积成 `manifest.deletedSessions` 随每份快照传播（上限 5000；本机又出现实体则**撤销**墓碑）。**三情形一律不动既有记录**：本次没推 sessions / 适配器不支持全量枚举 / 本机枚举为空或失败（把「读不到」当「全删」会一次性标错几百条）。pull/preview/merge 按墓碑把命中的会话单元从**将要导入的载荷**里剔除（整目录，`relativePath` 前两段），**不删除本机数据**（删除是不可回滚的用户动作）→ 登记为 **G-20**。剔除必须可见（`sync.sessionsTombstoned` / `sync.sessionDeletionsRecorded`，绝不静默）。
+## 同步写路径：索引条件写 + 机器专属路径不进快照（2026-10，借鉴 dsh-cloud-sync）
+
+- **索引写入必须是条件写（If-Match / If-None-Match）**：WebDAV 的本文档描述的三条通道里，
+  `index.json` / `<prefix>/index.json` / gist 索引都是**读改写**形态（先 GET 索引、合并、再 PUT）。
+  改造前只有「索引读不出来就不写回」的护栏（不许把可读索引覆盖成空集合），**两台设备同时 push 时仍有一个丢失更新窗口**：
+  后写者用自己读到的旧条目集合覆盖索引，先写者的快照条目从列表里消失 —— 数据文件还在，但它会被后续的
+  「无引用 blob 回收」当孤儿。落点：webdav / s3 的 `readIndexDetailed` 现在回传 `etag`，写回时带
+  `If-Match`（索引本不存在则 `If-None-Match: *`）；412（S3 兼容端点还可能是 409）一律归类为
+  `conflict` 并**中止本次写入**，让用户重跑。服务端不给 ETag / 不实现条件写时退化为无条件写（行为与改造前一致），
+  **绝不因为拿不到 ETag 把同步判成失败**。
+  - **gist 的 ETag 是弱 ETag**（`W/"…"`）：HTTP 禁止用它做 `If-Match`（GitHub 会对这种 PATCH 回 400），
+    故 gist 通道只采用**强** ETag，弱 ETag 直接不采用（退回无条件 PATCH）。
+  - 范围说明：blob 索引（`blobs-index.json`）**刻意不做条件写** —— 它漏记一条只占空间（该 blob 永不被 GC 删），
+    多记一条只是对不存在的 blob 发一次幂等 DELETE，不存在「覆盖别人的快照列表」这类不可恢复后果。
+
+- **首连自动建远端目录（WebDAV 逐级 MKCOL）**：按 WebDAV 规范，MKCOL 的父目录不存在时返回 **409 Conflict**
+  —— 这正是「用户填了一个还没建的目录 → 首次同步必失败」的根因。现在：直接 MKCOL 目标集合失败于 409 时，
+  沿 baseUrl 路径**逐级 MKCOL** 再重试一次；405/301/302/303/409 都按「已存在」处理，
+  只有 401/403/5xx 这类**不是「目录缺失」**的失败才抛出。返回值只记录**本次真建出来**的层级（探针据此如实回报，
+  不谎报「已创建」）。
+
+- **机器专属路径不进快照**：profile 的 `pnpm-workspace.yaml` 里可能有 `storeDir` / `globalDir` /
+  `cacheDir` / `stateDir` / `configDir`（含 kebab 拼写）这类**机器专属**位置，跟着快照跑到别的机器上会指到
+  不存在的地方。现在导出侧按行剥离（缩进块里的同名键不碰；CRLF 逐字保留），写回侧保留目标机自己原有的设置，
+  剥离/保留都走既有告警与计划项 detail 通道（用户可见、可取消），不静默改写。
+  `.npmrc` **不纳入同步面**（纳入会改 bundle/sync 载荷形态，且本插件从不写它）：来源机的 `.npmrc`
+  既不进快照也不被改写。
+
+- **验证状态**：以上三条的**单测**覆盖见 `src/sync/webdav|s3|gist` 与 `src/sync/sync-state` 的用例；
+  **未对真实 WebDAV / S3 / Gist 端点做端到端验证**（本批无真实凭据）—— 条件写在服务端不支持时是退化为无条件写，
+  因此「真实服务端是否回 ETag / 是否按 412 拒绝」仍属未验证项。
+

@@ -37,7 +37,7 @@ import {
   isEncryptedSections, sectionsEqual, SyncTransportError, withSyncRetry,
 } from '../transport.ts';
 import type {
-  SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
+  SyncProbeResult, SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
 } from '../transport.ts';
 import { signRequest } from './sigv4.ts';
 import type { SigV4DialectId } from './sigv4.ts';
@@ -56,6 +56,21 @@ const ERR_BODY_MAX = 500;
 /** 内容哈希形状（sha256 hex）：blob 对象键只接受它，杜绝路径穿越 */
 const BLOB_HASH_RE = /^[a-f0-9]{64}$/;
 const REDACTED = '[REDACTED]';
+
+/**
+ * 条件写头（cloud-sync 借鉴项 ①）：有 ETag → If-Match（远端必须仍是我读到的那一版）；
+ * 索引本来就不存在 → If-None-Match: *（防两设备同时首推）；服务端不给 ETag → 空（无条件写，不改既有行为）。
+ */
+function conditionalHeaders(etag: string | undefined, indexMissing: boolean): Record<string, string> {
+  if (etag !== undefined) return { 'if-match': etag };
+  return indexMissing ? { 'if-none-match': '*' } : {};
+}
+
+/** 条件写失败判定：412 恒是；409 仅在**确实带了条件头**时才算（无条件的 409 另有含义，不吞）。 */
+function isConcurrentWrite(status: number, headers: Record<string, string>): boolean {
+  if (status === 412) return true;
+  return status === 409 && Object.keys(headers).length > 0;
+}
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
 export interface S3RequestOptions {
@@ -258,7 +273,7 @@ export class S3Transport implements SyncTransport {
     const secret = await this.secretOnce();
     const meta = computeSnapshotMeta(snapshot);
     // audit-sync sync-N1 覆盖面补全（t66，来自 t22 的 C7）：upload 也是写路径，**不接受 404 = 空集合**。
-    const { entries: idxBefore, missing: indexMissing } = await this.readIndexDetailed(secret);
+    const { entries: idxBefore, missing: indexMissing, etag: idxEtag } = await this.readIndexDetailed(secret);
     if (indexMissing && await this.remoteHasPriorContent(secret)) {
       // 索引 404 只是**缺信息**：远端已有历史内容时按空索引读改写，会把权威索引 PUT 成只有本条目
       // → 其余快照从列表整体消失，随后 delete + GC 会回收仍被现存快照文件引用的 blob（不可恢复）。
@@ -281,7 +296,13 @@ export class S3Transport implements SyncTransport {
     const merged = idxBefore.filter((m) => m.id !== snapshot.id);
     merged.push(meta);
     merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-    const putIdx = await this.send('PUT', indexKey(this.target.prefix), { body: JSON.stringify(merged), secret });
+    const condHeaders = conditionalHeaders(idxEtag, indexMissing);
+    const putIdx = await this.send('PUT', indexKey(this.target.prefix), {
+      body: JSON.stringify(merged),
+      secret,
+      headers: condHeaders,
+    });
+    if (isConcurrentWrite(putIdx.res.status, condHeaders)) throw this.concurrentWrite(putIdx.url, putIdx.res.status);
     if (!putIdx.res.ok) {
       throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
     }
@@ -318,7 +339,7 @@ export class S3Transport implements SyncTransport {
     // index.json 覆盖成 []（其余快照从列表消失）并让 blob GC 删掉仍被引用的会话 blob —— 一律中止。
     // audit-sync sync-N1（P0）：与 WebDAV 同型 —— 写路径**不接受 404 = 空集合**。索引真缺失时
     // 「远端一条快照都没有」是缺信息而非事实，沿用空索引会覆盖 index.json 并用空引用集回收 blob。
-    const { entries: idx, missing: indexMissing } = await this.readIndexDetailed(secret);
+    const { entries: idx, missing: indexMissing, etag: idxEtag } = await this.readIndexDetailed(secret);
     const del = await this.send('DELETE', snapshotKey(this.target.prefix, id), { secret });
     if (!del.res.ok && del.res.status !== 404) {
       throw new S3TransportError(await this.failText('DELETE', del.url, del.res, secret), classifyHttpStatus(del.res.status));
@@ -328,7 +349,13 @@ export class S3Transport implements SyncTransport {
     if (indexMissing) return;
     const remaining = idx.filter((m) => m.id !== id);
     if (remaining.length === idx.length && del.res.status === 404) return; // 对象与索引都没有 → 静默成功
-    const putIdx = await this.send('PUT', indexKey(this.target.prefix), { body: JSON.stringify(remaining), secret });
+    const condHeaders = conditionalHeaders(idxEtag, false);
+    const putIdx = await this.send('PUT', indexKey(this.target.prefix), {
+      body: JSON.stringify(remaining),
+      secret,
+      headers: condHeaders,
+    });
+    if (isConcurrentWrite(putIdx.res.status, condHeaders)) throw this.concurrentWrite(putIdx.url, putIdx.res.status);
     if (!putIdx.res.ok) {
       throw new S3TransportError(await this.failText('PUT', putIdx.url, putIdx.res, secret), classifyHttpStatus(putIdx.res.status));
     }
@@ -336,6 +363,46 @@ export class S3Transport implements SyncTransport {
   }
 
   /* ---------------- 内部实现 ---------------- */
+
+  /** 条件写失败：远端索引在本次读取之后被别人改过 —— 中止写入让用户重跑（cloud-sync 借鉴项 ①）。 */
+  private concurrentWrite(url: string, status: number): S3TransportError {
+    return new S3TransportError(
+      this.o.msg('sync.s3.concurrentWrite', { status: String(status), url }),
+      { kind: 'conflict', retryable: false, status },
+    );
+  }
+
+  /**
+   * 连通性探针（cloud-sync 借鉴项 ②）：HEAD 桶证明端点/凭据/桶可达，再读一次索引回报快照数。
+   * 重定向（301/307/308）时读 x-amz-bucket-region 直接把「region 该填什么」告诉用户 ——
+   * 这是 S3 兼容端点最常见的失败原因（AWS/OSS/COS/Kodo 各自的 region 值不同）。
+   */
+  async probe(): Promise<SyncProbeResult> {
+    const secret = await this.secretOnce();
+    const bucket = await this.send('HEAD', '', { secret });
+    const status = bucket.res.status;
+    if (status === 301 || status === 307 || status === 308) {
+      const region = bucket.res.headers?.['x-amz-bucket-region'] ?? bucket.res.headers?.['X-Amz-Bucket-Region'];
+      throw new S3TransportError(
+        region !== undefined && region !== ''
+          ? this.o.msg('sync.s3.probeRegionRedirect', { region })
+          : this.o.msg('sync.s3.probeRedirectNoRegion', { status: String(status) }),
+        { kind: 'client', retryable: false, status },
+      );
+    }
+    if (status === 404) {
+      throw new S3TransportError(this.o.msg('sync.s3.probeBucketMissing'), { kind: 'notfound', retryable: false, status });
+    }
+    if (status === 403) {
+      throw new S3TransportError(this.o.msg('sync.s3.probeAccessDenied'), { kind: 'auth', retryable: false, status });
+    }
+    if (!bucket.res.ok) {
+      throw new S3TransportError(await this.failText('HEAD', bucket.url, bucket.res, secret), classifyHttpStatus(status));
+    }
+    const { entries, missing } = await this.readIndexDetailed(secret);
+    const count = missing ? 0 : entries.length;
+    return { message: this.o.msg('sync.s3.probeOk', { count: String(count) }), snapshotCount: count };
+  }
 
   private assertSafeId(id: string): void {
     if (typeof id !== 'string' || !SAFE_ID_RE.test(id) || RESERVED_IDS.has(id)) {
@@ -356,10 +423,15 @@ export class S3Transport implements SyncTransport {
   private async send(
     method: string,
     key: string,
-    opts: { body?: string; secret: string },
+    opts: { body?: string; secret: string; headers?: Record<string, string> },
   ): Promise<{ res: S3Response; url: string }> {
     const url = objectUrl(this.target, key);
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const headers: Record<string, string> = {
+      'content-type': 'application/json',
+      // 条件写头（if-match / if-none-match）从这里注入（cloud-sync 借鉴项 ①）；
+      // 签名在注入之后计算，因此条件头也进 SignedHeaders。
+      ...(opts.headers ?? {}),
+    };
     if (opts.body !== undefined) headers['content-length'] = String(Buffer.byteLength(opts.body, 'utf8'));
     const signed = signRequest({
       method,
@@ -440,13 +512,19 @@ export class S3Transport implements SyncTransport {
    * 读索引的**带缺失标志**版本（audit-sync sync-N1，与 WebDAV 同型）：
    * 404 → `missing = true`（缺信息，不是事实）；其它非 2xx / 非法 → 抛错（F2 语义）。
    */
-  private async readIndexDetailed(secret: string): Promise<{ entries: SyncSnapshotMeta[]; missing: boolean }> {
+  private async readIndexDetailed(secret: string): Promise<{ entries: SyncSnapshotMeta[]; missing: boolean; etag?: string }> {
     const sent = await this.send('GET', indexKey(this.target.prefix), { secret });
     if (sent.res.status === 404) return { entries: [], missing: true };
     if (!sent.res.ok) {
       throw new S3TransportError(await this.failText('GET', sent.url, sent.res, secret), classifyHttpStatus(sent.res.status));
     }
-    return { entries: this.parseIndex(await sent.res.text(), sent.url, secret), missing: false };
+    // ETag 是条件写的前置条件（cloud-sync 借鉴项 ①）；服务端没给就退化为无条件写，绝不判成失败。
+    const etag = sent.res.headers?.['etag'];
+    return {
+      entries: this.parseIndex(await sent.res.text(), sent.url, secret),
+      missing: false,
+      ...(typeof etag === 'string' && etag !== '' ? { etag } : {}),
+    };
   }
 
   private parseIndex(raw: string, url: string, secret: string): SyncSnapshotMeta[] {

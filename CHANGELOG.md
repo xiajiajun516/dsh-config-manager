@@ -51,8 +51,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **两台设备同时同步远端时不再互相覆盖**：写入前会核对远端是否已被别人改过，一旦发现就把这次写入停在写任何东西之前并明确提示重跑，绝不静默丢掉别人刚推的快照。
   **Two devices syncing at the same time no longer overwrite each other**: the write checks whether the remote changed since it was read, and if it did the sync stops before writing anything and asks you to run it again, instead of silently dropping a snapshot someone else just pushed.
-- **首次同步不再要求你先手工建好网盘目录**：目标目录（含多级）不存在时会自动创建，创建了哪一层也会如实告诉你。
-  **First sync no longer asks you to create the cloud folder by hand**: missing target folders (including nested ones) are created automatically, and which levels were created is reported honestly.
+- **首次同步不再要求你先手工建好网盘目录（WebDAV）**：目标目录（含多级）不存在时会自动创建，创建了哪一层也会如实告诉你；对象存储（S3/OSS/COS/MinIO/Kodo）与 Gist 仍按各自语义处理，不会替你新建桶或 Gist。
+  **First sync no longer asks you to create the WebDAV folder by hand**: missing target folders (including nested ones) are created automatically, and which levels were created is reported honestly; object storage (S3/OSS/COS/MinIO/Kodo) and Gist keep their own semantics and never create a bucket or a Gist for you.
 - **跨机同步不再把本机的 pnpm 缓存 / 存储位置带到别的机器**：导出时这些机器专属设置会被剥离（并在你的确认列表里可见），恢复时保留目标机自己原有的设置。
   **Cross-machine sync no longer carries this machine's pnpm cache/store locations to another machine**: those machine-specific settings are stripped on export (and shown in your confirmation list), while the target machine keeps its own settings.
 - **自动合并升级为真正的三方合并**：两台设备改了同一个配置分区里的不同键、或同一个文本文件的不同行时，两边改动现在会同时保留，不再整段变成冲突等你裁决；只有改到同一处才需要决定。

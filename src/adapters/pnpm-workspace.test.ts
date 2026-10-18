@@ -1,10 +1,14 @@
 /**
  * issue #35 回归：patchedDependencies 的解析与「目标机没有 patch 文件」条目的剔除。
  * 目标：绝不把「声明存在、文件不存在」的组合写到目标机（否则 pnpm 拒绝一切 add）。
+ *
+ * 跨机可移植性回归（④）：机器相关 pnpm 路径键的行级剥离与「本机设置保留」的回接。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePnpmPatchedDependencies, sanitizePnpmWorkspacePatches } from './pnpm-workspace.ts';
+import {
+  parsePnpmPatchedDependencies, restorePnpmMachinePaths, sanitizePnpmWorkspacePatches, stripPnpmMachinePaths,
+} from './pnpm-workspace.ts';
 
 const SOURCE = [
   'packages:',
@@ -84,4 +88,88 @@ test('sanitize：没有 patchedDependencies 时不产生任何改动', () => {
   assert.equal(r.text, text);
   assert.deepEqual(r.declared, []);
   assert.equal(r.unsupported, null);
+});
+
+/* ---------------- 可移植性净化：机器相关路径键（④） ---------------- */
+
+test('strip：剥离根层机器路径键（含 kebab 方言），其余内容与注释逐字不变', () => {
+  const text = [
+    'storeDir: D:/pnpm-store',
+    'packages:',
+    "  - 'plugins/*'",
+    'cache-dir: C:/pnpm-cache  # 注释也一起走',
+    'allowBuilds:',
+    '  ssh2: true',
+    'minimumReleaseAge: 1440',
+    '',
+  ].join('\n');
+  const r = stripPnpmMachinePaths(text);
+  assert.deepEqual(r.stripped, ['storeDir', 'cache-dir']);
+  assert.equal(r.text, [
+    'packages:',
+    "  - 'plugins/*'",
+    'allowBuilds:',
+    '  ssh2: true',
+    'minimumReleaseAge: 1440',
+    '',
+  ].join('\n'));
+});
+
+test('strip：不含机器路径键 → 逐字节不变（含缩进块 / 行尾注释 / 行尾缺换行）', () => {
+  const text = "# 本机配置\nallowBuilds:\n  ssh2: true  # 说明\npatchedDependencies:\n  a: patches/a.patch";
+  const r = stripPnpmMachinePaths(text);
+  assert.equal(r.text, text);
+  assert.deepEqual(r.stripped, []);
+  const empty = stripPnpmMachinePaths('');
+  assert.equal(empty.text, '');
+  assert.deepEqual(empty.stripped, []);
+});
+
+test('strip：只有根层才算设置 —— 缩进块里的同名键一律不碰', () => {
+  const text = 'pluginFoo:\n  storeDir: /nested/path\nstoreDir: /root/path\n';
+  const r = stripPnpmMachinePaths(text);
+  assert.deepEqual(r.stripped, ['storeDir']);
+  assert.equal(r.text, 'pluginFoo:\n  storeDir: /nested/path\n');
+});
+
+test('strip：CRLF 输入不引入 LF 漂移（被删行之外逐字保留 CRLF）', () => {
+  const text = 'storeDir: D:/pnpm-store\r\nallowBuilds:\r\n  ssh2: true\r\n';
+  const r = stripPnpmMachinePaths(text);
+  assert.equal(r.text, 'allowBuilds:\r\n  ssh2: true\r\n');
+  assert.ok(!r.text.includes('\n\n'), '不得产生空行');
+});
+
+test('strip：块标量形态连缩进续行一起删（不留孤儿缩进行 → 不产出坏 YAML）', () => {
+  const text = 'storeDir: |\n  D:/pnpm-store\nallowBuilds:\n  ssh2: true\n';
+  const r = stripPnpmMachinePaths(text);
+  assert.equal(r.text, 'allowBuilds:\n  ssh2: true\n');
+});
+
+test('strip：整份文件只有机器路径键 → 结果为空（上层据此不再携带该单元）', () => {
+  const r = stripPnpmMachinePaths('storeDir: D:/pnpm-store\n');
+  assert.equal(r.text, '');
+  assert.deepEqual(r.stripped, ['storeDir']);
+});
+
+test('restore：接回本机原有的机器路径行（来源机的路径早已被剥离）', () => {
+  const local = 'storeDir: D:/pnpm-store\nallowBuilds:\n  ssh2: true\n';
+  const incoming = 'allowBuilds:\n  ssh2: false\n';
+  const r = restorePnpmMachinePaths(incoming, local);
+  assert.deepEqual(r.restored, ['storeDir']);
+  assert.equal(r.text, 'allowBuilds:\n  ssh2: false\nstoreDir: D:/pnpm-store\n');
+});
+
+test('restore：本机没有这些键 / 本机没有该文件 / incoming 为空 → 原样返回', () => {
+  const incoming = 'allowBuilds:\n  ssh2: false\n';
+  assert.deepEqual(restorePnpmMachinePaths(incoming, null), { text: incoming, restored: [] });
+  assert.deepEqual(restorePnpmMachinePaths(incoming, ''), { text: incoming, restored: [] });
+  assert.deepEqual(restorePnpmMachinePaths(incoming, 'packages:\n  - "*"\n'), { text: incoming, restored: [] });
+  assert.deepEqual(restorePnpmMachinePaths('', 'storeDir: /x\n'), { text: '', restored: [] });
+});
+
+test('restore：接回行沿用 incoming 的 EOL；incoming 无尾换行时先补齐', () => {
+  const crlf = restorePnpmMachinePaths('allowBuilds:\r\n  ssh2: false\r\n', 'storeDir: D:/s\r\n');
+  assert.equal(crlf.text, 'allowBuilds:\r\n  ssh2: false\r\nstoreDir: D:/s\r\n');
+  const noTail = restorePnpmMachinePaths('allowBuilds:', 'storeDir: D:/s\n');
+  assert.equal(noTail.text, 'allowBuilds:\nstoreDir: D:/s\n');
 });

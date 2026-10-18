@@ -35,6 +35,10 @@ export const zh = {
   'adapter.pluginDataEnvOverridden': '{path} 的位置被环境变量 {env} 覆盖，本次已跳过（不猜它指向哪里）',
   'adapter.pluginDataPathNotAllowed': '路径不在第三方插件数据的允许范围内，已拒绝写入: {path}',
   'adapter.pluginDataNoOsHome': '第三方插件的数据在系统主目录下，但当前宿主没有提供该目录的文件通道（旧版本宿主）：本次不读取也不导入 / third-party plugin data lives under the system home directory, but this host offers no file channel for it (older host): nothing is read or imported this time',
+  // ---------- pnpm 配置可移植净化（机器相关路径键） ----------
+  'adapter.pwMachinePathStripped': '已剥离 {count} 条与本机路径绑定的 pnpm 设置（换机后会指向不存在的目录）：{keys}',
+  'adapter.pwMachinePathKept': '保留本机原有的 {count} 条 pnpm 路径设置（不搬运来源机的路径）：{keys}',
+  'adapter.pwLocalReadFailed': '读取本机 pnpm-workspace.yaml 失败：{reason}（未写入 —— 避免把本机自己的 pnpm 路径设置清掉）',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -53,6 +57,9 @@ export const en: Record<keyof typeof zh, string> = {
   'adapter.pluginDataEnvOverridden': "the location of {path} is overridden by the {env} environment variable; skipped this time (the new location is never guessed)",
   'adapter.pluginDataPathNotAllowed': 'the path is outside the range allowed for third-party plugin data and was refused: {path}',
   'adapter.pluginDataNoOsHome': 'third-party plugin data lives under the system home directory, but this host offers no file channel for it (older host): nothing is read or imported this time',
+  'adapter.pwMachinePathStripped': 'Stripped {count} pnpm setting(s) bound to machine-specific paths (they would point to non-existent directories on another machine): {keys}',
+  'adapter.pwMachinePathKept': "Kept this machine's own {count} pnpm path setting(s) (the source machine's paths are never carried over): {keys}",
+  'adapter.pwLocalReadFailed': "Failed to read the local pnpm-workspace.yaml: {reason} (nothing was written, so this machine's own pnpm path settings are not dropped)",
 };
 
 registerMessageCatalog({ id: 'adapters-domain', zh, en });
