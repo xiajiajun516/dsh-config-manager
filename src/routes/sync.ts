@@ -51,6 +51,7 @@ import { DeviceFlowStore } from '../sync/github-auth.ts'
 import { channelOf, clearSyncChannel, isWebDavConfig, listCloudConfiguredProviders, parseSyncChannel, readFullSyncConfig, writeSyncConfig, gistChannelView, s3ChannelView, cloudSecretRef, S3_COMPAT_PROVIDERS, GIST_PROVIDER } from '../sync/sync-config.ts'
 import type { CloudS3ChannelView, CloudGistChannelView, CloudSecretWriter, FullSyncConfig, SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
 import { SyncEngine } from '../sync/sync-engine.ts'
+import { isProbeUnsupported } from '../sync/transport.ts'
 import type { ApplyItemsReport } from '../sync/sync-engine.ts'
 import { readSyncHistory } from '../sync/sync-history.ts'
 import { SYNC_SELECTION_SCHEMA_VERSION, normalizeSessionsInclude, normalizeSessionsLimit, writeSyncSelection } from '../sync/sync-selection.ts'
@@ -733,7 +734,13 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
             : {}),
         })
       } catch (error) {
-        writeJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+        // 「该通道不提供自检」是**能力边界**（git 通道按 fast-forward 语义自证），不是故障：
+        // 用稳定错误码标记，界面据此按中性提示渲染，绝不显示成「操作失败」。
+        writeJson(res, 200, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          ...(isProbeUnsupported(error) ? { unsupported: true } : {}),
+        })
       }
     }),
     // ------------------------------------------------------ sync/inventory

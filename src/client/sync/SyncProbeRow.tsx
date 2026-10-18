@@ -61,8 +61,11 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy }: SyncProbeRowPr
     }
   }, [api, body, remoteReady])
 
-  /** 渲染规则全在纯函数里（可单测）：结论 / hint / 自动创建的目录三态分开 */
-  const view = result === null ? null : projectProbeResult(result)
+  /**
+   * 渲染规则全在纯函数里（可单测）：成功 / hint / 自动创建的目录 / 不支持自检 / 真失败**五态分开**。
+   * 兜底文案只在这里解析（纯模块不碰字典）：宿主没给 error 时用字典键的本地化文案。
+   */
+  const view = result === null ? null : projectProbeResult(result, t('probe.unsupported'))
 
   return (
     <>
@@ -80,7 +83,14 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy }: SyncProbeRowPr
           t={api.t}
         />
       )}
-      {view !== null && view.tone !== 'error' && (
+      {/* 能力边界**不是**故障：中性 info 横幅 + 一句解释，绝不显示「操作失败」 */}
+      {view !== null && view.tone === 'info' && (
+        <>
+          <Banner kind="info">{redact(view.message)}</Banner>
+          <div className={css.hint}>{t('probe.unsupportedHint')}</div>
+        </>
+      )}
+      {view !== null && (view.tone === 'ok' || view.tone === 'warn') && (
         <>
           <Banner kind="ok">{redact(view.message)}</Banner>
           {view.hint !== undefined && <Banner kind="warn">{redact(view.hint)}</Banner>}

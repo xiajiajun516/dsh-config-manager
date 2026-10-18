@@ -51,7 +51,7 @@ import type { RetentionPolicy } from './retention-policy.ts';
 import { hashSection, loadSyncState, resolveDeviceIdentity, saveSyncState } from './sync-state.ts';
 import type { PendingMerge, SyncState } from './sync-state.ts';
 import type { EncryptedCredentials, SyncProbeResult, SyncSnapshot, SyncSnapshotMeta, SyncTransport } from './transport.ts';
-import { isEncryptedSections, SyncTransportError } from './transport.ts';
+import { isEncryptedSections, PROBE_UNSUPPORTED_CODE, SyncTransportError } from './transport.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
@@ -1376,7 +1376,8 @@ export class SyncEngine {
   async probe(): Promise<SyncProbeResult> {
     const probe = this.transport.probe;
     if (typeof probe !== 'function') {
-      throw new SyncTransportError(this.msg('sync.probeUnsupported'), { kind: 'client', retryable: false });
+      // 带稳定错误码：路由/UI 据此把它当**能力边界**（中性提示）而不是「操作失败」
+      throw new SyncTransportError(this.msg('sync.probeUnsupported'), { kind: 'client', retryable: false, code: PROBE_UNSUPPORTED_CODE });
     }
     return await probe.call(this.transport);
   }

@@ -96,6 +96,8 @@ export const zh = {
   'sync.webdav.collectionCreateFailed': '创建远端目录失败（HTTP {status}）：{path}',
   // ---------- cloud-sync 借鉴项 ⑥：设备身份 ----------
   'sync.deviceNameFallback': '未命名设备',
+  // ---------- git 通道连通性探针（cloud-sync 借鉴项 ②，补齐四通道） ----------
+  'sync.git.probeOk': '连接正常（远端可达、凭据可用）',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -164,6 +166,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.webdav.collectionCreated': 'Created the remote directory automatically: {path}',
   'sync.webdav.collectionCreateFailed': 'Failed to create the remote directory (HTTP {status}): {path}',
   'sync.deviceNameFallback': 'Unnamed device',
+  'sync.git.probeOk': 'Connection OK (remote reachable, credentials accepted)',
 };
 
 registerMessageCatalog({ id: 'sync-domain', zh, en });

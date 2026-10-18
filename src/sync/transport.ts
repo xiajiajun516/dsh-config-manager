@@ -172,6 +172,14 @@ export interface SyncTransportErrorOptions {
   /** HTTP 状态码（webdav 通道；git 通道无） */
   status?: number;
   cause?: unknown;
+  /**
+   * 稳定的**机器可判定**错误码（可选）。
+   *
+   * 为什么不用 message 判：文案会随语言与措辞变，路由/UI 需要的是「这是哪一种情况」。
+   * 当前唯一使用点 = `probe-unsupported`（该通道没实现连通性自检 ⇒ 这是**能力边界**，不是故障，
+   * 界面必须按中性提示渲染而不是红色「操作失败」）。
+   */
+  code?: string;
 }
 
 /**
@@ -183,6 +191,7 @@ export class SyncTransportError extends Error {
   readonly kind: SyncTransportErrorKind;
   readonly retryable: boolean;
   readonly status: number | undefined;
+  readonly code: string | undefined;
 
   constructor(message: string, opts: SyncTransportErrorOptions = {}) {
     super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
@@ -190,12 +199,20 @@ export class SyncTransportError extends Error {
     this.kind = opts.kind ?? 'unknown';
     this.retryable = opts.retryable ?? RETRYABLE_KINDS.includes(this.kind);
     this.status = opts.status;
+    this.code = opts.code;
   }
 }
 
 /** 是否为同步传输层错误（跨通道统一判定） */
 export function isSyncTransportError(err: unknown): err is SyncTransportError {
   return err instanceof SyncTransportError;
+}
+
+/** 该通道**不提供**连通性自检（能力边界，不是故障）：路由/UI 据此改用中性提示。 */
+export const PROBE_UNSUPPORTED_CODE = 'probe-unsupported';
+
+export function isProbeUnsupported(err: unknown): boolean {
+  return err instanceof SyncTransportError && err.code === PROBE_UNSUPPORTED_CODE;
 }
 
 /** 是否值得重试：只有带可重试分类的传输层错误才重试；未知错误一律不重试。 */

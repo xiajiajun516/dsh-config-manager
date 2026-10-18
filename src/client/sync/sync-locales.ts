@@ -523,6 +523,9 @@ export const zh = {
   'probe.hint': '只读自检：凭据 / 端点 / 目标容器 / 目录可达。WebDAV 通道可能幂等创建上级目录（那正是它要修的故障）；不会推送或改动任何快照。',
   'probe.createdCollections': '已在远端自动创建目录：{list}',
   'probe.snapshotCount': '远端现有快照：{count} 份',
+  // 「不支持自检」= 能力边界（不是故障）：中性提示 + 一句解释，绝不显示「操作失败」
+  'probe.unsupported': '该通道不提供连通性自检',
+  'probe.unsupportedHint': '这是能力边界，不是故障：该通道的同步功能不受影响，只是没有自检这项能力。',
   // ---- cloud-sync 借鉴项 ⑥：快照的推送方设备（旧快照没有该字段 → 不显示设备行）----
   'syncflow.snapshotDevice': '由 {device} 推送',
 } as const;
@@ -1028,6 +1031,9 @@ export const en: Record<keyof typeof zh, string> = {
   'probe.hint': 'Read-only self-check: credentials / endpoint / target container / directory reachability. The WebDAV channel may create the parent directory (that is the failure it fixes); no snapshot is pushed or changed.',
   'probe.createdCollections': 'Created remote directories automatically: {list}',
   'probe.snapshotCount': 'Snapshots on the remote: {count}',
+  // "Unsupported" is a capability boundary, not a failure: neutral wording, never "operation failed"
+  'probe.unsupported': 'This channel does not offer a connectivity self-check',
+  'probe.unsupportedHint': 'This is a capability boundary, not a failure: syncing on this channel is unaffected — it simply has no self-check.',
   // ---- cloud-sync borrowing ⑥: device that pushed each snapshot (old snapshots have no such field, so no device line is shown) ----
   'syncflow.snapshotDevice': 'Pushed by {device}',
 };

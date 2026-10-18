@@ -312,6 +312,13 @@ export interface SyncProbeSuccess {
 export interface SyncProbeFailure {
   ok: false
   error: string
+  /**
+   * **能力边界标记**：该通道不提供连通性自检（传输层未实现 probe）。
+   *
+   * 与故障**严格区分**：true = 这个通道没有这项能力（中性提示，同步功能不受影响）；
+   * 缺省/undefined = 真的没连通（按故障展示）。界面据此选 info 而不是「操作失败」。
+   */
+  unsupported?: boolean
 }
 
 export type SyncProbeResult = SyncProbeSuccess | SyncProbeFailure

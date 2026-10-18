@@ -35,7 +35,7 @@ import {
   SyncTransportError, withSyncRetry,
 } from '../transport.ts';
 import type {
-  SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
+  SyncProbeResult, SyncRetryOptions, SyncSnapshot, SyncSnapshotMeta, SyncTransport, SyncTransportErrorOptions,
 } from '../transport.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 import { atomicWriteFile } from '../../utils/atomic-write.ts';
@@ -408,6 +408,20 @@ export class GitTransport implements SyncTransport {
       return true;
     }
     throw new GitTransportError(this.msg('sync.git.repoUnreachable', { url: this.mask(this.o.repoUrl, null) }));
+  }
+
+  /**
+   * 连通性探针（cloud-sync 借鉴项 ②）：只读自检「远端可达 + 凭据可用」。
+   *
+   * 为什么复用 ls-remote：它不需要工作副本、不写任何本地状态，而且正是 clone/fetch 之前的那一步 ——
+   * 远端不可达 / 令牌失效 / SSH 主机密钥不信任都会在这里显式失败（checkIsPrivate 抛可操作文案），
+   * 因此结论与随后真正同步时的成败**同源**。
+   * 刻意**不**统计远端快照数：那要先 fetch 工作副本（对本地有写入），超出「只读自检」的范围 ——
+   * 宁可不报，也不报一个会误导的 0。
+   */
+  async probe(): Promise<SyncProbeResult> {
+    await this.checkIsPrivate();
+    return { message: this.msg('sync.git.probeOk') };
   }
 
   /* ---------------- 内部实现 ---------------- */
