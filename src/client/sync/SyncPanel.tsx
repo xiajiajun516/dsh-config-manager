@@ -61,9 +61,9 @@ import type {
 import { resolveSmartSync } from './sync-entry.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
-  githubPollMessage, isClientChannel, kindLabel, pullReportView, pushReportView, readStoredChannel,
+  githubPollMessage, isClientChannel, pushReportView, readStoredChannel,
   gistSessionsRiskKey,
-  initialSyncSections, normalizeSessionsLimit, severityLabel, syncSectionOptions, writeStoredChannel,
+  initialSyncSections, normalizeSessionsLimit, syncSectionOptions, writeStoredChannel,
 } from './sync-view.ts'
 import type {
   ChannelSyncState, GithubLoginPhase, SyncChannel, SyncSectionOption,
@@ -92,11 +92,10 @@ import { WorkDirCard } from './WorkDirCard.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { SyncLogList } from './SyncLogList.tsx'
 import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
-import { PluginInventoryCard } from './PluginInventoryCard.tsx'
 import { SyncProbeRow } from './SyncProbeRow.tsx'
 import { deviceLabel } from './remote-device-view.ts'
 import { PushPreviewCard } from './PushPreviewCard.tsx'
-import { MergePreviewEntry } from './MergePreviewView.tsx'
+import { MergePreviewView } from './MergePreviewView.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
 
@@ -176,9 +175,14 @@ interface SyncUiState {
   savingConfig: boolean
   busy: 'sync' | 'push' | 'pull' | 'rollback' | null
   pushReport: SyncPushReport | null
-  pullReport: SyncPullReport | null
   /** P0-②：push 前只读预览弹窗（preview 结果 + 打开状态；非敏感，切 tab/刷新不丢） */
   pushPreview: PushPreviewSlice
+  /**
+   * 拉取报告（**仅作 run-store 切片的镜像字段**保留）：拉取的 UI 路径已整体移除
+   * （按钮 / runPull / pullView / 报告弹窗 / pullReportView import 全部删除），
+   * 此字段只为满足 SyncStoreSlice 的结构契约；彻底删除需同步改 run-store.ts（已报 lead）。
+   */
+  pullReport: SyncPullReport | null
   /** 一键同步差异确认会话（POST /sync/sync 结果；非空时渲染 SyncConfirmView） */
   confirmSession: SyncStartResponse | null
   /** 一键同步差异确认的逐项决策（adopted/resolution；与 confirmSession 生命周期绑定，切 tab/刷新不丢） */
@@ -293,8 +297,7 @@ function initFromStore(): SyncUiState {
     busy: s.busy,
     savingConfig: s.savingConfig,
     pushReport: s.pushReport,
-    pullReport: s.pullReport,
-    pushPreview: s.pushPreview ?? { preview: null, open: false },
+      pushPreview: s.pushPreview ?? { preview: null, open: false },
     confirmSession: s.confirmSession,
     confirmDecisions: s.confirmDecisions,
     lastRestoreId: s.lastRestoreId,
@@ -320,7 +323,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    * 方案 A：一键同步自动分派命中合并路径时的**受控展开种子**。
    * preview = 那一次只读请求的结果（视图不再二次拉远端快照）；signal 变化 = 重建视图（旧裁决作废）。
    */
-  const [mergeSeed, setMergeSeed] = useState<{ preview: MergePreviewResponse | null; signal: number } | null>(null)
+  const [mergeSeed, setMergeSeed] = useState<{ channel: SyncChannel; preview: MergePreviewResponse } | null>(null)
+  /** 合并裁决执行中（apply 在途）→ 让弹窗 busy，拒绝 Esc/遮罩关闭 */
+  const [mergeApplying, setMergeApplying] = useState(false)
   /** 同步分区选择弹窗开关（瞬态 UI：模式与勾选在弹窗内即时生效并持久化，关闭即完成） */
   const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
   /**
@@ -874,7 +879,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
   /** P0-②：push 前只读预览（弹窗确认流程第一步）——不写远端，只展示「将推送什么」。 */
   const runPushPreview = async (): Promise<void> => {
-    patch({ busy: 'push', pushReport: null, pullReport: null })
+    patch({ busy: 'push', pushReport: null })
     try {
       // 预览前先把加密密码落库（用户不必手动保存；失败只提示，不阻断预览）
       await persistEncryptPassword()
@@ -889,7 +894,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
 
   /** P0-②：确认弹窗里点「确认推送」→ 真正推送（复用既有 push 语义）。 */
   const runPush = async (): Promise<void> => {
-    patch({ busy: 'push', pushReport: null, pullReport: null })
+    patch({ busy: 'push', pushReport: null })
     try {
       // 推送前先把加密密码落库（下次推送不必重输）
       await persistEncryptPassword()
@@ -914,26 +919,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     } catch (err) {
       patch({ busy: null })
       toast.error(t('toast.pushFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
-    }
-  }
-
-  const runPull = async (): Promise<void> => {
-    patch({ busy: 'pull', pullReport: null, pushReport: null })
-    try {
-      // 解密密码（可选）：先落库再拉取，下次不必重输。留空时由 Host 用本机凭据库里
-      // 已保存的密码 —— 且只在远端快照确实加密时才会被使用（engine.prepareSnapshot 判定）。
-      await persistDecryptPassword()
-      const decrypt =
-        chState.decryptPassword !== '' ? { decryptPassword: chState.decryptPassword } : {}
-      const report = await api.pull({ ...payload(), ...decrypt })
-      patch({ busy: null, pullReport: report, token: '', webdavPassword: '' })
-      patchChannel({ decryptPassword: '' })
-      // 必须按 report.ok 分流（与 runPush 同口径）：校验不通过时宿主仍回 HTTP 200 + ok:false
-      if (report.ok) toast.ok(t('toast.pullDone'))
-      else toast.error(t('toast.pullFailed'))
-    } catch (err) {
-      patch({ busy: null })
-      toast.error(t('toast.pullFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
     }
   }
 
@@ -1078,7 +1063,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       decryptPassword: stateRef.current.byChannel[channel].decryptPassword,
     })
     if (smart.kind === 'merge') {
-      setMergeSeed((cur) => ({ preview: smart.preview, signal: (cur?.signal ?? 0) + 1 }))
+      setMergeSeed({ channel, preview: smart.preview })
       return
     }
     if (smart.kind === 'upToDate') { toast.ok(t('syncflow.upToDate')); return }
@@ -1141,7 +1126,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   /** 激活通道的远端就绪态（弹窗 / 页面级判断用） */
   const remoteReady = remoteReadyOf(state.channel)
   const pushView = pushReportView(state.pushReport, uiT)
-  const pullView = pullReportView(state.pullReport, uiT)
   const githubView = computeGithubLoginView(
     state.github.phase, state.github.userCode, state.github.verificationUri, state.github.error, uiT,
   )
@@ -1239,6 +1223,11 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
               </Button>
+              {/* 测试连接（只读自检）：与两个主操作同一行、排在最后；结果走 toast（不再占页面高度） */}
+              <SyncProbeRow
+                t={t} api={api} presentation="action" remoteReady={ready} busy={busy}
+                body={buildSyncChannelBody({ ...formOf(state), channel })}
+              />
             </div>
             {/* 选择历史快照（该通道的远端快照；缺省 = 最新）。
                 支持点击/展开即刷新，另有主动刷新按钮 —— 两个入口都保留（v1 行为不变）。 */}
@@ -1278,10 +1267,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                     : <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>}
                 </Button>
               </span>
-              {/* 方案 A：拉取差异预览从主操作降级为「针对所选快照的只读动作」，与刷新同一行 */}
-              <span className={css.pickerAction}>
-                <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPull || githubBusy} onClick={() => { switchChannel(channel); void runPull() }}>{computeSyncButtons(state.busy, ready, uiT).pullLabel}</Button>
-              </span>
             </div>
             {/* 空态独立成行（移出 label）：label 高度 = fieldLabel + select，
                 刷新按钮与之底部对齐即真正同一行，不再被 hint 顶高错位 */}
@@ -1298,21 +1283,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               onToggleAutosync={(enabled) => { void toggleAutosync(channel, enabled) }}
               onUpdateInterval={(interval) => { void updateAutosyncInterval(channel, interval) }}
             />
-            {/* cloud-sync 借鉴项 ②：测试连接（只读自检；结论/失败都就地展示，不弹窗）。
-                方案 A：从动作行下方移到卡片底部 —— 它是**诊断**，不与两个主操作抢注意力。 */}
-            <SyncProbeRow t={t} api={api} body={buildSyncChannelBody({ ...formOf(state), channel })} remoteReady={ready} busy={busy} />
           </Card>
-        )}
-        {/* T-ui-merge（方案 A）：裁决视图只在**一键同步自动分派**命中时受控展开（主行无独立入口），
-            预览复用那一次 /sync/merge-preview 的结果（不二次请求）。 */}
-        {ready && (
-          <MergePreviewEntry
-            api={api} t={t} busy={busy} hideEntryButton
-            openSignal={mergeSeed?.signal ?? 0} initialPreview={mergeSeed?.preview ?? null}
-            channelPayload={() => buildSyncChannelBody({ ...formOf(stateRef.current), channel })}
-            sectionName={(id) => sectionName(id as SectionId)} decryptPassword={cs.decryptPassword}
-            onApplied={() => { void loadStatus() }} onRolledBack={() => { void loadStatus() }}
-          />
         )}
         {/* v3（P-IA-7 / §2.2-6）：加密与解密**属于这一条通道**，因此渲染在它自己的卡里。
             此前这两张卡挂在页面级、绑定一个被「点某张卡的按钮」悄悄切换的隐式当前通道 ——
@@ -1342,22 +1313,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         {/* issue #59：远端快照列表不完整时的常驻告知（push 报成功但列表为空时，这里是唯一线索）。
             v3：跟着**它所属的通道**走（此前挂页面级 = 显示的是隐式当前通道的列表）。 */}
         {ready && <UnreadableSnapshotsBanner items={cs.unreadableSnapshots} t={t} />}
-        {/* ⑤ cloud-sync 借鉴项：远端依赖清单（**只读**，随时可看，不绑定本次同步）。
-            与「同步差异」的分工：差异是「这一次会怎么做」，清单是「远端声明 vs 本机现状」的常驻对照，
-            并把 installed（在 node_modules 里）与 enabled（在 dsh.profile.bundles 里）分开判定。
-            v3 IA 纪律：它属于**这条通道**（远端声明来自该通道快照），因此渲染在通道卡内，
-            请求体显式带 channel，不读隐式当前通道。 */}
-        {ready && (
-          <PluginInventoryCard
-            t={t}
-            api={api}
-            body={buildSyncChannelBody({ ...formOf(state), channel })}
-            remoteReady={ready}
-            snapshotId={cs.selectedSnapshotId}
-            decryptPassword={cs.decryptPassword}
-            busy={busy}
-          />
-        )}
         </Collapse>
       </>
     )
@@ -1527,57 +1482,37 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             </Modal.Footer>
           </Modal>
 
-          {/* 拉取差异预览弹窗（Radix Modal） */}
+          {/* 方案 A：一键同步命中合并路径 → **弹窗内**裁决（页面不再内联）。
+              预览来自那一次 /sync/merge-preview（initialPreview，不二次请求）；
+              内容：.mergeScroll 限高内滚 + Modal.Body scroll —— 564×720 画布下不撑出宿主面板滚动条。 */}
           <Modal
-            open={state.pullReport !== null && pullView !== null}
-            onClose={() => { patch({ pullReport: null }) }}
-            title={t('pull.title')}
-            cardStyle={{ width: 'min(720px, 100%)', maxHeight: '85vh' }}
+            open={mergeSeed !== null}
+            onClose={() => { setMergeSeed(null) }}
+            title={t('merge.title')}
+            wide
+            busy={state.busy !== null || mergeApplying}
+            cardStyle={{ width: 'min(820px, 100%)', maxHeight: '85vh' }}
           >
             <Modal.Header
-              title={t('pull.title')}
+              title={t('merge.title')}
               closeLabel={t('common.close')}
-              onClose={() => { patch({ pullReport: null }) }}
+              onClose={() => { setMergeSeed(null) }}
+              closeDisabled={state.busy !== null || mergeApplying}
             />
-            <Modal.Body scroll style={{ maxHeight: '70vh' }}>
-              {pullView !== null && (<>
-                <Banner kind={pullView.kind === 'ok' ? 'info' : pullView.kind === 'empty' ? 'ok' : 'error'}>
-                  {pullView.headline}
-                </Banner>
-                {pullView.summary !== null && (
-                  <>
-                    <div className={css.statRow}>
-                      <Badge kind="info">{t('change.total', { total: pullView.summary.total })}</Badge>
-                      {pullView.summary.error > 0 && <Badge kind="error">{severityLabel('error', uiT)} × {pullView.summary.error}</Badge>}
-                      {pullView.summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', uiT)} × {pullView.summary.warning}</Badge>}
-                      {pullView.summary.info > 0 && <Badge kind="info">{severityLabel('info', uiT)} × {pullView.summary.info}</Badge>}
-                    </div>
-                    {pullView.summary.needsReview && <Banner kind="warn">{t('pull.needsReview')}</Banner>}
-                    <div className={css.pullScroll}>
-                      <div className={css.reportList}>
-                        {pullView.summary.items.map((c) => (
-                          <div key={c.id} className={css.statRow}>
-                            <span className={css.kindTag}>{kindLabel(c.kind, uiT)}</span>
-                            <Badge kind={c.severity === 'error' ? 'error' : c.severity === 'warning' ? 'warn' : 'info'}>
-                              {severityLabel(c.severity, uiT)}
-                            </Badge>
-                            <span>{c.description}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-                {pullView.previewHint !== '' && <Banner kind="info">{pullView.previewHint}</Banner>}
-              </>)}
+            <Modal.Body scroll style={{ maxHeight: '72vh' }}>
+              {mergeSeed !== null && (
+                <MergePreviewView
+                  api={api} t={t} busy={state.busy !== null} showTitle={false}
+                  initialPreview={mergeSeed.preview}
+                  channelPayload={() => buildSyncChannelBody({ ...formOf(stateRef.current), channel: mergeSeed.channel })}
+                  sectionName={(id) => sectionName(id as SectionId)}
+                  decryptPassword={stateRef.current.byChannel[mergeSeed.channel].decryptPassword}
+                  onApplyingChange={setMergeApplying}
+                  onApplied={() => { void loadStatus() }} onRolledBack={() => { void loadStatus() }}
+                />
+              )}
             </Modal.Body>
-            <Modal.Footer>
-              <Button variant="primary" onClick={() => { patch({ pullReport: null }) }}>
-                {t('common.close')}
-              </Button>
-            </Modal.Footer>
           </Modal>
-
           {/* 一键同步差异确认弹窗（Radix Modal；SyncConfirmView 内含取消/确认按钮） */}
           <Modal
             open={state.confirmSession !== null}

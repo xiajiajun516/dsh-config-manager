@@ -100,10 +100,10 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   // 1580 → 1585（t3：英文界面零中文）。增量是**装配接线**：分区选择弹窗新增 uiT 注入
   //   （分区描述 / 分组说明改为字典键后，弹窗内需要 ui 字典翻译器才能解析；判定逻辑在 ui 层）。
   //   同一轮把 11 处 toast 的「全角冒号 + 详情」拼接改为 t('common.labelSeparator')，行数不变。
-  // 1585 → 1595（cloud-sync 借鉴项 ②⑤⑥ + 远程合并裁决入口）：新增的四个组件都已各自成文件
-  //   （SyncProbeRow / PluginInventoryCard / MergePreviewEntry + 产物库那侧的 deviceLabel），
-  //   主文件只多出 import、两处挂载点与一处「快照标签追加设备名」的拼接 —— 没有可再下沉的纯逻辑
-  //   （测试连接/清单的判定与渲染规则都在 ui 层，见 probe-view.ts / plugin-inventory-view.ts）。
+  // 1585 → 1595（cloud-sync 借鉴项 ②⑥ + 远程合并裁决入口）：新增的组件各自成文件
+  //   （SyncProbeRow / MergePreviewEntry + 产物库那侧的 deviceLabel），
+  //   主文件只多出 import、挂载点与一处「快照标签追加设备名」的拼接 —— 没有可再下沉的纯逻辑
+  //   （测试连接/设备名的判定与渲染规则在 ui 层，见 probe-view.ts / remote-device-view.ts）。
   // 1595 → 1620（方案 A：同步页按钮瘦身）。增量逐项都是**装配**，且已按「先抽出去」外移：
   //   · 一键同步分派：决策与编排分别下沉 merge-view.decideSyncEntry / sync-entry.resolveSmartSync
   //     （两者都有 node 单测），主文件只留 switchChannel + 一次 resolveSmartSync + 三个分支；
@@ -111,7 +111,13 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   //     openSignal / hideEntryButton / initialPreview），主文件只多一个 state 与一次挂载；
   //   · 按钮瘦身本身是**净减**（主行 3 → 2 个、拉取降级到快照行、测试连接下移到卡片底部）。
   //   剩下的全是 React 状态与 JSX 位置，没有可再下沉的纯逻辑，故按仓库惯例抬上限并记录理由。
-  assert.ok(viewLines <= 1620, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
+  // 1620 → **1560**（三项 UI 收口：测试连接并入动作行、移除拉取差异预览、一键同步改弹窗）。
+  //   这一轮是**净减**，因此按棘轮本意把上限**压回去**（而不是继续抬）：
+  //   · 测试连接：结果走 toast，页面不再有它的一整块内联横幅（组件内 presentation='action' 只出按钮）；
+  //   · 拉取差异预览：按钮、runPull、pullView、报告弹窗、pullReportView import 全部删除；
+  //   · 一键同步：裁决视图从页面内联改为**弹窗**装配（Modal + 一次 MergePreviewView），
+  //     页面侧只多一个 mergeSeed 状态、一个 mergeApplying 状态与一个弹窗块。
+  assert.ok(viewLines <= 1560, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
 })
 
 test('t42: 通道卡必须是渲染函数（内联组件 = 每次渲染新类型 → 子树重挂、Select 展开态清零）', () => {

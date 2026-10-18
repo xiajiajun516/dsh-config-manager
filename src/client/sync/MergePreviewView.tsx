@@ -54,6 +54,13 @@ export interface MergePreviewViewProps {
    * 视图由一键同步自动展开 —— 因此**必须**在视图内留一个收起出口（不提供则不渲染该按钮）。
    */
   onClose?: () => void
+  /** 是否渲染自带标题（默认 true；放进弹窗时由 Modal 提供标题，避免同一个标题出现两次） */
+  showTitle?: boolean
+  /**
+   * 执行中状态上抛（apply 在途 = true）。弹窗用它把 Modal 置 busy，从而在执行中拒绝
+   * Esc / 遮罩关闭 —— 关掉会让用户看不到结果，但请求仍在继续。
+   */
+  onApplyingChange?: (applying: boolean) => void
 }
 
 /**
@@ -64,6 +71,7 @@ export interface MergePreviewViewProps {
  */
 export function MergePreviewView({
   api, t, channelPayload, sectionName, decryptPassword, busy = false, onApplied, onRolledBack, initialPreview, onClose,
+  showTitle = true, onApplyingChange,
 }: MergePreviewViewProps) {
   /** 预置种子（只读：挂载时用它初始化，不在后续渲染里改状态） */
   const seed = initialPreview ?? null
@@ -112,6 +120,7 @@ export function MergePreviewView({
   /** 执行合并（写动作，过宿主 mutation gate）；结果如实展示，包括 pendingConflicts。 */
   const apply = async (): Promise<void> => {
     setApplying(true)
+    onApplyingChange?.(true)
     setError(null)
     try {
       const report = await api.applyMerge({
@@ -128,6 +137,7 @@ export function MergePreviewView({
       toast.error(t('merge.toast.applyFailed'))
     } finally {
       setApplying(false)
+      onApplyingChange?.(false)
     }
   }
 
@@ -156,7 +166,7 @@ export function MergePreviewView({
 
   return (
     <Card>
-      <SectionTitle title={t('merge.title')} info={<InfoHint text={t('merge.subtitle')} label={t('common.infoHint')} />} />
+      {showTitle && <SectionTitle title={t('merge.title')} info={<InfoHint text={t('merge.subtitle')} label={t('common.infoHint')} />} />}
 
       <div className={css.statRow}>
         {summary.map((item) => (
