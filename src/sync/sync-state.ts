@@ -3,6 +3,7 @@
  * 记录上次同步时间与各分区内容 hash，供变更检测（与远端快照对比决定是否重传）。
  * 纯逻辑 + 可注入 fs；不触碰真实 ~/.dsh。
  */
+import { randomUUID } from 'node:crypto';
 import { sha256Hex } from '../utils/hashing.ts';
 import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 import { zhMsg } from '../core/messages.ts';
@@ -10,6 +11,8 @@ import type { MsgFunc } from '../core/messages.ts';
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { createSnapshotFs, joinFs } from './fs.ts';
 import type { SnapshotFs } from './fs.ts';
+// 侧效应导入：注册同步域追加消息目录（sync.deviceNameFallback 等 ⑥ 新键必须能解析，绝不露裸键名）
+import './messages.ts';
 
 export const SYNC_STATE_SCHEMA_VERSION = 3;
 /**
@@ -26,6 +29,25 @@ export const SYNC_STATE_FILE = 'sync-state.json';
 export interface SyncSectionState {
   hash: string;
   updatedAt: string; // ISO-8601 UTC
+}
+
+/**
+ * 待裁决的合并状态（基线纪律，2026-10）。
+ *
+ * 非空 = 上一次三方合并**仍有未裁决的冲突**，因此 lastSnapshotId 刻意**不推进**：
+ * 远端的最新快照下一轮仍会被当作「比基线新」而重新合并，冲突因此重新出现，直到用户裁决完。
+ * 若在冲突未裁决时就推进基线，冲突内容会在下一轮静默消失（远端那一版改动永远不再被讨论）。
+ *
+ * 纯可选字段：**不提升 SYNC_STATE_SCHEMA_VERSION**（旧文件缺该字段 → 读取形状逐键不变；
+ * 旧版本代码读到新文件也只是忽略它）。
+ */
+export interface PendingMerge {
+  /** 冲突所针对的**远端**快照 id（基线指针此刻仍停在更早的那一个）。 */
+  remoteSnapshotId: string;
+  /** 仍未裁决的分区 id（非空；空 = 没有待裁决内容，调用方应清除该字段）。 */
+  sections: SectionId[];
+  /** 该待裁决状态**首次**出现的时刻（ISO-8601 UTC；跨轮保留首次时间，便于界面讲「挂了多久」）。 */
+  since: string;
 }
 
 /** sync-state.json 结构 */
@@ -57,6 +79,19 @@ export interface SyncState {
    * 本机若又出现该会话的实体，对应墓碑会被撤销（有实体 = 没删）。
    */
   deletedSessions?: string[];
+  /**
+   * cloud-sync 借鉴项 ⑥：本设备的**稳定**同步身份（首次推送时生成并持久化）。
+   *
+   * deviceId = 随机 UUID（换主机名/改机器名都不变，历史列表据此认出「同一台设备」）；
+   * deviceName = 人类可读名（缺省取主机名）。缺省 = 旧文件 / 从未推送（不猜）。
+   */
+  deviceId?: string;
+  deviceName?: string;
+  /**
+   * 基线纪律（2026-10）：未裁决冲突记录。非空 = 基线指针**刻意停在旧值**，
+   * 让冲突在下一轮重新出现（详见 PendingMerge）。
+   */
+  pendingMerge?: PendingMerge;
 }
 
 /** 文件类分区判定：{ version: 1, files: [...] }（duck-typing，与 JSON 分区区分） */
@@ -114,6 +149,22 @@ function readStringArray(raw: unknown): string[] {
   return out;
 }
 
+/**
+ * 读取可选 pendingMerge（基线纪律）。
+ *
+ * 形状不符（损坏/被篡改/分区清单为空）→ undefined = 按「无待裁决冲突」处理：
+ * 这里**绝不抛错**（一个诊断字段不该让 loadSyncState 整体失败），也绝不把空清单当成
+ * 「所有冲突都解决了」—— 空清单只是没有内容可记录。
+ */
+function readPendingMerge(raw: unknown): PendingMerge | undefined {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o['remoteSnapshotId'] !== 'string' || typeof o['since'] !== 'string') return undefined;
+  const sections = readStringArray(o['sections']);
+  if (sections.length === 0) return undefined;
+  return { remoteSnapshotId: o['remoteSnapshotId'], sections: sections as SectionId[], since: o['since'] };
+}
+
 /** 读取同步状态；文件不存在 → 返回缺省空状态（从未同步）。
  * 旧版本文件（v1/v2）→ 在内存中迁移到当前版本（见 SYNC_STATE_SUPPORTED_VERSIONS），
  * 不在磁盘上就地升级（首次 saveSyncState 时才写回新版本）。 */
@@ -164,6 +215,11 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
     // 绝不采用一个来路不明的目录名。
     ancestorId: rawAncestorId ?? (fileVersion < SYNC_STATE_SCHEMA_VERSION ? rawLastSnapshotId : ''),
     lastSnapshotId: rawLastSnapshotId,
+    // ⑥：只有文件里确实写过才回填（缺席 = 从未记录 → 下次推送才生成，绝不在这里凭空造一个 id）
+    ...(typeof obj['deviceId'] === 'string' && obj['deviceId'] !== '' ? { deviceId: obj['deviceId'] } : {}),
+    ...(typeof obj['deviceName'] === 'string' && obj['deviceName'] !== '' ? { deviceName: obj['deviceName'] } : {}),
+    // 基线纪律：同样「写过才回填」—— 缺席 = 无待裁决冲突（旧文件读回形状逐键不变）
+    ...(readPendingMerge(obj['pendingMerge']) !== undefined ? { pendingMerge: readPendingMerge(obj['pendingMerge'])! } : {}),
   };
   const t = obj['transport'];
   if (t !== undefined) {
@@ -173,6 +229,29 @@ export async function loadSyncState(dir: string, fsx: SnapshotFs = createSnapsho
     state.transport = { type: (t as { type: string }).type, ref: (t as { ref: string }).ref };
   }
   return state;
+}
+
+/**
+ * 解析（必要时生成并持久化）本设备的同步身份（cloud-sync 借鉴项 ⑥）。
+ *
+ * - deviceId 一旦生成就持久化在 sync-state.json → 历史列表能认出「同一台设备」；
+ * - deviceName 缺省取主机名，取不到（容器/无主机名）时用字典里的兜底文案，绝不写空串；
+ * - **只在首次生成时写盘**（已有 id → 纯读，不产生额外写）。
+ */
+export async function resolveDeviceIdentity(
+  dir: string,
+  hostName: string,
+  fsx: SnapshotFs = createSnapshotFs(),
+  msg: MsgFunc = zhMsg,
+): Promise<{ id: string; name: string }> {
+  const state = await loadSyncState(dir, fsx, msg);
+  const trimmedHost = typeof hostName === 'string' ? hostName.trim() : '';
+  const name = (typeof state.deviceName === 'string' && state.deviceName !== '' ? state.deviceName : '')
+    || (trimmedHost !== '' ? trimmedHost : msg('sync.deviceNameFallback'));
+  if (typeof state.deviceId === 'string' && state.deviceId !== '') return { id: state.deviceId, name };
+  const id = randomUUID();
+  await saveSyncState(dir, { ...state, deviceId: id, deviceName: name }, fsx);
+  return { id, name };
 }
 
 /** 保存同步状态（自动创建目录） */

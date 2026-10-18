@@ -31,11 +31,12 @@ import type { SyncTransportType as HostSyncTransportType } from '../../sync/sync
 // 云端点通道的**回传视图**（只带 secretStored 布尔，绝无密钥值）：类型直接取宿主声明处，
 // type-only 引用打包时被擦除，不会把 sync-config.ts 的 node:fs 带进浏览器产物。
 import type { CloudGistChannelView, CloudS3ChannelView } from '../../sync/sync-config.ts';
-import type { PlanItemKind, SessionFormatDisposition } from '../../core/types.ts';
+import type { PathMapping, PlanItemKind, SessionFormatDisposition } from '../../core/types.ts';
 import type { SectionId } from '../../schema/types.ts';
 import type { ConsultReport } from '../../core/migration-consult.ts';
 import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import { CONFIG_MANAGER_API, SYNC_API } from '../common/routes.ts';
+import type { InventoryResult } from '../../core/plugin-inventory.ts'
 import type { ExportPreviewResponse } from '../api.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { repoCreateBody } from '../../ui/sync-repository-picker.ts';
@@ -286,6 +287,52 @@ export interface SyncPullPayload extends SyncPushPayload {
   decryptPassword?: string;
 }
 
+/* ---------------------------------------------------------------- 连通性自检（cloud-sync 借鉴项 ②） */
+
+/**
+ * POST /sync/probe 结果。
+ *
+ * **失败也是正常返回**（HTTP 200 + \`ok:false\`）：测试连接是**预期会失败**的诊断动作，
+ * 用 5xx 表达会被界面当成基础设施崩溃。\`message\` / \`hint\` 由通道层本地化并脱敏后原样带回。
+ */
+export interface SyncProbeSuccess {
+  ok: true
+  transport: string
+  /** 结论（可直接展示的成功文案） */
+  message: string
+  /** 附加提醒（例如「该 S3 兼容端点应把 region 填成 xxx」），有值时界面按 warn 级展示 */
+  hint?: string
+  /** 远端已有快照数（取得时回传） */
+  snapshotCount?: number
+  /** 自检过程中**自动创建**的远端目录（webdav 幂等 MKCOL；界面须逐条说明，绝不静默写远端） */
+  createdCollections?: string[]
+}
+
+/** 自检失败（诊断动作的预期结果，不是异常） */
+export interface SyncProbeFailure {
+  ok: false
+  error: string
+}
+
+export type SyncProbeResult = SyncProbeSuccess | SyncProbeFailure
+
+/* ---------------------------------------------------------------- 远端依赖清单（⑤ cloud-sync 借鉴项） */
+
+/**
+ * POST /sync/inventory 请求体：**与 /sync/download 同形**（宿主用同一个 prepareSync 解析通道配置），
+ * 另加可选的 snapshotId / decryptPassword（加密快照需要；密码仅内存传输，绝不落盘/落日志）。
+ */
+export type SyncInventoryPayload = SyncPullPayload;
+
+/**
+ * POST /sync/inventory 响应（**只读**）。
+ *
+ * \`available:false\` 不是错误状态：远端不可达时宿主照常返回本机事实，只把后端原因放进
+ * \`error\`（已脱敏）——界面必须靠 \`available\` 区分「远端没声明」与「这次没取到快照」。
+ * 字段语义的**单一事实源**是宿主内核 \`src/core/plugin-inventory.ts\`（此处 type-only 引用）。
+ */
+export type SyncInventoryResponse = InventoryResult & { ok: boolean };
+
 /* ---------------------------------------------------------------- 一键同步（方案 A） */
 
 /** GET /sync/snapshots-list 响应：远端历史快照列表（按 createdAt 倒序）。 */
@@ -311,6 +358,14 @@ export interface SyncSnapshotLite {
   sectionCount: number;
   platform: string;
   dshVersion: string;
+  /**
+   * cloud-sync 借鉴项 ⑥：推送方设备身份（宿主从快照 manifest 读出）。
+   * **旧快照没有这两个字段** —— 界面必须据此不显示设备行，绝不把 undefined 渲染成文案、
+   * 也不显示空串占位。
+   */
+  deviceName?: string;
+  /** 稳定设备 id（换主机名/改机器名都不变；用于认出「同一台设备」）。 */
+  deviceId?: string;
 }
 
 /** POST /sync/sync 请求体（一键同步第一步：拉取 → 差异确认会话）。 */
@@ -439,6 +494,111 @@ export interface SyncRollbackFailedItem {
   item: string;
   reason: string;
   manualHint?: string;
+}
+
+/* ---------------------------------------------------------------- 远程合并裁决（T-ui-merge） */
+
+/**
+ * 合并冲突成因（对齐宿主 src/sync/merge.ts 的 MergeConflictReason）。
+ * 未在本联合里的字符串照样可能从宿主回传 —— 界面侧一律经 merge-view.ts 的
+ * mergeReasonKey() 映射，未知值按 both-modified 措辞，**绝不渲染裸枚举**。
+ */
+export type MergeConflictReason =
+  | 'both-modified'
+  | 'modify-delete'
+  | 'delete-modify'
+  | 'no-ancestor'
+  | 'binary'
+  | 'format'
+  | 'array'
+  | 'section';
+
+/** 分区级合并决策（'conflict' = 双侧改动重叠，必须由用户裁决）。 */
+export type MergeSectionDecision = 'useRemote' | 'keepLocal' | 'merge' | 'skip' | 'conflict';
+
+/** 单条冲突的三列预览（已由宿主脱敏/序列化，界面负责截断）。 */
+export interface MergePreviewConflict {
+  /** 冲突位置：JSON 分区是 top-level key；FilesSection 是 relativePath。 */
+  path: string;
+  kind: 'key' | 'file';
+  reason?: MergeConflictReason;
+  localPreview: string;
+  remotePreview: string;
+  ancestorPreview: string;
+}
+
+/** 单个分区的合并预览。 */
+export interface MergePreviewSection {
+  id: SectionId;
+  decision: MergeSectionDecision;
+  /** 自动合并并入的变更点数量（仅自动合并成功时有意义） */
+  autoMerged?: number;
+  conflictCount: number;
+  conflicts: MergePreviewConflict[];
+}
+
+/** 预览摘要（可自动应用 / 待裁决 / 冲突条目 / 无变化）。 */
+export interface MergePreviewSummary {
+  auto: number;
+  review: number;
+  conflicts: number;
+  skipped: number;
+}
+
+/** POST /sync/merge-preview 请求体（只读；密码仅内存传输，绝不落盘/落日志）。 */
+export interface MergePreviewPayload {
+  /** 远端快照 id；缺省 = 最新 */
+  snapshotId?: string;
+  /** 解密密码（仅当远端快照加密时使用；缺省 = 已保存的 DECRYPT 凭据） */
+  decryptPassword?: string;
+  /** 跨机路径映射（与一键同步同一口径） */
+  pathMappings?: PathMapping[];
+}
+
+/** POST /sync/merge-preview 响应（只读三方合并结果）。 */
+export interface MergePreviewResponse {
+  ok: boolean;
+  snapshotId: string;
+  /** 是否存在共同基准快照（false = 退化为两方比较，双侧不一致一律按冲突） */
+  hasAncestor: boolean;
+  sections: MergePreviewSection[];
+  summary: MergePreviewSummary;
+  /** 失败/降级原因（仅在 ok=false 等场景出现） */
+  message?: string;
+}
+
+/** 单条裁决动作。 */
+export type MergeResolutionActionWire = 'keepLocal' | 'useRemote' | 'useMerged' | 'skip';
+
+/** 单条裁决：id = 分区 id（分区级）或 `分区id::冲突路径`（冲突级，见 merge-view.ts）。 */
+export interface MergeResolution {
+  id: string;
+  action: MergeResolutionActionWire;
+}
+
+/** POST /sync/apply-merge 请求体（写动作；过 mutation gate）。 */
+export interface MergeApplyPayload extends MergePreviewPayload {
+  resolutions: MergeResolution[];
+}
+
+/** POST /sync/apply-merge 响应（字段与 /sync/apply-items 同风格 + pendingConflicts）。 */
+export interface MergeApplyResponse {
+  ok: boolean;
+  applied: string[];
+  skipped: string[];
+  needsRestart?: boolean;
+  warnings: string[];
+  /** 执行前快照 id（界面一键回滚用） */
+  restoreId?: string;
+  /** 任一失败是否整体回滚 */
+  rolledBack?: boolean;
+  /** 整体回滚是否完整（false = 有项未恢复，见 warnings；缺省 = 旧宿主未回传） */
+  rollbackFull?: boolean;
+  /** 执行后仍待裁决的分区（下次同步仍会出现） */
+  pendingConflicts: SectionId[];
+  failed?: { itemId: string; message?: string }[];
+  ineffective?: { itemId: string; adapter: string; message?: string }[];
+  historyWriteError?: string;
 }
 
 /* ---------------------------------------------------------------- 自动同步 */
@@ -623,6 +783,30 @@ export class SyncApi {
   }
 
   /**
+   * cloud-sync 借鉴项 ②：连通性自检（**只读**）。
+   *
+   * 失败回 \`ok:false\` 而非抛错 —— 调用方必须按 \`result.ok\` 分流，把失败当**结论**展示，
+   * 不要落进 catch（否则「连不上」会被渲染成崩溃）。
+   */
+  async probe(payload: SyncPushPayload): Promise<SyncProbeResult> {
+    return postJson<SyncProbeResult>(SYNC_API.probe, payload, this.t, SYNC_OPTS);
+  }
+
+  /**
+   * ⑤ cloud-sync 借鉴项：远端依赖清单（**只读**）。
+   *
+   * 与 push/pull 的区别：它**不绑定本次同步操作** —— 任何时候都能算一张
+   * 「远端快照声明的插件 vs 本机现状」对照表，并把 installed（包在 node_modules 里）与
+   * enabled（在 dsh.profile.bundles 里）分开判定，半装单独标出。
+   *
+   * 远端不可达**不是 HTTP 错误**：宿主回 HTTP 200 + available:false + error（本地事实照常返回），
+   * 界面必须按 available 区分「远端没声明」与「这次没取到快照」。
+   */
+  async inventory(payload: SyncInventoryPayload): Promise<SyncInventoryResponse> {
+    return postJson<SyncInventoryResponse>(SYNC_API.inventory, payload, this.t, SYNC_OPTS);
+  }
+
+  /**
    * 分区条目清单（复用 /export-preview；**只读**，不写任何内容）。
    *
    * 用途：同步页的「逐会话勾选」需要单元清单（sessions 的每个会话目录 + 其所属工作区），
@@ -775,6 +959,26 @@ export class SyncApi {
   /** 一键回滚：按 restoreId 调用 backup→rollback（full=false 时 failed 列出未回滚项与人工提示） */
   async rollback(payload: { restoreId: string }): Promise<SyncRollbackResponse> {
     return postJson<SyncRollbackResponse>(SYNC_API.rollback, payload, this.t, SYNC_OPTS);
+  }
+
+  /**
+   * T-ui-merge：远程合并**只读**预览（三方合并 + 冲突清单 + 摘要），零写入。
+   *
+   * 与 /sync/sync 的区别：这里不做导入计划、不登记同步会话，只回答「远端与本地差在哪、
+   * 哪些分区需要我裁决」；密码只在请求体内传输（宿主绝不回传/落日志）。
+   */
+  async mergePreview(payload: MergePreviewPayload = {}): Promise<MergePreviewResponse> {
+    return postJson<MergePreviewResponse>(SYNC_API.mergePreview, payload, this.t, SYNC_OPTS);
+  }
+
+  /**
+   * T-ui-merge：按逐项裁决执行合并（写动作，宿主侧过 mutation gate）。
+   *
+   * 返回 pendingConflicts = 执行后**仍**待裁决的分区：界面据此告诉用户
+   * 「跳过 ≠ 已解决，下次同步仍会出现」，而不是把一次带 skip 的执行报成「已解决」。
+   */
+  async applyMerge(payload: MergeApplyPayload): Promise<MergeApplyResponse> {
+    return postJson<MergeApplyResponse>(SYNC_API.applyMerge, payload, this.t, SYNC_OPTS);
   }
 
   /** Phase 7 迁移前咨询（只读健康评分 + 建议）：对远端快照生成咨询报告。 */

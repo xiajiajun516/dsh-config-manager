@@ -28,9 +28,57 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **{{本版主题}}**：{{一句话中文主题}}
+> **本版主题**：**同步通道变得更能自我诊断、也更难互相踩踏 —— 一键测试连接、首次同步自动建好远端目录、两台设备同时写不再互相覆盖，跨机搬配置时也不再带上本机的 pnpm 路径**
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: **The sync channel now diagnoses itself and steps on itself less — a one-click connection test, automatic remote folder creation on first sync, no more clobbering when two devices write at once, and cross-machine configs that no longer carry this machine's pnpm paths**
+
+### 🆕 新增 · Added
+
+- **同步页可以「测试连接」**：不执行任何同步就能只读自检当前通道（凭据、端点、目标容器、远端目录），失败时直接给出可执行的下一步（例如告诉你区域该填哪个值），不用再靠猜。通道本身不支持自检时会如实说明，绝不显示一个假的「连接正常」。
+  **A "Test connection" button in the sync page**: a read-only self-check of the current channel (credentials, endpoint, target container, remote folder) without running any sync, and failures come with an actionable next step (for example which region value to use) instead of guesswork. Channels that cannot self-check say so honestly rather than showing a fake "connection OK".
+- **同步页新增「远端依赖清单」**：不用先跑一次同步，就能看到远端要求哪些插件、本机各自装到了哪一步，并把「包已经下载但没被启用」这种半装状态单独标出来，一眼看出新机器还差什么。
+  **A remote dependency inventory in the sync page**: without running a sync first you can see which plugins the remote expects, how far this machine got for each of them, and "downloaded but never enabled" is called out as its own half-installed state, so a fresh machine's missing pieces are obvious at a glance.
+- **同步历史里能看出快照是哪台机器推的**：历史条目现在带设备名（同一台设备换过主机名也认得出），多台机器互相推送时不再分不清来源。
+  **Sync history now shows which machine pushed a snapshot**: history entries carry the device name (the same device is still recognized after a hostname change), so multi-device pushes are no longer indistinguishable.
+- **同步前可以逐项看清单、逐项拍板**：改动本机之前先只读预览每个分区会发生什么——本机值、远端值与共同祖先并排对比，标明哪些改动能自动合并、哪些必须你决定；你可以对每个分区选择「保留本机 / 采用远端 / 采用自动合并 / 暂不处理」，没处理完的冲突会一直留着并在下次同步继续出现，不会被悄悄咽下去。
+  **Review and decide each merge item before anything changes**: a read-only preview shows, per section, the local, remote and common-ancestor values side by side, marks what can be merged automatically and what needs your call, and lets you choose per section between keeping local, taking remote, taking the automatic merge or leaving it for later — unresolved conflicts stay listed and come back on the next sync instead of being silently dropped.
+- **从 Claude Code 迁移时会连同项目级与插件里的东西一起带过来**：项目级 `CLAUDE.md`/`CLAUDE.local.md` 与不带作用域的规则文件并入全局指令，项目与插件里的 MCP 服务、插件自带的 Skills 一并进包；来源 agent、读到过哪些位置、扫过哪些项目根、带了哪些插件与哪几类内容被跳过，会写进备份包本身，事后能核对这个包到底从哪来。
+  **Migrating from Claude Code now brings project-level and plugin-provided pieces along**: project `CLAUDE.md`/`CLAUDE.local.md` and unscoped rule files are merged into the global instructions, while MCP servers and plugin-bundled Skills from projects and plugins are packed too; the source agent, the locations that were read, the project roots scanned, the plugins carried and the categories skipped are recorded inside the bundle, so you can audit where a package really came from.
+- **Claude Code 的插件与设置不再「不声不响地没搬」**：插件（含 marketplace 来源与版本）、子代理定义、权限规则、hooks 事件、设置的其余顶层键、带作用域的规则文件现在逐条报告「没搬 / 为什么」，并明确说明插件代码不会被复制、hook 更不会被执行。
+  **Claude Code plugins and settings no longer go missing silently**: plugins (with marketplace source and version), subagent definitions, permission rules, hook events, other top-level settings keys and scoped rule files are each reported as "not migrated, and why", and it is stated plainly that plugin code is not copied and hooks are never executed.
+
+### 🔧 变更 · Changed
+
+- **两台设备同时同步远端时不再互相覆盖**：写入前会核对远端是否已被别人改过，一旦发现就把这次写入停在写任何东西之前并明确提示重跑，绝不静默丢掉别人刚推的快照。
+  **Two devices syncing at the same time no longer overwrite each other**: the write checks whether the remote changed since it was read, and if it did the sync stops before writing anything and asks you to run it again, instead of silently dropping a snapshot someone else just pushed.
+- **首次同步不再要求你先手工建好网盘目录**：目标目录（含多级）不存在时会自动创建，创建了哪一层也会如实告诉你。
+  **First sync no longer asks you to create the cloud folder by hand**: missing target folders (including nested ones) are created automatically, and which levels were created is reported honestly.
+- **跨机同步不再把本机的 pnpm 缓存 / 存储位置带到别的机器**：导出时这些机器专属设置会被剥离（并在你的确认列表里可见），恢复时保留目标机自己原有的设置。
+  **Cross-machine sync no longer carries this machine's pnpm cache/store locations to another machine**: those machine-specific settings are stripped on export (and shown in your confirmation list), while the target machine keeps its own settings.
+- **自动合并升级为真正的三方合并**：两台设备改了同一个配置分区里的不同键、或同一个文本文件的不同行时，两边改动现在会同时保留，不再整段变成冲突等你裁决；只有改到同一处才需要决定。
+  **Automatic merging is now a real three-way merge**: when two devices change different keys of the same section, or different lines of the same text file, both changes are kept instead of the whole section turning into a conflict; only edits to the same spot need a decision.
+
+- **同一份 Claude Code 数据重复导入不再产生重复副本**：会话日志的生成时间改为确定性回落，第二次导入同一来源会被判成「内容相同，跳过」，而不是让你逐条裁决冲突。
+  **Importing the same Claude Code data twice no longer creates duplicates**: session logs now fall back to a deterministic timestamp, so a second import of the same source is judged "identical content, skipped" instead of asking you to resolve conflicts item by item.
+
+### 🐛 修复 · Fixed
+
+- **Claude Code 的子代理对话不再被混进主对话**：带 `isSidechain` 的记录改为跳过并计数上报，此前它们会被当成普通消息写进正文。
+  **Claude Code subagent conversations are no longer mixed into the main one**: records marked `isSidechain` are skipped and counted, where they used to be written into the transcript as ordinary messages.
+- **Claude Code 配置目录被 `CLAUDE_CONFIG_DIR` 挪走后，导入会真的去读那个目录**：并在报告里注明「位置被环境变量覆盖」，此前会读默认位置、甚至判定为「没安装」。
+  **When Claude Code's config directory is moved via `CLAUDE_CONFIG_DIR`, the import now reads it**: the report states that the location was overridden by an environment variable, where it used to read the default location or even report Claude Code as not installed.
+- **Claude Code 会话与技能被静默丢掉的几种情况已变得可见**：会话文件数超过上限、技能目录是符号链接、会话记录里的 sessionId 与文件名不一致、推理内容无法承载——都会报出来，而不是悄悄少一块。
+  **Several silent drops in the Claude Code import are now visible**: exceeding the session-file cap, a symlinked skill directory, a session record whose `sessionId` disagrees with the file name, and reasoning content that cannot be represented are all reported instead of quietly disappearing.
+- **同步一次成功后不再反复报同一个冲突**：合并完成时同步基线按「本机实际落地的内容」记录，配置项内部的版本号自增不会再让下一轮把同一处判成新冲突。
+  **A successful sync no longer keeps reporting the same conflict**: the sync baseline is recorded from what actually landed on this machine, so internal revision bumps no longer make the next round treat the same spot as newly changed.
+- **被破坏的远端快照内容不再被原样写进本机配置**：分区数据形状不对（例如被外部工具改成一段字符串）时，现在会判为冲突并把原始内容留在裁决界面供你核对，而不是默默采用。
+  **Damaged remote snapshot content is no longer written into your local config as-is**: when a section's data has the wrong shape (for example a string where an object was expected), it is reported as a conflict with the raw values kept for review instead of being adopted silently.
+- **回退不再误伤别的对话，也不再覆盖「不知道是谁改的」内容**：同一工作区里对话 A 改了文件、对话 B 又接着改，回退 A 时只撤销 A 那一部分、B 的改动逐字保留；如果某处改动无法判定属于哪个对话（例如会话结束之后被手工改过、或文件被删掉后又被重建），回退会**一个字节都不写**并把该文件列出来让你决定，绝不再按「覆盖回记录版本」了事。先回退 A 再回退 B 时，A 的改动不会复活，B 的改动也不会丢。
+  **Rewinding a conversation no longer damages other conversations, and never overwrites content it cannot attribute**: in the same workspace, if conversation A changed a file and conversation B then changed it further, rewinding A now undoes only A's part and keeps every byte of B's. When a change cannot be attributed (for example the file was edited by hand after the session went quiet, or was deleted and later recreated), the rewind writes **nothing** and lists that file for you to decide — it no longer falls back to "restore the recorded version". A then B: A's edit does not come back and B's edit is not lost.
+- **回退后文件的换行符与编码不再被改写**：CRLF 文件不再被整份折成 LF；GBK / Latin-1 等非 UTF-8 文件里的非法字节不再被替换成 `\uFFFD`（此前会真的写坏文件内容）。
+  **Line endings and encodings survive a rewind**: a CRLF file is no longer rewritten with LF, and invalid bytes inside non-UTF-8 files (GBK, Latin-1) are no longer turned into `\uFFFD` — which used to corrupt the file for real.
+- **「有文件没能回退」不再被说成「没有东西可回退」**：因为两侧改到同一处、或无法判定归属而跳过的文件，现在会连同原因与路径逐条列出来，整体结论也不再显示成「已恢复」。
+  **"Some files were not rewound" is no longer reported as "there was nothing to restore"**: files skipped because both sides changed the same spot, or because they could not be attributed, are now listed with the reason and the path, and the overall result no longer claims a clean restore.
 
 ## [0.1.78] - 2026-10-17
 

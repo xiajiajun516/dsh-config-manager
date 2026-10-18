@@ -99,6 +99,20 @@ export const SYNC_API = {
   /** issue #79：工作副本显式重建（relink 非破坏 / reclone 需 confirm；写动作过 mutation gate） */
   workdirReset: `${API_BASE}/sync/workdir/reset`,
   rollback: `${API_BASE}/sync/rollback`,
+  /** T-ui-merge：远程合并**只读**预览（三方合并 + 冲突清单，零写入）。 */
+  mergePreview: `${API_BASE}/sync/merge-preview`,
+  /** T-ui-merge：按逐项裁决执行合并（写动作过 mutation gate）。 */
+  applyMerge: `${API_BASE}/sync/apply-merge`,
+  /**
+   * ⑤ cloud-sync 借鉴项：远端依赖清单（**只读**：读一份远端快照 + 本机 profile 现状 → 对照表）。
+   * 它不绑定任何同步操作，也不是写动作 —— 与 probe 同类，不过 mutation gate。
+   */
+  inventory: `${API_BASE}/sync/inventory`,
+  /**
+   * cloud-sync 借鉴项 ②：**只读**连通性自检（凭据 / 端点 / 目标容器 / 目录可达）。
+   * 失败回 200 + ok:false —— 「测试连接」是预期会失败的诊断动作（→ routes/sync.ts 的 sync/probe）。
+   */
+  probe: `${API_BASE}/sync/probe`,
 } as const;
 
 /** 配置市场路由族（内置单市场：浏览 / 下载 / 发布向导；无 add/remove）。 */

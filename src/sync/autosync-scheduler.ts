@@ -522,6 +522,29 @@ export class AutoSyncScheduler {
                 intent: { adapter: 'sync', ref: channel, kind: 'Push' }, fn: rawPush,
               })).result as import('./sync-engine.ts').SyncPushReport
             : await rawPush();
+          if (!pushReport.ok && pushReport.conflict === true) {
+            // 引擎前置检测拒绝写入：远端已被别的设备推进 —— 这是**有冲突待处理**，不是通道/凭据故障。
+            // 绝不记 failed（那会累加连续失败计数并对用户发通知，把「需要用『检查远程合并』处理」
+            // 谎报成「同步坏了」）；错误摘要保留引擎给出的说明（用户能看见到底为什么没推上去）。
+            const message = pushReport.message ?? engineMsg('sync.autosyncPushFailed');
+            const conflictResult: AutosyncRunResult = {
+              status: conflictedSections.length > 0 ? 'partial' : 'skipped',
+              direction: appliedSections.length ? 'both' : 'push',
+              skipReason: 'conflict', error: message, historyId,
+              appliedSections,
+              ...(conflictedSections.length > 0 ? { conflictedSections } : {}),
+              consecutiveFailures: 0,
+            };
+            await this.appendHistory(channel, {
+              direction: appliedSections.length ? 'both' : 'push', status: conflictResult.status,
+              skipReason: 'conflict', error: message,
+              appliedSections,
+              ...(conflictedSections.length > 0 ? { conflictedSections } : {}),
+              createdAt: nowIso, failureCountAtRun: 0,
+            });
+            await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
+            return conflictResult;
+          }
           if (!pushReport.ok) {
             const error = pushReport.message ?? engineMsg('sync.autosyncPushFailed');
             const result: AutosyncRunResult = {

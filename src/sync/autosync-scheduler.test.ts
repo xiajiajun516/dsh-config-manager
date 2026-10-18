@@ -377,6 +377,31 @@ test('issue #79：本轮成功必须清掉上一轮的错误文案与跳过码�
   assert.equal(saved.consecutiveFailures, 0, '成功归零连续失败');
 });
 
+test('push 被远端推进检测拒绝（conflict）→ skipped(conflict) 而非 failed；不累加连续失败、历史留下引擎说明', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 2 };
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    push: async () => ({
+      ok: false, snapshotId: '', sections: [] as never, warnings: [],
+      conflict: true,
+      message: '远端最新快照 sync-other 与本地基线 sync-base 不一致：本次推送未执行',
+    }),
+  };
+  const { scheduler, getConfig, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'skipped', '有冲突待处理 ≠ 同步坏了');
+  assert.equal(result.skipReason, 'conflict');
+  assert.equal(result.consecutiveFailures, 0, '冲突跳过不计失败（否则会误发「连续失败」通知）');
+  assert.ok((result.error ?? '').includes('sync-other'), '必须把引擎的说明带给用户: ' + (result.error ?? ''));
+  assert.equal(getConfig().lastRunStatus, 'skipped');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict');
+  assert.ok(
+    getEntries().some((e) => e.status === 'skipped' && e.skipReason === 'conflict' && (e.error ?? '').includes('sync-other')),
+    '历史里必须能看出「有远端冲突待合并」',
+  );
+});
+
 test('runOnce: 无冲突且无变化 → success(pull,unchanged)，不上传（本地也无改动）', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
   const engine = {

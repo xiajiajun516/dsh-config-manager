@@ -60,7 +60,15 @@ import { resolveSessionFormatDisposition, sessionFormatAbortResponse } from './s
 import { readUiPrefs, updateUiPrefs } from '../sync/ui-prefs.ts'
 import type { UiPrefsChannel } from '../sync/ui-prefs.ts'
 import fs from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
+// ⑤ 远端依赖清单：判定内核在 core（纯函数、零 I/O），本文件只做 I/O 与装配。
+import { buildPluginInventory, collectConfigPluginNames, localSourcePath, parseRemotePluginsSection } from '../core/plugin-inventory.ts'
+import type { InventoryRemote } from '../core/plugin-inventory.ts'
+import { hasDshBundlePatch, readInstalledVersion, readProfileManifest } from '../core/plugin-cli.ts'
+import { SECTION_JSON_PATHS } from '../schema/config.ts'
+import { loadPatchDocument } from '../utils/patch-yaml.ts'
+import { parseZip } from '../utils/zip.ts'
 
 /**
  * webdav 通道的子对象状态（只有 webdav 通道下发；git → undefined）。
@@ -136,6 +144,50 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
   const cloudSecrets: CloudSecretWriter = {
     set: async (ref, value) => { await credentials.set(credentialRef(ref), value) },
     has: async (ref) => (await credentials.describe(credentialRef(ref))).configured,
+  }
+  /**
+   * T-ui-merge：合并预览 / 合并执行共用的引擎选项。
+   *
+   * 解密密码口径与 /sync/sync 完全一致：请求体优先，其次已保存的 DECRYPT 凭据
+   * （syncPasswordRef('DECRYPT', channel)）。密码只存在于内存，绝不写进响应 / 日志 / 同步文件；
+   * 明文快照根本不会被解密（引擎只在 manifest.encrypted 时才用密码）。
+   */
+  const mergeEngineOptions = async (
+    body: Record<string, unknown>,
+    syncCfg: SyncConfig,
+  ): Promise<{ snapshotId?: string; password?: string; pathMappings?: PathMapping[] }> => {
+    const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+    const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
+    const decryptPassword = typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+      ? body['decryptPassword']
+      : savedDecryptPassword
+    const pathMappings = extractPathMappings(body)
+    return {
+      ...(snapshotId === undefined ? {} : { snapshotId }),
+      ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
+      ...(pathMappings.length === 0 ? {} : { pathMappings }),
+    }
+  }
+  /**
+   * 合并裁决清单解析（T-ui-merge）。**粒度 = 分区 id**（冻结口径，不做 'id::path' 复合 id）。
+   *
+   * 非法条目直接丢弃 —— 引擎按「未裁决」处理，该分区进 pendingConflicts，界面会如实显示；
+   * 这样既不需要新增宿主文案键，也不会因为客户端字段拼错而静默写坏别的分区。
+   */
+  const extractMergeResolutions = (body: Record<string, unknown>): Array<{ id: SectionId; action: 'keepLocal' | 'useRemote' | 'useMerged' | 'skip' }> => {
+    const raw = body['resolutions']
+    if (!Array.isArray(raw)) return []
+    const out: Array<{ id: SectionId; action: 'keepLocal' | 'useRemote' | 'useMerged' | 'skip' }> = []
+    for (const entry of raw) {
+      if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const rec = entry as Record<string, unknown>
+      const id = rec['id']
+      const action = rec['action']
+      if (typeof id !== 'string' || id === '') continue
+      if (action !== 'keepLocal' && action !== 'useRemote' && action !== 'useMerged' && action !== 'skip') continue
+      out.push({ id: id as SectionId, action })
+    }
+    return out
   }
   return [
     // ------------------------------------------------------ sync/status
@@ -657,6 +709,137 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
       }
     }),
+    // ------------------------------------------------------ sync/probe
+    // cloud-sync 借鉴项 ②：**只读**连通性自检（凭据 / 端点 / 目标容器 / 目录可达），
+    // 供 UI「测试连接」按钮拿到可直接展示的结论（例如 S3 兼容端点该把 region 填成哪个值）。
+    // 只探**已保存**的通道配置（走与 push/pull 同一条配置路径，绝不拿表单里未保存的值去发请求）。
+    // 远端唯一写副作用 = webdav 幂等 MKCOL 补齐上级目录（那正是它要修的故障：目录不存在）。
+    // 失败一律 200 + ok:false —— 「测试连接」是**预期会失败**的诊断动作，用 5xx 表达会被 UI
+    // 当成基础设施故障；文案由通道层本地化并脱敏后原样带回。
+    endpoint({ path: '/api/dsh-config-manager/sync/probe', methods: ['POST'] }, async (req, res) => {
+      const body = await requireJsonObject(req)
+      try {
+        const syncCfg = await prepareSync(body)
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
+        const result = await engine.probe()
+        writeJson(res, 200, {
+          ok: true,
+          transport: channelOf(syncCfg),
+          message: result.message,
+          ...(result.hint !== undefined ? { hint: result.hint } : {}),
+          ...(result.snapshotCount !== undefined ? { snapshotCount: result.snapshotCount } : {}),
+          ...(result.createdCollections !== undefined && result.createdCollections.length > 0
+            ? { createdCollections: result.createdCollections }
+            : {}),
+        })
+      } catch (error) {
+        writeJson(res, 200, { ok: false, error: error instanceof Error ? error.message : String(error) })
+      }
+    }),
+    // ------------------------------------------------------ sync/inventory
+    // ⑤ cloud-sync 借鉴项：**只读**的「远端依赖清单」——不绑定本次同步操作，随时可算。
+    //
+    // 三源并集（与竞品 dsh-cloud-sync 的 getSyncInventory 同口径）：
+    //   远端快照声明的包（快照 plugins 分区 = 导出机 profile 依赖）
+    //   ∪ 本机 profile package.json 的 dependencies
+    //   ∪ 本机 profiles/<p>/cordis.yml 与 cordis.patch.yml 里出现的 name
+    // 逐条把 installed（node_modules 里有落盘副本）与 enabled（名字在 dsh.profile.bundles 里）
+    // 分开判定 —— 二者不一致且该包是 bundle 形态 = 半装（DSH 不会挂载它）。
+    //
+    // 远端不可达**不是** HTTP 错误：本机事实照常返回，只把 available 置 false 并回脱敏原因。
+    // 「没取到快照」与「远端没有声明」必须能被界面分开（绝不拿 false 冒充判定结果）。
+    // 只读：不写远端、不动同步基线、不改本机任何文件（下载的临时 ZIP 用完即删）。
+    endpoint({ path: '/api/dsh-config-manager/sync/inventory', methods: ['POST'] }, async (req, res) => {
+      const body = await requireJsonObject(req)
+      try {
+        const profileDir = host.profileDir
+        const manifest = readProfileManifest(profileDir)
+        const dependencies = manifest?.dependencies ?? {}
+        const bundles = Array.isArray(manifest?.dsh?.profile?.bundles) ? (manifest?.dsh?.profile?.bundles as string[]) : []
+
+        // 落盘版本 = 「真的装在 node_modules 里」（唯一判据与插件清单视图同源：readInstalledVersion）。
+        // 同一包会被问两次（installed 与 version），故按名备忘，避免重复读盘。
+        const versionCache = new Map<string, string | null>()
+        const installedVersionOf = (name: string): string | null => {
+          if (!versionCache.has(name)) versionCache.set(name, readInstalledVersion(profileDir, name))
+          return versionCache.get(name) ?? null
+        }
+        // 本地来源（file:/link:/workspace:/portal:）指向的路径是否已不存在 —— 换机/重装会直接失败。
+        const isSourceArchived = (_name: string, spec: string): boolean => {
+          const target = localSourcePath(spec)
+          if (target === null || target === '') return false
+          const abs = isAbsolute(target) ? target : resolve(profileDir, target)
+          return !existsSync(abs)
+        }
+
+        // 本机配置层引用的 name：只读 profile 内的两个 cordis 文件（!!js 方言走唯一实现 patch-yaml）。
+        // 「存在但解析不了」不贡献名字（宁可不报，也不拿半解析结果冒充事实）。
+        const configNames: string[] = []
+        for (const rel of ['cordis.yml', 'cordis.patch.yml']) {
+          const text = await fs.readFile(join(profileDir, rel), 'utf8').catch(() => null)
+          if (text === null) continue
+          try {
+            configNames.push(...collectConfigPluginNames(loadPatchDocument(text)))
+          } catch { /* 解析失败：该文件不贡献名字 */ }
+        }
+
+        // —— 远端侧：任何失败（未配置通道 / 不可达 / 加密缺密码 / 载荷不可信）都退化为 available:false
+        let remote: InventoryRemote
+        try {
+          const syncCfg = await prepareSync(body)
+          // 默认构造（只带 portable 分区）：plugins 是 portable，本清单只需要它 → 不必把可选分区
+          // 也拖进临时 ZIP（少一次会话导出）。用户的分区勾选只影响 push/pull，不影响本对照表。
+          const engine = makeSyncEngine(syncCfg)
+          const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
+          // 解密密码：请求体 > 已保存（DSH credentials）；明文快照根本不会被解密（引擎层保证）
+          const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
+          const decryptPassword =
+            typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+              ? body['decryptPassword']
+              : savedDecryptPassword
+          const downloaded = await withTimeout(
+            engine.downloadSnapshot({
+              dir: tmpDir,
+              ...(snapshotId === undefined ? {} : { snapshotId }),
+              ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
+            }),
+            ROUTE_TIMEOUT_MS,
+            msg('host.syncPullTimeout'),
+          )
+          try {
+            // ZIP 视为不可信：走 utils/zip 的默认最严解析（条目数 / 体积 / 压缩比 / Zip Slip）。
+            const archive = parseZip(await fs.readFile(downloaded.path))
+            const jsonPath = SECTION_JSON_PATHS['plugins']
+            const section = jsonPath !== undefined && archive.has(jsonPath) ? archive.readEntryJson(jsonPath) : null
+            const parsed = parseRemotePluginsSection(section)
+            remote = {
+              available: true,
+              snapshotId: downloaded.snapshotId,
+              plugins: parsed.plugins,
+              configuredNames: parsed.configuredNames,
+            }
+          } finally {
+            // 临时 ZIP 用完即删（同步目录 / 暂存区都不留对照表的副产物）
+            await fs.rm(downloaded.path, { force: true }).catch(() => undefined)
+          }
+        } catch (error) {
+          remote = { available: false, error: redact(error instanceof Error ? error.message : String(error)) }
+        }
+
+        const inventory = buildPluginInventory({
+          remote,
+          local: { dependencies, bundles },
+          configNames,
+          isInstalled: (name) => installedVersionOf(name) !== null,
+          isBundle: (name) => hasDshBundlePatch(join(profileDir, 'node_modules', name)),
+          versionOf: (name) => installedVersionOf(name) ?? '',
+          isSourceArchived,
+        })
+        writeJson(res, 200, { ok: true, ...inventory })
+      } catch (error) {
+        writeSyncRouteError(res, error)
+      }
+    }),
     // ------------------------------------------------------ sync/download
     // 「拉取即导入」：把远端快照**落地成本机 ZIP** 并返回路径，供导入向导消费。
     // 与 /sync/pull 的分工：pull 只做只读差异预览（临时 ZIP 用完即删）；
@@ -741,6 +924,15 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
             sectionCount: m.manifest.sectionIds.length,
             platform: m.manifest.platform,
             dshVersion: m.manifest.dshVersion,
+            // cloud-sync 借鉴项 ⑥：**推送方设备身份**（写在快照 manifest 里；旧快照没有 → 字段不出现）。
+            // 只回名字与稳定 id（都是本机自己写上去的展示信息，非秘密）；缺字段时绝不回空串占位，
+            // 让界面能如实区分「旧快照没有这个字段」与「设备名是空的」。
+            ...(typeof m.manifest.deviceName === 'string' && m.manifest.deviceName !== ''
+              ? { deviceName: m.manifest.deviceName }
+              : {}),
+            ...(typeof m.manifest.deviceId === 'string' && m.manifest.deviceId !== ''
+              ? { deviceId: m.manifest.deviceId }
+              : {}),
           }))
         const state = await loadSyncState(syncDir)
         // issue #59：把「远端有但读不出来」的快照如实回传（绝不静默跳过）——
@@ -1089,6 +1281,49 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         writeJson(res, 200, historyError === undefined ? payload : { ...payload, historyWriteError: historyError })
       } catch (error) {
         writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+      }
+    })),
+    // ------------------------------------------------------ sync/merge-preview
+    // T-ui-merge：远程合并**只读**预览（三方合并 + 冲突清单 + 摘要）。
+    // 零写入 ⇒ 不过 mutation gate、也不登记同步会话（临时 ZIP 由引擎内部用完即清）；
+    // 解密密码只走内存，响应体不含任何凭据值。
+    endpoint({ path: '/api/dsh-config-manager/sync/merge-preview', methods: ['POST'] }, async (req, res) => {
+      const body = await requireJsonObject(req)
+      try {
+        const syncCfg = await prepareSync(body)
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
+        const opts = await mergeEngineOptions(body, syncCfg)
+        const preview = await withTimeout(
+          engine.previewMerge(opts),
+          ROUTE_TIMEOUT_MS,
+          msg('host.syncPullTimeout'),
+        )
+        writeJson(res, 200, preview)
+      } catch (error) {
+        writeSyncRouteError(res, error)
+      }
+    }),
+    // ------------------------------------------------------ sync/apply-merge
+    // T-ui-merge：按**分区级**裁决执行合并（写动作 ⇒ mutation gate 'sync-merge-apply'）。
+    // 响应直接透传引擎报告（字段与 /sync/apply-items 同风格）：其中 pendingConflicts =
+    // 执行后仍待裁决的分区 —— skip 不推进同步基线，界面必须如实说明「下次同步仍会出现」。
+    endpoint({ path: '/api/dsh-config-manager/sync/apply-merge', methods: ['POST'] }, withMutationGate('sync-merge-apply', async (req, res, _lockCtx, journalCtx) => {
+      const body = await requireJsonObject(req)
+      try {
+        const syncCfg = await prepareSync(body)
+        const engine = makeSyncEngine(syncCfg, { optInSections: selectionOptInSections(channelOf(syncCfg)) })
+        const resolutions = extractMergeResolutions(body)
+        const opts = await mergeEngineOptions(body, syncCfg)
+        // snapshotBinding：与 /sync/apply-items 同口径把 journal 绑定面交给引擎（审计 P0-23），
+        // restoreId 与事务日志因此同源，异常路径下回滚入口拿到的也是同一份快照。
+        const report = await withTimeout(
+          engine.applyMergeResolutions(resolutions, { ...opts, ...(journalCtx !== undefined ? { snapshotBinding: journalCtx } : {}) }),
+          ROUTE_TIMEOUT_MS,
+          msg('host.syncPullTimeout'),
+        )
+        writeJson(res, 200, report)
+      } catch (error) {
+        writeSyncRouteError(res, error)
       }
     })),
   ]

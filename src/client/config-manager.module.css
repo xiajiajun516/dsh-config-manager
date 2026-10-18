@@ -2297,6 +2297,7 @@ body {
 
 /* —— 限高滚动容器（大报告/列表通用） —— */
 .planScroll,
+.mergeScroll,
 .reportScroll,
 .confirmScroll,
 .pullScroll,
@@ -6299,4 +6300,125 @@ button.profileRowMain:hover {
   font-size: var(--cm-fs-meta);
   color: var(--dsw-alias-label-secondary);
 }
+/* ==========================================================================
+   T-ui-merge：远程合并裁决（分区行 + 冲突三列对照）
+   纪律：组件规则只写 --cm-*（结构类 --dsw-alias-* 的边框/底/文字层可直用）；字号走 --cm-fs-*；
+   间距只取 9 档；圆角走 --cm-r-*；长列表由 .mergeScroll 并进上面的限高内滚组承担。
+   ========================================================================== */
+
+/* 摘要项：徽章 + 计数（容器间距沿用 .statRow） */
+.mergeStat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mergeStatValue {
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分区块（.mergeScroll 内逐条，分隔线用 0.5px 发丝线） */
+.mergeSection {
+  padding: 8px 10px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+}
+
+.mergeSection:last-child {
+  border-bottom: none;
+}
+
+.mergeSectionHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mergeSectionName {
+  font-size: var(--cm-fs-table);
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+}
+
+.mergeMeta {
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 分区级动作行：换行与间距对齐 .actionRow */
+.mergeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* 当前裁决片：沿用原生 Pill 的激活配方（ghost-active 底 + 内描边） */
+.mergeActionActive {
+  background: var(--cm-ghost-active-fill);
+  border-color: var(--cm-ghost-active-border);
+}
+
+/* 单条冲突（只读展示：路径 + 原因 + 三列预览） */
+.mergeConflictRow {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 0.5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--cm-r-3);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.mergeConflictPath {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--cm-fs-table);
+  color: var(--dsw-alias-label-primary);
+}
+
+.mergeKind {
+  flex: 0 0 auto;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.mergeConflictReason {
+  margin-top: 4px;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 三列对照：等宽三列（564px 画布下每列约 160px），每列各自限高内滚 */
+.mergeCols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mergeCol {
+  min-width: 0;
+}
+
+.mergeColLabel {
+  display: block;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.mergeColValue {
+  margin: 0;
+  max-height: 88px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-secondary);
+}
+
 

@@ -31,6 +31,8 @@
 | `encrypted` | `boolean?` | false | `sections` 为 `EncryptedSections` 密文载荷 |
 | `sourceHome` | `string?` | 无 | **导出机的 DSH home**。拉取侧与**本机** home 比较后由 Importer 生成自动重定基规则（工作区 `path` + 会话日志首帧 cwd 一并改写）。缺字段 = 不猜（行为与改造前一致） |
 | `deletedSessions` | `string[]?` | 无 | **会话删除墓碑**（见 §4）。缺字段 = 旧快照，无墓碑信息 |
+| `deviceId` | `string?` | 无 | 产生该快照的**设备稳定标识**（UUID）。首次推送时生成并持久化在推送机的设备侧状态里；换主机名 / 改机器名都不变。供同步历史展示「哪台设备推的」。缺字段 = 旧快照 / 未记录（读侧不猜） |
+| `deviceName` | `string?` | 无 | 该设备的人类可读名（缺省取主机名；取不到时由实现回落到本地化兜底文案）。与 `deviceId` 同源，**仅供展示**，不参与任何判定 |
 
 ## 3. 内容寻址外置（大文件分区）
 
@@ -65,6 +67,12 @@
 3. `sectionHashes` / 索引里的 `sections` hash 一律按**明文分区**计算（不是引用形态），
    这样拉取侧不解仓也能比较变更；
 4. 加密快照**永不外置**（整份 `sections` 是密文，没有可拆的文件分区）。
+
+**并发写入（通道实现必须遵守）**：快照索引（`index.json` / `<prefix>/index.json` / gist 索引文件）是读改写形态，
+通道**必须**用条件写（WebDAV / S3 的 `If-Match`，索引本不存在则 `If-None-Match: *`）保护它：读到的 ETag 与实际写入之间
+若远端被其它设备改过（HTTP 412，S3 兼容端点可能是 409），**必须中止本次写入并如实报错**，绝不覆盖别人的索引条目。
+服务端不返回 ETag / 不实现条件写时退化为无条件写（行为与本条引入前一致），但**不得**把「拿不到 ETag」判成本次同步失败。
+gist 的 `ETag` 是**弱** ETag（`W/"…"`），HTTP 禁止用它做 `If-Match` —— 弱 ETag 一律不采用。
 
 **GC**：删除快照后回收无人引用的 blob。
 
@@ -150,3 +158,98 @@
 4. **加解密密码同族**：`syncPasswordRef('ENCRYPT'|'DECRYPT', 's3'|'gist')` → `DSH_CONFIG_MANAGER_SYNC_{ENCRYPT|DECRYPT}_PASSWORD_{S3|GIST}`，值只在进程内存 / DSH 凭据槽位，**永不落盘**。
 5. **断开通道即清槽位**：`/sync/config` 的 clear 分支 unset 该通道的密钥槽位（s3 → 五家全清）与加解密密码槽位，并关 autosync。
 6. **gist 不做内容寻址外置**（§3 的例外）：会话这类大分区请走 git / webdav / s3（能力边界见 `known-gaps.md` G-34）。
+
+## 7. 三方合并与冲突裁决（应用侧契约）
+
+> **性质**：本节描述**同步引擎在下行/合并时**的判定与基线纪律，供第三方实现者对齐；
+> 实现锚点 = `src/sync/merge.ts`（纯函数合并）、`src/sync/text-merge.ts`（行级/JSON 合并）、
+> `src/sync/sync-engine.ts`（`merge` / `previewMerge` / `applyMergeResolutions`）、
+> `src/routes/sync.ts`（`/sync/merge-preview`、`/sync/apply-merge`）。
+
+### 7.1 三方输入与分区决策
+
+合并输入是**三个**分区视图（不是两方 diff）：
+
+| 位置 | 来源 | 说明 |
+|---|---|---|
+| `local` | 本机此刻的真实导出（密钥已过 scanner 剥离） | 与 push 同口径 |
+| `remote` | 下载的远端快照 `sections` | 墓碑命中的会话单元先剔除 |
+| `ancestor` | 本机保存的**共同祖先副本**（`sync-state.ancestorId` 指向的目录） | 副本缺失/被裁剪 → 退化为无祖先 |
+
+分区决策是**闭集 5 值**（`MergeDecision` + `'conflict'`）：
+
+| 决策 | 判据 | `merged` |
+|---|---|---|
+| `skip` | localHash == remoteHash（或无实质变化） | 无 |
+| `useRemote` | 仅远端相对祖先改动 | 远端整分区原值 |
+| `keepLocal` | 仅本地相对祖先改动 | 本地整分区原值 |
+| `merge` | 双侧都改且**精细合并成功、无残留冲突** | 合并结果（+ `autoMerged` 变更点数） |
+| `conflict` | 双侧都改且无法安全自动合并（含无祖先） | **无**（绝不返回半成品） |
+
+**`merge` 绝不等于 `useRemote`**：把自动合并报成「用了远端」会让界面/日志谎报数据来源。
+精细合并规则：JSON 分区按**递归对象键**合并（数组**绝不按索引合并**，双侧都改即冲突）；
+文件类分区（`{version:1, files:[...]}`）按 `relativePath` 逐文件合并，双侧都改的**文本**文件再做行级三方合并
+（CRLF/LF 逐字保留；> 1 MiB 或二进制不做文本合并）。
+**形状闸门**先于一切取舍：任一侧分区值不是普通对象（例如被破坏成字符串）→ `conflict`，绝不原样采用；
+一侧为文件类、另一侧为 JSON 分区 → `conflict`。
+
+### 7.2 冲突成因（`reason` 闭集）
+
+| reason | 含义 |
+|---|---|
+| `both-modified` | 双侧改同一处（含文本行重叠） |
+| `overlap` | 文本/JSON 值级重叠（底层成因，界面按 both-modified 措辞） |
+| `modify-delete` | 本机改、远端删 |
+| `delete-modify` | 本机删、远端改 |
+| `no-ancestor` | 无共同祖先 → 差异一律待裁决（拒绝猜测） |
+| `binary` | 二进制文件，未做文本合并 |
+| `too-large` | 超过文本合并字节上限 |
+| `array` | 数组双侧都改（不按索引合并） |
+| `format` | 分区值形状不合法（不可信载荷） |
+| `section` | 分区形态不一致（文件类 vs JSON） |
+
+冲突条目携带 `path`（JSON 分区为**点号路径**、文件类为 `relativePath`、整分区为 `$`）、`kind`（key/file）、
+`autoMergeAttempted`，以及 `local`/`remote`/`ancestor` 原始值（只读预览接口只下发**截断并脱敏**后的文本预览）。
+
+### 7.3 基线推进规则（硬约束）
+
+| 情形 | `lastSnapshotId`（远端指针） | 说明 |
+|---|---|---|
+| push 成功 | → 本次快照 id | 同时写 `ancestorId`（未加密时）与各分区 hash |
+| push 被前置检查拒绝 | **不动** | 不 upload、不改 `sections`/`lastSyncAt` |
+| apply/合并**失败**（含整体回滚） | **不动** | 失败不是「部分成功」 |
+| apply/合并成功但**仍有未裁决冲突**（或用户 `action='skip'`） | **不动**，并写 `pendingMerge` | 未裁决冲突下一轮必须重新出现，绝不静默丢一侧改动 |
+| 全部裁决完且应用成功 | → 本次远端快照 id，清空 `pendingMerge` | |
+
+- **基线以「实际落地的本地导出」为准**（不是 merged 载荷）：适配器写回时可能自增
+  revision 这类派生字段（真机 settings 即如此），拿 merged 载荷记基线会让下一轮把「只有派生字段不同」
+  判成双侧改动 → 每轮重复冲突、无法收敛。重新导出失败时**不推进基线**并如实告警
+  （引擎消息键 `sync.baselineRexportFailed`）。
+- `ancestor` 目录（本地祖先副本）是**可缺失**的：加密快照不发明文副本、副本会被裁剪 —— 缺失时退化为
+  两方合并（所有双侧差异呈现为 `conflict`），**绝不上抛成整轮失败**。
+- `pendingMerge` 记录 `{ remoteSnapshotId, sections, since }`（同一远端快照上的连续待裁决保留首次时间）。
+
+### 7.4 push 前置：远端推进检测与 `force`
+
+- 判据：本机已有基线（`lastSnapshotId !== ''`）且远端最新快照 id ≠ 基线 id → **拒绝本次 push**：
+  返回 `{ ok:false, snapshotId:'', sections:[], conflict:true, warnings, message }`（**不抛错**），
+  零远端写入、基线字段零变化；界面据此引导「先同步远端」。
+- 首次同步（无基线）与远端为空**不拦**；`list()` 读不到时**不把「读不到」当「没变」**：照常继续但如实告警。
+- `force: true` 是**显式覆盖意图**：跳过该检查直接推送（用户确认要覆盖远端时使用）。
+- 通道自身的条件写（§3 索引 `If-Match`）是**另一道**防线：两者互补，不互相替代。
+
+### 7.5 通道能力边界（如实）
+
+| 能力 | git | webdav | s3（五家兼容） | gist |
+|---|---|---|---|---|
+| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ✅（412/409 视为冲突） | ❌ **弱 ETag 不做 `If-Match`**，退化为无条件 PATCH |
+| 大分区内容寻址外置（§3） | ✅ | ✅ | ✅ | ❌（刻意不做，G-34） |
+| 加密快照 | ✅ | ✅ | ✅ | ✅（但不外置） |
+| 远端推进检测（§7.4） | ✅ | ✅ | ✅ | ✅（依赖 `list` 能读全索引） |
+
+### 7.6 push 失败时的写入面（有意如此）
+
+push 被前置检查拒绝或上传失败时，**基线字段与远端都零变化**；但**设备身份**（`deviceId`/`deviceName`）
+可能在本次调用中已落盘一次 —— 它是**本机身份**而不是同步进度，首次生成后幂等（下次不再写），
+不会造成「部分同步状态」。实现方不要把它当成失败回滚的一部分。
+

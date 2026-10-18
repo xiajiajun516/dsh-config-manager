@@ -8,8 +8,8 @@
  * - 「每条路由首行 guard」这条安全不变量此前**只写在注释里**，零测试覆盖；
  * - 3 条 prefix 路由自造围栏（裸 isLoopbackRequest + 自判方法）。
  *
- * 计数口径（三路一致 = 78，勿再照抄旧审计初稿的计数 —— 那是计数口径 overcount）：
- *   路由快照 79 条 ＝ 现行 `endpoint()` 声明 79 条 ＝ 运行期 `buildRoutes()` 72 条 + `src/index.ts` 保留的 7 条。
+ * 计数口径（三路一致 = 83，勿再照抄旧审计初稿的计数 —— 那是计数口径 overcount）：
+ *   路由快照 83 条 ＝ 现行 `endpoint()` 声明 83 条 ＝ 运行期 `buildRoutes()` 76 条 + `src/index.ts` 保留的 7 条。
  * 增删路由后必须同步这段计数、`src/routes/index.ts` 的头注释与 parity 快照清单；`tests/route/route-parity.test.ts`
  * 的「路由计数散文」守卫会拿真实声明数逐条对账（写错即红灯）。
  *

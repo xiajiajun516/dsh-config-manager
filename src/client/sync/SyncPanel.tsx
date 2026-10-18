@@ -91,7 +91,11 @@ import { WorkDirCard } from './WorkDirCard.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import { SyncLogList } from './SyncLogList.tsx'
 import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
+import { PluginInventoryCard } from './PluginInventoryCard.tsx'
+import { SyncProbeRow } from './SyncProbeRow.tsx'
+import { deviceLabel } from './remote-device-view.ts'
 import { PushPreviewCard } from './PushPreviewCard.tsx'
+import { MergePreviewEntry } from './MergePreviewView.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
 
@@ -1207,6 +1211,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                 {computeSyncButtons(state.busy, ready, uiT).pullLabel}
               </Button>
             </div>
+            {/* cloud-sync 借鉴项 ②：测试连接（只读自检；结论/失败都就地展示，不弹窗）。
+                放在动作行正下方：它测的正是这几个按钮将要用的那条通道。 */}
+            <SyncProbeRow t={t} api={api} body={buildSyncChannelBody({ ...formOf(state), channel })} remoteReady={ready} busy={busy} />
             {/* 选择历史快照（该通道的远端快照；缺省 = 最新）。
                 支持点击/展开即刷新，另有主动刷新按钮 —— 两个入口都保留（v1 行为不变）。 */}
             <div className={css.snapshotPickerRow}>
@@ -1226,7 +1233,10 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                     { value: '', label: t('syncflow.latestSnapshot') },
                     ...cs.snapshots.map((s) => ({
                       value: s.id,
-                      label: s.id + t('syncflow.snapshotOption', { date: s.createdAt.slice(0, 10), count: String(s.sectionCount) }),
+                      label: s.id
+                        + t('syncflow.snapshotOption', { date: s.createdAt.slice(0, 10), count: String(s.sectionCount) })
+                        // ⑥ 设备身份：只有快照确实带 deviceName 时才追加（旧快照不显示占位空串）
+                        + (deviceLabel(s, (device) => t('syncflow.snapshotDevice', { device })) ?? ''),
                     })),
                   ]}
                 />
@@ -1260,6 +1270,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             />
           </Card>
         )}
+        {/* T-ui-merge：远程合并裁决入口（开合状态在 MergePreviewEntry 内自持；单行装配，t42 行数棘轮） */}
+        {ready && <MergePreviewEntry api={api} t={t} busy={busy} onOpen={() => { switchChannel(channel) }} channelPayload={() => buildSyncChannelBody(formOf(stateRef.current))} sectionName={(id) => sectionName(id as SectionId)} decryptPassword={cs.decryptPassword} onApplied={() => { void loadStatus() }} onRolledBack={() => { void loadStatus() }} />}
         {/* v3（P-IA-7 / §2.2-6）：加密与解密**属于这一条通道**，因此渲染在它自己的卡里。
             此前这两张卡挂在页面级、绑定一个被「点某张卡的按钮」悄悄切换的隐式当前通道 ——
             用户会以为四个通道共用一份加密设置。现在每张已配置的通道卡各自持有自己的凭据区，
@@ -1288,6 +1300,22 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         {/* issue #59：远端快照列表不完整时的常驻告知（push 报成功但列表为空时，这里是唯一线索）。
             v3：跟着**它所属的通道**走（此前挂页面级 = 显示的是隐式当前通道的列表）。 */}
         {ready && <UnreadableSnapshotsBanner items={cs.unreadableSnapshots} t={t} />}
+        {/* ⑤ cloud-sync 借鉴项：远端依赖清单（**只读**，随时可看，不绑定本次同步）。
+            与「同步差异」的分工：差异是「这一次会怎么做」，清单是「远端声明 vs 本机现状」的常驻对照，
+            并把 installed（在 node_modules 里）与 enabled（在 dsh.profile.bundles 里）分开判定。
+            v3 IA 纪律：它属于**这条通道**（远端声明来自该通道快照），因此渲染在通道卡内，
+            请求体显式带 channel，不读隐式当前通道。 */}
+        {ready && (
+          <PluginInventoryCard
+            t={t}
+            api={api}
+            body={buildSyncChannelBody({ ...formOf(state), channel })}
+            remoteReady={ready}
+            snapshotId={cs.selectedSnapshotId}
+            decryptPassword={cs.decryptPassword}
+            busy={busy}
+          />
+        )}
         </Collapse>
       </>
     )

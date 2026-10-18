@@ -1,6 +1,10 @@
 /**
  * W1 路由拆分安全网：**路由清单 parity 快照**（改造前先跑绿，重构后逐条一致）。
  *
+ * 最新增量（T-ui-merge，2026-10-18）：`POST /sync/merge-preview`（只读三方合并预览）与
+ * `POST /sync/apply-merge`（按分区级裁决执行，过 mutation gate）→ **81**；
+ * 并行会话的 `POST /sync/probe`（通道连通性自检，只读）与 `POST /sync/inventory`（同步内容清单）→ **83**。
+ *
  * 快照来源：2026-09-23 W1 动结构**之前**的 \`src/index.ts\` 的 \`routesList\`（67 条声明 /
  * 68 个 (method,path) 组合；其中 recovery 为 prefix 路由）。
  * 后续增量：m-disk-usage 新增 `GET /disk-usage` 与 `POST /disk-usage/cleanup` → 70；
@@ -120,6 +124,7 @@ const ROUTE_SNAPSHOT = [
   ['exact', 'GET+POST', '/api/dsh-config-manager/star-prompt'],
   ['exact', 'GET', '/api/dsh-config-manager/status'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/apply-items'],
+  ['exact', 'POST', '/api/dsh-config-manager/sync/apply-merge'],
   ['exact', 'GET+POST', '/api/dsh-config-manager/sync/autosync'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/cancel'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/config'],
@@ -127,8 +132,11 @@ const ROUTE_SNAPSHOT = [
   ['exact', 'POST', '/api/dsh-config-manager/sync/github/poll'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/github/start'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/github/validate'],
+  ['exact', 'POST', '/api/dsh-config-manager/sync/inventory'],
   ['exact', 'GET+POST', '/api/dsh-config-manager/sync/github/repositories'],
   ['exact', 'GET', '/api/dsh-config-manager/sync/history'],
+  ['exact', 'POST', '/api/dsh-config-manager/sync/merge-preview'],
+  ['exact', 'POST', '/api/dsh-config-manager/sync/probe'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/pull'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/download'],
   ['exact', 'POST', '/api/dsh-config-manager/sync/push'],
@@ -216,10 +224,10 @@ function declaredRoutes(): string[] {
   return rows.sort();
 }
 
-test('W1 parity：路由清单与预期快照逐条一致（79 条）', () => {
+test('W1 parity：路由清单与预期快照逐条一致（83 条）', () => {
   const expected = ROUTE_SNAPSHOT.map(([kind, methods, routePath]) => row(kind as string, (methods as string).split('+'), routePath as string)).sort();
   const actual = declaredRoutes();
-  assert.equal(expected.length, 79, '快照自身应为 79 条');
+  assert.equal(expected.length, 83, '快照自身应为 83 条');
   assert.deepEqual(actual, expected, 'kit 化/拆组后路由声明集合必须逐条不变');
 });
 
@@ -231,8 +239,8 @@ test('W1 parity 解析器自检：少一条 / 改一条 / 改方法都会被检�
   assert.notDeepEqual(dropped, expected, '少一条路由必须被判为不一致');
   const renamed = [...actual.slice(1), actual[0]!.replace(/\/[^/]+$/, '/__drifted__')];
   assert.notDeepEqual(renamed, expected, '路径漂移必须被判为不一致');
-  // 解析器必须真的解析到 74 条（否则上面的 deepEqual 可能是「两边都空」的假绿）
-  assert.equal(actual.length, 79, `解析到的路由数应为 79，实际 ${actual.length}`);
+  // 解析器必须真的解析到 82 条（否则上面的 deepEqual 可能是「两边都空」的假绿）
+  assert.equal(actual.length, 83, `解析到的路由数应为 83，实际 ${actual.length}`);
 });
 
 /** 单份源码里的真实路由声明数（与 declaredRoutes 同一解析口径）。 */
@@ -275,9 +283,9 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
   const indexSource = sources[0] as { file: string; text: string };
   const indexCount = countDeclarations(indexSource.text);
   const builtCount = actual - indexCount;
-  assert.equal(actual, 79, '真实声明总数应为 79');
+  assert.equal(actual, 83, '真实声明总数应为 83');
   assert.equal(indexCount, 7, 'src/index.ts 保留的声明应为 7');
-  assert.equal(builtCount, 72, 'buildRoutes 拆出的声明应为 72');
+  assert.equal(builtCount, 76, 'buildRoutes 拆出的声明应为 76');
 
   const claims: Array<{ file: string; label: string; stated: number; expected: number }> = [];
   const collect = (file: string, text: string, re: RegExp, label: string, expected: number): void => {

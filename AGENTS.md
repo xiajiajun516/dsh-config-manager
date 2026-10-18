@@ -1,6 +1,6 @@
 # AGENTS.md — 规则书
 
-> **只收硬规则**（必须/绝不 + 判据 + 指针，一行一条）：**非硬规则内容 —— 说明、清单、流程、示例、证据、历史沿革 —— 一律进 `docs/lessons/<域>.md`，本文件只留一行指针**（索引 = `docs/lessons/README.md`）；机制细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
+> **只收硬规则**：**非硬规则内容 —— 说明、清单、流程、示例、证据、历史沿革 —— 一律进 `docs/lessons/<域>.md`，本文件只留一行指针**；机制细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
 > **预算**：硬上限 28 KiB（workspace instruction 总预算 64 KiB）；>26 KiB 先告警；单行 ≤ 400 B。守卫 `node scripts/check-agents-budget.mjs`（超限时模型只能看到被截断的尾巴）。
 > **新增一条坑**：先在 `docs/lessons/<域>.md` 写透证据 → 再回本文件补一行规则 + 指针；**不要把证据写回本文件**。
 > **下移存档**：概览 / 目录结构 / 常用命令 / 本机环境注意 / UI 自查清单 → `docs/lessons/repo-overview.md`。
@@ -33,6 +33,7 @@
 - **磁盘占用清理四条不得放宽**：候选只有可重建区 + 显式勾选的过期导出；`snapshots`/`sync` 永不进候选；`categories` 是分区白名单；界面数字由渲染行现算；ENOENT 不计 errors。
 - **同步分区放行是「逐分区」而不是布尔**：`syncSectionCatalog` 由注册表派生；放行只看引擎构造期 `optInSections`；自动同步与 model-tools 只传 `'auto'` 档（sessions 绝不悄悄上下行）。
 - **同步通道「会话管理」五条**：远端保留接 GFS（刚 push 的恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；删除墓碑不删本机数据（→ `docs/lessons/sync-channel.md`）。
+- **同步写路径两条**：索引写入必须**条件写**（远端被改过即中止报错，绝不覆盖别人的条目；gist 弱 ETag 不用做 If-Match）；快照**不进机器专属路径**（pnpm store/cache 导出侧剥离、写回保留本机）（→ `docs/lessons/sync-channel.md`）。
 - **日志全程脱敏**：`redactValue` 掩码敏感值；UI 渲染前所有错误/报告再过 `redact()`（`ErrorBanner.tsx`/`ReportView.tsx`）。
 - **ZIP 视为不可信**：条目数上限、checksum、Zip Slip 拒绝（`src/security/zip-security.ts`）。
 - **导入前强制快照**（可回滚）、Dry Run 零写入、冲突不默认覆盖。
@@ -48,9 +49,9 @@
 ## 🏗️ 架构心智
 - 双面插件：host `src/index.ts`（Cordis `name='config-manager'`，`/api/dsh-config-manager/*`）+ web `src/client/`（React，settings.section，经 api 调 host）。
 - **宿主路由只经 kit 的 `endpoint()` 声明 + `registerRoutes()` 注册**（围栏与方法白名单在注册点统一包装；`registerRoutes()` 兜底断言未经 kit 的路由直接抛错）。
-- 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 72 条**；合计 **79** 条，见 parity 快照）；源码级守卫必须扫**全部**路由源。
-- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 79 条路由永不进入该认证路由。
-- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 79 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
+- 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 76 条**；合计 **83** 条，见 parity 快照）；源码级守卫必须扫**全部**路由源。
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 83 条路由永不进入该认证路由。
+- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 83 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
 - 新功能优先加 `src/core/`，适配器/UI 薄壳；15 adapter 与 `self` 分区口径 → `DEVELOPERS.md` 架构节。
 - 同步：`SyncEngine`+`Git/WebDavTransport`+`AutoSyncScheduler`（事件驱动）；**autosync 与 sync-selection 按通道独立**（schema v2）。
 - **import 一律带 `.ts` 后缀**（Deno-style）。
@@ -66,7 +67,7 @@
 
 ### TS/命名
 - **import type**（`verbatimModuleSyntax` 强制）；类型合并用 `declare module`+`import type{}`。
-- React：函数组件+hooks，无 class/高阶组件（**唯一显式例外** = `ChatEntryErrorBoundary`：React 18 仅 class 能 `getDerivedStateFromError` / `componentDidCatch`；证据与边界见 `docs/lessons/recovery-console.md`）；props 显式 `XxxProps`；导出类型汇总于 `src/client/index.ts`。
+- React：函数组件+hooks，无 class/高阶组件（**唯一显式例外** = `ChatEntryErrorBoundary`，边界见 `docs/lessons/recovery-console.md`）；props 显式 `XxxProps`；导出类型汇总于 `src/client/index.ts`。
 - 命名：组件/类型/类 PascalCase，函数/变量 camelCase，常量 UPPER_SNAKE，CSS 类名 camelCase。
 - 分号暂未统一——跟随所在文件风格，勿同一次 diff 混改。
 
@@ -96,7 +97,7 @@
 
 ## 🎨 UI / DESIGN SYSTEM（最高优先级）
 > **`DESIGN.md` 是 UI/样式决策唯一权威**；涉及 UI/Layout/CSS/颜色/字体/间距/图标/动效/响应式前必读。
-- **设计 token 必须定义在 `body`**（既不是 `.section` 也不是 `:root`）：DSH 的 `--dsw-*` 定义在 **body** 上（`dsh-client-ui-theme`），而 var() 在**声明它的元素**上替换 ⇒ 挂 `:root` 时 `--cm-*` 链在 html 就失效、挂 `.section` 时 Portal 到 body 的弹窗看不见。真机两轮 2026-10-11 → `docs/lessons/recovery-console.md`。
+- **设计 token 必须定义在 `body`**（既不是 `.section` 也不是 `:root`）：DSH 的 `--dsw-*` 定义在 **body** 上（`dsh-client-ui-theme`），而 var() 在**声明它的元素**上替换 ⇒ 挂 `:root` 时 `--cm-*` 链在 html 就失效、挂 `.section` 时 Portal 到 body 的弹窗看不见（→ `docs/lessons/recovery-console.md`）。
 - **颜色三层单向依赖**：组件只写 `--cm-*`，`--dsw-*` 只允许出现在 `--cm-*` 定义行；禁止 hardcode；tint 用 `color-mix(in srgb, var(--cm-*) <pct>%, transparent)`（`css-token-guard.test.ts`）。
 - **样式只能进 `src/client/config-manager.module.css`**：禁止内联 `<style>`/第三方 css；类名用 CSS Modules（`css.xxx`）；**scale 有源级守卫**（字号/间距/圆角/行高/z-index，`css-scale-guard.test.ts`），新档位先改 DESIGN.md §3–§5。
 - **复用优先**：`common/ui.tsx` 原语 + `ErrorBanner/ProgressBar/ReportView` 等；已有组件能解决就禁止重建，新页面先搜库。
@@ -189,13 +190,13 @@
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
 - **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的两道上限**（每会话 20 → 全局 50，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
-- **回滚点的「工作区态」必须是「该回合开始前」**：留点在 `turn/start` 拍（`turn/end` 只更新缺省边界）；在回合结束拍会把文件固定成「改完之后」⇒ 回退看起来「工作区与该回退点一致」，用户说「文件没被撤回」。证据 → `docs/lessons/recovery-console.md`
+- **回滚点的「工作区态」必须是「该回合开始前」**：留点在 `turn/start` 拍（`turn/end` 只更新缺省边界）；在回合结束拍会固定成「改完之后」⇒ 用户看到「文件没被撤回」（→ `docs/lessons/recovery-console.md`）。
 - **回退删除集只有一份规划**（`planCreatedRemovals`；预览 = 执行）、**判据 = 能证明「留点时不存在」**（只有证明名单不完整才不删，`truncated` 不算）。证据 → `docs/lessons/recovery-console.md`
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。
 - **宿主服务的方法抽出来必须 bind 回服务对象**；三档降级判据不动，只补 receiver。
 - **回退 fork 必走 DSH 的 `sessionController.fork`（落盘 + 归位），绝不直接 `SessionStore.fork`；归位 cwd 必须多源 + 失败重试 + 失败写诊断**（只读活会话 ⇒ 真机 285/285 皆 `cwd-unavailable`）→ `docs/lessons/recovery-console.md`。
 - **「查看」进 DSH 右侧栏**：`sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、抽出方法必须 bind、补试幂等、形态不符即不注册，缺能力降级为弹窗内展示 → `docs/lessons/recovery-console.md`。
-- **接管聊天用户消息后正文不得自绘**：必须 `renderFactorySlot('conversation.chat.user.content', …)` 委托宿主 + 自绘气泡当 `options.fallback`（判据 = 那条 factory 注册与否）。**回滚点开关关闭时不得再接管 user cell**：登记随开关出现 / 撤销，关掉即让位给宿主原生气泡。→ `docs/lessons/recovery-console.md`
+- **接管聊天用户消息后正文不得自绘**：必须 `renderFactorySlot('conversation.chat.user.content', …)` 委托宿主 + 自绘气泡当 `options.fallback`（判据 = 那条 factory 注册与否）；**回滚点开关关闭时不得再接管 user cell**（→ `docs/lessons/recovery-console.md`）。
 - **崩溃残留只放行可自证形状**：自证门仅 `backup-schedule` → `docs/lessons/recovery-console.md`。
 
 **第三方插件数据** → `docs/lessons/plugin-data-migration.md`

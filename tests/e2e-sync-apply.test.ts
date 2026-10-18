@@ -191,6 +191,96 @@ test('e2e: 双向冲突 → classify 进 review，applyMergePlan 短路（不写
   }
 });
 
+test('e2e: previewMerge → applyMergeResolutions（全部裁决）→ 基线推进且 F-2 收敛（同一远端快照不再判冲突）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-e2e-merge-resolve-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    for (const n of NS) ctx.settings.registered.add(n);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemTransport();
+    const stateDir = path.join(tmp, 'sync');
+    const localSnapshotsDir = path.join(tmp, 'snapshots');
+    const engine = makeEngine(ctx, transport, stateDir, localSnapshotsDir);
+
+    // ① push 建基线（dark）
+    await engine.push({ snapshotId: 'sync-base' });
+
+    // ② 另一台设备把远端改成 light（本地仍 dark → useRemote）
+    const remote = remoteSnapshot('sync-remote', 'light');
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+
+    // ③ 预览：只读
+    const preview = await engine.previewMerge();
+    assert.equal(preview.ok, true);
+    assert.equal(preview.snapshotId, 'sync-remote');
+    const view = preview.sections.find((s) => s.id === 'settings');
+    assert.ok(view !== undefined);
+    assert.equal(view!.decision, 'useRemote');
+    assert.equal(view!.conflictCount, 0);
+    assert.equal(preview.summary.conflicts, 0);
+    assert.equal(preview.summary.auto >= 1, true, '低风险可自动项应计入 auto');
+    assert.ok(preview.sections.every((s) => s.conflicts.every((c) => typeof c.localPreview === 'string')));
+    // 状态目录此刻仍只有 push 写下的东西（预览零写入由单测覆盖；这里断言没有 pendingMerge 之类新字段）
+    assert.equal((await loadSyncState(stateDir)).pendingMerge, undefined);
+
+    // ④ 全部裁决：settings 用远端
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'useRemote' }]);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.applied, ['settings']);
+    assert.deepEqual(report.pendingConflicts, [], '没有待裁决分区');
+    assert.equal((ctx.settings.ns.get('general')!.value as { theme: string }).theme, 'light');
+
+    // ⑤ 基线推进到远端快照且 pendingMerge 清空
+    const state = await loadSyncState(stateDir);
+    assert.equal(state.lastSnapshotId, 'sync-remote');
+    assert.equal(state.pendingMerge, undefined);
+
+    // ⑥ F-2：基线以「实际落地的本地导出」为准 ⇒ 同一远端快照不得再被判成冲突（假冲突循环消失）
+    const plan2 = await engine.merge();
+    const settings2 = plan2.sections.find((s) => s.id === 'settings');
+    assert.ok(settings2 !== undefined);
+    assert.notEqual(settings2!.decision, 'conflict', 'F-2：写回后不得再判 both-modified（否则每轮重复冲突）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('e2e: 有未裁决冲突时 applyMergeResolutions(部分裁决) → 本机写入已裁决部分但基线不推进、pendingMerge 记录', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-e2e-merge-pending-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    for (const n of NS) ctx.settings.registered.add(n);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemTransport();
+    const stateDir = path.join(tmp, 'sync');
+    const localSnapshotsDir = path.join(tmp, 'snapshots');
+    const engine = makeEngine(ctx, transport, stateDir, localSnapshotsDir);
+    await engine.push({ snapshotId: 'sync-base' });
+
+    // 本地改 blue + 远端改 red → 双向冲突
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    const remote = remoteSnapshot('sync-remote', 'red');
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'skip' }]);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.pendingConflicts, ['settings']);
+    const state = await loadSyncState(stateDir);
+    assert.equal(state.lastSnapshotId, 'sync-base', '未裁决 → 基线不推进');
+    assert.deepEqual(state.pendingMerge?.sections, ['settings']);
+    assert.equal(state.pendingMerge?.remoteSnapshotId, 'sync-remote');
+    assert.equal((ctx.settings.ns.get('general')!.value as { theme: string }).theme, 'blue', '冲突内容不进本机');
+
+    // 下一轮仍被判为冲突（用户还能继续裁决）
+    const plan = await engine.merge();
+    assert.equal(plan.sections.find((s) => s.id === 'settings')?.decision, 'conflict');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('e2e: 首次同步（firstSync=true）→ 低风险也进 review 而非自动应用', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-e2e-firstsync-'));
   try {

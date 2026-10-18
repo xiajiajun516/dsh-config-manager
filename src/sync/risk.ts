@@ -9,8 +9,10 @@
  *    本模块只做分流，`SECTION_RISK_TIER` 是注册表的派生视图（保留给既有调用方）；
  *  - 双向 conflict 分区永远进 review（无论风险与 firstSync 与否）；
  *  - firstSync=true 时所有非 skip 项一律进 review（安全第一：人工确认后才开启自动）；
- *  - firstSync=false 时按风险等级分流：低风险且 useRemote/keepLocal 进 autoApply；
- *    中风险、high、双向冲突 → review；skip 或无变化 → skipped。
+ *  - firstSync=false 时按风险等级分流：低风险且决策明确（useRemote / keepLocal / **merge**
+    即三方精细合并成功）进 autoApply；中风险、high、双向冲突 → review；skip 或无变化 → skipped。
+ *  - 'merge' 与 useRemote/keepLocal 同等对待：它的 merged 是双方改动的合并结果（不是单侧原值），
+    因此只有低风险分区才允许自动落盘；中/高风险仍要人工确认。
  */
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import type { SectionId } from '../schema/types.ts';

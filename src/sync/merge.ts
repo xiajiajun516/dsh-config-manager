@@ -2,28 +2,68 @@
  * m-sync-flow：三方合并引擎（纯函数）。
  *
  * 输入：local / remote / ancestor 各分区的 SectionData + 分区 hash。
- * 行为（每分区）：
- *   - localHash == remoteHash        → skip（无变化）
- *   - localHash != remoteHash：
- *     - localHash == ancestorHash    → useRemote（远端独有改动）
- *     - remoteHash == ancestorHash   → keepLocal（本地独有改动）
- *     - 其余                          → 进入精细合并：JSON 分区按 top-level key 合并、FilesSection 按 relativePath 合并；
- *                                       仅双侧均改且值不同的键/文件留为 conflict，其余非重叠变更自动合入。
+ * 输出：MergePlan（纯数据，不含副作用），由上层（SyncEngine.merge / previewMerge）交给 UI 决策。
  *
- * 输出：MergePlan（纯数据，不含副作用），由上层（SyncEngine.merge）返回给 UI 决策。
+ * 每分区的决策链（顺序即优先级，与 git 的三方合并口径一致）：
+ *   1. localHash == remoteHash    → skip（无变化，绝不产生多余写入）
+ *   2. 仅一侧存在该分区           → 单边存在：不构成删除语义（见 §边界），按变化与否取舍
+ *   3. ancestor 缺失              → conflict(reason='no-ancestor')：拒绝猜测共同祖先
+ *   4. localHash == ancestorHash  → useRemote（仅远端改）
+ *   5. remoteHash == ancestorHash → keepLocal（仅本地改）
+ *   6. 双侧相对祖先都改           → 精细合并：
+ *        - JSON 分区：递归对象合并（mergeJsonValues），冲突路径精确到叶子（'namespaces.general.value.theme'）
+ *        - FilesSection：逐 relativePath 合并，两侧都改的文本文件再走行级三方合并（mergeBytesThreeWay）
+ *        - 无残留冲突 → decision='merge'（merged + autoMerged 计数）
+ *        - 有残留冲突 → decision='conflict'（merged 为 undefined：绝不把半成品当结果）
  *
- * 安全约束：ancestor 为 undefined 时退化为两方合并：local != remote 视为整分区 conflict（拒绝猜测共同祖先）。
+ * 安全约束（改这里前先读）：
+ *  - 数组**绝不**按索引合并：双侧都改且不逐字相等 → 冲突（reason='array'）。语义不明的合并比冲突更危险。
+ *  - 二进制 / 超大文件不做文本合并（mergeBytesThreeWay 会如实拒绝）→ 保留冲突交用户裁决。
+ *  - 绝不静默丢弃任一侧的未知字段 / 插件配置 / 用户数据：递归合并只对「双侧都改同一处」报冲突，
+ *    单侧新增/修改的键一律保留。
+ *  - ancestor 缺失时退化为两方：差异一律整分区 conflict（拒绝猜测共同祖先）。
+ *
+ * 边界（有意如此，勿“修复”）：分区在某侧**缺失**不等于「该侧删了这个分区」—— 同步只搬本轮
+ * 勾选的分区，可选分区（sessions/mcp）未勾选时为缺失。因此分区级缺失不判删除冲突；
+ * 文件级（FilesSection 内的 relativePath）才是真正的删除语义，那里按 modify/delete 判冲突。
  */
 import type { FilesSection, SectionData, SectionId } from '../schema/types.ts';
 import { hashSection } from './sync-state.ts';
+import { mergeBytesThreeWay, mergeJsonValues, type TextMergeConflict } from './text-merge.ts';
 
-export type MergeDecision = 'useRemote' | 'keepLocal' | 'skip';
+/**
+ * 分区级决胜结果（三方合并，2026-10 收口）：
+ *  - 'skip'      ：双侧相对祖先都未改（或本就无变化）—— 不产生任何写入；
+ *  - 'useRemote' ：仅远端相对祖先改了（本地未改）→ 远端整分区原值胜出；
+ *  - 'keepLocal' ：仅本地相对祖先改了（远端未改）→ 本地整分区原值胜出；
+ *  - 'merge'     ：双侧都改，但**精细合并成功**（无残留冲突）→ merged 为合并结果。
+ *    'merge' 绝不等于 'useRemote'：把自动合并读成「用了远端」会让 UI/日志谎报数据来源。
+ *  - 'conflict'  ：双侧都改且无法安全自动合并 → merged 为 undefined，仅 conflicts 有值。
+ */
+export type MergeDecision = 'useRemote' | 'keepLocal' | 'merge' | 'skip';
 
-/** 分区内精细合并产生的单条冲突（JSON key 或 FilesSection 单文件）。 */
+/** 冲突成因（可选字段：旧调用方/旧数据没有它，UI 缺省按 'both-modified' 措辞）。 */
+export type MergeConflictReason =
+  | 'both-modified'
+  | 'modify-delete'
+  | 'delete-modify'
+  | 'no-ancestor'
+  | 'binary'
+  | 'too-large'
+  | 'overlap'
+  | 'array'
+  | 'format'
+  | 'section';
+
+/** 分区内精细合并产生的单条冲突（JSON 叶子 / FilesSection 单文件）。 */
 export interface MergeConflict {
-  /** 冲突位置：JSON 分区是 top-level key；FilesSection 是 relativePath。 */
+  /** 冲突位置：JSON 分区是**点号路径**（'a.b.c'，整分区为 '$'）；FilesSection 是 relativePath。 */
   path: string;
   kind: 'key' | 'file';
+  /** 冲突成因（可选：旧数据没有该字段；UI 缺省按 'both-modified' 措辞） */
+  reason?: MergeConflictReason;
+  /** 是否已尝试自动合并（true + reason='binary'/'too-large'/'array' = 试过但不安全，故留冲突） */
+  autoMergeAttempted?: boolean;
   local?: unknown;
   remote?: unknown;
   ancestor?: unknown;
@@ -31,12 +71,17 @@ export interface MergeConflict {
 
 export interface MergeSectionResult {
   id: SectionId;
-  /** 分区级决策；'skip' 时无 merged/conflicts；'conflict' 时 merged 为 null（仅 conflicts）。 */
+  /** 分区级决策；'skip' 时无 merged/conflicts；'conflict' 时 merged 为 undefined（仅 conflicts）。 */
   decision: MergeDecision | 'conflict';
-  /** 当 decision 为 'useRemote' / 'keepLocal' 时：合并后的整分区数据（= 胜出方原值）。 */
+  /** decision 为 'useRemote' / 'keepLocal' / 'merge' 时为整分区数据（原值或合并结果）。 */
   merged?: SectionData;
   /** 仅 decision === 'conflict' 时非空：分区级冲突或精细合并后剩余冲突。 */
   conflicts: MergeConflict[];
+  /**
+   * 自动合并并入的变更点数量（仅 decision === 'merge' 时有意义；缺省 undefined = 未统计）。
+   * UI 用它区分「远端整分区覆盖」与「双方改动都保住了」。
+   */
+  autoMerged?: number;
 }
 
 export interface MergePlan {
@@ -104,76 +149,76 @@ function deepEqual(a: unknown, b: unknown): boolean {
   return true;
 }
 
-/** JSON 分区精细合并：按 top-level key 走三方合并。
- *  - 双侧均未改 → 跳过
- *  - 仅一侧改   → 采纳该侧
- *  - 双侧均改   → 若 deepEqual 自动合并；否则留为冲突 */
-function mergeJsonSectionGranular(
-  local: Record<string, unknown>,
-  remote: Record<string, unknown>,
-  ancestor: Record<string, unknown> | undefined,
-): { merged: Record<string, unknown>; conflicts: MergeConflict[] } {
-  const merged: Record<string, unknown> = {};
-  const conflicts: MergeConflict[] = [];
-  const keys = new Set<string>([...Object.keys(local), ...Object.keys(remote), ...(ancestor ? Object.keys(ancestor) : [])]);
-  for (const k of keys) {
-    const lHas = Object.prototype.hasOwnProperty.call(local, k);
-    const rHas = Object.prototype.hasOwnProperty.call(remote, k);
-    const aHas = ancestor ? Object.prototype.hasOwnProperty.call(ancestor, k) : false;
-    const lv = lHas ? local[k] : undefined;
-    const rv = rHas ? remote[k] : undefined;
-    const av = aHas ? ancestor![k] : undefined;
-    if (lHas && rHas) {
-      if (deepEqual(lv, rv)) {
-        merged[k] = lv;
-        continue;
-      }
-      // 双侧都有该 key 但值不同 → 看是否都改过
-      const lChanged = !aHas || !deepEqual(lv, av);
-      const rChanged = !aHas || !deepEqual(rv, av);
-      if (lChanged && rChanged) {
-        if (deepEqual(lv, rv)) {
-          merged[k] = lv; // 两侧改后恰好相同
-        } else {
-          conflicts.push({ path: k, kind: 'key', local: lv, remote: rv, ancestor: av });
-        }
-      } else if (lChanged) {
-        merged[k] = lv;
-      } else if (rChanged) {
-        merged[k] = rv;
-      } else {
-        merged[k] = lv; // 双侧都未相对祖先改但 deepEqual 已失败——保持一致
-      }
-    } else if (lHas && !rHas) {
-      // 仅本地有：删/改/增？
-      const lChanged = !aHas || !deepEqual(lv, av);
-      if (lChanged) {
-        // 本地增/改，远程删 → 冲突
-        conflicts.push({ path: k, kind: 'key', local: lv, remote: undefined, ancestor: av });
-      } else {
-        // 本地等于祖先、远程缺：远程删 → 跟随删除
-      }
-    } else if (!lHas && rHas) {
-      const rChanged = !aHas || !deepEqual(rv, av);
-      if (rChanged) {
-        // 本地删、远程增 → 冲突
-        conflicts.push({ path: k, kind: 'key', local: undefined, remote: rv, ancestor: av });
-      } else {
-        // 远程等于祖先、本地缺：本地删 → 跟随删除
-      }
-    } else {
-      // 仅祖先有：双侧都删 → 跟随删除
-    }
-  }
-  return { merged, conflicts };
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-/** FilesSection 精细合并：按 relativePath 走三方合并（按文件字节 deepEqual）。 */
+/** 与 sync-state 的判定保持一致（鸭子类型）：{ version: 1, files: [...] }。 */
+function isFilesSectionData(data: SectionData): data is FilesSection {
+  if (data === null || typeof data !== 'object') return false;
+  const obj = data as { version?: unknown; files?: unknown };
+  return obj.version === 1 && Array.isArray(obj.files);
+}
+
+function bytesEqual(a: Uint8Array | undefined, b: Uint8Array | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** 文本/字节级合并产出的冲突成因 → 统一冲突成因。 */
+function mapConflictReason(reason: TextMergeConflict['reason']): MergeConflictReason {
+  switch (reason) {
+    case 'array': return 'array';
+    case 'format': return 'format';
+    case 'binary': return 'binary';
+    case 'too-large': return 'too-large';
+    default: return 'both-modified'; // 'overlap'（文本行重叠）= 双侧改同一处，统一口径
+  }
+}
+
+function fromTextConflicts(list: TextMergeConflict[]): MergeConflict[] {
+  return list.map((c) => ({
+    path: c.path === '' ? '$' : c.path,
+    kind: 'key' as const,
+    reason: mapConflictReason(c.reason),
+    autoMergeAttempted: true,
+    ...(c.local !== undefined ? { local: c.local } : {}),
+    ...(c.remote !== undefined ? { remote: c.remote } : {}),
+    ...(c.ancestor !== undefined ? { ancestor: c.ancestor } : {}),
+  }));
+}
+
+/**
+ * 统计「自动合并并入了几个变更点」：叶子级比较，双侧值不同且合并结果取到一侧即计 1。
+ * 只统计对象叶子（数组按整体 1 个点），口径 = 用户能感知的「两边各自的改动都保住了」处数。
+ */
+function countMergePoints(local: unknown, remote: unknown, merged: unknown): number {
+  if (isPlainObject(local) && isPlainObject(remote) && isPlainObject(merged)) {
+    const keys = new Set<string>([...Object.keys(local), ...Object.keys(remote), ...Object.keys(merged)]);
+    let n = 0;
+    for (const k of keys) n += countMergePoints(local[k], remote[k], merged[k]);
+    return n;
+  }
+  if (Array.isArray(local) || Array.isArray(remote) || Array.isArray(merged)) {
+    return deepEqual(local, remote) ? 0 : 1;
+  }
+  return deepEqual(local, remote) ? 0 : 1;
+}
+
+/**
+ * FilesSection 精细合并：按 relativePath 逐文件三方合并。
+ *  - 双侧都改且内容不同 → 先尝试行级三方合并（文本/JSON）；成功并入，失败留冲突（reason 如实）；
+ *  - 只有一侧改 → 采纳改动侧；
+ *  - 一侧删、另一侧改/新增 → modify-delete / delete-modify 冲突（绝不直接删数据）；
+ *  - 一侧删、另一侧未改 → 跟随删除。
+ */
 function mergeFilesSectionGranular(
   local: FilesSection,
   remote: FilesSection,
   ancestor: FilesSection | undefined,
-): { merged: FilesSection; conflicts: MergeConflict[] } {
+): { merged: FilesSection; conflicts: MergeConflict[]; mergePoints: number } {
   const lMap = new Map<string, Uint8Array>();
   for (const f of local.files) lMap.set(f.relativePath, f.data);
   const rMap = new Map<string, Uint8Array>();
@@ -184,72 +229,174 @@ function mergeFilesSectionGranular(
   const paths = new Set<string>([...lMap.keys(), ...rMap.keys(), ...aMap.keys()]);
   const mergedFiles: FilesSection['files'] = [];
   const conflicts: MergeConflict[] = [];
-  for (const p of paths) {
-    const l = lMap.get(p);
-    const r = rMap.get(p);
-    const a = aMap.get(p);
-    const eq = (x: Uint8Array | undefined, y: Uint8Array | undefined) => {
-      if (x === undefined || y === undefined) return x === y;
-      if (x.length !== y.length) return false;
-      for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
-      return true;
-    };
-    if (l && r) {
-      if (eq(l, r)) {
-        mergedFiles.push({ relativePath: p, data: l, contentHash: '' });
+  let mergePoints = 0;
+  const push = (relativePath: string, data: Uint8Array): void => {
+    mergedFiles.push({ relativePath, data, contentHash: '' });
+  };
+  for (const path of [...paths].sort()) {
+    const l = lMap.get(path);
+    const r = rMap.get(path);
+    const a = aMap.get(path);
+    if (l !== undefined && r !== undefined) {
+      if (bytesEqual(l, r)) { push(path, l); continue; }
+      const lChanged = a === undefined || !bytesEqual(l, a);
+      const rChanged = a === undefined || !bytesEqual(r, a);
+      if (lChanged && rChanged) {
+        const attempt = mergeBytesThreeWay(a, l, r);
+        if (attempt.ok && attempt.merged !== undefined) {
+          push(path, attempt.merged);
+          mergePoints += 1;
+          continue;
+        }
+        conflicts.push({
+          path,
+          kind: 'file',
+          reason: attempt.kind === 'binary' || attempt.kind === 'too-large'
+            ? (attempt.kind === 'binary' ? 'binary' : 'too-large')
+            : 'both-modified',
+          autoMergeAttempted: true,
+          local: l,
+          remote: r,
+          ancestor: a,
+        });
         continue;
       }
-      const lChanged = !a || !eq(l, a);
-      const rChanged = !a || !eq(r, a);
-      if (lChanged && rChanged) {
-        conflicts.push({ path: p, kind: 'file', local: l, remote: r, ancestor: a });
-      } else if (lChanged) {
-        mergedFiles.push({ relativePath: p, data: l, contentHash: '' });
-      } else if (rChanged) {
-        mergedFiles.push({ relativePath: p, data: r, contentHash: '' });
-      } else {
-        mergedFiles.push({ relativePath: p, data: l, contentHash: '' });
-      }
-    } else if (l && !r) {
-      const aExists = a !== undefined;
-      const lChanged = aExists ? !eq(l, a) : true;
-      if (lChanged) {
-        if (!aExists) {
-          // 纯本地新增（祖先里也没有）→ keepLocal
-          mergedFiles.push({ relativePath: p, data: l, contentHash: '' });
-        } else {
-          // 本地改/增 vs 远程删 → 冲突
-          conflicts.push({ path: p, kind: 'file', local: l, remote: undefined, ancestor: a });
-        }
-      }
-    } else if (!l && r) {
-      const aExists = a !== undefined;
-      const rChanged = aExists ? !eq(r, a) : true;
-      if (rChanged) {
-        if (!aExists) {
-          // 纯远程新增（祖先里也没有）→ useRemote
-          mergedFiles.push({ relativePath: p, data: r, contentHash: '' });
-        } else {
-          // 本地删 vs 远程改/增 → 冲突
-          conflicts.push({ path: p, kind: 'file', local: undefined, remote: r, ancestor: a });
-        }
-      }
+      if (lChanged) { push(path, l); mergePoints += 1; continue; }
+      if (rChanged) { push(path, r); mergePoints += 1; continue; }
+      push(path, l);
+      continue;
     }
+    if (l !== undefined && r === undefined) {
+      const aExists = a !== undefined;
+      if (aExists && bytesEqual(l, a)) continue; // 本地未改、远端删 → 跟随删除
+      if (!aExists) { push(path, l); mergePoints += 1; continue; } // 纯本地新增
+      conflicts.push({ path, kind: 'file', reason: 'modify-delete', local: l, remote: undefined, ancestor: a });
+      continue;
+    }
+    if (l === undefined && r !== undefined) {
+      const aExists = a !== undefined;
+      if (aExists && bytesEqual(r, a)) continue; // 远端未改、本地删 → 跟随删除
+      if (!aExists) { push(path, r); mergePoints += 1; continue; } // 纯远端新增
+      conflicts.push({ path, kind: 'file', reason: 'delete-modify', local: undefined, remote: r, ancestor: a });
+      continue;
+    }
+    // 双侧都删（或仅祖先有）：跟随删除，不产生动作。
   }
-  return { merged: { version: 1, files: mergedFiles }, conflicts };
+  return { merged: { version: 1, files: mergedFiles }, conflicts, mergePoints };
 }
 
-/** 识别 JSON 分区的「键级合并」键值映射（如 settings/ui 的 namespaces、providers 的 providers）。
- * 返回 undefined → 该分区无法做键级合并，调用方应退化为整分区冲突。 */
-function keyMapOf(data: SectionData): Record<string, unknown> | undefined {
-  const obj = data as unknown as Record<string, unknown>;
-  if (obj && typeof obj === 'object' && obj['version'] === 1) {
-    const ns = obj['namespaces'];
-    if (ns && typeof ns === 'object' && !Array.isArray(ns)) return ns as Record<string, unknown>;
-    const prov = obj['providers'];
-    if (prov && typeof prov === 'object' && !Array.isArray(prov)) return prov as Record<string, unknown>;
+/** 单分区三方合并（决策链见文件头注释）。 */
+function mergeSectionTriple(
+  id: SectionId,
+  lData: SectionData | undefined,
+  rData: SectionData | undefined,
+  aData: SectionData | undefined,
+  h: TripleHashes,
+): MergeSectionResult {
+  // ⓪ 形状闸门（先于一切取舍）：远端载荷来自不可信输入（解析层只保证整体是合法 JSON，
+  //    不保证每个分区的值形状正确）。值形状不对时**绝不原样采用** —— 那等于把畸形数据
+  //    写进本机配置；一律按 conflict(reason='format') 交用户裁决。
+  if (lData !== undefined && !isPlainObject(lData)) {
+    return {
+      id,
+      decision: 'conflict',
+      conflicts: [{ path: '$', kind: 'key', reason: 'format', autoMergeAttempted: false, local: lData, remote: rData, ancestor: aData }],
+    };
   }
-  return undefined;
+  if (rData !== undefined && !isPlainObject(rData)) {
+    return {
+      id,
+      decision: 'conflict',
+      conflicts: [{ path: '$', kind: 'key', reason: 'format', autoMergeAttempted: false, local: lData, remote: rData, ancestor: aData }],
+    };
+  }
+  // ① 远端无该分区：本地未改 → 无变化；本地改了 → 冲突（不准把本地改动当垃圾丢掉）
+  if (rData === undefined && lData !== undefined) {
+    const lChanged = h.ancestor === undefined || h.local !== h.ancestor;
+    if (!lChanged) return { id, decision: 'skip', conflicts: [] };
+    return {
+      id,
+      decision: 'conflict',
+      conflicts: [{
+        path: '$',
+        kind: 'key',
+        reason: h.ancestor === undefined ? 'no-ancestor' : 'modify-delete',
+        autoMergeAttempted: false,
+        local: lData,
+        remote: undefined,
+        ancestor: aData,
+      }],
+    };
+  }
+  // ② 本地无该分区、远端有：远端未改 → 无变化；远端改了 → 采用远端（分区缺失不是删除语义，见文件头）
+  if (lData === undefined && rData !== undefined) {
+    const rChanged = h.ancestor === undefined || h.remote !== h.ancestor;
+    if (!rChanged) return { id, decision: 'skip', conflicts: [] };
+    return { id, decision: 'useRemote', merged: rData, conflicts: [] };
+  }
+  if (lData === undefined && rData === undefined) return { id, decision: 'skip', conflicts: [] };
+  const local = lData as SectionData;
+  const remote = rData as SectionData;
+  if (h.local === h.remote) return { id, decision: 'skip', conflicts: [] };
+  // 分区形态互换（一侧 FilesSection、一侧 JSON 分区）→ 早于 useRemote/keepLocal 判冲突：
+  // 「远端改了、本地没改」不足以支撑把另一种形态的数据整分区写进本机（语义不同，采用必错）。
+  if (isFilesSectionData(local) !== isFilesSectionData(remote)) {
+    return {
+      id,
+      decision: 'conflict',
+      conflicts: [{ path: '$', kind: 'key', reason: 'section', autoMergeAttempted: false, local, remote, ancestor: aData }],
+    };
+  }
+  if (h.ancestor === undefined) {
+    return {
+      id,
+      decision: 'conflict',
+      conflicts: [{ path: '$', kind: 'key', reason: 'no-ancestor', autoMergeAttempted: false, local, remote, ancestor: undefined }],
+    };
+  }
+  if (h.local === h.ancestor) return { id, decision: 'useRemote', merged: remote, conflicts: [] };
+  if (h.remote === h.ancestor) return { id, decision: 'keepLocal', merged: local, conflicts: [] };
+
+  // ③ 双侧相对祖先都改 → 精细合并（形状与形态闸门已在 ⓪/前段通过）
+  if (isFilesSectionData(local) && isFilesSectionData(remote)) {
+    const aFiles = aData !== undefined && isFilesSectionData(aData) ? aData : undefined;
+    const { merged, conflicts, mergePoints } = mergeFilesSectionGranular(local, remote, aFiles);
+    if (conflicts.length === 0 && mergePoints > 0) {
+      return { id, decision: 'merge', merged, conflicts: [], autoMerged: mergePoints };
+    }
+    if (conflicts.length === 0) {
+      // 双侧都改但合并结果与某一侧逐字相同 → 如实报是哪一侧赢了（不谎称「合并」）
+      const mh = hashSection(merged);
+      if (mh === h.remote) return { id, decision: 'useRemote', merged, conflicts: [] };
+      if (mh === h.local) return { id, decision: 'keepLocal', merged, conflicts: [] };
+      return { id, decision: 'merge', merged, conflicts: [], autoMerged: 0 };
+    }
+    return { id, decision: 'conflict', conflicts };
+  }
+  if (isPlainObject(local) && isPlainObject(remote)) {
+    const aJson = aData !== undefined && isPlainObject(aData) ? aData : undefined;
+    const res = mergeJsonValues(aJson, local, remote);
+    if (!res.ok || res.merged === undefined) {
+      const conflicts = res.conflicts.length > 0
+        ? fromTextConflicts(res.conflicts)
+        : [{ path: '$', kind: 'key' as const, reason: 'format' as const, autoMergeAttempted: true, local, remote, ancestor: aData }];
+      return { id, decision: 'conflict', conflicts };
+    }
+    const merged = res.merged as SectionData;
+    if (res.conflicts.length === 0) {
+      const mh = hashSection(merged);
+      if (mh === h.remote) return { id, decision: 'useRemote', merged, conflicts: [] };
+      if (mh === h.local) return { id, decision: 'keepLocal', merged, conflicts: [] };
+      return { id, decision: 'merge', merged, conflicts: [], autoMerged: countMergePoints(local, remote, merged) };
+    }
+    return { id, decision: 'conflict', conflicts: fromTextConflicts(res.conflicts) };
+  }
+  // 类型不一致（一侧 FilesSection、一侧 JSON）或非对象 → 整分区冲突，交用户裁决
+  return {
+    id,
+    decision: 'conflict',
+    conflicts: [{ path: '$', kind: 'key', reason: 'section', autoMergeAttempted: false, local, remote, ancestor: aData }],
+  };
 }
 
 /** 主入口：三方合并。纯函数，无副作用。 */
@@ -264,97 +411,8 @@ export function merge(
   const ids = unionSectionIds(l, r, a);
   const hashes = computeHashes(l, r, a, ids);
   const results: MergeSectionResult[] = [];
-
   for (const id of ids) {
-    const h = hashes.get(id)!;
-    const lData = l[id];
-    const rData = r[id];
-    const aData = a ? a[id] : undefined;
-
-    // 远端无 → skip（不在本轮考虑；本地有但远端没有 = 远端"删了"，视作 useRemote=删除）
-    // 本实现按远端视角：远端缺 + 本地存在 + 本地未改祖先 → skip(无变化)；否则冲突。
-    if (rData === undefined && lData !== undefined) {
-      const lChanged = h.ancestor === undefined || h.local !== h.ancestor;
-      if (!lChanged) {
-        results.push({ id, decision: 'skip', conflicts: [] });
-        continue;
-      }
-      results.push({ id, decision: 'conflict', conflicts: [{ path: '$', kind: 'key', local: lData, remote: undefined, ancestor: aData }] });
-      continue;
-    }
-    // 本地无、远端有：远端新增；本地删除过（=等于祖先空）+祖先空→skip；否则按 useRemote。
-    if (lData === undefined && rData !== undefined) {
-      const rChanged = h.ancestor === undefined || h.remote !== h.ancestor;
-      if (!rChanged) {
-        results.push({ id, decision: 'skip', conflicts: [] });
-        continue;
-      }
-      results.push({ id, decision: 'useRemote', merged: rData, conflicts: [] });
-      continue;
-    }
-    // 双方都没有 → skip
-    if (lData === undefined && rData === undefined) {
-      results.push({ id, decision: 'skip', conflicts: [] });
-      continue;
-    }
-    // 双方都有
-    if (h.local === h.remote) {
-      results.push({ id, decision: 'skip', conflicts: [] });
-      continue;
-    }
-    if (h.ancestor === undefined) {
-      // 无祖先 → 两方差异视为整分区冲突（不猜测）
-      results.push({ id, decision: 'conflict', conflicts: [{ path: '$', kind: 'key', local: lData, remote: rData, ancestor: undefined }] });
-      continue;
-    }
-    if (h.local === h.ancestor) {
-      results.push({ id, decision: 'useRemote', merged: rData, conflicts: [] });
-      continue;
-    }
-    if (h.remote === h.ancestor) {
-      results.push({ id, decision: 'keepLocal', merged: lData, conflicts: [] });
-      continue;
-    }
-    // 双侧相对祖先都改 → 进入精细合并
-    if (isFilesSectionData(lData as SectionData)) {
-      const { merged, conflicts } = mergeFilesSectionGranular(lData as FilesSection, rData as FilesSection, aData as FilesSection | undefined);
-      if (conflicts.length === 0) {
-        results.push({ id, decision: 'useRemote', merged: merged as SectionData, conflicts: [] });
-      } else {
-        results.push({ id, decision: 'conflict', conflicts, merged: undefined });
-      }
-      continue;
-    }
-    // JSON 分区：识别可键级合并的子映射（namespaces / providers）
-    const lKeyMap = keyMapOf(lData as unknown as SectionData);
-    const rKeyMap = keyMapOf(rData as unknown as SectionData);
-    const aKeyMap = aData ? keyMapOf(aData as unknown as SectionData) : undefined;
-    if (lKeyMap && rKeyMap) {
-      const { merged: mergedKeys, conflicts } = mergeJsonSectionGranular(lKeyMap, rKeyMap, aKeyMap);
-      // 重组 SectionData：用 l/r 中较新者保留非键级合并字段（version 等），键级合并字段用 mergedKeys
-      const lObj = lData as unknown as Record<string, unknown>;
-      const rObj = rData as unknown as Record<string, unknown>;
-      const base: Record<string, unknown> = { ...lObj, ...rObj };
-      // 找到键级合并字段在 base 中的键名
-      const keyFieldName = lKeyMap === lObj['namespaces'] ? 'namespaces'
-        : lKeyMap === lObj['providers'] ? 'providers' : undefined;
-      if (keyFieldName) base[keyFieldName] = mergedKeys;
-      if (conflicts.length === 0) {
-        results.push({ id, decision: 'useRemote', merged: base as unknown as SectionData, conflicts: [] });
-      } else {
-        results.push({ id, decision: 'conflict', conflicts, merged: undefined });
-      }
-      continue;
-    }
-    // 非键级合并 JSON 分区（plugins/mcp/prompts/workspaces 等）：退化为整分区冲突
-    results.push({ id, decision: 'conflict', conflicts: [{ path: '$', kind: 'key', local: lData, remote: rData, ancestor: aData }] });
+    results.push(mergeSectionTriple(id, l[id], r[id], a ? a[id] : undefined, hashes.get(id)!));
   }
   return { sections: results };
-}
-
-/** 分区是否为文件类（FilesSection）—— 鸭子类型，复用 sync-state 的判定以保持一致。 */
-function isFilesSectionData(data: SectionData): data is FilesSection {
-  if (data === null || typeof data !== 'object') return false;
-  const obj = data as { version?: unknown; files?: unknown };
-  return obj.version === 1 && Array.isArray(obj.files);
 }

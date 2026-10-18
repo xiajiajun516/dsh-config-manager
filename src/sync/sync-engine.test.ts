@@ -2309,3 +2309,355 @@ test('issue #78: 拉取侧 —— 只放行 mcp 时，远端快照里的 session
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+
+/* ---------------- 远程合并：push 远端推进检测 + 基线纪律（2026-10） ---------------- */
+
+/** 造一份「另一台设备推的」远端快照（仅 settings 分区），与 e2e 同款夹具。 */
+function remoteSettingsSnapshot(id: string, theme: string, revision: number): SyncSnapshot {
+  return {
+    id,
+    createdAt: '2026-08-16T12:00:00.000Z',
+    manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+    sections: {
+      settings: { version: 1, namespaces: { general: { value: { theme }, revision, secrets: [] } } },
+    },
+  };
+}
+
+/** 把「别人的快照」塞进内存通道（模拟另一台设备推送）。 */
+function seedRemoteSnapshot(transport: MemSyncTransport, snapshot: SyncSnapshot): void {
+  transport.snapshots.set(snapshot.id, snapshot);
+  transport.metas.push(computeSnapshotMeta(snapshot));
+}
+
+/** 递归收集目录下全部文件（相对路径 → 文本内容）：用于断言「零写入」。 */
+async function snapshotTree(dir: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (rel: string): Promise<void> => {
+    const entries = await fs.readdir(path.join(dir, rel), { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
+    for (const e of entries) {
+      const child = rel === '' ? e.name : rel + '/' + e.name;
+      if (e.isDirectory()) await walk(child);
+      else out[child] = await fs.readFile(path.join(dir, child), 'utf8');
+    }
+  };
+  await walk('');
+  return out;
+}
+
+/** list() 可注入失败的通道（覆盖「读不到远端列表」这条分支）。 */
+class FlakyListTransport extends MemSyncTransport {
+  failList = false;
+  override async list(): Promise<SyncSnapshotMeta[]> {
+    if (this.failList) throw new Error('list-boom');
+    return await super.list();
+  }
+}
+
+test('push: 远端已被别的设备推进 → 拒绝写入（不 upload、sync-state 逐字节不变），force 才放行', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-push-advance-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    // 首次同步：远端为空 → 不拦（本机没有基线可丢）
+    assert.equal((await engine.push({ snapshotId: 'sync-base' })).ok, true);
+    const stateBefore = await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8');
+
+    // 另一台设备推了 sync-other（本机基线仍是 sync-base）
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-other', 'light', 5));
+    transport.calls.length = 0;
+    const refused = await engine.push({ snapshotId: 'sync-mine' });
+
+    assert.equal(refused.ok, false, '远端已推进 → 拒绝');
+    assert.equal(refused.conflict, true, '这是「需要先合并远端」的冲突态，不是通道故障');
+    assert.equal(refused.snapshotId, '');
+    assert.deepEqual(refused.sections, []);
+    assert.equal(refused.warnings.length, 0, '拒绝路径本身不产生额外告警');
+    assert.ok((refused.message ?? '').includes('sync-other'), '说明里点出远端快照 id: ' + refused.message);
+    assert.ok((refused.message ?? '').includes('sync-base'), '说明里点出本地基线 id: ' + refused.message);
+    assert.equal(transport.snapshots.has('sync-mine'), false, '绝不 upload');
+    assert.ok(!transport.calls.includes('upload'), 'transport 未收到 upload: ' + transport.calls.join(','));
+    assert.equal(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'), stateBefore, 'sync-state 逐字节不变');
+
+    // 用户显式强制才写
+    const forced = await engine.push({ snapshotId: 'sync-mine', force: true });
+    assert.equal(forced.ok, true, 'force=true 放行');
+    assert.equal(transport.snapshots.has('sync-mine'), true);
+    assert.equal((await loadSyncState(tmp)).lastSnapshotId, 'sync-mine');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 首次同步（lastSnapshotId=""）即使远端已有别人的快照也不拦', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-push-first-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-other', 'light', 5));
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    const report = await engine.push({ snapshotId: 'sync-first' });
+    assert.equal(report.ok, true, '没有基线就没有可丢的东西 → 不拦');
+    assert.equal((await loadSyncState(tmp)).lastSnapshotId, 'sync-first');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('push: 远端列表读不出来 → 无法判定，按原样继续但如实告警（不静默、不拦）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-push-listfail-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new FlakyListTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    await engine.push({ snapshotId: 'sync-base' });
+    transport.failList = true;
+    const report = await engine.push({ snapshotId: 'sync-mine' });
+    assert.equal(report.ok, true, '读不到远端列表不拦推送（上传本身会暴露通道问题）');
+    assert.ok(report.warnings.some((w) => w.includes('list-boom')), '必须如实说明无法判定: ' + report.warnings.join(' | '));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('previewMerge: 只读零写入 + 决策/计数/三侧预览（敏感值必须已脱敏）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-preview-merge-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const ancestors = path.join(tmp, 'anc');
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: ancestors });
+    // 先建基线（祖先 = dark + 一个值形态敏感内容：字段名不敏感，只能靠 redact 的值形状模式兜底）
+    // 注意：载荷必须是「像密钥」的形状（含大写/数字）——纯小写词的 sk- 形态被值形状守卫刻意放行（防过剥）
+    ctx.settings.ns.set('general', { value: { theme: 'dark', webhook: 'sk-anc-0000000000000000' }, revision: 3, secrets: [] });
+    await engine.push({ snapshotId: 'sync-base' });
+    // 本地改 blue / 远端改 red，且两侧的敏感值不同 → 该键必然留冲突，预览里必须有值可脱敏
+    ctx.settings.ns.set('general', { value: { theme: 'blue', webhook: 'sk-live-AB12cd34EF56gh78' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, {
+      id: 'sync-remote',
+      createdAt: '2026-08-16T12:00:00.000Z',
+      manifest: { schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32', sectionIds: ['settings'], containsSecrets: false },
+      sections: {
+        settings: {
+          version: 1,
+          namespaces: { general: { value: { theme: 'red', webhook: 'sk-live-Zx98wv76ut54sr32' }, revision: 9, secrets: [] } },
+        },
+      },
+    });
+
+    const before = { state: await snapshotTree(tmp), anc: await snapshotTree(ancestors) };
+    const preview = await engine.previewMerge();
+    const after = { state: await snapshotTree(tmp), anc: await snapshotTree(ancestors) };
+    assert.deepEqual(after, before, 'previewMerge 必须零写入（状态目录 + 祖先目录逐字节不变）');
+
+    assert.equal(preview.ok, true);
+    assert.equal(preview.snapshotId, 'sync-remote');
+    assert.equal(preview.hasAncestor, true, '有祖先副本 → 三方合并');
+    const settings = preview.sections.find((s) => s.id === 'settings');
+    assert.ok(settings !== undefined, 'plan 应含 settings');
+    assert.equal(settings!.decision, 'conflict');
+    assert.ok(settings!.conflictCount >= 1);
+    const conflict = settings!.conflicts[0]!;
+    assert.ok(conflict.localPreview.includes('blue'), '本机侧预览: ' + conflict.localPreview);
+    assert.ok(conflict.remotePreview.includes('red'), '远端侧预览: ' + conflict.remotePreview);
+    const serialized = JSON.stringify(preview);
+    assert.ok(!serialized.includes('sk-live-AB12cd34EF56gh78'), '本机侧敏感值绝不回传浏览器');
+    assert.ok(!serialized.includes('sk-live-Zx98wv76ut54sr32'), '远端侧敏感值绝不回传浏览器');
+    assert.ok(!serialized.includes('sk-anc-0000000000000000'), '祖先侧敏感值绝不回传浏览器');
+    assert.ok(serialized.includes('REDACTED'), '预览文本必须过 redact: ' + serialized.slice(0, 400));
+    // 预览必须是**字符串**（原始值对象绝不直接上抛给浏览器）
+    assert.ok(preview.sections.every((s) => s.conflicts.every((c) =>
+      typeof c.localPreview === 'string' && typeof c.remotePreview === 'string' && typeof c.ancestorPreview === 'string')));
+    assert.equal(preview.summary.conflicts, 1);
+    assert.ok(preview.summary.review >= 1, '冲突项必须计入需人工');
+    assert.equal(preview.summary.skipped >= 0, true);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('previewMerge: 无祖先副本 → hasAncestor=false 且两侧差异一律呈现为 conflict', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-preview-noanc-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    // 不给 localSnapshotsDir → 没有本地祖先副本
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'light', 5));
+    const preview = await engine.previewMerge();
+    assert.equal(preview.ok, true);
+    assert.equal(preview.hasAncestor, false);
+    const settings = preview.sections.find((s) => s.id === 'settings');
+    assert.equal(settings?.decision, 'conflict', '无祖先 → 不猜，两侧差异按冲突呈现');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergeResolutions: skip 的裁决 → 基线不推进 + pendingMerge 记录 + 本机不被写', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-pending-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'skip' }]);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.applied, []);
+    assert.deepEqual(report.pendingConflicts, ['settings']);
+    assert.ok(report.warnings.some((w) => w.includes('settings')), '待裁决必须可见: ' + report.warnings.join(' | '));
+
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-base', '冲突未裁决 → 远端指针保持原值');
+    assert.deepEqual(state.pendingMerge?.sections, ['settings']);
+    assert.equal(state.pendingMerge?.remoteSnapshotId, 'sync-remote');
+    assert.notEqual(state.pendingMerge?.since, '');
+    assert.equal((ctx.settings.ns.get('general')!.value as { theme: string }).theme, 'blue', '本机未被覆盖');
+    // 磁盘原文断言（不经 loadSyncState 的归一化）：lastSnapshotId 必须逐字不变，pendingMerge 必须落盘
+    const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
+    assert.equal(raw.lastSnapshotId, 'sync-base', 'sync-state.json 里的基线指针原文不变');
+    assert.equal(raw.schemaVersion, SYNC_STATE_SCHEMA_VERSION, '不提升 schemaVersion');
+    assert.deepEqual(raw.pendingMerge.sections, ['settings']);
+    assert.equal(raw.pendingMerge.remoteSnapshotId, 'sync-remote');
+
+    // 冲突下一轮重新出现（基线没推进 → 远端那版仍被当作新快照）
+    const again = await engine.previewMerge();
+    assert.equal(again.sections.find((s) => s.id === 'settings')?.decision, 'conflict');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergeResolutions: 全部裁决 → 基线推进到远端快照 + pendingMerge 清空 + 本机被写', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-resolved-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    // 先留一个待裁决状态，再全部裁决 → 字段必须被清掉
+    const pending = await engine.applyMergeResolutions([{ id: 'settings', action: 'skip' }]);
+    assert.deepEqual(pending.pendingConflicts, ['settings']);
+    assert.equal((await loadSyncState(tmp)).lastSnapshotId, 'sync-base');
+
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'useRemote' }]);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.applied, ['settings']);
+    assert.deepEqual(report.pendingConflicts, [], '没有待裁决分区了');
+    assert.equal((ctx.settings.ns.get('general')!.value as { theme: string }).theme, 'red', '远端整分区胜出');
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-remote', '全部裁决完 → 基线推进');
+    assert.equal(state.pendingMerge, undefined, 'pendingMerge 必须清空');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergeResolutions: useMerged 对 conflict 分区（无 merged）→ 计入待裁决，不写本机', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-usemerged-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'useMerged' }]);
+    assert.deepEqual(report.pendingConflicts, ['settings']);
+    assert.deepEqual(report.applied, []);
+    assert.equal((ctx.settings.ns.get('general')!.value as { theme: string }).theme, 'blue');
+    assert.equal((await loadSyncState(tmp)).lastSnapshotId, 'sync-base');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergeResolutions: keepLocal 全部裁决 → 本机不变且基线推进（决策不被下一轮推翻）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-keeplocal-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc') });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'keepLocal' }]);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.pendingConflicts, []);
+    assert.equal((ctx.settings.ns.get('general')!.value as { theme: string }).theme, 'blue', '本机裁决胜出');
+    assert.equal((await loadSyncState(tmp)).lastSnapshotId, 'sync-remote');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergeResolutions: 写回失败 → 整体回滚 + 基线不变 + 不写 pendingMerge', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-applyfail-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    ctx.settings.ns.set('general', { value: { theme: 'dark' }, revision: 3, secrets: [] });
+    const transport = new MemSyncTransport();
+    const mock = new MockImporter();
+    mock.ok = false;
+    const engine = makeEngineWithMockImporter({
+      ctx, transport, stateDir: tmp, localSnapshotsDir: path.join(tmp, 'anc'), mockImporter: mock,
+    });
+    await engine.push({ snapshotId: 'sync-base' });
+    ctx.settings.ns.set('general', { value: { theme: 'blue' }, revision: 4, secrets: [] });
+    seedRemoteSnapshot(transport, remoteSettingsSnapshot('sync-remote', 'red', 9));
+
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'useRemote' }]);
+    assert.equal(report.ok, false, '失败 → ok:false');
+    assert.equal(report.rolledBack, true, '失败 → 整体回滚');
+    assert.deepEqual(report.applied, []);
+    const state = await loadSyncState(tmp);
+    assert.equal(state.lastSnapshotId, 'sync-base', '失败绝不推进基线');
+    assert.equal(state.pendingMerge, undefined, '失败路径不写待裁决记录');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('applyMergeResolutions: 远端无快照 → 空报告（ok:true，不构造计划、不抛错）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-merge-empty-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    const report = await engine.applyMergeResolutions([{ id: 'settings', action: 'useRemote' }]);
+    assert.equal(report.ok, true);
+    assert.deepEqual(report.pendingConflicts, []);
+    assert.deepEqual(report.applied, []);
+    const preview = await engine.previewMerge();
+    assert.equal(preview.ok, false);
+    assert.equal(preview.snapshotId, '');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+

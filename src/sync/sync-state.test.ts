@@ -231,6 +231,70 @@ test('saveSyncState / loadSyncState: ancestorId 与 lastSnapshotId 相互独立�
   }
 });
 
+/* ---------------- 基线纪律：pendingMerge（纯可选字段，不提升 schemaVersion） ---------------- */
+
+test('saveSyncState / loadSyncState: pendingMerge 往返（旧调用方缺省不写该字段）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-pending-'));
+  try {
+    const state: SyncState = {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '2026-08-16T12:00:00.000Z',
+      sections: {},
+      lastSnapshotId: 'sync-base',
+      ancestorId: '',
+      pendingMerge: { remoteSnapshotId: 'sync-remote', sections: ['settings', 'skills'], since: '2026-08-16T12:00:00.000Z' },
+    };
+    await saveSyncState(tmp, state);
+    const raw = JSON.parse(await fs.readFile(path.join(tmp, SYNC_STATE_FILE), 'utf8'));
+    assert.equal(raw.schemaVersion, SYNC_STATE_SCHEMA_VERSION, '纯可选字段不提升 schemaVersion');
+    assert.deepEqual(raw.pendingMerge, state.pendingMerge, '逐字落盘');
+    const loaded = await loadSyncState(tmp);
+    assert.deepEqual(loaded.pendingMerge, state.pendingMerge, '读回形状一致');
+    assert.deepEqual(loaded, state);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('loadSyncState: 缺 pendingMerge 的旧文件 → 读回形状逐键不变（字段缺席，不是 undefined 键）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-nopending-'));
+  try {
+    await fs.writeFile(
+      path.join(tmp, SYNC_STATE_FILE),
+      JSON.stringify({ schemaVersion: 3, lastSyncAt: '', sections: {}, lastSnapshotId: '', ancestorId: '' }),
+      'utf8',
+    );
+    const state = await loadSyncState(tmp);
+    assert.equal('pendingMerge' in state, false, '缺席 = 无待裁决冲突（不凭空造一个空记录）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('loadSyncState: 形状损坏/分区清单为空的 pendingMerge → 按「无待裁决冲突」处理，不抛错', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-pending-bad-'));
+  try {
+    const cases: unknown[] = [
+      'not-an-object',
+      { remoteSnapshotId: 'x', since: 'y', sections: 'nope' },
+      { remoteSnapshotId: 42, since: 'y', sections: ['settings'] },
+      { remoteSnapshotId: 'x', sections: ['settings'] }, // 缺 since
+      { remoteSnapshotId: 'x', since: 'y', sections: [] }, // 空清单 = 没有内容可记录
+    ];
+    for (const bad of cases) {
+      await fs.writeFile(
+        path.join(tmp, SYNC_STATE_FILE),
+        JSON.stringify({ schemaVersion: 3, lastSyncAt: '', sections: {}, lastSnapshotId: '', ancestorId: '', pendingMerge: bad }),
+        'utf8',
+      );
+      const state = await loadSyncState(tmp);
+      assert.equal('pendingMerge' in state, false, '损坏形态不得让 loadSyncState 失败: ' + JSON.stringify(bad));
+    }
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('loadSyncState: 非字符串 ancestorId（损坏/被篡改）→ 按「无本地祖先副本」处理，不抛错', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-state-anc-bad-'));
   try {
