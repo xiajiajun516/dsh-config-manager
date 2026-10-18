@@ -9,6 +9,7 @@
 | --- | --- | --- |
 | `git-and-release.md` | git 同步 origin / 删文件前 git status / 禁用 checkout -- 回滚 / LF↔CRLF / pnpm 发布年龄 / CI 平台矩阵与 tests 类型检查 | §📌 常见坑「Git / 版本发布」、§⚙️ 命令与验证 |
 | `profiles-and-instances.md` | profile 语义 / desktop 独占 / 复制档案 relink 与中断残留 / 隔离实例挂载 bundles / cordis.patch.yml !!js / pnpm 同树布局 | §📌「Profile 与隔离实例」、§🏗️ 架构心智 |
+| `foreign-import.md` | 外部来源迁移：三处「文档说支持、代码没有」/ 插件≠目录拷贝的三条证据 / 会话字节幂等 / 「写了没接线」/ 静默截断修复 / 真值表护栏缺失 / 本机 Claude Code 实测形态 | §📌「外部来源迁移」 |
 | `sessions-import-export.md` | 会话日志字节改写 / 可见性来源 / 子代理父子 / 排序时间 / 前缀映射 / recursive-walk / 归档缓存与预览同口径 | §📌「会话与导入导出」、§🏗️ |
 | `sessions-repair-diagnostics.md` | v0 打包行 / 检测口径 G-24 / 复核门与 catalog / 外部来源合成行 / 面板侧写路径 / 两侧诚实 / codec 锚点链 | §📌「会话修复与诊断口径」 |
 | `security-and-credentials.md` | 凭据计划项「值的有无」/ 加密载荷 / 批量按钮 / 磁盘占用候选集 / DCA1 形态判定 / SAFE MODE / 值形状 G-36 / Secret 默认不导出 / sessionStorage 白名单 | §🔐 安全不变量、§📌「安全」相关条 |
