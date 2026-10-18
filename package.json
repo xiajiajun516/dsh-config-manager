@@ -202,7 +202,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "schemastery": "^3.18.0",
-    "tsdown": "0.23.0",
+    "tsdown": "0.23.1",
     "typescript": "^7.0.2"
   }
 }
