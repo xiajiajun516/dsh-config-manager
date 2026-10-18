@@ -44,6 +44,16 @@ export interface MergePreviewViewProps {
   onApplied?: () => void
   /** 回滚完成后通知父级刷新同步状态 */
   onRolledBack?: () => void
+  /**
+   * 预置预览（方案 A：一键同步已用**一次**请求取到 → 直接渲染，绝不再拉一遍远端快照）。
+   * 有值 = 打开即展示该结果；null/缺省 = 挂载时自取（保留翻页/重进后的自取路径）。
+   */
+  initialPreview?: MergePreviewResponse | null
+  /**
+   * 收起视图（受控入口提供）。方案 A：主行不再有「检查远程合并」按钮，
+   * 视图由一键同步自动展开 —— 因此**必须**在视图内留一个收起出口（不提供则不渲染该按钮）。
+   */
+  onClose?: () => void
 }
 
 /**
@@ -53,10 +63,12 @@ export interface MergePreviewViewProps {
  * 草稿**不持久化**（裁决是当次操作的一部分；刷新页面等于放弃本次裁决，不会静默留下半套选择）。
  */
 export function MergePreviewView({
-  api, t, channelPayload, sectionName, decryptPassword, busy = false, onApplied, onRolledBack,
+  api, t, channelPayload, sectionName, decryptPassword, busy = false, onApplied, onRolledBack, initialPreview, onClose,
 }: MergePreviewViewProps) {
-  const [preview, setPreview] = useState<MergePreviewResponse | null>(null)
-  const [draft, setDraft] = useState<MergeResolutionDraft>({})
+  /** 预置种子（只读：挂载时用它初始化，不在后续渲染里改状态） */
+  const seed = initialPreview ?? null
+  const [preview, setPreview] = useState<MergePreviewResponse | null>(seed)
+  const [draft, setDraft] = useState<MergeResolutionDraft>(() => initialResolutionDraft(seed))
   const [result, setResult] = useState<MergeApplyResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [applying, setApplying] = useState(false)
@@ -82,8 +94,10 @@ export function MergePreviewView({
   }
 
   useEffect(() => {
+    // 有预置种子就不再请求（方案 A 的「只取一次」）；否则挂载时自取一次，
+    // 之后由「重新预览」按钮显式刷新（避免与父级轮询叠加）。
+    if (seed !== null) return
     void load()
-    // 仅挂载时取一次：之后由「重新预览」按钮显式刷新（避免与父级轮询叠加）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -158,6 +172,7 @@ export function MergePreviewView({
       <div className={css.actionRow}>
         <Button size="sm" disabled={busy || loading} onClick={() => { void load() }}>{t('merge.reload')}</Button>
         <InfoHint text={t('merge.scopeNotice')} label={t('common.infoHint')} />
+        {onClose !== undefined && <Button size="sm" onClick={onClose}>{t('common.close')}</Button>}
       </div>
 
       {loading && <Skeleton count={3} label={t('merge.loading')} />}
@@ -310,10 +325,17 @@ export function MergePreviewView({
   )
 }
 
-/** 入口组件的 props = 裁决视图 props + 打开回调。 */
+/** 入口组件的 props = 裁决视图 props + 打开回调（方案 A 后主行不再使用自带按钮）。 */
 export interface MergePreviewEntryProps extends MergePreviewViewProps {
   /** 打开前先切到该通道（宿主请求体取自「当前通道」的表单快照，不切换就会拿错通道的地址） */
   onOpen?: () => void
+  /**
+   * 受控展开信号（方案 A）：值变化即展开一次。一键同步分派命中合并路径时由父级递增值，
+   * 于是主行不再需要独立的「检查远程合并」按钮。
+   */
+  openSignal?: number
+  /** 隐藏自带入口按钮（受控模式下由父级按钮触发；按钮样式与提示保持不变时无需隐藏） */
+  hideEntryButton?: boolean
 }
 
 /**
@@ -321,25 +343,33 @@ export interface MergePreviewEntryProps extends MergePreviewViewProps {
  *
  * 开合状态**自持**：SyncPanel 有行数棘轮（装配层不许膨胀），主文件只留一次调用；
  * 视图本身在展开时才挂载（未展开零请求 —— 预览要拉远端快照，不该由页面渲染顺手触发）。
+ * 受控展开（openSignal）与预置预览（initialPreview）组合 = 方案 A 的「一键同步 → 自动进裁决」。
  */
-export function MergePreviewEntry({ onOpen, t, ...view }: MergePreviewEntryProps) {
+export function MergePreviewEntry({ onOpen, t, openSignal, hideEntryButton = false, ...view }: MergePreviewEntryProps) {
   const [open, setOpen] = useState(false)
+  useEffect(() => {
+    // 只在**收到有效信号**时展开（不做「值变小即收起」——收起由用户主动点按钮决定）
+    if (openSignal !== undefined && openSignal > 0) setOpen(true)
+  }, [openSignal])
   return (
     <>
-      <div className={css.actionRow}>
-        <Button
-          disabled={view.busy === true}
-          onClick={() => {
-            if (!open) onOpen?.()
-            setOpen((cur) => !cur)
-          }}
-        >
-          {t('merge.entry')}
-        </Button>
-        <InfoHint text={t('merge.entryHint')} label={t('common.infoHint')} />
-      </div>
-      {/* t 单独回传：MergePreviewView 的 t 是必填 prop，解构后不在 view 里 */}
-      {open && <MergePreviewView t={t} {...view} />}
+      {!hideEntryButton && (
+        <div className={css.actionRow}>
+          <Button
+            disabled={view.busy === true}
+            onClick={() => {
+              if (!open) onOpen?.()
+              setOpen((cur) => !cur)
+            }}
+          >
+            {t('merge.entry')}
+          </Button>
+          <InfoHint text={t('merge.entryHint')} label={t('common.infoHint')} />
+        </div>
+      )}
+      {/* key = 信号：新的预览到达时重建视图（旧裁决属于上一份远端快照，必须丢弃）；
+          t 单独回传：它是必填 prop，解构后不在 view 里。 */}
+      {open && <MergePreviewView key={openSignal ?? 0} t={t} {...view} onClose={() => { setOpen(false) }} />}
     </>
   )
 }

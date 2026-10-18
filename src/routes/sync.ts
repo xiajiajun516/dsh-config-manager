@@ -238,6 +238,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           // 已保存的云端点 provider 清单（切换 provider 时回填用；只有名字，无任何值）
           cloudSavedProviders: await listCloudConfiguredProviders(syncDir),
           lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
+          // 方案 A（同步页按钮瘦身）：是否存在同步基线（本地祖先指针）。**只回布尔，绝不回快照 id** ——
+          // 界面据此在「有基线 → 三方裁决视图 / 无基线 → 导入确认」之间分派；缺省 undefined 按无基线处理。
+          hasBaseline: state.lastSnapshotId !== '',
           sectionCount: Object.keys(state.sections).length,
           lastTransport: state.transport,
           // 上次选择的同步通道（磁盘 ui-prefs；UI 回填优先于此，localStorage 仅兜底）

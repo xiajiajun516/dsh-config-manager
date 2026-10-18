@@ -137,6 +137,8 @@ export const zh = {
   // 一键同步（方案 A：拉取 → 逐项确认 → apply-items）
   'syncflow.title': '一键同步',
   'syncflow.button': '一键同步',
+  // 方案 A：有基线且三方合并全部 skip = 远端与本机一致，不必同步
+  'syncflow.upToDate': '已是最新，无需同步',
   'syncflow.syncing': '正在同步…',
   'syncflow.syncFailed': '同步失败',
   'syncflow.snapshotOption': '（{date} · {count} 分区）',
@@ -652,6 +654,8 @@ export const en: Record<keyof typeof zh, string> = {
   'warnings.title': 'Section Warnings',
   'syncflow.title': 'One-Click Sync',
   'syncflow.button': 'One-click sync',
+  // Plan A: with a baseline, an all-skip three-way merge means local and remote already match
+  'syncflow.upToDate': 'Already up to date; nothing to sync',
   'syncflow.syncing': 'Syncing…',
   'syncflow.syncFailed': 'Sync failed',
   'syncflow.snapshotOption': '({date} · {count} sections)',

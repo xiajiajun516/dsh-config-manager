@@ -8,12 +8,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  applyBulkResolution, buildMergeResolutions, hasWritableResolution, initialResolutionDraft,
+  applyBulkResolution, buildMergeResolutions, decideSyncEntry, hasWritableResolution, initialResolutionDraft,
   mergeDecisionCounts, mergeDecisionKey, mergeDecisionTone, mergeKindKey, mergeReasonKey,
   mergeResultView, mergeSectionRows, mergeSummaryItems, needsNoAncestorNotice,
   normalizeDecision, setSectionAction, truncatePreview, MERGE_PREVIEW_MAX_CHARS,
 } from './merge-view.ts'
-import type { MergePreviewResponse } from './sync-api.ts'
+import type { MergePreviewResponse, MergePreviewSection, MergeSectionDecision } from './sync-api.ts'
 
 /** 构造一份预览（分区 id 用真实 SectionId 形态，便于与宿主口径对齐）。 */
 function preview(overrides: Partial<MergePreviewResponse> = {}): MergePreviewResponse {
@@ -189,6 +189,22 @@ test('merge-view: mergeResultView —— pendingConflicts 必须暴露出来（�
   assert.equal(v.failedCount, 1)
   assert.equal(v.ineffectiveCount, 1)
   assert.equal(v.rolledBack, true)
+})
+
+test('merge-view: decideSyncEntry —— 无基准/预览失败一律回退老路径（fail-safe），全 skip 视为已最新', () => {
+  const sec = (decision: MergeSectionDecision): MergePreviewSection => ({ id: 'settings', decision, conflictCount: 0, conflicts: [] })
+  const ok = (sections: MergePreviewSection[]): Pick<MergePreviewResponse, 'ok' | 'sections'> => ({ ok: true, sections })
+  assert.equal(decideSyncEntry(undefined, null), 'fallback', '缺省（旧宿主）= 未知 → 老路径')
+  assert.equal(decideSyncEntry(false, null), 'fallback')
+  assert.equal(decideSyncEntry('true', null), 'fallback', '非布尔 true 一律回退')
+  assert.equal(decideSyncEntry(true, null), 'fallback', '预览缺失 → 老路径')
+  assert.equal(decideSyncEntry(true, { ok: false, sections: [] }), 'fallback', '宿主明确未产出 → 老路径')
+  assert.equal(decideSyncEntry(true, ok([])), 'upToDate', '无分区 = 无差异')
+  assert.equal(decideSyncEntry(true, ok([sec('skip'), sec('skip')])), 'upToDate', '全 skip = 已是最新')
+  assert.equal(decideSyncEntry(true, ok([sec('skip'), sec('conflict')])), 'merge')
+  assert.equal(decideSyncEntry(true, ok([sec('merge')])), 'merge')
+  // 宿主未来版本可能回传新决策值：类型上不可能，运行时必须 fail-closed（用 cast 模拟线上数据）
+  assert.equal(decideSyncEntry(true, ok([sec('brand-new' as MergeSectionDecision)])), 'merge', '未知决策 fail-closed 归入需裁决')
 })
 
 test('merge-view: needsNoAncestorNotice —— hasAncestor=false 才提示，null 预览不提示', () => {

@@ -56,8 +56,9 @@ import { copyTextToClipboard } from '../common/clipboard.ts'
 import { sectionLabeler } from '../common/section-labels.ts'
 import { runStore, toSyncStoreSlice, type SyncConfirmDecisions, type SyncStoreSlice } from '../run-store.ts'
 import type {
-  AutosyncInterval, SyncApi, SyncPushPayload, SyncStartResponse, SyncStatusResponse,
+  AutosyncInterval, MergePreviewResponse, SyncApi, SyncPushPayload, SyncStartResponse, SyncStatusResponse,
 } from './sync-api.ts'
+import { resolveSmartSync } from './sync-entry.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
   githubPollMessage, isClientChannel, kindLabel, pullReportView, pushReportView, readStoredChannel,
@@ -315,6 +316,11 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
   const [channelOpen, setChannelOpen] = useState(false)
   /** 待确认断开的通道（null = 未打开确认弹窗）——用户要求：配置过的通道必须能删掉 */
   const [clearTarget, setClearTarget] = useState<SyncChannel | null>(null)
+  /**
+   * 方案 A：一键同步自动分派命中合并路径时的**受控展开种子**。
+   * preview = 那一次只读请求的结果（视图不再二次拉远端快照）；signal 变化 = 重建视图（旧裁决作废）。
+   */
+  const [mergeSeed, setMergeSeed] = useState<{ preview: MergePreviewResponse | null; signal: number } | null>(null)
   /** 同步分区选择弹窗开关（瞬态 UI：模式与勾选在弹窗内即时生效并持久化，关闭即完成） */
   const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
   /**
@@ -1055,6 +1061,31 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     }
   }
 
+  /**
+   * 方案 A 的入口分派：有基线先做**一次**只读合并预览 —— 有变更直接开裁决视图（复用该次结果）；
+   * 全部 skip 提示「已是最新」；无基准 / 请求失败 / ok=false 一律回退老导入确认路径（fail-safe）。
+   */
+  const runSyncSmart = async (channel: SyncChannel): Promise<void> => {
+    switchChannel(channel)
+    // 与 runSync() 同处置：先清在途的差异确认会话（否则它持有的临时 ZIP 一直留在宿主 syncSessions 里，
+    // 走合并路径时更是没有出口；清掉后 fallback 分支的 runSync() 不会重复 cancel）。
+    const staleConfirm = stateRef.current.confirmSession
+    if (staleConfirm !== null) { try { await api.cancel(staleConfirm.syncSessionId) } catch { /* 尽力清理 */ } patch({ confirmSession: null, confirmDecisions: null }) }
+    const smart = await resolveSmartSync({
+      api,
+      hasBaseline: stateRef.current.statusInfo?.hasBaseline,
+      channelPayload: () => buildSyncChannelBody({ ...formOf(stateRef.current), channel }),
+      decryptPassword: stateRef.current.byChannel[channel].decryptPassword,
+    })
+    if (smart.kind === 'merge') {
+      setMergeSeed((cur) => ({ preview: smart.preview, signal: (cur?.signal ?? 0) + 1 }))
+      return
+    }
+    if (smart.kind === 'upToDate') { toast.ok(t('syncflow.upToDate')); return }
+    if (smart.error !== undefined) toast.error(t('merge.toast.previewFailed') + t('common.labelSeparator') + redact(smart.error))
+    await runSync()
+  }
+
   /** 用户取消差异确认：清除会话，复位到空闲。 */
   const cancelConfirm = (): void => {
     patch({ confirmSession: null, confirmDecisions: null })
@@ -1195,25 +1226,20 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         )}
         {ready && (
           <Card>
-            {/* 动作行：**一键同步**是这一行唯一的主操作（§8 定案）。 */}
+            {/* 动作行（方案 A 定案）：用户只面对两个方向 —— 下行「一键同步」/ 上行「推送到远端」。
+                合并裁决并入一键同步（有基线走三方裁决视图、无基线走老导入确认），不再单独占按钮。 */}
             <div className={css.actionRow}>
               <Button
                 variant="primary"
                 disabled={busy}
-                onClick={() => { switchChannel(channel); void runSync() }}
+                onClick={() => { void runSyncSmart(channel) }}
               >
                 {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}
               </Button>
               <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
               </Button>
-              <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPull || githubBusy} onClick={() => { switchChannel(channel); void runPull() }}>
-                {computeSyncButtons(state.busy, ready, uiT).pullLabel}
-              </Button>
             </div>
-            {/* cloud-sync 借鉴项 ②：测试连接（只读自检；结论/失败都就地展示，不弹窗）。
-                放在动作行正下方：它测的正是这几个按钮将要用的那条通道。 */}
-            <SyncProbeRow t={t} api={api} body={buildSyncChannelBody({ ...formOf(state), channel })} remoteReady={ready} busy={busy} />
             {/* 选择历史快照（该通道的远端快照；缺省 = 最新）。
                 支持点击/展开即刷新，另有主动刷新按钮 —— 两个入口都保留（v1 行为不变）。 */}
             <div className={css.snapshotPickerRow}>
@@ -1252,6 +1278,10 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                     : <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>}
                 </Button>
               </span>
+              {/* 方案 A：拉取差异预览从主操作降级为「针对所选快照的只读动作」，与刷新同一行 */}
+              <span className={css.pickerAction}>
+                <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPull || githubBusy} onClick={() => { switchChannel(channel); void runPull() }}>{computeSyncButtons(state.busy, ready, uiT).pullLabel}</Button>
+              </span>
             </div>
             {/* 空态独立成行（移出 label）：label 高度 = fieldLabel + select，
                 刷新按钮与之底部对齐即真正同一行，不再被 hint 顶高错位 */}
@@ -1268,10 +1298,22 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               onToggleAutosync={(enabled) => { void toggleAutosync(channel, enabled) }}
               onUpdateInterval={(interval) => { void updateAutosyncInterval(channel, interval) }}
             />
+            {/* cloud-sync 借鉴项 ②：测试连接（只读自检；结论/失败都就地展示，不弹窗）。
+                方案 A：从动作行下方移到卡片底部 —— 它是**诊断**，不与两个主操作抢注意力。 */}
+            <SyncProbeRow t={t} api={api} body={buildSyncChannelBody({ ...formOf(state), channel })} remoteReady={ready} busy={busy} />
           </Card>
         )}
-        {/* T-ui-merge：远程合并裁决入口（开合状态在 MergePreviewEntry 内自持；单行装配，t42 行数棘轮） */}
-        {ready && <MergePreviewEntry api={api} t={t} busy={busy} onOpen={() => { switchChannel(channel) }} channelPayload={() => buildSyncChannelBody(formOf(stateRef.current))} sectionName={(id) => sectionName(id as SectionId)} decryptPassword={cs.decryptPassword} onApplied={() => { void loadStatus() }} onRolledBack={() => { void loadStatus() }} />}
+        {/* T-ui-merge（方案 A）：裁决视图只在**一键同步自动分派**命中时受控展开（主行无独立入口），
+            预览复用那一次 /sync/merge-preview 的结果（不二次请求）。 */}
+        {ready && (
+          <MergePreviewEntry
+            api={api} t={t} busy={busy} hideEntryButton
+            openSignal={mergeSeed?.signal ?? 0} initialPreview={mergeSeed?.preview ?? null}
+            channelPayload={() => buildSyncChannelBody({ ...formOf(stateRef.current), channel })}
+            sectionName={(id) => sectionName(id as SectionId)} decryptPassword={cs.decryptPassword}
+            onApplied={() => { void loadStatus() }} onRolledBack={() => { void loadStatus() }}
+          />
+        )}
         {/* v3（P-IA-7 / §2.2-6）：加密与解密**属于这一条通道**，因此渲染在它自己的卡里。
             此前这两张卡挂在页面级、绑定一个被「点某张卡的按钮」悄悄切换的隐式当前通道 ——
             用户会以为四个通道共用一份加密设置。现在每张已配置的通道卡各自持有自己的凭据区，

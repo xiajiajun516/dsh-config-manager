@@ -325,6 +325,32 @@ export function mergeResultView(result: MergeApplyResponse | null | undefined): 
   }
 }
 
+/**
+ * 是否可按「有基线」走三方裁决：**只有 boolean true 算**（缺省 undefined / 旧宿主 / 非法值一律 false）。
+ * 单一判据来源 —— decideSyncEntry 与 sync-entry 的编排共用它，避免两处判据漂移。
+ */
+export function hasMergeBaseline(value: unknown): boolean {
+  return value === true
+}
+
+/**
+ * 一键同步入口分派（方案 A）。**纯函数、无副作用**，判据冻结：
+ *   - hasBaseline 非 true（未知 / 缺省 / 旧宿主）→ 'fallback'（走老导入确认路径）；
+ *   - 预览缺失 / ok !== true → 'fallback'（新入口绝不挡住老路径）；
+ *   - 无分区，或**全部分区 decision === 'skip'** → 'upToDate'（远端与本地一致，不必同步）；
+ *   - 其余 → 'merge'（打开裁决视图；调用方复用已取到的 preview，绝不二次请求）。
+ */
+export function decideSyncEntry(
+  hasBaseline: unknown,
+  preview: Pick<MergePreviewResponse, 'ok' | 'sections'> | null | undefined,
+): 'fallback' | 'merge' | 'upToDate' {
+  if (!hasMergeBaseline(hasBaseline)) return 'fallback'
+  if (preview === null || preview === undefined || preview.ok !== true) return 'fallback'
+  const sections = preview.sections ?? []
+  if (sections.length === 0) return 'upToDate'
+  return sections.every((s) => normalizeDecision(s.decision) === 'skip') ? 'upToDate' : 'merge'
+}
+
 /** 无共同基准时的降级提示是否需要显示（只读判断，不猜）。 */
 export function needsNoAncestorNotice(preview: MergePreviewResponse | null | undefined): boolean {
   return preview !== null && preview !== undefined && preview.hasAncestor === false

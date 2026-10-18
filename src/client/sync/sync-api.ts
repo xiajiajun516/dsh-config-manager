@@ -60,6 +60,11 @@ export type SyncTransportType = HostSyncTransportType;
 /** GET /sync/status 响应：配置/凭据/上次同步的只读事实（无任何 secret 值） */
 export interface SyncStatusResponse {
   ok: boolean;
+  /**
+   * 方案 A：是否存在同步基线（本地祖先指针；宿主只回布尔，绝不回快照 id）。
+   * **缺省 undefined = 未知 → 一律按「无基准」处理**，走老导入确认路径（fail-safe）。
+   */
+  hasBaseline?: boolean;
   /** 是否已保存过仓库/通道配置（sync-config.json；任一通道配置过即为 true） */
   configured: boolean;
   /** git 通道：已配置的仓库地址（不含 token，可回显；与当前通道无关，配置过即返回） */
