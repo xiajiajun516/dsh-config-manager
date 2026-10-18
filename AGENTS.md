@@ -49,9 +49,9 @@
 ## 🏗️ 架构心智
 - 双面插件：host `src/index.ts`（Cordis `name='config-manager'`，`/api/dsh-config-manager/*`）+ web `src/client/`（React，settings.section，经 api 调 host）。
 - **宿主路由只经 kit 的 `endpoint()` 声明 + `registerRoutes()` 注册**（围栏与方法白名单在注册点统一包装；`registerRoutes()` 兜底断言未经 kit 的路由直接抛错）。
-- 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 76 条**；合计 **83** 条，见 parity 快照）；源码级守卫必须扫**全部**路由源。
-- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 83 条路由永不进入该认证路由。
-- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 83 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
+- 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 75 条**；合计 **82** 条，见 parity 快照）；源码级守卫必须扫**全部**路由源。
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 82 条路由永不进入该认证路由。
+- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 82 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
 - 新功能优先加 `src/core/`，适配器/UI 薄壳；15 adapter 与 `self` 分区口径 → `DEVELOPERS.md` 架构节。
 - 同步：`SyncEngine`+`Git/WebDavTransport`+`AutoSyncScheduler`（事件驱动）；**autosync 与 sync-selection 按通道独立**（schema v2）。
 - **import 一律带 `.ts` 后缀**（Deno-style）。

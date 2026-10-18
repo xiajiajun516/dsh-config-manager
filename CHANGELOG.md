@@ -36,8 +36,6 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **同步页可以「测试连接」**：不执行任何同步就能只读自检当前通道（凭据、端点、目标容器、远端目录），失败时直接给出可执行的下一步（例如告诉你区域该填哪个值），不用再靠猜；四条通道都可自检 —— git 会只读核对远端可达与凭据是否被接受（不拉取、不改本地任何东西）。某条通道确实不提供自检时按中性提示说明（是能力边界，不是「操作失败」），绝不显示一个假的「连接正常」。
   **A "Test connection" button in the sync page**: a read-only self-check of the current channel (credentials, endpoint, target container, remote folder) without running any sync, and failures come with an actionable next step (for example which region value to use) instead of guesswork. Channels that cannot self-check say so honestly rather than showing a fake "connection OK".
-- **同步页新增「远端依赖清单」**：不用先跑一次同步，就能看到远端要求哪些插件、本机各自装到了哪一步，并把「包已经下载但没被启用」这种半装状态单独标出来，一眼看出新机器还差什么。
-  **A remote dependency inventory in the sync page**: without running a sync first you can see which plugins the remote expects, how far this machine got for each of them, and "downloaded but never enabled" is called out as its own half-installed state, so a fresh machine's missing pieces are obvious at a glance.
 - **同步历史里能看出快照是哪台机器推的**：历史条目现在带设备名（同一台设备换过主机名也认得出），多台机器互相推送时不再分不清来源。
   **Sync history now shows which machine pushed a snapshot**: history entries carry the device name (the same device is still recognized after a hostname change), so multi-device pushes are no longer indistinguishable.
 - **同步前可以逐项看清单、逐项拍板**：改动本机之前先只读预览每个分区会发生什么——本机值、远端值与共同祖先并排对比，标明哪些改动能自动合并、哪些必须你决定；你可以对每个分区选择「保留本机 / 采用远端 / 采用自动合并 / 暂不处理」，没处理完的冲突会一直留着并在下次同步继续出现，不会被悄悄咽下去。

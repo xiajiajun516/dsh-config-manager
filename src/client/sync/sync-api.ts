@@ -36,7 +36,6 @@ import type { SectionId } from '../../schema/types.ts';
 import type { ConsultReport } from '../../core/migration-consult.ts';
 import { getJson, LONG_REQUEST_TIMEOUT_MS, postJson, type RequestOptions } from '../common/http.ts';
 import { CONFIG_MANAGER_API, SYNC_API } from '../common/routes.ts';
-import type { InventoryResult } from '../../core/plugin-inventory.ts'
 import type { ExportPreviewResponse } from '../api.ts';
 import type { UiT } from '../../ui/i18n.ts';
 import { repoCreateBody } from '../../ui/sync-repository-picker.ts';
@@ -327,23 +326,6 @@ export interface SyncProbeFailure {
 }
 
 export type SyncProbeResult = SyncProbeSuccess | SyncProbeFailure
-
-/* ---------------------------------------------------------------- 远端依赖清单（⑤ cloud-sync 借鉴项） */
-
-/**
- * POST /sync/inventory 请求体：**与 /sync/download 同形**（宿主用同一个 prepareSync 解析通道配置），
- * 另加可选的 snapshotId / decryptPassword（加密快照需要；密码仅内存传输，绝不落盘/落日志）。
- */
-export type SyncInventoryPayload = SyncPullPayload;
-
-/**
- * POST /sync/inventory 响应（**只读**）。
- *
- * \`available:false\` 不是错误状态：远端不可达时宿主照常返回本机事实，只把后端原因放进
- * \`error\`（已脱敏）——界面必须靠 \`available\` 区分「远端没声明」与「这次没取到快照」。
- * 字段语义的**单一事实源**是宿主内核 \`src/core/plugin-inventory.ts\`（此处 type-only 引用）。
- */
-export type SyncInventoryResponse = InventoryResult & { ok: boolean };
 
 /* ---------------------------------------------------------------- 一键同步（方案 A） */
 
@@ -802,20 +784,6 @@ export class SyncApi {
    */
   async probe(payload: SyncPushPayload): Promise<SyncProbeResult> {
     return postJson<SyncProbeResult>(SYNC_API.probe, payload, this.t, SYNC_OPTS);
-  }
-
-  /**
-   * ⑤ cloud-sync 借鉴项：远端依赖清单（**只读**）。
-   *
-   * 与 push/pull 的区别：它**不绑定本次同步操作** —— 任何时候都能算一张
-   * 「远端快照声明的插件 vs 本机现状」对照表，并把 installed（包在 node_modules 里）与
-   * enabled（在 dsh.profile.bundles 里）分开判定，半装单独标出。
-   *
-   * 远端不可达**不是 HTTP 错误**：宿主回 HTTP 200 + available:false + error（本地事实照常返回），
-   * 界面必须按 available 区分「远端没声明」与「这次没取到快照」。
-   */
-  async inventory(payload: SyncInventoryPayload): Promise<SyncInventoryResponse> {
-    return postJson<SyncInventoryResponse>(SYNC_API.inventory, payload, this.t, SYNC_OPTS);
   }
 
   /**

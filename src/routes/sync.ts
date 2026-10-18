@@ -61,15 +61,7 @@ import { resolveSessionFormatDisposition, sessionFormatAbortResponse } from './s
 import { readUiPrefs, updateUiPrefs } from '../sync/ui-prefs.ts'
 import type { UiPrefsChannel } from '../sync/ui-prefs.ts'
 import fs from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-// ⑤ 远端依赖清单：判定内核在 core（纯函数、零 I/O），本文件只做 I/O 与装配。
-import { buildPluginInventory, collectConfigPluginNames, localSourcePath, parseRemotePluginsSection } from '../core/plugin-inventory.ts'
-import type { InventoryRemote } from '../core/plugin-inventory.ts'
-import { hasDshBundlePatch, readInstalledVersion, readProfileManifest } from '../core/plugin-cli.ts'
-import { SECTION_JSON_PATHS } from '../schema/config.ts'
-import { loadPatchDocument } from '../utils/patch-yaml.ts'
-import { parseZip } from '../utils/zip.ts'
+import { dirname, join } from 'node:path'
 
 /**
  * webdav 通道的子对象状态（只有 webdav 通道下发；git → undefined）。
@@ -744,110 +736,6 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           error: error instanceof Error ? error.message : String(error),
           ...(isProbeUnsupported(error) ? { unsupported: true } : {}),
         })
-      }
-    }),
-    // ------------------------------------------------------ sync/inventory
-    // ⑤ cloud-sync 借鉴项：**只读**的「远端依赖清单」——不绑定本次同步操作，随时可算。
-    //
-    // 三源并集（与竞品 dsh-cloud-sync 的 getSyncInventory 同口径）：
-    //   远端快照声明的包（快照 plugins 分区 = 导出机 profile 依赖）
-    //   ∪ 本机 profile package.json 的 dependencies
-    //   ∪ 本机 profiles/<p>/cordis.yml 与 cordis.patch.yml 里出现的 name
-    // 逐条把 installed（node_modules 里有落盘副本）与 enabled（名字在 dsh.profile.bundles 里）
-    // 分开判定 —— 二者不一致且该包是 bundle 形态 = 半装（DSH 不会挂载它）。
-    //
-    // 远端不可达**不是** HTTP 错误：本机事实照常返回，只把 available 置 false 并回脱敏原因。
-    // 「没取到快照」与「远端没有声明」必须能被界面分开（绝不拿 false 冒充判定结果）。
-    // 只读：不写远端、不动同步基线、不改本机任何文件（下载的临时 ZIP 用完即删）。
-    endpoint({ path: '/api/dsh-config-manager/sync/inventory', methods: ['POST'] }, async (req, res) => {
-      const body = await requireJsonObject(req)
-      try {
-        const profileDir = host.profileDir
-        const manifest = readProfileManifest(profileDir)
-        const dependencies = manifest?.dependencies ?? {}
-        const bundles = Array.isArray(manifest?.dsh?.profile?.bundles) ? (manifest?.dsh?.profile?.bundles as string[]) : []
-
-        // 落盘版本 = 「真的装在 node_modules 里」（唯一判据与插件清单视图同源：readInstalledVersion）。
-        // 同一包会被问两次（installed 与 version），故按名备忘，避免重复读盘。
-        const versionCache = new Map<string, string | null>()
-        const installedVersionOf = (name: string): string | null => {
-          if (!versionCache.has(name)) versionCache.set(name, readInstalledVersion(profileDir, name))
-          return versionCache.get(name) ?? null
-        }
-        // 本地来源（file:/link:/workspace:/portal:）指向的路径是否已不存在 —— 换机/重装会直接失败。
-        const isSourceArchived = (_name: string, spec: string): boolean => {
-          const target = localSourcePath(spec)
-          if (target === null || target === '') return false
-          const abs = isAbsolute(target) ? target : resolve(profileDir, target)
-          return !existsSync(abs)
-        }
-
-        // 本机配置层引用的 name：只读 profile 内的两个 cordis 文件（!!js 方言走唯一实现 patch-yaml）。
-        // 「存在但解析不了」不贡献名字（宁可不报，也不拿半解析结果冒充事实）。
-        const configNames: string[] = []
-        for (const rel of ['cordis.yml', 'cordis.patch.yml']) {
-          const text = await fs.readFile(join(profileDir, rel), 'utf8').catch(() => null)
-          if (text === null) continue
-          try {
-            configNames.push(...collectConfigPluginNames(loadPatchDocument(text)))
-          } catch { /* 解析失败：该文件不贡献名字 */ }
-        }
-
-        // —— 远端侧：任何失败（未配置通道 / 不可达 / 加密缺密码 / 载荷不可信）都退化为 available:false
-        let remote: InventoryRemote
-        try {
-          const syncCfg = await prepareSync(body)
-          // 默认构造（只带 portable 分区）：plugins 是 portable，本清单只需要它 → 不必把可选分区
-          // 也拖进临时 ZIP（少一次会话导出）。用户的分区勾选只影响 push/pull，不影响本对照表。
-          const engine = makeSyncEngine(syncCfg)
-          const snapshotId = typeof body['snapshotId'] === 'string' && body['snapshotId'] !== '' ? body['snapshotId'] : undefined
-          // 解密密码：请求体 > 已保存（DSH credentials）；明文快照根本不会被解密（引擎层保证）
-          const savedDecryptPassword = await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(syncCfg)))
-          const decryptPassword =
-            typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
-              ? body['decryptPassword']
-              : savedDecryptPassword
-          const downloaded = await withTimeout(
-            engine.downloadSnapshot({
-              dir: tmpDir,
-              ...(snapshotId === undefined ? {} : { snapshotId }),
-              ...(decryptPassword === undefined ? {} : { password: decryptPassword }),
-            }),
-            ROUTE_TIMEOUT_MS,
-            msg('host.syncPullTimeout'),
-          )
-          try {
-            // ZIP 视为不可信：走 utils/zip 的默认最严解析（条目数 / 体积 / 压缩比 / Zip Slip）。
-            const archive = parseZip(await fs.readFile(downloaded.path))
-            const jsonPath = SECTION_JSON_PATHS['plugins']
-            const section = jsonPath !== undefined && archive.has(jsonPath) ? archive.readEntryJson(jsonPath) : null
-            const parsed = parseRemotePluginsSection(section)
-            remote = {
-              available: true,
-              snapshotId: downloaded.snapshotId,
-              plugins: parsed.plugins,
-              configuredNames: parsed.configuredNames,
-            }
-          } finally {
-            // 临时 ZIP 用完即删（同步目录 / 暂存区都不留对照表的副产物）
-            await fs.rm(downloaded.path, { force: true }).catch(() => undefined)
-          }
-        } catch (error) {
-          remote = { available: false, error: redact(error instanceof Error ? error.message : String(error)) }
-        }
-
-        const inventory = buildPluginInventory({
-          remote,
-          local: { dependencies, bundles },
-          configNames,
-          isInstalled: (name) => installedVersionOf(name) !== null,
-          isBundle: (name) => hasDshBundlePatch(join(profileDir, 'node_modules', name)),
-          versionOf: (name) => installedVersionOf(name) ?? '',
-          isSourceArchived,
-        })
-        writeJson(res, 200, { ok: true, ...inventory })
-      } catch (error) {
-        writeSyncRouteError(res, error)
       }
     }),
     // ------------------------------------------------------ sync/download
