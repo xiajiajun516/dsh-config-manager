@@ -50,6 +50,20 @@ export function compareVersionStrings(a: string, b: string): -1 | 0 | 1 {
 }
 
 /**
+ * semver 形态判定（`1.2.3` / `1.2.3-rc.1` / `1.2.3+build`；区间 `^1.2.3`、dist-tag 与空串一律 false）。
+ *
+ * 与上面的 `compareVersionStrings` 分工不同：那个是**容错比较**（为了让 `0.2.1` 与 `0.2.1-rc.2`
+ * 也能排出大小，解析用宽松正则），这个是**严格形态判定** —— 只有它是具体版本时才允许拿来
+ * 拼 `<pkg>@<version>` 精确安装（issue #101）。导出为唯一实现，`self-update.ts`（是否接受目标
+ * 版本）与 `update-check.ts`（registry 返回值是否认得）都必须复用它，不许各留一份正则。
+ */
+export function isConcreteVersion(v: string): boolean {
+  return SEMVER_RE.test(v.trim());
+}
+
+const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
  * 兼容性判定的**结构化原因**（与 `computeCompatibility` 同源：评分由本函数派生）。
  *
  * 顺序固定为「跨平台 → 分区缺失 → 版本方向」，界面按此顺序逐条解释。

@@ -88,7 +88,7 @@ import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-
 import { agentSessionFactsOf, registerRollbackCommand } from './core/command-rollback.ts'
 import type { CommandServiceLike, RollbackCommandHost } from './core/command-rollback.ts'
 import type { MsgFunc } from './core/messages.ts'
-import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, installSpecFor, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
+import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, readInstalledVersion, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PlanItemKind, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
 import { ImportUserSkippedError } from './core/types.ts'
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
@@ -650,12 +650,13 @@ export class DshPluginsFacade implements PluginsFacade {
     return listInstalledPlugins(this.homeDir, this.profile)
   }
 
-  async install(pkg: string, spec?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean }> {
+  async install(pkg: string, target?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean; installedVersion?: string | null }> {
     const profileDir = resolveProfileDir(this.homeDir, this.profile)
-    // 非 registry 来源（github:/git+/file: 等）按来源 spec 安装；registry 包按裸包名装
-    // npm 最新版（官方机制）。spec 丢失（旧备份）时退化为裸包名 → pnpm fetch-404，
-    // 由 installErrorFor 给出可操作诊断。
-    const result = await this.runner(profileDir, this.profile, ['add', installSpecFor(pkg, spec)], undefined, signal)
+    // target 由调用方（adapters/plugins.ts 的 pluginInstallTarget）推导完毕，这里只执行：
+    // registry 包带精确版本或「包名@spec」，pnpm 才不会静默沿用目标机既有 spec（issue #101）。
+    // 缺省退化为裸包名（旧调用方）→ pnpm fetch-404，由 installErrorFor 给出可操作诊断。
+    const spec = target !== undefined && target !== '' ? target : pkg
+    const result = await this.runner(profileDir, this.profile, ['add', spec], undefined, signal)
     // 用户「跳过当前插件」：宿主 kill 了子进程 → 清理半装状态（删依赖行 + 删 node_modules/<pkg>，
     // 防止「package.json 声明了依赖但没装全」导致 DSH 启动失败），再以跳过语义抛错。
     if (result.aborted || (signal !== undefined && signal.aborted)) {
@@ -671,7 +672,8 @@ export class DshPluginsFacade implements PluginsFacade {
       const reason = error instanceof Error ? error.message : String(error)
       throw new Error(this.msg('host.activationRowFailed', { pkg, reason }))
     }
-    return { needsRestart: true }
+    // 回读实际落盘版本：调用方据此校验升级是否真的生效（issue #101），而不是只看子进程退出码。
+    return { needsRestart: true, installedVersion: readInstalledVersion(profileDir, pkg) }
   }
 }
 

@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyDshPluginFailure, dshArgv, installAnchorFromProfileContext, installErrorFor, isTransientDshPluginFailure,
+  pluginInstallTarget,
   profileNameFromArgv, profileNameFromDir, profileNameFromProfileContext,
   resolveProcessProfileName, resolveProfileNameFromEnv,
   type DshPluginResult,
@@ -198,6 +199,31 @@ const CARRIER: DesktopCarrier = {
   execPath: 'C:\\Apps\\DSH\\DeepSeek Harness.exe',
   env: { ELECTRON_RUN_AS_NODE: '1' },
 };
+
+test('pluginInstallTarget：安装目标决策表（issue #101 空转修复）', () => {
+  const cases: { name: string; pkg: string; input: { version?: string | undefined; spec?: string | undefined; tarballPath?: string | undefined }; expected: string }[] = [
+    { name: '备份内 tarball 优先于版本与 spec', pkg: 'p', input: { version: '1.0.0', spec: '^2.0.0', tarballPath: '/h/plugins/p.tgz' }, expected: 'file:/h/plugins/p.tgz' },
+    { name: '空 tarball 视为没有（回落 spec）', pkg: 'p', input: { tarballPath: '', spec: 'github:u/r' }, expected: 'github:u/r' },
+    { name: '非 registry 来源（github:）原样，手里的 version 不再拼', pkg: 'p', input: { version: '1.0.0', spec: 'github:u/r' }, expected: 'github:u/r' },
+    { name: '非 registry 来源（file:）原样', pkg: 'p', input: { spec: 'file:../local-p' }, expected: 'file:../local-p' },
+    {
+      name: '具体 semver → 精确版本（修复升级空转）',
+      pkg: 'dsh-free-search',
+      input: { version: '0.9.5', spec: '0.9.3' },
+      expected: 'dsh-free-search@0.9.5',
+    },
+    { name: '预发布版本同样精确', pkg: 'p', input: { version: '1.0.0-rc.2' }, expected: 'p@1.0.0-rc.2' },
+    { name: '带 build 元数据同样精确', pkg: 'p', input: { version: '1.0.0+build.7' }, expected: 'p@1.0.0+build.7' },
+    { name: 'version 不是具体版本 → 落到 spec', pkg: 'p', input: { version: 'latest', spec: '^1.2.3' }, expected: 'p@^1.2.3' },
+    { name: 'registry 区间 spec 带包名（手交给 pnpm 解析）', pkg: 'dshmarket', input: { spec: '^1.66.38' }, expected: 'dshmarket@^1.66.38' },
+    { name: 'dist-tag spec 带包名', pkg: 'p', input: { spec: 'next' }, expected: 'p@next' },
+    { name: '旧备份：version / spec 全缺 → 裸包名（改造前行为）', pkg: 'p', input: {}, expected: 'p' },
+    { name: '空字符串按缺省处理', pkg: 'p', input: { version: '', spec: '' }, expected: 'p' },
+  ];
+  for (const c of cases) {
+    assert.equal(pluginInstallTarget(c.pkg, c.input), c.expected, c.name);
+  }
+});
 
 test('dshArgv：desktop 档案走桌面端 CLI 载体（普通 dsh CLI 对它硬拒绝）', () => {
   const argv = dshArgv('desktop', CARRIER);

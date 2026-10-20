@@ -248,9 +248,17 @@ export interface PluginInfo {
 
 export interface PluginsFacade {
   listInstalled(): Promise<PluginInfo[]>;
-  /** 安装/更新插件；spec 为来源记录的声明依赖 spec（如 github:user/repo），缺省按裸包名装 npm 最新版。
-   * signal 可选：中止时宿主应 kill 子进程并清理半装状态（恢复 package.json + 删 node_modules/<pkg>）。 */
-  install(pkg: string, spec?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean }>;
+  /**
+   * 安装/更新插件。`target` 是**已经推导好的完整安装目标**（`name@1.2.3`、`github:user/repo`、
+   * `file:/abs/path.tgz`），由 `core/plugin-cli.ts` 的 `pluginInstallTarget()` 统一决策 ——
+   * 门面只负责执行，不再二次推导（否则「执行日志里写的」与「真正跑的命令」会分叉，issue #101）。
+   * 缺省按裸包名装 npm 最新版（旧调用方 / 旧备份）。
+   *
+   * `installedVersion`：安装后回读 `node_modules/<pkg>/package.json` 的实际版本（读不到为 null）。
+   * 调用方据此校验升级是否真的落地，而不是「子进程返回 0 就当成功」（issue #101）。
+   * signal 可选：中止时宿主应 kill 子进程并清理半装状态（恢复 package.json + 删 node_modules/<pkg>）。
+   */
+  install(pkg: string, target?: string, signal?: AbortSignal): Promise<{ needsRestart: boolean; installedVersion?: string | null }>;
 }
 
 export interface WorkspaceFacade {

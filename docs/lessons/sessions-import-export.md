@@ -65,4 +65,8 @@
 
 ## `readSessionMeta` 有 mtime 失效的进程内缓存
 
+## 插件内置技能（source='bundled'）不能备份，导入侧也要拦
+
+- **插件内置技能（source='bundled'）不能备份，导入侧也要拦**（issue #102，2026-10）：`ctx.skills.list()` 合并了**插件 registerProvider 注册的技能**与 `$DSH_HOME/skills` 磁盘技能，但技能端口**只暴露 `SKILL.md` 正文**，插件技能目录里的 `scripts/`、资源文件读不到 ⇒ 把 `source==='bundled'` 的条目按「磁盘技能」写进备份，副本必然残缺（真机：磁盘 20 个技能导出成 21 个 / 228 文件，多出的那个是 `@deepseek-ai/dsh-sandbox-windows-acl` 的 `diagnose-windows-sandbox-acl`，没有 `scripts/`）。三条边界：① 判据只有一个导出函数 `isMigratableSkillSource(source?: string)`（`src/adapters/skills.ts`）—— **只有 `'bundled'` 不可迁移，`undefined` 必须放行**（旧宿主不报 `source`，一律拦会让旧宿主一个技能都备份不到）；② 导出侧在 `listRelPaths()` 的服务合并循环里跳过（`onDisk.has(rel)` 只说明「同路径有磁盘文件」，不说明条目可迁移）；③ 导入侧 `SkillsAdapter.analyzeImport` 覆写：一次性 `ctx.target.skills.list()` 建 Set（**不要逐文件查**: 计划项数 × list 是 O(n²)），命中的计划项改成 `Skip` + `adapter.skillBundledSkipped` 说明，**旧备份里的残缺影子因此不再写进 `$DSH_HOME/skills`**（此前影子与插件自带版本同 rank 抢生效，取决于 provider 注册顺序）。**不要在宿主 façade（`toSkillSummaryView`）过滤 `bundled`** —— 端口语义是「有哪些技能」，过滤会污染未来消费者。
+
 - **`readSessionMeta` 有 mtime 失效的进程内缓存**（量化数据见 known-pitfalls）：键 = homeDir + 两个 storage 文件的 mtime，**任一读不到 mtime 就不缓存**（宁可多读，不可拿陈旧索引猜会话归属）；测试用 `clearSessionMetaCache()` 隔离。

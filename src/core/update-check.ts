@@ -17,7 +17,7 @@
  * 不读代理设置（Node 的 fetch 默认不认 HTTP_PROXY/HTTPS_PROXY）：公司网络下可能直接失败 ——
  * 这时如实报「检查失败」，其余功能不受影响（本模块与插件主干零耦合）。
  */
-import { compareVersionStrings } from './validator.ts'
+import { compareVersionStrings, isConcreteVersion } from './validator.ts'
 
 /** 被检查的 npm 包名（= package.json 的 name；单点常量，勿在别处再写一份） */
 export const PLUGIN_NPM_PACKAGE = 'dsh-config-manager'
@@ -51,9 +51,6 @@ export type PluginUpdateResult =
   | { ok: true; info: PluginUpdateInfo; cached: boolean }
   | { ok: false; current: string; error: string }
 
-/** semver 形态判定（允许 1.2.3 / 1.2.3-rc.1 / 1.2.3+build；不允许多余字符） */
-const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
-
 /**
  * 解析 registry 的 latest 响应体（只认 `{ version: 'x.y.z' }`）。
  * 畸形 / 缺字段 / 版本号不是 semver 形态 → null（调用方据此报「响应异常」，不猜）。
@@ -63,7 +60,7 @@ export function parseLatestVersion(payload: unknown): string | null {
   const version = (payload as Record<string, unknown>)['version']
   if (typeof version !== 'string') return null
   const trimmed = version.trim()
-  return SEMVER_RE.test(trimmed) ? trimmed : null
+  return isConcreteVersion(trimmed) ? trimmed : null
 }
 
 /**

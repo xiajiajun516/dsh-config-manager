@@ -24,7 +24,8 @@
  */
 import path from 'node:path';
 import { FileCollectionAdapter } from './file-collection.ts';
-import type { HostContext, SkillDefinitionView } from '../core/types.ts';
+import type { HostContext, ImportContext, PlanItem, SkillDefinitionView } from '../core/types.ts';
+import type { FilesSection } from '../schema/types.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
 import { sha256Hex } from '../utils/hashing.ts';
 import { isPathSafe, normalizePath } from '../utils/paths.ts';
@@ -33,6 +34,21 @@ import { sectionMeta } from '../schema/section-registry.ts';
 /** 技能服务技能的虚拟路径（相对 baseDir）：`<name>/SKILL.md`。 */
 export function skillServiceRel(name: string): string {
   return normalizePath(path.join(name, 'SKILL.md'));
+}
+
+/**
+ * 该来源的技能能否进本分区备份（issue #102）。
+ *
+ * `bundled` = 插件包 / DSH 内置目录里随插件发行的技能（宿主的 `SkillSummaryView.source`）。
+ * 技能服务端口只暴露 **SKILL.md 文本**（`ctx.skills.get()` 返回 name/description/content），
+ * 技能的 `scripts/`、模板、资源文件一律拿不到 —— 备份出来必然是**残缺影子**；导入后它还会以
+ * 同名同 rank 落在 `$DSH_HOME/skills`，跟插件自己的版本争谁生效，且不随插件升级更新。
+ * 正确姿势是「装/升级对应的插件」，不是搬 SKILL.md。
+ *
+ * `source === undefined`（旧宿主不报来源）必须当**可迁移**：否则旧宿主上一个技能都备份不到。
+ */
+export function isMigratableSkillSource(source?: string): boolean {
+  return source !== 'bundled';
 }
 
 /**
@@ -168,7 +184,7 @@ export class SkillsAdapter extends FileCollectionAdapter {
     const listing = await super.listRelPaths(ctx);
     this.serviceSkills = new Map<string, SkillDefinitionView>();
     if (ctx.skills === undefined) return listing;
-    let summaries: { name: string }[];
+    let summaries: { name: string; source?: string }[];
     try {
       summaries = await ctx.skills.list();
     } catch (err) {
@@ -182,6 +198,8 @@ export class SkillsAdapter extends FileCollectionAdapter {
     for (const summary of summaries) {
       // 名字要能当路径用：DSH 的 SKILL_NAME 是 [a-z0-9-]，这里再做一道通用安全校验（拒 `..`/绝对路径）
       if (typeof summary.name !== 'string' || !isPathSafe(summary.name) || summary.name.includes('/')) continue;
+      // issue #102：bundled 技能不进备份（残缺影子，见 isMigratableSkillSource）
+      if (!isMigratableSkillSource(summary.source)) continue;
       const rel = skillServiceRel(summary.name);
       if (onDisk.has(rel)) continue; // 文件系统优先
       let definition: SkillDefinitionView | undefined;
@@ -230,5 +248,43 @@ export class SkillsAdapter extends FileCollectionAdapter {
       return { data: new Uint8Array(0), sizeBytes: data.byteLength, contentHash: '' };
     }
     return { data, sizeBytes: data.byteLength, contentHash: sha256Hex(data) };
+  }
+
+  /**
+   * 导入侧：备份里的 bundled 技能一律跳过（issue #102）。
+   *
+   * 旧备份（本修复之前导出的）会把插件内置技能写成残缺影子，导入后落在 `$DSH_HOME/skills`，
+   * 与插件自己的同名技能争生效顺序。这里在**计划阶段**就把它们降级成 Skip（不写盘、不进
+   * 冲突收集器），并给出可理解的说明；不是静默丢弃。
+   *
+   * 目标机技能清单只查一次（`ctx.target.skills.list()`）—— 逐文件调 `get()` 会是 O(n²)；
+   * 查不到（旧宿主 / 服务抛错）就**原样放行**，绝不因为判不出而少导入用户真正的技能。
+   */
+  override async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const items = await super.analyzeImport(data, ctx);
+    if (ctx.target.skills === undefined) return items;
+    let bundled: Set<string>;
+    try {
+      const summaries = await ctx.target.skills.list();
+      bundled = new Set(summaries.filter((s) => !isMigratableSkillSource(s.source)).map((s) => s.name));
+    } catch (err) {
+      ctx.log.warn(`技能服务列举失败（无法识别 bundled 技能，按旧行为导入）: ${err instanceof Error ? err.message : String(err)}`);
+      return items;
+    }
+    if (bundled.size === 0) return items;
+    return items.map((item) => {
+      if (item.kind === 'Error') return item;
+      const ref = item.target?.ref;
+      if (ref === undefined) return item;
+      const name = this.unitIdOf(ref);
+      if (!bundled.has(name)) return item;
+      return {
+        ...item,
+        kind: 'Skip' as const,
+        severity: 'info' as const,
+        target: undefined,
+        description: ctx.msg('adapter.skillBundledSkipped', { name }),
+      };
+    });
   }
 }

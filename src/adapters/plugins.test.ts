@@ -292,7 +292,7 @@ test('plugins: applyItem Install → needsRestart（官方机制，不打包二�
   assert.ok(dst.plugins.installed.has('need-install'), '经 installPlugin 门面写入');
 });
 
-test('plugins: 非 registry spec（github:）随导入传给 install，registry 包不传 spec', async () => {
+test('plugins: 安装目标按 pluginInstallTarget 推导 —— github: 原样、registry 精确版本（issue #101）', async () => {
   const src = makeContext('win32', 'C:\\Users\\alice');
   src.plugins.installed.set('dsh-memory-evolve', { name: 'dsh-memory-evolve', version: '1.0.0', enabled: true, spec: 'github:csyangwen/dsh-memory-evolve' });
   src.plugins.installed.set('dshmarket', { name: 'dshmarket', version: '1.0.3', enabled: true, spec: '^1.0.3' });
@@ -306,7 +306,7 @@ test('plugins: 非 registry spec（github:）随导入传给 install，registry 
   assert.equal(dst.plugins.lastSpec, 'github:csyangwen/dsh-memory-evolve', 'github: spec 必须原样传给安装通道');
 
   await adapter.applyItem(items.find((i) => i.id === 'plugin:dshmarket')!, makeImportContext(dst, sections));
-  assert.equal(dst.plugins.lastSpec, '^1.0.3', 'registry 版本区间也透传（由门面决定按裸名装最新）');
+  assert.equal(dst.plugins.lastSpec, 'dshmarket@1.0.3', '备份里有具体版本 → 精确安装（裸包名会被目标机既有 spec 挡住，issue #101）');
 });
 
 test('plugins: 安装失败 → 非致命 warning（§34.17，不触发整体回滚）', async () => {
@@ -355,6 +355,42 @@ test('plugins: 版本冲突 useImported → Update 走安装通道，失败同�
   assert.equal(rFail.ok, false);
   assert.equal(rFail.warning, true, '更新失败同样为非致命 warning');
 });
+test('plugins: 安装后回读版本与备份不一致 → warning + 可复制的精确安装命令（issue #101）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.plugins.installed.set('pkg-b', { name: 'pkg-b', version: '2.0.0', enabled: true });
+  const adapter = new PluginsAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['plugins', exported.data]]);
+
+  const dst = makeContext('linux', '/home/bob', 'web');
+  dst.plugins.installed.set('pkg-b', { name: 'pkg-b', version: '1.5.0', enabled: true });
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const conflict = items.find((i) => i.id === 'plugin:pkg-b');
+  assert.equal(conflict?.kind, 'Conflict');
+  const updateItem: PlanItem = { ...conflict!, kind: 'Update', conflict: { itemId: conflict!.id, resolution: 'useImported' } };
+
+  // 子进程退出 0，但 pnpm 尊重了目标机既有 spec、什么都没换（真机空转形态）
+  dst.plugins.install = async (): Promise<{ needsRestart: boolean; installedVersion?: string | null }> => ({
+    needsRestart: true,
+    installedVersion: '1.5.0',
+  });
+  const stale = await adapter.applyItem(updateItem, makeImportContext(dst, sections));
+  assert.equal(stale.ok, false, '版本没落地就不能报 done');
+  assert.equal(stale.warning, true, '非致命：其余配置已导入');
+  assert.match(stale.message ?? '', /1\.5\.0/, '必须写出实际装成的版本');
+  assert.match(stale.message ?? '', /2\.0\.0/, '必须写出备份记录的版本');
+  assert.match(stale.message ?? '', /dsh plugin --profile web add pkg-b@2\.0\.0/, '给可复制的手动精确安装命令');
+
+  // 同一个计划项在版本真的落地时应判成功并写明版本
+  dst.plugins.install = async (): Promise<{ needsRestart: boolean; installedVersion?: string | null }> => ({
+    needsRestart: true,
+    installedVersion: '2.0.0',
+  });
+  const done = await adapter.applyItem(updateItem, makeImportContext(dst, sections));
+  assert.equal(done.ok, true);
+  assert.match(done.message ?? '', /2\.0\.0/, '成功文案必须带实际版本，便于用户核对');
+});
+
 /* ---------------- preview：只读预览不得触发任何本地源打包（总览慢的根因） ---------------- */
 
 test('plugins: preview 不调用打包钩子，但条目/白名单/告警与 export 同口径', async () => {

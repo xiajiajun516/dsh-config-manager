@@ -77,6 +77,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Line endings and encodings survive a rewind**: a CRLF file is no longer rewritten with LF, and invalid bytes inside non-UTF-8 files (GBK, Latin-1) are no longer turned into `\uFFFD` — which used to corrupt the file for real.
 - **「有文件没能回退」不再被说成「没有东西可回退」**：因为两侧改到同一处、或无法判定归属而跳过的文件，现在会连同原因与路径逐条列出来，整体结论也不再显示成「已恢复」。
   **"Some files were not rewound" is no longer reported as "there was nothing to restore"**: files skipped because both sides changed the same spot, or because they could not be attributed, are now listed with the reason and the path, and the overall result no longer claims a clean restore.
+- **同步导入升级插件时按备份里记录的确切版本安装**：装完会回读实际安装到的版本，没装到目标版本时直接说明原因并附一条可复制的精确安装命令，不再报「已触发更新」而版本其实一字未变。（issue #101）
+  **Plugin upgrades during a sync import now install the exact version recorded in the backup**: the version actually installed is read back afterwards, and when it does not match you get the reason plus a ready-to-copy install command instead of an "update triggered" message while the version stayed the same. (issue #101)
+- **插件自带的技能不再被打进备份**：这类技能的脚本与资源不随包走、副本必然残缺，于是不再导出；旧备份里的这类副本在导入时跳过并说明原因，不再与插件自带的版本互相抢生效。（issue #102）
+  **Skills provided by a plugin are no longer packed into backups**: their scripts and assets cannot travel with the package, so the copy would always be incomplete and is no longer exported; such copies in older backups are skipped during import with the reason stated, instead of competing with the plugin's own version. (issue #102)
 
 ## [0.1.78] - 2026-10-17
 

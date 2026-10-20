@@ -140,7 +140,7 @@ test('install: bundle 包成功 → 不补 patch 行（reconcile 维护 bundles�
   }
 });
 
-test('install: 非 registry spec（github:）→ add 按 spec 安装；registry 版本区间 → 裸包名（npm 最新）', async () => {
+test('install: 非 registry spec（github:）原样安装；registry 区间按「包名@spec」安装（issue #101）', async () => {
   const { homeDir, profileDir, cleanup } = makeTempProfile();
   try {
     writeInstalledPkg(profileDir, 'dsh-memory-evolve', '1.0.0');
@@ -153,13 +153,35 @@ test('install: 非 registry spec（github:）→ add 按 spec 安装；registry 
     const facade = new DshPluginsFacade(homeDir, 'web', new MemPatchFile(), runner);
 
     await facade.install('dsh-memory-evolve', 'github:csyangwen/dsh-memory-evolve');
-    await facade.install('dshmarket', '^1.0.3');
+    await facade.install('dshmarket', 'dshmarket@^1.0.3');
     await facade.install('pkg-plain');
     assert.deepEqual(calls.map((c) => c.args), [
       ['add', 'github:csyangwen/dsh-memory-evolve'],
-      ['add', 'dshmarket'],
+      ['add', 'dshmarket@^1.0.3'],
       ['add', 'pkg-plain'],
-    ], 'github: 来源按 spec 安装；registry 版本区间与裸包名都走 npm 最新版');
+    ], 'github: 来源原样安装；registry 区间带包名（裸包名会被目标机既有 spec 挡住，issue #101）；缺省仍退化为裸包名');
+  } finally {
+    cleanup();
+  }
+});
+
+test('install: 精确版本 target 原样执行，并回读 node_modules 实际版本（issue #101 落地校验依据）', async () => {
+  const { homeDir, profileDir, cleanup } = makeTempProfile();
+  try {
+    writeInstalledPkg(profileDir, 'dsh-free-search', '0.9.3');
+    const calls: { args: string[] }[] = [];
+    const runner = async (_p: string, _profile: string, args: readonly string[]): Promise<DshPluginResult> => {
+      calls.push({ args: [...args] });
+      // 模拟 pnpm 真的按 target 装了备份记录的版本
+      writeInstalledPkg(profileDir, 'dsh-free-search', '0.9.5');
+      return okResult();
+    };
+    const facade = new DshPluginsFacade(homeDir, 'web', new MemPatchFile(), runner);
+
+    const r = await facade.install('dsh-free-search', 'dsh-free-search@0.9.5');
+    assert.deepEqual(calls[0]?.args, ['add', 'dsh-free-search@0.9.5'], '精确版本必须进 argv，不能退化成裸包名');
+    assert.equal(r.needsRestart, true);
+    assert.equal(r.installedVersion, '0.9.5', '回读安装后的真实版本，供 adapter 校验是否真的落地');
   } finally {
     cleanup();
   }

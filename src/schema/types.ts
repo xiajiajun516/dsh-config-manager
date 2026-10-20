@@ -151,8 +151,9 @@ export interface PluginEntry {
   /**
    * 声明依赖 spec（profile package.json dependencies 原样），如 ^0.3.6、
    * github:csyangwen/dsh-memory-evolve、file:/link: 等。
-   * 导入时非 registry 来源（github:/git+/file:/link:/workspace: 等）按此 spec 安装，
-   * 否则按裸包名走 npm 最新版（官方机制）。
+   * 导入时的安装目标由 `core/plugin-cli.ts` 的 `pluginInstallTarget()` 统一推导（issue #101）：
+   * 非 registry 来源按此 spec 原样安装；`version` 是具体 semver 时按 `<name>@<version>` 精确安装；
+   * 其余 spec 按 `<name>@<spec>`；都没有才退回裸包名（npm 最新版）。
    */
   spec?: string;
   /**

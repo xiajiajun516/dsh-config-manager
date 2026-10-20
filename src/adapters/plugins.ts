@@ -13,7 +13,7 @@
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { sha256Hex } from '../utils/hashing.ts';
-import { installSpecFor, isBundlesOnlyEntry, mergeBundleDeclaration, resolveProcessProfileName } from '../core/plugin-cli.ts';
+import { isBundlesOnlyEntry, mergeBundleDeclaration, pluginInstallTarget, resolveProcessProfileName } from '../core/plugin-cli.ts';
 import { classifyPluginSpec, LOCAL_PLUGIN_DIR, resolveLocalPluginPath } from '../core/local-plugin-pack.ts';
 import type { PackLocalPluginsResult } from '../core/local-plugin-pack.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
@@ -997,27 +997,47 @@ export class PluginsAdapter implements ConfigAdapter<PluginsSection> {
         return await this.declareHostBundle(name, ctx);
       }
       try {
-        // 非 registry 来源（github:/file: 等）按来源 spec 安装，registry 包按裸包名装 npm 最新版
-        let spec = entry?.spec;
-
-        // T1：备份内自带 tarball → 解包到 homeDir 内的本地插件缓存目录，把 spec 重写为绝对路径。
+        // 安装目标由 pluginInstallTarget 统一决策（issue #101）：备份里有具体版本时精确安装，
+        // 其余 registry 包带「包名@spec」；非 registry 来源原样。
+        // T1：备份内自带 tarball → 解包到 homeDir 内的本地插件缓存目录，改以 file:<abs> 安装。
         // 这是「换机后本地插件不再丢失」的关键：原始绝对路径在目标机不存在，解包出的 tgz 一定存在。
+        let tarballPath: string | undefined;
         const tarball = data !== undefined ? tarballOf(data, name) : undefined;
         if (tarball !== undefined) {
           try {
-            const abs = await writeLocalTarball(ctx, tarball);
-            spec = `file:${abs}`;
+            tarballPath = await writeLocalTarball(ctx, tarball);
           } catch (err) {
             // 解包失败不阻断安装尝试：退回原 spec（可能失败，但会如实报错而非静默丢失）
             ctx.onLog?.(msg('adapter.localTarballUnpackFailed', { name, err: err instanceof Error ? err.message : String(err) }));
           }
         }
+        const target = pluginInstallTarget(name, { version: entry?.version, spec: entry?.spec, tarballPath });
         // 执行日志：记录实际将发起的子进程命令行（与宿主 DshPluginsFacade 的
-        // dsh plugin --profile <p> add <spec> 一致）；仅非敏感文本，渲染前 UI 再 redact 兜底
-        ctx.onLog?.(`$ dsh plugin --profile ${ctx.target.profile ?? resolveProcessProfileName()} add ${installSpecFor(name, spec)}`);
+        // dsh plugin --profile <p> add <target> 一致）；仅非敏感文本，渲染前 UI 再 redact 兜底
+        ctx.onLog?.(`$ dsh plugin --profile ${ctx.target.profile ?? resolveProcessProfileName()} add ${target}`);
         // 透传中止信号：用户「跳过当前插件」→ 宿主 kill 子进程 + 清半装状态 → 抛 ImportUserSkippedError
-        const result = await ctx.target.plugins.install(name, spec, ctx.signal);
+        const result = await ctx.target.plugins.install(name, target, ctx.signal);
         const suffix = result.needsRestart ? msg('adapter.pluginRestartSuffix') : '';
+        // 落地校验（issue #101）：官方 CLI 退出 0 不等于版本变了 —— pnpm 会尊重目标机既有
+        // package.json spec，固定版已装、区间已满足时「什么都没装」同样返回 0。回读实际版本再下结论。
+        const expected = entry?.version;
+        const actual = result.installedVersion ?? null;
+        if (expected !== undefined && expected !== '' && actual !== null && actual !== expected) {
+          return {
+            ok: false,
+            warning: true,
+            needsRestart: true,
+            message: msg('adapter.pluginVersionMismatch', {
+              name,
+              expected,
+              actual,
+              command: `dsh plugin --profile ${ctx.target.profile ?? resolveProcessProfileName()} add ${name}@${expected}`,
+            }),
+          };
+        }
+        if (actual !== null) {
+          return { ok: true, needsRestart: true, message: msg('adapter.pluginInstalledAtVersion', { name, version: actual, suffix }) };
+        }
         return {
           ok: true,
           needsRestart: true,

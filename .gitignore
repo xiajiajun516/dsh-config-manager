@@ -51,3 +51,6 @@ phase8-e2e/
 .tmp/
 undefined/
 .tmp-*
+
+# 文件编辑工具的临时锁文件（零字节、写完即删；漏留时别提交）
+.dsh-ops-update-*.lock

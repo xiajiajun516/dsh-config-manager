@@ -15,7 +15,8 @@
  * 只依赖 node 内置模块，零 DSH 运行时依赖（M5 的 TDD 可直接单测本模块）。
  */
 
-import { engineMsg } from './messages-core.ts';
+import { engineMsg } from './messages-core.ts'
+import { isConcreteVersion } from './validator.ts';
 import { spawn } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { readFileSync, rmSync } from 'node:fs'
@@ -414,13 +415,38 @@ const INSTALL_TIMEOUT_MS = Number(process.env.DSH_CONFIG_MANAGER_INSTALL_TIMEOUT
 /**
  * 非 registry 来源的依赖 spec 前缀：这些来源必须把 spec 原样交给 pnpm add，
  * 裸包名在 registry 上查不到（fetch-404 → 幽灵依赖拖垮整个 profile 的安装）。
- * 版本区间（^x / x.y.z）与裸包名走默认语义：npm 最新版（官方机制，见 §34.17 设计决策）。
+ * registry 包由 `pluginInstallTarget()` 拼精确版本或「包名@spec」（issue #101）。
  */
 const NON_REGISTRY_SPEC = /^(github:|gitlab:|bitbucket:|git\+|file:|link:|workspace:|https?:)/i
 
-/** 安装目标：非 registry spec 按 spec 安装；其余按裸包名（npm 最新版）。 */
-export function installSpecFor(pkg: string, spec?: string): string {
+/** `pluginInstallTarget()` 的输入：全部来自备份里的 `PluginEntry`（都可缺省 = 旧备份）。 */
+export interface PluginInstallTargetInput {
+  /** 备份记录的实际安装版本（`PluginEntry.version`）：具体 semver 时精确安装到它（issue #101）。 */
+  version?: string | undefined
+  /** 备份记录的声明依赖 spec（`PluginEntry.spec`）：非 registry 来源原样，registry 区间带包名。 */
+  spec?: string | undefined
+  /** 备份内自带 tarball 解包后的绝对路径：优先于 spec（T1 本地源插件迁移）。 */
+  tarballPath?: string | undefined
+}
+
+/**
+ * 安装目标：可直接交给 `dsh plugin add` 的**完整参数**（issue #101）。
+ *
+ * 为什么不能只传裸包名：pnpm add 会尊重目标机 `package.json` 里既有的 spec —— 固定版不动、
+ * 已经满足的区间也不动，于是「备份里记着 0.9.5、目标机装着 0.9.3」的升级会**空转却报成功**。
+ * 规则按优先级排列（`src/core/plugin-cli.test.ts` 表驱动钉住）：
+ *  ① 备份内 tarball → `file:<abs>`（换机后原绝对路径必然失效）；
+ *  ② 非 registry 来源（github:/git+/file:/link:）→ spec 原样（裸包名在 registry 上查不到）；
+ *  ③ `version` 是具体 semver → `<pkg>@<version>`（精确版本，pnpm 无法被既有 spec 挡住）；
+ *  ④ 其余 spec（`^1.2.3` / dist-tag）→ `<pkg>@<spec>`（交给 pnpm 解析，至少不会退回裸包名）；
+ *  ⑤ 什么都没有（旧备份 / 无版本记录）→ 裸包名（npm 最新版，改造前行为）。
+ */
+export function pluginInstallTarget(pkg: string, input: PluginInstallTargetInput = {}): string {
+  const { version, spec, tarballPath } = input
+  if (tarballPath !== undefined && tarballPath !== '') return `file:${tarballPath}`
   if (spec !== undefined && spec !== '' && NON_REGISTRY_SPEC.test(spec)) return spec
+  if (version !== undefined && isConcreteVersion(version)) return `${pkg}@${version}`
+  if (spec !== undefined && spec !== '') return `${pkg}@${spec}`
   return pkg
 }
 

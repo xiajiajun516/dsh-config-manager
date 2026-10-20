@@ -17,7 +17,7 @@
  *  ⑥ 失败必须如实：exitCode≠0 / 超时 / spawn 失败 → 复用 installErrorFor 的可操作诊断；
  *     成功也只表示**文件已换新**，必须重启 DSH 才生效（调用方回 needsRestart）。
  */
-import { compareVersionStrings } from './validator.ts'
+import { compareVersionStrings, isConcreteVersion } from './validator.ts'
 import { installErrorFor } from './plugin-cli.ts'
 import type { DshPluginResult } from './plugin-cli.ts'
 import { PLUGIN_NPM_PACKAGE } from './update-check.ts'
@@ -27,9 +27,6 @@ import type { SelfUpdateFailureCode } from '../utils/shared-constants.ts'
 export function selfUpdateSpec(version: string): string {
   return `${PLUGIN_NPM_PACKAGE}@${version}`
 }
-
-/** semver 形态判定（与 update-check 同一形态：允许预发布/构建后缀，不允许多余字符）。 */
-const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 
 /** 非 registry 来源的依赖 spec 前缀（与 core/plugin-cli.ts 的安装语义同一口径）。 */
 const NON_REGISTRY_SPEC = /^(github:|gitlab:|bitbucket:|git\+|file:|link:|workspace:|https?:)/i
@@ -61,7 +58,7 @@ export function planSelfUpdate(input: SelfUpdatePlanInput): SelfUpdatePlan {
     return { ok: false, code: 'unsupported-profile', error: 'the desktop profile is managed by the desktop app' }
   }
   const target = (input.target ?? '').trim()
-  if (!SEMVER_RE.test(target)) {
+  if (!isConcreteVersion(target)) {
     return { ok: false, code: 'invalid-version', error: `not a valid version: ${target === '' ? '(empty)' : target}` }
   }
   if (compareVersionStrings(target, input.current) <= 0) {
