@@ -6306,27 +6306,124 @@ button.profileRowMain:hover {
    间距只取 9 档；圆角走 --cm-r-*；长列表由 .mergeScroll 并进上面的限高内滚组承担。
    ========================================================================== */
 
-/* 摘要项：徽章 + 计数（容器间距沿用 .statRow） */
-.mergeStat {
+/* 视图外壳：竖直节奏统一由 flex gap 承担，子块不再各自写 margin-top */
+.mergeView {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* 概览：四个等分指标块（数字在上、标签在下；色只表达语义） */
+.mergeOverview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mergeTile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
+  background: var(--cm-surface-1);
+}
+
+.mergeTile[data-tone='ok'] {
+  border-color: color-mix(in srgb, var(--cm-ok) 40%, transparent);
+  background: color-mix(in srgb, var(--cm-ok) 8%, transparent);
+}
+
+.mergeTile[data-tone='info'] {
+  border-color: color-mix(in srgb, var(--cm-info) 40%, transparent);
+  background: color-mix(in srgb, var(--cm-info) 8%, transparent);
+}
+
+.mergeTile[data-tone='warn'] {
+  border-color: color-mix(in srgb, var(--cm-warn) 40%, transparent);
+  background: color-mix(in srgb, var(--cm-warn) 8%, transparent);
+}
+
+.mergeTile[data-tone='error'] {
+  border-color: color-mix(in srgb, var(--cm-error) 40%, transparent);
+  background: color-mix(in srgb, var(--cm-error) 8%, transparent);
+}
+
+.mergeTileValue {
+  font-size: var(--cm-fs-title);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--cm-text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.mergeTileLabel {
+  font-size: var(--cm-fs-meta);
+  line-height: 1.25;
+  color: var(--cm-text-2);
+}
+
+/* 工具栏：批量裁决 + 重新预览（ⓘ 说明夹在中间，靠 .statusSpacer 推右） */
+.mergeToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mergeToolbarLabel {
+  font-size: var(--cm-fs-meta);
+  color: var(--cm-text-3);
+}
+
+/* 按钮内「图标 + 文字」的组合（按钮本身不带 gap） */
+.mergeIconLabel {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.mergeStatValue {
-  font-size: var(--cm-fs-table);
-  color: var(--dsw-alias-label-primary);
-  font-variant-numeric: tabular-nums;
+/* 语义提示条：比 Banner 轻一档（常驻、只解释一句），用于「跳过 ≠ 已解决」 */
+.mergeNote {
+  padding: 6px 8px;
+  border: 0.5px solid color-mix(in srgb, var(--cm-warn) 35%, transparent);
+  border-radius: var(--cm-r-2);
+  background: color-mix(in srgb, var(--cm-warn) 10%, transparent);
+  font-size: var(--cm-fs-meta);
+  line-height: 1.5;
+  color: var(--cm-text-2);
 }
 
-/* 分区块（.mergeScroll 内逐条，分隔线用 0.5px 发丝线） */
+/* 执行结果卡：与分区卡同档表面，坐标是「已经发生的事」 */
+.mergeResult {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
+  background: var(--cm-surface-1);
+}
+
+/* 弹窗底栏的裁决进度（左，长文案允许收窄换行） */
+.mergeFooterSummary {
+  min-width: 0;
+  font-size: var(--cm-fs-meta);
+  line-height: 1.5;
+  color: var(--cm-text-2);
+}
+
+/* 分区卡（.mergeScroll 内逐张）：卡片外框 0.5px，相邻卡之间用间距而不是分隔线 */
 .mergeSection {
-  padding: 8px 10px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  padding: 10px 12px;
+  border: 0.5px solid var(--cm-line-1);
+  border-radius: var(--cm-r-3);
+  background: var(--cm-surface-1);
 }
 
-.mergeSection:last-child {
-  border-bottom: none;
+.mergeSection + .mergeSection {
+  margin-top: 8px;
 }
 
 .mergeSectionHead {
@@ -6337,9 +6434,9 @@ button.profileRowMain:hover {
 }
 
 .mergeSectionName {
-  font-size: var(--cm-fs-table);
+  font-size: var(--cm-fs-title);
   font-weight: 600;
-  color: var(--dsw-alias-label-primary);
+  color: var(--cm-text-1);
 }
 
 .mergeMeta {
@@ -6355,19 +6452,20 @@ button.profileRowMain:hover {
   margin-top: 8px;
 }
 
-/* 当前裁决片：沿用原生 Pill 的激活配方（ghost-active 底 + 内描边） */
+/* 当前裁决片：沿用原生 Pill 的激活配方（ghost-active 底 + 内描边）+ 加粗 */
 .mergeActionActive {
   background: var(--cm-ghost-active-fill);
   border-color: var(--cm-ghost-active-border);
+  font-weight: 600;
 }
 
-/* 单条冲突（只读展示：路径 + 原因 + 三列预览） */
+/* 单条冲突（只读展示：路径 + 原因 + 三列预览）：嵌在分区卡里，用低一档表面区分层级 */
 .mergeConflictRow {
   margin-top: 8px;
-  padding: 6px 8px;
-  border: 0.5px solid var(--dsw-alias-border-l1);
-  border-radius: var(--cm-r-3);
-  background: var(--dsw-alias-bg-layer-1);
+  padding: 8px;
+  border: 0.5px solid var(--cm-line-1);
+  border-radius: var(--cm-r-2);
+  background: color-mix(in srgb, var(--cm-text-1) 4%, transparent);
 }
 
 .mergeConflictPath {
@@ -6382,8 +6480,12 @@ button.profileRowMain:hover {
 
 .mergeKind {
   flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: var(--cm-r-1);
+  background: color-mix(in srgb, var(--cm-text-1) 8%, transparent);
   font-size: var(--cm-fs-meta);
-  color: var(--dsw-alias-label-tertiary);
+  line-height: 1.5;
+  color: var(--cm-text-2);
 }
 
 .mergeConflictReason {
@@ -6418,7 +6520,32 @@ button.profileRowMain:hover {
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: var(--cm-fs-meta);
-  color: var(--dsw-alias-label-secondary);
+  color: var(--cm-text-2);
+}
+
+/* 弹窗里的分区列表：卡片需要内边距（否则边框贴住滚动容器），高度让位给概览 + 底栏。 */
+.mergeScroll[data-fit='modal'] {
+  padding: 8px;
+  max-height: 46vh;
+}
+
+/* —— 同步在途活动条（一键同步：拉远端快照 / 正在同步） ——
+   不定态进度是**状态**而不是装饰：prefers-reduced-motion 下仍保留（见 DESIGN §5）。 */
+.syncActivity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.syncActivityTrack {
+  display: block;
+}
+
+.syncActivityLabel {
+  font-size: var(--cm-fs-meta);
+  line-height: 1.5;
+  color: var(--cm-text-2);
 }
 
 

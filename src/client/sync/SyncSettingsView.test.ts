@@ -65,6 +65,8 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
     // issue #91：推送预览卡（五条并列提示带：只读 / 首次基线 / 加密 / 含凭据 / 引擎告警）自成文件，
     // 主文件只装配 —— 同样以「抽出去」而不是「抬上限」满足棘轮
     ['PushPreviewCard', 'PushPreviewCard.tsx'],
+    // 一键同步的加载反馈：在途活动条是纯展示（无状态无调用），同样以「抽出去」守住棘轮
+    ['SyncActivityBar', 'SyncActivityBar.tsx'],
   ]
   for (const [name, file] of units) {
     // 主文件：必须 import 并渲染该单元
@@ -117,6 +119,8 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   //   · 拉取差异预览：按钮、runPull、pullView、报告弹窗、pullReportView import 全部删除；
   //   · 一键同步：裁决视图从页面内联改为**弹窗**装配（Modal + 一次 MergePreviewView），
   //     页面侧只多一个 mergeSeed 状态、一个 mergeApplying 状态与一个弹窗块。
+  // 1560 不变（加载动画 + 合并弹窗重设计）：新增的在途活动条抽成 SyncActivityBar.tsx，
+  //   裁决弹窗壳/状态/请求抽成 MergeModal.tsx（主文件只留一次挂载），主文件因此仍然回落。
   assert.ok(viewLines <= 1560, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
 })
 

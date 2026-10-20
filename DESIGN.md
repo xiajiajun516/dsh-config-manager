@@ -861,6 +861,34 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     收进列表头部摘要行的 `InfoHint`（ⓘ）；空列表「为什么什么都没有」的**常驻**解释由
     `<Empty>`（`runs.empty`）承担，不得一并移入 ⓘ。
 
+### 远程合并弹窗（2026-10-21 重设计，替代页内联的旧裁决视图）
+结构层次（**四层，表面与间距逐层收窄，不靠颜色堆叠**）：概览指标 → 分区卡 → 冲突片 → 结果卡。
+- **概览指标块**：`.mergeOverview`（4 等分 grid，gap 8）+ `.mergeTile[data-tone='ok'|'info'|'warn'|'error']`
+  + `.mergeTileValue`（fs-title/600/tabular-nums）+ `.mergeTileLabel`（fs-meta）。
+  **语义走 `data-tone` 而不是四个类名**（与 Badge/Banner 同一套四态词表）；着色只用
+  `color-mix(in srgb, var(--cm-<tone>) 8%, transparent)` 底 + 40% 边框 —— 数字先被读到，颜色只做分级。
+  概览是**决策依据**（可自动应用 / 待裁决 / 冲突 / 无变化），因此常驻在正文最上方，不折叠、不进 ⓘ。
+- **分区卡**：`.mergeSection` = 0.5px `--cm-line-1` 外框 + `--cm-r-3` + `--cm-surface-1`，
+  相邻卡之间用 `.mergeSection + .mergeSection { margin-top: 8px }` **而不是分隔线**（卡片化后分隔线
+  会与卡边框叠成双层）。卡头 `.mergeSectionHead`：名称 + 裁决 Badge + `.statusSpacer` + 冲突/自动并入计数。
+- **冲突片**：`.mergeConflictRow` 是卡内第二层，用 `--cm-r-2` + `color-mix(in srgb, var(--cm-text-1) 4%)`
+  抬一档明度（**不再用 `--dsw-alias-bg-layer-1`**：弹窗底色本就随主题变，叠宿主层色会脏）；
+  `.mergeKind` 是字号 11 / 行高 1.5 的芯片（padding `0 6px` + 8% tint），只标注冲突类型。
+- **裁决片**：`.mergeActionActive` = ghost-active 配方（`--cm-ghost-active-fill/border`）+ `font-weight:600`
+  + 按内 `CheckIcon`（12px，包在 `.mergeIconLabel`）。**当前裁决必须同时有底色、描边与对勾**：
+  只靠底色在暗色主题下几乎看不出差别。
+- **执行通道只有一条（UI-23 的强化用例）**：`.mergeFooterSummary`（裁决进度 `merge.apply.summary` ·
+  `skips`，可收窄换行）+ `.statusSpacer` + 关闭 ghost + 「执行合并」primary 三件套**固定在
+  `Modal.Footer`**；正文里不再出现第二个执行按钮，也不放「关闭」。
+- **长列表在弹窗内滚动**：`.mergeScroll[data-fit='modal']`（padding 8 + `max-height: 46vh`）——
+  高度让位给概览与底栏，564×720 画布下都不撑出宿主面板滚动条。
+- **职责切分**：弹窗壳 / 状态 / 请求 → `MergeModal.tsx`；列表与视觉 → `MergePreviewView.tsx`（纯展示，
+  无请求无状态，便于单测与复用）。概览/分区/冲突的判定仍在 `merge-view.ts` 纯函数里。
+- **在途活动条**（`.syncActivity` + `.syncActivityTrack` + `.syncActivityLabel`，`SyncActivityBar.tsx`）：
+  一键同步的触发按钮 `loading` **之外**，整张卡上再加一条不定态细条 + 阶段文案（先「正在检查远端变更」、
+  确认要同步后转「正在同步」）。规则属 UI-25 的加强版：凡「点击后要等几秒才有第一个可见结果」的操作，
+  **必须**在等待期间给出阶段文案，且不定态进度**不得**因 `prefers-reduced-motion` 被关掉（它是状态）。
+
 ### 布局行原语（2026-09 补：把「行」的语义与间距集中定义，禁止各处内联 margin）
 - `.actionRow`：通用操作行（flex + nowrap→wrap，`margin: 0 0 10px`）。
 - `.actionRowTop`：上方紧跟说明文案的操作行（同 `.actionRow` 但**上边距 10px**），

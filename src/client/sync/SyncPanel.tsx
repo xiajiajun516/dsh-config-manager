@@ -95,7 +95,8 @@ import { UnreadableSnapshotsBanner } from './UnreadableSnapshotsBanner.tsx'
 import { SyncProbeRow } from './SyncProbeRow.tsx'
 import { deviceLabel } from './remote-device-view.ts'
 import { PushPreviewCard } from './PushPreviewCard.tsx'
-import { MergePreviewView } from './MergePreviewView.tsx'
+import { MergeModal } from './MergeModal.tsx'
+import { SyncActivityBar } from './SyncActivityBar.tsx'
 import { SyncConfirmView } from './SyncConfirmView.tsx'
 import css from '../config-manager.module.css'
 
@@ -324,8 +325,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    * preview = 那一次只读请求的结果（视图不再二次拉远端快照）；signal 变化 = 重建视图（旧裁决作废）。
    */
   const [mergeSeed, setMergeSeed] = useState<{ channel: SyncChannel; preview: MergePreviewResponse } | null>(null)
-  /** 合并裁决执行中（apply 在途）→ 让弹窗 busy，拒绝 Esc/遮罩关闭 */
-  const [mergeApplying, setMergeApplying] = useState(false)
+  /** 一键同步阶段（null = 空闲）：'preview' 拉远端快照预览、'sync' 差异确认/导入；只驱动文案 */
+  const [syncPhase, setSyncPhase] = useState<'preview' | 'sync' | null>(null)
   /** 同步分区选择弹窗开关（瞬态 UI：模式与勾选在弹窗内即时生效并持久化，关闭即完成） */
   const [sectionPickerOpen, setSectionPickerOpen] = useState(false)
   /**
@@ -1051,6 +1052,21 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
    * 全部 skip 提示「已是最新」；无基准 / 请求失败 / ok=false 一律回退老导入确认路径（fail-safe）。
    */
   const runSyncSmart = async (channel: SyncChannel): Promise<void> => {
+    // 视觉反馈从**点击那一刻**开始：预览要拉远端快照（整条链最慢的一步），
+    // 此前只有回退分支 runSync() 才设 busy ⇒ 点击后数秒界面毫无动静（用户以为没响应）。
+    // 这里全程占用 busy（顺带挡住并发的 push/切换），并用 syncPhase 区分阶段文案。
+    patch({ busy: 'sync' })
+    setSyncPhase('preview')
+    try {
+      await dispatchSmartSync(channel)
+    } finally {
+      setSyncPhase(null)
+      patch({ busy: null })
+    }
+  }
+
+  /** 一键同步的实际分派（busy/阶段标志由 runSyncSmart 统一持有）。 */
+  const dispatchSmartSync = async (channel: SyncChannel): Promise<void> => {
     switchChannel(channel)
     // 与 runSync() 同处置：先清在途的差异确认会话（否则它持有的临时 ZIP 一直留在宿主 syncSessions 里，
     // 走合并路径时更是没有出口；清掉后 fallback 分支的 runSync() 不会重复 cancel）。
@@ -1068,6 +1084,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     }
     if (smart.kind === 'upToDate') { toast.ok(t('syncflow.upToDate')); return }
     if (smart.error !== undefined) toast.error(t('merge.toast.previewFailed') + t('common.labelSeparator') + redact(smart.error))
+    setSyncPhase('sync')
     await runSync()
   }
 
@@ -1216,9 +1233,12 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               <Button
                 variant="primary"
                 disabled={busy}
+                loading={state.busy === 'sync'}
                 onClick={() => { void runSyncSmart(channel) }}
               >
-                {state.busy === 'sync' ? <Spinner label={t('syncflow.syncing')} /> : t('syncflow.button')}
+                {state.busy === 'sync'
+                  ? (syncPhase === 'preview' ? t('syncflow.checkingRemote') : t('syncflow.syncing'))
+                  : t('syncflow.button')}
               </Button>
               <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
@@ -1229,6 +1249,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                 body={buildSyncChannelBody({ ...formOf(state), channel })}
               />
             </div>
+            {/* 同步在途的活动条：按钮 Spinner 只在按钮上，这条横条让「正在拉远端快照」在整张卡上可见 */}
+            {syncPhase !== null && <SyncActivityBar phase={syncPhase} t={t} />}
             {/* 选择历史快照（该通道的远端快照；缺省 = 最新）。
                 支持点击/展开即刷新，另有主动刷新按钮 —— 两个入口都保留（v1 行为不变）。 */}
             <div className={css.snapshotPickerRow}>
@@ -1485,34 +1507,17 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
           {/* 方案 A：一键同步命中合并路径 → **弹窗内**裁决（页面不再内联）。
               预览来自那一次 /sync/merge-preview（initialPreview，不二次请求）；
               内容：.mergeScroll 限高内滚 + Modal.Body scroll —— 564×720 画布下不撑出宿主面板滚动条。 */}
-          <Modal
-            open={mergeSeed !== null}
+          <MergeModal
+            seed={mergeSeed}
             onClose={() => { setMergeSeed(null) }}
-            title={t('merge.title')}
-            wide
-            busy={state.busy !== null || mergeApplying}
-            cardStyle={{ width: 'min(820px, 100%)', maxHeight: '85vh' }}
-          >
-            <Modal.Header
-              title={t('merge.title')}
-              closeLabel={t('common.close')}
-              onClose={() => { setMergeSeed(null) }}
-              closeDisabled={state.busy !== null || mergeApplying}
-            />
-            <Modal.Body scroll style={{ maxHeight: '72vh' }}>
-              {mergeSeed !== null && (
-                <MergePreviewView
-                  api={api} t={t} busy={state.busy !== null} showTitle={false}
-                  initialPreview={mergeSeed.preview}
-                  channelPayload={() => buildSyncChannelBody({ ...formOf(stateRef.current), channel: mergeSeed.channel })}
-                  sectionName={(id) => sectionName(id as SectionId)}
-                  decryptPassword={stateRef.current.byChannel[mergeSeed.channel].decryptPassword}
-                  onApplyingChange={setMergeApplying}
-                  onApplied={() => { void loadStatus() }} onRolledBack={() => { void loadStatus() }}
-                />
-              )}
-            </Modal.Body>
-          </Modal>
+            api={api} t={t}
+            busy={state.busy !== null}
+            channelBody={(channel) => buildSyncChannelBody({ ...formOf(stateRef.current), channel })}
+            sectionName={(id) => sectionName(id as SectionId)}
+            decryptPasswordOf={(channel) => stateRef.current.byChannel[channel].decryptPassword}
+            onApplied={() => { void loadStatus() }}
+            onRolledBack={() => { void loadStatus() }}
+          />
           {/* 一键同步差异确认弹窗（Radix Modal；SyncConfirmView 内含取消/确认按钮） */}
           <Modal
             open={state.confirmSession !== null}

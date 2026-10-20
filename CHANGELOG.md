@@ -59,6 +59,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **同一份 Claude Code 数据重复导入不再产生重复副本**：会话日志的生成时间改为确定性回落，第二次导入同一来源会被判成「内容相同，跳过」，而不是让你逐条裁决冲突。
   **Importing the same Claude Code data twice no longer creates duplicates**: session logs now fall back to a deterministic timestamp, so a second import of the same source is judged "identical content, skipped" instead of asking you to resolve conflicts item by item.
 
+- **点「一键同步」后立刻看得到它在动**：从点击那一刻起按钮进入加载态并说明正在做什么（先「正在检查远端变更」，确认要同步后再转「正在同步」），卡片上同时出现一条不定态进度条；原先最慢的那几秒（拉远端快照比差异）完全没有反馈，容易被当成没点上而反复点。
+  **Clicking "one-click sync" now visibly reacts right away**: the button enters its loading state the moment you click and says what it is doing (first "checking remote changes", then "syncing" once it proceeds), with an indeterminate progress bar on the card — previously the slowest few seconds (fetching the remote snapshot to diff) gave no feedback at all and looked like the click was lost.
+- **远程合并弹窗重新设计，一眼看出「哪里需要你决定」**：顶部四个指标（可自动应用 / 待裁决 / 冲突 / 无变化）用颜色区分轻重，每个分区改成一张卡片、冲突只保留必要信息，批量裁决收到工具栏，裁决进度与「执行合并」固定在弹窗底部；分区再多也在弹窗内滚动，不必滚到正文最底部找按钮。
+  **The remote-merge dialog is redesigned so what needs your decision is obvious at a glance**: four color-coded counters on top (auto-applicable / needs review / conflicts / no change), one card per section with only the necessary conflict detail, bulk decisions in the toolbar, and the decision progress plus "apply merge" pinned in the dialog footer, so long lists scroll inside the dialog instead of pushing the button out of reach.
+
 ### 🐛 修复 · Fixed
 
 - **Claude Code 的子代理对话不再被混进主对话**：带 `isSidechain` 的记录改为跳过并计数上报，此前它们会被当成普通消息写进正文。
