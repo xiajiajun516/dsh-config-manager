@@ -97,14 +97,14 @@
 
 ## 🎨 UI / DESIGN SYSTEM（最高优先级）
 > **`DESIGN.md` 是 UI/样式决策唯一权威**；涉及 UI/Layout/CSS/颜色/字体/间距/图标/动效/响应式前必读。
-- **设计 token 必须定义在 `body`**（既不是 `.section` 也不是 `:root`）：DSH 的 `--dsw-*` 定义在 **body** 上（`dsh-client-ui-theme`），而 var() 在**声明它的元素**上替换 ⇒ 挂 `:root` 时 `--cm-*` 链在 html 就失效、挂 `.section` 时 Portal 到 body 的弹窗看不见（→ `docs/lessons/recovery-console.md`）。
+- **设计 token 必须定义在 `body`**：DSH 的 `--dsw-*` 定义在 **body** 上（`dsh-client-ui-theme`），而 var() 在**声明它的元素**上替换 ⇒ 挂 `:root` 时 `--cm-*` 链在 html 就失效、挂 `.section` 时 Portal 到 body 的弹窗看不见（→ `docs/lessons/recovery-console.md`）。
 - **颜色三层单向依赖**：组件只写 `--cm-*`，`--dsw-*` 只允许出现在 `--cm-*` 定义行；禁止 hardcode；tint 用 `color-mix(in srgb, var(--cm-*) <pct>%, transparent)`（`css-token-guard.test.ts`）。
 - **样式只能进 `src/client/config-manager.module.css`**：禁止内联 `<style>`/第三方 css；类名用 CSS Modules（`css.xxx`）；**scale 有源级守卫**（字号/间距/圆角/行高/z-index，`css-scale-guard.test.ts`），新档位先改 DESIGN.md §3–§5。
 - **复用优先**：`common/ui.tsx` 原语 + `ErrorBanner/ProgressBar/ReportView` 等；已有组件能解决就禁止重建，新页面先搜库。
 - **默认不引入第二套视觉体系**。**图标 = `lucide-react`**（`common/Icon.tsx`）；**形变仅 `ExpandChevron`/`CopyStateIcon`**（`morphicons`，硬约定 `reducedMotion="user"`/`spring={MORPH_SPRING}`，**不得扩大范围**）。
 - 按钮语义：primary(主操作)/ghost(次)/danger(危险)，勿用 primary 做危险操作；徽章 `Badge kind="ok|info|warn|error"` 对应 Banner 四态；展示文本渲染前过 `redact()`。
 - **长列表/大报告必须限高内滚**（`planScroll` 等 5 个类），禁止撑长整页。
-- **界面文案克制**：预览/弹窗只留能改变决定的信息；机制与范围解释进 ⓘ 或文档。→ `DESIGN.md §7`
+- **页面/文案克制**：页面/预览/弹窗只留能改变决定的信息，**不加无用描述**；解释进 ⓘ 或文档。→ `DESIGN.md §7`
 - **页落位**：`home`/`library`/`sync`/`environment` 四页；**市场不是页面**（Task 承载）；**加页面/改 id 必须同改 `parsePersistedState` 映射与 `run-store.test.ts` 迁移用例**。
 - DESIGN.md 未覆盖时：搜库确认 → 能扩展先扩展 → token+color-mix → **写回 DESIGN.md** → 再使用；**除非明确要求 redesign，否则最小范围修改**、与既有页面观感不一致时以既有为准。第三方 UI 库须走 7 步准入（→ `DEVELOPERS.md` / `DESIGN.md §6`）。
 
