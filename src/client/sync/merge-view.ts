@@ -10,9 +10,12 @@
  *   POST /sync/apply-merge   → MergeApplyResponse  （按逐项裁决执行）
  *
  * **裁决粒度 = 分区 id**（Lead 2026-10-18 冻结，不做 'id::path' 复合 id）：
- *   resolutions: Array<{ id: SectionId; action: 'keepLocal' | 'useRemote' | 'useMerged' | 'skip' }>
- *   - 'useMerged' 只对引擎回传 decision === 'merge' 的分区有效；conflict 分区必须禁用并写明原因；
- *   - 'skip' = **未解决**：引擎不推进远端基线，该分区进 pendingConflicts，界面必须如实说。
+ *   resolutions: Array<{ id: SectionId; action: 'keepLocal' | 'useRemote' | 'useMerged' }>
+ *   - 'useMerged' 只对引擎回传 decision === 'merge' 的分区有效；conflict 分区**不渲染该按钮**（不是禁用态）；
+ *   - 界面**不再发送 'skip'**（2026-10-21 用户裁决：跳过既不是解决、又与「什么都不点」等价，
+ *     徒增一个会让人误以为已处理的按钮）。需要留到下次的分区**根本不出现在请求体里**：
+ *     引擎对未点名的分区按自己的结论应用（skip → 不动；conflict → 进 pendingConflicts），
+ *     所以「不在 resolutions 里」天然等于「本次不动、下次还出现」，语义比跳过的 skip 更诚实。
  *   冲突明细行只做展示（path + reason + 三列预览），动作按钮挂在分区行上。
  */
 import { redact } from '../../security/redaction.ts'
@@ -22,8 +25,12 @@ import type { MergeApplyResponse, MergePreviewResponse, MergePreviewSection } fr
 /** 分区级合并决策（与 src/sync/merge.ts 的 MergeDecision + 'conflict' 同口径）。 */
 export type MergeDecision = 'useRemote' | 'keepLocal' | 'merge' | 'skip' | 'conflict'
 
-/** 单条裁决动作（与 /sync/apply-merge 的 body.resolutions[].action 同口径）。 */
-export type MergeResolutionAction = 'keepLocal' | 'useRemote' | 'useMerged' | 'skip'
+/**
+ * 单条裁决动作（**是 /sync/apply-merge 的 body.resolutions[].action 的子集**）。
+ *
+ * 宿主契约仍接受 'skip'，但界面已不产生它 —— 见文件头「界面不再发送 skip」。
+ */
+export type MergeResolutionAction = 'keepLocal' | 'useRemote' | 'useMerged'
 
 /** 徽章色调（对齐 common/ui.tsx 的 BadgeKind，避免为纯函数引入 .tsx 类型）。 */
 export type MergeTone = 'ok' | 'info' | 'warn' | 'error'
@@ -190,17 +197,14 @@ export function mergeSummaryItems(preview: MergePreviewResponse | null | undefin
 export type MergeResolutionDraft = Record<string, MergeResolutionAction>
 
 /**
- * 初始草稿：**需要裁决的分区一律预置 skip（不动）**。
+ * 初始草稿：**空**（用户什么都不点时请求体里没有任何分区）。
  *
- * 这是刻意的保守缺省：预览是只读的，用户不点任何东西时执行合并不得写坏任何分区；
- * 「跳过 ≠ 已解决」的常驻提示同时告诉用户 skip 不会推进同步基线。
+ * 保守缺省依然成立，但不再靠「预置 skip」实现：引擎对未点名的分区按自己的结论处理 ——
+ * 无变化的 skip 分区不会写、冲突分区进 pendingConflicts（下次同步还在）。所以空草稿
+ * 与「全部预置 skip」在**写入结果**上完全一致，只是少了一个让人以为「已经处理过」的动作。
  */
-export function initialResolutionDraft(preview: Pick<MergePreviewResponse, 'sections'> | null | undefined): MergeResolutionDraft {
-  const draft: MergeResolutionDraft = {}
-  for (const row of mergeSectionRows(preview)) {
-    if (row.needsDecision) draft[row.resolutionId] = 'skip'
-  }
-  return draft
+export function initialResolutionDraft(_preview?: Pick<MergePreviewResponse, 'sections'> | null): MergeResolutionDraft {
+  return {}
 }
 
 /** 设置**分区级**裁决（分区 id 就是裁决单 id）。 */
@@ -208,15 +212,15 @@ export function setSectionAction(draft: MergeResolutionDraft, sectionId: string,
   return { ...draft, [sectionId]: action }
 }
 
-/** 批量类型。 */
-export type MergeBulkAction = MergeResolutionAction | 'autoOnly'
-
 /**
- * 批量裁决：
- *  - keepLocal / useRemote：对**每个需要裁决的分区**写它的分区级动作；
- *  - useMerged：只对**存在可用自动合并结果**的分区写（其余保持原样，不静默改成别的动作）；
- *  - autoOnly（仅处理无冲突项）：把所有需要裁决的分区显式置 skip，交给引擎只应用无冲突分区。
+ * 批量类型。
+ *
+ * - keepLocal / useRemote / useMerged：给分区写显式动作；
+ * - leavePending（原「仅处理无冲突项」）：把**需要裁决的分区从草稿里删掉**，
+ *   即「这些留到下次同步」，本次只应用其余分区。
  */
+export type MergeBulkAction = MergeResolutionAction | 'leavePending'
+
 export function applyBulkResolution(
   preview: Pick<MergePreviewResponse, 'sections'> | null | undefined,
   draft: MergeResolutionDraft,
@@ -224,9 +228,13 @@ export function applyBulkResolution(
 ): MergeResolutionDraft {
   let next: MergeResolutionDraft = { ...draft }
   for (const row of mergeSectionRows(preview)) {
-    if (bulk === 'autoOnly') {
-      // 只把**需要裁决**的分区置 skip；无冲突分区交给引擎自动应用（不写多余裁决单）
-      if (row.needsDecision) next = setSectionAction(next, row.id, 'skip')
+    if (bulk === 'leavePending') {
+      // 需要裁决的分区**移出草稿**（不是写 skip）：不进请求体 = 本次不应用、下次仍出现
+      if (row.needsDecision) {
+        const rest = { ...next }
+        delete rest[row.id]
+        next = rest
+      }
       continue
     }
     if (bulk === 'useMerged') {
@@ -250,42 +258,48 @@ export function buildMergeResolutions(draft: MergeResolutionDraft): Array<{ id: 
 
 /** 裁决计数（执行前确认摘要用）。 */
 export interface MergeDecisionCounts {
-  /** 需要裁决的分区数 */
+  /** 需要裁决的分区数（decision === 'conflict'） */
   needsDecision: number
-  /** 已给出显式裁决的分区数（含 skip） */
+  /** 已给出显式裁决的待裁决分区数 */
   decided: number
-  /** 尚未出现在草稿里的分区数 */
+  /** 尚未裁决、本次会留给下次的分区数 */
   undecided: number
-  /** 被判为 skip 的分区数（**未解决**，不会推进同步基线） */
-  skipped: number
   /** 待裁决分区里的冲突条目总数 */
   conflictItems: number
+  /** 本次**会被应用**的分区数（有变化且不需裁决） */
+  applicable: number
 }
 
-/** 统计草稿覆盖面：把「已裁决 / 未裁决 / 跳过」讲清楚（诚实性：skip 不算解决）。 */
+/** 统计草稿覆盖面：把「已裁决 / 待裁决 / 本次会应用几个」讲清楚。 */
 export function mergeDecisionCounts(
   preview: Pick<MergePreviewResponse, 'sections'> | null | undefined,
   draft: MergeResolutionDraft,
 ): MergeDecisionCounts {
   let needsDecision = 0
   let decided = 0
-  let skipped = 0
   let conflictItems = 0
+  let applicable = 0
   for (const row of mergeSectionRows(preview)) {
-    if (!row.needsDecision) continue
+    if (!row.needsDecision) {
+      // 无变化的分区不会有任何写入；其余（自动应用 / 显式结论）都会落盘
+      if (row.decision !== 'skip') applicable++
+      continue
+    }
     needsDecision++
     conflictItems += row.conflicts.length > 0 ? row.conflicts.length : row.conflictCount
-    const own = draft[row.resolutionId]
-    if (own === undefined) continue
-    decided++
-    if (own === 'skip') skipped++
+    if (draft[row.resolutionId] !== undefined) decided++
   }
-  return { needsDecision, decided, undecided: needsDecision - decided, skipped, conflictItems }
+  return { needsDecision, decided, undecided: needsDecision - decided, conflictItems, applicable }
 }
 
-/** 是否至少有一条**会产生写入**的裁决（全 skip = 无事可做，主按钮应禁用并说明）。 */
-export function hasWritableResolution(draft: MergeResolutionDraft): boolean {
-  return Object.values(draft).some((action) => action !== 'skip')
+/**
+ * 本次是否存在**可应用的分区**（决定「执行合并」主按钮是否可用）。
+ *
+ * 判据是预览本身而不是草稿：引擎对未点名的分区按自己的结论应用，所以只要有任一
+ * 非「无变化」、非「待裁决」的分区，执行合并就真的会写东西；全部无变化时按钮必须禁用。
+ */
+export function hasApplicableSections(preview: Pick<MergePreviewResponse, 'sections'> | null | undefined): boolean {
+  return mergeSectionRows(preview).some((row) => row.decision !== 'skip' && row.decision !== 'conflict')
 }
 
 /** 合并执行结果 → 渲染视图。 */

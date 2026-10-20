@@ -2,13 +2,13 @@
  * T-ui-merge：远程合并裁决**纯函数**单测（node:test，零依赖、无 DOM）。
  *
  * 覆盖验收：决策/成因字典映射（禁止裸枚举）、冲突行投影与截断+redact、
- * 保守缺省（冲突分区预置 skip）、批量裁决语义、裁决计数与「跳过 ≠ 已解决」、结果归一化。
+ * 保守缺省（空草稿 = 未点名的分区引擎不应用）、批量裁决语义、裁决计数与可应用判据、结果归一化。
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  applyBulkResolution, buildMergeResolutions, decideSyncEntry, hasWritableResolution, initialResolutionDraft,
+  applyBulkResolution, buildMergeResolutions, decideSyncEntry, hasApplicableSections, initialResolutionDraft,
   mergeDecisionCounts, mergeDecisionKey, mergeDecisionTone, mergeKindKey, mergeReasonKey,
   mergeResultView, mergeSectionRows, mergeSummaryItems, needsNoAncestorNotice,
   normalizeDecision, setSectionAction, truncatePreview, MERGE_PREVIEW_MAX_CHARS,
@@ -98,18 +98,19 @@ test('merge-view: mergeSectionRows —— 缺字段时用冲突数组长度兜�
   assert.equal(rows[0]!.autoMerged, null)
 })
 
-test('merge-view: initialResolutionDraft —— 冲突分区保守预置 skip，自动分区不出现', () => {
+test('merge-view: initialResolutionDraft —— 空草稿（未点名的分区引擎不应用，界面不再预置 skip）', () => {
   const p = preview({
     sections: [
       { id: 'settings', decision: 'conflict', conflictCount: 2, conflicts: [] },
       { id: 'providers', decision: 'useRemote', conflictCount: 0, conflicts: [] },
     ],
   })
-  assert.deepEqual(initialResolutionDraft(p), { settings: 'skip' })
+  assert.deepEqual(initialResolutionDraft(p), {}, '空草稿：请求体里不出现任何分区')
+  assert.deepEqual(initialResolutionDraft(null), {})
   assert.deepEqual(buildMergeResolutions({}), [], '空草稿 = 空请求体')
 })
 
-test('merge-view: 批量裁决 —— 本地/远端覆盖全部分区；自动合并只碰 merge 分区；仅无冲突项 = 全 skip', () => {
+test('merge-view: 批量裁决 —— 本地/远端覆盖全部分区；自动合并只碰 merge 分区；留到下次 = 清空待裁决', () => {
   const p = preview({
     sections: [
       { id: 'settings', decision: 'conflict', conflictCount: 1, conflicts: [] },
@@ -122,10 +123,12 @@ test('merge-view: 批量裁决 —— 本地/远端覆盖全部分区；自动�
   assert.deepEqual(applyBulkResolution(p, base, 'keepLocal'), { settings: 'keepLocal', mcp: 'keepLocal', providers: 'keepLocal' })
   assert.deepEqual(
     applyBulkResolution(p, base, 'useMerged'),
-    { settings: 'skip', mcp: 'skip', providers: 'useMerged' },
+    { providers: 'useMerged' },
     'conflict 分区不因批量操作被静默改成别的动作，只有有 merged 载荷的分区可写 useMerged',
   )
-  assert.deepEqual(applyBulkResolution(p, base, 'autoOnly'), { settings: 'skip', mcp: 'skip' })
+  assert.deepEqual(applyBulkResolution(p, base, 'leavePending'), {}, '冲突留到下次 = 把待裁决分区移出草稿')
+  // 已裁决的分区被「留到下次」清掉，未裁决分区本来就不在草稿里
+  assert.deepEqual(applyBulkResolution(p, setSectionAction(base, 'settings', 'useRemote'), 'leavePending'), {})
 })
 
 test('merge-view: 单分区裁决 + 请求体排序稳定', () => {
@@ -136,27 +139,44 @@ test('merge-view: 单分区裁决 + 请求体排序稳定', () => {
     ],
   })
   const d = setSectionAction(initialResolutionDraft(p), 'mcp', 'useRemote')
-  assert.deepEqual(buildMergeResolutions(d), [
-    { id: 'mcp', action: 'useRemote' },
-    { id: 'settings', action: 'skip' },
-  ])
-  assert.equal(hasWritableResolution({ a: 'skip', b: 'skip' }), false, '全 skip = 无事可做')
-  assert.equal(hasWritableResolution({ a: 'skip', b: 'useRemote' }), true)
+  assert.deepEqual(buildMergeResolutions(d), [{ id: 'mcp', action: 'useRemote' }])
+  assert.deepEqual(buildMergeResolutions(setSectionAction({}, 'settings', 'keepLocal')), [{ id: 'settings', action: 'keepLocal' }])
 })
 
-test('merge-view: mergeDecisionCounts —— 未裁决/已裁决/跳过分别可数（skip 不算解决）', () => {
+test('merge-view: hasApplicableSections —— 只要存在「有变化且不需裁决」的分区就可执行（与草稿无关）', () => {
+  const onlySkip = preview({ sections: [{ id: 'settings', decision: 'skip', conflictCount: 0, conflicts: [] }] })
+  assert.equal(hasApplicableSections(onlySkip), false, '全部无变化 → 执行合并必须禁用')
+  assert.equal(hasApplicableSections(null), false)
+  const withAuto = preview({
+    sections: [
+      { id: 'settings', decision: 'conflict', conflictCount: 1, conflicts: [] },
+      { id: 'providers', decision: 'useRemote', conflictCount: 0, conflicts: [] },
+    ],
+  })
+  assert.equal(hasApplicableSections(withAuto), true, '只有冲突 + 一个可应用分区 → 可执行（冲突留待下次）')
+  const onlyConflict = preview({ sections: [{ id: 'settings', decision: 'conflict', conflictCount: 1, conflicts: [] }] })
+  assert.equal(hasApplicableSections(onlyConflict), false, '只有待裁决分区 → 没有可应用内容')
+})
+
+test('merge-view: mergeDecisionCounts —— 待裁决覆盖 + 本次可应用分区数分别可数', () => {
   const p = preview({
     sections: [
       { id: 'settings', decision: 'conflict', conflictCount: 2, conflicts: [] },
       { id: 'mcp', decision: 'conflict', conflictCount: 1, conflicts: [] },
-      { id: 'providers', decision: 'skip', conflictCount: 0, conflicts: [] },
+      { id: 'providers', decision: 'merge', autoMerged: 1, conflictCount: 0, conflicts: [] },
+      { id: 'skills', decision: 'skip', conflictCount: 0, conflicts: [] },
     ],
   })
-  const draft = initialResolutionDraft(p)
-  assert.deepEqual(mergeDecisionCounts(p, draft), { needsDecision: 2, decided: 2, undecided: 0, skipped: 2, conflictItems: 3 })
-  const partial = setSectionAction(draft, 'settings', 'useRemote')
-  assert.deepEqual(mergeDecisionCounts(p, partial), { needsDecision: 2, decided: 2, undecided: 0, skipped: 1, conflictItems: 3 })
-  assert.deepEqual(mergeDecisionCounts(p, {}), { needsDecision: 2, decided: 0, undecided: 2, skipped: 0, conflictItems: 3 })
+  const empty = mergeDecisionCounts(p, {})
+  assert.deepEqual(empty, { needsDecision: 2, decided: 0, undecided: 2, conflictItems: 3, applicable: 1 })
+  assert.deepEqual(
+    mergeDecisionCounts(p, setSectionAction({}, 'settings', 'useRemote')),
+    { needsDecision: 2, decided: 1, undecided: 1, conflictItems: 3, applicable: 1 },
+  )
+  assert.deepEqual(
+    mergeDecisionCounts(p, setSectionAction(setSectionAction({}, 'settings', 'useRemote'), 'mcp', 'keepLocal')),
+    { needsDecision: 2, decided: 2, undecided: 0, conflictItems: 3, applicable: 1 },
+  )
 })
 
 test('merge-view: mergeSummaryItems —— 缺字段按 0，绝不 undefined', () => {

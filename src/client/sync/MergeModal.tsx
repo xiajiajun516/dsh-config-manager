@@ -22,7 +22,7 @@ import type {
 } from './sync-api.ts'
 import type { SyncChannel } from './sync-view.ts'
 import {
-  applyBulkResolution, buildMergeResolutions, hasWritableResolution, initialResolutionDraft,
+  applyBulkResolution, buildMergeResolutions, hasApplicableSections, initialResolutionDraft,
   mergeDecisionCounts, mergeResultView, mergeSectionRows,
 } from './merge-view.ts'
 import type { MergeBulkAction, MergeResolutionAction, MergeResolutionDraft } from './merge-view.ts'
@@ -160,7 +160,7 @@ export function MergeModal({
 
   const rows = mergeSectionRows(preview)
   const counts = mergeDecisionCounts(preview, draft)
-  const writable = hasWritableResolution(draft)
+  const applicable = hasApplicableSections(preview)
   const blocked = busy || loading || preview === null || rows.length === 0
 
   return (
@@ -201,14 +201,14 @@ export function MergeModal({
       <Modal.Footer>
         <span className={css.mergeFooterSummary}>
           {t('merge.apply.summary', { decided: String(counts.decided), needs: String(counts.needsDecision) })}
-          {counts.skipped > 0 ? ' · ' + t('merge.apply.skips', { n: String(counts.skipped) }) : ''}
+          {counts.applicable > 0 ? ' · ' + t('merge.apply.willApply', { n: String(counts.applicable) }) : ''}
         </span>
         <span className={css.statusSpacer} />
         <Button variant="ghost" disabled={applying} onClick={onClose}>{t('common.close')}</Button>
         <Button
           variant="primary"
           loading={applying}
-          disabled={blocked || !writable}
+          disabled={blocked || !applicable}
           onClick={() => { void apply() }}
         >
           {applying ? t('merge.applying') : t('merge.apply')}

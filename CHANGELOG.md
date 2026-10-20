@@ -64,8 +64,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **远程合并弹窗重新设计，一眼看出「哪里需要你决定」**：顶部四个指标（可自动应用 / 待裁决 / 冲突 / 无变化）用颜色区分轻重，每个分区改成一张卡片、冲突只保留必要信息，批量裁决收到工具栏，裁决进度与「执行合并」固定在弹窗底部；分区再多也在弹窗内滚动，不必滚到正文最底部找按钮。
   **The remote-merge dialog is redesigned so what needs your decision is obvious at a glance**: four color-coded counters on top (auto-applicable / needs review / conflicts / no change), one card per section with only the necessary conflict detail, bulk decisions in the toolbar, and the decision progress plus "apply merge" pinned in the dialog footer, so long lists scroll inside the dialog instead of pushing the button out of reach.
 
+- **合并弹窗里「采用自动合并」只出现在真的能自动合并的分区上**：以前它对每个分区都显示、对冲突分区永远点不动，看起来像坏了；现在没有自动合并结果的分区不显示这个按钮，「全部采用自动合并」也只在至少一个分区可用时出现。
+  **"Take the automatic merge" now appears only where there is an automatic result to take**: it used to be shown on every section and stayed permanently disabled where a section conflicts, which looked broken; sections without an automatic result no longer show the button, and the bulk "take all automatic merges" shows up only when at least one section qualifies.
+- **合并弹窗不再有「跳过」，冲突就是「留到下次」**：原来的「跳过」既没解决冲突、又与什么都不点完全等价，容易让人以为已经处理过；批量里的「仅处理无冲突项」也改成同一件事的直白说法「冲突留到下次」，只把待裁决的分区留在原处，弹窗底部如实说明还有几个分区这次不会应用。
+  **The merge dialog no longer has a "skip" action — conflicts are simply left for the next sync**: skipping resolved nothing and was equivalent to not choosing at all, yet it looked like the conflict had been handled; the bulk "only handle conflict-free items" button is now the plain-spoken "leave conflicts for next sync", and the footer states how many sections this run will not apply.
+
 ### 🐛 修复 · Fixed
 
+- **远程合并弹窗打开时不再抖动或形变**：入场动画改为纯淡入、不再做位移；带内滚列表的弹窗也不会因为滚动条在动画中途出现而横向跳一下。
+  **The remote-merge dialog no longer shudders or distorts as it opens**: its entrance is now a plain fade with no movement, and dialogs with inner scroll areas no longer jump sideways when the scrollbar appears mid-animation.
 - **Claude Code 的子代理对话不再被混进主对话**：带 `isSidechain` 的记录改为跳过并计数上报，此前它们会被当成普通消息写进正文。
   **Claude Code subagent conversations are no longer mixed into the main one**: records marked `isSidechain` are skipped and counted, where they used to be written into the transcript as ordinary messages.
 - **Claude Code 配置目录被 `CLAUDE_CONFIG_DIR` 挪走后，导入会真的去读那个目录**：并在报告里注明「位置被环境变量覆盖」，此前会读默认位置、甚至判定为「没安装」。

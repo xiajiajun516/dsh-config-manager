@@ -2352,23 +2352,25 @@ body {
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: var(--cm-z-modal);
-  /* 弹窗卡片入场：**只淡入，不缩放**。
-     为什么去掉 scale：本类靠 translate(-50%,-50%) 自居中，而 scale 会同时改变内容盒的
-     可见尺寸 → 卡片高度在动画期间变化 → 视觉上「先在偏下的位置出现，再闪到中心」
-     （真机反馈的 20~30px 下移闪烁）。淡入不触碰布局，位置从第一帧就是最终的。
-     注：keyframes 里仍须把 translate 一起写全 —— 只写 opacity 也安全，但保持显式更不容易被误改。 */
+  /* 弹窗卡片入场：**只淡入，零几何位移**。
+     为什么连 translateY 也去掉（2026-10-21 用户反馈「弹窗出现的时候有时候动画会发生形变」）：
+     ① scale 会改变可见尺寸（真机「先在偏下出现再闪到中心」的根因，早已去掉）；
+     ② 4px 上浮虽然不改中心，但它让**每一帧**都落在一个非整数像素位置上 —— 卡片内容
+        （1px 边框、0.5px 分隔线、11~13px 字）在这些亚像素位置上重采样，边框会一会儿粗一点、
+        一会儿糊一点，看起来就是「形变」；帧率抖动时尤其明显（不是每次都复现）。
+     ③ 弹窗尺寸由内容 + max-height 决定，入场期间若内滚条出现/消失，宽度还会跳一次 ——
+        这条交给滚动容器上的 scrollbar-gutter: stable 解决（见 .dialogBodyScroll）。
+     纯 opacity 的合成层变化不触碰布局与栅格，按下即最终位置，任何帧率下都不形变。
+     注：keyframes 里的 translate 已移除，静止态定位仍由本类的 transform 负责。 */
   animation: dialogIn var(--cm-motion-base) var(--cm-motion-ease-out);
 }
 
 @keyframes dialogIn {
-  /* 淡入 + 4px 上浮（用户 2026-10-12 第 3 条：优化弹窗入场）。
-     **仍然不加 scale**：卡片靠 translate(-50%,-50%) 自居中，scale 会在动画期间改变可见尺寸 ——
-     那是「先在偏下的位置出现，再闪到中心」的根因（见上条注释）。translateY 只挪起点 4px、
-     终点回到最终位置，第一帧与最后一帧都是同一个中心，不存在回跳。
+  /* 只做透明度：不加 scale、也不加 translateY（理由见 .dialogContentCenter 的注释）。
      另注：这条动画此前**根本没跑**过一次 —— `--cm-motion-base` 在 token 迁移时被丢掉，
      整个 animation 短手在 computed-value 阶段失效（见 body 里的动效令牌注释）。 */
-  from { opacity: 0; transform: translate(-50%, -50%) translateY(4px); }
-  to { opacity: 1; transform: translate(-50%, -50%) translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* 关闭退场：Radix Dialog 的 Presence 在 present=false 时**保持节点挂载**并等动画结束
@@ -2448,6 +2450,8 @@ body {
 .dialogBodyScroll {
   overflow-y: auto;
   max-height: 460px;
+  /* 内滚条出现/消失时不再挤压内容宽度（否则弹窗入场那一瞬间会「横向抖一下」）。 */
+  scrollbar-gutter: stable;
 }
 
 .dialogWide {
@@ -6384,17 +6388,6 @@ button.profileRowMain:hover {
   gap: 4px;
 }
 
-/* 语义提示条：比 Banner 轻一档（常驻、只解释一句），用于「跳过 ≠ 已解决」 */
-.mergeNote {
-  padding: 6px 8px;
-  border: 0.5px solid color-mix(in srgb, var(--cm-warn) 35%, transparent);
-  border-radius: var(--cm-r-2);
-  background: color-mix(in srgb, var(--cm-warn) 10%, transparent);
-  font-size: var(--cm-fs-meta);
-  line-height: 1.5;
-  color: var(--cm-text-2);
-}
-
 /* 执行结果卡：与分区卡同档表面，坐标是「已经发生的事」 */
 .mergeResult {
   display: flex;
@@ -6527,6 +6520,8 @@ button.profileRowMain:hover {
 .mergeScroll[data-fit='modal'] {
   padding: 8px;
   max-height: 46vh;
+  /* 分区列表在弹窗里内滚：预留滚动条槽位，列表从「刚好装下」变成「需要滚动」时宽度不跳。 */
+  scrollbar-gutter: stable;
 }
 
 /* —— 同步在途活动条（一键同步：拉远端快照 / 正在同步） ——

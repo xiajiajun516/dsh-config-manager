@@ -225,8 +225,11 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   状态点脉冲 1.2s、
   **页面入场 180ms**（`.pagePad` 的 `pageEnter`：opacity + 4px 上浮；React 侧以 `key={panel}`
   重建节点，换页时重放一次）、**弹窗入场/退场**（`.dialogMask` 淡入 120ms + `.dialogContentCenter`
-  **淡入 + 4px 上浮** 180ms；**入场不得用 scale** —— 卡片靠 `translate(-50%,-50%)` 自居中，scale 会改变
-  可见尺寸/位置（真机「先在偏下出现再闪到中心」）；退场仍是 0.98 微缩。关闭走 `[data-state='closed']` 的
+  **纯淡入** 180ms：`dialogIn` 的 keyframes 只写 opacity（2026-10-21 用户反馈「弹窗出现的时候有时候
+  动画会发生形变」后，从「淡入 + 4px 上浮」改掉）—— **入场不得用 scale**（卡片靠 `translate(-50%,-50%)`
+  自居中，scale 会改变可见尺寸/位置），**也不得用位移**（上浮让每帧落在非整数像素上，1px 外框与
+  0.5px 分隔线逐帧重采样 ⇒ 观感是「形变/抖动」；且内滚条在动画中途才出现时会挤压宽度）；
+  退场仍是 0.98 微缩。关闭走 `[data-state='closed']` 的
   `maskOut`/`dialogOut` ——
   Radix 的 Presence 会保持节点挂载并等 `animationend` 再卸载，所以退场只需写 CSS）、
   **折叠 180ms**（`.collapse`：`grid-template-rows` 0fr ⇄ 1fr，**展开与收起两端都有动画**；
@@ -239,8 +242,11 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   旋转与不定态进度**刻意保留**：它们承载「正在进行」这个状态本身，关掉会让用户以为界面卡死。
   形变侧由 morphicons 的 `reducedMotion="user"` 承担（CSS 选择器管不到 SVG 内的属性插值）。
   两条实现约束：页面/弹窗入场**不写 `forwards`**（动画结束回到基础样式，不留残影）；
-  `.dialogContentCenter` 的 keyframes **必须连 `translate(-50%,-50%)` 一起写**，
-  否则动画期间自居中位移被覆盖、弹窗会跳到左上角（该定位与动画在同一元素上）。
+  `dialogIn` 的 keyframes **只碰 `opacity`**，自居中位移留给 `.dialogContentCenter` 自己的
+  `transform: translate(-50%, -50%)`（动画与定位在同一元素上，keyframes 里再写 transform 会接管定位；
+  位移本身还会引入上面那条亚像素重采样）。
+  **含内滚列表的弹窗给滚动容器加 `scrollbar-gutter: stable`**（`.dialogBodyScroll`、`.mergeScroll`）：
+  入场瞬间内容尚未测量完，滚动条可能在动画中途才出现、占掉 8–15px 宽度 ⇒ 整卡片横向跳一下。
 
 ---
 
@@ -877,9 +883,19 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
 - **裁决片**：`.mergeActionActive` = ghost-active 配方（`--cm-ghost-active-fill/border`）+ `font-weight:600`
   + 按内 `CheckIcon`（12px，包在 `.mergeIconLabel`）。**当前裁决必须同时有底色、描边与对勾**：
   只靠底色在暗色主题下几乎看不出差别。
-- **执行通道只有一条（UI-23 的强化用例）**：`.mergeFooterSummary`（裁决进度 `merge.apply.summary` ·
-  `skips`，可收窄换行）+ `.statusSpacer` + 关闭 ghost + 「执行合并」primary 三件套**固定在
-  `Modal.Footer`**；正文里不再出现第二个执行按钮，也不放「关闭」。
+- **动作按可用性条件渲染，而不是「灰着不能点」**（2026-10-21）：分区行的「采用自动合并」只在
+  该分区 `decision === 'merge'`（有 merged 载荷）时出现；批量的「全部采用自动合并」只在至少一个分区
+  可用时出现。「冲突留到下次」只在还有待裁决分区时出现。灰按钮在这类弹窗里无法自证原因
+  （用户实测提问「为什么自动合并按钮永远都是灰色的」—— 它其实只对可自动合并的分区有意义，
+  对冲突分区永远不可用，于是整屏都是灰），判据能量化到行时就不要用 `disabled` 表达。
+- **没有「跳过」这个动作**（2026-10-21 移除）：跳过既没有解决冲突，又与「什么都不点」在引擎侧完全
+  等价（空草稿 = 未点名的分区不应用），多一个动作只会让人以为「已经处理过」。草稿缺省为空，
+  待裁决分区由正文脚注如实告知（「还有 N 个分区待裁决：本次不会应用它们，下次同步仍会出现」）。
+- **执行通道只有一条（UI-23 的强化用例）**：`.mergeFooterSummary`（裁决进度 `merge.apply.summary`
+  · 本次会应用的分区数 `merge.apply.willApply`，可收窄换行）+ `.statusSpacer` + 关闭 ghost +
+  「执行合并」primary 三件套**固定在 `Modal.Footer`**；正文里不再出现第二个执行按钮，也不放「关闭」。
+  primary 的 disabled 只由「在途 / 预览未就绪 / `hasApplicableSections(preview) === false`」决定 ——
+  **不再看草稿是否写了 skip**（草稿为空不代表无事可做：可自动合并的分区不需要用户裁决）。
 - **长列表在弹窗内滚动**：`.mergeScroll[data-fit='modal']`（padding 8 + `max-height: 46vh`）——
   高度让位给概览与底栏，564×720 画布下都不撑出宿主面板滚动条。
 - **职责切分**：弹窗壳 / 状态 / 请求 → `MergeModal.tsx`；列表与视觉 → `MergePreviewView.tsx`（纯展示，

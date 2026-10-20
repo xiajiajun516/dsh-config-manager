@@ -5,12 +5,18 @@
  *     弹窗把「执行合并」放进 Modal.Footer（DESIGN UI-23），因此这里不自持任何写状态。
  *
  * 交互契约（Lead 2026-10-18 冻结）：**裁决粒度 = 分区**。
- *   分区卡承载动作按钮（采用本地 / 采用远端 / 采用自动合并 / 跳过），冲突明细只做展示；
+ *   分区卡承载动作按钮（采用本地 / 采用远端 / 采用自动合并），冲突明细只做展示；
  *   因此界面常驻写明「冲突按分区整体裁决（本版不做逐条裁决）」—— 走 ⓘ，不占正文。
  *
+ * 两个按钮口径（2026-10-21 用户裁决后）：
+ *   - **「采用自动合并」只在真有自动合并结果时才出现**（decision === 'merge'）；
+ *     以前常驻一个永远灰着的按钮，用户分不清「没有结果」还是「坏了」；
+ *   - **没有「跳过」按钮**：它既不是解决、又与「什么都不点」等价（未点名的分区引擎不会应用），
+ *     留着只会让人以为已经处理过。
+ *
  * 诚实性三条（都由本组件兑现）：
- *   ① 「跳过 ≠ 已解决」常驻提示：skip 不推进同步基线，下次同步仍会出现；
- *   ② 执行结果里的 pendingConflicts 必须显示出来，不得把带 skip 的执行说成「已解决」；
+ *   ① 待裁决的分区本次不会被应用，且下次同步仍会出现 —— 用一行常驻提示说明；
+ *   ② 执行结果里的 pendingConflicts 必须显示出来，不得把「还有冲突」说成「已解决」；
  *   ③ 所有展示文本（含引擎回传的三列预览）渲染前过 redact（merge-view.ts 已做一次，
  *      这里对原始错误/告警再过一次）。
  */
@@ -23,7 +29,7 @@ import { InfoHint } from '../common/InfoHint.tsx'
 import { redact } from '../../security/redaction.ts'
 import type { MergeApplyResponse, MergePreviewResponse, SyncApi } from './sync-api.ts'
 import {
-  hasWritableResolution, mergeDecisionCounts, mergeResultView, mergeSectionRows, mergeSummaryItems,
+  hasApplicableSections, mergeDecisionCounts, mergeResultView, mergeSectionRows, mergeSummaryItems,
   needsNoAncestorNotice,
 } from './merge-view.ts'
 import type { MergeBulkAction, MergeResolutionAction, MergeResolutionDraft } from './merge-view.ts'
@@ -35,7 +41,7 @@ export interface MergePreviewViewProps {
   t: TranslateNS<'config-manager-sync'>
   /** 预览结果（null = 还没取到；父级持有点位） */
   preview: MergePreviewResponse | null
-  /** 裁决草稿（分区 id → 动作；缺省 = 未裁决/跳过，由父级初始化） */
+  /** 裁决草稿（分区 id → 动作；缺省 = 本次不动，由父级初始化） */
   draft: MergeResolutionDraft
   /** 执行结果（null = 本次还没执行过） */
   result: MergeApplyResponse | null
@@ -74,7 +80,8 @@ export function MergePreviewView({
   const rows = mergeSectionRows(preview)
   const summary = mergeSummaryItems(preview)
   const counts = mergeDecisionCounts(preview, draft)
-  const writable = hasWritableResolution(draft)
+  const applicable = hasApplicableSections(preview)
+  const anyMerged = rows.some((row) => row.canUseMerged)
   const resultView = mergeResultView(result)
 
   return (
@@ -98,10 +105,13 @@ export function MergePreviewView({
 
       {preview !== null && needsNoAncestorNotice(preview) && <Banner kind="warn">{t('merge.noAncestor')}</Banner>}
 
-      {/* 工具栏：批量裁决（一次改全部分区的草稿）+ 重新预览（只读）。 */}
+      {/* 工具栏：批量裁决（一次改全部分区的草稿）+ 重新预览（只读）。
+          「全部采用自动合并」「留到下次」只在有意义时出现（见 MERGE_BULK_BUTTONS 的 filter）。 */}
       <div className={css.mergeToolbar}>
         <span className={css.mergeToolbarLabel}>{t('merge.bulk.title')}</span>
-        {MERGE_BULK_BUTTONS.map((btn) => (
+        {MERGE_BULK_BUTTONS.filter((btn) => (
+          (btn.action !== 'useMerged' || anyMerged) && (btn.action !== 'leavePending' || counts.needsDecision > 0)
+        )).map((btn) => (
           <Button
             key={btn.action}
             size="sm"
@@ -112,7 +122,7 @@ export function MergePreviewView({
           </Button>
         ))}
         <span className={css.statusSpacer} />
-        <InfoHint text={t('merge.scopeNotice')} label={t('common.infoHint')} />
+        <InfoHint text={t('merge.scopeNotice') + ' ' + t('merge.bulk.hint')} label={t('common.infoHint')} />
         <Button size="sm" disabled={busy || loading} onClick={onReload}>
           <span className={css.mergeIconLabel}>
             <RefreshIcon size={12} />
@@ -160,17 +170,15 @@ export function MergePreviewView({
                   </div>
 
                   <div className={css.mergeActions} role="group" aria-label={sectionName(row.id)}>
-                    {MERGE_ACTION_BUTTONS.map((btn) => {
-                      const disabled = btn.action === 'useMerged' && !row.canUseMerged
+                    {MERGE_ACTION_BUTTONS.filter((btn) => btn.action !== 'useMerged' || row.canUseMerged).map((btn) => {
                       const active = current === btn.action
                       return (
                         <Button
                           key={btn.action}
                           size="sm"
-                          disabled={busy || disabled}
+                          disabled={busy}
                           className={active ? css.mergeActionActive : undefined}
-                          title={disabled ? t('merge.action.useMergedDisabled')
-                            : active ? t('merge.action.current') : undefined}
+                          title={active ? t('merge.action.current') : undefined}
                           onClick={() => { onAction(row.id, btn.action) }}
                         >
                           <span className={css.mergeIconLabel}>
@@ -207,10 +215,11 @@ export function MergePreviewView({
             })}
           </div>
 
-          {/* 「跳过 ≠ 已解决」是决定性的语义（决定用户敢不敢点执行），压缩成一行常驻提示。 */}
-          <div className={css.mergeNote}>{t('merge.skipNotice')}</div>
-          {counts.undecided > 0 && <div className={css.hint}>{t('merge.apply.undecided', { n: String(counts.undecided) })}</div>}
-          {!writable && <div className={css.hint}>{t('merge.apply.nothing')}</div>}
+          {/* 「待裁决的分区本次不会应用、下次还会出现」是决定性的语义（决定用户敢不敢点执行），压成一行常驻提示。 */}
+          {counts.undecided > 0 && (
+            <div className={css.hint}>{t('merge.apply.pendingHint', { n: String(counts.undecided) })}</div>
+          )}
+          {!applicable && <div className={css.hint}>{t('merge.apply.nothingPending')}</div>}
         </>
       )}
 
@@ -263,26 +272,30 @@ export function MergePreviewView({
   )
 }
 
-/** 分区级动作按钮（顺序即界面顺序；useMerged 无 merged 载荷时禁用并给原因）。 */
+/**
+ * 分区级动作按钮（顺序即界面顺序）。
+ *
+ * 「采用自动合并」**只在真有 merged 载荷的分区上渲染**（row.canUseMerged）—— 常驻禁用态
+ * 让用户以为功能坏了，而不是「这个分区没东西可自动合成」。
+ */
 const MERGE_ACTION_BUTTONS: ReadonlyArray<{
   action: MergeResolutionAction
-  key: 'merge.action.useLocal' | 'merge.action.useRemote' | 'merge.action.useMerged' | 'merge.action.skip'
+  key: 'merge.action.useLocal' | 'merge.action.useRemote' | 'merge.action.useMerged'
 }> = [
   { action: 'keepLocal', key: 'merge.action.useLocal' },
   { action: 'useRemote', key: 'merge.action.useRemote' },
   { action: 'useMerged', key: 'merge.action.useMerged' },
-  { action: 'skip', key: 'merge.action.skip' },
 ]
 
-/** 批量动作（对全部分区生效；纯函数保证「无冲突项」口径不在这里重算）。 */
+/** 批量动作（对全部分区生效；纯函数保证「留到下次」口径不在这里重算）。 */
 const MERGE_BULK_BUTTONS: ReadonlyArray<{
   action: MergeBulkAction
-  key: 'merge.bulk.keepLocal' | 'merge.bulk.useRemote' | 'merge.bulk.useMerged' | 'merge.bulk.autoOnly'
+  key: 'merge.bulk.keepLocal' | 'merge.bulk.useRemote' | 'merge.bulk.useMerged' | 'merge.bulk.leavePending'
 }> = [
   { action: 'keepLocal', key: 'merge.bulk.keepLocal' },
   { action: 'useRemote', key: 'merge.bulk.useRemote' },
   { action: 'useMerged', key: 'merge.bulk.useMerged' },
-  { action: 'autoOnly', key: 'merge.bulk.autoOnly' },
+  { action: 'leavePending', key: 'merge.bulk.leavePending' },
 ]
 
 /** 三列对照（本地 / 远端 / 基准）。 */
