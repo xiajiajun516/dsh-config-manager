@@ -45,7 +45,7 @@ import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDEN
 import { GitHubApiError } from '../market/github-repos.ts'
 import type { SectionId } from '../schema/types.ts'
 import { redact } from '../security/redaction.ts'
-import { readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs, clearLastRunResult } from '../sync/autosync-config.ts'
+import { shouldRunOnEnable, readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs, clearLastRunResult } from '../sync/autosync-config.ts'
 import { isValidExportFileName } from '../sync/backup-files.ts'
 import { DeviceFlowStore } from '../sync/github-auth.ts'
 import { channelOf, clearSyncChannel, isWebDavConfig, listCloudConfiguredProviders, parseSyncChannel, readFullSyncConfig, writeSyncConfig, gistChannelView, s3ChannelView, cloudSecretRef, S3_COMPAT_PROVIDERS, GIST_PROVIDER } from '../sync/sync-config.ts'
@@ -210,7 +210,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           : undefined
         // 云端点配置视图（只回 secretStored 布尔；与当前通道无关，配置过即回填）
         const cloud = await cloudChannelViews(full, credentials)
-        // issue #79：git 工作副本是否已跟随 repoUrl（只读自检，2 条本地只读 git 命令）。
+        // issue #79 / #104 建议 3：git 工作副本是否已跟随 repoUrl，外加「领先远端提交数 /
+        // 远端快照数」（只读自检；后者是「本地一直没真正备份」的预警依据）。
         // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
         const gitRepoUrl = full?.git?.repoUrl ?? ''
         let workDir: Awaited<ReturnType<typeof syncWorkDir.inspect>> | null = null
@@ -1077,6 +1078,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 按通道读写：git/webdav 各自的自动同步配置与运行状态独立（缺省 git 兜底）
         const channel: SyncTransportType = parseSyncChannel(body['transport']) ?? 'git'
         const cfg = await readAutosyncConfig(syncDir, channel)
+        // 「这次 POST 是不是把开关从关拨到开」必须在覆盖字段之前拍下来（issue #105 建议 4）
+        const wasEnabled = cfg.enabled
         if (typeof body['enabled'] === 'boolean') cfg.enabled = body['enabled']
         if (typeof body['interval'] === 'string' && isAutosyncInterval(body['interval'])) cfg.interval = body['interval']
         if (typeof body['startupMinIntervalMs'] === 'number' && Number.isFinite(body['startupMinIntervalMs']) && body['startupMinIntervalMs'] > 0) {
@@ -1099,8 +1102,17 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         // 上一轮 lastRunMessage/lastRunSkipReason 会被原样写回（"坐实"），于是十天前那次失败的
         // 错误原文会被一次纯改间隔的保存续命，卡片上继续挂着早已不成立的故障。
         // 现在：配置落盘前清空上一轮结论 —— 配置变更 ≠ 本轮结论。
+        // issue #105 建议 4：勾选开关是「用户刚刚要求它开始工作」，不该只重排定时器、让卡片
+        // 继续显示上一轮（甚至是十天前）的结论。若距上次运行已超过启动阈值，立刻跑一轮。
+        const runNow = shouldRunOnEnable({ enabled: wasEnabled }, cfg)
         await writeAutosyncConfig(syncDir, channel, clearLastRunResult(cfg))
-        if (scheduler) scheduler.reload().catch(() => { /* 尽力而为 */ })
+        if (scheduler) {
+          scheduler.reload().catch(() => { /* 尽力而为 */ })
+          // 不 await：POST 是配置保存，不能让页面等一次网络同步；结果由调度器自己写进
+          // sync-autosync.json / sync-history.json。并发由 runOnce 的 running 与 runs 全局防重
+          // 挡住（在跑时返回 skipped 而不是排队），所以这里不需要额外门控。
+          if (runNow) void scheduler.runOnce(channel, { reason: 'enable-toggle' }).catch(() => { /* 结果已落状态 */ })
+        }
         writeJson(res, 200, await buildAutosyncStatus(syncDir, channel))
       } catch (error) {
         writeSyncRouteError(res, error)

@@ -11,7 +11,7 @@ import path from 'node:path';
 import {
   readAutosyncConfig, writeAutosyncConfig, readAllAutosyncConfigs, AUTOSYNC_CONFIG_FILE,
   AUTOSYNC_CONFIG_SCHEMA_VERSION, DEFAULT_AUTOSYNC_INTERVAL,
-  DEFAULT_STARTUP_MIN_INTERVAL_MS, lastRunFailureMessage, clearLastRunResult,
+  DEFAULT_STARTUP_MIN_INTERVAL_MS, lastRunFailureMessage, clearLastRunResult, shouldRunOnEnable,
 } from './autosync-config.ts';
 
 test('writeAutosyncConfig + readAutosyncConfig：写入 → 读回字段一致（git 通道）', async () => {
@@ -200,4 +200,20 @@ test('clearLastRunResult：配置变更清空上一轮结论，但保留「上�
     assert.equal(raw.channels.git.lastRunSkipCount, undefined);
     assert.equal(raw.channels.git.lastRunStatus, 'failed');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('issue #105 建议 4：shouldRunOnEnable —— 只有「关→开」且已过启动冷却才立刻跑一轮', () => {
+  const now = Date.parse('2026-10-21T21:00:00.000Z');
+  const base = { enabled: true, lastRunAt: '2026-10-01T10:00:00.000Z', startupMinIntervalMs: 300_000 };
+  // 关 → 开，上次运行是十天前：立刻跑
+  assert.equal(shouldRunOnEnable({ enabled: false }, base, now), true);
+  // 本来就开着（只是改间隔/阈值）：不跑
+  assert.equal(shouldRunOnEnable({ enabled: true }, base, now), false);
+  // 这次是关掉：不跑
+  assert.equal(shouldRunOnEnable({ enabled: false }, { ...base, enabled: false }, now), false);
+  // 刚跑过（冷却窗口内）：不跑，避免连点把通道打爆
+  assert.equal(shouldRunOnEnable({ enabled: false }, { ...base, lastRunAt: '2026-10-21T20:58:00.000Z' }, now), false);
+  // 从未跑过 / 时间读不出：当作「很久没跑」→ 跑
+  assert.equal(shouldRunOnEnable({ enabled: false }, { ...base, lastRunAt: undefined }, now), true);
+  assert.equal(shouldRunOnEnable({ enabled: false }, { ...base, lastRunAt: 'garbage' }, now), true);
 });

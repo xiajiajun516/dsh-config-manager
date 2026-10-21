@@ -77,6 +77,14 @@ export interface GitWorkDirFacts {
   ahead: number | null;
   /** 工作树是否有未提交改动（读不出 → null） */
   dirty: boolean | null;
+  /**
+   * 远端跟踪分支上的快照数（issue #104 建议 3）：`snapshots/` 与 `snapshots-encrypted/`
+   * 下的直接子项数（目录，或加密通道的 <id>.json 文件）。它和 `ahead` 一起回答
+   * 「本地领先 N 个提交、可远端从来没收到过快照吗」—— 那正是 issue #104 里
+   * 远端两周一个字节都没收到、用户却以为在正常备份的现场。
+   * 只有 detail 自检时给出；无远端跟踪分支 / 读不出 → null。
+   */
+  remoteSnapshots: number | null;
 }
 
 /** 凭据提供者：token 只从这里读取，绝不在任何地方持久化 */
@@ -520,7 +528,7 @@ export class GitTransport implements SyncTransport {
   async inspectWorkDir(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {
     const fsx = createSnapshotFs();
     if (!(await fsx.exists(path.join(this.o.workDir, '.git')))) {
-      return { path: this.o.workDir, exists: false, origin: null, pushUrl: null, match: false, ahead: null, dirty: null };
+      return { path: this.o.workDir, exists: false, origin: null, pushUrl: null, match: false, ahead: null, dirty: null, remoteSnapshots: null };
     }
     const originRes = await this.runGit(['remote', 'get-url', 'origin'], { allowNonZero: true });
     const origin = originRes.code === 0 ? originRes.stdout.trim() : '';
@@ -528,6 +536,7 @@ export class GitTransport implements SyncTransport {
     const pushRaw = pushRes.code === 0 ? pushRes.stdout.trim() : '';
     let ahead: number | null = null;
     let dirty: boolean | null = null;
+    let remoteSnapshots: number | null = null;
     if (opts.detail === true) {
       // 未上行的本地提交：HEAD 可达、但任何远端跟踪引用都不可达的提交数（无 upstream 也能算）
       const aheadRes = await this.runGit(['rev-list', '--count', 'HEAD', '--not', '--remotes'], { allowNonZero: true });
@@ -535,6 +544,27 @@ export class GitTransport implements SyncTransport {
       ahead = Number.isFinite(parsed) ? parsed : null;
       const statusRes = await this.runGit(['status', '--porcelain'], { allowNonZero: true });
       dirty = statusRes.code === 0 ? statusRes.stdout.trim() !== '' : null;
+      // issue #104 建议 3：远端分支上到底有几个快照。只读 refs/remotes/origin/<branch>
+      // （上次 fetch / push 的结果），不发网络请求 —— 两条本地只读命令。
+      // 注意不能写 `ls-tree origin/<branch> -- snapshots`：带 pathspec 时它只回显目录条目
+      // 本身（`snapshots`），数出来永远是 1。必须用 `<ref>:<dir>` 取该树的直接子项。
+      const branchRes = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { allowNonZero: true });
+      const branch = branchRes.code === 0 ? branchRes.stdout.trim() : '';
+      if (branch !== '' && branch !== 'HEAD') {
+        const countTree = async (treeish: string): Promise<number | null> => {
+          const treeRes = await this.runGit(['ls-tree', '--name-only', treeish], { allowNonZero: true });
+          if (treeRes.code !== 0) return null;
+          return treeRes.stdout
+            .split('\n')
+            .map((line) => line.trim())
+            // 每个快照是一级子项；`.gitkeep` 只是占位，不是快照
+            .filter((line) => line !== '' && !line.endsWith(SNAPSHOT_KEEP_FILE)).length;
+        };
+        const plain = await countTree(`origin/${branch}:${SNAPSHOTS_REL}`);
+        const encrypted = await countTree(`origin/${branch}:${SNAPSHOTS_ENCRYPTED_REL}`);
+        // 两个目录都不存在 = 远端分支根本没有快照布局（0）；分支/引用读不出 = null（不猜）
+        remoteSnapshots = plain === null && encrypted === null ? 0 : (plain ?? 0) + (encrypted ?? 0);
+      }
     }
     return {
       path: this.o.workDir,
@@ -545,6 +575,7 @@ export class GitTransport implements SyncTransport {
       match: origin === this.o.repoUrl && (pushRaw === '' || pushRaw === this.o.repoUrl),
       ahead,
       dirty,
+      remoteSnapshots,
     };
   }
 

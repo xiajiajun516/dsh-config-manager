@@ -126,6 +126,8 @@ export interface SyncWorkDirFacts {
   ahead: number | null;
   /** 工作树是否有未提交改动（仅 detail 自检时给出，否则 null） */
   dirty: boolean | null;
+  /** 远端分支上的快照数（仅 detail 自检时给出，否则 null；issue #104 建议 3） */
+  remoteSnapshots: number | null;
 }
 
 /** 同步密码的保存状态（只回布尔；密码值永不回传浏览器）。 */

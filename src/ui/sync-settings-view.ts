@@ -884,6 +884,35 @@ export function canAdoptWorkdir(
   return canRecloneWorkdir(workDir)
 }
 
+/**
+ * 工作副本的「积压」判定（issue #104 建议 3）。
+ *
+ * 要回答的是 issue 里那个拖了两周才暴露的问题：本地一直在攒提交，远端从来没收到过快照，
+ * 而界面没有任何一处说这件事。判定只用状态接口回传的两个数字（`ahead` / `remoteSnapshots`），
+ * 任何一个是 null（没走 detail 自检 / 无远端分支）就不猜 —— 返回 unknown，不渲染告警。
+ *
+ *  - clean：没有未上传的提交；
+ *  - never-synced：本地领先且远端零快照 ⇒ **醒目告警**（这条通道可能一直没在真正备份）；
+ *  - ahead：本地领先，但远端确实收到过快照（只是还没推完）。
+ */
+export type WorkdirBacklog =
+  | { kind: 'unknown' }
+  | { kind: 'clean'; ahead: number; remoteSnapshots: number }
+  | { kind: 'ahead'; ahead: number; remoteSnapshots: number }
+  | { kind: 'never-synced'; ahead: number }
+
+export function workdirBacklog(
+  workDir: { facts?: { ahead?: number | null; remoteSnapshots?: number | null }; error?: string } | undefined,
+): WorkdirBacklog {
+  if (workDir === undefined || workDir.error !== undefined) return { kind: 'unknown' }
+  const ahead = workDir.facts?.ahead
+  const remoteSnapshots = workDir.facts?.remoteSnapshots
+  if (typeof ahead !== 'number' || typeof remoteSnapshots !== 'number') return { kind: 'unknown' }
+  if (ahead <= 0) return { kind: 'clean', ahead, remoteSnapshots }
+  if (remoteSnapshots === 0) return { kind: 'never-synced', ahead }
+  return { kind: 'ahead', ahead, remoteSnapshots }
+}
+
 export function formatSyncUrlPreview(url: string, max = 60): string {
   return url.slice(0, max)
 }

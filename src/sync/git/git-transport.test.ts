@@ -1112,6 +1112,8 @@ test('issue #79 集成：inspectWorkDir + rebuildWorkDir（relink 非破坏 / re
   assert.equal(after.origin, bare);
   assert.equal(after.ahead, 0, 'relink 不丢弃/不产生本地提交');
   assert.equal(after.dirty, false, 'relink 不动工作树');
+  // issue #104 建议 3：detail 自检必须同时数出远端分支上的快照（预警依据）
+  assert.equal(after.remoteSnapshots, 1, 'detail 自检数出远端分支上的 1 个快照');
 
   await transport.rebuildWorkDir('reclone');
   assert.ok((await fs.stat(path.join(workDir, '.git'))).isDirectory(), 'reclone 后重新 clone 出 .git');
@@ -1173,6 +1175,11 @@ test('issue #104 集成：改成另一条历史的同步仓库 → adopt 合并�
 
   // adopt 之后普通 push 可用：新快照写进当前地址，旧地址收不到
   await transport.upload(sampleSnapshot({ id: 'snap-003' }));
+  // issue #104 建议 3 的两个数字必须跟着推送一起收敛：领先 0、远端快照 2
+  const pushed = await transport.inspectWorkDir({ detail: true });
+  assert.equal(pushed.ahead, 0, '推送成功后不再领先远端');
+  // 3 = snap-001（本地历史随合并一起推上去）+ snap-other + snap-003：远端快照数是「远端分支上真实有的」
+  assert.equal(pushed.remoteSnapshots, 3, '远端快照数跟着推送更新（snap-001 + snap-other + snap-003）');
   const logC = await runRealGit(['log', '--oneline', '--all'], bareC);
   assert.match(logC.stdout, /snap-003/, '合并后下游能继续 push');
   const logA = await runRealGit(['log', '--oneline', '--all'], bareA);

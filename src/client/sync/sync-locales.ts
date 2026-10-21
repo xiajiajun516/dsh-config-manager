@@ -62,6 +62,11 @@ export const zh = {
   'workdir.recloneConfirmTitle': '重新克隆工作副本？',
   'workdir.recloneConfirmMessage': '将删除本机工作副本目录并从远端重新克隆。本机配置与远端快照都不受影响，但工作副本里尚未推送的本地提交会被丢弃 —— 需要时请先在同步页执行一次推送。',
   'workdir.recloneConfirm': '重新克隆',
+  // issue #104 建议 3：本地积压与远端快照数（只显示数字；告警文案见下两条）
+  'workdir.ahead': '未上传的本地提交',
+  'workdir.remoteSnapshots': '远端快照数',
+  'workdir.backlogAhead': '有本地提交还没上传到远端',
+  'workdir.backlogNeverSynced': '本地领先，但远端从未收到过快照 —— 这条通道可能一直没在真正备份',
   'toast.workdirRelinked': '工作副本已重指向当前仓库地址',
   'toast.workdirAdopted': '已采纳远端历史（本地提交未改写，已生成一次合并提交）',
   'toast.workdirRecloned': '工作副本已重新克隆',
@@ -569,6 +574,11 @@ export const en: Record<keyof typeof zh, string> = {
   'workdir.recloneConfirmTitle': 'Clone the working copy again?',
   'workdir.recloneConfirmMessage': 'The local working-copy directory will be deleted and cloned again from the remote. Your local config and the remote snapshots are unaffected, but local commits that were never pushed will be lost — push once from the sync page first if you need them.',
   'workdir.recloneConfirm': 'Clone again',
+  // issue #104 suggestion 3: local backlog and remote snapshot count
+  'workdir.ahead': 'Local commits not pushed',
+  'workdir.remoteSnapshots': 'Remote snapshots',
+  'workdir.backlogAhead': 'Local commits are waiting to be pushed',
+  'workdir.backlogNeverSynced': 'Local is ahead but the remote has never received a snapshot - this channel may not be backing up at all',
   'toast.workdirRelinked': 'Working copy now points at the configured repository address',
   'toast.workdirAdopted': 'Remote history adopted (no local commit was rewritten; one merge commit was created)',
   'toast.workdirRecloned': 'Working copy cloned again',

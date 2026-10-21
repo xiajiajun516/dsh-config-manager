@@ -3931,7 +3931,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
         // 也不伪装成「工作副本不存在」。
         inspect: async (repoUrl: string): Promise<{ facts: GitWorkDirFacts } | { error: string }> => {
           try {
-            return { facts: await makeGitTransport(repoUrl).inspectWorkDir() }
+            // issue #104 建议 3：`/sync/status` 要回传「领先远端提交数 / 远端快照数」，
+            // 用户看不见积压，就会在「以为在备份」的状态下一直失败。detail 多出的几条命令
+            // 都是本地只读（rev-list / status / ls-tree），不发网络请求。
+            return { facts: await makeGitTransport(repoUrl).inspectWorkDir({ detail: true }) }
           } catch (err) {
             return { error: err instanceof Error ? err.message : String(err) }
           }

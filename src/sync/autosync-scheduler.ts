@@ -119,7 +119,7 @@ export interface AutosyncRunResult {
 export interface AutosyncRunOptions {
   /** true = 启动触发变体：只做下行合并，不上传。 */
   startup?: boolean;
-  /** 触发来源：interval / remote-poll / local-change / manual / startup。 */
+  /** 触发来源：interval / remote-poll / local-change / manual / startup / enable-toggle。 */
   reason?: string;
 }
 

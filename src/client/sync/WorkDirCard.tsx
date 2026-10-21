@@ -21,7 +21,8 @@ import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import {
-  canAdoptWorkdir, canRecloneWorkdir, formatSyncUrlPreview, needsWorkdirRelink, workdirStateBadgeKind, workdirStateKey,
+  canAdoptWorkdir, canRecloneWorkdir, formatSyncUrlPreview, needsWorkdirRelink, workdirBacklog, workdirStateBadgeKind,
+  workdirStateKey,
 } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
 
@@ -50,6 +51,13 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
   const stateKey = workdirStateKey(workDir)
   const badgeKind = workdirStateBadgeKind(stateKey)
   const facts = workDir !== undefined && 'facts' in workDir ? workDir.facts : null
+  /** issue #104 建议 3：本地攒了提交、远端却一个快照都没有 —— 这一条必须显式喊出来 */
+  const backlog = workdirBacklog(workDir)
+  const backlogBadge = backlog.kind === 'never-synced'
+    ? { kind: 'warn' as const, key: 'workdir.backlogNeverSynced' as const }
+    : backlog.kind === 'ahead'
+      ? { kind: 'warn' as const, key: 'workdir.backlogAhead' as const }
+      : null
 
   const reset = async (mode: 'relink' | 'adopt' | 'reclone'): Promise<void> => {
     setRecloneOpen(false)
@@ -72,6 +80,7 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
       {stateKey !== null && badgeKind !== null && (
         <div className={css.statRow}>
           <Badge kind={badgeKind}>{t(stateKey)}</Badge>
+          {backlogBadge !== null && <Badge kind={backlogBadge.kind}>{t(backlogBadge.key)}</Badge>}
         </div>
       )}
       {workDir === undefined ? (
@@ -92,6 +101,18 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
               </span>
             </span>
           </div>
+          {backlog.kind !== 'unknown' && (
+            <div className={css.factCell}>
+              <span className={css.factLabel}>{t('workdir.ahead')}</span>
+              <span className={css.factValue}>{backlog.kind === 'clean' ? 0 : backlog.ahead}</span>
+            </div>
+          )}
+          {(backlog.kind === 'clean' || backlog.kind === 'ahead') && (
+            <div className={css.factCell}>
+              <span className={css.factLabel}>{t('workdir.remoteSnapshots')}</span>
+              <span className={css.factValue}>{backlog.remoteSnapshots}</span>
+            </div>
+          )}
         </div>
       )}
       <div className={css.actionRowTop}>

@@ -110,6 +110,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Recovery wording now matches reality**: "safe mode active" is shown only when config-modifying writes really are paused; for a stale lock or an interrupted copy the page says recovery items need handling instead of conflating "something needs attention" with "writes are frozen".
 - **已成功的操作在台账里不再停在「计划中」**：外部步骤（例如推送到远端）成功后会被标记为已完成并记下完成时间，事后看历史能分清「已经跑完」和「根本没跑」。
   **Succeeded operations no longer sit in the ledger as "planned"**: an external step (such as a push to the remote) is marked done with its completion time once it succeeds, so the history distinguishes "actually ran" from "never ran".
+- **同步页现在会告诉你「本地还有多少提交没上传、远端到底有几个快照」**：工作副本卡上直接显示这两个数，本地领先却从未成功上传过快照时给醒目告警 —— 此前远端两周没收到一个字节，界面也看不出任何异常。（issue #104）
+  **The sync page now says how many local commits are still unpushed and how many snapshots the remote actually has**: both numbers show on the working-copy card, with a prominent warning when local commits are ahead while the remote has never received a snapshot — previously the remote could go two weeks without a single byte while the UI showed nothing wrong. (issue #104)
+- **勾选「自动同步」后会立刻跑一轮真实同步**：只要距上次运行已超过启动阈值，勾选后马上产出本轮结果，而不是让卡片继续挂着上一轮（甚至是十天前）的结论；本来开着时改间隔/阈值不会触发。（issue #105）
+  **Ticking "auto sync" now runs a real sync round immediately**: as long as the last run is older than the startup threshold, enabling it produces this round's result right away instead of leaving the previous (possibly ten-day-old) conclusion on the card; adjusting the interval while it is already on does not trigger a run. (issue #105)
 
 ## [0.1.78] - 2026-10-17
 

@@ -263,6 +263,31 @@ export function clearLastRunResult(cfg: AutosyncConfig): AutosyncConfig {
   return next;
 }
 
+/**
+ * 勾选「自动同步」后是否该立刻跑一轮（issue #105 建议 4）。
+ *
+ * 三种情况返回 false：
+ *  - 本来就已经开着：这次 POST 只是改间隔 / 调阈值，不是「打开」动作；
+ *  - 打开后仍在 startupMinIntervalMs 冷却窗口内：刚跑过，别连点把通道打爆；
+ *  - 这次是把开关关掉：关掉当然不跑。
+ * `lastRunAt` 缺失或读不出（NaN）→ 当作「很久没跑过」，该跑。
+ *
+ * 判据与 `autosync-scheduler.ts` 的 `shouldTriggerStartupRun` 一致；这里不能直接 import 它
+ * —— 调度器依赖本模块，反向引用会成环。
+ */
+export function shouldRunOnEnable(
+  prev: Pick<AutosyncConfig, 'enabled'>,
+  next: Pick<AutosyncConfig, 'enabled' | 'lastRunAt' | 'startupMinIntervalMs'>,
+  nowMs: number = Date.now(),
+): boolean {
+  if (!next.enabled || prev.enabled) return false
+  const lastRunAt = next.lastRunAt
+  if (lastRunAt === undefined || lastRunAt === '') return true
+  const lastMs = Date.parse(lastRunAt)
+  if (Number.isNaN(lastMs)) return true
+  return nowMs - lastMs >= next.startupMinIntervalMs
+}
+
 /** AutosyncConfig → 文件载荷（可选运行字段仅在非空时写入，保持文件干净）。 */
 function toChannelPayload(cfg: AutosyncConfig): Record<string, unknown> {
   const payload: Record<string, unknown> = {

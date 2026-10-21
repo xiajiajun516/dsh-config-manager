@@ -12,6 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  workdirBacklog,
   autosyncIntervalKey, buildSelectionRequest, buildSyncChannelBody, buildSyncConfigBody, buildSyncPushBody,
   channelBackfillFromStatus, computeEncryptInvalid, encryptToggle, formatSyncStatusTimestamp,
   formatSyncUrlPreview, githubPollDecision, hasSelectedSections, includeSecretsToggle,
@@ -25,6 +26,7 @@ import {
   // issue #79：工作副本自检 → 状态 / 入口判定
   workdirStateKey, workdirStateBadgeKind, needsWorkdirRelink, canRecloneWorkdir, canAdoptWorkdir,
   type SaveQueueState, type SyncChannelSettings, type SyncFormSnapshot,
+
 } from './sync-settings-view.ts'
 
 /* ------------------------------------------------------------- 夹具 */
@@ -559,3 +561,17 @@ test('issue #104：canAdoptWorkdir —— 只在工作副本确实存在时给�
   assert.equal(canAdoptWorkdir({ error: '读取失败' }), false, '读不出来就不得提供写入口')
   assert.equal(canAdoptWorkdir(undefined), false, '非 git 通道不得出现该入口')
 })
+
+test('issue #104 建议 3：workdirBacklog —— 本地领先且远端零快照才算「从没备份过」', () => {
+  // 没有工作副本 / 自检失败 / 数字缺一项：一律不猜，不给告警
+  assert.equal(workdirBacklog(undefined).kind, 'unknown');
+  assert.equal(workdirBacklog({ error: 'git not found' }).kind, 'unknown');
+  assert.equal(workdirBacklog({ facts: { ahead: null, remoteSnapshots: null } }).kind, 'unknown');
+  assert.equal(workdirBacklog({ facts: { ahead: 3, remoteSnapshots: null } }).kind, 'unknown');
+  // 没有未上传提交 → clean（不是告警）
+  assert.deepEqual(workdirBacklog({ facts: { ahead: 0, remoteSnapshots: 14 } }), { kind: 'clean', ahead: 0, remoteSnapshots: 14 });
+  // 关键现场：本地攒着提交、远端一个快照都没有
+  assert.deepEqual(workdirBacklog({ facts: { ahead: 14, remoteSnapshots: 0 } }), { kind: 'never-synced', ahead: 14 });
+  // 远端有过快照 ⇒ 只是没推完，语气不同
+  assert.deepEqual(workdirBacklog({ facts: { ahead: 3, remoteSnapshots: 5 } }), { kind: 'ahead', ahead: 3, remoteSnapshots: 5 });
+});
