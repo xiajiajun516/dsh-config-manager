@@ -28,9 +28,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **本版主题**：**同步通道变得更能自我诊断、也更难互相踩踏 —— 一键测试连接、首次同步自动建好远端目录、两台设备同时写不再互相覆盖，跨机搬配置时也不再带上本机的 pnpm 路径、自动同步改成「改完就同步」**
+> **{{本版主题}}**：{{一句话中文主题}}
 >
-> **Theme**: **The sync channel now diagnoses itself and steps on itself less — a one-click connection test, automatic remote folder creation on first sync, no more clobbering when two devices write at once, and cross-machine configs that no longer carry this machine's pnpm paths, and auto sync that fires the moment you change something**
+> **Theme**: {{one-line English theme}}
+
+## [0.1.79] - 2026-10-22
+
+> **本版主题**：**这一版让「回退」和「同步」都变得可以放心依赖 —— 回退不再误伤别的对话改过的文件、也不再改写换行符与编码；同步能一键自检、两台设备同时写不再互相覆盖、改完就同步；从 Claude Code 迁移会连同项目级与插件里的东西一起带过来，导出时每个分区都能展开逐条勾选**
+>
+> **Theme**: **This release makes both rollback and sync safe to lean on: rollback no longer touches files that other conversations changed and no longer rewrites line endings or encodings; sync self-checks with one click, stops two devices from clobbering each other and fires the moment you change something; migrating from Claude Code now brings project-level and plugin-provided pieces along, and the export picker lets you expand every section for item-by-item selection**
 
 ### 🆕 新增 · Added
 
