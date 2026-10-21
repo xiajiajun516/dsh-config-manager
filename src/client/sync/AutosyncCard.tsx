@@ -11,7 +11,8 @@ import { Badge, Card } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import {
-  autosyncIntervalMs, autosyncSkipDetail, autosyncStatusText, computeAutosyncCountdown, formatIntervalDuration,
+  autosyncFailureMessage, autosyncIntervalMs, autosyncSkipDetail, autosyncStatusText, computeAutosyncCountdown,
+  formatIntervalDuration,
 } from './sync-view.ts'
 // 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
 import { redact } from '../../security/redaction.ts'
@@ -55,9 +56,10 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
   // issue #79：本轮为什么没同步 / 失败了什么，必须看得见 —— 此前只写进 info 级日志
   // （默认日志级别 warn），界面恒无提示，用户只能去翻 sync-autosync.json。
   const skipDetail = settings.autosync !== null ? autosyncSkipDetail(settings.autosync, t) : null
-  const lastMessage = settings.autosync?.lastRunMessage !== undefined && settings.autosync.lastRunMessage !== ''
-    ? redact(settings.autosync.lastRunMessage)
-    : null
+  // issue #105：只有本轮真的失败才渲染错误原文。此前只看「非空」，于是上一轮（甚至十天前）
+  // 的旧错误会被当成当前结论继续展示；判据现在收在 autosyncFailureMessage 一处。
+  const failureMessage = settings.autosync !== null ? autosyncFailureMessage(settings.autosync) : null
+  const lastMessage = failureMessage === null ? null : redact(failureMessage)
   return (
     <Card>
       <span className={css.groupLabel}>{t('autosync.title')} <InfoHint text={t('autosync.description')} label={t('common.infoHint')} /></span>

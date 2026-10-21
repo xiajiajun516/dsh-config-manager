@@ -11,7 +11,7 @@ import type { AutosyncStatusResponse, GithubPollResponse, SyncSectionInfo, SyncS
 import {
   autosyncIntervalMs, computeAutosyncCountdown, computeGithubLoginView, computeSyncButtons, computeSyncStatus,
   DEFAULT_SYNC_SESSIONS_LIMIT, defaultChannelSyncState, formatDateTime, formatIntervalDuration, formatLastSync,
-  autosyncSkipDetail,
+  autosyncFailureMessage, autosyncSkipDetail,
   githubPollMessage, initialSyncSections, kindLabel, normalizeSessionsLimit, privateRepoHint,
   pullReportView, pushReportView, presetById, presetIdForUrl, readStoredChannel, recommendedSyncSections,
   severityLabel, summarizePullChanges, syncSectionGroups, syncSectionOptions, WEBDAV_PRESETS, writeStoredChannel,
@@ -560,3 +560,20 @@ test('issue #79：autosyncSkipDetail —— en 界面下不得出现中文（文
   assert.match(String(en), /2/)
 })
 
+/* ------------------------------------------------- issue #105：卡片不得渲染上一轮的旧错误 */
+
+test('sync-view: autosyncFailureMessage —— 只有本轮失败才渲染错误原文（issue #105）', () => {
+  assert.equal(
+    autosyncFailureMessage({ lastRunStatus: 'failed', lastRunMessage: '认证失败' }),
+    '认证失败',
+    'failed + 有原文 → 渲染',
+  );
+  // 关键回归：同步已成功，但宿主/文件里还留着十天前的错误 —— 不得渲染
+  assert.equal(autosyncFailureMessage({ lastRunStatus: 'success', lastRunMessage: '十天前: 认证失败' }), null);
+  assert.equal(autosyncFailureMessage({ lastRunStatus: 'skipped', lastRunMessage: '十天前: 认证失败' }), null);
+  assert.equal(autosyncFailureMessage({ lastRunStatus: 'partial', lastRunMessage: '十天前: 认证失败' }), null);
+  // 空串 / 缺字段 / 从未运行 → 都不渲染
+  assert.equal(autosyncFailureMessage({ lastRunStatus: 'failed', lastRunMessage: '' }), null);
+  assert.equal(autosyncFailureMessage({ lastRunStatus: 'failed' }), null);
+  assert.equal(autosyncFailureMessage({}), null);
+});

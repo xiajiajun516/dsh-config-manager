@@ -45,7 +45,7 @@ import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDEN
 import { GitHubApiError } from '../market/github-repos.ts'
 import type { SectionId } from '../schema/types.ts'
 import { redact } from '../security/redaction.ts'
-import { readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs } from '../sync/autosync-config.ts'
+import { readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs, clearLastRunResult } from '../sync/autosync-config.ts'
 import { isValidExportFileName } from '../sync/backup-files.ts'
 import { DeviceFlowStore } from '../sync/github-auth.ts'
 import { channelOf, clearSyncChannel, isWebDavConfig, listCloudConfiguredProviders, parseSyncChannel, readFullSyncConfig, writeSyncConfig, gistChannelView, s3ChannelView, cloudSecretRef, S3_COMPAT_PROVIDERS, GIST_PROVIDER } from '../sync/sync-config.ts'
@@ -257,9 +257,11 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       }
     }),
     // ------------------------------------------------------ sync/workdir/reset
-    // issue #79：工作副本的自救入口（改造前 App 内完全没有 —— 改了仓库地址只能手工
-    // git remote set-url，或删掉 <dataDir>/sync/work 重来）。两种模式，破坏性清清楚楚：
+    // issue #79 / #104：工作副本的自救入口（改造前 App 内完全没有 —— 改了仓库地址只能手工
+    // git remote set-url，或删掉 <dataDir>/sync/work 重来）。三种模式，破坏性清清楚楚：
     //   relink  = 只把 origin / push URL 重指向当前配置地址（非破坏性：不碰工作树与本地提交）；
+    //   adopt   = 把远端分支合并进现有工作副本（issue #104：换成另一个仓库、或远端历史被重写后
+    //             两条历史不相交，pull --ff-only 永远失败）；不改写任何本地提交，可 revert；
     //   reclone = 删除工作副本目录后重新 clone（**丢弃未上行的本地提交**）→ 必须显式 confirm。
     // 写动作 → 过 mutation gate（SAFE MODE / 环境锁）；删除边界见 GitTransport.rebuildWorkDir
     // （目录非空且无 .git 一律拒绝，绝不删来路不明的目录）。
@@ -267,8 +269,10 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       try {
         const body = await requireJsonObject(req)
         const mode = body['mode'] === undefined ? 'relink' : body['mode']
-        if (mode !== 'relink' && mode !== 'reclone') {
-          writeJson(res, 400, { error: msg('sync.workdirModeInvalid', { mode: JSON.stringify(body['mode']) }) })
+        if (mode !== 'relink' && mode !== 'adopt' && mode !== 'reclone') {
+          // 用追加键（含三种模式）而不是既有的 sync.workdirModeInvalid：后者有冻结指纹，
+          // 只列出了两种模式，继续用会把「adopt 也合法」说反。
+          writeJson(res, 400, { error: msg('sync.workdirModeInvalidFull', { mode: JSON.stringify(body['mode']) }) })
           return
         }
         if (mode === 'reclone' && body['confirm'] !== true) {
@@ -1091,7 +1095,11 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         if (body['conflictPolicy'] === 'ask' || body['conflictPolicy'] === 'local') {
           cfg.conflictPolicy = body['conflictPolicy']
         }
-        await writeAutosyncConfig(syncDir, channel, cfg)
+        // issue #105：这里写的是**配置**，不是一轮运行结果。此前 readAutosyncConfig 读到的
+        // 上一轮 lastRunMessage/lastRunSkipReason 会被原样写回（"坐实"），于是十天前那次失败的
+        // 错误原文会被一次纯改间隔的保存续命，卡片上继续挂着早已不成立的故障。
+        // 现在：配置落盘前清空上一轮结论 —— 配置变更 ≠ 本轮结论。
+        await writeAutosyncConfig(syncDir, channel, clearLastRunResult(cfg))
         if (scheduler) scheduler.reload().catch(() => { /* 尽力而为 */ })
         writeJson(res, 200, await buildAutosyncStatus(syncDir, channel))
       } catch (error) {

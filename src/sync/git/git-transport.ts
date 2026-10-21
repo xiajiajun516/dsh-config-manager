@@ -130,6 +130,11 @@ const SNAPSHOTS_ENCRYPTED_REL = 'snapshots-encrypted';
  * 内容没变 = 文件路径已存在 = 一个字都不写、也不进本次 diff。
  */
 const BLOBS_REL = 'blobs';
+/**
+ * 同步仓库（git 通道）顶层**只可能出现**这三个条目。issue #104 的 `adopt` 模式拿它当安全判据：
+ * 远端分支的顶层出现别的名字 = 这不是本插件的同步仓库，合并它等于把别人的仓库内容搬进工作副本。
+ */
+const ADOPT_ROOT_ALLOW = new Set<string>([SNAPSHOTS_REL, SNAPSHOTS_ENCRYPTED_REL, BLOBS_REL]);
 const DEFAULT_AUTHOR: GitAuthor = { name: 'DSH Config Sync', email: 'sync@dsh.local' };
 const DEFAULT_CREDENTIAL_USERNAME = 'oauth2';
 /** 快照 id 安全字符集：字母数字开头，仅 . _ -；防路径穿越与 commit message 注入 */
@@ -544,14 +549,16 @@ export class GitTransport implements SyncTransport {
   }
 
   /**
-   * 重建工作副本（issue #79 的自救入口）：
+   * 重建工作副本（issue #79 / #104 的自救入口）：
    *  - `relink`：只把 origin / push URL 重新指向 repoUrl（**非破坏性**：不碰工作树与本地提交）；
+   *  - `adopt`：把远端分支**合并进**现有工作副本（issue #104：换成另一个仓库、或远端历史被重写后，
+   *    两条历史不相交，`pull --ff-only` 永远失败；这里合并后本地提交一条都不丢，可 revert）；
    *  - `reclone`：删除工作副本目录后重新 clone（**丢弃未上行的本地提交**；调用方必须先让用户确认）。
    *
    * 安全边界：`reclone` 只在目录**确实是 git 工作副本**（有 .git）时才删；目录非空且无 .git
    * 一律拒绝（与 ensureRepo 同一句 workDirNotRepo）—— 绝不删来路不明的目录。
    */
-  async rebuildWorkDir(mode: 'relink' | 'reclone'): Promise<void> {
+  async rebuildWorkDir(mode: 'relink' | 'adopt' | 'reclone'): Promise<void> {
     this.repoReady = false;
     if (mode === 'relink') {
       await this.ensureRepo(); // .git 存在 → reconcileOrigin
@@ -570,8 +577,119 @@ export class GitTransport implements SyncTransport {
       await this.ensureRepo(); // 空目录 → 直接 clone
       return;
     }
+    if (mode === 'adopt') {
+      // 已有工作副本但历史与远端不相交：合并远端历史，不删任何本地提交
+      await this.adoptRemoteHistory();
+      return;
+    }
     await fs.rm(this.o.workDir, { recursive: true, force: true });
     await this.ensureRepo();
+  }
+
+  /**
+   * 采纳远端历史（issue #104）：把远端分支合并进现有工作副本，解开「换了仓库 / 远端历史被重写」
+   * 之后 `pull --ff-only` 的死结（真机形态：`+ 8e87c0c...dc69fc7 main (forced update)` 后
+   * `fatal: Not possible to fast-forward, aborting.`）。
+   *
+   * 为什么 merge 而不是 issue 里建议的 `rebase --root --onto`：
+   *  - rebase 会**改写本地提交**（sha 全变），出问题时无法 revert，中途失败还留下 detached HEAD
+   *    与 .git/rebase-merge 目录，状态比失败前更难收拾；
+   *  - merge 只多一个 merge commit，`git revert -m 1` 可原路退回，冲突时 `merge --abort`
+   *    能干净回到起点（真机裸仓验证：冲突 abort 后无 MERGE_HEAD、工作树零改动）。
+   *
+   * 三条安全边界（宁可不做，也不把别人的仓库合进来）：
+   *  ① 工作树必须干净 —— 有未提交改动时合并会把用户改动卡在冲突里；
+   *  ② 远端分支顶层只允许快照布局（snapshots / snapshots-encrypted / blobs）—— 否则这是个
+   *     「另有用途的仓库」，合并等于把它整个搬进工作副本；
+   *  ③ 远端必须存在同名分支 —— 远端是空仓库（没有任何分支）时视为没什么可采纳，正常返回
+   *     （后续 push 会自己建分支）；有分支但名字对不上则拒绝猜，把远端分支名列出来。
+   */
+  private async adoptRemoteHistory(): Promise<void> {
+    // ① 未提交改动：不替用户丢改动
+    const statusRes = await this.runGit(['status', '--porcelain'], { allowNonZero: true });
+    if (statusRes.code !== 0) {
+      throw new GitTransportError(
+        this.msg('sync.git.cmdFailed', {
+          args: 'status --porcelain',
+          code: String(statusRes.code),
+          err: this.mask(statusRes.stderr, await this.readTokenOnce()),
+        }),
+        { kind: 'unknown', retryable: true },
+      );
+    }
+    if (statusRes.stdout.trim() !== '') {
+      throw new GitTransportError(
+        this.msg('sync.git.adoptDirty', { dir: this.o.workDir }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    await this.reconcileOrigin();
+    const branchRes = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { allowNonZero: true });
+    const branch = branchRes.code === 0 ? branchRes.stdout.trim() : '';
+    if (branch === '' || branch === 'HEAD') {
+      // detached HEAD：没有分支可挂比 upstream，合并也不会被 push 走 → 拒绝并说明
+      throw new GitTransportError(
+        this.msg('sync.git.adoptDetached', { dir: this.o.workDir }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    // fetch 是网络操作（幂等读）→ 允许有限指数退避重试
+    await withSyncRetry(async () => {
+      await this.runGit(['fetch', 'origin'], { withCredential: true });
+    }, this.o.retry);
+    const remoteRef = `refs/remotes/origin/${branch}`;
+    const refRes = await this.runGit(['rev-parse', '--verify', '--quiet', remoteRef], { allowNonZero: true });
+    if (refRes.code !== 0) {
+      // 远端没有同名分支：用 ls-remote 区分「远端是空仓库」与「分支名不同」
+      const headsRes = await this.runGit(['ls-remote', '--heads', 'origin'], { withCredential: true, allowNonZero: true });
+      const heads = (headsRes.code === 0 ? headsRes.stdout : '')
+        .split('\n')
+        .map((line) => line.trim().split('\t')[1] ?? '')
+        .filter((ref) => ref.startsWith('refs/heads/'))
+        .map((ref) => ref.slice('refs/heads/'.length));
+      if (heads.length === 0) {
+        this.repoReady = true; // 空仓库：没有可采纳的历史，后续 push 会建分支
+        return;
+      }
+      throw new GitTransportError(
+        this.msg('sync.git.adoptNoRemoteBranch', { branch, heads: heads.slice(0, 3).join(', ') }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    // ② 远端顶层只能是快照布局
+    const treeRes = await this.runGit(['ls-tree', '--name-only', `origin/${branch}`], { allowNonZero: true });
+    if (treeRes.code !== 0) {
+      throw new GitTransportError(
+        this.msg('sync.git.cmdFailed', {
+          args: `ls-tree --name-only origin/${branch}`,
+          code: String(treeRes.code),
+          err: this.mask(treeRes.stderr, await this.readTokenOnce()),
+        }),
+        { kind: 'unknown', retryable: true },
+      );
+    }
+    const unknownEntries = treeRes.stdout
+      .split('\n')
+      .map((name) => name.trim().replace(/\/$/, ''))
+      .filter((name) => name !== '' && !ADOPT_ROOT_ALLOW.has(name));
+    if (unknownEntries.length > 0) {
+      throw new GitTransportError(
+        this.msg('sync.git.adoptNotSyncRepo', { entries: unknownEntries.slice(0, 3).join(', ') }),
+        { kind: 'protocol', retryable: false },
+      );
+    }
+    // ③ 合并（不改写任何本地提交）；冲突则 abort 回起点再报错
+    const mergeRes = await this.runGit(['merge', '--allow-unrelated-histories', '--no-edit', `origin/${branch}`], { allowNonZero: true });
+    if (mergeRes.code !== 0) {
+      await this.runGit(['merge', '--abort'], { allowNonZero: true });
+      throw new GitTransportError(
+        this.msg('sync.git.adoptMergeConflict', { branch }),
+        { kind: 'conflict', retryable: false },
+      );
+    }
+    // 让后续 pull --ff-only 有 upstream 可用（忽略失败：分支可能已被删/重命名）
+    await this.runGit(['branch', '--set-upstream-to', `origin/${branch}`, branch], { allowNonZero: true });
+    this.repoReady = true;
   }
 
   /**
@@ -680,7 +798,17 @@ export class GitTransport implements SyncTransport {
     const fileArg = quoteGitValue(credFile.replace(/\\/g, '/'));
     await atomicWriteFile(credFile, `https://${this.o.credentialUsername}:${token}@${host}\n`, { mode: 0o600, symlink: 'reject' });
     return {
-      extraArgs: ['-c', 'credential.helper=', '-c', `credential.helper=store --file=${fileArg}`],
+      // issue #103：**必须**把用户名也钉进 git 参数。git credential store 用 URL 里的 username
+      // 作为查找键；store 文件写的是本插件自己的用户名（默认 oauth2），但 git 会先读全局
+      // `.gitconfig` 里的 `credential.<url>.username`（Git Credential Manager / gh CLI 都会写这一行），
+      // 用那个用户名去查 store —— 键对不上就查不到口令，无 tty 时退化成
+      // `fatal: could not read Password for 'https://<全局用户名>@host'`。
+      // 钉住 username 后查找键与 store 文件里的值同源（都来自 credentialUsername）。
+      extraArgs: [
+        '-c', 'credential.helper=',
+        '-c', `credential.helper=store --file=${fileArg}`,
+        '-c', `credential.username=${this.o.credentialUsername}`,
+      ],
       token,
       cleanup: async () => { await fs.rm(tmpDir, { recursive: true, force: true }); },
     };

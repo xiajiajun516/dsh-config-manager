@@ -1093,6 +1093,23 @@ export function autosyncSkipDetail(
   return label
 }
 
+/**
+ * 卡片该不该渲染「上一轮失败原因」（issue #105）。
+ *
+ * 此前卡片只看 lastRunMessage 非空就渲染，而该字段语义历史上是混用的：既可能是本轮错误原文，
+ * 也可能残留十天前那次失败、或被「连续失败通知」文案占用 —— 于是认证早已修好、同步也成功过，
+ * 卡片上仍挂着"认证失败"，用户据此去查一个不存在的故障。
+ *
+ * 渲染权只认一个判据：**本轮状态是 failed**。success/skipped/partial 一律不渲染旧错误。
+ * （宿主侧同一判据 = autosync-config.lastRunFailureMessage，此处是渲染层守门，双保险。）
+ */
+export function autosyncFailureMessage(
+  status: Pick<AutosyncStatusResponse, 'lastRunStatus' | 'lastRunMessage'>,
+): string | null {
+  if (status.lastRunStatus !== 'failed') return null
+  const message = status.lastRunMessage
+  return message === undefined || message === '' ? null : message
+}
 /** 自动同步状态行的可读文案（未运行 / 上次状态 / 连续失败计数）。 */
 export function autosyncStatusText(status: AutosyncStatusResponse, t: UiT): string {
   if (status.lastRunAt === undefined || status.lastRunAt === '' || status.lastRunStatus === undefined) {

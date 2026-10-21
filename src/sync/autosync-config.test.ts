@@ -11,7 +11,7 @@ import path from 'node:path';
 import {
   readAutosyncConfig, writeAutosyncConfig, readAllAutosyncConfigs, AUTOSYNC_CONFIG_FILE,
   AUTOSYNC_CONFIG_SCHEMA_VERSION, DEFAULT_AUTOSYNC_INTERVAL,
-  DEFAULT_STARTUP_MIN_INTERVAL_MS,
+  DEFAULT_STARTUP_MIN_INTERVAL_MS, lastRunFailureMessage, clearLastRunResult,
 } from './autosync-config.ts';
 
 test('writeAutosyncConfig + readAutosyncConfig：写入 → 读回字段一致（git 通道）', async () => {
@@ -143,5 +143,61 @@ test('v1 迁移：顶层单通道字段 → git 通道（webdav 缺省）', asyn
     const git2 = await readAutosyncConfig(dir, 'git');
     assert.equal(git2.enabled, true);
     assert.equal(git2.interval, '12h');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+/* ------------------------------------------------- issue #105：旧运行结果不得被当成结论 */
+
+test('lastRunFailureMessage：只有 failed 才回传错误原文（issue #105）', () => {
+  // failed + 有原文 → 原样回传
+  assert.equal(
+    lastRunFailureMessage({ lastRunStatus: 'failed', lastRunMessage: 'git pull 失败: 认证失败' }),
+    'git pull 失败: 认证失败',
+  );
+  // 其余状态一律 undefined —— 这正是「卡片挂着十天前旧错误」的根因
+  for (const status of ['success', 'skipped', 'partial'] as const) {
+    assert.equal(
+      lastRunFailureMessage({ lastRunStatus: status, lastRunMessage: '上一轮认证失败' }),
+      undefined,
+      `${status} 不得回传上一轮的旧错误`,
+    );
+  }
+  // 空串 / 缺字段 / 从未运行 → 都不得渲染
+  assert.equal(lastRunFailureMessage({ lastRunStatus: 'failed', lastRunMessage: '' }), undefined);
+  assert.equal(lastRunFailureMessage({ lastRunStatus: 'failed' }), undefined);
+  assert.equal(lastRunFailureMessage({}), undefined);
+});
+
+test('clearLastRunResult：配置变更清空上一轮结论，但保留「上次跑过什么」（issue #105）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-autosync-clear-'));
+  try {
+    await writeAutosyncConfig(dir, 'git', {
+      enabled: true,
+      interval: '15m',
+      startupMinIntervalMs: 300000,
+      consecutiveFailures: 4,
+      lastRunAt: '2026-08-17T10:00:00.000Z',
+      lastRunStatus: 'failed',
+      lastRunMessage: '认证失败',
+      lastRunSkipReason: 'conflict',
+      lastRunSkipCount: 2,
+      lastRunHistoryId: 'hist-9',
+    });
+    const cleared = clearLastRunResult(await readAutosyncConfig(dir, 'git'));
+    assert.equal(cleared.lastRunMessage, undefined);
+    assert.equal(cleared.lastRunSkipReason, undefined);
+    assert.equal(cleared.lastRunSkipCount, undefined);
+    // 配置与「上次运行事实」必须保留：改间隔不等于抹掉历史
+    assert.equal(cleared.enabled, true);
+    assert.equal(cleared.interval, '15m');
+    assert.equal(cleared.lastRunAt, '2026-08-17T10:00:00.000Z');
+    assert.equal(cleared.lastRunStatus, 'failed');
+    assert.equal(cleared.consecutiveFailures, 4);
+    // 落盘后旧结论真的不在文件里（不是只在内存里清掉）
+    await writeAutosyncConfig(dir, 'git', cleared);
+    const raw = JSON.parse(await fs.readFile(path.join(dir, AUTOSYNC_CONFIG_FILE), 'utf8'));
+    assert.equal(raw.channels.git.lastRunMessage, undefined);
+    assert.equal(raw.channels.git.lastRunSkipReason, undefined);
+    assert.equal(raw.channels.git.lastRunSkipCount, undefined);
+    assert.equal(raw.channels.git.lastRunStatus, 'failed');
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

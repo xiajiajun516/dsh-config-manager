@@ -61,7 +61,7 @@ import {
 import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig, isS3Config, isGistConfig, SYNC_CHANNELS } from './sync-config.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
-import { readSyncHistory, appendAutosyncEntry } from './sync-history.ts';
+import { readSyncHistory, appendAutosyncEntry, markAutosyncNotified } from './sync-history.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan } from './merge.ts';
@@ -898,22 +898,21 @@ export class AutoSyncScheduler {
     });
   }
 
-  /** 连续失败 ≥ 3 → 通知（host.log.warn）。 */
+  /**
+   * 连续失败 ≥ 3 → 通知（host.log.warn）。
+   *
+   * issue #105：通知的持久痕迹只留历史 entry 的 notifiedAt。
+   * 此前这里把通知文案写进 autosync-config.lastRunMessage —— 那是「本轮错误原文」的字段，
+   * 一个字段两种语义，界面就无法判断该显示什么；而且 entry.notifiedAt 只在内存对象上改、
+   * 从未落盘（sync-history 当时只有 append），通知事实其实没留下。现在两者都走一处：
+   * 通知文案只进日志，notifiedAt 落盘到历史记录。
+   */
   private maybeNotify(failures: number, historyId: string, nowIso: string, channel: SyncTransportType): void {
-    if (failures >= 3) {
-      this.host.log.warn(`自动同步连续失败 ${failures} 次，请检查仓库配置/凭据（${channel}）`);
-      // 记录 notifiedAt（更新历史 entry）
-      void this.readHistoryFn().then(async (hist) => {
-        const entry = hist.autosyncEntries.find((e) => e.createdAt === nowIso);
-        if (entry) {
-          entry.notifiedAt = nowIso;
-          await this.writeConfig(channel, {
-            ...(await this.readConfig(channel)),
-            lastRunMessage: engineMsg('sync.autosyncConsecutiveFailureNotified', { count: failures }),
-          });
-        }
-      }).catch(() => { /* 尽力而为 */ });
-    }
+    if (failures < 3) return;
+    this.host.log.warn(`自动同步连续失败 ${failures} 次，请检查仓库配置/凭据（${channel}）`);
+    // readHistory 走注入的 readHistoryFn（测试可替换），写入仍是原子落盘
+    void markAutosyncNotified(this.syncDir, nowIso, nowIso, { readHistory: this.readHistoryFn })
+      .catch(() => { /* 尽力而为 */ });
   }
 }
 

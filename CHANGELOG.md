@@ -103,6 +103,13 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **插件自带的技能不再被打进备份**：这类技能的脚本与资源不随包走、副本必然残缺，于是不再导出；旧备份里的这类副本在导入时跳过并说明原因，不再与插件自带的版本互相抢生效。（issue #102）
   **Skills provided by a plugin are no longer packed into backups**: their scripts and assets cannot travel with the package, so the copy would always be incomplete and is no longer exported; such copies in older backups are skipped during import with the reason stated, instead of competing with the plugin's own version. (issue #102)
 
+- **git 同步不再因为本机全局 git 配置里设过用户名而报「读不到密码」**：内置账号（oauth2）现在会显式带上，凭据库按用户名查找时不会再被全局配置里的另一个名字顶掉；市场里以 git 源安装插件走的也是这条路，一并修好。（issue #103）
+  **Git sync no longer fails with "could not read Password" because your global git config already sets a username**: the built-in account (oauth2) is now passed explicitly, so the credential-store lookup is no longer overridden by another name in your global config; installing plugins from a git source in the marketplace uses the same path and is fixed too. (issue #103)
+- **换了同步仓库、或远端历史被重写之后，工作副本不再只剩「重新克隆」一条路**：同步页新增「采纳远端历史」，把当前仓库地址的历史合并进本机工作副本 —— 本地提交一条都不会被改写、合并后还能用 git revert 撤回，发生冲突时自动撤销这次合并把工作副本还原（此前只能重新克隆，未推送的本地提交直接丢）；远端顶层看起来不是本插件的同步仓库时直接拒绝合并。（issue #104）
+  **After swapping the sync repository, or when the remote history was rewritten, the working copy is no longer stuck with "clone again"**: a new "adopt remote history" action merges the history at the configured address into the local working copy — no local commit is rewritten, the merge can be undone with git revert, and a conflict aborts the merge and restores the previous state (previously re-cloning was the only way out, throwing away unpushed local commits). If the remote root does not look like this plugin's sync repository, the merge is refused. (issue #104)
+- **自动同步卡片不再把很久以前那次的错误当成「本次运行结果」一直显示**：错误原文只在「本轮确实失败」时出现，改配置或勾选开关也不会再把旧错误写实；连续失败的通知只进同步历史与日志，不再冒充运行信息。（issue #105）
+  **The auto-sync card no longer keeps showing a long-past failure as if it were the latest run's result**: the error text appears only when the latest run actually failed, toggling settings no longer pins an old error in place, and consecutive-failure notifications go to the sync history and logs instead of masquerading as run info. (issue #105)
+
 ## [0.1.78] - 2026-10-17
 
 > **本版主题**：**同步或恢复配置后，DSH 自带的插件层不再被装成错版本的 npm 包 —— 不会再出现「DSH 升级之后新建会话报错」**

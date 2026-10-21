@@ -211,6 +211,39 @@ test('token 不泄漏：credential 文件在 git 调用期间存在、用后删�
   for (const c of calls) for (const arg of c.args) assert.ok(!arg.includes(TEST_TOKEN), `argv 泄漏 token: ${arg}`);
 });
 
+test('issue #103：credential.username 必须与 store 文件里的用户名一致（全局 .gitconfig 不得顶掉查找键）', async (t) => {
+  // git credential store 以 URL 里的 username 为查找键；只写 store 文件不钉 username 时，
+  // 全局 .gitconfig 的 credential.<url>.username（GCM / gh 写入）会把键换成别的用户名 →
+  // 查不到口令 → 无 tty 环境直接 fatal。这里把「pin 的值 === store 文件里的用户名」钉成不变量。
+  for (const username of [undefined, 'x-access-token']) {
+    const dir = await makeTempDir(t);
+    const seen: { args: string[]; fileRaw: string }[] = [];
+    const exec: GitExecFn = async (_cmd, args) => {
+      const helper = args.find((a) => a.startsWith('credential.helper=') && a.includes('store --file='));
+      if (helper) {
+        const file = helper.slice(helper.indexOf('--file=') + '--file='.length).replace(/^"|"$/g, '');
+        seen.push({ args, fileRaw: await fs.readFile(file, 'utf8') });
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    };
+    const transport = new GitTransport(makeOptions({
+      workDir: dir,
+      exec,
+      ...(username === undefined ? {} : { credentialUsername: username }),
+    }));
+    await transport.list();
+    assert.ok(seen.length >= 1, '必须发生过带凭据的调用');
+    const expected = username ?? 'oauth2';
+    for (const call of seen) {
+      const pin = call.args.find((a) => a.startsWith('credential.username='));
+      assert.equal(pin, `credential.username=${expected}`, '必须把 username 钉进 git 参数（缺省 oauth2，可用 credentialUsername 覆盖）');
+      const idx = call.args.indexOf(pin as string);
+      assert.equal(call.args[idx - 1], '-c', 'git 只认 `-c key=value` 形态，-c 必须紧邻');
+      assert.ok(call.fileRaw.startsWith(`https://${expected}:`), 'store 文件里的用户名必须与 pin 的值同源');
+    }
+  }
+});
+
 test('upload 契约：写快照目录 + add + commit(add) + push，返回 computeSnapshotMeta', async (t) => {
   const dir = await makeGitWorkDir(t);
   const calls: CallRecord[] = [];
@@ -1091,3 +1124,148 @@ test('issue #79 集成：inspectWorkDir + rebuildWorkDir（relink 非破坏 / re
   await assert.rejects(t3.rebuildWorkDir('reclone'), /不是 git 仓库/);
   assert.ok(await fs.stat(path.join(strayDir, 'stray.txt')), '拒绝时文件必须原样保留');
 });
+/* ---------------------------------------------------------------- issue #104 采纳远端历史（adopt） */
+
+/**
+ * 造一个「另一条历史」的同步仓库：同一个插件布局，但初始提交与现有工作副本不相交。
+ * adopt 的判据是「远端顶层只有快照布局」+「合并原始历史」，所以夹具必须是**假远端**（bare 仓）。
+ */
+async function makeSyncRemote(t: test.TestContext, snapshot: SyncSnapshot & { sections: Record<string, unknown> }): Promise<string> {
+  const bare = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  await new GitTransport({ repoUrl: bare, workDir, credentials: { getToken: async () => TEST_TOKEN } }).upload(snapshot);
+  return bare;
+}
+
+test('issue #104 集成：改成另一条历史的同步仓库 → adopt 合并两条历史（本地提交原样保留、之后能继续 push）', async (t) => {
+  const creds = { getToken: async () => TEST_TOKEN };
+  const bareA = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  await new GitTransport({ repoUrl: bareA, workDir, credentials: creds }).upload(sampleSnapshot({ id: 'snap-001' }));
+
+  const bareC = await makeSyncRemote(t, sampleSnapshot({ id: 'snap-other' }));
+  const localHead = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+  const transport = new GitTransport({ repoUrl: bareC, workDir, credentials: creds });
+
+  // 先确认这就是 issue #104 的现场：改地址后 pull --ff-only 因两条历史不相交而失败
+  await assert.rejects(transport.list(), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /不是同一条历史/);
+    return true;
+  });
+
+  await transport.rebuildWorkDir('adopt');
+
+  const facts = await transport.inspectWorkDir({ detail: true });
+  assert.equal(facts.match, true, 'adopt 后 origin 跟随当前配置地址');
+  assert.equal(facts.dirty, false, 'adopt 不留下工作树脏改动');
+  // 2 = 本地原提交（此前只推到过旧地址）+ 这次合并提交：两条都还不在当前地址上，merge 之后需要一次 push。
+  // 断言精确值而不是「>0」：若哪天实现偷偷 rebase 或 force-push，这里会先红。
+  assert.equal(facts.ahead, 2, '本地原提交与合并提交都尚未推到当前地址');
+
+  assert.ok(await fs.stat(path.join(workDir, 'snapshots', 'snap-001')), '本地已有快照保留（不是 reclone）');
+  assert.ok(await fs.stat(path.join(workDir, 'snapshots', 'snap-other')), '远端快照被合并进来');
+
+  const merged = await runRealGit(['log', '--merges', '--oneline'], workDir);
+  assert.match(merged.stdout, /Merge/, '走 merge 而不是 rebase ⇒ 历史里能看到合并提交');
+  const kept = await runRealGit(['merge-base', '--is-ancestor', localHead, 'HEAD'], workDir);
+  assert.equal(kept.code, 0, '本地原提交必须原样保留（rebase 会改写 sha，此断言会红）');
+
+  // adopt 之后普通 push 可用：新快照写进当前地址，旧地址收不到
+  await transport.upload(sampleSnapshot({ id: 'snap-003' }));
+  const logC = await runRealGit(['log', '--oneline', '--all'], bareC);
+  assert.match(logC.stdout, /snap-003/, '合并后下游能继续 push');
+  const logA = await runRealGit(['log', '--oneline', '--all'], bareA);
+  assert.ok(!logA.stdout.includes('snap-003'), '旧地址不得再收到（否则仍在用旧 origin）');
+});
+
+test('issue #104 集成：远端顶层不是同步布局 → 拒绝合并，且一个字节历史都不动', async (t) => {
+  const creds = { getToken: async () => TEST_TOKEN };
+  const bareA = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  await new GitTransport({ repoUrl: bareA, workDir, credentials: creds }).upload(sampleSnapshot({ id: 'snap-001' }));
+  const localHead = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+  const branch = (await runRealGit(['rev-parse', '--abbrev-ref', 'HEAD'], workDir)).stdout.trim();
+
+  // 一个普通代码仓库（顶层是 README.md）：把它的历史合进来 = 把别人的仓库搬进工作副本
+  const bareOther = await makeBareRepo(t);
+  const seed = await makeTempDir(t);
+  await runRealGit(['init'], seed);
+  await runRealGit(['config', 'user.name', 'test'], seed);
+  await runRealGit(['config', 'user.email', 'test@local'], seed);
+  await runRealGit(['checkout', '-B', branch], seed);
+  await fs.writeFile(path.join(seed, 'README.md'), '# notes\n');
+  await runRealGit(['add', '.'], seed);
+  await runRealGit(['commit', '-m', 'unrelated'], seed);
+  await runRealGit(['remote', 'add', 'origin', bareOther], seed);
+  const pushed = await runRealGit(['push', '-u', 'origin', branch], seed);
+  assert.equal(pushed.code, 0, `push 失败: ${pushed.stderr}`);
+
+  const transport = new GitTransport({ repoUrl: bareOther, workDir, credentials: creds });
+  await assert.rejects(transport.rebuildWorkDir('adopt'), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /README\.md/, '必须点出到底撞见了什么（可操作）');
+    assert.match(err.message, /不是本插件的同步仓库/);
+    assert.equal(err.retryable, false, '重试不会自愈');
+    return true;
+  });
+
+  const head = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+  assert.equal(head, localHead, '拒绝时历史一步都不许动');
+  await assert.rejects(fs.stat(path.join(workDir, '.git', 'MERGE_HEAD')), '不得留下半截合并');
+  const status = await runRealGit(['status', '--porcelain'], workDir);
+  assert.equal(status.stdout.trim(), '', '拒绝后工作树保持干净');
+});
+
+test('issue #104 集成：工作副本有未提交改动 → 拒绝 adopt（不替用户丢改动）', async (t) => {
+  const creds = { getToken: async () => TEST_TOKEN };
+  const bareA = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  await new GitTransport({ repoUrl: bareA, workDir, credentials: creds }).upload(sampleSnapshot({ id: 'snap-001' }));
+  const localHead = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+
+  const bareC = await makeSyncRemote(t, sampleSnapshot({ id: 'snap-other' }));
+  await fs.writeFile(path.join(workDir, 'notes.txt'), 'wip\n');
+
+  const transport = new GitTransport({ repoUrl: bareC, workDir, credentials: creds });
+  await assert.rejects(transport.rebuildWorkDir('adopt'), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /未提交的改动/, '说清为什么拒绝');
+    return true;
+  });
+
+  assert.ok(await fs.stat(path.join(workDir, 'notes.txt')), '用户的文件必须原样保留');
+  const head = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+  assert.equal(head, localHead, '被拒绝时不得 merge 任何东西');
+});
+
+test('issue #104 集成：两侧同名快照内容不同 → 合并冲突自动撤销，工作副本回到操作前', async (t) => {
+  const creds = { getToken: async () => TEST_TOKEN };
+  const bareA = await makeBareRepo(t);
+  const workDir = await makeTempDir(t);
+  const manifestA = { schemaVersion: 1, dshVersion: '1.0.0', platform: 'win32' as const, sectionIds: ['settings' as SectionId], containsSecrets: false };
+  await new GitTransport({ repoUrl: bareA, workDir, credentials: creds })
+    .upload(sampleSnapshot({ id: 'snap-c', manifest: manifestA }));
+
+  // 同一个快照 id、不同 manifest.json 内容 ⇒ 合并时 add/add 冲突
+  const bareC = await makeSyncRemote(t, sampleSnapshot({
+    id: 'snap-c',
+    manifest: { ...manifestA, dshVersion: '9.9.9' },
+  }));
+  const localHead = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+
+  const transport = new GitTransport({ repoUrl: bareC, workDir, credentials: creds });
+  await assert.rejects(transport.rebuildWorkDir('adopt'), (err: unknown) => {
+    assert.ok(err instanceof SyncTransportError);
+    assert.match(err.message, /合并远端 .* 时发生冲突/);
+    assert.match(err.message, /已撤销这次合并/);
+    return true;
+  });
+
+  await assert.rejects(fs.stat(path.join(workDir, '.git', 'MERGE_HEAD')), 'merge --abort 后不得残留 MERGE_HEAD');
+  const status = await runRealGit(['status', '--porcelain'], workDir);
+  assert.equal(status.stdout.trim(), '', '撤销后工作树必须干净（冲突标记不得留在文件里）');
+  const head = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
+  assert.equal(head, localHead, '撤销后 HEAD 必须回到操作前的提交');
+});
+

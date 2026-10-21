@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
-  readSyncHistory, appendAutosyncEntry, SYNC_HISTORY_FILE,
+  readSyncHistory, appendAutosyncEntry, markAutosyncNotified, SYNC_HISTORY_FILE,
   AUTOSYNC_HISTORY_KEEP,
 } from './sync-history.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
@@ -112,5 +112,20 @@ test('appendAutosyncEntry：原子写（不残留 .tmp 文件）', async () => {
     await appendAutosyncEntry(dir, makeEntry(0, 'failed'));
     const files = await fs.readdir(dir);
     assert.ok(!files.some((f) => f.includes('.tmp')), '不应残留 .tmp 临时文件');
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+test('markAutosyncNotified：连续失败通知的 notifiedAt 真正落盘（issue #105）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-history-notified-'));
+  try {
+    const entry = makeEntry(1, 'failed');
+    await appendAutosyncEntry(dir, entry);
+    const notifiedAt = '2026-08-17T11:00:00.000Z';
+    assert.equal(await markAutosyncNotified(dir, entry.createdAt, notifiedAt), true);
+    const hist = await readSyncHistory(dir);
+    // 此前只改内存对象、从不落盘 —— 通知事实等于没留下
+    assert.equal(hist.autosyncEntries[0]!.notifiedAt, notifiedAt, '通知时间必须留在历史记录里');
+    // 未命中记录 → false，且不产生新条目、不改条目数
+    assert.equal(await markAutosyncNotified(dir, '2026-01-01T00:00:00.000Z', notifiedAt), false);
+    assert.equal((await readSyncHistory(dir)).autosyncEntries.length, 1);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

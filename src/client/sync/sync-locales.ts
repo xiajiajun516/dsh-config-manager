@@ -54,11 +54,16 @@ export const zh = {
   'workdir.missing': '尚未创建（首次同步时克隆）',
   'workdir.unknown': '读不出工作副本状态',
   'workdir.relink': '重指向仓库地址',
+  // issue #104：换仓库 / 远端历史被重写后，本地与远端两条历史不相交，pull --ff-only 永远失败。
+  // adopt = 把远端历史合并进来（不改写本地提交，可 revert；冲突自动撤销），是 reclone 的非破坏替代。
+  'workdir.adopt': '采纳远端历史',
+  'workdir.adoptHint': '把远端的提交历史合并进本机工作副本（用于「换了仓库或远端历史被重写」后无法合并的情况）。不会改写本地提交，合并后可 git revert 撤销；一旦冲突会自动撤销这次合并，工作副本回到操作前。',
   'workdir.reclone': '重新克隆工作副本',
   'workdir.recloneConfirmTitle': '重新克隆工作副本？',
   'workdir.recloneConfirmMessage': '将删除本机工作副本目录并从远端重新克隆。本机配置与远端快照都不受影响，但工作副本里尚未推送的本地提交会被丢弃 —— 需要时请先在同步页执行一次推送。',
   'workdir.recloneConfirm': '重新克隆',
   'toast.workdirRelinked': '工作副本已重指向当前仓库地址',
+  'toast.workdirAdopted': '已采纳远端历史（本地提交未改写，已生成一次合并提交）',
   'toast.workdirRecloned': '工作副本已重新克隆',
   'toast.workdirResetFailed': '重建工作副本失败',
   'syncStatus.lastSync': '上次同步',
@@ -555,11 +560,17 @@ export const en: Record<keyof typeof zh, string> = {
   'workdir.missing': 'Not created yet (cloned on first sync)',
   'workdir.unknown': 'Working-copy state unreadable',
   'workdir.relink': 'Re-point repository address',
+  // issue #104: after a repository swap / rewritten remote history, local and remote histories are
+  // unrelated, so pull --ff-only can never succeed. adopt merges the remote history in (no local commit
+  // is rewritten, revertible; a conflict aborts the merge) — the non-destructive alternative to reclone.
+  'workdir.adopt': 'Adopt remote history',
+  'workdir.adoptHint': 'Merges the remote commit history into this local working copy (for the case where the repository was swapped or the remote history was rewritten and pulls can never merge). No local commit is rewritten and the merge can be undone with git revert; if there are conflicts the merge is aborted and the working copy returns to its previous state.',
   'workdir.reclone': 'Clone working copy again',
   'workdir.recloneConfirmTitle': 'Clone the working copy again?',
   'workdir.recloneConfirmMessage': 'The local working-copy directory will be deleted and cloned again from the remote. Your local config and the remote snapshots are unaffected, but local commits that were never pushed will be lost — push once from the sync page first if you need them.',
   'workdir.recloneConfirm': 'Clone again',
   'toast.workdirRelinked': 'Working copy now points at the configured repository address',
+  'toast.workdirAdopted': 'Remote history adopted (no local commit was rewritten; one merge commit was created)',
   'toast.workdirRecloned': 'Working copy cloned again',
   'toast.workdirResetFailed': 'Rebuilding the working copy failed',
   'syncStatus.lastSync': 'Last sync',

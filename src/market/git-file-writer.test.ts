@@ -98,6 +98,10 @@ test('git-file-writer: clone + 写文件 + commit + push（默认分支），凭
   const pushCall = calls[calls.length - 1]!;
   assert.deepEqual(pushCall.args.slice(pushCall.args.length - 4), ['push', '-u', 'origin', 'HEAD']);
   assert.ok(pushCall.args.some((a) => a.startsWith('credential.helper=store --file=')), 'push 必须注入 credential helper');
+  // issue #103：store 以 username 作查找键，只清 helper 不钉 username 会被全局 .gitconfig 顶掉
+  for (const call of [cloneCall, pushCall]) {
+    assert.ok(call.args.includes('credential.username=oauth2'), 'clone/push 必须钉住 credential.username（与 store 文件同源）');
+  }
   // commit message 原样传递
   const commitCall = calls.find((c) => gitCommandOf(c) === 'commit')!;
   assert.ok(commitCall.args.includes('publish: add my-config v1.0.0'));

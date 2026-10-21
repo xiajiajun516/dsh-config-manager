@@ -232,6 +232,37 @@ export async function writeAutosyncConfig(dir: string, channel: SyncTransportTyp
   await atomicWriteFile(target, data, { mode: 0o600 });
 }
 
+/**
+ * 可展示的「本轮失败原因」（issue #105）。
+ *
+ * 判据只有一条：**本轮状态真的是 failed**，才允许把 lastRunMessage 当成错误文案回传。
+ * 此前状态路由无条件回传 lastRunMessage，而 POST /sync/autosync 又会把读到的旧配置原样
+ * 写回 —— 于是「十天前那次失败的错误原文」会被一次纯粹改间隔的保存坐实，卡片上继续挂着
+ * 早已不成立的错误，用户据此去查一个不存在的故障（真机现场：认证已修好，界面仍报认证失败）。
+ *
+ * 返回 undefined = 界面不得渲染任何 lastRunMessage 单元格。
+ */
+export function lastRunFailureMessage(cfg: Pick<AutosyncConfig, 'lastRunStatus' | 'lastRunMessage'>): string | undefined {
+  if (cfg.lastRunStatus !== 'failed') return undefined;
+  const message = cfg.lastRunMessage;
+  return message === undefined || message === '' ? undefined : message;
+}
+
+/**
+ * 清空「上一轮运行结果」三字段（issue #105：配置变更 ≠ 一轮运行结果）。
+ *
+ * POST /sync/autosync 是**配置**写入而不是运行，写完必须把上一轮的结论清掉，否则旧结论
+ * 会被当成当前结论继续展示。保留 lastRunAt/lastRunStatus 与连续失败计数：它们描述的是
+ * 「上一次真的跑过什么」，不会因为改了间隔就变成假话。
+ */
+export function clearLastRunResult(cfg: AutosyncConfig): AutosyncConfig {
+  const next: AutosyncConfig = { ...cfg };
+  delete next.lastRunMessage;
+  delete next.lastRunSkipReason;
+  delete next.lastRunSkipCount;
+  return next;
+}
+
 /** AutosyncConfig → 文件载荷（可选运行字段仅在非空时写入，保持文件干净）。 */
 function toChannelPayload(cfg: AutosyncConfig): Record<string, unknown> {
   const payload: Record<string, unknown> = {

@@ -870,6 +870,20 @@ export function canRecloneWorkdir(
   return workDir !== undefined && workDir.error === undefined && workDir.facts?.exists === true
 }
 
+/**
+ * 是否可以「采纳远端历史」（issue #104）：前提与「重新克隆」相同（自检成功、目录里确实是 git
+ * 工作副本），区别只在破坏性 —— adopt 不删任何本地提交，可以 revert。
+ *
+ * 为什么**不**要求 workDir.match：issue #104 的触发路径恰恰是 mismatch（用户把仓库地址改成另一个
+ * 仓库后，自检看到 origin 仍指旧地址）。adopt 内部第一步就是 reconcileOrigin + fetch 当前配置地址，
+ * 所以 mismatch 正是该给这个入口的时候。地址还没跟上时先 relink 也行，但两键并不互斥。
+ */
+export function canAdoptWorkdir(
+  workDir: { facts?: { exists: boolean; match: boolean }; error?: string } | undefined,
+): boolean {
+  return canRecloneWorkdir(workDir)
+}
+
 export function formatSyncUrlPreview(url: string, max = 60): string {
   return url.slice(0, max)
 }

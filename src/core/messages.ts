@@ -412,6 +412,15 @@ export const zh = {
   'sync.workdirNotConfigured': '尚未配置 git 仓库地址，无法重建工作副本。',
   'sync.workdirRelinked': '工作副本的 origin 已重指向当前仓库地址（工作树与本地提交未改动）。',
   'sync.workdirRecloned': '工作副本已重新克隆（原有本地提交已丢弃，远端快照已同步回本地副本）。',
+  // issue #104：换仓库/远端历史被重写后「采纳远端历史」（adopt）的可操作文案。
+  // 注意：既有键（含上面的 historyDiverged / workdirModeInvalid）有冻结指纹，只许追加、不许改值。
+  'sync.git.adoptDirty': '工作副本 {dir} 里有未提交的改动：请先提交或撤销这些改动，再采纳远端历史（否则冲突会把你的改动卡住）。',
+  'sync.git.adoptDetached': '工作副本 {dir} 当前不在任何分支上（detached HEAD），无法采纳远端历史。请先切回一个分支（git switch <分支名>）后重试。',
+  'sync.git.adoptNoRemoteBranch': '远端没有名为 {branch} 的分支（远端现有：{heads}），未做任何合并。请先把仓库地址/分支改对，或改用「重新克隆工作副本」。',
+  'sync.git.adoptNotSyncRepo': '远端仓库顶层出现了快照布局以外的内容（{entries}）：它看起来不是本插件的同步仓库，已拒绝合并（不会把别的仓库内容搬进工作副本）。',
+  'sync.git.adoptMergeConflict': '合并远端 {branch} 时发生冲突：已撤销这次合并（merge --abort），工作副本回到操作前的状态。请手工解决冲突后重试，或改用「重新克隆工作副本」。',
+  'sync.workdirModeInvalidFull': '重建工作副本的模式非法: {mode}（只允许 relink（重指向地址）、adopt（采纳远端历史）或 reclone（重新克隆））',
+
   'sync.git.cmdFailed': 'git {args} 失败 (exit {code}): {err}',
   // 推送认证（真机：公开仓库拉取可匿名成功、推送必失败，git 原文只说「Invalid username or token」）
   'sync.git.pushTokenRequired': '推送需要访问令牌：远端是 http(s) 仓库，但本机没有可用的令牌（拉取公开仓库可以匿名完成，推送必须认证）。请在「同步 → 通道配置」里登录 GitHub 或填入访问令牌后重试。',
@@ -875,6 +884,15 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.workdirNotConfigured': 'No git repository address is configured, so the working copy cannot be rebuilt.',
   'sync.workdirRelinked': 'The working copy origin now points at the configured repository address (working tree and local commits untouched).',
   'sync.workdirRecloned': 'The working copy was cloned again (local commits were discarded; remote snapshots are back in the local copy).',
+  // issue #104: actionable text for adopting remote history (adopt) after a repository swap / rewritten history.
+  // Existing keys (including historyDiverged / workdirModeInvalid above) have frozen fingerprints: append only.
+  'sync.git.adoptDirty': 'The working copy {dir} has uncommitted changes: commit or discard them before adopting the remote history (otherwise a conflict would trap your changes).',
+  'sync.git.adoptDetached': 'The working copy {dir} is not on any branch (detached HEAD), so the remote history cannot be adopted. Switch back to a branch (git switch <branch>) and retry.',
+  'sync.git.adoptNoRemoteBranch': 'The remote has no branch named {branch} (remote branches: {heads}); nothing was merged. Fix the repository address/branch first, or use "clone the working copy again".',
+  'sync.git.adoptNotSyncRepo': 'The remote repository root contains entries outside the snapshot layout ({entries}): it does not look like this plugin\'s sync repository, so the merge was refused (another repository\'s content is never pulled into the working copy).',
+  'sync.git.adoptMergeConflict': 'Merging remote {branch} produced conflicts: the merge was aborted (merge --abort) and the working copy is back to its previous state. Resolve the conflicts manually and retry, or use "clone the working copy again".',
+  'sync.workdirModeInvalidFull': 'Invalid working-copy rebuild mode: {mode} (only relink (re-point the address), adopt (merge the remote history) or reclone (clone again) are allowed).',
+
   'sync.git.cmdFailed': 'git {args} failed (exit {code}): {err}',
   'sync.git.pushTokenRequired': 'Push requires an access token, but none is available on this machine (public repositories can be fetched anonymously; pushing always needs authentication). Sign in to GitHub or paste an access token under Sync → Channel configuration, then retry.',
   'sync.git.pushAuthFailed': 'Push authentication failed: {err}. Check that the token is valid and has write access to this repository (password authentication is disabled by the remote); a successful pull does not prove the token works — public repositories can be fetched anonymously. Sign in again or replace the token under Sync → Channel configuration.',

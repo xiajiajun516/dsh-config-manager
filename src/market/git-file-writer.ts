@@ -256,7 +256,13 @@ export class GitFileWriterClient implements GitFileWriter {
     const fileArg = quoteGitValue(credFile.replace(/\\/g, '/'));
     await atomicWriteFile(credFile, `https://${this.credentialUsername}:${token}@github.com\n`, { mode: 0o600, symlink: 'reject' });
     return {
-      extraArgs: ['-c', 'credential.helper=', '-c', `credential.helper=store --file=${fileArg}`],
+      // issue #103：同 git-transport.buildCredentialArgs —— store 用 username 作查找键，
+      // 不钉住就会被全局 `.gitconfig` 的 `credential.<url>.username` 顶掉而查不到口令。
+      extraArgs: [
+        '-c', 'credential.helper=',
+        '-c', `credential.helper=store --file=${fileArg}`,
+        '-c', `credential.username=${this.credentialUsername}`,
+      ],
       cleanup: async () => { await fs.rm(tmpDir, { recursive: true, force: true }); },
     };
   }

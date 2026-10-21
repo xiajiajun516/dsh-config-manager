@@ -118,3 +118,29 @@ export async function appendAutosyncEntry(
   const data = stringifyJsonSafe(current, { space: 2 });
   await atomicWriteFile(target, data, { mode: 0o600 });
 }
+
+/**
+ * 给指定 createdAt 的自动同步记录补 notifiedAt 并落盘（issue #105）。
+ *
+ * 为什么不再借道 autosync-config：此前「连续失败 ≥ 3」的通知文案被写进 lastRunMessage，
+ * 与「本轮错误原文」抢同一个字段 —— 界面据此渲染出与真实状态无关的通知文案。
+ * 通知的持久痕迹只留历史 entry 的 notifiedAt；未命中记录返回 false（不写文件）。
+ */
+export async function markAutosyncNotified(
+  dir: string,
+  createdAt: string,
+  notifiedAt: string,
+  opts: { now?: () => Date; readHistory?: (dir: string) => Promise<SyncHistoryFile> } = {},
+): Promise<boolean> {
+  const readHistory = opts.readHistory ?? readSyncHistory;
+  const current = await readHistory(dir);
+  const entry = current.autosyncEntries.find((e) => e.createdAt === createdAt);
+  if (entry === undefined) return false;
+  entry.notifiedAt = notifiedAt;
+  current.updatedAt = (opts.now ?? (() => new Date()))().toISOString();
+
+  await fs.mkdir(dir, { recursive: true });
+  const target = path.join(dir, SYNC_HISTORY_FILE);
+  await atomicWriteFile(target, stringifyJsonSafe(current, { space: 2 }), { mode: 0o600 });
+  return true;
+}

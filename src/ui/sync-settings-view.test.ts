@@ -23,7 +23,7 @@ import {
   validateCloudEndpoint, validateCloudForm, validateCloudPrefix, validateCloudRegion, validateGistForm,
   validateGistId, validateS3Form, DEFAULT_S3_PROVIDER, S3_PROVIDERS,
   // issue #79：工作副本自检 → 状态 / 入口判定
-  workdirStateKey, workdirStateBadgeKind, needsWorkdirRelink, canRecloneWorkdir,
+  workdirStateKey, workdirStateBadgeKind, needsWorkdirRelink, canRecloneWorkdir, canAdoptWorkdir,
   type SaveQueueState, type SyncChannelSettings, type SyncFormSnapshot,
 } from './sync-settings-view.ts'
 
@@ -547,4 +547,15 @@ test('issue #79：入口判定 —— 只有地址不一致才给「重指向」
   assert.equal(canRecloneWorkdir(workdirFacts({ exists: false })), false, '目录都不存在 → 没有「重新克隆」可言')
   assert.equal(canRecloneWorkdir({ error: '读取失败' }), false, '读不出来不得提供破坏性入口')
   assert.equal(canRecloneWorkdir(undefined), false)
+})
+
+/* ---------------------------------------------------------------- issue #104 采纳远端历史 */
+
+test('issue #104：canAdoptWorkdir —— 只在工作副本确实存在时给「采纳远端历史」，且不要求 origin 已跟随', () => {
+  // 触发路径恰恰是 mismatch：改仓库地址后 origin 仍指旧地址，pull --ff-only 因两条历史不相交失败。
+  assert.equal(canAdoptWorkdir(workdirFacts({ match: false })), true, 'mismatch 才是主场景（内部会先 reconcile origin）')
+  assert.equal(canAdoptWorkdir(workdirFacts()), true, '已跟随也能用：远端被重写后同样分叉')
+  assert.equal(canAdoptWorkdir(workdirFacts({ exists: false })), false, '目录都不存在 → 没有可合并的工作副本（应走首次克隆）')
+  assert.equal(canAdoptWorkdir({ error: '读取失败' }), false, '读不出来就不得提供写入口')
+  assert.equal(canAdoptWorkdir(undefined), false, '非 git 通道不得出现该入口')
 })

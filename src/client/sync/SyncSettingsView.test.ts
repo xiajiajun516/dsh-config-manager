@@ -144,7 +144,7 @@ test('工作副本「重建」按钮必须在请求在途时转加载态（用�
   // 重新 clone（可达数十秒），期间用户无从判断是否在执行。守卫钉住三条：在途态由本卡自持、两个出口都转
   // 加载态并互相禁用、失败也必须收掉加载态；任一条回退即变红。
   const src = readSource(fileURLToPath(new URL('./WorkDirCard.tsx', import.meta.url)))
-  assert.match(src, /const \[pending, setPending\] = useState<'relink' \| 'reclone' \| null>\(null\)/, '在途态必须是本卡自持的 relink/reclone 判别式状态')
+  assert.match(src, /const \[pending, setPending\] = useState<'relink' \| 'adopt' \| 'reclone' \| null>\(null\)/, '在途态必须是本卡自持的 relink/reclone 判别式状态')
   assert.match(src, /loading=\{pending === 'reclone'\}/, '重新克隆按钮必须在自身请求在途时显示加载态')
   assert.match(src, /loading=\{pending === 'relink'\}/, '重指向按钮同理')
   assert.match(src, /disabled=\{busy \|\| pending !== null\}/, '在途时必须同时禁用两个出口（防重复点击）')

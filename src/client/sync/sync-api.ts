@@ -790,11 +790,13 @@ export class SyncApi {
    * 重建 git 工作副本（issue #79 的自救入口）。
    *
    * - `relink`：只把 origin / push URL 重指向当前配置地址（非破坏性，不碰工作树与本地提交）；
+   * - `adopt`：把当前地址的远端历史合并进工作副本（issue #104：换仓库 / 远端历史被重写后两条历史
+   *   不相交，pull --ff-only 永远失败）。不改写本地提交、可 `git revert`，冲突由 host 自动 `merge --abort`；
    * - `reclone`：删除工作副本后重新 clone（**丢弃未上行的本地提交**）→ 必须带 `confirm: true`。
    *
    * 写动作：host 侧过 mutation gate（SAFE MODE / 环境锁）。
    */
-  async workdirReset(payload: { mode: 'relink' | 'reclone'; confirm?: boolean }): Promise<{ ok: boolean; mode: string; workDir: { facts: SyncWorkDirFacts } }> {
+  async workdirReset(payload: { mode: 'relink' | 'adopt' | 'reclone'; confirm?: boolean }): Promise<{ ok: boolean; mode: string; workDir: { facts: SyncWorkDirFacts } }> {
     return postJson<{ ok: boolean; mode: string; workDir: { facts: SyncWorkDirFacts } }>(SYNC_API.workdirReset, payload, this.t, SYNC_OPTS);
   }
 

@@ -3,8 +3,10 @@
  *
  * 为什么需要它：改仓库地址后同步失败时，App 内此前**没有任何自救路径** —— 只能手工
  * `git remote set-url`，或删掉 `<dataDir>/sync/work` 重来。这里给出工作副本的只读事实
- * （路径 / origin / 与配置地址是否一致）与两条出口：
+ * （路径 / origin / 与配置地址是否一致）与三条出口：
  *  - 「重指向仓库地址」= host 的 relink（非破坏性：只改 git 配置，不碰工作树与本地提交）；
+ *  - 「采纳远端历史」= host 的 adopt（issue #104：把远端分支合并进本地工作副本 —— 换仓库 / 远端历史
+ *    被重写后两条历史不相交，pull --ff-only 永远失败。不改写本地提交，可 revert，冲突自动 abort）；
  *  - 「重新克隆工作副本」= host 的 reclone（**丢弃未上行的本地提交**）→ danger 二次确认。
  *
  * 约定（与 ChannelClearConfirmDialog 同族）：确认弹窗、宿主调用与终局回执都在本文件内自持，
@@ -19,9 +21,16 @@ import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
 import {
-  canRecloneWorkdir, formatSyncUrlPreview, needsWorkdirRelink, workdirStateBadgeKind, workdirStateKey,
+  canAdoptWorkdir, canRecloneWorkdir, formatSyncUrlPreview, needsWorkdirRelink, workdirStateBadgeKind, workdirStateKey,
 } from '../../ui/sync-settings-view.ts'
 import css from '../config-manager.module.css'
+
+/** 三种出口各自的终局回执（zh/en 都在 sync-locales，禁止在这里拼用户可见文案）。 */
+const WORKDIR_TOAST = {
+  relink: 'toast.workdirRelinked',
+  adopt: 'toast.workdirAdopted',
+  reclone: 'toast.workdirRecloned',
+} as const
 
 export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
   t: TranslateNS<'config-manager-sync'>
@@ -34,20 +43,20 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
 }) {
   /** 重新克隆的二次确认（破坏性：丢弃未上行的本地提交） */
   const [recloneOpen, setRecloneOpen] = useState(false)
-  /** 本次发起的出口（relink / reclone）：请求在途时卡片按钮就地转加载态。
+  /** 本次发起的出口（relink / adopt / reclone）：请求在途时卡片按钮就地转加载态。
    *  为什么必须有：reclone 要删目录 + 重新 clone（真机可达数十秒），此前点了只有 toast 在**结束**时才响，
    *  用户无从判断是否正在执行，容易重复点击或以为没反应。 */
-  const [pending, setPending] = useState<'relink' | 'reclone' | null>(null)
+  const [pending, setPending] = useState<'relink' | 'adopt' | 'reclone' | null>(null)
   const stateKey = workdirStateKey(workDir)
   const badgeKind = workdirStateBadgeKind(stateKey)
   const facts = workDir !== undefined && 'facts' in workDir ? workDir.facts : null
 
-  const reset = async (mode: 'relink' | 'reclone'): Promise<void> => {
+  const reset = async (mode: 'relink' | 'adopt' | 'reclone'): Promise<void> => {
     setRecloneOpen(false)
     setPending(mode)
     try {
       await api.workdirReset(mode === 'reclone' ? { mode, confirm: true } : { mode })
-      toast.ok(t(mode === 'relink' ? 'toast.workdirRelinked' : 'toast.workdirRecloned'))
+      toast.ok(t(WORKDIR_TOAST[mode]))
       onChanged()
     } catch (err) {
       toast.error(t('toast.workdirResetFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
@@ -90,6 +99,14 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
           <Button disabled={busy || pending !== null} loading={pending === 'relink'} onClick={() => { void reset('relink') }}>
             {t('workdir.relink')}
           </Button>
+        )}
+        {canAdoptWorkdir(workDir) && (
+          <>
+            <Button disabled={busy || pending !== null} loading={pending === 'adopt'} onClick={() => { void reset('adopt') }}>
+              {t('workdir.adopt')}
+            </Button>
+            <InfoHint text={t('workdir.adoptHint')} label={t('common.infoHint')} />
+          </>
         )}
         {canRecloneWorkdir(workDir) && (
           <Button variant="danger" disabled={busy || pending !== null} loading={pending === 'reclone'} onClick={() => { setRecloneOpen(true) }}>
