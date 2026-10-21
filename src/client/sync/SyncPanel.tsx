@@ -1317,7 +1317,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   title={t('syncflow.refreshSnapshots')}
                 >
                   {cs.loadingSnapshots === true
-                    ? <Spinner label={t('syncflow.refreshingSnapshots')}  size="page" />
+                    ? <Spinner label={t('syncflow.refreshingSnapshots')} />
                     : <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>}
                 </Button>
               </span>

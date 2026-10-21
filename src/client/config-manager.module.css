@@ -1441,13 +1441,7 @@ body {
   background: color-mix(in srgb, var(--cm-error) 10%, transparent);
 }
 
-/* —— 鱼骨加载动画（Spinner；见 ui.tsx 与 common/fishbone.ts）——
-   造型：脊柱 + 四对肋骨 + 尾鳍 + 头骨（无肉骨架）。只有两段关键帧：脊柱的
-   stroke-dashoffset 让骨节向头部游动，肋骨 opacity 从尾向头依次亮起（延迟由 React 逐根
-   写 animation-delay，数据在 fishbone.ts，改形状/节奏只改那一处）。
-   颜色一律 **currentColor**（与 lucide 图标同一约定）：写死 business-primary 蓝会在
-   **主色按钮**（蓝底）上变成蓝画蓝、动画整个看不见（真机截图）。
-   prefers-reduced-motion 下**刻意保留**（§15：它承载「正在进行」这个状态本身）。 */
+/* —— Spinner —— */
 .spinnerWrap {
   display: inline-flex;
   align-items: center;
@@ -1455,66 +1449,44 @@ body {
   vertical-align: middle;
 }
 
+/*
+ * 加载环走 **SVG 几何**（见 ui.tsx 的 Spinner 注释）：旧实现是 13px 盒 + 2px 边框 +
+ * border-radius: 50%，边框占直径 15% 且只有 border-top 实色 —— 栅格化后形状读不出来
+ * （用户：「加载的 icon 不是圆形」）。改为两个 <circle>，几何与分辨率/DPR 无关。
+ *
+ * 颜色一律 **currentColor**（与 lucide 图标同一约定）：
+ * 此前写死 business-primary 蓝 —— 在**主色按钮**（蓝底）上等于用蓝色画蓝色，转圈完全看不见，
+ * 用户看到的只是「按钮变宽了却没有加载图标」（真机截图）。currentColor 让它在任意底色的
+ * 上下文（主色/危险/幽灵按钮、卡片）里都取该处的语义前景色。
+ */
 .spinner {
   display: inline-block;
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
   flex: none;
   vertical-align: middle;
-  /* 尾鳍/头骨贴着 viewBox 边缘，不许被裁掉 */
-  overflow: visible;
+  transform-origin: 50% 50%;
+  animation: spin 0.7s linear infinite;
 }
 
-/* 整块首屏加载的居中位：同一条鱼骨放大一档（不是第二个动画） */
-.spinnerPage {
-  width: 22px;
-  height: 22px;
+/* 底环：完整圆、低对比 —— 让「这是个圆」一眼可辨（旧实现底色仅 25% 不透明度，形状读不出来） */
+.spinnerTrack {
+  fill: none;
+  stroke: color-mix(in srgb, currentColor 30%, transparent);
+  stroke-width: 3;
 }
 
-.fishboneSpine,
-.fishboneRib,
-.fishboneSkull {
+/* 25% 圆弧：实色扫掠段；旋转由 .spinner 的 spin 承担（不做二次自转）。
+   stroke-dasharray 不在这里手写 —— 由 ui.tsx 按 r 现算（改半径时弧长自动跟随，不会漂移）。 */
+.spinnerArc {
   fill: none;
   stroke: currentColor;
-}
-
-/* 脊柱：骨节（虚线）持续向头部游动 */
-.fishboneSpine {
-  stroke-width: 2.2;
+  stroke-width: 3;
   stroke-linecap: round;
-  stroke-dasharray: 3.2 4.8;
-  animation: fishboneSwim 1.05s linear infinite;
 }
 
-/* 肋骨：从尾向头依次亮起（每根自己的 animation-delay 由组件给出） */
-.fishboneRib {
-  stroke-width: 1.9;
-  stroke-linecap: round;
-  animation: fishboneRibPulse 1.05s ease-in-out infinite;
-}
-
-/* 尾鳍与肋骨同色同粗，但不参与明暗波 —— 尾巴恒亮，鱼骨轮廓才读得出来 */
-.fishboneTail {
-  animation: none;
-  opacity: 0.85;
-}
-
-.fishboneSkull {
-  stroke-width: 1.9;
-}
-
-.fishboneEye {
-  fill: currentColor;
-  stroke: none;
-}
-
-@keyframes fishboneSwim {
-  to { stroke-dashoffset: -16; }
-}
-
-@keyframes fishboneRibPulse {
-  0%, 100% { opacity: 0.32; }
-  45% { opacity: 1; }
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .spinnerLabel {
@@ -1524,9 +1496,9 @@ body {
   opacity: 0.85;
 }
 
-/* —— Skeleton ——
+/* —— Skeleton（加载骨架；common/Skeleton.tsx）——
    场景：**整块内容的首次加载**（列表 / 表格 / 详情）。骨架先给出布局轮廓，数据到货时
-   不会整页跳动；按钮内联的进行中态仍用 Spinner（鱼骨）—— 那里没有轮廓可给，鱼骨才是对的反馈。
+   不会整页跳动；按钮内联的进行中态仍用 Spinner —— 那里没有轮廓可给，转圈才是对的反馈。
    着色只用「弱化文字色」的低透明 tint + 一条同色更亮的高光，不引入第二个色系。 */
 .skeletonRoot {
   display: flex;
@@ -5144,9 +5116,8 @@ button.profileRowMain:hover {
  *
  * 只关掉**装饰性**动效（入场 + 状态点脉冲）——它们是纯粹的观感修饰，关掉信息不丢。
  *
- * **刻意保留** 鱼骨加载动画（`.fishboneSpine` 的 fishboneSwim、`.fishboneRib` 的
- * fishboneRibPulse）与 `.progressIndeterminate`（indet）：它们承载「正在进行」这个状态
- * 本身，关掉会让用户以为界面卡死（无障碍实践里的常见反例）。
+ * **刻意保留** `.spinner`（spin）与 `.progressIndeterminate`（indet）：它们承载
+ * 「正在进行」这个状态本身，关掉会让用户以为界面卡死（无障碍实践里的常见反例）。
  *
  * 形变层（common/Icon.tsx 的 ExpandChevron）不在此处兜底：SVG 内部的属性插值由
  * morphicons 的 reducedMotion="user" 处理（在组件上显式指定），CSS 选择器管不到。

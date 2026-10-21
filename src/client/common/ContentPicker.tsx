@@ -785,7 +785,7 @@ export function ContentPicker({
           但整块不可点 —— 读 sessions 这类大分区要很久，没有任何反馈会被当成卡死。 */}
       {busy && !loading && (
         <div className={css.pickerOverlay} role="status" aria-live="polite">
-          <Spinner label={t('picker.loadingItems')}  size="page" />
+          <Spinner label={t('picker.loadingItems')} />
         </div>
       )}
 
