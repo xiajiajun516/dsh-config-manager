@@ -4,7 +4,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpAdapter, extractMcpServers, buildMcpPatchLine } from './mcp.ts';
+import { McpAdapter, extractMcpServers, buildMcpPatchLine, mcpServerUnitId, mcpConnectorUnitId } from './mcp.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 import type { PlanItem } from '../core/types.ts';
 
@@ -293,5 +293,81 @@ test('mcp: validate 接受可选 connectors，形态不对才报错', async () =
   assert.equal(ok.valid, true);
   const bad = await adapter.validate({ version: 1, servers: [], connectors: { connections: [{ key: '', serverName: '' }] } as never });
   assert.equal(bad.valid, false);
+});
+
+/* ---------------------------------------------------- 条目级选择（展开 / 收起 / 逐项勾选） */
+
+/** 同时有 patch 行 server 与连接器（含 OAuth 引用）的来源上下文 */
+function seedBothSources(): ReturnType<typeof makeContext> {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.patchFile.lines.set('mcp-fs', {
+    lineId: 'mcp-fs',
+    raw: { id: 'mcp-fs', name: 'dsh-mcp-client', config: { serverName: 'filesystem', command: 'npx', args: ['-y', 'server-fs'] } },
+  });
+  seedStore(src, {
+    'github-github': githubConn(),
+    'linear-linear': { key: 'linear-linear', connectorId: 'linear', kind: 'oauth', name: 'Linear', serverKey: 'linear', serverName: 'linear', transport: 'streamable-http', url: 'https://mcp.linear.app/sse', enabled: true, auth: { mode: 'oauth', grantKey: 'g-lin' }, createdAt: 1, updatedAt: 2 },
+  });
+  return src;
+}
+
+test('mcp 条目级：listUnits 同时列出 patch 行、连接器与 OAuth 引用，id 前缀分明', async () => {
+  const src = seedBothSources();
+  const adapter = new McpAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const units = adapter.listUnits(exported);
+  assert.deepEqual(units.map((u) => u.id).sort(), [
+    'mcp:connector:github-github',
+    'mcp:connector:linear-linear',
+    'mcp:patch:filesystem',
+  ]);
+  const fsUnit = units.find((u) => u.id === 'mcp:patch:filesystem');
+  assert.equal(fsUnit?.label, 'filesystem');
+  assert.equal(fsUnit?.detail, 'npx -y server-fs', 'stdio 单元给出命令 + 参数');
+  const gh = units.find((u) => u.id === 'mcp:connector:github-github');
+  assert.equal(gh?.label, 'GitHub');
+  assert.match(String(gh?.detail), /streamable-http https:\/\/api\.githubcopilot\.com/);
+  const lin = units.find((u) => u.id === 'mcp:connector:linear-linear');
+  assert.equal(lin?.detail, 'oauth linear', 'OAuth 连接只带引用，detail 标明它要靠重新授权');
+  assert.ok(units.every((u) => u.sizeBytes > 0), '每个单元都要有体积，选择器才能显示大小');
+  assert.equal(JSON.stringify(units).includes(GH_TOKEN), false, '单元清单不得带出凭据');
+});
+
+test('mcp 条目级：export 只带被勾选的单元（patch 行与连接器互不影响）', async () => {
+  const src = seedBothSources();
+  const adapter = new McpAdapter();
+  const onlyConnector = await adapter.export(src, { includeSecrets: false, includeItems: { mcp: ['mcp:connector:github-github'] } });
+  assert.equal(onlyConnector.data.servers.length, 0, '没勾 patch 行就不带 patch 行');
+  assert.deepEqual(onlyConnector.data.connectors?.connections.map((c) => c.key), ['github-github']);
+  assert.equal(onlyConnector.data.connectors?.oauthConnections.length, 0);
+  assert.equal(onlyConnector.counts['connectors'], 1);
+  assert.equal(onlyConnector.counts['servers'], 0);
+
+  const onlyPatch = await adapter.export(src, { includeSecrets: false, includeItems: { mcp: ['mcp:patch:filesystem'] } });
+  assert.deepEqual(onlyPatch.data.servers.map((s) => s.serverName), ['filesystem']);
+  assert.equal(onlyPatch.data.connectors, undefined, '一条连接器都没勾 → connectors 字段整个消失（不留空块冒充已备份）');
+  assert.equal(onlyPatch.counts['connectors'], undefined);
+});
+
+test('mcp 条目级：空白名单 = 一条都不带（不静默产出空分区）', async () => {
+  const src = seedBothSources();
+  const adapter = new McpAdapter();
+  const none = await adapter.export(src, { includeSecrets: false, includeItems: { mcp: [] } });
+  assert.deepEqual(none.data.servers, []);
+  assert.equal(none.data.connectors, undefined);
+  assert.equal(none.counts['servers'], 0);
+});
+
+test('mcp 条目级：单元 id 与 export 自洽（勾哪个就带出哪个）', async () => {
+  const src = seedBothSources();
+  const adapter = new McpAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  for (const unit of adapter.listUnits(exported)) {
+    const picked = await adapter.export(src, { includeSecrets: false, includeItems: { mcp: [unit.id] } });
+    const inServers = picked.data.servers.some((s) => mcpServerUnitId(s.serverName) === unit.id);
+    const inConnections = (picked.data.connectors?.connections ?? []).some((c) => mcpConnectorUnitId(c.key) === unit.id);
+    const inOauth = (picked.data.connectors?.oauthConnections ?? []).some((c) => mcpConnectorUnitId(c.key) === unit.id);
+    assert.equal(inServers || inConnections || inOauth, true, '单元 ' + unit.id + ' 被列出，勾选后却不在导出里');
+  }
 });
 

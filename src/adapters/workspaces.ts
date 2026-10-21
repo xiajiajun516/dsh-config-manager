@@ -104,7 +104,8 @@ export class WorkspacesAdapter implements ConfigAdapter<WorkspacesSection> {
 
   /** 单元清单（零 I/O）：一条工作区记录 = 一个单元；标题缺失时退回 id。 */
   listUnits(section: ExportSection<WorkspacesSection>): ExportUnit[] {
-    return section.data.workspaces.map((rec) => ({
+    // workspaces 可能缺省（空分区 / 手写 section）：按空表处理，不抛错 —— 选择器对任何分区都会调 listUnits
+    return (section.data.workspaces ?? []).map((rec) => ({
       id: `workspace:${rec.id}`,
       label: rec.title !== undefined && rec.title !== '' ? rec.title : rec.id,
       detail: rec.path,

@@ -324,7 +324,8 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
 
   /** 单元清单（零 I/O：直接由 export 产物归并）。 */
   listUnits(section: ExportSection<FilesSection>): ExportUnit[] {
-    return unitsFromFiles(this.id, section.data.files, (rel) => this.unitIdOf(rel));
+    // files 可能缺省（空分区 / 手写 section）：按空表处理，不抛错 —— 选择器对任何分区都会调 listUnits
+    return unitsFromFiles(this.id, section.data.files ?? [], (rel) => this.unitIdOf(rel));
   }
 
   /**

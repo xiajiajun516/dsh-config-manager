@@ -18,12 +18,13 @@ import type { MsgFunc } from '../core/messages.ts';
 import './messages.ts';
 import type { PromptEntry } from '../schema/types.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { locatePatchLineLayer, readEffectivePatchLines, resolveWriteLayer } from '../core/patch-layers.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
+import { entryByteSize, filterByUnits } from './units.ts';
 
 /** 导出记录：PromptEntry 之外记录来源行名与所在层（导入重建 / 写回定位用） */
 export interface PromptExportEntry extends PromptEntry {
@@ -128,20 +129,36 @@ export class PromptsAdapter implements ConfigAdapter<PromptsExportSection> {
   readonly defaultIncluded = sectionMeta('prompts').defaultIncluded;
   readonly portability = sectionMeta('prompts').portability;
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<PromptsExportSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<PromptsExportSection>> {
     const warnings: string[] = [];
     // issue #71：两层都读（home 层优先），否则 profile 层里的 persona / planMode 全部丢失
     const read = await readEffectivePatchLines(ctx.patchFile, ctx.profile);
     for (const f of read.failures) {
       warnings.push(msgOf(ctx)('adapter.patchReadFailedPrompts', { reason: `${f.file}: ${f.reason}` }));
     }
-    const prompts = extractPrompts(read.lines);
+    // 条目级白名单：未勾选的 persona / plan-mode section 不进包
+    const prompts = filterByUnits(extractPrompts(read.lines), options.includeItems?.[this.id], (p) => this.unitId(p));
     return {
       sectionId: 'prompts',
       data: { version: 1, prompts },
       counts: { prompts: prompts.length },
       warnings,
     };
+  }
+
+  /** 单元 id：`prompts:<条目 id>`（条目 id 已含来源行与 persona/section 名，天然唯一） */
+  private unitId(prompt: PromptExportEntry): string {
+    return this.id + ':' + prompt.id;
+  }
+
+  /** 条目级单元清单（零 I/O）；label = 条目名，detail = 类型（数据，不是 UI 文案） */
+  listUnits(section: ExportSection<PromptsExportSection>): ExportUnit[] {
+    return (section.data.prompts ?? []).map((p) => ({
+      id: this.unitId(p),
+      label: p.name,
+      detail: p.kind,
+      sizeBytes: entryByteSize(p),
+    }));
   }
 
   async analyzeImport(data: PromptsExportSection, ctx: ImportContext): Promise<PlanItem[]> {

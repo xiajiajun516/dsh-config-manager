@@ -18,7 +18,7 @@ import type { McpServerEntry } from '../schema/types.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { locatePatchLineLayer, readEffectivePatchLines, resolveWriteLayer } from '../core/patch-layers.ts';
@@ -129,6 +129,44 @@ function newLineId(serverName: string): string {
   return `mcp-${slug || 'server'}`;
 }
 
+/**
+ * 单元 id：两条数据源各自独立前缀。
+ *
+ * 为什么必须分开：patch 行的 `serverName` 与连接器的 `serverName` 完全可能同名（同一台服务器的两条
+ * 历史配置路径），共用 id 会让「勾了其中一个」变成「两个一起勾」，与选择器「逐项可勾」的前提冲突。
+ * 命名空间仍以 `mcp:` 开头 —— 与 ExportUnit 的「<section>:<单元>」约定一致。
+ */
+export function mcpServerUnitId(serverName: string): string {
+  return 'mcp:patch:' + serverName
+}
+
+export function mcpConnectorUnitId(key: string): string {
+  return 'mcp:connector:' + key
+}
+
+/** 单元体积 = 该条目在包里的 UTF-8 字节数（与 /export-preview 对 JSON 分区的口径一致） */
+function unitBytes(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value) ?? '').byteLength
+}
+
+/** 只读的 stdio 描述（命令 + 参数），不打印任何 env / header 值 */
+function stdioDetail(entry: { command?: string; args?: string[] }): string {
+  return [entry.command ?? '', ...(entry.args ?? [])].filter((s) => s !== '').join(' ').slice(0, 200)
+}
+
+/**
+ * 连接器整块的条目级过滤。
+ *
+ * allow === undefined = 全量（旧调用方零改动）；过滤后一条不剩 → 返回 undefined，
+ * 让 `connectors` 字段整个消失（而不是留一个空块冒充「连接器已备份」）。
+ */
+function filterConnectorBlock(block: McpConnectorExport, allow: readonly string[] | undefined): McpConnectorExport | undefined {
+  if (allow === undefined) return block
+  const connections = block.connections.filter((c) => allow.includes(mcpConnectorUnitId(c.key)))
+  const oauthConnections = block.oauthConnections.filter((c) => allow.includes(mcpConnectorUnitId(c.key)))
+  if (connections.length === 0 && oauthConnections.length === 0) return undefined
+  return { ...block, connections, oauthConnections }
+}
 export class McpAdapter implements ConfigAdapter<McpExportSection> {
   readonly id = 'mcp' as const;
   // 元数据唯一来源 = 注册表（t31）：不再与 ui/export-flow.ts 的导出目录各写一份
@@ -136,7 +174,7 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
   readonly defaultIncluded = sectionMeta('mcp').defaultIncluded;
   readonly portability = sectionMeta('mcp').portability;
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<McpExportSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<McpExportSection>> {
     const warnings: string[] = [];
     // issue #71：两层都读（home 层优先），否则 profile 层里的 server 全部丢失
     const read = await readEffectivePatchLines(ctx.patchFile, ctx.profile);
@@ -144,6 +182,12 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
       warnings.push(msgOf(ctx)('adapter.patchReadFailedMCP', { reason: `${f.file}: ${f.reason}` }));
     }
     const servers = extractMcpServers(read.lines);
+    // 条目级白名单：undefined = 整分区全量（旧调用方零改动）；空数组 = 一条都不带。
+    // 选择器把「部分勾选」翻译成 includeItems['mcp']，这里必须如实过滤，否则勾了等于没勾。
+    const allow = options.includeItems?.[this.id];
+    const pickedServers = allow === undefined
+      ? servers
+      : servers.filter((s) => allow.includes(mcpServerUnitId(s.serverName)));
     // 第二个数据源：连接器插件的 `storages/mcp_connector.json`（用户实际配置 MCP 的地方）。
     // 读不到 = 本机没装/没用连接器（正常，静默）；读到了解析不了 = 异常，如实报 warning，
     // **绝不**当作空表导出 —— 否则用户以为备份里有，恢复时才发现丢了。
@@ -154,22 +198,72 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
         warnings.push(msgOf(ctx)('adapter.mcpConnectorReadFailed', { reason: store.error ?? 'unknown' }));
       } else if (store.exists && store.parsed) {
         // 文件不存在 = 本机没有任何连接器：不写这个字段（旧备份也没有它，形状保持一致）
-        connectors = exportConnectorBlock(store.connections);
+        connectors = filterConnectorBlock(exportConnectorBlock(store.connections), allow);
       }
     } catch (err) {
       warnings.push(msgOf(ctx)('adapter.mcpConnectorReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
-    const data: McpExportSection = { version: 1, servers };
+    const data: McpExportSection = { version: 1, servers: pickedServers };
     if (connectors !== undefined) data.connectors = connectors;
     return {
       sectionId: 'mcp',
       data,
       counts: {
-        servers: servers.length,
+        servers: pickedServers.length,
         ...(connectors !== undefined ? { connectors: connectors.connections.length } : {}),
       },
       warnings,
     };
+  }
+
+  /**
+   * 条目级单元清单（选择器靠它决定「能不能展开」）。
+   *
+   * 契约（core/types.ts:1211）：纯函数、零 I/O，且必须与 export(includeItems) 自洽 ——
+   * 单元 id 就是 export 白名单里认的 id，两边共用 mcpServerUnitId / mcpConnectorUnitId。
+   *
+   * 单元 label 与 detail 只放「能帮用户认出是哪条」的信息：连接器的 detail 复用
+   * describeConnector（stdio 给命令 + 参数、http 给 URL），**绝不**带出 env / header 值。
+   */
+  listUnits(section: ExportSection<McpExportSection>): ExportUnit[] {
+    const units: ExportUnit[] = [];
+    const seen = new Set<string>();
+    for (const server of section.data.servers ?? []) {
+      const id = mcpServerUnitId(server.serverName);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      units.push({
+        id,
+        label: server.serverName,
+        detail: server.type === 'stdio' ? stdioDetail(server) : (server.url ?? ''),
+        sizeBytes: unitBytes(server),
+      });
+    }
+    const connectors = section.data.connectors;
+    for (const connection of connectors?.connections ?? []) {
+      const id = mcpConnectorUnitId(connection.key);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      units.push({
+        id,
+        label: connection.name,
+        detail: describeConnector(connection),
+        sizeBytes: unitBytes(connection),
+      });
+    }
+    for (const oauth of connectors?.oauthConnections ?? []) {
+      const id = mcpConnectorUnitId(oauth.key);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      units.push({
+        id,
+        label: oauth.name,
+        // OAuth 连接只带引用（Token 永不进备份），detail 说明它靠重新授权才能用
+        detail: 'oauth ' + oauth.serverName,
+        sizeBytes: unitBytes(oauth),
+      });
+    }
+    return units;
   }
 
   async analyzeImport(data: McpExportSection, ctx: ImportContext): Promise<PlanItem[]> {

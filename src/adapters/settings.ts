@@ -11,12 +11,13 @@ import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { NamespaceRecord, SettingsSection } from '../schema/types.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, NamespaceInfo, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { isUiNamespace } from './ui.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
+import { pickRecord, recordUnits } from './units.ts';
 
 /** namespace 清单提供者：宿主从 settings.yaml 顶层 key / 插件注册表获得 */
 export type NamespaceProvider = (ctx: HostContext) => Promise<string[]> | string[];
@@ -175,18 +176,30 @@ export class SettingsAdapter implements ConfigAdapter<SettingsSection> {
     this.namespaces = namespaces;
   }
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<SettingsSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<SettingsSection>> {
     const warnings: string[] = [];
     const all = await resolveNamespaces(this.namespaces, ctx);
     const nonUi = all.filter((n) => !isUiNamespace(n));
     if (nonUi.length === 0) warnings.push(msgOf(ctx)('adapter.noSettingsNamespaces'));
-    const namespaces = await collectNamespaceRecords(ctx, nonUi, warnings);
+    // 条目级白名单：未勾选的 namespace 整条不进包（勾了却全量搬 = 选择器在撒谎）
+    const collected = await collectNamespaceRecords(ctx, nonUi, warnings);
+    const namespaces = pickRecord(collected, options.includeItems?.[this.id], (ns) => this.unitId(ns));
     return {
       sectionId: 'settings',
       data: { version: 1, namespaces },
       counts: { namespaces: Object.keys(namespaces).length },
       warnings,
     };
+  }
+
+  /** 单元 id：`settings:<namespace>`（同一命名空间下的唯一键） */
+  private unitId(namespace: string): string {
+    return this.id + ':' + namespace;
+  }
+
+  /** 条目级单元清单（零 I/O：输入即 export 产物）；一个 namespace = 一个单元 */
+  listUnits(section: ExportSection<SettingsSection>): ExportUnit[] {
+    return recordUnits(this.id, section.data.namespaces ?? {});
   }
 
   async analyzeImport(data: SettingsSection, ctx: ImportContext): Promise<PlanItem[]> {

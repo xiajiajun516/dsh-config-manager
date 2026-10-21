@@ -110,7 +110,8 @@ export class PluginFilesAdapter implements ConfigAdapter<FilesSection> {
 
   /** 单元清单（零 I/O）：逐文件单元，id 与导入侧 `pluginFiles:<relPath>` 一致。 */
   listUnits(section: ExportSection<FilesSection>): ExportUnit[] {
-    return unitsFromFiles(this.id, section.data.files, (rel) => rel);
+    // files 可能缺省（空分区 / 手写 section）：按空表处理，不抛错 —— 选择器对任何分区都会调 listUnits
+    return unitsFromFiles(this.id, section.data.files ?? [], (rel) => rel);
   }
 
   async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {

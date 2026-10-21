@@ -11,12 +11,13 @@ import type { CredentialStatus, CredentialsSection } from '../schema/types.ts';
 import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { namespaceFromMap, readNamespaceMap, resolveNamespaces, type NamespaceProvider } from './settings.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
+import { entryByteSize, filterByUnits } from './units.ts';
 
 export type CredentialRefsProvider = (ctx: HostContext) => Promise<string[]>;
 
@@ -83,7 +84,7 @@ export class CredentialsAdapter implements ConfigAdapter<CredentialsSection> {
     this.refs = options.refs ?? defaultCredentialRefs(options.namespaces ?? []);
   }
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<CredentialsSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<CredentialsSection>> {
     const credentials: CredentialStatus[] = [];
     const warnings: string[] = [];
     for (const ref of await this.refs(ctx)) {
@@ -100,12 +101,29 @@ export class CredentialsAdapter implements ConfigAdapter<CredentialsSection> {
         warnings.push(msgOf(ctx)('adapter.credStatusReadFailed', { ref, reason: err instanceof Error ? err.message : String(err) }));
       }
     }
+    // 条目级白名单：未勾选的凭据 ref 不进「需补录」清单（少带一条 = 少录一个值）
+    const picked = filterByUnits(credentials, options.includeItems?.[this.id], (c) => this.unitId(c.ref));
     return {
       sectionId: 'credentialsStatus',
-      data: { version: 1, credentials },
-      counts: { credentials: credentials.length },
+      data: { version: 1, credentials: picked },
+      counts: { credentials: picked.length },
       warnings,
     };
+  }
+
+  /** 单元 id：`credentialsStatus:<凭据 ref>` */
+  private unitId(ref: string): string {
+    return this.id + ':' + ref;
+  }
+
+  /** 条目级单元清单（零 I/O）；label = 凭据 ref，detail = 本机是否有值（不含任何敏感值） */
+  listUnits(section: ExportSection<CredentialsSection>): ExportUnit[] {
+    return (section.data.credentials ?? []).map((c) => ({
+      id: this.unitId(c.ref),
+      label: c.ref,
+      detail: c.configured ? 'configured' : 'missing',
+      sizeBytes: entryByteSize(c),
+    }));
   }
 
   async analyzeImport(_data: CredentialsSection, _ctx: ImportContext): Promise<PlanItem[]> {

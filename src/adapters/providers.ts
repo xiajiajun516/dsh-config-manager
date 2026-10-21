@@ -10,12 +10,13 @@ import { msgOf, zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import type { ProviderEntry } from '../schema/types.ts';
 import type {
-  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, HostContext,
+  ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ExportUnit, HostContext,
   ImportContext, NamespaceInfo, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { resolveNamespaces, isEmptyValue, type NamespaceProvider } from './settings.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { validateJsonSection } from './json-section.ts';
+import { entryByteSize, filterByUnits } from './units.ts';
 
 /** 导出记录：ProviderEntry 之外附加 namespace 级元数据（导入写回用），满足 ProvidersSection 形状 */
 export interface ProviderExportEntry extends ProviderEntry {
@@ -53,7 +54,7 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
     this.namespaces = namespaces;
   }
 
-  async export(ctx: HostContext, _options: ExportOptions): Promise<ExportSection<ProviderExportSection>> {
+  async export(ctx: HostContext, options: ExportOptions): Promise<ExportSection<ProviderExportSection>> {
     const providers: Record<string, ProviderExportEntry> = {};
     const warnings: string[] = [];
     for (const ns of await resolveNamespaces(this.namespaces, ctx)) {
@@ -83,12 +84,69 @@ export class ProvidersAdapter implements ConfigAdapter<ProviderExportSection> {
         };
       }
     }
+    const picked = this.pickProviders(providers, options.includeItems?.[this.id]);
     return {
       sectionId: 'providers',
-      data: { version: 1, providers },
-      counts: { providers: Object.keys(providers).length },
+      data: { version: 1, providers: picked },
+      counts: { providers: Object.keys(picked).length },
       warnings,
     };
+  }
+
+  /** 单元 id：`providers:<route>`（route 是 providers 记录的键，天然唯一） */
+  private unitId(route: string): string {
+    return this.id + ':' + route;
+  }
+
+  /**
+   * 条目级单元清单（零 I/O）：一台 provider（记录里的一个 route）= 一个单元。
+   *
+   * detail 给来源 namespace —— 用户靠它区分「同一个模型走哪个 ns」，不放任何 key 值。
+   */
+  listUnits(section: ExportSection<ProviderExportSection>): ExportUnit[] {
+    return Object.entries(section.data.providers ?? {}).map(([route, entry]) => ({
+      id: this.unitId(route),
+      label: route,
+      detail: entry.namespace,
+      sizeBytes: entryByteSize(entry),
+    }));
+  }
+
+  /**
+   * 白名单过滤 + raw 重建。
+   *
+   * 为什么必须重建 raw：每个 entry.raw 存的是**整个 namespace** 的快照（导入按 namespace 整体替换）。
+   * 只勾 llm-pi-ai 下的一条 route 时若原样带走 raw，未勾的 route 会随 raw 一起进包、
+   * 导入时又被整 namespace 写回目标机 —— 用户看到「没勾却没生效」，选择器等于撒谎。
+   * 因此这里把每个 namespace 的 raw.providers 收窄成「该 ns 里被勾选的 route」集合。
+   */
+  private pickProviders(
+    providers: Record<string, ProviderExportEntry>,
+    allow: readonly string[] | undefined,
+  ): Record<string, ProviderExportEntry> {
+    const picked = filterByUnits(Object.entries(providers), allow, ([route]) => this.unitId(route));
+    const out: Record<string, ProviderExportEntry> = {};
+    const keepByNs = new Map<string, Set<string>>();
+    for (const [route, entry] of picked) {
+      out[route] = entry;
+      const keep = keepByNs.get(entry.namespace) ?? new Set<string>();
+      keep.add(route);
+      keepByNs.set(entry.namespace, keep);
+    }
+    if (allow === undefined) return out; // 全量导出不动 raw（保持与旧备份逐字节一致）
+    for (const entry of Object.values(out)) {
+      const raw = entry.raw;
+      if (raw === null || typeof raw !== 'object') continue;
+      const pv = raw['providers'];
+      if (pv === null || typeof pv !== 'object' || Array.isArray(pv)) continue;
+      const keep = keepByNs.get(entry.namespace) ?? new Set<string>();
+      const narrowed: Record<string, unknown> = {};
+      for (const [route, value] of Object.entries(pv as Record<string, unknown>)) {
+        if (keep.has(route)) narrowed[route] = value;
+      }
+      entry.raw = { ...raw, providers: narrowed };
+    }
+    return out;
   }
 
   async analyzeImport(data: ProviderExportSection, ctx: ImportContext): Promise<PlanItem[]> {

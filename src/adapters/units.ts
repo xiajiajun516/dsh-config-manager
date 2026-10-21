@@ -76,3 +76,53 @@ export function unitsFromEntries(
     sizeBytes: agg.size,
   }));
 }
+/**
+ * JSON / 记录型分区的单元体积 = 该条目在包里的 UTF-8 字节数。
+ *
+ * 与文件类不同，这里不需要读盘：条目本身就是 export() 的产物，直接量它的序列化长度，
+ * 预览与导出因此天然同口径（同一个函数量同一个对象）。
+ */
+export function entryByteSize(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value) ?? '').byteLength;
+}
+
+/**
+ * 按单元白名单过滤条目（JSON / 记录型分区共用）。
+ *
+ * allow === undefined = 未指定 → 全量（旧调用方 / 旧备份零改动）；空数组 = 一条都不留。
+ * 与 unitAllowed 同一判据，只是作用在整批条目上。
+ */
+export function filterByUnits<T>(
+  items: readonly T[],
+  allow: readonly string[] | undefined,
+  idOf: (item: T) => string,
+): T[] {
+  if (allow === undefined) return [...items];
+  return items.filter((item) => allow.includes(idOf(item)));
+}
+/** 记录型分区的单元清单：一个顶层键 = 一个单元（零 I/O；体积 = 条目序列化长度）。 */
+export function recordUnits<V>(
+  sectionId: string,
+  record: Record<string, V>,
+  detailOf?: (value: V, key: string) => string | undefined,
+): ExportUnit[] {
+  return Object.entries(record).map(([key, value]) => {
+    const unit: ExportUnit = { id: sectionId + ':' + key, label: key, sizeBytes: entryByteSize(value) };
+    const detail = detailOf?.(value, key);
+    if (detail !== undefined && detail !== '') unit.detail = detail;
+    return unit;
+  });
+}
+
+/** 记录型分区的白名单过滤（键 → 单元 id 由 idOf 决定，与 recordUnits 同一规则）。 */
+export function pickRecord<V>(
+  record: Record<string, V>,
+  allow: readonly string[] | undefined,
+  idOf: (key: string) => string,
+): Record<string, V> {
+  const out: Record<string, V> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (unitAllowed(allow, idOf(key))) out[key] = value;
+  }
+  return out;
+}

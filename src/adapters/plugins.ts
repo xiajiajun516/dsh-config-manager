@@ -299,7 +299,9 @@ function unitsOf(
   const patchFileIds = (data.patchFiles ?? []).map((pf) => `plugins:patch:${normalizePath(pf.relativePath)}`);
   const group = [wsId, ...patchFileIds];
   const units: ExportUnit[] = [];
-  for (const pl of data.plugins) {
+  // data.plugins 可能缺省（空分区 / 手写 section）：按空表处理，不抛错 ——
+  // 选择器对任何分区都会调 listUnits，抛错会让整行退化成不可展开。
+  for (const pl of data.plugins ?? []) {
     const tarball = tarballOf(data, pl.name);
     const measured = tarballBytes?.get(pl.name);
     const areas = related?.get(pl.name);
@@ -314,7 +316,7 @@ function unitsOf(
       ...(areas !== undefined && areas.length > 0 ? { relatedAreas: areas } : {}),
     });
   }
-  for (const line of data.patch) {
+  for (const line of data.patch ?? []) {
     // 由 mcp / prompts adapter 管理的行不属本分区（applyItem 同样跳过），列出来只会误导用户
     if (isManagedElsewhere(line.raw)) continue;
     units.push({ id: `patch:${line.lineId}`, label: line.lineId, sizeBytes: 0 });
