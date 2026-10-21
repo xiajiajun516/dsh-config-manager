@@ -577,6 +577,15 @@ export class Phase3Recovery {
       }
       await this.store.update(opId, (j) => {
         let next = j;
+        // ext step 必须随 op 成功一起结算：此前 :556 写入的 `status:'planned'` 永远不会被更新，
+        // ⇒ 一条 COMMITTED 的 journal 里躺着「计划做、没做过」的步骤。后果有两个：
+        //  ① 审计不可信（recovery 面板把 external step 的 planned 当「未执行的意图」转发给用户）；
+        //  ② issue #87 的 `selfProvableResidual` 用「所有 step 都是 planned 且 appliedAt 为空」来
+        //     证明「副作用从未开始」—— 成功 op 落在 completed/ 不参与判定，但同一形状一旦被别的
+        //     路径读到就会被误读成「残留」。结算成 done + appliedAt 后形状语义唯一。
+        if (next.steps.ext !== undefined) {
+          next = { ...next, steps: { ...next.steps, ext: { ...next.steps.ext, status: 'done', appliedAt: new Date().toISOString() } } };
+        }
         if (next.state === 'SNAPSHOT_CREATED') next = transitionJournalState(next, 'APPLYING');
         if (next.state === 'APPLYING') next = transitionJournalState(next, 'VALIDATING');
         next = transitionJournalState(next, 'COMMITTED');
@@ -596,7 +605,15 @@ export class Phase3Recovery {
       } else {
         const j = await this.store.loadActive(opId);
         if (j !== null && !isTerminalState(j.state)) {
-          await this.store.update(opId, (cur) => transitionJournalState(cur, 'NEEDS_ATTENTION')).catch(() => undefined);
+          await this.store.update(opId, (cur) => {
+            // 失败时 ext step 不能停在 planned：planned 的含义是「还没开始」，而外部操作已经
+            // 尝试过了（可能半途炸掉）。落成 attention 让 journal 自己说明「外部步骤结论未知」，
+            // 而不是留给读取方去猜。appliedAt 保持 null（没有可证明的完成时刻）。
+            const withStep = cur.steps.ext !== undefined && cur.steps.ext.status === 'planned'
+              ? { ...cur, steps: { ...cur.steps, ext: { ...cur.steps.ext, status: 'attention' as const } } }
+              : cur;
+            return transitionJournalState(withStep, 'NEEDS_ATTENTION');
+          }).catch(() => undefined);
         }
       }
       throw err;

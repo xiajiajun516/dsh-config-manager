@@ -9,7 +9,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  isSnapshotTrusted, isVerdictAttention, isVerdictSuccess, sortIncidentsByNewest,
+  isSnapshotTrusted, isVerdictAttention, isVerdictSuccess, recoveryBlockReason, sortIncidentsByNewest,
   toRecoveryPreviewView, toRecoveryView, verdictToUiState,
 } from './recovery-view.ts';
 import type { RecoveryStatus } from '../../ui/types.ts';
@@ -219,4 +219,42 @@ test('sortIncidentsByNewest：按 createdAt 倒序', () => {
   const sorted = sortIncidentsByNewest([a, b]);
   assert.equal(sorted[0]!.operationId, 'b');
   assert.equal(sorted[1]!.operationId, 'a');
+});
+
+// ---------- 正在正常执行的操作（本轮修复：不再当成「未完成的恢复事项」） ----------
+
+test('toRecoveryView：live[] 映射为 activeOperations，且不改变 state / recoveryRequired', () => {
+  const v = toRecoveryView(mkStatus({
+    live: [{
+      operationId: '00000000-0000-4000-8000-0000000000bb',
+      operationType: 'autosync-push',
+      state: 'APPLYING',
+      startedAt: '2026-01-01T00:00:00.000Z',
+    }],
+  }));
+  assert.equal(v.activeOperations.length, 1);
+  assert.equal(v.activeOperations[0]!.operationType, 'autosync-push');
+  assert.equal(v.activeOperations[0]!.state, 'APPLYING');
+  // 正在跑不是问题：既不进 incidents，也不触发「需要恢复」的横幅
+  assert.deepEqual(v.incidents, []);
+  assert.equal(v.recoveryRequired, false);
+  assert.equal(v.state, 'NORMAL');
+});
+
+test('toRecoveryView：旧宿主不返回 live 字段 → activeOperations 为空数组（不误报正在跑）', () => {
+  const v = toRecoveryView({ incidents: [], running: [] });
+  assert.deepEqual(v.activeOperations, []);
+});
+
+test('recoveryBlockReason：与 actionable 严格互补（面板据此解释「为什么灰」）', () => {
+  // needs-attention 优先：即使有快照，阻塞原因是「需人工处理」而不是「没快照」
+  assert.equal(recoveryBlockReason({ decision: 'needs-attention', snapshotId: 'snap-1' }), 'needsAttention');
+  assert.equal(recoveryBlockReason({ decision: 'needs-attention', snapshotId: null }), 'needsAttention');
+  // 能恢复的决策但没有可信快照 → 无快照可回滚
+  assert.equal(recoveryBlockReason({ decision: 'rollback-recommended', snapshotId: null }), 'noSnapshot');
+  // 判据必须与 actionable 逐字同口径（:108 只认 null / ''），所以这里也只断言这两种形态
+  assert.equal(recoveryBlockReason({ decision: 'rollback-recommended', snapshotId: '' }), 'noSnapshot');
+  // 可执行 → 无阻塞原因
+  assert.equal(recoveryBlockReason({ decision: 'rollback-recommended', snapshotId: 'snap-1' }), null);
+  assert.equal(recoveryBlockReason({ decision: 'rollback-continue', snapshotId: 'snap-1' }), null);
 });

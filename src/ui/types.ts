@@ -303,10 +303,32 @@ export interface RecoveryIncident {
   createdAt: string;
 }
 
+/**
+ * 正在**正常执行中**的操作（GET /recovery/status 的 `live`，加法字段）。
+ *
+ * 与 `incidents` 互斥：同一条 active journal 要么是「正在跑」（GLOBAL 锁由它持有、
+ * 且 journal.ownerInstanceId 与锁持有者一致），要么是「一次未正常完成的操作」。
+ * 判别只发生在宿主侧（single source = recovery-orchestrator 的 isLiveInFlight），
+ * 客户端只负责如实展示。
+ *
+ * 旧宿主不返回 → undefined（面板按「无进行中操作」处理）。
+ */
+export interface RecoveryActiveOperation {
+  operationId: string;
+  operationType: string;
+  state: string;
+  startedAt: string;
+}
+
 /** GET /recovery/status 响应。 */
 export interface RecoveryStatus {
   incidents: RecoveryIncident[];
   running: { runId: string; status: string }[];
+  /**
+   * 正在正常执行的操作（不是 incident）。用途：面板要能解释「为什么现在什么都点不动」——
+   * 此前这类操作被误报成事故，「执行恢复」永久灰、放弃恢复一直 423，用户拿不到任何原因。
+   */
+  live?: RecoveryActiveOperation[];
   /**
    * 环境锁状态摘要（issue #31）。纯残留锁**不是** journal：进程在 op 期间被杀时
    * `journalId: null`、`transactions/active/` 为空，incidents 恒为 []，而 423 文案却

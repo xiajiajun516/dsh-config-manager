@@ -111,6 +111,8 @@ export const zh = {
   'core.recovery.needsAttentionNoRetry': 'recovery decision 为 needs-attention，无法 retry',
   'core.recovery.dismissFailed': 'dismiss 失败',
   'core.recovery.lockNotStale': '未判定为 stale，已拒绝回收',
+  'core.recovery.opInFlight': '该操作仍在进行中（state={state}），请等它结束后再处理',
+  'core.recovery.liveHint': '有 {count} 个操作正在正常执行中',
   // ---------- restore ----------
   'core.restore.pathEscaped': '路径越界: {rel}',
   'core.restore.symlinkCriticalFile': 'symlink 化关键文件: {rel}',
@@ -423,6 +425,8 @@ export const en: Record<keyof typeof zh, string> = {
   'core.recovery.needsAttentionNoRetry': 'the recovery decision is needs-attention; cannot retry',
   'core.recovery.dismissFailed': 'dismiss failed',
   'core.recovery.lockNotStale': 'Not determined to be stale; recovery was refused',
+  'core.recovery.opInFlight': 'This operation is still running (state={state}); wait for it to finish',
+  'core.recovery.liveHint': '{count} operation(s) are currently running normally',
   // ---------- restore ----------
   'core.restore.pathEscaped': 'Path escapes the allowed root: {rel}',
   'core.restore.symlinkCriticalFile': 'Critical file is a symlink: {rel}',

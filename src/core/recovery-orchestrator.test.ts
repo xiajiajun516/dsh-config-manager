@@ -16,7 +16,9 @@ import path from 'node:path';
 
 import { createRecoveryOrchestrator } from './recovery-orchestrator.ts';
 import type { RecoveryOrchestratorDeps } from './recovery-orchestrator.ts';
-import { JournalStore } from './journal.ts';
+import {
+  JournalStore, createJournalEntry, generateOperationId, transitionJournalState,
+} from './journal.ts';
 import { RunRegistry } from './run-registry.ts';
 import { nullLogger } from '../utils/logger.ts';
 import { zhMsg } from './messages.ts';
@@ -32,15 +34,22 @@ async function makeOrchestrator(opts: {
   lockState?: string;
   lockDetail?: string;
   lockThrows?: boolean;
+  lockOwner?: string;
   recoverResult?: { ok: boolean; removed: boolean; state: string; detail?: string };
-} = {}): Promise<{ orchestrator: ReturnType<typeof createRecoveryOrchestrator>; spy: RecoverSpy }> {
+} = {}): Promise<{
+  orchestrator: ReturnType<typeof createRecoveryOrchestrator>;
+  spy: RecoverSpy;
+  /** 供用例预置 active journal（模拟「正在执行中的操作」）。 */
+  store: JournalStore;
+}> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-recovery-orch-'));
   const spy: RecoverSpy = {
     calls: 0,
     result: opts.recoverResult ?? { ok: true, removed: true, state: 'STALE_LOCK_DETECTED', detail: '已移除 stale ownership (op=autosync, pid=24140)' },
   };
+  const store = new JournalStore({ transactionsDir: path.join(dir, 'transactions') });
   const deps: RecoveryOrchestratorDeps = {
-    store: new JournalStore({ transactionsDir: path.join(dir, 'transactions') }),
+    store,
     runs: new RunRegistry(),
     snapshotsDir: path.join(dir, 'snapshots'),
     host: { log: nullLogger() } as unknown as HostContext,
@@ -50,14 +59,18 @@ async function makeOrchestrator(opts: {
     clearSafeMode: async () => undefined,
     inspectLockState: async () => {
       if (opts.lockThrows === true) throw new Error('probe failed');
-      return { state: opts.lockState ?? 'FREE', ...(opts.lockDetail !== undefined ? { detail: opts.lockDetail } : {}) };
+      return {
+        state: opts.lockState ?? 'FREE',
+        ...(opts.lockDetail !== undefined ? { detail: opts.lockDetail } : {}),
+        ...(opts.lockOwner !== undefined ? { ownerInstanceId: opts.lockOwner } : {}),
+      };
     },
     recoverStaleLock: async () => {
       spy.calls += 1;
       return spy.result;
     },
   };
-  return { orchestrator: createRecoveryOrchestrator(deps), spy };
+  return { orchestrator: createRecoveryOrchestrator(deps), spy, store };
 }
 
 // ---------- ① 纯锁残留场景：incidents 为空，但锁事项必须可见 ----------
@@ -189,4 +202,90 @@ test('源码守卫：/recovery/lock/recover 分支先于 operationId 解析，�
   const ctorBody = source.slice(ctor, source.indexOf('\n  })', ctor));
   assert.ok(ctorBody.includes('inspectLockState:'), 'createRecoveryOrchestrator 必须注入 inspectLockState');
   assert.ok(ctorBody.includes('recoverStaleLock:'), 'createRecoveryOrchestrator 必须注入 recoverStaleLock');
+});
+
+
+// ---------- ④ 正在正常执行的操作 vs 未完成的操作（本轮修复的核心口径） ----------
+
+/**
+ * 事故现场（2026-10-21，本机 0.1.78）：autosync push 的 journal 在执行期间存在于
+ * `transactions/active/`（CREATED→APPLYING），status() 把它当 incident 上报 ⇒
+ * 面板显示「需要人工处理 + 无可信快照」，顶部冒出「已进入安全模式」，「执行恢复」永久灰；
+ * 唯一出口 dismiss 又要 GLOBAL 锁，而锁正被同一个操作持有 ⇒ 点一次 423 一次。
+ * 下面四条把「什么算正在跑」钉死。
+ */
+
+const LIVE_OWNER = '44c2454fe7c1865e8771e294a5955e20';
+
+/** 预置一条 active journal（默认 CREATED，模拟刚开始的外部操作）。 */
+async function seedActiveJournal(
+  store: JournalStore,
+  ownerInstanceId: string,
+  opts: { operationType?: string; needsAttention?: boolean } = {},
+): Promise<string> {
+  await store.ensureDirs();
+  const operationId = generateOperationId();
+  const now = new Date().toISOString();
+  await store.create(createJournalEntry(opts.operationType ?? 'autosync-push', {
+    operationId, ownerInstanceId, lockId: ownerInstanceId,
+    packageVersion: '0.1.78', environmentFingerprint: 'fp-test',
+  }, now));
+  if (opts.needsAttention === true) {
+    await store.update(operationId, (j) => transitionJournalState(j, 'NEEDS_ATTENTION'));
+  }
+  return operationId;
+}
+
+test('status：锁持有者 == journal.ownerInstanceId（正在跑）→ 不进 incidents，单列进 live', async () => {
+  const { orchestrator, store } = await makeOrchestrator({ lockState: 'LOCKED', lockOwner: LIVE_OWNER });
+  const opId = await seedActiveJournal(store, LIVE_OWNER);
+  const r = await orchestrator.status();
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body['incidents'], [], '正在正常执行的操作不是「未完成的操作」——进 incidents 就会伪造假事故与假 SAFE MODE 横幅');
+  const live = r.body['live'] as Array<Record<string, unknown>>;
+  assert.equal(live.length, 1);
+  assert.equal(live[0]!['operationId'], opId);
+  assert.equal(live[0]!['operationType'], 'autosync-push');
+  assert.equal(live[0]!['state'], 'CREATED');
+  assert.ok(typeof live[0]!['startedAt'] === 'string', 'live 必须带开始时间（面板要显示它跑了多久）');
+  // 锁仍是 LOCKED（活跃持有）→ attention=false，不催用户去「回收」一把活锁
+  assert.deepEqual(r.body['lock'], { state: 'LOCKED', attention: false });
+});
+
+test('status：journal.ownerInstanceId 与锁持有者不一致 → 仍按 incident 上报（保守）', async () => {
+  const { orchestrator, store } = await makeOrchestrator({ lockState: 'LOCKED', lockOwner: 'someone-else' });
+  await seedActiveJournal(store, LIVE_OWNER);
+  const r = await orchestrator.status();
+  const incidents = r.body['incidents'] as Array<Record<string, unknown>>;
+  assert.equal(incidents.length, 1, '归属不一致就不能假定它正在跑（可能是崩溃残骸）');
+  assert.equal(incidents[0]!['operationType'], 'autosync-push');
+  assert.deepEqual(r.body['live'], []);
+});
+
+test('status：锁未持有（FREE）→ 同一 journal 仍按 incident 上报（无人能证明它还在跑）', async () => {
+  const { orchestrator, store } = await makeOrchestrator({ lockState: 'FREE' });
+  await seedActiveJournal(store, LIVE_OWNER);
+  const r = await orchestrator.status();
+  assert.equal((r.body['incidents'] as unknown[]).length, 1);
+  assert.deepEqual(r.body['live'], []);
+});
+
+test('status：NEEDS_ATTENTION 即使归属匹配也不得被吞（它是明确的「需人工处理」）', async () => {
+  const { orchestrator, store } = await makeOrchestrator({ lockState: 'LOCKED', lockOwner: LIVE_OWNER });
+  await seedActiveJournal(store, LIVE_OWNER, { needsAttention: true });
+  const r = await orchestrator.status();
+  const incidents = r.body['incidents'] as Array<Record<string, unknown>>;
+  assert.equal(incidents.length, 1);
+  assert.equal(incidents[0]!['state'], 'NEEDS_ATTENTION');
+  assert.deepEqual(r.body['live'], [], '需人工处理的事项绝不能伪装成「正在跑」');
+});
+
+test('dismiss：正在跑的操作 → 409 operation-in-flight（不 quarantine 在跑的 journal）', async () => {
+  const { orchestrator, store } = await makeOrchestrator({ lockState: 'LOCKED', lockOwner: LIVE_OWNER });
+  const opId = await seedActiveJournal(store, LIVE_OWNER);
+  const r = await orchestrator.dismiss(opId, true);
+  assert.equal(r.status, 409);
+  assert.equal(r.body['code'], 'operation-in-flight');
+  const active = await store.scanActive();
+  assert.deepEqual(active, [opId], '拒绝时必须原地不动：把在跑的 journal 挪走会让执行方后续 transition 失败');
 });

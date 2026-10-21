@@ -3808,7 +3808,13 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
       const port = host.mutationLock as EnvironmentLockManager | undefined
       if (port === undefined) return { state: 'FREE' }
       const insp = await port.inspectLockState()
-      return { state: insp.state, ...(insp.detail !== undefined ? { detail: insp.detail } : {}) }
+      // ownerInstanceId 只给编排器做 journal↔锁归属匹配（判定「正在跑」vs「残留事故」），
+      // 不进任何 HTTP 响应体（编排器只消费不回传）。
+      return {
+        state: insp.state,
+        ...(insp.detail !== undefined ? { detail: insp.detail } : {}),
+        ...(insp.ownerInstanceId !== undefined ? { ownerInstanceId: insp.ownerInstanceId } : {}),
+      }
     },
     recoverStaleLock: async () => {
       const port = host.mutationLock as EnvironmentLockManager | undefined

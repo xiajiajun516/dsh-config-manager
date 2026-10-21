@@ -974,7 +974,7 @@ export class EnvironmentLockManager {
    *  heartbeat expired + PID alive + identity 相同 → LOCKED (owner alive / heartbeat degraded)
    *  probe 无法可靠确定                 → UNKNOWN_STATE
    */
-  async inspectLockState(): Promise<{ state: LockState; detail?: string; corruptOwnership?: boolean }> {
+  async inspectLockState(): Promise<{ state: LockState; detail?: string; corruptOwnership?: boolean; ownerInstanceId?: string }> {
     const st = await this.readOwnershipState()
     if (st.kind === 'missing') {
       // 无所有权文件：可能在创建中、也已被清除 —— **报告**层如实说「没有锁」（issue #79）。
@@ -1002,7 +1002,9 @@ export class EnvironmentLockManager {
     const heartbeatFresh = heartbeat !== null && (now - heartbeat.heartbeatAt) <= this.staleAfterMs
 
     if (heartbeatFresh) {
-      return { state: 'LOCKED', detail: `owner op=${rec.op} pid=${rec.owner.pid} (heartbeat fresh)` }
+      // ownerInstanceId 供**宿主内部**做 journal↔锁归属匹配（recovery status 的 in-flight 判定）。
+      // 它不是诊断文案：绝不进 HTTP 响应体（编排器只消费，不回传）。
+      return { state: 'LOCKED', ownerInstanceId: rec.owner.instanceId, detail: `owner op=${rec.op} pid=${rec.owner.pid} (heartbeat fresh)` }
     }
 
     // heartbeat 已过期：先探测 PID liveness（kill(pid,0) 跨平台可靠；ESRCH = 确证不存在）
@@ -1014,7 +1016,7 @@ export class EnvironmentLockManager {
     }
     // 确证死亡（ESRCH）→ STALE（不依赖 OS identity 能力）
     if (!ident.alive) {
-      return { state: 'STALE_LOCK_DETECTED', detail: utilsMsg('utils.envLock.ownerConfirmedDead', { pid: rec.owner.pid }) }
+      return { state: 'STALE_LOCK_DETECTED', ownerInstanceId: rec.owner.instanceId, detail: utilsMsg('utils.envLock.ownerConfirmedDead', { pid: rec.owner.pid }) }
     }
     // PID 存活：需 OS identity 区分「reuse」与「同一进程 alive（heartbeat degraded）」
     // —— capability/值缺失 → 无法可靠确定 → UNKNOWN_STATE（保守拒删）
@@ -1027,6 +1029,7 @@ export class EnvironmentLockManager {
       if (longExpired !== null) {
         return {
           state: 'STALE_LOCK_DETECTED',
+          ownerInstanceId: rec.owner.instanceId,
           detail: utilsMsg('utils.envLock.ownerAliveUnverifiable', { pid: rec.owner.pid, longExpired }),
         }
       }
@@ -1036,10 +1039,10 @@ export class EnvironmentLockManager {
       }
     }
     if (rec.owner.osProcessStartIdentity !== ident.osProcessStartIdentity) {
-      return { state: 'STALE_LOCK_DETECTED', detail: utilsMsg('utils.envLock.pidReuse', { pid: rec.owner.pid }) }
+      return { state: 'STALE_LOCK_DETECTED', ownerInstanceId: rec.owner.instanceId, detail: utilsMsg('utils.envLock.pidReuse', { pid: rec.owner.pid }) }
     }
     // alive 且 identity 相同 → owner alive（heartbeat degraded 保护）
-    return { state: 'LOCKED', detail: utilsMsg('utils.envLock.ownerAliveDegraded') }
+    return { state: 'LOCKED', ownerInstanceId: rec.owner.instanceId, detail: utilsMsg('utils.envLock.ownerAliveDegraded') }
   }
 
   /* ------------------------------------------------------------ recover (explicit) */

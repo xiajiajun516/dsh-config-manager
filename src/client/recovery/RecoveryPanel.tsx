@@ -76,7 +76,7 @@ import { runStore, type RecoveryStoreSlice } from '../run-store.ts'
 import type { CrashReport, IncidentApi, RescueStatus } from './incident-api.ts'
 import { IncompleteCopiesSection } from './IncompleteCopiesSection.tsx'
 import {
-  isSnapshotTrusted, isVerdictAttention, isVerdictSuccess, toRecoveryPreviewView,
+  isSnapshotTrusted, isVerdictAttention, isVerdictSuccess, recoveryBlockReason, toRecoveryPreviewView,
   toRecoveryView,
   crashAdviceKey,
   crashReasonKey,
@@ -1487,6 +1487,14 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
   const previewView = state.preview !== null ? toRecoveryPreviewView(state.preview) : null
   /** 真有待处理事项（口径唯一来源 = 纯函数 recovery-view.ts 的 recoveryRequired）：决定副标题与空态 */
   const needsAttention = view?.recoveryRequired === true
+  /**
+   * 选中项是否属于「正在正常执行中」的操作。是 ⇒ 恢复/放弃都不该点：它还在跑，
+   * quarantine 会把在跑的 journal 从 active/ 抽走。据此给出**原因**而不是灰按钮。
+   */
+  const selectedLive = selected !== undefined
+    && (view?.activeOperations.some((op) => op.operationId === selected.operationId) ?? false)
+  /** 选中项「执行恢复」不可用的原因（null = 可用）——见 recovery-view.ts recoveryBlockReason */
+  const selectedBlockReason = selected !== undefined ? recoveryBlockReason(selected) : null
 
   return (
     <div className={css.viewBody}>
@@ -1515,9 +1523,15 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       )}
 
       {/* —— 状态与待处理事项（先异常、后诊断）：三块诊断卡在下方，缺省只展开磁盘占用 —— */}
-      {/* SAFE MODE / recovery-required 状态提示（正常态不渲染任何横幅——无事项即静默） */}
+      {/* SAFE MODE / recovery-required 状态提示（正常态不渲染任何横幅——无事项即静默）。
+          **文案必须与真实阻断态同源**：recoveryRequired 只是「有待处理事项」，不等于写操作已被
+          暂停（残留锁 / 中断的档案复制都不会让 safeMode.blocked 为 true）。此前这里无条件说
+          「已进入安全模式（会修改配置的操作已暂停）」⇒ 用户看到保护提示，实际上许多写操作照常
+          成功，属于假警报（也让真正被阻断的场景失去可信度）。 */}
       {view?.recoveryRequired === true && (
-        <Banner kind="error">{t('recovery.currentState.safeMode')}</Banner>
+        <Banner kind="error">
+          {view.safeModeBlocked ? t('recovery.currentState.safeMode') : t('recovery.currentState.itemsOnly')}
+        </Banner>
       )}
 
       {state.status === 'loading' && <SkeletonList label={t('recovery.loading')} />}
@@ -1561,6 +1575,26 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
             <Button variant="danger" disabled={lockBusy} loading={lockBusy} onClick={() => { setLockConfirmOpen(true) }}>
               {lockBusy ? t('recovery.lock.busy') : t('recovery.lock.action')}
             </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* 正在正常执行的操作（不是 incident）：给一句「会自行结束」，避免用户以为面板出了故障。
+          这一块存在的理由：此前 autosync push 在跑的 12 秒里，它被当成了待处理事故。 */}
+      {state.status === 'ready' && (view?.activeOperations.length ?? 0) > 0 && (
+        <Card className={css.card}>
+          <div className={css.groupLabel}>{t('recovery.live.title')}</div>
+          <div className={css.hint}>{t('recovery.live.hint')}</div>
+          <div className={css.snapshotList}>
+            {view!.activeOperations.map((op) => (
+              <div key={op.operationId} className={css.snapshotRow}>
+                <span className={css.snapshotRowMain} title={op.operationId}>
+                  <span>{op.operationType}</span>
+                  <span>{new Date(op.startedAt).toLocaleString()}</span>
+                  <span><Badge kind="info">{incidentStateLabel(t, op.state)}</Badge></span>
+                </span>
+              </div>
+            ))}
           </div>
         </Card>
       )}
@@ -1692,13 +1726,25 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
 
               {state.actionError !== null && <Banner kind="error">{state.actionError}</Banner>}
 
+              {/* 「执行恢复」不可用的原因：灰按钮不带解释 = 用户只能盲猜（这正是事故里的体验）。
+                  三种原因互斥且都能被代码逐条证明：操作仍在跑 / 无绑定快照 / 决策为需人工处理。 */}
+              {selectedLive ? (
+                <Banner kind="info">{t('recovery.incident.liveBlocked')}</Banner>
+              ) : state.verifyResult === null && selectedBlockReason !== null ? (
+                <div className={css.hint}>
+                  {selectedBlockReason === 'noSnapshot'
+                    ? t('recovery.incident.blockReason.noSnapshot')
+                    : t('recovery.incident.blockReason.needsAttention')}
+                </div>
+              ) : null}
+
               {/* 动作区 */}
               <div className={css.actionRow}>
                 {state.verifyResult === null && (
                   <>
                     <Button
                       variant="danger"
-                      disabled={state.running || !(previewView?.actionable ?? false)}
+                      disabled={state.running || selectedLive || !(previewView?.actionable ?? false)}
                       loading={state.running}
                       onClick={() => { setConfirmOpen(true) }}
                     >
@@ -1706,7 +1752,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
                     </Button>
                     <Button
                       variant="ghost"
-                      disabled={state.running}
+                      disabled={state.running || selectedLive}
                       onClick={() => { setDismissOpen(true) }}
                     >
                       {t('recovery.dismiss')}

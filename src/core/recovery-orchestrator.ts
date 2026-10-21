@@ -76,9 +76,10 @@ export interface RecoveryOrchestratorDeps {
   /**
    * 只读环境锁状态（issue #31）。**由宿主注入而非本模块 import**：本模块不依赖 env-lock，
    * 无锁环境（测试 mock 端口）可返回保守的 UNKNOWN_STATE。
-   * detail 含 owner pid/op 等内部诊断 → 只用于日志，绝不进响应体。
+   * detail / ownerInstanceId 含 owner pid/op/实例标识等内部诊断 → 只用于日志与
+   * **本模块内部**的 journal↔锁归属匹配，绝不进响应体。
    */
-  inspectLockState: () => Promise<{ state: string; detail?: string }>;
+  inspectLockState: () => Promise<{ state: string; detail?: string; ownerInstanceId?: string }>;
   /**
    * 显式回收 stale 残留锁（EnvironmentLockManager.recoverStaleLock）。
    * **调用方不得先 acquire 锁**：要回收的正是挡住 acquire 的那把锁，先取锁必然失败。
@@ -117,6 +118,35 @@ export interface RecoveryOrchestrator {
 export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): RecoveryOrchestrator {
   const { store, runs, snapshotsDir, host, snapshotExists, getEnvironmentFingerprint, clearSafeMode, inspectLockState, recoverStaleLock } = deps;
   const safeModeBlocked = deps.safeModeBlocked ?? ((): boolean => false);
+
+  /**
+   * 该 active journal 是否属于「正在正常执行中的外部操作」（in-flight），而不是
+   * 「一次未正常完成的操作」（incident）。
+   *
+   * 为什么必须区分：autosync push 的 journal 在整个执行期间存在于 `transactions/active/`
+   * （state=CREATED→APPLYING，成功后直接 moveToCompleted）。旧 status() 把所有非 terminal
+   * 的 active journal 一律当 incident 上报 ⇒ 正在跑的 push 被显示成「需要人工处理」的事故，
+   * 顶部冒出「配置修改已被保护」+「已进入安全模式」，而这类 journal 没有 snapshotId、
+   * decision 恒为 needs-attention ⇒ 「执行恢复」永久灰；唯一出口 dismiss 又要 GLOBAL 锁，
+   * 而锁正被同一个操作持着 ⇒ 点一次 423 一次。用户界面上是个纯粹的死胡同。
+   *
+   * 判据三合一，任一不成立就保守地仍按 incident 上报：
+   *  1. state 非 terminal 且非 NEEDS_ATTENTION（后者是明确的「需人工处理」）；
+   *  2. 环境锁 state === 'LOCKED'（另一任务活跃持有；STALE/UNKNOWN 都不可当作「有人在跑」）；
+   *  3. journal.ownerInstanceId === 锁持有者的 owner.instanceId —— 证明持锁的实例**就是**
+   *     写这条 journal 的实例，即它正在跑，而非上次崩溃的残骸。
+   *
+   * 不用时间窗启发式：op 执行期间 journal 本来就可能长时间不写（外部步骤无中途落盘），
+   * 任何「多久没更新算卡住」的阈值都会误伤慢速 push。
+   */
+  const isLiveInFlight = (j: OperationJournal, lock: { state: string; ownerInstanceId?: string } | undefined): boolean => {
+    if (lock === undefined || lock.state !== 'LOCKED') return false;
+    if (isTerminalState(j.state) || j.state === 'NEEDS_ATTENTION') return false;
+    const holder = lock.ownerInstanceId;
+    if (holder === undefined || holder === '') return false;
+    const owner = j.ownerInstanceId;
+    return owner !== null && owner !== '' && owner === holder;
+  };
 
   /**
    * 只读 recovery decision（不修改 journal）。**不用 reconcileActive**：其 §6.5 硬门控会把
@@ -214,15 +244,44 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       // 「解除安全模式」入口，而不是显示「暂无需要处理的恢复事项」然后继续 423。
       const blocked = safeModeBlocked();
       const clearable = blocked ? await resolveSafeMode(true) : false;
+      // issue #31：附带环境锁分类。**只暴露分类，不暴露 owner pid/op/hostname**（内部诊断）。
+      // attention 只对「需用户显式处理」的状态为 true：STALE_LOCK_DETECTED（残留锁，重试不会自愈）
+      // 与 UNKNOWN_STATE（无法判定）→ 引导用户回收；LOCKED（另一任务活跃持有）会自行释放，
+      // 不该催用户去「回收」，否则又是一个误导。探测失败 → 保守 UNKNOWN_STATE + attention。
+      //
+      // 探测必须**先于** incident 分类：LOCKED 且持有者 == journal.ownerInstanceId 时该 journal
+      // 是「正在跑」，不该进 incidents（解释见 isLiveInFlight）。
+      let lock: { state: string; attention: boolean } | undefined;
+      let lockInsp: { state: string; ownerInstanceId?: string } | undefined;
+      try {
+        const insp = await inspectLockState();
+        lockInsp = insp.ownerInstanceId !== undefined
+          ? { state: insp.state, ownerInstanceId: insp.ownerInstanceId }
+          : { state: insp.state };
+        lock = {
+          state: insp.state,
+          attention: insp.state === 'STALE_LOCK_DETECTED' || insp.state === 'UNKNOWN_STATE',
+        };
+      } catch {
+        lock = { state: 'UNKNOWN_STATE', attention: true };
+      }
       const activeIds = await store.scanActive();
       const incidents: Array<{
         operationId: string; operationType: string; state: string; decision: string;
         snapshotId: string | null; reason: string; createdAt: string;
       }> = [];
+      /** 正在正常执行的操作（不是 incident）：面板据此解释「为什么现在什么都点不动」。 */
+      const live: Array<{ operationId: string; operationType: string; state: string; startedAt: string }> = [];
       for (const opId of activeIds) {
         const j = await store.loadActive(opId);
         if (j === null) continue;
         if (isTerminalState(j.state) && j.state !== 'NEEDS_ATTENTION') continue; // COMMITTED/ROLLED_BACK/RECOVERED → 非 incident
+        // 正在跑的操作：既不进 incidents（否则伪装成事故 + 假 SAFE MODE 横幅），
+        // 也不进 running（那是 recovery run），单列进 live 供界面如实说明。
+        if (isLiveInFlight(j, lockInsp)) {
+          live.push({ operationId: opId, operationType: j.operationType, state: j.state, startedAt: j.createdAt });
+          continue;
+        }
         const d = await decision(j);
         incidents.push({
           operationId: opId,
@@ -235,23 +294,10 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
         });
       }
       const running = runs.listActive().filter((r) => r.kind === 'recovery').map((r) => ({ runId: r.runId, status: r.status }));
-      // issue #31：附带环境锁分类。**只暴露分类，不暴露 owner pid/op/hostname**（内部诊断）。
-      // attention 只对「需用户显式处理」的状态为 true：STALE_LOCK_DETECTED（残留锁，重试不会自愈）
-      // 与 UNKNOWN_STATE（无法判定）→ 引导用户回收；LOCKED（另一任务活跃持有）会自行释放，
-      // 不该催用户去「回收」，否则又是一个误导。探测失败 → 保守 UNKNOWN_STATE + attention。
-      let lock: { state: string; attention: boolean } | undefined;
-      try {
-        const insp = await inspectLockState();
-        lock = {
-          state: insp.state,
-          attention: insp.state === 'STALE_LOCK_DETECTED' || insp.state === 'UNKNOWN_STATE',
-        };
-      } catch {
-        lock = { state: 'UNKNOWN_STATE', attention: true };
-      }
       // issue #56：SAFE MODE 阻断态如实回传。`clearable` = 「结案但保护仍开着」
       // （durable 标记在、没有任何未解决 incident）—— 界面据此渲染显式解除入口。
-      return { status: 200, body: { incidents, running, lock, safeMode: { blocked, clearable } } };
+      // live 是**加法字段**：旧客户端读不到就按「无进行中操作」处理，不影响既有渲染。
+      return { status: 200, body: { incidents, running, live, lock, safeMode: { blocked, clearable } } };
     },
 
     async preview(operationId) {
@@ -366,6 +412,17 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
       if (userConfirmed !== true) return { status: 400, body: { error: 'userConfirmed required' } };
       const j = await store.loadActive(operationId);
       if (j === null) return { status: 404, body: { error: 'operation not found' } };
+      // 正在执行的操作不能「放弃」：它不是事故，quarantine 会把在跑的那条 journal 从 active/
+      // 抽走，让执行方后续 transition 失败。正常情况下这条路径走不到 —— 路由的 GLOBAL 锁
+      // 会先以 423 挡下；这里是防御性判据（锁端口未接线/跨进程判定差异时仍能给出准确原因，
+      // 而不是笼统的「另一个任务正在运行」）。
+      let lockForDismiss: { state: string; ownerInstanceId?: string } | undefined;
+      try {
+        lockForDismiss = await inspectLockState();
+      } catch { /* 探测失败 → 不拦（保持旧行为） */ }
+      if (isLiveInFlight(j, lockForDismiss)) {
+        return { status: 409, body: { error: engineMsg('core.recovery.opInFlight', { state: j.state }), code: 'operation-in-flight' } };
+      }
       // dismiss → quarantine（用户放弃；不删除 snapshot/journal evidence，不强行 RECOVERED）
       const result = await executeRecovery(store, { operationId, action: 'dismiss', snapshotId: j.snapshotId }, true);
       if (result === 'failed') return { status: 400, body: { error: engineMsg('core.recovery.dismissFailed') } };

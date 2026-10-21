@@ -23,7 +23,8 @@ export const zh = {
   'recovery.banner': '配置修改已被保护：存在未完成的恢复事项。请先处理后继续。',
   'recovery.bannerAction': '去处理',
   'recovery.required': '需要恢复',
-  'recovery.requiredHint': '检测到一次操作未正常完成，为安全起见已暂停所有会修改配置的操作。请处理以下恢复事项以恢复正常。',
+  // 「有待处理事项」≠「写操作已被暂停」：后者只有 safeMode.blocked 才成立（横幅文案另有一对键）。
+  'recovery.requiredHint': '存在需要处理的恢复事项（残留锁、未完成的操作或中断的复制）。处理完这些事项即恢复正常。',
   'recovery.rollbackRecommended': '建议回滚',
   'recovery.rollbackContinue': '续跑回滚',
   'recovery.inProgress': '恢复进行中',
@@ -54,6 +55,15 @@ export const zh = {
   // 当前状态
   'recovery.currentState.title': '当前状态',
   'recovery.currentState.safeMode': '已进入安全模式（会修改配置的操作已暂停）',
+  // 有待处理事项、但 safeMode.blocked 为 false（残留锁 / 中断复制 / 旧宿主）：不得声称写操作已被暂停
+  'recovery.currentState.itemsOnly': '存在需要处理的恢复事项（写操作未被暂停）',
+  // 正在正常执行的操作（不是 incident）
+  'recovery.live.title': '正在执行的操作',
+  'recovery.live.hint': '这些操作正在正常执行中，不是未完成的恢复事项；结束后会自动消失。',
+  // 「执行恢复 / 放弃恢复」不可用的原因（灰按钮必须能自证）
+  'recovery.incident.liveBlocked': '该操作仍在进行中，现在不能恢复也不能放弃，请等它结束。',
+  'recovery.incident.blockReason.noSnapshot': '本次操作没有绑定可信恢复快照，因此无法执行恢复。',
+  'recovery.incident.blockReason.needsAttention': '该事项被判定为需要人工处理，无法自动恢复。',
   'recovery.currentState.hasSnapshot': '存在可信恢复快照',
   'recovery.currentState.noSnapshot': '无可信恢复快照',
   // 快照信息
@@ -635,7 +645,7 @@ export const en: Record<keyof typeof zh, string> = {
   'recovery.banner': 'Configuration changes are protected: there is an unfinished recovery item. Resolve it before continuing.',
   'recovery.bannerAction': 'Go to recovery',
   'recovery.required': 'Recovery Required',
-  'recovery.requiredHint': 'An operation did not complete normally. To stay safe, all config-modifying operations are paused. Handle the recovery item(s) below to restore normal operation.',
+  'recovery.requiredHint': 'Recovery item(s) need handling (a stale lock, an unfinished operation, or an interrupted copy). Resolve them to restore normal operation.',
   'recovery.rollbackRecommended': 'Rollback recommended',
   'recovery.rollbackContinue': 'Continue rollback',
   'recovery.inProgress': 'Recovery in progress',
@@ -662,6 +672,12 @@ export const en: Record<keyof typeof zh, string> = {
   'recovery.verify.verdict.unknown': 'Unknown',
   'recovery.currentState.title': 'Current state',
   'recovery.currentState.safeMode': 'Safe mode active (config-modifying operations paused)',
+  'recovery.currentState.itemsOnly': 'Recovery item(s) need handling (write operations are not paused)',
+  'recovery.live.title': 'Running operations',
+  'recovery.live.hint': 'These operations are running normally; they are not unfinished recovery items and will disappear when they finish.',
+  'recovery.incident.liveBlocked': 'This operation is still running, so it cannot be recovered or dismissed yet. Wait for it to finish.',
+  'recovery.incident.blockReason.noSnapshot': 'This operation has no trusted recovery snapshot bound to it, so recovery cannot run.',
+  'recovery.incident.blockReason.needsAttention': 'This item is classified as needing manual handling and cannot be recovered automatically.',
   'recovery.currentState.hasSnapshot': 'Trusted recovery snapshot available',
   'recovery.currentState.noSnapshot': 'No trusted recovery snapshot',
   'recovery.snapshot.title': 'Recovery snapshot',

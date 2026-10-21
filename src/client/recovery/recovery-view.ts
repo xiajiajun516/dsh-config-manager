@@ -20,7 +20,7 @@
  * NEEDS_ATTENTION 显示为 recovered、绝不在 snapshot 不可信时显示可恢复。
  */
 import type {
-  RecoveryDecision, RecoveryIncident, RecoveryPreview, RecoveryStatus, RecoveryVerdict,
+  RecoveryActiveOperation, RecoveryDecision, RecoveryIncident, RecoveryPreview, RecoveryStatus, RecoveryVerdict,
 } from '../../ui/types.ts';
 
 /** UI 顶层状态分类。 */
@@ -71,6 +71,12 @@ export interface RecoveryView {
   incidents: RecoveryIncidentView[];
   /** 进行中的 recovery run（runId + status）。 */
   running: { runId: string; status: string }[];
+  /**
+   * 正在正常执行的操作（不是 incident）。决定两件事：
+   *  ① 面板要给出一句「这些在执行中，会自行结束」，而不是让用户对着灰按钮猜；
+   *  ② 若某条 incident 恰好也在跑（宿主判定放宽/旧宿主），对应行的「执行恢复/放弃恢复」要解释原因。
+   */
+  activeOperations: RecoveryActiveOperation[];
   /** 需用户显式处理的残留锁（attention=true 时才非 null）。 */
   lock: RecoveryLockView | null;
   /**
@@ -128,12 +134,28 @@ export function toRecoveryView(status: RecoveryStatus): RecoveryView {
     recoveryRequired,
     incidents,
     running: status.running,
+    // 旧宿主不返回 live → 空数组（绝不误报「有操作在跑」）
+    activeOperations: status.live ?? [],
     lock,
     safeModeStuck,
     safeModeBlocked,
     incompleteCopies,
     incompleteCopiesNotice: incompleteCopiesNotice(status),
   };
+}
+
+/**
+ * 「执行恢复」为什么不可用（面板显示原因，而不是丢一个没有任何解释的灰按钮）。
+ *
+ * 判据与 `actionable` 严格互补（同一条规则两处呈现）：decision=needs-attention 断了
+ * 恢复路径，snapshotId 为空断了快照来源。返回 null = 可执行。
+ */
+export function recoveryBlockReason(
+  incident: Pick<RecoveryIncidentView, 'decision' | 'snapshotId'>,
+): 'needsAttention' | 'noSnapshot' | null {
+  if (incident.decision === 'needs-attention') return 'needsAttention';
+  if (incident.snapshotId === null || incident.snapshotId === '') return 'noSnapshot';
+  return null;
 }
 
 /** 单个 preview 的渲染模型。 */

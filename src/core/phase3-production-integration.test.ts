@@ -130,6 +130,10 @@ test('P0-A：runExternalIntent 记录 external step + COMMITTED', async (t) => {
   assert.ok(j);
   assert.equal(j!.steps['ext']?.external, true);
   assert.equal(j!.state, 'COMMITTED');
+  // 成功路径必须清算 external step：否则 journal 会以「COMMITTED + step 永远 planned」落盘，
+  // 事后读台账的人无法区分「已成功执行」与「根本没跑」（本机 0.1.78 事故现场正是这种形态）。
+  assert.equal(j!.steps['ext']?.status, 'done', '外部步骤成功后必须标 done');
+  assert.equal(typeof j!.steps['ext']?.appliedAt, 'string', '外部步骤成功后必须有 appliedAt');
   assert.deepEqual(await recovery.store.scanActive(), []);
 });
 
