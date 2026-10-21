@@ -114,7 +114,7 @@ test('目录目标：递归事件的相对路径按 home 归一化；filename=nu
   assert.deepEqual(h.flushes, [['skills/nodejs-testing/SKILL.md']]);
 });
 
-test('suspend() 丢弃在途事件；resume() 后静默窗口内的事件仍被屏蔽（自写回声）', () => {
+test('suspend() 丢弃在途事件；resume() 后静默窗口内的事件被推迟到窗口结束（自写回声不触发、用户改动不丢）', () => {
   const h = makeHarness(TARGETS);
   h.watcher.start();
   const dir = path.dirname(settingsAbs);
@@ -131,12 +131,15 @@ test('suspend() 丢弃在途事件；resume() 后静默窗口内的事件仍被�
   h.watcher.resume();
   h.setNow(10_000 + 1_999);
   h.fire(dir, 'settings.yaml');
-  assert.equal(h.timers.length, 0, '静默窗口内（<2000ms）不得触发');
-  h.setNow(10_000 + 2_001);
-  h.fire(dir, 'settings.yaml');
-  assert.equal(h.timers.length, 1, '静默窗口过后恢复正常');
+  assert.deepEqual(h.flushes, [], '静默窗口内（<2000ms）不得立刻回调');
+  assert.equal(h.timers.length, 1, '但必须排一枚窗口结束后的补跑定时器（真机实测：直接丢弃会让用户改动等一整轮兜底间隔）');
+  // 平台抖动 / clearTimer 未生效导致定时器提前到期：仍不得在窗口内回调，而是继续推迟
   h.runTimers();
-  assert.deepEqual(h.flushes, [['settings.yaml']]);
+  assert.deepEqual(h.flushes, [], '窗口内即便定时器到期也不得回调');
+  assert.equal(h.timers.length, 1, '必须重新排期，绝不把这次改动丢掉');
+  h.setNow(10_000 + 2_001);
+  h.runTimers();
+  assert.deepEqual(h.flushes, [['settings.yaml']], '窗口结束后补跑一次：用户改动照常上行，自家回声由引擎 hash 比对判无变化');
 });
 
 test('stop() 后不再触发；onFlush 抛错只告警（监听不能拖垮宿主）', () => {

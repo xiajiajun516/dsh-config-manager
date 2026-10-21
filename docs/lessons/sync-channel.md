@@ -59,6 +59,10 @@
 2. **同步自家写入期间必须挂起监听**：`runOnce` 内部 `watcher.suspend()`、`finally` 里 `resume()`；
    文件目标是「原子写 temp+rename」，句柄不失但会产生事件 ⇒ 不挂起就会自激。
    `resume()` 后另有 2 s 静默窗口（`DEFAULT_WATCH_QUIET_MS`），覆盖宿主侧异步收尾写入。
+   **静默窗口只「推迟」不「丢弃」**：窗口内到达的事件照样进 `pending` 并排一枚「窗口剩余 + 去抖」的补跑定时器；
+   `flush()` 另有兜底（定时器提前到期 / `clearTimer` 未生效 → 继续推迟，不在窗口内回调）。
+   真机实测过反例：旧实现直接 `return` 丢弃，用户刚保存的配置要等一整轮兜底 `interval` 才上行。
+   自家回声不靠「丢弃」挡，而由引擎的分区 hash 比对判成「无变化」（多跑一轮零传输）。
 3. **触发不丢**：正在跑 → 记 `pendingTrigger`，本轮收尾后立刻补跑；距上轮开始不足 `minTriggerGapMs`（缺省 3 s）
    → 每通道**至多一枚**延迟定时器（连续保存合并成一轮），绝不丢弃。
 4. **定时器降级为兜底**：`interval` 仍是兜底节奏（5m…24h），远端探测另有 `remoteCheckMs`（缺省 60 s，
@@ -71,9 +75,13 @@
 - `src/sync/watch-scope.test.ts`（6 项）：14 个目标逐条存在、`profiles/<p>` 的 `patches/` 递归、`file` 目标只监听父目录非递归；
   负例断言**绝不**监听 `''` / `sessions` / `profiles` 根 / 四个 `sync-*.json`。
 - `src/sync/sync-watcher.test.ts`（8 项）：去抖只排一枚定时器、`*.tmp-*` 与 `node_modules`/`.git` 噪声被过滤、
-  `suspend` 丢弃在途并屏蔽事件、`resume` 后 2 s 内不触发、`stop` 后旧句柄回声不排期、挂载失败只降级（`attachmentCount = n-1`）不抛错。
+  `suspend` 丢弃在途并屏蔽事件、`resume` 后 2 s 内不回调但**必须排补跑定时器**（窗口结束即补跑，绝不丢用户改动）、
+  `stop` 后旧句柄回声不排期、挂载失败只降级（`attachmentCount = n-1`）不抛错。
 - `src/sync/autosync-scheduler.test.ts` 四个 realtime 用例：本地改动即触发一轮（期间 `suspend`/`resume` 各 +1）；
   gap 内二次改动只保留一枚定时器、到点后**合并成一轮**；`realtime:false` 不挂监听且只排 interval；
   `remoteCheckMs` 到点触发后立刻重排。
+- **真机 `fs.watch` 实测**（临时 home，7/14 目标挂载、其余路径不存在按设计降级）：改 `settings.yaml` → flush `['settings.yaml']`；
+  改 `skills/demo/SKILL.md` → flush `['skills/demo','skills/demo/SKILL.md']`；`node_modules` 与 `*.tmp-*` 零触发；
+  `suspend` 期间零触发；**静默窗口内的写入不丢**（窗口内无回调，窗口结束立即补跑一次）。
 - **未做真机端到端验证**：未在真实 git/webdav 远端上跑「保存 → 立即推送」的完整链路（本轮无远端凭据）；
-  上述结论均来自单测与夹具（假 transport / 假 watchFactory）。
+  「监听 → 触发一轮」之外的下行/上行结论仍来自单测与夹具（假 transport / 假 watchFactory）。

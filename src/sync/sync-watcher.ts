@@ -12,6 +12,9 @@
  *  - **自写回声屏蔽**：调度器在 runOnce 前后 suspend()/resume()，resume 后再静默
  *    `quietAfterSuspendMs`（缺省 2000ms）——否则「同步把远端内容写回本地」自身就会触发下一轮，
  *    形成 push→apply→push 的死循环；
+ *  - **静默窗口只「推迟」不「丢弃」**：窗口内到达的事件记进 pending 并排一枚窗口结束后的补跑定时器
+ *    （真机实测：窗口内保存若直接丢弃，用户改完要等一整轮兜底间隔才上行 —— 与「改完就同步」不符）。
+ *    自家回声由引擎的分区 hash 比对判成「无变化」，多跑一轮不产生任何传输；
  *  - **纯监听、不做判定**：这里只说「有东西变了」（附带 home 相对路径），究竟哪些分区真的变了
  *    由引擎的 `hasLocalChanges()`（分区 hash 比基线）回答 —— 监听器绝不猜。
  *
@@ -190,7 +193,8 @@ export class SyncWatcher {
 
   private onRawEvent(target: WatchTarget, watchedDir: string, fileBase: string | null, filename: string | null): void {
     if (!this.started || this.suspended) return;
-    if (this.now() < this.quietUntil) return;
+    // 静默窗口内到达的事件：先记账，窗口一结束就补跑一次判定（丢弃会让用户改动漏掉一整轮兜底间隔）
+    const quietRemainingMs = this.quietUntil - this.now();
     let abs: string;
     if (fileBase !== null) {
       // 文件目标：只关心父目录里同名文件的事件（原子写的 temp 名字被噪声规则挡掉）
@@ -204,19 +208,25 @@ export class SyncWatcher {
     if (rel === null || isNoiseRelPath(rel)) return;
     void target; // sections 仅用于诊断；判定交给引擎的分区 hash
     this.pending.add(rel);
-    this.scheduleFlush();
+    this.scheduleFlush(quietRemainingMs > 0 ? quietRemainingMs + this.debounceMs : this.debounceMs);
   }
 
-  private scheduleFlush(): void {
+  private scheduleFlush(delayMs: number = this.debounceMs): void {
     if (this.timer !== null) return;
     this.timer = this.setTimer(() => {
       this.timer = null;
       this.flush();
-    }, this.debounceMs);
+    }, delayMs);
   }
 
   private flush(): void {
     if (this.pending.size === 0) return;
+    const quietRemainingMs = this.quietUntil - this.now();
+    if (quietRemainingMs > 0) {
+      // 去抖定时器提前到期：推迟到窗口结束，既不丢用户改动、也不把自家收尾写入当触发
+      this.scheduleFlush(quietRemainingMs + this.debounceMs);
+      return;
+    }
     const changed = [...this.pending];
     this.pending.clear();
     try {
