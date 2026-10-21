@@ -87,7 +87,7 @@ export function autosyncStatusLabel(status: AutosyncHistoryEntry['status'], t: S
  * 跳过原因 → 可读描述（host 透传语义；未知原因回退原串）。
  *
  * client-F1（本次收口）：conflict / no-remote / not-configured / network / encrypted /
- * mutation-locked / 未知 **七类全部**走 history.autosyncReason* 字典键 —— 此前后三类是
+ * mutation-locked / conflict-kept-local / 未知 **八类全部**走 history.autosyncReason* 字典键 —— 此前部分码是
  * 硬编码中文（sync-locales.ts 当时不可写），英文界面下会原样透出。
  */
 export function skipReasonKey(reason: string | undefined): SyncKey | null {
@@ -106,6 +106,9 @@ export function skipReasonKey(reason: string | undefined): SyncKey | null {
     // 客户端拿不到细分 reason → 文案必须同时覆盖「活锁占用」与「残留锁需回收」两种可能，
     // 并给出可操作方向（否则界面只显示裸 token，用户无从判断要不要处理）。
     case 'mutation-locked': return 'history.autosyncReasonMutationLocked';
+    // 真·自动同步（conflictPolicy='local'）：冲突已按策略「保留本机并推上去」消解，
+    // 远端那一版被覆盖（仍在远端历史快照里，可回滚）—— 必须与「冲突待裁决」分开说。
+    case 'conflict-kept-local': return 'history.autosyncReasonConflictKeptLocal';
     // 未知原因：没有字典键（调用方决定回退策略）
     default: return null;
   }

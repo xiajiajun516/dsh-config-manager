@@ -121,7 +121,11 @@ test('t42: 组件按职责物理拆分成独立文件（各自导出 + 主文件
   //     页面侧只多一个 mergeSeed 状态、一个 mergeApplying 状态与一个弹窗块。
   // 1560 不变（加载动画 + 合并弹窗重设计）：新增的在途活动条抽成 SyncActivityBar.tsx，
   //   裁决弹窗壳/状态/请求抽成 MergeModal.tsx（主文件只留一次挂载），主文件因此仍然回落。
-  assert.ok(viewLines <= 1560, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
+  // 1560 → 1600（真·自动同步：三项策略开关）。增量逐项都是**装配**，三个控件本身在 AutosyncCard.tsx：
+  //   · updateAutosyncOptions：一次 api.autosyncUpdate + 两处 patchChannelOf（就地回填 autosync/interval/realtime）；
+  //   · 卡片新增 onUpdateOptions 接线与 import 两个类型（realtime / 分档 / 冲突策略都是通道级状态）。
+  //   没有可再下沉的纯逻辑：判定与文案都在 ui 层（sync-settings-view.ts）与字典里，这里只是 state 通道。
+  assert.ok(viewLines <= 1600, '主文件行数必须保持在拆分后的量级（实际 ' + viewLines + ' 行）')
 })
 
 test('t42: 通道卡必须是渲染函数（内联组件 = 每次渲染新类型 → 子树重挂、Select 展开态清零）', () => {

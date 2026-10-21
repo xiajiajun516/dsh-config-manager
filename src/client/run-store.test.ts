@@ -1617,7 +1617,7 @@ test('P0-9: 持久化字段清单显式化（键集合断言 —— 新增字段
     'loadError', 'pullReport', 'pushPreview', 'pushReport', 'repoUrl', 'webdavUrl', 'webdavUsername',
   ])
   assert.deepEqual(keys(p.sync.byChannel.git), [
-    'autosync', 'autosyncEnabled', 'autosyncInterval', 'encrypt', 'includeSecrets',
+    'autosync', 'autosyncEnabled', 'autosyncInterval', 'autosyncRealtime', 'encrypt', 'includeSecrets',
     'loadingSnapshots', 'selectedSnapshotId', 'sessionsInclude', 'sessionsLimit', 'snapshots',
     'syncMode', 'syncSections',
   ])

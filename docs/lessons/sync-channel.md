@@ -47,3 +47,33 @@
   **未对真实 WebDAV / S3 / Gist 端点做端到端验证**（本批无真实凭据）—— 条件写在服务端不支持时是退化为无条件写，
   因此「真实服务端是否回 ETag / 是否按 412 拒绝」仍属未验证项。
 
+
+## 自动同步「真·自动」：两条即时通道 + 策略默认值（2026-10）
+
+**规则（硬）**：
+1. **监听范围只能覆盖「可同步分区的落盘路径」，绝不含自写路径**：`sync-state.json` / `sync-history.json` /
+   `sync-autosync.json` / `backup-schedule.json` 与 `sessions/` 一律不监听 —— 前者会让每轮同步写回自己的状态、
+   立刻再触发下一轮（自激）；后者是 GB 级日志且会话恒为 `manual` 档，监听它既无意义又会拖垮宿主。
+   监听清单唯一来源 = `src/sync/watch-scope.ts` 的 `buildWatchTargets()`（由 `SECTION_JSON_PATHS` /
+   `SECTION_FILE_PREFIXES` 与注册表分区口径派生），不要在调度器里另写一份路径数组。
+2. **同步自家写入期间必须挂起监听**：`runOnce` 内部 `watcher.suspend()`、`finally` 里 `resume()`；
+   文件目标是「原子写 temp+rename」，句柄不失但会产生事件 ⇒ 不挂起就会自激。
+   `resume()` 后另有 2 s 静默窗口（`DEFAULT_WATCH_QUIET_MS`），覆盖宿主侧异步收尾写入。
+3. **触发不丢**：正在跑 → 记 `pendingTrigger`，本轮收尾后立刻补跑；距上轮开始不足 `minTriggerGapMs`（缺省 3 s）
+   → 每通道**至多一枚**延迟定时器（连续保存合并成一轮），绝不丢弃。
+4. **定时器降级为兜底**：`interval` 仍是兜底节奏（5m…24h），远端探测另有 `remoteCheckMs`（缺省 60 s，
+   夹取 15 s–1 h，只在 `realtime` 开启时排期）；两条即时通道都关掉时行为与改造前一致。
+5. **风险分级与冲突策略是「按通道」配置**：`autoApplyTier` 缺省 `medium`（`plugins`/`mcp` 也自动落盘，
+   `high` 恒不自动）；`conflictPolicy` 缺省 `local`（保留本机并 `push({force:true})`）。
+   `'remote'` 档**刻意不存在** —— 它等价于让远端整体覆盖本机，会绕过风险分级。
+
+**证据 / 实测**：
+- `src/sync/watch-scope.test.ts`（6 项）：14 个目标逐条存在、`profiles/<p>` 的 `patches/` 递归、`file` 目标只监听父目录非递归；
+  负例断言**绝不**监听 `''` / `sessions` / `profiles` 根 / 四个 `sync-*.json`。
+- `src/sync/sync-watcher.test.ts`（8 项）：去抖只排一枚定时器、`*.tmp-*` 与 `node_modules`/`.git` 噪声被过滤、
+  `suspend` 丢弃在途并屏蔽事件、`resume` 后 2 s 内不触发、`stop` 后旧句柄回声不排期、挂载失败只降级（`attachmentCount = n-1`）不抛错。
+- `src/sync/autosync-scheduler.test.ts` 四个 realtime 用例：本地改动即触发一轮（期间 `suspend`/`resume` 各 +1）；
+  gap 内二次改动只保留一枚定时器、到点后**合并成一轮**；`realtime:false` 不挂监听且只排 interval；
+  `remoteCheckMs` 到点触发后立刻重排。
+- **未做真机端到端验证**：未在真实 git/webdav 远端上跑「保存 → 立即推送」的完整链路（本轮无远端凭据）；
+  上述结论均来自单测与夹具（假 transport / 假 watchFactory）。

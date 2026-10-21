@@ -133,8 +133,13 @@ import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './sync/
 import type { RetentionPolicy } from './sync/retention-policy.ts'
 import type { PruneSelector } from './core/backup.ts'
 import { selectPruneCandidates } from './core/backup.ts'
-import { readAllAutosyncConfigs, readAutosyncConfig } from './sync/autosync-config.ts'
-import type { AutosyncInterval, AutosyncRunStatus } from './sync/autosync-config.ts'
+import {
+  readAllAutosyncConfigs, readAutosyncConfig, DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS,
+  DEFAULT_AUTOSYNC_AUTO_APPLY_TIER, DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+} from './sync/autosync-config.ts'
+import type {
+  AutosyncInterval, AutosyncRunStatus, AutosyncAutoApplyTier, AutosyncConflictPolicy,
+} from './sync/autosync-config.ts'
 import { appendAutosyncEntry } from './sync/sync-history.ts'
 import { MigrationStore, type MigrationKind, type MigrationResult, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
 import { readSyncConfig, validateRepoUrl, validateWebDavUrl, isWebDavConfig, isS3Config, isGistConfig, channelOf, parseSyncChannel, SYNC_CHANNELS, GIST_PROVIDER, isS3CompatProvider, validateCloudChannelInput, cloudSecretRef } from './sync/sync-config.ts'
@@ -2700,6 +2705,11 @@ export async function buildAutosyncStatus(dir: string, channel: SyncTransportTyp
   return {
     enabled: cfg.enabled,
     interval: cfg.interval,
+    // 真·自动同步三件套（缺省值在读取层已补齐，这里回传「生效中的值」）
+    realtime: cfg.realtime ?? DEFAULT_AUTOSYNC_REALTIME,
+    remoteCheckMs: cfg.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS,
+    autoApplyTier: cfg.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+    conflictPolicy: cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
     ...(cfg.lastRunAt !== undefined ? { lastRunAt: cfg.lastRunAt } : {}),
     ...(cfg.lastRunStatus !== undefined ? { lastRunStatus: cfg.lastRunStatus } : {}),
     ...(cfg.lastRunMessage !== undefined ? { lastRunMessage: cfg.lastRunMessage } : {}),
@@ -2723,6 +2733,10 @@ export async function buildAutosyncStatusByChannel(dir: string): Promise<Record<
     return {
       enabled: cfg.enabled,
       interval: cfg.interval,
+      realtime: cfg.realtime ?? DEFAULT_AUTOSYNC_REALTIME,
+      remoteCheckMs: cfg.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS,
+      autoApplyTier: cfg.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+      conflictPolicy: cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY,
       ...(cfg.lastRunAt !== undefined ? { lastRunAt: cfg.lastRunAt } : {}),
       ...(cfg.lastRunStatus !== undefined ? { lastRunStatus: cfg.lastRunStatus } : {}),
       ...(cfg.lastRunMessage !== undefined ? { lastRunMessage: cfg.lastRunMessage } : {}),
@@ -2743,6 +2757,14 @@ export async function buildAutosyncStatusByChannel(dir: string): Promise<Record<
 interface AutosyncStatusResponse {
   enabled: boolean
   interval: AutosyncInterval
+  /** 真·自动同步：本地改动即时触发（缺省 true） */
+  realtime: boolean
+  /** realtime 下的远端轮询间隔（ms） */
+  remoteCheckMs: number
+  /** 自动应用的最高风险等级（缺省 medium：plugins/mcp 也自动落盘） */
+  autoApplyTier: AutosyncAutoApplyTier
+  /** 双侧都改时的策略（缺省 local：保留本机并推上去） */
+  conflictPolicy: AutosyncConflictPolicy
   lastRunAt?: string
   lastRunStatus?: AutosyncRunStatus
   lastRunMessage?: string
@@ -3601,6 +3623,10 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
     mutationLock: host.mutationLock,
     isBlocked: () => host.safeModeIsBlocked?.() ?? false,
     phase3Recovery: host.phase3Recovery,
+    // 真·自动同步：本地配置文件监听（realtime 通道）以 $DSH_HOME 为基准；
+    // 监听清单由 sync/watch-scope.ts 静态派生，已排除 sessions/ 与调度器自写文件（避免自激）。
+    homeDir: host.homeDir,
+    ...(host.profile === undefined ? {} : { profile: host.profile }),
     // Phase 6：autosync 既写 sync-history.json（既有语义），也写统一迁移历史（COMPLETE 不变量）。
     appendHistoryFn: async (entry) => {
       await appendAutosyncEntry(syncDir, entry).catch(() => undefined)

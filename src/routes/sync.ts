@@ -45,7 +45,7 @@ import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDEN
 import { GitHubApiError } from '../market/github-repos.ts'
 import type { SectionId } from '../schema/types.ts'
 import { redact } from '../security/redaction.ts'
-import { readAutosyncConfig, writeAutosyncConfig } from '../sync/autosync-config.ts'
+import { readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs } from '../sync/autosync-config.ts'
 import { isValidExportFileName } from '../sync/backup-files.ts'
 import { DeviceFlowStore } from '../sync/github-auth.ts'
 import { channelOf, clearSyncChannel, isWebDavConfig, listCloudConfiguredProviders, parseSyncChannel, readFullSyncConfig, writeSyncConfig, gistChannelView, s3ChannelView, cloudSecretRef, S3_COMPAT_PROVIDERS, GIST_PROVIDER } from '../sync/sync-config.ts'
@@ -1055,7 +1055,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       }
     }),
     // ------------------------------------------------------ sync/autosync
-    // m-sync-v2：自动同步配置读写（按通道：git/webdav 各自的开关 + 间隔 + 启动阈值 + 状态）。
+    // m-sync-v2：自动同步配置读写（按通道：开关 + 兜底间隔 + 启动阈值 + realtime 监听/远端轮询
+    // + 自动应用等级 + 冲突策略 + 运行状态）。
     // GET = 读全部通道状态（{ git, webdav }）；POST = 写指定通道（body.transport，缺省 git）。
     // 同一路径注册为一个 exact 路由（方法内部分发），避免 webserver 对重复 exact 路径报错。
     endpoint({ path: '/api/dsh-config-manager/sync/autosync', methods: ['GET', 'POST'] }, async (req, res) => {
@@ -1076,6 +1077,19 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         if (typeof body['interval'] === 'string' && isAutosyncInterval(body['interval'])) cfg.interval = body['interval']
         if (typeof body['startupMinIntervalMs'] === 'number' && Number.isFinite(body['startupMinIntervalMs']) && body['startupMinIntervalMs'] > 0) {
           cfg.startupMinIntervalMs = body['startupMinIntervalMs']
+        }
+        // 真·自动同步：本地改动即时触发开关 + 远端轮询节奏（非法值一律忽略，绝不写 NaN）
+        if (typeof body['realtime'] === 'boolean') cfg.realtime = body['realtime']
+        if (typeof body['remoteCheckMs'] === 'number' && Number.isFinite(body['remoteCheckMs'])) {
+          cfg.remoteCheckMs = clampRemoteCheckMs(body['remoteCheckMs'])
+        }
+        // 自动应用等级：low = 只自动落低风险分区；medium = plugins/mcp 也自动落盘
+        if (body['autoApplyTier'] === 'low' || body['autoApplyTier'] === 'medium') {
+          cfg.autoApplyTier = body['autoApplyTier']
+        }
+        // 冲突策略：ask = 保留冲突待人工裁决；local = 保留本机并推上去（缺省）
+        if (body['conflictPolicy'] === 'ask' || body['conflictPolicy'] === 'local') {
+          cfg.conflictPolicy = body['conflictPolicy']
         }
         await writeAutosyncConfig(syncDir, channel, cfg)
         if (scheduler) scheduler.reload().catch(() => { /* 尽力而为 */ })

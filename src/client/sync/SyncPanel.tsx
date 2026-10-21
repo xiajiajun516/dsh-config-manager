@@ -56,7 +56,8 @@ import { copyTextToClipboard } from '../common/clipboard.ts'
 import { sectionLabeler } from '../common/section-labels.ts'
 import { runStore, toSyncStoreSlice, type SyncConfirmDecisions, type SyncStoreSlice } from '../run-store.ts'
 import type {
-  AutosyncInterval, MergePreviewResponse, SyncApi, SyncPushPayload, SyncStartResponse, SyncStatusResponse,
+  AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval, MergePreviewResponse, SyncApi,
+  SyncPushPayload, SyncStartResponse, SyncStatusResponse,
 } from './sync-api.ts'
 import { resolveSmartSync } from './sync-entry.ts'
 import {
@@ -517,9 +518,11 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
       const all = await api.autosyncStatusAll()
       patchChannelState('git', {
         autosync: all.git, autosyncEnabled: all.git.enabled, autosyncInterval: all.git.interval,
+        autosyncRealtime: all.git.realtime ?? true,
       })
       patchChannelState('webdav', {
         autosync: all.webdav, autosyncEnabled: all.webdav.enabled, autosyncInterval: all.webdav.interval,
+        autosyncRealtime: all.webdav.realtime ?? true,
       })
     } catch (err) {
       // R-20：读取自动同步状态失败（此前写入页面最底部的共享 error Banner，常滚出视野）
@@ -1136,6 +1139,35 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
     }
   }
 
+  /**
+   * 更新「真·自动同步」的三个策略项（realtime / autoApplyTier / conflictPolicy）。
+   * 只传要改的字段，其余沿用当前通道状态（显式传 enabled+interval，宿主按 read-modify-write 落盘）。
+   */
+  const updateAutosyncOptions = async (
+    channel: SyncChannel,
+    patch: { realtime?: boolean; autoApplyTier?: AutosyncAutoApplyTier; conflictPolicy?: AutosyncConflictPolicy },
+  ): Promise<void> => {
+    const cs = channelStateOf(channel)
+    if (patch.realtime !== undefined) patchChannelOf(channel, { autosyncRealtime: patch.realtime })
+    try {
+      const updated = await api.autosyncUpdate({
+        transport: channel,
+        enabled: cs.autosyncEnabled,
+        interval: cs.autosyncInterval,
+        ...patch,
+      })
+      patchChannelOf(channel, {
+        autosync: updated,
+        autosyncEnabled: updated.enabled,
+        autosyncInterval: updated.interval,
+        autosyncRealtime: updated.realtime ?? true,
+      })
+      toast.ok(t('toast.autosyncUpdated'))
+    } catch (err) {
+      toast.error(t('toast.autosyncUpdateFailed') + t('common.labelSeparator') + redact(err instanceof Error ? err.message : String(err)))
+    }
+  }
+
   /** 远端是否就绪（四通道统一判据在 ui 层：git/webdav=地址非空，s3/gist=表单校验通过）。 */
   const remoteReadyOf = (channel: SyncChannel): boolean => channelRemoteReady({ ...formOf(state), channel })
   /** 云端点表单的校验问题（对话框内联提示用；git/webdav 恒为空表）。 */
@@ -1285,7 +1317,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   title={t('syncflow.refreshSnapshots')}
                 >
                   {cs.loadingSnapshots === true
-                    ? <Spinner label={t('syncflow.refreshingSnapshots')} />
+                    ? <Spinner label={t('syncflow.refreshingSnapshots')}  size="page" />
                     : <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>}
                 </Button>
               </span>
@@ -1304,6 +1336,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               busy={busy}
               onToggleAutosync={(enabled) => { void toggleAutosync(channel, enabled) }}
               onUpdateInterval={(interval) => { void updateAutosyncInterval(channel, interval) }}
+              onUpdateOptions={(patch) => { void updateAutosyncOptions(channel, patch) }}
             />
           </Card>
         )}

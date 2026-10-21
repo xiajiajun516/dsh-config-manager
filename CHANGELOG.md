@@ -44,6 +44,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Migrating from Claude Code now brings project-level and plugin-provided pieces along**: project `CLAUDE.md`/`CLAUDE.local.md` and unscoped rule files are merged into the global instructions, while MCP servers and plugin-bundled Skills from projects and plugins are packed too; the source agent, the locations that were read, the project roots scanned, the plugins carried and the categories skipped are recorded inside the bundle, so you can audit where a package really came from.
 - **Claude Code 的插件与设置不再「不声不响地没搬」**：插件（含 marketplace 来源与版本）、子代理定义、权限规则、hooks 事件、设置的其余顶层键、带作用域的规则文件现在逐条报告「没搬 / 为什么」，并明确说明插件代码不会被复制、hook 更不会被执行。
   **Claude Code plugins and settings no longer go missing silently**: plugins (with marketplace source and version), subagent definitions, permission rules, hook events, other top-level settings keys and scoped rule files are each reported as "not migrated, and why", and it is stated plainly that plugin code is not copied and hooks are never executed.
+- **自动同步真正「自动」了**：本机配置一保存就立刻上传（不再等兜底间隔），远端也会每分钟检查一次有没有新快照；开启后按缺省策略，远端的中风险分区（插件、MCP）改动也会自动写回本机，凭据与插件数据类分区永不自动写入。不想即时上传，可以在同步页关掉「本地改动即时同步」，退回纯间隔兜底。
+  **Auto sync is now genuinely automatic**: saving a local config uploads it right away instead of waiting for the fallback interval, and the remote is checked for a new snapshot once a minute; by default medium-risk sections (plugins, MCP) are also applied back to this machine automatically, while credential and plugin-data sections are never auto-applied. Turn off "Sync local changes immediately" to fall back to interval-only polling.
 
 ### 🔧 变更 · Changed
 
@@ -70,6 +72,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **"Take the automatic merge" now appears only where there is an automatic result to take**: it used to be shown on every section and stayed permanently disabled where a section conflicts, which looked broken; sections without an automatic result no longer show the button, and the bulk "take all automatic merges" shows up only when at least one section qualifies.
 - **合并弹窗不再有「跳过」，冲突就是「留到下次」**：原来的「跳过」既没解决冲突、又与什么都不点完全等价，容易让人以为已经处理过；批量里的「仅处理无冲突项」也改成同一件事的直白说法「冲突留到下次」，只把待裁决的分区留在原处，弹窗底部如实说明还有几个分区这次不会应用。
   **The merge dialog no longer has a "skip" action — conflicts are simply left for the next sync**: skipping resolved nothing and was equivalent to not choosing at all, yet it looked like the conflict had been handled; the bulk "only handle conflict-free items" button is now the plain-spoken "leave conflicts for next sync", and the footer states how many sections this run will not apply.
+- **两侧都改了同一分区时，缺省「保留本机并推上去」**：本机版本成为新的远端最新，不再上下行都停下等人工裁决（被覆盖的远端快照仍留在历史里，可以回滚）；想改回「保留冲突待我确认」可在同步页切换，自动同步历史会写明这一轮是「已按策略保留本机并覆盖远端」。
+  **When both sides changed the same section, the default is now "keep local and push it"**: the local version becomes the new remote latest instead of stopping both directions for a manual decision (the replaced remote snapshot stays in history and can be rolled back). Switch to "Keep the conflict for review" on the sync page if you prefer the old behavior; the auto-sync history states plainly that this run kept the local version and overwrote the remote.
 
 ### 🐛 修复 · Fixed
 

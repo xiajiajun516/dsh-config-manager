@@ -12,6 +12,12 @@
  * 互不干扰；同一时刻至多执行一个通道的 runOnce（runs.register('autosync') 全局防重，
  * 避免两个引擎并发写本地配置），另一通道的定时触发在本轮结束后自然补跑。
  *
+ * 「真·自动」（VS Code 式）两条即时通道（realtime=true 时生效）：
+ *  - **本地改动即时上行**：SyncWatcher 监听本机可同步分区（watch-scope.ts 的清单，已排除
+ *    sessions/、sync-autosync.json 等自写回声路径）→ 去抖后 trigger(channel,'local-change')；
+ *  - **远端改动即时下行**：每 remoteCheckMs（缺省 60s，可 15s–1h）廉价探测一次远端是否有新快照
+ *    → trigger(channel,'remote-poll')。定时器 interval 只作兜底。
+ *
  * 核心逻辑（runOnce）：
  *  - 读该通道配置；若 !enabled → return
  *  - runs.register('autosync') 防重复；同 kind running → 跳过
@@ -19,11 +25,16 @@
  *    → 记 skipped(未配置) → return
  *  - Phase A: engine.merge() 三方合并 → 判定 needsReview（冲突/缺失依赖/Install/Error）
  *  - 冲突 → 只挡**下行**：跳过 Phase B（绝不写本地）+ 记 conflictedSections[]，
- *    但**继续**走到 Phase C 做纯上行导出（issue #79：远端冲突不该连坐「把本机配置推上去当备份」）
+ *    但**继续**走到 Phase C（issue #79：远端冲突不该连坐「把本机配置推上去当备份」）
  *  - Phase B: 无冲突 → 按 risk.ts 的 classifyMergePlan 分流（audit-sync sync-F5）：
- *    低风险项自动应用；medium/high 项**不自动应用**并进 conflictedSections（待人工确认，绝不静默）
+ *    低风险自动应用；medium 仅当 autoApplyTier='medium'（缺省）自动应用；
+ *    high/未注册/冲突项**不自动应用**并进 conflictedSections（待人工确认，绝不静默）
  *    → engine.applyMergePlan(autoApply) 写入本地
- *  - Phase C: 完整双向 → engine.push() 上传（本轮有冲突且推送成功 → 状态 partial，不谎报 success）
+ *  - Phase C: 完整双向 → engine.push() 上传。两处策略：
+ *    ① 无冲突且推送被远端推进挡下 → skipped/partial + skipReason='conflict'（等人工）；
+ *    ② conflictPolicy='local'（缺省）且本轮有冲突 → **不写本地**，改 engine.push({force:true})
+ *       把本机版本推成新的远端最新（被覆盖的远端旧版本仍在远端历史快照里可回滚），
+ *       状态记 partial + skipReason='conflict-kept-local'（绝不谎报 success）。
  *  - 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures,
  *    lastRunHistoryId, lastRunMessage/跳过原因 —— 每轮覆盖上一轮，绝不残留旧错误）
  *
@@ -42,7 +53,11 @@ import type { SyncEngine } from './sync-engine.ts';
 import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
 import { withMutationLock, LOCK_BLOCK_MESSAGE } from '../utils/env-lock.ts';
 import { engineMsg } from './messages.ts';
-import { readAutosyncConfig, writeAutosyncConfig } from './autosync-config.ts';
+import {
+  readAutosyncConfig, writeAutosyncConfig, clampRemoteCheckMs,
+  DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS, DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+  DEFAULT_AUTOSYNC_CONFLICT_POLICY,
+} from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig, isS3Config, isGistConfig, SYNC_CHANNELS } from './sync-config.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
@@ -51,6 +66,8 @@ import { classifyMergePlan } from './risk.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan } from './merge.ts';
 import type { SyncApplyPlan } from './risk.ts';
+import { SyncWatcher } from './sync-watcher.ts';
+import { buildWatchTargets } from './watch-scope.ts';
 
 /** 间隔 → ms 换算（§4.3） */
 export function intervalToMs(interval: AutosyncInterval): number {
@@ -93,6 +110,26 @@ export interface AutosyncRunResult {
   error?: string;
   historyId: string;
   consecutiveFailures: number;
+}
+
+/**
+ * runOnce 的触发语义（只影响「做什么」的两个分支，不改变同步流程本身）。
+ * reason 只进日志，用来说明这一轮是被谁叫醒的（排障时能区分「定时兜底」与「真有事发生」）。
+ */
+export interface AutosyncRunOptions {
+  /** true = 启动触发变体：只做下行合并，不上传。 */
+  startup?: boolean;
+  /** 触发来源：interval / remote-poll / local-change / manual / startup。 */
+  reason?: string;
+}
+
+/** watcher 工厂入参（缺省实现 = 真实 SyncWatcher；测试注入内存实现）。 */
+export interface WatcherFactoryOptions {
+  homeDir: string;
+  profile: string | undefined;
+  log: Logger;
+  /** 一批本地改动落地（已去抖）→ 交给调度器触发一轮同步。 */
+  onFlush: (changed: readonly string[]) => void;
 }
 
 export interface AutoSyncSchedulerOptions {
@@ -144,6 +181,17 @@ export interface AutoSyncSchedulerOptions {
       fn: (ctx?: JournalRunContext) => Promise<unknown>;
     }): Promise<{ operationId: string; result: unknown }>;
   };
+  /**
+   * 家目录（= DSH 的 $DSH_HOME）。提供时才启用「本地改动即时上行」的文件监听；
+   * 缺省（测试/未接线）→ 只靠定时器与远端轮询，行为退化为改造前。
+   */
+  homeDir?: string;
+  /** 当前 profile（决定监听 profiles/<profile>/ 下的组合 patch 与插件清单）。 */
+  profile?: string;
+  /** 注入 watcher 工厂（缺省 = 真实 SyncWatcher；测试可传内存实现）。 */
+  makeWatcher?: (opts: WatcherFactoryOptions) => SyncWatcher;
+  /** 触发合并窗口（ms）：连续保存/连续远端探测只跑一轮。缺省 3000。 */
+  minTriggerGapMs?: number;
 }
 
 export class AutoSyncScheduler {
@@ -169,6 +217,22 @@ export class AutoSyncScheduler {
 
   /** 每通道一个定时器（git/webdav 各自 enabled 时独立排期）。 */
   private readonly timers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
+  /** realtime 通道的远端轮询定时器：与 interval 定时器**分开**，否则每次轮询都会重置兜底间隔。 */
+  private readonly remoteTimers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
+  /** 本地改动监听（只有 enabled && realtime 的通道才挂；全关 → null）。 */
+  private watcher: SyncWatcher | null = null;
+  /** 当前需要监听的通道（setupWatchers 计算）。 */
+  private realtimeChannels: SyncTransportType[] = [];
+  /** 运行期到达的触发：本轮收尾后立刻补跑（绝不并发写本地配置，也绝不丢）。 */
+  private pendingTrigger: { channel: SyncTransportType; reason: string } | null = null;
+  /** 上次开始运行的时刻（trigger 的最小间隔合并用）。 */
+  private readonly lastRunAtMs = new Map<SyncTransportType, number>();
+  /** 因最小间隔被推迟的触发（每通道至多一个）。 */
+  private readonly gapTimers = new Map<SyncTransportType, ReturnType<typeof setTimeout>>();
+  private readonly homeDir: string | undefined;
+  private readonly profile: string | undefined;
+  private readonly makeWatcher: ((opts: WatcherFactoryOptions) => SyncWatcher) | undefined;
+  private readonly minTriggerGapMs: number;
   private stopped = false;
   private running = false;
 
@@ -190,6 +254,10 @@ export class AutoSyncScheduler {
     this.phase3Recovery = opts.phase3Recovery;
     this.detectRemoteNew = opts.detectRemoteNew ?? defaultDetectRemoteNew;
     this.detectLocalChange = opts.detectLocalChange ?? defaultDetectLocalChange;
+    this.homeDir = opts.homeDir;
+    this.profile = opts.profile;
+    this.makeWatcher = opts.makeWatcher ?? defaultMakeWatcher;
+    this.minTriggerGapMs = opts.minTriggerGapMs ?? 3000;
   }
 
   /** 追加一条自动同步历史（自动带上触发通道；0x 安全：绝不覆盖调用方显式 transport）。 */
@@ -204,11 +272,19 @@ export class AutoSyncScheduler {
     void this.startupRuns();
   }
 
-  /** 停止：清全部定时器、标记不再调度；正在执行的任务允许自然结束。 */
+  /** 停止：清全部定时器、拆掉文件监听、标记不再调度；正在执行的任务允许自然结束。 */
   stop(): void {
     this.stopped = true;
     for (const timer of this.timers.values()) this.clearTimer(timer);
     this.timers.clear();
+    for (const timer of this.remoteTimers.values()) this.clearTimer(timer);
+    this.remoteTimers.clear();
+    for (const timer of this.gapTimers.values()) this.clearTimer(timer);
+    this.gapTimers.clear();
+    this.pendingTrigger = null;
+    this.watcher?.stop();
+    this.watcher = null;
+    this.realtimeChannels = [];
   }
 
   /** 重新加载配置（路由 POST /sync/autosync 后调用；重排所有通道定时器）。 */
@@ -218,6 +294,40 @@ export class AutoSyncScheduler {
   }
 
   private refreshTimers(): void {
+    this.scheduleIntervalTimers();
+    this.scheduleRemoteTimers();
+    void this.setupWatchers();
+  }
+
+  /**
+   * 外部触发一次运行（本地改动 / 远端探测 / 另一通道让位）。
+   *
+   * - 正在跑 → 记 pendingTrigger，本轮收尾后**立刻补跑**（不并发写本地配置，也绝不丢）；
+   * - 距上次开始不足 minTriggerGapMs → 合并成一次（连续保存只跑一轮，每通道至多一个定时器）。
+   */
+  trigger(channel: SyncTransportType, reason: string = 'manual'): void {
+    if (this.stopped) return;
+    if (this.running) {
+      this.pendingTrigger = { channel, reason };
+      return;
+    }
+    const waitMs = this.minTriggerGapMs - (this.now().getTime() - (this.lastRunAtMs.get(channel) ?? 0));
+    if (waitMs > 0) {
+      if (this.gapTimers.has(channel)) return;
+      const timer = this.setTimer(() => {
+        this.gapTimers.delete(channel);
+        this.trigger(channel, reason);
+      }, waitMs);
+      this.gapTimers.set(channel, timer);
+      return;
+    }
+    void this.runOnce(channel, { reason }).catch((err) => {
+      this.host.log.error(`自动同步触发失败（${channel}/${reason}）`, { error: err instanceof Error ? err.message : String(err) });
+    });
+  }
+
+  /** 兜底间隔定时器：每个 enabled 通道按各自 interval 排一次性定时器，触发后只重排自己。 */
+  private scheduleIntervalTimers(): void {
     for (const timer of this.timers.values()) this.clearTimer(timer);
     this.timers.clear();
     // 通道清单唯一来源 = SYNC_CHANNELS（此前同一数组在本文件写了两遍：漏改一处即某通道永不排期）
@@ -230,19 +340,78 @@ export class AutoSyncScheduler {
           // 一次性定时器：触发后立即从表移除，避免 reload() 清理到已失效的句柄
           this.timers.delete(channel);
           if (this.stopped) return;
-          void this.runOnce(channel)
+          void this.runOnce(channel, { reason: 'interval' })
             .catch((err) => {
               this.host.log.error(`自动同步定时触发失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
             })
             .then(() => {
-              // 本轮结束（成功 / 跳过 / 失败）后重新排定下一次；refreshTimers
-              // 内部重读配置，若期间被关闭（enabled=false）则不再排期。
-              if (!this.stopped) this.refreshTimers();
+              // 只重排 interval 定时器（远端轮询有自己的节奏，绝不互相重置）
+              if (!this.stopped) this.scheduleIntervalTimers();
             });
         }, ms);
         this.timers.set(channel, timer);
       }).catch(() => { /* 读配置失败静默 */ });
     }
+  }
+
+  /**
+   * realtime 通道的远端轮询：按 remoteCheckMs（缺省 60s）排一次性定时器。
+   * 轮询只是「叫醒一轮 runOnce」—— 是否真的下载仍由 detectRemoteNew 判定，
+   * 所以哪怕每 60s 叫醒一次，无变化时也只会记一条 upToDate 而不会反复传输。
+   */
+  private scheduleRemoteTimers(): void {
+    for (const timer of this.remoteTimers.values()) this.clearTimer(timer);
+    this.remoteTimers.clear();
+    const channels = SYNC_CHANNELS;
+    for (const channel of channels) {
+      void this.readConfig(channel).then((cfg) => {
+        if (this.stopped || !cfg.enabled || !(cfg.realtime ?? DEFAULT_AUTOSYNC_REALTIME)) return;
+        const ms = clampRemoteCheckMs(cfg.remoteCheckMs ?? DEFAULT_AUTOSYNC_REMOTE_CHECK_MS);
+        const timer = this.setTimer(() => {
+          this.remoteTimers.delete(channel);
+          if (this.stopped) return;
+          this.trigger(channel, 'remote-poll');
+          // 固定节奏：轮询不等本轮跑完就排下一次（trigger 自己负责合并/排队）
+          if (!this.stopped) this.scheduleRemoteTimers();
+        }, ms);
+        this.remoteTimers.set(channel, timer);
+      }).catch(() => { /* 读配置失败静默 */ });
+    }
+  }
+
+  /** 按「enabled && realtime」重算监听集合：需要就挂、全关就拆（绝不留下空转句柄）。 */
+  private async setupWatchers(): Promise<void> {
+    const realtime: SyncTransportType[] = [];
+    for (const channel of SYNC_CHANNELS) {
+      try {
+        const cfg = await this.readConfig(channel);
+        if (cfg.enabled && (cfg.realtime ?? DEFAULT_AUTOSYNC_REALTIME)) realtime.push(channel);
+      } catch { /* 读配置失败 → 该通道不挂监听 */ }
+    }
+    this.realtimeChannels = realtime;
+    if (realtime.length === 0) {
+      this.watcher?.stop();
+      this.watcher = null;
+      return;
+    }
+    if (this.homeDir === undefined || this.makeWatcher === undefined) return; // 未接线（测试）→ 只靠定时器
+    if (this.watcher === null) {
+      this.watcher = this.makeWatcher({
+        homeDir: this.homeDir,
+        profile: this.profile,
+        log: this.host.log,
+        onFlush: (changed) => this.onLocalChange(changed),
+      });
+      this.watcher.start();
+      this.host.log.info(`自动同步已开启本地改动监听（${realtime.join('/')}）`);
+    }
+  }
+
+  /** watcher 回调：任一批改动 → 让所有 realtime 通道各跑一轮（各自有变化检测，不会空转传输）。 */
+  private onLocalChange(changed: readonly string[]): void {
+    if (this.stopped || changed.length === 0) return;
+    this.host.log.debug(`检测到本地配置改动（${changed.length} 个路径）→ 触发自动同步`);
+    for (const channel of this.realtimeChannels) this.trigger(channel, 'local-change');
   }
 
   /** 启动触发下载合并（每个 enabled 通道；受各自 startupMinIntervalMs 阈值约束）。 */
@@ -257,7 +426,7 @@ export class AutoSyncScheduler {
           this.host.log.info(`自动同步启动触发跳过（${channel}）：距上次运行未达阈值`);
           continue;
         }
-        await this.runOnce(channel, { startup: true });
+        await this.runOnce(channel, { startup: true, reason: 'startup' });
       } catch (err) {
         this.host.log.error(`启动触发下载合并失败（${channel}）`, { error: err instanceof Error ? err.message : String(err) });
       }
@@ -269,7 +438,17 @@ export class AutoSyncScheduler {
    * @param channel - 同步通道（git / webdav；各自独立的配置与运行状态）
    * @param opts.startup - true 表示启动触发变体（只做 Phase A+B，不做 Phase C push）
    */
-  async runOnce(channel: SyncTransportType, opts: { startup?: boolean } = {}): Promise<AutosyncRunResult> {
+  async runOnce(channel: SyncTransportType, opts: AutosyncRunOptions = {}): Promise<AutosyncRunResult> {
+    const result = await this.runOnceInternal(channel, opts);
+    // 收尾后补跑：运行期到达的触发（watcher 连续保存 / 远端轮询 / 定时器到期）不会丢。
+    // 放在内部实现之外（而不是 finally 里）是为了让锁与 run 账**完全释放之后**才开始下一轮。
+    const pending = this.pendingTrigger;
+    this.pendingTrigger = null;
+    if (pending !== null && !this.stopped) this.trigger(pending.channel, pending.reason);
+    return result;
+  }
+
+  private async runOnceInternal(channel: SyncTransportType, opts: AutosyncRunOptions = {}): Promise<AutosyncRunResult> {
     if (this.running) return { status: 'skipped', direction: 'none', skipReason: 'running', historyId: '', consecutiveFailures: 0 };
     const cfg = await this.readConfig(channel);
     if (!cfg.enabled) {
@@ -277,6 +456,9 @@ export class AutoSyncScheduler {
     }
 
     this.running = true;
+    this.lastRunAtMs.set(channel, this.now().getTime());
+    // 本轮会写本机配置（apply）→ 暂停监听，别把自己的写入当成「用户改了配置」（否则自激循环）。
+    this.watcher?.suspend();
     const nowIso = this.now().toISOString();
     const historyId = `autosync-${crypto.randomUUID()}`;
 
@@ -466,11 +648,15 @@ export class AutoSyncScheduler {
         // 风险分级（audit-sync sync-F5）照旧只在无冲突时执行。
         if (conflictedSections.length === 0) {
           // 无冲突：按 risk.ts 的风险分级契约分流（audit-sync sync-F5）。
-          // 此前用 buildAutoApplyPlan 无条件应用全部非冲突分区 → medium/high 分区（plugins/mcp/
-          // workspaces 等）在无用户确认时被自动写进本地，与 classifyMergePlan 的既定口径
-          // （低风险自动应用；medium/high → 待审）分叉，「首次同步强制预览」在自动路径上也形同虚设。
+          // autoApplyTier（缺省 'medium'）= 「真·自动同步所有改动」的开关：low 档只自动落
+          // 低风险分区（settings/ui/providers/prompts/skills/agentPresets/agentInstructions/self），
+          // medium 档连 plugins / mcp 这两个中风险分区也自动落盘；**high 档永不自动**
+          // （类型上限即 medium：secrets/credentialsStatus/pluginData/pluginFiles 根本不在同步面内）。
           // firstSync 恒 false：真正的首次同步没有祖先基线，merge 已把两侧差异判成 conflict → 走人工确认。
-          const apply = classifyMergePlan(mergePlan, { firstSync: false });
+          const apply = classifyMergePlan(mergePlan, {
+            firstSync: false,
+            maxAutoTier: cfg.autoApplyTier ?? DEFAULT_AUTOSYNC_AUTO_APPLY_TIER,
+          });
           // 待审项（medium/high：决策明确但不该自动应用）必须可见 —— 进历史 conflictedSections，
           // 绝不静默丢弃；真正的冲突已在上方记入 conflictedSections。
           deferredSections = apply.review.map((s) => s.id);
@@ -514,8 +700,16 @@ export class AutoSyncScheduler {
       // Phase C: push 上传（完整双向）—— 仅当本地真有改动才上传（§3.1）；startup 变体不上传。
       if (!opts.startup && localDirty) {
         try {
+          /**
+           * 冲突策略（conflictPolicy，缺省 'local'）：
+           * - 'ask'：不强制，推送会被引擎的「远端已推进」前置检测挡下 → skipped/partial(conflict)；
+           * - 'local'：**不写本地**（下行被冲突挡下），但把本机版本强制推成新的远端最新。
+           *   force 只跳过「基线是否落后」这一道检查，仍走正常快照上传与基线记录；
+           *   被覆盖的远端旧版本留在远端历史快照里，可手动回滚。
+           */
+          const forcePush = conflictedSections.length > 0 && (cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY) === 'local';
           // Phase C: 完整双向 → engine.push() 上传。P0-A：外部 push 包 intent journal。
-          const rawPush = async () => engine.push();
+          const rawPush = async () => engine.push(forcePush ? { force: true } : {});
           const pushReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
             ? (await this.phase3Recovery.runExternalIntent({
                 operationType: 'autosync-push', lockCtx: this.lockCtxForJournal,
@@ -563,22 +757,34 @@ export class AutoSyncScheduler {
           }
           // issue #79：上行成功但下行被冲突挡下 → partial（绝不把「半个方向完成」报成 success，
           // 也绝不因为它报成 failed：网络与凭据都是好的，只是远端有内容要用户确认）。
+          // conflictPolicy='local' 时冲突已被「本机覆盖远端」消解，但远端那一版确实被盖掉了 →
+          // 同样记 partial，skipReason 换成 conflict-kept-local（界面据此说清「本机已覆盖远端」）。
+          const keptLocal = forcePush && conflictedSections.length > 0;
           const partial = conflictedSections.length > 0;
+          const skipReason = keptLocal
+            ? ('conflict-kept-local' as const)
+            : partial
+              ? ('conflict' as const)
+              : undefined;
+          const reportedConflicted = keptLocal
+            ? conflictedSections
+            : partial
+              ? conflictedSections
+              : deferredSections;
           const result: AutosyncRunResult = {
             status: partial ? 'partial' : 'success',
             direction: appliedSections.length ? 'both' : 'push',
             appliedSections, pushedSnapshotId: pushReport.snapshotId, historyId,
-            ...(partial ? { skipReason: 'conflict' as const } : {}),
-            ...(deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
-            ...(partial ? { conflictedSections } : {}),
+            ...(skipReason !== undefined ? { skipReason } : {}),
+            ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
             consecutiveFailures: 0,
           };
           await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push',
             status: partial ? 'partial' : 'success',
             appliedSections, pushedSnapshotId: pushReport.snapshotId,
-            ...(partial ? { skipReason: 'conflict' as const, conflictedSections } : {}),
-            ...(!partial && deferredSections.length > 0 ? { conflictedSections: deferredSections } : {}),
+            ...(skipReason !== undefined ? { skipReason } : {}),
+            ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
             createdAt: nowIso, failureCountAtRun: 0,
           });
           await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
@@ -645,6 +851,7 @@ export class AutoSyncScheduler {
       return result;
     } finally {
       this.running = false;
+      this.watcher?.resume();
       // 收尾 RunRegistry：不 finish 会让 autosync 的 running 记录滞留，期间任何再次 runOnce
       // 都会 register('autosync') → RunConflictError → 永远 skip(conflict)，后台同步就此停摆。
       // 同一收敛点也必须在**主 try 之外**的早退路径上调用（见 finishRun 的注释）。
@@ -675,7 +882,8 @@ export class AutoSyncScheduler {
     channel: SyncTransportType,
   ): Promise<void> {
     const skipReason = result.status === 'failed' ? undefined : result.skipReason;
-    const skipCount = skipReason !== 'conflict' || result.conflictedSections === undefined
+    const countsConflicts = skipReason === 'conflict' || skipReason === 'conflict-kept-local';
+    const skipCount = !countsConflicts || result.conflictedSections === undefined
       ? undefined
       : result.conflictedSections.length;
     await this.writeConfig(channel, {
@@ -775,6 +983,19 @@ async function defaultDetectRemoteNew(engine: SyncEngine): Promise<boolean> {
  * 缺省本地变化检测（§3.1）：engine 实现了 hasLocalChanges() → 调用；
  * 否则（测试 mock 未实现）保守返回 true（假设有本地改动，保持旧行为=每次都尝试上传）。
  */
+/**
+ * 缺省 watcher 工厂 = 真实 fs.watch（SyncWatcher）。
+ * targets 由 watch-scope 的静态清单派生（纯函数、不读磁盘），profile 只影响 profiles/ 下的路径。
+ */
+function defaultMakeWatcher(opts: WatcherFactoryOptions): SyncWatcher {
+  return new SyncWatcher({
+    homeDir: opts.homeDir,
+    targets: buildWatchTargets({ homeDir: opts.homeDir, profile: opts.profile }),
+    log: opts.log,
+    onFlush: opts.onFlush,
+  });
+}
+
 async function defaultDetectLocalChange(engine: SyncEngine): Promise<boolean> {
   const fn = (engine as unknown as { hasLocalChanges?: () => Promise<boolean> }).hasLocalChanges;
   if (typeof fn === 'function') {

@@ -1023,6 +1023,8 @@ export function toPersistedState(state: StoreState): PersistedState {
     autosync: c.autosync,
     autosyncEnabled: c.autosyncEnabled,
     autosyncInterval: c.autosyncInterval,
+    // 真·自动同步的本地监听开关（用户设置，非敏感；缺省 true）
+    autosyncRealtime: c.autosyncRealtime,
   })
   return {
     v: 1,
@@ -1645,6 +1647,8 @@ export class RunStore {
               autosync: null,
               autosyncEnabled: false,
               autosyncInterval: '30m',
+              // 旧版持久化载荷没有这个字段 → 缺省开启（真·自动同步是缺省行为）
+              autosyncRealtime: true,
             }
           : undefined
         return {

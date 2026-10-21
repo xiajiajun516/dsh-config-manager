@@ -378,6 +378,8 @@ export interface ChannelSyncState {
   autosyncEnabled: boolean
   /** 该通道自动同步间隔（回填自 autosync） */
   autosyncInterval: AutosyncInterval
+  /** 本地改动即时触发（回填自 autosync；缺省 true —— 真·自动同步的开关） */
+  autosyncRealtime: boolean
 }
 
 /** 四通道的缺省状态表（`Record<SyncChannel, ChannelSyncState>`；组件 state 与快照复制共用）。 */
@@ -407,6 +409,7 @@ export function defaultChannelSyncState(): ChannelSyncState {
     autosync: null,
     autosyncEnabled: false,
     autosyncInterval: '30m',
+    autosyncRealtime: true,
   }
 }
 

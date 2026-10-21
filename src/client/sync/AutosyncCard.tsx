@@ -15,7 +15,7 @@ import {
 } from './sync-view.ts'
 // 展示文本渲染前统一脱敏（与 ErrorBanner/ReportView 同规矩）
 import { redact } from '../../security/redaction.ts'
-import type { AutosyncInterval } from './sync-api.ts'
+import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval } from './sync-api.ts'
 import type { ChannelSyncState } from './sync-view.ts'
 import { autosyncIntervalKey } from '../../ui/sync-settings-view.ts'
 import type { SyncAutosyncIntervalKey } from '../../ui/sync-settings-view.ts'
@@ -33,14 +33,20 @@ function intervalLabel(iv: AutosyncInterval, t: TranslateNS<'config-manager-sync
 /* ------------------------------------------- 拆分出的 render 段（t42，同文件内子组件） */
 
 /** 自动同步设置（当前通道）：总开关 + 间隔下拉 + 状态徽章（文案/倒计时在卡内派生）。 */
-export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdateInterval }: {
+export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdateInterval, onUpdateOptions }: {
   t: TranslateNS<'config-manager-sync'>
   uiT: UiT
   settings: Pick<ChannelSyncState, 'autosync' | 'autosyncEnabled' | 'autosyncInterval'>
   busy: boolean
   onToggleAutosync: (enabled: boolean) => void
   onUpdateInterval: (interval: AutosyncInterval) => void
+  /** 真·自动同步的三个策略项（realtime / 自动应用等级 / 冲突策略）；只传要改的字段 */
+  onUpdateOptions: (patch: { realtime?: boolean; autoApplyTier?: AutosyncAutoApplyTier; conflictPolicy?: AutosyncConflictPolicy }) => void
 }) {
+  // 三件套读自宿主状态（缺省值集中在这里，与宿主 DEFAULT_AUTOSYNC_* 的口径一致）
+  const realtime = settings.autosync?.realtime ?? true
+  const autoApplyTier: AutosyncAutoApplyTier = settings.autosync?.autoApplyTier ?? 'medium'
+  const conflictPolicy: AutosyncConflictPolicy = settings.autosync?.conflictPolicy ?? 'local'
   const autosyncText = settings.autosync !== null ? autosyncStatusText(settings.autosync, uiT) : t('autosync.statusNever')
   /** 距下次自动同步剩余 ms（null = 从未运行；0 = 已到期） */
   const autosyncCountdownMs = settings.autosync !== null && settings.autosync.elapsedMs >= 0
@@ -72,6 +78,41 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           ariaLabel={t('autosync.interval')}
           onChange={(next) => { onUpdateInterval(next as AutosyncInterval) }}
           options={AUTOSYNC_INTERVAL_OPTIONS.map((iv) => ({ value: iv, label: intervalLabel(iv, t) }))}
+        />
+      </label>
+      <label className={css.checkboxRow}>
+        <input
+          type="checkbox"
+          checked={realtime}
+          disabled={busy}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => { onUpdateOptions({ realtime: e.target.checked }) }}
+        />
+        <span>{t('autosync.realtime')} <InfoHint text={t('autosync.realtimeHint')} label={t('common.infoHint')} /></span>
+      </label>
+      <label className={css.field}>
+        <span className={css.fieldLabel}>{t('autosync.autoApplyTier')} <InfoHint text={t('autosync.autoApplyTierHint')} label={t('common.infoHint')} /></span>
+        <Select
+          value={autoApplyTier}
+          disabled={busy}
+          ariaLabel={t('autosync.autoApplyTier')}
+          onChange={(next) => { onUpdateOptions({ autoApplyTier: next as AutosyncAutoApplyTier }) }}
+          options={[
+            { value: 'low', label: t('autosync.tierLow') },
+            { value: 'medium', label: t('autosync.tierMedium') },
+          ]}
+        />
+      </label>
+      <label className={css.field}>
+        <span className={css.fieldLabel}>{t('autosync.conflictPolicy')} <InfoHint text={t('autosync.conflictPolicyHint')} label={t('common.infoHint')} /></span>
+        <Select
+          value={conflictPolicy}
+          disabled={busy}
+          ariaLabel={t('autosync.conflictPolicy')}
+          onChange={(next) => { onUpdateOptions({ conflictPolicy: next as AutosyncConflictPolicy }) }}
+          options={[
+            { value: 'local', label: t('autosync.conflictLocal') },
+            { value: 'ask', label: t('autosync.conflictAsk') },
+          ]}
         />
       </label>
       <div className={css.statRow}>

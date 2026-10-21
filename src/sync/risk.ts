@@ -9,10 +9,16 @@
  *    本模块只做分流，`SECTION_RISK_TIER` 是注册表的派生视图（保留给既有调用方）；
  *  - 双向 conflict 分区永远进 review（无论风险与 firstSync 与否）；
  *  - firstSync=true 时所有非 skip 项一律进 review（安全第一：人工确认后才开启自动）；
- *  - firstSync=false 时按风险等级分流：低风险且决策明确（useRemote / keepLocal / **merge**
-    即三方精细合并成功）进 autoApply；中风险、high、双向冲突 → review；skip 或无变化 → skipped。
- *  - 'merge' 与 useRemote/keepLocal 同等对待：它的 merged 是双方改动的合并结果（不是单侧原值），
-    因此只有低风险分区才允许自动落盘；中/高风险仍要人工确认。
+ *  - firstSync=false 时按风险等级分流：决策明确（useRemote / keepLocal / **merge** 即三方精细
+    合并成功）且「风险等级 ≤ maxAutoTier」的分区进 autoApply；超过阈值的、high、双向冲突 → review；
+    skip 或无变化 → skipped。
+ *  - 'merge' 与 useRemote/keepLocal 同等对待：它的 merged 是双方改动的合并结果（不是单侧原值）。
+ *
+ * maxAutoTier（真·自动同步，2026-10）：
+ *  - 缺省 'low' = 改造前的口径（只有低风险分区自动落盘），既有调用方（预览/UI）行为不变；
+ *  - 自动同步按用户配置传 'medium' ⇒ plugins / mcp 的中风险改动也自动落盘。
+ *    这是用户拍板的产品决策：不改这条，「同步所有更改」就只是句口号（中风险分区永远停在待确认）。
+ *  - **high 永远不参与自动应用**：类型上就只允许 low|medium，杜绝「传 high 顺手放行全部」。
  */
 import type { MergePlan, MergeSectionResult } from './merge.ts';
 import type { SectionId } from '../schema/types.ts';
@@ -50,6 +56,21 @@ export interface ClassifyOptions {
    * 调用方在 SyncEngine 中维护 firstSyncCompleted 标志。
    */
   firstSync: boolean;
+  /**
+   * 允许自动落盘的最高风险等级（缺省 'low' = 改造前的行为）。
+   *
+   * 只有自动同步路径会传 'medium'（用户在配置里显式选的，缺省也是 medium）；
+   * high 在类型层面就被排除 —— 那不是「配置项」，是安全边界。
+   */
+  maxAutoTier?: 'low' | 'medium';
+}
+
+/** 风险等级序（用于「等级 ≤ 阈值」比较；high 永不满足自动应用，因为阈值上限就是 medium）。 */
+const TIER_RANK: Readonly<Record<RiskTier, number>> = { low: 0, medium: 1, high: 2 };
+
+/** 该风险等级是否在允许自动落盘的阈值之内。 */
+export function tierWithinAutoApply(tier: RiskTier, maxAutoTier: 'low' | 'medium'): boolean {
+  return TIER_RANK[tier] <= TIER_RANK[maxAutoTier];
 }
 
 /** 自动应用三组结果（互斥：同一 sectionId 只出现在一组） */
@@ -67,6 +88,7 @@ export function classifyMergePlan(plan: MergePlan, opts: ClassifyOptions): SyncA
   const autoApply: MergeSectionResult[] = [];
   const review: MergeSectionResult[] = [];
   const skipped: MergeSectionResult[] = [];
+  const maxAutoTier = opts.maxAutoTier ?? 'low';
   for (const r of plan.sections) {
     // 跳过：决策为 skip（远端缺且本地未改 / 完全无变化）
     if (r.decision === 'skip') {
@@ -89,11 +111,11 @@ export function classifyMergePlan(plan: MergePlan, opts: ClassifyOptions): SyncA
       review.push(r);
       continue;
     }
-    if (tier === 'low') {
-      // 低风险且决策明确（useRemote / keepLocal）→ 自动应用
+    if (tierWithinAutoApply(tier, maxAutoTier)) {
+      // 决策明确（useRemote / keepLocal / merge）且等级在阈值内 → 自动应用
       autoApply.push(r);
     } else {
-      // medium / high → 待审
+      // 超过阈值（缺省阈值下即 medium / high）→ 待审
       review.push(r);
     }
   }

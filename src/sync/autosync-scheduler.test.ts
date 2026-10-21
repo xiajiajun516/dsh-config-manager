@@ -308,10 +308,10 @@ test('runOnce: merge 抛错 → failed，连续失败计数 +1', async () => {
   assert.ok(getEntries().some((e) => e.status === 'failed'), '写入失败历史');
 });
 
-test('issue #79：远端冲突只挡下行 —— 不写本地，但仍推送本机改动（partial，不谎报 success/failed）', async () => {
+test('issue #79 + conflictPolicy=local（缺省）：冲突只挡下行，本机版本强制推成新远端（partial，不谎报 success/failed）', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 1 };
   const applyCalls: string[] = [];
-  const pushCalls: string[] = [];
+  const pushCalls: Array<{ force?: boolean } | undefined> = [];
   const engine = {
     hasNewRemoteSnapshot: async () => true,
     hasLocalChanges: async () => true,
@@ -320,21 +320,54 @@ test('issue #79：远端冲突只挡下行 —— 不写本地，但仍推送本
       applyCalls.push('apply');
       return { ok: true, applied: [] as never[], restoreId: 'r1', rolledBack: false, review: [], warnings: [] };
     },
-    push: async () => { pushCalls.push('push'); return { ok: true, snapshotId: 'snap-up', sections: [] as never, warnings: [] }; },
+    push: async (opts?: { force?: boolean }) => {
+      pushCalls.push(opts);
+      return { ok: true, snapshotId: 'snap-up', sections: [] as never, warnings: [] };
+    },
   };
   const { scheduler, getConfig, getEntries } = makeScheduler({ cfg, engine, history: [] });
   const result = await scheduler.runOnce('git');
-  assert.equal(result.status, 'partial', '上行成功 + 下行待确认 → partial');
-  assert.equal(result.skipReason, 'conflict');
+  assert.equal(result.status, 'partial', '上行成功 + 下行被冲突挡下 → partial');
+  assert.equal(result.skipReason, 'conflict-kept-local', '本机已按策略覆盖远端，与「待人工裁决」区分开');
   assert.deepEqual(result.conflictedSections, ['settings']);
   assert.equal(result.pushedSnapshotId, 'snap-up', '本机快照仍有上行出口（issue #79 主诉）');
   assert.equal(applyCalls.length, 0, '冲突绝不写本机配置');
   assert.equal(pushCalls.length, 1, '纯上行不被冲突连坐');
+  assert.equal(pushCalls[0]?.force, true, 'local 策略下必须带上 force，否则引擎会因「远端已推进」拒绝上传');
   assert.equal(result.consecutiveFailures, 0, '冲突跳过不是失败 → 计数归零');
-  assert.equal(getConfig().lastRunSkipReason, 'conflict', '跳过原因落到状态（界面按码取字典）');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict-kept-local', '跳过原因落到状态（界面按码取字典）');
   assert.equal(getConfig().lastRunSkipCount, 1);
-  assert.ok(getEntries().some((e) => e.status === 'partial' && e.skipReason === 'conflict'), '写入 partial 历史');
+  assert.ok(getEntries().some((e) => e.status === 'partial' && e.skipReason === 'conflict-kept-local'), '写入 partial 历史');
   assert.ok(getEntries().some((e) => e.pushedSnapshotId === 'snap-up'), '历史带上行快照 id');
+});
+
+test('issue #79 + conflictPolicy=ask：冲突只挡下行，绝不强推覆盖远端（partial + skipped 码 conflict）', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 1,
+    conflictPolicy: 'ask',
+  };
+  const applyCalls: string[] = [];
+  const pushCalls: Array<{ force?: boolean } | undefined> = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict']]),
+    applyMergePlan: async () => {
+      applyCalls.push('apply');
+      return { ok: true, applied: [] as never[], restoreId: 'r1', rolledBack: false, review: [], warnings: [] };
+    },
+    push: async (opts?: { force?: boolean }) => {
+      pushCalls.push(opts);
+      return { ok: true, snapshotId: 'snap-up', sections: [] as never, warnings: [] };
+    },
+  };
+  const { scheduler, getConfig } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.status, 'partial');
+  assert.equal(result.skipReason, 'conflict', 'ask 策略保留「待裁决」语义');
+  assert.equal(pushCalls[0]?.force, undefined, 'ask 策略绝不 force 覆盖远端');
+  assert.equal(applyCalls.length, 0, '冲突绝不写本机配置');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict');
 });
 
 test('issue #79：冲突且本机无改动（非 startup）→ skipped(conflict) 且不带 push', async () => {
@@ -521,7 +554,8 @@ test('runOnce: 远端有新快照但本地无改动 → 只 pull 合并，不 pu
 });
 
 test('start(): 定时器触发后自动重排下一次（周期性后台同步）', async () => {
-  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  // realtime:false 关掉「远端轮询定时器」，本用例只测 interval 兜底排期与重排（每个通道 1 个定时器）。
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
   const pending: Array<() => void> = [];
   let timerSeq = 0;
   const engine = {
@@ -622,12 +656,13 @@ test('runOnce: 远端最新快照为普通 → 加密检测不触发（listSnaps
 });
 
 test('双通道：git/webdav 同时 enabled → 各自独立排期；runOnce 写各自通道配置', async () => {
-  const gitCfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
-  const webdavCfg: AutosyncConfig = { enabled: true, interval: '5m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  // realtime:false → 只有 interval 兜底定时器（realtime 时每通道还会多一个远端轮询定时器）。
+  const gitCfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
+  const webdavCfg: AutosyncConfig = { enabled: true, interval: '5m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
   // 全通道配置由唯一枚举派生（新增通道不得手写漏项）；其余通道保持默认关闭
   const configs = {} as Record<SyncTransportType, AutosyncConfig>;
   for (const ch of SYNC_CHANNELS) {
-    configs[ch] = { enabled: false, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+    configs[ch] = { enabled: false, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
   }
   configs.git = gitCfg;
   configs.webdav = webdavCfg;
@@ -689,7 +724,8 @@ test('t32：排期覆盖 SYNC_CHANNELS 的每个通道（长度取自枚举，�
     now: () => new Date(1_000_000_000_000),
     readConfig: async (channel: SyncTransportType) => {
       seen.push(channel);
-      return { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+      // realtime:false → 每个通道只排一个 interval 定时器，断言直接对应「通道数」。
+      return { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
     },
     writeConfig: async () => {},
     readSyncConfigFn: async () => null,
@@ -703,5 +739,153 @@ test('t32：排期覆盖 SYNC_CHANNELS 的每个通道（长度取自枚举，�
   assert.deepEqual([...new Set(seen)].sort(), [...SYNC_CHANNELS].sort(), '每个通道都被请求过配置（refreshTimers + startupRuns 两处都不漏）');
   assert.equal(pending.length, SYNC_CHANNELS.length, '排期数 = 枚举长度（不得硬编码 2）');
   scheduler.stop();
+});
+
+/* ---------------- m-autosync-realtime：即时通道（本地改动监听 + 远端轮询） ---------------- */
+
+interface RealtimeHarness {
+  scheduler: AutoSyncScheduler;
+  timers: Array<() => void>;
+  /** 模拟监听器发现本地改动 */
+  fireLocalChange: (changed?: readonly string[]) => void;
+  /** 监听器生命周期（started/stopped/suspended/resumed 计数） */
+  watcher: { started: boolean; stopped: boolean; suspended: number; resumed: number };
+  engineCalls: { merge: number; push: number };
+  /** 推进夹具时钟（间隔下限的判定依赖真实时间流逝） */
+  advance: (ms: number) => void;
+}
+
+function makeRealtimeScheduler(cfg: AutosyncConfig, opts: { minTriggerGapMs?: number } = {}): RealtimeHarness {
+  const timers: Array<() => void> = [];
+  const watcher = { started: false, stopped: false, suspended: 0, resumed: 0 };
+  const engineCalls = { merge: 0, push: 0 };
+  let flush: ((changed: readonly string[]) => void) | null = null;
+  let clockMs = 1_000_000_000_000;
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => { engineCalls.merge += 1; return makeMergePlan([]); },
+    push: async () => {
+      engineCalls.push += 1;
+      return { ok: true, snapshotId: 'snap-' + engineCalls.push, sections: [] as never, warnings: [] };
+    },
+  };
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: () => engine as unknown as SyncEngine,
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(clockMs),
+    // 只有 git 通道开启：其余通道回退 enabled:false，否则 refreshTimers 会给四个通道都排定时器
+    readConfig: async (channel) => (channel === 'git' ? cfg : { ...cfg, enabled: false }),
+    writeConfig: async () => {},
+    readSyncConfigFn: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } }),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: (fn) => { timers.push(fn); return timers.length as unknown as ReturnType<typeof setTimeout>; },
+    clearTimer: () => {},
+    homeDir: '/home/u/.dsh',
+    minTriggerGapMs: opts.minTriggerGapMs ?? 3000,
+    makeWatcher: (wopts) => {
+      flush = wopts.onFlush;
+      return {
+        start: () => { watcher.started = true; },
+        stop: () => { watcher.stopped = true; },
+        setTargets: () => {},
+        suspend: () => { watcher.suspended += 1; },
+        resume: () => { watcher.resumed += 1; },
+        isStarted: () => watcher.started,
+        attachmentCount: () => 1,
+        flushNow: () => {},
+      } as never;
+    },
+  });
+  return {
+    scheduler, timers, watcher, engineCalls,
+    advance: (ms: number) => { clockMs += ms; },
+    fireLocalChange: (changed = ['settings.yaml']) => {
+      assert.ok(flush !== null, '监听器尚未创建（start() 未跑或 realtime 关闭）');
+      flush!(changed);
+    },
+  };
+}
+
+const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+test('realtime：本地改动 → 立刻触发一轮（不等 interval），runOnce 期间挂起监听、结束后恢复', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '24h', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  // gap 归零：本用例只测「监听回调 → 立刻跑一轮」，间隔合并另有用例
+  const h = makeRealtimeScheduler(cfg, { minTriggerGapMs: 0 });
+  h.scheduler.start();
+  await tick();
+  await tick();
+  assert.equal(h.watcher.started, true, '开启实时同步必须挂上本地改动监听');
+  const pushesBefore = h.engineCalls.push;
+  const suspendedBefore = h.watcher.suspended;
+  const resumedBefore = h.watcher.resumed;
+  h.fireLocalChange();
+  await tick();
+  await tick();
+  assert.equal(h.engineCalls.push, pushesBefore + 1, '本地一改就上行（不必等 24h 兜底定时器）');
+  assert.equal(h.watcher.suspended, suspendedBefore + 1, '同步自家写入必须被挂起，否则自激');
+  assert.equal(h.watcher.resumed, resumedBefore + 1, '收尾必须恢复监听');
+  h.scheduler.stop();
+  assert.equal(h.watcher.stopped, true, 'stop() 必须关掉监听');
+});
+
+test('realtime：间隔下限（minTriggerGapMs）内的第二次触发排成延迟触发，不丢改动', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '24h', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const h = makeRealtimeScheduler(cfg, { minTriggerGapMs: 3000 });
+  h.scheduler.start();
+  await tick();
+  await tick();
+  const before = h.timers.length;
+  const pushesBefore = h.engineCalls.push;
+  h.fireLocalChange(['settings.yaml']);
+  await tick();
+  assert.equal(h.engineCalls.push, pushesBefore, '距上轮不足 gap 时不得立刻再跑（避免连续保存打满远端）');
+  assert.equal(h.timers.length, before + 1, 'gap 内触发必须排一个延迟定时器（绝不丢用户改动）');
+  // 同一通道再来一次：复用同一枚定时器（合并成一轮），不得堆积
+  h.fireLocalChange(['skills']);
+  await tick();
+  assert.equal(h.timers.length, before + 1, '同一通道 gap 内只保留一枚定时器（连续保存合并成一轮）');
+  const gapTimer = h.timers[h.timers.length - 1];
+  assert.ok(gapTimer !== undefined);
+  h.advance(3000); // 真实时间里这 3 秒是自然流逝的；夹具时钟被钉死，必须手动推进
+  gapTimer();
+  await tick();
+  await tick();
+  assert.equal(h.engineCalls.push, pushesBefore + 1, '延迟触发到点后必须补跑（两处改动合成一轮）');
+  h.scheduler.stop();
+});
+
+test('realtime=false：不挂监听、不排远端轮询定时器（退回纯 interval 兜底）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
+  const h = makeRealtimeScheduler(cfg);
+  h.scheduler.start();
+  await tick();
+  assert.equal(h.watcher.started, false, 'realtime 关闭时不得挂监听');
+  assert.equal(h.timers.length, 1, '只排 interval 兜底定时器（无远端轮询）');
+  h.scheduler.stop();
+});
+
+test('realtime：远端轮询定时器按 remoteCheckMs 排期，到点触发一轮后立刻重排', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '24h', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    remoteCheckMs: 60_000,
+  };
+  const h = makeRealtimeScheduler(cfg);
+  h.scheduler.start();
+  await tick();
+  // interval 兜底 1 个 + 远端轮询 1 个
+  assert.equal(h.timers.length, 2, '每通道排 interval + 远端轮询两枚定时器');
+  const poll = h.timers[1];
+  assert.ok(poll !== undefined);
+  poll();
+  await tick();
+  await tick();
+  assert.ok(h.timers.length >= 3, '轮询到点后必须立刻重排下一次');
+  h.scheduler.stop();
 });
 

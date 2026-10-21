@@ -603,10 +603,24 @@ export type AutosyncInterval = '5m' | '15m' | '30m' | '60m' | '6h' | '12h' | '24
 /** 最近一次自动同步执行状态。 */
 export type AutosyncRunStatus = 'success' | 'skipped' | 'failed' | 'partial';
 
+/** 自动应用的最高风险等级（low = 只自动落低风险分区；medium = plugins/mcp 也自动落盘）。 */
+export type AutosyncAutoApplyTier = 'low' | 'medium';
+
+/** 双侧都改（真冲突）时的策略（ask = 保留冲突待人工裁决；local = 保留本机并推上去）。 */
+export type AutosyncConflictPolicy = 'ask' | 'local';
+
 /** GET/POST /sync/autosync 响应：自动同步状态。 */
 export interface AutosyncStatusResponse {
   enabled: boolean;
   interval: AutosyncInterval;
+  /** 真·自动同步：本地改动即时触发（缺省 true；host 读取层已补缺省） */
+  realtime?: boolean;
+  /** realtime 下的远端轮询间隔（ms；缺省 60000） */
+  remoteCheckMs?: number;
+  /** 自动应用的最高风险等级（缺省 medium：plugins/mcp 也自动落盘） */
+  autoApplyTier?: AutosyncAutoApplyTier;
+  /** 双侧都改时的策略（缺省 local：保留本机并推上去） */
+  conflictPolicy?: AutosyncConflictPolicy;
   lastRunAt?: string;
   lastRunStatus?: AutosyncRunStatus;
   lastRunMessage?: string;
@@ -631,6 +645,14 @@ export interface AutosyncUpdatePayload {
   enabled: boolean;
   interval?: AutosyncInterval;
   startupMinIntervalMs?: number;
+  /** 本地改动即时触发（缺省 true） */
+  realtime?: boolean;
+  /** realtime 下的远端轮询间隔（ms；宿主 clamp 到 15s–1h） */
+  remoteCheckMs?: number;
+  /** 自动应用等级（缺省 medium） */
+  autoApplyTier?: AutosyncAutoApplyTier;
+  /** 冲突策略（缺省 local） */
+  conflictPolicy?: AutosyncConflictPolicy;
 }
 
 /* ---------------------------------------------------------------- 同步历史 */
