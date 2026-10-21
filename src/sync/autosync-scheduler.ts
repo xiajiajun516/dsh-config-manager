@@ -50,6 +50,7 @@ import type { SectionId } from '../schema/types.ts';
 import type { RunRegistry } from '../core/run-registry.ts';
 import type { JournalRunContext } from '../core/phase3-host.ts';
 import type { SyncEngine } from './sync-engine.ts';
+import type { SyncSnapshotMeta } from './transport.ts';
 import type { MutationLockPort, MutationLockContext } from '../utils/env-lock.ts';
 import { withMutationLock, LOCK_BLOCK_MESSAGE } from '../utils/env-lock.ts';
 import { engineMsg } from './messages.ts';
@@ -156,8 +157,9 @@ export interface AutoSyncSchedulerOptions {
   /**
    * 远端新快照检测（§3.2「下载=检测到远端新快照才拉取」）。
    * 缺省：若 engine 实现了 hasNewRemoteSnapshot() 则调用；否则视为 true（保持旧行为=每次拉取）。
+   * `listed` = 本轮已取到的远端列表（查加密快照时顺手拿到）—— 传下去就不必再 list 一次。
    */
-  detectRemoteNew?: (engine: SyncEngine) => Promise<boolean>;
+  detectRemoteNew?: (engine: SyncEngine, listed?: readonly SyncSnapshotMeta[]) => Promise<boolean>;
   /**
    * 本地配置变化检测（§3.1「上传=本地改动才推」）。
    * 缺省：若 engine 实现了 hasLocalChanges() 则调用；否则视为 true（保持旧行为=每次都推）。
@@ -207,7 +209,7 @@ export class AutoSyncScheduler {
   private readonly appendHistoryFn: (entry: AutosyncHistoryEntry) => Promise<void>;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   private readonly clearTimer: (timer: ReturnType<typeof setTimeout>) => void;
-  private readonly detectRemoteNew: (engine: SyncEngine) => Promise<boolean>;
+  private readonly detectRemoteNew: (engine: SyncEngine, listed?: readonly SyncSnapshotMeta[]) => Promise<boolean>;
   private readonly detectLocalChange: (engine: SyncEngine) => Promise<boolean>;
   private readonly mutationLock: MutationLockPort | undefined;
   private readonly isBlocked: (() => boolean) | undefined;
@@ -568,8 +570,13 @@ export class AutoSyncScheduler {
       // 加密快照只通过手动推送/拉取产生与消费；自动同步仅处理普通快照。
       // list 失败宽容处理：视为无加密快照，继续正常流程（网络问题由后续链路暴露为 failed）。
       let encryptedRemote = false;
+      // 本轮远端列表：加密快照检查与「远端是否有新快照」共用同一次 list。
+      // 每次 list 都是一次真实网络往返（git = `pull --ff-only`，webdav = PROPFIND/GET），
+      // 缺省 60s 轮询下多 list 一次 = 一天白跑 1440 次往返。
+      let remoteMetas: readonly SyncSnapshotMeta[] | null = null;
       try {
         const metas = await engine.listSnapshots();
+        remoteMetas = metas;
         const latestMeta = metas.length > 0 ? metas[metas.length - 1]! : null;
         encryptedRemote = latestMeta !== null && latestMeta.manifest.encrypted === true;
       } catch {
@@ -592,7 +599,8 @@ export class AutoSyncScheduler {
       // - remoteNew：远端是否出现比本地祖先更新的快照 → 决定是否做下载合并（Phase A）；
       // - localDirty：本地 portable 配置相对基线是否真的变了 → 决定是否上传（Phase C）。
       // 定时器只是兜底轮询；真正驱动是这两个「变化」信号。
-      const remoteNew = await this.detectRemoteNew(engine);
+      // 列表拿不到（网络失败）时 remoteMetas 为 null → 检测自己再 list 一次，行为与改造前一致
+      const remoteNew = await this.detectRemoteNew(engine, remoteMetas ?? undefined);
       const localDirty = await this.detectLocalChange(engine);
 
       // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
@@ -965,12 +973,13 @@ export function syncIsConfigured(cfg: SyncConfig | null): boolean {
 /**
  * 缺省远端新快照检测（§3.2）：engine 实现了 hasNewRemoteSnapshot() → 调用；
  * 否则（测试 mock 未实现）保守返回 true（假设有新生，保持旧行为=每次都尝试拉取）。
+ * `listed` 透传给引擎：本轮已 list 过就直接复用，不再多跑一次网络往返。
  */
-async function defaultDetectRemoteNew(engine: SyncEngine): Promise<boolean> {
-  const fn = (engine as unknown as { hasNewRemoteSnapshot?: () => Promise<boolean> }).hasNewRemoteSnapshot;
+async function defaultDetectRemoteNew(engine: SyncEngine, listed?: readonly SyncSnapshotMeta[]): Promise<boolean> {
+  const fn = (engine as unknown as { hasNewRemoteSnapshot?: (listed?: readonly SyncSnapshotMeta[]) => Promise<boolean> }).hasNewRemoteSnapshot;
   if (typeof fn === 'function') {
     try {
-      return await fn.call(engine);
+      return await fn.call(engine, listed);
     } catch {
       return true; // 检测失败保守视为有新生，避免漏拉
     }

@@ -1357,9 +1357,13 @@ export class SyncEngine {
    *
    * 前提：lastSnapshotId 必须是**远端**快照 id（P0-7）。旧实现把本地生成的快照 id 也写进去，
    * 于是合并/应用之后这里恒为 true → 每轮白跑 list + download + merge。
+   *
+   * `listed` 可选：调用方本轮已经 list 过（如自动同步先查加密快照）时直接传进来，
+   * 避免同一个回合对远端做两次 list —— 每条通道的 list 都是一次真实网络往返
+   * （git 通道 = `pull --ff-only`，webdav 通道 = PROPFIND/GET）。
    */
-  async hasNewRemoteSnapshot(): Promise<boolean> {
-    const metas = await this.transport.list();
+  async hasNewRemoteSnapshot(listed?: readonly SyncSnapshotMeta[]): Promise<boolean> {
+    const metas = listed ?? await this.transport.list();
     if (metas.length === 0) return false;
     const latestId = metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新在末
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);

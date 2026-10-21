@@ -1373,6 +1373,33 @@ test('hasNewRemoteSnapshot: 空远端→false；从未同步且远端非空→tr
   }
 });
 
+test('hasNewRemoteSnapshot(listed)：传入本轮列表 → 不再 list（自动同步一轮至多一次网络往返）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-hasnew-reuse-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+    await engine.push({ snapshotId: 'sync-001' });
+
+    const before = transport.calls.filter((c) => c === 'list').length;
+    const listed = await engine.listSnapshots();
+    assert.equal(transport.calls.filter((c) => c === 'list').length, before + 1);
+
+    assert.equal(await engine.hasNewRemoteSnapshot(listed), false, '复用传入列表判定「远端最新=祖先」');
+    assert.equal(
+      transport.calls.filter((c) => c === 'list').length, before + 1,
+      '传了列表就绝不能再 list 一次（否则每个回合白跑一次远端往返）',
+    );
+
+    // 对照组：不传 → 自己 list（保持旧行为）
+    assert.equal(await engine.hasNewRemoteSnapshot(), false);
+    assert.equal(transport.calls.filter((c) => c === 'list').length, before + 2, '不传时必须自己 list');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('hasLocalChanges: 从未同步→true；推后无改动→false；本地改动→true', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-haslocal-'));
   try {

@@ -18,6 +18,7 @@ import type { MutationLockPort, MutationLockToken } from '../utils/env-lock.ts';
 import type { AutosyncConfig } from './autosync-config.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
 import type { MergePlan, MergeSectionResult } from './merge.ts';
+import type { SyncSnapshotMeta } from './transport.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
@@ -240,6 +241,48 @@ test('runOnce: 历史记录携带触发通道（transport=调用通道 git/webda
   assert.ok(entries.some((e) => e.transport === 'webdav' && e.skipReason === 'upToDate'), 'webdav 通道历史应带 transport=webdav');
   // 全部历史条目都应携带 channel
   for (const e of entries) assert.ok(e.transport === 'git' || e.transport === 'webdav', `历史必须带 transport: ${JSON.stringify(e)}`);
+});
+
+test('runOnce: 缺省远端检测复用本轮列表（一轮至多一次远端 list，不再白跑一次网络往返）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const metas: SyncSnapshotMeta[] = [{
+    id: 'sync-001',
+    createdAt: '2026-08-16T12:00:00.000Z',
+    sections: {},
+    manifest: {
+      schemaVersion: 3, dshVersion: '0.0.0', platform: 'win32',
+      sectionIds: [], containsSecrets: false, encrypted: false,
+    },
+  }];
+  let listCalls = 0;
+  let seenListed: unknown = 'not-called';
+  const engine = {
+    listSnapshots: async () => { listCalls += 1; return metas; },
+    hasNewRemoteSnapshot: async (listed?: unknown) => { seenListed = listed; return false; },
+    hasLocalChanges: async () => false,
+  };
+  const { scheduler } = makeScheduler({ cfg, engine, history: [] });
+  await scheduler.runOnce('git');
+  assert.equal(listCalls, 1, '查加密快照已 list 过一次 → 检测必须复用，不得再 list');
+  assert.equal(seenListed, metas, '本轮列表要按引用原样透传给检测');
+});
+
+test('runOnce: 列表拿不到（网络失败）时检测回退自己 list，行为与改造前一致', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  let detectCalls = 0;
+  let seenListed: unknown = 'not-called';
+  const engine = {
+    listSnapshots: async () => { throw new Error('network down'); },
+    hasNewRemoteSnapshot: async (listed?: unknown) => { detectCalls += 1; seenListed = listed; return false; },
+    hasLocalChanges: async () => false,
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(detectCalls, 1, '列表失败不阻断检测');
+  assert.equal(seenListed, undefined, '没有可用列表 → 传 undefined，让引擎自己 list');
+  assert.equal(result.status, 'success');
+  assert.equal(result.skipReason, 'upToDate');
+  assert.equal(getEntries().length, 1);
 });
 
 test('runOnce: 未配置仓库 → skipped(unconfigured)，写历史但不计失败', async () => {

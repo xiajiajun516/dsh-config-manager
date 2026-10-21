@@ -28,9 +28,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **本版主题**：**同步通道变得更能自我诊断、也更难互相踩踏 —— 一键测试连接、首次同步自动建好远端目录、两台设备同时写不再互相覆盖，跨机搬配置时也不再带上本机的 pnpm 路径**
+> **本版主题**：**同步通道变得更能自我诊断、也更难互相踩踏 —— 一键测试连接、首次同步自动建好远端目录、两台设备同时写不再互相覆盖，跨机搬配置时也不再带上本机的 pnpm 路径、自动同步改成「改完就同步」**
 >
-> **Theme**: **The sync channel now diagnoses itself and steps on itself less — a one-click connection test, automatic remote folder creation on first sync, no more clobbering when two devices write at once, and cross-machine configs that no longer carry this machine's pnpm paths**
+> **Theme**: **The sync channel now diagnoses itself and steps on itself less — a one-click connection test, automatic remote folder creation on first sync, no more clobbering when two devices write at once, and cross-machine configs that no longer carry this machine's pnpm paths, and auto sync that fires the moment you change something**
 
 ### 🆕 新增 · Added
 
@@ -71,6 +71,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **加载时先看到「即将出现的内容」，不再只剩一个转圈**：产物库列表、首页状态条与最近活动、恢复台扫描、导入与迁移咨询、备份查看、回退点、更新说明与发布说明这些页面、弹窗与面板的首次加载，都改成与真实内容同形状的骨架占位，行高对齐后数据到货不再整页跳变；按钮里与读取遮罩中的进行中反馈仍保留转圈（那里没有布局轮廓可给）。
   **Loading now shows the shape of what is coming instead of a lone spinner**: first loads inside the library list, the home status strip and recent activity, recovery scans, import and migration consultations, backup inspection, rollback points, update notes and release notes all render skeleton placeholders shaped like the real content, and with row heights matched the page no longer jumps when data arrives; in-button and read-mask progress still uses the spinner, where there is no layout to outline.
+
+- **自动同步不再干等定时器：改完就同步**：本机一改配置（设置、提示词、插件清单与补丁、档案清单、技能与预设、指令文件等），一两秒内就会自动起一轮同步；远端也按独立节奏检查新快照（缺省 60 秒，可自行调整，最短 15 秒、最长 1 小时），原来的间隔设置退居兜底；一轮还没跑完时不会自己触发自己，改完再接上下一轮。
+  **Auto sync no longer waits for the timer — it fires as soon as you change something**: editing local config (settings, prompts, plugin lists and patches, profile manifests, skills and presets, instruction files) starts a sync round within a second or two, and the remote is checked for new snapshots on its own cadence (60 seconds by default, adjustable from 15 seconds to an hour), with the old interval kept as a fallback; a round in progress never triggers itself, and the next one follows as soon as it finishes.
+- **中风险分区（插件与 MCP）不再一律挂着等你裁决**：远端单边改动会自动落到本机；想更保守可以把自动落盘收窄成「只自动应用低风险」。高风险分区（会话、密钥、插件数据、本机凭据状态、插件文件）仍然永不自动。
+  **Medium-risk sections (plugins and MCP) no longer sit waiting for your decision**: one-sided remote changes are applied locally by default, and you can tighten it to "only low-risk" if you prefer; high-risk sections (sessions, secrets, plugin data, local credential status, plugin files) are still never automatic.
+- **真的改到同一处时按「保留本机并推上去」处理**：不再整轮挂起等人工裁决，本机内容会推成远端最新，被覆盖的远端旧快照仍留在远端历史里可回滚，卡片上如实写明本轮是「保留本机」的部分结果；想每次都由你决定可以切回「每次问我」。
+  **When both sides really changed the same spot, local wins and is pushed up**: the round no longer stalls waiting for a manual decision — your local content becomes the latest remote, the overwritten remote snapshot stays in remote history for rollback, and the card states plainly that this round kept local changes; switch back to "ask me every time" if you want to make the call yourself.
+- **自动同步一轮只拉取远端一次**：此前每轮会重复拉两次，现在网络往返与远端压力减半（按缺省 60 秒检查，从每天约 2880 次降到约 1440 次）。
+  **An auto-sync round now fetches the remote once instead of twice**: network round-trips and remote load are halved (about 1440 instead of 2880 per day at the default 60-second check).
 
 ### 🐛 修复 · Fixed
 
