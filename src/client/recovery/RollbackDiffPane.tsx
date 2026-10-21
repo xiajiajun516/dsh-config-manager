@@ -48,7 +48,7 @@ export function RollbackDiffPane({ state, rt, title, fill }: RollbackDiffPanePro
    */
   const shell = (body: ReactNode): ReactNode =>
     fill === true ? <div className={css.diffPane + ' ' + css.diffPaneFill}>{body}</div> : body
-  if (state.status === 'loading') return shell(<Spinner label={rt('rollback.diff.loading')} />)
+  if (state.status === 'loading') return shell(<Spinner label={rt('rollback.diff.loading')}  size="page" />)
   if (state.status === 'error') return shell(<Banner kind="error">{state.message === null ? rt('rollback.diff.failed') : redact(state.message)}</Banner>)
   const diff = state.diff
   if (diff.ok !== true) {

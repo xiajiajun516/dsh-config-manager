@@ -239,7 +239,7 @@ export function ReleaseNotesDialog({
       >
         {loading && (
           <div style={{ padding: '24px 0', display: 'flex', justifyContent: 'center' }}>
-            <Spinner label={t('about.releaseNotes.loading')} />
+            <Spinner label={t('about.releaseNotes.loading')}  size="page" />
           </div>
         )}
 
@@ -276,7 +276,7 @@ export function ReleaseNotesDialog({
 
         {loadingMore && (
           <div style={{ padding: '12px 0', display: 'flex', justifyContent: 'center' }}>
-            <Spinner label={t('about.releaseNotes.loadingMore')} />
+            <Spinner label={t('about.releaseNotes.loadingMore')}  size="page" />
           </div>
         )}
 

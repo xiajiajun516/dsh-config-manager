@@ -130,7 +130,7 @@ export function PluginUpdateDialog({
 
         {notes.kind === 'loading' && (
           <div className={css.updateNotesLoading}>
-            <Spinner label={t('about.update.dialog.loadingNotes')} />
+            <Spinner label={t('about.update.dialog.loadingNotes')}  size="page" />
           </div>
         )}
 

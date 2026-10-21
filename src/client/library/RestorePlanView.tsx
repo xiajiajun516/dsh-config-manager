@@ -104,7 +104,7 @@ function reasonLabel(t: TranslateNS<'config-manager'>, reason: SnapshotFileDiffR
 
 
 function DiffPane({ state, t }: { state: DiffState; t: TranslateNS<'config-manager'> }) {
-  if (state.status === 'loading') return <Spinner label={t('snapshots.plan.loadingDiff')} />
+  if (state.status === 'loading') return <Spinner label={t('snapshots.plan.loadingDiff')}  size="page" />
   if (state.status === 'error') return <Banner kind="error">{redact(state.message)}</Banner>
   const diff = state.diff
   if (diff.reason !== undefined) return <div className={css.hint}>{reasonLabel(t, diff.reason, diff)}</div>

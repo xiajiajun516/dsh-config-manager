@@ -231,7 +231,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
           与空态共用同一个 .libraryListState 契约（守卫要求恰好两处：加载态 + 空态）。 */}
       {(loading || (anySourcePending && filtered.length === 0)) && (
         <div className={css.libraryListState}>
-          <Spinner label={t('common.loading')} />
+          <Spinner label={t('common.loading')}  size="page" />
         </div>
       )}
 

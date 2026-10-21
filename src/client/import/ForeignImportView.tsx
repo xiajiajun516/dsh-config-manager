@@ -187,7 +187,7 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
       <div className={css.viewBody}>
         <SectionTitle title={t('foreign.source.title')} />
         <div className={css.marketReviewPage}>
-          <Spinner label={t('foreign.source.loading')} />
+          <Spinner label={t('foreign.source.loading')}  size="page" />
         </div>
       </div>
     )

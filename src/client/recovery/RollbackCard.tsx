@@ -460,7 +460,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
           </>
         )}
 
-        {status === 'loading' && <Spinner label={t('recovery.loading')} />}
+        {status === 'loading' && <Spinner label={t('recovery.loading')}  size="page" />}
         {status === 'error' && (
           <div className={css.actionRow}>
             <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>
@@ -544,7 +544,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             )}
           />
           <Modal.Body scroll>
-            {status === 'loading' && <Spinner label={t('recovery.loading')} />}
+            {status === 'loading' && <Spinner label={t('recovery.loading')}  size="page" />}
             {status === 'error' && (
               <div className={css.actionRow}>
                 <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>

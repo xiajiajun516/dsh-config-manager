@@ -47,6 +47,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **所有页面的加载动画统一成一条「鱼骨」**：按钮里的进行中指示、弹窗与大区块的首屏加载现在是同一个会游动的鱼骨架（骨节向头部游、肋骨从尾向头依次亮起），整块加载处放大一档；小尺寸下形状也读得出来，不再是一条看不清的细圆弧。
+  **Loading indicators on every page are now one swimming "fishbone"**: the in-button progress icon, dialogs and block-level first loads share a single skeleton (vertebrae drifting toward the head while the ribs light up from tail to head), one size larger for block loads — the shape stays readable at small sizes instead of a thin arc you cannot make out.
 - **两台设备同时同步远端时不再互相覆盖**：写入前会核对远端是否已被别人改过，一旦发现就把这次写入停在写任何东西之前并明确提示重跑，绝不静默丢掉别人刚推的快照。
   **Two devices syncing at the same time no longer overwrite each other**: the write checks whether the remote changed since it was read, and if it did the sync stops before writing anything and asks you to run it again, instead of silently dropping a snapshot someone else just pushed.
 - **首次同步不再要求你先手工建好网盘目录（WebDAV）**：目标目录（含多级）不存在时会自动创建，创建了哪一层也会如实告诉你；对象存储（S3/OSS/COS/MinIO/Kodo）与 Gist 仍按各自语义处理，不会替你新建桶或 Gist。

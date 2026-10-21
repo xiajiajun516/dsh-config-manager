@@ -874,7 +874,7 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
           {phase === 'error' && <Banner kind="error">{error ?? t('common.unknownError')}</Banner>}
 
           {/* 首次扫描（还没有任何结果）：给出进行中反馈 —— 旧实现在这里只留一片空白 */}
-          {phase === 'loading' && response === null && <Spinner label={t('sessions.scanning')} />}
+          {phase === 'loading' && response === null && <Spinner label={t('sessions.scanning')}  size="page" />}
 
           {phase === 'ready' && response !== null && (
             <>
@@ -1634,7 +1634,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
               )}
 
               {/* 预览加载 */}
-              {state.previewLoading && <Spinner label={t('recovery.preview.loading')} />}
+              {state.previewLoading && <Spinner label={t('recovery.preview.loading')}  size="page" />}
 
               {/* 预览内容 */}
               {previewView !== null && (

@@ -441,7 +441,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           trailing={<InfoHint text={t('snapshots.selectHint')} label={t('common.infoHint')} />}
         />
         <Modal.Body scroll>
-          {plan?.loading === true && <Spinner label={t('common.loading')} />}
+          {plan?.loading === true && <Spinner label={t('common.loading')}  size="page" />}
           {plan?.error !== null && plan?.error !== undefined && <Banner kind="error">{plan.error}</Banner>}
           {plan?.plan != null && plan.plan.actions.length === 0 && <Empty>{t('snapshots.noActions')}</Empty>}
           {plan?.plan != null && plan.plan.actions.length > 0 && (

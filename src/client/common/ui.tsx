@@ -15,6 +15,14 @@ import { ExpandChevron } from './Icon.tsx'
 import { badgeTone, type BadgeKind } from '../../ui/badge-tone.ts'
 import { hostTag } from './host-primitives.ts'
 import css from '../config-manager.module.css'
+import {
+  FISHBONE_EYE,
+  FISHBONE_RIBS,
+  FISHBONE_SPINE,
+  fishboneRibPath,
+  fishboneSkullPath,
+  fishboneTailPaths,
+} from './fishbone.ts'
 
 /* ---------------- Button ---------------- */
 
@@ -241,50 +249,59 @@ export function Card({ children, className, style }: CardProps) {
   return <div className={className !== undefined ? `${css.card} ${className}` : css.card} style={style}>{children}</div>
 }
 
-/* ---------------- Spinner ---------------- */
+/* ---------------- Spinner（鱼骨加载动画） ---------------- */
+
+export type SpinnerSize = 'inline' | 'page'
 
 export interface SpinnerProps {
+  /** 加载文案（已翻译；可见，同时承担读屏语义） */
   label?: string
+  /** 尺寸：inline（缺省，14px，按钮内联 / 行内）/ page（22px，整块首屏加载的居中位） */
+  size?: SpinnerSize
 }
 
 /**
- * 加载指示（旋转环 + 可选文案）。
+ * 加载指示（鱼骨 + 可选文案）—— 全站唯一的加载动画。
  *
- * 为什么用 **SVG 圆**而不是「border + border-radius: 50%」的经典 CSS 转圈
- * ---------------------------------------------------------------
- * 2026-09 用户反馈「加载的 icon 不是圆形」。实测（对截图做像素几何测量）：形状**本来就是**
- * 近圆（外缘 20×19），真正的问题是观感 —— 13px 的盒子上压 2px 边框（占直径 15%），
- * 且只有 `border-top` 是实色、其余三边仅 25% 不透明度，栅格化后视觉上只剩左上一条亮弧，
- * 「圆」读不出来，看着像圆角方块的一个角。
- * 改用两个 `<circle>`：几何由路径保证（与分辨率/DPR 无关），描边细一档（≈1.63px），
- * 底环有足够对比度 → 形状一眼可辨。
+ * 为什么是鱼骨（2026-10-21 用户要求）
+ * ---------------------------------
+ * 用户要求「统一所有页面的加载动画替换成鱼骨架加载动画」：此前是 SVG 圆环，13px 上
+ * 只剩一条亮弧、形状读不出来（2026-09 真机反馈「加载的 icon 不是圆形」）。鱼骨由几何
+ * 路径画成（脊柱 + 四对肋骨 + 尾鳍 + 头骨，见 ./fishbone.ts），与分辨率 / DPR 无关；
+ * 动画 = 脊柱骨节持续向头部游动 + 肋骨从尾向头依次亮起（相位与脊柱一致，
+ * CSS 见 config-manager.module.css §3）。
  *
- * 颜色仍走 `currentColor`（与 lucide 图标同一约定），在主色/危险/幽灵任意底色上都取该处
- * 语义前景色；此前写死 business-primary 蓝会在**主色按钮**（蓝底）上变成蓝画蓝、转圈完全看不见。
- * 动画仍是同一个 `@keyframes spin`，且**刻意不在 prefers-reduced-motion 下停掉**（CSS §15）：
- * 它承载「正在进行」这个状态本身，停掉会让用户以为界面卡死。
+ * 颜色一律 currentColor（与 lucide 图标同一约定）：主色 / 危险 / 幽灵任意底色上都取该处
+ * 语义前景色 —— 写死 business-primary 蓝会在**主色按钮**（蓝底）上变成蓝画蓝、动画整个
+ * 看不见（真机截图）。
+ *
+ * 与骨架屏的分工不变（DESIGN.md §3）：**有布局轮廓 → 骨架（Skeleton）；没有轮廓 →
+ * 这条鱼骨**（按钮内联 / 遮罩 / 轮询中的小区域）。`prefers-reduced-motion: reduce`
+ * 下**刻意不停**动画（CSS §15）：它承载「正在进行」这个状态本身，停掉像卡死。
  */
-/** 圆的半径（24 网格内）；圆心固定 12,12。 */
-const SPINNER_R = 9
-/** 可见扫掠段占整圈的比例（与旧实现的 border-top = 1/4 圈一致）。 */
-const SPINNER_ARC_RATIO = 0.25
-/** 弧长按 2πr 现算 —— 改 `SPINNER_R` 时 `stroke-dasharray` 自动跟随，
- *  不会像手写常量那样与半径悄悄漂移（此前是 CSS 里手写的 `14.14 42.41`）。 */
-const SPINNER_ARC_LENGTH = 2 * Math.PI * SPINNER_R * SPINNER_ARC_RATIO
-const SPINNER_GAP_LENGTH = 2 * Math.PI * SPINNER_R - SPINNER_ARC_LENGTH
-
-export function Spinner({ label }: SpinnerProps) {
+export function Spinner({ label, size = 'inline' }: SpinnerProps) {
+  const svgClass = size === 'page' ? css.spinner + ' ' + css.spinnerPage : css.spinner
   return (
     <span className={css.spinnerWrap}>
-      <svg className={css.spinner} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <circle className={css.spinnerTrack} cx="12" cy="12" r={SPINNER_R} />
-        <circle
-          className={css.spinnerArc}
-          cx="12"
-          cy="12"
-          r={SPINNER_R}
-          strokeDasharray={SPINNER_ARC_LENGTH.toFixed(2) + ' ' + SPINNER_GAP_LENGTH.toFixed(2)}
-        />
+      <svg className={svgClass} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path className={css.fishboneSpine} d={'M' + FISHBONE_SPINE.x1 + ' ' + FISHBONE_SPINE.y + 'H' + FISHBONE_SPINE.x2} />
+        {FISHBONE_RIBS.map((rib) => (
+          <g key={rib.x}>
+            {[1, -1].map((side) => (
+              <path
+                key={side}
+                className={css.fishboneRib}
+                style={{ animationDelay: rib.delay + 'ms' }}
+                d={fishboneRibPath(rib, side as 1 | -1)}
+              />
+            ))}
+          </g>
+        ))}
+        {fishboneTailPaths().map((d) => (
+          <path key={d} className={css.fishboneRib + ' ' + css.fishboneTail} d={d} />
+        ))}
+        <path className={css.fishboneSkull} d={fishboneSkullPath()} />
+        <circle className={css.fishboneEye} cx={FISHBONE_EYE.cx} cy={FISHBONE_EYE.cy} r={FISHBONE_EYE.r} />
       </svg>
       {label !== undefined && <span className={css.spinnerLabel}>{label}</span>}
     </span>

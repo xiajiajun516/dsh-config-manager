@@ -379,7 +379,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
           </div>
 
           <div className={`${css.dialogBody} ${css.dialogBodyScroll}`}>
-            {state === 'loading' && <Spinner label={t('chat.entry.loading')} />}
+            {state === 'loading' && <Spinner label={t('chat.entry.loading')}  size="page" />}
 
             {state === 'nopoint' && <Empty>{t('chat.entry.noPoint')}</Empty>}
 

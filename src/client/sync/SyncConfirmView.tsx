@@ -318,7 +318,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       </div>
 
       {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-      {consultLoading && <Spinner label={api.t('consult.loading')} />}
+      {consultLoading && <Spinner label={api.t('consult.loading')}  size="page" />}
       {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
 
       {error !== null && <Banner kind="error">{error}</Banner>}
