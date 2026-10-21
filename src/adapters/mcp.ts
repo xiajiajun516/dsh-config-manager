@@ -22,6 +22,12 @@ import type {
   ImportContext, PlanItem, ValidationResult,
 } from '../core/types.ts';
 import { locatePatchLineLayer, readEffectivePatchLines, resolveWriteLayer } from '../core/patch-layers.ts';
+import {
+  MCP_CONNECTOR_STORE_REL, buildConnectorRecord, comparableConnector, exportConnectorBlock,
+  findConnectorRecord, mergeConnectorIntoStoreText, pickConnectorKey, readConnectorStore,
+  refillFieldsOf,
+} from '../core/mcp-connector-store.ts';
+import type { ConnectorExportEntry, McpConnectorExport } from '../core/mcp-connector-store.ts';
 
 /** 导出记录：McpServerEntry 之外附加来源 patch 行 id 与所在层（导入写回定位用） */
 export interface McpExportEntry extends McpServerEntry {
@@ -33,7 +39,17 @@ export interface McpExportEntry extends McpServerEntry {
   sourceFile?: string;
 }
 
-export interface McpExportSection { version: 1; servers: McpExportEntry[]; }
+export interface McpExportSection {
+  version: 1;
+  servers: McpExportEntry[];
+  /**
+   * MCP 连接器（\`dsh-mcp-connector\` 插件）的连接，第二个数据源。
+   *
+   * 为什么并列而不是新增分区：两条路径在 DSH 里都是「MCP 服务器」，用户心智里是一件事；
+   * 而备份格式是追加字段 ⇒ 旧备份没有它 = 空，读旧包的代码不受影响。
+   */
+  connectors?: McpConnectorExport;
+}
 
 /**
  * 从 patch 行数组中提取 MCP server 条目（以 config.serverName 存在为判定）。
@@ -97,6 +113,17 @@ export function buildMcpPatchLine(lineId: string, server: McpServerEntry): Recor
   return { id: lineId, name: 'dsh-mcp-client', config };
 }
 
+/** 连接器计划项的 id 前缀（导入时按前缀分派到 applyConnectorItem） */
+const MCP_CONNECTOR_ITEM_PREFIX = 'mcp-connector:';
+
+/** 计划项 detail：stdio 给命令 + 参数，http 给 URL（不打印任何 header/env 值，防凭据入日志） */
+function describeConnector(entry: ConnectorExportEntry): string {
+  const head = entry.transport === 'stdio'
+    ? [entry.command ?? '', ...(entry.args ?? [])].filter((s) => s !== '').join(' ')
+    : (entry.url ?? '');
+  return `${entry.transport} ${head}`.trim().slice(0, 200);
+}
+
 function newLineId(serverName: string): string {
   const slug = serverName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   return `mcp-${slug || 'server'}`;
@@ -117,10 +144,30 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
       warnings.push(msgOf(ctx)('adapter.patchReadFailedMCP', { reason: `${f.file}: ${f.reason}` }));
     }
     const servers = extractMcpServers(read.lines);
+    // 第二个数据源：连接器插件的 `storages/mcp_connector.json`（用户实际配置 MCP 的地方）。
+    // 读不到 = 本机没装/没用连接器（正常，静默）；读到了解析不了 = 异常，如实报 warning，
+    // **绝不**当作空表导出 —— 否则用户以为备份里有，恢复时才发现丢了。
+    let connectors: McpConnectorExport | undefined;
+    try {
+      const store = await readConnectorStore(ctx.fs);
+      if (store.exists && !store.parsed) {
+        warnings.push(msgOf(ctx)('adapter.mcpConnectorReadFailed', { reason: store.error ?? 'unknown' }));
+      } else if (store.exists && store.parsed) {
+        // 文件不存在 = 本机没有任何连接器：不写这个字段（旧备份也没有它，形状保持一致）
+        connectors = exportConnectorBlock(store.connections);
+      }
+    } catch (err) {
+      warnings.push(msgOf(ctx)('adapter.mcpConnectorReadFailed', { reason: err instanceof Error ? err.message : String(err) }));
+    }
+    const data: McpExportSection = { version: 1, servers };
+    if (connectors !== undefined) data.connectors = connectors;
     return {
       sectionId: 'mcp',
-      data: { version: 1, servers },
-      counts: { servers: servers.length },
+      data,
+      counts: {
+        servers: servers.length,
+        ...(connectors !== undefined ? { connectors: connectors.connections.length } : {}),
+      },
       warnings,
     };
   }
@@ -166,10 +213,92 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
         }
       }
     }
+    items.push(...await this.analyzeConnectors(data, ctx));
+    return items;
+  }
+
+  /**
+   * 连接器来源的计划项。
+   *
+   * 三条纪律：
+   *  ① 目标存储「存在但解析不了」→ 只报 warning、**零写入**（整文件改写会把 grants 等表一起抹掉）；
+   *  ② 条目里还有占位符 → 不写，产出「需重填凭据」的 warning（写进去 = 给用户一个起不来的 Server）；
+   *  ③ 同名 server 同时来自 patch 行与连接器 → 两条都保留，另加一条 warning（不隐式合并，
+   *     两者在 DSH 里是两份独立配置，合并会悄悄改变用户的生效结果）。
+   */
+  private async analyzeConnectors(data: McpExportSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const msg = ctx.msg;
+    const block = data.connectors;
+    if (block === undefined) return [];
+    const items: PlanItem[] = [];
+    const target = await readConnectorStore(ctx.target.fs);
+    if (target.exists && !target.parsed) {
+      items.push({
+        id: 'mcp-connector:store',
+        kind: 'Warning',
+        adapter: 'mcp',
+        description: msg('adapter.mcpConnectorTargetUnreadable', { reason: target.error ?? 'unknown' }),
+        severity: 'warning',
+      });
+    }
+    const writable = target.parsed;
+    for (const entry of block.connections ?? []) {
+      const id = `mcp-connector:${entry.key}`;
+      // 双来源同名：告诉用户「这条连接和 patch 行里的同名 server 是两份」，不替用户做决定。
+      // 放在「需重填」判断**之前**——两条事实都要讲，不能因为一条要重填就吞掉另一条。
+      if (data.servers.some((s) => s.serverName === entry.serverName)) {
+        items.push({
+          id: `mcp-connector-name:${entry.key}`,
+          kind: 'Warning', adapter: 'mcp',
+          description: msg('adapter.mcpConnectorDuplicateName', { serverName: entry.serverName }),
+          severity: 'warning',
+        });
+      }
+      const refill = refillFieldsOf(entry);
+      if (refill.length > 0) {
+        items.push({
+          id, kind: 'Warning', adapter: 'mcp',
+          description: msg('adapter.mcpConnectorNeedsRefill', { name: entry.name }),
+          detail: refill.join(', '),
+          severity: 'warning',
+        });
+        continue;
+      }
+      if (!writable) continue;
+      const existing = findConnectorRecord(target.connections, entry);
+      const detail = describeConnector(entry);
+      if (existing === undefined) {
+        items.push({
+          id, kind: 'Create', adapter: 'mcp',
+          description: msg('adapter.mcpConnectorCreate', { name: entry.name }),
+          detail,
+          severity: 'info',
+          target: { adapter: 'mcp', ref: MCP_CONNECTOR_STORE_REL },
+        });
+      } else if (isDeepStrictEqual(comparableConnector(existing), comparableConnector(entry))) {
+        items.push({ id, kind: 'Skip', adapter: 'mcp', description: msg('adapter.mcpConnectorSame', { name: entry.name }), severity: 'info' });
+      } else {
+        items.push({
+          id, kind: 'Conflict', adapter: 'mcp',
+          description: msg('adapter.mcpConnectorDiff', { name: entry.name }),
+          detail: `current=${JSON.stringify(comparableConnector(existing))} imported=${JSON.stringify(comparableConnector(entry))}`.slice(0, 200),
+          severity: 'warning',
+          target: { adapter: 'mcp', ref: MCP_CONNECTOR_STORE_REL },
+        });
+      }
+    }
+    for (const oauth of block.oauthConnections ?? []) {
+      items.push({
+        id: `mcp-connector:${oauth.key}`, kind: 'Warning', adapter: 'mcp',
+        description: msg('adapter.mcpConnectorOauth', { name: oauth.name }),
+        severity: 'warning',
+      });
+    }
     return items;
   }
 
   async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    if (item.id.startsWith(MCP_CONNECTOR_ITEM_PREFIX)) return this.applyConnectorItem(item, ctx);
     const msg = ctx.msg;
     const serverName = item.id.replace(/^mcp:/, '');
     const data = ctx.sections.get('mcp') as McpExportSection | undefined;
@@ -189,6 +318,39 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
     return { ok: true, needsRestart: true, message: msg('adapter.mcpWritten', { serverName }) };
   }
 
+  /**
+   * 写入一条连接：读全文件 → 只替换 `tables.connections[<key>]` → 整文件原子写。
+   *
+   * 为什么整文件写而不是走宿主 storage 服务：本机没装 `@deepseek-ai/dsh-storage-domain`，
+   * 我们拿不到 `mcp_connector` 域的表句柄；而直接改文件又会被运行中的宿主内存态覆盖 ⇒
+   * 计划项与本结果都显式要求重启（needsRestart），写之前先把原文件整体快照（引擎侧按
+   * `storages/` 前缀走文件类快照）。
+   */
+  private async applyConnectorItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    const msg = ctx.msg;
+    const key = item.id.slice(MCP_CONNECTOR_ITEM_PREFIX.length);
+    const data = ctx.sections.get('mcp') as McpExportSection | undefined;
+    const entry = data?.connectors?.connections.find((c) => c.key === key);
+    if (entry === undefined) return { ok: false, message: msg('adapter.mcpConnectorMissing', { name: key }) };
+    const refill = refillFieldsOf(entry);
+    if (refill.length > 0) {
+      return { ok: false, message: msg('adapter.mcpConnectorNeedsRefill', { name: entry.name }) };
+    }
+    const store = await readConnectorStore(ctx.target.fs);
+    if (store.exists && !store.parsed) {
+      return { ok: false, message: msg('adapter.mcpConnectorTargetUnreadable', { reason: store.error ?? 'unknown' }) };
+    }
+    const existing = findConnectorRecord(store.connections, entry);
+    const record = buildConnectorRecord(entry, {
+      existing,
+      key: pickConnectorKey(store.connections, entry),
+      now: Date.now(),
+    });
+    const text = mergeConnectorIntoStoreText(store, record);
+    await ctx.target.fs.writeFile(MCP_CONNECTOR_STORE_REL, new TextEncoder().encode(text));
+    return { ok: true, needsRestart: true, message: msg('adapter.mcpConnectorWritten', { name: entry.name }) };
+  }
+
   async validate(data: McpExportSection, msg: MsgFunc = zhMsg): Promise<ValidationResult> {
     return validateJsonSection<McpExportSection>('mcp', data, msg, (section, issues) => {
       if (!Array.isArray(section.servers)) {
@@ -197,6 +359,21 @@ export class McpAdapter implements ConfigAdapter<McpExportSection> {
         for (const s of section.servers) {
           if (s === null || typeof s !== 'object' || typeof s.serverName !== 'string' || s.serverName === '') {
             issues.push({ path: 'servers[]', message: msg('adapter.validate.serverName'), severity: 'error' });
+          }
+        }
+      }
+      // connectors 是**可选追加字段**：旧备份没有它 = 合法；有它但形态不对才算错
+      const connectors = section.connectors;
+      if (connectors !== undefined) {
+        if (connectors === null || typeof connectors !== 'object' || !Array.isArray((connectors as { connections?: unknown }).connections)) {
+          issues.push({ path: 'connectors.connections', message: msg('adapter.validate.array', { subject: 'connectors.connections' }), severity: 'error' });
+        } else {
+          for (const c of (connectors as { connections: unknown[] }).connections) {
+            if (c === null || typeof c !== 'object'
+              || typeof (c as { key?: unknown }).key !== 'string' || (c as { key: string }).key === ''
+              || typeof (c as { serverName?: unknown }).serverName !== 'string' || (c as { serverName: string }).serverName === '') {
+              issues.push({ path: 'connectors.connections[]', message: msg('adapter.mcpConnectorInvalid'), severity: 'error' });
+            }
           }
         }
       }

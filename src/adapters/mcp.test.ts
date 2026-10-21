@@ -137,3 +137,161 @@ test('mcp: validate 拒绝无 serverName 的条目', async () => {
   const bad = await adapter.validate({ version: 1, servers: [{ serverName: '' } as never] });
   assert.equal(bad.valid, false);
 });
+
+/* ------------------------------------------------------------ 连接器来源（方案 C） */
+
+const enc = (s: string) => new TextEncoder().encode(s);
+
+/** 造一份连接器存储文件（与真机同形态：{unit,global,tables:{connections,...}}） */
+function seedStore(ctx: ReturnType<typeof makeContext>, connections: Record<string, unknown>): void {
+  void ctx.fs.writeFile('storages/mcp_connector.json', enc(JSON.stringify({
+    unit: { name: 'mcp_connector', version: 1 },
+    global: null,
+    tables: { connections, grants: { g1: { key: 'g1' } }, catalog: {}, snapshots: {} },
+  })));
+}
+
+const GH_TOKEN = 'ghp_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+
+function githubConn(): Record<string, unknown> {
+  return {
+    key: 'github-github', connectorId: 'github', kind: 'manual', name: 'GitHub', serverKey: 'github', serverName: 'github',
+    transport: 'streamable-http', url: 'https://api.githubcopilot.com/mcp/',
+    headers: { Accept: 'application/json', Authorization: 'Bearer ' + GH_TOKEN },
+    auth: { mode: 'bearer', bearerToken: GH_TOKEN },
+    enabled: true, createdAt: 1, updatedAt: 2,
+  };
+}
+
+test('mcp 连接器：export 带上连接器并按规则脱敏（真机 4 条 MCP 的由来）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  seedStore(src, { 'github-github': githubConn() });
+  const exported = await new McpAdapter().export(src, { includeSecrets: false });
+  assert.equal(exported.data.servers.length, 0, 'patch 层没有 server（真机形态）');
+  assert.equal(exported.data.connectors?.connections.length, 1, '连接器必须进备份，否则 MCP 分区恒为 0');
+  assert.equal(exported.counts['connectors'], 1);
+  const entry = exported.data.connectors?.connections[0];
+  assert.equal(entry?.serverName, 'github');
+  assert.equal(entry?.headers?.['Accept'], 'application/json');
+  assert.equal(entry?.headers?.['Authorization'], '<REDACTED:REENTER>');
+  assert.equal(JSON.stringify(exported.data).includes(GH_TOKEN), false, '备份里绝不能出现真实 token');
+});
+
+test('mcp 连接器：存储存在但解析不了 → 出 warning 且不当作空表（不静默）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  void src.fs.writeFile('storages/mcp_connector.json', enc('{ broken'));
+  const exported = await new McpAdapter().export(src, { includeSecrets: false });
+  assert.equal(exported.data.connectors, undefined);
+  assert.equal(exported.warnings?.length, 1);
+  assert.match(String(exported.warnings?.[0]), /连接器存储/);
+});
+
+test('mcp 连接器：本机没有该文件 → 静默（没装连接器是正常形态）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  const exported = await new McpAdapter().export(src, { includeSecrets: false });
+  assert.equal(exported.data.connectors, undefined);
+  assert.equal(exported.warnings?.length ?? 0, 0);
+});
+
+test('mcp 连接器：导入 Create → 写回 → 再分析 Skip（幂等），其它表原样保留', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  seedStore(src, { 'github-github': githubConn() });
+  const adapter = new McpAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const sections = new Map([['mcp', exported.data]]);
+
+  // 目标机已有存储（含 grants 与另一条无关连接）→ 写回时这些必须逐字保留
+  const dst = makeContext('linux', '/home/bob');
+  void dst.fs.writeFile('storages/mcp_connector.json', enc(JSON.stringify({
+    unit: { name: 'mcp_connector', version: 1 },
+    global: null,
+    tables: { connections: { 'keep-me': { key: 'keep-me', connectorId: 'other', serverName: 'other' } }, grants: { g1: { key: 'g1' } }, catalog: { c: 1 } },
+  })));
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(dst, sections));
+  const create = items.find((i) => i.id === 'mcp-connector:github-github');
+  assert.equal(create?.kind, 'Warning', '备份里是占位符（token 被脱敏）→ 不写，要求重填');
+  assert.equal(create?.target, undefined);
+
+  // 用户重填后（模拟：把占位符换成真值）再导入 → Create 写回
+  const refilled = JSON.parse(JSON.stringify(exported.data)) as typeof exported.data;
+  const conn = refilled.connectors?.connections[0];
+  if (conn !== undefined) {
+    conn.bearerToken = 'ghp_' + 'Z'.repeat(36);
+    conn.headers = { Accept: 'application/json', Authorization: 'Bearer ghp_' + 'Z'.repeat(36) };
+    delete conn.redactedFields;
+  }
+  const items2 = await adapter.analyzeImport(refilled, makeImportContext(dst, new Map([['mcp', refilled]])));
+  const create2 = items2.find((i) => i.id === 'mcp-connector:github-github');
+  assert.equal(create2?.kind, 'Create');
+  assert.equal(create2?.target?.ref, 'storages/mcp_connector.json', '快照/回滚目标是整文件');
+  const r = await adapter.applyItem(create2!, makeImportContext(dst, new Map([['mcp', refilled]])));
+  assert.equal(r.ok, true);
+  assert.equal(r.needsRestart, true, '改 storage 文件必须重启 DSH 才生效');
+  const written = JSON.parse(new TextDecoder().decode(await dst.fs.readFile('storages/mcp_connector.json'))) as Record<string, any>;
+  assert.equal(written['tables']['connections']['github-github']['serverName'], 'github');
+  assert.deepEqual(written['tables']['grants'], { g1: { key: 'g1' } }, 'grants 等其它表必须原样保留');
+  assert.deepEqual(written['tables']['catalog'], { c: 1 }, 'catalog 等其它表必须原样保留');
+  assert.equal(written['tables']['connections']['keep-me']['connectorId'], 'other', '目标机既有连接一条都不能丢');
+
+  const items3 = await adapter.analyzeImport(refilled, makeImportContext(dst, new Map([['mcp', refilled]])));
+  assert.equal(items3.find((i) => i.id === 'mcp-connector:github-github')?.kind, 'Skip', '同内容再来一次 → Skip（幂等）');
+});
+
+test('mcp 连接器：目标存储解析不了 → 只报 warning，零写入', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  seedStore(src, { 'github-github': githubConn() });
+  const adapter = new McpAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  const refilled = JSON.parse(JSON.stringify(exported.data)) as typeof exported.data;
+  const conn = refilled.connectors?.connections[0];
+  if (conn !== undefined) delete conn.redactedFields, conn.bearerToken = 'x' + 'y'.repeat(40), conn.headers = { Accept: 'application/json' };
+  const dst = makeContext('linux', '/home/bob');
+  void dst.fs.writeFile('storages/mcp_connector.json', enc('{ broken'));
+  const items = await adapter.analyzeImport(refilled, makeImportContext(dst, new Map([['mcp', refilled]])));
+  const storeWarning = items.find((i) => i.id === 'mcp-connector:store');
+  assert.equal(storeWarning?.kind, 'Warning');
+  assert.equal(items.some((i) => i.kind === 'Create'), false, '目标读不出来时绝不写（整文件改写会毁掉其它表）');
+});
+
+test('mcp 连接器：同名 server 同时来自 patch 行与连接器 → 两条都留 + warning（不隐式合并）', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  src.patchFile.lines.set('mcp-github', {
+    lineId: 'mcp-github',
+    raw: { id: 'mcp-github', name: 'dsh-mcp-client', config: { serverName: 'github', command: 'npx', args: ['-y', 'gh-mcp'] } },
+  });
+  seedStore(src, { 'github-github': githubConn() });
+  const adapter = new McpAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  assert.equal(exported.data.servers.length, 1);
+  assert.equal(exported.data.connectors?.connections.length, 1);
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(makeContext('linux', '/home/bob'), new Map([['mcp', exported.data]])));
+  const dupe = items.find((i) => i.id === 'mcp-connector-name:github-github');
+  assert.equal(dupe?.kind, 'Warning');
+  assert.match(String(dupe?.description), /github/);
+});
+
+test('mcp 连接器：OAuth 连接只提示重新授权，不进 connections', async () => {
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  seedStore(src, {
+    'github-github': githubConn(),
+    'linear-linear': { key: 'linear-linear', connectorId: 'linear', kind: 'oauth', name: 'Linear', serverKey: 'linear', serverName: 'linear', transport: 'streamable-http', url: 'https://mcp.linear.app/sse', enabled: true, auth: { mode: 'oauth', grantKey: 'g-lin' }, createdAt: 1, updatedAt: 2 },
+  });
+  const adapter = new McpAdapter();
+  const exported = await adapter.export(src, { includeSecrets: false });
+  assert.equal(exported.data.connectors?.connections.length, 1, 'oauth 不进 connections（token 不在备份里，导进去也起不来）');
+  assert.equal(exported.data.connectors?.oauthConnections.length, 1);
+  assert.equal(JSON.stringify(exported.data).includes('g-lin'), false, 'grantKey 永不导出');
+  const items = await adapter.analyzeImport(exported.data, makeImportContext(makeContext('linux', '/home/bob'), new Map([['mcp', exported.data]])));
+  const oauth = items.find((i) => i.id === 'mcp-connector:linear-linear');
+  assert.equal(oauth?.kind, 'Warning');
+  assert.match(String(oauth?.description), /重新授权/);
+});
+
+test('mcp: validate 接受可选 connectors，形态不对才报错', async () => {
+  const adapter = new McpAdapter();
+  const ok = await adapter.validate({ version: 1, servers: [], connectors: { format: 'x', version: 1, connections: [{ key: 'k', connectorId: 'c', kind: 'manual', name: 'n', serverName: 's', transport: 'stdio', enabled: true }] } as never });
+  assert.equal(ok.valid, true);
+  const bad = await adapter.validate({ version: 1, servers: [], connectors: { connections: [{ key: '', serverName: '' }] } as never });
+  assert.equal(bad.valid, false);
+});
+

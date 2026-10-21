@@ -34,6 +34,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🆕 新增 · Added
 
+- **用 MCP 连接器配的服务器现在会随备份走**：以前这 4 个连接的配置根本进不了备份包（MCP 分区只认旧的补丁行），现在会跟 MCP 分区一起导出——地址、参数、开关与普通请求头照原样保留，令牌、密钥、带凭据的 URL 查询参数一律替换成占位符；导入时按连接合进目标机、先自动留好可回滚的快照，并明确提示要重启 DSH 才生效，需要重填凭据的连接只列在清单里而不会被写成一个起不来的服务器。
+  **MCP servers configured through connectors now travel with your backups**: those connections used to be absent from the bundle entirely (the MCP section only knew about legacy patch lines); they now export alongside it with endpoints, arguments, switches and ordinary headers unchanged while tokens, keys and credential-bearing URL parameters become placeholders, import merges them into the target per connection with a rollback snapshot taken first, tells you plainly that DSH must restart to apply, and lists connections needing credentials instead of writing a server that cannot start.
+
 - **同步页可以「测试连接」**：不执行任何同步就能只读自检当前通道（凭据、端点、目标容器、远端目录），失败时直接给出可执行的下一步（例如告诉你区域该填哪个值），不用再靠猜；四条通道都可自检 —— git 会只读核对远端可达与凭据是否被接受（不拉取、不改本地任何东西）。某条通道确实不提供自检时按中性提示说明（是能力边界，不是「操作失败」），绝不显示一个假的「连接正常」。
   **A "Test connection" button in the sync page**: a read-only self-check of the current channel (credentials, endpoint, target container, remote folder) without running any sync, and failures come with an actionable next step (for example which region value to use) instead of guesswork. Channels that cannot self-check say so honestly rather than showing a fake "connection OK".
 - **同步历史里能看出快照是哪台机器推的**：历史条目现在带设备名（同一台设备换过主机名也认得出），多台机器互相推送时不再分不清来源。
@@ -82,6 +85,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **An auto-sync round now fetches the remote once instead of twice**: network round-trips and remote load are halved (about 1440 instead of 2880 per day at the default 60-second check).
 
 ### 🐛 修复 · Fixed
+
+- **MCP 分区不再恒显示 0 个**：在选择导出内容时，用 MCP 连接器配好的服务器以前一律算「0 个、26 B」的空数组，现在如实计入条目数与体积。
+  **The MCP section no longer always shows zero**: when picking what to export, servers configured through MCP connectors used to count as an empty array ("0 items, 26 B") and are now counted honestly in both item count and size.
 
 - **远程合并弹窗打开时不再抖动或形变**：入场动画改为纯淡入、不再做位移；带内滚列表的弹窗也不会因为滚动条在动画中途出现而横向跳一下。
   **The remote-merge dialog no longer shudders or distorts as it opens**: its entrance is now a plain fade with no movement, and dialogs with inner scroll areas no longer jump sideways when the scrollbar appears mid-animation.

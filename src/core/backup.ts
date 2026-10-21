@@ -16,6 +16,7 @@ import { normalizePath } from '../utils/paths.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { SECTION_IDS, isFileSection } from '../schema/config.ts';
 import { isPatchLayerRel, PROFILE_PATCH_FILENAME, USER_PATCH_FILE } from './patch-layers.ts';
+import { MCP_CONNECTOR_STORE_REL } from './mcp-connector-store.ts';
 import type { SectionId } from '../schema/types.ts';
 import type {
   ConfigAdapter, FileSystemFacade, HostContext, HostFileBackup, ImportPlan, PlanItem, Snapshot,
@@ -337,6 +338,25 @@ async function engineSnapshotEntry(ctx: HostContext, target: SnapshotTarget): Pr
           return { kind: 'file', adapter: target.adapter, ref: target.ref, before: null, existed: false };
         }
         const data = await ctx.fs.readFile(abs);
+        return {
+          kind: 'file',
+          adapter: target.adapter,
+          ref: target.ref,
+          before: { contentHash: sha256Hex(data) },
+          existed: true,
+          copiedTo: `blobs/${crypto.randomUUID()}`,
+        };
+      }
+      // mcp 分区的第二个数据源（连接器插件的 storage domain 文件）：整文件快照。
+      // 没有这条分支时，连接器导入的写入撤不回来（该文件不在 patch 层里，走 patchLine 语义会
+      // 变成「读过一行 patch」→ 回滚时不还原文件 → 用户的 4 个 MCP 连接被永久改掉）。
+      if (target.adapter === 'mcp' && target.ref === MCP_CONNECTOR_STORE_REL) {
+        const fsFacade = fsForSection(ctx, target.adapter);
+        const abs = resolveFileTarget(ctx, target.adapter, target.ref);
+        if (!(await fsFacade.exists(abs))) {
+          return { kind: 'file', adapter: target.adapter, ref: target.ref, before: null, existed: false };
+        }
+        const data = await fsFacade.readFile(abs);
         return {
           kind: 'file',
           adapter: target.adapter,

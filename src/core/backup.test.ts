@@ -30,6 +30,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { FileSnapshotStore, createSnapshot, normalizeDshVersion, resolveFileTarget, verifySnapshot } from './backup.ts';
+import { rollback } from './rollback.ts';
 import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import type { ImportPlan, Snapshot, SnapshotStore } from './types.ts';
 import type { SectionId } from '../schema/types.ts';
@@ -419,4 +420,44 @@ test('保留清理：快照目录名与内部 id 不一致时跳过并留痕（�
   assert.ok(remaining.includes('zzz-renamed-dir'), '目录名与内部 id 不一致的目录绝不能被当成候选删掉');
   assert.ok(remaining.includes(second.id), '新建的快照当然还在');
   assert.ok(warned.some((m) => m.includes('不一致')), '跳过必须留痕（绝不静默）：' + JSON.stringify(warned));
+});
+
+/* ---------------- 方案 C：MCP 连接器存储文件（整文件快照 / 回滚） ---------------- */
+
+test('mcp 连接器：storages/mcp_connector.json 进快照为整文件条目，回滚按原字节还原', async () => {
+  const { ctx } = countingCtx();
+  const rel = 'storages/mcp_connector.json';
+  // 用引擎真正会读的那个路径播种（file 类目标由 resolveFileTarget 拼绝对路径）
+  const abs = resolveFileTarget(ctx, 'mcp', rel);
+  const original = JSON.stringify({
+    unit: { name: 'mcp_connector', version: 1 },
+    global: null,
+    tables: { connections: { 'a-a': { key: 'a-a', serverName: 'a' } }, grants: { g1: { key: 'g1' } }, tool_catalog: { t: 1 } },
+  });
+  await ctx.fs.writeFile(abs, Buffer.from(original, 'utf8'));
+
+  const plan: ImportPlan = {
+    items: [{
+      id: 'mcp-connector:a-a', kind: 'Create' as const, adapter: 'mcp' as const,
+      description: 'a', severity: 'info' as const, target: { adapter: 'mcp' as const, ref: rel },
+    }],
+    globalStrategy: 'merge', pathMappings: [], missingSecrets: [], needsRestart: false,
+    estimatedActions: {} as Record<SectionId, number>,
+  };
+  const store = new MemSnapshotStore();
+  const snapshot = await createSnapshot({ ctx, plan, sourceZip: 'unit.zip', store, adapters: [] });
+
+  const entry = snapshot.entries.find((e) => e.adapter === 'mcp' && e.ref === rel);
+  assert.equal(entry?.kind, 'file', '连接器存储必须走整文件快照（patchLine 语义撤不回它）');
+  assert.equal(entry?.existed, true);
+  assert.ok(entry?.copiedTo, '必须真的拷出一份 blob，否则回滚无字节可写回');
+  const blob = new TextDecoder().decode(await store.readBlob(snapshot.id, entry!.copiedTo!));
+  assert.equal(blob, original, '快照必须逐字节含全部表（grants/tool_catalog 不能被裁掉）');
+
+  // 模拟导入改写（只留 connections）→ 回滚必须回到原字节
+  await ctx.fs.writeFile(abs, Buffer.from('{"tables":{"connections":{}}}', 'utf8'));
+  const report = await rollback({ ctx, snapshot, store });
+  assert.equal(report.full, true, JSON.stringify(report.failed));
+  assert.deepEqual(report.restored, ['mcp:' + rel], '回滚必须报告真正被还原的那一条');
+  assert.equal(new TextDecoder().decode(await ctx.fs.readFile(abs)), original);
 });
