@@ -10,13 +10,13 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import {
-  DshProfileLauncher, buildLaunchArgs, logTail, parseLaunchUrl, parseLaunches, pickFreePortCandidates,
-  serializeLaunches,
+  DshProfileLauncher, buildLaunchArgs, findCliEntryForShim, logTail, parseLaunchUrl, parseLaunches,
+  pickFreePortCandidates, resolveDirectCliRunner, serializeLaunches,
   type DshCliCommand, type DshProfileLauncherDeps,
 } from './dsh-profile-launcher.ts'
 import { DshProfileError } from './dsh-profile-manager.ts'
@@ -374,5 +374,70 @@ test('stop：怎么都杀不掉 → stopFailed（附 pid）且记录保留（用
     )
     assert.deepEqual(h.killed, ['4242:graceful', '4242:force'])
     assert.deepEqual(parseLaunches(h.state()).map((r) => r.name), ['work'], '杀不掉就不能清记录（否则 UI 显示「已停止」而进程还在）')
+  } finally { h.cleanup() }
+})
+
+/**
+ * 真机根因（Windows）：启动器原先直接跑 PATH 上的 `dsh.cmd`，参数里带 `detached: true` ——
+ * 中间多一层 cmd.exe 后，孙进程（真正常驻的 node）的 stdout/stderr **全部丢失**，
+ * 日志文件恒 0 字节，于是永远读不到 `dsh web: <带 token 的 URL>`。
+ * 修法 = 从 .cmd 反解真正的 bin.js 直启；下面钉住反解的两条真实布局。
+ */
+function makeShimTree(binLayout: 'sibling' | 'parent' | 'embedded-parent'): { root: string; shim: string; entry: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-shim-'))
+  const prefix = binLayout === 'sibling' ? root : join(root, 'bin')
+  mkdirSync(prefix, { recursive: true })
+  const pkgRoot = join(root, 'node_modules', '@deepseek-ai', 'dsh')
+  mkdirSync(join(pkgRoot, 'lib'), { recursive: true })
+  writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh' }))
+  const entry = join(pkgRoot, 'lib', 'bin.js')
+  writeFileSync(entry, '// dsh cli\n')
+  const shim = join(prefix, 'dsh.cmd')
+  if (binLayout === 'sibling') writeFileSync(shim, '"%_prog%" "%dp0%\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*\r\n')
+  else writeFileSync(shim, '"%_prog%" "%dp0%\\..\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*\r\n')
+  return { root, shim, entry, cleanup: () => { rmSync(root, { recursive: true, force: true }) } }
+}
+
+test('findCliEntryForShim：npm 全局布局（node_modules 与 shim 同目录）能反解出 bin.js', () => {
+  const tree = makeShimTree('sibling')
+  try {
+    assert.equal(findCliEntryForShim(tree.shim), tree.entry)
+  } finally { tree.cleanup() }
+})
+
+test('findCliEntryForShim：shim 在 bin/ 子目录、内嵌路径带 ..\\ → 仍能反解（否则会退回 shell 包装脚本，日志恒空）', () => {
+  const tree = makeShimTree('embedded-parent')
+  try {
+    assert.equal(findCliEntryForShim(tree.shim), tree.entry)
+  } finally { tree.cleanup() }
+})
+
+test('findCliEntryForShim：找不到 dsh 入口 → null（调用方退回包装脚本，并由 warn urlNotFound 如实告知）', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-shim-none-'))
+  try {
+    const shim = join(root, 'dsh.cmd')
+    writeFileSync(shim, '"%_prog%" "%dp0%\\somewhere\\else.js" %*\r\n')
+    assert.equal(findCliEntryForShim(shim), null)
+    assert.equal(findCliEntryForShim(join(root, 'missing.cmd')), null, '脚本读不到也不得抛')
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('resolveDirectCliRunner：宿主是 Electron 时以 ELECTRON_RUN_AS_NODE=1 直启 bin.js，普通 node 不带该变量', () => {
+  assert.deepEqual(resolveDirectCliRunner({ electron: '30.0.0' }), {
+    command: process.execPath,
+    env: { ELECTRON_RUN_AS_NODE: '1' },
+  })
+  assert.deepEqual(resolveDirectCliRunner({ node: '24.13.0' }), { command: process.execPath })
+})
+
+test('launch：CLI 解析成「直启 bin.js」时，spawn 不得带 shell（中间 cmd 层 + detached 会丢 stdio）', async () => {
+  const h = makeHarness({
+    cli: { command: 'C:/node/node.exe', prefixArgs: ['C:/dsh/lib/bin.js'], shell: false },
+    log: 'dsh web: http://127.0.0.1:3099/?token=abc',
+  })
+  try {
+    const result = await h.launcher.launch({ name: 'work', shape: 'web', openBrowser: false })
+    assert.equal(result.url, 'http://127.0.0.1:3099/?token=abc')
+    assert.deepEqual(result.warnings, [])
   } finally { h.cleanup() }
 })

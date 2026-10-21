@@ -49,7 +49,7 @@
 ## 🏗️ 架构心智
 - 双面插件：host `src/index.ts`（Cordis `name='config-manager'`，`/api/dsh-config-manager/*`）+ web `src/client/`（React，settings.section，经 api 调 host）。
 - **宿主路由只经 kit 的 `endpoint()` 声明 + `registerRoutes()` 注册**（围栏与方法白名单在注册点统一包装；`registerRoutes()` 兜底断言未经 kit 的路由直接抛错）。
-- 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 75 条**；合计 **82** 条，见 parity 快照）；源码级守卫必须扫**全部**路由源。
+- 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 75 条**；合计 82 条）；源码级守卫必须扫**全部**路由源。
 - **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 82 条路由永不进入该认证路由。
 - 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 82 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
 - 新功能优先加 `src/core/`，适配器/UI 薄壳；15 adapter 与 `self` 分区口径 → `DEVELOPERS.md` 架构节。
@@ -81,10 +81,10 @@
 
 
 ### i18n
-- **禁止硬编码用户可见字符串**：文案进字典；`src/ui/` 走 `UiT`（活翻译器），React 壳走 `t()`（`ConfigManagerKey` 编译校验，zh 源 / en 镜像），宿主/引擎走 `engineMsg`。**语言在「取文案那一刻」解析**，不得在装配期快照（`makeUiT()`/`makeMsg()` 出现在 `apply()` 里即缺陷）。
+- **禁止硬编码用户可见字符串**：文案进字典；`src/ui/` 走 `UiT`（活翻译器），React 壳走 `t()`（zh 源 / en 镜像），宿主/引擎走 `engineMsg`。**语言在「取文案那一刻」解析**，不得在装配期快照（→ `DEVELOPERS.md`）。
 - **新增用户可见文案必须进目录**：zh 逐字保留、en 补齐；既有键的 zh/en 指纹冻结在 `src/core/engine-locale.test.ts`（只许追加）。
 - **静态守卫**：`node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 零命中）；作用域自检用 `DCM_I18N_GUARD_SCOPE`；白名单新增**只能走 captain**。
-- 7 套字典对照表与「查不到 key 不等于缺陷」的排查姿势 → `DEVELOPERS.md`（漏读会产 600+ 假阳性）。
+- 7 套字典对照表与「查不到 key 不等于缺陷」的排查姿势 → `DEVELOPERS.md`。
 
 ### 测试
 - `node:test`+`node:assert`(零依赖)，同文件 `*.test.ts` 同目录。
@@ -149,6 +149,7 @@
 - **本插件是 bundle 包**：隔离实例挂载必须进 `dsh.profile.bundles`。
 - **`cordis.patch.yml` 的 `!!js` 方言**：读写只有 `src/utils/patch-yaml.ts` 一份实现，别在别处 `yaml.load`；「存在但解析不了」拒绝覆盖（ENOENT 才是空层）。
 - **pnpm 隔离安装同树布局的推导只有一处**；多候选版本对不上就**不猜**；`session-verify.ts` 与 `dsh-profile-manager` 必须共用。
+- **档案启动子进程必须直启入口文件**（`shell:false`；Electron 用 `ELECTRON_RUN_AS_NODE=1`）：Windows「cmd 包装 + `detached`」会吞掉孙进程 stdio ⇒ 日志恒空、**抓不到带 token 的 URL**；上限 30 秒。→ `docs/lessons/profiles-and-instances.md`
 
 **会话与导入导出** → `docs/lessons/sessions-import-export.md`
 - **宿主整文件快照「存在但读不出来」绝不写 `existed:false`**（只跳过，绝不产生 `hostFileRemove`）。
@@ -182,19 +183,19 @@
 - **灾备快照线已收敛下线**：不再自建第二条恢复通道；`BOOT_CRITICAL_RELS`/`profileCriticalRels` 在 `core/boot-paths.ts`（**不得连带删 `boot-safety.ts`**）。
 - **救援模式与 `reconcileBundles` 的硬冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出时逐字节还原）；救援激活期间 `reconcileBundles` 一律停手。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly 会话 cookie，其余 403；读路径只读、写路径各自过 CLI 同源写入门；判定不许重写；**绝不等于「插件 API 无认证」**。
-- **回滚点台账 = 一条一写 + 内容寻址载荷 + 字节预算**（整份读改写会随历史把宿主拖到 OOM）；**自动留点缺省关闭**，关闭即**解绑** `session/event` 订阅；活切换经进程内 gate（→ `docs/lessons/recovery-console.md`）。
-- **回滚点采集必须有时间预算与取消**（细节见文档）；**子代理会话绝不自动留点**；**回退前像落盘**（暂存建不出 = 零写入失败）。→ `docs/lessons/recovery-console.md`
+- **回滚点台账 = 一条一写 + 内容寻址载荷 + 字节预算**；**自动留点缺省关闭**，关闭即**解绑** `session/event` 订阅；活切换经进程内 gate（→ `docs/lessons/recovery-console.md`）。
+- **回滚点采集必须有时间预算与取消**；**子代理会话绝不自动留点**；**回退前像落盘**（暂存建不出 = 零写入失败）。→ `docs/lessons/recovery-console.md`
 - **捕获必须并发 + 自适应 + 缺口优先**：读/写并发、对象仓写入**不走 temp+fsync+rename**、预算 10–120 s 自适应、缺口优先 + **条目与读预算解耦** ⇒ 覆盖率随回合收敛到 100%。→ `docs/lessons/recovery-console.md`
 - **捕获绝不碰含 `.asar` 段的路径**（宿主当容器解析 ⇒ 畸形夹具带走整个宿主 = 桌面闪退），在飞内容闸门只接 `captureInFlightBytes`（缺省 32 MiB；接 `maxFileBytes` = 允许整点预算同时驻留）。→ `docs/lessons/recovery-console.md`
 - **拒删按分子树、不按全局**：忽略目录 / 读不出的目录 / 没走查到的子树（`unwalkedDirs`）只让**它们自己**不删；只有范围说不清（列表被记录上限截断 / 老台账）才全局 fail-closed。→ `docs/lessons/recovery-console.md`
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
-- **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**（真机 355 文件 ≈ 7.8 s），即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。
+- **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**，即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的两道上限**（每会话 20 → 全局 50，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
 - **回滚点的「工作区态」必须是「该回合开始前」**：留点在 `turn/start` 拍（`turn/end` 只更新缺省边界）；在回合结束拍会固定成「改完之后」⇒ 用户看到「文件没被撤回」（→ `docs/lessons/recovery-console.md`）。
 - **回退删除集只有一份规划**（`planCreatedRemovals`；预览 = 执行）、**判据 = 能证明「留点时不存在」**（只有证明名单不完整才不删，`truncated` 不算）。证据 → `docs/lessons/recovery-console.md`
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。
 - **宿主服务的方法抽出来必须 bind 回服务对象**；三档降级判据不动，只补 receiver。
-- **回退 fork 必走 DSH 的 `sessionController.fork`（落盘 + 归位），绝不直接 `SessionStore.fork`；归位 cwd 必须多源 + 失败重试 + 失败写诊断**（只读活会话 ⇒ 真机 285/285 皆 `cwd-unavailable`）→ `docs/lessons/recovery-console.md`。
+- **回退 fork 必走 DSH 的 `sessionController.fork`（落盘 + 归位），绝不直接 `SessionStore.fork`；归位 cwd 必须多源 + 失败重试 + 失败写诊断** → `docs/lessons/recovery-console.md`。
 - **「查看」进 DSH 右侧栏**：`sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次；服务惰取、抽出方法必须 bind、补试幂等、形态不符即不注册，缺能力降级为弹窗内展示 → `docs/lessons/recovery-console.md`。
 - **接管聊天用户消息后正文不得自绘**：必须 `renderFactorySlot('conversation.chat.user.content', …)` 委托宿主 + 自绘气泡当 `options.fallback`（判据 = 那条 factory 注册与否）；**回滚点开关关闭时不得再接管 user cell**（→ `docs/lessons/recovery-console.md`）。
 - **崩溃残留只放行可自证形状**：自证门仅 `backup-schedule` → `docs/lessons/recovery-console.md`。
@@ -208,7 +209,7 @@
 - **「按插件看」归属键只有 npm 包名**：`pluginFiles` 无包名信息 ⇒ 不猜归属；注册表有而清单无的单元一律**不可勾**。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
-- **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补；**宿主模块表里的包（如 ui-primitives）只能帧内惰取 + try/catch + 回落**（`src/client/common/host-primitives.ts`）——顶层 import 会打挂整个浏览器半。
+- **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补；**宿主模块表里的包（如 ui-primitives）只能帧内惰取 + try/catch + 回落**（`src/client/common/host-primitives.ts`，→ `docs/lessons/packaging-and-bundle.md`）。
 - **issue #57–#60 四条**：`file:` spec 打包前 `stat` 判形态；同步快照 JSON 读写同口径（512 MiB）；`runStore.patch()` 后必须 `patchSyncPasswords()` 写回内存；git 源安装需 `scripts.prepare` + pnpm 11 `allowBuilds`。
 - **MemFs 测试**：内存 fs key 与宿主 path 解耦（win32 home 注入 cwd）。
 

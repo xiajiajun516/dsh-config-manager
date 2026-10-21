@@ -130,6 +130,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **勾选「自动同步」后会立刻跑一轮真实同步**：只要距上次运行已超过启动阈值，勾选后马上产出本轮结果，而不是让卡片继续挂着上一轮（甚至是十天前）的结论；本来开着时改间隔/阈值不会触发。（issue #105）
   **Ticking "auto sync" now runs a real sync round immediately**: as long as the last run is older than the startup threshold, enabling it produces this round's result right away instead of leaving the previous (possibly ten-day-old) conclusion on the card; adjusting the interval while it is already on does not trigger a run. (issue #105)
 
+- **从档案页启动新实例后能直接拿到带 token 的登录地址**：此前在 Windows 上启动的实例虽然起来了（端口已经在听），启动日志却始终是空的 —— 界面因此只能报「20 秒内未确认就绪 / 没能抓到带 token 的认证 URL」，你只能自己去日志里找那条地址（而日志里其实一个字都没有）。现在地址会被正常抓起并可直接打开；等待上限也从 20 秒放宽到 30 秒，插件多、启动慢的档案不会再被误判成没起来。
+  **Launching a profile from the profiles page now hands you the token-carrying URL**: on Windows the instance did start (the port was already listening) but its launch log stayed empty, so the page could only warn that readiness was not confirmed within 20 seconds and that no authenticated URL could be found — leaving you to dig the URL out of a log that contained nothing at all. The URL is now captured and directly openable, and the wait limit was raised from 20 to 30 seconds so profile-heavy, slower-starting setups are no longer misjudged as failed.
+
 ## [0.1.78] - 2026-10-17
 
 > **本版主题**：**同步或恢复配置后，DSH 自带的插件层不再被装成错版本的 npm 包 —— 不会再出现「DSH 升级之后新建会话报错」**

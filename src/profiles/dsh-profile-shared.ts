@@ -144,8 +144,14 @@ export type DshProfileStopOutcome = 'graceful' | 'killed' | 'already-stopped'
 /** 启动回执里的非致命告警码。 */
 export type DshProfileLaunchWarning = 'notReady' | 'urlNotFound'
 
-/** 等待新实例就绪的上限（宿主探活默认值；UI 文案引用同一常量，避免两处各写一个数字）。 */
-export const DSH_PROFILE_LAUNCH_TIMEOUT_MS = 20_000
+/**
+ * 等待新实例就绪的上限（宿主探活默认值；UI 文案引用同一常量，避免两处各写一个数字）。
+ *
+ * 真机口径（web 档案）：端口约 3 秒就 LISTENING，但带 token 的 URL 要等 dsh 把整棵插件树
+ * settle 完 + startup audit 走完才打印，实测 8–10 秒，插件多的档案会更久（有过 >20 秒的样本）。
+ * 20 秒会把「慢但成功」误判成未就绪，故放宽到 30 秒。
+ */
+export const DSH_PROFILE_LAUNCH_TIMEOUT_MS = 30_000
 
 /** GET /profiles 的响应负载（列表 + 当前运行 + 运行中实例 + 模板清单）。 */
 export interface DshProfilesSnapshot {

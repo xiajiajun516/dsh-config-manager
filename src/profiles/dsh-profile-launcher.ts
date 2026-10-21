@@ -9,6 +9,9 @@
  * 生态里的做法同样如此（dsh-profile-manager 的 `dshm start`、DSH Launcher 的桌面启动器），
  * 都是「由启动器 spawn 一个实例」；本模块把这件事做进插件：
  * web 形态档案 → detached 子进程 + 自动挑空闲端口 + 从启动日志里抓认证 URL + HTTP 探活。
+ * 子进程必须**直启**（node/Electron-as-node 跑 `bin.js`）：Windows 上经 `.cmd` 包装脚本
+ * （`shell: true` 或中间 cmd 层）再 `detached: true` 会丢掉孙进程的 stdout/stderr，
+ * 日志文件恒 0 字节 ⇒ 永远抓不到 `dsh web: <带 token 的 URL>`（真机实测，见 findCliEntryForShim）。
  *
  * 设计约束：
  *  - 只消费 DSH 的稳定表面（启动参数 + 启动日志里的 `dsh web:` 行），不 import 任何
@@ -173,7 +176,18 @@ export function defaultResolveCli(): DshCliCommand | null {
     }
     return null
   }
-  return { command: fromPath, prefixArgs: [], shell: /\.(cmd|bat)$/i.test(fromPath) }
+  const needsShell = /\.(cmd|bat)$/i.test(fromPath)
+  // Windows 的 .cmd/.bat 只能经 shell 起，而「中间 cmd 层 + detached」会吞掉孙进程的
+  // stdio（日志恒 0 字节 ⇒ 永远抓不到带 token 的 URL）。能反解出真入口就直接跑，
+  // 只有反解不出来时才退回包装脚本（那时日志里没有 URL，UI 会如实报 urlNotFound）。
+  if (needsShell) {
+    const entry = findCliEntryForShim(fromPath)
+    if (entry !== null) {
+      const runner = resolveDirectCliRunner()
+      return { command: runner.command, prefixArgs: [entry], shell: false, env: runner.env }
+    }
+  }
+  return { command: fromPath, prefixArgs: [], shell: needsShell }
 }
 
 /** bin.js 是否属于 @deepseek-ai/dsh（读上一级的 package.json.name）。 */
@@ -197,6 +211,47 @@ function findOnPath(names: readonly string[]): string | null {
     }
   }
   return null
+}
+
+/**
+ * 直启 bin.js 用的运行时：宿主是 Electron 时必须以 `ELECTRON_RUN_AS_NODE=1` 当 node 用
+ * （桌面端宿主 `process.execPath` 是 DeepSeek Harness.exe，真机实测可正常跑 CLI）。
+ */
+export function resolveDirectCliRunner(versions: Readonly<Record<string, string | undefined>> = process.versions): { command: string; env?: Readonly<Record<string, string>> } {
+  if (versions['electron'] !== undefined) return { command: process.execPath, env: { ELECTRON_RUN_AS_NODE: '1' } }
+  return { command: process.execPath }
+}
+
+/**
+ * 从 PATH 上的 dsh 包装脚本反解真正的 CLI 入口（`.../@deepseek-ai/dsh/lib/bin.js`）。
+ *
+ * 为什么必须反解（真机实测根因）：Windows 上 `.cmd/.bat` 只能经 shell 起，而
+ * **中间 cmd 层 + `detached: true` 会丢掉孙进程的 stdout/stderr** ——
+ * `dsh.cmd --version` 经 detached 起时日志恒 0 字节（非 detached 正常），
+ * 于是启动器永远读不到 `dsh web: <带 token 的 URL>` 那行，用户只看到
+ * 「20 秒内未确认就绪 / 没能抓到带 token 的 URL」。直启 bin.js 则正常（约 8 秒出 URL）。
+ *
+ * 先按 npm/pnpm 的常见布局找同目录 `node_modules`，再退回脚本内嵌的入口路径。
+ */
+export function findCliEntryForShim(shimPath: string): string | null {
+  const dir = dirname(shimPath)
+  const candidates = [
+    join(dir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),      // npm 全局前缀（dsh.cmd 同目录）
+    join(dir, '..', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), // <prefix>/bin/dsh.cmd
+    join(dir, '..', '..', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    join(dir, '..', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),                // pnpm <store>/.bin/dsh.cmd
+  ]
+  for (const candidate of candidates) {
+    if (isDshBinPath(candidate)) return candidate
+  }
+  const text = readTextSafe(shimPath)
+  if (text === null) return null
+  // 脚本内嵌路径可能是相对当前目录的（`%dp0%\node_modules\…`）也可能是 `..\node_modules\…`，
+  // 故把可选的前导相对段一起抓下来，再按 shim 所在目录解析。
+  const embedded = /(?:\.\.[\\/]|[.][\\/])?node_modules[\\/]+@deepseek-ai[\\/]+dsh[\\/]+lib[\\/]+bin\.js/iu.exec(text)
+  if (embedded === null) return null
+  const resolved = join(dir, embedded[0])
+  return isDshBinPath(resolved) ? resolved : null
 }
 
 /** 档案 → 是否可启动（唯一判据在 shared，UI 与本模块共用）。 */
