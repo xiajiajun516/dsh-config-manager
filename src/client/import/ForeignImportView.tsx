@@ -30,6 +30,7 @@ import type { ConfigManagerApi, ForeignImportResponse } from '../api.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import { foreignLossyRows, foreignPathsText, foreignSourcesViewModel, type ForeignSourceRow } from '../../ui/foreign-view.ts'
 import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
+import { SkeletonList } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { redact } from '../../security/redaction.ts'
@@ -187,7 +188,8 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
       <div className={css.viewBody}>
         <SectionTitle title={t('foreign.source.title')} />
         <div className={css.marketReviewPage}>
-          <Spinner label={t('foreign.source.loading')}  size="page" />
+          {/* 来源卡还没到货：按来源卡（卡片列表）的形状铺骨架，不再只给一个居中转圈 */}
+          <SkeletonList count={4} label={t('foreign.source.loading')} />
         </div>
       </div>
     )

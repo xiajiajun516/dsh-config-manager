@@ -15,7 +15,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
-import { Banner, Button, Spinner } from '../common/ui.tsx'
+import { Banner, Button } from '../common/ui.tsx'
+import { Skeleton } from '../common/Skeleton.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { redact } from '../../security/redaction.ts'
 import { ABOUT_META } from './about-view.ts'
@@ -130,7 +131,8 @@ export function PluginUpdateDialog({
 
         {notes.kind === 'loading' && (
           <div className={css.updateNotesLoading}>
-            <Spinner label={t('about.update.dialog.loadingNotes')}  size="page" />
+            {/* 更新说明是**正文块**（多段文字）：按行铺骨架，读完再决定要不要装 */}
+            <Skeleton shape="line" count={6} label={t('about.update.dialog.loadingNotes')} />
           </div>
         )}
 

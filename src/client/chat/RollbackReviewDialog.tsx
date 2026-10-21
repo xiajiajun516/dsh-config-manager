@@ -40,7 +40,8 @@ import type {
   RollbackPreviewResult,
   RollbackRewindResult,
 } from '../../ui/rollback-view.ts'
-import { Badge, Banner, Button, Checkbox, Empty, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Checkbox, Empty } from '../common/ui.tsx'
+import { SkeletonList } from '../common/Skeleton.tsx'
 import type { RollbackFileIconRenderer } from './RollbackFileIcon.tsx'
 import { RollbackDiffPane, type RollbackDiffState } from '../recovery/RollbackDiffPane.tsx'
 import { RollbackFileChanges } from '../recovery/RollbackFileChanges.tsx'
@@ -379,7 +380,7 @@ export function RollbackReviewDialog({ sessionId, turn, port, rt, t, openChildSe
           </div>
 
           <div className={`${css.dialogBody} ${css.dialogBodyScroll}`}>
-            {state === 'loading' && <Spinner label={t('chat.entry.loading')}  size="page" />}
+            {state === 'loading' && <SkeletonList count={3} label={t('chat.entry.loading')} />}
 
             {state === 'nopoint' && <Empty>{t('chat.entry.noPoint')}</Empty>}
 

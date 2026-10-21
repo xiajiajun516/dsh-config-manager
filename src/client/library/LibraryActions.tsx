@@ -24,6 +24,7 @@ import type { SyncApi } from '../sync/sync-api.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
 import type { TranslateNS } from '../client-types.ts'
 import { Banner, Button, Empty, Spinner } from '../common/ui.tsx'
+import { Skeleton, SkeletonList, SkeletonTable } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
@@ -380,7 +381,8 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           {consult !== null && (
             <>
               <div className={css.hint}>{fileNameOf(consult.row)}</div>
-              {consult.loading && <Spinner label={api.t('consult.loading')} />}
+              {/* 迁移前咨询：正文块（多段报告）→ 按行铺骨架 */}
+              {consult.loading && <Skeleton shape="line" count={5} label={api.t('consult.loading')} />}
               {consult.error !== null && <Banner kind="error">{consult.error}</Banner>}
               {consult.report !== null && <ConsultCard report={consult.report} t={api.t} />}
             </>
@@ -441,7 +443,8 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           trailing={<InfoHint text={t('snapshots.selectHint')} label={t('common.infoHint')} />}
         />
         <Modal.Body scroll>
-          {plan?.loading === true && <Spinner label={t('common.loading')}  size="page" />}
+          {/* 恢复计划预览：结果是一张「文件 → 动作」表 → 按表格铺骨架 */}
+          {plan?.loading === true && <SkeletonTable rows={6} label={t('common.loading')} />}
           {plan?.error !== null && plan?.error !== undefined && <Banner kind="error">{plan.error}</Banner>}
           {plan?.plan != null && plan.plan.actions.length === 0 && <Empty>{t('snapshots.noActions')}</Empty>}
           {plan?.plan != null && plan.plan.actions.length > 0 && (
@@ -511,7 +514,7 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
         <Modal.Header title={t('backupFiles.inspect')} closeLabel={t('common.close')} onClose={() => { setInspect(null) }} />
         <Modal.Body scroll>
           {inspect !== null && <div className={css.hint} data-testid="inspect-backup-name">{inspect.name}</div>}
-          {inspect?.loading === true && <Spinner label={t('backupFiles.inspectLoading')} />}
+          {inspect?.loading === true && <SkeletonList count={3} label={t('backupFiles.inspectLoading')} />}
           {inspect?.error != null && <Banner kind="error">{inspect.error}</Banner>}
           {inspect !== null && !inspect.loading && inspect.result === null && inspect.error === null && <Empty>{t('backupFiles.inspectEmpty')}</Empty>}
           {inspect?.result != null && <BackupInspectView result={inspect.result} t={t} />}

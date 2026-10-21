@@ -12,7 +12,8 @@ import type { TranslateNS } from '../client-types.ts'
 import type { RollbackFileDiffResult } from '../../ui/rollback-view.ts'
 import { rollbackFileDiffComparable, rollbackFileDiffReasonKey } from '../../ui/rollback-view.ts'
 import { redact } from '../../security/redaction.ts'
-import { Banner, Spinner } from '../common/ui.tsx'
+import { Banner } from '../common/ui.tsx'
+import { SkeletonTable } from '../common/Skeleton.tsx'
 import { DiffTable } from '../common/DiffTable.tsx'
 import css from '../config-manager.module.css'
 
@@ -48,7 +49,7 @@ export function RollbackDiffPane({ state, rt, title, fill }: RollbackDiffPanePro
    */
   const shell = (body: ReactNode): ReactNode =>
     fill === true ? <div className={css.diffPane + ' ' + css.diffPaneFill}>{body}</div> : body
-  if (state.status === 'loading') return shell(<Spinner label={rt('rollback.diff.loading')}  size="page" />)
+  if (state.status === 'loading') return shell(<SkeletonTable rows={8} label={rt('rollback.diff.loading')} />)
   if (state.status === 'error') return shell(<Banner kind="error">{state.message === null ? rt('rollback.diff.failed') : redact(state.message)}</Banner>)
   const diff = state.diff
   if (diff.ok !== true) {

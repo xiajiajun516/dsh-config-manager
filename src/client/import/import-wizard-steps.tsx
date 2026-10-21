@@ -15,6 +15,7 @@ import type { UiT } from '../../ui/i18n.ts'
 import {
   Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner,
 } from '../common/ui.tsx'
+import { Skeleton } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner, ErrorList } from '../common/ErrorBanner.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
@@ -183,7 +184,7 @@ export function ConsultStage(props: {
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('import.preview.title')} info={<InfoHint text={t('import.consult.hint')} label={t('common.infoHint')} />} />
-      {consultLoading && <Spinner label={apiT('consult.loading')} />}
+      {consultLoading && <Skeleton shape="line" count={5} label={apiT('consult.loading')} />}
       {consultReport !== null && <ConsultCard report={consultReport} t={apiT} />}
       {!consultLoading && consultReport === null && (
         <Banner kind="info">{t('import.consult.unavailable')}</Banner>

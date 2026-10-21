@@ -14,6 +14,7 @@ import { useEffect } from 'react'
 
 import { redact } from '../../security/redaction.ts'
 import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
+import { Skeleton } from '../common/Skeleton.tsx'
 import { toast } from '../common/toast-store.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConsultReport } from '../../core/migration-consult.ts'
@@ -318,7 +319,7 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
       </div>
 
       {/* Phase 7 迁移前咨询卡（只读健康评分 + 建议） */}
-      {consultLoading && <Spinner label={api.t('consult.loading')}  size="page" />}
+      {consultLoading && <Skeleton shape="line" count={5} label={api.t('consult.loading')} />}
       {consultReport !== null && <ConsultCard report={consultReport} t={api.t} />}
 
       {error !== null && <Banner kind="error">{error}</Banner>}

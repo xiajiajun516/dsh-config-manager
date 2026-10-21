@@ -126,3 +126,35 @@ export function SkeletonTable({ rows = 5, label }: SkeletonTableProps) {
     </SkeletonRoot>
   )
 }
+
+export interface SkeletonRowsProps {
+  /** 行数（默认 6） */
+  count?: number
+  /** 可见文案（已翻译） */
+  label?: string
+}
+
+/**
+ * 紧凑行骨架：行高与 `.artifactRowHead` 对齐（52px = 20px 图标位 + 标题/说明两行 + 8/10 内边距），
+ * 右侧留一个动作位 —— 用于「产物库」「最近活动」这类**一行一条、有分割线**的列表。
+ * 为什么单列一种形态：卡片骨架套在这种列表上会把行距撑大（每卡 12px 内边距），
+ * 数据到货时整块往下跳；行的形状只能靠行骨架给。
+ */
+export function SkeletonRows({ count = 6, label }: SkeletonRowsProps) {
+  return (
+    <SkeletonRoot label={label}>
+      <div className={css.skeletonRows} aria-hidden="true">
+        {indices(count).map((key) => (
+          <div key={key} className={css.skeletonRowItem}>
+            <span className={css.skeletonBar + ' ' + css.skeletonRowIcon} />
+            <span className={css.skeletonRowBody}>
+              <span className={css.skeletonBar + ' ' + css.skeletonRowTitle} />
+              <span className={css.skeletonBar + ' ' + css.skeletonRowMeta} />
+            </span>
+            <span className={css.skeletonBar + ' ' + css.skeletonRowAction} />
+          </div>
+        ))}
+      </div>
+    </SkeletonRoot>
+  )
+}

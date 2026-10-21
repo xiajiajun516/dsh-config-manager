@@ -23,7 +23,8 @@ import type { TranslateNS } from '../client-types.ts'
 import { formatDateTimeFull } from '../sync/history-model.ts'
 import { deviceLabelsById } from '../sync/remote-device-view.ts'
 import { runStore, type LibraryStoreSlice } from '../run-store.ts'
-import { Badge, Button, Card, Empty, Spinner } from '../common/ui.tsx'
+import { Badge, Button, Card, Empty } from '../common/ui.tsx'
+import { SkeletonRows } from '../common/Skeleton.tsx'
 import { redact } from '../../security/redaction.ts'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ArtifactRowView } from './ArtifactRow.tsx'
@@ -230,8 +231,10 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
       {/* 还有来源在路上（本机两源已就绪但为空）时也走加载态：绝不先给「暂无产物」的结论。
           与空态共用同一个 .libraryListState 契约（守卫要求恰好两处：加载态 + 空态）。 */}
       {(loading || (anySourcePending && filtered.length === 0)) && (
-        <div className={css.libraryListState}>
-          <Spinner label={t('common.loading')}  size="page" />
+        <div className={css.libraryListState + ' ' + css.librarySkeletonRegion}>
+          {/* 骨架：行数按一屏可见行给（8 行 ≈ 564×720 画布的列表区），行高与 .artifactRowHead 对齐，
+              数据到货时列表从同一位置长出来，不再「空页面 + 居中转圈」整块跳变。 */}
+          <SkeletonRows count={8} label={t('common.loading')} />
         </div>
       )}
 

@@ -57,6 +57,7 @@ import type {
 } from '../../ui/rollback-view.ts'
 import { redact } from '../../security/redaction.ts'
 import { Badge, Banner, Button, Card, Checkbox, Empty, IconButton, SectionTitle, Spinner } from '../common/ui.tsx'
+import { SkeletonList } from '../common/Skeleton.tsx'
 import { Icon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
@@ -460,7 +461,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
           </>
         )}
 
-        {status === 'loading' && <Spinner label={t('recovery.loading')}  size="page" />}
+        {status === 'loading' && <SkeletonList count={3} label={t('recovery.loading')} />}
         {status === 'error' && (
           <div className={css.actionRow}>
             <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>
@@ -544,7 +545,7 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             )}
           />
           <Modal.Body scroll>
-            {status === 'loading' && <Spinner label={t('recovery.loading')}  size="page" />}
+            {status === 'loading' && <SkeletonList count={3} label={t('recovery.loading')} />}
             {status === 'error' && (
               <div className={css.actionRow}>
                 <Banner kind="error">{error !== null ? error : t('rollback.apiMissing')}</Banner>

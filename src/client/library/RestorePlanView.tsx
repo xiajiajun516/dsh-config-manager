@@ -19,7 +19,8 @@ import type { TranslateNS } from '../client-types.ts'
 import { toRestorePlanView, withLoadedStatus, type RestorePlanRow } from '../../ui/restore-plan-view.ts'
 import { DiffTable } from '../common/DiffTable.tsx'
 import { formatBytes } from '../../ui/report.ts'
-import { Badge, Banner, Spinner } from '../common/ui.tsx'
+import { Badge, Banner } from '../common/ui.tsx'
+import { SkeletonTable } from '../common/Skeleton.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
 import { Collapse } from '../common/Motion.tsx'
 import css from '../config-manager.module.css'
@@ -104,7 +105,8 @@ function reasonLabel(t: TranslateNS<'config-manager'>, reason: SnapshotFileDiffR
 
 
 function DiffPane({ state, t }: { state: DiffState; t: TranslateNS<'config-manager'> }) {
-  if (state.status === 'loading') return <Spinner label={t('snapshots.plan.loadingDiff')}  size="page" />
+  // 差异是「逐行文档」形状：加载时按表格铺骨架，与 DiffTable 的行高同一节奏
+  if (state.status === 'loading') return <SkeletonTable rows={6} label={t('snapshots.plan.loadingDiff')} />
   if (state.status === 'error') return <Banner kind="error">{redact(state.message)}</Banner>
   const diff = state.diff
   if (diff.reason !== undefined) return <div className={css.hint}>{reasonLabel(t, diff.reason, diff)}</div>

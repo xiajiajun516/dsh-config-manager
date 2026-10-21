@@ -75,6 +75,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **两侧都改了同一分区时，缺省「保留本机并推上去」**：本机版本成为新的远端最新，不再上下行都停下等人工裁决（被覆盖的远端快照仍留在历史里，可以回滚）；想改回「保留冲突待我确认」可在同步页切换，自动同步历史会写明这一轮是「已按策略保留本机并覆盖远端」。
   **When both sides changed the same section, the default is now "keep local and push it"**: the local version becomes the new remote latest instead of stopping both directions for a manual decision (the replaced remote snapshot stays in history and can be rolled back). Switch to "Keep the conflict for review" on the sync page if you prefer the old behavior; the auto-sync history states plainly that this run kept the local version and overwrote the remote.
 
+- **加载时先看到「即将出现的内容」，不再只剩一个转圈**：产物库列表、首页状态条与最近活动、恢复台扫描、导入与迁移咨询、备份查看、回退点、更新说明与发布说明这些页面、弹窗与面板的首次加载，都改成与真实内容同形状的骨架占位，行高对齐后数据到货不再整页跳变；按钮里与读取遮罩中的进行中反馈仍保留转圈（那里没有布局轮廓可给）。
+  **Loading now shows the shape of what is coming instead of a lone spinner**: first loads inside the library list, the home status strip and recent activity, recovery scans, import and migration consultations, backup inspection, rollback points, update notes and release notes all render skeleton placeholders shaped like the real content, and with row heights matched the page no longer jumps when data arrives; in-button and read-mask progress still uses the spinner, where there is no layout to outline.
+
 ### 🐛 修复 · Fixed
 
 - **远程合并弹窗打开时不再抖动或形变**：入场动画改为纯淡入、不再做位移；带内滚列表的弹窗也不会因为滚动条在动画中途出现而横向跳一下。

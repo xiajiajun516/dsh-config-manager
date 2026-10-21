@@ -25,7 +25,7 @@ import type { TranslateNS } from '../client-types.ts'
 import { Badge, Banner, Button, Card, Empty, FoldToggle, IconButton, SectionTitle, Spinner, StatusDot } from '../common/ui.tsx'
 import { DiskUsageCard } from '../environment/maintenance/DiskUsageCard.tsx'
 import { RollbackCard } from './RollbackCard.tsx'
-import { SkeletonList } from '../common/Skeleton.tsx'
+import { SkeletonList, SkeletonTable } from '../common/Skeleton.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { Icon } from '../common/Icon.tsx'
@@ -874,7 +874,8 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
           {phase === 'error' && <Banner kind="error">{error ?? t('common.unknownError')}</Banner>}
 
           {/* 首次扫描（还没有任何结果）：给出进行中反馈 —— 旧实现在这里只留一片空白 */}
-          {phase === 'loading' && response === null && <Spinner label={t('sessions.scanning')}  size="page" />}
+          {/* 首次扫描：按会话表的形状铺骨架（表格行），扫描结果到货时表格原地长出来 */}
+          {phase === 'loading' && response === null && <SkeletonTable rows={6} label={t('sessions.scanning')} />}
 
           {phase === 'ready' && response !== null && (
             <>
@@ -1634,7 +1635,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
               )}
 
               {/* 预览加载 */}
-              {state.previewLoading && <Spinner label={t('recovery.preview.loading')}  size="page" />}
+              {state.previewLoading && <Spinner label={t('recovery.preview.loading')} />}
 
               {/* 预览内容 */}
               {previewView !== null && (

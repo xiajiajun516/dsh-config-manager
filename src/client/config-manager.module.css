@@ -1096,6 +1096,13 @@ body {
   justify-content: center;
 }
 
+/* 加载骨架区：同一高度契约，但内容**顶部对齐**（行列表从上方长出来；居中会让骨架悬在
+   页面正中，数据到货时整块跳走）。必须写在 .libraryListState 之后才覆盖 justify-content。 */
+.librarySkeletonRegion {
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
 .artifactRow {
   border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
 }
@@ -1615,6 +1622,65 @@ body {
 
 .skeletonTableCell:last-child {
   flex: 0 0 20%;
+}
+
+/* 紧凑行骨架：行高/内边距与 .artifactRowHead 对齐（52px），数据到货时行距不跳变。
+   图标位 20px、标题/说明两行、右侧动作位 56px 都只是**形状**，不假装有内容。 */
+.skeletonRows {
+  display: flex;
+  flex-direction: column;
+}
+
+.skeletonRowItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--dsw-alias-border-l1) 60%, transparent);
+}
+
+.skeletonRowItem:last-child {
+  border-bottom: none;
+}
+
+/* 逐行递进延迟：读起来像「正在一行行填」，而不是整块齐闪（与 .skeletonBars 同一手法） */
+.skeletonRowItem:nth-child(2) .skeletonBar { animation-delay: 60ms; }
+.skeletonRowItem:nth-child(3) .skeletonBar { animation-delay: 120ms; }
+.skeletonRowItem:nth-child(4) .skeletonBar { animation-delay: 180ms; }
+.skeletonRowItem:nth-child(n + 5) .skeletonBar { animation-delay: 240ms; }
+
+.skeletonRowIcon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+.skeletonRowBody {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skeletonRowTitle { height: 12px; width: 38%; }
+.skeletonRowMeta { height: 10px; width: 24%; }
+
+.skeletonRowAction {
+  flex: none;
+  width: 56px;
+  height: 20px;
+}
+
+/* 指标段的「值」占位（首页状态条）：首屏数据没到时用一条骨架替代 <b> 的数字，
+   宽度只够表达「这里会有一个数」，高度与数值行一致。 */
+.statValueSkeleton {
+  display: inline-block;
+  width: 26px;
+  height: 12px;
+  border-radius: var(--cm-r-1);
 }
 
 /* 骨架下方的可见文案（与 Spinner 的 label 同义）：加载反馈必须能被读到，不只靠色块 */

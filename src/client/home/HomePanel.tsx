@@ -46,6 +46,7 @@ import {
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
 import { Badge, Banner, Button, Card, Spinner, StatusDot, Stepper } from '../common/ui.tsx'
+import { SkeletonRows } from '../common/Skeleton.tsx'
 import { BackupIcon, ExportIcon, ImportIcon, SyncIcon } from '../common/Icon.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { Modal } from '../common/Modal.tsx'
@@ -355,11 +356,14 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
             onClick={() => { navMetric(seg.key) }}
           >
             <span>{seg.label}</span>
-            <b>{seg.value}</b>
-            {seg.dim !== null && <span className={css.statSegDim}>· {seg.dim}</span>}
+            {/* 首屏数值未到货时用骨架占位（不再在整条右端挂一颗转圈）：
+                段本身的位置与宽度保持不变，数据到货只换「值」这一块。 */}
+            {loading
+              ? <span className={css.skeletonBar + ' ' + css.statValueSkeleton} aria-hidden="true" />
+              : <b>{seg.value}</b>}
+            {!loading && seg.dim !== null && <span className={css.statSegDim}>· {seg.dim}</span>}
           </button>
         ))}
-        {loading && <span className={css.statSeg}><Spinner /></span>}
       </div>
 
       {/* 2. 动作工具栏：立即备份 + 三张「任务域」入口（带走 / 装进 / 回去）。
@@ -421,9 +425,13 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
             <div className={css.activityHeader}>
               <span className={css.activityTitle}>{t('overview.activity.title')}</span>
             </div>
-            {activity.length === 0
-              ? <div className={css.activityEmpty}>{data.history === null && !loading ? t('overview.activity.unavailable') : t('overview.activity.empty')}</div>
-              : (
+            {/* 首屏未完成时**不写空态**：以前这里直接渲染「暂无操作记录」，
+                数据没到就说「没有」，与真实情况相反。改为按行列表形状铺骨架。 */}
+            {loading
+              ? <SkeletonRows count={5} label={t('common.loading')} />
+              : activity.length === 0
+                ? <div className={css.activityEmpty}>{data.history === null ? t('overview.activity.unavailable') : t('overview.activity.empty')}</div>
+                : (
                 <div className={css.activityRows}>
                   {activity.map((item, i) => {
                     const atMs = Date.parse(item.at) || 0

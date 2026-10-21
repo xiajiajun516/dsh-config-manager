@@ -341,7 +341,7 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   变成蓝画蓝、图标「隐形」，用户只看到按钮莫名变宽（真机截图）。
   几何契约由 `common/fishbone.test.ts` 守着（对称 / 长度与延迟递增 / 留在 24×24 内 / 脊柱与头骨相接）。
 
-- `Skeleton` / `SkeletonList` / `SkeletonTable`（`common/Skeleton.tsx`）：**整块内容首次加载**
+- `Skeleton` / `SkeletonList` / `SkeletonTable` / `SkeletonRows`（`common/Skeleton.tsx`）：**整块内容首次加载**
   的骨架占位（列表 / 表格 / 详情）。与 `Spinner` 的分工是**硬的**：**有布局轮廓可给 → 骨架**
   （首屏列表、数据表、详情正文）；**没有轮廓可给 → Spinner**（按钮内联的 `Button loading`、
   大分区读取遮罩 `.pickerOverlay`、轮询中的小区域）。骨架先给出「这里将出现什么」，
@@ -352,6 +352,13 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
   不引入第二个色系；`prefers-reduced-motion: reduce` 下退化为静态占位块（§15）。
   形态：`line` 正文行 / `title` 区块标题 / `block` 区块 / `row` 行条目，
   多行时按 `nth-child` 做长短交错 + 逐条递进延迟（避免整块齐闪）。
+  `SkeletonRows` 是**紧凑行**骨架：单行高度对齐真实行（产物库/回退点 52px，图标 20px、
+  标题 38% / 说明 24% / 右侧动作 56×20），用于「行结构已知的密集列表」—— 行高对齐后
+  数据到货不跳变，因此优先于 `SkeletonList` 的通用卡片块。
+  **判据（硬）**：页面 / 面板 / 弹窗**正文**的首次加载**一律骨架**，不得只留一个居中转圈
+  （用户会先看到空页面再整页跳变；2026-10 全站统一过一次）。`Spinner` 只剩三种场合 ——
+  按钮内联（`Button loading`）、`.pickerOverlay` 这类**读取遮罩**、以及
+  **已有内容之上的局部刷新/轮询**（骨架会把已读内容清空，反而更差）。
 
 - `Collapse` / `ViewSwitch`（`common/Motion.tsx`）：**内容出现/消失**的两个动效原语。
   - `Collapse`（折叠容器）：`grid-template-rows` 0fr ⇄ 1fr + 内层 `overflow: hidden`，
