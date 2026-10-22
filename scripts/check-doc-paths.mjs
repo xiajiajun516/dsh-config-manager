@@ -21,7 +21,7 @@ import { join, sep } from 'node:path'
 
 const ROOT = process.cwd()
 const ROOT_FILES = ['AGENTS.md', 'DESIGN.md', 'DEVELOPERS.md', 'README.md', 'README.zh-CN.md', 'SECURITY.md']
-const DOC_DIRS = ['docs/spec', 'docs/modules', 'docs/maintenance', 'docs/decisions']
+const DOC_DIRS = ['docs/spec', 'docs/modules', 'docs/maintenance', 'docs/decisions', 'docs/components']
 const DOC_FILES = ['docs/README.md', 'docs/index.md', 'docs/architecture.md']
 const PATH_ROOTS = ['src/', 'tests/', 'scripts/', 'docs/', 'locale/', '.github/', '.dsh/']
 // 代码类引用（组件/测试/样式）允许写成相对某源码目录的简写；

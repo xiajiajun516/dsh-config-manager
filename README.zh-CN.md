@@ -776,7 +776,7 @@ $env:HTTPS_PROXY='http://127.0.0.1:7897'; dsh web
   全量预览 27.6 s）。③ 修 issue #71「外壳里配好的 MCP 与 Skills 备份不到」：patch 行按层读取、写回原层，技能改经
   外壳的 `skills` 服务收编。三个 PR 均带单测与路由 / 源码级守卫。
 
-> 维护者与开发者：构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
+> 维护者与开发者：从[文档总索引](docs/index.md)开始（架构、模块文档、ADR、已知技术债）；构建、测试、自动发布与完整技术说明见 [DEVELOPERS.md](DEVELOPERS.md)。
 
 ---
 

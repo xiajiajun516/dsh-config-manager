@@ -1,20 +1,9 @@
-# docs/ — 文档索引
+# docs/ — 从这里开始
 
-> 仓库根目录只保留对外文档（`README.md` / `README.zh-CN.md` / `CHANGELOG.md` / `SECURITY.md` / `LICENSE`）
-> 与协作规范（`AGENTS.md` / `DEVELOPERS.md` / `DESIGN.md`）；其余文档一律按用途放进本目录，不再散落在仓库根目录。
+**总索引：`docs/index.md`**（按「我想做什么」组织：架构 / 模块 / 契约 / 决策 / 维护 / 证据 / 历史存档）。
 
-| 目录 | 性质 | 读者 |
-| --- | --- | --- |
-| `docs/design/` | 上游设计依据（各特性的设计稿与评审记录） | 本仓库维护者 |
-| `docs/spec/` | 对外契约（格式规格 / schema / 兼容矩阵 / 已知缺口） | 第三方实现者 |
-| `docs/seo/` | 搜索曝光与召回基线记录 | 维护者 |
-| `docs/handoff/` | 阶段交接 / Agent 交接文档（**历史归档，非当前状态**） | 接手者 |
-| `docs/lessons/` | **`AGENTS.md` 的经验/证据库**（真机事故 / 量化数据 / 复现与复核脚本；按域分文件，索引见 `docs/lessons/README.md`） | 维护者、接手者 |
-| `docs/known-pitfalls.md` | 2026-09/10 一次更早下移的**冻结存档**（不再追加；新证据进 `docs/lessons/`） | 维护者、接手者 |
+本文件只保留三条最容易被违反的约定：
 
-## 约定
-
-- 改动导出/导入格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`（详见 `AGENTS.md`）。
-- `docs/handoff/` 中的文档写于当时的版本与工作区状态，结论可能已过时；当前状态以 `CHANGELOG.md` + `git log` 为准。
-- `AGENTS.md` **只写规则**（必须/绝不 + 判据 + 指针，硬上限 28 KiB，守卫 `node scripts/check-agents-budget.mjs`）；证据/叙事放 `docs/lessons/<域>.md`。新增坑**两处同步**：先写证据，再补一行规则 + 指针。
-- 新增文档请按上表归位；根目录新增 `.md` 需先确认它是否属于「对外文档」。
+1. 仓库根只放对外文档（`README*` / `CHANGELOG` / `SECURITY` / `LICENSE`）与协作规范（`AGENTS.md` / `DEVELOPERS.md` / `DESIGN.md`）；其余进本目录并挂到 `docs/index.md`。
+2. `AGENTS.md` **只写规则**（硬上限 28 KiB，守卫 `node scripts/check-agents-budget.mjs`）；证据与叙事进 `docs/lessons/<域>.md`，新增坑两处同步：先写证据，再补一行规则 + 指针。
+3. 改导出/导入格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`；文档里的路径与版本声明由 `scripts/check-doc-paths.mjs` / `scripts/check-doc-versions.mjs` 校验。

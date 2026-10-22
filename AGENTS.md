@@ -1,9 +1,8 @@
 # AGENTS.md — 规则书
 
-> **只收硬规则**：**非硬规则内容 —— 说明、清单、流程、示例、证据、历史沿革 —— 一律进 `docs/lessons/<域>.md`，本文件只留一行指针**；机制细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
-> **预算**：硬上限 28 KiB（workspace instruction 总预算 64 KiB）；>26 KiB 先告警；单行 ≤ 400 B。守卫 `node scripts/check-agents-budget.mjs`。
-> **新增一条坑**：先在 `docs/lessons/<域>.md` 写透证据 → 再回本文件补一行规则 + 指针；**不要把证据写回本文件**。
-> **下移存档**：概览 / 目录结构 / 常用命令 / 本机环境注意 / UI 自查清单 → `docs/lessons/repo-overview.md`。
+> **只收硬规则**：说明/清单/流程/示例/证据/历史沿革一律进 `docs/lessons/<域>.md`，本文件只留一行指针；机制细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
+> **预算**：硬上限 28 KiB、>26 KiB 告警、单行 ≤ 400 B；守卫 `node scripts/check-agents-budget.mjs`。
+> **新增一条坑**：先在 `docs/lessons/<域>.md` 写透证据 → 再回本文件补一行规则 + 指针；**不要把证据写回本文件**。下移存档（概览/目录结构/常用命令/环境注意/UI 自查清单）统一进 `docs/lessons/repo-overview.md`。
 
 ## 🌐 语言
 与用户交流一律中文；代码注释/commit/文档以中文为主，技术术语可保留英文。
@@ -40,7 +39,7 @@
 - **加密备份 / 导出**：密码仅内存传入，不落盘/不落日志；解密明文 ZIP 为临时文件用完即清。
 - **同步通道的加密/解密密码是唯一例外**：不勾选即删除、不留空；只存 DSH credentials 专用槽位（`DSH_CONFIG_MANAGER_SYNC_ENCRYPT_PASSWORD_<GIT|WEBDAV>` 等），值绝不写入 `sync-*.json`/响应/日志/浏览器；请求体优先于已存、删除优先于写入。
 - 同步凭据走 DSH credentials 槽位引用（`SYNC_CREDENTIAL_REF` 等），`passwordConfigured` 仅布尔标记。
-- **备份形态判定只有一份实现**：`src/security/container-kind.ts`（只读前 4 字节，读不到回落 `'zip'`）；未解锁容器一律 400 `encrypted-container`；`src/client/**` 只能 import 零依赖的 `utils/shared-constants.ts` 拿码。
+- **备份形态判定只有一份实现**：`src/security/container-kind.ts`（读前 4 字节，读不到回落 `'zip'`）；未解锁容器一律 400 `encrypted-container`；`src/client/**` 只能 import 零依赖的 `utils/shared-constants.ts` 拿码。
 - **SAFE MODE**：落盘即跨重启生效；解除判据只有 `resolveSafeMode` 一份（扫描失败 fail-closed）；启动侧陈旧标记复位 = `resolveStartupSafeMode`；`GET /recovery/status` 回传 `safeMode.blocked/clearable`；解除端点不过 mutation gate，但有未解决 incident 必拒。
 - **敏感值形状判定是全仓单一来源**（`matchSecretValuePattern`）：`bearer` 大小写不敏感，厂商前缀（`sk-`/`AKIA`/`ghp_`）保持大小写敏感 —— **别顺手加 `i`**（G-36）。
 - **sessionStorage 白名单**：`run-store.ts` `toPersistedState()` 解构剔除 `password/passwordConfirm/secretInputs/decryptPassword/decryptRefs/archiveUnlocked/conflictCollector`；新敏感字段不显式放行即不落盘。
@@ -51,7 +50,7 @@
 - **宿主路由只经 kit 的 `endpoint()` 声明 + `registerRoutes()` 注册**（围栏与方法白名单在注册点统一包装；`registerRoutes()` 兜底断言未经 kit 的路由直接抛错）。
 - 路由源 = `src/index.ts`（被窗口守卫**钉住的 7 条**）+ `src/routes/*.ts`（**其余 75 条**；合计 82 条）；源码级守卫必须扫**全部**路由源。
 - **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**：DSH 的 cookie 拒绝只挂在 `kind:'prefix'`、`path:'/api'` 的 RPC 承载路由上，而派发顺序是 **exact 表先命中** ⇒ 本插件 82 条路由永不进入该认证路由。
-- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 82 条路由（远程/LAN 与跨站 CSRF 被围栏挡掉；经代理/隧道暴露时必须在注册点统一加认证，→ `DEVELOPERS.md`）。
+- 推论：**不得把 DSH 会话认证当兜底，也不得写成「插件 API 无认证」**——本机任意非浏览器进程无 token 即可调用全部 82 条路由（远程/LAN 与跨站 CSRF 已被围栏挡掉；经代理/隧道暴露必须在注册点统一加认证，→ `DEVELOPERS.md`）。
 - 新功能优先加 `src/core/`，适配器/UI 薄壳；15 adapter 与 `self` 分区口径 → `DEVELOPERS.md` 架构节。
 - 同步：`SyncEngine`+`Git/WebDavTransport`+`AutoSyncScheduler`（事件驱动）；**autosync 与 sync-selection 按通道独立**（schema v2）。
 - **import 一律带 `.ts` 后缀**（Deno-style）。
@@ -97,7 +96,7 @@
 
 ## 🎨 UI / DESIGN SYSTEM（最高优先级）
 > **`DESIGN.md` 是 UI/样式决策唯一权威**；涉及 UI/Layout/CSS/颜色/字体/间距/图标/动效/响应式前必读。
-- **设计 token 必须定义在 `body`**：DSH 的 `--dsw-*` 定义在 **body** 上（`dsh-client-ui-theme`），而 var() 在**声明它的元素**上替换 ⇒ 挂 `:root` 时 `--cm-*` 链在 html 就失效、挂 `.section` 时 Portal 到 body 的弹窗看不见（→ `docs/lessons/recovery-console.md`）。
+- **设计 token 必须定义在 `body`**：DSH 把 `--dsw-*` 定义在 **body**，var() 只在**声明它的元素**上替换 ⇒ 挂 `:root` 链在 html 即失效、挂 `.section` 时 Portal 弹窗看不见（→ `docs/lessons/recovery-console.md`）。
 - **颜色三层单向依赖**：组件只写 `--cm-*`，`--dsw-*` 只允许出现在 `--cm-*` 定义行；禁止 hardcode；tint 用 `color-mix(in srgb, var(--cm-*) <pct>%, transparent)`（`css-token-guard.test.ts`）。
 - **样式只能进 `src/client/config-manager.module.css`**：禁止内联 `<style>`/第三方 css；类名用 CSS Modules（`css.xxx`）；**scale 有源级守卫**（字号/间距/圆角/行高/z-index，`css-scale-guard.test.ts`），新档位先改 DESIGN.md §3–§5。
 - **复用优先**：`common/ui.tsx` 原语 + `ErrorBanner/ProgressBar/ReportView` 等；已有组件能解决就禁止重建，新页面先搜库。
@@ -128,6 +127,7 @@
 | 新增/调整 CHANGELOG 体例或分组约定 | `CHANGELOG.md` 头部 + `changelog-writing` skill + 版本段模板（三处同步） |
 | **用户可见的功能 / 行为 / 修复**（含 UI 体验与文案诚实性） | **同轮**写进 `CHANGELOG.md` 的 `## [Unreleased]`（按 `changelog-writing` skill 落位并跑 §4 自检）—— 漏写实测过 |
 | 新增/修订经验或证据（真机事故/量化数据/复现脚本） | `docs/lessons/<域>.md`（**只写证据**；规则回 `AGENTS.md` 对应小节补一行 + 指针） |
+| 新增/重构文档，或不知某类内容该放哪 | `docs/index.md`（总索引：按「我想做什么」分流） |
 
 代码与文档同步；冲突时以代码为准修正文档。
 
@@ -185,14 +185,14 @@
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly 会话 cookie，其余 403；读路径只读、写路径各自过 CLI 同源写入门；判定不许重写；**绝不等于「插件 API 无认证」**。
 - **回滚点台账 = 一条一写 + 内容寻址载荷 + 字节预算**；**自动留点缺省关闭**，关闭即**解绑** `session/event` 订阅；活切换经进程内 gate（→ `docs/lessons/recovery-console.md`）。
 - **回滚点采集必须有时间预算与取消**；**子代理会话绝不自动留点**；**回退前像落盘**（暂存建不出 = 零写入失败）。→ `docs/lessons/recovery-console.md`
-- **捕获必须并发 + 自适应 + 缺口优先**：读/写并发、对象仓写入**不走 temp+fsync+rename**、预算 10–120 s 自适应、缺口优先 + **条目与读预算解耦** ⇒ 覆盖率随回合收敛到 100%。→ `docs/lessons/recovery-console.md`
-- **捕获绝不碰含 `.asar` 段的路径**（宿主当容器解析 ⇒ 畸形夹具带走整个宿主 = 桌面闪退），在飞内容闸门只接 `captureInFlightBytes`（缺省 32 MiB；接 `maxFileBytes` = 允许整点预算同时驻留）。→ `docs/lessons/recovery-console.md`
-- **拒删按分子树、不按全局**：忽略目录 / 读不出的目录 / 没走查到的子树（`unwalkedDirs`）只让**它们自己**不删；只有范围说不清（列表被记录上限截断 / 老台账）才全局 fail-closed。→ `docs/lessons/recovery-console.md`
+- **捕获必须并发 + 自适应 + 缺口优先**：读/写并发、对象仓写入**不走 temp+fsync+rename**、预算 10–120 s 自适应、缺口优先 + **条目与读预算解耦** ⇒ 覆盖率随回合收敛到 100%。
+- **捕获绝不碰含 `.asar` 段的路径**（宿主会当容器解析 ⇒ 桌面闪退）；在飞内容闸门只接 `captureInFlightBytes`（缺省 32 MiB；接 `maxFileBytes` = 整点预算可同时驻留）。
+- **拒删按分子树、不按全局**：忽略目录 / 读不出的目录 / 没走查到的子树（`unwalkedDirs`）只让**它们自己**不删；只有范围说不清（列表被记录上限截断 / 老台账）才全局 fail-closed。
 - **回滚点 = 工作区 + 会话两态**（引擎 `src/core/rollback-point.ts`；`src/core/rollback.ts` 是导入补偿引擎，勿混用）：按回合自动留点、只覆盖记录在案路径、校验失败整体回滚；旧 `checkpoints/` 不再读取也不删。
 - **客户端读回滚点必须收尾后有界重试（空列表在窗口内是暂态）**：留点在收尾**之后**，即时查询都可能早于它；窗口关且仍为空才说「没有回滚点」；每个挂载只跑一轮窗口、**不得**无限轮询。
 - **救援点（guard）不占自动点的 20/50 预算、用户不可删，但有自己的两道上限**（每会话 20 → 全局 50，超出淘汰最旧）：**不得**写成「无上限保留」或「受保护的点永不淘汰」。
 - **回滚点的「工作区态」必须是「该回合开始前」**：留点在 `turn/start` 拍（`turn/end` 只更新缺省边界）；在回合结束拍会固定成「改完之后」⇒ 用户看到「文件没被撤回」（→ `docs/lessons/recovery-console.md`）。
-- **回退删除集只有一份规划**（`planCreatedRemovals`；预览 = 执行）、**判据 = 能证明「留点时不存在」**（只有证明名单不完整才不删，`truncated` 不算）。证据 → `docs/lessons/recovery-console.md`
+- **回退删除集只有一份规划**（`planCreatedRemovals`；预览 = 执行）、**判据 = 能证明「留点时不存在」**（只有证明名单不完整才不删，`truncated` 不算）。
 - **会话日志「就地截断」在运行中的 DSH 里不可能生效**：宿主内存里的活动会话不重读磁盘（离开再回来 / 整页刷新都不重读），平台也没有 drop/reload API ⇒ 回退只能是「fork + 归档原会话」（A 无感替换）。
 - **宿主服务的方法抽出来必须 bind 回服务对象**；三档降级判据不动，只补 receiver。
 - **回退 fork 必走 DSH 的 `sessionController.fork`（落盘 + 归位），绝不直接 `SessionStore.fork`；归位 cwd 必须多源 + 失败重试 + 失败写诊断** → `docs/lessons/recovery-console.md`。
@@ -209,7 +209,7 @@
 - **「按插件看」归属键只有 npm 包名**：`pluginFiles` 无包名信息 ⇒ 不猜归属；注册表有而清单无的单元一律**不可勾**。
 
 **打包与 client bundle** → `docs/lessons/packaging-and-bundle.md`
-- **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补；**宿主模块表里的包（如 ui-primitives）只能帧内惰取 + try/catch + 回落**（`src/client/common/host-primitives.ts`，→ `docs/lessons/packaging-and-bundle.md`）。
+- **client bundle 是 cjs + `window.__ModuleLoader__.load`**；CSS Modules 只认 `.module.css`；`style` 属性只允许极小修补；**宿主模块表里的包只能帧内惰取 + try/catch + 回落**（`src/client/common/host-primitives.ts`，→ `docs/lessons/packaging-and-bundle.md`）。
 - **issue #57–#60 四条**：`file:` spec 打包前 `stat` 判形态；同步快照 JSON 读写同口径（512 MiB）；`runStore.patch()` 后必须 `patchSyncPasswords()` 写回内存；git 源安装需 `scripts.prepare` + pnpm 11 `allowBuilds`。
 - **MemFs 测试**：内存 fs key 与宿主 path 解耦（win32 home 注入 cwd）。
 

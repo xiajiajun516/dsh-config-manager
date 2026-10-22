@@ -778,7 +778,7 @@ Found a bug, a misaligned panel, a button that does nothing — or just have an 
   read per layer and written back to their own layer, and skills are collected through the shell's `skills` service.
   All three shipped with unit tests and route / source-level guards.
 
-> Maintainers & developers: see [DEVELOPERS.md](DEVELOPERS.md) for build, testing, auto-publishing and full technical notes.
+> Maintainers & developers: start at the [documentation index](docs/index.md) — architecture, module docs, ADRs and known tech debt; [DEVELOPERS.md](DEVELOPERS.md) covers build, testing, auto-publishing and full technical notes.
 
 ---
 
