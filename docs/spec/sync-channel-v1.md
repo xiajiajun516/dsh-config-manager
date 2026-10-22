@@ -75,8 +75,11 @@
 
 > **gist 通道是这条规则的例外（issue #110）**：GitHub 的 `PATCH /gists/{id}` 对**任何**条件请求头都回
 > `400 Conditional request headers are not allowed in unsafe requests unless supported by the endpoint` ——
-> 与 ETag 强弱无关。故 gist 通道的写（upload / delete）**一律不带条件头**，也**没有**写前并发保护；
-> 需要并发保护请使用 git / webdav / s3 通道。
+> 与 ETag 强弱无关。故 gist 通道的写（upload / delete）**一律不带条件头**，也没有写前并发保护，
+> 改用**写后复核 + 有界重做**：PATCH 之后重读索引，校验「本次条目已落盘 / 目标已消失」且「读前看到的条目一个不少」，
+> 不成立就整轮重做（最多 3 轮）；仍不成立抛 `index-conflict`（错误码 `index-conflict`，用户文案键 `sync.gist.indexConflict`）。
+> **残余窗口如实登记**：别人在「我们读取索引」与「我们 PATCH」之间写入的条目仍会被覆盖（快照载荷本身不丢）。
+> 需要强并发保证请使用 git / webdav / s3 通道（索引写是条件写）。
 
 **GC**：删除快照后回收无人引用的 blob。
 
@@ -246,7 +249,7 @@
 
 | 能力 | git | webdav | s3（五家兼容） | gist |
 |---|---|---|---|---|
-| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ✅（412/409 视为冲突） | ❌ **弱 ETag 不做 `If-Match`**，退化为无条件 PATCH |
+| 索引条件写（`If-Match` / `If-None-Match`） | 不适用：git 通道的并发保护来自**快进/非快进语义**（工作副本侧 `pull/fetch` + `push`；`push` 被远端拒绝（`! [rejected] ... (fetch first)`）→ `SyncTransportError(kind='conflict')`），**不是** ETag 条件写 | ✅（服务端支持时） | ✅（412/409 视为冲突） | ❌ **弱 ETag 不做 `If-Match`**：无条件 PATCH + **写后复核重做 ≤3 轮**，仍冲突抛 `index-conflict` |
 | 大分区内容寻址外置（§3） | ✅ | ✅ | ✅ | ❌（刻意不做，G-34） |
 | 加密快照 | ✅ | ✅ | ✅ | ✅（但不外置） |
 | 远端推进检测（§7.4） | ✅ | ✅ | ✅ | ✅（依赖 `list` 能读全索引） |

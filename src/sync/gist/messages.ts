@@ -24,6 +24,8 @@ export const gistZh = {
   'sync.gist.timeout': '{method} {url} 请求超时（{timeout}ms）',
   'sync.gist.indexInvalid': '{url} 解析失败或结构非法: {err}',
   'sync.gist.snapshotInvalid': '快照 {id} 解析失败或结构非法: {err}',
+  // 写后复核失败（并发改动，已重试到上限）：不得静默覆盖别人的条目，交给用户重试
+  'sync.gist.indexConflict': '索引在写入期间被他人改动，本次未能安全合并（已重试 {attempts} 次）：请稍后重试',
   // ---- cloud-sync 借鉴项 ②③：探针 / 归属提示（①条件写已按 issue #110 移除，见 gist-transport.ts）----
   'sync.gist.probeOk': '连接正常（Gist 可读写，远端 {count} 份快照）',
   'sync.gist.probeForeignContent': '该 Gist 里已有 {count} 个不属于本插件的文件：请确认这是你的同步专用 Gist（前缀 {prefix}），否则可能覆盖别人的数据',
@@ -46,6 +48,7 @@ export const gistEn: Record<keyof typeof gistZh, string> = {
   'sync.gist.timeout': '{method} {url} request timed out ({timeout}ms)',
   'sync.gist.indexInvalid': '{url} failed to parse or is structurally invalid: {err}',
   'sync.gist.snapshotInvalid': 'Snapshot {id} failed to parse or is structurally invalid: {err}',
+  'sync.gist.indexConflict': 'The index was changed by someone else during the write and could not be merged safely (retried {attempts} times): please try again later',
   'sync.gist.probeOk': 'Connection OK (gist readable and writable, {count} remote snapshots)',
   'sync.gist.probeForeignContent': 'This gist already contains {count} files that are not ours: confirm it is your dedicated sync gist (prefix {prefix}) or you may overwrite someone else’s data',
 };

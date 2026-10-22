@@ -1,7 +1,7 @@
 # ADR-0003：同步写路径的并发保护 —— 条件写，且 gist 是明确例外
 
-- 状态：已采纳（Accepted），**gist 例外仍待产品决策**
-- 日期：2026-10-22（记录既有决策）
+- 状态：已采纳（Accepted），**gist 例外已收口**：不做条件头，改走「写后复核 + 有界重做」，残余窗口如实登记
+- 日期：2026-10-22（记录既有决策）；2026-10-23 补 gist 收口方案
 
 ## 背景
 
@@ -15,20 +15,27 @@
 ## 决策
 
 1. 索引写入必须**条件写**：远端被改过即中止并报错，绝不静默覆盖别人的条目（git/webdav/s3）。
-2. gist 通道**完全不做条件写**（`src/sync/gist/gist-transport.ts:58-63` 有明确注释与落点）。当前语义由
-   `src/sync/gist/gist-overwrite-semantics.test.ts` 钉住：后写者整体覆盖索引、不抛错、A 的载荷逐字节未变且仍可 download 复原。
+2. gist 通道**完全不做条件头**（`src/sync/gist/gist-transport.ts:58-63` 有明确注释与落点）。但因为「无条件 = 静默覆盖」不可接受，
+   写路径（upload 与 delete）统一加**写后复核 + 有界重做**：PATCH 后重读索引，校验「本次条目已落盘 / 目标已消失」且
+   「读前看到的条目一个不少」；不成立整轮重做，最多 3 轮，仍失败抛 `index-conflict`（文案键 `sync.gist.indexConflict`）。
+   这让「被覆盖」从静默变成可发现的错误，代价是冲突时需要用户重试。原先钉住现状的 `src/sync/gist/gist-overwrite-semantics.test.ts`
+   现在同时覆盖复核失败路径，并新增 `src/sync/gist/gist-delete-concurrency.test.ts` 覆盖删除侧。
 3. push 前先比「基线与远端最新」，不一致即零写入返回 conflict；merge 用 `state.ancestorId` 指向的本地祖先副本 + 分区 hash 双基线，
    **无祖先不猜**（宁可降级为两方合并并要求确认）。
 
 ## 后果
 
 - 好：git/webdav/s3 上「两台机器同时改」是可发现的错误，不是静默数据丢失。
-- 坏：gist 用户在两台机器同时同步时会静默丢索引条目（载荷不丢）。当前选择是**如实记录 + 测试钉住现状**，而不是假装安全。
-- 待决策：gist 是「单写者」还是「read-merge-write」。read-merge-write 需要读回索引再合并，仍有竞态窗口（gist 无 CAS），
-  只能缩小概率；单写者则需要一个显式锁或文档承诺。**这是产品决策，未采纳任何一种。**
+- 坏：gist 仍有**无法关闭的残余窗口** —— 别人在「我们读取索引」与「我们 PATCH」之间写入的条目会被覆盖（快照载荷本身不丢）。
+  这是无条件协议的物理边界：写后复核能发现「我们写完之后不一致」，发现不了「我们写的瞬间别人也在写」。
+- 选项取舍（已收口）：
+  · **单写者承诺**：否 —— 插件无法强制第三方写者（同一个 gist 可能被另一台机器、另一个账号或别人的脚本写），承诺无法执行。
+  · **read-merge-write**：已采纳为主体（upload 内先读索引再合并），本次再补**写后复核 + 有界重做**闭环。
+  · **强保证**：只能用 git / webdav / s3（索引写是条件写，`If-Match` / 412 视为冲突）。文档必须讲明 gist 不等价，别让人误以为安全。
 
 ## 证据
 
 - `src/sync/gist/gist-transport.ts:22-24`（不做 blob 外置的三条原因）、`:58-63`（不做条件写）、`:248-255`（一次 PATCH 写载荷+索引）
-- `src/sync/gist/gist-overwrite-semantics.test.ts`（双机同基线先后 push 的两种断言）
+- `src/sync/gist/gist-overwrite-semantics.test.ts`、`src/sync/gist/gist-delete-concurrency.test.ts`（写后复核与重做的正反路径）
+- `src/sync/gist/messages.ts`（`sync.gist.indexConflict` 文案）
 - `docs/spec/sync-channel-v1.md` 能力矩阵、`docs/lessons/sync-channel.md`

@@ -13,7 +13,8 @@
  * 设计：
  * - list：GET /gists/{id} → 取索引文件内容（内容被 GitHub 截断时回落 raw_url）→ 按 createdAt 升序；
  * - upload：GET 当前 gist → 快照级跳过（同 id 且 sections hash 全等 → 零 PATCH）→
- *   一次 PATCH 同时写快照文件与索引（索引最后落盘：快照成功才更新索引）；
+ *   一次 PATCH 同时写快照文件与索引（索引最后落盘：快照成功才更新索引）→
+ *   **写后复核**（重新 GET 索引：本次条目在、读前条目未丢；被别人改过则整轮重做，最多 3 轮）；
  * - download：从 gist 载荷取文件内容；\`truncated: true\` 时回落 \`raw_url\`（跨源跳转剥离 Authorization）；
  * - delete：PATCH 里把快照文件置 null（GitHub 的删除语义）+ 写回合并后的索引；
  * - 认证：\`Authorization: Bearer <token>\`（token 只从注入的 \`credentials.getToken()\` 读取，
@@ -52,6 +53,10 @@ const GITHUB_API_VERSION = '2022-11-28';
 const ERR_BODY_MAX = 500;
 /** 跟随的重定向上限（gist raw 地址可能 302 到 CDN 直链） */
 const MAX_REDIRECTS = 3;
+/** 写后复核失败（索引被并发改动）时，整轮「读-合并-写」的最大尝试次数 */
+const MAX_INDEX_WRITE_ATTEMPTS = 3;
+/** 缺省的重做间隔 ms（测试注入 0，禁止真实等待拖慢测试） */
+const DEFAULT_INDEX_CONFLICT_RETRY_DELAY_MS = 200;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const REDACTED = '[REDACTED]';
 
@@ -60,6 +65,10 @@ const REDACTED = '[REDACTED]';
  * 都直接回 400 —— `Conditional request headers are not allowed in unsafe requests unless supported
  * by the endpoint`，与 ETag 强弱无关（同一请求去掉 If-Match 即 200）。故本通道的 PATCH 一律不带
  * `If-Match`，也**没有**写前并发保护；要并发保护请用 git / webdav / s3 通道（那里的索引写是条件写）。
+ *
+ * 没有条件头不等于放任覆盖：upload 在 PATCH 之后**重新 GET 索引复核**（见 upload 注释）。
+ * 复核能抓住「我们写完之后又被别人整体覆盖」，抓不住「别人在我们读取与 PATCH 之间写入」
+ * —— 那些条目我们压根没读到，任何无条件写都不可能发现；这条残余限制是通道本身决定的。
  */
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
@@ -104,6 +113,11 @@ export interface GistTransportOptions {
   timeoutMs?: number;
   /** 幂等读操作（list/download）的网络重试参数；写操作（upload/delete）不使用 */
   retry?: SyncRetryOptions;
+  /**
+   * 写后复核发现「索引被并发改动」时的重做间隔 ms；缺省 200，0 = 不等待（测试用）。
+   * 只影响 upload 的重做节奏，不改变任何条件的请求头（gist 端点拒绝条件头）。
+   */
+  indexConflictRetryDelayMs?: number;
   /** 消息翻译器（缺省 zh；见 ./messages.ts） */
   msg?: MsgFunc;
 }
@@ -174,6 +188,7 @@ export class GistTransport implements SyncTransport {
     request: GistRequestFn;
     timeoutMs: number;
     retry: SyncRetryOptions;
+    indexConflictRetryDelayMs: number;
     msg: MsgFunc;
   };
 
@@ -211,6 +226,7 @@ export class GistTransport implements SyncTransport {
       request: options.request ?? defaultRequest,
       timeoutMs: options.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS,
       retry: options.retry ?? {},
+      indexConflictRetryDelayMs: options.indexConflictRetryDelayMs ?? DEFAULT_INDEX_CONFLICT_RETRY_DELAY_MS,
       msg,
     };
   }
@@ -231,35 +247,103 @@ export class GistTransport implements SyncTransport {
     }, this.o.retry);
   }
 
-  /** 上传快照（同 id 覆盖，幂等友好）；内容未变时零 PATCH 直接返回远端 meta。 */
+  /**
+   * 上传快照（同 id 覆盖，幂等友好）；内容未变时零 PATCH 直接返回远端 meta。
+   *
+   * 本通道没有条件写（文首 issue #110），所以用**写后复核**顶住最危险的一类覆盖：
+   * PATCH 之后重新 GET 索引并核对 ① 本次条目在且分区 hash 全等；② 读前已有的条目
+   * （除本次 id 外）一个都没消失。任一条不成立 = 索引在写入窗口里被别人改过 ⇒ 重新读
+   * 最新索引、重新合并、再写，最多 3 轮；仍不成立则抛 `sync.gist.indexConflict`，
+   * **绝不静默把别人的条目吞掉**。
+   *
+   * 残余限制（通道物理决定，不是疏忽）：别人在「我们读取」与「我们 PATCH」之间写入的
+   * 条目我们没读到，无条件写无法发现，只能被我们这次整体覆盖 —— 要堵这个窗口请用
+   * git / webdav / s3（索引写是条件写）。
+   */
   async upload(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
     this.assertSafeId(snapshot.id);
     const token = await this.tokenOnce();
     const meta = computeSnapshotMeta(snapshot);
-    const { files } = await this.readGist(token);
-    const idxRaw = await this.readFileText(files, this.indexFileName, token);
-    const idxBefore = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
-    const existing = idxBefore.find((m) => m.id === snapshot.id);
-    if (existing !== undefined && sectionsEqual(existing, meta)) return existing;
+    for (let attempt = 1; attempt <= MAX_INDEX_WRITE_ATTEMPTS; attempt += 1) {
+      const { files } = await this.readGist(token);
+      const idxRaw = await this.readFileText(files, this.indexFileName, token);
+      const idxBefore = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
+      const existing = idxBefore.find((m) => m.id === snapshot.id);
+      if (existing !== undefined && sectionsEqual(existing, meta)) return existing;
 
-    const merged = idxBefore.filter((m) => m.id !== snapshot.id);
-    merged.push(meta);
-    merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-    // 一次 PATCH 写两个文件：快照先、索引后（索引是「有哪些快照」的权威视图）
-    const body = JSON.stringify({
-      files: {
-        [this.snapshotFileName(snapshot.id)]: { content: serializeSnapshot(snapshot) },
-        [this.indexFileName]: { content: JSON.stringify(merged) },
-      },
-    });
-    const res = await this.send('PATCH', this.gistUrl(), token, { body });
-    if (!res.ok) {
-      throw new GistTransportError(
-        await this.failText('PATCH', this.gistUrl(), res, token),
-        this.classify(res.status, await this.safeText(res)),
-      );
+      const merged = idxBefore.filter((m) => m.id !== snapshot.id);
+      merged.push(meta);
+      merged.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+      // 一次 PATCH 写两个文件：快照先、索引后（索引是「有哪些快照」的权威视图）
+      const body = JSON.stringify({
+        files: {
+          [this.snapshotFileName(snapshot.id)]: { content: serializeSnapshot(snapshot) },
+          [this.indexFileName]: { content: JSON.stringify(merged) },
+        },
+      });
+      const res = await this.send('PATCH', this.gistUrl(), token, { body });
+      if (!res.ok) {
+        throw new GistTransportError(
+          await this.failText('PATCH', this.gistUrl(), res, token),
+          this.classify(res.status, await this.safeText(res)),
+        );
+      }
+      if (await this.verifyIndexLanded(token, { mineId: meta.id, mineMeta: meta, before: idxBefore })) return meta;
+      if (attempt === MAX_INDEX_WRITE_ATTEMPTS) break;
+      await this.waitIndexConflictRetry();
     }
-    return meta;
+    throw new GistTransportError(
+      this.o.msg('sync.gist.indexConflict', { attempts: String(MAX_INDEX_WRITE_ATTEMPTS) }),
+      { kind: 'conflict', code: 'index-conflict' },
+    );
+  }
+
+  /**
+   * 写后复核（upload / delete 共用的唯一实现）：重新读索引，确认本次写入按预期落盘。
+   * - 上传（`mineMeta`）：(a) 本次 id 的条目在场；非加密快照还要求 sections hash 全等
+   *   （加密快照 sections 为空，密文无法与明文 hash 比较 ⇒ 只认「在场」，与 `sectionsEqual`
+   *   的既有口径一致）；
+   * - 删除（`expectedAbsent`）：(a) 本次 id 既不在索引里、载荷文件也已不存在；
+   * - 两者共同：(b) 传入的读前既有条目（除本次 id 外）一个都不能少 —— 少一个就是被别人整体覆盖了。
+   */
+  private async verifyIndexLanded(
+    token: string,
+    args: {
+      mineId: string;
+      /** 上传才传：用于比对分区 hash。 */
+      mineMeta?: SyncSnapshotMeta;
+      /** 删除语义：要求目标 id 不在索引、载荷文件也已删除。 */
+      expectedAbsent?: boolean;
+      /** 读前看到的既有条目（删除侧跨轮累积，比对的是操作开始前那份）。 */
+      before: SyncSnapshotMeta[];
+    },
+  ): Promise<boolean> {
+    const { files } = await this.readGist(token);
+    const raw = await this.readFileText(files, this.indexFileName, token);
+    const idxAfter = raw === null ? [] : this.parseIndex(raw, this.gistUrl(), token);
+    const mine = idxAfter.find((m) => m.id === args.mineId);
+    if (args.expectedAbsent === true) {
+      if (mine !== undefined) return false;
+      // 载荷还在（null 没落盘 / 被别人改回来）同样视为删除没生效
+      if (files[this.snapshotFileName(args.mineId)] !== undefined) return false;
+    } else {
+      if (mine === undefined) return false;
+      const comparable = args.mineMeta !== undefined && Object.keys(args.mineMeta.sections).length > 0;
+      if (comparable && !sectionsEqual(mine, args.mineMeta as SyncSnapshotMeta)) return false;
+    }
+    const present = new Set(idxAfter.map((m) => m.id));
+    for (const before of args.before) {
+      if (before.id !== args.mineId && !present.has(before.id)) return false;
+    }
+    return true;
+  }
+
+  /** 索引冲突重试间隔（0 = 不等待；测试注入 0 以避免真实 sleep 拖慢用例）。 */
+  private async waitIndexConflictRetry(): Promise<void> {
+    if (this.o.indexConflictRetryDelayMs <= 0) return;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, this.o.indexConflictRetryDelayMs);
+    });
   }
 
   /** 下载快照完整载荷；不存在的 id 必须抛错（契约）。 */
@@ -287,30 +371,56 @@ export class GistTransport implements SyncTransport {
     }, this.o.retry);
   }
 
-  /** 删除远端快照（不存在视为成功）：PATCH 置 null + 写回摘除后的索引。 */
+  /**
+   * 删除远端快照（不存在视为成功）：PATCH 置 null + 写回摘除后的索引。
+   *
+   * 与 upload 同源的防护：本通道没有条件写（文首 issue #110），所以写后同样复核 ——
+   * ① 目标 id 已从索引消失且载荷文件已删除；② 读前见过的其它条目一个都没少。
+   * 任一条不成立 ⇒ 重新读最新索引、重新合并、再写，最多 `MAX_INDEX_WRITE_ATTEMPTS` 轮；
+   * 仍不成立抛 `sync.gist.indexConflict`，**绝不静默把别人的条目吞掉**。
+   *
+   * 与 upload 的差异只有一处：「本来就没这条」时零 PATCH 幂等成功；但如果本轮已经复核失败过，
+   * 就不再走幂等早退 —— 否则目标恰好已被覆盖删掉时，会用「无事可做」掩盖上一轮丢条目的问题。
+   */
   async delete(id: string): Promise<void> {
     this.assertSafeId(id);
     const token = await this.tokenOnce();
-    const { files } = await this.readGist(token);
-    const idxRaw = await this.readFileText(files, this.indexFileName, token);
-    const idx = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
-    const fileName = this.snapshotFileName(id);
-    const existed = files[fileName] !== undefined;
-    const remaining = idx.filter((m) => m.id !== id);
-    if (!existed && remaining.length === idx.length) return; // 文件与索引都没有 → 静默成功，不发 PATCH
-    const body = JSON.stringify({
-      files: {
-        [fileName]: null,
-        [this.indexFileName]: { content: JSON.stringify(remaining) },
-      },
-    });
-    const res = await this.send('PATCH', this.gistUrl(), token, { body });
-    if (!res.ok) {
-      throw new GistTransportError(
-        await this.failText('PATCH', this.gistUrl(), res, token),
-        this.classify(res.status, await this.safeText(res)),
-      );
+    // 跨轮累积「读前见过」的条目：复核要比对操作开始前那份索引，而不是每轮重读后的索引
+    const known = new Map<string, SyncSnapshotMeta>();
+    let conflicted = false;
+    for (let attempt = 1; attempt <= MAX_INDEX_WRITE_ATTEMPTS; attempt += 1) {
+      const { files } = await this.readGist(token);
+      const idxRaw = await this.readFileText(files, this.indexFileName, token);
+      const idxBefore = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
+      for (const meta of idxBefore) if (!known.has(meta.id)) known.set(meta.id, meta);
+      const fileName = this.snapshotFileName(id);
+      const existed = files[fileName] !== undefined;
+      const listed = idxBefore.some((m) => m.id === id);
+      if (!existed && !listed && !conflicted) return; // 文件与索引都没有 → 静默成功，不发 PATCH
+      const remaining = idxBefore.filter((m) => m.id !== id);
+      // 重做时目标载荷可能已被删掉 ⇒ 只写索引，不再置 null（对已不存在的文件置 null 是多余写入）
+      const body = JSON.stringify({
+        files: {
+          ...(existed ? { [fileName]: null } : {}),
+          [this.indexFileName]: { content: JSON.stringify(remaining) },
+        },
+      });
+      const res = await this.send('PATCH', this.gistUrl(), token, { body });
+      if (!res.ok) {
+        throw new GistTransportError(
+          await this.failText('PATCH', this.gistUrl(), res, token),
+          this.classify(res.status, await this.safeText(res)),
+        );
+      }
+      if (await this.verifyIndexLanded(token, { mineId: id, expectedAbsent: true, before: [...known.values()] })) return;
+      conflicted = true;
+      if (attempt === MAX_INDEX_WRITE_ATTEMPTS) break;
+      await this.waitIndexConflictRetry();
     }
+    throw new GistTransportError(
+      this.o.msg('sync.gist.indexConflict', { attempts: String(MAX_INDEX_WRITE_ATTEMPTS) }),
+      { kind: 'conflict', code: 'index-conflict' },
+    );
   }
 
   /* ---------------- 内部实现 ---------------- */

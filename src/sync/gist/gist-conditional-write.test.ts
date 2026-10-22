@@ -4,6 +4,9 @@
  *    （`Conditional request headers are not allowed in unsafe requests unless supported by the endpoint`），
  *    与 ETag 强弱无关 ⇒ PATCH 恒不带 if-match（upload 与 delete 两条路径都要钉住）；
  *  - ② 探针：GET /user 证明令牌有效 → 读 gist → snapshotCount + 非本前缀文件数进 hint（只读，零 PATCH）。
+ *
+ * 桩形状注意：upload 现在会在 PATCH 之后**重新 GET 索引做写后复核**，所以这里的假 gist 必须是
+ * 「PATCH 真落盘、GET 反映落盘结果」的有状态桩；返回固定空索引的桩会被复核判成并发冲突（3 次后抛错）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -30,6 +33,30 @@ function res(status: number, bodyText = '', headers?: Record<string, string>): G
     ...(headers !== undefined ? { headers } : {}),
     async text() { return bodyText; },
   };
+}
+
+/**
+ * 有状态假 gist：PATCH 落到内存文件表、GET 反映落盘结果。
+ * 为什么需要状态：upload 的写后复核会重新读索引，静态桩会让复核永远看不到自己刚写的条目。
+ */
+function statefulGist(calls: GistCall[], etag: string, seed: Record<string, string> = {}): GistRequestFn {
+  const files: Record<string, string> = { ...seed };
+  return record(calls, (m) => {
+    if (m.method === 'GET' && m.url === GIST_URL) {
+      const view: Record<string, { content: string }> = {};
+      for (const [name, content] of Object.entries(files)) view[name] = { content };
+      return res(200, JSON.stringify({ files: view }), { etag });
+    }
+    if (m.method === 'PATCH' && m.url === GIST_URL) {
+      const parsed = JSON.parse(m.body ?? '{}') as { files?: Record<string, { content: string } | null> };
+      for (const [name, entry] of Object.entries(parsed.files ?? {})) {
+        if (entry === null) delete files[name];
+        else files[name] = entry.content;
+      }
+      return res(200, '{}');
+    }
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  });
 }
 
 function record(calls: GistCall[], handler: (m: GistCall) => GistResponse): GistRequestFn {
@@ -80,11 +107,7 @@ function assertNoConditionalHeaders(call: GistCall | undefined, hint: string): v
 
 test('不做条件写①：强 ETag 也不得注入 if-match（issue #110 回归，带条件头 GitHub 回 400）', async () => {
   const calls: GistCall[] = [];
-  const t = new GistTransport(makeOptions(record(calls, (m) => {
-    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files: {} }), { etag: '"strong-etag-1"' });
-    if (m.method === 'PATCH' && m.url === GIST_URL) return res(200, '{}');
-    return res(500, 'unexpected ' + m.method + ' ' + m.url);
-  })));
+  const t = new GistTransport(makeOptions(statefulGist(calls, '"strong-etag-1"')));
 
   await t.upload(sampleSnapshot());
 
@@ -95,11 +118,7 @@ test('不做条件写①：强 ETag 也不得注入 if-match（issue #110 回归
 
 test('不做条件写①：弱 ETag（W/…）同样不带 if-match，写入照常发生', async () => {
   const calls: GistCall[] = [];
-  const t = new GistTransport(makeOptions(record(calls, (m) => {
-    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files: {} }), { etag: 'W/"weak-etag-1"' });
-    if (m.method === 'PATCH' && m.url === GIST_URL) return res(200, '{}');
-    return res(500, 'unexpected ' + m.method + ' ' + m.url);
-  })));
+  const t = new GistTransport(makeOptions(statefulGist(calls, 'W/"weak-etag-1"')));
 
   await t.upload(sampleSnapshot());
 
@@ -116,12 +135,12 @@ test('不做条件写①（删除路径）：强 ETag 下 delete 的 PATCH 也�
     sections: {},
     manifest: { schemaVersion: 1, dshVersion: '1', platform: 'win32', sectionIds: [], containsSecrets: false },
   };
-  const files = { [INDEX_FILE]: { content: JSON.stringify([meta]) }, [snapshotFile]: { content: '{}' } };
+  // 与 upload 侧同理：delete 现在也会在 PATCH 之后重读索引做写后复核，静态桩会让复核
+  // 永远看到「目标还在」→ 被判成并发冲突（3 次后抛错）。这里用带种子的有状态桩。
   const calls: GistCall[] = [];
-  const t = new GistTransport(makeOptions(record(calls, (m) => {
-    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files }), { etag: '"strong-del-1"' });
-    if (m.method === 'PATCH' && m.url === GIST_URL) return res(200, '{}');
-    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  const t = new GistTransport(makeOptions(statefulGist(calls, '"strong-del-1"', {
+    [INDEX_FILE]: JSON.stringify([meta]),
+    [snapshotFile]: '{}',
   })));
 
   await t.delete('snap-001');
