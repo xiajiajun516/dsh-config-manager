@@ -9,10 +9,12 @@
  *  - 尾 / = 只匹配目录；首 / = 相对规则文件所在目录（本实现里一律相对该目录）；
  *  - * / ? 不跨段，** 跨段。
  *
- * 两条硬边界（不得放宽）：
+ * 三条硬边界（不得放宽）：
  *  ① 内置运行时依赖目录（EXCLUDED_DEP_DIR_NAMES，当前 node_modules）不可被反向取消。
  *  ② 被忽略的整个目录不进走查 ⇒ 证明名单不完整 ⇒ 该点的删除集整体拒绝（fail-closed），
  *     由调用方据匹配结果置 ignoreIncomplete；被忽略的文件仍逐条进 skipped，名单照样完整。
+ *  ③ **内置敏感文件（凭据 / 私钥）同样不可被反向取消**：它们不进对象仓（不明文物化），
+ *     但仍进走查名单（pathIndex）⇒ 删除集不会把它们误判成「留点后新建」。见 builtinSensitiveReason。
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -22,6 +24,27 @@ export const IGNORE_RULE_FILE_NAME = '.dsh-rollback-ignore'
 
 /** 内置运行时依赖目录名（与 utils/recursive-walk 的唯一来源保持一致） */
 const EXCLUDED_DEP_SEGMENTS: readonly string[] = ['node_modules']
+
+/**
+ * 内置敏感文件表（判据见 {@link builtinSensitiveReason}）——**只收明确的凭据形态**，
+ * 不放宽成「名字里带 secret/token 就算」：误判会让用户回滚点静默少文件，比多存几个文件更糟。
+ *
+ * **不按目录名判定**：密钥常放在任意子目录（src/a.key），按目录猜会漏。
+ */
+const SENSITIVE_BASENAMES: ReadonlySet<string> = new Set([
+  '.npmrc', // npm token（_authToken）
+  '.pypirc', // PyPI token
+  '.netrc', // 明文登录口令
+  '.git-credentials', // git 明文凭据
+  '.htpasswd', // 散列口令（仍是凭据材料）
+  'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa', // OpenSSH 私钥（.pub 公钥已放行）
+])
+
+/** 私钥 / 证书容器后缀（文件本身就是凭据材料） */
+const SENSITIVE_KEY_SUFFIXES: readonly string[] = ['.pem', '.key', '.p12', '.pfx', '.jks', '.keystore', '.ppk']
+
+/** `.env.*` 里属于**模板**的形态：样例文件是文档，必须照常进快照（否则用户拷一份就丢） */
+const ENV_TEMPLATE_SUFFIXES: ReadonlySet<string> = new Set(['.example', '.sample', '.template'])
 
 interface IgnorePattern {
   /** 规则原文（诊断用） */
@@ -123,4 +146,33 @@ export function ignoreRelativePath(root: string, target: string): string | null 
   const rel = path.relative(root, target)
   if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null
   return rel.split('\\').join('/')
+}
+
+/**
+ * 内置敏感文件判据：命中返回原因码 `'sensitive'`（含凭据，**不回滚**），否则 null。
+ *
+ * `relPath` 是**相对分块根**的斜杠路径（来自 {@link ignoreRelativePath}）——只看文件名与后缀，
+ * 不看目录：密钥常散落在任意子目录（src/a.key）。
+ *
+ * 与用户忽略规则的关键区别：**不可被 `!` 反向取消**。调用方在判定处独立调用本函数，
+ * 而不是把它编译进 parseIgnoreRules 的 patterns —— 用户写 `!.env` 的动机通常是「我要能回滚我的
+ * .env」，但那会把明文密码送进内容寻址仓库；这类文件宁可少回滚，也不明文物化。
+ *
+ * 大小写折半比较（Windows / macOS 上 .ENV 与 .env 是同一个文件）：宁可保守。
+ * 刻意放行：`.env.example` / `.env.sample` / `.env.template`（模板是文档）、`*.pub`（公钥）。
+ */
+export function builtinSensitiveReason(relPath: string): string | null {
+  const normalized = relPath.split('\\').join('/').replace(/^\.\//, '')
+  const base = normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase()
+  if (base === '') return null
+  // .env 家族：模板放行，其余（.env / .env.local / .env.production …）一律视为凭据
+  if (base === '.env') return 'sensitive'
+  if (base.startsWith('.env.')) {
+    return ENV_TEMPLATE_SUFFIXES.has(base.slice('.env'.length)) ? null : 'sensitive'
+  }
+  if (SENSITIVE_BASENAMES.has(base)) return 'sensitive'
+  // 公钥放行（先于后缀判定：foo.pem.pub 之类也不该算凭据）
+  if (base.endsWith('.pub')) return null
+  if (SENSITIVE_KEY_SUFFIXES.some((suffix) => base.endsWith(suffix))) return 'sensitive'
+  return null
 }

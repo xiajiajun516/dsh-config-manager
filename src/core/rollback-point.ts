@@ -72,7 +72,13 @@ import { isRecord } from '../utils/guards.ts'
 import { EXCLUDED_DEP_DIR_NAMES } from '../utils/recursive-walk.ts'
 import { diffLines, type DiffHunk } from '../utils/line-diff.ts'
 import { projectKeyOf } from './session-select.ts'
-import { ignoreRelativePath, ignoreRuleMatches, loadIgnoreRules, type IgnoreRules } from './rollback-ignore-rules.ts'
+import {
+  builtinSensitiveReason,
+  ignoreRelativePath,
+  ignoreRuleMatches,
+  loadIgnoreRules,
+  type IgnoreRules,
+} from './rollback-ignore-rules.ts'
 import type { RollbackWriteAttributionPort, RollbackWriteFact, RollbackWriteRecorder } from './rollback-attribution.ts'
 import { mergeThreeWay } from './rollback-merge.ts'
 import { decodeTextBytes, encodeTextBytes } from './text-fidelity.ts'
@@ -495,7 +501,9 @@ export interface RollbackSkippedEntry {
    * link（符号链接/junction，不跟随）/ missing / not-a-file / self-store /
    * dep-dir（运行时依赖目录，整棵忽略）/ ignored（用户忽略规则命中）/ too-large（超单文件上限）/
    * budget-bytes（加它会超总量预算）/ budget-files（文件数预算用尽）/
-   * asar-container（含 `.asar` 段的路径：宿主会把它当容器解析、畸形夹具能带走宿主，因此绝不碰）
+   * asar-container（含 `.asar` 段的路径：宿主会把它当容器解析、畸形夹具能带走宿主，因此绝不碰）/
+   * sensitive（内置敏感文件：.env / 私钥 / 凭据文件 —— 不明文物化进对象仓，也不可被 `!` 规则取消；
+   *   仍进走查名单，故删除集不受影响，见 rollback-ignore-rules.ts 的 builtinSensitiveReason）
    */
   reason: string
 }
@@ -2494,6 +2502,15 @@ export class RollbackPointEngine {
         // walked（= 路径索引的来源）。否则 skipped 被记录上限截断后，「留点时已存在但被忽略」
         // 的文件既不在 files、也不在 skipped、更不在 pathIndex ⇒ 被当成「留点后新建」删掉。
         collect?.push(full)
+        // t8（D3）：内置敏感文件（.env / 私钥 …）**绝不进对象仓** —— 明文凭据不物化。
+        // 与 node_modules 同档：用户 `!` 规则取消不了（这里独立判定，不经过 parseIgnoreRules）。
+        // 位置必须在 collect 之后：它仍进走查名单 ⇒ 删除集不会把它当成「留点后新建」删掉。
+        const relPath = ignoreRelativePath(chunk, full)
+        const sensitive = relPath === null ? null : builtinSensitiveReason(relPath)
+        if (sensitive !== null) {
+          this.recordSkip(sink, 'skipped', { path: full, reason: sensitive })
+          continue
+        }
         if (ignore !== undefined && this.ignoredByRules(ignore, full, false)) {
           // 文件级忽略：逐条进 skipped（名单完整时删除照常；被记录上限截断时由 pathIndex 兜底）
           this.recordSkip(sink, 'skipped', { path: full, reason: 'ignored' })
