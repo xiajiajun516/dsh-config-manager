@@ -100,9 +100,10 @@ push 前先比「基线 vs 远端最新」，不一致即零写入返回 conflic
    不再 `import '../index.ts'`；`src/index.ts` 单向 import `buildRoutes()`，并把 `pluginVersion`/`starPromptRepoUrl` 经 `makeRouteEnv()` 注入组文件
    （`RouteEnvInferred` 是 `src/index.ts:2179` 手写的字面类型，加字段必须同步改）。守卫 = `tests/route/route-support-cycle.test.ts`。
    **新增共享工具就放 route-support，别让组文件回指组合根**。
-2. **巨型文件**：`src/core/rollback-point.ts` 5963 行、`src/index.ts` 4379 行（原 5003，已下沉 route-support）、`src/client/recovery/RecoveryPanel.tsx` 1946 行、`src/core/analyzer.ts` 1824 行、
-   `src/sync/sync-engine.ts` 2227 行、`src/client/run-store.ts` 2166 行。体量本身不是缺陷，但它让「改一处要读多少」和 merge 冲突成本线性上升；
-   拆分前必须先有对应回归测试（见 `docs/maintenance/tech-debt.md`）。
+2. **巨型文件**：`src/core/rollback-point.ts` 5980 行、`src/index.ts` 4379 行（原 5003，已下沉 route-support）、`src/sync/sync-engine.ts` 2227 行、
+   `src/client/run-store.ts` 2166 行、`src/client/recovery/RecoveryPanel.tsx` 1946 行、`src/core/analyzer.ts` 1500 行（原 1824，导入计划纯函数已外提到
+   `src/core/import-planning.ts` 356 行）。体量本身不是缺陷，但它让「改一处要读多少」和 merge 冲突成本线性上升；拆分前必须先有对应回归测试，
+   且 `tests/file-size-ratchet.test.ts` 只许把上限下调（上调必须在文件头写理由并同步 `docs/maintenance/tech-debt.md`）。
 3. **耦合中枢**（入度最高的模块，改动影响面最大）：`src/schema/types.ts`、`src/core/types.ts`、`src/client/client-types.ts`、`src/security/redaction.ts`、
    `src/foreign/types.ts`、`src/client/common/ui.tsx`、`src/utils/guards.ts`、`src/ui/i18n.ts`。改这些文件的代价不在实现，而在**必须全仓验证**。
 4. **双面共享靠零依赖模块**：client 不能碰 `node:`，所以常量/机器码放在 `src/utils/shared-constants.ts`（例如 `ENCRYPTED_CONTAINER_CODE`），

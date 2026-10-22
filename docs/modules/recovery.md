@@ -118,7 +118,7 @@ SAFE MODE 的解除判据只有一份：`resolveSafeMode`（`src/core/recovery-o
   path-cache.json
 ```
 
-三条硬性质（同处头注释）：清单不含大数组；按条解析；载荷去重。`SCHEMA_VERSION = 3`（`src/core/rollback-ledger.ts:58`）；写入口 `appendRecord`（`:1297`）经 `onFileRead`/`writeFile` seam（`:196`）保证**单次 append 不读别人的记录文件**；迁移幂等且崩溃安全，`recoverManifest` 在 records 为空时只落空清单（`:1285`–`:1306`）——写坏了就是整批旧点被抹掉。
+三条硬性质（同处头注释）：清单不含大数组；按条解析；载荷去重。`SCHEMA_VERSION = 3`（`src/core/rollback-ledger.ts:58`）；写入口 `appendRecord`（`:3283`）经 `onFileRead`/`writeFile` seam（`:199`）保证**单次 append 不读别人的记录文件**；迁移幂等且崩溃安全，`recoverManifest`（`:1301`）在 records 为空时只落空清单——写坏了就是整批旧点被抹掉。
 
 | 约束 | 值 | 落点 |
 |---|---|---|
@@ -154,7 +154,7 @@ HTTP 码映射集中在一处 `rollbackHttpStatus`（`src/routes/recovery.ts:59`
 - CLI `restore` 的写入门与 `checkWriteGates` 是等价组合而非同一函数（见 §3.4）。
 - fork 归位失败不回滚 fork，只带 warning + 诊断文件（会话在侧栏「未分组」）。
 - 采集有硬上限，回合内改动超过 32 MiB 会话载荷或超时间预算时覆盖率不足，需要用户显式重试或放宽。
-- 快照恢复（`src/core/restore.ts`，非本域）当前不写 journal step、pre-restore 序号每次从 0 重数、目标侧 symlink 采用 follow——已由 `src/core/restore-crash-injection.test.ts`、`src/core/restore-target-symlink.test.ts` 钉住当前行为，缺口跟踪在恢复域文档，**别再当成本域问题**。
+- 快照恢复（`src/core/restore.ts`，非本域）**仍不写 journal step**（崩溃后靠 journal + reconcile 兜底，缺断点续跑语义）；但两处历史缺口已修：目标侧在计划期做 realpath / 中间段解析，落在 home 外整单拒绝（`assertPlanTargetsSafe`，调用点在 `planRestore` 返回前）；「恢复前副本」改为**按次分目录** `pre-restore/<本地时间戳>[-n]/`，重跑不再覆盖上一次的反悔副本（GUI/HTTP 恢复复用同一布局）。锚点：`src/core/restore-crash-injection.test.ts`、`src/core/restore-target-symlink.test.ts`、`tests/route/restore-route.test.ts`。**别再当成本域问题**。
 
 ## 7. 测试锚点
 
@@ -176,7 +176,7 @@ HTTP 码映射集中在一处 `rollbackHttpStatus`（`src/routes/recovery.ts:59`
 ## 8. 维护提示
 
 - 改上限：引擎四个常量（`src/core/rollback-point.ts:185`/`:187`/`:197`/`:207`）与客户端四个（`src/ui/rollback-view.ts:247`–`:257`）必须同改，否则面板显示与引擎行为分叉。
-- 改台账目录名或 undo 目录命名：同步 `UNDO_DIR_RE`（`src/core/rollback-ledger.ts:60` 起），卡片清理按名字以 pid 开头判定。
+- 改台账目录名或 undo 目录命名：同步 `UNDO_DIR_RE`（`src/core/rollback-ledger.ts:100`，注释在 `:65`），卡片清理按名字以 pid 开头判定。
 - 改 fork 返回形状：三处一起动——`src/routes/recovery.ts:220`（窄化读取）、`src/index.ts:4814`（形状加固）、`src/index.ts:1154`（三档归位）。
 - 改回退的门：HTTP 与命令两条入口都要改（`src/routes/recovery.ts:758`/`:778` 与 `src/index.ts:4936`–`:4961`），少一处就是「HTTP 拒绝、命令放行」。
 - 采集的 `.asar` 例外**不可放宽**：原因见 §3.1，放宽的后果是宿主进程被畸形路径带崩。

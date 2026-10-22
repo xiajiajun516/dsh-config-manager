@@ -112,7 +112,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 | 快照目录 | `<dataDir>/snapshots/<id>/` | `src/index.ts:3844` |
 | 快照元数据 | `snapshot.json`（readiness）、`manifest.json`（entry 清单 + 哈希） | `src/core/backup.ts:656` |
 | 快照 blob | `blobs/`（宿主整文件与文件类分区内容） | `src/core/backup.ts:119` |
-| pre-restore 副本 | 快照目录下的 `pre-restore-*` | `src/core/restore.ts:234` |
+| pre-restore 副本 | 快照目录下 `pre-restore/<本地时间戳>[-n]/`（**每次恢复一个 attempt 子目录**，重跑不覆盖上一次） | `src/core/restore.ts:364` |
 | 导出明文临时包 | 临时目录 `export-plain-*`（失败也必删） | `src/index.ts:4137` |
 | 解密明文包 | 临时目录 `decrypted-*`（0600，成功后删） | `src/routes/import.ts:27` |
 | 加密容器 | DCA1（整包）；凭据槽 DSC1 在包内 `secrets.enc` | `src/security/encryption.ts:41` |
@@ -126,7 +126,9 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 - **导入：快照强制、先于写入**。快照失败即中止导入（`src/core/analyzer.ts:927`）；没有「先写再说」的分支。
 - **导入：取消只在计划项边界**（`src/core/analyzer.ts:1021`），不会在一个分区写到一半时撕开文件；取消后按用户决策整体回滚或保留半成品并标记。
 - **导入：回滚是补偿引擎**。`rollbackApplied` 调 `rollback` 并把结果写回 journal（`src/core/analyzer.ts:1336`）；回滚失败时快照标 `rolled-back` 而不是 `done`。
-- **恢复：没有整笔自动回滚**。`restore()` 逐动作 try/catch，单项失败只记 `failed` 并继续（`src/core/restore.ts:716`）；唯一兜底是 `pre-restore` 副本。删除快照只拦「被恢复流程引用」的那些（`src/routes/snapshots.ts:182`），不会保护 pre-restore 副本。
+- **恢复：没有整笔自动回滚**。`restore()` 逐动作 try/catch，单项失败只记 `failed` 并继续（`src/core/restore.ts:716`）；兜底是 `pre-restore` 副本 —— 每次恢复新建一个 attempt 子目录（`src/core/restore.ts:364`），重跑不会覆盖上一次的反悔副本，GUI/HTTP 恢复路径（`src/routes/route-support.ts` 的执行器）复用同一布局。删除快照只拦「被恢复流程引用」的那些（`src/routes/snapshots.ts:182`），**不保护 pre-restore 副本**。
+- **恢复：目标侧防写穿**。计划期对每个写回目标做 realpath / 中间段解析，落在 home 外即整单拒绝（`src/core/restore.ts:317`，错误码 `restore.pathEscape`），不会写到 home 外的真实文件。
+- **恢复：敏感文件不回滚**。回滚点采集默认排除 `.env`/私钥/证书等（`src/core/rollback-ignore-rules.ts` 的 `builtinSensitiveReason`），命中记 `skipped(reason='sensitive')` —— 这是**排除不是加密**。
 - **Dry Run 零写入**：恢复预览分支不登记 run、不落盘（`src/routes/snapshots.ts:90`）；导入的 `analyze/plan` 只读 ZIP 字节（`src/core/analyzer.ts:1` 模块注释）。测试锚点见 §6。
 - **冲突不默认覆盖**：计划项默认按 Skip/Merge 处理，覆盖必须由用户显式决策；快照与墓碑参与的判定在 `src/core/analyzer.ts:793` 与 `:799`。
 - **加密容器未解锁一律拒绝**：三处闸门返回 400 与 `encrypted-container` 码（`src/index.ts:4276`、`:4315`、`src/routes/import.ts:190`）；形态判定只有 `src/security/container-kind.ts` 一份。
