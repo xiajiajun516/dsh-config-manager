@@ -191,3 +191,65 @@ test('G-08 resolveWebPaths：快照/导出/锁/数据根四处必须同源（--d
   const defaults = resolveWebPaths({}, env);
   assert.equal(defaults.root, path.join(homeDsh, 'dsh-config-manager'));
 });
+/* ---------------------------------------------------------------- ⑤ sessions repair 写入门（与救急台同源） */
+
+/** 控制面根 = $DSH_HOME/dsh-config-manager（resolveControlRoots 的缺省候选）。 */
+function controlRoot(home: string): string {
+  return path.join(home, 'dsh-config-manager');
+}
+
+test('G-09 sessions repair --fix：SAFE MODE 激活 → 拒绝（不得只查「DSH 是否在跑」）', async () => {
+  await withTmp(async (tmp) => {
+    const home = path.join(tmp, 'home');
+    const marker = path.join(controlRoot(home), 'transactions', 'safe-mode');
+    await fs.mkdir(path.dirname(marker), { recursive: true });
+    await fs.writeFile(marker, 'blocked: unfinished transaction\n', 'utf8');
+    // 会话目录里放一份文件：被拒绝时它必须逐字节不变（写入门在 runSessionsRepair 之前）。
+    const sessionDir = path.join(home, 'sessions');
+    await fs.mkdir(sessionDir, { recursive: true });
+    const log = path.join(sessionDir, 's1.jsonl');
+    await fs.writeFile(log, 'ORIGINAL\n', 'utf8');
+
+    const { io, out } = captureIo();
+    const code = await runCli(['sessions', 'repair', '--fix'], io, { DSH_HOME: home });
+    assert.equal(code, 1, 'SAFE MODE 下 --fix 必须被拒绝');
+    const text = out.join('\n');
+    assert.match(text, /拒绝执行/);
+    assert.match(text, /SAFE MODE 已激活/);
+    assert.match(text, /SAFE MODE is active/, '必须给出等价的英文提示');
+    assert.equal(await fs.readFile(log, 'utf8'), 'ORIGINAL\n', '被拒绝时一个字节都不许改');
+  });
+});
+
+test('G-10 sessions repair --fix：残留环境锁 → 拒绝并指出 recover-stale-lock 出口', async () => {
+  await withTmp(async (tmp) => {
+    const home = path.join(tmp, 'home');
+    // 损坏的 ownership 文件 = 崩溃窗口残留（inspectLockState → UNKNOWN_STATE），门只看「锁存在」。
+    const locksDir = path.join(controlRoot(home), 'locks');
+    await fs.mkdir(locksDir, { recursive: true });
+    await fs.writeFile(path.join(locksDir, 'environment.lock'), 'not-json', 'utf8');
+
+    const { io, out } = captureIo();
+    const code = await runCli(['sessions', 'repair', '--fix'], io, { DSH_HOME: home });
+    assert.equal(code, 1, '存在环境锁时 --fix 必须被拒绝');
+    const text = out.join('\n');
+    assert.match(text, /拒绝执行/);
+    assert.match(text, /环境锁/);
+    assert.match(text, /recover-stale-lock/, '必须给出回收出口');
+  });
+});
+
+test('G-11 sessions repair（无 --fix）：预览不受写入门影响，SAFE MODE 下仍只报告', async () => {
+  await withTmp(async (tmp) => {
+    const home = path.join(tmp, 'home');
+    const marker = path.join(controlRoot(home), 'transactions', 'safe-mode');
+    await fs.mkdir(path.dirname(marker), { recursive: true });
+    await fs.writeFile(marker, 'blocked\n', 'utf8');
+    await fs.mkdir(path.join(home, 'sessions'), { recursive: true });
+
+    const { io, out } = captureIo();
+    const code = await runCli(['sessions', 'repair', '--json'], io, { DSH_HOME: home });
+    assert.equal(code, 0, 'dry-run 零写入，不受写入门影响');
+    assert.doesNotMatch(out.join('\n'), /拒绝执行/);
+  });
+});

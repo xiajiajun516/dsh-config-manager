@@ -932,3 +932,65 @@ test('realtime：远端轮询定时器按 remoteCheckMs 排期，到点触发一
   h.scheduler.stop();
 });
 
+/* ---------------- 运行期多通道触发：逐通道补跑（不得互相覆盖） ---------------- */
+
+test('运行期多通道触发：每个通道各自补跑（单槽实现会让后到的通道吃掉先到的）', async () => {
+  const configs = {} as Record<SyncTransportType, AutosyncConfig>;
+  for (const ch of SYNC_CHANNELS) {
+    configs[ch] = { enabled: false, interval: '24h', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
+  }
+  configs.git = { enabled: true, interval: '5m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
+  configs.webdav = { enabled: true, interval: '5m', startupMinIntervalMs: 300000, consecutiveFailures: 0, realtime: false };
+
+  // 第一轮卡在 push 里（模拟真实网络耗时），此时才到达其它触发
+  let releaseGate: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { releaseGate = resolve; });
+  const startedChannels: SyncTransportType[] = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => false,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => ({ schemaVersion: 1, sections: [] } as unknown as MergePlan),
+    push: async () => { await gate; return { ok: true, snapshotId: 'snap', sections: [], warnings: [] }; },
+  };
+  let timerSeq = 0;
+  const scheduler = new AutoSyncScheduler({
+    syncDir: '/tmp',
+    host: { log: nullLogger() },
+    makeSyncEngine: (cfg: SyncConfig) => {
+      startedChannels.push(cfg.transport);
+      return engine as unknown as SyncEngine;
+    },
+    msg: (k: string) => k,
+    runs: new RunRegistry(),
+    now: () => new Date(1_000_000_000_000),
+    readConfig: async (channel: SyncTransportType) => configs[channel],
+    writeConfig: async (channel: SyncTransportType, c: AutosyncConfig) => { configs[channel] = c; },
+    readSyncConfigFn: async (channel: SyncTransportType) => channel === 'webdav'
+      ? ({ schemaVersion: 2, transport: 'webdav', webdav: { url: 'https://dav.example.com/dav' } } as SyncConfig)
+      : ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'git@github.com:foo/bar.git' } } as SyncConfig),
+    readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: [], updatedAt: '' }),
+    appendHistoryFn: async () => {},
+    setTimer: () => String(timerSeq++) as unknown as ReturnType<typeof setTimeout>,
+    clearTimer: () => {},
+    minTriggerGapMs: 0,
+  });
+
+  // 不 start()：排除启动触发的干扰，直接手工开一轮
+  const first = scheduler.runOnce('git');
+  await tick();
+  await tick();
+  assert.deepEqual(startedChannels, ['git'] as SyncTransportType[], '第一轮已经在跑（卡在 gated push）');
+
+  scheduler.trigger('webdav', 'remote-poll');
+  scheduler.trigger('git', 'local-change');
+  releaseGate();
+  await first;
+  for (let i = 0; i < 20 && startedChannels.length < 3; i += 1) await tick();
+
+  assert.ok(startedChannels.includes('webdav'), 'git 运行期间到达的 webdav 触发必须补跑（单槽时代会被 git 的触发覆盖而永久丢失）');
+  assert.equal(startedChannels.filter((c) => c === 'git').length >= 2, true, 'git 自己的运行期触发同样要补跑');
+  // stop() 必须清空待补跑队列
+  scheduler.stop();
+  await tick();
+});
+

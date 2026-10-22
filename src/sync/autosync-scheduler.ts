@@ -225,8 +225,12 @@ export class AutoSyncScheduler {
   private watcher: SyncWatcher | null = null;
   /** 当前需要监听的通道（setupWatchers 计算）。 */
   private realtimeChannels: SyncTransportType[] = [];
-  /** 运行期到达的触发：本轮收尾后立刻补跑（绝不并发写本地配置，也绝不丢）。 */
-  private pendingTrigger: { channel: SyncTransportType; reason: string } | null = null;
+  /**
+   * 运行期到达的触发：本轮收尾后立刻补跑（绝不并发写本地配置，也绝不丢）。
+   * **每通道各存一个**：单槽字段会让后到的通道覆盖先到的（审计实测：git 运行期间 webdav 的
+   * remote-poll 被 git 的 local-change 覆盖 ⇒ 该通道这一轮触发永久丢失，违反上面那句「绝不丢」）。
+   */
+  private readonly pendingTriggers = new Map<SyncTransportType, string>();
   /** 上次开始运行的时刻（trigger 的最小间隔合并用）。 */
   private readonly lastRunAtMs = new Map<SyncTransportType, number>();
   /** 因最小间隔被推迟的触发（每通道至多一个）。 */
@@ -283,7 +287,7 @@ export class AutoSyncScheduler {
     this.remoteTimers.clear();
     for (const timer of this.gapTimers.values()) this.clearTimer(timer);
     this.gapTimers.clear();
-    this.pendingTrigger = null;
+    this.pendingTriggers.clear();
     this.watcher?.stop();
     this.watcher = null;
     this.realtimeChannels = [];
@@ -304,13 +308,14 @@ export class AutoSyncScheduler {
   /**
    * 外部触发一次运行（本地改动 / 远端探测 / 另一通道让位）。
    *
-   * - 正在跑 → 记 pendingTrigger，本轮收尾后**立刻补跑**（不并发写本地配置，也绝不丢）；
+   * - 正在跑 → 记进 pendingTriggers（按通道去重，同通道后来的 reason 覆盖先前的），本轮收尾后**逐通道立刻补跑**
+   *   （不并发写本地配置，也绝不丢 —— 单槽时代后到的通道会吃掉先到的 → 该通道这轮触发永久丢失）；
    * - 距上次开始不足 minTriggerGapMs → 合并成一次（连续保存只跑一轮，每通道至多一个定时器）。
    */
   trigger(channel: SyncTransportType, reason: string = 'manual'): void {
     if (this.stopped) return;
     if (this.running) {
-      this.pendingTrigger = { channel, reason };
+      this.pendingTriggers.set(channel, reason);
       return;
     }
     const waitMs = this.minTriggerGapMs - (this.now().getTime() - (this.lastRunAtMs.get(channel) ?? 0));
@@ -444,9 +449,17 @@ export class AutoSyncScheduler {
     const result = await this.runOnceInternal(channel, opts);
     // 收尾后补跑：运行期到达的触发（watcher 连续保存 / 远端轮询 / 定时器到期）不会丢。
     // 放在内部实现之外（而不是 finally 里）是为了让锁与 run 账**完全释放之后**才开始下一轮。
-    const pending = this.pendingTrigger;
-    this.pendingTrigger = null;
-    if (pending !== null && !this.stopped) this.trigger(pending.channel, pending.reason);
+    // 逐通道排空：多个通道同时排队时都要补跑（单槽时代只有最后那个能活下来）。
+    // **串行 await**：并发 fire-and-forget 会在 RunRegistry 里撞同 kind conflict（第二个被 skip 掉，
+    // 等于换个方式又丢一次触发）。补跑期间新到达的触发重新进 map，由那一轮自己排空（自然收敛）。
+    if (this.pendingTriggers.size > 0 && !this.stopped) {
+      const pending = [...this.pendingTriggers];
+      this.pendingTriggers.clear();
+      for (const [pendingChannel, pendingReason] of pending) {
+        if (this.stopped) break;
+        await this.runOnce(pendingChannel, { reason: pendingReason });
+      }
+    }
     return result;
   }
 

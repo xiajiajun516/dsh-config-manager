@@ -38,7 +38,7 @@ import { runSessionsRepair } from './sessions-repair.ts';
 import { runSessionsInspect } from './sessions-inspect.ts';
 import { runImportSource } from './import-source.ts';
 import { renderCommandHelp, renderOverview } from './help.ts';
-import { collectVerifyResults, readRunningInstances } from './actions.ts';
+import { checkWriteGates, collectVerifyResults, readRunningInstances } from './actions.ts';
 import { Phase3Recovery, readSafeModeMarkerSync, safeModeMarkerPath } from '../core/phase3-host.ts';
 import {
   verifyBackupZip, type BackupVerifyResult, type BackupVerifyVerdict,
@@ -977,7 +977,9 @@ export async function runCli(
     );
   }
   if (options.command === 'sessions') {
-    // 离线修复：不碰 $DSH_HOME 的其它部分、不需要环境锁（只读写会话目录，且默认 dry-run）
+    // 离线修复：只读写会话目录，默认 dry-run（零写入）。list/doctor 纯只读，连「DSH 在跑」都不用管。
+    // **--fix 走与救急台完全相同的写入门**（actions.ts 的 checkWriteGates，顺序 SAFE MODE → 残留环境锁 → DSH 未运行）：
+    // 此前这里只查「DSH 在跑」，于是 SAFE MODE 激活 / 残留环境锁时 CLI 仍能改写会话字节 —— 与救急台判据分叉（审计 P1）。
     const home = options.home ?? resolveDshHome(env);
     const action = options.positionals[0] ?? 'repair';
     // T6：list / doctor 是**只读**动作 —— 不检查「DSH 是否在跑」，因为读永远不会伤害运行中的实例。
@@ -987,14 +989,22 @@ export async function runCli(
         io,
       );
     }
-    // T6：repair（含 --fix/--apply）先跑安全修复计划；**写操作前必须确认 DSH 没在跑**。
+    // T6：repair（含 --fix/--apply）先跑安全修复计划；写操作前三道门与救急台逐条同源。
     if (options.fix === true) {
-      const running = (await readRunningInstances(
-        resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env),
-      )).map((instance) => instance.name);
-      if (running.length > 0) {
-        io.error('检测到 DSH 正在运行（' + running.join(', ') + '）：请先关闭 DSH 再执行修复。');
-        io.error('DSH running (' + running.join(', ') + '): close DSH before repairing session bytes.');
+      const controlOpts = { dataRoot: options.dataRoot, dataDir: options.dataDir };
+      const gate = await checkWriteGates(resolveControlRoots(controlOpts, env), {
+        needsDshStopped: true,
+        locksDir: resolveRecoverLocksDir(controlOpts, env),
+      });
+      if (!gate.ok) {
+        io.error('拒绝执行：' + gate.reason);
+        if (gate.code === 'dsh-running') {
+          io.error('DSH running: close DSH before repairing session bytes.');
+        } else if (gate.code === 'safe-mode') {
+          io.error('SAFE MODE is active: resolve the pending transaction before writing session bytes.');
+        } else if (gate.code === 'stale-lock') {
+          io.error('A stale environment lock is present: run "dsh-config-manager recover-stale-lock" first.');
+        }
         return 1;
       }
     }
