@@ -13,7 +13,7 @@
 
 | # | 状态 | 问题 | 证据 | 影响 | 建议 | 置信度 |
 |---|---|---|---|---|---|---|
-| 1 | 未修 | 入口 ↔ 路由组有运行时 import 环 | 9 个组文件反向 `import ... from '../index.ts'`：`src/routes/consult.ts`、`import.ts`、`market.ts`、`me.ts`、`prefs.ts`、`profiles.ts`、`recovery.ts`、`snapshots.ts`、`sync.ts`；而 `src/index.ts` import `buildRoutes()` | 单测 import 任一这类组文件都会拖进整个宿主入口；拆分/裁剪入口的每一步都被它拖住 | 把共享 helper 下沉（路由层新建 helpers 目录，或 `src/utils/`），组文件只依赖下层；分步做，每步跑 `tests/route/*` + `npm run typecheck` | 高 |
+| 1 | 已修 | 入口 ↔ 路由组有运行时 import 环 | 原 9 个组文件反向 `import ... from '../index.ts'`（consult/import/market/me/prefs/profiles/recovery/snapshots/sync）；现共享工具在 `src/routes/route-support.ts`，组文件只依赖它 + kit，`src/index.ts` 单向 import `buildRoutes()` | 单测 import 任一这类组文件都会拖进整个宿主入口；拆分/裁剪入口的每一步都被它拖住 | 已按「共享 helper 下沉」执行（见 F6）；守卫 `tests/route/route-support-cycle.test.ts` 防回退 | 高 |
 | 2 | 未修 | gist 通道无并发写保护，双机会静默覆盖索引 | `src/sync/gist/gist-transport.ts`（不做条件写的注释与落点）；`src/sync/gist/gist-overwrite-semantics.test.ts` 钉住现状 | 两台机器同时同步时后写者整体覆盖索引，前者条目消失（载荷不丢） | 需产品决策：单写者承诺 vs read-merge-write（都只能缩小窗口，gist 无 CAS）。决策前**不得**假装已安全 | 高 |
 | 3 | 未修 | 回滚点载荷没有缺省敏感排除 | `src/core/rollback-ignore-rules.ts` 的内置排除段只有依赖目录（`node_modules` 一类），没有 `.env`/密钥文件 | 自动留点会把工作区里的明文密钥写进回滚点载荷（本地磁盘，仍属泄露面扩大） | 加内置敏感模式表 + 明确「这是排除不是加密」；需要产品确认默认集合 | 高 |
 | 4 | 未修 | 恢复没有整笔自动回滚 | `src/core/restore.ts` 逐动作 try/catch；唯一兜底是恢复前副本 | 中途失败会留下「部分已恢复」的混合态，需要人工判断 | 先补「恢复中途进程崩溃」的回归测试（可在 journal 上续跑），再评估整笔回滚；不要在没有测试前改补偿逻辑 | 高 |
@@ -23,7 +23,7 @@
 
 | # | 状态 | 问题 | 证据 | 影响 | 建议 | 置信度 |
 |---|---|---|---|---|---|---|
-| 6 | 未修 | 巨型文件无体量棘轮 | `src/core/rollback-point.ts`（约 5.9k 行）、`src/index.ts`（约 5.0k）、`src/client/recovery/RecoveryPanel.tsx`（约 1.9k）、`src/core/analyzer.ts`（约 1.8k） | 阅读与 merge 成本高；改动易漏 | 先给「不得继续增长」的软棘轮（行数上限测试），再按域拆分；拆前必须先有该域回归测试 | 高 |
+| 6 | 未修 | 巨型文件无体量棘轮 | `src/core/rollback-point.ts`（约 5.9k 行）、`src/index.ts`（约 4.4k，原 5.0k）、`src/client/recovery/RecoveryPanel.tsx`（约 1.9k）、`src/core/analyzer.ts`（约 1.8k） | 阅读与 merge 成本高；改动易漏 | 先给「不得继续增长」的软棘轮（行数上限测试），再按域拆分；拆前必须先有该域回归测试 | 高 |
 | 7 | 未修 | `RecoveryPanel` 承载 8 类职责且写盘只有组件内 busy | `src/client/recovery/RecoveryPanel.tsx`；长写盘未进 `run-store` 的「进行中操作」状态 | 切页丢视图、用户不知道还在写 | 写盘动作登记到 `run-store`（与 export/import 同口径），再拆组件 | 高 |
 | 8 | 未修 | 同一个概念多份实现 | 日期戳 3 份（`src/index.ts`、`core/model-tools.ts`、`sync/backup-scheduler.ts`）；脱敏流水线 2 份（`security/redaction.ts` 内两条同构路径）；越界判定 2 份（`core/restore.ts` 的 `startsWith` vs `utils/paths.ts` 的 `path.relative`，大小写/realpath 语义不同） | 修一处漏一处；跨平台差异在这里最容易出 | 抽单一实现并加一条跨平台用例；越界判定优先用 `path.relative` 版本（已处理分隔符与大小写） | 高 |
 | 9 | 未修 | `/restore` 自拼 mutation gate 并复制 423 映射 | `src/routes/snapshots.ts` 与 `src/index.ts` 里的其它 gate 用法不一致 | 新增 gate 行为（例如新错误码）时容易漏改一处 | 收敛到同一个 helper；先补一条对比测试 | 中 |
@@ -56,3 +56,4 @@
 | F3 | 文档路径/版本守卫接进 CI 与发布流程 | `scripts/check-doc-paths.mjs`、`scripts/check-doc-versions.mjs`、`.github/workflows/ci.yml`、`publish.yml` |
 | F4 | 文档事实漂移（路由 82、13 组、页面四页、白名单 133、版本声明去写死） | `AGENTS.md`、`DEVELOPERS.md`、`docs/spec/compat-matrix.md`、`docs/spec/known-gaps.md` |
 | F5 | 未解锁容器闸门与 `plan-changed` 409 的回归测试 | `tests/route/encrypted-container-gate.test.ts`、`tests/route/restore-plan-changed.test.ts` |
+| F6 | 拆掉「入口 ↔ 路由组」运行时 import 环：共享工具下沉 `src/routes/route-support.ts`，`src/index.ts` 5003 → 4379 行；`pluginVersion`/`starPromptRepoUrl` 改经 `makeRouteEnv()` 注入 | `src/routes/route-support.ts`、`src/index.ts`、9 个组文件；守卫 `tests/route/route-support-cycle.test.ts`、`tests/architecture-boundaries.test.ts` |

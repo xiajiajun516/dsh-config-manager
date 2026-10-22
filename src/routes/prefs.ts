@@ -12,15 +12,16 @@ import { endpoint, requireJsonObject, writeJson } from './kit.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { PLUGIN_VERSION, STAR_PROMPT_REPO_URL } from '../index.ts'
 import { readUiPrefs, updateUiPrefs } from '../sync/ui-prefs.ts'
 import { UpdateChecker, wantsForcedUpdateCheck } from '../core/update-check.ts'
 
 export function prefsRoutes(env: RoutesEnv): WebRoute[] {
   const {
     host,
-    syncDir,
+    pluginVersion: PLUGIN_VERSION,
     selfUpdate,
+    starPromptRepoUrl: STAR_PROMPT_REPO_URL,
+    syncDir,
     withMutationGate,
   } = env
   /**

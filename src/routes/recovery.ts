@@ -29,7 +29,7 @@ import {
   rollbackSessionRepair,
 } from '../utils/session-repair-service.ts'
 import { applySessionLayoutRepair, planSessionLayoutRepair } from '../utils/session-layout-repair-service.ts'
-import { sessionHealthNextSteps } from '../index.ts'
+import { sessionHealthNextSteps } from './route-support.ts'
 
 /**
  * 回滚点的机器可读结果 → HTTP 状态码。

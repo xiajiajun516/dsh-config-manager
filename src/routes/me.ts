@@ -8,7 +8,7 @@
 import { endpoint, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { isControlledPath, isGitHubAuthMissing, parseMeForm } from '../index.ts'
+import { isControlledPath, isGitHubAuthMissing, parseMeForm } from './route-support.ts'
 import { MyRepoError, USER_CONFIGS_REPO, userConfigsRepoUrl } from '../market/my-repo.ts'
 import { redact } from '../security/redaction.ts'
 import fs from 'node:fs/promises'

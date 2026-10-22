@@ -95,11 +95,12 @@ push 前先比「基线 vs 远端最新」，不一致即零写入返回 conflic
 
 ## 6. 结构性事实（改动的成本来源）
 
-1. **入口 ↔ 路由组有运行时环**：9 个组文件为了共享工具函数反向 `import ... from '../index.ts'`
-   （`src/routes/consult.ts:13`、`import.ts:13`、`market.ts:11`、`me.ts:11`、`prefs.ts:15`、`profiles.ts:13`、`recovery.ts:32`、`snapshots.ts:15`、`sync.ts:44`），
-   而 `src/index.ts` 又 import `buildRoutes()`。后果：单测里 import 任一这类组文件都会把整个宿主入口拖进来。
-   收敛方向（未执行）：把这些共享 helper 下沉到路由层新建的 helpers 目录或 `src/utils/`，让组文件只依赖下层。
-2. **巨型文件**：`src/core/rollback-point.ts` 5963 行、`src/index.ts` 5003 行、`src/client/recovery/RecoveryPanel.tsx` 1946 行、`src/core/analyzer.ts` 1824 行、
+1. **入口与路由组之间只走单向依赖**（环已拆）：共享工具（凭据 ref、restore/plan 装配、autosync 视图、超时与写文件助手）在
+   `src/routes/route-support.ts`，9 个组文件（consult/import/market/me/prefs/profiles/recovery/snapshots/sync）只依赖它 + `src/routes/kit.ts`，
+   不再 `import '../index.ts'`；`src/index.ts` 单向 import `buildRoutes()`，并把 `pluginVersion`/`starPromptRepoUrl` 经 `makeRouteEnv()` 注入组文件
+   （`RouteEnvInferred` 是 `src/index.ts:2179` 手写的字面类型，加字段必须同步改）。守卫 = `tests/route/route-support-cycle.test.ts`。
+   **新增共享工具就放 route-support，别让组文件回指组合根**。
+2. **巨型文件**：`src/core/rollback-point.ts` 5963 行、`src/index.ts` 4379 行（原 5003，已下沉 route-support）、`src/client/recovery/RecoveryPanel.tsx` 1946 行、`src/core/analyzer.ts` 1824 行、
    `src/sync/sync-engine.ts` 2227 行、`src/client/run-store.ts` 2166 行。体量本身不是缺陷，但它让「改一处要读多少」和 merge 冲突成本线性上升；
    拆分前必须先有对应回归测试（见 `docs/maintenance/tech-debt.md`）。
 3. **耦合中枢**（入度最高的模块，改动影响面最大）：`src/schema/types.ts`、`src/core/types.ts`、`src/client/client-types.ts`、`src/security/redaction.ts`、

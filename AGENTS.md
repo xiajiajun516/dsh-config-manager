@@ -11,7 +11,7 @@
 ## 🗂️ 结构与分层
 > 目录树（各目录职责）→ `docs/lessons/repo-overview.md`；`src/index.ts` 保留的 7 条路由、`src/routes/` 13 组；下列为硬规则。
 1. 业务逻辑放 `src/ui/`，React 壳只装配；页面落位/共享原语/状态中枢清单 → `DEVELOPERS.md`。
-2. 新增一条 API = 在所属组文件加一条 `endpoint({ path, methods }, handler)`；路由注册**只经** `src/routes/kit.ts`。
+2. 新增一条 API = 在所属组文件加一条 `endpoint({ path, methods }, handler)`；路由注册**只经** `src/routes/kit.ts`；组文件**不得** import `../index.ts`（共享工具进 `src/routes/route-support.ts`）。
 3. `src/client/**` **不得 import node 模块**；跨端共享只能进零依赖模块；`src/profiles/dsh-profile-io.ts` 绝不能被浏览器半 import。
 4. 根目录只放对外文档（`README*`/`CHANGELOG`/`SECURITY`/`LICENSE`）与协作规范；其余进 `docs/`。
 5. 写/改 CHANGELOG 前先按 `.dsh/skills/changelog-writing` 落位并跑自检；会话相关改动先读 `docs/lessons/sessions-*.md`。

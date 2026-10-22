@@ -20,7 +20,9 @@
  *               等价实现，因此 client 不应出现任何 node 依赖；
  *  - adapters / sync / market / foreign：实现层，只依赖 core/schema/security/utils，禁止
  *                react/react-dom 与 ../client、../ui；
- *  - @deepseek-ai/* 只允许出现在 src/index.ts（host 入口）与 src/client/（浏览器半注入点）；
+ *  - @deepseek-ai/* 只允许出现在 src/index.ts（host 入口）与 src/client/（浏览器半注入点），
+ *    以及 DSH_PACKAGE_ALLOWED 里显式声明的「文件 → 包」对（当前仅 routes/route-support.ts
+ *    的 dsh-credentials 品牌 shim）；
  *  - src/index.ts、src/cli/** 为入口层，豁免层规则（cli 仍受 @deepseek-ai 全局规则约束）。
  *
  * 扫描 src 目录下全部 .ts / .tsx 源文件（跳过 .test.ts / .test.tsx / .d.ts），正则提取
@@ -91,9 +93,23 @@ const NODE_ONLY_PACKAGES = new Set([
   'process', 'module', 'perf_hooks', 'async_hooks',
 ]);
 
-/** @deepseek-ai/* 允许出现的位置（host 入口 + 浏览器半） */
-function isDshPackageAllowed(rel: string): boolean {
-  return rel === 'index.ts' || rel.startsWith('client/');
+/**
+ * @deepseek-ai/* 允许出现的 host 半模块（精确到「文件 → 包」对）。
+ *
+ * 为什么需要它：P4 把路由组共享工具下沉到 `routes/route-support.ts`，其中 `credentialRef`
+ * 是为跨 DSH 0.1.1 / 0.1.2-alpha 版本兼容而做的品牌 shim（包未导出时回落到正则校验）。
+ * 该模块只在**宿主半**被 import（`src/index.ts` 与各路由组），不会进 client bundle，
+ * 因此与 `src/index.ts` 同类；但为了不放开整层，只放行这一个「文件 → 包」对。
+ * 新增放行必须在此声明并写明理由（不要改成前缀匹配）。
+ */
+const DSH_PACKAGE_ALLOWED: ReadonlyArray<{ rel: string; pkg: string }> = [
+  { rel: 'routes/route-support.ts', pkg: '@deepseek-ai/dsh-credentials' },
+];
+
+/** @deepseek-ai/* 允许出现的位置（host 入口 + 浏览器半 + 显式放行的 host 半模块） */
+function isDshPackageAllowed(rel: string, spec: string): boolean {
+  if (rel === 'index.ts' || rel.startsWith('client/')) return true;
+  return DSH_PACKAGE_ALLOWED.some((entry) => entry.rel === rel && (spec === entry.pkg || spec.startsWith(entry.pkg + '/')));
 }
 
 /* ---------------------------------------------------------------- 已知例外 */
@@ -181,7 +197,7 @@ test('F7 架构边界：各层 import 依赖方向守护（违规即失败并列
     const src = fs.readFileSync(file, 'utf8');
     for (const spec of parseImports(src)) {
       // 全局规则：@deepseek-ai/* 只允许 index.ts 与 client
-      if (spec.startsWith('@deepseek-ai/') && !isDshPackageAllowed(rel)) {
+      if (spec.startsWith('@deepseek-ai/') && !isDshPackageAllowed(rel, spec)) {
         fileViolations.add(`${rel} → ${spec}（@deepseek-ai/* 只允许出现在 src/index.ts 与 src/client/）`);
         continue;
       }

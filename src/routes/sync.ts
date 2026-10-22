@@ -41,7 +41,7 @@ function extractPathMappings(body: Record<string, unknown>): PathMapping[] {
   }
   return out
 }
-import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF, SyncRouteError, buildAutosyncStatus, buildAutosyncStatusByChannel, credentialRef, extractSyncSections, extractSyncSessions, isAutosyncInterval, isGitHubAuthMissing, isToolchainChangeItem, planToConfirmItems, syncPasswordRef, withTimeout, writeSyncRouteError } from '../index.ts'
+import { REVIEW_KINDS, ROUTE_TIMEOUT_MS, SYNC_CREDENTIAL_REF, SYNC_WEBDAV_CREDENTIAL_REF, SyncRouteError, buildAutosyncStatus, buildAutosyncStatusByChannel, credentialRef, extractSyncSections, extractSyncSessions, isAutosyncInterval, isGitHubAuthMissing, isToolchainChangeItem, planToConfirmItems, syncPasswordRef, withTimeout, writeSyncRouteError } from './route-support.ts'
 import { GitHubApiError } from '../market/github-repos.ts'
 import type { SectionId } from '../schema/types.ts'
 import { redact } from '../security/redaction.ts'

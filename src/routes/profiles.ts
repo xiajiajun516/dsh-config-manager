@@ -10,7 +10,7 @@ import { endpoint, requireJsonObject, writeJson, queryParam } from './kit.ts'
 import { engineMsg } from './messages.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { writeProfileError } from '../index.ts'
+import { writeProfileError } from './route-support.ts'
 import { DSH_PROFILE_TEMPLATES, DshProfileError } from '../profiles/index.ts'
 import type { DshProfileCopyResult, DshProfileRunningView, DshProfilesSnapshot } from '../profiles/index.ts'
 

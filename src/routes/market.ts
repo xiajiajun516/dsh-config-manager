@@ -8,7 +8,7 @@
 import { endpoint, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
-import { isControlledPath } from '../index.ts'
+import { isControlledPath } from './route-support.ts'
 import { BUILTIN_MARKET_URL } from '../market/builtin.ts'
 import { parseMarketIndex, parseMarketItemManifest } from '../market/index-parser.ts'
 import { prepareMarketItem } from '../market/prepare.ts'
