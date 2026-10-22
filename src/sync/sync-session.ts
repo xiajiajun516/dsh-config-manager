@@ -26,6 +26,11 @@ export interface SyncSession {
   analysis: ImportAnalysis;
   /** 被拉取的远端快照 id */
   snapshotId: string;
+  /**
+   * 被拉取的远端快照本身是否加密（issue #107 补漏；只存布尔，**绝不存密码**）。
+   * apply-items 据此决定祖先副本落密文还是不落 —— 加密通道绝不写明文祖先副本。
+   */
+  encrypted?: boolean;
   /** 该次同步使用的通道配置（git/webdav 通用；apply-items 据此重建引擎） */
   config: SyncConfig;
   /**

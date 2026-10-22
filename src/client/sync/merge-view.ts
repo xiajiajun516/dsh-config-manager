@@ -303,6 +303,8 @@ export function mergeDecisionCounts(
  *
  * - useMerged：只有存在可用自动合并结果（decision === 'merge'）时才有内容可写；
  * - useRemote / keepLocal：都会写盘，选哪侧不影响「会写」这件事。
+ * 注：wire 类型另含 'skip'（`sync-api.ts` 的 MergeResolutionActionWire），它由批量「留待下次」
+ * 使用、引擎侧归 pendingConflicts 不写盘；本类型不含 skip，故这里无需分支。
  */
 export function decisionWillApply(row: MergeSectionRow, action: MergeResolutionAction | undefined): boolean {
   if (action === undefined) return false

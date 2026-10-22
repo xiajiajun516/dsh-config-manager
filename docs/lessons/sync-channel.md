@@ -96,6 +96,15 @@
   - merge：祖先为密文时用**本次请求的密码**解密；密码缺失/不匹配/载荷损坏一律回落 `undefined`
     （沿用 P0-7「祖先读不出就两方合并」契约，**绝不抛错打断合并**）。
   - `applyMergePlan` / `applyMergeResolutions` 透传 `ancestorPassword`（仅当本次远端快照加密且拿到了密码）。
+- **第二条落地路径同样只落密文（issue #107 补漏，2026-10-22 独立复核发现）**：`applyItems`（pull / 一键同步落地）
+  原先把 `recordBaseline` 的 `writeAncestor` 留在缺省值 ⇒ 加密快照走这条路时祖先副本仍是**明文散文件**。
+  现在 `preview()` 先把「远端快照本身是否加密」记成 `SyncPreviewResult.encrypted`，同步会话只存这个**布尔**
+  （绝不存密码）；`/sync/apply-items` 按「请求体 > 已存凭据」取密码（客户端此时手里没有密码：一键同步前已落库、
+  请求后立刻清空内存），有密码传 `ancestorPassword`（写密文副本），没密码传 `suppressAncestor: true`
+  （`writeAncestor: false`，`ancestorId` 置 ''），**宁可不留基线也绝不落明文**。
+- **回归测试（补漏那条）**：`src/sync/sync-engine.test.ts`「issue #107 补漏: applyItems 带 ancestorPassword → 祖先副本落密文；
+  suppressAncestor → 不落副本」，以及源码守卫「issue #107 源码守卫：/sync/apply-items 的祖先副本按会话加密标记决定
+  「密文 / 不落」」（防止路由接线被改回去）。
 - **不做**：`src/sync/layout.ts` 里「加密快照不写散文件目录」的结构性拒绝保持不变（git 通道依赖它）；
   自动同步路径本就不涉及加密快照，不需要额外密码来源。
 - **回归测试**：`src/sync/sync-engine.test.ts`「P0-7 + issue #107: 加密快照 push 落密文祖先副本 →

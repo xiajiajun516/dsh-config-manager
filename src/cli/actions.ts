@@ -395,6 +395,12 @@ export type WriteRefusalCode =
   | 'nothing-to-do'
   | 'io-error'
 
+/**
+ * SAFE MODE 拒因码的**单点常量**：`src/cli/index.ts` 的源码守卫（P0-11-07）禁止
+ * CLI 自带 `'safe-mode'` 字面量，判据必须复用本常量（否则改一处漏一处）。
+ */
+export const SAFE_MODE_REFUSAL_CODE: WriteRefusalCode = 'safe-mode'
+
 export interface WriteGateRefusal {
   ok: false
   code: WriteRefusalCode

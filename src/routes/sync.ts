@@ -895,6 +895,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           plan: preview.plan,
           analysis: preview.analysis,
           snapshotId: preview.snapshotId,
+          // issue #107 补漏：只记布尔（远端是否加密），不存密码 ——
+          // apply-items 另一次请求时据此决定祖先副本落密文还是不落，绝不落明文。
+          encrypted: preview.encrypted === true,
           config: syncCfg,
           // issue #38：随加密快照迁移的凭据（仅内存；apply-items 时写回本机）。
           // 绝不进响应体：下面只回 items/needsReview 等非敏感字段。
@@ -973,6 +976,17 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         }
         // 消费会话（同一 session 只允许一次 apply-items）
         syncSessions.delete(syncSessionId)
+        // issue #107 补漏：加密快照经「pull / 一键同步」落地时，祖先副本也必须落**密文**。
+        // 密码来源与 /sync/sync 同口径（请求体 > 已存本机凭据），仅本次内存使用；
+        // 拿不到密码就 `suppressAncestor` —— 宁可不留祖先（下轮两方合并），也绝不落明文副本。
+        const applyDecryptPassword = typeof body['decryptPassword'] === 'string' && body['decryptPassword'] !== ''
+          ? body['decryptPassword']
+          : await resolveSyncPassword(syncPasswordRef('DECRYPT', channelOf(session.config)))
+        const ancestorOpts = session.encrypted !== true
+          ? {}
+          : applyDecryptPassword !== undefined && applyDecryptPassword !== ''
+            ? { ancestorPassword: applyDecryptPassword }
+            : { suppressAncestor: true }
         let engine: SyncEngine
         let report: ApplyItemsReport
         try {
@@ -985,6 +999,8 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
             remoteSnapshotId: session.snapshotId,
             // issue #38：把会话里的凭据 Map 交给 credentials adapter 写回本机（仅内存）
             ...(session.credentials !== undefined ? { credentials: session.credentials } : {}),
+            // issue #107 补漏：祖先副本密文 / 不落（见上面 ancestorOpts）
+            ...ancestorOpts,
           })
         } finally {
           // 用完再清理临时 ZIP（此前在 applyItems 读取前就删除 → ENOENT：无法读取备份文件）

@@ -38,7 +38,7 @@ import { runSessionsRepair } from './sessions-repair.ts';
 import { runSessionsInspect } from './sessions-inspect.ts';
 import { runImportSource } from './import-source.ts';
 import { renderCommandHelp, renderOverview } from './help.ts';
-import { checkWriteGates, collectVerifyResults, readRunningInstances } from './actions.ts';
+import { checkWriteGates, collectVerifyResults, readRunningInstances, SAFE_MODE_REFUSAL_CODE } from './actions.ts';
 import { Phase3Recovery, readSafeModeMarkerSync, safeModeMarkerPath } from '../core/phase3-host.ts';
 import {
   verifyBackupZip, type BackupVerifyResult, type BackupVerifyVerdict,
@@ -1000,7 +1000,7 @@ export async function runCli(
         io.error('拒绝执行：' + gate.reason);
         if (gate.code === 'dsh-running') {
           io.error('DSH running: close DSH before repairing session bytes.');
-        } else if (gate.code === 'safe-mode') {
+        } else if (gate.code === SAFE_MODE_REFUSAL_CODE) {
           io.error('SAFE MODE is active: resolve the pending transaction before writing session bytes.');
         } else if (gate.code === 'stale-lock') {
           io.error('A stale environment lock is present: run "dsh-config-manager recover-stale-lock" first.');

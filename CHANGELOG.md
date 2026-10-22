@@ -63,6 +63,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **gist 通道不再被拒**：GitHub 的 gist 接口不接受任何条件请求头，上传与删除都不再携带，之前每次推送都失败的情况消失（代价是 gist 通道没有并发写保护，多设备同时写请改用 git / WebDAV / S3）。（issue #110）
   **The gist channel is no longer rejected**: GitHub's gist endpoint refuses conditional request headers, so uploads and deletes no longer send them and pushes stop failing (the trade-off is no concurrent-write protection on gist — use git, WebDAV or S3 if several devices write at once).
 
+## [0.1.81] - 2026-10-22
+
+> **本版主题**：**加密同步的共同基线不再因为「换了条落地路径」就退回明文散文件 —— 加密快照无论是推送上去还是拉取下来，留下的可三方比较的基线都只以密文形态落盘；拿不到密码时宁可不留基线，也不会把明文写出到磁盘**
+>
+> **Theme**: **The common baseline used by encrypted sync no longer degrades into plaintext files just because the changes landed through a different path: whether an encrypted snapshot was pushed up or pulled down, the baseline kept for three-way comparison stays encrypted on disk, and when no password is available it is not kept at all rather than written out in plaintext**
+
+### 🐛 修复 · Fixed
+
+- **加密同步拉取落地后也留密文基线**：以前只有「推送上去」会留可三方比较的基线，「拉取 / 一键同步」落地的那份仍是明文散文件；现在两条路径都只落密文，密码不对或缺失时索性不留，下一轮退回两边比较，不会再出现「看起来开了加密、磁盘上却有明文副本」的情况。（issue #107）
+  **Pulled encrypted sync keeps an encrypted baseline too**: previously only an upload left a baseline usable for three-way comparison, while the one written when pulling or one-click syncing landed was still plaintext on disk; both paths now keep it encrypted only, and when the password is missing or wrong the baseline is simply not kept — the next round falls back to a two-way comparison instead of leaving plaintext copies around while encryption is supposedly on. (issue #107)
 ## [0.1.79] - 2026-10-22
 
 > **本版主题**：**这一版让「回退」和「同步」都变得可以放心依赖 —— 回退不再误伤别的对话改过的文件、也不再改写换行符与编码；同步能一键自检、两台设备同时写不再互相覆盖、改完就同步；从 Claude Code 迁移会连同项目级与插件里的东西一起带过来，导出时每个分区都能展开逐条勾选**

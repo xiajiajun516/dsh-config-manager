@@ -1075,6 +1075,51 @@ test('applyItems: 成功路径 → 执行子计划 + recordBaseline', async () =
   }
 });
 
+test('issue #107 补漏: applyItems 带 ancestorPassword → 祖先副本落密文；suppressAncestor → 不落副本（绝不落明文）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applyitems-enc-anc-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const password = 'pw-12345678';
+    const local = path.join(tmp, 'snapshots');
+    const makeEngineFor = (stateDir: string) => makeEngineWithMockImporter({
+      ctx, transport: new MemSyncTransport(), stateDir, localSnapshotsDir: local, mockImporter: (() => { const m = new MockImporter(); m.ok = true; return m; })(),
+    });
+    const zipPath = path.join(tmp, 'session.zip');
+    await fs.writeFile(zipPath, 'mock-zip-content');
+
+    // ① 有密码：落地后的共同基线以**密文**副本落地（内容与形态同加密 push 的祖先副本）
+    const withPassword = makeEngineFor(path.join(tmp, 'state-with-pw'));
+    const report = await withPassword.applyItems(zipPath, makeImportPlan('ok'), {
+      remoteSnapshotId: 'sync-pull-enc',
+      ancestorPassword: password,
+    });
+    assert.equal(report.ok, true);
+    const state = await loadSyncState(path.join(tmp, 'state-with-pw'));
+    assert.equal(state.lastSnapshotId, 'sync-pull-enc');
+    assert.notEqual(state.ancestorId ?? '', '', '有密码时必须落祖先副本（否则下轮缺共同基线）');
+    // 副本目录名 = 落盘基线自己的 id（applyItems 用 snapshotIdFn 生成，不同于远端 id）
+    const ancestorDir = path.join(local, state.ancestorId!);
+    assert.deepEqual((await fs.readdir(ancestorDir)).sort(), ['manifest.json', 'sections.encrypted.json'], '加密通道落地只能落密文单载荷');
+    const payloadRaw = JSON.parse(await fs.readFile(path.join(ancestorDir, 'sections.encrypted.json'), 'utf8')) as EncryptedSections;
+    const decrypted = await decryptSectionsPayload(payloadRaw.encrypted, password);
+    assert.equal(decrypted.settings !== undefined, true, '用同一密码可解回明文（供下轮三方比较）');
+
+    // ② 没有密码：宁可**不落**祖先副本（下轮两方合并），也绝不落明文副本
+    const withoutPassword = makeEngineFor(path.join(tmp, 'state-no-pw'));
+    const report2 = await withoutPassword.applyItems(zipPath, makeImportPlan('ok'), {
+      remoteSnapshotId: 'sync-pull-enc-2',
+      suppressAncestor: true,
+    });
+    assert.equal(report2.ok, true);
+    const state2 = await loadSyncState(path.join(tmp, 'state-no-pw'));
+    assert.equal(state2.lastSnapshotId, 'sync-pull-enc-2');
+    assert.equal(state2.ancestorId, '', '拿不到密码时 ancestorId 必须为空（绝不指向明文副本）');
+    assert.deepEqual(await fs.readdir(local).then((names) => names.filter((n) => n !== state.ancestorId)).catch(() => []), [], '除 ① 的密文副本外不得再落任何副本目录');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
 test('applyItems: 失败路径 → 整体回滚 + ok:false', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-applyitems-fail-'));
   try {
@@ -1683,6 +1728,25 @@ test('P0-7 源码守卫：/sync/apply-items 以 remoteSnapshotId: session.snapsh
     source.includes('snapshotId: preview.snapshotId,'),
     '同步会话必须登记 preview.snapshotId 作为 session.snapshotId（该值即远端快照 id）',
   );
+});
+
+/**
+ * issue #107 补漏 · 源码守卫：一键同步落地的祖先副本也必须守「只落密文」。
+ * 引擎级行为由上面的 applyItems 用例钉住（传 ancestorPassword → 密文副本；suppressAncestor → 不落），
+ * 这里钉**接线**：路由若不把密码/抑制标志透传下去，加密通道走 pull 路径就会退回写明文祖先副本。
+ */
+test('issue #107 源码守卫：/sync/apply-items 的祖先副本按会话加密标记决定「密文 / 不落」', async () => {
+  const source = await hostRouteSource();
+  const callIdx = source.indexOf('await engine.applyItems(');
+  assert.ok(callIdx > 0, '应能找到 engine.applyItems(...) 调用');
+  const options = source.slice(callIdx, callIdx + 1200);
+  assert.ok(/session\.encrypted !== true/.test(source), '祖先形态必须由会话里的「远端是否加密」决定');
+  assert.ok(/ancestorPassword: applyDecryptPassword/.test(source), '有密码 → ancestorPassword 必须透传（写密文副本）');
+  assert.ok(/suppressAncestor: true/.test(source), '没密码 → 必须 suppressAncestor（宁可不落，也绝不落明文）');
+  assert.ok(/\.\.\.ancestorOpts/.test(options), 'applyItems 调用必须展开 ancestorOpts（否则上面两处判定全是死代码）');
+  assert.ok(/resolveSyncPassword\(syncPasswordRef\('DECRYPT'/.test(source), '密码来源必须回落到已存凭据（客户端不持有密码）');
+  assert.ok(source.includes('encrypted: preview.encrypted === true,'), '同步会话必须登记「远端快照是否加密」（只存布尔，不存密码）');
+  assert.equal(/ancestorPassword:\s*session\./.test(source), false, '会话里绝不存密码字段');
 });
 /**
  * P0-7 收尾 · 引擎级端到端（宿主调用形状）：一键同步 = preview() → 同步会话持有 snapshotId →

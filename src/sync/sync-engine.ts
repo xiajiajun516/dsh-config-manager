@@ -331,6 +331,11 @@ export interface SyncPreviewResult {
   analysis: ImportAnalysis | null;
   snapshotId: string;
   /**
+   * 被拉取的远端快照本身是否加密（issue #107 补漏）：apply-items 路径据此决定
+   * 祖先副本落密文（有密码）还是干脆不落（没有密码）—— 绝不落明文。
+   */
+  encrypted?: boolean;
+  /**
    * 从快照凭据载荷解密出的 `Map<ref, value>`（issue #38；无凭据载荷 → undefined）。
    * **仅内存**：绝不落盘、绝不进响应体/日志/报告；apply-items 时作为
    * executeImportPlan 的 decryptedCredentials 交给 credentials adapter 写回本机。
@@ -1436,6 +1441,9 @@ export class SyncEngine {
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
     const snapshot = await this.transport.download(targetId);
+    // issue #107 补漏：解密**前**记下「远端快照本身是否加密」——apply-items 落地时据此决定
+    // 共同基线的祖先副本落密文（有密码）还是不落（没密码），绝不因走了另一条路径就落明文。
+    const encrypted = snapshot.manifest.encrypted === true;
     // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
     await this.prepareSnapshot(snapshot, opts.password);
     // P1-5：按远端墓碑剔除已删除的会话（旧快照不复活；一键同步复用本 plan）
@@ -1453,7 +1461,7 @@ export class SyncEngine {
     });
     await this.appendCredentialPlanItems(plan, credentials);
     return {
-      ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, credentials,
+      ok: analysis.valid, zipPath, plan, analysis, snapshotId: targetId, credentials, encrypted,
       message: tombstoned.length === 0
         ? undefined
         : this.msg('sync.sessionsTombstoned', { count: String(tombstoned.length) }),
@@ -2050,6 +2058,14 @@ export class SyncEngine {
        * （那会让 hasNewRemoteSnapshot() 恒判「远端有新生」，每轮白跑 list + download + merge）。
        */
       remoteSnapshotId?: string;
+      /**
+       * issue #107 补漏：远端快照本身是加密快照时，本次基线对应的祖先副本也必须落**密文**。
+       * 提供密码 → 写密文祖先副本（下轮可三方合并）；不提供 → 由调用方传 `suppressAncestor`，
+       * **绝不落明文副本**（明文副本会违反「祖先副本只落密文」，也让加密通道的基线以明文散文件落盘）。
+       */
+      ancestorPassword?: string;
+      /** 加密通道拿不到密码时：不落祖先副本，`ancestorId` 置 ''（下轮退回两方合并，绝不落明文） */
+      suppressAncestor?: boolean;
     } = {},
   ): Promise<ApplyItemsReport> {
     if (!this.importer) {
@@ -2135,6 +2151,11 @@ export class SyncEngine {
     const snapshotId = this.snapshotIdFn();
     await this.recordBaseline(snapshotId, landed, undefined, {
       remoteSnapshotId: opts.remoteSnapshotId ?? '',
+      // issue #107 补漏：加密通道绝不落明文祖先副本（有密码落密文；没密码干脆不落，下轮两方合并）
+      ...(opts.suppressAncestor === true ? { writeAncestor: false } : {}),
+      ...(opts.ancestorPassword !== undefined && opts.ancestorPassword !== ''
+        ? { ancestorPassword: opts.ancestorPassword }
+        : {}),
     });
 
     return {
