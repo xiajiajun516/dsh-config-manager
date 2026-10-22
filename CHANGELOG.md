@@ -32,6 +32,14 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **两条同步通道不会再互相顶掉待补跑的那一轮**：一个通道正在同步时另一个通道的改动或远端探测会各自记下来、等这轮结束逐个补跑，不再只剩最后到的那一个。
+  **Two sync channels no longer cancel each other's queued run**: while one channel is syncing, changes or remote checks arriving on another channel are remembered per channel and each gets its own follow-up run instead of only the last one surviving.
+
+- **命令行修会话前会先看 SAFE MODE 与环境锁**：`sessions repair --fix` 现在与救急台用同一道写入门，存在未恢复的配置事务或残留环境锁时直接拒绝并指出出口，不再只看 DSH 有没有在运行。
+  **The CLI session repair checks SAFE MODE and the environment lock first**: `sessions repair --fix` now passes the same write gate as the rescue console, so it refuses with a pointer to the way out when an unfinished transaction or a stale lock exists, instead of only checking whether DSH is running.
+
 ## [0.1.80] - 2026-10-22
 
 > **本版主题**：**这一版修掉五处「看着像你不会用、其实是它自己出错」的地方：加密同步不再每轮逼你手动裁决、冲突拍完板就能执行合并、反向代理挂在子路径下不再误报「插件未安装」，阿里云 OSS 与 gist 两条同步通道也终于能真正连上**
