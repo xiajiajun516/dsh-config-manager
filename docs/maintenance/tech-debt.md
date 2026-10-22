@@ -3,7 +3,7 @@
 **怎么用**：这不是抱怨清单，而是**排期清单**。每条都必须能被代码或测试证明；修完把状态改成「已修」并写提交/测试名，
 不要删行 —— 删行会让下一个人重新踩一遍。改代码时顺手把行号同步一下。
 
-- 最后核对：2026-10-23（核对方式 = 逐条 grep/读实现/跑相关测试）；本轮修掉 #2/#3/#15/#16（见 F8–F11）
+- 最后核对：2026-10-23（核对方式 = 逐条 grep/读实现/跑相关测试）；此前修掉 #2/#3/#15/#16（F8–F11）；本轮补 #14 的进度登记（F13）
 - 置信度：**高** = 直接读到代码/复现；**中** = 代码结构推断，未跑针对性实验；**待验证** = 有线索但未证实
 - 严重度：**P1** 有明确数据/安全风险或阻断维护；**P2** 维护成本/一致性风险；**P3** 整洁度
 
@@ -31,7 +31,7 @@
 | 11 | 未修 | inline style 绕过样式守卫 | `MarketPanel.tsx`、`ReleaseBody.tsx`、`ReleaseNotesDialog.tsx`、`SyncLogList.tsx` 里的 `style={{...}}`（含 `--dsw-*` 与硬编码字号） | `css-token-guard`/`css-scale-guard` 只读 `*.module.css` ⇒ 这些行不受约束 | 要么迁到 module.css，要么把守卫扩到 TSX（后者成本高、误报多，建议前者） | 高 |
 | 12 | 未修 | `AGENTS.md` 预算顶死 | 约 28.5 KiB / 硬上限 28672 B（`scripts/check-agents-budget.mjs`） | 再加一条规则就红；当前已过警戒线 | 把长规则证据/流程下移到 `docs/lessons/`，AGENTS 只留一行规则 + 指针（本批正在做） | 高 |
 | 13 | 未修 | 多个路由组零专用测试 | `src/routes/profiles.ts`（9 个端点，仅被路由计数/parity 与个别测试引用路径）、`me.ts`（仅源码扫描）、`history.ts` | 端点行为回归只能靠端到端或人工 | 优先补 profiles（隔离实例是高风险面）与 history（数据读取）；用直接 handler + fake req/res 的低成本范式 | 高 |
-| 14 | 部分（测试已补） | 恢复中途崩溃后**续跑语义**未定，且没有任何进度登记 | `src/core/restore.ts` 逐动作执行、全程不写 journal step；崩溃后靠 journal + reconcile 判 `needs-attention` / SAFE MODE 兜底（不会误判完成）。用例：`src/core/restore-crash-injection.test.ts` A-1/A-2 钉住现状（journal 停 `APPLYING`、零 step、重跑被 `TransactionRecoveryRequiredError` 阻断） | 崩溃本身安全，但「重跑 = 从头再来」，没有断点续跑；用户不知道哪些动作已生效 | 先决定产品语义（从头再来 / 断点续跑），再决定是否补 step 登记；不要在没测试前改补偿逻辑 | 高 |
+| 14 | 部分（进度登记已补，续跑语义仍未定） | 恢复中途崩溃后**续跑语义**未定 | 已补进度登记（F13）：`src/core/restore-wal.ts` 在首个写之前预登记全部动盘动作（planned + beforeFp）、逐动作 settle（done/attention + afterFp），删除类用 `ABSENT_FINGERPRINT` 哨兵；HTTP/CLI/model-tools 三条入口都把 journal ctx 传进执行器。用例：`src/core/restore-wal.test.ts` R-01..R-07、`src/core/restore-crash-injection.test.ts` A-1（1 done + 2 planned）/ A-4（真实 hooks 判 recovered） | 崩溃后能看出「哪些还原了、哪些没动」（以前整笔不透明）；但**仍无自动续跑**，残留 journal 被 423 `transaction-recovery-required` 挡，必须先 reconcile | 续跑本身是产品决策；不要在没测试前改补偿逻辑 | 中（原 高） |
 | 15 | 已修 | 目标侧 junction / symlink 可写穿到 home 外 | `src/core/restore.ts` 的 `homeAbs`/`isWithinHome` 是**纯字符串前缀**（约 :191-201），计划期不 realpath；写回走 `atomicCopyFile`，其 `resolveTarget` 只对**叶子路径**做 lstat/symlink 判定（`src/utils/atomic-write.ts:200-206`、`:305`），中间段目录链接不解析。用例：`src/core/restore-target-symlink.test.ts` B-2（junction 写穿 + 外部内容被复制进 pre-restore）、B-3（叶子 symlink `follow` 写穿） | 只要 home 内存在指向树外的 junction/symlink，restore 会写到 home 外真实文件，并把外部内容当本机文件备份进快照（反向信息流）。触发面 = 显式恢复含该 relPath 的快照，非自动路径 | 已按前者执行：`planRestore` 返回前跑 `assertPlanTargetsSafe`（`realpathOrNull` + 中间段解析，落到 home 外整单拒绝，错误码 `restore.pathEscape`）；B-2/B-3 现在期望被拒、零写入 | 高（本机实测） |
 | 16 | 已修 | 崩溃后重跑 restore 会覆盖**唯一** pre-restore 反悔副本 | `src/core/restore.ts` 每次 `restore()` 的 pre-restore 序号从 0 重数（`:713`、`:723`，配合 `copyToPreRestore` :234-238）；用例 `src/core/restore-crash-injection.test.ts` A-3 实测 `0001-settings.yaml` 从 `CURRENT-settings` 被改写成 `SNAP-settings` | 用户原本可以「反悔回崩溃前」，重跑一次后这份唯一副本没了 | pre-restore 目录按 journal `opId` 分桶，或序号取「已有最大序号 + 1」；先加一条「两次 restore 不覆盖对方副本」的用例再改 | 高（本机实测） |
 | 17 | 未修 | `publish.yml` 与 `ci.yml` 的检查集已对齐但仍是两处维护 | `.github/workflows/ci.yml`、`.github/workflows/publish.yml` | 新增检查要改两处，容易漏 | 抽 composite action 或让 publish 复用 ci；成本低但需验证 GitHub 行为 | 中 |
@@ -62,5 +62,6 @@
 | F9 | 回滚点载荷内置敏感文件排除（`.env` 族 / 私钥 / 证书 / 凭据文件），不可用 `!` 取消，记 `skipped(reason='sensitive')` 但仍进走查名单 | `src/core/rollback-ignore-rules.ts`、`src/core/rollback-point.ts`；用例 `src/core/rollback-sensitive-exclusion.test.ts` |
 | F10 | 快照恢复目标侧防写穿：计划期对每个写回目标做 realpath / 中间段解析，落在 home 外即整单拒绝（此前只有纯字符串前缀判定） | `src/core/restore.ts`（`assertPlanTargetsSafe`，调用点在 `planRestore` 返回前）；用例 `src/core/restore-target-symlink.test.ts` B-1..B-4 |
 | F11 | 「恢复前副本」改为**按次分目录**（`pre-restore/<本地时间戳>[-n]/`），重跑不再覆盖上一次的反悔副本；GUI/HTTP 恢复复用同一布局 | `src/core/restore.ts`、`src/routes/route-support.ts`；用例 `src/core/restore-crash-injection.test.ts` A-1/A-3、`tests/route/restore-route.test.ts` G-02b |
+| F13 | 恢复逐动作 WAL：首个写之前预登记全部动盘动作（planned + beforeFp）、逐动作 done/attention（+ afterFp），删除类用 `ABSENT_FINGERPRINT` 哨兵表达「应不存在」；三入口（HTTP/CLI/model-tools）接线。崩溃后 reconcile 能判 recovered / needs-attention，但**仍不自动续跑** | `src/core/restore-wal.ts`、`src/core/journal.ts`（哨兵）、`src/core/phase3-host.ts`（verifyStepFingerprint 认哨兵）、`src/core/restore.ts`、`src/routes/route-support.ts`；用例 `src/core/restore-wal.test.ts`、`src/core/restore-crash-injection.test.ts` A-1/A-4 |
 | F12 | 拆出 `src/core/import-planning.ts`（356 行）：把 `analyzer.ts` 尾部的导入计划纯函数整体外提，`analyzer.ts` 1824 → 1500 行，行为零改动（analyzer 保留 re-export，import 面不变） | `src/core/analyzer.ts`、`src/core/import-planning.ts`；棘轮上限同步下调（`tests/file-size-ratchet.test.ts`） |
 

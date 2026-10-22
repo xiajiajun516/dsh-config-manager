@@ -51,6 +51,15 @@ ZIP 解析器面对加密容器只会给底层错误。所有接受归档的入�
 恢复前的目标侧防护用 `realpath` + 中间段解析挡 symlink/junction 写穿（`src/core/restore.ts` 的 `assertPlanTargetsSafe`）。
 ⇒ **同卷硬链接到 home 之外的路径拦不住**（硬链接没有可解析的跳转层）；UNC 路径、8.3 短名、大小写不敏感的卷也**未实测**，不能声称已覆盖。
 
-## 13. 审计侧的两个「看似能做其实不能」
+## 13. 恢复崩溃后能判进度，但不能自动续跑
+恢复会逐动作写 journal step（预登记 + 完成后更新指纹，`src/core/restore-wal.ts`），所以崩溃后 reconcile 能判出
+「全部完成（recovered）/ 部分完成（needs-attention）/ 一个都没动」。但 `runJournaled` 的 active≤1 门禁会在崩溃后**阻断下一次恢复**
+（423 `transaction-recovery-required`）—— 必须先 reconcile/recovery 结掉残留 journal，不存在「再点一次自动接着做」。
+
+## 14. 插件卸载是不可自证的外部副作用
+`pluginRemove` 记 `external=true` 且不带指纹（`dsh plugin remove` 可能只改 package.json、未 prune node_modules）。
+⇒ 恢复里只要出现插件卸载，崩溃后 reconcile 一律给 needs-attention，**不会**判 recovered —— 这是刻意的保守，不是缺陷。
+
+## 15. 审计侧的两个「看似能做其实不能」
 - **不能从文件名推断模块职责**：本仓库有多个「名字像 X、实现是 Y」的历史文件（例如 `core/rollback.ts` 是导入补偿引擎，不是回滚点引擎）。
 - **不能把设计文档当实现**：`docs/design/` 是上游设计存档，可能早于实现；判断行为一律读代码 + 跑测试。

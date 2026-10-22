@@ -86,8 +86,9 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 
 1. `POST /snapshots/restore` → `buildRestoreBody`（`src/index.ts:2791`）。
 2. `dryRun`：`planRestore` + 指纹，直接回 JSON，不登记 run、不写盘（`src/routes/snapshots.ts:90`）。
-3. 执行：拿 GLOBAL 锁 → `planRestore`（`src/core/restore.ts:400`）→ 客户端指纹与服务端不符则 409（`src/routes/snapshots.ts:117`）→ `restore()`（`src/core/restore.ts:695`）。
-4. 覆盖/删除目标前先 `copyToPreRestore` 留副本（`src/core/restore.ts:234`），随后逐动作 `atomicCopyFile`（`:728`、`:748`）。
+3. 执行：拿 GLOBAL 锁 → `planRestore`（`src/core/restore.ts:554`）→ 客户端指纹与服务端不符则 409 → `restore()`（`src/core/restore.ts:853`）。
+4. 逐动作 WAL：`createRestoreWal()`（`src/core/restore-wal.ts:105`）在**首个写之前**预登记全部动盘动作（`planned` + beforeFp），每个动作结束 settle 成 `done`/`attention`（+ afterFp）；`hostFileRemove`/`fileRemove` 的期望态用 `ABSENT_FINGERPRINT` 哨兵表达。GUI/HTTP 执行器 `executeRestorePlan`（`src/routes/route-support.ts:580`，WAL 在 `:597`）与 core `restore()`（WAL 在 `:885`）同一实现。崩溃后 reconcile 据此判 recovered / needs-attention。
+5. 覆盖/删除目标前先 `copyToPreRestore` 留副本（`src/core/restore.ts:924` 起），随后逐动作 `atomicCopyFile`。
 
 ### 3.4 导入
 
@@ -141,13 +142,13 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 
 | 限制 | 证据 | 现状 |
 |---|---|---|
-| 未解锁容器的路由闸门无回归测试 | 三处闸门：`src/index.ts:4276`、`src/routes/import.ts:190` | 引擎侧有 `tests/conformance/roundtrip.test.ts:502`；路由层缺口 |
-| 预览指纹可选，缺省不校验 | `src/index.ts:2791`、`src/routes/snapshots.ts:117` | 无 `plan-changed` 回归测试 |
-| 恢复中途进程崩溃无测试 | `src/core/phase4-crash-injection.test.ts` 只覆盖导入侧 | 缺口 |
+| 未解锁容器的路由闸门 | 三处闸门：`src/index.ts` 的 `/analyze`、`/plan` 与 `src/routes/import.ts` 的 `/execute` | 已补回归测试 `tests/route/encrypted-container-gate.test.ts`（含零写入断言） |
+| 预览指纹可选，缺省不校验 | `src/routes/route-support.ts` 的 `buildRestoreBody`、`src/routes/snapshots.ts` 的 409 分支 | 带指纹才校验；已补 `tests/route/restore-plan-changed.test.ts` |
+| 恢复中途进程崩溃 | `src/core/restore-crash-injection.test.ts` | 已覆盖：A-1（1 done + 2 planned）、A-4（真实 hooks 判 recovered）；残留 journal 仍会挡下一次恢复 |
 | 条目名中段反斜杠不进 checksums | `src/utils/paths.ts:35`、`src/security/integrity.ts:63` | 已登记在 `docs/spec/known-gaps.md` |
 | DCA1 不记录 KDF 参数 | `src/security/encryption.ts:194` | 换参数后旧容器不可解，无版本可判 |
 | 解密明文包存活到导入成功 | `src/routes/import.ts:162`、`:307` | 失败/取消刻意保留；见 `tests/route/decrypt-plaintext-cleanup.test.ts` |
-| 恢复目标侧未做 realpath | `src/core/restore.ts:191` | 待验证：home 内 symlink 指向外部时是否穿透 |
+| 恢复目标侧 realpath 围栏 | `src/core/restore.ts` 的 `assertPlanTargetsSafe` | 已修（home 外整单拒绝）；硬链接 / UNC / 8.3 短名仍未覆盖，见 `docs/maintenance/known-limits.md` |
 | 日期戳有三份实现 | `src/index.ts:2227`、`src/core/model-tools.ts:83`、`src/sync/backup-scheduler.ts:405` | 维护债，行为一致 |
 
 测试锚点（改动前先跑这些）：
@@ -157,6 +158,8 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 | 导出/预览口径 | `tests/core/exporter.test.ts` |
 | 导入计划与执行 | `tests/core/importer.test.ts` |
 | 恢复与信任判定 | `tests/core/restore.test.ts`、`tests/core/restore-trust.test.ts` |
+| 恢复逐动作 WAL / 崩溃注入 | `src/core/restore-wal.test.ts`、`src/core/restore-crash-injection.test.ts` |
+| 恢复目标侧防写穿 | `src/core/restore-target-symlink.test.ts` |
 | 快照存储与清理 | `tests/core/snapshot.test.ts`、`tests/core/snapshot-trust.test.ts`、`tests/core/retention.test.ts` |
 | schema 兼容 | `tests/schema-compat.test.ts`、`tests/schema/manifest.test.ts` |
 | ZIP 与路径安全 | `tests/security/import-security.test.ts` |

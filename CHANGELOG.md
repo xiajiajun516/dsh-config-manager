@@ -43,6 +43,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **gist 通道并发写不再悄悄吃掉别人刚推的快照**：推送或删除完成后会重新读回索引核对，条目没落上或被别人改过就整轮重做，最多三次；仍不行就明确报「索引冲突」并提示稍后重试，而不是当作成功。
   **Concurrent writes on the gist channel no longer silently drop someone else's fresh snapshot**: after a push or delete the index is read back and verified; if an entry did not land or someone else changed it, the whole round is redone up to three times, and a persistent conflict is reported as "index conflict" with a retry hint instead of being treated as success.
 
+- **快照恢复中途崩溃后，重启能看出「哪些还原了、哪些还没动」**：恢复现在每做完一个动作就登记一次进度，宿主在恢复途中被杀也能在下次启动时判出「已全部还原」还是「只做了一部分」，不再只有一句「需要人工检查」；仍不支持点一下自动接着做，残留的未完成恢复会先要求处理。
+  **A restore interrupted by a crash now reports what was already reverted**: progress is recorded action by action, so after the host is killed mid-restore the next start can tell "everything was restored" from "only part of it was", instead of a blanket "needs attention"; resuming automatically is still not supported, and the unfinished restore must be resolved first.
+
 ### 🔐 安全 · Security
 
 - **回滚点不再把凭证类文件写成明文副本**：`.env`、私钥、`credentials`/`secrets` 一类文件不再被采集进回滚点，而是记为「敏感跳过」并出现在跳过清单里；这些文件因此也不会被「回退到留点前」删除或改写。

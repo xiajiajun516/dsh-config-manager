@@ -154,7 +154,7 @@ HTTP 码映射集中在一处 `rollbackHttpStatus`（`src/routes/recovery.ts:59`
 - CLI `restore` 的写入门与 `checkWriteGates` 是等价组合而非同一函数（见 §3.4）。
 - fork 归位失败不回滚 fork，只带 warning + 诊断文件（会话在侧栏「未分组」）。
 - 采集有硬上限，回合内改动超过 32 MiB 会话载荷或超时间预算时覆盖率不足，需要用户显式重试或放宽。
-- 快照恢复（`src/core/restore.ts`，非本域）**仍不写 journal step**（崩溃后靠 journal + reconcile 兜底，缺断点续跑语义）；但两处历史缺口已修：目标侧在计划期做 realpath / 中间段解析，落在 home 外整单拒绝（`assertPlanTargetsSafe`，调用点在 `planRestore` 返回前）；「恢复前副本」改为**按次分目录** `pre-restore/<本地时间戳>[-n]/`，重跑不再覆盖上一次的反悔副本（GUI/HTTP 恢复复用同一布局）。锚点：`src/core/restore-crash-injection.test.ts`、`src/core/restore-target-symlink.test.ts`、`tests/route/restore-route.test.ts`。**别再当成本域问题**。
+- 快照恢复（`src/core/restore.ts`，非本域）自 2026-10-23 起**逐动作写 journal step**（`src/core/restore-wal.ts`：首个写之前预登记全部动盘动作 + beforeFp，逐动作 done/attention + afterFp，删除类用哨兵），崩溃后 reconcile 因此能证明进度（A-4 判 recovered）；**仍不自动续跑**（残留 journal 先被 423 挡，须走 reconcile）。三处历史缺口已修：目标侧在计划期做 realpath / 中间段解析，落在 home 外整单拒绝（`assertPlanTargetsSafe`，调用点在 `planRestore` 返回前）；「恢复前副本」改为**按次分目录** `pre-restore/<本地时间戳>[-n]/`，重跑不再覆盖上一次的反悔副本（GUI/HTTP 恢复复用同一布局）。锚点：`src/core/restore-crash-injection.test.ts`、`src/core/restore-target-symlink.test.ts`、`tests/route/restore-route.test.ts`。**别再当成本域问题**。
 
 ## 7. 测试锚点
 

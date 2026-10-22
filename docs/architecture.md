@@ -82,7 +82,10 @@ workspaces、credentialsStatus、pluginFiles、pluginData、pluginAssets、self�
 ### 5.3 恢复
 `POST /restore`（`dryRun=true` 只 `planRestore()` 零写入）→ 真实执行过 `runWithMutationLock` → 登记 run → `planRestore()` →
 用客户端回传的 `planFingerprint` 比对，**不一致即 409 `plan-changed`**（确认之后磁盘又变了，可能多出删除动作）→ `executeRestorePlan()` 逐动作原子写。
-恢复前留 pre-restore 副本；快照本身受 `snapshotsRoot` 校验（存在/READY/manifest/blob hash/symlink/provenance）。
+恢复前留 pre-restore 副本（按次分目录）；快照本身受 `snapshotsRoot` 校验（存在/READY/manifest/blob hash/symlink/provenance）。
+执行器在**首个写之前**把全部动盘动作写进 journal（`src/core/restore-wal.ts`：预登记 `planned` + beforeFp，逐动作 `done`/`attention` + afterFp，
+删除类用 `ABSENT_FINGERPRINT` 哨兵表达「应不存在」），于是崩溃后 reconcile 能证明「哪些还原了、哪些没动」，而不是整笔不透明。
+**仍不自动续跑**：残留 journal 会让下一次恢复被 423 `transaction-recovery-required` 挡住，必须先走 reconcile/recovery。
 
 ### 5.4 同步
 `SyncEngine` 状态机 + `Git/WebDav/S3/Gist` 四传输 + `AutoSyncScheduler`（事件驱动）：
