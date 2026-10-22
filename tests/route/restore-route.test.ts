@@ -12,6 +12,9 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { makeRestoreExecutor } from '../../src/routes/route-support.ts';
+import { restoreActionStepId } from '../../src/core/restore-wal.ts';
+import type { JournalStepRecord } from '../../src/core/types.ts';
+import type { RestoreResumeHint } from '../../src/core/restore-resume.ts';
 import type { HostContext } from '../../src/core/types.ts';
 
 test('G-01 buildRestoreBody：合法/缺 id/非法 id/越界 id/dryRun 解析', () => {
@@ -149,4 +152,40 @@ test('G-02b makeRestoreExecutor：反悔副本落本次 attempt 子目录（GUI 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('G-04 executeRestorePlan：续跑只做剩下的动作，已完成动作零重写（GUI 与 CLI 同一判定）', async () => {
+  const home = '/fake/home';
+  const abs = (rel: string): string => join(home, rel);
+  const writes: string[] = [];
+  const pre: string[] = [];
+  const recs: JournalStepRecord[] = [];
+  const exec: RestoreExecutor = {
+    absPath: (rel) => abs(rel),
+    readBlob: async (blobPath) => Buffer.from(`blob:${blobPath}`, 'utf8'),
+    savePreRestore: async (relPath) => { pre.push(relPath) },
+    existsHome: async () => true,
+    writeHome: async (relPath) => { writes.push(relPath) },
+    removeHome: async () => {},
+    uninstallPlugin: async () => ({ ok: true }),
+  };
+  const plan = makePlan([
+    { kind: 'hostFileRestore', description: '还原 settings.yaml', target: 'settings.yaml', blobPath: 'blobs/host/settings' },
+    { kind: 'hostFileRestore', description: '还原 extra.yaml', target: 'extra.yaml', blobPath: 'blobs/host/extra' },
+  ]);
+  const id1 = restoreActionStepId(plan.actions[0]!, abs('settings.yaml'));
+  const id2 = restoreActionStepId(plan.actions[1]!, abs('extra.yaml'));
+  const hint: RestoreResumeHint = {
+    skipStepIds: new Set([id1]),
+    steps: { [id1]: { beforeFp: 'before-settings' }, [id2]: { beforeFp: 'before-extra' } },
+  };
+  const report = await executeRestorePlan(plan, exec, undefined, { recordStep: async (rec) => { recs.push(rec) } }, hint);
+
+  assert.deepEqual(report.restored, ['extra.yaml'], '已证明完成的动作不得重做');
+  assert.equal(report.skipped.length, 1, '跳过要如实进报告（不是静默少做一个）');
+  assert.ok(report.skipped[0]!.includes('settings.yaml'), '跳过项要说是哪一个动作');
+  assert.deepEqual(writes, ['extra.yaml'], '唯一一次写入是剩下的动作');
+  assert.deepEqual(pre, ['extra.yaml'], '被跳过的动作不留反悔副本（它没被再次覆盖）');
+  assert.deepEqual(recs.map((r) => r.id), [id2], '续跑只 settle 本次真正执行的动作');
+  assert.equal(recs[0]!.status, 'done');
 });

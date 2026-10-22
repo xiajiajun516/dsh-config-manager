@@ -33,8 +33,11 @@ import type { MsgFunc } from './messages.ts';
 import {
   classifyDshPluginFailure, readInstalled, readInstalledVersion, resolveProfileDir, runDshPlugin,
 } from './plugin-cli.ts';
-import { createRestoreWal, isWalActionKind } from './restore-wal.ts';
+import {
+  collectRestoreWalEntries, createRestoreWal, restoreActionStepId, restoreWalHandlesFromSteps,
+} from './restore-wal.ts';
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from './restore-wal.ts';
+import type { RestoreResumeHint } from './restore-resume.ts';
 import { parseJsonSafe } from '../utils/json.ts';
 import { atomicCopyFile, atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
@@ -143,6 +146,14 @@ export interface RestoreOptions {
    * 不传 = 只记 operation intent（旧行为，绝不假装有进度）。
    */
   journal?: RestoreJournalPort;
+  /**
+   * 续跑提示（crash 后再点一次恢复）：只由 core/restore-resume.ts 的严格判定产出。
+   *  - `skipStepIds`：已证明「磁盘就是执行后状态」的动作 —— 本轮不执行、不重登记；
+   *  - `steps`：崩溃那次 journal 里已有的 step（执行完的动作仍要 settle 成 done/attention）。
+   * 传了它就必须配 journal（否则没有可 settle 的对象）；**绝不重新 preRegister**：
+   * 那会把已完成动作的 beforeFp 覆盖成「执行后内容」，崩溃证据全丢。
+   */
+  resume?: RestoreResumeHint;
 }
 
 export interface RestoreReport {
@@ -214,6 +225,19 @@ export function homeAbs(homeDir: string, relPath: string, msg: MsgFunc): string 
   const abs = path.resolve(homeDir, relPath);
   if (!isWithinHome(homeDir, abs)) throw new Error(msg('restore.pathEscape', { path: relPath }));
   return abs;
+}
+
+/**
+ * home 相对目标 → 绝对路径（越界/非法给 null 而不是抛错）。
+ * 供逐动作 WAL 与续跑判定用：这两处都只需要「能不能拿到绝对路径」这一个事实，
+ * 判定失败由调用方决定是跳过该动作还是拒绝整笔。
+ */
+export function resolveRestoreTargetAbs(homeDir: string, target: string): string | null {
+  try {
+    return homeAbs(homeDir, target, zhMsg);
+  } catch {
+    return null;
+  }
 }
 
 /** 快照目录内 blob 绝对路径（防 snapshot.json 里伪造 ../ 越界读） */
@@ -884,19 +908,21 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   // 存在的 step，只登记「已执行」的那些会把「崩在第 2 步」误判成「全部完成」。
   const wal = createRestoreWal(opts.journal);
   const walByAction = new Map<RestoreAction, RestoreWalHandle | undefined>();
+  const resume = opts.resume;
   if (wal !== null) {
-    const bindSnapshot = opts.journal?.bindSnapshot;
-    if (bindSnapshot !== undefined) await bindSnapshot(plan.snapshotId);
-    const markApplying = opts.journal?.markApplying;
-    if (markApplying !== undefined) await markApplying();
-    const mutating = plan.actions.filter((a) => isWalActionKind(a.kind));
-    const handles = await wal.preRegister(mutating.map((a) => ({
-      kind: a.kind,
-      ...(a.target !== undefined ? { target: a.target } : {}),
-      ...(a.pluginName !== undefined ? { pluginName: a.pluginName } : {}),
-      abs: walAbsOf(a),
-    })));
-    mutating.forEach((a, i) => { walByAction.set(a, handles[i]); });
+    const { mutating, entries } = collectRestoreWalEntries(plan.actions, (a) => walAbsOf(a));
+    if (resume === undefined) {
+      const bindSnapshot = opts.journal?.bindSnapshot;
+      if (bindSnapshot !== undefined) await bindSnapshot(plan.snapshotId);
+      const markApplying = opts.journal?.markApplying;
+      if (markApplying !== undefined) await markApplying();
+      const handles = await wal.preRegister(entries);
+      mutating.forEach((a, i) => { walByAction.set(a, handles[i]); });
+    } else {
+      // 续跑：只复原句柄，**绝不重新 preRegister**（见 RestoreOptions.resume 注释）。
+      const handles = restoreWalHandlesFromSteps(entries, resume.steps);
+      mutating.forEach((a, i) => { walByAction.set(a, handles[i]); });
+    }
   }
   /** 文件类动作的绝对目标（reconcile 直接拿它读盘算指纹）；插件卸载/越界目标 → null（不可指纹）。 */
   function walAbsOf(action: RestoreAction): string | null {
@@ -914,6 +940,11 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   for (const action of plan.actions) {
     actionIndex += 1;
     opts.onAction?.({ index: actionIndex, total, detail: action.description });
+    if (resume !== undefined && resume.skipStepIds.has(restoreActionStepId(action, walAbsOf(action)))) {
+      // 已证明上次就写成了这个动作的终态 —— 重做只会再覆盖一次（对删除类还会误删用户新放回的文件）。
+      report.skipped.push(msg('restore.resumedSkip', { description: action.description }));
+      continue;
+    }
     const walHandle = walByAction.get(action);
     let settleStatus: RestoreWalSettleStatus = 'done';
     let settleMessage: string | null = null;

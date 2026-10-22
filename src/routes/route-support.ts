@@ -31,7 +31,8 @@ import type { HostContext, ImportPlan, PlanItemKind } from '../core/types.ts'
 import { engineMsg } from '../core/engine-locale.ts'
 import { createPreRestoreAttemptDir } from '../core/restore.ts'
 import type { RestoreActionKind, RestorePlan, RestoreReport } from '../core/restore.ts'
-import { createRestoreWal, isWalActionKind } from '../core/restore-wal.ts'
+import { collectRestoreWalEntries, createRestoreWal, restoreActionStepId, restoreWalHandlesFromSteps } from '../core/restore-wal.ts'
+import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from '../core/restore-wal.ts'
 import type { SyncTransportType } from '../sync/sync-config.ts'
 import { DEFAULT_AUTOSYNC_AUTO_APPLY_TIER, DEFAULT_AUTOSYNC_CONFLICT_POLICY, DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS, lastRunFailureMessage, readAllAutosyncConfigs, readAutosyncConfig } from '../sync/autosync-config.ts'
@@ -582,6 +583,7 @@ export async function executeRestorePlan(
   exec: RestoreExecutor,
   onAction?: (info: { index: number; total: number; detail: string }) => void,
   journal?: RestoreJournalPort,
+  resumeHint?: RestoreResumeHint,
 ): Promise<RestoreReport> {
   const report: RestoreReport = {
     snapshotId: plan.snapshotId,
@@ -596,26 +598,36 @@ export async function executeRestorePlan(
   // 判出「哪些还原了、哪些没动」，而不是整笔不透明。没有 absPath = 不登记（旧行为）。
   const wal = createRestoreWal(journal)
   const walByAction = new Map<(typeof plan.actions)[number], RestoreWalHandle | undefined>()
+  const resume = resumeHint
+  const absOf = (action: (typeof plan.actions)[number]): string | null =>
+    action.kind === 'pluginRemove' || action.target === undefined || exec.absPath === undefined
+      ? null
+      : exec.absPath(action.target)
   if (wal !== null && exec.absPath !== undefined) {
-    const bindSnapshot = journal?.bindSnapshot
-    if (bindSnapshot !== undefined) await bindSnapshot(plan.snapshotId)
-    const markApplying = journal?.markApplying
-    if (markApplying !== undefined) await markApplying()
-    const mutating = plan.actions.filter((a) => isWalActionKind(a.kind))
-    const absPath = exec.absPath
-    const handles = await wal.preRegister(mutating.map((a) => ({
-      kind: a.kind,
-      ...(a.target !== undefined ? { target: a.target } : {}),
-      ...(a.pluginName !== undefined ? { pluginName: a.pluginName } : {}),
-      abs: a.kind === 'pluginRemove' || a.target === undefined ? null : absPath(a.target),
-    })))
-    mutating.forEach((a, i) => { walByAction.set(a, handles[i]) })
+    const { mutating, entries } = collectRestoreWalEntries(plan.actions, absOf)
+    if (resume === undefined) {
+      const bindSnapshot = journal?.bindSnapshot
+      if (bindSnapshot !== undefined) await bindSnapshot(plan.snapshotId)
+      const markApplying = journal?.markApplying
+      if (markApplying !== undefined) await markApplying()
+      const handles = await wal.preRegister(entries)
+      mutating.forEach((a, i) => { walByAction.set(a, handles[i]) })
+    } else {
+      // 续跑：只复原句柄，绝不重新 preRegister（与 core/restore.ts 同一口径）
+      const handles = restoreWalHandlesFromSteps(entries, resume.steps)
+      mutating.forEach((a, i) => { walByAction.set(a, handles[i]) })
+    }
   }
   const total = plan.actions.length
   let index = 0
   for (const action of plan.actions) {
     index += 1
     onAction?.({ index, total, detail: action.description })
+    if (resume !== undefined && resume.skipStepIds.has(restoreActionStepId(action, absOf(action)))) {
+      // 已证明上次就写成了这个动作的终态 —— 重做只会再覆盖一次（对删除类还会误删用户新放回的文件）
+      report.skipped.push(engineMsg('restore.resumedSkip', { description: action.description }))
+      continue
+    }
     const walHandle = walByAction.get(action)
     let settleStatus: RestoreWalSettleStatus = 'done'
     let settleMessage: string | null = null

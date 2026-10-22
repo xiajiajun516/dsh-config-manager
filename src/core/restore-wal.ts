@@ -153,8 +153,70 @@ export function createRestoreWal(journal: RestoreJournalPort | undefined): Resto
 /**
  * step id：**由动作语义派生**而非计划下标 —— 崩溃后磁盘状态变化会让计划下标漂移
  * （已经还原过的文件不再产生 restore 动作），语义 id 才能跨两次执行对上同一条 step。
+ *
+ * 导出（连同 restoreWalSubject）：续跑判定必须用**同一条规则**反查 journal 里的 step，
+ * 两处各写一份就会在改规则时静默错位（判定说「计划漂移」而其实只是 id 算法不同）。
  */
+export function restoreStepId(kind: string, subject: string): string {
+  return `restore:${kind}:${subject}`;
+}
+
+/** step id 的 subject 段：插件卸载用包名，其余用绝对路径（拿不到绝对路径时退回流相对 target）。 */
+export function restoreWalSubject(kind: string, pluginName: string | undefined, refOrTarget: string): string {
+  return kind === 'pluginRemove' ? (pluginName ?? refOrTarget) : refOrTarget;
+}
+
 function stepIdOf(entry: RestoreWalEntry, ref: string): string {
-  const subject = entry.kind === 'pluginRemove' ? (entry.pluginName ?? entry.target ?? '') : (ref || (entry.target ?? ''));
-  return `restore:${entry.kind}:${subject}`;
+  return restoreStepId(entry.kind, restoreWalSubject(entry.kind, entry.pluginName, ref || (entry.target ?? '')));
+}
+
+/** 计划动作 → step id（调用方比对「这条动作是否已证明完成」时必须用同一规则）。 */
+export function restoreActionStepId(
+  action: { kind: string; target?: string; pluginName?: string },
+  abs: string | null,
+): string {
+  const ref = action.kind === 'pluginRemove' ? '' : (abs ?? '');
+  return restoreStepId(action.kind, restoreWalSubject(action.kind, action.pluginName, ref || (action.target ?? '')));
+}
+
+/**
+ * 计划动作 → WAL 条目（只保留会动盘的动作）。`absOf` 把 home 相对目标解析成绝对路径，
+ * 解析不了（越界/非法）给 null —— 这类动作在 journal 里恒为不可指纹项，续跑判定会拒绝。
+ */
+export function collectRestoreWalEntries<A extends { kind: string; target?: string; pluginName?: string }>(
+  actions: readonly A[],
+  absOf: (action: A) => string | null,
+): { mutating: A[]; entries: RestoreWalEntry[] } {
+  const mutating: A[] = [];
+  const entries: RestoreWalEntry[] = [];
+  for (const action of actions) {
+    if (!isWalActionKind(action.kind)) continue;
+    mutating.push(action);
+    entries.push({
+      kind: action.kind,
+      ...(action.target !== undefined ? { target: action.target } : {}),
+      ...(action.pluginName !== undefined ? { pluginName: action.pluginName } : {}),
+      abs: action.kind === 'pluginRemove' || action.target === undefined ? null : absOf(action),
+    });
+  }
+  return { mutating, entries };
+}
+
+/**
+ * 续跑时**不得**重新 preRegister（那会把已完成动作的 beforeFp 覆盖成「执行后内容」，证据全丢）。
+ * 改为用 journal 里已有的 step 复原句柄：之后的动作执行完仍要 settle 成 done/attention。
+ */
+export function restoreWalHandlesFromSteps(
+  entries: readonly RestoreWalEntry[],
+  steps: Readonly<Record<string, { beforeFp: string | null }>>,
+): (RestoreWalHandle | undefined)[] {
+  return entries.map((entry) => {
+    if (!isWalActionKind(entry.kind)) return undefined;
+    const external = entry.kind === 'pluginRemove';
+    const ref = external ? '' : (entry.abs ?? '');
+    const id = restoreStepId(entry.kind, restoreWalSubject(entry.kind, entry.pluginName, ref || (entry.target ?? '')));
+    const known = steps[id];
+    if (known === undefined) return undefined;
+    return { id, kind: entry.kind, ref, external, beforeFp: known.beforeFp };
+  });
 }

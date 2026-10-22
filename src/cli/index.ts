@@ -25,7 +25,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as processStdin, stdout as processStdout } from 'node:process';
 
 import {
-  listSnapshots, planRestore, restore,
+  listSnapshots, planRestore,
   type RestorePlan, type RestoreReport, type SnapshotMeta,
 } from '../core/restore.ts';
 import {
@@ -37,6 +37,7 @@ import { EnvironmentLockManager, runWithMutationLock, EnvironmentLockUnavailable
 import { runSessionsRepair } from './sessions-repair.ts';
 import { runSessionsInspect } from './sessions-inspect.ts';
 import { runImportSource } from './import-source.ts';
+import { probeCliRestoreResume, runCliRestore } from './restore-resume.ts';
 import { renderCommandHelp, renderOverview } from './help.ts';
 import { checkWriteGates, collectVerifyResults, readRunningInstances, SAFE_MODE_REFUSAL_CODE } from './actions.ts';
 import { Phase3Recovery, readSafeModeMarkerSync, safeModeMarkerPath } from '../core/phase3-host.ts';
@@ -1102,10 +1103,12 @@ export async function runCli(
   // Phase 3 SAFE MODE：存在未恢复 transaction → 拒绝 destructive（CLI 不旁路 SAFE MODE）。
   // 候选根与真实 restore 的锁目录/journal 根同源（均为 <root> = dirname(快照目录) 的那一族）。
   const controlRoots = resolveControlRoots({ dataRoot: options.dataRoot, dataDir: options.dataDir }, env);
+  // Phase 3 P0-A：CLI restore 也建 durable journal；顺带做续跑探测（只读）——「同一个恢复崩在中途」正是 SAFE MODE 在等的结论。
+  const recovery = new Phase3Recovery({ dataDir: path.dirname(dataDir), packageVersion: '0.1.0', fingerprintDataDir: path.dirname(dataDir) });
+  const resumeProbe = await probeCliRestoreResume(recovery, restoreOptions);
   const safeMsg2 = checkSafeModeBlocked(controlRoots);
-  if (safeMsg2 !== null) {
-    io.error(`拒绝执行：${safeMsg2}`);
-    return 1;
+  if (safeMsg2 !== null && !resumeProbe.resumable) {
+    io.error(`拒绝执行：${safeMsg2}${resumeProbe.reason === null ? '' : `（无法自动续跑：${resumeProbe.reason}）`}`); return 1;
   }
   // Phase 2 锁：真实 restore 是 destructive（覆盖/删除 $DSH_HOME + 卸载插件），必须成功获取
   // GLOBAL 环境锁；被另一 DSH 任务持有 → 明确报错退出（无 --force 旁路）。无锁目录 → 用默认 dataDir。
@@ -1117,19 +1120,16 @@ export async function runCli(
   });
   try {
     // Phase 3 P0-A：CLI restore 也创建 durable journal（关闭 bypass）。
-    const recovery = new Phase3Recovery({ dataDir: path.dirname(dataDir), packageVersion: '0.1.0', fingerprintDataDir: path.dirname(dataDir) });
     await recovery.initFingerprint().catch(() => undefined);
     const outcome = await runWithMutationLock(lock, { op: 'cli-restore', target: id }, async (lockCtx) => {
       // 第三道门（与救急台 actions.ts 的 checkWriteGates 同源、同序：SAFE MODE → 残留锁 → DSH 未运行）：
       // 恢复会覆盖/删除 $DSH_HOME 下**正在被实例使用**的文件。放在持有环境锁之后，于是「残留锁」仍先于它报出。
       const running = await readRunningInstances(controlRoots);
       if (running.length > 0) return { kind: 'dsh-running' as const, running };
-      return {
-        kind: 'restore' as const,
-        report: lockCtx !== null
-          ? (await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: (ctx) => restore(ctx === undefined ? restoreOptions : { ...restoreOptions, journal: ctx }) })).result // ctx = WAL（崩溃后可判进度）
-          : await restore(restoreOptions),
-      };
+      // 锁内统一入口：能续跑 → resumeJournaled（接着做），否则 → runJournaled（照常新建）
+      const out = await runCliRestore(recovery, restoreOptions, lockCtx);
+      if (out.resumed !== null) io.log(`自动续跑：已完成 ${String(out.resumed.done)} 项、待做 ${String(out.resumed.todo)} 项；SAFE MODE ${out.safeModeCleared === true ? '已解除' : '仍保持'}`);
+      return { kind: 'restore' as const, report: out.report };
     });
     if (outcome.kind === 'dsh-running') {
       io.error('检测到 DSH 正在运行（' + outcome.running.map((i) => i.name + ' pid=' + String(i.pid)).join('、')

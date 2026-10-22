@@ -500,6 +500,22 @@ export const zh = {
   'command.rollback.segmentFacts': '段：{facts}',
   'command.rollback.rewindFailed': '回退失败（{code}）：{id}。{detail}',
   'command.rollback.mutationLocked': '当前不能写（{reason}），回退未执行：{id}。请先解除 SAFE MODE 或等其它任务结束。',
+  // ---------- 恢复续跑（崩溃后再点一次恢复 = 接着做；判定见 core/restore-resume.ts） ----------
+  'restore.resume.noActive': '没有可续跑的恢复记录',
+  'restore.resume.terminal': '恢复记录 {state} 不能自动续跑（只有「写了几个动作后崩掉」的 APPLYING 才可续）',
+  'restore.resume.wrongOperation': '这条记录属于另一类操作（{operationType}），不是恢复',
+  'restore.resume.rollbackInFlight': '上一次恢复已开始回滚（{count} 项），不再向前续跑',
+  'restore.resume.noSnapshot': '记录绑定的快照（{actual}）不是本次要恢复的快照（{expected}）',
+  'restore.resume.planDrift': '当前计划与崩溃那次登记的步骤对不上：{detail}',
+  'restore.resume.untrustedStep': '崩溃记录里有无法信任的步骤：{detail}',
+  'restore.resume.externalUnproven': '含无法自证的插件卸载（{detail}），请到「事故恢复」里处理',
+  'restore.resume.stepAttention': '{count} 个动作上次未成功（{detail}），不自动续跑',
+  'restore.resume.fingerprintDrift': '{path} 的内容既不是执行前也不是执行后（{detail}），不自动续跑',
+  'restore.resume.detected': '检测到未完成的恢复 {operationId}：已完成 {done} 项、待做 {todo} 项，本次自动续跑',
+  'restore.resumedSkip': '续跑跳过（上次已完成）：{description}',
+  'core.phase3.resumeMissing': '续跑失败：找不到 active journal {opId}（可能已被恢复面板收敛）',
+  'core.phase3.resumeTerminal': '续跑失败：journal {opId} 已处于终态 {state}',
+  'core.phase3.resumeWrongType': '续跑失败：journal {opId} 的操作类型是 {actual}，本次要求 {expected}',
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -982,6 +998,22 @@ export const en: Record<keyof typeof zh, string> = {
   'command.rollback.segmentFacts': 'segments: {facts}',
   'command.rollback.rewindFailed': 'Rewind failed ({code}): {id}. {detail}',
   'command.rollback.mutationLocked': 'Writing is currently blocked ({reason}); the rewind did not run: {id}. Clear SAFE MODE or wait for the running task to finish.',
+  // ---------- restore resume (crash then click restore again = continue; see core/restore-resume.ts) ----------
+  'restore.resume.noActive': 'No restorable recovery to resume',
+  'restore.resume.terminal': 'Recovery record {state} cannot auto-resume (only an APPLYING run that crashed mid-way can)',
+  'restore.resume.wrongOperation': 'That record belongs to another operation type ({operationType}), not a restore',
+  'restore.resume.rollbackInFlight': 'The previous restore already started rolling back ({count} item(s)); not resuming forward',
+  'restore.resume.noSnapshot': 'The record is bound to snapshot {actual}, not the snapshot being restored ({expected})',
+  'restore.resume.planDrift': 'The current plan does not line up with the steps registered by the crashed run: {detail}',
+  'restore.resume.untrustedStep': 'The crash record contains a step that cannot be trusted: {detail}',
+  'restore.resume.externalUnproven': 'Contains a plugin uninstall that cannot be self-proven ({detail}); handle it in Incident recovery',
+  'restore.resume.stepAttention': '{count} action(s) did not succeed last time ({detail}); not auto-resuming',
+  'restore.resume.fingerprintDrift': '{path} matches neither the pre-run nor the post-run content ({detail}); not auto-resuming',
+  'restore.resume.detected': 'An unfinished restore was found ({operationId}): {done} item(s) done, {todo} to go — resuming automatically',
+  'restore.resumedSkip': 'Resume skipped (already applied last time): {description}',
+  'core.phase3.resumeMissing': 'Resume failed: active journal {opId} not found (it may have been settled from the recovery panel)',
+  'core.phase3.resumeTerminal': 'Resume failed: journal {opId} is already in terminal state {state}',
+  'core.phase3.resumeWrongType': 'Resume failed: journal {opId} has operation type {actual}, expected {expected}',
 };
 
 /**

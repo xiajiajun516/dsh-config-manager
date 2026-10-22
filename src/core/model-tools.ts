@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import { Exporter } from './exporter.ts'
 import { listSnapshots, planRestore, restore as executeRestore } from './restore.ts'
+import { probeRestoreResume, runRestoreWithResume } from './restore-resume.ts'
 import type { RestorePlan, RestoreReport } from './restore.ts'
 import type { RestoreJournalPort } from './restore-wal.ts'
 import type { SyncEngine } from '../sync/sync-engine.ts'
@@ -217,13 +218,23 @@ export function createModelTools(deps: ModelToolsDeps) {
       // ctx = journal 上下文（可选）：交给 restore() 逐动作 WAL，崩溃后 reconcile 可判进度
       const doRestore = async (ctx?: RestoreJournalPort): Promise<RestoreReport> =>
         executeRestore(ctx === undefined ? restoreOpts : { ...restoreOpts, journal: ctx })
+      const phase3 = deps.host.phase3Recovery
+      // 续跑探测（锁前，只读）：崩溃后再跑一次同一快照的恢复时，「同一个恢复崩在中途」正是 SAFE MODE
+      // 在等的结论 —— 判得出来就放过这道门；真正写盘的决定在锁内由 runRestoreWithResume 再判一次。
+      const resumeProbe = phase3 === undefined
+        ? null
+        : await probeRestoreResume({ store: phase3.store, restoreOpts, allowedOperationTypes: ['model-restore'] })
+      const resumeAllowed = resumeProbe !== null && resumeProbe.ok
       const report: RestoreReport = await runWithMutationLock(
         deps.host.mutationLock,
-        { op: 'model-restore', target: snapshotId, isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false },
+        { op: 'model-restore', target: snapshotId, isBlocked: () => (deps.host.safeModeIsBlocked?.() ?? false) && !resumeAllowed },
         async (lockCtx) => {
-          if (deps.host.phase3Recovery !== undefined && lockCtx !== null) {
-            const r = await deps.host.phase3Recovery.runJournaled({ operationType: 'model-restore', lockCtx, fn: doRestore })
-            return r.result
+          if (phase3 !== undefined && lockCtx !== null) {
+            const out = await runRestoreWithResume<RestoreReport>({
+              store: phase3.store, restoreOpts, operationType: 'model-restore',
+              allowedOperationTypes: ['model-restore'], lockCtx, phase3,
+            })
+            return out.report
           }
           return doRestore()
         },

@@ -338,15 +338,13 @@ export class Phase3Recovery {
       packageVersion: this.packageVersion, environmentFingerprint: this.environmentFingerprint || 'unknown',
     };
     await this.store.create(createJournalEntry(operationType, base, new Date().toISOString()));
-    let fnCompleted = false;
-    let terminalPersistAttempted = false;
     // 引擎上报的「已就地回滚」结论（见 buildJournalCtx 的 rollbackOutcome）：非 null 时终态是
     // ROLLED_BACK，绝不写 COMMITTED。绑定面（bindSnapshot / markApplying / recordStep /
-    // recordRollback）统一由 buildJournalCtx 提供 —— runExternalIntent 共用同一份实现，
-    // 两条通道的上报语义必须逐字一致（审计 P0-23）。
+    // recordRollback）统一由 buildJournalCtx 提供 —— runExternalIntent / resumeJournaled 共用同一份实现，
+    // 三条通道的上报语义必须逐字一致（审计 P0-23）。
     const { ctx: journalCtx, rollbackOutcome } = this.buildJournalCtx(opId, operationType, ownerInstanceId);
 
-    try {
+    return this.runJournalTail(opId, rollbackOutcome, async () => {
       if (deferredSnapshot !== true && snapshotProvider !== undefined) {
         const snapId = await snapshotProvider();
         // P1-2 修复：snapshotProvider 返回 null 表示快照创建失败 → 显式 abort（不得在无快照下继续 mutation）
@@ -358,7 +356,59 @@ export class Phase3Recovery {
         await this.store.update(opId, (j) => transitionJournalState(j, 'APPLYING'));
       }
       // deferred 模式：保持 CREATED，fn 自行 bindSnapshot + markApplying（首个 destructive side effect 前）
-      const result = await fn(journalCtx);
+      return fn(journalCtx);
+    });
+  }
+
+  /**
+   * 续跑一条已存在的 active journal（崩溃后重做被中断的恢复，见 core/restore-resume.ts 的判定）。
+   *
+   * 与 runJournaled 的差别：**不 create、不做 active ≤ 1 门禁** —— 要续的正是那条 active 记录；
+   * 只有在「上次崩溃前已经写过至少一个动作」这一点被逐项证明后，调用方才允许走到这里。
+   * 所有 reject 分支都抛错（调用方负责转成用户可见的「不续跑」原因），绝不静默重跑。
+   */
+  async resumeJournaled<T>(opts: {
+    operationId: string;
+    operationType: string;
+    lockCtx: MutationLockContext;
+    fn: (ctx?: JournalRunContext) => Promise<T>;
+  }): Promise<{ operationId: string; result: T }> {
+    const { operationId, operationType, lockCtx, fn } = opts;
+    const journal = await this.store.loadActive(operationId);
+    if (journal === null) {
+      throw new Error(engineMsg('core.phase3.resumeMissing', { opId: operationId }));
+    }
+    if (isTerminalState(journal.state)) {
+      throw new Error(engineMsg('core.phase3.resumeTerminal', { opId: operationId, state: journal.state }));
+    }
+    if (journal.operationType !== operationType) {
+      throw new Error(engineMsg('core.phase3.resumeWrongType', {
+        opId: operationId, expected: operationType, actual: journal.operationType,
+      }));
+    }
+    const ownerInstanceId = (lockCtx.token.instanceId ?? 'unknown').toString();
+    // 接管所有权：这条 journal 现在归本次执行的实例。否则再次崩溃时「锁里的实例」与「journal 的 owner」
+    // 对不上，下一个人既不能确认它属于自己、也不能按 owner 判定该不该接管。
+    await this.store.update(operationId, (cur) => ({
+      ...cur, ownerInstanceId, lockId: ownerInstanceId, updatedAt: new Date().toISOString(),
+    }));
+    const { ctx: journalCtx, rollbackOutcome } = this.buildJournalCtx(operationId, operationType, ownerInstanceId);
+    return this.runJournalTail(operationId, rollbackOutcome, () => fn(journalCtx));
+  }
+
+  /**
+   * runJournaled / resumeJournaled 共用的收尾：成功推进终态、失败置 SAFE MODE 并分类 durable 状态。
+   * body 抛错即表示「副作用阶段失败」，由本方法决定 NEEDS_ATTENTION / 保持非终态 / ROLLED_BACK。
+   */
+  private async runJournalTail<T>(
+    opId: string,
+    rollbackOutcome: { value: JournalRollbackOutcome | null },
+    body: () => Promise<T>,
+  ): Promise<{ operationId: string; result: T }> {
+    let fnCompleted = false;
+    let terminalPersistAttempted = false;
+    try {
+      const result = await body();
       fnCompleted = true;
       const rolledBack = rollbackOutcome.value;
       if (rolledBack !== null) {
@@ -396,17 +446,17 @@ export class Phase3Recovery {
         // NEEDS_ATTENTION —— 那会把「已知结论：已回滚」误报成「不可证明」）。
         await this.recordRolledBackOutcome(opId, rolledBack).catch(() => undefined);
         await this.store.moveToCompleted(opId).catch(() => undefined);
-      } else if (fnCompleted && !terminalPersistAttempted) {
-        // 真实事务副作用已完成，但 terminal 持久化失败 → RECOVERY_REQUIRED（不伪造终态，保持非终态 journal）
-        // （此处保持 journal 非终态：apply 已成功、COMMITTED 未 durable —— 由下一轮显式 recovery 决定。
-        //   SAFE MODE 已设；不额外写 NEEDS_ATTENTION，避免把「无法 durable 记录 outcome」误报成「已分类 NEEDS_ATTENTION」。）
       } else if (!fnCompleted) {
         // fn / side effect 阶段失败：op 已开始但 outcome 不确定 → NEEDS_ATTENTION（durable 分类）
         const j = await this.store.loadActive(opId);
         if (j !== null && !isTerminalState(j.state)) {
           await this.store.update(opId, (cur) => transitionJournalState(cur, 'NEEDS_ATTENTION')).catch(() => undefined);
         }
+      } else if (!terminalPersistAttempted) {
+        // fn 已完成但终态没写成 → 保持非终态，交给下一轮显式 recovery 判定（SAFE MODE 已设）。
       }
+      // 其余分支（fnCompleted 已完成但 terminal 持久化失败）保持非终态：
+      // 不伪造 COMMITTED，也不误报 NEEDS_ATTENTION —— SAFE MODE 已设，交给下一轮显式 recovery 判定。
       throw err;
     }
   }

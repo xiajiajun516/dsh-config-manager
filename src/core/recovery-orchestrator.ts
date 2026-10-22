@@ -113,6 +113,42 @@ export interface RecoveryOrchestrator {
    * 时拒绝清除（ok=false + reason），不让这个入口变成绕过恢复的旁路。
    */
   clearSafeModeBlock(userConfirmed: boolean): Promise<RecoveryResult>;
+  /**
+   * 续跑成功后收尾（自动续跑专用）：按**同一个** resolveSafeMode 判据解除 SAFE MODE。
+   * 可选，是为了不破坏只 mock status 的既有桩（routes/recovery.test.ts）。
+   */
+  settleAfterResume?: () => Promise<boolean>;
+}
+
+/**
+ * SAFE MODE 解除判据的**唯一实现**（编排器内部与 CLI 续跑收尾共用同一份）。
+ *
+ * 仅当**不存在其他未解决 active journal**（active 全部为已解决 terminal：COMMITTED /
+ * ROLLED_BACK / RECOVERED；NEEDS_ATTENTION 视为未解决）时才清除 durable 标记。
+ * fail-closed：扫描失败不清除。
+ */
+export async function resolveSafeModeMarker(
+  store: { scanActive(): Promise<string[]>; loadActive(operationId: string): Promise<OperationJournal | null> },
+  clearSafeMode: () => Promise<void>,
+  probeOnly = false,
+): Promise<boolean> {
+  try {
+    const activeIds = await store.scanActive();
+    let allResolved = true;
+    for (const opId of activeIds) {
+      const j = await store.loadActive(opId);
+      if (j === null) continue;
+      // NEEDS_ATTENTION 是 terminal 但代表未解决 incident → 不视为 resolved
+      if (j.state === 'NEEDS_ATTENTION') { allResolved = false; break; }
+      if (!isTerminalState(j.state)) { allResolved = false; break; }
+    }
+    if (!allResolved) return false;
+    if (!probeOnly) await clearSafeMode();
+    return true;
+  } catch {
+    // 扫描失败保守：不清除 SAFE MODE（fail-closed）
+    return false;
+  }
 }
 
 export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): RecoveryOrchestrator {
@@ -186,25 +222,8 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
    * @param probeOnly true = 只判定不写盘（供 status 如实回传「结案但保护仍开」）。
    * @returns 判定通过时实际调用 clearSafeMode 后为 true。
    */
-  const resolveSafeMode = async (probeOnly = false): Promise<boolean> => {
-    try {
-      const activeIds = await store.scanActive();
-      let allResolved = true;
-      for (const opId of activeIds) {
-        const j = await store.loadActive(opId);
-        if (j === null) continue;
-        // NEEDS_ATTENTION 是 terminal 但代表未解决 incident → 不视为 resolved
-        if (j.state === 'NEEDS_ATTENTION') { allResolved = false; break; }
-        if (!isTerminalState(j.state)) { allResolved = false; break; }
-      }
-      if (!allResolved) return false;
-      if (!probeOnly) await clearSafeMode();
-      return true;
-    } catch {
-      // 扫描失败保守：不清除 SAFE MODE（fail-closed）
-      return false;
-    }
-  };
+  const resolveSafeMode = (probeOnly = false): Promise<boolean> =>
+    resolveSafeModeMarker(store, clearSafeMode, probeOnly);
 
   /** 执行 recovery（execute/retry 共用）：登记 run → 注入执行器工厂 → executeRecovery。 */
   const runExecution = async (    operationId: string,
@@ -495,5 +514,8 @@ export function createRecoveryOrchestrator(deps: RecoveryOrchestratorDeps): Reco
         return { status: 500, body: { error: error instanceof Error ? error.message : String(error) } };
       }
     },
+
+    /** 自动续跑成功后收尾：仍按 resolveSafeModeMarker 判定（还有别的未解决 incident 时保持 SAFE MODE）。 */
+    settleAfterResume: (): Promise<boolean> => resolveSafeMode(false),
   };
 }

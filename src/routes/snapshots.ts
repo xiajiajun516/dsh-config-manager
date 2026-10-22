@@ -14,6 +14,8 @@ import type { RunState } from '../core/run-registry.ts'
 import { snapshotFileDiff, summarizeRestoreChanges } from '../core/snapshot-diff.ts'
 import { buildFileDiffBody, buildRestoreBody, executeRestorePlan, makeRestoreExecutor } from './route-support.ts'
 import type { RestoreJournalPort } from '../core/restore-wal.ts'
+import { probeRestoreResume, runRestoreWithResume } from '../core/restore-resume.ts'
+import type { RestoreResumeHint } from '../core/restore-resume.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { isENOENT } from '../utils/guards.ts'
 import { join } from 'node:path'
@@ -98,11 +100,27 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
           writeJson(res, 200, { dryRun: true, plan, changeSummary, planFingerprint: restorePlanFingerprint(plan) })
           return
         }
+        // 自动续跑探测（锁前，只读）：崩溃后再点一次恢复时，若「同一份快照的恢复崩在中途且逐步可证明」，
+        // 这一次就该接着做而不是整笔重来。锁前的探测只用来决定「能否放过 SAFE MODE 门」——
+        // SAFE MODE 要等的正是「把这次写盘做完」，证明得出来就不该拦住它。真正的写盘决定在锁内再判一次。
+        const phase3 = host.phase3Recovery
+        const resumeProbe = phase3 === undefined
+          ? null
+          : await probeRestoreResume({
+            store: phase3.store,
+            restoreOpts,
+            allowedOperationTypes: ['restore'],
+          })
+        const resumeAllowed = resumeProbe !== null && resumeProbe.ok
         // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
-        await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId, isBlocked: () => host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
+        await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId, isBlocked: () => (host.safeModeIsBlocked?.() ?? false) && !resumeAllowed }, async (lockCtx) => {
           // ctx = journal 上下文（deferredSnapshot 模式）：交给 executeRestorePlan 逐动作 WAL，
           // 崩溃后 reconcile 才能判出「哪些还原了、哪些没动」。
-          const executeRestore = async (ctx?: RestoreJournalPort): Promise<void> => {
+          const executeRestore = async (
+            ctx?: RestoreJournalPort,
+            resumeHint?: RestoreResumeHint,
+            resumeMeta?: { operationId: string; done: number; todo: number } | null,
+          ): Promise<void> => {
             // 先登记 run（同 kind running → 409 拒绝重复恢复）
             let run: RunState
             try {
@@ -137,6 +155,7 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
                   })
                 },
                 ctx,
+                resumeHint,
               )
               runs.finish(runId, report)
               // Phase 6：迁移历史（best-effort）。sections 从快照 entries 的 adapter 去重派生。
@@ -154,16 +173,33 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
                   suffix: report.removedPlugins.length > 0 ? msg('route.snapshotRestoreRemovedPluginsSuffix', { count: report.removedPlugins.length }) : '',
                 }),
               })
-              writeJson(res, 200, historyError === undefined ? { dryRun: false, report, runId } : { dryRun: false, report, runId, historyWriteError: historyError })
+              // resumed 只在「这一次是接着上次做」时为真，界面据此说清「已完成的动作没有重做」
+              const resumed = resumeMeta !== undefined && resumeMeta !== null ? { resumed: true, resumedFrom: resumeMeta } : {}
+              writeJson(res, 200, historyError === undefined
+                ? { dryRun: false, report, runId, ...resumed }
+                : { dryRun: false, report, runId, historyWriteError: historyError, ...resumed })
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error)
               runs.fail(runId, message)
               writeJson(res, 400, { error: message, runId })
             }
           }
-          // Step 3 P0-A：真实 restore 在已持锁下创建 journal（不 double-acquire；release 由本 gate）
-          if (host.phase3Recovery !== undefined && lockCtx !== null) {
-            await host.phase3Recovery.runJournaled({ operationType: 'restore', lockCtx, fn: executeRestore })
+          // Step 3 P0-A：真实 restore 在已持锁下创建 journal（不 double-acquire；release 由本 gate）。
+          // 锁内用统一入口再判一次：能续跑 → resumeJournaled（接着做），否则 → runJournaled（照常新建）。
+          if (phase3 !== undefined && lockCtx !== null) {
+            const out = await runRestoreWithResume<void>({
+              store: phase3.store,
+              restoreOpts,
+              operationType: 'restore',
+              allowedOperationTypes: ['restore'],
+              lockCtx,
+              phase3,
+              execute: (ctx, hint, meta) => executeRestore(ctx, hint, meta),
+            })
+            if (out.resumed !== null) {
+              // 续跑成功才收尾：判据仍是 resolveSafeModeMarker（其它 incident 未解决就继续锁着写）
+              await env.recoveryOrchestrator?.settleAfterResume?.()
+            }
           } else {
             await executeRestore()
           }
