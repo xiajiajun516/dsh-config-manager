@@ -948,17 +948,8 @@ test('recordBaseline: 写本地祖先副本 + 更新 sync-state + 触发裁剪',
     // 走一遍 push 让 ancestors 目录被建立
     await engine.push({ snapshotId: 'sync-anc-1' });
     await engine.push({ snapshotId: 'sync-anc-2' });
-    // 显式再调一次 recordBaseline（模拟合并 apply 完成后更新基线）
-    const newSnap: SyncSnapshot = {
-      id: 'sync-explicit',
-      createdAt: '2026-08-16T13:00:00.000Z',
-      manifest: {
-        schemaVersion: 1, dshVersion: '1.2.3', platform: 'win32',
-        sectionIds: ['settings'], containsSecrets: false,
-      },
-      sections: { settings: { version: 1, namespaces: {} } },
-    };
-    await engine.recordBaseline('sync-explicit', newSnap.sections, '2026-08-16T13:00:00.000Z');
+    // 显式再调一次 recordBaseline（模拟合并 apply 完成后更新基线；基线恒为**明文** sections）
+    await engine.recordBaseline('sync-explicit', { settings: { version: 1, namespaces: {} } }, '2026-08-16T13:00:00.000Z');
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSnapshotId, 'sync-explicit');
     assert.ok((await fs.stat(path.join(local, 'sync-explicit', 'manifest.json'))).isFile(), '祖先副本已写');
@@ -1512,7 +1503,7 @@ function mkRemote(id: string, createdAt: string, theme: string, revision: number
   };
 }
 
-test('P0-7: 加密快照 push 后，下一轮 merge 不再抛「快照目录缺少 manifest.json」→ 降级为两方合并', async () => {
+test('P0-7 + issue #107: 加密快照 push 落**密文**祖先副本 → 无密码时降级两方合并、带密码恢复三方合并', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-p07-enc-merge-'));
   try {
     const ctx = makeContext('win32', 'C:\\Users\\alice');
@@ -1520,23 +1511,44 @@ test('P0-7: 加密快照 push 后，下一轮 merge 不再抛「快照目录缺�
     const transport = new MemSyncTransport();
     const local = path.join(tmp, 'ancestors');
     const engine = makeEngine({ ctx, transport, stateDir: tmp, localSnapshotsDir: local });
+    const password = 'pw-12345678';
 
-    // 加密 push：按既有安全语义不落本地明文祖先副本
-    const push = await engine.push({ snapshotId: 'sync-enc-1', encrypt: true, password: 'pw-12345678' });
+    // issue #107：加密 push 也落祖先副本，但**只落密文**（manifest.encrypted + 单密文载荷）。
+    const push = await engine.push({ snapshotId: 'sync-enc-1', encrypt: true, password });
     assert.equal(push.ok, true);
     const state = await loadSyncState(tmp);
     assert.equal(state.lastSnapshotId, 'sync-enc-1', 'lastSnapshotId 必须等于远端快照 id');
-    assert.equal(state.ancestorId ?? '', '', '加密 push 不落本地祖先副本 → ancestorId 必须为空');
+    assert.equal(state.ancestorId, 'sync-enc-1', '加密 push 必须落祖先副本（issue #107：否则每轮缺祖先）');
+
+    // 磁盘形态：只有 manifest.json + 密文载荷，绝无明文分区文件
+    const ancestorDir = path.join(local, 'sync-enc-1');
+    const names = (await fs.readdir(ancestorDir)).sort();
+    assert.deepEqual(names, ['manifest.json', 'sections.encrypted.json'], '加密祖先目录只能是 manifest + 密文单载荷');
+    const payloadText = await fs.readFile(path.join(ancestorDir, 'sections.encrypted.json'), 'utf8');
+    assert.ok(!payloadText.includes('dark'), '密文载荷里不得出现明文配置内容（祖先副本不落明文）');
+    const payloadRaw = JSON.parse(payloadText) as EncryptedSections;
+    const decrypted = await decryptSectionsPayload(payloadRaw.encrypted, password);
+    assert.equal(decrypted.settings !== undefined, true, '用同一密码可解回明文 sections（供 merge 三方比较）');
 
     // 另一台机器推了一个普通快照 → 自动同步会走 merge（修复前：loadAncestor 抛错 → 整轮 failed 且每轮复现）
     const remote2 = mkRemote('remote-2', '2026-08-16T13:00:00.000Z', 'light', 9);
     transport.snapshots.set(remote2.id, remote2);
     transport.metas.push(computeSnapshotMeta(remote2));
 
-    const plan = await engine.merge();
-    const settings = plan.sections.find((s) => s.id === 'settings');
-    assert.ok(settings, 'merge 必须返回 settings 分区结果');
-    assert.equal(settings!.decision, 'conflict', '祖先缺失 → 两方差异按整分区 conflict 交用户裁决');
+    // 无密码：密文祖先解不开 → 如实降级为两方合并（整分区 conflict），绝不抛错
+    const twoWay = await engine.previewMerge();
+    assert.equal(twoWay.hasAncestor, false, '无密码时密文祖先不可用 → 如实两方合并');
+    const conflictRow = twoWay.sections.find((s) => s.id === 'settings');
+    assert.ok(conflictRow, 'merge 必须返回 settings 分区结果');
+    assert.equal(conflictRow!.decision, 'conflict', '祖先不可用 → 两方差异按整分区 conflict 交用户裁决');
+
+    // 带密码：解密祖先 → 三方比较；本机与祖先相同、只有远端改了 → useRemote（不再是冲突）
+    const threeWay = await engine.previewMerge({ password });
+    assert.equal(threeWay.hasAncestor, true, '带密码时密文祖先可解密 → 恢复三方合并（issue #107）');
+    const merged = threeWay.sections.find((s) => s.id === 'settings');
+    assert.ok(merged, 'merge 必须返回 settings 分区结果');
+    assert.notEqual(merged!.decision, 'conflict', '有共同祖先时不得把单侧改动误判成冲突');
+    assert.equal(merged!.decision, 'useRemote', '只有远端改过 → 自动采用远端值');
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

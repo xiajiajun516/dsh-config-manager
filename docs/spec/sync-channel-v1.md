@@ -72,7 +72,11 @@
 通道**必须**用条件写（WebDAV / S3 的 `If-Match`，索引本不存在则 `If-None-Match: *`）保护它：读到的 ETag 与实际写入之间
 若远端被其它设备改过（HTTP 412，S3 兼容端点可能是 409），**必须中止本次写入并如实报错**，绝不覆盖别人的索引条目。
 服务端不返回 ETag / 不实现条件写时退化为无条件写（行为与本条引入前一致），但**不得**把「拿不到 ETag」判成本次同步失败。
-gist 的 `ETag` 是**弱** ETag（`W/"…"`），HTTP 禁止用它做 `If-Match` —— 弱 ETag 一律不采用。
+
+> **gist 通道是这条规则的例外（issue #110）**：GitHub 的 `PATCH /gists/{id}` 对**任何**条件请求头都回
+> `400 Conditional request headers are not allowed in unsafe requests unless supported by the endpoint` ——
+> 与 ETag 强弱无关。故 gist 通道的写（upload / delete）**一律不带条件头**，也**没有**写前并发保护；
+> 需要并发保护请使用 git / webdav / s3 通道。
 
 **GC**：删除快照后回收无人引用的 blob。
 

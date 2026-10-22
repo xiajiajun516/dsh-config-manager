@@ -24,8 +24,7 @@ export const gistZh = {
   'sync.gist.timeout': '{method} {url} 请求超时（{timeout}ms）',
   'sync.gist.indexInvalid': '{url} 解析失败或结构非法: {err}',
   'sync.gist.snapshotInvalid': '快照 {id} 解析失败或结构非法: {err}',
-  // ---- cloud-sync 借鉴项 ①②③：条件写 / 探针 / 归属提示 ----
-  'sync.gist.concurrentWrite': 'Gist 已被其它设备更新（PATCH 冲突，HTTP {status}）：本次写入已中止，请重新同步后再试',
+  // ---- cloud-sync 借鉴项 ②③：探针 / 归属提示（①条件写已按 issue #110 移除，见 gist-transport.ts）----
   'sync.gist.probeOk': '连接正常（Gist 可读写，远端 {count} 份快照）',
   'sync.gist.probeForeignContent': '该 Gist 里已有 {count} 个不属于本插件的文件：请确认这是你的同步专用 Gist（前缀 {prefix}），否则可能覆盖别人的数据',
 } as const;
@@ -47,7 +46,6 @@ export const gistEn: Record<keyof typeof gistZh, string> = {
   'sync.gist.timeout': '{method} {url} request timed out ({timeout}ms)',
   'sync.gist.indexInvalid': '{url} failed to parse or is structurally invalid: {err}',
   'sync.gist.snapshotInvalid': 'Snapshot {id} failed to parse or is structurally invalid: {err}',
-  'sync.gist.concurrentWrite': 'The gist was updated by another device (PATCH conflict, HTTP {status}): this write was aborted, please sync again',
   'sync.gist.probeOk': 'Connection OK (gist readable and writable, {count} remote snapshots)',
   'sync.gist.probeForeignContent': 'This gist already contains {count} files that are not ours: confirm it is your dedicated sync gist (prefix {prefix}) or you may overwrite someone else’s data',
 };

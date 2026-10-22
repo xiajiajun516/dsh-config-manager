@@ -8,7 +8,9 @@ import { engineMsg } from './messages.ts';
 import type { SnapshotFs } from './fs.ts';
 import { readSnapshotFromDir, writeSnapshotToDir } from './layout.ts';
 import { SNAPSHOT_MANIFEST_FILE } from './layout.ts';
+import { isEncryptedSections } from './transport.ts';
 import type { SyncSnapshot } from './transport.ts';
+import { parseJsonSafe, stringifyJsonSafe } from '../utils/json.ts';
 
 /** 默认保留的祖先快照数量（最旧超出则被裁剪）。 */
 export const DEFAULT_ANCESTOR_KEEP = 10;
@@ -23,7 +25,7 @@ export async function loadAncestor(
     throw new Error(engineMsg('sync.ancestorSnapshotIdRequired'));
   }
   const dir = joinFs(localSnapshotsDir, snapshotId);
-  return await readSnapshotFromDir(dir, fsx);
+  return await readAncestorSnapshot(dir, fsx);
 }
 
 /**
@@ -43,10 +45,82 @@ export async function tryLoadAncestor(
 ): Promise<SyncSnapshot | undefined> {
   if (typeof snapshotId !== 'string' || snapshotId === '') return undefined;
   try {
-    return await readSnapshotFromDir(joinFs(localSnapshotsDir, snapshotId), fsx);
+    return await readAncestorSnapshot(joinFs(localSnapshotsDir, snapshotId), fsx);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 加密祖先副本的密文载荷文件名（issue #107）。
+ * 加密快照无法平铺成明文 JSON 分区，因此加密祖先目录 = manifest.json + 这一个密文载荷文件。
+ */
+export const ENCRYPTED_ANCESTOR_FILE = 'sections.encrypted.json';
+
+/**
+ * 读祖先副本目录：manifest.encrypted=true → 读密文单载荷；否则按散文件布局读回明文。
+ *
+ * 为什么要在这里分派（而不是改 layout.readSnapshotFromDir）：散文件布局对加密快照是**结构性拒绝**
+ * （layoutEncryptedDirUnsupported，git 通道的密文单文件布局依赖它）；祖先副本是本地缓存目录，
+ * 允许有自己的加密形态，且不该让「本地缓存」把明文布局的契约搞松。
+ * 读不出 / 形态不符一律抛错 —— 是否降级为 undefined 由 tryLoadAncestor 决定。
+ */
+export async function readAncestorSnapshot(
+  dir: string,
+  fsx: SnapshotFs = createSnapshotFs(),
+): Promise<SyncSnapshot> {
+  const manifestAbs = joinFs(dir, SNAPSHOT_MANIFEST_FILE);
+  if (!(await fsx.exists(manifestAbs))) {
+    throw new Error(engineMsg('sync.layoutManifestMissing', { file: SNAPSHOT_MANIFEST_FILE, dir }));
+  }
+  const parsed = parseJsonSafe(Buffer.from(await fsx.readFile(manifestAbs)).toString('utf8'));
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(engineMsg('sync.layoutManifestNotObject'));
+  }
+  const m = parsed as Record<string, unknown>;
+  const manifest = m['manifest'];
+  if (manifest !== null && typeof manifest === 'object' && !Array.isArray(manifest)
+    && (manifest as Record<string, unknown>)['encrypted'] === true) {
+    const payloadAbs = joinFs(dir, ENCRYPTED_ANCESTOR_FILE);
+    if (!(await fsx.exists(payloadAbs))) {
+      throw new Error(engineMsg('sync.layoutManifestMissing', { file: ENCRYPTED_ANCESTOR_FILE, dir }));
+    }
+    const payload = parseJsonSafe(Buffer.from(await fsx.readFile(payloadAbs)).toString('utf8'));
+    if (!isEncryptedSections(payload)) {
+      throw new Error(engineMsg('sync.layoutManifestMissingFields'));
+    }
+    return {
+      id: typeof m['id'] === 'string' ? m['id'] : '',
+      createdAt: typeof m['createdAt'] === 'string' ? m['createdAt'] : '',
+      manifest: manifest as SyncSnapshot['manifest'],
+      sections: payload,
+    };
+  }
+  return await readSnapshotFromDir(dir, fsx);
+}
+
+/**
+ * 把**加密**祖先副本写入本地目录（issue #107）。
+ *
+ * 磁盘上只有 manifest.json（manifest.encrypted=true，sectionHashes 为空）+ 单个 AES-GCM 密文载荷；
+ * 密码绝不落盘（载荷里只有 salt/iv/authTag 与密文，与远端加密快照同口径）。
+ * 目录里有 manifest.json ⇒ 仍被 listAncestors / pruneAncestors 当成普通祖先副本，保留策略不变。
+ */
+export async function writeEncryptedAncestor(
+  localSnapshotsDir: string,
+  snapshot: SyncSnapshot,
+  fsx: SnapshotFs = createSnapshotFs(),
+): Promise<void> {
+  if (!isEncryptedSections(snapshot.sections)) {
+    // 结构性断言：明文快照必须走 writeAncestor（散文件布局），不得落进密文单载荷形态
+    throw new Error(engineMsg('sync.layoutEncryptedDirUnsupported'));
+  }
+  const dir = joinFs(localSnapshotsDir, snapshot.id);
+  await fsx.mkdir(dir);
+  const manifest = { id: snapshot.id, createdAt: snapshot.createdAt, manifest: snapshot.manifest, sectionHashes: {} };
+  const enc = new TextEncoder();
+  await fsx.writeFile(joinFs(dir, SNAPSHOT_MANIFEST_FILE), enc.encode(stringifyJsonSafe(manifest, { space: 2 })));
+  await fsx.writeFile(joinFs(dir, ENCRYPTED_ANCESTOR_FILE), enc.encode(stringifyJsonSafe(snapshot.sections, { space: 2 })));
 }
 
 /** 把合并后的快照写入本地祖先副本目录（覆盖同名 id）。 */

@@ -269,8 +269,17 @@ export function signRequest(input: SigV4RequestInput): SigV4RequestOutput {
     dialect,
   });
   const signature = createHmac('sha256', signingKey).update(stringToSign, 'utf8').digest('hex');
-  const authorization = dialect.algorithm + ' Credential=' + input.accessKeyId + '/' + credentialScope
-    + ', ' + dialect.headerListLabel + '=' + headerList + ', Signature=' + signature;
+  // 授权头序列化按方言分两套（issue #109 实证）：
+  //  - AWS：AWS4-HMAC-SHA256 Credential=<ak>/<scope>, SignedHeaders=<list>, Signature=<sig>
+  //  - OSS4：官方 Go/PHP SDK 的格式是**逗号后不带空格**，且 AdditionalHeaders 为空时**整段省略**；
+  //    写成 ", AdditionalHeaders=, Signature=" 会被 OSS 判成 Authorization header value is empty.
+  //    （HTTP 400 InvalidArgument，错误码 EC 0002-00000209，真机逐一比对过两种格式）。
+  const authorization = dialect.headerListLabel === 'AdditionalHeaders'
+    ? dialect.algorithm + ' Credential=' + input.accessKeyId + '/' + credentialScope
+      + (headerList === '' ? '' : ',' + dialect.headerListLabel + '=' + headerList)
+      + ',Signature=' + signature
+    : dialect.algorithm + ' Credential=' + input.accessKeyId + '/' + credentialScope
+      + ', ' + dialect.headerListLabel + '=' + headerList + ', Signature=' + signature;
 
   return {
     headers: { ...all, authorization },

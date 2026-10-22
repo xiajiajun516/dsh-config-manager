@@ -25,8 +25,17 @@
   `If-Match`（索引本不存在则 `If-None-Match: *`）；412（S3 兼容端点还可能是 409）一律归类为
   `conflict` 并**中止本次写入**，让用户重跑。服务端不给 ETag / 不实现条件写时退化为无条件写（行为与改造前一致），
   **绝不因为拿不到 ETag 把同步判成失败**。
-  - **gist 的 ETag 是弱 ETag**（`W/"…"`）：HTTP 禁止用它做 `If-Match`（GitHub 会对这种 PATCH 回 400），
-    故 gist 通道只采用**强** ETag，弱 ETag 直接不采用（退回无条件 PATCH）。
+  - **gist 通道完全不做条件写**（issue #110，2026-10 实测，推翻本条的早期假设）：早期实现以为「弱 ETag 不能用、
+    强 ETag 可以用」，于是 `conditionalPatchHeaders()` 在拿到强 ETag 时注入 `If-Match`。实测（临时 secret gist，
+    `gh auth token` + curl）：
+    - `PATCH /gists/{id}` 带 `If-Match: "<strong etag>"` → **400**，
+      `{"message":"Bad Request","errors":["Conditional request headers are not allowed in unsafe requests unless supported by the endpoint"]}`；
+    - 同一 PATCH 去掉 `If-Match` → **200**；随后 `DELETE`（无条件头）→ **204**。
+
+    ⇒ 该端点**不接受任何条件请求头**，与强弱无关；用户侧表现是首次推送就 400、配置完全写不上去。
+    现在 gist 的 `upload` / `delete` 恒不带条件头，代价是**失去写前并发保护**（个人配置同步到自己的 secret gist
+    这一场景可接受）；412 分支与 `sync.gist.concurrentWrite` 文案一并移除。回归测试：
+    `src/sync/gist/gist-conditional-write.test.ts`（强/弱 ETag 与删除路径都断言「零条件头」）。
   - 范围说明：blob 索引（`blobs-index.json`）**刻意不做条件写** —— 它漏记一条只占空间（该 blob 永不被 GC 删），
     多记一条只是对不存在的 blob 发一次幂等 DELETE，不存在「覆盖别人的快照列表」这类不可恢复后果。
 
@@ -48,6 +57,50 @@
   因此「真实服务端是否回 ETag / 是否按 412 拒绝」仍属未验证项。
 
 
+## S3 兼容系签名：OSS4 授权头必须照官方 SDK 逐字序列化（issue #109，2026-10）
+
+- **用户侧表现**：阿里云 OSS（`provider: 'oss'`，签名方言 `oss4`）配置填完、点同步即失败，报
+  `GET https://<bucket>.oss-cn-hangzhou.aliyuncs.com/<prefix>/index.json 失败 (HTTP 400): InvalidArgument - Authorization header value is empty.`，
+  响应 XML 里回显的授权头与我们拼出的串逐字一致（含空格与空的 `AdditionalHeaders=`）。
+- **根因**：`src/sync/s3/sigv4.ts` 的授权头装配曾套用 AWS 风格：
+  `OSS4-HMAC-SHA256 Credential=<ak>/<scope>, AdditionalHeaders=, Signature=<sig>` —— **逗号后带空格**、**空头清单也照写**。
+  阿里云官方 SDK（Go `oss/signer/v4.go`、PHP `src/Signer/SignerV4.php`，2026-10 读码确证）的格式是：
+  - 逗号后**不带空格**；
+  - `AdditionalHeaders` **非空时才写**（`,AdditionalHeaders=<头名;头名>`），为空时**整段省略**。
+- **实证（不需要真凭据）**：对真实端点 `https://oss-cn-hangzhou.aliyuncs.com/` 发两个只差授权头格式的假 AK 请求：
+  - 我们那串（空格 + 空 `AdditionalHeaders`）→ `400 InvalidArgument / Authorization header value is empty.`（EC `0002-00000209`）；
+  - 官方格式（紧凑逗号、省略空 `AdditionalHeaders`）→ `403 InvalidAccessKeyId` —— **已进入鉴权**，说明格式被接受。
+  ⇒ 400 与「签名算错」无关，纯粹是授权头**解析**失败（错误码文档把该 EC 归到 Authorization 格式错误）。
+- **修法**：`signRequest()` 按方言分两套序列化 —— AWS 保持 `, SignedHeaders=…, Signature=…`（带空格），
+  OSS4 走紧凑格式且空清单省略。**规范化请求不变**（与 SDK 逐行对齐：OSS4 的 CanonicalHeaders 只含
+  `content-type`/`content-md5`/`x-oss-*`；规范化请求在头块之后多一行 AdditionalHeaders、载荷取 `UNSIGNED-PAYLOAD`；
+  派生密钥 `aliyun_v4`→date→region→oss→`aliyun_v4_request`）。
+- **回归测试**：`src/sync/s3/sigv4.test.ts`（OSS4 授权头正则 + 断言不含 `', '`、不含空的 `AdditionalHeaders=`）、
+  `src/sync/s3/s3-transport.test.ts`（通道层同一断言）。
+- **未做**：本机无阿里云 AK/SK，端到端仍待报告者复测；签名数值只做到「与官方 SDK 算法逐行对齐」，
+  没有官方测试向量可对（阿里云未公开固定向量）。
+
+## 加密快照也落密文祖先副本（issue #107，2026-10）
+
+- **用户侧表现**：开启「加密快照」后每轮合并都退化成两方比较，界面 `previewMerge().hasAncestor === false`，
+  合法改动被判冲突、被迫反复人工裁决（每轮都要点一遍）。
+- **根因**：push 成功后 `recordBaseline` 曾以 `writeAncestor: !encrypted` 跳过祖先副本写盘，`state.ancestorId`
+  因此被清空；而祖先目录 `src/sync/ancestor.ts` 只认明文布局（`writeSnapshotToDir`/`readSnapshotFromDir` 散文件），
+  根本没有存密文副本的形态。
+- **修法（方案 A：加密祖先副本）**：
+  - `writeEncryptedAncestor()` 写的目录里只有 `manifest.json`（`manifest.encrypted === true`、`sectionHashes` 空）
+    与单文件 `sections.encrypted.json`（密文载荷）；`readAncestorSnapshot()` 按 `manifest.encrypted` 分流，
+    密文先过 `isEncryptedSections` 校验；`loadAncestor`/`tryLoadAncestor` 共用这一入口。
+  - push 成功后 `recordBaseline(..., { ancestorPassword: opts.password })`；`recordBaseline` 的 `sections` 参数
+    收窄为**明文**（基线 hash 恒按明文算），只在写盘时加密。
+  - merge：祖先为密文时用**本次请求的密码**解密；密码缺失/不匹配/载荷损坏一律回落 `undefined`
+    （沿用 P0-7「祖先读不出就两方合并」契约，**绝不抛错打断合并**）。
+  - `applyMergePlan` / `applyMergeResolutions` 透传 `ancestorPassword`（仅当本次远端快照加密且拿到了密码）。
+- **不做**：`src/sync/layout.ts` 里「加密快照不写散文件目录」的结构性拒绝保持不变（git 通道依赖它）；
+  自动同步路径本就不涉及加密快照，不需要额外密码来源。
+- **回归测试**：`src/sync/sync-engine.test.ts`「P0-7 + issue #107: 加密快照 push 落密文祖先副本 →
+  无密码时降级两方合并、带密码恢复三方合并」（断言祖先目录只有两个文件、载荷不含明文、带密码时判 `useRemote`）。
+- **未验证**：没有真实远端两机端到端跑过（本机单测覆盖 push → `previewMerge()` 全链）。
 ## 自动同步「真·自动」：两条即时通道 + 策略默认值（2026-10）
 
 **规则（硬）**：

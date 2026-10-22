@@ -33,7 +33,7 @@
 - **磁盘占用清理四条不得放宽**：候选只有可重建区 + 显式勾选的过期导出；`snapshots`/`sync` 永不进候选；`categories` 是分区白名单；界面数字由渲染行现算；ENOENT 不计 errors。
 - **同步分区放行是「逐分区」而不是布尔**：`syncSectionCatalog` 由注册表派生；放行只看引擎构造期 `optInSections`；自动同步与 model-tools 只传 `'auto'` 档（sessions 绝不悄悄上下行）。
 - **同步通道「会话管理」五条**：远端保留接 GFS（刚 push 的恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；删除墓碑不删本机数据（→ `docs/lessons/sync-channel.md`）。
-- **同步写路径两条**：索引写入必须**条件写**（远端被改过即中止报错，绝不覆盖别人的条目；gist 弱 ETag 不用做 If-Match）；快照**不进机器专属路径**（pnpm store/cache 导出侧剥离、写回保留本机）（→ `docs/lessons/sync-channel.md`）。
+- **同步写路径三条**：索引必须**条件写**（远端改过即中止，绝不覆盖别人的条目；**gist 例外 = 不做条件写**，条件头一律 400）；快照**不进机器专属路径**（导出剥离 pnpm store/cache、写回保留本机）；**S3 授权头照官方 SDK 逐字序列化**；**祖先副本只落密文**（→ `docs/lessons/sync-channel.md`）。
 - **日志全程脱敏**：`redactValue` 掩码敏感值；UI 渲染前所有错误/报告再过 `redact()`（`ErrorBanner.tsx`/`ReportView.tsx`）。
 - **ZIP 视为不可信**：条目数上限、checksum、Zip Slip 拒绝（`src/security/zip-security.ts`）。
 - **导入前强制快照**（可回滚）、Dry Run 零写入、冲突不默认覆盖。
@@ -135,11 +135,11 @@
 > 只留规则判据；**真机证据、量化数据、复现与复核脚本见 `docs/lessons/<域>.md`**（索引 = `docs/lessons/README.md`）。
 
 **Git / 版本发布** → `docs/lessons/git-and-release.md`
-- git 同步工作副本的 `origin` **必须每次跟随 `repoUrl`**（含 `--push`；不一致即 `set-url`，一致时零写命令）。
+- git 同步工作副本的 `origin` **每次跟随 `repoUrl`**（含 `--push`；不一致即 `set-url`，一致零写）。
 - **删任何源文件前先 `git status --porcelain <路径>`**：看到 `??` 必须停下确认。
 - **绝不用 `git checkout -- <文件>` 回滚本仓库**；撤销自己的改动用针对性 edit 反向操作。
 - **EOL 由根 `.gitattributes` 钉死**；源码字面量守卫必须在读取入口折 LF，否则 CRLF 假红。
-- **pnpm 11 `minimumReleaseAge`**：`@latest` 可能装到旧版 —— 用精确版本，或设 `minimumReleaseAge: 0`。
+- **pnpm 11 `minimumReleaseAge`**：`@latest` 可能装旧版 —— 用精确版本或设 0。
 
 **Profile 与隔离实例** → `docs/lessons/profiles-and-instances.md`
 - **DSH 没有「默认 / 下次启动 profile」状态**：只由启动参数决定；不写 `<dataDir>/next-profile`。

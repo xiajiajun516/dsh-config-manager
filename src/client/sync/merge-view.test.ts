@@ -8,7 +8,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  applyBulkResolution, buildMergeResolutions, decideSyncEntry, hasApplicableSections, initialResolutionDraft,
+  applyBulkResolution, buildMergeResolutions, decideSyncEntry, decisionWillApply, hasApplicableSections, initialResolutionDraft,
   mergeDecisionCounts, mergeDecisionKey, mergeDecisionTone, mergeKindKey, mergeReasonKey,
   mergeResultView, mergeSectionRows, mergeSummaryItems, needsNoAncestorNotice,
   normalizeDecision, setSectionAction, truncatePreview, MERGE_PREVIEW_MAX_CHARS,
@@ -143,9 +143,10 @@ test('merge-view: 单分区裁决 + 请求体排序稳定', () => {
   assert.deepEqual(buildMergeResolutions(setSectionAction({}, 'settings', 'keepLocal')), [{ id: 'settings', action: 'keepLocal' }])
 })
 
-test('merge-view: hasApplicableSections —— 只要存在「有变化且不需裁决」的分区就可执行（与草稿无关）', () => {
+test('merge-view: hasApplicableSections —— 预览可应用 或 已裁决会写盘（issue #106）', () => {
   const onlySkip = preview({ sections: [{ id: 'settings', decision: 'skip', conflictCount: 0, conflicts: [] }] })
   assert.equal(hasApplicableSections(onlySkip), false, '全部无变化 → 执行合并必须禁用')
+  assert.equal(hasApplicableSections(onlySkip, {}), false)
   assert.equal(hasApplicableSections(null), false)
   const withAuto = preview({
     sections: [
@@ -155,7 +156,20 @@ test('merge-view: hasApplicableSections —— 只要存在「有变化且不需
   })
   assert.equal(hasApplicableSections(withAuto), true, '只有冲突 + 一个可应用分区 → 可执行（冲突留待下次）')
   const onlyConflict = preview({ sections: [{ id: 'settings', decision: 'conflict', conflictCount: 1, conflicts: [] }] })
-  assert.equal(hasApplicableSections(onlyConflict), false, '只有待裁决分区 → 没有可应用内容')
+  assert.equal(hasApplicableSections(onlyConflict), false, '未裁决的冲突 → 没有可应用内容')
+
+  // ---- issue #106 回归：0 可自动应用 + 全是冲突时，裁决完必须可为 ----
+  assert.equal(hasApplicableSections(onlyConflict, setSectionAction({}, 'settings', 'useRemote')), true, '已裁决 useRemote → 会写盘，必须可用')
+  assert.equal(hasApplicableSections(onlyConflict, setSectionAction({}, 'settings', 'keepLocal')), true, '已裁决 keepLocal → 会写盘，必须可用')
+  assert.equal(hasApplicableSections(onlyConflict, setSectionAction({}, 'other', 'useRemote')), false, '草稿点的是别的分区 → 仍然禁用')
+  assert.equal(hasApplicableSections(onlyConflict, setSectionAction({}, 'settings', 'useMerged')), false, '冲突分区没有 merged 载荷 → 该裁决什么也不写')
+  const mergeable = preview({ sections: [{ id: 'settings', decision: 'merge', autoMerged: 2, conflictCount: 0, conflicts: [] }] })
+  assert.equal(hasApplicableSections(mergeable, setSectionAction({}, 'settings', 'useMerged')), true, '有 merged 载荷 → useMerged 会写盘')
+  // 批量「全部采用本机」会把 skip 分区也写进草稿，此时它同样会落盘
+  assert.equal(hasApplicableSections(onlySkip, setSectionAction({}, 'settings', 'keepLocal')), true)
+  assert.equal(decisionWillApply(mergeSectionRows(mergeable)[0]!, 'useMerged'), true)
+  assert.equal(decisionWillApply(mergeSectionRows(onlyConflict)[0]!, 'useMerged'), false)
+  assert.equal(decisionWillApply(mergeSectionRows(onlyConflict)[0]!, undefined), false)
 })
 
 test('merge-view: mergeDecisionCounts —— 待裁决覆盖 + 本次可应用分区数分别可数', () => {
@@ -171,11 +185,11 @@ test('merge-view: mergeDecisionCounts —— 待裁决覆盖 + 本次可应用�
   assert.deepEqual(empty, { needsDecision: 2, decided: 0, undecided: 2, conflictItems: 3, applicable: 1 })
   assert.deepEqual(
     mergeDecisionCounts(p, setSectionAction({}, 'settings', 'useRemote')),
-    { needsDecision: 2, decided: 1, undecided: 1, conflictItems: 3, applicable: 1 },
+    { needsDecision: 2, decided: 1, undecided: 1, conflictItems: 3, applicable: 2 },
   )
   assert.deepEqual(
     mergeDecisionCounts(p, setSectionAction(setSectionAction({}, 'settings', 'useRemote'), 'mcp', 'keepLocal')),
-    { needsDecision: 2, decided: 2, undecided: 0, conflictItems: 3, applicable: 1 },
+    { needsDecision: 2, decided: 2, undecided: 0, conflictItems: 3, applicable: 3 },
   )
 })
 

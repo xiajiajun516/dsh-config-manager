@@ -55,7 +55,7 @@ import { isEncryptedSections, PROBE_UNSUPPORTED_CODE, SyncTransportError } from 
 import { msgOf, zhMsg } from '../core/messages.ts';
 import { engineMsg } from './messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
-import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor } from './ancestor.ts';
+import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor, writeEncryptedAncestor } from './ancestor.ts';
 import type { MergeConflictReason, MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
 import { classifyMergePlan } from './risk.ts';
@@ -544,6 +544,12 @@ export class SyncEngine {
    * 「源机 home → 本机 home」的重定基规则；'' = 旧快照/未知（不猜，行为不变）。
    */
   private lastMergedRemoteSourceHome = '';
+  /**
+   * 最近一次 merge() 命中的远端快照是否加密（issue #107）：
+   * applyMergeResolutions → applyMergePlan 写基线时据此决定祖先副本是否也落**密文**。
+   * false = 明文通道/未知（保持既有明文副本，行为逐字不变）。
+   */
+  private lastMergedRemoteEncrypted = false;
   /** 最近一次 merge() 收到的用户路径映射（applyMergePlan 复用；缺省 []） */
   private lastMergedPathMappings: PathMapping[] = [];
   /**
@@ -968,7 +974,10 @@ export class SyncEngine {
     // ③ 记录祖先基线：写 sync-state（lastSnapshotId + 每分区 hash/updatedAt + lastSyncAt + transport）+ 裁剪。
     //    基线 hash 用明文（hasLocalChanges 与本地明文可比）；加密快照不写明文祖先副本（密钥不落盘）。
     await this.recordBaseline(id, plainSections, nowIso, {
-      writeAncestor: !encrypted,
+      // issue #107：加密快照也落**密文**祖先副本（密码只在本进程内存里用；磁盘上只有密文）。
+      // 不落任何副本的旧行为会让每轮合并都缺共同祖先 → 三方退化成两方、整分区冲突，
+      // 用户被迫反复人工裁决。明文通道不受影响（缺省走 writeAncestor 的明文散文件布局）。
+      ...(encrypted ? { ancestorPassword: opts.password! } : {}),
       // 只有本轮真的跟踪了 sessions 才覆盖这两个字段（见 computeSessionBookkeeping）
       ...(bookkeeping.tracked
         ? { sessionUnits: bookkeeping.sessionUnits, deletedSessions: bookkeeping.tombstones }
@@ -1466,12 +1475,15 @@ export class SyncEngine {
       // 远端为空：清掉全部缓存（绝不把上一轮的输入留在内存里被后续调用误用）
       this.lastMergeHadAncestor = false;
       this.lastMergeInputs = null;
+      this.lastMergedRemoteEncrypted = false;
       return { sections: [] };
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
     const remote = await this.transport.download(targetId);
     // 加密快照 → 用密码解密；普通快照 containsSecrets=true → 拒绝（防御）
     await this.prepareSnapshot(remote, opts.password);
+    // issue #107：记下远端快照是否加密 —— applyMergePlan 据此决定祖先副本也落密文
+    this.lastMergedRemoteEncrypted = remote.manifest.encrypted === true;
     // P1-5：按远端墓碑剔除已删除的会话（三方合并的 remote 侧同样不许复活）
     this.stripTombstonedSessions(remote);
     // 本次合并的远端基准（P0-7）：紧随其后的 applyMergePlan() 用它写基线远端指针
@@ -1482,13 +1494,28 @@ export class SyncEngine {
     this.lastMergedPathMappings = opts.pathMappings ?? [];
     // 共同祖先用本地祖先**副本目录名** = state.ancestorId（'' = 无本地祖先副本）。
     // 不能用 state.lastSnapshotId —— 那是远端快照 id；混用会让 merge 去 load 一个并不存在的目录
-    // （加密快照 push 不落副本）→ 抛「快照目录缺少 manifest.json」→ 整轮自动同步 failed 且每轮复现。
+    // → 抛「快照目录缺少 manifest.json」→ 整轮自动同步 failed 且每轮复现。
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
     const ancestorId = state.ancestorId ?? '';
     let ancestor: SyncSnapshot | undefined;
     if (ancestorId !== '' && this.localSnapshotsDir !== undefined) {
       // 副本缺失/被裁剪/损坏 → undefined（两方合并），绝不上抛成整轮失败（P0-7）
       ancestor = await tryLoadAncestor(this.localSnapshotsDir, ancestorId, this.fsx);
+    }
+    // issue #107：加密祖先副本（manifest.encrypted + 单密文载荷）→ 用本次合并的密码解密回明文。
+    // 密码缺失 / 与副本不同 / 副本损坏，一律按「无祖先」降级为两方合并 —— 祖先只是本地缓存，
+    // 它的形态问题绝不能让整轮合并失败（与 tryLoadAncestor 的 P0-7 契约同一精神）。
+    if (ancestor !== undefined && ancestor.manifest.encrypted) {
+      const ancestorPassword = opts.password ?? '';
+      if (ancestorPassword !== '' && isEncryptedSections(ancestor.sections)) {
+        try {
+          ancestor.sections = await decryptSectionsPayload(ancestor.sections.encrypted, ancestorPassword);
+        } catch {
+          ancestor = undefined;
+        }
+      } else {
+        ancestor = undefined;
+      }
     }
     // 本地当前：现场 export（含 secret 剥离），与 push 同口径
     const localSections: Partial<Record<SectionId, SectionData>> = {};
@@ -1669,6 +1696,10 @@ export class SyncEngine {
         : { pendingMerge: null }),
       ...(opts.snapshotBinding !== undefined ? { snapshotBinding: opts.snapshotBinding } : {}),
       ...(opts.pathMappings !== undefined ? { pathMappings: opts.pathMappings } : {}),
+      // issue #107：远端是加密快照且本次有密码 → 祖先副本也落密文（下轮三方合并可解密）
+      ...(this.lastMergedRemoteEncrypted && opts.password !== undefined && opts.password !== ''
+        ? { ancestorPassword: opts.password }
+        : {}),
     });
     if (!report.ok) {
       // 失败已整体回滚：基线未动、本机配置没变 → 不写 pendingMerge（冲突下一轮照旧出现）
@@ -1746,8 +1777,10 @@ export class SyncEngine {
    *   （push 路径两者天然相同）；合并/应用路径**必须显式传**，否则 lastSnapshotId 会退化成「一个远端
    *   并不存在的本地 id」→ hasNewRemoteSnapshot() 恒判「远端有新生」，每轮白跑 list + download + merge。
    *   传入 `''` 表示「远端 id 未知」——宁可留空，也不要把本地 id 冒充成远端 id。
-   * - `opts.writeAncestor === false`（加密快照 push）：不落本地祖先副本，`ancestorId` 一并置 '' ——
+   * - `opts.writeAncestor === false`：不落本地祖先副本，`ancestorId` 一并置 '' ——
    *   绝不把一个本地并不存在的目录名写进状态（旧实现正是这样让下一轮 merge 直接抛错）。
+   * - `opts.ancestorPassword`（issue #107）：祖先副本落**密文**（manifest.encrypted + 单密文载荷）；
+   *   加密快照 push 必须传，否则下轮三方合并缺共同祖先、整分区冲突。
    * - `opts.preserveAncestor === true`（合并仍有未裁决冲突）：祖先副本与 ancestorId **保持不动** ——
    *   共同基线必须仍是「本机与远端都认可的上一版」；拿只带本次应用分区的副本去覆盖它，会让
    *   下一轮所有分区都退化成「无祖先 → 冲突」。
@@ -1755,10 +1788,14 @@ export class SyncEngine {
    */
   async recordBaseline(
     snapshotId: string,
-    sections: SyncSnapshot['sections'],
+    // 基线**恒为明文**（加密快照的基线 hash 也用明文算，供 hasLocalChanges 比较）；
+    // 需要落盘副本时由 opts.ancestorPassword 决定写明文还是密文目录。
+    sections: Partial<Record<SectionId, SectionData>>,
     nowIso?: string,
     opts: {
       writeAncestor?: boolean;
+      /** 提供即把祖先副本写成**密文**（密码仅本次内存使用；issue #107） */
+      ancestorPassword?: string;
       remoteSnapshotId?: string;
       /** 保留当前祖先副本与 ancestorId（缺省 false = 既有行为逐字不变） */
       preserveAncestor?: boolean;
@@ -1774,24 +1811,27 @@ export class SyncEngine {
     const preserveAncestor = opts.preserveAncestor === true;
     const writesAncestorCopy = !preserveAncestor && this.localSnapshotsDir !== undefined && opts.writeAncestor !== false;
     // 1) 写本地祖先副本（如有 localSnapshotsDir）。
-    //    writeAncestor=false（加密快照基线）：不写明文祖先副本（磁盘不落密钥；
-    //    基线仅用 sync-state 的明文 hash，供 hasLocalChanges 比较）。
+    //    ancestorPassword 提供 → 落**密文**祖先副本（issue #107：加密通道也能做三方合并）；
+    //    否则落明文散文件布局（既有行为逐字不变）。
     if (writesAncestorCopy) {
-      const snapshot: SyncSnapshot = {
-        id: snapshotId,
-        createdAt: ts,
-        manifest: {
-          schemaVersion: CURRENT_SCHEMA_VERSION,
-          dshVersion: this.ctx.dshVersion,
-          platform: this.ctx.platform as Platform,
-          sectionIds: Object.keys(sections) as SectionId[],
-          containsSecrets: false,
-          // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
-          transport: this.transport.type,
-        },
-        sections,
+      const ancestorPassword = opts.ancestorPassword;
+      const encryptedAncestor = ancestorPassword !== undefined && ancestorPassword !== '';
+      const manifest: SyncSnapshot['manifest'] = {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        dshVersion: this.ctx.dshVersion,
+        platform: this.ctx.platform as Platform,
+        sectionIds: Object.keys(sections) as SectionId[],
+        containsSecrets: false,
+        // 记录触发通道（git/webdav），供同步历史展示「由哪个通道触发」
+        transport: this.transport.type,
+        ...(encryptedAncestor ? { encrypted: true } : {}),
       };
-      await writeAncestor(this.localSnapshotsDir, snapshot, this.fsx);
+      if (encryptedAncestor) {
+        const encryptedSections = await encryptSectionsPayload(sections, ancestorPassword);
+        await writeEncryptedAncestor(this.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections: encryptedSections }, this.fsx);
+      } else {
+        await writeAncestor(this.localSnapshotsDir, { id: snapshotId, createdAt: ts, manifest, sections }, this.fsx);
+      }
     }
     // 2) 更新 sync-state：远端指针 + 本地祖先目录名 + 每分区 hash/updatedAt + lastSyncAt + transport
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
@@ -1850,6 +1890,11 @@ export class SyncEngine {
      * 与 recordBaseline 同语义，随本次成功的基线写入**同一次落盘**（原子，不留中间态）。
      */
     pendingMerge?: PendingMerge | null;
+    /**
+     * issue #107：本次基线对应的远端快照是加密快照时传解密密码 → 祖先副本也落**密文**。
+     * 缺省 = 明文祖先副本（既有行为逐字不变）。密码仅本进程内存使用。
+     */
+    ancestorPassword?: string;
   } = {}): Promise<ApplyReport> {
     if (!this.importer) {
       throw new Error(this.msg('sync.applyMergePlanNoImporter'));
@@ -1959,6 +2004,7 @@ export class SyncEngine {
         remoteSnapshotId: opts.remoteSnapshotId ?? this.lastMergedRemoteSnapshotId ?? '',
         ...(opts.preserveAncestor !== undefined ? { preserveAncestor: opts.preserveAncestor } : {}),
         ...(opts.pendingMerge !== undefined ? { pendingMerge: opts.pendingMerge } : {}),
+        ...(opts.ancestorPassword !== undefined ? { ancestorPassword: opts.ancestorPassword } : {}),
       });
       return {
         ok: true,

@@ -80,7 +80,7 @@ export function MergePreviewView({
   const rows = mergeSectionRows(preview)
   const summary = mergeSummaryItems(preview)
   const counts = mergeDecisionCounts(preview, draft)
-  const applicable = hasApplicableSections(preview)
+  const applicable = hasApplicableSections(preview, draft)
   const anyMerged = rows.some((row) => row.canUseMerged)
   const resultView = mergeResultView(result)
 

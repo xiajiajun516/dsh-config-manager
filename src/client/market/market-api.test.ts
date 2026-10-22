@@ -181,12 +181,13 @@ test('M-07 错误映射：4xx 携带 error → ConfigManagerApiError', async () 
   });
 });
 
-test('M-08 服务未挂载：404（非 JSON 体）→ ConfigManagerApiError 提示插件未加载', async () => {
+test('M-08 接口路径未命中：404（非 JSON 体）→ 提示请求前缀而不是「插件未挂载」（issue #108）', async () => {
   installFetchMock(() => new Response('Not Found', { status: 404 }));
   const api = new MarketApi(zhUiT);
   await assert.rejects(api.status(), (err: unknown) => {
     assert.ok(err instanceof ConfigManagerApiError);
-    assert.match(err.message, /未挂载/);
+    assert.match(err.message, /接口路径未命中/);
+    assert.doesNotMatch(err.message, /未挂载/);
     return true;
   });
 });

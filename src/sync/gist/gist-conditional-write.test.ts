@@ -1,7 +1,8 @@
 /**
  * GitHub Gist 通道：本轮借鉴项的**针对性**单测（不重复 gist-transport.test.ts 的既有契约）。
- *  - ① 条件写：**强** ETag → PATCH 带 if-match；**弱** ETag（W/…）→ PATCH 不带 if-match（仍要写）；
- *    PATCH 回 412 → conflict；
+ *  - ① **不做条件写**（issue #110，2026-10 实测）：`PATCH /gists/{id}` 对任何条件请求头都回 400
+ *    （`Conditional request headers are not allowed in unsafe requests unless supported by the endpoint`），
+ *    与 ETag 强弱无关 ⇒ PATCH 恒不带 if-match（upload 与 delete 两条路径都要钉住）；
  *  - ② 探针：GET /user 证明令牌有效 → 读 gist → snapshotCount + 非本前缀文件数进 hint（只读，零 PATCH）。
  */
 import test from 'node:test';
@@ -9,7 +10,6 @@ import assert from 'node:assert/strict';
 
 import { GistTransport, GistTransportError, GIST_DEFAULT_FILE_PREFIX } from './gist-transport.ts';
 import type { GistRequestFn, GistResponse, GistTransportOptions } from './gist-transport.ts';
-import { SyncTransportError } from '../transport.ts';
 import type { SyncSnapshot } from '../transport.ts';
 import { gistMsg } from './messages.ts';
 
@@ -18,6 +18,8 @@ const TOKEN = 'ghp_ExampleTokenValueThatMustNeverLeak123456';
 const API = 'https://api.github.com';
 const GIST_URL = API + '/gists/' + GIST_ID;
 const INDEX_FILE = GIST_DEFAULT_FILE_PREFIX + '-index.json';
+/** 任何条件请求头（出现即说明破坏了 gist 端点的约束） */
+const CONDITIONAL_HEADERS = ['if-match', 'if-none-match', 'if-modified-since', 'if-unmodified-since'];
 
 interface GistCall { method: string; url: string; headers: Record<string, string>; body?: string }
 
@@ -67,13 +69,19 @@ function sampleSnapshot(overrides: Partial<SyncSnapshot> = {}): SyncSnapshot {
 
 const patches = (calls: GistCall[]): GistCall[] => calls.filter((c) => c.method === 'PATCH');
 
-/* ---------------- ① 条件写 ---------------- */
+/** 断言：本次 PATCH 一个条件头都没带（回归 issue #110） */
+function assertNoConditionalHeaders(call: GistCall | undefined, hint: string): void {
+  assert.ok(call !== undefined, hint + '：必须发生 PATCH');
+  const present = CONDITIONAL_HEADERS.filter((h) => call.headers[h] !== undefined);
+  assert.deepEqual(present, [], hint + '：gist 端点拒绝任何条件请求头，带了就会 400');
+}
 
-test('条件写①：强 ETag → PATCH 带 if-match 钉住读到的那一版', async () => {
+/* ---------------- ① 不做条件写 ---------------- */
+
+test('不做条件写①：强 ETag 也不得注入 if-match（issue #110 回归，带条件头 GitHub 回 400）', async () => {
   const calls: GistCall[] = [];
-  const STRONG = '"strong-etag-1"';
   const t = new GistTransport(makeOptions(record(calls, (m) => {
-    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files: {} }), { etag: STRONG });
+    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files: {} }), { etag: '"strong-etag-1"' });
     if (m.method === 'PATCH' && m.url === GIST_URL) return res(200, '{}');
     return res(500, 'unexpected ' + m.method + ' ' + m.url);
   })));
@@ -82,10 +90,10 @@ test('条件写①：强 ETag → PATCH 带 if-match 钉住读到的那一版', 
 
   const patched = patches(calls);
   assert.equal(patched.length, 1, '必须发生且只发生一次 PATCH');
-  assert.equal(patched[0]!.headers['if-match'], STRONG, '强 ETag 必须用于 if-match');
+  assertNoConditionalHeaders(patched[0], '强 ETag');
 });
 
-test('条件写①：弱 ETag（W/…）→ PATCH **不带** if-match，但写入照常发生', async () => {
+test('不做条件写①：弱 ETag（W/…）同样不带 if-match，写入照常发生', async () => {
   const calls: GistCall[] = [];
   const t = new GistTransport(makeOptions(record(calls, (m) => {
     if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files: {} }), { etag: 'W/"weak-etag-1"' });
@@ -96,34 +104,11 @@ test('条件写①：弱 ETag（W/…）→ PATCH **不带** if-match，但写�
   await t.upload(sampleSnapshot());
 
   const patched = patches(calls);
-  assert.equal(patched.length, 1, '弱 ETag 不得让写入被跳过');
-  assert.equal(patched[0]!.headers['if-match'], undefined,
-    'HTTP 禁止用弱 ETag 做 If-Match（GitHub 会回 400）⇒ 必须退化为无条件写');
+  assert.equal(patched.length, 1, '弱/强 ETag 都不影响写入发生');
+  assertNoConditionalHeaders(patched[0], '弱 ETag');
 });
 
-test('条件写①：PATCH 回 412 → 抛 conflict，文案来自字典键 sync.gist.concurrentWrite', async () => {
-  const calls: GistCall[] = [];
-  const t = new GistTransport(makeOptions(record(calls, (m) => {
-    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files: {} }), { etag: '"strong-etag-1"' });
-    if (m.method === 'PATCH' && m.url === GIST_URL) return res(412, 'precondition failed');
-    return res(500, 'unexpected ' + m.method + ' ' + m.url);
-  })));
-
-  await assert.rejects(
-    () => t.upload(sampleSnapshot()),
-    (err: unknown) => {
-      assert.ok(err instanceof GistTransportError);
-      assert.ok(err instanceof SyncTransportError);
-      assert.equal(err.kind, 'conflict');
-      assert.equal(err.retryable, false);
-      assert.equal(err.status, 412);
-      assert.equal(err.message, gistMsg('sync.gist.concurrentWrite', { status: '412' }));
-      return true;
-    },
-  );
-});
-
-test('条件写①（删除路径）：强 ETag → delete 的 PATCH 带 if-match；弱 ETag → 不带', async () => {
+test('不做条件写①（删除路径）：强 ETag 下 delete 的 PATCH 也不带 if-match', async () => {
   const snapshotFile = GIST_DEFAULT_FILE_PREFIX + '-snap-001.json';
   const meta = {
     id: 'snap-001',
@@ -132,23 +117,18 @@ test('条件写①（删除路径）：强 ETag → delete 的 PATCH 带 if-matc
     manifest: { schemaVersion: 1, dshVersion: '1', platform: 'win32', sectionIds: [], containsSecrets: false },
   };
   const files = { [INDEX_FILE]: { content: JSON.stringify([meta]) }, [snapshotFile]: { content: '{}' } };
+  const calls: GistCall[] = [];
+  const t = new GistTransport(makeOptions(record(calls, (m) => {
+    if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files }), { etag: '"strong-del-1"' });
+    if (m.method === 'PATCH' && m.url === GIST_URL) return res(200, '{}');
+    return res(500, 'unexpected ' + m.method + ' ' + m.url);
+  })));
 
-  const run = async (etag: string): Promise<GistCall> => {
-    const calls: GistCall[] = [];
-    const t = new GistTransport(makeOptions(record(calls, (m) => {
-      if (m.method === 'GET' && m.url === GIST_URL) return res(200, JSON.stringify({ files }), { etag });
-      if (m.method === 'PATCH' && m.url === GIST_URL) return res(200, '{}');
-      return res(500, 'unexpected ' + m.method + ' ' + m.url);
-    })));
-    await t.delete('snap-001');
-    const patched = calls.filter((c) => c.method === 'PATCH');
-    assert.equal(patched.length, 1);
-    return patched[0]!;
-  };
+  await t.delete('snap-001');
 
-  assert.equal((await run('"strong-del-1"')).headers['if-match'], '"strong-del-1"', '删除路径的 PATCH 同样是条件写');
-  assert.equal((await run('W/"weak-del-1"')).headers['if-match'], undefined, '弱 ETag 不得用于 if-match');
-
+  const patched = patches(calls);
+  assert.equal(patched.length, 1);
+  assertNoConditionalHeaders(patched[0], '删除路径');
 });
 
 /* ---------------- ② 探针 ---------------- */

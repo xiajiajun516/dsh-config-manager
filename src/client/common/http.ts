@@ -37,6 +37,7 @@
  * `src/client/bundle-selfcontained.test.ts`），只依赖 `src/ui/i18n.ts` 的类型。
  */
 import type { UiT } from '../../ui/i18n.ts';
+import { API_BASE } from './routes.ts';
 
 /** 普通请求超时（ms）：纯元数据读写。 */
 export const REQUEST_TIMEOUT_MS = 30_000;
@@ -107,7 +108,8 @@ export class ConfigManagerApiError extends Error {
  * 解析 JSON 响应；非 2xx 时抛出带路由 error 消息的 ConfigManagerApiError。
  *
  * 错误口径（唯一实现，7 个 api 文件共用）：
- *  1. 响应体不是 JSON：404 → 「插件未挂载」；其余 → `error.httpInvalidJson`；
+ *  1. 响应体不是 JSON：404 → 「接口路径未命中」（issue #108：网关对未知路径回 HTML 404，
+ *     常见于反代丢了子路径前缀，不能再说成「插件未加载」）；其余 → `error.httpInvalidJson`；
  *  2. 非 2xx：`{message}` → `{error}` → 404「未挂载」→ `HTTP <status>`。
  */
 export async function readJson<T>(response: Response, t: UiT): Promise<T> {
@@ -116,7 +118,11 @@ export async function readJson<T>(response: Response, t: UiT): Promise<T> {
   try {
     body = await response.json();
   } catch {
-    if (response.status === 404) throw new ConfigManagerApiError(notMountedMessage);
+    // 404 + 非 JSON：多数是网关/反代对未知路径的兜底页（前缀不匹配），
+    // 与「插件没装」是两回事（issue #108）—— 文案必须给出实际请求前缀，便于自查代理配置。
+    if (response.status === 404) {
+      throw new ConfigManagerApiError(t('error.apiPathMissed', { status: '404', base: API_BASE }), 404);
+    }
     throw new ConfigManagerApiError(t('error.httpInvalidJson', { status: String(response.status) }));
   }
   if (!response.ok) {

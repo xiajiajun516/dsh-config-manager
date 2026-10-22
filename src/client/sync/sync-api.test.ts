@@ -118,13 +118,15 @@ test('S-04 错误映射：4xx 携带 error → ConfigManagerApiError', async () 
   });
 });
 
-test('S-05 服务未挂载：404（非 JSON 体）→ ConfigManagerApiError 提示插件未加载', async () => {
-  // 路由不存在时宿主返回 404 但无 JSON error → readJson 兜底为「插件未挂载」提示
+test('S-05 接口路径未命中：404（非 JSON 体）→ 提示请求前缀而不是「插件未挂载」（issue #108）', async () => {
+  // 网关对未知路径回 HTML 404：这是「前缀没转发到插件」，不是「插件没装」
   installFetchMock(() => new Response('Not Found', { status: 404 }));
   const api = new SyncApi(zhUiT);
   await assert.rejects(api.status(), (err: unknown) => {
     assert.ok(err instanceof ConfigManagerApiError);
-    assert.match(err.message, /未挂载/);
+    assert.match(err.message, /接口路径未命中/);
+    assert.match(err.message, /\/api\/dsh-config-manager/);
+    assert.doesNotMatch(err.message, /未挂载/);
     return true;
   });
 });

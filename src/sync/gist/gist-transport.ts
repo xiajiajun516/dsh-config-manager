@@ -56,13 +56,11 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const REDACTED = '[REDACTED]';
 
 /**
- * 条件写头（cloud-sync 借鉴项 ①）：拿到**强** ETag 才发 If-Match。
- * GitHub 对 gist 返回弱 ETag（W/"…"），HTTP 禁止用它做 If-Match（GitHub 会回 400）——
- * 这里已经由 readGist 过滤掉弱 ETag，无 ETag 即返回空对象 = 退化为无条件 PATCH（既有行为不变）。
+ * **gist 通道不做条件写**（issue #110，2026-10 实测）：`PATCH /gists/{id}` 对**任何**条件请求头
+ * 都直接回 400 —— `Conditional request headers are not allowed in unsafe requests unless supported
+ * by the endpoint`，与 ETag 强弱无关（同一请求去掉 If-Match 即 200）。故本通道的 PATCH 一律不带
+ * `If-Match`，也**没有**写前并发保护；要并发保护请用 git / webdav / s3 通道（那里的索引写是条件写）。
  */
-function conditionalPatchHeaders(etag: string | undefined): Record<string, string> {
-  return etag === undefined ? {} : { 'if-match': etag };
-}
 
 /** 请求选项：headers / body / 覆盖默认超时（ms；0 = 不超时） */
 export interface GistRequestOptions {
@@ -238,7 +236,7 @@ export class GistTransport implements SyncTransport {
     this.assertSafeId(snapshot.id);
     const token = await this.tokenOnce();
     const meta = computeSnapshotMeta(snapshot);
-    const { files, etag } = await this.readGist(token);
+    const { files } = await this.readGist(token);
     const idxRaw = await this.readFileText(files, this.indexFileName, token);
     const idxBefore = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
     const existing = idxBefore.find((m) => m.id === snapshot.id);
@@ -254,8 +252,7 @@ export class GistTransport implements SyncTransport {
         [this.indexFileName]: { content: JSON.stringify(merged) },
       },
     });
-    const res = await this.send('PATCH', this.gistUrl(), token, { body, headers: conditionalPatchHeaders(etag) });
-    if (res.status === 412) throw this.concurrentWrite(res.status);
+    const res = await this.send('PATCH', this.gistUrl(), token, { body });
     if (!res.ok) {
       throw new GistTransportError(
         await this.failText('PATCH', this.gistUrl(), res, token),
@@ -294,7 +291,7 @@ export class GistTransport implements SyncTransport {
   async delete(id: string): Promise<void> {
     this.assertSafeId(id);
     const token = await this.tokenOnce();
-    const { files, etag } = await this.readGist(token);
+    const { files } = await this.readGist(token);
     const idxRaw = await this.readFileText(files, this.indexFileName, token);
     const idx = idxRaw === null ? [] : this.parseIndex(idxRaw, this.gistUrl(), token);
     const fileName = this.snapshotFileName(id);
@@ -307,8 +304,7 @@ export class GistTransport implements SyncTransport {
         [this.indexFileName]: { content: JSON.stringify(remaining) },
       },
     });
-    const res = await this.send('PATCH', this.gistUrl(), token, { body, headers: conditionalPatchHeaders(etag) });
-    if (res.status === 412) throw this.concurrentWrite(res.status);
+    const res = await this.send('PATCH', this.gistUrl(), token, { body });
     if (!res.ok) {
       throw new GistTransportError(
         await this.failText('PATCH', this.gistUrl(), res, token),
@@ -318,14 +314,6 @@ export class GistTransport implements SyncTransport {
   }
 
   /* ---------------- 内部实现 ---------------- */
-
-  /** 条件写失败（HTTP 412）：远端 gist 在本次读取之后被别人改过 —— 中止写入让用户重跑。 */
-  private concurrentWrite(status: number): GistTransportError {
-    return new GistTransportError(
-      this.o.msg('sync.gist.concurrentWrite', { status: String(status) }),
-      { kind: 'conflict', retryable: false, status },
-    );
-  }
 
   /**
    * 连通性探针（cloud-sync 借鉴项 ②③）：令牌有效性（GET /user）→ gist 可读 → 快照数 →
@@ -395,7 +383,7 @@ export class GistTransport implements SyncTransport {
         'content-type': 'application/json',
         'X-GitHub-Api-Version': GITHUB_API_VERSION,
         ...(token !== '' ? { authorization: 'Bearer ' + token } : {}),
-        // 条件写的 if-match 从这里注入（cloud-sync 借鉴项 ①）
+        // 附加请求头（本通道当前不注入条件头：gist 端点拒绝任何条件请求头，见文首说明）
         ...(opts.headers ?? {}),
       };
     try {
@@ -427,11 +415,10 @@ export class GistTransport implements SyncTransport {
   }
 
   /**
-   * 读 gist 全量文件 + 响应 ETag（ETag 供**条件写**用，cloud-sync 借鉴项 ①）。
-   * GitHub 对 gist 返回的是**弱 ETag**（W/"…"）—— HTTP 禁止用它做 If-Match（GitHub 会回 400），
-   * 因此弱 ETag 一律不采用（返回 undefined = 退化为无条件写），由 conditionalPatchHeaders 统一判定。
+   * 读 gist 全量文件。响应 ETag **不用**：gist 的 PATCH 端点不接受任何条件请求头（issue #110 实测），
+   * 读到强/弱 ETag 都无处可用，故这里不再解析。
    */
-  private async readGist(token: string): Promise<{ files: Record<string, GistFileEntry>; etag?: string }> {
+  private async readGist(token: string): Promise<{ files: Record<string, GistFileEntry> }> {
     const url = this.gistUrl();
     const res = await this.send('GET', url, token);
     if (res.status === 404) {
@@ -460,12 +447,7 @@ export class GistTransport implements SyncTransport {
         { kind: 'protocol', retryable: false },
       );
     }
-    const rawEtag = res.headers?.['etag'];
-    const etag = typeof rawEtag === 'string' && rawEtag !== '' && !rawEtag.startsWith('W/') ? rawEtag : undefined;
-    return {
-      files: files as Record<string, GistFileEntry>,
-      ...(etag !== undefined ? { etag } : {}),
-    };
+    return { files: files as Record<string, GistFileEntry> };
   }
 
   /**

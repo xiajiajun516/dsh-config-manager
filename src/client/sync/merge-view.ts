@@ -266,7 +266,7 @@ export interface MergeDecisionCounts {
   undecided: number
   /** 待裁决分区里的冲突条目总数 */
   conflictItems: number
-  /** 本次**会被应用**的分区数（有变化且不需裁决） */
+  /** 本次**会被应用**的分区数（有变化且不需裁决，**或**已裁决且裁决会写盘 —— issue #106） */
   applicable: number
 }
 
@@ -280,26 +280,53 @@ export function mergeDecisionCounts(
   let conflictItems = 0
   let applicable = 0
   for (const row of mergeSectionRows(preview)) {
+    const action = draft[row.resolutionId]
     if (!row.needsDecision) {
       // 无变化的分区不会有任何写入；其余（自动应用 / 显式结论）都会落盘
-      if (row.decision !== 'skip') applicable++
+      // 例外：批量「全部采用本机 / 远端」会给 skip 分区也写草稿，此时它同样会落盘
+      if (row.decision !== 'skip' || decisionWillApply(row, action)) applicable++
       continue
     }
     needsDecision++
     conflictItems += row.conflicts.length > 0 ? row.conflicts.length : row.conflictCount
-    if (draft[row.resolutionId] !== undefined) decided++
+    if (action !== undefined) {
+      decided++
+      // 已裁决且裁决会写盘 → 本次真的会应用它（issue #106：否则「0 可自动应用 + 全冲突」时数字永远是 0）
+      if (decisionWillApply(row, action)) applicable++
+    }
   }
   return { needsDecision, decided, undecided: needsDecision - decided, conflictItems, applicable }
 }
 
 /**
+ * 单条裁决是否**真的会写盘**（issue #106）。
+ *
+ * - useMerged：只有存在可用自动合并结果（decision === 'merge'）时才有内容可写；
+ * - useRemote / keepLocal：都会写盘，选哪侧不影响「会写」这件事。
+ */
+export function decisionWillApply(row: MergeSectionRow, action: MergeResolutionAction | undefined): boolean {
+  if (action === undefined) return false
+  if (action === 'useMerged') return row.canUseMerged
+  return true
+}
+
+/**
  * 本次是否存在**可应用的分区**（决定「执行合并」主按钮是否可用）。
  *
- * 判据是预览本身而不是草稿：引擎对未点名的分区按自己的结论应用，所以只要有任一
- * 非「无变化」、非「待裁决」的分区，执行合并就真的会写东西；全部无变化时按钮必须禁用。
+ * 判据 = 预览自身会写的分区 **或** 已裁决且裁决会写盘的分区（issue #106）：
+ * 引擎对未点名的分区按自己的结论应用（skip 不动、conflict 进 pendingConflicts），
+ * 但只要用户已经逐条裁决了冲突，这次执行就真的会写东西 —— 只看预览会让
+ * 「0 可自动应用 + 全是冲突」的合并**永久禁用**，裁决完也点不动。
  */
-export function hasApplicableSections(preview: Pick<MergePreviewResponse, 'sections'> | null | undefined): boolean {
-  return mergeSectionRows(preview).some((row) => row.decision !== 'skip' && row.decision !== 'conflict')
+export function hasApplicableSections(
+  preview: Pick<MergePreviewResponse, 'sections'> | null | undefined,
+  draft: MergeResolutionDraft = {},
+): boolean {
+  return mergeSectionRows(preview).some((row) => (
+    row.needsDecision
+      ? decisionWillApply(row, draft[row.resolutionId])
+      : row.decision !== 'skip' || decisionWillApply(row, draft[row.resolutionId])
+  ))
 }
 
 /** 合并执行结果 → 渲染视图。 */

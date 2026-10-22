@@ -94,6 +94,7 @@ export const uiZh = {
   'report.action.done': '完成',
   // 错误
   'error.notMounted': 'config-manager 服务未挂载（插件未加载）：请确认 profile 中已安装 dsh-config-manager 并重启 DSH',
+  'error.apiPathMissed': '接口路径未命中（HTTP {status}）：请求前缀为 {base}，但该路径没有返回 JSON —— 若你经反向代理挂在子路径下，请检查代理是否转发了这个前缀（issue #108）',
   'error.httpInvalidJson': 'HTTP {status}: 无效的 JSON 响应',
   'error.fallback': '操作失败',
   'error.requestTimeout': '请求超时（{seconds} 秒）：未在时限内收到宿主响应，请重试',
@@ -671,6 +672,7 @@ export const uiEn: Record<UiTextKey, string> = {
   'report.unit.notes': 'note(s)',
   'report.action.done': 'Done',
   'error.notMounted': 'config-manager service is not mounted (plugin not loaded): make sure dsh-config-manager is installed in the profile and restart DSH',
+  'error.apiPathMissed': 'API path not matched (HTTP {status}): the request prefix is {base} but that path did not return JSON — if you serve DSH under a reverse-proxy sub-path, check that this prefix is proxied (issue #108)',
   'error.httpInvalidJson': 'HTTP {status}: invalid JSON response',
   'error.fallback': 'Operation failed',
   'error.requestTimeout': 'Request timed out ({seconds}s): the host did not respond in time, please retry',

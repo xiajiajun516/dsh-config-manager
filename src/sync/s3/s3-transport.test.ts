@@ -291,7 +291,8 @@ test('阿里云 OSS 变体：请求头走 OSS4（x-oss-date / x-oss-content-sha2
   assert.equal(call.headers['x-oss-date'], '20261005T014910Z');
   assert.equal(call.headers['x-oss-content-sha256'], 'UNSIGNED-PAYLOAD');
   assert.equal(call.headers['x-amz-date'], undefined);
-  assert.match(call.headers['authorization'] ?? '', /^OSS4-HMAC-SHA256 Credential=.*\/cn-hangzhou\/oss\/aliyun_v4_request, AdditionalHeaders=, Signature=[a-f0-9]{64}$/);
+  // 官方 SDK 格式：无空格、空 AdditionalHeaders 省略（issue #109：写成 ", AdditionalHeaders=, Signature=" 会被 OSS 拒绝）
+  assert.match(call.headers['authorization'] ?? '', /^OSS4-HMAC-SHA256 Credential=.*\/cn-hangzhou\/oss\/aliyun_v4_request,Signature=[a-f0-9]{64}$/);
 });
 
 test('密钥纪律：错误消息里的响应体被脱敏（密钥绝不出现），且目标对象不含任何密钥', async () => {

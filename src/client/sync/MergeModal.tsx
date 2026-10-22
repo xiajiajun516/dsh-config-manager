@@ -160,7 +160,8 @@ export function MergeModal({
 
   const rows = mergeSectionRows(preview)
   const counts = mergeDecisionCounts(preview, draft)
-  const applicable = hasApplicableSections(preview)
+  // issue #106：门控必须把裁决草稿算进来，否则「0 可自动应用 + 全是冲突」时裁决完也点不动
+  const applicable = hasApplicableSections(preview, draft)
   const blocked = busy || loading || preview === null || rows.length === 0
 
   return (

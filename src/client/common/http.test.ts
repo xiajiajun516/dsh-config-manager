@@ -22,6 +22,7 @@ import {
   timeoutMessage,
 } from './http.ts';
 import { zhUiT } from '../../ui/i18n.ts';
+import { API_BASE } from './routes.ts';
 
 interface FetchCall {
   url: string;
@@ -107,9 +108,19 @@ test('http-03 readJson：{ message } 优先于 { error }（lifecycle 兼容口�
   );
 });
 
-test('http-04 readJson：404 且响应体不是 JSON → 「插件未挂载」', async () => {
+test('http-04 readJson：404 且响应体不是 JSON → 「接口路径未命中」并带上请求前缀（issue #108）', async () => {
   await assert.rejects(readJson(new Response('Not Found', { status: 404 }), zhUiT), (err: unknown) => {
     assert.ok(err instanceof ConfigManagerApiError);
+    // 不能再把网关 404 说成「插件未加载」：那会把反代配置错误伪装成部署问题
+    assert.equal((err as Error).message, zhUiT('error.apiPathMissed', { status: '404', base: API_BASE }));
+    assert.equal((err as ConfigManagerApiError).status, 404);
+    assert.doesNotMatch((err as Error).message, /未挂载/);
+    return true;
+  });
+});
+
+test('http-04b readJson：404 但宿主回了 JSON（无 message/error）→ 仍是「插件未挂载」', async () => {
+  await assert.rejects(readJson(jsonResponse(404, { ok: false }), zhUiT), (err: unknown) => {
     assert.match((err as Error).message, /未挂载/);
     return true;
   });

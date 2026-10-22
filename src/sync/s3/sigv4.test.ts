@@ -156,7 +156,10 @@ test('OSS4 方言：algorithm/头名/UNSIGNED-PAYLOAD/AdditionalHeaders/scope �
   assert.equal(out.headers['x-oss-content-sha256'], UNSIGNED_PAYLOAD, 'OSS4 只支持 UNSIGNED-PAYLOAD');
   assert.equal(out.headers['x-amz-date'], undefined, 'OSS4 不得出现 AWS 头名');
   assert.equal(out.credentialScope, '20261005/cn-hangzhou/oss/aliyun_v4_request');
-  assert.match(out.authorization, /^OSS4-HMAC-SHA256 Credential=LTAIEXAMPLE\/20261005\/cn-hangzhou\/oss\/aliyun_v4_request, AdditionalHeaders=, Signature=[a-f0-9]{64}$/);
+  // 官方 Go/PHP SDK 的格式：逗号后无空格，AdditionalHeaders 为空时整段省略（issue #109）
+  assert.match(out.authorization, /^OSS4-HMAC-SHA256 Credential=LTAIEXAMPLE\/20261005\/cn-hangzhou\/oss\/aliyun_v4_request,Signature=[a-f0-9]{64}$/);
+  assert.equal(out.authorization.includes(', '), false, 'OSS4 授权头不得有逗号后的空格');
+  assert.equal(out.authorization.includes('AdditionalHeaders='), false, '没有附加头时不得写空的 AdditionalHeaders=');
   assert.equal(out.stringToSign.split('\n')[0], 'OSS4-HMAC-SHA256');
   // 规范化头只含 content-type 与 x-oss-*（host 默认不参与）
   assert.equal(out.canonicalRequest.split('\n')[3], 'content-type:application/json');

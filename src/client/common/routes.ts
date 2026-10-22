@@ -12,11 +12,45 @@
  * `route-parity.test.ts` 会点名缺失的那条。宿主 **prefix 路由**（recovery / lifecycle，
  * 由宿主内部按 path 分发，无逐条字面量）在该测试里单独登记。
  *
- * 边界：纯字符串模块，无任何 import（client bundle 自包含）。
+ * 边界：无任何 import（client bundle 自包含）。浏览器下按 `document.baseURI` 解析前缀
+ * （issue #108：反代子路径），Node / 无 document 环境回落根路径默认常量。
  */
 
-/** API 前缀（与宿主 `src/index.ts` 的 `API` 常量完全一致）。 */
-export const API_BASE = '/api/dsh-config-manager';
+/** API 前缀的**默认**位置（同源根路径；与宿主 `src/index.ts` 的 `API` 常量完全一致）。 */
+const DEFAULT_API_BASE = '/api/dsh-config-manager';
+
+/**
+ * 解析 API 前缀（issue #108）：**不能再写死根路径**。
+ *
+ * 反代把 DSH 挂在子路径下（如 `https://gw.example.com/app/dsh/`）时，浏览器的
+ * `location.origin + '/api/dsh-config-manager'` 会丢掉前缀 → 网关回 HTML 404 →
+ * 界面误报「插件未挂载」。这里改为按 `document.baseURI` 的**目录**解析：
+ *
+ *   /                      → /api/dsh-config-manager
+ *   /app/dsh              → /app/dsh/api/dsh-config-manager
+ *   /app/dsh/             → /app/dsh/api/dsh-config-manager
+ *   /app/dsh/index.html   → /app/dsh/api/dsh-config-manager
+ *
+ * Node（单测 / 离线 CLI / 无 document 环境）一律回落 `DEFAULT_API_BASE`，与宿主常量逐字相同。
+ */
+export function resolveApiBase(baseUri?: string): string {
+  if (typeof baseUri !== 'string' || baseUri === '') return DEFAULT_API_BASE;
+  let pathname: string;
+  try {
+    // 浏览器给的 baseURI 是绝对 URL；解析不了（相对/畸形）就回落默认，绝不猜前缀
+    pathname = new URL(baseUri).pathname;
+  } catch {
+    return DEFAULT_API_BASE;
+  }
+  if (!pathname.startsWith('/')) return DEFAULT_API_BASE;
+  // 目录化：去掉 index.html，补尾斜杠（`/app/dsh` 与 `/app/dsh/` 等价）
+  const dir = pathname.endsWith('/index.html') ? pathname.slice(0, -'index.html'.length) : pathname;
+  const prefix = dir.endsWith('/') ? dir : dir + '/';
+  return prefix === '/' ? DEFAULT_API_BASE : `${prefix}api/dsh-config-manager`;
+}
+
+/** API 前缀：按当前页面的 base 解析（无 document 时即默认根路径）。 */
+export const API_BASE = resolveApiBase(typeof document === 'undefined' ? undefined : document.baseURI);
 
 /** 主 API 路由族（导出 / 导入 / 快照 / 档案 / 备份文件 / 咨询 / 弹窗偏好）。 */
 export const CONFIG_MANAGER_API = {

@@ -32,6 +32,29 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.80] - 2026-10-22
+
+> **本版主题**：**这一版修掉五处「看着像你不会用、其实是它自己出错」的地方：加密同步不再每轮逼你手动裁决、冲突拍完板就能执行合并、反向代理挂在子路径下不再误报「插件未安装」，阿里云 OSS 与 gist 两条同步通道也终于能真正连上**
+>
+> **Theme**: **This release fixes five places that looked like user error but were ours: encrypted sync no longer demands a manual decision every round, a fully-decided merge can be applied, a reverse-proxied sub-path deployment no longer reports the plugin as missing, and both Aliyun OSS and gist channels now actually connect**
+
+### 🐛 修复 · Fixed
+
+- **加密同步不再每轮都要求你手动裁决**：开启加密快照后也会留下用于三方比较的共同基线，密码正确时能自动合并的改动会自己合上，不再把两边都没动过的分区也报成冲突；密码缺失或不对时退回两边比较，不会因此中断同步。（issue #107）
+  **Encrypted sync no longer asks you to decide every single round**: encrypted snapshots now keep a common baseline too, so with the right password the automatically mergeable changes just merge and untouched sections are no longer reported as conflicts; a missing or wrong password falls back to a two-way comparison instead of breaking the sync.
+
+- **冲突全部裁决完就能执行合并**：以前「没有可自动合并的分区、全是冲突」时执行按钮一直灰着，现在逐个拍板后就能点；「已裁决」与「可自动应用」分开表述，不再互相冒充。（issue #106）
+  **A merge can be applied once every conflict is decided**: the apply button used to stay disabled whenever nothing could be merged automatically and everything was a conflict; now it enables as soon as you have decided each item, and the summary tells decided items and auto-applicable items apart.
+
+- **反向代理挂在子路径下也能正常用**：面板的接口地址改为跟随页面实际所在路径，`/app/dsh/` 这类前缀不再丢失；路径没命中时提示「接口路径未命中」并给出实际请求前缀，不再误报「插件未安装」。（issue #108）
+  **Works behind a reverse proxy on a sub-path**: the panel's API base now follows the path the page is actually served from, so an `/app/dsh/`-style prefix is no longer dropped; when a path does not hit the API it says so and shows the prefix it used instead of claiming the plugin is not installed.
+
+- **阿里云 OSS 同步能连上了**：授权头改为按阿里云官方格式逐字组装，不再带多余空格与空的附加头段，填对密钥后不会再被回 «Authorization header value is empty»。（issue #109）
+  **Aliyun OSS sync connects**: the authorization header is now built exactly as Aliyun's own SDKs do it (no stray spaces, no empty additional-headers segment), so a correct key no longer comes back as «Authorization header value is empty».
+
+- **gist 通道不再被拒**：GitHub 的 gist 接口不接受任何条件请求头，上传与删除都不再携带，之前每次推送都失败的情况消失（代价是 gist 通道没有并发写保护，多设备同时写请改用 git / WebDAV / S3）。（issue #110）
+  **The gist channel is no longer rejected**: GitHub's gist endpoint refuses conditional request headers, so uploads and deletes no longer send them and pushes stop failing (the trade-off is no concurrent-write protection on gist — use git, WebDAV or S3 if several devices write at once).
+
 ## [0.1.79] - 2026-10-22
 
 > **本版主题**：**这一版让「回退」和「同步」都变得可以放心依赖 —— 回退不再误伤别的对话改过的文件、也不再改写换行符与编码；同步能一键自检、两台设备同时写不再互相覆盖、改完就同步；从 Claude Code 迁移会连同项目级与插件里的东西一起带过来，导出时每个分区都能展开逐条勾选**
