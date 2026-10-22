@@ -9,7 +9,7 @@
  *     profile 层 cordis.patch.yml）的 blob 写回 $DSH_HOME；快照时不存在、现已出现
  *     的文件删除（restore = 还原到快照那一刻的状态，含移除导入期间新增激活行）；
  *  2. pre-restore 双保险：任何覆盖/删除前，把当前文件复制到
- *     <snapshotDir>/pre-restore/（可人工反悔）；
+ *     <snapshotDir>/pre-restore/<attemptDir>/（每次执行一个目录，可人工反悔，重跑不覆盖）；
  *  3. 插件撤销：beforePlugins（导入前基线）与当前已装对比 → 导入期间新增的插件
  *     走官方 `dsh plugin --profile <p> remove <pkg>`（runDshPlugin 通道，零新子进程代码）；
  *  4. file 类条目补偿：skills/agentPresets/agentInstructions/pluginFiles/sessions 原文件 blob 写回 /
@@ -21,6 +21,7 @@
  * 旧快照（无 beforePlugins / hostFileBackups）兼容：缺基线的部分只提示不动作。
  */
 import { engineMsg } from './messages-core.ts';
+import fssync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -148,6 +149,12 @@ export interface RestoreReport {
   /** 跳过项（无动作 / 离线无法处理） */
   skipped: string[];
   /**
+   * 本次执行真正写入的 pre-restore 反悔副本目录（`<snapshotDir>/pre-restore/<attemptDir>/`）。
+   * 每次 restore() 新建一个 attempt 目录（D5）⇒ 崩溃后重跑**不会覆盖**上一次的反悔副本；
+   * 没有任何文件需要备份时缺省（不建空目录）。
+   */
+  preRestoreDir?: string;
+  /**
    * 幽灵会话（F5 失效归档清理）：快照记录的 sessions 分区会话在磁盘 sessions 目录
    * 已无任何文件（备份有记录、磁盘无文件）。DSH 官方无归档会话 API，降级本地校验，
    * 仅供报告、需人工在 DSH 确认清理；无会话分区/无幽灵时为缺省或空数组。
@@ -213,6 +220,114 @@ function toRelPath(homeDir: string, abs: string): string {
   return path.relative(homeDir, abs).split(path.sep).join('/');
 }
 
+/* ------------------------- 目标侧真实路径围栏（junction / symlink 防写穿，D4） */
+
+/**
+ * 目标侧路径安全：字符串前缀围栏 `isWithinHome` 挡不住两类逃逸 ——
+ *  1. `$DSH_HOME` 内某个**目录**本身是链接（Windows junction / POSIX 目录 symlink）：
+ *     字符串前缀成立，真实落点却在 home 之外；
+ *  2. **目标文件本身是 symlink**：`atomicCopyFile` 缺省 `symlink:'follow'`
+ *     （src/utils/atomic-write.ts:305）解析真实路径后改写 home 外的文件，而链接结构不变（肉眼无痕）。
+ * 因此计划期对每个「会被写入 / 删除」的目标做一次 realpath 判定；任一目标不安全 ⇒
+ * **整笔计划作废**（`planRestore` 抛错；`restore()` 是先规划后执行 ⇒ 零写入），
+ * 绝不逐项降级为 skip —— 半套恢复比不恢复更难收拾。
+ *
+ * 判据三条：
+ *  a. 目标存在且 `lstat().isSymbolicLink()` → 拒绝（含指向 home 内的链接：写它等于改写另一份文件）；
+ *  b. 从 `dirname(目标)` 向上找第一个**存在**的祖先，`realpathSync.native` 解析；解析失败 → 拒绝；
+ *  c. 真实落点必须仍在 `realpath(home)` 之内（`path.relative` 判定，Windows 折大小写比较）。
+ *
+ * 为什么 home 侧也 realpath：macOS `/var → /private/var`、Windows 8.3 短名 / 目录 junction 下
+ * 恢复自己的 home 是**正常**场景 —— 只解析目标侧会把正常恢复误判成越界。
+ *
+ * 缓存：按「实际解析过的祖先目录」缓存真实路径（同一父目录只解析一次），
+ * 不缓存不存在的中间层（它们的落点 = 存在祖先的真实路径 + 剩余段推导）。
+ */
+
+/** realpath，失败（不存在 / 无权限 / 不可解析）返回 null */
+function realpathOrNull(p: string): string | null {
+  try {
+    return fssync.realpathSync.native(p);
+  } catch {
+    return null;
+  }
+}
+
+/** 比较键：Windows 文件系统大小写不敏感 */
+function foldPathKey(p: string): string {
+  return process.platform === 'win32' ? p.toLowerCase() : p;
+}
+
+/** child 是否等于 root 或位于 root 之内（两侧都应是已解析的真实路径） */
+function isRealInside(root: string, child: string): boolean {
+  const rel = path.relative(foldPathKey(root), foldPathKey(child));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * 生成「目标安全性」判定函数；返回 null = 安全，否则返回**机器码**（只作日志/诊断，
+ * 用户可见文案仍走既有 `restore.pathEscape`，不新造自然语言）。
+ */
+function createTargetSafetyChecker(homeDir: string): (absTarget: string) => string | null {
+  const homeResolved = path.resolve(homeDir);
+  const rootReal = realpathOrNull(homeResolved) ?? homeResolved;
+  const ancestorCache = new Map<string, string>();
+
+  /** 父目录的真实落点：向上找第一个存在的祖先，再把不存在的剩余段拼回去 */
+  const projectedParentReal = (parent: string): string | null => {
+    const parts: string[] = [];
+    let cur = parent;
+    for (;;) {
+      const cached = ancestorCache.get(foldPathKey(cur));
+      if (cached !== undefined) return parts.length === 0 ? cached : path.join(cached, ...parts.reverse());
+      const real = realpathOrNull(cur);
+      if (real !== null) {
+        ancestorCache.set(foldPathKey(cur), real);
+        return parts.length === 0 ? real : path.join(real, ...parts.reverse());
+      }
+      const up = path.dirname(cur);
+      if (up === cur) return null; // 上溯到根仍不可解析 ⇒ 保守拒绝
+      parts.push(path.basename(cur));
+      cur = up;
+    }
+  };
+
+  return (absTarget: string): string | null => {
+    try {
+      if (fssync.lstatSync(absTarget).isSymbolicLink()) return 'target-symlink';
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return 'target-unreadable';
+    }
+    const parentReal = projectedParentReal(path.dirname(absTarget));
+    if (parentReal === null) return 'parent-unresolvable';
+    if (!isRealInside(rootReal, parentReal)) return 'parent-escape';
+    return null;
+  };
+}
+
+/** 计划里会真正落盘 / 删文件的动作（skip / pluginRemove / credentialHint 不碰目标路径） */
+const WRITE_TARGET_KINDS: ReadonlySet<RestoreActionKind> = new Set<RestoreActionKind>([
+  'hostFileRestore', 'hostFileRemove', 'fileRestore', 'fileRemove',
+]);
+
+/**
+ * 计划期目标侧总闸：任一目标不安全就抛错（整笔拒绝）。
+ * 字符串越界的目标在计划期已降级为 `skip`（不会走到这里），此处只补真实路径这一层。
+ */
+function assertPlanTargetsSafe(actions: RestoreAction[], homeDir: string, msg: MsgFunc): void {
+  const check = createTargetSafetyChecker(homeDir);
+  for (const a of actions) {
+    if (a.target === undefined || !WRITE_TARGET_KINDS.has(a.kind)) continue;
+    const abs = path.resolve(homeDir, a.target);
+    if (!isWithinHome(homeDir, abs)) continue;
+    const unsafe = check(abs);
+    if (unsafe !== null) {
+      // 复用既有「路径越界」语义与错误码：planRestore 顶层抛出 ⇒ restore() 一个字节都没写。
+      throw new Error(msg('restore.pathEscape', { path: a.target }));
+    }
+  }
+}
+
 /** file 类条目的目标绝对路径（复用 backup.ts 的基准目录规则；仅读 homeDir） */
 function resolveFileAbs(homeDir: string, adapter: SectionId, ref: string): string {
   return resolveFileTarget({ homeDir } as unknown as HostContext, adapter, ref);
@@ -230,7 +345,37 @@ async function resolveSettingsRelPath(homeDir: string, settingsPath?: string): P
   return undefined;
 }
 
-/** 把当前文件复制到 <snapshotDir>/pre-restore/（双保险，命名含序号防碰撞） */
+/** pre-restore attempt 目录名：本地时间 yyyyMMdd-HHmmss-SSS */
+function preRestoreStamp(now: Date = new Date()): string {
+  const p2 = (n: number): string => String(n).padStart(2, '0');
+  return `${String(now.getFullYear())}${p2(now.getMonth() + 1)}${p2(now.getDate())}-`
+    + `${p2(now.getHours())}${p2(now.getMinutes())}${p2(now.getSeconds())}-`
+    + String(now.getMilliseconds()).padStart(3, '0');
+}
+
+/**
+ * 新建本次执行的 pre-restore 目录（D5）：`<snapshotDir>/pre-restore/<attemptDir>/`。
+ *
+ * 为什么必须分目录：备份名原来是「seq + relPath」、seq 每次都从 1 重数 ⇒ 崩溃后重跑会把
+ * 第一次的「恢复前原文」覆盖成「第一次恢复后的内容」= 反悔副本静默丢失。
+ * 同名（同一毫秒内重复调用 / 时钟回拨）时追加 `-1`/`-2`…：靠 `mkdir` 的 EEXIST 判定，
+ * **不 pre-stat**（先查后建在并发下会撞车）。
+ */
+export async function createPreRestoreAttemptDir(preRoot: string): Promise<string> {
+  await fs.mkdir(preRoot, { recursive: true });
+  const stamp = preRestoreStamp();
+  for (let i = 0; ; i += 1) {
+    const candidate = path.join(preRoot, i === 0 ? stamp : `${stamp}-${i}`);
+    try {
+      await fs.mkdir(candidate);
+      return candidate;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+  }
+}
+
+/** 把当前文件复制到 <snapshotDir>/pre-restore/<attemptDir>/（双保险，命名含序号防碰撞） */
 async function copyToPreRestore(preDir: string, absPath: string, label: string, seq: number): Promise<void> {
   const safe = label.replace(/[\\/:*?"<>|]/g, '_');
   await fs.mkdir(preDir, { recursive: true });
@@ -654,6 +799,10 @@ export async function planRestore(opts: RestoreOptions): Promise<RestorePlan> {
     });
   }
 
+  // D4：目标侧真实路径总闸（junction / 目录 symlink / 目标自身是 symlink）——
+  // 任一目标不安全 ⇒ 整笔拒绝（抛错，零写入），绝不逐项跳过。
+  assertPlanTargetsSafe(actions, homeDir, msg);
+
   return {
     snapshotId: snapshot.id,
     createdAt: snapshot.createdAt,
@@ -689,14 +838,14 @@ function summarizeActions(actions: RestoreAction[]): RestorePlan['summary'] {
 
 /**
  * 执行恢复：按计划顺序 整文件还原 → 插件卸载 → file 补偿，
- * 覆盖/删除前全部先复制到 <snapshotDir>/pre-restore/（双保险），
+ * 覆盖/删除前全部先复制到 <snapshotDir>/pre-restore/<attemptDir>/（双保险，每次执行一个新目录），
  * 逐项 try/catch（单项失败不拖垮其余），输出诚实报告。
  */
 export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
   const plan = await planRestore(opts);
   const { snapshotDir, homeDir, profile } = opts;
   const msg = opts.msg ?? zhMsg;
-  const preDir = path.join(snapshotDir, 'pre-restore');
+  const preRoot = path.join(snapshotDir, 'pre-restore');
   const profileDir = resolveProfileDir(homeDir, profile);
   const uninstaller = opts.pluginUninstaller
     ?? ((name: string, dir: string, prof: string) => defaultPluginUninstaller(name, dir, prof, msg));
@@ -710,6 +859,17 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
     skipped: [],
   };
 
+  // D5：反悔副本按「本次执行」分目录（pre-restore/<attemptDir>/），惰性创建 ——
+  // 计划全是 skip 的恢复不会建空目录（dry-run 连 restore() 都不调，同样零写入）。
+  let preDir: string | undefined;
+  const preDirOf = async (): Promise<string> => {
+    if (preDir === undefined) {
+      preDir = await createPreRestoreAttemptDir(preRoot);
+      report.preRestoreDir = preDir;
+    }
+    return preDir;
+  };
+
   let seq = 0;
   const total = plan.actions.length;
   let actionIndex = 0;
@@ -720,7 +880,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
       switch (action.kind) {
         case 'hostFileRestore': {
           const abs = homeAbs(homeDir, action.target!, msg);
-          if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
+          if (await fileExists(abs)) await copyToPreRestore(await preDirOf(), abs, action.target!, ++seq);
           // 流式拷贝（t46）：blob → 目标文件经 copyFile，**不经内存中转**。改动前是
           // readFile + atomicWriteFile —— 整个 blob 进堆，大 home 下与快照载荷叠加成双份驻留
           // （本机 32MB blob 实测 +32.0MB arrayBuffers；改用本原语后 +0.0MB）。
@@ -732,7 +892,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
         case 'hostFileRemove': {
           const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) {
-            await copyToPreRestore(preDir, abs, action.target!, ++seq);
+            await copyToPreRestore(await preDirOf(), abs, action.target!, ++seq);
             await fs.rm(abs, { force: true });
           }
           report.restored.push(action.target!);
@@ -740,7 +900,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
         }
         case 'fileRestore': {
           const abs = homeAbs(homeDir, action.target!, msg);
-          if (await fileExists(abs)) await copyToPreRestore(preDir, abs, action.target!, ++seq);
+          if (await fileExists(abs)) await copyToPreRestore(await preDirOf(), abs, action.target!, ++seq);
           // 流式拷贝（t46）：blob → 目标文件经 copyFile，**不经内存中转**。改动前是
           // readFile + atomicWriteFile —— 整个 blob 进堆，大 home 下与快照载荷叠加成双份驻留
           // （本机 32MB blob 实测 +32.0MB arrayBuffers；改用本原语后 +0.0MB）。
@@ -752,7 +912,7 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
         case 'fileRemove': {
           const abs = homeAbs(homeDir, action.target!, msg);
           if (await fileExists(abs)) {
-            await copyToPreRestore(preDir, abs, action.target!, ++seq);
+            await copyToPreRestore(await preDirOf(), abs, action.target!, ++seq);
             await fs.rm(abs, { force: true });
           }
           report.restored.push(action.target!);

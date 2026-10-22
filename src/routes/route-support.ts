@@ -29,6 +29,7 @@ import { decryptCredentials, SecurityError } from '../security/index.ts'
 import type { Manifest, SectionId } from '../schema/types.ts'
 import type { HostContext, ImportPlan, PlanItemKind } from '../core/types.ts'
 import { engineMsg } from '../core/engine-locale.ts'
+import { createPreRestoreAttemptDir } from '../core/restore.ts'
 import type { RestoreActionKind, RestorePlan, RestoreReport } from '../core/restore.ts'
 import type { SyncTransportType } from '../sync/sync-config.ts'
 import { DEFAULT_AUTOSYNC_AUTO_APPLY_TIER, DEFAULT_AUTOSYNC_CONFLICT_POLICY, DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS, lastRunFailureMessage, readAllAutosyncConfigs, readAutosyncConfig } from '../sync/autosync-config.ts'
@@ -552,8 +553,10 @@ export interface AutosyncStatusResponse {
 export interface RestoreExecutor {
   /** 读快照目录内 blob（相对 snapshotDir） */
   readBlob(blobPath: string): Promise<Uint8Array>
-  /** 把当前 home 文件内容复制到 <snapshotDir>/pre-restore/（覆盖/删除前的双保险） */
+  /** 把当前 home 文件内容复制到 <snapshotDir>/pre-restore/<本次 attempt>/（覆盖/删除前的双保险） */
   savePreRestore(relPath: string): Promise<void>
+  /** 本次执行的 pre-restore attempt 目录（未发生任何备份 → null）；用于报告如实回填 */
+  preRestoreDir?(): Promise<string | null>
   existsHome(relPath: string): Promise<boolean>
   writeHome(relPath: string, data: Uint8Array): Promise<void>
   removeHome(relPath: string): Promise<void>
@@ -633,6 +636,10 @@ export async function executeRestorePlan(
       })
     }
   }
+  if (exec.preRestoreDir !== undefined) {
+    const dir = await exec.preRestoreDir()
+    if (dir !== null) report.preRestoreDir = dir
+  }
   return report
 }
 
@@ -640,6 +647,12 @@ export async function executeRestorePlan(
 export function makeRestoreExecutor(snapshotDir: string, host: HostContext, profile: string): RestoreExecutor {
   const profileDir = resolveProfileDir(host.homeDir, profile)
   let seq = 0
+  // D5：本次执行的 attempt 目录（惰性创建；与 core/restore.ts 同一命名实现，绝不另写一套）
+  let preDir: string | null = null
+  const ensurePreDir = async (): Promise<string> => {
+    if (preDir === null) preDir = await createPreRestoreAttemptDir(join(snapshotDir, 'pre-restore'))
+    return preDir
+  }
   return {
     readBlob: async (blobPath) => {
       const target = resolve(snapshotDir, blobPath)
@@ -650,9 +663,14 @@ export function makeRestoreExecutor(snapshotDir: string, host: HostContext, prof
       const data = await host.fs.readFile(relPath)
       seq += 1
       const safe = relPath.replace(/[\\/:*?"<>|]/g, '_')
-      await fs.mkdir(join(snapshotDir, 'pre-restore'), { recursive: true })
-      await fs.writeFile(join(snapshotDir, 'pre-restore', `${String(seq).padStart(4, '0')}-${safe}`), data)
+      const dir = await ensurePreDir()
+      // 反悔副本必须一次落盘成功：先写旁路再 rename，避免半写文件被当成可用副本
+      const target = join(dir, `${String(seq).padStart(4, '0')}-${safe}`)
+      const tmp = `${target}.tmp-${process.pid}-${seq}`
+      await fs.writeFile(tmp, data)
+      await fs.rename(tmp, target)
     },
+    preRestoreDir: async () => preDir,
     existsHome: (relPath) => host.fs.exists(relPath),
     writeHome: (relPath, data) => host.fs.writeFile(relPath, data),
     removeHome: (relPath) => host.fs.remove(relPath),

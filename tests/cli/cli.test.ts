@@ -198,8 +198,11 @@ test('C-07 runCli restore 执行：整文件还原 + 诚实报告 + 退出码', 
     assert.ok(text.includes('恢复完成'), '输出恢复报告');
     assert.ok(text.includes('settings.yaml'), '报告含已还原文件');
     assert.equal(await fs.readFile(path.join(homeDir, 'settings.yaml'), 'utf8'), 'SNAPSHOT settings\n', 'settings.yaml 已还原为快照内容');
-    // pre-restore 双保险
-    const pre = path.join(dir, 'pre-restore');
+    // pre-restore 双保险（D5：副本在「本次执行」的 attempt 目录内）
+    const preRoot = path.join(dir, 'pre-restore');
+    const attempts = await fs.readdir(preRoot);
+    assert.equal(attempts.length, 1, '一次 restore 应恰一个 attempt 目录');
+    const pre = path.join(preRoot, attempts[0]!);
     const names = await fs.readdir(pre);
     assert.equal(names.length, 1, 'pre-restore 应有 1 份当前文件副本');
     assert.equal(await fs.readFile(path.join(pre, names[0]!), 'utf8'), 'CURRENT settings\n');

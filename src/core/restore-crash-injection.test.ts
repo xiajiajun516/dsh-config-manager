@@ -1,15 +1,17 @@
 /**
  * task-2/A：restore 中途崩溃（真实子进程 SIGKILL）——journal 语义与「半写文件不被当成已完成」。
  *
- * 只读审计产物：不改 src 任何实现，按**真实行为**断言。核心事实链（源码）：
+ * 只读审计产物 + task-9 修后的回归锚点：按**真实行为**断言，行号以符号名为锚。核心事实链（源码）：
  *  - src/cli/index.ts:1130 把 restore() 包进 runJournaled({operationType:'cli-restore'})，非 deferred、
  *    无 snapshotProvider ⇒ src/core/phase3-host.ts:352-353 在 fn 之前把 journal 写成 APPLYING。
  *  - restore()（src/core/restore.ts:695-803）**全程不调用** recordStep/bindSnapshot/markApplying
  *    ⇒ 崩溃后 journal 是「APPLYING + 零 step + snapshotId=null」。
  *  - src/core/reconcile.ts:365-373（空 steps + APPLYING + 无 trusted snapshot）⇒ needs-attention + SAFE MODE，
  *    绝不 recovered ⇒ 「半写状态不会被当成已完成」由 journal 判定兜住。
- *  - 缺口（本文件以 TODO 标注、不改 src）：pre-restore/ 备份名=seq+relPath，seq 每次 restore() 从 0 重数
- *    （restore.ts:713/723）⇒ 崩溃后重跑会**覆盖**第一次的「反悔副本」。
+ *  - D5（task-9 已修）：反悔副本按「本次执行」分目录（pre-restore/<stamp>[-n]/），seq 只在该目录内
+ *    重数 ⇒ 崩溃后重跑不再覆盖第一份副本（修复前文件名只由 seq+relPath 决定，见 A-3）。
+ *  - D4（task-9 已修，用例在 restore-target-symlink.test.ts）：计划期对目标侧 symlink/junction 做真实
+ *    路径围栏，任一目标不安全 ⇒ 整笔抛错、零写入。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -142,8 +144,11 @@ test('A-1 restore 中途进程被 SIGKILL：journal 停在 APPLYING、零 step �
   assert.equal(await readFile(f.homeDir, 'cordis.patch.yml'), 'CURRENT-patch');
   assert.equal(await readFile(f.homeDir, 'extra.yaml'), 'CURRENT-extra');
 
-  // 反悔副本：只有第 1 个动作的 pre-restore 备份
-  const preDir = path.join(f.snapshotDir, 'pre-restore');
+  // 反悔副本：D5 起按「本次执行」分目录（pre-restore/<attemptDir>/），只有第 1 个动作的备份
+  const preRoot = path.join(f.snapshotDir, 'pre-restore');
+  const attempts = await fs.readdir(preRoot);
+  assert.equal(attempts.length, 1, '崩溃前只有一次执行 ⇒ 恰一个 attempt 目录');
+  const preDir = path.join(preRoot, attempts[0]!);
   assert.deepEqual(await fs.readdir(preDir), ['0001-settings.yaml']);
   assert.equal(await fs.readFile(path.join(preDir, '0001-settings.yaml'), 'utf8'), 'CURRENT-settings');
 
@@ -192,34 +197,46 @@ test('A-2 崩溃后重启走同一 CLI 路径：被残留 journal 阻断（Trans
   assert.equal(await readFile(f.homeDir, 'extra.yaml'), 'CURRENT-extra');
 });
 
-test('A-3 崩溃后直接重跑 restore 引擎可收敛到快照态，但 pre-restore 反悔副本被覆盖（当前行为/TODO）', async (t) => {
+test('A-3 崩溃后直接重跑 restore 引擎可收敛到快照态，且第一份反悔副本不再被覆盖（D5 按 attempt 目录分桶）', async (t) => {
   const f = await makeFixture(workdir(t));
   assertKilled(await spawnChild(f, 'crash', 2));
-  const preDir = path.join(f.snapshotDir, 'pre-restore');
-  assert.equal(await fs.readFile(path.join(preDir, '0001-settings.yaml'), 'utf8'), 'CURRENT-settings');
+  const preRoot = path.join(f.snapshotDir, 'pre-restore');
+  const before = await fs.readdir(preRoot);
+  assert.equal(before.length, 1, '崩溃前只有一次执行 => 恰一个 attempt 目录');
+  const crashDir = path.join(preRoot, before[0]!);
+  assert.equal(await fs.readFile(path.join(crashDir, '0001-settings.yaml'), 'utf8'), 'CURRENT-settings');
 
   // 引擎本身幂等：以快照为唯一事实源重跑一次即可收敛（CLI 侧需先结掉残留 journal，见 A-2）
   const report = await restore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web' });
   assert.deepEqual(report.failed, [], '重跑不应有失败动作');
   assert.deepEqual(report.restored.sort(), ['cordis.patch.yml', 'extra.yaml', 'settings.yaml']);
   for (const [rel, content] of Object.entries(SNAPSHOT)) {
-    assert.equal(await readFile(f.homeDir, rel), content, `${rel} 应收敛到快照内容`);
+    assert.equal(await readFile(f.homeDir, rel), content, rel + ' 应收敛到快照内容');
   }
 
-  // TODO(缺陷，未改 src)：seq 每次 restore() 从 0 重数（src/core/restore.ts:713/723），
-  // pre-restore 文件名只由 seq+relPath 决定（copyToPreRestore 234-238）⇒ 第二次运行把
-  // 0001-settings.yaml（真正的「恢复前原文」）覆盖成「第一次恢复后的内容」= 反悔副本静默丢失。
-  // 若修复（例如按运行时间戳/唯一目录分桶），本断言应改为 === 'CURRENT-settings'。
-  assert.equal(
-    await fs.readFile(path.join(preDir, '0001-settings.yaml'), 'utf8'),
-    'SNAP-settings',
-    '当前行为：重跑覆盖了第一次的反悔副本',
+  // D5 修复点：反悔副本落在「本次执行」的独立 attempt 目录里，第二次运行不再覆盖第一次的
+  // 0001-settings.yaml（修复前该文件名只由 seq+relPath 决定，seq 每次从 0 重数）。
+  assert.ok(report.preRestoreDir !== undefined, '重跑有文件被覆盖 => 必须产出 attempt 目录');
+  const secondDir = report.preRestoreDir!;
+  assert.notEqual(secondDir, crashDir, '两次执行必须是不同目录');
+  assert.deepEqual(
+    (await fs.readdir(preRoot)).sort(),
+    [path.basename(crashDir), path.basename(secondDir)].sort(),
+    '应恰有两份 attempt 目录',
   );
-  // 未被第一次触碰的目标，其反悔副本仍是原文
-  assert.equal(await fs.readFile(path.join(preDir, '0002-cordis.patch.yml'), 'utf8'), 'CURRENT-patch');
-  assert.deepEqual((await fs.readdir(preDir)).sort(), [
+  assert.equal(
+    await fs.readFile(path.join(crashDir, '0001-settings.yaml'), 'utf8'),
+    'CURRENT-settings',
+    '第一份反悔副本逐字节保留（修复前会被覆盖成 SNAP-settings）',
+  );
+  assert.deepEqual((await fs.readdir(crashDir)).sort(), ['0001-settings.yaml'], '第一份目录不得被追加文件');
+  // 第二份 = 崩溃后 home 的真实状态（settings 已是 SNAP，另两份仍是 CURRENT）
+  assert.deepEqual((await fs.readdir(secondDir)).sort(), [
     '0001-settings.yaml', '0002-cordis.patch.yml', '0003-extra.yaml',
   ]);
+  assert.equal(await fs.readFile(path.join(secondDir, '0001-settings.yaml'), 'utf8'), 'SNAP-settings');
+  assert.equal(await fs.readFile(path.join(secondDir, '0002-cordis.patch.yml'), 'utf8'), 'CURRENT-patch');
+  assert.equal(await fs.readFile(path.join(secondDir, '0003-extra.yaml'), 'utf8'), 'CURRENT-extra');
 
   const all = await listAll(f.workDir);
   assert.deepEqual(all.filter((p) => p.includes('.dshcm.')), [], '重跑不应留下 tmp 残留');

@@ -8,6 +8,11 @@ import assert from 'node:assert/strict';
 
 import { buildRestoreBody, executeRestorePlan, type RestoreExecutor } from '../../src/index.ts';
 import type { RestorePlan } from '../../src/core/restore.ts';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, relative, sep } from 'node:path';
+import { makeRestoreExecutor } from '../../src/routes/route-support.ts';
+import type { HostContext } from '../../src/core/types.ts';
 
 test('G-01 buildRestoreBody：合法/缺 id/非法 id/越界 id/dryRun 解析', () => {
   const ok = buildRestoreBody({ snapshotId: 'abc-123', dryRun: true });
@@ -107,4 +112,41 @@ test('G-03 executeRestorePlan：插件卸载成败、凭据提示、跳过、单
   assert.equal(report.failed.length, 2, 'bad-plugin 失败 + 坏动作失败都应记录');
   assert.ok(report.failed.some((f) => f.item === 'plugin:bad-plugin' && f.reason.includes('模拟 pnpm 卸载失败')));
   assert.ok(report.failed.some((f) => f.reason.includes('缺少 target')), '坏动作如实记录且不中断其余');
+});
+
+test('G-02b makeRestoreExecutor：反悔副本落本次 attempt 子目录（GUI 与 CLI 同一布局）', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dcm-route-prerestore-'));
+  try {
+    const snapshotDir = join(root, 'snap');
+    await mkdir(join(snapshotDir, 'blobs', 'host'), { recursive: true });
+    await writeFile(join(snapshotDir, 'blobs', 'host', 'settings'), 'blob:settings', 'utf8');
+    const files = new Map<string, string>([['settings.yaml', 'before']]);
+    const host = {
+      homeDir: join(root, 'home'),
+      fs: {
+        readFile: async (rel: string) => Buffer.from(files.get(rel) ?? '', 'utf8'),
+        exists: async (rel: string) => files.has(rel),
+        writeFile: async (rel: string, data: Uint8Array) => { files.set(rel, Buffer.from(data).toString('utf8')); },
+        remove: async (rel: string) => { files.delete(rel); },
+      },
+    } as unknown as HostContext;
+    const exec = makeRestoreExecutor(snapshotDir, host, 'web');
+    const plan = makePlan([
+      { kind: 'hostFileRestore', description: '整文件还原 settings.yaml', target: 'settings.yaml', blobPath: 'blobs/host/settings' },
+    ]);
+    const report = await executeRestorePlan(plan, exec);
+    assert.deepEqual(report.failed, []);
+    assert.ok(report.preRestoreDir !== undefined, '发生覆盖就必须回填 attempt 目录');
+    // D5：目录必须是 pre-restore 的直接子目录（不能退回旧的扁平布局）
+    const relInside = relative(join(snapshotDir, 'pre-restore'), report.preRestoreDir!);
+    assert.equal(relInside.split(sep).length, 1, 'attempt 目录必须直接位于 pre-restore 下');
+    assert.equal(
+      await readFile(join(report.preRestoreDir!, '0001-settings.yaml'), 'utf8'),
+      'before',
+      '反悔副本必须是覆盖前的原文',
+    );
+    assert.equal(files.get('settings.yaml'), 'blob:settings', '目标文件已按快照写回');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

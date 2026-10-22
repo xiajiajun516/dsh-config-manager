@@ -200,8 +200,12 @@ test('R-03 restore 执行：blob 写回 + pre-restore 双保险 + 插件卸载 +
     assert.ok(report.restored.includes('profiles/web/cordis.patch.yml'), '删除项也计入 restored（已回到快照状态）');
     assert.deepEqual(report.ghostSessions, [], '无 sessions 分区条目 → 无幽灵会话');
 
-    // pre-restore 双保险：3 个当前文件（settings.yaml / coding.md / profile patch）各有副本
-    const pre = path.join(f.snapshotDir, 'pre-restore');
+    // pre-restore 双保险：3 个当前文件（settings.yaml / coding.md / profile patch）各有副本。
+    // D5 起副本在「本次执行」的 attempt 目录内（pre-restore/<stamp>[-n]/），一次 restore 恰一个目录。
+    const preRoot = path.join(f.snapshotDir, 'pre-restore');
+    const attempts = await fs.readdir(preRoot);
+    assert.equal(attempts.length, 1, `一次 restore 应恰一个 attempt 目录，实际: ${attempts.join(',')}`);
+    const pre = path.join(preRoot, attempts[0]!);
     const names = await fs.readdir(pre);
     assert.equal(names.length, 3, `pre-restore 应有 3 份副本，实际: ${names.join(',')}`);
     const settingsPre = names.find((n) => n.endsWith('settings.yaml'));
