@@ -13,6 +13,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import {
+  ABSENT_FINGERPRINT,
   JournalStore, environmentFingerprint as computeFingerprint, TRANSACTIONS_DIR,
   generateOperationId, createJournalEntry, transitionJournalState, isTerminalState, isValidTransition,
   readSafeModeMarkerSync,
@@ -205,7 +206,11 @@ export class Phase3Recovery {
         try {
           data = await fs.readFile(step.ref);
         } catch {
-          // 目标不存在：若已记录 afterFp（期望存在）→ 未应用；否则无法判定。
+          // 目标不存在：先看「应不存在」哨兵（journal.ts 的 ABSENT_FINGERPRINT）——
+          // 删除类动作（restore 的 hostFileRemove/fileRemove）只有这样才自证得出来。
+          if (step.afterFp === ABSENT_FINGERPRINT) return 'after-match';
+          if (step.beforeFp === ABSENT_FINGERPRINT) return 'before-match';
+          // 否则：若已记录 afterFp（期望存在）→ 未应用；否则无法判定。
           return step.afterFp !== null && step.beforeFp === null ? 'before-match' : 'none';
         }
         const fp = sha256Hex(data);

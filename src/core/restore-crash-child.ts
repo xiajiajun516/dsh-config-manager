@@ -55,7 +55,11 @@ async function main(): Promise<void> {
   if (mode === 'rerun') {
     let result: { ok: boolean; name?: string; message?: string };
     try {
-      await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: () => restore(opts) });
+      await recovery.runJournaled({
+        operationType: 'cli-restore',
+        lockCtx,
+        fn: (ctx) => restore(ctx === undefined ? opts : { ...opts, journal: ctx }),
+      });
       result = { ok: true };
     } catch (e) {
       result = {
@@ -68,7 +72,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: () => restore(opts) });
+  await recovery.runJournaled({
+    operationType: 'cli-restore',
+    lockCtx,
+    fn: (ctx) => restore(ctx === undefined ? opts : { ...opts, journal: ctx }),
+  });
 }
 
 main().then(

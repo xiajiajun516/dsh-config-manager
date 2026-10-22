@@ -1127,7 +1127,7 @@ export async function runCli(
       return {
         kind: 'restore' as const,
         report: lockCtx !== null
-          ? (await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: () => restore(restoreOptions) })).result
+          ? (await recovery.runJournaled({ operationType: 'cli-restore', lockCtx, fn: (ctx) => restore(ctx === undefined ? restoreOptions : { ...restoreOptions, journal: ctx }) })).result // ctx = WAL（崩溃后可判进度）
           : await restore(restoreOptions),
       };
     });

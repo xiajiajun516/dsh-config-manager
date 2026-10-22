@@ -31,6 +31,8 @@ import type { HostContext, ImportPlan, PlanItemKind } from '../core/types.ts'
 import { engineMsg } from '../core/engine-locale.ts'
 import { createPreRestoreAttemptDir } from '../core/restore.ts'
 import type { RestoreActionKind, RestorePlan, RestoreReport } from '../core/restore.ts'
+import { createRestoreWal, isWalActionKind } from '../core/restore-wal.ts'
+import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from '../core/restore-wal.ts'
 import type { SyncTransportType } from '../sync/sync-config.ts'
 import { DEFAULT_AUTOSYNC_AUTO_APPLY_TIER, DEFAULT_AUTOSYNC_CONFLICT_POLICY, DEFAULT_AUTOSYNC_REALTIME, DEFAULT_AUTOSYNC_REMOTE_CHECK_MS, lastRunFailureMessage, readAllAutosyncConfigs, readAutosyncConfig } from '../sync/autosync-config.ts'
 import type { AutosyncAutoApplyTier, AutosyncConflictPolicy, AutosyncInterval, AutosyncRunStatus } from '../sync/autosync-config.ts'
@@ -562,6 +564,11 @@ export interface RestoreExecutor {
   removeHome(relPath: string): Promise<void>
   /** 卸载插件（官方通道）；失败返回 { ok:false, message } */
   uninstallPlugin(name: string): Promise<{ ok: boolean; message?: string }>
+  /**
+   * home 相对路径 → 磁盘绝对路径（逐动作 WAL 用：journal 的 ref 必须是绝对路径，
+   * reconcile 的 verifyStepFingerprint 直接拿它读盘算指纹）。缺省 = 不登记 WAL。
+   */
+  absPath?(relPath: string): string
 }
 
 /**
@@ -574,6 +581,7 @@ export async function executeRestorePlan(
   plan: RestorePlan,
   exec: RestoreExecutor,
   onAction?: (info: { index: number; total: number; detail: string }) => void,
+  journal?: RestoreJournalPort,
 ): Promise<RestoreReport> {
   const report: RestoreReport = {
     snapshotId: plan.snapshotId,
@@ -583,11 +591,34 @@ export async function executeRestorePlan(
     failed: [],
     skipped: [],
   }
+  // 逐动作 WAL（与 core/restore.ts 同一实现，见 core/restore-wal.ts）：**首个写之前**预登记全部
+  // 动盘动作（planned + beforeFp），执行完逐项 done/attention（+ afterFp）。崩溃后 reconcile 才能
+  // 判出「哪些还原了、哪些没动」，而不是整笔不透明。没有 absPath = 不登记（旧行为）。
+  const wal = createRestoreWal(journal)
+  const walByAction = new Map<(typeof plan.actions)[number], RestoreWalHandle | undefined>()
+  if (wal !== null && exec.absPath !== undefined) {
+    const bindSnapshot = journal?.bindSnapshot
+    if (bindSnapshot !== undefined) await bindSnapshot(plan.snapshotId)
+    const markApplying = journal?.markApplying
+    if (markApplying !== undefined) await markApplying()
+    const mutating = plan.actions.filter((a) => isWalActionKind(a.kind))
+    const absPath = exec.absPath
+    const handles = await wal.preRegister(mutating.map((a) => ({
+      kind: a.kind,
+      ...(a.target !== undefined ? { target: a.target } : {}),
+      ...(a.pluginName !== undefined ? { pluginName: a.pluginName } : {}),
+      abs: a.kind === 'pluginRemove' || a.target === undefined ? null : absPath(a.target),
+    })))
+    mutating.forEach((a, i) => { walByAction.set(a, handles[i]) })
+  }
   const total = plan.actions.length
   let index = 0
   for (const action of plan.actions) {
     index += 1
     onAction?.({ index, total, detail: action.description })
+    const walHandle = walByAction.get(action)
+    let settleStatus: RestoreWalSettleStatus = 'done'
+    let settleMessage: string | null = null
     try {
       switch (action.kind) {
         case 'hostFileRestore':
@@ -616,7 +647,11 @@ export async function executeRestorePlan(
           if (result.ok) {
             report.removedPlugins.push(action.pluginName)
           } else {
-            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? engineMsg('restore.pluginRemoveFailed') })
+            const reason = result.message ?? engineMsg('restore.pluginRemoveFailed')
+            report.failed.push({ item: `plugin:${action.pluginName}`, reason })
+            // 外部副作用没做成 → attention（绝不记 done）
+            settleStatus = 'attention'
+            settleMessage = reason
           }
           break
         }
@@ -630,11 +665,13 @@ export async function executeRestorePlan(
           report.skipped.push(engineMsg('restore.unknownAction', { kind: String(action.kind), description: action.description }))
       }
     } catch (err) {
-      report.failed.push({
-        item: action.target ?? action.pluginName ?? action.description,
-        reason: err instanceof Error ? err.message : String(err),
-      })
+      const reason = err instanceof Error ? err.message : String(err)
+      report.failed.push({ item: action.target ?? action.pluginName ?? action.description, reason })
+      settleStatus = 'attention'
+      settleMessage = reason
     }
+    // WAL 终态：持久化失败向上抛（fail-closed，与 core/restore.ts 同口径）
+    if (wal !== null && walHandle !== undefined) await wal.settle(walHandle, settleStatus, settleMessage)
   }
   if (exec.preRestoreDir !== undefined) {
     const dir = await exec.preRestoreDir()
@@ -671,6 +708,7 @@ export function makeRestoreExecutor(snapshotDir: string, host: HostContext, prof
       await fs.rename(tmp, target)
     },
     preRestoreDir: async () => preDir,
+    absPath: (relPath) => join(host.homeDir, relPath),
     existsHome: (relPath) => host.fs.exists(relPath),
     writeHome: (relPath, data) => host.fs.writeFile(relPath, data),
     removeHome: (relPath) => host.fs.remove(relPath),

@@ -1,13 +1,14 @@
 /**
  * task-2/A：restore 中途崩溃（真实子进程 SIGKILL）——journal 语义与「半写文件不被当成已完成」。
  *
- * 只读审计产物 + task-9 修后的回归锚点：按**真实行为**断言，行号以符号名为锚。核心事实链（源码）：
- *  - src/cli/index.ts:1130 把 restore() 包进 runJournaled({operationType:'cli-restore'})，非 deferred、
- *    无 snapshotProvider ⇒ src/core/phase3-host.ts:352-353 在 fn 之前把 journal 写成 APPLYING。
- *  - restore()（src/core/restore.ts:695-803）**全程不调用** recordStep/bindSnapshot/markApplying
- *    ⇒ 崩溃后 journal 是「APPLYING + 零 step + snapshotId=null」。
- *  - src/core/reconcile.ts:365-373（空 steps + APPLYING + 无 trusted snapshot）⇒ needs-attention + SAFE MODE，
- *    绝不 recovered ⇒ 「半写状态不会被当成已完成」由 journal 判定兜住。
+ * 回归锚点：按**真实行为**断言，行号以符号名为锚。核心事实链（源码）：
+ *  - src/cli/index.ts 把 restore() 包进 runJournaled({operationType:'cli-restore'})，非 deferred、
+ *    无 snapshotProvider ⇒ src/core/phase3-host.ts 在 fn 之前把 journal 写成 APPLYING。
+ *  - restore() 自本轮起通过 src/core/restore-wal.ts 上报**逐动作 WAL**：首个写之前预登记全部动盘
+ *    动作（planned + beforeFp），每个动作结束更新 done/attention（+ afterFp）。崩溃后 journal 因此
+ *    带着真实进度（A-1 断言「1 done + 2 planned」），而不是以前的「零 step 全不透明」。
+ *  - src/core/reconcile.ts 消费这些 step：全部 done 且 afterFp 可验 ⇒ recovered（A-4）；
+ *    仍有 planned/不可证 ⇒ needs-attention + SAFE MODE（A-1），绝不谎报完成。
  *  - D5（task-9 已修）：反悔副本按「本次执行」分目录（pre-restore/<stamp>[-n]/），seq 只在该目录内
  *    重数 ⇒ 崩溃后重跑不再覆盖第一份副本（修复前文件名只由 seq+relPath 决定，见 A-3）。
  *  - D4（task-9 已修，用例在 restore-target-symlink.test.ts）：计划期对目标侧 symlink/junction 做真实
@@ -21,9 +22,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
-import { JournalStore } from './journal.ts';
+import { JournalStore, createJournalEntry, generateOperationId } from './journal.ts';
+import { Phase3Recovery } from './phase3-host.ts';
 import { reconcileActive } from './reconcile.ts';
 import { restore } from './restore.ts';
+import type { RestoreJournalPort } from './restore-wal.ts';
+import { sha256Hex } from '../utils/hashing.ts';
 import type { Snapshot } from './types.ts';
 
 const SNAP_ID = 'snap-restore-crash';
@@ -128,16 +132,30 @@ async function listAll(root: string, prefix = ''): Promise<string[]> {
   return out;
 }
 
-test('A-1 restore 中途进程被 SIGKILL：journal 停在 APPLYING、零 step 登记，绝无「完成」标记', async (t) => {
+test('A-1 restore 中途进程被 SIGKILL：journal 停在 APPLYING，WAL 记录「1 done + 2 planned」，绝无「完成」标记', async (t) => {
   const f = await makeFixture(workdir(t));
   assertKilled(await spawnChild(f, 'crash', 2));
 
   const { journal } = await readActiveJournal(f);
-  // 真实 journal 语义：非 deferred 无 provider ⇒ fn 前已 APPLYING；restore 不登记任何 step
+  // 真实 journal 语义：非 deferred 无 provider ⇒ fn 前已 APPLYING；WAL 在首个写之前预登记全部动盘动作
   assert.equal(journal.state, 'APPLYING', 'journal 应停在 APPLYING');
   assert.equal(journal.operationType, 'cli-restore');
-  assert.ok(journal.snapshotId == null, 'CLI restore 路径不绑定 snapshotId（无可信回滚快照）');
-  assert.deepEqual(Object.keys(journal.steps), [], 'restore 不写 step ⇒ 崩溃后零进度登记');
+  assert.equal(journal.snapshotId, SNAP_ID, 'WAL 在首个写之前绑定本次可信快照');
+  assert.equal(Object.keys(journal.steps).length, 3, '三个 host 文件动作全部预登记（不是只登记已执行的）');
+  const steps = Object.values(journal.steps);
+  assert.deepEqual(steps.map((s) => s.status), ['done', 'planned', 'planned'], '崩在第 2 步 ⇒ 1 个 done + 2 个 planned');
+  assert.deepEqual(steps.map((s) => s.ref), [
+    path.join(f.homeDir, 'settings.yaml'),
+    path.join(f.homeDir, 'cordis.patch.yml'),
+    path.join(f.homeDir, 'extra.yaml'),
+  ]);
+  // done 项的 afterFp = 快照内容指纹；planned 项只有 beforeFp（= 当前内容），afterFp 仍为 null
+  assert.equal(steps[0]!.afterFp, sha256Hex(Buffer.from('SNAP-settings')));
+  assert.equal(steps[0]!.beforeFp, sha256Hex(Buffer.from('CURRENT-settings')));
+  assert.equal(steps[1]!.beforeFp, sha256Hex(Buffer.from('CURRENT-patch')));
+  assert.equal(steps[1]!.afterFp, null);
+  assert.equal(steps[2]!.status, 'planned');
+  assert.equal(steps[2]!.afterFp, null);
 
   // 磁盘半恢复态真实存在：第 1 个动作已写，第 2/3 个未动
   assert.equal(await readFile(f.homeDir, 'settings.yaml'), 'SNAP-settings');
@@ -240,4 +258,72 @@ test('A-3 崩溃后直接重跑 restore 引擎可收敛到快照态，且第一�
 
   const all = await listAll(f.workDir);
   assert.deepEqual(all.filter((p) => p.includes('.dshcm.')), [], '重跑不应留下 tmp 残留');
+});
+
+test('A-4 恢复全程写完但终态未落盘（宿主被杀在尾操作前）：reconcile 用真实 hooks 判 recovered', async (t) => {
+  const f = await makeFixture(workdir(t));
+  const store = new JournalStore({ transactionsDir: f.transactionsDir });
+  await store.ensureDirs();
+  const opId = generateOperationId();
+  await store.create(createJournalEntry('cli-restore', {
+    operationId: opId,
+    ownerInstanceId: 'restore-crash-owner',
+    lockId: 'restore-crash-owner',
+    packageVersion: '0.1.79',
+    environmentFingerprint: FP,
+  }, new Date().toISOString()));
+  await store.transition(opId, 'APPLYING');
+  // journal 端口（与 phase3-host 的 JournalRunContext 同形）：把 WAL step 直接落进**真** store，
+  // 但不写终态 —— 模拟「恢复全跑完、COMMITTED 之前被 SIGKILL」。
+  const port: RestoreJournalPort = {
+    bindSnapshot: async (snapshotId) => {
+      await store.update(opId, (j) => ({ ...j, snapshotId }));
+    },
+    markApplying: async () => undefined,
+    recordStep: async (rec) => {
+      await store.update(opId, (j) => {
+        const plannedSteps = j.plannedSteps.includes(rec.id) ? j.plannedSteps : [...j.plannedSteps, rec.id];
+        return {
+          ...j,
+          plannedSteps,
+          steps: {
+            ...j.steps,
+            [rec.id]: {
+              adapter: rec.adapter,
+              ref: rec.ref,
+              kind: rec.kind,
+              external: rec.external === true,
+              beforeFp: rec.beforeFp ?? null,
+              afterFp: rec.afterFp ?? null,
+              status: rec.status ?? 'planned',
+              appliedAt: new Date().toISOString(),
+              message: rec.message ?? null,
+            },
+          },
+        };
+      });
+    },
+  };
+  const report = await restore({ snapshotDir: f.snapshotDir, homeDir: f.homeDir, profile: 'web', journal: port });
+  assert.deepEqual(report.failed, [], '恢复本身不应失败');
+  for (const [rel, content] of Object.entries(SNAPSHOT)) {
+    assert.equal(await readFile(f.homeDir, rel), content, rel + ' 应已还原');
+  }
+
+  const { journal } = await readActiveJournal(f);
+  assert.equal(journal.state, 'APPLYING', '恢复不写终态（终态由 runJournaled 尾操作写）');
+  assert.equal(journal.snapshotId, SNAP_ID);
+  const steps = Object.values(journal.steps);
+  assert.deepEqual(steps.map((s) => s.status), ['done', 'done', 'done'], '每个动作都登记 done');
+
+  // 真实 hooks：afterFp 与盘面一致 ⇒ 全部可证明 ⇒ recovered（不是空 steps 的 needs-attention）
+  const recovery = new Phase3Recovery({ dataDir: f.dataDir, packageVersion: '0.1.79', environmentFingerprint: FP });
+  const out = await reconcileActive(recovery.store, recovery.recoveryHooks, {
+    environmentFingerprint: FP,
+    isLiveOwner: async () => false,
+  });
+  assert.equal(out.decisions.length, 1);
+  assert.equal(out.decisions[0]!.kind, 'recovered', '全部 step 可证明 ⇒ 判 recovered');
+  assert.equal(out.safeModeRequired, false, '可证明完成时不得再要 SAFE MODE');
+  assert.equal(out.unresolved.length, 0);
 });

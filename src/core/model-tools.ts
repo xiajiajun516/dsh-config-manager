@@ -30,6 +30,7 @@ import type { JsonValue } from '@deepseek-ai/dsh-tools'
 import { Exporter } from './exporter.ts'
 import { listSnapshots, planRestore, restore as executeRestore } from './restore.ts'
 import type { RestorePlan, RestoreReport } from './restore.ts'
+import type { RestoreJournalPort } from './restore-wal.ts'
 import type { SyncEngine } from '../sync/sync-engine.ts'
 import { createEncryptionProvider } from '../security/encryption.ts'
 import { SECTION_IDS } from '../schema/config.ts'
@@ -213,7 +214,9 @@ export function createModelTools(deps: ModelToolsDeps) {
         }
       }
       // Step 3 P0-A：真实 model-restore 在已持锁下创建 journal（不 double-acquire）
-      const doRestore = async (): Promise<RestoreReport> => executeRestore(restoreOpts)
+      // ctx = journal 上下文（可选）：交给 restore() 逐动作 WAL，崩溃后 reconcile 可判进度
+      const doRestore = async (ctx?: RestoreJournalPort): Promise<RestoreReport> =>
+        executeRestore(ctx === undefined ? restoreOpts : { ...restoreOpts, journal: ctx })
       const report: RestoreReport = await runWithMutationLock(
         deps.host.mutationLock,
         { op: 'model-restore', target: snapshotId, isBlocked: () => deps.host.safeModeIsBlocked?.() ?? false },

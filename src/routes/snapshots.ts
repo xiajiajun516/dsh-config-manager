@@ -13,6 +13,7 @@ import { deleteSnapshot, isValidSnapshotId, listSnapshots, planRestore, setSnaps
 import type { RunState } from '../core/run-registry.ts'
 import { snapshotFileDiff, summarizeRestoreChanges } from '../core/snapshot-diff.ts'
 import { buildFileDiffBody, buildRestoreBody, executeRestorePlan, makeRestoreExecutor } from './route-support.ts'
+import type { RestoreJournalPort } from '../core/restore-wal.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import { isENOENT } from '../utils/guards.ts'
 import { join } from 'node:path'
@@ -99,7 +100,9 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
         }
         // 真实执行（Phase 2 锁：destructive 必须先获取 GLOBAL 环境锁；被挡 → 423）
         await runWithMutationLock(host.mutationLock, { op: 'restore', target: snapshotId, isBlocked: () => host.safeModeIsBlocked?.() ?? false }, async (lockCtx) => {
-          const executeRestore = async (): Promise<void> => {
+          // ctx = journal 上下文（deferredSnapshot 模式）：交给 executeRestorePlan 逐动作 WAL，
+          // 崩溃后 reconcile 才能判出「哪些还原了、哪些没动」。
+          const executeRestore = async (ctx?: RestoreJournalPort): Promise<void> => {
             // 先登记 run（同 kind running → 409 拒绝重复恢复）
             let run: RunState
             try {
@@ -133,6 +136,7 @@ export function snapshotRoutes(env: RoutesEnv): WebRoute[] {
                     detail: info.detail,
                   })
                 },
+                ctx,
               )
               runs.finish(runId, report)
               // Phase 6：迁移历史（best-effort）。sections 从快照 entries 的 adapter 去重派生。

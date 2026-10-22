@@ -87,6 +87,19 @@ export function isTerminalState(s: JournalState): boolean {
 
 export type StepStatus = 'planned' | 'done' | 'failed' | 'skipped' | 'attention';
 
+/**
+ * 指纹哨兵：「该路径**本就不该存在**」（删除类动作的期望态）。
+ *
+ * 为什么需要：文件类 step 的 beforeFp/afterFp 一直是「文件内容 sha256」，而**删除**动作的正确
+ * 终态是「文件不存在」—— 没有任何 sha256 能表达它，于是删除项在 crash 后永远无法自证已应用
+ * （reconcile 只能判 none → NEEDS_ATTENTION）。本哨兵把「应不存在」变成可比较的值：
+ *  - beforeFp = ABSENT_FINGERPRINT ⇒ 「留点时不在」
+ *  - afterFp  = ABSENT_FINGERPRINT ⇒ 「做完后不在」
+ * 判定只有一处（phase3-host 的 verifyStepFingerprint）；importer 的指纹永远是十六进制 sha256
+ * 或 null，因此本哨兵对导入链路零影响。
+ */
+export const ABSENT_FINGERPRINT = 'absent';
+
 export interface JournalStep {
   adapter: string;
   ref: string;

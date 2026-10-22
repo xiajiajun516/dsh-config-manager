@@ -33,6 +33,8 @@ import type { MsgFunc } from './messages.ts';
 import {
   classifyDshPluginFailure, readInstalled, readInstalledVersion, resolveProfileDir, runDshPlugin,
 } from './plugin-cli.ts';
+import { createRestoreWal, isWalActionKind } from './restore-wal.ts';
+import type { RestoreJournalPort, RestoreWalHandle, RestoreWalSettleStatus } from './restore-wal.ts';
 import { parseJsonSafe } from '../utils/json.ts';
 import { atomicCopyFile, atomicWriteFile } from '../utils/atomic-write.ts';
 import type { SectionId } from '../schema/types.ts';
@@ -134,6 +136,13 @@ export interface RestoreOptions {
    * 可传 'requireOperationBound'。
    */
   requireOperationBound?: boolean;
+  /**
+   * 逐动作 WAL（崩溃后可判进度）：传入 journal 上下文（host 的 JournalRunContext 结构上兼容）后，
+   * 恢复会在**首个写之前**把全部动盘动作登记为 planned（带 beforeFp），执行完逐项更新 done/attention
+   * （带 afterFp）。崩溃后 reconcile 因此能证明「哪些还原了、哪些没动」，而不是整笔不透明。
+   * 不传 = 只记 operation intent（旧行为，绝不假装有进度）。
+   */
+  journal?: RestoreJournalPort;
 }
 
 export interface RestoreReport {
@@ -870,12 +879,44 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
     return preDir;
   };
 
+  // 逐动作 WAL（可判进度，见 restore-wal.ts）：绑定可信快照 → 推进 APPLYING → **首个写之前**
+  // 预登记**全部**动盘动作（planned + beforeFp）。预登记而不是边做边记：reconcile 只看 journal 里
+  // 存在的 step，只登记「已执行」的那些会把「崩在第 2 步」误判成「全部完成」。
+  const wal = createRestoreWal(opts.journal);
+  const walByAction = new Map<RestoreAction, RestoreWalHandle | undefined>();
+  if (wal !== null) {
+    const bindSnapshot = opts.journal?.bindSnapshot;
+    if (bindSnapshot !== undefined) await bindSnapshot(plan.snapshotId);
+    const markApplying = opts.journal?.markApplying;
+    if (markApplying !== undefined) await markApplying();
+    const mutating = plan.actions.filter((a) => isWalActionKind(a.kind));
+    const handles = await wal.preRegister(mutating.map((a) => ({
+      kind: a.kind,
+      ...(a.target !== undefined ? { target: a.target } : {}),
+      ...(a.pluginName !== undefined ? { pluginName: a.pluginName } : {}),
+      abs: walAbsOf(a),
+    })));
+    mutating.forEach((a, i) => { walByAction.set(a, handles[i]); });
+  }
+  /** 文件类动作的绝对目标（reconcile 直接拿它读盘算指纹）；插件卸载/越界目标 → null（不可指纹）。 */
+  function walAbsOf(action: RestoreAction): string | null {
+    if (action.kind === 'pluginRemove' || action.target === undefined) return null;
+    try {
+      return homeAbs(homeDir, action.target, msg);
+    } catch {
+      return null;
+    }
+  }
+
   let seq = 0;
   const total = plan.actions.length;
   let actionIndex = 0;
   for (const action of plan.actions) {
     actionIndex += 1;
     opts.onAction?.({ index: actionIndex, total, detail: action.description });
+    const walHandle = walByAction.get(action);
+    let settleStatus: RestoreWalSettleStatus = 'done';
+    let settleMessage: string | null = null;
     try {
       switch (action.kind) {
         case 'hostFileRestore': {
@@ -923,7 +964,11 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           if (result.ok) {
             report.removedPlugins.push(action.pluginName!);
           } else {
-            report.failed.push({ item: `plugin:${action.pluginName}`, reason: result.message ?? msg('restore.pluginRemoveFailed') });
+            const reason = result.message ?? msg('restore.pluginRemoveFailed');
+            report.failed.push({ item: `plugin:${action.pluginName}`, reason });
+            // 外部副作用没做成 → 记 attention（绝不记 done：reconcile 对 external step 本就保守）
+            settleStatus = 'attention';
+            settleMessage = reason;
           }
           break;
         }
@@ -937,11 +982,13 @@ export async function restore(opts: RestoreOptions): Promise<RestoreReport> {
           report.skipped.push(msg('restore.unknownAction', { kind: String(action.kind), description: action.description }));
       }
     } catch (err) {
-      report.failed.push({
-        item: action.target ?? action.pluginName ?? action.description,
-        reason: err instanceof Error ? err.message : String(err),
-      });
+      const reason = err instanceof Error ? err.message : String(err);
+      report.failed.push({ item: action.target ?? action.pluginName ?? action.description, reason });
+      settleStatus = 'attention';
+      settleMessage = reason;
     }
+    // WAL 终态与导入引擎同口径：持久化失败向上抛（fail-closed），绝不静默丢进度。
+    if (wal !== null && walHandle !== undefined) await wal.settle(walHandle, settleStatus, settleMessage);
   }
 
   // F5 幽灵会话校验（file 类会话条目写回后）：快照记录的会话清单 vs 磁盘 sessions 目录
