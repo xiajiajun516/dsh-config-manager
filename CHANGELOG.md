@@ -43,8 +43,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **gist 通道并发写不再悄悄吃掉别人刚推的快照**：推送或删除完成后会重新读回索引核对，条目没落上或被别人改过就整轮重做，最多三次；仍不行就明确报「索引冲突」并提示稍后重试，而不是当作成功。
   **Concurrent writes on the gist channel no longer silently drop someone else's fresh snapshot**: after a push or delete the index is read back and verified; if an entry did not land or someone else changed it, the whole round is redone up to three times, and a persistent conflict is reported as "index conflict" with a retry hint instead of being treated as success.
 
-- **快照恢复中途崩溃后，重启能看出「哪些还原了、哪些还没动」**：恢复现在每做完一个动作就登记一次进度，宿主在恢复途中被杀也能在下次启动时判出「已全部还原」还是「只做了一部分」，不再只有一句「需要人工检查」；仍不支持点一下自动接着做，残留的未完成恢复会先要求处理。
-  **A restore interrupted by a crash now reports what was already reverted**: progress is recorded action by action, so after the host is killed mid-restore the next start can tell "everything was restored" from "only part of it was", instead of a blanket "needs attention"; resuming automatically is still not supported, and the unfinished restore must be resolved first.
+- **快照恢复中途崩溃后能接着做完，但要先逐项证明**：恢复每做完一个动作就登记进度；宿主在恢复途中被杀后，再点一次恢复会先核对「还是同一次恢复、同一个快照、每个目标文件仍是做之前或做之后的样子」，成立就只补做剩下的动作，不成立就明确报出原因并要求先处理，绝不猜着继续。
+  **A restore interrupted by a crash can be finished by clicking restore again, once it proves it is safe**: progress is recorded action by action; after the host is killed mid-restore, the next attempt first verifies that it is the same restore on the same snapshot and that every target still matches either its pre-restore or post-restore state. Only then does it perform just the remaining actions, and otherwise it explains why it refused instead of guessing.
 
 ### 🔐 安全 · Security
 
