@@ -40,6 +40,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **命令行修会话前会先看 SAFE MODE 与环境锁**：`sessions repair --fix` 现在与救急台用同一道写入门，存在未恢复的配置事务或残留环境锁时直接拒绝并指出出口，不再只看 DSH 有没有在运行。
   **The CLI session repair checks SAFE MODE and the environment lock first**: `sessions repair --fix` now passes the same write gate as the rescue console, so it refuses with a pointer to the way out when an unfinished transaction or a stale lock exists, instead of only checking whether DSH is running.
 
+- **gist 通道并发写不再悄悄吃掉别人刚推的快照**：推送或删除完成后会重新读回索引核对，条目没落上或被别人改过就整轮重做，最多三次；仍不行就明确报「索引冲突」并提示稍后重试，而不是当作成功。
+  **Concurrent writes on the gist channel no longer silently drop someone else's fresh snapshot**: after a push or delete the index is read back and verified; if an entry did not land or someone else changed it, the whole round is redone up to three times, and a persistent conflict is reported as "index conflict" with a retry hint instead of being treated as success.
+
+### 🔐 安全 · Security
+
+- **回滚点不再把凭证类文件写成明文副本**：`.env`、私钥、`credentials`/`secrets` 一类文件不再被采集进回滚点，而是记为「敏感跳过」并出现在跳过清单里；这些文件因此也不会被「回退到留点前」删除或改写。
+  **Rollback points no longer materialize credential files as plaintext copies**: `.env` files, private keys and `credentials`/`secrets` style files are no longer captured into rollback points; they show up on the skipped list instead, and rollback will neither delete nor rewrite them.
+
+### 🔧 变更 · Changed
+
+- **快照恢复的「恢复前备份」改为每次一个目录**：重跑同一次恢复不再覆盖上一次的反悔副本，命令行与界面看到同一个位置，出问题可挑对应那次回到恢复前状态。
+  **The pre-restore backup of a snapshot restore now gets its own directory per run**: re-running a restore no longer overwrites the previous undo copy, the CLI and the UI point at the same place, and you can pick the run you want to roll back to.
+
 ## [0.1.80] - 2026-10-22
 
 > **本版主题**：**这一版修掉五处「看着像你不会用、其实是它自己出错」的地方：加密同步不再每轮逼你手动裁决、冲突拍完板就能执行合并、反向代理挂在子路径下不再误报「插件未安装」，阿里云 OSS 与 gist 两条同步通道也终于能真正连上**
