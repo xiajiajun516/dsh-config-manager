@@ -23,7 +23,7 @@
 
 | # | 状态 | 问题 | 证据 | 影响 | 建议 | 置信度 |
 |---|---|---|---|---|---|---|
-| 6 | 未修 | 巨型文件无体量棘轮 | `src/core/rollback-point.ts`（约 5.9k 行）、`src/index.ts`（约 4.4k，原 5.0k）、`src/client/recovery/RecoveryPanel.tsx`（约 1.9k）、`src/core/analyzer.ts`（约 1.8k） | 阅读与 merge 成本高；改动易漏 | 先给「不得继续增长」的软棘轮（行数上限测试），再按域拆分；拆前必须先有该域回归测试 | 高 |
+| 6 | 部分（已加棘轮） | 巨型文件无体量棘轮 | `src/core/rollback-point.ts`（约 5.9k 行）、`src/index.ts`（4.4k，原 5.0k）、`src/client/recovery/RecoveryPanel.tsx`（约 1.9k）、`src/core/analyzer.ts`（约 1.8k） | 阅读与 merge 成本高；改动易漏 | 已加「只许降不许涨」的行数棘轮（见 F7）；拆分仍按域进行，拆前必须先有该域回归测试 | 高 |
 | 7 | 未修 | `RecoveryPanel` 承载 8 类职责且写盘只有组件内 busy | `src/client/recovery/RecoveryPanel.tsx`；长写盘未进 `run-store` 的「进行中操作」状态 | 切页丢视图、用户不知道还在写 | 写盘动作登记到 `run-store`（与 export/import 同口径），再拆组件 | 高 |
 | 8 | 未修 | 同一个概念多份实现 | 日期戳 3 份（`src/index.ts`、`core/model-tools.ts`、`sync/backup-scheduler.ts`）；脱敏流水线 2 份（`security/redaction.ts` 内两条同构路径）；越界判定 2 份（`core/restore.ts` 的 `startsWith` vs `utils/paths.ts` 的 `path.relative`，大小写/realpath 语义不同） | 修一处漏一处；跨平台差异在这里最容易出 | 抽单一实现并加一条跨平台用例；越界判定优先用 `path.relative` 版本（已处理分隔符与大小写） | 高 |
 | 9 | 未修 | `/restore` 自拼 mutation gate 并复制 423 映射 | `src/routes/snapshots.ts` 与 `src/index.ts` 里的其它 gate 用法不一致 | 新增 gate 行为（例如新错误码）时容易漏改一处 | 收敛到同一个 helper；先补一条对比测试 | 中 |
@@ -57,3 +57,4 @@
 | F4 | 文档事实漂移（路由 82、13 组、页面四页、白名单 133、版本声明去写死） | `AGENTS.md`、`DEVELOPERS.md`、`docs/spec/compat-matrix.md`、`docs/spec/known-gaps.md` |
 | F5 | 未解锁容器闸门与 `plan-changed` 409 的回归测试 | `tests/route/encrypted-container-gate.test.ts`、`tests/route/restore-plan-changed.test.ts` |
 | F6 | 拆掉「入口 ↔ 路由组」运行时 import 环：共享工具下沉 `src/routes/route-support.ts`，`src/index.ts` 5003 → 4379 行；`pluginVersion`/`starPromptRepoUrl` 改经 `makeRouteEnv()` 注入 | `src/routes/route-support.ts`、`src/index.ts`、9 个组文件；守卫 `tests/route/route-support-cycle.test.ts`、`tests/architecture-boundaries.test.ts` |
+| F7 | 巨型文件行数棘轮（12 个 ≥1400 行文件的当前行数即为上限，只许下调） | `tests/file-size-ratchet.test.ts`（F-01/F-02）；登记表含 `src/core/rollback-point.ts` 5963、`src/index.ts` 4379 等 |
