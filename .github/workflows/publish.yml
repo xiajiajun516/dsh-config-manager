@@ -34,6 +34,11 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Typecheck (tests)
+        # 与 ci.yml 对齐：tests/** 不在根 tsconfig 的 include 内，必须单独跑一遍；
+        # 发版流水线缺这一步时，测试代码的类型错误在整个发布路径上都是盲区。
+        run: npm run typecheck:tests
+
       - name: Test
         run: npm test
 
@@ -45,6 +50,17 @@ jobs:
         # 任何被外置的 require 都会让用户端插件加载崩溃，绝不能带病发布。
         # `npm test` 在 Build 之前运行，此时产物还不存在（该测试会跳过），故此处必须重跑。
         run: node --test src/client/bundle-selfcontained.test.ts
+
+      - name: AGENTS.md budget guard
+        # 与 ci.yml 同构：只在 PR 阶段拦，发版路径仍可能带病发布。
+        run: node scripts/check-agents-budget.mjs
+
+      - name: Doc path guard
+        run: node scripts/check-doc-paths.mjs
+
+      - name: Doc version guard
+        # 发版前最容易踩的正是版本漂移：三处版本 + 文档声明必须一致。
+        run: node scripts/check-doc-versions.mjs
 
       - name: Package tarball
         # The installable tgz is attached to the GitHub Release as an asset.

@@ -104,6 +104,16 @@ jobs:
         # 超限时模型只能看到被截断的尾巴（历史事故）。规则留在 AGENTS.md，证据必须进 docs/lessons/。
         run: node scripts/check-agents-budget.mjs
 
+      - name: Doc path guard
+        # 活文档里指向已删除文件的路径会让读者与 agent 按图索骥失败（审计实测多例）。
+        # 只校验活文档；历史归档 / 证据库 / CHANGELOG 故意排除（见脚本头注释）。
+        run: node scripts/check-doc-paths.mjs
+
+      - name: Doc version guard
+        # 写死的版本号没有机制保证跟着发版走（审计实测：文档写 v0.1.58，实为 0.1.79）。
+        # 校验三处版本一致 + 活文档里「适用/当前版本」声明与 package.json 一致。
+        run: node scripts/check-doc-versions.mjs
+
       - name: Package tarball (dry run)
         # 与发布流水线同构的打包校验：pack 失败说明 package.json "files" 白名单
         # 或 lib/ 产物已坏——在 PR 阶段暴露，而不是等到发版时才卡住。

@@ -15,7 +15,7 @@ npm run bundle                   # 仅重建 client bundle（tsdown）
 # 注意：client 半（src/client/**，含文案/样式）改动后必须重新 build（或 bundle）并重启 DSH 才生效
 #     —— 宿主半在 DSH 启动时加载、没有热重载；只改源码不 build，界面仍是旧 UI。
 #     产物：lib/client.js（CSS Modules 内联其中）+ lib/（host）。
-npm test                         # 运行全部测试（node --test，192 个）
+npm test                         # 运行全部测试（node --test，src/** 与 tests/** 的 *.test.ts）
 npm run smoke                    # 仅核心引擎冒烟测试
 ```
 
@@ -44,7 +44,7 @@ src/
 
 > 下移自 `AGENTS.md` §🏗️ 架构心智：这里是完整论证与证据；规则句仍留在 AGENTS.md。
 
-- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；证据见 known-pitfalls）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件 79 条路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 79 条路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；证据见 known-pitfalls）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件 82 条路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 82 条路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
 
 ## 🚀 自动发布（npm + GitHub Release）
 
@@ -96,7 +96,7 @@ install → typecheck（src）→ typecheck:tests（tests/**）→ npm test（�
 ```
 
 - **零发布副作用**：不含向 registry 推送的步骤，不申请 OIDC 发布凭据，权限仅 `permissions: contents: read`
-- **单 job 跑完整阶梯**：install → typecheck → typecheck:tests → test → build → pack，一步失败即整体红；**禁用「允许失败」、不加自动重试**（全量测试实测 1558 项约 88 秒，无需拆 job；耗时由 concurrency + timeout 控制）
+- **单 job 跑完整阶梯**：install → typecheck → typecheck:tests → test → build → pack，一步失败即整体红；**禁用「允许失败」、不加自动重试**（全量测试 2026-10 实测 5000+ 项、约 3–4 分钟，无需拆 job；耗时由 concurrency + timeout 控制）
 - **`tests/**` 是独立一条类型检查**：根 tsconfig 只 include `src/**`，历史上 228 个测试文件长期在类型检查之外并积压 43 条错误（2026-09 修完并接进 CI）；`tsconfig.tests.json` 未进版本库时该 step 会 TS5083 报错，提交时必须带上它
 - **安装契约与发布一致**：Node 24 + `npm ci --legacy-peer-deps`（部分 DSH 核心包只声明在 peerDependencies，普通 `npm ci` 必红）
 - **并发**：`concurrency.group: ci-${{ github.ref }}` + `cancel-in-progress`，同一分支的新提交自动取消旧运行
@@ -241,9 +241,10 @@ install → typecheck（src）→ typecheck:tests（tests/**）→ npm test（�
 > 下移不改变任何约定，只是把按需查阅的内容从常驻文档挪到这里；`AGENTS.md` 中保留了硬性规则与指针。
 
 #### 页面落位（src/client/）
-- 七 tab 容器：`index.ts` + `ConfigManagerSection.tsx`（Overview/Export/Import/Snapshots/Sync/Market/Profiles/More；tablist 支持方向键导航）；总览为默认首 tab（`panel:'overview'`，旧 panel 缺省值经 parsePersistedState 迁移）
-- 总览 `overview/OverviewPanel.tsx`（纯函数模型 `src/ui/overview-view.ts`：指标/健康判定/建议/最近活动/相对时间）
-- 导出 `export/ExportView.tsx`；导入九步 `import/ImportWizardView.tsx`（外层包装 Stepper 步骤条 + `ImportWizardBody` 本体；纯函数 `src/ui/import-stepper.ts`；+`ConflictList/PathMappingForm/import-file-select`）；快照 `snapshots/SnapshotsPanel.tsx`
+- 四页容器：`index.ts` + `ConfigManagerSection.tsx`（`PanelId = 'home' | 'library' | 'sync' | 'environment'`，分派唯一在 `ConfigManagerSection.tsx`；默认首 tab = `home`）。**加页/改 id 必须四处同改**：`run-store.ts` 的 `PanelId` → `parsePersistedState` 映射 → `ConfigManagerSection.tsx` 分支 → `run-store.test.ts` 迁移用例
+- 首页 `src/client/home/`（`HomePanel` + `BackupScheduleCard`）；环境页 `src/client/environment/`（`EnvironmentPanel` + 维护/诊断）
+- 产物库 `src/client/library/`（`LibraryPanel` + `ArtifactRow`/`ArtifactDetail`/`LibraryActions`/`BackupInspectView`/`RestorePlanView`：备份、快照、恢复与各类产物的混合入口）；同步页 `src/client/sync/`（`SyncPanel`/`SyncSettingsView`/`SyncConfirmView`）
+- 导出 `src/client/export/ExportView.tsx`；导入九步 `src/client/import/ImportWizardView.tsx`（外层包装 Stepper 步骤条 + `ImportWizardBody` 本体；纯函数 `src/ui/import-stepper.ts`；+`ConflictList/PathMappingForm/import-file-select`）
 - 历史 `history/HistoryPanel.tsx`；同步 `sync/SyncSettingsView.tsx`(+`SyncConfirmView/SyncHistoryView/sync-view`)；市场 `market/MarketPanel.tsx`(+`MyConfigsView/my-configs-view/my-configs-api`)；咨询 `consult/ConsultCard.tsx`
 - 共享原语 **`common/ui.tsx`**（Button/Badge/Banner/Card/Spinner/Field/SectionTitle/Empty/Checkbox/Stepper）+`common/ErrorBanner.tsx`/`ProgressBar.tsx`/`ReportView.tsx`/`ConfirmDialog.tsx`（含 focus trap）/`Skeleton.tsx`（加载骨架 `Skeleton`/`SkeletonList`/`SkeletonTable`；与 Spinner 的分工见 `DESIGN.md §6`）/`Motion.tsx`（`Collapse` 折叠容器 + `ViewSwitch` 视图切换入场）
 - 状态中枢 `run-store.ts`（模块级单例+sessionStorage 白名单）；数据访问 `api.ts`/`sync/sync-api.ts`/`market/market-api.ts`；文案字典 `locales.ts`/`sync-locales.ts`/`market-locales.ts`（zh 源/en 镜像）
@@ -275,8 +276,8 @@ CI 门禁：`.github/workflows/ci.yml` 对 `pull_request`→main 与 `push`→ma
 - **禁止硬编码用户可见字符串**。
 - **语言在「取文案那一刻」解析，不在装配那一刻**（2026-10-08 根因修复）：客户端 `makeLiveUiT(read)`（`src/ui/i18n.ts`；模块级 `liveUiT` 由 `setUiLanguageSource(read)` 接线在 `src/client/index.ts`），宿主 / 引擎 `engineMsg` + `setEngineLanguageSource(() => resolveAppLanguage(ctx))`（`src/index.ts` 构造期），路由注册点 `src/routes/kit.ts` 的 `endpoint()` 每请求 `invalidateEngineLocale()`；`LANGUAGE_TTL_MS = 1000` 只给非请求路径（调度器 / 后台任务）兜底。**不得**在 `apply()` 里写 `makeUiT(...)` / `makeMsg(...)` 快照（那是「切到 English 后界面仍有中文」的根因）。
 - **静态守卫（回归门禁）**：全量 `node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 全仓零命中；摘要行 `DCM_I18N_GUARD scope=ALL files=<扫描文件数> hits=0 allowlisted=128`（**不变量是 `hits=0` / `allowlisted=128`**；`files=` 随新增源文件增长））；作用域自检 `$env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'; node --test tests/i18n-hardcoded-guard.test.ts`。
-  `DCM_I18N_GUARD_SCOPE` = 逗号分隔的 **workspace 相对 POSIX 前缀**，按**目录段边界**匹配（`src/client` 不命中 `src/client2`），**只收窄文件列表**（E1–E3 豁免、白名单过期断言、内核自检始终全局生效）；未设置 / 全空白 = 全量；非法值（绝对路径 / 反斜杠 / `..` 段）**直接失败**，绝不静默当空集。内核 `tests/helpers/i18n-scan.ts`、用例 `tests/i18n-hardcoded-guard.test.ts`（扫描集 = `src/**` − `src/cli/**` − `*.test.ts` − `fixtures/**`，+ `locale/en.json` / `locale/zh.json`；注释 / `log.*`·`console.*` 实参 / 目录 zh 区豁免）。
-- **新增用户可见文案必须进目录**（zh 逐字保留、en 补齐）；新增白名单豁免只能走 captain → `tests/helpers/i18n-scan.ts`（条目计数精确锚定：**4 条 / 128 命中**）。
+  `DCM_I18N_GUARD_SCOPE` = 逗号分隔的 **workspace 相对 POSIX 前缀**，按**目录段边界**匹配（`src/client` 不命中名字以它开头的更长子目录），**只收窄文件列表**（E1–E3 豁免、白名单过期断言、内核自检始终全局生效）；未设置 / 全空白 = 全量；非法值（绝对路径 / 反斜杠 / `..` 段）**直接失败**，绝不静默当空集。内核 `tests/helpers/i18n-scan.ts`、用例 `tests/i18n-hardcoded-guard.test.ts`（扫描集 = `src/**` − `src/cli/**` − `*.test.ts` − `fixtures/**`，+ `locale/en.json` / `locale/zh.json`；注释 / `log.*`·`console.*` 实参 / 目录 zh 区豁免）。
+- **新增用户可见文案必须进目录**（zh 逐字保留、en 补齐）；新增白名单豁免只能走 captain → `tests/helpers/i18n-scan.ts`（条目计数精确锚定：**133 命中**（条数随豁免演进，单一事实源是 `ALLOWLIST_TOTAL_HITS`））。
 
 ##### 字典共 7 套；「查不到 key」不等于是缺陷（排查前必读）
 写文案时要放进**正确的那一套**；反过来，**判断「某 key 是否存在」时必须先确认 `t` 的来源**，否则会系统性误报：
@@ -377,7 +378,7 @@ node --input-type=module -e "for (const r of [['./src/client/locales.ts','zh','e
 
 > 规则句仍在 `AGENTS.md` §🏗️；这里是原文（含审核 finding id 与实现要点）。
 
-- **宿主路由只经 `src/routes/kit.ts` 的 `endpoint()` 声明**（W1，host-entry#F-02/F-03/F-05）：围栏（loopback + 同源）与方法白名单由 kit 在**注册点**统一包装（`registerRoutes()` 兜底断言「未经 kit 的路由直接抛错」），**禁止**再写逐路由的 `guard`/裸 `isLoopbackRequest` 样板；新增一条 API 只改一处（组文件里那一条 `endpoint({ path, methods }, handler)`）。路由源 = `src/index.ts`（被源码级窗口守卫钉住的 7 条）+ `src/routes/*.ts`（其余 72 条；合计 **79** 条，见 parity 快照）——**源码级守卫必须扫全部路由源**（见 `tests/route/route-fence.test.ts`、`route-parity.test.ts`、`route-channel-guard.test.ts`），只扫 index.ts 会静默失去覆盖。
+- **宿主路由只经 `src/routes/kit.ts` 的 `endpoint()` 声明**（W1，host-entry#F-02/F-03/F-05）：围栏（loopback + 同源）与方法白名单由 kit 在**注册点**统一包装（`registerRoutes()` 兜底断言「未经 kit 的路由直接抛错」），**禁止**再写逐路由的 `guard`/裸 `isLoopbackRequest` 样板；新增一条 API 只改一处（组文件里那一条 `endpoint({ path, methods }, handler)`）。路由源 = `src/index.ts`（被源码级窗口守卫钉住的 7 条）+ `src/routes/*.ts`（其余 75 条；合计 **82** 条，见 parity 快照）——**源码级守卫必须扫全部路由源**（见 `tests/route/route-fence.test.ts`、`route-parity.test.ts`、`route-channel-guard.test.ts`），只扫 index.ts 会静默失去覆盖。
 
 - **宿主路由只能经 `src/routes/kit.ts` 的 `registerRoutes()` 注册**（W1，约定级防线）：全仓唯一调用点是 `src/index.ts`（也是唯一 webServer 消费点），它逐条断言路由出自 `endpoint()`；**绕过它直接 `webServer.register(...)` 的旁路当前不存在，但未来新增第二个注册点会静默失去围栏覆盖**（route-fence 只覆盖现有注册路径）。新增注册路径时必须同时接上 `registerRoutes`，或补一条同等的结构守卫。
 

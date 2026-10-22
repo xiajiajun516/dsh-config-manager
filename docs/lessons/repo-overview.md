@@ -14,7 +14,7 @@
 
 ```
 src/cli/      离线 CLI（`dcm`）：snapshots/restore/reinstall/verify/backup/import/sessions/web；actions.ts=动作层 · help.ts=文案单一事实源 · web/=救急台
-src/index.ts  host 入口（apply() 装配 + 保留的 7 条路由）· src/routes/ kit.endpoint() 围栏 + 按域组文件（10 组）
+src/index.ts  host 入口（apply() 装配 + 保留的 7 条路由）· src/routes/ kit.endpoint() 围栏 + 按域组文件（13 组）
 src/core/     引擎（exporter/importer/restore/rollback/rollback-point/run-registry/plugin-cli），与 DSH 解耦（ConfigAdapter/HostContext + 内存 mock）
 src/foreign/  外部 agent 配置 → bundle v1（30 来源；会话转码经 IR；凭据值绝不进包）
 src/schema/   类型/Manifest/版本 · src/security/ 安全内核 · src/migrations/ 迁移链

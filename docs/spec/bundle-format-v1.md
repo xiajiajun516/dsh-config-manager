@@ -360,16 +360,16 @@ win32 | darwin | linux | freebsd | openbsd | aix | sunos | android | cygwin | ha
 > 默认勾选 / 风险分级；`SECTION_IDS`（按 `applyOrder` 升序）、`SECTION_JSON_PATHS`、
 > `SECTION_FILE_PREFIXES`、`isFileSection` 都是它的**派生视图**，第三方可经 `dsh-config-manager/schema`
 > 导入（见 `headless-consumption.md` §3），**不必读 `src/`**。本节下面的清单是注册表的**人读快照**：
-> 分区增删时**以注册表为准**（不要照抄本节）；`tests/schema/manifest-schema.test.ts` 的 K-04 断言
+> 分区增删时**以注册表为准**（不要照抄本节）；`src/schema/manifest-schema.test.ts` 的 K-04 断言
 > `bundle-manifest.schema.json` 的 `x-section-ids` 副本与 `SECTION_IDS` 逐项一致（漂移即红灯）。
 
 `buildSectionFlags` 先为**全部已知分区**置 `false`，再把实际导出的置 `true`（`src/core/exporter.ts`）。所以：
 
-- `sections` 恒包含全部 **17 个键**（= `SECTION_IDS`；`SECTION_IDS.length === 17` 由 `tests/schema/manifest-schema.test.ts` 的 S-02 断言），缺一不可：`settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, secrets, sessions, self, pluginData, pluginAssets`。
+- `sections` 恒包含全部 **17 个键**（= `SECTION_IDS`；`SECTION_IDS.length === 17` 由 `src/schema/manifest-schema.test.ts` 的 S-02 断言），缺一不可：`settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, secrets, sessions, self, pluginData, pluginAssets`。
 - 这 17 个键要按**两种性质**分开读，否则极易误读为「只写 16 个键」（判据在注册表的 `payload.kind` 上）：
   - **16 个真实数据分区 id**：上表里的 `settings, ui, providers, plugins, mcp, prompts, skills, agentPresets, agentInstructions, workspaces, pluginFiles, credentialsStatus, sessions, self, pluginData, pluginAssets`——即注册表中 `payload.kind !== 'none'` 的全部条目，每个都对应一个 adapter / ZIP 目录，可被置 `true` 或 `false`；
   - **1 个状态位 `secrets`**：注册表里**唯一** `payload.kind === 'none'` 的条目——**不是数据分区**，全仓库没有它的 adapter（见 §3.2），因此它在 `sections` 里**恒为 `false`**（`src/core/exporter.ts`）。它出现在表里只为「键集合恒全量」这一条不变量，**不代表 bundle 含凭据**——是否含凭据由 `security.containsSecrets` / `security.encrypted` 承载（见 §4）。
-- **所以第三方 exporter 应当写满 15 个键**（14 个数据分区 + `secrets: false`）：本实现自己的导出端**永远**写满。需要留意校验强度——`validateManifest` 对 `sections` 只检查「值必须是布尔」与「键是否已知（未知键仅 warning）」（`src/schema/manifest.ts:97-104`），**并不强制 15 个键齐全**；但缺键会让接收端把该分区当作「未声明」，因此不建议依赖这种宽松。**取证**：§0.2 运行产物中 `manifest.sections` 的键集合与 `SECTION_IDS`（派生自 `SECTION_REGISTRY`，**15 项**，其中 `secrets` 亦在列）逐项一致。
+- **所以第三方 exporter 应当写满 17 个键**（16 个数据分区 + `secrets: false`）：本实现自己的导出端**永远**写满。需要留意校验强度——`validateManifest` 对 `sections` 只检查「值必须是布尔」与「键是否已知（未知键仅 warning）」（`src/schema/manifest.ts:97-104`），**并不强制 17 个键齐全**；但缺键会让接收端把该分区当作「未声明」，因此不建议依赖这种宽松。**取证**：`src/schema/manifest-schema.test.ts` 的 S-02 断言 `sections` 键集合等于 `SECTION_IDS` 且长度为 17（含 `secrets`）。
 - **未知分区键可以存在**（仅 warning），但本实现的导出端**永不会**产生它们。
 
 > ### ⚠️ G-10：`sections.secrets` 语义澄清（**第三方必读，误读会直接导致安全判断错误**）

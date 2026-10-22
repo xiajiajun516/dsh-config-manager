@@ -1,7 +1,7 @@
 # AGENTS.md — 规则书
 
 > **只收硬规则**：**非硬规则内容 —— 说明、清单、流程、示例、证据、历史沿革 —— 一律进 `docs/lessons/<域>.md`，本文件只留一行指针**；机制细则 → `DEVELOPERS.md`；UI 规范 → `DESIGN.md`（唯一权威）；对外契约 → `docs/spec/`。
-> **预算**：硬上限 28 KiB（workspace instruction 总预算 64 KiB）；>26 KiB 先告警；单行 ≤ 400 B。守卫 `node scripts/check-agents-budget.mjs`（超限时模型只能看到被截断的尾巴）。
+> **预算**：硬上限 28 KiB（workspace instruction 总预算 64 KiB）；>26 KiB 先告警；单行 ≤ 400 B。守卫 `node scripts/check-agents-budget.mjs`。
 > **新增一条坑**：先在 `docs/lessons/<域>.md` 写透证据 → 再回本文件补一行规则 + 指针；**不要把证据写回本文件**。
 > **下移存档**：概览 / 目录结构 / 常用命令 / 本机环境注意 / UI 自查清单 → `docs/lessons/repo-overview.md`。
 
@@ -10,7 +10,7 @@
 
 
 ## 🗂️ 结构与分层
-> 目录树（各目录职责）→ `docs/lessons/repo-overview.md`；`src/index.ts` 保留的 7 条路由、`src/routes/` 10 组；下列为硬规则。
+> 目录树（各目录职责）→ `docs/lessons/repo-overview.md`；`src/index.ts` 保留的 7 条路由、`src/routes/` 13 组；下列为硬规则。
 1. 业务逻辑放 `src/ui/`，React 壳只装配；页面落位/共享原语/状态中枢清单 → `DEVELOPERS.md`。
 2. 新增一条 API = 在所属组文件加一条 `endpoint({ path, methods }, handler)`；路由注册**只经** `src/routes/kit.ts`。
 3. `src/client/**` **不得 import node 模块**；跨端共享只能进零依赖模块；`src/profiles/dsh-profile-io.ts` 绝不能被浏览器半 import。
@@ -18,7 +18,7 @@
 5. 写/改 CHANGELOG 前先按 `.dsh/skills/changelog-writing` 落位并跑自检；会话相关改动先读 `docs/lessons/sessions-*.md`。
 
 ## 🔢 版本三处必须同步（最易漏）
-`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION`(约L124) ≡ `package-lock.json` 根对象 version(L3) 与 `packages[""].version`(L9)。bump 后跑 `npm run typecheck` 确认。
+`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION`(L190) ≡ `package-lock.json` 根对象 version(L3) 与 `packages[""].version`(L9)。
 **自动化断言**：`tests/packaging-contract.test.ts` 的 `V-1` 四条（源码级正则读 `PLUGIN_VERSION`，不 import 宿主入口）——任一处漏改即 `npm test` 红灯。
 
 ## 🚀 发布（打 tag 全自动）
