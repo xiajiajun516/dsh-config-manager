@@ -85,7 +85,9 @@ workspaces、credentialsStatus、pluginFiles、pluginData、pluginAssets、self�
 恢复前留 pre-restore 副本（按次分目录）；快照本身受 `snapshotsRoot` 校验（存在/READY/manifest/blob hash/symlink/provenance）。
 执行器在**首个写之前**把全部动盘动作写进 journal（`src/core/restore-wal.ts`：预登记 `planned` + beforeFp，逐动作 `done`/`attention` + afterFp，
 删除类用 `ABSENT_FINGERPRINT` 哨兵表达「应不存在」），于是崩溃后 reconcile 能证明「哪些还原了、哪些没动」，而不是整笔不透明。
-**仍不自动续跑**：残留 journal 会让下一次恢复被 423 `transaction-recovery-required` 挡住，必须先走 reconcile/recovery。
+**能自动续跑，但只在逐项可证时**：再点一次恢复先跑 `judgeRestoreResume`（`src/core/restore-resume.ts`：同操作类型 + 同快照 + 计划与 step 一一对应 +
+每个目标盘面只能等于 beforeFp 或 afterFp + 无回滚痕迹/失败项/外部副作用），成立才接着做（跳过已完成动作、不重新预登记）；否则照旧走 `runJournaled`，
+被 active≤1 挡回 423 `transaction-recovery-required`。三个入口只续**自己**的 operationType（GUI `restore` / CLI `cli-restore` / model `model-restore`）。
 
 ### 5.4 同步
 `SyncEngine` 状态机 + `Git/WebDav/S3/Gist` 四传输 + `AutoSyncScheduler`（事件驱动）：

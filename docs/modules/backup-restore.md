@@ -90,6 +90,8 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 4. 逐动作 WAL：`createRestoreWal()`（`src/core/restore-wal.ts:105`）在**首个写之前**预登记全部动盘动作（`planned` + beforeFp），每个动作结束 settle 成 `done`/`attention`（+ afterFp）；`hostFileRemove`/`fileRemove` 的期望态用 `ABSENT_FINGERPRINT` 哨兵表达。GUI/HTTP 执行器 `executeRestorePlan`（`src/routes/route-support.ts:580`，WAL 在 `:597`）与 core `restore()`（WAL 在 `:885`）同一实现。崩溃后 reconcile 据此判 recovered / needs-attention。
 5. 覆盖/删除目标前先 `copyToPreRestore` 留副本（`src/core/restore.ts:924` 起），随后逐动作 `atomicCopyFile`。
 
+**续跑（自 2026-10-23）**：执行前先 `probeRestoreResume`（`src/core/restore-resume.ts`）扫 active journal 并重新规划；判定器 `judgeRestoreResume` 逐条证明「同操作类型 + 同快照 + 计划与 step 一一对应 + 每个目标盘面只能等于 beforeFp 或 afterFp + 无回滚痕迹/失败项/外部副作用」。成立 → `phase3.resumeJournaled` 接管 owner（不 create、不做 active≤1 门禁）→ 执行器跳过已完成动作且**不重新预登记**（保住崩溃证据）；不成立 → 照常 `runJournaled`，被 active≤1 挡回 423。三个入口只续自己的 operationType（GUI `restore` / CLI `cli-restore` / model `model-restore`）；CLI 的锁前探测只用于「能否放过 SAFE MODE 门」，成功后续跑收尾按同一 `resolveSafeModeMarker` 解除 SAFE MODE。
+
 ### 3.4 导入
 
 `upload`（`readContainerKind` 只读前 4 字节）→ 若为 DCA1：`decrypt-archive` 校验密码并落明文 ZIP（`src/routes/import.ts:161`）→ `/analyze` → `/plan` → `/execute`（`withMutationGate('import-apply', …, {deferredSnapshot:true})`）→ `Importer` 门面 → `Analyzer` 四段：`loadBundle`（`src/core/analyzer.ts:267`）、`analyzeImport`（`:626`）、`createImportPlan`（`:774`）、`executeImportPlan`（`:853`）→ 快照 → 逐项 apply → 收尾 → 失败/取消时 `rollback`（`src/core/rollback.ts`）。
@@ -127,6 +129,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 - **导入：快照强制、先于写入**。快照失败即中止导入（`src/core/analyzer.ts:927`）；没有「先写再说」的分支。
 - **导入：取消只在计划项边界**（`src/core/analyzer.ts:1021`），不会在一个分区写到一半时撕开文件；取消后按用户决策整体回滚或保留半成品并标记。
 - **导入：回滚是补偿引擎**。`rollbackApplied` 调 `rollback` 并把结果写回 journal（`src/core/analyzer.ts:1336`）；回滚失败时快照标 `rolled-back` 而不是 `done`。
+- **恢复：崩溃时能判进度、能续跑，但仍无整笔自动回滚**。续跑只做「逐项可证」的剩余动作（`src/core/restore-resume.ts`），任一目标被用户改过、含插件卸载、或是别的入口创建的 journal 都会拒绝续跑并退回 423 —— 不存在「无条件接着做」。
 - **恢复：没有整笔自动回滚**。`restore()` 逐动作 try/catch，单项失败只记 `failed` 并继续（`src/core/restore.ts:716`）；兜底是 `pre-restore` 副本 —— 每次恢复新建一个 attempt 子目录（`src/core/restore.ts:364`），重跑不会覆盖上一次的反悔副本，GUI/HTTP 恢复路径（`src/routes/route-support.ts` 的执行器）复用同一布局。删除快照只拦「被恢复流程引用」的那些（`src/routes/snapshots.ts:182`），**不保护 pre-restore 副本**。
 - **恢复：目标侧防写穿**。计划期对每个写回目标做 realpath / 中间段解析，落在 home 外即整单拒绝（`src/core/restore.ts:317`，错误码 `restore.pathEscape`），不会写到 home 外的真实文件。
 - **恢复：敏感文件不回滚**。回滚点采集默认排除 `.env`/私钥/证书等（`src/core/rollback-ignore-rules.ts` 的 `builtinSensitiveReason`），命中记 `skipped(reason='sensitive')` —— 这是**排除不是加密**。
@@ -144,7 +147,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 |---|---|---|
 | 未解锁容器的路由闸门 | 三处闸门：`src/index.ts` 的 `/analyze`、`/plan` 与 `src/routes/import.ts` 的 `/execute` | 已补回归测试 `tests/route/encrypted-container-gate.test.ts`（含零写入断言） |
 | 预览指纹可选，缺省不校验 | `src/routes/route-support.ts` 的 `buildRestoreBody`、`src/routes/snapshots.ts` 的 409 分支 | 带指纹才校验；已补 `tests/route/restore-plan-changed.test.ts` |
-| 恢复中途进程崩溃 | `src/core/restore-crash-injection.test.ts` | 已覆盖：A-1（1 done + 2 planned）、A-4（真实 hooks 判 recovered）；残留 journal 仍会挡下一次恢复 |
+| 恢复中途进程崩溃 | `src/core/restore-crash-injection.test.ts`、`src/core/restore-resume.test.ts` | 已覆盖：A-1（1 done + 2 planned）、A-4（真实 hooks 判 recovered）；**能自动续跑**（T-07 真 SIGKILL 之后只重做剩下的 2 个动作）；判定不成立时仍退回 423 |
 | 条目名中段反斜杠不进 checksums | `src/utils/paths.ts:35`、`src/security/integrity.ts:63` | 已登记在 `docs/spec/known-gaps.md` |
 | DCA1 不记录 KDF 参数 | `src/security/encryption.ts:194` | 换参数后旧容器不可解，无版本可判 |
 | 解密明文包存活到导入成功 | `src/routes/import.ts:162`、`:307` | 失败/取消刻意保留；见 `tests/route/decrypt-plaintext-cleanup.test.ts` |
@@ -159,6 +162,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 | 导入计划与执行 | `tests/core/importer.test.ts` |
 | 恢复与信任判定 | `tests/core/restore.test.ts`、`tests/core/restore-trust.test.ts` |
 | 恢复逐动作 WAL / 崩溃注入 | `src/core/restore-wal.test.ts`、`src/core/restore-crash-injection.test.ts` |
+| 恢复自动续跑（判定/拒绝码/续跑执行） | `src/core/restore-resume.test.ts`、`src/cli/restore-resume.test.ts`、`tests/route/restore-route.test.ts`（G-04） |
 | 恢复目标侧防写穿 | `src/core/restore-target-symlink.test.ts` |
 | 快照存储与清理 | `tests/core/snapshot.test.ts`、`tests/core/snapshot-trust.test.ts`、`tests/core/retention.test.ts` |
 | schema 兼容 | `tests/schema-compat.test.ts`、`tests/schema/manifest.test.ts` |

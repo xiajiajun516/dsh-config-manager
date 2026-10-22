@@ -54,6 +54,7 @@
 - `docs/decisions/0003-sync-conditional-write-and-gist-exception.md` — 条件写；gist 是明确例外（**待产品决策**）
 - `docs/decisions/0004-rollback-point-fork-archive.md` — 回退 = fork + 归档；回滚点 = 两态 + 内容寻址台账
 - `docs/decisions/0005-safe-mode-fail-closed.md` — SAFE MODE fail-closed，解除判据只有一份
+- `docs/decisions/0006-restore-auto-resume.md` — 恢复崩溃后自动续跑：逐项证明成立才续，三个入口不跨续
 
 ## 5. 维护与债
 

@@ -181,6 +181,7 @@
 **恢复 / 救急台 / 救援模式** → `docs/lessons/recovery-console.md`
 - **CLI 与救急台必须同一道写入门**（SAFE MODE → 环境锁 → DSH 未运行）；`sessions doctor --json` 的 `ok` 必须 `blocking === 0`；`sessions repair` 读不到会话根必须 exit 1。
 - **灾备快照线已收敛下线**：不再自建第二条恢复通道；`BOOT_CRITICAL_RELS`/`profileCriticalRels` 在 `core/boot-paths.ts`（**不得连带删 `boot-safety.ts`**）。
+- **恢复崩溃后能续跑，但只在逐项可证时**（`judgeRestoreResume`：同快照 + 目标盘面只能等于 beforeFp/afterFp + 不跨入口 + 不重建 WAL；不成立退回 423）。
 - **救援模式与 `reconcileBundles` 的硬冲突**：`enterRescueMode` 必须同时 `stripDependencies`（退出时逐字节还原）；救援激活期间 `reconcileBundles` 一律停手。
 - **离线救急台（`dcm web`）**：一次性 token → HttpOnly 会话 cookie，其余 403；读路径只读、写路径各自过 CLI 同源写入门；判定不许重写；**绝不等于「插件 API 无认证」**。
 - **回滚点台账 = 一条一写 + 内容寻址载荷 + 字节预算**；**自动留点缺省关闭**，关闭即**解绑** `session/event` 订阅；活切换经进程内 gate（→ `docs/lessons/recovery-console.md`）。
@@ -215,4 +216,3 @@
 
 ## ⛔ 技术限制（勿突破）
 凭据值无法回滚(DSH 不回读)、插件安装需重启、MCP 无管理 API(组合 patch 行导入)、localStorage UI 状态不迁移
-
