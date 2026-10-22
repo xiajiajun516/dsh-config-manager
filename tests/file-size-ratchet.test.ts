@@ -8,6 +8,7 @@
  * 规则：
  * - 拆小了就把这里的天花板一起下调（棘轮只往下走）。
  * - 真要上调，必须同时写清理由与拆解计划，并在 `docs/maintenance/tech-debt.md` 记一笔。
+ *   （已有上调记录：rollback-point 5963 → 5980，D3 内置敏感文件排除，见 tech-debt #3。）
  * - 新文件超过 1400 行也要登记进来（否则它会绕开棘轮继续长）。
  */
 import { test } from 'node:test';
@@ -20,13 +21,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** 路径 → 行数上限（当前实测值，只许下调）。 */
 const CEILINGS: Record<string, number> = {
-  'src/core/rollback-point.ts': 5963,
+  'src/core/rollback-point.ts': 5980,
   'src/index.ts': 4379,
   'src/sync/sync-engine.ts': 2227,
   'src/client/run-store.ts': 2166,
   'src/client/recovery/RecoveryPanel.tsx': 1946,
   'src/client/locales.ts': 1907,
-  'src/core/analyzer.ts': 1824,
+  'src/core/analyzer.ts': 1500,
   'src/client/sync/SyncPanel.tsx': 1591,
   'src/cli/actions.ts': 1575,
   'src/ui/rollback-view.ts': 1558,
