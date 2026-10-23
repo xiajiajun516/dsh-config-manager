@@ -37,7 +37,7 @@
 - **修法**：① `listInstalledPlugins()` 改为**纯读零写入**，清单需要的 `isBundle/inBundles/bundlesOnly` 全部现算（读包内 `cordis.patch.yml` 判定），不再依赖「先对账」这个副作用；② 对账挪到唯一写路径 `DshPluginsFacade.install()` 成功后（导入/恢复/市场安装最终都到这里），封装成 `reconcileBundlesAfterInstall(profileDir): boolean`（失败返回 false、不抛 —— 包已装好，不因对账写失败否掉成功）；③ 救援模式守卫仍留在 `reconcileBundles` 内部（写路径在救援期间同样不得加回）。
 - **回归测试**：`src/core/plugin-cli.fs.test.ts`（读清单前后 `package.json` **逐字节相等**、`bundles` 不变，随后显式调用写路径才变）/ `src/index.facade.test.ts`（`listInstalled` 零写入 + `install` 成功后 bundle 仍进 `bundles`）。
 - **教训**：**任何「为了让后续逻辑好写」而挂在读函数开头的对账/迁移/补写，都会变成用户视角的「它自己改我配置」**；清单字段能现算就现算，写操作只挂在语义上就是写的入口（安装成功、用户点保存）。
-- **顺带发现的既有风险（未修，待单独立项）**：`reconcileBundles` 的「移除」循环只对「加回」那一路跳过 in-box 层；若 in-box 核心层同时写了 `dependencies` 行却不在 profile `node_modules` 里，它可能被移出 `bundles`。
+- **顺带发现并已修（同一 issue 的第二个缺陷）**：`reconcileBundles` 的「移除」循环原先只对「加回」那一路跳过 in-box 层；profile 模板常把 `@deepseek-ai/dsh-base` **同时**写成 `dependencies` 行，而其实体在 DSH 安装树、profile 的 `node_modules` 下并不存在 ⇒ `hasDshBundlePatch` 读不到 ⇒ 核心层被判「已不是依赖」而从 `bundles` 移出（下次启动少挂一层，日志无报错）。修法：移除循环首行 `if (INBOX_BUNDLES.has(name)) continue`（`INBOX_BUNDLES` = dsh-base / dsh-web-app / dsh-headless，定义在 `src/core/plugin-cli.ts`），函数 doc 同步写成「加回与移出两条路都跳过」。回归测试 `src/core/plugin-cli.fs.test.ts`：in-box 层被写成依赖行且 `node_modules` 无实体时 `reconcileBundles` 返回 false 且 `package.json` **逐字节相等**；同树另有真 bundle 时返回 true 且只追加它。判据：**in-box 层永远不是依赖，两条路都不许碰**。
 
 ## pnpm 隔离安装的「同树布局」有三种，推导只能有一处
 

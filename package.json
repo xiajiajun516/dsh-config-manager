@@ -83,6 +83,7 @@
   "scripts": {
     "test": "node --test \"src/**/*.test.ts\" \"tests/**/*.test.ts\"",
     "smoke": "node --test src/core/smoke.test.ts",
+    "oss:check": "node scripts/oss-live-check.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:tests": "tsc -p tsconfig.tests.json --noEmit",
     "build": "tsc -p tsconfig.build.json && tsdown",

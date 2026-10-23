@@ -186,6 +186,42 @@ test('reconcileBundles: 当前依赖但非 bundle 的条目移出；从未是依
   }
 });
 
+test('issue #111 附带修复：in-box 层即使被写成依赖行、profile node_modules 下不存在，也绝不移出 bundles', () => {
+  // 现场：profile 模板把 @deepseek-ai/dsh-base 同时写进 dependencies，而它的实体在 DSH 安装树里，
+  // profile 的 node_modules 下读不到 ⇒ 旧的移除循环按「已装状态」判成「不再是 bundle」，
+  // 把核心层从挂载清单里摘掉（下一次 reconcile 又被加回，来回抖动；若恰在启动前后，插件整层消失）。
+  const a = makeTempProfile(
+    { '@deepseek-ai/dsh-base': '0.1.0-rc.6', '@deepseek-ai/dsh-web-app': '0.1.0-rc.6' },
+    ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', 'manual-layer'],
+  );
+  try {
+    const pkgPath = join(a.profileDir, 'package.json');
+    const before = readFileSync(pkgPath, 'utf8');
+    assert.equal(reconcileBundles(a.profileDir), false, 'in-box 未变动 → 不写回');
+    assert.equal(readFileSync(pkgPath, 'utf8'), before, '逐字节零写入');
+  } finally {
+    a.cleanup();
+  }
+
+  // 同一棵树里仍有真 bundle 依赖要追加时：只追加它，in-box 层保持原位不动
+  const b = makeTempProfile(
+    { '@deepseek-ai/dsh-base': '0.1.0-rc.6', 'pkg-bundle': '1.0.0' },
+    ['@deepseek-ai/dsh-base'],
+  );
+  try {
+    writeInstalledPkg(b.profileDir, 'pkg-bundle', '1.0.0', 'patch.yml');
+    assert.equal(reconcileBundles(b.profileDir), true);
+    type Manifest = { dsh: { profile: { bundles: string[] } } };
+    assert.deepEqual(
+      (JSON.parse(readFileSync(join(b.profileDir, 'package.json'), 'utf8')) as Manifest).dsh.profile.bundles,
+      ['@deepseek-ai/dsh-base', 'pkg-bundle'],
+      '核心层保留，新 bundle 追加在尾部',
+    );
+  } finally {
+    b.cleanup();
+  }
+});
+
 test('issue #111：listInstalledPlugins 纯读，绝不改写 dsh.profile.bundles（打开备份不再复活已关插件）', () => {
   // 现场：插件仍作为依赖装在 node_modules（pnpm 没卸），但用户把它从 dsh.profile.bundles 移除了
   // = 关掉。历史上读清单会先 reconcile，把它原样加回 —— 于是「只看一眼备份页」就把它复活。

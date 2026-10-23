@@ -93,6 +93,17 @@
   `s3-providers.ts` 新增 `canonicalObjectPath(target, key)`（= endpoint 基路径 + `/<bucket>` + 转义后的 key，两种寻址风格同源），
   `s3-transport.ts` 只在 `dialect.id === 'oss4'` 时传入。AWS 系不传（其规范 URI 就是请求路径）。
 - **判据（别退回）**：**OSSSigV4 的规范 URI 带 bucket 这件事与寻址风格无关**，别用 `url.pathname` 直接当规范路径；空值参数写法随方言走，不能一套通吃。
+- **自证方式（不必等报告者复测）**：签名正确性有两道独立证据 ——
+  ① **金标向量**（上述两条官方 Go 测试的期望签名逐字相同）证明「我们的算法 = 官方算法」；
+  ② **服务端视角验签**（`src/sync/s3/oss4-verify.ts`，照官方 `conn.go`/`auth.go` **独立重写**的服务端：只吃收到的 method/url/头/body，
+  自己判寻址风格、自己重建规范请求、验不过就按 OSS 真实错误回 403 + 回显 StringToSign/CanonicalRequest）证明「发出去的每个请求都能被重建出来并验过」。
+  `src/sync/s3/s3-transport.oss4-server.test.ts` 把 `S3Transport` 的真实出站请求（**不勾 path-style**，即现场失败的那条）逐个喂给它，
+  覆盖探桶 → PUT 索引/快照（含条件写头）→ 列表 → 下载逐值比对 → 删除 → 再列表，共 14 个请求零验签失败。
+  ③ **真桶联调脚本** `scripts/oss-live-check.mjs`（`npm run oss:check`）：默认**本地模式**用同一验签器起 `node:http` 服务端、走真实网络栈与真实出站实现
+  （能抓到注入 mock 看不到的头大小写/Host/追加头差异），不需密钥、不碰任何桶；`--live` 才连真桶（读操作默认、写操作要 `--write`），
+  密钥只从 `OSS_ACCESS_KEY_ID`/`OSS_ACCESS_KEY_SECRET` 环境变量读，不落盘不打印。真桶那次才是阿里云服务端盖章，其余两者保证「算法与报文形状」。
+- **教训**：客户端单测只能覆盖「我算得对」，覆盖不到「服务端会怎么理解我发的东西」。凡是签名/协议类问题，**把服务端校验独立实现一遍**（不共用客户端中间量）
+  才是能自证的最小闭环；能起本地服务就走真实网络栈，不要只喂内存对象。
 
 ## 加密快照也落密文祖先副本（issue #107，2026-10）
 

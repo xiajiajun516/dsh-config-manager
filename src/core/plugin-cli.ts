@@ -230,7 +230,7 @@ export function hasDshBundlePatch(pkgDir: string): boolean {
  * reconcilePlugins，按「已装状态」而非依赖 diff 判定）：
  *  - 声明 dsh.bundle.patch 的依赖必须出现在 bundles（追加在依赖顺序尾部）；
  *  - bundles 中「曾是依赖、但不再是（移除或版本不再声明 patch）」的条目移出；
- *  - in-box bundles 不是依赖，永远不碰。
+ *  - in-box bundles 不是依赖，永远不碰（加回与移出两条路都跳过）。
  * 仅在确有变化时写回 package.json。返回是否写回。
  *
  * **这是写操作，只允许挂在写路径上**（安装成功后对账 / 中止安装清理）。
@@ -262,6 +262,10 @@ export function reconcileBundles(profileDir: string): boolean {
     }
   }
   for (const name of [...plugins]) {
+    // in-box 层不是可移除的依赖：profile 模板常把它们**同时**写成 dependencies 行，而它们的
+    // 实体在 DSH 安装树里、profile 的 node_modules 下没有 —— 按「已装状态」判会读不到 bundle 声明，
+    // 于是核心层被移出挂载清单（同一条 in-box 过滤只加在「加回」那一路时的漏网）。这里必须跳过。
+    if (INBOX_BUNDLES.has(name)) continue
     const wasDependency = dependencySet.has(name)
     const stillBundle = dependencySet.has(name) && hasDshBundlePatch(join(profileDir, 'node_modules', name))
     if (wasDependency && !stillBundle) {

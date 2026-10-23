@@ -40,6 +40,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **打开「备份与迁移」不再悄悄改你的插件开关**：查看插件清单、导出预览与自动快照现在都只读文件，不再顺手把档案的挂载清单改回全量；你把某个插件关掉后，不会因为看了一眼备份页就被重新启用。（issue #111）
   **Opening Backup & Migration no longer silently flips your plugin switches**: listing plugins, export previews and automatic snapshots now only read files instead of rewriting the profile's bundle list, so a plugin you turned off is not re-enabled just because you opened the backup page.
 
+- **DSH 内置的挂载层不会再被对账误删**：档案模板常把内置层（如 dsh-base）同时写成依赖行，而对账以前只看档案自己的依赖目录里有没有实体，于是误判「已经不装了」把它从挂载清单移出、下次启动少挂一层；现在内置层在「加回」与「移出」两条路上都跳过。
+  **DSH's built-in bundle layers are no longer dropped by the reconcile step**: profile templates often also list built-in layers (such as dsh-base) as dependencies, while the reconcile step only checked whether the profile's own dependency folder had a physical copy — so it wrongly concluded "no longer installed" and removed the layer from the bundle list, costing a layer on the next start; built-in layers are now skipped on both the add-back and the removal path.
+
 - **两条同步通道不会再互相顶掉待补跑的那一轮**：一个通道正在同步时另一个通道的改动或远端探测会各自记下来、等这轮结束逐个补跑，不再只剩最后到的那一个。
   **Two sync channels no longer cancel each other's queued run**: while one channel is syncing, changes or remote checks arriving on another channel are remembered per channel and each gets its own follow-up run instead of only the last one surviving.
 
