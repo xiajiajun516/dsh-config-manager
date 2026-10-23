@@ -34,6 +34,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **阿里云 OSS 同步真正能连上了**：上一版只改了授权头格式、没对齐官方签名算法，于是从「授权头为空」变成「签名不匹配」；现在按阿里云官方 SDK 的规范路径（路径里始终包含存储桶）与空值参数写法重算签名，填对密钥即可连上。（issue #109）
+  **Aliyun OSS sync actually connects now**: the previous release only fixed the authorization header format without matching Aliyun's signing algorithm, which turned «authorization header is empty» into «signature does not match»; signatures now follow the official SDK's canonical path (the bucket is always part of it) and empty-parameter form, so a correct key connects.
+
+- **打开「备份与迁移」不再悄悄改你的插件开关**：查看插件清单、导出预览与自动快照现在都只读文件，不再顺手把档案的挂载清单改回全量；你把某个插件关掉后，不会因为看了一眼备份页就被重新启用。（issue #111）
+  **Opening Backup & Migration no longer silently flips your plugin switches**: listing plugins, export previews and automatic snapshots now only read files instead of rewriting the profile's bundle list, so a plugin you turned off is not re-enabled just because you opened the backup page.
+
 - **两条同步通道不会再互相顶掉待补跑的那一轮**：一个通道正在同步时另一个通道的改动或远端探测会各自记下来、等这轮结束逐个补跑，不再只剩最后到的那一个。
   **Two sync channels no longer cancel each other's queued run**: while one channel is syncing, changes or remote checks arriving on another channel are remembered per channel and each gets its own follow-up run instead of only the last one surviving.
 

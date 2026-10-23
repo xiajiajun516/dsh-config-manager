@@ -86,7 +86,7 @@ import type { RollbackForkCarrier, RollbackRewindResult } from './core/rollback-
 import { agentSessionFactsOf, registerRollbackCommand } from './core/command-rollback.ts'
 import type { CommandServiceLike, RollbackCommandHost } from './core/command-rollback.ts'
 import type { MsgFunc } from './core/messages.ts'
-import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, readInstalledVersion, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
+import { cleanupAbortedInstall, hasDshBundlePatch, installAnchorFromProfileContext, installErrorFor, readInstalledVersion, reconcileBundlesAfterInstall, listInstalledPlugins, profileNameFromProfileContext, resolveProcessProfileName, resolveProfileDir, readProfileManifest, runDshPlugin, validateProfileName } from './core/plugin-cli.ts'
 import type { ConfigAdapter, CredentialsFacade, ExportUnit, FileSystemFacade, HostContext, ImportDecisions, ImportPlan, NamedNamespaceInfo, NamespaceInfo, PatchFileFacade, PluginInfo, PluginsFacade, SessionMoveResult, SessionParentRelation, SessionRewriteResult, SessionStoreFacade, SettingsFacade, SkillDefinitionView, SkillStoreFacade, SkillSummaryView, WorkspaceFacade } from './core/types.ts'
 import { ImportUserSkippedError } from './core/types.ts'
 import { PLUGIN_NPM_PACKAGE } from './core/update-check.ts'
@@ -583,8 +583,8 @@ export class DshPluginsFacade implements PluginsFacade {
       throw new ImportUserSkippedError(this.msg)
     }
     if (result.exitCode !== 0 || result.timedOut) throw installErrorFor(pkg, result)
-    // 非 bundle 插件：CLI 只维护 bundles，需补 profile patch 激活行才能加载。
-    // 补写失败不吞：包已装但未激活，明确报错并允许重试（幂等补行）。
+    reconcileBundlesAfterInstall(profileDir) // issue #111：对账是写操作，只在安装成功补一次；读路径已纯读，绝不复活已关插件
+    // 非 bundle 插件：CLI 只维护 bundles，需补 patch 激活行才能加载；补写失败不吞（包已装但未激活），明确报错并允许重试。
     try {
       await ensureActivationRow(this.patchFile, join(profileDir, 'node_modules', pkg), pkg, this.profile)
     } catch (error) {

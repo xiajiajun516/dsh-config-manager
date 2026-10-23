@@ -180,19 +180,45 @@ export function resolveS3Target(input: S3TargetInput): S3TargetResult {
   };
 }
 
+/**
+ * 对象 key 的路径编码（逐段 uriEncode，保留分隔符）。
+ *
+ * audit-sync sync-F7：编码口径必须与 SigV4 的规范化口径（sigv4.uriEncode：RFC 3986
+ * 未保留字符集 A-Za-z0-9-_.~ 之外一律 %XX）**逐字一致**，否则 ! ' ( ) * 这类
+ * encodeURIComponent 不编码的字符会让「实际发出的 path」与「签名的 canonicalURI」分叉
+ * （签名被服务端判为不匹配），也会让同一 key 在不同实现下指向不同对象。
+ */
+function encodeObjectKey(key: string): string {
+  return key.split('/').map((seg) => uriEncode(seg, true)).join('/');
+}
+
+/** 端点自带的基础路径（如反向代理子路径），已去尾斜杠。 */
+function endpointBasePath(target: S3Target): string {
+  return target.endpoint.pathname.replace(/\/+$/, '');
+}
+
 /** 某 key 的对象访问地址（path-style 或 virtual-host）。 */
 export function objectUrl(target: S3Target, key: string): string {
-  // audit-sync sync-F7：逐段编码必须与 SigV4 的规范化口径（sigv4.uriEncode：RFC 3986
-  // 未保留字符集 A-Za-z0-9-_.~ 之外一律 %XX）**逐字一致**，否则 ! ' ( ) * 这类
-  // encodeURIComponent 不编码的字符会让「实际发出的 path」与「签名的 canonicalURI」分叉
-  // （签名被服务端判为不匹配），也会让同一 key 在不同实现下指向不同对象。
-  const encodedKey = key.split('/').map((seg) => uriEncode(seg, true)).join('/');
-  const basePath = target.endpoint.pathname.replace(/\/+$/, '');
+  const encodedKey = encodeObjectKey(key);
+  const basePath = endpointBasePath(target);
   const origin = target.endpoint.origin;
   if (target.pathStyle) return origin + basePath + '/' + target.bucket + '/' + encodedKey;
   // virtual-host：桶名做主机名首段（桶名已校验为合法 DNS 标签组合）
   const host = target.bucket + '.' + target.endpoint.host;
   return target.endpoint.protocol + '//' + host + basePath + '/' + encodedKey;
+}
+
+/**
+ * 规范化 URI 路径（**恒含 bucket**）：`<basePath>/<bucket>/<key>`。
+ *
+ * 为什么与 `objectUrl` 分开：阿里云 OSS4 的 CanonicalURI 恒为 `/<bucket>/<key>`，与寻址风格无关
+ * （官方 Go SDK `conn.go` 的 `getResourceV4` 只接 bucket + object，不看 URL 主机形态）。
+ * 虚拟主机风格下请求路径里没有 bucket，若直接把 pathname 当规范路径，签出来的哈希就与服务端
+ * 不一致 ⇒ `SignatureDoesNotMatch`（issue #109）。path-style 下两者相等，仍统一走这里，
+ * 保证两条分支逐字同源。
+ */
+export function canonicalObjectPath(target: S3Target, key: string): string {
+  return endpointBasePath(target) + '/' + target.bucket + '/' + encodeObjectKey(key);
 }
 
 /** 快照对象键。 */

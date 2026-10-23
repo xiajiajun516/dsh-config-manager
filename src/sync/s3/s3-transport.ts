@@ -42,7 +42,9 @@ import type {
 import { signRequest } from './sigv4.ts';
 import type { SigV4DialectId } from './sigv4.ts';
 import { composeMsg, s3Msg } from './messages.ts';
-import { blobIndexKey, blobKey, indexKey, objectUrl, resolveS3Target, snapshotKey } from './s3-providers.ts';
+import {
+  blobIndexKey, blobKey, canonicalObjectPath, indexKey, objectUrl, resolveS3Target, snapshotKey,
+} from './s3-providers.ts';
 import type { S3Target } from './s3-providers.ts';
 import type { CloudConfigIssueCode, S3CompatProvider } from '../sync-config.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
@@ -433,6 +435,10 @@ export class S3Transport implements SyncTransport {
       ...(opts.headers ?? {}),
     };
     if (opts.body !== undefined) headers['content-length'] = String(Buffer.byteLength(opts.body, 'utf8'));
+    // OSS4 的 CanonicalURI 恒为 /<bucket>/<key>（虚拟主机风格下的 pathname 只有 key）⇒ 显式覆盖，
+    // 否则规范请求哈希与服务端不一致、恒报 SignatureDoesNotMatch（issue #109）。
+    // AWS 系不动：它的规范 URI 就是实际请求路径。
+    const canonicalPath = this.target.dialect.id === 'oss4' ? canonicalObjectPath(this.target, key) : undefined;
     const signed = signRequest({
       method,
       url,
@@ -444,6 +450,7 @@ export class S3Transport implements SyncTransport {
       service: this.target.service,
       dialect: this.target.dialect,
       now: this.o.now(),
+      ...(canonicalPath !== undefined ? { canonicalPath } : {}),
     });
     try {
       const res = await this.o.request(method, url, {

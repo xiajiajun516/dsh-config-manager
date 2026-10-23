@@ -188,6 +188,103 @@ test('OSS4 方言：显式声明 host 时才把 host 拉进签名（与 SDK 的 
   assert.notEqual(withHost.signature, withoutHost.signature, '头集合变化必须改变签名');
 });
 
+/**
+ * 阿里云官方向量 ①（`aliyun-oss-go-sdk` `oss/conn_test.go` `TestAuthV4Header`，commit b6e0a2ae）：
+ * 虚拟主机风格 URL（pathname 里**没有** bucket）+ 6 个查询参数（其中 3 个只有键无值）。
+ * 期望签名/授权头由官方 SDK 钉死；它是 #109 回归的**外部锚点**：
+ * 规范 URI 必须含 bucket（`/bucket/1234%2B-/123/1.txt`）、空值参数只写键名。
+ */
+test('官方金标向量 ①（OSS Go SDK TestAuthV4Header）：规范 URI 含 bucket + 空值参数只写键', () => {
+  const out = signRequest({
+    method: 'PUT',
+    url: 'http://bucket.oss-cn-hangzhou.aliyuncs.com/1234+-/123/1.txt'
+      + '?param1=value1&%2Bparam1=value3&%7Cparam1=value4&%2Bparam2&%7Cparam2&param2',
+    // 虚拟主机风格：pathname 只有 key，规范路径必须由调用方补上 /bucket 前缀
+    canonicalPath: '/bucket/1234+-/123/1.txt',
+    headers: { 'content-type': 'text/plain', 'x-oss-head1': 'value' },
+    accessKeyId: 'ak',
+    secretAccessKey: 'sk',
+    region: 'cn-hangzhou',
+    service: 'oss',
+    dialect: OSS_SIG_V4,
+    now: new Date(1702743657 * 1000), // 2023-12-16T16:20:57Z
+  });
+  assert.equal(
+    out.authorization,
+    'OSS4-HMAC-SHA256 Credential=ak/20231216/cn-hangzhou/oss/aliyun_v4_request,'
+      + 'Signature=e21d18daa82167720f9b1047ae7e7f1ce7cb77a31e8203a7d5f4624fa0284afe',
+  );
+  // 规范请求逐行核对：URI 含 bucket、查询串空值不带 '='、规范头块与附加头行之间留空行
+  const lines = out.canonicalRequest.split('\n');
+  assert.equal(lines[1], '/bucket/1234%2B-/123/1.txt');
+  assert.equal(lines[2], '%2Bparam1=value3&%2Bparam2&%7Cparam1=value4&%7Cparam2&param1=value1&param2');
+  assert.deepEqual(lines.slice(3), [
+    'content-type:text/plain',
+    'x-oss-content-sha256:UNSIGNED-PAYLOAD',
+    'x-oss-date:20231216T162057Z',
+    'x-oss-head1:value',
+    '',
+    '',
+    'UNSIGNED-PAYLOAD',
+  ]);
+});
+
+/** 阿里云官方向量 ②（`TestAuthV4HeaderWithAdditionalHeaders`）：配置附加头后授权头带 AdditionalHeaders。 */
+test('官方金标向量 ②（OSS Go SDK TestAuthV4HeaderWithAdditionalHeaders）：AdditionalHeaders 排序小写', () => {
+  const out = signRequest({
+    method: 'PUT',
+    url: 'http://bucket.oss-cn-hangzhou.aliyuncs.com/1234+-/123/1.txt'
+      + '?param1=value1&%2Bparam1=value3&%7Cparam1=value4&%2Bparam2&%7Cparam2&param2',
+    canonicalPath: '/bucket/1234+-/123/1.txt',
+    headers: { 'content-type': 'text/plain', 'x-oss-head1': 'value', abc: 'value', zabc: 'value' },
+    accessKeyId: 'ak',
+    secretAccessKey: 'sk',
+    region: 'cn-hangzhou',
+    service: 'oss',
+    dialect: OSS_SIG_V4,
+    additionalSignedHeaders: ['ZAbc', 'abc'],
+    now: new Date(1702747512 * 1000), // 2023-12-16T17:25:12Z
+  });
+  assert.equal(
+    out.authorization,
+    'OSS4-HMAC-SHA256 Credential=ak/20231216/cn-hangzhou/oss/aliyun_v4_request,'
+      + 'AdditionalHeaders=abc;zabc,'
+      + 'Signature=4a4183c187c07c8947db7620deb0a6b38d9fbdd34187b6dbaccb316fa251212f',
+  );
+});
+
+test('canonicalPath 覆盖：不传时退回 url.pathname（AWS 口径不动）', () => {
+  const base = {
+    method: 'GET',
+    headers: {},
+    accessKeyId: 'AK',
+    secretAccessKey: 'SK',
+    region: 'us-east-1',
+    service: 's3',
+    now: NOW,
+  } as const;
+  const aws = signRequest({ ...base, url: 'https://b.s3.us-east-1.amazonaws.com/k.json', dialect: AWS_SIG_V4 });
+  assert.equal(aws.canonicalRequest.split('\n')[1], '/k.json', 'AWS 虚拟主机风格的规范 URI 就是请求路径');
+  const oss = signRequest({
+    ...base,
+    url: 'https://b.oss-cn-hangzhou.aliyuncs.com/k.json',
+    dialect: OSS_SIG_V4,
+    canonicalPath: '/bbucket/k.json',
+  });
+  assert.equal(oss.canonicalRequest.split('\n')[1], '/bbucket/k.json');
+  assert.notEqual(oss.signature, signRequest({
+    ...base,
+    url: 'https://b.oss-cn-hangzhou.aliyuncs.com/k.json',
+    dialect: OSS_SIG_V4,
+  }).signature, 'OSS 不传 canonicalPath 时签名不同（缺 bucket ⇒ 服务端恒判不匹配）');
+});
+
+test('canonicalQueryString：OSS4 方言空值只写键名（官方 getSubResource 口径）', () => {
+  const params = new URLSearchParams('acl&x=1');
+  assert.equal(canonicalQueryString(params), 'acl=&x=1', 'AWS 缺省口径保留 =');
+  assert.equal(canonicalQueryString(params, 'bare'), 'acl&x=1');
+});
+
 test('时间格式：formatAmzDate / formatDateStamp 为 UTC 紧致格式', () => {
   assert.equal(formatAmzDate(new Date('2026-01-02T03:04:05.999Z')), '20260102T030405Z');
   assert.equal(formatAmzDate(new Date('2026-12-31T23:59:59.000Z')), '20261231T235959Z');

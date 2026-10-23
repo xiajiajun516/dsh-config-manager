@@ -11,7 +11,10 @@ import assert from 'node:assert/strict';
 
 import { S3Transport, S3TransportError } from './s3-transport.ts';
 import type { S3RequestFn, S3Response, S3TransportOptions } from './s3-transport.ts';
-import { S3_PROVIDER_VARIANTS, resolveS3Target, objectUrl, normalizeObjectPrefix, s3ProviderList } from './s3-providers.ts';
+import {
+  S3_PROVIDER_VARIANTS, canonicalObjectPath, resolveS3Target, objectUrl, normalizeObjectPrefix, s3ProviderList,
+} from './s3-providers.ts';
+import { OSS_SIG_V4, signRequest } from './sigv4.ts';
 import { S3_COMPAT_PROVIDERS } from '../sync-config.ts';
 import type { S3CompatProvider } from '../sync-config.ts';
 import { computeSnapshotMeta, sectionsEqual, SyncTransportError } from '../transport.ts';
@@ -185,6 +188,24 @@ test('端点与寻址风格：virtual-host（s3/oss/cos/kodo）与 path-style（
   assert.equal(custom.target.pathStyle, true);
 });
 
+test('规范化 URI 路径：恒含 bucket，path-style 与 virtual-host 同源', () => {
+  const virtual = resolveS3Target({ provider: 'oss', bucket: BUCKET, region: 'cn-hangzhou' });
+  assert.ok(virtual.ok);
+  assert.equal(canonicalObjectPath(virtual.target, 'dsh-config-manager/index.json'),
+    '/demo-bucket/dsh-config-manager/index.json');
+  assert.equal(objectUrl(virtual.target, 'dsh-config-manager/index.json'),
+    'https://demo-bucket.oss-cn-hangzhou.aliyuncs.com/dsh-config-manager/index.json',
+    '请求地址仍是虚拟主机形态（bucket 不在路径里）');
+  const path = resolveS3Target({ provider: 'oss', bucket: BUCKET, region: 'cn-hangzhou', pathStyle: true });
+  assert.ok(path.ok);
+  assert.equal(canonicalObjectPath(path.target, 'dsh-config-manager/index.json'),
+    '/demo-bucket/dsh-config-manager/index.json', 'path-style 下规范路径与请求路径一致');
+  assert.equal(objectUrl(path.target, 'dsh-config-manager/index.json'),
+    'https://oss-cn-hangzhou.aliyuncs.com/demo-bucket/dsh-config-manager/index.json');
+  // 逐段编码与 objectUrl 同口径（! ' ( ) * 这类字符不得让签名与实际路径分叉）
+  assert.equal(canonicalObjectPath(virtual.target, "a/!b(c)*.json"), '/demo-bucket/a/%21b%28c%29%2A.json');
+});
+
 test('前缀归一：缺省 / 去斜杠 / 空值回落默认', () => {
   assert.equal(normalizeObjectPrefix(undefined), 'dsh-config-manager');
   assert.equal(normalizeObjectPrefix('/a/b/'), 'a/b');
@@ -293,6 +314,28 @@ test('阿里云 OSS 变体：请求头走 OSS4（x-oss-date / x-oss-content-sha2
   assert.equal(call.headers['x-amz-date'], undefined);
   // 官方 SDK 格式：无空格、空 AdditionalHeaders 省略（issue #109：写成 ", AdditionalHeaders=, Signature=" 会被 OSS 拒绝）
   assert.match(call.headers['authorization'] ?? '', /^OSS4-HMAC-SHA256 Credential=.*\/cn-hangzhou\/oss\/aliyun_v4_request,Signature=[a-f0-9]{64}$/);
+
+  // issue #109：虚拟主机风格下请求路径里没有 bucket，但 OSS 的规范 URI 必须含 bucket。
+  // 这里用同一份 signRequest 复算两种口径，钉住「通道层确实传了 canonicalPath」。
+  const signedInput = {
+    method: 'GET',
+    url: call.url,
+    headers: { 'content-type': 'application/json' },
+    body: '',
+    accessKeyId: ACCESS_KEY_ID,
+    secretAccessKey: SECRET,
+    region: 'cn-hangzhou',
+    service: 'oss',
+    dialect: OSS_SIG_V4,
+    now: FIXED_NOW,
+  } as const;
+  const withBucket = signRequest({ ...signedInput, canonicalPath: '/demo-bucket/dsh-config-manager/index.json' });
+  assert.equal(call.headers['authorization'], withBucket.authorization, '通道必须按 /<bucket>/<key> 签规范 URI');
+  const withoutBucket = signRequest({ ...signedInput });
+  assert.notEqual(call.headers['authorization'], withoutBucket.authorization,
+    '缺 bucket 的规范 URI 签名必须不同（这正是 v0.1.81 恒报 SignatureDoesNotMatch 的原因）');
+  assert.equal(withBucket.canonicalRequest.split('\n')[1], '/demo-bucket/dsh-config-manager/index.json');
+  assert.equal(withoutBucket.canonicalRequest.split('\n')[1], '/dsh-config-manager/index.json');
 });
 
 test('密钥纪律：错误消息里的响应体被脱敏（密钥绝不出现），且目标对象不含任何密钥', async () => {

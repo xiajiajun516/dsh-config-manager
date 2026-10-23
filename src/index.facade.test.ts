@@ -140,6 +140,35 @@ test('install: bundle 包成功 → 不补 patch 行（reconcile 维护 bundles�
   }
 });
 
+test('install: 装成功的 bundle 由写路径对账进 dsh.profile.bundles（issue #111 把副作用从读路径挪到这里）', async () => {
+  const { homeDir, profileDir, cleanup } = makeTempProfile();
+  try {
+    const pkgPath = join(profileDir, 'package.json');
+    writeFileSync(pkgPath, JSON.stringify({
+      name: 'dsh-profile-web',
+      // in-box bundle 只声明在 bundles、不做依赖行（与真实 profile 的解锁形态一致：node_modules 里没有它）
+      dependencies: {},
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
+    }, null, 2) + '\n', 'utf8');
+    // runner 模拟 pnpm add 的真实副作用：写依赖行 + 落 node_modules（bundle 包声明 dsh.bundle.patch）
+    const runner = async (): Promise<DshPluginResult> => {
+      const manifest = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies: Record<string, string> };
+      manifest.dependencies['pkg-bundle'] = '1.0.0';
+      writeFileSync(pkgPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+      writeInstalledPkg(profileDir, 'pkg-bundle', '1.0.0', 'patch.yml');
+      return okResult();
+    };
+    const facade = new DshPluginsFacade(homeDir, 'web', new MemPatchFile(), runner);
+
+    await facade.install('pkg-bundle');
+    type Manifest = { dependencies: Record<string, string>; dsh: { profile: { bundles: string[] } } };
+    const after = JSON.parse(readFileSync(pkgPath, 'utf8')) as Manifest;
+    assert.deepEqual(after.dsh.profile.bundles, ['@deepseek-ai/dsh-base', 'pkg-bundle'], 'bundle 装成功后必须进 bundles（否则重启不挂载）');
+    assert.equal(after.dependencies['pkg-bundle'], '1.0.0', '对账不得丢依赖行');
+  } finally {
+    cleanup();
+  }
+});
 test('install: 非 registry spec（github:）原样安装；registry 区间按「包名@spec」安装（issue #101）', async () => {
   const { homeDir, profileDir, cleanup } = makeTempProfile();
   try {
@@ -258,6 +287,26 @@ test('listInstalled: 委托 profile 文件实时读取，返回真实落盘版�
   }
 });
 
+test('listInstalled: 纯读，绝不改写 dsh.profile.bundles（issue #111 现场：只看备份页就复活已关插件）', async () => {
+  const { homeDir, profileDir, cleanup } = makeTempProfile();
+  try {
+    const pkgPath = join(profileDir, 'package.json');
+    writeFileSync(pkgPath, JSON.stringify({
+      name: 'dsh-profile-web',
+      dependencies: { '@linxin666/dsh-ssh': '^0.1.0' },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
+    }, null, 2) + '\n', 'utf8');
+    writeInstalledPkg(profileDir, '@linxin666/dsh-ssh', '0.1.12', './cordis.patch.yml');
+    const before = readFileSync(pkgPath, 'utf8');
+
+    const facade = new DshPluginsFacade(homeDir, 'web', new MemPatchFile(), async () => okResult());
+    const list = await facade.listInstalled();
+    assert.equal(readFileSync(pkgPath, 'utf8'), before, '备份/预览读清单必须零写入');
+    assert.equal(list.find((p) => p.name === '@linxin666/dsh-ssh')?.isBundle, true, '读视图仍如实报 bundle 形态');
+  } finally {
+    cleanup();
+  }
+});
 test('ensureActivationRow: 幂等——重复安装不重复行', async () => {
   const { profileDir, cleanup } = makeTempProfile();
   try {

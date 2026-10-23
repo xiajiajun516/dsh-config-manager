@@ -9,8 +9,9 @@
  *  - 阿里云 OSS：\`OSS4-HMAC-SHA256\` + \`x-oss-date\` + \`x-oss-content-sha256: UNSIGNED-PAYLOAD\`
  *    + 派生密钥前缀 \`aliyun_v4\` + 终止符 \`aliyun_v4_request\`，授权头里用
  *    \`AdditionalHeaders=<可选头>\`，且**只有** \`content-type\`/\`content-md5\`/\`x-oss-*\` 参与规范化头
- *    （\`host\` 默认不参与）。依据 = 阿里云《在 Header 中包含 V4 签名》+ 官方 SDK
- *    \`aliyun-oss-java-sdk\` 的 \`OSSV4Signer\`（2026-10 读码确证）。
+ *    （\`host\` 默认不参与）；**规范 URI 恒为 \`/<bucket>/<key>\`，与请求是虚拟主机还是 path-style 无关**。
+ *    依据 = 阿里云《在 Header 中包含 V4 签名》+ 官方 SDK \`aliyun-oss-go-sdk\`
+ *    （\`oss/auth.go\` \`getSignedStrV4\` / \`conn.go\` \`getResourceV4\`，2026-10 读码 + 官方向量复算确证）。
  *  因此本文件把「同一实现 + 方言参数表」落成 \`SigV4Dialect\`：新增同类厂商只加一行参数。
  *
  * 纪律：
@@ -52,6 +53,12 @@ export interface SigV4Dialect {
   payloadHash: 'sha256' | 'unsigned';
   /** 授权头里头清单的字段名（SignedHeaders / AdditionalHeaders） */
   headerListLabel: 'SignedHeaders' | 'AdditionalHeaders';
+  /**
+   * 规范化查询串里「有键无值」的写法：
+   *  - `equals`（AWS SigV4）：`?acl` 写成 `acl=`；
+   *  - `bare`（OSS4）：只写键名 `acl`（官方 Go SDK `getSubResource` 对 nil/空值只拼键）。
+   */
+  emptyQueryValue: 'equals' | 'bare';
 }
 
 /** AWS SigV4（S3 / MinIO / COS / Kodo 共用）。 */
@@ -65,6 +72,7 @@ export const AWS_SIG_V4: SigV4Dialect = {
   headerSelection: 'all',
   payloadHash: 'sha256',
   headerListLabel: 'SignedHeaders',
+  emptyQueryValue: 'equals',
 };
 
 /** 阿里云 OSS4（OSS 原生 V4；与 AWS 同构但头名/前缀/终止符/载荷形态不同）。 */
@@ -78,6 +86,7 @@ export const OSS_SIG_V4: SigV4Dialect = {
   headerSelection: 'oss-default',
   payloadHash: 'unsigned',
   headerListLabel: 'AdditionalHeaders',
+  emptyQueryValue: 'bare',
 };
 
 /** 方言查表（非法 id 抛错：绝不静默回落成 AWS，否则 OSS 会以「签名不对」的形式失败）。 */
@@ -161,14 +170,25 @@ export function canonicalUri(pathname: string): string {
   return path.split('/').map((seg) => uriEncode(safeDecode(seg), true)).join('/');
 }
 
-/** 规范化查询串：按「编码后的键、编码后的值」字典序排序，空值写成 \`key=\`。 */
-export function canonicalQueryString(searchParams: URLSearchParams): string {
-  const pairs: Array<{ key: string; value: string }> = [];
+/**
+ * 规范化查询串：按「编码后的键、编码后的值」字典序排序。
+ *
+ * 空值写法按方言分派（`emptyQueryValue`）：AWS 写 `key=`，OSS4 只写 `key` —— 官方 Go SDK
+ * 的 `getSubResource` 对 nil/空值确实只拼键名（金标向量 `TestAuthV4Header` 的
+ * `%2Bparam2&%7Cparam2&param2` 可验），写成 `param2=` 会让规范请求哈希不同。
+ */
+export function canonicalQueryString(
+  searchParams: URLSearchParams,
+  emptyQueryValue: 'equals' | 'bare' = 'equals',
+): string {
+  const pairs: Array<{ key: string; value: string; empty: boolean }> = [];
   for (const [rawKey, rawValue] of searchParams) {
-    pairs.push({ key: uriEncode(rawKey, true), value: uriEncode(rawValue, true) });
+    pairs.push({ key: uriEncode(rawKey, true), value: uriEncode(rawValue, true), empty: rawValue === '' });
   }
   pairs.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : (a.value < b.value ? -1 : a.value > b.value ? 1 : 0)));
-  return pairs.map((p) => p.key + '=' + p.value).join('&');
+  return pairs
+    .map((p) => (p.empty && emptyQueryValue === 'bare' ? p.key : p.key + '=' + p.value))
+    .join('&');
 }
 
 /** 头值归一：去首尾空白 + 内部连续空白折叠成单空格（SigV4 要求）。 */
@@ -200,6 +220,15 @@ export interface SigV4RequestInput {
   now?: Date;
   /** 额外声明参与签名的头名（小写；OSS4 用于把 host/content-length 等显式拉进签名） */
   additionalSignedHeaders?: readonly string[];
+  /**
+   * 覆盖规范化 URI 的路径（缺省 = \`url.pathname\`）。
+   *
+   * 为什么需要：阿里云 OSS 的 CanonicalURI **恒为 \`/<bucket>/<key>\`**，而虚拟主机风格下请求
+   * 路径里只有 key（bucket 在 Host 头里）。不接这个口子，签名用的路径就比服务端少一段
+   * \`/<bucket>\` ⇒ 规范请求哈希不同 ⇒ \`SignatureDoesNotMatch\`（issue #109 真机现象）。
+   * 通道层用 \`canonicalObjectPath(target, key)\` 构造并传入。
+   */
+  canonicalPath?: string;
   /**
    * 是否注入并签名 \`<contentShaHeader>\`（缺省 true = S3 系必需）。
    *
@@ -252,8 +281,8 @@ export function signRequest(input: SigV4RequestInput): SigV4RequestOutput {
 
   const canonicalRequest = [
     input.method.toUpperCase(),
-    canonicalUri(url.pathname),
-    canonicalQueryString(url.searchParams),
+    canonicalUri(input.canonicalPath ?? url.pathname),
+    canonicalQueryString(url.searchParams, dialect.emptyQueryValue),
     canonicalHeaderBlock,
     headerList,
     payloadHash,

@@ -232,6 +232,10 @@ export function hasDshBundlePatch(pkgDir: string): boolean {
  *  - bundles 中「曾是依赖、但不再是（移除或版本不再声明 patch）」的条目移出；
  *  - in-box bundles 不是依赖，永远不碰。
  * 仅在确有变化时写回 package.json。返回是否写回。
+ *
+ * **这是写操作，只允许挂在写路径上**（安装成功后对账 / 中止安装清理）。
+ * 读路径（listInstalledPlugins）调用它 = 用户「只是看一眼」就把 bundles 改回全量，
+ * 关掉的插件被重新加回、下次启动照常挂载（issue #111）。
  */
 export function reconcileBundles(profileDir: string): boolean {
   // 救援模式停手（硬约束，真机实测的失效点）：救援把 dsh.profile.bundles 收窄为
@@ -313,10 +317,34 @@ export function cleanupAbortedInstall(profileDir: string, pkg: string): void {
   }
 }
 
-/** 实时读 profile 已装插件清单（先 reconcile bundles，再逐依赖取版本/bundle 属性）。 */
+/**
+ * 安装/升级成功后的 bundles 对账（**写路径专用**，issue #111）。
+ *
+ * 为什么单独一层：reconcileBundles 会写 profile package.json，绝不能出现在读路径上。
+ * 它原先挂在 listInstalledPlugins 里，于是「打开设置 → 备份与迁移」就顺手把
+ * dsh.profile.bundles 改回全量（用户关掉的插件被重新加回），这正是 #111 的现象。
+ * 安装成功后补一次对账，把这条副作用挪到真正该发生的地方：官方 `dsh plugin add`
+ * 自己也会 reconcilePlugins，这里只是旧宿主版本的兜底，因此失败不抛——包已经装好了，
+ * 不因为一次对账写失败把成功否掉。
+ */
+export function reconcileBundlesAfterInstall(profileDir: string): boolean {
+  try {
+    return reconcileBundles(profileDir)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 实时读 profile 已装插件清单（**纯读，零写入**）。
+ *
+ * 曾经这里第一句是 reconcileBundles(dir)：读一次清单就写一次 package.json，
+ * 把用户在 bundles 里关掉的插件重新加回（issue #111）。bundle 属性本来就按
+ * node_modules 里的 package.json 现算（hasDshBundlePatch），根本不依赖 bundles
+ * 已被对账，所以读路径不需要它；需要写的地方是安装成功 / 中止安装清理。
+ */
 export function listInstalledPlugins(homeDir: string, profile: string): PluginInfo[] {
   const dir = resolveProfileDir(homeDir, profile)
-  reconcileBundles(dir)
   const out: PluginInfo[] = []
   const installed = readInstalled(dir)
   for (const name of Object.keys(installed)) {

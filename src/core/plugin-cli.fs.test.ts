@@ -14,7 +14,7 @@ import { join } from 'node:path';
 
 import {
   isBundlesOnlyEntry, listInstalledPlugins, mergeBundleDeclaration, readInstalled, readInstalledVersion,
-  reconcileBundles, resolveProfileDir,
+  reconcileBundles, reconcileBundlesAfterInstall, resolveProfileDir,
 } from './plugin-cli.ts';
 import { enterRescueMode } from './boot-rescue.ts';
 import type { PluginInfo } from './types.ts';
@@ -186,14 +186,48 @@ test('reconcileBundles: 当前依赖但非 bundle 的条目移出；从未是依
   }
 });
 
+test('issue #111：listInstalledPlugins 纯读，绝不改写 dsh.profile.bundles（打开备份不再复活已关插件）', () => {
+  // 现场：插件仍作为依赖装在 node_modules（pnpm 没卸），但用户把它从 dsh.profile.bundles 移除了
+  // = 关掉。历史上读清单会先 reconcile，把它原样加回 —— 于是「只看一眼备份页」就把它复活。
+  const { homeDir, profileDir, cleanup } = makeTempProfile({ 'closed-plugin': '1.0.0' }, ['@deepseek-ai/dsh-base']);
+  try {
+    writeInstalledPkg(profileDir, 'closed-plugin', '1.0.0', 'patch.yml');
+    const pkgPath = join(profileDir, 'package.json');
+    const before = readFileSync(pkgPath, 'utf8');
+
+    const list = listInstalledPlugins(homeDir, 'web');
+    assert.equal(readFileSync(pkgPath, 'utf8'), before, '读清单必须逐字节零写入');
+    type Manifest = { dsh: { profile: { bundles: string[] } } };
+    assert.deepEqual(
+      (JSON.parse(before) as Manifest).dsh.profile.bundles,
+      ['@deepseek-ai/dsh-base'],
+      'bundles 保持用户关掉后的形态（不被加回）',
+    );
+    // 读视图本身不受影响：包已装 → 仍可见、仍如实报 bundle 形态（能否挂载由 bundles 决定，此处不猜）
+    const closed = list.find((p) => p.name === 'closed-plugin');
+    assert.equal(closed?.isBundle, true);
+    assert.deepEqual(closed?.inBundles, ['closed-plugin']);
+
+    // 写路径对照：安装成功后的对账照旧会把它加回（#111 只是把副作用从读路径挪走，不是取消对账）
+    assert.equal(reconcileBundlesAfterInstall(profileDir), true);
+    assert.deepEqual(
+      (JSON.parse(readFileSync(pkgPath, 'utf8')) as Manifest).dsh.profile.bundles,
+      ['@deepseek-ai/dsh-base', 'closed-plugin'],
+    );
+  } finally {
+    cleanup();
+  }
+});
 /**
  * 救援模式与 reconcile 的冲突（真机实测的失效点，2026-09）。
  *
  * 救援把 dsh.profile.bundles 收窄为「DSH 核心 + 本插件」，而 reconcileBundles 的规则是
  * 「声明 dsh.bundle.patch 的依赖必须出现在 bundles」——二者直接冲突。只要救援期间依赖行
  * 又出现（导入 / 恢复 / 市场安装都会写 dependencies），reconcile 就会把用户插件加回
- * bundles；而 reconcile 会随**每次读插件清单**跑（导出预览、自动快照的 plugins 分区、
+ * bundles；而历史上 reconcile 会随**每次读插件清单**跑（导出预览、自动快照的 plugins 分区、
  * 插件页），于是救援刚写下的收窄约 1.5 秒就被撤销，用户重启后插件照常挂载 = 名存实亡。
+ * issue #111 之后读路径已改为纯读，但这条守卫仍必须留在 reconcileBundles 内部：写路径
+ * （安装成功对账 / 中止安装清理）在救援期间同样不得把用户插件加回去。
  */
 test('reconcileBundles：救援模式下必须停手（不得把收窄掉的用户插件加回 bundles）', async () => {
   const { homeDir, profileDir, cleanup } = makeTempProfile(
