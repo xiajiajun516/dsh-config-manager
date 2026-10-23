@@ -2,9 +2,10 @@
 
 本仓库的文档按**读者要解决的问题**分区，不按文件类型。找不到时先看这里，再看 `docs/lessons/README.md`（证据库索引）。
 
-> 维护规则：文档怎么写、写到哪、什么时候不必写 → `docs/maintenance/doc-maintenance.md`。新增文档必须回本页表格加一行
-> （这条靠人工，**没有脚本强制**）；文档里的路径与版本声明由 `node scripts/check-doc-paths.mjs`、
-> `node scripts/check-doc-versions.mjs` 在 CI 里校验。
+> 维护规则：文档怎么写、写到哪、什么时候不必写 → `docs/maintenance/doc-maintenance.md`。新增文档必须回本页表格加一行；
+> 这条**由脚本强制**：`node scripts/check-doc-paths.mjs` 的 `[doc-index]` 段会检查 `docs/{spec,modules,maintenance,decisions,components}/`
+> 下的每份 md 是否在本页以明确路径收录（`lessons`/`design`/`handoff`/`seo` 与冻结存档不在范围内）。
+> 路径与版本声明同样由 `check-doc-paths.mjs`、`node scripts/check-doc-versions.mjs` 在 CI 里校验。
 
 ---
 
@@ -87,4 +88,4 @@
 3. 「外部要照着实现」→ `docs/spec/`。
 4. 「为什么」→ `docs/decisions/`（一次性取舍）或 `docs/lessons/<域>.md`（可复用经验与证据）。
 5. 「已知债 / 硬限制」→ `docs/maintenance/`。
-6. 新增任何文件后回本页表格加一行，并跑两个守卫。
+6. 新增任何文件后回本页表格加一行（漏了 `check-doc-paths` 会直接红），并跑两个守卫。

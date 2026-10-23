@@ -14,6 +14,13 @@
  *   - 无法判定为路径的片段（含空格/通配符/URL/<占位符>/纯标识符）一律跳过，避免误报
  *   - 退出码：0 = 全部存在；1 = 有失效路径（逐条打印 file:line 与目标）
  *
+ * 二、活跃文档索引收录（2026-10-23 批准新增）
+ * 为什么存在：新增 md 忘记回 docs/index.md 加行，导致文档事实上不可达；此前只靠人工。
+ * 覆盖面**只**是正式长期维护的五目录（docs/spec、docs/modules、docs/maintenance、docs/decisions、docs/components），
+ * 不扩大到 lessons（用裸文件名收录）、design/handoff/seo（历史区）与 docs/known-pitfalls.md（冻结存档）。
+ * 收录判定 = index.md 里出现该文件的全路径（反引号或相对链接）；人工删改索引不会绕过本检查。
+ * 豁免表 INDEX_COVERAGE_EXEMPT 当前为空；加条目必须写理由（= 公开承认这份文档故意不进索引）。
+ *
  * 用法：node scripts/check-doc-paths.mjs [--report]
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
@@ -129,7 +136,33 @@ for (const rel of living) {
 const reportOnly = process.argv.includes('--report')
 console.log('[doc-paths] scanned=' + living.length + ' refs=' + checked + ' missing=' + misses.length)
 for (const m of misses) console.log('  x ' + m.file + ':' + m.line + '  ->  ' + m.path)
-if (misses.length > 0 && !reportOnly) {
-  console.error('[doc-paths] FAIL: 修正上述路径，或把纯历史文档移出校验范围（见脚本头注释）。')
+
+// ---------------- 活跃文档索引收录 ----------------
+// 只查正式长期维护的五目录；见文件头「二」的边界说明。
+const INDEX_COVERAGE_EXEMPT = new Map() // 路径 -> 理由；当前没有豁免项
+
+const indexMd = readFileSync(join(ROOT, 'docs/index.md'), 'utf8')
+const listed = (rel) =>
+  indexMd.includes('`' + rel + '`') || indexMd.includes('](' + rel + ')') || indexMd.includes('](<' + rel + '>')
+const unlisted = []
+let livingDocs = 0
+for (const d of DOC_DIRS) {
+  for (const f of walkMd(join(ROOT, d))) {
+    const rel = f.slice(ROOT.length + 1).split(sep).join('/')
+    livingDocs += 1
+    if (INDEX_COVERAGE_EXEMPT.has(rel)) continue
+    if (!listed(rel)) unlisted.push(rel)
+  }
+}
+console.log('[doc-index] living=' + livingDocs + ' unlisted=' + unlisted.length)
+for (const p of unlisted) console.log('  x 未在 docs/index.md 收录: ' + p)
+
+if ((misses.length > 0 || unlisted.length > 0) && !reportOnly) {
+  if (misses.length > 0) {
+    console.error('[doc-paths] FAIL: 修正上述路径，或把纯历史文档移出校验范围（见脚本头注释）。')
+  }
+  if (unlisted.length > 0) {
+    console.error('[doc-index] FAIL: 给每份活跃文档在 docs/index.md 加一行明确路径（或用豁免表并写理由）。')
+  }
   process.exit(1)
 }

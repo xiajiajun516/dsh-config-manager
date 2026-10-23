@@ -133,15 +133,16 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 | 每次真机事故/线上问题 | 先写 `docs/lessons/<域>.md` 证据，再回 `AGENTS.md` 补一行判据 | 当事人 |
 | 每季度，或「连续两次发现文档说法被代码证伪」 | 跑 §7.2 清单人工审一遍活文档 | 维护负责人 |
 
-### 7.1 能自动化的（只有这三类，不再增加）
+### 7.1 能自动化的（只有这四类，不再增加）
 
 - **路径存在性**：`node scripts/check-doc-paths.mjs`（反引号路径与相对链接；不含 docs/design、docs/handoff、docs/seo、docs/lessons 等历史区）。
+- **活跃文档索引收录**：同一个脚本的 `[doc-index]` 段——`docs/{spec,modules,maintenance,decisions,components}/` 下每份 md 必须在 `docs/index.md` 里以明确路径出现（`lessons` 用裸文件名收录，故意不在范围内）。
 - **版本声明一致性**：`node scripts/check-doc-versions.mjs`（三处版本号 + 活文档里标注适用版本的句子）。
 - **行为锚点**：现有测试（`tests/route/`、`tests/architecture-boundaries.test.ts`、`tests/conformance/`、各 `*.test.ts`）。文档断言与测试冲突时，以测试为准改文档。
 
-### 7.2 必须人工判断的（季度清单，约 10 分钟）
+### 7.2 必须人工判断的（季度清单；首次执行约 25 分钟，后续视改动范围而定）
 
-1. `docs/index.md` 的表格是否覆盖全部活文档（新增的 md 有没有进表）。
+1. 索引收录：**已自动化**（§7.1 第二类），人工只看豁免表里有没有该删未删的条目。
 2. 每份 `docs/modules/*.md` 的「入口 / 上限 / 失败语义」是否仍与代码一致。
 3. `docs/maintenance/tech-debt.md` 里「已修」条目是否都带提交或测试名。
 4. `docs/maintenance/known-limits.md` 是否有已经解禁的条目。
