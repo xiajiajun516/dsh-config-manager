@@ -74,7 +74,7 @@ test('t72-d：厂商前缀的大小写边界钉成事实（SK- / GHP_ / akia 是
   assert.equal(matchSecretValuePattern('AKIAIOSFODNN7A1B2C3D4'), 'aws-access-key');
   assert.equal(matchSecretValuePattern('ghp_' + 'AbCdEf0123456789aBcDeF0123456789aB'), 'github-token');
   // 不命中侧：**刻意保留**的大小写边界。改这里 = 改整个脱敏面（日志/导出/界面），需单独决策 ——
-  // 若确要收，请连同 known-gaps G-36 与 docs/known-pitfalls.md 一起改，不要只改死这条断言。
+  // 若确要收，请连同 known-gaps G-36 与 docs/lessons/security-and-credentials.md 一起改，不要只改死这条断言。
   const boundary = [
     'SK-ABCDEFGHIJKLMNOP0123456789XYZ',
     'Sk-abcdefghijklmnop0123456789XYZ',
