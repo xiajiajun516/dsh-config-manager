@@ -1,5 +1,5 @@
 /**
- * 工作副本锁单测（src/sync/git/workdir-lock.ts）。
+ * 工作副本锁单测（src/utils/workdir-lock.ts；sync 与 market 共用）。
  *
  * 背景（真机 incident 2026-10-23）：自动同步与 GUI 只读路由（/sync/snapshots-list 等）
  * 各自驱动同一个 sync/work，两个 `git pull --ff-only` 并发把 FETCH_HEAD 写成多行 for-merge，

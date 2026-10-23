@@ -4,7 +4,8 @@
  * 与 docs/design/2026-08-19-market-publish-design.md §3.2「GitMarketReader：按条目选择仓库」对齐：
  * - 市场用「只读 git fetch」，不复用 GitTransport 的写路径（commit/push/snapshots/<id>/ 布局）；
  * - 复用点：git 命令执行层（execFile promise 封装 / 脱敏 mask / SnapshotFs）+ validateRepoUrl；
- * - 每次读取：ensureRepo() 首次 git clone --depth 1，已存在副本则 git pull --ff-only；
+ * - 每次读取：ensureRepo() 首次 git clone --depth 1，已存在副本则快进到远端（显式 refspec fetch +
+ *   merge --ff-only，不读 FETCH_HEAD；参数见 src/utils/git-fast-forward.ts）；整段在工作副本锁内；
  * - 默认公开市场不注入凭据（repoUrl 拒绝 userinfo）；二期私有市场才走 token credential helper；
  * - itemId 必须过 assertSafeItemId（防 items/<id>/ 越界）；
  * - 条目级来源仓库（方案 B，docs/design/2026-08-19-market-publish-design.md §3.2）：
@@ -22,6 +23,8 @@ import type { GitExecResult } from '../sync/git/git-transport.ts';
 import { zhMsg } from '../core/messages.ts';
 import type { MsgFunc } from '../core/messages.ts';
 import { assertSafeItemId } from './types.ts';
+import { withWorkdirLock, WorkdirLockError } from '../utils/workdir-lock.ts';
+import { fastForwardFetchArgs, fastForwardMergeArgs, isMissingRemoteRefError, parseCurrentBranch } from '../utils/git-fast-forward.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -99,7 +102,7 @@ export class GitMarketReader implements MarketReader {
   }
 
   /**
-   * 拉取市场目录。首次 clone --depth 1 到 workDir；已存在副本则 pull --ff-only。
+   * 拉取市场目录。首次 clone --depth 1 到 workDir；已存在副本则快进到远端（不读 FETCH_HEAD）。
    * 返回 index.json 原文 + 拉取时间（ISO-8601）。
    */
   async readIndex(opts: { url: string; workDir: string }): Promise<{ text: string; fetchedAt: string }> {
@@ -148,27 +151,61 @@ export class GitMarketReader implements MarketReader {
 
   /* ---------------- 内部实现 ---------------- */
 
-  /** 确保本地工作副本就绪：首次 clone --depth 1；已有 .git 则 pull --ff-only 同步远端。 */
+  /**
+   * 确保本地工作副本就绪：首次 clone --depth 1；已有 .git 则快进到远端。
+   *
+   * 整段（判 .git → clone / 拉取）都在**工作副本锁**内：并发驱动同一个 market 工作副本时，
+   * 两个 `git pull` 会把 FETCH_HEAD 写成多行 for-merge 记录、随后自己 fatal
+   * （`fatal: Cannot fast-forward to multiple branches.`，真机 incident 2026-10-23 同款），
+   * 并发 clone 也会互相踩；锁也覆盖「先判 .git 再 clone」这段竞态。
+   */
   private async ensureRepo(url: string, workDir: string): Promise<void> {
     const fsx = this.fsx;
-    if (await fsx.exists(path.join(workDir, '.git'))) {
-      const res = await this.runGit(['pull', '--ff-only'], { cwd: workDir });
-      if (res.code !== 0) {
-        // 无 upstream / 全新分支等 → 静默跳过（内容可能已是最新或本地有未跟踪改动）
-        if (/no tracking information/i.test(res.stderr)) return;
-        throw new MarketReaderError(this.msg('market.pullFailed', { err: this.mask(res.stderr, url) }));
+    try {
+      await withWorkdirLock(workDir, async () => {
+        if (await fsx.exists(path.join(workDir, '.git'))) {
+          await this.fastForward(url, workDir);
+          return;
+        }
+        await fsx.mkdir(workDir);
+        const entries = await fsx.readdir(workDir);
+        if (entries.length > 0) {
+          throw new MarketReaderError(this.msg('market.workDirNotRepo', { dir: workDir }));
+        }
+        // 只读方针：--depth 1 兜底体积；公开市场无凭据（repoUrl 已拒绝 userinfo）
+        const res = await this.runGit(['clone', '--depth', '1', url, '.'], { cwd: workDir });
+        if (res.code !== 0) {
+          throw new MarketReaderError(this.msg('market.cloneFailed', { err: this.mask(res.stderr, url) }));
+        }
+      });
+    } catch (err) {
+      // 等锁超时不是「同步失败」而是「别人正在同步」→ 换成可操作的提示
+      if (err instanceof WorkdirLockError) {
+        throw new MarketReaderError(this.msg('market.workdirBusy', { dir: workDir }));
       }
-      return;
+      throw err;
     }
-    await fsx.mkdir(workDir);
-    const entries = await fsx.readdir(workDir);
-    if (entries.length > 0) {
-      throw new MarketReaderError(this.msg('market.workDirNotRepo', { dir: workDir }));
+  }
+
+  /**
+   * 快进本地副本到远端（不读 FETCH_HEAD）。
+   * 无本地提交、detached HEAD、远端还没有同名分支 → 一律静默跳过（内容可能已是最新）。
+   */
+  private async fastForward(url: string, workDir: string): Promise<void> {
+    const head = await this.runGit(['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: workDir });
+    if (head.code !== 0) return;
+    const branchRes = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workDir });
+    const branch = branchRes.code === 0 ? parseCurrentBranch(branchRes.stdout) : '';
+    if (branch === '') return;
+    const fetched = await this.runGit(fastForwardFetchArgs(branch), { cwd: workDir });
+    if (fetched.code !== 0) {
+      const combined = fetched.stderr + ' ' + fetched.stdout;
+      if (isMissingRemoteRefError(combined) || /no tracking information/i.test(combined)) return;
+      throw new MarketReaderError(this.msg('market.pullFailed', { err: this.mask(fetched.stderr, url) }));
     }
-    // 只读方针：--depth 1 兜底体积；公开市场无凭据（repoUrl 已拒绝 userinfo）
-    const res = await this.runGit(['clone', '--depth', '1', url, '.'], { cwd: workDir });
-    if (res.code !== 0) {
-      throw new MarketReaderError(this.msg('market.cloneFailed', { err: this.mask(res.stderr, url) }));
+    const merged = await this.runGit(fastForwardMergeArgs(branch), { cwd: workDir });
+    if (merged.code !== 0) {
+      throw new MarketReaderError(this.msg('market.pullFailed', { err: this.mask(merged.stderr, url) }));
     }
   }
 

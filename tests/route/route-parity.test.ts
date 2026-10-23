@@ -314,7 +314,7 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
     [/保留的 (\d+) 条/g, 'src/index.ts 保留条数', indexCount],
     [/钉住的 (\d+) 条/g, 'src/index.ts 保留条数（窗口守卫）', indexCount],
     [/其余 (\d+) 条/g, '拆出条数', builtCount],
-    [/合计 \*\*(\d+)\*\* 条/g, '合计条数', actual],
+    [/合计 ?\*{0,2}(\d+)\*{0,2} ?条/g, '合计条数', actual],
     [/本插件 (\d+) 条路由/g, '插件路由总数', actual],
     [/全部 (\d+) 条路由/g, '插件路由总数（影响面）', actual],
   ];
@@ -325,10 +325,27 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
     }
   }
   const agentsClaims = claims.filter((c) => claimsFiles.includes(c.file));
-  assert.ok(
-    agentsClaims.length >= agentsClaimsSpec.length,
-    claimsFiles.join(' + ') + ' 里至少要扫到 ' + String(agentsClaimsSpec.length) + ' 处路由计数声明（扫不到即假绿），实际 ' + String(agentsClaims.length),
-  );
+  /**
+   * routes-F5b（2026-10 补，取代此前的「至少 6 处」总数门槛）：
+   *
+   * AGENTS.md 的 C 档重写把它瘦成「只留判据」，路由计数散文从 6 处收敛为 3 处 ——
+   * 「窗口守卫钉住的 N 条」「其余 N 条（合计 N 条）」（AGENTS.md §3 一行）与
+   * 「保留的 N 条路由」（ docs/lessons/repo-overview.md 目录行）。
+   *
+   * 这里逐个点名这三个锚点，而不是数总数：总数门槛在散文搬家/合并时会误报，
+   * 也可能被「加两处重复散文」蒙过去；点名断言只认「这几句还在且数字对」——
+   * 删掉或改写任一处即红灯，正是「少一条即静默少一道围栏」的对外叙述不能被静默删空。
+   */
+  const requireClaim = (file: string, label: string): void => {
+    assert.ok(
+      agentsClaims.some((c) => c.file === file && c.label === label),
+      file + ' 里必须保留「' + label + '」这条计数声明（删掉即假绿）',
+    );
+  };
+  requireClaim('AGENTS.md', 'src/index.ts 保留条数（窗口守卫）');
+  requireClaim('AGENTS.md', '拆出条数');
+  requireClaim('AGENTS.md', '合计条数');
+  requireClaim('docs/lessons/repo-overview.md', 'src/index.ts 保留条数');
 
   assert.ok(claims.length >= 4, '至少要扫到 4 处计数声明（扫不到即假绿），实际 ' + String(claims.length));
   assert.deepEqual(

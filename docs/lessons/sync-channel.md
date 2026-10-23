@@ -211,7 +211,7 @@ incident 行 = `autosync-push / 需要人工处理`，而 `transactions/active/*
 用户所有会改配置的操作被阻断，只能人工处理。
 
 **修复（本次）**：
-1. `src/sync/git/workdir-lock.ts`：工作副本级互斥锁 = `os.tmpdir()` 下按目录绝对路径哈希命名的
+1. `src/utils/workdir-lock.ts`（原在 `src/sync/git/`，market 也要用 ⇒ 移入 `src/utils/`，锁名 `dshcm-workdir-<hash>.lock`）：工作副本级互斥锁 = `os.tmpdir()` 下按目录绝对路径哈希命名的
    `open('wx')` 文件锁（不写进工作副本：clone 前也能先锁住、不脏 `git status`）+ 进程内 Promise 链
    + 陈旧锁按 mtime 回收（缺省 15 min；等待上限缺省 5 min）。
 2. `GitTransport` 加 `private withWorkdir()`（`workdirLockDepth` 可重入），包住
@@ -222,14 +222,24 @@ incident 行 = `autosync-push / 需要人工处理`，而 `transactions/active/*
    SSH 主机密钥 / 历史分叉 / 网络分类逻辑逐条沿用。
 4. `runExternalIntent` 的 NEEDS_ATTENTION 分支补写 `journal.error`（过 `redactJournalText`）——
    面板的 `reason` 是 `j.error || j.recovery.reason`，此前恒为空。
+5. `market` 通道同口径：`src/market/reader.ts` 的 `ensureRepo` 与 `src/market/git-file-writer.ts` 的
+   `writeFiles` 各自整段包进 `withWorkdirLock`（writer 内层 `ensureRepo` **由调用方持锁、不再取锁**，
+   否则同进程自锁），拉取同样换成显式 `fetch` + `merge --ff-only`；这套参数抽成唯一实现
+   `src/utils/git-fast-forward.ts`（`fastForwardFetchArgs`/`fastForwardMergeArgs`/
+   `isMissingRemoteRefError`/`parseCurrentBranch`），sync 与 market 共用。
 
 **证据 / 实测**：
-- `src/sync/git/workdir-lock.test.ts`（6 项）：同目录并发串行（maxActive=1）、不同目录并行、等锁超时抛
+- `src/utils/workdir-lock.test.ts`（6 项）：同目录并发串行（maxActive=1）、不同目录并行、等锁超时抛
   `WorkdirLockError` 且**不删别人的锁**、陈旧锁回收、fn 抛错后锁必释放、`path.resolve` 归一后共用一把锁。
 - `src/sync/git/git-transport.test.ts` 新增 3 项：命令序列里**不再出现 `pull`**（显式 fetch + merge）、
   远端无同名分支静默跳过且不 merge、两个 transport 实例共享同一 workDir 时 git 调用 `maxActive=1`。
-- 全量 `npm test`：5129 项、fail 0；`npm run typecheck` 0 错。
+- 全量 `npm test`：5136 项（pass 5134 / skipped 2）、fail 0；`npm run typecheck` 0 错。
 
-**未覆盖**：`market` 通道（`src/market/reader.ts`、`src/market/git-file-writer.ts`）仍用
-`git pull --ff-only` 驱动自己的市场工作副本 —— 同一类并发风险存在，但它不经过 intent journal，
-失败不会升级成 SAFE MODE，故本次未改（要一并修就复用 `withWorkdirLock` + 同样的 fetch/merge 写法）。
+**market 通道同样受影响（本次一并修）**：`src/market/reader.ts` / `src/market/git-file-writer.ts` 驱动
+自己的市场工作副本，原先也是 `git pull --ff-only`；它不经过 intent journal，失败不会升级成 SAFE MODE，
+但会直接表现为「市场打不开 / 上传失败」。现在两条路径共用**同一把**工作副本锁与**同一套** fetch/merge 参数：
+- `src/utils/git-fast-forward.test.ts`（5 项）：fetch/merge 参数逐字、带斜杠分支名、两种 missing-ref 措辞、
+  detached HEAD 解析为空串。
+- `src/market/market.test.ts` 新增「reader：并发读取同一个工作副本 → git 调用不重叠」（3 个并发 `readIndex`，
+  `maxActive=1`）；`src/market/git-file-writer.test.ts` 新增「并发写入同一个工作副本 → git 调用不重叠」并把旧
+  「已存在工作副本 → pull --ff-only」用例改成「显式 fetch + merge、断言全程不出现 `pull`、不读 `FETCH_HEAD`」。

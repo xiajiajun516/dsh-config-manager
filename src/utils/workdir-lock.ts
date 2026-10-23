@@ -1,11 +1,13 @@
 /**
- * 工作副本级互斥锁（git 通道）。
+ * 工作副本级互斥锁（git 通道；sync 工作副本与 market 仓库工作副本共用）。
  *
- * 为什么必须串行化同一个 sync/work：
+ * 为什么必须串行化同一个工作副本：
  * 一个工作副本会被**多个互不知情的消费者**同时驱动 —— 同一进程里自动同步持着
  * withMutationLock 跑 engine.push，而 GUI 的只读路由（/sync/snapshots-list、
  * /sync/download、/sync/pull…）各自 makeSyncEngine 后直接 transport.list()，
  * 根本不参与那把锁；多开 DSH 实例（desktop + web）共用同一 sync/work 时更是跨进程。
+ * market 侧同理：市场读取（GitMarketReader.ensureRepo）与市场上传（GitFileWriter.writeFiles）
+ * 都会驱动同一个 market 工作副本，两者互不知情。
  *
  * git 的 `pull --ff-only` 是「fetch 写 FETCH_HEAD + 读 FETCH_HEAD 合并」的两步动作。
  * 两个 pull 并发时 FETCH_HEAD 会留下多行 for-merge 记录，随后**每个** pull 都以
@@ -70,7 +72,7 @@ export function workdirLockKey(workDir: string): string {
 
 /** 锁文件路径（导出仅为测试与诊断；不要手工删一把可能被人持有的锁） */
 export function workdirLockPath(workDir: string): string {
-  return path.join(os.tmpdir(), `dshcm-sync-workdir-${workdirLockKey(workDir)}.lock`);
+  return path.join(os.tmpdir(), `dshcm-workdir-${workdirLockKey(workDir)}.lock`);
 }
 
 async function tryAcquire(lockPath: string, workDir: string, staleMs: number, now: () => number): Promise<(() => Promise<void>) | null> {

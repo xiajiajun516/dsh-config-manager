@@ -789,7 +789,7 @@ test('t24：超时口径统一——默认取共用 DEFAULT_SYNC_TIMEOUT_MS（�
  *
  * 远端同步 = `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>` + `git merge --ff-only origin/<branch>`
  * （**不再用 `git pull --ff-only`**：并发下 FETCH_HEAD 会被写成多行 for-merge，pull 自己就 fatal，
- * 详见 src/sync/git/workdir-lock.ts 头注释）。脚本命中 fetch 那一步。
+ * 详见 src/utils/workdir-lock.ts 头注释）。脚本命中 fetch 那一步。
  */
 function pullScriptedExec(calls: CallRecord[], pullResults: GitExecResult[]): GitExecFn {
   let i = 0;

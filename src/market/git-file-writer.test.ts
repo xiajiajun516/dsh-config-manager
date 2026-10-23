@@ -176,10 +176,15 @@ test('git-file-writer: PR 分支场景（branch + baseRef + upstream fetch + for
   assert.deepEqual(push.slice(push.length - 5), ['push', '-u', 'origin', 'dsh-market-sync/my-config', '--force-with-lease']);
 });
 
-test('git-file-writer: 已存在工作副本 → pull --ff-only 而非重新 clone', async (t) => {
+test('git-file-writer: 已存在工作副本 → 显式 fetch + merge --ff-only（不读 FETCH_HEAD、不重新 clone）', async (t) => {
   const workDir = await tempWorkDir(t);
   await fs.mkdir(path.join(workDir, '.git'), { recursive: true }); // 假装已 clone
-  const { exec, calls } = installExec(okScript({ changed: false }));
+  const { exec, calls } = installExec((call) => {
+    if (gitCommandOf(call) === 'diff') return { stdout: '', stderr: '', code: 0 };
+    // 分支探测：rev-parse --abbrev-ref HEAD → main（detached 会返回 HEAD，走静默跳过）
+    if (gitCommandOf(call) === 'rev-parse' && call.args.includes('--abbrev-ref')) return { stdout: 'main\n', stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  });
   const writer = createGitFileWriter({ credentials: { getToken: async () => TEST_TOKEN }, exec });
 
   await writer.writeFiles({
@@ -190,7 +195,38 @@ test('git-file-writer: 已存在工作副本 → pull --ff-only 而非重新 clo
   });
 
   assert.ok(!calls.some((c) => gitCommandOf(c) === 'clone'), '已存在副本不得重新 clone');
-  assert.ok(calls.some((c) => gitCommandOf(c) === 'pull' && c.args.includes('--ff-only')), '必须 pull --ff-only');
+  // 并发下 `git pull` 会把 FETCH_HEAD 写成多行 for-merge、pull 自己 fatal（真机 SAFE MODE 根源）
+  assert.ok(!calls.some((c) => gitCommandOf(c) === 'pull'), '不得再用 git pull');
+  const fetchCall = calls.find((c) => gitCommandOf(c) === 'fetch');
+  assert.ok(fetchCall !== undefined, '必须显式 fetch');
+  assert.deepEqual(fetchCall!.args.slice(-3), ['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+  const mergeCall = calls.find((c) => gitCommandOf(c) === 'merge');
+  assert.ok(mergeCall !== undefined, '必须 merge --ff-only');
+  assert.deepEqual(mergeCall!.args.slice(-3), ['merge', '--ff-only', 'origin/main']);
+  assert.ok(!calls.some((c) => c.args.some((a) => a.includes('FETCH_HEAD'))), '绝不读 FETCH_HEAD');
+});
+
+test('git-file-writer: 并发写入同一个工作副本 → git 调用不重叠（工作副本锁）', async (t) => {
+  const workDir = await tempWorkDir(t);
+  await fs.mkdir(path.join(workDir, '.git'), { recursive: true }); // 假装已 clone
+  let active = 0;
+  let maxActive = 0;
+  const { exec } = installExec((call) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    active -= 1;
+    if (gitCommandOf(call) === 'diff') return { stdout: '', stderr: '', code: 0 }; // 无变化 → 幂等返回
+    return { stdout: '', stderr: '', code: 0 };
+  });
+  const writer = createGitFileWriter({ credentials: { getToken: async () => TEST_TOKEN }, exec });
+  const write = (): Promise<unknown> => writer.writeFiles({
+    repoUrl: 'https://github.com/xiaojun/dsh-configs',
+    workDir,
+    entries: [{ path: 'a.txt', content: '1' }],
+    commitMessage: 'noop',
+  });
+  await Promise.all([write(), write()]);
+  assert.equal(maxActive, 1, '同一上传工作副本的 git 操作必须串行（并发会撞 index.lock / 写坏 FETCH_HEAD）');
 });
 
 test('git-file-writer: push 失败 → 错误消息脱敏（token 与 repoUrl 均被掩码）', async (t) => {

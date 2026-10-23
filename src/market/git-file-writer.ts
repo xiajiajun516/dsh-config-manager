@@ -26,6 +26,8 @@ import { promisify } from 'node:util';
 import { validateRepoUrl } from '../sync/sync-config.ts';
 import { atomicWriteFile } from '../utils/atomic-write.ts';
 import { quoteGitValue } from '../utils/git-quote.ts';
+import { withWorkdirLock, WorkdirLockError } from '../utils/workdir-lock.ts';
+import { fastForwardFetchArgs, fastForwardMergeArgs, isMissingRemoteRefError, parseCurrentBranch } from '../utils/git-fast-forward.ts';
 import { marketMsg } from './messages-market.ts';
 import type { GitAuthor, GitCredentialProvider, GitExecFn, GitExecResult } from '../sync/git/git-transport.ts';
 
@@ -45,7 +47,7 @@ export interface GitFileWriteEntry {
 export interface GitFileWriteCall {
   /** 目标仓库 https 地址（token 绝不拼入；过 validateRepoUrl） */
   repoUrl: string;
-  /** 本地 git 工作副本目录（不存在则 clone；已存在则 pull --ff-only） */
+  /** 本地 git 工作副本目录（不存在则 clone；已存在则快进到远端） */
   workDir: string;
   /** 要写入的文件 */
   entries: GitFileWriteEntry[];
@@ -160,7 +162,11 @@ export class GitFileWriterClient implements GitFileWriter {
 
   /**
    * 写文件并推送：
-   * 1. ensureRepo：工作副本不存在 → clone（带凭据）；存在 → pull --ff-only（无 tracking 静默跳过）；
+   * 0. 整段写入（判 .git → clone / 拉取 → checkout → 写文件 → add → commit → push）都在**工作副本锁**内：
+   *    并发驱动同一个工作副本会撞 index.lock、让 FETCH_HEAD 写坏导致 pull 自己 fatal
+   *    （真机 incident 2026-10-23 同款），锁也可防同进程两个上传互相踩；
+   * 1. ensureRepo：工作副本不存在 → clone（带凭据）；存在 → 快进远端（显式 refspec fetch +
+   *    merge --ff-only，不读 FETCH_HEAD；无 upstream / 远端无同名分支静默跳过）；
    * 2. upstreamUrl → ensureUpstream（add upstream + fetch 官方 main，公开仓库匿名只读）；
    * 3. branch 指定 → checkout -B <branch> <baseRef ?? 远端默认分支探测>；
    * 4. 写文件（自动建目录）→ add → diff --cached --quiet（无变化 → 返回 pushed:false 幂等）→ commit → push；
@@ -177,6 +183,21 @@ export class GitFileWriterClient implements GitFileWriter {
     const token = await this.credentials.getToken();
     const mask = makeMask(repoUrl, token);
 
+    try {
+      return await withWorkdirLock(call.workDir, () => this.writeFilesLocked(call, repoUrl, token, mask));
+    } catch (err) {
+      // 等锁超时不是「上传失败」而是「另一个上传任务还没结束」→ 换成可操作的提示
+      if (err instanceof WorkdirLockError) {
+        throw new GitFileWriterError(marketMsg('market.gitWriter.workdirBusy', { dir: call.workDir }));
+      }
+      throw err;
+    }
+  }
+
+  /** writeFiles 的临界区（调用方已持工作副本锁）。 */
+  private async writeFilesLocked(
+    call: GitFileWriteCall, repoUrl: string, token: string, mask: (text: string) => string,
+  ): Promise<GitFileWriterResult> {
     await this.ensureRepo(repoUrl, call.workDir, token, mask);
     if (call.upstreamUrl !== undefined && call.upstreamUrl !== '') {
       const upstream = validateAndNormalizeRepoUrl(call.upstreamUrl);
@@ -267,7 +288,10 @@ export class GitFileWriterClient implements GitFileWriter {
     };
   }
 
-  /** 确保工作副本就绪：克隆（带凭据）或 pull --ff-only（无 tracking 静默跳过）。 */
+  /**
+   * 确保工作副本就绪：克隆（带凭据）或快进到远端（不读 FETCH_HEAD）。
+   * **调用方已持工作副本锁**（writeFiles）—— 这里不得再次取锁，否则同进程自锁。
+   */
   private async ensureRepo(
     repoUrl: string, workDir: string, token: string, mask: (text: string) => string,
   ): Promise<void> {
@@ -299,12 +323,24 @@ export class GitFileWriterClient implements GitFileWriter {
       }
       return;
     }
-    // 已存在：有本地提交才 pull --ff-only（全新仓库无 HEAD → 跳过）
+    // 已存在：有本地提交才快进（全新仓库无 HEAD / detached HEAD → 跳过）
     const head = await this.runGit(['rev-parse', '--verify', '--quiet', 'HEAD'], { cwd: workDir, allowNonZero: true, token, mask });
     if (head.code !== 0) return;
-    const pull = await this.runGit(['pull', '--ff-only'], { cwd: workDir, withCredential: true, allowNonZero: true, token, mask });
-    if (pull.code !== 0 && !/no tracking information/i.test(pull.stderr)) {
-      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.pullFailed', { stderr: pull.stderr })));
+    const branchRes = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workDir, allowNonZero: true, token, mask });
+    const branch = branchRes.code === 0 ? parseCurrentBranch(branchRes.stdout) : '';
+    if (branch === '') return;
+    // 不再用 git pull --ff-only：并发下 FETCH_HEAD 会被写成多行 for-merge、pull 自己 fatal；
+    // 显式 refspec fetch + 显式远端跟踪分支 merge 完全不读 FETCH_HEAD（参数见 utils/git-fast-forward.ts）。
+    const fetched = await this.runGit(fastForwardFetchArgs(branch), { cwd: workDir, withCredential: true, allowNonZero: true, token, mask });
+    if (fetched.code !== 0) {
+      const combined = fetched.stderr + ' ' + fetched.stdout;
+      // 无 upstream / 远端还没有这个分支 → 静默跳过（内容可能已是最新）
+      if (isMissingRemoteRefError(combined) || /no tracking information/i.test(combined)) return;
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.pullFailed', { stderr: fetched.stderr })));
+    }
+    const merged = await this.runGit(fastForwardMergeArgs(branch), { cwd: workDir, allowNonZero: true, token, mask });
+    if (merged.code !== 0) {
+      throw new GitFileWriterError(mask(marketMsg('market.gitWriter.pullFailed', { stderr: merged.stderr })));
     }
   }
 

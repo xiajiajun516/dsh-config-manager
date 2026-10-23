@@ -548,10 +548,12 @@ test('reader：首次 clone，复用副本 pull（只读不 push）', async () =
   // 第二次调用：.git 已存在 → pull 分支
   const r2 = await reader.readIndex({ url: 'https://github.com/example/market', workDir: work });
   assert.equal(r2.text, '{}');
-  // 断言：clone + pull，绝无 push
+  // 断言：clone + 显式 fetch + merge --ff-only，绝无 push，也绝不再用 git pull（并发下 FETCH_HEAD 会写坏）
   const flat = calls.map((c) => c.join(' ')).join('\n');
   assert.match(flat, /clone/);
-  assert.match(flat, /pull/);
+  assert.match(flat, /fetch origin \+refs\/heads\//);
+  assert.match(flat, /merge --ff-only origin\//);
+  assert.doesNotMatch(flat, /\bpull\b/);
   assert.doesNotMatch(flat, /push/);
   await fs.rm(work, { recursive: true, force: true });
 });
@@ -572,6 +574,31 @@ function makeMemFs(initial: Array<[string, string]> = []): SnapshotFsLike {
     async remove() {},
   };
 }
+
+test('reader：并发读取同一个工作副本 → git 调用不重叠（工作副本锁）', async () => {
+  const work = await tmpDir('dsh-mkt-work-lock-');
+  let active = 0;
+  let maxActive = 0;
+  const mem = makeMemFs([[`${work}/index.json`, '{}'], [`${work}/.git`, '']]);
+  const reader = new GitMarketReader({
+    exec: async (_cmd, args) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active -= 1;
+      if (args.includes('--abbrev-ref')) return { stdout: 'main\n', stderr: '', code: 0 };
+      return { stdout: '', stderr: '', code: 0 };
+    },
+    fsx: mem as unknown as SnapshotFs,
+  });
+  await Promise.all([
+    reader.readIndex({ url: 'https://github.com/example/market', workDir: work }),
+    reader.readIndex({ url: 'https://github.com/example/market', workDir: work }),
+    reader.readIndex({ url: 'https://github.com/example/market', workDir: work }),
+  ]);
+  assert.equal(maxActive, 1, '同一 market 工作副本的 git 操作必须串行（并发 pull 会写坏 FETCH_HEAD）');
+  await fs.rm(work, { recursive: true, force: true });
+});
 
 test('reader：条目级 repo 多仓库读取（clone 条目仓库到调用方 workDir，读 items/<id>/）', async () => {
   const work = await tmpDir('dsh-mkt-work-item-');
@@ -612,7 +639,8 @@ test('reader：条目级 repo 多仓库读取（clone 条目仓库到调用方 w
   });
   assert.equal(new TextDecoder().decode(z.data), 'PK-bytes');
   const flat = calls.map((c) => c.join(' ')).join('\n');
-  assert.match(flat, /pull/);
+  assert.match(flat, /merge --ff-only/);
+  assert.doesNotMatch(flat, /\bpull\b/);
   assert.doesNotMatch(flat, /push/);
   await fs.rm(work, { recursive: true, force: true });
 });

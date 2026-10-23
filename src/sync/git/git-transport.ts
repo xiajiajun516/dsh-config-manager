@@ -44,7 +44,8 @@ import { SECTION_FILE_PREFIXES } from '../../schema/config.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
-import { withWorkdirLock, WorkdirLockError } from './workdir-lock.ts';
+import { withWorkdirLock, WorkdirLockError } from '../../utils/workdir-lock.ts';
+import { fastForwardFetchArgs, fastForwardMergeArgs, isMissingRemoteRefError, parseCurrentBranch } from '../../utils/git-fast-forward.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -472,7 +473,7 @@ export class GitTransport implements SyncTransport {
    * 为什么：并发驱动同一个工作副本会让 `git pull --ff-only` 在 FETCH_HEAD 里留下多行 for-merge
    * 记录，随后每个 pull 都以 `fatal: Cannot fast-forward to multiple branches.` 失败 ——
    * 该失败在自动同步里落在 intent journal 内 ⇒ durable SAFE MODE（真机 incident，2026-10-23）。
-   * 并发 add/commit 还会撞 index.lock。锁的实现与理由见 ./workdir-lock.ts。
+   * 并发 add/commit 还会撞 index.lock。锁的实现与理由见 ../../utils/workdir-lock.ts。
    *
    * 可重入：内层（ensureRepo/pullFromRemote/adoptRemoteHistory 等）不重复取锁。
    */
@@ -814,15 +815,15 @@ export class GitTransport implements SyncTransport {
       // 而这条失败落在自动同步的 intent journal 里 ⇒ durable SAFE MODE。
       // 显式 refspec fetch + 显式远端跟踪分支 merge 完全不读 FETCH_HEAD（同样 5 并发实测全成功），
       // 语义与 ff-only pull 一致：能快进就快进，不能快进就报「历史分叉」。
-      const refspec = `+refs/heads/${branch}:refs/remotes/origin/${branch}`;
-      const fetched = await this.runGit(['fetch', 'origin', refspec], { withCredential: true, allowNonZero: true });
+      // 参数与判定在 utils/git-fast-forward.ts（market 侧共用同一份实现）。
+      const fetched = await this.runGit(fastForwardFetchArgs(branch), { withCredential: true, allowNonZero: true });
       if (fetched.code !== 0) {
         const combined = fetched.stderr + ' ' + fetched.stdout;
         // 远端还没有这个分支（全新空仓库 / 分支被改名）→ 与「无 upstream」一样静默跳过
-        if (/could.?n.t find remote ref|could not find remote ref/i.test(combined)) return;
+        if (isMissingRemoteRefError(combined)) return;
         await this.throwPullFailure(combined, fetched.stderr);
       }
-      const merged = await this.runGit(['merge', '--ff-only', `origin/${branch}`], { allowNonZero: true });
+      const merged = await this.runGit(fastForwardMergeArgs(branch), { allowNonZero: true });
       if (merged.code === 0) return;
       await this.throwPullFailure(merged.stderr + ' ' + merged.stdout, merged.stderr);
     };
@@ -833,8 +834,7 @@ export class GitTransport implements SyncTransport {
   /** 当前分支名；detached HEAD 返回 ''（此时不存在 upstream 语义）。 */
   private async currentBranch(): Promise<string> {
     const res = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { allowNonZero: true });
-    const name = res.code === 0 ? res.stdout.trim() : '';
-    return name === 'HEAD' ? '' : name;
+    return res.code === 0 ? parseCurrentBranch(res.stdout) : '';
   }
 
   /**

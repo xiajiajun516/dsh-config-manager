@@ -37,6 +37,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **自动同步不再把配置写入锁进安全模式**：之前自动同步和「同步」页的其他操作（列出远端快照、下载、拉取）会同时驱动同一个本地同步仓库，两次 git pull 撞在一起会让 git 自己报错，而这条报错被当成「状态不可证明」，于是整个配置写入被锁进安全模式、只能人工处理；现在同一同步仓库的所有 git 操作排队执行（多开 DSH 实例也一样），拉取也换成了不会被并发写坏的写法，偶发的一次同步失败最多只是那一轮失败，不会再加锁。
   **Auto sync no longer locks config writes into safe mode**: auto sync and the other Sync-page actions (listing remote snapshots, download, pull) used to drive the same local sync repository at the same time; two concurrent git pulls made git itself fail, that failure was treated as «state cannot be proven», and every config write was locked into safe mode until handled manually. All git work on one sync repository is now queued (also across multiple DSH instances), and pulling no longer uses the concurrent-fragile form, so a one-off failed sync stays a failed round instead of escalating.
 
+- **市场读取与上传不再互相踩脚**：同时打开市场、刷新列表，或者一边读一边上传时，两个动作会同时驱动同一个本地仓库副本，偶尔互相把对方的 git 操作搞失败（表现为市场打不开、或上传直接报错）；现在这些操作排队执行，同一份本地副本不再被并发改动。
+  **Market reading and uploads no longer trip over each other**: opening the market, refreshing the list, or uploading while reading used to drive the same local repository copy at once and occasionally break each other's git work (the market failed to open, or the upload errored); those operations are now queued, so one local copy is never touched concurrently.
+
 - **失败原因不再是一行空白**：安全模式下「需要人工处理」的那一行现在会写明到底哪一步失败、失败原因是什么，不再是只有一句「需要人工处理」而没有任何线索。
   **Failure reasons are no longer blank**: the «needs manual handling» row in safe mode now says which step failed and why, instead of a bare «needs manual handling» with no clue.
 
