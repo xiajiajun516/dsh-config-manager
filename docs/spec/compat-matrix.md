@@ -120,7 +120,7 @@ node:https   ← 仅出现在解释历史 bug 的注释文本里，不是真实�
 }
 ```
 
-已安装产物 `$DSH_HOME/profiles/web/node_modules/dsh-config-manager/package.json` 的 `dsh` / `engines` 字段与仓库一致（`version: 0.1.59`，`engines.node: ^22.19.0 || >=24.0.0`），**未验证**该目录是否为符号链接以外的其它安装形态。
+已安装产物 `$DSH_HOME/profiles/web/node_modules/dsh-config-manager/package.json` 的 `dsh` / `engines` 字段与仓库一致（`engines.node: ^22.19.0 || >=24.0.0`；`version` 随发布版本推进，此处**不写死**数值，以 `package.json` 为准），**未验证**该目录是否为符号链接以外的其它安装形态。
 
 ### 2.4 client 侧的宿主契约（读 DSH 实现源码取证）
 
@@ -147,9 +147,9 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 ## 3. peer 声明范围 vs 本机实测版本
 
-### 3.1 peer 声明（`package.json:91-108`，共 14 个官方包 + react/react-dom）
+### 3.1 peer 声明（`package.json:98-117`，共 **16** 个官方包 + react/react-dom）
 
-`@deepseek-ai/dsh-agent-presets`、`dsh-client-connection`、`dsh-client-locale`、`dsh-client-runtime`、`dsh-client-ui-settings`、`dsh-client-ui-slots`、`dsh-credentials`、`dsh-home-paths`、`dsh-host-plugin-inventory`、`dsh-host-webserver`、`dsh-llm`、`dsh-settings`、`dsh-system-prompt`、`dsh-tools` —— **全部声明为 `>=0.1.0-rc.6 <0.3.0-0`**（0.1.66 起，显式上下界；改前为带预发布版的 caret `^0.1.0-rc.6`，见 §3.3）；`react` / `react-dom` 为 `^18.2.0`。
+`@deepseek-ai/dsh-agent-presets`、`dsh-client-connection`、`dsh-client-locale`、`dsh-client-runtime`、`dsh-client-ui-primitives`、`dsh-client-ui-settings`、`dsh-client-ui-slots`、`dsh-commands`、`dsh-credentials`、`dsh-home-paths`、`dsh-host-plugin-inventory`、`dsh-host-webserver`、`dsh-llm`、`dsh-settings`、`dsh-system-prompt`、`dsh-tools` —— **全部声明为 `>=0.1.0-rc.6 <0.3.0-0`**（0.1.66 起，显式上下界；改前为带预发布版的 caret `^0.1.0-rc.6`，见 §3.3）；`react` / `react-dom` 为 `^18.2.0`。
 
 ### 3.2 本机三套并存的实际版本
 
@@ -187,7 +187,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 ### 3.3 「rc 期 semver 不可靠」——实测结论
 
-**旧声明（≤ 0.1.65，已被 issue #53 修掉）**：14 条 peer 全是**带预发布版的 caret** `^0.1.0-rc.6`。用 DSH 自带 `semver` 实测：
+**旧声明（≤ 0.1.65，已被 issue #53 修掉）**：当时 14 条 peer（现 16 条，见 §3.1）全是**带预发布版的 caret** `^0.1.0-rc.6`。用 DSH 自带 `semver` 实测：
 
 | 候选版本 | `^0.1.0-rc.6` 默认 | `^0.1.0-rc.6` + `{includePrerelease:true}` |
 |---|---|---|
@@ -214,7 +214,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 **结论与风险**：
 
 1. 兼容闸的判定式（读 `@deepseek-ai/dsh-app-boot@0.2.0-rc.1` 源码的 `evaluatePluginCompatibility`，`lib/index.js:286-313`）是 `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`，只检查名字为 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer；**任一不满足 → 整份 bundle 在启动时被跳过**（stderr 只多一行 `skipping profile bundle`，进程照常起来、功能静默消失）。0.1.5-rc.1 还没有这道闸。
-2. **真跑判定**（runtime = `0.2.0-rc.1`，manifest = 本插件）：改前 `^0.1.0-rc.6` → **INCOMPATIBLE（14 条 peer 全中）**；改后 → **COMPATIBLE**。`0.1.5-rc.1` / `0.1.7-rc.2` / `0.2.0-rc.1` 三种 runtime 全部 COMPATIBLE。回归护栏：`tests/packaging-contract.test.ts` 的 **P-3**（钉住 14 条 peer 一律是显式上下界，caret/tilde 一律红灯）。
+2. **真跑判定**（runtime = `0.2.0-rc.1`，manifest = 本插件）：改前 `^0.1.0-rc.6` → **INCOMPATIBLE（当时 14 条 peer 全中）**；改后 → **COMPATIBLE**。`0.1.5-rc.1` / `0.1.7-rc.2` / `0.2.0-rc.1` 三种 runtime 全部 COMPATIBLE。回归护栏：`tests/packaging-contract.test.ts` 的 **P-3**（钉住 14 条 peer 一律是显式上下界，caret/tilde 一律红灯）。
 3. 旧声明的另外两处脆弱点也在现行区间下消失：**默认语义**下 `^0.1.0-rc.6` 不匹配任何 `0.1.x-rc.y`（`x>0` 或 `y>6`，因为 `<upper>` 被钉在 `0.1.0` 那一格），所以一旦打开 `autoInstallPeers` 或走 pnpm `strict-peer-dependencies` / npm 的 peer 校验就立刻报冲突 —— 现在 profile 实际装的 `0.1.5-rc.2` 在默认语义下也满足 `>=0.1.0-rc.6 <0.3.0-0`。
 4. rc 期 semver 不可靠的根因：prerelease 段的存在使「兼容区间」的实际边界依赖工具的 `includePrerelease` 选择，而 npm / pnpm / 各 loader 的选择并不统一。**因此本插件的兼容性事实上靠「运行时实测 + 优雅降级」维持，而不是靠 semver 保证** —— peer 只是**安装期闸门**，不构成运行时承诺（真正运行时 import 的官方包只有 §1.3 的 4 个）。
 
@@ -334,7 +334,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 ### 规则 M6 —— 声明范围与实测范围脱节
 
-若某一版 DSH 发布后，本插件的 peer 范围在**默认 semver 语义**下不满足实际安装的 DSH 版本（当前即已处于该状态：profile `0.1.5-rc.2` vs `^0.1.0-rc.6`）→ **不**自动触发 major，但**必须**修正 peer 范围使其在默认语义下成立（例如改为 `^0.1.0-rc.6 || ^0.1.5-rc.1` 或按 DSH 实际发布节奏重设）。
+若某一版 DSH 发布后，本插件的 peer 范围在**默认 semver 语义**下不满足实际安装的 DSH 版本 → **不**自动触发 major，但**必须**修正 peer 范围使其在默认语义下成立。**当前状态：不在该状态**——0.1.66 起范围已改为显式上下界 `>=0.1.0-rc.6 <0.3.0-0`（§3.1），profile 实测 `0.1.5-rc.2` / `0.2.0-rc.1` 均在区间内；本条规则留作下次 DSH major 时的判据。判据复核点：`tests/packaging-contract.test.ts` 的 `DSH_PEER_COUNT` 与范围断言。
 理由：这属于声明缺陷，不是行为破坏；但长期不修会累积成 R11 的安装期爆炸。
 
 ### 规则 M7 —— 不需要升 major 的情形（明确排除）

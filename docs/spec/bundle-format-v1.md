@@ -1005,7 +1005,7 @@ THROW 备份 schema v2（高于当前 1，需升级插件），无法导入（�
 
 ### 6.3 兼容性评分（受版本影响，但不是版本判定）
 
-`computeCompatibility`（`src/core/validator.ts:49-69`）：
+`computeCompatibility`（`src/core/validator.ts:110-115`，评分由 `compatibilityReasons` 派生）：
 
 | 评分 | 条件 |
 |---|---|
@@ -1324,7 +1324,9 @@ errors   = []
 >
 > **⚠️ 时效性声明（必读）**：本规格的取证基线是提交 `696cb17`（曾被标记为 `0.1.59`，但**从未发布**；`v0.1.60` 已并入 `v0.1.59`，本版将以 `v0.1.59` 发布）。在**格式相关行为**上，该基线与 npm 上**最新已发布**的 `v0.1.58` 一致，故「基线版本」列可视为**已发布版本**的真实行为；「当前工作区状态」列是**本文件写作时仓库工作区**的实测/读码结论，两列**刻意分开**——已发布版本仍可能带这些缺陷，第三方实现者需要知道它们存在过、以及修好之后应该长什么样。
 >
-> **当前工作区状态汇总**：✅ 已修复 G-01 / G-02 / G-03 / G-04（含本轮补齐的表缺失分支）/ G-06 / G-09 / G-10（规格侧澄清）；➖ **G-08 已按产品决策整体移除**（不是「修复」——加密不再做任何密码强度校验，该能力被有意取消，任何非空密码可用）；⚠️ G-05 部分修复（不对称）；⚠️ G-07 **仍然成立**（`MIN = CURRENT = 1` 未变，迁移分支结构上仍不可达，但接线已就绪）；✅ G-11 仍然成立（本版新增登记）。
+> **编号范围（先看这条）**：本节表的 `G-NN` 是**基线审计编号（G-01…G-13，只覆盖格式行为）**，与 [`docs/spec/known-gaps.md`](./known-gaps.md) 的 `G-01…G-45`（全仓缺口台账）**不是同一套编号**，同号不同义。以哪张表为准：本表看**格式行为随基线到当前的演变**；某条缺口的当前结论一律查 known-gaps（它的状态列更新更快）。
+>
+> **当前工作区状态汇总**：✅ 已修复 G-01 / G-02 / G-03 / G-04（含本轮补齐的表缺失分支）/ G-06 / G-09 / G-10（规格侧澄清）/ G-12 / G-13；➖ **G-08 已按产品决策整体移除**（不是「修复」——加密不再做任何密码强度校验，该能力被有意取消，任何非空密码可用）；⚠️ G-05 部分修复（不对称）；⚠️ G-07 **仍然成立**（`MIN = CURRENT = 1` 未变，迁移分支结构上仍不可达，但接线已就绪）；❌ G-11 **仍然成立**（未修复）（本版新增登记）。
 >
 > 行号口径：**「当前工作区状态」列引用的行号是当前源码行号**（写作时逐条用 Node 读行内容核对过）；「基线」列的行号指 `0.1.59` 发布版源码。源码仍在并行修改，若行号漂移请以符号名（函数/消息 key）为准检索。
 
@@ -1341,14 +1343,14 @@ errors   = []
 | **G-09** | **文件类分区内容不扫描 secret** | `skills`/`agentPresets`/`agentInstructions`/`pluginFiles`/`sessions`/`self` 的文件内容**完全不进扫描器**，也不计入 `redactedHits` | 基线：`src/core/exporter.ts:161-167`、`src/adapters/self.ts:21-22` | 「默认不含秘密」对文件类分区**不成立**；`pluginFiles` 默认 `false` 与市场 BANNED 是对此的缓解，但**用户显式勾选即可带出明文** | ✅ **已修复（已实测复核）**：文件类分区改走 `scanFileSectionText`（定义 `src/core/exporter.ts:135-161`，调用点 `src/core/exporter.ts`），命中**计入 `redactedHits`** 并逐条产出 `export.fileSectionSecrets` 告警（`src/core/messages.ts`）。**边界（仍然成立）**：只报告**不改写**（绝不剥离用户文件内容）；默认 `defaultSecretScanner` 未实现 `scanText` → 该分支返回空、行为与修复前一致（`src/core/exporter.ts:130-131`、`:137`），生产路径注入的是含 `scanText` 的强化扫描器。**遗留的告警去重问题**见本表 G-13 |
 | **G-10** | **`secrets` 在 `sections` 中恒 `false` 但语义被复用** | `sections.secrets` 永远是 `false`（无 adapter）；加密事实由 `security.encrypted` 承载。若第三方按「`sections.secrets === true` 表示含凭据」理解会出错 | 基线：`src/core/exporter.ts:296`（基线行号）；§0.2 运行验证 | 格式语义的坑（文档级，非实现缺陷） | ✅ **已收口（规格侧澄清，实现未变）**：`buildSectionFlags` 里 `flags['secrets'] = false` 仍在（**当前工作区** `src/core/exporter.ts`），这不是实现缺陷而是**语义设计**；§2.5 已加显式警告块，§9 步骤 4 的验收判据明确「含秘密/需密码只看 `security.containsSecrets` / `security.encrypted`，不看 `sections.secrets`」。第三方按该判据实现即不会误判 |
 | **G-11** | **条目名侧不拒绝中段反斜杠（与 checksums 侧不一致）** | `isPathSafe` 只拒绝「以 `/` 或 `\` 开头」与「含 `..` 段」的名字，**中段 `\` 被接受**：`isPathSafe('custom/skills/back\\slash.md') === true`，写侧 `zipToBuffer` 也接受，读侧 `parseZip` 也接受。后果：① 同一份 bundle 在 Windows 目标上把 `\` 当分隔符（`skills/probe/back/slash.md`），在 POSIX 目标上当普通字符（`skills/probe/back\slash.md`）——**跨平台路径语义不一致**；② 而 `checksums.json` 的键侧**明确拒绝**含 `\` 的路径（`src/security/integrity.ts:63`），两套规则不对齐 | `src/utils/paths.ts:45-54`（无 `\` 检查）、`src/utils/zip.ts` 的 `zipToBuffer`（条目名 `isPathSafe` 闸）、`src/utils/zip.ts` 的 `parseZip`（条目名 `isPathSafe` 闸）；§3.3.2 实测 C10 | 条目名安全边界；跨平台不一致；第三方若照抄 `isPathSafe` 会继承该缺陷 | ✅ **仍然成立**（本版新增登记，实测确认）。**这是本表唯一一条「未修复的格式行为缺陷」** |
-| **G-12** | **G-04 的收窄残留：checksums 表缺失/为空时「未登记条目」漏报** | 反向完整性检查（「ZIP 里在、校验表里不在」的条目）原本整段嵌在「表存在」分支内：剥掉 `integrity/checksums.json` 或把它置为 `{}` ⇒ 一个条目都不校验、也零告警，却 `valid=true` | 基线：`src/core/analyzer.ts:163`（`if (archive.has(CHECKSUMS_FILE))` 包住整段） | 与 G-04 同源：可静默绕过完整性校验 | 🚧 **本轮审计新发现，正在修复（未收口）**。**工作区已见修复**：`src/core/analyzer.ts` 的 `loadBundle`（表缺失/为空 → `import.checksumsMissing`） 把「表缺失或为空」统一映射为 `import.checksumsMissing` 告警，反向检查（同一 `loadBundle`）此时不再运行（无表可对照）；回归测试 `INT-02` / `INT-03` / `INT-04`（`tests/conformance/roundtrip.test.ts:945-1031`）。**但由并行任务负责收口与验收，本文件不声称已修完**——详见 §7.4「行为正在变更」提示与 `docs/spec/known-gaps.md` §2 |
-| **G-13** | **G-09 的告警去重问题** | 文件类分区的 secret 命中告警原本按 **hit** 计数且不去重：同一行同时命中「字段名」与「值形状」会产出两条**同路径**告警，少数文件就吃满 `MAX_FILE_SECTION_WARNINGS_PER_SECTION` 上限，使含真实明文凭据的其它文件被静默淹没 | 基线：`src/core/exporter.ts` 按 hit 逐条 push | 告警噪声，可淹没真正需要关注的命中；**不改变**「命中是否被检出」这一安全事实（计数始终可信） | 🚧 **本轮审计新发现，正在修复（未收口）**。**工作区已见修复**：`src/core/exporter.ts` 先按**文件路径**去重、再截断到 `MAX_FILE_SECTION_WARNINGS_PER_SECTION`（语义 = 不同**文件**数，常量在 `:107-108`），并对被截断的文件数补一条**汇总告警**；`redactedHits` 仍计**全量命中**。回归测试 `tests/core/exporter.test.ts:381` / `:436` / `:456`。**但由并行任务负责收口，本文件不声称已修完** |
+| **G-12** | **G-04 的收窄残留：checksums 表缺失/为空时「未登记条目」漏报** | 反向完整性检查（「ZIP 里在、校验表里不在」的条目）原本整段嵌在「表存在」分支内：剥掉 `integrity/checksums.json` 或把它置为 `{}` ⇒ 一个条目都不校验、也零告警，却 `valid=true` | 基线：`src/core/analyzer.ts:163`（`if (archive.has(CHECKSUMS_FILE))` 包住整段） | 与 G-04 同源：可静默绕过完整性校验 | ✅ **已修复**（收录于 `docs/spec/known-gaps.md` 的 G-12，状态列为权威）：`src/core/analyzer.ts` 的 `loadBundle`（表缺失/为空 → `import.checksumsMissing`） 把「表缺失或为空」统一映射为 `import.checksumsMissing` 告警，反向检查（同一 `loadBundle`）此时不再运行（无表可对照）；回归测试 `INT-02` / `INT-03` / `INT-04`（`tests/conformance/roundtrip.test.ts:945-1031`）。回归测试 `INT-02`/`INT-03`/`INT-04` 见 `tests/conformance/roundtrip.test.ts`。口径以 `docs/spec/known-gaps.md` §1 为准 |
+| **G-13** | **G-09 的告警去重问题** | 文件类分区的 secret 命中告警原本按 **hit** 计数且不去重：同一行同时命中「字段名」与「值形状」会产出两条**同路径**告警，少数文件就吃满 `MAX_FILE_SECTION_WARNINGS_PER_SECTION` 上限，使含真实明文凭据的其它文件被静默淹没 | 基线：`src/core/exporter.ts` 按 hit 逐条 push | 告警噪声，可淹没真正需要关注的命中；**不改变**「命中是否被检出」这一安全事实（计数始终可信） | ✅ **已修复**（收录于 `docs/spec/known-gaps.md` 的 G-13）：`src/core/exporter.ts` 先按**文件路径**去重、再截断到 `MAX_FILE_SECTION_WARNINGS_PER_SECTION`（语义 = 不同**文件**数，常量在 `:107-108`），并对被截断的文件数补一条**汇总告警**；`redactedHits` 仍计**全量命中**。回归测试 `tests/core/exporter.test.ts`（按文件去重 / 截断补汇总三例）。口径以 `docs/spec/known-gaps.md` §1 为准 |
 
 > 说明：G-07 目前**没有可观测后果**（因为 `MIN = CURRENT = 1`，迁移路径不可达）。**G-06 已修复后，这条定时问题已解除**：一旦发布 schema v2，`loadBundle` 会沿迁移链真实执行迁移（`src/core/analyzer.ts` 的 `needsMigration` 守卫分支（调用 `runSchemaMigration`）），而不是「判定可迁移却按新格式直接用」。v2 发布前仍应补一条「v1 → v2 真实迁移」的端到端测试。
 >
 > G-11 的**实际可利用性有限**（`\` 不是 `..`，无法越出 baseDir 之外，且 L3 的 `isReservedInternalRel` 会在折叠后拦截保留命名空间），但它是**真实的行为不一致**，且会让跨平台幂等比对出错，因此按缺口登记，不粉饰。
 >
-> G-12 / G-13 是**本轮审计新发现**（不在基线 `0.1.59` 的登记范围内），状态一律标 🚧「正在修复」——**不要**把它们当作已解决；收口结论以负责该修复的任务与 `docs/spec/known-gaps.md` 为准。
+> G-12 / G-13 是**本轮审计新发现**（不在基线 `0.1.59` 的登记范围内），现已修复并有回归测试；状态结论以 `docs/spec/known-gaps.md` §1 的 G-12 / G-13 行为准。
 
 ---
 

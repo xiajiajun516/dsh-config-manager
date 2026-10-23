@@ -44,7 +44,7 @@ src/
 
 > 下移自 `AGENTS.md` §🏗️ 架构心智：这里是完整论证与证据；规则句仍留在 AGENTS.md。
 
-- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；证据见 known-pitfalls）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件 82 条路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 82 条路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
+- **插件 HTTP API 的真实认证边界 = kit 的围栏，不是 DSH 的 cookie**（W2；规则判据见 `AGENTS.md` §🏗️ 架构心智，路由守卫的活文档见 `docs/lessons/repo-overview.md` 与 `docs/spec/known-gaps.md` G-01/G-02；下面的实测打点出自**只读冻结存档** `docs/known-pitfalls.md`）：DSH 的 browser-session cookie 拒绝只挂在 **`kind:'prefix'`、`path:'/api'` 的 RPC 承载路由**上（源码行号见 `docs/known-pitfalls.md`「t93 容量腾挪」§1），而 host-webserver 的派发顺序是 **exact 表先命中**。本插件 82 条路由（口径见 parity 快照）都命中 exact 或更长的私有 prefix，**永不进入** DSH 的 `/api` 认证路由——实测打点见 `docs/known-pitfalls.md`「t93 容量腾挪」§1。**影响面**：本机任意非浏览器进程（含本机其它本地用户）**无 token/cookie 即可调用全部 82 条路由**（含破坏性路由，清单见 known-pitfalls）；**远程/LAN 来源**被 kit 的 `remoteAddress ∈ {127.0.0.1, ::1, ::ffff:127.0.0.1}` 判定挡掉，**浏览器跨站 CSRF** 被同源/Host 围栏挡掉——**围栏确实在生效，不得把这条写成「插件 API 无认证」**。两个不得误解的推论：① **不得把 DSH 会话认证当作插件 API 的兜底**——认证挂在通用 prefix 路由 `/api` 上 + exact 优先的派发顺序是**平台级性质**，任何在 `/api` 下注册 exact 路由的 DSH 插件同理；插件 API 的边界只能是 kit 的 `endpoint()` 围栏。② 若将来要在**共享机器**或**经本机代理/隧道转发**（非回环来源、`trustedHosts`/LAN 绑定）的场景暴露插件 API，**必须**在 kit 里自行对接认证（方向：在 `endpoint()` 注册点统一加一道校验，勿逐路由散写），届时应重新评级本条的残余风险。**复核路径**见 `docs/known-pitfalls.md`「t93 容量腾挪」§1（含 DSH 源码位置与 `outputs/e2e-w2/run-e2e.ps1 -Strict`）。
 
 ## 🚀 自动发布（npm + GitHub Release）
 
@@ -66,7 +66,7 @@ git push origin main --tags
   做格式门禁（标题带日期 / 有中英主题 / `###` 小节非空 / 不留 `{{...}}` 占位符 —— 骨架没填完发不出去）；
   行为门禁见 `tests/changelog-section.test.ts`。
 
-CI 流水线：`typecheck → 192 测试 → build → npm pack → npm publish（OIDC）→ 创建 GitHub Release（tgz 附件 + CHANGELOG 双语亮点 + 自动变更记录）`
+CI 流水线：`typecheck → 全量测试 → build → npm pack → npm publish（OIDC）→ 创建 GitHub Release（tgz 附件 + CHANGELOG 双语亮点 + 自动变更记录）`（用例数不写死，以 `npm test` 实际输出为准 —— 规模已翻数倍，任何写死数字都会立刻过时）
 
 - **npm 发布走 Trusted Publishing（OIDC）**：无任何长期令牌；workflow 需 `id-token: write` + npm ≥ 11.5.1（workflow 会先升级 npm）
 - **Release 描述由模板渲染**：CI 从 `CHANGELOG.md` 抽取当前版本段（中英双语亮点，漏写会 **fail fast**），
@@ -113,7 +113,7 @@ install → typecheck（src）→ typecheck:tests（tests/**）→ npm test（�
 
 ## 🧪 测试矩阵
 
-**192 个测试全部通过**（node:test，零额外依赖），覆盖规范 §33 + 验收场景 A–G：
+**全量测试通过**（node:test，零额外依赖；用例数**以 `npm test` 实际输出为准**，不在此写死），覆盖规范 §33 + 验收场景 A–G：
 
 | 类别 | 覆盖 |
 |---|---|

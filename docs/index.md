@@ -44,9 +44,9 @@
 | 文档 | 内容范围 |
 |---|---|
 | `docs/spec/bundle-format-v1.md` | 备份包（ZIP）结构与 manifest 字段 |
+| `docs/spec/bundle-manifest.schema.json` | manifest 的**机器可读 schema**（`bundle-format-v1.md` §manifest 一节的配套文件；非 md，`[doc-index]` 不扫，靠人记着） |
 | `docs/spec/sync-channel-v1.md` | 同步通道的索引/快照/能力矩阵 |
 | `docs/spec/compat-matrix.md` | 跨版本/跨平台兼容矩阵 |
-| `docs/spec/known-gaps.md` | 已知实现缺口台账（**历史证据 + 当前状态**，不是路线图） |
 | `docs/spec/headless-consumption.md` | 无 GUI/脚本化消费本插件产物的契约（CLI 与模型工具面） |
 | `docs/spec/plugin-data-declaration.md` | 插件通过 `dsh.dataDirs` 自述数据目录的声明格式 |
 
@@ -58,7 +58,7 @@
 
 - `docs/decisions/0001-route-fence-and-auth-boundary.md` — 路由只经 kit 声明；围栏即认证边界
 - `docs/decisions/0002-encrypted-container-unlock-gate.md` — 未解锁容器不得进解析器
-- `docs/decisions/0003-sync-conditional-write-and-gist-exception.md` — 条件写；gist 是明确例外（**待产品决策**）
+- `docs/decisions/0003-sync-conditional-write-and-gist-exception.md` — 条件写；gist 是明确例外（不做条件头，改「写后复核 + 有界重做」；**已采纳并收口**，残余窗口见 `docs/maintenance/known-limits.md`）
 - `docs/decisions/0004-rollback-point-fork-archive.md` — 回退 = fork + 归档；回滚点 = 两态 + 内容寻址台账
 - `docs/decisions/0005-safe-mode-fail-closed.md` — SAFE MODE fail-closed，解除判据只有一份
 - `docs/decisions/0006-restore-auto-resume.md` — 恢复崩溃后自动续跑：逐项证明成立才续，三个入口不跨续
@@ -66,7 +66,8 @@
 ## 5. 维护与债
 
 - `docs/maintenance/tech-debt.md` — 按 P1/P2/P3 编号的债务清单 + 已修留档；每条带证据/影响/建议/置信度
-- `docs/maintenance/known-limits.md` — 「当前做不到 / 做了会出事」的硬限制
+- `docs/maintenance/known-limits.md` — 「当前做不到 / 做了会出事」的硬限制（平台/外部事实，仓内不可证）
+- `docs/spec/known-gaps.md` — 已知实现缺口台账（**历史证据 + 当前状态**，不是路线图，也**不是**对外契约）
 - `docs/maintenance/doc-maintenance.md` — **文档维护规则**：改动要不要写文档、写哪份、AI 流程、季度人工清单
 
 更新时机：修完一条把状态改为「已修」并写提交/测试名（**不要删行**）；发现新债先加行再决定排期。
@@ -79,7 +80,7 @@
 | `docs/design/` | 上游设计存档 | 可能早于实现；判断行为以代码 + 测试为准 |
 | `docs/handoff/` | 阶段交接（历史归档） | 写于当时的版本，**非当前状态** |
 | `docs/seo/` | 曝光基线记录 | 与功能无关 |
-| `docs/known-pitfalls.md` | 冻结存档 | 2026-09/10 一次下移的记录，不再追加 |
+| `docs/known-pitfalls.md` | 冻结存档 | 2026-09/10 一次下移的记录，**只读**、不再追加；与 `docs/lessons/` 冲突时**以 lessons 与代码为准** |
 
 ## 7. 归位约定（新文档放哪）
 

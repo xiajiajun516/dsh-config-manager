@@ -56,6 +56,8 @@ DSH 的配置有三个权威存储（`settings.yaml`、`cordis.patch.yml`、prof
 
 ## 4. 版本与兼容
 
-- 数组缺省、字段不认识、形状非法 → **整条声明作废**（等价于没声明），绝不影响内置来源与其它声明。
+- 数组缺省 / `dataDirs` 不是非空数组 → **整条声明作废**（等价于没声明），绝不影响内置来源与其它声明。
+- 条目不是对象、或 `path` 非法（绝对路径 / `..` / 空段）→ 同样**整条声明作废**（`parseDeclaredDataDirs` 返回 `null`，`src/core/plugin-data-registry.ts`）。
+- **`role` 不认识不是作废**：只认 `assets` / `cache`，其余（缺省、拼错）**静默回落 `config`**（`src/core/plugin-data-registry.ts:245-246`）；`env` / `exclude` 里的非字符串项**逐项丢弃**，不影响该条目。
 - 该约定是**附加**信息：删掉 `dsh.dataDirs` 只等于「配置管理器不再自动识别该插件的数据」，不影响插件自身运行。
 - 未来字段只做**追加**语义；已有字段的含义不改变。

@@ -68,9 +68,9 @@
 | G-33 | 备份不到外壳的 MCP 与技能：patch 只读 home 层、技能不落目录（issue #71） | ✅ 已修复（patch 行按层读取并写回原层、技能经 `ctx.skills` 服务收编、快照与回滚记录层，见 §1） |
 | G-34 | GitHub Gist 通道**刻意不外置 blob**（一次 GET 全量返回 / 单文件超限截断 / 文件数上限三条限制）→ 大分区（会话）不适合走 gist | ⚠️ **刻意设计的能力边界，不是缺陷**（gist 定位 = 配置类分区的低门槛远端）；**界面提示已补（2026-10-08）**：gist 表单常驻 `cloud.gistLargeSectionHint`，且「通道=gist 且勾选 sessions」时出 `mode.gistSessionsWarn` 风险横幅（判定纯函数 `gistSessionsRiskKey`，护栏 `sync-view-v2.test.ts`） |
 | G-35 | 同步通道对**远端 404 的可靠性假设**：blob GC 只按索引条目收集引用 → ① **索引可读但陈旧**（孤儿快照文件在索引外）、② **引用者文件这一读 404 而远端其实仍在**，两种形态都会把**仍在用的 blob** 回收 → **内容不可恢复** | ⚠️ **未修复（已核实残余，非原任务引入）**：t42 已堵住 `delete()` 侧的「索引 404 真缺失」；`upload()` 侧仍待 **t66/t67**（登记时 pending）；根治需通道侧补列举原语（WebDAV PROPFIND / S3 ListObjectsV2），见 §3 |
+| G-36 | **值形状判定的大小写边界**：auth-scheme `bearer` 原为大小写敏感（`bearer` / `BEARER` 明文进包且 refs/skipped 皆空）；厂商前缀 `sk-` / `AKIA` / `ghp_` / `github_pat_` 的大小写变体（`SK-` / `akia` / `GHP_` …）**按决策不剥离** | ⚠️ **部分修复（t72）**：`bearer` 已按 RFC 7235 / 6750 大小写不敏感剥离（含过剥控制）；厂商前缀**刻意保持敏感**、登记为已知边界（见 §3 G-36） |
 | G-37 | 宿主整文件快照把「存在但读不出来」记成 `existed:false`（恢复时删掉用户真实文件）+ 保留清理在「recovery 引用集合读不出来」时按空集合继续删（可能删掉 SAFE MODE 唯一回滚点） | ✅ **已修复**（2026-10-08 UX 审查：`existed:true` + `unreadable:true` + 计划只跳过；引用扫描失败即放弃本轮 prune + `onWarn` 可见，见 §3） |
 | G-38 | 渲染点脱敏登记表（`src/client/common/plan-text-redaction.test.ts`）**覆盖不到「上游已脱敏」型渲染点**：RollbackCard 有 5 处宿主文本在 `src/ui/rollback-view.ts` 里已过 `redact()`，组件内没有 redact 调用 ⇒ 登记不出 redacted≠bare 的对照对 | ⚠️ **已知覆盖形态限制**（不是泄漏、也不是漏点）：强登只会得到 `redacted===bare` 的死断言 / 假绿；现有覆盖 = `src/ui/rollback-view.test.ts` 逐条断言。见 §4.2 |
-| G-36 | **值形状判定的大小写边界**：auth-scheme `bearer` 原为大小写敏感（`bearer` / `BEARER` 明文进包且 refs/skipped 皆空）；厂商前缀 `sk-` / `AKIA` / `ghp_` / `github_pat_` 的大小写变体（`SK-` / `akia` / `GHP_` …）**按决策不剥离** | ⚠️ **部分修复（t72）**：`bearer` 已按 RFC 7235 / 6750 大小写不敏感剥离（含过剥控制）；厂商前缀**刻意保持敏感**、登记为已知边界（见 §3 G-36） |
 | G-39 | 聊天 **user 消息渲染器被本插件接管**：剩余已追认差距（技能 chip 与引用 chip 的**可点开外观**未做、文件类型图标仍为扩展名徽标、时间不做「今天 / 昨天」、动作行常显、无宿主同款 tooltip、崩溃降级只保留正文）+ **宿主级 abdicate 一次性、不可复活**（崩溃一次该消息在本登记生命周期内永久交回宿主）+ bytes 缺失时宿主渲染 `NaNGB` 而我们不渲染 + 偏好**跨标签页不同步** + 宿主升级错位风险 + 错误边界为 class 组件的显式例外 | ⚠️ **已知边界 / 有意承担**（缺省形态「每条用户消息一个」；「整回合」档仍可切；复核发现的 5 处复刻偏差已于 2026-10-10 按宿主修齐；**2026-10-10 三修**：入口 icon-only、两档**互斥**（per-message 档回合尾入口一次都不注册）、聊天预览弹窗改简洁版（含「点回退即确认」的有意替换），见 §3「G-30 / G-39 增量」） |
 
 ---
@@ -441,13 +441,21 @@
 | **M1** | `config_backup` 构造 `Exporter` 时未传 `scanner` → 落回无 `scanText` 的默认扫描器 → 文件类分区扫描**静默失效**（HTTP 导出会报、Agent 工具不报） | `ModelToolsDeps` 新增可选 `scanner`，注入与 HTTP 路由同一个实例 | 行为测试（注入时告警 / 未注入零告警）+ 源码守卫；变异验证红灯 |
 | **M1b** | **定时自动备份**（第三条导出路径）同样未传 `scanner`，且它是**无人值守**的——用户更不可能自己发现 | `BackupSchedulerOptions` 新增可选 `scanner`；`src/index.ts` 把 `createConfiguredSecretScanner(...)` 提为**单一实例**并注入三处 | 三处同一标识符（独立复核：`createConfiguredSecretScanner` 仅 1 处调用、3 处 `scanner: secretScanner`）；变异验证红灯 |
 | **L1** | P-1/P-2 无自动化回归护栏（回归时不会报警） | 新增 `tests/packaging-contract.test.ts`（5 个断言：peer 全 optional、`dependencies` 仅 `js-yaml`、`files` 含 map 排除且顺序正确、`./schema` 指向运行时入口） | 6 种变异逐个红灯后还原（SHA-256 一致） |
-| **L2** | `exports["./schema"]` 指向纯类型产物 `types.js` → 第三方 `import` 得到**空对象**；且 `CURRENT_SCHEMA_VERSION` 等版本工具**包外无法导入** | 新增 `src/schema/index.ts`（零 DSH / 零 `node:` 依赖）导出运行时值 + 类型：版本判定 9 + 分区表 4 + 分区注册表 11 = **24 个运行时导出**；`exports["./schema"]` 改指它（修复时该出口只有 13 个，后来分区注册表并入该出口才成 24 个） | 隔离默认安装后 `import('dsh-config-manager/schema')` 返回 **24 个运行时导出**（修复前 `{}`）；`SECTION_IDS.length === 15`。**回归测试位置**：`tests/packaging-contract.test.ts`（断言 `exports["./schema"]` 指向 `lib/schema/index.{js,d.ts}`，而非纯类型产物 `types.js`）+ `src/schema/registry.test.ts`（注册表零 node 依赖 / 分区集合一致） |
+| **L2** | `exports["./schema"]` 指向纯类型产物 `types.js` → 第三方 `import` 得到**空对象**；且 `CURRENT_SCHEMA_VERSION` 等版本工具**包外无法导入** | 新增 `src/schema/index.ts`（零 DSH / 零 `node:` 依赖）导出运行时值 + 类型：版本判定 9 + 分区表（`config.ts`）5 + 分区注册表（`section-registry.ts`）10 = **24 个运行时导出**（分组口径：`src/schema/index.ts:31-69` 的三个 `export` 块）；`exports["./schema"]` 改指它（修复时该出口只有 13 个，后来分区注册表并入该出口才成 24 个） | 隔离默认安装后 `import('dsh-config-manager/schema')` 返回 **24 个运行时导出**（修复前 `{}`）；`SECTION_IDS.length === 15`。**回归测试位置**：`tests/packaging-contract.test.ts`（断言 `exports["./schema"]` 指向 `lib/schema/index.{js,d.ts}`，而非纯类型产物 `types.js`）+ `src/schema/registry.test.ts`（注册表零 node 依赖 / 分区集合一致） |
 | **L3** | `env-lock` 的 heartbeat 走 `atomicWriteFile`（同目录 tmp 写 → rename）；`release()` 不等在途写 ⇒ `.dshcm.*.tmp` 残留在 locks 目录 → after-hook `rmSync` **ENOTEMPTY**（Windows 偶发） | heartbeat 写**串行化** + `release()` 前 `drainHeartbeat()`（顺带修掉 interval 写之间的并发 rename 竞态） | 连续 10 次单文件全绿；变异（移除 drain）→ 红灯。**拒绝用 `maxRetries` 掩盖**——那会留下真实缺陷 |
 | **L4** | `run-store` 测试用固定 `sleep` 等轮询收敛，全量套件并发时定时器被拖慢 → 偶发 `actual: 'importing', expected: 'result'` | 改为 `waitFor(predicate, timeout)` 条件等待（**不削弱断言语义**，超时仍抛错） | 连续 10 次全绿；变异（破坏收敛）→ `waitFor` 超时抛错 |
 
 ---
 
-## 3. 仍未修复的缺口
+## 3. 未修复项、契约边界与历史增量（三类混排，先看导览）
+
+> **这一节不是「待办清单」**，而是「§1 已修清单之外」的全部登记。三类混排在同一个编号序列里，各自的性质写在条目内部：
+>
+> 1. **仍然成立的真缺陷** —— 需要将来动格式/行为才能修，例：G-11（条目名中段 `\`）、G-45（`applyItems` 不消费 `pendingMerge`）。
+> 2. **刻意的契约 / 能力边界** —— 有明确「为什么有意不修」，修它反而是退化，例：G-19（数据格式不做协议协商）、G-20（墓碑不代本机删除）、G-34（gist 不外置 blob）、G-40 / G-41（合并只到分区级 / 行级）、G-43（新字段不做协商）、G-44（保留本地裁决的传播窗口）。
+> 3. **已交付 / 历史增量（保留为证据，不是待办）** —— 例：G-30 及其 6 条「增量」、G-31、G-32、G-35、G-36、G-37、G-39 及其 9 条「增量」、G-24 的「剩余未做项 / M2 观察」。读到「已交付」「已修复」「已收口」「增量」字样即属此类。
+>
+> **怎么读**：某条现在到底算不算缺陷，只看它自己表格里的状态行；标题里的「仍未做 / 剩余」是该时点的历史记录。总览一律看 §1 概览表（状态列更新最快）。`docs/maintenance/known-limits.md` 只收**无法由本仓库证明的平台/外部事实**，不重复本节的实现缺口。
 
 ### G-11 条目名侧不拒绝中段反斜杠（与 checksums 侧不一致）
 
@@ -522,7 +530,7 @@
 |---|---|
 | 事实 | `GistTransport`（`src/sync/gist/gist-transport.ts` 文件头明写）**不做**内容寻址外置 —— 与 git / webdav / s3 三条通道的差别是**刻意为之**，三条理由：① gist 一次 GET 就把**全部文件内容**吐回来（没有按文件取）；② **单文件内容超限会被 GitHub 截断**（截断时才回落 `raw_url`）；③ gist 的**文件数有上限**。把会话这类「大且数量多」的分区逐文件外置到 gist 会同时撞上这三条。 |
 | 定位 | gist 通道 = 「**配置类分区的低门槛远端**」（一个 token + 一个 `gistId` 即可用，适合本机没有 git 二进制 / 只有一个 GitHub 账号的用户）。**会话这类大分区请走 git / webdav / s3**。 |
-| 影响与现状 | ① 这是**能力边界不是缺陷**：不外置不会让 gist 通道坏掉，只是推送体积 / 文件数受 GitHub 限制，超限时的表现是**截断**（不是静默成功）。② **UI 目前没有「gist 不适合大分区 / 会话」的提示**（表单只做字段校验与「密钥只写凭据槽位」说明）—— **建议**在 gist 表单加一条提示（zh/en 字典），并在「通道 = gist 且勾选 `sessions`」时给出风险提示；**本条目只登记建议，表单改动不在本任务的 inScope（未动 `src/**`）**。 |
+| 影响与现状 | ① 这是**能力边界不是缺陷**：不外置不会让 gist 通道坏掉，只是推送体积 / 文件数受 GitHub 限制，超限时的表现是**截断**（不是静默成功）。② **界面提示已补（2026-10-08）**：gist 表单常驻 `cloud.gistLargeSectionHint`（常量 `GIST_LARGE_SECTION_HINT_KEY`，`src/client/sync/sync-view.ts`；zh/en 在 `src/client/sync/sync-locales.ts`）。**仍未做**的是「勾了 `sessions` 就二次确认」这类更强阻断 —— 登记为待办，不改变本条「能力边界」的定性。 |
 | 验证方式 | `src/sync/gist/gist-transport.test.ts`（含 `truncated: true` 回落 `raw_url` 的用例）；`src/sync/blob-store.test.ts`（外置只在 transport 传了 BlobSink 时启用 —— gist 不传，引擎看到的仍是普通 `FilesSection`）。 |
 
 ### G-35 同步通道对**远端 404 的可靠性假设**：GC 把「读不到」当「没引用」（两种形态，**均不可恢复**）
@@ -618,7 +626,7 @@
 | ④ 槽位声明顺序硬化：**有界补试 + 幂等 reapply**（t17） | 装配点只在第一次 hold 创建挂载（后到声明只 +1 计数）⇒ 若「当前档要用的槽位」声明**晚于**挂载创建（先 turnTail 后 chat.node 而偏好是 per-message），该档停在 **0 入口**。现在自带**有界补试**（当前档声明不可用时按注入排程器再试，最多 `maxRetries=4`，到位即停 ⇒ 正常路径零补试零 churn）+ 幂等 `reapply()` 钩子。**如实：顺序无关是异步达成的** —— 声明到位 + **一个排程 tick** 后恰好 1 入口；**同步瞬间仍可为 0，这是设计而非缺陷**。`src/client/index.ts` **未改**（captain 裁决：目标已达成，避免第二套机制）。 |
 | ⑤ 码表镜像的**防漂移守卫**（t11） | 引擎 `RollbackCode` union（`src/core/rollback-point.ts`）与客户端 `ROLLBACK_CODES` 镜像（`src/ui/rollback-view.ts`）现在有**源码级双向集合相等**用例 + **反自检**（注入「引擎有、镜像没有」的码必须被抓到；注释里的假码不得被当真码）+ 两侧解析结果 ≥30 条（防「空集对空集」假绿）。教训：**两份拷贝必须有对照守卫**（t10 新增 `no-recorded-files` 时镜像静默漏一格，正是守卫生效前的形态）。证据写进 `docs/lessons/recovery-console.md`。 |
 | **NOT VERIFIED（不得读成已验证）** | ① **真机浏览器点击 / 真实 DSH 聊天流**仍未取证（同 §5）；② **真宿主里槽位声明的真实到达顺序**未取证 —— 补试在单测里用「确定性排程队列」与「真 `setTimeout`」两路验过，但没有真机时序取证；③ `reapply()` 钩子**未接线**（装配点仍是一次 hold）⇒ 「每次 hold 调一次 reapply」这个**手段**未落地，落地的是**目标**（顺序无关）；④ 幽灵 id 修复未在真机上人为制造「台账写失败」取证（证据 = 引擎单测注入）。 |
-| 验证方式 | 六个护栏文件合计 **183 / 183 pass**（qa 本轮实测）：`src/client/chat/chat-entry-mount.test.ts`、`src/ui/rollback-view.test.ts`、`src/core/rollback-point.test.ts`、`src/client/recovery/recovery-locales.test.ts`、`src/client/chat/rollback-entry-view.test.ts`、`src/client/chat/chat-entry-view.test.ts`；另有 chat-dev 自建模拟 `.tmp/t13/switch-sim.ts`（trace `[1,1,1,1]`）。 |
+| 验证方式 | 六个护栏文件合计 **183 / 183 pass**（qa 本轮实测）：`src/client/chat/chat-entry-mount.test.ts`（**该文件已随「整回合」档一并删除**，此处是当时快照）、`src/ui/rollback-view.test.ts`、`src/core/rollback-point.test.ts`、`src/client/recovery/recovery-locales.test.ts`、`src/client/chat/rollback-entry-view.test.ts`、`src/client/chat/chat-entry-view.test.ts`；另有 chat-dev 自建模拟 `.tmp/t13/switch-sim.ts`（trace `[1,1,1,1]`）。 |
 
 ### G-30 / G-39 增量（三）（2026-10-10：聊天回退入口的「捕获晚于查询」竞态 —— 收尾后有界重试 + 空结果不锁死 + 窗口内诚实）
 
@@ -764,7 +772,7 @@
 |---|---|
 | 现象 | **端点拒绝一切条件请求头**：`PATCH /gists/{id}` 对任何 `If-Match`/`If-None-Match` 都回 400（与 ETag 强弱无关，issue #110，`src/sync/gist/gist-transport.ts:63-72`）⇒ gist 的索引写只能无条件写，改用**写后复核 + 最多 3 轮重做**（`:263-298`、`verifyIndexLanded` `:309`），仍被覆盖则抛 `sync.gist.indexConflict`；同时 gist 刻意不做内容寻址外置（G-34）。**残余窗口**：别人在「我们读索引」与「我们 PATCH」之间的写入发现不了，两台设备同时 push 仍可能丢条目（git / webdav / s3 已由条件写挡住）。 |
 | 影响 | 丢失的是**索引条目**（快照文件本身仍在 gist 里），该快照从列表消失；gist 不外置 blob，故无 blob 连带损伤。 |
-| 现状 | 属已登记的**能力边界**（spec §7.5），不是遗漏；读不到/被截断时的保守行为见 G-34。 |
+| 现状 | 属已登记的**能力边界**（spec §7.5），不是遗漏；读不到/被截断时的保守行为见 G-34。**文本服务端事实与残余窗口的唯一权威是 `docs/maintenance/known-limits.md` 第 6 条**（平台行为、仓内不可证），本表只记「同步通道怎么应对」。 |
 | 验证方式 | `node --test src/sync/gist/*.test.ts`；spec §7.5 能力边界表。 |
 
 ### G-43 合并相关的新状态/新字段**不做协议协商**：旧版插件读到时的行为边界
