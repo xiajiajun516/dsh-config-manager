@@ -18,17 +18,19 @@
  * 为什么存在：新增 md 忘记回 docs/index.md 加行，导致文档事实上不可达；此前只靠人工。
  * 覆盖面**只**是正式长期维护的五目录（docs/spec、docs/modules、docs/maintenance、docs/decisions、docs/components），
  * 不扩大到 lessons（用裸文件名收录）、design/handoff/seo（历史区）与 docs/known-pitfalls.md（冻结存档）。
- * 收录判定 = index.md 里出现该文件的全路径（反引号或相对链接）；人工删改索引不会绕过本检查。
+ * 收录判定 = **索引条目行**（表格行 / 列表项）出现该文件的全路径（反引号或相对链接）；正文顺带提到不算。
+ * 判定逻辑抽在 scripts/doc-index-coverage.mjs（单测 tests/doc-index-coverage.test.ts），脚本不重复实现。
  * 豁免表 INDEX_COVERAGE_EXEMPT 当前为空；加条目必须写理由（= 公开承认这份文档故意不进索引）。
  *
  * 用法：node scripts/check-doc-paths.mjs [--report]
  */
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, sep } from 'node:path'
+import { INDEX_COVERAGE_DIRS, collectIndexCoverage } from './doc-index-coverage.mjs'
 
 const ROOT = process.cwd()
 const ROOT_FILES = ['AGENTS.md', 'DESIGN.md', 'DEVELOPERS.md', 'README.md', 'README.zh-CN.md', 'SECURITY.md']
-const DOC_DIRS = ['docs/spec', 'docs/modules', 'docs/maintenance', 'docs/decisions', 'docs/components']
+const DOC_DIRS = INDEX_COVERAGE_DIRS // 单份清单，见 scripts/doc-index-coverage.mjs
 const DOC_FILES = ['docs/README.md', 'docs/index.md', 'docs/architecture.md']
 const PATH_ROOTS = ['src/', 'tests/', 'scripts/', 'docs/', 'locale/', '.github/', '.dsh/']
 // 代码类引用（组件/测试/样式）允许写成相对某源码目录的简写；
@@ -139,22 +141,10 @@ for (const m of misses) console.log('  x ' + m.file + ':' + m.line + '  ->  ' + 
 
 // ---------------- 活跃文档索引收录 ----------------
 // 只查正式长期维护的五目录；见文件头「二」的边界说明。
-const INDEX_COVERAGE_EXEMPT = new Map() // 路径 -> 理由；当前没有豁免项
-
 const indexMd = readFileSync(join(ROOT, 'docs/index.md'), 'utf8')
-const listed = (rel) =>
-  indexMd.includes('`' + rel + '`') || indexMd.includes('](' + rel + ')') || indexMd.includes('](<' + rel + '>')
-const unlisted = []
-let livingDocs = 0
-for (const d of DOC_DIRS) {
-  for (const f of walkMd(join(ROOT, d))) {
-    const rel = f.slice(ROOT.length + 1).split(sep).join('/')
-    livingDocs += 1
-    if (INDEX_COVERAGE_EXEMPT.has(rel)) continue
-    if (!listed(rel)) unlisted.push(rel)
-  }
-}
-console.log('[doc-index] living=' + livingDocs + ' unlisted=' + unlisted.length)
+const coverage = collectIndexCoverage({ root: ROOT, indexText: indexMd })
+const unlisted = coverage.unlisted
+console.log('[doc-index] living=' + coverage.living.length + ' unlisted=' + unlisted.length)
 for (const p of unlisted) console.log('  x 未在 docs/index.md 收录: ' + p)
 
 if ((misses.length > 0 || unlisted.length > 0) && !reportOnly) {
