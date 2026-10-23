@@ -414,6 +414,8 @@ export const zh = {
   'sync.git.repoUnreachable': '仓库不可达或认证失败: {url}',
   'sync.git.workDirNotRepo': 'workDir 不是 git 仓库（缺少 .git）且目录非空，无法 clone: {dir}',
   'sync.git.pullFailed': 'git pull 失败: {err}',
+  // 工作副本锁等锁超时（并发同步 / 另一个 DSH 实例正在用同一个工作副本）
+  'sync.git.workdirBusy': '同步工作副本 {dir} 正被另一个同步任务占用（另一个 DSH 实例，或上一轮同步还没结束）：已等待超时。请稍后重试。',
   // issue #79：主机密钥与「换仓库地址」两类失败此前只透出 git 原始 stderr，用户无从下手
   'sync.git.hostKeyUnverified': 'SSH 主机密钥校验失败：本机 known_hosts 里没有 {host} 的密钥（或密钥已变更），git 因此拒绝连接。请先核对主机指纹，再在本机执行 ssh-keyscan -p <端口> {host} >> ~/.ssh/known_hosts（或直接 ssh {host} 按提示确认）后重试 —— 插件不会自动信任任何主机。',
   'sync.git.hostKeyUnverifiedNoHost': 'SSH 主机密钥校验失败：本机 known_hosts 里没有该主机的密钥（或密钥已变更），git 因此拒绝连接。请先核对主机指纹，再在本机用 ssh-keyscan 把该主机写入 ~/.ssh/known_hosts（或直接 ssh 该主机按提示确认）后重试 —— 插件不会自动信任任何主机。',
@@ -913,6 +915,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.git.repoUnreachable': 'Repository unreachable or authentication failed: {url}',
   'sync.git.workDirNotRepo': 'workDir is not a git repository (no .git) and the directory is not empty; cannot clone: {dir}',
   'sync.git.pullFailed': 'git pull failed: {err}',
+  'sync.git.workdirBusy': 'The sync working copy {dir} is in use by another sync task (another DSH instance, or a previous sync that has not finished yet): the wait timed out. Please retry later.',
   // issue #79: host-key and "repository address changed" failures previously leaked raw git stderr
   'sync.git.hostKeyUnverified': 'SSH host key verification failed: this machine has no key for {host} in known_hosts (or the key changed), so git refused to connect. Verify the host fingerprint first, then run ssh-keyscan -p <port> {host} >> ~/.ssh/known_hosts on this machine (or just ssh {host} and confirm the prompt), then retry — the plugin never trusts a host automatically.',
   'sync.git.hostKeyUnverifiedNoHost': 'SSH host key verification failed: this machine has no key for that host in known_hosts (or the key changed), so git refused to connect. Verify the host fingerprint first, then add the host to ~/.ssh/known_hosts with ssh-keyscan (or just ssh the host and confirm the prompt), then retry — the plugin never trusts a host automatically.',

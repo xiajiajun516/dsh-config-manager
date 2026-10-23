@@ -2,82 +2,27 @@
 
 > 团队目标：把 dsh-config-manager 客户端的**说明性文案**收敛到 ⓘ（`common/InfoHint.tsx`），页面更简洁；
 > **错误 / 安全 / 状态 / 空态**文案保持常驻。
-> 本文是这次迁移的**单一台账**：冻结规则、逐目录判定、deferred、渲染契约、护栏与复核命令。
+> 本文只做**台账**：逐目录判定、deferred、护栏与复核命令。冻结规则与渲染契约的唯一权威在 `DESIGN.md` §6/§7，本文不复制（原先的重抄段已删，避免两处维护）。
 > 视觉规范落在 `DESIGN.md` §6（组件）与 §7「说明性文案分层」（规则）；本文只做台账与索引。
 
 **状态**：t1–t10 已完成（原语 → 面板收敛 → 聚合验证 → 评审 → 修复 → 复评 → 收口）；
 **2026-10-12 追加 t7 波次**（用户要求「把**所有**描述都收进 ⓘ，页面更简洁」）：
 在既有 42 个 MOVE 键之外，再把上一轮判为 KEEP 的**静态**安全/机制说明与**静态**页级/分区级副标题收进 ⓘ，
-**MOVE 合计 83 键**，守卫 `info-hint-guard.test.ts` 13/13 pass。规则边界见 `DESIGN.md` §7（t7 清单在「本次落地」段末）。
+**MOVE 合计 82 键**，守卫 `info-hint-guard.test.ts` 13/13 pass。规则边界见 `DESIGN.md` §7（t7 清单在「本次落地」段末）。
 
 ---
 
-## 1. 冻结的分层规则（逐字适用，不得扩大或缩小）
+## 1–2. 规则与渲染契约（不在此维护）
 
-**MOVE → ⓘ**（改为 `<InfoHint text={t('原键')} label={t('common.infoHint')} />`，并删掉原来那一行可见说明）：
-- 纯说明性文案：机制怎么工作 / 为什么这样设计 / 补充背景 / 边界与限制 / 示例 / 省事提示；
-- 输入规则类文案（如「仅允许字母数字、空格、- _ .」）—— 因为校验失败时错误文案本身会重申规则。
-
-**KEEP 常驻**（渲染与文案必须与改动前逐字一致，一处都不许动）：
-1. 校验错误 / 失败原因（`css.formError`、`ErrorBanner`、`ErrorList`、`ReportView` 的失败文本）；
-2. 安全与不可逆操作告警（加密、密钥、覆盖、删除、回滚、恢复、SAFE MODE）；
-3. 状态 / 进度 / 等待文本（运行中、已停止、等待 N 分钟、下载中）；
-4. 按钮与选项的禁用原因（`title=` 上的解释）；
-5. 空态解释（列表为空时说明「为什么什么都没有」的那一行）；
-6. 行内防截断的 `title=`（表格 / 列表 / 长路径上的全量提示，**不是**页面文案）；
-7. `SectionTitle` 的 `subtitle`（页级 / 分区级副标题）、`css.cellMeta` 元数据；
-8. `ConfirmDialog` / `Modal` 内的危险操作说明。
-
-判据边界（本次实测确认）：
-- **MOVE 的「纯说明」= 可选的补充信息**：用户「必须看到才能安全决策」的文本一律 KEEP（上表 8 类）；
-- 输入规则移入 ⓘ 的前提是**校验失败的错误文案会重申规则**（`export.fileNameInvalid` 等），否则规则就不可见了；
-- 组件自带的**源语言回落只作兜底**：每个调用点必须显式给可访问名。
-
----
-
-## 2. 落地形态（v2）与渲染契约
-
-**形态（v2，全部 41 个 ⓘ 调用点统一）**：
-
-```tsx
-<InfoHint text={t('原键')} label={t('common.infoHint')} />
-```
-
-- `text` **逐字复用既有字典键**：本次 43 个 MOVE 键没有新增任何一个说明键；
-- `label` = **各自命名空间的** `common.infoHint`：主字典 `src/client/locales.ts` + `market-locales.ts` /
-  `sync-locales.ts` / `recovery-locales.ts` 各有一份同键同值副本（zh「查看说明」/ en「Show description」），
-  `history-locales.ts` 无 ⓘ 故不要求；
-- **不跨命名空间传 `t`**（`TranslateNS<'config-manager'>` 与其它命名空间的 `t` 类型不兼容），
-  也**不用可能 undefined 的 `copyT`**；
-- UiT 消费方（`DiskUsageCard`，文案走 `src/ui/i18n.ts`）取不到主字典 → 由有主字典的调用方
-  （`SnapshotsPanel`）显式传 `infoHintLabel={t('common.infoHint')}`。
-
-**渲染契约（t9 修 T7-F1/F2）**：
-- 气泡**必须经 `createPortal` 渲进插件根容器**（`resolveModalRoot()` = `MODAL_ROOT_ID` = `#dsh-config-manager-root`，
-  与 `Modal.tsx` 共用同一份实现；**绝不挂 `document.body`**）。
-  根因：`.dialogContentCenter` 带常驻 `transform: translate(-50%,-50%)` ⇒ 按 CSS Transforms L1 成为后代
-  `position: fixed` 的**包含块**；裸 fixed 的气泡在 Modal 内会整体偏移卡片位移，并被
-  `.dialogBody{overflow-y:auto}` 裁剪（当时 11/41 个调用点在 Modal 内）。守卫：`t9-1`。
-- **气泡边界 = 宿主画布 ∪ 锚点（画布 564×720），不是浏览器视口**：夹紧矩形取**插件根容器的可见矩形 ∩ 窗口**
-  （容器缺失 / 尺寸为 0 / 交集退化时才回落窗口），并**并进锚点矩形**（只放宽、不收紧）—— 弹窗卡片是
-  `position:fixed`、相对浏览器窗口居中，会伸出画布左缘，严格夹进画布会把气泡推离自己的 ⓘ
-  （2026-10-04 用户反馈「位置有偏移」）；「下方空间不足且上方更宽裕 → 向上翻转」保留。守卫：`t9-2` + `t11-2`。
-- 交互四通道：悬停打开 / 键盘聚焦打开 / 点击固定（再点取消固定）/
-  **固定态下按下任意位置取消固定并关闭**（`mousedown` 捕获阶段、触发按钮自身放行；守卫 `t10`，
-  2026-10-04 用户反馈：此前只能再点一次同一颗 ⓘ 才能退出）/ Esc 关闭（捕获阶段 `stopPropagation`，
-  不连带关掉外层 Modal/抽屉）；鼠标移出且未固定时关闭。**键盘聚焦只认用户发起**：Radix 弹窗挂载时
-  `focusFirst(...)` 会把初始焦点派给容器内第一个可聚焦元素（标题行 trailing 的 ⓘ 常常正是它），
-  该次聚焦的 `relatedTarget` 在弹窗之外 → 不弹气泡；焦点环同时只在气泡打开时绘制
-  （2026-10-04 用户反馈「一进弹窗就自动选中 ⓘ」，守卫 `t11-1`）。无障碍：`<button type="button">` +
-  `aria-label` + `aria-describedby`（多实例 id 由 `useId` 归一化保证唯一），**不依赖原生 `title`**。
-- 样式只进 `config-manager.module.css`（`.infoHint / .infoHintBtn / .infoHintBubble`），颜色/底色/边框/阴影
-  全走 `--dsw-*` token；坐标由组件量测后写内联 `top/left`（动态值无法用静态类表达）。
+MOVE / KEEP 的冻结判定、ⓘ 的渲染契约（portal 根、气泡边界、交互四通道、焦点规则）**唯一权威在 `DESIGN.md`**：
+组件与气泡行为见 `DESIGN.md` §6（InfoHint 条），分层规则与 t1–t7 清单见 §7「说明性文案分层」。
+本文只保留台账（§3 起）：逐目录判定、deferred、findings 收口、护栏与复核命令 —— 避免同一份规则两处维护、改一处忘另一处。
 
 ---
 
 ## 3. 逐目录台账
 
-### 3.1 MOVE（**83 键**，全量；机器化清单 = `info-hint-guard.test.ts` 的 `MOVE_PINS`）
+### 3.1 MOVE（**82 键**，全量；机器化清单 = `info-hint-guard.test.ts` 的 `MOVE_PINS`，**键数只信该测试**）
 
 > **t7 波次（2026-10-12，41 键）**：页级/分区级副标题 → `SectionTitle.info`；卡片/字段说明 → 标题行或字段标签行的 ⓘ
 > （`Field.info` 是本次新加的原语入口）。逐键清单与「同轮仍常驻」的有意例外见 `DESIGN.md` §7 t7 段。
@@ -210,7 +155,7 @@
 
 | 护栏 | 位置 | 钉住什么 |
 |---|---|---|
-| t6-1 MOVE | `src/client/common/info-hint-guard.test.ts` | **83** 个 MOVE 键（t1–t5 的 42 + t7 的 41）各自仍有一处 `<InfoHint text={t('原键')} …/>` 或 `SectionTitle.info` / `Field.info` 里的同名 ⓘ，且不再出现在可见说明行（`css.hint / modeHint / groupNote / noticeLine`） |
+| t6-1 MOVE | `src/client/common/info-hint-guard.test.ts` | **82** 个 MOVE 键（键数只信 `MOVE_PINS`）各自仍有一处 `<InfoHint text={t('原键')} …/>` 或 `SectionTitle.info` / `Field.info` 里的同名 ⓘ，且不再出现在可见说明行（`css.hint / modeHint / groupNote / noticeLine`） |
 | t6-2 KEEP | 同上 | **36** 个 KEEP 针仍有可见渲染点（错误 / 安全 / 空态三类齐全） |
 | t6-3 可访问名 | 同上 | 每一处 `<InfoHint>` 都显式给可访问名（`label={t('common.infoHint')}` / 白名单 prop / 主字典 `t={t}`），且必须自闭合 |
 | t6-4 字典口径 | 同上 | 四本带 ⓘ 的字典的 `common.infoHint` zh/en 逐字一致 |

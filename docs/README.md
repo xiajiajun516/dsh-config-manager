@@ -1,9 +1,11 @@
 # docs/ — 从这里开始
 
-**总索引：`docs/index.md`**（按「我想做什么」组织：架构 / 模块 / 契约 / 决策 / 维护 / 证据 / 历史存档）。
+**唯一入口：`docs/index.md`**（按「我想做什么」分流：架构 / 模块 / 契约 / 决策 / 维护 / 证据 / 历史存档）。
 
-本文件只保留三条最容易被违反的约定：
+本文件不再重复任何规则正文，避免与权威文档漂移。三类常被问到的内容各自只有一个家：
 
-1. 仓库根只放对外文档（`README*` / `CHANGELOG` / `SECURITY` / `LICENSE`）与协作规范（`AGENTS.md` / `DEVELOPERS.md` / `DESIGN.md`）；其余进本目录并挂到 `docs/index.md`。
-2. `AGENTS.md` **只写规则**（硬上限 28 KiB，守卫 `node scripts/check-agents-budget.mjs`）；证据与叙事进 `docs/lessons/<域>.md`，新增坑两处同步：先写证据，再补一行规则 + 指针。
-3. 改导出/导入格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`；文档里的路径与版本声明由 `scripts/check-doc-paths.mjs` / `scripts/check-doc-versions.mjs` 校验。
+- **文档该写什么、写在哪、要不要写** → `docs/maintenance/doc-maintenance.md`（载体归属表 §2、新增/修改/重构的判定 §3–§5）。
+- **AI 开发必须遵守的硬规则** → 根目录 `AGENTS.md`（只写规则，预算 28 KiB，守卫 `node scripts/check-agents-budget.mjs`）。
+- **代码路径 / 版本声明是否与文档一致** → `scripts/check-doc-paths.mjs`（含 `[doc-index]` 活跃文档收录检查）与 `scripts/check-doc-versions.mjs`。
+
+新增文档后必须回 `docs/index.md` 的表格加一行；漏了 `check-doc-paths` 的 `[doc-index]` 段会直接红。

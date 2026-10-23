@@ -1,6 +1,8 @@
 # 低频面板状态持久化设计（切 tab / 刷新不丢）
 
-> 日期：2026-08-19 · 状态：已实现（m2 扩展）· 关联：`src/client/run-store.ts`、`ConfigManagerSection.tsx`、`SyncSettingsView.tsx`、`MarketPanel.tsx`、`SnapshotsPanel.tsx`
+
+> ⚠️ **2026-10-23 状态复核**：现行页签只有 `home` / `library` / `sync` / `environment`（`src/client/run-store.ts` 的 `PanelId`），文中的 `snapshots` / `market` / `about` 页签与对应验收清单作废；**切片机制与「为什么低频面板也要镜像进 runStore」的理由仍现行**。
+> 日期：2026-08-19 · 状态：已实现（m2 扩展）；**2026-10-23 复核：页签已收敛为 4 页**· 关联：`src/client/run-store.ts`、`ConfigManagerSection.tsx`、`SyncSettingsView.tsx`、`MarketPanel.tsx`、`SnapshotsPanel.tsx`
 
 ## 问题
 

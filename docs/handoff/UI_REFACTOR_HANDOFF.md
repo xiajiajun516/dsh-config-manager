@@ -2,6 +2,13 @@
 
 > 📦 **历史归档**（阶段交接记录，非当前状态）：本文的「当前任务范围」是针对当时接手的 UI 打磨阶段而写。
 > 后续 UI 改动已进 `DESIGN.md`，UI/样式决策一律以 `DESIGN.md` 为唯一权威。
+>
+> **已知与现状不符、读到请勿照做的三处**：
+> - L88「7 页签」已废弃 —— 现行是 4 页（`home`/`library`/`sync`/`environment`，见 `docs/components/client-ui.md`）。
+> - L48-49「刻意禁止 Lucide / Radix」已推翻 —— 现行**必用** `lucide-react`（`common/Icon.tsx`）+ `@radix-ui/react-dialog`（`common/Modal.tsx`），见 `AGENTS.md` §🎨 与 `DEVELOPERS.md` 第三方 UI 库准入。
+> - 文中的测试数（1497 例）/ 页面结构快照均已过时，当前口径看 `npm test` 实际输出与 `docs/components/client-ui.md`。
+>
+> 本文仍值得保留的只有两段**工具经验**（已在 `docs/lessons/repo-overview.md`「UI 自查清单」留了副本）：`.qa` 现成隔离实例配方、浏览器截图一帧滞后。其余内容仅作当时决策的历史记录。
 
 > 为「接手前端 UI 美化的新 AI Agent」而写。生成时间基于当前 main 分支（UI Workbench 全量重建已完成并提交）。
 > 本文件不是 README、不是教程、不是产品介绍，而是 **Frontend UI Refactoring Handoff**。

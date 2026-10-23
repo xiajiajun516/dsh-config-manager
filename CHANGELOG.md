@@ -34,6 +34,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🐛 修复 · Fixed
 
+- **自动同步不再把配置写入锁进安全模式**：之前自动同步和「同步」页的其他操作（列出远端快照、下载、拉取）会同时驱动同一个本地同步仓库，两次 git pull 撞在一起会让 git 自己报错，而这条报错被当成「状态不可证明」，于是整个配置写入被锁进安全模式、只能人工处理；现在同一同步仓库的所有 git 操作排队执行（多开 DSH 实例也一样），拉取也换成了不会被并发写坏的写法，偶发的一次同步失败最多只是那一轮失败，不会再加锁。
+  **Auto sync no longer locks config writes into safe mode**: auto sync and the other Sync-page actions (listing remote snapshots, download, pull) used to drive the same local sync repository at the same time; two concurrent git pulls made git itself fail, that failure was treated as «state cannot be proven», and every config write was locked into safe mode until handled manually. All git work on one sync repository is now queued (also across multiple DSH instances), and pulling no longer uses the concurrent-fragile form, so a one-off failed sync stays a failed round instead of escalating.
+
+- **失败原因不再是一行空白**：安全模式下「需要人工处理」的那一行现在会写明到底哪一步失败、失败原因是什么，不再是只有一句「需要人工处理」而没有任何线索。
+  **Failure reasons are no longer blank**: the «needs manual handling» row in safe mode now says which step failed and why, instead of a bare «needs manual handling» with no clue.
+
 - **阿里云 OSS 同步真正能连上了**：上一版只改了授权头格式、没对齐官方签名算法，于是从「授权头为空」变成「签名不匹配」；现在按阿里云官方 SDK 的规范路径（路径里始终包含存储桶）与空值参数写法重算签名，填对密钥即可连上。（issue #109）
   **Aliyun OSS sync actually connects now**: the previous release only fixed the authorization header format without matching Aliyun's signing algorithm, which turned «authorization header is empty» into «signature does not match»; signatures now follow the official SDK's canonical path (the bucket is always part of it) and empty-parameter form, so a correct key connects.
 

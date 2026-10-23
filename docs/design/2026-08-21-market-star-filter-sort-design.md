@@ -1,6 +1,8 @@
 # 市场页「仓库级 Star 展示 + 来源筛选 + 排序」设计文档
 
-> 日期：2026-08-21 · 状态：**设计稿（待评审）** · 上游约束：
+
+> ⚠️ **2026-10-23 状态复核**：已实施：排序键与排序函数在 `src/ui/market-view.ts`（`MarketSortKey` / `sortMarketItems`），界面在 `src/client/market/MarketPanel.tsx`。§3.1/§3.3 的判定规则仍为准，§6「不做项」仍有效。
+> 日期：2026-08-21 · 状态：**已实施**（2026-10-23 复核） · 上游约束：
 > [AGENTS.md](../../AGENTS.md)（安全不变量 / UI 分层纪律 / 文档规范）、[DESIGN.md](../../DESIGN.md)（Design System 唯一权威）、
 > [2026-08-20-my-configs-design.md](./2026-08-20-my-configs-design.md)（「一键上传 / 我的配置」既有实现）、
 > [2026-08-19-market-publish-design.md](./2026-08-19-market-publish-design.md)（条目级 `repo` 去中心化引用）

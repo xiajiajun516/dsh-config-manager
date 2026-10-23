@@ -1,6 +1,6 @@
 # 会话格式「处置开关」设计（下一轮）
 
-> **状态**：**第一批已落地**（core 地基），UI/路由待做 —— 见 §9「落地进度」。
+> **状态**：**已全部落地**（core + UI + 路由；`docs/spec/known-gaps.md` 的 G-23 已标「已全部落地」）。§9 与文中「UI/路由待做」仅作历史进度记录。
 > 前置 = known-gaps **G-23** 的会话格式体检与告警
 > （工作区已落地：宿主探针 `src/utils/session-format.ts`、core 的 `sessionFormatWarnings`、
 > 档案页版本展示；见 `CHANGELOG.md` 的「未发布」段）。

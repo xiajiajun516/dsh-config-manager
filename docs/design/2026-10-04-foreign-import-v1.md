@@ -1,7 +1,7 @@
 # 外部 agent 配置导入 v1（Claude Code → DSH）
 
 > 状态：**v1 转换层已落地并自测通过**（2026-10-04），含**会话转码**（§3.1，产物已用 DSH 自己的 codec 验过）。
-> 范围仅 Claude Code；CLI/UI 接线未做（见 §6）。
+> 范围仅 Claude Code。**2026-10-23 复核：CLI 与 GUI 接线均已完成**（`src/cli/index.ts` 的 `import --from`、`src/client/import/ForeignImportView.tsx`），§6 的「未做」清单仅作历史记录；现行实现口径见 `docs/modules/foreign-import.md`，§8 的冻结契约保留为 v1 历史版本。
 > 起点：用户诉求「让插件支持从其他 agent 导入数据」，明确指 Claude Code / Cursor / Codex 这类第三方工具。
 >
 > **2026-10-18 增量**：[Claude Code 迁移能力加固 v1.1](2026-10-18-claude-code-migration-v1.1.md)（项目级 / 插件级来源、如实诊断码、Bundle 溯源）。

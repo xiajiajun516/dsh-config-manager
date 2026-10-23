@@ -1,5 +1,7 @@
 # 迁移前咨询（Migration Pre-flight Consultation）设计
 
+
+> ⚠️ **2026-10-23 状态复核**：**已实现**：`src/core/migration-consult.ts`（健康评分 / Recommendation 判据）+ `src/ui/migration-consult-view.ts`。上游依据 `PHASE7_PROMPT.md` **不在本仓**，本文的判断依据是代码与测试，不是那份提示词。
 > 三段式引擎第一段：迁移前咨询（Manifest + 健康评分）。迁移中事务 = Phase 3（Journal），迁移后可审计 = Phase 6（迁移历史）。
 > 本设计是 Phase 7 的实现规格；上游依据 = PHASE7_PROMPT.md。
 

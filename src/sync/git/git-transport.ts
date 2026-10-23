@@ -44,6 +44,7 @@ import { SECTION_FILE_PREFIXES } from '../../schema/config.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { zhMsg } from '../../core/messages.ts';
 import type { MsgFunc } from '../../core/messages.ts';
+import { withWorkdirLock, WorkdirLockError } from './workdir-lock.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -200,6 +201,11 @@ export class GitTransport implements SyncTransport {
     exec: GitExecFn;
   };
   private repoReady = false;
+  /**
+   * 工作副本锁的可重入深度：list/upload/download/delete 都会经 ensureRepo → reconcileOrigin，
+   * rebuildWorkDir → adoptRemoteHistory 也各自嵌套；外层入口持锁，内层直接跑。
+   */
+  private workdirLockDepth = 0;
   private privateHint: boolean | null = null;
   /**
    * 最近一次 list() 里**读不出/解析失败**的密文快照文件与原因（issue #59）。
@@ -248,6 +254,12 @@ export class GitTransport implements SyncTransport {
   /** 列出远端已有快照（按 createdAt 升序）。读取工作副本 snapshots/（明文散文件）
    *  与 snapshots-encrypted/（密文单文件）两个目录（先 pull 同步远端）。 */
   async list(): Promise<SyncSnapshotMeta[]> {
+    // 工作副本锁：与自动同步的 push / 另一个 DSH 实例的 list 串行（并发 pull 会撞坏 FETCH_HEAD）
+    return this.withWorkdir(() => this.listLocked());
+  }
+
+  /** list 的实体；**调用方必须已持有工作副本锁** */
+  private async listLocked(): Promise<SyncSnapshotMeta[]> {
     await this.ensureRepo();
     // 幂等读：网络故障（连接重置/超时/DNS）允许一次有限重试；工作副本无写副作用
     await this.pullFromRemote({ retryable: true });
@@ -291,6 +303,11 @@ export class GitTransport implements SyncTransport {
    * 双形态互斥：同 id 从一种形态切到另一种时先清掉旧形态残留，保证工作副本/远端布局自洽。
    */
   async upload(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
+    return this.withWorkdir(() => this.uploadLocked(snapshot));
+  }
+
+  /** upload 的实体；**调用方必须已持有工作副本锁** */
+  private async uploadLocked(snapshot: SyncSnapshot): Promise<SyncSnapshotMeta> {
     this.assertSafeId(snapshot.id);
     await this.ensureRepo();
     await this.pullFromRemote();
@@ -345,6 +362,11 @@ export class GitTransport implements SyncTransport {
 
   /** 下载快照完整载荷。明文 → 读回散文件目录；加密 → 读回密文单文件。不存在的 id 必须抛错（契约）。 */
   async download(id: string): Promise<SyncSnapshot> {
+    return this.withWorkdir(() => this.downloadLocked(id));
+  }
+
+  /** download 的实体；**调用方必须已持有工作副本锁** */
+  private async downloadLocked(id: string): Promise<SyncSnapshot> {
     this.assertSafeId(id);
     await this.ensureRepo();
     // 幂等读：网络故障允许一次有限重试（只读远端/工作副本，无写副作用）
@@ -376,6 +398,11 @@ export class GitTransport implements SyncTransport {
 
   /** 删除远端快照（明文散文件目录或密文单文件；不存在视为成功，契约）。 */
   async delete(id: string): Promise<void> {
+    return this.withWorkdir(() => this.deleteLocked(id));
+  }
+
+  /** delete 的实体；**调用方必须已持有工作副本锁** */
+  private async deleteLocked(id: string): Promise<void> {
     this.assertSafeId(id);
     await this.ensureRepo();
     await this.pullFromRemote();
@@ -438,6 +465,44 @@ export class GitTransport implements SyncTransport {
   }
 
   /* ---------------- 内部实现 ---------------- */
+
+  /**
+   * 在「工作副本锁」下执行 fn（同一 sync/work 的 git 操作串行化；跨进程同理）。
+   *
+   * 为什么：并发驱动同一个工作副本会让 `git pull --ff-only` 在 FETCH_HEAD 里留下多行 for-merge
+   * 记录，随后每个 pull 都以 `fatal: Cannot fast-forward to multiple branches.` 失败 ——
+   * 该失败在自动同步里落在 intent journal 内 ⇒ durable SAFE MODE（真机 incident，2026-10-23）。
+   * 并发 add/commit 还会撞 index.lock。锁的实现与理由见 ./workdir-lock.ts。
+   *
+   * 可重入：内层（ensureRepo/pullFromRemote/adoptRemoteHistory 等）不重复取锁。
+   */
+  private async withWorkdir<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.workdirLockDepth > 0) {
+      this.workdirLockDepth += 1;
+      try {
+        return await fn();
+      } finally {
+        this.workdirLockDepth -= 1;
+      }
+    }
+    try {
+      return await withWorkdirLock(this.o.workDir, async () => {
+        this.workdirLockDepth += 1;
+        try {
+          return await fn();
+        } finally {
+          this.workdirLockDepth -= 1;
+        }
+      });
+    } catch (err) {
+      // 等锁超时 = 别人正在同步（另一个 DSH 实例 / 另一个同步任务），不是通道故障：
+      // 给可操作文案并标记 retryable，别让它伪装成「git 命令失败」。
+      if (err instanceof WorkdirLockError) {
+        throw new GitTransportError(this.msg('sync.git.workdirBusy', { dir: this.o.workDir }), { kind: 'conflict', retryable: true });
+      }
+      throw err;
+    }
+  }
 
   private async ensureRepo(): Promise<void> {
     if (this.repoReady) return;
@@ -526,6 +591,11 @@ export class GitTransport implements SyncTransport {
    * 因此放进 `detail: true`（供「重建工作副本」前评估数据量等场景显式索取）。
    */
   async inspectWorkDir(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {
+    // 只读命令也要排队：与并发的 fetch/checkout 交错会让 status/rev-list 读到半更新状态
+    return this.withWorkdir(() => this.inspectWorkDirLocked(opts));
+  }
+
+  private async inspectWorkDirLocked(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {
     const fsx = createSnapshotFs();
     if (!(await fsx.exists(path.join(this.o.workDir, '.git')))) {
       return { path: this.o.workDir, exists: false, origin: null, pushUrl: null, match: false, ahead: null, dirty: null, remoteSnapshots: null };
@@ -590,6 +660,10 @@ export class GitTransport implements SyncTransport {
    * 一律拒绝（与 ensureRepo 同一句 workDirNotRepo）—— 绝不删来路不明的目录。
    */
   async rebuildWorkDir(mode: 'relink' | 'adopt' | 'reclone'): Promise<void> {
+    return this.withWorkdir(() => this.rebuildWorkDirLocked(mode));
+  }
+
+  private async rebuildWorkDirLocked(mode: 'relink' | 'adopt' | 'reclone'): Promise<void> {
     this.repoReady = false;
     if (mode === 'relink') {
       await this.ensureRepo(); // .git 存在 → reconcileOrigin
@@ -732,24 +806,53 @@ export class GitTransport implements SyncTransport {
     const head = await this.runGit(['rev-parse', '--verify', '--quiet', 'HEAD'], { allowNonZero: true });
     if (head.code !== 0) return; // 无本地提交 → 无可 pull
     const attempt = async (): Promise<void> => {
-      const res = await this.runGit(['pull', '--ff-only'], { withCredential: true, allowNonZero: true });
-      if (res.code === 0) return;
-      if (/no tracking information/i.test(res.stderr)) return; // 无 upstream（初始状态）→ 跳过
-      const combined = res.stderr + ' ' + res.stdout;
-      // issue #79：这两类失败与网络无关，必须给「改回地址 / 重建工作副本」的出口
-      if (SSH_HOST_KEY_RE.test(combined)) {
-        throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
+      const branch = await this.currentBranch();
+      if (branch === '') return; // detached HEAD：没有 upstream 概念（与原「no tracking information」同姿态跳过）
+      // **不再用 `git pull --ff-only`**：它是「fetch 写 FETCH_HEAD + 读 FETCH_HEAD 合并」的两步动作，
+      // 并发驱动同一个工作副本时 FETCH_HEAD 会留下多行 for-merge 记录，随后每个 pull 都以
+      // `fatal: Cannot fast-forward to multiple branches.` 失败（本机 5 并发实测全败），
+      // 而这条失败落在自动同步的 intent journal 里 ⇒ durable SAFE MODE。
+      // 显式 refspec fetch + 显式远端跟踪分支 merge 完全不读 FETCH_HEAD（同样 5 并发实测全成功），
+      // 语义与 ff-only pull 一致：能快进就快进，不能快进就报「历史分叉」。
+      const refspec = `+refs/heads/${branch}:refs/remotes/origin/${branch}`;
+      const fetched = await this.runGit(['fetch', 'origin', refspec], { withCredential: true, allowNonZero: true });
+      if (fetched.code !== 0) {
+        const combined = fetched.stderr + ' ' + fetched.stdout;
+        // 远端还没有这个分支（全新空仓库 / 分支被改名）→ 与「无 upstream」一样静默跳过
+        if (/could.?n.t find remote ref|could not find remote ref/i.test(combined)) return;
+        await this.throwPullFailure(combined, fetched.stderr);
       }
-      if (DIVERGED_HISTORY_RE.test(combined)) {
-        throw new GitTransportError(this.msg('sync.git.historyDiverged', { dir: this.o.workDir }), { kind: 'conflict', retryable: false });
-      }
-      throw new GitTransportError(
-        this.msg('sync.git.pullFailed', { err: this.mask(res.stderr, await this.readTokenOnce()) }),
-        classifyNetworkErrorText(combined),
-      );
+      const merged = await this.runGit(['merge', '--ff-only', `origin/${branch}`], { allowNonZero: true });
+      if (merged.code === 0) return;
+      await this.throwPullFailure(merged.stderr + ' ' + merged.stdout, merged.stderr);
     };
     if (opts.retryable === true) await withSyncRetry(attempt, this.o.retry);
     else await attempt();
+  }
+
+  /** 当前分支名；detached HEAD 返回 ''（此时不存在 upstream 语义）。 */
+  private async currentBranch(): Promise<string> {
+    const res = await this.runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { allowNonZero: true });
+    const name = res.code === 0 ? res.stdout.trim() : '';
+    return name === 'HEAD' ? '' : name;
+  }
+
+  /**
+   * 把 fetch / merge 的失败归一成可操作错误（与旧 pull 的归类逐条对齐）：
+   * 主机密钥 → 教用户怎么信任主机；历史分叉 → 给「改回地址 / 重建工作副本」出口；其余交给统一分类器。
+   */
+  private async throwPullFailure(combined: string, rawStderr: string): Promise<never> {
+    // issue #79：这两类失败与网络无关，必须给「改回地址 / 重建工作副本」的出口
+    if (SSH_HOST_KEY_RE.test(combined)) {
+      throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
+    }
+    if (DIVERGED_HISTORY_RE.test(combined)) {
+      throw new GitTransportError(this.msg('sync.git.historyDiverged', { dir: this.o.workDir }), { kind: 'conflict', retryable: false });
+    }
+    throw new GitTransportError(
+      this.msg('sync.git.pullFailed', { err: this.mask(rawStderr, await this.readTokenOnce()) }),
+      classifyNetworkErrorText(combined),
+    );
   }
 
   /**

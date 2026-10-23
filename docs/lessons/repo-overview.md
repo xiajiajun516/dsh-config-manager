@@ -48,3 +48,5 @@ npm run bundle                   # 仅重建 client bundle
 ## UI 自查清单（下移自 AGENTS.md §✅ Verification）
 
 - DESIGN.md 一致(token/组件/spacing/radius/状态语义)、响应式、Hover/Focus/Disabled/Loading/Empty/Error 齐全、Dark Mode 无 hardcode、未建重复组件、新样式进 css+DESIGN.md、新文案进 locale(zh/en)、敏感字段未落 storage/日志/回显。
+- **要在真实 UI 里看效果，有现成的 `.qa` 隔离环境**（`.gitignore` 已忽略）：`$env:DSH_HOME="$PWD\.qa\home"; dsh web --port 3277 --no-open`（想开浏览器去掉 `--no-open`）→ 首次弹「内测声明/添加 API Key」时点「稍后配置」→ 左下「设置」→「备份与迁移」。`.qa/home/profiles/web` 里放一个 bundless 的 `package.json`（`dsh.profile.bundles` 含 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`dsh-config-manager`），插件用 `dsh plugin --profile web add link:<仓库路径>` 挂上。**另一套从零建实例的 E2E 配方**（cmtest + Junction + 抓 token）见 `docs/known-pitfalls.md` 的「bundle 包」条。
+- **浏览器截图有一帧渲染滞后**：导航或切页签后立刻截图会拍到上一帧 —— 连拍两张取第二张，或先 `window.scrollBy(0,1)` 触发重绘再截。

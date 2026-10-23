@@ -1,6 +1,8 @@
 # 「关于（About）」Tab 设计文档
 
-> 日期：2026-08-19 · 状态：待实施 · 上游约束：[AGENTS.md](../../AGENTS.md)（UI/Design 规则）、[DESIGN.md](../../DESIGN.md)（Design System 唯一权威）、[CLIENT_DEPENDENCIES.md](../../src/client/CLIENT_DEPENDENCIES.md)（client 与 host API 契约）
+
+> ⚠️ **2026-10-23 状态复核**：「关于」面板已实现（`src/client/about/AboutPanel.tsx`，挂在 `ConfigManagerSection.tsx` 的 `about` 面板）；v3 之后落位为导航区图标入口，不再是「第 6 个 tab」（文中 §1 与 L140/L183 的 tab 序号已作废）。§5 键表与 §8 安全理由仍为准。
+> 日期：2026-08-19 · 状态：**已实现**（2026-10-23 复核） · 上游约束：[AGENTS.md](../../AGENTS.md)（UI/Design 规则）、[DESIGN.md](../../DESIGN.md)（Design System 唯一权威）、[CLIENT_DEPENDENCIES.md](../../src/client/CLIENT_DEPENDENCIES.md)（client 与 host API 契约）
 
 ## 1. 背景与目标
 

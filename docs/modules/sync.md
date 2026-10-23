@@ -43,6 +43,8 @@
 - 自动同步开关：`sync-autosync.json`，`schemaVersion:2`，同样按通道独立（`src/sync/autosync-config.ts:25-26`、`:181`）；缺 schemaVersion 视为 v1，非 2 回退缺省（`:200`）。
 - 引擎构造期只认 `optInSections`（`src/sync/sync-engine.ts:603`）；自动同步与 model-tools 传 `'auto'` 档（`src/index.ts:3624`），所以「界面上勾了」不等于「自动同步会传」。
 - 保留策略：GFS 三层（`keepLast`/`keepMonthly`/`keepYearly`，缺省 10/0/0，`src/sync/retention-policy.ts:27-42`），缺省走旧 FIFO 快路径以保持等价（`:254-269`）。
+- **为什么按通道独立而不是全局一份**：老形态下 autosync / 模式 / 分区勾选 / 加密 / 远端快照全共享，切换通道就互相踩（GitHub 想 30 分钟自动、WebDAV 只想手动推加密快照这种组合无法表达）⇒ 才把配置改成按通道命名空间；v1 读入归一为 git 通道，旧 API 字段（`syncSelection`/`autosync`）保留返回以免破坏调用方。同一时刻仍**只允许一个通道在跑**（全局防重 `runs.register('autosync')` + `running`），另一通道的触发在收尾后补跑，不丢同步。
+- **git 仓库选择器**（用户可见，2026-10 起）：配置弹窗的 git 分支在地址框上方有仓库选择器（`src/client/sync/SyncRepositoryPicker.tsx`；纯逻辑在 `src/ui/sync-repository-picker.ts`，可被 node:test 覆盖）。只列**当前 token 可见的私有仓库**、可内联新建私有仓库（请求体不传 `private`，宿主恒定建私有）；地址框保留给 ssh / 本地路径 / 列表外仓库。宿主端点 `/sync/github/repositories` 的 GET(列) 与 POST(建) **共用同一路径**（围栏按 `(kind, path)` 去重，拆成两条会撞车，同 `/sync/autosync` 先例），REST 能力在 `src/market/github-repos.ts`（`createRepo`/`listRepos`）；两条分支都**不挂 mutation gate**（列举只读、建仓是幂等元操作，挂上会让 SAFE MODE 用户连仓库都选不了）。
 
 ## 3. 关键调用链
 

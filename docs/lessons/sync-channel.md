@@ -172,3 +172,62 @@
   `suspend` 期间零触发；**静默窗口内的写入不丢**（窗口内无回调，窗口结束立即补跑一次）。
 - **未做真机端到端验证**：未在真实 git/webdav 远端上跑「保存 → 立即推送」的完整链路（本轮无远端凭据）；
   「监听 → 触发一轮」之外的下行/上行结论仍来自单测与夹具（假 transport / 假 watchFactory）。
+
+
+## 并发驱动同一个同步工作副本 → `git pull` 自己 fatal → durable SAFE MODE
+
+**规则判据（已回写 `AGENTS.md`）**：同一个 `sync/work` 上的 git 操作必须串行；拉取只能用
+「显式 refspec `fetch` + `merge --ff-only origin/<branch>`」，**禁止回到 `git pull --ff-only`**。
+
+**真机形态（2026-10-23，issue #112 现场）**：环境 → 维护与诊断 一直停在「已进入安全模式」，
+incident 行 = `autosync-push / 需要人工处理`，而 `transactions/active/*.json` 的 `error` 是**空串**
+（面板因此只显示「需要人工处理」，没有任何原因）；`sync/sync-autosync.json` 的
+`lastRunMessage` = `git pull 失败: fatal: Cannot fast-forward to multiple branches.`。
+同一 `~/.dsh/dsh-config-manager/running/` 下同时有 desktop(24252) 与 web(2320) 两个实例，
+`sync/work/.git/FETCH_HEAD` 里有**两行 SHA 完全相同**的 for-merge 记录（手工 `git pull --ff-only` 成功、
+只剩一行）。
+
+**根因（已复现，非推断）**：拉取走的是 `git pull --ff-only` = 「fetch 写 `FETCH_HEAD` + 读 `FETCH_HEAD` 合并」两步。
+并发时 `FETCH_HEAD` 被写成多行 for-merge；`git pull` 的 ff-only 前置检查看到多个 for-merge head，
+直接 `die("Cannot fast-forward to multiple branches.")`（exit 128）。
+复现实验（`.tmp/ffrepro`，本地 bare 远端 + 5 个进程同时 `git pull --ff-only`）：
+5/5 全部 exit 128 且同一条 fatal，`FETCH_HEAD` 留下 5 行相同 SHA；顺序 pull（1/2/3 次）恒为 1 行
+⇒ 是并发写坏，不是累积。同一实验里 `git fetch -q origin +refs/heads/main:refs/remotes/origin/main`
++ `git merge --ff-only -q origin/main` 在 5 并发下 **5/5 成功**、无 fatal（不读 `FETCH_HEAD` 就绕开污染面）。
+
+**是谁在并发**（代码事实）：
+- 自动同步整轮持 `withMutationLock`，但 `POST /sync/snapshots-list`（以及 `/sync/pull`、
+  `/sync/download`、`/sync/sync`、`/sync/merge-preview`）**不带任何锁**，各自 `makeSyncEngine()`
+  后直接 `transport.list()`/`download()` → `pullFromRemote()`；GUI 打开或刷新同步页就会触发。
+- 多开 DSH 实例共用同一 `sync/work`：跨进程的 `GLOBAL` 锁只覆盖自动同步，覆盖不到上面的只读路由。
+- 并发 `add/commit` 还会撞 `index.lock` —— 同一类「莫名其妙的失败」，同样会落进 SAFE MODE。
+
+**为什么一次 git 报错会被放大成「锁死全部配置写入」**：`engine.push()` 在 Phase C 里被
+`runExternalIntent({operationType:'autosync-push'})` 包住；`src/core/phase3-host.ts` 的 catch 分支
+**无条件** `writeSafeMode(true)` 并把 journal 推到 `NEEDS_ATTENTION`；
+`resolveSafeModeMarker` 对 active 里任何非终态/NEEDS_ATTENTION **fail-closed** ⇒ durable SAFE MODE，
+用户所有会改配置的操作被阻断，只能人工处理。
+
+**修复（本次）**：
+1. `src/sync/git/workdir-lock.ts`：工作副本级互斥锁 = `os.tmpdir()` 下按目录绝对路径哈希命名的
+   `open('wx')` 文件锁（不写进工作副本：clone 前也能先锁住、不脏 `git status`）+ 进程内 Promise 链
+   + 陈旧锁按 mtime 回收（缺省 15 min；等待上限缺省 5 min）。
+2. `GitTransport` 加 `private withWorkdir()`（`workdirLockDepth` 可重入），包住
+   `list/upload/download/delete/inspectWorkDir/rebuildWorkDir` 六个工作副本入口；
+   `ensureRepo/pullFromRemote/adoptRemoteHistory` 假定已持锁（避免嵌套死锁）。
+3. `pullFromRemote` 改为显式 `fetch origin +refs/heads/<b>:refs/remotes/origin/<b>` +
+   `merge --ff-only origin/<b>`；detached HEAD、远端无同名分支（`couldn't find remote ref`）静默跳过，
+   SSH 主机密钥 / 历史分叉 / 网络分类逻辑逐条沿用。
+4. `runExternalIntent` 的 NEEDS_ATTENTION 分支补写 `journal.error`（过 `redactJournalText`）——
+   面板的 `reason` 是 `j.error || j.recovery.reason`，此前恒为空。
+
+**证据 / 实测**：
+- `src/sync/git/workdir-lock.test.ts`（6 项）：同目录并发串行（maxActive=1）、不同目录并行、等锁超时抛
+  `WorkdirLockError` 且**不删别人的锁**、陈旧锁回收、fn 抛错后锁必释放、`path.resolve` 归一后共用一把锁。
+- `src/sync/git/git-transport.test.ts` 新增 3 项：命令序列里**不再出现 `pull`**（显式 fetch + merge）、
+  远端无同名分支静默跳过且不 merge、两个 transport 实例共享同一 workDir 时 git 调用 `maxActive=1`。
+- 全量 `npm test`：5129 项、fail 0；`npm run typecheck` 0 错。
+
+**未覆盖**：`market` 通道（`src/market/reader.ts`、`src/market/git-file-writer.ts`）仍用
+`git pull --ff-only` 驱动自己的市场工作副本 —— 同一类并发风险存在，但它不经过 intent journal，
+失败不会升级成 SAFE MODE，故本次未改（要一并修就复用 `withWorkdirLock` + 同样的 fetch/merge 写法）。

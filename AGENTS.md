@@ -32,6 +32,7 @@
 - **磁盘占用清理四条不得放宽**：候选＝可重建区 + 显式勾选的过期导出；`snapshots`/`sync` 永不进候选；`categories` 是分区白名单；数字由渲染行现算；ENOENT 不计 errors。
 - **同步分区放行逐分区、不是布尔**：`syncSectionCatalog` 由注册表派生；放行只看构造期 `optInSections`；自动同步与 model-tools 只传 `'auto'` 档（sessions 绝不悄悄上下行）。
 - **同步通道「会话管理」五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；删除墓碑不删本机数据。
+- **同一工作副本的 git 操作必须串行**：入口一律经 `GitTransport.withWorkdir()`；拉取只许 `fetch` + `merge --ff-only`、**禁止 `git pull`**（并发写坏 FETCH_HEAD ⇒ pull fatal ⇒ SAFE MODE）→ `docs/lessons/sync-channel.md`
 - **同步写路径三条**：索引**条件写**（远端改过即中止，绝不覆盖别人条目；**gist 例外＝无条件下**，写后复核、冲突报 index-conflict）；快照**不进机器专属路径**（导出剥 store/cache、写回留本机）；**S3 授权头逐字序列化**；**祖先副本只落密文**。
 - **日志全程脱敏**：`redactValue` 掩码敏感值；UI 渲染前所有错误/报告再过 `redact()`（`ErrorBanner.tsx`/`ReportView.tsx`）。
 - **ZIP 视为不可信**：条目数上限、checksum、Zip Slip 拒绝（`src/security/zip-security.ts`）。

@@ -784,14 +784,21 @@ test('t24：超时口径统一——默认取共用 DEFAULT_SYNC_TIMEOUT_MS（�
   assert.equal(custom[0], 5000, '宿主注入的 timeoutMs 必须生效');
 });
 
-/** 构造「rev-parse 恒成功（会走 pull）+ pull 按脚本返回」的 exec */
+/**
+ * 构造「rev-parse 恒成功（会走远端同步）+ 远端同步按脚本返回」的 exec。
+ *
+ * 远端同步 = `git fetch origin +refs/heads/<branch>:refs/remotes/origin/<branch>` + `git merge --ff-only origin/<branch>`
+ * （**不再用 `git pull --ff-only`**：并发下 FETCH_HEAD 会被写成多行 for-merge，pull 自己就 fatal，
+ * 详见 src/sync/git/workdir-lock.ts 头注释）。脚本命中 fetch 那一步。
+ */
 function pullScriptedExec(calls: CallRecord[], pullResults: GitExecResult[]): GitExecFn {
   let i = 0;
   return async (_cmd, args) => {
     calls.push({ cmd: 'git', args });
     const joined = args.join(' ');
+    if (joined.includes('rev-parse') && joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
     if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
-    if (joined.includes('pull')) {
+    if (joined.includes('fetch origin')) {
       const r = pullResults[Math.min(i, pullResults.length - 1)]!;
       i += 1;
       return r;
@@ -811,7 +818,7 @@ test('t24：幂等读（list）遇瞬时网络故障 → 指数退避重试后�
     workDir: dir, exec, retry: { attempts: 3, baseDelayMs: 1, sleep: async () => {} },
   }));
   assert.deepEqual(await transport.list(), [], '重试后应成功（空远端）');
-  assert.equal(joinedArgs(calls, 'pull').length, 2, '第一次瞬时失败 → 重试一次即成功');
+  assert.equal(joinedArgs(calls, 'fetch origin').length, 2, '第一次瞬时失败 → 重试一次即成功');
 });
 
 test('t24：重试耗尽后上抛带分类的错误（network / retryable=true），尝试次数 = attempts', async (t) => {
@@ -828,7 +835,7 @@ test('t24：重试耗尽后上抛带分类的错误（network / retryable=true�
     assert.equal(err.retryable, true);
     return true;
   });
-  assert.equal(joinedArgs(calls, 'pull').length, 3, 'attempts=3 → 恰好 3 次尝试');
+  assert.equal(joinedArgs(calls, 'fetch origin').length, 3, 'attempts=3 → 恰好 3 次尝试');
 });
 
 test('t24：不可重试错误（仓库不存在 / 鉴权失败）→ 只尝试一次且分类正确', async (t) => {
@@ -849,8 +856,63 @@ test('t24：不可重试错误（仓库不存在 / 鉴权失败）→ 只尝试�
       assert.equal(err.retryable, false, '不可重试: ' + stderr);
       return true;
     });
-    assert.equal(joinedArgs(calls, 'pull').length, 1, '不可重试错误不得重试: ' + stderr);
+    assert.equal(joinedArgs(calls, 'fetch origin').length, 1, '不可重试错误不得重试: ' + stderr);
   }
+});
+
+test('远端同步命令序列：显式 refspec fetch + merge --ff-only，绝不再执行 git pull（FETCH_HEAD 并发毒化面）', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({
+    workDir: dir, exec: pullScriptedExec(calls, [{ stdout: '', stderr: '', code: 0 }]),
+  }));
+  await transport.list();
+  const joined = calls.map((c) => c.args.join(' '));
+  assert.ok(!joined.some((j) => /^pull(\s|$)/.test(j)), '不得再执行 git pull: ' + joined.join(' | '));
+  // 网络命令前面会挂 credential helper 的 -c 参数，所以按「末尾 3 个参数」判命令本身
+  const fetched = calls.some((c) => c.args.slice(-3).join(' ') === 'fetch origin +refs/heads/main:refs/remotes/origin/main');
+  assert.ok(fetched, '必须显式 refspec fetch: ' + joined.join(' | '));
+  assert.ok(joined.includes('merge --ff-only origin/main'), '必须显式远端分支快进合并: ' + joined.join(' | '));
+});
+
+test('远端还没有同名分支（空仓库 / 分支被改名）→ 与「无 upstream」同姿态静默跳过，不报错', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
+    if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
+    if (joined.includes('fetch origin')) {
+      return { stdout: '', stderr: "fatal: couldn't find remote ref refs/heads/main", code: 128 };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  assert.deepEqual(await transport.list(), [], '远端没有该分支 → 空列表，绝不抛错');
+  assert.equal(calls.filter((c) => c.args.includes('merge')).length, 0, '没 fetch 到东西就不该 merge');
+});
+
+test('并发驱动同一工作副本（两个 transport 实例）→ git 调用被工作副本锁串行化', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  let active = 0;
+  let maxActive = 0;
+  const exec: GitExecFn = async (_cmd, args) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((r) => setTimeout(r, 15));
+    active -= 1;
+    const joined = args.join(' ');
+    if (joined.includes('--abbrev-ref')) return { stdout: 'main', stderr: '', code: 0 };
+    if (joined.includes('rev-parse')) return { stdout: 'sha', stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const a = new GitTransport(makeOptions({ workDir: dir, exec }));
+  const b = new GitTransport(makeOptions({ workDir: dir, exec }));
+  const [ra, rb] = await Promise.all([a.list(), b.list()]);
+  assert.deepEqual(ra, []);
+  assert.deepEqual(rb, []);
+  assert.equal(maxActive, 1, '同一工作副本的 git 命令绝不允许并发（否则 FETCH_HEAD / index.lock 撞车）');
 });
 
 test('t24：首次使用（空目录）clone 遇瞬时超时 → 重试后成功', async (t) => {
@@ -1034,7 +1096,7 @@ test('issue #79：Host key verification failed → 可操作指纹指引（含 h
     calls.push({ cmd: 'git', args });
     const joined = args.join(' ');
     if (joined.includes('remote get-url')) return { stdout: repoUrl, stderr: '', code: 0 };
-    if (joined.includes('pull')) {
+    if (joined.includes('fetch origin')) {
       return { stdout: '', stderr: 'Host key verification failed.\nfatal: Could not read from remote repository.', code: 128 };
     }
     return { stdout: 'sha', stderr: '', code: 0 };

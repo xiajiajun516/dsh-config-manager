@@ -1,5 +1,9 @@
 # Client 半（src/client）构建依赖清单 — 给 p3 的输入
 
+> ⚠️ **一次性交接输入，不是当前规范**（2026-10 复核）：§1/§2 记录的依赖与 tsconfig 变更**均已落地**，现状看 `package.json` / `tsconfig.json`；
+> §3 的「13 条路由契约」是当时的计划清单，**现已作废**（实际路由见 `docs/modules/*.md` 与 `tests/route/route-parity.test.ts` 的快照，合计 82 条）；§4 的绑定表仍是理解 `src/ui` ↔ `src/client` 分工的快捷索引。
+> 保留本文件是因为 `src/client/client-types.ts`、`src/client/api.ts` 与 `docs/design/2026-08-19-about-tab-design.md` 有注释指过来。**不要在这里新增内容。**
+>
 > 本文件由 p1（client 半）产出，只描述 `src/client/**` 需要的依赖与 tsconfig 变更；
 > **p1 未修改 package.json / tsconfig**（按任务约定，构建配置由 p3 负责）。
 
@@ -62,38 +66,13 @@ client 需要：
 > 不影响现有 `npm run typecheck`（core/ui 仍全绿）；p3 打开 `.tsx` 后
 > 需一并补齐 DOM lib 与 jsx，否则 client 类型不通过。
 
-## 3. Host 半 `/api/dsh-config-manager/*` 路由契约（client 按此调用）
+## 3. Host 半 `/api/dsh-config-manager/*` 路由契约（**已作废，仅留一条仍有效的约定**）
 
-p1 只做 client 侧 fetch 封装（`src/client/api.ts`），Host 半（`src/index.ts`）按此实现：
+本节当时列了 13 条路由的计划契约，**现在全部过时**：实际路由合计 82 条（宿主 `src/index.ts` 7 条 + `src/routes/*.ts` 75 条），由 `tests/route/route-parity.test.ts` 的快照钉住；按功能分组的现状说明在 `docs/modules/` 与 `docs/components/client-ui.md`。
 
-```
-GET  /api/dsh-config-manager/status        → ServiceStatus { ready, pluginVersion, dshVersion, platform, arch }
-POST /api/dsh-config-manager/export        body: { includeSecrets, only?, password? } → ExportResponse { zipPath, manifest, report }
-GET  /api/dsh-config-manager/download?path → 文件流（content-disposition: filename="..."）
-POST /api/dsh-config-manager/upload?name   body: 原始字节 → UploadResponse { zipPath, name, sizeBytes }
-POST /api/dsh-config-manager/analyze       body: { zipPath } → ImportAnalysis
-POST /api/dsh-config-manager/plan          body: { zipPath, decisions } → ImportPlan
-POST /api/dsh-config-manager/execute       body: { zipPath, plan, opts: { confirm, secretInputs, rollbackOnError } } → ImportResult
-GET  /api/dsh-config-manager/backup-files  → { ok, files: BackupFileMeta[] }（exports 目录备份文件，时间倒序；
-                                            每项带 containerType: 'zip' | 'encrypted'，加密容器必须先经
-                                            decrypt-archive 解锁再分析 —— issue #55）
-POST /api/dsh-config-manager/backup-files/delete  body: { name } → { ok, removed }（仅 exports 内 .zip）
-POST /api/dsh-config-manager/decrypt-archive body: { zipPath, password } → { zipPath, refs }（整体加密容器解锁）
-POST /api/dsh-config-manager/recovery/safe-mode/clear body: { userConfirmed } → { ok, cleared, reason? }
-                                            （显式解除仍生效的 SAFE MODE；还有未解决事项时 ok=false —— issue #56）
-```
+仍有效的一条约定（客户端据此分流错误，而不是当「备份损坏」）：**未解锁的整体加密容器（DCA1）** 在 `/analyze`、`/plan`、`/execute` 上一律返回 `400 { code: 'encrypted-container' }`，与 mutation gate 的 `mutation-locked` 同一约定；形态判定实现只有 `src/security/container-kind.ts` 一份。
 
-- 未解锁的整体加密容器（DCA1）：`/analyze`、`/plan`、`/execute` 一律返回
-  `400 { code: 'encrypted-container' }`（与 mutation gate 的 `mutation-locked` 同一约定）；
-  客户端据该码进入「解锁加密备份」阶段，而不是把容器当 ZIP 报「备份损坏」。
-
-- `password` 为加密的独立开关：传入即注入 EncryptionProvider（Host 侧 `security/encryption.ts`
-  scrypt+AES-256-GCM），备份标记 encrypted（导入需密码）；`includeSecrets=false`（不导出密钥）时
-  secrets.enc 加密空内容占位，不包含任何凭据值。密码**绝不写入 manifest / 任何配置**；
-- `upload` 落 Host 受控临时目录（如 `~/.dsh/dsh-config-manager/tmp/`），返回的 zipPath
-  供 analyze/plan/execute 引用；
-- 错误响应统一 `{ error: string }`（client `readJson` 依赖该形状）；
-- Host 侧路由安全围栏参考 dsh-ssh `isLoopbackRequest`（仅 127.0.0.1 + 同源）。
+其余（上传落盘位置、密码开关、错误体形状、路由围栏）以当前代码为准，不再在此维护。
 
 ## 4. 与 src/ui 的绑定点（p1 实现摘要）
 

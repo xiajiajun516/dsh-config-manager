@@ -1,5 +1,7 @@
 # dsh-config-manager 生态优化清单
 
+
+> ⚠️ **2026-10-23 状态复核**：**历史行动清单（2026-08-23 完结）**，不是当前路线图。P0-2 提到的 `scripts/check-order.mjs` 不在本仓（不可复现）；文中对外部榜单、PR 状态的描述属**平台行为判断，仓内不可证**。
 > 日期：2026-08-22；更新：2026-08-23（P0-1/P0-2/P0-3 全部完成）
 > 背景：调研 DSH 插件生态（beancookie/awesome-dsh-plugin、SihanTeng/awesome-deepseek-harness-plugins、awesome-dsh-plugin/awesome-dsh-plugin 三大榜单），对照本插件源码（v0.1.45，~2.65 万行）产出的优化行动清单。
 > 状态：**三个 P0 均已完成**（P0-3 于 2026-08-23 收尾，npm test 1010/1010 绿灯）。

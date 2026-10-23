@@ -16,7 +16,7 @@ import {
   ABSENT_FINGERPRINT,
   JournalStore, environmentFingerprint as computeFingerprint, TRANSACTIONS_DIR,
   generateOperationId, createJournalEntry, transitionJournalState, isTerminalState, isValidTransition,
-  readSafeModeMarkerSync,
+  readSafeModeMarkerSync, redactJournalText,
 } from './journal.ts';
 import type { JournalState, OperationJournal, SafeModeMarkerState } from './journal.ts';
 import { inspectStartup, type ReconcileProbeHooks, type ReconcileEnv } from './reconcile.ts';
@@ -660,6 +660,10 @@ export class Phase3Recovery {
       } else {
         const j = await this.store.loadActive(opId);
         if (j !== null && !isTerminalState(j.state)) {
+          // 失败原因必须落进 journal：恢复面板的 reason 是 `j.error || j.recovery.reason`，
+          // 此前这里从不写 error —— 真机 incident 的 panel 因此只显示一行「需要人工处理」，
+          // 用户无从知道到底是哪一步失败了（2026-10-23 autosync-push 的 error 是空串）。
+          const failure = redactJournalText(err instanceof Error ? err.message : String(err));
           await this.store.update(opId, (cur) => {
             // 失败时 ext step 不能停在 planned：planned 的含义是「还没开始」，而外部操作已经
             // 尝试过了（可能半途炸掉）。落成 attention 让 journal 自己说明「外部步骤结论未知」，
@@ -667,7 +671,7 @@ export class Phase3Recovery {
             const withStep = cur.steps.ext !== undefined && cur.steps.ext.status === 'planned'
               ? { ...cur, steps: { ...cur.steps, ext: { ...cur.steps.ext, status: 'attention' as const } } }
               : cur;
-            return transitionJournalState(withStep, 'NEEDS_ATTENTION');
+            return transitionJournalState({ ...withStep, error: failure }, 'NEEDS_ATTENTION');
           }).catch(() => undefined);
         }
       }
