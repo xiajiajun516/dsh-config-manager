@@ -78,7 +78,7 @@
 
 `rewind`（`src/core/rollback-point.ts:4383`）→ 三道门（`userConfirmed` 必须恰好 `true` `:4403`；保护点 `:4407`；记录不完整 `:4412`，`allowPartial` 才放行）→ 回退前 guard 点（`:4422`）→ `restoreWorkspace`（`:4832`）→ `restoreSession`（`:5319`）→ 引擎 `fork` seam → 路由侧封装 `forkSeamOf`（`src/routes/recovery.ts:220`）→ 宿主注入（`src/index.ts:4814`）→ `forkPort.forkSession`（`src/index.ts:4815`）→ `fork.call(controller, { sessionId, atSeq: boundarySeq })`（`src/index.ts:1086`）。
 
-为什么必须这样：宿主内存里的活动会话不重读磁盘，平台也没有 drop/reload API，所以「就地截断日志」在运行中的 DSH 里不可能生效；能生效的只有「新会话替换旧会话 + 归档旧会话」（决策记录见 `docs/decisions/0004-rollback-point-fork-archive.md`）。客户端把归档结果翻成文案键（`archiveHintKey`，`src/client/chat/rollback-entry-view.ts:894`）。
+为什么必须这样：宿主内存里的活动会话不重读磁盘，平台也没有 drop/reload API，所以「就地截断日志」在运行中的 DSH 里不可能生效（**平台行为判断，仓内不可证**：本仓库只能证明我们选了 fork + 归档，证不了宿主不重读）；能生效的只有「新会话替换旧会话 + 归档旧会话」（决策记录见 `docs/decisions/0004-rollback-point-fork-archive.md`）。客户端把归档结果翻成文案键（`archiveHintKey`，`src/client/chat/rollback-entry-view.ts:894`）。
 
 两个**硬性要求**：
 

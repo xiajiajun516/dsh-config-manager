@@ -70,6 +70,17 @@ node scripts/check-doc-paths.mjs            # 路径/文件是否还存在
 rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIGN.md
 ```
 
+### 4.1 每句断言必须能归到四类之一
+
+| 类型 | 长什么样 | 写法 |
+|---|---|---|
+| **已由代码确认的事实** | 文件/符号/上限/错误码/测试名 | 直接写，带锚点（符号名优先，行号只是快照） |
+| **当前实现的设计约束** | 「必须」「禁止」，由结构或守卫决定 | 写判据 + 指向守卫（测试名或单一实现文件） |
+| **根据平台经验得出的判断** | 宿主/外部服务行为，如「gist 拒一切条件头」「运行中的 DSH 不重读会话日志」 | **必须标注**「平台行为判断，仓内不可证」+ 观察日期与出处；结论可写，但不得伪装成代码事实 |
+| **尚未验证的假设** | 没实测、没测试、没读源码 | 写「待确认」+ 怎么验证；**不得**陈述为结论 |
+
+第三、四类最容易变成谣言：猜错一次，下一个 agent 会当规则抄三遍。标注成本只有一句，别省。
+
 - **行号漂移不算失修**：本仓库约定「行号是写作时快照，符号名才是锚」，重构后只要符号名与路径仍在，行号可以不动；顺手改更好。
 - **接口/数据格式变化**：先改 `docs/spec/`，再跑 `tests/conformance/`；`compat-matrix.md` 需要时加版本行。
 - **默认值/上限变化**：域文档的上限表 + 客户端常量（如 `src/ui/rollback-view.ts`）+ CHANGELOG 一起改。
@@ -96,6 +107,7 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 | 备份/导出/导入/恢复/加密 | `docs/modules/backup-restore.md` + `docs/spec/bundle-format-v1.md` |
 | 同步/合并/自动同步/配置档案 | `docs/modules/sync.md` + `docs/spec/sync-channel-v1.md` |
 | 对话回退/回滚点/救援台/CLI 写入门 | `docs/modules/recovery.md` |
+| 外部来源导入（Claude Code / Codex / Cursor…） | `docs/modules/foreign-import.md` |
 | 客户端/页面/样式/i18n | `docs/components/client-ui.md` + `DESIGN.md` |
 | 加路由/改分层/改入口 | `docs/architecture.md` + `AGENTS.md` §结构与分层 |
 | 发布/版本/CI | `DEVELOPERS.md` + `AGENTS.md` §发布 |
@@ -135,6 +147,24 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 4. `docs/maintenance/known-limits.md` 是否有已经解禁的条目。
 5. `docs/decisions/` 是否有技术前提已失效的 ADR（标「已废弃」，不删）。
 6. `node scripts/check-agents-budget.mjs` 是否超过 26 KiB 警戒线（超了就把细节下移 `docs/`）。
+
+#### 首次执行记录（2026-10-23）
+
+本节六项第一次按字面实跑，结果如下（耗时未精确计时，均为取证 + 核对，不含写文档）：
+
+| 项 | 结果 | 证据 | 耗时 |
+|---|---|---|---|
+| ① 索引覆盖 | **通过**：`docs/{modules,components,spec,maintenance,decisions}/*.md` 19 份全部在 `docs/index.md`（0 缺失） | 逐文件比对表格 | ~2 min |
+| ② 模块文档与代码 | **通过**（抽查 4 份）：路由总数 82 = `src/index.ts` 7 + `src/routes/*` 75，由 `tests/route/route-parity.test.ts:228`/`:287`/`:289` 钉住；入口/上限/失败语义与实现一致 | 上述测试 + 逐份核对源码 | ~12 min |
+| ③ tech-debt 已修项 | **基本通过**：16 条已修中 14 条直接带测试名；#2 只写文件与文案键，靠同表 F8 行补测试名（可接受）；未修 11 条仍标修 | `docs/maintenance/tech-debt.md` | ~3 min |
+| ④ known-limits 已解禁 | **通过**：15 条无「已解禁仍留档」；但 §5 与 §7/§12 的部分表述属**平台判断**，已按 §4.1 标注 | `docs/maintenance/known-limits.md` | ~2 min |
+| ⑤ ADR 前提失效 | **通过**：0001（82 条路由/exact 先命中/围栏即唯一认证）前提仍成立且与 route-parity 一致；0002–0006 前提未被证伪；0004 背景含平台判断，已标注 | `docs/decisions/` + 上表测试 | ~3 min |
+| ⑥ AGENTS 预算 | **未通过（已知债 #12）**：28657 B / 28672 B，距硬上限 15 B，超警戒线 2033 B。`📌 常见坑` 一节 12462 B（43.5%）；>200 B 的单行 54 条共 13776 B | `node scripts/check-agents-budget.mjs` + 分节字节统计 | ~3 min |
+
+**这次跑不出来的两项**（不算失败，是清单本身的边界）：
+
+- ①②仍是人工活：① 只要 `docs/lessons/README.md` 继续用裸文件名收录，任何「路径必须出现」的脚本都会误报；② 路由校验若用正则扫 `path:` 字面量，会漏掉 `src/index.ts` 里另一种声明形态（本次误报 4 条）。
+- 「运行中的 DSH 不重读会话日志」一类平台断言，仓内只能证明「我们选择了 fork + 归档」，证不了宿主行为；按 §4.1 标注即可，不要试图用测试证明。
 
 ### 7.3 怎么识别过时 / 重复 / 无价值
 

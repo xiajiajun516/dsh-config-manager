@@ -16,6 +16,7 @@
 | 改备份/导出/导入/恢复/加密 | `docs/modules/backup-restore.md` + `docs/spec/` |
 | 改同步通道、合并、自动同步、配置档案 | `docs/modules/sync.md` |
 | 改对话回退、回滚点、救援台、CLI 写入门 | `docs/modules/recovery.md` |
+| 改外部来源导入（Claude Code / Codex / Cursor… 共 30 个来源） | `docs/modules/foreign-import.md` |
 | 改 React 壳、页面、状态、i18n、样式 | `docs/components/client-ui.md` + `DESIGN.md`（视觉唯一权威） |
 | 实现一个兼容本仓备份格式的第三方工具 | `docs/spec/`（对外契约 + 兼容矩阵） |
 | 知道「为什么当初这么设计」 | `docs/decisions/` |
@@ -34,7 +35,8 @@
 | `docs/modules/backup-restore.md` | 导出、快照、恢复、导入、加密、ZIP 安全边界、失败与回退语义 | 上述链路的实现或语义变化时 |
 | `docs/modules/sync.md` | 同步状态机、四传输能力差异、自动同步、sessions/optInSections、档案复制 | 同步行为/通道能力变化时 |
 | `docs/modules/recovery.md` | 回滚点两态采集、台账与预算、删除集判据、回退=fork+归档、SAFE MODE、三道写入门 | 回退或救援语义变化时 |
-| `docs/components/client-ui.md` | client 装配、四页与加页四步、原语清单、样式/token 守卫、状态归属、i18n、测试口径 | 组件体系或页面结构变化时 |
+| `docs/modules/foreign-import.md` | 30 个外部来源的读盘/解析/合成流水线、三入口同源、IR 硬形状、体积守卫、加来源清单 | 新增来源或合成形状变化时 |
+| `docs/components/client-ui.md` | client 装配、四页与加页五处、原语清单、样式/token 守卫、状态归属、i18n、测试口径 | 组件体系或页面结构变化时 |
 
 ## 3. 对外契约（第三方要能照着实现）
 
