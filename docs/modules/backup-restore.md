@@ -39,11 +39,11 @@
 | `POST /export-preview` | `src/index.ts:4148` | 只读预览分区与条目数 |
 | `POST /analyze` | `src/index.ts:4264` | 解析包、给兼容性报告 |
 | `POST /plan` | `src/index.ts:4300` | 生成导入计划（加密包需解锁） |
-| `POST /import/upload` | `src/routes/import.ts:98` | 收 ZIP 到临时目录并判定容器形态 |
-| `POST /import/decrypt-archive` | `src/routes/import.ts:130` | DCA1 → 明文 ZIP（0600） |
-| `POST /import/execute` | `src/routes/import.ts:179` | 真正写盘（过 mutation gate） |
+| `POST /upload` | `src/routes/import.ts:98` | 收 ZIP 到临时目录并判定容器形态（上限 256 MiB，`src/routes/import.ts:24`，超限 413 `:102-104`） |
+| `POST /decrypt-archive` | `src/routes/import.ts:130` | DCA1 → 明文 ZIP（0600） |
+| `POST /execute` | `src/routes/import.ts:179` | 真正写盘（过 mutation gate）；plan 走 JSON 体 ⇒ 受 4 MiB 请求体上限约束（`src/routes/kit.ts:120`、超限 `:129` → 400） |
 | `GET /snapshots` | `src/routes/snapshots.ts:44` | 列出快照（含 unreadable） |
-| `POST /snapshots/restore` | `src/routes/snapshots.ts:66` | 预览（dryRun）或执行恢复 |
+| `POST /restore` | `src/routes/snapshots.ts:69` | 预览（dryRun）或执行恢复（**注意路径不带 `snapshots/` 前缀**） |
 | `POST /snapshots/delete` | `src/routes/snapshots.ts:182` | 删除快照（被恢复引用则拒绝） |
 | `POST /snapshots/pin` | `src/routes/snapshots.ts:226` | 置顶保护，避免被自动清理 |
 | `GET /backup-files` | `src/routes/backup.ts:259` | 列出导出目录里的备份 |
@@ -52,7 +52,7 @@
 | `POST /backup-schedule/run` | `src/routes/backup.ts:246` | 手动触发一次定时备份 |
 | `POST /disk-usage/cleanup` | `src/routes/backup.ts:184` | 清理可重建区与过期导出 |
 
-写操作统一过 `withMutationGate`（`src/index.ts:3357`）。**唯一例外**是 `/snapshots/restore`：它自己组合 `runWithMutationLock` 与 `phase3Recovery.runJournaled`（`src/routes/snapshots.ts:101`、`:161`），并自行映射 423 错误（`:167`）——改 gate 时不要以为它自动跟随。
+写操作统一过 `withMutationGate`（定义 `src/index.ts:2729`，注入 `:3345`）。两处**不过**它，改 gate 时不要以为它们自动跟随：① `POST /restore` 自己取 `runWithMutationLock`（`src/routes/snapshots.ts:116`）→ `runRestoreWithResume`（`:190`），并自行映射 409 指纹冲突与 423（`:208-212`）；② `/recovery/*` 前缀路由**刻意**不走 gate（避免与恢复自身的 journal 双写，`src/routes/recovery.ts:328`、`:894`、`:915`）。
 
 ### 2.2 CLI
 
@@ -84,11 +84,11 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 
 ### 3.3 恢复
 
-1. `POST /snapshots/restore` → `buildRestoreBody`（`src/index.ts:2791`）。
+1. `POST /restore` → `buildRestoreBody`（定义 `src/routes/route-support.ts:213`，`src/index.ts:171` 仅 re-export）。
 2. `dryRun`：`planRestore` + 指纹，直接回 JSON，不登记 run、不写盘（`src/routes/snapshots.ts:90`）。
-3. 执行：拿 GLOBAL 锁 → `planRestore`（`src/core/restore.ts:554`）→ 客户端指纹与服务端不符则 409 → `restore()`（`src/core/restore.ts:853`）。
-4. 逐动作 WAL：`createRestoreWal()`（`src/core/restore-wal.ts:105`）在**首个写之前**预登记全部动盘动作（`planned` + beforeFp），每个动作结束 settle 成 `done`/`attention`（+ afterFp）；`hostFileRemove`/`fileRemove` 的期望态用 `ABSENT_FINGERPRINT` 哨兵表达。GUI/HTTP 执行器 `executeRestorePlan`（`src/routes/route-support.ts:580`，WAL 在 `:597`）与 core `restore()`（WAL 在 `:885`）同一实现。崩溃后 reconcile 据此判 recovered / needs-attention。
-5. 覆盖/删除目标前先 `copyToPreRestore` 留副本（`src/core/restore.ts:924` 起），随后逐动作 `atomicCopyFile`。
+3. 执行：拿 GLOBAL 锁 → `planRestore`（`src/core/restore.ts:578`）→ 客户端指纹与服务端不符则 409 → `restore()`（`src/core/restore.ts:877`）。
+4. 逐动作 WAL：`createRestoreWal()`（`src/core/restore-wal.ts:105`）在**首个写之前**预登记全部动盘动作（`planned` + beforeFp），每个动作结束 settle 成 `done`/`attention`（+ afterFp）；`hostFileRemove`/`fileRemove` 的期望态用 `ABSENT_FINGERPRINT` 哨兵表达。GUI/HTTP 执行器 `executeRestorePlan`（`src/routes/route-support.ts:580`，WAL 在 `:597`）与 core `restore()`（WAL 在 `:909`）同一实现。崩溃后 reconcile 据此判 recovered / needs-attention。
+5. 覆盖/删除目标前先 `copyToPreRestore` 留副本（实现 `src/core/restore.ts:412`，恢复主流程首次调用 `:955`），随后逐动作 `atomicCopyFile`。
 
 **续跑（自 2026-10-23）**：执行前先 `probeRestoreResume`（`src/core/restore-resume.ts`）扫 active journal 并重新规划；判定器 `judgeRestoreResume` 逐条证明「同操作类型 + 同快照 + 计划与 step 一一对应 + 每个目标盘面只能等于 beforeFp 或 afterFp + 无回滚痕迹/失败项/外部副作用」。成立 → `phase3.resumeJournaled` 接管 owner（不 create、不做 active≤1 门禁）→ 执行器跳过已完成动作且**不重新预登记**（保住崩溃证据）；不成立 → 照常 `runJournaled`，被 active≤1 挡回 423。三个入口只续自己的 operationType（GUI `restore` / CLI `cli-restore` / model `model-restore`）；CLI 的锁前探测只用于「能否放过 SAFE MODE 门」，成功后续跑收尾按同一 `resolveSafeModeMarker` 解除 SAFE MODE。
 

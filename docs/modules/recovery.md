@@ -10,8 +10,8 @@
 | 回滚点引擎 | `src/core/rollback-point.ts:1916` `RollbackPointEngine` | 采集（工作区 + 会话两态）、预览、删除集规划、回退执行、跨会话/fork 链接 |
 | 台账存储 | `src/core/rollback-ledger.ts` | 一条一写、内容寻址载荷、schema 迁移、字节预算与淘汰落盘 |
 | 进程内开关 | `src/core/rollback-gate.ts:19` | `enabled` 标志（缺省 false）+ 变更通知；不含任何采集逻辑 |
-| 宿主接线 | `src/index.ts:4808` | 注入 fork seam、订阅 `session/event`、注册 `/rollback` 命令、卸载清理 |
-| 会话 fork 与 cwd 归位 | `src/index.ts:1080`、`src/index.ts:1154` | 调宿主 `sessionController.fork`、三档归位、写归位诊断 |
+| 宿主接线 | `src/index.ts:4208` | 注入 fork seam、订阅 `session/event`（`:4221` 起）、注册 `/rollback` 命令（`:4293`）、卸载清理（`:4274-4279`） |
+| 会话 fork 与 cwd 归位 | `src/index.ts:4164-4195`（fork seam）、`src/index.ts:1000`（`fork.call`） | 调宿主 `sessionController.fork`、三档归位、写归位诊断 |
 | HTTP | `src/routes/recovery.ts:329` | 唯一 prefix 路由 + 子路径分派 + HTTP 码映射 |
 | 客户端 | `src/client/recovery/RollbackCard.tsx:102`、`src/client/chat/rollback-entry-view.ts` | 面板/聊天入口、有界重试、归档结果→文案键 |
 | 纯函数视图层 | `src/ui/rollback-view.ts` | 行/分组/范围与上限常量（数字必须与引擎一致） |
@@ -45,7 +45,7 @@
 
 ### 2.2 会话内命令
 
-`/rollback <id>` 走同一套门（`src/index.ts:4927`）：先 `runWithMutationLock({op:'rollback-rewind'})`（`src/index.ts:4936`），再 `preview` 零写入预检（`src/index.ts:4941`），再同一道 `session-active` 门（`src/index.ts:4959`），最后 `rewind`，其中 `userConfirmed` **恒 true**（`src/index.ts:4964`：敲命令就是那次确认）。命令入口没有第二次确认按钮，其余门全量生效。
+`/rollback <id>` 走同一套门（`src/index.ts:4293` 起；处理体 `:4303-4348`）：先 `runWithMutationLock({op:'rollback-rewind'})`（`:4312`），再 `preview` 零写入预检（`:4317`），再同一道 `session-active` 门（`:4335`），最后 `rewind`，其中 `userConfirmed` **恒 true**（`:4342`：敲命令就是那次确认）。命令入口没有第二次确认按钮，其余门全量生效。
 
 ### 2.3 客户端
 
@@ -62,13 +62,13 @@
 
 ### 3.1 自动留点：在 `turn/start` 拍「回合开始前」的工作区态
 
-`session/event` → 宿主监听器（`src/index.ts:4845`）→ 第一道门 `isRollbackEnabled()`（`src/index.ts:4848`）→ 子代理会话只 warn 一次、不留点（`src/index.ts:4852`）→ `RollbackAutoTracker.noteEvent`（`src/core/rollback-point.ts:5820`）→ `turn/start` 分支（`src/core/rollback-point.ts:5833`）→ `captureFor`（`:5784`）→ `capturePoint`（`:3365`）→ `captureWorkspace`（`:2515`）与 `captureSession`（`:2319`）。
+`session/event` → 宿主监听器（`src/index.ts:4221`）→ 第一道门 `isRollbackEnabled()`（`:4224`）→ 子代理会话只 warn 一次、不留点（`:4228`）→ `RollbackAutoTracker.noteEvent`（`src/core/rollback-point.ts:5837`）→ `turn/start` 分支（`:5850`）→ `captureFor`（`:5801`）→ `capturePoint`（`:3382`）→ `captureWorkspace`（`:2532`）与 `captureSession`（`:2327`）。
 
 三条**时间语义**是这块最容易改错的地方：
 
-- 留点发生在回合**开始前**（`src/core/rollback-point.ts:5852`，注释里记着真机症状：在回合结束拍会固定成「改完之后」，用户看到文件没被撤回）。
-- `turn/end` 只更新缺省边界 `lastBoundary`（`:5868`），**不**补采集。
-- 已采集过的回合不重采（`:5845`）；继承回合不补点（`:5847`）。
+- 留点发生在回合**开始前**（`src/core/rollback-point.ts:5869-5877`，注释里记着真机症状：在回合结束拍会固定成「改完之后」，用户看到文件没被撤回）。
+- `turn/end` 只更新缺省边界 `lastBoundary`（`:5886-5888`），**不**补采集。
+- 已采集过的回合不重采（`:5860-5862`）；继承回合不补点（`:5863-5866`）。
 
 采集本身：候选分块 `captureChunkCandidates`（`src/core/rollback-point.ts:2677`），缺口优先排序 `orderByCoverage`（`:2844`），并发缺省 16、钳在 1..64（`:291`、`:2047`），在飞字节上限 32 MiB（`:303`、`:2021`），时间预算 10–120 s 自适应（`:281`、`:2044`），超预算记 `budget-time`/`budget-files` 跳过（`:2557`、`:2505`）。**含 `.asar` 段的路径一律零 fs 调用**（`:1266` 判定、`:2458` 起的分块入口），否则宿主会把畸形夹具当容器解析、桌面直接闪退。
 
@@ -102,7 +102,7 @@
 
 **已知不齐**的一处：CLI `restore` 不是调 `checkWriteGates`，而是它的等价组合——先 `checkSafeModeBlocked`、再拿锁、锁内查 `readRunningInstances`（`src/cli/index.ts:1102`–`:1125`，注释自称同源同序）。判据相同但**代码路径不同**，改门时两处都要动。
 
-SAFE MODE 的解除判据只有一份：`resolveSafeMode`（`src/core/recovery-orchestrator.ts:189`），verify/dismiss 与显式解除都调它（`:434`、`:462`），`ROLLED_BACK` 后自动解除（`:385`）。宿主把结果注入成 `host.safeModeIsBlocked`（`src/index.ts:4548`），所有写路由用 `isBlocked: () => host.safeModeIsBlocked?.() ?? false` 接（`src/routes/recovery.ts:369`/`:444`/`:616`/`:653`/`:769`/`:818`/`:861`）。
+SAFE MODE 的解除判据只有一份：`resolveSafeMode`（`src/core/recovery-orchestrator.ts:225-226`，内部委托 `resolveSafeModeMarker` `:130`），verify/dismiss 与显式解除都调它（`:265` 读 `clearable`、`:453` 自动解除），`ROLLED_BACK` 后自动解除（`:402`）。宿主把结果注入成 `host.safeModeIsBlocked`（`src/index.ts:3924`），所有写路由用 `isBlocked: () => host.safeModeIsBlocked?.() ?? false` 接（`src/routes/recovery.ts:369`/`:444`/`:616`/`:653`/`:769`/`:818`/`:861`）。
 
 ## 4. 数据形态与预算
 
@@ -118,21 +118,21 @@ SAFE MODE 的解除判据只有一份：`resolveSafeMode`（`src/core/recovery-o
   path-cache.json
 ```
 
-三条硬性质（同处头注释）：清单不含大数组；按条解析；载荷去重。`SCHEMA_VERSION = 3`（`src/core/rollback-ledger.ts:58`）；写入口 `appendRecord`（`:3283`）经 `onFileRead`/`writeFile` seam（`:199`）保证**单次 append 不读别人的记录文件**；迁移幂等且崩溃安全，`recoverManifest`（`:1301`）在 records 为空时只落空清单——写坏了就是整批旧点被抹掉。
+三条硬性质（同处头注释）：清单不含大数组；按条解析；载荷去重。`SCHEMA_VERSION = 3`（`src/core/rollback-ledger.ts:58`）；写入口 `appendRecord`（`src/core/rollback-point.ts:3300`；清单读写 seam 在 `src/core/rollback-ledger.ts:199`）保证**单次 append 不读别人的记录文件**；迁移幂等且崩溃安全，`recoverManifest`（`:1301`）在 records 为空时只落空清单——写坏了就是整批旧点被抹掉。
 
 | 约束 | 值 | 落点 |
 |---|---|---|
-| 自动点全局上限 | 50 | `src/core/rollback-point.ts:185` |
-| 自动点每会话上限 | 20 | `src/core/rollback-point.ts:187` |
-| guard 点每会话上限 | 20 | `src/core/rollback-point.ts:197` |
-| guard 点全局上限 | 50 | `src/core/rollback-point.ts:207` |
+| 自动点全局上限 | 50 | `src/core/rollback-point.ts:191` |
+| 自动点每会话上限 | 20 | `src/core/rollback-point.ts:193` |
+| guard 点每会话上限 | 20 | `src/core/rollback-point.ts:203` |
+| guard 点全局上限 | 50 | `src/core/rollback-point.ts:213` |
 | 台账字节预算 | 256 MiB（与条数两套独立） | `src/core/rollback-ledger.ts:76` |
-| 单点会话载荷上限 | 32 MiB | `src/core/rollback-point.ts:260` |
-| 采集在飞字节 | 32 MiB | `src/core/rollback-point.ts:303` |
-| 采集并发 | 16（钳 1..64） | `src/core/rollback-point.ts:291` |
-| 采集时间预算 | 10–120 s 自适应 | `src/core/rollback-point.ts:281` |
+| 单点会话载荷上限 | 32 MiB | `src/core/rollback-point.ts:266` |
+| 采集在飞字节 | 32 MiB | `src/core/rollback-point.ts:309` |
+| 采集并发 | 16（钳 1..64） | `src/core/rollback-point.ts:297` |
+| 采集时间预算 | 缺省 30 s，钳 10–120 s 自适应 | `src/core/rollback-point.ts:282`（钳位常量 `:287-288`） |
 
-淘汰与预算：`selectPruneEntries`（`:3073`）按会话分组截断，`applyByteBudget`（`:3122`）再按字节淘汰，`gcObjects`（`:3194`）回收无引用对象。guard 点**不占**自动点的 20/50 预算，但有自己的一套 20/50，且用户不可删（`rewind` 的保护点门 `:4407` 不含 guard；`delete` 会拒）。客户端上限常量必须与引擎逐字一致：`src/ui/rollback-view.ts:247`/`:249`/`:251`/`:257`。
+淘汰与预算：`selectPruneEntries`（`:3090`）按会话分组截断，`applyByteBudget`（`:3139`）再按字节淘汰，`gcObjects`（`:3211`）回收无引用对象。guard 点**不占**自动点的 20/50 预算，但有自己的一套 20/50，且用户不可删（`rewind` 的保护点门 `:4407` 不含 guard；`delete` 会拒）。客户端上限常量必须与引擎逐字一致：`src/ui/rollback-view.ts:247`/`:249`/`:251`/`:257`。
 
 ## 5. 失败语义
 

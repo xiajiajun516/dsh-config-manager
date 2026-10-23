@@ -15,7 +15,7 @@
 ## 决策
 
 1. 索引写入必须**条件写**：远端被改过即中止并报错，绝不静默覆盖别人的条目（git/webdav/s3）。
-2. gist 通道**完全不做条件头**（`src/sync/gist/gist-transport.ts:58-63` 有明确注释与落点）。但因为「无条件 = 静默覆盖」不可接受，
+2. gist 通道**完全不做条件头**（`src/sync/gist/gist-transport.ts:63-72` 有明确注释与落点，限制常量 `:57-59`）。但因为「无条件 = 静默覆盖」不可接受，
    写路径（upload 与 delete）统一加**写后复核 + 有界重做**：PATCH 后重读索引，校验「本次条目已落盘 / 目标已消失」且
    「读前看到的条目一个不少」；不成立整轮重做，最多 3 轮，仍失败抛 `index-conflict`（文案键 `sync.gist.indexConflict`）。
    这让「被覆盖」从静默变成可发现的错误，代价是冲突时需要用户重试。原先钉住现状的 `src/sync/gist/gist-overwrite-semantics.test.ts`
@@ -35,7 +35,7 @@
 
 ## 证据
 
-- `src/sync/gist/gist-transport.ts:22-24`（不做 blob 外置的三条原因）、`:58-63`（不做条件写）、`:248-255`（一次 PATCH 写载荷+索引）
+- `src/sync/gist/gist-transport.ts:23-27`（不做 blob 外置的三条原因）、`:63-72`（不做条件写）、`:277-284`（一次 PATCH 写载荷+索引）、`:291`（写后复核）、`:309-339`（`verifyIndexLanded`）
 - `src/sync/gist/gist-overwrite-semantics.test.ts`、`src/sync/gist/gist-delete-concurrency.test.ts`（写后复核与重做的正反路径）
 - `src/sync/gist/messages.ts`（`sync.gist.indexConflict` 文案）
 - `docs/spec/sync-channel-v1.md` 能力矩阵、`docs/lessons/sync-channel.md`

@@ -24,8 +24,9 @@
 
 `AutoSyncScheduler` 在宿主装配期构造（`src/index.ts:3619`），在 `src/index.ts:4760` 调用 `scheduler.start()`（**不在 makeRoutes**——要等 recovery 分类完成），销毁在 `src/index.ts:4768`。
 
-调度器内部的四类触发面：
+调度器内部的四类触发面（另加一次启动触发）：
 
+- **启动触发**：`start()` 排完定时器就立刻对每个 enabled 通道跑一轮 `startupRuns()`（受各自 `startupMinIntervalMs` 约束，`src/sync/autosync-scheduler.ts:278`、`:425-432`）——「刚开宿主就同步」来自这里，不是定时器。
 - **每通道定时器**：按通道各排各的 interval，改动某通道只重排该通道（`src/sync/autosync-scheduler.ts:336-355`）。
 - **本地改动监听**：`realtimeChannels` 驱动 watcher，回调里对每个 realtime 通道 `trigger('local-change')`（`:398-412`、`:417-421`）。
 - **远端轮询**：`remoteTimers`（缺省 60 s，见 `src/sync/autosync-config.ts:41`）。
@@ -84,42 +85,42 @@
 | 本地祖先指针 | 同文件 `ancestorId` | **只**存本地祖先副本目录名；merge 的三方祖先来源 |
 | 分区 hash | 同文件 `sections[].hash` | 与本机现算 hash 比 → 判定「本地有没有改」 |
 
-- 迁移与解析：`src/sync/sync-state.ts:20`（v3 语义）、`:191-219`（v2 及更早原 `lastSnapshotId` 双写为 `ancestorId`；非字符串 `ancestorId` 视为无祖先）。
+- 迁移与解析：`src/sync/sync-state.ts:17`（v3 语义）、`:202-217`（v2 及更早原 `lastSnapshotId` 双写为 `ancestorId`；非字符串 `ancestorId` 视为无祖先）。
 - `pendingMerge` 非空时刻意不推进远端指针（`src/sync/sync-state.ts:37-48`），避免把「还没裁决的合并」当成已同步。
 - 假冲突防护点：`merge.ts:340` `localHash === remoteHash → skip`；`:350-354` 无祖先直接 `conflict('no-ancestor')` 而不是随便挑一边；`:357-358` 单侧改走单侧；`:363-372` 精细合并后再用 hash 回退，避免「行合并产物与被改侧不一致」被记为已合并。
-- 设备身份：`ensureDeviceIdentity`（`src/sync/sync-state.ts:237`），随快照 manifest 上行，用于历史展示与排查。
-- 会话记账：`computeSessionBookkeeping`（`src/sync/sync-engine.ts:1108`）产出 `sessionUnits`/`deletedSessions` 墓碑（上限 5000，`src/sync/session-tombstones.ts:26`）；`pull` 与 `merge` 都按墓碑剔除已删会话（`stripTombstonedUnits`，`src/sync/session-tombstones.ts:83`），墓碑只删远端条目、不删本机数据。
+- 设备身份：`resolveDeviceIdentity`（`src/sync/sync-state.ts:241`，调用点 `src/sync/sync-engine.ts:939`），随快照 manifest 上行，用于历史展示与排查。
+- 会话记账：`computeSessionBookkeeping`（`src/sync/sync-engine.ts:1108`）产出 `sessionUnits`/`deletedSessions` 墓碑（上限 5000，`src/sync/session-tombstones.ts:26`）。**`tracked=false` 的三种情形一律不动既有墓碑**——没推 sessions / 适配器不支持全量枚举 / 本机枚举抛错或为空（`:1113`、`:1120`、`:1123`）：用「读不到」覆盖成「全删了」会一次标错几百条，绝不猜；`pull` 与 `merge` 都按墓碑剔除已删会话（`stripTombstonedUnits`，`src/sync/session-tombstones.ts:83`），墓碑只删远端条目、不删本机数据。
 
 ## 5. 通道能力矩阵
 
 | 能力 | git | webdav | s3 | gist |
 |---|---|---|---|---|
-| 索引条件写 | push 非快进即拒（`src/sync/git/git-transport.ts:341`、`:400`） | ETag → `If-Match`；无索引 → `If-None-Match: *`；**无 ETag 退化无条件写**（`src/sync/webdav/webdav-transport.ts:90-96`） | `if-match` / `if-none-match: *`（`src/sync/s3/s3-transport.ts:61-66`） | **无**（`src/sync/gist/gist-transport.ts:58-62`：端点对任何条件头回 400，issue #110） |
+| 索引条件写 | push 非快进即拒（`src/sync/git/git-transport.ts:341`、`:400`） | ETag → `If-Match`；无索引 → `If-None-Match: *`；**无 ETag 退化无条件写**（`src/sync/webdav/webdav-transport.ts:90-96`） | `if-match` / `if-none-match: *`（`src/sync/s3/s3-transport.ts:61-66`） | **无**（`src/sync/gist/gist-transport.ts:63-70`：端点对任何条件头回 400，issue #110）→ 改用写后复核 + 有界重做，见 §8 |
 | blob 外置（sessions） | 有，与索引同一次 commit（`src/sync/git/git-transport.ts:315-336`） | 有，`blobs/` + `blobs-index.json`（`src/sync/webdav/webdav-transport.ts:63-71`） | 有，`blobs/<sha256>`（`src/sync/s3/s3-transport.ts:53-57`） | **无**（`:22-24`：一次 GET 全量、会截断、文件数上限） |
-| 重定向跟随 | git 自身不管 | 自实现，上限 5（`:110`） | 无 | 自实现，上限 3（`:54`） |
+| 重定向跟随 | git 自身不管 | 自实现，上限 5（`:110`） | 无 | 自实现，上限 3（`:55`） |
 | 失败重试 | 读路径可重试，写路径明确不重试（`src/sync/git/git-transport.ts:727-729`） | 共享 `withSyncRetry` | 同左 | 同左 |
-| 单次载荷上限 | 无显式上限 | 无显式上限 | 无显式上限 | GitHub gist 文件截断 → 回落 `raw_url`（`src/sync/gist/gist-transport.ts:458`） |
+| 单次载荷上限 | 无显式上限 | 无显式上限 | 无显式上限 | GitHub gist 文件截断 → 回落 `raw_url`（`src/sync/gist/gist-transport.ts:568-584`） |
 
-写入顺序（防止「索引指向不存在的 blob」）：webdav / s3 先把 blob 与 blob 索引落远端、**最后**写快照索引（`src/sync/webdav/webdav-transport.ts:493`、`src/sync/s3/s3-transport.ts:289-309`）；git 把索引与 `blobs/` 放进同一次 commit（`src/sync/git/git-transport.ts:315-336`）；gist 只有一次 PATCH，新载荷与合并后的索引一起写（`src/sync/gist/gist-transport.ts:248`）。
+写入顺序（防止「索引指向不存在的 blob」）：webdav / s3 先把 blob 与 blob 索引落远端、**最后**写快照索引（`src/sync/webdav/webdav-transport.ts:408-422`、`src/sync/s3/s3-transport.ts:289-309`）；git 把索引与 `blobs/` 放进同一次 commit（`src/sync/git/git-transport.ts:315-336`）；gist 只有一次 PATCH，新载荷与合并后的索引一起写（`src/sync/gist/gist-transport.ts:284`）。
 
-共享契约在 `src/sync/transport.ts:123`（`list/upload/download/delete/probe`）、`:119`（412 判定）、`:355`（`sectionsEqual`：本地 sections 空 = 加密 ⇒ 必上传）。blob 语义统一在 `src/sync/blob-store.ts:31`（只有 `sessions`）、`:91`（引用缺失即硬失败）、`:116`（GC 保护窗口 10 分钟）。
+共享契约在 `src/sync/transport.ts:123`（`list/upload/download/delete/probe`）、`:119`（412 判定）、`:355`（`sectionsEqual`：本地 sections 空 = 加密 ⇒ 必上传）。blob 语义统一在 `src/sync/blob-store.ts:31`（只有 `sessions`）、`:98-99`（引用缺失即硬失败）、`:117`（GC 保护窗口 10 分钟）。
 
 ## 6. 失败语义
 
 - 条件写失败（412，webdav/s3 的 409 仅在确实带了条件头时）→ `SyncTransportError`，**中止且不覆盖远端**。
 - 读不到远端列表（`remoteAdvancedCheck` 的 `reason`）→ **不拦**，继续 push 并如实告警（`:1219-1227`）；不把「读不到」当「没变」。
-- 远端索引缺失但存在 blob 引用 → 零写入中止（`src/sync/webdav/webdav-transport.ts:380-383`、`src/sync/s3/s3-transport.ts:279-280`）。
+- 远端索引 404 **且远端已有任何历史内容** → 零写入中止（判据 `remoteHasPriorContent`：`src/sync/webdav/webdav-transport.ts:379`、`:538`；`src/sync/s3/s3-transport.ts:279`、`:592`）；与有无 blob 引用无关。
 - 删除/GC 遇到索引 404 → 不写回、不 GC（`src/sync/webdav/webdav-transport.ts:470-471`）。
 - 加密通道无密码 → 不落祖先副本、不写明文（`:2067`）。
 - 自动同步：`runs.register('autosync')` 冲突 → 记 `skipped('conflict')` 且立刻释放 `running`（`src/sync/autosync-scheduler.ts:483-486`）；注释记录了 2026-09 真机 bug（mutation-locked 早退未 `finishRun` → run 永久 running，之后后台同步静默停摆，`:494-496`）。
-- 凭据：同步密码只作为参数透传，存 DSH credentials 专用槽位；保存路径 `src/routes/sync.ts:1155-1167`（清空优先于写入），响应只回 `encryptPasswordConfigured`/`decryptPasswordConfigured` 布尔（`:1174-1184`），client 侧同样只有布尔（`src/client/sync/sync-api.ts:176-198`）。
+- 凭据：同步密码只作为参数透传，存 DSH credentials 专用槽位；保存路径 `src/routes/sync.ts:1174-1183`（清空优先于写入），响应只回 `encryptPasswordConfigured`/`decryptPasswordConfigured` 布尔（`:1186-1195`），client 侧同样只有布尔（`src/client/sync/sync-api.ts:176-198`）。
 
 ## 7. 档案：复制与隔离实例
 
 ### 7.1 复制（`src/profiles/dsh-profile-manager.ts:213`）
 
 1. 先写标记 `.dcm-copy-in-progress.json` 再拷文件（`:226-235`，常量 `src/profiles/dsh-profile-shared.ts:198`）——进程被强杀时半截副本可被列表辨识并物理删除。
-2. 逐顶层条目 `fs.promises.cp`（异步，避免卡死宿主事件循环，`:199`）。
+2. 逐顶层条目 `fs.promises.cp`（异步，避免卡死宿主事件循环，`:241`）。
 3. `includeNodeModules=false` 时同时跳过 `node_modules` 与 `.dsh-module-fallback`（`:239-240`；派生目录只搬会留悬空链接）。
 4. `relinkCopiedTree` 把「指向源档案内部」的 junction 重指向副本自身，**指向源档案之外**的链接原样保留（`:302`）；不做就会出现「删掉源档案，副本缺包」。
 5. 改 `package.json` 的 `name`（`:248`），删标记（`:261`）。
@@ -128,15 +129,15 @@
 
 ### 7.2 隔离实例
 
-- 启动：`DshProfileLauncher`（`src/profiles/dsh-profile-launcher.ts:261`）直启 CLI 入口，`shell:false`，`detached`，日志重定向到文件；30 秒就绪上限（`src/profiles/dsh-profile-shared.ts:154`）。Windows 的 `.cmd` 经 shell 起会吞掉孙进程 stdio（`src/profiles/dsh-profile-launcher.ts:228-236`）。
+- 启动：`DshProfileLauncher`（`src/profiles/dsh-profile-launcher.ts:261`）以 `detached` 起子进程、日志重定向到文件，30 秒就绪上限（`src/profiles/dsh-profile-shared.ts:154`）。**能反解出真入口才 `shell:false`**；反解不出退回 `.cmd`/`.bat` 包装脚本时是 `shell: needsShell`（`:179-190`）——此时孙进程 stdio 会被吞、日志抓不到带 token 的 URL（`:228-236`）。
 - 运行注册表：`<dataDir>/running/<profile>.json` 心跳（`src/profiles/dsh-profile-runtime.ts:9`），20 s 刷新 / 60 s 判死（`:33-35`），**不写认证 token**（`:13`）；只能停别人（`:17`）。
 - 保留限制：`desktop` 是 Electron 独占档案，启动/删除/改名一律以 `managedProfile` 拒绝（`src/profiles/dsh-profile-shared.ts:244`、`src/profiles/dsh-profile-manager.ts:276`、`src/profiles/dsh-profile-launcher.ts:348`）；保留名另见 `src/profiles/dsh-profile-shared.ts:252`。
 
 ## 8. 已知限制
 
-- gist 通道写索引**没有**并发保护（`src/sync/gist/gist-transport.ts:58-62`）：两台机器基于同一基线先后 push，后写者整体覆盖先写者，且不报错。不要在此基础上宣传并发安全。
+- gist 通道**没有条件写**（`src/sync/gist/gist-transport.ts:63-70`，issue #110：PATCH 对任何条件头回 400），改用**写后复核 + 有界重做**：PATCH 之后重新 GET 索引，核对「本次条目在场（非加密快照还要求分区 hash 全等）」且「读前见过的其它条目一个都没少」；任一不成立就重读最新索引、重新合并再写，最多 3 轮（`MAX_INDEX_WRITE_ATTEMPTS`，间隔 200 ms），仍不成立抛 `sync.gist.indexConflict`（`kind:'conflict'`、`code:'index-conflict'`；upload `:263-298`、delete 同源防护 `:385-424`、复核实现 `verifyIndexLanded` `:309`）。**残余窗口仍在**：别人在「我们读索引」与「我们 PATCH」之间写入的条目我们读不到，无条件写发现不了 —— 要并发保护请用 git / webdav / s3。不要在此基础上宣传并发安全。
 - webdav 在服务端不给 ETag 时退化为无条件写（`src/sync/webdav/webdav-transport.ts:92`）。
-- 四个 transport 各自维护 HTTP 客户端（超时、状态分类、错误类），重复度高；重试策略才共享。
+- 四个 transport 各自维护 HTTP 客户端（超时、状态分类、错误类），重复度高；只有重试策略共享（细节易漂移，证据见 `docs/lessons/sync-channel.md`）。
 - 快照 JSON 自身载荷上限 512 MiB（`src/utils/json.ts:24`），超大快照仍会整体进内存。
 - 自动同步的并发保护是宿主进程内单例（`running` 标志），跨进程多开不互斥。
 
@@ -145,7 +146,8 @@
 - `src/sync/sync-engine.test.ts`：引擎主流程、推送/拉取/基线。
 - `tests/sync-merge/baseline-discipline.test.ts`：场景 11 并发改远端被拒且 state 原文不变（`:71`）、11b 读不到列表不拦（`:114`）、12 中途失败整体回滚（`:134`）。
 - `tests/sync-merge/scenarios.test.ts`、`merge-granular.test.ts`、`merge-resolution.test.ts`、`contract.test.ts`、`security.test.ts`、`transport-failures.test.ts`。
-- `src/sync/gist/gist-conditional-write.test.ts`：强/弱 ETag 都不注入 `if-match`（`:81`、`:96`），删除路径同样不带（`:111`）。
+- `src/sync/gist/gist-conditional-write.test.ts`：强/弱 ETag 都不注入 `if-match`，删除路径同样不带（三条用例 `:108`/`:119`/`:130`，共同断言 `assertNoConditionalHeaders` `:100-104`）。
+- `src/sync/gist/gist-overwrite-semantics.test.ts`：写后复核三轮仍被覆盖 ⇒ 抛 `index-conflict`（用例 `:181`，断言 `code` `:198`）；`src/sync/gist/gist-delete-concurrency.test.ts`：删除路径同源防护（用例 `:187`，断言 `:200`）。
 - `src/sync/webdav/webdav-conditional-write.test.ts`、`src/sync/s3/s3-conditional-write.test.ts`：条件写头与 412/409 语义。
 - `src/sync/autosync-scheduler.test.ts`、`src/sync/sync-state.test.ts`、`src/sync/merge.test.ts`、`src/sync/sync-selection.test.ts`、`src/sync/blob-store.test.ts`。
 - 端到端与路由：`tests/e2e-sync-apply.test.ts`（apply-items 路径）、`tests/e2e/plugin-data-migration.test.ts`、`tests/route/sync-rollback-route.test.ts`、`tests/route/sync-download-route.test.ts`、`tests/route/sync-workdir-reset-route.test.ts`、`tests/route/sync-snapshot-delete-route.test.ts`。

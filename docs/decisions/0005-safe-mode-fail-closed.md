@@ -16,14 +16,16 @@
 1. 落盘即跨重启生效；解除判据只有 `resolveSafeMode` 一份，扫描失败一律按 blocked 处理（**fail-closed**）。
 2. 启动侧陈旧标记复位用 `resolveStartupSafeMode`；`GET /recovery/status` 回传 `safeMode.blocked/clearable`。
 3. 解除端点不过 mutation gate，但有未解决 incident 时必拒。
-4. 所有写路径共用同一道门：CLI 与离线救急台都走 `checkWriteGates()`（SAFE MODE → 残留环境锁 → DSH 未运行），
-   判据顺序与文案一致，不各自为政。
+4. 写路径共用同一套判据（SAFE MODE → 残留环境锁 → DSH 未运行），但**不是同一个函数**：CLI 与离线救急台走
+   `checkWriteGates()`；CLI `restore` 走等价组合（`checkSafeModeBlocked` → 取锁 → 锁内 `readRunningInstances`，
+   `src/cli/index.ts:1102-1125`，注释自称同源同序）。判据顺序与文案一致，改门时两处都要动。
 
 ## 后果
 
 - 好：任何写入口（GUI、CLI、救急台）对「能不能写」给出同一个答案。
 - 坏：fail-closed 意味着扫描本身出问题时插件会「看起来坏了」，需要清楚的诊断文案（`safeMode.blocked` 与 `clearable` 分开表达）。
 - 坏：新增写路径时必须记得过这道门 —— 这是一条**容易漏**的规则，所以进了 `AGENTS.md` 的安全不变量。
+- 已知不齐：`restore` 那条等价组合没有复用同一函数，判据可能各自漂移；目前没有测试把两者钉在一起（已知缺口）。
 
 ## 证据
 

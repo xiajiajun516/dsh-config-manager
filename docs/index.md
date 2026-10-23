@@ -2,8 +2,9 @@
 
 本仓库的文档按**读者要解决的问题**分区，不按文件类型。找不到时先看这里，再看 `docs/lessons/README.md`（证据库索引）。
 
-> 维护规则：新增文档必须挂进本页（否则 `scripts/check-doc-paths.mjs` 查不到引用、人会找不到）；文档里的路径与版本声明由
-> `node scripts/check-doc-paths.mjs`、`node scripts/check-doc-versions.mjs` 在 CI 里校验。
+> 维护规则：文档怎么写、写到哪、什么时候不必写 → `docs/maintenance/doc-maintenance.md`。新增文档必须回本页表格加一行
+> （这条靠人工，**没有脚本强制**）；文档里的路径与版本声明由 `node scripts/check-doc-paths.mjs`、
+> `node scripts/check-doc-versions.mjs` 在 CI 里校验。
 
 ---
 
@@ -23,6 +24,7 @@
 | 找某条规则的证据（真机事故、量化数据、复现脚本） | `docs/lessons/`（规则本身在 `AGENTS.md`） |
 | 查开发/测试/发布的具体命令 | `DEVELOPERS.md` |
 | 查 UI 视觉与 token 决策 | `DESIGN.md` |
+| 决定这次改动要不要写文档、写在哪 | `docs/maintenance/doc-maintenance.md` |
 
 ## 2. 当前实现（代码是什么样）
 
@@ -42,6 +44,8 @@
 | `docs/spec/sync-channel-v1.md` | 同步通道的索引/快照/能力矩阵 |
 | `docs/spec/compat-matrix.md` | 跨版本/跨平台兼容矩阵 |
 | `docs/spec/known-gaps.md` | 已知实现缺口台账（**历史证据 + 当前状态**，不是路线图） |
+| `docs/spec/headless-consumption.md` | 无 GUI/脚本化消费本插件产物的契约（CLI 与模型工具面） |
+| `docs/spec/plugin-data-declaration.md` | 插件通过 `dsh.dataDirs` 自述数据目录的声明格式 |
 
 改格式行为必须同步 `docs/spec/` 并重跑 `tests/conformance/`（规则在 `AGENTS.md`）。
 
@@ -60,6 +64,7 @@
 
 - `docs/maintenance/tech-debt.md` — 按 P1/P2/P3 编号的债务清单 + 已修留档；每条带证据/影响/建议/置信度
 - `docs/maintenance/known-limits.md` — 「当前做不到 / 做了会出事」的硬限制
+- `docs/maintenance/doc-maintenance.md` — **文档维护规则**：改动要不要写文档、写哪份、AI 流程、季度人工清单
 
 更新时机：修完一条把状态改为「已修」并写提交/测试名（**不要删行**）；发现新债先加行再决定排期。
 

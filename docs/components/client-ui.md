@@ -7,7 +7,7 @@
 
 - 三层分工：`src/client/**` 是 React 装配壳；`src/ui/**` 是与框架无关的纯逻辑（可单测）；`src/core/**` 是宿主引擎。
 - 规则出处：业务逻辑放 `src/ui/`、React 壳只装配；这条规则的守门方式是代码评审，不是自动守卫。
-- 客户端入口 `src/client/index.ts:120`（`apply(ctx)`）。
+- 客户端入口 `src/client/index.ts:123`（`apply(ctx)`）。
 - 页面枚举 `src/client/run-store.ts:86`：`'home' | 'library' | 'sync' | 'environment'`。
 - 页面分派唯一位置 `src/client/ConfigManagerSection.tsx:464`；`panel` 读自 store `src/client/ConfigManagerSection.tsx:92`。
 - 「市场」不是页面，由 Task 流程承载；Task 的 origin 恒为当前页 `src/client/ConfigManagerSection.tsx:328`。
@@ -36,14 +36,15 @@
 
 ## 3. 页面与状态
 
-### 3.1 加一个页面 = 改四处
+### 3.1 加一个页面 = 改五处
 
 1. `PanelId` 枚举 `src/client/run-store.ts:86`。
 2. `parsePersistedState` 的映射与旧值迁移 `src/client/run-store.ts:1176`。
 3. 迁移用例（样板 `src/client/run-store.test.ts:1063` 起的旧载荷用例）。
-4. `ConfigManagerSection` 的 switch `src/client/ConfigManagerSection.tsx:464`。
+4. 导航条 `NAV_ITEMS` `src/client/ConfigManagerSection.tsx:77-82`（含图标与顺序）。
+5. `ConfigManagerSection` 的 switch `src/client/ConfigManagerSection.tsx:464`。
 
-> 第 4 步不在页落位规则的三条里，但漏改则该页永不渲染。
+> 漏第 4 步 = 页面存在但导航里点不到；漏第 5 步 = 永不渲染。命令面板的跳转项另有一处 `src/ui/commands.ts:93-102`（`go.*`），不改只影响快捷跳转，不影响可达性。
 
 ### 3.2 状态归属
 
@@ -94,6 +95,10 @@
 | ReportView | `src/client/common/ReportView.tsx:233` | 导出/导入报告体，正文全部 redact |
 | Modal | `src/client/common/Modal.tsx:83` | Radix Dialog；根容器 `:42`（Portal 到 body 才拿得到 token） |
 | Icon | `src/client/common/Icon.tsx:103` | lucide 深导入；形变仅 `ExpandChevron` `:177` 与 `CopyStateIcon` `:213` |
+| InfoHint | `src/client/common/InfoHint.tsx:80` | ⓘ 解释气泡；气泡 Portal 到同一 `#dsh-config-manager-root`（弹窗内不受 transform 包含块影响）；有守卫 `info-hint-guard.test.ts` |
+| Skeleton | `src/client/common/Skeleton.tsx:64`（另有 `SkeletonList` `:87`/`SkeletonTable` `:114`/`SkeletonRows` `:143`） | 加载骨架，替代 spinner 撑布局 |
+| ConfirmDialog | `src/client/common/ConfirmDialog.tsx:54` | 二次确认；危险操作走 `kind` 而非 primary |
+| toast | `src/client/common/toast-store.ts:174`（store `:164`，宿主 `ToastViewport.tsx`） | 轻提示；不进 run-store，不进 sessionStorage |
 
 - 形变硬约定：`reducedMotion="user"` `src/client/common/Icon.tsx:160` + `spring={MORPH_SPRING}` `:159`；不得扩大形变范围。
 - 下拉唯一出口 `src/client/common/Select.tsx:2`；现存违规见 §8。
@@ -102,10 +107,10 @@
 ## 5. 样式与 token
 
 - 唯一样式文件 `src/client/config-manager.module.css`；CSS Modules，类名以 `css.xxx` 引用。
-- token 必须定义在 `body`：DSH 的 `--dsw-*` 定义在 body，`var()` 在声明它的元素上替换 ⇒ 挂 `:root` 断链、挂 `.section` 会让 Portal 弹窗失样式。
+- token 必须定义在 `body`：DSH 的 `--dsw-*` 定义在 body，`var()` 只在**声明它的元素**上替换 ⇒ 挂 `:root` 断链。挂 `.section` 看似可行（Modal 的 Portal 根正是 `.section` 本身：`src/client/common/Modal.tsx:42`、`src/client/ConfigManagerSection.tsx:523`），但本插件还有 `.section` 之外的挂载面（聊天节点 `src/client/index.ts:279`、回滚 diff `:331`），它们拿不到 token。
 - 三层单向：组件只写 `--cm-*`；`--dsw-*` 只允许出现在 `--cm-*` 定义行；tint 用 `color-mix(in srgb, var(--cm-*) N%, transparent)`。
 - 守卫（均源码级、跑在 `node --test`）：
-  - `src/client/css-token-guard.test.ts:24` 受约束的 `--dsw-*` 6 条、`:39` 必备 `--cm-*`。
+  - `src/client/css-token-guard.test.ts:24` 受约束的 `--dsw-*`（清单 6 条，`:24-38`；2026-10-17 起 `--cm-info` 接 `--cm-accent`，`--dsw-alias-state-info-primary` 已不在清单）、`:39` 必备 `--cm-*`。**新 token 不登记进清单就不受约束**。
   - token 用例：token-01 `:48`、token-02 `:59`、token-03 `:71`、token-04 `:77`、token-05 `:84`（反自检）。
   - `src/client/css-scale-guard.test.ts:25` 字号、`:26` 圆角、`:27` 行高、`:29` 间距。
   - scale 用例：scale-01 `:93`、scale-02 `:107`、scale-03 `:117`、scale-04 `:123`、scale-05 `:130`、scale-06 `:183`（反自检）、scale-07 `:171`。
@@ -132,20 +137,20 @@
   - `src/client/common/http-usage-guard.test.ts:28`：api 文件清单，禁裸 fetch / 本地 readJson。
   - `src/client/css-token-guard.test.ts`、`src/client/css-scale-guard.test.ts`：样式。
   - `tests/i18n-hardcoded-guard.test.ts`：文案。
-  - `tests/architecture-boundaries.test.ts:62`：分层（对 client 只禁 `node:`）。
+  - `tests/architecture-boundaries.test.ts:64-67`：分层（对 client 只禁 `node:`）。
 - 页面级测试多为布局/文案断言，例 `src/client/recovery/recovery-panel-layout.test.ts`；它们证明不了交互正确性。
 - `src/client/bundle-selfcontained.test.ts` 必须 **build 之后单独跑**（`npm test` 时产物不存在会跳过）。
 - 判定口径：源码级断言证明「写法没漂移」，不证明「运行时行为正确」；交互正确性目前只能人工点。
 
 ## 8. 已知限制（已确认，勿当设计意图）
 
-- `src/client/recovery/RecoveryPanel.tsx` 1946 行、无行数棘轮：单文件承载维护页与约 600 行的会话健康对话框。
-- `src/client/sync/SyncPanel.tsx` 1591 行，有 ≤1600 棘轮 `src/client/sync/SyncSettingsView.test.ts:128`。
+- `src/client/recovery/RecoveryPanel.tsx` 1946 行，已登记全局行数棘轮（`tests/file-size-ratchet.test.ts:28`，只许降不许升）：单文件承载维护页与约 600 行的会话健康对话框。
+- `src/client/sync/SyncPanel.tsx` 1591 行，已登记全局行数棘轮 1591（`tests/file-size-ratchet.test.ts:31`，只许降不许升）。
 - 第二套徽章族 `.kindTag` 仍在 `src/client/config-manager.module.css:4401`，消费点如 `src/client/library/RestorePlanView.tsx:59`；与「已收敛」的说法不一致。
 - 原生 `<select>` 违反 Select 唯一出口：`src/client/recovery/RollbackCard.tsx:767`。
 - inline style 绕过样式守卫：`src/client/market/MarketPanel.tsx:524` 裸用 `--dsw-alias-state-warn-primary`。
 - 同理 `src/client/about/ReleaseNotesDialog.tsx:264` 内联 `padding: '20px 0'` 不在间距档位内。
-- client/ui → core 的**值** import 无自动拦截：`tests/architecture-boundaries.test.ts:62` 对 client 只禁 `node:`。
+- client/ui → core 的**值** import 无自动拦截：`tests/architecture-boundaries.test.ts:64-67` 对 client 只禁 `node:`。
 - 长写盘操作（会话修复/布局归位）只有组件内 busy `src/client/recovery/RecoveryPanel.tsx:671`，未进 run-store，切页会丢进行中视图。
 - 待验证：`src/ui/i18n.ts` 在途修改后 `src/core/engine-locale.test.ts` 的指纹断言是否仍绿（本文未运行测试）。
 

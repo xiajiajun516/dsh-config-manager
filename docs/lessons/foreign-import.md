@@ -12,6 +12,14 @@
 
 教训：**文档里的「已支持」必须能在代码里指到具体分支**；否则它会在审计时以「与实现冲突」的形式暴露，而不是以「未实现」暴露。
 
+**2026-10-23 复核：三处已补齐（本节保留为历史证据，勿再当作现状引用）**
+
+| 如今 | 位置 |
+|---|---|
+| `CLAUDE_CONFIG_DIR` 覆盖生效，命中报码 `source-location-overridden` | 读 env `src/foreign/read-claude-code.ts:46`、判定 `:142-146`（`configDirOverrideOf`）、生效与报码 `:567-573`；真值表 `src/foreign/truth-table.ts:126` |
+| `isSidechain:true` 记录与父对话分离，整类计报 `ignored.isSidechain` | `src/foreign/claude-sessions.ts:368`/`:421-439`/`:530`；用例 `src/foreign/claude-sessions.test.ts:219` |
+| `~/.claude/plugins` 独立读取并逐个报码 | `src/foreign/read-claude-plugins.ts:11-17`（报码 `:35`/`:37`/`:39`） |
+
 ## 2. 「插件目录复制成功」≠「插件能运行」
 
 三条独立证据，任何一条都足以否掉「把 `.claude/plugins/**` 拷进 DSH 插件目录」的做法：

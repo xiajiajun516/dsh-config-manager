@@ -126,9 +126,11 @@ manifest.json
 | 解压后累计字节 `maxTotalBytes` | 500 MiB | `src/utils/zip.ts` 的 `DEFAULT_ZIP_SAFETY_LIMITS.maxTotalBytes` |
 | 压缩数据累计字节 `maxCompressedBytes` | 200 MiB | `src/utils/zip.ts` 的 `DEFAULT_ZIP_SAFETY_LIMITS.maxCompressedBytes` |
 | 单条目解压后 `maxSingleBytes` | 100 MiB | `src/utils/zip.ts` 的 `DEFAULT_ZIP_SAFETY_LIMITS.maxSingleBytes` |
-| 单条目压缩比 `maxRatio` | 200 | `src/utils/zip.ts:40` |
-| JSON 嵌套深度 | 64 | `src/utils/json.ts:7` |
-| JSON 单文档字节 | 64 MiB | `src/utils/json.ts:8` |
+| 单条目压缩比 `maxRatio` | 200 | `src/utils/zip.ts:41` |
+| JSON 嵌套深度 | 64 | `src/utils/json.ts:9` |
+| JSON 单文档字节 | 64 MiB | `src/utils/json.ts:10` |
+| HTTP JSON 请求体 | 4 MiB | `src/routes/kit.ts:120`（超限 `:129` → 400；`POST /execute` 的 plan 也在其中） |
+| HTTP 上传 ZIP | 256 MiB | `src/routes/import.ts:24`，超限 413（`:102-104`） |
 | 市场条目 `config.zip` 字节上限 | 64 MiB（**仅市场通道**，普通导入不受此限） | `src/market/types.ts:30` |
 
 超出限额的后果是**抛错并整体拒绝**，不是部分导入（`src/utils/zip.ts` 的 `assertZipEntryCount` 与 `ZipArchive.readEntry`（超限即抛 `ZipSafetyError`）、`src/utils/zip.ts:231-239`）。

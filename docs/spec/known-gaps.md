@@ -762,7 +762,7 @@
 
 | 项 | 内容 |
 |---|---|
-| 现象 | GitHub 返回**弱 ETag**（`W/"…"`），HTTP 禁止用于 `If-Match` ⇒ gist 的索引写回退化为无条件写；同时 gist 刻意不做内容寻址外置（G-34）。两台设备同时 push 到同一 gist 时，「后写者用自己的旧条目覆盖索引」的风险仍在（git / webdav / s3 已由条件写挡住）。 |
+| 现象 | **端点拒绝一切条件请求头**：`PATCH /gists/{id}` 对任何 `If-Match`/`If-None-Match` 都回 400（与 ETag 强弱无关，issue #110，`src/sync/gist/gist-transport.ts:63-72`）⇒ gist 的索引写只能无条件写，改用**写后复核 + 最多 3 轮重做**（`:263-298`、`verifyIndexLanded` `:309`），仍被覆盖则抛 `sync.gist.indexConflict`；同时 gist 刻意不做内容寻址外置（G-34）。**残余窗口**：别人在「我们读索引」与「我们 PATCH」之间的写入发现不了，两台设备同时 push 仍可能丢条目（git / webdav / s3 已由条件写挡住）。 |
 | 影响 | 丢失的是**索引条目**（快照文件本身仍在 gist 里），该快照从列表消失；gist 不外置 blob，故无 blob 连带损伤。 |
 | 现状 | 属已登记的**能力边界**（spec §7.5），不是遗漏；读不到/被截断时的保守行为见 G-34。 |
 | 验证方式 | `node --test src/sync/gist/*.test.ts`；spec §7.5 能力边界表。 |

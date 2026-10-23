@@ -127,7 +127,7 @@
 
 | 字段 | 语义 |
 |---|---|
-| `mode` / `sections` | 恒 `advanced` + 勾选分区（勾选集合就是同步范围） |
+| `mode` / `sections` | 缺省 `mode='default'` = 全部 portable 且 `defaultIncluded` 的分区（`src/sync/sync-selection.ts:101`、`:134-139`，此时 `sections` 不参与）；只有 `mode='advanced'` 且 `sections` 非空才以勾选集合为范围 |
 | `sessionsLimit` | `sessions` 勾选时只带「最新 N 个」（按会话日志 mtime 倒序；0 = 不带） |
 | `sessionsInclude` | **显式点名的会话单元**；非空时**优先于 `sessionsLimit`**（用户点名的必须赢） |
 | `retention`（远端保留） | 来自 `backup-schedule.json`：远端快照裁剪走 GFS（keepLast/keepMonthly/keepYearly），缺省 = 最近 10 个（与旧硬编码 FIFO 逐字等价） |

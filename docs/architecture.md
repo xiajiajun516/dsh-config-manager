@@ -118,7 +118,8 @@ push 前先比「基线 vs 远端最新」，不一致即零写入返回 conflic
 
 ## 7. 读完之后
 
-- 具体模块行为 → `docs/modules/`（backup-restore / sync / recovery / foreign-market / profiles-instances）
+- 具体模块行为 → `docs/modules/`（backup-restore / sync / recovery）
+- 外部来源迁移（`src/foreign/**`，30+ 来源）**暂无模块文档**：现状证据在 `docs/lessons/foreign-import.md`，设计存档在 `docs/design/2026-10-04-foreign-import-v1.md`；是否补一份 foreign-import 模块文档待负责人决定（判据见 `docs/maintenance/doc-maintenance.md` §3 新建门槛）
 - 客户端与 UI 规范落点 → `docs/components/client-ui.md`；视觉决策 → `DESIGN.md`
 - 为什么要这么做 → `docs/decisions/`
 - 已知债与硬限制 → `docs/maintenance/`
