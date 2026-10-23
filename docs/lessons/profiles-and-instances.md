@@ -30,6 +30,15 @@
 ## 同步导入装插件必须钉备份记录的精确版本
 
 - **同步导入装插件必须钉备份记录的精确版本**（issue #101，2026-10）：`dsh plugin add <裸包名>` 由 pnpm 解析，而 pnpm 会**尊重该 profile 里 `package.json` 已有的 spec** —— 源机写的是 `0.9.3` 这类精确 pin 时，远端已到 `0.9.5` 也照样「安装成功」，事务还会报「已触发更新（npm 最新版）」而版本一字未变。三条边界：① 安装目标只有一个决策点 `pluginInstallTarget(pkg, { version, spec, tarballPath })`（`src/core/plugin-cli.ts`），顺序 tarball → 非 registry spec 原样 → **具体 semver 走 `pkg@version`** → 其余 spec 走 `pkg@spec` → 都没有才裸名（旧备份兼容）；② 门面 `PluginsFacade.install(pkg, target)` 是**哑执行器**，绝不在内部二次推导，日志与实际 argv 必须同一个变量；③ 退出码不算数 —— 装完必须 `readInstalledVersion()` 回读 `node_modules/<pkg>/package.json` 与备份 `entry.version` 比对，不一致要标 warning 并给出可复制的 `dsh plugin --profile <p> add <pkg>@<version>`（精确 pin 的版本从 npm 撤版时只能明确失败，不能静默停旧版）。semver 判据复用 `src/core/validator.ts` 的 `isConcreteVersion()`（不得再添第 N 份 `SEMVER_RE`）。
+## 读插件清单是纯读：对账（reconcileBundles）只属于安装写路径
+
+- **现象（issue #111，2026-10 真机）**：用户把某个插件关掉（从 `dsh.profile.bundles` 移除），此后**只要打开「设置 → 备份与迁移」**，`package.json` 里的 `dsh.profile.bundles` 就被改回全量，被关掉的插件下次启动照常挂载。报告者日志指向 `listInstalledPlugins()` 第一行调 `reconcileBundles(dir)`。
+- **根因**：读路径挂写操作。`src/core/plugin-cli.ts` 的 `listInstalledPlugins()` 曾先 `reconcileBundles()`「顺手把清单对账好」，而对账会 `writeProfileManifest` 写盘；调用方遍布只读入口 —— 备份页列表（`src/adapters/plugins.ts` → `DshPluginsFacade.listInstalled`）、导出预览（`src/core/backup.ts`）、自动快照（`src/core/verify-recovery.ts`）。用户「只是看一眼」= 一次静默写盘 + 行为回退（关掉的插件复活）。
+- **修法**：① `listInstalledPlugins()` 改为**纯读零写入**，清单需要的 `isBundle/inBundles/bundlesOnly` 全部现算（读包内 `cordis.patch.yml` 判定），不再依赖「先对账」这个副作用；② 对账挪到唯一写路径 `DshPluginsFacade.install()` 成功后（导入/恢复/市场安装最终都到这里），封装成 `reconcileBundlesAfterInstall(profileDir): boolean`（失败返回 false、不抛 —— 包已装好，不因对账写失败否掉成功）；③ 救援模式守卫仍留在 `reconcileBundles` 内部（写路径在救援期间同样不得加回）。
+- **回归测试**：`src/core/plugin-cli.fs.test.ts`（读清单前后 `package.json` **逐字节相等**、`bundles` 不变，随后显式调用写路径才变）/ `src/index.facade.test.ts`（`listInstalled` 零写入 + `install` 成功后 bundle 仍进 `bundles`）。
+- **教训**：**任何「为了让后续逻辑好写」而挂在读函数开头的对账/迁移/补写，都会变成用户视角的「它自己改我配置」**；清单字段能现算就现算，写操作只挂在语义上就是写的入口（安装成功、用户点保存）。
+- **顺带发现的既有风险（未修，待单独立项）**：`reconcileBundles` 的「移除」循环只对「加回」那一路跳过 in-box 层；若 in-box 核心层同时写了 `dependencies` 行却不在 profile `node_modules` 里，它可能被移出 `bundles`。
+
 ## pnpm 隔离安装的「同树布局」有三种，推导只能有一处
 
 - **pnpm 隔离安装的「同树布局」有三种，推导只能有一处**（issue #74）：`@deepseek-ai/dsh/package.json` 的候选根反推为 `dirname/../..` 后，先试 hoisted 同级、再试 `dsh/node_modules` 嵌套，**最后**用 `sessionFormatRoots()` 扫最近 `.pnpm` 里的 `@deepseek-ai+dsh-session@*`（前缀末尾的 `@` 必须有，否则 `-projection` 误命中）。三条不得回退：① 多版本共存取与本机 dsh **同版本**者，**版本读不出来或对不上且多候选 → 不猜**（宁可体检跳过，也不谎报格式）；② `session-verify.ts`（复验门的权威版本）与 `dsh-profile-manager` 必须共用这一份实现，**禁止再写第二份布局推导**；③ 解析失败要把**已尝试的路径**写进日志（`resolveSessionFormatVersion(candidates, tried)`）。见 known-pitfalls 同序条目。

@@ -77,8 +77,22 @@
   派生密钥 `aliyun_v4`→date→region→oss→`aliyun_v4_request`）。
 - **回归测试**：`src/sync/s3/sigv4.test.ts`（OSS4 授权头正则 + 断言不含 `', '`、不含空的 `AdditionalHeaders=`）、
   `src/sync/s3/s3-transport.test.ts`（通道层同一断言）。
-- **未做**：本机无阿里云 AK/SK，端到端仍待报告者复测；签名数值只做到「与官方 SDK 算法逐行对齐」，
-  没有官方测试向量可对（阿里云未公开固定向量）。
+- **未做**：本机无阿里云 AK/SK，端到端仍待报告者复测。
+
+## OSS4 规范请求：规范 URI 恒含 bucket、空值查询参数写裸键（issue #109 第二轮，2026-10）
+
+- **现象**：v0.1.80 只改了授权头格式后，报告者在 v0.1.81 复测仍是失败，但错误从 `InvalidArgument / Authorization header value is empty.` 变成
+  `SignatureDoesNotMatch`（`The request signature we calculated does not match the signature you provided.`），**且只在未勾选 path-style 时复现**。
+- **根因一（决定性）**：阿里云 OSS4 的规范 URI 是 `/<bucket>/<object>`，**与 URL 寻址风格无关**（官方 Go SDK `conn.go` 的 `getResourceV4()` 恒拼 `"/"+bucket`）。
+  虚拟主机风格（`https://<bucket>.oss-cn-hangzhou.aliyuncs.com/<prefix>/index.json`）下 `url.pathname` 只有 `/<prefix>/index.json`，
+  缺 bucket ⇒ 规范请求哈希不同 ⇒ 签名不匹配。勾 path-style 时 path 里恰好带 bucket，所以能对上 —— 这就是「只有一种配置能连」的原因。
+- **根因二（次要）**：空值查询参数官方只写**裸键**（`acl`，见 `getSubResource()`），我们写成 `acl=`；键值先 `QueryEscape` 再按键排序。
+- **实证**：把官方 Go 测试的**金标向量**搬成单测（`oss/conn_test.go` 的 `TestAuthV4Header` / `TestAuthV4HeaderWithAdditionalHeaders`，AK=ak/SK=sk/region=cn-hangzhou），
+  两条期望签名 `e21d18da…4afe` / `4a4183c1…212f` **逐字符相同**；向量里还覆盖 `+`/`|` 前缀参数、空值参数与 `AdditionalHeaders=abc;zabc` 形态。
+- **修法**：`sigv4.ts` 的 `SigV4Dialect` 增 `emptyQueryValue: 'equals' | 'bare'`，`SigV4RequestInput` 增可选 `canonicalPath`；
+  `s3-providers.ts` 新增 `canonicalObjectPath(target, key)`（= endpoint 基路径 + `/<bucket>` + 转义后的 key，两种寻址风格同源），
+  `s3-transport.ts` 只在 `dialect.id === 'oss4'` 时传入。AWS 系不传（其规范 URI 就是请求路径）。
+- **判据（别退回）**：**OSSSigV4 的规范 URI 带 bucket 这件事与寻址风格无关**，别用 `url.pathname` 直接当规范路径；空值参数写法随方言走，不能一套通吃。
 
 ## 加密快照也落密文祖先副本（issue #107，2026-10）
 

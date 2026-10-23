@@ -146,7 +146,7 @@
 - **`desktop` 是 Electron 独占保留档案**：启动/删除/改名一律以 `managedProfile` 拒绝；版本只取 `profileContext.installAnchor`。
 - **复制档案**：拷完必须 `relinkCopiedTree`；整树拷贝走 async fs；`includeNodeModules=false` 同时跳过 `node_modules` 与 `.dsh-module-fallback`；失败回滚。
 - **复制档案中断残留 = 标记先行 + 只认自己的标记**（`.dcm-copy-in-progress.json`）；**不得引入「看着像残留就删」的启发式**。
-- **本插件是 bundle 包**：隔离实例挂载必须进 `dsh.profile.bundles`。
+- **本插件是 bundle 包**：隔离实例挂载必须进 `dsh.profile.bundles`；**读路径零写入**，对账只挂安装成功后（issue #111）。
 - **`cordis.patch.yml` 的 `!!js` 方言**：读写只有 `src/utils/patch-yaml.ts` 一份实现，别在别处 `yaml.load`；「存在但解析不了」拒绝覆盖（ENOENT 才是空层）。
 - **pnpm 隔离安装同树布局的推导只有一处**；多候选版本对不上就**不猜**；`session-verify.ts` 与 `dsh-profile-manager` 必须共用。
 - **档案启动子进程必须直启入口文件**（`shell:false`；Electron 用 `ELECTRON_RUN_AS_NODE=1`）：Windows「cmd 包装 + `detached`」会吞掉孙进程 stdio ⇒ 日志恒空、**抓不到带 token 的 URL**；上限 30 秒。→ `docs/lessons/profiles-and-instances.md`
