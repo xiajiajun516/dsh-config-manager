@@ -770,6 +770,16 @@ v3 收敛记录：9.5 / 10 / 10.5 → 11；14 → 13；30 随死类删除；11.5
     ② **点击那一刻就关窗**，把进度交给页面上那颗触发按钮（`Button loading` + 文案换「正在…」）。
     两者都不做 = 操作确实在跑，但屏幕上毫无变化，用户判定「点了没反应」（真机反馈原文）。选 ② 时**必须**
     保证页面不掉：不重载列表、不回骨架，成功与失败分别走 toast（清理磁盘占用即此档）。
+  - **行内动作的 pending 必须落到那一刻的按钮上（UI-25 变体，2026-10-24 产物库实测反馈）**：
+    列表行里的动作（产物库行内「恢复 / 导入 / 拉取 / 下载 / 咨询 / 删除」）没有确认弹窗可挂 busy，
+    所以反馈只能落在**被点的那颗按钮**：① 若它是行内主按钮 → 直接传 `Button loading`（自带 Spinner + disabled
+    + aria-busy，禁再手写）；② 若它藏在「⋯ 更多」里 → 菜单关闭后**把触发器换成 `Spinner` + 该动作的文案**
+    （用户得知道「在等哪一件事」），因为那时按钮已经不在屏上了；③ 同一行的其余入口一律 `disabled`
+    （`MoreMenu` 的 `disabled` prop、按钮的 `disabled`），杜绝连点重复提交；④ pending 是**行粒度**的
+    （`{key, capability}`），由壳层持有 —— 面板与动作组件是兄弟节点，组件内自存 busy 就是一个**读不到**的状态
+    （本次 bug 的成因：`useState(false)` 后 `void busy`）。**收尾必须清 null，成功与失败都要清**，
+    否则行会永远转圈。执行者：`src/client/library/ArtifactRow.tsx` 的 `pending` 与
+    `src/client/library/LibraryActions.tsx` 的 `reportPending`。
   - **尺寸**（2026-09 放大，长内容可读性）：`.dialogCard` = `min(640px, calc(100vw - 48px), 95%)`
     × `min(600px, calc(100vh - 64px), 92%)`；`.dialogWide` = `min(720px, …, 96%)` ×
     `min(620px, …, 92%)`；`.dialogBodyScroll` 限高 460px。旧值 380×480 在「配置更改明细 /

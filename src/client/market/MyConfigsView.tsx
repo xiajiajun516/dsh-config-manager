@@ -697,7 +697,7 @@ export function MyConfigsView({
       onFormField={onFormField}
       onRunUpload={() => { void runUpload() }}
       onCancelUpdate={cancelUpdate}
-      onRelist={(itemId) => { void runRelist(itemId) }}
+      onRelist={runRelist}
       onReset={resetWizard}
     />
   )

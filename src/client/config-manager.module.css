@@ -257,10 +257,17 @@ body {
   white-space: nowrap;
 }
 
-.navTab:hover,
-.navMore:hover {
+.navTab:hover:not(:disabled),
+.navMore:hover:not(:disabled) {
   color: var(--dsw-alias-label-primary);
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 禁用态（产物库行内 ⋯：同一行有动作在跑时它不可点，DESIGN §8.11）——
+   与 .primaryButton:disabled 同一档视觉，避免出现第二套「灰掉」的样子 */
+.navMore:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .navTab:focus-visible,

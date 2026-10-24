@@ -34,6 +34,7 @@ import { CommandPalette } from './common/CommandPalette.tsx'
 import { TaskShell } from './task/TaskShell.tsx'
 import { LibraryPanel } from './library/LibraryPanel.tsx'
 import { LibraryActions } from './library/LibraryActions.tsx'
+import type { ArtifactPendingAction } from './library/ArtifactRow.tsx'
 import type { ArtifactCapability, ArtifactRow } from '../ui/artifact-view.ts'
 import { HomePanel } from './home/HomePanel.tsx'
 import { ExportView } from './export/ExportView.tsx'
@@ -156,6 +157,14 @@ const navLayoutResult = navWidths === null
   const [libraryAction, setLibraryAction] = useState<{ capability: ArtifactCapability; row: ArtifactRow } | null>(null)
   /** 产物列表刷新信号：恢复 / 删除 / 置顶完成后递增，让面板重拉四份清单 */
   const [libraryTick, setLibraryTick] = useState(0)
+  /**
+   * 产物库行内动作的进行中态（DESIGN §8.11「行内动作 pending」）。
+   * 动作实在 LibraryActions（面板的兄弟节点）里跑的，行的读点在 LibraryPanel ⇒
+   * 由动作上报到这里，再作为 prop 传回面板；行内按钮据此转圈/禁用。
+   * 放壳层（而不是面板或动作组件）还有一个好处：`pagePad` 带 key=panel，
+   * 切页会重挂面板，忙态若存面板里会随切页蒸发。
+   */
+  const [libraryPending, setLibraryPending] = useState<ArtifactPendingAction | null>(null)
 
   /**
    * 导入面板当前是否停在「从其它 agent 导入」这一页（t17）。
@@ -491,6 +500,7 @@ const navLayoutResult = navWidths === null
           onOpenExport={() => { openTask('export') }}
           onOpenPublish={() => { openTask('market', { subView: 'myconfigs' }) }}
           refreshTick={libraryTick}
+          pending={libraryPending}
         />
       )
       break
@@ -623,6 +633,7 @@ const navLayoutResult = navWidths === null
           target={libraryAction}
           onDone={() => { setLibraryAction(null) }}
           onChanged={() => { setLibraryTick((n) => n + 1) }}
+          onPendingChange={setLibraryPending}
           onOpenTask={(kind, marketId) => { openTask(kind, marketId === undefined ? undefined : { marketId }) }}
         />
         {activeTask !== null && (

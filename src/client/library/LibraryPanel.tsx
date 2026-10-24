@@ -27,7 +27,7 @@ import { Badge, Button, Card, Empty } from '../common/ui.tsx'
 import { SkeletonRows } from '../common/Skeleton.tsx'
 import { redact } from '../../security/redaction.ts'
 import { InfoHint } from '../common/InfoHint.tsx'
-import { ArtifactRowView } from './ArtifactRow.tsx'
+import { ArtifactRowView, type ArtifactPendingAction } from './ArtifactRow.tsx'
 import css from '../config-manager.module.css'
 
 export interface LibraryPanelProps {
@@ -51,6 +51,13 @@ export interface LibraryPanelProps {
   onOpenPublish: () => void
   /** 外部刷新信号（动作完成 / 恢复 / 删除后递增）→ 重拉四份清单 */
   refreshTick: number
+  /**
+   * 行内动作的进行中态（DESIGN §8.11「行内动作 pending」）。
+   * 由壳层持有：动作实现在 **LibraryActions**（本面板的兄弟节点，见其文件头），
+   * 它跑起来时把「哪一行的哪个动作」上报给壳层，壳层再以本 prop 传回 →
+   * 行内按钮就地转圈/禁用。放壳层还顺带解决了「切页把面板重挂后忙态蒸发」的问题。
+   */
+  pending: ArtifactPendingAction | null
 }
 
 type SourceStatus = 'loading' | 'ready' | 'error'
@@ -63,7 +70,7 @@ interface SourceState<T> {
 
 function initialSource<T>(): SourceState<T> { return { status: 'loading', items: [], error: null } }
 
-export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpenTask, onOpenExport, onOpenPublish, refreshTick }: LibraryPanelProps) {
+export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpenTask, onOpenExport, onOpenPublish, refreshTick, pending }: LibraryPanelProps) {
   const state = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const lib = state.library
 
@@ -263,6 +270,8 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
                 runStore.patch({ library: { expandedKey: lib.expandedKey === row.key ? null : row.key } })
               }}
               onAction={onAction}
+              // 只把**本行**的进行中动作交给行组件：其余行保持可点（一次只挡同一行）
+              pending={pending !== null && pending.key === row.key ? pending.capability : null}
               deviceLabel={row.kind === 'remote-snapshot' ? deviceLabelOf.get(row.ref.remoteId ?? '') : undefined}
             />
           ))}

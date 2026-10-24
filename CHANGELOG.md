@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🔧 变更 · Changed
+
+- **产物库的行内操作现在会自己转圈**：点「恢复 / 导入 / 拉取 / 下载 / 迁移前咨询」或行尾「更多」里的动作后，那颗按钮立刻进入加载态（藏在「更多」里的动作会把「更多」换成该动作名 + 转圈），同一行的其余动作同时变灰；删除确认弹窗在真正删完前也保持加载态，点重复了不会再删一遍。
+  **Artifact rows now show their own progress**: after picking «restore / import / pull / download / migration check» or any action inside the row's «more» menu, the button that was pressed turns into a loading state right away (an action hidden in «more» replaces that trigger with the action's name plus a spinner) while the row's other actions grey out; the delete confirmation stays in a loading state until the delete actually finishes, so a double click can no longer delete twice.
+
 ## [0.1.82] - 2026-10-24
 
 > **本版主题**：**这一版把「同时干两件事」招来的失败整条收掉：同步、市场与恢复不再互相踩脚，出错时会写清到底哪一步失败；阿里云 OSS 改成按官方算法签名，打开备份页也不再偷偷改你的插件开关**

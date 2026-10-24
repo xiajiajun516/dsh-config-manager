@@ -18,7 +18,7 @@ import {
 } from '../../ui/artifact-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Button } from '../common/ui.tsx'
+import { Badge, Button, Spinner } from '../common/ui.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
 import { MoreMenu } from '../common/MoreMenu.tsx'
 import { ArtifactDetail } from './ArtifactDetail.tsx'
@@ -32,6 +32,17 @@ const BADGE_KIND: Record<ArtifactBadge, 'info' | 'ok' | 'warn' | 'error'> = {
   'unreadable': 'error',
 }
 
+/**
+ * 行内动作的**进行中态**：哪一行的哪个动作正在跑。
+ * 生产者 = LibraryActions（动作实现处），持有者 = 壳层，消费者 = LibraryPanel → ArtifactRowView。
+ * 三处共用这一个类型，避免各写一份结构而漂移（此前正是「写了 busy 却没人读」）。
+ */
+export interface ArtifactPendingAction {
+  /** 行的稳定键（ArtifactRow.key） */
+  key: string
+  capability: ArtifactCapability
+}
+
 export interface ArtifactRowViewProps {
   row: ArtifactRow
   t: TranslateNS<'config-manager'>
@@ -41,8 +52,14 @@ export interface ArtifactRowViewProps {
   expanded: boolean
   onToggle: () => void
   onAction: (capability: ArtifactCapability, row: ArtifactRow) => void
-  /** 该行有动作在跑：禁用行内按钮（防重复提交） */
-  busy?: boolean
+  /**
+   * 该行**正在进行中的那个动作**（DESIGN.md §8.11「行内动作 pending」/ UI-25）。
+   * null = 空闲。有值时就地给可见反馈并禁用其余入口（防连点）。
+   *
+   * 为什么不是 boolean：走 ⋯ 菜单的动作在跑时，触发器已被换成「转圈 + 该动作文案」，
+   * 否则用户只看到「更多」位置上冒出个圈，根本不知道跑的是刚点的那条。
+   */
+  pending?: ArtifactCapability | null
   /**
    * cloud-sync 借鉴项 ⑥：该行远端快照的**推送方设备**文案（如「由 <设备名> 推送」）。
    * 只有快照 manifest 真的带 deviceName 时才由调用方给出 —— 缺省 undefined 表示**不渲染**
@@ -52,12 +69,20 @@ export interface ArtifactRowViewProps {
 }
 
 export function ArtifactRowView({
-  row, t, uiT, formatTime, expanded, onToggle, onAction, busy = false, deviceLabel,
+  row, t, uiT, formatTime, expanded, onToggle, onAction, pending = null, deviceLabel,
 }: ArtifactRowViewProps) {
   const detailId = useId()
   const primary = row.capabilities[0]
   const rest = row.capabilities.slice(1)
   const encrypted = row.badges.includes('encrypted')
+  /**
+   * 三态：空闲 / 主操作在跑 / 某个 ⋯ 动作在跑。
+   * 主操作在跑 → 按钮自己 loading（Button 原语给图标），⋯ 整块禁用；
+   * ⋯ 动作在跑 → ⋯ 触发器换成「转圈 + 该动作文案」，主操作禁用。
+   * 两条路的共同点：**同一时刻只允许一个动作**（此前这里完全没有反馈，可以连点）。
+   */
+  const pendingPrimary = primary !== undefined && pending === primary
+  const pendingRest = rest.find((capability) => capability === pending)
   const name = row.title.kind === 'text' ? row.title.value : formatTime(row.title.iso)
   /** 加密徽章的可访问说明（「导入前需解锁」= 安全类文案，必须可见可读，不能只靠颜色） */
   const encryptedHint = t('backupFiles.encryptedHint')
@@ -103,20 +128,27 @@ export function ArtifactRowView({
             <Button
               size="sm"
               variant={primary === 'delete' ? 'danger' : 'primary'}
-              disabled={busy}
+              // 进行中图标由 Button 原语按 loading 自动渲染（DESIGN §14.11：不要手写 Spinner）
+              loading={pendingPrimary}
+              disabled={pending !== null && !pendingPrimary}
               onClick={() => { onAction(primary, row) }}
             >
               {actionLabel(primary, encrypted, uiT)}
             </Button>
           )}
-          {rest.length > 0 && (
+          {rest.length > 0 && (pendingRest === undefined ? (
             <MoreMenu
               items={rest.map((capability) => ({ id: capability, label: actionLabel(capability, encrypted, uiT) }))}
               activeId=""
               onSelect={(id) => { onAction(id as ArtifactCapability, row) }}
               label={t('library.moreActions')}
+              disabled={pending !== null}
             />
-          )}
+          ) : (
+            /* 走 ⋯ 的动作在跑：菜单已收起，把触发器原地换成「转圈 + 该动作文案」——
+               只留一个圈的话，用户看不出跑的是「下载」还是「迁移前咨询」 */
+            <Spinner label={actionLabel(pendingRest, encrypted, uiT)} />
+          ))}
         </div>
       </div>
       {/* **始终挂载**：展开/收回由 data-expanded 驱动 CSS 过渡。

@@ -43,9 +43,15 @@ export interface MoreMenuProps {
   onSelect: (id: string) => void
   /** 按钮与菜单的无障碍名（如「更多页面」） */
   label: string
+  /**
+   * 禁用整个入口（产物库行内动作进行中时，其余动作一律不可点 —— DESIGN §8.11）。
+   * 禁用只拦行为、不换外观：行内的「在忙」提示由调用方另行渲染（那里换的是转圈 + 动作名），
+   * 这里只负责「点不开、键盘也打不开」。
+   */
+  disabled?: boolean
 }
 
-export function MoreMenu({ items, activeId, onSelect, label }: MoreMenuProps) {
+export function MoreMenu({ items, activeId, onSelect, label, disabled = false }: MoreMenuProps) {
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
   const [align, setAlign] = useState<'start' | 'end'>('start')
@@ -64,6 +70,7 @@ export function MoreMenu({ items, activeId, onSelect, label }: MoreMenuProps) {
   }
 
   const openMenu = (): void => {
+    if (disabled) return
     setActive(initialActiveIndex(options, activeId))
     setAlign(menuAlign(rootRef.current))
     setOpen(true)
@@ -75,6 +82,11 @@ export function MoreMenu({ items, activeId, onSelect, label }: MoreMenuProps) {
     onSelect(option.value)
     close(true)
   }
+
+  // 打开期间变为禁用（如同行另一个动作开始跑）：菜单必须收起，否则它悬空在禁用按钮上方
+  useEffect(() => {
+    if (disabled && open) close(false)
+  }, [disabled, open])
 
   // 点击外部关闭：mousedown 比 click 早，且能覆盖右键与拖拽结束
   useEffect(() => {
@@ -101,6 +113,8 @@ export function MoreMenu({ items, activeId, onSelect, label }: MoreMenuProps) {
   }, [open, active])
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    // 禁用态整块不响应键盘（按钮本身已 disabled，这是对「打开中突变为禁用」的兜底）
+    if (disabled) return
     switch (event.key) {
       case 'ArrowDown':
       case 'ArrowUp': {
@@ -164,7 +178,8 @@ export function MoreMenu({ items, activeId, onSelect, label }: MoreMenuProps) {
         aria-controls={open ? menuId : undefined}
         aria-label={label}
         title={label}
-        onClick={() => { if (open) close(false); else openMenu() }}
+        disabled={disabled}
+        onClick={() => { if (disabled) return; if (open) close(false); else openMenu() }}
         onKeyDown={onKeyDown}
       >
         {label}

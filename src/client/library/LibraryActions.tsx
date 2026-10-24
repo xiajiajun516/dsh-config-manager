@@ -30,6 +30,7 @@ import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { toast } from '../common/toast-store.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
+import type { ArtifactPendingAction } from './ArtifactRow.tsx'
 import { RestorePlanView } from './RestorePlanView.tsx'
 import { BackupInspectView } from './BackupInspectView.tsx'
 import { redact } from '../../security/redaction.ts'
@@ -76,6 +77,14 @@ export interface LibraryActionsProps {
    * 经壳层转成 Task 入参；其余入口不带（= 打开市场列表）。
    */
   onOpenTask: (kind: 'import' | 'market', marketId?: string) => void
+  /**
+   * 把「哪一行的哪个动作正在跑」上报给壳层（DESIGN §8.11「行内动作 pending」）。
+   *
+   * 为什么必须上报：本组件是产物库面板的**兄弟节点**（见文件头），行的读点在面板里。
+   * 此前这里是 `const [busy, setBusy] = useState(false)` + `void busy` —— 写了一个
+   * **读不到**的状态：行内按钮既不转圈也不禁用，同一个动作可以连点。
+   */
+  onPendingChange: (pending: ArtifactPendingAction | null) => void
 }
 
 /** 恢复计划弹窗的本地态（dry-run 结果 + 咨询报告） */
@@ -100,7 +109,7 @@ interface PullState {
   error: string | null
 }
 
-export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onOpenTask }: LibraryActionsProps) {
+export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onOpenTask, onPendingChange }: LibraryActionsProps) {
   const mounted = useRef(true)
   useEffect(() => () => { mounted.current = false }, [])
 
@@ -122,10 +131,14 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
   const [confirmRestore, setConfirmRestore] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<ArtifactRow | null>(null)
   const [inspect, setInspect] = useState<{ name: string; loading: boolean; error: string | null; result: BackupInspectResult | null } | null>(null)
-  // 忙态总开关：下载 / 置顶 / 咨询是**无弹窗**的即时动作，正在跑时不该再接受第二次点击。
-  // 它的读点在 LibraryPanel（行内按钮 disabled）——这里只负责写。
-  const [busy, setBusy] = useState(false)
-  void busy
+  /**
+   * 行内 pending 的统一出口：本组件不再自存忙态（自存就是上一个 bug 的成因），
+   * 一律写进壳层，由壳层传回面板（`ArtifactRowView.pending`）。
+   * 传 null = 这一行的动作收尾（成功或失败都要清，否则行会永远转圈）。
+   */
+  const reportPending = useCallback((key: string, capability: ArtifactCapability | null): void => {
+    onPendingChange(capability === null ? null : { key, capability })
+  }, [onPendingChange])
 
   /** 每次触发动作递增：快速连点时作废在途的 dry-run 响应（防晚到结果覆盖新选择）。 */
   const generation = useRef(0)
@@ -137,6 +150,8 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
     switch (capability) {
       case 'restore': {
         setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: true, plan: null, changeSummary: undefined, planFingerprint: undefined, error: null })
+        // dry-run 是网络往返：弹窗里已有骨架，行上也标出来（两份反馈不冲突，各自回答一个问题）
+        reportPending(row.key, 'restore')
         // v3（用户要求）：恢复计划弹窗**不再内嵌「迁移前咨询」卡** —— 那个弹窗的职责是
         // 「这次恢复会改什么 + 确认执行」；咨询报告有自己的入口（产物库行 ⋯ 菜单 →「迁移前咨询」），
         // 想看报告的人可以单独打开。顺带省掉一次重量级请求（consult 要读快照内容做评分）。
@@ -144,10 +159,12 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           (res) => {
             if (!mounted.current || gen !== generation.current) return
             setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: res.plan ?? null, changeSummary: res.changeSummary, planFingerprint: res.planFingerprint, error: null })
+            reportPending(row.key, null)
           },
           (err) => {
             if (!mounted.current || gen !== generation.current) return
             setPlan({ snapshotId: row.ref.snapshotId ?? '', loading: false, plan: null, changeSummary: undefined, planFingerprint: undefined, error: err instanceof Error ? err.message : String(err) })
+            reportPending(row.key, null)
           },
         )
         return
@@ -249,13 +266,15 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
           )
           return
         }
-        setBusy(true)
+        // 本机备份的下载**没有弹窗**（Blob + <a download>，立即），所以反馈只能落在行上：
+        // 点击那颗按钮立刻转圈，直到浏览器收下这份文件（此前这里 setBusy 后无人读 ⇒ 零反馈）。
+        reportPending(row.key, 'download')
         // 用户要求：直接走浏览器下载（落到「下载」目录），不弹系统保存对话框 ——
         // 备份文件是**可再生成的产物**，多一步选路径没有收益。
         // api.download 缺省即此语义（Blob + <a download>）；不要传 saveDialog: true。
         void api.download(row.ref.path ?? '')
           .catch((err) => { toast.error(redactErrorText(err)) })
-          .finally(() => { if (mounted.current) { setBusy(false); onDone() } })
+          .finally(() => { if (mounted.current) { reportPending(row.key, null); onDone() } })
         return
       }
       case 'delete': {
@@ -263,29 +282,35 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
         return
       }
       case 'consult': {
-        setBusy(true)
-        // 四种可迁移源共用一个入口（§6.8 ②）：咨询永远进 ⋯，不按来源造分叉
-        // 远端快照的咨询要带通道地址（宿主 consult 的远端分支需要 repoUrl/url，只给 id 会 400）
-        const input = await consultInput(row, syncApi)
-        if (!mounted.current) return
-        // 报告要**有自己的弹窗**：此前只 setConsult 而不开弹窗，而 ConsultCard 挂在
-        // 「恢复计划预览」弹窗内部（由 plan !== null 控制）⇒ 点 ⋯ 完全没反应。
+        // 四种可迁移源共用一个入口（§6.8 ②）：咨询永远进 ⋯，不按来源造分叉。
+        //
+        // **先开弹窗、再去取参数**（顺序不能反）：consultInput 对远端快照要走 /sync/status
+        // 拿通道地址（网络），旧顺序是「先 await 再开弹窗」⇒ 那一段页面完全没反应；
+        // 而且它会**抛错**（无通道地址时 'sync channel address is unavailable'），
+        // 先 await 的写法会让异常直接逃出 dispatch，弹窗永远不出现。
         setConsult({ row, loading: true, error: null, report: null })
-        api.consult(input).then(
-          (rep) => { if (mounted.current) setConsult({ row, loading: false, error: null, report: rep }) },
-          (err) => {
+        reportPending(row.key, 'consult')
+        void (async () => {
+          try {
+            const input = await consultInput(row, syncApi)
+            if (!mounted.current) return
+            const rep = await api.consult(input)
+            if (mounted.current) setConsult({ row, loading: false, error: null, report: rep })
+          } catch (err) {
             const message = redactErrorText(err)
             if (mounted.current) setConsult({ row, loading: false, error: message, report: null })
             // Toast 与弹窗内错误都给：弹窗可能被立刻关掉，Toast 保证反馈不丢
             toast.error(message)
-          },
-        ).finally(() => { if (mounted.current) { setBusy(false); onDone() } })
+          } finally {
+            if (mounted.current) { reportPending(row.key, null); onDone() }
+          }
+        })()
         return
       }
       default:
         onDone()
     }
-  }, [api, t, onDone, onChanged, onOpenTask])
+  }, [api, t, onDone, onChanged, onOpenTask, reportPending])
 
   /**
    * 供 LibraryPanel 调用：把点击转进来。用 ref 暴露，避免面板每次渲染重建回调。
@@ -325,38 +350,42 @@ export function LibraryActions({ api, syncApi, t, target, onDone, onChanged, onO
     ).finally(() => { runStoreStopWatch() })
   }
 
-  const doDelete = (): void => {
+  /**
+   * 执行删除。**返回 Promise 是有意的**（DESIGN UI-25 ①档）：ConfirmDialog 只在 onConfirm
+   * 返回 Promise 时自管 busy —— 这样弹窗在删除期间转圈、确认键与取消/遮罩/Esc 全禁用，
+   * 用户不会在还在删的时候点第二下（此前的 void 版本：弹窗一动不动，可重复提交）。
+   * 远端行还多一步 remotePayload（要通道地址），更要挡住重复点击。
+   * 失败时**关窗 + toast**：错误文案在弹窗里既没人读，也会被下一次打开冲掉。
+   */
+  const doDelete = async (): Promise<void> => {
     const row = confirmDelete
     if (row === null) return
     const done = (): void => { if (mounted.current) { setConfirmDelete(null); onChanged(); onDone() } }
-    if (row.kind === 'snapshot') {
-      api.deleteSnapshot(row.ref.snapshotId ?? '').then(
-        () => { toast.ok(t('snapshots.deleted')); done() },
-        (err) => { if (mounted.current) setConfirmDelete(null); toast.error(snapshotDeleteErrorText(err, t)) },
-      )
-      return
-    }
-    if (row.kind === 'backup-file') {
-      api.deleteBackupFile(fileNameOf(row)).then(
-        () => { toast.ok(t('backupFiles.deleted', { name: fileNameOf(row) })); done() },
-        (err) => { if (mounted.current) setConfirmDelete(null); toast.error(redactErrorText(err)) },
-      )
-      return
-    }
-    if (row.kind === 'remote-snapshot') {
-      // 删的是**远端那一份**（只动远端，见宿主 SyncEngine.deleteSnapshot）：需要通道 + 地址，
-      // 与拉取/咨询同源取（prepareSync 只认 repoUrl/url）。
-      void (async () => {
-        try {
-          const payload = await remotePayload(syncApi)
-          await syncApi.deleteSnapshot({ ...payload, snapshotId: row.ref.remoteId ?? '' })
-          toast.ok(t('library.remoteDeleted'))
-          done()
-        } catch (err) {
-          if (mounted.current) setConfirmDelete(null)
-          toast.error(redactErrorText(err))
-        }
-      })()
+    try {
+      if (row.kind === 'snapshot') {
+        await api.deleteSnapshot(row.ref.snapshotId ?? '')
+        toast.ok(t('snapshots.deleted'))
+        done()
+        return
+      }
+      if (row.kind === 'backup-file') {
+        await api.deleteBackupFile(fileNameOf(row))
+        toast.ok(t('backupFiles.deleted', { name: fileNameOf(row) }))
+        done()
+        return
+      }
+      if (row.kind === 'remote-snapshot') {
+        // 删的是**远端那一份**（只动远端，见宿主 SyncEngine.deleteSnapshot）：需要通道 + 地址，
+        // 与拉取/咨询同源取（prepareSync 只认 repoUrl/url）。
+        const payload = await remotePayload(syncApi)
+        await syncApi.deleteSnapshot({ ...payload, snapshotId: row.ref.remoteId ?? '' })
+        toast.ok(t('library.remoteDeleted'))
+        done()
+      }
+    } catch (err) {
+      if (mounted.current) setConfirmDelete(null)
+      // 快照删除有两条可映射的宿主码（被事故恢复引用 / 清单读不出），其余走脱敏原文
+      toast.error(row.kind === 'snapshot' ? snapshotDeleteErrorText(err, t) : redactErrorText(err))
     }
   }
 

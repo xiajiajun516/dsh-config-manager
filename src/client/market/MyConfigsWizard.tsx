@@ -4,6 +4,7 @@
  * 本文件只渲染 + 上抛回调：向导全量状态是受控 prop，所有状态迁移与请求（校验/上传/更新/重试收录）
  * 都在 MyConfigsView.tsx；PR 链接来源优先级复用 ../../ui/my-configs-view.ts 的 myPrLinkSource。
  */
+import { useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
@@ -37,8 +38,12 @@ export interface MyConfigsWizardProps {
   onRunUpload: () => void
   /** 取消更新：向导回到「一键上传」初始态（弹窗保持打开） */
   onCancelUpdate: () => void
-  /** 结果卡「重新收录」 */
-  onRelist: (itemId: string) => void
+  /**
+   * 结果卡「重新收录」。**返回 Promise**：重试是一次网络往返 + 重新轮询，
+   * 本组件要等它结束才放开按钮（此前返回 void，调用方只能 `void onRelist(...)`，
+   * 点击后按钮毫无变化，用户会以为没点上而连点）。
+   */
+  onRelist: (itemId: string) => Promise<void>
   /** 重选 zip：update 轻量重置（保留预填表单）/ upload 完全重置 */
   onReset: () => void
 }
@@ -47,6 +52,18 @@ export function MyConfigsWizard({
   wizard, listingStatus, t, fileInput, autoBadges,
   onClose, onPickFile, onFormField, onRunUpload, onCancelUpdate, onRelist, onReset,
 }: MyConfigsWizardProps) {
+  /**
+   * 「重新收录」的在途态。是**一次点击的瞬时 UI 态**，不是向导的领域状态
+   * （向导状态仍全部归容器），所以留在本组件里；等 Promise 落定即放开。
+   */
+  const [relisting, setRelisting] = useState(false)
+  const runRelist = (itemId: string): void => {
+    if (relisting) return
+    setRelisting(true)
+    // 失败文案由容器统一走常驻 Toast（runRelist 内部已 catch），这里只管收尾
+    void onRelist(itemId).finally(() => { setRelisting(false) })
+  }
+
   /** PR 链接（优先实时任务状态；收录完成后由轮询补上，或直接取同步结果） */
   const prLink = ((): { url: string; label: string } | null => {
     // 来源优先级（实时任务状态 → 向导结果）在 src/ui/my-configs-view.ts 的 myPrLinkSource
@@ -233,7 +250,8 @@ export function MyConfigsWizard({
               {listingStatus !== null && listingStatus.listing === 'failed' ? (
                 <>
                   <Badge kind="error">{t('myconfigs.result.listingFailed')}</Badge>
-                  <Button variant="danger" onClick={() => { void onRelist(wizard.result!.itemId) }}>
+                  {/* 转圈图标由 Button 原语按 loading 自动渲染（DESIGN §14.11） */}
+                  <Button variant="danger" loading={relisting} onClick={() => { runRelist(wizard.result!.itemId) }}>
                     {t('myconfigs.result.relist')}
                   </Button>
                 </>
