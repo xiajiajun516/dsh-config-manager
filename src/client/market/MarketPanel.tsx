@@ -25,7 +25,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { ImportResult, ItemResolution } from '../../core/types.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, Empty, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -477,11 +477,11 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       <Card>
         <span className={css.groupLabel}>{t('config.title')}</span>
         <div className={css.actionRow}>
-          <Button variant="primary" disabled={state.refreshing || state.importing || state.browsing} onClick={() => { void runRefresh() }}>
-            {state.refreshing ? <Spinner label={t('config.refreshing')} /> : t('config.refresh')}
+          <Button variant="primary" loading={state.refreshing} disabled={state.importing || state.browsing} onClick={() => { void runRefresh() }}>
+            {t('config.refresh')}
           </Button>
-          <Button disabled={state.browsing || state.refreshing || state.importing} onClick={() => { void runBrowse() }}>
-            {state.browsing ? <Spinner label={t('list.loading')} /> : t('list.browse')}
+          <Button loading={state.browsing} disabled={state.refreshing || state.importing} onClick={() => { void runBrowse() }}>
+            {t('list.browse')}
           </Button>
         </div>
       </Card>
@@ -712,8 +712,8 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
                       </div>
                     </div>
                     {/* 下载按钮：任一下载进行中全部禁用（防止并发下载详情串扰 + 防重复点击） */}
-                    <Button disabled={state.downloadingId !== null} onClick={() => { openDownload(it) }}>
-                      {state.downloadingId === it.id ? <Spinner label={t('common.loading')} /> : t('list.download')}
+                    <Button loading={state.downloadingId === it.id} disabled={state.downloadingId !== null} onClick={() => { openDownload(it) }}>
+                      {t('list.download')}
                     </Button>
                   </div>
                 )

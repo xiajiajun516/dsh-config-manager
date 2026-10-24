@@ -20,7 +20,7 @@ import type { ChangeEvent } from 'react'
 
 import type { TranslateNS } from '../client-types.ts'
 import { redact } from '../../security/redaction.ts'
-import { Button, Spinner } from '../common/ui.tsx'
+import { Button } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Select } from '../common/Select.tsx'
 import { toast } from '../common/toast-store.ts'
@@ -159,8 +159,8 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
             onOpen={() => { if (!loaded && !loading) void load() }}
             onChange={pick}
           />
-          <Button size="sm" disabled={busy || loading} onClick={() => { void load() }}>
-            {loading ? <Spinner label={t('repoPicker.refreshing')} /> : t('repoPicker.refresh')}
+          <Button size="sm" loading={loading} disabled={busy} onClick={() => { void load() }}>
+            {t('repoPicker.refresh')}
           </Button>
         </div>
         {/* 空态 / 失败说明留在原地（不进 ⓘ）：用户正卡在这里，说明必须看得见 */}
@@ -200,8 +200,8 @@ export function SyncRepositoryPicker({ open, api, t, repoUrl, busy, onPick }: Sy
           {nameHint !== null && <span className={css.formError}>{nameHint}</span>}
           {createError !== null && <span className={css.formError}>{redact(createError)}</span>}
           <div className={css.actionRowTop}>
-            <Button variant="primary" size="sm" disabled={busy || creating} onClick={() => { void submitCreate() }}>
-              {creating ? <Spinner label={t('repoPicker.creating')} /> : t('repoPicker.createSubmit')}
+            <Button variant="primary" size="sm" loading={creating} disabled={busy} onClick={() => { void submitCreate() }}>
+              {t('repoPicker.createSubmit')}
             </Button>
             <Button size="sm" disabled={creating} onClick={() => { setCreateOpen(false) }}>
               {t('repoPicker.createCancel')}

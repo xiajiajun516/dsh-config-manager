@@ -29,7 +29,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi, ForeignImportResponse } from '../api.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import { foreignLossyRows, foreignPathsText, foreignSourcesViewModel, type ForeignSourceRow } from '../../ui/foreign-view.ts'
-import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
@@ -310,8 +310,8 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
         <Button onClick={handleRefresh} disabled={importing}>
           {t('foreign.action.refresh')}
         </Button>
-        <Button variant="primary" onClick={() => { void runImport() }} disabled={importing || selected === null}>
-          {importing ? <Spinner label={t('foreign.importing')} /> : t('foreign.action.import')}
+        <Button variant="primary" loading={importing} onClick={() => { void runImport() }} disabled={selected === null}>
+          {t('foreign.action.import')}
         </Button>
       </div>
     </div>

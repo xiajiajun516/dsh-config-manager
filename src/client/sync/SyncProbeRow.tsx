@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncApi, SyncProbeResult, SyncPushPayload } from './sync-api.ts'
-import { Banner, Button, Spinner } from '../common/ui.tsx'
+import { Banner, Button } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { projectProbeResult } from './probe-view.ts'
 import { toast } from '../common/toast-store.ts'
@@ -104,8 +104,8 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
   const view = result === null ? null : projectProbeResult(result, t('probe.unsupported'))
 
   const button = (
-    <Button onClick={() => { void run() }} disabled={busy || loading || !remoteReady}>
-      {loading ? <Spinner label={t('probe.running')} /> : t('probe.run')}
+    <Button onClick={() => { void run() }} loading={loading} disabled={busy || !remoteReady}>
+      {t('probe.run')}
     </Button>
   )
   const hintNode = <InfoHint text={t('probe.hint')} label={t('common.infoHint')} />

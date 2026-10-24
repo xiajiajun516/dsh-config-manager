@@ -10,7 +10,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import { redact } from '../../security/redaction.ts'
 import { myPrLinkSource } from '../../ui/my-configs-view.ts'
-import { Badge, Banner, Button, Field, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Field } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { myConfigFormValid } from './my-configs-view.ts'
@@ -126,10 +126,10 @@ export function MyConfigsWizard({
         <div className={css.actionRow}>
           <Button
             variant="primary"
-            disabled={wizard.validating}
+            loading={wizard.validating}
             onClick={onReset}
           >
-            {wizard.validating ? <Spinner label={t('myconfigs.upload.validating')} /> : t('myconfigs.upload.reselect')}
+            {t('myconfigs.upload.reselect')}
           </Button>
         </div>
         {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
@@ -214,15 +214,14 @@ export function MyConfigsWizard({
         <div className={css.actionRow}>
           <Button
             variant="primary"
+            loading={wizard.running}
             disabled={
-              wizard.validated !== true || wizard.running || wizard.zipPath === null
+              wizard.validated !== true || wizard.zipPath === null
               || !myConfigFormValid(wizard.formErrors)
             }
             onClick={() => { onRunUpload() }}
           >
-            {wizard.running
-              ? <Spinner label={wizard.mode === 'update' ? t('myconfigs.update.running') : t('myconfigs.upload.running')} />
-              : (wizard.mode === 'update' ? t('myconfigs.update.run') : t('myconfigs.upload.run'))}
+            {wizard.mode === 'update' ? t('myconfigs.update.run') : t('myconfigs.upload.run')}
           </Button>
           {wizard.mode === 'update' && (
             <Button disabled={wizard.running || wizard.validating} onClick={onCancelUpdate}>{t('common.cancel')}</Button>

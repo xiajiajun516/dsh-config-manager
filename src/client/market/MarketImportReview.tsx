@@ -37,7 +37,7 @@ import {
   type MarketPickerFilter, type MarketReviewStep,
 } from '../../ui/market-import.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Segmented, Spinner, Stepper } from '../common/ui.tsx'
+import { Badge, Banner, Button, Segmented, Stepper } from '../common/ui.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { ConflictList } from '../import/ConflictList.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
@@ -337,10 +337,11 @@ export function MarketImportReview({
             <Button onClick={() => { go(prevMarketStep(active, hasConflicts)) }}>{t('review.back')}</Button>
             <Button
               variant="primary"
-              disabled={importing || !summary.canImport}
+              loading={importing}
+              disabled={!summary.canImport}
               onClick={() => { void runImport() }}
             >
-              {importing ? <Spinner label={t('common.loading')} /> : t('detail.import')}
+              {t('detail.import')}
             </Button>
           </div>
         </>

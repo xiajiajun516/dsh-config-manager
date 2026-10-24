@@ -45,7 +45,7 @@ import {
   relTime,
   type OverviewMetricKey,
 } from '../../ui/overview-view.ts'
-import { Badge, Banner, Button, Card, Spinner, StatusDot, Stepper } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, StatusDot, Stepper } from '../common/ui.tsx'
 import { SkeletonRows } from '../common/Skeleton.tsx'
 import { BackupIcon, ExportIcon, ImportIcon, SyncIcon } from '../common/Icon.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
@@ -372,11 +372,11 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       <div className={css.toolRow}>
         <Button
           variant="primary"
-          disabled={backupRunning}
+          loading={backupRunning}
           title={t('overview.quick.backupTitle')}
           onClick={() => { void runBackupNow() }}
         >
-          {backupRunning ? <Spinner /> : <BackupIcon size={14} />} {t('overview.quick.backup')}
+          {backupRunning ? null : <BackupIcon size={14} />} {t('overview.quick.backup')}
         </Button>
         <Button title={t('overview.quick.exportTitle')} onClick={openExportTask}>
           <ExportIcon size={14} /> {t('nav.export')} ZIP

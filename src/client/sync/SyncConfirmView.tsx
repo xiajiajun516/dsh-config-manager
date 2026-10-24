@@ -13,7 +13,7 @@ import type { ReactNode } from 'react'
 import { useEffect } from 'react'
 
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { toast } from '../common/toast-store.ts'
 import { ConsultCard } from '../consult/ConsultCard.tsx'
@@ -494,10 +494,10 @@ function ApplyResultCard({ result, busy, t, onRollback }: ApplyResultCardProps):
       {result.restoreId !== '' && (
         <Button
           variant="danger"
-          disabled={busy}
+          loading={busy}
           onClick={() => { void onRollback(result.restoreId) }}
         >
-          {busy ? <Spinner label={t('syncflow.rollingBack')} /> : t('syncflow.rollback')}
+          {t('syncflow.rollback')}
         </Button>
       )}
     </>

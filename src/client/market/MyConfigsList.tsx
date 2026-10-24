@@ -7,7 +7,7 @@ import type { TranslateNS } from '../client-types.ts'
 import type { MyItemEntry } from './my-configs-api.ts'
 import type { ItemStatusBadge, MyInstallState, MyItemView, MyItemsSummary } from './my-configs-view.ts'
 import { redact } from '../../security/redaction.ts'
-import { Badge, Banner, Button, Card, Empty, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Empty } from '../common/ui.tsx'
 import { SkeletonList } from '../common/Skeleton.tsx'
 import css from '../config-manager.module.css'
 
@@ -65,8 +65,8 @@ export function MyConfigsList({
             })}
           </Badge>
         )}
-        <Button disabled={listLoading} onClick={() => { onRefresh() }}>
-          {listLoading ? <Spinner label={t('myconfigs.list.loading')} /> : t('myconfigs.list.refresh')}
+        <Button loading={listLoading} onClick={() => { onRefresh() }}>
+          {t('myconfigs.list.refresh')}
         </Button>
       </div>
       {myItemsError !== null && <Banner kind="error">{redact(myItemsError)}</Banner>}

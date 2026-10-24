@@ -13,7 +13,7 @@ import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import {
-  Banner, Button, Card, Checkbox, Empty, SectionTitle, Spinner,
+  Banner, Button, Card, Checkbox, Empty, SectionTitle,
 } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -133,10 +133,10 @@ export function SelectStep(props: {
         )}
         <Button
           variant="primary"
-          disabled={uploading}
+          loading={uploading}
           onClick={() => { fileInput.current?.click() }}
         >
-          {uploading ? <Spinner label={t('import.analyzing')} /> : t(browseLabelKey(selectModel.selectedName !== null))}
+          {t(browseLabelKey(selectModel.selectedName !== null))}
         </Button>
       </div>
       {error !== null && <ErrorBanner error={error} onRetry={onReset} t={apiT} />}
@@ -228,10 +228,11 @@ export function DecryptArchiveStep(props: {
         <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
         <Button
           variant="primary"
-          disabled={password === '' || unlocking}
+          loading={unlocking}
+          disabled={password === ''}
           onClick={onUnlock}
         >
-          {unlocking ? <Spinner label={t('import.decryptArchive.unlocking')} /> : t('import.decryptArchive.unlock')}
+          {t('import.decryptArchive.unlock')}
         </Button>
       </div>
     </div>

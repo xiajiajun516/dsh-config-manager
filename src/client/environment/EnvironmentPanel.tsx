@@ -35,7 +35,7 @@ import { runStore, toProfilesStoreSlice, type ProfilesStoreSlice } from '../run-
 import { RecoveryPanel } from '../recovery/RecoveryPanel.tsx'
 import type { RecoveryPort } from '../../ui/types.ts'
 import type { IncidentApi } from '../recovery/incident-api.ts'
-import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Segmented, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle, Segmented } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Skeleton, SkeletonList } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -465,9 +465,10 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
               variant="ghost"
               disabled={state.stopping !== null || record.current}
               title={record.current ? t('profiles.stop.currentHint') : record.owned ? t('profiles.stop.hint') : t('profiles.stop.hintExternal')}
+              loading={state.stopping === record.name}
               onClick={() => { patch({ stopTargetName: record.name, error: null }) }}
             >
-              {state.stopping === record.name ? <Spinner label={t('profiles.stopping')} /> : t('profiles.stop')}
+              {t('profiles.stop')}
             </Button>
           </div>
         ))}
@@ -561,8 +562,8 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
               label: `${template.id} — ${template.bundles.join(' + ')}`,
             }))}
           />
-          <Button variant="primary" disabled={state.creating || state.createName.trim() === '' || createIssue !== null} onClick={doCreate}>
-            {state.creating ? <Spinner label={t('profiles.create.creating')} /> : t('profiles.create.action')}
+          <Button variant="primary" loading={state.creating} disabled={state.createName.trim() === '' || createIssue !== null} onClick={doCreate}>
+            {t('profiles.create.action')}
           </Button>
         </div>
         {createIssue !== null && <span className={css.formError}>{nameIssueText(t, state.createName.trim(), createIssue)}</span>}
@@ -661,10 +662,11 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                         <Button
                           size="sm"
                           title={runningRecord.owned ? t('profiles.stop.hint') : t('profiles.stop.hintExternal')}
+                          loading={state.stopping === profile.name}
                           disabled={state.stopping !== null}
                           onClick={() => { patch({ stopTargetName: runningRecord.name, error: null }) }}
                         >
-                          {state.stopping === profile.name ? <Spinner label={t('profiles.stopping')} /> : t('profiles.stop')}
+                          {t('profiles.stop')}
                         </Button>
                       )}
                       {caps.launchOrStop && rowAction === 'launch' && (
@@ -672,10 +674,11 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           size="sm"
                           variant="primary"
                           title={canLaunchProfile(profile) ? t('profiles.launch.hint') : launchBlockReason(profile) === 'managed' ? t('profiles.launch.managed', { name: profile.name }) : t('profiles.launch.notWeb', { name: profile.name })}
+                          loading={state.launching === profile.name}
                           disabled={state.launching !== null || state.stopping !== null}
                           onClick={() => { doLaunch(profile) }}
                         >
-                          {state.launching === profile.name ? <Spinner label={t('profiles.launching')} /> : t('profiles.launch')}
+                          {t('profiles.launch')}
                         </Button>
                       )}
                       {caps.duplicate && (

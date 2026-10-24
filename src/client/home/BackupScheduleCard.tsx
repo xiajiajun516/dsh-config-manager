@@ -34,7 +34,7 @@ import { describeSkipReason } from '../sync/history-model.ts'
 import { runStore } from '../run-store.ts'
 import type { ConfigManagerApi } from '../api.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Banner, Button, Card, Checkbox, Spinner, StatusDot } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Checkbox, StatusDot } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -221,14 +221,15 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
         <Button
           variant="primary"
           size="sm"
-          disabled={busy || !dirty}
+          loading={saving}
+          disabled={running || !dirty}
           onClick={save}
           title={dirty ? undefined : t('backupSchedule.saved')}
         >
-          {saving ? <Spinner /> : t('backupSchedule.save')}
+          {t('backupSchedule.save')}
         </Button>
-        <Button size="sm" disabled={busy || !(saved?.enabled ?? false)} onClick={runNow}>
-          {running ? <Spinner /> : t('backupSchedule.runNow')}
+        <Button size="sm" loading={running} disabled={saving || !(saved?.enabled ?? false)} onClick={runNow}>
+          {t('backupSchedule.runNow')}
         </Button>
       </div>
 

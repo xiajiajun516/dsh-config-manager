@@ -37,7 +37,7 @@ import type { TranslateNS } from '../client-types.ts'
 import { resolveFailedSections } from '../api.ts'
 import type { ConfigManagerApi, ExportPreviewResponse } from '../api.ts'
 import { runStore } from '../run-store.ts'
-import { Banner, Button, Card, Checkbox, Spinner } from '../common/ui.tsx'
+import { Banner, Button, Card, Checkbox } from '../common/ui.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
 import { SectionComposition } from '../common/SectionComposition.tsx'
 import { sectionLabel, sectionLabeler } from '../common/section-labels.ts'
@@ -376,13 +376,14 @@ export function ExportView({ api, t }: ExportViewProps) {
             且**「开始导出」在前、「选择要导出的内容」在后**（主操作在左，选择内容在它右边）。 */}
         <Button
           variant="primary"
-          disabled={running || passwordInvalid || fileNameInvalid || nothingSelected}
+          loading={running}
+          disabled={passwordInvalid || fileNameInvalid || nothingSelected}
           onClick={() => { void runExport() }}
         >
-          {running ? <Spinner /> : t('export.run')}
+          {t('export.run')}
         </Button>
-        <Button size="sm" disabled={running} title={t('picker.title')} onClick={openPicker}>
-          {invLoading ? <Spinner /> : <PreviewIcon size={13} />} {t('picker.title')}
+        <Button size="sm" loading={invLoading} disabled={running} title={t('picker.title')} onClick={openPicker}>
+          {invLoading ? null : <PreviewIcon size={13} />} {t('picker.title')}
         </Button>
         {/* 工具栏「模式提示」属「机制怎么工作 + 省事提示」（MOVE 类）：收进 ⓘ，
             不再常驻占首屏一行（默认导出推荐分区 + 去哪里调整勾选）。 */}

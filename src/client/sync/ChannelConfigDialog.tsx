@@ -7,7 +7,7 @@
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
-import { Badge, Banner, Button, Checkbox, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Checkbox } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { Select } from '../common/Select.tsx'
@@ -444,10 +444,11 @@ export function ChannelConfigDialog({ open, onClose, api, t, uiT, form, cloudIss
       <div className={css.actionRow}>
         <Button
           variant="primary"
-          disabled={busy || savingConfig || !remoteReady}
+          loading={savingConfig}
+          disabled={busy || !remoteReady}
           onClick={() => { onSave() }}
         >
-          {savingConfig ? <Spinner label={t('config.saving')} /> : t('config.save')}
+          {t('config.save')}
         </Button>
         <InfoHint text={t('config.saveHint')} label={t('common.infoHint')} />
       </div>

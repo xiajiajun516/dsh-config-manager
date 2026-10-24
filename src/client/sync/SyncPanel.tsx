@@ -44,7 +44,7 @@ import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Select } from '../common/Select.tsx'
@@ -1312,13 +1312,12 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               </label>
               <span className={css.pickerAction}>
                 <Button
-                  disabled={busy || cs.loadingSnapshots === true}
+                  loading={cs.loadingSnapshots === true}
+                  disabled={busy}
                   onClick={() => { void loadSnapshots(undefined, channel, true) }}
                   title={t('syncflow.refreshSnapshots')}
                 >
-                  {cs.loadingSnapshots === true
-                    ? <Spinner label={t('syncflow.refreshingSnapshots')} />
-                    : <><RefreshIcon size={14} /> {t('syncflow.refreshSnapshots')}</>}
+                  {cs.loadingSnapshots === true ? null : <RefreshIcon size={14} />} {t('syncflow.refreshSnapshots')}
                 </Button>
               </span>
             </div>
@@ -1489,10 +1488,10 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               </Button>
               <Button
                 variant="primary"
-                disabled={state.busy === 'push'}
+                loading={state.busy === 'push'}
                 onClick={() => { void runPush() }}
               >
-                {state.busy === 'push' ? <Spinner label={t('syncflow.pushing')} /> : t('syncflow.pushConfirm')}
+                {t('syncflow.pushConfirm')}
               </Button>
             </Modal.Footer>
           </Modal>

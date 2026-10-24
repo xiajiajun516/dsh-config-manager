@@ -36,6 +36,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 - **产物库的行内操作现在会自己转圈**：点「恢复 / 导入 / 拉取 / 下载 / 迁移前咨询」或行尾「更多」里的动作后，那颗按钮立刻进入加载态（藏在「更多」里的动作会把「更多」换成该动作名 + 转圈），同一行的其余动作同时变灰；删除确认弹窗在真正删完前也保持加载态，点重复了不会再删一遍。
   **Artifact rows now show their own progress**: after picking «restore / import / pull / download / migration check» or any action inside the row's «more» menu, the button that was pressed turns into a loading state right away (an action hidden in «more» replaces that trigger with the action's name plus a spinner) while the row's other actions grey out; the delete confirmation stays in a loading state until the delete actually finishes, so a double click can no longer delete twice.
+- **按钮加载时不再把文案吞掉**：备份、导出、上架/上传、刷新快照、同步推送、市场下载等按钮在加载中保留按钮名并同时转圈（以前个别按钮忙起来只剩一个圈，看不出点的是哪个动作），读屏软件也能听到「正忙」。
+  **Buttons keep their label while loading**: backup, export, upload/listing, snapshot refresh, push and market download no longer lose their text while busy — the button name stays next to the spinner, and screen readers now hear the busy state.
 - **刷新迁移历史不再把清单打回骨架**：「刷新」按钮自己转圈，已加载的记录与筛选结果留在原地；刷新失败也只弹一条提示，旧列表不消失。
   **Refreshing the migration history no longer blanks the list**: the «Refresh» button spins in place and the loaded records and filters stay on screen; a failed refresh only shows a toast instead of wiping the list.
 
