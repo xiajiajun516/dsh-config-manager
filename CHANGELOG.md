@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.83] - 2026-10-24
+
+> **本版主题**：**这一版专治「点了之后没反应」——产物库的行内动作、迁移历史的刷新，以及全站按钮忙起来的时候都会立刻告诉你正在做什么，而且不再把按钮名换成孤零零一个圈**
+>
+> **Theme**: **This release is about visible progress — artifact-row actions, history refresh and buttons across the app now show right away that they are working, and they keep their label instead of collapsing into a lone spinner**
+
 ### 🔧 变更 · Changed
 
 - **产物库的行内操作现在会自己转圈**：点「恢复 / 导入 / 拉取 / 下载 / 迁移前咨询」或行尾「更多」里的动作后，那颗按钮立刻进入加载态（藏在「更多」里的动作会把「更多」换成该动作名 + 转圈），同一行的其余动作同时变灰；删除确认弹窗在真正删完前也保持加载态，点重复了不会再删一遍。
