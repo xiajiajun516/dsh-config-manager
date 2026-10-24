@@ -17,8 +17,19 @@
  *   resolveDshHome()       -> homeDir             (@deepseek-ai/dsh-home-paths)
  *
  * Security posture (mirrors the verified @linxin666/dsh-ssh@0.1.12 routes):
- *  - every route carries the loopback-only + same-origin trust fence
- *    (isLoopbackRequest); LAN-exposed deployments never serve these endpoints;
+ *  - the trust fence is installed once, in the kit: every route is built by
+ *    `endpoint()` and registered through `registerRoutes()`, which wraps it with
+ *    the loopback-only + same-origin check (`isLoopbackRequest`; anything not
+ *    loopback → 403), the per-route method allowlist (→ 405) and a top-level
+ *    try/catch (→ writeRouteError, never the webserver's empty-body 400). No
+ *    route hand-rolls any of it, and a route that did not come from the kit
+ *    makes registration throw — the plugin fails to start instead of silently
+ *    dropping a fence;
+ *  - that fence, not the DSH session cookie, is the real auth boundary for
+ *    `/api/dsh-config-manager/*` (AGENTS.md §3): the cookie rejection only
+ *    applies to `kind:'prefix'` routes on `/api`, so exposing the server through
+ *    a proxy or tunnel means adding authentication at the registration point —
+ *    remote/LAN and CSRF are already blocked, authentication is not implied;
  *  - uploads/exported ZIPs are staged under $DSH_HOME/dsh-config-manager/{tmp,exports}
  *    and every `path`/`zipPath` reference is confined to those roots;
  *  - the encryption password is in-memory only: used to derive the AES-256-GCM
