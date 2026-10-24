@@ -282,6 +282,44 @@ test('R-08 F5 幽灵会话：全部 blob 齐全 → 无幽灵', async () => {
   });
 });
 
+test('R-09 home 尚不存在 + 祖先含目录链接 → 合法恢复不被误判越界', async (t) => {
+  await withTmp(async (tmp) => {
+    // 复现 macOS（/var → /private/var）与 GitHub Windows runner（8.3 短名 / junction）：
+    // home 自身不存在，但它的祖先目录是个链接 ⇒ 未解析的 home 文本与已解析的父目录基准不同。
+    const realDir = path.join(tmp, 'real');
+    await fs.mkdir(realDir, { recursive: true });
+    const linkDir = path.join(tmp, 'link');
+    try {
+      await fs.symlink(realDir, linkDir, process.platform === 'win32' ? 'junction' : 'dir');
+    } catch {
+      t.skip('本机不允许创建目录链接（Windows 需开发者模式或管理员权限）');
+      return;
+    }
+    const homeDir = path.join(linkDir, 'home');
+    const snapshotDir = path.join(tmp, 'snapshots', 'snap-m2-1');
+    await fs.mkdir(path.join(snapshotDir, 'blobs'), { recursive: true });
+    await fs.writeFile(path.join(snapshotDir, 'blobs', 'sess-s1'), 'SESSION S1\n', 'utf8');
+    const snapshot = makeSnapshot({
+      beforePlugins: [],
+      hostFileBackups: [],
+      entries: [{
+        kind: 'file', adapter: 'sessions', ref: 'proj-a/s1/session.jsonl.zstd',
+        before: { contentHash: 'h1' }, existed: true, copiedTo: 'blobs/sess-s1', snapshotId: 'snap-m2-1',
+      }],
+    });
+    await fs.writeFile(path.join(snapshotDir, 'snapshot.json'), JSON.stringify(snapshot, null, 2), 'utf8');
+
+    const report = await restore({ snapshotDir, homeDir, profile: 'web' });
+
+    assert.equal(
+      await fs.readFile(path.join(homeDir, 'sessions', 'proj-a', 's1', 'session.jsonl.zstd'), 'utf8'),
+      'SESSION S1\n',
+      'home 不存在且祖先含链接时，恢复仍应写入（不得误判 restore.pathEscape）',
+    );
+    assert.deepEqual(report.ghostSessions, []);
+  });
+});
+
 test('R-05 listSnapshots：按 createdAt 倒序 + 损坏目录跳过 + 缺失目录空列表', async () => {
   await withTmp(async (tmp) => {
     const snapshotsDir = path.join(tmp, 'snapshots');

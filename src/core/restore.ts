@@ -303,7 +303,6 @@ function isRealInside(root: string, child: string): boolean {
  */
 function createTargetSafetyChecker(homeDir: string): (absTarget: string) => string | null {
   const homeResolved = path.resolve(homeDir);
-  const rootReal = realpathOrNull(homeResolved) ?? homeResolved;
   const ancestorCache = new Map<string, string>();
 
   /** 父目录的真实落点：向上找第一个存在的祖先，再把不存在的剩余段拼回去 */
@@ -324,6 +323,14 @@ function createTargetSafetyChecker(homeDir: string): (absTarget: string) => stri
       cur = up;
     }
   };
+
+  /**
+   * home 自身也可能**尚不存在**（全新机器 / 首次恢复）：同样走「最近存在祖先 + 剩余段」投影，
+   * 而不是把未解析的字符串当基准。否则 rootReal 停在未解析坐标（macOS `/var → /private/var`、
+   * Windows 8.3 短名 / junction），与已解析的 parentReal 基准不同 ⇒ 合法恢复被误判
+   * `parent-escape`（R-07/R-08 在 macOS 与 GitHub Windows runner 上实测复现）。
+   */
+  const rootReal = projectedParentReal(homeResolved) ?? homeResolved;
 
   return (absTarget: string): string | null => {
     try {

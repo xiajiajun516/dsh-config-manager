@@ -101,6 +101,7 @@
 - **救援点（guard）**不占自动点 20/50 预算、用户不可删，但有自己的两道上限（每会话 20 → 全局 50，超出淘汰最旧）：**不得**写成「无上限」。
 - **宿主服务与方法抽取**：抽出方法必须 bind 回服务对象；「查看」进右侧栏需 `sidebarRightTabs.register` + 正文位 `sidebar.right.pane.tab`（key = 实现 id）各注册一次，服务惰取、补试幂等、形态不符不注册。
 - **接管聊天用户消息后正文不得自绘**：必须 `renderFactorySlot('conversation.chat.user.content', …)` 委托宿主 + 自绘气泡当 `options.fallback`；**回滚点开关关闭时不得接管 user cell**。
+- **目标侧真实路径围栏两侧必须同一坐标系**：home 可能尚不存在（新机器/首次恢复）⇒ 也走「最近存在祖先 + 剩余段」投影，不得拿未解析字符串当基准；否则 macOS `/var→/private/var`、Windows 8.3/junction 会把合法恢复判 `parent-escape`（单 Linux CI 抓不到，`tests/core/restore.test.ts` R-09 用目录链接复现）。
 
 ## 8 改会话 / 导入导出 / 外部来源
 > 证据：`docs/lessons/sessions-import-export.md`、`docs/lessons/sessions-repair-diagnostics.md`、`docs/lessons/foreign-import.md`。

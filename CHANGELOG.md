@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **恢复不再把「目标目录还不存在」误判成路径越界**：当 `$DSH_HOME` 尚未创建、而它所在的路径里带符号链接 / junction（macOS 的 `/var`、Windows 的 8.3 短名）时，恢复计划会把本来合法的目标判成越界、直接一个字节都不写（错误信息「路径越界」）。现在 home 侧也按「最近存在的祖先目录 + 剩余段」解析真实路径，两侧比较回到同一坐标系。
+  **Restore no longer calls a not-yet-created home an out-of-bounds path**: when `$DSH_HOME` does not exist yet and its path passes through a symlink or junction (macOS `/var`, Windows 8.3 short names), the restore plan rejected legitimate targets as path escapes and wrote nothing. The home side is now resolved the same way (nearest existing ancestor plus the remaining segments), so both sides compare in one coordinate system.
+
 ## [0.1.83] - 2026-10-24
 
 > **本版主题**：**这一版专治「点了之后没反应」——产物库的行内动作、迁移历史的刷新，以及全站按钮忙起来的时候都会立刻告诉你正在做什么，而且不再把按钮名换成孤零零一个圈**

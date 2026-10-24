@@ -961,3 +961,40 @@ X-10/T10-2/T11-1..2/X-12a..c，全部按**最终文件内容/字节**断言）�
 ⑤ 连续回退的第二刀依赖第一次回退留下的**救援点**（生产缺省会留；显式 `guardPolicy:'off'` 时没有）。
 
 
+
+
+## home 尚不存在时，目标侧真实路径围栏会误判 `parent-escape`（2026-10-24，3-OS CI 暴露）
+
+**现象**：把 `main` 推到 GitHub（tag 发布只跑 publish job，main 才跑三系统矩阵）后，
+`windows-latest` 与 `macos-latest` 的 Test 步骤各挂 2 条，`ubuntu-latest` 全绿：
+
+```
+✖ R-07 F5 幽灵会话：恢复后校验快照会话 vs 磁盘实际文件，报告失效归档（混合场景）
+  Error: 路径越界: sessions/proj-a/s1/session.jsonl.zstd
+    at assertPlanTargetsSafe (src/core/restore.ts:359:13)
+```
+
+两条用例（`tests/core/restore.test.ts` 的 R-07 / R-08）构造 fixture 时**只建快照目录、不建 `home`**
+（没有 `seedCurrent`），即 `$DSH_HOME` 不存在；本机 `D:\Projects\...` 的临时目录没有链接，所以在本地全绿。
+
+**根因**（`src/core/restore.ts` 的 `createTargetSafetyChecker`）：两侧基准不在同一坐标系。
+- 目标侧：`projectedParentReal(dirname(target))` 会**向上找到第一个存在的祖先再 realpath**，把不存在的剩余段拼回去
+  ⇒ 基准是「已解析的真实路径」。
+- home 侧：`rootReal = realpathOrNull(homeDir) ?? homeDir` —— home 不存在时 realpath 失败，
+  fallback 用的是**未解析的文本路径**。
+- 于是 `isRealInside(rootReal, parentReal)` 比较「未解析」vs「已解析」：macOS `/var → /private/var`、
+  Windows runner 上的 8.3 短名 / junction 下必然不等 ⇒ `parent-escape` ⇒ `planRestore` 抛
+  `restore.pathEscape`，恢复**一个字节都不写**（这是设计上的 fail-closed，不是绕过）。
+
+**修法**：home 侧走同一个投影 —— `const rootReal = projectedParentReal(homeResolved) ?? homeResolved;`
+（把 `projectedParentReal` 提到 `rootReal` 之前定义）。语义不变：目标仍必须在 **home 的真实落点**之内，
+只是「home 还不存在」时不再拿未解析字符串当基准。
+
+**回归**：`tests/core/restore.test.ts` 新增 **R-09**——home 不存在、其祖先是一个目录链接
+（Windows 用 `fs.symlink(..., 'junction')`，POSIX 用 `'dir'`）。反证做过：把该行改回
+`realpathOrNull(homeResolved) ?? homeResolved` 后 R-09 立刻复现同一条 `路径越界` 报错，恢复修复后 15/15 通过。
+
+**教训**：① 只要拿两个路径做「谁在谁之内」的判定，两侧必须**都由同一条解析规则**产出；② 防御层 fallback
+到未解析字符串时，等于把「解析不了」静默降级成「必然不等」；③ 单 OS 的 CI 抓不到这类差异，
+矩阵里 windows/macos 的 Test 步骤不是凑数。
+
