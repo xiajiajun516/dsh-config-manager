@@ -42,6 +42,12 @@ interface PanelState {
   filter: HistoryFilter
   /** 导出中的格式（瞬态；结果反馈走全局 Toast，不再占页内一行灰字） */
   exporting: 'json' | 'markdown' | null
+  /**
+   * 「刷新」专用进行中态：**列表已经在了**，此时不该把它打回骨架
+   * （DESIGN UI-25 ②：页面必须不掉 —— 内容闪一下骨架会被读成「我刚筛好的东西没了」）。
+   * 首次加载仍走 status='loading' 的骨架分支。
+   */
+  refreshing: boolean
 }
 
 export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
@@ -51,6 +57,7 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     result: null,
     filter: { query: '' },
     exporting: null,
+    refreshing: false,
   })
   const mounted = useRef(true)
   useEffect(() => {
@@ -58,13 +65,27 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
     return () => { mounted.current = false }
   }, [])
 
-  const load = async (): Promise<void> => {
-    setState((s) => ({ ...s, status: 'loading', error: null }))
+  /**
+   * 读列表。`quiet` = 页面上已有列表时的「刷新」：
+   * 不复位 status（否则整页回骨架、已筛好的清单在眼前消失），只点亮按钮自己的 loading；
+   * 失败也不清列表，改为 toast —— 旧数据仍在屏上，比空白页有用。
+   */
+  const load = async (quiet = false): Promise<void> => {
+    if (quiet) setState((s) => ({ ...s, refreshing: true, error: null }))
+    else setState((s) => ({ ...s, status: 'loading', error: null }))
     try {
       const result = await historyApi.list()
-      if (mounted.current) setState((s) => ({ ...s, status: 'ready', result }))
+      if (mounted.current) setState((s) => ({ ...s, status: 'ready', refreshing: false, result }))
     } catch (error) {
-      if (mounted.current) setState((s) => ({ ...s, status: 'error', error: error instanceof Error ? error.message : String(error) }))
+      const message = error instanceof Error ? error.message : String(error)
+      if (mounted.current) {
+        if (quiet) {
+          setState((s) => ({ ...s, refreshing: false }))
+          toast.error(`${t('history.refreshError')}: ${redact(message)}`)
+        } else {
+          setState((s) => ({ ...s, status: 'error', refreshing: false, error: message }))
+        }
+      }
     }
   }
   useEffect(() => { void load() }, [historyApi]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -182,7 +203,13 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
             value={state.filter.query}
             onChange={(e) => setFilter({ query: e.target.value })}
           />
-          <Button onClick={() => void load()}>{t('history.refresh')}</Button>
+          <Button
+            onClick={() => void load(true)}
+            loading={state.refreshing}
+            disabled={state.refreshing}
+          >
+            {t('history.refresh')}
+          </Button>
           <Button
             onClick={() => void handleExport('json')}
             disabled={state.exporting !== null || summary.total === 0}

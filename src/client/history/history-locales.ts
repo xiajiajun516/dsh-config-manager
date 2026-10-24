@@ -42,6 +42,7 @@ type CommonKey =
   | 'history.table.summary'
   | 'history.updatedAt'
   | 'history.refresh'
+  | 'history.refreshError'
   /** ⓘ 说明按钮的可访问名（与主字典 / market / sync / recovery 同口径，见 info-hint-guard t6-4） */
   | 'common.infoHint';
 
@@ -83,6 +84,7 @@ export const zh = {
   'history.table.summary': '摘要',
   'history.updatedAt': '更新于',
   'history.refresh': '刷新',
+  'history.refreshError': '刷新失败',
   'history.kind.import': '导入',
   'history.kind.restore': '快照恢复',
   'history.kind.rollback': '回滚',
@@ -141,6 +143,7 @@ export const en = {
   'history.table.summary': 'Summary',
   'history.updatedAt': 'Updated',
   'history.refresh': 'Refresh',
+  'history.refreshError': 'Refresh failed',
   'history.kind.import': 'Import',
   'history.kind.restore': 'Snapshot restore',
   'history.kind.rollback': 'Rollback',
