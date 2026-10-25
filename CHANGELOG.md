@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.84] - 2026-10-25
+
+> **本版主题**：**这一版只治两处「你什么都没做、它却动了」——自动同步不再每分钟空推一次把远端堆满快照，恢复也不再因为目标目录还没创建就判成路径越界**
+>
+> **Theme**: **Two false alarms fixed — auto-sync no longer pushes an empty snapshot every minute, and restore no longer treats a not-yet-created home as a path escape**
+
 ### 🐛 修复 · Fixed
 
 - **自动同步只在配置真的变了的时候才推送**：插件的同步/备份计划里会记录「上次运行时间 / 上次结果」这类执行记录，以前它们也被算进「本地有没有改动」，于是你什么都没改，同步页的「最近活动」也每分钟冒出一条「自动同步 push (git) 成功」，远端仓库跟着堆满内容几乎相同的快照。现在执行记录不参与比对、也不会随快照上传，只有真的改了配置（加 skill、装/删插件、改设置）才会推一次。

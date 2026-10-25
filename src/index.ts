@@ -17,19 +17,8 @@
  *   resolveDshHome()       -> homeDir             (@deepseek-ai/dsh-home-paths)
  *
  * Security posture (mirrors the verified @linxin666/dsh-ssh@0.1.12 routes):
- *  - the trust fence is installed once, in the kit: every route is built by
- *    `endpoint()` and registered through `registerRoutes()`, which wraps it with
- *    the loopback-only + same-origin check (`isLoopbackRequest`; anything not
- *    loopback → 403), the per-route method allowlist (→ 405) and a top-level
- *    try/catch (→ writeRouteError, never the webserver's empty-body 400). No
- *    route hand-rolls any of it, and a route that did not come from the kit
- *    makes registration throw — the plugin fails to start instead of silently
- *    dropping a fence;
- *  - that fence, not the DSH session cookie, is the real auth boundary for
- *    `/api/dsh-config-manager/*` (AGENTS.md §3): the cookie rejection only
- *    applies to `kind:'prefix'` routes on `/api`, so exposing the server through
- *    a proxy or tunnel means adding authentication at the registration point —
- *    remote/LAN and CSRF are already blocked, authentication is not implied;
+ *  - the trust fence is installed once in the kit (loopback/same-origin → 403, method
+ *    allowlist → 405); it — not the DSH cookie — is the auth boundary: DEVELOPERS.md §认证边界;
  *  - uploads/exported ZIPs are staged under $DSH_HOME/dsh-config-manager/{tmp,exports}
  *    and every `path`/`zipPath` reference is confined to those roots;
  *  - the encryption password is in-memory only: used to derive the AES-256-GCM
@@ -191,7 +180,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.1.83'
+export const PLUGIN_VERSION = '0.1.84'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
