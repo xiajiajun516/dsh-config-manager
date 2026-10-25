@@ -82,6 +82,7 @@
 - **分区放行逐分区、不是布尔**：`syncSectionCatalog` 由注册表派生；放行只看构造期 `optInSections`；自动同步与 model-tools 只传 `'auto'` 档（sessions 绝不悄悄上下行）。
 - **索引条件写**：远端改过即中止、绝不覆盖别人；**gist 例外 = 不做条件头**（PATCH 回 400），改写后复核、冲突报 `index-conflict`。
 - **快照不进机器专属路径**（导出剥 store/cache、写回保留本机）；**S3 授权头逐字序列化**；**祖先副本只落密文**。
+- **「本地有改动」与导出载荷必须同一份字节**：`hasLocalChanges` 比的是 `hashSection(export())` ⇒ 子类在比对里剔掉的易变字段（调度配置的运行态）必须同时从**载荷**剔除，否则分区 hash 每轮都变、每次远端轮询都真推一次（issue #127）；身份字节只有 `file-collection.ts` 的 `comparableContent()` 一处。
 - **会话管理五条**：远端保留接 GFS（刚 push 恒保留）；重定基贯通（`sourceHome`，缺则不猜）；`sessionsInclude` 优先于 `sessionsLimit`；blob 仓缺 blob 硬失败、加密快照永不外置；墓碑不删本机数据。
 
 ## 7 改备份 / 恢复 / 回滚点

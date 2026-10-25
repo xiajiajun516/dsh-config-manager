@@ -243,3 +243,41 @@ incident 行 = `autosync-push / 需要人工处理`，而 `transactions/active/*
 - `src/market/market.test.ts` 新增「reader：并发读取同一个工作副本 → git 调用不重叠」（3 个并发 `readIndex`，
   `maxActive=1`）；`src/market/git-file-writer.test.ts` 新增「并发写入同一个工作副本 → git 调用不重叠」并把旧
   「已存在工作副本 → pull --ff-only」用例改成「显式 fetch + merge、断言全程不出现 `pull`、不读 `FETCH_HEAD`」。
+
+## 自动同步「每分钟都推一次」：运行态混进分区 hash（issue #127，2026-10-25 真机）
+
+**规则判据（已回写 `AGENTS.md` §6）**：`hasLocalChanges` 比的是 `hashSection(export())` ⇒ 子类在比对里
+剔除的易变字段必须**同时**从导出载荷剔除；身份字节只有 `file-collection.ts` 的 `comparableContent()` 一处。
+
+**现场**：同步页「最近活动」每 ~60s 一条「自动同步 push (git) 成功」，用户什么都没改；
+`~/.dsh/dsh-config-manager/sync/sync-history.json` 共 200 条，2026-10-25 当天 43 条（41 条 success/push，
+每条不同 `pushedSnapshotId`），间隔 56–76s；工作副本 `sync/work` 的 `git log` 640 条
+（325「sync: add snapshot」+315「sync: delete snapshot」）。
+
+**60s 本身是设计行为**：`src/sync/autosync-scheduler.ts` 的 `scheduleRemoteTimers()` 按 `remoteCheckMs`
+（缺省 60000）触发 `trigger(channel, "remote-poll")` —— 那是**远端探测**节奏，不是推送节奏；
+`runOnceInternal()` 只有在 `detectRemoteNew || detectLocalChange` 时才进 Phase A/C。真问题在 `detectLocalChange`。
+
+**根因（快照 diff 实证，非推断）**：`SyncEngine.hasLocalChanges()` → `defaultDetectLocalChange()` 对每个
+portable 分区 `export()` 后与 `sync-state.sections` 基线比 `hashSection()`；文件类分区的 `hashSection`
+（`src/sync/sync-state.ts:128`）按 `relativePath + 分隔符 + sha256(f.data)` 聚合 ⇒ **导出载荷的原始字节**
+直接进哈希。而 `self` 分区白名单里的 `sync/sync-autosync.json`、`sync/backup-schedule.json` 由调度器
+在每轮收尾 `writeFinalConfig()` 改写 `lastRunAt/lastRunStatus/lastRunMessage/lastRunHistoryId/consecutiveFailures`；
+`SelfAdapter.comparableContent()` 只把这批字段从**导入比对**里剔掉（issue #73），载荷没动 ⇒
+self 分区 hash 每轮都变 ⇒ 永远 dirty ⇒ 每次远端轮询都真推一个只差 `lastRunAt` 的快照。
+
+证据：相邻两个快照目录（`sync/work/snapshots/sync-*`）共 33 个文件，逐文件 sha256 只有 2 个不同 ——
+`manifest.json` 与 `self/sync/sync-autosync.json`（后者只差一个 `lastRunAt`）；manifest 的 `sectionHashes`
+每轮只有 `self` 一项变化。`watch-scope.ts` 只在文件监听侧排除了自写回声路径，救不到哈希侧。
+
+**修复**：`FileCollectionAdapter.collect()` 在内容模式下把 `comparableContent(relPath, bytes)` 的结果（「身份字节」）
+同时用于 `entry.data` 与 `contentHash`（缺省实现返回同一引用 ⇒ 其余分区字节/哈希逐字节不变）。
+效果：运行态只留在本机文件里，不进导出载荷、不进基线；`lastRunAt` 也不再有跨机倒灌路径。
+
+**验证**：`src/adapters/self.test.ts` 新增回归（同一份 `sync-autosync.json` 只推进运行态 → 两次 `export()`
+的 `hashSection` 相等；载荷不含 `lastRunAt`/`consecutiveFailures`；改 `repoUrl` → hash 必变）。
+`node --test "src/adapters/*.test.ts" "src/sync/*.test.ts"` 720 项全绿；`npm run typecheck` 零错。
+
+**未做**：远端仓库里已积累的 ~325 个「只差 lastRunAt」的历史快照没有自动清理（留给用户决定）；
+本次修复需要重建 `lib/` 并重启 DSH 才在真机生效。
+

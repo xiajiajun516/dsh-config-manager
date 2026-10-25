@@ -20,9 +20,13 @@
  * 快照/回滚路径一致）；**清单来自覆写的 listRelPaths()（白名单），export() 与 preview() 都经
  * 基类 collect()**（self 目录内存在大量非配置子目录，不能像 skills/sessions 那样整体递归）。
  *
- * **例外：两个调度配置的比对口径见覆写的 comparableContent()** —— sync-autosync.json /
- * backup-schedule.json 内含每次执行收尾都被改写的运行态字段，整文件哈希会恒判 Conflict
- * （每轮同步都重现，用户点「应用」还会把远端陈旧运行态倒灌回本机；issue #73）。
+ * **例外：两个调度配置的身份字节见覆写的 comparableContent()** —— sync-autosync.json /
+ * backup-schedule.json 内含每次执行收尾都被改写的运行态字段（lastRunAt / lastRunStatus /
+ * lastRunHistoryId / consecutiveFailures …），整文件哈希会恒判 Conflict（每轮同步都重现，
+ * 用户点「应用」还会把远端陈旧运行态倒灌回本机；issue #73）；同一批字段还会让 self 分区
+ * 的 hashSection 每轮都变 —— 自动同步的「本地有改动」检测因此**永远为真**，每次远端轮询
+ * （缺省 60s）都真推一个新快照（issue #127：真机 41 次/天、内容仅差一个 lastRunAt）。
+ * 现在这份字节同时用于导出载荷与哈希（见基类 collect()），运行态只留在本机文件里。
  *
  * 为什么必须靠 listRelPaths() 而不是覆写 export() 来收窄（2026-10 真机报告）：
  * `preview()` / `listRelPaths()` 是后来才加进基类的。本类此前只覆写 export()，于是只读预览

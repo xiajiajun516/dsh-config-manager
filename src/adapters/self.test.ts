@@ -8,6 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAdapters } from './index.ts';
 import { SelfAdapter, SELF_CONFIG_FILES } from './self.ts';
+import { hashSection } from '../sync/sync-state.ts';
 import { makeContext, makeImportContext } from './test-helpers.ts';
 
 test('self: 白名单收集（存在才收，子目录路径保留，白名单外不收集）', async () => {
@@ -241,4 +242,46 @@ test('self: 其余白名单文件的比对口径不外溢（仍是整文件哈�
   await dst.fs.writeFile('dsh-config-manager/sync/sync-config.json', Buffer.from('{ "webdav": {}, "git": { "repoUrl": "https://x" }, "transport": "git" }', 'utf8'));
   const items = await adapter.analyzeImport(out.data, makeImportContext(dst, sections));
   assert.equal(items[0]?.kind, 'Conflict', '键序不同但语义相同 —— sync-config 不是调度配置，仍按字节判');
+});
+
+/**
+ * issue #127 回归：运行态漂移不得改变导出的分区 hash。
+ *
+ * 现场：调度器每轮收尾改写 sync-autosync.json 的运行态字段 → self 分区 hashSection 每轮都变
+ * → SyncEngine.hasLocalChanges() 永远为真 → 自动同步的每次远端轮询（缺省 60s）都真推一个
+ * 只差 lastRunAt 的新快照（真机 2026-10-25 一天 41 次 push，远端累积 325 个垃圾快照）。
+ */
+test('self: 运行态改写不改变分区 hash（自动同步不再每轮误判「本地有改动」）', async () => {
+  const rel = 'dsh-config-manager/sync/sync-autosync.json';
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  const adapter = new SelfAdapter();
+  const config = (runState: Record<string, unknown>, repoUrl: string) => JSON.stringify({
+    schemaVersion: 2,
+    channels: {
+      git: { enabled: true, intervalMinutes: 30, realtime: true, remoteCheckMs: 60000, repoUrl, branch: 'main', ...runState },
+      webdav: { enabled: false },
+    },
+  }, null, 2);
+
+  await src.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-25T12:00:00.000Z', lastRunStatus: 'success', lastRunHistoryId: 'h-1', consecutiveFailures: 0 }, 'https://x/repo.git'), 'utf8'));
+  const first = await adapter.export(src, { includeSecrets: false });
+
+  // 模拟一次同步收尾：只推进运行态（配置本体不动）
+  await src.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-25T12:01:00.000Z', lastRunStatus: 'failed', lastRunMessage: 'boom', lastRunHistoryId: 'h-2', consecutiveFailures: 1 }, 'https://x/repo.git'), 'utf8'));
+  const second = await adapter.export(src, { includeSecrets: false });
+
+  assert.equal(
+    hashSection(second.data),
+    hashSection(first.data),
+    '仅运行态不同 → 分区 hash 必须不变（否则每轮远端轮询都真推一次）',
+  );
+  const payload = Buffer.from(second.data.files.find((f) => f.relativePath === 'sync/sync-autosync.json')!.data).toString('utf8');
+  assert.ok(!payload.includes('lastRunAt'), '导出载荷不含运行态：远端不该接收本机执行记录');
+  assert.ok(!payload.includes('consecutiveFailures'));
+  assert.ok(payload.includes('"repoUrl":"https://x/repo.git"'), '配置本体仍在载荷里');
+
+  // 配置本体变化必须被识别（不能把运行态过滤做成「什么都判不变」）
+  await src.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-25T12:02:00.000Z' }, 'https://y/repo.git'), 'utf8'));
+  const third = await adapter.export(src, { includeSecrets: false });
+  assert.notEqual(hashSection(third.data), hashSection(second.data), '真实配置变化必须让分区 hash 变化');
 });

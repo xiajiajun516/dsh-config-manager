@@ -239,10 +239,22 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
         const read = await this.readMember(ctx, member.rel, mode, statTimes);
         unitBytes += read.sizeBytes;
         if (unitBytes > room) break;
+        // 身份字节（issue #127）：`comparableContent` 定义的「参与哈希的身份内容」同时作为
+        // **导出载荷**写出。否则基线与包内字节的口径不一致 —— 子类剔掉的易变字段仍躺在载荷里，
+        // hashSection 照样每轮都变（真机现场：self 分区因 sync-autosync.json 的运行态每 ~60s
+        // 被判「本地有改动」，一天推 40+ 个内容几乎相同的快照）。
+        // 缺省实现返回同一引用 → 其余分区字节/哈希逐字节不变（`files.test.ts` 的 contentHash 断言照旧）。
+        const identity = mode === 'content' ? this.comparableContent(member.relPath, read.data) : read.data;
         pending.push({
           rel: member.rel,
           sizeBytes: read.sizeBytes,
-          entry: { relativePath: member.relPath, data: read.data, contentHash: read.contentHash },
+          entry: {
+            relativePath: member.relPath,
+            data: identity,
+            contentHash: mode === 'content'
+              ? (identity === read.data ? read.contentHash : sha256Hex(identity))
+              : read.contentHash,
+          },
         });
       }
       if (unitBytes > room) {
@@ -329,11 +341,18 @@ export abstract class FileCollectionAdapter implements ConfigAdapter<FilesSectio
   }
 
   /**
-   * 幂等比对用的内容（相对 baseDir 路径 + 盘上/包内字节 → 参与哈希比对的字节）。
+   * **身份内容**（相对 baseDir 路径 + 盘上/包内字节 → 参与哈希与导出的字节）。
    *
    * 缺省 = **原字节**：对文件类分区来说「相对路径 + 内容哈希」就是身份语义，不得改动。
    * 覆写者只应用于剔除**不属于「配置身份」的易变字段**（见 SelfAdapter 的两个调度配置：
-   * 运行态每轮都被改写，整文件哈希会恒判 Conflict —— issue #73）。两条契约：
+   * 运行态每轮都被改写，整文件哈希会恒判 Conflict —— issue #73；同一批字段还会让
+   * 分区 hash 每轮都变 → 自动同步每轮真推一次 —— issue #127）。
+   *
+   * 用途有两处，且**必须共用同一份字节**，否则「判等」与「落地」分叉：
+   *   1. analyzeImport 的幂等判定（包内 vs 盘上）；
+   *   2. collect() 的导出载荷与 contentHash —— hashSection 按字节算分区 hash，
+   *      载荷里留着易变字段就等于每轮都判「本地有改动」。
+   * 两条契约：
    *   1. **必须收敛**：applyItem 写盘后再分析一次必须判 Skip，否则同步永不收敛；
    *   2. **未改写时返回同一引用** —— 调用方据此复用导入侧已算好的 contentHash，
    *      不给 sessions 这类大分区白算一遍哈希。
