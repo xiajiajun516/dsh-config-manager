@@ -325,6 +325,49 @@ LONG_REQUEST_TIMEOUT_MS = 5 min`）⇒ 一个点挂住 = 整页骨架 5 分钟�
 需要重建 `lib/` 并重启 DSH 后由用户确认。
 
 
+## 死进程残留的工作副本锁把 `/sync/status` 拖成 10 s 超时（2026-10-27 真机，第三轮）
+
+**规则判据（已回写 `AGENTS.md` §1）**：只读端点的「有界返回」必须**覆盖锁等待**。工作副本锁的等待上限
+（缺省 300 s）是给写操作定的，只读自检不能继承；同时锁的回收不能只看 mtime —— holder 被强杀后
+`finally` 不会执行，只按 mtime 判陈旧要白等满 15 分钟。
+
+**现场**：用户报「远程同步加载太慢」。实测 `GET /api/dsh-config-manager/sync/status` 每次 **10055–10106 ms**
+后 503（body = `host.syncStatusTimeout` 文案），`?detail=0` 同样 10 s；同机 `/sync/history` 7 ms（62 KB）、
+`/market/status` 24 ms。
+
+**逐层排除（每层都有独立实测）**：
+
+- **接口预算本身**：`collectSyncStatus` 已被 `withTimeout(…, 10_000)` 包住，超时确实是「预算耗尽」而不是别的错。
+- **凭据服务**：同脚本直接跑 `readFullSyncConfig` 2.8/1.4 ms、`loadSyncState` 1.3/0.6 ms、`readUiPrefs` 0.5 ms、
+  `readAllSyncSelections` 0.6 ms、`readAllAutosyncConfigs` 0.5 ms、`listCloudConfiguredProviders` 0.1–0.2 ms。
+- **工作副本自检**：同一脚本 `inspectWorkDir({detail:false})` 与 `{detail:true}` 都 HANG（>20 s 未返回）——
+  唯一挂点，且与 detail 无关 ⇒ 不是 git 命令慢，而是取锁慢。
+- **锁现场**：`%TEMP%` 下的 `dshcm-workdir-c1827469....lock` 记 `pid:28888`，`Get-CimInstance` 查无该进程；
+  锁创建 22:25:15Z，新宿主进程 23:25:19 启动 ⇒ 旧实例重启前 4 秒拿锁后被杀、`finally` 未执行。
+  另有 8 个历史锁残留（age 14621 s ~ 296752 s，最长 3.4 天）。
+
+**根因链**：死锁 → `inspectWorkDir` → `withWorkdir` → `withWorkdirLock`（缺省等待 300 s，且只按 mtime 回收）⇒
+`collectSyncStatus` 最后一步永不完结 ⇒ 10 s 预算耗尽 ⇒ 503。**正常同步持锁时同样命中**（autosync 每 1–2 分钟
+一次 push），所以这不是「偶发」。清掉死锁后端点立刻恢复：首次 735 ms（冷缓存 7 条 git 命令）、之后 50 ms。
+
+**修复三处**（缺一处就还会复发）：
+
+1. `src/utils/workdir-lock.ts` 的 `workdirLockHolderAlive(pid)`：`process.kill(pid, 0)`，`ESRCH` = 确定已死 ⇒
+   立即回收；`EPERM` = 存活；其余（含读不出 holder）= 判不了 ⇒ 退回 mtime 规则（钉死「绝不盲抢」）。
+2. 等待变成**硬上界**：等锁与进程内链上排队共用同一个 `timeoutMs`（对链头 `Promise.race` + 入口过期检查），
+   被放弃的调用轮到时直接抛、**不执行 fn** —— 否则界面早已超时，底层还会偷偷去驱动工作副本。
+3. 只读自检单独用 1.5 s 上限（`INSPECT_WORKDIR_LOCK_TIMEOUT_MS`），写路径仍用 300 s（该等）；拿不到锁 →
+   `sync.git.workdirBusy`（`kind:'conflict'`、`retryable`），经宿主既有 `{ error }` 通道回到界面。
+   另加一次性清扫 `pruneDeadWorkdirLocksOnce()`：只删「pid 确定已死」或「pid 被复用 + 声明的工作目录已不存在
+   + 已过 staleMs」的残留锁（本机实测一条测试残留锁的 pid 9704 已被 `NoiseCancelingEngine.exe` 复用）。
+
+**验证**：`node --test src/utils/workdir-lock.test.ts` 10 pass（新增：死 pid 立即回收 / 链上排队计入超时且不执行 fn /
+一次性清扫只清死锁）；`node --test src/sync/git/git-transport.test.ts` 53 pass（新增：活锁持有时 1793 ms 返回
+`workdirBusy`、零 git spawn）；`npm run typecheck` 零错；现场清死锁后 `GET /sync/status` 200（735 ms → 50 ms）。
+
+**未做/未知**：改动在 `src/`，运行中的 DSH 加载的是已安装的 `lib/` —— 需重建并重装插件后，「重启踩在同步中」
+这条路径才真正受保护；单测与端点实测只覆盖代码本身，未覆盖「装到桌面实例后重启」的现场。
+
 ## `/sync/status` 的 730 ms 从哪来：7 次 `git.exe` 进程启动（2026-10-27 实测）
 
 **规则判据（已回写 `AGENTS.md` §1）**：只读端点也别在 GET 里 spawn 外部进程；**同一事实被反复索取**

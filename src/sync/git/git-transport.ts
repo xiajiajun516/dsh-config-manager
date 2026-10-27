@@ -108,6 +108,16 @@ export interface GitWorkDirFacts {
 const INSPECT_FACTS_TTL_MS = 10_000;
 const inspectFactsCache = new Map<string, { at: number; detail: boolean; facts: GitWorkDirFacts }>();
 
+/**
+ * 只读自检等锁的上限（2026-10-27）。
+ *
+ * 为什么和写路径不同：写操作本来就该等（一次 push 十几秒是正常的），但自检挂在
+ * `GET /sync/status` 上，同步任务持锁期间它等待是**纯损失** —— 界面要的只是「工作副本有没有跟随
+ * 当前地址」，拿不到锁就如实报忙，让请求有界返回（再退一步还有 10 s 的接口预算兜底）。此前它沿用
+ * 缺省的 300 s：一次自动同步持锁就能让同步页每次打开都白等 10 s（真机 2026-10-27）。
+ */
+const INSPECT_WORKDIR_LOCK_TIMEOUT_MS = 1_500;
+
 function inspectFactsCacheKey(workDir: string, repoUrl: string): string {
   return workDir + '\u0000' + repoUrl;
 }
@@ -508,7 +518,7 @@ export class GitTransport implements SyncTransport {
    *
    * 可重入：内层（ensureRepo/pullFromRemote/adoptRemoteHistory 等）不重复取锁。
    */
-  private async withWorkdir<T>(fn: () => Promise<T>, opts: { readonly?: boolean } = {}): Promise<T> {
+  private async withWorkdir<T>(fn: () => Promise<T>, opts: { readonly?: boolean; lockTimeoutMs?: number } = {}): Promise<T> {
     try {
       if (this.workdirLockDepth > 0) {
         this.workdirLockDepth += 1;
@@ -519,6 +529,8 @@ export class GitTransport implements SyncTransport {
         }
       }
       try {
+        // 只读自检传短上限：它挂在状态接口上，等不起一次同步（见 INSPECT_WORKDIR_LOCK_TIMEOUT_MS）；
+        // 写路径不传，沿用缺省的 300 s。
         return await withWorkdirLock(this.o.workDir, async () => {
           this.workdirLockDepth += 1;
           try {
@@ -526,7 +538,7 @@ export class GitTransport implements SyncTransport {
           } finally {
             this.workdirLockDepth -= 1;
           }
-        });
+        }, opts.lockTimeoutMs === undefined ? {} : { timeoutMs: opts.lockTimeoutMs });
       } catch (err) {
         // 等锁超时 = 别人正在同步（另一个 DSH 实例 / 另一个同步任务），不是通道故障：
         // 给可操作文案并标记 retryable，别让它伪装成「git 命令失败」。
@@ -637,8 +649,12 @@ export class GitTransport implements SyncTransport {
     if (hit !== undefined && Date.now() - hit.at < INSPECT_FACTS_TTL_MS && (hit.detail || !detail)) {
       return { ...hit.facts };
     }
-    // 只读命令也要排队：与并发的 fetch/checkout 交错会让 status/rev-list 读到半更新状态
-    const facts = await this.withWorkdir(() => this.inspectWorkDirLocked(opts), { readonly: true });
+    // 只读命令也要排队：与并发的 fetch/checkout 交错会让 status/rev-list 读到半更新状态。
+    // 但排队必须有界（短上限）：拿不到锁就报「工作副本忙」，绝不把状态接口拖进 300 s 的等待。
+    const facts = await this.withWorkdir(() => this.inspectWorkDirLocked(opts), {
+      readonly: true,
+      lockTimeoutMs: INSPECT_WORKDIR_LOCK_TIMEOUT_MS,
+    });
     const prev = inspectFactsCache.get(key);
     if (detail || prev === undefined || !prev.detail) {
       inspectFactsCache.set(key, { at: Date.now(), detail, facts });

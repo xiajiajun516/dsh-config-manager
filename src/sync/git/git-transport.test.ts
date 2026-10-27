@@ -18,6 +18,7 @@ import { computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections, Sync
 import type { SyncSnapshot } from '../transport.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { sha256Hex } from '../../utils/hashing.ts';
+import { resetWorkdirLockChainsForTest, workdirLockPath } from '../../utils/workdir-lock.ts';
 
 /* ---------------- helpers ---------------- */
 
@@ -1409,6 +1410,37 @@ test('自检缓存：TTL 过期后重新自检', async (t) => {
   mock.timers.tick(10_001);
   await transport.inspectWorkDir({ detail: true });
   assert.ok(calls.length > warm, 'TTL 过期后必须重新自检，绝不无限期返回旧事实');
+});
+
+/**
+ * 为什么有这条用例（真机 2026-10-27）：自检挂在 `GET /sync/status` 上，而同步任务持锁是常态
+ * （autosync 每 1~2 分钟一次 push）。此前它沿用工作副本锁缺省的 300 s 等待 ⇒ 同步页每次打开都白等
+ * 满 10 s 接口预算再报超时。只读自检必须**有界**：拿不到锁立刻如实报「忙」，让调用方按可操作文案提示。
+ */
+test('只读自检有界：锁被活进程持有时报「工作副本忙」，绝不等满锁的缺省上限', async (t) => {
+  clearInspectFactsCache();
+  const dir = await makeGitWorkDir(t);
+  const lockPath = workdirLockPath(dir);
+  // 模拟另一个存活实例正在同步：pid 存活 ⇒ 不会被当作陈旧锁回收，只能等
+  await fs.writeFile(lockPath, JSON.stringify({ pid: process.pid, token: 'other-instance' }));
+  t.after(async () => {
+    await fs.rm(lockPath, { force: true });
+    resetWorkdirLockChainsForTest();
+  });
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+
+  const t0 = Date.now();
+  await assert.rejects(transport.inspectWorkDir(), (err: unknown) => {
+    assert.ok(err instanceof GitTransportError, '必须是 GitTransportError');
+    assert.equal(err.kind, 'conflict', '等锁超时是「通道忙」，不是协议/网络故障');
+    assert.equal(err.retryable, true);
+    assert.match(err.message, /正被另一个同步任务占用/);
+    return true;
+  });
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed < 3_000, '自检必须在短上限内失败（实测 ' + String(elapsed) + 'ms），绝不能等缺省的 300 s');
+  assert.equal(calls.length, 0, '拿不到锁就不得 spawn 任何 git 命令');
 });
 
 

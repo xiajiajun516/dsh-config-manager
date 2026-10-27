@@ -28,9 +28,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **{{本版主题}}**：{{一句话中文主题}}
+> **本版主题**：同步状态不再被「别人占着工作副本」拖成超时，首页与同步页打开即有结果。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: Sync status no longer turns into a timeout because someone else holds the work copy; the home page and sync page report right away.
+
+### 🔧 变更 · Changed
+
+- **同步正在进行时打开同步页不再干等十秒**：另一个同步任务占着工作副本时，页面会立刻说明「工作副本正忙」，而不是空转到超时再报错。
+  **Opening the sync page during a running sync no longer waits ten seconds**: when another sync holds the work copy, the page says the work copy is busy right away instead of idling until it times out.
+
+### 🐛 修复 · Fixed
+
+- **DSH 重启或崩溃后同步页不再一直「读取超时」**：上一次同步留下的占用会被立即识别并回收，旧的残留占用文件也会自动清理，同步状态恢复秒开。
+  **No more endless "read timeout" after DSH restarts or crashes**: a claim left behind by an interrupted sync is now reclaimed immediately, leftovers are cleaned up automatically, and sync status loads instantly again.
 
 ## [0.1.85] - 2026-10-27
 
