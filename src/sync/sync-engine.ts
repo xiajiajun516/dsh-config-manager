@@ -499,10 +499,10 @@ export interface MergePreview {
   /** 是否拿到了本地祖先副本（false = 退化为两方合并 → 所有双侧差异都会呈现为 conflict）。 */
   hasAncestor: boolean;
   sections: MergePreviewSectionView[];
-  /** 与 risk.ts 的 classifyMergePlan 同口径计数：
-   *  auto = 可自动应用的非冲突项，review = 需人工，conflicts = decision === 'conflict'，skipped = 'skip'。 */
+  /** 与 risk.ts 的 classifyMergePlan 同口径计数：auto = 可自动应用，review = 需人工，conflicts = 冲突，skipped = 跳过。 */
   summary: { auto: number; review: number; conflicts: number; skipped: number };
   message?: string;
+  reason?: 'remote-empty'; // 远端没有任何快照：首次同步的正常起点，不是故障（客户端据此给「先推送」引导，issue 116）
 }
 
 /**
@@ -1573,7 +1573,7 @@ export class SyncEngine {
     const snapshotId = this.lastMergedRemoteSnapshotId;
     if (snapshotId === null) {
       // merge() 已清掉全部缓存；这里如实报「远端无快照」（ok:false，而不是一个空成功）
-      return { ok: false, snapshotId: '', hasAncestor: false, sections: [], summary, message: this.msg('sync.remoteEmpty') };
+      return { ok: false, snapshotId: '', hasAncestor: false, sections: [], summary, reason: 'remote-empty', message: this.msg('sync.remoteEmpty') };
     }
     const split = classifyMergePlan(plan, { firstSync: false });
     summary.auto = split.autoApply.length;

@@ -76,3 +76,9 @@ test('sync-entry: 宿主 ok=false → fallback + 宿主 message（如实带出�
   const out = await resolveSmartSync(deps(api, true))
   assert.deepEqual(out, { kind: 'fallback', error: '远端没有快照' })
 })
+
+test('sync-entry: 远端无快照（reason=remote-empty）→ fallback 但**不带 error**（引导交给 /sync/sync，不许先红后蓝）', async () => {
+  const { api } = fakeApi(preview({ ok: false, sections: [], message: '远端无快照', reason: 'remote-empty' }))
+  const out = await resolveSmartSync(deps(api, true))
+  assert.deepEqual(out, { kind: 'fallback' }, '首次同步不是故障：不出现「预览失败」红字')
+})

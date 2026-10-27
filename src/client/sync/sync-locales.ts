@@ -95,7 +95,7 @@ export const zh = {
   'webdav.preset.box': 'Box',
   // GitHub OAuth 登录（device flow，无需手动输入 token）
   'github.title': 'GitHub 登录',
-  'github.description': '通过 GitHub OAuth 设备码流程授权：无需手动输入 token，在浏览器中确认授权后，token 自动写入 DSH credentials。授权范围是**整个账号**：GitHub OAuth App 无法收窄到单个仓库，组织仓库还需组织管理员批准。只想授权一个仓库 → 改用上方 token 字段填细粒度 PAT（Repository access 选 Only select repositories，Permissions → Contents 设为 Read and write；创建页 github.com/settings/personal-access-tokens/new）。',
+  'github.description': '通过 GitHub OAuth 设备码流程授权：无需手动输入 token，在浏览器中确认授权后，token 自动写入 DSH credentials。授权范围是「整个账号」：GitHub OAuth App 无法收窄到单个仓库，组织仓库还需组织管理员批准。只想授权一个仓库 → 改用上方 token 字段填细粒度 PAT（Repository access 选 Only select repositories，Permissions → Contents 设为 Read and write；创建页 github.com/settings/personal-access-tokens/new）。',
   'github.login': '使用 GitHub 登录',
   'github.retry': '重新登录',
   'github.cancel': '取消',
@@ -105,7 +105,7 @@ export const zh = {
   'github.clientIdHint': '需要插件配置 githubClientId（GitHub OAuth App 的 client_id）才能使用 GitHub 登录。',
   // 仓库选择器（选择已有仓库 / 新建仓库；同步仓库必须私有）
   'repoPicker.label': '从我的仓库中选择',
-  'repoPicker.hint': '列出你 GitHub 账号下**已有的私有仓库**（按最近更新排序），选中即填入下方仓库地址；也可以直接在下方手填地址（ssh / 本地路径 / 不在列表里的仓库）。列表需要先登录 GitHub；新建的仓库一律为私有 —— 公开仓库会公开你的配置内容。',
+  'repoPicker.hint': '列出你 GitHub 账号下已有的私有仓库（按最近更新排序），选中即填入下方仓库地址；也可以直接在下方手填地址（ssh / 本地路径 / 不在列表里的仓库）。列表需要先登录 GitHub；新建的仓库一律为私有 —— 公开仓库会公开你的配置内容。',
   'repoPicker.placeholder': '手动填写地址（或从上方选择）',
   'repoPicker.refresh': '刷新列表',
   'repoPicker.refreshing': '刷新中…',
@@ -605,7 +605,7 @@ export const en: Record<keyof typeof zh, string> = {
   'webdav.preset.synology': 'Synology NAS (WebDAV)',
   'webdav.preset.box': 'Box',
   'github.title': 'GitHub Sign-in',
-  'github.description': 'Authorize via the GitHub OAuth device flow: no manual token entry — after you approve in the browser, the token is written into DSH credentials automatically. The grant covers your **whole account**: GitHub OAuth Apps cannot be narrowed to a single repository, and organization repositories additionally need an org admin approval. To authorize just one repository, fill the token field above with a fine-grained PAT instead (Repository access = Only select repositories, Permissions → Contents = Read and write; create it at github.com/settings/personal-access-tokens/new).',
+  'github.description': 'Authorize via the GitHub OAuth device flow: no manual token entry — after you approve in the browser, the token is written into DSH credentials automatically. The grant covers your whole account: GitHub OAuth Apps cannot be narrowed to a single repository, and organization repositories additionally need an org admin approval. To authorize just one repository, fill the token field above with a fine-grained PAT instead (Repository access = Only select repositories, Permissions → Contents = Read and write; create it at github.com/settings/personal-access-tokens/new).',
   'github.login': 'Sign in with GitHub',
   'github.retry': 'Sign in again',
   'github.cancel': 'Cancel',
@@ -615,7 +615,7 @@ export const en: Record<keyof typeof zh, string> = {
   'github.clientIdHint': 'Requires the githubClientId plugin config (the client_id of your GitHub OAuth App).',
   // Repository picker (pick an existing repo / create a new one; sync repos must be private)
   'repoPicker.label': 'Pick one of my repositories',
-  'repoPicker.hint': 'Lists the **existing private repositories** in your GitHub account (most recently updated first); picking one fills the repository URL below. You can still type an address by hand (ssh / local path / repositories not in the list). The list requires GitHub sign-in. Newly created repositories are always private — a public repository would expose your config contents.',
+  'repoPicker.hint': 'Lists the existing private repositories in your GitHub account (most recently updated first); picking one fills the repository URL below. You can still type an address by hand (ssh / local path / repositories not in the list). The list requires GitHub sign-in. Newly created repositories are always private — a public repository would expose your config contents.',
   'repoPicker.placeholder': 'Type an address (or pick above)',
   'repoPicker.refresh': 'Refresh list',
   'repoPicker.refreshing': 'Refreshing…',

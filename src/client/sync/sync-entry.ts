@@ -45,7 +45,10 @@ export async function resolveSmartSync(deps: SmartSyncDeps): Promise<SmartSyncOu
     const decision = decideSyncEntry(deps.hasBaseline, preview)
     if (decision === 'merge') return { kind: 'merge', preview }
     if (decision === 'upToDate') return { kind: 'upToDate' }
-    // ok === false：宿主明确说预览没产出（例如远端没有快照）→ 老路径 + 如实带出原因
+    // 远端无快照（reason='remote-empty'）：不是故障 —— 老路径的 /sync/sync 预览会给出「先推送」引导，
+    // 这里再抛「预览失败」就会先红后蓝、自相矛盾（issue 116）。
+    if (preview.reason === 'remote-empty') return { kind: 'fallback' }
+    // ok === false：宿主明确说预览没产出（其它原因）→ 老路径 + 如实带出原因
     return { kind: 'fallback', ...(preview.message !== undefined ? { error: preview.message } : {}) }
   } catch (err) {
     return { kind: 'fallback', error: err instanceof Error ? err.message : String(err) }

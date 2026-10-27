@@ -45,6 +45,13 @@ test('issue #116：远端无快照 → ok:false 且 reason=remote-empty（不是
     assert.equal(result.reason, 'remote-empty', '客户端据此把首次同步渲染成引导');
     assert.equal(result.plan, null);
     assert.equal(result.analysis, null);
+
+    // 合并预览路径（一键同步命中 hasBaseline 时走这条）必须同口径：空远端也带结构化原因，
+    // 否则客户端只能靠文案猜，红色「预览失败」会盖住「先推送」的引导。
+    const merge = await engine.previewMerge({});
+    assert.equal(merge.ok, false);
+    assert.equal(merge.reason, 'remote-empty', '合并预览同样不许把「首次同步」当成故障');
+    assert.deepEqual(merge.sections, []);
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
   }

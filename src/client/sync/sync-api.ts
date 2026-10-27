@@ -566,6 +566,8 @@ export interface MergePreviewResponse {
   summary: MergePreviewSummary;
   /** 失败/降级原因（仅在 ok=false 等场景出现） */
   message?: string;
+  /** 失败的结构化原因（issue 116）：`'remote-empty'` = 远端还没有任何快照 —— 首次同步的正常起点，不是故障。 */
+  reason?: 'remote-empty';
 }
 
 /** 单条裁决动作。 */
