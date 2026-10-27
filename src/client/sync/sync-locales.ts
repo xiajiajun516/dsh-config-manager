@@ -95,7 +95,7 @@ export const zh = {
   'webdav.preset.box': 'Box',
   // GitHub OAuth 登录（device flow，无需手动输入 token）
   'github.title': 'GitHub 登录',
-  'github.description': '通过 GitHub OAuth 设备码流程授权：无需手动输入 token，在浏览器中确认授权后，token 自动写入 DSH credentials。',
+  'github.description': '通过 GitHub OAuth 设备码流程授权：无需手动输入 token，在浏览器中确认授权后，token 自动写入 DSH credentials。授权范围是**整个账号**：GitHub OAuth App 无法收窄到单个仓库，组织仓库还需组织管理员批准。只想授权一个仓库 → 改用上方 token 字段填细粒度 PAT（Repository access 选 Only select repositories，Permissions → Contents 设为 Read and write；创建页 github.com/settings/personal-access-tokens/new）。',
   'github.login': '使用 GitHub 登录',
   'github.retry': '重新登录',
   'github.cancel': '取消',
@@ -200,6 +200,7 @@ export const zh = {
   'syncflow.pushConfirm': '确认推送',
   'syncflow.pushing': '正在推送…',
   'syncflow.pushFirstBaseline': '远端暂无快照：本次将创建首个同步基线',
+  'syncflow.remoteEmptyGuide': '远端还没有任何快照：这是首次同步，先点「推送到远端」把本机配置推上去（推送会创建第一个快照），之后才能拉取。',
   // 同步模式（默认快速导出 / 高级自定义导出）
   'mode.title': '同步分区',
   'mode.hint': '点按钮在弹窗里勾选要同步的分区：勾选集合就是同步范围（默认已勾选推荐分区，可随时改）。',
@@ -604,7 +605,7 @@ export const en: Record<keyof typeof zh, string> = {
   'webdav.preset.synology': 'Synology NAS (WebDAV)',
   'webdav.preset.box': 'Box',
   'github.title': 'GitHub Sign-in',
-  'github.description': 'Authorize via the GitHub OAuth device flow: no manual token entry — after you approve in the browser, the token is written into DSH credentials automatically.',
+  'github.description': 'Authorize via the GitHub OAuth device flow: no manual token entry — after you approve in the browser, the token is written into DSH credentials automatically. The grant covers your **whole account**: GitHub OAuth Apps cannot be narrowed to a single repository, and organization repositories additionally need an org admin approval. To authorize just one repository, fill the token field above with a fine-grained PAT instead (Repository access = Only select repositories, Permissions → Contents = Read and write; create it at github.com/settings/personal-access-tokens/new).',
   'github.login': 'Sign in with GitHub',
   'github.retry': 'Sign in again',
   'github.cancel': 'Cancel',
@@ -704,6 +705,7 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.pushConfirm': 'Push',
   'syncflow.pushing': 'Pushing…',
   'syncflow.pushFirstBaseline': 'No remote snapshots yet: this push creates the first sync baseline',
+  'syncflow.remoteEmptyGuide': 'No remote snapshots yet: this is the first sync — click "Push to remote" to upload your local config (that push creates the first snapshot); pulling only works afterwards.',
   // Sync mode (default quick export / advanced custom export)
   'mode.title': 'Sync Sections',
   'mode.hint': 'Click the button to tick the sections to sync: the ticked set is the sync scope (recommended sections are ticked by default and can be changed any time).',

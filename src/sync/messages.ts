@@ -98,6 +98,8 @@ export const zh = {
   'sync.deviceNameFallback': '未命名设备',
   // ---------- git 通道连通性探针（cloud-sync 借鉴项 ②，补齐四通道） ----------
   'sync.git.probeOk': '连接正常（远端可达、凭据可用）',
+  'sync.git.probeReadOnlyHint': '只验证了「能读」：推送还需要写权限（细粒度 PAT 的 Contents: Read and write；SSH 部署密钥需勾 Allow write access）。',
+  'sync.git.cloneAuthFailed': '读不到这个仓库（HTTP 401/403）：当前凭据对它没有读权限。细粒度 PAT 只勾 Administration 不够，必须勾 Contents: Read and write；classic PAT 需要 repo 域。'
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -167,6 +169,8 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.webdav.collectionCreateFailed': 'Failed to create the remote directory (HTTP {status}): {path}',
   'sync.deviceNameFallback': 'Unnamed device',
   'sync.git.probeOk': 'Connection OK (remote reachable, credentials accepted)',
+  'sync.git.probeReadOnlyHint': 'Only read access was verified: pushing also needs write access (Contents: Read and write for a fine-grained PAT; Allow write access for an SSH deploy key).',
+  'sync.git.cloneAuthFailed': 'Cannot read this repository (HTTP 401/403): the current credential has no read access to it. A fine-grained PAT needs Contents: Read and write — Administration alone is not enough; a classic PAT needs the repo scope.'
 };
 
 registerMessageCatalog({ id: 'sync-domain', zh, en });

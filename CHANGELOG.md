@@ -32,6 +32,19 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🔧 变更 · Changed
+
+- **GitHub 登录的授权范围现在写清楚了**：点「使用 GitHub 登录」时，GitHub 给的是你**整个账号**的授权 —— OAuth App 收窄不到单个仓库，组织仓库还要组织管理员批准。授权说明里现在明说这一点，并给出「只想授权一个仓库」的具体做法：改用细粒度 PAT，Repository access 选 Only select repositories、Permissions → Contents 设为 Read and write。
+  **The scope of GitHub sign-in is now stated up front**: "Sign in with GitHub" grants access to your **whole account** — an OAuth App cannot be narrowed to a single repository, and organization repositories additionally need an org admin approval. The authorization hint now says so, and spells out how to authorize just one repository instead: use a fine-grained PAT with Repository access = Only select repositories and Permissions → Contents = Read and write.
+
+### 🐛 修复 · Fixed
+
+- **细粒度令牌权限不足时说清缺的是哪一项**：只勾了 Administration 而没勾 Contents 的细粒度 PAT，以前同步只会甩出 git 原文「remote: Write access to repository not granted / 403」，看着像令牌坏了、换个令牌依然 403；现在直接告诉你要补的是 Contents: Read and write，Administration 不够用。「测试连接」也会顺带说明它只验证了「能读」，写权限属于另一项授权。
+  **A missing permission is now named instead of leaking git's raw 403**: a fine-grained PAT with Administration but without Contents used to fail with git's own "remote: Write access to repository not granted / 403" — which reads like a broken token, so users recreated it and got 403 again. The message now says the missing permission is Contents: Read and write and that Administration alone is not enough. "Test connection" also notes it only verifies read access, while pushing needs a separate write grant.
+
+- **新建仓库的第一次同步不再报「同步失败」**：远端一个快照都没有时（新建的空仓库正是这个状态），以前弹红色「一键同步失败：远端无快照」，看着像通道坏了；现在给的是提示而非报错 —— 这是首次同步，先在同步页点「推送到远端」创建第一个快照，之后才能拉取。
+  **The first sync of a new repository no longer reports a failure**: with zero snapshots on the remote (exactly what a freshly created repository looks like), the panel used to raise a red "one-click sync failed: no remote snapshots" as if the channel were broken. It is now a hint, not an error: this is the first sync — press "Push to remote" to create the first snapshot, and pulling works from then on.
+
 ## [0.1.84] - 2026-10-25
 
 > **本版主题**：**这一版只治两处「你什么都没做、它却动了」——自动同步不再每分钟空推一次把远端堆满快照，恢复也不再因为目标目录还没创建就判成路径越界**

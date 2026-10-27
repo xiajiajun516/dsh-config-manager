@@ -880,7 +880,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           msg('host.syncPullTimeout'),
         )
         if (!preview.ok || preview.plan === null || preview.analysis === null) {
-          writeJson(res, 200, { ok: false, syncSessionId: '', snapshotId: preview.snapshotId, items: [], needsReview: false, compatibility: 'unsupported', message: preview.message ?? msg('route.syncPreviewFailed') })
+          writeJson(res, 200, { ok: false, syncSessionId: '', snapshotId: preview.snapshotId, items: [], needsReview: false, compatibility: 'unsupported', message: preview.message ?? msg('route.syncPreviewFailed'), reason: preview.reason })
           return
         }
         // T1：abort 处置在**预览阶段**就阻断（此刻仍零写入：临时 ZIP 与内存会话都还没登记）。

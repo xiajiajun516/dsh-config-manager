@@ -342,6 +342,7 @@ export interface SyncPreviewResult {
    */
   credentials?: Map<string, string>;
   message?: string;
+  reason?: 'remote-empty'; // 远端还没有任何快照：首次同步的正常起点，不是故障（issue 116；客户端据此引导「先推送」而不是报失败）
 }
 
 /** 自动应用执行器（P2b）报告 */
@@ -1427,8 +1428,7 @@ export class SyncEngine {
 
   /**
    * 一键同步预览：拉取远端（最新或指定历史快照）→ 转临时 ZIP → Importer 分析出计划。
-   * 与 pull 的区别：临时 ZIP **不清理**（由调用方 / 会话持有，供 apply-items 复用），
-   * 并返回完整 plan/analysis/snapshotId 供会话登记。
+   * 与 pull 的区别：临时 ZIP **不清理**（由调用方 / 会话持有，供 apply-items 复用），并返回完整 plan/analysis/snapshotId 供会话登记。
    * 调用方负责在会话消费或取消后清理 zipPath 所在目录。
    */
   async preview(opts: SyncPullOptions = {}): Promise<SyncPreviewResult> {
@@ -1437,7 +1437,7 @@ export class SyncEngine {
     }
     const metas = await this.transport.list();
     if (metas.length === 0) {
-      return { ok: false, zipPath: '', plan: null, analysis: null, snapshotId: '', message: this.msg('sync.remoteEmpty') };
+      return { ok: false, zipPath: '', plan: null, analysis: null, snapshotId: '', message: this.msg('sync.remoteEmpty'), reason: 'remote-empty' };
     }
     const targetId = opts.snapshotId ?? metas[metas.length - 1]!.id;
     const snapshot = await this.transport.download(targetId);

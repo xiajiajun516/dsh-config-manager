@@ -462,7 +462,10 @@ export class GitTransport implements SyncTransport {
    */
   async probe(): Promise<SyncProbeResult> {
     await this.checkIsPrivate();
-    return { message: this.msg('sync.git.probeOk') };
+    // issue #115：ls-remote 只证明「能读」。写权限是**另一项**授权（细粒度 PAT 的 Contents: Read and write、
+    // SSH 部署密钥的 Allow write access），而传输层没有 REST 通道去查它 —— 宁可明说「写权限未验证」，
+    // 也不给一句「连接正常」让用户以为推送必然成功（真正暴露问题的地方是他的第一次推送）。
+    return { message: this.msg('sync.git.probeOk'), hint: this.msg('sync.git.probeReadOnlyHint') };
   }
 
   /* ---------------- 内部实现 ---------------- */
@@ -893,9 +896,13 @@ export class GitTransport implements SyncTransport {
           throw new GitTransportError(this.hostKeyMessage(), { kind: 'auth', retryable: false });
         }
         // 推送 + 鉴权失败：git 原文只说「认证失败」——换成能照做的说明（令牌失效 / 无写权限 / 远端禁用了密码推送）
+        // issue #115：clone 的鉴权失败原文（remote: Write access to repository not granted / 403）读不出「缺哪种权限」，
+        // 换成点名 Contents: Read and write 的说明 —— 否则用户只会以为令牌坏了（细粒度 PAT 常只勾了 Administration）
         const message = opts.requirePushToken === true && classified.kind === 'auth'
           ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
-          : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
+          : args[0] === 'clone' && classified.kind === 'auth'
+            ? this.msg('sync.git.cloneAuthFailed', { err: this.mask(result.stderr, token) })
+            : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
         throw new GitTransportError(message, classified);
       }
       return result;

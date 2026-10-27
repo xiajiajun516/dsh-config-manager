@@ -60,6 +60,7 @@ import type {
   SyncPushPayload, SyncStartResponse, SyncStatusResponse,
 } from './sync-api.ts'
 import { resolveSmartSync } from './sync-entry.ts'
+import { reportPreviewFailure } from './preview-failure.ts'
 import {
   channelMapOf, channelStateMap, computeGithubLoginView, computeSyncButtons, defaultChannelSyncState,
   githubPollMessage, isClientChannel, pushReportView, readStoredChannel,
@@ -1036,9 +1037,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         sessionFormatDisposition: 'guide',
       })
       if (!session.ok) {
-        // R-20：一键同步启动失败（宿主明确回报 message，无异常抛出）
+        // R-20：启动失败（宿主回报 message，无异常抛出）；issue 116 的 remote-empty → 引导「先推送」，见 preview-failure.ts
         patch({ busy: null })
-        toast.error(t('toast.syncStartFailed') + t('common.labelSeparator') + redact(session.message ?? t('syncflow.syncFailed')))
+        reportPreviewFailure(session, t)
         return
       }
       patch({ busy: null, confirmSession: session, confirmDecisions: null, token: '', webdavPassword: '' })

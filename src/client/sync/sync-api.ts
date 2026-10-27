@@ -388,6 +388,11 @@ export interface SyncStartResponse {
   needsReview: boolean;
   compatibility: 'excellent' | 'good' | 'partial' | 'unsupported';
   message?: string;
+  /**
+   * 预览失败的**结构化原因**（issue #116）：`'remote-empty'` = 远端还没有任何快照 —— 首次同步的正常起点，
+   * UI 据此引导「先推送」而不是报「同步失败」。没有 reason 的失败按 message 原样展示。
+   */
+  reason?: 'remote-empty';
 }
 
 /** 单条可确认的差异项（由 ImportPlan.item 投影 + 冲突详情）。 */
