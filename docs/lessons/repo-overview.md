@@ -23,7 +23,7 @@ src/sync/     SyncEngine + Git/WebDavTransport + AutoSyncScheduler + sync-select
 src/profiles/ 档案（8 个模块：shared 零依赖 / manager / launcher / runtime 心跳 / process-control / io【宿主专用，走 node:fs】/ messages / index 导出）
 src/utils/    paths/zip/hashing/json/logger/atomic-write/env-lock/recursive-walk/guards/git-quote
 src/ui/       框架无关 UI 逻辑（纯函数，node 可测） ← 业务逻辑必须在此 · src/client/ React 壳 ← 只做装配
-tests/        node --test 集成测试 · docs/（design/spec/seo/handoff/lessons）· .dsh/skills/
+tests/        node --test 集成测试 · docs/（spec/modules/components/decisions/maintenance/lessons/design/seo）· .dsh/skills/
 ```
 
 > **计数口径（2026-10-28 实测）**：`src/routes` 14 个域组文件、`src/adapters` 24、`src/profiles` 8、`src/foreign` 74 个非测试模块（= 目录内 `*.ts` 去掉 `*.test.ts`）。「来源数 30」是契约值（`src/foreign/registry.ts` 顶部注释 + t12 冻结、测试钉住 `FOREIGN_SOURCE_IDS`），不随文件数变化 —— 别把模块数当来源数。

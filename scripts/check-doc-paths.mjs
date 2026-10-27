@@ -4,7 +4,7 @@
  *
  * 为什么存在：审计发现活文档里存在指向已删除文件的「反引号路径」，读者与 agent 按图索骥会失败。
  * 只校验**活文档**；历史归档与证据库故意不校验：
- *   - 排除：docs/design（历史设计稿）、docs/handoff、docs/seo、docs/lessons（证据可能引用已删文件）、
+ *   - 排除：docs/design（历史设计稿）、docs/seo、docs/lessons（证据可能引用已删文件）、
  *           docs/lessons/known-pitfalls.md（冻结存档）、CHANGELOG.md（历史记录）
  *
  * 契约：

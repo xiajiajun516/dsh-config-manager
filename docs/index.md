@@ -4,7 +4,7 @@
 
 > 维护规则：文档怎么写、写到哪、什么时候不必写 → `docs/maintenance/doc-maintenance.md`。新增文档必须回本页表格加一行；
 > 这条**由脚本强制**：`node scripts/check-doc-paths.mjs` 的 `[doc-index]` 段会检查 `docs/{spec,modules,maintenance,decisions,components}/`
-> 下的每份 md 是否在本页以明确路径收录（`lessons`/`design`/`handoff`/`seo` 与冻结存档不在范围内）。
+> 下的每份 md 是否在本页以明确路径收录（`lessons`/`design`/`seo` 与冻结存档不在范围内）。
 > 路径与版本声明同样由 `check-doc-paths.mjs`、`node scripts/check-doc-versions.mjs` 在 CI 里校验。
 
 ---
@@ -85,9 +85,10 @@
 |---|---|---|
 | `docs/lessons/` | 证据库（当前有效） | `AGENTS.md` 只写规则，**为什么**写在这里；索引进 `docs/lessons/README.md` |
 | `docs/design/` | 上游设计存档 | 可能早于实现；判断行为以代码 + 测试为准 |
-| `docs/handoff/` | 阶段交接（已失效历史归档） | 写于当时的版本且描述的代码多已删除，**不要按它施工** |
 | `docs/seo/` | 曝光与收录记录（历史，不再维护） | 与功能无关；只在查历史搜索表现时看 |
 | `docs/lessons/known-pitfalls.md` | 冻结存档 | 2026-09/10 一次下移的记录，**只读**、不再追加；与 `docs/lessons/` 冲突时**以 lessons 与代码为准** |
+
+阶段交接记录（原 handoff 目录，两份都已失效）已于 2026-10-28 移出仓库，不在本仓维护；需要时按文件路径从 git 历史取回（`git log --diff-filter=D --oneline -- docs` 里能找到删除提交）。
 
 ## 7. 归位约定（新文档放哪）
 

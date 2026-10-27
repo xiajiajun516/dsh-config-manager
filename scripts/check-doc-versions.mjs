@@ -12,7 +12,7 @@
  *   2. 活文档里**声明当前适用版本**的句子（含「适用插件版本」）必须等于当前版本；
  *      含「最新/当前」字样的 dsh-config-manager@X.Y.Z 同样必须等于当前版本。
  *
- * 不查：CHANGELOG、docs/maintenance/known-gaps.md（历史台账）、docs/handoff、docs/lessons、
+ * 不查：CHANGELOG、docs/maintenance/known-gaps.md（历史台账）、docs/lessons、
  *       docs/design（历史设计稿），以及标注「取证/写作时」的历史证据行。
  *
  * 用法：node scripts/check-doc-versions.mjs [--report]
