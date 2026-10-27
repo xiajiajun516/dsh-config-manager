@@ -4,13 +4,14 @@
  * - 真实 git 集成测试：本地 bare repo 模拟远端（无真实网络），端到端 list/upload/download/delete
  */
 import test from 'node:test';
+import { mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 
-import { GitTransport, GitTransportError } from './git-transport.ts';
+import { clearInspectFactsCache, GitTransport, GitTransportError } from './git-transport.ts';
 import type { GitExecFn, GitExecResult, GitTransportOptions } from './git-transport.ts';
 import { encryptSectionsPayload } from '../snapshot-crypto.ts';
 import { computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections, SyncTransportError } from '../transport.ts';
@@ -1337,4 +1338,77 @@ test('issue #104 集成：两侧同名快照内容不同 → 合并冲突自动�
   const head = (await runRealGit(['rev-parse', 'HEAD'], workDir)).stdout.trim();
   assert.equal(head, localHead, '撤销后 HEAD 必须回到操作前的提交');
 });
+
+/* ---------------- 工作副本自检的短 TTL 缓存 ---------------- */
+
+/**
+ * 为什么有这组用例：`inspectWorkDir` 的每个字段都是一次 `git.exe` 进程启动，
+ * Windows 上每次约 80 ms（2026-10-27 实测 detail 版 7 条命令 = 585 ms，`/sync/status` 730 ms）。
+ * 缓存必须做到三件事，缺一条就会出错或者白缓存：
+ *   1. 命中不再 spawn（收益）；
+ *   2. 默认结果不能冒充完整事实（detail 请求必须重新自检，否则 ahead/dirty 静默变 null）；
+ *   3. 任何写路径（push / fetch / 重建）之后必须失效（否则「写完读」看到旧事实）。
+ */
+test('自检缓存：命中不再 spawn git，写路径后立即失效', async (t) => {
+  clearInspectFactsCache();
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+
+  const first = await transport.inspectWorkDir({ detail: true });
+  const afterFirst = calls.length;
+  assert.ok(afterFirst >= 5, 'detail 自检至少 5 条 git 命令（实测 7 条）—— 缓存要省的正是这些进程');
+
+  const second = await transport.inspectWorkDir({ detail: true });
+  assert.equal(calls.length, afterFirst, '第二次 detail 自检必须命中缓存，一条 git 都不该 spawn');
+  assert.deepEqual(second, first, '缓存结果的字段必须与首次一致');
+  assert.notEqual(second, first, '缓存必须返回浅拷贝，不得把缓存条目本身递给调用方');
+
+  // 写路径（relink 会碰 origin）之后，缓存必须失效 —— 否则「写完读」看到旧事实
+  await transport.rebuildWorkDir('relink');
+  const afterRelink = calls.length;
+  await transport.inspectWorkDir({ detail: true });
+  assert.ok(calls.length > afterRelink, 'rebuildWorkDir 之后自检缓存必须失效，重新 spawn');
+});
+
+test('自检缓存：默认结果不满足 detail 请求，不同 repoUrl 不共用', async (t) => {
+  clearInspectFactsCache();
+  const dirA = await makeGitWorkDir(t);
+  const callsA: CallRecord[] = [];
+  const lean = new GitTransport(makeOptions({ workDir: dirA, exec: mockExec(callsA) }));
+
+  await lean.inspectWorkDir();
+  const afterLean = callsA.length;
+  await lean.inspectWorkDir({ detail: true });
+  assert.ok(
+    callsA.length > afterLean,
+    '默认自检缺 ahead/dirty/remoteSnapshots ⇒ detail 请求必须重新自检，不得拿默认条目冒充完整事实',
+  );
+
+  // 同一 workDir + 不同 repoUrl：key 不同，各自重新自检（不能让 A 仓库的结论套到 B 仓库）
+  const afterDetail = callsA.length;
+  const other = new GitTransport(makeOptions({ repoUrl: 'https://github.com/example/other.git', workDir: dirA, exec: mockExec(callsA) }));
+  await other.inspectWorkDir({ detail: true });
+  assert.ok(callsA.length > afterDetail, '不同 repoUrl 必须是不同的缓存 key');
+});
+
+test('自检缓存：TTL 过期后重新自检', async (t) => {
+  clearInspectFactsCache();
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+
+  mock.timers.enable({ apis: ['Date'] });
+  t.after(() => { mock.timers.reset(); });
+
+  await transport.inspectWorkDir({ detail: true });
+  const warm = calls.length;
+  await transport.inspectWorkDir({ detail: true });
+  assert.equal(calls.length, warm, '预热窗口内必须命中');
+
+  mock.timers.tick(10_001);
+  await transport.inspectWorkDir({ detail: true });
+  assert.ok(calls.length > warm, 'TTL 过期后必须重新自检，绝不无限期返回旧事实');
+});
+
 

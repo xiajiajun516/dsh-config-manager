@@ -196,7 +196,9 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     // 自检，真机出现过 300 秒不返回。此前它与其余 4 个请求同桶 allSettled，一个挂住就把整页按在骨架上。
     // 超时取 30 秒档（客户端超时文案按时长插值，读作「30 秒」，与实测一致）。
     setSyncState('loading')
-    void syncApi.status({ timeoutMs: HOME_SYNC_TIMEOUT_MS }).then(
+    // workDirDetail: false —— 首页只用这一份填指标段，不渲染 WorkDirCard；关掉 ahead/dirty/
+    // 远端快照数可省 5 次 git 子进程启动（Windows 每次约 80 ms，实测 730 ms → 170 ms）。
+    void syncApi.status({ timeoutMs: HOME_SYNC_TIMEOUT_MS, workDirDetail: false }).then(
       (value) => {
         if (!aliveRef.current) return
         setData((prev) => ({ ...prev, sync: value }))

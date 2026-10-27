@@ -32,8 +32,8 @@ test('L-01 首屏快请求集合不含同步状态：不得退回一把梭的 al
     '同步状态必须有独立的 30 秒档超时（沿用默认 {seconds} 超时文案，与实测时长一致）',
   );
   assert.ok(
-    src.includes('syncApi.status({ timeoutMs: HOME_SYNC_TIMEOUT_MS })'),
-    '同步状态必须带自己的超时调用',
+    src.includes('syncApi.status({ timeoutMs: HOME_SYNC_TIMEOUT_MS, workDirDetail: false })'),
+    '同步状态必须带自己的超时调用，并关掉工作副本 detail（首页不渲染 WorkDirCard，省 5 次 git 子进程）',
   );
   assert.equal(
     src.includes('syncApi.status()'),
@@ -66,7 +66,7 @@ test('L-02 同步段有独立三态与失败文案，骨架按段判定', () => 
 test('L-03 /sync/status 的取值体继续被总预算包住，超时明确回 503', () => {
   const src = read('src/routes/sync.ts');
   assert.ok(
-    /withTimeout\(\s*collectSyncStatus\(\),\s*SYNC_STATUS_BUDGET_MS\b/.test(src),
+    /withTimeout\(\s*collectSyncStatus\([^()]*\),\s*SYNC_STATUS_BUDGET_MS\b/.test(src),
     '取值体必须套总预算：只读端点也会碰 DSH credentials 服务与 git 工作副本自检，两者都可能永不返回',
   );
   assert.ok(
@@ -77,4 +77,35 @@ test('L-03 /sync/status 的取值体继续被总预算包住，超时明确回 5
     src.includes("message === msg('host.syncStatusTimeout') ? 503 : 500"),
     '预算耗尽 = 暂不可用（503）；其余异常仍是 500',
   );
+});
+
+test('L-04 workDir detail 开关贯通四层：默认完整、按需降级', () => {
+  // 为什么单独钉：/sync/status 的 730 ms 里 585 ms 是 7 次 git.exe 启动（Windows 每次约 80 ms）。
+  // 只有同步页的 WorkDirCard 需要 ahead/dirty/remoteSnapshots；首页与产物库只要「地址是否跟随」。
+  const route = read('src/routes/sync.ts');
+  assert.ok(
+    route.includes("queryParam(new URL(req.url ?? '/', 'http://localhost'), 'detail') !== '0'"),
+    '路由必须从 query 读 detail（缺省 = 完整自检，只有显式 detail=0 才降级）',
+  );
+  assert.ok(
+    route.includes('collectSyncStatus({ workDirDetail })'),
+    '取值体必须收到 detail 选择',
+  );
+  assert.ok(
+    route.includes('syncWorkDir.inspect(gitRepoUrl, { detail: opts.workDirDetail })'),
+    '降级必须真的传到工作副本自检，不能只解析不生效',
+  );
+  const host = read('src/index.ts');
+  assert.ok(
+    host.includes('inspectWorkDir({ detail: opts.detail !== false })'),
+    '宿主缺省仍做完整自检（opts.detail !== false），避免漏传参数悄悄丢掉三项事实',
+  );
+  const api = read('src/client/sync/sync-api.ts');
+  assert.ok(
+    api.includes("workDirDetail === false ? SYNC_API.status + '?detail=0' : SYNC_API.status"),
+    '客户端只在显式 workDirDetail:false 时降级',
+  );
+  for (const rel of ['src/client/home/HomePanel.tsx', 'src/client/library/LibraryActions.tsx', 'src/client/library/LibraryPanel.tsx']) {
+    assert.ok(read(rel).includes('workDirDetail: false'), rel + ' 不渲染 WorkDirCard → 必须关掉 detail');
+  }
 });

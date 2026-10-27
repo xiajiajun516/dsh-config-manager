@@ -614,7 +614,8 @@ function pullProgressLabel(mode: PullState['mode'], t: TranslateNS<'config-manag
  * 地址从 /sync/status 现取，与产物库加载远端列表同源。
  */
 async function remotePayload(syncApi: SyncApi): Promise<{ transport: 'git'; repoUrl: string } | { transport: 'webdav'; url: string }> {
-  const status = await syncApi.status()
+  // 只要通道与地址，不要工作副本的 ahead/dirty/远端快照（省 5 次 git 子进程启动）
+  const status = await syncApi.status({ workDirDetail: false })
   const isWebdav = status.lastSyncChannel === 'webdav'
   const webdavUrl = (status.webdav?.url ?? '').trim()
   const repoUrl = (status.repoUrl ?? '').trim()

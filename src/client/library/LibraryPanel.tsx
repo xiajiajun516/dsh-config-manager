@@ -116,7 +116,7 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
     // 远端快照：payload 必须带通道与地址 —— 宿主 prepareSync 需要 repoUrl/url，
     // 只传 {} 会被 400 `repoUrl is required` 挡回（此前该源恒失败，页面显示「1 个来源读取失败」）。
     // 先取 /sync/status 拿到通道与地址，再据此发请求；两处都不可用时该源如实标失败，绝不空手请求。
-    put(setRemote, syncApi.status().then((status) => {
+    put(setRemote, syncApi.status({ workDirDetail: false }).then((status) => {
       if (!mounted.current) return [] as SyncSnapshotLite[]
       setRemoteChannel(status.lastSyncChannel === 'webdav' ? 'webdav' : status.lastSyncChannel === 'git' ? 'git' : null)
       const configured = status.configured === true

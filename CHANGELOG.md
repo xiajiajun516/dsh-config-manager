@@ -34,6 +34,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **首页与产物库打开更快**：读取同步状态时不再顺带跑「领先提交数 / 未提交改动 / 远端快照数」那三项工作副本统计 —— 只有同步页用得上它们，其余页面改用按需查询，10 秒内重复读取直接复用结果。
+  **Faster home page and library**: reading sync status no longer drags along the work-copy backlog scan (commits ahead, uncommitted changes, remote snapshot count) that only the sync page shows; other pages ask for it on demand and reuse a result within 10 seconds.
+
 - **整个界面做了一轮「删文案」体检**：重复的页面标题、复述按钮功能的悬浮说明、只用来填充版面的提示语都已删除 —— 页面标题不再和导航同名，按钮不再用 tooltip 解释自己干什么，「同一件事说两遍」（页脚版本 + 关于页、备份计划卡头与事实行各一枚同款徽章、详情里再列一遍行内已有的大小与时间）也只留一处。
   **The whole UI went through a copy audit**: duplicated page titles, tooltips that restate what a button already says, and filler hints are gone — page names no longer repeat the navigation tab, buttons no longer explain themselves on hover, and one fact is stated once (footer version vs. About page, duplicate badges on the backup-schedule card, size/time listed again inside a row's details).
 

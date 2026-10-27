@@ -791,9 +791,17 @@ export class SyncApi {
   }
 
   /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数 / 工作副本自检）。
-   *  opts 可覆盖超时：首页只拿它填一个指标段，等不起同步族默认的 5 分钟档。 */
-  async status(opts: RequestOptions = {}): Promise<SyncStatusResponse> {
-    return getJson<SyncStatusResponse>(SYNC_API.status, this.t, { ...SYNC_OPTS, ...opts });
+   *
+   * 两个与请求计时无关、只为调用场景服务的开关：
+   *  - `timeoutMs`：首页只拿它填一个指标段，等不起同步族默认的 5 分钟档；
+   *  - `workDirDetail`：只要「工作副本是否跟随地址」时传 false —— 宿主跳过 ahead / dirty /
+   *    remoteSnapshots 那 5 条 git 子进程（Windows 每次约 80 ms，实测端点 730 ms → 170 ms）。
+   *    同步页的 WorkDirCard 需要全量，保持缺省（true）。关掉时那三项由宿主如实回 null，
+   *    界面显示「未知」，不会被当成 0。 */
+  async status(opts: RequestOptions & { workDirDetail?: boolean } = {}): Promise<SyncStatusResponse> {
+    const { workDirDetail, ...rest } = opts
+    const path = workDirDetail === false ? SYNC_API.status + '?detail=0' : SYNC_API.status
+    return getJson<SyncStatusResponse>(path, this.t, { ...SYNC_OPTS, ...rest });
   }
 
   /**

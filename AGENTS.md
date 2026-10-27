@@ -18,6 +18,7 @@
 - **git**：工作副本 `origin` **每次跟随 `repoUrl`**（含 `--push`；不一致即 `set-url`）；同一工作副本操作一律经 `GitTransport.withWorkdir()`；拉取只许 `fetch` + `merge --ff-only`、**禁 `git pull`**（坏 FETCH_HEAD ⇒ SAFE MODE）→ `docs/lessons/sync-channel.md`
 - **删源文件前 `git status --porcelain <路径>`**：见 `??` 必须停下；**禁 `git checkout -- <文件>` 回滚**，撤销改动用针对性 edit 反向。
 - **只读端点也必须「有界返回」**：取值体碰不可控依赖（DSH credentials 服务、子进程/工作副本自检、外部 HTTP）一律 `withTimeout` + 明确错误码；客户端首屏**不得**让单一慢请求垄断骨架 → `docs/lessons/sync-channel.md`
+- **只读端点别在 GET 里 spawn 外部进程**：同一事实被反复索取（首页/切页/轮询）要「按需 detail + 短 TTL 缓存」；缓存 key 含 repoUrl，写路径经 `withWorkdir` 统一失效 → `docs/lessons/sync-channel.md`
 - **EOL 由根 `.gitattributes` 钉死**；源码字面量守卫必须在读取入口折 LF。**pnpm 11 `minimumReleaseAge`**：`@latest` 可能装旧版 —— 精确版本或设 0。
 - **`import` 一律带 `.ts`**；**`import type`** 强制（`verbatimModuleSyntax`）；类型合并用 `declare module`+`import type{}`。
 - **依赖**：现有库优先（运行时仅 `js-yaml`，peer 是 DSH 官方包）；不加 UI/CSS/图标/动画/工具库，**也不引入已准入库的同类替代品**；新增后同步 `package.json`+`package-lock.json`（两处 + 根对象）。

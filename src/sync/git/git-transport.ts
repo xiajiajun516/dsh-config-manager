@@ -89,6 +89,34 @@ export interface GitWorkDirFacts {
   remoteSnapshots: number | null;
 }
 
+/**
+ * 工作副本自检结果的短 TTL 缓存（`inspectWorkDir`，2026-10-27）。
+ *
+ * 为什么需要：自检的每个字段都是一次 `git.exe` 进程启动，Windows 上每次 ~80 ms 固定开销
+ * （实测 detail 版 7 条命令 = 585 ms，`GET /sync/status` 整体 730 ms）。它挂在状态接口上，
+ * 首页 / 同步页 / 切页 / 轮询会在几秒内重复索取，而工作副本状态不会在 10 秒里反复变化。
+ *
+ * 为什么放模块级而不是实例字段：`makeGitTransport()` 每次请求都新建实例（src/index.ts:3313），
+ * 实例级缓存等于没有缓存。
+ *
+ * 「完整事实」判定：`detail: true` 的结果是默认结果的超集 ⇒ 完整条目能满足任何请求，默认条目
+ * 不能满足 detail 请求；写回时 detail 结果总是覆盖，默认结果只在还没有完整条目时写入 ——
+ * 否则一次默认请求会把刚拿到的 ahead/dirty/remoteSnapshots 冲掉。
+ *
+ * 失效：`withWorkdir` 在除自检之外的每条路径收尾后都删掉本 key（写操作必然可能改变事实）。
+ */
+const INSPECT_FACTS_TTL_MS = 10_000;
+const inspectFactsCache = new Map<string, { at: number; detail: boolean; facts: GitWorkDirFacts }>();
+
+function inspectFactsCacheKey(workDir: string, repoUrl: string): string {
+  return workDir + '\u0000' + repoUrl;
+}
+
+/** 清空自检缓存（测试隔离用；生产路径由 `withWorkdir` 逐 key 失效）。 */
+export function clearInspectFactsCache(): void {
+  inspectFactsCache.clear();
+}
+
 /** 凭据提供者：token 只从这里读取，绝不在任何地方持久化 */
 export interface GitCredentialProvider {
   getToken(): Promise<string>;
@@ -480,31 +508,37 @@ export class GitTransport implements SyncTransport {
    *
    * 可重入：内层（ensureRepo/pullFromRemote/adoptRemoteHistory 等）不重复取锁。
    */
-  private async withWorkdir<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.workdirLockDepth > 0) {
-      this.workdirLockDepth += 1;
-      try {
-        return await fn();
-      } finally {
-        this.workdirLockDepth -= 1;
-      }
-    }
+  private async withWorkdir<T>(fn: () => Promise<T>, opts: { readonly?: boolean } = {}): Promise<T> {
     try {
-      return await withWorkdirLock(this.o.workDir, async () => {
+      if (this.workdirLockDepth > 0) {
         this.workdirLockDepth += 1;
         try {
           return await fn();
         } finally {
           this.workdirLockDepth -= 1;
         }
-      });
-    } catch (err) {
-      // 等锁超时 = 别人正在同步（另一个 DSH 实例 / 另一个同步任务），不是通道故障：
-      // 给可操作文案并标记 retryable，别让它伪装成「git 命令失败」。
-      if (err instanceof WorkdirLockError) {
-        throw new GitTransportError(this.msg('sync.git.workdirBusy', { dir: this.o.workDir }), { kind: 'conflict', retryable: true });
       }
-      throw err;
+      try {
+        return await withWorkdirLock(this.o.workDir, async () => {
+          this.workdirLockDepth += 1;
+          try {
+            return await fn();
+          } finally {
+            this.workdirLockDepth -= 1;
+          }
+        });
+      } catch (err) {
+        // 等锁超时 = 别人正在同步（另一个 DSH 实例 / 另一个同步任务），不是通道故障：
+        // 给可操作文案并标记 retryable，别让它伪装成「git 命令失败」。
+        if (err instanceof WorkdirLockError) {
+          throw new GitTransportError(this.msg('sync.git.workdirBusy', { dir: this.o.workDir }), { kind: 'conflict', retryable: true });
+        }
+        throw err;
+      }
+    } finally {
+      // 除纯只读自检外，任何操作都可能改变工作副本状态（push 改 ahead、fetch 改远端引用、
+      // 重建删目录、失败也可能已留下 commit）→ 收尾即丢弃自检缓存，绝不让「写后读」看到旧事实。
+      if (opts.readonly !== true) inspectFactsCache.delete(inspectFactsCacheKey(this.o.workDir, this.o.repoUrl));
     }
   }
 
@@ -595,8 +629,21 @@ export class GitTransport implements SyncTransport {
    * 因此放进 `detail: true`（供「重建工作副本」前评估数据量等场景显式索取）。
    */
   async inspectWorkDir(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {
+    const key = inspectFactsCacheKey(this.o.workDir, this.o.repoUrl);
+    const detail = opts.detail === true;
+    const hit = inspectFactsCache.get(key);
+    // 命中即返回：不必排队等锁，也不必再 spawn 一条 git（这是首页/切页/轮询的常态路径）。
+    // 返回浅拷贝 —— 缓存条目绝不外泄给调用方修改。
+    if (hit !== undefined && Date.now() - hit.at < INSPECT_FACTS_TTL_MS && (hit.detail || !detail)) {
+      return { ...hit.facts };
+    }
     // 只读命令也要排队：与并发的 fetch/checkout 交错会让 status/rev-list 读到半更新状态
-    return this.withWorkdir(() => this.inspectWorkDirLocked(opts));
+    const facts = await this.withWorkdir(() => this.inspectWorkDirLocked(opts), { readonly: true });
+    const prev = inspectFactsCache.get(key);
+    if (detail || prev === undefined || !prev.detail) {
+      inspectFactsCache.set(key, { at: Date.now(), detail, facts });
+    }
+    return { ...facts };
   }
 
   private async inspectWorkDirLocked(opts: { detail?: boolean } = {}): Promise<GitWorkDirFacts> {

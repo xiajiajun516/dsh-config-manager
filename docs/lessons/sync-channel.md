@@ -323,3 +323,55 @@ LONG_REQUEST_TIMEOUT_MS = 5 min`）⇒ 一个点挂住 = 整页骨架 5 分钟�
 `sync.ts` 里 5 处 `credentials.describe`，且 `cloudChannelViews`/`selectionViewByChannel`/
 `syncCredentialsByChannelView` 内部各再调一次）；本次修复不依赖定位到它。真机是否因此恢复健康，
 需要重建 `lib/` 并重启 DSH 后由用户确认。
+
+
+## `/sync/status` 的 730 ms 从哪来：7 次 `git.exe` 进程启动（2026-10-27 实测）
+
+**规则判据（已回写 `AGENTS.md` §1）**：只读端点也别在 GET 里 spawn 外部进程；**同一事实被反复索取**
+（首页 / 切页 / 轮询）要「按需 detail + 短 TTL 缓存」，别让每次请求都重新付一遍进程创建的钱。
+
+**现象**：修完上一节的「无界挂起」之后，同机实测 `GET /sync/status` 仍要 **0.73–0.77 s**，比同级只读端点
+慢两个数量级：`/status` 5 ms、`/sync/autosync` 1–2 ms、`/sync/history` 8 ms（它们都不 spawn 外部进程）。
+
+**归因（逐条实测，cwd = `~/.dsh/dsh-config-manager/sync/work`）**：
+
+| 命令（detail 自检） | 耗时 | 输出 |
+|---|---|---|
+| `git remote get-url origin` | 89 ms | 地址 |
+| `git remote get-url --push origin` | 77 ms | 地址 |
+| `git rev-list --count HEAD --not --remotes` | 84 ms | 2 B |
+| `git status --porcelain` | 99 ms | **0 B**（工作副本干净） |
+| `git rev-parse --abbrev-ref HEAD` | 80 ms | main |
+| `git ls-tree --name-only origin/main:snapshots` | 79 ms | 462 B |
+| `git ls-tree --name-only origin/main:snapshots-encrypted` | 78 ms | exit 128（目录不存在） |
+| **合计** | **585 ms** | |
+
+本地直调 `new GitTransport(...).inspectWorkDir({ detail: true })` = **693–732 ms**（构造 0 ms），与 HTTP 端点
+730–774 ms 只差 30–40 ms（HTTP 层）⇒ **耗时 100% 落在自检里**，与仓库大小、输出内容、命令成败都无关 ——
+Windows 上每次进程创建固定 ~77–99 ms。
+
+**已排除**：`readFullSyncConfig` 0.18–1.17 ms、`loadSyncState` 0.04–0.33 ms、`readAllSyncSelections`
+0.05–0.22 ms、`listCloudConfiguredProviders` 0.04–0.15 ms、读 `.credentials.yaml` 0.12–0.58 ms；
+凭据 `describe` 是**纯内存**（`dsh-credentials-local` 只查 `Map.get` + 启动环境表 `Map.get`）。
+
+**修法（两条，一起上）**：
+1. **按需 detail**：`GET /sync/status?detail=0` 跳过 ahead / dirty / remoteSnapshots 那 5 条命令（7 → 2 条）。
+   只有同步页的 `WorkDirCard` 渲染这三项；首页与产物库只要「工作副本是否跟随配置地址」。缺省仍是完整自检
+   （老调用方零改动），宿主 `inspectWorkDir({ detail: opts.detail !== false })` 保证漏传参数不会悄悄丢字段。
+2. **10 s TTL 缓存**（`src/sync/git/git-transport.ts` 的 `inspectFactsCache`）：**模块级**，因为
+   `makeGitTransport()` 每次请求都新建实例（实例字段等于没缓存）。只把 `detail: true` 的结果当「完整事实」
+   —— 完整条目能满足任何请求，默认条目不能满足 detail 请求；写回时 detail 总是覆盖，默认结果只在还没有完整
+   条目时写入。**失效靠 `withWorkdir` 的 `readonly` 标记**：除自检外每条路径收尾都删 key（push 改 ahead、
+   fetch 改远端引用、重建删目录、失败也可能已留下 commit）—— 宁可多清，也不让「写后读」看到旧事实。
+
+**收益**：detail 关闭时只 spawn 2 条命令（约 170 ms）；缓存命中时 **0 条命令**。首页 / 产物库 / 切页 / 轮询
+全走缓存或缺省路径，只有同步页主动要完整事实。
+
+**验收**：`tests/route/sync-status-budget.test.ts` 的「detail=0 → 工作副本自检降级；缺省仍是完整自检」
+（断言宿主收到的入参）、`src/sync/git/git-transport.test.ts` 的三条缓存用例（命中不再 spawn / 默认结果不满足
+detail 请求且不同 repoUrl 不共用 / TTL 过期后重跑）、`tests/home-load-availability.test.ts` 的 **L-04**
+「workDir detail 开关贯通四层」共同钉住。
+
+**未做**：合并命令（7 → 4 条，例如一次 `git status --porcelain=v2 --branch` 拿 ahead/branch/dirty）—— 收益
+有限且要重写解析，本次未采纳。
+

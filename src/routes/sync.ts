@@ -5,7 +5,7 @@
  * path/methods 就是唯一声明处；围栏、方法判定与顶层异常处理由 src/routes/kit.ts 在注册点统一提供。
  */
 
-import { endpoint, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
+import { endpoint, queryParam, requireJsonObject, readJsonBody, writeJson } from './kit.ts'
 import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/env-lock.ts'
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
@@ -191,7 +191,12 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
    * ⇒ 整个组装套总预算，超时如实报 503，保证请求有界返回。
    */
   const SYNC_STATUS_BUDGET_MS = 10_000
-  const collectSyncStatus = async (): Promise<Record<string, unknown>> => {
+  /**
+   * @param workDirDetail 是否连「领先远端提交数 / 未提交改动 / 远端快照数」一起自检。
+   *   那三项多起 5 条 git 子进程（Windows 每次约 80 ms；实测完整自检 585 ms、端点 730 ms）。
+   *   只有同步页的 WorkDirCard 渲染它们 —— 首页与产物库只问「工作副本是否跟随配置地址」。
+   */
+  const collectSyncStatus = async (opts: { workDirDetail: boolean }): Promise<Record<string, unknown>> => {
     // 完整双命名空间配置：repoUrl / webdav.url 无论当前通道都回填，
     // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失
     const full = await readFullSyncConfig(syncDir)
@@ -220,7 +225,7 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
     const gitRepoUrl = full?.git?.repoUrl ?? ''
     let workDir: Awaited<ReturnType<typeof syncWorkDir.inspect>> | null = null
-    if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl)
+    if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl, { detail: opts.workDirDetail })
     return {
       ok: true,
       configured: full !== null,
@@ -264,7 +269,10 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
     endpoint({ path: '/api/dsh-config-manager/sync/status', methods: ['GET'] }, async (req, res) => {
       try {
-        writeJson(res, 200, await withTimeout(collectSyncStatus(), SYNC_STATUS_BUDGET_MS, msg('host.syncStatusTimeout')))
+        // detail=0：跳过 workDir 的 ahead / dirty / remoteSnapshots（省 5 次 git 子进程启动）。
+        // 缺省仍做完整自检 —— 老调用方按原语义继续拿到全部字段，关掉时那三项如实回 null。
+        const workDirDetail = queryParam(new URL(req.url ?? '/', 'http://localhost'), 'detail') !== '0'
+        writeJson(res, 200, await withTimeout(collectSyncStatus({ workDirDetail }), SYNC_STATUS_BUDGET_MS, msg('host.syncStatusTimeout')))
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         // 预算耗尽 = 暂不可用（503）；其余异常仍是 500。两者都让客户端拿到明确错误而不是空等。
