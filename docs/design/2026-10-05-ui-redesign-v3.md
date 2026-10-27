@@ -98,7 +98,7 @@ node -e "const fs=require('fs');const c=fs.readFileSync('src/client/config-manag
 | **P-IA-13** | low | **`pin/unpin` 残留死代码**：能力已按用户要求下线，但 union/字典/API/路由仍在，`LibraryActions` 无 case（落 default） | `ui/artifact-view.ts:91,183-184,224`；`artifact-view.test.ts:91`；`client/api.ts:680`；`routes/snapshots.ts:190` | 工程纪律（死代码） | 下线时只改了分派，未清残留 |
 | **P-DOC-1** | low | `DESIGN.md` 1135 行、边写边补的「案例法」；多处描述与实现不符（如 §1 导航列「首页/产物库/导入/同步/市场/环境」6 项，而实现是 5 页签且无导入、有市场；同文件 §1.1 的表又只列 4 页） | `DESIGN.md:29,34-39` vs `ConfigManagerSection.tsx:70-81,492-502` | §9 文档同步 | 文档滞后于实现 |
 
-**审计遗留**：`docs/design/ui-audit-2026-09-20.md` 的 26 条已**全部**在 v2 落地（抽查 `UI-20`=`ErrorBanner.tsx:34-40`、`UI-25`=`ImportWizardView.tsx:275-276` 均有修复注释）。本清单不含未修审计项。
+**审计遗留**：2026-09 那份 UI 审计（26 条，2026-10-28 已移出仓库，取回 `git show 6f2864b:docs/design/ui-audit-2026-09-20.md`）已**全部**在 v2 落地（抽查 `UI-20`=`ErrorBanner.tsx:34-40`、`UI-25`=`ImportWizardView.tsx:275-276` 均有修复注释）。本清单不含未修审计项。
 
 ---
 

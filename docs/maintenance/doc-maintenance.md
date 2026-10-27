@@ -136,7 +136,7 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 
 ### 7.1 能自动化的（只有这四类，不再增加）
 
-- **路径存在性**：`node scripts/check-doc-paths.mjs`（反引号路径与相对链接；不含 docs/design、docs/seo、docs/lessons 等历史区）。
+- **路径存在性**：`node scripts/check-doc-paths.mjs`（反引号路径与相对链接；不含 docs/design、docs/lessons 等历史区）。
 - **活跃文档索引收录**：同一个脚本的 `[doc-index]` 段——`docs/{spec,modules,maintenance,decisions,components}/` 下每份 md 必须在 `docs/index.md` 里以明确路径出现（`lessons` 用裸文件名收录，故意不在范围内）。
 - **版本声明一致性**：`node scripts/check-doc-versions.mjs`（三处版本号 + 活文档里标注适用版本的句子）。
 - **行为锚点**：现有测试（`tests/route/`、`tests/architecture-boundaries.test.ts`、`tests/conformance/`、各 `*.test.ts`）。文档断言与测试冲突时，以测试为准改文档。

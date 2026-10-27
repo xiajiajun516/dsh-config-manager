@@ -1,6 +1,6 @@
 // 「活跃文档是否被 docs/index.md 收录」的纯判定逻辑（零依赖）。
 // 单独成模块只为可测：脚本与 tests/doc-index-coverage.test.ts 共用这一份实现，测试不复制正则。
-// 边界（2026-10-23 批准）：只覆盖正式长期维护的五目录；lessons（裸文件名收录）、design/handoff/seo、
+// 边界（2026-10-23 批准）：只覆盖正式长期维护的五目录；lessons（裸文件名收录）、design（历史区）、
 // docs/lessons/known-pitfalls.md 都不在范围内。
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join, sep } from 'node:path'

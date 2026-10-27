@@ -4,7 +4,7 @@
  *
  * 为什么存在：审计发现活文档里存在指向已删除文件的「反引号路径」，读者与 agent 按图索骥会失败。
  * 只校验**活文档**；历史归档与证据库故意不校验：
- *   - 排除：docs/design（历史设计稿）、docs/seo、docs/lessons（证据可能引用已删文件）、
+ *   - 排除：docs/design（历史设计稿）、docs/lessons（证据可能引用已删文件）、
  *           docs/lessons/known-pitfalls.md（冻结存档）、CHANGELOG.md（历史记录）
  *
  * 契约：
@@ -17,7 +17,7 @@
  * 二、活跃文档索引收录（2026-10-23 批准新增）
  * 为什么存在：新增 md 忘记回 docs/index.md 加行，导致文档事实上不可达；此前只靠人工。
  * 覆盖面**只**是正式长期维护的五目录（docs/spec、docs/modules、docs/maintenance、docs/decisions、docs/components），
- * 不扩大到 lessons（用裸文件名收录）、design/handoff/seo（历史区）与 docs/lessons/known-pitfalls.md（冻结存档）。
+ * 不扩大到 lessons（用裸文件名收录）、docs/design（历史区）与 docs/lessons/known-pitfalls.md（冻结存档）。
  * 收录判定 = **索引条目行**（表格行 / 列表项）出现该文件的全路径（反引号或相对链接）；正文顺带提到不算。
  * 判定逻辑抽在 scripts/doc-index-coverage.mjs（单测 tests/doc-index-coverage.test.ts），脚本不重复实现。
  * 豁免表 INDEX_COVERAGE_EXEMPT 当前为空；加条目必须写理由（= 公开承认这份文档故意不进索引）。
