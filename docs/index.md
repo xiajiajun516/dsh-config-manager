@@ -73,7 +73,7 @@
 
 - `docs/maintenance/tech-debt.md` — 按 P1/P2/P3 编号的债务清单 + 已修留档；每条带证据/影响/建议/置信度
 - `docs/maintenance/known-limits.md` — 「当前做不到 / 做了会出事」的硬限制（平台/外部事实，仓内不可证）
-- `docs/maintenance/known-gaps.md` — 已知实现缺口台账（**历史证据 + 当前状态**，不是路线图，也**不是**对外契约）；查「现在还没关的」只看 §0 状态表。体积大且不随版本走，两个守卫显式跳过它
+- `docs/maintenance/known-gaps.md` — 已知实现缺口台账（不是路线图，也**不是**对外契约）；**只登记仍未关闭的项**（§0.1），已关闭项只留编号 + 一句话（§0.2），逐条取证在 git 历史（`git show 6f2864b:docs/maintenance/known-gaps.md`）。体积大且不随版本走，两个守卫显式跳过它
 - `docs/maintenance/doc-maintenance.md` — **文档维护规则**：改动要不要写文档、写哪份、AI 流程、季度人工清单
 - `docs/maintenance/versioning.md` — **版本管理规范**：三数字语义与 0.x 本地约定、预发布命名、历史版本保留与审计记录、「已发布」的四项定义、发布前检查清单、版本变更判断模板
 

@@ -815,7 +815,7 @@ Electron 的 asar 报错、crashpad `not connected`。对照 09-30 / 10-01 / 10-
 ## 用户消息气泡与宿主**逐值对齐**（2026-10-17，用户要求「完全一致」）
 
 **来源**：用户 2026-10-17 明确要求「本插件绘制的消息气泡与 DSH 原生气泡完全一致」。上一版把三处差距登记为
-「近似档、本任务不做」（见 DESIGN.md §15b 旧注与 `docs/maintenance/known-gaps.md` G-39 增量（五）③），本轮全部收回。
+「近似档、本任务不做」（见 DESIGN.md §15b 旧注与 `docs/maintenance/known-gaps.md` G-39），本轮全部收回。
 
 **取证方法（可复现，零依赖）**：DSH 桌面把实现整套放在 `D:/Apps/DSH/resources/app.asar` 里（系统提示里的
 `app.asar/dsh/` 是**虚拟路径**，rg/glob 读不到）。asar 头 = `u32@0 = 4`、`u32@4 = headerSize`、

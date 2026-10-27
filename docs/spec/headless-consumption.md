@@ -290,7 +290,7 @@ npm ls --all
 #     +-- js-yaml@5.4.2
 #     | `-- argparse@2.0.1
 #     `-- (18 条 UNMET peerDependencies —— 由 DSH 宿主提供)
-#          16 个 @deepseek-ai/* + react + react-dom（2 个 React peer，见 docs/maintenance/known-gaps.md §P-1）
+#          16 个 @deepseek-ai/* + react + react-dom（2 个 React peer，历史缺口 P-1 已修复，见 docs/maintenance/known-gaps.md）
 
 node -e "import('dsh-config-manager/core')"     # 38 exports，加载成功
 node --check node_modules/dsh-config-manager/lib/client.js   # exit 0
