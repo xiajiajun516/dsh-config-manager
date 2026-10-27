@@ -99,7 +99,6 @@ function ReleaseCardView({
 
         <Button
           href={release.url}
-          title={t('about.releaseNotes.viewSingleOnGithub')}
           className={css.dialogClose}
         >
           {t('about.releaseNotes.viewSingleOnGithub')} ↗
@@ -291,7 +290,7 @@ export function ReleaseNotesDialog({
               color: 'var(--dsw-alias-label-tertiary)',
             }}
           >
-            — {t('about.releaseNotes.allLoaded')} —
+            {t('about.releaseNotes.allLoaded')}
           </div>
         )}
       </Modal.Body>

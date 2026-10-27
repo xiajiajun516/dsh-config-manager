@@ -51,7 +51,6 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
     return (
       <Card>
         <div className={css.statRow}>
-          <span className={css.groupLabel}>{t('myconfigs.login.title')}</span>
           <Skeleton count={2} label={t('myconfigs.login.checking')} />
         </div>
       </Card>
@@ -61,7 +60,6 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
     return (
       <Card>
         <div className={css.actionRow}>
-          <span className={css.groupLabel}>{t('myconfigs.login.title')}</span>
           <Button variant="primary" disabled={!githubView.canStart} onClick={() => { onStart() }}>
             {githubView.startLabel}
           </Button>
@@ -85,7 +83,6 @@ export function MyConfigsLoginCard({ loginView, github, t, uiT, onStart, onCance
   return (
     <Card>
       <div className={css.actionRow}>
-        <span className={css.groupLabel}>{t('myconfigs.login.title')}</span>
         <Badge kind="ok">{t('myconfigs.login.loggedInAs', { login: loginView.login })}</Badge>
       </div>
       <div className={css.statRow}>

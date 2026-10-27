@@ -31,15 +31,6 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
       case 'others': return 'backupFiles.inspectGroup.others'
     }
   }
-  // kindTag 颜色变体（kind → CSS 类；颜色语义见 backup-inspect.ts InspectChangeGroup.kind）
-  const kindTagClass = (kind: 'error' | 'info' | 'warn' | 'ok'): string => {
-    switch (kind) {
-      case 'error': return css.kindTagError ?? ''
-      case 'warn': return css.kindTagWarn ?? ''
-      case 'ok': return css.kindTagOk ?? ''
-      case 'info': return css.kindTagInfo ?? ''
-    }
-  }
   const groups = inspectGroupedChanges(summary)
   return (
     <div>
@@ -80,8 +71,9 @@ export function BackupInspectView({ result, t }: BackupInspectViewProps) {
                 <ul className={css.reportList}>
                   {group.items.map((item) => (
                     <li key={item.id}>
-                      <span className={`${css.kindTag} ${kindTagClass(group.kind)}`}>{item.kind}</span>
-                      {/* 差异查看的计划项文本由宿主拼装 → 渲染前过 redact（安全自查） */}
+                      {/* 逐项不再重复 kind：分组标题已按 kind 命名，裸枚举值（Create/Skip…）没有第二种说法。
+                          前导 {' '} 是 plan-text-redaction 逐字锚点的一部分，别删（见该表 snapshot-inspect-description）。
+                          差异查看的计划项文本由宿主拼装 → 渲染前过 redact（安全自查） */}
                       {' '}{item.adapter}: {redact(item.description)}
                     </li>
                   ))}

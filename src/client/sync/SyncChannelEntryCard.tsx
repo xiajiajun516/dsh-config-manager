@@ -83,17 +83,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
           <Badge kind={workdirKind}>{t(workdirKey)}</Badge>
         )}
       </div>
-      {/* 状态事实行（Workbench：配置状态/上次同步/可同步分区——未配置时也要给硬事实） */}
+      {/* 状态事实行（Workbench：上次同步/可同步分区——未配置时也要给硬事实）。
+          配置状态只由上面那排徽章表达：同一张卡里用「徽章 + 事实行」两处说同一件事，
+          用户得比对两遍才知道是不是同一状态。 */}
       <div className={css.factGrid} style={{ marginTop: 8 }}>
-        <div className={css.factCell}>
-          <span className={css.factLabel}>{t('syncStatus.state')}</span>
-          <span className={css.factValue}>
-            {/* 判据必须与徽章同源（本卡自己的 remoteReady）：statusInfo.configured 是**全局**语义
-                （任一通道配置过即为 true），照它渲染会让「只配了 git」时另外三张卡同时出现
-                「未配置」徽章 +「已配置」事实行。 */}
-            {remoteReady ? t('channel.configured') : t('channel.notConfigured')}
-          </span>
-        </div>
         <div className={css.factCell}>
           <span className={css.factLabel}>{t('syncStatus.lastSync')}</span>
           <span className={css.factValue}>

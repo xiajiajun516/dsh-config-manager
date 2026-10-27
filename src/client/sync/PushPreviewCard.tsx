@@ -30,7 +30,6 @@ export function PushPreviewCard({ preview, t, uiT, sectionName }: {
   return (
     <div>
       <Banner kind="info">{view.headline}</Banner>
-      {view.previewHint !== '' && <div className={css.hint}>{view.previewHint}</div>}
       {view.remoteSnapshotCount === 0 && (
         <Banner kind="warn">{t('syncflow.pushFirstBaseline')}</Banner>
       )}

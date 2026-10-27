@@ -156,7 +156,6 @@ export function CommandPalette({ open, onClose, commands, ctx, onRun, t }: Comma
                 aria-disabled={hit.disabled ? true : undefined}
                 data-active={index === safeActive ? '' : undefined}
                 data-disabled={hit.disabled ? '' : undefined}
-                title={titleOf(hit.item.titleKey)}
                 onMouseEnter={() => { setActive(index) }}
                 onClick={() => { runAt(index) }}
               >

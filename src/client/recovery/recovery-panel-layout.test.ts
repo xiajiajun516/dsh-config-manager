@@ -174,8 +174,10 @@ test('台账弹窗分栏 / 刷新不抖 / 预览留白（2026-10-12 用户要求
 test('会话体检卡不再渲染预扫描说明文案（用户 2026-10-12 要求）', () => {
   const sessions = functionBody('SessionHealthCard');
   assert.equal(sessions.includes('sessions.dialog.hint'), false, '预扫描说明文案不得再回到卡上');
-  // 摘要行必须保留，且只在真有扫描结果时渲染（首屏不得留空行）
-  assert.ok(sessions.includes("t('sessions.dialog.lastScan'"), '扫描摘要必须保留');
+  // 摘要行必须保留（2026-10-27：整句摘要改成三个计数徽章），且只在真有扫描结果时渲染（首屏不得留空行）
+  assert.ok(sessions.includes("t('sessions.dialog.lastScan.total'"), '扫描摘要必须保留');
+  assert.ok(sessions.includes("t('sessions.dialog.lastScan.issues'"), '需处理计数必须保留');
+  assert.match(sessions, /<Badge kind=\{summary\.needsAttention > 0 \? 'warn' : 'ok'\}>/, '摘要以状态徽章表达（不再是一整句）');
   assert.match(sessions, /summary !== null && response !== null &&/, '摘要只在有结果时渲染');
   const locales = readFileSync('src/client/recovery/recovery-locales.ts', 'utf8');
   assert.equal(locales.includes("'sessions.dialog.hint'"), false, '字典里不得留下已删文案（zh 与 en 都要删）');

@@ -12,7 +12,7 @@
  */
 import { useState } from 'react'
 
-import { Badge, Button, Card } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { redact } from '../../security/redaction.ts'
 import css from '../config-manager.module.css'
@@ -118,16 +118,14 @@ export function IncompleteCopiesSection(props: IncompleteCopiesSectionProps) {
         ))}
       </div>
       {locked !== null && (
-        <div>
-          <div className={css.hint}>{t('recovery.incomplete.locked', { reason: locked })}</div>
+        <>
+          <Banner kind="warn">{t('recovery.incomplete.locked', { reason: locked })}</Banner>
           <div className={css.actionRow}>
-            <Button loading={unlocking} onClick={() => { void doUnlock() }}>
-              {t('recovery.incomplete.unlock')}
-            </Button>
+            <Button loading={unlocking} onClick={() => { void doUnlock() }}>{t('recovery.incomplete.unlock')}</Button>
           </div>
-        </div>
+        </>
       )}
-      {error !== null && <div className={css.hint}>{error}</div>}
+      {error !== null && <Banner kind="error">{error}</Banner>}
     </Card>
   )
 }

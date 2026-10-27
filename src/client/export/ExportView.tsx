@@ -259,12 +259,11 @@ export function ExportView({ api, t }: ExportViewProps) {
 
   /**
    * 公告位内容（页面与选择器弹窗共用同一个槽位）：
-   * 「未勾选」优先，否则显示「设备相关」警示 —— 两者天然互斥（未勾选时 selection 为空，
-   * validateSelection 不可能报出设备相关分区），所以槽位内容最多一个，高度恒定。
+   * 只承载「设备相关」这一条非阻断警示。「未勾选」不再单独出 Banner ——
+   * 它与「本次将导出」卡片里的空态是同一件事（同屏第二次说），
+   * 且主按钮同时置灰（disabled={nothingSelected}），槽位高度由 .noticeSlot 固定。
    */
-  const notice = nothingSelected
-    ? <Banner kind="warn"><span className={css.noticeLine}>{t('export.nothingSelected')}</span></Banner>
-    : deviceWarning
+  const notice = deviceWarning
 
   /** 选择器变更：直接落库（不再有「切换模式」这一步）。 */
   const applyPicker = (next: Selection): void => {
@@ -389,14 +388,12 @@ export function ExportView({ api, t }: ExportViewProps) {
             不再常驻占首屏一行（默认导出推荐分区 + 去哪里调整勾选）。 */}
         <InfoHint text={t('export.hint')} label={t('common.infoHint')} />
       </div>
-      {/* 公告位 = **恒定高度**槽位（.noticeSlot）。原先「未勾选」与「设备相关」是两个各自条件
-          渲染的 Banner，出现/消失时内容流高度变化 —— 垂直居中的弹窗与页面会跳（用户实测反馈）。
-          两者天然互斥（未勾选时 deviceSpecific 必为空），因此共用同一个槽位。 */}
+      {/* 公告位 = **恒定高度**槽位（.noticeSlot）：出现/消失时不能改变内容流高度，
+          否则垂直居中的选择器弹窗会跳（用户实测反馈）。 */}
       <div className={css.noticeSlot}>{notice}</div>
 
-      {/* 3. 安全选项（UI-11：恢复分组标题 —— 否则这一组与下面的「文件名与备注」是两块
-          外观完全相同的输入区，读不出边界；标题键 export.security 此前已备但无引用点） */}
-      <div className={css.groupLabel}>{t('export.security')}</div>
+      {/* 3. 安全选项：两个 Checkbox 各自的 label 已说明「做什么」，
+          不再加分组标题（同屏多一层「安全选项」并不改变任何决定）。 */}
       <div className={css.optionsRow}>
         <Checkbox
           checked={encrypt}
@@ -427,8 +424,8 @@ export function ExportView({ api, t }: ExportViewProps) {
         </div>
       )}
 
-      {/* 4. 命名行：文件名 + 备注（双列；UI-11 恢复分组标题） */}
-      <div className={css.groupLabel}>{t('export.naming')}</div>
+      {/* 4. 命名行：文件名 + 备注（双列）。两个 field 自带可见 label，
+          分组标题「文件名与备注（可选）」只是把字段名再念一遍，已删除。 */}
       <div className={css.secretFields}>
         <label className={css.field}>
           <span className={css.fieldLabel}>

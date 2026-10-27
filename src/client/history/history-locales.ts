@@ -9,7 +9,6 @@ type KindKey = `history.kind.${MigrationKind}`;
 type ResultKey = `history.result.${MigrationResult}`;
 type CommonKey =
   | 'view.history'
-  | 'history.title'
   | 'history.subtitle'
   | 'history.empty'
   | 'history.loading'
@@ -26,7 +25,6 @@ type CommonKey =
   | 'history.filter.recent.50'
   | 'history.filter.recent.200'
   | 'history.filter.sections'
-  | 'history.filter.title'
   | 'history.search.placeholder'
   | 'history.export.json'
   | 'history.export.markdown'
@@ -51,12 +49,11 @@ export type HistoryKey = KindKey | ResultKey | CommonKey;
 export const zh = {
   'view.history': '迁移历史',
   'common.infoHint': '查看说明',
-  'history.title': '迁移与审计历史',
   'history.subtitle': '统一记录全部破坏性/迁移操作（导入/恢复/回滚/档案/同步/备份/快照操作），只可追加、不可修改或删除，跨重启持久，可查询可导出。',
-  'history.empty': '暂无迁移记录。执行导入、恢复、档案切换、同步应用或备份后，这里会出现审计记录。',
+  'history.empty': '暂无迁移记录。',
   'history.loading': '加载迁移历史…',
   'history.corruptedBanner': '检测到无法读取/可能被篡改的历史条目',
-  'history.corruptedCount': '{count} 条已被跳过（不计入导出）',
+  'history.corruptedCount': '{count} 条已跳过 · 不参与导出',
   'history.stats.total': '总数',
   'history.stats.success': '成功',
   'history.stats.failed': '失败',
@@ -68,7 +65,6 @@ export const zh = {
   'history.filter.recent.50': '最近 50 条',
   'history.filter.recent.200': '最近 200 条',
   'history.filter.sections': '涉及分区',
-  'history.filter.title': '筛选与导出',
   'history.search.placeholder': '搜索摘要 / 错误 / 分区…',
   'history.export.json': '导出 JSON',
   'history.export.markdown': '导出 Markdown',
@@ -110,12 +106,11 @@ export const zh = {
 export const en = {
   'view.history': 'Migration History',
   'common.infoHint': 'Show description',
-  'history.title': 'Migration & Audit History',
   'history.subtitle': 'Unified append-only audit trail of all destructive/migration operations (import/restore/rollback/profile/sync/backup/snapshot), durable across restarts, queryable and exportable.',
-  'history.empty': 'No migration records yet. Executing an import, restore, profile switch, sync apply, or scheduled backup will create audit entries here.',
+  'history.empty': 'No migration records yet.',
   'history.loading': 'Loading migration history…',
   'history.corruptedBanner': 'Detected unreadable or possibly tampered history entries',
-  'history.corruptedCount': '{count} entry(s) were skipped (excluded from export)',
+  'history.corruptedCount': '{count} skipped · not exported',
   'history.stats.total': 'Total',
   'history.stats.success': 'Success',
   'history.stats.failed': 'Failed',
@@ -127,7 +122,6 @@ export const en = {
   'history.filter.recent.50': 'Latest 50',
   'history.filter.recent.200': 'Latest 200',
   'history.filter.sections': 'Sections',
-  'history.filter.title': 'Filter & export',
   'history.search.placeholder': 'Search summary / error / section…',
   'history.export.json': 'Export JSON',
   'history.export.markdown': 'Export Markdown',

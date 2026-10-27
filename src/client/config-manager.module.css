@@ -677,11 +677,6 @@ body {
   flex: 1 1 auto;
 }
 
-.statusMeta {
-  flex: none;
-  color: var(--dsw-alias-label-tertiary);
-}
-
 /* ================================================================ §3 Primitives */
 
 /* —— 按钮 —— */
@@ -2373,7 +2368,6 @@ body {
 .mergeScroll,
 .reportScroll,
 .confirmScroll,
-.pullScroll,
 .diffScroll,
 .historyScroll,
 .consultScroll {
@@ -2855,12 +2849,6 @@ body {
    保留为原语，供后续需要独占一行的分段控件使用。）
    注意：本类必须**自带分段控件外壳**（border/radius/padding/bg-base），
    否则 `.modeTab[data-active]` 的选中底色（layer-2）会与 Card 底色相同而「隐形」。 */
-
-/* 同步页「选择历史快照」空态提示行（原为行内 hint，独立成行以保持下拉与按钮同基线） */
-.snapshotPickerHint {
-  margin-top: 4px;
-  margin-bottom: 10px;
-}
 
 /* 卡头单行（标题 + 右侧动作/徽章）：标题左、其余右。
    与 .groupHeader 的区别：本类不做 baseline 对齐（按钮组需要居中），
@@ -3388,21 +3376,6 @@ body {
   color: var(--dsw-alias-label-secondary);
 }
 
-.snapshotRowBadges {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-}
-
-.snapshotRowIssues {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .snapshotRowFacts {
   flex: 0 0 auto;
   text-align: right;
@@ -3701,7 +3674,9 @@ body {
 /* 「显示全部（共 N 条）」行（UI-15）：单元列表折叠后的渐进披露入口，与单元行同缩进 */
 .pickerMore {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 4px 0 2px 16px;
 }
 
@@ -3803,11 +3778,6 @@ body {
    原先是 4 处内联 style={{ marginBottom: 0 }}，按「style 属性只允许极小修补」改成语义类（UI-21）。 */
 .secretFields .field {
   margin-bottom: 0;
-}
-
-/* 分组标题下的说明行（与下一个数据块留 10px）；替代内联 style，UI-21 */
-.groupHintRow {
-  margin-bottom: 10px;
 }
 
 .secretFields {

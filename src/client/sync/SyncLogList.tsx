@@ -83,7 +83,9 @@ export function SyncLogList({ api, t }: SyncLogListProps): ReactNode {
 
   return (
     <Card>
-      <SectionTitle title={t('history.title') + t('common.parens', { text: String(rows.length) })} />
+      {/* 条数只在下面那排统计徽章里给一次：标题里的 (12) 与「共 12 条」是同一个数，
+          两处并列时用户要先比对才敢确定它们说的是同一件事 */}
+      <SectionTitle title={t('history.title')} />
       {/* 头部统计摘要（先扫结论）；失败/跳过仅在存在时出现，并给语义色 */}
       <div className={css.statRow} aria-label={t('history.stats.summary')}>
         <Badge kind="info">{t('history.stats.total', { count: String(stats.total) })}</Badge>
@@ -164,7 +166,8 @@ function AutosyncRow({ entry, t }: { entry: AutosyncHistoryEntry; t: TranslateNS
           </span>
           {/* 第二行小字：跳过原因 / 错误（信息保留，但不挤在主行里） */}
           {row.skipReasonText !== undefined && <span className={css.hint}>{row.skipReasonText}</span>}
-          {row.error !== undefined && <span className={css.hint} title={row.error}>{t('history.autosyncError', { error: '' })}{row.error}</span>}
+          {/* 错误正文已经在这行显示，不再挂一份同样的 title（同一句话的第二种副本） */}
+          {row.error !== undefined && <span className={css.hint}>{t('history.autosyncError', { error: '' })}{row.error}</span>}
         </div>
         {row.hasDetail && (
           <details>

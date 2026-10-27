@@ -23,7 +23,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncApi, SyncProbeResult, SyncPushPayload } from './sync-api.ts'
-import { Banner, Button } from '../common/ui.tsx'
+import { Badge, Banner, Button } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { projectProbeResult } from './probe-view.ts'
 import { toast } from '../common/toast-store.ts'
@@ -67,7 +67,6 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
     const v = projectProbeResult(res, t('probe.unsupported'))
     const parts = [redact(v.message)]
     if (v.hint !== undefined) parts.push(redact(v.hint))
-    if (v.unsupported) parts.push(t('probe.unsupportedHint'))
     if (v.createdCollections.length > 0) {
       parts.push(t('probe.createdCollections', { list: v.createdCollections.map((c) => redact(c)).join(t('common.listSeparator')) }))
     }
@@ -124,12 +123,11 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
           t={api.t}
         />
       )}
-      {/* 能力边界**不是**故障：中性 info 横幅 + 一句解释，绝不显示「操作失败」 */}
+      {/* 能力边界**不是**故障：中性 info 横幅说结论，绝不显示「操作失败」。
+          不另加「这是能力边界不是故障」的解释句 —— 横幅已是 info 语义（绿/中性，不是红色错误带），
+          再写一遍等于告诉用户如何看待他自己看到的颜色。 */}
       {!actionMode && view !== null && view.tone === 'info' && (
-        <>
-          <Banner kind="info">{redact(view.message)}</Banner>
-          <div className={css.hint}>{t('probe.unsupportedHint')}</div>
-        </>
+        <Banner kind="info">{redact(view.message)}</Banner>
       )}
       {!actionMode && view !== null && (view.tone === 'ok' || view.tone === 'warn') && (
         <>
@@ -144,7 +142,7 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
             </div>
           )}
           {view.snapshotCount !== undefined && (
-            <div className={css.hint}>{t('probe.snapshotCount', { count: String(view.snapshotCount) })}</div>
+            <Badge kind="info">{t('probe.snapshotCount', { count: String(view.snapshotCount) })}</Badge>
           )}
         </>
       )}

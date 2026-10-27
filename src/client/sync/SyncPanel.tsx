@@ -1321,12 +1321,14 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   {cs.loadingSnapshots === true ? null : <RefreshIcon size={14} />} {t('syncflow.refreshSnapshots')}
                 </Button>
               </span>
+              {/* 空态 = 选快照这一行的状态，跟控件同排（徽章），不另占一行：
+                  此前它是 picker 下方单独一行的 hint，把下面整块内容整体顶低 4+10px。 */}
+              {cs.snapshots.length === 0 && cs.loadingSnapshots !== true && (
+                <span className={css.pickerAction}>
+                  <Badge kind="info">{t('syncflow.noSnapshots')}</Badge>
+                </span>
+              )}
             </div>
-            {/* 空态独立成行（移出 label）：label 高度 = fieldLabel + select，
-                刷新按钮与之底部对齐即真正同一行，不再被 hint 顶高错位 */}
-            {cs.snapshots.length === 0 && cs.loadingSnapshots !== true && (
-              <div className={css.hint + ' ' + css.snapshotPickerHint}>{t('syncflow.noSnapshots')}</div>
-            )}
 
             {/* 自动同步行（按通道；文案与倒计时在卡内派生） */}
             <AutosyncCard
@@ -1454,8 +1456,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
           {/* 同步记录（只留操作日志）：远端快照行已搬进产物库（§8）。
               这条指路行是**必须的** —— 否则用户会以为「远端快照不见了」。 */}
           <div className={css.actionRow}>
-            <span className={css.hint}>{t('history.remoteMovedHint')}</span>
-            <span className={css.statusSpacer} />
             <Button size="sm" onClick={() => { runStore.patch({ panel: 'library', library: { sourceFilter: 'remote-snapshot' } }) }}>
               {t('history.remoteMovedAction')}
             </Button>

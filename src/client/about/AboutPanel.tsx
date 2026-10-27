@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { ConfigManagerApi } from '../api.ts'
-import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -110,14 +110,8 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('about.title')} info={<InfoHint text={t('about.subtitle')} label={t('common.infoHint')} />} />
-
       {/* 项目信息卡：插件名 + 官方 Badge；版本 / DSH / 平台（动态，经 status()） + 查看更新内容 */}
       <Card>
-        <span className={css.groupLabel}>{ABOUT_META.name}</span>
-        <div className={css.statRow}>
-          <Badge kind="ok">{t('about.official')}</Badge>
-        </div>
         {state.loading && <Skeleton count={3} label={t('about.loading')} />}
         {state.loadError !== null && (
           <div>
@@ -128,7 +122,8 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
           </div>
         )}
         {state.rows !== null && (
-          <div className={css.statRow} style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+          <div className={css.statRow}>
+            <Badge kind="ok">{t('about.official')}</Badge>
             <Badge kind="info">{t('about.version', { version: state.rows.version })}</Badge>
             <Badge kind="info">{t('about.dshVersion', { version: state.rows.dsh })}</Badge>
             <Badge kind="info">{state.rows.platform}</Badge>
@@ -163,13 +158,12 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
         )}
       </Card>
 
-
       {/* 插件版本更新检查（2026-09）：只读探测 npm latest + 给一条可复制的升级命令。
           为什么放在「关于」页：这是用户唯一会主动查看「我装的是哪一版」的地方；
           检查失败如实显示原因并允许重试，绝不显示成「已是最新」。 */}
       <Card>
         <span className={css.groupLabel}>{t('about.update.title')} <InfoHint text={t('about.update.offline')} label={t('common.infoHint')} /></span>
-        <div className={css.statRow} style={{ flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
+        <div className={css.statRow}>
           {state.rows !== null && (
             <Badge kind="info">{t('about.update.current', { version: state.rows.version })}</Badge>
           )}
@@ -200,7 +194,6 @@ export function AboutPanel({ api, t }: AboutPanelProps) {
               <pre className={css.cliCommand}>{updateView.command}</pre>
               <div className={css.actionRow}>
                 <CopyButton text={updateView.command} label={t('about.update.copyCommand')} t={t} />
-                <span className={css.hint}>{t('about.update.copyCommand')}</span>
               </div>
             </>
           ) : (

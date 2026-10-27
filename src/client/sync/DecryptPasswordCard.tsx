@@ -6,7 +6,7 @@
  */
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
-import { Button, Card } from '../common/ui.tsx'
+import { Badge, Button, Card } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import type { ChannelSyncState } from './sync-view.ts'
 import type { SyncChannelSettingsPatch } from '../../ui/sync-settings-view.ts'
@@ -36,7 +36,7 @@ export function DecryptPasswordCard({ t, settings, onPatchSettings, onPersistDec
       </label>
       {settings.decryptPasswordSaved && (
         <div className={css.actionRow}>
-          <span className={css.hint}>{t('mode.decryptPasswordSaved')}</span>
+          <Badge kind="ok">{t('mode.decryptPasswordSaved')}</Badge>
           {/* 危险语义：删除本机已保存的密码（不可逆，用户主动操作） */}
           <Button size="sm" variant="danger" onClick={onClearSavedPassword}>
             {t('mode.clearSavedPassword')}

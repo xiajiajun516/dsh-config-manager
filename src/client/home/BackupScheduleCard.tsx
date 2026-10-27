@@ -215,7 +215,6 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
     <Card>
       <div className={css.groupHeader}>
         <span className={css.groupLabel}>{t('backupSchedule.title')}</span>
-        {lastRun !== undefined && <Badge kind={backupRunBadgeKind(lastRun)}>{runStatusText(lastRun)}</Badge>}
         <InfoHint text={t('backupSchedule.hint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
         <Button
@@ -377,7 +376,6 @@ export function BackupScheduleCard({ api, t, syncT, onBackupDone }: BackupSchedu
                     value={retentionDraft[field]}
                     disabled={busy}
                     style={{ width: 88 }}
-                    aria-label={t('retention.title')}
                     onChange={(event) => {
                       const raw = event.target.value
                       const parsed = raw === '' ? 0 : Number(raw)

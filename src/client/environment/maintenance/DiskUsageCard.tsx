@@ -164,8 +164,9 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
 
       {status === 'ready' && vm !== null && (
         <>
-          <div className={css.hint}>
-            {t('diskUsage.location')}: <span className={css.mono}>{redact(vm.summary.dataDir)}</span> · {vm.summary.files}
+          {/* 路径与文件数本身就是字段值，不再加「统计位置」这类标签占位 */}
+          <div className={css.cellMeta}>
+            <span className={css.mono}>{redact(vm.summary.dataDir)}</span> · {vm.summary.files}
           </div>
           {/* 读不到的子区如实说明：既不显示 0，也不整卡报错（硬边界：unreadable ≠ 0） */}
           {vm.summary.anyUnreadable && <div className={css.hint}>{t('diskUsage.partial')}</div>}
@@ -212,14 +213,15 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
           {vm.legacy.length > 0 && (
             <>
               <div className={css.groupLabel}>{t('diskUsage.legacy.title')}</div>
-              <div className={css.hint}>{t('diskUsage.legacy.hint')}</div>
+              {/* 只留「与上方合计的口径差」：不删、不自动清的理由由行内策略标签负责 */}
+              <div className={css.cellMeta}>{t('diskUsage.legacy.hint')}</div>
               {vm.legacy.map((row) => (
                 <div className={css.actionRow} data-inline key={row.id}>
                   <span>
                     {row.label} <span className={css.mono}>{redact(row.relPath)}</span>
                   </span>
                   <span className={css.statusSpacer} />
-                  <span className={css.hint}>
+                  <span className={css.cellMeta}>
                     {row.unreadable ? t('diskUsage.unreadable') : row.size + ' · ' + row.files}
                   </span>
                   <span className={css.dim}>{t('diskUsage.policy.protected')}</span>
@@ -245,8 +247,6 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
           {tmpMarket !== undefined && (
             <div className={css.actionRow} data-inline>
               <span>{tmpMarket.label} <Badge kind={tmpMarket.bytes > 0 ? 'info' : 'ok'}>{tmpMarket.size}</Badge></span>
-              <span className={css.statusSpacer} />
-              <span className={css.hint}>{tmpMarket.desc}</span>
             </div>
           )}
 
@@ -258,14 +258,14 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
                 label={t('diskUsage.clean.includeExpired')}
               />
               <span className={css.statusSpacer} />
-              <span className={css.hint}>
-                {expiredExports.label} <Badge kind={expiredExports.bytes > 0 ? 'warn' : 'ok'}>{expiredExports.size}</Badge>
-              </span>
+              {/* 勾选框已经说明了「回收什么」，这里只补可回收量 */}
+              <Badge kind={expiredExports.bytes > 0 ? 'warn' : 'ok'}>{expiredExports.size}</Badge>
             </div>
           )}
 
           <div className={css.actionRow}>
-            <span className={css.hint}>{t('diskUsage.clean.reclaimableLabel')}</span>
+            <span className={css.cellMeta}>{t('diskUsage.clean.reclaimableLabel')}</span>
+            <span className={css.mono}>{formatBytes(reclaimTargets)}</span>
             <span className={css.statusSpacer} />
             <Button
               variant={includeExpired ? 'danger' : 'primary'}

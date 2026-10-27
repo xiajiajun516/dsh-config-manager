@@ -20,7 +20,7 @@ import { ConsultCard } from '../consult/ConsultCard.tsx'
 import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { SyncApi, SyncConfirmItem } from './sync-api.ts'
 import {
-  buildAdoptions, confirmListSummary, hasBulkDecidable, keepLocalAll, kindLabel, reviewItems, severityLabel,
+  buildAdoptions, confirmListSummary, hasBulkDecidable, isBulkDecidable, keepLocalAll, kindLabel, reviewItems, severityLabel,
   summarizeConfirmItems, useRemoteAll, type BulkDecision, type SyncConflictResolution,
 } from './sync-view.ts'
 import type { ApplyItemsResponse, SyncRollbackResponse } from './sync-api.ts'
@@ -115,6 +115,8 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
   const listSummary = useMemo(() => confirmListSummary(items), [items]);
   // 批量按钮的可用性：列表里存在可批量决策项（Error 项除外，需逐项处理）
   const bulkDecidable = useMemo(() => hasBulkDecidable(displayItems), [displayItems]);
+  // 批量按钮实际会改到的项数（= 列表里的可决策项，Error 项除外）—— 直接标在按钮行尾，不另写一段说明
+  const bulkCount = useMemo(() => displayItems.filter((it) => isBulkDecidable(it)).length, [displayItems]);
 
   const setAdopted = (itemId: string, adopted: boolean): void => {
     const existing: ItemState = states[itemId] ?? { adopted: false, resolution: undefined };
@@ -239,33 +241,32 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      <Banner kind={needsReview ? 'warn' : 'info'}>
-        {needsReview ? t('syncflow.needsReviewBadge') : t('syncflow.diffCount', { count: String(summary.total) })}
-      </Banner>
-      {/* 差异概览：兼容性徽章与计数同排。此前兼容性独占一行 —— 弹窗顶部连着三行都在讲「现在什么状态」，
-          而真正要用户做的事（下面那份列表）被推得更靠下。映射用 src/ui 的纯函数（等级 + 语义色），
-          文案走 sync 字典 —— 不在这里另写分级规则。 */}
+      {/* 状态与计数一律徽章，不再先来一条整句 Banner：此前 Banner 与下面的徽章把「共 N 项差异」
+          在同一屏里说了两遍。映射用 src/ui 的纯函数（等级 + 语义色），文案走 sync 字典 —— 不在这里另写分级规则。 */}
       <div className={css.statRow}>
         {compatibility !== undefined && (
           <Badge kind={compatibilityBadgeKind(compatibilityLevel(compatibility))}>
             {t(SYNC_COMPAT_KEYS[compatibilityLevel(compatibility)])}
           </Badge>
         )}
-        <Badge kind="info">{t('syncflow.diffCount', { count: String(summary.total) })}</Badge>
-        <Badge kind="ok">{t('syncflow.adoptRemote')} {summary.adopted}</Badge>
+        {needsReview && <Badge kind="warn">{t('syncflow.needsReviewBadge')}</Badge>}
+        {/* 一个徽章给两个数字：本次会导入几项 / 差异几项（原来的「共 N 项差异」与此重复） */}
+        <Badge kind="ok">{t('syncflow.adoptRemote')} {summary.adopted}/{summary.total}</Badge>
         {summary.error > 0 && <Badge kind="error">{severityLabel('error', api.t)} × {summary.error}</Badge>}
         {summary.warning > 0 && <Badge kind="warn">{severityLabel('warning', api.t)} × {summary.warning}</Badge>}
       </div>
-      <span className={css.hint}>{t('syncflow.adoptHint')}</span>
-      {/* 列表只有需人工决策的项，摘要徽章却是全量差异 —— 明确交代差集（autoCount=0 时不显示噪音） */}
-      {listSummary.autoCount > 0 && (
-        <span className={css.hint}>
-          {t('syncflow.listScope', { review: String(listSummary.reviewCount), auto: String(listSummary.autoCount) })}
-        </span>
-      )}
 
-      {/* 批量决策（作用于确认列表里的全部项；Error 项不在其列，需逐项处理）。
-          两个按钮都是「快捷方式」，一律 ghost —— primary 只留给弹窗底部真正的主操作「确认导入」。 */}
+      {/* 列表图例（合成一行）：勾选框怎么读 + 列表为什么比全量短。两件事都在解释下面这张列表，
+          各占一段只会把列表推到更低处。autoCount=0 时后半句不显示（没有差集可交代）。 */}
+      <div className={css.hint}>
+        {t('syncflow.adoptHint')}
+        {listSummary.autoCount > 0 && (
+          <> · {t('syncflow.listScope', { review: String(listSummary.reviewCount), auto: String(listSummary.autoCount) })}</>
+        )}
+      </div>
+
+      {/* 批量决策（快捷方式，一律 ghost —— primary 只留给弹窗底部真正的主操作「确认导入」）。
+          作用范围标在按钮行尾：能批量决策几项、错误项为什么只能逐项处理。 */}
       <div className={css.actionRow}>
         <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(keepLocalAll(items)) }}>
           {t('syncflow.keepLocalAll')}
@@ -273,9 +274,11 @@ export function SyncConfirmView(props: SyncConfirmViewProps): ReactNode {
         <Button variant="ghost" disabled={busy || !bulkDecidable} onClick={() => { applyBulkDecision(useRemoteAll(items)) }}>
           {t('syncflow.useRemoteAll')}
         </Button>
+        <span className={css.hint}>
+          {t('syncflow.bulkHint', { n: String(bulkCount) })}
+          {summary.error > 0 && <> · {t('syncflow.bulkErrorNote')}</>}
+        </span>
       </div>
-      {/* 说明独占一行：与按钮挤在同一行时换行位置随按钮宽度/文案长度乱跳 */}
-      <span className={css.hint}>{t('syncflow.bulkHint')}</span>
 
       {/* 逐项差异列表（仅需人工决策的项）；固定容器限高 + 内部滚动，防止整页被拉长 */}
       <div className={css.confirmScroll}>

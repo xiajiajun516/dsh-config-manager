@@ -218,9 +218,12 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         onChange={(event) => { runStore.patch({ library: { query: event.target.value } }) }}
       />
 
-      {/* 快照目录读不出来（不是「没有快照」）：与来源失败同一层级地如实说明 */}
+      {/* 快照目录读不出来（不是「没有快照」）：状态用 warn 徽章 + 行内原因，不写成一句话 */}
       {snapshotsUnreadable !== null && (
-        <div className={css.hint}>{t('library.snapshotsUnreadable')}{t('common.labelSeparator')}{redact(snapshotsUnreadable)}</div>
+        <div className={css.actionRow}>
+          <Badge kind="warn">{t('library.snapshotsUnreadable')}</Badge>
+          <span className={css.cellMetaNoteText}>{redact(snapshotsUnreadable)}</span>
+        </div>
       )}
 
       {/* 某个来源读不到：一条 warn + 重试，既不静默跳过，也不整页报错（§6.7） */}

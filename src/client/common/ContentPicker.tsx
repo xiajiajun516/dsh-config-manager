@@ -321,7 +321,16 @@ export function ContentPicker({
     const rootUnread = pluginTreeUnreadSections(tree)
     const body = (
       <>
-        {!tree.pluginsLoaded && <span className={css.hint}>{t('picker.pluginViewEmpty')}</span>}
+        {/* 插件清单还没到：**状态 + 动作**，不写操作说明。
+            读取中的等待态用同一句「读取中…」，别让用户以为要自己去找「插件」分区按钮；
+            读取失败/未触发时给就地重试 —— 折叠再展开是隐藏入口，不能只靠它。 */}
+        {!tree.pluginsLoaded && (busy || loading) && <span className={css.hint}>{t('picker.loadingSection')}</span>}
+        {!tree.pluginsLoaded && !busy && !loading && (
+          <div className={css.pickerMore}>
+            <Badge kind="info">{t('picker.pluginAreaUnread')}</Badge>
+            <Button size="sm" onClick={() => { for (const s of rootUnread) onRequestUnits?.(s) }}>{t('common.retry')}</Button>
+          </div>
+        )}
       {tree.pluginsLoaded
         && tree.entries.length === 0
         && tree.buckets.every((b) => b.units.length === 0)

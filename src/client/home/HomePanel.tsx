@@ -47,7 +47,7 @@ import {
 } from '../../ui/overview-view.ts'
 import { Badge, Banner, Button, Card, StatusDot, Stepper } from '../common/ui.tsx'
 import { SkeletonRows } from '../common/Skeleton.tsx'
-import { BackupIcon, ExportIcon, ImportIcon, SyncIcon } from '../common/Icon.tsx'
+import { BackupIcon, ExportIcon, ImportIcon } from '../common/Icon.tsx'
 import { CopyButton } from '../common/CopyButton.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { BackupScheduleCard } from './BackupScheduleCard.tsx'
@@ -223,10 +223,6 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     }
   }
 
-  // 纯导航（与 nav 页签同语义；状态入 runStore，切页/刷新不丢）
-  // v2：本页不再有「备份页」这个去处（定时备份就在本页，产物在产物库）
-  const navPanel = (panel: 'sync'): void => { runStore.patch({ panel }) }
-
   /**
    * 导入是**流程**不是页面（与导出同一条容器判据）：开侧滑面板，不切页。
    *
@@ -373,35 +369,30 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
         <Button
           variant="primary"
           loading={backupRunning}
-          title={t('overview.quick.backupTitle')}
           onClick={() => { void runBackupNow() }}
         >
           {backupRunning ? null : <BackupIcon size={14} />} {t('overview.quick.backup')}
         </Button>
-        <Button title={t('overview.quick.exportTitle')} onClick={openExportTask}>
+        <Button onClick={openExportTask}>
           <ExportIcon size={14} /> {t('nav.export')} ZIP
         </Button>
-        <Button title={t('overview.quick.importTitle')} onClick={openImportTask}>
+        <Button onClick={openImportTask}>
           <ImportIcon size={14} /> {t('nav.import')}
         </Button>
         {/* 外部 agent 入口（t17）：与「导入」并列但**直达来源选择** ——
             装了 Claude Code / Cursor 的用户要找的就是这条路，而不是先进向导再找按钮。 */}
         {openForeignImport !== undefined && (
-          <Button title={t('foreign.source.hint')} onClick={openForeignImportTask}>
+          <Button onClick={openForeignImportTask}>
             <ImportIcon size={14} /> {t('foreign.source.title')}
           </Button>
         )}
-        <Button title={t('overview.quick.syncTitle')} onClick={() => { navPanel('sync') }}>
-          <SyncIcon size={14} /> {t('overview.quick.sync')}
-        </Button>
       </div>
 
       {emptyState ? (
-        /* 首用空态：引导创建第一个备份（填充剩余高度） */
+        /* 首用空态：只交代顺序（备份 → 导出 → 导入），动作全交给上方工具栏 ——
+           此前这里又放了一遍「立即备份 / 远程同步」，等于同一屏两个入口。 */
         <Card className={`${css.activityCard} ${css.fillCard}`}>
           <span className={css.groupLabel}>{t('overview.empty.title')}</span>
-          <span className={css.hint} style={{ display: 'block', marginBottom: 10 }}>{t('overview.empty.body')}</span>
-          {/* 三步主线（备份 → 导出 → 导入）：顺序来自 overviewFirstSteps()，组件不写死 */}
           <div className={css.emptySteps}>
             <Stepper
               steps={overviewFirstSteps().map((s, i) => ({
@@ -410,12 +401,6 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
                 state: i === 0 ? 'current' : 'todo',
               }))}
             />
-          </div>
-          <div className={css.toolRow}>
-            <Button variant="primary" disabled={backupRunning} onClick={() => { void runBackupNow() }}>
-              {t('overview.quick.backup')}
-            </Button>
-            <Button onClick={() => { navPanel('sync') }}>{t('overview.quick.sync')}</Button>
           </div>
         </Card>
       ) : (

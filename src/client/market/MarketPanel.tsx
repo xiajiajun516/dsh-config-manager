@@ -530,6 +530,8 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
           <div className={css.statRow}>
             <Badge kind={detailView.badge.statusKind === 'ok' ? 'ok' : 'error'}>{detailView.badge.statusText}</Badge>
             <Badge kind="info">{detailView.badge.sectionsText}</Badge>
+            {/* 「只读预览、尚未改动」是状态而不是说明：并入徽章行，不再用整条 Banner 讲安全管道机制 */}
+            <Badge kind="info">{t('detail.previewHint')}</Badge>
             {state.detail.version !== undefined && <Badge kind="info">{t('detail.version', { version: state.detail.version })}</Badge>}
           </div>
 
@@ -541,8 +543,6 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
               </ul>
             </div>
           </>)}
-
-          <Banner kind="info">{t('detail.previewHint')}</Banner>
 
           {/* P1-⑥：装了这个会动你哪些东西（基于 dry-run plan 的只读摘要） */}
           {impact !== null && (

@@ -153,14 +153,18 @@ export function MyConfigsWizard({
           />
           <div className={css.actionRow}>
             <Button variant="primary" disabled={wizard.validating || wizard.running} onClick={() => { fileInput.current?.click() }}>
-              {wizard.fileName !== null && wizard.zipPath !== null
-                ? t('myconfigs.upload.selected', { name: wizard.fileName })
-                : t('myconfigs.update.selectZip')}
+              {t('myconfigs.update.selectZip')}
             </Button>
             {wizard.zipPath !== null && (
               <Button disabled={wizard.validating || wizard.running} onClick={onReset}>{t('myconfigs.upload.reselect')}</Button>
             )}
           </div>
+          {/* 按钮只写动作，选中的文件名是状态 → 独立徽章；不再让按钮名字随状态变形 */}
+          {wizard.fileName !== null && wizard.zipPath !== null && (
+            <div className={css.statRow}>
+              <Badge kind="info">{t('myconfigs.upload.selected', { name: wizard.fileName })}</Badge>
+            </div>
+          )}
           {wizard.validationError !== null && <Banner kind="error">{redact(wizard.validationError)}</Banner>}
         </>)}
         {wizard.validated && (
@@ -205,7 +209,7 @@ export function MyConfigsWizard({
           </div>
         </Field>
         {/* 系统自动字段（id/author/version/updatedAt 徽章，无需填写） */}
-        <span className={css.hint}>{t('myconfigs.upload.form.autoHint')}</span>
+        <span className={css.groupLabel}>{t('myconfigs.upload.form.autoTitle')}</span>
         <div className={css.statRow}>
           {autoBadges.map((b) => (
             <Badge key={b.field} kind="info">{b.label}{t('common.labelSeparator')}{b.autoText}</Badge>

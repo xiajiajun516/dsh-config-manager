@@ -206,13 +206,15 @@ export function MergeModal({
         </span>
         <span className={css.statusSpacer} />
         <Button variant="ghost" disabled={applying} onClick={onClose}>{t('common.close')}</Button>
+        {/* 执行中只换 loading 态、按钮文案不变（DESIGN §9-11）：
+            左侧那行「本次会应用 N 个分区」已经是这次写入的后果，按钮重复一遍不会多给信息。 */}
         <Button
           variant="primary"
           loading={applying}
           disabled={blocked || !applicable}
           onClick={() => { void apply() }}
         >
-          {applying ? t('merge.applying') : t('merge.apply')}
+          {t('merge.apply')}
         </Button>
       </Modal.Footer>
     </Modal>

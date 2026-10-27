@@ -29,7 +29,7 @@ import { InfoHint } from '../common/InfoHint.tsx'
 import { redact } from '../../security/redaction.ts'
 import type { MergeApplyResponse, MergePreviewResponse, SyncApi } from './sync-api.ts'
 import {
-  hasApplicableSections, mergeDecisionCounts, mergeResultView, mergeSectionRows, mergeSummaryItems,
+  mergeDecisionCounts, mergeResultView, mergeSectionRows, mergeSummaryItems,
   needsNoAncestorNotice,
 } from './merge-view.ts'
 import type { MergeBulkAction, MergeResolutionAction, MergeResolutionDraft } from './merge-view.ts'
@@ -80,7 +80,6 @@ export function MergePreviewView({
   const rows = mergeSectionRows(preview)
   const summary = mergeSummaryItems(preview)
   const counts = mergeDecisionCounts(preview, draft)
-  const applicable = hasApplicableSections(preview, draft)
   const anyMerged = rows.some((row) => row.canUseMerged)
   const resultView = mergeResultView(result)
 
@@ -141,12 +140,10 @@ export function MergePreviewView({
         />
       )}
 
+      {/* 空态只说结论：「远端与本地一致 / 没有分区参与同步」是两个原因，而两者的处置完全相同
+          （关掉弹窗，没有可做的事）—— 区分它们不改变任何决定，只把空态撑成一段话。 */}
       {preview !== null && !loading && rows.length === 0 && (
-        <div className={css.hint}>
-          {t('merge.empty')}
-          <br />
-          {t('merge.emptyHint')}
-        </div>
+        <div className={css.hint}>{t('merge.empty')}</div>
       )}
 
       {rows.length > 0 && (
@@ -215,11 +212,6 @@ export function MergePreviewView({
             })}
           </div>
 
-          {/* 「待裁决的分区本次不会应用、下次还会出现」是决定性的语义（决定用户敢不敢点执行），压成一行常驻提示。 */}
-          {counts.undecided > 0 && (
-            <div className={css.hint}>{t('merge.apply.pendingHint', { n: String(counts.undecided) })}</div>
-          )}
-          {!applicable && <div className={css.hint}>{t('merge.apply.nothingPending')}</div>}
         </>
       )}
 
@@ -248,11 +240,17 @@ export function MergePreviewView({
               <span className={css.kvValue}><span className={css.mono}>{resultView.restoreId}</span></span>
             </div>
           )}
-          {resultView.applied.length === 0 && resultView.skipped.length === 0 && (
-            <div className={css.hint}>{t('merge.result.none')}</div>
+          {/* 失败/未生效是「需要人接手」的结论，用徽章给出计数（与上面两行 kvRow 同一张表里读） */}
+          {(resultView.failedCount > 0 || resultView.ineffectiveCount > 0) && (
+            <div className={css.statRow}>
+              {resultView.failedCount > 0 && (
+                <Badge kind="error">{t('merge.result.failed', { n: String(resultView.failedCount) })}</Badge>
+              )}
+              {resultView.ineffectiveCount > 0 && (
+                <Badge kind="warn">{t('merge.result.ineffective', { n: String(resultView.ineffectiveCount) })}</Badge>
+              )}
+            </div>
           )}
-          {resultView.failedCount > 0 && <div className={css.hint}>{t('merge.result.failed', { n: String(resultView.failedCount) })}</div>}
-          {resultView.ineffectiveCount > 0 && <div className={css.hint}>{t('merge.result.ineffective', { n: String(resultView.ineffectiveCount) })}</div>}
           {resultView.rolledBack && (
             <Banner kind="info">
               {resultView.rollbackFull === false ? t('merge.result.rollbackIncomplete') : t('merge.result.rolledBack')}

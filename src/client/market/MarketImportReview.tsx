@@ -271,13 +271,13 @@ export function MarketImportReview({
               </Banner>
             )}
             {countBadges}
-            <span className={css.groupLabel}>{t('review.changeTitle')}</span>
+            {/* 步骤名由顶部 Stepper 承担：这里再写一遍「本次将改动的内容」是同屏第二次说同一步叫什么 */}
             {sectionSummaries.length === 0
               ? <div className={css.hint}>{t('review.changeEmpty')}</div>
               : renderSectionRows(false)}
           </div>
           <div className={css.actionRow}>
-            <Button onClick={() => { go('select') }}>{t('review.nextSelect')}</Button>
+            <Button onClick={() => { go('select') }}>{t('review.step.select')}</Button>
           </div>
         </>
       )}
@@ -327,10 +327,12 @@ export function MarketImportReview({
       {active === 'confirm' && (
         <>
           <div className={css.marketReviewScroll}>
-            <span className={css.groupLabel}>{t('review.confirmTitle')}</span>
             {countBadges}
             {renderSectionRows(true)}
-            <Banner kind="info">{t('review.confirmHint')}</Banner>
+            {/* 快照是安全保证（"能不能回滚"），属状态而不是说明：进徽章行，不再用整条 Banner 讲机制 */}
+            <div className={css.statRow}>
+              <Badge kind="info">{t('review.confirmHint')}</Badge>
+            </div>
           </div>
           {noSelectionHint && !summary.canImport && <Banner kind="error">{t('review.nothingSelected')}</Banner>}
           <div className={css.actionRow}>
@@ -350,7 +352,6 @@ export function MarketImportReview({
       {active === 'result' && (
         <>
           <div className={css.marketReviewScroll}>
-            <span className={css.groupLabel}>{t('review.resultTitle')}</span>
             {result === null
               ? <div className={css.hint}>{t('review.changeEmpty')}</div>
               : (

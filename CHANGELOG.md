@@ -34,6 +34,15 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **整个界面做了一轮「删文案」体检**：重复的页面标题、复述按钮功能的悬浮说明、只用来填充版面的提示语都已删除 —— 页面标题不再和导航同名，按钮不再用 tooltip 解释自己干什么，「同一件事说两遍」（页脚版本 + 关于页、备份计划卡头与事实行各一枚同款徽章、详情里再列一遍行内已有的大小与时间）也只留一处。
+  **The whole UI went through a copy audit**: duplicated page titles, tooltips that restate what a button already says, and filler hints are gone — page names no longer repeat the navigation tab, buttons no longer explain themselves on hover, and one fact is stated once (footer version vs. About page, duplicate badges on the backup-schedule card, size/time listed again inside a row's details).
+
+- **删掉文字的地方改用结构表达**：未读取的分区改成「状态徽章 + 重试按钮」而不是一句说明；分类标签由分组标题承担；计数改成徽章行；会造成后果的选项把后果写在控件名上（回滚点开关旁给「立即生效」，而不是一段解释）。首页工具栏删掉了与状态条、侧栏重复的那颗「远程同步」。
+  **Where text was removed, structure took over**: an unread section now shows a status badge plus a retry button instead of a sentence, category tags are carried by group headings, counts became badge rows, and consequential options put their effect in the control itself (the rollback-point switch now has an "Apply now" button instead of a paragraph). The home toolbar's duplicate "Remote sync" button — the status strip and sidebar already reach it — is gone.
+
+- **必要说明一字未删**：不可逆操作与数据丢失提示、权限与费用披露、错误与校验反馈、无障碍名称、禁用原因悬停说明全部保留；只是把「能由界面本身说清」的那些删掉。
+  **Nothing necessary was removed**: irreversible-action and data-loss warnings, permission and cost disclosures, error and validation feedback, accessible names, and disabled-reason tooltips all stay — only the parts the interface itself can say were removed.
+
 - **GitHub 登录的授权范围现在写清楚了**：点「使用 GitHub 登录」时，GitHub 给的是你**整个账号**的授权 —— OAuth App 收窄不到单个仓库，组织仓库还要组织管理员批准。授权说明里现在明说这一点，并给出「只想授权一个仓库」的具体做法：改用细粒度 PAT，Repository access 选 Only select repositories、Permissions → Contents 设为 Read and write。
   **The scope of GitHub sign-in is now stated up front**: "Sign in with GitHub" grants access to your **whole account** — an OAuth App cannot be narrowed to a single repository, and organization repositories additionally need an org admin approval. The authorization hint now says so, and spells out how to authorize just one repository instead: use a fine-grained PAT with Repository access = Only select repositories and Permissions → Contents = Read and write.
 

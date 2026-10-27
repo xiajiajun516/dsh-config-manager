@@ -330,12 +330,10 @@ function SessionHealthCard({ recoveryApi, t, copyT, diskApi }: Pick<RecoveryPane
           2026-10-12 用户要求：本卡**退出折叠**，入口与摘要常驻可见（不再有 chevron）。 */}
       {/* 2026-10-12 用户要求：预扫描说明文案已删（点按钮即扫，屏上只留真正的摘要）。 */}
       {summary !== null && response !== null && (
-        <div className={css.hint}>
-          {t('sessions.dialog.lastScan', {
-            total: String(summary.total),
-            issues: String(summary.needsAttention),
-            repairs: String(repairEntries.length),
-          })}
+        <div className={css.statRow}>
+          <Badge kind="info">{t('sessions.dialog.lastScan.total', { count: String(summary.total) })}</Badge>
+          <Badge kind={summary.needsAttention > 0 ? 'warn' : 'ok'}>{t('sessions.dialog.lastScan.issues', { count: String(summary.needsAttention) })}</Badge>
+          {repairEntries.length > 0 && <Badge kind="info">{t('sessions.dialog.lastScan.repairs', { count: String(repairEntries.length) })}</Badge>}
         </div>
       )}
       <div className={css.actionRow}>
@@ -499,7 +497,7 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
       </div>
       {/* 与离线 CLI 的差异（它要求先停 DSH）：真会写盘时才占据屏幕（安全告警类，必须可见） */}
       {actionable && <Banner kind="warn">{t('sessions.layout.runtimeNote')}</Banner>}
-      {sectionState === 'empty' && <div className={css.hint}>{t('sessions.layout.noCandidates')}</div>}
+      {sectionState === 'empty' && <Empty>{t('sessions.layout.noCandidates')}</Empty>}
       {candidates.length > 0 && (
         <div className={`${css.snapshotList} ${css.reportScroll} ${css.shScroll}`}>
           {candidates.map((candidate) => (
@@ -528,8 +526,8 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
             <span className={css.shPanelTitle}>{t('sessions.layout.planTitle')}</span>
             <InfoHint text={t('sessions.layout.planReadOnly')} label={t('common.infoHint')} />
           </div>
-          <div className={css.hint}>
-            {t('sessions.layout.summary', { move: String(plan.summary.move), quarantine: String(plan.summary.quarantine) })}
+          <div className={css.statRow}>
+            <Badge kind="info">{t('sessions.layout.summary', { move: String(plan.summary.move), quarantine: String(plan.summary.quarantine) })}</Badge>
           </div>
           {planReasonKey !== null && <Banner kind="warn">{t(planReasonKey)}</Banner>}
           {planRows.length === 0 && <div className={css.hint}>{t('sessions.layout.planEmpty')}</div>}
@@ -551,14 +549,11 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
               ))}
             </div>
           )}
-          {skippedCount > 0 && (
-            <div className={css.hint}>{t('sessions.layout.planSkipped', { count: String(skippedCount) })}</div>
-          )}
+          {skippedCount > 0 && <div className={css.statRow}><Badge kind="info">{t('sessions.layout.planSkipped', { count: String(skippedCount) })}</Badge></div>}
           {/* 重复 id：必须选定保留哪一份才可提交（判定在 ui 纯函数层） */}
           {plan.needsKeep.length > 0 && (
             <>
               <div className={css.groupLabel}>{t('sessions.layout.keepTitle')}</div>
-              <div className={css.hint}>{t('sessions.layout.keepHint')}</div>
               {/* 隔离目录口径（会搬走用户的会话文件 ⇒ 安全类，必须可见）：只在真要处理重复 id 时出现 */}
               <div className={css.hint}>{t('sessions.layout.quarantineNote')}</div>
               {plan.needsKeep.map((sessionId) => (
@@ -579,9 +574,7 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
                   })}
                 </div>
               ))}
-              {!keepState.complete && (
-                <div className={css.hint}>{t('sessions.layout.keepMissing', { count: String(keepState.missing.length) })}</div>
-              )}
+              {!keepState.complete && <div className={css.statRow}><Badge kind="warn">{t('sessions.layout.keepMissing', { count: String(keepState.missing.length) })}</Badge></div>}
             </>
           )}
           <div className={css.actionRow}>
@@ -600,13 +593,10 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
           {/* 整体未执行（如 reindex-unavailable）**不是**成功：单独说明，且下面不会有任何成功条目 */}
           {appliedReasonKey !== null && <Banner kind="warn">{t(appliedReasonKey)}</Banner>}
           {appliedItems.length > 0 && (
-            <div className={css.hint}>
-              {t('sessions.layout.done', {
-                moved: String(counts.moved),
-                quarantined: String(counts.quarantined),
-                failed: String(counts.failedTotal),
-                skipped: String(counts.skipped),
-              })}
+            <div className={css.statRow}>
+              <Badge kind={counts.failedTotal > 0 ? 'warn' : 'ok'}>
+                {t('sessions.layout.done', { moved: String(counts.moved), quarantined: String(counts.quarantined), failed: String(counts.failedTotal), skipped: String(counts.skipped) })}
+              </Badge>
             </div>
           )}
           {appliedItems.length > 0 && (
@@ -626,7 +616,6 @@ function SessionLayoutSection({ recoveryApi, t, response, onScan }: SessionLayou
               ))}
             </div>
           )}
-          <div className={css.hint}>{t('sessions.layout.refreshHint')}</div>
           <div className={css.actionRow}>
             <Button variant="ghost" onClick={() => { setApplied(null); setPlan(null); setKeep({}) }}>
               {t('sessions.layout.close')}
@@ -915,20 +904,10 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                     {/* 数据口径：这次统计覆盖了多少（未深度校验 / 被隐藏的正常会话 / 超上限 / 读不出条目）。
                         全部常驻可见 —— 「未验证 ≠ 没问题」「绝不静默少显示」是本面板的既定口径。 */}
                     <div className={css.shNotes}>
-                      {summary.deepUnverified > 0 && (
-                        <div className={css.hint}>
-                          {t('sessions.unverified', { count: String(summary.deepUnverified), verified: String(summary.deepVerified) })}
-                        </div>
-                      )}
-                      {summary.hiddenHealthy > 0 && (
-                        <div className={css.hint} title={t('sessions.hidden.healthy', { count: String(summary.hiddenHealthy) })}>
-                          {t('sessions.hidden.healthyShort', { count: String(summary.hiddenHealthy) })}
-                        </div>
-                      )}
-                      {summary.untested > 0 && <div className={css.hint}>{t('sessions.untested', { count: String(summary.untested) })}</div>}
-                      {summary.unreadableEntries > 0 && (
-                        <div className={css.hint}>{t('sessions.unreadableEntries', { count: String(summary.unreadableEntries) })}</div>
-                      )}
+                      {summary.deepUnverified > 0 && <Badge kind="info">{t('sessions.unverified', { count: String(summary.deepUnverified), verified: String(summary.deepVerified) })}</Badge>}
+                      {summary.hiddenHealthy > 0 && <Badge kind="info">{t('sessions.hidden.healthyShort', { count: String(summary.hiddenHealthy) })}</Badge>}
+                      {summary.untested > 0 && <Badge kind="info">{t('sessions.untested', { count: String(summary.untested) })}</Badge>}
+                      {summary.unreadableEntries > 0 && <Badge kind="warn">{t('sessions.unreadableEntries', { count: String(summary.unreadableEntries) })}</Badge>}
                     </div>
                   </div>
 
@@ -943,7 +922,12 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
 
                   {/* ② 需要处理的会话：列表与「一键修复全部」同屏，动作恒在区块头右侧 */}
                   <div className={css.shSectionHead}>
-                    <span className={css.shSectionTitle}>{t('sessions.section.attention')}</span>
+                    {/* 操作说明属说明性文案 → 完整句进 ⓘ（DESIGN §7）；「可应用内修复 N 条」这种
+                        计数句已删（右上按钮本身就带同一个计数）。 */}
+                    <span className={css.shSectionTitle}>
+                      {t('sessions.section.attention')}
+                      <InfoHint text={summary.repairable > 0 ? t('sessions.repair.available', { count: String(summary.repairable) }) : t('sessions.repair.none')} label={t('common.infoHint')} />
+                    </span>
                     <Badge kind={rows.length > 0 ? 'warn' : 'ok'}>{String(rows.length)}</Badge>
                     {summary.repairable > 0 && (
                       <>
@@ -959,19 +943,6 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                         </Button>
                       </>
                     )}
-                  </div>
-                  <div className={css.hint}>
-                    {summary.repairable > 0
-                      ? t('sessions.repair.availableShort', { count: String(summary.repairable) })
-                      : t('sessions.repair.noneShort')}
-                    {' '}
-                    {/* 操作说明（怎么点、先看什么）属说明性文案 → 完整句进 ⓘ（DESIGN §7） */}
-                    <InfoHint
-                      text={summary.repairable > 0
-                        ? t('sessions.repair.available', { count: String(summary.repairable) })
-                        : t('sessions.repair.none')}
-                      label={t('common.infoHint')}
-                    />
                   </div>
 
                   {/* 一键修复的全部结果（逐条留痕 + 复验结论）：绝不只给一个计数 */}
@@ -1098,12 +1069,8 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                       </div>
                       {plan.result.ok ? (
                         <>
-                          <div className={css.hint}>
-                            {t('sessions.repair.plan.summary', {
-                              rows: String(plan.result.droppedRows ?? 0),
-                              before: formatSessionBytes(plan.result.bytesBefore ?? 0),
-                              after: formatSessionBytes(plan.result.bytesAfter ?? 0),
-                            })}
+                          <div className={css.statRow}>
+                            <Badge kind="info">{t('sessions.repair.plan.summary', { rows: String(plan.result.droppedRows ?? 0), before: formatSessionBytes(plan.result.bytesBefore ?? 0), after: formatSessionBytes(plan.result.bytesAfter ?? 0) })}</Badge>
                           </div>
                           <div className={css.shLines}>
                             {(plan.result.actions ?? []).map((action) => (
@@ -1150,9 +1117,7 @@ function SessionHealthDialog(props: SessionHealthDialogProps) {
                           {applied.result.sessionId ?? applied.unitId}
                         </span>
                       </div>
-                      <div className={css.hint}>
-                        {t('sessions.repair.applied', { rows: String(applied.result.droppedRows ?? 0) })}
-                      </div>
+                      <div className={css.statRow}><Badge kind="ok">{t('sessions.repair.applied', { rows: String(applied.result.droppedRows ?? 0) })}</Badge></div>
                       {appliedVerifyKey !== null && <div className={css.hint}>{t(appliedVerifyKey)}</div>}
                       <div className={css.actionRow}>
                         <Button variant="ghost" onClick={() => { setApplied(null) }}>
@@ -1514,11 +1479,15 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
             <strong>{t('recovery.crash.title')}</strong>
             <Badge kind="error">{t(crashReasonKey(crash.crashReason))}</Badge>
           </div>
-          <div className={css.hint}>{t(crashAdviceKey(crash.advice))}</div>
+          {crashAdviceKey(crash.advice) !== 'recovery.crash.advice.none' && <div className={css.hint}>{t(crashAdviceKey(crash.advice))}</div>}
           {crash.lastGoodAt !== null && (
             <div className={css.hint}>{t('recovery.crash.lastGood', { time: formatRecoveryTime(crash.lastGoodAt) })}</div>
           )}
-          <div className={css.hint}>{t('recovery.crash.guidance')}</div>
+          {rescue?.active !== true && (
+            <div className={css.actionRow}>
+              <Button variant="danger" disabled={rescueBusy} loading={rescueBusy} onClick={() => { setRescueConfirmOpen(true) }}>{t('recovery.rescue.enter')}</Button>
+            </div>
+          )}
         </Banner>
       )}
 
@@ -1584,7 +1553,6 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
       {state.status === 'ready' && (view?.activeOperations.length ?? 0) > 0 && (
         <Card className={css.card}>
           <div className={css.groupLabel}>{t('recovery.live.title')}</div>
-          <div className={css.hint}>{t('recovery.live.hint')}</div>
           <div className={css.snapshotList}>
             {view!.activeOperations.map((op) => (
               <div key={op.operationId} className={css.snapshotRow}>
@@ -1640,9 +1608,15 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
           {/* 选中 incident 的详情 + 预览 + 执行 */}
           {selected !== undefined && (
             <Card className={css.card}>
-              <div className={css.groupLabel}>{t('recovery.incident.operationId')}: {selected.operationId}</div>
+              <div className={css.kvRow}>
+                <span className={css.kvKey}>{t('recovery.incident.operationId')}</span>
+                <span className={`${css.kvValue} ${css.mono}`} title={selected.operationId}>{selected.operationId}</span>
+              </div>
               {selected.reason !== '' && (
-                <div className={css.hint}>{t('recovery.incident.reason')}: {selected.reason}</div>
+                <div className={css.kvRow}>
+                  <span className={css.kvKey}>{t('recovery.incident.reason')}</span>
+                  <span className={css.kvValue}>{selected.reason}</span>
+                </div>
               )}
 
               {/* 快照信息 */}
@@ -1660,8 +1634,8 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
 
               {/* 环境 */}
               {previewView !== null && (
-                <div className={css.statRow}>
-                  <span className={css.groupLabel}>{t('recovery.environment.title')}</span>
+                <div className={css.kvRow}>
+                  <span className={css.kvKey}>{t('recovery.environment.title')}</span>
                   <Badge kind={previewView.environmentCompatible ? 'ok' : 'error'}>
                     {previewView.environmentCompatible ? t('recovery.environment.compatible') : t('recovery.environment.incompatible')}
                   </Badge>
@@ -1681,16 +1655,17 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
                     <InfoHint text={t('recovery.preview.hint')} label={t('common.infoHint')} />
                   </div>
                   {previewView.snapshotVerdict !== null && (
-                    <div className={css.statRow}>
-                      <span className={css.hint}>{t('recovery.snapshot.verdict')}</span>
+                    <div className={css.kvRow}>
+                      <span className={css.kvKey}>{t('recovery.snapshot.verdict')}</span>
                       <Badge kind={isSnapshotTrusted(previewView.snapshotVerdict) ? 'ok' : 'warn'}>
                         {snapshotVerdictLabel(t, previewView.snapshotVerdict)}
                       </Badge>
                     </div>
                   )}
                   {previewView.snapshotMeta !== null && (
-                    <div className={css.hint}>
-                      {t('recovery.snapshot.createdAt')}: {new Date(previewView.snapshotMeta.createdAt).toLocaleString()}
+                    <div className={css.kvRow}>
+                      <span className={css.kvKey}>{t('recovery.snapshot.createdAt')}</span>
+                      <span className={css.kvValue}>{new Date(previewView.snapshotMeta.createdAt).toLocaleString()}</span>
                     </div>
                   )}
                 </>
@@ -1820,7 +1795,7 @@ export function RecoveryPanel(props: RecoveryPanelProps) {
               {t(rescue.applied ? 'recovery.rescue.applied' : 'recovery.rescue.active', { time: formatRecoveryTime(rescue.enteredAt) })}
             </div>
           )}
-          {rescue.active && <div className={css.hint}>{t(rescueHintKey(rescue))}</div>}
+          {rescue.active && rescue.applied && <div className={css.hint}>{t(rescueHintKey(rescue))}</div>}
           </Collapse>
         </Card>
       )}

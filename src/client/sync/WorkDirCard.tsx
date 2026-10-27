@@ -80,7 +80,12 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
       {stateKey !== null && badgeKind !== null && (
         <div className={css.statRow}>
           <Badge kind={badgeKind}>{t(stateKey)}</Badge>
-          {backlogBadge !== null && <Badge kind={backlogBadge.kind}>{t(backlogBadge.key)}</Badge>}
+          {/* 积压的条数并进这条告警徽章：状态与数量说同一件事，分两处只是让用户对两个数对齐 */}
+          {backlogBadge !== null && (
+            <Badge kind={backlogBadge.kind}>
+              {t(backlogBadge.key)}{backlog.kind === 'ahead' ? ' ' + String(backlog.ahead) : ''}
+            </Badge>
+          )}
         </div>
       )}
       {workDir === undefined ? (
@@ -101,12 +106,6 @@ export function WorkDirCard({ t, api, workDir, busy, onChanged }: {
               </span>
             </span>
           </div>
-          {backlog.kind !== 'unknown' && (
-            <div className={css.factCell}>
-              <span className={css.factLabel}>{t('workdir.ahead')}</span>
-              <span className={css.factValue}>{backlog.kind === 'clean' ? 0 : backlog.ahead}</span>
-            </div>
-          )}
           {(backlog.kind === 'clean' || backlog.kind === 'ahead') && (
             <div className={css.factCell}>
               <span className={css.factLabel}>{t('workdir.remoteSnapshots')}</span>

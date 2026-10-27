@@ -24,7 +24,6 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConfigManagerSectionInjected, TranslateNS } from './client-types.ts'
-import type { ServiceStatus } from './api.ts'
 import { runStore, type LibraryStoreSlice, type PanelId, type TaskState } from './run-store.ts'
 import { navLayout } from '../ui/nav-model.ts'
 import { toast } from './common/toast-store.ts'
@@ -174,17 +173,6 @@ const navLayoutResult = navWidths === null
    * 关面板 / 切走即随组件卸载归零，与 libraryAction 同一档语义。
    */
   const [foreignImportOpen, setForeignImportOpen] = useState(false)
-
-  /* ---------------- 状态栏版本（挂载时取一次；失败隐藏） ---------------- */
-  const [version, setVersion] = useState<ServiceStatus | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    api.status().then(
-      (s) => { if (!cancelled) setVersion(s) },
-      () => { /* 版本信息失败不影响功能 */ },
-    )
-    return () => { cancelled = true }
-  }, [api])
 
   /* ---------------- m-star-prompt：Star 引导弹窗（保持既有能力） ---------------- */
   const [starPromptOpen, setStarPromptOpen] = useState(false)
@@ -568,7 +556,7 @@ const navLayoutResult = navWidths === null
           <IconButton
             icon={<Icon name="inspect" size={14} />}
             label={t('palette.label')}
-            title={t('palette.hint')}
+            title={t('palette.shortcut')}
             onClick={() => { setPaletteOpen(true) }}
           />
           <IconButton
@@ -730,11 +718,6 @@ const navLayoutResult = navWidths === null
           <span className={css.statusText}>{statusText}</span>
         )}
         <span className={css.statusSpacer} />
-        {version !== null && (
-          <span className={css.statusMeta}>
-            {t('shell.version', { plugin: version.pluginVersion, dsh: version.dshVersion })}
-          </span>
-        )}
       </footer>
 
       {/* 宽度实测容器：结构与真实页签**逐字节同构**（同一批 class、同一段文案、同样的告警点），

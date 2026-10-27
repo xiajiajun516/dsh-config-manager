@@ -773,11 +773,10 @@ export function MyConfigsView({
         <>
           {/* 一键上传入口：点按钮 → 免责（首次）→ 弹窗向导 */}
           <Card>
-            <div className={css.headRow}>
-              <span className={css.groupLabel}>{t('myconfigs.upload.title')} <InfoHint text={t('myconfigs.upload.selectHint')} label={t('common.infoHint')} /></span>
-              {/* 撑开剩余空间，「一键上传」按钮贴右 */}
-              <span className={css.statusSpacer} />
+            {/* 卡片里只有一个动作：按钮本身已经写明「一键上传」，不再重复一个同名标题；ⓘ 跟着动作走 */}
+            <div className={css.actionRow}>
               <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
+              <InfoHint text={t('myconfigs.upload.selectHint')} label={t('common.infoHint')} />
             </div>
           </Card>
           {renderList()}

@@ -441,14 +441,19 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               label={t('rollback.switch.label')}
             />
             <InfoHint text={t('rollback.switch.hint')} label={t('common.infoHint')} />
+            {/* 三态不再各占一行解释：提示做成开关**旁边**的状态徽章，分歧态再给一次点击就生效的动作。
+                「还没读到」= info 徽章（开关此时同时禁用）；「磁盘开着但本进程没生效」= warn 徽章 + 立即生效。 */}
+            {hasPrefsApi && prefsEnabled === null && <Badge kind="info">{t('rollback.switch.reading')}</Badge>}
+            {hasPrefsApi && prefsDiverged && (
+              <>
+                <Badge kind="warn">{t('rollback.switch.diverged')}</Badge>
+                <Button size="sm" variant="ghost" disabled={prefsBusy || busy} loading={prefsBusy} onClick={() => { togglePrefs(true) }}>
+                  {t('rollback.switch.apply')}
+                </Button>
+              </>
+            )}
           </div>
         )}
-        {/* 还没读到偏好：说「正在读」而不是画成「关」（三处判据同一份：磁盘 / 本进程 / 未知） */}
-        {hasPrefsApi && prefsEnabled === null && (
-          <div className={css.hint}>{t('rollback.switch.unknown')}</div>
-        )}
-        {/* H7：偏好与本进程实际状态分歧（另一个实例写过 ui-prefs.json）—— 如实说，不替磁盘打包票 */}
-        {prefsDiverged && <div className={css.hint}>{t('rollback.switch.diverged')}</div>}
 
         {/* 存储栈不可用：如实说「现在不能用」，并给出可行动的指引（列表仍可看） */}
         {storage !== null && !storage.available && (
@@ -457,7 +462,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             {storageGuidance.map((row) => (
               <div key={row.key + (row.detail ?? '')} className={css.hint}>{t(dyn(row.key))}{row.detail !== null ? ' — ' + row.detail : ''}</div>
             ))}
-            <div className={css.hint}>{t('rollback.guidance.readOnlyFallback')}</div>
           </>
         )}
 
@@ -498,21 +502,23 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             </div>
             {/* 预算真的淘汰过东西时才说（没发生过就不占屏）：字节预算与已淘汰数都来自宿主读数 */}
             {ledger !== undefined && ledger.evicted > 0 && (
-              <div className={css.hint}>
-                {t('rollback.ledger.budget', {
-                  budget: formatSessionBytes(ledger.budgetBytes),
-                  evicted: ledger.evicted,
-                })}
+              <div className={css.statRow}>
+                <Badge kind="info">
+                  {t('rollback.ledger.budget', {
+                    budget: formatSessionBytes(ledger.budgetBytes),
+                    evicted: ledger.evicted,
+                  })}
+                </Badge>
               </div>
             )}
-            {/* 预算**兜不住**时如实说（典型：单条点本身就大于预算）—— 静默会让「预算生效」变成假象 */}
+            {/* 预算**兜不住**时如实说 —— 静默会让「预算生效」变成假象。真实告警走 Banner（与其它告警同一形态）。 */}
             {ledger !== undefined && ledger.overBudget === true && (
-              <div className={css.hint}>
+              <Banner kind="warn">
                 {t('rollback.ledger.overBudget', {
                   size: formatSessionBytes(ledger.bytes),
                   budget: formatSessionBytes(ledger.budgetBytes),
                 })}
-              </div>
+              </Banner>
             )}
             {cleanupNote !== null && <div className={css.hint}>{cleanupNote}</div>}
           </>
@@ -698,7 +704,6 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
             {/* 点级告警（宿主 preview.warnings：trackMissing / trackDegraded / protected…）：此前只渲染 result.warnings，导致「留点被跳过 / 被截断」在预览里完全不可见。 */}
             {previewWarnings.length > 0 && (
               <div className={css.rollbackWarnings}>
-                <div className={css.groupLabel}>{t('rollback.preview.warningsTitle')}</div>
                 {previewWarnings.map((warning) => (
                   <div key={warning.key + (warning.detail ?? '')} className={css.hint}>
                     {t(dyn(warning.key))}{warning.detail !== null ? ' — ' + warning.detail : ''}
@@ -795,10 +800,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
 
         {result !== null && (
           <>
-            <div className={css.groupLabel}>{t('rollback.rewind.result.title')}</div>
-            {outcome !== null && <Badge kind={outcome.badgeKind}>{t(dyn(outcome.key))}</Badge>}
-            <div className={css.hint}>
-              {t('rollback.rewind.result.counts', { restored: rewindCounts.restored, removed: rewindCounts.removed, failed: rewindCounts.failed, leftovers: rewindCounts.leftovers })}
+            {/* 结果头：状态徽章 + 计数元数据在**一行**（标题「回退结果」已由徽章与本弹窗语境表达，不再占一行）。 */}
+            <div className={css.statRow}>
+              {outcome !== null && <Badge kind={outcome.badgeKind}>{t(dyn(outcome.key))}</Badge>}
+              <span className={css.hint}>
+                {t('rollback.rewind.result.counts', { restored: rewindCounts.restored, removed: rewindCounts.removed, failed: rewindCounts.failed, leftovers: rewindCounts.leftovers })}
+              </span>
             </div>
             {childSession !== null && <div className={css.hint}>{t(dyn(childSession.key), { id: childSession.id })}</div>}
             {result.guardPointId !== undefined && <div className={css.hint}>{t('rollback.rewind.result.guard', { id: result.guardPointId })}</div>}

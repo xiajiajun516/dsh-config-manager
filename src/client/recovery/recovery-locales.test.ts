@@ -122,14 +122,13 @@ const ROLLBACK_FIXED_KEYS: readonly string[] = [
   'rollback.preview.overwrite', 'rollback.preview.different', 'rollback.preview.missing',
   'rollback.preview.createdAfter',
   'rollback.preview.cursor', 'rollback.preview.cursorBytes', 'rollback.preview.turns', 'rollback.preview.active',
-  'rollback.preview.warningsTitle',
   'rollback.preview.reason.guard', 'rollback.preview.reason.incomplete', 'rollback.preview.reason.hostRefused',
   'rollback.preview.notice.skipped', 'rollback.preview.notice.truncated',
   'rollback.group.label', 'rollback.group.unknownSession',
   'rollback.row.files', 'rollback.row.sessionCursor', 'rollback.row.noSessionCursor',
   'rollback.row.notice.skipped', 'rollback.row.notice.truncated',
   'rollback.rewind', 'rollback.rewind.confirm', 'rollback.rewind.allowPartial',
-  'rollback.rewind.result.title', 'rollback.rewind.result.counts', 'rollback.rewind.result.child',
+  'rollback.rewind.result.counts', 'rollback.rewind.result.child',
   'rollback.rewind.result.guard', 'rollback.rewind.result.skipped',
   'rollback.segment.restored', 'rollback.segment.skipped', 'rollback.segment.failed', 'rollback.segment.unknown',
   'rollback.outcome.restored', 'rollback.outcome.partial', 'rollback.outcome.failed',
@@ -355,7 +354,6 @@ test('T18-F1：跳过 / 截断 / 点级告警的文案键齐备且 zh/en 成对'
   const keys = [
     'rollback.row.notice.skipped', 'rollback.row.notice.truncated',
     'rollback.preview.notice.skipped', 'rollback.preview.notice.truncated',
-    'rollback.preview.warningsTitle',
   ]
   const missing: string[] = []
   for (const key of keys) {

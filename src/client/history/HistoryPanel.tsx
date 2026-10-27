@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { redact } from '../../security/redaction.ts'
 import { HistoryApi, type HistoryListResult, type HistoryExportFormat } from './history-api.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Badge, Banner, Button, Card, Empty, SectionTitle } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, Empty } from '../common/ui.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { SkeletonTable } from '../common/Skeleton.tsx'
 import { Select } from '../common/Select.tsx'
@@ -113,7 +113,6 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   if (state.status === 'loading') {
     return (
       <div className={css.viewBody}>
-        <SectionTitle title={t('history.title')} info={<InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />} />
         <SkeletonTable label={t('history.loading')} />
       </div>
     )
@@ -122,7 +121,6 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
   if (state.status === 'error') {
     return (
       <div className={css.viewBody}>
-        <SectionTitle title={t('history.title')} info={<InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />} />
         {/* F-02：t 必传 —— 否则英文界面下错误标题/建议动作恒中文 */}
         <ErrorBanner error={new Error(redact(state.error ?? ''))} onRetry={() => void load()} t={historyApi.t} />
       </div>
@@ -147,27 +145,27 @@ export function HistoryPanel({ historyApi, t }: HistoryPanelProps) {
 
   return (
     <div className={css.viewBody}>
-      <SectionTitle title={t('history.title')} info={<InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />} />
-
-      {/* 统计徽章行 */}
+      {/* 统计徽章行（页名在 TaskShell 头部已给一次；这里只放数据与语义 ⓘ） */}
       <div className={css.statRow}>
         <Badge kind="info">{t('history.stats.total')}: {summary.total}</Badge>
         <Badge kind="ok">{t('history.stats.success')}: {summary.success}</Badge>
         <Badge kind="error">{t('history.stats.failed')}: {summary.failed}</Badge>
         <Badge kind="warn">{t('history.stats.skipped')}: {summary.skipped}</Badge>
+        <InfoHint text={t('history.subtitle')} label={t('common.infoHint')} />
       </div>
 
-      {/* 篡改/损坏条目警示 */}
+      {/* 损坏条目：结论句 + 计数徽章同一行（计数属于「状态」，用徽章而不是第二句灰字）。 */}
       {corrupted.length > 0 && (
         <Banner kind="warn">
-          <div>{t('history.corruptedBanner')}</div>
-          <div className={css.hint}>{t('history.corruptedCount', { count: String(corrupted.length) })}</div>
+          <div className={css.statRow}>
+            <span>{t('history.corruptedBanner')}</span>
+            <Badge kind="warn">{t('history.corruptedCount', { count: String(corrupted.length) })}</Badge>
+          </div>
         </Banner>
       )}
 
-      {/* 过滤 + 导出操作行 */}
+      {/* 过滤 + 导出：控件各自带维度标签（「操作类型: 全部」…），不再另起一行区块标题。 */}
       <Card>
-        <div className={css.groupLabel}>{t('history.filter.title')}</div>
         <div className={css.actionRow}>
           <Select
             value={state.filter.kind ?? ''}

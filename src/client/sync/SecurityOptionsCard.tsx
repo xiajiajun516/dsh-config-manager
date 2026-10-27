@@ -40,6 +40,11 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
           label={t('common.infoHint')}
         />
       </div>
+      {/* 数据丢失后果贴在它真正发生的那个勾选框下面（且只在确有已保存密码时出现）。
+          原先写在密码输入区里：用户在「改密码」的位置读到「取消勾选会删密码」，位置与决定对不上。 */}
+      {settings.encrypt && settings.encryptPasswordSaved && (
+        <span className={css.hint + ' ' + css.warnText}>{t('mode.passwordClearNotice')}</span>
+      )}
       {settings.encrypt && (
         <div className={css.secretFields}>
           <label className={css.field}>
@@ -77,7 +82,6 @@ export function SecurityOptionsCard({ t, settings, onToggleEncrypt, onToggleIncl
           {settings.encryptPassword === '' && !settings.encryptPasswordSaved && (
             <span className={css.formError}>{t('mode.passwordRequired')}</span>
           )}
-          <span className={css.hint}>{t('mode.passwordClearNotice')}</span>
         </div>
       )}
       <div className={css.controlRow}>

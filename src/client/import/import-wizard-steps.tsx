@@ -13,7 +13,7 @@ import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import {
-  Banner, Button, Card, Checkbox, Empty, SectionTitle,
+  Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle,
 } from '../common/ui.tsx'
 import { Skeleton } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
@@ -121,8 +121,10 @@ export function SelectStep(props: {
         }}
       />
       {selectModel.selectedName !== null && (
-        <div className={css.hint} data-testid="import-selected-file">
-          {t('import.select.file', { name: selectModel.selectedName })}
+        /* 已选文件是**值**，不是说明：用徽章承载（原先是一句「已选择：xxx」），
+           data-testid 保持不变以便既有守卫继续定位。 */
+        <div className={css.statRow} data-testid="import-selected-file">
+          <Badge kind="info">{t('import.select.file', { name: selectModel.selectedName })}</Badge>
         </div>
       )}
       <div className={css.actionRow} style={{ marginBottom: 0 }}>
@@ -193,7 +195,7 @@ export function ConsultStage(props: {
       <div className={css.actionRow}>
         <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
         <Button variant="primary" onClick={onNext}>
-          {t('import.consult.next')}
+          {t('common.next')}
         </Button>
       </div>
     </div>
@@ -372,8 +374,8 @@ export function SessionFormatDispositionField(props: {
         ))}
       </div>
       <div className={css.hint}>{options.find((o) => o.value === disposition)?.hint ?? ''}</div>
-      {/* 升级/重导出的指引 + 可复制命令：三种处置下都摆出来（guide 不阻塞，但也需要它） */}
-      <div className={css.groupLabel}>{t('import.sessionFormat.guide.title')}</div>
+      {/* 升级/重导出的指引 + 可复制命令：三种处置下都摆出来（guide 不阻塞，但也需要它）。
+          两条 <li> 自身就是完整指令，不再加「怎么让这些对话可见」这层分组标题。 */}
       <ul className={css.reportList}>
         <li>{t('import.sessionFormat.guide.upgrade', { newer: String(newest), target: String(facts.target) })}</li>
         <li>{t('import.sessionFormat.guide.doctor')}</li>
@@ -427,16 +429,19 @@ export function ConfirmStage(props: {
         {isEncrypted && decryptRefs.length > 0 && (
           <Banner kind="ok">{t('import.confirm.encrypted', { count: String(decryptRefs.length) })}</Banner>
         )}
-        {/* UI-14：将导入的分区/条目合计（与预览步选择器同源）+ 被用户取消的项数 */}
-        <div className={css.hint}>
-          {t('picker.summaryImport', {
-            sections: String(summary.sections),
-            units: String(summary.units),
-          })}
+        {/* UI-14：将导入的合计 + 被取消勾选的项数 —— 两个**计数**，做成并列徽章
+            （原先两行说明句；计数属结构化信息，不需要句子外壳）。 */}
+        <div className={css.statRow}>
+          <Badge kind="info">
+            {t('picker.summaryImport', {
+              sections: String(summary.sections),
+              units: String(summary.units),
+            })}
+          </Badge>
+          {excludedCount > 0 && (
+            <Badge kind="warn">{t('import.excludedByUser', { count: String(excludedCount) })}</Badge>
+          )}
         </div>
-        {excludedCount > 0 && (
-          <div className={css.hint}>{t('import.excludedByUser', { count: String(excludedCount) })}</div>
-        )}
         {/* T1：确认页是最后一道闸门 —— 处置选择在这里仍可改（改完点「确认导入」时会用新处置
             重新生成计划，abort 仍然在计划阶段被拦住）。 */}
         <SessionFormatDispositionField

@@ -80,6 +80,8 @@ export interface ImportWizardViewProps {
  * - 补录凭据（ref 名清单，非值；无值展示，安全不变量不破）；
  * - 失败/跳过项（count 传达「可重试」，明细仍在 ReportView 内联报告里）。
  * 三组均无内容 → 显示「全部完成」ok Banner（替代旧版单行 needsRestart 提示）。
+ * 每组只有**一行标题句（含计数）+ 明细列表**：原先「组标题 + 复述同一件事的提示句」两层
+ * 结构已合并 —— 计数与原因写在同一行，列表紧随其后。
  */
 function NextStepsCard({ plan, result, t }: {
   plan: ImportPlan | null
@@ -100,8 +102,7 @@ function NextStepsCard({ plan, result, t }: {
       <div className={css.groupLabel}>{t('nextSteps.title')}</div>
       {steps.restartItems.length > 0 && (
         <div className={css.nextStepsGroup}>
-          <div className={css.groupLabel}>{t('nextSteps.restart.title', { count: String(steps.restartItems.length) })}</div>
-          <div className={css.hint}>{t('nextSteps.restart.hint')}</div>
+          <div className={css.hint}>{t('nextSteps.restart.hint', { count: String(steps.restartItems.length) })}</div>
           <ul className={`${css.reportList} ${css.nextStepsList}`}>
             {steps.restartItems.map((item) => (
               // description 由宿主按计划项拼装（可能含 MCP env/headers 等本地配置片段）→ 渲染前过 redact
@@ -112,14 +113,12 @@ function NextStepsCard({ plan, result, t }: {
       )}
       {steps.sessionsRestart !== null && (
         <div className={css.nextStepsGroup}>
-          <div className={css.groupLabel}>{t('nextSteps.sessionsRestart.title')}</div>
           <div className={css.hint}>{t('nextSteps.sessionsRestart.hint', { count: String(steps.sessionsRestart.count) })}</div>
         </div>
       )}
       {steps.missingSecrets.length > 0 && (
         <div className={css.nextStepsGroup}>
-          <div className={css.groupLabel}>{t('nextSteps.secrets.title', { count: String(steps.missingSecrets.length) })}</div>
-          <div className={css.hint}>{t('nextSteps.secrets.hint')}</div>
+          <div className={css.hint}>{t('nextSteps.secrets.hint', { count: String(steps.missingSecrets.length) })}</div>
           <ul className={`${css.reportList} ${css.nextStepsList}`}>
             {steps.missingSecrets.map((ref) => <li key={ref}>{ref}</li>)}
           </ul>
@@ -127,8 +126,7 @@ function NextStepsCard({ plan, result, t }: {
       )}
       {steps.unresolved.length > 0 && (
         <div className={css.nextStepsGroup}>
-          <div className={css.groupLabel}>{t('nextSteps.unresolved.title', { count: String(steps.unresolved.length) })}</div>
-          <div className={css.hint}>{t('nextSteps.unresolved.hint')}</div>
+          <div className={css.hint}>{t('nextSteps.unresolved.hint', { count: String(steps.unresolved.length) })}</div>
         </div>
       )}
     </Card>
@@ -312,7 +310,6 @@ function ContentSelectStage(props: {
           />
         </Card>
       )}
-      {nothingSelected && <Banner kind="warn">{t('import.nothingSelected')}</Banner>}
       <div className={css.actionRow}>
         <Button variant="ghost" onClick={onReset}>{t('import.select.reselect')}</Button>
         {/* 阻断态下「下一步」不再是导航，而是「按新处置重新生成计划」——同一个动作，
@@ -320,6 +317,7 @@ function ContentSelectStage(props: {
         <Button
           variant="primary"
           disabled={nothingSelected}
+          title={nothingSelected ? t('import.nothingSelected') : undefined}
           onClick={sessionFormatBlocked ? onRetryPlan : onNext}
         >
           {sessionFormatBlocked ? t('import.sessionFormat.retryPlan') : t('common.next')}
@@ -355,8 +353,9 @@ function ImportingStep(props: {
           </Button>
         </div>
       )}
+      {/* 进度与阶段由 ProgressBar + 日志面板表达（原来的「正在导入…（可能需要几分钟，请勿关闭页面）」
+          只是在同屏把进度再说一遍）；跳过是**另一个动作的状态**，仍单独给一行。 */}
       {skipRequested && <div className={css.hint}>{t('import.skipPending')}</div>}
-      <div className={css.hint}>{t('import.importing')}</div>
       {/* P0-8：失败后（running=false）必须给出重试入口 —— 与 ExportView 的
           ErrorBanner(onRetry) 对齐，并保留执行中不暴露重试（避免重复启动 run）。
           正常路径下向导已把 step 退回确认页（那里也有重试按钮），这里是兜底。 */}

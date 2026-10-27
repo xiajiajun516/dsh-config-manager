@@ -211,13 +211,6 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
         <Banner kind="info">{t('foreign.source.empty')}</Banner>
       )}
 
-      {/* 冲突策略（用户决策：同 id 不覆盖、跳过并报码）——
-          在用户点下去**之前**就把规则说清楚，而不是等他遇到冲突才解释。 */}
-      {vm !== null && vm.conflictPolicy !== null && (
-        <div className={css.hint}>{t('foreign.conflict.policy')}</div>
-      )}
-
-
       <div className={css.marketReviewPage}>
         <div className={css.marketReviewScroll}>
           <div className={css.sourceList}>
@@ -235,6 +228,12 @@ export function ForeignImportView({ api, t, uiT, onReady }: ForeignImportViewPro
           </div>
         </div>
       </div>
+
+      {/* 冲突规则紧贴来源列表：它约束的是「选中来源之后会发生什么」，属于列表的脚注，
+          不再作为页面开场白横在列表之前（开场白会被读成页面介绍，而不是决策依据）。 */}
+      {vm !== null && vm.conflictPolicy !== null && (
+        <div className={css.hint}>{t('foreign.conflict.policy')}</div>
+      )}
 
       {/* 三类已知有损（F-5）：不阻断导入，也不会出现在兼容性评分里（评分对它们零原因）。
           三条文案与判定都在纯函数 foreignLossyRows 里，这里只摆放；产包后逐条标注本包是否

@@ -403,10 +403,6 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
 
   return (
     <div className={css.viewBody}>
-      {/* 页级标题：只留标题 ——「档案 = 插件组合（bundles）+ 依赖 + patch 层」这句现在挂在
-          「档案」分区标题的 ⓘ 上（2026-10-12 用户要求说明性文案一律进 ⓘ；此前页级与分区级
-          各渲染一次同一句话，同一屏出现两遍）。 */}
-      <SectionTitle title={t('environment.title')} />
 
       {/* 子视图切换：档案列表 ↔ 维护与诊断 */}
       <div className={css.actionRow}>
@@ -450,7 +446,12 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
             {state.current === null ? '—' : <span className={css.mono}>{state.current}</span>}
           </span>
         </div>
-        {state.running.length === 0 && <div className={css.hint}>{t('profiles.running.none')}</div>}
+        {/* 空态只给状态，不解释机制：「启动」按钮就在每行，端口/开浏览器属该按钮的 title */}
+        {state.running.length === 0 && (
+          <div className={css.actionRow}>
+            <Badge kind="info">{t('profiles.running.none')}</Badge>
+          </div>
+        )}
         {state.running.map((record) => (
           <div key={record.name} className={css.actionRow}>
             <span className={css.kvValue}>
@@ -583,8 +584,8 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
           <div className={css.listHeaderRow}>
             <span className={css.groupLabel}>{t('profiles.list.title')} <InfoHint text={t('profiles.list.hint')} label={t('common.infoHint')} /></span>
             <span className={css.cellMeta}>
-              {t('profiles.list.count', { count: summary.total })} ·{' '}
-              {t('profiles.list.summary', { web: summary.web, headless: summary.headless, generic: summary.generic, installed: summary.withNodeModules })}
+              {/* 只留计数与「需处理」：形态 / node_modules 已是每行徽章，汇总句不改变任何决定 */}
+              {t('profiles.list.count', { count: summary.total })}
               {incompleteCount > 0 && <> · {t('profiles.list.incompleteCount', { count: incompleteCount })}</>}
             </span>
             <Button size="sm" onClick={load}>{t('profiles.refresh')}</Button>
@@ -820,11 +821,11 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
               onChange={(checked: boolean) => { patch({ copyIncludeModules: checked, error: null }) }}
               label={t('profiles.duplicate.includeModules')}
             />
-            <div className={css.hint}>{t('profiles.duplicate.includeModulesHint')}</div>
+            <div className={css.cellMeta}>{t('profiles.duplicate.includeModulesHint')}</div>
           </>
         )}
         {copyTarget !== null && !copyTarget.hasNodeModules && (
-          <div className={css.hint}>{t('profiles.duplicate.onlyManifest')}</div>
+          <div className={css.cellMeta}>{t('profiles.duplicate.onlyManifest')}</div>
         )}
         {state.error !== null && <span className={css.formError}>{state.error}</span>}
       </ConfirmDialog>

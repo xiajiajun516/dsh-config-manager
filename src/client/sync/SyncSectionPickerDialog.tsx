@@ -15,6 +15,7 @@ import type { SectionId } from '../../schema/types.ts'
 import { Badge, Banner, Button, Card, Checkbox } from '../common/ui.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { ContentPicker } from '../common/ContentPicker.tsx'
+import { Skeleton } from '../common/Skeleton.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import type { SelectionSection } from '../../ui/selection-model.ts'
 import {
@@ -84,7 +85,7 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
           )}
           {sessionFailed && <span className={css.hint}>{cmT('picker.unitsUnavailable')}</span>}
           {!sessionFailed && sessionNodes.length === 0 && sessionPending && (
-            <span className={css.hint}>{t('common.loading')}</span>
+            <Skeleton count={4} label={t('common.loading')} />
           )}
           {!sessionFailed && sessionNodes.length > 0 && (
             <ContentPicker
@@ -117,7 +118,7 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
       />
       <Modal.Body scroll style={{ maxHeight: '66vh' }}>
         {catalog.length === 0 ? (
-          <span className={css.hint}>{t('common.loading')}</span>
+          <Skeleton count={4} label={t('common.loading')} />
         ) : (
           /* 分组勾选目录：与「导出备份·自定义模式」同构（分组 Card + 名称/描述/徽章），
              分区名走 section-labels 单一映射 —— 与导出选择器显示**同一个中文名**。 */
@@ -126,7 +127,6 @@ export function SyncSectionPickerDialog({ open, t, cmT, uiT, sectionName, catalo
               <Card key={g.group} className={css.groupCard}>
                 <div className={css.groupHeader}>
                   <span className={css.groupLabel}>{g.label}</span>
-                  {g.note !== undefined && <span className={css.groupNote}>{g.note}</span>}
                 </div>
                 <div className={css.groupItems}>
                   {g.items.map((s) => (

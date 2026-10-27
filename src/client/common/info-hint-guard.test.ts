@@ -147,7 +147,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'profiles.subtitle', file: 'src/client/environment/EnvironmentPanel.tsx', kind: '机制' },
   { key: 'section.description', file: 'src/client/sync/SyncPanel.tsx', kind: '机制' },
   { key: 'section.description', file: 'src/client/market/MarketPanel.tsx', kind: '机制' },
-  { key: 'about.subtitle', file: 'src/client/about/AboutPanel.tsx', kind: '背景' },
   { key: 'history.subtitle', file: 'src/client/history/HistoryPanel.tsx', kind: '机制' },
   { key: 'rollback.desc', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
   { key: 'rollback.preview.hint', file: 'src/client/recovery/RollbackCard.tsx', kind: '机制' },
@@ -208,7 +207,6 @@ const KEEP_PINS: readonly KeepPin[] = [
   // ⑤空态解释
   { key: 'history.emptyHint', file: 'src/client/sync/SyncLogList.tsx', kind: '空态' },
   { key: 'history.empty', file: 'src/client/history/HistoryPanel.tsx', kind: '空态' },
-  { key: 'overview.empty.body', file: 'src/client/home/HomePanel.tsx', kind: '空态' },
   { key: 'overview.activity.empty', file: 'src/client/home/HomePanel.tsx', kind: '空态' },
   { key: 'review.changeEmpty', file: 'src/client/market/MarketImportReview.tsx', kind: '空态' },
   { key: 'export.compositionEmpty', file: 'src/client/export/ExportView.tsx', kind: '空态' },
@@ -387,12 +385,14 @@ function parseInfoHintEntry(rel: string): { zh: string | undefined; en: string |
   return { zh: values[0], en: values[1], count: values.length };
 }
 
-test('t6-1 MOVE：83 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
+test('t6-1 MOVE：81 个说明键都已收进 ⓘ（逐字复用原键）且不再有可见说明行', () => {
   const files = readClientSources();
   // 扫描范围自检：客户端源码至少覆盖 t6 涉及的面板目录
   const dirs = new Set(MOVE_PINS.map((p) => p.file.split('/').slice(0, 3).join('/')));
   assert.ok(dirs.size >= 8, 'MOVE 清单必须覆盖全部面板目录（实际 ' + String(dirs.size) + ' 个）');
-  assert.ok(MOVE_PINS.length === 82, 'MOVE 清单长度应为 82（实际 ' + String(MOVE_PINS.length) + '）');
+  // 2026-10-27 文案审计：about.subtitle 是「页面目录式副标题」（插件信息、作者与反馈入口），
+  // 页面本身已由卡片表达，随页级标题一并删除 ⇒ MOVE 清单从 82 降到 81（不是删检查项）。
+  assert.ok(MOVE_PINS.length === 81, 'MOVE 清单长度应为 81（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',

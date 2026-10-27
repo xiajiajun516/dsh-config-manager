@@ -34,7 +34,7 @@ test('pushPreviewView: ok 预览 → 分区行 + 变更计数 + 远端快照数�
   assert.equal(view.changedCount, 1, '只有一个分区有变化');
   assert.equal(view.remoteSnapshotCount, 3);
   assert.equal(view.error, null);
-  assert.ok(view.previewHint.length > 0, '恒显示只读预览提示');
+  assert.equal(view.headline, zhUiT('sync.pushPreviewHeadline', { total: '2', changed: '1' }), '横幅自带分区总数/变化数');
   assert.equal(view.encryptedHint, '');
 });
 
