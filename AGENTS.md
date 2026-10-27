@@ -13,7 +13,7 @@
 > 证据：`docs/lessons/repo-overview.md`（命令/环境/目录树/UI 自查）、`docs/lessons/git-and-release.md`。
 - **验证顺序**：`npm run typecheck` → `npm test` →（动 client/样式）`npm run build` →（大改）`npm run smoke`；build 前 `TEMP`/`TMP` → `.tmp/buildtmp`、test 用系统 TEMP；**无 lint/format**（typecheck 兜底）。
 - **版本三处同步**：`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION`(L190) ≡ `package-lock.json` 根 version 与 `packages[""].version`；`tests/packaging-contract.test.ts` 的 `V-1` 钉住。
-- **发版**打 `tag v* push` 全自动（typecheck → test → build → pack → publish OIDC → Release）；前置 = 三处版本 + `CHANGELOG.md` 顶部亮点段。
+- **发版**打 `tag v* push` 全自动（typecheck → test → build → pack → publish OIDC → Release）；前置 = 三处版本 + `CHANGELOG.md` 顶部亮点段。**发版收尾**：发布成功后按 `.dsh/issue-ledger.md` 里 `awaiting-release` 的行逐条回版本号 + 加 `fixed`（skill `issue-intake-response` §3），清单随本版提交。
 - **用户可见的功能/行为/修复同轮进 `CHANGELOG.md` 的 `## [Unreleased]`**（按 `.dsh/skills/changelog-writing` 落位自检）；会话改动先读 `docs/lessons/sessions-*.md`。
 - **git**：工作副本 `origin` **每次跟随 `repoUrl`**（含 `--push`；不一致即 `set-url`）；同一工作副本操作一律经 `GitTransport.withWorkdir()`；拉取只许 `fetch` + `merge --ff-only`、**禁 `git pull`**（坏 FETCH_HEAD ⇒ SAFE MODE）→ `docs/lessons/sync-channel.md`
 - **删源文件前 `git status --porcelain <路径>`**：见 `??` 必须停下；**禁 `git checkout -- <文件>` 回滚**，撤销改动用针对性 edit 反向。
