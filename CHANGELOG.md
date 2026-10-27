@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.1.85] - 2026-10-27
+
+> **本版主题**：界面删掉重复与自我说明的文案，同步失败开始说清缺的是哪项权限，卡住的同步请求不再把首页拖成永久骨架，GitHub 登录的授权范围也写在了授权说明里。
+>
+> **Theme**: Less noise, fewer dead waits, and sync failures that name the fix — duplicated and self-explaining copy is gone, a failing sync says which permission is missing, a hung sync request no longer leaves the home page stuck on its skeleton, and the GitHub sign-in scope is stated up front.
+
 ### 🔧 变更 · Changed
 
 - **首页与产物库打开更快**：读取同步状态时不再顺带跑「领先提交数 / 未提交改动 / 远端快照数」那三项工作副本统计 —— 只有同步页用得上它们，其余页面改用按需查询，10 秒内重复读取直接复用结果。
