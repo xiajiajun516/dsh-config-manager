@@ -56,13 +56,9 @@ export const zh = {
    * 这里是**数字**，数字留、句子走。
    */
   'chat.preview.scope.files': '{n} 个文件',
-  'chat.preview.scope.added': '+{n}',
-  'chat.preview.scope.removed': '−{n}',
-  'chat.preview.scope.deleted': '{n} 项删除',
   /** 取消勾选（只退对话）时的汇总：数字与用户无关，改写一句「文件不动」；清单仍在下面、且不再变半透明 */
   'chat.preview.scope.off': '只回退对话，文件不改动',
   /** 文件行上悬停出现的「查看」（在看得到的前提下才出现：没有侧栏能力时换成下面那句） */
-  'chat.preview.view': '查看',
   /** 「查看」= 名字本身：无障碍名必须带**这个文件**的全路径（列表里同名按钮一屏好几个） */
   'chat.preview.viewHint': '查看差异：{path}',
   /** 没有右侧栏能力（旧 DSH / 侧栏服务缺失）→ 如实降级为弹窗内展示，不假装打开过 */
@@ -123,11 +119,7 @@ export const en: Record<keyof typeof zh, string> = {
   'chat.preview.summary': 'Confirming this undo will make the following changes:',
   'chat.preview.revertFiles': 'Revert file changes',
   'chat.preview.scope.files': '{n} files',
-  'chat.preview.scope.added': '+{n}',
-  'chat.preview.scope.removed': '\u2212{n}',
-  'chat.preview.scope.deleted': '{n} to delete',
   'chat.preview.scope.off': 'Session only \u2014 files stay as they are',
-  'chat.preview.view': 'View diff',
   'chat.preview.viewHint': 'View diff: {path}',
   'chat.preview.viewInline': 'This client has no right sidebar, so the diff is shown here instead',
   'chat.preview.viewFailed': 'Could not open the right sidebar: {detail}',

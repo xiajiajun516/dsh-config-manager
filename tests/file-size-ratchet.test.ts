@@ -26,7 +26,7 @@ const CEILINGS: Record<string, number> = {
   'src/sync/sync-engine.ts': 2227,
   'src/client/run-store.ts': 2166,
   'src/client/recovery/RecoveryPanel.tsx': 1922,
-  'src/client/locales.ts': 1879,
+  'src/client/locales.ts': 1749,
   'src/core/analyzer.ts': 1500,
   'src/client/sync/SyncPanel.tsx': 1591,
   'src/cli/actions.ts': 1575,

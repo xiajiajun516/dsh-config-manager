@@ -8,7 +8,6 @@ import type { MigrationKind, MigrationResult } from '../../core/migration-histor
 type KindKey = `history.kind.${MigrationKind}`;
 type ResultKey = `history.result.${MigrationResult}`;
 type CommonKey =
-  | 'view.history'
   | 'history.subtitle'
   | 'history.empty'
   | 'history.loading'
@@ -24,21 +23,12 @@ type CommonKey =
   | 'history.filter.recent.all'
   | 'history.filter.recent.50'
   | 'history.filter.recent.200'
-  | 'history.filter.sections'
   | 'history.search.placeholder'
   | 'history.export.json'
   | 'history.export.markdown'
   | 'history.exported'
   | 'history.exporting'
   | 'history.exportError'
-  | 'history.loadError'
-  | 'history.reload'
-  | 'history.table.time'
-  | 'history.table.kind'
-  | 'history.table.result'
-  | 'history.table.sections'
-  | 'history.table.summary'
-  | 'history.updatedAt'
   | 'history.refresh'
   | 'history.refreshError'
   /** ⓘ 说明按钮的可访问名（与主字典 / market / sync / recovery 同口径，见 info-hint-guard t6-4） */
@@ -47,7 +37,6 @@ type CommonKey =
 export type HistoryKey = KindKey | ResultKey | CommonKey;
 
 export const zh = {
-  'view.history': '迁移历史',
   'common.infoHint': '查看说明',
   'history.subtitle': '统一记录全部破坏性/迁移操作（导入/恢复/回滚/档案/同步/备份/快照操作），只可追加、不可修改或删除，跨重启持久，可查询可导出。',
   'history.empty': '暂无迁移记录。',
@@ -64,21 +53,12 @@ export const zh = {
   'history.filter.recent.all': '全部',
   'history.filter.recent.50': '最近 50 条',
   'history.filter.recent.200': '最近 200 条',
-  'history.filter.sections': '涉及分区',
   'history.search.placeholder': '搜索摘要 / 错误 / 分区…',
   'history.export.json': '导出 JSON',
   'history.export.markdown': '导出 Markdown',
   'history.exported': '已导出',
   'history.exporting': '导出中…',
   'history.exportError': '导出失败',
-  'history.loadError': '加载迁移历史失败',
-  'history.reload': '重新加载',
-  'history.table.time': '时间',
-  'history.table.kind': '操作',
-  'history.table.result': '结果',
-  'history.table.sections': '涉及分区',
-  'history.table.summary': '摘要',
-  'history.updatedAt': '更新于',
   'history.refresh': '刷新',
   'history.refreshError': '刷新失败',
   'history.kind.import': '导入',
@@ -104,7 +84,6 @@ export const zh = {
 } as const satisfies Record<HistoryKey, string>;
 
 export const en = {
-  'view.history': 'Migration History',
   'common.infoHint': 'Show description',
   'history.subtitle': 'Unified append-only audit trail of all destructive/migration operations (import/restore/rollback/profile/sync/backup/snapshot), durable across restarts, queryable and exportable.',
   'history.empty': 'No migration records yet.',
@@ -121,21 +100,12 @@ export const en = {
   'history.filter.recent.all': 'All',
   'history.filter.recent.50': 'Latest 50',
   'history.filter.recent.200': 'Latest 200',
-  'history.filter.sections': 'Sections',
   'history.search.placeholder': 'Search summary / error / section…',
   'history.export.json': 'Export JSON',
   'history.export.markdown': 'Export Markdown',
   'history.exported': 'Exported',
   'history.exporting': 'Exporting…',
   'history.exportError': 'Export failed',
-  'history.loadError': 'Failed to load migration history',
-  'history.reload': 'Reload',
-  'history.table.time': 'Time',
-  'history.table.kind': 'Operation',
-  'history.table.result': 'Result',
-  'history.table.sections': 'Sections',
-  'history.table.summary': 'Summary',
-  'history.updatedAt': 'Updated',
   'history.refresh': 'Refresh',
   'history.refreshError': 'Refresh failed',
   'history.kind.import': 'Import',
