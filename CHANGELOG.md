@@ -54,6 +54,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **新建仓库的第一次同步不再报「同步失败」**：远端一个快照都没有时（新建的空仓库正是这个状态），以前弹红色「一键同步失败：远端无快照」，看着像通道坏了；现在给的是提示而非报错 —— 这是首次同步，先在同步页点「推送到远端」创建第一个快照，之后才能拉取。
   **The first sync of a new repository no longer reports a failure**: with zero snapshots on the remote (exactly what a freshly created repository looks like), the panel used to raise a red "one-click sync failed: no remote snapshots" as if the channel were broken. It is now a hint, not an error: this is the first sync — press "Push to remote" to create the first snapshot, and pulling works from then on.
 
+- **同步状态读不出来时，首页不再一直转圈**：同步状态一旦卡住不返回，以前整页骨架会一直挂着等它（默认 5 分钟）。现在首屏只等备份文件、快照、备份计划与活动记录这四个毫秒级请求，同步状态单独加载、最多等 30 秒；超时就把状态条里那一段标成「读取超时」，不再留空让人以为「没配置」。读取同步状态的接口本身也加了 10 秒预算，超时会明确回「同步状态读取超时」，而不是让请求永远悬着。
+  **The home page no longer spins forever when sync status cannot be read**: a stalled sync-status request used to hold the whole page on skeletons (up to the 5-minute default). The first paint now waits only for the four millisecond-level requests — backup files, snapshots, backup schedule, activity — while sync status loads on its own for at most 30 seconds; on timeout that one segment honestly reads "Timed out" instead of staying blank as if nothing were configured. The endpoint itself also got a 10-second budget and now answers with an explicit timeout error instead of leaving the request hanging.
+
 ## [0.1.84] - 2026-10-25
 
 > **本版主题**：**这一版只治两处「你什么都没做、它却动了」——自动同步不再每分钟空推一次把远端堆满快照，恢复也不再因为目标目录还没创建就判成路径越界**

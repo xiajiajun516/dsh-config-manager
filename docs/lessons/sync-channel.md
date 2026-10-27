@@ -281,3 +281,45 @@ self 分区 hash 每轮都变 ⇒ 永远 dirty ⇒ 每次远端轮询都真推�
 **未做**：远端仓库里已积累的 ~325 个「只差 lastRunAt」的历史快照没有自动清理（留给用户决定）；
 本次修复需要重建 `lib/` 并重启 DSH 才在真机生效。
 
+
+## 只读端点也会无界挂起：`/sync/status` 300 秒不回 ⇒ 首页永久骨架（2026-10 真机）
+
+**规则判据（已回写 `AGENTS.md` §1）**：只读端点同样必须「有界返回」—— 碰不可控依赖（DSH credentials
+服务、子进程/工作副本自检、外部 HTTP）的取值体一律套总预算并给明确错误码；客户端首屏**不得**让单一慢
+请求垄断骨架。判据 = 「这个 await 最长能挂多久」这个问题必须有答案，答案不能是「不知道」。
+
+**现场**：profile=`desktop` 打开插件首页，状态条四段与「最近活动」全是骨架、「加载中…」十余分钟不动
+（用户报「首页一直在加载」）。实测 `GET /api/dsh-config-manager/sync/status` **300 秒零响应字节**
+（`curl -m 300` → `code=000`，耗时 300.004 s）；同机其余只读端点全在毫秒级：status 0.024 s /
+snapshots 0.007 s / backup-files 0.004 s / backup-schedule 0.002 s / history 0.39 s / disk-usage 0.8 s。
+
+**已排除的假设**：git 与锁 —— 探测期间无 `git.exe` 子进程，`/tmp` 无 `sync/work` 的 workdir 锁
+（lockKey `8c5748b567c9570910e1729df1b3b5cf`，只有 `dsh-git-test-*` 陈旧锁）；网络 —— 同机
+`git ls-remote origin` 在 `sync/work` 下 **2.07 s** 返回 `12d6d5b1…refs/heads/main`。
+
+**症状为何是「整页」而不是「一段」**：旧 `HomePanel.loadFast` 用
+`Promise.allSettled([listBackupFiles, snapshots, backupSchedule, syncApi.status(), historyApi.list])`，
+全部 settle 才 `setLoading(false)`；而 `syncApi.status()` 走 `SYNC_OPTS`（`timeoutMs =
+LONG_REQUEST_TIMEOUT_MS = 5 min`）⇒ 一个点挂住 = 整页骨架 5 分钟，且失败被吞成 `null`
+（`overviewHealth` 对 null 不降级 ⇒ 界面上看不出任何异常）。
+
+**修复两半**（缺一不可）：
+1. 服务端：`src/routes/sync.ts` 把 handler 取值体抽成 `collectSyncStatus()`，用
+   `withTimeout(collectSyncStatus(), SYNC_STATUS_BUDGET_MS = 10_000, msg('host.syncStatusTimeout'))` 包住；
+   预算耗尽 → **503**，其余异常仍 500。这是**对任何挂起形态都成立**的围栏 —— 挂在哪一层无法在宿主
+   进程内取证（没有 JS 栈可抓），所以修复不能依赖定位到具体那个 await。
+2. 客户端：同步状态移出首屏关键路径，独立 30 秒档（`HOME_SYNC_TIMEOUT_MS`）加载，自带
+   `loading | ready | failed` 三态；失败时该指标段显示「读取超时」（`overview.meta.syncUnavailable`），
+   不留空冒充「未配置」（诚实性硬约束：用户看到「未配置」会去重配一个本来配好的通道）。骨架按段判定
+   （`segLoading(seg.key)`），其余四段只看首屏快请求。
+
+**验证**：`npx tsc --noEmit` 零错；`npm test` 5145 pass（唯一红是 locales 体量棘轮 +2，已按
+`tests/file-size-ratchet.test.ts` 的规则上调并登记 tech-debt #22）；`npm run build` ✔；
+`node --test src/client/bundle-selfcontained.test.ts` ✔；新守卫 `tests/home-load-availability.test.ts`
+（L-01 不得退回 `Promise.allSettled` / 不得退回无参 `status()`；L-02 三态与「读取超时」文案；L-03 服务端
+预算与 503 判定）钉住两半，防「顺手把 sync 加回首屏」。
+
+**未做/未知**：究竟是哪个 await 永不返回，宿主进程内没有取到栈证据（最可疑是 DSH credentials 服务：
+`sync.ts` 里 5 处 `credentials.describe`，且 `cloudChannelViews`/`selectionViewByChannel`/
+`syncCredentialsByChannelView` 内部各再调一次）；本次修复不依赖定位到它。真机是否因此恢复健康，
+需要重建 `lib/` 并重启 DSH 后由用户确认。

@@ -14,7 +14,8 @@
  * （Canvas 纪律：不留底部空洞）。
  * 状态行**不重复**恢复待处理的提示 —— 全局 SAFE MODE 横幅已经承担（§4.4）。
  *
- * 数据流：挂载/刷新时对 5 个**毫秒级**只读 API 做 Promise.allSettled 并行聚合，首屏不等分区预览；
+ * 数据流：挂载/刷新时 4 个**毫秒级**只读 API 逐个 settle 逐个渲染（骨架只等它们）；/sync/status
+ * 独立加载、绝不参与骨架（它碰 DSH 凭据服务与 git 工作副本自检，真机出现过 300 s 不返回）；首屏不等分区预览；
  * 分区构成（export-preview）单独后发 —— 它要遍历全部默认分区（含本地插件打包、会话扫描），
  * 是最慢的一步，等它会让整页转圈（真机曾达 12~30 s）。全部渲染模型来自 src/ui/overview-view.ts
  * 纯函数（node 单测覆盖），本组件只做装配。
@@ -52,6 +53,9 @@ import { CopyButton } from '../common/CopyButton.tsx'
 import { Modal } from '../common/Modal.tsx'
 import { BackupScheduleCard } from './BackupScheduleCard.tsx'
 import css from '../config-manager.module.css'
+
+/** 首页同步状态请求超时（ms）：它只填一个指标段，超时走默认 30 秒文案档（时长与文案一致）。 */
+const HOME_SYNC_TIMEOUT_MS = 30_000
 
 /** issue #43：立即备份跳过原因 → 文案键（文案统一走 locale 字典；未知 token 走 other）。 */
 const BACKUP_SKIP_KEY: Record<BackupSkipReason, ConfigManagerKey> = {
@@ -142,7 +146,10 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const store = useSyncExternalStore(runStore.subscribe, runStore.getSnapshot)
   const [data, setData] = useState<OverviewData>(initialData)
+  /** 首屏 4 个毫秒级只读接口是否仍在飞（决定状态条/活动表的骨架）。 */
   const [loading, setLoading] = useState(true)
+  /** 同步状态的独立加载态：'failed' 时指标段显示「读取超时」（绝不冒充「未配置」）。 */
+  const [syncState, setSyncState] = useState<'loading' | 'ready' | 'failed'>('loading')
   /** 首屏 5 个只读请求的失败情况（null = 全部成功 / 还没跑过）。
    *  为什么必须有它：此前 allSettled 把失败一律吞成 null，而健康判定对 null 不降级 ——
    *  宿主接口整体不可达时，用户看到的是绿色「配置健康」+「暂无操作记录」，
@@ -152,34 +159,58 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
   /** 卸载后不再 setState（异步回调竞态防护） */
   const aliveRef = useRef(true)
   useEffect(() => () => { aliveRef.current = false }, [])
-
-  /** 首屏：5 个毫秒级只读接口；settle 即渲染（不 await 分区预览） */
-  const loadFast = useCallback(async (): Promise<void> => {
-    const results = await Promise.allSettled([
-      api.listBackupFiles(),
-      api.snapshots(),
-      api.backupSchedule(),
-      syncApi.status(),
-      historyApi.list({}),
-    ])
+  /** 本轮首屏的失败集合（4 个快请求 + 独立同步状态共享）：横幅的计数与首条原因都出自这里。 */
+  const failuresRef = useRef<unknown[]>([])
+  const publishFailures = useCallback((): void => {
     if (!aliveRef.current) return
-    // 失败必须留痕（数量 + 第一条原因）；成功时清掉上一轮的错误。
-    const failures = results.flatMap((r) => (r.status === 'rejected' ? [r.reason] : []))
-    const first = failures[0]
-    setLoadError(failures.length === 0 ? null : {
-      count: failures.length,
+    const list = failuresRef.current
+    const first = list[0]
+    setLoadError(list.length === 0 ? null : {
+      count: list.length,
       message: first instanceof Error ? first.message : String(first),
     })
-    setData((prev) => ({
-      ...prev,
-      backups: results[0].status === 'fulfilled' ? results[0].value : null,
-      snapshots: results[1].status === 'fulfilled' ? results[1].value : null,
-      schedule: results[2].status === 'fulfilled' ? results[2].value : null,
-      sync: results[3].status === 'fulfilled' ? results[3].value : null,
-      history: results[4].status === 'fulfilled' ? results[4].value : null,
-    }))
-    setLoading(false)
-  }, [api, syncApi, historyApi])
+  }, [])
+
+  /** 首屏 4 个毫秒级只读接口（backups/snapshots/schedule/history）：**逐个 settle 逐个渲染**，
+   *  凑齐才撤骨架；「首屏好了没」只看它们 —— 同步状态另走一条独立通道（见下方注释）。 */
+  const loadFast = useCallback(async (): Promise<void> => {
+    failuresRef.current = []
+    let remaining = 4
+    /** 单个快请求：成功就写自己那块数据，失败只记账（不牵连其它块，也不延长骨架）。 */
+    const runFast = <T,>(promise: Promise<T>, apply: (value: T) => void): void => {
+      void promise.then(
+        (value) => { if (aliveRef.current) apply(value) },
+        (reason) => { failuresRef.current.push(reason) },
+      ).finally(() => {
+        remaining -= 1
+        if (remaining > 0) return
+        publishFailures()
+        if (aliveRef.current) setLoading(false)
+      })
+    }
+    runFast(api.listBackupFiles(), (value) => { setData((prev) => ({ ...prev, backups: value })) })
+    runFast(api.snapshots(), (value) => { setData((prev) => ({ ...prev, snapshots: value })) })
+    runFast(api.backupSchedule(), (value) => { setData((prev) => ({ ...prev, schedule: value })) })
+    runFast(historyApi.list({}), (value) => { setData((prev) => ({ ...prev, history: value })) })
+    // 同步状态**独立加载、绝不参与首屏骨架**：/sync/status 会碰 DSH credentials 服务与 git 工作副本
+    // 自检，真机出现过 300 秒不返回。此前它与其余 4 个请求同桶 allSettled，一个挂住就把整页按在骨架上。
+    // 超时取 30 秒档（客户端超时文案按时长插值，读作「30 秒」，与实测一致）。
+    setSyncState('loading')
+    void syncApi.status({ timeoutMs: HOME_SYNC_TIMEOUT_MS }).then(
+      (value) => {
+        if (!aliveRef.current) return
+        setData((prev) => ({ ...prev, sync: value }))
+        setSyncState('ready')
+        publishFailures()
+      },
+      (reason) => {
+        failuresRef.current.push(reason)
+        if (!aliveRef.current) return
+        setSyncState('failed')
+        publishFailures()
+      },
+    )
+  }, [api, syncApi, historyApi, publishFailures])
 
   /**
    * 全量刷新（挂载、立即备份后、定时备份弹窗关闭后）。
@@ -305,8 +336,16 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
     } else if (m.key === 'backups' && m.metaParams['time'] !== undefined) {
       dim = renderRelTime(Number(m.metaParams['time']), t)
     }
+    // 同步状态读取失败（超时/不可用）：值留空、附注如实写「读取超时」——
+    // 落到 sync=null 的「无值」上会读成「没配置」，与真实原因相反。
+    if (m.key === 'sync' && syncState === 'failed') {
+      return { key: m.key, label: t(METRIC_LABEL[m.key]), value: '—', dim: t('overview.meta.syncUnavailable') }
+    }
     return { key: m.key, label: t(METRIC_LABEL[m.key]), value, dim }
   })
+
+  /** 某指标段是否仍在等数据：同步段只看自己的加载态，其余三段/四段看首屏快请求。 */
+  const segLoading = (key: OverviewMetricKey): boolean => (key === 'sync' ? syncState === 'loading' : loading)
 
   /** 结果渲染：ok = 绿点（降噪）；failed/skipped = 徽章（需要被看见）。 */
   const resultNode = (badge: 'ok' | 'error' | 'warn'): ReactNode =>
@@ -354,10 +393,10 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
             <span>{seg.label}</span>
             {/* 首屏数值未到货时用骨架占位（不再在整条右端挂一颗转圈）：
                 段本身的位置与宽度保持不变，数据到货只换「值」这一块。 */}
-            {loading
+            {segLoading(seg.key)
               ? <span className={css.skeletonBar + ' ' + css.statValueSkeleton} aria-hidden="true" />
               : <b>{seg.value}</b>}
-            {!loading && seg.dim !== null && <span className={css.statSegDim}>· {seg.dim}</span>}
+            {!segLoading(seg.key) && seg.dim !== null && <span className={css.statSegDim}>· {seg.dim}</span>}
           </button>
         ))}
       </div>

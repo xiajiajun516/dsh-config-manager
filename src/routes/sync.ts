@@ -182,79 +182,93 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
     }
     return out
   }
+  /**
+   * /sync/status 的取值体。
+   *
+   * 只读端点也碰两处**不可控延迟**：DSH credentials 服务（describe/resolve）与 git 工作副本自检
+   * （子进程 + 工作副本锁）。任一处永不返回时，裸 await 会让 HTTP 响应永不被写出 ——
+   * 首页首屏会永久停在骨架（2026-10 现场：/sync/status 300 s 无响应，其余只读端点均毫秒级）。
+   * ⇒ 整个组装套总预算，超时如实报 503，保证请求有界返回。
+   */
+  const SYNC_STATUS_BUDGET_MS = 10_000
+  const collectSyncStatus = async (): Promise<Record<string, unknown>> => {
+    // 完整双命名空间配置：repoUrl / webdav.url 无论当前通道都回填，
+    // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失
+    const full = await readFullSyncConfig(syncDir)
+    const state = await loadSyncState(syncDir)
+    const [cred, webdavCred] = await Promise.all([
+      credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
+      credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
+    ])
+    const transport: SyncConfig['transport'] = parseSyncChannel(full?.transport) ?? 'git'
+    // m-self：插件 UI 偏好（上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
+    const uiPrefs = await readUiPrefs(syncDir)
+    // webdav 配置视图（配置过即返回，与当前通道无关：供表单在 git ↔ webdav 切换时回填）
+    const webdav = full?.webdav !== undefined
+      ? {
+          url: full.webdav.url,
+          // username 非敏感可回显，供表单回填
+          username: full.webdav.username,
+          usernameConfigured: typeof full.webdav.username === 'string' && full.webdav.username !== '',
+          passwordConfigured: webdavCred.configured,
+        }
+      : undefined
+    // 云端点配置视图（只回 secretStored 布尔；与当前通道无关，配置过即回填）
+    const cloud = await cloudChannelViews(full, credentials)
+    // issue #79 / #104 建议 3：git 工作副本是否已跟随 repoUrl，外加「领先远端提交数 /
+    // 远端快照数」（只读自检；后者是「本地一直没真正备份」的预警依据）。
+    // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
+    const gitRepoUrl = full?.git?.repoUrl ?? ''
+    let workDir: Awaited<ReturnType<typeof syncWorkDir.inspect>> | null = null
+    if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl)
+    return {
+      ok: true,
+      configured: full !== null,
+      transport,
+      repoUrl: full?.git?.repoUrl,
+      credentialConfigured: cred.configured,
+      credentialWritable: cred.writable === true,
+      // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）
+      ...(webdav !== undefined ? { webdav } : {}),
+      // 云端点：当前活动 s3 兼容商 / gist 的非密配置（无任何密钥值）
+      ...(cloud.s3 === undefined ? {} : { s3: cloud.s3 }),
+      ...(cloud.gist === undefined ? {} : { gist: cloud.gist }),
+      // 已保存的云端点 provider 清单（切换 provider 时回填用；只有名字，无任何值）
+      cloudSavedProviders: await listCloudConfiguredProviders(syncDir),
+      lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
+      // 方案 A（同步页按钮瘦身）：是否存在同步基线（本地祖先指针）。**只回布尔，绝不回快照 id** ——
+      // 界面据此在「有基线 → 三方裁决视图 / 无基线 → 导入确认」之间分派；缺省 undefined 按无基线处理。
+      hasBaseline: state.lastSnapshotId !== '',
+      sectionCount: Object.keys(state.sections).length,
+      lastTransport: state.transport,
+      // 上次选择的同步通道（磁盘 ui-prefs；UI 回填优先于此，localStorage 仅兜底）
+      lastSyncChannel: uiPrefs.lastSyncChannel,
+      // 可同步分区目录（「高级/自定义导出」勾选列表；只含 portable，无 secret 值）
+      syncSections: syncSectionCatalog,
+      // 当前分区选择（默认/高级模式 + 勾选分区；当前激活通道；UI 回填用，自动同步共用）
+      syncSelection: await selectionView(transport),
+      // 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道）
+      syncSelectionByChannel: await selectionViewByChannel(),
+      // 全部通道的同步密码保存状态（加密/解密；只回布尔，值永不回传浏览器）
+      syncCredentialsByChannel: await syncCredentialsByChannelView(),
+      // 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9）
+      autosync: await buildAutosyncStatus(syncDir, transport),
+      // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
+      autosyncByChannel: await buildAutosyncStatusByChannel(syncDir),
+      // 工作副本事实（仅 git 且配置了地址时返回；'facts' = 自检成功，'error' = 自检读不出来）
+      ...(workDir === null ? {} : { workDir }),
+    }
+  }
   return [
     // ------------------------------------------------------ sync/status
     // m-sync-ui：同步状态（通道配置 / 凭据状态 / 上次同步 / 分区数）。只读，无 secret 值。
     endpoint({ path: '/api/dsh-config-manager/sync/status', methods: ['GET'] }, async (req, res) => {
       try {
-        // 完整双命名空间配置：repoUrl / webdav.url 无论当前通道都回填，
-        // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失
-        const full = await readFullSyncConfig(syncDir)
-        const state = await loadSyncState(syncDir)
-        const [cred, webdavCred] = await Promise.all([
-          credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
-          credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
-        ])
-        const transport: SyncConfig['transport'] = parseSyncChannel(full?.transport) ?? 'git'
-        // m-self：插件 UI 偏好（上次选择的同步通道；ui-prefs.json，随 self 分区进备份）
-        const uiPrefs = await readUiPrefs(syncDir)
-        // webdav 配置视图（配置过即返回，与当前通道无关：供表单在 git ↔ webdav 切换时回填）
-        const webdav = full?.webdav !== undefined
-          ? {
-              url: full.webdav.url,
-              // username 非敏感可回显，供表单回填
-              username: full.webdav.username,
-              usernameConfigured: typeof full.webdav.username === 'string' && full.webdav.username !== '',
-              passwordConfigured: webdavCred.configured,
-            }
-          : undefined
-        // 云端点配置视图（只回 secretStored 布尔；与当前通道无关，配置过即回填）
-        const cloud = await cloudChannelViews(full, credentials)
-        // issue #79 / #104 建议 3：git 工作副本是否已跟随 repoUrl，外加「领先远端提交数 /
-        // 远端快照数」（只读自检；后者是「本地一直没真正备份」的预警依据）。
-        // 读不出来时**如实回传错误**（workDirError），不让状态接口静默少一块信息。
-        const gitRepoUrl = full?.git?.repoUrl ?? ''
-        let workDir: Awaited<ReturnType<typeof syncWorkDir.inspect>> | null = null
-        if (gitRepoUrl !== '') workDir = await syncWorkDir.inspect(gitRepoUrl)
-        writeJson(res, 200, {
-          ok: true,
-          configured: full !== null,
-          transport,
-          repoUrl: full?.git?.repoUrl,
-          credentialConfigured: cred.configured,
-          credentialWritable: cred.writable === true,
-          // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）
-          ...(webdav !== undefined ? { webdav } : {}),
-          // 云端点：当前活动 s3 兼容商 / gist 的非密配置（无任何密钥值）
-          ...(cloud.s3 === undefined ? {} : { s3: cloud.s3 }),
-          ...(cloud.gist === undefined ? {} : { gist: cloud.gist }),
-          // 已保存的云端点 provider 清单（切换 provider 时回填用；只有名字，无任何值）
-          cloudSavedProviders: await listCloudConfiguredProviders(syncDir),
-          lastSyncAt: state.lastSyncAt === '' ? undefined : state.lastSyncAt,
-          // 方案 A（同步页按钮瘦身）：是否存在同步基线（本地祖先指针）。**只回布尔，绝不回快照 id** ——
-          // 界面据此在「有基线 → 三方裁决视图 / 无基线 → 导入确认」之间分派；缺省 undefined 按无基线处理。
-          hasBaseline: state.lastSnapshotId !== '',
-          sectionCount: Object.keys(state.sections).length,
-          lastTransport: state.transport,
-          // 上次选择的同步通道（磁盘 ui-prefs；UI 回填优先于此，localStorage 仅兜底）
-          lastSyncChannel: uiPrefs.lastSyncChannel,
-          // 可同步分区目录（「高级/自定义导出」勾选列表；只含 portable，无 secret 值）
-          syncSections: syncSectionCatalog,
-          // 当前分区选择（默认/高级模式 + 勾选分区；当前激活通道；UI 回填用，自动同步共用）
-          syncSelection: await selectionView(transport),
-          // 全部通道的分区选择（git/webdav 各自独立；UI 按当前 tab 取对应通道）
-          syncSelectionByChannel: await selectionViewByChannel(),
-          // 全部通道的同步密码保存状态（加密/解密；只回布尔，值永不回传浏览器）
-          syncCredentialsByChannel: await syncCredentialsByChannelView(),
-          // 自动同步当前状态（当前激活通道；供 UI 顶部开关回填；§3.9）
-          autosync: await buildAutosyncStatus(syncDir, transport),
-          // 全部通道的自动同步状态（git/webdav 各自独立；UI 按当前 tab 取对应通道）
-          autosyncByChannel: await buildAutosyncStatusByChannel(syncDir),
-          // 工作副本事实（仅 git 且配置了地址时返回；'facts' = 自检成功，'error' = 自检读不出来）
-          ...(workDir === null ? {} : { workDir }),
-        })
+        writeJson(res, 200, await withTimeout(collectSyncStatus(), SYNC_STATUS_BUDGET_MS, msg('host.syncStatusTimeout')))
       } catch (error) {
-        writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+        const message = error instanceof Error ? error.message : String(error)
+        // 预算耗尽 = 暂不可用（503）；其余异常仍是 500。两者都让客户端拿到明确错误而不是空等。
+        writeJson(res, message === msg('host.syncStatusTimeout') ? 503 : 500, { error: message })
       }
     }),
     // ------------------------------------------------------ sync/workdir/reset

@@ -13,7 +13,7 @@
 | `sessions-import-export.md` | 会话日志字节改写 / 可见性来源 / 子代理父子 / 排序时间 / 前缀映射 / recursive-walk / 归档缓存与预览同口径 | §📌「会话与导入导出」、§🏗️ |
 | `sessions-repair-diagnostics.md` | v0 打包行 / 检测口径 G-24 / 复核门与 catalog / 外部来源合成行 / 面板侧写路径 / 两侧诚实 / codec 锚点链 | §📌「会话修复与诊断口径」 |
 | `security-and-credentials.md` | 凭据计划项「值的有无」/ 加密载荷 / 批量按钮 / 磁盘占用候选集 / DCA1 形态判定 / SAFE MODE / 值形状 G-36 / Secret 默认不导出 / sessionStorage 白名单 | §🔐 安全不变量、§📌「安全」相关条 |
-| `sync-channel.md` | 同步分区逐分区放行 / 会话管理五条语义 | §🔐 安全不变量、`docs/spec/sync-channel-v1.md` |
+| `sync-channel.md` | 同步分区逐分区放行 / 会话管理五条语义 / 只读端点无界挂起与首页骨架（2026-10 真机） | §🔐 安全不变量、`docs/spec/sync-channel-v1.md` |
 | `recovery-console.md` | CLI 与救急台同门 / 灾备下线 / 救援模式与 reconcileBundles / 离线救急台 token 边界 | §📌「恢复 / 救急台 / 救援模式」 |
 | `packaging-and-bundle.md` | bundle 是 cjs / 自包含护栏 / issue #57–#60 / MemFs | §📌「打包与 client bundle」、§🏗️ |
 | `plugin-data-migration.md` | 第三方插件数据目录的位置取证与收录口径 / 区域相对排除 / 声明缓存按 home 键 / 目录形态判定 / 离线 CLI 为何不收集 | §📌「第三方插件数据」 |

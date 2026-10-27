@@ -790,9 +790,10 @@ export class SyncApi {
     this.t = t
   }
 
-  /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数 / 工作副本自检） */
-  async status(): Promise<SyncStatusResponse> {
-    return getJson<SyncStatusResponse>(SYNC_API.status, this.t, SYNC_OPTS);
+  /** 读取同步状态（配置 / 凭据 / 上次同步时间 / 分区数 / 工作副本自检）。
+   *  opts 可覆盖超时：首页只拿它填一个指标段，等不起同步族默认的 5 分钟档。 */
+  async status(opts: RequestOptions = {}): Promise<SyncStatusResponse> {
+    return getJson<SyncStatusResponse>(SYNC_API.status, this.t, { ...SYNC_OPTS, ...opts });
   }
 
   /**
