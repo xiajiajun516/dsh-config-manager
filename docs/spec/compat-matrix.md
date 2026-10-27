@@ -3,7 +3,7 @@
 > 本文件回答一个问题：**本插件支持哪个 DSH 版本区间，以及 DSH 升级时哪一部分会先破。**
 > 所有断言均标注取证位置（`file:line`）或标记为「未验证」。凡未实际读取文件确认的结论一律不写入本文件。
 
-- 适用插件版本：`dsh-config-manager@0.1.85`（`package.json:3`，与 `src/index.ts` 的 `export const PLUGIN_VERSION` 一致）
+- 适用插件版本：`dsh-config-manager@0.1.86`（`package.json:3`，与 `src/index.ts` 的 `export const PLUGIN_VERSION` 一致）
 - 取证环境：Windows，Node `v24.13.0`，npm `11.19.0`
 - 本机 DSH 部署：`@deepseek-ai/dsh@0.1.5-rc.1`（`D:\Apps\nodejs\node_global\node_modules\@deepseek-ai\dsh\package.json`）
 - 兼容闸取证（2026-09-28，issue #53）：另从 npm 取 `@deepseek-ai/dsh-app-boot@0.2.0-rc.1`、`@deepseek-ai/dsh@0.1.7-rc.2` 与 `@deepseek-ai/dsh@0.2.0-rc.1` 的 tarball 逐字读源码，并用 app-boot 导出的 `evaluatePluginCompatibility` 对**本插件的 manifest** 真跑判定（结果见 §3.3）

@@ -28,6 +28,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+> **{{本版主题}}**：{{一句话中文主题}}
+>
+> **Theme**: {{one-line English theme}}
+
+## [0.1.86] - 2026-10-28
+
 > **本版主题**：同步状态不再被「别人占着工作副本」拖成超时，首页与同步页打开即有结果。
 >
 > **Theme**: Sync status no longer turns into a timeout because someone else holds the work copy; the home page and sync page report right away.
