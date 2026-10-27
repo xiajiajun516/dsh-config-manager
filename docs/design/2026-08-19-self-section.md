@@ -10,7 +10,7 @@ dsh-config-manager 自身有两类"浏览器存储"数据：
 1. **localStorage**：`dsh.configManager.syncChannel`（用户上次选择的同步通道 git/webdav）——真实偏好，但换浏览器/换机器即丢失，且 Host 侧 Node 进程读不到（自动同步在浏览器关闭时也运行）；
 2. **sessionStorage**：`dsh.cfgMgr.state.v1`（当前 tab / 向导进度 / 面板状态）——运行时 UI 状态，非配置，**保持现状不进备份**（跨机器恢复无意义，且白名单机制已成熟）。
 
-同时发现真实缺口：12 个既有 adapter 均不覆盖**插件自身配置**（`$DSH_HOME/dsh-config-manager/` 下的 `sync-config.json` / `sync-autosync.json` / `sync-selection.json` / `market-config.json`）。用户在 A 机器配置好的同步通道与自动同步，导出备份迁移到 B 机器后不会跟随（凭据走 credentials 槽位能迁移，通道配置本身不能）。
+同时发现真实缺口：当时 12 个既有 adapter（2026-10-28 复核：现为 15 个）均不覆盖**插件自身配置**（`$DSH_HOME/dsh-config-manager/` 下的 `sync-config.json` / `sync-autosync.json` / `sync-selection.json` / `market-config.json`）。用户在 A 机器配置好的同步通道与自动同步，导出备份迁移到 B 机器后不会跟随（凭据走 credentials 槽位能迁移，通道配置本身不能）。
 
 ## 决策
 
@@ -18,9 +18,11 @@ dsh-config-manager 自身有两类"浏览器存储"数据：
 
 - 分区 id：`self`；ZIP 内前缀 `self/`；`portability='portable'`、`defaultIncluded=true`（Quick Export 与远程同步默认携带）。
 - **文件类分区**而非 JSON 分区：与 pluginFiles/skills 同机制（整文件进 ZIP，导入时按相对路径写回），天然保留各配置文件自身的 schema（sync-config 是 v3、market-config 是 v1），免去解析/合并/演进维护。
-- **白名单收集**（非递归）：只导出
-  `sync/sync-config.json`、`sync/sync-autosync.json`、`sync/sync-selection.json`、`sync/ui-prefs.json`、`market/market-config.json`；
-  显式排除 `sync/sync-history.json`（执行记录，属数据非配置）、`market/cache/`（缓存）、`snapshots/`（快照）、`tmp/` `exports/`（临时/导出产物）。
+- **白名单收集**（非递归）：`src/adapters/self.ts:53` 的 `SELF_CONFIG_FILES` 现为 **7 项** ——
+  `sync/sync-config.json`、`sync/sync-autosync.json`、`sync/sync-selection.json`、`sync/ui-prefs.json`、`sync/backup-schedule.json`、`market/market-config.json`、`exports/.backup-notes.json`；
+  显式排除 `sync/sync-history.json`（执行记录，属数据非配置）、`market/cache/`（缓存）、`snapshots/`（快照）、`tmp/`、以及 `exports/` 下除备注清单外的全部导出产物。
+  （2026-10-28 复核：本文原写 5 项，漏 `sync/backup-schedule.json` 与 `exports/.backup-notes.json`；后者是手动导出时填写的备注清单，随分区迁移后换机器仍能看到备注。）
+- **运行态剔除（身份字节）**：`sync/backup-schedule.json` 与 `sync/sync-autosync.json` 每次执行收尾都会被改写 `lastRunAt` / `lastRunStatus` / `lastRunMessage` / `lastRunHistoryId` / `consecutiveFailures`，故 `self.ts:69` 的 `VOLATILE_RUN_STATE_KEYS` 配合覆写的 `comparableContent()`（`self.ts:184`）只在**比对/身份哈希**时剔掉这批字段，写盘仍写完整文件。不做这一步的后果：幂等判定恒判 Conflict、`hashSection` 每轮都变 ⇒ 自动同步的「本地有改动」永远为真，每次轮询（缺省 60 s）都真推一个快照（issue #73、#127，真机 41 次/天，内容只差一个 `lastRunAt`）。
 - 复用 `FileCollectionAdapter` 基类（`analyzeImport`/`applyItem`/`validate`），仅覆写 `export` 为白名单收集；基准目录 `dsh-config-manager`（相对 `~/.dsh` 根），与 `core/backup.ts` 的 `FILE_BASES['self']` 一致，快照/回滚路径自动正确。
 - **挂载边界**：宿主按 `dataDir` 计算相对 `~/.dsh` 的目录；自定义 `dataDir` 位于 `~/.dsh` 之外时（Host fs 门面 confined to home root）**不挂载** self adapter 并告警，其余分区不受影响。
 

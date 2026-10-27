@@ -31,7 +31,7 @@ export type MarketPublishMode = 'migrate' | 'share';
 export const MAX_MARKET_ZIP_BYTES = 64 * 1024 * 1024;
 
 /**
- * 市场条目禁止携带的分区（产品决策 2026-08-19，guide docs/design/2026-08-19-market-repo-setup-guide.md）：
+ * 市场条目禁止携带的分区（产品决策 2026-08-19，guide docs/spec/market-index-v1.md）：
  *  - sessions：历史会话，含个人交互记录/上下文；
  *  - pluginFiles：任意文件直通（目录放啥带啥），无内容过滤，最易泄漏 token/密钥文件；
  *  - self：本地环境专属（sync 通道 URL / WebDAV 地址 / 市场配置 / UI 偏好），无分享价值且泄漏环境信息。

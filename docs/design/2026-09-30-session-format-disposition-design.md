@@ -1,6 +1,6 @@
 # 会话格式「处置开关」设计（下一轮）
 
-> **状态**：**已全部落地**（core + UI + 路由；`docs/spec/known-gaps.md` 的 G-23 已标「已全部落地」）。§9 与文中「UI/路由待做」仅作历史进度记录。
+> **状态**：**已全部落地**（core + UI + 路由；`docs/maintenance/known-gaps.md` 的 G-23 已标「已全部落地」）。§9 与文中「UI/路由待做」仅作历史进度记录。
 > 前置 = known-gaps **G-23** 的会话格式体检与告警
 > （工作区已落地：宿主探针 `src/utils/session-format.ts`、core 的 `sessionFormatWarnings`、
 > 档案页版本展示；见 `CHANGELOG.md` 的「未发布」段）。
@@ -18,7 +18,7 @@
 > 为什么不做「导入时自动降级转换」：DSH 只提供**相邻且向上**的迁移 API
 > （`defineSessionFormatMigration` 断言 `toVersion === fromVersion + 1`，catalog 只暴露 `currentEncoder`），
 > 而 v3→v4 的边是**多对一的语义变换**（producer 归并 + message 形状改写），不可逆；
-> 手写降级器只会得到 strict 校验下的「corrupt session log」。结论与证据见 `docs/spec/known-gaps.md` G-23。
+> 手写降级器只会得到 strict 校验下的「corrupt session log」。结论与证据见 `docs/maintenance/known-gaps.md` G-23。
 
 ## 2. 本轮范围（目标）
 

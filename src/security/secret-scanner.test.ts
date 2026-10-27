@@ -5,7 +5,7 @@
  * 这类**合法**（RFC 7235 / 6750：auth-scheme 名大小写不敏感）的授权头在 env / headers / url 通道上
  * 明文进包且**完全不可见**（refs / skipped 皆空）。
  *
- * 两条口径（改这条判定的任何人先读 `docs/spec/known-gaps.md` **G-36**）：
+ * 两条口径（改这条判定的任何人先读 `docs/maintenance/known-gaps.md` **G-36**）：
  *  ① 规范形态 `Bearer …` 的**行为与历史逐字一致**（命中名仍是 `bearer-token`）：本模块只**补**非规范大小写；
  *  ② 厂商前缀（`sk-` / `AKIA` / `ghp_` / `github_pat_`）**刻意保持大小写敏感** —— `SK-…` 不是真实厂商形态，
  *     全改 `i` 会连带放宽整个脱敏面（日志 / 导出 / 界面渲染前 redact），代价大于收益 ⇒ 登记为**已知边界**

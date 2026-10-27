@@ -84,7 +84,7 @@ test('排除目录不被扫描（lessons / design / 冻结存档）', () => {
       'docs/spec/a.md': '# a\n',
       'docs/lessons/l.md': '# l\n',
       'docs/design/d.md': '# d\n',
-      'docs/known-pitfalls.md': '# p\n',
+      'docs/lessons/known-pitfalls.md': '# p\n',
     },
     (root) => {
       const r = mod.collectIndexCoverage({ root, indexText: '| 契约 | `docs/spec/a.md` |\n' });

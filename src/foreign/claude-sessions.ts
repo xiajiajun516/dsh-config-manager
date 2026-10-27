@@ -37,7 +37,7 @@
  *  ③ **sessionId 不一致**：`input.recordSessionId` 存在且 ≠ `input.id` → 非致命发现
  *     `session-id-mismatch`（会话 id 仍以文件名 stem 为准，见 `TranscodeResult.findings`）。
  *  ④ **推理块**（Claude Code 的 `thinking` / `redacted_thinking`）：共享 IR 没有 reasoning
- *     承载位（docs/spec/known-gaps.md F-01）→ 计报 `thinking`，**绝不伪装成正文**；非 Claude 原生的
+ *     承载位（docs/maintenance/known-gaps.md F-01）→ 计报 `thinking`，**绝不伪装成正文**；非 Claude 原生的
  *     `{type:'reasoning',text:…}` 刻意保持既有口径（理由与切换方式见 `REASONING_BLOCK_TYPES`）。
  */
 import type { Stats } from 'node:fs';
@@ -195,7 +195,7 @@ export interface TranscodeResult {
 interface ParsedBlock {
   /**
    * `thinking` = 推理块（Claude Code 的 `thinking` / `redacted_thinking`）：共享 IR 的 `IrBlock`
-   * **没有 reasoning 承载位**（docs/spec/known-gaps.md F-01），所以它既不进 IR 也不伪装成正文，
+   * **没有 reasoning 承载位**（docs/maintenance/known-gaps.md F-01），所以它既不进 IR 也不伪装成正文，
    * 只**逐条计数**（ignored['thinking']）。判定口径与「`reasoning` 为何不在此列」见
    * `REASONING_BLOCK_TYPES` 的注释。
    */
@@ -219,7 +219,7 @@ function usageField(usage: unknown, key: string): unknown {
  * 沿「对象带 text 才算文本」的兜底把它变成一个**空文本块** —— 内容静默丢失，且那个空块还会多插入
  * 一个换行。本仓其余 20+ 来源一律「推理不伪装成正文、只计数」（read-crush / read-opencode /
  * read-qwen / read-pi / read-openclaw …），这里对齐同一口径；共享 IR 无 reasoning 承载位这件事
- * 记在 docs/spec/known-gaps.md 的 F-01。
+ * 记在 docs/maintenance/known-gaps.md 的 F-01。
  *
  * **为什么不把 `{type:'reasoning', text:'…'}` 一并纳入**（如实记明，别当成漏掉）：
  *  ① Claude Code 不写这种块（它是别的导出器的归一命名，各来源自己的解析器已各自计报）；

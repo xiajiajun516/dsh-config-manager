@@ -5,7 +5,7 @@
  * HTML：**零脚本、零外部资源、零构建产物**，配合 http.ts 里收紧的 CSP。
  * 样式内联在 <style> 里（独立于插件 UI 的 CSS Modules；该新 pattern 已登记进 DESIGN.md）。
  * 这套样式表**有一份外部出处**（亮色 IBM Carbon / 暗色 Raycast 阶梯）与逐条对照表：
- * docs/design/2026-10-04-cli-rescue-console-carbon.md —— 改 STYLE 前先读它，改完跑 web.test.ts 的 R3-02。
+ * docs/components/cli-rescue-console.md —— 改 STYLE 前先读它，改完跑 web.test.ts 的 R3-02。
  *
  * 呈现纪律：每个数字都要能回答「你怎么知道的」—— 离线拿不到的（结构化分区/凭据/同步令牌）
  * 一律显式列出并说明原因，绝不显示为 0 或留空。
@@ -32,7 +32,7 @@ export interface PageChrome {
 
 const STYLE = [
   // ---- 设计 token：IBM Carbon（亮色语义四色）+ Raycast（暗色 surface 阶梯）----
-  // 映射表、取的章节与全部偏离记录：docs/design/2026-10-04-cli-rescue-console-carbon.md
+  // 映射表、取的章节与全部偏离记录：docs/components/cli-rescue-console.md
   // 文字色一律取「能读」的那一档：Carbon 的 #24a148 / #f1c21b 只做填充，正文用 #198038 / #8e6a00
   // （AA 对比度由 web.test.ts 的 R3-02 逐对钉住，改色先过那条测试）。
 ':root{color-scheme:light dark;--font:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC",sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;--fg:#161616;--muted:#525252;--bg:#f4f4f4;--card:#fff;--surface:#f4f4f4;--line:#e0e0e0;--accent:#0f62fe;--accent-hover:#0043ce;--on-accent:#fff;--ok:#198038;--warn:#8e6a00;--bad:#da1e28;--scrim:rgba(22,22,22,.45)}',

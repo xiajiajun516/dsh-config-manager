@@ -5,7 +5,7 @@
 
 ## git 同步的工作副本 origin 必须每次跟随 repoUrl（issue #79）
 
-- **git 同步的工作副本 origin 必须每次跟随 repoUrl（issue #79）**：`ensureRepo()` 复用已有 `.git` 时**必须**核对 `remote get-url origin`（含 `--push`）并在不一致时 `set-url`（一致时**零写命令**；读不出 origin → `remote add`）—— 此前只在首次 clone 用 `repoUrl`，改地址后 pull/push 全走旧 `origin`，失败面却是旧地址的网络超时（真机：局域网 → Tailscale 后静默失效数日）。同族五条：① 引擎与「重建工作副本」共用同一份 workDir（`makeGitTransport` 单点）；② `rebuildWorkDir('reclone')` **只**删有 `.git` 的目录（非空且无 `.git` 一律拒绝），路由要求 `confirm: true`（丢弃未上行提交）；③ 冲突只挡**下行**（绝不写本地），纯上行 push 照走并记 `partial`；④ 连续失败计数只在真失败 +1（其余归零），`lastRunMessage`/跳过原因**每轮覆盖**，跳过原因传**码**不传文案（界面按 `skipReasonKey` 取字典）；⑤ 环境锁 ownership 缺失如实报 `FREE`，**acquire 不据此放行**（改有界重试独占创建）。护栏与细节见 `docs/known-pitfalls.md`（同序「git 同步工作副本」节）。
+- **git 同步的工作副本 origin 必须每次跟随 repoUrl（issue #79）**：`ensureRepo()` 复用已有 `.git` 时**必须**核对 `remote get-url origin`（含 `--push`）并在不一致时 `set-url`（一致时**零写命令**；读不出 origin → `remote add`）—— 此前只在首次 clone 用 `repoUrl`，改地址后 pull/push 全走旧 `origin`，失败面却是旧地址的网络超时（真机：局域网 → Tailscale 后静默失效数日）。同族五条：① 引擎与「重建工作副本」共用同一份 workDir（`makeGitTransport` 单点）；② `rebuildWorkDir('reclone')` **只**删有 `.git` 的目录（非空且无 `.git` 一律拒绝），路由要求 `confirm: true`（丢弃未上行提交）；③ 冲突只挡**下行**（绝不写本地），纯上行 push 照走并记 `partial`；④ 连续失败计数只在真失败 +1（其余归零），`lastRunMessage`/跳过原因**每轮覆盖**，跳过原因传**码**不传文案（界面按 `skipReasonKey` 取字典）；⑤ 环境锁 ownership 缺失如实报 `FREE`，**acquire 不据此放行**（改有界重试独占创建）。护栏与细节见 `docs/lessons/known-pitfalls.md`（同序「git 同步工作副本」节）。
 
 ## pnpm 发布年龄
 

@@ -5,7 +5,7 @@
  * 为什么存在：审计发现活文档里存在指向已删除文件的「反引号路径」，读者与 agent 按图索骥会失败。
  * 只校验**活文档**；历史归档与证据库故意不校验：
  *   - 排除：docs/design（历史设计稿）、docs/handoff、docs/seo、docs/lessons（证据可能引用已删文件）、
- *           docs/known-pitfalls.md（冻结存档）、CHANGELOG.md（历史记录）
+ *           docs/lessons/known-pitfalls.md（冻结存档）、CHANGELOG.md（历史记录）
  *
  * 契约：
  *   - 校验对象 = 反引号内的仓库相对路径 + 相对 Markdown 链接
@@ -17,7 +17,7 @@
  * 二、活跃文档索引收录（2026-10-23 批准新增）
  * 为什么存在：新增 md 忘记回 docs/index.md 加行，导致文档事实上不可达；此前只靠人工。
  * 覆盖面**只**是正式长期维护的五目录（docs/spec、docs/modules、docs/maintenance、docs/decisions、docs/components），
- * 不扩大到 lessons（用裸文件名收录）、design/handoff/seo（历史区）与 docs/known-pitfalls.md（冻结存档）。
+ * 不扩大到 lessons（用裸文件名收录）、design/handoff/seo（历史区）与 docs/lessons/known-pitfalls.md（冻结存档）。
  * 收录判定 = **索引条目行**（表格行 / 列表项）出现该文件的全路径（反引号或相对链接）；正文顺带提到不算。
  * 判定逻辑抽在 scripts/doc-index-coverage.mjs（单测 tests/doc-index-coverage.test.ts），脚本不重复实现。
  * 豁免表 INDEX_COVERAGE_EXEMPT 当前为空；加条目必须写理由（= 公开承认这份文档故意不进索引）。
@@ -31,7 +31,7 @@ import { INDEX_COVERAGE_DIRS, collectIndexCoverage } from './doc-index-coverage.
 const ROOT = process.cwd()
 const ROOT_FILES = ['AGENTS.md', 'DESIGN.md', 'DEVELOPERS.md', 'README.md', 'README.zh-CN.md', 'SECURITY.md']
 const DOC_DIRS = INDEX_COVERAGE_DIRS // 单份清单，见 scripts/doc-index-coverage.mjs
-const DOC_FILES = ['docs/README.md', 'docs/index.md', 'docs/architecture.md']
+const DOC_FILES = ['docs/index.md', 'docs/modules/architecture.md']
 const PATH_ROOTS = ['src/', 'tests/', 'scripts/', 'docs/', 'locale/', '.github/', '.dsh/']
 // 代码类引用（组件/测试/样式）允许写成相对某源码目录的简写；
 // 其余扩展名必须带仓库根前缀，避免把 bundle 内产物路径（config/settings.json）误判为仓库文件。
@@ -115,9 +115,9 @@ function collect(line) {
   return found
 }
 
-// docs/spec/known-gaps.md 是**历史缺陷台账**（记录各版本基线下的代码形状），
+// docs/maintenance/known-gaps.md 是**历史缺陷台账**（记录各版本基线下的代码形状），
 // 与 CHANGELOG 同类：引用当时存在的文件是职责，不是失修。故不校验。
-const living = targets.filter((rel) => rel !== 'docs/spec/known-gaps.md')
+const living = targets.filter((rel) => rel !== 'docs/maintenance/known-gaps.md')
 const misses = []
 let checked = 0
 for (const rel of living) {

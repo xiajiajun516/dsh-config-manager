@@ -8,7 +8,7 @@
 
 ### 1.1 现状痛点
 
-dsh-config-manager 的「发布到市场」向导（`src/client/market/PublishView.tsx`，5 步）目前只做到「生成条目包 + 给出手动操作指引」：
+dsh-config-manager 的「发布到市场」向导（`src/client/market/PublishView.tsx`，5 步）目前只做到「生成条目包 + 给出手动操作指引」：（2026-10-28 复核：`PublishView.tsx` 已不存在，发布入口是 `MarketPanel.tsx` 的「我的配置」子视图；上传/更新向导实为 `src/client/market/MyConfigsWizard.tsx`，由 `MyConfigsView.tsx:64` import。）
 
 1. 选配置包（zip）✓ 方便
 2. 本地 8 道校验 + 秘密扫描 ✓ 方便
@@ -81,7 +81,7 @@ dsh-config-manager 的「发布到市场」向导（`src/client/market/PublishVi
 | 发布校验（8 道 + 秘密扫描） | `src/market/prepare.ts` + 路由 `/market/prepare` | 上传与 PR 前的强制安全闸门 |
 | 条目级 repo 自托管读取 | `src/market/reader.ts`（`readItemManifest`/`readItemZip` 的 `repo` 参数）、`src/market/index-parser.ts` | 官方收录后下载端自动从作者仓库拉取（无需任何改动） |
 | PR CI 校验 | `dsh-config-market/.github/workflows/validate.yml`（`pull_request: branches: [main]`） | 自动 PR 自带 8 道校验 + 秘密扫描监督 |
-| 发布向导前三步 UI | `src/client/market/PublishView.tsx` + `src/ui/market-publish.ts` | 复制/提取为上传向导骨架 |
+| 发布向导前三步 UI | 历史原文 `src/client/market/PublishView.tsx` + `src/ui/market-publish.ts`（2026-10-28 复核：两者都已不存在；现行骨架 = `src/client/market/MyConfigsWizard.tsx`） | 复制/提取为上传向导骨架 |
 | 下载 + 逐分区安全导入 | `src/client/market/MarketPanel.tsx` | 「装回本地」直接复用现有导入链路 |
 
 ## 4. 详细设计
@@ -192,7 +192,7 @@ dsh-config-manager 的「发布到市场」向导（`src/client/market/PublishVi
   - **启动后首次打开自动更新**：Host 进程内存标记 `marketBootAutoRefreshed`（dsh 重启后归零；`/market/refresh` 成功后置位）随 `/market/status` 以 `bootAutoRefreshed` 返回；MarketPanel 挂载时读该标记，未刷新过则自动执行一次「拉取最新」（复用 `runRefresh`，失败不置位 → 下次打开重试）；
 - 新增 `src/client/market/MyConfigsView.tsx`：
   - **登录卡**：未登录 → 「使用 GitHub 登录」（device flow：展示一次性用户码 + 授权页链接 + 轮询，交互与 SyncSettingsView 一致）；已登录 → 显示 `@login` + **固定目标仓库** `dsh-config-market` 的状态（只读展示，无任何编辑入口）；
-  - **上传向导**：复用 PublishView 前两步（选 zip → 本地校验）+ 精简表单 + 第 3 步「一键上传」（调用 `/me/upload`）→ 结果卡（PR 链接 / 仓库链接 / sha256 / 分区）。表单仅含：**名称**（预填 zip 文件名，可改）、**描述**（可选）、**分类**（可选）；id / author / version / updatedAt 以「系统自动」徽章展示，无需填写；
+  - **上传向导**：复用 PublishView 前两步（选 zip → 本地校验；2026-10-28 复核：现行实现是 `MyConfigsWizard.tsx`）+ 精简表单 + 第 3 步「一键上传」（调用 `/me/upload`）→ 结果卡（PR 链接 / 仓库链接 / sha256 / 分区）。表单仅含：**名称**（预填 zip 文件名，可改）、**描述**（可选）、**分类**（可选）；id / author / version / updatedAt 以「系统自动」徽章展示，无需填写；
   - **已上传列表**：条目卡片（字段 + 状态徽章 + 行操作按钮）；
 - 纯渲染模型放 `src/client/market/my-configs-view.ts`（node 单测）；文案进 `market-locales.ts`（zh 源 / en 镜像）；状态镜像进 `runStore`（低频面板策略：切 tab 不丢）；样式仅使用/扩充 `config-manager.module.css`，新 Pattern 才进 DESIGN.md。
 

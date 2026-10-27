@@ -19,7 +19,7 @@
 | **A2** | **en 目录零 CJK**（7 本字典 + `locale/en.json`） | `$env:DCM_I18N_GUARD_SCOPE='src/client/locales.ts,src/ui/i18n.ts,src/core/messages.ts,src/client/history/history-locales.ts,src/client/market/market-locales.ts,src/client/recovery/recovery-locales.ts,src/client/sync/sync-locales.ts,locale/en.json'; node --test tests/i18n-hardcoded-guard.test.ts` | 退出码 0 |
 | **A3** | **语言选择有单测证明**（根因不再复现） | `node --test tests/i18n-locale-runtime.test.ts` | 退出码 0（用例清单见 §4.4） |
 | **A4** | **既有 zh 文案逐字不变**（既有测试断言依赖它） | `npm test` + `npm run typecheck` + `npm run typecheck:tests` | 三项退出码 0 |
-| **A5** | 迁移期**不得新增豁免**：白名单条目计数锚定 | 同 A1（守卫内的过期/增长断言） | 退出码 0；白名单恒为 **4 条 128 命中**（t1 初始 2 条 73 + t12 授权的 2 条 55） |
+| **A5** | 迁移期**不得新增豁免**：白名单条目计数锚定 | 同 A1（守卫内的过期/增长断言） | 退出码 0；白名单恒为 **4 条 133 命中**（t1 初始 2 条 73 + t12 授权的 2 条 55 + 2026-10-08 checkpoint 命令 4 + 2026-10-18 truth-table 取证文本 1） |
 
 作用域自检（各实现作用域自己的门禁；退出码 0 = 本作用域零命中）：
 
@@ -209,25 +209,27 @@ export interface I18nAllowlistEntry {
 6. 文件在白名单里？→ 计入白名单计数（W），**不计入缺陷数**
 7. 其余 → **命中**（缺陷）
 
-### 3.5 白名单（4 条，合计 128 命中；最终态）
+### 3.5 白名单（4 条，合计 133 命中；最终态）
+
+> **2026-10-28 复核**：本文原写「合计 128 命中」（条目 61/12/49/6）；现值为 `tests/helpers/i18n-scan.ts:547` 的 `ALLOWLIST_TOTAL_HITS = 133`、条目 62/12/53/6（逐步增量见该常量注释：t1 初始 73 + t12 授权 55 + 2026-10-08 checkpoint 命令 4 + 2026-10-18 truth-table 取证文本 1）。条目数 `ALLOWLIST_ENTRY_COUNT = 4` 未变。
 
 | # | 文件 | expectedHits | 理由（可核验） |
 |---|---|---|---|
-| 1 | `src/foreign/truth-table.ts` | 61 | 该文件的 `refs` / `dynamic` 是**取证文本数据**（`FOREIGN_TRUTH_TABLES` 的字段），供 `truth-table.test.ts` 与各来源单测逐平台比对，**从不渲染**：实测非测试导入方全部在 `src/foreign/**` 内，且 `src/ui/foreign-view.ts` 只消费 `source.paths`（界面路径说明走 `ui/i18n.ts` 的 `foreign.paths` / `foreign.pathsNone`） |
+| 1 | `src/foreign/truth-table.ts` | 62 | 该文件的 `refs` / `dynamic` 是**取证文本数据**（`FOREIGN_TRUTH_TABLES` 的字段），供 `truth-table.test.ts` 与各来源单测逐平台比对，**从不渲染**：实测非测试导入方全部在 `src/foreign/**` 内，且 `src/ui/foreign-view.ts` 只消费 `source.paths`（界面路径说明走 `ui/i18n.ts` 的 `foreign.paths` / `foreign.pathsNone`） |
 | 2 | `src/ui/test-helpers.ts` | 12 | 文件头自述「**仅供 `src/ui/*.test.ts` 使用，不参与生产构建语义**」；实测除 `*.test.ts` 外零导入方，且从 client 打包入口 `src/client/index.ts` 不可达（tsdown 单入口）⇒ 不进 `lib/client.js` |
-| 3 | `src/ui/commands.ts` | 49 | `COMMANDS[].keywords` 是命令面板的**检索同义词**、不是文案：唯一消费方 `filterCommands` → `matchScore`（`src/ui/commands.ts:196-207`）只对关键词做 `toLowerCase` / `startsWith` / `includes` 并折成分档数值，返回值 `CommandMatch` 只带 `{item, disabled}`，关键词从不作为文本离开本模块；面板可见标题由调用方注入 `titleOf(titleKey)`（`:222` / `:237`），由壳层 `src/client/common/CommandPalette.tsx` 用 `t(item.titleKey)` 渲染客户端字典 `src/client/locales.ts`；文件头 `:7-12` 自述「零依赖、与语言无关：文案键只声明字面量联合」。中文词只是让中文用户搜得到命令（删掉只会让检索退化，不改变任何显示文本） |
+| 3 | `src/ui/commands.ts` | 53 | `COMMANDS[].keywords` 是命令面板的**检索同义词**、不是文案：唯一消费方 `filterCommands` → `matchScore`（`src/ui/commands.ts:196-207`）只对关键词做 `toLowerCase` / `startsWith` / `includes` 并折成分档数值，返回值 `CommandMatch` 只带 `{item, disabled}`，关键词从不作为文本离开本模块；面板可见标题由调用方注入 `titleOf(titleKey)`（`:222` / `:237`），由壳层 `src/client/common/CommandPalette.tsx` 用 `t(item.titleKey)` 渲染客户端字典 `src/client/locales.ts`；文件头 `:7-12` 自述「零依赖、与语言无关：文案键只声明字面量联合」。中文词只是让中文用户搜得到命令（删掉只会让检索退化，不改变任何显示文本） |
 | 4 | `src/ui/errors.ts` | 6 | `buildErrorRules()` 的 `match` 是**正则字面量**，只对宿主产出的错误消息（可能含中文原文）做 `.test()` 子串判定以挑选规则（`src/ui/errors.ts:31-76`），正则本身从不进入返回值或界面；显示文本来自规则里的 UiT 键 `error.*.title` / `error.*.action`（`:83-90` 写进 `ActionableError.title` / `suggestedAction`），由 `src/ui/i18n.ts` 字典渲染、经 `src/client/common/ErrorBanner.tsx` 与 `src/ui/import-wizard.ts` 展示。中文在这里是**匹配能力**（宿主错误消息是中文时才能命中友好标题），迁走会让匹配失效 |
 
 **无过期条目断言（冻结语义）**：
 
 - 每条白名单的 `expectedHits` 与实测命中数**精确相等**，否则守卫失败并打印差值；
 - 实测为 0 的条目视为**过期**，同样失败（要求删除该条目）；
-- 白名单**总命中数**作为一行输出（`allowlisted=128`），条目数锚定为 **4 条**（A5 断言 `ALLOWLIST_TOTAL_HITS=128` / `ALLOWLIST_ENTRY_COUNT=4`）；集成时必须仍为 128（除非 amend 明确批准）。
+- 白名单**总命中数**作为一行输出（`allowlisted=133`），条目数锚定为 **4 条**（A5 断言 `ALLOWLIST_TOTAL_HITS=133` / `ALLOWLIST_ENTRY_COUNT=4`）；集成时必须仍为 133（除非 amend 明确批准）。
 - 每条条目的 `reason` 由 A5 校验**可核验性**：trim 后 ≥ 20 字、且必须含 `src/` 消费方路径（挡「内部用」这类不可核验的话），`expectedHits` 必须是精确数字。
 
 > 新增白名单条目的唯一通道：作用域所有者把「文件 + 现测命中数 + 用户看不到它的可核验理由」报给 captain，由 t2 的所有者落进 `tests/helpers/i18n-scan.ts`（硬约束②：不越界改别人的写作用域）。
 > **t12（captain 授权）实际新增的两条**即上表 3 / 4（55 命中）：两条都属「匹配模式 / 检索同义词」而非用户可见文案 —— 迁走会让中文匹配能力消失，或把中文搬进 E3 豁免区（等价于不可见），故保持原样登记。
-> **落条实测（同一工作树口径）**：off（临时移除这两条）`allowlisted=73 hits=597` → on（恢复）`allowlisted=128 hits=542`，差集恰为 `src/ui/commands.ts` ×49 + `src/ui/errors.ts` ×6，**反向差集为空**（零新增）。
+> **落条实测（同一工作树口径，2026-10-08 快照）**：off（临时移除这两条）`allowlisted=73 hits=597` → on（恢复）`allowlisted=128 hits=542`，差集恰为 `src/ui/commands.ts` ×49 + `src/ui/errors.ts` ×6，**反向差集为空**（零新增）。（2026-10-28 复核：此后 commands.ts 再 +4 = 53、truth-table.ts +1 = 62，故现值 `allowlisted=133`；上述差集关系不变。）
 
 ### 3.6 `DCM_I18N_GUARD_SCOPE`（名字与语义冻结）
 
@@ -278,7 +280,7 @@ export interface I18nAllowlistEntry {
 
 | # | 弱点 | 当前是否可达 | 处置 |
 |---|---|---|---|
-| F1 | 白名单是**整文件**豁免（一条 `{file, expectedHits, reason}` 放过整文件），没有按行 / 按模式锚定，也没有 `approvedBy` / 到期日 | 可达，但**不可静默增长**：条目数锚定 4、总数锚定 128、单文件计数精确相等 ⇒ 该文件里新增任何中文立刻红；`reason` 还必须含 `src/` 消费方路径并走 captain 审批 | **仍然存在**（登记在案）；加固方向：`lineRanges` / `literalPattern` + 到期日 |
+| F1 | 白名单是**整文件**豁免（一条 `{file, expectedHits, reason}` 放过整文件），没有按行 / 按模式锚定，也没有 `approvedBy` / 到期日 | 可达，但**不可静默增长**：条目数锚定 4、总数锚定 133、单文件计数精确相等 ⇒ 该文件里新增任何中文立刻红；`reason` 还必须含 `src/` 消费方路径并走 captain 审批 | **仍然存在**（登记在案）；加固方向：`lineRanges` / `literalPattern` + 到期日 |
 | V1-① | **E3 属主正则无左边界**：`CATALOG_OWNER_CALL_RE` 只要求字样出现 ⇒ `myregisterMessageCatalog(` 这类**后缀名**也会给整文件授予 zh 豁免（t19 独立复验报的 low 残余） | 可达（潜在旁路；**现树无假属主**） | **仍然存在（low）**；加固方向：加左边界后再判（已写进 t18/t19 的后续 acceptance） |
 | V1-② | **类型注解 / 声明形态也算「调用」**：`registerMessageCatalog(id: string, …): void` 这样的声明会让该文件成为属主（t19 报的 low 残余） | 可达（潜在旁路；**现树无假属主**） | **仍然存在（low）**；加固方向：`(` 后紧跟 `\w+\s*:` 判为类型注解、不授予 |
 
@@ -367,17 +369,17 @@ export function setUiLanguageSource(read: () => LanguageId): void
 
 > **最终态（2026-10-08 收口，t11 集成）**：全量守卫 `node --test tests/i18n-hardcoded-guard.test.ts` → **exit 0**，摘要行
 > `DCM_I18N_GUARD scope=ALL files=424 hits=0 allowlisted=128`（**收尾实测 17/17** 通过；t16 + t18 加固后自检从 S1–S7 扩到 A3 + S1–S12）⇒ **全部用户可见中文已迁入 zh/en 目录**。
-> （**不变量是 `hits=0` / `allowlisted=128`**；`files=` 随新增源文件与**在途探针**浮动 —— t1 基线 412、t2 后 424、t16/t17 期间实测 424↔426。）
+> （**不变量是 `hits=0` / `allowlisted=133`**（2026-10-28 复核：原写 128，见 §3.5 复核段；上方 `allowlisted=128` 是 2026-10-08 的实跑摘要原文）；`files=` 随新增源文件与**在途探针**浮动 —— t1 基线 412、t2 后 424、t16/t17 期间实测 424↔426。）
 > 下表是**迁移前**（基线 commit `ce03fe5`）的逐作用域缺陷数，保留作对照与审计依据。
 >
 > **实测基线推进（同一工作树口径）**：迁移前红 **1107 + 白名单 73 = 1180** → t2 落守卫（含 `src/index.ts` 的 23 条）后 **1084 + 73 = 1157**
-> → t12 落两条白名单后 hits **再减 55**（`src/ui/commands.ts` 49 + `src/ui/errors.ts` 6）→ **最终 `hits=0` / `allowlisted=128`**。
+> → t12 落两条白名单后 hits **再减 55**（`src/ui/commands.ts` 49 + `src/ui/errors.ts` 6）→ **最终 `hits=0` / `allowlisted=133`**（复核后现值，原写 128）。
 > 扫描文件数 412（基线）→ 424（新增 12 个域目录文件等）。
 
 ### 5.0 统计口径与命令（先读这段，再看数字）
 
 - **口径**：§3.2 扫描集 + §3.3 词法口径（注释剥离、log/console 实参豁免、目录 zh 区豁免）+ §3.3-4 的 CJK broad 类 + §3.3-3 命中单位。
-- **白名单**（§3.5，最终 **4 条 128 命中**；本表是迁移前基线、当时为 2 条 73 命中）在这张表里**不扣除**：表中「命中」= 该作用域的全部命中；「待迁移」= 命中 − 白名单。
+- **白名单**（§3.5，最终 **4 条 133 命中**；本表是迁移前基线、当时为 2 条 73 命中）在这张表里**不扣除**：表中「命中」= 该作用域的全部命中；「待迁移」= 命中 − 白名单。
 - **命令**（现测命令 = 附录 A 的参考实现；t2 落地后等价命令 = 守卫）：
 
 ```powershell
@@ -392,7 +394,7 @@ $env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'; node --test tests/i18n-hardcoded-
 ```
 
 - **基线**：`git rev-parse HEAD` = `ce03fe542508cd5ad109b68fbafcbea0e1b262ed`（version `0.1.71`）—— 下表数字是**该 commit 的工作树**现测；工作树若在实现期被别的改动动了中文文案，数字会变，**以守卫在 t2 落地时的首次全量输出为准**（§3.8 的基线比对）。
-- **迁移前总计：扫描 412 文件，命中 1180，有命中的文件 124；扣白名单后待迁移 1107。**（最终态：424 文件 / `hits=0` / `allowlisted=128`。）
+- **迁移前总计：扫描 412 文件，命中 1180，有命中的文件 124；扣白名单后待迁移 1107。**（最终态：424 文件 / `hits=0` / `allowlisted=133`。）
 - **§3.8 的基线比对已完成**：`tests/helpers/i18n-scan.ts` 与附录 A 参考实现**逐命中等价**（412 文件 / 1180 命中；file:line + kind + 摘录 0 差异），分组 23 / 144 / 356 / 306 / 255 / 96 与下表完全一致；落条后逐条 diff 只剩 `src/index.ts` 的 23 条、**零新增**。
 - 实测**无未归属文件**（124 个命中文件全部落在下表 6 个作用域里）。
 - **遇到「好像不渲染」的字符串怎么办**：默认**迁**（搬进 zh 目录 + 新增 en 值，zh 逐字不变）—— 迁移成本远低于评审成本，也不要先自行判断「用户看不到」；只有当它确实是**数据或测试语料**（例：外部产品样例文件、真值表证据文本）时，才按 §3.5 走 captain 加白名单，并给出可核验理由。
@@ -965,5 +967,5 @@ if (process.argv[1] && process.argv[1].endsWith('i18n-scan.reference.mjs')) main
 
 ### i18n
 - i18n：**禁止硬编码用户可见字符串**；文案进字典，`src/ui/` 走 `UiT`（活翻译器 `liveUiT` / `makeLiveUiT`），React 壳走 `t()`（`ConfigManagerKey` 编译校验，zh 源 / en 镜像），宿主 / 引擎走 `engineMsg`（`src/core/engine-locale.ts`：活语言 + 各域目录经 `registerMessageCatalog` 并入）。**语言在「取文案那一刻」解析**，不得在装配期快照（`makeUiT(...)` / `makeMsg(...)` 出现在 `apply()` 里即缺陷）。
-- **新增用户可见文案必须进目录**：zh 逐字保留、en 补齐；既有键的 zh/en 指纹冻结在 `src/core/engine-locale.test.ts`（只许追加，改既有键即红）。**静态守卫**：全量 `node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 全仓零命中）；作用域自检 `$env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'; node --test tests/i18n-hardcoded-guard.test.ts`（只收窄文件列表，退出码 0 = 本作用域零命中）。扫描集 = `src/**`（−`src/cli/**` −`*.test.ts` −`fixtures/**`）+ `locale/*.json`；注释 / `log.*`·`console.*` 实参 / 目录 zh 区豁免；白名单 4 条 128 命中（已登记的非渲染匹配文本，**新增豁免只能走 captain** → `tests/helpers/i18n-scan.ts`）。
+- **新增用户可见文案必须进目录**：zh 逐字保留、en 补齐；既有键的 zh/en 指纹冻结在 `src/core/engine-locale.test.ts`（只许追加，改既有键即红）。**静态守卫**：全量 `node --test tests/i18n-hardcoded-guard.test.ts`（退出码 0 = 全仓零命中）；作用域自检 `$env:DCM_I18N_GUARD_SCOPE='src/client,src/ui'; node --test tests/i18n-hardcoded-guard.test.ts`（只收窄文件列表，退出码 0 = 本作用域零命中）。扫描集 = `src/**`（−`src/cli/**` −`*.test.ts` −`fixtures/**`）+ `locale/*.json`；注释 / `log.*`·`console.*` 实参 / 目录 zh 区豁免；白名单 4 条 133 命中（已登记的非渲染匹配文本，**新增豁免只能走 captain** → `tests/helpers/i18n-scan.ts`）。
 - **7 套字典的对照表与「查不到 key 不等于缺陷」的排查姿势见 `DEVELOPERS.md`——那一段极易误判，漏读会产出 600+ 假阳性。**

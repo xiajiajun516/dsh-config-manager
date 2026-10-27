@@ -1,5 +1,12 @@
 # Phase 1 交接文档（灾备基线）
 
+> **状态：已失效的历史交接记录（2026-10-28 复核）** —— 它描述的代码已整体删除、结构已重构，只作历史证据，不要按它施工。
+> **失效点（逐条对代码核实）**：
+> 1. §2 文件表里的 `src/core/{config-state,config-snapshot,config-lifecycle,undo,watcher}.ts`、`src/core/phase1-wiring.ts` 与 `src/client/LifecyclePanel.tsx` **全部已不存在**（现存 `src/core/recovery-orchestrator.ts` / `boot-rescue.ts` / `crash-report.ts`）。
+> 2. §11 的两个 kill switch `LIFECYCLE_ENABLED`（`src/index.ts`）与 `SHOW_LIFECYCLE_NAV`（`ConfigManagerSection.tsx`）**已删除**，`src/core/incident-wiring.test.ts:44` 断言源码里不得再出现 `LIFECYCLE_ENABLED`。
+> 3. 文中「本仓库无 `.gitattributes` + `core.autocrlf=true`」已不成立：根 `.gitattributes` 存在，EOL 由它钉死（见 `AGENTS.md` 通用节）。
+> 4. 自动快照 / 撤销重做 / 快照库整条线已下线（`CHANGELOG.md` 的「灾备收敛」段），只保留崩溃归因 + 救援模式并入「事故恢复」。
+>
 > 📦 **历史归档**（阶段交接记录，非当前状态）：本文写于 `v0.1.59`，其中的版本号、测试基线（1890 项）与工作区状态均已过时。
 >
 > ⛔ **本文描述的灾备能力已于 2026-09 按产品定位收敛下线**（只保留崩溃归因 + 救援模式，并入「事故恢复」子 tab）——

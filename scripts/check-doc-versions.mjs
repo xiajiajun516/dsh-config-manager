@@ -12,7 +12,7 @@
  *   2. 活文档里**声明当前适用版本**的句子（含「适用插件版本」）必须等于当前版本；
  *      含「最新/当前」字样的 dsh-config-manager@X.Y.Z 同样必须等于当前版本。
  *
- * 不查：CHANGELOG、docs/spec/known-gaps.md（历史台账）、docs/handoff、docs/lessons、
+ * 不查：CHANGELOG、docs/maintenance/known-gaps.md（历史台账）、docs/handoff、docs/lessons、
  *       docs/design（历史设计稿），以及标注「取证/写作时」的历史证据行。
  *
  * 用法：node scripts/check-doc-versions.mjs [--report]
@@ -26,9 +26,9 @@ const LF = String.fromCharCode(10)
 const CR = String.fromCharCode(13)
 const SEMVER = /([0-9]+[.][0-9]+[.][0-9]+)/
 const ROOT_FILES = ['AGENTS.md', 'DESIGN.md', 'DEVELOPERS.md', 'README.md', 'README.zh-CN.md', 'SECURITY.md']
-const DOC_FILES = ['docs/README.md', 'docs/index.md', 'docs/architecture.md']
+const DOC_FILES = ['docs/index.md', 'docs/modules/architecture.md']
 const DOC_DIRS = ['docs/spec', 'docs/modules', 'docs/maintenance', 'docs/decisions']
-const SKIP_FILES = ['docs/spec/known-gaps.md'] // 历史缺陷台账：写的是写作时的基线
+const SKIP_FILES = ['docs/maintenance/known-gaps.md'] // 历史缺陷台账：写的是写作时的基线
 
 const errors = []
 const lines = (rel) => {

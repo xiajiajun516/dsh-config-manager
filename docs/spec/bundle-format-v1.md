@@ -6,13 +6,14 @@
 > 写作纪律：每一条断言都给出 `file:line` 取证位置；凡未实际读源码或未实际运行验证的结论，一律显式标注 **「未验证」**，不做推测性陈述。
 >
 > - 规格版本：Bundle Format **v1**（对应 `CURRENT_SCHEMA_VERSION = 1`）
-> - 取证插件版本：`dsh-config-manager@0.1.59`（`package.json:3`）
+> - 适用版本：`dsh-config-manager@0.1.85`（`package.json:3`）；**取证基线**：`0.1.59`（提交 `696cb17`；缺口状态以 `docs/maintenance/known-gaps.md` §0 为准，见 §10）
 > - 取证环境：Windows，Node `v24.13.0`
 > - 取证方法：读源码 + **实际构造畸形 bundle 跑通 importer 三段式**（见 §0.2），结论以运行结果为准而非以注释为准
 > - 本版修订（S-1…S-4 + G-10）：补齐独立审计确认缺失的 4 处关键信息（ZIP 读侧强制/容忍边界、文件类条目名归一化规则、已知分区内未知字段的真实命运、`redactedHits` 语义）并显式澄清 `sections.secrets`；**同时修正了旧版 §1.2「含反斜杠的条目名一律拒绝」这一与实测不符的表述**（实测：仅拒绝以 `\` 开头者，中段 `\` 被接受，见 §3.3.2 与 §10 G-11）
 > - **M2 一致性修订（前次）**：让 §10 缺口表、§8.3、§11 未验证清单与「附：一句话结论」与**当前工作区实际状态**一致——原结论段把 §10 已标 ✅ 的 G-01/G-02/G-03/G-06 仍列为「未修复缺口」，§8.3 以现在时断言「导入路径并未调用 `migrateToCurrent`」，§11 把已读码确认的密码强度校验函数调用点仍列为「未验证」，§10 G-09 行标「⏳ 未复核（推测仍成立）」而实测已修复。同时**逐条用 Node 读当前源码行内容**校正了漂移的 `file:line` 取证（G-09 / G-10 / G-04 / G-06 / §11 scanner 与 password 行号、§8.3 的 `isSupported` 行号等），并新增 G-12 / G-13 两条「本轮审计新发现、正在修复」的登记。
 > - **M3 产品决策修订（本次）**：**加密备份不再做任何密码强度校验**（产品负责人决策，2026-09-13）。§4.6 的密码强度校验行与「未验证」块、§10 G-08 行、§11 移除块、§10 末尾的「已修复缺口」清单与「附：一句话结论」全部改写为**最终状态**：加密只要求密码**非空**，任何非空密码都可用。原先为实现该闸门而引入的符号（强度校验函数、断言函数、导出路由密码守卫）与消息键 `export.passwordTooWeak` **已从源码整体移除**——本文件不再把它们当作现状描述，仅在下述 G-08 条目中作为**已移除**的历史记录出现。**对第三方实现者的直接要求：不要假设本格式对加密密码有任何强度要求。**
 > - **行号时效口径**：本文件的 `file:line` 是**写作时**逐条读源码核对的快照；源码仍在校验期间被并行修改，行号可能再次漂移。检索时请以**符号名 / 消息 key**（如 `runSchemaMigration`、`import.checksumsMissing`、`isFileSection`）为主锚点，行号仅作快速定位。
+> - **「基线」与「当前工作区」的口径**：文中「基线」指**已发布契约版本（`0.1.59` 那一族）的实测形状**，「当前工作区」指**写作时的仓库 HEAD**；两者只在**有差异的地方**保留双列对照，一致处不复述。
 > - 编码校验：本文件写入后以 Node 逐字节读取校验，确认不含零宽字符（正则 `[\u200b\u200c\u200d\u2060\ufeff]`）且为合法 UTF-8。PowerShell 控制台显示的中文 mojibake 属显示层假象，不作为编码判据。
 
 ---
@@ -1019,7 +1020,7 @@ THROW 备份 schema v2（高于当前 1，需升级插件），无法导入（�
 ## 7. 向前兼容规则（本规格的核心价值）
 
 > 这一章回答一个问题：**导入端遇到「不认识的东西」时，应该保留还是忽略？**
-> 下面每一条都标注了**现有实现的真实行为**（源码 + §0.2 运行验证）。凡现有实现与「基础设施应有的行为」不一致的，写进 §10「已知缺口」，**不粉饰**。
+> 下面每一条都标注了**现有实现的真实行为**（源码 + §0.2 运行验证）。凡现有实现与「基础设施应有的行为」不一致的，登记进 §10 指向的缺口台账（`docs/maintenance/known-gaps.md`），**不粉饰**。
 
 ### 7.1 四种「不认识」的总表
 
@@ -1029,41 +1030,6 @@ THROW 备份 schema v2（高于当前 1，需升级插件），无法导入（�
 | **② `manifest` 已知对象内的未知子字段** | 同上 | 同上 | `tests/schema-compat.test.ts:120-124`（SC-07 断言 `exporter.futureExporterField` 保留） |
 | **③ `manifest.sections` 内的未知分区 id** | **当前工作区**：`extractSections` 用 `knownIds = new Set(SECTION_IDS)` 单独识别未知分区 → 收集进 `unsupportedSections` → 产出独立告警 `备份包含本版本不支持的分区: {ids}（已跳过，未导入）`；**不再**混入 `missingSections`。**基线 0.1.59**：静默 `continue` + 误报为「声明但缺失」 | ❌ **数据丢弃**（该分区在 ZIP 内的内容不被读取，计划项为零）；但**存在性会被明确告知** | 当前：`src/core/analyzer.ts` 的 `extractSections`（`unsupportedSections` 收集）、`src/core/analyzer.ts` 的 `extractSections`（未知 id 拦截，`knownIds` 判定）、`src/core/analyzer.ts` 的 `extractSections`（`SECTION_JSON_PATHS` 查找）；基线：`src/core/analyzer.ts:204-205`、`src/core/analyzer.ts:275-280`；§7.2 实测 |
 | **④ 已知分区 JSON 内的未知字段** | `validateSectionData` 只检查已知形状，**不重写**；但**没有任何代码路径保留它** | ⚠️ **因分区而异**（`workspaces[]` / `plugins.patch[].raw` / `providers.raw` 会写回，其余不写回，见 §7.3） | `src/schema/config.ts` 的 `validateSectionData`（`payload.kind` 判别 switch，无白名单）；§7.3 实测 |
-
-### 7.2 未知分区（③）——**最可能暴露真实缺口的一处**
-
-§0.2 运行验证（构造 `sections.keybindings = true` + ZIP 内 `keybindings/keybindings.json` + `sections.workflows = true` + ZIP 内 `custom/workflows/x.json`）：
-
-```
-[P1 未知分区] valid=true
-              errors=[]
-              warnings=["备份声明了但缺少的分区: keybindings, workflows"]
-              sectionsInZip=["settings","ui","providers","plugins","mcp","prompts","workspaces",
-                             "credentialsStatus","skills","agentPresets","agentInstructions","self"]
-              compat=partial
-[P1 未知分区] plan items adapters=["settings","skills"]   ← 无任何 keybindings/workflows 项
-              estimatedActions={"settings":1,"skills":1}
-```
-
-**结论（三条，全部为实测）**：
-
-1. **未知分区不阻塞导入**：`valid=true`，不报 error。这一点是好的。
-2. **未知分区的数据被完全丢弃**，且**没有任何一条消息告诉用户「这个分区我不认识」**。
-3. **唯一的相关告警是误导性的**：它来自 `missingSections` 计算（`src/core/analyzer.ts:275-280`），文案是 `备份声明了但缺少的分区: {sections}`（`src/core/messages.ts`）。它把「我不认识」和「声明了但文件不在」**归为同一类**。对未知分区而言，文件其实**在** ZIP 里（`keybindings/keybindings.json` 确实存在），只是从没被读取。
-
-**为什么数据会被丢**：`extractSections` 只遍历 `manifest.sections` 的条目，且只处理两类：
-
-```ts
-for (const [sectionId, enabled] of Object.entries(manifest.sections)) {
-  if (!enabled) continue;
-  if (isFileSection(sectionId)) { ... }              // 仅 SECTION_FILE_PREFIXES 内的 id
-  const jsonPath = SECTION_JSON_PATHS[sectionId];
-  if (jsonPath === undefined) continue;              // ← 未知分区在此静默 continue
-  ...
-}
-```
-
-（基线 `src/core/analyzer.ts:189-219`）——未知 id 既不在 `SECTION_FILE_PREFIXES` 也不在 `SECTION_JSON_PATHS`，于是在基线的第 205 行 `continue`，**静默丢弃**；当前工作区在 `src/core/analyzer.ts` 的 `extractSections`（未知 id 拦截，`knownIds` 判定） 显式拦截并告警。
 
 ### 7.2 未知分区（③）——**基线有缺口，当前工作区已修复**
 
@@ -1318,39 +1284,16 @@ errors   = []
 
 ---
 
-## 10. 已知缺口（不粉饰）
+## 10. 已知缺口（指针，不复述）
 
-> 下列条目是**现有实现与「基础设施应有的行为」之间的真实差距**。它们不是「待办清单」，而是给第三方实现者的**风险提示**：照抄现有行为会继承这些缺陷。
+> **本节不再维护缺口表**：`G-NN` 的编号、当前状态与取证以唯一台账 [`docs/maintenance/known-gaps.md`](../maintenance/known-gaps.md) 的 **§0 状态总览**为准（本文件此前那 13 行表与它重复，已删除）。
 >
-> **⚠️ 时效性声明（必读）**：本规格的取证基线是提交 `696cb17`（曾被标记为 `0.1.59`，但**从未发布**；`v0.1.60` 已并入 `v0.1.59`，本版将以 `v0.1.59` 发布）。在**格式相关行为**上，该基线与 npm 上**最新已发布**的 `v0.1.58` 一致，故「基线版本」列可视为**已发布版本**的真实行为；「当前工作区状态」列是**本文件写作时仓库工作区**的实测/读码结论，两列**刻意分开**——已发布版本仍可能带这些缺陷，第三方实现者需要知道它们存在过、以及修好之后应该长什么样。
+> **本文件里的 `G-NN` 是基线审计编号（G-01…G-13，只覆盖格式行为）**，与那份全仓台账的 `G-01…G-45` **同号未必同义**；任何「这条现在还成不成立」的判断一律查台账，本文件只保留与格式契约直接相关的结论：
 >
-> **编号范围（先看这条）**：本节表的 `G-NN` 是**基线审计编号（G-01…G-13，只覆盖格式行为）**，与 [`docs/spec/known-gaps.md`](./known-gaps.md) 的 `G-01…G-45`（全仓缺口台账）**不是同一套编号**，同号不同义。以哪张表为准：本表看**格式行为随基线到当前的演变**；某条缺口的当前结论一律查 known-gaps（它的状态列更新更快）。
->
-> **当前工作区状态汇总**：✅ 已修复 G-01 / G-02 / G-03 / G-04（含本轮补齐的表缺失分支）/ G-06 / G-09 / G-10（规格侧澄清）/ G-12 / G-13；➖ **G-08 已按产品决策整体移除**（不是「修复」——加密不再做任何密码强度校验，该能力被有意取消，任何非空密码可用）；⚠️ G-05 部分修复（不对称）；⚠️ G-07 **仍然成立**（`MIN = CURRENT = 1` 未变，迁移分支结构上仍不可达，但接线已就绪）；❌ G-11 **仍然成立**（未修复）（本版新增登记）。
->
-> 行号口径：**「当前工作区状态」列引用的行号是当前源码行号**（写作时逐条用 Node 读行内容核对过）；「基线」列的行号指 `0.1.59` 发布版源码。源码仍在并行修改，若行号漂移请以符号名（函数/消息 key）为准检索。
-
-| # | 缺口 | 具体表现（基线版本） | 取证 | 影响面 | **当前工作区状态** |
-|---|---|---|---|---|---|
-| **G-01** | **未知分区被静默丢弃** | 未知 id 的 `sections` 键进入不了 `SECTION_JSON_PATHS`/`SECTION_FILE_PREFIXES`，`extractSections` 直接 `continue`；ZIP 内该分区的数据从未被读取，也从未被告知 | 基线：`src/core/analyzer.ts:204-205`；§0.2 运行验证 | 前向兼容的核心缺陷 | ✅ **已修复**：`src/core/analyzer.ts` 的 `extractSections`（`unsupportedSections` 收集） 单独收集 `unsupportedSections`，`src/core/analyzer.ts` 的 `extractSections` 的汇总告警（`import.unsupportedSections`）产出独立告警 `备份包含本版本不支持的分区: keybindings（已跳过，未导入）`（§7.2 实测）。**注意**：数据本身仍不被保留（格式 v1 无此能力） |
-| **G-02** | **告警文案误导** | 未知分区落进 `missingSections`，用户看到「备份声明了但缺少的分区: keybindings」——但文件其实在 ZIP 里 | 基线：`src/core/analyzer.ts:275-280`、`src/core/messages.ts`（`import.missingSections`） | 用户无法判断「我该升级插件」还是「备份坏了」 | ✅ **已修复**：`missingSections` 现在剔除被跳过的分区（`src/core/analyzer.ts` 的 `analyzeImport`（`skippedSections` 从 `missingSections` 剔除），告警在 `src/core/analyzer.ts` 的 `analyzeImport`（`missingSections` 告警）），未知分区不再混入 |
-| **G-03** | **无「不支持分区」的概念** | 全仓库没有 unsupported-section 的报告通道；`ImportAnalysis` 只有 `sectionsInZip`（只含**已知**分区）与 `warnings`/`errors` | 基线：`src/core/types.ts:201-213` | 第三方无法从现有 API 学到正确做法 | ✅ **已修复**：`ImportAnalysis.unsupportedSections` 已存在（`src/core/types.ts`，填充点 `src/core/analyzer.ts` 的 `analyzeImport`（`unsupportedSections` 填充点）），§7.2 实测返回 `["keybindings"]` |
-| **G-04** | **checksums 单向** | 只校验「表内条目未被篡改」，不校验「ZIP 内没有多余条目」；普通导入路径对此零告警 | `src/utils/hashing.ts:36-52`、`src/core/analyzer.ts:141-163`；§0.2 运行验证（P9） | 可向 bundle 注入任意未登记文件而不被普通导入察觉 | ✅ **已修复**：表存在且非空时，`src/core/analyzer.ts` 的 `loadBundle`（反向检查未登记条目 → `import.extraEntries`） 产出 `import.extraEntries` warning。**表缺失/为空**这一半（本轮审计新发现的漏报）修复已进入工作区（同一 `loadBundle` 另产出 `import.checksumsMissing`，一致性测试 `INT-02`/`INT-03` 钉住），但**由并行任务收口，本文件不声称已验收完成**——详见 §7.4 的「行为正在变更」提示 |
-| **G-05** | **分区 version 无兼容余地** | 精确 `=== 1` 判定；任何已知分区 JSON 的 `version != 1` 都会让**整个 bundle** 无法导入（而非跳过该分区） | 基线：`src/schema/versions.ts` 的 `sectionDataVersionIssue`（`version === 1` 判定）；§0.2 运行验证（P4 抛错） | 未来分区结构演进没有加法之外的空间 | ⚠️ **部分修复**：`version > 1` 现在**跳过该分区**并告警（`src/core/analyzer.ts` 的 `extractSections`（`import.unsupportedSectionVersion` → 跳过该分区），§3.3.3 实测）；`version < 1` / 非数字 / 缺失**仍让整个 bundle 硬失败**（不对称，见 §3.3） |
-| **G-06** | **迁移链未接入导入路径** | `migrateToCurrent` 已实现且有测试，但**导入路径从不调用它**：`analyzer.loadBundle` 只用 `isSupported` 判定后直接继续 | 基线：`src/core/analyzer.ts:165-168` | 一旦 `CURRENT > MIN`，旧备份会被「判定为可迁移」却**不会真的被迁移** | ✅ **已修复**：`src/core/analyzer.ts` 的 `needsMigration` 守卫分支（调用 `runSchemaMigration`） 在 `needsMigration` 为真时调用 `runSchemaMigration`（`runSchemaMigration` 的实现），迁移结果重新过 `validateManifest` 才作为后续 manifest 使用。当前 `MIN = CURRENT = 1` 故路径仍不可达（见 G-07） |
-| **G-07** | **`needsMigration` / `describeVersion` 的「将迁移」分支当前不可达** | `MIN = CURRENT = 1`，不存在 `1 < v < 1` 的整数 | `tests/schema-compat.test.ts:17-18`、`tests/schema-compat.test.ts:154` | 迁移链在真实导入中**从未被执行过**，其正确性是理论值 | ⚠️ **仍然成立**（`MIN = CURRENT = 1` 未变）；但迁移链已接入导入路径（G-06），一旦上移 `CURRENT` 即会真实执行。**这不是待修缺陷，而是版本区间的必然结果**——修复动作只在发布 v2 时随 G-06 一并生效 |
-| **G-08** | **密码强度校验（基线形同虚设 → 一度接通 → 按产品决策整体移除）** | 基线 `0.1.59` 中强度校验函数已实现且有单测，但在 `src/index.ts` 中**零调用**——导出端只要求 `password` 是非空字符串。**形同虚设**：有一个「看起来在守、实际不跑」的强度函数 | 基线：`src/security/encryption.ts:165-174`（函数定义）、`src/index.ts` 的备份导出路由（基线唯一校验是 `!== ''`） | 基线：弱密码可被接受（当时无闸门）；**现状：这是刻意的产品决策，不是缺陷** | ➖ **已按产品决策整体移除**（2026-09-13）：本轮一度接通的三层闸门（导出路由 400 拒绝、`config_backup` 结构化拒绝、加密层兜底）**被全部删除**，而非保留或收紧。**当前唯一约束是非空**：空字符串抛 `BAD_PASSWORD`（`src/security/encryption.ts:85`、`:197`），其余任何密码（含 `1` / `12345678` / `password`）一律接受。被移除的符号与消息键（强度校验函数、断言函数、导出路由密码守卫、`export.passwordTooWeak`）**在当前工作区已不存在**，第三方**不得**假设本格式有密码强度要求。 |
-| **G-09** | **文件类分区内容不扫描 secret** | `skills`/`agentPresets`/`agentInstructions`/`pluginFiles`/`sessions`/`self` 的文件内容**完全不进扫描器**，也不计入 `redactedHits` | 基线：`src/core/exporter.ts:161-167`、`src/adapters/self.ts:21-22` | 「默认不含秘密」对文件类分区**不成立**；`pluginFiles` 默认 `false` 与市场 BANNED 是对此的缓解，但**用户显式勾选即可带出明文** | ✅ **已修复（已实测复核）**：文件类分区改走 `scanFileSectionText`（定义 `src/core/exporter.ts:135-161`，调用点 `src/core/exporter.ts`），命中**计入 `redactedHits`** 并逐条产出 `export.fileSectionSecrets` 告警（`src/core/messages.ts`）。**边界（仍然成立）**：只报告**不改写**（绝不剥离用户文件内容）；默认 `defaultSecretScanner` 未实现 `scanText` → 该分支返回空、行为与修复前一致（`src/core/exporter.ts:130-131`、`:137`），生产路径注入的是含 `scanText` 的强化扫描器。**遗留的告警去重问题**见本表 G-13 |
-| **G-10** | **`secrets` 在 `sections` 中恒 `false` 但语义被复用** | `sections.secrets` 永远是 `false`（无 adapter）；加密事实由 `security.encrypted` 承载。若第三方按「`sections.secrets === true` 表示含凭据」理解会出错 | 基线：`src/core/exporter.ts:296`（基线行号）；§0.2 运行验证 | 格式语义的坑（文档级，非实现缺陷） | ✅ **已收口（规格侧澄清，实现未变）**：`buildSectionFlags` 里 `flags['secrets'] = false` 仍在（**当前工作区** `src/core/exporter.ts`），这不是实现缺陷而是**语义设计**；§2.5 已加显式警告块，§9 步骤 4 的验收判据明确「含秘密/需密码只看 `security.containsSecrets` / `security.encrypted`，不看 `sections.secrets`」。第三方按该判据实现即不会误判 |
-| **G-11** | **条目名侧不拒绝中段反斜杠（与 checksums 侧不一致）** | `isPathSafe` 只拒绝「以 `/` 或 `\` 开头」与「含 `..` 段」的名字，**中段 `\` 被接受**：`isPathSafe('custom/skills/back\\slash.md') === true`，写侧 `zipToBuffer` 也接受，读侧 `parseZip` 也接受。后果：① 同一份 bundle 在 Windows 目标上把 `\` 当分隔符（`skills/probe/back/slash.md`），在 POSIX 目标上当普通字符（`skills/probe/back\slash.md`）——**跨平台路径语义不一致**；② 而 `checksums.json` 的键侧**明确拒绝**含 `\` 的路径（`src/security/integrity.ts:63`），两套规则不对齐 | `src/utils/paths.ts:45-54`（无 `\` 检查）、`src/utils/zip.ts` 的 `zipToBuffer`（条目名 `isPathSafe` 闸）、`src/utils/zip.ts` 的 `parseZip`（条目名 `isPathSafe` 闸）；§3.3.2 实测 C10 | 条目名安全边界；跨平台不一致；第三方若照抄 `isPathSafe` 会继承该缺陷 | ✅ **仍然成立**（本版新增登记，实测确认）。**这是本表唯一一条「未修复的格式行为缺陷」** |
-| **G-12** | **G-04 的收窄残留：checksums 表缺失/为空时「未登记条目」漏报** | 反向完整性检查（「ZIP 里在、校验表里不在」的条目）原本整段嵌在「表存在」分支内：剥掉 `integrity/checksums.json` 或把它置为 `{}` ⇒ 一个条目都不校验、也零告警，却 `valid=true` | 基线：`src/core/analyzer.ts:163`（`if (archive.has(CHECKSUMS_FILE))` 包住整段） | 与 G-04 同源：可静默绕过完整性校验 | ✅ **已修复**（收录于 `docs/spec/known-gaps.md` 的 G-12，状态列为权威）：`src/core/analyzer.ts` 的 `loadBundle`（表缺失/为空 → `import.checksumsMissing`） 把「表缺失或为空」统一映射为 `import.checksumsMissing` 告警，反向检查（同一 `loadBundle`）此时不再运行（无表可对照）；回归测试 `INT-02` / `INT-03` / `INT-04`（`tests/conformance/roundtrip.test.ts:945-1031`）。回归测试 `INT-02`/`INT-03`/`INT-04` 见 `tests/conformance/roundtrip.test.ts`。口径以 `docs/spec/known-gaps.md` §1 为准 |
-| **G-13** | **G-09 的告警去重问题** | 文件类分区的 secret 命中告警原本按 **hit** 计数且不去重：同一行同时命中「字段名」与「值形状」会产出两条**同路径**告警，少数文件就吃满 `MAX_FILE_SECTION_WARNINGS_PER_SECTION` 上限，使含真实明文凭据的其它文件被静默淹没 | 基线：`src/core/exporter.ts` 按 hit 逐条 push | 告警噪声，可淹没真正需要关注的命中；**不改变**「命中是否被检出」这一安全事实（计数始终可信） | ✅ **已修复**（收录于 `docs/spec/known-gaps.md` 的 G-13）：`src/core/exporter.ts` 先按**文件路径**去重、再截断到 `MAX_FILE_SECTION_WARNINGS_PER_SECTION`（语义 = 不同**文件**数，常量在 `:107-108`），并对被截断的文件数补一条**汇总告警**；`redactedHits` 仍计**全量命中**。回归测试 `tests/core/exporter.test.ts`（按文件去重 / 截断补汇总三例）。口径以 `docs/spec/known-gaps.md` §1 为准 |
-
-> 说明：G-07 目前**没有可观测后果**（因为 `MIN = CURRENT = 1`，迁移路径不可达）。**G-06 已修复后，这条定时问题已解除**：一旦发布 schema v2，`loadBundle` 会沿迁移链真实执行迁移（`src/core/analyzer.ts` 的 `needsMigration` 守卫分支（调用 `runSchemaMigration`）），而不是「判定可迁移却按新格式直接用」。v2 发布前仍应补一条「v1 → v2 真实迁移」的端到端测试。
->
-> G-11 的**实际可利用性有限**（`\` 不是 `..`，无法越出 baseDir 之外，且 L3 的 `isReservedInternalRel` 会在折叠后拦截保留命名空间），但它是**真实的行为不一致**，且会让跨平台幂等比对出错，因此按缺口登记，不粉饰。
->
-> G-12 / G-13 是**本轮审计新发现**（不在基线 `0.1.59` 的登记范围内），现已修复并有回归测试；状态结论以 `docs/spec/known-gaps.md` §1 的 G-12 / G-13 行为准。
+> - **未知分区必须显式告警、不得混入「声明但缺失」**（原 G-01/G-02/G-03，当前实现已满足）→ §7.2、§7.5、§9 步骤 8。注意**数据本身仍不被保留**：格式 v1 没有「原样回传未知分区」的能力。
+> - **条目名侧 `isPathSafe` 接受中段反斜杠**（原 G-11，**仍未修复**）→ §1.2、§3.3.1；checksums 侧另有拒绝（`src/security/integrity.ts`），两套规则不对齐，第三方照抄会继承该缺陷。
+> - **加密不做任何密码强度校验**（原 G-08，按产品决策**移除**而非修复）→ §4.6：任何非空密码合法，**不要**在自己的实现里加闸门。
+> - **`sections.secrets` 恒假、无安全语义**（原 G-10，规格侧已澄清）→ §2.5；判断只认 `security.containsSecrets` / `security.encrypted`。
 
 ---
 
@@ -1369,9 +1312,9 @@ errors   = []
 > - ~~`prompts` / `providers` / `workspaces` / `credentialsStatus` 分区内未知字段是否写回目标~~ → **已实测**，见 §7.3（含 `providers.raw` 与 `workspaces[]` 两个反例）。
 > - ~~`redactedHits` 除 UI/日志外的持久化/审计用途~~ → **已查清**，见 §5.3（全仓库 5 处命中，不落 bundle、不落盘）。
 > - ~~密码强度校验函数在 host 侧的实际调用点~~ → **已不再适用**：该函数本身已按产品决策**从源码整体移除**（见 §4.6 与 §10 G-08）。现状不是「调用点在哪」，而是**没有强度校验这回事**——加密只要求密码非空。基线 `0.1.59` 的旧表述「在 `src/index.ts` 中检索该符号零命中」描述的正是「已实现但从不调用」的形同虚设状态，该状态随移除一并终结。
-> - ~~checksums 表**缺失或为空**时，ZIP 内多余条目是否告警~~ → **已查清并正在变更**：当前工作区在表缺失/为空时产出 `import.checksumsMissing` 告警（`src/core/analyzer.ts` 的 `loadBundle`（表缺失/为空 → `import.checksumsMissing`）），「未登记条目」反向检查（同一 `loadBundle`）此时不再运行（无表可对照）；基线 `0.1.59` 是整段跳过、零告警。行为正在变更，见 §7.4 的提示块与 §10 G-12。
+> - ~~checksums 表**缺失或为空**时，ZIP 内多余条目是否告警~~ → **已查清并正在变更**：当前工作区在表缺失/为空时产出 `import.checksumsMissing` 告警（`src/core/analyzer.ts` 的 `loadBundle`（表缺失/为空 → `import.checksumsMissing`）），「未登记条目」反向检查（同一 `loadBundle`）此时不再运行（无表可对照）；基线 `0.1.59` 是整段跳过、零告警。行为正在变更，见 §7.4 的提示块与 `docs/maintenance/known-gaps.md` §0 的 G-12 行。
 >
-> ~~G-09 / G-10 在**当前工作区**是否仍成立~~ → **已逐条读码复核**：G-09 ✅ 已修复（含边界说明）、G-10 ✅ 已在规格侧澄清；两者的当前状态见 §10 表内「当前工作区状态」列。~~G-08~~ **不再是「未验证」问题**：它已按产品决策整体移除，状态为 ➖ 而非 ✅（§10 G-08）。
+> ~~G-09 / G-10 在**当前工作区**是否仍成立~~ → **已逐条读码复核**：G-09 ✅ 已修复（含边界说明）、G-10 ✅ 已在规格侧澄清；两者的当前状态见 §10 与 `docs/maintenance/known-gaps.md` §0。~~G-08~~ **不再是「未验证」问题**：它已按产品决策整体移除，状态为 ➖ 而非 ✅（§10 G-08）。
 
 ---
 
@@ -1379,13 +1322,13 @@ errors   = []
 
 Bundle Format v1 的**文件布局、manifest 契约、checksums 语义、加密字节布局、ZIP 读侧强制/容忍边界（§1.5）、文件类条目名归一化规则（§3.3.1）、各分区未知字段的真实命运（§7.3）、`redactedHits` 的非持久化语义（§5.3）**都已写明，第三方可以照 §1–§6 实现一个兼容的 exporter/importer。
 
-**当前工作区仍需注意的真实缺口**（与 §10 缺口表的「当前工作区状态」列**逐条一致**，不含任何已在 §10 标 ✅ 的条目）：
+**当前工作区仍需注意的真实缺口**（状态以 [`docs/maintenance/known-gaps.md`](../maintenance/known-gaps.md) §0 为准，本节只保留格式契约层面的结论）：
 
 - **G-11「条目名侧不拒绝中段反斜杠」**——跨平台路径语义不一致（本版新增登记；`src/utils/paths.ts:45-54` 与 `src/security/integrity.ts:63` 两套规则不对齐）。**这是本表唯一一条未修复的格式行为缺陷。**
 - **G-07「`needsMigration` / `describeVersion` 的『将迁移』分支不可达」**——`MIN_SUPPORTED = CURRENT = 1` 未变，迁移链虽已接入导入路径（G-06 已修复），该分支在真实导入中仍结构上不可达。它不是待修缺陷，而是版本区间的必然结果。
-- **G-12 / G-13（本轮审计新发现，🚧 正在修复、未收口）**——G-12：G-04 的收窄残留（checksums 表缺失/为空时「未登记条目」漏报）；G-13：G-09 的告警去重问题。**不要**当作已解决；收口以负责修复的任务与 `docs/spec/known-gaps.md` 为准。
+- **G-12 / G-13（本轮审计新发现，🚧 正在修复、未收口）**——G-12：G-04 的收窄残留（checksums 表缺失/为空时「未登记条目」漏报）；G-13：G-09 的告警去重问题。**不要**当作已解决；收口以负责修复的任务与 `docs/maintenance/known-gaps.md` 为准。
 
-**基线（已发布版本 `v0.1.58`）曾有、当前工作区已修复的缺口**（G-01 / G-02 / G-03 / G-04 / G-06 / G-09 / G-10；逐条取证见 §10）：它们**不再是**本文件的未修复缺口，但**已发布版本仍带这些缺陷**。**G-08 不在这一清单里**——它不是「已修复」，而是**已按产品决策整体移除**（见下方单独说明）。其中对第三方实现者仍然适用的只有两条：
+**基线（已发布版本 `v0.1.58`）曾有、当前工作区已修复的缺口**（G-01 / G-02 / G-03 / G-04 / G-06 / G-09 / G-10；逐条状态见 known-gaps §0）：它们**不再是**本文件的未修复缺口，但**已发布版本仍带这些缺陷**。**G-08 不在这一清单里**——它不是「已修复」，而是**已按产品决策整体移除**（见下方单独说明）。其中对第三方实现者仍然适用的只有两条：
 
 - **G-01/G-02/G-03「未知分区」必须显式告警**——基线把未知分区**静默丢弃**并复用「声明但缺失」的误导文案（`src/core/analyzer.ts:204-205`、`:275-280`）；当前工作区已改为**独立通道 + 独立文案 + 从 `missingSections` 剔除**（`src/core/analyzer.ts` 的 `extractSections`（未知 id 收集）、`extractSections`（`import.unsupportedSections` 汇总告警）、`analyzeImport`（`skippedSections` 从 `missingSections` 剔除），§7.2 实测）。但**格式 v1 没有「原样保留未知分区」的能力**：未知分区的字节两版都不幸存。因此「显式告警、不混入『声明但缺失』、不拒绝整包」仍是本规格要求第三方**主动做得比基线更好**的**主要**一条（§7.5、§9 步骤 8）。
 - **G-06「迁移链已接入导入路径」**——基线是「已实现但从不调用」的定时问题；当前工作区已在 `needsMigration` 为真时调用 `runSchemaMigration`（`src/core/analyzer.ts` 的 `needsMigration` 守卫分支（调用 `runSchemaMigration`））。发布 schema v2 前仍需补一条「v1 → v2 真实迁移」的端到端测试（§10 G-06 / G-07）。

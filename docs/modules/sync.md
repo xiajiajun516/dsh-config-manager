@@ -16,9 +16,9 @@
 
 ### 2.1 HTTP（`src/routes/sync.ts`、`src/routes/profiles.ts`）
 
-同步端点（都是 `endpoint({ path, methods }, …)`）：status `:188`、workdir/reset `:269`、config `:299`、ui-prefs `:373`、push `:400`、pull `:458`、github/start `:498`、github/poll `:531`、github/cancel `:574`、github/validate `:589`、github/repositories `:624`、history `:653`、probe `:720`、download `:755`、snapshot-delete `:793`、snapshots-list `:812`、sync（预览）`:856`、apply-items `:926`、cancel `:1062`、autosync `:1083`、selection `:1141`、rollback `:1207`、merge-preview `:1238`、apply-merge `:1258`。
+同步端点共 24 条，全部是 `endpoint({ path, methods }, …)`，实现都在 `src/routes/sync.ts`。行号随实现漂移（本文件此前维护的行号已整轮失效），这里只留端点名，定位靠在该文件里搜 `path:`：status、workdir/reset、config、ui-prefs、push、pull、github/start、github/poll、github/cancel、github/validate、github/repositories（GET 列 + POST 建，同一路径）、history、probe、download、snapshot-delete、snapshots-list、sync（预览）、apply-items、cancel、autosync、selection、rollback、merge-preview、apply-merge。
 
-档案端点：list `src/routes/profiles.ts:70`、launch `:93`、detail `:118`、create `:130`、copy `:156`、rename `:189`、delete `:209`、stop `:232`（写操作全过 mutation gate）。
+档案端点：list `src/routes/profiles.ts:70`、launch `:93`、detail `:118`、create `:130`、copy `:156`、rename `:189`、delete `:209`、stop `:232`。写操作过 `withMutationGate`（create/copy/rename/delete 四个），**例外是 launch（`:93`）与 stop（`:232`）**：它们操作子进程生命周期而不是配置字节，gate 会占全局写锁，而 launch 最长要等 30 s 子进程就绪（§7.2），塞进锁里会把其它写全堵住。
 
 ### 2.2 定时器
 
@@ -115,7 +115,7 @@
 - 删除/GC 遇到索引 404 → 不写回、不 GC（`src/sync/webdav/webdav-transport.ts:470-471`）。
 - 加密通道无密码 → 不落祖先副本、不写明文（`:2067`）。
 - 自动同步：`runs.register('autosync')` 冲突 → 记 `skipped('conflict')` 且立刻释放 `running`（`src/sync/autosync-scheduler.ts:483-486`）；注释记录了 2026-09 真机 bug（mutation-locked 早退未 `finishRun` → run 永久 running，之后后台同步静默停摆，`:494-496`）。
-- 凭据：同步密码只作为参数透传，存 DSH credentials 专用槽位；保存路径 `src/routes/sync.ts:1174-1183`（清空优先于写入），响应只回 `encryptPasswordConfigured`/`decryptPasswordConfigured` 布尔（`:1186-1195`），client 侧同样只有布尔（`src/client/sync/sync-api.ts:176-198`）。
+- 凭据：同步密码只作为参数透传，存 DSH credentials 专用槽位；保存逻辑在 `src/routes/sync.ts:1208` 起（清空优先于写入），响应只回 `encryptPasswordConfigured`/`decryptPasswordConfigured` 布尔（`:1220-1221`），client 侧同样只有布尔（`src/client/sync/sync-api.ts:176-198`）。
 
 ## 7. 档案：复制与隔离实例
 

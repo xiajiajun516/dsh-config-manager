@@ -130,7 +130,7 @@
 
 ## Documentation
 - `docs/index.md` — 文档总索引；不知该读哪份时先看它。
-- `docs/architecture.md` — 分层、目录约定、守卫与脚本；改架构或多个模块时查阅，硬规则回本文件补一行。
+- `docs/modules/architecture.md` — 分层、目录约定、守卫与脚本；改架构或多个模块时查阅，硬规则回本文件补一行。
 - `docs/maintenance/doc-maintenance.md` — 载体归属表；判断某类内容该写进哪份文档。
 - `docs/lessons/README.md` — 证据库按域索引；查某条规则的实测依据、事故成因与量化数据。
 - `docs/maintenance/known-limits.md` — 已知限制全表；判断某能力是否已支持时查阅。

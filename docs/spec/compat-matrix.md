@@ -147,7 +147,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 ## 3. peer 声明范围 vs 本机实测版本
 
-### 3.1 peer 声明（`package.json:98-117`，共 **16** 个官方包 + react/react-dom）
+### 3.1 peer 声明（`package.json` 的 `peerDependencies`，共 **18** 条 = **16** 个官方包 + react/react-dom）
 
 `@deepseek-ai/dsh-agent-presets`、`dsh-client-connection`、`dsh-client-locale`、`dsh-client-runtime`、`dsh-client-ui-primitives`、`dsh-client-ui-settings`、`dsh-client-ui-slots`、`dsh-commands`、`dsh-credentials`、`dsh-home-paths`、`dsh-host-plugin-inventory`、`dsh-host-webserver`、`dsh-llm`、`dsh-settings`、`dsh-system-prompt`、`dsh-tools` —— **全部声明为 `>=0.1.0-rc.6 <0.3.0-0`**（0.1.66 起，显式上下界；改前为带预发布版的 caret `^0.1.0-rc.6`，见 §3.3）；`react` / `react-dom` 为 `^18.2.0`。
 
@@ -158,14 +158,14 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | **DSH 应用本体** | `D:\Apps\nodejs\node_global\node_modules\@deepseek-ai\dsh` | **`0.1.5-rc.1`** | — （仅决定 loader / 客户端 shell 行为） |
 | **DSH profile 解析** | `$DSH_HOME/profiles/node_modules/@deepseek-ai/*`（244 个包） | **`0.1.5-rc.2`** | 否（见下） |
 | **插件自身解析** | `D:\Projects\personal\dsh-config-manager\node_modules/@deepseek-ai/*` | **`0.1.0-rc.6` / `0.1.0-rc.8`** | **是** |
-| 仓库 devDependencies 声明 | `package.json`（2026-10-04 复核，PR #64 / #65 合并后） | 多数 `^0.1.0-rc.6`；`dsh-timeout` 为 `^0.1.0-rc.8`；**`dsh-client-ui-slots` / `dsh-client-locale` 为 `^0.2.0-rc.2`**（`package-lock.json` 实测解析到 `0.2.0-rc.2`；其余官方包在 npm 上没有 0.2.0-rc.2，`dsh-client-runtime` 最新仍为 `0.1.0-rc.8`） | 决定上者装到什么 |
+| 仓库 devDependencies 声明 | `package.json`（2026-10-28 逐条复核） | 多数 `^0.1.0-rc.6`；`dsh-timeout` 为 `^0.1.0-rc.8`；**5 个为 `^0.2.0-rc.2`**：`dsh-client-locale`、`dsh-client-ui-primitives`、`dsh-client-ui-settings`、`dsh-client-ui-slots`、`dsh-commands`（`package-lock.json` 实测解析到 `0.2.0-rc.2`；其余官方包在 npm 上没有 0.2.0-rc.2，`dsh-client-runtime` 最新仍为 `0.1.0-rc.8`） | 决定上者装到什么 |
 
-> **2026-10-04 追加（PR #64 / #65）**：`dsh-client-ui-slots` 与 `dsh-client-locale` 的 devDependencies 下限已提到
+> **2026-10-04 追加（PR #64 / #65，2026-10-28 扩展到 5 个）**：`dsh-client-ui-slots` 与 `dsh-client-locale` 的 devDependencies 下限已提到
 > `^0.2.0-rc.2`。两者在本插件里**只有 type-only import**（`src/client/index.ts:18,22`、`src/client/client-types.ts:13`），
 > 因此升级只影响类型面：**不进产物、不改运行时解析**（peer 区间仍是 `>=0.1.0-rc.6 <0.3.0-0`，用户端不受影响）。
 > 官方 monorepo 并非每个包都发 0.2.0-rc.2（`dsh-client-runtime` 就没有），所以「让全部官方包同版本」在当前上游
 > 发布节奏下做不到。本机 `node_modules` 尚未重装，仍为 `0.1.0-rc.6` / `0.1.0-rc.8`；下一次 `npm install` 后这两个
-> 包会变成 `0.2.0-rc.2`（`package-lock.json` 已按此锁定）。
+> 包会变成 `0.2.0-rc.2`（`package-lock.json` 已按此锁定）。此后 `dsh-client-ui-primitives`、`dsh-client-ui-settings`、`dsh-commands` 也一并提到 `^0.2.0-rc.2`（同样只有 type / client 半用），共 **5** 个；peer 区间不受影响。
 
 **为什么插件用的是 rc.6/rc.8 而不是 profile 的 rc.2**：
 
@@ -214,7 +214,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 **结论与风险**：
 
 1. 兼容闸的判定式（读 `@deepseek-ai/dsh-app-boot@0.2.0-rc.1` 源码的 `evaluatePluginCompatibility`，`lib/index.js:286-313`）是 `semver.satisfies(runtimeVersion, range, { includePrerelease: true })`，只检查名字为 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer；**任一不满足 → 整份 bundle 在启动时被跳过**（stderr 只多一行 `skipping profile bundle`，进程照常起来、功能静默消失）。0.1.5-rc.1 还没有这道闸。
-2. **真跑判定**（runtime = `0.2.0-rc.1`，manifest = 本插件）：改前 `^0.1.0-rc.6` → **INCOMPATIBLE（当时 14 条 peer 全中）**；改后 → **COMPATIBLE**。`0.1.5-rc.1` / `0.1.7-rc.2` / `0.2.0-rc.1` 三种 runtime 全部 COMPATIBLE。回归护栏：`tests/packaging-contract.test.ts` 的 **P-3**（钉住 14 条 peer 一律是显式上下界，caret/tilde 一律红灯）。
+2. **真跑判定**（runtime = `0.2.0-rc.1`，manifest = 本插件）：改前 `^0.1.0-rc.6` → **INCOMPATIBLE（当时那 14 条 peer 全中；现为 16 条，见 §3.1）**；改后 → **COMPATIBLE**。`0.1.5-rc.1` / `0.1.7-rc.2` / `0.2.0-rc.1` 三种 runtime 全部 COMPATIBLE。回归护栏：`tests/packaging-contract.test.ts` 的 **P-3**（`DSH_PEER_COUNT = 16`，钉住 16 条 peer 一律是显式上下界，caret/tilde 一律红灯）。
 3. 旧声明的另外两处脆弱点也在现行区间下消失：**默认语义**下 `^0.1.0-rc.6` 不匹配任何 `0.1.x-rc.y`（`x>0` 或 `y>6`，因为 `<upper>` 被钉在 `0.1.0` 那一格），所以一旦打开 `autoInstallPeers` 或走 pnpm `strict-peer-dependencies` / npm 的 peer 校验就立刻报冲突 —— 现在 profile 实际装的 `0.1.5-rc.2` 在默认语义下也满足 `>=0.1.0-rc.6 <0.3.0-0`。
 4. rc 期 semver 不可靠的根因：prerelease 段的存在使「兼容区间」的实际边界依赖工具的 `includePrerelease` 选择，而 npm / pnpm / 各 loader 的选择并不统一。**因此本插件的兼容性事实上靠「运行时实测 + 优雅降级」维持，而不是靠 semver 保证** —— peer 只是**安装期闸门**，不构成运行时承诺（真正运行时 import 的官方包只有 §1.3 的 4 个）。
 
@@ -285,7 +285,7 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 | **R8** | `settings.section` Slot 契约变化（owner props、`register` 字段、`inject` face 形态） | 设置页注册 | 设置页 section 消失或白屏；控制台报 Slot 注册失败 | `src/client/index.ts:111-118`；对照 DSH 的 `dsh-client-ui-settings` SlotMap |
 | **R9** | `ctx.locale.register/bind/getLocale` 契约变化 | 全部 5 套 locale 字典 + `UiT` | 界面文案回退成裸 key（如 `section.label`）或英文/中文错配 | `src/client/index.ts:87-105`；`src/ui/i18n.ts`（缺 key 静默返回 key 本身） |
 | **R10** | `dsh.client.inject` / `dsh.client.platform` 字段校验变严（例如要求 inject 名字必须命中 boot graph） | client 半装载 | 设置页不出现；控制台报 client-modules 图相关错误 | 现状为「未命中即跳过、不抛错」（`dsh-client-modules/lib/client.js:265-268`），若 DSH 改为抛错则本节结论失效 |
-| **R11** | 插件加载器改为**强制 peer / engines 校验**（0.1.7 起已落地为兼容闸） | 安装/启动期 | 插件装不上，或启动即被**静默跳过**（stderr 一行 `skipping profile bundle`） | 闸门判定式见 §3.3；peer 范围必须在 `{includePrerelease:true}` 下满足实际 runtime（`tests/packaging-contract.test.ts` 的 P-3 已钉住 14 条 peer 的形状） |
+| **R11** | 插件加载器改为**强制 peer / engines 校验**（0.1.7 起已落地为兼容闸） | 安装/启动期 | 插件装不上，或启动即被**静默跳过**（stderr 一行 `skipping profile bundle`） | 闸门判定式见 §3.3；peer 范围必须在 `{includePrerelease:true}` 下满足实际 runtime（`tests/packaging-contract.test.ts` 的 P-3 已钉住 16 条 peer 的形状） |
 | **R12** | DSH 进入 `0.3.x` | 全部 peer 范围 | 同 R11（现行上界 `<0.3.0-0` 恰好挡住 `0.3.0-0` 及以上的预发布版；`0.2.x` 已放行） | §3.3 现行区间表末行；越过 0.3 前必须按 M8 重采证据集 |
 | **R13** | `$DSH_HOME/cordis.patch.yml` 或 profile patch 文件格式变化（含**合并顺序**变化） | MCP 分区、prompts 分区、插件激活行 | MCP/prompts 导入后不生效；`patch 行` 解析报错；**同一条 lineId 在两层各一份时以哪层为准**（本插件按 home 层优先，与 DSH 的合并序一致） | `src/core/patch-layers.ts` 的 `readEffectivePatchLines`（两层读取 + 按层优先去重）与 `patchLayerRels`；`src/index.ts` 的 `DshPatchFileFacade`（`patchFile.readPatchLines`）；`src/adapters/mcp.ts`；`src/adapters/prompts.ts` |
 | **R15** | DSH 的 MCP 配置形态变化：`dsh-mcp-client` patch 行的字段（`config.serverName` / `command` / `args` / `cwd` / `url`）或合并顺序变化 | `mcp` 分区的导出/导入与**同步通道**（可选分区） | MCP 服务器导入后不出现、或参数错位；同步时 `mcp` 分区内容为空 | `src/adapters/mcp.ts`（`extractMcpServers` 按 `config.serverName` 判定 + 两形态兼容）、`src/core/patch-layers.ts`（按层读回）、`src/schema/section-registry.ts` 的 `mcp.syncOptIn='auto'`（issue #78；放行集合由 `SyncEngineOptions.optInSections` 决定） |
@@ -379,4 +379,4 @@ react, react/jsx-runtime, react-dom, react-dom/client,
 
 ## 附：一句话结论
 
-本插件对 DSH 的实际依赖面**远小于其 peer 声明**：host 侧真正运行时 import 的官方包只有 4 个，client 侧为 **0 个**；14 个 peer 中至少 4 个（`dsh-agent-presets`、`dsh-llm`、`dsh-system-prompt`、`dsh-host-plugin-inventory`）在源码与构建产物中**完全未被引用**。因此「peer 声明范围」目前更多是**安装期契约**而非**运行时契约**；真正的兼容性风险集中在 §5 的 R1 / R3 / R7 三项，以及 §3.3 的 rc 期 semver 声明缺陷（R11 / R12）。
+本插件对 DSH 的实际依赖面**远小于其 peer 声明**：host 侧真正运行时 import 的官方包只有 4 个，client 侧为 **0 个**；16 个 peer 中至少 4 个（`dsh-agent-presets`、`dsh-llm`、`dsh-system-prompt`、`dsh-host-plugin-inventory`）在源码与构建产物中**完全未被引用**。因此「peer 声明范围」目前更多是**安装期契约**而非**运行时契约**；真正的兼容性风险集中在 §5 的 R1 / R3 / R7 三项，以及 §3.3 的 rc 期 semver 声明缺陷（R11 / R12）。

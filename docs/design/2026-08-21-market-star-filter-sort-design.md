@@ -2,6 +2,7 @@
 
 
 > ⚠️ **2026-10-23 状态复核**：已实施：排序键与排序函数在 `src/ui/market-view.ts`（`MarketSortKey` / `sortMarketItems`），界面在 `src/client/market/MarketPanel.tsx`。§3.1/§3.3 的判定规则仍为准，§6「不做项」仍有效。
+> **2026-10-28 路径复核**：该文件实际在 `src/client/market/market-view.ts`（`MarketSortKey` 在 `:72`，`sortMarketItems` 在 `:92`；`src/ui/` 下没有 market-view）。star 取数已落成**双通道**：`src/market/github-repos.ts:413 getRepoStars()`（带 token，仅「我的配置」页用）与 `:423 getRepoStarsPublic()`（匿名，市场浏览用，守住「市场端点零凭据」硬不变式）。
 > 日期：2026-08-21 · 状态：**已实施**（2026-10-23 复核） · 上游约束：
 > [AGENTS.md](../../AGENTS.md)（安全不变量 / UI 分层纪律 / 文档规范）、[DESIGN.md](../../DESIGN.md)（Design System 唯一权威）、
 > [2026-08-20-my-configs-design.md](./2026-08-20-my-configs-design.md)（「一键上传 / 我的配置」既有实现）、
@@ -104,7 +105,7 @@ class StarCache {
 
 - 现有 browse 逻辑（L2801-2836）构造 `items: MarketListItem[]`；
 - 改造：遍历前先收集所有条目 `repo ?? 市场URL` 去重集合 → 逐仓库查 `StarCache` → 把 `stars` 并入每条 `MarketListItem`；
-- **零凭据**：匿名 `fetch`（`getRepoStars` 用 `GitHubAuthRest` 但 tokenProvider 可注入空 token 的匿名模式，或单独实现匿名查询小函数——实现时二选一，保证 browse 不碰凭据槽）。
+- **零凭据**：匿名 `fetch`（`getRepoStars` 用 `GitHubAuthRest` 但 tokenProvider 可注入空 token 的匿名模式，或单独实现匿名查询小函数——实现时二选一，保证 browse 不碰凭据槽）。（2026-10-28 复核：最终**两个都实现**了 —— `getRepoStars()`（带 token）在 `src/market/github-repos.ts:413`，`getRepoStarsPublic()`（匿名，走 `requestPublic`）在 `:423`；`github-repos.test.ts:529` 断言公开通道**不带** `authorization` 头。）
 
 #### 3.1.5 `src/market/my-repo.ts`：`listItems()` 顺带返回自己仓库 star
 
@@ -175,7 +176,7 @@ list.stars         ⭐ {count}（title=来源仓库 star 数）
 
 | 文件 | 改动 |
 |---|---|
-| `src/market/github-repos.ts` | 新增 `getRepoStars()`（+ 匿名查询模式） |
+| `src/market/github-repos.ts` | 新增 `getRepoStars()`（+ 匿名查询模式）（实际落成两个方法：`getRepoStars` `:413` / `getRepoStarsPublic` `:423`） |
 | `src/market/repo-url.ts`（新） | `parseGitHubRepoUrl()` 纯函数 |
 | `src/market/star-cache.ts`（新） | `StarCache`（去重 + TTL + 失败降级） |
 | `src/market/types.ts` | `MarketListItem.stars?` |

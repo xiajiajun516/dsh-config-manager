@@ -128,7 +128,7 @@ export function validateMarketItem(
   for (const [sectionId, enabled] of Object.entries(internalManifest.sections) as [SectionId, boolean][]) {
     if (!enabled) continue;
     // 市场条目禁止分区（BANNED_MARKET_SECTIONS：sessions 历史会话 / pluginFiles 任意文件 / self 本地环境）：
-    // 与 secrets 同级硬约束（产品决策 2026-08-19，guide docs/design/2026-08-19-market-repo-setup-guide.md）。
+    // 与 secrets 同级硬约束（产品决策 2026-08-19，guide docs/spec/market-index-v1.md）。
     if (BANNED_MARKET_SECTIONS.includes(sectionId)) {
       return { status: 'invalid', errors: [marketMsg('market.security.bannedSection', { section: sectionId })], warnings, manifest, internalManifest, sections: [], checksumsOk: true };
     }

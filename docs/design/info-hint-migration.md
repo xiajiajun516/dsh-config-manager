@@ -7,8 +7,8 @@
 
 **状态**：t1–t10 已完成（原语 → 面板收敛 → 聚合验证 → 评审 → 修复 → 复评 → 收口）；
 **2026-10-12 追加 t7 波次**（用户要求「把**所有**描述都收进 ⓘ，页面更简洁」）：
-在既有 42 个 MOVE 键之外，再把上一轮判为 KEEP 的**静态**安全/机制说明与**静态**页级/分区级副标题收进 ⓘ，
-**MOVE 合计 82 键**，守卫 `info-hint-guard.test.ts` 13/13 pass。规则边界见 `DESIGN.md` §7（t7 清单在「本次落地」段末）。
+在既有 42 个 MOVE 键（2026-10-04 口径）之外，再把上一轮判为 KEEP 的**静态**安全/机制说明与**静态**页级/分区级副标题收进 ⓘ。
+**MOVE 合计 81 键**（2026-10-28 复核：原写 82，与守卫断言不符 —— `src/client/common/info-hint-guard.test.ts:395` 断言 `MOVE_PINS.length === 81`，逐键清单自 `:93` 起）。规则边界见 `DESIGN.md` §7（t7 清单在「本次落地」段末）。
 
 ---
 
@@ -22,7 +22,7 @@ MOVE / KEEP 的冻结判定、ⓘ 的渲染契约（portal 根、气泡边界、
 
 ## 3. 逐目录台账
 
-### 3.1 MOVE（**82 键**，全量；机器化清单 = `info-hint-guard.test.ts` 的 `MOVE_PINS`，**键数只信该测试**）
+### 3.1 MOVE（**81 键**，全量；机器化清单 = `info-hint-guard.test.ts` 的 `MOVE_PINS`（`:93`），**键数只信该测试**（`:395` 断言 81））
 
 > **t7 波次（2026-10-12，41 键）**：页级/分区级副标题 → `SectionTitle.info`；卡片/字段说明 → 标题行或字段标签行的 ⓘ
 > （`Field.info` 是本次新加的原语入口）。逐键清单与「同轮仍常驻」的有意例外见 `DESIGN.md` §7 t7 段。
@@ -78,14 +78,14 @@ MOVE / KEEP 的冻结判定、ⓘ 的渲染契约（portal 根、气泡边界、
 | recovery/ | `sessions.desc` | RecoveryPanel.tsx · 会话体检卡标题旁 | 机制+边界：扫什么、为什么修复只能走离线 CLI（只读语义由 sessions.readOnly 徽章承担） |
 | recovery/ | `recovery.preview.hint` | RecoveryPanel.tsx · 恢复预览标题旁 | 机制：预览只读零写入、确认后才执行（危险动作说明仍常驻 ConfirmDialog） |
 
-目录小计：`common/ 2` · `sync/ 16` · `snapshots/ 10` · `export/ 3` · `market/ 3` · `about/ 4` · `profiles/ 2` · `recovery/ 2` = **42**
-（t1–t5 原为 43；2026-10-04 起 `snapshots.retentionHint` 退出）。
-**零 MOVE 的目录**：`history/`、`overview/`、`import/`、`consult/`（其 `.hint` 类站点全部命中 KEEP）。
+目录小计（2026-10-28 复核，按 `MOVE_PINS` 的 `file` 现算，共 **81**）：`common/ 2` · `sync/ 27` · `library/ 2` · `environment/ 5` · `home/ 8` · `export/ 6` · `market/ 6` · `about/ 4` · `recovery/ 9` · `history/ 1` · `import/ 11`。
+（历史原文写「common/ 2 · sync/ 16 · snapshots/ 10 · export/ 3 · market/ 3 · about/ 4 · profiles/ 2 · recovery/ 2 = 42」，与现值不符：目录按当时的页划分，现已改为 `home`/`library`/`sync`/`environment` 四页 + Task 面板；本文上表只保留 t1–t7 的**措辞台账**，不等于键数全量。）
+**零 MOVE 的目录**：原文列为 `history/`、`overview/`、`import/`、`consult/`，2026-10-28 复核已不成立 —— `history/ 1`、`import/ 11` 均有 MOVE 键（`overview/`、`consult/` 目录本身已不存在）。
 
 ### 3.2 KEEP（常驻；渲染与文案逐字未动）
 
 完整规则见 §1 的 8 类（边界经 t7 修订：**动态**告警常驻，**静态**机制说明进 ⓘ）。机器化钉子 =
-`info-hint-guard.test.ts` 的 `KEEP_PINS`（**36 条**；t7 从原 46 条里移走 10 条静态安全说明转 MOVE）：
+`info-hint-guard.test.ts` 的 `KEEP_PINS`（**37 条**；2026-10-28 复核：原文写 36，实测 `KEEP_PINS` 在 `:189` 起共 37 个对象；t7 从原 46 条里移走 10 条静态安全说明转 MOVE）：
 
 | 类别 | 条数 | 代表键（全量见 `KEEP_PINS`） |
 |---|---|---|

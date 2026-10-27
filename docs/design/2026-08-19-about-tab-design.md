@@ -1,12 +1,12 @@
 # 「关于（About）」Tab 设计文档
 
 
-> ⚠️ **2026-10-23 状态复核**：「关于」面板已实现（`src/client/about/AboutPanel.tsx`，挂在 `ConfigManagerSection.tsx` 的 `about` 面板）；v3 之后落位为导航区图标入口，不再是「第 6 个 tab」（文中 §1 与 L140/L183 的 tab 序号已作废）。§5 键表与 §8 安全理由仍为准。
+> ⚠️ **2026-10-23 状态复核**：「关于」面板已实现（`src/client/about/AboutPanel.tsx`，挂在 `ConfigManagerSection.tsx` 的 `about` 面板）；v3 之后落位为导航区图标入口，不再是「第 6 个 tab」（文中 §1 与 L140/L183 的 tab 序号已作废）。§5 键表与 §8 安全理由仍为准。（2026-10-28 复核：现行实现 = `ConfigManagerSection.tsx:448` 的 `case 'about.open': openTask('about'); return` 与 `:577` 的 `activeTask?.kind === 'about'` 图标按钮；`src/client/run-store.ts:86` 的 `PanelId` 仍是 `home`/`library`/`sync`/`environment` 四页，全文件无 `aboutOpen` state、无 `activeTab` 扩展。）
 > 日期：2026-08-19 · 状态：**已实现**（2026-10-23 复核） · 上游约束：[AGENTS.md](../../AGENTS.md)（UI/Design 规则）、[DESIGN.md](../../DESIGN.md)（Design System 唯一权威）、[CLIENT_DEPENDENCIES.md](../../src/client/CLIENT_DEPENDENCIES.md)（client 与 host API 契约）
 
 ## 1. 背景与目标
 
-dsh-config-manager 当前设置页共有 5 个 tab（Export / Import / Snapshots / Sync / Market）。用户希望新增第 6 个 **「关于（About）」tab**，集中展示插件自身的公共信息：
+dsh-config-manager 当前设置页共有 5 个 tab（Export / Import / Snapshots / Sync / Market）。用户希望新增第 6 个 **「关于（About）」tab**，集中展示插件自身的公共信息（2026-10-28 复核：这是 2026-08 的历史基线；现行不是 tab，而是导航区图标入口打开的 `about` Task 面板）：
 
 - GitHub 官方仓库地址（外链）
 - 作者名字（GitHub 用户名）
@@ -19,7 +19,7 @@ dsh-config-manager 当前设置页共有 5 个 tab（Export / Import / Snapshots
 
 ### 2.1 包含
 
-1. `ConfigManagerSection.tsx` 新增第 6 个「关于」tab。
+1. `ConfigManagerSection.tsx` 新增「关于」入口（历史设计 = 第 6 个 tab；现行 = `openTask('about')` 的 Task 面板，见 §6 复核）。
 2. 新增 `src/client/about/AboutPanel.tsx` 组件（React 壳，只做装配）。
 3. 新增 `src/client/about/about-view.ts` 纯函数渲染模型（node 可单测）。
 4. 新增 `src/client/about/about-view.test.ts` 单测。
@@ -134,6 +134,8 @@ export function aboutStatusRows(status: ServiceStatus): { version: string; dsh: 
 
 ## 6. Tab 集成（`ConfigManagerSection.tsx`）
 
+> **2026-10-28 复核（现行实现）**：`about` 是 Task 面板而非 tab —— `ConfigManagerSection.tsx:448` 是 `case 'about.open': openTask('about'); return`，`:570-578` 是 `IconButton` + `AboutIcon` 的 `active={activeTask?.kind === 'about'}` + `onClick={() => { openTask('about') }}`。下述 `aboutOpen` / `setAboutOpen` / `activeTab` 方案**当时未被采用**，保留作评审记录：
+
 按现有「低频面板」模式（与 `marketOpen/syncOpen/snapshotsOpen` 完全一致）：
 
 - 新增 `const [aboutOpen, setAboutOpen] = useState(false)`
@@ -182,7 +184,7 @@ export function aboutStatusRows(status: ServiceStatus): { version: string; dsh: 
 - [ ] `npm run typecheck` 通过
 - [ ] `npm test` 通过（新增 `about-view.test.ts` 用例全绿）
 - [ ] `npm run build` 通过（client bundle 可出，CSS Modules 正常）
-- [ ] GUI 中「关于」tab 出现在最右，其余 5 tab 行为不变
+- [ ] GUI 中「关于」入口可打开并点亮导航图标（原文：作为第 6 个 tab 出现在最右；2026-10-28 复核：现行是导航区图标 → `about` Task 面板，其余页签行为不变）
 - [ ] 版本 / DSH / 平台来自 `status()`，加载中有 Spinner，失败可重试
 - [ ] Star / 仓库 / 文档 / Issues / 作者 外链均 `target="_blank"` + `rel="noreferrer"`，点击新窗口打开
 - [ ] 暗色 / 亮色主题均正常（全部 token 驱动）

@@ -30,7 +30,7 @@
 | 机制细则、命令全表、发布与 CI 流程 | `DEVELOPERS.md` | `docs/modules/` |
 | 版本号规则（SemVer 判定、预发布命名、历史保留、发布前检查） | `docs/maintenance/versioning.md` | `DEVELOPERS.md`（只留命令与阶段表） |
 | UI/视觉/token/组件视觉规范 | `DESIGN.md` | `docs/components/client-ui.md`（那里只写代码落点与守卫） |
-| 分层、依赖方向、路由全景、关键数据流、结构性债 | `docs/architecture.md` | 域文档（域文档只指向它） |
+| 分层、依赖方向、路由全景、关键数据流、结构性债 | `docs/modules/architecture.md` | 域文档（域文档只指向它） |
 | 某域的当前实现（入口/调用链/上限/失败语义） | `docs/modules/<域>.md` | `AGENTS.md` 的坑段 |
 | 客户端装配、页面、状态、i18n、原语清单 | `docs/components/client-ui.md` | `DEVELOPERS.md` |
 | 对外契约（第三方能照着实现） | `docs/spec/` | 域文档（改写链接指向 spec） |
@@ -47,7 +47,7 @@
 |---|---|
 | 对外可观察的数据格式、协议、错误码 | `docs/spec/` + `tests/conformance/`（契约在前） |
 | 用户能看见的行为、文案、交互 | `CHANGELOG.md`（按 `changelog-writing` skill 落位） |
-| 新目录、新分层、新守卫脚本、新 CI 步骤 | `docs/architecture.md`（+ `AGENTS.md` 若属硬规则） |
+| 新目录、新分层、新守卫脚本、新 CI 步骤 | `docs/modules/architecture.md`（+ `AGENTS.md` 若属硬规则） |
 | 新的长期约束（上限、不可逆操作、失败语义） | `docs/modules/<域>.md` 或 `docs/maintenance/known-limits.md` |
 | 非显然的坑（踩过一次、下次还会踩） | 先 `docs/lessons/<域>.md` 写证据 → 再 `AGENTS.md` 补一行判据 |
 
@@ -92,7 +92,7 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 | 重构类型 | 文档动作 |
 |---|---|
 | 模块搬家、函数拆合、文件改名（对外行为不变） | 不写新文档；改受影响文档里的路径；必跑 `check-doc-paths` |
-| 分层/依赖方向变化 | 同轮改 `docs/architecture.md` §2 与 `tests/architecture-boundaries.test.ts`，并在 `docs/decisions/` 留一条 |
+| 分层/依赖方向变化 | 同轮改 `docs/modules/architecture.md` §2 与 `tests/architecture-boundaries.test.ts`，并在 `docs/decisions/` 留一条 |
 | 对外行为变化（哪怕只是「顺手」） | 按 §4 当作功能变更处理，不能只写「重构」 |
 | 发现文档描述的行为其实是错的 | **以代码为准改文档**；若是当初的取舍，把「为什么」补进 ADR；若只是笔误，commit message 说明即可 |
 
@@ -110,7 +110,7 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 | 对话回退/回滚点/救援台/CLI 写入门 | `docs/modules/recovery.md` |
 | 外部来源导入（Claude Code / Codex / Cursor…） | `docs/modules/foreign-import.md` |
 | 客户端/页面/样式/i18n | `docs/components/client-ui.md` + `DESIGN.md` |
-| 加路由/改分层/改入口 | `docs/architecture.md` + `AGENTS.md` §结构与分层 |
+| 加路由/改分层/改入口 | `docs/modules/architecture.md` + `AGENTS.md` §结构与分层 |
 | 发布/版本/CI | `DEVELOPERS.md` + `AGENTS.md` §发布 |
 
 **怎么找文档**：`docs/index.md` §1「我想做什么」是唯一起点；不要 grep 整个 `docs/` 猜。
@@ -156,7 +156,7 @@ rg -n "<改动的符号名|路由|错误码>" docs AGENTS.md DEVELOPERS.md DESIG
 
 | 项 | 结果 | 证据 | 耗时 |
 |---|---|---|---|
-| ① 索引覆盖 | **通过**：`docs/{modules,components,spec,maintenance,decisions}/*.md` 19 份全部在 `docs/index.md`（0 缺失） | 逐文件比对表格 | ~2 min |
+| ① 索引覆盖 | **通过**：`docs/{modules,components,spec,maintenance,decisions}/*.md` 19 份全部在 `docs/index.md`（0 缺失）；2026-10-28 整理后为 24 份，仍 0 缺失 | 逐文件比对表格 + `node scripts/check-doc-paths.mjs` 的 `[doc-index]` 段 | ~2 min |
 | ② 模块文档与代码 | **通过**（抽查 4 份）：路由总数 82 = `src/index.ts` 7 + `src/routes/*` 75，由 `tests/route/route-parity.test.ts:228`/`:287`/`:289` 钉住；入口/上限/失败语义与实现一致 | 上述测试 + 逐份核对源码 | ~12 min |
 | ③ tech-debt 已修项 | **基本通过**：16 条已修中 14 条直接带测试名；#2 只写文件与文案键，靠同表 F8 行补测试名（可接受）；未修 11 条仍标修 | `docs/maintenance/tech-debt.md` | ~3 min |
 | ④ known-limits 已解禁 | **通过**：15 条无「已解禁仍留档」；但 §5 与 §7/§12 的部分表述属**平台判断**，已按 §4.1 标注 | `docs/maintenance/known-limits.md` | ~2 min |

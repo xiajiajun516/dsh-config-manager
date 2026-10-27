@@ -139,7 +139,7 @@ import {
 
 ### 4.4 其他常用导出
 
-`/core` 共 32 个运行时导出，例如：
+`/core` 共 **38** 个运行时导出（2026-10-28 对 `src/core/index.ts` 的导出面实测计数），例如：
 
 - 引擎：`Exporter` / `Importer` / `Analyzer` / `MigrationStore`
 - 快照：`FileSnapshotStore` / `createSnapshot` / `listSnapshots` / `verifySnapshot`
@@ -224,7 +224,7 @@ warning，绝不让「会话没进工作区」静默通过）。为什么必须�
   但**注意**：npm 7+ 默认会自动安装 peer——本包用 **`peerDependenciesMeta` 把全部 16 个 peer 标成
   `optional: true`**，所以 npm 不再自动装 peer，headless 消费者实际只装 `js-yaml`（隔离安装实测见 §7：
   16 个 UNMET peer，无 React 栈）。该不变量由 `tests/packaging-contract.test.ts` 钉死（peer 全 optional
-  ＋ `dependencies` 仅 `js-yaml`）；历史缺口 `P-1` / `P-2` 见 `docs/spec/known-gaps.md`（已修复）。
+  ＋ `dependencies` 仅 `js-yaml`）；历史缺口 `P-1` / `P-2` 见 `docs/maintenance/known-gaps.md`（已修复）。
 - 引擎与 DSH 解耦：`src/core/` 只依赖 `ConfigAdapter` / `HostContext` 抽象与内存 mock。
   需要真实文件系统/凭据时，由调用方提供对应实现。
 
@@ -272,9 +272,9 @@ node --test src/client/bundle-selfcontained.test.ts
 
 ---
 
-## 7. 验证记录（本仓库实测）
+## 7. 验证记录（示例快照，非契约）
 
-以下命令在 Windows + Node 24 上实际执行过：
+以下命令在 Windows + Node 24 上实际执行过。**本节的版本号、体积、导出计数与包数是写作时（`dsh-config-manager@0.1.59`）的实测快照，随发版变化，不构成契约**——判断现状以现行构建与 `npm pack` 输出为准（`/core` 导出计数可现场复核：`node -e "import('dsh-config-manager/core').then(m=>console.log(Object.keys(m).length))"`）。
 
 ```bash
 npm run typecheck                 # exit 0
@@ -286,17 +286,17 @@ node --test src/client/bundle-selfcontained.test.ts   # 1 pass
 npm pack --pack-destination <tmp>
 cd <tmp>/consumer && npm i <tarball> --legacy-peer-deps
 npm ls --all
-# → dsh-config-manager@0.1.59
+# → dsh-config-manager@<current-version>   # 示例快照：0.1.59
 #     +-- js-yaml@5.4.2
 #     | `-- argparse@2.0.1
-#     `-- (16 个 UNMET peerDependencies —— 由 DSH 宿主提供)
-#          14 个 @deepseek-ai/* + react + react-dom（2 个 React peer，见 docs/spec/known-gaps.md §P-1）
+#     `-- (18 条 UNMET peerDependencies —— 由 DSH 宿主提供)
+#          16 个 @deepseek-ai/* + react + react-dom（2 个 React peer，见 docs/maintenance/known-gaps.md §P-1）
 
-node -e "import('dsh-config-manager/core')"     # 32 exports，加载成功
+node -e "import('dsh-config-manager/core')"     # 38 exports，加载成功
 node --check node_modules/dsh-config-manager/lib/client.js   # exit 0
 ```
 
-安装体积对比：**29 个包 → 3 个包**（UI 栈 26 个包不再被拉入）。
+安装体积对比：**29 个包 → 3 个包**（UI 栈 26 个包不再被拉入）——写作时快照，实测请重跑上面的 `npm ls --all`。
 
 ---
 

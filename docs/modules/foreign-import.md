@@ -92,7 +92,7 @@ assistant 的 `message.content` 必须含 `tool-call` 块；`tool/result` 块是
 - **没有可导入内容**：HTTP 400 `nothing-to-import`；CLI 打印稳定错误，不做「导个空包」。
 - **位置被环境变量覆盖**（`CLAUDE_CONFIG_DIR`/`HERMES_HOME`/`CODEX_HOME`/`COPILOT_HOME` 等）：**只报键名**
   （`source-location-overridden`），值绝不进包/日志/回传；取值 ≠ 默认位置时按覆盖后的位置读，不猜默认位置。
-- **内容缺口**：IR 没有 reasoning 承载块（`docs/spec/known-gaps.md` 的 F-01）、没有会话级压缩检查点通道（F-02），
+- **内容缺口**：IR 没有 reasoning 承载块（`docs/maintenance/known-gaps.md` 的 F-01）、没有会话级压缩检查点通道（F-02），
   这类内容只进 `unsupported-session-record` 计数 —— 是已知缺口，不要当成静默丢失去「修」。
 
 ## 9. 测试锚点

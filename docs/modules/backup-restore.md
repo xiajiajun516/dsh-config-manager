@@ -42,10 +42,11 @@
 | `POST /upload` | `src/routes/import.ts:98` | 收 ZIP 到临时目录并判定容器形态（上限 256 MiB，`src/routes/import.ts:24`，超限 413 `:102-104`） |
 | `POST /decrypt-archive` | `src/routes/import.ts:130` | DCA1 → 明文 ZIP（0600） |
 | `POST /execute` | `src/routes/import.ts:179` | 真正写盘（过 mutation gate）；plan 走 JSON 体 ⇒ 受 4 MiB 请求体上限约束（`src/routes/kit.ts:120`、超限 `:129` → 400） |
-| `GET /snapshots` | `src/routes/snapshots.ts:44` | 列出快照（含 unreadable） |
+| `GET /snapshots` | `src/routes/snapshots.ts:47` | 列出快照（含 unreadable） |
 | `POST /restore` | `src/routes/snapshots.ts:69` | 预览（dryRun）或执行恢复（**注意路径不带 `snapshots/` 前缀**） |
-| `POST /snapshots/delete` | `src/routes/snapshots.ts:182` | 删除快照（被恢复引用则拒绝） |
-| `POST /snapshots/pin` | `src/routes/snapshots.ts:226` | 置顶保护，避免被自动清理 |
+| `POST /snapshots/delete` | `src/routes/snapshots.ts:222` | 删除快照（被恢复引用则拒绝） |
+| `POST /snapshots/pin` | `src/routes/snapshots.ts:266` | 置顶保护，避免被自动清理 |
+| `POST /snapshots/file-diff` | `src/routes/snapshots.ts:293` | 单快照与当前盘面的逐文件差异（只读，durable 引用） |
 | `GET /backup-files` | `src/routes/backup.ts:259` | 列出导出目录里的备份 |
 | `POST /backup-files/delete` | `src/routes/backup.ts:268` | 删除指定备份（只接受纯文件名） |
 | `GET/PUT /backup-schedule` | `src/routes/backup.ts:209` | 定时备份配置 |
@@ -58,13 +59,13 @@
 
 | 命令 | 实现 | 备注 |
 |---|---|---|
-| `snapshots` | `src/cli/index.ts:1051` | 只读；目录读不出来时非 0 退出 |
-| `restore <id>` | `src/cli/index.ts:1089` | 预览在前（`:1099`），执行在后（`:1131`） |
+| `snapshots` | `src/cli/index.ts:1052` | 只读；目录读不出来时非 0 退出 |
+| `restore <id>` | `src/cli/index.ts:1067` | 预览在前（`:1099`），执行在后（`:1124`） |
 | `verify [id]` | `src/cli/index.ts:1267` | 自检，与救急台共用 `collectVerifyResults` |
 | `backup` | `src/cli/index.ts:1321` | 离线文件级备份，默认写入导出目录 |
-| `import` | `src/cli/index.ts:270` | 外部来源转 bundle，供导入向导消费 |
+| `import` | `src/cli/index.ts:966` | 外部来源转 bundle，供导入向导消费 |
 
-CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → DSH 未运行（`src/cli/actions.ts:438`）。`restore` 把三道门内联在锁之内（`src/cli/index.ts:1102`、`:1112`、`:1123`），因此「残留锁」先于「DSH 在跑」报出，且没有 `--force` 旁路。
+CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → DSH 未运行（`src/cli/actions.ts:438`）。`restore` 把三道门内联在锁之内（`src/cli/index.ts:1109` SAFE MODE → `:1124` 环境锁 → `:1127` DSH 在跑），因此「残留锁」先于「DSH 在跑」报出，且没有 `--force` 旁路。
 
 ---
 
@@ -88,7 +89,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 2. `dryRun`：`planRestore` + 指纹，直接回 JSON，不登记 run、不写盘（`src/routes/snapshots.ts:90`）。
 3. 执行：拿 GLOBAL 锁 → `planRestore`（`src/core/restore.ts:578`）→ 客户端指纹与服务端不符则 409 → `restore()`（`src/core/restore.ts:877`）。
 4. 逐动作 WAL：`createRestoreWal()`（`src/core/restore-wal.ts:105`）在**首个写之前**预登记全部动盘动作（`planned` + beforeFp），每个动作结束 settle 成 `done`/`attention`（+ afterFp）；`hostFileRemove`/`fileRemove` 的期望态用 `ABSENT_FINGERPRINT` 哨兵表达。GUI/HTTP 执行器 `executeRestorePlan`（`src/routes/route-support.ts:580`，WAL 在 `:597`）与 core `restore()`（WAL 在 `:909`）同一实现。崩溃后 reconcile 据此判 recovered / needs-attention。
-5. 覆盖/删除目标前先 `copyToPreRestore` 留副本（实现 `src/core/restore.ts:412`，恢复主流程首次调用 `:955`），随后逐动作 `atomicCopyFile`。
+5. 覆盖/删除目标前先 `copyToPreRestore` 留副本（实现 `src/core/restore.ts:419`，恢复主流程首次调用 `:955`），随后逐动作 `atomicCopyFile`。本轮的 attempt 目录由 `createPreRestoreAttemptDir` 新建（`:404`，`mkdir` 判 EEXIST 追加 `-1`/`-2`，不 pre-stat）。
 
 **续跑（自 2026-10-23）**：执行前先 `probeRestoreResume`（`src/core/restore-resume.ts`）扫 active journal 并重新规划；判定器 `judgeRestoreResume` 逐条证明「同操作类型 + 同快照 + 计划与 step 一一对应 + 每个目标盘面只能等于 beforeFp 或 afterFp + 无回滚痕迹/失败项/外部副作用」。成立 → `phase3.resumeJournaled` 接管 owner（不 create、不做 active≤1 门禁）→ 执行器跳过已完成动作且**不重新预登记**（保住崩溃证据）；不成立 → 照常 `runJournaled`，被 active≤1 挡回 423。三个入口只续自己的 operationType（GUI `restore` / CLI `cli-restore` / model `model-restore`）；CLI 的锁前探测只用于「能否放过 SAFE MODE 门」，成功后续跑收尾按同一 `resolveSafeModeMarker` 解除 SAFE MODE。
 
@@ -112,10 +113,10 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 |---|---|---|
 | 导出/备份 ZIP | 导出目录（`<dataDir>/exports`） | `src/index.ts:4455` |
 | 导出备注 | `<dataDir>/exports/.backup-notes.json` | `src/sync/backup-files.ts:74` |
-| 快照目录 | `<dataDir>/snapshots/<id>/` | `src/index.ts:3844` |
+| 快照目录 | `<dataDir>/snapshots/<id>/` | `src/index.ts:3833`（`const snapshotsDir = join(dataDir, 'snapshots')`） |
 | 快照元数据 | `snapshot.json`（readiness）、`manifest.json`（entry 清单 + 哈希） | `src/core/backup.ts:656` |
 | 快照 blob | `blobs/`（宿主整文件与文件类分区内容） | `src/core/backup.ts:119` |
-| pre-restore 副本 | 快照目录下 `pre-restore/<本地时间戳>[-n]/`（**每次恢复一个 attempt 子目录**，重跑不覆盖上一次） | `src/core/restore.ts:364` |
+| pre-restore 副本 | 快照目录下 `pre-restore/<本地时间戳>[-n]/`（**每次恢复一个 attempt 子目录**，重跑不覆盖上一次） | `src/core/restore.ts:404`（`createPreRestoreAttemptDir`） |
 | 导出明文临时包 | 临时目录 `export-plain-*`（失败也必删） | `src/index.ts:4137` |
 | 解密明文包 | 临时目录 `decrypted-*`（0600，成功后删） | `src/routes/import.ts:27` |
 | 加密容器 | DCA1（整包）；凭据槽 DSC1 在包内 `secrets.enc` | `src/security/encryption.ts:41` |
@@ -130,12 +131,12 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 - **导入：取消只在计划项边界**（`src/core/analyzer.ts:1021`），不会在一个分区写到一半时撕开文件；取消后按用户决策整体回滚或保留半成品并标记。
 - **导入：回滚是补偿引擎**。`rollbackApplied` 调 `rollback` 并把结果写回 journal（`src/core/analyzer.ts:1336`）；回滚失败时快照标 `rolled-back` 而不是 `done`。
 - **恢复：崩溃时能判进度、能续跑，但仍无整笔自动回滚**。续跑只做「逐项可证」的剩余动作（`src/core/restore-resume.ts`），任一目标被用户改过、含插件卸载、或是别的入口创建的 journal 都会拒绝续跑并退回 423 —— 不存在「无条件接着做」。
-- **恢复：没有整笔自动回滚**。`restore()` 逐动作 try/catch，单项失败只记 `failed` 并继续（`src/core/restore.ts:716`）；兜底是 `pre-restore` 副本 —— 每次恢复新建一个 attempt 子目录（`src/core/restore.ts:364`），重跑不会覆盖上一次的反悔副本，GUI/HTTP 恢复路径（`src/routes/route-support.ts` 的执行器）复用同一布局。删除快照只拦「被恢复流程引用」的那些（`src/routes/snapshots.ts:182`），**不保护 pre-restore 副本**。
-- **恢复：目标侧防写穿**。计划期对每个写回目标做 realpath / 中间段解析，落在 home 外即整单拒绝（`src/core/restore.ts:317`，错误码 `restore.pathEscape`），不会写到 home 外的真实文件。
+- **恢复：没有整笔自动回滚**。`restore()` 逐动作 try/catch，单项失败只记 `failed` 并继续（`src/core/restore.ts:716`）；兜底是 `pre-restore` 副本 —— 每次恢复新建一个 attempt 子目录（`src/core/restore.ts:404`），重跑不会覆盖上一次的反悔副本，GUI/HTTP 恢复路径（`src/routes/route-support.ts` 的执行器）复用同一布局。删除快照只拦「被恢复流程引用」的那些（`src/routes/snapshots.ts:182`），**不保护 pre-restore 副本**。
+- **恢复：目标侧防写穿**。计划期对每个写回目标做 realpath / 中间段解析，落在 home 外即整单拒绝（`assertPlanTargetsSafe`，`src/core/restore.ts:357`，抛出在 `:366`，错误码 `restore.pathEscape`），不会写到 home 外的真实文件。
 - **恢复：敏感文件不回滚**。回滚点采集默认排除 `.env`/私钥/证书等（`src/core/rollback-ignore-rules.ts` 的 `builtinSensitiveReason`），命中记 `skipped(reason='sensitive')` —— 这是**排除不是加密**。
 - **Dry Run 零写入**：恢复预览分支不登记 run、不落盘（`src/routes/snapshots.ts:90`）；导入的 `analyze/plan` 只读 ZIP 字节（`src/core/analyzer.ts:1` 模块注释）。测试锚点见 §6。
 - **冲突不默认覆盖**：计划项默认按 Skip/Merge 处理，覆盖必须由用户显式决策；快照与墓碑参与的判定在 `src/core/analyzer.ts:793` 与 `:799`。
-- **加密容器未解锁一律拒绝**：三处闸门返回 400 与 `encrypted-container` 码（`src/index.ts:4276`、`:4315`、`src/routes/import.ts:190`）；形态判定只有 `src/security/container-kind.ts` 一份。
+- **加密容器未解锁一律拒绝**：三处闸门返回 400 与 `encrypted-container` 码 —— `/analyze`（`src/index.ts:3652`）、`/plan`（`:3691`）、`/execute`（`src/routes/import.ts:190`）；形态判定只有 `src/security/container-kind.ts` 一份。
 - **快照清理不会删用户数据**：上限 10 个（`src/core/backup.ts:566`）；`pinned` 与被 journal 引用的快照豁免（`:758`、`:759`）；引用集合读不到就放弃本轮清理（`:732`）；定时备份的 prune 只动 `auto` 前缀文件。
 - **磁盘清理是分区白名单**：`snapshots`/`sync` 永不进候选，导出只在显式勾选「过期导出」时清理（`src/routes/backup.ts:95`、`:101`）。
 
@@ -148,7 +149,7 @@ CLI 破坏性命令的门禁与 GUI 同源：SAFE MODE → 残留环境锁 → D
 | 未解锁容器的路由闸门 | 三处闸门：`src/index.ts` 的 `/analyze`、`/plan` 与 `src/routes/import.ts` 的 `/execute` | 已补回归测试 `tests/route/encrypted-container-gate.test.ts`（含零写入断言） |
 | 预览指纹可选，缺省不校验 | `src/routes/route-support.ts` 的 `buildRestoreBody`、`src/routes/snapshots.ts` 的 409 分支 | 带指纹才校验；已补 `tests/route/restore-plan-changed.test.ts` |
 | 恢复中途进程崩溃 | `src/core/restore-crash-injection.test.ts`、`src/core/restore-resume.test.ts` | 已覆盖：A-1（1 done + 2 planned）、A-4（真实 hooks 判 recovered）；**能自动续跑**（T-07 真 SIGKILL 之后只重做剩下的 2 个动作）；判定不成立时仍退回 423 |
-| 条目名中段反斜杠不进 checksums | `src/utils/paths.ts:35`、`src/security/integrity.ts:63` | 已登记在 `docs/spec/known-gaps.md` |
+| 条目名中段反斜杠不进 checksums | `src/utils/paths.ts:35`、`src/security/integrity.ts:63` | 已登记在 `docs/maintenance/known-gaps.md` |
 | DCA1 不记录 KDF 参数 | `src/security/encryption.ts:194` | 换参数后旧容器不可解，无版本可判 |
 | 解密明文包存活到导入成功 | `src/routes/import.ts:162`、`:307` | 失败/取消刻意保留；见 `tests/route/decrypt-plaintext-cleanup.test.ts` |
 | 恢复目标侧 realpath 围栏 | `src/core/restore.ts` 的 `assertPlanTargetsSafe` | 已修（home 外整单拒绝）；硬链接 / UNC / 8.3 短名仍未覆盖，见 `docs/maintenance/known-limits.md` |

@@ -4,7 +4,7 @@
  * 为什么需要它：体检列表此前把内部机器码直接拼上屏（location-mismatch / duplicate-id /
  * missing-message-id / format-newer …），中英用户看到的都是英文枚举 —— 既违反
  * AGENTS.md「禁止硬编码用户可见字符串」，也让用户无法判断这一行到底出了什么问题
- * （已知缺口登记：docs/spec/known-gaps.md 的 G-24 剩余未做项 ③）。
+ * （已知缺口登记：docs/maintenance/known-gaps.md 的 G-24 剩余未做项 ③）。
  *
  * 口径与既有的 sessionLayoutReasonKey / 同步页的 cloudIssueKey 完全一致：
  * **未知码回落 sessions.issue.unknown，绝不裸渲染机器码**。

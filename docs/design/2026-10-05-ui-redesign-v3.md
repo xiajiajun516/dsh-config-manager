@@ -696,7 +696,7 @@ Task（覆盖 shellContent，不盖 nav/banner/statusBar）：
 - **M3 逐页迁移**：首页瘦身 → 产物库底栏 → 同步拆卡（SyncChannelCard + 加密入配置弹窗）→ 环境（档案不动、维护拆文件）。每页迁完立即跑门禁。
 - **M4 流程容器迁移**：market 只作 Task；export/import 外壳去页面 padding；Task/TaskShell 复核。
 - **M5 run-store 迁移**：PanelId 4 值 + 删 MainView/subTab/publish + `pendingZip` + parse 映射重写 + 旧载荷用例 + 守卫锚点更新。
-- **M6 收口**：删旧组件与旧样式（零活引用才删）、`DESIGN.md`/`AGENTS.md`/`known-pitfalls` 同步、v2 文档标注作废、`docs/design/2026-10-05-ui-redesign-v3.md` 定稿。
+- **M6 收口**：删旧组件与旧样式（零活引用才删）、`DESIGN.md`/`AGENTS.md`/`known-pitfalls.md` 同步、v2 文档标注作废、`docs/design/2026-10-05-ui-redesign-v3.md` 定稿。
 
 **每批门禁**：`npm run typecheck` / `typecheck:tests` / `npm test` / `npm run build` / `node --test src/client/bundle-selfcontained.test.ts`（build 后）/ 新增两个 CSS 守卫。
 

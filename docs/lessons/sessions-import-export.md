@@ -5,7 +5,8 @@
 
 ## 宿主整文件快照的「存在但读不出来」绝不写 `existed:false`
 
-- **宿主整文件快照的「存在但读不出来」绝不写 `existed:false`**（2026-10-08 UX 审查，数据安全）：`backupHostFiles` 读失败 / 存在性探测失败一律登记 `existed:true` + `unreadable:true`（无 blob），`planRestore` 据此**只跳过并说明、绝不产生 `hostFileRemove`** —— 写成 false 等于「当时不存在」，回滚会删掉用户真实的 settings.yaml。同轮：`prune` 的 recovery 引用集合**读不到即放弃本轮清理**（绝不按空集合继续删），新增 `FileSnapshotStoreOptions.onWarn`（宿主接 `host.log.warn`）让放弃/失败可见。护栏：`src/core/backup.test.ts`、`tests/core/restore.test.ts` 的 `R-host-unreadable`；证据见 `docs/known-pitfalls.md`（同序条目）。
+- **宿主整文件快照的「存在但读不出来」绝不写 `existed:false`**（2026-10-08 UX 审查，数据安全）：`backupHostFiles` 读失败 / 存在性探测失败一律登记 `existed:true` + `unreadable:true`（无 blob），`planRestore` 据此**只跳过并说明、绝不产生 `hostFileRemove`** —— 写成 false 等于「当时不存在」，回滚会删掉用户真实的 settings.yaml。同轮：`prune` 的 recovery 引用集合**读不到即放弃本轮清理**（绝不按空集合继续删），新增 `FileSnapshotStoreOptions.onWarn`（宿主接 `host.log.warn`）让放弃/失败可见。护栏：`src/core/backup.test.ts`、`tests/core/restore.test.ts` 的 `R-host-unreadable`；证据见 `docs/lessons/known-pitfalls.md`（同序条目）。
+- **宿主整文件与文件类分区仍是两条读失败口径（如实记录，未统一）**：宿主整文件走 `existed:true` + `unreadable:true` 后**只跳过并说明**；文件类分区则上抛成**分区级可见失败**（`export.sectionFailed` + 一条 warning，见下节）。把「宿主文件 unreadable」也接进导出报告的告警面属另一条线，改动要同时过 `planRestore` 与报告文案两处。
 
 ## 文件类分区收集一律走 `utils/recursive-walk.ts`
 
@@ -33,7 +34,7 @@
 
 ## 子代理会话（`origin='subagent'`）不是工作区里的对话，导出必须连带父对话
 
-- **子代理会话（`origin='subagent'`）不是工作区里的对话，导出必须连带父对话**：`SessionsAdapter.export()` 调 `coupleSessionParents` **只向上补父对话**；向下由界面联动（`src/ui/selection-model.ts` 的 `applySessionParentCoupling`，`ContentPicker.commit` 调用）—— **白名单即权威，引擎绝不向下展开**。子会话清单来自 `SessionStoreFacade.parentRelations()`（读 header `parentSession`+`origin`，不读日志字节）；**BFS 的「已排队」与「已展开」必须分成两个集合**；父对话 id 在磁盘 header 叫 `parentSession`、DSH 的 RPC 投影才叫 `parentSessionId`。复核见 known-pitfalls。
+- **子代理会话（`origin='subagent'`）不是工作区里的对话，导出必须连带父对话**：`SessionsAdapter.export()` 调 `coupleSessionParents` **只向上补父对话**；向下由界面联动（`src/ui/selection-model.ts` 的 `applySessionParentCoupling`，`ContentPicker.commit` 调用）—— **白名单即权威，引擎绝不向下展开**。子会话清单来自 `SessionStoreFacade.parentRelations()`（读 header `parentSession`+`origin`，不读日志字节）；**BFS 的「已排队」与「已展开」必须分成两个集合**；父对话 id 在磁盘 header 叫 `parentSession`、DSH 的 RPC 投影才叫 `parentSessionId`。复核见 known-pitfalls.md。
 
 ## 「历史对话」排序时间有两个来源
 
@@ -43,9 +44,10 @@
 
 - **journal step 的 `skipped` 只能表示「用户主动跳过」**：`warning` 与 `failed` 都必须记 `attention`，否则事后审计会把「安装失败」读成「用户跳过了」（issue #35）。
 
-## 会话日志格式版本跨版本是「单向兼容 + 静默跳过」
+## 导出/导入侧的格式版本体检：不体检就会「导入全部成功、对话一个不显示」
 
-- **会话日志格式版本跨版本是「单向兼容 + 静默跳过」**（known-gaps **G-23**）：DSH 对非本 build 版本直接拒绝，而 `listArtifacts()` 对该错误 `continue` → 用户只看到「对话消失」。高版本可读低版本，**反向不可读**。接线：`src/utils/session-format.ts` 宿主探针（只解**首帧**、每会话一条、上限 200，常量从 `installAnchor` 同树的 `@deepseek-ai/dsh-session` 读，**绝不拿 semver 猜**）→ `HostContext.sessionFormatVersion` + `AnalyzerOptions.sessionFormatProbe` → `import.sessionsFormatUnsupported` / `import.sessionsFormatSampled`；档案页用 `profileVersionFacts` / `sessionFormatRisk`。**任一侧读不到版本一律不提示**（不猜）。core 仍禁止 import 会话存储格式。
+- **量级先记住**：本机 401 个会话日志分布 `{v0:200, v3:201}`（桌面端内置 0.2.0-rc.2 = **v4**，磁盘 CLI 档案 0.1.5-rc.1 = **v3**）—— 多版本共存是常态，而本插件的导出/导入/同步是**逐字节搬运** `.jsonl.zstd`；DSH 对非本 build 版本直接拒绝（`refuseForeignFormatVersion` → `SessionFormatUnsupportedError`）、列表 `listArtifacts()` 对该错误 `continue` ⇒ 不体检的后果不是报错，是「对话消失」。**跨版本可读性与「按目标机版本写」的口径归 `sessions-repair-diagnostics.md`；本节只留体检落点。**
+- **落点**：`src/utils/session-format.ts` 宿主探针（只解**首帧**、每会话一条、上限 200，常量从 `installAnchor` 同树的 `@deepseek-ai/dsh-session` 读，**绝不拿 semver 猜**）→ `HostContext.sessionFormatVersion` + `AnalyzerOptions.sessionFormatProbe` → `Analyzer.sessionFormatWarnings` 产出 `import.sessionsFormatUnsupported` / `import.sessionsFormatSampled`；档案页用 `profileVersionFacts` / `sessionFormatRisk`。**任一侧读不到版本一律不提示**（不猜、不给假结论）；core 仍禁止 import 会话存储格式（只消费数字）。登记 known-gaps **G-23**。
 
 ## `skippedLinks` 的 `too-deep` 不再必然等于「链接」
 
@@ -57,15 +59,15 @@
 
 ## 只读预览与导出必须同口径
 
-- **只读预览与导出必须同口径**（2026-09）：`/export-preview` 走 `ConfigAdapter.preview?()`（文件类分区由 `FileCollectionAdapter` 实现），它只把「读文件内容 + SHA-256」换成 `ctx.fs.statSize`，**单元分组 / 条目白名单 / 单分区字节闸门 / 告警生成逐字共用**同一个内核（`file-collection.ts` 的 `collect(ctx, options, mode)`）。为什么必须共用：预览是用户勾选的唯一依据，一旦与真实导出分叉，用户会按预览勾选却拿到别的包（`file-collection.test.ts` 断言两者逐项相等）。**`preview()` 产出的 `FilesSection` 是无内容形态**（`data` 长度 0 / `contentHash` 空串），只在内存里流转，**不得**交给 exporter/importer/快照；**收集面靠覆写 `export()` 收窄的分区必须改成覆写 `listRelPaths()`**（覆写 `export()` 不参与预览，否则预览落到基类目录递归；量化数据见 known-pitfalls）。
+- **只读预览与导出必须同口径**（2026-09）：`/export-preview` 走 `ConfigAdapter.preview?()`（文件类分区由 `FileCollectionAdapter` 实现），它只把「读文件内容 + SHA-256」换成 `ctx.fs.statSize`，**单元分组 / 条目白名单 / 单分区字节闸门 / 告警生成逐字共用**同一个内核（`file-collection.ts` 的 `collect(ctx, options, mode)`）。为什么必须共用：预览是用户勾选的唯一依据，一旦与真实导出分叉，用户会按预览勾选却拿到别的包（`file-collection.test.ts` 断言两者逐项相等）。**`preview()` 产出的 `FilesSection` 是无内容形态**（`data` 长度 0 / `contentHash` 空串），只在内存里流转，**不得**交给 exporter/importer/快照；**收集面靠覆写 `export()` 收窄的分区必须改成覆写 `listRelPaths()`**（覆写 `export()` 不参与预览，否则预览落到基类目录递归；量化数据见 known-pitfalls.md）。
 
 ## 已验证归档跨请求缓存
 
-- **已验证归档跨请求缓存**（`src/core/analyzer.ts` 的 `verifiedBundles`，2026-09）：宿主 `makeImporter()` **每请求新建** Importer/Analyzer，实例级 `bundleCache` 跨请求恒不命中，于是 analyze→plan→execute（每改一次决策还会再 plan）会把同一个 ZIP 读入 + 全量解压 + 逐条 SHA-256 校验 3~4 次。三条硬边界：① 缓存键 = **路径 + 文件大小 + mtimeMs**（stat 失败即不缓存）；② **只有只读入口**（`analyzeImport` / `createImportPlan`）读它，`executeImportPlan` 一律 `refresh` —— 每次都重新读盘 + 重新校验，关掉「校验后、写盘前被换掉」的 TOCTOU 窗口（`src/core/analyzer-cache.test.ts` 用「plan 后篡改归档 → execute 必须被完整性校验拦下」钉住）；③ 只缓存 ≤ 64 MiB 的归档，条目上限 2 + TTL 120 s。配套：逐条完整性校验改走 `ZipArchive.readEntryAsync`（`inflateRaw` 走 libuv 线程池），不再用 `inflateRawSync` 阻塞事件循环（实测见 known-pitfalls）。
+- **已验证归档跨请求缓存**（`src/core/analyzer.ts` 的 `verifiedBundles`，2026-09）：宿主 `makeImporter()` **每请求新建** Importer/Analyzer，实例级 `bundleCache` 跨请求恒不命中，于是 analyze→plan→execute（每改一次决策还会再 plan）会把同一个 ZIP 读入 + 全量解压 + 逐条 SHA-256 校验 3~4 次。三条硬边界：① 缓存键 = **路径 + 文件大小 + mtimeMs**（stat 失败即不缓存）；② **只有只读入口**（`analyzeImport` / `createImportPlan`）读它，`executeImportPlan` 一律 `refresh` —— 每次都重新读盘 + 重新校验，关掉「校验后、写盘前被换掉」的 TOCTOU 窗口（`src/core/analyzer-cache.test.ts` 用「plan 后篡改归档 → execute 必须被完整性校验拦下」钉住）；③ 只缓存 ≤ 64 MiB 的归档，条目上限 2 + TTL 120 s。配套：逐条完整性校验改走 `ZipArchive.readEntryAsync`（`inflateRaw` 走 libuv 线程池），不再用 `inflateRawSync` 阻塞事件循环（实测见 known-pitfalls.md）。
 
 ## `readSessionMeta` 有 mtime 失效的进程内缓存
 
-- **`readSessionMeta` 有 mtime 失效的进程内缓存**（量化数据见 known-pitfalls）：键 = homeDir + 两个 storage 文件的 mtime，**任一读不到 mtime 就不缓存**（宁可多读，不可拿陈旧索引猜会话归属）；测试用 `clearSessionMetaCache()` 隔离。
+- **`readSessionMeta` 有 mtime 失效的进程内缓存**（量化数据见 known-pitfalls.md）：键 = homeDir + 两个 storage 文件的 mtime，**任一读不到 mtime 就不缓存**（宁可多读，不可拿陈旧索引猜会话归属）；测试用 `clearSessionMetaCache()` 隔离。
 
 ## 插件内置技能（source='bundled'）不能备份，导入侧也要拦
 

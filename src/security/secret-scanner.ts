@@ -81,7 +81,7 @@ const BEARER_TOKEN_CHARS = '[A-Za-z0-9._~+/=-]';
  * 于是 `bearer credentials are required` / `bearer authentication failed` / `BEARER HEADER NOT SET`
  * 这类纯小写或纯大写的英文词**不命中**；而 `bearer abc12345`、`BEARER AbCdEfGh`、`bearer <24+ 字符>` 命中。
  *
- * 已知残余（登记在 `docs/spec/known-gaps.md` G-36）：scheme 用非规范大小写**且** token 是 8–23 个**纯字母、
+ * 已知残余（登记在 `docs/maintenance/known-gaps.md` G-36）：scheme 用非规范大小写**且** token 是 8–23 个**纯字母、
  * 单一大小写**时本条不命中；规范 `Bearer …` 形态不受此限（上面那条 `bearer-token` 只要求 8+ 字符，行为不变）。
  */
 const BEARER_TOKEN_ANY_CASE = new RegExp(

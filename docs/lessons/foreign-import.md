@@ -4,11 +4,13 @@
 
 ## 1. 三处「文档说支持、代码没有」（2026-10-18 审计，基线 865c4ef）
 
-| 声称 | 代码实际 | 位置 |
-|---|---|---|
-| 位置可被 `CLAUDE_CONFIG_DIR` 整体替换，命中报 `source-location-overridden` | 全仓不读 env，只用 `path.join(home, '.claude')` | `read-claude-code.ts`（改前 :213,:216）；doc:219/387 |
-| `isSidechain` 子代理会话按 `unsupported-session-record` 计报 | `isSidechain` 在 `src/foreign/*.ts` **零命中**；子代理记录是 `type=user/assistant + isSidechain:true` ⇒ 正文被静默混进父对话 | doc:89-90 |
-| `~/.claude/{plugins,cache,...}` 归入「不做也不报」 | 实际是**一行代码都没有**（不是「刻意不做之后报了码」） | doc:56 |
+三处都是**设计稿先写了「已支持」、实现侧一行都没有**（声称出处按设计稿章节定位，不引行号 —— 行号会漂，章节名不会）：
+
+| 声称（设计稿 `2026-10-04-foreign-import-v1.md`） | 当时代码实际 |
+|---|---|
+| §8.2 真值表把 `CLAUDE_CONFIG_DIR` 记成 `mode:'replace'`「整体替换配置目录、命中报 `source-location-overridden`」 | 全仓不读 env，只有 `path.join(home, '.claude')` ⇒ 用户设了环境变量也不生效、更不报码 |
+| §3.1 / §6.6 把 `isSidechain` 子代理会话记成「按 `unsupported-session-record` 计报」 | `isSidechain` 在 `src/foreign/*.ts` **零命中**；子代理记录是 `type=user/assistant + isSidechain:true` ⇒ 正文被静默混进父对话 |
+| §3 映射表把 `~/.claude/{plugins,cache,…}` 归入「不做也不报」 | 实际是**一行代码都没有**（不是「刻意不做之后报了码」） |
 
 教训：**文档里的「已支持」必须能在代码里指到具体分支**；否则它会在审计时以「与实现冲突」的形式暴露，而不是以「未实现」暴露。
 
@@ -70,9 +72,11 @@
 
 ## 7. 本机 Claude Code 实测形态（2026-10-18，只记录结构与键名）
 
-- `~/.claude`：`skills/`（7 个）、`hooks/<名>/*.cjs|ps1`、`plugins/known_marketplaces.json`、`plugins/marketplaces/<市场>/{.claude-plugin/{marketplace.json,plugin.json},plugins/,external_plugins/}`；`agents/`、`commands/`、`rules/` **不存在**。
-- `~/.claude.json`：顶层 `mcpServers`、`lastVersionBase`、`projects`（键 = 项目绝对路径，2 个；每项含 `mcpServers`/`allowedTools`/`enabledMcpjsonServers`…）。
-- `~/.claude/settings.json` 顶层键：`env`、`includeCoAuthoredBy`、`theme`、`hooks`（`PreToolUse`/`PostToolUse`）；`enabledPlugins` **缺失** ⇒ 0 个启用插件（所以插件分支本机只能靠夹具取证）。
+> **一次性快照**：取自当时本机的一份安装，条目数（技能个数、项目个数、marketplace 插件数）随用户环境变化，**不要当判据引用**；可用的是**目录布局、顶层键名、字段名**这些形状。
+
+- `~/.claude`：`skills/`、`hooks/<名>/*.cjs|ps1`、`plugins/known_marketplaces.json`、`plugins/marketplaces/<市场>/{.claude-plugin/{marketplace.json,plugin.json},plugins/,external_plugins/}`；`agents/`、`commands/`、`rules/` **不存在**（当时的版本形态，新版可能补齐）。
+- `~/.claude.json`：顶层 `mcpServers`、`lastVersionBase`、`projects`（键 = 项目绝对路径；每项含 `mcpServers`/`allowedTools`/`enabledMcpjsonServers`…）。
+- `~/.claude/settings.json` 顶层键：`env`、`includeCoAuthoredBy`、`theme`、`hooks`（`PreToolUse`/`PostToolUse`）；`enabledPlugins` **缺失** ⇒ 当时 0 个启用插件（**所以插件分支只能靠夹具取证**，这条结论与环境无关）。
 - 项目级 `<root>/.claude/settings.local.json` 顶层键：`permissions`。
-- 官方 marketplace 的 `marketplace.json` 顶层：`{$schema,name,description,owner,plugins[]}`，plugin 项字段 `name/description/author/category/source{source,url,path,ref,sha}/homepage`（本机 255 项）。
+- 官方 marketplace 的 `marketplace.json` 顶层：`{$schema,name,description,owner,plugins[]}`，plugin 项字段 `name/description/author/category/source{source,url,path,ref,sha}/homepage`。
 - 插件目录：`.claude-plugin/plugin.json`（`name/description/author`）+ `commands/`/`skills/`/`agents/`/`hooks/`/`.mcp.json`；`.mcp.json` 形如 `{ "<server>": { type, url, headers } }` —— **headers 里可能是真凭据**（实测 github 插件就是 `Authorization`）。

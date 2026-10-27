@@ -69,12 +69,9 @@ ZIP 解析器面对加密容器只会给底层错误。所有接受归档的入�
 恢复前的目标侧防护用 `realpath` + 中间段解析挡 symlink/junction 写穿（`src/core/restore.ts` 的 `assertPlanTargetsSafe`）。
 ⇒ **同卷硬链接到 home 之外的路径拦不住**（硬链接没有可解析的跳转层）；UNC 路径、8.3 短名、大小写不敏感的卷也**未实测**，不能声称已覆盖。
 
-## 13. 恢复崩溃后能续跑，但只在「能逐项证明」的前提下
-恢复会逐动作写 journal step（预登记 + 完成后更新指纹，`src/core/restore-wal.ts`），所以崩溃后 reconcile 能判出
-「全部完成（recovered）/ 部分完成（needs-attention）/ 一个都没动」。再点一次恢复会先跑 `judgeRestoreResume`（`src/core/restore-resume.ts`）：
-同操作类型 + 同快照 + 计划与 step 一一对应 + 每个目标盘面只能等于 beforeFp 或 afterFp + 无回滚痕迹/失败项/外部副作用，成立才**接着做**。
-⇒ 只要有一条不成立（典型：目标文件被用户改过、含插件卸载、是别的入口创建的 journal），仍然退回 423 `transaction-recovery-required`，
-必须人工 reconcile —— 不存在「无条件接着做」。三个入口只续跑**自己**的 operationType（GUI `restore` / CLI `cli-restore` / model `model-restore`）。
+## 13. 恢复崩溃后不能「无条件接着做」
+续跑只在能逐项证明时成立：目标文件被用户改过、含插件卸载、或 journal 由别的入口创建，一律退回 423 `transaction-recovery-required` 等人工 reconcile（判定器 `judgeRestoreResume`，`src/core/restore-resume.ts:106`）。
+⇒ 这里只记这条限制；判定条件、三个入口的 operationType 分工与续跑机制见 `docs/modules/backup-restore.md` §3.3 与 `docs/decisions/0006-restore-auto-resume.md`，不在此重复。
 
 ## 14. 插件卸载是不可自证的外部副作用
 `pluginRemove` 记 `external=true` 且不带指纹（`dsh plugin remove` 可能只改 package.json、未 prune node_modules）。

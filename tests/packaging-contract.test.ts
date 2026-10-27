@@ -311,6 +311,6 @@ V-1（版本四处一致，2026-09 新增）：把 `src/index.ts` 的 `PLUGIN_VE
 `'0.0.0-test'` → 「V-1: src/index.ts 的 PLUGIN_VERSION 必须与 package.json.version 一致」
 **红灯**（AssertionError: actual `0.0.0-test` / expected `0.1.67`，其余 10 条仍绿）；
 改回 `'0.1.67'` 后 11/11 全绿，并用 `node` 读回确认磁盘上恢复原值。
-（P-1 / P-2 / P-3 的变异验证记录见 `docs/spec/known-gaps.md` §1 L1 与 issue #53。）
+（P-1 / P-2 / P-3 的变异验证记录见 `docs/maintenance/known-gaps.md` §1 L1 与 issue #53。）
 */
 

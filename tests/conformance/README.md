@@ -256,7 +256,7 @@ import { rebuildBundle } from './tests/conformance/corpus.ts';
 
 **待办（不在本目录职责内）**：
 
-- `docs/spec/bundle-format-v1.md` §10 与 `docs/spec/known-gaps.md` 的缺口表需要同步为「已修复」
+- `docs/spec/bundle-format-v1.md` §10 与 `docs/maintenance/known-gaps.md` 的缺口表需要同步为「已修复」
   （`docs/spec/**` 由契约维护者负责）；具体到 H2：§7.4 与 §10 的 G-04 行仍写着
   「**但 checksums 表缺失时整段跳过 → 零告警**」，该描述在本次修复后**已过时**，
   应改为「表缺失或为空 → `import.checksumsMissing` warning」；
@@ -304,7 +304,7 @@ import { rebuildBundle } from './tests/conformance/corpus.ts';
   `needsMigration` 守卫的**受控块内**（顺序 + 花括号范围）。任何新增源码守卫都要用这条突变
   （`if (false)`）自检：**改坏了必须红灯**，否则它只是装饰。
 - **「缺口登记」与「缺口修复」是两件事，不要混淆**：
-  - **登记**（记录「现状是什么」）只写 `docs/spec/known-gaps.md` 与
+  - **登记**（记录「现状是什么」）只写 `docs/maintenance/known-gaps.md` 与
     `docs/spec/bundle-format-v1.md` §10，**不写 CHANGELOG**——既有行为不是本次发布的亮点，
     且 CHANGELOG 的当前版本段会被 CI 抽成 GitHub Release 描述，塞入既有缺口会污染 Release notes；
   - **修复**（改变行为）才写 CHANGELOG，因为那是对外可见的变更。

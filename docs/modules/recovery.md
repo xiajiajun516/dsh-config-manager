@@ -7,7 +7,7 @@
 
 | 层 | 落点 | 只负责 |
 |---|---|---|
-| 回滚点引擎 | `src/core/rollback-point.ts:1916` `RollbackPointEngine` | 采集（工作区 + 会话两态）、预览、删除集规划、回退执行、跨会话/fork 链接 |
+| 回滚点引擎 | `src/core/rollback-point.ts:1924` `RollbackPointEngine` | 采集（工作区 + 会话两态）、预览、删除集规划、回退执行、跨会话/fork 链接 |
 | 台账存储 | `src/core/rollback-ledger.ts` | 一条一写、内容寻址载荷、schema 迁移、字节预算与淘汰落盘 |
 | 进程内开关 | `src/core/rollback-gate.ts:19` | `enabled` 标志（缺省 false）+ 变更通知；不含任何采集逻辑 |
 | 宿主接线 | `src/index.ts:4208` | 注入 fork seam、订阅 `session/event`（`:4221` 起）、注册 `/rollback` 命令（`:4293`）、卸载清理（`:4274-4279`） |
@@ -25,21 +25,29 @@
 
 ## 2. 入口
 
-### 2.1 HTTP：一个 prefix 路由，九个子路径
+### 2.1 HTTP：一个 prefix 路由 + 分段分派
 
-全部挂在 `endpoint({ kind: 'prefix', path: '/api/dsh-config-manager/recovery', methods: ['GET','POST'] })`（`src/routes/recovery.ts:329`）下，无第二条注册：
+全部挂在 `endpoint({ kind: 'prefix', path: '/api/dsh-config-manager/recovery', methods: ['GET','POST'] })`（`src/routes/recovery.ts:329`）下，无第二条注册。分派按 `segments[0]` 走六个顶层段（`status` / `sessions` / `rollback-points` / `fork-reconcile` / `lock` / `safe-mode`），末尾另有一类 `<operationId>/<action>` 形式（action ∈ `preview`/`confirm`/`execute`/`verify`/`retry`/`dismiss`，`:938` 起）：
 
-| 子路径 | 方法 | 行为 | 门 |
+| 完整子路径（前缀 `/api/dsh-config-manager/recovery` 省略） | 方法 | 行为 | 门 |
 |---|---|---|---|
-| 空 | GET | 列点 + storage 状态（带 `rollbackEnabled`/`rollbackActive`）`src/routes/recovery.ts:548` | 只读 |
-| `storage` | GET | 存储栈可用性 `src/routes/recovery.ts:581` | 只读 |
-| `prefs` | GET/POST | 读/写自动留点开关 `src/routes/recovery.ts:600` | mutation gate `rollback-prefs` |
-| `cleanup` | POST | 清理过期点 `src/routes/recovery.ts:640` | `userConfirmed === true` + gate |
-| `<id>` | GET | 单点详情 `src/routes/recovery.ts:682` | 只读 |
-| `<id>/preview` | GET | 回退预演 `src/routes/recovery.ts:701` | 只读 |
-| `<id>/file-diff` | GET | 单文件差异 `src/routes/recovery.ts:709` | 只读 |
-| `<id>/rewind` | POST | 真回退 `src/routes/recovery.ts:719` | 预检 + mutation lock |
-| `<id>/delete` | POST | 删点 `src/routes/recovery.ts:809` | mutation lock |
+| `status` | GET | 全局状态（含 `safeMode.blocked`/`safeMode.clearable`）`src/routes/recovery.ts:334` | 只读 |
+| `sessions` | GET | 会话级诊断列表 `src/routes/recovery.ts:353` | 只读 |
+| `sessions/repair`、`sessions/rollback` | POST | 会话日志修复 / 回退 `src/routes/recovery.ts:361` | mutation lock（`:367`） |
+| `sessions/layout` | POST | 会话目录归位 `src/routes/recovery.ts:428` | mutation lock（`:442`） |
+| `sessions/<unitId>` | GET | 单会话详情 `src/routes/recovery.ts:478` | 只读 |
+| `rollback-points` | GET | 列点 + storage 状态（带 `rollbackEnabled`/`rollbackActive`）`src/routes/recovery.ts:532` | 只读（`:549`） |
+| `rollback-points/storage` | GET | 存储栈可用性 `src/routes/recovery.ts:581` | 只读 |
+| `rollback-points/prefs` | GET/POST | 读/写自动留点开关 `src/routes/recovery.ts:600` | mutation lock（`:614`，op `rollback-prefs`） |
+| `rollback-points/cleanup` | POST | 清理过期点 `src/routes/recovery.ts:640` | `userConfirmed === true` + mutation lock（`:651`） |
+| `rollback-points/<id>` | GET | 单点详情 `src/routes/recovery.ts:682` | 只读 |
+| `rollback-points/<id>/preview` | GET | 回退预演 `src/routes/recovery.ts:701` | 只读 |
+| `rollback-points/<id>/file-diff` | GET | 单文件差异 `src/routes/recovery.ts:709` | 只读 |
+| `rollback-points/<id>/rewind` | POST | 真回退 `src/routes/recovery.ts:719` | 预检 + mutation lock（`:767`） |
+| `rollback-points/<id>/delete` | POST | 删点 `src/routes/recovery.ts:809` | mutation lock（`:816`） |
+| `fork-reconcile` | POST | 会话 fork 父子关系对账 `src/routes/recovery.ts:855` | mutation lock（`:859`）；读不到父子关系 → 503（不是「没有子会话」） |
+| `lock/recover` | POST | 回收残留环境锁 `src/routes/recovery.ts:890` | **刻意不取锁**（`:894` 注释：要回收的正是挡住 acquire 的那把锁） |
+| `safe-mode/clear` | POST | 解除 SAFE MODE `src/routes/recovery.ts:919` | **不过 gate**、走 mutation lock；有未解决 incident 必拒（`:914-918`） |
 
 `rewind` 是唯一会写工作区的入口，它做**两次**判定：R1 在拿锁之前（`src/routes/recovery.ts:760`），R2 在锁内再用 fresh preview 判一遍（`src/routes/recovery.ts:778`）。R2 针对的是「等锁期间对话又跑起来了」这个窗口。
 
@@ -100,7 +108,7 @@
 
 `checkWriteGates`（`src/cli/actions.ts:438`）是这一层的共享实现，顺序固定：① SAFE MODE（`readSafeMode` 三态，blocked 与 unknown 都拒，`src/cli/actions.ts:442`）② 环境锁存在即拒（`:466`，不自动回收陈旧锁）③ `needsDshStopped` 时 DSH 在跑即拒（`:480`，desktop 档案只给「关窗口」通道）。调用点：`sessions repair --fix`（`src/cli/index.ts:995`）、CLI 其他写路径（`src/cli/actions.ts:678`/`:743`/`:1292`）、救急台（`src/cli/web/routes.ts:213`/`:258`）。
 
-**已知不齐**的一处：CLI `restore` 不是调 `checkWriteGates`，而是它的等价组合——先 `checkSafeModeBlocked`、再拿锁、锁内查 `readRunningInstances`（`src/cli/index.ts:1102`–`:1125`，注释自称同源同序）。判据相同但**代码路径不同**，改门时两处都要动。
+**已知不齐**的一处：CLI `restore` 不是调 `checkWriteGates`，而是它的等价组合——先 `checkSafeModeBlocked`、再拿锁、锁内查 `readRunningInstances`（`src/cli/index.ts:1109` `checkSafeModeBlocked` → `:1124` `runWithMutationLock` → `:1127` `readRunningInstances`，注释自称同源同序）。判据相同但**代码路径不同**，改门时两处都要动。
 
 SAFE MODE 的解除判据只有一份：`resolveSafeMode`（`src/core/recovery-orchestrator.ts:225-226`，内部委托 `resolveSafeModeMarker` `:130`），verify/dismiss 与显式解除都调它（`:265` 读 `clearable`、`:453` 自动解除），`ROLLED_BACK` 后自动解除（`:402`）。宿主把结果注入成 `host.safeModeIsBlocked`（`src/index.ts:3924`），所有写路由用 `isBlocked: () => host.safeModeIsBlocked?.() ?? false` 接（`src/routes/recovery.ts:369`/`:444`/`:616`/`:653`/`:769`/`:818`/`:861`）。
 
@@ -175,7 +183,7 @@ HTTP 码映射集中在一处 `rollbackHttpStatus`（`src/routes/recovery.ts:59`
 
 ## 8. 维护提示
 
-- 改上限：引擎四个常量（`src/core/rollback-point.ts:185`/`:187`/`:197`/`:207`）与客户端四个（`src/ui/rollback-view.ts:247`–`:257`）必须同改，否则面板显示与引擎行为分叉。
+- 改上限：引擎四个常量（`src/core/rollback-point.ts:191`/`:193`/`:203`/`:213`，与 §4 表同一组）与客户端四个（`src/ui/rollback-view.ts:247`–`:257`）必须同改，否则面板显示与引擎行为分叉。
 - 改台账目录名或 undo 目录命名：同步 `UNDO_DIR_RE`（`src/core/rollback-ledger.ts:100`，注释在 `:65`），卡片清理按名字以 pid 开头判定。
 - 改 fork 返回形状：三处一起动——`src/routes/recovery.ts:220`（窄化读取）、`src/index.ts:4814`（形状加固）、`src/index.ts:1154`（三档归位）。
 - 改回退的门：HTTP 与命令两条入口都要改（`src/routes/recovery.ts:758`/`:778` 与 `src/index.ts:4936`–`:4961`），少一处就是「HTTP 拒绝、命令放行」。

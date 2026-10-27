@@ -1,6 +1,6 @@
 # 外部参考（只读）
 
-这里保存第三方 DESIGN.md 分析的**逐字副本**，作为 `docs/design/2026-10-04-cli-rescue-console-carbon.md` 的出处依据。
+这里保存第三方 DESIGN.md 分析的**逐字副本**，作为 `docs/components/cli-rescue-console.md` 的出处依据。
 它们**不是**本仓库的规范：本仓库的 UI 规范是根目录 `DESIGN.md`。
 
 | 文件 | 来源 | 用途 |

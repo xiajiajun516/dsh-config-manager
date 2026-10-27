@@ -1,5 +1,7 @@
 # AI 搜索曝光审计：xiajiajun516/dsh-config-manager
 
+> 状态：历史记录，不再维护（2026-10-28 复核）。最新状态与结论以 `docs/seo/2026-09-27-search-recall-retest.md` 为准。
+
 > 日期：2026-08-21 · 范围：GitHub 元数据 / npm metadata / README 首屏与结构 / 生态收录现状
 > 目的：提升 DSH 生态与自然语言检索（GitHub Search、Google/Bing、DSH 聚合站、AI Web Search）对「备份 / 恢复 / 迁移 / 同步 DSH 配置」意图的召回与排名。
 

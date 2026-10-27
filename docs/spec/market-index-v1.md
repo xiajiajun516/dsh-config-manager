@@ -1,6 +1,8 @@
 # dsh-config-market 官方配置市场仓库 · 搭建规格书
 
-> 日期：2026-08-19 · 用途：**整份复制发给搭建 AI 的规格文档** · 上游依据：dsh-config-manager 插件 `src/market/`（types.ts / index-parser.ts / security.ts / reader.ts / builtin.ts 为唯一事实来源，本规格与代码逐项一致）
+> **本文件是给第三方市场仓库作者的对外契约**：照本规格搭出的仓库必须能被 dsh-config-manager 直接消费，无需读插件源码。
+> 上游唯一事实来源 = 插件 `src/market/`（`types.ts` / `index-parser.ts` / `security.ts` / `reader.ts` / `builtin.ts`），与本文件冲突时以代码为准。
+> 设计过程与背景推演不在这里（原 `docs/design/2026-08-19-market-repo-setup-guide.md` 已随迁移并入本文件）。
 
 ---
 
@@ -19,7 +21,7 @@
 **安全不变量（仓库必须配合，插件侧强制执行）**：
 - 市场通道**永不携带秘密**：任何声明 `containsSecrets=true` 的配置包会被拒绝；
 - 供应链警示恒展示：从市场下载的条目一律视为「未经官方审核的不可信输入」；
-- 条目必须通过 8 道校验（见 §5），任一失败即拒绝导入。
+- 条目必须通过 8 道校验（见 §7），任一失败即拒绝导入。
 
 ---
 
@@ -155,9 +157,9 @@ credentialsStatus, secrets, sessions, self, pluginData, pluginAssets
 | pluginFiles | `plugin-files/`（目录）——**禁止进入市场条目**（任意文件直通，无内容过滤，最易泄漏 token/密钥文件，见下） |
 | sessions | `sessions/`（目录）——**禁止进入市场条目**（历史会话含个人交互记录，见下） |
 | self | `self/`（目录）——**禁止进入市场条目**（本地环境专属：sync 通道 URL / WebDAV 地址 / 市场配置 / UI 偏好，见下） |
-| secrets | **禁止进入市场条目**（见安全不变量） |
+| secrets | **禁止进入市场条目**（由内部 manifest 的 `security.containsSecrets` 拒绝，不在 `BANNED_MARKET_SECTIONS` 里，见 §7） |
 
-**禁止分区**：`secrets`（凭据）、`sessions`（历史会话，含个人交互记录与上下文）、`pluginFiles`（任意文件直通，无结构过滤，目录放啥带啥）、`self`（本地环境专属：sync 通道地址/WebDAV 主机等环境信息）为市场条目硬性禁止分区——发布向导（prepare）与下载校验（validateMarketItem）两端均强制，含任一禁止分区的条目直接 invalid / 拒绝发布。作者发布前需在导出时排除这些分区。
+**禁止分区是两份清单，别混**：`BANNED_MARKET_SECTIONS`（`src/market/types.ts:40`）只有三个——`sessions`（历史会话，含个人交互记录与上下文）、`pluginFiles`（任意文件直通，无结构过滤，目录放啥带啥）、`self`（本地环境专属：sync 通道地址/WebDAV 主机等环境信息）；含任一条目直接 invalid / 拒绝发布，发布向导（prepare）与下载校验（validateMarketItem）两端强制。`secrets`（凭据）**不在**这张表里：它由内部 manifest 的 `security.containsSecrets` 单独拒绝（`src/market/security.ts:99`），且 `sections.secrets` 恒为 `false`、不具备安全语义。作者发布前需在导出时排除这四个分区。
 
 **内容级秘密扫描（纵深防御）**：发布向导除校验 `containsSecrets` 标记外，还会对 config.zip 内各分区**实际内容**做敏感扫描（复用 secret-scanner：字段名 + 值形状识别 api-key/token/password/SK- 形态；环境变量引用名豁免不误报）。扫描采用**宽松档**：占位符（`your-token`、`<token>`）、模板引用（`${VAR}` / `{{VAR}}` / `%VAR%` / `$VAR`）、代码表达式（`process.env.X`）与示例形态（`sk-your-*`、`Bearer example-*`、JWT 教学串）一律放行；只有值像**真实字面量凭据**（sk- 真实串 / ghp_ / AKIA / PEM / 完整 JWT，或字段名敏感且值为含数字/符号的混合长串）才拦截——即使导出标记被绕过，内容中残留的凭据也会被拦下。作者发布前应确认 providers/mcp/settings 等分区内容已脱敏（apiKey 请改为 env 引用名或 `${VAR}` 模板引用）。
 
@@ -186,7 +188,7 @@ credentialsStatus, secrets, sessions, self, pluginData, pluginAssets
 
 ---
 
-## 7. 插件侧 8 道校验（仓库条目必须全部满足）
+## 7. 插件侧 8 道校验（`validateMarketItem` 的 8 个编号步骤，仓库条目必须全部满足）
 
 1. **id 一致**：manifest.json.id === 请求目录名；
 2. **体积上限**：config.zip ≤ 64 MB；
@@ -194,10 +196,13 @@ credentialsStatus, secrets, sessions, self, pluginData, pluginAssets
 4. **zip 加固**：无 Zip Slip（`../`/绝对路径）、无 zip bomb、无恶意条目（解包安全）；
 5. **内部 manifest 可解析**且 `containsSecrets=true` → **拒绝**（市场永不携带秘密）；
 6. **内部完整性**：`integrity/checksums.json` 存在则校验全部文件摘要；
-7. **分区数据合法**：JSON 分区过结构校验（version=1 + 顶层形状），文件分区目录非空；
+7. **分区数据合法**：JSON 分区过结构校验（version=1 + 顶层形状），文件分区目录非空；并逐分区拒绝 `BANNED_MARKET_SECTIONS`（`sessions` / `pluginFiles` / `self`，`src/market/security.ts:130-132`）；
 8. **L2↔L3 一致**：manifest.sections 与 zip 内部启用分区交集**非空**（空 → 拒绝）；
-9. **禁止分区拒绝**：`sessions`（历史会话）、`pluginFiles`（任意文件）、`self`（本地环境）为市场硬性禁止分区（与 `secrets` 同级）——发布向导与下载校验两端强制，含任一即拒绝；
-10. **内容级秘密扫描（发布侧纵深防御）**：对区内实际内容做敏感扫描（字段名 + 值形状，宽松档：占位符/模板引用/代码表达式/示例形态放行），发现疑似**真实凭据**即拒绝发布——不依赖导出 `containsSecrets` 标记。
+
+**另有两条规则不在上面 8 步里，但同样强制**：
+
+- **禁止分区**（`sessions` / `pluginFiles` / `self`）：已在第 7 步内逐分区拒绝（清单 `src/market/types.ts:40`，判定 `src/market/security.ts:130-132`）；口径与「`secrets` 不在这张清单、由第 5 步的 `containsSecrets` 拒绝」见 §5。
+- **内容级秘密扫描（发布侧纵深防御，只在发布向导里，不在下载校验里）**：对 config.zip 内各分区实际内容做敏感扫描（字段名 + 值形状；宽松档：占位符 / 模板引用 / 代码表达式 / 示例形态放行），发现疑似**真实凭据**即拒绝发布——不依赖导出 `containsSecrets` 标记。
 
 辅以：`repo` 必须 `http(s)` 且无 userinfo（`git@`/`ssh://` 形态拒绝）；供应链警示对任何来源恒展示。
 

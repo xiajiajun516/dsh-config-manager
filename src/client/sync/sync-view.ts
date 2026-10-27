@@ -294,7 +294,7 @@ export function cloudIssueKey(code: string): SyncKey | null {
 /* ------------------------------------------------ G-34：gist 通道不适合大分区 */
 
 /**
- * G-34（docs/spec/known-gaps.md）：gist 通道**刻意不做内容寻址外置** —— 一次 GET 把全部
+ * G-34（docs/maintenance/known-gaps.md）：gist 通道**刻意不做内容寻址外置** —— 一次 GET 把全部
  * 文件内容取回、单文件内容超限会被截断、文件数还有上限，因此会话这类大分区不适合走 gist。
  *
  * 本常量 = 「gist 表单」常驻提示的字典键（组件按它取 sync 字典文案渲染 hint）。
