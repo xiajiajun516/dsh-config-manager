@@ -51,12 +51,15 @@ src/
 **发版顺序**（顺序有意义：publish.yml 抽取的是**被打 tag 的那个提交**里的 CHANGELOG，所以 CHANGELOG 收口必须先提交再打 tag）：
 
 ```bash
-# 1) 收口 CHANGELOG：[Unreleased] → ## [0.1.70] - <今天>，并在顶部开好下一轮骨架
-node .github/scripts/changelog-section.mjs release 0.1.70
-git add CHANGELOG.md && git commit -m "docs(changelog): 0.1.70"
+# 1) 收口 CHANGELOG：[Unreleased] → ## [X.Y.Z] - <今天>，并在顶部开好下一轮骨架
+node .github/scripts/changelog-section.mjs release X.Y.Z
+git add CHANGELOG.md && git commit -m "docs(changelog): X.Y.Z"
 
-# 2) 同步版本号三处并打 tag（全自动：typecheck → test → build → pack → npm publish → GitHub Release）
-npm version patch          # 0.1.x → 0.1.x+1（改版本 + 打 tag）
+# 2) 同步版本号四处并打附注 tag（全自动：typecheck → test → build → 守卫 → pack → npm publish → GitHub Release）
+npm version patch --no-git-tag-version   # 或 minor；预发布 preminor --preid rc
+#    手改 src/index.ts 的 PLUGIN_VERSION 与 docs/spec/compat-matrix.md 顶部的版本声明行
+git add -A && git commit -m "chore(release): vX.Y.Z"
+git tag -a vX.Y.Z -m vX.Y.Z
 git push origin main --tags
 ```
 

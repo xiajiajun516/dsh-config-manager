@@ -8,8 +8,9 @@
 
 ### 通用（任何改动）
 - **验证顺序**：`npm run typecheck` → `npm test` →（动 client/样式）`npm run build` →（大改）`npm run smoke`；build 前 `TEMP`/`TMP` → `.tmp/buildtmp`；无 lint/format，typecheck 兜底。
-- **版本三处同步**：`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION` ≡ `package-lock.json` 根 version 与 `packages[""].version`；`tests/packaging-contract.test.ts` 的 `V-1` 钉住。
-- **发版**：打 `tag v* push` 后全自动（阶段表 → `DEVELOPERS.md`）；前置 = 三处版本 + `CHANGELOG.md` 顶部亮点段；发布成功后按 `.dsh/issue-ledger.md` 的 `awaiting-release` 行回版本号并标 `fixed`。
+- **版本号按 SemVer 判定**：修复 = PATCH、兼容新增 = MINOR、破公开契约 = MAJOR；`0.1.z` 只放修复，功能进 MINOR；判据与历史保留 → `docs/maintenance/versioning.md`。
+- **版本四处同步**：`package.json.version` ≡ `src/index.ts` 的 `PLUGIN_VERSION` ≡ `package-lock.json` 根 version 与 `packages[""].version` ≡ `docs/spec/compat-matrix.md` 顶部版本声明行；`tests/packaging-contract.test.ts` 的 `V-1` 钉前三处，声明行由 `scripts/check-doc-versions.mjs` 钉住（`npm version` 不会改 `PLUGIN_VERSION`）。
+- **发版**：打 `tag v* push` 后全自动（阶段表 → `DEVELOPERS.md`）；前置 = 发布前检查清单（`docs/maintenance/versioning.md` §10）+ `CHANGELOG.md` 顶部亮点段；发布成功后按 `.dsh/issue-ledger.md` 的 `awaiting-release` 行回版本号并标 `fixed`。
 - **用户可见的功能/行为/修复同轮进 `CHANGELOG.md` 的 `## [Unreleased]`**（落位见 skill `changelog-writing`）。
 - **git**：工作副本 `origin` 每次跟随 `repoUrl`（含 `--push`，不一致即 `set-url`）；同一工作副本操作一律经 `GitTransport.withWorkdir()`；拉取只许 `fetch` + `merge --ff-only`，禁 `git pull`（坏 FETCH_HEAD ⇒ SAFE MODE）。
 - **删源文件前先 `git status --porcelain <路径>`**：见 `??` 必须停下；禁 `git checkout -- <文件>` 回滚，撤销改动用针对性 edit 反向。

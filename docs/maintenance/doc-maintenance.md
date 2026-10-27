@@ -28,6 +28,7 @@
 | 项目介绍、安装、使用、开发入口 | `README.md` / `README.zh-CN.md` | `AGENTS.md` |
 | AI/人开发时必须遵守的硬规则（判据一行） | `AGENTS.md` | 各域文档的规则段（那里只放证据/细节） |
 | 机制细则、命令全表、发布与 CI 流程 | `DEVELOPERS.md` | `docs/modules/` |
+| 版本号规则（SemVer 判定、预发布命名、历史保留、发布前检查） | `docs/maintenance/versioning.md` | `DEVELOPERS.md`（只留命令与阶段表） |
 | UI/视觉/token/组件视觉规范 | `DESIGN.md` | `docs/components/client-ui.md`（那里只写代码落点与守卫） |
 | 分层、依赖方向、路由全景、关键数据流、结构性债 | `docs/architecture.md` | 域文档（域文档只指向它） |
 | 某域的当前实现（入口/调用链/上限/失败语义） | `docs/modules/<域>.md` | `AGENTS.md` 的坑段 |

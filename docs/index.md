@@ -27,6 +27,7 @@
 | 查开发/测试/发布的具体命令 | `DEVELOPERS.md` |
 | 查 UI 视觉与 token 决策 | `DESIGN.md` |
 | 决定这次改动要不要写文档、写在哪 | `docs/maintenance/doc-maintenance.md` |
+| 决定下一个版本号（PATCH/MINOR/MAJOR、预发布命名、历史版本能不能动） | `docs/maintenance/versioning.md` |
 
 ## 2. 当前实现（代码是什么样）
 
@@ -69,6 +70,7 @@
 - `docs/maintenance/known-limits.md` — 「当前做不到 / 做了会出事」的硬限制（平台/外部事实，仓内不可证）
 - `docs/spec/known-gaps.md` — 已知实现缺口台账（**历史证据 + 当前状态**，不是路线图，也**不是**对外契约）
 - `docs/maintenance/doc-maintenance.md` — **文档维护规则**：改动要不要写文档、写哪份、AI 流程、季度人工清单
+- `docs/maintenance/versioning.md` — **版本管理规范**：三数字语义与 0.x 约定、预发布命名、历史版本保留、发版判定模板与发布前检查清单
 
 更新时机：修完一条把状态改为「已修」并写提交/测试名（**不要删行**）；发现新债先加行再决定排期。
 

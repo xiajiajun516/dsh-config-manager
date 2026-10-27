@@ -4,7 +4,7 @@
 > 不重复的内容：发版命令与 CI 阶段表 → `DEVELOPERS.md`；CHANGELOG 体例 → skill `changelog-writing`；
 > 四处数字与活文档声明由 `tests/packaging-contract.test.ts` 的 `V-1` 与 `scripts/check-doc-versions.mjs` 机械钉住。
 
-- 适用插件版本：`dsh-config-manager@0.1.85`（`package.json:3`；与 `src/index.ts` 的 `export const PLUGIN_VERSION`、`package-lock.json` 根 version、`packages[""].version` 四处一致）
+- 适用插件版本：`dsh-config-manager@0.1.86`（`package.json:3`；与 `src/index.ts` 的 `export const PLUGIN_VERSION`、`package-lock.json` 根 version、`packages[""].version` 四处一致）
 - 本规范自版本切换点起生效；切换点与理由见 §9。取证时间 2026-10-27（npm registry / `gh release list` / `git tag` / 提交信息实查）。
 
 ## 1. 三个数字代表什么
@@ -76,10 +76,10 @@ SemVer 2.0.0 §4 规定 `0.y.z` 期间任何东西都可能变，公开 API 不�
 
 1. **版本号从未按变更类型判定**：84 次发布全是 `0.1.z` 递增，功能版与修复版不可区分，外部无法从版本号判断「这次能不能放心升」。根因是发版流程只有 `npm version patch` 一条路径。
 2. **`0.1.74` 被撤回并删 tag**：`7156cb0` 发布 → `5827721`「撤回 v0.1.74 发布（删除 GitHub Release + tag）」→ `232ae18` 修根因 → `960649b`「fix 0.1.75」。npm 上同号 E404，registry `time` 仍保留 0.1.74/0.1.75 两条记录（无 `time.unpublished` 字段）。该版本永不可复现。
-3. **`0.1.75` 是「半撤回」**：tag `v0.1.75`、GitHub Release（2026-10-15T23:40:41Z）与资产 `dsh-config-manager-0.1.75.tgz` 都在，npm 上 E404 → 「已发布」此前没有定义，到底以哪一面为准不明。
+3. **`0.1.75` 是「半撤回」**：tag `v0.1.75`、GitHub Release（2026-10-15T23:40:41Z）与资产 `dsh-config-manager-0.1.75.tgz` 都在，npm 上 E404 → 「已发布」此前没有定义，到底以哪一面为准不明。**处置（2026-10-28，§11.3）**：登记为「仅 GitHub 资产可用」—— 需要 `0.1.75` 只能装 Release 资产 `dsh-config-manager-0.1.75.tgz`，不删 tag、不删 Release、不重发 npm。
 4. **`0.1.0` 已发 npm 但无 tag、无 Release**（最早的发布早于「tag 与 Release 同步」的惯例），且历史已重写（见 5），无法补 tag，只能登记。
 5. **历史断链**：`v0.1.1`–`v0.1.17` 不是 `main` 的祖先（`main` 首个提交是 `f6418f3`「chore: baseline before vibe XL execution」）。这 17 个 tag 指向另一条已废弃的线：npm 包与 Release 还在，但「tag → 可评审提交」对它们不成立。
-6. **`publish.yml` 不校验 tag 与版本号一致**：Release 说明按 tag 抽取 CHANGELOG 段，`npm publish` 按 `package.json.version` 发布。tag 落后 → 发布失败；tag 领先 → 把包发成另一个版本号，而 Release 描述写的还是 tag 那个号。
+6. **`publish.yml` 不校验 tag 与版本号一致**：Release 说明按 tag 抽取 CHANGELOG 段，`npm publish` 按 `package.json.version` 发布。tag 落后 → 发布失败；tag 领先 → 把包发成另一个版本号，而 Release 描述写的还是 tag 那个号。**已修（2026-10-28，§11.1/§11.2）**：`Tag guard` 步骤在 `npm publish` 之前校验 tag 形态与 tag↔`package.json.version` 的一致性。
 7. **发版文档与实际做法不符**：`DEVELOPERS.md` 原文写 `npm version patch`（该命令会自行 commit + 打 **轻量** tag）再 `git push origin main --tags`，与实证的「单提交 + 附注 tag」不一致，且没有 SemVer 判定这一步。
 
 ## 7. 版本衔接与 `1.0.0`
@@ -137,26 +137,17 @@ SemVer 2.0.0 §4 规定 `0.y.z` 期间任何东西都可能变，公开 API 不�
 6. 同号未用过：`git tag -l vX.Y.Z` 为空，且 `npm view dsh-config-manager@X.Y.Z version` 为 404。
 7. tag 形态：正式版匹配 `^v[0-9]+\.[0-9]+\.[0-9]+$`；预发布匹配 `^v[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[1-9][0-9]*$`。
 
-## 11. 已知缺口与待确认动作
+## 11. 缺口处置结果（2026-10-28 落地）
 
-1. **`publish.yml` 缺 tag↔版本守卫**（未实施，需用户确认后改）：在 publish 步骤前加
+> 审计列的 4 项缺口已按用户确认执行；「已实施」指代码/文档已在仓库里可核对，不指「计划中」。
 
-   ```yaml
-   - name: Tag / package.json version guard
-     if: startsWith(github.ref, 'refs/tags/v')
-     run: |
-       PKG=$(node -p 'require("./package.json").version')
-       if [ "v$PKG" != "$GITHUB_REF_NAME" ]; then
-         echo "::error::tag $GITHUB_REF_NAME 与 package.json.version $PKG 不一致"; exit 1
-       fi
-   ```
-
-2. **tag 形态守卫**：正式版正则同上，预发布白名单 `alpha|beta|rc`；当前完全没有校验，任何人都能打 `v1` 或 `v0.1.86-beta` 触发发布。
-3. **`0.1.75` 的收口**（三选一，需用户定）：保持现状并在 §6.2 登记为「仅 GitHub 资产可用」／在下个 PATCH 的 CHANGELOG 里写明 `0.1.75` 的安装方式／另发公告。**不动 tag、不动 Release、不重发 npm。**
-4. **`0.1.0` 无 tag**：按 §5 不补 tag，仅在 §6 登记为历史遗留。
+1. **`publish.yml` 已加 `Tag guard` 步骤（已实施）**：位置在 `Doc version guard` 之后、`npm publish` 之前，校验 ① tag 形态 ② tag 名 == `package.json.version`。任一不成立即 `::error::` 退出 1，包不会发出去；取证 = `.github/workflows/publish.yml` 的 `Tag guard (形态 + tag↔版本)` 步骤。
+2. **tag 形态守卫（已实施）**：正式版 `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`，预发布只允许 `-(alpha|beta|rc).N`（N 为正整数）。`v1`、`v0.1.86-beta`、`v0.1.86+build` 都会在发布前被拒。
+3. **`0.1.75` 收口 = 保持现状（已采纳）**：不动 tag、不动 Release、不重发 npm；登记为「仅 GitHub 资产可用」—— 需要 `0.1.75` 只能装 Release 资产 `dsh-config-manager-0.1.75.tgz`，npm 上没有任何可用包（§6.2 第 3 条）。
+4. **`0.1.0` 无 tag（已登记）**：按 §5 不补 tag，只在 §6 登记为历史遗留。
 
 ## 12. 本次审计的结论与建议
 
 - **下一个版本号：`0.1.86`（PATCH）**。理由：`v0.1.85` 之后 5 个提交里用户可见变更只有 `c802dd8` 的同步锁回收修复（已在 `[Unreleased]`），其余为文档与台账；无新功能、无契约变化 → 按 §1 只能是 PATCH。
 - **再下一个版本起分叉**：第一条新增用户可见功能或不兼容变更 → `0.2.0`（§2）；`1.0.0` 等 §7 三条成立并由用户确认。
-- 本次**不**改版本号、不打 tag、不发 npm、不改 Release、不动 `publish.yml`；§11 的四项待用户确认后另行执行。
+- 本次**不**改版本号、不打 tag、不发 npm、不改 Release、不动 `publish.yml`；§11 四项已按用户确认落地（2026-10-28）；`0.1.86` 是规范生效后的第一个版本，也是 §1/§9 的一次实例：只有修复 → PATCH。
