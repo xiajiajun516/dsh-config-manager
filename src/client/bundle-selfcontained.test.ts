@@ -73,6 +73,15 @@ test('lib/client.js 自包含：只 require 运行时白名单内的外部包', 
       `修复方向：把该依赖加回 tsdown.config.ts 的 deps.alwaysBundle（并保留在 devDependencies）。`,
   )
 
+  // 相对 require = 依赖同目录 chunk：loader 只取 lib/client.js，不会请求 ./client2.js。
+  const relativeSpecifiers = result.specifiers.filter((s) => s.startsWith('.'))
+  assert.deepEqual(
+    relativeSpecifiers,
+    [],
+    `lib/client.js 依赖了同目录 chunk（loader 不会请求它们）：${relativeSpecifiers.join(', ')}\n` +
+      '修复方向：tsdown.config.ts 的 outputOptions.inlineDynamicImports = true。',
+  )
+
   // node:* 内置模块不属于本护栏判定范围（浏览器半不应依赖它们，但那是另一条不变量）。
   if (result.nodeBuiltins.length > 0) {
     t.diagnostic(`注意：bundle 内出现 Node 内置 require：${result.nodeBuiltins.join(', ')}`)

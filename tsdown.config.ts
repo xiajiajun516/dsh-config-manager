@@ -114,6 +114,12 @@ export default defineConfig({
   sourcemap: true,
   clean: false,
   hash: false,
+  // 动态 import 必须内联（2026-10-28，morphicons 2.x 升级时实测）：`morphicons/region`
+  // （填充图标归一化器）是 `() => import("./region.js")` 懒加载，默认会让 rolldown 把客户端
+  // 拆成 client.js + client2.js + region*.js；而 DSH loader 只取 lib/client.js、也只提供
+  // module table 里的包 —— 兄弟 chunk 的相对 require 无处可解析，插件整体加载失败
+  // （对照 bundle-selfcontained.test.ts 的「不得出现相对 require」断言）。
+  outputOptions: { inlineDynamicImports: true },
   // Force lib/client.js (not .cjs): the package is `type: module` and the
   // loader/runtime serves the `./client` export by that exact filename
   // (dsh-ssh ships lib/client.js the same way).
