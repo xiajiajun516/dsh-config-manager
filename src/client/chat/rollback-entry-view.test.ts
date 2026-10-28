@@ -443,6 +443,20 @@ test('A 真机回归：workspaces.archiveSession 依赖 this —— 抽方法时
   assert.deepEqual(service.archived, ['c1'])
 })
 
+test('A 真机回归（0.2.x 服务名）：归档能力只在 uiWorkspace 上，也必须取得到', async () => {
+  const service = {
+    archived: [] as string[],
+    async archiveSession(this: { archived: string[] }, id: string): Promise<unknown> {
+      this.archived.push(id)
+      return { ok: true, value: { archivedSessionIds: [id] } }
+    },
+  }
+  // 老版本才有 workspaces 服务；只照这个名字取 = 真机上永远拿不到（本轮修的就是这个）。
+  const sources = navigationSourcesOf({ get: (key: string) => (key === 'uiWorkspace' ? service : undefined) })
+  assert.deepEqual(await archiveParentSession(sources.workspaces, 'c2'), { ok: true })
+  assert.deepEqual(service.archived, ['c2'])
+})
+
 test('A：归档失败码 → 文案键（子串映射；成功不提示；界面绝不裸渲染机器码）', () => {
   assert.equal(archiveHintKey({ ok: true }), null)
   assert.equal(archiveHintKey({ ok: false, code: 'archive-unavailable' }), 'rollback.rewind.archive.unavailable')

@@ -15,7 +15,7 @@
 
 | 层 | 窗口 | 条件 | 实现 |
 | --- | --- | --- | --- |
-| ① | **DSH 宿主自带目录选择器**（就是「选择工作区目录」那个原生窗口） | DSH 客户端提供 `workspaces` 服务 | `ctx.get('workspaces').pickDirectory()`（`src/client/index.ts` 惰取 thunk → `ConfigManagerApi.pickDshPath`） |
+| ① | **DSH 自带目录选择器**（就是「选择工作区目录」那个原生窗口） | 桌面壳挂了全局 `__DSH_DIRECTORY_PICKER__`，或客户端有 `uiWorkspace` / 老版 `workspaces` 服务 | `import/dsh-directory-pick.ts` 的 `makeDshDirectoryPicker`（按 全局 → `uiWorkspace` → `workspaces` 惰取）→ `ConfigManagerApi.pickDshPath` |
 | ② | 插件自己的系统对话框（Windows = `IFileOpenDialog` 文件夹模式 / macOS = `choose folder` / Linux = `zenity`→`kdialog`） | ①报告 `unavailable` | 宿主 `POST /path-browse` → `src/core/native-path-picker.ts` |
 | ③ | 插件内置目录浏览器 | ①②都不可用 | `GET /path-browse` + `PathPickerDialog` |
 
@@ -23,7 +23,9 @@
 
 ## 3. 关键事实（取证）
 
-- `workspaces.pickDirectory(): Promise<string | null>` —— 契约面 `@deepseek-ai/dsh-client-runtime` 的 `lib/types/client/contract/workspaces.ts`；服务经 `ctx.reflect.provide('workspaces', …)` 注册（runtime `apply` 先于插件 `apply`），因此插件 `ctx.get('workspaces')` 可用，且**必须在点击那一刻**取（宿主重连/服务重建后装载期快照会失效）。
+- **服务名是 `uiWorkspace`，不是 `workspaces`**（真机取证：DSH 0.2.1-rc.3 的 `@deepseek-ai/dsh-client-ui-workspace/lib/client.js` 里 `super(ctx, "uiWorkspace")`，`pickDirectory()` 在同一个服务上）。第一版只写 `ctx.get('workspaces')`，真机上取不到 ⇒ 每次都被当成 `unavailable` 静默降级到 ②，用户看到的一直是插件自己的对话框。老版本（`@deepseek-ai/dsh-client-runtime` 的 `contract/workspaces`）才有 `workspaces` 服务，所以两个名字都试、新的在前。
+- 桌面壳还挂了全局 `globalThis.__DSH_DIRECTORY_PICKER__.pick(): Promise<string | null>`（`@deepseek-ai/dsh-client-ui-directory-picker-native` 优先用它），所以解析顺序是 全局 → `uiWorkspace` → `workspaces`。
+- `pickDirectory()` 返回 `null` = 用户取消；**取不到任何入口才抛错**，抛错才归 `unavailable` 并降级。能力必须在**点击那一刻**取（宿主重连/服务重建后装载期快照会失效）。
 - 该能力走 DSH 自己的 wire 客户端（`host.pickDirectory`，`caller-signal-only`，无服务端超时），**不经过**插件 `/api/dsh-config-manager/*` 围栏。
 - 语义三分：返回路径 = 选中；返回 `null` = 用户取消（静默收手）；**调用抛错 / 服务缺失 = `unavailable`**（回落下一层，不当错误弹红条）。
 - **代价（如实）**：`host.pickDirectory` 的请求体是空对象（`object({})`），**标题与起始目录都不可定制** —— 窗口标题固定为 DSH 的「Select Workspace Directory」，与「选择本机路径」的上下文不完全一致。若将来该能力开放参数，①层可直接补 title/startPath，②③无需改动。
@@ -36,6 +38,7 @@
 
 ## 5. 测试与验证
 
+- `src/client/import/dsh-directory-pick.test.ts`（6 条）：全局优先 / **只有 `uiWorkspace` 也必须成功（真机口径回归）** / 老版 `workspaces` 回落 / 取消原样传出 / 没有入口抛错 / 惰取。
 - `tests/client/api-dsh-pick.test.ts`（6 条）：选中 / `null` / 空串 / 未注入 / 抛错 / 惰取第二次拿到新结果。
 - `src/core/native-path-picker.test.ts`（9 条）：三平台 argv、取消与失败码、盘符根与 `/` 根归一化、zenity→kdialog 回落。
 - 真机：Windows 上 `DCM_PICK_PROBE=1` 自检互操作装配；带 `timeoutMs: 3000` 真弹窗被 kill（证明 `Show()` 进了模态循环）。

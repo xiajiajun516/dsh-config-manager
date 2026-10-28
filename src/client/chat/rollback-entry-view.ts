@@ -839,7 +839,8 @@ export function navigationSourcesOf(ctx: unknown): NavigationSources {
   return {
     workspace: asWorkspaceSource(safeGet('uiWorkspace')),
     sessions: asSessionListSource(safeGet('sessions')),
-    workspaces: asArchiveSource(safeGet('workspaces')),
+    // 归档能力挂在 uiWorkspace 上（真机 DSH 0.2.x 只有这个服务名；老版本才有 workspaces）——两个都试，不猜。
+    workspaces: asArchiveSource(safeGet('uiWorkspace')) ?? asArchiveSource(safeGet('workspaces')),
   }
 }
 

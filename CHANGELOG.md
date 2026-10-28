@@ -48,6 +48,10 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
   **Hitting "Import" after "Import from another agent" no longer lands on the wrong page**: the import entry now follows the source of the current click instead of remembering the previous one.
 - **路径映射面板里的深色路径块不再溢出卡片**：长路径块与卡片左右对齐，路径再长也只在框内换行。
   **The dark path blocks in path mapping no longer spill out of the card**: they line up with the card edges, and long paths wrap inside the box.
+- **点文件夹按钮真的会用 DSH 自带的目录窗口**：文件夹按钮现在优先调用 DSH 桌面壳自己的原生选择窗口，取不到才用插件自己的系统对话框；此前因为找错了服务名，真机上永远退回插件自己的窗口。
+  **The folder button now really uses DSH's own directory window**: it asks DSH's desktop shell for its native chooser first and only falls back to the plugin's own system dialog when that capability is missing — previously it looked up the wrong service name and always fell back.
+- **插件自己弹出的系统文件夹窗口不再另开一个应用、也不藏在别的窗口后面**：窗口居中出现在当前屏幕、置顶可见，任务栏上不再多出一个图标。
+  **The plugin's system folder window no longer opens as a separate app or hides behind other windows**: it appears centered on the current screen, on top, and adds no extra taskbar icon.
 
 ## [0.1.86] - 2026-10-28
 

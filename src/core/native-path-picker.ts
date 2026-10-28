@@ -74,6 +74,9 @@ const WINDOWS_SCRIPT = `$ErrorActionPreference = 'Stop'
 $src = @"
 using System;
 using System.Runtime.InteropServices;
+using System.IO;
+using System.Text;
+using System.Threading;
 
 [ComImport, Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
 public class FileOpenDialogRCW { }
@@ -153,10 +156,184 @@ public static class DcmNativePick {
     return name;
   }
 
+  delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+  [DllImport("user32.dll")]
+  static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+  [DllImport("user32.dll")]
+  static extern bool IsWindowVisible(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+  [DllImport("user32.dll")]
+  static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+  [DllImport("user32.dll")]
+  static extern bool SetForegroundWindow(IntPtr hWnd);
+
+  [DllImport("user32.dll")]
+  static extern IntPtr GetForegroundWindow();
+
+  [DllImport("user32.dll")]
+  static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+  [DllImport("kernel32.dll")]
+  static extern uint GetCurrentProcessId();
+
+  [DllImport("kernel32.dll")]
+  static extern uint GetCurrentThreadId();
+
+  const uint GW_OWNER = 4;
+  const uint SWP_NOSIZE = 0x1;
+  const uint SWP_NOMOVE = 0x2;
+  const uint SWP_NOZORDER = 0x4;
+  const uint SWP_SHOWWINDOW = 0x40;
+  const uint SPI_GETWORKAREA = 0x30;
+  const int GWL_EXSTYLE = -20;
+  const int WS_EX_TOOLWINDOW = 0x80;
+  const int WS_EX_APPWINDOW = 0x40000;
+  const int SW_HIDE = 0;
+  const byte VK_MENU = 0x12;
+  const uint KEYEVENTF_KEYUP = 0x2;
+  const int SW_SHOW = 5;
+
+  [StructLayout(LayoutKind.Sequential)]
+  struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+
+  [DllImport("user32.dll")]
+  static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+  [DllImport("user32.dll")]
+  static extern bool SystemParametersInfo(uint action, uint param, out RECT rect, uint winIni);
+
+  [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+  static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int index);
+
+  [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")]
+  static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int index, IntPtr value);
+
+  [DllImport("user32.dll")]
+  static extern bool ShowWindow(IntPtr hWnd, int cmd);
+
+  [DllImport("user32.dll")]
+  static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  static extern int GetClassName(IntPtr hWnd, StringBuilder name, int count);
+
+  static void Log(string message) {
+    // Debug output goes to a file: a killed child loses its stderr, and with it the only clue.
+    string path = Environment.GetEnvironmentVariable("DCM_PICK_DEBUG");
+    if (string.IsNullOrEmpty(path)) return;
+    try { using (StreamWriter writer = File.AppendText(path)) { writer.WriteLine(message); } } catch { }
+  }
+
+  /**
+   * The dialog is a #32770 window owned by this process. Ours is the only visible top-level
+   * window here, but walk the class name first so a future console/helper window cannot win.
+   */
+  static IntPtr FindOwnDialog() {
+    uint self = GetCurrentProcessId();
+    IntPtr fallback = IntPtr.Zero;
+    IntPtr dialog = IntPtr.Zero;
+    EnumWindows((h, l) => {
+      uint pid;
+      GetWindowThreadProcessId(h, out pid);
+      if (pid != self || !IsWindowVisible(h) || GetWindow(h, GW_OWNER) != IntPtr.Zero) return true;
+      StringBuilder name = new StringBuilder(64);
+      GetClassName(h, name, 64);
+      if (name.ToString() == "#32770") { dialog = h; return false; }
+      if (fallback == IntPtr.Zero) fallback = h;
+      return true;
+    }, IntPtr.Zero);
+    return dialog != IntPtr.Zero ? dialog : fallback;
+  }
+
+  /**
+   * IFileOpenDialog is created by a windowless helper process, so Windows gives it no owner and
+   * remembers no position: it lands wherever the default puts it (often half under the taskbar)
+   * and adds a second taskbar entry that the user has to click before the dialog is usable.
+   * Fix all three here: drop the taskbar entry (WS_EX_TOOLWINDOW), center the dialog inside the
+   * work area, keep it topmost, then borrow the foreground thread's input queue to activate it.
+   */
+  static void BringToFront() {
+    for (int i = 0; i < 400; i++) {
+      IntPtr h = FindOwnDialog();
+      if (h != IntPtr.Zero) {
+        Log("dialog hwnd=" + h.ToInt64().ToString() + " attempt=" + i.ToString());
+        HideFromTaskbar(h);
+        CenterOnWorkArea(h);
+        Activate(h);
+        bool top = SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+        ShowWindow(h, SW_SHOW);
+        Log("topmost=" + top.ToString() + " ex=0x" + GetWindowLongPtr(h, GWL_EXSTYLE).ToInt64().ToString("X") + " prev=" + GetWindow(h, 3).ToInt64().ToString());
+        return;
+      }
+      Thread.Sleep(50);
+    }
+    Log("dialog window never appeared");
+  }
+
+  /** Re-parent the dialog into the tool window band so it stops advertising itself as a new app. */
+  static void HideFromTaskbar(IntPtr h) {
+    try {
+      IntPtr style = GetWindowLongPtr(h, GWL_EXSTYLE);
+      long value = style.ToInt64() & ~(long)WS_EX_APPWINDOW | (long)WS_EX_TOOLWINDOW;
+      SetWindowLongPtr(h, GWL_EXSTYLE, new IntPtr(value));
+      Log("exstyle=" + value.ToString());
+    } catch (Exception error) {
+      Log("exstyle failed: " + error.Message);
+    }
+  }
+
+  /** Center inside the work area so the dialog never opens half under the taskbar. */
+  static void CenterOnWorkArea(IntPtr h) {
+    RECT window;
+    RECT area;
+    if (!GetWindowRect(h, out window)) return;
+    if (!SystemParametersInfo(SPI_GETWORKAREA, 0, out area, 0)) return;
+    int width = window.Right - window.Left;
+    int height = window.Bottom - window.Top;
+    if (width <= 0 || height <= 0) return;
+    int x = area.Left + (area.Right - area.Left - width) / 2;
+    int y = area.Top + (area.Bottom - area.Top - height) / 2;
+    SetWindowPos(h, IntPtr.Zero, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    Log("centered " + x.ToString() + "," + y.ToString() + " size=" + width.ToString() + "x" + height.ToString());
+  }
+
+  /** SetForegroundWindow can silently fail; retry with the input queue attached until it sticks. */
+  static void Activate(IntPtr h) {
+    // A background process has no input history, so SetForegroundWindow is refused silently; pulse Alt first to unlock it.
+    keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+    keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+    for (int i = 0; i < 20; i++) {
+      uint pid;
+      IntPtr front = GetForegroundWindow();
+      if (front == h) { Log("activated attempt=" + i.ToString()); return; }
+      uint fgThread = GetWindowThreadProcessId(front, out pid);
+      uint selfThread = GetCurrentThreadId();
+      bool attached = AttachThreadInput(selfThread, fgThread, true);
+      bool done = SetForegroundWindow(h);
+      AttachThreadInput(selfThread, fgThread, false);
+      Log("activate attempt=" + i.ToString() + " attach=" + attached.ToString() + " ok=" + done.ToString() + " fg=" + GetForegroundWindow().ToInt64().ToString());
+      if (GetForegroundWindow() == h) return;
+      Thread.Sleep(100);
+    }
+    Log("activation never stuck; window stays topmost");
+  }
+
   /** Shows the native picker: returns the path, or "CANCEL" / "ERR:<hr>". */
   public static string Show(string title, string startPath) {
     IFileDialog dlg = Create(startPath);
     if (!string.IsNullOrEmpty(title)) dlg.SetTitle(title);
+    Thread helper = new Thread(BringToFront);
+    helper.IsBackground = true;
+    helper.Start();
     int hr = dlg.Show(IntPtr.Zero);
     if (hr == unchecked((int)0x800704C7)) return "CANCEL";
     if (hr != 0) return "ERR:" + hr;
@@ -220,7 +397,9 @@ export function defaultSpawner(run: NativePickRun): Promise<NativePickExec> {
     let stderr = ''
     const timer = setTimeout(() => {
       child.kill()
-      finish({ code: null, stdout, stderr: 'timed out', missing: false })
+      // 超时也保留子进程已经吐出的 stderr：调试标志的日志全在那里，丢掉就无法定位。
+      const tail = stderr.trim()
+      finish({ code: null, stdout, stderr: tail === '' ? 'timed out' : `timed out\n${tail}`, missing: false })
     }, run.timeoutMs)
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8')

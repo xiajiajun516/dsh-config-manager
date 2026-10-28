@@ -21,6 +21,8 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only：拉入 SlotMap / LocaleNamespaceMap 合并表（dsh-client-ui-slots）。
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+import { makeDshDirectoryPicker } from './import/dsh-directory-pick.ts'
+import type { DesktopDirectoryPicker } from './import/dsh-directory-pick.ts'
 import { ConfigManagerApi } from './api.ts'
 import { ConfigManagerSection } from './ConfigManagerSection.tsx'
 import { en, zh, type ConfigManagerKey } from './locales.ts'
@@ -136,13 +138,15 @@ export function apply(ctx: ClientContext): void {
   // 模块级单例（runStore 等）用同一个活源：它们没有调用方可以传 UiT。
   setUiLanguageSource(readLanguage)
   const uiT: UiT = makeLiveUiT(readLanguage)
-  // DSH 宿主自带的目录选择器（「选择工作区目录」那个原生窗口）：**点击那一刻**才读服务，
-  // 装载期快照会在宿主重连/服务重建后失效。服务不在或宿主不支持 ⇒ 抛给 pickDshPath 归成 unavailable。
-  const pickDshDirectory = (): Promise<string | null> => {
-    const workspaces = ctx.get('workspaces')
-    if (workspaces === undefined) throw new Error('config-manager: workspaces service unavailable')
-    return workspaces.pickDirectory()
-  }
+  // DSH 自带的目录选择器（「选择工作区目录」那个原生窗口）：**点击那一刻**才读全局/服务，
+  // 装载期快照会在宿主重连/服务重建后失效。解析顺序与降级见 import/dsh-directory-pick.ts
+  // （真机取证：服务名是 uiWorkspace，不是 workspaces；桌面壳还会挂全局 __DSH_DIRECTORY_PICKER__）。
+  const pickDshDirectory = makeDshDirectoryPicker({
+    get desktop() {
+      return (globalThis as { __DSH_DIRECTORY_PICKER__?: DesktopDirectoryPicker }).__DSH_DIRECTORY_PICKER__
+    },
+    getService: (name) => ctx.get(name),
+  })
   const api = new ConfigManagerApi(uiT, pickDshDirectory)
   const syncT = ctx.locale.bind(SYNC_NS)
   const syncApi = new SyncApi(uiT)

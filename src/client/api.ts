@@ -363,7 +363,8 @@ export class ConfigManagerApi {
   /** 客户端展示层翻译器（zh 源 / en 镜像，见 ui/i18n.ts）。 */
   readonly t: UiT
   /**
-   * DSH 宿主自带目录选择器（`ctx.get('workspaces').pickDirectory`），由 `apply(ctx)` 注入的**惰取** thunk。
+   * DSH 自带目录选择器（桌面壳全局 `__DSH_DIRECTORY_PICKER__.pick` 或客户端服务 `ctx.get('uiWorkspace').pickDirectory`），
+   * 由 `apply(ctx)` 注入的**惰取** thunk（解析顺序见 `import/dsh-directory-pick.ts`）。
    * 宿主没提供该能力时保持 `undefined`。
    */
   private readonly dshDirectoryPicker: (() => Promise<string | null>) | undefined

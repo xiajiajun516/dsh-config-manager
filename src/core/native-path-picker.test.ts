@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import {
   PICK_ENV_START,
   PICK_ENV_TITLE,
+  defaultSpawner,
   pickNativeDirectory,
 } from './native-path-picker.ts';
 import type { NativePickExec, NativePickRun } from './native-path-picker.ts';
@@ -106,4 +107,12 @@ test('其他平台：直接 unsupported，且根本不 spawn', async () => {
   const result = await pickNativeDirectory({ platform: 'freebsd', spawner });
   assert.equal(result.ok === false ? result.reason : '', 'unsupported');
   assert.equal(runs.length, 0);
+});
+
+test('defaultSpawner：超时也保留子进程已经吐出的 stderr（排障线索不能丢）', async () => {
+  const script = 'process.stderr.write("boom\\n"); setTimeout(() => {}, 10000)';
+  const exec = await defaultSpawner({ file: process.execPath, args: ['-e', script], env: {}, timeoutMs: 400 });
+  assert.equal(exec.code, null);
+  assert.match(exec.stderr, /timed out/);
+  assert.match(exec.stderr, /boom/);
 });
