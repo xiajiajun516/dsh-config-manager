@@ -63,25 +63,31 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
   }
 
   /**
-   * 文件夹按钮的完整动作：**先请系统原生目录选择器**（Windows = 资源管理器同款「选择文件夹」窗口，
-   * macOS = Finder 面板，Linux = zenity/kdialog），拿到绝对路径就直接回填。
+   * 文件夹按钮的完整动作，三层降级，任一层拿到绝对路径就回填：
+   *  ① **DSH 宿主自带**的目录选择器（就是「选择工作区目录」那个原生窗口，跟着宿主主进程走，最稳）；
+   *  ② 插件自己的系统对话框（Windows = 资源管理器同款、macOS = Finder、Linux = zenity/kdialog）；
+   *  ③ 内置目录浏览器（前两层都没有时才用）。
    *
-   * 只有「平台不支持 / 弹窗自身失败」才回落到内置目录浏览器 —— 两条路都能给出绝对路径，
-   * 区别只是用谁家的窗口；用户取消则什么都不做（不是错误，不弹红条）。
+   * 用户在任何一层点取消 ⇒ 什么都不做（不是错误，不弹红条）。
    */
   const pickFolder = (oldPrefix: string): void => {
     const startPath = (drafts[oldPrefix] ?? '').trim()
-    api.pickNativePath(startPath, t('import.paths.picker.title')).then(
-      (result) => {
-        if (result.ok) {
-          setNewPrefix(oldPrefix, result.path)
-          return
-        }
-        if (result.reason === 'canceled') return
-        setPickingFor(oldPrefix) // unsupported / failed → 内置浏览器兜底
-      },
-      () => { setPickingFor(oldPrefix) }, // 请求本身失败（宿主不可达等）同样回落，不堵住用户
-    )
+    void (async () => {
+      const viaHost = api.pickDshPath === undefined ? undefined : await api.pickDshPath()
+      if (viaHost?.ok === true) {
+        setNewPrefix(oldPrefix, viaHost.path)
+        return
+      }
+      if (viaHost?.reason === 'canceled') return
+      // 宿主没有该能力（非桌面宿主 / 版本较旧 / 调用抛错）⇒ 换插件自己的原生对话框
+      const native = await api.pickNativePath(startPath, t('import.paths.picker.title')).catch(() => null)
+      if (native !== null && native.ok) {
+        setNewPrefix(oldPrefix, native.path)
+        return
+      }
+      if (native !== null && native.reason === 'canceled') return
+      setPickingFor(oldPrefix) // unsupported / failed / 请求失败 → 内置浏览器兜底
+    })()
   }
 
   const unresolved = useMemo(() => {

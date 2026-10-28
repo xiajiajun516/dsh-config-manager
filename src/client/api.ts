@@ -342,6 +342,14 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
 }
 
 /**
+ * DSH 宿主自带目录选择器的结果。
+ *  - `ok`：用户选中（`path` 非空）；
+ *  - `canceled`：用户点了取消，调用方静默收手；
+ *  - `unavailable`：宿主没有这个能力（非桌面宿主 / 版本较旧 / 调用抛错），调用方回落下一层。
+ */
+export type DshPickResult = { ok: true; path: string } | { ok: false; reason: 'canceled' | 'unavailable' }
+
+/**
  * Config Manager 浏览器半的唯一数据入口。
  * 同时实现 `ExportPort`（export-flow 用）与 `ImportPort`（import-wizard 用）。
  */
@@ -354,9 +362,15 @@ export class ConfigManagerApi {
   exportPassword: string | null = null
   /** 客户端展示层翻译器（zh 源 / en 镜像，见 ui/i18n.ts）。 */
   readonly t: UiT
+  /**
+   * DSH 宿主自带目录选择器（`ctx.get('workspaces').pickDirectory`），由 `apply(ctx)` 注入的**惰取** thunk。
+   * 宿主没提供该能力时保持 `undefined`。
+   */
+  private readonly dshDirectoryPicker: (() => Promise<string | null>) | undefined
 
-  constructor(t: UiT) {
+  constructor(t: UiT, dshDirectoryPicker?: () => Promise<string | null>) {
     this.t = t
+    this.dshDirectoryPicker = dshDirectoryPicker
   }
 
   // ------------------------------------------------------------- status
@@ -600,6 +614,23 @@ export class ConfigManagerApi {
     if (startPath !== undefined && startPath !== '') body.startPath = startPath;
     if (title !== undefined && title !== '') body.title = title;
     return postJson<NativePickResult>(CONFIG_MANAGER_API.pathBrowse, body, this.t, NATIVE_PICK_OPTS);
+  }
+
+  /**
+   * 复用 **DSH 宿主自带**的原生目录选择器（就是「选择工作区目录」那个窗口）。
+   *
+   * 比插件自己起系统对话框更稳：窗口由 DSH 主进程弹，跟着宿主走，不受插件宿主的进程形态限制。
+   * 完全不设客户端超时 —— 用户可能在原生窗口里逛几分钟，宿主侧 `host.pickDirectory` 也是 caller-signal-only。
+   * 宿主没有该能力或调用抛错一律归成 `unavailable`，由调用方回落插件自己的原生对话框，不当错误处理。
+   */
+  async pickDshPath(): Promise<DshPickResult> {
+    if (this.dshDirectoryPicker === undefined) return { ok: false, reason: 'unavailable' }
+    try {
+      const path = await this.dshDirectoryPicker()
+      return typeof path === 'string' && path !== '' ? { ok: true, path } : { ok: false, reason: 'canceled' }
+    } catch {
+      return { ok: false, reason: 'unavailable' }
+    }
   }
 
   /** ImportPort.decryptArchive：解锁整体加密备份容器 → 明文 ZIP 路径 + 解密覆盖的凭据 ref 名 */

@@ -136,7 +136,14 @@ export function apply(ctx: ClientContext): void {
   // 模块级单例（runStore 等）用同一个活源：它们没有调用方可以传 UiT。
   setUiLanguageSource(readLanguage)
   const uiT: UiT = makeLiveUiT(readLanguage)
-  const api = new ConfigManagerApi(uiT)
+  // DSH 宿主自带的目录选择器（「选择工作区目录」那个原生窗口）：**点击那一刻**才读服务，
+  // 装载期快照会在宿主重连/服务重建后失效。服务不在或宿主不支持 ⇒ 抛给 pickDshPath 归成 unavailable。
+  const pickDshDirectory = (): Promise<string | null> => {
+    const workspaces = ctx.get('workspaces')
+    if (workspaces === undefined) throw new Error('config-manager: workspaces service unavailable')
+    return workspaces.pickDirectory()
+  }
+  const api = new ConfigManagerApi(uiT, pickDshDirectory)
   const syncT = ctx.locale.bind(SYNC_NS)
   const syncApi = new SyncApi(uiT)
   const marketT = ctx.locale.bind(MARKET_NS)
