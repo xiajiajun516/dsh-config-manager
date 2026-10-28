@@ -100,8 +100,8 @@ importers:
         specifier: ^1.61.0
         version: 1.61.0(@types/react@18.3.31)(react@18.3.1)
       morphicons:
-        specifier: ^1.7.1
-        version: 1.7.1(react@18.3.1)
+        specifier: ^2.0.0
+        version: 2.0.0(react@18.3.1)
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -1598,8 +1598,8 @@ packages:
   lucide@1.61.0:
     resolution: {integrity: sha512-RPNMBgej6WjPKuCNEODg83CF8lnraCeDOsZ3HZ7KvUYf0O5hdJBzer/Ax/meBHl3xvrp5NmKX0IDA5myyzlvGw==}
 
-  morphicons@1.7.1:
-    resolution: {integrity: sha512-q5ylxy5/d7vBg0OAzanlooXf05PekovMYDuuQVpr6vAQZxl99lrJbaIi+jJ32PXQf9WEEaDO2pbNBsx1ZhEnFQ==}
+  morphicons@2.0.0:
+    resolution: {integrity: sha512-/pyqQjUhq8FUKz2SjJ6sXe4KjAa0QEmEbtzG13158/pl+G6bCJGvo1zIEDGNQ+Hagl69hIu4Mn9kJgTvvTf8Ew==}
     peerDependencies:
       react: '>=18'
       react-native: '>=0.71'
@@ -3148,7 +3148,7 @@ snapshots:
 
   lucide@1.61.0: {}
 
-  morphicons@1.7.1(react@18.3.1):
+  morphicons@2.0.0(react@18.3.1):
     optionalDependencies:
       react: 18.3.1
 
