@@ -4,7 +4,7 @@
 > 不重复的内容：发版命令与 CI 阶段表 → `DEVELOPERS.md`；CHANGELOG 体例 → skill `changelog-writing`；
 > 四处数字与活文档声明由 `tests/packaging-contract.test.ts` 的 `V-1` 与 `scripts/check-doc-versions.mjs` 机械钉住。
 
-- 适用插件版本：`dsh-config-manager@0.1.86`（`package.json:3`；与 `src/index.ts` 的 `export const PLUGIN_VERSION`、`package-lock.json` 根 version、`packages[""].version` 四处一致）
+- 适用插件版本：`dsh-config-manager@0.2.0`（`package.json:3`；与 `src/index.ts` 的 `export const PLUGIN_VERSION`、`package-lock.json` 根 version、`packages[""].version` 四处一致）
 - 本规范自版本切换点起生效；切换点与理由见 §9。取证时间 2026-10-27（npm registry / `gh release list` / `git tag` / 提交信息实查）。
 
 ## 1. 三个数字代表什么

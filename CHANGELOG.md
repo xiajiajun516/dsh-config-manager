@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.2.0] - 2026-10-29
+
+> **本版主题**：路径映射点一下就能选本机目录，系统文件夹窗口也不再藏到别的窗口后面。
+>
+> **Theme**: Pick a real folder for each path mapping in one click, and the system folder window no longer hides behind other windows.
+
 ### 🆕 新增 · Added
 
 - **路径映射可以从本机目录里点选**：每条待映射路径右侧的文件夹按钮直接弹出系统原生的「选择文件夹」窗口，选完即回填；优先复用 DSH 自带的目录选择窗口，DSH 没有该能力时用插件自己的系统对话框（Windows 资源管理器同款 / macOS Finder / Linux GTK·KDE），两者都不可用才回落到内置浏览器。
