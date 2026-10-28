@@ -4,7 +4,8 @@
  * 最新增量（T-ui-merge，2026-10-18）：`POST /sync/merge-preview`（只读三方合并预览）与
  * `POST /sync/apply-merge`（按分区级裁决执行，过 mutation gate）→ **81**；
  * 并行会话的 `POST /sync/probe`（通道连通性自检，只读）→ **82**。
- * 路径映射「选择本机路径」新增 `GET /path-browse`（只读列举一层目录，供导入向导弹窗）→ **83**。
+ * 路径映射「选择本机路径」新增 `GET /path-browse`（只读列举一层目录，供导入向导弹窗）→ **83**；
+ * 同一路径再加 `POST`（弹系统原生目录选择器，不改盘面）→ 仍是 **83** 条路由（该方法并入原声明）。
  * （`POST /sync/inventory` 曾把计数抬到 83，2026-10-18 按用户要求整项移除 → 回到 **82**。）
  * `/sync/inventory` 移除后 `/sync/probe` 与 `/sync/download` 之间不再有端点，两者紧邻。
  *
@@ -102,7 +103,7 @@ const ROUTE_SNAPSHOT = [
   ['exact', 'POST', '/api/dsh-config-manager/me/status'],
   ['exact', 'POST', '/api/dsh-config-manager/me/update'],
   ['exact', 'POST', '/api/dsh-config-manager/me/upload'],
-  ['exact', 'GET', '/api/dsh-config-manager/path-browse'],
+  ['exact', 'GET+POST', '/api/dsh-config-manager/path-browse'],
   ['exact', 'POST', '/api/dsh-config-manager/plan'],
   ['exact', 'GET', '/api/dsh-config-manager/profiles'],
   ['exact', 'POST', '/api/dsh-config-manager/profiles/copy'],

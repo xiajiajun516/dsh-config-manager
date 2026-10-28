@@ -35,7 +35,7 @@ export interface PathMappingFormProps {
   t: TranslateNS<'config-manager'>
   /** 映射变化时上报（仅已填写 newPrefix 的条目进入 core） */
   onChange: (mappings: PathMapping[]) => void
-  /** 本机目录列举（「选择本机路径」弹窗的数据源；宿主只读端点 /path-browse） */
+  /** 本机路径来源：原生选择器优先，内置目录浏览器兜底（同一条宿主端点 /path-browse） */
   api: PathBrowsePort
 }
 
@@ -62,6 +62,28 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
     onChange(mappings)
   }
 
+  /**
+   * 文件夹按钮的完整动作：**先请系统原生目录选择器**（Windows = 资源管理器同款「选择文件夹」窗口，
+   * macOS = Finder 面板，Linux = zenity/kdialog），拿到绝对路径就直接回填。
+   *
+   * 只有「平台不支持 / 弹窗自身失败」才回落到内置目录浏览器 —— 两条路都能给出绝对路径，
+   * 区别只是用谁家的窗口；用户取消则什么都不做（不是错误，不弹红条）。
+   */
+  const pickFolder = (oldPrefix: string): void => {
+    const startPath = (drafts[oldPrefix] ?? '').trim()
+    api.pickNativePath(startPath, t('import.paths.picker.title')).then(
+      (result) => {
+        if (result.ok) {
+          setNewPrefix(oldPrefix, result.path)
+          return
+        }
+        if (result.reason === 'canceled') return
+        setPickingFor(oldPrefix) // unsupported / failed → 内置浏览器兜底
+      },
+      () => { setPickingFor(oldPrefix) }, // 请求本身失败（宿主不可达等）同样回落，不堵住用户
+    )
+  }
+
   const unresolved = useMemo(() => {
     return issues.filter((issue) => (drafts[issue.value] ?? '') === '')
   }, [issues, drafts])
@@ -85,7 +107,7 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
           </div>
           <div className={css.pathNew}>
             <div className={css.fieldLabel}>{t('import.paths.new')}</div>
-            {/* 输入行 = 手打 + 浏览：浏览按钮打开宿主目录弹窗（浏览器拿不到本机路径） */}
+            {/* 输入行 = 手打 + 原生选择器（不可用时回落宿主的目录浏览器；浏览器本身拿不到本机路径） */}
             <div className={css.pathInputRow}>
               <input
                 className={css.input}
@@ -96,7 +118,7 @@ export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappi
               <IconButton
                 icon={<FolderOpenIcon size={14} />}
                 label={t('import.paths.browse')}
-                onClick={() => { setPickingFor(issue.value) }}
+                onClick={() => { pickFolder(issue.value) }}
               />
             </div>
           </div>

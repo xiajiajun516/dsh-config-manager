@@ -43,6 +43,7 @@ import type { ForeignSkip } from '../foreign/types.ts';
 import type { ForeignSourcesResponse as ForeignSourcesViewInput } from '../ui/foreign-view.ts';
 import type { DiskUsageReport } from '../core/disk-usage.ts';
 import type { BrowseResult } from '../core/path-browse.ts';
+import type { NativePickResult } from '../core/native-path-picker.ts';
 import type { UiT } from '../ui/i18n.ts';
 import { failedSectionsFromResponse } from '../ui/export-flow.ts';
 import type { SessionFormatDisposition } from '../ui/session-format-disposition.ts';
@@ -292,6 +293,8 @@ const LONG_OPTS: RequestOptions = { timeoutMs: LONG_REQUEST_TIMEOUT_MS };
 
 /** 插件自更新请求的超时：宿主侧安装上限 15 分钟，客户端留出余量（16 分钟）避免误报「请求超时」。 */
 const SELF_UPDATE_OPTS: RequestOptions = { timeoutMs: 16 * 60 * 1000 };
+/** 原生目录选择器：宿主侧 10 分钟上限，这里留出传输余量。 */
+const NATIVE_PICK_OPTS: RequestOptions = { timeoutMs: 11 * 60 * 1000 };
 
 /** query-string 辅助（跳过 undefined/空串，与 dsh-ssh 一致） */
 function query(params: Record<string, string | number | undefined>): string {
@@ -584,6 +587,19 @@ export class ConfigManagerApi {
   async browsePath(target?: string): Promise<BrowseResult> {
     const suffix = target === undefined || target === '' ? '' : query({ path: target });
     return getJson<BrowseResult>(CONFIG_MANAGER_API.pathBrowse + suffix, this.t);
+  }
+
+  /**
+   * 弹**系统原生**目录选择器（同一端点的 POST 形态）。
+   *
+   * 用户可能在系统对话框里逛几分钟，所以超时必须远大于常规请求：内核侧 10 分钟兜底，这里再加一道。
+   * 回 `reason: 'unsupported' | 'failed'` 时调用方回落到内置目录浏览器，不当错误处理。
+   */
+  async pickNativePath(startPath?: string, title?: string): Promise<NativePickResult> {
+    const body: Record<string, string> = {};
+    if (startPath !== undefined && startPath !== '') body.startPath = startPath;
+    if (title !== undefined && title !== '') body.title = title;
+    return postJson<NativePickResult>(CONFIG_MANAGER_API.pathBrowse, body, this.t, NATIVE_PICK_OPTS);
   }
 
   /** ImportPort.decryptArchive：解锁整体加密备份容器 → 明文 ZIP 路径 + 解密覆盖的凭据 ref 名 */

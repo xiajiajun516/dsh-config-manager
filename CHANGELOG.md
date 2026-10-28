@@ -34,8 +34,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🆕 新增 · Added
 
-- **路径映射可以从本机目录里点选**：每条待映射路径右侧多了一个文件夹按钮，打开就是本机目录浏览器，可逐层点进去挑目录，也可直接「使用当前目录」。
-  **Path mapping can be picked from your own folders**: each unmapped path now has a folder button that opens a directory browser — click through folders to pick one, or take the current directory as is.
+- **路径映射可以从本机目录里点选**：每条待映射路径右侧的文件夹按钮直接弹出系统原生的「选择文件夹」窗口（Windows 与资源管理器同款、macOS 为 Finder 面板、Linux 为 GTK/KDE 对话框），选完即回填；系统弹窗不可用时自动回落到插件内置的目录浏览器。
+  **Path mapping can be picked from your own folders**: the folder button now opens the OS-native folder picker (the window Explorer uses on Windows, Finder on macOS, GTK/KDE on Linux) and fills the path in place, falling back to the built-in directory browser when no native picker exists.
 
 ### 🔧 变更 · Changed
 

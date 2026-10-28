@@ -40,8 +40,11 @@ type BrowseState =
   | { kind: 'ready'; data: BrowseResult }
   | { kind: 'failed'; detail: string }
 
-/** 只需要一个列举方法：方便测试替身，也避免组件碰到其余 API。 */
-export type PathBrowsePort = Pick<ConfigManagerApi, 'browsePath'>
+/**
+ * 只需要两个方法：内置浏览器列举 + 原生选择器（两者是**同一条**宿主端点的 GET / POST 形态）。
+ * 这样测试替身只碰这两个方法，其余 API 一概不进入组件视野。
+ */
+export type PathBrowsePort = Pick<ConfigManagerApi, 'browsePath' | 'pickNativePath'>
 
 export interface PathPickerDialogProps {
   open: boolean
