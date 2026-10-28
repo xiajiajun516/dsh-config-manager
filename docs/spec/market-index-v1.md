@@ -2,7 +2,7 @@
 
 > **本文件是给第三方市场仓库作者的对外契约**：照本规格搭出的仓库必须能被 dsh-config-manager 直接消费，无需读插件源码。
 > 上游唯一事实来源 = 插件 `src/market/`（`types.ts` / `index-parser.ts` / `security.ts` / `reader.ts` / `builtin.ts`），与本文件冲突时以代码为准。
-> 设计过程与背景推演不在这里（原 `docs/design/2026-08-19-market-repo-setup-guide.md` 已随迁移并入本文件）。
+> 设计过程与背景推演不在这里（原《市场仓库搭建指南》设计稿已随迁移并入本文件）。
 
 ---
 

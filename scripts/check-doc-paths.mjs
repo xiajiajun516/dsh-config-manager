@@ -66,9 +66,10 @@ const REPO_FILES = []
 function walkRepo(dir) {
   if (!existsSync(dir)) return
   for (const name of readdirSync(dir)) {
-    if (name === 'node_modules' || name === '.git' || name === '.tmp' || name === 'lib' || name === 'dist') continue
+    // outputs/ 与 .tmp/ 是本地夹具与暂存（未进 git）：纳入索引会让守卫在本地假绿、CI 真红。
+    if (name === 'node_modules' || name === '.git' || name === '.tmp' || name === 'outputs' || name === 'lib' || name === 'dist') continue
     const full = join(dir, name)
-    const st = lstatSync(full) // 可能有断链符号链接（outputs 夹具），不能跟随
+    const st = lstatSync(full) // 可能有断链符号链接，不能跟随
     if (st.isSymbolicLink()) continue
     if (st.isDirectory()) walkRepo(full)
     else REPO_FILES.push(full.slice(ROOT.length + 1).split(sep).join('/'))
