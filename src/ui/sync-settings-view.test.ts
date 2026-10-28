@@ -12,7 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  workdirBacklog,
+  workdirBacklog, pickSyncPrimary,
   autosyncIntervalKey, buildSelectionRequest, buildSyncChannelBody, buildSyncConfigBody, buildSyncPushBody,
   channelBackfillFromStatus, computeEncryptInvalid, encryptToggle, formatSyncStatusTimestamp,
   formatSyncUrlPreview, githubPollDecision, hasSelectedSections, includeSecretsToggle,
@@ -574,4 +574,21 @@ test('issue #104 建议 3：workdirBacklog —— 本地领先且远端零快照
   assert.deepEqual(workdirBacklog({ facts: { ahead: 14, remoteSnapshots: 0 } }), { kind: 'never-synced', ahead: 14 });
   // 远端有过快照 ⇒ 只是没推完，语气不同
   assert.deepEqual(workdirBacklog({ facts: { ahead: 3, remoteSnapshots: 5 } }), { kind: 'ahead', ahead: 3, remoteSnapshots: 5 });
+});
+
+test('issue #115：pickSyncPrimary —— 只有远端确证零快照才让「推送到远端」当主按钮', () => {
+  // 远端确实空（自检给出 0）→ 同步无事可做，第一次备份就是上传
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 0, remoteSnapshots: 0 } } }, 'git'), 'push');
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 14, remoteSnapshots: 0 } } }, 'git'), 'push', '本地攒着提交 + 远端零快照同样是首次备份');
+  // 远端有快照（哪怕本地领先）→ 回落下行：同步会先合并，不覆盖远端历史
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 0, remoteSnapshots: 14 } } }, 'git'), 'sync');
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 3, remoteSnapshots: 5 } } }, 'git'), 'sync');
+  // 没有事实（没走 detail 自检 / 自检失败 / 无状态）→ 一律回落下行，绝不把用户推向推送
+  assert.equal(pickSyncPrimary(undefined, 'git'), 'sync');
+  assert.equal(pickSyncPrimary(null, 'git'), 'sync');
+  assert.equal(pickSyncPrimary({ workDir: { error: 'git not found' } }, 'git'), 'sync');
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: null, remoteSnapshots: null } } }, 'git'), 'sync');
+  // 非 git 通道没有工作副本自检事实 ⇒ 即使 statusInfo 里带了别人的 workDir 也一律下行
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 0, remoteSnapshots: 0 } } }, 'webdav'), 'sync');
+  assert.equal(pickSyncPrimary({ workDir: { facts: { ahead: 0, remoteSnapshots: 0 } } }, 's3'), 'sync');
 });

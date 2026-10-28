@@ -913,6 +913,27 @@ export function workdirBacklog(
   return { kind: 'ahead', ahead, remoteSnapshots }
 }
 
+/**
+ * 「这一步该按哪个方向」—— 动作行只留一个 primary（issue 115：两个按钮并排、首次使用看不出该按哪个）。
+ *
+ * 判定只用**已确证**的远端事实，没证据就回落下行：一键同步先拉远端再三方合并、逐项确认，
+ * 不会拿本机默认值覆盖远端历史；上行推送才是产生新快照、改写远端历史的那个动作。
+ * 唯一让上行成为 primary 的情形是「远端确证零快照」（git 工作副本自检 remoteSnapshots === 0）：
+ * 此时同步无事可做，用户要的就是第一次备份。判定入口收在本函数里（channel 一并传入），
+ * 组件不用在调用点再判一次通道 —— 判据只有一处。
+ */
+export function pickSyncPrimary(
+  statusInfo: { workDir?: { facts?: { ahead?: number | null; remoteSnapshots?: number | null }; error?: string } } | null | undefined,
+  channel: string,
+): 'push' | 'sync' {
+  // 只有 git 通道会做工作副本自检；别的通道没有这份事实，一律回落下行。
+  if (channel !== 'git') return 'sync';
+  const backlog = workdirBacklog(statusInfo?.workDir)
+  if (backlog.kind === 'never-synced') return 'push';
+  if (backlog.kind === 'clean' && backlog.remoteSnapshots === 0) return 'push';
+  return 'sync';
+}
+
 export function formatSyncUrlPreview(url: string, max = 60): string {
   return url.slice(0, max)
 }

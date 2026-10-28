@@ -51,7 +51,8 @@ src/
 **发版顺序**（顺序有意义：publish.yml 抽取的是**被打 tag 的那个提交**里的 CHANGELOG，所以 CHANGELOG 收口必须先提交再打 tag）：
 
 ```bash
-# 1) 收口 CHANGELOG：[Unreleased] → ## [X.Y.Z] - <今天>，并在顶部开好下一轮骨架
+# 1) 先定版本号，再收口 CHANGELOG：[Unreleased] → ## [X.Y.Z] - <今天>，顶部开好下一轮骨架
+#    版本号怎么定（PATCH/MINOR/MAJOR、预发布命名、能不能发）→ docs/maintenance/versioning.md
 node .github/scripts/changelog-section.mjs release X.Y.Z
 git add CHANGELOG.md && git commit -m "docs(changelog): X.Y.Z"
 

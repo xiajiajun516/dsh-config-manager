@@ -40,6 +40,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **同步页只强调当前该按的那一个方向**：远端确实还没有任何快照时，主按钮是「推送到远端」（第一次备份），其余情况一律是「一键同步」；两个方向不再同级并列。
+  **The sync page now highlights the one direction that actually applies**: when the remote provably holds no snapshot yet, "Push to remote" is the primary button (first backup); otherwise "Sync" is — the two are no longer presented as equals.
 - **同步正在进行时打开同步页不再干等十秒**：另一个同步任务占着工作副本时，页面会立刻说明「工作副本正忙」，而不是空转到超时再报错。
   **Opening the sync page during a running sync no longer waits ten seconds**: when another sync holds the work copy, the page says the work copy is busy right away instead of idling until it times out.
 

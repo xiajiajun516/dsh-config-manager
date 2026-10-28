@@ -74,7 +74,7 @@ import type {
 import {
   buildSelectionRequest, buildSyncChannelBody, buildSyncConfigBody, buildSyncPushBody,
   channelBackfillFromStatus, channelRemoteReady, cloudFormFromStatus, computeEncryptInvalid, encryptToggle,
-  githubPollDecision, hasSelectedSections, includeSecretsToggle, isGithubFlowInFlight, resolveInitialChannel,
+  githubPollDecision, hasSelectedSections, includeSecretsToggle, isGithubFlowInFlight, pickSyncPrimary, resolveInitialChannel,
   needsSessionInventory, saveQueueOnFlush, saveQueueOnRequest, saveQueueOnSettled, toggleSectionSelection,
   validateCloudForm, DEFAULT_S3_PROVIDER,
   SYNC_CONFIG_SAVE_DEBOUNCE_MS,
@@ -1261,10 +1261,10 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         {ready && (
           <Card>
             {/* 动作行（方案 A 定案）：用户只面对两个方向 —— 下行「一键同步」/ 上行「推送到远端」。
-                合并裁决并入一键同步（有基线走三方裁决视图、无基线走老导入确认），不再单独占按钮。 */}
+                合并裁决并入一键同步（有基线走三方裁决视图、无基线走老导入确认）；并排两个按钮看不出该按哪个（issue 115）⇒ 按已确证远端事实只让一个落在 primary。 */}
             <div className={css.actionRow}>
               <Button
-                variant="primary"
+                variant={pickSyncPrimary(state.statusInfo, channel) === 'sync' ? 'primary' : 'ghost'}
                 disabled={busy}
                 loading={state.busy === 'sync'}
                 onClick={() => { void runSyncSmart(channel) }}
@@ -1273,7 +1273,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   ? (syncPhase === 'preview' ? t('syncflow.checkingRemote') : t('syncflow.syncing'))
                   : t('syncflow.button')}
               </Button>
-              <Button disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
+              <Button variant={pickSyncPrimary(state.statusInfo, channel) === 'push' ? 'primary' : 'ghost'} disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
               </Button>
               {/* 测试连接（只读自检）：与两个主操作同一行、排在最后；结果走 toast（不再占页面高度） */}
