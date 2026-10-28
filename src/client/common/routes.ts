@@ -106,6 +106,11 @@ export const CONFIG_MANAGER_API = {
    * 带 `sessionId` = 流式代理 DSH 自己的 `/api/session.export`（原始日志 ZIP，含子会话与附件）。
    */
   sessionExport: `${API_BASE}/session-export`,
+  /**
+   * 本机目录列举（**只读**）：`?path=` 缺省 = 「此电脑」根列表。
+   * 导入向导「路径映射 → 选本机路径」弹窗的唯一数据源（浏览器拿不到真实目录树）。
+   */
+  pathBrowse: `${API_BASE}/path-browse`,
 } as const;
 
 /** 远程同步路由族（git / webdav 通道、GitHub device flow、历史快照、自动同步、分区选择）。 */

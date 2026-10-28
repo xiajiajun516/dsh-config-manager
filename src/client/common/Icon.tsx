@@ -30,7 +30,9 @@ import DatabaseBackup from 'lucide-react/dist/esm/icons/database-backup.mjs'
 import Download from 'lucide-react/dist/esm/icons/download.mjs'
 import Eye from 'lucide-react/dist/esm/icons/eye.mjs'
 import File from 'lucide-react/dist/esm/icons/file.mjs'
+import Folder from 'lucide-react/dist/esm/icons/folder.mjs'
 import FolderInput from 'lucide-react/dist/esm/icons/folder-input.mjs'
+import FolderOpen from 'lucide-react/dist/esm/icons/folder-open.mjs'
 import HardDriveDownload from 'lucide-react/dist/esm/icons/hard-drive-download.mjs'
 import History from 'lucide-react/dist/esm/icons/history.mjs'
 import Info from 'lucide-react/dist/esm/icons/info.mjs'
@@ -68,6 +70,8 @@ const ICONS = {
   close: X,
   delete: Trash2,
   file: File,
+  folder: Folder,
+  folderOpen: FolderOpen,
   download: Download,
   inspect: Search,
   view: Eye,
@@ -238,6 +242,9 @@ export const CloseIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name
 export const DeleteIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="delete" {...p} />
 export const DownloadIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="download" {...p} />
 export const InspectIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="inspect" {...p} />
+export const FolderIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="folder" {...p} />
+export const FolderOpenIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="folderOpen" {...p} />
+export const FileIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="file" {...p} />
 export const ArrowRightIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="arrowRight" {...p} />
 export const ChevronDownIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="chevronDown" {...p} />
 export const PreviewIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="preview" {...p} />

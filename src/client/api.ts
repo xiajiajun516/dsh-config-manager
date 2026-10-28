@@ -42,6 +42,7 @@ import type { SessionExportProbe } from './session-export/session-export-view.ts
 import type { ForeignSkip } from '../foreign/types.ts';
 import type { ForeignSourcesResponse as ForeignSourcesViewInput } from '../ui/foreign-view.ts';
 import type { DiskUsageReport } from '../core/disk-usage.ts';
+import type { BrowseResult } from '../core/path-browse.ts';
 import type { UiT } from '../ui/i18n.ts';
 import { failedSectionsFromResponse } from '../ui/export-flow.ts';
 import type { SessionFormatDisposition } from '../ui/session-format-disposition.ts';
@@ -573,6 +574,16 @@ export class ConfigManagerApi {
       this.t,
       LONG_OPTS,
     );
+  }
+
+  /**
+   * 列出一层本机目录（只读；路径映射「选本机路径」弹窗的数据源）。
+   * `target` 缺省或空串 = 「此电脑」根列表（Windows 盘符 / POSIX `/`）。
+   * 失败不抛异常：宿主回 `error: 'not-found'|'denied'|'failed'|'not-absolute'`，弹窗照常可用。
+   */
+  async browsePath(target?: string): Promise<BrowseResult> {
+    const suffix = target === undefined || target === '' ? '' : query({ path: target });
+    return getJson<BrowseResult>(CONFIG_MANAGER_API.pathBrowse + suffix, this.t);
   }
 
   /** ImportPort.decryptArchive：解锁整体加密备份容器 → 明文 ZIP 路径 + 解密覆盖的凭据 ref 名 */

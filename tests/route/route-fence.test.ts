@@ -18,7 +18,7 @@ import { endpoint, registerRoutes, requireJsonObject, RouteError, routeSpecOf, t
 
 const root = path.resolve(import.meta.dirname, '../..');
 
-/** 宿主路由源：src/index.ts（保留的 7 条）+ src/routes/*.ts（拆出去的 75 条）。 */
+/** 宿主路由源：src/index.ts（保留的 7 条）+ src/routes/*.ts（拆出去的 76 条）。 */
 function routeSources(): Array<{ file: string; text: string }> {
   const out = [{ file: 'src/index.ts', text: fs.readFileSync(path.join(root, 'src/index.ts'), 'utf8') }];
   const dir = path.join(root, 'src/routes');
@@ -175,17 +175,17 @@ test('注册点兜底：未经 endpoint() 的裸路由直接抛错（fail-fast�
 });
 
 
-test('buildRoutes：75 条拆出的路由全部产出、全部经 kit、路径不重复（运行期）', async () => {
+test('buildRoutes：76 条拆出的路由全部产出、全部经 kit、路径不重复（运行期）', async () => {
   const { buildRoutes } = await import('../../src/routes/index.ts');
   // 只构造路由表：组文件在构建期只解构 env，并调用 withMutationGate 包裹 handler（其余依赖都在 handler 内）
   // → 用一个「withMutationGate 恒等包裹、其余成员为空对象」的代理即可，不需要真宿主依赖树。
   const routes = buildRoutes(stubEnv());
-  assert.equal(routes.length, 75, '拆出的路由数应为 75（其余 7 条留在 index.ts；路由总数见 parity 快照的 82 条）');
+  assert.equal(routes.length, 76, '拆出的路由数应为 76（其余 7 条留在 index.ts；路由总数见 parity 快照的 83 条）');
   for (const route of routes) {
     assert.notEqual(routeSpecOf(route), undefined, '未经 kit 的路由: ' + route.path);
   }
   const paths = new Set(routes.map((r) => r.path));
-  assert.equal(paths.size, 75, '路径不得重复（webServer.register 对重复 (kind,path) 直接抛错）');
+  assert.equal(paths.size, 76, '路径不得重复（webServer.register 对重复 (kind,path) 直接抛错）');
 });
 
 test('W1 修复证据：原先无 try/catch 的路由，异常现在被 kit 兜成 500 JSON（旧行为=webserver 空体 400）', async () => {
@@ -211,7 +211,7 @@ test('W1 修复证据：原先无 try/catch 的路由，异常现在被 kit 兜�
   }
 });
 
-test('结构不变量：82 条路由全部经 endpoint() 声明，且围栏只有 kit 一份实现', () => {
+test('结构不变量：83 条路由全部经 endpoint() 声明，且围栏只有 kit 一份实现', () => {
   const sources = routeSources();
   let declarations = 0;
   let bareHandlers = 0;
@@ -225,7 +225,7 @@ test('结构不变量：82 条路由全部经 endpoint() 声明，且围栏只�
     // 旧的逐路由样板形态（handler: async (req, res) => { + 首行 guard）不得再出现
     bareHandlers += (text.match(/handler:\s*async \(req, res\)/g) ?? []).length;
   }
-  assert.equal(declarations, 82, `路由声明应为 82 条（实际 ${declarations}）——少一条即静默少一道围栏`);
+  assert.equal(declarations, 83, `路由声明应为 83 条（实际 ${declarations}）——少一条即静默少一道围栏`);
   assert.equal(bareHandlers, 0, '不得残留裸 handler 形态（必须经 endpoint() 包装）');
   const fenceOwners = sources.filter(({ text }) => /isLoopbackRequest\(/.test(text)).map((s) => s.file);
   assert.deepEqual(fenceOwners, ['src/routes/kit.ts'], 'loopback 围栏只允许在 kit 里实现一次，实际：' + fenceOwners.join(', '));

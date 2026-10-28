@@ -3972,6 +3972,11 @@ body {
 
 .pathOld,
 .pathNew {
+  /* 黑块溢出面板的根因：本仓库**没有**全局 `*{box-sizing:border-box}` 复位，而这块是
+     width:100% + padding 4/8px + border 1px 的 content-box ⇒ 实际外框比父内容盒宽 18px，
+     深色底块右缘冲出 .pathRow 约 7px（实测卡片 39..570 vs 内部块 51..577）。
+     声明式修法：本块自己算 border-box（与 .input 的既有做法一致）。 */
+  box-sizing: border-box;
   min-width: 0;
   width: 100%;
   /* 纵向列容器：让内部 input 拉满块宽（等价于旧版全局 .input{width:100%} 的效果，
@@ -3996,6 +4001,71 @@ body {
 
 .pathIssueKind {
   flex: none;
+}
+
+/* 新路径输入行：手打输入 + 浏览按钮同一行（窄画布下按钮 flex:none 不换行，输入可收缩） */
+.pathInputRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pathInputRow > .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 路径选择弹窗：当前目录条 + 一层条目列表（长列表由 Modal.Body scroll 限高内滚） */
+.pickerPath {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 4px 8px;
+  border-radius: var(--cm-r-2);
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--cm-fs-meta);
+  overflow-wrap: anywhere;
+}
+
+.pickerList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pickerRow {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--cm-r-2);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--cm-fs-meta);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pickerRow:hover {
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.pickerRow:focus-visible {
+  outline: 2px solid var(--cm-accent);
+  outline-offset: -1px;
+}
+
+/* 文件名可任意折行，绝不横向撑破弹窗 */
+.pickerName {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* 密钥补录 */

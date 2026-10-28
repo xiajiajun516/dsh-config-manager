@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import { toast } from './toast-store.ts'
 import { CopyStateIcon } from './Icon.tsx'
+import { hostIcon } from './host-primitives.ts'
 import { copyTextToClipboard } from './clipboard.ts'
 import css from '../config-manager.module.css'
 
@@ -63,9 +64,27 @@ export function CopyButton({ text, label, t }: CopyButtonProps) {
     })
   }
 
+  /**
+   * 图标 = **对话（聊天）回退条用的那两颗宿主原生图**（2026-10-28 用户要求「复制图标统一替换成
+   * 对话回退的复制 icon」）：`IconCopyOutlineRegular → IconCheckOutlineRegular` 的**瞬时换图**，
+   * 与宿主 MessageIconActions / ChatEntryCopyAction 同一对、同一字形与描边重量。
+   * 拿不到宿主图标的老宿主回落 morphicons 的 `CopyStateIcon`（绝不能变成空白按钮）。
+   */
+  const HostCopyIcon = hostIcon('IconCopyOutlineRegular')
+  const HostCheckIcon = hostIcon('IconCheckOutlineRegular')
+
   return (
-    <button type="button" className={css.copyBtn} aria-label={label} title={label} onClick={onClick}>
-      <CopyStateIcon done={copied} size={12} />
+    <button
+      type="button"
+      className={css.copyBtn}
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      data-copy-state={copied ? 'copied' : 'idle'}
+    >
+      {HostCopyIcon !== null && HostCheckIcon !== null
+        ? (copied ? <HostCheckIcon size={12} /> : <HostCopyIcon size={12} />)
+        : <CopyStateIcon done={copied} size={12} />}
     </button>
   )
 }

@@ -3,7 +3,7 @@
  *
  * 顺序对匹配无影响：DSH webServer 的契约是「命名路由必须互不相同，注册顺序不影响请求」
  * （见 @deepseek-ai/dsh-host-webserver 的 WebServer 文档）。src/index.ts 保留的 7 条被源码级
- * 守卫按文件窗口钉住，其余 75 条在这里组装。
+ * 守卫按文件窗口钉住，其余 76 条在这里组装（总数 83：含 path-browse）。
  */
 import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
@@ -20,6 +20,7 @@ import { meRoutes } from './me.ts'
 import { historyRoutes } from './history.ts'
 import { recoveryRoutes } from './recovery.ts'
 import { sessionExportRoutes } from './session-export.ts'
+import { pathBrowseRoutes } from './path-browse.ts'
 
 export function buildRoutes(env: RoutesEnv): WebRoute[] {
   return [
@@ -36,5 +37,6 @@ export function buildRoutes(env: RoutesEnv): WebRoute[] {
     ...historyRoutes(env),
     ...recoveryRoutes(env),
     ...sessionExportRoutes(env),
+    ...pathBrowseRoutes(env),
   ]
 }

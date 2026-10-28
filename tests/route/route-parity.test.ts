@@ -4,6 +4,7 @@
  * 最新增量（T-ui-merge，2026-10-18）：`POST /sync/merge-preview`（只读三方合并预览）与
  * `POST /sync/apply-merge`（按分区级裁决执行，过 mutation gate）→ **81**；
  * 并行会话的 `POST /sync/probe`（通道连通性自检，只读）→ **82**。
+ * 路径映射「选择本机路径」新增 `GET /path-browse`（只读列举一层目录，供导入向导弹窗）→ **83**。
  * （`POST /sync/inventory` 曾把计数抬到 83，2026-10-18 按用户要求整项移除 → 回到 **82**。）
  * `/sync/inventory` 移除后 `/sync/probe` 与 `/sync/download` 之间不再有端点，两者紧邻。
  *
@@ -101,6 +102,7 @@ const ROUTE_SNAPSHOT = [
   ['exact', 'POST', '/api/dsh-config-manager/me/status'],
   ['exact', 'POST', '/api/dsh-config-manager/me/update'],
   ['exact', 'POST', '/api/dsh-config-manager/me/upload'],
+  ['exact', 'GET', '/api/dsh-config-manager/path-browse'],
   ['exact', 'POST', '/api/dsh-config-manager/plan'],
   ['exact', 'GET', '/api/dsh-config-manager/profiles'],
   ['exact', 'POST', '/api/dsh-config-manager/profiles/copy'],
@@ -225,10 +227,10 @@ function declaredRoutes(): string[] {
   return rows.sort();
 }
 
-test('W1 parity：路由清单与预期快照逐条一致（82 条）', () => {
+test('W1 parity：路由清单与预期快照逐条一致（83 条）', () => {
   const expected = ROUTE_SNAPSHOT.map(([kind, methods, routePath]) => row(kind as string, (methods as string).split('+'), routePath as string)).sort();
   const actual = declaredRoutes();
-  assert.equal(expected.length, 82, '快照自身应为 82 条');
+  assert.equal(expected.length, 83, '快照自身应为 83 条');
   assert.deepEqual(actual, expected, 'kit 化/拆组后路由声明集合必须逐条不变');
 });
 
@@ -240,8 +242,8 @@ test('W1 parity 解析器自检：少一条 / 改一条 / 改方法都会被检�
   assert.notDeepEqual(dropped, expected, '少一条路由必须被判为不一致');
   const renamed = [...actual.slice(1), actual[0]!.replace(/\/[^/]+$/, '/__drifted__')];
   assert.notDeepEqual(renamed, expected, '路径漂移必须被判为不一致');
-  // 解析器必须真的解析到 82 条（否则上面的 deepEqual 可能是「两边都空」的假绿）
-  assert.equal(actual.length, 82, `解析到的路由数应为 82，实际 ${actual.length}`);
+  // 解析器必须真的解析到 83 条（否则上面的 deepEqual 可能是「两边都空」的假绿）
+  assert.equal(actual.length, 83, `解析到的路由数应为 83，实际 ${actual.length}`);
 });
 
 /** 单份源码里的真实路由声明数（与 declaredRoutes 同一解析口径）。 */
@@ -284,9 +286,9 @@ test('W1 parity：路由计数散文必须与真实声明数一致（routes-F5 �
   const indexSource = sources[0] as { file: string; text: string };
   const indexCount = countDeclarations(indexSource.text);
   const builtCount = actual - indexCount;
-  assert.equal(actual, 82, '真实声明总数应为 82');
+  assert.equal(actual, 83, '真实声明总数应为 83');
   assert.equal(indexCount, 7, 'src/index.ts 保留的声明应为 7');
-  assert.equal(builtCount, 75, 'buildRoutes 拆出的声明应为 75');
+  assert.equal(builtCount, 76, 'buildRoutes 拆出的声明应为 76');
 
   const claims: Array<{ file: string; label: string; stated: number; expected: number }> = [];
   const collect = (file: string, text: string, re: RegExp, label: string, expected: number): void => {

@@ -165,15 +165,6 @@ const navLayoutResult = navWidths === null
    */
   const [libraryPending, setLibraryPending] = useState<ArtifactPendingAction | null>(null)
 
-  /**
-   * 导入面板当前是否停在「从其它 agent 导入」这一页（t17）。
-   *
-   * 为什么是壳层 state 而不是 runStore：它与「导入面板」同生命周期，且**不该被持久化** ——
-   * 刷新后重放一个「正在选来源」的界面只会骗人（来源检测结果要重新拉）。
-   * 关面板 / 切走即随组件卸载归零，与 libraryAction 同一档语义。
-   */
-  const [foreignImportOpen, setForeignImportOpen] = useState(false)
-
   /* ---------------- m-star-prompt：Star 引导弹窗（保持既有能力） ---------------- */
   const [starPromptOpen, setStarPromptOpen] = useState(false)
   /** 弹窗展示的 GitHub 仓库地址（GET /star-prompt 返回；不落 store） */
@@ -441,7 +432,7 @@ const navLayoutResult = navWidths === null
       case 'market.publish.open': openTask('market', { subView: 'myconfigs' }); return
       // 维护与诊断是全屏子视图：命令直达它，而不是只把用户送到环境页
       // 从其它 agent 导入：开导入面板并停在来源选择（与首页工具栏同一路径）
-      case 'import.foreign': openTask('import'); setForeignImportOpen(true); return
+      case 'import.foreign': openTask('import', { foreign: true }); return
       case 'maintenance.open': openMaintenance(); return
       case 'activity.open': openTask('runs'); return
       case 'history.open': openTask('history'); return
@@ -468,10 +459,7 @@ const navLayoutResult = navWidths === null
           t={t}
           syncT={syncT}
           // 直达来源选择：开导入面板 + 把面板切到「从其它 agent 导入」那一步
-          openForeignImport={() => {
-            openTask('import')
-            setForeignImportOpen(true)
-          }}
+          openForeignImport={() => { openTask('import', { foreign: true }) }}
         />
       )
       break
@@ -638,7 +626,7 @@ const navLayoutResult = navWidths === null
             {/* 导入与逛市场都是多阶段流程（§1），同样由本面板承载。
                 此前只渲染了 export / runs / history / about —— 从产物库点「导入」会开到**一个空面板**，
                 而导入其实在页面那条路径里跑（返回后正好看到它），两处状态分叉。 */}
-            {activeTask.kind === 'import' && (foreignImportOpen ? (
+            {activeTask.kind === 'import' && (importTaskForeign(activeTask.payload) ? (
               /* 「从其它 agent 导入」（t17）：页面级步骤，复用同一块面板 ——
                  与既有导入向导并列，避免「弹窗套向导」。产包成功后把 zipPath 写进
                  runStore.library.pendingZip（产物库「一键导入」那条已验证的通道），
@@ -648,8 +636,9 @@ const navLayoutResult = navWidths === null
                 t={t}
                 uiT={uiT}
                 onReady={(result) => {
-                  setForeignImportOpen(false)
+                  // 产包成功 = 这一页的使命结束：入参改回「向导」，并把 zipPath 交给既有导入通道
                   runStore.patch({
+                    task: { ...activeTask, payload: { foreign: false } },
                     library: {
                       pendingZip: { zipPath: result.zipPath, name: result.name },
                     },
@@ -661,7 +650,8 @@ const navLayoutResult = navWidths === null
                 api={api}
                 t={t}
                 uiT={uiT}
-                onOpenForeignImport={() => { setForeignImportOpen(true) }}
+                // 向导 → 来源选择：同样是改 Task 入参（面板状态只有一个事实源）
+                onOpenForeignImport={() => { runStore.patch({ task: { ...activeTask, payload: { foreign: true } } }) }}
               />
             ))}
             {activeTask.kind === 'market' && (
@@ -781,6 +771,19 @@ function marketTaskSubView(payload: unknown): 'browse' | 'myconfigs' | undefined
   if (typeof payload !== 'object' || payload === null) return undefined
   const v: unknown = (payload as { subView?: unknown }).subView
   return v === 'myconfigs' || v === 'browse' ? v : undefined
+}
+
+/**
+ * Task 入参里取「导入面板停在来源选择」（t17「从其它 agent 导入」）。
+ *
+ * 为什么放进 Task 入参而不是壳层 useState（原 bug 的根因）：壳层 state 与「导入面板」**不同**
+ * 生命周期 —— 关面板只是 `task: null`，壳层不重挂，于是「先点从其它 agent 导入 → 关掉 → 再点导入」
+ * 会带着旧的 true 进来，看到的是来源选择页而不是导入向导。入参随 Task 一起生灭（且 Task 本身
+ * 不持久化，见 run-store 的 `task: null`），开一个**新的**导入面板自然就是向导。
+ */
+function importTaskForeign(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false
+  return (payload as { foreign?: unknown }).foreign === true
 }
 
 function marketTaskItemId(payload: unknown): string | undefined {

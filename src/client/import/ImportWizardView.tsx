@@ -648,6 +648,7 @@ function ImportWizardBody({ api, t, uiT, onOpenForeignImport }: ImportWizardView
         onBack={() => { setPhase('preview') }}
         onNext={finishPathMapping}
         t={t}
+        api={api}
       />
     )
   }

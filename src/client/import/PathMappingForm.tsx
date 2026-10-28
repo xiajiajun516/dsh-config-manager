@@ -10,7 +10,10 @@ import { useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { PathIssue, PathMapping } from '../../core/types.ts'
 import type { TranslateNS } from '../client-types.ts'
-import { Banner } from '../common/ui.tsx'
+import { Banner, IconButton } from '../common/ui.tsx'
+import { FolderOpenIcon } from '../common/Icon.tsx'
+import { PathPickerDialog } from './PathPickerDialog.tsx'
+import type { PathBrowsePort } from './PathPickerDialog.tsx'
 import css from '../config-manager.module.css'
 
 /**
@@ -32,13 +35,17 @@ export interface PathMappingFormProps {
   t: TranslateNS<'config-manager'>
   /** 映射变化时上报（仅已填写 newPrefix 的条目进入 core） */
   onChange: (mappings: PathMapping[]) => void
+  /** 本机目录列举（「选择本机路径」弹窗的数据源；宿主只读端点 /path-browse） */
+  api: PathBrowsePort
 }
 
 /**
  * 路径映射表单：每条 PathIssue 一行（原路径 → 新路径输入框），
  * 留空 = 该路径不映射（unresolved）；填写 = 输出 core PathMapping[]。
  */
-export function PathMappingForm({ issues, initial, t, onChange }: PathMappingFormProps) {
+export function PathMappingForm({ issues, initial, t, onChange, api }: PathMappingFormProps) {
+  // 正在为哪条路径挑目录（oldPrefix 作 key；null = 弹窗关闭）
+  const [pickingFor, setPickingFor] = useState<string | null>(null)
   // draft 状态：issue.value（oldPrefix）→ newPrefix；预置映射合并进 initial 状态
   const [drafts, setDrafts] = useState<Record<string, string>>(() => {
     const out: Record<string, string> = {}
@@ -78,15 +85,34 @@ export function PathMappingForm({ issues, initial, t, onChange }: PathMappingFor
           </div>
           <div className={css.pathNew}>
             <div className={css.fieldLabel}>{t('import.paths.new')}</div>
-            <input
-              className={css.input}
-              value={drafts[issue.value] ?? ''}
-              placeholder={issue.mappedTo ?? ''}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => { setNewPrefix(issue.value, e.target.value) }}
-            />
+            {/* 输入行 = 手打 + 浏览：浏览按钮打开宿主目录弹窗（浏览器拿不到本机路径） */}
+            <div className={css.pathInputRow}>
+              <input
+                className={css.input}
+                value={drafts[issue.value] ?? ''}
+                placeholder={issue.mappedTo ?? ''}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => { setNewPrefix(issue.value, e.target.value) }}
+              />
+              <IconButton
+                icon={<FolderOpenIcon size={14} />}
+                label={t('import.paths.browse')}
+                onClick={() => { setPickingFor(issue.value) }}
+              />
+            </div>
           </div>
         </div>
       ))}
+      <PathPickerDialog
+        open={pickingFor !== null}
+        api={api}
+        t={t}
+        startPath={pickingFor === null ? '' : (drafts[pickingFor] ?? '')}
+        onPick={(path) => {
+          if (pickingFor !== null) setNewPrefix(pickingFor, path)
+          setPickingFor(null)
+        }}
+        onClose={() => { setPickingFor(null) }}
+      />
     </div>
   )
 }

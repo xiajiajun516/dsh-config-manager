@@ -245,7 +245,7 @@ export interface Config {
 /**
  * 本文件保留的 7 条路由的路径（被源码级守卫按文件窗口钉住，见下方 routesList 注释）。
  *
- * 其余 75 条路由的路径**声明在各自的组文件里**（src/routes/*.ts 的 endpoint({ path, methods })）——
+ * 其余 76 条路由的路径**声明在各自的组文件里**（src/routes/*.ts 的 endpoint({ path, methods })）——
  * 新增一条 API 只需那一条声明，不再有「常量表 + 路由对象」两处要同步。
  */
 export const API = {
@@ -3350,7 +3350,7 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   /**
    * 路由表：本文件只保留被源码级守卫按**文件窗口**钉住的 7 条（host-entry 审计 F-04 记录的
    * tests/host/**、src/core/model-tools.test.ts、src/core/phase1-wiring.test.ts 的窗口断言）。
-   * 其余 75 条已按域拆到 src/routes/*.ts，由 buildRoutes 组装。
+   * 其余 76 条已按域拆到 src/routes/*.ts，由 buildRoutes 组装。
    * 注册顺序不影响匹配：命名路由必须互不相同（webServer 契约）。
    */
   const routeEnv: RouteEnvInferred = makeRouteEnv()

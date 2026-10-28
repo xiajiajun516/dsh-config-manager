@@ -9,7 +9,7 @@
  * - 拆小了就把这里的天花板一起下调（棘轮只往下走）。
  * - 真要上调，必须同时写清理由与拆解计划，并在 `docs/maintenance/tech-debt.md` 记一笔。
  *   （已有上调记录：rollback-point 5963 → 5980，D3 内置敏感文件排除，见 tech-debt #3；
- *    locales 1749 → 1751，新增「读取超时」语义的 zh/en 两行，见 tech-debt #22。）
+ *    locales 1749 → 1751 → 1776，前者为「读取超时」语义的 zh/en 两行、后者为路径浏览器 13 条 zh/en（见 tech-debt #22）。）
  * - 新文件超过 1400 行也要登记进来（否则它会绕开棘轮继续长）。
  */
 import { test } from 'node:test';
@@ -27,7 +27,7 @@ const CEILINGS: Record<string, number> = {
   'src/sync/sync-engine.ts': 2227,
   'src/client/run-store.ts': 2166,
   'src/client/recovery/RecoveryPanel.tsx': 1922,
-  'src/client/locales.ts': 1751,
+  'src/client/locales.ts': 1776,
   'src/core/analyzer.ts': 1500,
   'src/client/sync/SyncPanel.tsx': 1591,
   'src/cli/actions.ts': 1575,

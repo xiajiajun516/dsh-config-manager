@@ -32,6 +32,23 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🆕 新增 · Added
+
+- **路径映射可以从本机目录里点选**：每条待映射路径右侧多了一个文件夹按钮，打开就是本机目录浏览器，可逐层点进去挑目录，也可直接「使用当前目录」。
+  **Path mapping can be picked from your own folders**: each unmapped path now has a folder button that opens a directory browser — click through folders to pick one, or take the current directory as is.
+
+### 🔧 变更 · Changed
+
+- **复制按钮换成聊天回退弹窗那套图标**：各处的复制图标与对话回退确认里的保持一致，点击后的打勾反馈不变。
+  **Copy buttons now use the same icon as the chat rollback dialog**: the copy affordance matches the one in the rollback confirmation, with the same check-mark feedback after clicking.
+
+### 🐛 修复 · Fixed
+
+- **点过「从其它 agent 导入」再点「导入」不再进错页面**：导入入口现在按每次点击的来源决定停在选择页还是直接进入导入流程，不再记住上一次的选择。
+  **Hitting "Import" after "Import from another agent" no longer lands on the wrong page**: the import entry now follows the source of the current click instead of remembering the previous one.
+- **路径映射面板里的深色路径块不再溢出卡片**：长路径块与卡片左右对齐，路径再长也只在框内换行。
+  **The dark path blocks in path mapping no longer spill out of the card**: they line up with the card edges, and long paths wrap inside the box.
+
 ## [0.1.86] - 2026-10-28
 
 > **本版主题**：同步状态不再被「别人占着工作副本」拖成超时，首页与同步页打开即有结果。

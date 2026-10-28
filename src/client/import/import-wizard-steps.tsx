@@ -12,6 +12,7 @@ import type { ImportAnalysis, PathMapping } from '../../core/types.ts'
 import type { ConsultReport } from '../../core/migration-consult.ts'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
+import type { PathBrowsePort } from './PathPickerDialog.tsx'
 import {
   Badge, Banner, Button, Card, Checkbox, Empty, SectionTitle,
 } from '../common/ui.tsx'
@@ -276,12 +277,14 @@ export function PathMappingStage(props: {
   onBack: () => void
   onNext: () => void
   t: TranslateNS<'config-manager'>
+  /** 「选择本机路径」弹窗的数据源（宿主只读列举端点） */
+  api: PathBrowsePort
 }) {
-  const { issues, mappings, onMappingsChange, onBack, onNext, t } = props
+  const { issues, mappings, onMappingsChange, onBack, onNext, t, api } = props
   return (
     <div className={css.viewBody}>
       <SectionTitle title={t('import.paths.title')} info={<InfoHint text={t('import.paths.hint')} label={t('common.infoHint')} />} />
-      <PathMappingForm issues={issues} initial={mappings} t={t} onChange={onMappingsChange} />
+      <PathMappingForm issues={issues} initial={mappings} t={t} onChange={onMappingsChange} api={api} />
       <div className={css.actionRow}>
         <Button variant="ghost" onClick={onBack}>{t('common.back')}</Button>
         <Button variant="primary" onClick={onNext}>{t('common.next')}</Button>
