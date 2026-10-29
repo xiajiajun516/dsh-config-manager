@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.2.1] - 2026-10-29
+
+> **本版主题**：什么都没改的时候，自动同步不再每分钟往远端仓库堆提交。
+>
+> **Theme**: When you have changed nothing, auto-sync stops piling up remote commits every minute.
+
 ### 🐛 修复 · Fixed
 
 - **配置没改时自动同步不再每分钟往远端仓库堆提交**：每次轮询只做比对，只有真正改动才生成新快照（issue #119）。
