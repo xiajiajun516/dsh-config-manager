@@ -285,3 +285,57 @@ test('self: 运行态改写不改变分区 hash（自动同步不再每轮误判
   const third = await adapter.export(src, { includeSecrets: false });
   assert.notEqual(hashSection(third.data), hashSection(second.data), '真实配置变化必须让分区 hash 变化');
 });
+
+/**
+ * issue #119 回归：跳过码翻转不得改变分区 hash。
+ *
+ * 现场（0.2.0 / macOS desktop / git 通道 + 自动同步 60s 远端轮询）：配置一字未改，远端仓库
+ * 每分钟多 1~2 个 commit，15 分钟 24 个。根因 = 调度器「跳过」轮写
+ * lastRunSkipReason='upToDate'（冲突轮写 'conflict' + lastRunSkipCount），而「真推」轮收尾
+ * 又把它们清空（toChannelPayload 空值不写）；两个字段不在剔除表里 → self 分区 hash 每轮翻新
+ * → hasLocalChanges() 恒真 → 每轮都真推一个新快照。
+ */
+test('self: 跳过码翻转不改变分区 hash（issue #119：自动同步不再每轮真推快照）', async () => {
+  const rel = 'dsh-config-manager/sync/sync-autosync.json';
+  const src = makeContext('win32', 'C:\\Users\\alice');
+  const adapter = new SelfAdapter();
+  const config = (runState: Record<string, unknown>, repoUrl = 'https://x/repo.git') => JSON.stringify({
+    schemaVersion: 2,
+    channels: {
+      git: { enabled: true, intervalMinutes: 30, realtime: true, remoteCheckMs: 60000, repoUrl, branch: 'main', ...runState },
+      webdav: { enabled: false },
+    },
+  }, null, 2);
+
+  // 轮次 A：跳过（无本地改动）
+  await src.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-29T09:00:00.000Z', lastRunStatus: 'success', lastRunSkipReason: 'upToDate', consecutiveFailures: 0 }), 'utf8'));
+  const skipRound = await adapter.export(src, { includeSecrets: false });
+
+  // 轮次 B：真推一次 —— 跳过码被清空，其余与 A 相同
+  await src.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-29T09:01:00.000Z', lastRunStatus: 'success', consecutiveFailures: 0 }), 'utf8'));
+  const pushRound = await adapter.export(src, { includeSecrets: false });
+
+  // 轮次 C：跳过（冲突，带待确认分区数）
+  await src.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-29T09:02:00.000Z', lastRunStatus: 'success', lastRunSkipReason: 'conflict', lastRunSkipCount: 3, consecutiveFailures: 0 }), 'utf8'));
+  const conflictRound = await adapter.export(src, { includeSecrets: false });
+
+  const base = hashSection(skipRound.data);
+  assert.equal(hashSection(pushRound.data), base, '跳过码被清空不得改变分区 hash（否则每轮都判「本地有改动」）');
+  assert.equal(hashSection(conflictRound.data), base, '跳过码换值 / 带分区数不得改变分区 hash');
+
+  const payload = Buffer.from(pushRound.data.files.find((f) => f.relativePath === 'sync/sync-autosync.json')!.data).toString('utf8');
+  assert.ok(!payload.includes('lastRunSkip'), '导出载荷不含跳过码：远端不该接收本机执行记录');
+  assert.ok(payload.includes('"repoUrl":"https://x/repo.git"'), '配置本体仍在载荷里');
+
+  // 同一份远端载荷回灌本机（本机多出跳过码）→ Skip，不是 Conflict
+  const dst = makeContext('linux', '/home/bob');
+  await dst.fs.writeFile(rel, Buffer.from(config({ lastRunAt: '2026-10-29T09:05:00.000Z', lastRunStatus: 'success', lastRunSkipReason: 'upToDate' }), 'utf8'));
+  const sections = new Map([['self', pushRound.data]]);
+  let items = await adapter.analyzeImport(pushRound.data, makeImportContext(dst, sections));
+  assert.equal(items[0]?.kind, 'Skip', '仅跳过码不同 → Skip（此前每轮判 Conflict 并重复推送）');
+
+  // 配置本体变化仍必须被识别（不能把剔除做成「什么都判不变」）
+  await dst.fs.writeFile(rel, Buffer.from(config({ lastRunSkipReason: 'upToDate' }, 'https://y/repo.git'), 'utf8'));
+  items = await adapter.analyzeImport(pushRound.data, makeImportContext(dst, sections));
+  assert.equal(items[0]?.kind, 'Conflict', '真实配置变化必须仍判 Conflict');
+});

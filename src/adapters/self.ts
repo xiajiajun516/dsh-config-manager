@@ -45,6 +45,8 @@
  * 且文件类分区不进 SecretScanner（与 pluginFiles/skills 同语义）。
  */
 import type { HostContext } from '../core/types.ts';
+import type { AutosyncConfig } from '../sync/autosync-config.ts';
+import type { BackupScheduleConfig } from '../sync/backup-schedule-config.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
@@ -63,12 +65,47 @@ export const SELF_CONFIG_FILES: readonly string[] = [
 ];
 
 /**
+ * 调度配置里「运行态字段」的**命名口径**：调度器每轮收尾都会改写的字段名形状
+ * （`lastRun*` 一族 + `consecutiveFailures`）。剔除表必须覆盖两个调度配置的并集，
+ * 少一个都会让 self 分区的 hashSection 每轮翻新（issue #119）。
+ */
+type RunStateKeyOf<T> = {
+  [K in keyof T]-?: K extends 'consecutiveFailures' | `lastRun${string}` ? K : never;
+}[keyof T];
+
+type SchedulerRunStateKey = RunStateKeyOf<AutosyncConfig> | RunStateKeyOf<BackupScheduleConfig>;
+
+/**
  * 调度配置里的**运行态字段**：每次执行收尾都会被调度器改写，不属于「配置身份」。
  * 仅比对时剔除（见 comparableContent）；写盘仍写完整文件。
+ *
+ * 逐项列全而不是靠前缀过滤：前缀过滤会把**将来**新增的运行态字段静默吞掉（看不见的假 Skip），
+ * 漏列则让 hash 每轮翻新（issue #119）。所以列全 + 下面的穷尽断言，让编译器守住漂移。
  */
-const VOLATILE_RUN_STATE_KEYS: ReadonlySet<string> = new Set([
-  'lastRunAt', 'lastRunStatus', 'lastRunMessage', 'lastRunHistoryId', 'consecutiveFailures',
-]);
+const VOLATILE_RUN_STATE_KEY_LIST = [
+  'lastRunAt',
+  'lastRunStatus',
+  'lastRunMessage',
+  'lastRunHistoryId',
+  'consecutiveFailures',
+  // issue #119：跳过码每轮在「写入 / 清空」之间翻转，与 lastRunAt 同性质，漏剔即每轮真推快照
+  'lastRunSkipReason',
+  'lastRunSkipCount',
+] as const satisfies readonly SchedulerRunStateKey[];
+
+const VOLATILE_RUN_STATE_KEYS: ReadonlySet<string> = new Set(VOLATILE_RUN_STATE_KEY_LIST);
+
+/**
+ * 编译期穷尽断言（零运行时开销）：`AutosyncConfig` / `BackupScheduleConfig` 将来新增任何
+ * `lastRun*` 字段而没进上表时，`Exclude` 不再是 `never`，**这一行 typecheck 报错**。
+ * 只写 `satisfies keyof T` 挡不住「新增字段忘了加」——那正是 issue #119 的失效模式。
+ */
+type AssertExhaustive<T extends never> = T;
+
+/** 见 AssertExhaustive 的注释；导出只为让断言参与类型检查（无需被引用）。 */
+export type SchedulerRunStateKeysExhaustive = AssertExhaustive<
+  Exclude<SchedulerRunStateKey, (typeof VOLATILE_RUN_STATE_KEY_LIST)[number]>
+>;
 
 /** 含运行态字段的调度配置（相对 baseDir）。 */
 const SCHEDULER_CONFIG_RELS: ReadonlySet<string> = new Set([
