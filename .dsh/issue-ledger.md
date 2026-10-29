@@ -11,7 +11,11 @@
 | 115 | 细粒度 PAT 没勾 Contents，同步只甩 git 原始 403；报告者已确认修复生效，另提「同步页两个按钮分不清该按哪个」 | done | 62049df | v0.2.0 | 2026-10-29 |
 | 109 | 阿里云 OSS 同步 SigV4 签名不匹配（规范路径缺 bucket） | done | bf1642f | v0.1.82 | 2026-10-23 |
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
+| 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | awaiting-release | 39f1208 | — | 2026-10-29 |
 
+- `2026-10-29` **#119 修复（未发版）**：回确认评论（comment 6508108922）+ 加 `confirmed` / `sync`，去 `needs-triage`；
+  修复提交 `39f1208`（跳过码进剔除表 + 编译期穷尽断言 + 回归测试）。发版后回版本号并转 `done`。
+  报告者附带的两个观察（同机往返仍报 3 个 Conflict / detail 截断 200 字符、apply-items 的 applied 与 skipped 口径）与本次 bug 无关，需另开 issue。
 - `2026-10-29` **v0.2.0 发版收尾**：#115 回版本号评论（issue comment 6483667536）+ 加 `fixed`，行转 `done`。
   对账证据：`git merge-base --is-ancestor 62049df v0.2.0` = 0；`npm view dsh-config-manager@0.2.0 version` = 0.2.0；dist-tags latest = 0.2.0。
   更正：那版行为实际随 `v0.1.86` 发布（CHANGELOG `[0.1.86]` 第 70 行「同步页只强调当前该按的那一个方向」），本行原填的 `v0.1.85` 是错的；回复里如实写成「v0.1.86 首发，当前版本 v0.2.0」。
