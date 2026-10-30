@@ -12,7 +12,11 @@
 | 109 | 阿里云 OSS 同步 SigV4 签名不匹配（规范路径缺 bucket） | done | bf1642f | v0.1.82 | 2026-10-23 |
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
+| 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（方向：非 Windows 改 `core.askpass`；helper 无「无空格」替代写法，已本机实测） | open |  |  | 2026-10-30 |
 
+- `2026-10-30` **#120 受理**：回确认评论（comment 6522239454）+ 加 `confirmed` / `sync`，去 `needs-triage`。
+  核对到两处注入点（`src/sync/git/git-transport.ts:1011`、`src/market/git-file-writer.ts:282`）；本机 git 实测**裸 `credential.helper=store` 同样走 `sh -c 'git credential-store get'`** ⇒ helper 这条路上不存在避开 shell 的写法，只能 helper→askpass 切换。
+  已向报告者提两个实现修正（shebang 探测 `/system/bin/sh`、Windows 保持 helper）与一项真机待确认（`os.tmpdir()` 是否 noexec）。状态 `open`，未修。
 - `2026-10-29` **#119 修复 + 发版收尾**：回确认评论（comment 6508108922）+ 加 `confirmed` / `sync`，去 `needs-triage`；
   修复提交 `39f1208`（跳过码进剔除表 + 编译期穷尽断言 + 回归测试），发版提交 `950bfd5`（tag `v0.2.1`）。
   回版本号评论 comment 6508671619 + 加 `fixed`，行转 `done`。对账证据：`git log -1 v0.2.1` = `950bfd5`；Publish 工作流 success（npm publish + GitHub Release 已建）。
