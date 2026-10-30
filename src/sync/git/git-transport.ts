@@ -40,6 +40,7 @@ import type {
 import { parseJsonSafe } from '../../utils/json.ts';
 import { atomicWriteFile } from '../../utils/atomic-write.ts';
 import { quoteGitValue } from '../../utils/git-quote.ts';
+import { clearDirContents, credentialHeaderEnv, isEmptyDir, isCredentialExecFailure } from './credential-auth.ts';
 import { SECTION_FILE_PREFIXES } from '../../schema/config.ts';
 import type { FilesSection, SectionData, SectionId } from '../../schema/types.ts';
 import { zhMsg } from '../../core/messages.ts';
@@ -60,7 +61,7 @@ export interface GitExecResult {
 export type GitExecFn = (
   cmd: string,
   args: string[],
-  opts: { cwd?: string; timeoutMs?: number },
+  opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
 ) => Promise<GitExecResult>;
 
 /** 工作副本自检事实（issue #79）：origin 是否已跟随配置地址、有无未上行的本地提交。 */
@@ -208,6 +209,9 @@ const defaultExec: GitExecFn = async (cmd, args, opts) => {
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true,
       encoding: 'utf8',
+      // issue #120：credential helper 走 shell 且本机没有可用 shell 时，改用 env 注入认证头重试 ——
+      // 追加在继承的 process.env 上（env 缺省 = 完全继承，不改变既有行为）
+      env: opts.env === undefined ? undefined : { ...process.env, ...opts.env },
     });
     return { stdout: String(stdout), stderr: String(stderr), code: 0 };
   } catch (err) {
@@ -948,8 +952,23 @@ export class GitTransport implements SyncTransport {
       if (cleanup) await cleanup();
       throw new GitTransportError(this.msg('sync.git.pushTokenRequired'), { kind: 'auth', retryable: false });
     }
+    // issue #120：只有「命令开跑前目录是空的」才敢在重试前清空 —— clone 失败可能留下半成品，
+    // 而目录里原本就有别的内容时宁可放弃重试，也绝不删用户文件。
+    const cloneTargetWasEmpty = args[0] === 'clone' ? await isEmptyDir(cwd) : false;
     try {
-      const result = await this.o.exec(this.o.gitBin, [...extra, ...args], { cwd, timeoutMs: this.o.timeoutMs });
+      let result = await this.o.exec(this.o.gitBin, [...extra, ...args], { cwd, timeoutMs: this.o.timeoutMs });
+      // issue #120：credential helper 必须经 shell 执行（值里不含空格也一样，git 统一拼成
+      // `sh -c 'git <helper> ...'`），而 Android 上 git 二进制的 GIT_SHELL_PATH 指向 App 沙箱里
+      // 不存在的 Termux sh；`core.askpass` 又要 exec 权限（Android 10+ 对 targetSdk ≥ 29 禁执行应用
+      // 目录里的文件）。两条路都走不通时，改用 env 注入 HTTP 认证头重试一次（不需要 shell）。
+      if (result.code !== 0 && token !== null && token !== ''
+        && isCredentialExecFailure(result.stderr + ' ' + result.stdout)) {
+        const headerEnv = credentialHeaderEnv(this.o.repoUrl, this.o.credentialUsername, token);
+        if (Object.keys(headerEnv).length > 0 && (args[0] !== 'clone' || cloneTargetWasEmpty)) {
+          if (args[0] === 'clone') await clearDirContents(cwd);
+          result = await this.o.exec(this.o.gitBin, args, { cwd, timeoutMs: this.o.timeoutMs, env: headerEnv });
+        }
+      }
       if (result.code !== 0 && !opts.allowNonZero) {
         const combined = result.stderr + ' ' + result.stdout;
         // 统一分类（超时 / 网络 / 鉴权 / 5xx…）：上层可据 kind / retryable 分流，不必解析 message
@@ -961,12 +980,19 @@ export class GitTransport implements SyncTransport {
         // 推送 + 鉴权失败：git 原文只说「认证失败」——换成能照做的说明（令牌失效 / 无写权限 / 远端禁用了密码推送）
         // issue #115：clone 的鉴权失败原文（remote: Write access to repository not granted / 403）读不出「缺哪种权限」，
         // 换成点名 Contents: Read and write 的说明 —— 否则用户只会以为令牌坏了（细粒度 PAT 常只勾了 Administration）
-        const message = opts.requirePushToken === true && classified.kind === 'auth'
-          ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
-          : args[0] === 'clone' && classified.kind === 'auth'
-            ? this.msg('sync.git.cloneAuthFailed', { err: this.mask(result.stderr, token) })
-            : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
-        throw new GitTransportError(message, classified);
+        // issue #120：helper 根本没能执行时，「请确认令牌有效」是错误指引（令牌可能是好的）——
+        // 这类失败必须点名平台原因，排在 push/clone 的鉴权文案之前。
+        const credentialBlocked = isCredentialExecFailure(combined);
+        const message = credentialBlocked
+          ? this.msg('sync.git.credentialHelperBlocked', { err: this.mask(result.stderr, token) })
+          : opts.requirePushToken === true && classified.kind === 'auth'
+            ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
+            : args[0] === 'clone' && classified.kind === 'auth'
+              ? this.msg('sync.git.cloneAuthFailed', { err: this.mask(result.stderr, token) })
+              : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
+        // 归类同样不能交给原文：`cannot exec ...: No such file or directory` 里的 ENOENT 会被判成
+        // notfound（「仓库不存在」），而真实原因是凭据通道不可用 → 钉成 auth（非瞬时、别重试）。
+        throw new GitTransportError(message, credentialBlocked ? { kind: 'auth', retryable: false } : classified);
       }
       return result;
     } catch (err) {

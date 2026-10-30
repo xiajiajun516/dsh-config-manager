@@ -30,6 +30,7 @@ import { withWorkdirLock, WorkdirLockError } from '../utils/workdir-lock.ts';
 import { fastForwardFetchArgs, fastForwardMergeArgs, isMissingRemoteRefError, parseCurrentBranch } from '../utils/git-fast-forward.ts';
 import { marketMsg } from './messages-market.ts';
 import type { GitAuthor, GitCredentialProvider, GitExecFn, GitExecResult } from '../sync/git/git-transport.ts';
+import { clearDirContents, credentialHeaderEnv, isEmptyDir, isCredentialExecFailure } from '../sync/git/credential-auth.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -102,6 +103,8 @@ const defaultExec: GitExecFn = async (cmd, args, opts) => {
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true,
       encoding: 'utf8',
+      // issue #120：credential helper 走不了 shell 时改用 env 注入认证头重试（追加在继承的 process.env 上）
+      env: opts.env === undefined ? undefined : { ...process.env, ...opts.env },
     });
     return { stdout: String(stdout), stderr: String(stderr), code: 0 };
   } catch (err) {
@@ -231,7 +234,7 @@ export class GitFileWriterClient implements GitFileWriter {
     const pushArgs = branch !== ''
       ? ['push', '-u', 'origin', branch, ...(call.force === true ? ['--force-with-lease'] : [])]
       : ['push', '-u', 'origin', 'HEAD'];
-    const push = await this.runGit(pushArgs, { cwd: call.workDir, withCredential: true, token, mask });
+    const push = await this.runGit(pushArgs, { cwd: call.workDir, withCredential: true, token, mask, repoUrl: call.repoUrl });
     if (push.code !== 0) {
       throw new GitFileWriterError(mask(marketMsg('market.gitWriter.pushFailed', { stderr: push.stderr })));
     }
@@ -246,7 +249,10 @@ export class GitFileWriterClient implements GitFileWriter {
    */
   private async runGit(
     args: string[],
-    opts: { cwd?: string; withCredential?: boolean; allowNonZero?: boolean; token: string; mask: (text: string) => string },
+    opts: {
+      cwd?: string; withCredential?: boolean; allowNonZero?: boolean; token: string;
+      mask: (text: string) => string; repoUrl?: string;
+    },
   ): Promise<GitExecResult> {
     const cwd = opts.cwd ?? '';
     let extra: string[] = [];
@@ -256,8 +262,20 @@ export class GitFileWriterClient implements GitFileWriter {
       extra = cred.extraArgs;
       cleanup = cred.cleanup;
     }
+    // issue #120：只有「命令开跑前目录是空的」才敢在重试前清空 —— 绝不删用户文件。
+    const cloneTargetWasEmpty = args[0] === 'clone' ? await isEmptyDir(cwd) : false;
     try {
-      const result = await this.exec(this.gitBin, [...extra, ...args], { cwd, timeoutMs: this.timeoutMs });
+      let result = await this.exec(this.gitBin, [...extra, ...args], { cwd, timeoutMs: this.timeoutMs });
+      // issue #120：同 GitTransport —— credential helper 必须经 shell 执行，Android 上 git 的 shell 路径
+      // 不存在（askpass 又要 exec 权限）→ 改用 env 注入 HTTP 认证头重试一次（不需要 shell）。
+      if (result.code !== 0 && opts.withCredential === true && opts.token !== ''
+        && isCredentialExecFailure(result.stderr + ' ' + result.stdout)) {
+        const headerEnv = credentialHeaderEnv(opts.repoUrl ?? '', this.credentialUsername, opts.token);
+        if (Object.keys(headerEnv).length > 0 && (args[0] !== 'clone' || cloneTargetWasEmpty)) {
+          if (args[0] === 'clone') await clearDirContents(cwd);
+          result = await this.exec(this.gitBin, args, { cwd, timeoutMs: this.timeoutMs, env: headerEnv });
+        }
+      }
       if (result.code !== 0 && !opts.allowNonZero) {
         throw new GitFileWriterError(opts.mask(marketMsg('market.gitWriter.commandFailed', { args: args.join(' '), stderr: result.stderr })));
       }
@@ -309,7 +327,7 @@ export class GitFileWriterClient implements GitFileWriter {
       if (entries.length > 0) {
         throw new GitFileWriterError(marketMsg('market.gitWriter.workDirNotEmpty', { workDir }));
       }
-      const clone = await this.runGit(['clone', repoUrl, '.'], { cwd: workDir, withCredential: true, token, mask });
+      const clone = await this.runGit(['clone', repoUrl, '.'], { cwd: workDir, withCredential: true, token, mask, repoUrl });
       if (clone.code !== 0) {
         throw new GitFileWriterError(mask(marketMsg('market.gitWriter.cloneFailed', { stderr: clone.stderr })));
       }
@@ -331,7 +349,7 @@ export class GitFileWriterClient implements GitFileWriter {
     if (branch === '') return;
     // 不再用 git pull --ff-only：并发下 FETCH_HEAD 会被写成多行 for-merge、pull 自己 fatal；
     // 显式 refspec fetch + 显式远端跟踪分支 merge 完全不读 FETCH_HEAD（参数见 utils/git-fast-forward.ts）。
-    const fetched = await this.runGit(fastForwardFetchArgs(branch), { cwd: workDir, withCredential: true, allowNonZero: true, token, mask });
+    const fetched = await this.runGit(fastForwardFetchArgs(branch), { cwd: workDir, withCredential: true, allowNonZero: true, token, mask, repoUrl });
     if (fetched.code !== 0) {
       const combined = fetched.stderr + ' ' + fetched.stdout;
       // 无 upstream / 远端还没有这个分支 → 静默跳过（内容可能已是最新）

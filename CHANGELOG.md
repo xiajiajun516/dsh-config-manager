@@ -32,6 +32,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+### 🐛 修复 · Fixed
+
+- **Android 上的 Git 同步不再因为取不到凭据而恒失败**：系统不允许从应用目录执行脚本时，同步自动改用请求头携带令牌重试一次，只有这次也失败才提示真实原因（并给出 git 2.31+ 或改用 ssh 的方向）（issue #120）。
+  **Git sync on Android no longer fails for good when the credential helper cannot start**: when the platform refuses to run scripts from the app directory, sync now retries once with the token sent as an auth header, and only then reports the real cause (git 2.31+ or switching to ssh) (issue #120).
+
 ## [0.2.1] - 2026-10-29
 
 > **本版主题**：什么都没改的时候，自动同步不再每分钟往远端仓库堆提交。

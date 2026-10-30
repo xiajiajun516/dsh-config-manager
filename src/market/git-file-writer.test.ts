@@ -19,7 +19,7 @@ const TEST_TOKEN = 'gho_abcdefghijklmnopqrstuvwxyz123456';
 interface ExecCall {
   cmd: string;
   args: string[];
-  opts: { cwd?: string; timeoutMs?: number };
+  opts: { cwd?: string; timeoutMs?: number; env?: Record<string, string> };
 }
 
 /** 记录 exec 调用并按命令返回脚本化结果的 mock */
@@ -286,4 +286,78 @@ test('git-file-writer: 工作副本非空且非 git 仓库 → 拒绝', async (t
     GitFileWriterError,
   );
   assert.ok(!calls.some((c) => c.args[0] === 'clone'), '非空非仓库目录不得 clone');
+});
+
+// issue #120：Android 上 credential helper 走 `sh -c`，helper 无法执行 ⇒ 换 env 注入认证头重试。
+test('git-file-writer: credential helper 无法执行 → 用 env 注入认证头重试 push 成功', async (t) => {
+  const workDir = await tempWorkDir(t);
+  const { exec, calls } = installExec((call) => {
+    if (gitCommandOf(call) === 'diff') return { stdout: '', stderr: '', code: 1 }; // 有变化 → commit + push
+    if (gitCommandOf(call) === 'push' && call.opts.env === undefined) {
+      return {
+        stdout: '',
+        stderr: "fatal: cannot exec 'git credential-store --file=/data/user/0/x/cache/tmp/dsh-git-cred-1/credential get': No such file or directory",
+        code: 128,
+      };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  });
+  const writer = createGitFileWriter({ credentials: { getToken: async () => TEST_TOKEN }, exec });
+
+  const result = await writer.writeFiles({
+    repoUrl: 'https://github.com/xiaojun/dsh-configs',
+    workDir,
+    entries: [{ path: 'a.txt', content: '1' }],
+    commitMessage: 'publish',
+  });
+
+  assert.equal(result.pushed, true);
+  const pushes = calls.filter((c) => gitCommandOf(c) === 'push');
+  assert.equal(pushes.length, 2, 'helper 失败后必须重试一次');
+  const retry = pushes[1]!;
+  assert.ok(!retry.args.some((a) => a.startsWith('credential.helper=store')), '重试不得再走 helper');
+  assert.equal(retry.opts.env?.['GIT_CONFIG_COUNT'], '2');
+  assert.equal(retry.opts.env?.['GIT_CONFIG_KEY_0'], 'credential.helper');
+  assert.equal(retry.opts.env?.['GIT_CONFIG_VALUE_0'], '');
+  assert.equal(retry.opts.env?.['GIT_CONFIG_KEY_1'], 'http.https://github.com/.extraheader');
+  assert.equal(
+    retry.opts.env?.['GIT_CONFIG_VALUE_1'],
+    'AUTHORIZATION: basic ' + Buffer.from('oauth2:' + TEST_TOKEN).toString('base64'),
+  );
+  assert.ok(!retry.args.join(' ').includes(TEST_TOKEN), 'token 不得进 argv');
+});
+
+test('git-file-writer: clone 遇 helper 无法执行 → 清掉半成品目录后重试', async (t) => {
+  const workDir = await tempWorkDir(t);
+  let cloneAttempts = 0;
+  const { exec } = installExec((call) => {
+    if (gitCommandOf(call) === 'clone') {
+      cloneAttempts += 1;
+      if (cloneAttempts === 1) {
+        return { stdout: '', stderr: "fatal: cannot exec 'git credential-store get': No such file or directory", code: 128 };
+      }
+    }
+    if (gitCommandOf(call) === 'diff') return { stdout: '', stderr: '', code: 0 };
+    return { stdout: '', stderr: '', code: 0 };
+  });
+  // 第一次 clone 前造一个半成品目录：真实 git 失败会留下 .git 残骸，重试前必须清空
+  const scriptedExec: GitExecFn = async (cmd, args, opts) => {
+    if (args.includes('clone') && cloneAttempts === 0) {
+      await fs.mkdir(path.join(workDir, '.git', 'partial'), { recursive: true });
+    }
+    return exec(cmd, args, opts);
+  };
+
+  const writer = createGitFileWriter({ credentials: { getToken: async () => TEST_TOKEN }, exec: scriptedExec });
+  const result = await writer.writeFiles({
+    repoUrl: 'https://github.com/xiaojun/dsh-configs',
+    workDir,
+    entries: [{ path: 'a.txt', content: '1' }],
+    commitMessage: 'noop',
+  });
+
+  assert.equal(cloneAttempts, 2, 'clone 失败后必须重试一次');
+  assert.equal(result.pushed, false);
+  // 第一轮留下的 .git 残骸必须被清掉，目录里只剩本轮写入的文件
+  assert.deepEqual(await fs.readdir(workDir), ['a.txt']);
 });

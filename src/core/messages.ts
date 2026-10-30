@@ -439,6 +439,9 @@ export const zh = {
   // 推送认证（真机：公开仓库拉取可匿名成功、推送必失败，git 原文只说「Invalid username or token」）
   'sync.git.pushTokenRequired': '推送需要访问令牌：远端是 http(s) 仓库，但本机没有可用的令牌（拉取公开仓库可以匿名完成，推送必须认证）。请在「同步 → 通道配置」里登录 GitHub 或填入访问令牌后重试。',
   'sync.git.pushAuthFailed': '推送认证失败：{err}。请确认令牌有效且对该仓库有写权限（账号密码推送已被远端禁用）；拉取成功不代表令牌可用 —— 公开仓库匿名即可拉取。可在「同步 → 通道配置」里重新登录或更换令牌。',
+  // issue #120：credential helper 必须经 shell 执行，Android 上 git 的 shell 路径不存在（askpass 又要 exec
+  // 权限，Android 10+ 禁执行应用目录文件）→ 已改用 HTTP 认证头重试；仍失败只能点名平台原因，别引向「令牌坏了」。
+  'sync.git.credentialHelperBlocked': 'git 在本机无法执行 credential helper（它需要 shell，而当前平台不允许从应用目录执行脚本/二进制），改用 HTTP 认证头重试也没成功。请确认 git 版本不低于 2.31（环境变量注入配置需要），或把仓库地址换成 ssh。原始错误：{err}',
   'sync.git.repoUrlInvalid': '无法解析 repoUrl（http(s) 仓库必须为合法 URL）: {url}',
   'sync.git.invalidSnapshotId': '非法快照 id: {id}（仅允许字母数字开头，字符限 . _ -）',
   'sync.webdav.baseUrlRequired': 'baseUrl 必须是非空字符串',
@@ -940,6 +943,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.git.cmdFailed': 'git {args} failed (exit {code}): {err}',
   'sync.git.pushTokenRequired': 'Push requires an access token, but none is available on this machine (public repositories can be fetched anonymously; pushing always needs authentication). Sign in to GitHub or paste an access token under Sync → Channel configuration, then retry.',
   'sync.git.pushAuthFailed': 'Push authentication failed: {err}. Check that the token is valid and has write access to this repository (password authentication is disabled by the remote); a successful pull does not prove the token works — public repositories can be fetched anonymously. Sign in again or replace the token under Sync → Channel configuration.',
+  'sync.git.credentialHelperBlocked': 'git cannot run the credential helper on this machine (it needs a shell, and this platform does not allow executing scripts/binaries from the app directory), and retrying with an HTTP authorization header did not work either. Make sure git is 2.31 or newer (injecting config through environment variables needs it) or switch the repository address to ssh. Original error: {err}',
   'sync.git.repoUrlInvalid': 'Cannot parse repoUrl (http(s) repositories must be valid URLs): {url}',
   'sync.git.invalidSnapshotId': 'Invalid snapshot id: {id} (must start with an alphanumeric; only . _ - allowed)',
   'sync.webdav.baseUrlRequired': 'baseUrl must be a non-empty string',

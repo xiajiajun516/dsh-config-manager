@@ -401,6 +401,102 @@ test('推送鉴权失败（GitHub 文案）→ 分类 auth + 可操作提示，�
   );
 });
 
+test('issue #120：credential helper 无法执行（Android 没有可用 shell）→ 改用 env 注入认证头重试一次', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: { args: string[]; env?: Record<string, string> }[] = [];
+  const exec: GitExecFn = async (_cmd, args, opts) => {
+    calls.push({ args, env: opts.env });
+    const joined = args.join(' ');
+    if (joined.includes('diff') && joined.includes('--quiet')) return { stdout: '', stderr: '', code: 1 };
+    if (joined.includes('push -u')) {
+      // 第一次：credential helper 走 shell，而本机没有可用的 sh（真机原文）
+      if (opts.env === undefined || opts.env['GIT_CONFIG_KEY_0'] === undefined) {
+        return {
+          stdout: '',
+          stderr: "fatal: cannot exec 'git credential-store --file=/data/user/0/x/cache/tmp/dsh-git-cred-1/credential get': No such file or directory",
+          code: 128,
+        };
+      }
+      return { stdout: '', stderr: '', code: 0 };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  await transport.upload(sampleSnapshot());
+  const pushes = calls.filter((c) => c.args.join(' ').includes('push -u'));
+  assert.equal(pushes.length, 2, 'helper 无法执行时必须重试一次');
+  const retry = pushes[1]!;
+  assert.ok(!retry.args.some((a) => a.startsWith('credential.helper=store')), '重试不得再注入 store helper');
+  const env = retry.env!;
+  assert.equal(env['GIT_CONFIG_COUNT'], '2', '一条清 helper、一条挂认证头');
+  assert.equal(env['GIT_CONFIG_KEY_0'], 'credential.helper');
+  assert.equal(env['GIT_CONFIG_VALUE_0'], '', '必须清掉全局 helper，否则它会被再次调用并再次 cannot exec');
+  assert.equal(env['GIT_CONFIG_KEY_1'], 'http.https://github.com/.extraheader');
+  assert.equal(
+    env['GIT_CONFIG_VALUE_1'],
+    'AUTHORIZATION: basic ' + Buffer.from('oauth2:' + TEST_TOKEN, 'utf8').toString('base64'),
+  );
+  for (const arg of retry.args) assert.ok(!arg.includes(TEST_TOKEN), '重试的 argv 不得含 token');
+});
+
+test('issue #120：认证头重试也失败 → 错误点名平台原因，不再把用户引向「令牌坏了」', async (t) => {
+  const dir = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const exec: GitExecFn = async (_cmd, args) => {
+    calls.push({ cmd: 'git', args });
+    const joined = args.join(' ');
+    if (joined.includes('diff') && joined.includes('--quiet')) return { stdout: '', stderr: '', code: 1 };
+    if (joined.includes('push -u')) {
+      return {
+        stdout: '',
+        stderr: "fatal: cannot exec 'git credential-store get': No such file or directory\n"
+          + 'fatal: could not read Password for ' + "'" + 'https://oauth2@github.com' + "'" + ': terminal prompts disabled',
+        code: 128,
+      };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  await assert.rejects(
+    transport.upload(sampleSnapshot()),
+    (err: unknown) => {
+      assert.ok(err instanceof GitTransportError);
+      assert.equal(err.kind, 'auth');
+      assert.match(err.message, /credential helper/, '必须点名 credential helper 执行不了');
+      assert.match(err.message, /2\.31/, '必须给出可验证的下限（env 注入配置需要 git ≥ 2.31）');
+      assert.ok(!/推送认证失败/.test(err.message), '不得把平台问题写成「令牌/权限」问题');
+      assert.ok(!err.message.includes(TEST_TOKEN), '错误消息不得泄漏 token');
+      return true;
+    },
+  );
+  assert.equal(calls.filter((c) => c.args.join(' ').includes('push -u')).length, 2, '只重试一次，不无限重试');
+});
+
+test('issue #120：clone 遇到 helper 无法执行 → 清掉半成品目录后用认证头重试成功', async (t) => {
+  const dir = await makeTempDir(t); // 空目录 → 走 clone 分支
+  let cloneAttempts = 0;
+  const exec: GitExecFn = async (_cmd, args, opts) => {
+    const joined = args.join(' ');
+    if (joined.includes('clone')) {
+      cloneAttempts += 1;
+      if (cloneAttempts === 1) {
+        // git 认证失败前已建出半成品（.git + 部分对象）
+        await fs.mkdir(path.join(dir, '.git'), { recursive: true });
+        await fs.writeFile(path.join(dir, '.git', 'partial'), 'half');
+        return { stdout: '', stderr: "fatal: cannot exec 'git credential-store get': No such file or directory", code: 128 };
+      }
+      assert.deepEqual(await fs.readdir(dir), [], '重试前必须清掉半成品，否则 clone 会因目录非空失败');
+      assert.ok(opts.env !== undefined, '重试必须走 env 注入认证头');
+      await fs.mkdir(path.join(dir, '.git'), { recursive: true });
+      return { stdout: '', stderr: '', code: 0 };
+    }
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec }));
+  await transport.list();
+  assert.equal(cloneAttempts, 2, '应恰好重试一次 clone');
+});
+
 test('checkIsPrivate：匿名可达 → false；匿名失败+认证可达 → true；都失败 → 抛错', async (t) => {
   // 匿名成功
   const c1: CallRecord[] = [];
