@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.2.2] - 2026-10-30
+
+> **本版主题**：Android 上的 Git 同步不再因为取不到凭据而恒失败。
+>
+> **Theme**: Git sync on Android no longer fails for good when the credential helper cannot start.
+
 ### 🐛 修复 · Fixed
 
 - **Android 上的 Git 同步不再因为取不到凭据而恒失败**：系统不允许从应用目录执行脚本时，同步自动改用请求头携带令牌重试一次，只有这次也失败才提示真实原因（并给出 git 2.31+ 或改用 ssh 的方向）（issue #120）。
