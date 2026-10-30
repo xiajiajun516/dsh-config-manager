@@ -12,8 +12,11 @@
 | 109 | 阿里云 OSS 同步 SigV4 签名不匹配（规范路径缺 bucket） | done | bf1642f | v0.1.82 | 2026-10-23 |
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
-| 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | awaiting-release | 73b6fe4 |  | 2026-10-30 |
+| 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-10-30` **#120 发版收尾**：tag `v0.2.2`（提交 `d391779`）→ Publish 工作流 41058412334 success（npm publish + GitHub Release 已建）。
+  核对：`git merge-base --is-ancestor 73b6fe4 v0.2.2` = 0；`npm view dsh-config-manager@0.2.2 version` = 0.2.2（发布后约 2 分钟才在 registry 可解析，前 4 次 404）；`gh release view v0.2.2` 双语亮点在位。
+  回版本号评论 comment 6523386907 + 加 `fixed`，行转 `done`。仍 `awaiting-release` 的行：0 条。
 - `2026-10-30` **#120 修复（待发版）**：不以 askpass 为主路径（它同样需要从应用目录 exec 脚本；Android 10+ targetSdk≥29 禁 exec 应用 home，报告者给的 TS 片段正是这个坑），
   改成「helper 注入失败 ⇒ 自动重试一次，凭据经 `GIT_CONFIG_*` 环境变量注入 `http.<origin>.extraheader`」（本机实测该通道零 sh、零临时凭据文件、token 不进 argv）。
   两处注入点共用新模块 `src/sync/git/credential-auth.ts`；新增 i18n 键 `sync.git.credentialHelperBlocked`；单测 git-transport 3 例 + market 2 例。状态转 `awaiting-release`。
