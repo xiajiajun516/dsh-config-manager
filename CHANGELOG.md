@@ -34,8 +34,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
-- **「一键同步」改名为「从远端合并到本机」**：名字写明方向 —— 它只把远端改动合并进来，本机单边改的保留、绝不上传。运行记录、历史与回滚文案同步改叫「从远端合并」；同步页动作行只留按钮，「测试连接」旁那颗说明图标一并去掉。
-  **"One-click sync" is now "Merge from remote"**: the name states the direction — it only merges remote changes in, keeps local-only edits and never uploads. Run records, history and rollback labels now say "Merge from remote" as well, and the sync action row keeps only buttons — the info icon beside "Test connection" is gone too.
+- **「一键同步」改名为「从远端合并到本机」**：名字写明方向 —— 它只把远端改动合并进来，本机单边改的保留、绝不上传。运行记录、历史与回滚文案同步改叫「从远端合并」；同步页动作行只留按钮，「测试连接」旁那颗说明图标一并去掉（issue #121）。
+  **"One-click sync" is now "Merge from remote"**: the name states the direction — it only merges remote changes in, keeps local-only edits and never uploads. Run records, history and rollback labels now say "Merge from remote" as well, and the sync action row keeps only buttons — the info icon beside "Test connection" is gone too (issue #121).
 
 - **按钮标题自己说清作用，旁边的说明图标不再复述它**：「保存配置」改为「立即保存」、「一键上传」改为「上传配置包」；同步、导出、市场几处说明里复述按钮名或标题的句子一并删掉，市场页上传按钮旁那颗图标也去掉了（同一句在点开后就能看到）。
   **Button labels now say what they do, and the info icons no longer repeat them**: "Save config" became "Save now" and "one-click upload" became "Upload bundle"; lines inside the sync, export and marketplace hints that only restated a neighbouring button label are gone, as is the info icon next to the marketplace upload button (the same text appears as soon as the wizard opens).
