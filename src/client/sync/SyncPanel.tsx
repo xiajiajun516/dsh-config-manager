@@ -1260,8 +1260,8 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         )}
         {ready && (
           <Card>
-            {/* 动作行（方案 A 定案）：用户只面对两个方向 —— 下行「一键同步」/ 上行「推送到远端」。
-                合并裁决并入一键同步（有基线走三方裁决视图、无基线走老导入确认）；并排两个按钮看不出该按哪个（issue 115）⇒ 按已确证远端事实只让一个落在 primary。 */}
+            {/* 动作行（方案 A 定案）：用户只面对两个方向 —— 下行「从远端合并到本机」/ 上行「推送到远端」。
+                合并裁决并入下行按钮（有基线走三方裁决视图、无基线走老导入确认）；并排两个按钮看不出该按哪个（issue 115）⇒ 按已确证远端事实只让一个落在 primary。 */}
             <div className={css.actionRow}>
               <Button
                 variant={pickSyncPrimary(state.statusInfo, channel) === 'sync' ? 'primary' : 'ghost'}
@@ -1272,7 +1272,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                 {state.busy === 'sync'
                   ? (syncPhase === 'preview' ? t('syncflow.checkingRemote') : t('syncflow.syncing'))
                   : t('syncflow.button')}
-              </Button>
+              </Button><InfoHint text={t('syncflow.directionHint')} label={t('common.infoHint')} />{/* 方向说明（issue 121）：只下行；常驻成行会复述按钮名，静态机制说明按 DESIGN.md §7 只进 ⓘ */}
               <Button variant={pickSyncPrimary(state.statusInfo, channel) === 'push' ? 'primary' : 'ghost'} disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
               </Button>

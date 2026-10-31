@@ -125,9 +125,12 @@ export const zh = {
   'push.title': '推送结果',
   'sections.title': '同步分区',
   'warnings.title': '分区告警',
-  // 一键同步（方案 A：拉取 → 逐项确认 → apply-items）
-  'syncflow.title': '一键同步',
-  'syncflow.button': '一键同步',
+  // 从远端合并到本机（方案 A：拉取 → 逐项确认 → apply-items）
+  // 名字必须写明方向（issue 121）：这条链路只下行、绝不上传 —— 叫「同步」会被读成双向。
+  'syncflow.title': '从远端合并到本机',
+  'syncflow.button': '从远端合并到本机',
+  // 方向说明（ⓘ，挂在动作行）：只下行 + 双向该去哪儿；常驻成行会与按钮名重复（DESIGN.md §7）
+  'syncflow.directionHint': '只下行：远端改的分区进本机，本机单边改的保留不动、不会上传。要两边自动对齐，打开下面的自动同步。',
   // 方案 A：有基线且三方合并全部 skip = 远端与本机一致，不必同步
   'syncflow.upToDate': '已是最新，无需同步',
   'syncflow.syncing': '正在同步…',
@@ -257,7 +260,7 @@ export const zh = {
   // 同步历史（含自动同步记录）
   'history.title': '同步历史',
   'history.empty': '尚无同步历史',
-  'history.emptyHint': '完成首次 push / 一键同步 / 自动同步后，这里会显示记录。',
+  'history.emptyHint': '完成首次推送 / 从远端合并 / 自动同步后，这里会显示记录。',
   'history.colTime': '时间',
   'history.colDetail': '详情',
   'history.kindAutosync': '自动同步',
@@ -304,7 +307,7 @@ export const zh = {
   'toast.pushPreviewFailed': '推送预览失败',
   'toast.pushFailed': '推送失败',
   'toast.pushDone': '推送完成',
-  'toast.syncStartFailed': '一键同步失败',
+  'toast.syncStartFailed': '从远端合并失败',
   'toast.autosyncUpdateFailed': '自动同步设置更新失败',
   'toast.autosyncUpdated': '自动同步设置已更新',
   'toast.snapshotsLoadFailed': '读取远端快照失败',
@@ -573,8 +576,9 @@ export const en: Record<keyof typeof zh, string> = {
   'push.title': 'Push Result',
   'sections.title': 'Synced Sections',
   'warnings.title': 'Section Warnings',
-  'syncflow.title': 'One-Click Sync',
-  'syncflow.button': 'One-click sync',
+  'syncflow.title': 'Merge from remote',
+  'syncflow.button': 'Merge from remote',
+  'syncflow.directionHint': 'Down only: remote changes come into this device; local-only edits stay and are never uploaded. For two-way alignment, turn on auto-sync below.',
   // Plan A: with a baseline, an all-skip three-way merge means local and remote already match
   'syncflow.upToDate': 'Already up to date; nothing to sync',
   'syncflow.syncing': 'Syncing…',
@@ -701,7 +705,7 @@ export const en: Record<keyof typeof zh, string> = {
   'autosync.lastMessage': 'Last message',
   'history.title': 'Sync History',
   'history.empty': 'No sync history yet',
-  'history.emptyHint': 'Records appear here after your first push / one-click sync / auto sync.',
+  'history.emptyHint': 'Records appear here after your first push / merge from remote / auto sync.',
   'history.colTime': 'Time',
   'history.colDetail': 'Detail',
   'history.kindAutosync': 'Auto Sync',
@@ -745,7 +749,7 @@ export const en: Record<keyof typeof zh, string> = {
   'toast.pushPreviewFailed': 'Failed to build push preview',
   'toast.pushFailed': 'Push failed',
   'toast.pushDone': 'Push completed',
-  'toast.syncStartFailed': 'One-click sync failed',
+  'toast.syncStartFailed': 'Merge from remote failed',
   'toast.autosyncUpdateFailed': 'Failed to update auto-sync settings',
   'toast.autosyncUpdated': 'Auto-sync settings updated',
   'toast.snapshotsLoadFailed': 'Failed to load remote snapshots',

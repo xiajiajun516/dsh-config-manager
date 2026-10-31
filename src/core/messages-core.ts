@@ -67,7 +67,7 @@ export const zh = {
 
   // ---------- run-registry ----------
   'core.run.autosyncBusy': '自动同步已在进行中',
-  'core.run.syncApplyBusy': '一键同步已在进行中',
+  'core.run.syncApplyBusy': '正在从远端合并',
   'core.run.backupScheduleBusy': '定时备份已在进行中',
   'core.run.restoreBusy': '快照恢复已在进行中（请等待当前恢复完成）',
   'core.run.recoveryBusy': '恢复/回滚已在进行中（请等待当前恢复完成）',
@@ -381,7 +381,7 @@ export const en: Record<keyof typeof zh, string> = {
 
   // ---------- run-registry ----------
   'core.run.autosyncBusy': 'Automatic sync is already in progress',
-  'core.run.syncApplyBusy': 'One-click sync is already in progress',
+  'core.run.syncApplyBusy': 'Merge from remote is already in progress',
   'core.run.backupScheduleBusy': 'Scheduled backup is already in progress',
   'core.run.restoreBusy': 'Snapshot restore is already in progress (wait for the current restore to finish)',
   'core.run.recoveryBusy': 'Recovery/rollback is already in progress (wait for the current recovery to finish)',
