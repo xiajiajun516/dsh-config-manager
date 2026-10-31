@@ -123,7 +123,7 @@ export const zh = {
   'overview.kind.other': '其他操作',
   // 状态横幅
   // —— 导出 ——
-  'export.hint': '默认导出推荐分区（可迁移、不含设备专属数据）。点「选择要导出的内容」可按分区、逐条目调整（技能、插件、工作区、会话等）。',
+  'export.hint': '默认导出推荐分区（可迁移、不含设备专属数据）。',
   'export.encrypt': '加密备份',
   'export.encryptHint': '用密码加密整个备份文件（AES-256-GCM）。密码仅用于本次加密，不会写入备份或任何配置文件；导入时必须输入该密码才能解锁。',
   'export.password': '备份加密密码',
@@ -1013,7 +1013,7 @@ export const en: Record<keyof typeof zh, string> = {
   'overview.kind.snapshot-delete': 'Snapshot delete',
   'overview.kind.snapshot-prune': 'Snapshot prune',
   'overview.kind.other': 'Other operation',
-  'export.hint': 'Exports the recommended sections by default (portable, no device-specific data). Click "Choose what to export" to adjust per section and per item (skills, plugins, workspaces, sessions, …).',
+  'export.hint': 'Exports the recommended sections by default (portable, no device-specific data).',
   'export.encrypt': 'Encrypt backup',
   'export.encryptHint': 'Encrypt the entire backup file with a password (AES-256-GCM). The password is used once and never written into the backup or any config file; it is required to unlock the backup on import.',
   'export.password': 'Backup encryption password',

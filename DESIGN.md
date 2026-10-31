@@ -1563,6 +1563,25 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
     `sessions.layout.keepHint` / `quarantineNote` / `refreshHint`（隔离与回滚的逐条后果）；
     `mode.passwordClearNotice`（取消勾选会删除已保存的密码）；`recovery.crash.guidance`（处置指引）；
     `diskUsage.location` 与计数类元数据；`myconfigs.upload.form.autoHint`（「以下字段由系统自动生成：」引导行）。
+- **t8（2026-10-31，用户要求「按钮标题能说清作用就不要 ⓘ」）：删 1 处渲染点 + 6 键瘦身 + 2 个按钮标题改写** ——
+  判据句：**一个没用过本插件的用户读按钮标题，能否预测点击结果与作用对象？能 → 就地删 ⓘ，或删掉 ⓘ 里复述它的那半句。**
+  - **标题改写（改字典值，zh/en 同步）**：`config.save`「保存配置 → 立即保存」——表单本就自动保存，
+    原标题暗示「必须手动保存」，这正是 `config.saveHint` 曾经存在的根因；
+    `myconfigs.upload.run`「一键上传 → 上传配置包」——点它先开向导、必须先选 zip，不是一键。
+  - **删渲染点（同义重复，字典键保留）**：`myconfigs.upload.selectHint` 从市场页「上传」按钮行移除 ——
+    同一句已在点开后的向导头 `Modal.Header.trailing`（`MyConfigsWizard.tsx`）逐字出现，
+    与上方 `rollback.autopoint.hint` 同处理口径。
+  - **删复述子句（ⓘ / 提示在复述同一行/同一屏的按钮名或标题，见 §7 ⑤）**：
+    `config.saveHint` 删「也可点击按钮立即保存」；`export.hint` 删「点「选择要导出的内容」可按分区、逐条目调整…」；
+    `mode.hint` 删「点按钮在弹窗里勾选要同步的分区：」并改写为「同步范围 = 勾选的分区集合（…）」；
+    `channel.openHint` 删「点击按钮在弹窗中配置或修改」；`mode.decryptPasswordHint` 删「删除请点「删除已保存密码」」；
+    `myconfigs.update.zipHint` 删「更新需要新的配置包：…通过后即可一键更新」并改写为「选择新 zip 后自动校验，通过才能更新」。
+    六条瘦身后都仍保留**会改变决定**的那部分（写入位置 / 默认导出范围 / 范围定义 / 通道类型 / 密码只服务加密快照 / 必须先过校验）。
+  - **本轮仍常驻（有意为之，不是漏改）**：`about.update.offline`（离线失败属正常的预期管理）、
+    `backupFiles.hint`（保留策略）、`recovery.preview.hint`（零写入）、`probe.hint`（WebDAV 会幂等建上级目录）、
+    `workdir.adoptHint`（可 `git revert`）、`merge.scopeNotice` / `merge.bulk.hint`（整分区裁决）、
+    `picker.sessionWorkspaceLinked`（会话↔工作区联动后果）。
+  - **`MOVE_PINS` 长度不变（81）**：本轮删的是**重复渲染点**，被删处那个键的 pin 记在仍渲染它的 `MyConfigsWizard.tsx` 上。
 
 ---
 

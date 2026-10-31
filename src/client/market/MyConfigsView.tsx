@@ -35,7 +35,6 @@ import type { MyConfigsApi, MyItemEntry } from './my-configs-api.ts'
 import type { ListingStatusResponse } from '../../market/my-repo.ts'
 import type { SyncApi, GithubPollResponse } from '../sync/sync-api.ts'
 import { Button, Card, SectionTitle } from '../common/ui.tsx'
-import { InfoHint } from '../common/InfoHint.tsx'
 import { ConfirmDialog } from '../common/ConfirmDialog.tsx'
 import { toast } from '../common/toast-store.ts'
 import { redact } from '../../security/redaction.ts'
@@ -773,10 +772,11 @@ export function MyConfigsView({
         <>
           {/* 一键上传入口：点按钮 → 免责（首次）→ 弹窗向导 */}
           <Card>
-            {/* 卡片里只有一个动作：按钮本身已经写明「一键上传」，不再重复一个同名标题；ⓘ 跟着动作走 */}
+            {/* 卡片里只有一个动作：按钮本身已写明作用对象（上传配置包），不再重复标题。
+                此处不再放 ⓘ：它的「先在导出页生成 zip / 含密钥的备份会被拒绝」已在点开后的
+                向导头（MyConfigsWizard 的 Modal.Header trailing）逐字出现，入口再放一遍是同一条信息两次。 */}
             <div className={css.actionRow}>
               <Button variant="primary" onClick={openUpload}>{t('myconfigs.upload.run')}</Button>
-              <InfoHint text={t('myconfigs.upload.selectHint')} label={t('common.infoHint')} />
             </div>
           </Card>
           {renderList()}

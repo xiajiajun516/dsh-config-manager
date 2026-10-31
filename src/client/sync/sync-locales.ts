@@ -20,8 +20,8 @@ export const zh = {
   'config.tokenMissing': '未配置令牌：可拉取公开仓库，无法推送',
   'config.tokenPlaceholder': 'ghp_…（可选）',
   // 配置保存（自动保存 + 显式保存按钮）
-  'config.save': '保存配置',
-  'config.saveHint': '表单改动会自动保存（密码/token 安全写入 DSH credentials，不会写入同步文件或日志）；也可点击按钮立即保存。',
+  'config.save': '立即保存',
+  'config.saveHint': '表单改动会自动保存：密码/token 安全写入 DSH credentials，不会写入同步文件或日志。',
   // 通道选择器
   'channel.title': '同步通道',
   'channel.git': 'Git 私有仓库',
@@ -31,7 +31,7 @@ export const zh = {
   'channel.perChannelHint': '每条通道（Git / WebDAV / 对象存储 / Gist）的自动同步、同步模式、加密与远端快照各自独立配置。',
   // 通道入口卡（弹窗驱动：点按钮 → 弹窗内配置通道）
   'channel.open': '配置…',
-  'channel.openHint': '远程同步通过「同步通道」进行：Git 私有仓库或 WebDAV 服务器。点击按钮在弹窗中配置或修改。',
+  'channel.openHint': '远程同步通过「同步通道」进行：Git 私有仓库或 WebDAV 服务器。',
   // 断开通道配置（用户实测要求：配置过就必须能删掉，否则打不通的通道会永久占位）
   'channel.expand': '展开通道详情',
   'channel.collapse': '收起通道详情',
@@ -179,7 +179,7 @@ export const zh = {
   'syncflow.remoteEmptyGuide': '远端还没有任何快照：这是首次同步，先点「推送到远端」把本机配置推上去（推送会创建第一个快照），之后才能拉取。',
   // 同步模式（默认快速导出 / 高级自定义导出）
   'mode.title': '同步分区',
-  'mode.hint': '点按钮在弹窗里勾选要同步的分区：勾选集合就是同步范围（默认已勾选推荐分区，可随时改）。',
+  'mode.hint': '同步范围 = 勾选的分区集合（默认已勾选推荐分区，可随时改）。',
   'mode.selectedCount': '已勾选 {n} 个',
   'mode.sectionsHint': '默认可同步的是可移植分区；平台相关分区（MCP 服务器）与设备相关分区（插件文件、凭据状态、历史会话）只有你在这里主动勾选才参与同步。',
   'mode.atLeastOne': '请至少勾选一个同步分区',
@@ -218,7 +218,7 @@ export const zh = {
   'mode.includeSecretsHint': '把真实凭据值（~/.dsh/.credentials.yaml）写入加密快照，可在另一台机器上随同步一并写回本机凭据；勾选时自动选中加密，密钥绝不进入未加密快照。',
   'mode.encryptAutosyncNotice': '加密快照仅通过手动推送/拉取使用；自动同步无密码，遇到加密快照会跳过并在历史中提示。',
   'mode.decryptPassword': '解密密码（加密快照拉取/同步用，可选）',
-  'mode.decryptPasswordHint': '输入后保存在本机凭据库，下次拉取自动使用；只有拉取的快照确实加密时才会用到 —— 未加密的备份不会使用密码。删除请点「删除已保存密码」。',
+  'mode.decryptPasswordHint': '输入后保存在本机凭据库，下次拉取自动使用；只有拉取的快照确实加密时才会用到 —— 未加密的备份不会使用密码。',
   'mode.decryptPasswordSaved': '已保存到本机',
   'mode.decryptPasswordPlaceholder': '已保存（留空即沿用）',
   'mode.clearSavedPassword': '删除已保存密码',
@@ -476,8 +476,8 @@ export const en: Record<keyof typeof zh, string> = {
   'config.tokenMissing': 'No token: public repos can be pulled, but pushing will fail',
   'config.tokenPlaceholder': 'ghp_… (optional)',
   // Config save (auto-save + explicit save button)
-  'config.save': 'Save config',
-  'config.saveHint': 'Form changes are saved automatically (password/token written securely into DSH credentials, never into sync files or logs); you can also save explicitly with the button.',
+  'config.save': 'Save now',
+  'config.saveHint': 'Form changes are saved automatically: password/token goes securely into DSH credentials, never into sync files or logs.',
   'channel.title': 'Sync Channel',
   'channel.git': 'Git private repo',
   'channel.webdav': 'WebDAV server',
@@ -486,7 +486,7 @@ export const en: Record<keyof typeof zh, string> = {
   'channel.perChannelHint': 'Auto sync, sync mode, encryption and remote snapshots are configured independently for each channel (Git / WebDAV / object storage / Gist).',
   // Channel entry card (dialog-driven: click the button → configure the channel in the dialog)
   'channel.open': 'Configure…',
-  'channel.openHint': 'Remote sync runs through a sync channel: a private Git repository or a WebDAV server. Click the button to configure or change it in the dialog.',
+  'channel.openHint': 'Remote sync runs through a sync channel: a private Git repository or a WebDAV server.',
   // Disconnect channel config (user report: once configured there was no way out)
   'channel.expand': 'Expand channel details',
   'channel.collapse': 'Collapse channel details',
@@ -625,7 +625,7 @@ export const en: Record<keyof typeof zh, string> = {
   'syncflow.remoteEmptyGuide': 'No remote snapshots yet: this is the first sync — click "Push to remote" to upload your local config (that push creates the first snapshot); pulling only works afterwards.',
   // Sync mode (default quick export / advanced custom export)
   'mode.title': 'Sync Sections',
-  'mode.hint': 'Click the button to tick the sections to sync: the ticked set is the sync scope (recommended sections are ticked by default and can be changed any time).',
+  'mode.hint': 'Sync scope = the ticked set of sections (recommended sections are ticked by default and can be changed any time).',
   'mode.selectedCount': '{n} selected',
   'mode.sectionsHint': 'Portable sections sync by default; platform-dependent sections (MCP servers) and device-specific sections (plugin files, credentials status, sessions) only participate when you explicitly tick them here.',
   'mode.atLeastOne': 'Select at least one section to sync',
@@ -664,7 +664,7 @@ export const en: Record<keyof typeof zh, string> = {
   'mode.includeSecretsHint': 'Write real credential values (~/.dsh/.credentials.yaml) into the encrypted snapshot so another machine can restore them with the sync; checking this auto-selects encryption, and secrets never enter a plaintext snapshot.',
   'mode.encryptAutosyncNotice': 'Encrypted snapshots are only produced/consumed by manual push/pull; auto sync has no password, so it skips encrypted snapshots and reports them in history.',
   'mode.decryptPassword': 'Decryption password (for encrypted snapshot pull/sync, optional)',
-  'mode.decryptPasswordHint': 'Once entered it is saved in the local credential store and reused automatically; it is only ever used when the pulled snapshot is actually encrypted — plaintext backups never use the password. Use "Delete saved password" to remove it.',
+  'mode.decryptPasswordHint': 'Once entered it is saved in the local credential store and reused automatically; it is only ever used when the pulled snapshot is actually encrypted — plaintext backups never use the password.',
   'mode.decryptPasswordSaved': 'Saved locally',
   'mode.decryptPasswordPlaceholder': 'Saved (leave empty to reuse)',
   'mode.clearSavedPassword': 'Delete saved password',
