@@ -32,6 +32,12 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 >
 > **Theme**: {{one-line English theme}}
 
+## [0.2.3] - 2026-10-31
+
+> **本版主题**：同步页的按钮自己说清作用——改名「从远端合并到本机」「立即保存」「上传配置包」，旁边的说明图标不再复述它们。
+>
+> **Theme**: Sync buttons now state what they do — "Merge from remote", "Save now", "Upload bundle" — and the info icons no longer repeat them.
+
 ### 🔧 变更 · Changed
 
 - **「一键同步」改名为「从远端合并到本机」**：名字写明方向 —— 它只把远端改动合并进来，本机单边改的保留、绝不上传。运行记录、历史与回滚文案同步改叫「从远端合并」；同步页动作行只留按钮，「测试连接」旁那颗说明图标一并去掉（issue #121）。
