@@ -12,9 +12,12 @@
 | 109 | 阿里云 OSS 同步 SigV4 签名不匹配（规范路径缺 bucket） | done | bf1642f | v0.1.82 | 2026-10-23 |
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
-| 121 | 「一键同步」这个名字让人以为是双向补齐，实际手动同步只下行；自动同步却是真双向 ⇒ 同一个词两种方向（修复：改名为「从远端合并到本机」，运行记录/历史/回滚文案同步；不改「恢复到本机」——三方合并会保留本机单边改动，「快照恢复」已占用该词） | awaiting-release | 1cf8538 | — | 2026-10-31 |
+| 121 | 「一键同步」这个名字让人以为是双向补齐，实际手动同步只下行；自动同步却是真双向 ⇒ 同一个词两种方向（修复：改名为「从远端合并到本机」，运行记录/历史/回滚文案同步；不改「恢复到本机」——三方合并会保留本机单边改动，「快照恢复」已占用该词） | done | 1cf8538 | v0.2.3 | 2026-10-31 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-10-31` **#121 发版收尾**：tag `v0.2.3`（提交 `babd759`）→ Publish 工作流 success（npm publish + GitHub Release 已建，release 正文双语亮点在位）。
+  对账：`git merge-base --is-ancestor 1cf8538 v0.2.3` = 0；`npm view dsh-config-manager@0.2.3 version` = 0.2.3；dist-tags latest = 0.2.3。
+  回版本号评论 comment 6544459250 + 加 `fixed`，行转 `done`。仍 `awaiting-release` 的行：0 条（`#117` 仍 `open`：等报告者接受授权范围说明，非本版范围）。
 - `2026-10-31` **#121 受理 + 修复（待发版）**：回确认评论（comment 6544199390）+ 加 `confirmed` / `sync` / `ui`，去 `needs-triage`。
   修复提交 `408be6a`（改名「从远端合并到本机」+ 运行记录/历史/回滚文案）与 `1cf8538`（按报告者要求移除动作行两处 ⓘ）。
   未采纳「恢复到本机」的两条理由（三方合并保留本机单边改动、与已有「快照恢复」撞名）已写进 issue 评论。状态 `awaiting-release`。
