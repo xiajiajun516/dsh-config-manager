@@ -111,9 +111,10 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
 
   return (
     <>
-      {/* action 形态：直接摊进调用方自己的动作行（不再套一层 .actionRow），结果走 toast */}
+      {/* action 形态：直接摊进调用方自己的动作行（不再套一层 .actionRow），结果走 toast。
+          动作行里只留按钮：与同排其它按钮并排时，ⓘ 会被读成该按钮的开关（issue 121 用户要求移除）。 */}
       {actionMode
-        ? <>{button}{hintNode}</>
+        ? <>{button}</>
         : <div className={css.actionRow}>{button}{hintNode}</div>}
       {!actionMode && error !== null && (
         <ErrorBanner

@@ -34,8 +34,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
-- **「一键同步」改名为「从远端合并到本机」**：名字写明方向 —— 它只把远端改动合并进来，本机单边改的保留、绝不上传；按钮旁新增 ⓘ 说明只下行，并指出双向对齐该用自动同步。运行记录、历史与回滚文案同步改叫「从远端合并」。
-  **"One-click sync" is now "Merge from remote"**: the name states the direction — it only merges remote changes in, keeps local-only edits and never uploads; a new ⓘ beside the button explains the one-way flow and points two-way alignment at auto-sync. Run records, history and rollback labels now say "Merge from remote" as well.
+- **「一键同步」改名为「从远端合并到本机」**：名字写明方向 —— 它只把远端改动合并进来，本机单边改的保留、绝不上传。运行记录、历史与回滚文案同步改叫「从远端合并」；同步页动作行只留按钮，「测试连接」旁那颗说明图标一并去掉。
+  **"One-click sync" is now "Merge from remote"**: the name states the direction — it only merges remote changes in, keeps local-only edits and never uploads. Run records, history and rollback labels now say "Merge from remote" as well, and the sync action row keeps only buttons — the info icon beside "Test connection" is gone too.
 
 ## [0.2.2] - 2026-10-30
 

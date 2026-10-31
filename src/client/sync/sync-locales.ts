@@ -130,7 +130,6 @@ export const zh = {
   'syncflow.title': '从远端合并到本机',
   'syncflow.button': '从远端合并到本机',
   // 方向说明（ⓘ，挂在动作行）：只下行 + 双向该去哪儿；常驻成行会与按钮名重复（DESIGN.md §7）
-  'syncflow.directionHint': '只下行：远端改的分区进本机，本机单边改的保留不动、不会上传。要两边自动对齐，打开下面的自动同步。',
   // 方案 A：有基线且三方合并全部 skip = 远端与本机一致，不必同步
   'syncflow.upToDate': '已是最新，无需同步',
   'syncflow.syncing': '正在同步…',
@@ -578,7 +577,6 @@ export const en: Record<keyof typeof zh, string> = {
   'warnings.title': 'Section Warnings',
   'syncflow.title': 'Merge from remote',
   'syncflow.button': 'Merge from remote',
-  'syncflow.directionHint': 'Down only: remote changes come into this device; local-only edits stay and are never uploaded. For two-way alignment, turn on auto-sync below.',
   // Plan A: with a baseline, an all-skip three-way merge means local and remote already match
   'syncflow.upToDate': 'Already up to date; nothing to sync',
   'syncflow.syncing': 'Syncing…',

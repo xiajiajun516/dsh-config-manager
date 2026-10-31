@@ -1272,7 +1272,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                 {state.busy === 'sync'
                   ? (syncPhase === 'preview' ? t('syncflow.checkingRemote') : t('syncflow.syncing'))
                   : t('syncflow.button')}
-              </Button><InfoHint text={t('syncflow.directionHint')} label={t('common.infoHint')} />{/* 方向说明（issue 121）：只下行；常驻成行会复述按钮名，静态机制说明按 DESIGN.md §7 只进 ⓘ */}
+              </Button>
               <Button variant={pickSyncPrimary(state.statusInfo, channel) === 'push' ? 'primary' : 'ghost'} disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
               </Button>
