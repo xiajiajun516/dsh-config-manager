@@ -28,9 +28,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
-> **{{本版主题}}**：{{一句话中文主题}}
+## [0.2.4] - 2026-11-01
+
+> **本版主题**：同步仓库比配置大得多时不再卡死——只取同步目录、远端没变一次往返返回、卡住 30 秒内失败且不留孤儿进程。
 >
-> **Theme**: {{one-line English theme}}
+> **Theme**: sync no longer stalls when the remote repository is far larger than your config — only the synced folders are fetched, an unchanged remote costs one round trip, and a stalled download fails within 30 seconds without leaving orphans behind.
 
 ### 🐛 修复 · Fixed
 
