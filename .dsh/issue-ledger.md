@@ -13,8 +13,12 @@
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
 | 121 | 「一键同步」这个名字让人以为是双向补齐，实际手动同步只下行；自动同步却是真双向 ⇒ 同一个词两种方向（修复：改名为「从远端合并到本机」，运行记录/历史/回滚文案同步；不改「恢复到本机」——三方合并会保留本机单边改动，「快照恢复」已占用该词） | done | 1cf8538 | v0.2.3 | 2026-10-31 |
+| 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | open | — | — | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-01` **#122 受理**：回确认评论（comment 6558142935）+ 加 `confirmed` / `sync`，去 `needs-triage`。
+  代码核实（`src/sync/git/git-transport.ts`）：clone 无 `--filter`（:587）、fetch 无 filter（`src/utils/git-fast-forward.ts:14`）、超时 `execFile` 只杀 `git.exe`（:208，`DEFAULT_SYNC_TIMEOUT_MS=120_000` @ `src/sync/transport.ts:281` + 3 次重试）。
+  并发不是缺 single-flight：`src/utils/workdir-lock.ts` 已跨进程串行，5 份并发 = 孤儿 + 新起。修复方向：clone `--filter=blob:none --no-checkout` + `sparse-checkout set --cone snapshots snapshots-encrypted blobs` + `checkout`（服务端不支持则回落全量）、fetch 仅在 `remote.origin.promisor` 为真时补 filter、超时改杀进程树（Windows `taskkill /T /F`）且以定时器为准不等 stdio 管道、存量副本走「重建工作副本」不静默改造、不采用 `--depth 1`。状态 `open`（未改代码）。
 - `2026-10-31` **#121 发版收尾**：tag `v0.2.3`（提交 `babd759`）→ Publish 工作流 success（npm publish + GitHub Release 已建，release 正文双语亮点在位）。
   对账：`git merge-base --is-ancestor 1cf8538 v0.2.3` = 0；`npm view dsh-config-manager@0.2.3 version` = 0.2.3；dist-tags latest = 0.2.3。
   回版本号评论 comment 6544459250 + 加 `fixed`，行转 `done`。仍 `awaiting-release` 的行：0 条（`#117` 仍 `open`：等报告者接受授权范围说明，非本版范围）。
