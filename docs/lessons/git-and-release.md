@@ -30,3 +30,18 @@
   非测试 `process.platform` 分支此前只被 ubuntu 覆盖。**macOS 是观察期**（`experimental: true` +
   job 级 `continue-on-error`）：连续 1~2 次绿灯后删掉那一行即变硬门禁（不做长期「允许失败」）。详见 `DEVELOPERS.md`。
 - **`tests/**` 的类型检查是独立一条命令**（`tsconfig.tests.json`）：根 config 只 include `src/**`，历史上 228 个测试文件长期在类型检查之外（实测曾积压 43 条错误，已修完并接进 CI）。改动测试后请跑 `npm run typecheck:tests`。
+## 构建与测试的 TEMP 口径：`TEMP`/`TMP` 只给 build / install，不给 test（2026-11-01 实测）
+
+- **build 必须在仓库内 TEMP 下跑**：`TEMP`/`TMP` 落在 `%TEMP%` 时 dts 阶段写盘被拒 —— `error TS5033: Could not write file 'C:/Users/<user>/AppData/Local/Temp/rolldown-plugin-dts-*/…': Access is denied` → `Error: tsgo process exited with code 2` → `Build failed with 1 error: [plugin rolldown-plugin-dts:generate]`；改指 `.tmp/buildtmp` 后 exit 0（`lib/client.js` 2.4 MB，1914 ms）。`prepare` = `npm run build`，所以 `npm ci --legacy-peer-deps` **也要**带同一重定向：依赖已装好但 install 仍以非 0 结束。
+- **同一条重定向顺延到 `npm test` 会假红 3 条**：全量 `npm test` 带重定向 = 5275 tests / 5270 pass / 3 fail；去掉重定向 = 5275 / 5273 pass / 0 fail / 2 skipped（与 `79da4b1` 提交自报一致）。只跑这两个文件同样复现：`node --test src/foreign/cursor.test.ts src/foreign/qoder.test.ts` → 带重定向 25 tests / 21 pass / 3 fail / 1 skipped（exit 1），去掉重定向 25 / 24 pass / 0 fail / 1 skipped（exit 0）。
+- **机制是有损 slug 编解码，不是「测试挑剔点目录」**：`src/foreign/read-cursor.ts:441` 的 `encodeCursorSlug()` 把分隔符与 `.` 都折成 `-`（`tail.split('/').map((s) => s.replace(/\./g, '-')).join('-')`），`src/foreign/read-qoder.ts:116` 的 `derivedCwdOf()` 只能 `split('-')` 反解再靠 `isDirectory()` 做存在性校验；路径里本来带 `-` 就必然解错，解错即返回 `undefined` —— 而这正是「绝不猜 cwd」的正确行为。`src/foreign/qoder.test.ts:41-43` 已写明这件事：「**探针根必须无连字符**：这种编码是有损的（路径里的 `-` 与分隔符同形），带 `-` 的路径解不出来 —— 这正是『反解必须过存在性检查』的原因」。
+- **同机两个 TEMP 的对照**（同一 `derivedCwdOf(encode(p), 'win32')` 实测）：
+  - `C:\Users\<user>\AppData\Local\Temp` → slug `C--Users-<user>-AppData-Local-Temp` → **解回 true**；
+  - `<repo>\.tmp\buildtmp`（`D:\Projects\personal\dsh-config-manager\.tmp\buildtmp`）→ slug `D--Projects-personal-dsh-config-manager-.tmp-buildtmp` → **null**。
+
+  差别只有一个：仓库目录名 `dsh-config-manager` 自带连字符（系统 temp 路径没有）。换成任何带 `-` 的临时根都会崩，与「`.tmp` 是点目录」无关 —— 别把成因记成点目录。
+- **复现**（`TEMP` 指到仓库内 → 期望 3 条红）：`mkdir -p .tmp/buildtmp` 后 `TEMP="<repo>\.tmp\buildtmp" TMP="<repo>\.tmp\buildtmp" node --test src/foreign/cursor.test.ts src/foreign/qoder.test.ts`，观察：
+  - `src/foreign/cursor.test.ts` t16：`AssertionError: cwd 必须由存在性解码得出`，`actual: undefined` / `expected: 'd:\projects\personal\dsh-config-manager\.tmp\buildtmp\dsh-cursor-derive-<rand>\projects\demo.client\app'`；
+  - `src/foreign/qoder.test.ts:97` t3：`探针根无连字符时反解必须命中：D--Projects-personal-dsh-config-manager-.tmp-buildtmp-qoderProbe<pid>-real` → `actual: false`；
+  - 同文件 t4：反解回落成仓库根，`actual: 'D:\Projects\personal\dsh-config-manager'` / `expected: '…\.tmp\buildtmp\qoderProbe<pid>Home<rand>'`（相对 TEMP `.tmp/buildtmp` 被按仓库根解析）。
+- **落点**：build / install 用仓库内 TEMP（`TEMP=TMP=.tmp/buildtmp npm run build`），test 用系统 `TEMP`；两条分开跑，别 export 一次吃到底（同一个 shell 里 `$env:TEMP` 会一直生效，很容易把 test 也带走）。

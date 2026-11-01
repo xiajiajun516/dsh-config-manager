@@ -7,7 +7,7 @@
 
 | 域文件 | 收录内容 | 对应 `AGENTS.md` 小节（`## Rules` 下） |
 | --- | --- | --- |
-| `git-and-release.md` | git 同步 origin / 删文件前 git status / 禁用 checkout -- 回滚 / LF↔CRLF / pnpm 发布年龄 / CI 平台矩阵与 tests 类型检查 | 通用（任何改动） |
+| `git-and-release.md` | git 同步 origin / 删文件前 git status / 禁用 checkout -- 回滚 / LF↔CRLF / pnpm 发布年龄 / CI 平台矩阵与 tests 类型检查 / 构建与测试的 TEMP 口径（有损 slug 反解） | 通用（任何改动） |
 | `profiles-and-instances.md` | profile 语义 / desktop 独占 / 复制档案 relink 与中断残留 / 隔离实例挂载 bundles / cordis.patch.yml !!js / pnpm 同树布局 | Profile / 插件数据 / 打包 |
 | `foreign-import.md` | 外部来源迁移：三处「文档说支持、代码没有」/ 插件≠目录拷贝的三条证据 / 会话字节幂等 / 「写了没接线」/ 静默截断修复 / 真值表护栏缺失 / 本机 Claude Code 实测形态 | 会话 / 导入导出 / 外部来源 |
 | `sessions-import-export.md` | 会话日志字节改写 / 可见性来源 / 子代理父子 / 排序时间 / 前缀映射 / recursive-walk / 归档缓存与预览同口径 / 格式版本体检落点 | 会话 / 导入导出 / 外部来源、架构与路由（只读预览与导出同口径） |

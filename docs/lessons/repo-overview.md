@@ -44,8 +44,8 @@ npm run bundle                   # 仅重建 client bundle
 
 ## 本机环境注意（下移自 AGENTS.md §✅ Verification）
 
-- `npm run build` 需先把 `TEMP`/`TMP` 指向工作区内（`.tmp/buildtmp`）否则 dts 阶段 `Access is denied` 致 build=1。
-- `npm test` 必须用系统 TEMP（`foreign/qoder.test.ts` 用 `os.tmpdir()`）。
+- `npm run build` 需先把 `TEMP`/`TMP` 指向工作区内（`.tmp/buildtmp`）否则 dts 阶段 `Access is denied` 致 build=1；`npm ci --legacy-peer-deps` 会跑 `prepare`(=build)，同一口径。
+- `npm test` 必须用系统 `TEMP`，不能沿用上面那条重定向：测试用 `os.tmpdir()` 造探针根，而仓库路径 `dsh-config-manager` 自带连字符会让有损 slug 反解必然失败（成因与复现 → `docs/lessons/git-and-release.md`）。
 
 ## UI 自查清单（下移自 AGENTS.md §✅ Verification）
 
