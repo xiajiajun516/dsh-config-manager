@@ -1086,6 +1086,11 @@ body {
   overflow-y: auto;
   overscroll-behavior: contain;
   min-height: 0;
+  /* 2026-11-01 视觉 pass：滚动条槽固定 + 末行留 4px 呼吸。
+     此前滚动条出现/消失会让整行宽度跳 5px，末行又紧贴底栏的 1px 横线，
+     读起来像「这一行被界面切断了」。 */
+  scrollbar-gutter: stable;
+  padding-bottom: 4px;
 }
 
 /* 空态 / 加载态：与 .artifactList 同一条契约 —— 同样吃掉剩余高度，
@@ -1181,6 +1186,23 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 行内主操作常态是 ghost（2026-11-01 视觉 pass）：八行八颗实心按钮让 accent 变成壁纸，
+   整屏最亮的元素成了 chrome，主色不再表示「哪一行值得动」。悬停该行或展开该行时才升到
+   primary —— 此刻它确实是这一行要做的事。过渡走 --cm-motion-fast，与全站一致。 */
+.artifactActions .rowPrimary {
+  transition:
+    background var(--cm-motion-fast) ease,
+    border-color var(--cm-motion-fast) ease,
+    color var(--cm-motion-fast) ease;
+}
+
+.artifactRowHead:hover .artifactActions .rowPrimary,
+.artifactRow[data-expanded] .artifactActions .rowPrimary {
+  background: var(--cm-primary-fill);
+  border-color: transparent;
+  color: var(--cm-text-on-accent);
 }
 
 /* 徽章与动作 flex:none：标题先被压缩（ellipsis），不允许把按钮挤成两行 */
@@ -2892,6 +2914,19 @@ body {
   grid-column: 1 / -1;
 }
 
+/* 市场操作行：标题在左、动作在右，同一行（原为一张只有标题 + 两按钮的卡，
+   右侧永远空着 —— 这张卡没有任何独立内容，改成一行即省掉整块死空间）。 */
+.marketRepoRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.marketRepoRow > .groupLabel {
+  margin-bottom: 0;
+}
+
 /* 筛选区下方的元信息行（分区未知提示 + 条目计数徽章） */
 .marketFilterMeta {
   display: flex;
@@ -3120,6 +3155,56 @@ body {
   flex: 1 1 auto;
   min-height: 0;
   max-height: none;
+  /* 2026-11-01：与首页活动列表同一个毛病 —— 卡片已有外框，滚动区再套一层
+     border + radius 就是双圈；它的 bg-base 又比卡面深一档，整块读作「卡片里挖了个洞」
+     （附带的边框线还让表头看起来像一条深色填充带，app-screens §7.2 明令无填充表头带）。
+     卡内滚动区应当是透明的：卡片面连续，只有滚动条提示「内容还没完」。 */
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding-right: 2px;
+}
+
+/* 卡片固定高度（420px）下，除明细表外的子项一律不参与压缩（2026-11-01 实测）：
+   内容一多（比如出现「有目录读不到」的提示行）时，flex 会按比例压扁每个子项，
+   .cellMeta 被压到 4px、文字被 overflow:hidden 裁成半个字 —— 读起来像「这行坏了」。
+   设计意图写在上面的注释②：只有明细表滚动，其余恒在视野内。 */
+.diskUsageCard > * {
+  flex-shrink: 0;
+}
+
+.diskUsageCard > .diskUsageScroll {
+  flex-shrink: 1;
+  min-height: 0;
+}
+
+/* 列宽显式给定（2026-11-01）：table-layout: fixed 下不给宽度时浏览器按首行内容分配，
+   Cleanup policy 只剩 ~118px —— "Auto-removed after 7 days"、"Your data / safety net
+   (never auto-removed)" 全被省略号截掉，而这一列恰好是「这块数据能不能删」的唯一答案。 */
+.diskUsageScroll th:nth-child(2) { width: 78px; }
+.diskUsageScroll th:nth-child(3) { width: 86px; }
+.diskUsageScroll th:nth-child(4) { width: 160px; }
+
+/* 数值两列不需要省略号：内容永远是「4.8 KB」「235 file(s)」这种短串，
+   一旦被 .tableFixed 的 ellipsis 截成 "265.0 …" 就完全读不出量级。 */
+.diskUsageScroll td:nth-child(2),
+.diskUsageScroll td:nth-child(3) {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* 策略列允许换行（其余列是短标签，保持单行省略） */
+.diskUsageScroll td:nth-child(4) { white-space: normal; }
+
+/* 第一列也允许换行（2026-11-01）：内容列剩 186px，"Sync config & workbook copies" 这类
+   长名字一律被截成「Sync config & work…」—— 而这一列就是「这是哪块数据」的唯一线索。
+   表格行高由 .tableFixed 的 min-height 兜住，换行后仍是两行可读，不会塌成 4px。 */
+.diskUsageScroll td:nth-child(1) { white-space: normal; }
+
+/* 卡内小节之间留出间隔（2026-11-01）：表格滚动区下方紧贴的「Legacy data」分组标签
+   原本与最后一行数据只差 2px，读起来像表格的又一行数据。 */
+.diskUsageCard .groupLabel {
+  margin-top: 10px;
 }
 
 .activityHeader {
@@ -3138,24 +3223,49 @@ body {
 }
 
 .activityRows {
-  /* v3：卡片刻意吃掉首页剩余高度（.fillCard），列表随之伸展并自身内滚 —— 否则首页底部
-     会留出大片空白（用户真机反馈「太空旷」）。min-height:0 是可收缩的前提：没有它，
-     列表的自动最小尺寸 = 内容高度，卡片会被 30 行撑破而不是滚动。 */
-  flex: 1 1 auto;
+  /* v3 曾让卡片吃掉首页剩余高度（.fillCard）并让列表伸展。2026-11-01 改为限高内滚：
+     撑满那一刻，8 行记录下方会空出约 150px 纯背景，读起来是「还在加载」，而不是
+     「这里本来就这么高」（app-screens §4.2 / §10：空得零散像没做完）。
+     现在卡片高度随内容，行数超过上限时本容器内滚 —— 长列表纪律与 .planScroll 一致。 */
+  max-height: 460px;
   min-height: 0;
   overflow-y: auto;
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-radius: var(--cm-r-3);
-  background: var(--dsw-alias-bg-base);
+  /* 2026-11-01 视觉 pass：去掉列表自带的 1px 外框与 bg-base 深底。
+     卡已经是 .card（一层 1px 外框 + 表面色），列表再套一层 = 双圈边框；
+     而 bg-base 比卡片表面深一档，8 行记录下方的空余区被读成「表格还没加载完」
+     （app-screens §4.2：卡内 >40px 的空带读作未完成）。现在列表直接坐在卡片表面上，
+     只有行分隔线划分行。滚动条槽固定，避免滚动条出现时整行宽度跳一下。 */
+  scrollbar-gutter: stable;
 }
 
+/* 列头：12px 灰、句首大写、无底色、无下划线（app-screens §7.2：11 张有表头的表里 0 张有
+   填充带，8 张没有标头下划线）。三列与 .activityRow 同一份 grid 定义，否则列头与数据错位。 */
+.activityHead {
+  display: grid;
+  /* 四列：时间 / 动作 / 详情 / 结果。第二列定宽（96px = 最长 kind 文案 "Manual backup"），
+     列头与行是两个独立的 grid 容器，只有定宽才能让表头压在数据上方对齐。 */
+  grid-template-columns: 72px 96px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 6px;
+  font-size: var(--cm-fs-table);
+  line-height: 1.25;
+  color: var(--dsw-alias-label-tertiary);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1);
+}
+
+.activityHead > :last-child {
+  justify-self: end;
+}
 
 .activityRow {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto;
+  grid-template-columns: 72px 96px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  padding: 4px 10px;
+  /* 行高 36 → 40（app-screens §7.1：单行数据行 36-53px，中位 45）；
+     密度三件套同动 —— 只抬行高不抬字号，符合 §10「别只缩字号」的反面。 */
+  padding: 10px 10px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   font-size: var(--cm-fs-table);
   line-height: 1.5;
@@ -3176,11 +3286,13 @@ body {
 }
 
 .activityKind {
-  flex: none;
+  min-width: 0;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
   font-size: var(--cm-fs-meta);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .activitySummary {
@@ -3220,9 +3332,37 @@ body {
 }
 
 /* —— 备份位置卡：四列事实网格（标签上、值下，tabular-nums 对齐） —— */
+/* 卡内小节分隔（2026-11-01）：同一张卡里的第二块内容不再套 Card，改用顶线 + 上下 10px。
+   0.5px + border-l2 与 css 里既有的 4 处卡内分节一致（DESIGN.md：行分隔 0.5px、外框 1px）。 */
+/* 同步内容选择行（2026-11-01）：原为页面上独立的一张卡，卡内只有「9 selected + Choose…」，
+   右侧整片留白（app-screens §4.2 卡内死空间）。并入动作卡后一行放下：标题 · 计数 · 按钮 · ⓘ。
+   groupLabel 的 8px 块级下边距在这里归零，行内只靠 gap。 */
+.sectionPickerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.sectionPickerRow > .groupLabel {
+  margin-bottom: 0;
+}
+
+.syncSubBlock {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+
 .factGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* 列数跟内容走（2026-11-01）：原来写死 4 列，而事实行实际只有「上次同步 / 可同步分区」
+     两项 —— 内容只占左边一半，右边是一列永远空着的轨道，整张卡被读成「右边还没加载完」。
+     app-screens §4.2 把「grid 不适配数据造成的死空间」列为最常见的版面失败。
+     auto-fit + 最小列宽让两格平分整行；只剩一格时（无 statusInfo）它独占整行也不会挤成窄条。
+     远端 URL 那格仍是 gridColumn: 1 / -1，跨满全部自动列。 */
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 6px 12px;
 }
 
@@ -3253,13 +3393,22 @@ body {
    宽容器（总览「分区构成」卡 / 导出页「本次将导出」数据块）仍是两列。 */
 .sectionGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  /* 每列至少要装得下「分区名 + 计数 + 大小」三个字段（2026-11-01）：
+     原先 210px 的列在两列布局里只剩 ~107px 给名字，11px 等宽下只放得下 16 个字符 ——
+     "Config Manager settings"、"Agent Instructions" 全被截成前半截，
+     而右半边页面下方空着一大片（app-screens §4.2 的死空间）。
+     260px 起跳后 540px 画布上刚好只排一列，名字完整、计数与大小仍共用同一条右边缘。 */
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 0 24px;
 }
 
 .sectionRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 56px;
+  /* 计数列定宽（2026-11-01）：原来是 auto —— 每行按自己的内容算宽，
+     于是 "19 item(s)" 与 "941 item(s)" 的右边缘相差 20px，一列数字看起来
+     像没对齐（app-screens §7.4：一列数字共用一条右边缘）。72px 容得下
+     "941 items" 这种最长形态，zh 侧「941 项」更短。 */
+  grid-template-columns: minmax(0, 1fr) 68px 56px;
   align-items: center;
   gap: 10px;
   padding: 4px 0;
@@ -3270,6 +3419,14 @@ body {
 
 .sectionRow:nth-last-child(-n+2) {
   border-bottom: none;
+}
+
+/* 真·空行（条目与体积都为 0）：降权到 tertiary，但**不隐藏** ——
+   「这个分区存在但没有内容」本身是用户要判断的信息（app-screens §13 零值用灰）。 */
+.sectionRowEmpty .sectionName,
+.sectionRowEmpty .sectionCount,
+.sectionRowEmpty .sectionSize {
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .sectionName {

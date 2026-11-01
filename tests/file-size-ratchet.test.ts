@@ -27,7 +27,9 @@ const CEILINGS: Record<string, number> = {
   'src/sync/sync-engine.ts': 2227,
   'src/client/run-store.ts': 2166,
   'src/client/recovery/RecoveryPanel.tsx': 1922,
-  'src/client/locales.ts': 1776,
+  // 1776 → 1795（2026-11-01，视觉 pass）：+19 行全是新增的用户可见文案，理由与拆解计划见
+  // tech-debt #22（首页活动表 4 个列头 ×2 语言、自动备份关闭档、产物库筛选计数、档案行端口徽章）。
+  'src/client/locales.ts': 1795,
   'src/core/analyzer.ts': 1500,
   'src/client/sync/SyncPanel.tsx': 1591,
   'src/cli/actions.ts': 1575,

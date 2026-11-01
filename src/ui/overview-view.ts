@@ -237,7 +237,7 @@ export type OverviewHealthKind = 'ok' | 'warn' | 'error'
 export interface OverviewHealth {
   kind: OverviewHealthKind
   /** UI 渲染 key（`overview.health.*`）。 */
-  textKey: 'health.ok' | 'health.noBackup' | 'health.scheduleFailed' | 'health.recovery'
+  textKey: 'health.ok' | 'health.noBackup' | 'health.scheduleFailed' | 'health.autoBackupOff' | 'health.recovery'
 }
 
 /**
@@ -245,7 +245,11 @@ export interface OverviewHealth {
  * 1. SAFE MODE 激活（有未解决恢复事项）→ error（最高优先，需用户处理）；
  * 2. 已加载且备份与快照均为空 → warn「尚无任何备份」（新装机引导场景）；
  * 3. 定时备份开启但上次运行失败 → warn；
- * 4. 其余 → ok。
+ * 4. 手上已有备份、但定时备份是关的 → warn「自动备份已关闭」（2026-11-01 视觉 pass 新增：
+ *    此前关闭档不判定，于是「All healthy」与「Auto backup Off / Backups 1」同屏并列，
+ *    状态条给出的结论与它脚下的指标自相矛盾 —— 一页只在回答「现在安全吗」，
+ *    在没有任何后续保护时报健康等于放弃这个结论）；
+ * 5. 其余 → ok。
  * 数据未加载（null）不降级健康状态（避免加载闪红）。
  */
 export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
@@ -258,6 +262,9 @@ export function overviewHealth(inputs: OverviewInputs): OverviewHealth {
   }
   if (inputs.schedule !== null && inputs.schedule.enabled && inputs.schedule.lastRunStatus === 'failed') {
     return { kind: 'warn', textKey: 'health.scheduleFailed' }
+  }
+  if (inputs.schedule !== null && !inputs.schedule.enabled) {
+    return { kind: 'warn', textKey: 'health.autoBackupOff' }
   }
   return { kind: 'ok', textKey: 'health.ok' }
 }

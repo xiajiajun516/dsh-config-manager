@@ -283,7 +283,14 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
 
       {/* 计数条：**不显示合计体积** —— 四源里只有备份文件有体积，求和会把「未知」混进「合计」（§6.8 ①） */}
       <div className={css.libraryFooter}>
-        <span className={css.libraryCount}>{t('library.summary.count', { count: filtered.length })}</span>
+        {/* 计数只在筛选/搜索生效时出现（2026-11-01）：无筛选时它与上方「全部 16」是同一个数
+            出现在同一屏的两处 —— app-screens §5「一个数字只出现一处」。筛掉多少要看得出
+            「眼前几条 / 一共几条」，所以这时写成分数而不是重复总数。 */}
+        {filtered.length !== rows.length && (
+          <span className={css.libraryCount}>
+            {t('library.summary.filtered', { shown: filtered.length, total: rows.length })}
+          </span>
+        )}
         {/* 加密计数只统计**当前筛选后**的行：此前用 rows（全部来源）⇒ 切到「本机快照」等
             没有加密项的类别时底部仍显示「1 个加密」，与眼前看到的列表不符（真机反馈）。 */}
         {encryptedCount > 0 && (
@@ -291,7 +298,10 @@ export function LibraryPanel({ api, syncApi, marketApi, t, uiT, onAction, onOpen
         )}
         <InfoHint text={t('backupFiles.hint')} label={t('common.infoHint')} />
         <span className={css.statusSpacer} />
-        <Button size="sm" onClick={onOpenExport}>{t('library.new.export')}</Button>
+        {/* 底栏四个入口，只有「导出」是这一页的产品级动作（把本机配置打成可分享的包）；
+            其余三个是「拿别人的东西进来 / 去别处找」。主按钮只留一个，否则整屏没有焦点
+            （app-screens §13：强调色应用在数据与至多一个控件上）。 */}
+        <Button size="sm" variant="primary" onClick={onOpenExport}>{t('library.new.export')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('import') }}>{t('library.new.import')}</Button>
         <Button size="sm" onClick={() => { onOpenTask('market') }}>{t('library.new.market')}</Button>
         <Button size="sm" onClick={onOpenPublish}>{t('task.title.publish')}</Button>

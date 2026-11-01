@@ -18,6 +18,7 @@ import {
 } from '../../ui/artifact-view.ts'
 import type { UiT } from '../../ui/i18n.ts'
 import type { TranslateNS } from '../client-types.ts'
+import { midEllipsis } from '../../ui/mid-ellipsis.ts'
 import { Badge, Button, Spinner } from '../common/ui.tsx'
 import { ExpandChevron } from '../common/Icon.tsx'
 import { MoreMenu } from '../common/MoreMenu.tsx'
@@ -104,7 +105,14 @@ export function ArtifactRowView({
           <div className={css.artifactTitle}>
             {/* 来源标签上标题行（定案 B）：来源已由此表达，再放一个 kind 图标属重复表达 */}
             <span className={css.kindTag}>{uiT(ARTIFACT_KIND_LABEL_KEY[row.kind])}</span>
-            <span className={css.artifactName} title={name}>{name}</span>
+            {/* 文件名走等宽栈 + 中段省略（DESIGN.md:93 / §9-5）：尾部才是区分信息
+                （同一分钟导出的两份备份只差尾部时间戳），尾部截断会让两行看起来一样。 */}
+            <span
+              className={row.title.kind === 'text' ? `${css.artifactName} ${css.mono}` : css.artifactName}
+              title={name}
+            >
+              {row.title.kind === 'text' ? midEllipsis(name) : name}
+            </span>
           </div>
           {/* 元数据是**自由序列**而不是表格列：某一段没有（如快照没有体积）就整段不出现，
               绝不补一个「—」占位 —— 这里没有对齐问题，占位只会变成噪音（§3 第三条） */}
@@ -127,7 +135,10 @@ export function ArtifactRowView({
           {primary !== undefined && (
             <Button
               size="sm"
-              variant={primary === 'delete' ? 'danger' : 'primary'}
+              // 常态 ghost：八行八颗实心按钮会把 accent 变成壁纸，整屏最亮的是 chrome。
+              // 悬停/展开时由 CSS（.rowPrimary）升到 primary —— 那时它才真是「这一行要做的事」。
+              variant={primary === 'delete' ? 'danger' : 'ghost'}
+              className={primary === 'delete' ? undefined : css.rowPrimary}
               // 进行中图标由 Button 原语按 loading 自动渲染（DESIGN §14.11：不要手写 Spinner）
               loading={pendingPrimary}
               disabled={pending !== null && !pendingPrimary}

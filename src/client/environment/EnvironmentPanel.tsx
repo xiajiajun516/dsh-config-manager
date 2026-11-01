@@ -440,37 +440,43 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
       {/* —— 运行状态：当前运行中的 profile + 本插件启动的实例（可打开 / 可停止） —— */}
       <Card className={css.card}>
         <div className={css.groupLabel}>{t('profiles.running.title')}</div>
-        <div className={css.kvRow}>
-          <span className={css.kvKey}>{t('profiles.current')}</span>
-          <span className={css.kvValue}>
-            {state.current === null ? '—' : <span className={css.mono}>{state.current}</span>}
-          </span>
-        </div>
-        {/* 空态只给状态，不解释机制：「启动」按钮就在每行，端口/开浏览器属该按钮的 title */}
+        {/* 2026-11-01：原来「当前：web」一行 + 运行行「web · :3277 · 当前实例」把同一个事实
+            说了两遍，而两行的值起点一个在 110px、一个在 12px（kvKey 88px 只在前者生效），
+            左边缘对不齐 —— app-screens §7.4「一个事实只在一处、一个左边缘」。
+            现在只有一种行：kvKey 列放档案名（与空态那格同宽同起点，两种状态边缘一致），
+            kvValue 列放端口与来源。 */}
         {state.running.length === 0 && (
-          <div className={css.actionRow}>
-            <Badge kind="info">{t('profiles.running.none')}</Badge>
+          <div className={css.kvRow}>
+            <span className={css.kvKey}>{t('profiles.current')}</span>
+            <span className={css.kvValue}>
+              {state.current === null ? '—' : <span className={css.mono}>{state.current}</span>}
+              <Badge kind="info">{t('profiles.running.none')}</Badge>
+            </span>
           </div>
         )}
         {state.running.map((record) => (
-          <div key={record.name} className={css.actionRow}>
+          <div key={record.name} className={css.kvRow}>
+            <span className={css.kvKey + ' ' + css.mono} title={record.name}>{record.name}</span>
             <span className={css.kvValue}>
-              <span className={css.mono}>{record.name}</span>
-              {record.port !== null && <>{' · '}{t('profiles.running.port', { port: record.port })}</>}
-              {' · '}{t(record.current ? 'profiles.running.originCurrent' : record.owned ? 'profiles.running.originOwned' : 'profiles.running.originExternal')}
+              {record.port !== null && <>{t('profiles.running.port', { port: record.port })}{' · '}</>}
+              {t(record.current ? 'profiles.running.originCurrent' : record.owned ? 'profiles.running.originOwned' : 'profiles.running.originExternal')}
             </span>
             {record.url !== null && <Button size="sm" href={record.url}>{t('profiles.running.open')}</Button>}
-            {/* 当前实例不能停自己（进程会死在响应途中）：给禁用按钮 + 说明，而不是藏起来 */}
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={state.stopping !== null || record.current}
-              title={record.current ? t('profiles.stop.currentHint') : record.owned ? t('profiles.stop.hint') : t('profiles.stop.hintExternal')}
-              loading={state.stopping === record.name}
-              onClick={() => { patch({ stopTargetName: record.name, error: null }) }}
-            >
-              {t('profiles.stop')}
-            </Button>
+            {/* 当前实例不能停自己（进程会死在响应途中）：不渲染按钮，也不给禁用按钮。
+                disabled 的按钮在真实数据里只读作「这里有个坏掉的东西」（app-screens §11）；
+                这一行本来已经写着「当前实例」，缺的不是提示而是控件。 */}
+            {!record.current && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={state.stopping !== null}
+                title={record.owned ? t('profiles.stop.hint') : t('profiles.stop.hintExternal')}
+                loading={state.stopping === record.name}
+                onClick={() => { patch({ stopTargetName: record.name, error: null }) }}
+              >
+                {t('profiles.stop')}
+              </Button>
+            )}
           </div>
         ))}
       </Card>
@@ -610,11 +616,18 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                       <span className={css.profileRowTitle}>
                         <span className={`${css.mono} ${css.profileRowName}`}>{profile.name}</span>
                         <span className={css.badgeRow}>
-                          {profile.isCurrent && <Badge kind="ok">{t('profiles.current')}</Badge>}
-                          {runningRecord !== undefined && (
-                            <Badge kind="info">
-                              {runningRecord.port !== null ? t('profiles.running.badge', { port: runningRecord.port }) : t('profiles.running.badgePlain')}
-                            </Badge>
+                          {/* 2026-11-01：这两个徽章原来并排写着「Running」与「·3277 running」——
+                              同一个词三格内出现两次，还要额外占 60px 宽（正是把行摘要挤到截断的
+                              一部分）。isCurrent 已经由 ok 徽章说清，第二个徽章只需要回答「在哪个
+                              端口上」，所以文案收成 ':3277'。非当前实例（外部/本插件启动）没有
+                              状态徽章，那时保留 'running' 字样。 */}
+                          {profile.isCurrent
+                            ? <Badge kind="ok">{t('profiles.current')}</Badge>
+                            : runningRecord !== undefined && runningRecord.port === null
+                              ? <Badge kind="info">{t('profiles.running.badgePlain')}</Badge>
+                              : null}
+                          {runningRecord !== undefined && runningRecord.port !== null && (
+                            <Badge kind="info">{t('profiles.running.portBadge', { port: runningRecord.port })}</Badge>
                           )}
                           {/* 残留行必须自报「未完成的副本」——不得伪装成普通「自定义」档案（t50）；非残留行走原形态键 */}
                           <Badge kind={incomplete ? 'warn' : 'info'}>{t(profileShapeLabelKey(profile))}</Badge>
@@ -646,9 +659,11 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                           )
                           : (
                             <>
+                              {/* 2026-11-01：这里原来还跟着「node_modules present · patch hot reload」
+                                  两段 —— 它们与详情弹窗里的同名徽章重复（EnvironmentPanel 详情区），
+                                  而三颗动作按钮已经把这一行压到尾部截断。行摘要只留三个计数，
+                                  那两段在点开详情时仍然逐字可见。 */}
                               {t('profiles.row.summary', { bundles: facts.bundles, patch: facts.patchEntries, deps: facts.deps })}
-                              {' · '}{facts.hasNodeModules ? t('profiles.nodeModules.yes') : t('profiles.nodeModules.no')}
-                              {' · '}{profile.patchReload === 'startup' ? t('profiles.patchReload.startup') : t('profiles.patchReload.live')}
                               {profile.updatedAtMs !== null && ` · ${t('profiles.updatedAt', { time: formatProfileTime(profile.updatedAtMs) })}`}
                             </>
                           )}
@@ -656,9 +671,10 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
                     </button>
                     <span className={css.actionRow} data-inline>
                       {/* cross-F3：残留行不给启动/停止那一格（generic 必然 notLaunchable）；删除恒在 */}
-                      {caps.launchOrStop && rowAction === 'current' && (
-                        <Button size="sm" disabled title={t('profiles.stop.currentHint')}>{t('profiles.current')}</Button>
-                      )}
+                      {/* 2026-11-01：原来 current 这一格放一颗 disabled 的「运行中」按钮 —— 标题旁
+                          已经有 ok 徽章写着同一句话，动作区却因此常年挂着一个按不动的方块。
+                          「当前档案没有启动/停止动作」这件事的正确表达是**没有动作**，
+                          不是一颗永远灰着的按钮。reactor: app-screens §11 disabled ≠ 可用提示。 */}
                       {caps.launchOrStop && rowAction === 'stop' && runningRecord !== undefined && (
                         <Button
                           size="sm"

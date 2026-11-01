@@ -381,7 +381,9 @@ export function ExportView({ api, t }: ExportViewProps) {
         >
           {t('export.run')}
         </Button>
-        <Button size="sm" loading={invLoading} disabled={running} title={t('picker.title')} onClick={openPicker}>
+        {/* 不再 size="sm"（2026-11-01）：同一工具栏里 28px 与 24px 混排，右边缘参差、
+            基线也对不齐（app-screens §8「同排控件同高」）。次要性由 ghost 承担，不由高度承担。 */}
+        <Button loading={invLoading} disabled={running} title={t('picker.title')} onClick={openPicker}>
           {invLoading ? null : <PreviewIcon size={13} />} {t('picker.title')}
         </Button>
         {/* 工具栏「模式提示」属「机制怎么工作 + 省事提示」（MOVE 类）：收进 ⓘ，

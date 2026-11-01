@@ -15,10 +15,16 @@ import { needsGitToken, SYNC_CHANNEL_LABEL_KEY } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
 /** 同步通道入口卡：通道徽章 + 配置状态 + 状态事实行 + 打开配置弹窗 + 断开该通道配置。 */
-export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, expanded, contentId, onToggleExpanded }: {
+export function SyncChannelEntryCard({ t, channel, statusInfo, sectionCount, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, expanded, contentId, onToggleExpanded }: {
   t: TranslateNS<'config-manager-sync'>
   channel: SyncChannel
   statusInfo: SyncStatusResponse | null
+  /**
+   * 已选中的同步分区数 —— 与下方「Choose… / 9 selected」**同一来源**（壳层的 cs.syncSections）。
+   * 不使用 statusInfo.sectionCount：那个值只代表「上一次持久化下来的选择」，
+   * 用户刚在弹窗里改完还没落盘时，它会在同一张卡里给出 0 与 9 两个数字（真机反馈）。
+   */
+  sectionCount?: number
   remoteReady: boolean
   repoUrl: string
   webdavUrl: string
@@ -93,10 +99,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
             {formatSyncStatusTimestamp(statusInfo?.lastSyncAt)}
           </span>
         </div>
-        {statusInfo?.sectionCount !== undefined && (
+        {(sectionCount ?? statusInfo?.sectionCount) !== undefined && (
           <div className={css.factCell}>
             <span className={css.factLabel}>{t('syncStatus.sections')}</span>
-            <span className={`${css.factValue} ${css.mono}`}>{String(statusInfo.sectionCount)}</span>
+            <span className={`${css.factValue} ${css.mono}`}>{String(sectionCount ?? statusInfo?.sectionCount)}</span>
           </div>
         )}
         {remoteReady && (
@@ -111,7 +117,10 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repo
         )}
       </div>
       <div className={css.actionRowTop}>
-        <Button variant="primary" onClick={onOpen}>
+        {/* ghost 而不是 primary（2026-11-01）：本页唯一的主行动是「把本地改动推上去 /
+            把远端拉下来」，而那是下方 pickSyncPrimary 决定的那颗按钮。
+            配置入口与它并列同填充时，用户在首屏看到两个「主按钮」，谁也不会先按。 */}
+        <Button variant="ghost" onClick={onOpen}>
           {t('channel.open')}
         </Button>
         {/* 断开出口：只有**配置过**的通道才渲染（未配置时这个按钮没有意义，也不该存在）。

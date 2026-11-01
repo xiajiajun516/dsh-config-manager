@@ -155,6 +155,15 @@ test('overviewHealth: SAFE MODE 优先 error；全空 warn；正常 ok', () => {
   assert.equal(scheduleFail.kind, 'warn')
   assert.equal(scheduleFail.textKey, 'health.scheduleFailed')
 
+  /* 有备份、但自动备份是关的 → 仍要 warn：状态条不能与脚下「Auto backup Off」并列报健康 */
+  const autoOff = overviewHealth(baseInputs({
+    backups: [{ name: 'a.zip', sizeBytes: 1, mtimeMs: NOW, source: 'manual' }],
+    snapshots: [{ createdAt: '2026-09-10T00:00:00Z', entryCount: 1 }],
+    schedule: { enabled: false, lastRunStatus: 'ok' },
+  }))
+  assert.equal(autoOff.kind, 'warn')
+  assert.equal(autoOff.textKey, 'health.autoBackupOff')
+
   assert.equal(overviewHealth(baseInputs()).kind, 'ok', '数据未加载不降级')
 })
 

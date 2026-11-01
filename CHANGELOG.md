@@ -28,6 +28,20 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🔧 变更 · Changed
+
+- **四个页面和任务面板的视觉重做**：卡片里的双层边框和深色空洞没了，列表不再用大幅空白撑满视口，每页只留一个主按钮，重复的状态徽章合并、行内长文字不再被截成半句，维护页的磁盘明细表四列都能完整读完。
+  **Visual pass over all four pages and the task panel**: double borders and dark voids inside cards are gone, lists no longer stretch to fill the viewport with dead space, each page has a single primary button, duplicated status badges are merged, long inline text is no longer cut mid-sentence, and the disk-usage table on the maintenance page is fully readable in all four columns.
+
+### 🐛 修复 · Fixed
+
+- **首页「最近活动」会与顶部状态自相矛盾**：自动备份关着、手上只有手动备份时，顶部不再一律显示「一切正常」，改为提示自动备份已关闭。
+  **The home page no longer contradicts its own status strip**: when auto backup is off and the machine only has manual backups, the header stops claiming everything is healthy and says so instead.
+- **维护页磁盘明细表被挤压到文字只剩半个字**：内容一多，卡片会把每一行的高度压到几像素；现在只有明细表自己滚动，其余内容固定可见。
+  **Disk usage details on the maintenance page were squashed until text was cut in half**: a longer card used to compress every row to a few pixels; now only the table scrolls and everything else stays put.
+- **产物库的文件名和首页活动摘要被尾部截断**：现在改成中段省略，靠后缀区分的备份包名仍然看得出是哪一个。
+  **File names in the artifact library and activity summaries on the home page were truncated at the tail**: they now elide in the middle, so backup packages that differ only in the suffix remain identifiable.
+
 ## [0.2.4] - 2026-11-01
 
 > **本版主题**：同步仓库比配置大得多时不再卡死——只取同步目录、远端没变一次往返返回、卡住 30 秒内失败且不留孤儿进程。

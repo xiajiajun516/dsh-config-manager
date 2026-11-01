@@ -1224,6 +1224,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
           t={t}
           channel={channel}
           statusInfo={state.statusInfo}
+          sectionCount={cs.syncSections.length}
           remoteReady={ready}
           repoUrl={state.repoUrl}
           webdavUrl={state.webdavUrl}
@@ -1238,17 +1239,20 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
         <Collapse open={ready && isChannelExpanded(channel)} id={channelContentId(channel)} className={css.syncChannelBody}>
         {ready && (
           <Card>
-            {/* 同步内容：**跟着通道卡走** —— autosync 与 sync-selection 都按通道独立，
-                做成全局一节会让用户以为两个通道共用一份选择（§8 的关键修正）。 */}
+            {/* 同步内容跟着通道卡走 —— autosync 与 sync-selection 都按通道独立，做成全局一节
+                会让用户以为两个通道共用一份选择（§8 的关键修正）。
+                2026-11-01：原为独立一张卡，卡内只有「9 selected」+ 一个 Choose…，右侧四百多像素
+                全空（app-screens §4.2 卡内死空间，白吃约 115px 把 Auto Sync 挤出画布）。改成本卡
+                内的选择行：它本来就是动作的前置条件（选哪些分区的改动才参与合并/推送）。 */}
             {/* ⓘ 一律跟在**相关标题/操作的右边**（同一行）：单独成行会让卡片出现「孤零零一个图标」
                 的断行。标题内联沿用 AboutPanel / EnvironmentPanel 的既有写法（零新增样式）。 */}
-            <span className={css.groupLabel}>{t('mode.title')} <InfoHint text={t('mode.hint')} label={t('common.infoHint')} /></span>
-            <span className={css.categoryDesc}>
-              {state.loadError !== null ? t('load.failed')
-                : state.catalog.length === 0 ? t('common.loading')
-                  : t('mode.selectedCount', { n: String(cs.syncSections.length) })}
-            </span>
-            <div className={css.actionRowTop}>
+            <div className={css.sectionPickerRow}>
+              <span className={css.groupLabel}>{t('mode.title')} <InfoHint text={t('mode.hint')} label={t('common.infoHint')} /></span>
+              <span className={css.categoryDesc}>
+                {state.loadError !== null ? t('load.failed')
+                  : state.catalog.length === 0 ? t('common.loading')
+                    : t('mode.selectedCount', { n: String(cs.syncSections.length) })}
+              </span>
               <Button onClick={() => { openSectionPickerFor(channel) }} disabled={busy}>
                 {t('mode.choose')}
               </Button>
@@ -1256,10 +1260,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             </div>
             {cs.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
             {gistSessionsRiskKey(channel, cs.syncSections) !== null && <Banner kind="warn">{t(gistSessionsRiskKey(channel, cs.syncSections)!)}</Banner>}
-          </Card>
-        )}
-        {ready && (
-          <Card>
             {/* 动作行（方案 A 定案）：用户只面对两个方向 —— 下行「从远端合并到本机」/ 上行「推送到远端」。
                 合并裁决并入下行按钮（有基线走三方裁决视图、无基线走老导入确认）；并排两个按钮看不出该按哪个（issue 115）⇒ 按已确证远端事实只让一个落在 primary。 */}
             <div className={css.actionRow}>

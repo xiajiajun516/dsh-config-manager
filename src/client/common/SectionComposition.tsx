@@ -48,8 +48,13 @@ export function SectionComposition({ sections, t, sectionLabel }: SectionComposi
     <div className={css.sectionGrid}>
       {sections.map((s) => {
         const state = s.state ?? 'ready'
+        /* 真·空行降权（2026-11-01）：条目与体积都为 0 的分区（如未启用的 Agent Presets）
+           与有内容的行同权重，会让「这一项什么都没有」读成和「941 条」一样重要。
+           app-screens §13：零值不给状态色，用灰 —— 有内容但 0 条目的行（如 Prompts 0 条 / 26 B）
+           保持正常色，因为它确实带着配置。 */
+        const isEmptyRow = state === 'ready' && s.count === 0 && s.sizeBytes === 0
         return (
-          <div key={s.section} className={css.sectionRow}>
+          <div key={s.section} className={isEmptyRow ? `${css.sectionRow} ${css.sectionRowEmpty}` : css.sectionRow}>
             <span className={css.sectionName}>{sectionLabel?.(s.section) ?? s.section}</span>
             {state === 'ready'
               ? (

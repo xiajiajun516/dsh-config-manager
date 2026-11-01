@@ -473,18 +473,19 @@ export function MarketPanel({ api, myConfigsApi, importApi, syncApi, t, cmT, ope
       {!downloadOpen && (<>
       <SectionTitle title={t('section.label')} info={<InfoHint text={t('section.description')} label={t('common.infoHint')} />} />
 
-      {/* 内置市场操作卡：保留面板标题；移除 URL / 官方徽章 / 名称 / 条目数 / 状态行等文字展示 */}
-      <Card>
+      {/* 市场操作行（2026-11-01）：原为一张卡，卡里只有标题 + 两个按钮，右侧四百多像素永远空着
+          （app-screens §4.2 卡内死空间，白吃约 50px）。改成标题与动作同一行 —— 它本来就是
+          「对仓库做两件事」，不是一块独立内容区。 */}
+      <div className={css.marketRepoRow}>
         <span className={css.groupLabel}>{t('config.title')}</span>
-        <div className={css.actionRow}>
-          <Button variant="primary" loading={state.refreshing} disabled={state.importing || state.browsing} onClick={() => { void runRefresh() }}>
-            {t('config.refresh')}
-          </Button>
-          <Button loading={state.browsing} disabled={state.refreshing || state.importing} onClick={() => { void runBrowse() }}>
-            {t('list.browse')}
-          </Button>
-        </div>
-      </Card>
+        <span className={css.statusSpacer} />
+        <Button variant="primary" loading={state.refreshing} disabled={state.importing || state.browsing} onClick={() => { void runRefresh() }}>
+          {t('config.refresh')}
+        </Button>
+        <Button loading={state.browsing} disabled={state.refreshing || state.importing} onClick={() => { void runBrowse() }}>
+          {t('list.browse')}
+        </Button>
+      </div>
       </>)}
 
       {/* R-21：动作失败（拉取最新 / 浏览 / 下载 / 导入）已全部改由全局 Toast 送达，

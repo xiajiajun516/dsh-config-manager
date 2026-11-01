@@ -7,7 +7,7 @@
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
-import { Badge, Card } from '../common/ui.tsx'
+import { Badge } from '../common/ui.tsx'
 import { Select } from '../common/Select.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import {
@@ -61,7 +61,12 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
   const failureMessage = settings.autosync !== null ? autosyncFailureMessage(settings.autosync) : null
   const lastMessage = failureMessage === null ? null : redact(failureMessage)
   return (
-    <Card>
+    /* 卡内小节，不再套一层 Card（2026-11-01）：本组件唯一的调用点在
+       SyncPanel 的「通道动作卡」内部（SyncPanel.tsx:1262 的 <Card> 里、快照选择行下面），
+       而 Card 自带 1px 边框 + 12px 内边距 + 10px 外边距 —— 于是卡里出现一张浮起来的卡，
+       边界多出一圈、上下白吃 22px，把 Auto Sync 从首屏挤到折叠线以下。
+       同页卡内分节的既有口径是 0.5px border-l2 顶线（css 里另有 4 处同款），照它走。 */
+    <div className={css.syncSubBlock}>
       <span className={css.groupLabel}>{t('autosync.title')} <InfoHint text={t('autosync.description')} label={t('common.infoHint')} /></span>
       <label className={css.checkboxRow}>
         <input
@@ -72,6 +77,12 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
         />
         <span>{t('autosync.enable')}</span>
       </label>
+      {/* 关闭时不再展示策略项（2026-11-01）：Enabled 没勾选，下面 4 个下拉 + 状态徽章 +
+          失败原文仍然全铺开，占掉画布最后三屏里的两屏 —— 用户要按的「合并 / 推送」被推到
+          首屏之外，而这一整组在关闭状态下没有一个控件能生效。app-screens §11 与 DESIGN.md §9
+          同口径：不给未启用的能力配满配置项。开启后这些控件立刻出现，没有隐藏的能力。 */}
+      {settings.autosyncEnabled && (
+        <>
       <label className={css.field}>
         <span className={css.fieldLabel}>{t('autosync.interval')} <InfoHint text={t('autosync.intervalHint')} label={t('common.infoHint')} /></span>
         <Select
@@ -145,6 +156,8 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           )}
         </div>
       )}
-    </Card>
+        </>
+      )}
+    </div>
   )
 }

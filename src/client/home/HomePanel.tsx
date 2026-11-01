@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import type { SnapshotMeta } from '../../core/restore.ts'
+import { midEllipsis } from '../../ui/mid-ellipsis.ts'
 import type { BackupScheduleStatus } from '../../ui/backup-schedule.ts'
 import { backupRunOutcome, type BackupSkipReason } from '../../ui/backup-schedule.ts'
 import type { BackupFileMeta } from '../../sync/backup-files.ts'
@@ -432,7 +433,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
       {emptyState ? (
         /* 首用空态：只交代顺序（备份 → 导出 → 导入），动作全交给上方工具栏 ——
            此前这里又放了一遍「立即备份 / 远程同步」，等于同一屏两个入口。 */
-        <Card className={`${css.activityCard} ${css.fillCard}`}>
+        <Card className={css.activityCard}>
           <span className={css.groupLabel}>{t('overview.empty.title')}</span>
           <div className={css.emptySteps}>
             <Stepper
@@ -446,8 +447,11 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
         </Card>
       ) : (
         <>
-          {/* 3. 最近活动表（**首页最后一个数据块**：吃掉剩余高度，列表自身内滚） */}
-          <Card className={`${css.activityCard} ${css.fillCard}`}>
+          {/* 3. 最近活动表（**首页最后一个数据块**）。2026-11-01：不再用 .fillCard 撑满视口 ——
+              8 行记录撑到 400px 后，卡内下方留出约 150px 纯空区，被读成「表格还没加载完」
+              （app-screens §4.2：卡内 >40px 空带读作未完成）。现在卡片高度随内容，
+              行数多时由 .activityRows 的 max-height 内滚；页底留白属于页面层级，读起来是完整的。 */}
+          <Card className={css.activityCard}>
             <div className={css.activityHeader}>
               <span className={css.activityTitle}>{t('overview.activity.title')}</span>
             </div>
@@ -458,6 +462,15 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
               : activity.length === 0
                 ? <div className={css.activityEmpty}>{data.history === null ? t('overview.activity.unavailable') : t('overview.activity.empty')}</div>
                 : (
+                <>
+                {/* 列头：14 行记录只有「时间 / 类型·摘要 / 结果」三列，没有名字时
+                    用户不知道右边那一列的绿点是什么（app-screens §7.2：有表头才读得懂列）。 */}
+                <div className={css.activityHead}>
+                  <span>{t('overview.activity.colTime')}</span>
+                  <span>{t('overview.activity.colEvent')}</span>
+                  <span>{t('overview.activity.colDetail')}</span>
+                  <span>{t('overview.activity.colResult')}</span>
+                </div>
                 <div className={css.activityRows}>
                   {activity.map((item, i) => {
                     const atMs = Date.parse(item.at) || 0
@@ -467,10 +480,16 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
                         <span className={css.activityTime} title={atMs > 0 ? new Date(atMs).toLocaleString() : undefined}>
                           {renderRelTime(atMs, t)}
                         </span>
+                        {/* kind 独立成列（2026-11-01）：原先它挤在摘要行里，「Import · 」的
+                            长前缀把真正的区分信息（文件名尾部时间戳）挤出可视宽度，
+                            中段省略再准也被前缀吃掉。 */}
+                        <span className={css.activityKind} title={kindText}>{kindText}</span>
                         <span className={css.activitySummary}>
-                          <span className={css.activityKind}>{kindText} ·</span>
+                          {/* 中段省略而不是尾部（DESIGN.md §9-5）：摘要里的区分信息在尾部
+                              —— 文件名时间戳后缀、项数 —— 尾部截断会让两条记录看起来一样。
+                              52 是 HomePanel 历史上的取值，换实现不改观感。title 保留全文。 */}
                           <span className={css.activitySummaryText} title={displaySummary(item.summary, t)}>
-                            {displaySummary(item.summary, t)}
+                            {midEllipsis(displaySummary(item.summary, t), 34)}
                           </span>
                           <CopyButton text={item.summary} label={t('overview.activity.copy')} t={t} />
                         </span>
@@ -479,6 +498,7 @@ export function HomePanel({ api, syncApi, historyApi, t, syncT, openForeignImpor
                     )
                   })}
                 </div>
+                </>
               )}
           </Card>
         </>

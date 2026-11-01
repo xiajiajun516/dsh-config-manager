@@ -224,7 +224,9 @@ export function DiskUsageCard({ api, infoHintLabel, onBackupsChanged }: DiskUsag
                   <span className={css.cellMeta}>
                     {row.unreadable ? t('diskUsage.unreadable') : row.size + ' · ' + row.files}
                   </span>
-                  <span className={css.dim}>{t('diskUsage.policy.protected')}</span>
+                  {/* 行尾的 protected 标签已删（2026-11-01）：本组上方的说明文字就是
+                      「no longer read · never auto-deleted · not part of the total above」，
+                      逐行再贴一遍只会把这一行挤到溢出（实测最后一段跑出右边界）。 */}
                 </div>
               ))}
             </>

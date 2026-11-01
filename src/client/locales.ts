@@ -65,6 +65,7 @@ export const zh = {
   'overview.health.noBackup': '尚无任何备份',
   'overview.health.scheduleFailed': '上次定时备份失败，建议检查备份设置',
   'overview.health.recovery': '存在未解决的恢复事项，需要处理',
+  'overview.health.autoBackupOff': '自动备份已关闭，目前只有手动备份',
   'overview.health.recoveryAction': '前往「事故恢复」处理',
   'overview.metric.backups': '备份文件',
   'overview.metric.snapshots': '安全快照',
@@ -95,6 +96,10 @@ export const zh = {
   'overview.quick.backupSkippedOther': '已跳过：备份服务当前无法执行（详情见宿主日志）',
   'overview.quick.backupFailed': '备份失败：{message}',
   'overview.activity.title': '最近活动',
+  'overview.activity.colTime': '时间',
+  'overview.activity.colEvent': '动作',
+  'overview.activity.colDetail': '详情',
+  'overview.activity.colResult': '结果',
   'overview.activity.empty': '暂无操作记录',
   'overview.activity.unavailable': '活动记录读取失败（这不是「没有记录」）',
   // 首屏 5 个只读请求有失败时如实说清（此前失败被吞成 null，页面仍显示绿色健康 + 空活动）
@@ -492,6 +497,9 @@ export const zh = {
   'profiles.running.port': '端口 {port}',
   'profiles.running.open': '打开',
   'profiles.running.badge': ':{port} 运行中',
+  // 行徽章专用：状态由相邻的「运行中」ok 徽章表达，这里只回答「在哪个端口」
+  // （2026-11-01：原先把 ':{port} 运行中' 与它并排，同一个词三格内出现两次）。
+  'profiles.running.portBadge': ':{port}',
   'profiles.running.originCurrent': '当前实例',
   'profiles.running.originOwned': '本插件启动',
   'profiles.running.originExternal': '其他实例',
@@ -800,6 +808,7 @@ export const zh = {
   'library.remoteDeleteBaseline': '注意：这是当前的同步基线（本机上次同步到的那份）。删除不会改动本机配置，但下次同步会重新比对远端最新快照。',
   'library.remoteDeleted': '已删除远端快照',
   'library.summary.count': '共 {count} 个',
+  'library.summary.filtered': '{shown} / {total} 个',
   'library.new.export': '手动导出',
   'library.new.import': '从文件导入',
   'library.new.market': '逛市场',
@@ -957,6 +966,7 @@ export const en: Record<keyof typeof zh, string> = {
   'overview.health.noBackup': 'No backups yet',
   'overview.health.scheduleFailed': 'The last scheduled backup failed — check backup settings',
   'overview.health.recovery': 'Unresolved recovery items need attention',
+  'overview.health.autoBackupOff': 'Auto backup is off — this machine only has manual backups',
   'overview.health.recoveryAction': 'Go to Incident recovery',
   'overview.metric.backups': 'Backups',
   'overview.metric.snapshots': 'Snapshots',
@@ -987,6 +997,10 @@ export const en: Record<keyof typeof zh, string> = {
   'overview.quick.backupSkippedOther': 'Skipped: the backup service cannot run right now (see host logs for details)',
   'overview.quick.backupFailed': 'Backup failed: {message}',
   'overview.activity.title': 'Recent activity',
+  'overview.activity.colTime': 'Time',
+  'overview.activity.colEvent': 'Action',
+  'overview.activity.colDetail': 'Detail',
+  'overview.activity.colResult': 'Result',
   'overview.activity.empty': 'No activity yet',
   'overview.activity.unavailable': 'The activity log could not be read (this is not \"no activity\")',
   // Say it plainly when some of the five read-only requests failed (failures used to be swallowed into null)
@@ -1364,6 +1378,7 @@ export const en: Record<keyof typeof zh, string> = {
   'profiles.running.port': 'port {port}',
   'profiles.running.open': 'Open',
   'profiles.running.badge': ':{port} running',
+  'profiles.running.portBadge': ':{port}',
   'profiles.running.originCurrent': 'current instance',
   'profiles.running.originOwned': 'launched here',
   'profiles.running.originExternal': 'other instance',
@@ -1406,7 +1421,10 @@ export const en: Record<keyof typeof zh, string> = {
   'profiles.list.title': 'All profiles',
   'profiles.list.count': '{count} total',
   'profiles.list.hint': 'Click a profile row for full details (bundle layers / dependencies / raw patch)',
-  'profiles.row.summary': '{bundles} layer(s) · {patch} patch entry(ies) · {deps} dependencies',
+  // 英文侧不再用 (s)/(ies) 括号式复数（2026-11-01）：档案只有 1 个时它渲染成
+  // "1 layer(s) · 5 patch entry(ies)"，在一行被截断的元信息里既占宽又不专业。
+  // zh 侧本来就是无复数形态，改成同样的「数字 + 名词」短形态后两侧结构一致。
+  'profiles.row.summary': '{bundles} layers · {patch} patches · {deps} deps',
   'profiles.detail.info': 'Profile info',
   'profiles.bundles.count': '{count} bundle layer(s)',
   'profiles.shape.web': 'Web',
@@ -1677,6 +1695,7 @@ export const en: Record<keyof typeof zh, string> = {
   'library.remoteDeleteBaseline': 'Note: this is the current sync baseline (the snapshot this machine last synced to). Deleting it does not change this machine, but the next sync will re-compare against the latest remote snapshot.',
   'library.remoteDeleted': 'Remote snapshot deleted',
   'library.summary.count': '{count} total',
+  'library.summary.filtered': '{shown} of {total}',
   'library.new.export': 'Export',
   'library.new.import': 'Import from file',
   'library.new.market': 'Browse market',
