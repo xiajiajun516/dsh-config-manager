@@ -528,14 +528,14 @@ export const uiEn: Record<UiTextKey, string> = {
   'report.backupCreated': 'Backup Created',
   'report.importComplete': 'Import Complete',
   'report.importFailed': 'Import Failed',
-  'report.tombstonedSkipped': '{count} item(s) skipped by deletion records',
+  'report.tombstonedSkipped': '{count} {count, plural, item|items} skipped by deletion records',
   'report.included': 'Included:',
   'report.excluded': 'Excluded:',
   'report.security': 'Security:',
   'report.apiKeysExcluded': 'API Keys excluded:',
   'report.containsSecrets': 'Contains secrets:',
   'report.encrypted': 'Encrypted:',
-  'report.redacted': '{count} sensitive field(s) redacted',
+  'report.redacted': '{count} sensitive {count, plural, field|fields} redacted',
   'report.file': 'File:',
   'report.yes': 'yes',
   'report.yesEncrypted': 'yes (encrypted)',
@@ -553,12 +553,12 @@ export const uiEn: Record<UiTextKey, string> = {
   'report.other': 'Other',
   'report.fullText': 'Full text report (with per-item reasons)',
   'report.secrets': 'Secrets:',
-  'report.credentialsNeedEntry': '{count} credential(s) need to be entered',
+  'report.credentialsNeedEntry': '{count} {count, plural, credential needs|credentials need} to be entered',
   'report.restartPluginsMcp': 'Plugin / MCP changes take effect after restarting DSH',
   'report.rollbackFull': 'Rollback: fully restored the pre-import configuration.',
   'report.rollbackPartial': 'Rollback partially completed.',
   'report.rollbackManual': 'These items may require manual recovery:',
-  'report.restored': 'Restored: {count} item(s)',
+  'report.restored': 'Restored: {count} {count, plural, item|items}',
   'report.includedCount': '{count} included',
   'report.excludedCount': '{count} excluded',
   'report.badgeEncrypted': 'encrypted',
@@ -569,18 +569,18 @@ export const uiEn: Record<UiTextKey, string> = {
   'report.includedSections': 'Included sections',
   'report.excludedSections': 'Excluded sections',
   'report.warnings': 'Warnings',
-  'report.unit.namespaces': 'namespace(s)',
-  'report.unit.files': 'file(s)',
-  'report.unit.servers': 'server(s)',
-  'report.unit.providers': 'provider(s)',
-  'report.unit.plugins': 'plugin(s)',
-  'report.unit.patchLines': 'patch line(s)',
-  'report.unit.patchFiles': 'patch file(s)',
-  'report.unit.localTarballs': 'local package(s)',
-  'report.unit.prompts': 'prompt(s)',
-  'report.unit.workspaces': 'workspace(s)',
-  'report.unit.credentials': 'credential status item(s)',
-  'report.unit.notes': 'note(s)',
+  'report.unit.namespaces': '{n, plural, namespace|namespaces}',
+  'report.unit.files': '{n, plural, file|files}',
+  'report.unit.servers': '{n, plural, server|servers}',
+  'report.unit.providers': '{n, plural, provider|providers}',
+  'report.unit.plugins': '{n, plural, plugin|plugins}',
+  'report.unit.patchLines': '{n, plural, patch line|patch lines}',
+  'report.unit.patchFiles': '{n, plural, patch file|patch files}',
+  'report.unit.localTarballs': '{n, plural, local package|local packages}',
+  'report.unit.prompts': '{n, plural, prompt|prompts}',
+  'report.unit.workspaces': '{n, plural, workspace|workspaces}',
+  'report.unit.credentials': '{n, plural, credential status item|credential status items}',
+  'report.unit.notes': '{n, plural, note|notes}',
   'error.notMounted': 'config-manager service is not mounted (plugin not loaded): make sure dsh-config-manager is installed in the profile and restart DSH',
   'error.apiPathMissed': 'API path not matched (HTTP {status}): the request prefix is {base} but that path did not return JSON — if you serve DSH under a reverse-proxy sub-path, check that this prefix is proxied (issue #108)',
   'error.httpInvalidJson': 'HTTP {status}: invalid JSON response',
@@ -671,16 +671,16 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.pushFailed': 'Push failed',
   'sync.pushOk': 'Push succeeded (snapshot {id})',
   'sync.conflictUnresolved': 'Conflict item {id} must be resolved first (keep current / use imported)',
-  'sync.pushPreviewHeadline': 'Will push {total} section(s) ({changed} changed)',
+  'sync.pushPreviewHeadline': 'Will push {total} {total, plural, section|sections} ({changed} changed)',
   'sync.pushPreviewEncrypted': 'Encrypted snapshot: the payload is encrypted as a whole; per-section changes vs the baseline cannot be compared.',
   'sync.pushPreviewCredentials': 'This push includes real credential values (encrypted with the payload; the remote only ever sees ciphertext).',
   'sync.pullFailed': 'Pull failed',
-  'sync.pullOk': 'Remote snapshot {id} diff preview: {count} change(s)',
+  'sync.pullOk': 'Remote snapshot {id} diff preview: {count} {count, plural, change|changes}',
   'sync.pullEmpty': 'Remote snapshot matches local (no changes)',
   'sync.previewHint': 'Read-only diff preview above; nothing is imported. One-click import is not supported in this version — use the Import wizard to apply a downloaded backup if needed.',
   'sync.syncing': 'Syncing…',
-  'sync.importDone': 'Imported {n} section(s)',
-  'sync.importPartial': 'Partly successful: {n} item(s) did not take effect (the rest were written; nothing rolled back)',
+  'sync.importDone': 'Imported {n} {n, plural, section|sections}',
+  'sync.importPartial': 'Partly successful: {n} {n, plural, item did|items did} not take effect (the rest were written; nothing rolled back)',
   'sync.importFailed': 'Import failed (rolled back)',
   'sync.autosyncNever': 'Never run',
   'sync.autosyncLastRun': 'Last run: {time}',
@@ -688,7 +688,7 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.autosyncSkipped': 'Skipped',
   'sync.autosyncFailed': 'Failed',
   'sync.autosyncPartial': 'Partial',
-  'sync.autosyncFailCount': '{n} consecutive failure(s)',
+  'sync.autosyncFailCount': '{n} consecutive {n, plural, failure|failures}',
   'sync.duration.min': '{n} min',
   'sync.duration.hour': '{n} hr',
   'sync.duration.day': '{n} day',
@@ -707,7 +707,7 @@ export const uiEn: Record<UiTextKey, string> = {
   'sync.github.pollError': 'GitHub OAuth error: {detail}',
   'sync.github.unknownError': 'Unknown error',
   'market.statusUnconfigured': 'No markets added (enter a public Git repository URL)',
-  'market.statusConfigured': '{count} market(s) added',
+  'market.statusConfigured': '{count} {count, plural, market|markets} added',
   'market.supplyUnofficial': 'From the public network, not officially reviewed',
   'market.supplySource': 'Source repo: {url}',
   'market.supplyDownloadedAt': 'Downloaded at: {time}',
@@ -739,18 +739,18 @@ export const uiEn: Record<UiTextKey, string> = {
   'consult.title': 'Migration Pre-flight Consultation',
   'consult.healthScore': 'Health score {score}',
   'consult.dryRun': 'Read-only analysis',
-  'consult.blockers': '{count} hard blocker(s) (cannot import safely until resolved)',
-  'consult.attention': '{count} item(s) need attention',
+  'consult.blockers': '{count} hard {count, plural, blocker|blockers} (cannot import safely until resolved)',
+  'consult.attention': '{count} {count, plural, item needs|items need} attention',
   'consult.reasons': 'Recommendation basis',
   'consult.willApply': 'Will apply',
-  'consult.sections': '{count} section(s)',
-  'consult.items': '{count} item(s)',
-  'consult.conflicts': '{count} conflict(s)',
-  'consult.risks': '{count} risk(s)',
+  'consult.sections': '{count} {count, plural, section|sections}',
+  'consult.items': '{count} {count, plural, item|items}',
+  'consult.conflicts': '{count} {count, plural, conflict|conflicts}',
+  'consult.risks': '{count} {count, plural, risk|risks}',
   'consult.dimensions': 'Score dimensions',
   'consult.loading': 'Generating consultation report…',
   'diskUsage.title': 'Disk Usage',
-  'diskUsage.files': '{count} file(s)',
+  'diskUsage.files': '{count} {count, plural, file|files}',
   'diskUsage.refresh': 'Re-scan',
   'diskUsage.loading': 'Measuring disk usage…',
   'diskUsage.unreadable': 'not measured',
@@ -784,9 +784,9 @@ export const uiEn: Record<UiTextKey, string> = {
   'diskUsage.area.vault': 'Sensitive file mirror',
   'diskUsage.area.vaultDesc': 'Mirror for the local editor write channel (enabled on demand)',
   'diskUsage.retention.none': 'Retention disabled (never auto-removed)',
-  'diskUsage.retention.days': '{count} day(s)',
-  'diskUsage.retention.hours': '{count} hour(s)',
-  'diskUsage.retention.minutes': '{count} minute(s)',
+  'diskUsage.retention.days': '{count} {count, plural, day|days}',
+  'diskUsage.retention.hours': '{count} {count, plural, hour|hours}',
+  'diskUsage.retention.minutes': '{count} {count, plural, minute|minutes}',
   'diskUsage.backupRetention': 'Scheduled backups keep the latest {count}; exports are auto-removed after {days} days.',
   'diskUsage.clean.title': 'Reclaim space',
   'diskUsage.clean.hint': 'Only regenerable caches and staging are cleaned; snapshots and sync data are never removed here.',
@@ -796,10 +796,10 @@ export const uiEn: Record<UiTextKey, string> = {
   'diskUsage.clean.tmpMarketDesc': 'Clears regardless of retention — all of it regenerates (avoid while an import is in flight).',
   'diskUsage.clean.expiredExports': 'Reclaim expired backups',
   'diskUsage.clean.expiredExportsDesc': 'Only exports past their retention window (scheduled backups are excluded).',
-  'diskUsage.clean.done': 'Freed {size}, removed {count} item(s)',
+  'diskUsage.clean.done': 'Freed {size}, removed {count} {count, plural, item|items}',
   'diskUsage.clean.nothing': 'Nothing to reclaim',
   'diskUsage.clean.nothingAbsent': 'Nothing to clean (the target directories are missing or already empty)',
-  'diskUsage.clean.failed': 'Cleanup finished with {count} failure(s) (skipped)',
+  'diskUsage.clean.failed': 'Cleanup finished with {count} {count, plural, failure|failures} (skipped)',
   'diskUsage.clean.confirmTitle': 'Clean disk usage',
   'diskUsage.clean.confirmMessage': 'This deletes regenerable caches/staging plus expired backup files; snapshots and sync data are untouched. It cannot be undone, but everything removed can be regenerated.',
   'diskUsage.clean.confirm': 'Clean',
@@ -904,7 +904,7 @@ export const uiEn: Record<UiTextKey, string> = {
   'foreign.found.no': 'Not detected',
   'foreign.paths': 'Matched paths: {paths}',
   'foreign.pathsNone': 'No truth-table path matched',
-  'foreign.credentialRefs': '{count} credential(s) to enter manually: {refs}',
+  'foreign.credentialRefs': '{count} {count, plural, credential|credentials} to enter manually: {refs}',
   'foreign.skip.unsupported-hooks': 'settings hooks: DSH has no equivalent, not migrated',
   'foreign.skip.unsupported-commands': 'Slash commands: not the same thing as DSH prompts, not migrated this round',
   'foreign.skip.credentials-not-migrated': 'Credential fields: only the names are recorded; the values are never read or migrated',
@@ -988,6 +988,18 @@ export const uiEn: Record<UiTextKey, string> = {
 /** UI 翻译函数：key → 当前语言文案（{param} 插值；未知键回退 zh/键名）。 */
 export type UiT = (key: UiTextKey, params?: Record<string, string | number>) => string;
 
+/**
+ * 单复数段：`{count, plural, one-form|other-form}`（ICU 的极小子集，2026-11-01）。
+ *
+ * 为什么要它：英文旧写法把复数塞进括号 —— `{count} item(s)`、`{count} copy(ies)`。
+ * 界面读不出来：用户看到 "3 item(s)" 会先怀疑渲染漏了，单数时也照样写 "1 item(s)"。
+ * 真复数得按数量选形式，而模板是死字符串，只能把两种形式都放进值里、由插值层挑一个。
+ *
+ * 规则：`Number(v)` 的绝对值 === 1 取 one，其余（含 0、小数、非数字）取 other —— 英语常规
+ * （"0 items"）。中文值不写这段（中文没有单复数），同一键的中文照旧。
+ */
+const PLURAL_SEGMENT = /\{(\w+),\s*plural,\s*([^{}|]*)\|([^{}]*)\}/g;
+
 /** 构造 翻译函数（zh 源 / en 镜像；缺 key 回退）。 */
 export function makeUiT(lang: 'zh' | 'en'): UiT {
   const dict = lang === 'en' ? uiEn : uiZh;
@@ -996,9 +1008,17 @@ export function makeUiT(lang: 'zh' | 'en'): UiT {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const template = (dict as any)[key] ?? (fallback as any)?.[key] ?? key;
     if (params === undefined) return template;
-    return String(template).replace(/\{(\w+)\}/g, (match, k: string) =>
-      params[k] === undefined ? match : String(params[k]),
-    );
+    return String(template)
+      .replace(PLURAL_SEGMENT, (match, k: string, one: string, other: string) => {
+        const value = params[k];
+        if (value === undefined) return match;
+        const n = Number(value);
+        const form = Number.isFinite(n) && Math.abs(n) === 1 ? one : other;
+        return form.trim();
+      })
+      .replace(/\{(\w+)\}/g, (match, k: string) =>
+        params[k] === undefined ? match : String(params[k]),
+      );
   };
 }
 

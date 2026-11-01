@@ -790,10 +790,12 @@ export function RollbackCard({ recoveryApi, t }: RollbackCardProps) {
               <div className={css.hint}>{t(dyn(verdict.reasonKey))}</div>
             )}
 
+            {/* 动作顺序与 MergeModal 同口径（DESIGN §9）：**取消在左、主操作在右**。
+                以前危险操作在左、取消在右 —— 两个弹窗的「取消」位置相反，用户会点错。 */}
             <div className={css.actionRow}>
-              <Button variant="danger" disabled={busy || !canRewind || selectionBlocked} loading={busy} onClick={() => { setConfirmOpen(true) }}>{t('rollback.rewind')}</Button>
-              <span className={css.statusSpacer} />
               <Button disabled={busy} onClick={closePreview}>{t('common.cancel')}</Button>
+              <span className={css.statusSpacer} />
+              <Button variant="danger" disabled={busy || !canRewind || selectionBlocked} loading={busy} onClick={() => { setConfirmOpen(true) }}>{t('rollback.rewind')}</Button>
             </div>
           </>
         )}

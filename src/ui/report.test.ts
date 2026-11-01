@@ -36,7 +36,7 @@ test('report: 导出报告含 Included/Excluded/Security/File（en / zh）', () 
   assert.ok(enText.includes('○ sessions'));
   assert.ok(enText.includes('API Keys excluded: yes'));
   assert.ok(enText.includes('File: dsh-config-2026-08-14.zip'));
-  assert.ok(enText.includes('2 sensitive field(s) redacted'));
+  assert.ok(enText.includes('2 sensitive fields redacted'));
   const zhText = renderExportReport(makeExportReport(), zhT);
   assert.ok(zhText.includes('备份已创建'));
 });
@@ -44,7 +44,8 @@ test('report: 导出报告含 Included/Excluded/Security/File（en / zh）', () 
 test('report: exportCountsText —— 计数单位中文化（zh/en），未知单位键原样回退', () => {
   assert.equal(exportCountsText({ namespaces: 18 }, zhT), '18 个命名空间');
   assert.equal(exportCountsText({ plugins: 10, patchLines: 11 }, zhT), '10 个插件，11 行补丁');
-  assert.equal(exportCountsText({ namespaces: 18 }, enT), '18 namespace(s)');
+  assert.equal(exportCountsText({ namespaces: 18 }, enT), '18 namespaces', '单位词按数量选形（1 → namespace）');
+  assert.equal(exportCountsText({ namespaces: 1 }, enT), '1 namespace', '单数不再写成 1 namespace(s)');
   assert.equal(exportCountsText({ servers: 0 }, zhT), '0 个服务器', '0 是有效值，不能当空');
   assert.equal(exportCountsText({ customThing: 2 }, zhT), '2 customThing', '未知单位键原样显示，不吞信息');
   assert.equal(exportCountsText({}, zhT), '', '空 counts → 空串（由调用方渲染占位符）');
@@ -66,7 +67,7 @@ test('report: 导入报告渲染含分节/重启/缺失 secret（en）', () => {
   const text = renderImportReport(makeImportResult(), enT);
   assert.ok(text.includes('Import Complete'));
   assert.ok(text.includes('settings: ✓ 2 imported/restored'));
-  assert.ok(text.includes('Secrets: ⚠ 1 credential(s) need to be entered'));
+  assert.ok(text.includes('Secrets: ⚠ 1 credential needs to be entered'), '动词单复数跟着数量走');
   assert.ok(text.includes('Plugin / MCP changes take effect'));
 });
 

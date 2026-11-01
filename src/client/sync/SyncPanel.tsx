@@ -1224,7 +1224,6 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
           t={t}
           channel={channel}
           statusInfo={state.statusInfo}
-          sectionCount={cs.syncSections.length}
           remoteReady={ready}
           repoUrl={state.repoUrl}
           webdavUrl={state.webdavUrl}
@@ -1251,7 +1250,7 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
               <span className={css.categoryDesc}>
                 {state.loadError !== null ? t('load.failed')
                   : state.catalog.length === 0 ? t('common.loading')
-                    : t('mode.selectedCount', { n: String(cs.syncSections.length) })}
+                    : t('mode.selectedCount', { n: String(cs.syncSections.length), total: String(state.catalog.length) })}
               </span>
               {/* 按钮靠右成列（2026-11-01 用户要求：左描述、右按钮）。行内不再挂「已保存」ⓘ ——
                   它在说一件用户无从选择的事（选完自然保存），与弹窗底那颗重复。 */}

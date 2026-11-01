@@ -134,7 +134,8 @@ test('formatRetention：天 / 小时 / 缺失三档（en 与 zh 都走字典）'
   assert.equal(formatRetention(6 * 60 * 60 * 1000, zh), '6 小时');
   assert.equal(formatRetention(30 * 60 * 1000, zh), '30 分钟');
   assert.equal(formatRetention(0, zh), zh('diskUsage.retention.none'));
-  assert.equal(formatRetention(2 * DAY, en), '2 day(s)');
+  assert.equal(formatRetention(2 * DAY, en), '2 days');
+  assert.equal(formatRetention(DAY, en), '1 day', '单数（今日起由 plural 段选形）');
 });
 
 test('diskUsageViewModel：英文界面下所有标签来自 en 字典（不回落中文）', () => {

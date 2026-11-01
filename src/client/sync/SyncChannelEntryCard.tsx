@@ -15,16 +15,10 @@ import { needsGitToken, SYNC_CHANNEL_LABEL_KEY } from './sync-view.ts'
 import css from '../config-manager.module.css'
 
 /** 同步通道入口卡：通道徽章 + 配置状态 + 状态事实行 + 打开配置弹窗 + 断开该通道配置。 */
-export function SyncChannelEntryCard({ t, channel, statusInfo, sectionCount, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, expanded, contentId, onToggleExpanded }: {
+export function SyncChannelEntryCard({ t, channel, statusInfo, remoteReady, repoUrl, webdavUrl, s3Endpoint, gistId, onOpen, onClear, expanded, contentId, onToggleExpanded }: {
   t: TranslateNS<'config-manager-sync'>
   channel: SyncChannel
   statusInfo: SyncStatusResponse | null
-  /**
-   * 已选中的同步分区数 —— 与下方「Choose… / 9 selected」**同一来源**（壳层的 cs.syncSections）。
-   * 不使用 statusInfo.sectionCount：那个值只代表「上一次持久化下来的选择」，
-   * 用户刚在弹窗里改完还没落盘时，它会在同一张卡里给出 0 与 9 两个数字（真机反馈）。
-   */
-  sectionCount?: number
   remoteReady: boolean
   repoUrl: string
   webdavUrl: string
@@ -59,7 +53,15 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, sectionCount, rem
         : repoUrl
   return (
     <Card>
-      <span className={css.groupLabel}>{t('channel.title')} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
+      <div className={css.cardTitleRow}>
+        <span className={css.groupLabel}>{t('channel.title')} <InfoHint text={t('channel.openHint')} label={t('common.infoHint')} /></span>
+        {/* 上次同步是单条事实，贴标题行右端（见 .cardTitleRow 注释） */}
+        <span className={css.statusSpacer} />
+        <span className={css.factInline}>
+          {t('syncStatus.lastSync')}{' '}
+          {formatSyncStatusTimestamp(statusInfo?.lastSyncAt)}
+        </span>
+      </div>
       <div className={css.statRow}>
         <Badge kind="info">{t(SYNC_CHANNEL_LABEL_KEY[channel])}</Badge>
         <Badge kind={remoteReady ? 'ok' : 'warn'}>
@@ -89,24 +91,12 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, sectionCount, rem
           <Badge kind={workdirKind}>{t(workdirKey)}</Badge>
         )}
       </div>
-      {/* 状态事实行（Workbench：上次同步/可同步分区——未配置时也要给硬事实）。
+      {/* 远端地址（Workbench：未配置时也要给硬事实）。
           配置状态只由上面那排徽章表达：同一张卡里用「徽章 + 事实行」两处说同一件事，
           用户得比对两遍才知道是不是同一状态。 */}
-      <div className={css.factGrid} style={{ marginTop: 8 }}>
-        <div className={css.factCell}>
-          <span className={css.factLabel}>{t('syncStatus.lastSync')}</span>
-          <span className={css.factValue}>
-            {formatSyncStatusTimestamp(statusInfo?.lastSyncAt)}
-          </span>
-        </div>
-        {(sectionCount ?? statusInfo?.sectionCount) !== undefined && (
+      {remoteReady && (
+        <div className={css.factGrid} style={{ marginTop: 8 }}>
           <div className={css.factCell}>
-            <span className={css.factLabel}>{t('syncStatus.sections')}</span>
-            <span className={`${css.factValue} ${css.mono}`}>{String(sectionCount ?? statusInfo?.sectionCount)}</span>
-          </div>
-        )}
-        {remoteReady && (
-          <div className={css.factCell} style={{ gridColumn: '1 / -1' }}>
             <span className={css.factLabel}>{t('channel.currentUrl')}</span>
             <span className={css.factValue}>
               <span className={css.mono}>
@@ -114,8 +104,8 @@ export function SyncChannelEntryCard({ t, channel, statusInfo, sectionCount, rem
               </span>
             </span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
       <div className={css.actionRowTop}>
         {/* ghost 而不是 primary（2026-11-01）：本页唯一的主行动是「把本地改动推上去 /
             把远端拉下来」，而那是下方 pickSyncPrimary 决定的那颗按钮。

@@ -47,7 +47,9 @@ test('i18n(ui): zhUiT 缺省 + makeUiT 双语插值', () => {
   assert.equal(zhUiT('error.notMounted'), 'config-manager 服务未挂载（插件未加载）：请确认 profile 中已安装 dsh-config-manager 并重启 DSH');
   const enT = makeUiT('en');
   assert.equal(enT('error.notMounted'), 'config-manager service is not mounted (plugin not loaded): make sure dsh-config-manager is installed in the profile and restart DSH');
-  assert.equal(enT('report.credentialsNeedEntry', { count: '3' }), '3 credential(s) need to be entered');
+  // 2026-11-01 起复数由 `{count, plural, ...}` 段决定：3 → credentials / need
+  assert.equal(enT('report.credentialsNeedEntry', { count: '3' }), '3 credentials need to be entered');
+  assert.equal(enT('report.credentialsNeedEntry', { count: '1' }), '1 credential needs to be entered');
   // 未知键回退 zh → 键名（类型层不允许字面量，这里用宽松断言验证运行期回退）
   const loose = makeUiT('en') as (key: string) => string;
   assert.equal(loose('no.such.key'), 'no.such.key');

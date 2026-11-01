@@ -342,9 +342,11 @@ test('T18-F1④：createdAfter / result.counts 必须说「留点时并不存在
   }
   assert.deepEqual(offenders, [], '计数类文案不得再写「未记录」（那是旧判据：既有文件也会落进那个计数）：' + offenders.join(', '))
   assert.ok(zh['rollback.preview.createdAfter'].includes('留点时并不存在'), 'zh createdAfter 必须说「留点时并不存在」')
+  // 2026-11-01 起单复数由 `{n, plural, one|other}` 段承担 ⇒ 动词跟着进段，
+  // 模板里不再有连续的 "did not exist"（渲染后才有）。断言模板结构，不断言拼接结果。
   assert.ok(
-    en['rollback.preview.createdAfter'].toLowerCase().includes('did not exist at that point'),
-    'en createdAfter 必须说 did not exist at that point',
+    en['rollback.preview.createdAfter'].includes('{n, plural, item did|items did} not exist at that point'),
+    'en createdAfter 必须说 did not exist at that point（动词进 plural 段后仍是这句）',
   )
   assert.ok(zh['rollback.rewind.result.counts'].includes('之后新建'), 'zh 结果计数必须说清 leftovers 的口径')
   assert.ok(en['rollback.rewind.result.counts'].includes('created afterwards'), 'en 结果计数必须说清 leftovers 的口径')

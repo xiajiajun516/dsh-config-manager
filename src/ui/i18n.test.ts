@@ -19,6 +19,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { makeUiT, uiEn, uiZh, zhUiT } from './i18n.ts';
 import {
@@ -144,4 +145,50 @@ test('i18n-05 默认超时路径走 error.requestTimeout（真实请求：getJso
     assert.equal((err as Error).message, zhUiT('error.requestTimeout', { seconds: '1' }));
     return true;
   });
+});
+
+// 复数语法（2026-11-01）：`{n, plural, one|other}`。英文 (s)/(ies) 括号式复数全站清零后，
+// 单复数由这条替换链决定 —— 它错了整站英文都会退回 "1 files"。
+test('i18n-06 plural 段按数量选形：1/-1 取 one，0/2/非数取 other', () => {
+  assert.equal(enT('report.unit.files', { n: 1 }), 'file');
+  assert.equal(enT('report.unit.files', { n: 2 }), 'files');
+  assert.equal(enT('report.unit.files', { n: 0 }), 'files');
+  assert.equal(enT('report.unit.files', { n: -1 }), 'file', '负数是绝对值为 1，不当成复数');
+  assert.equal(enT('report.unit.files', { n: '1' }), 'file', '占位符值是字符串也要认');
+  assert.equal(enT('report.unit.files', { n: 'n/a' }), 'files', '无法解析成数字时按复数兜底，不抛错');
+  // 缺参时与普通占位符同口径：原样保留模板（调用点漏传会显形，而不是静默选错形）
+  assert.equal(enT('report.unit.files'), '{n, plural, file|files}');
+});
+
+test('i18n-07 plural 段与数字并存：数字仍由普通占位符渲染，且只出现一次', () => {
+  const en = enT('consult.attention', { count: 1 });
+  assert.equal(en, '1 item needs attention');
+  assert.equal(enT('consult.attention', { count: 3 }), '3 items need attention');
+  // 动词单复数必须跟着变：`3 item need` / `1 items did` 这类残留是这条断言的主要目标
+  assert.equal(
+    enT('sync.importPartial', { n: 1 }),
+    'Partly successful: 1 item did not take effect (the rest were written; nothing rolled back)',
+  );
+  assert.equal(
+    enT('sync.importPartial', { n: 4 }),
+    'Partly successful: 4 items did not take effect (the rest were written; nothing rolled back)',
+  );
+});
+
+test('i18n-08 英文字典不留 (s)/(ies) 括号式复数（今日起由 plural 段承担）', () => {
+  const offenders: string[] = [];
+  const collect = (dict: Record<string, string>, label: string) => {
+    for (const [key, value] of Object.entries(dict)) {
+      if (/\(s\)|\(ies\)/.test(value) && !/http\(s\)/.test(value)) offenders.push(label + ':' + key + ' = ' + value);
+    }
+  };
+  collect(uiEn, 'uiEn');
+  // 客户端四本字典同查：改的是源码文本，不 import（client 侧不保证可被 node 直接加载）
+  for (const rel of ['../client/locales.ts', '../client/sync/sync-locales.ts', '../client/market/market-locales.ts', '../client/recovery/recovery-locales.ts']) {
+    const text = readFileSync(new URL(rel, import.meta.url), 'utf8');
+    for (const line of text.split('\n')) {
+      if (/\((s|ies)\)/.test(line) && !/http\(s\)/.test(line) && /:\s*'/.test(line)) offenders.push(rel + ' :: ' + line.trim());
+    }
+  }
+  assert.deepEqual(offenders, [], '括号式复数会让 1 渲染成 "1 file(s)"；改用 {n, plural, file|files}');
 });

@@ -3408,6 +3408,28 @@ body {
   text-overflow: ellipsis;
 }
 
+/* 上次同步：从事实格移进徽章行行尾（2026-11-01）。删掉「可同步分区」那格之后，
+   事实格首行只剩一格，右侧留出 ~500px 空带（DESIGN §9 #20 panel-void）。
+   单条时间事实跟在徽章后面读起来是一句话，也省掉一整行高度。 */
+.factInline {
+  font-size: var(--cm-fs-meta);
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+/* 卡标题行：标题在左、单条状态事实贴右（2026-11-01）。564px 画布下徽章行已被三枚徽章
+   占满，那条时间事实只能掉成孤零零的第二行；而标题行右侧一直是空的。 */
+.cardTitleRow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cardTitleRow > .groupLabel {
+  margin-bottom: 0;
+}
+
 /* —— 分区构成卡：两列网格行（名称 | 条目数 | 体积） ——
    用 auto-fit，窄容器（弹窗内的分区构成）自动退化为单列，
    宽容器（总览「分区构成」卡 / 导出页「本次将导出」数据块）仍是两列。 */

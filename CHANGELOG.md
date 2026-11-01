@@ -28,7 +28,18 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+### 🆕 新增 · Added
+
+- **快照里「恢复前被覆盖的原件」现在能列出来也能导出**：恢复前自动留下的那份副本可以在恢复记录里浏览并导出成 ZIP，不用再手工翻快照目录找。
+  **The originals kept before a restore can now be listed and exported**: the copy saved prior to a restore is browsable in the recovery list and exportable as a ZIP instead of digging through the snapshot folder by hand.
+
 ### 🔧 变更 · Changed
+
+- **英文界面的单复数说得对了**：以前一律写 `1 file(s)`、`3 day(ies)`，现在按数量选形 —— 顶部报告、导入/导出计数、同步部分成功提示、恢复与回退清单、磁盘留存说明全部改成 `1 file` / `3 files`，动词也跟着变（`1 credential needs` / `3 credentials need`）。
+  **English plurals read correctly**: counts used to be written as `1 file(s)` or `3 day(ies)`; every report, import/export count, partial-sync notice, recovery and rewind list, and disk-retention note now picks the right form by number, and the verb agrees too (`1 credential needs` / `3 credentials need`).
+
+- **同步页面板少了一处重复数字**：分区数以前在概况格和分区行各报一次，现在只留分区行上的「已勾选 9 / 12」，上次同步时间移到卡片标题行右端，空出来的半行不再是一条空白；恢复弹窗的动作顺序也统一成「取消在左、回退在右」，和合并弹窗一致。
+  **The sync panel stops repeating one number**: the section count used to appear both in the facts grid and on the section row; only the row keeps it now, as "9 / 12 selected", the last-sync time moved to the right edge of the card title, and the half-row that freed up is no longer left blank. The recovery dialog's buttons now also read cancel-left / rewind-right, matching the merge dialog.
 
 - **四个页面和任务面板的视觉重做**：卡片里的双层边框和深色空洞没了，列表不再用大幅空白撑满视口，每页只留一个主按钮，重复的状态徽章合并、行内长文字不再被截成半句，维护页的磁盘明细表四列都能完整读完；同步页的「合并 / 推送」两个按钮改为等宽平分整行，测试连接与刷新快照收成两枚图标按钮，快照下拉因此拿到完整行宽。
   **Visual pass over all four pages and the task panel**: double borders and dark voids inside cards are gone, lists no longer stretch to fill the viewport with dead space, each page has a single primary button, duplicated status badges are merged, long inline text is no longer cut mid-sentence, and the disk-usage table on the maintenance page is fully readable in all four columns; on the sync page the merge and push buttons now split the row evenly, while test-connection and refresh-snapshots became icon buttons so the snapshot select gets the full row width.
@@ -36,14 +47,45 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **同步页的按钮和说明文案收拾干净**：「配置…」「选择…」「＋ 新建私有仓库…」不再带省略号，「选择」挪到行右端，每行统一读成「左边说明 / 右边按钮」；弹窗底部和分区行里那两处只解释「会自动保存」的图标说明已删除，脚注只剩一颗「完成」。
   **The sync page's buttons and hints are tidied up**: the configure, choose and new-repository buttons no longer carry a trailing ellipsis, the choose button moves to the right edge so every row reads description-left / button-right, and the two icon hints that only explained "changes save automatically" are gone, leaving the dialog footer with a single Done button.
 
+- **自动同步遇到冲突时缺省停下来问你**：缺省从「保留本机」改为「先问」，之前明确选过「保留本机」的设置继续生效；首轮同步或远端出现新内容时会强制走询问。
+  **Autosync now asks before overwriting on a conflict**: the default moved from keep-local to ask; an explicit keep-local choice keeps working, and first syncs or newly-seen remote content are forced to ask.
+
+- **远端快照回收遇到意外响应就整轮放弃**：不再做半截回收，同步警告里会说明原因与本轮没回收的事实。
+  **Remote snapshot reclamation gives up for the whole round on an unexpected response**: no half-finished cleanup, and the sync warning says why nothing was reclaimed this round.
+
 ### 🐛 修复 · Fixed
 
 - **首页「最近活动」会与顶部状态自相矛盾**：自动备份关着、手上只有手动备份时，顶部不再一律显示「一切正常」，改为提示自动备份已关闭。
   **The home page no longer contradicts its own status strip**: when auto backup is off and the machine only has manual backups, the header stops claiming everything is healthy and says so instead.
+
 - **维护页磁盘明细表被挤压到文字只剩半个字**：内容一多，卡片会把每一行的高度压到几像素；现在只有明细表自己滚动，其余内容固定可见。
   **Disk usage details on the maintenance page were squashed until text was cut in half**: a longer card used to compress every row to a few pixels; now only the table scrolls and everything else stays put.
+
 - **产物库的文件名和首页活动摘要被尾部截断**：现在改成中段省略，靠后缀区分的备份包名仍然看得出是哪一个。
   **File names in the artifact library and activity summaries on the home page were truncated at the tail**: they now elide in the middle, so backup packages that differ only in the suffix remain identifiable.
+
+- **清理旧快照不再顺手删掉恢复前的原件**：那些副本有自己的保留期（最近 5 份 / 30 天），旧快照被回收后仍能取回。
+  **Pruning old snapshots no longer wipes the originals kept before a restore**: those copies follow their own retention (latest 5 / 30 days) and survive snapshot cleanup.
+
+- **导入失败时到底回不回滚，四个入口现在给同一个答案**：命令行、界面、同步与内部调用统一为失败即回滚，不再出现「界面回滚、命令行不回滚」。
+  **Import now answers rollback-on-failure the same way at all four entry points**: CLI, UI, sync and internal calls all roll back on failure instead of disagreeing.
+
+- **一台机器上删掉的会话不会再被同步回来**：删除记录随同步传播，另一台机器同步时跟着剔除并给出提示。
+  **A conversation deleted on one machine no longer comes back through sync**: the deletion record travels with sync, so the other machine drops it and says so.
+
+### 🔐 安全 · Security
+
+- **备份包里夹带「同步目标配置」也改不了本机同步指向**：导入时这类文件一律不写盘，本机同步设置保持不变，报告会点名被拦下的条目。
+  **A backup package can no longer repoint this machine sync target**: such files are refused on import, existing sync settings stay untouched, and the report names what was blocked.
+
+- **同步仓库地址只接受 http(s) 与 ssh**：以短横线开头、指向本机/内网、或无法解析的地址一律拒绝并说明原因，不再可能混进交给 git 的参数里。
+  **Sync repository URLs are limited to http(s) and ssh**: values starting with a dash, pointing at loopback or private networks, or failing to parse are rejected with a reason, so nothing slips into the argument list handed to git.
+
+- **被拒的同步地址不再显示成「未配置」**：已保存但被新规则拒绝的地址会在同步状态、模型工具与自动同步历史里带上成因（因此局域网 NAS 的 git 目标不再支持）。
+  **A rejected sync URL is no longer reported as not configured**: an address that is stored but rejected now carries its reason in sync status, model tools and autosync history (so LAN/NAS git targets are no longer supported).
+
+- **备份包里没登记在校验表里的文件，导入时逐条拦下**：其余条目照常导入，报告列出被拦下的文件名。
+  **Files missing from a package checksum table are blocked one by one on import**: the rest import normally and the report lists what was blocked.
 
 ## [0.2.4] - 2026-11-01
 

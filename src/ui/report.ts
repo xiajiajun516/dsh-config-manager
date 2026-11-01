@@ -45,7 +45,8 @@ export function exportCountsText(counts: Record<string, number>, t: UiT): string
   for (const [key, value] of Object.entries(counts)) {
     if (typeof value !== 'number' || !Number.isFinite(value)) continue;
     const unitKey = COUNT_UNIT_KEY[key];
-    parts.push(unitKey === undefined ? String(value) + ' ' + key : String(value) + ' ' + t(unitKey));
+    // 单位词按数量选单复数（en 的 `{n, plural, file|files}`）；中文单位不受影响
+    parts.push(unitKey === undefined ? String(value) + ' ' + key : String(value) + ' ' + t(unitKey, { n: value }));
   }
   // 分隔符也走字典：英文用半角逗号（全角标点在英文界面同样是缺陷）
   return parts.join(t('report.unitSeparator'));
