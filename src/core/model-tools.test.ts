@@ -398,3 +398,36 @@ test('registerModelTools：tools 服务缺失 → 静默跳过（不抛错、不
     await fs.rm(tmp, { recursive: true, force: true })
   }
 })
+
+/* ---------------- SEC-03 读侧可见性：被拒 repoUrl 的成因必须传到模型工具错误里 ---------------- */
+
+/**
+ * 审计 SEC-01/02/03：`resolveEngine` 读到的 git 通道若因白名单被丢弃（repoUrl 是内网/环回/
+ * 带 userinfo/以 '-' 开头），修复前只抛「该通道未配置」——把「你配过但被拒」说成「你没配」，
+ * Agent 于是让用户「去配一下」，用户配了还是被拒，彻底卡死。
+ * 这里钉住：错误文本必须带上被拒地址与成因，且**绝不构造同步引擎**。
+ */
+test('SEC-03 config_sync_push：已存 repoUrl 被白名单拒绝 → 错误带真实成因（不是「未配置」）', async () => {
+  const { deps, tmp, transport } = await makeDeps()
+  try {
+    await fs.mkdir(deps.syncDir, { recursive: true })
+    await fs.writeFile(
+      path.join(deps.syncDir, 'sync-config.json'),
+      JSON.stringify({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://192.168.1.10/owner/repo.git' } }),
+      'utf8',
+    )
+    const tools = createModelTools(deps)
+    await assert.rejects(
+      () => tools.syncPush({ channel: 'git' }),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        assert.ok(message.includes('192.168.1.10'), '错误必须带上被拒地址: ' + message)
+        assert.ok(/repo-url-invalid/.test(message), '错误必须带上机读成因码: ' + message)
+        return true
+      },
+    )
+    assert.ok(!transport.calls.includes('upload'), '被拒地址绝不发起任何远端写入')
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true })
+  }
+})

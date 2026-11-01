@@ -31,6 +31,7 @@ import type { SnapshotDirManifest } from '../layout.ts';
 import { BLOB_SECTIONS, gcBlobs, referencedBlobHashes } from '../blob-store.ts';
 import type { BlobSink } from '../blob-store.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
+import { classifyRepoUrl, isPrivateRepoHost } from '../sync-config.ts';
 import {
   classifyNetworkErrorText, computeSnapshotMeta, DEFAULT_SYNC_TIMEOUT_MS, isEncryptedSections,
   SyncTransportError, withSyncRetry,
@@ -198,6 +199,19 @@ const SYNC_ROOT_DIRS: readonly string[] = [...ADOPT_ROOT_ALLOW];
  */
 const NETWORK_SUBCOMMANDS = new Set<string>(['clone', 'fetch', 'push', 'ls-remote', 'pull']);
 const LOW_SPEED_ARGS: readonly string[] = ['-c', 'http.lowSpeedLimit=1000', '-c', 'http.lowSpeedTime=30'];
+/**
+ * 协议护栏（SEC-12）：**所有** git 子进程恒带，与「这条命令走不走网络」无关。
+ *
+ * 为什么恒带而不是只给网络命令：危险的不只是远端协议本身 —— `ext::sh -c ...` / `file://`
+ * 这类地址在 clone/fetch 之外还能经 `remote set-url`、配置重载等路径被触发，而本插件的 repoUrl
+ * 来自用户可编辑的 sync-config.json 与可导入的配置包。把 `ext` 与 `file` 传输整体关掉，
+ * 就等于「repoUrl 无论被改成什么，都只能走 http/https/ssh 三种真协议」。
+ */
+const PROTOCOL_GUARD_ARGS: readonly string[] = ['-c', 'protocol.ext.allow=never'];
+/** 网络仓库额外禁 file 传输（本地目录仓库是显式支持的用法，不能一刀切禁掉）。 */
+const FILE_PROTOCOL_GUARD_ARGS: readonly string[] = ['-c', 'protocol.file.allow=never'];
+/** 报错/日志里回显的地址占位符：不带真实 repoUrl（脱敏由上层的 mask() 负责）。 */
+const REPO_URL_PLACEHOLDER = '[REPO_URL]';
 const DEFAULT_AUTHOR: GitAuthor = { name: 'DSH Config Sync', email: 'sync@dsh.local' };
 const DEFAULT_CREDENTIAL_USERNAME = 'oauth2';
 /** 快照 id 安全字符集：字母数字开头，仅 . _ -；防路径穿越与 commit message 注入 */
@@ -361,6 +375,8 @@ export class GitTransport implements SyncTransport {
    */
   private readErrors: { file: string; reason: string }[] = [];
   private readonly msg: MsgFunc;
+  /** repoUrl 是否为网络地址（本地目录仓库 == false）：决定要不要额外禁 file 传输（SEC-12）。 */
+  private readonly networkRepo: boolean;
 
   constructor(options: GitTransportOptions) {
     if (typeof options.repoUrl !== 'string' || options.repoUrl.length === 0) {
@@ -374,6 +390,16 @@ export class GitTransport implements SyncTransport {
       throw new GitTransportError(zhMsg('sync.git.credentialsRequired'));
     }
     this.msg = options.msg ?? zhMsg;
+    // SEC-12：repoUrl 来自用户可编辑配置与可导入配置包 —— 构造期就收成「只能是真网络地址或本地目录」，
+    // 环回/私网/链路本地一律拒（把家目录配置推到 localhost 上的抓取器是最省事的外泄方式）。
+    // **已知行为变更**：局域网 NAS / 内网 git 服务器作为同步目标此后会被拒绝（见 sync-config.ts
+    // 的 isPrivateRepoHost 注释里的取舍说明），这是有意的安全收紧，不是回归。
+    // 地址本体不回显进错误（占位符代替），脱敏仍由 mask() 兜底。
+    const repoShape = classifyRepoUrl(options.repoUrl);
+    if (repoShape === null || (repoShape.kind !== 'local' && isPrivateRepoHost(repoShape.host))) {
+      throw new GitTransportError(this.msg('sync.git.repoUrlInvalid', { url: REPO_URL_PLACEHOLDER }));
+    }
+    this.networkRepo = repoShape.kind !== 'local';
     this.o = {
       repoUrl: options.repoUrl,
       workDir: options.workDir,
@@ -583,12 +609,12 @@ export class GitTransport implements SyncTransport {
    */
   async checkIsPrivate(): Promise<boolean> {
     if (this.privateHint !== null) return this.privateHint;
-    const anon = await this.runGit(['ls-remote', this.o.repoUrl], { allowNonZero: true, cwd: undefined });
+    const anon = await this.runGit(['ls-remote', '--', this.o.repoUrl], { allowNonZero: true, cwd: undefined });
     if (anon.code === 0) {
       this.privateHint = false;
       return false;
     }
-    const authed = await this.runGit(['ls-remote', this.o.repoUrl], { allowNonZero: true, cwd: undefined, withCredential: true });
+    const authed = await this.runGit(['ls-remote', '--', this.o.repoUrl], { allowNonZero: true, cwd: undefined, withCredential: true });
     if (authed.code === 0) {
       this.privateHint = true;
       return true;
@@ -708,7 +734,7 @@ export class GitTransport implements SyncTransport {
   private async cloneIntoWorkDir(): Promise<void> {
     const cwd = this.o.workDir;
     this.partialClone = null; // reclone 后重新判定（配置可能变）
-    const filteredArgs = ['clone', '--filter=blob:none', '--no-checkout', this.o.repoUrl, '.'];
+    const filteredArgs = ['clone', '--filter=blob:none', '--no-checkout', '--', this.o.repoUrl, '.'];
     const filtered = await this.runGit(filteredArgs, { cwd, withCredential: true, allowNonZero: true });
     if (filtered.code !== 0) {
       if (!UNSUPPORTED_GIT_OPTION_RE.test(filtered.stderr + ' ' + filtered.stdout)) {
@@ -717,7 +743,7 @@ export class GitTransport implements SyncTransport {
       }
       // 老 git：回落全量 clone（全量 clone 自带 checkout）
       await clearDirContents(cwd);
-      await this.runGit(['clone', this.o.repoUrl, '.'], { cwd, withCredential: true });
+      await this.runGit(['clone', '--', this.o.repoUrl, '.'], { cwd, withCredential: true });
       return;
     }
     const branch = await this.currentBranch();
@@ -789,15 +815,15 @@ export class GitTransport implements SyncTransport {
     const current = await this.runGit(['remote', 'get-url', 'origin'], { allowNonZero: true });
     const origin = current.code === 0 ? current.stdout.trim() : '';
     if (current.code !== 0) {
-      await this.runGit(['remote', 'add', 'origin', this.o.repoUrl]);
+      await this.runGit(['remote', 'add', 'origin', '--', this.o.repoUrl]);
     } else if (origin !== '' && origin !== this.o.repoUrl) {
-      await this.runGit(['remote', 'set-url', 'origin', this.o.repoUrl]);
+      await this.runGit(['remote', 'set-url', 'origin', '--', this.o.repoUrl]);
       this.partialClone = null; // 换了远端 ⇒ promisor 判定失效（issue #122）
     }
     const push = await this.runGit(['remote', 'get-url', '--push', 'origin'], { allowNonZero: true });
     const pushUrl = push.code === 0 ? push.stdout.trim() : '';
     if (pushUrl !== '' && pushUrl !== this.o.repoUrl) {
-      await this.runGit(['remote', 'set-url', '--push', 'origin', this.o.repoUrl]);
+      await this.runGit(['remote', 'set-url', '--push', 'origin', '--', this.o.repoUrl]);
     }
   }
 
@@ -896,8 +922,9 @@ export class GitTransport implements SyncTransport {
     return {
       path: this.o.workDir,
       exists: true,
-      origin: origin === '' ? null : origin,
-      pushUrl: pushRaw === '' ? null : pushRaw,
+      // RV1-F8：这两个字段会进 GET /sync/status 的响应 → 剥掉可能存在的 userinfo token
+      origin: origin === '' ? null : this.bareUrl(origin),
+      pushUrl: pushRaw === '' ? null : this.bareUrl(pushRaw),
       // 读不出 origin（null）→ 不算 match（状态接口据此提示「工作副本地址未知」）
       match: origin === this.o.repoUrl && (pushRaw === '' || pushRaw === this.o.repoUrl),
       ahead,
@@ -1138,6 +1165,10 @@ export class GitTransport implements SyncTransport {
     const cwd = opts.cwd === undefined ? this.o.workDir : opts.cwd;
     // 网络子命令一律带低速上限：真卡住在 30 s 内明确失败，而不是耗满 timeoutMs（issue #122）
     const networkArgs = NETWORK_SUBCOMMANDS.has(args[0] ?? '') ? [...LOW_SPEED_ARGS] : [];
+    // SEC-12：协议护栏恒带（见 PROTOCOL_GUARD_ARGS）；网络仓库再额外禁 file 传输。
+    const guardArgs = this.networkRepo
+      ? [...PROTOCOL_GUARD_ARGS, ...FILE_PROTOCOL_GUARD_ARGS]
+      : [...PROTOCOL_GUARD_ARGS];
     let extra: string[] = [];
     let token: string | null = null;
     let cleanup: (() => Promise<void>) | null = null;
@@ -1156,7 +1187,7 @@ export class GitTransport implements SyncTransport {
     // 而目录里原本就有别的内容时宁可放弃重试，也绝不删用户文件。
     const cloneTargetWasEmpty = args[0] === 'clone' ? await isEmptyDir(cwd) : false;
     try {
-      let result = await this.o.exec(this.o.gitBin, [...extra, ...networkArgs, ...args], { cwd, timeoutMs: this.o.timeoutMs });
+      let result = await this.o.exec(this.o.gitBin, [...extra, ...guardArgs, ...networkArgs, ...args], { cwd, timeoutMs: this.o.timeoutMs });
       // issue #120：credential helper 必须经 shell 执行（值里不含空格也一样，git 统一拼成
       // `sh -c 'git <helper> ...'`），而 Android 上 git 二进制的 GIT_SHELL_PATH 指向 App 沙箱里
       // 不存在的 Termux sh；`core.askpass` 又要 exec 权限（Android 10+ 对 targetSdk ≥ 29 禁执行应用
@@ -1166,7 +1197,7 @@ export class GitTransport implements SyncTransport {
         const headerEnv = credentialHeaderEnv(this.o.repoUrl, this.o.credentialUsername, token);
         if (Object.keys(headerEnv).length > 0 && (args[0] !== 'clone' || cloneTargetWasEmpty)) {
           if (args[0] === 'clone') await clearDirContents(cwd);
-          result = await this.o.exec(this.o.gitBin, [...networkArgs, ...args], { cwd, timeoutMs: this.o.timeoutMs, env: headerEnv });
+          result = await this.o.exec(this.o.gitBin, [...guardArgs, ...networkArgs, ...args], { cwd, timeoutMs: this.o.timeoutMs, env: headerEnv });
         }
       }
       if (result.code !== 0 && !opts.allowNonZero) {
@@ -1178,7 +1209,8 @@ export class GitTransport implements SyncTransport {
       // 注入的 exec 实现可能直接抛错（默认实现只返回非零 code）——同样归一为带分类的传输层错误
       const detail = err instanceof Error ? err.message : String(err);
       throw new GitTransportError(
-        this.msg('sync.git.cmdFailed', { args: args.join(' '), code: 'exec', err: this.mask(detail, token) }),
+        // argv 里含 repoUrl 原文（clone/ls-remote/remote set-url -- <url>）→ 必须经 mask 才进文案
+        this.msg('sync.git.cmdFailed', { args: this.mask(args.join(' '), token), code: 'exec', err: this.mask(detail, token) }),
         { ...classifyNetworkErrorText(detail), cause: err },
       );
     } finally {
@@ -1210,7 +1242,7 @@ export class GitTransport implements SyncTransport {
         ? this.msg('sync.git.pushAuthFailed', { err: this.mask(result.stderr, token) })
         : args[0] === 'clone' && classified.kind === 'auth'
           ? this.msg('sync.git.cloneAuthFailed', { err: this.mask(result.stderr, token) })
-          : this.msg('sync.git.cmdFailed', { args: args.join(' '), code: String(result.code), err: this.mask(result.stderr, token) });
+          : this.msg('sync.git.cmdFailed', { args: this.mask(args.join(' '), token), code: String(result.code), err: this.mask(result.stderr, token) });
     // 归类同样不能交给原文：`cannot exec ...: No such file or directory` 里的 ENOENT 会被判成
     // notfound（「仓库不存在」），而真实原因是凭据通道不可用 → 钉成 auth（非瞬时、别重试）。
     throw new GitTransportError(message, credentialBlocked ? { kind: 'auth', retryable: false } : classified);
@@ -1258,7 +1290,8 @@ export class GitTransport implements SyncTransport {
       const u = new URL(this.o.repoUrl);
       return u.port ? `${u.hostname}:${u.port}` : u.hostname;
     } catch {
-      throw new GitTransportError(this.msg('sync.git.repoUrlInvalid', { url: this.o.repoUrl }));
+      // RV1-F8：回显一律占位符 —— repoUrl 可能带 userinfo token，错误消息会进日志/响应/issue 截图
+      throw new GitTransportError(this.msg('sync.git.repoUrlInvalid', { url: REPO_URL_PLACEHOLDER }));
     }
   }
 
@@ -1266,6 +1299,29 @@ export class GitTransport implements SyncTransport {
   private async readTokenOnce(): Promise<string | null> {
     if (!/^https?:\/\//i.test(this.o.repoUrl)) return null;
     try { return await this.o.credentials.getToken(); } catch { return null; }
+  }
+
+  /**
+   * 回传体里的地址（工作副本自检的 origin / pushUrl）脱敏：只剥「凭据段」，其余原样保留。
+   *
+   * 为什么不整串换占位符：状态面板要显示「工作副本现在指向哪个远端」，用户靠 host/path 判断是否
+   * 已跟随配置。为什么不一律剥 userinfo：`ssh://git@host` 里的 `git` 是 ssh 登录名（标准写法），
+   * 剥掉会让用户认不出自己的远端 —— 与 validateRepoUrl 的口径保持一致（只有 password 位是凭据）。
+   */
+  private bareUrl(url: string): string {
+    try {
+      const parsed = new URL(url);
+      const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+      const keepSshUser = scheme === 'ssh' && parsed.password === '';
+      const dirty = parsed.password !== '' || (parsed.username !== '' && !keepSshUser);
+      if (!dirty) return url;
+      parsed.username = '';
+      parsed.password = '';
+      return parsed.toString();
+    } catch {
+      // 解析不了（scp 式 `git@host:path` 或本机路径）：`git@` 是登录名不是凭据，原样返回
+      return url;
+    }
   }
 
   /** 错误/日志脱敏：token（原文与 URL 编码两种形态）与 repoUrl 一律替换 */

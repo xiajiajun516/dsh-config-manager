@@ -593,6 +593,53 @@ export type PruneSelector = (
 export const fallbackPruneSelector: PruneSelector = (metas, policy) =>
   selectPruneCandidates(metas, policy.keepLast);
 
+/* ---------------- BK-05：反悔副本（pre-restore）保留策略 ----------------
+ *
+ * 反悔副本 = 恢复链路在覆盖/删除前落的原文副本（restore.ts:888 起写 <snapshotDir>/pre-restore/<attempt>/）。
+ * 它与快照本体的生命周期**不是一回事**：本体可以按保留策略回收（历史回滚点），
+ * 反悔副本却是用户「把刚才这次恢复撤回去」的最后一份原文，整条链路上没有第二份
+ * （不在 blobs 里、不进同步、不进导出）。所以两套策略分开：
+ *  - 快照本体：既有 RetentionPolicyLike（宿主可注入 GFS）；
+ *  - 反悔副本：只按「份数 + 天数」淘汰，常量在 core 内固定（无宿主可调项 —— 少了它等于没有反悔能力）。
+ */
+export const PRE_RESTORE_KEEP_ATTEMPTS = 5;
+export const PRE_RESTORE_KEEP_DAYS = 30;
+/** 反悔副本目录名（restore.ts 写入侧同一常量值；这里是读侧，绝不与写侧分叉） */
+const PRE_RESTORE_DIR_NAME = 'pre-restore';
+
+/** 解析反悔副本 attempt 目录名里的时间戳（本地时间 yyyyMMdd-HHmmss-SSS，可选 -N 去重后缀）。 */
+function parsePreRestoreStamp(name: string): number | null {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-(\d{3})(?:-\d+)?$/.exec(name);
+  if (m === null) return null;
+  const at = new Date(
+    Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+    Number(m[4]), Number(m[5]), Number(m[6]), Number(m[7]),
+  ).getTime();
+  return Number.isFinite(at) ? at : null;
+}
+
+/** 一条反悔副本 attempt 的淘汰计划（删除**前**就进 PrunePlan，供审计与界面展示）。 */
+export interface PrunePreRestoreDrop {
+  snapshotId: string;
+  attempt: string;
+  /** count = 超出份数上限；over-age = 超过保留天数 */
+  reason: 'count' | 'over-age';
+  /** 该 attempt 目录里的文件数（用户能看出「删了多少份原文」） */
+  files: number;
+}
+
+/** 一轮保留清理的**计划**（在真正 rm 之前回调出去；也是 pruneNow 的返回值）。 */
+export interface PrunePlan {
+  /** 将回收的快照 id（目录内的快照本体，不含 pre-restore 子树） */
+  removeSnapshots: string[];
+  /** 因存在反悔副本而**不**整目录删的快照 id（只删本体内容、留下 pre-restore/） */
+  keepPreRestoreFor: string[];
+  /** 反悔副本 attempt 级淘汰计划 */
+  dropPreRestore: PrunePreRestoreDrop[];
+  /** 计划删除的具体路径（相对快照根、'/' 分隔；审计「到底删了什么」） */
+  paths: string[];
+}
+
 export interface FileSnapshotStoreOptions {
   /** 快照根目录（宿主决定，如 ~/.dsh/dsh-config-manager/snapshots） */
   dir: string;
@@ -608,6 +655,8 @@ export interface FileSnapshotStoreOptions {
    * 缺省 = 不记录（不改变 prune 行为、不污染核心引擎）。
    */
   onPrune?: (removedIds: string[]) => void;
+  /** BK-05：保留清理的**计划**回调（在真正删除之前，best-effort；抛错不影响清理） */
+  onPrunePlan?: (plan: PrunePlan) => void;
   /**
    * m-retention：快照保留策略提供者（GFS 分层；可配置）。
    * 缺省 = `SNAPSHOT_RETENTION_LIMIT`（= 既有的「保留最近 10 个」，行为不变）。
@@ -722,7 +771,8 @@ export class FileSnapshotStore implements SnapshotStore {
  *  自动淘汰，只能手动删除（deleteSnapshot）。
  *  Phase 4 F3：被 active/quarantine 未收敛 journal 引用的 snapshot（recovery 回滚点）
  *  必须豁免——引用提供者（referencedSnapshotIds）返回的 id 绝不自动清理。 */
-  private async prune(): Promise<void> {
+  private async prune(): Promise<PrunePlan> {
+    const emptyPlan: PrunePlan = { removeSnapshots: [], keepPreRestoreFor: [], dropPreRestore: [], paths: [] };
     const dir = this.options.dir;
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     // F3：被未收敛 journal 引用的快照**绝不自动清理**。判据是「读不到 ≠ 没有引用」——
@@ -734,7 +784,7 @@ export class FileSnapshotStore implements SnapshotStore {
         referenced = await this.options.referencedSnapshotIds();
       } catch (err) {
         this.options.onWarn?.(engineMsg('core.backup.pruneAbandoned', { reason: err instanceof Error ? err.message : String(err) }));
-        return;
+        return emptyPlan;
       }
     }
     // m-retention：策略读取失败 → 回退缺省（绝不因策略提供者异常而误删/崩溃）
@@ -762,17 +812,108 @@ export class FileSnapshotStore implements SnapshotStore {
         // 损坏 / 非快照目录：跳过（与 listSnapshots 语义一致）
       }
     }
-    const removedIds: string[] = [];
+    // --- BK-05：先出计划，再删 ---
+    // 快照本体与反悔副本是两套生命周期：本体按保留策略回收，pre-restore 按「份数 + 天数」淘汰。
+    // 计划必须在 rm **之前**成型并回调出去——删完再报等于审计拿不到原始状态。
+    const plan: PrunePlan = {
+      removeSnapshots: [],
+      keepPreRestoreFor: [],
+      dropPreRestore: await this.collectPreRestorePlan(),
+      paths: [],
+    };
+    /** 每个待回收快照：目录名 → 要删的子项（保持 pre-restore 不动） */
+    const removals: { id: string; children: string[]; hasPre: boolean }[] = [];
     for (const id of selector(metas, policy)) {
       const target = path.join(dir, id);
       if (!target.startsWith(dir)) continue; // 越界 id 跳过（不删、不抛，同 save/readBlob 包含性约定）
+      const children = await fs.readdir(target).catch(() => [] as string[]);
+      const hasPre = children.includes(PRE_RESTORE_DIR_NAME);
+      removals.push({ id, children, hasPre });
+      plan.removeSnapshots.push(id);
+      for (const child of children) {
+        if (child === PRE_RESTORE_DIR_NAME) continue;
+        plan.paths.push(id + '/' + child);
+      }
+    }
+    for (const drop of plan.dropPreRestore) plan.paths.push(drop.snapshotId + '/pre-restore/' + drop.attempt + '/');
+    this.options.onPrunePlan?.(plan);
+    if (plan.removeSnapshots.length === 0 && plan.dropPreRestore.length === 0) return plan;
+
+    // 1) 回收快照本体：有反悔副本的快照**不整目录删**（否则唯一那份原文跟着消失），逐项删其余内容
+    const removedIds: string[] = [];
+    for (const removal of removals) {
+      const target = path.join(dir, removal.id);
+      for (const child of removal.children) {
+        if (child === PRE_RESTORE_DIR_NAME) continue;
+        await fs.rm(path.join(target, child), { recursive: true, force: true });
+      }
+      if (removal.hasPre) plan.keepPreRestoreFor.push(removal.id);
+      else await fs.rm(target, { recursive: true, force: true });
+      removedIds.push(removal.id);
+    }
+    // 2) 反悔副本 attempt 级淘汰（份数超限 / 超过保留天数）
+    for (const drop of plan.dropPreRestore) {
+      await fs.rm(path.join(dir, drop.snapshotId, PRE_RESTORE_DIR_NAME, drop.attempt), { recursive: true, force: true });
+    }
+    // 3) 收尾：快照本体已回收（无 snapshot.json）且反悔副本也空了 ⇒ 不留空壳目录
+    const touched = new Set<string>([...plan.keepPreRestoreFor, ...plan.dropPreRestore.map((d) => d.snapshotId)]);
+    for (const id of touched) {
+      const target = path.join(dir, id);
+      const hasSnapshot = await fs.stat(path.join(target, 'snapshot.json')).catch(() => null) !== null;
+      if (hasSnapshot) continue;
+      const left = await fs.readdir(path.join(target, PRE_RESTORE_DIR_NAME)).catch(() => null);
+      if (left !== null && left.length > 0) continue;
       await fs.rm(target, { recursive: true, force: true });
-      removedIds.push(id);
     }
     // Phase 6：自动保留清理历史回调（best-effort；不改变 prune 行为）
     if (removedIds.length > 0) {
       try { this.options.onPrune?.(removedIds); } catch { /* 历史回调失败不阻断 */ }
     }
+    return plan;
+  }
+
+  /**
+   * BK-05：反悔副本（pre-restore）淘汰计划 —— 只看**份数与天数**，与快照本体的保留策略无关。
+   *
+   * 为什么单独一套：快照本体是「历史回滚点」，可被 GFS 策略批量回收；反悔副本是用户把
+   * 刚才那次恢复撤回去的**唯一**原文（不在 blobs、不进同步、不进导出），它只需要「别无限长」，
+   * 不需要也不该受 keepLast/keepMonthly 影响 —— 否则一次批量淘汰会把最近几次恢复的反悔点一起抹掉。
+   * attempt 名即恢复时间戳（restore.ts 的 preRestoreStamp，本地时间 yyyyMMdd-HHmmss-SSS[-序号]）；
+   * 解析不出来回落目录 mtime（手工改名的残留也能被淘汰，不会永久占位）。
+   */
+  private async collectPreRestorePlan(): Promise<PrunePreRestoreDrop[]> {
+    const dir = this.options.dir;
+    const drops: PrunePreRestoreDrop[] = [];
+    const now = Date.now();
+    const maxAgeMs = PRE_RESTORE_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory()) continue;
+      const preRoot = path.join(dir, entry.name, PRE_RESTORE_DIR_NAME);
+      const attempts = await fs.readdir(preRoot, { withFileTypes: true }).catch(() => null);
+      if (attempts === null) continue;
+      const rows: { attempt: string; at: number; files: number }[] = [];
+      for (const a of attempts) {
+        if (!a.isDirectory()) continue;
+        const at = parsePreRestoreStamp(a.name)
+          ?? (await fs.stat(path.join(preRoot, a.name)).then((s) => s.mtimeMs).catch(() => now));
+        const names = await fs.readdir(path.join(preRoot, a.name), { recursive: true }).catch(() => [] as string[]);
+        rows.push({ attempt: a.name, at, files: names.length });
+      }
+      rows.sort((x, y) => y.at - x.at); // 新 → 旧
+      rows.forEach((row, index) => {
+        if (index >= PRE_RESTORE_KEEP_ATTEMPTS) {
+          drops.push({ snapshotId: entry.name, attempt: row.attempt, reason: 'count', files: row.files });
+        } else if (now - row.at > maxAgeMs) {
+          drops.push({ snapshotId: entry.name, attempt: row.attempt, reason: 'over-age', files: row.files });
+        }
+      });
+    }
+    return drops;
+  }
+
+  /** BK-05：手动触发一轮保留清理（与 save 后的自动清理同一实现）。 */
+  async pruneNow(): Promise<PrunePlan> {
+    return this.prune();
   }
 
   async load(id: string): Promise<Snapshot> {

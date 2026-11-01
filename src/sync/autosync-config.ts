@@ -54,17 +54,21 @@ export const DEFAULT_AUTOSYNC_AUTO_APPLY_TIER: AutosyncAutoApplyTier = 'medium';
 
 /**
  * 双侧都改（真冲突）时的自动裁决策略：
- *  - 'ask'   ：保留冲突待人工裁决（改造前的唯一行为）；
- *  - 'local' ：缺省 —— **保留本机并推上去**（VS Code 风格）：本机版本成为新的远端最新，
- *              被覆盖的远端版本仍留在远端历史快照里，随时可回滚。
+ *  - 'ask'   ：缺省 —— 保留冲突待人工裁决，冲突期间**零写入**（下行不动、上行不 force）；
+ *  - 'local' ：用户显式选中才生效 —— **保留本机并推上去**（VS Code 风格）：本机版本成为新的
+ *              远端最新，被覆盖的远端版本仍留在远端历史快照里，随时可回滚。
+ *
+ * SYN-05 为什么把缺省从 'local' 改成 'ask'：'local' 缺省会在「首轮」与「远端刚出现新快照」
+ * 这两个高危时刻静默用本机覆盖远端最新（用户根本没看见那段远端改动就被盖掉）。缺省必须选
+ * **安全且可逆**的一侧 = ask；想覆盖必须自己选，且首轮 / 远端有新快照时仍降级为 ask（forced）。
  *
  * 刻意**不提供** 'remote'：采用远端需要走 applyMergeResolutions，那条路径会整体应用所有
  * 可决断分区、绕过 risk.ts 的风险分级（audit-sync sync-F5），与「分区逐档放行」冲突。
  */
 export type AutosyncConflictPolicy = 'ask' | 'local';
 
-/** 缺省冲突策略：local（保留本机并推上去） */
-export const DEFAULT_AUTOSYNC_CONFLICT_POLICY: AutosyncConflictPolicy = 'local';
+/** 缺省冲突策略：ask（冲突待人工裁决；显式写过 local 的旧配置仍按 local 生效） */
+export const DEFAULT_AUTOSYNC_CONFLICT_POLICY: AutosyncConflictPolicy = 'ask';
 
 /** 最近一次自动同步执行状态 */
 export type AutosyncRunStatus = 'success' | 'skipped' | 'failed' | 'partial';

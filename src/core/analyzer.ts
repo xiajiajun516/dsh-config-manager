@@ -10,11 +10,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { sha256Hex } from '../utils/hashing.ts';
-import { parseJsonSafe } from '../utils/json.ts';
 import {
   SECTION_FILE_PREFIXES, SECTION_IDS, SECTION_JSON_PATHS, isFileSection, validateSectionData,
 } from '../schema/config.ts';
-import { CHECKSUMS_FILE, MANIFEST_FILE, parseManifest } from '../schema/manifest.ts';
+import { MANIFEST_FILE, parseManifest } from '../schema/manifest.ts';
 import {
   CURRENT_SCHEMA_VERSION, canImport, describeVersion, isSupported, isTooNew, needsMigration,
 } from '../schema/versions.ts';
@@ -23,6 +22,8 @@ import type { BootSafetyReport } from './boot-safety.ts';
 import type { FilesSection, Manifest, SectionId } from '../schema/types.ts';
 import { loadTombstones } from '../schema/tombstones.ts';
 import { DEFAULT_SENSITIVE_RELS, restoreVaultFiles } from '../security/vault.ts';
+import { applyUnverifiedFileBlocks, scanArchiveIntegrity, unverifiedNoticeText } from '../security/unverified-file-blocks.ts';
+import { UNVERIFIED_FILE_ENTRY_CODE } from '../security/integrity.ts';
 import { createSnapshot, fsForSection, planItemWritesTarget, resolveFileTarget, resolveFileTargetRel } from './backup.ts';
 import { isCredentialConfigured } from './credential-status.ts';
 import { rollback } from './rollback.ts';
@@ -107,12 +108,15 @@ export interface AnalyzerOptions {
    * 缺省 = 不做会话格式体检（旧调用方零改动）。
    */
   sessionFormatProbe?: (files: readonly { relativePath: string; data: Uint8Array }[]) => SessionFormatProbeResult;
+  /** SEC-05：按分区豁免「表外条目阻断」（缺省空 = 严格）；判据见 security/unverified-file-blocks.ts */
+  extraEntryExemptSections?: readonly SectionId[];
 }
 
 interface Bundle {
   archive: ZipArchive;
   manifest: Manifest;
   checksums: { ok: boolean; mismatches: string[]; missing: string[] };
+  unverifiedEntries: string[];
   zipWarnings: string[];
   /** G-06：schema 迁移链实际执行的步骤告警（`import.migrated`；CURRENT=MIN=1 时恒为空） */
   migrationWarnings: string[];
@@ -227,6 +231,7 @@ export class Analyzer {
   private readonly parseZipFn: (buf: Uint8Array, limits?: ZipSafetyLimits) => ZipArchive;
   private readonly msg: MsgFunc;
   private readonly sessionFormatProbe?: (files: readonly { relativePath: string; data: Uint8Array }[]) => SessionFormatProbeResult;
+  private readonly extraEntryExemptSections: readonly string[];
   /**
    * 会话内 bundle 缓存（zipPath → { 身份, 解析结果 }）。
    *
@@ -250,6 +255,7 @@ export class Analyzer {
     this.parseZipFn = opts.parseZipOverride ?? parseZip;
     this.msg = opts.msg ?? msgOf(opts.ctx);
     this.sessionFormatProbe = opts.sessionFormatProbe;
+    this.extraEntryExemptSections = opts.extraEntryExemptSections ?? [];
   }
 
   /* ---------------- 第 1-6 步：ZIP 读入 → 安全解析 → manifest → 完整性 → schema ---------------- */
@@ -297,55 +303,12 @@ export class Analyzer {
       throw new Error(this.msg('import.manifestParseFailed', { reason: err instanceof Error ? err.message : String(err) }));
     }
 
-    // 4. 完整性（integrity/checksums.json 逐一 SHA-256）
+    // 4. 完整性（checksums.json 逐一 SHA-256）+ 4b 反向覆盖（表外条目）：判据下沉在 security 侧。
     const zipWarnings: string[] = [];
-    let checksums = { ok: true, mismatches: [] as string[], missing: [] as string[] };
-    // 4a. H2：校验表**缺失**或**为空**时，全部条目都处于「未登记 ⇒ 未被校验」状态。
-    //     此前整段完整性逻辑（含下面的反向检查）都嵌在 `if (archive.has(CHECKSUMS_FILE))` 内，
-    //     于是「剥掉 checksums.json」或「把它置为 {}」= 一个条目都不校验，却 valid=true / 零告警。
-    //     两种形态对用户是同一件事（没有任何条目被校验），故共用同一条告警，不制造近重复文案。
-    const table = archive.has(CHECKSUMS_FILE)
-      ? (parseJsonSafe(archive.readEntryText(CHECKSUMS_FILE)) as Record<string, string>)
-      : null;
-    if (table === null || Object.keys(table).length === 0) {
-      zipWarnings.push(this.msg('import.checksumsMissing'));
-    }
-    if (table !== null && Object.keys(table).length > 0) {
-      const entries = new Map<string, Uint8Array>();
-      for (const name of archive.names()) {
-        if (name === MANIFEST_FILE || name === CHECKSUMS_FILE) continue;
-        try {
-          // 异步解压：这是全仓**唯一**逐条解压全部条目的地方，`inflateRawSync` 会整段阻塞
-          // 事件循环（实测 29 MiB 归档 108 ms，大备份就是几秒的界面冻结）。判据与同步版逐字相同。
-          entries.set(name, await archive.readEntryAsync(name));
-        } catch {
-          entries.delete(name); // 损坏条目在完整性阶段即失败
-          checksums.ok = false;
-          checksums.mismatches.push(name);
-        }
-      }
-      const result = await verifyAgainstTable(entries, table);
-      checksums = result;
-      if (!checksums.ok) {
-        throw new Error(this.msg('import.integrityFailed', {
-          entries: [...checksums.mismatches, ...checksums.missing].map((m) => `"${m}"`).join(', '),
-        }));
-      }
-      // 4b. G-04：反向完整性——ZIP 内**不在**校验表里的条目（未登记 ⇒ 未被校验）。
-      //     verifyAgainstTable 只遍历表里的键，所以 ZIP 里多出的条目此前既不校验也不告知；
-      //     这里把它变成显式 warning（不阻断：未知 ZIP 条目不参与校验是格式 v1 的既定语义）。
-      //     排除 manifest.json / checksums.json 自身与目录条目（以 "/" 结尾）。
-      const tableKeys = new Set(Object.keys(table));
-      const extraEntries = archive.names().filter(
-        (name) => name !== MANIFEST_FILE && name !== CHECKSUMS_FILE
-          && !name.endsWith('/') && !tableKeys.has(name),
-      );
-      if (extraEntries.length > 0) {
-        zipWarnings.push(this.msg('import.extraEntries', {
-          entries: extraEntries.map((e) => `"${e}"`).join(', '),
-        }));
-      }
-    }
+    const integrity = await scanArchiveIntegrity(archive, this.msg);
+    if (integrity.failure !== undefined) throw new Error(integrity.failure);
+    zipWarnings.push(...integrity.warnings);
+    const { checksums, unverified } = integrity;
 
     // 5. schema 版本判定（集中）：过新（isTooNew）或过旧（低于 MIN_SUPPORTED）→ 一律硬失败（行为不变）
     if (isTooNew(manifest.schemaVersion) || !isSupported(manifest.schemaVersion)) {
@@ -371,7 +334,7 @@ export class Analyzer {
       }
     }
 
-    const bundle: Bundle = { archive, manifest, checksums, zipWarnings, migrationWarnings };
+    const bundle: Bundle = { archive, manifest, checksums, unverifiedEntries: unverified, zipWarnings, migrationWarnings };
     // 身份读得到才入实例缓存（与跨请求缓存同一判据：不拿未知身份签结果）。
     if (identity !== null) this.bundleCache.set(zipPath, { stamp: identity.stamp, bundle });
     // 写入跨请求缓存：execute（refresh）也写 —— 它刚做过完整校验，这份结果对后续只读入口同样有效。
@@ -584,6 +547,12 @@ export class Analyzer {
     // 会话格式体检只跑一次：告警、计划项标记、ImportAnalysis 摘要共用（探针要解首帧，别重复跑）。
     const sessionFormats = this.resolveSessionFormats(sections);
 
+    // SEC-05：会落盘的文件分区条目必须在校验表内（表外条目此前照样被原样写进目标目录）。
+    // 阻断结果就在计划项自己身上（kind:'Error' + description），不另存一份名单（单一事实）。
+    applyUnverifiedFileBlocks(
+      bundle.unverifiedEntries, adapterItems, this.fileCollectionIds(), this.extraEntryExemptSections, this.msg,
+    );
+
     return {
       ...bundle,
       sections,
@@ -629,7 +598,13 @@ export class Analyzer {
     const analyzed = await this.analyzeBundle(bundle);
 
     const errors = [...analyzed.adapterIssues];
-    const warnings = [...zipWarnings, ...bundle.migrationWarnings, ...analyzed.sectionWarnings];
+    // SEC-05：未覆盖条目（表外 + 校验表缺失时的全部文件分区条目）≠ 被篡改 —— 逐条 Error 已保证零写入，
+    // 不再把整包判死。全仓只此一条 warning（RV1-F11：与 scanArchiveIntegrity 的 import.extraEntries 合并）；
+    // 名单取**全部**未覆盖条目而非「被阻断」子集：豁免分区（历史包兼容）不阻断但仍必须被说出来。
+    const blockedCount = analyzed.adapterItems.filter((i) => i.detail === UNVERIFIED_FILE_ENTRY_CODE).length;
+    const unverifiedNotice = analyzed.unverifiedEntries.length > 0
+      ? [unverifiedNoticeText(this.msg, analyzed.unverifiedEntries, blockedCount)] : [];
+    const warnings = [...zipWarnings, ...bundle.migrationWarnings, ...analyzed.sectionWarnings, ...unverifiedNotice];
     warnings.push(...this.secretsPayloadWarnings(manifest, opts.decryptedCredentials));
     if (!canImport(manifest.schemaVersion)) {
       errors.push(this.msg('import.versionUnsupported', { version: describeVersion(manifest.schemaVersion) }));
@@ -1074,11 +1049,17 @@ export class Analyzer {
             message: outcome.executed.message ?? null,
           });
         }
-        // 仅硬失败计入 anyFailed（warning 属非致命：目标不可达等，不触发回滚，§34.17）
-        if (outcome.executed.status === 'failed') anyFailed = true;
+        // 仅硬失败计入 anyFailed（warning 属非致命：目标不可达等，不触发回滚，§34.17）。
+        // 「硬失败」= 真的尝试过写、并且失败了（applyOne/adapter 抛错、applyItem 返回 failed、写一半的
+        // 目标不可达）。执行前就被策略拦下的项（kind 'Error'：安全白名单 / SEC-05 未覆盖条目）**根本没
+        // 碰目标** —— 它连一个字节都没写，把它算成失败只会让 rollbackOnError（IE-02 缺省 true）在
+        // 「本来能导入的部分」上做一次整笔回滚，等于用安全策略制造数据损失；它也没留下半套状态可回滚。
+        // 因此这类预判阻断只记账（executed 里 status 'failed'，用户可见），不触发回滚、不中断后续条目。
+        const hardFailed = outcome.executed.status === 'failed' && item.kind !== 'Error';
+        if (hardFailed) anyFailed = true;
         if (outcome.needsRestart) needsRestart = true;
         if (outcome.warning) warnings.push(outcome.warning);
-        if (opts.rollbackOnError && outcome.executed.status === 'failed') break;
+        if (opts.rollbackOnError && hardFailed) break;
       }
       // 分区收尾（issue #45 ④）：会话位置护栏等必须等本分区全部写完才做的动作。
       // 「终止 + 回滚」例外：整笔马上要被回滚，再跑收尾纯属浪费且可能中途失败。
@@ -1493,7 +1474,7 @@ export class Analyzer {
 import {
   applyMappingsToSections, applyTombstoneFilter, buildCredentialPlanItems, detectPathIssues,
   mergePathMappings, rebaseMapping, reportRollbackToJournal, runSchemaMigration, sessionUnitVersion,
-  usableSecretValue, verifyAgainstTable,
+  usableSecretValue,
 } from './import-planning.ts';
 
 // 对外导入面保持不变（core/index.ts 与既有测试按 './analyzer.ts' 取这三个名字）。

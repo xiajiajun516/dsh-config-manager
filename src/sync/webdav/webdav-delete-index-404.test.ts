@@ -10,7 +10,10 @@
  *      目标快照文件**仍按用户意图 DELETE**（DELETE 拿到 404 = 本来就不存在 = 成功，与另两个通道同口径）；
  *   ② index 读操作抛错  → 显式失败（F1 语义，绝不回落成空索引）；
  *   ③ index = 200 + []  → 索引权威地声明集合为空，保持既有语义；
- *   ④ GC 遇到「索引有条目但快照文件读不出来（非 404）」→ 本轮放弃（读不出来 ≠ 没引用）。
+ *   ④ GC 遇到「索引有条目但快照文件读不出来（非 404）」→ 本轮放弃（读不出来 ≠ 没引用）；
+ *   ⑤ SYN-04（P1）：**404 同样放弃本轮** —— 索引有条目但快照文件 404（孤儿条目 / 假 404）时，旧实现
+ *      走 continue 把该快照当「引用集为空」，仍被它使用的 blob 就被判无人引用而删除（不可恢复）。
+ *      现在与「读不出来」同口径：本轮 0 删除，并记下放弃码（`lastGcSkip`，机器可判定）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -175,4 +178,29 @@ test('N1⑤：索引有条目但该快照文件读不出来（非 404）→ 本�
   await t.delete('sync-aaa-111');
   assert.deepEqual(r.seen.deletedBlobs, [], '读不出 sync-ccc-333 就无法证明它没引用 blob → 本轮不得删任何 blob');
   assert.equal(r.blobs.has(BLOB_HASH), true);
+});
+
+test('N1⑥（SYN-04）：索引有条目但该快照文件真 404 → 本轮放弃 GC（404 也证明不了「没引用」）+ 记放弃码', async () => {
+  // 孤儿条目 / 假 404：索引还列着 sync-ccc-333，文件却不在远端 —— 拿不到内容 ⇒ 无法证明它没引用 blob。
+  // base 上 404 走 continue，引用集只剩「读得出来的那几份」，于是在用的 BLOB_HASH 被判无人引用而删除。
+  const r = makeRemote({
+    index: JSON.stringify([meta('sync-aaa-111', '1'), meta('sync-ccc-333', '3')]),
+    snapshotFiles: { 'sync-aaa-111': snapOf('sync-aaa-111', PLAIN) },
+  });
+  const t = transportWith(r.request);
+  await t.delete('sync-aaa-111');
+  assert.deepEqual(r.seen.deletedBlobs, [], '404 与「读不出来」同属「无法证明没有引用」→ 本轮 0 删除');
+  assert.equal(r.blobs.has(BLOB_HASH), true, '没有被证明无引用的 blob 必须保留');
+  assert.equal(t.lastGcSkip, 'gc-skip-reference-missing', '必须记下本轮放弃码（机器可判定，文案由上层按码翻译）');
+});
+
+test('N1⑦（SYN-04）：引用者 200 但内容坏掉 → 本轮放弃，放弃码 = snapshot-unparsable', async () => {
+  const r = makeRemote({
+    index: JSON.stringify([meta('sync-aaa-111', '1'), meta('sync-ccc-333', '3')]),
+    snapshotFiles: { 'sync-aaa-111': snapOf('sync-aaa-111', PLAIN), 'sync-ccc-333': 'not-json' },
+  });
+  const t = transportWith(r.request);
+  await t.delete('sync-aaa-111');
+  assert.deepEqual(r.seen.deletedBlobs, [], '解析不了 ⇒ 引用集不完整 ⇒ 本轮不得删任何 blob');
+  assert.equal(t.lastGcSkip, 'gc-skip-snapshot-unparsable');
 });

@@ -32,9 +32,11 @@
  *    → engine.applyMergePlan(autoApply) 写入本地
  *  - Phase C: 完整双向 → engine.push() 上传。两处策略：
  *    ① 无冲突且推送被远端推进挡下 → skipped/partial + skipReason='conflict'（等人工）；
- *    ② conflictPolicy='local'（缺省）且本轮有冲突 → **不写本地**，改 engine.push({force:true})
- *       把本机版本推成新的远端最新（被覆盖的远端旧版本仍在远端历史快照里可回滚），
- *       状态记 partial + skipReason='conflict-kept-local'（绝不谎报 success）。
+ *    ② conflictPolicy='local'（**只有用户显式选过才生效**；缺省 ask）且本轮有冲突 → **不写本地**，
+ *       改 engine.push({force:true}) 把本机版本推成新的远端最新（被覆盖的远端旧版本仍在远端历史快照里
+ *       可回滚），状态记 partial + skipReason='conflict-kept-local'（绝不谎报 success）；
+ *       SYN-05：首轮 / 远端有新快照时即使选了 local 也降级 ask 并记 forced=true（见
+ *       resolveConflictPushPolicy）——这两个时刻覆盖远端等于替用户丢数据。
  *  - 收尾：写该通道 autosync-config（lastRunAt, lastRunStatus, consecutiveFailures,
  *    lastRunHistoryId, lastRunMessage/跳过原因 —— 每轮覆盖上一轮，绝不残留旧错误）
  *
@@ -61,10 +63,11 @@ import {
 } from './autosync-config.ts';
 import type { AutosyncConfig, AutosyncInterval } from './autosync-config.ts';
 import { readSyncConfigFor, isGitConfig, isWebDavConfig, isS3Config, isGistConfig, SYNC_CHANNELS } from './sync-config.ts';
-import type { SyncConfig, SyncTransportType } from './sync-config.ts';
+import type { SyncConfig, SyncConfigIssue, SyncTransportType } from './sync-config.ts';
 import { readSyncHistory, appendAutosyncEntry, markAutosyncNotified } from './sync-history.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { AutosyncHistoryEntry } from './sync-history.ts';
+import type { AutosyncConflictPolicy } from './autosync-config.ts';
 import type { MergePlan } from './merge.ts';
 import type { SyncApplyPlan } from './risk.ts';
 import { SyncWatcher } from './sync-watcher.ts';
@@ -111,6 +114,42 @@ export interface AutosyncRunResult {
   error?: string;
   historyId: string;
   consecutiveFailures: number;
+  /**
+   * SYN-05：本轮 ask 是**被强制**的（首轮或远端有新快照），不是用户选的 ask。
+   * 界面据此说清「这次没让你选」，避免用户以为自己的 local 设置失效了。
+   */
+  forced?: boolean;
+  /**
+   * SEC-03：本轮 skipReason='unconfigured' 时，已落盘配置为何被读侧丢弃（地址被白名单拒绝）。
+   * 缺省 undefined = 真的没配。有值就必须让用户看见 —— 否则「保存过却被拒」和
+   * 「从来没配」在界面上长得一模一样，用户会反复重填同一个被拒地址。
+   */
+  configIssue?: string;
+}
+
+/**
+ * SYN-05：本轮冲突（下行冲突）该不该 force push —— 唯一判定点。
+ *
+ * 规则（缺省 ask 之上再加两道高危闸）：
+ *  - 用户没选过策略 → 用缺省（ask）；
+ *  - **首轮**（从未跑过）或**远端有新快照**：即使显式选了 'local' 也强制降级 ask（forcedAsk）——
+ *    这两个时刻正是「远端最新改动只在历史快照里」的事故现场，静默覆盖等于替用户丢数据；
+ *    降级记 forced，界面才能说清「这次没按你的 local 走」；
+ *  - 只有「显式 local + 非高危时刻 + 真有冲突」才 force。
+ *
+ * 纯函数（无状态、无 I/O）：调度层与单测共用同一份判定，避免两处各写一遍阈值。
+ */
+export function resolveConflictPushPolicy(args: {
+  configuredPolicy?: AutosyncConflictPolicy;
+  firstRun: boolean;
+  remoteNew: boolean;
+  conflicted: number;
+}): { policy: AutosyncConflictPolicy; force: boolean; forcedAsk: boolean } {
+  const configured = args.configuredPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY;
+  // forcedAsk 只描述「用户选了 local，但本轮被降级」——缺省 ask 不算被强制（那不是用户的决定被推翻）。
+  const forcedAsk = configured === 'local' && (args.firstRun || args.remoteNew);
+  const policy: AutosyncConflictPolicy = forcedAsk ? 'ask' : configured;
+  return { policy, force: policy === 'local' && args.conflicted > 0, forcedAsk };
 }
 
 /**
@@ -147,7 +186,11 @@ export interface AutoSyncSchedulerOptions {
   readConfig?: (channel: SyncTransportType) => Promise<AutosyncConfig>;
   writeConfig?: (channel: SyncTransportType, cfg: AutosyncConfig) => Promise<void>;
   /** 注入 sync-config 读取（按通道） */
-  readSyncConfigFn?: (channel: SyncTransportType) => Promise<SyncConfig | null>;
+  /**
+   * SEC-03：可选第二参收集「读侧被丢弃的配置成因」。既有注入实现（单参闭包）依然合法 ——
+   * 少一个参数不是类型错误，缺省接线才负责真正回填。
+   */
+  readSyncConfigFn?: (channel: SyncTransportType, issues?: SyncConfigIssue[]) => Promise<SyncConfig | null>;
   /** 注入 sync-history 读写 */
   readHistoryFn?: () => Promise<Awaited<ReturnType<typeof readSyncHistory>>>;
   appendHistoryFn?: (entry: AutosyncHistoryEntry) => Promise<void>;
@@ -204,7 +247,7 @@ export class AutoSyncScheduler {
   private readonly now: () => Date;
   private readonly readConfig: (channel: SyncTransportType) => Promise<AutosyncConfig>;
   private readonly writeConfig: (channel: SyncTransportType, cfg: AutosyncConfig) => Promise<void>;
-  private readonly readSyncConfigFn: (channel: SyncTransportType) => Promise<SyncConfig | null>;
+  private readonly readSyncConfigFn: (channel: SyncTransportType, issues?: SyncConfigIssue[]) => Promise<SyncConfig | null>;
   private readonly readHistoryFn: () => Promise<Awaited<ReturnType<typeof readSyncHistory>>>;
   private readonly appendHistoryFn: (entry: AutosyncHistoryEntry) => Promise<void>;
   private readonly setTimer: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
@@ -239,6 +282,8 @@ export class AutoSyncScheduler {
   private readonly profile: string | undefined;
   private readonly makeWatcher: ((opts: WatcherFactoryOptions) => SyncWatcher) | undefined;
   private readonly minTriggerGapMs: number;
+  /** SEC-03：已 warn 过的「地址被拒」成因（键 = 通道 + 成因文本），进程内去重。 */
+  private readonly reportedConfigIssues = new Set<string>();
   private stopped = false;
   private running = false;
 
@@ -250,7 +295,7 @@ export class AutoSyncScheduler {
     this.now = opts.now ?? (() => new Date());
     this.readConfig = opts.readConfig ?? ((channel) => readAutosyncConfig(this.syncDir, channel));
     this.writeConfig = opts.writeConfig ?? ((channel, cfg) => writeAutosyncConfig(this.syncDir, channel, cfg));
-    this.readSyncConfigFn = opts.readSyncConfigFn ?? ((channel) => readSyncConfigFor(this.syncDir, channel));
+    this.readSyncConfigFn = opts.readSyncConfigFn ?? ((channel, issues) => readSyncConfigFor(this.syncDir, channel, issues));
     this.readHistoryFn = opts.readHistoryFn ?? (() => readSyncHistory(this.syncDir));
     this.appendHistoryFn = opts.appendHistoryFn ?? ((entry) => appendAutosyncEntry(this.syncDir, entry));
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
@@ -266,9 +311,30 @@ export class AutoSyncScheduler {
     this.minTriggerGapMs = opts.minTriggerGapMs ?? 3000;
   }
 
-  /** 追加一条自动同步历史（自动带上触发通道；0x 安全：绝不覆盖调用方显式 transport）。 */
-  private async appendHistory(channel: SyncTransportType, entry: AutosyncHistoryEntry): Promise<void> {
+  /**
+   * 追加一条自动同步历史（自动带上触发通道；0x 安全：绝不覆盖调用方显式 transport）。
+   *
+   * SYN-05：额外允许 forced（本轮 ask 是被强制的）。该字段不在 sync-history.ts 的
+   * AutosyncHistoryEntry 里（那是另一个模块的公开契约，本轮不扩），但读写两侧都按普通对象
+   * 原样透传（readSyncHistory 逐条 cast），所以运行时可稳定往返；界面按「字段有无」渲染。
+   */
+  private async appendHistory(
+    channel: SyncTransportType,
+    entry: AutosyncHistoryEntry & { forced?: boolean; configIssue?: string },
+  ): Promise<void> {
     await this.appendHistoryFn({ ...entry, transport: channel });
+  }
+
+  /**
+   * SEC-03：「地址被拒」是持久状态，而自动同步每 interval（缺省 60s）就转一圈 ——
+   * 每轮打一条日志等于把日志刷成噪音。同一 (通道 + 成因) 只 warn 一次。
+   * 用户改了配置后成因文本会变（message 带真实地址/原因），自然再报一次。
+   */
+  private reportConfigIssue(channel: SyncTransportType, detail: string): void {
+    const key = channel + '/' + detail;
+    if (this.reportedConfigIssues.has(key)) return;
+    this.reportedConfigIssues.add(key);
+    this.host.log.warn(`自动同步已跳过（${channel}）：同步通道配置被安全校验拒绝，请重新填写地址（${detail}）`);
   }
 
   /** 启动：读两个通道配置 → enabled 通道各自排定时器 → 对每个 enabled 通道执行一次启动触发。 */
@@ -559,11 +625,17 @@ export class AutoSyncScheduler {
 
     try {
       // 读该通道 sync-config：按通道判定「已配置」——git 看 git.repoUrl、webdav 看 webdav.url。
-      const syncCfg = await this.readSyncConfigFn(channel);
+      // SEC-03：「未配置」有两种成因 —— 真的没配，或存过的地址被白名单拒掉（读侧丢弃）。
+      // 必须区分：后者如果说成前者的「尚未配置」，用户会一遍遍重填同一个被拒地址。
+      const configIssues: SyncConfigIssue[] = [];
+      const syncCfg = await this.readSyncConfigFn(channel, configIssues);
       if (!syncIsConfigured(syncCfg)) {
+        const configIssue = describeConfigIssue(configIssues, channel);
+        if (configIssue !== undefined) this.reportConfigIssue(channel, configIssue);
         const result: AutosyncRunResult = {
           status: 'skipped', direction: 'none', skipReason: 'unconfigured', historyId,
           consecutiveFailures: 0,
+          ...(configIssue === undefined ? {} : { configIssue }),
         };
         await this.appendHistory(channel, {
           direction: 'both',
@@ -571,6 +643,7 @@ export class AutoSyncScheduler {
           skipReason: 'unconfigured',
           createdAt: nowIso,
           failureCountAtRun: 0,
+          ...(configIssue === undefined ? {} : { configIssue }),
         });
         await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
         return result;
@@ -615,6 +688,9 @@ export class AutoSyncScheduler {
       // 列表拿不到（网络失败）时 remoteMetas 为 null → 检测自己再 list 一次，行为与改造前一致
       const remoteNew = await this.detectRemoteNew(engine, remoteMetas ?? undefined);
       const localDirty = await this.detectLocalChange(engine);
+      // SYN-05：首轮（从未跑过）与「远端有新快照」是覆盖风险最高的两个时刻 —— 由
+      // resolveConflictPushPolicy 统一把这两处的 ask 标成 forced。
+      const firstRun = cfg.lastRunAt === undefined || cfg.lastRunAt === '';
 
       // 两端都无变化 → 什么都不做，记为 upToDate（不重复拉取/不空转）。
       if (!remoteNew && !localDirty) {
@@ -722,13 +798,23 @@ export class AutoSyncScheduler {
       if (!opts.startup && localDirty) {
         try {
           /**
-           * 冲突策略（conflictPolicy，缺省 'local'）：
+           * 冲突策略（conflictPolicy，缺省 'ask'）：
            * - 'ask'：不强制，推送会被引擎的「远端已推进」前置检测挡下 → skipped/partial(conflict)；
-           * - 'local'：**不写本地**（下行被冲突挡下），但把本机版本强制推成新的远端最新。
-           *   force 只跳过「基线是否落后」这一道检查，仍走正常快照上传与基线记录；
+           * - 'local'：用户显式选中才生效 —— **不写本地**（下行被冲突挡下），但把本机版本强制推成
+           *   新的远端最新。force 只跳过「基线是否落后」这一道检查，仍走正常快照上传与基线记录；
            *   被覆盖的远端旧版本留在远端历史快照里，可手动回滚。
+           *
+           * SYN-05：首轮 / 远端有新快照时即使显式选了 local 也强制降级 ask（forced=true 进结果与
+           * 历史），绝不在这两个高危时刻替用户覆盖远端最新。
            */
-          const forcePush = conflictedSections.length > 0 && (cfg.conflictPolicy ?? DEFAULT_AUTOSYNC_CONFLICT_POLICY) === 'local';
+          const pushDecision = resolveConflictPushPolicy({
+            ...(cfg.conflictPolicy !== undefined ? { configuredPolicy: cfg.conflictPolicy } : {}),
+            firstRun,
+            remoteNew,
+            conflicted: conflictedSections.length,
+          });
+          const forcePush = pushDecision.force;
+          const forcedMark = pushDecision.forcedAsk ? { forced: true as const } : {};
           // Phase C: 完整双向 → engine.push() 上传。P0-A：外部 push 包 intent journal。
           const rawPush = async () => engine.push(forcePush ? { force: true } : {});
           const pushReport = (this.phase3Recovery !== undefined && this.lockCtxForJournal !== null)
@@ -749,6 +835,7 @@ export class AutoSyncScheduler {
               appliedSections,
               ...(conflictedSections.length > 0 ? { conflictedSections } : {}),
               consecutiveFailures: 0,
+              ...forcedMark,
             };
             await this.appendHistory(channel, {
               direction: appliedSections.length ? 'both' : 'push', status: conflictResult.status,
@@ -756,6 +843,7 @@ export class AutoSyncScheduler {
               appliedSections,
               ...(conflictedSections.length > 0 ? { conflictedSections } : {}),
               createdAt: nowIso, failureCountAtRun: 0,
+              ...forcedMark,
             });
             await this.writeFinalConfig(cfg, conflictResult, nowIso, historyId, channel);
             return conflictResult;
@@ -799,6 +887,7 @@ export class AutoSyncScheduler {
             ...(skipReason !== undefined ? { skipReason } : {}),
             ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
             consecutiveFailures: 0,
+            ...forcedMark,
           };
           await this.appendHistory(channel, {
             direction: appliedSections.length ? 'both' : 'push',
@@ -807,6 +896,7 @@ export class AutoSyncScheduler {
             ...(skipReason !== undefined ? { skipReason } : {}),
             ...(reportedConflicted.length > 0 ? { conflictedSections: reportedConflicted } : {}),
             createdAt: nowIso, failureCountAtRun: 0,
+            ...forcedMark,
           });
           await this.writeFinalConfig(cfg, result, nowIso, historyId, channel);
           return result;
@@ -981,6 +1071,20 @@ export function syncIsConfigured(cfg: SyncConfig | null): boolean {
     return cfg.gist.gistId !== '';
   }
   return false;
+}
+
+/**
+ * SEC-03：从读侧收集到的 issue 里挑出本通道的成因（`code(channel): message`），
+ * 没有就返回 undefined —— 「真的没配」绝不伪造原因（无幻影告警）。
+ * 多通道并存时只取本通道，git 的拒因不该挂在 webdav 的历史里。
+ */
+export function describeConfigIssue(
+  issues: readonly SyncConfigIssue[],
+  channel: SyncTransportType,
+): string | undefined {
+  const own = issues.filter((issue) => issue.channel === channel);
+  if (own.length === 0) return undefined;
+  return own.map((issue) => `${issue.code} (${issue.channel}): ${issue.message}`).join('; ');
 }
 
 /**

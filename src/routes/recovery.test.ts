@@ -13,7 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,7 @@ import type { Server } from 'node:http';
 import { recoveryRoutes } from './recovery.ts';
 import { routeSpecOf, type WebRoute } from './kit.ts';
 import { DshProfileManager } from '../profiles/dsh-profile-manager.ts';
+import { parseZip } from '../utils/zip.ts';
 
 const BASE = '/api/dsh-config-manager/recovery';
 
@@ -568,4 +569,200 @@ test('t8 源码级：判据取自 preview 的 session.active，路由**不自己
   assert.equal((source.match(/sessionActiveDenied\(/g) ?? []).length, 3, 'R1 预检 + R2 锁内二道保险 + 定义处');
   assert.match(source, /rewindTouchesWorkspace\(rewindInput\)/, '是否要动工作区必须有唯一判据');
   assert.equal((source.match(/sessionActiveGateApplies\(/g) ?? []).length, 3, '判定链位置只有一份判据（定义 + R1 + R2）');
+});
+
+/* ------------------------------------------------------------------ BK-01
+ * 反悔副本（pre-restore）只读出口：恢复覆盖前的原文落在 <snapshotDir>/pre-restore/<attempt>/
+ * （src/core/restore.ts 的 createPreRestoreAttemptDir / copyToPreRestore，命名 `NNNN-<label>`），
+ * 但此前 src/client、src/ui 零引用 ⇒ 用户既看不见也取不出来。这里只做两件只读的事：
+ *   ① GET  /recovery/pre-restore                      → 列出每个快照下的 attempt 目录与文件清单；
+ *   ② POST /recovery/pre-restore/export               → 把某个 attempt 目录打成 zip，落到用户指定目录。
+ * 硬约束：整条链路**不写快照目录一个字节**；zip 只写「用户显式指定的导出目录」，
+ * 且目标已存在 / 目标落在源目录内一律拒绝（禁止就地覆盖任何源文件）。
+ */
+
+interface PreRestoreFixture { root: string; out: string; cleanup: () => void }
+
+/** 造一个快照根：两个带反悔副本的快照 + 一个没有 pre-restore 的快照。 */
+function preRestoreFixture(): PreRestoreFixture {
+  const root = mkdtempSync(join(tmpdir(), 'dcm-bk01-snaps-'));
+  const out = mkdtempSync(join(tmpdir(), 'dcm-bk01-out-'));
+  const a = join(root, 'snap-a', 'pre-restore', '20261005-101010-123');
+  mkdirSync(a, { recursive: true });
+  writeFileSync(join(a, '0001-settings.yaml'), 'old-settings');
+  writeFileSync(join(a, '0002-sessions_x.jsonl'), 'old-session-line');
+  const b = join(root, 'snap-b', 'pre-restore', '20261006-090000-500');
+  mkdirSync(b, { recursive: true });
+  writeFileSync(join(b, '0001-plugins.yaml'), 'old-plugins');
+  mkdirSync(join(root, 'snap-c'), { recursive: true }); // 没有 pre-restore
+  return { root, out, cleanup: () => { rmSync(root, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true }); } };
+}
+
+function envWithPreRestore(root: string, overrides: Record<string, unknown> = {}): unknown {
+  return {
+    dataDir: '/tmp/dcm-bk01-data',
+    snapshotsDir: root,
+    host: { homeDir: '/tmp/dcm-bk01-home', profile: 'web', log: { warn: () => {} } },
+    profiles: { listIncompleteCopies: () => [] },
+    recoveryOrchestrator: { status: async () => ({ status: 200, body: { incidents: [], running: [] } }) },
+    sessionHealth: {},
+    makeRecoveryExecutors: () => ({}),
+    tryAppendHistory: async () => undefined,
+    ...overrides,
+  };
+}
+
+test('BK-01/①：GET /recovery/pre-restore 列出每个快照下的 attempt 目录与文件清单（相对路径/大小/mtime）', async () => {
+  const f = preRestoreFixture();
+  try {
+    const route = routeOf(envWithPreRestore(f.root));
+    await withServer(route, async (base) => {
+      const res = await fetch(base + '/pre-restore');
+      assert.equal(res.status, 200);
+      const body = await res.json() as {
+        snapshots?: { snapshotId: string; attempts: { attempt: string; files: { relativePath: string; sizeBytes: number; mtimeMs: number }[] }[] }[];
+        unreadable?: unknown;
+      };
+      const ids = (body.snapshots ?? []).map((s) => s.snapshotId);
+      assert.deepEqual(ids.sort(), ['snap-a', 'snap-b'], '没有反悔副本的快照不必出现，但也不能凭空造');
+      const snapA = body.snapshots!.find((s) => s.snapshotId === 'snap-a')!;
+      assert.equal(snapA.attempts.length, 1, '同一快照下每次恢复一个新 attempt 目录');
+      assert.equal(snapA.attempts[0]!.attempt, '20261005-101010-123');
+      const files = snapA.attempts[0]!.files.map((x) => x.relativePath).sort();
+      assert.deepEqual(files, ['0001-settings.yaml', '0002-sessions_x.jsonl'], '文件清单按 attempt 目录内的相对路径给出');
+      const first = snapA.attempts[0]!.files.find((x) => x.relativePath === '0001-settings.yaml')!;
+      assert.equal(first.sizeBytes, 'old-settings'.length, '大小如实（反悔副本是原文）');
+      assert.equal(typeof first.mtimeMs, 'number');
+      assert.equal(body.unreadable, null, '读得动就必须如实说「没读不动」');
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('BK-01/②：POST /recovery/pre-restore/export 把某个 attempt 打成 zip 落到指定目录，源目录字节不变', async () => {
+  const f = preRestoreFixture();
+  try {
+    const src = join(f.root, 'snap-a', 'pre-restore', '20261005-101010-123');
+    const before = { a: readFileSync(join(src, '0001-settings.yaml'), 'utf8'), b: readFileSync(join(src, '0002-sessions_x.jsonl'), 'utf8') };
+    const route = routeOf(envWithPreRestore(f.root));
+    await withServer(route, async (base) => {
+      const res = await fetch(base + '/pre-restore/export', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ snapshotId: 'snap-a', attempt: '20261005-101010-123', outputDir: f.out }),
+      });
+      const body = await res.json() as { ok?: boolean; zipPath?: string; entries?: number; code?: string };
+      assert.equal(res.status, 200, JSON.stringify(body));
+      assert.equal(body.ok, true);
+      const zipPath = body.zipPath!;
+      assert.equal(existsSync(zipPath), true, 'zip 必须真的落盘');
+      assert.equal(join(zipPath).startsWith(f.out), true, '只许写进用户指定的导出目录');
+      assert.equal(body.entries, 2);
+      const entries = parseZip(readFileSync(zipPath)).entries().map((e) => e.name).sort();
+      assert.deepEqual(entries, ['0001-settings.yaml', '0002-sessions_x.jsonl'], 'zip 里是 attempt 目录内的相对路径');
+    });
+    assert.equal(readFileSync(join(src, '0001-settings.yaml'), 'utf8'), before.a, '源文件字节不得变化');
+    assert.equal(readFileSync(join(src, '0002-sessions_x.jsonl'), 'utf8'), before.b);
+    assert.deepEqual(readdirSync(src).sort(), ['0001-settings.yaml', '0002-sessions_x.jsonl'], '不得在源目录里留任何产物');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('BK-01/③：snapshotId / attempt 带穿越（../、绝对路径）→ 400，零写入', async () => {
+  const f = preRestoreFixture();
+  try {
+    const route = routeOf(envWithPreRestore(f.root));
+    await withServer(route, async (base) => {
+      for (const body of [
+        { snapshotId: '../etc', attempt: '20261005-101010-123', outputDir: f.out },
+        { snapshotId: 'snap-a', attempt: '../snap-b', outputDir: f.out },
+        { snapshotId: 'snap-a', attempt: '20261005-101010-123', outputDir: '../escape' },
+      ]) {
+        const res = await fetch(base + '/pre-restore/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+        assert.equal(res.status, 400, JSON.stringify(body));
+      }
+      assert.deepEqual(readdirSync(f.out), [], '拒绝路径不得留下 zip');
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('BK-01/④：导出目录不存在 / attempt 不存在 → 400 / 404，且绝不静默成功', async () => {
+  const f = preRestoreFixture();
+  try {
+    const route = routeOf(envWithPreRestore(f.root));
+    await withServer(route, async (base) => {
+      const missingDir = await fetch(base + '/pre-restore/export', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ snapshotId: 'snap-a', attempt: '20261005-101010-123', outputDir: join(f.out, 'nope') }),
+      });
+      assert.equal(missingDir.status, 400);
+      const missingAttempt = await fetch(base + '/pre-restore/export', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ snapshotId: 'snap-a', attempt: '20990101-000000-000', outputDir: f.out }),
+      });
+      assert.equal(missingAttempt.status, 404);
+      assert.deepEqual(readdirSync(f.out), [], '两种拒绝都不得留下产物');
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('BK-01/⑤：目标 zip 已存在 → 409，绝不就地覆盖既有文件', async () => {
+  const f = preRestoreFixture();
+  try {
+    const route = routeOf(envWithPreRestore(f.root));
+    await withServer(route, async (base) => {
+      const body = JSON.stringify({ snapshotId: 'snap-a', attempt: '20261005-101010-123', outputDir: f.out });
+      const first = await fetch(base + '/pre-restore/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+      assert.equal(first.status, 200);
+      const zipPath = (await first.json() as { zipPath: string }).zipPath;
+      writeFileSync(zipPath, 'user-owned-bytes');
+      const second = await fetch(base + '/pre-restore/export', { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+      assert.equal(second.status, 409);
+      assert.equal(readFileSync(zipPath, 'utf8'), 'user-owned-bytes', '已存在的目标文件必须原样保留');
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('BK-01/⑥：导出目录落在 attempt 目录内 → 400，禁止往源目录里写', async () => {
+  const f = preRestoreFixture();
+  try {
+    const src = join(f.root, 'snap-a', 'pre-restore', '20261005-101010-123');
+    const route = routeOf(envWithPreRestore(f.root));
+    await withServer(route, async (base) => {
+      const res = await fetch(base + '/pre-restore/export', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ snapshotId: 'snap-a', attempt: '20261005-101010-123', outputDir: src }),
+      });
+      assert.equal(res.status, 400);
+      assert.deepEqual(readdirSync(src).sort(), ['0001-settings.yaml', '0002-sessions_x.jsonl'], '源目录里一个字节都不许新增');
+    });
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('BK-01/⑦：快照根本身读不动 → 200 + readOnly + unreadable，不假装「没有反悔副本」', async () => {
+  const f = preRestoreFixture();
+  try {
+    // 指向一个不存在的根：readdir 失败 ⇒ 必须如实外露原因（"没有" 与 "读不到" 不能混为一谈）
+    const route = routeOf(envWithPreRestore(join(f.root, 'no-such-root')));
+    await withServer(route, async (base) => {
+      const res = await fetch(base + '/pre-restore');
+      assert.equal(res.status, 200, '读不动是「说不清」，不是 500');
+      const body = await res.json() as { readOnly?: boolean; snapshots?: unknown[]; unreadable?: unknown };
+      assert.equal(body.readOnly, true);
+      assert.deepEqual(body.snapshots, []);
+      assert.notEqual(body.unreadable, null, '读不动必须外露，不能返回空清单冒充「没有」');
+    });
+  } finally {
+    f.cleanup();
+  }
 });

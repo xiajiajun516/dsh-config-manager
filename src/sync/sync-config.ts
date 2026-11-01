@@ -169,11 +169,25 @@ function parseV2WebDavNamespace(ns: unknown): WebDavConfig | null {
 }
 
 /**
+ * 已落盘 repoUrl 的读取侧校验（SEC-01）：与写入侧同一份 validateRepoUrl。
+ * 不合法 → 记一条明确 issue 并让调用方丢弃该配置；绝不把可疑地址继续交给凭据注入与 git 子进程。
+ */
+function acceptPersistedRepoUrl(repoUrl: string, issues?: SyncConfigIssue[]): boolean {
+  const err = validateRepoUrl(repoUrl);
+  if (err === null) return true;
+  issues?.push({ code: 'repo-url-invalid', channel: 'git', message: err });
+  return false;
+}
+
+/**
  * 读取同步通道配置；文件不存在/损坏/不支持 schema → null（视为未配置，UI 显示空表单）。
  * 兼容旧文件：缺 schemaVersion 字段视为 v1（git 通道）。
  * 恒返回 schemaVersion=2 的规范形态（v1 读取时归一为 git）。
+ *
+ * `issues` 可选：传数组时，被丢弃的 git repoUrl（白名单校验不通过）以结构化成因追加进去，
+ * 供 UI/日志如实呈现（不静默吞掉）。
  */
-export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
+export async function readSyncConfig(dir: string, issues?: SyncConfigIssue[]): Promise<SyncConfig | null> {
   const file = path.join(dir, SYNC_CONFIG_FILE);
   let raw: string;
   try {
@@ -200,6 +214,7 @@ export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
   if (ver === 1) {
     const git = parseV1Git(obj);
     if (git === null) return null;
+    if (!acceptPersistedRepoUrl(git.repoUrl, issues)) return null;
     return { schemaVersion: 2, transport: 'git', git };
   }
 
@@ -210,6 +225,7 @@ export async function readSyncConfig(dir: string): Promise<SyncConfig | null> {
   if (transport === 'git') {
     const git = parseV2GitNamespace(obj['git']);
     if (git === null) return null;
+    if (!acceptPersistedRepoUrl(git.repoUrl, issues)) return null;
     return { schemaVersion: 2, transport: 'git', git };
   }
   if (transport === 'webdav') {
@@ -264,9 +280,14 @@ function readBothNamespaces(file: string): Promise<{ git?: GitConfig; webdav?: W
  * 读取完整的双命名空间配置（供 status 路由回填另一通道的 repoUrl/url）。
  * 文件不存在/损坏/无任何通道配置 → null（视为未配置）。
  */
-export async function readFullSyncConfig(dir: string): Promise<FullSyncConfig | null> {
+export async function readFullSyncConfig(dir: string, issues?: SyncConfigIssue[]): Promise<FullSyncConfig | null> {
   const file = path.join(dir, SYNC_CONFIG_FILE)
   const both = await readBothNamespaces(file)
+  // SEC-01/03 读侧：已落盘的 git repoUrl 过同一份白名单校验；不合法就当作没配 git 通道
+  // （自动同步/凭据注入都从这里取通道配置，绝不能让可疑地址继续往下走）
+  if (both.git !== undefined && !acceptPersistedRepoUrl(both.git.repoUrl, issues)) {
+    delete both.git
+  }
   // 云端点通道的配置不在 sync-config.json（见 sync-cloud-config.json）；这里一并对齐成完整视图
   const s3 = await readS3ChannelConfig(dir)
   const gist = await readGistChannelConfig(dir)
@@ -296,8 +317,12 @@ export async function readFullSyncConfig(dir: string): Promise<FullSyncConfig | 
  * 读取指定通道的同步通道配置（供自动同步调度器按通道运行）。
  * 从完整双命名空间配置取对应通道构造可辨识联合 SyncConfig；该通道未配置 → null。
  */
-export async function readSyncConfigFor(dir: string, channel: SyncTransportType): Promise<SyncConfig | null> {
-  const full = await readFullSyncConfig(dir);
+export async function readSyncConfigFor(
+  dir: string,
+  channel: SyncTransportType,
+  issues?: SyncConfigIssue[],
+): Promise<SyncConfig | null> {
+  const full = await readFullSyncConfig(dir, issues);
   if (full === null) return null;
   switch (channel) {
     case 'git':
@@ -430,10 +455,135 @@ export async function clearSyncChannel(dir: string, channel: SyncTransportType):
   return { removed: true, hasRemaining: true, transport };
 }
 
+/** repoUrl 形态：网络地址（http/https/ssh，含 scp 式）或本机路径 */
+export type RepoUrlKind = 'http' | 'https' | 'ssh' | 'local';
+
+/**
+ * 已落盘 repoUrl 校验失败的**结构化**结果（SEC-01 读侧）。
+ * 读取侧不能只是返回 null：调用方要能如实告诉用户「你的配置被丢弃了，原因是地址不合法」。
+ */
+export interface SyncConfigIssue {
+  code: 'repo-url-invalid';
+  channel: SyncTransportType;
+  message: string;
+}
+
+/**
+ * repoUrl 形态分类；null = 不认识的形态。
+ *
+ * 为什么要分类而不是只做正则：git 对同一个「地址」支持 http(s)、ssh、scp 式与本机路径，
+ * 而这三类的安全含义完全不同（网络地址要防 SSRF，本机路径要防 argv 注入）。先判形态，
+ * 再按形态分别收紧，比一堆互相打架的正则清楚。
+ */
+export function classifyRepoUrl(repoUrl: string): { kind: RepoUrlKind; host: string } | null {
+  const url = repoUrl.trim();
+  if (url === '' || /\s/.test(url)) return null;
+  // SEC-12：以 '-' 开头的「地址」会被 git 当成选项（--upload-pack=… / -c core.pager=…）
+  if (url.startsWith('-')) return null;
+  // 'ext::sh -c …' 一类命令协议（SCM 协议语法里 scheme 与地址之间是 '::'）
+  if (url.includes('::')) return null;
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(url);
+  if (scheme !== null) {
+    const name = scheme[1]!.toLowerCase();
+    if (name !== 'http' && name !== 'https' && name !== 'ssh') return null;
+    // 'https:///r.git' 这类空 authority 会被 URL 解析器「跳过斜杠」后当成主机 r.git —— 必须先拦
+    const rest = url.slice(scheme[0].length);
+    if (rest === '' || rest.startsWith('/') || rest.startsWith('\\')) return null;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return null;
+    }
+    if (parsed.hostname === '') return null;
+    return { kind: name, host: parsed.hostname };
+  }
+  // scp 式（git@github.com:user/repo.git）：只有 user@host:path 才算网络地址
+  const scp = /^[^\s/@:]+@([^\s/:]+):(.+)$/.exec(url);
+  if (scp !== null) return { kind: 'ssh', host: scp[1]! };
+  // 其余按本机路径处理（相对 ../bare、绝对 /home/u/r.git、盘符 D:/repos/bare）
+  return { kind: 'local', host: '' };
+}
+
+/** 四段点分且每段 0-255 → IPv4 字面量；否则 null（域名里的数字段不算 IP） */
+function parseIpv4(host: string): [number, number, number, number] | null {
+  const parts = host.split('.');
+  if (parts.length !== 4) return null;
+  const nums: number[] = [];
+  for (const part of parts) {
+    if (!/^\d{1,3}$/.test(part)) return null;
+    const n = Number(part);
+    if (n > 255) return null;
+    nums.push(n);
+  }
+  return [nums[0]!, nums[1]!, nums[2]!, nums[3]!];
+}
+
+/**
+ * 环回 / 私网 / 链路本地 / 未指定地址（含云元数据 169.254.169.254）判定。
+ * SEC-03：这类地址让「客户端」去访问内网或本机端口，等于给 SSRF 开一扇门。
+ *
+ * **已知行为变更（有意，非副作用）**：SEC-02/03 之前 `https://192.168.1.10/…`、`http://127.0.0.1:3000/…`、
+ * `http://nas.local/…` 这类地址可以被接受。收紧后一律拒绝 —— 代价是「拿家里 NAS / 局域网 git 服务器
+ * 当同步目标」这条路走不通，收益是「包里的 repoUrl 无法把家目录配置推给内网监听者或云元数据端点」。
+ * 取舍判据：本插件的同步目标是「用户自己的远端仓库」，公网 http(s)/ssh 已覆盖该用途；本机目录仓库
+ * 仍走 `local` 分支（不由本函数判定）。真要支持内网目标，应做成显式开关 + 用户逐目标确认，
+ * 不能靠「地址字符串看起来像内网就放行」——那正是攻击者可控的判据。
+ */
+export function isPrivateRepoHost(host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '');
+  if (h === '') return true;
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  const v4 = parseIpv4(h);
+  if (v4 !== null) {
+    const [a, b] = v4;
+    return a === 0 || a === 127 || a === 10
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || (a === 169 && b === 254);
+  }
+  if (!h.includes(':')) return false;
+  if (h === '::1' || h === '::') return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(h)) return true; // fc00::/7 唯一本地
+  if (/^fe[89ab][0-9a-f]?:/.test(h)) return true; // fe80::/10 链路本地
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
+  if (mapped !== null) return isPrivateRepoHost(mapped[1]!);
+  return false;
+}
+
+/**
+ * 文案里回显地址用：剥掉 userinfo（token 可能就藏在这一段），host/path 原样保留。
+ *
+ * 为什么不整串换成 `[REPO_URL]` 占位符：这里拒绝的是**用户自己刚填的**地址，他需要认出
+ * 「被拒的是哪一个」才能改；剥掉 `user:pass@` 之后剩下的部分正是修复所需的定位信息。
+ * 为什么解析失败也要剥：`https://user:tok@` 这类半截地址 `new URL` 会抛，但前缀照样是凭据。
+ */
+export function sanitizeRepoUrlForMessage(url: string): string {
+  const raw = url.trim();
+  try {
+    const parsed = new URL(raw);
+    if (parsed.username === '' && parsed.password === '') return raw;
+    parsed.username = '';
+    parsed.password = '';
+    return parsed.toString();
+  } catch {
+    // 只有「残缺的带 scheme 地址」（`https://user:tok@`，`new URL` 会抛但前缀就是凭据）需要剥。
+    // 无 scheme 的 scp 式（`git@host:path`）里 `git` 是 ssh 登录名、不是凭据 → 原样返回，
+    // 免得用户看到一条认不出是哪个远端的报错。
+    if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(raw)) return raw;
+    return raw.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/@\s]*@/, (_m: string, scheme?: string) => scheme ?? '');
+  }
+}
+
 /**
  * 仓库地址合法性校验（返回错误消息；null = 合法）。
- * 安全约束：token 永不拼入 repoUrl —— http(s) 地址带 userinfo（username[:password]@）直接拒绝，
- * 引导用户把 token 放凭据字段（DSH credentials），避免 token 经 URL 泄漏进 git 历史/日志。
+ *
+ * 白名单口径（SEC-02/03/12，写入侧与读取侧共用同一份实现）：
+ * - 只认 http(s)/ssh/scp 式网络地址与本机路径；file://、ext::、ftp://、git:// 一律拒绝；
+ * - 整串以 '-' 开头拒绝（git argv 位置参数以 '-' 开头会被当选项，可执行任意命令）；
+ * - 网络地址拒绝环回/私网/链路本地主机（SSRF）—— 文案单独一条（sync.configPrivateHost），
+ *   不能复用「无法解析」：用户看到「解析不了」只会反复改写法，实际原因是地址指向内网；
+ * - 带 scheme 的地址一律拒绝 userinfo（username[:password]@）—— token 只许放凭据字段。
  */
 export function validateRepoUrl(repoUrl: string, msg: MsgFunc = zhMsg): string | null {
   if (typeof repoUrl !== 'string' || repoUrl.trim() === '') {
@@ -443,14 +593,34 @@ export function validateRepoUrl(repoUrl: string, msg: MsgFunc = zhMsg): string |
   if (/\s/.test(url)) {
     return msg('sync.configWhitespace');
   }
-  if (/^https?:\/\//i.test(url)) {
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      return msg('sync.configUnparseable', { url });
-    }
-    if (parsed.username !== '' || parsed.password !== '') {
+  // 回显一律脱敏：错误文案会进日志、进接口响应、进 issue 截图
+  const echo = sanitizeRepoUrlForMessage(url);
+  const shape = classifyRepoUrl(url);
+  if (shape === null) {
+    return msg('sync.configUnparseable', { url: echo });
+  }
+  if (shape.kind === 'local') return null;
+  if (isPrivateRepoHost(shape.host)) {
+    return msg('sync.configPrivateHost', { url: echo });
+  }
+  // userinfo 检查与 scheme 无关（RV1-F7）：原实现只在 http/https 分支内查，于是
+  // `ssh://user:tok@host/r.git` 能过白名单，token 照样进 argv 与 sync-config.json。
+  // 口径（按「这一段是不是凭据」区分，而不是按 scheme 区分）：
+  // - password 位：任何带 scheme 的地址都拒 —— 那是可粘贴的 secret；
+  // - http/https 的 username：Basic 认证的用户名与口令等同，一并拒（保持既有行为）；
+  // - ssh 的 username：就是 ssh 登录名（`ssh://git@host`、`ssh://deploy@host` 是标准写法），
+  //   ssh 认证只认密钥/agent，用户名不具凭据效力，因此放行 —— 拒掉会杀掉合法用法。
+  // scp 式（git@host:path）无 scheme、`new URL` 解析不了，本就不进这条判定。
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = null;
+  }
+  if (parsed !== null) {
+    const hasPassword = parsed.password !== '';
+    const hasBasicUser = parsed.username !== '' && (shape.kind === 'http' || shape.kind === 'https');
+    if (hasPassword || hasBasicUser) {
       return msg('sync.configUserinfo');
     }
   }

@@ -18,6 +18,9 @@
  *    本次不实现（保留信息可见，不代用户删数据）。
  */
 import { sha256Hex } from '../utils/hashing.ts';
+import { isEncryptedSections } from './transport.ts';
+import type { SectionData, SectionId } from '../schema/types.ts';
+import type { SyncSnapshotMeta, SyncTransport } from './transport.ts';
 
 /** 会话单元 id 前缀（与 SessionsAdapter.unitIdOf 同口径：`sessions:<projectKey>/<sessionId>`）。 */
 export const SESSION_UNIT_PREFIX = 'sessions:';
@@ -121,3 +124,90 @@ export function sessionUnitIdsOfSection(section: unknown): string[] {
 export function unitSetFingerprint(units: readonly string[]): string {
   return sha256Hex([...units].sort().join('\n'));
 }
+
+/* ---------------- SYN-02：墓碑跨设备继承（远端 → 本机 → 下一份快照） ---------------- */
+
+/**
+ * 一次远端 list() 的读取结果。
+ *
+ * `metas` 为空**且**无 `reason` 才代表「远端确实为空」；有 reason = 读不到（按「看不到远端」
+ * 处理，调用方告警后继续，绝不把它当成「远端没东西」而误判）。
+ */
+export interface RemoteSnapshotIndex {
+  metas: SyncSnapshotMeta[];
+  reason?: string;
+}
+
+/** 读一次远端快照索引（只读、零写入）。push 的「是否被推进」判定与墓碑继承共用这一份。 */
+export async function listRemoteSnapshotIndex(transport: Pick<SyncTransport, 'list'>): Promise<RemoteSnapshotIndex> {
+  try {
+    return { metas: await transport.list() };
+  } catch (error) {
+    return { metas: [], reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * 远端最新快照携带的会话删除墓碑（去重、去空、保序）。
+ *
+ * 只取**最新一份**：manifest.deletedSessions 是累积清单（见文件头），旧快照的墓碑必然被后续
+ * 快照包含；把整段历史并起来只会让「已经在别处撤销的墓碑」复活。
+ * 远端为空 / 老快照缺字段 → 空数组（行为与改造前逐字一致：不继承任何墓碑）。
+ */
+export function remoteTombstonesOf(metas: readonly SyncSnapshotMeta[]): string[] {
+  const latest = metas.length === 0 ? undefined : metas[metas.length - 1];
+  const list = latest?.manifest.deletedSessions ?? [];
+  return [...new Set(list.filter((id) => typeof id === 'string' && id !== ''))];
+}
+
+/** 一次 push 的会话簿记结果（manifest / baseline / 告警共用这一份）。 */
+export interface SessionBookkeepingResult {
+  /** false = 本次没有可用的会话枚举（没推 sessions / 适配器不支持 / 枚举失败或为空） */
+  tracked: boolean;
+  sessionUnits: string[];
+  tombstones: string[];
+  /** 本次**新**发现的删除（之前推过、这次本机没了） */
+  deletedNow: string[];
+  /** 从远端继承来的墓碑条数（本机此前没有、且本机也没有实体） */
+  inherited: number;
+}
+
+/**
+ * 墓碑集合的唯一计算点（本机删除 + 远端继承合进同一条累积链）。
+ *
+ * 去重、FIFO 上限、以及「本机还有实体 ⇒ 撤销墓碑」这条不变量对继承来的墓碑同样适用：
+ * 另一台设备删了、本机仍有 → 用户在本机显然没删，绝不把它记成本机删除。
+ */
+export function planSessionBookkeeping(args: {
+  previousUnits: readonly string[];
+  previousTombstones: readonly string[];
+  localUnits: readonly string[];
+  exportedSessions: SectionData | undefined;
+  remoteTombstones: readonly string[];
+}): Omit<SessionBookkeepingResult, 'tracked'> {
+  const known = args.previousTombstones;
+  const knownSet = new Set(known);
+  const localSet = new Set(args.localUnits);
+  const inherited = args.remoteTombstones.filter((id) => !knownSet.has(id) && !localSet.has(id)).length;
+  const { tombstones, deletedNow } = nextSessionTombstones({
+    previousUnits: [...args.previousUnits],
+    localUnits: [...args.localUnits],
+    previousTombstones: [...known, ...args.remoteTombstones],
+  });
+  return { sessionUnits: sessionUnitIdsOfSection(args.exportedSessions), tombstones, deletedNow, inherited };
+}
+
+/** 按墓碑剔除**将要导入**的会话（旧快照不得复活已删除的对话）。只动载荷，不动本机数据。 */
+export function stripTombstonedSessionsInPlace<P extends {
+  manifest: { deletedSessions?: readonly string[] };
+  sections: unknown;
+}>(snapshot: P): string[] {
+  const tombstones = snapshot.manifest.deletedSessions ?? [];
+  if (tombstones.length === 0 || isEncryptedSections(snapshot.sections)) return [];
+  const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
+  const stripped = stripTombstonedUnits(plain['sessions'], tombstones);
+  if (stripped.removed.length === 0) return [];
+  plain['sessions'] = stripped.section as SectionData;
+  return stripped.removed;
+}
+

@@ -2094,6 +2094,113 @@ test('P1-5: pull 按远端墓碑剔除已删除的会话（旧快照不复活）
   }
 });
 
+test('SYN-02: 远端墓碑被本机继承 → 下一次 push 仍带它（删除跨设备传播，旧快照不复活）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-tombstone-inherit-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\bob');
+    seedSource(ctx);
+    // 本机只有 b；a 是**另一台设备**删掉的 —— 本机从来没推过 a，靠 previousUnits 推断不出这条删除
+    await ctx.fs.writeFile('sessions/--p--/b/session.jsonl.zstd', Buffer.from('b', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/b/session.jsonl.zstd', 2000);
+    const transport = new MemSyncTransport();
+    const remote: SyncSnapshot = {
+      id: 'remote-with-tombstones',
+      createdAt: '2026-08-15T10:00:00.000Z',
+      manifest: {
+        schemaVersion: 1, dshVersion: '1.2.3', platform: 'linux',
+        sectionIds: ['sessions'], containsSecrets: false,
+        // 重复项：远端清单本身可能有重复，继承时必须去重保序
+        deletedSessions: ['sessions:--p--/a', 'sessions:--p--/a', 'sessions:--q--/legacy'],
+      },
+      sections: { sessions: { version: 1, files: [] } },
+    };
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    // 基线停在远端最新 → 本次 push 不被「远端已推进」拦下（继承墓碑与是否 force 无关）
+    await saveSyncState(tmp, {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '2026-08-15T10:00:00.000Z', sections: {},
+      lastSnapshotId: remote.id, ancestorId: '',
+      sessionUnits: ['sessions:--p--/b'],
+      deletedSessions: [],
+    });
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+      optInSections: ['sessions'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    const report = await engine.push({ snapshotId: 'sync-inherit', sections: ['sessions'], sessions: {} });
+    assert.equal(report.ok, true);
+    assert.deepEqual(
+      transport.snapshots.get('sync-inherit')!.manifest.deletedSessions,
+      ['sessions:--p--/a', 'sessions:--q--/legacy'],
+      '远端墓碑必须被继承进新快照（否则第三台设备会复活已删会话）',
+    );
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(
+      state.deletedSessions,
+      ['sessions:--p--/a', 'sessions:--q--/legacy'],
+      '继承来的墓碑必须进 sync-state（下轮继续传播）',
+    );
+    assert.ok(report.warnings.length > 0, '继承墓碑必须可见（绝不静默）: 无任何告警');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('SYN-02: 远端墓碑命中本机仍有实体的会话 → 继承时撤销墓碑（有实体 = 没删，绝不记成本机删除）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-tombstone-revoke-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\bob');
+    seedSource(ctx);
+    // a 在本机**存在**（从别处恢复/未删）→ 远端那条墓碑必须被撤销，不能继续传播
+    await ctx.fs.writeFile('sessions/--p--/a/session.jsonl.zstd', Buffer.from('a', 'utf8'));
+    ctx.fs.setMtime('sessions/--p--/a/session.jsonl.zstd', 1000);
+    const transport = new MemSyncTransport();
+    const remote: SyncSnapshot = {
+      id: 'remote-stale-tombstone',
+      createdAt: '2026-08-15T10:00:00.000Z',
+      manifest: {
+        schemaVersion: 1, dshVersion: '1.2.3', platform: 'linux',
+        sectionIds: ['sessions'], containsSecrets: false,
+        deletedSessions: ['sessions:--p--/a'],
+      },
+      sections: { sessions: { version: 1, files: [] } },
+    };
+    transport.snapshots.set(remote.id, remote);
+    transport.metas.push(computeSnapshotMeta(remote));
+    await saveSyncState(tmp, {
+      schemaVersion: SYNC_STATE_SCHEMA_VERSION,
+      lastSyncAt: '2026-08-15T10:00:00.000Z', sections: {},
+      lastSnapshotId: remote.id, ancestorId: '',
+      sessionUnits: ['sessions:--p--/a'],
+      deletedSessions: [],
+    });
+    const adapters = createAdapters({ namespaces: NS, includeSessions: true });
+    const engine = new SyncEngine({
+      ctx, transport, stateDir: tmp, adapters,
+      importer: new Importer({ ctx, adapters, snapshotStore: new MemSnapshotStore() }),
+      now: () => new Date('2026-08-16T12:00:00.000Z'),
+      optInSections: ['sessions'],
+    } as ConstructorParameters<typeof SyncEngine>[0]);
+
+    const report = await engine.push({ snapshotId: 'sync-revoked', sections: ['sessions'], sessions: {} });
+    assert.equal(report.ok, true);
+    assert.deepEqual(
+      transport.snapshots.get('sync-revoked')!.manifest.deletedSessions ?? [],
+      [],
+      '本机还有实体 → 墓碑撤销，绝不把「本机有数据」记成删除',
+    );
+    const state = await loadSyncState(tmp);
+    assert.deepEqual(state.deletedSessions ?? [], [], 'sync-state 里也不该留下这条墓碑');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
 test('push: 快照 manifest 携带导出机 sourceHome（跨机重定基的数据源）', async () => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-sourcehome-'));
   try {
@@ -2763,4 +2870,135 @@ test('applyMergeResolutions: 远端无快照 → 空报告（ok:true，不构造
     await fs.rm(tmp, { recursive: true, force: true });
   }
 });
+
+// ─── SYN-04b：GC 放弃（lastGcSkip）必须冒泡成 push 报告里的一条 warning ────────────────
+//
+// 背景：SYN-04 修掉了「引用 404 就当无引用继续删」的静默丢数据路径 —— 现在 webdav/s3 通道会
+// **放弃本轮 blob GC** 并记下放弃码（lastGcSkip：gc-skip-reference-missing / -unreadable /
+// -snapshot-unparsable）。但通道层没有 logger、delete() 又把 GC 异常吃掉，引擎侧此前零引用
+// ⇒ 用户看到的是「push 成功、裁剪成功」，实际这一轮 blob 回收根本没跑（孤儿文件会一直堆）。
+// 这里钉三件事：① 有放弃码 ⇒ warnings 里出现该码；② 同一轮多次 delete 只报一次；
+// ③ 能力探测：通道没有该字段 / 字段不是非空字符串 ⇒ 当没有，绝不凭空造告警。
+
+/** 给内存通道挂一个「GC 放弃码」出口：形态与 webdav/s3 transport 的 lastGcSkip 一致（只读字段）。 */
+function attachGcSkip(transport: MemSyncTransport, initial: unknown): { code: unknown } {
+  const box = { code: initial };
+  Object.defineProperty(transport, 'lastGcSkip', { get: () => box.code, configurable: true });
+  return box;
+}
+
+test('SYN-04b/①：GC 放弃 ⇒ push 的 warnings 含放弃码，且同一轮只报一次', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-gcskip-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 13); // 最旧 4 个会被裁剪 ⇒ 4 次 delete
+    const box = attachGcSkip(transport, null);
+    const origDelete = transport.delete.bind(transport);
+    // 每次删除都触发一轮 GC，而这一轮的 GC 都放弃（真实场景：引用快照 404 / 读不出）
+    transport.delete = async (id: string) => {
+      box.code = 'gc-skip-reference-missing';
+      return origDelete(id);
+    };
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true, 'GC 放弃不影响 push 主流程');
+    assert.equal(transport.calls.filter((c) => c === 'delete').length, 4, '四次裁剪删除都发生了');
+    const hits = report.warnings.filter((w) => w.includes('gc-skip-reference-missing'));
+    assert.equal(hits.length, 1, '同一轮只报一次（否则每删一个快照就刷一条同义告警）：' + JSON.stringify(report.warnings));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('SYN-04b/②：通道没有 lastGcSkip 字段 ⇒ 不产生任何 GC 告警（能力探测，字段不存在当没有）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-gcskip-absent-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport(); // 裸 Mem 通道：无该字段
+    seedRemoteSnapshots(transport, 13);
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const report = await engine.push({ snapshotId: 'sync-new' });
+    assert.equal(report.ok, true);
+    assert.equal(transport.calls.filter((c) => c === 'delete').length, 4);
+    assert.ok(!report.warnings.some((w) => w.includes('gc-skip-')), '无放弃码就不得凭空告警：' + JSON.stringify(report.warnings));
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('SYN-04b/③：lastGcSkip 不是非空字符串（null / 数字 / 空串）⇒ 一律当没有', async () => {
+  for (const bogus of [null, 42, '']) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-gcskip-bogus-'));
+    try {
+      const ctx = makeContext('win32', 'C:\\Users\\alice');
+      seedSource(ctx);
+      const transport = new MemSyncTransport();
+      seedRemoteSnapshots(transport, 13);
+      attachGcSkip(transport, bogus);
+      const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+      const report = await engine.push({ snapshotId: 'sync-new' });
+      assert.equal(report.ok, true);
+      assert.ok(
+        !report.warnings.some((w) => w.includes('gc-skip-')),
+        '非法放弃码（' + JSON.stringify(bogus) + '）不得变成告警：' + JSON.stringify(report.warnings),
+      );
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }
+});
+
+// ─── F3：**手动**删快照撞上 GC 放弃时不得静默（RV1 复核：deleteSnapshot 此前 Promise<void>） ───
+//
+// 与上面 SYN-04b 的差别在触发路径：push 的 warnings 只覆盖「保留策略裁剪」那一轮；用户在产品库里
+// 显式点删除走的是 SyncEngine.deleteSnapshot → transport.delete → gcBlobStore，通道同样会放弃本轮
+// 回收，但旧实现把放弃码丢在原地 ⇒ 孤儿 blob 无人可见地累积。这里钉：放弃要有 warnings，没有就空。
+
+test('F3/①：手动删快照 + 通道放弃本轮 GC ⇒ 返回体带该放弃码的 warning（快照仍按意图删除）', async () => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-del-gcskip-'));
+  try {
+    const ctx = makeContext('win32', 'C:\\Users\\alice');
+    seedSource(ctx);
+    const transport = new MemSyncTransport();
+    seedRemoteSnapshots(transport, 2);
+    attachGcSkip(transport, 'gc-skip-reference-missing');
+    const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+    const result = await engine.deleteSnapshot('remote-01');
+
+    assert.deepEqual(transport.calls.filter((c) => c === 'delete'), ['delete'], '删除只发生一次');
+    assert.ok(transport.metas.every((m) => m.id !== 'remote-01'), '快照本身已按用户意图删除');
+    assert.equal(result.warnings.length, 1, '放弃本轮 GC 必须给出恰好一条 warning：' + JSON.stringify(result.warnings));
+    assert.ok(result.warnings[0]!.includes('gc-skip-reference-missing'), 'warning 必须含放弃码明文（字典未补键也能 grep）');
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test('F3/②：手动删快照但没有放弃码（通道无该字段 / 非非空字符串）⇒ 零 warning', async () => {
+  for (const spec of ['absent', null, 42, ''] as const) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-engine-del-gcskip-none-'));
+    try {
+      const ctx = makeContext('win32', 'C:\\Users\\alice');
+      seedSource(ctx);
+      const transport = new MemSyncTransport();
+      seedRemoteSnapshots(transport, 1);
+      if (spec !== 'absent') attachGcSkip(transport, spec);
+      const engine = makeEngine({ ctx, transport, stateDir: tmp });
+
+      const result = await engine.deleteSnapshot('remote-01');
+      assert.deepEqual(result.warnings, [], '无放弃码（' + String(spec) + '）不得凭空造告警');
+      assert.ok(transport.metas.every((m) => m.id !== 'remote-01'), '删除照常生效');
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  }
+});
+
 

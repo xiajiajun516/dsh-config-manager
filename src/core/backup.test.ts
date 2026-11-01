@@ -29,7 +29,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { FileSnapshotStore, createSnapshot, normalizeDshVersion, resolveFileTarget, verifySnapshot } from './backup.ts';
+import {
+  FileSnapshotStore, PRE_RESTORE_KEEP_ATTEMPTS, PRE_RESTORE_KEEP_DAYS,
+  createSnapshot, normalizeDshVersion, resolveFileTarget, verifySnapshot,
+} from './backup.ts';
+import type { PrunePlan } from './backup.ts';
+import { existsSync } from 'node:fs';
 import { rollback } from './rollback.ts';
 import { makeContext, MemSnapshotStore } from '../adapters/test-helpers.ts';
 import type { ImportPlan, Snapshot, SnapshotStore } from './types.ts';
@@ -461,3 +466,136 @@ test('mcp 连接器：storages/mcp_connector.json 进快照为整文件条目，
   assert.deepEqual(report.restored, ['mcp:' + rel], '回滚必须报告真正被还原的那一条');
   assert.equal(new TextDecoder().decode(await ctx.fs.readFile(abs)), original);
 });
+
+/* ---------------- BK-05：prune 不得销毁反悔副本（pre-restore） ----------------
+ *
+ * 反悔副本 = 恢复链路在覆盖/删除前落的原文副本：<snapshotsDir>/<snapshotId>/pre-restore/<attempt>/（restore.ts:888）。
+ * 此前 prune 用 fs.rm(<snapshotsDir>/<id>, { recursive: true }) 整目录删 ⇒ 快照一被淘汰，用户最后一次
+ * 「反悔」的原文就跟着消失，而那份字节是**唯一**的（不在 blobs 里、不进同步、不进导出）。
+ * 现在的口径：快照本体照常回收，pre-restore 子树留下；它有自己的保留策略（数量 + 天数），
+ * 且删除前先把「要删什么」回调出去（onPrunePlan），不先删后报。
+ */
+
+/** 与 restore.ts 的 preRestoreStamp 同格式（本地时间 yyyyMMdd-HHmmss-SSS）。 */
+function stamp(date: Date): string {
+  const p = (n: number, width = 2): string => String(n).padStart(width, '0');
+  return p(date.getFullYear(), 4) + p(date.getMonth() + 1) + p(date.getDate())
+    + '-' + p(date.getHours()) + p(date.getMinutes()) + p(date.getSeconds())
+    + '-' + p(date.getMilliseconds(), 3);
+}
+
+async function plantPreRestore(
+  dir: string,
+  snapshotId: string,
+  attempt: string,
+  files: Record<string, string>,
+): Promise<string> {
+  const pre = path.join(dir, snapshotId, 'pre-restore', attempt);
+  await fs.mkdir(pre, { recursive: true });
+  for (const [name, body] of Object.entries(files)) await fs.writeFile(path.join(pre, name), body, 'utf8');
+  return pre;
+}
+
+test('BK-05/①：prune 淘汰旧快照时保留 pre-restore 反悔副本（原文逐字节还在），删什么先落计划', async (t) => {
+  const dir = await tmpDir(t, 'prune-prerestore');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  const plans: PrunePlan[] = [];
+  /** 计划回调里快照本体还在吗 —— 证明「先出清单，再删」而不是删完再编 */
+  let snapshotJsonAliveAtPlanTime: boolean | null = null;
+  const store = new FileSnapshotStore({
+    dir,
+    retentionPolicy: () => ({ keepLast: 1, keepMonthly: 0, keepYearly: 0 }),
+    onPrunePlan: (plan) => {
+      plans.push(plan);
+      if (plan.removeSnapshots.length > 0) {
+        snapshotJsonAliveAtPlanTime = existsSync(path.join(dir, plan.removeSnapshots[0]!, 'snapshot.json'));
+      }
+    },
+  });
+
+  const first = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+  const attempt = stamp(new Date());
+  const pre = await plantPreRestore(dir, first.id, attempt, { '0001-settings.yaml': 'old-settings' });
+  const second = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  // 快照本体照常回收（否则保留清理等于失效）
+  await assert.rejects(fs.readFile(path.join(dir, first.id, 'snapshot.json'), 'utf8'), '旧快照的 snapshot.json 必须删掉');
+  await assert.rejects(fs.stat(path.join(dir, first.id, 'blobs')), '旧快照的 blobs 必须回收');
+  // 反悔副本一字不差
+  assert.equal(await fs.readFile(path.join(pre, '0001-settings.yaml'), 'utf8'), 'old-settings', '反悔副本必须原样保留');
+  assert.equal(existsSync(path.join(dir, second.id, 'snapshot.json')), true);
+
+  const plan = plans.at(-1)!;
+  assert.deepEqual(plan.removeSnapshots, [first.id], '计划里必须有「要删哪个快照」');
+  assert.ok(plan.keepPreRestoreFor.includes(first.id), '因反悔副本而不整目录删的快照要如实列出：' + JSON.stringify(plan));
+  assert.ok(plan.paths.includes(first.id + '/snapshot.json'), '计划要含具体路径（审计「到底删了什么」）：' + JSON.stringify(plan.paths));
+  assert.equal(snapshotJsonAliveAtPlanTime, true, '计划必须在真正删除**之前**给出');
+});
+
+test('BK-05/②：反悔副本自有保留策略 —— 每次恢复一个 attempt，只留最新 5 个', async (t) => {
+  const dir = await tmpDir(t, 'prune-prerestore-count');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  const plans: PrunePlan[] = [];
+  const store = new FileSnapshotStore({ dir, onPrunePlan: (plan) => { plans.push(plan) } });
+  const snap = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  // 7 个 attempt（时间递增；每个 attempt 只装它那一次被覆盖的文件）
+  const base = Date.now() - 6 * 60 * 60 * 1000;
+  const names: string[] = [];
+  for (let i = 0; i < 7; i += 1) {
+    const name = stamp(new Date(base + i * 60 * 60 * 1000));
+    names.push(name);
+    await plantPreRestore(dir, snap.id, name, { '0001-settings.yaml': 'v' + i });
+  }
+  await store.pruneNow();
+
+  const left = (await fs.readdir(path.join(dir, snap.id, 'pre-restore'))).sort();
+  assert.deepEqual(left, names.slice(-PRE_RESTORE_KEEP_ATTEMPTS).sort(), '只留最新 ' + PRE_RESTORE_KEEP_ATTEMPTS + ' 个 attempt');
+  const plan = plans.at(-1)!;
+  const dropped = plan.dropPreRestore.map((d) => d.attempt).sort();
+  assert.deepEqual(dropped, names.slice(0, names.length - PRE_RESTORE_KEEP_ATTEMPTS).sort(), '被删的 attempt 必须逐条进计划');
+  assert.ok(plan.dropPreRestore.every((d) => d.reason === 'count'));
+  assert.ok(plan.dropPreRestore.every((d) => d.files === 1), '计划要带文件数（用户能看出删了多少）');
+  assert.equal(existsSync(path.join(dir, snap.id, 'snapshot.json')), true, '活着的快照本体绝不能被这轮清理碰到');
+});
+
+test('BK-05/③：反悔副本超过保留天数 → 删；近期的不动', async (t) => {
+  const dir = await tmpDir(t, 'prune-prerestore-age');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  const plans: PrunePlan[] = [];
+  const store = new FileSnapshotStore({ dir, onPrunePlan: (plan) => { plans.push(plan) } });
+  const snap = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  const oldAttempt = stamp(new Date(Date.now() - (PRE_RESTORE_KEEP_DAYS + 5) * 24 * 60 * 60 * 1000));
+  const freshAttempt = stamp(new Date(Date.now() - 60 * 60 * 1000));
+  await plantPreRestore(dir, snap.id, oldAttempt, { '0001-settings.yaml': 'ancient' });
+  await plantPreRestore(dir, snap.id, freshAttempt, { '0001-settings.yaml': 'fresh' });
+  await store.pruneNow();
+
+  const left = (await fs.readdir(path.join(dir, snap.id, 'pre-restore'))).sort();
+  assert.deepEqual(left, [freshAttempt], '超过 ' + PRE_RESTORE_KEEP_DAYS + ' 天的反悔副本该按天数淘汰');
+  assert.deepEqual(
+    plans.at(-1)!.dropPreRestore.map((d) => ({ attempt: d.attempt, reason: d.reason })),
+    [{ attempt: oldAttempt, reason: 'over-age' }],
+  );
+});
+
+test('BK-05/④：反悔副本全部过期后不留空壳目录（快照已不在 ⇒ 目录一起收掉）', async (t) => {
+  const dir = await tmpDir(t, 'prune-prerestore-shell');
+  const { ctx } = countingCtx();
+  await seedHostFiles(ctx);
+  const store = new FileSnapshotStore({
+    dir,
+    retentionPolicy: () => ({ keepLast: 1, keepMonthly: 0, keepYearly: 0 }),
+  });
+  const first = await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+  const oldAttempt = stamp(new Date(Date.now() - (PRE_RESTORE_KEEP_DAYS + 1) * 24 * 60 * 60 * 1000));
+  await plantPreRestore(dir, first.id, oldAttempt, { '0001-settings.yaml': 'ancient' });
+  await createSnapshot({ ctx, plan: emptyPlan(), sourceZip: 'unit.zip', store, adapters: [] });
+
+  assert.equal(existsSync(path.join(dir, first.id)), false, '快照没了 + 反悔副本也过期 ⇒ 不留空壳');
+});
+

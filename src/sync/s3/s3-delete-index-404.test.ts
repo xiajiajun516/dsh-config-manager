@@ -11,7 +11,9 @@
  *   ② index 读操作抛错  → 显式失败（F2 语义，绝不回落成空索引）；
  *   ③ index = 200 + []  → 索引权威地声明集合为空，保持既有语义（既有用例
  *      「blob GC：删除最后一份快照后回收超保护窗的无人引用 blob」钉住该路径）；
- *   ④ GC 遇到「索引有条目但快照文件读不出来（非 404）」→ 本轮放弃（读不出来 ≠ 没引用）。
+ *   ④ GC 遇到「索引有条目但快照文件读不出来（非 404）」→ 本轮放弃（读不出来 ≠ 没引用）；
+ *   ⑤ SYN-04（P1）：与 WebDAV 同型 —— **404 也放弃本轮**（孤儿条目 / 假 404 拿不到内容就无法证明
+ *      「没人引用」），本轮 0 删除并记下放弃码（`lastGcSkip`，机器可判定）。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -167,4 +169,27 @@ test('N1⑤：索引有条目但该快照文件读不出来（非 404）→ 本�
   await t.delete('sync-aaa-111');
   assert.equal(remote.deletedBlobs.length, 0, '读不出 sync-ccc-333 就无法证明它没引用 blob → 本轮不得删任何 blob');
   assert.equal(remote.objects.has(PREFIX + '/blobs/' + BLOB_HASH), true);
+});
+
+test('N1⑥（SYN-04）：索引有条目但该快照文件真 404 → 本轮放弃 GC（404 也证明不了「没引用」）+ 记放弃码', async () => {
+  const remote = makeRemote({
+    index: JSON.stringify([meta('sync-aaa-111', '1'), meta('sync-ccc-333', '3')]),
+    snapshotFiles: { 'sync-aaa-111': snapOf('sync-aaa-111', PLAIN) },
+  });
+  const t = new S3Transport(makeOptions(remote));
+  await t.delete('sync-aaa-111');
+  assert.equal(remote.deletedBlobs.length, 0, '404 与「读不出来」同属「无法证明没有引用」→ 本轮 0 删除');
+  assert.equal(remote.objects.has(PREFIX + '/blobs/' + BLOB_HASH), true, '没有被证明无引用的 blob 必须保留');
+  assert.equal(t.lastGcSkip, 'gc-skip-reference-missing', '必须记下本轮放弃码（机器可判定，文案由上层按码翻译）');
+});
+
+test('N1⑦（SYN-04）：引用者 200 但内容坏掉 → 本轮放弃，放弃码 = snapshot-unparsable', async () => {
+  const remote = makeRemote({
+    index: JSON.stringify([meta('sync-aaa-111', '1'), meta('sync-ccc-333', '3')]),
+    snapshotFiles: { 'sync-aaa-111': snapOf('sync-aaa-111', PLAIN), 'sync-ccc-333': 'not-json' },
+  });
+  const t = new S3Transport(makeOptions(remote));
+  await t.delete('sync-aaa-111');
+  assert.equal(remote.deletedBlobs.length, 0, '解析不了 ⇒ 引用集不完整 ⇒ 本轮不得删任何 blob');
+  assert.equal(t.lastGcSkip, 'gc-skip-snapshot-unparsable');
 });

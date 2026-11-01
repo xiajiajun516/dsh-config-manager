@@ -7,9 +7,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 import {
   AutoSyncScheduler, intervalToMs, shouldTriggerStartupRun, buildAutoApplyPlan,
+  resolveConflictPushPolicy,
 } from './autosync-scheduler.ts';
 import { RunRegistry } from '../core/run-registry.ts';
 import { nullLogger, createLogger } from '../utils/logger.ts';
@@ -22,6 +26,7 @@ import type { SyncSnapshotMeta } from './transport.ts';
 import type { SectionId } from '../schema/types.ts';
 import type { SyncEngine } from './sync-engine.ts';
 import type { SyncConfig, SyncTransportType } from './sync-config.ts';
+import { SYNC_CONFIG_FILE } from './sync-config.ts';
 import { SYNC_CHANNELS } from './sync-config.ts';
 import { syncIsConfigured } from './autosync-scheduler.ts';
 
@@ -351,7 +356,7 @@ test('runOnce: merge 抛错 → failed，连续失败计数 +1', async () => {
   assert.ok(getEntries().some((e) => e.status === 'failed'), '写入失败历史');
 });
 
-test('issue #79 + conflictPolicy=local（缺省）：冲突只挡下行，本机版本强制推成新远端（partial，不谎报 success/failed）', async () => {
+test('SYN-05：缺省策略 = ask —— 冲突只挡下行，绝不 force 覆盖远端（首轮同样强制 ask）', async () => {
   const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 1 };
   const applyCalls: string[] = [];
   const pushCalls: Array<{ force?: boolean } | undefined> = [];
@@ -370,18 +375,79 @@ test('issue #79 + conflictPolicy=local（缺省）：冲突只挡下行，本机
   };
   const { scheduler, getConfig, getEntries } = makeScheduler({ cfg, engine, history: [] });
   const result = await scheduler.runOnce('git');
-  assert.equal(result.status, 'partial', '上行成功 + 下行被冲突挡下 → partial');
-  assert.equal(result.skipReason, 'conflict-kept-local', '本机已按策略覆盖远端，与「待人工裁决」区分开');
+  assert.equal(result.status, 'partial', '上行成功 + 下行待裁决 → partial');
+  assert.equal(result.skipReason, 'conflict', '缺省绝不宣称「本机已覆盖远端」');
   assert.deepEqual(result.conflictedSections, ['settings']);
   assert.equal(result.pushedSnapshotId, 'snap-up', '本机快照仍有上行出口（issue #79 主诉）');
   assert.equal(applyCalls.length, 0, '冲突绝不写本机配置');
   assert.equal(pushCalls.length, 1, '纯上行不被冲突连坐');
-  assert.equal(pushCalls[0]?.force, true, 'local 策略下必须带上 force，否则引擎会因「远端已推进」拒绝上传');
+  assert.equal(pushCalls[0]?.force, undefined, '缺省 ask 一律不得带 force（绝不覆盖远端最新）');
+  assert.equal(result.forced, undefined, '缺省就是 ask：不算「用户选择被推翻」，不标 forced');
   assert.equal(result.consecutiveFailures, 0, '冲突跳过不是失败 → 计数归零');
-  assert.equal(getConfig().lastRunSkipReason, 'conflict-kept-local', '跳过原因落到状态（界面按码取字典）');
+  assert.equal(getConfig().lastRunSkipReason, 'conflict', '跳过原因落到状态（界面按码取字典）');
   assert.equal(getConfig().lastRunSkipCount, 1);
-  assert.ok(getEntries().some((e) => e.status === 'partial' && e.skipReason === 'conflict-kept-local'), '写入 partial 历史');
+  assert.ok(getEntries().some((e) => e.status === 'partial' && e.skipReason === 'conflict'), '写入 partial 历史');
+
   assert.ok(getEntries().some((e) => e.pushedSnapshotId === 'snap-up'), '历史带上行快照 id');
+});
+
+test('SYN-05：显式 local + 首轮 → 降级 ask 且 forced=true（历史留痕）', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    conflictPolicy: 'local',
+  };
+  const pushCalls: Array<{ force?: boolean } | undefined> = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict']]),
+    push: async (opts?: { force?: boolean }) => {
+      pushCalls.push(opts);
+      return { ok: true, snapshotId: 'snap-up', sections: [] as never, warnings: [] };
+    },
+  };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(pushCalls[0]?.force, undefined, '首轮 = 高危时刻：显式 local 也不得 force');
+  assert.equal(result.skipReason, 'conflict');
+  assert.equal(result.forced, true, '用户选过 local 但被降级 → 必须标 forced');
+  const forcedEntries = getEntries().filter(
+    (e) => (e as AutosyncHistoryEntry & { forced?: boolean }).forced === true,
+  );
+  assert.equal(forcedEntries.length, 1, '历史同步留痕（界面能说清「这次没按你的设置走」）');
+});
+
+test('SYN-05：远端有新快照（非首轮）+ 显式 local → 仍强制 ask，不覆盖远端最新', async () => {
+  const cfg: AutosyncConfig = {
+    enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0,
+    conflictPolicy: 'local', lastRunAt: '2026-11-01T10:00:00.000Z',
+  };
+  const pushCalls: Array<{ force?: boolean } | undefined> = [];
+  const engine = {
+    hasNewRemoteSnapshot: async () => true,
+    hasLocalChanges: async () => true,
+    merge: async (): Promise<MergePlan> => makeMergePlan([['settings', 'conflict']]),
+    push: async (opts?: { force?: boolean }) => {
+      pushCalls.push(opts);
+      return { ok: true, snapshotId: 'snap-up', sections: [] as never, warnings: [] };
+    },
+  };
+  const { scheduler } = makeScheduler({ cfg, engine, history: [] });
+  const result = await scheduler.runOnce('git');
+  assert.equal(pushCalls[0]?.force, undefined, '远端有新快照 = 高危时刻，即使用户选过 local 也不得 force');
+  assert.equal(result.skipReason, 'conflict');
+  assert.equal(result.forced, true, '强制降级必须可见');
+});
+
+test('SYN-05：非首轮 + 远端无新快照 + 显式 local → 尊重用户选择（force 语义保留）', () => {
+  // 冲突只可能随「远端有新快照」出现，因此调度层实际上不会走到 force；
+  // 这条断言钉住判定函数本身：显式 local 且非高危时刻 → force 仍为 true（策略没被单方面删除）。
+  const decision = resolveConflictPushPolicy({
+    configuredPolicy: 'local', firstRun: false, remoteNew: false, conflicted: 1,
+  });
+  assert.equal(decision.policy, 'local');
+  assert.equal(decision.force, true);
+  assert.equal(decision.forcedAsk, false);
 });
 
 test('issue #79 + conflictPolicy=ask：冲突只挡下行，绝不强推覆盖远端（partial + skipped 码 conflict）', async () => {
@@ -994,3 +1060,64 @@ test('运行期多通道触发：每个通道各自补跑（单槽实现会让�
   await tick();
 });
 
+
+/* ---------------- SEC-03 读侧可见性：被白名单拒绝的 repoUrl ≠ 「真的没配」 ---------------- */
+
+/**
+ * 审计 SEC-01/02/03：已落盘的 repoUrl 过不了白名单就会被 readFullSyncConfig 丢掉。
+ * 丢掉本身是对的（绝不把可疑地址交给凭据注入与 git 子进程），但自动同步若只说
+ * 'unconfigured'，用户看到的是「你没配」，实际是「你配过、被拒了」—— 永远查不出原因。
+ * 所以未配置分支必须带上成因字段（配置跳过 + 历史各一份），且真没配时不产生幻影成因。
+ */
+
+test('SEC-03：已存 repoUrl 被白名单拒绝 → skipped(unconfigured) 但带 configIssue（结果 + 历史）', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-autosync-config-issue-'));
+  try {
+    await fs.writeFile(
+      path.join(dir, SYNC_CONFIG_FILE),
+      JSON.stringify({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://192.168.1.10/owner/repo.git' } }),
+      'utf8',
+    );
+    const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+    const entries: AutosyncHistoryEntry[] = [];
+    // 故意不注入 readSyncConfigFn：走缺省 readSyncConfigFor(syncDir, channel, issues)，钉住真实接线
+    const scheduler = new AutoSyncScheduler({
+      syncDir: dir,
+      host: { log: nullLogger() },
+      makeSyncEngine: () => { throw new Error('被拒地址绝不构造同步引擎'); },
+      msg: (k: string) => k,
+      runs: new RunRegistry(),
+      now: () => new Date(1_000_000_000_000),
+      readConfig: async () => cfg,
+      writeConfig: async () => {},
+      readHistoryFn: async () => ({ schemaVersion: 1, autosyncEntries: entries, updatedAt: '' }),
+      appendHistoryFn: async (e) => { entries.push(e); },
+    });
+    const result = await scheduler.runOnce('git');
+    assert.equal(result.status, 'skipped');
+    assert.equal(result.skipReason, 'unconfigured', '机读 token 保持稳定（客户端本地化不破）');
+    assert.ok(
+      (result.configIssue ?? '').includes('192.168.1.10'),
+      '结果必须说明「地址被拒」，实际: ' + JSON.stringify(result),
+    );
+    assert.equal(entries.length, 1, '仍然写一条跳过历史');
+    const entry = entries[0] as AutosyncHistoryEntry & { configIssue?: string };
+    assert.equal(entry.skipReason, 'unconfigured');
+    assert.ok(
+      (entry.configIssue ?? '').includes('192.168.1.10'),
+      '历史同一字段（界面按字段有无渲染「被拒」而不是「未配置」）: ' + JSON.stringify(entry),
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('SEC-03：真的没配 → 不带 configIssue（不产生幻影告警）', async () => {
+  const cfg: AutosyncConfig = { enabled: true, interval: '30m', startupMinIntervalMs: 300000, consecutiveFailures: 0 };
+  const { scheduler, getEntries } = makeScheduler({ cfg, engine: {}, history: [], syncCfg: null });
+  const result = await scheduler.runOnce('git');
+  assert.equal(result.skipReason, 'unconfigured');
+  assert.equal(result.configIssue, undefined, '空配置不是「被拒」，不许造一条假成因');
+  const entry = getEntries()[0] as AutosyncHistoryEntry & { configIssue?: string } | undefined;
+  assert.equal(entry?.configIssue, undefined);
+});

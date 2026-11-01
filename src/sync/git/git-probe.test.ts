@@ -48,11 +48,12 @@ test('git probe：匿名 ls-remote 成功 → 连接正常，且**只**发这一
   assert.equal(result.snapshotCount, undefined, '不得报快照数（统计它需要 fetch 工作副本）');
   assert.deepEqual(result.createdCollections ?? [], [], 'git 通道不在远端建目录');
   assert.equal(calls.length, 1, '探针只准发一条 ls-remote');
-  // 前置的 `-c <key=value>` 是网络低速上限（issue #122），不属于命令本体
+  // 前置的 `-c <key=value>` 是网络低速上限（issue #122）与协议护栏（SEC-12），不属于命令本体
   const argv = calls[0]!;
   let i = 0;
   while (argv[i] === '-c') i += 2;
-  assert.deepEqual(argv.slice(i), ['ls-remote', REPO]);
+  // `--` 是 SEC-12 的选项终止符：repoUrl 恒定位在 `--` 之后，永不被当成 git 选项解析
+  assert.deepEqual(argv.slice(i), ['ls-remote', '--', REPO]);
 });
 
 test('git probe：匿名被拒、带凭据成功 → 连接正常（私有仓库 + 凭据可用）', async () => {

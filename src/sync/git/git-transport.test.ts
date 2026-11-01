@@ -119,6 +119,17 @@ function joinedArgs(calls: CallRecord[], needle: string): string[] {
   return calls.filter((c) => c.args.join(' ').includes(needle)).map((c) => c.args.join(' '));
 }
 
+/** 去掉 argv 前置的协议护栏（-c protocol.*.allow=never），用于断言「业务参数」本身 */
+function stripProtocolGuards(joined: string): string {
+  return joined.replace(/^(?:-c protocol\.[a-z]+\.allow=never )+/, '');
+}
+
+/** 单条调用是否带某个 -c 配置（必须成对出现） */
+function hasGitConfig(args: string[], kv: string): boolean {
+  const i = args.indexOf(kv);
+  return i > 0 && args[i - 1] === '-c';
+}
+
 /**
  * 拉取命令判定（issue #122）：fetch 与 origin 之间现在会插 `--no-tags`/`--filter=blob:none`，
  * 所以不能再按 'fetch origin' 子串匹配。
@@ -977,7 +988,8 @@ test('远端同步命令序列：显式 refspec fetch + merge --ff-only，绝不
     workDir: dir, exec: pullScriptedExec(calls, [{ stdout: '', stderr: '', code: 0 }]),
   }));
   await transport.list();
-  const joined = calls.map((c) => c.args.join(' '));
+  // SEC-12：每条 argv 前都挂协议护栏，断言业务参数前先剥掉
+  const joined = calls.map((c) => stripProtocolGuards(c.args.join(' ')));
   assert.ok(!joined.some((j) => /^pull(\s|$)/.test(j)), '不得再执行 git pull: ' + joined.join(' | '));
   // 网络命令前面会挂 credential helper 的 -c 参数，所以按「末尾 3 个参数」判命令本身
   // issue #122：fetch 与 origin 之间还会插 `--no-tags`（partial clone 时另有 `--filter=blob:none`），
@@ -1118,7 +1130,7 @@ test('issue #122：首次 clone 走 partial clone + sparse-checkout，只 materi
   const sparse = calls.find((c) => c.args.includes('sparse-checkout'));
   assert.ok(sparse !== undefined, '必须设置 sparse-checkout');
   assert.equal(
-    sparse.args.join(' '),
+    stripProtocolGuards(sparse.args.join(' ')),
     'sparse-checkout set --cone snapshots snapshots-encrypted blobs',
     'sparse 面必须与同步目录同源: ' + sparse.args.join(' '),
   );
@@ -1325,10 +1337,10 @@ test('issue #79：已有工作副本且 origin 与 repoUrl 不一致 → set-url
     exec: probeExec(calls, 'ssh://git@old.example:2222/owner/repo.git'),
   }));
   await transport.list();
-  assert.deepEqual(joinedArgs(calls, 'remote set-url'), [
-    `remote set-url origin ${target}`,
-    `remote set-url --push origin ${target}`,
-  ], 'fetch 与 push 地址都必须跟随（否则推送仍走旧地址）');
+  assert.deepEqual(joinedArgs(calls, 'remote set-url').map(stripProtocolGuards), [
+    `remote set-url origin -- ${target}`,
+    `remote set-url --push origin -- ${target}`,
+  ], 'fetch 与 push 地址都必须跟随（否则推送仍走旧地址）；repoUrl 恒由 -- 结束选项解析');
 });
 
 test('issue #79：origin 已一致 → 一条写命令都不发（幂等，只有只读探针）', async (t) => {
@@ -1347,7 +1359,7 @@ test('issue #79：无 origin（读不出来）→ remote add origin，否则 pus
   const target = 'ssh://git@fresh.example:2222/owner/repo.git';
   const transport = new GitTransport(makeOptions({ repoUrl: target, workDir: dir, exec: probeExec(calls, null) }));
   await transport.list();
-  assert.deepEqual(joinedArgs(calls, 'remote add origin'), [`remote add origin ${target}`]);
+  assert.deepEqual(joinedArgs(calls, 'remote add origin').map(stripProtocolGuards), [`remote add origin -- ${target}`]);
 });
 
 test('issue #79：origin 读得出但为空串 → 视为读不到，不改写（不拿不确定的读取覆盖配置）', async (t) => {
@@ -1716,3 +1728,152 @@ test('只读自检有界：锁被活进程持有时报「工作副本忙」，�
 });
 
 
+
+/* ------------------------------------------------------------------------------------------------
+ * SEC-12 / SEC-03：repoUrl 不得被 git 当成命令行选项，也不得借协议开关读到本机任意仓库
+ *
+ * 事实：repoUrl 原样进 argv。于是「--upload-pack=touch /tmp/pwn」「-c core.pager=…」这类取值会被
+ * git 当成**选项**执行；「file:///…」则让 git 用本地文件协议去读任意本机仓库（sync 通道本该只碰
+ * 同步内容）。三道防线：构造期白名单（方案/主机/首字符）→ argv 恒带协议护栏 → repoUrl 前恒有 --。
+ * ---------------------------------------------------------------------------------------------- */
+test('SEC-12：以 - 开头 / 非网络方案 / 私网环回地址的 repoUrl → 构造期直接拒绝（一条 git 都不 spawn）', async (t) => {
+  const dir = await makeTempDir(t);
+  for (const repoUrl of [
+    '--upload-pack=touch /tmp/pwned',
+    '-c core.pager=touch /tmp/pwned',
+    'file:///c:/repos/x.git',
+    'ext::sh -c touch% /tmp/pwned',
+    'ftp://git.example.com/r.git',
+    'git://git.example.com/r.git',
+    'https://127.0.0.1:8443/r.git',
+    'https://[::1]/r.git',
+    'https://169.254.169.254/latest/meta-data/',
+    'https://10.1.2.3/r.git',
+    'https://172.20.0.1/r.git',
+    'https://192.168.0.9/r.git',
+  ]) {
+    const calls: CallRecord[] = [];
+    assert.throws(
+      () => new GitTransport(makeOptions({ repoUrl, workDir: dir, exec: mockExec(calls) })),
+      (err: unknown) => {
+        assert.ok(err instanceof GitTransportError, '必须是 GitTransportError: ' + repoUrl);
+        assert.match(err.message, /repoUrl/, '错误必须点明 repoUrl');
+        assert.ok(err.message.includes('[REPO_URL]'), '错误消息里的地址必须脱敏');
+        assert.ok(!err.message.includes('169.254.169.254'), '不得把危险地址原样回显');
+        return true;
+      },
+    );
+    assert.equal(calls.length, 0, '构造期拦截，不得先 spawn 再失败: ' + repoUrl);
+  }
+
+  // 本机路径仍是 git 通道既有的合法目标（real-git 集成测试就靠它），不得被白名单误伤
+  const local = new GitTransport(makeOptions({ repoUrl: path.join(dir, 'remote.git'), workDir: dir, exec: mockExec([]) }));
+  assert.ok(local);
+});
+
+test('SEC-12：协议护栏 —— 网络地址恒禁 ext + file；本机路径只禁 ext（否则本地仓老用法失效）', async (t) => {
+  const net = await makeTempDir(t);
+  const netCalls: CallRecord[] = [];
+  const netTransport = new GitTransport(makeOptions({ workDir: net, exec: mockExec(netCalls) }));
+  await netTransport.list();
+  assert.ok(netCalls.length > 0, '应有 git 调用');
+  for (const c of netCalls) {
+    assert.ok(hasGitConfig(c.args, 'protocol.ext.allow=never'), '每条 git 都必须禁 ext 兜底（ext:: 可执行任意命令）: ' + c.args.join(' '));
+    assert.ok(hasGitConfig(c.args, 'protocol.file.allow=never'), '网络地址还须禁 file（防被改写成 file:// 后读本机仓）: ' + c.args.join(' '));
+  }
+
+  const localDir = await makeTempDir(t);
+  const localCalls: CallRecord[] = [];
+  const localTransport = new GitTransport(makeOptions({
+    repoUrl: path.join(localDir, 'remote.git'), workDir: localDir, exec: mockExec(localCalls),
+  }));
+  await localTransport.list();
+  assert.ok(localCalls.length > 0, '应有 git 调用');
+  for (const c of localCalls) {
+    assert.ok(hasGitConfig(c.args, 'protocol.ext.allow=never'), 'ext 护栏对任何地址都开: ' + c.args.join(' '));
+    assert.ok(!hasGitConfig(c.args, 'protocol.file.allow=never'), '本机路径不得禁 file（否则 clone 本地仓直接失败）: ' + c.args.join(' '));
+  }
+});
+
+test('SEC-12：repoUrl 恒由 -- 与选项分开（clone / ls-remote / remote add）', async (t) => {
+  const dir = await makeTempDir(t);
+  const calls: CallRecord[] = [];
+  const transport = new GitTransport(makeOptions({ workDir: dir, exec: mockExec(calls) }));
+  await transport.list();
+
+  const urlArgIndex = (args: string[]): number => args.indexOf('https://github.com/example/private-config.git');
+  const withUrl = calls.filter((c) => urlArgIndex(c.args) >= 0);
+  assert.ok(withUrl.length > 0, '应有带 repoUrl 的调用: ' + calls.map((c) => c.args.join(' ')).join(' | '));
+  for (const c of withUrl) {
+    const i = urlArgIndex(c.args);
+    assert.equal(c.args[i - 1], '--', 'repoUrl 前必须有 -- 结束选项解析: ' + c.args.join(' '));
+  }
+
+  // remote add 同样受约束（工作副本已存在但 origin 读不到）
+  const wd = await makeGitWorkDir(t);
+  const remotes: CallRecord[] = [];
+  const t2 = new GitTransport(makeOptions({ workDir: wd, exec: probeExec(remotes, null) }));
+  await t2.list();
+  const add = remotes.filter((c) => c.args.includes('add'));
+  assert.equal(add.length, 1, '应 remote add: ' + remotes.map((c) => c.args.join(' ')).join(' | '));
+  const ai = add[0]!.args.indexOf('https://github.com/example/private-config.git');
+  assert.equal(add[0]!.args[ai - 1], '--', 'remote add 的 repoUrl 前必须有 --');
+});
+
+/* ------------------------------------------------------------------------------------------------
+ * RV1-F8：错误消息与返回体不得回显真 repoUrl
+ *
+ * 事实：构造期已用 `[REPO_URL]` 占位符，但 `repoHost()` 的 catch、`cmdFailed` 的 `{args}`（argv 里
+ * 原样带着 repoUrl）、以及 `inspectWorkDir()` 回传的 origin/pushUrl 仍可能把 `user:token@` 带出去 ——
+ * 这些字符串会进日志、进 GET /sync/status 响应、进用户贴出来的 issue 截图。
+ * 口径：错误/日志一律占位符（mask），返回体保留 host/path 但剥掉 userinfo。
+ * ---------------------------------------------------------------------------------------------- */
+test('RV1-F8：错误文本与工作副本自检返回体都不含 userinfo（token 一条都不许出）', async (t) => {
+  const secret = 'ghp_leaktoken0123456789';
+  const secretUrl = 'ssh://user:' + secret + '@git.example.com/u/r.git';
+
+  // ① exec 抛错 → cmdFailed 的 {args} 含 repoUrl 原文，必须经 mask
+  const dir = await makeTempDir(t);
+  const throwing: GitExecFn = async (_cmd, args): Promise<GitExecResult> => {
+    if (args.includes('ls-remote')) throw new Error('spawn git ENOENT: ' + args.join(' '));
+    return { stdout: '', stderr: '', code: 0 };
+  };
+  const transport = new GitTransport(makeOptions({ repoUrl: secretUrl, workDir: dir, exec: throwing }));
+  let raised: unknown = null;
+  try {
+    await transport.checkIsPrivate();
+  } catch (err) {
+    raised = err;
+  }
+  assert.ok(raised instanceof GitTransportError, '必须归一为 GitTransportError');
+  const msg1 = (raised as GitTransportError).message;
+  assert.ok(msg1.includes('[REPO_URL]'), '回显必须走占位符: ' + msg1);
+  assert.ok(!msg1.includes(secret), 'argv 里的地址含 token —— 错误文本不得回显: ' + msg1);
+  assert.ok(!msg1.includes('user:'), '不得回显 userinfo 片段: ' + msg1);
+
+  // ② 工作副本自检的 origin / pushUrl 会进 GET /sync/status 响应 → 只剥 userinfo，保留 host/path
+  const wd = await makeGitWorkDir(t);
+  const calls: CallRecord[] = [];
+  const inspector = new GitTransport(makeOptions({ repoUrl: secretUrl, workDir: wd, exec: probeExec(calls, secretUrl) }));
+  const facts = await inspector.inspectWorkDir();
+  assert.equal(facts.origin, 'ssh://git.example.com/u/r.git', 'origin 必须剥掉 userinfo: ' + String(facts.origin));
+  assert.equal(facts.pushUrl, 'ssh://git.example.com/u/r.git', 'pushUrl 同样剥掉 userinfo: ' + String(facts.pushUrl));
+  assert.ok(!JSON.stringify(facts).includes(secret), 'facts 里任何字段都不得残留 token');
+  assert.equal(facts.match, true, '匹配判定用原文比对，不受脱敏影响');
+
+  // ③ 地址解析不出主机时（本机路径走 repoHost），错误里也只是占位符
+  const localDir = await makeTempDir(t);
+  const localTransport = new GitTransport(makeOptions({
+    repoUrl: path.join(localDir, 'remote.git'), workDir: localDir, exec: mockExec([]),
+  }));
+  let hostErr: unknown = null;
+  try {
+    // 私有可见性探测会走 buildCredentialArgs → repoHost()；本机路径 new URL() 必失败
+    await localTransport.checkIsPrivate();
+  } catch (err) {
+    hostErr = err;
+  }
+  if (hostErr instanceof GitTransportError) {
+    assert.ok(!hostErr.message.includes(localDir), '本机路径同样不得原样回显: ' + hostErr.message);
+  }
+});

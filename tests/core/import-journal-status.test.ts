@@ -78,7 +78,10 @@ test('issue #35：warning 不得记为 skipped；用户跳过才记 skipped；me
       recordStep: async (rec) => { recorded.set(rec.id, rec); },
     };
 
-    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true, snapshotBinding: binding });
+    // 本用例只验 journal 状态映射：显式关掉整体回滚（IE-02 缺省是 true），否则硬失败项会连带回滚。
+    const result = await importer.executeImportPlan(
+      zipPath, plan, { confirm: true, snapshotBinding: binding, rollbackOnError: false },
+    );
     assert.equal(result.ok, true, '非致命警告不得让整次导入失败');
 
     // ① 安装失败（warning）→ attention，绝不是 skipped

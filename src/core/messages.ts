@@ -65,6 +65,7 @@ export const zh = {
   'import.unsupportedSectionVersion': '分区 {section} 的数据版本 {version} 高于本版本支持的 1（已跳过该分区）',
   'import.checksumsMissing': '备份未提供完整性校验表，全部条目未被校验',
   'import.extraEntries': 'ZIP 内含未登记进校验表的条目: {entries}（未被校验）',
+  'import.unverifiedFileEntry': '以下条目不在校验表内，无法校验，已逐条阻断写入（其余条目照常导入）: {entries}',
   'import.undeclaredSectionContent': '备份包含未声明的分区内容（清单里标为不包含，这些条目不会被导入）: {sections}；示例条目: {entries}',
   'import.secretsPayloadEmpty': '备份声明携带凭据值，但解出的凭据清单为空：这不是「没有凭据」，而是没读到（请确认备份密码与导出机的凭据库布局）',
   'import.migrated': '备份 schema 已从 v{from} 迁移到 v{to}',
@@ -349,6 +350,7 @@ export const zh = {
   'adapter.workspaceSessionsOutsideBundle': '另有 {count} 个会话不在此备份包内（本次未导入其数据），未登记；目标机本来就有这些会话则不受影响',
   'adapter.workspaceSessionsManual': '本机工作区服务不支持会话登记，{count} 个会话未登记：启动 DSH 后可在设置里重新导入，或用离线修复工具 sessions repair',
   'adapter.workspaceSessionsOwnerMissing': '找不到对应的目标工作区记录，{count} 个会话未登记：请确认备份里包含该工作区（导出会话时会自动连带其工作区）',
+  'adapter.selfImportBlocked': '包内含 {path}（同步目标配置）：已拒绝写入，本机同步目标保持不变',
   'adapter.providerMissing': '导入数据缺少 provider {route}',
   'adapter.namespaceMissing': '导入数据缺少 namespace {ref}',
 
@@ -399,6 +401,7 @@ export const zh = {
   'sync.changesSummary': 'compatibility={compatibility}，共 {count} 项变更',
   'sync.configWhitespace': '仓库地址不能包含空白字符',
   'sync.configUnparseable': '无法解析仓库地址: {url}',
+  'sync.configPrivateHost': '仓库地址指向本机或内网地址，不作为同步目标: {url}',
   'sync.configUserinfo': '请勿在仓库地址中包含用户名/密码（认证 token 请使用凭据字段，不会拼入地址）',
   'sync.state.notObject': 'sync-state.json 损坏：必须是对象',
   'sync.state.schemaUnsupported': 'sync-state.json schemaVersion 不支持: {version}（期望 {expected}）',
@@ -459,6 +462,7 @@ export const zh = {
   'sync.webdav.snapshotInvalid': '快照 {id} 解析失败或结构非法: {err}',
   'sync.pruneListFailed': '远端快照裁剪失败：无法列出远端快照，{reason}',
   'sync.pruneDeleteFailed': '远端快照裁剪失败：删除快照 {id} 失败，{reason}',
+  'sync.gcSkipped': '本轮已放弃回收远端孤立文件（{code}）：本轮不做回收，快照本身不受影响',
 
   // ---------- 配置市场（m-market：只读公开仓库目录读取 + 校验） ----------
   'market.invalidItemId': '非法市场条目 id: {id}（仅允许字母数字开头，字符限 . _ -）',
@@ -571,6 +575,7 @@ export const en: Record<keyof typeof zh, string> = {
   'import.unsupportedSectionVersion': 'Section {section} data version {version} is higher than the supported version 1 (section skipped)',
   'import.checksumsMissing': 'Backup provides no integrity checksum table; no entry was verified',
   'import.extraEntries': 'ZIP contains entries not registered in the checksum table: {entries} (not verified)',
+  'import.unverifiedFileEntry': 'These entries are not covered by the checksum table and cannot be verified, so each was blocked (the rest import normally): {entries}',
   'import.undeclaredSectionContent': 'Backup contains content for undeclared sections (not marked as included; these entries will not be imported): {sections}; sample entries: {entries}',
   'import.secretsPayloadEmpty': 'The backup declares embedded secret values, but no credential ref could be read out of it: this is not "no credentials", it means they were not read (check the backup password and the source machine credential-store layout)',
   'import.migrated': 'Backup schema migrated from v{from} to v{to}',
@@ -855,6 +860,7 @@ export const en: Record<keyof typeof zh, string> = {
   'adapter.workspaceSessionsOutsideBundle': 'A further {count} session(s) are not part of this backup (their data was not imported) and stay unregistered; sessions that already exist on this machine are unaffected',
   'adapter.workspaceSessionsManual': 'The host workspace service cannot attach sessions; {count} session(s) are unregistered: re-import from Settings once DSH is up, or use the offline tool: sessions repair',
   'adapter.workspaceSessionsOwnerMissing': 'No matching target workspace record, {count} session(s) unregistered: make sure the backup contains that workspace (exporting sessions now carries their workspaces automatically)',
+  'adapter.selfImportBlocked': 'Package contains {path} (sync target config): write refused, local sync target unchanged',
   'adapter.providerMissing': 'Import data is missing provider {route}',
   'adapter.namespaceMissing': 'Import data is missing namespace {ref}',
 
@@ -905,6 +911,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.changesSummary': 'compatibility={compatibility}, {count} change(s)',
   'sync.configWhitespace': 'Repository URL must not contain whitespace',
   'sync.configUnparseable': 'Cannot parse repository URL: {url}',
+  'sync.configPrivateHost': 'Repository URL points at this machine or a private network, so it is not accepted as a sync target: {url}',
   'sync.configUserinfo': 'Do not include a username/password in the repository URL (use the credential field for the auth token; it is never embedded in the URL)',
   'sync.state.notObject': 'sync-state.json is corrupt: must be an object',
   'sync.state.schemaUnsupported': 'sync-state.json schemaVersion not supported: {version} (expected {expected})',
@@ -961,6 +968,7 @@ export const en: Record<keyof typeof zh, string> = {
   'sync.webdav.snapshotInvalid': 'Snapshot {id} failed to parse or is structurally invalid: {err}',
   'sync.pruneListFailed': 'Remote snapshot pruning failed: could not list remote snapshots, {reason}',
   'sync.pruneDeleteFailed': 'Remote snapshot pruning failed: deleting snapshot {id} failed, {reason}',
+  'sync.gcSkipped': 'Skipped reclaiming remote orphan files this round ({code}); snapshots are unaffected',
 
   // ---------- config marketplace (m-market: read-only public repo directory read + validation) ----------
   'market.invalidItemId': 'Invalid marketplace item id: {id} (must start with an alphanumeric; only . _ - allowed)',

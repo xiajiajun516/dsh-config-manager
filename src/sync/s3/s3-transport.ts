@@ -26,6 +26,8 @@ import { requestOnce } from '../../utils/proxy.ts';
 import type { RawResponse } from '../../utils/proxy.ts';
 import { parseJsonSafe } from '../../utils/json.ts';
 import type { MsgFunc } from '../../core/msg-types.ts';
+import { GC_SKIP_REFERENCE_MISSING, GC_SKIP_REFERENCE_UNREADABLE, GC_SKIP_SNAPSHOT_UNPARSABLE } from '../gc-skip.ts';
+import type { GcSkipCode } from '../gc-skip.ts';
 import { deserializeSnapshot, serializeSnapshot } from '../snapshot-json.ts';
 import {
   BLOB_SECTIONS, gcBlobs, isBlobRefsSection, isFilesSectionLike, referencedBlobHashes,
@@ -212,6 +214,14 @@ export class S3Transport implements SyncTransport {
     now: () => Date;
     msg: MsgFunc;
   };
+
+  /** 最近一轮 blob GC 的放弃码（`null` = 跑完或未触发；SYN-04）。 */
+  private gcSkip: GcSkipCode | null = null;
+
+  /** 最近一轮 blob GC 是否因「无法证明引用集完整」而整体放弃（`null` = 正常跑完），供上层给用户提示。 */
+  get lastGcSkip(): GcSkipCode | null {
+    return this.gcSkip;
+  }
 
   constructor(options: S3TransportOptions) {
     // t79：宿主传进来的 msg（core 目录）**不包含** sync.s3.* 键，直接用会显示裸键名 —— 合并本地目录。
@@ -708,20 +718,29 @@ export class S3Transport implements SyncTransport {
   }
 
   /** blob 仓 GC：逐份读仍存在的快照收集引用，删除无人引用且超保护窗的 blob；
-   *  读坏任一份快照 → 本轮直接放弃（宁可留垃圾，不可删在用的） */
+   *  读不坏任何一份快照 → 正常回收，否则本轮整体放弃（宁可留垃圾，不可删在用的）。
+   *  SYN-04（P1）：**404 也放弃本轮** —— 条目在但文件 404 = 拿不到内容 = 无法证明「没人引用」，
+   *  按残集回收会删掉仍在用的 blob（与 WebDAV 同型，口径一致）。 */
   private async gcBlobStore(secret: string, remaining: SyncSnapshotMeta[]): Promise<void> {
+    this.gcSkip = null;
     const index = await this.readBlobIndex(secret);
     if (Object.keys(index).length === 0) return;
     const referenced = new Set<string>();
     for (const meta of remaining) {
       const sent = await this.send('GET', snapshotKey(this.target.prefix, meta.id), { secret });
-      // 条目在但文件 404 ⇒ 不可能引用 blob（安全跳过）；其它失败 ⇒ 读不出来 ≠ 没引用，本轮放弃。
-      if (sent.res.status === 404) continue;
-      if (!sent.res.ok) return;
+      if (sent.res.status === 404) {
+        this.gcSkip = GC_SKIP_REFERENCE_MISSING;
+        return;
+      }
+      if (!sent.res.ok) {
+        this.gcSkip = GC_SKIP_REFERENCE_UNREADABLE;
+        return;
+      }
       let snap: SyncSnapshot;
       try {
         snap = deserializeSnapshot(await sent.res.text());
       } catch {
+        this.gcSkip = GC_SKIP_SNAPSHOT_UNPARSABLE;
         return;
       }
       const plain = snap.sections as Partial<Record<SectionId, unknown>>;

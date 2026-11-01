@@ -24,7 +24,7 @@ import {
   readSyncConfig, readFullSyncConfig, readSyncConfigFor, writeSyncConfig, isGitConfig, isWebDavConfig,
   isS3Config, isGistConfig, listConfiguredChannels, readActiveS3Provider,
   SYNC_CONFIG_FILE, SYNC_CONFIG_SCHEMA_VERSION, SYNC_CONFIG_SUPPORTED_VERSIONS, CLOUD_SYNC_CONFIG_FILE,
-  validateWebDavUrl, type SyncConfig,
+  validateWebDavUrl, validateRepoUrl, type SyncConfig, type SyncConfigIssue,
   SYNC_CHANNELS, channelOf, channelMap, isSyncTransportType, parseSyncChannel, clearSyncChannel,
   S3_COMPAT_PROVIDERS, CLOUD_SYNC_PROVIDERS, cloudSecretRef,
 } from './sync-config.ts';
@@ -738,4 +738,173 @@ test('t88 跨侧常量守卫：S3 兼容商清单与云端点密钥槽位引用�
     viewSrc.includes("export { cloudSecretRefName } from '../../utils/shared-constants.ts';"),
     'client 侧必须 re-export 共享派生函数（不得自己再实现一遍）',
   );
+});
+/* ------------------------------------------------------------------------------------------------
+ * SEC-02 / SEC-03 / SEC-12：repoUrl 白名单（审计 §安全 P0 链）
+ *
+ * 事实：repoUrl 直接进 git 子进程 argv，且 http(s) 通道会把凭据注入到它的 host 上。原实现只拒
+ * 空白与 userinfo，于是「file:// 任意本机仓」「ext::sh -c …」「-c core.pager=…」、环回/私网地址
+ * 全都能当同步目标 —— 一旦写进本机配置，git 就会按包方指定的地址执行/送凭据。
+ * 白名单口径：只认 http/https/ssh/scp-like 远端；无 host、私网/环回/链路本地、非网络方案、
+ * 整串以 '-' 开头一律拒绝。本机路径保留（git 通道的老用法，见 GitTransportOptions.repoUrl 注释）。
+ * ---------------------------------------------------------------------------------------------- */
+
+test('validateRepoUrl（SEC-02/03/12）：白名单 —— http(s)/ssh/scp-like 远端通过，危险方案与私网地址一律拒绝', () => {
+  // 通过：真实用法的四种形状（https / http / ssh:// / scp-like）+ 本机路径
+  for (const ok of [
+    'https://github.com/u/r.git',
+    'http://git.example.com/u/r.git',
+    'ssh://git@git.example.com:2222/u/r.git',
+    'git@github.com:u/r.git',
+    'git@git.example.com:team/r.git',
+    '/home/bob/repos/config.git',
+    '../bare',
+    'D:/repos/bare',
+    'https://github.com/u/r-1.git',
+    // 私网边界外（172.16/12 之外的 172.x 与 11.x 不是保留段）
+    'https://172.32.0.1/r.git',
+    'https://11.0.0.1/r.git',
+  ]) {
+    assert.equal(validateRepoUrl(ok), null, '应通过: ' + ok);
+  }
+
+  // 拒绝：方案白名单（SEC-03）+ 无 host + 私网/环回/链路本地（SEC-02）+ 以 '-' 开头（SEC-12）
+  for (const bad of [
+    'file:///c:/repos/x.git',
+    'file:///etc/passwd',
+    'ext::sh -c touch% /tmp/pwned',
+    'ftp://git.example.com/r.git',
+    'git://git.example.com/r.git',
+    'https://',
+    'https:///r.git',
+    'https://127.0.0.1:8443/r.git',
+    'http://localhost:3000/r.git',
+    'https://[::1]/r.git',
+    'ssh://git@127.0.0.1/r.git',
+    'git@localhost:r.git',
+    'https://10.0.0.5/r.git',
+    'https://192.168.1.10/r.git',
+    'https://172.16.0.9/r.git',
+    'https://172.31.255.1/r.git',
+    'https://169.254.169.254/latest/meta-data/',
+    'https://[fe80::1]/r.git',
+    '-c core.pager=touch /tmp/pwned',
+    '--upload-pack=touch /tmp/pwned',
+    'https://user:ghp_token@github.com/u/r.git',
+    'https://github.com/u/r .git',
+  ]) {
+    const err = validateRepoUrl(bad);
+    assert.equal(typeof err, 'string', '必须拒绝: ' + bad);
+    assert.ok(err !== null && err.length > 0, '拒绝必须带可展示原因: ' + bad);
+  }
+});
+
+test('readSyncConfig（SEC-01 读侧）：已存 repoUrl 走同一校验；不合法 → 不返回该配置并给明确 issue', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-sync-cfg-repo-'));
+  try {
+    // 合法：照常读出，无 issue
+    await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), JSON.stringify({
+      schemaVersion: 3, transport: 'git',
+      git: { repoUrl: 'https://github.com/u/r.git' }, webdav: {},
+    }, null, 2), 'utf8');
+    const issues: SyncConfigIssue[] = [];
+    const ok = await readSyncConfig(dir, issues);
+    assert.equal(issues.length, 0, '合法 repoUrl 不该产生 issue');
+    assert.ok(ok !== null && isGitConfig(ok));
+
+    // 不合法：包方写进来的 file:// 目标 —— 读侧必须当成「未配置」，且给出明确原因
+    for (const badUrl of [
+      'file:///c:/repos/x.git',
+      'ext::sh -c touch% /tmp/pwned',
+      'https://169.254.169.254/latest/meta-data/',
+      'https://user:ghp_x@github.com/u/r.git',
+    ]) {
+      await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), JSON.stringify({
+        schemaVersion: 3, transport: 'git', git: { repoUrl: badUrl }, webdav: {},
+      }, null, 2), 'utf8');
+      const local: SyncConfigIssue[] = [];
+      const cfg = await readSyncConfig(dir, local);
+      assert.equal(cfg, null, '不合法的 repoUrl 不得进入后续凭据注入: ' + badUrl);
+      assert.equal(local.length, 1, '必须显式记录被拒的通道，不得静默: ' + badUrl);
+      assert.equal(local[0]?.code, 'repo-url-invalid');
+      assert.equal(local[0]?.channel, 'git');
+      assert.ok((local[0]?.message ?? '').length > 0, '必须带可展示原因');
+
+      // 省略 issue 收集参数时行为不变（老调用方仍拿 null = 未配置）
+      assert.equal(await readSyncConfig(dir), null);
+    }
+
+    // v1 旧文件（扁平 repoUrl）走同一校验
+    await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), JSON.stringify({ schemaVersion: 1, repoUrl: 'file:///etc' }), 'utf8');
+    const legacyIssues: SyncConfigIssue[] = [];
+    assert.equal(await readSyncConfig(dir, legacyIssues), null, 'v1 旧文件的 repoUrl 也要校验');
+    assert.equal(legacyIssues.length, 1);
+
+    // 本机路径仍是 git 通道的合法目标（产品既有能力，不因白名单被砍）
+    await fs.writeFile(path.join(dir, SYNC_CONFIG_FILE), JSON.stringify({
+      schemaVersion: 3, transport: 'git', git: { repoUrl: '/home/bob/repos/config.git' }, webdav: {},
+    }, null, 2), 'utf8');
+    const localIssues: SyncConfigIssue[] = [];
+    const localCfg = await readSyncConfig(dir, localIssues);
+    assert.equal(localIssues.length, 0);
+    assert.ok(localCfg !== null && isGitConfig(localCfg) && localCfg.git.repoUrl === '/home/bob/repos/config.git');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+/* ------------------------------------------------------------------------------------------------
+ * RV1-F6 / F7：私网拒绝的文案口径 + userinfo 覆盖 ssh（复核在 SEC-02/12 里抓到的两处边角）
+ *
+ * F6：环回/私网复用「无法解析仓库地址」= 给了用户错的方向（他会反复改写法）。真实判据是
+ *     「这个地址指向本机/内网，不作为同步目标」，因此单独一条 sync.configPrivateHost。
+ * F7：userinfo 检查原来只在 http/https 分支内，`ssh://user:tok@host/r.git` 能过白名单，
+ *     token 会跟着 repoUrl 进 argv、进 sync-config.json。口径改成「password 位任何 scheme 都拒」。
+ * ---------------------------------------------------------------------------------------------- */
+
+test('validateRepoUrl（RV1-F6）：私网/环回用专属文案，且回显地址已脱敏（不含 userinfo）', () => {
+  const cases: Array<[string, string]> = [
+    ['https://127.0.0.1:8443/r.git', '127.0.0.1:8443'],
+    ['http://localhost:3000/r.git', 'localhost:3000'],
+    ['https://192.168.1.10/r.git', '192.168.1.10'],
+    ['https://169.254.169.254/latest/meta-data/', '169.254.169.254'],
+    ['ssh://git@10.0.0.5/r.git', '10.0.0.5'],
+  ];
+  for (const [url, host] of cases) {
+    const err = validateRepoUrl(url);
+    assert.ok(err !== null, '私网地址必须拒绝: ' + url);
+    assert.ok(err.includes('本机或内网'), '原因必须是「指向本机/内网」，不能复用解析失败: ' + err);
+    assert.ok(!err.includes('无法解析'), '不得再用「无法解析仓库地址」描述私网: ' + err);
+    assert.ok(err.includes(host), '要能认出被拒的是哪个地址: ' + err);
+  }
+
+  // 回显脱敏：私网 + userinfo 同时出现时，文案里只能有 host，不能有 user/token
+  const withToken = validateRepoUrl('https://user:ghp_secretvalue@192.168.1.10/r.git');
+  assert.ok(withToken !== null);
+  assert.ok(withToken.includes('192.168.1.10'), '地址主体保留: ' + withToken);
+  assert.ok(!withToken.includes('ghp_secretvalue') && !withToken.includes('user:'), '文案不得回显凭据: ' + withToken);
+
+  // 私网判定先于 userinfo：带 userinfo 的私网地址仍报「内网」，而不是「别带凭据」
+  assert.ok(withToken.includes('本机或内网'), '私网判定优先: ' + withToken);
+});
+
+test('validateRepoUrl（RV1-F7）：带 scheme 的 userinfo —— ssh 的 token 也被拒，ssh 登录名仍放行', () => {
+  // ssh 里 password 位 = 可粘贴的 token → 拒
+  for (const bad of ['ssh://user:tok@example.com/r.git', 'ssh://git:ghp_abc@example.com:22/u/r.git', 'ssh://:tok@example.com/r.git']) {
+    assert.equal(validateRepoUrl(bad), validateRepoUrl('https://user:tok@example.com/r.git'), 'ssh userinfo 与 http 同口径: ' + bad);
+    assert.ok((validateRepoUrl(bad) ?? '').includes('用户名/密码'), '必须是 userinfo 文案: ' + bad);
+  }
+  // ssh 的 username 是登录名（标准写法）→ 放行；否则会杀掉合法用法
+  for (const ok of ['ssh://git@git.example.com:2222/u/r.git', 'ssh://deploy@git.example.com/u/r.git', 'git@github.com:u/r.git']) {
+    assert.equal(validateRepoUrl(ok), null, 'ssh 登录名不是凭据，必须放行: ' + ok);
+  }
+  // http(s) 的 username 与口令等同（Basic 认证）→ 仍拒
+  for (const bad of ['https://user@github.com/u/r.git', 'http://user@git.example.com/u/r.git']) {
+    assert.ok((validateRepoUrl(bad) ?? '').includes('用户名/密码'), 'http(s) 的 username 仍拒: ' + bad);
+  }
+
+  // 解析不了的半截地址也必须脱敏回显（`https://user:tok@` 前缀就是凭据）
+  const half = validateRepoUrl('https://user:ghp_halfsecret@');
+  assert.ok(half !== null);
+  assert.ok(!half.includes('ghp_halfsecret'), '无法解析的地址同样不得回显凭据: ' + half);
 });

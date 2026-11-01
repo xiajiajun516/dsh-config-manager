@@ -132,7 +132,7 @@ import type { PruneSelector } from './core/backup.ts'
 import { selectPruneCandidates } from './core/backup.ts'
 import { appendAutosyncEntry } from './sync/sync-history.ts'
 import { MigrationStore, type MigrationKind, type MigrationResult, MIGRATION_HISTORY_DIR } from './core/migration-history.ts'
-import { readSyncConfig, validateRepoUrl, validateWebDavUrl, isWebDavConfig, isS3Config, isGistConfig, channelOf, parseSyncChannel, SYNC_CHANNELS, GIST_PROVIDER, isS3CompatProvider, validateCloudChannelInput, cloudSecretRef } from './sync/sync-config.ts'
+import { validateRepoUrl, validateWebDavUrl, isWebDavConfig, isS3Config, isGistConfig, channelOf, parseSyncChannel, SYNC_CHANNELS, GIST_PROVIDER, isS3CompatProvider, validateCloudChannelInput, cloudSecretRef } from './sync/sync-config.ts'
 import {
   resolveSessionFormatDisposition,
   sessionFormatAbortResponse,
@@ -140,6 +140,7 @@ import {
 } from './routes/session-format.ts'
 import type { SessionFormatDisposition } from './core/types.ts'
 import type { SyncConfig, SyncTransportType } from './sync/sync-config.ts'
+import { createPrepareSync } from './sync/config-issue-reporting.ts'
 import { AUTO_SYNC_OPT_IN_SECTIONS, defaultSyncSelection, effectiveSections, OPT_IN_SYNC_SECTIONS, readAllSyncSelections, readSyncSelection } from './sync/sync-selection.ts'
 import type { SyncSelection, SyncSelectionMode } from './sync/sync-selection.ts'
 import type { SyncTransport } from './sync/transport.ts'
@@ -180,7 +181,7 @@ export const name = 'config-manager'
 export const inject = ['settings', 'credentials']
 
 /** Plugin version, kept in sync with package.json ("version"). */
-export const PLUGIN_VERSION = '0.2.4'
+export const PLUGIN_VERSION = '0.3.0'
 
 /** Plugin own package name — excluded from its own exported plugins list. */
 const PLUGIN_NAME = 'dsh-config-manager'
@@ -2772,25 +2773,15 @@ function makeRoutes(deps: RoutesDeps): { routes: WebRoute[]; scheduler: AutoSync
   // credentials（只存值不落盘同步文件/日志），git 网络操作时经 resolve 现取 ——
   // 与 GitTransport「token 只从注入 provider 读取」的安全契约完全对齐。
 
-  /**
-   * 解析同步请求体并补全缺失字段（委托给导出的 parseSyncBody，便于单测）。
-   * username 回退：webdav 请求体未带 username（如挂载时 snapshotsList 自动加载、
-   * 表单留空后直接同步）时，从持久化 sync-config 回填已保存的 username——
-   * 否则 WebDavTransport 构造会因空 username 抛错，导致「保存过配置仍无法列出快照」。
-   * 语义与 password 一致：留空 = 沿用已保存凭据。
-   */
-  const prepareSync = async (body: Record<string, unknown>): Promise<SyncConfig> => {
-    const cfg = await parseSyncBody(body, { credentials })
-    if (isWebDavConfig(cfg) && (cfg.webdav.username === undefined || cfg.webdav.username === '')) {
-      try {
-        const persisted = await readSyncConfig(syncDir)
-        return mergePersistedWebDavUsername(cfg, persisted)
-      } catch {
-        return cfg // 读失败保持原值（空 username 由 WebDavTransport 构造校验兜底报错）
-      }
-    }
-    return cfg
-  }
+  // 同步请求体准备 = 「webdav username 回填 + SEC-03 配置被拒的一次性告警」。
+  // 解析/去重/文案与读侧语义都在 src/sync/config-issue-reporting.ts（含单测），
+  // 这里只做装配：宿主只提供 credentials、日志出口与配置目录。
+  const prepareSync = createPrepareSync({
+    syncDir,
+    parseBody: (body) => parseSyncBody(body, { credentials }),
+    mergeWebDavUsername: mergePersistedWebDavUsername,
+    log: (line) => host.log.warn(line),
+  })
 
   /** 同步分区选择缓存（按通道；sync-selection.json；makeSyncEngine 同步读取用，保存路由更新）。
    *  缺失通道 = 尚未加载（启动竞态窗口）；读取/使用处兜底 defaultSyncSelection。 */

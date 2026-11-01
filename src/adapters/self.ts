@@ -1,11 +1,15 @@
 /**
  * self 分区 adapter（插件自身配置，设计「self 分区」）：
  * 数据源 = $DSH_HOME/dsh-config-manager/ 下的插件自身配置文件（白名单收集，非递归）：
- *   - sync/sync-config.json     同步通道配置（git repoUrl / webdav url+username；凭据值走 credentials 槽位，不含 secret）
- *   - sync/sync-autosync.json   自动同步调度配置
  *   - sync/sync-selection.json  同步分区选择（默认/高级模式 + 勾选分区）
  *   - sync/ui-prefs.json        插件 UI 偏好（如上次选择的同步通道；从 localStorage 迁入）
+ *   - sync/backup-schedule.json 备份调度配置
  *   - market/market-config.json 配置市场配置
+ *   - exports/.backup-notes.json 导出产物备注清单
+ *
+ * **可信边界（SEC-01）**：`sync/sync-config.json` 与 `sync/sync-autosync.json` 是「同步目标」本身，
+ * 永不可由**包**决定 —— 一个把 repoUrl 指向攻击者仓库的包，导入完用户下一次同步就把家目录配置
+ * 推过去。它们不在白名单里（不导出），导入侧另由 `SELF_IMPORT_BLOCKED_RELS` 显式挡下并留 warning。
  *
  * 排除项：sync/sync-history.json（执行记录，属数据非配置）、market/cache/（缓存）、
  * snapshots/（快照）、tmp/ exports/（临时/导出产物）、rollback-points/（回滚点库——磁盘体检
@@ -44,17 +48,22 @@
  * 安全不变量：配置文件本身不含凭据值（同步凭据走 DSH credentials 槽位引用），
  * 且文件类分区不进 SecretScanner（与 pluginFiles/skills 同语义）。
  */
-import type { HostContext } from '../core/types.ts';
+import type { ApplyResult, HostContext, ImportContext, PlanItem } from '../core/types.ts';
+import type { FilesSection } from '../schema/types.ts';
 import type { AutosyncConfig } from '../sync/autosync-config.ts';
 import type { BackupScheduleConfig } from '../sync/backup-schedule-config.ts';
 import type { RecursiveListing } from '../utils/recursive-walk.ts';
 import { sectionMeta } from '../schema/section-registry.ts';
 import { FileCollectionAdapter } from './file-collection.ts';
 
-/** self 分区白名单文件（相对 baseDir，即 $DSH_HOME/dsh-config-manager/）。 */
+/**
+ * self 分区白名单文件（相对 baseDir，即 $DSH_HOME/dsh-config-manager/）。
+ *
+ * `sync/sync-config.json` 与 `sync/sync-autosync.json` **不在其中**（SEC-01）：同步目标与自动同步开关
+ * 属于「目标机自己的决定」，跨机搬运等于让包决定把本机配置推到哪里。白名单只管导出侧；
+ * 导入侧的包内容不受白名单约束，所以另有 `SELF_IMPORT_BLOCKED_RELS` 显式挡下。
+ */
 export const SELF_CONFIG_FILES: readonly string[] = [
-  'sync/sync-config.json',
-  'sync/sync-autosync.json',
   'sync/sync-selection.json',
   'sync/ui-prefs.json',
   'sync/backup-schedule.json',
@@ -63,6 +72,25 @@ export const SELF_CONFIG_FILES: readonly string[] = [
   // 换机器后备份列表仍能看到手动导出时填写的备注
   'exports/.backup-notes.json',
 ];
+
+/**
+ * 导入侧**一律不写盘**的 rel（SEC-01）。
+ *
+ * 与白名单的关系：白名单管「导出带什么」，本清单管「包里有也绝不落地」。两者故意不共用一份
+ * 数组 —— 白名单将来若因别的理由重新收进某个文件，也不该连带解除导入侧的保护。
+ */
+export const SELF_IMPORT_BLOCKED_RELS: readonly string[] = [
+  'sync/sync-config.json',
+  'sync/sync-autosync.json',
+];
+
+/**
+ * 拦截报告项里的**稳定机器码**前缀（`self-import-blocked:<rel>`）。
+ *
+ * 为什么要有码而不是只给文案：文案随语言/措辞变，调用方（报告、日志、将来的自动判定）需要
+ * 一个能逐字比对的判据。
+ */
+export const SELF_IMPORT_BLOCKED_CODE = "self-import-blocked";
 
 /**
  * 调度配置里「运行态字段」的**命名口径**：调度器每轮收尾都会改写的字段名形状
@@ -222,5 +250,44 @@ export class SelfAdapter extends FileCollectionAdapter {
     if (!SCHEDULER_CONFIG_RELS.has(relativePath)) return data;
     // 回落原引用（解析失败 / 非对象）：走整文件哈希，且不额外重算包内哈希
     return canonicalizeWithoutRunState(data) ?? data;
+  }
+
+  /**
+   * 导入侧拦截（SEC-01）：包里带 `sync/sync-config.json` / `sync/sync-autosync.json` → 改判 Warning。
+   *
+   * 为什么必须在**计划阶段**改判而不是只在 applyItem 里拒绝：这两份文件是「同步目标」本身，
+   * 一个把 repoUrl 指向攻击者仓库的包，导入完用户下一次同步就会把本机配置推过去 —— 而用户
+   * 从来没被问过「要不要换同步目标」。去掉 `target` 后引擎不会为它登记快照、也不会调 applyItem；
+   * 同时留下一项 report 级 warning（带稳定码 `self-import-blocked:<rel>`），让用户看得见
+   * 「包里有这个文件、我没写」，绝不静默。
+   */
+  override async analyzeImport(data: FilesSection, ctx: ImportContext): Promise<PlanItem[]> {
+    const items = await super.analyzeImport(data, ctx);
+    return items.map((item) => {
+      const rel = item.target?.ref;
+      if (rel === undefined || !SELF_IMPORT_BLOCKED_RELS.includes(rel)) return item;
+      const blocked: PlanItem = {
+        id: item.id,
+        kind: 'Warning',
+        adapter: this.id,
+        description: ctx.msg('adapter.selfImportBlocked', { path: rel }),
+        detail: `${SELF_IMPORT_BLOCKED_CODE}:${rel}`,
+        severity: 'warning',
+      };
+      if (item.unitId !== undefined) blocked.unitId = item.unitId;
+      return blocked;
+    });
+  }
+
+  /**
+   * 纵深防御（SEC-01）：即使有人绕过引擎直接把被拦项喂进 applyItem，也一字节都不写。
+   * 报 warning=true（非致命、不触发整体回滚），与计划阶段的判定同源。
+   */
+  override async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    const ref = item.target?.ref;
+    if (ref !== undefined && SELF_IMPORT_BLOCKED_RELS.includes(ref)) {
+      return { ok: false, message: ctx.msg('adapter.selfImportBlocked', { path: ref }), warning: true };
+    }
+    return super.applyItem(item, ctx);
   }
 }

@@ -26,7 +26,8 @@ function envFor(p: Probes): never {
     msg: (key: string) => key,
     prepareSync: async () => ({ schemaVersion: 2, transport: 'git', git: { repoUrl: 'https://example.com/repo.git' } }),
     makeSyncEngine: () => ({
-      deleteSnapshot: async (id: string) => { p.deleted.push(id) },
+      // 真引擎返回 DeleteSnapshotResult（RV1-F3：删除时放弃远端回收要能看见）。
+      deleteSnapshot: async (id: string) => { p.deleted.push(id); return { warnings: ['gc skipped: reference-missing'] } },
     }),
     withMutationGate: (op: string, handler: unknown) => { p.gated.push(op); return handler },
   }
@@ -76,7 +77,7 @@ test('POST /sync/snapshot-delete：把 snapshotId 交给引擎 deleteSnapshot（
   const res = fakeResponse()
   await route.handler(fakeRequest({ method: 'POST', body: '{"transport":"git","snapshotId":" snap-7 "}' }), res.res)
   assert.equal(res.status(), 200)
-  assert.deepEqual(res.json(), { ok: true, snapshotId: 'snap-7' })
+  assert.deepEqual(res.json(), { ok: true, snapshotId: 'snap-7', warnings: ['gc skipped: reference-missing'] })
   assert.deepEqual(probes.deleted, ['snap-7'], 'id 必须 trim 后原样透传（不做任何猜测/改写）')
 })
 

@@ -23,6 +23,7 @@ import path from 'node:path';
 import { createAdapters } from '../adapters/index.ts';
 import { defaultSecretScanner } from '../core/exporter.ts';
 import { Importer } from '../core/importer.ts';
+import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts';
 // issue #91：只读预览与基线 hash 的口径判定（本地源插件在预览里不会被 npm pack）
 import { isLocalPluginSpec } from '../core/local-plugin-pack.ts';
 import type {
@@ -45,7 +46,10 @@ import {
   encryptCredentialsPayload, encryptSectionsPayload,
 } from './snapshot-crypto.ts';
 import { OPT_IN_SYNC_SECTIONS } from './sync-selection.ts';
-import { nextSessionTombstones, sessionUnitIdsOfSection, stripTombstonedUnits } from './session-tombstones.ts';
+import {
+  listRemoteSnapshotIndex, planSessionBookkeeping, remoteTombstonesOf, stripTombstonedSessionsInPlace,
+} from './session-tombstones.ts';
+import type { RemoteSnapshotIndex, SessionBookkeepingResult } from './session-tombstones.ts';
 import { DEFAULT_RETENTION_POLICY, selectPruneCandidatesByPolicy } from './retention-policy.ts';
 import type { RetentionPolicy } from './retention-policy.ts';
 import { hashSection, loadSyncState, resolveDeviceIdentity, saveSyncState } from './sync-state.ts';
@@ -58,9 +62,10 @@ import type { MsgFunc } from '../core/messages.ts';
 import { DEFAULT_ANCESTOR_KEEP, pruneAncestors, tryLoadAncestor, writeAncestor, writeEncryptedAncestor } from './ancestor.ts';
 import type { MergeConflictReason, MergePlan, MergeSectionResult } from './merge.ts';
 import { merge as mergeSections } from './merge.ts';
+import { previewTextOf } from './merge-preview-text.ts';
+import { gcSkipWarning, readGcSkipCode, reportGcSkipOnce } from './gc-skip.ts';
 import { classifyMergePlan } from './risk.ts';
 import type { SyncApplyPlan } from './risk.ts';
-import { redact } from '../security/redaction.ts';
 import { registerMessageCatalog } from '../core/engine-locale.ts';
 import { createSnapshot, selectPruneCandidates } from '../core/backup.ts';
 import { rollback } from '../core/rollback.ts';
@@ -79,6 +84,7 @@ import type { PlanItemProgress } from '../core/analyzer.ts';
 const zh = {
   'sync.pushRemoteAdvanced': '远端最新快照 {remote} 与本地基线 {base} 不一致：本次推送未执行（远端未写入、基线未改动）。请先同步远端改动；确认要用本机覆盖远端时，再显式选择强制推送。',
   'sync.pushAdvanceCheckFailed': '无法确认远端是否已被其它设备推进（{reason}）：本次推送按原样继续',
+  'sync.sessionTombstonesInherited': '已从远端快照继承 {count} 条会话删除墓碑：删除继续跨设备传播（本机数据不动）',
   'sync.applyMergeResolutionsNoImporter': 'applyMergeResolutions: SyncEngine 缺少 importer（需在 options 中注入）',
   'sync.mergePendingConflicts': '仍有 {count} 个分区未裁决（{sections}）：已裁决的部分已写入本机，但基线不推进，冲突下一轮会重新出现',
   'sync.baselineRexportFailed': '写回成功但重新导出本机分区失败（{sections}）：无法证明基线与本机一致，本次**不记基线**（远端指针保持原值，下一轮重新合并收敛）',
@@ -87,48 +93,13 @@ const zh = {
 const en: Record<keyof typeof zh, string> = {
   'sync.pushRemoteAdvanced': 'The newest remote snapshot {remote} differs from the local baseline {base}: this push did not run (nothing written remotely, baseline untouched). Sync the remote changes first, or explicitly force the push if this machine should overwrite the remote.',
   'sync.pushAdvanceCheckFailed': 'Cannot tell whether another device advanced the remote ({reason}): this push continues as-is',
+  'sync.sessionTombstonesInherited': 'Inherited {count} session deletion tombstone(s) from the remote snapshot: deletions keep propagating across devices (local data untouched)',
   'sync.applyMergeResolutionsNoImporter': 'applyMergeResolutions: SyncEngine is missing the importer (must be injected via options)',
   'sync.mergePendingConflicts': '{count} section(s) still have no decision ({sections}): the decided parts were written locally, but the baseline is not advanced, so the conflicts will reappear next round',
   'sync.baselineRexportFailed': 'The write succeeded but re-exporting the local section(s) failed ({sections}): the baseline cannot be proven to match this machine, so no baseline was recorded (the remote pointer keeps its old value and the next merge converges again)',
 };
 
 registerMessageCatalog({ id: 'sync-engine-merge', zh, en });
-
-/**
- * 单侧预览文本上限（2 KiB **字符**预算）：超出截断并追加省略号。
- *
- * 顺序恒为「先 redact 再截断」：反过来会把跨边界的敏感值切成半个形状，让脱敏匹配不到它
- * （等于把秘密截一半发出去）。redact 之后的剩余文本已不含秘密形状，截断才安全。
- */
-const MERGE_PREVIEW_TEXT_LIMIT = 2048;
-
-/** 严格 UTF-8 解码器：非法字节序列直接抛错（用于区分文本与二进制文件冲突）。 */
-const STRICT_UTF8 = new TextDecoder('utf-8', { fatal: true });
-
-/** 把任意冲突侧值转成**可读字符串**；二进制只回传形状与字节数，绝不回传原始值对象。 */
-function previewTextOf(value: unknown): string {
-  if (value === undefined) return '';
-  if (typeof value === 'string') return finalizePreviewText(value);
-  if (value instanceof Uint8Array) {
-    try {
-      return finalizePreviewText(STRICT_UTF8.decode(value));
-    } catch {
-      // 二进制内容解码只会得到乱码（同样误导用户）→ 只回传形状；JSON 是数据形态，不是文案
-      return JSON.stringify({ binary: true, bytes: value.length });
-    }
-  }
-  try {
-    return finalizePreviewText(JSON.stringify(value) ?? '');
-  } catch {
-    return finalizePreviewText(String(value));
-  }
-}
-
-/** 预览文本统一出口：先 redact（敏感值绝不回传浏览器），再截断到 2 KiB。 */
-function finalizePreviewText(text: string): string {
-  const masked = redact(text);
-  return masked.length > MERGE_PREVIEW_TEXT_LIMIT ? `${masked.slice(0, MERGE_PREVIEW_TEXT_LIMIT)}…` : masked;
-}
 
 /** plan 的单个分区结果 → 预览视图（三侧都只回传可读文本，绝不回传原始值）。 */
 function mergePreviewSectionView(result: MergeSectionResult): MergePreviewSectionView {
@@ -517,6 +488,15 @@ export type MergeResolution = { id: SectionId; action: 'keepLocal' | 'useRemote'
 /** applyMergeResolutions 报告：ApplyReport + 仍未裁决的冲突分区（非空 = 基线未推进）。 */
 export type ApplyMergeResolutionsReport = ApplyReport & { pendingConflicts: SectionId[] };
 
+/**
+ * 删除远端快照的结果（F3：显式删除路径此前对「本轮 blob GC 被放弃」完全静默）。
+ * `warnings` 与 push 报告同风格（空数组 = 本轮什么都没被放弃）：快照已按用户意图删除，
+ * 「孤儿 blob 没回收」不是失败（下一轮 GC 还会再试），所以进 warnings、不进 ok。
+ */
+export interface DeleteSnapshotResult {
+  warnings: string[];
+}
+
 export class SyncEngine {
   private readonly ctx: HostContext;
   private readonly transport: SyncTransport;
@@ -872,10 +852,13 @@ export class SyncEngine {
     if (encrypt && (opts.password === undefined || opts.password === '')) {
       throw new Error(this.msg('sync.encryptRequiresPassword'));
     }
+    // SYN-02：本轮只列一次远端 index（推进检测 + 继承会话删除墓碑共用；墓碑累积在最新快照里）
+    const remoteIndex = await listRemoteSnapshotIndex(this.transport);
+    const remoteTombstones = remoteIndex.reason === undefined ? remoteTombstonesOf(remoteIndex.metas) : [];
     // 远端推进检测：不一致 = 远端被别的设备推过（或本机基线已被裁剪）。
     // 此时推上去会覆盖/架空别人的改动 → 直接返回冲突（**不抛错**、不 upload、不记基线、不改 sync-state）。
     if (opts.force !== true) {
-      const check = await this.remoteAdvancedCheck();
+      const check = await this.remoteAdvancedCheck(remoteIndex);
       if (check.reason !== undefined) {
         // 读不到远端列表 ⇒ 无法判定。按原样继续（上传本身会再暴露通道问题），但如实说明。
         warnings.push(this.msg('sync.pushAdvanceCheckFailed', { reason: check.reason }));
@@ -929,10 +912,14 @@ export class SyncEngine {
       ? await this.buildCredentialsPayload(opts.password!, warnings)
       : undefined;
 
-    // P1-5：会话删除墓碑（上一次推过、本机已不存在的会话 = 用户删掉了）
-    const bookkeeping = await this.computeSessionBookkeeping(targets, plainSections);
+    // P1-5 + SYN-02：本机墓碑（上次推过、本机已删）叠加上远端继承的墓碑 ——
+    // 不继承的话「A 删 → B 推」会漏掉墓碑，C 带旧快照就能把已删会话复活（删除只在本机传播）。
+    const bookkeeping = await this.computeSessionBookkeeping(targets, plainSections, remoteTombstones);
     if (bookkeeping.deletedNow.length > 0) {
       warnings.push(this.msg('sync.sessionDeletionsRecorded', { count: String(bookkeeping.deletedNow.length) }));
+    }
+    if (bookkeeping.inherited > 0) {
+      warnings.push(this.msg('sync.sessionTombstonesInherited', { count: String(bookkeeping.inherited) }));
     }
 
     // ⑥ 设备身份（cloud-sync 借鉴项 ⑥）：首次生成后持久化在 sync-state.json（已有则纯读），
@@ -1109,48 +1096,34 @@ export class SyncEngine {
   private async computeSessionBookkeeping(
     targets: readonly ConfigAdapter[],
     plainSections: Partial<Record<SectionId, SectionData>>,
-  ): Promise<{ tracked: boolean; sessionUnits: string[]; tombstones: string[]; deletedNow: string[] }> {
+    remoteTombstones: readonly string[] = [],
+  ): Promise<SessionBookkeepingResult> {
     const sessions = targets.find((a) => a.id === 'sessions');
     if (sessions === undefined || sessions.listAllUnitIds === undefined) {
-      return { tracked: false, sessionUnits: [], tombstones: [], deletedNow: [] };
+      return { tracked: false, sessionUnits: [], tombstones: [], deletedNow: [], inherited: 0 };
     }
     let localUnits: string[];
     try {
       localUnits = await sessions.listAllUnitIds(this.ctx);
     } catch {
-      return { tracked: false, sessionUnits: [], tombstones: [], deletedNow: [] };
+      return { tracked: false, sessionUnits: [], tombstones: [], deletedNow: [], inherited: 0 };
     }
     if (localUnits.length === 0) {
-      return { tracked: false, sessionUnits: [], tombstones: [], deletedNow: [] };
+      return { tracked: false, sessionUnits: [], tombstones: [], deletedNow: [], inherited: 0 };
     }
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
-    const { tombstones, deletedNow } = nextSessionTombstones({
-      previousUnits: state.sessionUnits ?? [],
-      localUnits,
-      previousTombstones: state.deletedSessions ?? [],
-    });
     return {
       tracked: true,
-      sessionUnits: sessionUnitIdsOfSection(plainSections['sessions']),
-      tombstones,
-      deletedNow,
+      ...planSessionBookkeeping({
+        previousUnits: state.sessionUnits ?? [],
+        previousTombstones: state.deletedSessions ?? [],
+        localUnits,
+        exportedSessions: plainSections['sessions'],
+        remoteTombstones,
+      }),
     };
   }
 
-  /**
-   * P1-5：按远端墓碑剔除**将要导入**的会话（旧快照不得复活已删除的对话）。
-   * 只动载荷，不动本机已有数据 —— 墓碑不代用户删除本机文件（那是不可回滚的用户动作）。
-   * @returns 被剔除的会话单元 id（调用方据此出可见报告，绝不静默）
-   */
-  private stripTombstonedSessions(snapshot: SyncSnapshot): string[] {
-    const tombstones = snapshot.manifest.deletedSessions ?? [];
-    if (tombstones.length === 0 || isEncryptedSections(snapshot.sections)) return [];
-    const plain = snapshot.sections as Partial<Record<SectionId, SectionData>>;
-    const stripped = stripTombstonedUnits(plain['sessions'], tombstones);
-    if (stripped.removed.length === 0) return [];
-    plain['sessions'] = stripped.section as SectionData;
-    return stripped.removed;
-  }
 
   /**
    * 裁剪远端快照：调用 transport.list() 获取全部快照（按 createdAt 升序），
@@ -1186,6 +1159,10 @@ export class SyncEngine {
     );
     // 刚 push 的快照永不进删除集（防御性：策略三层全关时也保住它）
     const keep = new Set<string>([pushedId]);
+    // SYN-04b：本轮 GC 是否已放弃 —— 每次 transport.delete() 内部会重跑一轮 blob GC，
+    // 而放弃码是「本轮」的结论；同一次 push 里删 N 个快照会设置 N 次同一个原因，
+    // 逐条报会把「一样的事实」刷 N 遍，所以本轮只报一次。
+    const gcReported = { done: false };
     for (const m of metas) {
       if (doomed.includes(m.id) && !keep.has(m.id)) {
         try {
@@ -1194,6 +1171,7 @@ export class SyncEngine {
           const reason = err instanceof Error ? err.message : String(err);
           warnings.push(this.msg('sync.pruneDeleteFailed', { id: m.id, reason }));
         }
+        reportGcSkipOnce(this.transport, this.msg, warnings, gcReported);
       }
     }
   }
@@ -1216,17 +1194,17 @@ export class SyncEngine {
    *  - 其余：远端最新快照 id !== lastSnapshotId ⇒ 远端被推进（或本机基线已被裁剪）→ 拦。
    *    两种情况都**无法安全断言「远端没变」**，保守拒绝并给出 force 出口。
    *  - list() 抛错 → 返回 reason（调用方按原样继续并告警），绝不把「读不到」当成「没变」。
+   *  - SYN-02：index 可由 push() 传入（同一轮只列一次远端），缺省自己 list（其它调用点行为不变）。
    */
-  private async remoteAdvancedCheck(): Promise<{ blocked: boolean; base: string; latest: string; reason?: string }> {
+  private async remoteAdvancedCheck(
+    index?: RemoteSnapshotIndex,
+  ): Promise<{ blocked: boolean; base: string; latest: string; reason?: string }> {
     const state = await loadSyncState(this.stateDir, this.fsx, this.msg);
     const base = state.lastSnapshotId;
     if (base === '') return { blocked: false, base, latest: '' };
-    let metas: SyncSnapshotMeta[];
-    try {
-      metas = await this.transport.list();
-    } catch (err) {
-      return { blocked: false, base, latest: '', reason: err instanceof Error ? err.message : String(err) };
-    }
+    const listed = index ?? await listRemoteSnapshotIndex(this.transport);
+    if (listed.reason !== undefined) return { blocked: false, base, latest: '', reason: listed.reason };
+    const metas = listed.metas;
     if (metas.length === 0) return { blocked: false, base, latest: '' };
     const latest = metas[metas.length - 1]!.id; // list 按 createdAt 升序 → 最新在末
     return { blocked: latest !== base, base, latest };
@@ -1250,7 +1228,7 @@ export class SyncEngine {
     // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
     await this.prepareSnapshot(snapshot, opts.password);
     // P1-5：按远端墓碑剔除已删除的会话（旧快照不复活）
-    const tombstoned = this.stripTombstonedSessions(snapshot);
+    const tombstoned = stripTombstonedSessionsInPlace(snapshot);
     // issue #38：快照携带凭据载荷 → 解密出 ref→值（仅内存），供计划项与后续 apply 使用
     const credentials = await this.decryptSnapshotCredentials(snapshot, opts.password);
 
@@ -1315,7 +1293,7 @@ export class SyncEngine {
     await this.prepareSnapshot(snapshot, opts.password)
     // audit-sync sync-F6：剔除结果必须**可见**（与 pull/preview 同一口径）。
     // 此前返回值丢弃了它 —— 产物里少了哪些会话，调用方与用户都无从得知（绝不静默少带）。
-    const tombstonedSessions = this.stripTombstonedSessions(snapshot).length
+    const tombstonedSessions = stripTombstonedSessionsInPlace(snapshot).length
     const portableIds = this.pullSectionIds()
     const zipPath = await this.snapshotToZip(snapshot, portableIds)
     // snapshotToZip 产出在临时目录；搬到调用方指定目录（同盘 rename，跨盘退化为复制）
@@ -1342,9 +1320,27 @@ export class SyncEngine {
    *  - **与保留策略裁剪共用同一条 `transport.delete`**（两条通道的删除语义只有一份实现），
    *    区别只在「谁点名」：这里是用户显式指定的 id，pruneRemoteSnapshots 由 RetentionPolicy 挑；
    *  - **不存在视为成功**（SyncTransport 契约），所以重复点删除 / 已被裁剪掉都不会报错。
+   *
+   * F3：通道侧的 blob GC 可能「放弃本轮」（SYN-04：引用快照 404 / 读不出 ⇒ 证明不了没人引用）。
+   * 放弃不是删除失败，但**必须可见**（否则孤儿 blob 无人知晓地一直堆）⇒ 放弃码用与 push 报告
+   * 同一条 `gcSkipWarning` 渲染进返回体的 warnings。
    */
-  async deleteSnapshot(id: string): Promise<void> {
+  async deleteSnapshot(id: string): Promise<DeleteSnapshotResult> {
     await this.transport.delete(id)
+    // transport.delete 内部是 await 完 gcBlobStore 才返回的（两条通道同型），所以此时取到的是
+    // **本次删除那一轮**的放弃码，而不是上一轮的残留。
+    const code = this.lastGcSkipCode()
+    return code === null ? { warnings: [] } : { warnings: [gcSkipWarning(this.msg, code)] }
+  }
+
+  /**
+   * SYN-04b：通道最近一轮 GC 的放弃码（无则 null）。
+   *
+   * 保留为 public 只读出口（不删）：属本类已发布的可见 API，路由/诊断不跑删除流程也能读到通道能力；
+   * 引擎内已由 deleteSnapshot 消费（放弃码 → warnings），不再是死方法。读不到（通道没这能力）= null。
+   */
+  lastGcSkipCode(): string | null {
+    return readGcSkipCode(this.transport)
   }
 
   /** 列出远端已有快照（按 createdAt 升序）—— 供「选择历史快照」下拉。 */
@@ -1447,7 +1443,7 @@ export class SyncEngine {
     // 加密快照 → 用密码解密回明文（无密码明确报错）；普通快照 → containsSecrets 拒绝
     await this.prepareSnapshot(snapshot, opts.password);
     // P1-5：按远端墓碑剔除已删除的会话（旧快照不复活；一键同步复用本 plan）
-    const tombstoned = this.stripTombstonedSessions(snapshot);
+    const tombstoned = stripTombstonedSessionsInPlace(snapshot);
     // issue #38：凭据载荷解密（仅内存；由调用方登记进同步会话，apply-items 时写回本机）
     const credentials = await this.decryptSnapshotCredentials(snapshot, opts.password);
     const portableIds = this.pullSectionIds();
@@ -1493,7 +1489,7 @@ export class SyncEngine {
     // issue #107：记下远端快照是否加密 —— applyMergePlan 据此决定祖先副本也落密文
     this.lastMergedRemoteEncrypted = remote.manifest.encrypted === true;
     // P1-5：按远端墓碑剔除已删除的会话（三方合并的 remote 侧同样不许复活）
-    this.stripTombstonedSessions(remote);
+    stripTombstonedSessionsInPlace(remote);
     // 本次合并的远端基准（P0-7）：紧随其后的 applyMergePlan() 用它写基线远端指针
     this.lastMergedRemoteSnapshotId = targetId;
     // issue #45：把远端快照的 sourceHome 与用户映射一并备忘 —— applyMergePlan 重建临时 ZIP 时
@@ -1965,12 +1961,12 @@ export class SyncEngine {
           warnings: [this.msg('sync.preApplySnapshotFailed', { err: backupErr instanceof Error ? backupErr.message : String(backupErr) })],
         };
       }
-      // 3) 真正执行：Importer.executeImportPlan（rollbackOnError=true → 任一失败整体回滚）
+      // 3) 真正执行：Importer.executeImportPlan（rollbackOnError 取单一缺省 → 任一失败整体回滚）
       // 自动同步路径没有密码（凭据载荷无法解密），因此恒不注入 decryptedCredentials；
       // 加密快照本就不会进入自动同步（无密码无法 prepareSnapshot）。
       const result = await this.importer.executeImportPlan(zipPath, plan, {
         confirm: true,
-        rollbackOnError: true,
+        rollbackOnError: DEFAULT_ROLLBACK_ON_ERROR,
         secretInputs: undefined,
         decryptedCredentials: undefined,
         // 审计 P0-23：把 journal 绑定面透传给引擎（自动同步路径由 autosync-scheduler 提供），
@@ -2100,10 +2096,10 @@ export class SyncEngine {
       };
     }
 
-    // 真正执行：Importer.executeImportPlan（confirm:true + rollbackOnError:true → 任一失败整体回滚）
+    // 真正执行：Importer.executeImportPlan（confirm:true + rollbackOnError 取单一缺省 → 任一失败整体回滚）
     const result = await this.importer.executeImportPlan(zipPath, subPlan, {
       confirm: true,
-      rollbackOnError: true,
+      rollbackOnError: DEFAULT_ROLLBACK_ON_ERROR,
       secretInputs: undefined,
       // issue #38：快照凭据载荷解出的 ref→值（仅内存）→ credentials adapter 写回本机
       decryptedCredentials: opts.credentials,

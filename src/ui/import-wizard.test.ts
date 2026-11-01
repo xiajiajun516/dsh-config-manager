@@ -13,6 +13,7 @@ import {
   importPreviewStageAfter, isSkippablePluginInstall, mergeSecretInput, nextImportPhase, pendingSecretRequests,
 } from './import-wizard.ts';
 import { MockImportPort, makeAnalysis, makeImportResult, makePlan, makePlanItem } from './test-helpers.ts';
+import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/importer.ts';
 import type { ImportPlan, PathIssue } from '../core/types.ts';
 import type { SectionId } from '../schema/types.ts';
 import { ConfigManagerApiError } from '../client/common/http.ts';
@@ -101,7 +102,23 @@ test('import-wizard: execute 默认显式传 rollbackOnError=true（场景 E）'
   assert.equal(wiz.currentStep, 'result');
   assert.equal(port.executeCalls.length, 1);
   assert.equal(port.executeCalls[0]!.confirm, true);
-  assert.equal(port.executeCalls[0]!.rollbackOnError, true, '默认整体回滚');
+  assert.equal(port.executeCalls[0]!.rollbackOnError, DEFAULT_ROLLBACK_ON_ERROR, '默认整体回滚（与引擎同一缺省符号）');
+});
+
+test('IE-02: 向导缺省取引擎同一符号（IE-02 四入口同缺省）', async () => {
+  const port = new MockImportPort();
+  const wiz = new ImportWizard({ port });
+  assert.equal(wiz.snapshot().rollbackOnError, DEFAULT_ROLLBACK_ON_ERROR, '未传 defaultRollbackOnError → 引擎同一缺省');
+
+  await wiz.selectZip('x.zip');
+  await wiz.confirmCompatibility();
+  await wiz.execute({ confirm: true });
+  assert.equal(port.executeCalls[0]!.rollbackOnError, DEFAULT_ROLLBACK_ON_ERROR, '交给 /execute 的值也是同一缺省');
+
+  // 显式缺省仍以调用方为准（UI 可选项不被缺省吃掉）
+  const offPort = new MockImportPort();
+  const off = new ImportWizard({ port: offPort, defaultRollbackOnError: false });
+  assert.equal(off.snapshot().rollbackOnError, false);
 });
 
 test('import-wizard: 用户可选 rollbackOnError=false（单项失败继续 §34.17）', async () => {

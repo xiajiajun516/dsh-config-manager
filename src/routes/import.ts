@@ -10,6 +10,7 @@ import type { WebRoute } from './kit.ts'
 import type { RoutesEnv } from './context.ts'
 import type { RunState } from '../core/run-registry.ts'
 import type { ImportPlan } from '../core/types.ts'
+import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts'
 import { decryptErrorText, isControlledPath, tryDecryptCredentials, writeRequestBodyToFile } from './route-support.ts'
 import { resolveSessionFormatDisposition, sessionFormatAbortResponse } from './session-format.ts'
 import { ENCRYPTED_CONTAINER_CODE, SecurityError, decryptArchive, isArchiveBlob, readContainerKind, verifyEncryptedBlob } from '../security/index.ts'
@@ -252,7 +253,9 @@ export function importRoutes(env: RoutesEnv): WebRoute[] {
             opts['secretInputs'] !== null && typeof opts['secretInputs'] === 'object'
               ? opts['secretInputs'] as Record<string, string>
               : {},
-          rollbackOnError: opts['rollbackOnError'] === true,
+          // IE-02：调用方没写就落全仓同一缺省，别在这里另立一份 true/false
+          rollbackOnError:
+            typeof opts['rollbackOnError'] === 'boolean' ? opts['rollbackOnError'] : DEFAULT_ROLLBACK_ON_ERROR,
           decryptedCredentials,
           // Phase 4 生产 snapshot 接线：deferred journal 绑定的 ctx 透传给引擎，
           // 使快照创建后立即 bindSnapshot（SNAPSHOT_CREATED）→ markApplying（APPLYING）再执行。

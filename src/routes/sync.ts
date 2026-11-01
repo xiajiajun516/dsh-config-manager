@@ -49,7 +49,7 @@ import { shouldRunOnEnable, readAutosyncConfig, writeAutosyncConfig, clampRemote
 import { isValidExportFileName } from '../sync/backup-files.ts'
 import { DeviceFlowStore } from '../sync/github-auth.ts'
 import { channelOf, clearSyncChannel, isWebDavConfig, listCloudConfiguredProviders, parseSyncChannel, readFullSyncConfig, writeSyncConfig, gistChannelView, s3ChannelView, cloudSecretRef, S3_COMPAT_PROVIDERS, GIST_PROVIDER } from '../sync/sync-config.ts'
-import type { CloudS3ChannelView, CloudGistChannelView, CloudSecretWriter, FullSyncConfig, SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
+import type { CloudS3ChannelView, CloudGistChannelView, CloudSecretWriter, FullSyncConfig, SyncConfig, SyncConfigIssue, SyncTransportType } from '../sync/sync-config.ts'
 import { SyncEngine } from '../sync/sync-engine.ts'
 import { isProbeUnsupported } from '../sync/transport.ts'
 import type { ApplyItemsReport } from '../sync/sync-engine.ts'
@@ -198,8 +198,12 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
    */
   const collectSyncStatus = async (opts: { workDirDetail: boolean }): Promise<Record<string, unknown>> => {
     // 完整双命名空间配置：repoUrl / webdav.url 无论当前通道都回填，
-    // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失
-    const full = await readFullSyncConfig(syncDir)
+    // 保证 UI 在 git ↔ webdav 间切换时另一通道的地址不丢失。
+    // SEC-03 读侧可见性：已落盘但过不了白名单的 repoUrl 会被 readFullSyncConfig 丢弃
+    // （绝不交给凭据注入/git 子进程），但**必须把成因带出去** —— 否则界面显示「未配置」，
+    // 用户永远看不出自己保存过的地址是被安全校验拒掉，而不是从来没存过。
+    const configIssues: SyncConfigIssue[] = []
+    const full = await readFullSyncConfig(syncDir, configIssues)
     const state = await loadSyncState(syncDir)
     const [cred, webdavCred] = await Promise.all([
       credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
@@ -231,6 +235,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
       configured: full !== null,
       transport,
       repoUrl: full?.git?.repoUrl,
+      // 被丢弃的通道配置成因（默认空数组：字段恒在，客户端不必判 undefined；
+      // 合法配置不产生幻影告警）。code 是机读 token，message 可直接展示。
+      configIssues,
       credentialConfigured: cred.configured,
       credentialWritable: cred.writable === true,
       // webdav 配置状态（无 secret 值：口令用 passwordConfigured 布尔标记）
@@ -302,10 +309,17 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           writeJson(res, 400, { error: msg('sync.workdirRecloneNeedsConfirm') })
           return
         }
-        const full = await readFullSyncConfig(syncDir)
+        const configIssues: SyncConfigIssue[] = []
+        const full = await readFullSyncConfig(syncDir, configIssues)
         const repoUrl = full?.git?.repoUrl ?? ''
         if (repoUrl === '') {
-          writeJson(res, 400, { error: msg('sync.workdirNotConfigured') })
+          // SEC-03：区分「地址被安全校验拒掉」与「从来就没配」。两者都 400、都不重建，
+          // 但文案必须说实话 —— 说成「尚未配置」会让用户反复重填同一个被拒地址。
+          const rejected = configIssues.find((issue) => issue.channel === 'git')
+          writeJson(res, 400, {
+            error: rejected === undefined ? msg('sync.workdirNotConfigured') : rejected.message,
+            configIssues,
+          })
           return
         }
         const rebuilt = await syncWorkDir.rebuild(repoUrl, mode)
@@ -373,11 +387,15 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
           credentials.describe(credentialRef(SYNC_CREDENTIAL_REF)),
           credentials.describe(credentialRef(SYNC_WEBDAV_CREDENTIAL_REF)),
         ])
-        const cloud = await cloudChannelViews(await readFullSyncConfig(syncDir), credentials)
+        // SEC-03：写完就把落盘结果再读一遍（writeSyncConfig 可能因命名空间合并保留旧值），
+        // 成因而非「写成功」才是客户端要显示的真相；字段恒在（默认空数组）。
+        const configIssues: SyncConfigIssue[] = []
+        const cloud = await cloudChannelViews(await readFullSyncConfig(syncDir, configIssues), credentials)
         writeJson(res, 200, {
           ok: true,
           configured: true,
           transport: syncCfg.transport,
+          configIssues,
           credentialConfigured: cred.configured,
           // 通道判定消费单一来源 channelOf（B7 守卫扩到覆盖该谓词形态；此前是裸 isWebDavConfig 分支）
           webdav: channelOf(syncCfg) === 'webdav' ? describeWebDavSlot(syncCfg, webdavCred.configured) : undefined,
@@ -823,8 +841,9 @@ export function syncRoutes(env: RoutesEnv): WebRoute[] {
         }
         const syncCfg = await prepareSync(body)
         const engine = makeSyncEngine(syncCfg)
-        await withTimeout(engine.deleteSnapshot(snapshotId), ROUTE_TIMEOUT_MS, msg('host.syncPullTimeout'))
-        writeJson(res, 200, { ok: true, snapshotId })
+        const deleted = await withTimeout(engine.deleteSnapshot(snapshotId), ROUTE_TIMEOUT_MS, msg('host.syncPullTimeout'))
+        // 远端孤儿 blob 回收被放弃时要能看见（RV1-F3）：空数组 = 本轮什么都没被放弃。
+        writeJson(res, 200, { ok: true, snapshotId, warnings: deleted.warnings })
       } catch (error) {
         writeSyncRouteError(res, error)
       }

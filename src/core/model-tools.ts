@@ -37,7 +37,7 @@ import { createEncryptionProvider } from '../security/encryption.ts'
 import { SECTION_IDS } from '../schema/config.ts'
 import type { SectionId } from '../schema/types.ts'
 import { parseSyncChannel, readFullSyncConfig, readSyncConfigFor, SYNC_CHANNELS } from '../sync/sync-config.ts'
-import type { SyncConfig, SyncTransportType } from '../sync/sync-config.ts'
+import type { SyncConfig, SyncConfigIssue, SyncTransportType } from '../sync/sync-config.ts'
 import type { ConfigAdapter, HostContext, SecretScanner } from './types.ts'
 import { runWithMutationLock } from '../utils/env-lock.ts'
 
@@ -92,17 +92,33 @@ function filterSectionIds(ids: readonly string[]): SectionId[] {
   return ids.filter((id): id is SectionId => (SECTION_IDS as readonly string[]).includes(id))
 }
 
+/**
+ * SEC-03：把「读侧被白名单丢弃的配置」翻成一句可执行的补充说明。
+ * 只挑本通道的 issue —— git 地址被拒不该出现在 webdav 的错误里。
+ */
+function describeConfigIssues(issues: readonly SyncConfigIssue[], channel: SyncTransportType): string {
+  const own = issues.filter((issue) => issue.channel === channel)
+  if (own.length === 0) return ''
+  return own.map((issue) => `config issue ${issue.code} (${issue.channel}): ${issue.message}`).join('; ')
+}
+
 /** 解析同步引擎：channel 缺省取已配置的活动通道（git/webdav），未配置则抛可操作错误。 */
 async function resolveEngine(
   deps: ModelToolsDeps,
   channel?: SyncTransportType,
 ): Promise<{ engine: SyncEngine; channel: SyncTransportType }> {
+  // SEC-03：两处读取都收集 issues —— 否则「地址被安全校验拒掉」会被报成
+  // 「sync-config.json 缺失或损坏」，让模型/用户反复重填同一个被拒地址。
+  const issues: SyncConfigIssue[] = []
   // 未显式指定通道 → 取已配置的活动通道（唯一判定口径 parseSyncChannel；缺省 git）
-  const full = channel === undefined ? await readFullSyncConfig(deps.syncDir) : null
+  const full = channel === undefined ? await readFullSyncConfig(deps.syncDir, issues) : null
   const ch: SyncTransportType = channel ?? parseSyncChannel(full?.transport) ?? 'git'
-  const cfg = await readSyncConfigFor(deps.syncDir, ch)
+  const cfg = await readSyncConfigFor(deps.syncDir, ch, issues)
   if (cfg === null) {
-    throw new Error(engineMsg('core.modelTools.syncChannelNotConfigured', { channel: ch }))
+    const base = engineMsg('core.modelTools.syncChannelNotConfigured', { channel: ch })
+    const detail = describeConfigIssues(issues, ch)
+    // 无 issue = 真的没配（保持原文案）；有 issue = 说清成因，绝不吞掉
+    throw new Error(detail === '' ? base : `${base} — ${detail}`)
   }
   return { engine: deps.makeSyncEngine(cfg), channel: ch }
 }

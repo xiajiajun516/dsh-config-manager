@@ -25,11 +25,12 @@ import { EXECUTING_STAGE, IMPORT_STAGES, ProgressTracker } from './progress.ts';
 import { formatActionableError, toActionableError } from './errors.ts';
 import { liveUiT, type UiT } from './i18n.ts';
 import { nextFlowPhase, type FlowPhase } from './flow.ts';
+import { DEFAULT_ROLLBACK_ON_ERROR } from '../core/import-defaults.ts';
 
 export interface ImportWizardOptions {
   port: ImportPort;
   onProgress?: ProgressListener;
-  /** 默认回滚策略（场景 E：true=整体回滚；UI 可在执行前覆盖） */
+  /** 默认回滚策略（场景 E：true=整体回滚；UI 可在执行前覆盖；缺省取 `DEFAULT_ROLLBACK_ON_ERROR`） */
   defaultRollbackOnError?: boolean;
   /**
    * 渲染层翻译器（UiT）。缺省 = **活**翻译器 `liveUiT`（随 DSH 语言变化）——
@@ -282,7 +283,7 @@ export class ImportWizard {
     this.port = opts.port;
     this.onProgress = opts.onProgress;
     this.tracker = new ProgressTracker(IMPORT_STAGES, this.onProgress);
-    this.rollbackOnError = opts.defaultRollbackOnError ?? true;
+    this.rollbackOnError = opts.defaultRollbackOnError ?? DEFAULT_ROLLBACK_ON_ERROR;
     this.t = opts.t ?? liveUiT;
   }
 

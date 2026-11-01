@@ -28,6 +28,8 @@
 import { requestOnce, type RawResponse } from '../../utils/proxy.ts';
 import { zhMsg } from '../../core/messages.ts';
 import { composeMsg } from '../s3/messages.ts';
+import { GC_SKIP_REFERENCE_MISSING, GC_SKIP_REFERENCE_UNREADABLE, GC_SKIP_SNAPSHOT_UNPARSABLE } from '../gc-skip.ts';
+import type { GcSkipCode } from '../gc-skip.ts';
 // t6：「英文界面零中文」——注册同步域追加目录（this.o.msg 缺省 = zhMsg，其查找链会查注册目录；
 // sync.webdav.blobHashInvalid 这类新键必须能解析，绝不露裸键名）。
 import '../messages.ts';
@@ -301,6 +303,14 @@ export class WebDavTransport implements SyncTransport {
     retry: SyncRetryOptions;
     msg: MsgFunc;
   };
+
+  /** 最近一轮 blob GC 的放弃码（`null` = 跑完或未触发；SYN-04）。 */
+  private gcSkip: GcSkipCode | null = null;
+
+  /** 最近一轮 blob GC 是否因「无法证明引用集完整」而整体放弃（`null` = 正常跑完），供上层给用户提示。 */
+  get lastGcSkip(): GcSkipCode | null {
+    return this.gcSkip;
+  }
 
   constructor(options: WebDavTransportOptions) {
     this.o = {
@@ -662,22 +672,33 @@ export class WebDavTransport implements SyncTransport {
 
   /**
    * blob 仓 GC（P1-4）：逐份读取**仍存在**的快照 JSON，收集被引用的哈希，删除无人引用且
-   * 超过保护窗口的 blob。读坏任一份快照 → 本轮直接放弃（宁可留垃圾，不可删在用的）。
+   * 超过保护窗口的 blob。读不坏任何一份快照 → 正常回收；否则本轮整体放弃（宁可留垃圾，不可删在用的）。
+   *
+   * SYN-04（P1）：**404 也放弃本轮**。旧实现把「索引有条目但快照文件 404」当作「文件不存在 ⇒ 不可能
+   * 引用任何 blob」直接 continue，于是引用集只剩「读得出来的那几份」，仍被该快照（假 404 / 孤儿条目）
+   * 使用的 blob 就被判成无人引用而删除 —— 不可恢复。拿不到内容就无法证明「没人引用」，与「读不出来」
+   * 是同一件事 ⇒ 一律放弃并记码（sync-N1 同族口径）。
    */
   private async gcBlobStore(pwd: string, remaining: SyncSnapshotMeta[]): Promise<void> {
+    this.gcSkip = null;
     const index = await this.readBlobIndex(pwd);
     if (Object.keys(index).length === 0) return;
     const referenced = new Set<string>();
     for (const meta of remaining) {
       const res = await this.send('GET', this.snapshotUrl(meta.id), pwd);
-      // 索引有条目但快照文件 404 ⇒ 该文件不存在，不可能引用任何 blob（安全跳过）。
-      // 其它失败 ⇒ **读不出来 ≠ 没引用**，本轮直接放弃（与「宁可留垃圾，不可删在用的」同口径；sync-N1 同族）。
-      if (res.status === 404) continue;
-      if (!res.ok) return;
+      if (res.status === 404) {
+        this.gcSkip = GC_SKIP_REFERENCE_MISSING;
+        return;
+      }
+      if (!res.ok) {
+        this.gcSkip = GC_SKIP_REFERENCE_UNREADABLE;
+        return;
+      }
       let snap: SyncSnapshot;
       try {
         snap = deserializeSnapshot(await res.text());
       } catch {
+        this.gcSkip = GC_SKIP_SNAPSHOT_UNPARSABLE;
         return;
       }
       const plain = snap.sections as Partial<Record<SectionId, unknown>>;

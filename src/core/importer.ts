@@ -11,6 +11,13 @@
 import type { ZipArchive, ZipSafetyLimits } from '../utils/zip.ts';
 import type { MsgFunc } from './messages.ts';
 import { Analyzer } from './analyzer.ts';
+import { DEFAULT_ROLLBACK_ON_ERROR } from './import-defaults.ts';
+
+/**
+ * 缺省值的规范定义在 `./import-defaults.ts`（零依赖，UI 向导与浏览器 bundle 也引入它）；
+ * 这里再导出一份，宿主侧调用方（路由、同步通道、CLI）可以从引擎门面拿，不必记两个路径。
+ */
+export { DEFAULT_ROLLBACK_ON_ERROR };
 import type { PlanItemProgress } from './analyzer.ts';
 import type { BootSafetyReport } from './boot-safety.ts';
 import type {
@@ -41,7 +48,10 @@ export interface ExecuteOptions {
   secretInputs?: Record<string, string>;
   /** 加密备份解密结果（仅内存；解密必须经 m4 encryption provider） */
   decryptedCredentials?: Map<string, string>;
-  /** 任一项失败立即整体回滚（默认 false：单项失败如实记录并继续其余项） */
+  /**
+   * 任一项失败立即整体回滚。缺省 = `DEFAULT_ROLLBACK_ON_ERROR`（`./import-defaults.ts`，全仓唯一一份）；
+   * 要「单项失败如实记录并继续其余项」必须显式传 `false`。
+   */
   rollbackOnError?: boolean;
   /** m1：每完成一个计划项的进度回调（透传给 Analyzer；不传则无埋点） */
   onItem?: (info: PlanItemProgress) => void;
@@ -97,7 +107,7 @@ export class Importer {
       confirm: opts.confirm,
       secretInputs: opts.secretInputs,
       decryptedCredentials: opts.decryptedCredentials,
-      rollbackOnError: opts.rollbackOnError,
+      rollbackOnError: opts.rollbackOnError ?? DEFAULT_ROLLBACK_ON_ERROR,
       onItem: opts.onItem,
       onItemStart: opts.onItemStart,
       onLog: opts.onLog,

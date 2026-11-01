@@ -21,7 +21,11 @@ import { EnvironmentLockUnavailableError, runWithMutationLock } from '../utils/e
 import { scanSessionHealth } from '../utils/session-health-scan.ts'
 import { applySessionTitles } from '../core/session-meta.ts'
 import { applySessionLogTitles } from '../core/session-title.ts'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { isPathSafe, isSameOrChild } from '../utils/paths.ts'
+import { writeZip, type ZipWriteEntry } from '../utils/zip.ts'
+import { isValidSnapshotId } from '../core/restore.ts'
 import {
   applySessionRepair,
   listSessionRepairs,
@@ -312,6 +316,160 @@ function incompleteCopiesOf(profiles: {
   }
 }
 
+/* ------------------------------------------------------------------ BK-01
+ * 反悔副本（pre-restore）只读出口。
+ *
+ * 恢复链路在覆盖/删除任何文件前，会把当前原文复制到
+ * `<snapshotsDir>/<snapshotId>/pre-restore/<attempt>/`（src/core/restore.ts 的
+ * createPreRestoreAttemptDir / copyToPreRestore，文件名 `NNNN-<label>`）。
+ * BK-01：这份数据此前在 host 侧零出口 —— 用户既看不见、也取不出来，等于「存在但不可达」。
+ * 这里只做两件**零写入**的事：列清单（GET）与把某个 attempt 打成 zip 落到用户指定的导出目录（POST）。
+ *
+ * 硬边界：
+ *  - 整条链路不写快照目录一个字节（源目录里连临时文件都不许留）；
+ *  - zip 只落用户显式给出的**已存在**目录，目标同名文件已存在即 409（绝不就地覆盖任何既有文件）；
+ *  - 导出目录落在源目录之内（或源目录落在导出目录之内）一律 400。
+ */
+const PRE_RESTORE_DIR = 'pre-restore'
+/** 单次枚举的上限：attempt 数 / 文件数 / 递归深度 / 单次导出总字节。防一个坏目录把首屏拖垮。 */
+const PRE_RESTORE_MAX_ATTEMPTS = 200
+const PRE_RESTORE_MAX_FILES = 2000
+const PRE_RESTORE_MAX_DEPTH = 8
+const PRE_RESTORE_EXPORT_MAX_BYTES = 256 * 1024 * 1024
+/** attempt 目录名 = 恢复时间戳 `YYYYMMDD-HHMMSS-mmm`（restore.ts 的 preRestoreStamp），可选 `-N` 去重后缀。 */
+const PRE_RESTORE_ATTEMPT_RE = /^[0-9]{8}-[0-9]{6}-[0-9]{3}(-[0-9]+)?$/
+
+interface PreRestoreFile { relativePath: string; sizeBytes: number; mtimeMs: number }
+interface PreRestoreAttempt { attempt: string; files: PreRestoreFile[]; totalBytes: number; skippedLinks: number; truncated: boolean }
+interface PreRestoreSnapshot { snapshotId: string; attempts: PreRestoreAttempt[]; unreadable?: string; truncated?: true }
+interface PreRestoreListing { readOnly: true; snapshots: PreRestoreSnapshot[]; unreadable: string | null }
+
+function isPreRestoreAttemptName(name: unknown): name is string {
+  return typeof name === 'string' && PRE_RESTORE_ATTEMPT_RE.test(name)
+}
+
+interface PreRestoreWalk { files: PreRestoreFile[]; totalBytes: number; skippedLinks: number; truncated: boolean }
+
+/**
+ * 递归走一遍 attempt 目录，只**读元数据**（readdir + stat），不读文件内容。
+ * symlink 不跟随（只计数）：反悔副本里出现链接本身就可疑，跟过去会把 home 外的东西带进 zip。
+ * 超深度 / 超文件数 / 超字节即 `truncated` —— 调用方必须把截断当成「没说全」，不能当成「就这么多」。
+ */
+async function walkPreRestore(dir: string, maxBytes?: number): Promise<PreRestoreWalk> {
+  const files: PreRestoreFile[] = []
+  let totalBytes = 0
+  let skippedLinks = 0
+  let truncated = false
+  const walk = async (current: string, rel: string, depth: number): Promise<void> => {
+    if (truncated) return
+    if (depth > PRE_RESTORE_MAX_DEPTH) { truncated = true; return }
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => null)
+    if (entries === null) { truncated = true; return }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    for (const entry of entries) {
+      if (truncated) return
+      const abs = join(current, entry.name)
+      const relativePath = rel === '' ? entry.name : rel + '/' + entry.name
+      if (entry.isSymbolicLink()) { skippedLinks += 1; continue }
+      if (entry.isDirectory()) { await walk(abs, relativePath, depth + 1); continue }
+      if (!entry.isFile()) { skippedLinks += 1; continue }
+      const info = await stat(abs).catch(() => null)
+      if (info === null || !info.isFile()) { skippedLinks += 1; continue }
+      if (files.length >= PRE_RESTORE_MAX_FILES) { truncated = true; return }
+      if (maxBytes !== undefined && totalBytes + info.size > maxBytes) { truncated = true; return }
+      files.push({ relativePath, sizeBytes: info.size, mtimeMs: info.mtimeMs })
+      totalBytes += info.size
+    }
+  }
+  await walk(dir, '', 0)
+  return { files, totalBytes, skippedLinks, truncated }
+}
+
+/** 列出快照根下每个快照的 pre-restore attempt 与文件清单。只读；快照根读不动如实外露。 */
+async function listPreRestore(snapshotsDir: string): Promise<PreRestoreListing> {
+  const roots = await readdir(snapshotsDir, { withFileTypes: true }).catch(() => null)
+  if (roots === null) {
+    // 与 listSnapshots 同口径：读不动就如实说「读不动」，不抛 500、也不假装「没有反悔副本」
+    return { readOnly: true, snapshots: [], unreadable: snapshotsDir }
+  }
+  const snapshots: PreRestoreSnapshot[] = []
+  const ids = roots.filter((e) => e.isDirectory()).map((e) => e.name).sort()
+  for (const snapshotId of ids) {
+    if (!isValidSnapshotId(snapshotId)) continue
+    const base = join(snapshotsDir, snapshotId, PRE_RESTORE_DIR)
+    const entries = await readdir(base, { withFileTypes: true }).catch((error: unknown) => error)
+    if (!Array.isArray(entries)) {
+      const code = (entries as { code?: unknown }).code
+      // ENOENT = 这个快照从未做过恢复（正常态，不列）；其余读不动如实标注
+      if (code === 'ENOENT' || code === 'ENOTDIR') continue
+      snapshots.push({ snapshotId, attempts: [], unreadable: entries instanceof Error ? entries.message : String(entries) })
+      continue
+    }
+    const attempts = entries.filter((e) => e.isDirectory() && isPreRestoreAttemptName(e.name)).map((e) => e.name)
+    if (attempts.length === 0) continue
+    attempts.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0)) // 新 → 旧
+    const kept = attempts.slice(0, PRE_RESTORE_MAX_ATTEMPTS)
+    const list: PreRestoreAttempt[] = []
+    for (const attempt of kept) {
+      const walked = await walkPreRestore(join(base, attempt))
+      list.push({ attempt, ...walked })
+    }
+    snapshots.push({ snapshotId, attempts: list, ...(attempts.length > kept.length ? { truncated: true as const } : {}) })
+  }
+  return { readOnly: true, snapshots, unreadable: null }
+}
+
+type PreRestoreExportResult =
+  | { ok: true; zipPath: string; entries: number; totalBytes: number; skippedLinks: number }
+  | { ok: false; status: number; code: string; detail?: string }
+
+/**
+ * 把某个 attempt 目录打成 zip 落到用户指定目录。
+ * 码表（界面按 code 出文案，不靠状态码猜原因）：
+ *   invalid-input 400 / attempt-not-found 404 / export-dir-missing 400 /
+ *   export-inside-source 400 / export-target-exists 409 / export-too-large 413
+ */
+async function exportPreRestoreZip(snapshotsDir: string, body: Record<string, unknown>): Promise<PreRestoreExportResult> {
+  const fail = (status: number, code: string, detail?: string): PreRestoreExportResult =>
+    ({ ok: false, status, code, ...(detail !== undefined ? { detail } : {}) })
+  const { snapshotId, attempt, outputDir } = body
+  if (!isValidSnapshotId(snapshotId)) return fail(400, 'invalid-input', 'snapshotId')
+  if (!isPreRestoreAttemptName(attempt)) return fail(400, 'invalid-input', 'attempt')
+  // 导出目录必须是**绝对路径**且不带上跳段：相对路径会按宿主进程 cwd 解析，用户根本不知道写到哪去了
+  if (typeof outputDir !== 'string' || outputDir.trim() === '' || !isAbsolute(outputDir) || outputDir.split(/[\\/]+/).includes('..')) {
+    return fail(400, 'invalid-input', 'outputDir')
+  }
+  const outDir = resolve(outputDir)
+  const attemptDir = resolve(join(snapshotsDir, snapshotId, PRE_RESTORE_DIR, attempt))
+  // 双保险：id / attempt 已过白名单，再按解析后的路径确认没跳出快照根
+  if (!isSameOrChild(attemptDir, resolve(snapshotsDir))) return fail(400, 'invalid-input', 'attempt')
+  const srcInfo = await stat(attemptDir).catch(() => null)
+  if (srcInfo === null || !srcInfo.isDirectory()) return fail(404, 'attempt-not-found')
+  // 导出目录必须已存在：不替用户造目录（造出来的目录没人认，还可能落在错的盘上）
+  const outInfo = await stat(outDir).catch(() => null)
+  if (outInfo === null || !outInfo.isDirectory()) return fail(400, 'export-dir-missing')
+  // 双向 containment 都是「往源里写」：导出目录在 attempt 内 / attempt 在导出目录内（含快照根本身）
+  if (isSameOrChild(outDir, attemptDir) || isSameOrChild(attemptDir, outDir)) return fail(400, 'export-inside-source')
+  const zipPath = join(outDir, `pre-restore-${snapshotId}-${attempt}.zip`)
+  const walked = await walkPreRestore(attemptDir, PRE_RESTORE_EXPORT_MAX_BYTES)
+  if (walked.truncated) return fail(413, 'export-too-large')
+  // 目标已存在 ⇒ 409：writeZip 内部会 rename 覆盖，绝不能让「导出」顺手抹掉用户已有的文件
+  if ((await stat(zipPath).catch(() => null)) !== null) return fail(409, 'export-target-exists')
+  const entries: ZipWriteEntry[] = []
+  for (const file of walked.files) {
+    if (!isPathSafe(file.relativePath)) return fail(400, 'invalid-input', 'entry')
+    const data = await readFile(join(attemptDir, file.relativePath)).catch(() => null)
+    if (data === null) return fail(500, 'read-failed', file.relativePath)
+    entries.push({ name: file.relativePath, data: new Uint8Array(data) })
+  }
+  try {
+    await writeZip(zipPath, entries, { maxEntries: PRE_RESTORE_MAX_FILES })
+  } catch (error) {
+    return fail(500, 'zip-write-failed', error instanceof Error ? error.message : String(error))
+  }
+  return { ok: true, zipPath, entries: entries.length, totalBytes: walked.totalBytes, skippedLinks: walked.skippedLinks }
+}
+
 export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
   const {
     dataDir,
@@ -320,6 +478,7 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
     profiles,
     recoveryOrchestrator,
     sessionHealth,
+    snapshotsDir,
     tryAppendHistory,
   } = env
   return [
@@ -519,6 +678,40 @@ export function recoveryRoutes(env: RoutesEnv): WebRoute[] {
         } catch (error) {
           writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
         }
+        return
+      }
+      // ------------------------------- BK-01：反悔副本（pre-restore）只读出口
+      // 挂在既有 recovery prefix 内，按 segments 分发 —— **不新增 endpoint 注册点**（本族本就是 prefix
+      // 路由，路由总数仍是 83；窗口守卫钉住那 7 条不受影响）。
+      // 零写入：GET 只读元数据；POST 只往用户显式指定的导出目录写一个 zip，快照目录一字节不动。
+      if (segments[0] === 'pre-restore') {
+        const sub = segments.slice(1)
+        if (sub.length === 0) {
+          if (req.method !== 'GET') { writeJson(res, 405, { error: 'method not allowed', code: 'method-not-allowed' }); return }
+          writeJson(res, 200, await listPreRestore(snapshotsDir))
+          return
+        }
+        if (sub.length === 1 && sub[0] === 'export') {
+          if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed', code: 'method-not-allowed' }); return }
+          const body = await readJsonBody(req)
+          if (body === undefined) { writeJson(res, 400, { error: 'invalid-input', code: 'invalid-input' }); return }
+          const result = await exportPreRestoreZip(snapshotsDir, body)
+          if (!result.ok) {
+            writeJson(res, result.status, { error: result.code, code: result.code, ...(result.detail !== undefined ? { detail: result.detail } : {}) })
+            return
+          }
+          // 导出是「用户拿到了一份文件」这件事实，照既有 recovery 子路径的口径落一条历史
+          await tryAppendHistory({
+            kind: 'recovery',
+            result: 'success',
+            sections: [],
+            source: 'recovery',
+            summary: engineMsg('route.recoveryOperationSummary', { action: 'export-pre-restore' }),
+          }).catch(() => undefined)
+          writeJson(res, 200, result)
+          return
+        }
+        writeJson(res, 404, { error: 'not found' })
         return
       }
       // ---------------------------------------- S1–S8：工作区 + 会话回滚点

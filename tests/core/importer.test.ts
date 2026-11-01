@@ -12,10 +12,10 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { Exporter } from '../../src/core/exporter.ts';
-import { Importer } from '../../src/core/importer.ts';
+import { DEFAULT_ROLLBACK_ON_ERROR, Importer } from '../../src/core/importer.ts';
 import { createAdapters } from '../../src/adapters/index.ts';
 import { makeContext, MemSnapshotStore, type MockHostContext } from '../../src/adapters/test-helpers.ts';
-import type { ImportPlan } from '../../src/core/types.ts';
+import type { ApplyResult, ConfigAdapter, ExportOptions, ExportSection, ImportContext, ImportPlan, PlanItem, ValidationResult } from '../../src/core/types.ts';
 
 const NS = ['general', 'llm-deepseek'];
 
@@ -52,6 +52,33 @@ async function exportFixture(src: MockHostContext, outPath: string): Promise<voi
   const adapters = createAdapters({ namespaces: NS });
   await new Exporter({ ctx: src, adapters, now: () => new Date('2026-08-14T12:00:00.000Z') })
     .export({ includeSecrets: false, outPath });
+}
+
+/**
+ * IE-02 失败注入：代理真实 adapter，命中指定计划项时抛错（模拟写到一半失败）。
+ * 与 tests/core/rollback.test.ts 的 FlakyAdapter 同形 —— 这里只为「缺省策略」这一条断言服务。
+ */
+class FlakyItemAdapter implements ConfigAdapter {
+  private readonly inner: ConfigAdapter;
+  private failItemId: string;
+  constructor(inner: ConfigAdapter, failItemId: string) {
+    this.inner = inner;
+    this.failItemId = failItemId;
+  }
+  get id() { return this.inner.id; }
+  get displayName() { return this.inner.displayName; }
+  get defaultIncluded() { return this.inner.defaultIncluded; }
+  get portability() { return this.inner.portability; }
+  export(ctx: MockHostContext, options: ExportOptions): Promise<ExportSection> { return this.inner.export(ctx, options); }
+  analyzeImport(data: unknown, ctx: ImportContext): Promise<PlanItem[]> { return this.inner.analyzeImport(data, ctx); }
+  async applyItem(item: PlanItem, ctx: ImportContext): Promise<ApplyResult> {
+    if (item.id === this.failItemId) {
+      this.failItemId = '__none__'; // 只失败一次（防循环）
+      throw new Error(`模拟写入失败: ${item.id}`);
+    }
+    return this.inner.applyItem(item, ctx);
+  }
+  validate(data: unknown): Promise<ValidationResult> { return this.inner.validate(data); }
 }
 
 function makeImporter(dst: MockHostContext) {
@@ -431,3 +458,94 @@ test('I-12 无墓碑文件：计划不包含 skippedTombstoned 过滤记录（�
     assert.equal(plan.skippedTombstoned?.length ?? 0, 0, '无墓碑 → 无过滤记录（或空数组）');
   });
 });
+/* ─── IE-02：rollbackOnError 单一缺省（引擎 / HTTP 路由 / UI 向导 / 同步通道同一符号） ─── */
+
+test('IE-02: 未显式传 rollbackOnError → 引擎按单一缺省整体回滚（不再默认落进半套导入）', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedSource(src);
+    const zipPath = path.join(dir, 'ie02.zip');
+    await exportFixture(src, zipPath);
+
+    const dst = makeContext('win32', 'C:\\Users\\bob');
+    dst.settings.registered.add('general');
+    dst.settings.registered.add('llm-deepseek');
+    // settings 适配器的第一个计划项写到一半失败 → 缺省策略必须把整笔导入回滚
+    const adapters = createAdapters({ namespaces: NS })
+      .map((a) => (a.id === 'settings' ? new FlakyItemAdapter(a, 'settings:general') : a));
+    const importer = new Importer({ ctx: dst, adapters, snapshotStore: new MemSnapshotStore() });
+
+    const plan = await importer.createImportPlan(zipPath, { strategy: 'merge', resolutions: {}, pathMappings: [] });
+    assert.ok(plan.items.some((i) => i.id === 'settings:general'), '前置：general 应有计划项');
+
+    const result = await importer.executeImportPlan(zipPath, plan, { confirm: true });
+    assert.equal(DEFAULT_ROLLBACK_ON_ERROR, true, '缺省 = 整体回滚（安全侧），要「单项失败继续」必须显式传 false');
+    assert.equal(result.ok, false, '缺省策略下中途失败 = 整笔导入失败（不是半套导入）');
+    assert.ok(result.rollback, '缺省策略必须触发回滚并如实报告');
+    assert.equal(dst.settings.ns.get('general')?.value, undefined, '回滚后目标机不应留下笔记本体写过的 general 值（半套导入会留下它）');
+  });
+});
+
+test('IE-02: 四个调用点引用同一缺省符号（不各写一份 true/false）', async () => {
+  const repoRoot = path.resolve(import.meta.dirname, '..', '..');
+  const sites = ['src/core/importer.ts', 'src/routes/import.ts', 'src/ui/import-wizard.ts', 'src/sync/sync-engine.ts'];
+  for (const rel of sites) {
+    const text = await fs.readFile(path.join(repoRoot, rel), 'utf8');
+    assert.ok(text.includes('DEFAULT_ROLLBACK_ON_ERROR'), `${rel} 必须引用同一缺省符号 DEFAULT_ROLLBACK_ON_ERROR`);
+    assert.equal(/rollbackOnError:\s*true\b/.test(text), false, `${rel} 不得再硬写 rollbackOnError: true`);
+  }
+});
+
+/* ─── RV1-F2：预判阻断（kind 'Error'）不算硬失败 —— 不能把安全策略变成整笔回滚 ─── */
+
+test('RV1/F2: 预判阻断项不回滚，真·中途失败仍回滚（两种失败语义必须区分开）', async () => {
+  await withTmp(async (dir) => {
+    const src = makeContext('win32', 'C:\\Users\\alice');
+    await seedSource(src);
+    const zipPath = path.join(dir, 'rv1-f2.zip');
+    await exportFixture(src, zipPath);
+    const decisions = { strategy: 'merge' as const, resolutions: {}, pathMappings: [] };
+
+    // 第一段：只有「执行前就被策略拦下」的项（SEC-05 未覆盖条目 / 安全白名单）——
+    // 它一个字节都没写，把它算成硬失败等于让安全策略去删用户本来能导入的部分。
+    const dst1 = makeContext('win32', 'C:\\Users\\bob');
+    dst1.settings.registered.add('general');
+    dst1.settings.registered.add('llm-deepseek');
+    const importer1 = makeImporter(dst1);
+    const plan1 = await importer1.createImportPlan(zipPath, decisions);
+    const blocked1 = plan1.items.find((i) => i.id === 'settings:general');
+    assert.ok(blocked1, '前置：general 应有计划项');
+    blocked1!.kind = 'Error'; // 模拟预判阻断（真实来源：安全白名单 / SEC-05）
+    blocked1!.severity = 'error';
+
+    const r1 = await importer1.executeImportPlan(zipPath, plan1, { confirm: true });
+    assert.equal(r1.ok, true, '预判阻断不是中途失败：整笔导入仍算完成（E2E-4 口径）');
+    assert.equal(r1.rollback, null, '预判阻断不得触发整笔回滚');
+    const at = r1.executed.findIndex((e) => e.itemId === 'settings:general');
+    assert.ok(at >= 0, '被拦项必须如实出现在 executed 里');
+    assert.equal(r1.executed[at]!.status, 'failed', '被拦项状态 = failed（用户可见「为什么这条没导」）');
+    assert.ok(r1.executed.slice(at + 1).some((e) => e.status === 'ok'), '被拦项之后的条目必须继续执行（不中断）');
+
+    // 第二段：同一个包里再叠一个真·中途失败（applyItem 抛错）→ 必须回滚，证明语义没被放宽。
+    const dst2 = makeContext('win32', 'C:\\Users\\bob');
+    dst2.settings.registered.add('general');
+    dst2.settings.registered.add('llm-deepseek');
+    const probe = new Importer({ ctx: dst2, adapters: createAdapters({ namespaces: NS }), snapshotStore: new MemSnapshotStore() });
+    const probePlan = await probe.createImportPlan(zipPath, decisions);
+    const failItem = probePlan.items.find((i) => i.id.startsWith('settings:') && i.id !== 'settings:general');
+    assert.ok(failItem, '前置：settings 下应有第二个计划项用于注入失败');
+    const adapters2 = createAdapters({ namespaces: NS })
+      .map((a) => (a.id === 'settings' ? new FlakyItemAdapter(a, failItem!.id) : a));
+    const importer2 = new Importer({ ctx: dst2, adapters: adapters2, snapshotStore: new MemSnapshotStore() });
+    const plan2 = await importer2.createImportPlan(zipPath, decisions);
+    const blocked2 = plan2.items.find((i) => i.id === 'settings:general');
+    assert.ok(blocked2, '前置：general 应有计划项');
+    blocked2!.kind = 'Error';
+
+    const r2 = await importer2.executeImportPlan(zipPath, plan2, { confirm: true });
+    assert.equal(r2.ok, false, '真·中途失败必须让整笔导入失败（预判阻断不改变这条路径）');
+    assert.ok(r2.rollback, '真·中途失败必须回滚');
+  });
+});
+
+

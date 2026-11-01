@@ -10,6 +10,8 @@
  *    危险键（防 prototype pollution）；解析失败抛错 → 导入方归为「Backup integrity check failed」。
  *  - 一步到位 `verifyChecksumsJson`：解析 + 校验合并，供 m5/导入管线直接调用。
  *  - 校验语义：表内每个路径必须在条目集合中存在且 SHA-256 一致；缺失与不符均计入 mismatches。
+ *  - 反向覆盖（SEC-05）：`unverifiedEntries` 算出「ZIP 有、表里没登记」的条目 —— 正向校验看不到
+ *    它们，而文件类分区按归档名原样落盘，缺了这条判定就等于「完整性只覆盖一半」。
  */
 import { parseJsonSafe } from '../utils/json.ts';
 import {
@@ -90,6 +92,41 @@ export function verifyChecksumsJson(
 ): ChecksumVerifyResult {
   const table = parseChecksumsTable(raw, opts);
   return verifyChecksums(entries, table);
+}
+
+/**
+ * 会落盘的文件分区条目「未登记进校验表」时的错误码（写进 `PlanItem.detail`，也进执行报告）。
+ *
+ * 语义不是「哈希不符」（那由 `import.integrityFailed` 表示，且直接失败），而是
+ * 「这个条目根本没被校验表覆盖」—— 完整性声明对它零约束（SEC-05）。
+ */
+export const UNVERIFIED_FILE_ENTRY_CODE = 'unverified-file-entry';
+
+/**
+ * 上述状态的文案键。字典条目由维护方补齐；缺失时 messages 回退成键名本身、绝不抛错，
+ * 所以导入流程不会因为缺一条文案而中断。
+ */
+export const UNVERIFIED_FILE_ENTRY_KEY = 'import.unverifiedFileEntry';
+
+/**
+ * 校验表的**反向覆盖**：entries 里存在、校验表里没登记的路径。
+ *
+ * `verifyChecksums` 只正向遍历表里的键（登记的必须存在且 SHA-256 一致），**表外条目它不看**；
+ * 而文件类分区是按归档名原样落盘的（`adapters/file-collection.ts` 的 applyItem），
+ * 于是「ZIP 里有、checksums 没登记」的文件照样写进目标目录 —— 完整性声明只约束了登记过的那一半。
+ *
+ * 本函数是「谁没被覆盖」的**单一事实源**：loadBundle 的告警与导入侧的阻断判定共用它，
+ * 不各算一遍（两份实现迟早分叉）。判据与既有告警逐字一致：
+ * 跳过目录条目（以 `/` 结尾）与调用方给出的结构文件（manifest.json / integrity/checksums.json）。
+ */
+export function unverifiedEntries(
+  names: readonly string[],
+  table: Record<string, string>,
+  exclude: readonly string[] = [],
+): string[] {
+  const skip = new Set(exclude);
+  const covered = new Set(Object.keys(table));
+  return names.filter((name) => !name.endsWith('/') && !skip.has(name) && !covered.has(name));
 }
 
 /** 人类可读的不匹配摘要（给「Backup integrity check failed」错误消息用） */
