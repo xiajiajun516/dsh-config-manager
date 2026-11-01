@@ -13,9 +13,10 @@
 | 118 | 用 GitHub App（installation token）把授权收窄到单仓库 | dropped | — | — | 2026-10-27 |
 | 119 | 配置一字未改，远端每分钟多 1~2 个 commit（自动同步每轮误判「本地有改动」而真推快照） | done | 39f1208 | v0.2.1 | 2026-10-29 |
 | 121 | 「一键同步」这个名字让人以为是双向补齐，实际手动同步只下行；自动同步却是真双向 ⇒ 同一个词两种方向（修复：改名为「从远端合并到本机」，运行记录/历史/回滚文案同步；不改「恢复到本机」——三方合并会保留本机单边改动，「快照恢复」已占用该词） | done | 1cf8538 | v0.2.3 | 2026-10-31 |
-| 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | awaiting-release | aafc93f | — | 2026-11-01 |
+| 122 | 远端仓库远大于同步内容时 git 通道卡死：全量 clone/fetch 拉完整对象图（1.8 GB 仓库 / 6 MB 同步内容），超时只杀 git.exe 使 git-remote-https/index-pack 成孤儿继续写 tmp_pack_*（累积 7.3 GB），UI 永久停在「正在检查远端变更…」 | done | aafc93f | v0.2.4 | 2026-11-01 |
 | 120 | Android（App 内嵌 dsh web，Termux 构建的 git 2.55.0）上 Git 同步恒失败：git 编译期写死的 `GIT_SHELL_PATH` 不存在，而 credential helper 必走 `sh -c` ⇒ `cannot exec 'git credential-store … get'`（修复：helper 失败时改用 env 注入 `Authorization: basic` 重试一次，仍失败则点名平台原因） | done | 73b6fe4 | v0.2.2 | 2026-10-30 |
 
+- `2026-11-01` **#122 已发版 v0.2.4**：CI 发布成功（run 41310464902，OIDC 可信发布 + GitHub Release），registry 上 `dsh-config-manager@0.2.4` 可装（`dist-tags.latest` = 0.2.4）；已回版本号评论（issue #122 comment 6558551306）并加 `fixed` 标签，issue 保持 open 等报告者真机确认。
 - `2026-11-01` **#122 修复（待发版）**：提交 `aafc93f`。clone 改 partial + sparse（sparse 面 = `SYNC_ROOT_DIRS` ← `ADOPT_ROOT_ALLOW` 同源），老 git 按 `unknown option` 回落全量；
   `pullFromRemote` 先 `ls-remote --heads` 比 sha，**refs 相同且 HEAD 已合并**才整段跳过（只比 refs 会漏「fetch 完没 merge」的副本）；
   `--filter` 只给 `remote.origin.promisor=true` 的副本（对全量副本加过滤会让后续 checkout 缺 blob）；网络子命令前置 `-c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30`；
