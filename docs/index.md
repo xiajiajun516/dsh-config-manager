@@ -84,6 +84,7 @@
 | 位置 | 性质 | 说明 |
 |---|---|---|
 | `docs/lessons/` | 证据库（当前有效） | `AGENTS.md` 只写规则，**为什么**写在这里；索引进 `docs/lessons/README.md` |
+| `docs/research/` | 一次性专项审计与竞品研究（**快照**，不做增量维护）| 有审计基线（版本 + HEAD）与证据口径；判断当前行为仍以代码 + 测试为准；索引进 `docs/research/README.md` |
 | `docs/design/` | 上游设计存档（只留仍被活文档/代码引用的 11 份） | 可能早于实现；判断行为以代码 + 测试为准 |
 | `docs/lessons/known-pitfalls.md` | 冻结存档 | 2026-09/10 一次下移的记录，**只读**、不再追加；与 `docs/lessons/` 冲突时**以 lessons 与代码为准** |
 
