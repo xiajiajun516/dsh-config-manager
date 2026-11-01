@@ -28,6 +28,16 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ## [Unreleased]
 
+> **{{本版主题}}**：{{一句话中文主题}}
+>
+> **Theme**: {{one-line English theme}}
+
+## [0.3.0] - 2026-11-01
+
+> **本版主题**：四个页面重排到一眼能读完，设置页与同步页去掉多余的层和重复的数字，英文数量也说得对了；导入与同步补上更硬的边界 —— 备份包改不了本机同步指向，可疑的仓库地址在交给 git 之前就被拒，删除记录跟着同步走。
+>
+> **Theme**: all four pages are re-laid-out to read at a glance, the settings and sync pages shed redundant layers and repeated numbers, English counts agree, and import plus sync get harder borders — a package can no longer repoint this machine's sync target, a suspicious repository URL is rejected before git ever sees it, and deletions travel with sync.
+
 ### 🆕 新增 · Added
 
 - **快照里「恢复前被覆盖的原件」现在能列出来也能导出**：恢复前自动留下的那份副本可以在恢复记录里浏览并导出成 ZIP，不用再手工翻快照目录找。
