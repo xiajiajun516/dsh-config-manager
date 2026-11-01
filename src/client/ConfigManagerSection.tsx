@@ -649,9 +649,6 @@ const navLayoutResult = navWidths === null
               <ImportWizardView
                 api={api}
                 t={t}
-                uiT={uiT}
-                // 向导 → 来源选择：同样是改 Task 入参（面板状态只有一个事实源）
-                onOpenForeignImport={() => { runStore.patch({ task: { ...activeTask, payload: { foreign: true } } }) }}
               />
             ))}
             {activeTask.kind === 'market' && (

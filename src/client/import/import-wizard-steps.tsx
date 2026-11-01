@@ -97,16 +97,8 @@ export function SelectStep(props: {
   onReset: () => void
   apiT: UiT
   t: TranslateNS<'config-manager'>
-  /**
-   * 「从其它 agent 导入」入口（t17，**可选**）：壳层注入 uiT 与导航回调时才渲染。
-   *
-   * 为什么放在本步而不是加一级页签：导入是 Task 面板里的多阶段流程，外部来源只是
-   * 「包从哪来」的另一种选择 —— 与「选择 ZIP 文件」并列，用户心智上是同一件事的两个入口。
-   * 老调用方不传该 prop → 本区块不渲染，既有行为逐字不变。
-   */
-  foreignEntry?: { uiT: UiT; onOpen: () => void }
 }) {
-  const { fileInput, selectModel, uploading, error, onCancel, onPickFile, onReset, apiT, t, foreignEntry } = props
+  const { fileInput, selectModel, uploading, error, onCancel, onPickFile, onReset, apiT, t } = props
   return (
     <div className={`${css.viewBody} ${css.sparseFill}`}>
       <SectionTitle title={t('import.select.title')} info={<InfoHint text={t('import.select.hint')} label={t('common.infoHint')} />} />
@@ -143,14 +135,6 @@ export function SelectStep(props: {
         </Button>
       </div>
       {error !== null && <ErrorBanner error={error} onRetry={onReset} t={apiT} />}
-      {foreignEntry !== undefined && (
-        <>
-          <div className={css.actionRow} style={{ marginBottom: 0 }}>
-            <Button onClick={foreignEntry.onOpen}>{t('foreign.source.title')}</Button>
-            <InfoHint text={t('foreign.source.hint')} label={t('common.infoHint')} />
-          </div>
-        </>
-      )}
     </div>
   )
 }

@@ -73,6 +73,11 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 - **一台机器上删掉的会话不会再被同步回来**：删除记录随同步传播，另一台机器同步时跟着剔除并给出提示。
   **A conversation deleted on one machine no longer comes back through sync**: the deletion record travels with sync, so the other machine drops it and says so.
 
+### 🗑️ 移除 · Removed
+
+- **导入面板里不再有第二个「从其它 agent 导入」按钮**：首页那颗直达按钮保留，导入面板只剩「选择 ZIP 文件」，同一件事不再有两个入口。
+  **The import panel no longer carries a second "Import from another agent" button**: the direct button on the home page stays, the panel only offers "Choose ZIP file", so one action has one entry.
+
 ### 🔐 安全 · Security
 
 - **备份包里夹带「同步目标配置」也改不了本机同步指向**：导入时这类文件一律不写盘，本机同步设置保持不变，报告会点名被拦下的条目。

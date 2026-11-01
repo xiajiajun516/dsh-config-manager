@@ -342,7 +342,7 @@ You do not have to rebuild another agent's setup by hand.
 - **What travels** — MCP servers, skills, global instructions (as `AGENTS.md`), and **chat history together with the workspaces those conversations belong to** (29 sources; conversations are re-encoded into DSH's session-log format and placed by their recorded `cwd`).
 - **What does not** — secret **values** are never read: only the key names are recorded so the plan can ask you to re-enter them. Structures DSH has no equivalent for (Claude Code hooks, slash commands, …) are reported as explicit codes rather than silently dropped.
 - **Honest skips** — a conversation with no recorded `cwd` cannot be placed and is reported as skipped (never guessed into some other project); known lossy items are listed **before** the import runs.
-- **Entry points** — Home toolbar → "Import" → **"Import from another agent"** (Home also has a direct entry), the ⌘K command, or the CLI: `dcm import --from <source> [--dry-run] [--out <path>]`.
+- **Entry points** — the **"Import from another agent"** button on the home toolbar, the ⌘K command, or the CLI: `dcm import --from <source> [--dry-run] [--out <path>]`.
 
 ### 🔒 Secrets
 

@@ -1554,7 +1554,7 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
   - **页级 / 分区级副标题 → `SectionTitle.info`**：`profiles.subtitle`、`section.description`（同步页 + 市场页）、
     `about.subtitle`、`history.subtitle`（3 个分支同一文案）、`rollback.desc`、`import.select.hint` /
     `import.consult.hint` / `import.decryptArchive.hint` / `import.conflicts.hint` / `import.paths.hint` /
-    `import.picker.hint` / `import.secrets.hint` / `foreign.source.hint`（两处渲染点同改）；
+    `import.picker.hint` / `import.secrets.hint` / `foreign.source.hint`（两处渲染点同改；导入选择页那处已随按钮一起移除，现只剩来源选择页）；
   - **卡片 / 字段说明 → 标题行或字段标签行的 ⓘ**（`span.groupLabel` / `span.fieldLabel` / `.controlRow` /
     `Modal.Header.trailing` / `SectionTitle.info`，`Field.info` 是新加的原语入口）：
     `mode.encryptHint` + `mode.encryptAutosyncNotice`（合成同一颗 ⓘ）、`mode.includeSecretsHint`、

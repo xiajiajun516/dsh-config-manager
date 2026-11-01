@@ -155,7 +155,6 @@ const MOVE_PINS: readonly MovePin[] = [
   { key: 'import.decryptArchive.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.conflicts.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.paths.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
-  { key: 'foreign.source.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.secrets.hint', file: 'src/client/import/import-wizard-steps.tsx', kind: '机制' },
   { key: 'import.picker.hint', file: 'src/client/import/ImportWizardView.tsx', kind: '机制' },
   { key: 'foreign.source.hint', file: 'src/client/import/ForeignImportView.tsx', kind: '机制' },
@@ -394,7 +393,8 @@ test('t6-1 MOVE：79 个说明键都已收进 ⓘ（逐字复用原键）且不�
   // 页面本身已由卡片表达，随页级标题一并删除 ⇒ MOVE 清单从 82 降到 81（不是删检查项）。
   // 2026-11-01：删掉「改动即时生效并保存」「分区选择已保存到本机」两处 ⓘ（用户要求，
 // 属解释「用户无从选择的事」的废话）⇒ 81 降到 79（不是删检查项）。
-assert.ok(MOVE_PINS.length === 79, 'MOVE 清单长度应为 79（实际 ' + String(MOVE_PINS.length) + '）');
+  // 2026-11-01：导入选择页的「从其它 agent 导入」按钮与其 ⓘ 一并移除（首页已有直达入口）⇒ 79 降到 78。
+  assert.ok(MOVE_PINS.length === 78, 'MOVE 清单长度应为 78（实际 ' + String(MOVE_PINS.length) + '）');
   assert.ok(
     MOVE_PINS.filter((p) => p.kind === '输入规则').length >= 5,
     '输入规则类 MOVE 至少 5 处（config.repoUrlHint / webdav.urlHint / mode.sessionsLimitHint / retention.keep*Hint / export.fileNameHint）',
