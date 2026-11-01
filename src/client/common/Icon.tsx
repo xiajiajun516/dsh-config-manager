@@ -42,6 +42,7 @@ import PackageCheck from 'lucide-react/dist/esm/icons/package-check.mjs'
 import Pencil from 'lucide-react/dist/esm/icons/pencil.mjs'
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw.mjs'
 import RotateCw from 'lucide-react/dist/esm/icons/rotate-cw.mjs'
+import Plug from 'lucide-react/dist/esm/icons/plug.mjs'
 import Search from 'lucide-react/dist/esm/icons/search.mjs'
 import Trash2 from 'lucide-react/dist/esm/icons/trash-2.mjs'
 import TriangleAlert from 'lucide-react/dist/esm/icons/triangle-alert.mjs'
@@ -63,6 +64,7 @@ const ICONS = {
   clock: Clock,
   history: History,
   about: Info,
+  probe: Plug,
   info: Info,
   lock: Lock,
   message: MessageSquare,
@@ -236,6 +238,7 @@ export const ActivityIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon n
 export const ClockIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="clock" {...p} />
 export const HistoryIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="history" {...p} />
 export const AboutIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="about" {...p} />
+export const ProbeIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="probe" {...p} />
 export const MessageIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="message" {...p} />
 export const PencilIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="pencil" {...p} />
 export const CloseIcon = (p: Omit<IconProps, 'name'>): JSX.Element => <Icon name="close" {...p} />

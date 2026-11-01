@@ -44,7 +44,7 @@ import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncPullReport, SyncPushPreview, SyncPushReport } from '../../sync/sync-engine.ts'
 import type { SectionId } from '../../schema/types.ts'
-import { Badge, Banner, Button, Card, SectionTitle } from '../common/ui.tsx'
+import { Badge, Banner, Button, Card, SectionTitle, Spinner } from '../common/ui.tsx'
 import { ErrorBanner } from '../common/ErrorBanner.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { Select } from '../common/Select.tsx'
@@ -1260,10 +1260,13 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
             </div>
             {cs.syncSections.length === 0 && <Banner kind="warn">{t('mode.atLeastOne')}</Banner>}
             {gistSessionsRiskKey(channel, cs.syncSections) !== null && <Banner kind="warn">{t(gistSessionsRiskKey(channel, cs.syncSections)!)}</Banner>}
-            {/* 动作行（方案 A 定案）：用户只面对两个方向 —— 下行「从远端合并到本机」/ 上行「推送到远端」。
-                合并裁决并入下行按钮（有基线走三方裁决视图、无基线走老导入确认）；并排两个按钮看不出该按哪个（issue 115）⇒ 按已确证远端事实只让一个落在 primary。 */}
-            <div className={css.actionRow}>
+            {/* 动作行（方案 A）：用户只面对两个方向，合并裁决并入下行（有基线走三方裁决、无基线走导入确认），
+                按已确证远端事实只让一个落在 primary（issue 115：并排两个都亮看不出按哪个）。
+                2026-11-01：两枚改为平分整行宽（flex 1 1 0）—— 三个宽度各异的文字按钮并排时右边缘参差、
+                每个都像主行动；只读自检因此退到下方工具组（与「刷新快照」同款 28px 图标按钮，title 给全名）。 */}
+            <div className={css.actionRow} data-split>
               <Button
+                className={css.splitBtn}
                 variant={pickSyncPrimary(state.statusInfo, channel) === 'sync' ? 'primary' : 'ghost'}
                 disabled={busy}
                 loading={state.busy === 'sync'}
@@ -1273,14 +1276,9 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   ? (syncPhase === 'preview' ? t('syncflow.checkingRemote') : t('syncflow.syncing'))
                   : t('syncflow.button')}
               </Button>
-              <Button variant={pickSyncPrimary(state.statusInfo, channel) === 'push' ? 'primary' : 'ghost'} disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
+              <Button className={css.splitBtn} variant={pickSyncPrimary(state.statusInfo, channel) === 'push' ? 'primary' : 'ghost'} disabled={!computeSyncButtons(state.busy, ready, uiT).canPush || githubBusy || !hasSelectedSections(cs) || computeEncryptInvalid(cs)} onClick={() => { switchChannel(channel); void runPushPreview() }}>
                 {computeSyncButtons(state.busy, ready, uiT).pushLabel}
               </Button>
-              {/* 测试连接（只读自检）：与两个主操作同一行、排在最后；结果走 toast（不再占页面高度） */}
-              <SyncProbeRow
-                t={t} api={api} presentation="action" remoteReady={ready} busy={busy}
-                body={buildSyncChannelBody({ ...formOf(state), channel })}
-              />
             </div>
             {/* 同步在途的活动条：按钮 Spinner 只在按钮上，这条横条让「正在拉远端快照」在整张卡上可见 */}
             {syncPhase !== null && <SyncActivityBar phase={syncPhase} t={t} />}
@@ -1311,15 +1309,16 @@ export function SyncPanel({ api, t, cmT }: SyncPanelProps) {
                   ]}
                 />
               </label>
+              {/* 工具组（2026-11-01）：刷新与只读自检都是低频诊断动作、都只服务这一行，收成两枚 28px 图标
+                  按钮（与下拉同高、同组右对齐）。此前刷新是带图标的宽文字按钮，把下拉压到约 380px。 */}
               <span className={css.pickerAction}>
-                <Button
-                  loading={cs.loadingSnapshots === true}
-                  disabled={busy}
-                  onClick={() => { void loadSnapshots(undefined, channel, true) }}
-                  title={t('syncflow.refreshSnapshots')}
-                >
-                  {cs.loadingSnapshots === true ? null : <RefreshIcon size={14} />} {t('syncflow.refreshSnapshots')}
-                </Button>
+                <button type="button" className={css.iconBtn} onClick={() => { void loadSnapshots(undefined, channel, true) }}
+                  disabled={busy} aria-label={t('syncflow.refreshSnapshots')} title={t('syncflow.refreshSnapshots')}
+                  aria-busy={cs.loadingSnapshots === true || undefined}>
+                  {cs.loadingSnapshots === true ? <Spinner /> : <RefreshIcon size={16} />}
+                </button>
+                <SyncProbeRow t={t} api={api} presentation="icon" remoteReady={ready} busy={busy}
+                  body={buildSyncChannelBody({ ...formOf(state), channel })} />
               </span>
               {/* 空态 = 选快照这一行的状态，跟控件同排（徽章），不另占一行：
                   此前它是 picker 下方单独一行的 hint，把下面整块内容整体顶低 4+10px。 */}

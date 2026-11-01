@@ -2854,6 +2854,19 @@ body {
   margin: 0 0 10px;
 }
 
+/* 平分整行的动作行（2026-11-01 同步页）：两个方向按钮各占一半，右边缘与卡内其余行齐平 ——
+   宽度各随文案时，三个按钮排一行会形成左对齐锯齿，且窄的那个看起来更次要（显得随意）。
+   主次靠 primary 底色表达，不靠宽度。 */
+.actionRow[data-split] {
+  flex-wrap: nowrap;
+}
+
+.actionRow[data-split] > .splitBtn {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: center;
+}
+
 
 
 /* 上方有说明文案的操作行（如「通道配置」按钮紧跟在 hint 之后）：
@@ -4260,6 +4273,7 @@ body {
   flex: none;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
 }
 
 /* 导入日志面板 */

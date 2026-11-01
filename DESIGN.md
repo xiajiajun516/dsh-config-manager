@@ -1666,3 +1666,7 @@ history 无 ⓘ 故不要求）；**不跨命名空间传 `t`**（`TranslateNS<'
 24. **表格列不给宽度就指望浏览器分对**（`table-layout: fixed`）—— 浏览器按首行内容分配，后出现的长值
     会被挤到只剩省略号，而那一列往往正是唯一的答案列（Cleanup policy）。显式给 `th` 宽度，
     内容列 `white-space: normal` 允许换行，数值列 `overflow: visible; text-overflow: clip`（数值不该省略）。
+25. **并排多个等宽含义不同的文字按钮，宽度各随文案**（2026-11-01 同步页）—— 三个按钮左对齐成一排时，
+    宽窄差形成锯齿、右边缘全不齐，而每个都像主行动。同一逻辑组里的并列动作要么**平分整行**
+    （`.actionRow[data-split] > * { flex: 1 1 0; min-width: 0 }`，主次只靠 variant），要么
+    **低频诊断动作收成图标按钮**（28px，与同排控件同高，`aria-label` + `title` 给全名）。

@@ -23,7 +23,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { SyncApi, SyncProbeResult, SyncPushPayload } from './sync-api.ts'
-import { Badge, Banner, Button } from '../common/ui.tsx'
+import { Badge, Banner, Button, Spinner } from '../common/ui.tsx'
+import { ProbeIcon } from '../common/Icon.tsx'
 import { InfoHint } from '../common/InfoHint.tsx'
 import { projectProbeResult } from './probe-view.ts'
 import { toast } from '../common/toast-store.ts'
@@ -45,11 +46,12 @@ export interface SyncProbeRowProps {
    *  - 'card'：动作行 + 内联结果横幅；
    *  - 'action'：只渲染按钮 + ⓘ（嵌进别的动作行），结果走 toast。
    */
-  presentation?: 'card' | 'action'
+  presentation?: 'card' | 'action' | 'icon'
 }
 
 export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = 'card' }: SyncProbeRowProps): ReactNode {
-  const actionMode = presentation === 'action'
+  /** 两种「轻形态」都走 toast，只有渲染出来的控件不同 */
+  const actionMode = presentation === 'action' || presentation === 'icon'
   const [result, setResult] = useState<SyncProbeResult | null>(null)
   const [loading, setLoading] = useState(false)
   const /** 传输层异常（与「自检结论 = 失败」分开：前者是宿主/网络没走通，后者是通道层给出的结论） */
@@ -102,6 +104,19 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
    */
   const view = result === null ? null : projectProbeResult(result, t('probe.unsupported'))
 
+  const iconButton = (
+    <button
+      type="button"
+      className={css.iconBtn}
+      onClick={() => { void run() }}
+      disabled={busy || !remoteReady}
+      aria-label={t('probe.run')}
+      aria-busy={loading || undefined}
+      title={t('probe.run')}
+    >
+      {loading ? <Spinner /> : <ProbeIcon size={16} />}
+    </button>
+  )
   const button = (
     <Button onClick={() => { void run() }} loading={loading} disabled={busy || !remoteReady}>
       {t('probe.run')}
@@ -113,9 +128,11 @@ export function SyncProbeRow({ api, t, body, remoteReady, busy, presentation = '
     <>
       {/* action 形态：直接摊进调用方自己的动作行（不再套一层 .actionRow），结果走 toast。
           动作行里只留按钮：与同排其它按钮并排时，ⓘ 会被读成该按钮的开关（issue 121 用户要求移除）。 */}
-      {actionMode
-        ? <>{button}</>
-        : <div className={css.actionRow}>{button}{hintNode}</div>}
+      {presentation === 'icon'
+        ? iconButton
+        : actionMode
+          ? <>{button}</>
+          : <div className={css.actionRow}>{button}{hintNode}</div>}
       {!actionMode && error !== null && (
         <ErrorBanner
           error={redact(error)}

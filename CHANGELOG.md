@@ -30,8 +30,8 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
-- **四个页面和任务面板的视觉重做**：卡片里的双层边框和深色空洞没了，列表不再用大幅空白撑满视口，每页只留一个主按钮，重复的状态徽章合并、行内长文字不再被截成半句，维护页的磁盘明细表四列都能完整读完。
-  **Visual pass over all four pages and the task panel**: double borders and dark voids inside cards are gone, lists no longer stretch to fill the viewport with dead space, each page has a single primary button, duplicated status badges are merged, long inline text is no longer cut mid-sentence, and the disk-usage table on the maintenance page is fully readable in all four columns.
+- **四个页面和任务面板的视觉重做**：卡片里的双层边框和深色空洞没了，列表不再用大幅空白撑满视口，每页只留一个主按钮，重复的状态徽章合并、行内长文字不再被截成半句，维护页的磁盘明细表四列都能完整读完；同步页的「合并 / 推送」两个按钮改为等宽平分整行，测试连接与刷新快照收成两枚图标按钮，快照下拉因此拿到完整行宽。
+  **Visual pass over all four pages and the task panel**: double borders and dark voids inside cards are gone, lists no longer stretch to fill the viewport with dead space, each page has a single primary button, duplicated status badges are merged, long inline text is no longer cut mid-sentence, and the disk-usage table on the maintenance page is fully readable in all four columns; on the sync page the merge and push buttons now split the row evenly, while test-connection and refresh-snapshots became icon buttons so the snapshot select gets the full row width.
 
 ### 🐛 修复 · Fixed
 
