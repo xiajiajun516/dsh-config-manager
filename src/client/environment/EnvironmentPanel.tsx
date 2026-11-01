@@ -499,12 +499,14 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
           )}
         </Banner>
       )}
-      {launch !== null && (
-        <Banner kind={launchState(launch) === 'ready' ? 'ok' : 'warn'}>
+      {/* 启动**就绪**只走 toast（2026-11-01 用户要求）：doLaunch 成功那一刻已经发过
+          「已启动档案 X（端口 N）」，而这条横幅把同一句再说一遍，还占掉一整块绿色面板
+          ——「打开 / 停止」在下面「运行状态」卡里本来就有（record.url 的「打开」按钮），
+          日志路径只在**没就绪**时需要，那时才留在横幅里。 */}
+      {launch !== null && launchState(launch) !== 'ready' && (
+        <Banner kind="warn">
           <div>
-            {launchState(launch) === 'ready'
-              ? t('profiles.launch.started', { name: launch.name, port: launch.port })
-              : t('profiles.launch.pending', { name: launch.name, port: launch.port, seconds: Math.round(DSH_PROFILE_LAUNCH_TIMEOUT_MS / 1000) })}
+            {t('profiles.launch.pending', { name: launch.name, port: launch.port, seconds: Math.round(DSH_PROFILE_LAUNCH_TIMEOUT_MS / 1000) })}
           </div>
           <div className={css.kvRow}>
             <span className={css.kvKey}>{t('profiles.launch.log')}</span>
@@ -514,14 +516,6 @@ export function EnvironmentPanel({ api, t, recoveryApi, recoveryT, incidentApi }
             <div key={warning} className={css.hint}>{t(launchWarningKey(warning))}</div>
           ))}
           <div className={css.actionRow}>
-            {launch.url !== null && (
-              <>
-                <Button size="sm" variant="primary" href={launch.url}>{t('profiles.launch.open')}</Button>
-                <Button size="sm" onClick={() => { copyText(launch.url ?? '', t, 'profiles.launch.copiedUrl') }}>
-                  {t('profiles.launch.copyUrl')}
-                </Button>
-              </>
-            )}
             <Button size="sm" variant="ghost" onClick={() => { patch({ launchResult: null }) }}>{t('common.close')}</Button>
           </div>
         </Banner>

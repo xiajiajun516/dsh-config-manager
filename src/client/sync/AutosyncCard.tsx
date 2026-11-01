@@ -4,6 +4,7 @@
  * 约定：只接收「渲染所需的数据 + 回调」；React 状态、副作用与网络调用仍由
  * SyncPanel 持有（单一状态源）；可测纯逻辑在 src/ui/sync-settings-view.ts。
  */
+import { useId } from 'react'
 import type { ChangeEvent } from 'react'
 import type { TranslateNS } from '../client-types.ts'
 import type { UiT } from '../../ui/i18n.ts'
@@ -60,6 +61,9 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
   // 的旧错误会被当成当前结论继续展示；判据现在收在 autosyncFailureMessage 一处。
   const failureMessage = settings.autosync !== null ? autosyncFailureMessage(settings.autosync) : null
   const lastMessage = failureMessage === null ? null : redact(failureMessage)
+  /** 开关的 id：标题在左、勾选框在右，靠 htmlFor 把两者绑成一行（见 .toggleRow 注释） */
+  const enableId = useId()
+  const realtimeId = useId()
   return (
     /* 卡内小节，不再套一层 Card（2026-11-01）：本组件唯一的调用点在
        SyncPanel 的「通道动作卡」内部（SyncPanel.tsx:1262 的 <Card> 里、快照选择行下面），
@@ -67,16 +71,21 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
        边界多出一圈、上下白吃 22px，把 Auto Sync 从首屏挤到折叠线以下。
        同页卡内分节的既有口径是 0.5px border-l2 顶线（css 里另有 4 处同款），照它走。 */
     <div className={css.syncSubBlock}>
-      <span className={css.groupLabel}>{t('autosync.title')} <InfoHint text={t('autosync.description')} label={t('common.infoHint')} /></span>
-      <label className={css.checkboxRow}>
+      {/* 总开关并进标题行（2026-11-01 用户要求「左标题右按钮」）：原来标题一行、下面
+          再单列一行「☑ 启用」，同一件事占两行，而右侧一直空着。开关此刻就叫「自动同步」是否开启。 */}
+      <div className={css.subBlockHead}>
+        <span className={css.groupLabel}>{t('autosync.title')} <InfoHint text={t('autosync.description')} label={t('common.infoHint')} /></span>
+        <span className={css.statusSpacer} />
         <input
+          id={enableId}
+          className={css.toggleInput}
           type="checkbox"
           checked={settings.autosyncEnabled}
           disabled={busy}
+          aria-label={t('autosync.enable')}
           onChange={(e: ChangeEvent<HTMLInputElement>) => { onToggleAutosync(e.target.checked) }}
         />
-        <span>{t('autosync.enable')}</span>
-      </label>
+      </div>
       {/* 关闭时不再展示策略项（2026-11-01）：Enabled 没勾选，下面 4 个下拉 + 状态徽章 +
           失败原文仍然全铺开，占掉画布最后三屏里的两屏 —— 用户要按的「合并 / 推送」被推到
           首屏之外，而这一整组在关闭状态下没有一个控件能生效。app-screens §11 与 DESIGN.md §9
@@ -93,15 +102,19 @@ export function AutosyncCard({ t, uiT, settings, busy, onToggleAutosync, onUpdat
           options={AUTOSYNC_INTERVAL_OPTIONS.map((iv) => ({ value: iv, label: intervalLabel(iv, t) }))}
         />
       </label>
-      <label className={css.checkboxRow}>
+      <div className={css.toggleRow}>
+        <label className={css.toggleLabel} htmlFor={realtimeId}>{t('autosync.realtime')}</label>
+        <InfoHint text={t('autosync.realtimeHint')} label={t('common.infoHint')} />
+        <span className={css.statusSpacer} />
         <input
+          id={realtimeId}
+          className={css.toggleInput}
           type="checkbox"
           checked={realtime}
           disabled={busy}
           onChange={(e: ChangeEvent<HTMLInputElement>) => { onUpdateOptions({ realtime: e.target.checked }) }}
         />
-        <span>{t('autosync.realtime')} <InfoHint text={t('autosync.realtimeHint')} label={t('common.infoHint')} /></span>
-      </label>
+      </div>
       <label className={css.field}>
         <span className={css.fieldLabel}>{t('autosync.autoApplyTier')} <InfoHint text={t('autosync.autoApplyTierHint')} label={t('common.infoHint')} /></span>
         <Select

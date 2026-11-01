@@ -35,6 +35,9 @@ This file records release highlights of dsh-config-manager (bilingual: 中文 + 
 
 ### 🔧 变更 · Changed
 
+- **设置页两处「多余的一层」收掉了**：档案启动成功后不再留一块「已启动 · 打开新实例 / 复制 URL」的面板，成功只走顶部提示，打开与停止仍然在运行状态卡里；自动同步的总开关挪到「自动同步」标题行右端，实时同步也改成左文字右开关，下面的间隔与冲突策略不再被一行「启用」割开。
+  **Two redundant layers are gone from the settings pages**: a successful profile launch no longer leaves an "launched · open new instance / copy URL" panel behind — success only shows as a toast, and open/stop stay on the runtime card; the auto-sync master switch moved to the right end of the "Auto Sync" title row, the realtime switch now reads label-left / switch-right, and the interval and conflict-policy selects are no longer split off by a lone "Enable" row.
+
 - **英文界面的单复数说得对了**：以前一律写 `1 file(s)`、`3 day(ies)`，现在按数量选形 —— 顶部报告、导入/导出计数、同步部分成功提示、恢复与回退清单、磁盘留存说明全部改成 `1 file` / `3 files`，动词也跟着变（`1 credential needs` / `3 credentials need`）。
   **English plurals read correctly**: counts used to be written as `1 file(s)` or `3 day(ies)`; every report, import/export count, partial-sync notice, recovery and rewind list, and disk-retention note now picks the right form by number, and the verb agrees too (`1 credential needs` / `3 credentials need`).
 

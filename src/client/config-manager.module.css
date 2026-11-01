@@ -1382,6 +1382,47 @@ body {
   outline-offset: 2px;
 }
 
+/* 「左标题 · 右开关」行（2026-11-01）。设置类开关的标题就是这一行的名字，
+   开关是这一行的值 —— 控件跟在标题后面读起来是「启用 ☑」，用户得先读半句再找方框，
+   而 564px 画布里每行右侧本来就空着。开关统一贴右：勾选框仍在标签内（点标题也能切），
+   但 InfoHint 不放进 label，否则点 ⓘ 会顺手改掉设置。 */
+.toggleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--cm-fs-base);
+  color: var(--dsw-alias-label-primary);
+}
+
+.toggleLabel {
+  cursor: pointer;
+}
+
+.toggleInput {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--cm-brand);
+  cursor: pointer;
+}
+
+.toggleInput:focus-visible {
+  outline: var(--cm-focus-width) solid var(--cm-focus-color);
+  outline-offset: 2px;
+}
+
+/* 小节标题行：标题在左、该节的开关贴右（与 .toggleRow 同一口径）。 */
+.subBlockHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subBlockHead > .groupLabel {
+  margin-bottom: 0;
+}
+
 /* —— 徽章 —— */
 .badge {
   display: inline-flex;
