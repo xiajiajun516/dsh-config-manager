@@ -16,7 +16,7 @@
 
 ### 1.1 一句话结论
 
-**单机数据安全底座已经过硬，短板全在「出口」「闭环」「边界」这三件小事上。** 快照原子发布、逐动作 WAL、崩溃后可证续跑、ZIP 读侧硬化、凭据零回读——这五样在 §12 的五个竞品里没有一个同时具备。但：**恢复链路的可撤销性只做后端不留出口**（写了反悔副本，界面零引用，还会被 prune 连带删除）、**导入的失败语义在三个入口有三种默认值**、**跨 Agent 资产模型靠适配器各自为政且版本轴没有区间语义**。
+**单机数据安全底座已经过硬，短板全在「出口」「闭环」「边界」这三件小事上。** 快照原子发布、逐动作 WAL、崩溃后可证续跑、ZIP 读侧硬化、凭据零回读——这五样就本轮读到的五个竞品源码而言没有一个仓库同时具备（未逐仓跑测）。但：**恢复链路的可撤销性只做后端不留出口**（写了反悔副本，界面零引用，还会被 prune 连带删除）、**导入的失败语义在四个调用点有两种缺省**、**跨 Agent 资产模型靠适配器各自为政且版本轴没有区间语义**。
 
 ### 1.2 已验证的能力（事实，非 README 声明）
 
@@ -28,32 +28,32 @@
 | ZIP 读侧硬化 | FULL | `src/utils/zip.ts:41-47` 五道上限；`parseZip`（`:465`）拒 `../`/绝对路径/盘符/UNC/NUL、重复条目名、`S_IFLNK` 条目；`readEntry` 逐条 CRC32+尺寸+累计预算+压缩比 |
 | 路径写穿防护（恢复）| FULL | `src/core/restore.ts:304` `createTargetSafetyChecker` + `:357` `assertPlanTargetsSafe`（`realpathSync.native` + `path.relative` + win32 折大小写），计划期整单拒绝、零写入 |
 | 并发互斥 | FULL | `src/routes/snapshots.ts:69` restore 走 `runWithMutationLock` + `runs.register('restore')`；`src/sync/backup-scheduler.ts:266` 手动/自动备份同样过锁 |
-| 凭据零回读 | FULL | `src/core/rollback.ts:63-70` credential `existed=true` 直接判不可补偿；`src/core/importer.ts:37-60` `includeSecrets` 缺省 false |
+| 凭据零回读 | FULL | `src/core/rollback.ts:63-70` credential `existed=true` 直接判不可补偿；凭据值不进 `sections`（`src/adapters/credentials.ts:87` `hasValue: false`），导出密码是独立密文凭据载荷（`src/core/backup.ts:402`）；`includeSecrets` 缺省 false（`src/core/backup.ts` 导出选项）|
 | 启动期事务对账 | FULL（fail-closed）| `src/core/reconcile.ts:547` `inspectStartup` 内部 `:561` 调 `reconcileActive`；`src/core/startup-barrier.ts:44`、`src/index.ts:3984`（inspectStartup 抛错不默认 NORMAL）|
 | Bundle 格式向后兼容留口 | FULL | `src/schema/manifest.ts:33` `buildManifest` 可选写 `sourceHome`/`foreign`；`:79-113` `validateForeignOrigin` 对未知/畸形 `foreign` **只告警不拒包** |
 
-### 1.3 已验证的问题（决策切片，完整 57 条见 §13）
+### 1.3 已验证的问题（决策切片，完整 58 条见 §13）
 
 | ID | 问题 | 优先级 |
 |---|---|---|
 | SEC-01 | 导入包可改写同步目标：`self` 分区把 `sync/*.json` 当普通配置裸写，token 是独立槽位且不看 host 是否变过 ⇒ 下一轮同步把已存凭据发往包内 host | **P0** |
 | BK-01 | 恢复的反悔副本（pre-restore）在生产代码里没有任何出口：`report.preRestoreDir` 生成后 `grep preRestoreDir src/client src/ui` 零命中 | P1 |
-| BK-05 | `prune` 整快照目录 `rm -rf`（`src/core/backup.ts:769`）连带删掉反悔副本 ⇒ 唯一的撤销材料被定期销毁 | P1 |
+| BK-05 | `prune` 会销毁唯一的撤销材料：反悔副本写在快照目录内（`src/core/restore.ts:888`），整目录 `rm -rf`（`src/core/backup.ts:769`），`pinned` 只保护快照本身（`:758`）| P1 |
 | IE-01 | 分区载荷版本要求「恰好相等」（`src/schema/versions.ts:69`）⇒ 任一分区结构升级即旧包全废 | P1 |
-| IE-02 | `rollbackOnError` 默认值三处不一致：引擎 false / HTTP 路由 false / UI 向导 true ⇒ 非 UI 调用方默认落进「半套导入」| P1 |
-| SYN-01 | 同步状态非原子写 ⇒ 半截 JSON 让整条链路进入硬失败（`sync.state.notObject`）且无自愈路径 | P1 |
+| IE-02 | `rollbackOnError` 缺省值四个调用点不一致：引擎 false / HTTP 路由 false / UI 向导 true / 同步通道 true（`src/sync/sync-engine.ts:1973`、`:2106`）⇒ 非 UI 调用方默认落进「半套导入」| P1 |
+| SYN-01 | 同步状态形状损坏后没有自愈：`loadSyncState`（`src/sync/sync-state.ts:179`）抛 `sync.state.notObject` 后，全仓没有修复路径 ⇒ 只能手删 `sync-state.json`（连带丢 deviceId/ancestor 指针）| P2 |
 | BK-02 | 选择性子集恢复缺失：只读 `/snapshots/file-diff`（`src/routes/snapshots.ts:293`）已能逐文件定位差异，但 `planRestore`/`RestoreOptions` 只能整快照 | P2 |
 | BK-03 | 快照无跨快照内容去重：同内容 blob 按快照各存一份（对比回滚点域已用内容寻址载荷）| P2 |
 | IE-05 | CLI 无「应用 bundle」命令（`src/cli/help.ts` 全表无此命令）⇒ 无头环境只能生成包、不能落地 | P2 |
 | DOC-01 | 文档漂移：`docs/modules/architecture.md:15/19/42/44/50` 写 82 条路由与 `PLUGIN_VERSION '0.1.85'`，实测 83 条与 `'0.2.4'` | P3 |
 
-（§13 给出全部 57 条的字段级规范：模块 / 当前实现 / 问题 / 证据 / 竞品参考 / 影响 / 建议 / 优先级 / 复杂度 / 兼容性风险。）
+（§13 给出全部 58 条的字段级规范：模块 / 当前实现 / 问题 / 证据 / 竞品参考 / 影响 / 建议 / 优先级 / 复杂度 / 兼容性风险。）
 
 ### 1.4 三条最该先做的事
 
 1. **SEC-01：切断「导入包 → 改写同步目标 → 把 token 发出去」这条链**（P0，唯一 P0）。它不是理论漏洞：`self` 分区把同步配置当普通配置裸写，token 在独立槽位、不看 host 是否变过。改动面小（4 个文件），不做就是凭据外泄。
 2. **BK-01 + BK-05：给「撤销这次恢复」一个出口，并停止销毁它**（P1）。反悔副本已经在写、已经在报告里返回，缺的只是暴露与一键复用；而 `prune` 会把它当快照目录内容一起删掉。改动面 = 一条只读路由 + 一条恢复计划来源 + prune 的排除规则，**不需要动恢复引擎**。
-3. **SYN-01：把同步状态改成原子写并自愈**（P1）。半截 JSON 会让整条同步链路硬失败且没有恢复路径；修复是纯局部改动，却是「一次断电 = 同步永久坏掉」的根源。
+3. **IE-01：把分区载荷版本从「恰好相等」改成区间语义**（P1）。`isSupportedSectionDataVersion`（`src/schema/versions.ts:78-80`）要求分区 `dataVersion` 恰好等于注册表声明值 ⇒ 任何单个分区的结构升级都会让所有旧包整体不可导，而这是「bundle 能否当跨 Agent 内部标准」的硬前提。修复只改判定、不改 ZIP 结构与 manifest，兼容风险 Low。
 
 > 三条横跨三个域、各自只需改 1-2 个文件，可并行、互不阻塞。结构性建议（先抽 Adapter Contract、后谈 Migration Engine）不是「先做项」，见 §14.4。
 
@@ -146,7 +146,7 @@
 
 - 声明唯一入口：`src/routes/kit.ts` 的 `endpoint({ path, methods }, handler)`，统一做三件事：loopback 围栏（非本机 → 403）、方法白名单（405）、顶层 try/catch。
 - `registerRoutes()` 对**未经 kit 的裸路由注册直接抛错**（结构性强制，不靠 review）。
-- 路由总数 **83**：`src/index.ts` 7 条 + `src/routes/*.ts` 76 条（13 个组文件，`buildRoutes(env)` 装配）。`tests/route/route-parity.test.ts` 与 `route-fence.test.ts` 双钉（实测 12 项全绿）。
+- 路由总数 **83**：`src/index.ts` 7 条 + `src/routes/*.ts` 76 条（14 个组文件，`src/routes/index.ts:25-41` 装配，`buildRoutes(env)`）。`tests/route/route-parity.test.ts` 与 `route-fence.test.ts` 双钉（实测 12 项全绿）。
 - **认证边界的真实语义**（易被误读，必须在报告里说清）：**围栏就是本插件的认证边界**，不是 DSH cookie。cookie 拒绝只挂在 `kind:'prefix'`/`path:'/api'` 的 RPC 路由上，且派发时 exact 表先命中 ⇒ 带正确 token 的本机进程可调全部路由。因此「经代理/隧道暴露」时必须在注册点自行加认证，而这在当前实现里是**部署责任而非代码默认**（WebUI 围栏已挡住远程/LAN/CSRF，但没有身份概念）。
 
 ### 3.3 分层与依赖方向
@@ -191,13 +191,13 @@ client → ui → core → utils / security / schema
 ### 4.1 Export：采集 → ZIP → （可选）加密
 
 ```
-POST /export  (src/routes/export.ts)
+POST /export  (src/index.ts:3375)
   └─ Exporter.export()                       src/core/exporter.ts:127
        ├─ adapter.collect()  ×N 分区         （与 preview 同一实现；FileCollectionAdapter）
        │    ├─ buildSectionFlags()           src/core/exporter.ts:526
        │    ├─ looksBinary()/BINARY_SNIFF_BYTES=4096   :125
        │    └─ 扫描预算：1MB/文件、16MB/分区、5 条告警/分区
-       ├─ buildManifest()                    src/schema/manifest.ts:33（可选 sourceHome / foreign）
+       ├─ buildManifest()                    src/schema/manifest.ts:35（可选 sourceHome / foreign）
        ├─ buildChecksums() → checksums.txt   src/security/integrity.ts:37（上限 10_000 条，拒 __proto__/constructor/prototype）
        ├─ secrets.enc（独立密文凭据载荷，不进 sections）
        └─ 明文 ZIP 临时文件 finally 必删；定时备份恒 includeSecrets:false
@@ -243,7 +243,7 @@ POST /restore  (src/routes/snapshots.ts:69)
                  ├─ planRestore()（读快照 + validateSnapshotForRestore:493 + assertPlanTargetsSafe:357）
                  ├─ createRestoreWal()    src/core/restore-wal.ts:105（首写前 preRegister 全部动盘动作）
                  ├─ 逐动作：copyToPreRestore(:419/:962/974/982) → atomicCopyFile/删除 → WAL settle
-                 ├─ 单项失败：catch 只 push failed + settleStatus='attention'，继续后续动作（:1052 附近）
+                 ├─ 单项失败：catch 只 push failed + settleStatus=attention，继续后续动作（`:1022-1029`）
                  └─ 末尾 sweepRestoredSessions()（:1072，只报告幽灵会话，不自动清理）
 ```
 
@@ -265,7 +265,7 @@ POST /restore  (src/routes/snapshots.ts:69)
 ### 4.4 Backup：快照创建 → 原子发布 → 修剪
 
 ```
-createSnapshot()                    src/core/backup.ts:463
+createSnapshot()                    src/core/backup.ts:465
   ├─ 只覆盖 plan 将要写入的目标（collectTargets）
   ├─ adapter.snapshot 优先，引擎兜底
   ├─ 文件类条目字节延后按需读（lazyBlobSources）；宿主整文件即时读
@@ -316,7 +316,7 @@ dcm import --from <source>           src/cli/import-source.ts
 | 写入 | `writeBlob` 用 `target.startsWith(dir)` 前缀判定 + `atomicWriteFile` + 同遍 `sha256` | `src/core/backup.ts` `writeBlob` |
 | 发布顺序 | CREATING → manifest(blobHashes + metadataHash) → **从磁盘重读** `verifySnapshot` → 原子 READY → prune | `finalizeSnapshot` |
 | 双通道 | `save()`（内存聚合）与 `saveStreaming()`（能力探测，任一时刻只驻留一条 blob） | `src/core/backup.ts` |
-| 捕获范围 | 只覆盖 plan 将要写入的目标（`collectTargets`），不是整目录盲拷 | `createSnapshot` `:463` |
+| 捕获范围 | 只覆盖 plan 将要写入的目标（`collectTargets`），不是整目录盲拷 | `createSnapshot` `:465` |
 | 绑定信息 | `operationId / operationType / environmentFingerprint / ownerInstanceId` | `snapshotBinding` |
 | 保留 | `SNAPSHOT_RETENTION_LIMIT = 10`（:566）；pinned 豁免；journal 引用豁免；引用提供者抛错 ⇒ 放弃本轮清理；目录名与内部 id 不一致 ⇒ 跳过 + `onWarn` | `prune()` |
 
@@ -331,14 +331,14 @@ dcm import --from <source>           src/cli/import-source.ts
 **Q2 是否能够防止恢复过程中断导致数据损坏？**
 → **能，且是全项目最强的一环**。三重机制叠加：
 1. 每个落盘动作走 `atomicCopyFile`（临时文件 + fsync + rename，`src/utils/atomic-write.ts:304`），**不存在半写文件**；
-2. 首写前 `createRestoreWal` 把**全部**动盘动作 preRegister（planned + `beforeFp`），逐项 settle（done/attention + `afterFp`，删除类用 `ABSENT_FINGERPRINT`，`src/core/restore-wal.ts:101-105`）；
+2. 首写前 `createRestoreWal` 把**全部**动盘动作 preRegister（planned + `beforeFp`），逐项 settle（done/attention + `afterFp`，删除类用 `ABSENT_FINGERPRINT`，定义在 `src/core/journal.ts:101`、由 `src/core/restore-wal.ts:66` 使用）；
 3. 崩溃后再点恢复，`judgeRestoreResume`（`src/core/restore-resume.ts:106`）只在「同快照 + 盘面只等于 beforeFp/afterFp + 不跨入口 + 不重建 WAL」四条同时成立时放行续跑，否则 **423 `transaction-recovery-required`**；续跑分支**绝不重新 preRegister**（`src/core/restore.ts:920-930`）。
 → 注意区分：这是**逐项可证的续跑**，不是整笔事务。中间态（部分 done、部分 planned）是允许存在的，但它是**可判定的**，不是"未知的半截状态"。
 
 **Q3 是否存在快照与实际文件不一致的情况？**
 → 存在两种真实不一致，都有检测手段：
 - **创建后文件又变了**：执行时用 `planFingerprint` 比对（dryRun 下发、执行时带回），不一致 → **409 `plan-changed`**；
-- **环境变了**（DSH 版本/档案）：`environmentFingerprint` + `currentDshVersion`（`src/routes/snapshots.ts:96` 注入宿主权威版本）→ 只产生可见告警，不阻断恢复。
+- **环境变了**（DSH 版本/档案）：`environmentFingerprint` + `currentDshVersion`（`src/routes/snapshots.ts:90` 注入宿主权威版本）→ 只产生可见告警，不阻断恢复。
 → 未发现"快照声称包含但实际没捕获"的路径：`createSnapshot` 按 plan 目标收集，"存在但读不出"在文件类分区是显式失败而非静默跳过（`AGENTS.md`「会话 / 导入导出 / 外部来源」第 1 条）。
 
 **Q4 是否有足够信息判断快照是否完整？**
@@ -358,7 +358,7 @@ dcm import --from <source>           src/cli/import-source.ts
 
 | 场景 | 实际行为 | 证据 | 评价 |
 |---|---|---|---|
-| 单动作失败 | catch → `report.failed` + `settleStatus='attention'`，**继续后续动作** | `src/core/restore.ts:1052` 附近 | 与 tech-debt #4 一致：无整笔回滚 |
+| 单动作失败 | catch → `report.failed` + `settleStatus=attention`，**继续后续动作** | `src/core/restore.ts:1022-1029`（`:1025` settleStatus）| 与 tech-debt #4 一致：无整笔回滚 |
 | 计划期路径不安全 | `assertPlanTargetsSafe` 整单拒绝（realpath + relative + win32 折大小写） | `:304/:357` | 正确，零写入 |
 | 快照被篡改（snapshot.json 写 `../`） | `blobAbs` 拒绝 | `:244` | 正确 |
 | symlink 快照 | `assertNoSnapshotSymlink` 含 snapshotDir 自身与 blobs junction | `:468` | 正确 |
@@ -369,8 +369,8 @@ dcm import --from <source>           src/cli/import-source.ts
 
 ### 5.4 备份域结论
 
-- **必须保留**：`FileSnapshotStore` 的"写→重读→校验→发布"顺序、逐动作 WAL、`judgeRestoreResume` 的四条判据、`assertPlanTargetsSafe` 的 realpath 围栏、provenance 三档分级。这四样任何一项被"简化"，都会把可判定状态变成不可判定状态。
-- **需要补**：反悔副本出口（BK-01）、选择性子集恢复（BK-02）。
+- **必须保留**：`FileSnapshotStore` 的"写→重读→校验→发布"顺序、逐动作 WAL、`judgeRestoreResume` 的四条判据、`assertPlanTargetsSafe` 的 realpath 围栏、provenance 三档分级。这五样任何一项被"简化"，都会把可判定状态变成不可判定状态。
+- **需要补**：反悔副本的出口（BK-01）与「不再被 prune 连带销毁」（BK-05）、选择性子集恢复（BK-02）。
 - **值得量化再决定**：跨快照去重（BK-03）、快照索引（避免逐目录读）。
 
 ---
@@ -383,12 +383,12 @@ dcm import --from <source>           src/cli/import-source.ts
 
 证据链：
 
-1. **版本轴极简且有意的**：`CURRENT_SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`（`src/schema/versions.ts:18/:21`）；`needsMigration`（`:45`）在 v1 下恒 false。
-2. **格式自带扩展位**：`buildManifest`（`src/schema/manifest.ts:33`）可选写 `sourceHome` 与 `foreign`；`validateForeignOrigin`（`:79-113`）对 `manifest.foreign` **只产 warning、绝不拒包**——旧包无此键可继续导入，新包畸形值也不阻断。这是"加元数据而不破兼容"的现成证据。
+1. **版本轴极简且有意的**：`CURRENT_SCHEMA_VERSION = 1`、`MIN_SUPPORTED_SCHEMA_VERSION = 1`（`src/schema/versions.ts:18/:21`）；`needsMigration`（`:44`）在 v1 下恒 false。
+2. **格式自带扩展位**：`buildManifest`（`src/schema/manifest.ts:35`）可选写 `sourceHome` 与 `foreign`；`validateForeignOrigin`（`:81-101`）对 `manifest.foreign` **只产 warning、绝不拒包**——旧包无此键可继续导入，新包畸形值也不阻断。这是「加元数据而不破兼容」的现成证据。
 3. **完整性独立于格式**：`checksums.txt` + `verifyChecksums`（`src/security/integrity.ts:78`），解析侧带原型污染防护（`DANGEROUS_KEYS`，`:27`），条目上限 10_000（`:24`）。
 4. **凭据不进 sections**：`secrets` 是独立的加密凭据载荷。
 
-**但有一个真实的演进障碍（IE-01，P1 前瞻）**：`isSupportedSectionDataVersion`（`src/schema/versions.ts:69`）要求分区 `dataVersion` **恰好等于**注册表声明值（known-gaps G-05 已登记"部分修复"）。含义是：**任何单个分区（例如 `sessions` 或 `pluginFiles`）的载荷结构升级，都会让所有旧包整体不可导**，因为版本判定没有"向上兼容一个区间"的余地。这与全局 schema 版本轴（当前恒 1、迁移链从未被真实数据走过）形成了不对称：全局轴有迁移机制但用不上，分区轴需要迁移却没有机制。
+**但有一个真实的演进障碍（IE-01，P1 前瞻）**：`isSupportedSectionDataVersion`（`src/schema/versions.ts:78-80`）要求分区 `dataVersion` **恰好等于**注册表声明值（known-gaps G-05 已登记「部分修复」）。含义是：**任何单个分区（例如 `sessions` 或 `pluginFiles`）的载荷结构升级，都会让所有旧包整体不可导**，因为版本判定没有「向上兼容一个区间」的余地。这与全局 schema 版本轴（当前恒 1、迁移链从未被真实数据走过）形成了不对称：全局轴有迁移机制但用不上，分区轴需要迁移却没有机制。
 
 **最小合理改进**（不改格式、只改判定）：分区版本从"等于"改为"落在 `minSupported..current` 区间"，并在读取侧对**新增的可选字段**做缺省填充；破坏性变更才提升 `minSupported`。这一步不需要改 ZIP 结构，也不需要动 `manifest`，兼容风险 Low。
 
@@ -403,7 +403,7 @@ dcm import --from <source>           src/cli/import-source.ts
 | 执行 | `/execute` | 唯一改数据链路；强制先建快照 |
 | 补偿 | `src/core/rollback.ts` | 见 4.2；三类不可补偿如实上报 |
 
-**IE-02（P1）细节——`rollbackOnError` 三处默认值不一致**：
+**IE-02（P1）细节——`rollbackOnError` 四个调用点缺省值不一致**：
 
 | 入口 | 默认值 | 证据 |
 |---|---|---|
@@ -449,23 +449,23 @@ dcm import --from <source>           src/cli/import-source.ts
 
 ## 7. Sync Audit
 
-范围：`src/sync/**`（96 个 .ts / 33 102 行）+ `src/routes/sync.ts`（24 个端点）+ `src/index.ts` 的 `makeSyncEngine`/scheduler 接线 + 契约 `src/sync/transport.ts`。lead 对四条关键判断做了独立复核（标注「复核」）。
+范围：`src/sync/**`（96 个 .ts / 33 282 行）+ `src/routes/sync.ts`（24 个端点）+ `src/index.ts` 的 `makeSyncEngine`/scheduler 接线 + 契约 `src/sync/transport.ts`。lead 对四条关键判断做了独立复核（标注「复核」）。
 
 ### 7.1 结论速览
 
-1. **三方合并是真的，但真的不是任务书假设的那种**：base 不是 `lastSnapshotId`，而是**本地祖先副本** `state.ancestorId`（`src/sync/sync-state.ts:17`、:222 的 v2→v3 迁移 `ancestorId ?? lastSnapshotId`；`src/sync/sync-engine.ts:1500` 附近 → `tryLoadAncestor` → :1552 `mergeSections(local, remote, ancestor)`）。祖先缺失/解不开 → **静默降级为两方**并把整分区判 `conflict reason='no-ancestor'`（`src/sync/merge.ts:350`）。⇒「能三方」与「有基线」两件事耦合在本机磁盘上，祖先副本被 prune 或丢失即降级，且没有告警。
-2. **合并决策是闭集，没有"猜"**：`mergeSectionTriple`（`merge.ts:289`）对形状不合、形态互换、仅单侧存在、双侧改等分支逐个短路；双侧都改时文件走字节三方（`mergeFilesSectionGranular` :217 → `mergeBytesThreeWay`），JSON 走行级三方（`mergeJsonValues` :378）。1 MiB 以上、纯二进制、无共同祖先一律如实报 reason（`src/sync/text-merge.ts:19`），不伪装成功。
-3. **数据安全面的真短板是墓碑与 blob GC，不是条件写**（条件写已相当到位）：墓碑只在本机累积、从不与远端 `manifest.deletedSessions` 求并集（`sync-engine.ts:1109-1143`、:959），加密快照直接跳过剔除（:1145-1153）⇒ 换设备后旧快照可复活已删会话；webdav/s3 的 GC 引用集只来自 `index.json`，`404` 当成"无引用"（`webdav-transport.ts:675`、`s3-transport.ts:712-732`）⇒ 删在用的 blob 且不可恢复。
+1. **三方合并是真的，但真的不是任务书假设的那种**：base 不是 `lastSnapshotId`，而是**本地祖先副本** `state.ancestorId`（`src/sync/sync-state.ts:17`、`:216` 的 v2→v3 迁移 `ancestorId ?? lastSnapshotId`；`src/sync/sync-engine.ts:1500` 附近 → `tryLoadAncestor` → :1552 `mergeSections(local, remote, ancestor)`）。祖先缺失/解不开 → **降级为两方**并把整分区判 `conflict reason=no-ancestor`（`src/sync/merge.ts:350`）。⇒「能三方」与「有基线」两件事耦合在本机磁盘上，祖先副本被 prune 或丢失即降级；界面上有 `merge.noAncestor` 告警（`src/client/sync/MergePreviewView.tsx:105`），自动同步路径不展示。
+2. **合并决策是闭集，没有「猜」**：`mergeSectionTriple`（`merge.ts:289`）对形状不合、形态互换、仅单侧存在、双侧改等分支逐个短路；双侧都改时文件走字节三方（`mergeFilesSectionGranular` :217 → `mergeBytesThreeWay`），JSON 走行级三方（`mergeJsonValues` :378）。1 MiB 以上、纯二进制、无共同祖先一律如实报 reason（`src/sync/text-merge.ts:20`），不伪装成功。
+3. **数据安全面的真短板是墓碑与 blob GC，不是条件写**（条件写已相当到位）：墓碑只在本机累积、生成侧从不与远端 `manifest.deletedSessions` 求并集（`sync-engine.ts:1109-1138`、:959）⇒ 换设备后旧快照可复活已删会话；webdav/s3 的 GC 引用集只来自 `index.json`，引用者 `404` 被当成「无引用」（`webdav-transport.ts:676`、`s3-transport.ts:719-720`）⇒ 删在用的 blob 且不可恢复。
 4. **缺省行为会覆盖远端**：`conflictPolicy` 缺省 `'local'`（`src/sync/autosync-config.ts:56-63`，类型只有 `'ask'|'local'`）⇒ 有冲突时 Phase C 用 `force=true` 推（`autosync-scheduler.ts:731`），跳过 `remoteAdvancedCheck`，把本机版本推成远端最新（远端值只留在历史快照）。
-5. **`sync-state.json` 是全系统唯一非原子写的状态文件**（`sync-state.ts:258-261` `mkdir`+`writeFile`；对照 `sync-selection.ts:226`、`autosync-config.ts:23` 都走 `atomicWriteFile`）—— 复核确认。半截 JSON 会让 `loadSyncState` 抛错，此后**所有**同步操作硬失败且无自愈。
+5. **`sync-state.json` 是原子写的，但形状损坏后没有自愈**（复核纠偏）：`saveSyncState` 的 `fsx` 缺省 `createSnapshotFs()`（`sync-state.ts:258`），而 `src/sync/fs.ts:35` 就是 `await atomicWriteFile(p, data)`，生产唯一构造点 `src/index.ts:2968` 也不传 `fsx` ⇒ **不存在半截 JSON**。真实残留是 `loadSyncState`（`:179`）在形状不对时抛 `sync.state.notObject` 且全仓无修复路径：用户只能手删状态文件（连带丢 deviceId/ancestor 指针）。
 
 ### 7.2 base / local / remote 三要素的实际定义
 
 | 要素 | 本项目定义 | 存储 | 证据 |
 | --- | --- | --- | --- |
-| base | 上次**成功落地**那一轮的明文（或密文）分区副本 | `sync/ancestors/<id>`，`DEFAULT_ANCESTOR_KEEP=10` | `src/sync/ancestor.ts`（`writeAncestor`/`tryLoadAncestor`/`pruneAncestors`）、`sync-state.ts:17` |
+| base | 上次**成功落地**那一轮的明文（或密文）分区副本 | `dataDir/sync/snapshots/<id>`（`localSnapshotsDir`，`src/index.ts:2974` + `:3834` `syncDir`）| `src/sync/ancestor.ts`（`writeAncestor`/`tryLoadAncestor`/`pruneAncestors`，`:132`）、`sync-state.ts:17` |
 | local | 当轮 `adapter.export()` 的结果，且与 push **同口径**（sections 过滤 + secret 剥离） | 内存 | `sync-engine.ts:1477-1560`、`portableAdapters()` |
-| remote | `transport.download(targetId)` → `prepareSnapshot` → `stripTombstonedSessions` → 解密 | 内存 | `sync-engine.ts:1450-1452`、:688 |
+| remote | `transport.download(targetId)` → `prepareSnapshot`（解密）→ `stripTombstonedSessions` | 内存 | `sync-engine.ts:1448-1452`、:688 |
 
 判据是**分区哈希**（`hashSection`：文件类按 `relativePath` 排序后拼 `"path\0"+sha256(data)`；JSON 走 `canonicalJson`），不是快照 id，也不是 mtime。这解释了为什么"仅两侧 hash 相等"就能推 `skip`（`merge.ts:340`）。
 
@@ -477,9 +477,9 @@ dcm import --from <source>           src/cli/import-source.ts
 | 2 | 仅远端修改 | `local==ancestor` → `useRemote` | 正确 | `merge.ts:357` |
 | 3 | 双方修改 | JSON 行级三方成功→`merge`；文件字节三方成功→并入且 `mergePoints+1`；失败如实记 `both-modified`/`binary`/`too-large` | 正确 | `merge.ts:378`、:251-261、`text-merge.ts:19` |
 | 4 | 本地删除（分区） | 远端未改 → `skip`（尊重删除）；**远端改过 → `useRemote`，分区整体复活且无提示** | 部分正确 | `merge.ts:332-341` |
-| 5 | 本地删除（单文件） | 远端字节==祖先 → 跟随删除；远端改过 → `conflict(modify-delete)` | 正确 | `merge.ts:271-273` |
+| 5 | 本地删除（单文件） | 远端字节==祖先 → 跟随删除；远端改过 → `conflict(delete-modify)` | 正确 | `merge.ts:276-281` |
 | 6 | 远端删除（分区） | 本地未改 → `skip`；本地改过 → `conflict` | 正确 | `merge.ts:314-330` |
-| 7 | 远端删除（单文件） | 对称 `delete-modify` 冲突 | 正确 | `merge.ts:280` |
+| 7 | 远端删除（单文件） | 对称 `modify-delete` 冲突 | 正确 | `merge.ts:269-274`（:273）|
 | 8 | 双方新增 | 整分区两侧都新（祖先无该分区）→ `conflict('no-ancestor')`，先于逐项比较 | 正确（保守） | `merge.ts:350` |
 | 9 | 重命名 | **未建模**：A 机 `a→b`、B 机 `a→c` ⇒ `a` 双侧缺失跟随删除，`b`/`c` 各判"纯新增" ⇒ **两份副本并存、零冲突** | 缺口 | `merge.ts:271-273`、:332；`merge.test.ts` 无 rename 用例（grep 零命中） |
 | 10 | 文件类型改变（file→dir） | `FilesSection` 无类型元数据（只有 `relativePath + data`）⇒ 等价"删该文件 + 新增若干"，按 #5/#8 处理，不崩不提示 | 缺口（低危） | `src/adapters/file-collection.ts:426`、collect 侧 :247-257 |
@@ -501,29 +501,27 @@ dcm import --from <source>           src/cli/import-source.ts
 
 ### 7.5 墓碑与 GC：本次同步域唯一触及"数据可能消失"的地方
 
-- **墓碑不跨设备传播**：`computeSessionBookkeeping()` 只吃本机 `state.sessionUnits/deletedSessions`（`sync-engine.ts:1109-1143`），从不与远端 `manifest.deletedSessions` 求并集（远端那份只在 `:959` 写入、无读取方）。⇒ 设备 B 从没见过删除历史，推上去的快照 `deletedSessions` 为空，A 的墓碑链在最新快照上断裂，任何一端按最新快照拉取都能复活已删会话。
-- **加密快照完全不剔除**：`stripTombstonedSessions` 首行 `if (isEncryptedSections(...)) return []`（`sync-engine.ts:1145-1153`）⇒ 加密通道下旧快照必然复活已删会话，且无提示。
-- **GC 引用集只来自索引、404 视为无引用**：`webdav-transport.ts:667-687`（:675 `if (res.status === 404) continue`）、`s3-transport.ts:712-732`。台账 G-35 的两个形态都还在：① upload 两步之间失败留下孤儿快照，其 blob 不在引用集 → 被删；② 引用者 GET 假 404 → 同一 blob 被删。**结果不可恢复**（快照文件在，读回即 `sync.blobMissing`）。git 通道反而安全（`git-transport.ts:1340-1357` 枚举目录）。
+- **墓碑生成侧不跨设备传播**：`computeSessionBookkeeping()` 只吃本机 `state.sessionUnits/deletedSessions`（`sync-engine.ts:1109-1138`），从不与远端 `manifest.deletedSessions` 求并集。远端墓碑**是有读取方的**（`:1146` 读 `snapshot.manifest.deletedSessions`，pull/preview/merge 在 `:1253`/`:1318`/`:1450`/`:1496` 使用），缺的是「生成侧把远端墓碑并入本机」。⇒ 设备 B 从没见过删除历史，推上去的快照 `deletedSessions` 为空，A 的墓碑链在最新快照上断裂，任何一端按最新快照拉取都能复活已删会话。
+- **GC 引用集只来自索引、404 视为无引用**：两个通道的「索引缺失 + 远端有过内容 ⇒ 零写入抛 protocol」已 fail-closed（`webdav-transport.ts:415-417`、`s3-transport.ts:301-307`），因此只剩两种形态：① upload 两步之间失败留下孤儿快照，其 blob 不在引用集 → 被删；② 引用者 GET **假 404**（`webdav-transport.ts:676`）→ 同一 blob 被删。**结果不可恢复**（快照文件在，读回即 `sync.blobMissing`）。git 通道反而安全（`git-transport.ts:1340-1357` 枚举目录）。
 
 必须如实写一条**台账纠偏**：G-35 里"upload 侧仍待 t66"已过时 —— `webdav-transport.ts:377-394` 与 `s3-transport.ts:277-287` 的三态（`indexMissing && remoteHasPriorContent → 零写入抛 protocol`）已经落地，注释显式标注 t66。条目主体（GC 两形态）仍成立，但描述需要更新。
 
 ### 7.6 缺省策略与状态文件
 
-- **缺省覆盖远端**：`DEFAULT_AUTOSYNC_CONFLICT_POLICY = 'local'`（`autosync-config.ts:56-63`），类型刻意不提供 `'remote'`（注释理由：走 `applyMergeResolutions` 会绕过风险分级，audit-sync sync-F5）。副作用是 `force=true` 推（`autosync-scheduler.ts:731`）跳过 `remoteAdvancedCheck`。这与"索引条件写绝不覆盖别人"的直觉直接冲突 —— 同一个产品里两个方向的默认值不同。
+- **缺省覆盖远端**：`DEFAULT_AUTOSYNC_CONFLICT_POLICY = local`（`src/sync/autosync-config.ts:67`），类型刻意不提供 `remote`（注释理由：走 `applyMergeResolutions` 会绕过风险分级，audit-sync sync-F5）。副作用是 `force=true` 推（`autosync-scheduler.ts:731`）跳过 `remoteAdvancedCheck`。这与「索引条件写绝不覆盖别人」的直觉直接冲突 —— 同一个产品里两个方向的默认值不同。
 - **`firstSync` 安全档从未接线**（复核：`autosync-scheduler.ts:678`、:954、`sync-engine.ts:1578` 全是 `firstSync: false`；`firstSync: true` 只出现在 `risk.test.ts`）⇒ `risk.ts:11` 注释承诺的"首次同步全部进 review"在生产路径上不存在。
-- **`pendingMerge` 只写不读**（复核：`src/routes/**`、`src/ui/**`、`src/client/**` grep 零命中）⇒ `sync-engine.ts:1723` 注释"界面据此讲挂了多久"是 DOC-ONLY；且 push 的 `recordBaseline`（:982-991）与一键同步 `applyItems`（:2152-2157）都不传该字段，陈旧记录永不清除。
+- **`pendingMerge` 的清理不完整**（复核纠偏）：`writeMergeBaseline` 在 `pending === undefined` 时确实会删掉 `state.pendingMerge`（`sync-engine.ts:1702`/`:1704` 清、`:1852-1853` 覆盖），所以「只写不读」不成立；残留问题是 **push（`:982-991`）与一键同步 `applyItems`（`:2152-2159`）都不清该字段** ⇒ 走这两条路径留下的陈旧记录永不清除，而 `:1723` 注释承诺的界面提示仍然不存在（`src/routes/**`、`src/ui/**`、`src/client/**` grep 零命中）。
 
 ### 7.7 问题表
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容风险 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| SYN-01 | sync/state | `mkdir`+`writeFile` 非原子 | 半截 JSON ⇒ 全链路硬失败、无自愈 | `src/sync/sync-state.ts:258-261`、`loadSyncState` :196-230；对照 `sync-selection.ts:226` | dsh-backup-sync 的 baseline 落盘（§12） | 断电后所有同步操作报 `sync.state.notObject`，只能手删（连带丢 deviceId/ancestor 指针） | 换 `atomicWriteFile(...,{mode:0o600})`；形状坏但可解析时改备份重建 | P1 | S | Low |
+| SYN-01 | sync/state | `saveSyncState` 原子写；`loadSyncState` 形状不对即抛 | 状态文件不可解析后无自愈路径 | `src/sync/sync-state.ts:171-232`（:179 抛 `sync.state.notObject`）、:258；`src/sync/fs.ts:35` | dsh-backup-sync baseline 落盘 | 一次外部损坏 = 同步永久不可用，清理即丢 deviceId/ancestor 指针 | 坏形状时备份改名 + 重建空状态（保留 deviceId），并给只读诊断 | P2 | S | Low |
 | SYN-02 | sync/tombstone | 墓碑只吃本机 state | 不跨设备传播，旧快照复活已删会话 | `sync-engine.ts:1109-1143`、:959、:988-990；`sync-state.ts:81` | undo-savepoint 的全局 blob 台账（§12） | 隐私/正确性：删除无法在多设备间生效 | `computeSessionBookkeeping` 入参加 `remoteTombstones`（来自远端 manifest，去重后减去本机现存），并把合并数进 warnings | P1 | M | Low |
-| SYN-03 | sync/tombstone | 加密快照首行直接 `return []` | 加密通道完全不剔除墓碑 | `sync-engine.ts:1145-1153` | — | 加密用户删除行为形同虚设 | 解密后再剔除（`prepareSnapshot` 已回落明文），剔除数进 report | P1 | S | Low |
-| SYN-04 | sync/webdav,s3 | 引用集只来自索引，404 当无引用 | 删在用 blob，不可恢复 | `webdav-transport.ts:667-687`(:675)、:488；`s3-transport.ts:712-732` | undo-savepoint 的 `pruneOrphanBlobs`（先写 manifest 再 GC，§12） | 快照不可读（`sync.blobMissing`），且 G-35 已登记 | 先落地 fail-closed（引用者 404 → 本轮放弃 GC）；中期补列举原语（PROPFIND/ListObjectsV2） | P1 | S / XL | Low |
+| SYN-04 | sync/webdav,s3 | 引用集只来自索引，引用者 404 当无引用（索引缺失已 fail-closed）| 假 404 / 孤儿快照会让在用 blob 被删，不可恢复 | `webdav-transport.ts:676`；`s3-transport.ts:719-720`；`:488` | undo-savepoint 的 `pruneOrphanBlobs`（先写 manifest 再 GC，§12） | 快照不可读（`sync.blobMissing`），G-35 已登记 | 404 也放弃本轮 GC（现在是「忽略该引用」）；中期补列举原语（PROPFIND/ListObjectsV2） | P1 | S / XL | Low |
 | SYN-05 | sync/autosync | 缺省 `conflictPolicy='local'` + `force` 推 | 缺省覆盖远端最新 | `autosync-config.ts:56-63`；`autosync-scheduler.ts:731-739`；`sync-engine.ts:877` | dsh-cloud-sync 的 2-way 语义（§12，反而更差） | 远端最新改动只在历史快照可见 | 首轮或远端有新快照时强制 `ask`；历史记录标 `forced=true` | P1 | M | Medium |
 | SYN-06 | sync/engine | 无协议层 journal | upload 后崩溃只能靠拦截 | `sync-engine.ts:975`→:982、:1220-1233 | — | 用户看到"远端已推进"但无续跑/确认入口 | push 前写 `inflight{snapshotId,startedAt}`，成功后清；命中时提示"上次可能已完成" | P2 | M | Low |
-| SYN-07 | sync/engine | `pendingMerge` 只写不读 | 注释承诺的界面不存在；陈旧记录残留 | 写 `sync-engine.ts:1683/:1702/:1743/:1852-1853`；读仅 `sync-state.ts:222` | — | 文档/注释与实现对不上 | 要么接线（status 暴露 + 同步页提示），要么删字段并撤承诺；两者都要求 push/applyItems 清理 | P2 | S | Low |
+| SYN-07 | sync/engine | `writeMergeBaseline` 会清 `pendingMerge`，push 与 applyItems 不清 | 注释承诺的界面不存在；两条路径留下陈旧记录 | 写/清 `sync-engine.ts:1683/:1702/:1743/:1852-1853`；读仅 `sync-state.ts:222`；push `:982-991`、applyItems `:2152-2159` 不清 | — | 文档/注释与实现对不上 | 要么接线（status 暴露 + 同步页提示），要么删字段并撤承诺；两条路径补清理 | P2 | S | Low |
 | SYN-08 | sync/merge | 只按 `relativePath` 比较 | 无 rename 语义 → 两份副本零冲突 | `merge.ts:271-273`、:332；`merge.test.ts` 无 rename 用例 | dsh-backup-sync 同样无（§12） | 用户看到"多一份"不知哪份新 | `mergeFilesSectionGranular` 加"同内容异路径"检测（祖先路径消失 + 另一侧新路径字节==祖先 → 判 rename），先补测试 | P2 | L | Medium |
 | SYN-09 | sync/engine | `useRemote` + 远端缺分区 → `pendingConflicts` | 该组合永不可解，基线不推进 | `sync-engine.ts:1655-1660`、:1608 注释 | — | 用户只能改选 `keepLocal` 才能脱身 | 裁决层把该组合降级为"整分区删除"计划项（需 adapter 支持删除），或 UI 禁用该组合并说明 | P2 | M | Medium |
 | SYN-10 | adapters/self | 载荷即"剔除运行态后"的字节，apply 直写 | 应用远端 `self` 会清掉本机 `lastRun*`/`consecutiveFailures` | `src/adapters/self.ts:221`、:91-100、:80 注释；`file-collection.ts:247-257`、:426 | — | 自动同步间隔门控与失败计数归零（可能立刻多跑一轮、丢告警） | 二选一：导出保留完整字节只在 hash 前剔除；或 apply 对调度配置做"保留本机运行态键"的合并写 | P2 | M | Medium |
@@ -533,7 +531,7 @@ dcm import --from <source>           src/cli/import-source.ts
 | SYN-14 | sync/merge | `advanceRemoteId` 只改 `lastSnapshotId/lastSyncAt` | 本地删分区 + 远端未改 → 后续恒判"有本地改动" | `merge.ts:332`；`sync-engine.ts:1680-1691`、:1744-1747 | — | 多一轮无谓上行/自动同步触发（自愈） | 推进基线时同步重算受影响分区 hash 或清除该分区记录 | P3 | S | Low |
 | SYN-15 | sync/git | GC 的 push 未带 `requirePushToken` | 只读权限 token 走 GC 时错误分类不同 | `git-transport.ts:1364` vs :504、:573 | — | 错误提示误导 | 与 upload/delete 对齐 | P3 | S | Low |
 
-计数：**P0 = 0**、P1 = 5（SYN-01…05）、P2 = 6（SYN-06…11）、P3 = 4（SYN-12…15）。
+计数：**P0 = 0**、P1 = 3（SYN-02/04/05）、P2 = 7（SYN-01/06/07/08/09/10/11）、P3 = 4（SYN-12…15），合计 14 条。
 
 关于"为什么同步域没有 P0"：本次逐条追了"数据会不会消失"的四条路径（覆盖写、删远端、GC、墓碑），只有 SYN-04 能让文件不可读，但它需要"孤儿快照 + 索引残留"或"假 404"的低概率组合，且台账已登记、代码里已有 fail-closed 的最小修法 ⇒ 记 P1 而不是 P0。**不把"没有 git merge 级别的一致性"当问题**：本项目的三态 + 闭集决策 + 落地后重导出记基线（`exportAppliedSections` → `null` 则不推进基线，`sync-engine.ts:1998-2016`）已经在正确方向上，缺的是协议层 journal 与墓碑传播，不是替换合并算法。
 
@@ -646,6 +644,7 @@ dcm import --from <source>           src/cli/import-source.ts
 | 同步 URL 校验 | 只拒空白/userinfo/非 http(s) 的解析；host 完全不判 | `src/sync/sync-config.ts:438-458`、:465-486、:720-734、:784-808 | PARTIAL |
 | 私网/环回/链路本地 | 无任何拦截（`localhost`、`127.0.0.1`、`169.254.169.254` 全部可用） | 同上 | UNSUPPORTED |
 | git 协议白名单 | 无；`runGit` 把 `repoUrl` 原样作参数（数组传参、无 shell） | `src/sync/git/git-transport.ts:1159` | UNSUPPORTED |
+| git 参数分隔 | 无 `--` 分隔，以 `-` 开头的 repoUrl 会被 git 当成选项（参数注入面比 `file://` 更宽）| `src/sync/git/git-transport.ts:586`、`:711`；无 `GIT_ALLOW_PROTOCOL`（grep 零命中）| UNSUPPORTED |
 | token ↔ host 绑定 | 无；任意 host 都注入 | `git-transport.ts:1233-1237`、:1256-1263 | UNSUPPORTED |
 
 单独使用时，"用户自己填了内网地址"属于用户自选（P1 而非 P0）；但它在 7.5 链条里是"没有任何一层会拦"的最后一环，所以修复建议与 7.5 合并成一次 host 策略改造，而不是两个独立需求。
@@ -654,25 +653,26 @@ dcm import --from <source>           src/cli/import-source.ts
 
 - **恢复/备份互斥是真的**：`/restore` 走 `runWithMutationLock`（`src/routes/snapshots.ts:69`），手动备份在 `BackupScheduler.runOnce` 内过同一把锁（`src/sync/backup-scheduler.ts:266`），锁被占则 `status='skipped'` + `skipReason='mutation-locked'`（:345）。
 - **环境锁语义安全**：stale 不自动抢占，probe 失败不伪装死亡（`src/utils/env-lock.ts:14`、:17`、:1002-1038、:1051-1126）。
-- **配置类写路由缺少条件写**：全仓 60 处写方法（POST/PUT/DELETE）只有 22 处过 mutation gate；`POST /sync/config`（`src/routes/sync.ts:321`）与 `/sync/selection`（:1163）都是无条件整文件写 ⇒ GUI 与 CLI/救急台并发时后写覆盖，且无版本/ETag 保护（SEC-09，P2；远端索引侧的条件写见 7.9 UNKNOWN-2）。
+- **配置类写路由缺少条件写**：全仓 65 处写方法（POST/PUT/DELETE）只有 16 处过 mutation gate（`src/routes/backup.ts:184`/`:268`、`import.ts:179`、`prefs.ts:171`、`profiles.ts:130`/`:156`/`:189`/`:209`、`snapshots.ts:222`/`:266`、`sync.ts:291`/`:422`/`:815`/`:948`/`:1229`/`:1280`），余 49 处配置类写无锁/无条件写；`POST /sync/config`（`src/routes/sync.ts:321`）与 `/sync/selection`（`:1163`）都是无条件整文件写 ⇒ GUI 与 CLI/救急台并发时后写覆盖，且无版本/ETag 保护（SEC-09，P2）。gate 定义见 `src/index.ts:2729-2768`。
 
 ### 8.8 问题表
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容风险 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| SEC-01 | adapters/sync | `self` 白名单含 `sync/sync-config.json`；导入裸写；读取不校验 | 包可改写同步目标，下一轮同步把 token 发往包内 host | `src/adapters/self.ts:55-65`(:56)；`src/adapters/file-collection.ts:414-430`(:426)；`src/sync/sync-config.ts:176`/:299；`src/sync/git/git-transport.ts:1224-1246`；`src/core/conflict-decisions.ts:22-45`；`src/client/import/ConflictList.tsx:116-118` | dsh-backup 的"导入后不触碰传输凭据"取向（见 §12）；DSH-Portable 的"导入先落隔离区再显式提交" | 凭据外泄 + 后续拉取攻击者内容覆盖本机配置 | ① `applyItem` 对 `sync/*.json` 调与写路由同一校验；② host 策略（默认仅 github.com/gist/官方端点，自定义需显式确认并留审计）；③ token 与 host 绑定，host 变化即不注入且告警 | **P0** | M | Medium |
+| SEC-01 | adapters/sync | `self` 白名单含 `sync/sync-config.json`；导入裸写；读取不校验 | 包可改写同步目标，下一轮同步把 token 发往包内 host | `src/adapters/self.ts:55-65`(:56)；`src/adapters/file-collection.ts:414-430`(:426)；`src/sync/sync-config.ts:176`/:299；`src/sync/git/git-transport.ts:1224-1246`；`src/ui/import-wizard.ts:260`（`strategy: merge`）；`src/core/conflict-decisions.ts:44-45` | dsh-backup 的"导入后不触碰传输凭据"取向（见 §12）；DSH-Portable 的"导入先落隔离区再显式提交" | 凭据外泄 + 后续拉取攻击者内容覆盖本机配置 | ① `applyItem` 对 `sync/*.json` 调与写路由同一校验；② host 策略（默认仅 github.com/gist/官方端点，自定义需显式确认并留审计）；③ token 与 host 绑定，host 变化即不注入且告警 | **P0** | M | Medium |
 | SEC-02 | sync | URL 校验只看 scheme/userinfo | 环回/私网/链路本地可作同步目标 | `src/sync/sync-config.ts:438-458`、:465-486、:720-734、:784-808 | 无（竞品普遍同样薄） | 与 SEC-01 叠加即成包控 SSRF；单独使用属用户自选 | 并入 SEC-01 的 host 策略，一次改完 | P1 | S | Medium |
 | SEC-03 | sync/git | 非 http(s) repoUrl 直接放行；无 `protocol.*` | `file://` 可指本机任意 git 仓 | `src/sync/sync-config.ts:446-456`；`src/sync/git/git-transport.ts:1159` | — | 本地仓库读取面；`ext::` helper 面未拦 | `validateRepoUrl` 改白名单 + git 恒带 `-c protocol.ext.allow=never` 与 `GIT_ALLOW_PROTOCOL` | P1 | S | Low |
-| SEC-04 | sync/import | `sync-autosync.json` 在 `self` 白名单；`self` riskTier=low；缺省档 medium | 导入即可打开自动同步并抬高自动落盘档位 | `src/adapters/self.ts:57`；`src/schema/section-registry.ts:385`；`src/sync/autosync-config.ts:53`、:129；`src/sync/autosync-scheduler.ts:672-680` | dsh-backup 的"调度配置不随包迁移"（§12） | 无人值守把远端内容落到多分区 | 导入把"自动同步开关/档位"列为需人工确认项（或直接跳过） | P1 | S | Medium |
+| SEC-04 | sync/import | `sync-autosync.json` 在 `self` 白名单；`self` riskTier=low；缺省档 medium | 导入预置自动同步开关/档位（`reload()` 不在 import 路由，故当轮不生效；已开启者下一轮即按包内目标推送）| `src/adapters/self.ts:57`；`src/schema/section-registry.ts:385`；`src/sync/autosync-config.ts:53`、`:124`；`src/sync/autosync-scheduler.ts:672-680`；`src/routes/sync.ts:354` | dsh-backup 的「调度配置不随包迁移」（§12） | 已开启自动同步的用户会被包内目标接管 | 导入把「自动同步开关/档位」列为需人工确认项（或直接跳过） | P2 | S | Medium |
 | SEC-05 | analyzer/integrity | checksum 只正向；表外条目仅 warning；文件分区按归档名写入 | 完整性承诺弱于声明，表外文件可落盘 | `src/utils/hashing.ts:36-38`（注释 :27-28）；`src/security/integrity.ts:75-76`；`src/core/analyzer.ts:334-347`、:407-413 | dsh-backup 的"包内条目必须与清单一一对应" | 完整性可被绕过；使 SEC-01 的投送不需要改校验表 | 文件类分区落盘前要求条目在 checksums 表内；`extraEntries` 升为阻断（可按分区配置） | P1 | S | Low |
 | SEC-06 | utils/paths | `isPathSafe` 只判 `..`/绝对/盘符/UNC/NUL | Windows ADS（`a.txt:s`）、设备名（CON/NUL/COM1）、尾点尾空格不拦 | `src/utils/paths.ts:33-42`；`src/utils/zip.ts:503` | — | 恶意条目可写 NTFS 备用数据流/异常路径；`lstat` 复核只查 `isFile` | Windows 下追加拒绝 `:`、设备名表、尾点/尾空格 | P2 | S | Low |
 | SEC-07 | security/encryption | `validateKdfParams` 上界宽于 `deriveKey` 实际能力（无 `maxmem`） | 越界参数被归成 `BAD_PASSWORD`（实测：Node 默认 maxmem 先拦） | `src/security/encryption.ts:63-70`、:73-79、:147-152 | — | 仅错误码语义；将来补 `maxmem` 才成真风险 | 收紧到 128·N·r ≤ 32 MiB，越界返 `UNSUPPORTED_FORMAT` | P2 | S | Low |
 | SEC-08 | routes/kit | `writeJson` 只设 content-type + referrer-policy | 无 `nosniff`/CSP/frame-options，与救急台口径不一致 | `src/routes/kit.ts:96-103`；对照 `src/cli/web/http.ts:4-25` | — | 残余嗅探/嵌框风险（低） | `writeJson` 补 `x-content-type-options: nosniff` | P3 | S | Low |
-| SEC-09 | routes | 60 处写方法仅 22 处过 mutation gate | 配置类写无并发保护/条件写 | `src/index.ts:2724-2762`（gate）；`src/routes/sync.ts:321`、:1163；`src/routes/me.ts` 7 条 POST | Gitea 类条件写（见 §12 的 baseline 思路） | 后写覆盖，无版本判据 | 对"会驱动后续网络/写盘"的配置引入 mtime/版本条件写或纳入锁 | P2 | M | Low |
+| SEC-09 | routes | 65 处写方法仅 16 处过 mutation gate | 配置类写无并发保护/条件写 | `src/index.ts:2729-2768`（gate）；`src/routes/sync.ts:321`、:1163；`src/routes/me.ts` 7 条 POST | Gitea 类条件写（见 §12 的 baseline 思路） | 后写覆盖，无版本判据 | 对"会驱动后续网络/写盘"的配置引入 mtime/版本条件写或纳入锁 | P2 | M | Low |
 | SEC-10 | docs/decisions | ADR-0002 用行号引用闸门 | 行号已漂移（实测指向 rollback 闭包与 rewind gate） | `docs/decisions/0002-encrypted-container-unlock-gate.md:28` vs `src/index.ts:3652`、:3691、`src/routes/import.ts:190` | — | 维护者按 ADR 找不到闸门 | 改符号引用而非行号 | P3 | S | Low |
 | SEC-11 | utils/zip | `safeExtract`/`safeExtractHardened` 全仓无调用方 | 文件头宣称"整体拒绝"，实际 CRC 校验在惰性读阶段 | `src/utils/zip.ts:538`；`src/security/zip-security.ts:72-109` | — | 现网不受影响（导入走内存）；潜伏误用风险 | 要么删掉这两个导出，要么把校验前移到落盘之前 | P3 | S | Low |
+| SEC-12 | sync/git | `validateRepoUrl` 只看 scheme/userinfo；repoUrl 直接进 git argv | 以 `-` 开头的 repoUrl 被 git 当选项（参数注入），非 http(s) 也未拦 | `src/sync/sync-config.ts:438-459`；`src/sync/git/git-transport.ts:586`（ls-remote）、`:711`（clone）| dsh-backup 的传输层不拼 user 输入 | 可让 git 读任意本地仓/触发 helper | scheme 白名单 + argv 恒带 `--` + `-c protocol.ext.allow=never` | P1 | S | Low |
 
-计数：P0 = 1、P1 = 4、P2 = 3、P3 = 3（合计 11；其中 SEC-11 为 lead 复核新增，其余 10 条与 sec-audit 笔记一一对应）。
+计数：P0 = 1、P1 = 4（SEC-02/03/05/12）、P2 = 4（SEC-04/06/07/09）、P3 = 3（SEC-08/10/11），合计 12 条。其中 SEC-12 为本轮复核新增；SEC-04 由 P1 下调为 P2（缺省即 `enabled:false`，且导入路由不 reload）。
 
 ### 8.9 UNKNOWN（未验证，不写成缺陷）
 
@@ -702,23 +702,23 @@ dcm import --from <source>           src/cli/import-source.ts
 
 | 项目 | 内容 |
 |---|---|
-| 实际位置 | `src/adapters/`（24 个非测试文件）、`src/foreign/`（外部来源，120 文件）、`src/schema/`（分区注册表与版本）|
+| 实际位置 | `src/adapters/`（23 个非测试文件）、`src/foreign/`（外部来源，120 文件）、`src/schema/`（分区注册表与版本）|
 | 主要职责 | 把每个分区（section）的「读 / 分析差异 / 写 / 校验 / 收尾」实现成统一契约，供 Exporter / Analyzer / Importer 三引擎无差别调度 |
-| 关键接口 | `ConfigAdapter`（`src/core/types.ts:1171-1273`，14 个成员，9 个必填 + 5 个可选钩子 + 2 个生命周期钩子 + 2 个快照钩子）；抽象基类 `FileCollectionAdapter`（`src/adapters/file-collection.ts:69`）|
+| 关键接口 | `ConfigAdapter`（`src/core/types.ts:1171-1272`，**17 个成员：8 个必填 + 9 个可选钩子**）；抽象基类 `FileCollectionAdapter`（`src/adapters/file-collection.ts:69`）|
 | 依赖关系 | 只依赖 `core/types.ts` 的类型与 `HostContext` 门面；不 import `routes/` / `client/`；`index.ts` 负责注册与挂载顺序 |
 | 数据流 | 导出：`export(ctx, options)` → `ExportSection`；预览：`preview()` → `SectionPreview`；导入：`analyzeImport()` → `PlanItem[]` → 引擎调度 `applyItem()` → `finalizeApply()`（分区内）→ `finalizeImport()`（全分区后）|
 | 状态管理 | 无内部状态（纯函数式，状态全在宿主 `HostContext` 的 fs 门面里）；顺序语义由 `section-registry.ts` 的 `applyOrder` 决定 |
-| 测试覆盖 | 同目录 `*.test.ts` 覆盖 17 分区中的绝大多数；`src/adapters/file-collection.test.ts`、`plugins.test.ts` 为最厚；本轮实跑 96 个用例全绿（见 §17）|
-| 主要问题 | ①`ConfigAdapter.snapshot()/`rollback()` 两个钩子零覆写（AD-01）；②`pluginFiles` 不复用基类（AD-03）；③跨分区收尾顺序脆弱（AD-04）|
+| 测试覆盖 | 同目录 `*.test.ts` 覆盖 17 分区中的绝大多数；`src/adapters/file-collection.test.ts`、`plugins.test.ts` 为最厚（本轮未跑全量测试，见 §17.1）|
+| 主要问题 | ①`ConfigAdapter.snapshot()`/`rollback()` 两个钩子零覆写（AD-01）；②`pluginFiles` 未复用基类的单文件字节闸门（AD-03）；③可选钩子只有单一实现者（`listAllUnitIds`/`unitActivityTimes`/`finalizeApply` 均在 sessions）|
 
 **事实**：17 个分区 id 全部登记在 `src/schema/section-registry.ts:190-420`：settings、ui、providers、plugins、mcp、prompts、skills、agentPresets、agentInstructions、workspaces、pluginFiles、credentialsStatus、secrets、sessions、self、pluginData、pluginAssets。
 
-**事实**：适配器类是 16 个，覆盖 17 个分区（`secrets` 与 `credentialsStatus` 由 `CredentialsAdapter` 一并处理）：
+**事实**：适配器类是 15 个，覆盖 16 个分区（`secrets` **没有适配器**，由 exporter/importer/backup 的独立密文凭据载荷处理：`src/core/backup.ts:402` `case secrets`；`credentials.ts:87` 导出时 `hasValue: false`）：
 
 | 载体类型 | 适配器类 | 分区 |
 |---|---|---|
 | 继承 `FileCollectionAdapter`（6）| `SkillsAdapter` `src/adapters/skills.ts:166`、`AgentPresetsAdapter` `:agent-presets.ts:9`、`AgentInstructionsAdapter` `:agent-instructions.ts:22`、`SessionsAdapter` `:sessions.ts:49`、`SelfAdapter` `:self.ts:152`、`PluginDataAdapter` `:plugin-data.ts:68` | skills、agentPresets、agentInstructions、sessions、self、pluginData |
-| 直接 `implements ConfigAdapter`（10）| `SettingsAdapter` `:settings.ts:167`、`UiAdapter` `:ui.ts:63`、`ProvidersAdapter` `:providers.ts:45`、`PluginsAdapter` `:plugins.ts:354`、`McpAdapter` `:mcp.ts:170`、`PromptsAdapter` `:prompts.ts:125`、`WorkspacesAdapter` `:workspaces.ts:86`、`PluginFilesAdapter` `:plugin-files.ts:27`、`CredentialsAdapter` `:credentials.ts:75`、`FileCollectionAdapter`（抽象基类本体）| 其余 10 个 |
+| 直接 `implements ConfigAdapter`（9）| `SettingsAdapter` `:settings.ts:167`、`UiAdapter` `:ui.ts:63`、`ProvidersAdapter` `:providers.ts:45`、`PluginsAdapter` `:plugins.ts:354`、`McpAdapter` `:mcp.ts:170`、`PromptsAdapter` `:prompts.ts:125`、`WorkspacesAdapter` `:workspaces.ts:86`、`PluginFilesAdapter` `:plugin-files.ts:27`、`CredentialsAdapter` `:credentials.ts:75` | 其余 10 个分区 |
 
 ### 9.2 契约面覆盖矩阵
 
@@ -744,25 +744,25 @@ dcm import --from <source>           src/cli/import-source.ts
 
 ### 9.3 DSH 内部分区能力矩阵
 
-等级：**FULL** = 读写与删除/重命名检测齐备且有测试；**PARTIAL** = 能读能写但缺一类判定（如无删除检测、无字节闸门）；**DETECT** = 只能识别不能写；**NONE** = 不支持；**UNKNOWN** = 本轮未验证。
+等级：**FULL** = 读写 + 删除/重命名检测齐备且有测试（本轮只有 `sessions` 达到：删除检测依赖 `listAllUnitIds()`，唯一实现 `src/adapters/sessions.ts:116`）；**PARTIAL** = 能读能写但缺一类判定（无删除检测、无字节闸门）；**DETECT** = 只能识别不能写；**NONE** = 不支持；**UNKNOWN** = 本轮未验证。
 
 | 分区 | 载体 | 读 | 写 | 单元级选择 | 专属收尾 | 等级 | 备注 / 证据 |
 |---|---|---|---|---|---|---|---|
-| settings | JSON | ✅ | ✅ | ✅ `listUnits` | — | FULL | `settings.ts:167` |
-| ui | JSON | ✅ | ✅ | ✅ | — | FULL | `ui.ts:63` |
-| providers | JSON（含凭据引用）| ✅ | ✅ | ✅ | — | FULL | `providers.ts:45`；凭据值不在此分区 |
-| plugins | JSON + 档案 manifest/patch 层 | ✅ | ✅ | ✅ | — | FULL | `plugins.ts:354`；覆盖 `profiles/<p>/cordis.patch.yml`（`:116`）、package.json、pnpm-workspace、patches/*.patch |
-| mcp | JSON（connector store）| ✅ | ✅ | ✅ | — | FULL | `mcp.ts:170`；`:10` 复用 profile manifest ref |
-| prompts | 文件/JSON | ✅ | ✅ | ✅ | — | FULL | `prompts.ts:125` |
-| skills | 文件集合 | ✅ | ✅ | ✅ | — | FULL | `skills.ts:166`（基类）|
-| agentPresets | 文件集合 | ✅ | ✅ | ✅ | — | FULL | `agent-presets.ts:9` |
-| agentInstructions | 文件集合 | ✅ | ✅ | ✅ | — | FULL | `agent-instructions.ts:22` |
-| workspaces | JSON + 会话登记 | ✅ | ✅ | ✅ | ✅ `finalizeImport` | FULL | `workspaces.ts:86`、`:246` |
-| pluginFiles | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | `plugin-files.ts:27` 自实现，不复用基类的字节闸门/链接告警（AD-03）|
-| credentialsStatus | 元数据 | ✅ | ✅ | ✅ | — | FULL | `credentials.ts:75`；值层走 DSH credentials 槽位 |
+| settings | JSON | ✅ | ✅ | ✅ `listUnits` | — | PARTIAL | `settings.ts:167` |
+| ui | JSON | ✅ | ✅ | ✅ | — | PARTIAL | `ui.ts:63` |
+| providers | JSON（含凭据引用）| ✅ | ✅ | ✅ | — | PARTIAL | `providers.ts:45`；凭据值不在此分区 |
+| plugins | JSON + 档案 manifest/patch 层 | ✅ | ✅ | ✅ | — | PARTIAL | `plugins.ts:354`；覆盖 `profiles/<p>/cordis.patch.yml`（`:116`）、package.json、pnpm-workspace、patches/*.patch |
+| mcp | JSON（connector store）| ✅ | ✅ | ✅ | — | PARTIAL | `mcp.ts:170`；`:10` 复用 profile manifest ref |
+| prompts | 文件/JSON | ✅ | ✅ | ✅ | — | PARTIAL | `prompts.ts:125` |
+| skills | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | `skills.ts:166`（基类）|
+| agentPresets | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | `agent-presets.ts:9` |
+| agentInstructions | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | `agent-instructions.ts:22` |
+| workspaces | JSON + 会话登记 | ✅ | ✅ | ✅ | ✅ `finalizeImport` | PARTIAL | `workspaces.ts:86`、`:246`；无删除检测 |
+| pluginFiles | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | `plugin-files.ts:27` 自实现；**已复用**链接告警（`:12`/`:92`）与保留路径防线（`:157`），只缺基类的单文件字节闸门（`file-collection.ts:48` `MAX_FILE_SECTION_BYTES`）（AD-03）|
+| credentialsStatus | 元数据 | ✅ | ✅ | ✅ | — | PARTIAL | `credentials.ts:75`；值层走 DSH credentials 槽位；无删除/重命名概念 |
 | secrets | 密文凭据载荷 | ✅ | ✅ | — | — | PARTIAL | 导出独立载荷（不进 sections）；导入写回槽位；**值不可回读**（技术限制）|
 | sessions | 文件集合（.jsonl.zstd）| ✅ | ✅ | ✅ | ✅ `finalizeApply` + `unitActivityTimes` + `listAllUnitIds` | FULL | `sessions.ts:49`；默认不挂载，需 `includeSessions`（`src/adapters/index.ts:53-78`）|
-| self | 文件集合 | ✅ | ✅ | ✅ | — | FULL | `self.ts:152` |
+| self | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | `self.ts:152` |
 | pluginData | 文件集合（按插件声明）| ✅ | ✅ | ✅ | — | PARTIAL | `plugin-data.ts:68`；只收内置来源 + 已安装插件自述 `dsh.dataDirs`；`cache` 永不收录 |
 | pluginAssets | 文件集合 | ✅ | ✅ | ✅ | — | PARTIAL | 同 `pluginData` 口径；离线 CLI 不收集该分区 |
 
@@ -799,8 +799,8 @@ dcm import --from <source>           src/cli/import-source.ts
 **结论一：不需要新造统一 Asset Model。**
 
 证据：
-1. 统一模型其实已经存在，只是名字叫 `SectionId` + `ExportSection<T>` + `PlanItem`（`src/core/types.ts`）。17 个分区、16 个适配器、导出/预览/分析/写入/校验五条链路全部走这一套类型。
-2. 真正的抽象缺口是**快照知识没进契约**：`snapshot()`/`rollback()` 在契约里（`types.ts:1269-1272`），引擎侧也确实接线了（`src/core/backup.ts:484-485`、`src/core/rollback.ts:137`），但 17 个适配器零覆写。结果分区快照知识落在引擎的 `engineSnapshotEntry` 按 adapter id 的 switch 里（`src/core/backup.ts:309-431`，约 120 行；含 pnpm-workspace / `PLUGIN_PROFILE_MANIFEST_REF` / `MCP_CONNECTOR_STORE_REL` 整文件特判、`secrets` 显式 throw、`default: never` 穷举）。
+1. 统一模型其实已经存在，只是名字叫 `SectionId` + `ExportSection<T>` + `PlanItem`（`src/core/types.ts`）。17 个分区、15 个适配器（`secrets` 无适配器）、导出/预览/分析/写入/校验五条链路全部走这一套类型。
+2. 真正的抽象缺口是**快照知识没进契约**：`snapshot()`/`rollback()` 在契约里（`types.ts:1269-1272`），引擎侧也确实接线了（`src/core/backup.ts:484-485`、`src/core/rollback.ts:137`），但 15 类适配器零覆写。结果分区快照知识落在引擎的 `engineSnapshotEntry` 按 adapter id 的 switch 里（`src/core/backup.ts:309-431`，约 120 行；含 pnpm-workspace / `PLUGIN_PROFILE_MANIFEST_REF` / `MCP_CONNECTOR_STORE_REL` 整文件特判、`secrets` 显式 throw、`default: never` 穷举）。
 3. 再造一层 Asset Model 会把这三份知识变成四份，且必须同时改动 ExportSection 与 PlanItem —— 那是破 `docs/spec/` 的 MAJOR 改动，收益不成比例。
 
 ⇒ 应采取的最小改进是 **AD-01：把 switch 各分支下沉成 `adapter.snapshot()`**，引擎只留兜底（P2，M，Low）。这不是「新架构」，是把已经设计好的钩子接上。
@@ -809,7 +809,7 @@ dcm import --from <source>           src/cli/import-source.ts
 
 证据：
 1. `src/schema/versions.ts:18` `CURRENT_SCHEMA_VERSION = 1`、`:21` `MIN_SUPPORTED_SCHEMA_VERSION = 1` ⇒ `:45` `needsMigration` 恒为假。
-2. `src/core/analyzer.ts:354` 的 isTooNew / !isSupported 硬失败发生在 `:361` 的 `runSchemaMigration(manifest, manifest.schemaVersion, CURRENT_SCHEMA_VERSION, this.msg)` 之前 ⇒ 迁移分支不可达（台账 G-07 的「不可达」判断属实）。
+2. `src/core/analyzer.ts:351` 的 isTooNew / !isSupported 硬失败发生在 `:361` 的 `runSchemaMigration(manifest, manifest.schemaVersion, CURRENT_SCHEMA_VERSION, this.msg)` 之前 ⇒ 迁移分支不可达（台账 G-07 的「不可达」判断属实）。
 3. `src/migrations/v1-to-v2.ts` 的 `migrate()` 恒等返回 ⇒ 一旦把 CURRENT 升到 2，会产出「已迁移」的假告警，而不是真的改文档。
 
 ⇒ **AD-02**：不是造引擎，而是补两道断言 ——「升版本必须真的改文档」+「v1→v2 端到端用例」（P2，S，Low）。迁移框架本身（版本轴、`runSchemaMigration` 调度、`needsMigration` 判据）设计正确、保留。
@@ -818,16 +818,16 @@ dcm import --from <source>           src/cli/import-source.ts
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| AD-01 | adapters / backup | 快照知识集中在引擎 switch | 契约有 `snapshot()/`rollback()，17 个适配器零覆写 | `types.ts:1269-1272`、`backup.ts:309-431`、`backup.ts:484-485`、`rollback.ts:137`；grep `async snapshot(` 零命中 | dsh-backup 的快照逻辑按模块归属 | 新增分区必须在引擎 switch 里加分支，漏改则静默不进快照 | 各分支下沉为 `adapter.snapshot()`；引擎只留 default 兜底 + `never` 穷举 | P2 | M | Low |
-| AD-02 | migrations | 迁移分支不可达；v1-to-v2 恒等 | 升版本会产出假告警 | `versions.ts:18/21/45`、`analyzer.ts:354/361`、`migrations/v1-to-v2.ts` | dsh-backup-sync 的显式 schema 迁移 + 断言 | 未来升 v2 时迁移「看起来成功」 | 补「必须改文档」断言 + 端到端用例 | P2 | S | Low |
-| AD-03 | adapters/pluginFiles | 自实现 186 行 | 不复用基类的字节闸门 / 链接告警 / 保留路径防线 | `plugin-files.ts:45/117/155/169` | DSH-Portable 的统一文件收集器 | 防线靠人工跟随，新增分区易漏 | 抽共享工具或继承基类 | P2 | S | Low |
-| AD-04 | adapters/workspaces | `finalizeImport` 里 attachSession | 依赖 sessions 先落盘；applyOrder workspaces=10 < sessions=14 | `workspaces.ts:246`、`section-registry.ts` applyOrder、`adapters/index.ts:53-78` | — | 改序或未挂载 sessions 时工作区↔会话关联静默丢失 | 在注册表显式声明「依赖会话已落盘」，由守卫测试钉住 | P2 | S | Low |
+| AD-01 | adapters / backup | 快照知识集中在引擎 switch | 契约有 `snapshot()/`rollback()，15 类适配器零覆写 | `types.ts:1269-1272`、`backup.ts:309-431`、`backup.ts:484-485`、`rollback.ts:137`；grep `async snapshot(` 零命中 | dsh-backup 的快照逻辑按模块归属 | 新增分区必须在引擎 switch 里加分支，漏改则静默不进快照 | 各分支下沉为 `adapter.snapshot()`；引擎只留 default 兜底 + `never` 穷举 | P2 | M | Low |
+| AD-02 | migrations | 迁移分支不可达；v1-to-v2 恒等 | 升版本会产出假告警 | `versions.ts:18/21/45`、`analyzer.ts:351/361`、`migrations/v1-to-v2.ts` | dsh-backup-sync 的显式 schema 迁移 + 断言 | 未来升 v2 时迁移「看起来成功」 | 补「必须改文档」断言 + 端到端用例 | P2 | S | Low |
+| AD-03 | adapters/pluginFiles | 自实现 186 行 | 未复用基类的**单文件字节闸门**（`MAX_FILE_SECTION_BYTES`）；链接告警与保留路径防线已复用 | `plugin-files.ts:12`/`:92`（链接告警）、`:157`（保留路径）、`file-collection.ts:48`（闸门，全仓仅基类引用）| DSH-Portable 的统一文件收集器 | 单插件文件超限时基类会拦、本分区不会 | 把字节闸门抽成共享工具（链接/保留路径不必动）| P3 | S | Low |
+| AD-04 | adapters/workspaces | `finalizeImport` 里 `attachSession`，在所有 `applyItem` 之后执行 | 未挂载 `sessions`（`includeSessions=false`）时工作区↔会话关联登记不上 | `workspaces.ts:235-248`（jsdoc 自陈顺序与「绝不静默失败」）、`:258-263`（`note.failed > 0` ⇒ `warning`）| — | 关联缺失，但**按 warning 上报、不阻断导入**（可见，非静默）| 保持现状；补一条「未挂载 sessions 时提示」的界面说明 | P2 | S | Low |
 | AD-05 | foreign | 30 源，measured 5 / documented 2 / fixture 23 | 23 源仅夹具验证，真机布局一变即 nothing-to-import | `registry.ts:81-86`、`truth-table.ts` 各行 | — | 「支持 30 个 Agent」的可信度被高估 | 逐源真机 smoke 把 `evidence` 升 measured；未升的界面文案按 fixture 口径 | P2 | L | Low |
-| AD-06 | foreign / model-tools | GUI + CLI 两入口同源 | model-tools 面零入口 | `routes/foreign.ts:89/101`、`cli/import-source.ts:156`、`core/model-tools.ts:346-449` | — | Agent 无法自行调用外部来源导入 | 视需要在 model-tools 暴露只读 sources 列举 | P3 | S | Low |
+| AD-06 | foreign / model-tools | GUI + CLI 两入口同源 | model-tools 面零入口 | `routes/foreign.ts:89/101`、`cli/import-source.ts:156`；`grep -n foreign src/core/model-tools.ts` 零命中 | — | Agent 无法自行调用外部来源导入 | 视需要在 model-tools 暴露只读 sources 列举 | P3 | S | Low |
 | AD-07 | routes | 计划项默认值写三处 | `createImportPlan` 默认参数重复 | `routes/consult.ts:83-84`、`routes/market.ts:211-212`、`routes/sync.ts:983`（注释自陈镜像）| — | 默认值漂移 | 抽 `planWithDefaults()` | P2 | S | Low |
 | AD-08 | schema | 两条版本轴各写一半 | 无「改版本要同时改哪两处」的书面耦合 | `versions.ts:69`、`section-registry.ts:137` | — | 改分区 dataVersion 易漏一侧 | 两处各写死耦合注释 + 触发测试名 | P3 | S | Low |
 
-**计数**：AD 域 8 条，P0=0 / P1=0 / P2=6 / P3=2。
+**计数**：AD 域 8 条，P0=0 / P1=0 / P2=5（AD-01/02/04/05/07）/ P3=3（AD-03/06/08）。
 
 ### 9.7 未验证（UNKNOWN）
 
@@ -863,7 +863,7 @@ dcm import --from <source>           src/cli/import-source.ts
 
 | 档案树内的内容 | 是否进备份 / 同步 | 证据 |
 |---|---|---|
-| `profiles/<p>/cordis.patch.yml` | **进**（`plugins` 分区）| `src/adapters/plugins.ts:116`、`src/adapters/mcp.ts:10` |
+| `profiles/<p>/cordis.patch.yml` | **进**（`plugins` 分区）| `src/adapters/plugins.ts:3`/`:6`（patch 层说明）、`src/core/patch-layers.ts`（实现）、`src/adapters/mcp.ts:10` |
 | `profiles/<p>/package.json`（含 `dsh.profile.bundles`）| **进** | `src/adapters/plugins.ts` 的 profile manifest 读写；`plugins.test.ts` 用例 |
 | `profiles/<p>/pnpm-workspace.yaml` | **进**（机器路径键整行剥离）| `plugins.test.ts:784-801`（`MACHINE_WS` → `PORTABLE_WS` 断言）|
 | `profiles/<p>/patches/*.patch` | **进** | `plugins.ts` 的 patch 层收集 |
@@ -910,9 +910,9 @@ dcm import --from <source>           src/cli/import-source.ts
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| PW-01 | profiles | `remove()` 直接 `rmSync(recursive, force)` | 删除档案不可逆，删除前无快照 | `dsh-profile-manager.ts:357-368`（`:363` 删除）、头注释 `:21`/`:348` | dsh-undo-savepoint 的 undo 点即删除前快照 | 用户删错档案 = 整套插件树与补丁层消失 | 删除前调 `SnapshotEngine` 落一份「档案声明面 + 锁文件」快照；UI 提供「撤销删除」入口 | P1 | L | Medium |
-| PW-02 | profiles / sync | 声明面由 `plugins` 分区覆盖；锁与载荷不覆盖；无 profiles 分区 | 「整机迁移 = 完整环境」的预期与实现不符；档案无自动同步通道 | `plugins.ts:116`、`plugins.test.ts:530-552/784-801`、`section-registry.ts:190-420`（无 profiles）、`src/adapters` grep `pnpm-lock` 零命中 | DSH-Portable 的「环境封装」思路 | 跨机迁移后插件树可能与源机不同；用户不知情 | 导出包 manifest 显式声明「未含锁文件与 node_modules」并在 UI 提示；锁文件作为**可选**条目（默认不勾）| P2 | M | Low |
-| PW-03 | profiles | 复制中断靠残留标记识别（`listIncompleteCopies`）| 台账 tech-debt #5 的严重度描述未随代码更新（代码已能列/删半截副本）| `dsh-profile-manager.ts:383/391/456/471`、`.dsh/issue-ledger.md` tech-debt #5 | — | 维护者按台账低估现状 | 更新台账严重度并指向 `listIncompleteCopies` | P3 | S | Low |
+| PW-01 | profiles | `remove()` 直接 `rmSync(recursive, force)` | 删除档案不可逆，删除前无快照 | `dsh-profile-manager.ts:357-364`（`:363` 删除）、头注释 `:21`/`:348` | dsh-undo-savepoint 的 undo 点即删除前快照 | 用户删错档案 = 整套插件树与补丁层消失 | 删除前调 `SnapshotEngine` 落一份「档案声明面 + 锁文件」快照；UI 提供「撤销删除」入口 | P1 | L | Medium |
+| PW-02 | profiles / sync | 声明面由 `plugins` 分区覆盖；锁与载荷不覆盖；无 profiles 分区 | 「整机迁移 = 完整环境」的预期与实现不符；档案无自动同步通道 | `src/core/patch-layers.ts`、`plugins.test.ts:530-552/784-801`、`section-registry.ts:190-420`（无 profiles）、`src/adapters` grep `pnpm-lock` 零命中 | DSH-Portable 的「环境封装」思路 | 跨机迁移后插件树可能与源机不同；用户不知情 | 导出包 manifest 显式声明「未含锁文件与 node_modules」并在 UI 提示；锁文件作为**可选**条目（默认不勾）| P2 | M | Low |
+| PW-03 | profiles | 复制中断靠残留标记识别（`listIncompleteCopies`）| 台账 tech-debt #5 的严重度描述未随代码更新（代码已能列/删半截副本）| `dsh-profile-manager.ts:383/391/456/471`、`docs/maintenance/tech-debt.md:20`（tech-debt #5）；`src/routes/recovery.ts:293`/`:339-344` | — | 维护者按台账低估现状 | 更新台账严重度并指向 `listIncompleteCopies` | P3 | S | Low |
 
 **计数**：PW 域 3 条，P0=0 / P1=1 / P2=1 / P3=1。
 
@@ -936,7 +936,7 @@ dcm import --from <source>           src/cli/import-source.ts
 | 视图模型 | `src/ui/` | 89 | 纯 view-model + i18n，**零 import `src/client/`** | `rollback-view.ts` 1558 行、`selection-model.ts` 1323、`i18n.ts` 1052、`sync-settings-view.ts` 939、`session-inventory-view.ts` 628、`import-wizard.ts` 611、`types.ts` 513 |
 | React 壳 | `src/client/` | 197 | 装配 + 交互 | 目录分布：`common` 50 / `sync` 39 / `market` 18 / `recovery` 16 / `chat` 15 / `import` 14 / `about` 10 / `library` 9 / `environment` 3 |
 
-**事实**：反向依赖（`src/ui` → `src/client`）仅 5 处，全部是类型或测试辅助：`src/client/api.ts`、`ConfigManagerSection.tsx`、`src/client/index.ts`、`run-store.ts`、`run-store.test.ts`。方向是干净的。
+**事实**：反向依赖（`src/ui` → `src/client`）共 5 处，**全部在 `src/ui/*.test.ts`**（测试期借用 `http.ts` 的错误类、`history-model.ts` 的工具函数、`recovery-locales.ts` 的字典：`i18n.test.ts:31`、`import-wizard.test.ts:18`、`mid-ellipsis.test.ts:26`、`session-inventory-view.test.ts:34`、`session-layout-view.test.ts:43`）；`src/ui` 生产代码零反向 import，方向是干净的。
 
 **事实（文档漂移）**：AGENTS.md 写「业务逻辑放 `src/ui/`，React 壳只装配」，但实际业务逻辑在 `src/core/` 与 `src/sync/`，`src/ui` 是 view-model 层。这属文档与代码不符，不属代码错误 ⇒ DOC-02。
 
@@ -946,11 +946,11 @@ dcm import --from <source>           src/cli/import-source.ts
 |---|---|---|---|---|
 | 会话体检 | `routes/` → `scanSessionHealth` | `sessions doctor --json` | ✅ 同源 | 共用 `src/core/` 体检器 |
 | 快照恢复 | `routes/` → `core/restore` | `restore` 子命令 | ✅ 同源（含 `restore-resume` 判据）| `core/restore.ts`、`restore-resume` |
-| 磁盘占用 / 清理 | `routes/` → `scanDiskUsage` / `cleanupCaches` | `sessions` 侧命令 | ✅ 同源 | `src/core/` 扫描器 |
+| 磁盘占用 / 清理 | `routes/backup.ts:78`/`:108` | `cli/actions.ts:205`（`readDiskUsage`）/`:835`（`cleanupCaches`），无独立子命令，供 `dcm web` 救急台复用 | ✅ 同源 | `src/core/disk-usage.ts`、`src/core/cache-cleaner.ts` |
 | 档案管理 | `DshProfileManager` | 同一类 | ✅ 同源 | `src/profiles/dsh-profile-manager.ts` |
 | 外部来源导入 | `routes/foreign.ts:89/101` | `cli/import-source.ts:156` | ✅ 同源（同一 registry + `foreignSourceContext()` `src/routes/foreign-context.ts:57`）| 已复核 |
 | 会话修复规划 | `core/session-repair` 编排器 | 同一规划器、不同编排层 | ✅ 规划同源 | — |
-| **备份导出装配** | `core/exporter.ts:494` `writeZip(outPath, entries)` | `cli/index.ts:1396` 与 `cli/actions.ts:1389` 各自 `writeZip` | ❌ **三份** | 已复核 |
+| **备份导出装配** | `core/exporter.ts:494` `writeZip(outPath, entries)` | `cli/index.ts:1396` 与 `cli/actions.ts:1389` 各自 `writeZip` | ❌ **三份**（另有 `src/foreign/bundle.ts:140` 与 `src/sync/sync-engine.ts:2224` 装配的是外部来源 bundle 与加密快照，不属同类）| 已复核 |
 | **备份校验** | **无端点** | `verifyBackupZip`（`cli/actions.ts:143`、`:1391`、`cli/import-source.ts:220`、`cli/index.ts:1407`）| ❌ 仅 CLI | `src/routes/*` 对该函数零引用 |
 | 应用 bundle（对已有 ZIP 执行导入）| 有（`/execute` 系列）| **无命令** | ❌ 仅 GUI | `src/cli/help.ts` 命令表：web / snapshots / verify / sessions / backup / import / restore / sessions repair / recover-stale-lock / reinstall / help |
 
@@ -966,15 +966,15 @@ dcm import --from <source>           src/cli/import-source.ts
 |---|---|---|---|
 | 档案复制 | 285 MB / 约 30 s | 组件内 `useState(busy)` | `dsh-profile-manager.ts:213`、`RecoveryPanel.tsx:417` |
 | 快照恢复 | 全分区写盘 | 组件内 `useState(busy)` | `RecoveryPanel.tsx:660` |
-| 会话修复 / 布局归位 | 多文件改写 | 组件内 `useState(busy)` | `RecoveryPanel.tsx:701` |
-| 磁盘清理 | 删除可重建区 | 组件内 `useState(busy)` | 同上 |
-| 插件自更新 | 下载 + 重启 | 组件内 `useState(busy)` | 同上 |
+| 会话修复 / 布局归位 | 多文件改写 | 组件内 `useState(busy)` | `RecoveryPanel.tsx:700`（`batchBusy`） |
+| 磁盘清理 | 删除可重建区 | 组件内 `useState(busy)` | `client/environment/maintenance/DiskUsageCard.tsx:51` |
+| 插件自更新 | 下载 + 重启 | 组件内 `useState(busy)` | `client/about/PluginUpdateDialog.tsx:69` |
 
 后果：切页/刷新后进度丢失，且这些操作在「关于」页或侧栏看不到正在跑 —— 与 export/import 的体验不一致。
 
 **缺口二：取消不可达（UI-03，P2）**
 
-`AbortController` 只出现在 `src/routes/import.ts:224/229/388` 与 `src/routes/session-export.ts:157/235`；`src/core/run-registry.ts:27` 登记了 8 种 `RunKind`，其中 `restore` / `profile-switch` / `recovery` / `backup-schedule` **没有 abort 入口**。⇒ 长操作里只有导入与导出可取消。
+`AbortController` 接进**run 取消语义**的只有两个路由族：`src/routes/import.ts:224/229/388` 与 `src/routes/session-export.ts:157/235`。其余出现点（`src/core/analyzer.ts:1022-1024`、`src/core/rollback-point.ts:5764`/`:5959`、`src/core/update-check.ts:104`、`src/client/common/http.ts:147`/`:162`/`:228`、`src/sync/webdav/webdav-transport.ts:147`）是网络超时或项级跳过，不是用户可取消。`src/core/run-registry.ts:27` 登记了 8 种 `RunKind`，其中 **6 种**没有 abort 入口（`autosync` 与 `sync-apply` 属自动路径，用户面本就无按钮）。⇒ 手动长操作里只有导入与导出可取消。
 
 **判读（事实）**：`/execute/skip`（项级跳过）与 `/runs/cancel/decision`（整 run 取消后 rollback|keep）是两套不同信号，`src/index.ts:2608-2617` 注释明确禁止合并 ⇒ **不是重复 API**，不计入问题。
 
@@ -991,7 +991,7 @@ dcm import --from <source>           src/cli/import-source.ts
 
 | 项 | 现状 | 判断 |
 |---|---|---|
-| 字典 | 三套并行：`src/client/locales.ts`（1776 行 / 1662 键）、`src/ui/i18n.ts`（1052 行 / 924 键）、`src/core/messages-core.ts`（542 键，另有 `sync/messages.ts`、`schema/messages.ts`）| 引擎与界面分离是合理设计；真正的成本是**新增文案要写三处**且键指纹冻结（`src/core/engine-locale.test.ts`，只许追加）⇒ UI-01（P2，L，Medium）|
+| 字典 | 三套并行：`src/client/locales.ts`（1788 行，键数随在途改动漂移、本轮不可复现）、`src/ui/i18n.ts`（1052 行 / 924 键）、`src/core/messages-core.ts`（665 行 / 542 键，另有 `sync/messages.ts`、`schema/messages.ts`）| 引擎与界面分离是合理设计；真正的成本是**新增文案要写三处**且键指纹冻结（`src/core/engine-locale.test.ts`，只许追加）⇒ UI-01（P2，L，Medium）|
 | 错误链 | `src/ui/errors.ts:79` `toActionableError()` / `:95` `formatActionableError()` → `ErrorBanner` / `ReportView`，展示前各过一次 `redact()`（幂等）| 设计正确，无需改动 ⇒ UI-07（P3，仅记录）|
 | 持久化 | `run-store.ts:1472` 注释自陈 `1 s` 节流；`toPersistedState()` `:1001` 白名单；`watchRunning` 每 500 ms patch 都整份 stringify 进 sessionStorage | 有界但偏重 ⇒ UI-06（P3，S，Low）|
 
@@ -1000,13 +1000,14 @@ dcm import --from <source>           src/cli/import-source.ts
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | UI-01 | i18n | 三套字典 + 键指纹冻结 | 新增文案要写三处；引擎键只许追加 | `client/locales.ts`、`ui/i18n.ts`、`core/messages-core.ts`、`core/engine-locale.test.ts` | — | 维护成本，易漏译 | 保留分层，加「同一 key 三处齐全」守卫测试 | P2 | L | Medium |
-| UI-02 | client/run-store | 6 个 TaskKind 覆盖 6 类长操作 | 复制/恢复/修复/清理/自更新用组件内 `useState(busy)` | `run-store.ts:94/1922`、`RecoveryPanel.tsx:417/660/701` | — | 切页丢进度、跨页状态不一致 | 把这 5 类纳入 `RunKind` + `watchRunning`，先在 recovery 面板接 `restore` | P1 | M | Low |
-| UI-03 | routes/run-registry | AbortController 仅 import / session-export | 8 种 RunKind 里 4 种无取消入口 | `routes/import.ts:224/229/388`、`session-export.ts:157/235`、`run-registry.ts:27` | dsh-undo-savepoint 的可中断采集 | 长操作只能关窗口 | 为 restore 增加 abort → 走 `judgeRestoreResume` 的续跑语义，而不是硬中断 | P2 | M | Medium |
+| UI-02 | client/run-store | 6 个 TaskKind 覆盖 6 类长操作 | 复制/恢复/修复/清理/自更新用组件内 `useState(busy)` | `run-store.ts:94/1922`、`RecoveryPanel.tsx:417/660/700` | — | 切页丢进度、跨页状态不一致 | 把这 5 类纳入 `RunKind` + `watchRunning`，先在 recovery 面板接 `restore` | P1 | M | Low |
+| UI-03 | core/run-registry | 只有 import / session-export 把 AbortController 接进 run 取消语义 | 8 种 RunKind 里 6 种无 abort 入口 | `routes/import.ts:224/229/388`、`session-export.ts:157/235`、`core/run-registry.ts:27` | dsh-undo-savepoint 的可中断采集 | 手动长操作只有导出/导入可取消 | 为 restore 增加 abort → 走 `judgeRestoreResume` 的续跑语义，而不是硬中断 | P2 | M | Medium |
 | UI-04 | routes | `verifyBackupZip` 无 HTTP 入口 | GUI 导出的包无法在 GUI 里验证 | `core/backup-verify.ts:140`；调用者全在 `src/cli/*` | dsh-backup 的 verify 命令 | 用户必须开终端才知道包能不能恢复 | 加只读端点 `/verify-backup`（无写路径，过只读围栏）| P2 | S | Low |
 | UI-05 | 写入门 | GUI 与 CLI 各读一次 SAFE MODE / 锁 | 判据两处实现 | `src/index.ts:2729-2768`、`cli/actions.ts:254/278/438-505` | — | 两处口径漂移风险 | 抽纯函数 `readWriteGateState()`；门的差异留调用层 | P2 | S | Low |
 | UI-06 | client/run-store | `watchRunning` 每 500 ms 整份 stringify | sessionStorage 写放大 | `run-store.ts:1472/1751/1001` | — | 长任务期间主线程抖动 | 改为脏字段增量 patch | P3 | S | Low |
 | UI-07 | ui/errors | `toActionableError` → redact 幂等 | 无问题，仅记录设计正确 | `ui/errors.ts:79/95` | — | — | 保持 | P3 | S | Low |
 | DOC-02 | 文档 | AGENTS.md 称业务逻辑在 `src/ui/` | 与实际分层不符（业务在 core/sync）| AGENTS.md「业务逻辑放 src/ui/」；`src/ui` 零 import client、纯 view-model | — | 新维护者按文档找错地方 | 改为「view-model 放 `src/ui/`，业务放 `src/core/` / `src/sync/`」 | P3 | S | Low |
+| DOC-03 | docs/台账 | 已知缺口中部分条目已修复但未回填 | 台账与代码不同步（G-05 标「部分修复」、tech-debt #5 严重度失真等）| `docs/maintenance/tech-debt.md:20`、`docs/maintenance/known-limits.md` 与 `src/` 实际行为逐条对照（§5-§11）| — | 维护者按文档低估或高估现状 | 本轮审查结束后一次性回填（`fixed` / 降级 / 保留并写明理由）| P3 | S | Low |
 
 **计数**：UI 域 7 条（+ DOC-02 归文档域）。P0=0 / P1=1（UI-02）/ P2=4（UI-01/03/04/05）/ P3=2（UI-06/07）。
 
@@ -1071,7 +1072,7 @@ UI/CLI 层**不是**本次升级的重点：分层干净、6/8 能力同源、�
 
 | 文件 | 行数 | 实际做的事 |
 |---|---|---|
-| [launcher/data-import-journal.mjs](https://github.com/WSL043/DSH-Portable/blob/main/launcher/data-import-journal.mjs) | 164 | 导入日志 `data/runtime/data-import.json`；**`importEntryIdentity()` 用 `lstat({bigint:true})` 取 `{dev, ino, birthtimeNs, sha256, kind}`** 作为条目身份（`:18-25`）；注释写明「同一文件系统条目在回滚中被重命名后身份不变 —— **绝不因为备份不见了就推断恢复成功**」（`:20-21`）；`hasIdentity()` 逐字段比对（`:27-31`）；`assertImportProfilesIdle()` 检查 `profiles/<p>/package.json.lock` 存在即拒（`:10-16`，码 `DSH_DATA_IMPORT_PROFILE_BUSY`）；所有失败统一 `DSH_DATA_IMPORT_RECOVERY_REQUIRED` |
+| [launcher/data-import-journal.mjs](https://github.com/WSL043/DSH-Portable/blob/main/launcher/data-import-journal.mjs) | 164 | 导入日志 `data/runtime/data-import.json`；**`importEntryIdentity()` 用 `lstat({bigint:true})` 取 `{dev, ino, birth, hash, kind}`（源码字段名 birth/hash，即 birthtimeNs/sha256）** 作为条目身份（`:18-25`）；注释写明「同一文件系统条目在回滚中被重命名后身份不变 —— **绝不因为备份不见了就推断恢复成功**」（`:20-21`）；`hasIdentity()` 逐字段比对（`:27-31`）；`assertImportProfilesIdle()` 检查 `profiles/<p>/package.json.lock` 存在即拒（`:10-16`，码 `DSH_DATA_IMPORT_PROFILE_BUSY`）；所有失败统一 `DSH_DATA_IMPORT_RECOVERY_REQUIRED` |
 | `launcher/data-import-preflight.mjs` / `data-paths.mjs` | — | 路径归一 + `safeDataTarget` + `writeDataFileAtomic`；导入前预检 |
 | `launcher/profile-compatibility.mjs` / `startup-profile-recovery.mjs` / `repair-core.mjs` / `runtime-capsule.mjs` | — | 档案兼容性判定、启动期档案恢复、修复核心、运行时胶囊（把运行环境打成一份）|
 
@@ -1235,25 +1236,25 @@ UI/CLI 层**不是**本次升级的重点：分层干净、6/8 能力同源、�
 
 | 域 | 前缀 | 条数 | P0 | P1 | P2 | P3 |
 |---|---|---|---|---|---|---|
-| 备份与恢复 | BK | 5 | 0 | 1 | 4 | 0 |
+| 备份与恢复 | BK | 5 | 0 | 2 | 3 | 0 |
 | 导入导出 / Bundle | IE | 6 | 0 | 3 | 2 | 1 |
-| 安全 | SEC | 11 | **1** | 4 | 3 | 3 |
-| 同步 | SYN | 15 | 0 | 5 | 6 | 4 |
-| 适配器 / 迁移 / 外部来源 | AD | 8 | 0 | 0 | 6 | 2 |
+| 安全 | SEC | 12 | **1** | 4 | 4 | 3 |
+| 同步 | SYN | 14 | 0 | 3 | 7 | 4 |
+| 适配器 / 迁移 / 外部来源 | AD | 8 | 0 | 0 | 5 | 3 |
 | Profile / Workspace | PW | 3 | 0 | 1 | 1 | 1 |
 | UI / CLI | UI | 7 | 0 | 1 | 4 | 2 |
-| 文档与台账 | DOC | 2 | 0 | 0 | 0 | 2 |
-| **合计** | — | **57** | **1** | **15** | **26** | **15** |
+| 文档与台账 | DOC | 3 | 0 | 0 | 0 | 3 |
+| **合计** | — | **58** | **1** | **14** | **26** | **17** |
 
 **优先级判据（与任务书一致）**：P0 = 数据安全 / 数据丢失 / 严重漏洞 / 核心操作可靠性；P1 = 核心架构瓶颈 / 同步正确性 / 迁移准确性 / 明显维护成本；P2 = 性能、扩展性、可维护性、UX；P3 = 非必要优化与长期探索。
 
-**两条纪律**：①**没有一条 P0/P1 是「尚未实现的新功能」** —— 57 条全部对应已存在的代码行为、已存在的承诺缺口或已存在的错误语义；②UNKNOWN 不进本矩阵，凡证据不足者已在 §5-§11 各自标 UNKNOWN，不在此计分。
+**两条纪律**：①**没有一条 P0/P1 是「尚未实现的新功能」** —— 58 条全部对应已存在的代码行为、已存在的承诺缺口或已存在的错误语义；②UNKNOWN 不进本矩阵，凡证据不足者已在 §5-§11 各自标 UNKNOWN，不在此计分。
 
 **复杂度口径**：S ≈ 半天内、单文件 + 测试；M ≈ 1-3 天、跨 2-4 文件 + 测试；L ≈ 1-2 周、跨模块 + 兼容性分析；XL ≈ 需要新的数据格式或新的协议语义。
 
-### 13.1 备份与恢复（BK，5 条：P1×1 / P2×4）
+### 13.1 备份与恢复（BK，5 条：P1×2 / P2×3）
 
-核心数据安全域。**BK-01 是本域唯一 P1**：不是缺功能，而是数据已经在盘上却没有出口。
+核心数据安全域。**BK-01 / BK-05 是本域两条 P1**：不是缺功能，而是数据已经在盘上却没有出口（BK-01），而唯一能撤销那次恢复的副本又被 `prune` 连带销毁（BK-05）。
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -1261,7 +1262,7 @@ UI/CLI 层**不是**本次升级的重点：分层干净、6/8 能力同源、�
 | BK-02 | restore | `planRestore` 支持 targets 过滤，但所有入口都传全集 | 无选择性恢复入口（单文件/子目录） | `src/routes/snapshots.ts:293` 的 `/snapshots/file-diff` 已能逐文件列差异；`planRestore` 接收 targets | dsh-undo-savepoint 的快照按 dest 分单元，天然可选 | 恢复一个配置文件必须恢复整个快照 | 只读端点 `/snapshots/file-diff` 的下钻结果直接作为 `planRestore` 的 targets 入参 | P2 | M | Low |
 | BK-03 | core/backup | 每个快照独立整存 blob，无跨快照内容寻址 | 同一份大文件（sessions 日志）在 10 个快照里存 10 份 | `src/core/backup.ts` snapshot 写入路径；保留上限 `SNAPSHOT_RETENTION_LIMIT=10` | dsh-undo-savepoint `lib/snapshot.mjs` 用 `writeBlob` 内容寻址 + manifest | 磁盘放大（尤其会话分区） | **先做只读测量**（统计同 sha256 的重复字节占比），再决定是否引入 blob store；不先写实现 | P2 | L | Medium |
 | BK-04 | core/backup | 快照列举逐目录读 `snapshot.json` | 无索引文件，快照多时列举是 O(n) 次 IO 且无法按时间/标签查询 | `src/core/backup.ts` 列举与 `prune()` 路径 | dsh-cloud-sync `HISTORY_INDEX='snapshots/history/index.json'` + `HISTORY_LIMIT=30` | 列表页变慢；无法做跨快照查询 | 加一个 `index.json`（写入时 append、启动时校验、缺失即重建），不改快照内部格式 | P2 | S | Low |
-| BK-05 | core/backup | `prune()` 按保留数整目录 `rm(recursive)` | `pinned` 只保护快照本身；同一目录下的 `pre-restore` 反悔副本被**连带删除** | `src/core/backup.ts:725` `prune()`、`:758` `pinned` 跳过、`:769` `fs.rm(target,{recursive:true,force:true})` | dsh-backup 把反悔目录放在快照之外（`.dsh.pre-restore-*`） | BK-01 的反悔副本有有效期上限且不可见，超期后撤销能力消失 | 反悔副本独立保留策略（数量 + 天）并移出快照目录；删除前在报告里列出 | P2 | S | Low |
+| BK-05 | core/backup | `prune()` 按保留数整目录 `rm(recursive)` | `pinned` 只保护快照本身；同一目录下的 `pre-restore` 反悔副本被**连带删除** | `src/core/backup.ts:725` `prune()`、`:758` `pinned` 跳过、`:769` `fs.rm(target,{recursive:true,force:true})` | dsh-backup 把反悔目录放在快照之外（`.dsh.pre-restore-*`） | BK-01 的反悔副本有有效期上限且不可见，超期后撤销能力消失 | 反悔副本独立保留策略（数量 + 天）并移出快照目录；删除前在报告里列出 | P1 | S | Low |
 
 ### 13.2 导入导出与 Bundle（IE，6 条：P1×3 / P2×2 / P3×1）
 
@@ -1276,37 +1277,37 @@ UI/CLI 层**不是**本次升级的重点：分层干净、6/8 能力同源、�
 | IE-05 | cli | `dcm` 有 export/backup/restore/verify 等子命令 | 无 `import --plan/--apply` | `src/cli/help.ts` 命令表 | DSH-Portable 的离线导入 | 无 GUI 环境无法导入包 | 加 `import --plan/--apply`（复用 `core/import-planning`，写路径过 CLI 同一道门） | P2 | M | Low |
 | IE-06 | utils/zip | `accept()` 把 `out.length` 累加到实例级 `totalUncompressed` | 同一归档内重复读同一条目会重复计入 ⇒ 可能误判超总量（假阳性） | `src/utils/zip.ts:439` | — | 极端情况下自己拒绝自己的合法包 | 按条目 id 记已计入字节；或改为按中央目录声明的解压总量一次判定 | P3 | S | Low |
 
-### 13.3 安全（SEC，11 条：P0×1 / P1×4 / P2×3 / P3×3）
+### 13.3 安全（SEC，12 条：P0×1 / P1×4 / P2×4 / P3×3）
 
 **全报告唯一 P0**。SEC-01 是「导入包 → 改写同步目标 → 发出凭据」的完整链路，四段都有源码证据。
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| SEC-01 | adapters/sync | `self` 白名单含 `sync/sync-config.json`，导入裸写；读取不校验 | 包可改写同步目标 ⇒ 下一轮同步把 token 发往包内 host | `src/adapters/self.ts:55-65`；`src/adapters/file-collection.ts:414-430`；`src/sync/sync-config.ts:176`/:299；`src/sync/git/git-transport.ts:1224-1246`；`src/core/conflict-decisions.ts:22-45`；`src/client/import/ConflictList.tsx:116-118` | dsh-backup「导入不触碰传输凭据」取向 | 凭据外泄 + 后续拉取覆盖本机配置 | ① `applyItem` 对 `sync/*.json` 调用与写路由同一校验；② host 策略（默认仅官方/gist 端点，自定义需显式确认并留审计）；③ token 与 host 绑定，host 变化即不注入并告警 | P0 | M | Medium |
+| SEC-01 | adapters/sync | `self` 白名单含 `sync/sync-config.json`，导入裸写；读取不校验 | 包可改写同步目标 ⇒ 下一轮同步把 token 发往包内 host | `src/adapters/self.ts:55-65`；`src/adapters/file-collection.ts:414-430`；`src/sync/sync-config.ts:176`/:299；`src/sync/git/git-transport.ts:1224-1246`；`src/ui/import-wizard.ts:260`（`strategy: merge`）；`src/core/conflict-decisions.ts:44-45` | dsh-backup「导入不触碰传输凭据」取向 | 凭据外泄 + 后续拉取覆盖本机配置 | ① `applyItem` 对 `sync/*.json` 调用与写路由同一校验；② host 策略（默认仅官方/gist 端点，自定义需显式确认并留审计）；③ token 与 host 绑定，host 变化即不注入并告警 | P0 | M | Medium |
 | SEC-02 | sync | URL 校验只看 scheme/userinfo | 环回/私网/链路本地可作同步目标 | `src/sync/sync-config.ts:438-458`、:465-486、:720-734、:784-808 | 无（竞品同样薄） | 与 SEC-01 叠加即成包控 SSRF | 并入 SEC-01 的 host 策略一次改完 | P1 | S | Medium |
 | SEC-03 | sync/git | 非 http(s) `repoUrl` 直接放行；无 `protocol.*` 配置 | `file://` 可指本机任意 git 仓 | `src/sync/sync-config.ts:446-456`；`src/sync/git/git-transport.ts:1159` | — | 本地仓库读取面；`ext::` helper 面未拦 | `validateRepoUrl` 改白名单 + git 调用恒带 `-c protocol.ext.allow=never` 与 `GIT_ALLOW_PROTOCOL` | P1 | S | Low |
-| SEC-04 | sync/import | `sync-autosync.json` 在 `self` 白名单且 `self` 风险档 low | 导入即可打开自动同步并抬高自动落盘档位 | `src/adapters/self.ts:57`；`src/schema/section-registry.ts:385`；`src/sync/autosync-config.ts:53`、:129；`src/sync/autosync-scheduler.ts:672-680` | dsh-backup「调度配置不随包迁移」 | 无人值守把远端内容落到多分区 | 导入把自动同步开关/档位列需人工确认项（或直接跳过） | P1 | S | Medium |
+| SEC-04 | sync/import | `sync-autosync.json` 在 `self` 白名单且 `self` 风险档 low | 导入预置自动同步开关/档位（当轮不生效，重启或下次改设置才装载）| `src/adapters/self.ts:57`；`src/schema/section-registry.ts:385`；`src/sync/autosync-config.ts:124`；`src/routes/sync.ts:1148`；`src/routes/backup.ts:231` | dsh-backup「调度配置不随包迁移」 | 已开启自动同步者下一轮按包内目标推送 | 导入把自动同步开关/档位列需人工确认项（或直接跳过） | P2 | S | Medium |
 | SEC-05 | analyzer/integrity | checksum 只正向校验；表外条目仅 warning；文件分区按归档名写入 | 完整性承诺弱于声明；表外文件可落盘 | `src/utils/hashing.ts:36-38`；`src/security/integrity.ts:75-76`；`src/core/analyzer.ts:334-347`、:407-413 | dsh-backup「包内条目必须与清单一一对应」 | 完整性可绕过，且使 SEC-01 的投送不需改校验表 | 文件类分区落盘前要求条目在 checksums 表内；`extraEntries` 升为阻断（可按分区配置） | P1 | S | Low |
 | SEC-06 | utils/paths | `isPathSafe` 只判 `..`/绝对/盘符/UNC/NUL | Windows ADS（`a.txt:s`）、设备名（CON/NUL/COM1）、尾点尾空格不拦 | `src/utils/paths.ts:33-42`；`src/utils/zip.ts:503` | — | 恶意条目可写 NTFS 备用数据流/异常路径 | Windows 下追加拒绝 `:`、设备名表、尾点/尾空格 | P2 | S | Low |
 | SEC-07 | security/encryption | `validateKdfParams` 上界宽于 `deriveKey` 实际能力（无 `maxmem`） | 越界参数被归成 `BAD_PASSWORD`（实测 Node 默认 maxmem 先拦） | `src/security/encryption.ts:63-70`、:73-79、:147-152 | dsh-backup `lib/encrypt.js:55` 显式 `maxmem = 128*N*r*2 + 1MiB` | 当前仅错误码语义；补 maxmem 后若不收紧即真风险 | 收紧到 128·N·r ≤ 32 MiB 越界返 `UNSUPPORTED_FORMAT`；`deriveKey` 显式传两倍余量 maxmem | P2 | S | Low |
 | SEC-08 | routes/kit | `writeJson` 只设 content-type + referrer-policy | 无 `nosniff`/CSP/frame-options，与救急台口径不一致 | `src/routes/kit.ts:96-103`；对照 `src/cli/web/http.ts:4-25` | — | 残余嗅探/嵌框风险（低） | `writeJson` 补 `x-content-type-options: nosniff` | P3 | S | Low |
-| SEC-09 | routes | 60 处写方法仅 22 处过 mutation gate | 配置类写无并发保护/条件写 | `src/index.ts:2724-2762`；`src/routes/sync.ts:321`、:1163；`src/routes/me.ts` 7 条 POST | Gitea 类条件写 | 后写覆盖，无版本判据 | 对「会驱动后续网络/写盘」的配置引入 mtime/版本条件写或纳入锁 | P2 | M | Low |
+| SEC-09 | routes | 65 处写方法仅 16 处过 mutation gate | 配置类写无并发保护/条件写 | `src/index.ts:2729-2768`；`src/routes/sync.ts:321`、:1163；`src/routes/me.ts` 7 条 POST | Gitea 类条件写 | 后写覆盖，无版本判据 | 对「会驱动后续网络/写盘」的配置引入 mtime/版本条件写或纳入锁 | P2 | M | Low |
 | SEC-10 | docs/decisions | ADR-0002 用行号引用闸门 | 行号已漂移（实测指向 rollback 闭包与 rewind gate） | `docs/decisions/0002-encrypted-container-unlock-gate.md:28` vs `src/index.ts:3652`、:3691、`src/routes/import.ts:190` | — | 维护者按 ADR 找不到闸门 | 改符号引用而非行号 | P3 | S | Low |
 | SEC-11 | utils/zip | `safeExtract`/`safeExtractHardened` 全仓无调用方 | 文件头宣称「整体拒绝」，实际 CRC/比例校验在惰性读阶段 ⇒ 中途失败留部分文件 | `src/utils/zip.ts:538`；`src/security/zip-security.ts:72-109` | dsh-backup 的 zip 读侧统一入口 | 现网不受影响（导入走内存）；潜伏误用 | 要么删除两个导出，要么把校验前移到落盘之前 | P3 | S | Low |
+| SEC-12 | sync/git | `validateRepoUrl` 只看 scheme/userinfo；repoUrl 直接进 git argv | 以 `-` 开头的 repoUrl 被 git 当选项（参数注入），非 http(s) 也未拦 | `src/sync/sync-config.ts:438-459`；`src/sync/git/git-transport.ts:586`（ls-remote）、`:711`（clone）| dsh-backup 的传输层不拼 user 输入 | 可让 git 读任意本地仓/触发 helper | scheme 白名单 + argv 恒带 `--` + `-c protocol.ext.allow=never` | P1 | S | Low |
 
-### 13.4 同步（SYN，15 条：P1×5 / P2×6 / P3×4）
+### 13.4 同步（SYN，14 条：P1×3 / P2×7 / P3×4）
 
-条目最多的域。P1 全部落在「正确性」（原子写、墓碑跨设备、GC 安全、缺省覆盖）。
+条目最多的域。P1 全部落在「正确性」（墓碑跨设备、GC 安全、缺省覆盖）。
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| SYN-01 | sync/state | `mkdir`+`writeFile` 非原子 | 半截 JSON ⇒ 全链路硬失败、无自愈 | `src/sync/sync-state.ts:258-261`、`loadSyncState` :196-230；对照 `sync-selection.ts:226` | dsh-backup-sync baseline 落盘 | 断电后所有同步操作报 `sync.state.notObject`，只能手删（连带丢 deviceId/ancestor 指针） | 换 `atomicWriteFile(...,{mode:0o600})`；形状坏但可解析时备份重建 | P1 | S | Low |
-| SYN-02 | sync/tombstone | 墓碑只吃本机 state | 不跨设备传播 ⇒ 旧快照复活已删会话 | `src/sync/sync-engine.ts:1109-1143`、:959、:988-990；`sync-state.ts:81` | undo-savepoint 的全局 blob 台账 | 隐私/正确性：删除无法在多设备间生效 | `computeSessionBookkeeping` 入参加 `remoteTombstones`（远端 manifest 去重后减本机现存），合并数进 warnings | P1 | M | Low |
-| SYN-03 | sync/tombstone | 加密快照首行直接 `return []` | 加密通道完全不剔除墓碑 | `src/sync/sync-engine.ts:1145-1153` | — | 加密用户删除行为形同虚设 | 解密后再剔除（`prepareSnapshot` 已回落明文），剔除数进 report | P1 | S | Low |
-| SYN-04 | sync/webdav,s3 | 引用集只来自索引，404 当「无引用」 | 删在用 blob，不可恢复 | `src/sync/webdav-transport.ts:667-687`(:675)、:488；`src/sync/s3-transport.ts:712-732` | undo-savepoint `pruneOrphanBlobs`（先写 manifest 再 GC） | 快照不可读（`sync.blobMissing`），G-35 已登记 | 先落 fail-closed（引用者 404 ⇒ 本轮放弃 GC）；中期补列举原语（PROPFIND/ListObjectsV2） | P1 | S | Low |
+| SYN-01 | sync/state | `saveSyncState` 走原子写（`createSnapshotFs` → `atomicWriteFile`）；`loadSyncState` 形状不对即抛 | 状态文件不可解析后**无自愈路径**（全仓无修复代码，只读诊断）| `src/sync/sync-state.ts:171-232`（:179 抛 `sync.state.notObject`）、`:258`；`src/sync/fs.ts:35` | dsh-backup-sync 的 baseline 落盘与坏形状处理 | 一次外部损坏 = 同步永久不可用；手删即丢 deviceId 与 ancestor 指针 | 坏形状时把原文件改名备份 + 重建空状态（保留 deviceId），并给只读诊断端点 | P2 | S | Low |
+| SYN-02 | sync/tombstone | 墓碑只吃本机 state | 不跨设备传播，旧快照复活已删会话 | `src/sync/sync-engine.ts:1109-1138`、:959、:988-990；`src/sync/sync-state.ts:81` | undo-savepoint 的全局 blob 台账（§12）| 隐私/正确性：删除无法在多设备间生效 | `computeSessionBookkeeping` 入参加 `remoteTombstones`（远端 manifest 去重后减去本机现存），合并数进 warnings | P1 | M | Low |
+| SYN-04 | sync/webdav,s3 | 引用集只来自索引；引用者 404 当无引用（索引缺失分支已 fail-closed）| 假 404 / 孤儿快照让在用 blob 被删，不可恢复 | `src/sync/webdav-transport.ts:676`；`src/sync/s3-transport.ts:719-720` | undo-savepoint `pruneOrphanBlobs`（先写 manifest 再 GC） | 快照不可读（`sync.blobMissing`），G-35 已登记 | 404 也放弃本轮 GC；中期补列举原语（PROPFIND/ListObjectsV2） | P1 | S / XL | Low |
 | SYN-05 | sync/autosync | 缺省 `conflictPolicy='local'` + `force` 推 | 缺省覆盖远端最新 | `src/sync/autosync-config.ts:56-63`；`autosync-scheduler.ts:731-739`；`sync-engine.ts:877` | dsh-backup-sync「冲突未裁决 = 零写入」（`lib/apply.js:12-19`） | 远端最新改动只在历史快照可见 | 首轮或远端有新快照时强制 `ask`；历史记录标 `forced=true` | P1 | M | Medium |
 | SYN-06 | sync/engine | 无协议层 journal | upload 后崩溃只能靠拦截 | `src/sync/sync-engine.ts:975`→:982、:1220-1233 | DSH-Portable 的 journal 形状 | 用户看到「远端已推进」但无续跑/确认入口 | push 前写 `inflight{snapshotId,startedAt}`，成功后清；命中时提示「上次可能已完成」 | P2 | M | Low |
-| SYN-07 | sync/engine | `pendingMerge` 只写不读 | 注释承诺的界面不存在；陈旧记录残留 | 写 `sync-engine.ts:1683/:1702/:1743/:1852-1853`；读仅 `sync-state.ts:222` | — | 文档/注释与实现对不上 | 接线（status 暴露 + 同步页提示）或删字段并撤承诺；两者都要求 push/applyItems 清理 | P2 | S | Low |
+| SYN-07 | sync/engine | `writeMergeBaseline` 会清 `pendingMerge`，push 与 applyItems 不清 | 注释承诺的界面不存在；两条路径留下陈旧记录 | 写/清 `sync-engine.ts:1683/:1702/:1743/:1852-1853`；读仅 `sync-state.ts:222`；push `:982-991`、applyItems `:2152-2159` 不清 | — | 文档/注释与实现对不上 | 接线（status 暴露 + 同步页提示）或删字段撤承诺；两条路径补清理 | P2 | S | Low |
 | SYN-08 | sync/merge | 只按 `relativePath` 比较 | 无 rename 语义 ⇒ 两份副本零冲突 | `src/sync/merge.ts:271-273`、:332；`merge.test.ts` 无 rename 用例 | dsh-backup-sync 同样无 | 用户看到「多一份」不知哪份新 | 加「同内容异路径」检测（祖先路径消失 + 另一侧新路径字节等于祖先 ⇒ 判 rename），先补测试 | P2 | L | Medium |
 | SYN-09 | sync/engine | `useRemote` + 远端缺分区 ⇒ `pendingConflicts` | 该组合永不可解，基线不推进 | `src/sync/sync-engine.ts:1655-1660`、:1608 注释 | dsh-backup-sync「裁决后基线记本地哈希」 | 用户只能改选 `keepLocal` 才能脱身 | 裁决层把该组合降级为整分区删除计划项（需 adapter 支持删除），或 UI 禁用并说明 | P2 | M | Medium |
 | SYN-10 | adapters/self | 载荷 = 剔除运行态后的字节，apply 直写 | 应用远端 `self` 会清掉本机 `lastRun*`/`consecutiveFailures` | `src/adapters/self.ts:221`、:91-100、:80 注释；`file-collection.ts:247-257`、:426 | — | 自动同步间隔门控与失败计数归零（可能立刻多跑、丢告警） | 导出保留完整字节只在 hash 前剔除；或 apply 对调度配置做「保留本机运行态键」的合并写 | P2 | M | Medium |
@@ -1316,16 +1317,16 @@ UI/CLI 层**不是**本次升级的重点：分层干净、6/8 能力同源、�
 | SYN-14 | sync/merge | `advanceRemoteId` 只改 `lastSnapshotId/lastSyncAt` | 本地删分区 + 远端未改 ⇒ 后续恒判「有本地改动」 | `src/sync/merge.ts:332`；`sync-engine.ts:1680-1691`、:1744-1747` | — | 多一轮无谓上行/自动同步触发（自愈） | 推进基线时同步重算受影响分区 hash 或清除该分区记录 | P3 | S | Low |
 | SYN-15 | sync/git | GC 的 push 未带 `requirePushToken` | 只读权限 token 走 GC 时错误分类不同 | `src/sync/git/git-transport.ts:1364` vs :504、:573 | — | 错误提示误导 | 与 upload/delete 对齐 | P3 | S | Low |
 
-### 13.5 适配器 / 迁移 / 外部来源（AD，8 条：P2×6 / P3×2）
+### 13.5 适配器 / 迁移 / 外部来源（AD，8 条：P2×5 / P3×3）
 
 无 P0/P1：契约已能表达现状，问题都是「引擎替适配器干活」与「证据等级虚高」。
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| AD-01 | adapters/backup | 快照知识集中在引擎 switch | 契约有 `snapshot()/rollback()`，17 个适配器零覆写 | `src/core/types.ts:1269-1272`；`src/core/backup.ts:309-431`、:484-485；`src/core/rollback.ts:137`；grep `async snapshot(` 零命中 | dsh-backup 的快照逻辑按模块归属 | 新增分区必须在引擎 switch 加分支，漏改即静默不进快照 | 各分支下沉为 `adapter.snapshot()`；引擎只留 default 兜底 + `never` 穷举 | P2 | M | Low |
-| AD-02 | migrations | 迁移分支不可达；v1→v2 恒等 | 升版本会产出假告警 | `src/schema/versions.ts:18/21/45`；`analyzer.ts:354/361`；`migrations/v1-to-v2.ts` | dsh-backup-sync 显式 schema 迁移 + 断言 | 未来升 v2 时迁移「看起来成功」 | 补「必须改文档」断言 + 端到端用例 | P2 | S | Low |
-| AD-03 | adapters/pluginFiles | 自实现 186 行 | 不复用基类的字节闸门/链接告警/保留路径防线 | `src/adapters/plugin-files.ts:45/117/155/169` | DSH-Portable 统一文件收集器 | 防线靠人工跟随，新增分区易漏 | 抽共享工具或继承基类 | P2 | S | Low |
-| AD-04 | adapters/workspaces | `finalizeImport` 里 `attachSession` | 依赖 sessions 先落盘；`applyOrder` workspaces=10 < sessions=14 | `src/adapters/workspaces.ts:246`；`src/schema/section-registry.ts` applyOrder；`src/adapters/index.ts:53-78` | — | 改序或未挂载 sessions 时工作区↔会话关联静默丢失 | 注册表显式声明「依赖会话已落盘」，由守卫测试钉住 | P2 | S | Low |
+| AD-01 | adapters/backup | 快照知识集中在引擎 switch | 契约有 `snapshot()/rollback()`，15 类适配器零覆写 | `src/core/types.ts:1269-1272`；`src/core/backup.ts:309-431`、:484-485；`src/core/rollback.ts:137`；grep `async snapshot(` 零命中 | dsh-backup 的快照逻辑按模块归属 | 新增分区必须在引擎 switch 加分支，漏改即静默不进快照 | 各分支下沉为 `adapter.snapshot()`；引擎只留 default 兜底 + `never` 穷举 | P2 | M | Low |
+| AD-02 | migrations | 迁移分支不可达；v1→v2 恒等 | 升版本会产出假告警 | `src/schema/versions.ts:18/21/45`；`analyzer.ts:351/361`；`migrations/v1-to-v2.ts` | dsh-backup-sync 显式 schema 迁移 + 断言 | 未来升 v2 时迁移「看起来成功」 | 补「必须改文档」断言 + 端到端用例 | P2 | S | Low |
+| AD-03 | adapters/pluginFiles | 自实现 186 行 | 未复用基类的**单文件字节闸门**（`MAX_FILE_SECTION_BYTES`）；链接告警与保留路径防线已复用 | `src/adapters/plugin-files.ts:12`/`:92`（链接告警）、`:157`（保留路径）、`src/adapters/file-collection.ts:48`（闸门，全仓仅基类引用）| DSH-Portable 的统一文件收集器 | 单插件文件超限时无同口径拦截 | 继承基类或抽共享工具，只补字节闸门 | P3 | S | Low |
+| AD-04 | adapters/workspaces | `finalizeImport` 在所有 `applyItem` 之后执行（jsdoc 自陈顺序），`note.failed > 0` 升级为 warning | 未挂载 `sessions` 时工作区↔会话关联登记不上（有 warning，不静默失败）| `src/adapters/workspaces.ts:235-248`、`:258-263`；`src/schema/section-registry.ts` applyOrder | — | 该组合下关联信息缺失 | 计划期用 `requiresSections` 前置校验（依赖 AD-01 的契约扩展）| P2 | S | Low |
 | AD-05 | foreign | 30 源：measured 5 / documented 2 / fixture 23 | 23 源仅夹具验证，真机布局一变即 nothing-to-import | `src/foreign/registry.ts:81-86`；`truth-table.ts` 各行 | — | 「支持 30 个 Agent」的可信度被高估 | 逐源真机 smoke 把 `evidence` 升 measured；未升的界面文案按 fixture 口径 | P2 | L | Low |
 | AD-06 | foreign/model-tools | GUI + CLI 两入口同源 | model-tools 面零入口 | `src/routes/foreign.ts:89/101`；`src/cli/import-source.ts:156`；`src/core/model-tools.ts:346-449` | — | Agent 无法自行调用外部来源导入 | 视需要在 model-tools 暴露只读 sources 列举 | P3 | S | Low |
 | AD-07 | routes | 计划项默认值写三处 | `createImportPlan` 默认参数重复 | `src/routes/consult.ts:83-84`、`market.ts:211-212`、`sync.ts:983`（注释自陈镜像） | — | 默认值漂移 | 抽 `planWithDefaults()` | P2 | S | Low |
@@ -1337,9 +1338,9 @@ PW-01 是唯一 P1：删档案 = 不可逆删树。
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| PW-01 | profiles | `remove()` 直接 `rmSync(recursive, force)` | 删除档案不可逆，删除前无快照 | `src/profiles/dsh-profile-manager.ts:357-368`（`:363` 删除）、头注释 `:21`/`:348` | dsh-undo-savepoint 的 undo 点即删除前快照 | 用户删错档案 = 整套插件树与补丁层消失 | 删除前落一份「档案声明面 + 锁文件」快照；UI 提供「撤销删除」入口 | P1 | L | Medium |
-| PW-02 | profiles/sync | 声明面由 `plugins` 分区覆盖；锁与载荷不覆盖；无 profiles 分区 | 「整机迁移 = 完整环境」的预期与实现不符 | `src/adapters/plugins.ts:116`；`plugins.test.ts:530-552/784-801`；`section-registry.ts:190-420`（无 profiles）；`src/adapters` grep `pnpm-lock` 零命中 | DSH-Portable 环境封装思路；dsh-cloud-sync `CONFIG_FILES` 含锁文件 | 跨机迁移后插件树可能与源机不同，用户不知情 | 导出包 manifest 显式声明「未含锁文件与 node_modules」；锁文件作可选条目（默认不勾） | P2 | M | Low |
-| PW-03 | profiles | 复制中断靠残留标记识别 | 台账 tech-debt #5 的严重度未随代码更新（代码已能列/删半截副本） | `dsh-profile-manager.ts:383/391/456/471`；`.dsh/issue-ledger.md` tech-debt #5 | — | 维护者按台账低估现状 | 更新台账严重度并指向 `listIncompleteCopies` | P3 | S | Low |
+| PW-01 | profiles | `remove()` 直接 `rmSync(recursive, force)` | 删除档案不可逆，删除前无快照 | `src/profiles/dsh-profile-manager.ts:357-364`（`:363` 删除）、头注释 `:21`/`:348` | dsh-undo-savepoint 的 undo 点即删除前快照 | 用户删错档案 = 整套插件树与补丁层消失 | 删除前落一份「档案声明面 + 锁文件」快照；UI 提供「撤销删除」入口 | P1 | L | Medium |
+| PW-02 | profiles/sync | 声明面由 `plugins` 分区覆盖；锁与载荷不覆盖；无 profiles 分区 | 「整机迁移 = 完整环境」的预期与实现不符 | `src/core/patch-layers.ts`；`plugins.test.ts:530-552/784-801`；`section-registry.ts:190-420`（无 profiles）；`src/adapters` grep `pnpm-lock` 零命中 | DSH-Portable 环境封装思路；dsh-cloud-sync `CONFIG_FILES` 含锁文件 | 跨机迁移后插件树可能与源机不同，用户不知情 | 导出包 manifest 显式声明「未含锁文件与 node_modules」；锁文件作可选条目（默认不勾） | P2 | M | Low |
+| PW-03 | profiles | 复制中断靠残留标记识别 | 台账 tech-debt #5 的严重度未随代码更新（代码已能列/删半截副本） | `dsh-profile-manager.ts:383/391/456/471`；`docs/maintenance/tech-debt.md:20`（tech-debt #5）；`src/routes/recovery.ts:293`/`:339-344` | — | 维护者按台账低估现状 | 更新台账严重度并指向 `listIncompleteCopies` | P3 | S | Low |
 
 ### 13.7 UI / CLI（UI，7 条：P1×1 / P2×4 / P3×2）
 
@@ -1349,20 +1350,21 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 |---|---|---|---|---|---|---|---|---|---|---|
 | UI-01 | i18n | 三套字典 + 键指纹冻结 | 新增文案要写三处；引擎键只许追加 | `src/client/locales.ts`；`src/ui/i18n.ts`；`src/core/messages-core.ts`；`src/core/engine-locale.test.ts` | — | 维护成本，易漏译 | 保留分层，加「同一 key 三处齐全」守卫测试 | P2 | L | Medium |
 | UI-02 | client/run-store | 6 个 TaskKind 覆盖 6 类长操作 | 复制/恢复/修复/清理/自更新用组件内 `useState(busy)` | `src/client/run-store.ts:94/1922`；`src/client/RecoveryPanel.tsx:417/660/701` | — | 切页丢进度、跨页状态不一致 | 把这 5 类纳入 `RunKind` + `watchRunning`，先在 recovery 面板接 `restore` | P1 | M | Low |
-| UI-03 | routes/run-registry | AbortController 仅 import/session-export | 8 种 RunKind 里 4 种无取消入口 | `src/routes/import.ts:224/229/388`；`session-export.ts:157/235`；`run-registry.ts:27` | dsh-undo-savepoint 的可中断采集 | 长操作只能关窗口 | 为 restore 增加 abort，走 `judgeRestoreResume` 的续跑语义而非硬中断 | P2 | M | Medium |
+| UI-03 | core/run-registry | AbortController 仅 import/session-export 接进取消语义 | 8 种 RunKind 里 6 种无取消入口 | `src/routes/import.ts:224/229/388`；`session-export.ts:157/235`；`src/core/run-registry.ts:27` | dsh-undo-savepoint 的可中断采集 | 手动长操作只能关窗口 | 为 restore 增加 abort，走 `judgeRestoreResume` 的续跑语义而非硬中断 | P2 | M | Medium |
 | UI-04 | routes | `verifyBackupZip` 无 HTTP 入口 | GUI 导出的包无法在 GUI 里验证 | `src/core/backup-verify.ts:140`；调用者全在 `src/cli/*` | dsh-backup 的 verify 命令 | 用户必须开终端才知道包能不能恢复 | 加只读端点 `/verify-backup`（无写路径，过只读围栏） | P2 | S | Low |
 | UI-05 | 写入门 | GUI 与 CLI 各读一次 SAFE MODE / 锁 | 判据两处实现 | `src/index.ts:2729-2768`；`src/cli/actions.ts:254/278/438-505` | — | 两处口径漂移风险 | 抽纯函数 `readWriteGateState()`，门的差异留调用层 | P2 | S | Low |
 | UI-06 | client/run-store | `watchRunning` 每 500 ms 整份 stringify | sessionStorage 写放大 | `src/client/run-store.ts:1472/1751/1001` | — | 长任务期间主线程抖动 | 改为脏字段增量 patch | P3 | S | Low |
 | UI-07 | ui/errors | `toActionableError` → redact 幂等 | 无问题，仅记录设计正确 | `src/ui/errors.ts:79/95` | — | — | 保持（作为正面样例） | P3 | S | Low |
 
-### 13.8 文档与台账（DOC，2 条：均 P3）
+### 13.8 文档与台账（DOC，3 条：均 P3）
 
 只影响维护效率。
 
 | ID | 模块 | 当前实现 | 问题 | 证据 | 竞品参考 | 影响 | 建议 | 优先级 | 复杂度 | 兼容性风险 |
 |---|---|---|---|---|---|---|---|---|---|---|
-| DOC-01 | docs/台账 | §1 的 DOC-01 系列：已知缺口中部分条目已修复但未回填 | 台账/known-gaps 与代码不同步（G-05 标「部分修复」、tech-debt #5 严重度失真等） | `.dsh/issue-ledger.md`、`docs/maintenance/known-limits.md` 与 `src/` 实际行为逐条对照（§5-§11） | — | 维护者按文档低估或高估现状 | 本轮审查结束后一次性回填（`fixed` / 降级 / 保留并写明理由） | P3 | S | Low |
+| DOC-01 | docs/modules | `docs/modules/architecture.md` 的计数与版本句未随代码更新 | 文档写 82 条路由与 `PLUGIN_VERSION 0.1.85`，实测 83 条与 `0.2.4` | `docs/modules/architecture.md:15`/`:19`/`:42`/`:44`/`:50` vs `src/index.ts:183` | — | 维护者按文档判断路由数与版本边界 | 改为符号引用（路由数由 parity 测试钉住），删掉硬编码版本 | P3 | S | Low |
 | DOC-02 | AGENTS.md | 称「业务逻辑放 `src/ui/`」 | 与实际分层不符（业务在 `src/core/`、`src/sync/`；`src/ui` 是 view-model） | `AGENTS.md`「业务逻辑放 src/ui」；`src/ui` 零 import client | — | 新维护者按文档找错地方 | 改为「view-model 放 `src/ui/`，业务放 `src/core/`/`src/sync/`」 | P3 | S | Low |
+| DOC-03 | docs/台账 | 已知缺口中部分条目已修复但未回填 | 台账与代码不同步（G-05 标「部分修复」、tech-debt #5 严重度失真等）| `docs/maintenance/tech-debt.md:20`、`docs/maintenance/known-limits.md` 与 `src/` 实际行为逐条对照（§5-§11）| — | 维护者按文档低估或高估现状 | 本轮审查结束后一次性回填（`fixed` / 降级 / 保留并写明理由）| P3 | S | Low |
 
 ## 14. Recommended Architecture
 
@@ -1374,11 +1376,11 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 
 | # | 缺口 | 证据 | 后果 |
 |---|---|---|---|
-| 1 | 快照语义没下沉到适配器 | `snapshot()` / `rollback()` 在契约里，17 个适配器**零覆写**，知识全在引擎 switch（AD-01）| 新增分区漏改引擎分支即静默不进快照 |
+| 1 | 快照语义没下沉到适配器 | `snapshot()` / `rollback()` 在契约里，15 类适配器**零覆写**，知识全在引擎 switch（AD-01）| 新增分区漏改引擎分支即静默不进快照 |
 | 2 | 版本轴没有区间语义 | `isSupportedSectionDataVersion` 要求精确相等（IE-01）| 任一分区升结构即旧包全废 |
 | 3 | 恢复/导入没有统一的「可判定事务」 | restore 有 `judgeRestoreResume`（强），import 什么都没有（IE-04）| 同一个词「中断」在两个域有完全不同的可靠性 |
 
-结论：**Adapter Contract 补三处 → 不新建模型层**。理由是可逆性：新建 Asset Model 会让 17 个适配器 + 快照 + 同步 + 迁移四处同时改数据结构，而收益只是「描述更统一」；补契约只改契约与它的一处执行点，且**不改任何落盘格式**。
+结论：**Adapter Contract 补三处 → 不新建模型层**。理由是可逆性：新建 Asset Model 会让 15 类适配器 + 快照 + 同步 + 迁移四处同时改数据结构，而收益只是「描述更统一」；补契约只改契约与它的一处执行点，且**不改任何落盘格式**。
 
 ### 14.2 A. 保持现有架构（明确不改，及原因）
 
@@ -1397,7 +1399,7 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 
 | # | 动作 | 现状 → 目标 | 接口影响 | 关联问题 |
 |---|---|---|---|---|
-| B1 | **快照语义下沉** | 引擎 switch（`src/core/backup.ts:309-431`）→ 各适配器 `snapshot()` / `rollback()`；引擎保留 default 兜底 + never 穷举 | 内部接口；17 个适配器各加 `snapshot`（可实现为继承基类默认实现）| AD-01 |
+| B1 | **快照语义下沉** | 引擎 switch（`src/core/backup.ts:309-431`）→ 各适配器 `snapshot()` / `rollback()`；引擎保留 default 兜底 + never 穷举 | 内部接口；15 类适配器各加 `snapshot`（可实现为继承基类默认实现）| AD-01 |
 | B2 | **导出收集唯一化** | 三处装配 + CLI 第二套 → 唯一 `collectForExport()` | 内部函数抽取；CLI 只做参数映射 | IE-03 |
 | B3 | **写入门纯函数化** | GUI（`src/index.ts:2729-2768`）与 CLI（`src/cli/actions.ts:254/278/438-505`）各读一次 → 纯函数 `readWriteGateState()` | 纯函数 + 两个调用点；语义不变 | UI-05 |
 | B4 | **计划默认值收敛** | 三处默认参数（`consult.ts:83-84` / `market.ts:211-212` / `sync.ts:983`）→ `planWithDefaults()` | 内部 | AD-07 |
@@ -1428,29 +1430,29 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 
 **结论**：本报告推荐的所有改动里，**没有一处需要改 Bundle 容器结构或加密容器格式**；风险最高的两处（反悔副本搬移、checksum 收紧）都给出了双读窗口或开关。
 
-### 14.6 E. 升级路线 —— 四个阶段，每阶段可独立交付
+### 14.6 E. 升级路线 —— 五个阶段，每阶段可独立交付
 
 > 排序原则：**先修「已经在发生的数据/凭据风险」，再修「会静默出错但还没出事」的正确性，最后才是结构性收敛与量化型优化**。每阶段的完成标准都必须能被命令或测试验证。
 
-#### Phase 0 — 安全封口（SEC-01 / SEC-02 / SEC-03 / SEC-04）
+#### Phase 0 — 安全封口（SEC-01 / SEC-02 / SEC-03 / SEC-12）
 
 | 项 | 内容 |
 |---|---|
-| 解决什么 | 「导入包 → 改写同步目标 → 下一轮同步把 token 发往包内 host」这条完整链路（§8 有逐段证据）；以及导入即可打开自动同步、`file://` 仓库放行 |
-| 改哪些模块与接口 | `src/adapters/self.ts`（`sync/*.json` 移出裸写白名单或走同校验）、`src/sync/sync-config.ts`（host 白名单 + 私网判定）、`src/sync/git/git-transport.ts`（`validateRepoUrl` 白名单 + `GIT_ALLOW_PROTOCOL`）、`src/sync/autosync-config.ts`（开关/档位进「需人工确认」集）|
+| 解决什么 | 「导入包 → 改写同步目标 → 下一轮同步把 token 发往包内 host」这条完整链路（§8 有逐段证据）；任意 scheme 的 `repoUrl` 放行且原样进 git argv（`-` 开头会被当选项）；导入可预置自动同步（当轮不生效，重启或下次改设置后才生效）|
+| 改哪些模块与接口 | `src/adapters/self.ts`（`sync/*.json` 移出裸写白名单或走同校验）、`src/sync/sync-config.ts`（scheme 白名单 + host 白名单 + 私网判定）、`src/sync/git/git-transport.ts`（argv 恒带 `--` + `-c protocol.ext.allow=never`）、`src/sync/autosync-config.ts`（开关/档位进「需人工确认」集）|
 | 依赖 | 无（可与任何阶段并行）|
-| 测试要求 | ①带 `sync-config.json` 的包导入后被拒或将 host 标为待确认；②token 与 host 绑定后 host 变化即不注入；③`file://` 与私网 URL 被拒；④`sync-autosync.json` 不因导入而开启。用例放 `src/adapters/*.test.ts` 与 `src/sync/*.test.ts` |
+| 测试要求 | ①带 `sync-config.json` 的包导入后被拒或将 host 标为待确认；②token 与 host 绑定后 host 变化即不注入；③`file://`、私网 URL、`-` 开头的 repoUrl 一律被拒且不进 argv；④`sync-autosync.json` 不因导入而开启。用例放 `src/adapters/*.test.ts` 与 `src/sync/*.test.ts` |
 | 风险 | host 白名单可能挡住合法自建端点 ⇒ 必须「默认严格 + 自定义显式确认 + 审计留痕」，不能一刀切拒绝 |
 | 完成标准 | 上述 4 个用例全绿；`node scripts/check-doc-paths.mjs` = 0；`src/adapters` / `src/sync` 现有测试无回归 |
 
-#### Phase 1 — 正确性硬化（SYN-01/02/03/04/05、BK-01、BK-05、IE-02、SEC-05）
+#### Phase 1 — 正确性硬化（SYN-02/04/05、BK-01/05、IE-02、SEC-05）
 
 | 项 | 内容 |
 |---|---|
-| 解决什么 | 同步状态非原子写（断电即全链路硬失败）、墓碑不跨设备、加密通道不剔墓碑、GC 删在用 blob、自动同步缺省覆盖远端；恢复反悔副本无出口且被 prune 连带删除；导入失败语义三处不一致；导出 checksum 表外条目只告警不阻断（凭据类分区可绕过校验）|
-| 改哪些模块与接口 | `src/sync/sync-state.ts`（原子写 + 坏形状自愈）、`src/sync/sync-engine.ts`（远端墓碑入参、加密分支解密后剔除、`inflight` 记录）、`src/sync/webdav-transport.ts` / `s3-transport.ts`（GC fail-closed）、`src/sync/autosync-scheduler.ts`（首轮/远端更新强制 ask）、`src/core/backup.ts`（prune 不删反悔副本）、`src/routes/snapshots.ts`（暴露 attempt 目录）、`src/core/import*`（`rollbackOnError` 单一缺省）、`src/core/exporter*`（checksum 表外条目按分区阻断，默认只对新包生效）|
+| 解决什么 | 墓碑不跨设备、GC 把假 404 当无引用而在用 blob 被删、自动同步缺省覆盖远端；恢复反悔副本无出口且被 prune 连带删除；导入失败语义四个调用点不一致；导出 checksum 表外条目只告警不阻断（凭据类分区可绕过校验）|
+| 改哪些模块与接口 | `src/sync/sync-state.ts`（坏形状自愈：原文件备份改名 + 重建空状态并保留 deviceId）、`src/sync/sync-engine.ts`（远端墓碑入参、引用者 404 放弃本轮 GC、`inflight` 记录）、`src/sync/webdav-transport.ts` / `s3-transport.ts`（GC fail-closed）、`src/sync/autosync-scheduler.ts`（首轮/远端更新强制 ask）、`src/core/backup.ts`（prune 不删反悔副本）、`src/routes/snapshots.ts`（暴露 attempt 目录）、`src/core/import*`（`rollbackOnError` 单一缺省）、`src/core/exporter*`（checksum 表外条目按分区阻断，默认只对新包生效）|
 | 依赖 | BK-01 的「出口」可先只做只读列举，不依赖 BK-02 的选择性恢复 |
-| 测试要求 | ①状态文件半截内容 → 自愈而非报 `sync.state.notObject`；②墓碑跨设备剔除计数进 report；③WebDAV/S3 引用者 404 → 本轮不 GC；④缺省策略下远端有新快照时不覆盖；⑤prune 后反悔副本仍在；⑥三处 `rollbackOnError` 入口同一行为（参数化测试跑同一份断言）；⑦表外条目在新包导出/导入上被阻断、历史包可豁免 |
+| 测试要求 | ①状态文件不可解析 → 自愈重建，不再抛 `sync.state.notObject`；②墓碑跨设备剔除计数进 report；③WebDAV/S3 引用者 404 → 本轮不 GC；④缺省策略下远端有新快照时不覆盖；⑤prune 后反悔副本仍在；⑥四个 `rollbackOnError` 调用点同一行为（参数化测试跑同一份断言）；⑦表外条目在新包导出/导入上被阻断、历史包可豁免 |
 | 风险 | 缺省从 local 改 ask 会改变现有体感 ⇒ 需在 CHANGELOG 明写，并保留旧行为的手动开关 |
 | 完成标准 | 七个断言全绿；`src/sync` 全量测试无回归；`CHANGELOG.md` 有对应 Unreleased 条目 |
 
@@ -1462,7 +1464,7 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 | 改哪些模块与接口 | `src/schema/versions.ts` + `src/schema/section-registry.ts`（`acceptsDataVersions` + `migrate`）、`src/core/exporter*`（`collectForExport`）、`src/sync/sync-engine.ts`（裁决降级 + self 合并写 + failures 告警）、`src/adapters/*`（snapshot 下沉 + `requiresSections`）、`src/client/run-store.ts`（5 类操作纳入 RunKind）、`src/index.ts` / `src/cli/actions.ts`（`readWriteGateState`）|
 | 依赖 | AD-01 依赖契约扩展（`requiresSections` 先落，再下沉 snapshot）|
 | 测试要求 | ①旧 dataVersion 的包在新版可导（区间）+ 越界包给出明确错误码；②GUI 与 CLI 导出同一输入的收集面一致（快照对比）；③`useRemote` + 缺分区不再产生不可解裁决；④应用远端 self 后本机 `lastRun*` 保留；⑤新增分区未写 snapshot 时引擎 never 穷举编译期报错 |
-| 风险 | 契约扩展是内部接口，但 17 个适配器要逐个过一遍 ⇒ 用基类默认实现，只让确有差异的分区覆写 |
+| 风险 | 契约扩展是内部接口，但 16 类适配器（覆盖 17 分区）要逐个过一遍 ⇒ 用基类默认实现，只让确有差异的分区覆写 |
 | 完成标准 | `npm run typecheck` 通过（never 穷举在此生效）；新增用例全绿；`docs/spec/` 若有格式描述需同轮更新 |
 
 #### Phase 3 — 产品化与可观测（BK-02、BK-04、IE-04、IE-05、UI-03、UI-04、AD-03、AD-05、AD-07）
@@ -1470,7 +1472,7 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 | 项 | 内容 |
 |---|---|
 | 解决什么 | 无选择性恢复、快照无索引、导入无续跑、CLI 无导入、长操作不可取消、GUI 无法验证包、pluginFiles 自实现、外部来源证据等级虚高、计划默认值三处 |
-| 改哪些模块与接口 | `src/routes/snapshots.ts`（子集恢复）、`src/core/backup.ts`（index.json）、`src/core/import-journal.ts`（新）、`src/cli/import.ts`（新 plan/apply）、`src/routes/run-registry.ts`（restore abort → 续跑语义）、`src/routes/verify.ts`（只读验证端点）、`src/adapters/plugin-files.ts`（复用基类）、`src/foreign/registry.ts`（evidence 升级流程）|
+| 改哪些模块与接口 | `src/routes/snapshots.ts`（子集恢复）、`src/core/backup.ts`（index.json）、`src/core/import-journal.ts`（新）、`src/cli/import.ts`（新 plan/apply）、`src/core/run-registry.ts`（restore abort → 续跑语义）、`src/routes/verify.ts`（只读验证端点）、`src/adapters/plugin-files.ts`（复用基类）、`src/foreign/registry.ts`（evidence 升级流程）|
 | 依赖 | IE-04 依赖 Phase 1 的 journal 形状约定；UI-03 依赖 IE-04（取消语义要落在可续跑之上）|
 | 测试要求 | ①子集恢复只动选中文件（同目录其他文件 mtime 不变）；②删除 index.json 后列表仍正确；③导入中断后重启给出「续跑 / 回滚 / 人工」三态之一；④`dcm import --plan` 与 GUI 计划一致；⑤验证端点只读（写路径 0 次）|
 | 风险 | 给导入加 journal 会引入新落盘文件 ⇒ 必须 0600、必须「删掉即无条件重来」；不可判定时 fail-closed 会让用户卡住 ⇒ 必须给「人工确认」出口 |
@@ -1491,14 +1493,14 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 
 | 阶段 | 覆盖问题 ID | 条数 | 预计工作量 | 前置 | 交付判定 |
 |---|---|---|---|---|---|
-| Phase 0 安全封口 | SEC-01/02/03/04 | 4 | 2-4 天 | 无 | 4 个回归用例绿 + 包导入不再能改同步目标 |
-| Phase 1 正确性硬化 | SYN-01/02/03/04/05、BK-01/05、IE-02、SEC-05 | 9 | 1-2 周 | 无（BK-01 只做只读出口）| 7 个断言绿 + CHANGELOG 条目 |
+| Phase 0 安全封口 | SEC-01/02/03/12 | 4 | 2-4 天 | 无 | 4 个回归用例绿；包导入不再能改同步目标；`-` 开头的 repoUrl 不进 argv |
+| Phase 1 正确性硬化 | SYN-02/04/05、BK-01/05、IE-02、SEC-05 | 7 | 1-2 周 | 无（BK-01 只做只读出口）| 7 个断言绿 + CHANGELOG 条目 |
 | Phase 2 语义闭环 | IE-01/03、SYN-09/10/11、AD-01/04、UI-02/05 | 9 | 2-3 周 | Phase 1 | typecheck 通过（never 穷举）+ 5 个断言 |
 | Phase 3 产品化 | BK-02/04、IE-04/05、UI-03/04、AD-03/05/07 | 9 | 2-3 周 | Phase 1、Phase 2 | 5 个断言 + 文档同步 |
 | Phase 4 探索 | BK-03、SYN-08、UI-01、PW-01/02、UI-06 | 6 | 视测量结果 | 测量报告 | 做/不做结论落档 |
-| 不单列（随手修）| SEC-06/07/08/09/10/11、SYN-06/07/12/13/14/15、IE-06、AD-02/06/08、PW-03、UI-07、DOC-01/02 | 21 | 随阶段顺手 | — | 见 §18 |
+| 不单列（随手修）| SEC-04/06/07/08/09/10/11、SYN-01/06/07/12/13/14/15、IE-06、AD-02/06/08、PW-03、UI-07、DOC-01/02/03 | 23 | 随阶段顺手 | — | 见 §18 |
 
-**覆盖核对**：57 = 4 + 9 + 9 + 9 + 6 + 21，每条 ID 只出现在一个位置，无重复计数。
+**覆盖核对**：58 = 4 + 7 + 9 + 9 + 6 + 23，每条 ID 只出现在一个位置，无重复计数。
 
 ## 16. Compatibility & Migration Risks
 
@@ -1509,7 +1511,7 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 | R1 | 反悔副本从快照目录搬出时中断，副本一半在旧位置一半在新位置 | 搬移过程中进程被杀 / 断电 | 恢复入口找不到该次恢复的反悔副本 | 先复制 → 逐文件校验 sha256 → 再删旧；读取侧在过渡期同时查两个位置（双读窗口保留一个 MINOR 周期）| 低（双读期间旧位置只读）|
 | R2 | checksum 表外条目从警告升为阻断后，历史包被拒 | 用户用旧版导出过带表外条目的包 | 导入失败，用户以为包坏了 | 默认只对**新导出**的包阻断；历史包给「按分区豁免」开关并计入 report.failures | 中（判定口径变化必须进 CHANGELOG）|
 | R3 | 自动同步缺省从 local 改为 ask 后，用户感觉「同步不动了」 | 现有用户依赖缺省覆盖远端 | 体感变化，非数据风险 | 变更写进 CHANGELOG 顶部；保留显式开关回到旧行为；首轮与远端有更新时提示一次 | 中（沟通风险大于技术风险）|
-| R4 | `ConfigAdapter` 契约扩展导致 17 个适配器逐个过一遍 | 新增 `requiresSections` / `capabilities` / 基类 snapshot 默认实现 | 改错一个分区即该分区数据不进快照 | 基类给默认实现，只让确有差异的分区覆写；引擎侧用 never 穷举把漏改变成编译错误 | 低（编译期可捕获）|
+| R4 | `ConfigAdapter` 契约扩展导致 16 类适配器（覆盖 17 分区）逐个过一遍 | 新增 `requiresSections` / `capabilities` / 基类 snapshot 默认实现 | 改错一个分区即该分区数据不进快照 | 基类给默认实现，只让确有差异的分区覆写；引擎侧用 never 穷举把漏改变成编译错误 | 低（编译期可捕获）|
 | R5 | 导入 journal 新落盘文件让导入在不可判定时 fail-closed | journal 写入成功但首次写入前后崩溃 | 用户被卡在「恢复 / 人工」二选一 | 「删掉 journal 即无条件重来」；提供人工确认出口；journal 0600 且不含内容载荷 | 中（必须给出口，不能只 fail-closed）|
 | R6 | 分区版本改成区间后，旧版读新版包仍然被拒 | 用户降级回旧版 | 旧版报不支持，用户以为数据损坏 | 这是**既定**行为（旧版只认自己那代），文档与错误码必须写清「请用 ≥ 新版打开」；不尝试让旧版兼容 | 低（不可消除，只能解释清）|
 
@@ -1641,7 +1643,7 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 
 1. **SEC-01：导入包可以改写同步目标（P0，唯一 P0）**。链路完整：恶意包 → 写入 `sync/sync-config.json` → 下一轮同步把已存 token 发往包内 host。它不是理论漏洞 —— `self` 分区把同步配置当普通配置裸写，而 token 是独立槽位、不看 host 是否变过。修法很小（§14.6 Phase 0），但**不做就是凭据外泄**。
 2. **BK-01 + BK-05：恢复的反悔副本既没有出口，还会被 prune 连带删除（P1）**。`restore` 的 `preRestoreDir` 在引擎里被写入、在 GUI/CLI 里零引用（`grep` 在 `src/client` / `src/ui` 零命中），而 `prune` 把整快照目录连同它一起 `rm -rf`。等于「留了撤不回来的保险，再定期把保险烧掉」。修法 = 暴露只读出口 + 把反悔副本移出快照目录各自定生命周期。
-3. **SYN-01：同步状态非原子写（P1）**。半截 JSON 会让整条同步链路进入硬失败（形状不对即 `sync.state.notObject`），且没有自愈路径。修复是纯局部改动（原子写 + 坏形状自愈），却是「一次断电 = 同步永久坏掉」的根源。
+3. **IE-01：分区版本判定是「精确相等」，一次结构升级就会挡住所有历史包（P1）**。`isSupportedSectionDataVersion` 只接受当前那一个 `dataVersion`（`src/schema/versions.ts:78-80`），没有区间也没有 `migrate` 钩子 ⇒ 分区结构一升级，旧包在本版与新版之间双向不可读，且错误码只能笼统报「不支持」。修法 = 判定改成区间 + 每个分区可选 `migrate`（§14.6 Phase 2），纯 schema 层改动，不动 bundle 格式。
 
 > 注：三条横跨三个域，**恰好各自只需要改 1-2 个文件**，可以并行，不会互相阻塞。
 
@@ -1651,14 +1653,14 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 |---|---|
 | 双面插件 + `src/core` / `src/sync` / `src/ui` 三层 | 分层是本仓对竞品（1774 行单文件）的结构优势 |
 | 17 分区注册表 + `applyOrder` | 顺序语义是资产模型容易丢掉的东西 |
-| 恢复四判据（`judgeRestoreResume`）| 5 个竞品无一具备；要复制到导入域，不要反过来简化 |
+| 恢复四判据（`judgeRestoreResume`）| 就本轮读到的五个仓库源码而言未见同时具备（未逐仓跑测）；要复制到导入域，不要反过来简化 |
 | 凭据纪律（零回读 / 独立载荷 / 全链路 `redact`）| 最强的不变量集合；SEC-01 是它被绕过一次，不是它错了 |
 
 ### 19.3 战略判断
 
-**这个项目的护城河不在功能数量，在「可判定的可靠性」**。对齐 §12 的结论：五个竞品里没有一个同时具备「恢复可判定续跑 + 三方同步裁决闭环 + 分区级放行 + 凭据零回读」。所以接下来最该做的不是加适配器、加通道、加云能力，而是把已有可靠性**做成可解释、可撤销、可验证**的三件事 —— 也就是本报告 P1 的全部内容。
+**这个项目的护城河不在功能数量，在「可判定的可靠性」**。对齐 §12 的结论：就本轮读到的五个仓库而言，未见一个同时具备「恢复可判定续跑 + 三方同步裁决闭环 + 分区级放行 + 凭据零回读」。所以接下来最该做的不是加适配器、加通道、加云能力，而是把已有可靠性**做成可解释、可撤销、可验证**的三件事 —— 也就是本报告 P1 的全部内容。
 
-反过来，最该警惕的是**「静默错误」类问题**：快照没进、裁决不可解、导出漏收集、状态半截 —— 这些不会报错，只会让用户以为「同步好了」。本报告 57 条里，P1 的 15 条几乎全是这一类。
+反过来，最该警惕的是**「静默错误」类问题**：快照没进、裁决不可解、导出漏收集、状态半截 —— 这些不会报错，只会让用户以为「同步好了」。本报告 58 条里，P1 的 14 条几乎全是这一类。
 
 ### 19.4 一句话结论
 
@@ -1672,7 +1674,7 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 |---|---|
 | 仓库 | `D:\Projects\personal\dsh-config-manager` |
 | 版本 | `0.2.4`（`package.json`）|
-| HEAD | `c671c98`（2026-11-01）|
+| HEAD | 代码基线 `c671c98`（2026-11-01）；本报告落盘后 HEAD 为 `13b88e8`（仅新增 `docs/research/` 两文件与 `docs/index.md` 一行）|
 | 审计方式 | 只读：源码阅读、`grep`、类型与接口核对、`git status` / `git log` 只读命令 |
 | 未执行 | `npm run typecheck` / `npm test` / `npm run build` / `npm run smoke`（见 §17.1）|
 | 工作区状态 | 审计期间未改动任何业务源码、测试、`package.json` 与 lockfile |
@@ -1683,18 +1685,18 @@ UI-02 是唯一 P1：长操作状态分散在组件本地 state。
 |---|---|---|
 | 宿主入口 / 路由 | `src/index.ts`（含 7 条钉住路由、写入门 `:2729-2768`）、`src/routes/*.ts`（其余 76 条）| 路由总数 83、认证边界在 kit 围栏 |
 | 契约 | `src/core/types.ts:1171-1273`（`ConfigAdapter`）| 适配器契约与降级语义 |
-| 分区 | `src/schema/section-registry.ts:190-408`（17 个分区 id）、`src/schema/versions.ts:69`（`isSupportedSectionDataVersion`）| 注册表与版本判定 |
-| 适配器 | `src/adapters/file-collection.ts:69`、`skills.ts:166`、`agent-presets.ts:9`、`agent-instructions.ts:22`、`sessions.ts:49`、`self.ts:152`、`plugin-data.ts:68`、`settings.ts:167`、`ui.ts:63`、`providers.ts:45`、`plugins.ts:354`、`mcp.ts:170`、`prompts.ts:125`、`workspaces.ts:86`、`plugin-files.ts:27`、`credentials.ts:75` | 16 类覆盖 17 分区 |
+| 分区 | `src/schema/section-registry.ts:190-408`（17 个分区 id）、`src/schema/versions.ts:69`（`sectionDataVersion`）、`:78-80`（`isSupportedSectionDataVersion`）| 注册表与版本判定 |
+| 适配器 | `src/adapters/file-collection.ts:69`、`skills.ts:166`、`agent-presets.ts:9`、`agent-instructions.ts:22`、`sessions.ts:49`、`self.ts:152`、`plugin-data.ts:68`、`settings.ts:167`、`ui.ts:63`、`providers.ts:45`、`plugins.ts:354`、`mcp.ts:170`、`prompts.ts:125`、`workspaces.ts:86`、`plugin-files.ts:27`、`credentials.ts:75` | 15 类覆盖 16 分区（`secrets` 无适配器，走契约外载荷）|
 | 备份 / 恢复 | `src/core/backup.ts`（`prune` `:725`、pinned 跳过 `:758`、`rm -rf` `:769`）、`src/core/restore-resume.ts`（`judgeRestoreResume`）、`src/core/rollback-point.ts`、`src/core/rollback.ts`（导入补偿，勿与回滚点混用）、`src/core/boot-paths.ts` | BK 域全部结论 |
-| ZIP / 安全 | `src/utils/zip.ts:41-47`（五道上限）、`:439`（重复累加）、`src/security/zip-security.ts`、`src/security/container-kind.ts` | IE 与 SEC 域 |
-| 同步 | `src/sync/merge.ts`、`sync-state.ts`、`sync-engine.ts`、`sync-config.ts`、`autosync-config.ts`、`autosync-scheduler.ts`、`webdav-transport.ts`、`s3-transport.ts`、`git/git-transport.ts` | SYN 域 15 条 |
+| ZIP / 安全 | `src/utils/zip.ts:41-47`（五道上限）、`:436`（重复累加）、`src/security/zip-security.ts`、`src/security/container-kind.ts` | IE 与 SEC 域 |
+| 同步 | `src/sync/merge.ts`、`sync-state.ts`、`sync-engine.ts`、`sync-config.ts`、`autosync-config.ts`、`autosync-scheduler.ts`、`webdav-transport.ts`、`s3-transport.ts`、`git/git-transport.ts` | SYN 域 14 条 |
 | Profile | `src/profiles/dsh-profile-manager.ts:107-549`（`remove` `:357`、`rmSync` `:363`）、`dsh-profile-shared.ts:238`（`DESKTOP_PROFILE_NAME`）| PW 域 |
 | CLI | `src/cli/actions.ts:254` / `:278` / `:438-505`（写入门三处读取）| UI-05 与 IE-05 |
-| 客户端 | `src/client/run-store.ts`、`src/client/ErrorBanner.tsx`、`src/client/ReportView.tsx` | 状态归属与错误脱敏 |
+| 客户端 | `src/client/run-store.ts`、`src/client/common/ErrorBanner.tsx`、`src/client/common/ReportView.tsx` | 状态归属与错误脱敏 |
 | 守卫脚本 | `scripts/check-doc-paths.mjs`、`check-doc-versions.mjs`、`check-agents-budget.mjs` | 文档治理 |
-| 文档 | `AGENTS.md`、`DESIGN.md`、`docs/index.md`、`docs/spec/`、`docs/maintenance/known-limits.md`、`.dsh/issue-ledger.md` | 规范与台账（DOC 域）|
+| 文档 | `AGENTS.md`、`DESIGN.md`、`docs/index.md`、`docs/spec/`、`docs/maintenance/known-limits.md`、`docs/maintenance/tech-debt.md` | 规范与台账（DOC 域）|
 
-### 20.3 竞品源码（GitHub，均读 main，2026-11-01）
+### 20.3 竞品源码（GitHub，分支不一：四仓读 main，`lire1131/dsh-undo-savepoint` 读 master —— 其 main 返回 404；2026-11-01）
 
 | 项目 | 读取的关键文件 |
 |---|---|
